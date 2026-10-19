@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::collections::{HashMap,VecDeque};
+use std::collections::{HashMap,HashSet,VecDeque};
 use std::process::{Child, Command};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -18,7 +18,8 @@ struct IoOperation { file_handle:usize,issuing_thread:ThreadId,state:Mutex<IoRes
 static IO_OPERATIONS:OnceLock<Mutex<HashMap<usize,Arc<IoOperation>>>>=OnceLock::new();
 #[derive(Clone,Copy)]
 struct CompletionPacket { bytes:u32,key:usize,overlapped:usize,error:u32 }
-struct CompletionPort { queue:Mutex<VecDeque<CompletionPacket>>,changed:Condvar }
+struct CompletionPortState { queue:VecDeque<CompletionPacket>,active:HashSet<ThreadId> }
+struct CompletionPort { state:Mutex<CompletionPortState>,changed:Condvar,max_concurrency:usize }
 static IOCP_ASSOCIATIONS:OnceLock<Mutex<HashMap<usize,(Arc<CompletionPort>,usize)>>>=OnceLock::new();
 static NEXT_HANDLE: AtomicUsize = AtomicUsize::new(0x1_0000);
 static TEMP_FILE_SEQUENCE:AtomicU32=AtomicU32::new(1);
@@ -116,9 +117,9 @@ pub extern "win64" fn get_std_handle(which: u32) -> usize {
 }
 
 fn next_handle() -> usize { NEXT_HANDLE.fetch_add(1, Ordering::Relaxed) }
-fn post_iocp(port:&CompletionPort,packet:CompletionPacket){lock(&port.queue).push_back(packet);port.changed.notify_one();}
-fn iocp_is_signaled(port:&CompletionPort)->bool{!lock(&port.queue).is_empty()}
-fn wait_iocp(port:&CompletionPort,timeout:u32)->u32{let start=std::time::Instant::now();let mut q=lock(&port.queue);loop{if !q.is_empty(){return 0;}if timeout==0{return 258;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{return 258;}timeout-elapsed};let(next,timed)=wait_condvar(&port.changed,q,left);q=next;if timed&&q.is_empty(){return 258;}}}
+fn post_iocp(port:&CompletionPort,packet:CompletionPacket){lock(&port.state).queue.push_back(packet);port.changed.notify_all();}
+fn iocp_is_signaled(port:&CompletionPort)->bool{!lock(&port.state).queue.is_empty()}
+fn wait_iocp(port:&CompletionPort,timeout:u32)->u32{let start=std::time::Instant::now();let mut state=lock(&port.state);loop{if !state.queue.is_empty(){return 0;}if timeout==0{return 258;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{return 258;}timeout-elapsed};let(next,timed)=wait_condvar(&port.changed,state,left);state=next;if timed&&state.queue.is_empty(){return 258;}}}
 pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
     match e.kind() { std::io::ErrorKind::NotFound => 2, std::io::ErrorKind::PermissionDenied => 5,
         std::io::ErrorKind::AlreadyExists => 183, std::io::ErrorKind::InvalidInput => 87,
@@ -171,8 +172,20 @@ pub unsafe extern "win64" fn get_overlapped_result(h:usize,overlapped:*mut Overl
 }
 pub extern "win64" fn cancel_io(h:usize)->i32{if !lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).contains_key(&h){crate::process::set_last_error(6);return 0;}let current=std::thread::current().id();let ops=lock(IO_OPERATIONS.get_or_init(||Mutex::new(HashMap::new())));let mut cancelled=0;for op in ops.values(){if op.file_handle==h&&op.issuing_thread==current&&!lock(&op.state).done{op.cancelled.store(true,Ordering::Release);cancelled+=1;}}if cancelled==0{crate::process::set_last_error(1168);0}else{1}}
 pub unsafe extern "win64" fn cancel_io_ex(h:usize,overlapped:*mut Overlapped)->i32{if !lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).contains_key(&h){crate::process::set_last_error(6);return 0;}let ops=lock(IO_OPERATIONS.get_or_init(||Mutex::new(HashMap::new())));let mut cancelled=0;for (key,op) in ops.iter(){if op.file_handle==h&&(overlapped.is_null()||*key==overlapped as usize)&&!lock(&op.state).done{op.cancelled.store(true,Ordering::Release);cancelled+=1;}}if cancelled==0{crate::process::set_last_error(1168);0}else{1}}
+fn dequeue_iocp(port:&CompletionPort,max_packets:usize,timeout:u32)->Result<Vec<CompletionPacket>,u32>{
+    let start=std::time::Instant::now();let current=std::thread::current().id();let mut state=lock(&port.state);
+    if state.active.remove(&current){port.changed.notify_all();}
+    loop{
+        if !state.queue.is_empty()&&state.active.len()<port.max_concurrency{
+            let n=max_packets.min(state.queue.len());let packets=state.queue.drain(..n).collect();state.active.insert(current);return Ok(packets);
+        }
+        if timeout==0{return Err(258);}
+        let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{return Err(258);}timeout-elapsed};
+        let(next,timed)=wait_condvar(&port.changed,state,left);state=next;if timed&&(state.queue.is_empty()||state.active.len()>=port.max_concurrency){return Err(258);}
+    }
+}
 pub extern "win64" fn create_io_completion_port(file:usize,existing:usize,key:usize,_concurrency:u32)->usize{
-    let(port_handle,port)=if existing==0{let p=Arc::new(CompletionPort{queue:Mutex::new(VecDeque::new()),changed:Condvar::new()});let h=add_sync(SyncHandle::CompletionPort(p.clone()),None);(h,p)}else{let Some(SyncHandle::CompletionPort(p))=lookup_sync(existing)else{crate::process::set_last_error(6);return 0;};(existing,p)};
+    let(port_handle,port)=if existing==0{let concurrency=if _concurrency==0{std::thread::available_parallelism().map(|n|n.get()).unwrap_or(1)}else{_concurrency as usize};let p=Arc::new(CompletionPort{state:Mutex::new(CompletionPortState{queue:VecDeque::new(),active:HashSet::new()}),changed:Condvar::new(),max_concurrency:concurrency.max(1)});let h=add_sync(SyncHandle::CompletionPort(p.clone()),None);(h,p)}else{let Some(SyncHandle::CompletionPort(p))=lookup_sync(existing)else{crate::process::set_last_error(6);return 0;};(existing,p)};
     if file==usize::MAX{return port_handle;}
     if !lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).contains_key(&file){if existing==0{remove_sync(port_handle);}crate::process::set_last_error(6);return 0;}
     let mut associations=lock(IOCP_ASSOCIATIONS.get_or_init(||Mutex::new(HashMap::new())));if let Some((old,_))=associations.get(&file){if !Arc::ptr_eq(old,&port){drop(associations);if existing==0{remove_sync(port_handle);}crate::process::set_last_error(87);return 0;}}else{associations.insert(file,(port,key));}
@@ -182,15 +195,13 @@ pub unsafe extern "win64" fn post_queued_completion_status(port:usize,bytes:u32,
 pub unsafe extern "win64" fn get_queued_completion_status(port:usize,bytes:*mut u32,key:*mut usize,overlapped:*mut *mut c_void,timeout:u32)->i32{
     if bytes.is_null()||key.is_null()||overlapped.is_null(){crate::process::set_last_error(87);return 0;}
     let Some(SyncHandle::CompletionPort(p))=lookup_sync(port)else{crate::process::set_last_error(6);return 0;};
-    let start=std::time::Instant::now();let mut queue=lock(&p.queue);
-    while queue.is_empty(){if timeout==0{*bytes=0;*key=0;*overlapped=std::ptr::null_mut();crate::process::set_last_error(258);return 0;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{*bytes=0;*key=0;*overlapped=std::ptr::null_mut();crate::process::set_last_error(258);return 0;}timeout-elapsed};let(next,timed)=wait_condvar(&p.changed,queue,left);queue=next;if timed&&queue.is_empty(){*bytes=0;*key=0;*overlapped=std::ptr::null_mut();crate::process::set_last_error(258);return 0;}}
-    let packet=queue.pop_front().unwrap();drop(queue);*bytes=packet.bytes;*key=packet.key;*overlapped=packet.overlapped as *mut c_void;if packet.error!=0{crate::process::set_last_error(packet.error);0}else{1}
+    let packet=match dequeue_iocp(&p,1,timeout){Ok(mut packets)=>packets.remove(0),Err(e)=>{*bytes=0;*key=0;*overlapped=std::ptr::null_mut();crate::process::set_last_error(e);return 0;}};
+    *bytes=packet.bytes;*key=packet.key;*overlapped=packet.overlapped as *mut c_void;if packet.error!=0{crate::process::set_last_error(packet.error);0}else{1}
 }
 pub unsafe extern "win64" fn get_queued_completion_status_ex(port:usize,entries:*mut OverlappedEntry,count:u32,removed:*mut u32,timeout:u32,alertable:i32)->i32{
     if entries.is_null()||removed.is_null()||count==0{crate::process::set_last_error(87);return 0;}if alertable!=0{crate::process::set_last_error(120);return 0;}
-    let Some(SyncHandle::CompletionPort(p))=lookup_sync(port)else{crate::process::set_last_error(6);return 0;};let start=std::time::Instant::now();let mut q=lock(&p.queue);
-    while q.is_empty(){if timeout==0{*removed=0;crate::process::set_last_error(258);return 0;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{*removed=0;crate::process::set_last_error(258);return 0;}timeout-elapsed};let(next,timed)=wait_condvar(&p.changed,q,left);q=next;if timed&&q.is_empty(){*removed=0;crate::process::set_last_error(258);return 0;}}
-    let n=(count as usize).min(q.len());for i in 0..n{let packet=q.pop_front().unwrap();let internal=if packet.error==0{0}else{0xC000_0001};std::ptr::write(entries.add(i),OverlappedEntry{completion_key:packet.key,overlapped:packet.overlapped as *mut c_void,internal,bytes_transferred:packet.bytes,reserved:0});}*removed=n as u32;1
+    let Some(SyncHandle::CompletionPort(p))=lookup_sync(port)else{crate::process::set_last_error(6);return 0;};let packets=match dequeue_iocp(&p,count as usize,timeout){Ok(p)=>p,Err(e)=>{*removed=0;crate::process::set_last_error(e);return 0;}};
+    for (i,packet) in packets.iter().enumerate(){let internal=if packet.error==0{0}else{0xC000_0001};std::ptr::write(entries.add(i),OverlappedEntry{completion_key:packet.key,overlapped:packet.overlapped as *mut c_void,internal,bytes_transferred:packet.bytes,reserved:0});}*removed=packets.len()as u32;1
 }
 
 pub unsafe extern "win64" fn write_file(h: usize, buf: *const u8, len: u32, written: *mut u32, ov: usize) -> i32 {
@@ -722,6 +733,20 @@ mod tests {
         assert_eq!(unsafe{get_queued_completion_status_ex(port,entries.as_mut_ptr(),2,&mut count,0,0)},1);
         assert_eq!(count,2);assert_eq!(entries[0].completion_key,0xabc);assert_eq!(entries[0].bytes_transferred,12);assert_eq!(entries[1].completion_key,0xdef);assert_eq!(entries[1].bytes_transferred,34);
         assert_eq!(wait_for_single_object(port,0),258);assert_eq!(close_handle(port),1);
+    }
+
+    #[test]
+    fn iocp_limite_les_threads_actifs_selon_le_concurrency_max(){
+        let port=create_io_completion_port(usize::MAX,0,0,1);assert_ne!(port,0);
+        unsafe{post_queued_completion_status(port,1,1,std::ptr::null_mut());}
+        let(mut bytes,mut key)=(0u32,0usize);let mut ov=std::ptr::null_mut();
+        assert_eq!(unsafe{get_queued_completion_status(port,&mut bytes,&mut key,&mut ov,0)},1);
+        assert_eq!(key,1);
+        unsafe{post_queued_completion_status(port,2,2,std::ptr::null_mut());}
+        let second=std::thread::spawn(move||{let(mut bytes,mut key)=(0u32,0usize);let mut ov=std::ptr::null_mut();unsafe{get_queued_completion_status(port,&mut bytes,&mut key,&mut ov,0)}}).join().unwrap();
+        assert_eq!(second,0); // le premier thread détient encore le slot actif
+        assert_eq!(unsafe{get_queued_completion_status(port,&mut bytes,&mut key,&mut ov,0)},1);
+        assert_eq!(key,2);assert_eq!(close_handle(port),1);
     }
 
     #[test]

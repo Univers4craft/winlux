@@ -2,14 +2,14 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (31 tests), compilation release et les six exécutables PE de test réussissent. Relancer les scripts après chaque changement.
+- Dernière validation connue : `cargo test -p winlux` (32 tests), compilation release et les six exécutables PE de test réussissent. Relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
 - [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe` et `findfiles.exe` sous Winlux.
-- [x] Ajouter 31 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers et IOCP.
+- [x] Ajouter 32 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers et IOCP.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
@@ -59,7 +59,8 @@
 - [x] Ajouter `ReadFile`/`WriteFile` overlapped avec offsets, `ERROR_IO_PENDING`, signal d’événement et `GetOverlappedResult`.
 - [x] Ajouter une annulation best-effort des opérations overlapped en attente avec `CancelIo` et `CancelIoEx`.
 - [x] Ajouter un sous-ensemble IOCP : association d’un fichier, `GetQueuedCompletionStatus[Ex]` et `PostQueuedCompletionStatus`.
-- [ ] Compléter la concurrence IOCP et les erreurs, annuler les I/O déjà commencées, et tester exhaustivement buffers/handles invalides.
+- [x] Respecter le plafond de concurrence IOCP pour les threads qui retirent les paquets avec `GetQueuedCompletionStatus[Ex]`.
+- [ ] Compléter les erreurs et la libération des slots IOCP à la sortie des threads; annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides.
 - [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
 - [x] Lire les blocs d’environnement ANSI ou Unicode de `CreateProcessA/W` et les appliquer au processus enfant.
 - [x] Implémenter `CREATE_SUSPENDED`/`ResumeThread` pour les enfants via un lanceur Linux suspendu avant l’exécution du programme.

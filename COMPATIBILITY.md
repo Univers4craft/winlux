@@ -44,8 +44,10 @@ des codecs, des services et parfois d’un runtime managé.
   avec `CancelIo/CancelIoEx`, est best-effort avant le début effectif de l’accès.
   Un sous-ensemble de ports IOCP est disponible (`CreateIoCompletionPort`,
   `GetQueuedCompletionStatus[Ex]`, `PostQueuedCompletionStatus`) et testé avec des
-  I/O overlapped associées et la lecture par lot. La concurrence IOCP complète, l’annulation d’E/S déjà
-  bloquante et les contrats avancés de partage restent à implémenter.
+  I/O overlapped associées et la lecture par lot. Le plafond de concurrence est
+  appliqué aux workers; un worker libère son slot lorsqu’il rappelle GQCS. La
+  sortie d’un worker sans nouvel appel et l’annulation d’E/S déjà bloquante
+  restent incomplètes.
 - Winsock relie les sockets POSIX, les codes d’erreur WSA et les résolutions
   `getaddrinfo` A/W; TCP loopback, `bind/listen/connect/accept/send/recv` sont
   testés, mais ce n’est pas encore une implémentation complète de Winsock.
