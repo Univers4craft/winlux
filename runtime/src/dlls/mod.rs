@@ -4,6 +4,7 @@
 
 pub mod kernel32;
 pub mod msvcrt;
+pub mod crt;
 pub mod ntdll;
 pub mod user32;
 pub mod advapi32;
@@ -55,9 +56,10 @@ fn fake_module() -> usize {
 fn builtins() -> &'static Vec<Builtin> {
     static B: OnceLock<Vec<Builtin>> = OnceLock::new();
     B.get_or_init(|| {
-        let crt = msvcrt::exports();
+        let crt = { let mut e = msvcrt::exports(); e.extend(crt::exports()); e };
         let mut ucrt = crt.clone();
         ucrt.extend(msvcrt::ucrt_exports());
+        ucrt.extend(crt::exports());
         vec![
             Builtin { name: "kernel32", exports: { let mut e=kernel32::exports(); e.extend(winfile::exports()); e }, handle: fake_module() },
             Builtin { name: "ntdll", exports: ntdll::exports(), handle: fake_module() },

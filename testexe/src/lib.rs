@@ -284,6 +284,41 @@ extern "C" {
     pub fn memmove(d: *mut c_void, s: *const c_void, n: usize) -> *mut c_void;
     pub fn atoi(s: *const c_char) -> i32;
     pub fn exit(code: i32) -> !;
+    pub fn strcpy(d: *mut c_char, s: *const c_char) -> *mut c_char;
+    pub fn strncpy(d: *mut c_char, s: *const c_char, n: usize) -> *mut c_char;
+    pub fn strcat(d: *mut c_char, s: *const c_char) -> *mut c_char;
+    pub fn strncmp(a: *const c_char, b: *const c_char, n: usize) -> i32;
+    pub fn strchr(s: *const c_char, c: i32) -> *mut c_char;
+    pub fn strrchr(s: *const c_char, c: i32) -> *mut c_char;
+    pub fn strstr(h: *const c_char, n: *const c_char) -> *mut c_char;
+    pub fn strdup(s: *const c_char) -> *mut c_char;
+    pub fn stricmp(a: *const c_char, b: *const c_char) -> i32;
+    pub fn strlwr(s: *mut c_char) -> *mut c_char;
+    pub fn strupr(s: *mut c_char) -> *mut c_char;
+    pub fn strtok_s(s: *mut c_char, delim: *const c_char, context: *mut *mut c_char) -> *mut c_char;
+    pub fn atol(s: *const c_char) -> i32;
+    pub fn atoll(s: *const c_char) -> i64;
+    pub fn strtol(s: *const c_char, end: *mut *mut c_char, base: i32) -> i32;
+    pub fn strtoul(s: *const c_char, end: *mut *mut c_char, base: i32) -> u32;
+    pub fn strtoll(s: *const c_char, end: *mut *mut c_char, base: i32) -> i64;
+    pub fn strtod(s: *const c_char, end: *mut *mut c_char) -> f64;
+    pub fn toupper(c: i32) -> i32;
+    pub fn tolower(c: i32) -> i32;
+    pub fn isalpha(c: i32) -> i32;
+    pub fn isdigit(c: i32) -> i32;
+    pub fn isspace(c: i32) -> i32;
+    pub fn isxdigit(c: i32) -> i32;
+    pub fn sqrt(x: f64) -> f64;
+    pub fn pow(x: f64, y: f64) -> f64;
+    pub fn fabs(x: f64) -> f64;
+    pub fn floor(x: f64) -> f64;
+    pub fn abs(v: i32) -> i32;
+    pub fn qsort(base: *mut c_void, num: usize, width: usize, compare: usize);
+    pub fn bsearch(key: *const c_void, base: *const c_void, num: usize, width: usize, compare: usize) -> *mut c_void;
+    pub fn _itoa(value: i32, buf: *mut c_char, radix: i32) -> *mut c_char;
+    pub fn _i64toa(value: i64, buf: *mut c_char, radix: i32) -> *mut c_char;
+    pub fn _snprintf(buf: *mut c_char, size: usize, fmt: *const c_char, ...) -> i32;
+    pub fn snprintf(buf: *mut c_char, size: usize, fmt: *const c_char, ...) -> i32;
 }
 
 /// Requis par le compilateur dès qu'un programme Windows manipule des flottants.

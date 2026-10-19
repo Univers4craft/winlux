@@ -1,0 +1,96 @@
+#![no_std]
+#![no_main]
+
+use core::ffi::{c_char, c_void};
+use core::ptr::null_mut;
+use winlux_testexe::*;
+
+extern "system" fn compare_i32(a: *const c_void, b: *const c_void) -> i32 {
+    let x = unsafe { *(a as *const i32) };
+    let y = unsafe { *(b as *const i32) };
+    if x < y { -1 } else if x > y { 1 } else { 0 }
+}
+
+#[no_mangle]
+pub extern "C" fn mainCRTStartup() -> ! {
+    unsafe {
+        let mut buf = [0 as c_char; 64];
+        strcpy(buf.as_mut_ptr(), c"abc".as_ptr());
+        strcat(buf.as_mut_ptr(), c"def".as_ptr());
+        let joined = strcmp(buf.as_ptr(), c"abcdef".as_ptr()) == 0;
+        let sized = strncmp(c"abcdef".as_ptr(), c"abcxyz".as_ptr(), 3) == 0;
+        let found = *strchr(buf.as_ptr(), b'd' as i32) == b'd' as c_char;
+        let sub = *strstr(buf.as_ptr(), c"cde".as_ptr()) == b'c' as c_char;
+        let upper = strcmp(strupr(buf.as_mut_ptr()), c"ABCDEF".as_ptr()) == 0;
+        let lower = strcmp(strlwr(buf.as_mut_ptr()), c"abcdef".as_ptr()) == 0;
+        let ci = stricmp(c"AbC".as_ptr(), c"aBc".as_ptr()) == 0;
+        check!(joined && sized && found && sub && upper && lower && ci, "chaînes strcpy/strcat/strchr/strstr/casse");
+
+        let duplicated = strdup(c"dup".as_ptr());
+        let dup_ok = strcmp(duplicated, c"dup".as_ptr()) == 0;
+        free(duplicated as *mut c_void);
+        let mut text = [0 as c_char; 32];
+        strcpy(text.as_mut_ptr(), c"un,deux;;trois".as_ptr());
+        let mut ctx: *mut c_char = null_mut();
+        let mut count = 0;
+        let mut tok = strtok_s(text.as_mut_ptr(), c",;".as_ptr(), &mut ctx);
+        while !tok.is_null() {
+            count += 1;
+            tok = strtok_s(null_mut(), c",;".as_ptr(), &mut ctx);
+        }
+        check!(dup_ok && count == 3, "strdup et strtok_s");
+
+        let mut end: *mut c_char = null_mut();
+        let handled = strtol(c"0x1f".as_ptr(), &mut end, 0) == 31
+            && strtol(c"777".as_ptr(), &mut end, 8) == 511
+            && strtoul(c"ff".as_ptr(), &mut end, 16) == 255
+            && strtoll(c"-900000000000".as_ptr(), &mut end, 10) == -900_000_000_000
+            && atol(c"  42abc".as_ptr()) == 42
+            && strtod(c"3.5e2 reste".as_ptr(), &mut end) > 349.9
+            && strtod(c"3.5e2 reste".as_ptr(), &mut end) < 350.1
+            && *end == b' ' as c_char;
+        check!(handled, "strtol/strtoul/strtoll/strtod avec pointeur de fin");
+
+        _itoa(-255, buf.as_mut_ptr(), 10);
+        let itoa_dec = strcmp(buf.as_ptr(), c"-255".as_ptr()) == 0;
+        _itoa(255, buf.as_mut_ptr(), 16);
+        let itoa_hex = strcmp(buf.as_ptr(), c"ff".as_ptr()) == 0;
+        _i64toa(4_000_000_000, buf.as_mut_ptr(), 10);
+        let i64 = strcmp(buf.as_ptr(), c"4000000000".as_ptr()) == 0;
+        check!(itoa_dec && itoa_hex && i64, "_itoa et _i64toa");
+
+        let ctype = isalpha(b'A' as i32) != 0
+            && isdigit(b'7' as i32) != 0
+            && isspace(b' ' as i32) != 0
+            && isspace(b'x' as i32) == 0
+            && isxdigit(b'F' as i32) != 0
+            && toupper(b'a' as i32) == b'A' as i32
+            && tolower(b'Z' as i32) == b'z' as i32;
+        check!(ctype, "classification et conversion de caractères");
+
+        let math = (sqrt(9.0) - 3.0).abs() < 1e-9
+            && (pow(2.0, 10.0) - 1024.0).abs() < 1e-9
+            && (fabs(-2.5) - 2.5).abs() < 1e-12
+            && (floor(2.9) - 2.0).abs() < 1e-12
+            && abs(-7) == 7;
+        check!(math, "mathématiques sqrt/pow/fabs/floor/abs");
+
+        let mut data = [5i32, 1, 4, 2, 3];
+        qsort(data.as_mut_ptr() as *mut c_void, data.len(), core::mem::size_of::<i32>(), compare_i32 as *const () as usize);
+        let sorted = data == [1, 2, 3, 4, 5];
+        let key = 4i32;
+        let hit = bsearch(&key as *const i32 as *const c_void, data.as_ptr() as *const c_void, data.len(), core::mem::size_of::<i32>(), compare_i32 as *const () as usize);
+        let found_key = !hit.is_null() && *(hit as *const i32) == 4;
+        check!(sorted && found_key, "qsort et bsearch avec comparateur");
+
+        let mut line = [0 as c_char; 32];
+        let written = _snprintf(line.as_mut_ptr(), 32, c"%d-%s-%.2f".as_ptr(), 7, c"ok".as_ptr(), 1.5);
+        let formatted = written == 9 && strcmp(line.as_ptr(), c"7-ok-1.50".as_ptr()) == 0;
+        let mut small = [0 as c_char; 4];
+        let truncated = _snprintf(small.as_mut_ptr(), 4, c"%s".as_ptr(), c"abcdef".as_ptr()) == -1
+            && strcmp(small.as_ptr(), c"abc".as_ptr()) == 0;
+        let needed = snprintf(null_mut(), 0, c"%d".as_ptr(), 1234) == 4;
+        check!(formatted && truncated && needed, "_snprintf/snprintf avec troncature");
+    }
+    finish()
+}

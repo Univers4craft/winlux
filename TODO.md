@@ -2,14 +2,14 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (32 tests), compilation release et les six exécutables PE de test réussissent. Relancer les scripts après chaque changement.
+- Dernière validation connue : `cargo test -p winlux` (39 tests), compilation release et les sept exécutables PE de test réussissent. Relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
-- [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe` et `findfiles.exe` sous Winlux.
-- [x] Ajouter 32 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers et IOCP.
+- [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe`, `findfiles.exe` et `crt_suite.exe` sous Winlux.
+- [x] Ajouter 39 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT et IOCP.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
@@ -60,14 +60,16 @@
 - [x] Ajouter une annulation best-effort des opérations overlapped en attente avec `CancelIo` et `CancelIoEx`.
 - [x] Ajouter un sous-ensemble IOCP : association d’un fichier, `GetQueuedCompletionStatus[Ex]` et `PostQueuedCompletionStatus`.
 - [x] Respecter le plafond de concurrence IOCP pour les threads qui retirent les paquets avec `GetQueuedCompletionStatus[Ex]`.
-- [ ] Compléter les erreurs et la libération des slots IOCP à la sortie des threads; annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides.
+- [x] Libérer le slot actif d’un thread Win32 à sa terminaison, avec test dédié.
+- [ ] Annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides.
 - [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
 - [x] Lire les blocs d’environnement ANSI ou Unicode de `CreateProcessA/W` et les appliquer au processus enfant.
 - [x] Implémenter `CREATE_SUSPENDED`/`ResumeThread` pour les enfants via un lanceur Linux suspendu avant l’exécution du programme.
 - [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
 - [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
-- [ ] Étendre la CRT : `scanf`, conversions, locale, fichiers, erreurs et fonctions mathématiques.
+- [x] Étendre la CRT : chaînes étroites/larges, conversions (`strtol`, `strtod`, `_itoa`), classification de caractères, fonctions mathématiques, `qsort`/`bsearch` et `_snprintf`, avec tests unitaires et PE (`crt_suite`).
+- [ ] Continuer la CRT : `scanf`/`sscanf`, locale, fonctions de fichiers `FILE*` et formats `%n`/positionnels.
 - [ ] Ajouter un backend graphique réel; `user32`/`gdi32` actuels sont surtout des stubs et n’affichent pas de fenêtres.
 - [ ] Intégrer un véritable runtime CLR compatible pour exécuter les `.exe` .NET; sans CLR, `paint.net` ne fonctionne pas.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
