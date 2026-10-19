@@ -443,10 +443,16 @@ fn split_windows_command_line(line:&str)->Vec<String>{
     if !arg.is_empty(){out.push(arg);}out
 }
 fn process_error(e:&std::io::Error)->u32{io_error_code(e)}
-unsafe fn create_process_common(application:Option<String>,command_line:*const u8,inherit_handles:i32,creation_flags:u32,environment:*const c_void,current_directory:*const u8,startup:*const StartupInfoA,info:*mut ProcessInformation)->i32{
+unsafe fn parse_environment_block(block:*const c_void,unicode:bool)->Result<Option<Vec<(String,String)>>,u32>{
+    if block.is_null(){return Ok(None);}let mut env=HashMap::<String,(String,String)>::new();
+    if unicode{let p=block as *const u16;let mut off=0usize;loop{if off>=524_288{return Err(87);}let mut end=off;while end<524_288&&*p.add(end)!=0{end+=1;}if end==524_288{return Err(87);}if end==off{break;}let entry=String::from_utf16(std::slice::from_raw_parts(p.add(off),end-off)).map_err(|_|1113u32)?;off=end+1;insert_env_entry(&entry,&mut env);}}
+    else{let p=block as *const u8;let mut off=0usize;loop{if off>=1_048_576{return Err(87);}let mut end=off;while end<1_048_576&&*p.add(end)!=0{end+=1;}if end==1_048_576{return Err(87);}if end==off{break;}let entry=crate::dlls::decode_ansi(std::slice::from_raw_parts(p.add(off),end-off));off=end+1;insert_env_entry(&entry,&mut env);}}
+    Ok(Some(env.into_values().collect()))
+}
+fn insert_env_entry(entry:&str,env:&mut HashMap<String,(String,String)>){let start=if entry.starts_with('='){1}else{0};if let Some(i)=entry[start..].find('='){let split=start+i;let name=&entry[..split];let value=&entry[split+1..];if !name.is_empty(){env.insert(name.to_lowercase(),(name.to_string(),value.to_string()));}}}
+unsafe fn create_process_common(application:Option<String>,command_line:*const u8,inherit_handles:i32,creation_flags:u32,environment:Option<Vec<(String,String)>>,current_directory:*const u8,startup:*const StartupInfoA,info:*mut ProcessInformation)->i32{
     if info.is_null(){crate::process::set_last_error(87);return 0;}
-    if !environment.is_null(){crate::process::set_last_error(120);return 0;}
-    if creation_flags&!0x0800_0000!=0{crate::process::set_last_error(50);return 0;}
+    if creation_flags&!(0x0800_0000|0x0000_0400)!=0{crate::process::set_last_error(50);return 0;}
     if !startup.is_null()&&(*startup).cb < std::mem::size_of::<StartupInfoA>() as u32{crate::process::set_last_error(87);return 0;}
     let line=if command_line.is_null(){String::new()}else{crate::dlls::cstr(command_line)};
     let mut args=split_windows_command_line(&line);
@@ -458,6 +464,7 @@ unsafe fn create_process_common(application:Option<String>,command_line:*const u
     cmd.args(args.iter());
     if !current_directory.is_null(){let cwd=crate::paths::to_linux(&crate::dlls::cstr(current_directory));cmd.current_dir(cwd);}
     if inherit_handles!=0{crate::process::set_last_error(120);return 0;}
+    if let Some(env)=environment{cmd.env_clear();for (key,value) in env{cmd.env(key,value);}}
     let child=match cmd.spawn(){Ok(c)=>c,Err(e)=>{crate::process::set_last_error(process_error(&e));return 0;}};
     let pid=child.id();let object=Arc::new(ProcessObject{state:Mutex::new(ProcessState{child:Some(child),exit_code:259}),changed:Condvar::new()});
     let process_handle=add_sync(SyncHandle::Process(object.clone()),None);let thread_handle=add_sync(SyncHandle::Process(object),None);
@@ -466,15 +473,17 @@ unsafe fn create_process_common(application:Option<String>,command_line:*const u
 pub unsafe extern "win64" fn create_process_a(application:*const u8,command_line:*const u8,process_attributes:usize,thread_attributes:usize,inherit:i32,flags:u32,environment:*const c_void,current_directory:*const u8,startup:*const StartupInfoA,info:*mut ProcessInformation)->i32{
     if application.is_null()&&command_line.is_null(){crate::process::set_last_error(87);return 0;}
     let app=if application.is_null(){None}else{Some(crate::dlls::cstr(application))};
-    let _=(process_attributes,thread_attributes);create_process_common(app,command_line,inherit,flags,environment,current_directory,startup,info)
+    let env=match parse_environment_block(environment,flags&0x400!=0){Ok(e)=>e,Err(e)=>{crate::process::set_last_error(e);return 0;}};
+    let _=(process_attributes,thread_attributes);create_process_common(app,command_line,inherit,flags,env,current_directory,startup,info)
 }
 pub unsafe extern "win64" fn create_process_w(application:*const u16,command_line:*mut u16,process_attributes:usize,thread_attributes:usize,inherit:i32,flags:u32,environment:*const c_void,current_directory:*const u16,startup:*const StartupInfoA,info:*mut ProcessInformation)->i32{
-    let app=if application.is_null(){None}else{let s=match cstring_from_wide(application){Ok(s)=>s,Err(e)=>{crate::process::set_last_error(e);return 0;}};Some(s)};
+    let app=if application.is_null(){None}else{let s=match cstring_from_wide(application){Ok(s)=>s,Err(e)=>{crate::process::set_last_error(e);return 0;}};Some(s.to_string_lossy().into_owned())};
     let line=if command_line.is_null(){None}else{let n=crate::printf::wide_len(command_line);let s=match String::from_utf16(std::slice::from_raw_parts(command_line,n)){Ok(s)=>s,Err(_)=>{crate::process::set_last_error(1113);return 0;}};let bytes=crate::dlls::encode_ansi(&s);match std::ffi::CString::new(bytes){Ok(c)=>Some(c),Err(_)=>{crate::process::set_last_error(87);return 0;}}};
     if app.is_none()&&line.is_none(){crate::process::set_last_error(87);return 0;}
     let cwd=if current_directory.is_null(){None}else{match cstring_from_wide(current_directory){Ok(s)=>Some(s),Err(e)=>{crate::process::set_last_error(e);return 0;}}};
+    let env=match parse_environment_block(environment,flags&0x400!=0){Ok(e)=>e,Err(e)=>{crate::process::set_last_error(e);return 0;}};
     let _=(process_attributes,thread_attributes);
-    create_process_a(app.as_ref().map_or(std::ptr::null(),|s|s.as_ptr()as *const u8),line.as_ref().map_or(std::ptr::null(),|s|s.as_ptr()as *const u8),0,0,inherit,flags,environment,cwd.as_ref().map_or(std::ptr::null(),|s|s.as_ptr()as *const u8),startup,info)
+    create_process_common(app,line.as_ref().map_or(std::ptr::null(),|s|s.as_ptr()as *const u8),inherit,flags,env,cwd.as_ref().map_or(std::ptr::null(),|s|s.as_ptr()as *const u8),startup,info)
 }
 pub unsafe extern "win64" fn open_process(_access:u32,_inherit:i32,pid:u32)->usize{if pid==0{crate::process::set_last_error(87);return 0;}if pid==libc::getpid() as u32{return get_current_process();}crate::process::set_last_error(5);0}
 pub unsafe extern "win64" fn get_exit_code_process(handle:usize,code:*mut u32)->i32{if code.is_null(){crate::process::set_last_error(87);return 0;}let Some(SyncHandle::Process(p))=lookup_sync(handle)else{crate::process::set_last_error(6);return 0;};poll_process(&p);*code=lock(&p.state).exit_code;1}
@@ -809,5 +818,16 @@ mod tests {
         assert_eq!(unsafe{get_exit_code_process(info.process,&mut code)},1);assert_eq!(code,42);
         assert_eq!(unsafe{get_exit_code_thread(info.thread,&mut code)},1);assert_eq!(code,42);
         close_handle(info.thread);close_handle(info.process);
+    }
+
+    #[test]
+    fn create_process_lit_les_blocs_denvironnement_ansi_et_unicode(){
+        let ansi=b"PATH=/bin\0WINLUX_CHILD=ansi\0\0";
+        let parsed=unsafe{parse_environment_block(ansi.as_ptr()as *const c_void,false)}.unwrap().unwrap();
+        assert!(parsed.iter().any(|(k,v)|k=="PATH"&&v=="/bin"));assert!(parsed.iter().any(|(k,v)|k=="WINLUX_CHILD"&&v=="ansi"));
+        let wide:Vec<u16>="PATH=/bin\0WINLUX_CHILD=unicode\0\0".encode_utf16().collect();
+        let parsed=unsafe{parse_environment_block(wide.as_ptr()as *const c_void,true)}.unwrap().unwrap();
+        assert!(parsed.iter().any(|(k,v)|k=="PATH"&&v=="/bin"));assert!(parsed.iter().any(|(k,v)|k=="WINLUX_CHILD"&&v=="unicode"));
+        assert!(unsafe{parse_environment_block(b"BAD\0\0".as_ptr()as *const c_void,false)}.unwrap().unwrap().is_empty());
     }
 }

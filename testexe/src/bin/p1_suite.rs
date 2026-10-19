@@ -205,6 +205,15 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let child_thread_status = GetExitCodeThread(child.thread, &mut child_thread_exit) != 0 && child_thread_exit == 42;
         check!(child_status && child_thread_status, "CreateProcessA/WaitForSingleObject/GetExitCodeProcess");
         if launched { CloseHandle(child.thread); CloseHandle(child.process); }
+        let child_environment = *b"WINLUX_CHILD=child\0\0";
+        let mut env_child: ProcessInformation = core::mem::zeroed();
+        let env_cmd = c"sh -c \"test \\\"$WINLUX_CHILD\\\" = child\"";
+        let env_launched = CreateProcessA(c"Z:\\bin\\sh".as_ptr(), env_cmd.as_ptr(), null_mut(), null_mut(), 0, 0, child_environment.as_ptr() as *const core::ffi::c_void, null_mut(), &startup, &mut env_child) != 0;
+        let env_done = env_launched && WaitForSingleObject(env_child.process, 5000) == 0;
+        let mut env_exit = 999u32;
+        let env_ok = env_done && GetExitCodeProcess(env_child.process, &mut env_exit) != 0 && env_exit == 0;
+        check!(env_ok, "CreateProcessA construit l'environnement invité depuis le bloc ANSI");
+        if env_launched { CloseHandle(env_child.thread); CloseHandle(env_child.process); }
         let app_w = [b'/' as u16,b'b' as u16,b'i' as u16,b'n' as u16,b'/' as u16,b't' as u16,b'r' as u16,b'u' as u16,b'e' as u16,0];
         let mut cmd_w = [b't' as u16,b'r' as u16,b'u' as u16,b'e' as u16,0];
         let mut child_w: ProcessInformation = core::mem::zeroed();
