@@ -36,7 +36,8 @@ des codecs, des services et parfois d’un runtime managé.
 - Les variantes Unicode `W`, les conversions UTF-8/Windows-1252, `VirtualProtect`,
   `MEM_DECOMMIT`, `GetSystemInfo` et plusieurs fonctions `Rtl*` sont disponibles.
 - Les API de fichiers A/W incluent notamment `CreateFile`, `CopyFile`, `MoveFile`,
-  `DeleteFile`, `CreateDirectory`, `RemoveDirectory` et `GetFullPathName`.
+  `DeleteFile`, `CreateDirectory`, `RemoveDirectory`, `GetFullPathName` et
+  l’énumération `FindFirstFile`/`FindNextFile` avec jokers.
 - `ReadFile`/`WriteFile` overlapped utilisent des offsets explicites, retournent
   `ERROR_IO_PENDING` et se récupèrent avec `GetOverlappedResult`; l’annulation,
   avec `CancelIo/CancelIoEx`, est best-effort avant le début effectif de l’accès.

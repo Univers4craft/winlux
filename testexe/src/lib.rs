@@ -72,6 +72,33 @@ pub struct Overlapped { pub internal: usize, pub internal_high: usize, pub offse
 pub struct OverlappedEntry { pub completion_key: usize, pub overlapped: *mut c_void, pub internal: usize, pub bytes_transferred: u32, pub reserved: u32 }
 
 #[repr(C)]
+pub struct Win32FindDataA {
+    pub attributes: u32,
+    pub creation_time: u64,
+    pub access_time: u64,
+    pub write_time: u64,
+    pub size_high: u32,
+    pub size_low: u32,
+    pub reserved0: u32,
+    pub reserved1: u32,
+    pub file_name: [c_char; 260],
+    pub alternate_name: [c_char; 14],
+}
+#[repr(C)]
+pub struct Win32FindDataW {
+    pub attributes: u32,
+    pub creation_time: u64,
+    pub access_time: u64,
+    pub write_time: u64,
+    pub size_high: u32,
+    pub size_low: u32,
+    pub reserved0: u32,
+    pub reserved1: u32,
+    pub file_name: [u16; 260],
+    pub alternate_name: [u16; 14],
+}
+
+#[repr(C)]
 pub struct AddrInfoA {
     pub flags: i32,
     pub family: i32,
@@ -143,6 +170,11 @@ extern "system" {
     pub fn MoveFileA(src: *const c_char, dst: *const c_char) -> i32;
     pub fn CreateDirectoryA(path: *const c_char, sec: *mut c_void) -> i32;
     pub fn RemoveDirectoryA(path: *const c_char) -> i32;
+    pub fn FindFirstFileA(path: *const c_char, data: *mut Win32FindDataA) -> Handle;
+    pub fn FindNextFileA(search: Handle, data: *mut Win32FindDataA) -> i32;
+    pub fn FindFirstFileW(path: *const u16, data: *mut Win32FindDataW) -> Handle;
+    pub fn FindNextFileW(search: Handle, data: *mut Win32FindDataW) -> i32;
+    pub fn FindClose(search: Handle) -> i32;
     pub fn GetFullPathNameA(path: *const c_char, size: u32, out: *mut c_char, file_part: *mut *mut c_char) -> u32;
     pub fn GetFullPathNameW(path: *const u16, size: u32, out: *mut u16, file_part: *mut *mut u16) -> u32;
     pub fn ExitProcess(code: u32) -> !;

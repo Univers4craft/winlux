@@ -6,7 +6,7 @@ Winlux est un runtime expérimental Linux qui charge des exécutables **Windows 
 
 ## État testé
 
-Les exécutables de test incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, un test de DLL réelle et un test d’import différé. Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux.
+Les exécutables de test incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, des tests de DLL réelle/import différé et `findfiles.exe`. Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux.
 
 Le runtime contient notamment un chargeur PE, les relocations et imports, un PEB/TEB minimal, du TLS, des DLL intégrées partielles, le registre Winlux persistant, des fichiers mappés vers Linux et une passerelle Winsock/ALSA expérimentale.
 

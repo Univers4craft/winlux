@@ -112,7 +112,7 @@ fn next_handle() -> usize { NEXT_HANDLE.fetch_add(1, Ordering::Relaxed) }
 fn post_iocp(port:&CompletionPort,packet:CompletionPacket){lock(&port.queue).push_back(packet);port.changed.notify_one();}
 fn iocp_is_signaled(port:&CompletionPort)->bool{!lock(&port.queue).is_empty()}
 fn wait_iocp(port:&CompletionPort,timeout:u32)->u32{let start=std::time::Instant::now();let mut q=lock(&port.queue);loop{if !q.is_empty(){return 0;}if timeout==0{return 258;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{return 258;}timeout-elapsed};let(next,timed)=wait_condvar(&port.changed,q,left);q=next;if timed&&q.is_empty(){return 258;}}}
-fn io_error_code(e: &std::io::Error) -> u32 {
+pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
     match e.kind() { std::io::ErrorKind::NotFound => 2, std::io::ErrorKind::PermissionDenied => 5,
         std::io::ErrorKind::AlreadyExists => 183, std::io::ErrorKind::InvalidInput => 87,
         std::io::ErrorKind::NotADirectory => 267, _ => 31 }

@@ -2,14 +2,14 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (29 tests), compilation release et les cinq exécutables PE de test réussissent. Relancer les scripts après chaque changement.
+- Dernière validation connue : `cargo test -p winlux` (31 tests), compilation release et les six exécutables PE de test réussissent. Relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
-- [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe` et `delay_import.exe` sous Winlux.
-- [x] Ajouter 29 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus et les fichiers overlapped/IOCP.
+- [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe` et `findfiles.exe` sous Winlux.
+- [x] Ajouter 31 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers et IOCP.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
@@ -43,6 +43,7 @@
 - [x] Relier les API de base fichiers/répertoires Windows au système de fichiers Linux.
 - [x] Ajouter des variantes Unicode `W` pour les chemins, fichiers et variables d’environnement.
 - [x] Ajouter `GetFullPathName`, `CopyFile`, `MoveFile`, `CreateDirectory` et `RemoveDirectory` en A/W ou A selon l’API.
+- [x] Ajouter l’énumération de répertoires `FindFirstFileA/W`, `FindNextFileA/W` et `FindClose` avec motifs `*`/`?` et tests PE.
 - [x] Implémenter les conversions UTF-8 et Windows-1252 avec vérification des buffers.
 - [x] Ajouter les API de base `GetSystemInfo`, version OS, horloge FILETIME et plusieurs primitives `Rtl*`.
 - [x] Ajouter les premières API GUI (`user32`, `gdi32`) et réseau (`ws2_32`).

@@ -17,6 +17,7 @@ pub mod ws2_32;
 pub mod gdi32;
 pub mod mfplat;
 pub mod winmm;
+pub mod winfile;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -58,7 +59,7 @@ fn builtins() -> &'static Vec<Builtin> {
         let mut ucrt = crt.clone();
         ucrt.extend(msvcrt::ucrt_exports());
         vec![
-            Builtin { name: "kernel32", exports: kernel32::exports(), handle: fake_module() },
+            Builtin { name: "kernel32", exports: { let mut e=kernel32::exports(); e.extend(winfile::exports()); e }, handle: fake_module() },
             Builtin { name: "ntdll", exports: ntdll::exports(), handle: fake_module() },
             Builtin { name: "msvcrt", exports: crt, handle: fake_module() },
             Builtin { name: "ucrtbase", exports: ucrt, handle: fake_module() },
