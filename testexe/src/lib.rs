@@ -99,6 +99,18 @@ pub struct Win32FindDataW {
 }
 
 #[repr(C)]
+pub struct FileTime { pub low: u32, pub high: u32 }
+#[repr(C)]
+pub struct Win32FileAttributeData {
+    pub attributes: u32,
+    pub creation_time: FileTime,
+    pub access_time: FileTime,
+    pub write_time: FileTime,
+    pub size_high: u32,
+    pub size_low: u32,
+}
+
+#[repr(C)]
 pub struct AddrInfoA {
     pub flags: i32,
     pub family: i32,
@@ -140,6 +152,11 @@ extern "system" {
     pub fn CreateFileA(path: *const c_char, access: u32, share: u32, sec: *mut c_void, creation: u32, flags: u32, template: Handle) -> Handle;
     pub fn CreateFileW(path: *const u16, access: u32, share: u32, sec: *mut c_void, creation: u32, flags: u32, template: Handle) -> Handle;
     pub fn GetFileSize(h: Handle, high: *mut u32) -> u32;
+    pub fn SetEndOfFile(h: Handle) -> i32;
+    pub fn GetFileAttributesExA(path: *const c_char, level: u32, data: *mut Win32FileAttributeData) -> i32;
+    pub fn GetFileAttributesExW(path: *const u16, level: u32, data: *mut Win32FileAttributeData) -> i32;
+    pub fn GetTempFileNameA(path: *const c_char, prefix: *const c_char, unique: u32, output: *mut c_char) -> u32;
+    pub fn GetTempFileNameW(path: *const u16, prefix: *const u16, unique: u32, output: *mut u16) -> u32;
     pub fn SetFilePointer(h: Handle, distance: i32, high: *mut i32, method: u32) -> u32;
     pub fn FlushFileBuffers(h: Handle) -> i32;
     pub fn GetOverlappedResult(h: Handle, overlapped: *mut Overlapped, transferred: *mut u32, wait: i32) -> i32;

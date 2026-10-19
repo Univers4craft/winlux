@@ -21,6 +21,7 @@ struct CompletionPacket { bytes:u32,key:usize,overlapped:usize,error:u32 }
 struct CompletionPort { queue:Mutex<VecDeque<CompletionPacket>>,changed:Condvar }
 static IOCP_ASSOCIATIONS:OnceLock<Mutex<HashMap<usize,(Arc<CompletionPort>,usize)>>>=OnceLock::new();
 static NEXT_HANDLE: AtomicUsize = AtomicUsize::new(0x1_0000);
+static TEMP_FILE_SEQUENCE:AtomicU32=AtomicU32::new(1);
 
 struct EventObject { manual_reset: bool, signaled: Mutex<bool>, changed: Condvar }
 struct MutexState { owner: Option<ThreadId>, recursion: usize }
@@ -84,6 +85,12 @@ pub struct Overlapped { pub internal:usize,pub internal_high:usize,pub offset:u3
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct OverlappedEntry { pub completion_key:usize,pub overlapped:*mut c_void,pub internal:usize,pub bytes_transferred:u32,pub reserved:u32 }
+#[repr(C)]
+#[derive(Clone,Copy,Default)]
+pub struct FileTime { pub low:u32,pub high:u32 }
+#[repr(C)]
+#[derive(Clone,Copy,Default)]
+pub struct Win32FileAttributeData { pub attributes:u32,pub creation_time:FileTime,pub access_time:FileTime,pub write_time:FileTime,pub size_high:u32,pub size_low:u32 }
 
 #[repr(C)]
 struct CriticalSection { debug_info:*mut c_void, lock_count:i32, recursion_count:i32, owning_thread:usize, lock_semaphore:usize, spin_count:usize }
@@ -223,6 +230,42 @@ pub unsafe extern "win64" fn create_file_a(path:*const u8,access:u32,_share:u32,
 pub unsafe extern "win64" fn get_file_size(h:usize,high:*mut u32)->u32 {
     let f={let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));let Some(FileHandle::File(f))=handles.get(&h)else{crate::process::set_last_error(6);return u32::MAX;};f.clone()};
     let result={lock(&f).metadata()};match result{Ok(m)=>{let n=m.len();if !high.is_null(){*high=(n>>32) as u32;}n as u32},Err(e)=>{crate::process::set_last_error(io_error_code(&e));u32::MAX}}
+}
+pub unsafe extern "win64" fn set_end_of_file(h:usize)->i32{let f={let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));let Some(FileHandle::File(f))=handles.get(&h)else{crate::process::set_last_error(6);return 0;};f.clone()};let mut file=lock(&f);let position=match file.stream_position(){Ok(p)=>p,Err(e)=>{crate::process::set_last_error(io_error_code(&e));return 0;}};match file.set_len(position){Ok(())=>1,Err(e)=>{crate::process::set_last_error(io_error_code(&e));0}}}
+fn system_time_to_filetime(t:std::time::SystemTime)->u64{const EPOCH:u64=116_444_736_000_000_000;let d=t.duration_since(std::time::UNIX_EPOCH).unwrap_or_default();EPOCH.saturating_add(d.as_secs().saturating_mul(10_000_000)).saturating_add((d.subsec_nanos()/100)as u64)}
+fn filetime_parts(t:u64)->FileTime{FileTime{low:t as u32,high:(t>>32)as u32}}
+fn metadata_to_find_data(path:&std::path::Path,metadata:&std::fs::Metadata)->Win32FileAttributeData{let mut attributes=0;if metadata.is_dir(){attributes|=0x10;}if metadata.permissions().readonly(){attributes|=1;}if path.file_name().is_some_and(|n|n.to_string_lossy().starts_with('.')){attributes|=2;}if metadata.is_file(){attributes|=0x20;}if attributes==0{attributes=0x80;}let zero=std::time::UNIX_EPOCH;Win32FileAttributeData{attributes,creation_time:filetime_parts(system_time_to_filetime(metadata.created().unwrap_or_else(|_|metadata.modified().unwrap_or(zero)))),access_time:filetime_parts(system_time_to_filetime(metadata.accessed().unwrap_or(zero))),write_time:filetime_parts(system_time_to_filetime(metadata.modified().unwrap_or(zero))),size_high:(metadata.len()>>32)as u32,size_low:metadata.len()as u32}}
+pub unsafe extern "win64" fn get_file_attributes_ex_a(path:*const u8,level:u32,data:*mut Win32FileAttributeData)->i32{if path.is_null()||data.is_null()||level!=0{crate::process::set_last_error(87);return 0;}let p=crate::paths::to_linux(&crate::dlls::cstr(path));match std::fs::metadata(&p){Ok(m)=>{std::ptr::write_unaligned(data,metadata_to_find_data(&p,&m));1},Err(e)=>{crate::process::set_last_error(io_error_code(&e));0}}}
+pub unsafe extern "win64" fn get_file_attributes_ex_w(path:*const u16,level:u32,data:*mut Win32FileAttributeData)->i32{if path.is_null(){crate::process::set_last_error(87);return 0;}let s=match String::from_utf16(std::slice::from_raw_parts(path,crate::printf::wide_len(path))){Ok(s)=>s,Err(_)=>{crate::process::set_last_error(1113);return 0;}};let p=crate::paths::to_linux(&s);if data.is_null()||level!=0{crate::process::set_last_error(87);return 0;}match std::fs::metadata(&p){Ok(m)=>{std::ptr::write_unaligned(data,metadata_to_find_data(&p,&m));1},Err(e)=>{crate::process::set_last_error(io_error_code(&e));0}}}
+fn get_temp_file_name(directory:&str,prefix:&str,unique:u32)->Result<(String,u32),u32>{
+    if prefix.len()>3||prefix.contains(['\\','/']){return Err(87);}
+    let dir=crate::paths::to_linux(directory);if !dir.is_dir(){return Err(3);}
+    let attempts=if unique==0{65535}else{1};
+    for _ in 0..attempts{
+        let id=if unique==0{TEMP_FILE_SEQUENCE.fetch_add(1,Ordering::Relaxed).max(1)}else{unique};
+        let name=format!("{prefix}{id:04X}.tmp");let path=dir.join(&name);
+        if unique==0{match OpenOptions::new().write(true).create_new(true).open(&path){
+            Ok(_)=>return Ok((crate::paths::to_windows(&path),id)),
+            Err(e)if e.kind()==std::io::ErrorKind::AlreadyExists=>continue,
+            Err(e)=>return Err(io_error_code(&e)),
+        }}else{return Ok((crate::paths::to_windows(&path),id));}
+    }
+    Err(80)
+}
+pub unsafe extern "win64" fn get_temp_file_name_a(directory:*const u8,prefix:*const u8,unique:u32,out:*mut u8)->u32{
+    if directory.is_null()||out.is_null(){crate::process::set_last_error(87);return 0;}
+    let dir=crate::dlls::cstr(directory);let prefix=if prefix.is_null(){String::new()}else{crate::dlls::cstr(prefix)};
+    let(path,id)=match get_temp_file_name(&dir,&prefix,unique){Ok(x)=>x,Err(e)=>{crate::process::set_last_error(e);return 0;}};
+    let b=crate::dlls::encode_ansi(&path);if b.len()>=260{if unique==0{let _=std::fs::remove_file(crate::paths::to_linux(&path));}crate::process::set_last_error(206);return 0;}
+    std::ptr::copy_nonoverlapping(b.as_ptr(),out,b.len());*out.add(b.len())=0;id
+}
+pub unsafe extern "win64" fn get_temp_file_name_w(directory:*const u16,prefix:*const u16,unique:u32,out:*mut u16)->u32{
+    if directory.is_null()||out.is_null(){crate::process::set_last_error(87);return 0;}
+    let d=match String::from_utf16(std::slice::from_raw_parts(directory,crate::printf::wide_len(directory))){Ok(s)=>s,Err(_)=>{crate::process::set_last_error(1113);return 0;}};
+    let p=if prefix.is_null(){String::new()}else{match String::from_utf16(std::slice::from_raw_parts(prefix,crate::printf::wide_len(prefix))){Ok(s)=>s,Err(_)=>{crate::process::set_last_error(1113);return 0;}}};
+    let(path,id)=match get_temp_file_name(&d,&p,unique){Ok(x)=>x,Err(e)=>{crate::process::set_last_error(e);return 0;}};
+    let w:Vec<u16>=path.encode_utf16().collect();if w.len()>=260{if unique==0{let _=std::fs::remove_file(crate::paths::to_linux(&path));}crate::process::set_last_error(206);return 0;}
+    std::ptr::copy_nonoverlapping(w.as_ptr(),out,w.len());*out.add(w.len())=0;id
 }
 pub unsafe extern "win64" fn set_file_pointer(h:usize,distance:i32,high:*mut i32,method:u32)->u32 {
     let f={let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));let Some(FileHandle::File(f))=handles.get(&h)else{crate::process::set_last_error(6);return u32::MAX;};f.clone()};let mut f=lock(&f);
@@ -609,9 +652,9 @@ pub fn exports() -> crate::dlls::Exports { crate::exports! {
    "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
   "GetTickCount"=>fn get_tick_count,"GetTickCount64"=>fn get_tick_count64,"GetCurrentProcessId"=>fn get_current_process_id,"CreateThread"=>fn create_thread,"CloseHandle"=>fn close_handle,"GetEnvironmentVariableA"=>fn get_environment_variable_a,"SetEnvironmentVariableA"=>fn set_environment_variable_a,
   "GetSystemInfo"=>fn get_system_info,"GetNativeSystemInfo"=>fn get_native_system_info,"GetSystemTimeAsFileTime"=>fn get_system_time_as_file_time,"GetSystemTimePreciseAsFileTime"=>fn get_system_time_as_file_time,"GetVersion"=>fn get_version,"GetVersionExA"=>fn get_version_ex_a,"GetVersionExW"=>fn get_version_ex_w,
-   "GetCurrentDirectoryA"=>fn get_current_directory_a,"SetCurrentDirectoryA"=>fn set_current_directory_a,"GetTempPathA"=>fn get_temp_path_a,"GetModuleFileNameA"=>fn get_module_file_name_a,"GetFileAttributesA"=>fn get_file_attributes_a,"DeleteFileA"=>fn delete_file_a,"CreateDirectoryA"=>fn create_directory_a,"CreateFileW"=>fn create_file_w,"GetFullPathNameA"=>fn get_full_path_name_a,"CopyFileA"=>fn copy_file_a,"MoveFileA"=>fn move_file_a,"RemoveDirectoryA"=>fn remove_directory_a,
+   "GetCurrentDirectoryA"=>fn get_current_directory_a,"SetCurrentDirectoryA"=>fn set_current_directory_a,"GetTempPathA"=>fn get_temp_path_a,"GetTempFileNameA"=>fn get_temp_file_name_a,"GetModuleFileNameA"=>fn get_module_file_name_a,"GetFileAttributesA"=>fn get_file_attributes_a,"GetFileAttributesExA"=>fn get_file_attributes_ex_a,"DeleteFileA"=>fn delete_file_a,"CreateDirectoryA"=>fn create_directory_a,"CreateFileW"=>fn create_file_w,"GetFullPathNameA"=>fn get_full_path_name_a,"CopyFileA"=>fn copy_file_a,"MoveFileA"=>fn move_file_a,"RemoveDirectoryA"=>fn remove_directory_a,
    "GetEnvironmentVariableW"=>fn get_environment_variable_w,"SetEnvironmentVariableW"=>fn set_environment_variable_w,"GetCurrentDirectoryW"=>fn get_current_directory_w,"SetCurrentDirectoryW"=>fn set_current_directory_w,
-   "GetTempPathW"=>fn get_temp_path_w,"GetModuleFileNameW"=>fn get_module_file_name_w,"GetFileAttributesW"=>fn get_file_attributes_w,"DeleteFileW"=>fn delete_file_w,"CreateDirectoryW"=>fn create_directory_w,"GetFullPathNameW"=>fn get_full_path_name_w,"CopyFileW"=>fn copy_file_w,"MoveFileW"=>fn move_file_w,"RemoveDirectoryW"=>fn remove_directory_w,"Sleep"=>fn sleep,
+   "GetTempPathW"=>fn get_temp_path_w,"GetTempFileNameW"=>fn get_temp_file_name_w,"GetModuleFileNameW"=>fn get_module_file_name_w,"GetFileAttributesW"=>fn get_file_attributes_w,"GetFileAttributesExW"=>fn get_file_attributes_ex_w,"DeleteFileW"=>fn delete_file_w,"CreateDirectoryW"=>fn create_directory_w,"GetFullPathNameW"=>fn get_full_path_name_w,"CopyFileW"=>fn copy_file_w,"MoveFileW"=>fn move_file_w,"RemoveDirectoryW"=>fn remove_directory_w,"SetEndOfFile"=>fn set_end_of_file,"Sleep"=>fn sleep,
   "TlsAlloc"=>fn tls_alloc, "TlsFree"=>fn tls_free, "TlsSetValue"=>fn tls_set_value, "TlsGetValue"=>fn tls_get_value,
   "MultiByteToWideChar"=>fn multi_byte_to_wide,"WideCharToMultiByte"=>fn wide_char_to_multi_byte,"WriteConsoleW"=>fn write_console_w,
  "QueryPerformanceFrequency"=>fn query_performance_frequency, "QueryPerformanceCounter"=>fn query_performance_counter

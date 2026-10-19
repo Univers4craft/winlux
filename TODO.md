@@ -43,6 +43,7 @@
 - [x] Relier les API de base fichiers/répertoires Windows au système de fichiers Linux.
 - [x] Ajouter des variantes Unicode `W` pour les chemins, fichiers et variables d’environnement.
 - [x] Ajouter `GetFullPathName`, `CopyFile`, `MoveFile`, `CreateDirectory` et `RemoveDirectory` en A/W ou A selon l’API.
+- [x] Ajouter `GetTempFileNameA/W`, `GetFileAttributesExA/W` et `SetEndOfFile` avec tests fonctionnels.
 - [x] Ajouter l’énumération de répertoires `FindFirstFileA/W`, `FindNextFileA/W` et `FindClose` avec motifs `*`/`?` et tests PE.
 - [x] Implémenter les conversions UTF-8 et Windows-1252 avec vérification des buffers.
 - [x] Ajouter les API de base `GetSystemInfo`, version OS, horloge FILETIME et plusieurs primitives `Rtl*`.
