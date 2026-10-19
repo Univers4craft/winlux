@@ -97,10 +97,14 @@ présentes jusqu’à la fin du processus afin de ne pas invalider des pointeurs
 encore détenus par le code invité. Les handles de fichiers ignorent encore les
 partages Windows avancés et les opérations asynchrones/overlapped.
 
-Les stubs GUI ne fournissent pas un affichage Windows utilisable : les fenêtres,
-messages et GDI ne sont pas encore reliés à GTK/Qt/Wayland/X11. L’association
-`.desktop` et binfmt est préparée, mais n’a pas été installée ni validée sur une
-session de bureau réelle. Le script ISO requiert encore un staging Linux bootable.
+Le noyau fenêtres/messages (`user32`) fonctionne : classes, table HWND, file de
+messages par thread, appel du `WndProc` invité et une boucle `GetMessage`/
+`DispatchMessage` complète (testée par `gui_suite.exe`). Le rendu n'est pas
+encore relié à un serveur graphique : le backend actuel est *headless*, donc les
+fenêtres ne s'affichent pas tant que X11/Wayland n'est pas branché. GDI reste
+minimal. L’association `.desktop` et binfmt est préparée, mais n’a pas été
+installée ni validée sur une session de bureau réelle. Le script ISO requiert
+encore un staging Linux bootable.
 
 ## Cas .NET et paint.net
 

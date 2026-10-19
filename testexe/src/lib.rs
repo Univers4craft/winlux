@@ -142,6 +142,68 @@ pub struct SockAddrIn {
     pub zero: [u8; 8],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Point {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct Rect {
+    pub left: i32,
+    pub top: i32,
+    pub right: i32,
+    pub bottom: i32,
+}
+
+#[repr(C)]
+pub struct Msg {
+    pub hwnd: Handle,
+    pub message: u32,
+    pub wparam: usize,
+    pub lparam: isize,
+    pub time: u32,
+    pub pt: Point,
+    pub l_private: u32,
+}
+
+#[repr(C)]
+pub struct WndClassExA {
+    pub size: u32,
+    pub style: u32,
+    pub wnd_proc: usize,
+    pub cls_extra: i32,
+    pub wnd_extra: i32,
+    pub instance: Handle,
+    pub icon: Handle,
+    pub cursor: Handle,
+    pub background: Handle,
+    pub menu_name: *const c_char,
+    pub class_name: *const c_char,
+    pub icon_sm: Handle,
+}
+
+#[repr(C)]
+pub struct PaintStruct {
+    pub hdc: Handle,
+    pub erase: i32,
+    pub paint: Rect,
+    pub restore: i32,
+    pub inc_update: i32,
+    pub reserved: [u8; 32],
+}
+
+pub const WM_CREATE: u32 = 0x0001;
+pub const WM_DESTROY: u32 = 0x0002;
+pub const WM_SIZE: u32 = 0x0005;
+pub const WM_PAINT: u32 = 0x000F;
+pub const WM_CLOSE: u32 = 0x0010;
+pub const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
+pub const WS_VISIBLE: u32 = 0x1000_0000;
+pub const SW_SHOW: i32 = 5;
+
 pub const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
 
 #[link(name = "kernel32", kind = "raw-dylib")]
@@ -267,6 +329,29 @@ extern "system" {
     pub fn RegDeleteValueA(key: Handle, name: *const c_char) -> i32;
     pub fn RegDeleteKeyA(root: Handle, sub: *const c_char) -> i32;
     pub fn RegCloseKey(key: Handle) -> i32;
+}
+
+#[link(name = "user32", kind = "raw-dylib")]
+extern "C" {
+    pub fn RegisterClassExA(wc: *const WndClassExA) -> u16;
+    pub fn CreateWindowExA(
+        ex_style: u32, class: *const c_char, title: *const c_char, style: u32,
+        x: i32, y: i32, cx: i32, cy: i32, parent: Handle, menu: Handle, instance: Handle, param: *mut c_void,
+    ) -> Handle;
+    pub fn DefWindowProcA(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
+    pub fn GetMessageA(msg: *mut Msg, hwnd: Handle, min: u32, max: u32) -> i32;
+    pub fn DispatchMessageA(msg: *const Msg) -> isize;
+    pub fn TranslateMessage(msg: *const Msg) -> i32;
+    pub fn PostQuitMessage(code: i32);
+    pub fn ShowWindow(hwnd: Handle, cmd: i32) -> i32;
+    pub fn UpdateWindow(hwnd: Handle) -> i32;
+    pub fn DestroyWindow(hwnd: Handle) -> i32;
+    pub fn IsWindow(hwnd: Handle) -> i32;
+    pub fn GetClientRect(hwnd: Handle, out: *mut Rect) -> i32;
+    pub fn GetWindowRect(hwnd: Handle, out: *mut Rect) -> i32;
+    pub fn BeginPaint(hwnd: Handle, ps: *mut PaintStruct) -> Handle;
+    pub fn EndPaint(hwnd: Handle, ps: *const PaintStruct) -> i32;
+    pub fn GetSystemMetrics(index: i32) -> i32;
 }
 
 #[link(name = "msvcrt", kind = "raw-dylib")]
