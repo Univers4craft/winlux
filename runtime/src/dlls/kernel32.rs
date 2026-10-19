@@ -397,7 +397,7 @@ pub unsafe extern "win64" fn set_file_time(h: usize, _creation: *const FileTime,
     let f = { let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))); let Some(FileHandle::File(f)) = handles.get(&h) else { crate::process::set_last_error(6); return 0; }; f.clone() };
     let Some(ft) = filetime_value(write) else { return 1; };
     let when = system_time_from_filetime(ft);
-    let mut file = lock(&f);
+    let file = lock(&f);
     let result = file.set_modified(when); match result { Ok(()) => 1, Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 } }
 }
 

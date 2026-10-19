@@ -1,5 +1,7 @@
 # Winlux
 
+[![CI](https://github.com/Univers4craft/winlux/actions/workflows/ci.yml/badge.svg)](https://github.com/Univers4craft/winlux/actions/workflows/ci.yml)
+
 Winlux est un runtime expérimental Linux qui charge des exécutables **Windows PE32+ x86-64** et fournit un sous-ensemble d’API Win32 écrit en Rust. Le projet vise une interopérabilité progressive avec Linux; il ne s’appuie pas sur Wine.
 
 > **État expérimental :** la compatibilité est partielle. Ce projet ne garantit ni l’exécution de tout logiciel Windows, ni l’absence de crash. Les applications GUI complexes et les exécutables .NET ne sont pas encore pris en charge.

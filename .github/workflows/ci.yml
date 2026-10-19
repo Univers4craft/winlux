@@ -1,0 +1,130 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+    branches: [master]
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # 1. Vérifications statiques rapides sur le code source.
+  hygiene:
+    name: Hygiène
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Ne pas dépendre de Wine
+        run: |
+          set -eu
+          # Aucune bibliothèque Wine ne doit être référencée par le runtime.
+          if grep -rn --include=*.rs -E 'extern "C" \{[^}]*\b(wine|ntdll_dll)\b' runtime/src; then
+            echo "Dépendance Wine détectée" >&2; exit 1
+          fi
+          if grep -rn -E 'winegcc|winegcc|libwine|winebuild' --include=*.toml --include=*.sh .; then
+            echo "Outil Wine détecté" >&2; exit 1
+          fi
+          echo "Aucune dépendance Wine."
+
+      - name: Les scripts sont en LF et exécutables
+        run: |
+          set -eu
+          for f in scripts/*.sh; do
+            if grep -q $'\r' "$f"; then
+              echo "Fini de ligne CRLF dans $f" >&2; exit 1
+            fi
+            test -x "$f" || { echo "$f n'est pas exécutable" >&2; exit 1; }
+          done
+          echo "Scripts valides."
+
+      - name: Les PEs de test sont listés dans le script
+        run: |
+          set -eu
+          # Tout .rs dans testexe/src/bin doit être référencé par test-runtime.sh,
+          # sinon un test pourrait être oublié silencieusement.
+          for b in testexe/src/bin/*.rs; do
+            name=$(basename "$b" .rs)
+            if ! grep -q "\b$name\b" scripts/test-runtime.sh; then
+              echo "$name n'est pas exécuté par scripts/test-runtime.sh" >&2; exit 1
+            fi
+          done
+          echo "Tous les binaires PE sont couverts."
+
+  # 2. Build + tests unitaires du runtime.
+  unit-tests:
+    name: Tests unitaires
+    runs-on: ubuntu-latest
+    needs: hygiene
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Installer Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-unit-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-unit-
+
+      - name: Compiler le runtime
+        run: cargo build --release -p winlux
+
+      - name: Lancer les tests unitaires
+        run: cargo test -p winlux
+
+      - name: Aucune erreur de compilation
+        run: cargo check -p winlux --all-targets
+
+  # 3. Compile les .exe Windows puis les exécute sous Winlux.
+  runtime-tests:
+    name: Tests runtime (PE)
+    runs-on: ubuntu-latest
+    needs: unit-tests
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Installer Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-pe-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-pe-
+
+      - name: Compiler le runtime
+        run: cargo build --release -p winlux
+
+      - name: Compiler les exécutables PE de test
+        run: bash scripts/build-tests.sh
+
+      - name: Exécuter les tests runtime
+        run: bash scripts/test-runtime.sh
+
+      - name: Rapport des PE générés
+        if: always()
+        run: |
+          ls -l target/x86_64-pc-windows-msvc/release/*.exe || true
