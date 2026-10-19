@@ -256,6 +256,90 @@ crate::varargs_thunk!(snprintf_s_thunk => imp_snprintf_s);
 crate::varargs_thunk!(vsnprintf_thunk => imp_vsnprintf);
 crate::varargs_thunk!(vsnprintf_c99_thunk => imp_vsnprintf_c99);
 
+// ---------- Variantes larges (wchar_t) ----------
+
+/// Formate une chaîne de format large en UTF-16 via le moteur étroit.
+unsafe fn format_wide(fmt:*const u16,va:&mut crate::thunks::VaList)->Vec<u16>{
+    let narrow={
+        let n=crate::printf::wide_len(fmt);
+        let text=String::from_utf16_lossy(std::slice::from_raw_parts(fmt,n));
+        text.into_bytes()
+    };
+    let opts=crate::printf::Opts{wide:true,..crate::printf::MSVCRT};
+    let out=crate::printf::format(&narrow,va,opts);
+    String::from_utf8_lossy(&out).encode_utf16().collect()
+}
+unsafe fn write_limited_w(dst:*mut u16,size:usize,w:&[u16])->(bool,usize){
+    if !dst.is_null()&&size>0{
+        let n=w.len().min(size-1);
+        std::ptr::copy_nonoverlapping(w.as_ptr(),dst,n);
+        *dst.add(n)=0;
+    }
+    (w.len()>=size,w.len())
+}
+unsafe fn itow_impl(value:u64,negative:bool,buf:*mut u16,radix:i32)->*mut u16{
+    if buf.is_null(){return buf;}
+    let r=if(2..=36).contains(&radix){radix as u64}else{10};
+    let digits=b"0123456789abcdefghijklmnopqrstuvwxyz";
+    let mut tmp=[0u16;72];
+    let mut i=tmp.len();
+    let mut v=value;
+    if v==0{i-=1;tmp[i]=b'0' as u16;}
+    while v>0{i-=1;tmp[i]=digits[(v%r)as usize]as u16;v/=r;}
+    if negative{i-=1;tmp[i]=b'-' as u16;}
+    let len=tmp.len()-i;
+    std::ptr::copy_nonoverlapping(tmp.as_ptr().add(i),buf,len);
+    *buf.add(len)=0;
+    buf
+}
+pub unsafe extern "win64" fn itow(value:i32,buf:*mut u16,radix:i32)->*mut u16{itow_impl(value.unsigned_abs()as u64,value<0,buf,radix)}
+pub unsafe extern "win64" fn i64tow(value:i64,buf:*mut u16,radix:i32)->*mut u16{itow_impl(value.unsigned_abs(),value<0,buf,radix)}
+pub unsafe extern "win64" fn ui64tow(value:u64,buf:*mut u16,radix:i32)->*mut u16{itow_impl(value,false,buf,radix)}
+pub unsafe extern "win64" fn ultow(value:u32,buf:*mut u16,radix:i32)->*mut u16{itow_impl(value as u64,false,buf,radix)}
+unsafe extern "win64" fn imp_snwprintf(args:*const u64)->i32{
+    let mut v=crate::thunks::VaList::new(args);
+    let dst=v.next_u64() as *mut u16;
+    let size=v.next_u64() as usize;
+    let fmt=v.next_ptr::<u16>();
+    let w=format_wide(fmt,&mut v);
+    let(truncated,len)=write_limited_w(dst,size,&w);
+    if truncated{-1}else{len as i32}
+}
+unsafe extern "win64" fn imp_snwprintf_c99(args:*const u64)->i32{
+    let mut v=crate::thunks::VaList::new(args);
+    let dst=v.next_u64() as *mut u16;
+    let size=v.next_u64() as usize;
+    let fmt=v.next_ptr::<u16>();
+    let w=format_wide(fmt,&mut v);
+    let(_,len)=write_limited_w(dst,size,&w);
+    len as i32
+}
+unsafe extern "win64" fn imp_snwprintf_s(args:*const u64)->i32{
+    let mut v=crate::thunks::VaList::new(args);
+    let dst=v.next_u64() as *mut u16;
+    let size=v.next_u64() as usize;
+    let count=v.next_u64() as usize;
+    let fmt=v.next_ptr::<u16>();
+    let mut w=format_wide(fmt,&mut v);
+    if count<w.len(){w.truncate(count);}
+    let(truncated,len)=write_limited_w(dst,size,&w);
+    if truncated&&size<=count{-1}else{len as i32}
+}
+unsafe extern "win64" fn imp_vsnwprintf(args:*const u64)->i32{
+    let dst=*args as *mut u16;
+    let size=*args.add(1) as usize;
+    let fmt=*args.add(2) as *const u16;
+    let va=*args.add(3) as *const u64;
+    let mut v=crate::thunks::VaList::new(va);
+    let w=format_wide(fmt,&mut v);
+    let(truncated,len)=write_limited_w(dst,size,&w);
+    if truncated{-1}else{len as i32}
+}
+crate::varargs_thunk!(snwprintf_thunk => imp_snwprintf);
+crate::varargs_thunk!(snwprintf_c99_thunk => imp_snwprintf_c99);
+crate::varargs_thunk!(snwprintf_s_thunk => imp_snwprintf_s);
+crate::varargs_thunk!(vsnwprintf_thunk => imp_vsnwprintf);
+
 pub fn exports()->crate::dlls::Exports{
     crate::exports!{
         "strcpy"=>fn strcpy,"strncpy"=>fn strncpy,"strcat"=>fn strcat,"strncat"=>fn strncat,
@@ -285,6 +369,9 @@ pub fn exports()->crate::dlls::Exports{
         "qsort"=>fn qsort,"bsearch"=>fn bsearch,
         "_snprintf"=>fn snprintf_thunk,"snprintf"=>fn snprintf_c99_thunk,"_snprintf_s"=>fn snprintf_s_thunk,
         "_vsnprintf"=>fn vsnprintf_thunk,"vsnprintf"=>fn vsnprintf_c99_thunk,
+        "_itow"=>fn itow,"_ltow"=>fn itow,"_i64tow"=>fn i64tow,"_ui64tow"=>fn ui64tow,"_ultow"=>fn ultow,
+        "_snwprintf"=>fn snwprintf_thunk,"swprintf"=>fn snwprintf_c99_thunk,"_snwprintf_s"=>fn snwprintf_s_thunk,
+        "_vsnwprintf"=>fn vsnwprintf_thunk,
     }
 }
 
@@ -312,8 +399,7 @@ mod tests {
             assert_eq!(strrchr(buf.as_ptr(),b'a' as i32)as usize, buf.as_ptr() as usize);
             let dup=strdup(buf.as_ptr());
             assert_eq!(std::ffi::CStr::from_ptr(dup as *const i8).to_bytes(),b"abcdef");
-            unsafe{libc::free(dup as *mut c_void);}
-            assert_eq!(stricmp(cs("AbC").as_ptr(),cs("aBc").as_ptr()),0);
+            libc::free(dup as *mut c_void);            assert_eq!(stricmp(cs("AbC").as_ptr(),cs("aBc").as_ptr()),0);
             strlwr(buf.as_mut_ptr());
             assert_eq!(&buf[..3],b"abc");
             strupr(buf.as_mut_ptr());
@@ -403,6 +489,26 @@ mod tests {
         let x=unsafe{*(a as *const i32)};
         let y=unsafe{*(b as *const i32)};
         match x.cmp(&y){std::cmp::Ordering::Less=>-1,std::cmp::Ordering::Equal=>0,std::cmp::Ordering::Greater=>1}
+    }
+
+    #[test]
+    fn formatage_et_conversion_larges(){
+        unsafe{
+            let fmt:Vec<u16>="%s-%d".encode_utf16().chain(std::iter::once(0)).collect();
+            let arg:Vec<u16>="ok".encode_utf16().chain(std::iter::once(0)).collect();
+            let args=[arg.as_ptr() as u64,7u64];
+            let mut v=crate::thunks::VaList::new(args.as_ptr());
+            let out=format_wide(fmt.as_ptr(),&mut v);
+            assert_eq!(String::from_utf16(&out).unwrap(),"ok-7");
+
+            let mut wb=[0u16;24];
+            itow(-255,wb.as_mut_ptr(),10);
+            let end=wb.iter().position(|&c|c==0).unwrap();
+            assert_eq!(String::from_utf16(&wb[..end]).unwrap(),"-255");
+            i64tow(i64::MIN,wb.as_mut_ptr(),10);
+            let end=wb.iter().position(|&c|c==0).unwrap();
+            assert_eq!(String::from_utf16(&wb[..end]).unwrap(),i64::MIN.to_string());
+        }
     }
 
     #[test]

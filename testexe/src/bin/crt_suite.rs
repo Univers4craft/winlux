@@ -91,6 +91,17 @@ pub extern "C" fn mainCRTStartup() -> ! {
             && strcmp(small.as_ptr(), c"abc".as_ptr()) == 0;
         let needed = snprintf(null_mut(), 0, c"%d".as_ptr(), 1234) == 4;
         check!(formatted && truncated && needed, "_snprintf/snprintf avec troncature");
+
+        let wfmt = [b'%' as u16, b's' as u16, b'-' as u16, b'%' as u16, b'd' as u16, 0];
+        let warg = [b'o' as u16, b'k' as u16, 0];
+        let wexpected = [b'o' as u16, b'k' as u16, b'-' as u16, b'7' as u16, 0];
+        let mut wbuf = [0u16; 32];
+        let wwritten = _snwprintf(wbuf.as_mut_ptr(), 32, wfmt.as_ptr(), warg.as_ptr(), 7);
+        let wide_format = wwritten == 4 && wcscmp(wbuf.as_ptr(), wexpected.as_ptr()) == 0;
+        _itow(-255, wbuf.as_mut_ptr(), 10);
+        let wminus = [b'-' as u16, b'2' as u16, b'5' as u16, b'5' as u16, 0];
+        let wide_itoa = wcscmp(wbuf.as_ptr(), wminus.as_ptr()) == 0;
+        check!(wide_format && wide_itoa, "_snwprintf et _itow");
     }
     finish()
 }

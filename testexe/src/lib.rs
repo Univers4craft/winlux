@@ -319,6 +319,10 @@ extern "C" {
     pub fn _i64toa(value: i64, buf: *mut c_char, radix: i32) -> *mut c_char;
     pub fn _snprintf(buf: *mut c_char, size: usize, fmt: *const c_char, ...) -> i32;
     pub fn snprintf(buf: *mut c_char, size: usize, fmt: *const c_char, ...) -> i32;
+    pub fn _snwprintf(buf: *mut u16, count: usize, fmt: *const u16, ...) -> i32;
+    pub fn _itow(value: i32, buf: *mut u16, radix: i32) -> *mut u16;
+    pub fn wcscmp(a: *const u16, b: *const u16) -> i32;
+    pub fn wcslen(s: *const u16) -> usize;
 }
 
 /// Requis par le compilateur dès qu'un programme Windows manipule des flottants.

@@ -59,10 +59,10 @@ des codecs, des services et parfois d’un runtime managé.
   répertoires; partage Windows avancé, handles hérités et I/O overlapped restent
   absents.
 - La CRT (`msvcrt`/`ucrtbase`) fournit les chaînes étroites et larges courantes,
-  les conversions (`atoi`/`strtol`/`strtod`/`_itoa`), la classification de
+  les conversions (`atoi`/`strtol`/`strtod`/`_itoa`/`_itow`), la classification de
   caractères, les fonctions mathématiques usuelles, `qsort`/`bsearch` et le
-  formatage borné (`_snprintf`/`snprintf`). `scanf`/`sscanf`, la locale et les
-  flux `FILE*` restent absents.
+  formatage borné étroit et large (`_snprintf`/`snprintf`/`_snwprintf`).
+  `scanf`/`sscanf`, la locale et les flux `FILE*` restent absents.
 - Le registre propose un sous-ensemble Win32 et une persistance propriétaire
   TSV; il ne reproduit ni les vues 32/64 bits ni les règles ACL du registre Windows.
 - Les DLL intégrées utilisent des fonctions Linux natives et ne dépendent pas
