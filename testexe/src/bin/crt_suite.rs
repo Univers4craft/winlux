@@ -102,6 +102,29 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let wminus = [b'-' as u16, b'2' as u16, b'5' as u16, b'5' as u16, 0];
         let wide_itoa = wcscmp(wbuf.as_ptr(), wminus.as_ptr()) == 0;
         check!(wide_format && wide_itoa, "_snwprintf et _itow");
+
+        let mut pid_text = [0 as c_char; 16];
+        _itoa(GetCurrentProcessId() as i32, pid_text.as_mut_ptr(), 10);
+        let mut stream_path = [0 as c_char; 160];
+        sprintf(stream_path.as_mut_ptr(), c"Z:\\tmp\\winlux-stream-%s.txt".as_ptr(), pid_text.as_ptr());
+        let stream = fopen(stream_path.as_ptr(), c"w+".as_ptr());
+        let wrote = if stream.is_null() {
+            false
+        } else {
+            fprintf(stream, c"%s=%d\n".as_ptr(), c"alpha".as_ptr(), 41) == 9
+                && fprintf(stream, c"%s=%d\n".as_ptr(), c"beta".as_ptr(), 42) == 8
+                && fflush(stream) == 0
+        };
+        let positioned = !stream.is_null() && ftell(stream) == 17 && fseek(stream, 0, 0) == 0;
+        let mut line = [0 as c_char; 64];
+        let line1 = !stream.is_null() && !fgets(line.as_mut_ptr(), 64, stream).is_null()
+            && strcmp(line.as_ptr(), c"alpha=41\n".as_ptr()) == 0;
+        let line2 = !stream.is_null() && !fgets(line.as_mut_ptr(), 64, stream).is_null()
+            && strcmp(line.as_ptr(), c"beta=42\n".as_ptr()) == 0;
+        let ended = !stream.is_null() && fgets(line.as_mut_ptr(), 64, stream).is_null() && feof(stream) != 0;
+        let closed = !stream.is_null() && fclose(stream) == 0;
+        let removed = remove(stream_path.as_ptr()) == 0;
+        check!(wrote && positioned && line1 && line2 && ended && closed && removed, "fopen/fprintf/fgets/fseek/fclose");
     }
     finish()
 }

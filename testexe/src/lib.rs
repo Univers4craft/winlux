@@ -323,6 +323,17 @@ extern "C" {
     pub fn _itow(value: i32, buf: *mut u16, radix: i32) -> *mut u16;
     pub fn wcscmp(a: *const u16, b: *const u16) -> i32;
     pub fn wcslen(s: *const u16) -> usize;
+    pub fn fopen(path: *const c_char, mode: *const c_char) -> *mut c_void;
+    pub fn fclose(f: *mut c_void) -> i32;
+    pub fn fread(ptr: *mut u8, size: usize, count: usize, f: *mut c_void) -> usize;
+    pub fn fwrite(ptr: *const u8, size: usize, count: usize, f: *mut c_void) -> usize;
+    pub fn fgets(buf: *mut c_char, n: i32, f: *mut c_void) -> *mut c_char;
+    pub fn fseek(f: *mut c_void, offset: i64, origin: i32) -> i32;
+    pub fn ftell(f: *mut c_void) -> i64;
+    pub fn feof(f: *mut c_void) -> i32;
+    pub fn fflush(f: *mut c_void) -> i32;
+    pub fn fprintf(f: *mut c_void, fmt: *const c_char, ...) -> i32;
+    pub fn remove(path: *const c_char) -> i32;
 }
 
 /// Requis par le compilateur dès qu'un programme Windows manipule des flottants.
