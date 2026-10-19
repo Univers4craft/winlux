@@ -113,6 +113,9 @@ extern "system" {
     pub fn SetFilePointer(h: Handle, distance: i32, high: *mut i32, method: u32) -> u32;
     pub fn FlushFileBuffers(h: Handle) -> i32;
     pub fn GetOverlappedResult(h: Handle, overlapped: *mut Overlapped, transferred: *mut u32, wait: i32) -> i32;
+    pub fn CreateIoCompletionPort(file: Handle, existing_port: Handle, completion_key: usize, concurrent_threads: u32) -> Handle;
+    pub fn GetQueuedCompletionStatus(port: Handle, bytes: *mut u32, key: *mut usize, overlapped: *mut *mut c_void, timeout: u32) -> i32;
+    pub fn PostQueuedCompletionStatus(port: Handle, bytes: u32, key: usize, overlapped: *mut c_void) -> i32;
     pub fn CloseHandle(h: Handle) -> i32;
     pub fn CreateEventA(sec: *mut c_void, manual: i32, initial: i32, name: *const c_char) -> Handle;
     pub fn SetEvent(h: Handle) -> i32;

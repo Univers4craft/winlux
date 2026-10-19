@@ -2,7 +2,7 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (27 tests), compilation release et les cinq exécutables PE de test réussissent. Relancer les scripts de build et de test après toute modification.
+- Dernière validation connue : `cargo test -p winlux` (27 tests), compilation release et les cinq exécutables PE de test réussissent, y compris des E/S overlapped via IOCP. Relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
@@ -56,7 +56,8 @@
 - [x] Ajouter `VirtualQuery`, `WaitForMultipleObjects` wait-any/wait-all et les sections critiques récursives.
 - [x] Ajouter `ReadFile`/`WriteFile` overlapped avec offsets, `ERROR_IO_PENDING`, signal d’événement et `GetOverlappedResult`.
 - [x] Ajouter une annulation best-effort des opérations overlapped en attente avec `CancelIo` et `CancelIoEx`.
-- [ ] Ajouter les ports de complétion IOCP, l’annulation des appels bloquants en cours et les tests complets de concurrence/buffers invalides.
+- [x] Ajouter un sous-ensemble IOCP : association d’un fichier, `GetQueuedCompletionStatus` et `PostQueuedCompletionStatus`.
+- [ ] Compléter la concurrence IOCP et les erreurs, annuler les I/O déjà commencées, et tester exhaustivement buffers/handles invalides.
 - [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
 - [ ] Compléter le cycle de vie des processus : héritage de handles, environnement Windows, suspension, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.

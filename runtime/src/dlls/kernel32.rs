@@ -1,7 +1,7 @@
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::collections::HashMap;
+use std::collections::{HashMap,VecDeque};
 use std::process::{Child, Command};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
@@ -16,6 +16,10 @@ static HANDLES: OnceLock<Mutex<HashMap<usize, FileHandle>>> = OnceLock::new();
 struct IoResult { done:bool,bytes:u32,error:u32 }
 struct IoOperation { file_handle:usize,issuing_thread:ThreadId,state:Mutex<IoResult>,changed:Condvar,cancelled:std::sync::atomic::AtomicBool }
 static IO_OPERATIONS:OnceLock<Mutex<HashMap<usize,Arc<IoOperation>>>>=OnceLock::new();
+#[derive(Clone,Copy)]
+struct CompletionPacket { bytes:u32,key:usize,overlapped:usize,error:u32 }
+struct CompletionPort { queue:Mutex<VecDeque<CompletionPacket>>,changed:Condvar }
+static IOCP_ASSOCIATIONS:OnceLock<Mutex<HashMap<usize,(Arc<CompletionPort>,usize)>>>=OnceLock::new();
 static NEXT_HANDLE: AtomicUsize = AtomicUsize::new(0x1_0000);
 
 struct EventObject { manual_reset: bool, signaled: Mutex<bool>, changed: Condvar }
@@ -26,7 +30,7 @@ struct ThreadObject { state: Mutex<ThreadState>, changed: Condvar }
 struct ProcessState { child: Option<Child>, exit_code: u32 }
 struct ProcessObject { state: Mutex<ProcessState>, changed: Condvar }
 #[derive(Clone)]
-enum SyncHandle { Event(Arc<EventObject>), Mutex(Arc<MutexObject>), Thread(Arc<ThreadObject>), Process(Arc<ProcessObject>) }
+enum SyncHandle { Event(Arc<EventObject>), Mutex(Arc<MutexObject>), Thread(Arc<ThreadObject>), Process(Arc<ProcessObject>), CompletionPort(Arc<CompletionPort>) }
 static SYNCS: OnceLock<Mutex<HashMap<usize, SyncHandle>>> = OnceLock::new();
 static SYNC_NAMES: OnceLock<Mutex<HashMap<String, (SyncHandle, usize)>>> = OnceLock::new();
 static SYNC_GATE: OnceLock<Mutex<()>> = OnceLock::new();
@@ -88,6 +92,8 @@ pub fn init() {
     let _ = ALLOCS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let _ = HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new()));
     let _ = HANDLES.get_or_init(|| Mutex::new(HashMap::new()));
+    let _ = IO_OPERATIONS.get_or_init(||Mutex::new(HashMap::new()));
+    let _ = IOCP_ASSOCIATIONS.get_or_init(||Mutex::new(HashMap::new()));
     let _ = SYNCS.get_or_init(|| Mutex::new(HashMap::new()));
     let _ = SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new()));
     let _ = CRITICALS.get_or_init(|| Mutex::new(HashMap::new()));
@@ -100,6 +106,9 @@ pub extern "win64" fn get_std_handle(which: u32) -> usize {
 }
 
 fn next_handle() -> usize { NEXT_HANDLE.fetch_add(1, Ordering::Relaxed) }
+fn post_iocp(port:&CompletionPort,packet:CompletionPacket){lock(&port.queue).push_back(packet);port.changed.notify_one();}
+fn iocp_is_signaled(port:&CompletionPort)->bool{!lock(&port.queue).is_empty()}
+fn wait_iocp(port:&CompletionPort,timeout:u32)->u32{let start=std::time::Instant::now();let mut q=lock(&port.queue);loop{if !q.is_empty(){return 0;}if timeout==0{return 258;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{return 258;}timeout-elapsed};let(next,timed)=wait_condvar(&port.changed,q,left);q=next;if timed&&q.is_empty(){return 258;}}}
 fn io_error_code(e: &std::io::Error) -> u32 {
     match e.kind() { std::io::ErrorKind::NotFound => 2, std::io::ErrorKind::PermissionDenied => 5,
         std::io::ErrorKind::AlreadyExists => 183, std::io::ErrorKind::InvalidInput => 87,
@@ -121,6 +130,7 @@ fn start_overlapped_io(h:usize,buffer:usize,len:u32,overlapped:usize,is_write:bo
     let ov=overlapped as *mut Overlapped;
     let offset=unsafe{((*ov).offset_high as u64)<<32|(*ov).offset as u64};
     let event=unsafe{(*ov).event};
+    let completion=lock(IOCP_ASSOCIATIONS.get_or_init(||Mutex::new(HashMap::new()))).get(&h).cloned();
     let write_data=if is_write&&len!=0{Some(unsafe{std::slice::from_raw_parts(buffer as *const u8,len as usize).to_vec()})}else{None};
     let operation=Arc::new(IoOperation{file_handle:h,issuing_thread:std::thread::current().id(),state:Mutex::new(IoResult{done:false,bytes:0,error:0}),changed:Condvar::new(),cancelled:std::sync::atomic::AtomicBool::new(false)});
     {let mut ops=lock(IO_OPERATIONS.get_or_init(||Mutex::new(HashMap::new())));if ops.contains_key(&overlapped){crate::process::set_last_error(997);return 0;}ops.insert(overlapped,operation.clone());}
@@ -135,6 +145,7 @@ fn start_overlapped_io(h:usize,buffer:usize,len:u32,overlapped:usize,is_write:bo
         {let mut state=lock(&op.state);state.bytes=bytes;state.error=error;state.done=true;op.changed.notify_all();}
         unsafe{let p=overlapped as *mut Overlapped;(*p).internal=if error==0{0}else{0xC000_0001};(*p).internal_high=bytes as usize;}
         if event!=0{let _=set_event(event);}
+        if let Some((port,key))=completion{post_iocp(&port,CompletionPacket{bytes,key,overlapped,error});}
     }).is_err(){lock(IO_OPERATIONS.get().unwrap()).remove(&overlapped);unsafe{(*ov).internal=0;}crate::process::set_last_error(8);return 0;}
     crate::process::set_last_error(ERROR_IO_PENDING);0
 }
@@ -150,6 +161,21 @@ pub unsafe extern "win64" fn get_overlapped_result(h:usize,overlapped:*mut Overl
 }
 pub extern "win64" fn cancel_io(h:usize)->i32{if !lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).contains_key(&h){crate::process::set_last_error(6);return 0;}let current=std::thread::current().id();let ops=lock(IO_OPERATIONS.get_or_init(||Mutex::new(HashMap::new())));let mut cancelled=0;for op in ops.values(){if op.file_handle==h&&op.issuing_thread==current&&!lock(&op.state).done{op.cancelled.store(true,Ordering::Release);cancelled+=1;}}if cancelled==0{crate::process::set_last_error(1168);0}else{1}}
 pub unsafe extern "win64" fn cancel_io_ex(h:usize,overlapped:*mut Overlapped)->i32{if !lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).contains_key(&h){crate::process::set_last_error(6);return 0;}let ops=lock(IO_OPERATIONS.get_or_init(||Mutex::new(HashMap::new())));let mut cancelled=0;for (key,op) in ops.iter(){if op.file_handle==h&&(overlapped.is_null()||*key==overlapped as usize)&&!lock(&op.state).done{op.cancelled.store(true,Ordering::Release);cancelled+=1;}}if cancelled==0{crate::process::set_last_error(1168);0}else{1}}
+pub extern "win64" fn create_io_completion_port(file:usize,existing:usize,key:usize,_concurrency:u32)->usize{
+    let(port_handle,port)=if existing==0{let p=Arc::new(CompletionPort{queue:Mutex::new(VecDeque::new()),changed:Condvar::new()});let h=add_sync(SyncHandle::CompletionPort(p.clone()),None);(h,p)}else{let Some(SyncHandle::CompletionPort(p))=lookup_sync(existing)else{crate::process::set_last_error(6);return 0;};(existing,p)};
+    if file==usize::MAX{return port_handle;}
+    if !lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).contains_key(&file){if existing==0{remove_sync(port_handle);}crate::process::set_last_error(6);return 0;}
+    let mut associations=lock(IOCP_ASSOCIATIONS.get_or_init(||Mutex::new(HashMap::new())));if let Some((old,_))=associations.get(&file){if !Arc::ptr_eq(old,&port){drop(associations);if existing==0{remove_sync(port_handle);}crate::process::set_last_error(87);return 0;}}else{associations.insert(file,(port,key));}
+    port_handle
+}
+pub unsafe extern "win64" fn post_queued_completion_status(port:usize,bytes:u32,key:usize,overlapped:*mut c_void)->i32{let Some(SyncHandle::CompletionPort(p))=lookup_sync(port)else{crate::process::set_last_error(6);return 0;};post_iocp(&p,CompletionPacket{bytes,key,overlapped:overlapped as usize,error:0});1}
+pub unsafe extern "win64" fn get_queued_completion_status(port:usize,bytes:*mut u32,key:*mut usize,overlapped:*mut *mut c_void,timeout:u32)->i32{
+    if bytes.is_null()||key.is_null()||overlapped.is_null(){crate::process::set_last_error(87);return 0;}
+    let Some(SyncHandle::CompletionPort(p))=lookup_sync(port)else{crate::process::set_last_error(6);return 0;};
+    let start=std::time::Instant::now();let mut queue=lock(&p.queue);
+    while queue.is_empty(){if timeout==0{*bytes=0;*key=0;*overlapped=std::ptr::null_mut();crate::process::set_last_error(258);return 0;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{*bytes=0;*key=0;*overlapped=std::ptr::null_mut();crate::process::set_last_error(258);return 0;}timeout-elapsed};let(next,timed)=wait_condvar(&p.changed,queue,left);queue=next;if timed&&queue.is_empty(){*bytes=0;*key=0;*overlapped=std::ptr::null_mut();crate::process::set_last_error(258);return 0;}}
+    let packet=queue.pop_front().unwrap();drop(queue);*bytes=packet.bytes;*key=packet.key;*overlapped=packet.overlapped as *mut c_void;if packet.error!=0{crate::process::set_last_error(packet.error);0}else{1}
+}
 
 pub unsafe extern "win64" fn write_file(h: usize, buf: *const u8, len: u32, written: *mut u32, ov: usize) -> i32 {
     if !written.is_null() { *written = 0; }
@@ -339,7 +365,7 @@ pub extern "win64" fn flush_instruction_cache(_process:usize,_addr:*const c_void
 pub extern "win64" fn get_tick_count() -> u32 { CLOCK_START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u32 }
 pub extern "win64" fn get_tick_count64() -> u64 { CLOCK_START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 }
 pub unsafe extern "win64" fn get_current_process_id() -> u32 { libc::getpid() as u32 }
-fn same_sync(a:&SyncHandle,b:&SyncHandle)->bool { match(a,b){(SyncHandle::Event(x),SyncHandle::Event(y))=>Arc::ptr_eq(x,y),(SyncHandle::Mutex(x),SyncHandle::Mutex(y))=>Arc::ptr_eq(x,y),(SyncHandle::Thread(x),SyncHandle::Thread(y))=>Arc::ptr_eq(x,y),(SyncHandle::Process(x),SyncHandle::Process(y))=>Arc::ptr_eq(x,y),_=>false} }
+fn same_sync(a:&SyncHandle,b:&SyncHandle)->bool { match(a,b){(SyncHandle::Event(x),SyncHandle::Event(y))=>Arc::ptr_eq(x,y),(SyncHandle::Mutex(x),SyncHandle::Mutex(y))=>Arc::ptr_eq(x,y),(SyncHandle::Thread(x),SyncHandle::Thread(y))=>Arc::ptr_eq(x,y),(SyncHandle::Process(x),SyncHandle::Process(y))=>Arc::ptr_eq(x,y),(SyncHandle::CompletionPort(x),SyncHandle::CompletionPort(y))=>Arc::ptr_eq(x,y),_=>false} }
 fn add_sync(obj:SyncHandle,name:Option<String>)->usize {
     let obj=if let Some(name)=name { let key=name.to_lowercase();let mut names=lock(SYNC_NAMES.get_or_init(||Mutex::new(HashMap::new())));if let Some((old,count))=names.get_mut(&key){
         let compatible=matches!((&obj,&*old),(SyncHandle::Event(_),SyncHandle::Event(_))|(SyncHandle::Mutex(_),SyncHandle::Mutex(_)));
@@ -446,13 +472,13 @@ pub unsafe extern "win64" fn get_exit_code_process(handle:usize,code:*mut u32)->
 pub unsafe extern "win64" fn terminate_process(handle:usize,code:u32)->i32{let Some(SyncHandle::Process(p))=lookup_sync(handle)else{crate::process::set_last_error(6);return 0;};let mut s=lock(&p.state);let Some(child)=s.child.as_mut()else{crate::process::set_last_error(5);return 0;};if child.kill().is_err(){crate::process::set_last_error(5);return 0;}if let Some(mut child)=s.child.take(){let _=child.wait();}s.exit_code=code;p.changed.notify_all();1}
 pub unsafe extern "win64" fn get_exit_code_thread(handle:usize,code:*mut u32)->i32{if code.is_null(){crate::process::set_last_error(87);return 0;}match lookup_sync(handle){Some(SyncHandle::Thread(t))=>{let s=lock(&t.state);*code=if s.finished{s.exit_code}else{259};1},Some(SyncHandle::Process(p))=>{poll_process(&p);*code=lock(&p.state).exit_code;1},_=>{crate::process::set_last_error(6);0}}}
 pub extern "win64" fn resume_thread(handle:usize)->u32{let Some(SyncHandle::Thread(t))=lookup_sync(handle)else{crate::process::set_last_error(6);return u32::MAX;};let _gate=sync_gate();let mut s=lock(&t.state);if s.finished{crate::process::set_last_error(6);return u32::MAX;}let old=s.suspend_count;if old>0{s.suspend_count-=1;if s.suspend_count==0{t.changed.notify_all();}}old.min(u32::MAX as usize) as u32}
-pub extern "win64" fn close_handle(handle: usize) -> i32 { if handle==1||handle==2||handle==(-10isize)as usize||handle==(-11isize)as usize||handle==(-12isize)as usize{crate::process::set_last_error(6);return 0;}if lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle).is_some(){1}else if remove_sync(handle){1}else{crate::process::set_last_error(6);0} }
+pub extern "win64" fn close_handle(handle: usize) -> i32 { if handle==1||handle==2||handle==(-10isize)as usize||handle==(-11isize)as usize||handle==(-12isize)as usize{crate::process::set_last_error(6);return 0;}if lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle).is_some(){lock(IOCP_ASSOCIATIONS.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle);1}else if remove_sync(handle){1}else{crate::process::set_last_error(6);0} }
 pub unsafe extern "win64" fn create_event_a(_sec:usize,manual:i32,initial:i32,name:*const u8)->usize{let obj=SyncHandle::Event(Arc::new(EventObject{manual_reset:manual!=0,signaled:Mutex::new(initial!=0),changed:Condvar::new()}));add_sync(obj,named_event(name))}
 pub extern "win64" fn set_event(h:usize)->i32{let Some(SyncHandle::Event(v))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};let _gate=sync_gate();*lock(&v.signaled)=true;if v.manual_reset{v.changed.notify_all()}else{v.changed.notify_one()}1}
 pub extern "win64" fn reset_event(h:usize)->i32{let Some(SyncHandle::Event(v))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};let _gate=sync_gate();*lock(&v.signaled)=false;1}
 pub unsafe extern "win64" fn create_mutex_a(_sec:usize,initial:i32,name:*const u8)->usize{let obj=SyncHandle::Mutex(Arc::new(MutexObject{state:Mutex::new(MutexState{owner:if initial!=0{Some(std::thread::current().id())}else{None},recursion:usize::from(initial!=0)}),changed:Condvar::new()}));add_sync(obj,named_event(name))}
 pub extern "win64" fn release_mutex(h:usize)->i32{let Some(SyncHandle::Mutex(m))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};if leave_mutex(&m){1}else{0}}
-pub extern "win64" fn wait_for_single_object(h:usize,timeout:u32)->u32{let Some(obj)=lookup_sync(h)else{crate::process::set_last_error(6);return u32::MAX;};match obj{SyncHandle::Event(e)=>wait_event(&e,timeout),SyncHandle::Mutex(m)=>wait_mutex(&m,timeout),SyncHandle::Thread(t)=>wait_thread(&t,timeout),SyncHandle::Process(p)=>wait_process(&p,timeout)}}
+pub extern "win64" fn wait_for_single_object(h:usize,timeout:u32)->u32{let Some(obj)=lookup_sync(h)else{crate::process::set_last_error(6);return u32::MAX;};match obj{SyncHandle::Event(e)=>wait_event(&e,timeout),SyncHandle::Mutex(m)=>wait_mutex(&m,timeout),SyncHandle::Thread(t)=>wait_thread(&t,timeout),SyncHandle::Process(p)=>wait_process(&p,timeout),SyncHandle::CompletionPort(p)=>wait_iocp(&p,timeout)}}
 pub unsafe extern "win64" fn wait_for_multiple_objects(count:u32,handles:*const usize,wait_all:i32,timeout:u32)->u32{
     if count==0||count>64||handles.is_null(){crate::process::set_last_error(87);return u32::MAX;}
     let hs=std::slice::from_raw_parts(handles,count as usize);let mut objects=Vec::with_capacity(hs.len());
@@ -462,12 +488,12 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(count:u32,handles:*const 
         for i in 0..objects.len(){if objects[..i].iter().any(|o|same_sync(o,&objects[i])){crate::process::set_last_error(87);return u32::MAX;}}
         loop{
             let gate=sync_gate();let me=std::thread::current().id();
-            let ready=objects.iter().all(|o|match o{SyncHandle::Event(e)=>*lock(&e.signaled),SyncHandle::Mutex(m)=>{let s=lock(&m.state);s.owner.is_none()||s.owner.as_ref()==Some(&me)},SyncHandle::Thread(t)=>lock(&t.state).finished,SyncHandle::Process(p)=>poll_process(p)});
-            if ready{for o in &objects{match o{SyncHandle::Event(e)=>{let mut signaled=lock(&e.signaled);if !e.manual_reset{*signaled=false;}},SyncHandle::Mutex(m)=>{let mut s=lock(&m.state);if s.owner.as_ref()==Some(&me){s.recursion=s.recursion.saturating_add(1);}else{s.owner=Some(me);s.recursion=1;}},SyncHandle::Thread(_)|SyncHandle::Process(_)=>{}}}return 0;}
+            let ready=objects.iter().all(|o|match o{SyncHandle::Event(e)=>*lock(&e.signaled),SyncHandle::Mutex(m)=>{let s=lock(&m.state);s.owner.is_none()||s.owner.as_ref()==Some(&me)},SyncHandle::Thread(t)=>lock(&t.state).finished,SyncHandle::Process(p)=>poll_process(p),SyncHandle::CompletionPort(p)=>iocp_is_signaled(p)});
+            if ready{for o in &objects{match o{SyncHandle::Event(e)=>{let mut signaled=lock(&e.signaled);if !e.manual_reset{*signaled=false;}},SyncHandle::Mutex(m)=>{let mut s=lock(&m.state);if s.owner.as_ref()==Some(&me){s.recursion=s.recursion.saturating_add(1);}else{s.owner=Some(me);s.recursion=1;}},SyncHandle::Thread(_)|SyncHandle::Process(_)|SyncHandle::CompletionPort(_)=>{}}}return 0;}
             drop(gate);if timeout==0{return 258;}if timeout!=u32::MAX&&start.elapsed().as_millis()>=timeout as u128{return 258;}std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
-    loop{for (i,obj) in objects.iter().enumerate(){let ready=match obj{SyncHandle::Event(e)=>wait_event(e,0)==0,SyncHandle::Mutex(m)=>wait_mutex(m,0)==0,SyncHandle::Thread(t)=>wait_thread(t,0)==0,SyncHandle::Process(p)=>poll_process(p)};if ready{return i as u32;}}
+    loop{for (i,obj) in objects.iter().enumerate(){let ready=match obj{SyncHandle::Event(e)=>wait_event(e,0)==0,SyncHandle::Mutex(m)=>wait_mutex(m,0)==0,SyncHandle::Thread(t)=>wait_thread(t,0)==0,SyncHandle::Process(p)=>poll_process(p),SyncHandle::CompletionPort(p)=>iocp_is_signaled(p)};if ready{return i as u32;}}
         if timeout==0{return 258;}if timeout!=u32::MAX&&start.elapsed().as_millis()>=timeout as u128{return 258;}std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
@@ -556,7 +582,7 @@ pub extern "win64" fn query_performance_frequency(out:*mut i64)->i32 { unsafe{if
 pub extern "win64" fn query_performance_counter(out:*mut i64)->i32 { unsafe{if out.is_null(){return 0;}*out=CLOCK_START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as i64;}1 }
 pub fn flush_and_exit(code:i32)->! { let _=std::io::Write::flush(&mut std::io::stdout()); std::process::exit(code) }
 pub fn exports() -> crate::dlls::Exports { crate::exports! {
-  "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex, "CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
+  "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
   "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
   "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
   "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"GetCurrentThreadId"=>fn get_current_thread_id,

@@ -103,15 +103,23 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let mut async_path = [0 as c_char; 128];
         sprintf(async_path.as_mut_ptr(), c"Z:\\tmp\\winlux-async-%u.bin".as_ptr(), GetCurrentProcessId());
         let async_file = CreateFileA(async_path.as_ptr(), 0xC000_0000, 7, null_mut(), 2, 0x4000_0000, null_mut());
+        let completion_port = CreateIoCompletionPort(usize::MAX as Handle, null_mut(), 0, 0);
+        let associated_port = CreateIoCompletionPort(async_file, completion_port, 0x1234, 0);
         let async_payload = *b"async";
         let mut overlapped = Overlapped { internal: 0, internal_high: 0, offset: 0, offset_high: 0, event: 0 };
-        let pending = async_file as usize != usize::MAX && WriteFile(async_file, async_payload.as_ptr(), 5, &mut n, &mut overlapped as *mut _ as *mut core::ffi::c_void) == 0;
-        let write_done = pending && GetOverlappedResult(async_file, &mut overlapped, &mut n, 1) != 0 && n == 5;
+        let pending = async_file as usize != usize::MAX && !completion_port.is_null() && associated_port == completion_port
+            && WriteFile(async_file, async_payload.as_ptr(), 5, &mut n, &mut overlapped as *mut _ as *mut core::ffi::c_void) == 0;
+        let mut completion_bytes = 0u32;let mut completion_key = 0usize;let mut completion_overlapped = null_mut();
+        let completion = pending && GetQueuedCompletionStatus(completion_port, &mut completion_bytes, &mut completion_key, &mut completion_overlapped, 5000) != 0
+            && completion_bytes == 5 && completion_key == 0x1234 && completion_overlapped == &mut overlapped as *mut _ as *mut core::ffi::c_void;
+        let write_done = completion && GetOverlappedResult(async_file, &mut overlapped, &mut n, 1) != 0 && n == 5;
         overlapped = Overlapped { internal: 0, internal_high: 0, offset: 0, offset_high: 0, event: 0 };
         let mut async_read = [0u8; 5];
         let read_pending = write_done && ReadFile(async_file, async_read.as_mut_ptr(), 5, &mut n, &mut overlapped as *mut _ as *mut core::ffi::c_void) == 0;
-        let read_done = read_pending && GetOverlappedResult(async_file, &mut overlapped, &mut n, 1) != 0 && n == 5 && async_read == async_payload;
-        check!(read_done && CloseHandle(async_file) != 0 && DeleteFileA(async_path.as_ptr()) != 0, "ReadFile/WriteFile overlapped");
+        let read_done = read_pending && GetQueuedCompletionStatus(completion_port, &mut completion_bytes, &mut completion_key, &mut completion_overlapped, 5000) != 0
+            && completion_bytes == 5 && completion_key == 0x1234 && completion_overlapped == &mut overlapped as *mut _ as *mut core::ffi::c_void
+            && GetOverlappedResult(async_file, &mut overlapped, &mut n, 1) != 0 && n == 5 && async_read == async_payload;
+        check!(read_done && CloseHandle(async_file) != 0 && CloseHandle(completion_port) != 0 && DeleteFileA(async_path.as_ptr()) != 0, "ReadFile/WriteFile overlapped via IOCP");
         let mut dir_path = [0 as c_char; 128];
         sprintf(dir_path.as_mut_ptr(), c"Z:\\tmp\\winlux-dir-%u".as_ptr(), GetCurrentProcessId());
         check!(CreateDirectoryA(dir_path.as_ptr(), null_mut()) != 0 && RemoveDirectoryA(dir_path.as_ptr()) != 0, "CreateDirectoryA/RemoveDirectoryA");
