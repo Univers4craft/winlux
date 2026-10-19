@@ -222,8 +222,20 @@ pub unsafe extern "win64" fn fputs(text: *const u8, p: *mut c_void) -> i32 {
     if n == b.len() { 0 } else { s.err.store(true, Ordering::Release); -1 }
 }
 
-// ---------- Positionnement et état ----------
+/// Lit tout le contenu restant d'un flux ; utilisé par `fscanf`.
+pub unsafe fn read_to_end(p: *mut c_void) -> Vec<u8> {
+    let s = match lookup(p) { Some(s) => s, None => return Vec::new() };
+    let mut data = Vec::new();
+    let mut buf = [0u8; 4096];
+    loop {
+        let n = read_into(&s, &mut buf);
+        if n == 0 { break; }
+        data.extend_from_slice(&buf[..n]);
+    }
+    data
+}
 
+// ---------- Positionnement et état ----------
 pub unsafe extern "win64" fn fseek(p: *mut c_void, offset: i64, origin: i32) -> i32 {
     let s = match lookup(p) { Some(s) => s, None => return -1 };
     if s.kind != Kind::Disk { return -1; }

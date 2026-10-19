@@ -2,14 +2,14 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (42 tests), compilation release et les sept exécutables PE de test réussissent. Relancer les scripts après chaque changement.
+- Dernière validation connue : `cargo test -p winlux` (45 tests), compilation release et les sept exécutables PE de test réussissent. Relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
 - [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe`, `findfiles.exe` et `crt_suite.exe` sous Winlux.
-- [x] Ajouter 42 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT et IOCP.
+- [x] Ajouter 45 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT et IOCP.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
@@ -70,7 +70,8 @@
 - [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
 - [x] Étendre la CRT : chaînes étroites/larges, conversions (`strtol`, `strtod`, `_itoa`, `_itow`), classification de caractères, fonctions mathématiques, `qsort`/`bsearch` et formatage borné (`_snprintf`, `_snwprintf`), avec tests unitaires et PE (`crt_suite`).
 - [x] Ajouter les flux `FILE*` de la CRT (`fopen`/`fclose`, `fread`/`fwrite`, `fgets`/`fputs`, `fseek`/`ftell`, `feof`, `fprintf`, `vfprintf`, `vsprintf`, `remove`/`rename`) avec tests unitaires et PE.
-- [ ] Continuer la CRT : `scanf`/`sscanf`, locale, `fscanf` et positions `fgetpos`/`fsetpos`.
+- [x] Ajouter les entrées formatées `scanf`/`sscanf`/`fscanf` et leurs variantes `v*` (entiers, flottants, chaînes, jeux de caractères, largeur, `*`, `%n`) avec tests unitaires et PE.
+- [ ] Continuer la CRT : locale, `_snscanf`, `fgetpos`/`fsetpos` et formats positionnels.
 - [ ] Ajouter un backend graphique réel; `user32`/`gdi32` actuels sont surtout des stubs et n’affichent pas de fenêtres.
 - [ ] Intégrer un véritable runtime CLR compatible pour exécuter les `.exe` .NET; sans CLR, `paint.net` ne fonctionne pas.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.

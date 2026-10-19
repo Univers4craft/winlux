@@ -125,6 +125,38 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let closed = !stream.is_null() && fclose(stream) == 0;
         let removed = remove(stream_path.as_ptr()) == 0;
         check!(wrote && positioned && line1 && line2 && ended && closed && removed, "fopen/fprintf/fgets/fseek/fclose");
+
+        let mut num1 = 0i32;
+        let mut num2 = 0i32;
+        let mut real = 0f64;
+        let parsed = sscanf(c"12 -7 3.5".as_ptr(), c"%d %i %lf".as_ptr(), &mut num1, &mut num2, &mut real) == 3
+            && num1 == 12 && num2 == -7 && (real - 3.5).abs() < 1e-9;
+        let mut word = [0 as c_char; 16];
+        let mut value = 0i32;
+        let sets = sscanf(c"alpha=41".as_ptr(), c"%[a-z]=%d".as_ptr(), word.as_mut_ptr(), &mut value) == 2
+            && strcmp(word.as_ptr(), c"alpha".as_ptr()) == 0
+            && value == 41;
+        check!(parsed && sets, "sscanf avec entiers, flottants et jeux de caractères");
+
+        let mut pid2 = [0 as c_char; 16];
+        _itoa(GetCurrentProcessId() as i32, pid2.as_mut_ptr(), 10);
+        let mut scan_path = [0 as c_char; 160];
+        sprintf(scan_path.as_mut_ptr(), c"Z:\\tmp\\winlux-scan-%s.txt".as_ptr(), pid2.as_ptr());
+        let sf = fopen(scan_path.as_ptr(), c"w+".as_ptr());
+        let mut scan_ok = false;
+        if !sf.is_null() {
+            fprintf(sf, c"%d %s\n".as_ptr(), 99, c"ligne".as_ptr());
+            fflush(sf);
+            fseek(sf, 0, 0);
+            let mut got_n = 0i32;
+            let mut got_s = [0 as c_char; 16];
+            scan_ok = fscanf(sf, c"%d %s".as_ptr(), &mut got_n, got_s.as_mut_ptr()) == 2
+                && got_n == 99
+                && strcmp(got_s.as_ptr(), c"ligne".as_ptr()) == 0;
+            fclose(sf);
+            remove(scan_path.as_ptr());
+        }
+        check!(scan_ok, "fscanf sur un flux FILE*");
     }
     finish()
 }

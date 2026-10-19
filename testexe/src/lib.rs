@@ -333,6 +333,8 @@ extern "C" {
     pub fn feof(f: *mut c_void) -> i32;
     pub fn fflush(f: *mut c_void) -> i32;
     pub fn fprintf(f: *mut c_void, fmt: *const c_char, ...) -> i32;
+    pub fn sscanf(buf: *const c_char, fmt: *const c_char, ...) -> i32;
+    pub fn fscanf(f: *mut c_void, fmt: *const c_char, ...) -> i32;
     pub fn remove(path: *const c_char) -> i32;
 }
 
