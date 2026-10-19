@@ -120,6 +120,12 @@ fn next_handle() -> usize { NEXT_HANDLE.fetch_add(1, Ordering::Relaxed) }
 fn post_iocp(port:&CompletionPort,packet:CompletionPacket){lock(&port.state).queue.push_back(packet);port.changed.notify_all();}
 fn iocp_is_signaled(port:&CompletionPort)->bool{!lock(&port.state).queue.is_empty()}
 fn wait_iocp(port:&CompletionPort,timeout:u32)->u32{let start=std::time::Instant::now();let mut state=lock(&port.state);loop{if !state.queue.is_empty(){return 0;}if timeout==0{return 258;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{return 258;}timeout-elapsed};let(next,timed)=wait_condvar(&port.changed,state,left);state=next;if timed&&state.queue.is_empty(){return 258;}}}
+pub(crate) fn release_iocp_slots_for_current_thread(){
+    let tid=std::thread::current().id();let mut ports:Vec<Arc<CompletionPort>>=Vec::new();let mut seen=HashSet::new();
+    for obj in lock(SYNCS.get_or_init(||Mutex::new(HashMap::new()))).values(){if let SyncHandle::CompletionPort(p)=obj{let key=Arc::as_ptr(p)as usize;if seen.insert(key){ports.push(p.clone());}}}
+    for (p,_) in lock(IOCP_ASSOCIATIONS.get_or_init(||Mutex::new(HashMap::new()))).values(){let key=Arc::as_ptr(p)as usize;if seen.insert(key){ports.push(p.clone());}}
+    for p in ports{let mut state=lock(&p.state);if state.active.remove(&tid){p.changed.notify_all();}}
+}
 pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
     match e.kind() { std::io::ErrorKind::NotFound => 2, std::io::ErrorKind::PermissionDenied => 5,
         std::io::ErrorKind::AlreadyExists => 183, std::io::ErrorKind::InvalidInput => 87,
@@ -485,7 +491,7 @@ pub unsafe extern "win64" fn create_thread(_attrs: usize, stack: usize, start: u
     let tid=NEXT_THREAD.fetch_add(1,Ordering::Relaxed);let state=Arc::new(ThreadObject{state:Mutex::new(ThreadState{finished:false,exit_code:259,suspend_count:usize::from(flags&4!=0)}),changed:Condvar::new()});
     let handle=add_sync(SyncHandle::Thread(state.clone()),None);let f:extern "win64" fn(usize)->u32=std::mem::transmute(start);
     let mut builder=std::thread::Builder::new().name(format!("win-thread-{tid}"));if stack!=0{builder=builder.stack_size(stack.max(64*1024));}
-    if builder.spawn(move||{let mut s=lock(&state.state);while s.suspend_count!=0{s=state.changed.wait(s).unwrap_or_else(std::sync::PoisonError::into_inner);}drop(s);crate::process::thread_attach_current();let code=f(param);crate::process::thread_detach_current();let _gate=sync_gate();let mut s=lock(&state.state);s.exit_code=code;s.finished=true;state.changed.notify_all();}).is_err(){remove_sync(handle);crate::process::set_last_error(8);return 0;}
+    if builder.spawn(move||{let mut s=lock(&state.state);while s.suspend_count!=0{s=state.changed.wait(s).unwrap_or_else(std::sync::PoisonError::into_inner);}drop(s);crate::process::thread_attach_current();let code=f(param);crate::process::thread_detach_current();release_iocp_slots_for_current_thread();let _gate=sync_gate();let mut s=lock(&state.state);s.exit_code=code;s.finished=true;state.changed.notify_all();}).is_err(){remove_sync(handle);crate::process::set_last_error(8);return 0;}
     if !id.is_null(){*id=tid;}handle
 }
 fn split_windows_command_line(line:&str)->Vec<String>{
@@ -747,6 +753,18 @@ mod tests {
         assert_eq!(second,0); // le premier thread détient encore le slot actif
         assert_eq!(unsafe{get_queued_completion_status(port,&mut bytes,&mut key,&mut ov,0)},1);
         assert_eq!(key,2);assert_eq!(close_handle(port),1);
+    }
+
+    extern "win64" fn iocp_one_packet_worker(port:usize)->u32{let(mut bytes,mut key)=(0u32,0usize);let mut ov=std::ptr::null_mut();unsafe{get_queued_completion_status(port,&mut bytes,&mut key,&mut ov,5000)as u32}}
+
+    #[test]
+    fn iocp_libere_le_slot_quand_un_worker_win32_se_termine(){
+        init();let port=create_io_completion_port(usize::MAX,0,0,1);assert_ne!(port,0);unsafe{post_queued_completion_status(port,1,0x11,std::ptr::null_mut());}
+        let worker=unsafe{create_thread(0,0,iocp_one_packet_worker as *const () as usize,port,0,std::ptr::null_mut())};assert_ne!(worker,0);
+        assert_eq!(wait_for_single_object(worker,5000),0);let mut worker_code=0;assert_eq!(unsafe{get_exit_code_thread(worker,&mut worker_code)},1);assert_eq!(worker_code,1);
+        unsafe{post_queued_completion_status(port,2,0x22,std::ptr::null_mut());}let(mut bytes,mut key)=(0u32,0usize);let mut ov=std::ptr::null_mut();
+        assert_eq!(unsafe{get_queued_completion_status(port,&mut bytes,&mut key,&mut ov,0)},1);assert_eq!(key,0x22);assert_eq!(bytes,2);
+        close_handle(worker);close_handle(port);
     }
 
     #[test]
