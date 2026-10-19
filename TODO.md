@@ -2,14 +2,14 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (26 tests), compilation release et les cinq exécutables PE de test réussissent. Relancer les scripts de build et de test après toute modification.
+- Dernière validation connue : `cargo test -p winlux` (27 tests), compilation release et les cinq exécutables PE de test réussissent. Relancer les scripts de build et de test après toute modification.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
 - [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe` et `delay_import.exe` sous Winlux.
-- [x] Ajouter 26 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus et les fichiers overlapped.
+- [x] Ajouter 27 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus et les fichiers overlapped.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
@@ -55,7 +55,8 @@
 - [x] Ajouter les primitives de synchronisation `Event`, `Mutex` et `WaitForSingleObject`.
 - [x] Ajouter `VirtualQuery`, `WaitForMultipleObjects` wait-any/wait-all et les sections critiques récursives.
 - [x] Ajouter `ReadFile`/`WriteFile` overlapped avec offsets, `ERROR_IO_PENDING`, signal d’événement et `GetOverlappedResult`.
-- [ ] Ajouter annulation fiable (`CancelIo/CancelIoEx`), IOCP et tests de buffers/handles invalides pour les E/S overlapped.
+- [x] Ajouter une annulation best-effort des opérations overlapped en attente avec `CancelIo` et `CancelIoEx`.
+- [ ] Ajouter les ports de complétion IOCP, l’annulation des appels bloquants en cours et les tests complets de concurrence/buffers invalides.
 - [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
 - [ ] Compléter le cycle de vie des processus : héritage de handles, environnement Windows, suspension, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.

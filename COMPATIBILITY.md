@@ -37,8 +37,9 @@ des codecs, des services et parfois d’un runtime managé.
   `DeleteFile`, `CreateDirectory`, `RemoveDirectory` et `GetFullPathName`.
 - `ReadFile`/`WriteFile` overlapped utilisent des offsets explicites, retournent
   `ERROR_IO_PENDING` et se récupèrent avec `GetOverlappedResult`; l’annulation,
-  les ports de complétion (IOCP) et les contrats avancés de partage ne sont pas
-  encore implémentés.
+  avec `CancelIo/CancelIoEx`, est best-effort avant le début effectif de l’accès.
+  Les ports de complétion (IOCP), l’annulation d’E/S bloquante déjà commencée
+  et les contrats avancés de partage ne sont pas encore implémentés.
 - Winsock relie les sockets POSIX, les codes d’erreur WSA et les résolutions
   `getaddrinfo` A/W; TCP loopback, `bind/listen/connect/accept/send/recv` sont
   testés, mais ce n’est pas encore une implémentation complète de Winsock.
