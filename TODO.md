@@ -2,14 +2,14 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (27 tests), compilation release et les cinq exécutables PE de test réussissent, y compris des E/S overlapped via IOCP. Relancer les scripts après chaque changement.
+- Dernière validation connue : `cargo test -p winlux` (28 tests), compilation release et les cinq exécutables PE de test réussissent, y compris les E/S overlapped via IOCP et la lecture par lot. Relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
 - [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe` et `delay_import.exe` sous Winlux.
-- [x] Ajouter 27 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus et les fichiers overlapped.
+- [x] Ajouter 28 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus et les fichiers overlapped/IOCP.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
@@ -56,7 +56,7 @@
 - [x] Ajouter `VirtualQuery`, `WaitForMultipleObjects` wait-any/wait-all et les sections critiques récursives.
 - [x] Ajouter `ReadFile`/`WriteFile` overlapped avec offsets, `ERROR_IO_PENDING`, signal d’événement et `GetOverlappedResult`.
 - [x] Ajouter une annulation best-effort des opérations overlapped en attente avec `CancelIo` et `CancelIoEx`.
-- [x] Ajouter un sous-ensemble IOCP : association d’un fichier, `GetQueuedCompletionStatus` et `PostQueuedCompletionStatus`.
+- [x] Ajouter un sous-ensemble IOCP : association d’un fichier, `GetQueuedCompletionStatus[Ex]` et `PostQueuedCompletionStatus`.
 - [ ] Compléter la concurrence IOCP et les erreurs, annuler les I/O déjà commencées, et tester exhaustivement buffers/handles invalides.
 - [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
 - [ ] Compléter le cycle de vie des processus : héritage de handles, environnement Windows, suspension, attributs étendus et suivi/récolte robuste des enfants.

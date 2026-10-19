@@ -67,6 +67,9 @@ pub struct StartupInfoA {
 pub struct ProcessInformation { pub process: Handle, pub thread: Handle, pub process_id: u32, pub thread_id: u32 }
 #[repr(C)]
 pub struct Overlapped { pub internal: usize, pub internal_high: usize, pub offset: u32, pub offset_high: u32, pub event: usize }
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct OverlappedEntry { pub completion_key: usize, pub overlapped: *mut c_void, pub internal: usize, pub bytes_transferred: u32, pub reserved: u32 }
 
 #[repr(C)]
 pub struct AddrInfoA {
@@ -115,6 +118,7 @@ extern "system" {
     pub fn GetOverlappedResult(h: Handle, overlapped: *mut Overlapped, transferred: *mut u32, wait: i32) -> i32;
     pub fn CreateIoCompletionPort(file: Handle, existing_port: Handle, completion_key: usize, concurrent_threads: u32) -> Handle;
     pub fn GetQueuedCompletionStatus(port: Handle, bytes: *mut u32, key: *mut usize, overlapped: *mut *mut c_void, timeout: u32) -> i32;
+    pub fn GetQueuedCompletionStatusEx(port: Handle, entries: *mut OverlappedEntry, count: u32, removed: *mut u32, timeout: u32, alertable: i32) -> i32;
     pub fn PostQueuedCompletionStatus(port: Handle, bytes: u32, key: usize, overlapped: *mut c_void) -> i32;
     pub fn CloseHandle(h: Handle) -> i32;
     pub fn CreateEventA(sec: *mut c_void, manual: i32, initial: i32, name: *const c_char) -> Handle;

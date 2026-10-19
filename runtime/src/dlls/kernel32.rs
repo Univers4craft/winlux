@@ -81,6 +81,9 @@ pub struct ProcessInformation { pub process:usize,pub thread:usize,pub process_i
 
 #[repr(C)]
 pub struct Overlapped { pub internal:usize,pub internal_high:usize,pub offset:u32,pub offset_high:u32,pub event:usize }
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct OverlappedEntry { pub completion_key:usize,pub overlapped:*mut c_void,pub internal:usize,pub bytes_transferred:u32,pub reserved:u32 }
 
 #[repr(C)]
 struct CriticalSection { debug_info:*mut c_void, lock_count:i32, recursion_count:i32, owning_thread:usize, lock_semaphore:usize, spin_count:usize }
@@ -175,6 +178,12 @@ pub unsafe extern "win64" fn get_queued_completion_status(port:usize,bytes:*mut 
     let start=std::time::Instant::now();let mut queue=lock(&p.queue);
     while queue.is_empty(){if timeout==0{*bytes=0;*key=0;*overlapped=std::ptr::null_mut();crate::process::set_last_error(258);return 0;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{*bytes=0;*key=0;*overlapped=std::ptr::null_mut();crate::process::set_last_error(258);return 0;}timeout-elapsed};let(next,timed)=wait_condvar(&p.changed,queue,left);queue=next;if timed&&queue.is_empty(){*bytes=0;*key=0;*overlapped=std::ptr::null_mut();crate::process::set_last_error(258);return 0;}}
     let packet=queue.pop_front().unwrap();drop(queue);*bytes=packet.bytes;*key=packet.key;*overlapped=packet.overlapped as *mut c_void;if packet.error!=0{crate::process::set_last_error(packet.error);0}else{1}
+}
+pub unsafe extern "win64" fn get_queued_completion_status_ex(port:usize,entries:*mut OverlappedEntry,count:u32,removed:*mut u32,timeout:u32,alertable:i32)->i32{
+    if entries.is_null()||removed.is_null()||count==0{crate::process::set_last_error(87);return 0;}if alertable!=0{crate::process::set_last_error(120);return 0;}
+    let Some(SyncHandle::CompletionPort(p))=lookup_sync(port)else{crate::process::set_last_error(6);return 0;};let start=std::time::Instant::now();let mut q=lock(&p.queue);
+    while q.is_empty(){if timeout==0{*removed=0;crate::process::set_last_error(258);return 0;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{*removed=0;crate::process::set_last_error(258);return 0;}timeout-elapsed};let(next,timed)=wait_condvar(&p.changed,q,left);q=next;if timed&&q.is_empty(){*removed=0;crate::process::set_last_error(258);return 0;}}
+    let n=(count as usize).min(q.len());for i in 0..n{let packet=q.pop_front().unwrap();let internal=if packet.error==0{0}else{0xC000_0001};std::ptr::write(entries.add(i),OverlappedEntry{completion_key:packet.key,overlapped:packet.overlapped as *mut c_void,internal,bytes_transferred:packet.bytes,reserved:0});}*removed=n as u32;1
 }
 
 pub unsafe extern "win64" fn write_file(h: usize, buf: *const u8, len: u32, written: *mut u32, ov: usize) -> i32 {
@@ -582,7 +591,7 @@ pub extern "win64" fn query_performance_frequency(out:*mut i64)->i32 { unsafe{if
 pub extern "win64" fn query_performance_counter(out:*mut i64)->i32 { unsafe{if out.is_null(){return 0;}*out=CLOCK_START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as i64;}1 }
 pub fn flush_and_exit(code:i32)->! { let _=std::io::Write::flush(&mut std::io::stdout()); std::process::exit(code) }
 pub fn exports() -> crate::dlls::Exports { crate::exports! {
-  "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
+  "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
   "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
   "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
   "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"GetCurrentThreadId"=>fn get_current_thread_id,
@@ -649,6 +658,17 @@ mod tests {
         assert_eq!(unsafe{cancel_io_ex(h,&mut ov)},1);drop(file_guard);
         assert_eq!(unsafe{get_overlapped_result(h,&mut ov,&mut written,1)},0);assert_eq!(crate::process::last_error(),995);
         assert_eq!(close_handle(h),1);assert_eq!(unsafe{delete_file_a(c.as_ptr()as *const u8)},1);
+    }
+
+    #[test]
+    fn iocp_est_waitable_et_dequeue_des_paquets_en_lot(){
+        init();let port=create_io_completion_port(usize::MAX,0,0,0);assert_ne!(port,0);
+        unsafe{assert_eq!(post_queued_completion_status(port,12,0xabc,std::ptr::null_mut()),1);assert_eq!(post_queued_completion_status(port,34,0xdef,0x1234usize as *mut c_void),1);}
+        assert_eq!(wait_for_single_object(port,0),0);
+        let mut entries=[OverlappedEntry{completion_key:0,overlapped:std::ptr::null_mut(),internal:0,bytes_transferred:0,reserved:0};2];let mut count=0;
+        assert_eq!(unsafe{get_queued_completion_status_ex(port,entries.as_mut_ptr(),2,&mut count,0,0)},1);
+        assert_eq!(count,2);assert_eq!(entries[0].completion_key,0xabc);assert_eq!(entries[0].bytes_transferred,12);assert_eq!(entries[1].completion_key,0xdef);assert_eq!(entries[1].bytes_transferred,34);
+        assert_eq!(wait_for_single_object(port,0),258);assert_eq!(close_handle(port),1);
     }
 
     #[test]
