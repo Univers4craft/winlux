@@ -60,7 +60,8 @@
 - [ ] Compléter la concurrence IOCP et les erreurs, annuler les I/O déjà commencées, et tester exhaustivement buffers/handles invalides.
 - [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
 - [x] Lire les blocs d’environnement ANSI ou Unicode de `CreateProcessA/W` et les appliquer au processus enfant.
-- [ ] Compléter le cycle de vie des processus : héritage de handles, `CREATE_SUSPENDED`, attributs étendus et suivi/récolte robuste des enfants.
+- [x] Implémenter `CREATE_SUSPENDED`/`ResumeThread` pour les enfants via un lanceur Linux suspendu avant l’exécution du programme.
+- [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
 - [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
 - [ ] Étendre la CRT : `scanf`, conversions, locale, fichiers, erreurs et fonctions mathématiques.

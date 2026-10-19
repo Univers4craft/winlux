@@ -27,7 +27,7 @@ struct MutexState { owner: Option<ThreadId>, recursion: usize }
 struct MutexObject { state: Mutex<MutexState>, changed: Condvar }
 struct ThreadState { finished: bool, exit_code: u32, suspend_count: usize }
 struct ThreadObject { state: Mutex<ThreadState>, changed: Condvar }
-struct ProcessState { child: Option<Child>, exit_code: u32 }
+struct ProcessState { child: Option<Child>, exit_code: u32, suspended: bool }
 struct ProcessObject { state: Mutex<ProcessState>, changed: Condvar }
 #[derive(Clone)]
 enum SyncHandle { Event(Arc<EventObject>), Mutex(Arc<MutexObject>), Thread(Arc<ThreadObject>), Process(Arc<ProcessObject>), CompletionPort(Arc<CompletionPort>) }
@@ -452,21 +452,22 @@ unsafe fn parse_environment_block(block:*const c_void,unicode:bool)->Result<Opti
 fn insert_env_entry(entry:&str,env:&mut HashMap<String,(String,String)>){let start=if entry.starts_with('='){1}else{0};if let Some(i)=entry[start..].find('='){let split=start+i;let name=&entry[..split];let value=&entry[split+1..];if !name.is_empty(){env.insert(name.to_lowercase(),(name.to_string(),value.to_string()));}}}
 unsafe fn create_process_common(application:Option<String>,command_line:*const u8,inherit_handles:i32,creation_flags:u32,environment:Option<Vec<(String,String)>>,current_directory:*const u8,startup:*const StartupInfoA,info:*mut ProcessInformation)->i32{
     if info.is_null(){crate::process::set_last_error(87);return 0;}
-    if creation_flags&!(0x0800_0000|0x0000_0400)!=0{crate::process::set_last_error(50);return 0;}
+    if creation_flags&!(0x0800_0000|0x0000_0400|0x0000_0004)!=0{crate::process::set_last_error(50);return 0;}
     if !startup.is_null()&&(*startup).cb < std::mem::size_of::<StartupInfoA>() as u32{crate::process::set_last_error(87);return 0;}
     let line=if command_line.is_null(){String::new()}else{crate::dlls::cstr(command_line)};
     let mut args=split_windows_command_line(&line);
     let exe=if let Some(app)=application{if !args.is_empty(){args.remove(0);}app}else if !args.is_empty(){args.remove(0)}else{crate::process::set_last_error(87);return 0;};
     let mut host_path=crate::paths::to_linux(&exe);
     if !host_path.exists()&&host_path.extension().is_none(){let mut x=host_path.as_os_str().to_os_string();x.push(".exe");let p=std::path::PathBuf::from(x);if p.exists(){host_path=p;}}
-    let is_pe=host_path.extension().is_some_and(|e|e.to_string_lossy().eq_ignore_ascii_case("exe"));
-    let mut cmd=if is_pe{let runtime=match std::env::current_exe(){Ok(p)=>p,Err(e)=>{crate::process::set_last_error(process_error(&e));return 0;}};let mut c=Command::new(runtime);c.arg(&host_path);c}else{Command::new(&host_path)};
-    cmd.args(args.iter());
+    let is_pe=host_path.extension().is_some_and(|e|e.to_string_lossy().eq_ignore_ascii_case("exe"));let suspended=creation_flags&4!=0;
+    let mut target=Vec::<std::ffi::OsString>::new();if is_pe{let runtime=match std::env::current_exe(){Ok(p)=>p,Err(e)=>{crate::process::set_last_error(process_error(&e));return 0;}};target.push(runtime.into_os_string());}target.push(host_path.into_os_string());target.extend(args.iter().map(std::ffi::OsString::from));
+    let mut cmd=if suspended{let mut c=Command::new("/bin/sh");c.arg("-c").arg("kill -STOP $$; exec \"$@\"").arg("winlux-suspended").args(target.iter());c}else{let mut i=target.into_iter();let exe=i.next().unwrap();let mut c=Command::new(exe);c.args(i);c};
     if !current_directory.is_null(){let cwd=crate::paths::to_linux(&crate::dlls::cstr(current_directory));cmd.current_dir(cwd);}
     if inherit_handles!=0{crate::process::set_last_error(120);return 0;}
     if let Some(env)=environment{cmd.env_clear();for (key,value) in env{cmd.env(key,value);}}
-    let child=match cmd.spawn(){Ok(c)=>c,Err(e)=>{crate::process::set_last_error(process_error(&e));return 0;}};
-    let pid=child.id();let object=Arc::new(ProcessObject{state:Mutex::new(ProcessState{child:Some(child),exit_code:259}),changed:Condvar::new()});
+    let mut child=match cmd.spawn(){Ok(c)=>c,Err(e)=>{crate::process::set_last_error(process_error(&e));return 0;}};
+    let pid=child.id();if suspended{let mut status=0;let waited=loop{let r=libc::waitpid(pid as i32,&mut status,libc::WUNTRACED);if r>=0{break r;}if std::io::Error::last_os_error().raw_os_error()==Some(libc::EINTR){continue;}let _=child.kill();let _=child.wait();crate::process::set_last_error(31);return 0;};if waited!=pid as i32||(status&0xff)!=0x7f{let _=child.kill();let _=child.wait();crate::process::set_last_error(31);return 0;}}
+    let object=Arc::new(ProcessObject{state:Mutex::new(ProcessState{child:Some(child),exit_code:259,suspended}),changed:Condvar::new()});
     let process_handle=add_sync(SyncHandle::Process(object.clone()),None);let thread_handle=add_sync(SyncHandle::Process(object),None);
     std::ptr::write(info,ProcessInformation{process:process_handle,thread:thread_handle,process_id:pid,thread_id:pid});1
 }
@@ -489,7 +490,7 @@ pub unsafe extern "win64" fn open_process(_access:u32,_inherit:i32,pid:u32)->usi
 pub unsafe extern "win64" fn get_exit_code_process(handle:usize,code:*mut u32)->i32{if code.is_null(){crate::process::set_last_error(87);return 0;}let Some(SyncHandle::Process(p))=lookup_sync(handle)else{crate::process::set_last_error(6);return 0;};poll_process(&p);*code=lock(&p.state).exit_code;1}
 pub unsafe extern "win64" fn terminate_process(handle:usize,code:u32)->i32{let Some(SyncHandle::Process(p))=lookup_sync(handle)else{crate::process::set_last_error(6);return 0;};let mut s=lock(&p.state);let Some(child)=s.child.as_mut()else{crate::process::set_last_error(5);return 0;};if child.kill().is_err(){crate::process::set_last_error(5);return 0;}if let Some(mut child)=s.child.take(){let _=child.wait();}s.exit_code=code;p.changed.notify_all();1}
 pub unsafe extern "win64" fn get_exit_code_thread(handle:usize,code:*mut u32)->i32{if code.is_null(){crate::process::set_last_error(87);return 0;}match lookup_sync(handle){Some(SyncHandle::Thread(t))=>{let s=lock(&t.state);*code=if s.finished{s.exit_code}else{259};1},Some(SyncHandle::Process(p))=>{poll_process(&p);*code=lock(&p.state).exit_code;1},_=>{crate::process::set_last_error(6);0}}}
-pub extern "win64" fn resume_thread(handle:usize)->u32{let Some(SyncHandle::Thread(t))=lookup_sync(handle)else{crate::process::set_last_error(6);return u32::MAX;};let _gate=sync_gate();let mut s=lock(&t.state);if s.finished{crate::process::set_last_error(6);return u32::MAX;}let old=s.suspend_count;if old>0{s.suspend_count-=1;if s.suspend_count==0{t.changed.notify_all();}}old.min(u32::MAX as usize) as u32}
+pub extern "win64" fn resume_thread(handle:usize)->u32{let Some(obj)=lookup_sync(handle)else{crate::process::set_last_error(6);return u32::MAX;};match obj{SyncHandle::Thread(t)=>{let _gate=sync_gate();let mut s=lock(&t.state);if s.finished{crate::process::set_last_error(6);return u32::MAX;}let old=s.suspend_count;if old>0{s.suspend_count-=1;if s.suspend_count==0{t.changed.notify_all();}}old.min(u32::MAX as usize) as u32},SyncHandle::Process(p)=>{let mut s=lock(&p.state);if !s.suspended{return 0;}let Some(c)=s.child.as_mut()else{crate::process::set_last_error(6);return u32::MAX;};if unsafe{libc::kill(c.id()as i32,libc::SIGCONT)}!=0{crate::process::set_last_error(5);return u32::MAX;}s.suspended=false;1},_=>{crate::process::set_last_error(6);u32::MAX}}}
 pub extern "win64" fn close_handle(handle: usize) -> i32 { if handle==1||handle==2||handle==(-10isize)as usize||handle==(-11isize)as usize||handle==(-12isize)as usize{crate::process::set_last_error(6);return 0;}if lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle).is_some(){lock(IOCP_ASSOCIATIONS.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle);1}else if remove_sync(handle){1}else{crate::process::set_last_error(6);0} }
 pub unsafe extern "win64" fn create_event_a(_sec:usize,manual:i32,initial:i32,name:*const u8)->usize{let obj=SyncHandle::Event(Arc::new(EventObject{manual_reset:manual!=0,signaled:Mutex::new(initial!=0),changed:Condvar::new()}));add_sync(obj,named_event(name))}
 pub extern "win64" fn set_event(h:usize)->i32{let Some(SyncHandle::Event(v))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};let _gate=sync_gate();*lock(&v.signaled)=true;if v.manual_reset{v.changed.notify_all()}else{v.changed.notify_one()}1}
@@ -818,6 +819,17 @@ mod tests {
         assert_eq!(unsafe{get_exit_code_process(info.process,&mut code)},1);assert_eq!(code,42);
         assert_eq!(unsafe{get_exit_code_thread(info.thread,&mut code)},1);assert_eq!(code,42);
         close_handle(info.thread);close_handle(info.process);
+    }
+
+    #[test]
+    fn create_process_suspended_ne_demarre_quapres_resume_thread(){
+        let app=std::ffi::CString::new("/bin/sh").unwrap();let line=std::ffi::CString::new("sh -c \"exit 42\"").unwrap();
+        let startup=StartupInfoA{cb:std::mem::size_of::<StartupInfoA>()as u32,reserved:std::ptr::null_mut(),desktop:std::ptr::null_mut(),title:std::ptr::null_mut(),x:0,y:0,x_size:0,y_size:0,x_chars:0,y_chars:0,fill_attribute:0,flags:0,show_window:0,reserved2_size:0,reserved2:std::ptr::null_mut(),std_input:0,std_output:0,std_error:0};
+        let mut info=ProcessInformation{process:0,thread:0,process_id:0,thread_id:0};
+        assert_eq!(unsafe{create_process_a(app.as_ptr()as *const u8,line.as_ptr()as *const u8,0,0,0,4,std::ptr::null(),std::ptr::null(),&startup,&mut info)},1);
+        assert_eq!(wait_for_single_object(info.process,0),258);let mut code=0;assert_eq!(unsafe{get_exit_code_process(info.process,&mut code)},1);assert_eq!(code,259);
+        assert_eq!(resume_thread(info.thread),1);assert_eq!(wait_for_single_object(info.process,5000),0);
+        assert_eq!(unsafe{get_exit_code_process(info.process,&mut code)},1);assert_eq!(code,42);close_handle(info.thread);close_handle(info.process);
     }
 
     #[test]

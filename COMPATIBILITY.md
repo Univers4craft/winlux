@@ -30,8 +30,9 @@ des codecs, des services et parfois d’un runtime managé.
   `GetProcAddress` par nom ou ordinal, les callbacks TLS et `DllMain` au chargement.
 - `CreateProcessA/W` peut lancer des exécutables Linux natifs ou relancer un PE via
   Winlux; les handles offrent attente et codes de sortie, et les blocs
-  d’environnement ANSI/Unicode sont appliqués. L’héritage des handles,
-  `CREATE_SUSPENDED` et les attributs de création avancés ne sont pas pris en charge.
+  d’environnement ANSI/Unicode sont appliqués. `CREATE_SUSPENDED`/`ResumeThread`
+  utilisent un petit lanceur Linux qui s’arrête avant `exec`. L’héritage des handles
+  et les attributs de création avancés ne sont pas pris en charge.
 - Les variantes Unicode `W`, les conversions UTF-8/Windows-1252, `VirtualProtect`,
   `MEM_DECOMMIT`, `GetSystemInfo` et plusieurs fonctions `Rtl*` sont disponibles.
 - Les API de fichiers A/W incluent notamment `CreateFile`, `CopyFile`, `MoveFile`,
