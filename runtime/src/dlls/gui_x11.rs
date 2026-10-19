@@ -38,6 +38,8 @@ pub struct X11Backend {
     content: HashMap<usize, Vec<DrawCmd>>,
     /// Police « core » utilisée pour le texte (ouverte à la première demande).
     font: Option<u32>,
+    /// Table de correspondance keycode X11 → keysyms (lue à la demande).
+    keymap: HashMap<u8, Vec<u32>>,
 }
 
 impl X11Backend {
@@ -60,6 +62,7 @@ impl X11Backend {
             pending: Vec::new(),
             content: HashMap::new(),
             font: None,
+            keymap: HashMap::new(),
         })
     }
 
@@ -157,6 +160,22 @@ impl X11Backend {
             }
         }
         None
+    }
+
+    /// Keysym X11 d'un keycode au niveau demandé (0 = base, 1 = Maj).
+    fn key_sym(&mut self, keycode: u8, shift: bool) -> Option<u32> {
+        if !self.keymap.contains_key(&keycode) {
+            let reply = self.conn.get_keyboard_mapping(keycode, 1).ok()?.reply().ok()?;
+            let per = (reply.keysyms_per_keycode as usize).max(1);
+            let syms = reply.keysyms.chunks(per).next()?.to_vec();
+            self.keymap.insert(keycode, syms);
+        }
+        let syms = self.keymap.get(&keycode)?;
+        let level = usize::from(shift);
+        syms.get(level)
+            .copied()
+            .filter(|s| *s != 0)
+            .or_else(|| syms.first().copied().filter(|s| *s != 0))
     }
 
     fn paint_fill(&self, w: &XWin, r: &Rect, color: u32) {
@@ -302,11 +321,32 @@ impl X11Backend {
             }
             Event::KeyPress(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                Some(PendingEvent { hwnd, message: gui::WM_KEYDOWN, wparam: e.detail as usize, lparam: 1 })
+                let shift = e.state.contains(x11rb::protocol::xproto::KeyButMask::SHIFT);
+                let ctrl = e.state.contains(x11rb::protocol::xproto::KeyButMask::CONTROL);
+                let sym = self.key_sym(e.detail, shift);
+                let vk = keysym_to_vk(sym.unwrap_or(0)).unwrap_or(e.detail as usize);
+                // Caractère effectif pour `TranslateMessage` ; Ctrl+lettre ne
+                // produit pas de caractère (raccourci clavier).
+                let ch = if ctrl { 0 } else { sym.map(keysym_to_char).unwrap_or(0) };
+                gui::set_key_char(vk, ch);
+                Some(PendingEvent {
+                    hwnd,
+                    message: gui::WM_KEYDOWN,
+                    wparam: vk,
+                    lparam: key_lparam(e.detail, false),
+                })
             }
             Event::KeyRelease(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                Some(PendingEvent { hwnd, message: gui::WM_KEYUP, wparam: e.detail as usize, lparam: 1 })
+                let shift = e.state.contains(x11rb::protocol::xproto::KeyButMask::SHIFT);
+                let sym = self.key_sym(e.detail, shift);
+                let vk = keysym_to_vk(sym.unwrap_or(0)).unwrap_or(e.detail as usize);
+                Some(PendingEvent {
+                    hwnd,
+                    message: gui::WM_KEYUP,
+                    wparam: vk,
+                    lparam: key_lparam(e.detail, true),
+                })
             }
             _ => None,
         }
@@ -337,6 +377,66 @@ fn button_wparam(detail: u8) -> usize {
         2 => 0x0002, // MK_MBUTTON
         3 => 0x0010, // MK_RBUTTON
         _ => 0,
+    }
+}
+
+/// Convertit un keysym X11 en code de touche virtuelle Win32 (`VK_*`).
+fn keysym_to_vk(sym: u32) -> Option<usize> {
+    let vk = match sym {
+        0xFF08 => 0x08,                                  // VK_BACK
+        0xFF09 => 0x09,                                  // VK_TAB
+        0xFF0D => 0x0D,                                  // VK_RETURN
+        0xFF1B => 0x1B,                                  // VK_ESCAPE
+        0xFFFF => 0x2E,                                  // VK_DELETE
+        0xFF51 => 0x25,                                  // VK_LEFT
+        0xFF52 => 0x26,                                  // VK_UP
+        0xFF53 => 0x27,                                  // VK_RIGHT
+        0xFF54 => 0x28,                                  // VK_DOWN
+        0xFF50 => 0x24,                                  // VK_HOME
+        0xFF57 => 0x23,                                  // VK_END
+        0xFF55 => 0x21,                                  // VK_PRIOR
+        0xFF56 => 0x22,                                  // VK_NEXT
+        0xFF63 => 0x2D,                                  // VK_INSERT
+        0xFFBE..=0xFFC9 => 0x70 + (sym - 0xFFBE) as usize, // VK_F1..VK_F12
+        0xFFE1 | 0xFFE2 => 0x10,                          // VK_SHIFT
+        0xFFE3 | 0xFFE4 => 0x11,                          // VK_CONTROL
+        0xFFE9 | 0xFFEA => 0x12,                          // VK_MENU
+        0xFFE5 => 0x14,                                   // VK_CAPITAL
+        // ASCII imprimable : les lettres deviennent des VK majuscules, les
+        // chiffres et la ponctuation gardent leur code.
+        0x20..=0x7E => {
+            let c = sym as u8;
+            if c.is_ascii_lowercase() {
+                (c - 0x20) as usize
+            } else {
+                c as usize
+            }
+        }
+        _ => return None,
+    };
+    Some(vk)
+}
+
+/// Caractère produit par un keysym, 0 si la touche n'en produit pas.
+fn keysym_to_char(sym: u32) -> u16 {
+    match sym {
+        0xFF08 => 0x08, // Retour arrière
+        0xFF09 => 0x09, // Tabulation
+        0xFF0D => 0x0D, // Entrée
+        0xFF1B => 0x1B, // Échap
+        0x20..=0x7E => sym as u16,
+        0xA0..=0xFF => sym as u16, // Latin-1 (é, à, ç…)
+        _ => 0,
+    }
+}
+
+/// `lParam` d'un message clavier : une répétition, code matériel, transition.
+fn key_lparam(keycode: u8, up: bool) -> isize {
+    let scan = (keycode as isize) << 16;
+    if up {
+        scan | (1 << 30) | (1 << 31)
+    } else {
+        scan | 1
     }
 }
 

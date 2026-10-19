@@ -137,6 +137,13 @@ pub struct Msg {
     pub l_private: u32,
 }
 
+impl Msg {
+    /// Message neutre : horodatage, position et donnée privée à zéro.
+    pub fn new(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> Msg {
+        Msg { hwnd, message, wparam, lparam, time: 0, pt: Point::default(), l_private: 0 }
+    }
+}
+
 #[repr(C)]
 pub struct WndClassA {
     pub style: u32,
@@ -299,6 +306,46 @@ pub fn post_to_window(hwnd: usize, msg: Msg) -> bool {
     match owner {
         Some(tid) => post_to_thread(tid, msg),
         None => false,
+    }
+}
+
+// ---------- Clavier ----------
+
+pub const VK_BACK: usize = 0x08;
+pub const VK_TAB: usize = 0x09;
+pub const VK_RETURN: usize = 0x0D;
+pub const VK_ESCAPE: usize = 0x1B;
+pub const VK_SPACE: usize = 0x20;
+
+/// Caractères en attente de `TranslateMessage`, indexés par touche virtuelle.
+/// Le backend X11 y dépose la traduction de la disposition clavier effective ;
+/// la valeur 0 signifie « touche sans caractère » (flèches, Ctrl, F1…).
+fn key_chars() -> &'static Mutex<HashMap<usize, u16>> {
+    static K: OnceLock<Mutex<HashMap<usize, u16>>> = OnceLock::new();
+    K.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Enregistre le caractère produit par la prochaine pression d'une touche.
+pub fn set_key_char(vk: usize, ch: u16) {
+    lock(key_chars()).insert(vk, ch);
+}
+
+/// Caractère à synthétiser pour un `WM_KEYDOWN`, consommé une seule fois.
+pub fn take_key_char(vk: usize) -> Option<u16> {
+    if let Some(ch) = lock(key_chars()).remove(&vk) {
+        return (ch != 0).then_some(ch);
+    }
+    vk_to_char(vk)
+}
+
+/// Traduction par défaut d'une touche virtuelle, utilisée quand le backend n'a
+/// rien enregistré (message clavier synthétique) : disposition US non modifiée.
+pub fn vk_to_char(vk: usize) -> Option<u16> {
+    match vk {
+        0x08 | 0x09 | 0x0D | 0x1B | 0x20 => Some(vk as u16),
+        0x30..=0x39 => Some(vk as u16),              // chiffres
+        0x41..=0x5A => Some(vk as u16 + 0x20),       // lettres (minuscules)
+        _ => None,
     }
 }
 

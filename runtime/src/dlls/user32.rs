@@ -249,8 +249,24 @@ pub unsafe extern "win64" fn peek_message_a(out: *mut Msg, hwnd: usize, min: u32
     }
 }
 
-pub unsafe extern "win64" fn translate_message(_msg: *const Msg) -> i32 {
-    // Pas de synthèse de WM_CHAR pour l'instant.
+pub unsafe extern "win64" fn translate_message(msg: *const Msg) -> i32 {
+    if msg.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let m = &*msg;
+    // Win32 : une pression de touche devient un message de caractère quand la
+    // disposition clavier en produit un. Le backend X11 a mémorisé le caractère
+    // effectif (majuscules, ponctuation, accents) ; à défaut on retombe sur la
+    // disposition US non modifiée.
+    if m.message == gui::WM_KEYDOWN {
+        if let Some(ch) = gui::take_key_char(m.wparam) {
+            gui::post_to_window(
+                m.hwnd,
+                gui::Msg::new(m.hwnd, gui::WM_CHAR, ch as usize, m.lparam),
+            );
+        }
+    }
     1
 }
 
