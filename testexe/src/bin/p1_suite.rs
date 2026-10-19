@@ -167,7 +167,26 @@ pub extern "C" fn mainCRTStartup() -> ! {
             && ResumeThread(thread) == 1 && WaitForSingleObject(thread, 5000) == 0
             && GetExitCodeThread(thread, &mut thread_code) != 0 && thread_code == 42;
         check!(thread_ok && CloseHandle(thread) != 0, "CreateThread/WaitForSingleObject/GetExitCodeThread");
-
+        let mut startup: StartupInfoA = core::mem::zeroed();
+        startup.cb = core::mem::size_of::<StartupInfoA>() as u32;
+        let mut child: ProcessInformation = core::mem::zeroed();
+        let launched = CreateProcessA(c"Z:\\bin\\sh".as_ptr(), c"sh -c \"exit 42\"".as_ptr(), null_mut(), null_mut(), 0, 0, null_mut(), null_mut(), &startup, &mut child) != 0;
+        let child_done = launched && WaitForSingleObject(child.process, 5_000) == 0;
+        let mut child_exit = 0u32;
+        let child_status = child_done && GetExitCodeProcess(child.process, &mut child_exit) != 0 && child_exit == 42;
+        let mut child_thread_exit = 0u32;
+        let child_thread_status = GetExitCodeThread(child.thread, &mut child_thread_exit) != 0 && child_thread_exit == 42;
+        check!(child_status && child_thread_status, "CreateProcessA/WaitForSingleObject/GetExitCodeProcess");
+        if launched { CloseHandle(child.thread); CloseHandle(child.process); }
+        let app_w = [b'/' as u16,b'b' as u16,b'i' as u16,b'n' as u16,b'/' as u16,b't' as u16,b'r' as u16,b'u' as u16,b'e' as u16,0];
+        let mut cmd_w = [b't' as u16,b'r' as u16,b'u' as u16,b'e' as u16,0];
+        let mut child_w: ProcessInformation = core::mem::zeroed();
+        let launched_w = CreateProcessW(app_w.as_ptr(), cmd_w.as_mut_ptr(), null_mut(), null_mut(), 0, 0, null_mut(), null_mut(), &startup, &mut child_w) != 0;
+        let child_w_done = launched_w && WaitForSingleObject(child_w.process, 5_000) == 0;
+        let mut child_w_exit = 999u32;
+        let child_w_ok = child_w_done && GetExitCodeProcess(child_w.process, &mut child_w_exit) != 0 && child_w_exit == 0;
+        check!(child_w_ok, "CreateProcessW lance un binaire Linux via le pont");
+        if launched_w { CloseHandle(child_w.thread); CloseHandle(child_w.process); }
         // --- module, imports dynamiques ---
         let base = GetModuleHandleA(core::ptr::null());
         check!(!base.is_null() && *(base as *const u16) == 0x5A4D, "GetModuleHandle(NULL) pointe sur l'en-tete MZ");

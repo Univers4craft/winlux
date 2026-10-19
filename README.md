@@ -10,6 +10,8 @@ Les exécutables de test incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, u
 
 Le runtime contient notamment un chargeur PE, les relocations et imports, un PEB/TEB minimal, du TLS, des DLL intégrées partielles, le registre Winlux persistant, des fichiers mappés vers Linux et une passerelle Winsock/ALSA expérimentale.
 
+Le sous-ensemble de processus implémente `CreateProcessA/W` pour lancer un programme Linux ou un PE enfant via Winlux, avec attente et code de sortie. L’héritage des handles et les blocs d’environnement Windows ne sont pas encore implémentés.
+
 ## Prérequis
 
 - Linux x86-64

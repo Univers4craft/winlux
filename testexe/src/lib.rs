@@ -57,6 +57,16 @@ pub struct MemoryBasicInformation {
 }
 
 #[repr(C)]
+pub struct StartupInfoA {
+    pub cb: u32, pub reserved: *mut c_char, pub desktop: *mut c_char, pub title: *mut c_char,
+    pub x: u32, pub y: u32, pub x_size: u32, pub y_size: u32, pub x_chars: u32, pub y_chars: u32,
+    pub fill_attribute: u32, pub flags: u32, pub show_window: u16, pub reserved2_size: u16,
+    pub reserved2: *mut u8, pub std_input: Handle, pub std_output: Handle, pub std_error: Handle,
+}
+#[repr(C)]
+pub struct ProcessInformation { pub process: Handle, pub thread: Handle, pub process_id: u32, pub thread_id: u32 }
+
+#[repr(C)]
 pub struct AddrInfoA {
     pub flags: i32,
     pub family: i32,
@@ -126,6 +136,9 @@ extern "system" {
     pub fn GetFullPathNameA(path: *const c_char, size: u32, out: *mut c_char, file_part: *mut *mut c_char) -> u32;
     pub fn GetFullPathNameW(path: *const u16, size: u32, out: *mut u16, file_part: *mut *mut u16) -> u32;
     pub fn ExitProcess(code: u32) -> !;
+    pub fn CreateProcessA(application: *const c_char, command_line: *const c_char, process_attributes: *mut c_void, thread_attributes: *mut c_void, inherit: i32, flags: u32, environment: *const c_void, current_directory: *const c_char, startup: *const StartupInfoA, info: *mut ProcessInformation) -> i32;
+    pub fn CreateProcessW(application: *const u16, command_line: *mut u16, process_attributes: *mut c_void, thread_attributes: *mut c_void, inherit: i32, flags: u32, environment: *const c_void, current_directory: *const u16, startup: *const StartupInfoA, info: *mut ProcessInformation) -> i32;
+    pub fn GetExitCodeProcess(process: Handle, code: *mut u32) -> i32;
     pub fn GetCommandLineA() -> *const c_char;
     pub fn GetCommandLineW() -> *const u16;
     pub fn GetModuleHandleA(name: *const c_char) -> Handle;

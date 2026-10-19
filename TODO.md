@@ -2,14 +2,14 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (24 tests), compilation release et les cinq exécutables PE de test réussissent. Relancer les scripts de build et de test après toute modification.
+- Dernière validation connue : `cargo test -p winlux` (25 tests), compilation release et les cinq exécutables PE de test réussissent. Relancer les scripts de build et de test après toute modification.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
 - [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe` et `delay_import.exe` sous Winlux.
-- [x] Ajouter 24 tests unitaires couvrant le runtime, le registre, le SCM, WAVE et Winsock.
+- [x] Ajouter 25 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock et la création de processus.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
@@ -55,7 +55,8 @@
 - [x] Ajouter les primitives de synchronisation `Event`, `Mutex` et `WaitForSingleObject`.
 - [x] Ajouter `VirtualQuery`, `WaitForMultipleObjects` wait-any/wait-all et les sections critiques récursives.
 - [ ] Ajouter les fichiers overlapped et tester les erreurs/concurrences d’accès aux handles.
-- [ ] Implémenter les API de processus Windows et leur cycle de vie.
+- [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
+- [ ] Compléter le cycle de vie des processus : héritage de handles, environnement Windows, suspension, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
 - [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
 - [ ] Étendre la CRT : `scanf`, conversions, locale, fichiers, erreurs et fonctions mathématiques.

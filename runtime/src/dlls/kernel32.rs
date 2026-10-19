@@ -2,6 +2,7 @@ use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::collections::HashMap;
+use std::process::{Child, Command};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
 use std::thread::ThreadId;
@@ -19,8 +20,10 @@ struct MutexState { owner: Option<ThreadId>, recursion: usize }
 struct MutexObject { state: Mutex<MutexState>, changed: Condvar }
 struct ThreadState { finished: bool, exit_code: u32, suspend_count: usize }
 struct ThreadObject { state: Mutex<ThreadState>, changed: Condvar }
+struct ProcessState { child: Option<Child>, exit_code: u32 }
+struct ProcessObject { state: Mutex<ProcessState>, changed: Condvar }
 #[derive(Clone)]
-enum SyncHandle { Event(Arc<EventObject>), Mutex(Arc<MutexObject>), Thread(Arc<ThreadObject>) }
+enum SyncHandle { Event(Arc<EventObject>), Mutex(Arc<MutexObject>), Thread(Arc<ThreadObject>), Process(Arc<ProcessObject>) }
 static SYNCS: OnceLock<Mutex<HashMap<usize, SyncHandle>>> = OnceLock::new();
 static SYNC_NAMES: OnceLock<Mutex<HashMap<String, (SyncHandle, usize)>>> = OnceLock::new();
 static SYNC_GATE: OnceLock<Mutex<()>> = OnceLock::new();
@@ -58,6 +61,16 @@ pub struct MemoryBasicInformation {
     pub protect:u32,
     pub kind:u32,
 }
+
+#[repr(C)]
+pub struct StartupInfoA {
+    pub cb:u32, pub reserved:*mut u8, pub desktop:*mut u8, pub title:*mut u8,
+    pub x:u32,pub y:u32,pub x_size:u32,pub y_size:u32,pub x_chars:u32,pub y_chars:u32,
+    pub fill_attribute:u32,pub flags:u32,pub show_window:u16,pub reserved2_size:u16,
+    pub reserved2:*mut u8,pub std_input:usize,pub std_output:usize,pub std_error:usize,
+}
+#[repr(C)]
+pub struct ProcessInformation { pub process:usize,pub thread:usize,pub process_id:u32,pub thread_id:u32 }
 
 #[repr(C)]
 struct CriticalSection { debug_info:*mut c_void, lock_count:i32, recursion_count:i32, owning_thread:usize, lock_semaphore:usize, spin_count:usize }
@@ -286,7 +299,7 @@ pub extern "win64" fn flush_instruction_cache(_process:usize,_addr:*const c_void
 pub extern "win64" fn get_tick_count() -> u32 { CLOCK_START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u32 }
 pub extern "win64" fn get_tick_count64() -> u64 { CLOCK_START.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64 }
 pub unsafe extern "win64" fn get_current_process_id() -> u32 { libc::getpid() as u32 }
-fn same_sync(a:&SyncHandle,b:&SyncHandle)->bool { match(a,b){(SyncHandle::Event(x),SyncHandle::Event(y))=>Arc::ptr_eq(x,y),(SyncHandle::Mutex(x),SyncHandle::Mutex(y))=>Arc::ptr_eq(x,y),(SyncHandle::Thread(x),SyncHandle::Thread(y))=>Arc::ptr_eq(x,y),_=>false} }
+fn same_sync(a:&SyncHandle,b:&SyncHandle)->bool { match(a,b){(SyncHandle::Event(x),SyncHandle::Event(y))=>Arc::ptr_eq(x,y),(SyncHandle::Mutex(x),SyncHandle::Mutex(y))=>Arc::ptr_eq(x,y),(SyncHandle::Thread(x),SyncHandle::Thread(y))=>Arc::ptr_eq(x,y),(SyncHandle::Process(x),SyncHandle::Process(y))=>Arc::ptr_eq(x,y),_=>false} }
 fn add_sync(obj:SyncHandle,name:Option<String>)->usize {
     let obj=if let Some(name)=name { let key=name.to_lowercase();let mut names=lock(SYNC_NAMES.get_or_init(||Mutex::new(HashMap::new())));if let Some((old,count))=names.get_mut(&key){
         let compatible=matches!((&obj,&*old),(SyncHandle::Event(_),SyncHandle::Event(_))|(SyncHandle::Mutex(_),SyncHandle::Mutex(_)));
@@ -324,6 +337,8 @@ fn wait_mutex(m:&MutexObject,timeout:u32)->u32 {
 fn wait_thread(t:&ThreadObject,timeout:u32)->u32 {
     let start=std::time::Instant::now();loop{let gate=sync_gate();let s=lock(&t.state);if s.finished{return 0;}if timeout==0{return 258;}let left=if timeout==u32::MAX{u32::MAX}else{let elapsed=start.elapsed().as_millis().min(u32::MAX as u128)as u32;if elapsed>=timeout{return 258;}timeout-elapsed};drop(gate);let(next,_)=wait_condvar(&t.changed,s,left);drop(next);}
 }
+fn poll_process(p:&ProcessObject)->bool{let mut s=lock(&p.state);if let Some(child)=s.child.as_mut(){match child.try_wait(){Ok(Some(status))=>{s.exit_code=status.code().unwrap_or(1)as u32;s.child=None;p.changed.notify_all();},Ok(None)=>{},Err(_)=>{s.exit_code=1;s.child=None;p.changed.notify_all();}}}s.child.is_none()}
+fn wait_process(p:&ProcessObject,timeout:u32)->u32{let start=std::time::Instant::now();loop{let gate=sync_gate();if poll_process(p){return 0;}if timeout==0{return 258;}if timeout!=u32::MAX&&start.elapsed().as_millis()>=timeout as u128{return 258;}drop(gate);std::thread::sleep(std::time::Duration::from_millis(2));}}
 fn try_mutex(m:&MutexObject)->bool{let _gate=sync_gate();let me=std::thread::current().id();let mut s=lock(&m.state);if s.owner.as_ref()==Some(&me){s.recursion=s.recursion.saturating_add(1);true}else if s.owner.is_none(){s.owner=Some(me);s.recursion=1;true}else{false}}
 fn leave_mutex(m:&MutexObject)->bool{let _gate=sync_gate();let me=std::thread::current().id();let mut s=lock(&m.state);if s.owner.as_ref()!=Some(&me){crate::process::set_last_error(288);return false;}if s.recursion>1{s.recursion-=1;}else{s.recursion=0;s.owner=None;m.changed.notify_one();}true}
 fn critical_object(cs:usize)->Option<Arc<MutexObject>>{lock(CRITICALS.get_or_init(||Mutex::new(HashMap::new()))).get(&cs).cloned()}
@@ -344,7 +359,52 @@ pub unsafe extern "win64" fn create_thread(_attrs: usize, stack: usize, start: u
     if builder.spawn(move||{let mut s=lock(&state.state);while s.suspend_count!=0{s=state.changed.wait(s).unwrap_or_else(std::sync::PoisonError::into_inner);}drop(s);crate::process::thread_attach_current();let code=f(param);crate::process::thread_detach_current();let _gate=sync_gate();let mut s=lock(&state.state);s.exit_code=code;s.finished=true;state.changed.notify_all();}).is_err(){remove_sync(handle);crate::process::set_last_error(8);return 0;}
     if !id.is_null(){*id=tid;}handle
 }
-pub unsafe extern "win64" fn get_exit_code_thread(handle:usize,code:*mut u32)->i32{if code.is_null(){crate::process::set_last_error(87);return 0;}let Some(SyncHandle::Thread(t))=lookup_sync(handle)else{crate::process::set_last_error(6);return 0;};let s=lock(&t.state);*code=if s.finished{s.exit_code}else{259};1}
+fn split_windows_command_line(line:&str)->Vec<String>{
+    let mut out=Vec::new();let mut arg=String::new();let mut chars=line.chars().peekable();let mut quoted=false;
+    while let Some(c)=chars.next(){
+        if c=='\\'{let mut slashes=1usize;while chars.peek()==Some(&'\\'){chars.next();slashes+=1;}if chars.peek()==Some(&'"'){chars.next();arg.extend(std::iter::repeat('\\').take(slashes/2));if slashes%2==1{arg.push('"')}else{quoted=!quoted;}}else{arg.extend(std::iter::repeat('\\').take(slashes));}continue;}
+        if c=='"'{quoted=!quoted;continue;}if c.is_whitespace()&&!quoted{if !arg.is_empty(){out.push(std::mem::take(&mut arg));}continue;}arg.push(c);
+    }
+    if !arg.is_empty(){out.push(arg);}out
+}
+fn process_error(e:&std::io::Error)->u32{io_error_code(e)}
+unsafe fn create_process_common(application:Option<String>,command_line:*const u8,inherit_handles:i32,creation_flags:u32,environment:*const c_void,current_directory:*const u8,startup:*const StartupInfoA,info:*mut ProcessInformation)->i32{
+    if info.is_null(){crate::process::set_last_error(87);return 0;}
+    if !environment.is_null(){crate::process::set_last_error(120);return 0;}
+    if creation_flags&!0x0800_0000!=0{crate::process::set_last_error(50);return 0;}
+    if !startup.is_null()&&(*startup).cb < std::mem::size_of::<StartupInfoA>() as u32{crate::process::set_last_error(87);return 0;}
+    let line=if command_line.is_null(){String::new()}else{crate::dlls::cstr(command_line)};
+    let mut args=split_windows_command_line(&line);
+    let exe=if let Some(app)=application{if !args.is_empty(){args.remove(0);}app}else if !args.is_empty(){args.remove(0)}else{crate::process::set_last_error(87);return 0;};
+    let mut host_path=crate::paths::to_linux(&exe);
+    if !host_path.exists()&&host_path.extension().is_none(){let mut x=host_path.as_os_str().to_os_string();x.push(".exe");let p=std::path::PathBuf::from(x);if p.exists(){host_path=p;}}
+    let is_pe=host_path.extension().is_some_and(|e|e.to_string_lossy().eq_ignore_ascii_case("exe"));
+    let mut cmd=if is_pe{let runtime=match std::env::current_exe(){Ok(p)=>p,Err(e)=>{crate::process::set_last_error(process_error(&e));return 0;}};let mut c=Command::new(runtime);c.arg(&host_path);c}else{Command::new(&host_path)};
+    cmd.args(args.iter());
+    if !current_directory.is_null(){let cwd=crate::paths::to_linux(&crate::dlls::cstr(current_directory));cmd.current_dir(cwd);}
+    if inherit_handles!=0{crate::process::set_last_error(120);return 0;}
+    let child=match cmd.spawn(){Ok(c)=>c,Err(e)=>{crate::process::set_last_error(process_error(&e));return 0;}};
+    let pid=child.id();let object=Arc::new(ProcessObject{state:Mutex::new(ProcessState{child:Some(child),exit_code:259}),changed:Condvar::new()});
+    let process_handle=add_sync(SyncHandle::Process(object.clone()),None);let thread_handle=add_sync(SyncHandle::Process(object),None);
+    std::ptr::write(info,ProcessInformation{process:process_handle,thread:thread_handle,process_id:pid,thread_id:pid});1
+}
+pub unsafe extern "win64" fn create_process_a(application:*const u8,command_line:*const u8,process_attributes:usize,thread_attributes:usize,inherit:i32,flags:u32,environment:*const c_void,current_directory:*const u8,startup:*const StartupInfoA,info:*mut ProcessInformation)->i32{
+    if application.is_null()&&command_line.is_null(){crate::process::set_last_error(87);return 0;}
+    let app=if application.is_null(){None}else{Some(crate::dlls::cstr(application))};
+    let _=(process_attributes,thread_attributes);create_process_common(app,command_line,inherit,flags,environment,current_directory,startup,info)
+}
+pub unsafe extern "win64" fn create_process_w(application:*const u16,command_line:*mut u16,process_attributes:usize,thread_attributes:usize,inherit:i32,flags:u32,environment:*const c_void,current_directory:*const u16,startup:*const StartupInfoA,info:*mut ProcessInformation)->i32{
+    let app=if application.is_null(){None}else{let s=match cstring_from_wide(application){Ok(s)=>s,Err(e)=>{crate::process::set_last_error(e);return 0;}};Some(s)};
+    let line=if command_line.is_null(){None}else{let n=crate::printf::wide_len(command_line);let s=match String::from_utf16(std::slice::from_raw_parts(command_line,n)){Ok(s)=>s,Err(_)=>{crate::process::set_last_error(1113);return 0;}};let bytes=crate::dlls::encode_ansi(&s);match std::ffi::CString::new(bytes){Ok(c)=>Some(c),Err(_)=>{crate::process::set_last_error(87);return 0;}}};
+    if app.is_none()&&line.is_none(){crate::process::set_last_error(87);return 0;}
+    let cwd=if current_directory.is_null(){None}else{match cstring_from_wide(current_directory){Ok(s)=>Some(s),Err(e)=>{crate::process::set_last_error(e);return 0;}}};
+    let _=(process_attributes,thread_attributes);
+    create_process_a(app.as_ref().map_or(std::ptr::null(),|s|s.as_ptr()as *const u8),line.as_ref().map_or(std::ptr::null(),|s|s.as_ptr()as *const u8),0,0,inherit,flags,environment,cwd.as_ref().map_or(std::ptr::null(),|s|s.as_ptr()as *const u8),startup,info)
+}
+pub unsafe extern "win64" fn open_process(_access:u32,_inherit:i32,pid:u32)->usize{if pid==0{crate::process::set_last_error(87);return 0;}if pid==libc::getpid() as u32{return get_current_process();}crate::process::set_last_error(5);0}
+pub unsafe extern "win64" fn get_exit_code_process(handle:usize,code:*mut u32)->i32{if code.is_null(){crate::process::set_last_error(87);return 0;}let Some(SyncHandle::Process(p))=lookup_sync(handle)else{crate::process::set_last_error(6);return 0;};poll_process(&p);*code=lock(&p.state).exit_code;1}
+pub unsafe extern "win64" fn terminate_process(handle:usize,code:u32)->i32{let Some(SyncHandle::Process(p))=lookup_sync(handle)else{crate::process::set_last_error(6);return 0;};let mut s=lock(&p.state);let Some(child)=s.child.as_mut()else{crate::process::set_last_error(5);return 0;};if child.kill().is_err(){crate::process::set_last_error(5);return 0;}if let Some(mut child)=s.child.take(){let _=child.wait();}s.exit_code=code;p.changed.notify_all();1}
+pub unsafe extern "win64" fn get_exit_code_thread(handle:usize,code:*mut u32)->i32{if code.is_null(){crate::process::set_last_error(87);return 0;}match lookup_sync(handle){Some(SyncHandle::Thread(t))=>{let s=lock(&t.state);*code=if s.finished{s.exit_code}else{259};1},Some(SyncHandle::Process(p))=>{poll_process(&p);*code=lock(&p.state).exit_code;1},_=>{crate::process::set_last_error(6);0}}}
 pub extern "win64" fn resume_thread(handle:usize)->u32{let Some(SyncHandle::Thread(t))=lookup_sync(handle)else{crate::process::set_last_error(6);return u32::MAX;};let _gate=sync_gate();let mut s=lock(&t.state);if s.finished{crate::process::set_last_error(6);return u32::MAX;}let old=s.suspend_count;if old>0{s.suspend_count-=1;if s.suspend_count==0{t.changed.notify_all();}}old.min(u32::MAX as usize) as u32}
 pub extern "win64" fn close_handle(handle: usize) -> i32 { if handle==1||handle==2||handle==(-10isize)as usize||handle==(-11isize)as usize||handle==(-12isize)as usize{crate::process::set_last_error(6);return 0;}if lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle).is_some(){1}else if remove_sync(handle){1}else{crate::process::set_last_error(6);0} }
 pub unsafe extern "win64" fn create_event_a(_sec:usize,manual:i32,initial:i32,name:*const u8)->usize{let obj=SyncHandle::Event(Arc::new(EventObject{manual_reset:manual!=0,signaled:Mutex::new(initial!=0),changed:Condvar::new()}));add_sync(obj,named_event(name))}
@@ -352,7 +412,7 @@ pub extern "win64" fn set_event(h:usize)->i32{let Some(SyncHandle::Event(v))=loo
 pub extern "win64" fn reset_event(h:usize)->i32{let Some(SyncHandle::Event(v))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};let _gate=sync_gate();*lock(&v.signaled)=false;1}
 pub unsafe extern "win64" fn create_mutex_a(_sec:usize,initial:i32,name:*const u8)->usize{let obj=SyncHandle::Mutex(Arc::new(MutexObject{state:Mutex::new(MutexState{owner:if initial!=0{Some(std::thread::current().id())}else{None},recursion:usize::from(initial!=0)}),changed:Condvar::new()}));add_sync(obj,named_event(name))}
 pub extern "win64" fn release_mutex(h:usize)->i32{let Some(SyncHandle::Mutex(m))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};if leave_mutex(&m){1}else{0}}
-pub extern "win64" fn wait_for_single_object(h:usize,timeout:u32)->u32{let Some(obj)=lookup_sync(h)else{crate::process::set_last_error(6);return u32::MAX;};match obj{SyncHandle::Event(e)=>wait_event(&e,timeout),SyncHandle::Mutex(m)=>wait_mutex(&m,timeout),SyncHandle::Thread(t)=>wait_thread(&t,timeout)}}
+pub extern "win64" fn wait_for_single_object(h:usize,timeout:u32)->u32{let Some(obj)=lookup_sync(h)else{crate::process::set_last_error(6);return u32::MAX;};match obj{SyncHandle::Event(e)=>wait_event(&e,timeout),SyncHandle::Mutex(m)=>wait_mutex(&m,timeout),SyncHandle::Thread(t)=>wait_thread(&t,timeout),SyncHandle::Process(p)=>wait_process(&p,timeout)}}
 pub unsafe extern "win64" fn wait_for_multiple_objects(count:u32,handles:*const usize,wait_all:i32,timeout:u32)->u32{
     if count==0||count>64||handles.is_null(){crate::process::set_last_error(87);return u32::MAX;}
     let hs=std::slice::from_raw_parts(handles,count as usize);let mut objects=Vec::with_capacity(hs.len());
@@ -362,12 +422,12 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(count:u32,handles:*const 
         for i in 0..objects.len(){if objects[..i].iter().any(|o|same_sync(o,&objects[i])){crate::process::set_last_error(87);return u32::MAX;}}
         loop{
             let gate=sync_gate();let me=std::thread::current().id();
-            let ready=objects.iter().all(|o|match o{SyncHandle::Event(e)=>*lock(&e.signaled),SyncHandle::Mutex(m)=>{let s=lock(&m.state);s.owner.is_none()||s.owner.as_ref()==Some(&me)},SyncHandle::Thread(t)=>lock(&t.state).finished});
-            if ready{for o in &objects{match o{SyncHandle::Event(e)=>{let mut signaled=lock(&e.signaled);if !e.manual_reset{*signaled=false;}},SyncHandle::Mutex(m)=>{let mut s=lock(&m.state);if s.owner.as_ref()==Some(&me){s.recursion=s.recursion.saturating_add(1);}else{s.owner=Some(me);s.recursion=1;}},SyncHandle::Thread(_)=>{}}}return 0;}
+            let ready=objects.iter().all(|o|match o{SyncHandle::Event(e)=>*lock(&e.signaled),SyncHandle::Mutex(m)=>{let s=lock(&m.state);s.owner.is_none()||s.owner.as_ref()==Some(&me)},SyncHandle::Thread(t)=>lock(&t.state).finished,SyncHandle::Process(p)=>poll_process(p)});
+            if ready{for o in &objects{match o{SyncHandle::Event(e)=>{let mut signaled=lock(&e.signaled);if !e.manual_reset{*signaled=false;}},SyncHandle::Mutex(m)=>{let mut s=lock(&m.state);if s.owner.as_ref()==Some(&me){s.recursion=s.recursion.saturating_add(1);}else{s.owner=Some(me);s.recursion=1;}},SyncHandle::Thread(_)|SyncHandle::Process(_)=>{}}}return 0;}
             drop(gate);if timeout==0{return 258;}if timeout!=u32::MAX&&start.elapsed().as_millis()>=timeout as u128{return 258;}std::thread::sleep(std::time::Duration::from_millis(1));
         }
     }
-    loop{for (i,obj) in objects.iter().enumerate(){let ready=match obj{SyncHandle::Event(e)=>wait_event(e,0)==0,SyncHandle::Mutex(m)=>wait_mutex(m,0)==0,SyncHandle::Thread(t)=>wait_thread(t,0)==0};if ready{return i as u32;}}
+    loop{for (i,obj) in objects.iter().enumerate(){let ready=match obj{SyncHandle::Event(e)=>wait_event(e,0)==0,SyncHandle::Mutex(m)=>wait_mutex(m,0)==0,SyncHandle::Thread(t)=>wait_thread(t,0)==0,SyncHandle::Process(p)=>poll_process(p)};if ready{return i as u32;}}
         if timeout==0{return 258;}if timeout!=u32::MAX&&start.elapsed().as_millis()>=timeout as u128{return 258;}std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
@@ -459,7 +519,7 @@ pub fn exports() -> crate::dlls::Exports { crate::exports! {
  "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file, "CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
   "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
   "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
-  "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"GetCurrentThreadId"=>fn get_current_thread_id,
+  "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"GetCurrentThreadId"=>fn get_current_thread_id,
  "GetLastError"=>fn get_last_error, "SetLastError"=>fn set_last_error, "GetProcessHeap"=>fn get_process_heap,
    "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
   "GetTickCount"=>fn get_tick_count,"GetTickCount64"=>fn get_tick_count64,"GetCurrentProcessId"=>fn get_current_process_id,"CreateThread"=>fn create_thread,"CloseHandle"=>fn close_handle,"GetEnvironmentVariableA"=>fn get_environment_variable_a,"SetEnvironmentVariableA"=>fn set_environment_variable_a,
@@ -607,7 +667,7 @@ mod tests {
     fn create_thread_retourne_un_handle_attendable_et_un_code_de_sortie() {
         init();
         let mut tid = 0;
-        let h = unsafe { create_thread(0, 0, thread_returns_42 as usize, 0, 0, &mut tid) };
+        let h = unsafe { create_thread(0, 0, thread_returns_42 as *const () as usize, 0, 0, &mut tid) };
         assert_ne!(h, 0);
         assert_ne!(tid, 0);
         assert_eq!(wait_for_single_object(h, 5_000), 0);
@@ -620,11 +680,23 @@ mod tests {
     #[test]
     fn create_thread_suspended_attend_resume_thread() {
         init();
-        let h=unsafe{create_thread(0,0,thread_returns_42 as usize,0,4,std::ptr::null_mut())};
+        let h=unsafe{create_thread(0,0,thread_returns_42 as *const () as usize,0,4,std::ptr::null_mut())};
         assert_ne!(h,0);
         assert_eq!(wait_for_single_object(h,0),258);
         assert_eq!(resume_thread(h),1);
         assert_eq!(wait_for_single_object(h,5_000),0);
         close_handle(h);
+    }
+
+    #[test]
+    fn create_process_execute_un_processus_local_et_retourne_son_code(){
+        let app=std::ffi::CString::new("/bin/sh").unwrap();let line=std::ffi::CString::new("sh -c \"exit 42\"").unwrap();
+        let startup=StartupInfoA{cb:std::mem::size_of::<StartupInfoA>()as u32,reserved:std::ptr::null_mut(),desktop:std::ptr::null_mut(),title:std::ptr::null_mut(),x:0,y:0,x_size:0,y_size:0,x_chars:0,y_chars:0,fill_attribute:0,flags:0,show_window:0,reserved2_size:0,reserved2:std::ptr::null_mut(),std_input:0,std_output:0,std_error:0};
+        let mut info=ProcessInformation{process:0,thread:0,process_id:0,thread_id:0};
+        assert_eq!(unsafe{create_process_a(app.as_ptr()as *const u8,line.as_ptr()as *const u8,0,0,0,0,std::ptr::null(),std::ptr::null(),&startup,&mut info)},1);
+        assert_eq!(wait_for_single_object(info.process,5000),0);let mut code=0;
+        assert_eq!(unsafe{get_exit_code_process(info.process,&mut code)},1);assert_eq!(code,42);
+        assert_eq!(unsafe{get_exit_code_thread(info.thread,&mut code)},1);assert_eq!(code,42);
+        close_handle(info.thread);close_handle(info.process);
     }
 }
