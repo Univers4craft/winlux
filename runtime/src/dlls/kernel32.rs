@@ -294,6 +294,216 @@ pub extern "win64" fn flush_file_buffers(h:usize)->i32 {
     let f={let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));let Some(FileHandle::File(f))=handles.get(&h)else{crate::process::set_last_error(6);return 0;};f.clone()};
     let result={lock(&f).sync_all()};match result{Ok(())=>1,Err(e)=>{crate::process::set_last_error(io_error_code(&e));0}}
 }
+// ---------- Démarrage, fichiers, volumes ----------
+
+/// `STARTUPINFOA/W` : même disposition sur 64 bits, 104 octets.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct StartupInfo {
+    pub cb: u32,
+    pub reserved: u32,
+    pub lp_reserved: usize,
+    pub lp_desktop: usize,
+    pub lp_title: usize,
+    pub x: u32,
+    pub y: u32,
+    pub x_size: u32,
+    pub y_size: u32,
+    pub x_count: u32,
+    pub y_count: u32,
+    pub fill_attribute: u32,
+    pub flags: u32,
+    pub show_window: u16,
+    pub cb_reserved2: u16,
+    pub pad: u32,
+    pub lp_reserved2: usize,
+    pub std_input: usize,
+    pub std_output: usize,
+    pub std_error: usize,
+}
+
+fn startup_info() -> StartupInfo {
+    StartupInfo {
+        cb: std::mem::size_of::<StartupInfo>() as u32, reserved: 0, lp_reserved: 0, lp_desktop: 0, lp_title: 0,
+        x: 0, y: 0, x_size: 0, y_size: 0, x_count: 0, y_count: 0, fill_attribute: 0, flags: 0,
+        show_window: 0, cb_reserved2: 0, pad: 0, lp_reserved2: 0,
+        std_input: get_std_handle(-10i32 as u32), std_output: get_std_handle(-11i32 as u32), std_error: get_std_handle(-12i32 as u32),
+    }
+}
+
+unsafe fn write_startup_info(info: *mut u8) {
+    if info.is_null() { crate::process::set_last_error(87); return; }
+    std::ptr::write_unaligned(info as *mut StartupInfo, startup_info());
+}
+
+pub unsafe extern "win64" fn get_startup_info_a(info: *mut u8) { write_startup_info(info); }
+pub unsafe extern "win64" fn get_startup_info_w(info: *mut u8) { write_startup_info(info); }
+
+pub unsafe extern "win64" fn set_file_pointer_ex(h: usize, distance: i64, new_position: *mut i64, method: u32) -> i32 {
+    let f = { let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))); let Some(FileHandle::File(f)) = handles.get(&h) else { crate::process::set_last_error(6); return 0; }; f.clone() };
+    let from = match method {
+        0 if distance >= 0 => SeekFrom::Start(distance as u64),
+        1 => SeekFrom::Current(distance),
+        2 => SeekFrom::End(distance),
+        _ => { crate::process::set_last_error(87); return 0; }
+    };
+    let mut guard = lock(&f);
+    let result = guard.seek(from);
+    match result { Ok(n) => { if !new_position.is_null() { *new_position = n as i64; } 1 }, Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 } }
+}
+
+pub unsafe extern "win64" fn get_file_size_ex(h: usize, out: *mut i64) -> i32 {
+    if out.is_null() { crate::process::set_last_error(87); return 0; }
+    let f = { let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))); let Some(FileHandle::File(f)) = handles.get(&h) else { crate::process::set_last_error(6); return 0; }; f.clone() };
+    let result = lock(&f).metadata();
+    match result { Ok(m) => { *out = m.len() as i64; 1 }, Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 } }
+}
+
+pub extern "win64" fn get_file_type(h: usize) -> u32 {
+    if h == (-10isize) as usize || h == (-11isize) as usize || h == (-12isize) as usize { return 2; }
+    if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).contains_key(&h) { 1 } else { crate::process::set_last_error(6); 0 }
+}
+
+pub unsafe extern "win64" fn set_file_attributes_a(path: *const u8, attributes: u32) -> i32 {
+    if path.is_null() { crate::process::set_last_error(87); return 0; }
+    let p = crate::paths::to_linux(&crate::dlls::cstr(path));
+    let m = match std::fs::metadata(&p) { Ok(m) => m, Err(e) => { crate::process::set_last_error(io_error_code(&e)); return 0; } };
+    let mut perms = m.permissions();
+    perms.set_readonly(attributes & 0x1 != 0);
+    match std::fs::set_permissions(&p, perms) { Ok(()) => 1, Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 } }
+}
+
+pub unsafe extern "win64" fn set_file_attributes_w(path: *const u16, attributes: u32) -> i32 {
+    let s = match cstring_from_wide(path) { Ok(s) => s, Err(e) => { crate::process::set_last_error(e); return 0; } };
+    set_file_attributes_a(s.as_ptr() as *const u8, attributes)
+}
+
+pub unsafe extern "win64" fn get_file_time(h: usize, creation: *mut FileTime, access: *mut FileTime, write: *mut FileTime) -> i32 {
+    let f = { let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))); let Some(FileHandle::File(f)) = handles.get(&h) else { crate::process::set_last_error(6); return 0; }; f.clone() };
+    let result = lock(&f).metadata();
+    match result {
+        Ok(m) => {
+            let zero = std::time::UNIX_EPOCH;
+            if !creation.is_null() { std::ptr::write_unaligned(creation, filetime_parts(system_time_to_filetime(m.created().unwrap_or(zero)))); }
+            if !access.is_null() { std::ptr::write_unaligned(access, filetime_parts(system_time_to_filetime(m.accessed().unwrap_or(zero)))); }
+            if !write.is_null() { std::ptr::write_unaligned(write, filetime_parts(system_time_to_filetime(m.modified().unwrap_or(zero)))); }
+            1
+        }
+        Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 }
+    }
+}
+
+pub unsafe extern "win64" fn set_file_time(h: usize, _creation: *const FileTime, _access: *const FileTime, write: *const FileTime) -> i32 {
+    let f = { let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))); let Some(FileHandle::File(f)) = handles.get(&h) else { crate::process::set_last_error(6); return 0; }; f.clone() };
+    let Some(ft) = filetime_value(write) else { return 1; };
+    let when = system_time_from_filetime(ft);
+    let mut file = lock(&f);
+    let result = file.set_modified(when); match result { Ok(()) => 1, Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 } }
+}
+
+fn filetime_value(ft: *const FileTime) -> Option<u64> {
+    if ft.is_null() { return None; }
+    Some(unsafe { ((*ft).high as u64) << 32 | (*ft).low as u64 })
+}
+
+const FILETIME_EPOCH: u64 = 116_444_736_000_000_000;
+
+fn system_time_from_filetime(t: u64) -> std::time::SystemTime {
+    if t >= FILETIME_EPOCH {
+        std::time::UNIX_EPOCH + std::time::Duration::from_nanos(t.saturating_sub(FILETIME_EPOCH).saturating_mul(100))
+    } else {
+        std::time::UNIX_EPOCH
+    }
+}
+
+pub unsafe extern "win64" fn lock_file(h: usize, _offset_low: u32, _offset_high: u32, _length_low: u32, _length_high: u32) -> i32 {
+    let f = { let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))); let Some(FileHandle::File(f)) = handles.get(&h) else { crate::process::set_last_error(6); return 0; }; f.clone() };
+    let fd = std::os::unix::io::AsRawFd::as_raw_fd(&*lock(&f));
+    if libc::flock(fd, libc::LOCK_EX) == 0 { 1 } else { crate::process::set_last_error(33); 0 }
+}
+
+pub unsafe extern "win64" fn unlock_file(h: usize, _offset_low: u32, _offset_high: u32, _length_low: u32, _length_high: u32) -> i32 {
+    let f = { let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))); let Some(FileHandle::File(f)) = handles.get(&h) else { crate::process::set_last_error(6); return 0; }; f.clone() };
+    let fd = std::os::unix::io::AsRawFd::as_raw_fd(&*lock(&f));
+    if libc::flock(fd, libc::LOCK_UN) == 0 { 1 } else { crate::process::set_last_error(33); 0 }
+}
+
+fn disk_free(path: &str) -> Option<(u64, u64, u64)> {
+    let linux = crate::paths::to_linux(path);
+    let text = linux.to_string_lossy().into_owned();
+    let c = std::ffi::CString::new(text).ok()?;
+    let mut s: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut s) } != 0 { return None; }
+    let fragment = if s.f_frsize != 0 { s.f_frsize } else { s.f_bsize };
+    Some((s.f_bavail as u64 * fragment as u64, s.f_blocks as u64 * fragment as u64, s.f_bfree as u64 * fragment as u64))
+}
+
+pub unsafe extern "win64" fn get_disk_free_space_ex_a(path: *const u8, available: *mut i64, total: *mut i64, free: *mut i64) -> i32 {
+    if path.is_null() { crate::process::set_last_error(87); return 0; }
+    match disk_free(&crate::dlls::cstr(path)) {
+        Some((a, t, f)) => { if !available.is_null() { *available = a as i64; } if !total.is_null() { *total = t as i64; } if !free.is_null() { *free = f as i64; } 1 }
+        None => { crate::process::set_last_error(3); 0 }
+    }
+}
+
+pub unsafe extern "win64" fn get_disk_free_space_ex_w(path: *const u16, available: *mut i64, total: *mut i64, free: *mut i64) -> i32 {
+    let s = match cstring_from_wide(path) { Ok(s) => s, Err(e) => { crate::process::set_last_error(e); return 0; } };
+    get_disk_free_space_ex_a(s.as_ptr() as *const u8, available, total, free)
+}
+
+unsafe fn write_volume_info_a(label: *mut u8, label_size: u32, serial: *mut u32, max_component: *mut u32, fs_flags: *mut u32, fs_name: *mut u8, fs_size: u32) {
+    if !label.is_null() { let _ = write_a_text("WINLUX", label, label_size); }
+    if !serial.is_null() { *serial = 0x5731_4E4C; }
+    if !max_component.is_null() { *max_component = 255; }
+    if !fs_flags.is_null() { *fs_flags = 0; }
+    if !fs_name.is_null() { let _ = write_a_text("WINLUXFS", fs_name, fs_size); }
+}
+
+pub unsafe extern "win64" fn get_volume_information_a(root: *const u8, label: *mut u8, label_size: u32, serial: *mut u32, max_component: *mut u32, flags: *mut u32, fs: *mut u8, fs_size: u32) -> i32 {
+    if root.is_null() { crate::process::set_last_error(87); return 0; }
+    let p = crate::paths::to_linux(&crate::dlls::cstr(root));
+    if !p.exists() { crate::process::set_last_error(3); return 0; }
+    write_volume_info_a(label, label_size, serial, max_component, flags, fs, fs_size);
+    1
+}
+
+pub unsafe extern "win64" fn get_volume_information_w(root: *const u16, label: *mut u16, label_size: u32, serial: *mut u32, max_component: *mut u32, flags: *mut u32, fs: *mut u16, fs_size: u32) -> i32 {
+    let s = match cstring_from_wide(root) { Ok(s) => s, Err(e) => { crate::process::set_last_error(e); return 0; } };
+    let p = crate::paths::to_linux(&s.to_string_lossy());
+    if !p.exists() { crate::process::set_last_error(3); return 0; }
+    if !label.is_null() { let _ = write_w_text("WINLUX", label, label_size); }
+    if !serial.is_null() { *serial = 0x5731_4E4C; }
+    if !max_component.is_null() { *max_component = 255; }
+    if !flags.is_null() { *flags = 0; }
+    if !fs.is_null() { let _ = write_w_text("WINLUXFS", fs, fs_size); }
+    1
+}
+
+pub unsafe extern "win64" fn get_drive_type_a(root: *const u8) -> u32 { if root.is_null() { crate::process::set_last_error(87); return 1; } 3 }
+pub unsafe extern "win64" fn get_drive_type_w(root: *const u16) -> u32 { if root.is_null() { crate::process::set_last_error(87); return 1; } 3 }
+
+fn move_file_ex_impl(src: &str, dst: &str, flags: u32) -> i32 {
+    let s = crate::paths::to_linux(src);
+    let d = crate::paths::to_linux(dst);
+    if flags & 0x1 != 0 && d.exists() { let _ = std::fs::remove_file(&d); }
+    match std::fs::rename(&s, &d) {
+        Ok(()) => 1,
+        Err(_) if flags & 0x2 != 0 => match std::fs::copy(&s, &d) { Ok(_) => { let _ = std::fs::remove_file(&s); 1 }, Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 } },
+        Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 }
+    }
+}
+
+pub unsafe extern "win64" fn move_file_ex_a(src: *const u8, dst: *const u8, flags: u32) -> i32 {
+    if src.is_null() || dst.is_null() { crate::process::set_last_error(87); return 0; }
+    move_file_ex_impl(&crate::dlls::cstr(src), &crate::dlls::cstr(dst), flags)
+}
+
+pub unsafe extern "win64" fn move_file_ex_w(src: *const u16, dst: *const u16, flags: u32) -> i32 {
+    let s = match cstring_from_wide(src) { Ok(s) => s, Err(e) => { crate::process::set_last_error(e); return 0; } };
+    let d = match cstring_from_wide(dst) { Ok(s) => s, Err(e) => { crate::process::set_last_error(e); return 0; } };
+    move_file_ex_impl(&s.to_string_lossy(), &d.to_string_lossy(), flags)
+}
+
 pub extern "win64" fn exit_process(code: u32) -> ! { flush_and_exit(code as i32) }
 pub extern "win64" fn get_command_line_a() -> usize { crate::process::PROCESS.get().map(|p| p.command_line_a.as_ptr() as usize).unwrap_or(0) }
 pub extern "win64" fn get_command_line_w() -> usize { crate::process::PROCESS.get().map(|p| p.command_line_w.as_ptr() as usize).unwrap_or(0) }
@@ -674,7 +884,10 @@ pub fn exports() -> crate::dlls::Exports { crate::exports! {
    "GetTempPathW"=>fn get_temp_path_w,"GetTempFileNameW"=>fn get_temp_file_name_w,"GetModuleFileNameW"=>fn get_module_file_name_w,"GetFileAttributesW"=>fn get_file_attributes_w,"GetFileAttributesExW"=>fn get_file_attributes_ex_w,"DeleteFileW"=>fn delete_file_w,"CreateDirectoryW"=>fn create_directory_w,"GetFullPathNameW"=>fn get_full_path_name_w,"CopyFileW"=>fn copy_file_w,"MoveFileW"=>fn move_file_w,"RemoveDirectoryW"=>fn remove_directory_w,"SetEndOfFile"=>fn set_end_of_file,"Sleep"=>fn sleep,
   "TlsAlloc"=>fn tls_alloc, "TlsFree"=>fn tls_free, "TlsSetValue"=>fn tls_set_value, "TlsGetValue"=>fn tls_get_value,
   "MultiByteToWideChar"=>fn multi_byte_to_wide,"WideCharToMultiByte"=>fn wide_char_to_multi_byte,"WriteConsoleW"=>fn write_console_w,
- "QueryPerformanceFrequency"=>fn query_performance_frequency, "QueryPerformanceCounter"=>fn query_performance_counter
+ "QueryPerformanceFrequency"=>fn query_performance_frequency, "QueryPerformanceCounter"=>fn query_performance_counter,
+  "GetStartupInfoA"=>fn get_startup_info_a,"GetStartupInfoW"=>fn get_startup_info_w,"SetFilePointerEx"=>fn set_file_pointer_ex,"GetFileSizeEx"=>fn get_file_size_ex,"GetFileType"=>fn get_file_type,
+  "SetFileAttributesA"=>fn set_file_attributes_a,"SetFileAttributesW"=>fn set_file_attributes_w,"GetFileTime"=>fn get_file_time,"SetFileTime"=>fn set_file_time,"LockFile"=>fn lock_file,"UnlockFile"=>fn unlock_file,
+  "GetDiskFreeSpaceExA"=>fn get_disk_free_space_ex_a,"GetDiskFreeSpaceExW"=>fn get_disk_free_space_ex_w,"GetVolumeInformationA"=>fn get_volume_information_a,"GetVolumeInformationW"=>fn get_volume_information_w,"GetDriveTypeA"=>fn get_drive_type_a,"GetDriveTypeW"=>fn get_drive_type_w,"MoveFileExA"=>fn move_file_ex_a,"MoveFileExW"=>fn move_file_ex_w
   } }
 
 #[cfg(test)]
