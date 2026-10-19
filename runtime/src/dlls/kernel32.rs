@@ -11,8 +11,11 @@ pub static mut PROCESS_HEAP: usize = 0;
 struct VmRegion { size: usize, committed: Vec<bool>, protection: Vec<u32>, allocation_protection: u32 }
 static ALLOCS: OnceLock<Mutex<HashMap<usize, VmRegion>>> = OnceLock::new();
 static HEAP_ALLOCS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
-enum FileHandle { File(File) }
+enum FileHandle { File(Arc<Mutex<File>>) }
 static HANDLES: OnceLock<Mutex<HashMap<usize, FileHandle>>> = OnceLock::new();
+struct IoResult { done:bool,bytes:u32,error:u32 }
+struct IoOperation { file_handle:usize,state:Mutex<IoResult>,changed:Condvar,cancelled:std::sync::atomic::AtomicBool }
+static IO_OPERATIONS:OnceLock<Mutex<HashMap<usize,Arc<IoOperation>>>>=OnceLock::new();
 static NEXT_HANDLE: AtomicUsize = AtomicUsize::new(0x1_0000);
 
 struct EventObject { manual_reset: bool, signaled: Mutex<bool>, changed: Condvar }
@@ -73,6 +76,9 @@ pub struct StartupInfoA {
 pub struct ProcessInformation { pub process:usize,pub thread:usize,pub process_id:u32,pub thread_id:u32 }
 
 #[repr(C)]
+pub struct Overlapped { pub internal:usize,pub internal_high:usize,pub offset:u32,pub offset_high:u32,pub event:usize }
+
+#[repr(C)]
 struct CriticalSection { debug_info:*mut c_void, lock_count:i32, recursion_count:i32, owning_thread:usize, lock_semaphore:usize, spin_count:usize }
 
 pub fn init() {
@@ -108,8 +114,44 @@ unsafe fn bytes_mut<'a>(p: *mut u8, len: usize) -> Option<&'a mut [u8]> {
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> { m.lock().unwrap_or_else(std::sync::PoisonError::into_inner) }
 fn sync_gate()->std::sync::MutexGuard<'static,()>{lock(SYNC_GATE.get_or_init(||Mutex::new(())))}
 
-pub unsafe extern "win64" fn write_file(h: usize, buf: *const u8, len: u32, written: *mut u32, _ov: usize) -> i32 {
+fn start_overlapped_io(h:usize,buffer:usize,len:u32,overlapped:usize,is_write:bool)->i32{
+    const ERROR_IO_PENDING:u32=997;const STATUS_PENDING:usize=0x103;
+    if overlapped==0||overlapped%std::mem::align_of::<Overlapped>()!=0||(len!=0&&buffer==0){crate::process::set_last_error(87);return 0;}
+    let file={let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));let Some(FileHandle::File(f))=handles.get(&h)else{crate::process::set_last_error(6);return 0;};f.clone()};
+    let ov=overlapped as *mut Overlapped;
+    let offset=unsafe{((*ov).offset_high as u64)<<32|(*ov).offset as u64};
+    let event=unsafe{(*ov).event};
+    let write_data=if is_write&&len!=0{Some(unsafe{std::slice::from_raw_parts(buffer as *const u8,len as usize).to_vec()})}else{None};
+    let operation=Arc::new(IoOperation{file_handle:h,state:Mutex::new(IoResult{done:false,bytes:0,error:0}),changed:Condvar::new(),cancelled:std::sync::atomic::AtomicBool::new(false)});
+    {let mut ops=lock(IO_OPERATIONS.get_or_init(||Mutex::new(HashMap::new())));if ops.contains_key(&overlapped){crate::process::set_last_error(997);return 0;}ops.insert(overlapped,operation.clone());}
+    unsafe{(*ov).internal=STATUS_PENDING;(*ov).internal_high=0;}
+    let op=operation.clone();
+    if std::thread::Builder::new().name("winlux-overlapped-io".into()).spawn(move||{
+        use std::os::unix::fs::FileExt;
+        let result=if op.cancelled.load(Ordering::Acquire){Err(995)}else if let Some(data)=write_data{lock(&file).write_at(&data,offset).map(|n|n as u32).map_err(|e|io_error_code(&e))}else{
+            let mut data=vec![0u8;len as usize];match lock(&file).read_at(&mut data,offset){Ok(n)=>{if n>0{unsafe{std::ptr::copy_nonoverlapping(data.as_ptr(),buffer as *mut u8,n);}}Ok(n as u32)},Err(e)=>Err(io_error_code(&e))}
+        };
+        let(mut bytes,mut error)=(0u32,0u32);match result{Ok(n)=>bytes=n,Err(e)=>error=e}
+        {let mut state=lock(&op.state);state.bytes=bytes;state.error=error;state.done=true;op.changed.notify_all();}
+        unsafe{let p=overlapped as *mut Overlapped;(*p).internal=if error==0{0}else{0xC000_0001};(*p).internal_high=bytes as usize;}
+        if event!=0{let _=set_event(event);}
+    }).is_err(){lock(IO_OPERATIONS.get().unwrap()).remove(&overlapped);unsafe{(*ov).internal=0;}crate::process::set_last_error(8);return 0;}
+    crate::process::set_last_error(ERROR_IO_PENDING);0
+}
+
+pub unsafe extern "win64" fn get_overlapped_result(h:usize,overlapped:*mut Overlapped,transferred:*mut u32,wait:i32)->i32{
+    if overlapped.is_null()||transferred.is_null(){crate::process::set_last_error(87);return 0;}
+    let key=overlapped as usize;let operation={let ops=lock(IO_OPERATIONS.get_or_init(||Mutex::new(HashMap::new())));ops.get(&key).cloned()};
+    let Some(op)=operation else{crate::process::set_last_error(996);return 0;};if op.file_handle!=h{crate::process::set_last_error(6);return 0;}
+    let mut state=lock(&op.state);if !state.done&&wait==0{*transferred=0;crate::process::set_last_error(996);return 0;}
+    while !state.done{state=op.changed.wait(state).unwrap_or_else(std::sync::PoisonError::into_inner);}
+    *transferred=state.bytes;let error=state.error;drop(state);lock(IO_OPERATIONS.get().unwrap()).remove(&key);
+    if error!=0{crate::process::set_last_error(error);0}else{1}
+}
+
+pub unsafe extern "win64" fn write_file(h: usize, buf: *const u8, len: u32, written: *mut u32, ov: usize) -> i32 {
     if !written.is_null() { *written = 0; }
+    if ov!=0{return start_overlapped_io(h,buf as usize,len,ov,true);}
     let Some(s) = bytes(buf, len as usize) else { crate::process::set_last_error(87); return 0; };
     if h == (-11isize) as usize {
         return match std::io::stdout().write_all(s) { Ok(()) => { if !written.is_null(){*written=len;} 1 }, Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 } };
@@ -118,17 +160,16 @@ pub unsafe extern "win64" fn write_file(h: usize, buf: *const u8, len: u32, writ
         return match std::io::stderr().write_all(s) { Ok(()) => { if !written.is_null(){*written=len;} 1 }, Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 } };
     }
     if h == (-10isize) as usize { crate::process::set_last_error(6); return 0; }
-    let mut handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())));
-    let Some(FileHandle::File(f)) = handles.get_mut(&h) else { crate::process::set_last_error(6); return 0; };
-    match f.write(s) { Ok(n) => { if !written.is_null(){*written=n as u32;} 1 }, Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 } }
+    let f={let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));let Some(FileHandle::File(f))=handles.get(&h)else{crate::process::set_last_error(6);return 0;};f.clone()};
+    let result={lock(&f).write(s)};match result { Ok(n) => { if !written.is_null(){*written=n as u32;} 1 }, Err(e) => { crate::process::set_last_error(io_error_code(&e)); 0 } }
 }
-pub unsafe extern "win64" fn read_file(h:usize,buf:*mut u8,len:u32,read:*mut u32,_ov:usize)->i32 {
+pub unsafe extern "win64" fn read_file(h:usize,buf:*mut u8,len:u32,read:*mut u32,ov:usize)->i32 {
     if !read.is_null(){*read=0;}
+    if ov!=0{return start_overlapped_io(h,buf as usize,len,ov,false);}
     let Some(b)=bytes_mut(buf,len as usize) else {crate::process::set_last_error(87);return 0;};
     if h==(-10isize) as usize {return match std::io::stdin().read(b){Ok(n)=>{if !read.is_null(){*read=n as u32;}1},Err(e)=>{crate::process::set_last_error(io_error_code(&e));0}};}
-    let mut handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));
-    let Some(FileHandle::File(f))=handles.get_mut(&h) else {crate::process::set_last_error(6);return 0;};
-    match f.read(b){Ok(n)=>{if !read.is_null(){*read=n as u32;}1},Err(e)=>{crate::process::set_last_error(io_error_code(&e));0}}
+    let f={let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));let Some(FileHandle::File(f))=handles.get(&h)else{crate::process::set_last_error(6);return 0;};f.clone()};
+    let result={lock(&f).read(b)};match result{Ok(n)=>{if !read.is_null(){*read=n as u32;}1},Err(e)=>{crate::process::set_last_error(io_error_code(&e));0}}
 }
 pub unsafe extern "win64" fn create_file_a(path:*const u8,access:u32,_share:u32,_sec:usize,creation:u32,_flags:u32,_template:usize)->usize {
     if path.is_null(){crate::process::set_last_error(87);return usize::MAX;}
@@ -140,24 +181,21 @@ pub unsafe extern "win64" fn create_file_a(path:*const u8,access:u32,_share:u32,
     match creation {1=>{o.create_new(true);},2=>{o.create(true).truncate(true);},3=>{},4=>{o.create(true);},5=>{o.truncate(true);},_=>{crate::process::set_last_error(87);return usize::MAX;}}
     let f=match o.open(p){Ok(f)=>f,Err(e)=>{crate::process::set_last_error(io_error_code(&e));return usize::MAX;}};
     if (creation==2||creation==4)&&existed{crate::process::set_last_error(183);}
-    let h=next_handle();lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).insert(h,FileHandle::File(f));h
+    let h=next_handle();lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).insert(h,FileHandle::File(Arc::new(Mutex::new(f))));h
 }
 pub unsafe extern "win64" fn get_file_size(h:usize,high:*mut u32)->u32 {
-    let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));
-    let Some(FileHandle::File(f))=handles.get(&h) else {crate::process::set_last_error(6);return u32::MAX;};
-    match f.metadata(){Ok(m)=>{let n=m.len();if !high.is_null(){*high=(n>>32) as u32;}n as u32},Err(e)=>{crate::process::set_last_error(io_error_code(&e));u32::MAX}}
+    let f={let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));let Some(FileHandle::File(f))=handles.get(&h)else{crate::process::set_last_error(6);return u32::MAX;};f.clone()};
+    let result={lock(&f).metadata()};match result{Ok(m)=>{let n=m.len();if !high.is_null(){*high=(n>>32) as u32;}n as u32},Err(e)=>{crate::process::set_last_error(io_error_code(&e));u32::MAX}}
 }
 pub unsafe extern "win64" fn set_file_pointer(h:usize,distance:i32,high:*mut i32,method:u32)->u32 {
-    let mut handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));
-    let Some(FileHandle::File(f))=handles.get_mut(&h) else {crate::process::set_last_error(6);return u32::MAX;};
+    let f={let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));let Some(FileHandle::File(f))=handles.get(&h)else{crate::process::set_last_error(6);return u32::MAX;};f.clone()};let mut f=lock(&f);
     let d=if high.is_null(){distance as i64}else{(((*high as u32 as u64)<<32)|(distance as u32 as u64)) as i64};
     let from=match method{0 if d>=0=>SeekFrom::Start(d as u64),0=>{crate::process::set_last_error(87);return u32::MAX;},1=>SeekFrom::Current(d),2=>SeekFrom::End(d),_=>{crate::process::set_last_error(87);return u32::MAX;}};
     match f.seek(from){Ok(n)=>{if !high.is_null(){*high=(n>>32) as i32;}n as u32},Err(e)=>{crate::process::set_last_error(io_error_code(&e));u32::MAX}}
 }
 pub extern "win64" fn flush_file_buffers(h:usize)->i32 {
-    let mut handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));
-    let Some(FileHandle::File(f))=handles.get_mut(&h) else {crate::process::set_last_error(6);return 0;};
-    match f.sync_all(){Ok(())=>1,Err(e)=>{crate::process::set_last_error(io_error_code(&e));0}}
+    let f={let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));let Some(FileHandle::File(f))=handles.get(&h)else{crate::process::set_last_error(6);return 0;};f.clone()};
+    let result={lock(&f).sync_all()};match result{Ok(())=>1,Err(e)=>{crate::process::set_last_error(io_error_code(&e));0}}
 }
 pub extern "win64" fn exit_process(code: u32) -> ! { flush_and_exit(code as i32) }
 pub extern "win64" fn get_command_line_a() -> usize { crate::process::PROCESS.get().map(|p| p.command_line_a.as_ptr() as usize).unwrap_or(0) }
@@ -516,7 +554,7 @@ pub extern "win64" fn query_performance_frequency(out:*mut i64)->i32 { unsafe{if
 pub extern "win64" fn query_performance_counter(out:*mut i64)->i32 { unsafe{if out.is_null(){return 0;}*out=CLOCK_START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as i64;}1 }
 pub fn flush_and_exit(code:i32)->! { let _=std::io::Write::flush(&mut std::io::stdout()); std::process::exit(code) }
 pub fn exports() -> crate::dlls::Exports { crate::exports! {
- "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file, "CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
+ "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result, "CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
   "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
   "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
   "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"GetCurrentThreadId"=>fn get_current_thread_id,
@@ -558,6 +596,20 @@ mod tests {
         assert_eq!(output, payload);
         assert_eq!(close_handle(h), 1);
         assert_eq!(unsafe { delete_file_a(path_c.as_ptr() as *const u8) }, 1);
+    }
+
+    #[test]
+    fn lecture_ecriture_overlapped_renvoie_io_pending_puis_resultat(){
+        init();crate::process::init_thread();let path=format!("Z:\\tmp\\winlux-overlapped-{}-{}.bin",std::process::id(),next_handle());let c=CString::new(path).unwrap();
+        let h=unsafe{create_file_a(c.as_ptr()as *const u8,0xC0000000,7,0,2,0,0)};assert_ne!(h,usize::MAX);
+        let payload=*b"async";let mut ov=Overlapped{internal:0,internal_high:0,offset:7,offset_high:0,event:0};let mut transferred=0;
+        assert_eq!(unsafe{write_file(h,payload.as_ptr(),payload.len()as u32,&mut transferred,&mut ov as *mut _ as usize)},0);
+        assert_eq!(crate::process::last_error(),997);
+        assert_eq!(unsafe{get_overlapped_result(h,&mut ov,&mut transferred,1)},1);assert_eq!(transferred,5);
+        let mut output=[0u8;5];ov=Overlapped{internal:0,internal_high:0,offset:7,offset_high:0,event:0};
+        assert_eq!(unsafe{read_file(h,output.as_mut_ptr(),output.len()as u32,&mut transferred,&mut ov as *mut _ as usize)},0);
+        assert_eq!(unsafe{get_overlapped_result(h,&mut ov,&mut transferred,1)},1);assert_eq!(transferred,5);assert_eq!(output,payload);
+        assert_eq!(close_handle(h),1);assert_eq!(unsafe{delete_file_a(c.as_ptr()as *const u8)},1);
     }
 
     #[test]

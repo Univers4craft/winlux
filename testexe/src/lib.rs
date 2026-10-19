@@ -65,6 +65,8 @@ pub struct StartupInfoA {
 }
 #[repr(C)]
 pub struct ProcessInformation { pub process: Handle, pub thread: Handle, pub process_id: u32, pub thread_id: u32 }
+#[repr(C)]
+pub struct Overlapped { pub internal: usize, pub internal_high: usize, pub offset: u32, pub offset_high: u32, pub event: usize }
 
 #[repr(C)]
 pub struct AddrInfoA {
@@ -110,6 +112,7 @@ extern "system" {
     pub fn GetFileSize(h: Handle, high: *mut u32) -> u32;
     pub fn SetFilePointer(h: Handle, distance: i32, high: *mut i32, method: u32) -> u32;
     pub fn FlushFileBuffers(h: Handle) -> i32;
+    pub fn GetOverlappedResult(h: Handle, overlapped: *mut Overlapped, transferred: *mut u32, wait: i32) -> i32;
     pub fn CloseHandle(h: Handle) -> i32;
     pub fn CreateEventA(sec: *mut c_void, manual: i32, initial: i32, name: *const c_char) -> Handle;
     pub fn SetEvent(h: Handle) -> i32;

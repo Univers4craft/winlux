@@ -100,6 +100,18 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let move_ok = copy_ok && MoveFileA(copy_path.as_ptr(), moved_path.as_ptr()) != 0;
         let cleanup_files = DeleteFileA(source_path.as_ptr()) != 0 && DeleteFileA(moved_path.as_ptr()) != 0;
         check!(source_ok && copy_ok && move_ok && cleanup_files, "CopyFileA/MoveFileA/DeleteFileA");
+        let mut async_path = [0 as c_char; 128];
+        sprintf(async_path.as_mut_ptr(), c"Z:\\tmp\\winlux-async-%u.bin".as_ptr(), GetCurrentProcessId());
+        let async_file = CreateFileA(async_path.as_ptr(), 0xC000_0000, 7, null_mut(), 2, 0x4000_0000, null_mut());
+        let async_payload = *b"async";
+        let mut overlapped = Overlapped { internal: 0, internal_high: 0, offset: 0, offset_high: 0, event: 0 };
+        let pending = async_file as usize != usize::MAX && WriteFile(async_file, async_payload.as_ptr(), 5, &mut n, &mut overlapped as *mut _ as *mut core::ffi::c_void) == 0;
+        let write_done = pending && GetOverlappedResult(async_file, &mut overlapped, &mut n, 1) != 0 && n == 5;
+        overlapped = Overlapped { internal: 0, internal_high: 0, offset: 0, offset_high: 0, event: 0 };
+        let mut async_read = [0u8; 5];
+        let read_pending = write_done && ReadFile(async_file, async_read.as_mut_ptr(), 5, &mut n, &mut overlapped as *mut _ as *mut core::ffi::c_void) == 0;
+        let read_done = read_pending && GetOverlappedResult(async_file, &mut overlapped, &mut n, 1) != 0 && n == 5 && async_read == async_payload;
+        check!(read_done && CloseHandle(async_file) != 0 && DeleteFileA(async_path.as_ptr()) != 0, "ReadFile/WriteFile overlapped");
         let mut dir_path = [0 as c_char; 128];
         sprintf(dir_path.as_mut_ptr(), c"Z:\\tmp\\winlux-dir-%u".as_ptr(), GetCurrentProcessId());
         check!(CreateDirectoryA(dir_path.as_ptr(), null_mut()) != 0 && RemoveDirectoryA(dir_path.as_ptr()) != 0, "CreateDirectoryA/RemoveDirectoryA");
