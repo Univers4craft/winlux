@@ -1,0 +1,14 @@
+# Les tests sont de vrais .exe Windows x86-64 (PE32+), liés par rust-lld
+# (fourni avec rustup) en mode lld-link. Les imports kernel32/msvcrt sont
+# générés par rustc via `raw-dylib` : aucune bibliothèque Microsoft n'est utilisée.
+[build]
+target = "x86_64-pc-windows-msvc"
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld"
+rustflags = [
+  "-C", "linker-flavor=lld-link",
+  "-C", "link-arg=/nodefaultlib",
+  "-C", "link-arg=/subsystem:console",
+  "-C", "link-arg=/entry:mainCRTStartup",
+]

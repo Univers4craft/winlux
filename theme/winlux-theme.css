@@ -1,0 +1,13 @@
+/* Palette de démonstration inspirée de Windows 11, sans assets propriétaires. */
+:root {
+  --winlux-bg: #f3f3f3;
+  --winlux-surface: #ffffff;
+  --winlux-accent: #4f7cff;
+  --winlux-text: #1f1f1f;
+  --winlux-muted: #616161;
+  --winlux-radius: 10px;
+}
+
+window, .winlux-window { background: var(--winlux-bg); color: var(--winlux-text); }
+.winlux-surface { background: var(--winlux-surface); border-radius: var(--winlux-radius); }
+.winlux-accent { background: var(--winlux-accent); color: white; }

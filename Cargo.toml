@@ -1,0 +1,13 @@
+[workspace]
+members = ["runtime", "testexe", "testdll"]
+resolver = "2"
+
+[profile.release]
+debug = 1
+panic = "abort"
+
+[profile.release.package.winlux-testexe]
+opt-level = "s"
+
+[profile.release.package.winlux-testdll]
+opt-level = "s"

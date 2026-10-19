@@ -1,0 +1,192 @@
+//! Les « DLL » intégrées de Winlux : du code Rust natif Linux, exposé
+//! avec la convention d'appel Windows. Le chargeur relie directement les
+//! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
+
+pub mod kernel32;
+pub mod msvcrt;
+pub mod ntdll;
+pub mod user32;
+pub mod advapi32;
+pub mod advapi32_services;
+pub mod ole32;
+pub mod bcrypt;
+pub mod version;
+pub mod shell32;
+pub mod mscoree;
+pub mod ws2_32;
+pub mod gdi32;
+pub mod mfplat;
+pub mod winmm;
+
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
+/// Table des exports d'une DLL intégrée : nom → adresse (fonction ou donnée).
+pub type Exports = HashMap<&'static str, usize>;
+
+/// Déclare une table d'exports. `fn` pour une fonction, `data` pour une variable exportée.
+#[macro_export]
+macro_rules! exports {
+    ($($name:literal => $kind:ident $val:expr),* $(,)?) => {{
+        #[allow(unused_mut)]
+        let mut m: $crate::dlls::Exports = std::collections::HashMap::new();
+        $( m.insert($name, $crate::exports!(@addr $kind $val)); )*
+        m
+    }};
+    (@addr fn $f:expr) => { $f as *const () as usize };
+    (@addr data $v:expr) => { std::ptr::addr_of!($v) as usize };
+}
+
+struct Builtin {
+    name: &'static str,
+    exports: Exports,
+    /// Fausse image (une page commençant par « MZ ») servant de HMODULE.
+    handle: usize,
+}
+
+fn fake_module() -> usize {
+    let page = Box::leak(Box::new([0u8; 4096]));
+    page[0] = b'M';
+    page[1] = b'Z';
+    page.as_ptr() as usize
+}
+
+fn builtins() -> &'static Vec<Builtin> {
+    static B: OnceLock<Vec<Builtin>> = OnceLock::new();
+    B.get_or_init(|| {
+        let crt = msvcrt::exports();
+        let mut ucrt = crt.clone();
+        ucrt.extend(msvcrt::ucrt_exports());
+        vec![
+            Builtin { name: "kernel32", exports: kernel32::exports(), handle: fake_module() },
+            Builtin { name: "ntdll", exports: ntdll::exports(), handle: fake_module() },
+            Builtin { name: "msvcrt", exports: crt, handle: fake_module() },
+            Builtin { name: "ucrtbase", exports: ucrt, handle: fake_module() },
+            Builtin { name: "user32", exports: user32::exports(), handle: fake_module() },
+            Builtin { name: "advapi32", exports: { let mut e=advapi32::exports(); e.extend(advapi32_services::exports()); e }, handle: fake_module() },
+            Builtin { name: "ole32", exports: ole32::exports(), handle: fake_module() },
+            Builtin { name: "bcrypt", exports: bcrypt::exports(), handle: fake_module() },
+            Builtin { name: "version", exports: version::exports(), handle: fake_module() },
+            Builtin { name: "shell32", exports: shell32::exports(), handle: fake_module() },
+            Builtin { name: "mscoree", exports: mscoree::exports(), handle: fake_module() },
+            Builtin { name: "ws2_32", exports: ws2_32::exports(), handle: fake_module() },
+            Builtin { name: "gdi32", exports: gdi32::exports(), handle: fake_module() },
+            Builtin { name: "mfplat", exports: mfplat::exports(), handle: fake_module() },
+            Builtin { name: "winmm", exports: winmm::exports(), handle: fake_module() },
+        ]
+    })
+}
+
+/// Nom de DLL normalisé : minuscules, sans « .dll », avec les alias connus
+/// (api-ms-win-crt-* → ucrtbase, kernelbase → kernel32, msvcr120 → msvcrt…).
+pub fn normalize(dll: &str) -> String {
+    let l = dll.to_ascii_lowercase();
+    let l = l.rsplit(['\\', '/']).next().unwrap_or(&l).to_string();
+    let base = l.strip_suffix(".dll").unwrap_or(&l);
+    if base.starts_with("api-ms-win-crt-") || base == "vcruntime140" || base == "vcruntime140_1" {
+        return "ucrtbase".into();
+    }
+    if base.starts_with("api-ms-win-core-") || base == "kernelbase" {
+        return "kernel32".into();
+    }
+    if base.starts_with("msvcr") && base != "msvcrt" {
+        return "msvcrt".into();
+    }
+    base.to_string()
+}
+
+pub fn is_builtin(normalized: &str) -> bool {
+    builtins().iter().any(|b| b.name == normalized)
+}
+
+pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
+    let b = builtins().iter().find(|b| b.name == normalized)?;
+    let r = b.exports.get(func).copied();
+    // Les API « A/W » d'api-ms-win-core peuvent aussi vivre dans ntdll (Rtl*).
+    r.or_else(|| if normalized == "kernel32" { lookup("ntdll", func) } else { None })
+}
+
+/// HMODULE d'une DLL intégrée ou d'une DLL réelle déjà chargée.
+pub fn module_handle(dll: &str) -> Option<usize> {
+    let n = normalize(dll);
+    if let Some(b) = builtins().iter().find(|b| b.name == n) {
+        return Some(b.handle);
+    }
+    crate::loader::find_module_by_name(dll).map(|m| m.base)
+}
+
+/// Si `h` est le HMODULE d'une DLL intégrée, renvoie son nom normalisé.
+pub fn builtin_by_handle(h: usize) -> Option<&'static str> {
+    builtins().iter().find(|b| b.handle == h).map(|b| b.name)
+}
+
+// ---------- Utilitaires partagés par les DLL ----------
+
+pub unsafe fn cstr(p: *const u8) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    let n = crate::printf::narrow_len(p);
+    decode_ansi(std::slice::from_raw_parts(p, n))
+}
+
+/// Codepage ANSI par défaut de Winlux (Windows-1252), convertie vers UTF-8
+/// pour l'interface Linux. Les API Unicode `W` évitent cette conversion.
+pub fn decode_ansi(bytes: &[u8]) -> String {
+    const CP1252: [u16; 32] = [0x20ac,0x0081,0x201a,0x0192,0x201e,0x2026,0x2020,0x2021,0x02c6,0x2030,0x0160,0x2039,0x0152,0x008d,0x017d,0x008f,0x0090,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,0x02dc,0x2122,0x0161,0x203a,0x0153,0x009d,0x017e,0x0178];
+    bytes.iter().map(|&b| {
+        let n=if (0x80..=0x9f).contains(&b){CP1252[(b-0x80)as usize] as u32}else{b as u32};
+        char::from_u32(n).unwrap_or('\u{fffd}')
+    }).collect()
+}
+
+pub fn encode_ansi(text: &str) -> Vec<u8> {
+    text.chars().map(|c| {
+        let n=c as u32;
+        if n<=0x7f||(0xa0..=0xff).contains(&n){return n as u8;}
+        const CP1252:[u16;32]=[0x20ac,0x0081,0x201a,0x0192,0x201e,0x2026,0x2020,0x2021,0x02c6,0x2030,0x0160,0x2039,0x0152,0x008d,0x017d,0x008f,0x0090,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,0x02dc,0x2122,0x0161,0x203a,0x0153,0x009d,0x017e,0x0178];
+        CP1252.iter().position(|&x|x as u32==n).map(|i|i as u8+0x80).unwrap_or(b'?')
+    }).collect()
+}
+
+pub unsafe fn wstr(p: *const u16) -> String {
+    if p.is_null() {
+        return String::new();
+    }
+    let n = crate::printf::wide_len(p);
+    String::from_utf16_lossy(std::slice::from_raw_parts(p, n))
+}
+
+/// Copie une chaîne dans un tampon Windows « A » de `cap` caractères.
+/// Convention Win32 : renvoie la longueur copiée, ou la taille nécessaire (avec le 0) si trop petit.
+pub unsafe fn put_a(s: &str, buf: *mut u8, cap: u32) -> u32 {
+    let b = s.as_bytes();
+    if buf.is_null() || (cap as usize) <= b.len() {
+        return b.len() as u32 + 1;
+    }
+    std::ptr::copy_nonoverlapping(b.as_ptr(), buf, b.len());
+    *buf.add(b.len()) = 0;
+    b.len() as u32
+}
+
+pub unsafe fn put_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
+    let w: Vec<u16> = s.encode_utf16().collect();
+    if buf.is_null() || (cap as usize) <= w.len() {
+        return w.len() as u32 + 1;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
+    *buf.add(w.len()) = 0;
+    w.len() as u32
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize;
+
+    #[test]
+    fn normalise_les_alias_de_dll() {
+        assert_eq!(normalize("KERNELBASE.dll"), "kernel32");
+        assert_eq!(normalize("api-ms-win-crt-runtime-l1-1-0.dll"), "ucrtbase");
+        assert_eq!(normalize("C:\\Windows\\System32\\MSVCR120.DLL"), "msvcrt");
+    }
+}

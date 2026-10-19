@@ -1,0 +1,8 @@
+[package]
+name = "winlux-testexe"
+version = "0.1.0"
+edition = "2021"
+description = "Petits programmes Windows de test pour le runtime Winlux (compilés sans MinGW ni MSVC)"
+
+[lib]
+path = "src/lib.rs"

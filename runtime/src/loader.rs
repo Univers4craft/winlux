@@ -1,0 +1,526 @@
+//! Chargeur PE : place l'image en mémoire, applique les relocations,
+//! relie les imports aux DLL maison (ou à de vraies DLL livrées avec le
+//! programme) et prépare le TLS statique.
+
+use crate::dlls;
+use crate::pe::*;
+use crate::thunks;
+use crate::trace;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+const PAGE: usize = 4096;
+
+#[derive(Clone, Debug)]
+pub struct TlsInfo {
+    pub raw_start: usize,
+    pub raw_end: usize,
+    pub index_addr: usize,
+    pub callbacks_addr: usize,
+    pub zero_fill: usize,
+}
+
+/// Un module PE (le .exe ou une DLL réelle) chargé en mémoire.
+#[derive(Clone, Debug)]
+pub struct Module {
+    pub name: String,
+    pub path: PathBuf,
+    pub base: usize,
+    pub size: usize,
+    pub pe: PeImage,
+    pub tls: Option<TlsInfo>,
+    pub initialized: bool,
+}
+
+impl Module {
+    pub fn entry(&self) -> Option<usize> {
+        (self.pe.entry_rva != 0).then(|| self.base + self.pe.entry_rva as usize)
+    }
+    pub fn contains(&self, addr: usize) -> bool {
+        addr >= self.base && addr < self.base + self.size
+    }
+    fn bytes(&self) -> &'static [u8] {
+        unsafe { std::slice::from_raw_parts(self.base as *const u8, self.size) }
+    }
+    fn cstr_at(&self, rva: u32) -> Option<String> {
+        let b = self.bytes().get(rva as usize..)?;
+        let end = b.iter().position(|&c| c == 0)?;
+        Some(String::from_utf8_lossy(&b[..end]).into_owned())
+    }
+}
+
+/// Modules PE réels chargés (l'exécutable est toujours le premier).
+pub static MODULES: Mutex<Vec<Module>> = Mutex::new(Vec::new());
+
+pub fn find_module_by_addr(addr: usize) -> Option<Module> {
+    MODULES.lock().unwrap().iter().find(|m| m.contains(addr)).cloned()
+}
+
+pub fn find_module_by_name(name: &str) -> Option<Module> {
+    let n = dlls::normalize(name);
+    MODULES.lock().unwrap().iter().find(|m| dlls::normalize(&m.name) == n).cloned()
+}
+
+pub fn main_module() -> Option<Module> {
+    MODULES.lock().unwrap().first().cloned()
+}
+
+fn round_up(v: usize, a: usize) -> usize {
+    (v + a - 1) & !(a - 1)
+}
+
+unsafe fn map_at(hint: usize, size: usize, fixed: bool) -> Option<usize> {
+    let flags = libc::MAP_PRIVATE | libc::MAP_ANONYMOUS | if fixed { libc::MAP_FIXED_NOREPLACE } else { 0 };
+    let p = libc::mmap(hint as *mut _, size, libc::PROT_READ | libc::PROT_WRITE, flags, -1, 0);
+    if p == libc::MAP_FAILED {
+        return None;
+    }
+    if fixed && p as usize != hint {
+        // Ancien noyau ignorant MAP_FIXED_NOREPLACE : l'adresse n'est pas celle demandée.
+        libc::munmap(p, size);
+        return None;
+    }
+    Some(p as usize)
+}
+
+/// Charge un module et toutes ses dépendances. Renvoie l'index dans MODULES.
+pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
+    let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
+    let pe = PeImage::parse(&file).map_err(|e| format!("{} : {e}", path.display()))?;
+    let size = round_up(pe.size_of_image as usize, PAGE);
+    let relocs_stripped = pe.characteristics & 0x0001 != 0;
+    let has_relocs = pe.dir(DIR_BASERELOC).size != 0;
+
+    let base = unsafe {
+        let preferred = if force_reloc && has_relocs { None } else { map_at(pe.image_base as usize, size, true) };
+        match preferred {
+            Some(b) => b,
+            None if relocs_stripped || !has_relocs => {
+                return Err(format!(
+                    "{} : impossible de placer l'image à son adresse fixe 0x{:x} et elle n'a pas de relocations",
+                    path.display(),
+                    pe.image_base
+                ))
+            }
+            None => map_at(0, size, false).ok_or("mémoire insuffisante pour l'image")?,
+        }
+    };
+    trace!("chargement de {} à 0x{base:x} (préférée 0x{:x}, {} octets)", path.display(), pe.image_base, size);
+
+    // En-têtes puis sections.
+    unsafe {
+        let dst = std::slice::from_raw_parts_mut(base as *mut u8, size);
+        let hs = (pe.size_of_headers as usize).min(file.len());
+        dst[..hs].copy_from_slice(&file[..hs]);
+        for s in &pe.sections {
+            if s.raw_size == 0 || s.characteristics & SCN_CNT_UNINITIALIZED != 0 && s.raw_ptr == 0 {
+                continue;
+            }
+            let start = s.raw_ptr as usize;
+            let mut n = (s.raw_size as usize).min(file.len().saturating_sub(start));
+            if s.virtual_size != 0 {
+                n = n.min(s.virtual_size as usize);
+            }
+            let d = s.rva as usize;
+            if d + n > size {
+                return Err(format!("{} : section {} déborde de l'image", path.display(), s.name));
+            }
+            dst[d..d + n].copy_from_slice(&file[start..start + n]);
+        }
+    }
+
+    let name = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    let mut m = Module { name, path: path.to_path_buf(), base, size, pe, tls: None, initialized: false };
+
+    let delta = base.wrapping_sub(m.pe.image_base as usize);
+    if delta != 0 {
+        apply_relocations(&m, delta)?;
+        // ImageBase dans l'en-tête en mémoire reflète la vraie adresse, comme sous Windows.
+        unsafe {
+            let pe_off = *((base + 0x3c) as *const u32) as usize;
+            *((base + pe_off + 24 + 24) as *mut u64) = base as u64;
+        }
+    }
+    m.tls = read_tls(&m);
+
+    MODULES.lock().unwrap().push(m.clone());
+    resolve_imports(&m)?;
+    protect(&m);
+    Ok(m)
+}
+
+fn apply_relocations(m: &Module, delta: usize) -> Result<(), String> {
+    let d = m.pe.dir(DIR_BASERELOC);
+    let b = m.bytes();
+    let mut off = d.rva as usize;
+    let end = off + d.size as usize;
+    let mut count = 0usize;
+    while off + 8 <= end {
+        let page = rd32(b, off).ok_or("relocations tronquées")? as usize;
+        let bsize = rd32(b, off + 4).ok_or("relocations tronquées")? as usize;
+        if bsize < 8 {
+            break;
+        }
+        for i in 0..(bsize - 8) / 2 {
+            let e = rd16(b, off + 8 + i * 2).ok_or("relocations tronquées")?;
+            let (ty, ofs) = (e >> 12, (e & 0xfff) as usize);
+            let addr = m.base + page + ofs;
+            if page + ofs + 8 > m.size && ty != 0 {
+                return Err("relocation hors de l'image".into());
+            }
+            unsafe {
+                match ty {
+                    0 => {}
+                    10 => {
+                        let p = addr as *mut u64;
+                        p.write_unaligned(p.read_unaligned().wrapping_add(delta as u64));
+                    }
+                    3 => {
+                        let p = addr as *mut u32;
+                        p.write_unaligned(p.read_unaligned().wrapping_add(delta as u32));
+                    }
+                    t => return Err(format!("type de relocation {t} non pris en charge")),
+                }
+            }
+            count += 1;
+        }
+        off += bsize;
+    }
+    trace!("{} relocations appliquées (décalage 0x{delta:x})", count);
+    Ok(())
+}
+
+fn read_tls(m: &Module) -> Option<TlsInfo> {
+    let d = m.pe.dir(DIR_TLS);
+    if d.rva == 0 {
+        return None;
+    }
+    let b = m.bytes();
+    let o = d.rva as usize;
+    Some(TlsInfo {
+        raw_start: rd64(b, o)? as usize,
+        raw_end: rd64(b, o + 8)? as usize,
+        index_addr: rd64(b, o + 16)? as usize,
+        callbacks_addr: rd64(b, o + 24)? as usize,
+        zero_fill: rd32(b, o + 32)? as usize,
+    })
+}
+
+enum Want {
+    Name(String),
+    Ordinal(u16),
+}
+
+/// Résout un import : DLL maison d'abord, puis DLL réelle à côté du .exe.
+fn resolve_one(dll: &str, want: &Want, importer: &Module) -> Result<usize, String> {
+    let ndll = dlls::normalize(dll);
+    if dlls::is_builtin(&ndll) {
+        let found = match want {
+            Want::Name(n) => dlls::lookup(&ndll, n),
+            Want::Ordinal(_) => None,
+        };
+        return Ok(match found {
+            Some(a) => a,
+            None => {
+                let label = match want {
+                    Want::Name(n) => n.clone(),
+                    Want::Ordinal(o) => format!("#{o}"),
+                };
+                thunks::missing_stub(dll, &label)
+            }
+        });
+    }
+    let module = match find_module_by_name(dll) {
+        Some(m) => m,
+        None => {
+            let p = find_dll_file(dll, &importer.path).ok_or_else(|| {
+                format!("DLL introuvable : {dll} (ni intégrée à Winlux, ni présente à côté du programme)")
+            })?;
+            load(&p, false)?
+        }
+    };
+    let r = match want {
+        Want::Name(n) => export_by_name(&module, n),
+        Want::Ordinal(o) => export_by_ordinal(&module, *o as u32),
+    };
+    Ok(match r {
+        Some(a) => a,
+        None => thunks::missing_stub(dll, &match want {
+            Want::Name(n) => n.clone(),
+            Want::Ordinal(o) => format!("#{o}"),
+        }),
+    })
+}
+
+pub fn find_dll_file(dll: &str, importer: &Path) -> Option<PathBuf> {
+    let mut dirs: Vec<PathBuf> = vec![];
+    if let Some(d) = importer.parent() {
+        dirs.push(d.to_path_buf());
+    }
+    if let Ok(c) = std::env::current_dir() {
+        dirs.push(c);
+    }
+    if let Some(path) = std::env::var_os("PATH") {
+        dirs.extend(std::env::split_paths(&path));
+    }
+    let want = dll.to_ascii_lowercase();
+    let want_dll = if want.ends_with(".dll") { want.clone() } else { format!("{want}.dll") };
+    for d in dirs {
+        // Windows ignore la casse : on cherche sans en tenir compte.
+        if let Ok(rd) = std::fs::read_dir(&d) {
+            for e in rd.flatten() {
+                let n = e.file_name().to_string_lossy().to_ascii_lowercase();
+                if n == want || n == want_dll {
+                    return Some(e.path());
+                }
+            }
+        }
+    }
+    None
+}
+
+fn resolve_imports(m: &Module) -> Result<(), String> {
+    let b = m.bytes();
+    let d = m.pe.dir(DIR_IMPORT);
+    if d.rva != 0 {
+        let mut o = d.rva as usize;
+        loop {
+            let ilt = rd32(b, o).ok_or("imports tronqués")? as usize;
+            let name = rd32(b, o + 12).ok_or("imports tronqués")?;
+            let iat = rd32(b, o + 16).ok_or("imports tronqués")? as usize;
+            if name == 0 && iat == 0 {
+                break;
+            }
+            let dll = m.cstr_at(name).ok_or("nom de DLL illisible")?;
+            fill_thunks(m, &dll, if ilt != 0 { ilt } else { iat }, iat)?;
+            o = o.checked_add(20).ok_or("table des imports trop grande")?;
+        }
+    }
+    // Imports différés : on les résout tout de suite, c'est plus simple et sans effet visible.
+    let d = m.pe.dir(DIR_DELAY_IMPORT);
+    if d.rva != 0 {
+        let mut o = d.rva as usize;
+        loop {
+            let attrs = rd32(b, o).ok_or("imports différés tronqués")?;
+            let name = rd32(b, o + 4).ok_or("imports différés tronqués")?;
+            let hmod = rd32(b, o + 8).ok_or("imports différés tronqués")?;
+            let iat = rd32(b, o + 12).ok_or("imports différés tronqués")?;
+            let int = rd32(b, o + 16).ok_or("imports différés tronqués")?;
+            if name == 0 && iat == 0 && int == 0 {
+                break;
+            }
+            let name = delay_rva(m, attrs, name)?;
+            let hmod = delay_rva(m, attrs, hmod)?;
+            let iat = delay_rva(m, attrs, iat)?;
+            let int = delay_rva(m, attrs, int)?;
+            let dll = m.cstr_at(name as u32).ok_or("nom de DLL illisible")?;
+            fill_thunks(m, &dll, int, iat)?;
+            if hmod != 0 {
+                unsafe { *((m.base + hmod) as *mut usize) = dlls::module_handle(&dll).unwrap_or(1) };
+            }
+            o = o.checked_add(32).ok_or("table des imports différés trop grande")?;
+        }
+    }
+    Ok(())
+}
+
+fn delay_rva(m: &Module, attrs: u32, value: u32) -> Result<usize, String> {
+    if value == 0 { return Ok(0); }
+    if attrs & 1 != 0 {
+        let rva = value as usize;
+        if rva >= m.size { return Err("import différé hors de l'image".into()); }
+        Ok(rva)
+    } else {
+        let va = value as u64;
+        let base = m.base as u64;
+        if va < base || va - base >= m.size as u64 { return Err("adresse d'import différé invalide".into()); }
+        Ok((va - base) as usize)
+    }
+}
+
+fn fill_thunks(m: &Module, dll: &str, lookup_rva: usize, iat_rva: usize) -> Result<(), String> {
+    let b = m.bytes();
+    let mut i: usize = 0;
+    loop {
+        let lo = i.checked_mul(8).and_then(|n| lookup_rva.checked_add(n)).ok_or("table d'importations trop grande")?;
+        let t = rd64(b, lo).ok_or("table d'imports tronquée")?;
+        if t == 0 {
+            break;
+        }
+        let want = if t & (1 << 63) != 0 {
+            Want::Ordinal((t & 0xffff) as u16)
+        } else {
+            Want::Name(m.cstr_at((t & 0x7fff_ffff) as u32 + 2).ok_or("nom d'import illisible")?)
+        };
+        let addr = resolve_one(dll, &want, m)?;
+        let dst = i.checked_mul(8).and_then(|n| iat_rva.checked_add(n)).ok_or("IAT trop grande")?;
+        if dst.checked_add(8).map_or(true, |x| x > m.size) {
+            return Err("IAT hors de l'image".into());
+        }
+        unsafe { *((m.base + dst) as *mut usize) = addr };
+        i += 1;
+    }
+    trace!("{dll} : {i} import(s) reliés");
+    Ok(())
+}
+
+fn exports(m: &Module) -> Option<(usize, usize, usize, usize, usize, usize, usize)> {
+    let d = m.pe.dir(DIR_EXPORT);
+    if d.rva == 0 {
+        return None;
+    }
+    let b = m.bytes();
+    let o = d.rva as usize;
+    Some((
+        rd32(b, o + 16)? as usize, // base ordinal
+        rd32(b, o + 20)? as usize, // nb fonctions
+        rd32(b, o + 24)? as usize, // nb noms
+        rd32(b, o + 28)? as usize, // table des fonctions
+        rd32(b, o + 32)? as usize, // table des noms
+        rd32(b, o + 36)? as usize, // table des ordinaux
+        d.size as usize,
+    ))
+}
+
+fn export_addr(m: &Module, idx: usize) -> Option<usize> {
+    let (_, nfun, _, funcs, _, _, _) = exports(m)?;
+    if idx >= nfun {
+        return None;
+    }
+    let rva = rd32(m.bytes(), funcs + idx * 4)? as usize;
+    if rva == 0 {
+        return None;
+    }
+    let d = m.pe.dir(DIR_EXPORT);
+    if rva >= d.rva as usize && rva < (d.rva + d.size) as usize {
+        // Export « transféré » : « AUTREDLL.Fonction ».
+        let fwd = m.cstr_at(rva as u32)?;
+        let (dll, func) = fwd.split_once('.')?;
+        let want = match func.strip_prefix('#') {
+            Some(n) => Want::Ordinal(n.parse().ok()?),
+            None => Want::Name(func.to_string()),
+        };
+        return resolve_one(&format!("{dll}.dll"), &want, m).ok();
+    }
+    Some(m.base + rva)
+}
+
+pub fn export_by_name(m: &Module, name: &str) -> Option<usize> {
+    let (_, _, nnames, _, names, ords, _) = exports(m)?;
+    let b = m.bytes();
+    for i in 0..nnames {
+        let nrva = rd32(b, names + i * 4)?;
+        if m.cstr_at(nrva).as_deref() == Some(name) {
+            let idx = rd16(b, ords + i * 2)? as usize;
+            return export_addr(m, idx);
+        }
+    }
+    None
+}
+
+pub fn export_by_ordinal(m: &Module, ord: u32) -> Option<usize> {
+    let (base, ..) = exports(m)?;
+    export_addr(m, (ord as usize).checked_sub(base)?)
+}
+
+fn protect(m: &Module) {
+    if (m.pe.section_alignment as usize) < PAGE {
+        // Petites sections non alignées sur la page : tout reste lisible, inscriptible et exécutable.
+        unsafe { libc::mprotect(m.base as *mut _, m.size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC) };
+        return;
+    }
+    unsafe {
+        libc::mprotect(m.base as *mut _, round_up(m.pe.size_of_headers as usize, PAGE).max(PAGE), libc::PROT_READ);
+        for s in &m.pe.sections {
+            let len = round_up(s.virtual_size.max(s.raw_size) as usize, PAGE);
+            if len == 0 {
+                continue;
+            }
+            let mut prot = 0;
+            if s.characteristics & SCN_MEM_READ != 0 {
+                prot |= libc::PROT_READ;
+            }
+            if s.characteristics & SCN_MEM_WRITE != 0 {
+                prot |= libc::PROT_READ | libc::PROT_WRITE;
+            }
+            if s.characteristics & SCN_MEM_EXECUTE != 0 {
+                prot |= libc::PROT_READ | libc::PROT_EXEC;
+            }
+            libc::mprotect((m.base + s.rva as usize) as *mut _, len.min(m.size - s.rva as usize), prot);
+        }
+    }
+}
+
+/// Marque un module comme initialisé ; renvoie faux s'il l'était déjà.
+pub fn mark_initialized(base: usize) -> bool {
+    let mut mods = MODULES.lock().unwrap();
+    match mods.iter_mut().find(|m| m.base == base) {
+        Some(m) if !m.initialized => {
+            m.initialized = true;
+            true
+        }
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn put32(b: &mut [u8], o: usize, v: u32) { b[o..o + 4].copy_from_slice(&v.to_le_bytes()); }
+
+    #[test]
+    fn resout_un_export_par_nom_et_par_ordinal() {
+        let mut image = vec![0u8; 0x400];
+        // IMAGE_EXPORT_DIRECTORY à 0x100 : base ordinal 7, une fonction,
+        // un nom, puis les trois tables aux RVAs 0x180/0x190/0x1a0.
+        put32(&mut image, 0x110, 7);
+        put32(&mut image, 0x114, 1);
+        put32(&mut image, 0x118, 1);
+        put32(&mut image, 0x11c, 0x180);
+        put32(&mut image, 0x120, 0x190);
+        put32(&mut image, 0x124, 0x1a0);
+        put32(&mut image, 0x180, 0x250);
+        put32(&mut image, 0x190, 0x1b0);
+        image[0x1b0..0x1b0 + 5].copy_from_slice(b"demo\0");
+        image[0x1a0..0x1a2].copy_from_slice(&0u16.to_le_bytes());
+        image[0x250] = 0xc3;
+        let mut dirs = vec![DataDir::default(); 16];
+        dirs[DIR_EXPORT] = DataDir { rva: 0x100, size: 0x80 };
+        let m = Module { name: "demo.dll".into(), path: "demo.dll".into(), base: image.as_ptr() as usize, size: image.len(),
+            pe: PeImage { characteristics: 0, entry_rva: 0, image_base: 0, section_alignment: 0x1000, size_of_image: image.len() as u32, size_of_headers: 0, subsystem: 3, dll_characteristics: 0, stack_reserve: 0, stack_commit: 0, dirs, sections: vec![] }, tls: None, initialized: false };
+        assert_eq!(export_by_name(&m, "demo"), Some(m.base + 0x250));
+        assert_eq!(export_by_ordinal(&m, 7), Some(m.base + 0x250));
+        assert_eq!(export_by_ordinal(&m, 6), None);
+    }
+
+    #[test]
+    fn valide_les_references_dimports_differees() {
+        let m = Module { name: "x".into(), path: "x".into(), base: 0x1000, size: 0x1000,
+            pe: PeImage { characteristics: 0, entry_rva: 0, image_base: 0, section_alignment: 0, size_of_image: 0, size_of_headers: 0, subsystem: 0, dll_characteristics: 0, stack_reserve: 0, stack_commit: 0, dirs: vec![DataDir::default(); 16], sections: vec![] }, tls: None, initialized: false };
+        assert_eq!(delay_rva(&m, 1, 0x120).unwrap(), 0x120);
+        assert_eq!(delay_rva(&m, 0, 0x1100).unwrap(), 0x100);
+        assert!(delay_rva(&m, 1, 0x2000).is_err());
+    }
+
+    #[test]
+    fn relie_un_import_differe_dans_une_image_synthetique() {
+        let mut image = vec![0u8; 0x400];
+        put32(&mut image, 0x100, 1);       // grAttrs : tous les champs sont des RVA
+        put32(&mut image, 0x104, 0x180);   // nom de DLL
+        put32(&mut image, 0x108, 0x1c0);   // HMODULE
+        put32(&mut image, 0x10c, 0x1a0);   // IAT
+        put32(&mut image, 0x110, 0x1b0);   // INT
+        image[0x180..0x18d].copy_from_slice(b"kernel32.dll\0");
+        put32(&mut image, 0x1b0, 0x1ce);   // RVA du hint/name moins 2
+        image[0x1d0..0x1d2].copy_from_slice(&0u16.to_le_bytes());
+        image[0x1d2..0x1df].copy_from_slice(b"GetTickCount\0");
+        let mut dirs = vec![DataDir::default(); 16];
+        dirs[DIR_DELAY_IMPORT] = DataDir { rva: 0x100, size: 0x40 };
+        let m = Module { name: "delay.exe".into(), path: "delay.exe".into(), base: image.as_ptr() as usize, size: image.len(),
+            pe: PeImage { characteristics: 0, entry_rva: 0, image_base: 0, section_alignment: 0x1000, size_of_image: image.len() as u32, size_of_headers: 0, subsystem: 3, dll_characteristics: 0, stack_reserve: 0, stack_commit: 0, dirs, sections: vec![] }, tls: None, initialized: false };
+        resolve_imports(&m).unwrap();
+        assert_ne!(unsafe { *(m.base as *const usize).add(0x1a0 / 8) }, 0);
+        assert_ne!(unsafe { *(m.base as *const usize).add(0x1c0 / 8) }, 0);
+    }
+}

@@ -1,0 +1,23 @@
+#!/bin/sh
+set -eu
+
+root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+runtime=${WINLUX_BIN:-$root/target/release/winlux}
+testdir=${WINLUX_TESTDIR:-$root/target/x86_64-pc-windows-msvc/release}
+
+test -x "$runtime" || { echo "runtime absent : $runtime" >&2; exit 1; }
+for name in hello exitcode p1_suite dll_import delay_import; do
+    exe="$testdir/$name.exe"
+    test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
+    printf '\n== %s ==\n' "$name"
+    if [ "$name" = exitcode ]; then expected=42; else expected=0; fi
+    set +e
+    WINLUX_TEST=salut "$runtime" "$exe"
+    actual=$?
+    set -e
+    test "$actual" -eq "$expected" || {
+        echo "$name : code $actual attendu $expected" >&2
+        exit 1
+    }
+done
+echo "Tous les tests runtime passent."
