@@ -6,7 +6,6 @@
 #![no_std]
 #![no_main]
 
-use core::ffi::{c_char, c_void};
 use winlux_testexe::*;
 
 // Compteurs partagés avec le wndproc (variables statiques).
@@ -54,7 +53,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
     let wc = WndClassExA {
         size: core::mem::size_of::<WndClassExA>() as u32,
         style: 0,
-        wnd_proc: wnd_proc as usize,
+        wnd_proc: wnd_proc as *const () as usize,
         cls_extra: 0,
         wnd_extra: 0,
         instance: core::ptr::null_mut(),
@@ -102,6 +101,11 @@ pub extern "C" fn mainCRTStartup() -> ! {
         DispatchMessageA(&msg);
         iterations += 1;
         if iterations > 64 {
+            break;
+        }
+        // Messages attendus déjà traités : on ne va pas bloquer dans GetMessage
+        // en attente d'événements X11 supplémentaires.
+        if GOT_PAINT >= 1 && GOT_SIZE >= 1 && GOT_CREATE >= 1 {
             break;
         }
     }

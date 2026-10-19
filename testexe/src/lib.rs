@@ -203,6 +203,7 @@ pub const WM_CLOSE: u32 = 0x0010;
 pub const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
 pub const SW_SHOW: i32 = 5;
+pub const SW_SHOWNORMAL: i32 = 1;
 
 pub const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
 
@@ -298,6 +299,7 @@ extern "system" {
     pub fn MultiByteToWideChar(cp: u32, flags: u32, s: *const u8, n: i32, w: *mut u16, wn: i32) -> i32;
     pub fn WideCharToMultiByte(cp: u32, flags: u32, w: *const u16, n: i32, out: *mut u8, cap: i32, default: *const u8, used: *mut i32) -> i32;
     pub fn WriteConsoleW(h: Handle, buf: *const u16, n: u32, written: *mut u32, r: *mut c_void) -> i32;
+    pub fn Sleep(ms: u32);
 }
 
 #[link(name = "ws2_32", kind = "raw-dylib")]
@@ -340,6 +342,7 @@ extern "C" {
     ) -> Handle;
     pub fn DefWindowProcA(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
     pub fn GetMessageA(msg: *mut Msg, hwnd: Handle, min: u32, max: u32) -> i32;
+    pub fn PeekMessageA(msg: *mut Msg, hwnd: Handle, min: u32, max: u32, remove: u32) -> i32;
     pub fn DispatchMessageA(msg: *const Msg) -> isize;
     pub fn TranslateMessage(msg: *const Msg) -> i32;
     pub fn PostQuitMessage(code: i32);

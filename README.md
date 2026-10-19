@@ -8,7 +8,7 @@ Winlux est un runtime expérimental Linux qui charge des exécutables **Windows 
 
 ## État testé
 
-Les exécutables de test incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, des tests de DLL réelle/import différé, `findfiles.exe` et `crt_suite.exe` (chaînes, conversions, mathématiques, tri). Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux.
+Les exécutables de test incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, des tests de DLL réelle/import différé, `findfiles.exe`, `crt_suite.exe` (chaînes, conversions, mathématiques, tri) et deux tests GUI (`gui_suite.exe`, `gui_demo.exe`). Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux.
 
 Le runtime contient notamment un chargeur PE, les relocations et imports, un PEB/TEB minimal, du TLS, des DLL intégrées partielles, le registre Winlux persistant, des fichiers mappés vers Linux (énumération, fichiers temporaires, métadonnées) et une passerelle Winsock/ALSA expérimentale.
 
@@ -65,7 +65,7 @@ La configuration binfmt et le fichier `.desktop` sont des préparatifs, pas une 
 ## Limites importantes
 
 - PE32+ x86-64 seulement; le runtime n’est pas un noyau Windows.
-- `user32`/`gdi32` sont très partiels : aucune pile GUI utilisable n’est fournie.
+- `user32`/`gdi32` sont très partiels : le noyau fenêtres/messages et un backend X11 de base existent (thème « blob » violet-bleu), mais GDI, les contrôles, les décorations et la plupart des API GUI avancées manquent encore.
 - `mscoree` émet un diagnostic; aucun CLR n’est intégré. `paint.net` ne fonctionne donc pas actuellement.
 - Les codecs compressés, DirectX, les pilotes, le registre Windows complet, les services SCM complets, les E/S overlapped et de nombreuses API Win32 ne sont pas implémentés.
 - `FreeLibrary` ne démonte pas encore une DLL chargée.

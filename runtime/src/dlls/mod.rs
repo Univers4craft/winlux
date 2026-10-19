@@ -10,6 +10,7 @@ pub mod crt_scan;
 pub mod ntdll;
 pub mod user32;
 pub mod gui;
+pub mod gui_x11;
 pub mod advapi32;
 pub mod advapi32_services;
 pub mod ole32;

@@ -2,13 +2,13 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (47 tests), compilation release et les huit exécutables PE de test réussissent. Relancer les scripts après chaque changement.
+- Dernière validation connue : `cargo test -p winlux` (47 tests), compilation release et les neuf exécutables PE de test réussissent. Relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
-- [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe`, `findfiles.exe` et `crt_suite.exe` sous Winlux.
+- [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe`, `findfiles.exe`, `crt_suite.exe`, `gui_suite.exe` et `gui_demo.exe` sous Winlux.
 - [x] Ajouter 47 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT, IOCP et le noyau fenêtres/messages.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
@@ -49,6 +49,7 @@
 - [x] Ajouter les API de base `GetSystemInfo`, version OS, horloge FILETIME et plusieurs primitives `Rtl*`.
 - [x] Ajouter les premières API GUI (`user32`, `gdi32`) et réseau (`ws2_32`).
 - [x] Construire le noyau fenêtres/messages (`gui.rs`) : classes, table HWND, file par thread, appel du `WndProc` invité, thème « blob » violet-bleu, avec un test PE `gui_suite.exe` (séquence WM_CREATE/WM_SIZE/WM_PAINT/WM_DESTROY).
+- [x] Relier le noyau à un backend X11 réel (`gui_x11.rs`, x11rb) : vraies fenêtres, dégradé violet→bleu + accent rendus côté serveur, événements X traduits en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`→`WM_SIZE`, clics, clavier, `WM_DELETE_WINDOW`→`WM_CLOSE`), avec démo `gui_demo.exe`. Backend *headless* conservé par défaut pour les tests (`WINLUX_GUI=headless`).
 - [x] Relier sockets TCP/UDP, erreurs WSA et résolveur `getaddrinfo` A/W aux interfaces POSIX (tests loopback).
 - [x] Ajouter un registre persistant partagé Linux/Windows.
 - [x] Ajouter une couche SCM locale, non privilégiée, qui persiste les définitions et lance/arrête les services en processus utilisateur.
@@ -73,7 +74,7 @@
 - [x] Ajouter les flux `FILE*` de la CRT (`fopen`/`fclose`, `fread`/`fwrite`, `fgets`/`fputs`, `fseek`/`ftell`, `feof`, `fprintf`, `vfprintf`, `vsprintf`, `remove`/`rename`) avec tests unitaires et PE.
 - [x] Ajouter les entrées formatées `scanf`/`sscanf`/`fscanf` et leurs variantes `v*` (entiers, flottants, chaînes, jeux de caractères, largeur, `*`, `%n`) avec tests unitaires et PE.
 - [ ] Continuer la CRT : locale, `_snscanf`, `fgetpos`/`fsetpos` et formats positionnels.
-- [ ] Relier le noyau fenêtres à un backend d'affichage réel (X11) pour montrer de vraies fenêtres; le cœur messages et la boucle existent déjà.
+- [ ] Poursuivre le rendu X11 : décorations/titre maison si absence de WM, texte via GDI, redimensionnement (`WM_SIZE` → `SetWindowPos`), `SetFocus`/clavier virtuel et gestion du focus X.
 - [ ] Intégrer un véritable runtime CLR compatible pour exécuter les `.exe` .NET; sans CLR, `paint.net` ne fonctionne pas.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
 - [ ] Ajouter les formats audio compressés et les codecs vidéo; Media Foundation n’est pas encore reliée à une chaîne complète.

@@ -15,24 +15,34 @@ use std::thread::ThreadId;
 
 pub const WM_CREATE: u32 = 0x0001;
 pub const WM_DESTROY: u32 = 0x0002;
+#[allow(dead_code)] // publié par DefWindowProc lors d'un déplacement
 pub const WM_MOVE: u32 = 0x0003;
 pub const WM_SIZE: u32 = 0x0005;
+// Constantes réservées aux prochaines étapes (focus, clavier, effacement).
+#[allow(dead_code)]
 pub const WM_ACTIVATE: u32 = 0x0006;
+#[allow(dead_code)]
 pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_QUIT: u32 = 0x0012;
+#[allow(dead_code)]
 pub const WM_ERASEBKGND: u32 = 0x0014;
+#[allow(dead_code)]
 pub const WM_SHOWWINDOW: u32 = 0x0018;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
+#[allow(dead_code)]
 pub const WM_CHAR: u32 = 0x0102;
 pub const WM_MOUSEMOVE: u32 = 0x0200;
 pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const WM_LBUTTONUP: u32 = 0x0202;
 
+#[allow(dead_code)]
 pub const SW_HIDE: i32 = 0;
+#[allow(dead_code)]
 pub const SW_SHOWNORMAL: i32 = 1;
+#[allow(dead_code)]
 pub const SW_SHOW: i32 = 5;
 
 pub const CW_USEDEFAULT: i32 = 0x8000_0000u32 as i32;
@@ -42,6 +52,7 @@ pub const CW_USEDEFAULT: i32 = 0x8000_0000u32 as i32;
 /// Palette utilisée par tout le rendu de Winlux (fond de fenêtre, accent,
 /// dégradés). Une teinte Windows `COLORREF` est encodée `0x00BBGGRR`.
 pub mod theme {
+    #![allow(dead_code)] // palette complète utilisée progressivement par le rendu
     /// Fond profond (indigo-violet sombre), le « blob » dans son ensemble.
     pub const BG_DEEP: u32 = 0x002A_1B3D;      // #3D1B2A -> indigo sombre
     pub const BG_SURFACE: u32 = 0x003A_2555;    // surface de fenêtre
@@ -191,8 +202,10 @@ pub struct ClassInfo {
 }
 
 pub struct Window {
+    #[allow(dead_code)] // conservés pour les prochaines étapes (style de classe, fond)
     pub class: String,
     pub wnd_proc: usize,
+    #[allow(dead_code)]
     pub background: usize,
     pub title: String,
     pub rect: Rect,
@@ -200,7 +213,9 @@ pub struct Window {
     pub parent: usize,
     pub owner: ThreadId,
     pub needs_paint: bool,
+    #[allow(dead_code)] // style WS_* utile pour GetWindowLong et les futures branches
     pub style: u32,
+    #[allow(dead_code)]
     pub ex_style: u32,
 }
 
@@ -299,26 +314,60 @@ pub unsafe fn call_wndproc(wnd_proc: usize, hwnd: usize, msg: u32, wparam: usize
 
 // ---------- Backend ----------
 
-/// Rendu et événements hôte. `headless` n'affiche rien ; X11 branchera ici.
+/// Événement traduit par le backend, à publier dans la file du thread cible.
+pub struct PendingEvent {
+    pub hwnd: usize,
+    pub message: u32,
+    pub wparam: usize,
+    pub lparam: isize,
+}
+
+/// Rendu et événements hôte. `headless` n'affiche rien ; X11 traduit les
+/// événements du serveur en messages Win32.
 pub trait GuiBackend: Send {
-    fn pump(&mut self) {}
+    /// Traduit les événements hôte en messages Win32 (vidés à chaque boucle).
+    fn pump(&mut self) -> Vec<PendingEvent> {
+        Vec::new()
+    }
     fn create_window(&mut self, _hwnd: usize, _title: &str, _rect: Rect) {}
     fn destroy_window(&mut self, _hwnd: usize) {}
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn invalidate(&mut self, _hwnd: usize) {}
+    /// Attend des événements hôte pendant `timeout_ms`; renvoie `true` si le
+    /// backend peut en produire (X11) et `false` s'il est headless, auquel cas
+    /// une boucle `GetMessage` vide doit se terminer.
+    fn wait(&mut self, _timeout_ms: u32) -> bool {
+        false
+    }
 }
 
 struct HeadlessBackend;
 
 impl GuiBackend for HeadlessBackend {}
 
-fn backend() -> &'static Mutex<Box<dyn GuiBackend>> {
-    static B: OnceLock<Mutex<Box<dyn GuiBackend>>> = OnceLock::new();
-    B.get_or_init(|| Mutex::new(Box::new(HeadlessBackend)))
+/// Construit le backend : X11 si `DISPLAY` est présent et qu'on n'a pas forcé
+/// `WINLUX_GUI=headless`; sinon headless. Retombe sur headless si la connexion
+/// échoue.
+fn build_backend() -> Box<dyn GuiBackend> {
+    let force_headless = std::env::var("WINLUX_GUI").map(|v| v == "headless").unwrap_or(false);
+    if !force_headless && std::env::var_os("DISPLAY").is_some() {
+        if let Some(b) = crate::dlls::gui_x11::X11Backend::connect() {
+            crate::trace!("backend graphique : X11");
+            return Box::new(b);
+        }
+        crate::trace!("connexion X11 impossible, bascule headless");
+    }
+    Box::new(HeadlessBackend)
 }
 
-/// Une seule initialisation : aujourd'hui toujours headless.
+fn backend() -> &'static Mutex<Box<dyn GuiBackend>> {
+    static B: OnceLock<Mutex<Box<dyn GuiBackend>>> = OnceLock::new();
+    B.get_or_init(|| Mutex::new(build_backend()))
+}
+
+/// Force l'initialisation du backend (au premier appel GUI).
+#[allow(dead_code)]
 pub fn init() {
     let _ = backend();
 }
@@ -328,12 +377,48 @@ fn with_backend<F: FnOnce(&mut dyn GuiBackend)>(f: F) {
     f(b.as_mut());
 }
 
+/// Interroge le backend et publie les messages traduits dans les files cibles.
+pub fn pump_backend() {
+    let events = {
+        let mut b = lock(backend());
+        b.pump()
+    };
+    for e in events {
+        let m = Msg {
+            hwnd: e.hwnd,
+            message: e.message,
+            wparam: e.wparam,
+            lparam: e.lparam,
+            time: 0,
+            pt: Point::default(),
+            l_private: 0,
+        };
+        if e.message == WM_PAINT {
+            request_paint(e.hwnd);
+        } else {
+            post_to_window(e.hwnd, m);
+        }
+    }
+}
+
+/// Attend des événements hôte (au plus `timeout_ms`). Renvoie `false` si le
+/// backend est headless : une boucle `GetMessage` vide doit alors se terminer.
+pub fn wait_backend(timeout_ms: u32) -> bool {
+    let mut b = lock(backend());
+    b.wait(timeout_ms)
+}
+
 // ---------- Opérations sur les fenêtres ----------
 
+/// Nombre de fenêtres actuellement enregistrées (diagnostic, shell).
+#[allow(dead_code)]
 pub fn window_count() -> usize {
     lock(windows()).len()
 }
 
+/// Vrai si au moins une fenêtre est visible (sert à distinguer une boucle de
+/// messages active d'une fin de programme en backend headless).
+#[allow(dead_code)]
 pub fn any_visible_window() -> bool {
     lock(windows()).values().any(|w| w.visible)
 }
@@ -408,11 +493,6 @@ pub fn insert_window(hwnd: usize, w: Window) {
 /// Expose le backend pour les wrappers (user32/gdi32).
 pub fn with_backend_public<F: FnOnce(&mut dyn GuiBackend)>(f: F) {
     with_backend(f);
-}
-
-/// Traite les événements hôte ( aujourd'hui no-op en headless ).
-pub fn pump_backend() {
-    with_backend(|b| b.pump());
 }
 
 /// wndproc d'une fenêtre, si elle existe.

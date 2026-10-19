@@ -99,10 +99,13 @@ partages Windows avancés et les opérations asynchrones/overlapped.
 
 Le noyau fenêtres/messages (`user32`) fonctionne : classes, table HWND, file de
 messages par thread, appel du `WndProc` invité et une boucle `GetMessage`/
-`DispatchMessage` complète (testée par `gui_suite.exe`). Le rendu n'est pas
-encore relié à un serveur graphique : le backend actuel est *headless*, donc les
-fenêtres ne s'affichent pas tant que X11/Wayland n'est pas branché. GDI reste
-minimal. L’association `.desktop` et binfmt est préparée, mais n’a pas été
+`DispatchMessage` complète (testée par `gui_suite.exe` et `gui_demo.exe`).
+Deux backends sont disponibles : *headless* (par défaut, aucun affichage, sert
+aux tests) et **X11** (`gui_x11.rs`), qui crée de vraies fenêtres sur le serveur
+X, rend le thème « blob » (dégradé vertical violet→bleu avec accent) et traduit
+les événements X en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`→
+`WM_SIZE`, boutons, souris, clavier, `WM_DELETE_WINDOW`→`WM_CLOSE`). GDI reste
+minimal : le décor est peint par le backend, pas par les primitives GDI invitées. L’association `.desktop` et binfmt est préparée, mais n’a pas été
 installée ni validée sur une session de bureau réelle. Le script ISO requiert
 encore un staging Linux bootable.
 

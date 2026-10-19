@@ -145,7 +145,12 @@ unsafe fn create_window_common(
         return 0;
     }
 
-    with_backend(|b| b.create_window(hwnd, &title, rect));
+    with_backend(|b| {
+        b.create_window(hwnd, &title, rect);
+        if visible {
+            b.show_window(hwnd, true);
+        }
+    });
 
     // WM_SIZE puis, si visible, demande de peinture.
     gui::post_to_window(hwnd, Msg {
@@ -201,21 +206,23 @@ unsafe fn write_msg(out: *mut Msg, m: &Msg) {
 }
 
 pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
-    gui::pump_backend();
-    let q = gui::current_queue();
-    // WM_QUIT (posted par PostQuitMessage) termine la boucle (renvoie 0).
-    if let Some(m) = gui::take_message(&q, hwnd, min, max) {
-        if m.message == gui::WM_QUIT {
+    loop {
+        gui::pump_backend();
+        let q = gui::current_queue();
+        // WM_QUIT (posted par PostQuitMessage) termine la boucle (renvoie 0).
+        if let Some(m) = gui::take_message(&q, hwnd, min, max) {
+            if m.message == gui::WM_QUIT {
+                return 0;
+            }
+            write_msg(out, &m);
+            return 1;
+        }
+        // File vide : en headless on rend la main (fin de boucle); avec un
+        // backend réel on attend les prochains événements hôte, comme Win32.
+        if !gui::wait_backend(50) {
             return 0;
         }
-        write_msg(out, &m);
-        return 1;
     }
-    // File vide : en headless, on termine proprement plutôt que de bloquer.
-    if !gui::any_visible_window() {
-        return 0;
-    }
-    0
 }
 
 pub unsafe extern "win64" fn peek_message_a(out: *mut Msg, hwnd: usize, min: u32, max: u32, remove: u32) -> i32 {
@@ -397,6 +404,8 @@ pub unsafe extern "win64" fn end_paint(hwnd: usize, _ps: *const PaintStruct) -> 
 
 pub unsafe extern "win64" fn invalidate_rect(hwnd: usize, _rect: *const Rect, _erase: i32) -> i32 {
     if gui::wnd_proc_of(hwnd).is_some() {
+        // Le backend X11 efface la zone (→ Expose) et le noyau publie WM_PAINT.
+        with_backend(|b| b.invalidate(hwnd));
         gui::request_paint(hwnd);
         1
     } else {
