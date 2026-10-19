@@ -217,6 +217,8 @@ pub struct Window {
     pub style: u32,
     #[allow(dead_code)]
     pub ex_style: u32,
+    /// Commandes GDI accumulées depuis le dernier `EndPaint`.
+    pub pending: Vec<DrawCmd>,
 }
 
 impl Window {
@@ -312,6 +314,243 @@ pub unsafe fn call_wndproc(wnd_proc: usize, hwnd: usize, msg: u32, wparam: usize
     f(hwnd, msg, wparam, lparam)
 }
 
+// ---------- Dessin : HDC, objets GDI, commandes ----------
+
+/// Commande de rendu produite par les primitives GDI invitées. La liste est
+/// conservée par le backend et rejouée à chaque `WM_PAINT` (Expose X11), ce qui
+/// donne un vrai cycle de rendu sans dépendre d'un GDI invité complet.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DrawCmd {
+    /// Remplissage d'un rectangle logique (`COLORREF`).
+    FillRect { rect: Rect, color: u32 },
+    /// Cadre de `width` pixels autour du rectangle.
+    FrameRect { rect: Rect, color: u32, width: u16 },
+    /// Texte ANSI dont `x,y` désignent le coin haut-gauche. `bk` est la couleur
+    /// de fond posée derrière les glyphes (`SetBkColor`), ou `None` quand le mode
+    /// de fond est transparent (`SetBkMode(TRANSPARENT)`).
+    Text { x: i32, y: i32, text: String, color: u32, bk: Option<u32> },
+    /// Ellipse inscrite dans le rectangle.
+    Ellipse { rect: Rect, color: u32 },
+}
+
+/// État d'un `HDC` invité. Les HDC de fenêtre pointent sur la table des HWND ;
+/// les DC mémoire vivent seuls dans la table et ne rendent pas.
+#[derive(Clone, Copy)]
+pub struct DcState {
+    pub hwnd: usize,
+    pub text_color: u32,
+    pub bk_color: u32,
+    /// 1 = transparent, 2 = opaque (constantes Win32 `TRANSPARENT`/`OPAQUE`).
+    pub bk_mode: u32,
+    pub brush: usize,
+    pub pen: usize,
+}
+
+/// Objet GDI créé par l'invité (`CreateSolidBrush`, `CreatePen`).
+#[derive(Clone, Copy)]
+pub enum GdiObject {
+    Brush(u32),
+    Pen { width: u16, color: u32 },
+}
+
+fn dcs() -> &'static Mutex<HashMap<usize, DcState>> {
+    static D: OnceLock<Mutex<HashMap<usize, DcState>>> = OnceLock::new();
+    D.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn objects() -> &'static Mutex<HashMap<usize, GdiObject>> {
+    static O: OnceLock<Mutex<HashMap<usize, GdiObject>>> = OnceLock::new();
+    O.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Compteur d'handles invités : HDC à partir de `0x0011_0000`, objets GDI à
+/// partir de `0x0021_0000`. Les valeurs faibles restent réservées aux objets
+/// « stock » (`GetStockObject` renvoie `index + 1`).
+fn next_handle(base: usize) -> usize {
+    static A: OnceLock<Mutex<usize>> = OnceLock::new();
+    let a = A.get_or_init(|| Mutex::new(0x0011_0000));
+    let mut v = lock(a);
+    if *v < base {
+        *v = base;
+    }
+    let h = *v;
+    *v += 1;
+    h
+}
+
+/// Crée un DC associé à une fenêtre (ou mémoire si `hwnd == 0`).
+pub fn create_dc(hwnd: usize) -> usize {
+    let hdc = next_handle(0x0011_0000);
+    lock(dcs()).insert(hdc, DcState {
+        hwnd,
+        text_color: 0x0000_0000,
+        bk_color: 0x00FF_FFFF,
+        bk_mode: 2,
+        brush: 5, // BLACK_BRUSH stock
+        pen: 8,   // BLACK_PEN stock
+    });
+    hdc
+}
+
+/// Retire un DC (`ReleaseDC`, fin de `BeginPaint`).
+pub fn free_dc(hdc: usize) {
+    lock(dcs()).remove(&hdc);
+}
+
+/// Fenêtre cible d'un HDC, `None` si l'invalide.
+pub fn dc_window(hdc: usize) -> Option<usize> {
+    lock(dcs()).get(&hdc).map(|d| d.hwnd)
+}
+
+/// Applique une transformation à l'état du DC et renvoie sa valeur de retour ;
+/// `default` est servi si le handle n'existe plus.
+fn with_dc<T>(hdc: usize, f: impl FnOnce(&mut DcState) -> T, default: T) -> T {
+    let mut map = lock(dcs());
+    match map.get_mut(&hdc) {
+        Some(d) => f(d),
+        None => default,
+    }
+}
+
+pub fn set_dc_text_color(hdc: usize, color: u32) -> u32 {
+    with_dc(hdc, |d| {
+        let old = d.text_color;
+        d.text_color = color;
+        old
+    }, 0)
+}
+
+pub fn set_dc_bk_color(hdc: usize, color: u32) -> u32 {
+    with_dc(hdc, |d| {
+        let old = d.bk_color;
+        d.bk_color = color;
+        old
+    }, 0)
+}
+
+pub fn set_dc_bk_mode(hdc: usize, mode: u32) -> u32 {
+    with_dc(hdc, |d| {
+        let old = d.bk_mode;
+        d.bk_mode = mode;
+        old
+    }, 0)
+}
+
+/// Couleur de texte courante d'un DC (utilisée par `TextOutA`).
+pub fn dc_text_color(hdc: usize) -> u32 {
+    with_dc(hdc, |d| d.text_color, 0)
+}
+
+/// Handle du pinceau sélectionné dans un DC.
+pub fn dc_brush(hdc: usize) -> usize {
+    with_dc(hdc, |d| d.brush, 0)
+}
+
+/// Couleur de fond courante d'un DC (`SetBkColor`).
+pub fn dc_bk_color(hdc: usize) -> u32 {
+    with_dc(hdc, |d| d.bk_color, 0x00FF_FFFF)
+}
+
+/// Mode de fond courant d'un DC (2 = opaque, 1 = transparent).
+pub fn dc_bk_mode(hdc: usize) -> u32 {
+    with_dc(hdc, |d| d.bk_mode, 2)
+}
+
+/// Sélectionne un pinceau ou une plume selon la nature de l'objet.
+pub fn select_object(hdc: usize, obj: usize) -> usize {
+    let kind_pen = is_stock_pen(obj)
+        || matches!(lock(objects()).get(&obj), Some(GdiObject::Pen { .. }));
+    with_dc(hdc, |d| {
+        if kind_pen {
+            let old = d.pen;
+            d.pen = obj;
+            old
+        } else {
+            let old = d.brush;
+            d.brush = obj;
+            old
+        }
+    }, 0)
+}
+
+/// Objets « stock » plume : `GetStockObject(WHITE_PEN)` → 7, `BLACK_PEN` → 8,
+/// `NULL_PEN` → 9.
+fn is_stock_pen(handle: usize) -> bool {
+    matches!(handle, 7 | 8 | 9)
+}
+
+pub fn create_solid_brush(color: u32) -> usize {
+    let h = next_handle(0x0021_0000);
+    lock(objects()).insert(h, GdiObject::Brush(color));
+    h
+}
+
+pub fn create_pen(style: u32, width: i32, color: u32) -> usize {
+    // Les styles pointillés ne sont pas distingués : toute plume est pleine.
+    let _ = style;
+    let h = next_handle(0x0021_0000);
+    lock(objects()).insert(h, GdiObject::Pen { width: width.max(1) as u16, color });
+    h
+}
+
+/// Supprime un objet créé par l'invité. Les objets « stock » ne sont pas
+/// réellement supprimés (Win32 l'interdit) mais on répond succès : beaucoup de
+/// programmes appellent `DeleteObject` sans distinguer les deux cas.
+pub fn delete_object(obj: usize) -> bool {
+    lock(objects()).remove(&obj).is_some() || (1..=9).contains(&obj)
+}
+
+/// Couleur d'un pinceau/plume, `None` pour les objets « null » du stock.
+pub fn object_color(handle: usize) -> Option<u32> {
+    if let Some(o) = lock(objects()).get(&handle).copied() {
+        return match o {
+            GdiObject::Brush(c) => Some(c),
+            GdiObject::Pen { color, .. } => Some(color),
+        };
+    }
+    // Objets du stock (`GetStockObject` renvoie `index + 1`) : pinceaux puis
+    // plumes ; `NULL_BRUSH` et `NULL_PEN` ne peignent rien.
+    match handle {
+        1 => Some(0x00FF_FFFF), // WHITE_BRUSH
+        2 => Some(0x00C0_C0C0), // LTGRAY_BRUSH
+        3 => Some(0x0080_8080), // GRAY_BRUSH
+        4 => Some(0x0040_4040), // DKGRAY_BRUSH
+        5 => Some(0x0000_0000), // BLACK_BRUSH
+        6 => None,              // NULL_BRUSH
+        7 => Some(0x00FF_FFFF), // WHITE_PEN
+        8 => Some(0x0000_0000), // BLACK_PEN
+        9 => None,              // NULL_PEN
+        _ => None,
+    }
+}
+
+/// Largeur d'une plume sélectionnée (les plumes simples font 1 px).
+pub fn object_pen_width(handle: usize) -> u16 {
+    match lock(objects()).get(&handle).copied() {
+        Some(GdiObject::Pen { width, .. }) => width,
+        _ => 1,
+    }
+}
+
+/// Ajoute une commande de dessin à la file d'attente de peinture de la fenêtre
+/// cible du DC. Renvoie faux si le DC ou la fenêtre n'existe plus.
+pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
+    let target = match lock(dcs()).get(&hdc) {
+        Some(d) => d.hwnd,
+        None => return false,
+    };
+    let mut map = lock(windows());
+    match map.get_mut(&target) {
+        Some(w) => { w.pending.push(cmd); true }
+        None => false,
+    }
+}
+
+/// Retire les commandes accumulées depuis le dernier `EndPaint`.
+pub fn take_pending(hwnd: usize) -> Vec<DrawCmd> {
+    lock(windows()).get_mut(&hwnd).map(|w| std::mem::take(&mut w.pending)).unwrap_or_default()
+}
+
 // ---------- Backend ----------
 
 /// Événement traduit par le backend, à publier dans la file du thread cible.
@@ -334,6 +573,10 @@ pub trait GuiBackend: Send {
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn invalidate(&mut self, _hwnd: usize) {}
+    /// Joue la liste de commandes GDI d'une fenêtre (thème + contenu). Le
+    /// backend X11 conserve la liste pour la rejouer à chaque Expose; headless
+    /// ignore le rendu.
+    fn draw(&mut self, _hwnd: usize, _cmds: &[DrawCmd]) {}
     /// Attend des événements hôte pendant `timeout_ms`; renvoie `true` si le
     /// backend peut en produire (X11) et `false` s'il est headless, auquel cas
     /// une boucle `GetMessage` vide doit se terminer.
@@ -408,6 +651,16 @@ pub fn wait_backend(timeout_ms: u32) -> bool {
     b.wait(timeout_ms)
 }
 
+/// Transmet les commandes accumulées par les appels GDI invités au backend de
+/// rendu, puis les oublie. Appelé à la fin d'un cycle de peinture.
+pub fn flush_paint(hwnd: usize) {
+    let cmds = take_pending(hwnd);
+    if cmds.is_empty() {
+        return;
+    }
+    with_backend(|b| b.draw(hwnd, &cmds));
+}
+
 // ---------- Opérations sur les fenêtres ----------
 
 /// Nombre de fenêtres actuellement enregistrées (diagnostic, shell).
@@ -452,6 +705,8 @@ pub fn destroy_window(hwnd: usize) -> bool {
             None => (None, 0),
         }
     };
+    // Les DC de la fenêtre ne servent plus (le code invité ne doit pas peindre).
+    lock(dcs()).retain(|_, d| d.hwnd != hwnd);
     // WM_DESTROY synchrone auprès du wndproc de la fenêtre détruite.
     if let Some(wp) = wnd_proc {
         unsafe { call_wndproc(wp, hwnd, WM_DESTROY, 0, 0) };
@@ -540,19 +795,24 @@ pub fn first_window() -> Option<usize> {
     lock(windows()).keys().next().copied()
 }
 
-/// Recycle un HDC factice ; en headless on ne rend pas, donc une valeur stable.
+/// Ouvre un cycle de peinture : marque la zone comme validée et alloue un vrai
+/// `HDC` invité ciblant la fenêtre.
 pub fn begin_paint(hwnd: usize) -> Option<(usize, Rect)> {
-    let mut map = lock(windows());
-    match map.get_mut(&hwnd) {
-        Some(w) => {
-            w.needs_paint = false;
-            Some((hwnd, w.client_rect()))
-        }
-        None => None,
-    }
+    let rect = {
+        let mut map = lock(windows());
+        let w = map.get_mut(&hwnd)?;
+        w.needs_paint = false;
+        w.client_rect()
+    };
+    Some((create_dc(hwnd), rect))
 }
 
-pub fn end_paint(_hwnd: usize) -> bool {
+/// Clôt le cycle : libère le DC et rejoue les commandes GDI chez le backend.
+pub fn end_paint(_hwnd: usize, hdc: usize) -> bool {
+    if hdc != 0 {
+        free_dc(hdc);
+    }
+    flush_paint(_hwnd);
     true
 }
 
@@ -643,5 +903,119 @@ mod tests {
         assert_eq!(r.height(), 50);
         assert_eq!(r.right, 110);
         assert_eq!(r.bottom, 70);
+    }
+
+    /// WndProc inerte : `destroy_window` l'appelle de façon synchrone.
+    extern "win64" fn wnd_proc_inerte(
+        _hwnd: usize,
+        _msg: u32,
+        _wparam: usize,
+        _lparam: isize,
+    ) -> isize {
+        0
+    }
+
+    fn fenetre_de_test() -> usize {
+        let hwnd = alloc_hwnd();
+        let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
+        insert_window(hwnd, Window {
+            class: "Test".to_string(),
+            wnd_proc: proc_addr as usize,
+            background: 0,
+            title: "test".to_string(),
+            rect: Rect::from_size(0, 0, 200, 100),
+            visible: true,
+            parent: 0,
+            owner: std::thread::current().id(),
+            needs_paint: false,
+            style: 0,
+            ex_style: 0,
+            pending: Vec::new(),
+        });
+        hwnd
+    }
+
+    #[test]
+    fn les_objets_gdi_personnels_portent_leur_couleur() {
+        let brush = create_solid_brush(0x00C8_6BF0);
+        assert_ne!(brush, 0);
+        assert_eq!(object_color(brush), Some(0x00C8_6BF0));
+        let pen = create_pen(0, 3, 0x0012_3456);
+        assert_eq!(object_color(pen), Some(0x0012_3456));
+        assert_eq!(object_pen_width(pen), 3);
+        assert!(delete_object(brush));
+        assert_eq!(object_color(brush), None);
+    }
+
+    #[test]
+    fn les_objets_stock_ont_les_couleurs_win32() {
+        // GetStockObject renvoie index + 1 (convention Win32) : BLACK_BRUSH est
+        // l'index 4, NULL_BRUSH l'index 5, BLACK_PEN l'index 7.
+        let stock = crate::dlls::gdi32::get_stock_object;
+        assert_eq!(object_color(stock(4)), Some(0x0000_0000)); // BLACK_BRUSH
+        assert_eq!(object_color(stock(0)), Some(0x00FF_FFFF)); // WHITE_BRUSH
+        assert_eq!(object_color(stock(5)), None); // NULL_BRUSH
+        assert_eq!(object_pen_width(stock(7)), 1); // BLACK_PEN
+    }
+
+    #[test]
+    fn un_dc_retient_couleurs_et_objet_selectionne() {
+        let hwnd = fenetre_de_test();
+        let hdc = create_dc(hwnd);
+        assert_eq!(dc_window(hdc), Some(hwnd));
+        // Valeurs initiales Win32 : texte noir, fond blanc, mode opaque.
+        assert_eq!(set_dc_text_color(hdc, 0x00FF_FFFF), 0);
+        assert_eq!(dc_text_color(hdc), 0x00FF_FFFF);
+        assert_eq!(set_dc_text_color(hdc, 0x0000_00FF), 0x00FF_FFFF);
+        assert_eq!(set_dc_bk_color(hdc, 0x0012_3456), 0x00FF_FFFF);
+
+        // Une plume va dans l'emplacement plume, un pinceau dans l'emplacement
+        // pinceau.
+        let pen = create_pen(0, 2, 0x00AA_BBCC);
+        let brush = create_solid_brush(0x0011_2233);
+        assert_eq!(select_object(hdc, pen), 8); // BLACK_PEN stock initial
+        assert_eq!(select_object(hdc, brush), 5); // BLACK_BRUSH stock initial
+        assert_eq!(dc_brush(hdc), brush);
+
+        free_dc(hdc);
+        assert_eq!(dc_window(hdc), None);
+        destroy_window(hwnd);
+    }
+
+    #[test]
+    fn les_commandes_de_dessin_sont_accumulees_puis_prises() {
+        let hwnd = fenetre_de_test();
+        let hdc = create_dc(hwnd);
+        let rect = Rect::from_size(10, 10, 40, 20);
+        assert!(record(hdc, DrawCmd::FillRect { rect, color: 0x0000_00FF }));
+        assert!(record(hdc, DrawCmd::FrameRect { rect, color: 0x0000_00FF, width: 1 }));
+        assert!(record(hdc, DrawCmd::Text {
+            x: 4,
+            y: 8,
+            text: "salut".to_string(),
+            color: 0x00FF_FFFF,
+            bk: None,
+        }));
+        assert_eq!(take_pending(hwnd).len(), 3);
+        // La prise vide la file : le prochain `EndPaint` ne rejoue rien.
+        assert!(take_pending(hwnd).is_empty());
+
+        // Un DC mémoire (pas de fenêtre cible) n'accumule pas de rendu.
+        let mem = create_dc(0);
+        assert!(!record(mem, DrawCmd::FillRect { rect, color: 0 }));
+        free_dc(mem);
+        free_dc(hdc);
+        destroy_window(hwnd);
+    }
+
+    #[test]
+    fn un_dc_inconnu_ne_recoit_aucune_commande() {
+        assert!(!record(0x00DE_AD00, DrawCmd::FillRect {
+            rect: Rect::from_size(0, 0, 1, 1),
+            color: 0,
+        }));
+        assert_eq!(dc_window(0x00DE_AD00), None);
+        // Sans DC, les réglages sont sans effet et renvoient la valeur neutre.
+        assert_eq!(set_dc_bk_mode(0x00DE_AD00, 1), 0);
     }
 }

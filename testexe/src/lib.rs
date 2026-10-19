@@ -354,7 +354,27 @@ extern "C" {
     pub fn GetWindowRect(hwnd: Handle, out: *mut Rect) -> i32;
     pub fn BeginPaint(hwnd: Handle, ps: *mut PaintStruct) -> Handle;
     pub fn EndPaint(hwnd: Handle, ps: *const PaintStruct) -> i32;
+    pub fn GetDC(hwnd: Handle) -> Handle;
+    pub fn ReleaseDC(hwnd: Handle, hdc: Handle) -> i32;
+    pub fn FillRect(hdc: Handle, rect: *const Rect, brush: Handle) -> i32;
+    pub fn FrameRect(hdc: Handle, rect: *const Rect, brush: Handle) -> i32;
+    pub fn InvalidateRect(hwnd: Handle, rect: *const Rect, erase: i32) -> i32;
     pub fn GetSystemMetrics(index: i32) -> i32;
+}
+
+#[link(name = "gdi32", kind = "raw-dylib")]
+extern "C" {
+    pub fn GetStockObject(index: i32) -> Handle;
+    pub fn CreateSolidBrush(color: u32) -> Handle;
+    pub fn CreatePen(style: u32, width: i32, color: u32) -> Handle;
+    pub fn SelectObject(hdc: Handle, obj: Handle) -> Handle;
+    pub fn DeleteObject(obj: Handle) -> i32;
+    pub fn SetTextColor(hdc: Handle, color: u32) -> u32;
+    pub fn SetBkColor(hdc: Handle, color: u32) -> u32;
+    pub fn SetBkMode(hdc: Handle, mode: i32) -> i32;
+    pub fn TextOutA(hdc: Handle, x: i32, y: i32, text: *const c_char, count: i32) -> i32;
+    pub fn Rectangle(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32, pen: Handle, brush: Handle) -> i32;
+    pub fn Ellipse(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32) -> i32;
 }
 
 #[link(name = "msvcrt", kind = "raw-dylib")]

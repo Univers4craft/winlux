@@ -104,8 +104,20 @@ Deux backends sont disponibles : *headless* (par défaut, aucun affichage, sert
 aux tests) et **X11** (`gui_x11.rs`), qui crée de vraies fenêtres sur le serveur
 X, rend le thème « blob » (dégradé vertical violet→bleu avec accent) et traduit
 les événements X en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`→
-`WM_SIZE`, boutons, souris, clavier, `WM_DELETE_WINDOW`→`WM_CLOSE`). GDI reste
-minimal : le décor est peint par le backend, pas par les primitives GDI invitées. L’association `.desktop` et binfmt est préparée, mais n’a pas été
+`WM_SIZE`, boutons, souris, clavier, `WM_DELETE_WINDOW`→`WM_CLOSE`).
+
+La couche de dessin GDI est amorcée : les primitives invitées n’écrivent pas
+directement dans la fenêtre, elles empilent des commandes (`FillRect`,
+`FrameRect`, `Ellipse`, `Text`) associées à la fenêtre du `HDC`. `EndPaint` et
+`ReleaseDC` transmettent la liste au backend, qui la rejoue après le thème à
+chaque `Expose` : le contenu survit donc aux rafraîchissements et aux
+redimensionnements. Sont couverts `CreateSolidBrush`, `CreatePen`,
+`SelectObject`, `DeleteObject`, `GetStockObject` (pinceaux/plumes standard),
+`SetTextColor`, `SetBkColor`, `SetBkMode` (texte opaque ou transparent),
+`TextOutA`, `Rectangle`, `Ellipse`, `FillRect`, `FrameRect`, `GetDC` et
+`ReleaseDC`. Le texte est rendu par la police « core » du serveur X. Manquent
+encore les polices GDI, les bitmaps/`BitBlt`, les régions, les couleurs système
+et le double tampon. L’association `.desktop` et binfmt est préparée, mais n’a pas été
 installée ni validée sur une session de bureau réelle. Le script ISO requiert
 encore un staging Linux bootable.
 

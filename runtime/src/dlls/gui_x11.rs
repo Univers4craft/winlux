@@ -2,7 +2,7 @@
 //! ses événements en messages Win32. Le fond utilise le thème « blob »
 //! violet-bleu (dégradé vertical + accent) défini dans `gui::theme`.
 
-use crate::dlls::gui::{self, PendingEvent, Rect};
+use crate::dlls::gui::{self, DrawCmd, PendingEvent, Rect};
 use crate::dlls::gui::theme;
 use std::collections::HashMap;
 use x11rb::connection::Connection;
@@ -14,6 +14,7 @@ use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
 use x11rb::wrapper::ConnectionExt as _;
 
+#[derive(Clone, Copy)]
 struct XWin {
     window: Window,
     gc: Gcontext,
@@ -33,6 +34,10 @@ pub struct X11Backend {
     by_xwin: HashMap<u32, usize>,
     /// Événements lus pendant `wait`, consommés par le prochain `pump`.
     pending: Vec<Event>,
+    /// Dernière liste de commandes GDI par fenêtre, rejouée à chaque Expose.
+    content: HashMap<usize, Vec<DrawCmd>>,
+    /// Police « core » utilisée pour le texte (ouverte à la première demande).
+    font: Option<u32>,
 }
 
 impl X11Backend {
@@ -53,6 +58,8 @@ impl X11Backend {
             windows: HashMap::new(),
             by_xwin: HashMap::new(),
             pending: Vec::new(),
+            content: HashMap::new(),
+            font: None,
         })
     }
 
@@ -113,15 +120,156 @@ impl X11Backend {
         let _ = self.conn.flush();
     }
 
+    /// Convertit un rectangle logique en rectangle X rogné à la fenêtre.
+    fn to_x_rect(w: &XWin, r: &Rect) -> Option<x11rb::protocol::xproto::Rectangle> {
+        let x0 = r.left.max(0).min(w.width as i32);
+        let y0 = r.top.max(0).min(w.height as i32);
+        let x1 = r.right.max(0).min(w.width as i32);
+        let y1 = r.bottom.max(0).min(w.height as i32);
+        if x1 <= x0 || y1 <= y0 {
+            return None;
+        }
+        Some(x11rb::protocol::xproto::Rectangle {
+            x: x0 as i16,
+            y: y0 as i16,
+            width: (x1 - x0) as u16,
+            height: (y1 - y0) as u16,
+        })
+    }
+
+    fn set_foreground(&self, w: &XWin, color: u32) {
+        let pixel = self.alloc_color(color);
+        let _ = self.conn.change_gc(w.gc, &ChangeGCAux::new().foreground(pixel));
+    }
+
+    /// Ouvre (une seule fois) la police « fixed » du serveur X.
+    fn ensure_font(&mut self) -> Option<u32> {
+        if let Some(f) = self.font {
+            return Some(f);
+        }
+        let fid = self.conn.generate_id().ok()?;
+        // « fixed » est un alias quasi universel; sinon on tente 6x13.
+        for name in [&b"fixed"[..], &b"6x13"[..]] {
+            if let Ok(cookie) = self.conn.open_font(fid, name) {
+                cookie.check().ok()?;
+                self.font = Some(fid);
+                return Some(fid);
+            }
+        }
+        None
+    }
+
+    fn paint_fill(&self, w: &XWin, r: &Rect, color: u32) {
+        if let Some(xr) = Self::to_x_rect(w, r) {
+            self.set_foreground(w, color);
+            let _ = self.conn.poly_fill_rectangle(w.window, w.gc, &[xr]);
+        }
+    }
+
+    fn paint_frame(&self, w: &XWin, r: &Rect, color: u32, width: u16) {
+        self.set_foreground(w, color);
+        let t = width.max(1) as i32;
+        let edges = [
+            Rect { left: r.left, top: r.top, right: r.right, bottom: r.top + t },
+            Rect { left: r.left, top: r.bottom - t, right: r.right, bottom: r.bottom },
+            Rect { left: r.left, top: r.top + t, right: r.left + t, bottom: r.bottom - t },
+            Rect { left: r.right - t, top: r.top + t, right: r.right, bottom: r.bottom - t },
+        ];
+        let xs: Vec<_> = edges.iter().filter_map(|e| Self::to_x_rect(w, e)).collect();
+        if !xs.is_empty() {
+            let _ = self.conn.poly_fill_rectangle(w.window, w.gc, &xs);
+        }
+    }
+
+    fn paint_ellipse(&self, w: &XWin, r: &Rect, color: u32) {
+        if let Some(xr) = Self::to_x_rect(w, r) {
+            self.set_foreground(w, color);
+            let arc = x11rb::protocol::xproto::Arc {
+                x: xr.x,
+                y: xr.y,
+                width: xr.width,
+                height: xr.height,
+                angle1: 0,
+                angle2: 360 * 64,
+            };
+            let _ = self.conn.poly_fill_arc(w.window, w.gc, &[arc]);
+        }
+    }
+
+    /// Pose un texte ANSI. `bk` est la couleur de fond (`Some`) quand le mode
+    /// de fond est opaque, ou `None` pour un fond transparent : seul le fond
+    /// décide du primitive X11 employée (`image_text8` repeint le fond,
+    /// `poly_text8` ne pose que les glyphes).
+    fn paint_text(&mut self, w: &XWin, x: i32, y: i32, text: &str, color: u32, bk: Option<u32>) {
+        let font = match self.ensure_font() {
+            Some(f) => f,
+            None => return,
+        };
+        let pixel = self.alloc_color(color);
+        let mut aux = ChangeGCAux::new().foreground(pixel).font(font);
+        let opaque = match bk {
+            Some(bg) => {
+                aux = aux.background(self.alloc_color(bg));
+                true
+            }
+            None => false,
+        };
+        let _ = self.conn.change_gc(w.gc, &aux);
+        // `y` est la ligne de base ; la police `fixed` monte d'environ 11 px.
+        let mut bytes = text.as_bytes();
+        if bytes.len() > 255 {
+            bytes = &bytes[..255];
+        }
+        if bytes.is_empty() {
+            return;
+        }
+        let px = x.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let py = (y + 11).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        if opaque {
+            let _ = self.conn.image_text8(w.window, w.gc, px, py, bytes);
+        } else {
+            // Élément TEXT8 : nombre d'octets, puis déplacement (0) et glyphes.
+            // Le serveur X attend `n` avant `delta` ; le tampon est complété à
+            // un multiple de 4 octets (éléments vides ignorés).
+            let mut item = Vec::with_capacity(bytes.len() + 4);
+            item.push(bytes.len() as u8);
+            item.push(0u8);
+            item.extend_from_slice(bytes);
+            while item.len() % 4 != 0 {
+                item.push(0);
+            }
+            let _ = self.conn.poly_text8(w.window, w.gc, px, py, &item);
+        }
+    }
+
+    /// Rejoue la liste de commandes GDI d'une fenêtre.
+    fn paint_cmds(&mut self, w: &XWin, cmds: &[DrawCmd]) {
+        for cmd in cmds {
+            match cmd {
+                DrawCmd::FillRect { rect, color } => self.paint_fill(w, rect, *color),
+                DrawCmd::FrameRect { rect, color, width } => {
+                    self.paint_frame(w, rect, *color, *width)
+                }
+                DrawCmd::Ellipse { rect, color } => self.paint_ellipse(w, rect, *color),
+                DrawCmd::Text { x, y, text, color, bk } => {
+                    self.paint_text(w, *x, *y, text, *color, *bk)
+                }
+            }
+        }
+    }
+
     fn translate(&mut self, ev: Event) -> Option<PendingEvent> {
         match ev {
             Event::Expose(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
-                crate::trace!("X11 expose hwnd={} count={}", hwnd, e.count);
-                // Redessin du thème quand la zone est exposée.
-                if let Some(w) = self.windows.get(&hwnd) {
-                    let wref = XWin { window: w.window, gc: w.gc, width: w.width, height: w.height };
-                    self.paint_theme(&wref);
+                // count > 0 : d'autres Expose suivent, on attend le dernier.
+                if e.count == 0 {
+                    if let Some(w) = self.windows.get(&hwnd).copied() {
+                        self.paint_theme(&w);
+                        let content = self.content.get(&hwnd).cloned().unwrap_or_default();
+                        self.paint_cmds(&w, &content);
+                        let _ = self.conn.flush();
+                    }
                 }
                 Some(PendingEvent { hwnd, message: gui::WM_PAINT, wparam: 0, lparam: 0 })
             }
@@ -304,7 +452,17 @@ impl gui::GuiBackend for X11Backend {
         self.by_xwin.insert(win, hwnd);
     }
 
+    fn draw(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
+        self.content.insert(hwnd, cmds.to_vec());
+        if let Some(w) = self.windows.get(&hwnd).copied() {
+            self.paint_theme(&w);
+            self.paint_cmds(&w, cmds);
+            let _ = self.conn.flush();
+        }
+    }
+
     fn destroy_window(&mut self, hwnd: usize) {
+        self.content.remove(&hwnd);
         if let Some(w) = self.windows.remove(&hwnd) {
             self.by_xwin.remove(&w.window);
             let _ = self.conn.free_gc(w.gc);

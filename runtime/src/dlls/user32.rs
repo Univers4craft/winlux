@@ -136,6 +136,7 @@ unsafe fn create_window_common(
         needs_paint: visible,
         style,
         ex_style,
+        pending: Vec::new(),
     });
 
     // WM_CREATE synchrone (le wndproc peut refuser la fenêtre).
@@ -398,8 +399,54 @@ pub unsafe extern "win64" fn begin_paint(hwnd: usize, ps: *mut PaintStruct) -> u
     hdc
 }
 
-pub unsafe extern "win64" fn end_paint(hwnd: usize, _ps: *const PaintStruct) -> i32 {
-    gui::end_paint(hwnd) as i32
+pub unsafe extern "win64" fn end_paint(hwnd: usize, ps: *const PaintStruct) -> i32 {
+    let hdc = if ps.is_null() { 0 } else { (*ps).hdc };
+    gui::end_paint(hwnd, hdc) as i32
+}
+
+// ---------- DC et primitives de dessin ----------
+
+/// DC ciblant une fenêtre (le `hwnd` 0 désigne le bureau, sans rendu).
+pub extern "win64" fn get_dc(hwnd: usize) -> usize {
+    if hwnd != 0 && gui::wnd_proc_of(hwnd).is_none() {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    }
+    gui::create_dc(hwnd)
+}
+
+pub unsafe extern "win64" fn release_dc(hwnd: usize, hdc: usize) -> i32 {
+    if gui::dc_window(hdc).is_none() {
+        crate::process::set_last_error(1400);
+        return 0;
+    }
+    gui::free_dc(hdc);
+    gui::flush_paint(hwnd);
+    1
+}
+
+/// Remplit un rectangle avec la couleur du pinceau (`FillRect`, user32).
+pub unsafe extern "win64" fn fill_rect(hdc: usize, rect: *const Rect, brush: usize) -> i32 {
+    if rect.is_null() || gui::dc_window(hdc).is_none() {
+        crate::process::set_last_error(1400);
+        return 0;
+    }
+    if let Some(color) = gui::object_color(brush) {
+        gui::record(hdc, gui::DrawCmd::FillRect { rect: *rect, color });
+    }
+    1
+}
+
+/// Cadre d'un pixel avec la couleur du pinceau (`FrameRect`, user32).
+pub unsafe extern "win64" fn frame_rect(hdc: usize, rect: *const Rect, brush: usize) -> i32 {
+    if rect.is_null() || gui::dc_window(hdc).is_none() {
+        crate::process::set_last_error(1400);
+        return 0;
+    }
+    if let Some(color) = gui::object_color(brush) {
+        gui::record(hdc, gui::DrawCmd::FrameRect { rect: *rect, color, width: 1 });
+    }
+    1
 }
 
 pub unsafe extern "win64" fn invalidate_rect(hwnd: usize, _rect: *const Rect, _erase: i32) -> i32 {
@@ -469,6 +516,8 @@ pub fn exports() -> crate::dlls::Exports {
         "GetWindowTextA"=>fn get_window_text_a, "GetWindowTextLengthA"=>fn get_window_text_length_a,
         "BeginPaint"=>fn begin_paint, "EndPaint"=>fn end_paint,
         "InvalidateRect"=>fn invalidate_rect, "ValidateRect"=>fn validate_rect,
+        "GetDC"=>fn get_dc, "ReleaseDC"=>fn release_dc,
+        "FillRect"=>fn fill_rect, "FrameRect"=>fn frame_rect,
         "GetDesktopWindow"=>fn get_desktop_window, "GetForegroundWindow"=>fn get_foreground_window,
         "GetSystemMetrics"=>fn get_system_metrics,
         "MessageBoxA"=>fn message_box_a, "MessageBoxW"=>fn message_box_w,
