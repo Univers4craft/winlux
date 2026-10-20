@@ -8,6 +8,13 @@ use crate::dlls::gui::{
 };
 use std::ffi::c_void;
 
+const SWP_NOSIZE: u32 = 0x0001;
+const SWP_NOMOVE: u32 = 0x0002;
+const SWP_NOREDRAW: u32 = 0x0008;
+const SWP_SHOWWINDOW: u32 = 0x0040;
+const SWP_HIDEWINDOW: u32 = 0x0080;
+const SWP_FRAMECHANGED: u32 = 0x0020;
+
 // ---------- Utilitaires ----------
 
 fn now_tick() -> u32 {
@@ -372,6 +379,107 @@ pub unsafe extern "win64" fn get_client_rect(hwnd: usize, out: *mut Rect) -> i32
     }
 }
 
+fn pack_i16_pair(low: i32, high: i32) -> isize {
+    (((high as u16 as u32) << 16) | low as u16 as u32) as isize
+}
+
+/// Positionne/redimensionne une fenêtre et publie `WM_MOVE`/`WM_SIZE`.
+/// Le z-order et les notifications WINDOWPOS avancées ne sont pas encore gérés.
+pub unsafe extern "win64" fn set_window_pos(
+    hwnd: usize,
+    _insert_after: usize,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    flags: u32,
+) -> i32 {
+    let Some(old) = gui::window_rect(hwnd) else {
+        crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+        return 0;
+    };
+    let left = if flags & SWP_NOMOVE != 0 { old.left } else { x };
+    let top = if flags & SWP_NOMOVE != 0 { old.top } else { y };
+    let width = if flags & SWP_NOSIZE != 0 { old.width() } else { cx };
+    let height = if flags & SWP_NOSIZE != 0 { old.height() } else { cy };
+    if width <= 0 || height <= 0 {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    let Some(right) = left.checked_add(width) else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let Some(bottom) = top.checked_add(height) else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let rect = Rect { left, top, right, bottom };
+    let moved = left != old.left || top != old.top;
+    let resized = width != old.width() || height != old.height();
+
+    if moved || resized {
+        if gui::set_window_rect(hwnd, rect).is_none() {
+            crate::process::set_last_error(1400);
+            return 0;
+        }
+        // Le verrou de la table HWND est relâché avant celui du backend.
+        with_backend(|backend| backend.set_window_rect(hwnd, rect));
+        if resized {
+            gui::post_to_window(
+                hwnd,
+                Msg::new(hwnd, gui::WM_SIZE, 0, pack_i16_pair(width, height)),
+            );
+        }
+        if moved {
+            gui::post_to_window(
+                hwnd,
+                Msg::new(hwnd, gui::WM_MOVE, 0, pack_i16_pair(left, top)),
+            );
+        }
+    }
+
+    let mut visibility_changed = false;
+    if flags & SWP_SHOWWINDOW != 0 {
+        visibility_changed = !gui::set_visible(hwnd, true);
+        with_backend(|backend| backend.show_window(hwnd, true));
+    } else if flags & SWP_HIDEWINDOW != 0 {
+        visibility_changed = gui::set_visible(hwnd, false);
+        with_backend(|backend| backend.show_window(hwnd, false));
+    }
+
+    if flags & SWP_NOREDRAW == 0
+        && gui::window_rect(hwnd).is_some()
+        && (moved || resized || visibility_changed || flags & SWP_FRAMECHANGED != 0)
+    {
+        // N'invalide pas une fenêtre masquée.
+        if flags & SWP_HIDEWINDOW == 0 {
+            gui::request_paint(hwnd);
+        }
+    }
+    1
+}
+
+/// Déplace/redimensionne une fenêtre (raccourci Win32 de `SetWindowPos`).
+pub unsafe extern "win64" fn move_window(
+    hwnd: usize,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    repaint: i32,
+) -> i32 {
+    set_window_pos(
+        hwnd,
+        0,
+        x,
+        y,
+        width,
+        height,
+        if repaint != 0 { 0 } else { SWP_NOREDRAW },
+    )
+}
+
 pub unsafe extern "win64" fn set_window_text_a(hwnd: usize, text: *const u8) -> i32 {
     let t = read_class_name_a(text);
     if gui::set_title(hwnd, &t) {
@@ -529,6 +637,7 @@ pub fn exports() -> crate::dlls::Exports {
         "UpdateWindow"=>fn update_window, "DestroyWindow"=>fn destroy_window,
         "IsWindow"=>fn is_window, "GetWindowRect"=>fn get_window_rect,
         "GetClientRect"=>fn get_client_rect, "SetWindowTextA"=>fn set_window_text_a,
+        "SetWindowPos"=>fn set_window_pos, "MoveWindow"=>fn move_window,
         "GetWindowTextA"=>fn get_window_text_a, "GetWindowTextLengthA"=>fn get_window_text_length_a,
         "BeginPaint"=>fn begin_paint, "EndPaint"=>fn end_paint,
         "InvalidateRect"=>fn invalidate_rect, "ValidateRect"=>fn validate_rect,

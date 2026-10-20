@@ -10,9 +10,12 @@ use winlux_testexe::*;
 
 // Compteurs partagés avec le wndproc (variables statiques).
 static mut GOT_CREATE: u32 = 0;
+static mut GOT_MOVE: u32 = 0;
 static mut GOT_SIZE: u32 = 0;
 static mut GOT_PAINT: u32 = 0;
 static mut GOT_DESTROY: u32 = 0;
+static mut LAST_MOVE: isize = 0;
+static mut LAST_SIZE: isize = 0;
 static mut MAIN_HWND: Handle = core::ptr::null_mut();
 
 unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize {
@@ -23,6 +26,12 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
         }
         WM_SIZE => {
             GOT_SIZE += 1;
+            LAST_SIZE = lparam;
+            0
+        }
+        WM_MOVE => {
+            GOT_MOVE += 1;
+            LAST_MOVE = lparam;
             0
         }
         WM_PAINT => {
@@ -75,6 +84,11 @@ pub extern "C" fn mainCRTStartup() -> ! {
     check!(!hwnd.is_null(), "CreateWindowExA");
     MAIN_HWND = hwnd;
 
+    SetLastError(0);
+    check!(SetWindowPos(core::ptr::null_mut(), core::ptr::null_mut(), 0, 0, 10, 10, 0) == 0 && GetLastError() == 1400, "SetWindowPos rejette HWND invalide");
+    SetLastError(0);
+    check!(SetWindowPos(hwnd, core::ptr::null_mut(), 0, 0, 0, 10, 0) == 0 && GetLastError() == 87, "SetWindowPos rejette taille invalide");
+
     check!(IsWindow(hwnd) != 0, "IsWindow apres creation");
 
     let mut rect: Rect = Default::default();
@@ -113,6 +127,48 @@ pub extern "C" fn mainCRTStartup() -> ! {
     check!(GOT_CREATE >= 1, "WM_CREATE recu");
     check!(GOT_SIZE >= 1, "WM_SIZE recu");
     check!(GOT_PAINT >= 1, "WM_PAINT recu");
+
+    // SetWindowPos déplace et redimensionne la fenêtre, actualise les rectangles
+    // puis publie WM_SIZE/WM_MOVE dans la file du thread.
+    let size_before = GOT_SIZE;
+    let move_before = GOT_MOVE;
+    check!(SetWindowPos(hwnd, core::ptr::null_mut(), 140, 160, 800, 520, 0) != 0, "SetWindowPos move+size");
+    check!(GetWindowRect(hwnd, &mut rect) != 0, "GetWindowRect apres SetWindowPos");
+    check!(rect.left == 140 && rect.top == 160 && rect.right == 940 && rect.bottom == 680, "rectangle apres SetWindowPos");
+    check!(GetClientRect(hwnd, &mut client) != 0 && client.right == 800 && client.bottom == 520, "client apres SetWindowPos");
+    while PeekMessageA(&mut msg, core::ptr::null_mut(), WM_MOVE, WM_SIZE, 1) > 0 {
+        DispatchMessageA(&msg);
+    }
+    check!(GOT_SIZE == size_before + 1 && LAST_SIZE as u32 == ((520u32 << 16) | 800), "WM_SIZE apres SetWindowPos");
+    check!(GOT_MOVE == move_before + 1 && LAST_MOVE as u32 == ((160u32 << 16) | 140), "WM_MOVE apres SetWindowPos");
+
+    // SWP_NOSIZE doit préserver les dimensions même si cx/cy sont différents.
+    let size_before = GOT_SIZE;
+    let move_before = GOT_MOVE;
+    check!(SetWindowPos(hwnd, core::ptr::null_mut(), 200, 220, 1, 1, SWP_NOSIZE) != 0, "SetWindowPos SWP_NOSIZE");
+    check!(GetWindowRect(hwnd, &mut rect) != 0 && rect.left == 200 && rect.top == 220 && rect.right == 1000 && rect.bottom == 740, "SWP_NOSIZE conserve la taille");
+    while PeekMessageA(&mut msg, core::ptr::null_mut(), WM_MOVE, WM_SIZE, 1) > 0 {
+        DispatchMessageA(&msg);
+    }
+    check!(GOT_MOVE == move_before + 1 && GOT_SIZE == size_before, "SWP_NOSIZE publie seulement WM_MOVE");
+
+    // SWP_NOMOVE conserve la position mais applique la nouvelle taille.
+    let size_before = GOT_SIZE;
+    let move_before = GOT_MOVE;
+    check!(SetWindowPos(hwnd, core::ptr::null_mut(), 0, 0, 900, 550, SWP_NOMOVE) != 0, "SetWindowPos SWP_NOMOVE");
+    check!(GetWindowRect(hwnd, &mut rect) != 0 && rect.left == 200 && rect.top == 220 && rect.right == 1100 && rect.bottom == 770, "SWP_NOMOVE conserve la position");
+    while PeekMessageA(&mut msg, core::ptr::null_mut(), WM_MOVE, WM_SIZE, 1) > 0 {
+        DispatchMessageA(&msg);
+    }
+    check!(GOT_SIZE == size_before + 1 && GOT_MOVE == move_before, "SWP_NOMOVE publie seulement WM_SIZE");
+
+    let move_before = GOT_MOVE;
+    check!(MoveWindow(hwnd, 210, 230, 900, 550, 0) != 0, "MoveWindow sans repaint");
+    check!(GetWindowRect(hwnd, &mut rect) != 0 && rect.left == 210 && rect.top == 230 && rect.right == 1110 && rect.bottom == 780, "MoveWindow met a jour le rectangle");
+    while PeekMessageA(&mut msg, core::ptr::null_mut(), WM_MOVE, WM_SIZE, 1) > 0 {
+        DispatchMessageA(&msg);
+    }
+    check!(GOT_MOVE == move_before + 1, "MoveWindow publie WM_MOVE");
 
     // Destruction explicite → WM_DESTROY.
     DestroyWindow(hwnd);

@@ -648,6 +648,7 @@ pub trait GuiBackend: Send {
     fn destroy_window(&mut self, _hwnd: usize) {}
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
+    fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
     fn invalidate(&mut self, _hwnd: usize) {}
     /// Joue la liste de commandes GDI d'une fenêtre (thème + contenu). Le
     /// backend X11 conserve la liste pour la rejouer à chaque Expose; headless
@@ -703,6 +704,10 @@ pub fn pump_backend() {
         b.pump()
     };
     for e in events {
+        if e.message == WM_SIZE {
+            let packed = e.lparam as u32;
+            update_window_size(e.hwnd, (packed & 0xFFFF) as i32, (packed >> 16) as i32);
+        }
         let m = Msg {
             hwnd: e.hwnd,
             message: e.message,
@@ -834,6 +839,21 @@ pub fn wnd_proc_of(hwnd: usize) -> Option<usize> {
 
 pub fn window_rect(hwnd: usize) -> Option<Rect> {
     lock(windows()).get(&hwnd).map(|w| w.rect)
+}
+
+/// Remplace le rectangle logique et renvoie son ancienne valeur.
+pub fn set_window_rect(hwnd: usize, rect: Rect) -> Option<Rect> {
+    let mut map = lock(windows());
+    let window = map.get_mut(&hwnd)?;
+    Some(std::mem::replace(&mut window.rect, rect))
+}
+
+/// Met à jour la taille client après un `ConfigureNotify` X11 externe.
+fn update_window_size(hwnd: usize, width: i32, height: i32) {
+    if let Some(window) = lock(windows()).get_mut(&hwnd) {
+        window.rect.right = window.rect.left.saturating_add(width);
+        window.rect.bottom = window.rect.top.saturating_add(height);
+    }
 }
 
 pub fn window_client_rect(hwnd: usize) -> Option<Rect> {

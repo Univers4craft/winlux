@@ -108,7 +108,11 @@ les événements X en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`�
 `WM_KEYUP`, `WM_DELETE_WINDOW`→`WM_CLOSE`). `TranslateMessage` publie les
 `WM_CHAR` correspondants pour les caractères ASCII/Latin-1 et les caractères
 BMP Unicode pris en charge ; la composition IME, les caractères hors BMP et
-les API d’état/focus clavier restent à implémenter.
+les API d’état/focus clavier restent à implémenter. `SetWindowPos` et
+`MoveWindow` déplacent/redimensionnent les fenêtres, actualisent les rectangles
+Win32 et publient `WM_MOVE`/`WM_SIZE` ; les changements de taille externes via
+`ConfigureNotify` sont également reflétés. Le z-order et les notifications
+`WINDOWPOS` avancées ne sont pas encore gérés.
 
 La couche de dessin GDI est amorcée : les primitives invitées n’écrivent pas
 directement dans la fenêtre, elles empilent des commandes (`FillRect`,

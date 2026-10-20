@@ -7,8 +7,8 @@ use crate::dlls::gui::theme;
 use std::collections::HashMap;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    Atom, AtomEnum, ChangeGCAux, ConfigureNotifyEvent, ConnectionExt as _, CreateGCAux,
-    CreateWindowAux, Gcontext, Window, WindowClass,
+    Atom, AtomEnum, ChangeGCAux, ConfigureNotifyEvent, ConfigureWindowAux, ConnectionExt as _,
+    CreateGCAux, CreateWindowAux, Gcontext, Window, WindowClass,
 };
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
@@ -690,6 +690,28 @@ impl gui::GuiBackend for X11Backend {
             );
             let _ = self.conn.flush();
         }
+    }
+
+    fn set_window_rect(&mut self, hwnd: usize, rect: Rect) {
+        let x = rect.left.clamp(i16::MIN as i32, i16::MAX as i32);
+        let y = rect.top.clamp(i16::MIN as i32, i16::MAX as i32);
+        let width = rect.width().max(1).min(u16::MAX as i32) as u16;
+        let height = rect.height().max(1).min(u16::MAX as i32) as u16;
+        let window = match self.windows.get_mut(&hwnd) {
+            Some(w) => {
+                w.width = width;
+                w.height = height;
+                w.window
+            }
+            None => return,
+        };
+        let aux = ConfigureWindowAux::new()
+            .x(x)
+            .y(y)
+            .width(width as u32)
+            .height(height as u32);
+        let _ = self.conn.configure_window(window, &aux);
+        let _ = self.conn.flush();
     }
 
     fn invalidate(&mut self, hwnd: usize) {

@@ -10,6 +10,8 @@ use winlux_testexe::*;
 
 static mut GOT_PAINT: u32 = 0;
 static mut GOT_DESTROY: u32 = 0;
+static mut GOT_SIZE: u32 = 0;
+static mut CLIENT_SIZE_MATCH: u32 = 0;
 static mut GOT_CHAR: u32 = 0;
 static mut LAST_CHAR: usize = 0;
 
@@ -84,6 +86,16 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             GOT_DESTROY += 1;
             0
         }
+        WM_SIZE => {
+            GOT_SIZE += 1;
+            let mut client: Rect = core::mem::zeroed();
+            let expected_w = (lparam as u32 & 0xFFFF) as i32;
+            let expected_h = ((lparam as u32 >> 16) & 0xFFFF) as i32;
+            CLIENT_SIZE_MATCH = (GetClientRect(hwnd, &mut client) != 0
+                && client.right == expected_w
+                && client.bottom == expected_h) as u32;
+            0
+        }
         WM_CHAR => {
             GOT_CHAR += 1;
             LAST_CHAR = wparam;
@@ -151,6 +163,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
         }
 
         check!(GOT_PAINT >= 1, "WM_PAINT via PeekMessage");
+        if GOT_SIZE > 1 {
+            check!(CLIENT_SIZE_MATCH != 0, "GetClientRect synchronise avec ConfigureNotify");
+        }
         if GOT_CHAR > 0 {
             check!(LAST_CHAR != 0, "WM_CHAR traduit depuis le clavier");
         }
