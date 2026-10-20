@@ -74,6 +74,35 @@ pub mod theme {
     pub const GRADIENT_TOP: u32 = 0x00D8_4BF0;  // #F04BD8
     pub const GRADIENT_BOTTOM: u32 = 0x00C8_6B4B; // #4B6BC8 -> bleu
 
+    /// Sous-ensemble de la palette `GetSysColor`, harmonisé avec le thème.
+    pub fn system_color(index: i32) -> Option<u32> {
+        Some(match index {
+            0 => 0x00C0_C0C0,             // COLOR_SCROLLBAR
+            1 => BG_DEEP,                 // COLOR_BACKGROUND / DESKTOP
+            2 => GRADIENT_TOP,            // COLOR_ACTIVECAPTION
+            3 => BG_ELEVATED,             // COLOR_INACTIVECAPTION
+            4 => BG_SURFACE,              // COLOR_MENU
+            5 => BG_SURFACE,              // COLOR_WINDOW
+            6 => BG_DEEP,                 // COLOR_WINDOWFRAME
+            7 | 8 | 9 | 14 | 18 | 23 => TEXT,
+            10 => ACCENT,                 // COLOR_ACTIVEBORDER
+            11 => BG_ELEVATED,            // COLOR_INACTIVEBORDER
+            12 => BG_DEEP,                // COLOR_APPWORKSPACE
+            13 => ACCENT,                 // COLOR_HIGHLIGHT
+            15 => BG_ELEVATED,            // COLOR_BTNFACE
+            16 | 21 => BG_DEEP,           // COLOR_BTNSHADOW / 3DDKSHADOW
+            17 | 19 => TEXT_DIM,          // COLOR_GRAYTEXT / INACTIVECAPTIONTEXT
+            20 | 22 => 0x00FF_FFFF,       // COLOR_BTNHIGHLIGHT / 3DLIGHT
+            24 => BG_ELEVATED,            // COLOR_INFOBK
+            26 => ACCENT_VIOLET,          // COLOR_HOTLIGHT
+            27 => GRADIENT_BOTTOM,        // COLOR_GRADIENTACTIVECAPTION
+            28 => BG_ELEVATED,            // COLOR_GRADIENTINACTIVECAPTION
+            29 => HOVER,                  // COLOR_MENUHILIGHT
+            30 => BG_SURFACE,             // COLOR_MENUBAR
+            _ => return None,
+        })
+    }
+
     /// Convertit un COLORREF Win32 (0x00BBGGRR) en entier RGB (0x00RRGGBB).
     pub fn colorref_to_rgb(c: u32) -> u32 {
         let r = c & 0xFF;
@@ -604,9 +633,35 @@ pub enum DrawCmd {
     /// Texte ANSI dont `x,y` désignent le coin haut-gauche. `bk` est la couleur
     /// de fond posée derrière les glyphes (`SetBkColor`), ou `None` quand le mode
     /// de fond est transparent (`SetBkMode(TRANSPARENT)`).
-    Text { x: i32, y: i32, text: String, color: u32, bk: Option<u32> },
+    Text { x: i32, y: i32, text: String, color: u32, bk: Option<u32>, font: FontSpec },
     /// Ellipse inscrite dans le rectangle.
     Ellipse { rect: Rect, color: u32 },
+}
+
+/// Sous-ensemble des paramètres de CreateFontA/W utile au rendu X11.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct FontSpec {
+    pub height: i32,
+    pub width: i32,
+    pub weight: i32,
+    pub italic: bool,
+    pub underline: bool,
+    pub strikeout: bool,
+    pub face: String,
+}
+
+impl Default for FontSpec {
+    fn default() -> Self {
+        Self {
+            height: 13,
+            width: 0,
+            weight: 400,
+            italic: false,
+            underline: false,
+            strikeout: false,
+            face: "fixed".to_string(),
+        }
+    }
 }
 
 /// État d'un `HDC` invité. Les HDC de fenêtre pointent sur la table des HWND ;
@@ -620,13 +675,16 @@ pub struct DcState {
     pub bk_mode: u32,
     pub brush: usize,
     pub pen: usize,
+    pub font: usize,
 }
 
 /// Objet GDI créé par l'invité (`CreateSolidBrush`, `CreatePen`).
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub enum GdiObject {
     Brush(u32),
+    SystemBrush(u32),
     Pen { width: u16, color: u32 },
+    Font(FontSpec),
 }
 
 fn dcs() -> &'static Mutex<HashMap<usize, DcState>> {
@@ -637,6 +695,11 @@ fn dcs() -> &'static Mutex<HashMap<usize, DcState>> {
 fn objects() -> &'static Mutex<HashMap<usize, GdiObject>> {
     static O: OnceLock<Mutex<HashMap<usize, GdiObject>>> = OnceLock::new();
     O.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn system_brushes() -> &'static Mutex<HashMap<usize, usize>> {
+    static B: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
+    B.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
 /// Compteur d'handles invités : HDC à partir de `0x0011_0000`, objets GDI à
@@ -664,6 +727,7 @@ pub fn create_dc(hwnd: usize) -> usize {
         bk_mode: 2,
         brush: 5, // BLACK_BRUSH stock
         pen: 8,   // BLACK_PEN stock
+        font: 14, // SYSTEM_FONT stock
     });
     hdc
 }
@@ -722,6 +786,11 @@ pub fn dc_brush(hdc: usize) -> usize {
     with_dc(hdc, |d| d.brush, 0)
 }
 
+/// Handle de la police sélectionnée dans le DC.
+pub fn dc_font(hdc: usize) -> usize {
+    with_dc(hdc, |d| d.font, 0)
+}
+
 /// Couleur de fond courante d'un DC (`SetBkColor`).
 pub fn dc_bk_color(hdc: usize) -> u32 {
     with_dc(hdc, |d| d.bk_color, 0x00FF_FFFF)
@@ -736,10 +805,17 @@ pub fn dc_bk_mode(hdc: usize) -> u32 {
 pub fn select_object(hdc: usize, obj: usize) -> usize {
     let kind_pen = is_stock_pen(obj)
         || matches!(lock(objects()).get(&obj), Some(GdiObject::Pen { .. }));
+    let kind_font = !kind_pen
+        && (is_stock_font(obj)
+            || matches!(lock(objects()).get(&obj), Some(GdiObject::Font(_))));
     with_dc(hdc, |d| {
         if kind_pen {
             let old = d.pen;
             d.pen = obj;
+            old
+        } else if kind_font {
+            let old = d.font;
+            d.font = obj;
             old
         } else {
             let old = d.brush;
@@ -755,10 +831,27 @@ fn is_stock_pen(handle: usize) -> bool {
     matches!(handle, 7 | 8 | 9)
 }
 
+fn is_stock_font(handle: usize) -> bool {
+    matches!(handle, 11 | 12 | 13 | 14 | 15 | 17 | 18)
+}
+
 pub fn create_solid_brush(color: u32) -> usize {
     let h = next_handle(0x0021_0000);
     lock(objects()).insert(h, GdiObject::Brush(color));
     h
+}
+
+/// Handle stable et non supprimable du pinceau correspondant à une couleur
+/// système Windows.
+pub fn system_color_brush(index: usize, color: u32) -> usize {
+    let mut cache = lock(system_brushes());
+    if let Some(&handle) = cache.get(&index) {
+        return handle;
+    }
+    let handle = next_handle(0x0021_0000);
+    lock(objects()).insert(handle, GdiObject::SystemBrush(color));
+    cache.insert(index, handle);
+    handle
 }
 
 pub fn create_pen(style: u32, width: i32, color: u32) -> usize {
@@ -769,19 +862,42 @@ pub fn create_pen(style: u32, width: i32, color: u32) -> usize {
     h
 }
 
+pub fn create_font(spec: FontSpec) -> usize {
+    let handle = next_handle(0x0021_0000);
+    lock(objects()).insert(handle, GdiObject::Font(spec));
+    handle
+}
+
+/// Description d'une police créée, ou police système par défaut pour un objet
+/// stock. `None` indique un handle non-police.
+pub fn font_spec(handle: usize) -> Option<FontSpec> {
+    match lock(objects()).get(&handle).cloned() {
+        Some(GdiObject::Font(spec)) => Some(spec),
+        Some(_) => None,
+        None if is_stock_font(handle) => Some(FontSpec::default()),
+        None => None,
+    }
+}
+
 /// Supprime un objet créé par l'invité. Les objets « stock » ne sont pas
 /// réellement supprimés (Win32 l'interdit) mais on répond succès : beaucoup de
 /// programmes appellent `DeleteObject` sans distinguer les deux cas.
 pub fn delete_object(obj: usize) -> bool {
-    lock(objects()).remove(&obj).is_some() || (1..=9).contains(&obj)
+    let mut map = lock(objects());
+    match map.get(&obj) {
+        Some(GdiObject::SystemBrush(_)) => false,
+        Some(_) => map.remove(&obj).is_some(),
+        None => (1..=9).contains(&obj),
+    }
 }
 
 /// Couleur d'un pinceau/plume, `None` pour les objets « null » du stock.
 pub fn object_color(handle: usize) -> Option<u32> {
-    if let Some(o) = lock(objects()).get(&handle).copied() {
+    if let Some(o) = lock(objects()).get(&handle).cloned() {
         return match o {
-            GdiObject::Brush(c) => Some(c),
+            GdiObject::Brush(c) | GdiObject::SystemBrush(c) => Some(c),
             GdiObject::Pen { color, .. } => Some(color),
+            GdiObject::Font(_) => None,
         };
     }
     // Objets du stock (`GetStockObject` renvoie `index + 1`) : pinceaux puis
@@ -802,7 +918,7 @@ pub fn object_color(handle: usize) -> Option<u32> {
 
 /// Largeur d'une plume sélectionnée (les plumes simples font 1 px).
 pub fn object_pen_width(handle: usize) -> u16 {
-    match lock(objects()).get(&handle).copied() {
+    match lock(objects()).get(&handle).cloned() {
         Some(GdiObject::Pen { width, .. }) => width,
         _ => 1,
     }
@@ -1379,6 +1495,29 @@ mod tests {
     }
 
     #[test]
+    fn police_gdi_est_creee_stockee_et_selectionnee_par_le_dc() {
+        let spec = FontSpec {
+            height: 18,
+            width: 0,
+            weight: 700,
+            italic: true,
+            underline: false,
+            strikeout: false,
+            face: "fixed".to_string(),
+        };
+        let font = create_font(spec.clone());
+        let dc = create_dc(0);
+        assert_ne!(font, 0);
+        assert_eq!(select_object(dc, font), 14); // SYSTEM_FONT stock
+        assert_eq!(dc_font(dc), font);
+        assert_eq!(font_spec(font), Some(spec));
+        assert_eq!(select_object(dc, 14), font);
+        assert!(delete_object(font));
+        assert_eq!(font_spec(font), None);
+        free_dc(dc);
+    }
+
+    #[test]
     fn les_objets_stock_ont_les_couleurs_win32() {
         // GetStockObject renvoie index + 1 (convention Win32) : BLACK_BRUSH est
         // l'index 4, NULL_BRUSH l'index 5, BLACK_PEN l'index 7.
@@ -1387,6 +1526,17 @@ mod tests {
         assert_eq!(object_color(stock(0)), Some(0x00FF_FFFF)); // WHITE_BRUSH
         assert_eq!(object_color(stock(5)), None); // NULL_BRUSH
         assert_eq!(object_pen_width(stock(7)), 1); // BLACK_PEN
+    }
+
+    #[test]
+    fn pinceau_de_couleur_systeme_est_stable_et_non_supprimable() {
+        let color = theme::system_color(29).expect("COLOR_MENUHILIGHT");
+        let first = system_color_brush(29, color);
+        let second = system_color_brush(29, color);
+        assert_eq!(first, second);
+        assert_eq!(object_color(first), Some(color));
+        assert!(!delete_object(first));
+        assert_eq!(object_color(first), Some(color));
     }
 
     #[test]
@@ -1426,6 +1576,7 @@ mod tests {
             text: "salut".to_string(),
             color: 0x00FF_FFFF,
             bk: None,
+            font: FontSpec::default(),
         }));
         assert_eq!(take_pending(hwnd).len(), 3);
         // La prise vide la file : le prochain `EndPaint` ne rejoue rien.

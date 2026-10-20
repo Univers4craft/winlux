@@ -2,7 +2,7 @@
 //! ses événements en messages Win32. Le fond utilise le thème « blob »
 //! violet-bleu (dégradé vertical + accent) défini dans `gui::theme`.
 
-use crate::dlls::gui::{self, DrawCmd, PendingEvent, Rect};
+use crate::dlls::gui::{self, DrawCmd, FontSpec, PendingEvent, Rect};
 use crate::dlls::gui::theme;
 use std::collections::HashMap;
 use x11rb::connection::Connection;
@@ -24,6 +24,50 @@ struct XWin {
     height: u16,
 }
 
+#[derive(Clone, Copy)]
+struct XFont {
+    id: u32,
+    ascent: i16,
+    char_width: i16,
+}
+
+fn font_candidates(spec: &FontSpec) -> Vec<Vec<u8>> {
+    let height = if spec.height == 0 { 13 } else { spec.height.saturating_abs().max(1) };
+    let size = if height <= 8 {
+        b"5x8".as_slice()
+    } else if height <= 10 {
+        b"6x10".as_slice()
+    } else if height <= 12 {
+        b"6x12".as_slice()
+    } else if height <= 13 {
+        b"6x13".as_slice()
+    } else if height <= 14 {
+        b"7x14".as_slice()
+    } else if height <= 15 {
+        b"9x15".as_slice()
+    } else {
+        b"10x20".as_slice()
+    };
+    let mut names = Vec::new();
+    if !spec.face.is_empty() && !spec.face.eq_ignore_ascii_case("fixed") {
+        names.push(spec.face.as_bytes().to_vec());
+    }
+    if spec.weight >= 600 {
+        let mut bold = size.to_vec();
+        bold.extend_from_slice(b"bold");
+        names.push(bold);
+    }
+    names.push(size.to_vec());
+    names.extend([b"fixed".to_vec(), b"6x13".to_vec()]);
+    let mut unique = Vec::new();
+    for name in names {
+        if !unique.contains(&name) {
+            unique.push(name);
+        }
+    }
+    unique
+}
+
 pub struct X11Backend {
     conn: RustConnection,
     screen: usize,
@@ -40,8 +84,8 @@ pub struct X11Backend {
     deferred_events: Vec<PendingEvent>,
     /// Dernière liste de commandes GDI par fenêtre, rejouée à chaque Expose.
     content: HashMap<usize, Vec<DrawCmd>>,
-    /// Police « core » utilisée pour le texte (ouverte à la première demande).
-    font: Option<u32>,
+    /// Polices « core » ouvertes à la demande, indexées par les attributs GDI.
+    fonts: HashMap<FontSpec, XFont>,
     /// Table de correspondance keycode X11 → keysyms (lue à la demande).
     keymap: HashMap<u8, Vec<u32>>,
 }
@@ -66,7 +110,7 @@ impl X11Backend {
             pending: Vec::new(),
             deferred_events: Vec::new(),
             content: HashMap::new(),
-            font: None,
+            fonts: HashMap::new(),
             keymap: HashMap::new(),
         })
     }
@@ -150,19 +194,41 @@ impl X11Backend {
         let _ = self.conn.change_gc(w.gc, &ChangeGCAux::new().foreground(pixel));
     }
 
-    /// Ouvre (une seule fois) la police « fixed » du serveur X.
-    fn ensure_font(&mut self) -> Option<u32> {
-        if let Some(f) = self.font {
-            return Some(f);
+    /// Ouvre une police core de taille voisine; replie vers `fixed` si le
+    /// serveur ne fournit pas l'alias demandé.
+    fn ensure_font(&mut self, spec: &FontSpec) -> Option<XFont> {
+        if let Some(font) = self.fonts.get(spec) {
+            return Some(*font);
         }
-        let fid = self.conn.generate_id().ok()?;
-        // « fixed » est un alias quasi universel; sinon on tente 6x13.
-        for name in [&b"fixed"[..], &b"6x13"[..]] {
-            if let Ok(cookie) = self.conn.open_font(fid, name) {
-                cookie.check().ok()?;
-                self.font = Some(fid);
-                return Some(fid);
+        for name in font_candidates(spec) {
+            let id = self.conn.generate_id().ok()?;
+            let cookie = match self.conn.open_font(id, &name) {
+                Ok(cookie) => cookie,
+                Err(_) => continue,
+            };
+            if cookie.check().is_err() {
+                continue;
             }
+            let metrics = match self.conn.query_font(id) {
+                Ok(cookie) => match cookie.reply() {
+                    Ok(metrics) => metrics,
+                    Err(_) => {
+                        let _ = self.conn.close_font(id);
+                        continue;
+                    }
+                },
+                Err(_) => {
+                    let _ = self.conn.close_font(id);
+                    continue;
+                }
+            };
+            let font = XFont {
+                id,
+                ascent: metrics.font_ascent.max(1),
+                char_width: metrics.max_bounds.character_width.max(1),
+            };
+            self.fonts.insert(spec.clone(), font);
+            return Some(font);
         }
         None
     }
@@ -217,13 +283,22 @@ impl X11Backend {
     /// de fond est opaque, ou `None` pour un fond transparent : seul le fond
     /// décide du primitive X11 employée (`image_text8` repeint le fond,
     /// `poly_text8` ne pose que les glyphes).
-    fn paint_text(&mut self, w: &XWin, x: i32, y: i32, text: &str, color: u32, bk: Option<u32>) {
-        let font = match self.ensure_font() {
+    fn paint_text(
+        &mut self,
+        w: &XWin,
+        x: i32,
+        y: i32,
+        text: &str,
+        color: u32,
+        bk: Option<u32>,
+        spec: &FontSpec,
+    ) {
+        let font = match self.ensure_font(spec) {
             Some(f) => f,
             None => return,
         };
         let pixel = self.alloc_color(color);
-        let mut aux = ChangeGCAux::new().foreground(pixel).font(font);
+        let mut aux = ChangeGCAux::new().foreground(pixel).font(font.id);
         let opaque = match bk {
             Some(bg) => {
                 aux = aux.background(self.alloc_color(bg));
@@ -232,7 +307,7 @@ impl X11Backend {
             None => false,
         };
         let _ = self.conn.change_gc(w.gc, &aux);
-        // `y` est la ligne de base ; la police `fixed` monte d'environ 11 px.
+        // `y` désigne le haut logique ; l'ascendant du serveur donne la ligne de base.
         let mut bytes = text.as_bytes();
         if bytes.len() > 255 {
             bytes = &bytes[..255];
@@ -241,7 +316,7 @@ impl X11Backend {
             return;
         }
         let px = x.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        let py = (y + 11).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let py = (y + font.ascent as i32).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
         if opaque {
             let _ = self.conn.image_text8(w.window, w.gc, px, py, bytes);
         } else {
@@ -257,6 +332,28 @@ impl X11Backend {
             }
             let _ = self.conn.poly_text8(w.window, w.gc, px, py, &item);
         }
+        if spec.underline || spec.strikeout {
+            let width = (bytes.len() as i32 * font.char_width as i32)
+                .clamp(1, u16::MAX as i32) as u16;
+            let mut lines = Vec::new();
+            if spec.underline {
+                lines.push(x11rb::protocol::xproto::Rectangle {
+                    x: px,
+                    y: py.saturating_add(1),
+                    width,
+                    height: 1,
+                });
+            }
+            if spec.strikeout {
+                lines.push(x11rb::protocol::xproto::Rectangle {
+                    x: px,
+                    y: py.saturating_sub((font.ascent / 2).max(1)),
+                    width,
+                    height: 1,
+                });
+            }
+            let _ = self.conn.poly_fill_rectangle(w.window, w.gc, &lines);
+        }
     }
 
     /// Rejoue la liste de commandes GDI d'une fenêtre.
@@ -268,8 +365,8 @@ impl X11Backend {
                     self.paint_frame(w, rect, *color, *width)
                 }
                 DrawCmd::Ellipse { rect, color } => self.paint_ellipse(w, rect, *color),
-                DrawCmd::Text { x, y, text, color, bk } => {
-                    self.paint_text(w, *x, *y, text, *color, *bk)
+                DrawCmd::Text { x, y, text, color, bk, font } => {
+                    self.paint_text(w, *x, *y, text, *color, *bk, font)
                 }
             }
         }
@@ -797,5 +894,14 @@ impl gui::GuiBackend for X11Backend {
             let _ = self.conn.clear_area(false, w.window, 0, 0, 0, 0);
             let _ = self.conn.flush();
         }
+    }
+}
+
+impl Drop for X11Backend {
+    fn drop(&mut self) {
+        for font in self.fonts.values() {
+            let _ = self.conn.close_font(font.id);
+        }
+        let _ = self.conn.flush();
     }
 }

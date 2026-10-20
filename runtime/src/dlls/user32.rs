@@ -686,6 +686,15 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
     }
 }
 
+pub extern "win64" fn get_sys_color(index: i32) -> u32 {
+    gui::theme::system_color(index).unwrap_or(0)
+}
+
+pub extern "win64" fn get_sys_color_brush(index: i32) -> usize {
+    let Some(color) = gui::theme::system_color(index) else { return 0 };
+    gui::system_color_brush(index as usize, color)
+}
+
 pub unsafe extern "win64" fn message_box_a(_hwnd: usize, text: *const u8, caption: *const u8, _typ: u32) -> i32 {
     eprintln!("winlux: MessageBoxA [{}] {}", crate::dlls::cstr(caption), crate::dlls::cstr(text));
     1
@@ -720,6 +729,7 @@ pub fn exports() -> crate::dlls::Exports {
         "FillRect"=>fn fill_rect, "FrameRect"=>fn frame_rect,
         "GetDesktopWindow"=>fn get_desktop_window, "GetForegroundWindow"=>fn get_foreground_window,
         "GetSystemMetrics"=>fn get_system_metrics,
+        "GetSysColor"=>fn get_sys_color, "GetSysColorBrush"=>fn get_sys_color_brush,
         "MessageBoxA"=>fn message_box_a, "MessageBoxW"=>fn message_box_w,
     }
 }

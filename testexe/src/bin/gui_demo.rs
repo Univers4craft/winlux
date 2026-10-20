@@ -41,11 +41,14 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     let filled = FillRect(hdc, &panel, surface);
     let framed = FrameRect(hdc, &panel, accent);
 
-    // Titre en clair : fond transparent (SetBkMode(TRANSPARENT) = 1), police du
-    // serveur X. Sans ça, la couleur de fond du DC encadrerait les glyphes.
+    // Titre en clair : fond transparent et police GDI de taille 16 (repli sur
+    // une police core disponible côté serveur X).
     let previous = SetTextColor(hdc, 0x00FF_FFFF);
     let previous_bk = SetBkMode(hdc, 1);
+    let font = CreateFontA(16, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
+    let old_font = SelectObject(hdc, font);
     let titled = TextOutA(hdc, 48, 56, c"Winlux GDI".as_ptr(), -1);
+    SelectObject(hdc, old_font);
 
     // Second libellé en mode opaque (2) : le fond du DC est peint derrière les
     // glyphes ; on le choisit de la couleur du panneau pour rester cohérent.
@@ -59,6 +62,8 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     let bar1 = Rect { left: 48, top: 88, right: 300, bottom: 106 };
     let bar2 = Rect { left: 48, top: 112, right: 220, bottom: 130 };
     let bars_filled = FillRect(hdc, &bar1, bars) & FillRect(hdc, &bar2, bars);
+    SelectObject(hdc, bars);
+    let pat_blt = PatBlt(hdc, 48, 136, 120, 8, 0x00F0_0021); // PATCOPY
 
     // Accent « blob » : ellipse pleine avec le pinceau sélectionné.
     SelectObject(hdc, accent);
@@ -70,17 +75,20 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
         check!(framed == 1, "FrameRect panneau");
         check!(previous == 0, "SetTextColor ancienne valeur");
         check!(previous_bk == 2, "SetBkMode ancien mode opague");
+        check!(!font.is_null() && !old_font.is_null(), "CreateFontA/SelectObject");
         check!(titled == 1, "TextOutA titre");
         check!(previous_mode == 1, "SetBkMode retour transparent");
         check!(previous_bgc == 0x00FF_FFFF, "SetBkColor ancienne valeur");
         check!(opaque_text == 1, "TextOutA fond opaque");
         check!(bars_filled == 1, "FillRect barres accent");
+        check!(pat_blt == 1, "PatBlt PATCOPY");
         check!(blob == 1, "Ellipse blob");
     }
 
     DeleteObject(surface);
     DeleteObject(accent);
     DeleteObject(bars);
+    DeleteObject(font);
     EndPaint(hwnd, &ps);
 }
 

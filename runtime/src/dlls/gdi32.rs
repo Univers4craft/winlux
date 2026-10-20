@@ -2,7 +2,7 @@
 //! alimentent la liste de commandes du noyau GUI. Le backend (X11) rejoue cette
 //! liste à chaque cycle de peinture.
 
-use crate::dlls::gui::{self, DrawCmd, Rect};
+use crate::dlls::gui::{self, DrawCmd, FontSpec, Rect};
 
 pub extern "win64" fn get_stock_object(index: i32) -> usize {
     if index >= 0 { (index as usize) + 1 } else { 0 }
@@ -14,6 +14,66 @@ pub extern "win64" fn create_solid_brush(color: u32) -> usize {
 
 pub extern "win64" fn create_pen(style: u32, width: i32, color: u32) -> usize {
     gui::create_pen(style, width, color)
+}
+
+fn create_font_common(
+    height: i32,
+    width: i32,
+    weight: i32,
+    italic: u32,
+    underline: u32,
+    strikeout: u32,
+    face: String,
+) -> usize {
+    gui::create_font(FontSpec {
+        height,
+        width,
+        weight,
+        italic: italic != 0,
+        underline: underline != 0,
+        strikeout: strikeout != 0,
+        face: if face.is_empty() { "fixed".to_string() } else { face },
+    })
+}
+
+pub unsafe extern "win64" fn create_font_a(
+    height: i32,
+    width: i32,
+    _escapement: i32,
+    _orientation: i32,
+    weight: i32,
+    italic: u32,
+    underline: u32,
+    strikeout: u32,
+    _charset: u32,
+    _out_precision: u32,
+    _clip_precision: u32,
+    _quality: u32,
+    _pitch_and_family: u32,
+    face: *const u8,
+) -> usize {
+    let face = if face.is_null() { String::new() } else { crate::dlls::cstr(face) };
+    create_font_common(height, width, weight, italic, underline, strikeout, face)
+}
+
+pub unsafe extern "win64" fn create_font_w(
+    height: i32,
+    width: i32,
+    _escapement: i32,
+    _orientation: i32,
+    weight: i32,
+    italic: u32,
+    underline: u32,
+    strikeout: u32,
+    _charset: u32,
+    _out_precision: u32,
+    _clip_precision: u32,
+    _quality: u32,
+    _pitch_and_family: u32,
+    face: *const u16,
+) -> usize {
+    let face = if face.is_null() { String::new() } else { crate::dlls::wstr(face) };
+    create_font_common(height, width, weight, italic, underline, strikeout, face)
 }
 
 pub extern "win64" fn select_object(hdc: usize, obj: usize) -> usize {
@@ -34,6 +94,38 @@ pub extern "win64" fn set_bk_color(hdc: usize, color: u32) -> u32 {
 
 pub extern "win64" fn set_bk_mode(hdc: usize, mode: u32) -> u32 {
     gui::set_dc_bk_mode(hdc, mode)
+}
+
+/// Remplit un rectangle par le pinceau courant ou une couleur constante.
+pub unsafe extern "win64" fn pat_blt(
+    hdc: usize,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    rop: u32,
+) -> i32 {
+    if gui::dc_window(hdc).is_none() {
+        crate::process::set_last_error(1400); // ERROR_INVALID_HANDLE
+        return 0;
+    }
+    if width <= 0 || height <= 0 {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    let color = match rop {
+        0x00F0_0021 => gui::object_color(gui::dc_brush(hdc)), // PATCOPY
+        0x0000_0042 => Some(0x0000_0000),                    // BLACKNESS
+        0x00FF_0062 => Some(0x00FF_FFFF),                    // WHITENESS
+        _ => {
+            crate::process::set_last_error(87);
+            return 0;
+        }
+    };
+    if let Some(color) = color {
+        gui::record(hdc, DrawCmd::FillRect { rect: Rect::from_size(x, y, width, height), color });
+    }
+    1
 }
 
 pub extern "win64" fn create_compatible_dc(_dc: usize) -> usize {
@@ -83,7 +175,8 @@ pub unsafe extern "win64" fn text_out_a(hdc: usize, x: i32, y: i32, text: *const
     } else {
         Some(gui::dc_bk_color(hdc))
     };
-    gui::record(hdc, DrawCmd::Text { x, y, text: s, color, bk });
+    let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    gui::record(hdc, DrawCmd::Text { x, y, text: s, color, bk, font });
     1
 }
 
@@ -140,11 +233,13 @@ pub fn exports() -> crate::dlls::Exports {
         "GetStockObject"=>fn get_stock_object,
         "CreateSolidBrush"=>fn create_solid_brush,
         "CreatePen"=>fn create_pen,
+        "CreateFontA"=>fn create_font_a, "CreateFontW"=>fn create_font_w,
         "SelectObject"=>fn select_object,
         "DeleteObject"=>fn delete_object,
         "SetTextColor"=>fn set_text_color,
         "SetBkColor"=>fn set_bk_color,
         "SetBkMode"=>fn set_bk_mode,
+        "PatBlt"=>fn pat_blt,
         "CreateCompatibleDC"=>fn create_compatible_dc,
         "DeleteDC"=>fn delete_dc,
         "GetDeviceCaps"=>fn get_device_caps,

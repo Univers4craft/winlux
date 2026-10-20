@@ -126,11 +126,14 @@ directement dans la fenêtre, elles empilent des commandes (`FillRect`,
 chaque `Expose` : le contenu survit donc aux rafraîchissements et aux
 redimensionnements. Sont couverts `CreateSolidBrush`, `CreatePen`,
 `SelectObject`, `DeleteObject`, `GetStockObject` (pinceaux/plumes standard),
+`GetSysColor`/`GetSysColorBrush` pour le sous-ensemble de couleurs du thème,
 `SetTextColor`, `SetBkColor`, `SetBkMode` (texte opaque ou transparent),
-`TextOutA`, `Rectangle`, `Ellipse`, `FillRect`, `FrameRect`, `GetDC` et
-`ReleaseDC`. Le texte est rendu par la police « core » du serveur X. Manquent
-encore les polices GDI, les bitmaps/`BitBlt`, les régions, les couleurs système
-et le double tampon. L’association `.desktop` et binfmt est préparée, mais n’a pas été
+`TextOutA`, `Rectangle`, `Ellipse`, `FillRect`, `FrameRect`, `PatBlt` (PATCOPY,
+BLACKNESS et WHITENESS), `GetDC` et `ReleaseDC`. `CreateFontA/W` choisit une
+police core X approximative selon la taille; la famille et plusieurs attributs
+LOGFONT ne sont pas fidèlement rendus. Manquent encore les bitmaps/
+`BitBlt`/`StretchBlt`, les autres ROP, les régions et le double tampon.
+L’association `.desktop` et binfmt est préparée, mais n’a pas été
 installée ni validée sur une session de bureau réelle. Le script ISO requiert
 encore un staging Linux bootable.
 

@@ -120,6 +120,16 @@ pub extern "C" fn mainCRTStartup() -> ! {
     check!(PeekMessageA(&mut key_msg, core::ptr::null_mut(), WM_KEYUP, WM_KEYUP, 1) > 0, "PeekMessage relâchement avec retrait");
     check!(GetKeyState(VK_A) as u16 & 0x8000 == 0, "GetKeyState bit relâché");
 
+    check!(GetSysColor(5) == 0x003A_2555, "GetSysColor COLOR_WINDOW");
+    check!(GetSysColor(-1) == 0, "GetSysColor index inconnu");
+    let sys_brush = GetSysColorBrush(5);
+    check!(!sys_brush.is_null() && sys_brush == GetSysColorBrush(5), "GetSysColorBrush stable");
+    let sys_hdc = GetDC(hwnd);
+    let sys_rect = Rect { left: 0, top: 0, right: 2, bottom: 2 };
+    check!(!sys_hdc.is_null() && FillRect(sys_hdc, &sys_rect, sys_brush) == 1, "FillRect avec pinceau système");
+    check!(DeleteObject(sys_brush) == 0, "DeleteObject refuse le pinceau système");
+    ReleaseDC(hwnd, sys_hdc);
+
     check!(IsWindow(hwnd) != 0, "IsWindow apres creation");
 
     let mut rect: Rect = Default::default();
