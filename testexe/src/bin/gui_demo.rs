@@ -64,6 +64,8 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     let bars_filled = FillRect(hdc, &bar1, bars) & FillRect(hdc, &bar2, bars);
     SelectObject(hdc, bars);
     let pat_blt = PatBlt(hdc, 48, 136, 120, 8, 0x00F0_0021); // PATCOPY
+    let bit_blt = BitBlt(hdc, 350, 24, 120, 70, hdc, 24, 24, 0x00CC_0020); // SRCCOPY
+    let stretch_blt = StretchBlt(hdc, 350, 112, 120, 36, hdc, 48, 88, 252, 18, 0x00CC_0020);
 
     // Accent « blob » : ellipse pleine avec le pinceau sélectionné.
     SelectObject(hdc, accent);
@@ -82,6 +84,8 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
         check!(opaque_text == 1, "TextOutA fond opaque");
         check!(bars_filled == 1, "FillRect barres accent");
         check!(pat_blt == 1, "PatBlt PATCOPY");
+        check!(bit_blt == 1, "BitBlt SRCCOPY");
+        check!(stretch_blt == 1, "StretchBlt SRCCOPY");
         check!(blob == 1, "Ellipse blob");
     }
 

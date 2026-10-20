@@ -129,10 +129,11 @@ redimensionnements. Sont couverts `CreateSolidBrush`, `CreatePen`,
 `GetSysColor`/`GetSysColorBrush` pour le sous-ensemble de couleurs du thème,
 `SetTextColor`, `SetBkColor`, `SetBkMode` (texte opaque ou transparent),
 `TextOutA`, `Rectangle`, `Ellipse`, `FillRect`, `FrameRect`, `PatBlt` (PATCOPY,
-BLACKNESS et WHITENESS), `GetDC` et `ReleaseDC`. `CreateFontA/W` choisit une
-police core X approximative selon la taille; la famille et plusieurs attributs
-LOGFONT ne sont pas fidèlement rendus. Manquent encore les bitmaps/
-`BitBlt`/`StretchBlt`, les autres ROP, les régions et le double tampon.
+BLACKNESS et WHITENESS), `BitBlt`/`StretchBlt` window-to-window en SRCCOPY,
+`GetDC` et `ReleaseDC`. `CreateFontA/W` choisit une police core X approximative
+selon la taille; la famille et plusieurs attributs LOGFONT ne sont pas fidèlement
+rendus. Manquent encore la création de bitmaps/DIB, les autres ROP, les régions
+et le double tampon.
 L’association `.desktop` et binfmt est préparée, mais n’a pas été
 installée ni validée sur une session de bureau réelle. Le script ISO requiert
 encore un staging Linux bootable.

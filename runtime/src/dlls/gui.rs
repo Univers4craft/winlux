@@ -636,6 +636,8 @@ pub enum DrawCmd {
     Text { x: i32, y: i32, text: String, color: u32, bk: Option<u32>, font: FontSpec },
     /// Ellipse inscrite dans le rectangle.
     Ellipse { rect: Rect, color: u32 },
+    /// Copie de pixels entre deux fenêtres X11 (SRCCOPY).
+    Blit { source_hwnd: usize, source: Rect, destination: Rect, stretch: bool },
 }
 
 /// Sous-ensemble des paramètres de CreateFontA/W utile au rendu X11.

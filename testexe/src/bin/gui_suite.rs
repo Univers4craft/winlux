@@ -130,6 +130,15 @@ pub extern "C" fn mainCRTStartup() -> ! {
     check!(DeleteObject(sys_brush) == 0, "DeleteObject refuse le pinceau système");
     ReleaseDC(hwnd, sys_hdc);
 
+    let fixed_w: [u16; 6] = [b'f' as u16, b'i' as u16, b'x' as u16, b'e' as u16, b'd' as u16, 0];
+    let font_w = CreateFontW(14, 0, 0, 0, 400, 0, 1, 0, 1, 0, 0, 0, 0, fixed_w.as_ptr());
+    let font_hdc = GetDC(hwnd);
+    let old_font = SelectObject(font_hdc, font_w);
+    check!(!font_w.is_null() && !old_font.is_null(), "CreateFontW/SelectObject");
+    SelectObject(font_hdc, old_font);
+    check!(DeleteObject(font_w) != 0, "DeleteObject police deselectionnee");
+    ReleaseDC(hwnd, font_hdc);
+
     check!(IsWindow(hwnd) != 0, "IsWindow apres creation");
 
     let mut rect: Rect = Default::default();

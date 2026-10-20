@@ -128,6 +128,103 @@ pub unsafe extern "win64" fn pat_blt(
     1
 }
 
+/// Copie une aire entre deux DC de fenêtre. ROP pris en charge : SRCCOPY.
+pub extern "win64" fn bit_blt(
+    dst_hdc: usize,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    src_hdc: usize,
+    src_x: i32,
+    src_y: i32,
+    rop: u32,
+) -> i32 {
+    blit_common(dst_hdc, x, y, width, height, src_hdc, src_x, src_y, width, height, rop, false)
+}
+
+/// Copie/redimensionne une aire entre DC de fenêtre par rééchantillonnage X11.
+pub extern "win64" fn stretch_blt(
+    dst_hdc: usize,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    src_hdc: usize,
+    src_x: i32,
+    src_y: i32,
+    src_width: i32,
+    src_height: i32,
+    rop: u32,
+) -> i32 {
+    blit_common(
+        dst_hdc, x, y, width, height, src_hdc, src_x, src_y,
+        src_width, src_height, rop, true,
+    )
+}
+
+fn blit_common(
+    dst_hdc: usize,
+    x: i32,
+    y: i32,
+    width: i32,
+    height: i32,
+    src_hdc: usize,
+    src_x: i32,
+    src_y: i32,
+    src_width: i32,
+    src_height: i32,
+    rop: u32,
+    stretch: bool,
+) -> i32 {
+    if rop != 0x00CC_0020 { // SRCCOPY
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    if width <= 0 || height <= 0 || src_width <= 0 || src_height <= 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let Some(dst_hwnd) = gui::dc_window(dst_hdc) else {
+        crate::process::set_last_error(1400);
+        return 0;
+    };
+    let Some(src_hwnd) = gui::dc_window(src_hdc) else {
+        crate::process::set_last_error(1400);
+        return 0;
+    };
+    if dst_hwnd == 0 || src_hwnd == 0
+        || gui::wnd_proc_of(dst_hwnd).is_none()
+        || gui::wnd_proc_of(src_hwnd).is_none()
+    {
+        crate::process::set_last_error(1400);
+        return 0;
+    }
+    let Some(dst_right) = x.checked_add(width) else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let Some(dst_bottom) = y.checked_add(height) else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let Some(src_right) = src_x.checked_add(src_width) else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let Some(src_bottom) = src_y.checked_add(src_height) else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    let cmd = DrawCmd::Blit {
+        source_hwnd: src_hwnd,
+        source: Rect { left: src_x, top: src_y, right: src_right, bottom: src_bottom },
+        destination: Rect { left: x, top: y, right: dst_right, bottom: dst_bottom },
+        stretch,
+    };
+    if gui::record(dst_hdc, cmd) { 1 } else { 0 }
+}
+
 pub extern "win64" fn create_compatible_dc(_dc: usize) -> usize {
     // DC mémoire : pas de cible de rendu, les commandes sont ignorées.
     gui::create_dc(0)
@@ -240,6 +337,7 @@ pub fn exports() -> crate::dlls::Exports {
         "SetBkColor"=>fn set_bk_color,
         "SetBkMode"=>fn set_bk_mode,
         "PatBlt"=>fn pat_blt,
+        "BitBlt"=>fn bit_blt, "StretchBlt"=>fn stretch_blt,
         "CreateCompatibleDC"=>fn create_compatible_dc,
         "DeleteDC"=>fn delete_dc,
         "GetDeviceCaps"=>fn get_device_caps,

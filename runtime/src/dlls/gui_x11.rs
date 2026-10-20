@@ -356,6 +356,113 @@ impl X11Backend {
         }
     }
 
+    fn paint_blit(
+        &self,
+        destination_window: &XWin,
+        source_hwnd: usize,
+        source_rect: &Rect,
+        destination_rect: &Rect,
+        stretch: bool,
+    ) {
+        let Some(source_window) = self.windows.get(&source_hwnd).copied() else { return };
+        let Some(src) = Self::to_x_rect(&source_window, source_rect) else { return };
+        let Some(dst) = Self::to_x_rect(destination_window, destination_rect) else { return };
+
+        if !stretch || (src.width == dst.width && src.height == dst.height) {
+            let width = src.width.min(dst.width);
+            let height = src.height.min(dst.height);
+            let _ = self.conn.copy_area(
+                source_window.window,
+                destination_window.window,
+                destination_window.gc,
+                src.x,
+                src.y,
+                dst.x,
+                dst.y,
+                width,
+                height,
+            );
+            return;
+        }
+
+        self.paint_stretched_pixels(source_window.window, destination_window, src, dst);
+    }
+
+    /// Rééchantillonnage nearest-neighbor des pixels ZPixmap (formats 8/16/24/32bpp).
+    fn paint_stretched_pixels(
+        &self,
+        source: Window,
+        destination: &XWin,
+        src: x11rb::protocol::xproto::Rectangle,
+        dst: x11rb::protocol::xproto::Rectangle,
+    ) {
+        let depth = self.conn.setup().roots[self.screen].root_depth;
+        let Some(format) = self.conn.setup().pixmap_formats.iter().find(|f| f.depth == depth) else {
+            return;
+        };
+        let bits_per_pixel = format.bits_per_pixel as usize;
+        let pad = format.scanline_pad as usize;
+        if bits_per_pixel == 0
+            || bits_per_pixel > 32
+            || bits_per_pixel % 8 != 0
+            || pad < 8
+            || pad % 8 != 0
+        {
+            return;
+        }
+        let bytes_per_pixel = bits_per_pixel / 8;
+        let stride = |width: usize| ((width * bits_per_pixel + pad - 1) / pad) * (pad / 8);
+        let src_stride = stride(src.width as usize);
+        let dst_stride = stride(dst.width as usize);
+        const MAX_IMAGE_BYTES: usize = 256 * 1024 - 64;
+        let Some(src_len) = src_stride.checked_mul(src.height as usize) else { return };
+        let Some(dst_len) = dst_stride.checked_mul(dst.height as usize) else { return };
+        if src_len > MAX_IMAGE_BYTES || dst_len > MAX_IMAGE_BYTES {
+            return;
+        }
+        let image = match self.conn.get_image(
+            x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+            source,
+            src.x,
+            src.y,
+            src.width,
+            src.height,
+            u32::MAX,
+        ) {
+            Ok(cookie) => match cookie.reply() {
+                Ok(image) => image.data,
+                Err(_) => return,
+            },
+            Err(_) => return,
+        };
+        if image.len() < src_len {
+            return;
+        }
+        let mut output = vec![0u8; dst_len];
+        for dy in 0..dst.height as usize {
+            let sy = dy * src.height as usize / dst.height as usize;
+            for dx in 0..dst.width as usize {
+                let sx = dx * src.width as usize / dst.width as usize;
+                let from = sy * src_stride + sx * bytes_per_pixel;
+                let to = dy * dst_stride + dx * bytes_per_pixel;
+                output[to..to + bytes_per_pixel]
+                    .copy_from_slice(&image[from..from + bytes_per_pixel]);
+            }
+        }
+        let _ = self.conn.put_image(
+            x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+            destination.window,
+            destination.gc,
+            dst.width,
+            dst.height,
+            dst.x,
+            dst.y,
+            0,
+            depth,
+            &output,
+        );
+    }
+
     /// Rejoue la liste de commandes GDI d'une fenêtre.
     fn paint_cmds(&mut self, w: &XWin, cmds: &[DrawCmd]) {
         for cmd in cmds {
@@ -367,6 +474,9 @@ impl X11Backend {
                 DrawCmd::Ellipse { rect, color } => self.paint_ellipse(w, rect, *color),
                 DrawCmd::Text { x, y, text, color, bk, font } => {
                     self.paint_text(w, *x, *y, text, *color, *bk, font)
+                }
+                DrawCmd::Blit { source_hwnd, source, destination, stretch } => {
+                    self.paint_blit(w, *source_hwnd, source, destination, *stretch)
                 }
             }
         }

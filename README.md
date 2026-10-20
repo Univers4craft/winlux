@@ -65,7 +65,7 @@ La configuration binfmt et le fichier `.desktop` sont des préparatifs, pas une 
 ## Limites importantes
 
 - PE32+ x86-64 seulement; le runtime n’est pas un noyau Windows.
-- `user32`/`gdi32` sont partiels : le noyau fenêtres/messages, `SetWindowPos`/`MoveWindow`, les API de focus et d’état clavier de base, un backend X11 (thème « blob » violet-bleu, keysyms traduits en `VK_*` et `WM_CHAR` via `TranslateMessage`) et des primitives GDI de base (`GetSysColor`, `CreateFontA/W` sur polices core, pinceaux/plumes, `FillRect`/`FrameRect`/`PatBlt`/`Rectangle`/`Ellipse`, `TextOutA` opaque ou transparent) existent, mais les contrôles, les bitmaps, `BitBlt`, les décorations et la plupart des API clavier avancées manquent encore.
+- `user32`/`gdi32` sont partiels : le noyau fenêtres/messages, `SetWindowPos`/`MoveWindow`, les API de focus et d’état clavier de base, un backend X11 (thème « blob » violet-bleu, keysyms traduits en `VK_*` et `WM_CHAR` via `TranslateMessage`) et des primitives GDI de base (`GetSysColor`, `CreateFontA/W` sur polices core, pinceaux/plumes, `FillRect`/`FrameRect`/`PatBlt`/`BitBlt`/`StretchBlt` SRCCOPY/`Rectangle`/`Ellipse`, `TextOutA` opaque ou transparent) existent, mais les contrôles, la création de bitmaps/DIB, les décorations et la plupart des API clavier avancées manquent encore.
 - `mscoree` émet un diagnostic; aucun CLR n’est intégré. `paint.net` ne fonctionne donc pas actuellement.
 - Les codecs compressés, DirectX, les pilotes, le registre Windows complet, les services SCM complets, les E/S overlapped et de nombreuses API Win32 ne sont pas implémentés.
 - `FreeLibrary` ne démonte pas encore une DLL chargée.
