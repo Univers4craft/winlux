@@ -12,6 +12,8 @@ static mut GOT_PAINT: u32 = 0;
 static mut GOT_DESTROY: u32 = 0;
 static mut GOT_SIZE: u32 = 0;
 static mut CLIENT_SIZE_MATCH: u32 = 0;
+static mut GOT_FOCUS: u32 = 0;
+static mut GOT_KILLFOCUS: u32 = 0;
 static mut GOT_CHAR: u32 = 0;
 static mut LAST_CHAR: usize = 0;
 
@@ -96,6 +98,14 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
                 && client.bottom == expected_h) as u32;
             0
         }
+        WM_SETFOCUS => {
+            GOT_FOCUS += 1;
+            0
+        }
+        WM_KILLFOCUS => {
+            GOT_KILLFOCUS += 1;
+            0
+        }
         WM_CHAR => {
             GOT_CHAR += 1;
             LAST_CHAR = wparam;
@@ -168,6 +178,13 @@ pub extern "C" fn mainCRTStartup() -> ! {
         }
         if GOT_CHAR > 0 {
             check!(LAST_CHAR != 0, "WM_CHAR traduit depuis le clavier");
+        }
+        if GOT_FOCUS > 0 {
+            if GOT_KILLFOCUS > 0 {
+                check!(GOT_KILLFOCUS >= 1, "WM_KILLFOCUS traduit depuis FocusOut X11");
+            } else {
+                check!(GetFocus() == hwnd, "GetFocus synchronise avec FocusIn X11");
+            }
         }
         DestroyWindow(hwnd);
         check!(GOT_DESTROY >= 1, "WM_DESTROY destruction");

@@ -312,6 +312,14 @@ impl X11Backend {
                 let lparam = ((e.event_y as isize) << 16) | (e.event_x as isize & 0xFFFF);
                 Some(PendingEvent { hwnd, message: gui::WM_MOUSEMOVE, wparam: 0, lparam })
             }
+            Event::FocusIn(e) => {
+                let hwnd = *self.by_xwin.get(&e.event)?;
+                Some(PendingEvent { hwnd, message: gui::WM_SETFOCUS, wparam: 0, lparam: 0 })
+            }
+            Event::FocusOut(e) => {
+                let hwnd = *self.by_xwin.get(&e.event)?;
+                Some(PendingEvent { hwnd, message: gui::WM_KILLFOCUS, wparam: 0, lparam: 0 })
+            }
             Event::KeyPress(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let shift = e.state.contains(x11rb::protocol::xproto::KeyButMask::SHIFT);
@@ -597,6 +605,7 @@ impl gui::GuiBackend for X11Backend {
                     | x11rb::protocol::xproto::EventMask::BUTTON_PRESS
                     | x11rb::protocol::xproto::EventMask::BUTTON_RELEASE
                     | x11rb::protocol::xproto::EventMask::POINTER_MOTION
+                    | x11rb::protocol::xproto::EventMask::FOCUS_CHANGE
                     | x11rb::protocol::xproto::EventMask::KEY_PRESS
                     | x11rb::protocol::xproto::EventMask::KEY_RELEASE,
             );
@@ -712,6 +721,27 @@ impl gui::GuiBackend for X11Backend {
             .height(height as u32);
         let _ = self.conn.configure_window(window, &aux);
         let _ = self.conn.flush();
+    }
+
+    fn set_focus(&mut self, hwnd: usize) {
+        let focus = if hwnd == 0 {
+            0
+        } else if let Some(w) = self.windows.get(&hwnd) {
+            w.window
+        } else {
+            return;
+        };
+        let _ = self.conn.set_input_focus(
+            x11rb::protocol::xproto::InputFocus::PARENT,
+            focus,
+            0u32,
+        );
+        let _ = self.conn.flush();
+        // SetFocus est synchrone côté Win32 : le round-trip force le serveur à
+        // traiter la requête et rend FocusIn/FocusOut immédiatement pompables.
+        if let Ok(cookie) = self.conn.get_input_focus() {
+            let _ = cookie.reply();
+        }
     }
 
     fn invalidate(&mut self, hwnd: usize) {

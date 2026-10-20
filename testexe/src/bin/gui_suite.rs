@@ -11,6 +11,8 @@ use winlux_testexe::*;
 // Compteurs partagés avec le wndproc (variables statiques).
 static mut GOT_CREATE: u32 = 0;
 static mut GOT_MOVE: u32 = 0;
+static mut GOT_SETFOCUS: u32 = 0;
+static mut GOT_KILLFOCUS: u32 = 0;
 static mut GOT_SIZE: u32 = 0;
 static mut GOT_PAINT: u32 = 0;
 static mut GOT_DESTROY: u32 = 0;
@@ -32,6 +34,14 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
         WM_MOVE => {
             GOT_MOVE += 1;
             LAST_MOVE = lparam;
+            0
+        }
+        WM_SETFOCUS => {
+            GOT_SETFOCUS += 1;
+            0
+        }
+        WM_KILLFOCUS => {
+            GOT_KILLFOCUS += 1;
             0
         }
         WM_PAINT => {
@@ -88,6 +98,11 @@ pub extern "C" fn mainCRTStartup() -> ! {
     check!(SetWindowPos(core::ptr::null_mut(), core::ptr::null_mut(), 0, 0, 10, 10, 0) == 0 && GetLastError() == 1400, "SetWindowPos rejette HWND invalide");
     SetLastError(0);
     check!(SetWindowPos(hwnd, core::ptr::null_mut(), 0, 0, 0, 10, 0) == 0 && GetLastError() == 87, "SetWindowPos rejette taille invalide");
+
+    check!(GetFocus().is_null(), "GetFocus initial");
+    check!(SetFocus(hwnd).is_null() && GetFocus() == hwnd && GOT_SETFOCUS == 1, "SetFocus envoie WM_SETFOCUS");
+    check!(SetFocus(core::ptr::null_mut()) == hwnd && GetFocus().is_null() && GOT_KILLFOCUS == 1, "SetFocus(NULL) envoie WM_KILLFOCUS");
+    check!(SetFocus(hwnd).is_null() && GetFocus() == hwnd && GOT_SETFOCUS == 2, "SetFocus reprend le focus");
 
     check!(IsWindow(hwnd) != 0, "IsWindow apres creation");
 
@@ -173,6 +188,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
     // Destruction explicite → WM_DESTROY.
     DestroyWindow(hwnd);
     check!(GOT_DESTROY >= 1, "WM_DESTROY recu");
+    check!(GOT_KILLFOCUS >= 2, "DestroyWindow retire le focus");
     check!(IsWindow(hwnd) == 0, "IsWindow apres destruction");
 
     finish()

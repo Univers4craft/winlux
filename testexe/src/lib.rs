@@ -201,6 +201,8 @@ pub const WM_MOVE: u32 = 0x0003;
 pub const WM_SIZE: u32 = 0x0005;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
+pub const WM_SETFOCUS: u32 = 0x0007;
+pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const WM_CHAR: u32 = 0x0102;
 pub const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
@@ -354,6 +356,8 @@ extern "C" {
     pub fn UpdateWindow(hwnd: Handle) -> i32;
     pub fn DestroyWindow(hwnd: Handle) -> i32;
     pub fn IsWindow(hwnd: Handle) -> i32;
+    pub fn GetFocus() -> Handle;
+    pub fn SetFocus(hwnd: Handle) -> Handle;
     pub fn GetClientRect(hwnd: Handle, out: *mut Rect) -> i32;
     pub fn GetWindowRect(hwnd: Handle, out: *mut Rect) -> i32;
     pub fn SetWindowPos(hwnd: Handle, after: Handle, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;

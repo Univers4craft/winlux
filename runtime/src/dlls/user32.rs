@@ -351,6 +351,48 @@ pub unsafe extern "win64" fn is_window(hwnd: usize) -> i32 {
     gui::wnd_proc_of(hwnd).is_some() as i32
 }
 
+pub extern "win64" fn get_focus() -> usize {
+    gui::focused_window()
+}
+
+pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
+    if hwnd != 0 {
+        let Some(owner) = gui::window_owner(hwnd) else {
+            crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
+            return 0;
+        };
+        if owner != std::thread::current().id() {
+            crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+            return 0;
+        }
+    }
+    let Some(old) = gui::set_focus(hwnd) else {
+        crate::process::set_last_error(87);
+        return 0;
+    };
+    if old == hwnd {
+        return old;
+    }
+
+    // Met à jour le backend avant les callbacks : un SetFocus réentrant depuis
+    // un WndProc pourra ainsi le remplacer sans être écrasé au retour.
+    with_backend(|backend| backend.set_focus(hwnd));
+    // Traite les FocusIn/FocusOut éventuellement synchrones générés par X11 ;
+    // le noyau connaît déjà le nouvel état et élimine ainsi les doublons.
+    gui::pump_backend();
+    if old != 0 {
+        if let Some(wp) = gui::wnd_proc_of(old) {
+            gui::call_wndproc(wp, old, gui::WM_KILLFOCUS, hwnd, 0);
+        }
+    }
+    if hwnd != 0 && gui::focused_window() == hwnd {
+        if let Some(wp) = gui::wnd_proc_of(hwnd) {
+            gui::call_wndproc(wp, hwnd, gui::WM_SETFOCUS, old, 0);
+        }
+    }
+    old
+}
+
 pub unsafe extern "win64" fn get_window_rect(hwnd: usize, out: *mut Rect) -> i32 {
     if out.is_null() {
         crate::process::set_last_error(87);
@@ -636,6 +678,7 @@ pub fn exports() -> crate::dlls::Exports {
         "SendMessageA"=>fn send_message_a, "ShowWindow"=>fn show_window,
         "UpdateWindow"=>fn update_window, "DestroyWindow"=>fn destroy_window,
         "IsWindow"=>fn is_window, "GetWindowRect"=>fn get_window_rect,
+        "GetFocus"=>fn get_focus, "SetFocus"=>fn set_focus,
         "GetClientRect"=>fn get_client_rect, "SetWindowTextA"=>fn set_window_text_a,
         "SetWindowPos"=>fn set_window_pos, "MoveWindow"=>fn move_window,
         "GetWindowTextA"=>fn get_window_text_a, "GetWindowTextLengthA"=>fn get_window_text_length_a,

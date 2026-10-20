@@ -23,6 +23,7 @@ pub const WM_SIZE: u32 = 0x0005;
 pub const WM_ACTIVATE: u32 = 0x0006;
 #[allow(dead_code)]
 pub const WM_SETFOCUS: u32 = 0x0007;
+pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_QUIT: u32 = 0x0012;
@@ -307,6 +308,70 @@ pub fn post_to_window(hwnd: usize, msg: Msg) -> bool {
         Some(tid) => post_to_thread(tid, msg),
         None => false,
     }
+}
+
+// ---------- Focus clavier ----------
+
+fn focused_windows() -> &'static Mutex<HashMap<ThreadId, usize>> {
+    static F: OnceLock<Mutex<HashMap<ThreadId, usize>>> = OnceLock::new();
+    F.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// HWND ayant le focus sur le thread appelant, ou zéro.
+pub fn focused_window() -> usize {
+    lock(focused_windows())
+        .get(&std::thread::current().id())
+        .copied()
+        .unwrap_or(0)
+}
+
+/// Change le focus du thread appelant ; `None` indique une HWND absente ou
+/// appartenant à un autre thread, sinon renvoie l'ancien focus (zéro possible).
+pub fn set_focus(hwnd: usize) -> Option<usize> {
+    let tid = std::thread::current().id();
+    if hwnd != 0 && window_owner(hwnd).as_ref() != Some(&tid) {
+        return None;
+    }
+    let mut map = lock(focused_windows());
+    let old = map.get(&tid).copied().unwrap_or(0);
+    if hwnd == 0 {
+        map.remove(&tid);
+    } else {
+        map.insert(tid, hwnd);
+    }
+    Some(old)
+}
+
+/// Applique un changement de focus reçu du backend ; `None` signifie que
+/// l'événement ne change pas l'état connu (ou que la fenêtre est détruite).
+pub fn set_focus_from_backend(hwnd: usize) -> Option<usize> {
+    let owner = window_owner(hwnd)?;
+    let mut map = lock(focused_windows());
+    let old = map.get(&owner).copied().unwrap_or(0);
+    if old == hwnd {
+        return None;
+    }
+    map.insert(owner, hwnd);
+    Some(old)
+}
+
+/// Efface le focus reçu d'un backend uniquement si cette HWND le détient encore.
+pub fn clear_focus_from_backend(hwnd: usize) -> bool {
+    let Some(owner) = window_owner(hwnd) else { return false };
+    let mut map = lock(focused_windows());
+    if map.get(&owner).copied() == Some(hwnd) {
+        map.remove(&owner);
+        true
+    } else {
+        false
+    }
+}
+
+fn clear_focus_for_destroy(hwnd: usize) -> bool {
+    let mut map = lock(focused_windows());
+    let was_focused = map.values().any(|&focused| focused == hwnd);
+    map.retain(|_, focused| *focused != hwnd);
+    was_focused
 }
 
 // ---------- Clavier ----------
@@ -649,6 +714,7 @@ pub trait GuiBackend: Send {
     fn show_window(&mut self, _hwnd: usize, _show: bool) {}
     fn set_title(&mut self, _hwnd: usize, _title: &str) {}
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
+    fn set_focus(&mut self, _hwnd: usize) {}
     fn invalidate(&mut self, _hwnd: usize) {}
     /// Joue la liste de commandes GDI d'une fenêtre (thème + contenu). Le
     /// backend X11 conserve la liste pour la rejouer à chaque Expose; headless
@@ -704,6 +770,23 @@ pub fn pump_backend() {
         b.pump()
     };
     for e in events {
+        if e.message == WM_SETFOCUS {
+            let change = set_focus_from_backend(e.hwnd);
+            if let Some(old) = change {
+                if old != 0 {
+                    post_to_window(old, Msg::new(old, WM_KILLFOCUS, e.hwnd, 0));
+                }
+                post_to_window(e.hwnd, Msg::new(e.hwnd, WM_SETFOCUS, old, 0));
+            }
+            continue;
+        }
+        if e.message == WM_KILLFOCUS {
+            let cleared = clear_focus_from_backend(e.hwnd);
+            if cleared {
+                post_to_window(e.hwnd, Msg::new(e.hwnd, WM_KILLFOCUS, 0, 0));
+            }
+            continue;
+        }
         if e.message == WM_SIZE {
             let packed = e.lparam as u32;
             update_window_size(e.hwnd, (packed & 0xFFFF) as i32, (packed >> 16) as i32);
@@ -789,8 +872,12 @@ pub fn destroy_window(hwnd: usize) -> bool {
     // Les DC de la fenêtre ne servent plus (le code invité ne doit pas peindre).
     lock(dcs()).retain(|_, d| d.hwnd != hwnd);
     discard_key_chars(hwnd);
+    let had_focus = clear_focus_for_destroy(hwnd);
     // WM_DESTROY synchrone auprès du wndproc de la fenêtre détruite.
     if let Some(wp) = wnd_proc {
+        if had_focus {
+            unsafe { call_wndproc(wp, hwnd, WM_KILLFOCUS, 0, 0) };
+        }
         unsafe { call_wndproc(wp, hwnd, WM_DESTROY, 0, 0) };
     }
     with_backend(|b| b.destroy_window(hwnd));
@@ -839,6 +926,10 @@ pub fn wnd_proc_of(hwnd: usize) -> Option<usize> {
 
 pub fn window_rect(hwnd: usize) -> Option<Rect> {
     lock(windows()).get(&hwnd).map(|w| w.rect)
+}
+
+pub fn window_owner(hwnd: usize) -> Option<ThreadId> {
+    lock(windows()).get(&hwnd).map(|w| w.owner.clone())
 }
 
 /// Remplace le rectangle logique et renvoie son ancienne valeur.
@@ -1043,6 +1134,24 @@ mod tests {
         assert!(take_message(&q, hwnd, WM_CHAR, WM_CHAR).is_none());
 
         destroy_window(hwnd);
+    }
+
+    #[test]
+    fn le_focus_est_isole_par_thread_et_les_evenements_x_sont_dedoublonnes() {
+        let hwnd = fenetre_de_test();
+        assert_eq!(focused_window(), 0);
+        assert_eq!(set_focus(hwnd), Some(0));
+        assert_eq!(focused_window(), hwnd);
+        assert_eq!(set_focus(hwnd), Some(hwnd));
+        // L'événement FocusIn correspondant à SetFocus ne doit pas notifier
+        // une deuxième fois le noyau d'un changement déjà appliqué.
+        assert_eq!(set_focus_from_backend(hwnd), None);
+        assert!(clear_focus_from_backend(hwnd));
+        assert_eq!(focused_window(), 0);
+        assert_eq!(set_focus_from_backend(hwnd), Some(0));
+        assert_eq!(focused_window(), hwnd);
+        destroy_window(hwnd);
+        assert_eq!(focused_window(), 0);
     }
 
     /// WndProc inerte : `destroy_window` l'appelle de façon synchrone.
