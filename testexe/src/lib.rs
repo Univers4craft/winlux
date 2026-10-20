@@ -195,6 +195,22 @@ pub struct PaintStruct {
     pub reserved: [u8; 32],
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct BitmapInfoHeader {
+    pub size: u32,
+    pub width: i32,
+    pub height: i32,
+    pub planes: u16,
+    pub bit_count: u16,
+    pub compression: u32,
+    pub size_image: u32,
+    pub x_pels_per_meter: i32,
+    pub y_pels_per_meter: i32,
+    pub colors_used: u32,
+    pub colors_important: u32,
+}
+
 pub const WM_CREATE: u32 = 0x0001;
 pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_MOVE: u32 = 0x0003;
@@ -386,6 +402,10 @@ extern "C" {
     pub fn GetStockObject(index: i32) -> Handle;
     pub fn CreateSolidBrush(color: u32) -> Handle;
     pub fn CreatePen(style: u32, width: i32, color: u32) -> Handle;
+    pub fn CreateCompatibleDC(dc: Handle) -> Handle;
+    pub fn CreateCompatibleBitmap(dc: Handle, width: i32, height: i32) -> Handle;
+    pub fn CreateDIBSection(dc: Handle, info: *const BitmapInfoHeader, usage: u32, bits: *mut *mut c_void, section: Handle, offset: u32) -> Handle;
+    pub fn DeleteDC(dc: Handle) -> i32;
     pub fn CreateFontA(height: i32, width: i32, escapement: i32, orientation: i32, weight: i32, italic: u32, underline: u32, strikeout: u32, charset: u32, out_precision: u32, clip_precision: u32, quality: u32, pitch_family: u32, face: *const c_char) -> Handle;
     pub fn CreateFontW(height: i32, width: i32, escapement: i32, orientation: i32, weight: i32, italic: u32, underline: u32, strikeout: u32, charset: u32, out_precision: u32, clip_precision: u32, quality: u32, pitch_family: u32, face: *const u16) -> Handle;
     pub fn SelectObject(hdc: Handle, obj: Handle) -> Handle;

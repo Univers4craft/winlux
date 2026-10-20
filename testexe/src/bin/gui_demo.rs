@@ -67,6 +67,67 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     let bit_blt = BitBlt(hdc, 350, 24, 120, 70, hdc, 24, 24, 0x00CC_0020); // SRCCOPY
     let stretch_blt = StretchBlt(hdc, 350, 112, 120, 36, hdc, 48, 88, 252, 18, 0x00CC_0020);
 
+    // Bitmap compatible hors écran : PatBlt remplit le buffer, puis SRCCOPY le
+    // transfère dans la fenêtre avant que le HBITMAP ne soit détruit.
+    let memory_dc = CreateCompatibleDC(hdc);
+    let memory_bitmap = CreateCompatibleBitmap(hdc, 40, 32);
+    let _old_bitmap = SelectObject(memory_dc, memory_bitmap);
+    let memory_brush = CreateSolidBrush(0x0000_D070);
+    SelectObject(memory_dc, memory_brush);
+    let memory_fill = PatBlt(memory_dc, 0, 0, 40, 32, 0x00F0_0021);
+    let memory_blit = BitBlt(hdc, 500, 24, 40, 32, memory_dc, 0, 0, 0x00CC_0020);
+    DeleteDC(memory_dc);
+    let bitmap_deleted = DeleteObject(memory_bitmap);
+    let memory_brush_deleted = DeleteObject(memory_brush);
+
+    // Chemin de lecture X11 explicite réservé au test manuel sous Xvfb :
+    // fenêtre → bitmap mémoire → fenêtre.
+    if GetEnvironmentVariableA(c"WINLUX_CAPTURE_TEST".as_ptr(), core::ptr::null_mut(), 0) > 0 {
+        let capture_dc = CreateCompatibleDC(hdc);
+        let capture_bitmap = CreateCompatibleBitmap(hdc, 32, 32);
+        SelectObject(capture_dc, capture_bitmap);
+        let captured = BitBlt(capture_dc, 0, 0, 32, 32, hdc, 24, 24, 0x00CC_0020);
+        let recopy = BitBlt(hdc, 600, 24, 32, 32, capture_dc, 0, 0, 0x00CC_0020);
+        if first {
+            check!(captured == 1 && recopy == 1, "BitBlt fenêtre→bitmap→fenêtre");
+        }
+        DeleteDC(capture_dc);
+        DeleteObject(capture_bitmap);
+    }
+
+    if GetEnvironmentVariableA(c"WINLUX_DIB_TEST".as_ptr(), core::ptr::null_mut(), 0) > 0 {
+        let dib_info = BitmapInfoHeader {
+            size: core::mem::size_of::<BitmapInfoHeader>() as u32,
+            width: 8,
+            height: -8,
+            planes: 1,
+            bit_count: 32,
+            compression: 0,
+            size_image: 0,
+            x_pels_per_meter: 0,
+            y_pels_per_meter: 0,
+            colors_used: 0,
+            colors_important: 0,
+        };
+        let dib_dc = CreateCompatibleDC(hdc);
+        let mut dib_bits: *mut core::ffi::c_void = core::ptr::null_mut();
+        let dib = CreateDIBSection(dib_dc, &dib_info, 0, &mut dib_bits, core::ptr::null_mut(), 0);
+        SelectObject(dib_dc, dib);
+        for i in 0..64 {
+            let pixel = dib_bits.cast::<u8>().add(i * 4);
+            *pixel = 0;       // B
+            *pixel.add(1) = 0; // G
+            *pixel.add(2) = 0xFF; // R
+            *pixel.add(3) = 0;
+        }
+        let dib_blit = BitBlt(hdc, 550, 80, 8, 8, dib_dc, 0, 0, 0x00CC_0020);
+        DeleteDC(dib_dc);
+        let dib_deleted = DeleteObject(dib);
+        if first {
+            check!(!dib_bits.is_null() && dib_blit == 1 && dib_deleted != 0, "CreateDIBSection/BitBlt X11");
+        }
+    }
+
     // Accent « blob » : ellipse pleine avec le pinceau sélectionné.
     SelectObject(hdc, accent);
     let blob = Ellipse(hdc, 480, 300, 640, 440);
@@ -86,6 +147,9 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
         check!(pat_blt == 1, "PatBlt PATCOPY");
         check!(bit_blt == 1, "BitBlt SRCCOPY");
         check!(stretch_blt == 1, "StretchBlt SRCCOPY");
+        check!(!memory_dc.is_null() && !memory_bitmap.is_null(), "CreateCompatibleBitmap mémoire");
+        check!(memory_fill == 1 && memory_blit == 1, "PatBlt/BitBlt bitmap mémoire");
+        check!(bitmap_deleted != 0 && memory_brush_deleted != 0, "DeleteObject bitmap mémoire");
         check!(blob == 1, "Ellipse blob");
     }
 

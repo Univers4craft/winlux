@@ -2,7 +2,7 @@
 //! ses événements en messages Win32. Le fond utilise le thème « blob »
 //! violet-bleu (dégradé vertical + accent) défini dans `gui::theme`.
 
-use crate::dlls::gui::{self, DrawCmd, FontSpec, PendingEvent, Rect};
+use crate::dlls::gui::{self, BitmapSnapshot, DrawCmd, FontSpec, PendingEvent, Rect};
 use crate::dlls::gui::theme;
 use std::collections::HashMap;
 use x11rb::connection::Connection;
@@ -463,6 +463,74 @@ impl X11Backend {
         );
     }
 
+    fn paint_bitmap(&self, window: &XWin, rect: &Rect, pixels: &[u32]) {
+        let Some(dst) = Self::to_x_rect(window, rect) else { return };
+        let source_width = rect.width();
+        let source_height = rect.height();
+        if source_width <= 0 || source_height <= 0 {
+            return;
+        }
+        let Some(source_count) = (source_width as usize).checked_mul(source_height as usize) else {
+            return;
+        };
+        if pixels.len() < source_count {
+            return;
+        }
+        let Some(source_left) = (dst.x as i32).checked_sub(rect.left) else { return };
+        let Some(source_top) = (dst.y as i32).checked_sub(rect.top) else { return };
+        let setup = self.conn.setup();
+        let depth = setup.roots[self.screen].root_depth;
+        let Some(format) = setup.pixmap_formats.iter().find(|f| f.depth == depth) else { return };
+        let bits_per_pixel = format.bits_per_pixel as usize;
+        let pad = format.scanline_pad as usize;
+        if bits_per_pixel == 0 || bits_per_pixel > 32 || bits_per_pixel % 8 != 0 || pad < 8 || pad % 8 != 0 {
+            return;
+        }
+        let bytes_per_pixel = bits_per_pixel / 8;
+        let stride = |width: usize| ((width * bits_per_pixel + pad - 1) / pad) * (pad / 8);
+        let row_bytes = stride(dst.width as usize);
+        let Some(image_len) = row_bytes.checked_mul(dst.height as usize) else { return };
+        const MAX_IMAGE_BYTES: usize = 256 * 1024 - 64;
+        if image_len > MAX_IMAGE_BYTES {
+            return;
+        }
+        let mut image = vec![0u8; image_len];
+        let mut color_pixels = HashMap::new();
+        for y in 0..dst.height as usize {
+            for x in 0..dst.width as usize {
+                let source_index = (source_top as usize + y) * source_width as usize
+                    + source_left as usize + x;
+                let colorref = pixels[source_index];
+                let pixel = *color_pixels
+                    .entry(colorref)
+                    .or_insert_with(|| self.alloc_color(colorref));
+                let pixel_bytes = match setup.image_byte_order {
+                    x11rb::protocol::xproto::ImageOrder::LSB_FIRST => pixel.to_le_bytes(),
+                    _ => pixel.to_be_bytes(),
+                };
+                let offset = y * row_bytes + x * bytes_per_pixel;
+                let bytes = if setup.image_byte_order == x11rb::protocol::xproto::ImageOrder::LSB_FIRST {
+                    &pixel_bytes[..bytes_per_pixel]
+                } else {
+                    &pixel_bytes[4 - bytes_per_pixel..]
+                };
+                image[offset..offset + bytes_per_pixel].copy_from_slice(bytes);
+            }
+        }
+        let _ = self.conn.put_image(
+            x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+            window.window,
+            window.gc,
+            dst.width,
+            dst.height,
+            dst.x,
+            dst.y,
+            0,
+            depth,
+            &image,
+        );
+    }
+
     /// Rejoue la liste de commandes GDI d'une fenêtre.
     fn paint_cmds(&mut self, w: &XWin, cmds: &[DrawCmd]) {
         for cmd in cmds {
@@ -478,6 +546,7 @@ impl X11Backend {
                 DrawCmd::Blit { source_hwnd, source, destination, stretch } => {
                     self.paint_blit(w, *source_hwnd, source, destination, *stretch)
                 }
+                DrawCmd::Bitmap { rect, pixels } => self.paint_bitmap(w, rect, pixels),
             }
         }
     }
@@ -632,6 +701,23 @@ fn button_wparam(detail: u8) -> usize {
 
 fn pack_i16_pair(low: i32, high: i32) -> isize {
     (((high as u16 as u32) << 16) | low as u16 as u32) as isize
+}
+
+fn pixel_channel(pixel: u32, mask: u32) -> u32 {
+    if mask == 0 {
+        return 0;
+    }
+    let shift = mask.trailing_zeros();
+    let max = mask >> shift;
+    let value = (pixel & mask) >> shift;
+    ((value as u64 * 255 + max as u64 / 2) / max as u64) as u32
+}
+
+fn pixel_to_colorref(pixel: u32, masks: (u32, u32, u32)) -> u32 {
+    let r = pixel_channel(pixel, masks.0);
+    let g = pixel_channel(pixel, masks.1);
+    let b = pixel_channel(pixel, masks.2);
+    (b << 16) | (g << 8) | r
 }
 
 /// Convertit un keysym X11 en code de touche virtuelle Win32 (`VK_*`).
@@ -997,6 +1083,75 @@ impl gui::GuiBackend for X11Backend {
         if let Ok(cookie) = self.conn.get_input_focus() {
             let _ = cookie.reply();
         }
+    }
+
+    fn capture(&mut self, hwnd: usize, rect: Rect) -> Option<BitmapSnapshot> {
+        let window = self.windows.get(&hwnd).copied()?;
+        let area = Self::to_x_rect(&window, &rect)?;
+        let setup = self.conn.setup();
+        let screen = &setup.roots[self.screen];
+        let depth = screen.root_depth;
+        let masks = screen
+            .allowed_depths
+            .iter()
+            .flat_map(|d| d.visuals.iter())
+            .find(|v| v.visual_id == screen.root_visual)
+            .map(|v| (v.red_mask, v.green_mask, v.blue_mask))?;
+        let format = setup.pixmap_formats.iter().find(|f| f.depth == depth)?;
+        let bits_per_pixel = format.bits_per_pixel as usize;
+        let pad = format.scanline_pad as usize;
+        if bits_per_pixel == 0 || bits_per_pixel > 32 || bits_per_pixel % 8 != 0 || pad < 8 || pad % 8 != 0 {
+            return None;
+        }
+        let bytes_per_pixel = bits_per_pixel / 8;
+        let stride = ((area.width as usize * bits_per_pixel + pad - 1) / pad) * (pad / 8);
+        let image_len = stride.checked_mul(area.height as usize)?;
+        if image_len > 256 * 1024 * 1024 {
+            return None;
+        }
+        let image = self
+            .conn
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                window.window,
+                area.x,
+                area.y,
+                area.width,
+                area.height,
+                u32::MAX,
+            )
+            .ok()?
+            .reply()
+            .ok()?
+            .data;
+        if image.len() < image_len {
+            return None;
+        }
+        let mut pixels = vec![0; area.width as usize * area.height as usize];
+        for y in 0..area.height as usize {
+            for x in 0..area.width as usize {
+                let start = y * stride + x * bytes_per_pixel;
+                let mut pixel = 0u32;
+                match setup.image_byte_order {
+                    x11rb::protocol::xproto::ImageOrder::LSB_FIRST => {
+                        for i in 0..bytes_per_pixel {
+                            pixel |= (image[start + i] as u32) << (8 * i);
+                        }
+                    }
+                    _ => {
+                        for i in 0..bytes_per_pixel {
+                            pixel = (pixel << 8) | image[start + i] as u32;
+                        }
+                    }
+                }
+                pixels[y * area.width as usize + x] = pixel_to_colorref(pixel, masks);
+            }
+        }
+        Some(BitmapSnapshot {
+            width: area.width as usize,
+            height: area.height as usize,
+            pixels,
+        })
     }
 
     fn invalidate(&mut self, hwnd: usize) {

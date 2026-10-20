@@ -3,6 +3,23 @@
 //! liste à chaque cycle de peinture.
 
 use crate::dlls::gui::{self, DrawCmd, FontSpec, Rect};
+use std::ffi::c_void;
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct BitmapInfoHeader {
+    pub size: u32,
+    pub width: i32,
+    pub height: i32,
+    pub planes: u16,
+    pub bit_count: u16,
+    pub compression: u32,
+    pub size_image: u32,
+    pub x_pels_per_meter: i32,
+    pub y_pels_per_meter: i32,
+    pub colors_used: u32,
+    pub colors_important: u32,
+}
 
 pub extern "win64" fn get_stock_object(index: i32) -> usize {
     if index >= 0 { (index as usize) + 1 } else { 0 }
@@ -193,9 +210,8 @@ fn blit_common(
         crate::process::set_last_error(1400);
         return 0;
     };
-    if dst_hwnd == 0 || src_hwnd == 0
-        || gui::wnd_proc_of(dst_hwnd).is_none()
-        || gui::wnd_proc_of(src_hwnd).is_none()
+    if (dst_hwnd != 0 && gui::wnd_proc_of(dst_hwnd).is_none())
+        || (src_hwnd != 0 && gui::wnd_proc_of(src_hwnd).is_none())
     {
         crate::process::set_last_error(1400);
         return 0;
@@ -216,18 +232,116 @@ fn blit_common(
         crate::process::set_last_error(87);
         return 0;
     };
-    let cmd = DrawCmd::Blit {
-        source_hwnd: src_hwnd,
-        source: Rect { left: src_x, top: src_y, right: src_right, bottom: src_bottom },
-        destination: Rect { left: x, top: y, right: dst_right, bottom: dst_bottom },
-        stretch,
+    let source = Rect { left: src_x, top: src_y, right: src_right, bottom: src_bottom };
+    let destination = Rect { left: x, top: y, right: dst_right, bottom: dst_bottom };
+    let cmd = if src_hwnd != 0 && dst_hwnd != 0 {
+        DrawCmd::Blit { source_hwnd: src_hwnd, source, destination, stretch }
+    } else {
+        let snapshot = if src_hwnd == 0 {
+            gui::bitmap_snapshot(src_hdc, source)
+        } else {
+            gui::capture_window(src_hwnd, source)
+        };
+        let Some(snapshot) = snapshot else {
+            crate::process::set_last_error(1400); // source bitmap/window unavailable
+            return 0;
+        };
+        let Some(pixels) = resize_bitmap(snapshot, width as usize, height as usize) else {
+            crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
+            return 0;
+        };
+        DrawCmd::Bitmap { rect: destination, pixels }
     };
     if gui::record(dst_hdc, cmd) { 1 } else { 0 }
 }
 
+fn resize_bitmap(snapshot: gui::BitmapSnapshot, width: usize, height: usize) -> Option<Vec<u32>> {
+    let count = width.checked_mul(height)?;
+    if width == 0 || height == 0 || count > 4 * 1024 * 1024
+        || snapshot.width == 0 || snapshot.height == 0
+    {
+        return None;
+    }
+    if snapshot.pixels.len() < snapshot.width.checked_mul(snapshot.height)? {
+        return None;
+    }
+    if snapshot.width == width && snapshot.height == height {
+        return Some(snapshot.pixels);
+    }
+    let mut output = vec![0; count];
+    for y in 0..height {
+        let sy = y * snapshot.height / height;
+        for x in 0..width {
+            let sx = x * snapshot.width / width;
+            output[y * width + x] = snapshot.pixels[sy * snapshot.width + sx];
+        }
+    }
+    Some(output)
+}
+
 pub extern "win64" fn create_compatible_dc(_dc: usize) -> usize {
-    // DC mémoire : pas de cible de rendu, les commandes sont ignorées.
+    // Les opérations de dessin écrivent dans la bitmap sélectionnée.
     gui::create_dc(0)
+}
+
+pub extern "win64" fn create_compatible_bitmap(dc: usize, width: i32, height: i32) -> usize {
+    if gui::dc_window(dc).is_none() {
+        crate::process::set_last_error(1400); // ERROR_INVALID_HANDLE
+        return 0;
+    }
+    if width <= 0 || height <= 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    match gui::create_compatible_bitmap(width, height) {
+        Some(bitmap) => bitmap,
+        None => {
+            crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
+            0
+        }
+    }
+}
+
+/// Crée une DIB section 32bpp BI_RGB; le tampon exposé utilise des pixels BGRX.
+pub unsafe extern "win64" fn create_dib_section(
+    dc: usize,
+    info: *const BitmapInfoHeader,
+    usage: u32,
+    bits: *mut *mut c_void,
+    section: usize,
+    offset: u32,
+) -> usize {
+    if gui::dc_window(dc).is_none() {
+        crate::process::set_last_error(1400);
+        return 0;
+    }
+    if info.is_null() || bits.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let header = std::ptr::read_unaligned(info);
+    if header.size < std::mem::size_of::<BitmapInfoHeader>() as u32
+        || header.width <= 0
+        || header.height == 0
+        || header.height == i32::MIN
+        || header.planes != 1
+        || header.bit_count != 32
+        || header.compression != 0 // BI_RGB
+        || usage != 0 // DIB_RGB_COLORS
+        || section != 0
+        || offset != 0
+    {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let Some((bitmap, pixel_bits)) =
+        gui::create_dib_section(header.width, header.height.abs(), header.height < 0)
+    else {
+        crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
+        return 0;
+    };
+    std::ptr::write_unaligned(bits, pixel_bits.cast::<c_void>());
+    bitmap
 }
 
 pub extern "win64" fn delete_dc(dc: usize) -> i32 {
@@ -339,6 +453,8 @@ pub fn exports() -> crate::dlls::Exports {
         "PatBlt"=>fn pat_blt,
         "BitBlt"=>fn bit_blt, "StretchBlt"=>fn stretch_blt,
         "CreateCompatibleDC"=>fn create_compatible_dc,
+        "CreateCompatibleBitmap"=>fn create_compatible_bitmap,
+        "CreateDIBSection"=>fn create_dib_section,
         "DeleteDC"=>fn delete_dc,
         "GetDeviceCaps"=>fn get_device_caps,
         "TextOutA"=>fn text_out_a,

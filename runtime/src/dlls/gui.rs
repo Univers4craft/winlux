@@ -638,6 +638,15 @@ pub enum DrawCmd {
     Ellipse { rect: Rect, color: u32 },
     /// Copie de pixels entre deux fenêtres X11 (SRCCOPY).
     Blit { source_hwnd: usize, source: Rect, destination: Rect, stretch: bool },
+    /// Copie depuis une bitmap mémoire (pixels stockés en COLORREF).
+    Bitmap { rect: Rect, pixels: Vec<u32> },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BitmapSnapshot {
+    pub width: usize,
+    pub height: usize,
+    pub pixels: Vec<u32>,
 }
 
 /// Sous-ensemble des paramètres de CreateFontA/W utile au rendu X11.
@@ -678,6 +687,7 @@ pub struct DcState {
     pub brush: usize,
     pub pen: usize,
     pub font: usize,
+    pub bitmap: usize,
 }
 
 /// Objet GDI créé par l'invité (`CreateSolidBrush`, `CreatePen`).
@@ -687,6 +697,13 @@ pub enum GdiObject {
     SystemBrush(u32),
     Pen { width: u16, color: u32 },
     Font(FontSpec),
+    Bitmap {
+        width: usize,
+        height: usize,
+        pixels: Vec<u32>,
+        dib_bits: Option<Vec<u8>>,
+        top_down: bool,
+    },
 }
 
 fn dcs() -> &'static Mutex<HashMap<usize, DcState>> {
@@ -730,6 +747,7 @@ pub fn create_dc(hwnd: usize) -> usize {
         brush: 5, // BLACK_BRUSH stock
         pen: 8,   // BLACK_PEN stock
         font: 14, // SYSTEM_FONT stock
+        bitmap: 0,
     });
     hdc
 }
@@ -793,6 +811,11 @@ pub fn dc_font(hdc: usize) -> usize {
     with_dc(hdc, |d| d.font, 0)
 }
 
+/// Bitmap mémoire sélectionnée dans le DC (zéro si aucune).
+pub fn dc_bitmap(hdc: usize) -> usize {
+    with_dc(hdc, |d| d.bitmap, 0)
+}
+
 /// Couleur de fond courante d'un DC (`SetBkColor`).
 pub fn dc_bk_color(hdc: usize) -> u32 {
     with_dc(hdc, |d| d.bk_color, 0x00FF_FFFF)
@@ -810,6 +833,9 @@ pub fn select_object(hdc: usize, obj: usize) -> usize {
     let kind_font = !kind_pen
         && (is_stock_font(obj)
             || matches!(lock(objects()).get(&obj), Some(GdiObject::Font(_))));
+    let kind_bitmap = !kind_pen
+        && !kind_font
+        && matches!(lock(objects()).get(&obj), Some(GdiObject::Bitmap { .. }));
     with_dc(hdc, |d| {
         if kind_pen {
             let old = d.pen;
@@ -818,6 +844,10 @@ pub fn select_object(hdc: usize, obj: usize) -> usize {
         } else if kind_font {
             let old = d.font;
             d.font = obj;
+            old
+        } else if kind_bitmap {
+            let old = d.bitmap;
+            d.bitmap = obj;
             old
         } else {
             let old = d.brush;
@@ -870,11 +900,141 @@ pub fn create_font(spec: FontSpec) -> usize {
     handle
 }
 
+/// Crée une bitmap compatible 32 bits dont les pixels internes sont des COLORREF.
+pub fn create_compatible_bitmap(width: i32, height: i32) -> Option<usize> {
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let pixels = (width as usize).checked_mul(height as usize)?;
+    if pixels > 4 * 1024 * 1024 {
+        return None;
+    }
+    let handle = next_handle(0x0021_0000);
+    lock(objects()).insert(
+        handle,
+        GdiObject::Bitmap {
+            width: width as usize,
+            height: height as usize,
+            pixels: vec![0; pixels],
+            dib_bits: None,
+            top_down: false,
+        },
+    );
+    Some(handle)
+}
+
+/// Crée une DIB section 32bpp et expose son tampon BGRX stable à l'invité.
+pub fn create_dib_section(width: i32, height: i32, top_down: bool) -> Option<(usize, *mut u8)> {
+    if width <= 0 || height <= 0 {
+        return None;
+    }
+    let pixels = (width as usize).checked_mul(height as usize)?;
+    if pixels > 4 * 1024 * 1024 {
+        return None;
+    }
+    let bytes = pixels.checked_mul(4)?;
+    let mut dib_bits = vec![0u8; bytes];
+    let bits_ptr = dib_bits.as_mut_ptr();
+    let handle = next_handle(0x0021_0000);
+    lock(objects()).insert(
+        handle,
+        GdiObject::Bitmap {
+            width: width as usize,
+            height: height as usize,
+            pixels: vec![0; pixels],
+            dib_bits: Some(dib_bits),
+            top_down,
+        },
+    );
+    Some((handle, bits_ptr))
+}
+
+fn bitmap_color_at(
+    width: usize,
+    height: usize,
+    pixels: &[u32],
+    dib_bits: Option<&[u8]>,
+    top_down: bool,
+    x: usize,
+    y: usize,
+) -> u32 {
+    let index = if top_down { y } else { height - 1 - y } * width + x;
+    if let Some(bytes) = dib_bits {
+        let offset = index * 4;
+        let b = bytes[offset] as u32;
+        let g = bytes[offset + 1] as u32;
+        let r = bytes[offset + 2] as u32;
+        (b << 16) | (g << 8) | r
+    } else {
+        pixels[index]
+    }
+}
+
+fn set_bitmap_color(
+    width: usize,
+    height: usize,
+    pixels: &mut [u32],
+    dib_bits: &mut Option<Vec<u8>>,
+    top_down: bool,
+    x: usize,
+    y: usize,
+    color: u32,
+) {
+    let index = if top_down { y } else { height - 1 - y } * width + x;
+    pixels[index] = color;
+    if let Some(bytes) = dib_bits {
+        let offset = index * 4;
+        bytes[offset] = ((color >> 16) & 0xFF) as u8; // B
+        bytes[offset + 1] = ((color >> 8) & 0xFF) as u8; // G
+        bytes[offset + 2] = (color & 0xFF) as u8; // R
+        bytes[offset + 3] = 0;
+    }
+}
+
+/// Copie une zone de la bitmap sélectionnée dans un DC mémoire. Les pixels
+/// hors limites sont noirs, comme une surface nouvellement créée.
+pub fn bitmap_snapshot(hdc: usize, rect: Rect) -> Option<BitmapSnapshot> {
+    let bitmap = dc_bitmap(hdc);
+    if bitmap == 0 || rect.width() <= 0 || rect.height() <= 0 {
+        return None;
+    }
+    let width = rect.width() as usize;
+    let height = rect.height() as usize;
+    let count = width.checked_mul(height)?;
+    if count > 4 * 1024 * 1024 {
+        return None;
+    }
+    let objects = lock(objects());
+    let Some(GdiObject::Bitmap { width: bitmap_width, height: bitmap_height, pixels, dib_bits, top_down }) = objects.get(&bitmap) else {
+        return None;
+    };
+    let mut copy = vec![0; count];
+    for y in 0..height {
+        let sy = rect.top as i64 + y as i64;
+        if sy < 0 || sy >= *bitmap_height as i64 { continue; }
+        for x in 0..width {
+            let sx = rect.left as i64 + x as i64;
+            if sx >= 0 && sx < *bitmap_width as i64 {
+                copy[y * width + x] = bitmap_color_at(
+                    *bitmap_width,
+                    *bitmap_height,
+                    pixels,
+                    dib_bits.as_deref(),
+                    *top_down,
+                    sx as usize,
+                    sy as usize,
+                );
+            }
+        }
+    }
+    Some(BitmapSnapshot { width, height, pixels: copy })
+}
+
 /// Description d'une police créée, ou police système par défaut pour un objet
 /// stock. `None` indique un handle non-police.
 pub fn font_spec(handle: usize) -> Option<FontSpec> {
-    match lock(objects()).get(&handle).cloned() {
-        Some(GdiObject::Font(spec)) => Some(spec),
+    match lock(objects()).get(&handle) {
+        Some(GdiObject::Font(spec)) => Some(spec.clone()),
         Some(_) => None,
         None if is_stock_font(handle) => Some(FontSpec::default()),
         None => None,
@@ -885,6 +1045,9 @@ pub fn font_spec(handle: usize) -> Option<FontSpec> {
 /// réellement supprimés (Win32 l'interdit) mais on répond succès : beaucoup de
 /// programmes appellent `DeleteObject` sans distinguer les deux cas.
 pub fn delete_object(obj: usize) -> bool {
+    if lock(dcs()).values().any(|dc| dc.bitmap == obj) {
+        return false;
+    }
     let mut map = lock(objects());
     match map.get(&obj) {
         Some(GdiObject::SystemBrush(_)) => false,
@@ -895,12 +1058,15 @@ pub fn delete_object(obj: usize) -> bool {
 
 /// Couleur d'un pinceau/plume, `None` pour les objets « null » du stock.
 pub fn object_color(handle: usize) -> Option<u32> {
-    if let Some(o) = lock(objects()).get(&handle).cloned() {
-        return match o {
-            GdiObject::Brush(c) | GdiObject::SystemBrush(c) => Some(c),
-            GdiObject::Pen { color, .. } => Some(color),
-            GdiObject::Font(_) => None,
-        };
+    {
+        let map = lock(objects());
+        if let Some(object) = map.get(&handle) {
+            return match object {
+                GdiObject::Brush(c) | GdiObject::SystemBrush(c) => Some(*c),
+                GdiObject::Pen { color, .. } => Some(*color),
+                GdiObject::Font(_) | GdiObject::Bitmap { .. } => None,
+            };
+        }
     }
     // Objets du stock (`GetStockObject` renvoie `index + 1`) : pinceaux puis
     // plumes ; `NULL_BRUSH` et `NULL_PEN` ne peignent rien.
@@ -920,8 +1086,8 @@ pub fn object_color(handle: usize) -> Option<u32> {
 
 /// Largeur d'une plume sélectionnée (les plumes simples font 1 px).
 pub fn object_pen_width(handle: usize) -> u16 {
-    match lock(objects()).get(&handle).cloned() {
-        Some(GdiObject::Pen { width, .. }) => width,
+    match lock(objects()).get(&handle) {
+        Some(GdiObject::Pen { width, .. }) => *width,
         _ => 1,
     }
 }
@@ -929,15 +1095,95 @@ pub fn object_pen_width(handle: usize) -> u16 {
 /// Ajoute une commande de dessin à la file d'attente de peinture de la fenêtre
 /// cible du DC. Renvoie faux si le DC ou la fenêtre n'existe plus.
 pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
-    let target = match lock(dcs()).get(&hdc) {
-        Some(d) => d.hwnd,
+    let (target, bitmap) = match lock(dcs()).get(&hdc) {
+        Some(d) => (d.hwnd, d.bitmap),
         None => return false,
     };
+    if target == 0 {
+        return bitmap != 0 && draw_to_bitmap(bitmap, &cmd);
+    }
     let mut map = lock(windows());
     match map.get_mut(&target) {
         Some(w) => { w.pending.push(cmd); true }
         None => false,
     }
+}
+
+fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
+    let mut map = lock(objects());
+    let Some(GdiObject::Bitmap { width, height, pixels, dib_bits, top_down }) = map.get_mut(&handle) else {
+        return false;
+    };
+    let bounds = Rect::from_size(0, 0, *width as i32, *height as i32);
+    let mut put = |x: i32, y: i32, color: u32| {
+        if x >= 0 && y >= 0 && x < bounds.right && y < bounds.bottom {
+            set_bitmap_color(
+                *width,
+                *height,
+                pixels,
+                dib_bits,
+                *top_down,
+                x as usize,
+                y as usize,
+                color,
+            );
+        }
+    };
+    match cmd {
+        DrawCmd::FillRect { rect, color } => {
+            for y in rect.top.max(0)..rect.bottom.min(bounds.bottom) {
+                for x in rect.left.max(0)..rect.right.min(bounds.right) {
+                    put(x, y, *color);
+                }
+            }
+        }
+        DrawCmd::FrameRect { rect, color, width: line } => {
+            let line = (*line as i32).max(1);
+            for y in rect.top.max(0)..rect.bottom.min(bounds.bottom) {
+                for x in rect.left.max(0)..rect.right.min(bounds.right) {
+                    if x < rect.left + line || x >= rect.right - line
+                        || y < rect.top + line || y >= rect.bottom - line
+                    {
+                        put(x, y, *color);
+                    }
+                }
+            }
+        }
+        DrawCmd::Ellipse { rect, color } => {
+            let w = rect.width();
+            let h = rect.height();
+            if w > 0 && h > 0 {
+                let rx = w as f64 / 2.0;
+                let ry = h as f64 / 2.0;
+                for y in rect.top.max(0)..rect.bottom.min(bounds.bottom) {
+                    for x in rect.left.max(0)..rect.right.min(bounds.right) {
+                        let dx = (x as f64 + 0.5 - rect.left as f64 - rx) / rx;
+                        let dy = (y as f64 + 0.5 - rect.top as f64 - ry) / ry;
+                        if dx * dx + dy * dy <= 1.0 {
+                            put(x, y, *color);
+                        }
+                    }
+                }
+            }
+        }
+        DrawCmd::Bitmap { rect, pixels: source } => {
+            let sw = rect.width().max(0) as usize;
+            let sh = rect.height().max(0) as usize;
+            let Some(required) = sw.checked_mul(sh) else { return false };
+            if required > source.len() {
+                return false;
+            }
+            for y in rect.top.max(0)..rect.bottom.min(bounds.bottom) {
+                for x in rect.left.max(0)..rect.right.min(bounds.right) {
+                    let sx = (x - rect.left) as usize;
+                    let sy = (y - rect.top) as usize;
+                    put(x, y, source[sy * sw + sx]);
+                }
+            }
+        }
+        DrawCmd::Text { .. } | DrawCmd::Blit { .. } => {}
+    }
+    true
 }
 
 /// Retire les commandes accumulées depuis le dernier `EndPaint`.
@@ -969,6 +1215,8 @@ pub trait GuiBackend: Send {
     fn set_window_rect(&mut self, _hwnd: usize, _rect: Rect) {}
     fn set_focus(&mut self, _hwnd: usize) {}
     fn invalidate(&mut self, _hwnd: usize) {}
+    /// Lit une zone de la fenêtre en pixels COLORREF (pour les blits vers un DC mémoire).
+    fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> { None }
     /// Joue la liste de commandes GDI d'une fenêtre (thème + contenu). Le
     /// backend X11 conserve la liste pour la rejouer à chaque Expose; headless
     /// ignore le rendu.
@@ -1184,6 +1432,12 @@ pub fn with_backend_public<F: FnOnce(&mut dyn GuiBackend)>(f: F) {
     with_backend(f);
 }
 
+pub fn capture_window(hwnd: usize, rect: Rect) -> Option<BitmapSnapshot> {
+    let mut captured = None;
+    with_backend(|backend| captured = backend.capture(hwnd, rect));
+    captured
+}
+
 /// wndproc d'une fenêtre, si elle existe.
 pub fn wnd_proc_of(hwnd: usize) -> Option<usize> {
     lock(windows()).get(&hwnd).map(|w| w.wnd_proc)
@@ -1343,6 +1597,8 @@ pub fn def_window_proc(hwnd: usize, message: u32, _wparam: usize, _lparam: isize
 mod tests {
     use super::*;
 
+    static KEYBOARD_GLOBAL_TEST_LOCK: Mutex<()> = Mutex::new(());
+
     #[test]
     fn file_messages_par_thread_est_isolee() {
         let q = current_queue();
@@ -1414,6 +1670,7 @@ mod tests {
 
     #[test]
     fn le_focus_est_isole_par_thread_et_les_evenements_x_sont_dedoublonnes() {
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
         let hwnd = fenetre_de_test();
         assert_eq!(focused_window(), 0);
         assert_eq!(set_focus(hwnd), Some(0));
@@ -1432,6 +1689,7 @@ mod tests {
 
     #[test]
     fn etats_clavier_thread_async_et_touches_a_bascule() {
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
         let vk = 0xE7;
         update_thread_key_state(vk, true);
         assert_ne!(get_key_state(vk) as u16 & 0x8000, 0);

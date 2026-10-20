@@ -139,6 +139,52 @@ pub extern "C" fn mainCRTStartup() -> ! {
     check!(DeleteObject(font_w) != 0, "DeleteObject police deselectionnee");
     ReleaseDC(hwnd, font_hdc);
 
+    let memory_dc = CreateCompatibleDC(core::ptr::null_mut());
+    let bitmap = CreateCompatibleBitmap(memory_dc, 8, 8);
+    let old_bitmap = SelectObject(memory_dc, bitmap);
+    let bitmap_brush = CreateSolidBrush(0x0000_FF00);
+    SelectObject(memory_dc, bitmap_brush);
+    check!(!memory_dc.is_null() && !bitmap.is_null(), "CreateCompatibleDC/Bitmap");
+    check!(PatBlt(memory_dc, 0, 0, 8, 8, 0x00F0_0021) != 0, "PatBlt sur bitmap mémoire");
+    let blit_dc = GetDC(hwnd);
+    check!(BitBlt(blit_dc, 10, 10, 8, 8, memory_dc, 0, 0, 0x00CC_0020) != 0, "BitBlt depuis bitmap mémoire");
+    check!(StretchBlt(blit_dc, 30, 10, 16, 16, memory_dc, 0, 0, 8, 8, 0x00CC_0020) != 0, "StretchBlt depuis bitmap mémoire");
+    ReleaseDC(hwnd, blit_dc);
+    DeleteDC(memory_dc);
+    check!(DeleteObject(bitmap) != 0 && DeleteObject(bitmap_brush) != 0, "DeleteObject bitmap memoire");
+    let _ = old_bitmap;
+
+    let dib_dc = CreateCompatibleDC(core::ptr::null_mut());
+    let dib_info = BitmapInfoHeader {
+        size: core::mem::size_of::<BitmapInfoHeader>() as u32,
+        width: 4,
+        height: -4, // DIB top-down
+        planes: 1,
+        bit_count: 32,
+        compression: 0, // BI_RGB
+        size_image: 0,
+        x_pels_per_meter: 0,
+        y_pels_per_meter: 0,
+        colors_used: 0,
+        colors_important: 0,
+    };
+    let mut dib_bits: *mut core::ffi::c_void = core::ptr::null_mut();
+    let dib = CreateDIBSection(dib_dc, &dib_info, 0, &mut dib_bits, core::ptr::null_mut(), 0);
+    SelectObject(dib_dc, dib);
+    for pixel in 0..16 {
+        let p = dib_bits.cast::<u8>().add(pixel * 4);
+        *p = 0;       // B
+        *p.add(1) = 0; // G
+        *p.add(2) = 0xFF; // R
+        *p.add(3) = 0;
+    }
+    let dib_dst = GetDC(hwnd);
+    check!(!dib.is_null() && !dib_bits.is_null(), "CreateDIBSection BI_RGB 32bpp");
+    check!(BitBlt(dib_dst, 50, 50, 4, 4, dib_dc, 0, 0, 0x00CC_0020) != 0, "BitBlt depuis DIB section");
+    ReleaseDC(hwnd, dib_dst);
+    DeleteDC(dib_dc);
+    check!(DeleteObject(dib) != 0, "DeleteObject DIB deselectionnee");
+
     check!(IsWindow(hwnd) != 0, "IsWindow apres creation");
 
     let mut rect: Rect = Default::default();
