@@ -363,6 +363,7 @@ impl X11Backend {
         source_rect: &Rect,
         destination_rect: &Rect,
         stretch: bool,
+        rop: gui::RasterOp,
     ) {
         let Some(source_window) = self.windows.get(&source_hwnd).copied() else { return };
         let Some(src) = Self::to_x_rect(&source_window, source_rect) else { return };
@@ -371,6 +372,10 @@ impl X11Backend {
         if !stretch || (src.width == dst.width && src.height == dst.height) {
             let width = src.width.min(dst.width);
             let height = src.height.min(dst.height);
+            let _ = self.conn.change_gc(
+                destination_window.gc,
+                &ChangeGCAux::new().function(x11_function(rop)),
+            );
             let _ = self.conn.copy_area(
                 source_window.window,
                 destination_window.window,
@@ -382,10 +387,14 @@ impl X11Backend {
                 width,
                 height,
             );
+            let _ = self.conn.change_gc(
+                destination_window.gc,
+                &ChangeGCAux::new().function(x11rb::protocol::xproto::GX::COPY),
+            );
             return;
         }
 
-        self.paint_stretched_pixels(source_window.window, destination_window, src, dst);
+        self.paint_stretched_pixels(source_window.window, destination_window, src, dst, rop);
     }
 
     /// Rééchantillonnage nearest-neighbor des pixels ZPixmap (formats 8/16/24/32bpp).
@@ -395,6 +404,7 @@ impl X11Backend {
         destination: &XWin,
         src: x11rb::protocol::xproto::Rectangle,
         dst: x11rb::protocol::xproto::Rectangle,
+        rop: gui::RasterOp,
     ) {
         let depth = self.conn.setup().roots[self.screen].root_depth;
         let Some(format) = self.conn.setup().pixmap_formats.iter().find(|f| f.depth == depth) else {
@@ -449,6 +459,10 @@ impl X11Backend {
                     .copy_from_slice(&image[from..from + bytes_per_pixel]);
             }
         }
+        let _ = self.conn.change_gc(
+            destination.gc,
+            &ChangeGCAux::new().function(x11_function(rop)),
+        );
         let _ = self.conn.put_image(
             x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
             destination.window,
@@ -461,9 +475,13 @@ impl X11Backend {
             depth,
             &output,
         );
+        let _ = self.conn.change_gc(
+            destination.gc,
+            &ChangeGCAux::new().function(x11rb::protocol::xproto::GX::COPY),
+        );
     }
 
-    fn paint_bitmap(&self, window: &XWin, rect: &Rect, pixels: &[u32]) {
+    fn paint_bitmap(&self, window: &XWin, rect: &Rect, pixels: &[u32], rop: gui::RasterOp) {
         let Some(dst) = Self::to_x_rect(window, rect) else { return };
         let source_width = rect.width();
         let source_height = rect.height();
@@ -517,6 +535,10 @@ impl X11Backend {
                 image[offset..offset + bytes_per_pixel].copy_from_slice(bytes);
             }
         }
+        let _ = self.conn.change_gc(
+            window.gc,
+            &ChangeGCAux::new().function(x11_function(rop)),
+        );
         let _ = self.conn.put_image(
             x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
             window.window,
@@ -529,6 +551,25 @@ impl X11Backend {
             depth,
             &image,
         );
+        let _ = self.conn.change_gc(
+            window.gc,
+            &ChangeGCAux::new().function(x11rb::protocol::xproto::GX::COPY),
+        );
+    }
+
+    fn paint_pattern(&self, window: &XWin, rect: &Rect, color: u32, rop: gui::RasterOp) {
+        if let Some(xr) = Self::to_x_rect(window, rect) {
+            self.set_foreground(window, color);
+            let _ = self.conn.change_gc(
+                window.gc,
+                &ChangeGCAux::new().function(x11_function(rop)),
+            );
+            let _ = self.conn.poly_fill_rectangle(window.window, window.gc, &[xr]);
+            let _ = self.conn.change_gc(
+                window.gc,
+                &ChangeGCAux::new().function(x11rb::protocol::xproto::GX::COPY),
+            );
+        }
     }
 
     /// Rejoue la liste de commandes GDI d'une fenêtre.
@@ -540,13 +581,14 @@ impl X11Backend {
                     self.paint_frame(w, rect, *color, *width)
                 }
                 DrawCmd::Ellipse { rect, color } => self.paint_ellipse(w, rect, *color),
+                DrawCmd::PatternRect { rect, color, rop } => self.paint_pattern(w, rect, *color, *rop),
                 DrawCmd::Text { x, y, text, color, bk, font } => {
                     self.paint_text(w, *x, *y, text, *color, *bk, font)
                 }
-                DrawCmd::Blit { source_hwnd, source, destination, stretch } => {
-                    self.paint_blit(w, *source_hwnd, source, destination, *stretch)
+                DrawCmd::Blit { source_hwnd, source, destination, stretch, rop } => {
+                    self.paint_blit(w, *source_hwnd, source, destination, *stretch, *rop)
                 }
-                DrawCmd::Bitmap { rect, pixels } => self.paint_bitmap(w, rect, pixels),
+                DrawCmd::Bitmap { rect, pixels, rop } => self.paint_bitmap(w, rect, pixels, *rop),
             }
         }
     }
@@ -701,6 +743,20 @@ fn button_wparam(detail: u8) -> usize {
 
 fn pack_i16_pair(low: i32, high: i32) -> isize {
     (((high as u16 as u32) << 16) | low as u16 as u32) as isize
+}
+
+fn x11_function(rop: gui::RasterOp) -> x11rb::protocol::xproto::GX {
+    use x11rb::protocol::xproto::GX;
+    match rop {
+        gui::RasterOp::Copy => GX::COPY,
+        gui::RasterOp::And => GX::AND,
+        gui::RasterOp::Or => GX::OR,
+        gui::RasterOp::Xor => GX::XOR,
+        gui::RasterOp::Invert => GX::INVERT,
+        gui::RasterOp::CopyInverted => GX::COPY_INVERTED,
+        gui::RasterOp::Clear => GX::CLEAR,
+        gui::RasterOp::Set => GX::SET,
+    }
 }
 
 fn pixel_channel(pixel: u32, mask: u32) -> u32 {

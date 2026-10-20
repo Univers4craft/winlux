@@ -636,10 +636,24 @@ pub enum DrawCmd {
     Text { x: i32, y: i32, text: String, color: u32, bk: Option<u32>, font: FontSpec },
     /// Ellipse inscrite dans le rectangle.
     Ellipse { rect: Rect, color: u32 },
+    /// ROP binaire entre le pinceau courant et le contenu existant.
+    PatternRect { rect: Rect, color: u32, rop: RasterOp },
     /// Copie de pixels entre deux fenêtres X11 (SRCCOPY).
-    Blit { source_hwnd: usize, source: Rect, destination: Rect, stretch: bool },
+    Blit { source_hwnd: usize, source: Rect, destination: Rect, stretch: bool, rop: RasterOp },
     /// Copie depuis une bitmap mémoire (pixels stockés en COLORREF).
-    Bitmap { rect: Rect, pixels: Vec<u32> },
+    Bitmap { rect: Rect, pixels: Vec<u32>, rop: RasterOp },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RasterOp {
+    Copy,
+    And,
+    Or,
+    Xor,
+    Invert,
+    CopyInverted,
+    Clear,
+    Set,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1115,8 +1129,17 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
         return false;
     };
     let bounds = Rect::from_size(0, 0, *width as i32, *height as i32);
-    let mut put = |x: i32, y: i32, color: u32| {
+    let mut put = |x: i32, y: i32, source: u32, rop: RasterOp| {
         if x >= 0 && y >= 0 && x < bounds.right && y < bounds.bottom {
+            let old = bitmap_color_at(
+                *width,
+                *height,
+                pixels,
+                dib_bits.as_deref(),
+                *top_down,
+                x as usize,
+                y as usize,
+            );
             set_bitmap_color(
                 *width,
                 *height,
@@ -1125,7 +1148,7 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 *top_down,
                 x as usize,
                 y as usize,
-                color,
+                raster_color(source, old, rop),
             );
         }
     };
@@ -1133,7 +1156,7 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
         DrawCmd::FillRect { rect, color } => {
             for y in rect.top.max(0)..rect.bottom.min(bounds.bottom) {
                 for x in rect.left.max(0)..rect.right.min(bounds.right) {
-                    put(x, y, *color);
+                    put(x, y, *color, RasterOp::Copy);
                 }
             }
         }
@@ -1144,7 +1167,7 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                     if x < rect.left + line || x >= rect.right - line
                         || y < rect.top + line || y >= rect.bottom - line
                     {
-                        put(x, y, *color);
+                        put(x, y, *color, RasterOp::Copy);
                     }
                 }
             }
@@ -1160,13 +1183,20 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                         let dx = (x as f64 + 0.5 - rect.left as f64 - rx) / rx;
                         let dy = (y as f64 + 0.5 - rect.top as f64 - ry) / ry;
                         if dx * dx + dy * dy <= 1.0 {
-                            put(x, y, *color);
+                            put(x, y, *color, RasterOp::Copy);
                         }
                     }
                 }
             }
         }
-        DrawCmd::Bitmap { rect, pixels: source } => {
+        DrawCmd::PatternRect { rect, color, rop } => {
+            for y in rect.top.max(0)..rect.bottom.min(bounds.bottom) {
+                for x in rect.left.max(0)..rect.right.min(bounds.right) {
+                    put(x, y, *color, *rop);
+                }
+            }
+        }
+        DrawCmd::Bitmap { rect, pixels: source, rop } => {
             let sw = rect.width().max(0) as usize;
             let sh = rect.height().max(0) as usize;
             let Some(required) = sw.checked_mul(sh) else { return false };
@@ -1177,13 +1207,27 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 for x in rect.left.max(0)..rect.right.min(bounds.right) {
                     let sx = (x - rect.left) as usize;
                     let sy = (y - rect.top) as usize;
-                    put(x, y, source[sy * sw + sx]);
+                    put(x, y, source[sy * sw + sx], *rop);
                 }
             }
         }
         DrawCmd::Text { .. } | DrawCmd::Blit { .. } => {}
     }
     true
+}
+
+fn raster_color(source: u32, destination: u32, rop: RasterOp) -> u32 {
+    const RGB_MASK: u32 = 0x00FF_FFFF;
+    match rop {
+        RasterOp::Copy => source,
+        RasterOp::And => source & destination,
+        RasterOp::Or => source | destination,
+        RasterOp::Xor => source ^ destination,
+        RasterOp::Invert => !destination & RGB_MASK,
+        RasterOp::CopyInverted => !source & RGB_MASK,
+        RasterOp::Clear => 0,
+        RasterOp::Set => RGB_MASK,
+    }
 }
 
 /// Retire les commandes accumulées depuis le dernier `EndPaint`.
@@ -1775,6 +1819,18 @@ mod tests {
         assert!(delete_object(font));
         assert_eq!(font_spec(font), None);
         free_dc(dc);
+    }
+
+    #[test]
+    fn les_rops_simples_combinent_source_et_destination() {
+        assert_eq!(raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::Copy), 0x00FF_0000);
+        assert_eq!(raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::And), 0);
+        assert_eq!(raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::Or), 0x00FF_FF00);
+        assert_eq!(raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::Xor), 0x00FF_FF00);
+        assert_eq!(raster_color(0, 0x0012_3456, RasterOp::Invert), 0x00ED_CBA9);
+        assert_eq!(raster_color(0x0012_3456, 0, RasterOp::CopyInverted), 0x00ED_CBA9);
+        assert_eq!(raster_color(0x00FF_FFFF, 0, RasterOp::Set), 0x00FF_FFFF);
+        assert_eq!(raster_color(0x00FF_FFFF, 0x00FF_FFFF, RasterOp::Clear), 0);
     }
 
     #[test]

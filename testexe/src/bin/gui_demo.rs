@@ -64,8 +64,10 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     let bars_filled = FillRect(hdc, &bar1, bars) & FillRect(hdc, &bar2, bars);
     SelectObject(hdc, bars);
     let pat_blt = PatBlt(hdc, 48, 136, 120, 8, 0x00F0_0021); // PATCOPY
+    let pat_invert = PatBlt(hdc, 176, 136, 120, 8, 0x005A_0049); // PATINVERT
     let bit_blt = BitBlt(hdc, 350, 24, 120, 70, hdc, 24, 24, 0x00CC_0020); // SRCCOPY
     let stretch_blt = StretchBlt(hdc, 350, 112, 120, 36, hdc, 48, 88, 252, 18, 0x00CC_0020);
+    let xor_blt = BitBlt(hdc, 350, 160, 16, 16, hdc, 48, 88, 0x0066_0046); // SRCINVERT
 
     // Bitmap compatible hors écran : PatBlt remplit le buffer, puis SRCCOPY le
     // transfère dans la fenêtre avant que le HBITMAP ne soit détruit.
@@ -145,8 +147,10 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
         check!(opaque_text == 1, "TextOutA fond opaque");
         check!(bars_filled == 1, "FillRect barres accent");
         check!(pat_blt == 1, "PatBlt PATCOPY");
+        check!(pat_invert == 1, "PatBlt PATINVERT");
         check!(bit_blt == 1, "BitBlt SRCCOPY");
         check!(stretch_blt == 1, "StretchBlt SRCCOPY");
+        check!(xor_blt == 1, "BitBlt SRCINVERT");
         check!(!memory_dc.is_null() && !memory_bitmap.is_null(), "CreateCompatibleBitmap mémoire");
         check!(memory_fill == 1 && memory_blit == 1, "PatBlt/BitBlt bitmap mémoire");
         check!(bitmap_deleted != 0 && memory_brush_deleted != 0, "DeleteObject bitmap mémoire");

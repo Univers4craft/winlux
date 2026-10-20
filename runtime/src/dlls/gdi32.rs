@@ -130,17 +130,25 @@ pub unsafe extern "win64" fn pat_blt(
         crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
         return 0;
     }
-    let color = match rop {
-        0x00F0_0021 => gui::object_color(gui::dc_brush(hdc)), // PATCOPY
-        0x0000_0042 => Some(0x0000_0000),                    // BLACKNESS
-        0x00FF_0062 => Some(0x00FF_FFFF),                    // WHITENESS
+    let (color, operation) = match rop {
+        0x00F0_0021 => (gui::object_color(gui::dc_brush(hdc)), gui::RasterOp::Copy),
+        0x0000_0042 => (Some(0), gui::RasterOp::Clear),
+        0x00FF_0062 => (Some(0x00FF_FFFF), gui::RasterOp::Set),
+        0x005A_0049 => (gui::object_color(gui::dc_brush(hdc)), gui::RasterOp::Xor), // PATINVERT
+        0x0055_0009 => (Some(0), gui::RasterOp::Invert), // DSTINVERT
+        0x00A0_00C9 => (gui::object_color(gui::dc_brush(hdc)), gui::RasterOp::And), // PATAND
+        0x00FA_0089 => (gui::object_color(gui::dc_brush(hdc)), gui::RasterOp::Or), // PATOR
         _ => {
             crate::process::set_last_error(87);
             return 0;
         }
     };
     if let Some(color) = color {
-        gui::record(hdc, DrawCmd::FillRect { rect: Rect::from_size(x, y, width, height), color });
+        gui::record(hdc, DrawCmd::PatternRect {
+            rect: Rect::from_size(x, y, width, height),
+            color,
+            rop: operation,
+        });
     }
     1
 }
@@ -194,10 +202,10 @@ fn blit_common(
     rop: u32,
     stretch: bool,
 ) -> i32 {
-    if rop != 0x00CC_0020 { // SRCCOPY
+    let Some(operation) = bitblt_rop(rop) else {
         crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
         return 0;
-    }
+    };
     if width <= 0 || height <= 0 || src_width <= 0 || src_height <= 0 {
         crate::process::set_last_error(87);
         return 0;
@@ -235,7 +243,7 @@ fn blit_common(
     let source = Rect { left: src_x, top: src_y, right: src_right, bottom: src_bottom };
     let destination = Rect { left: x, top: y, right: dst_right, bottom: dst_bottom };
     let cmd = if src_hwnd != 0 && dst_hwnd != 0 {
-        DrawCmd::Blit { source_hwnd: src_hwnd, source, destination, stretch }
+        DrawCmd::Blit { source_hwnd: src_hwnd, source, destination, stretch, rop: operation }
     } else {
         let snapshot = if src_hwnd == 0 {
             gui::bitmap_snapshot(src_hdc, source)
@@ -250,9 +258,23 @@ fn blit_common(
             crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
             return 0;
         };
-        DrawCmd::Bitmap { rect: destination, pixels }
+        DrawCmd::Bitmap { rect: destination, pixels, rop: operation }
     };
     if gui::record(dst_hdc, cmd) { 1 } else { 0 }
+}
+
+fn bitblt_rop(rop: u32) -> Option<gui::RasterOp> {
+    Some(match rop {
+        0x00CC_0020 => gui::RasterOp::Copy,         // SRCCOPY
+        0x00EE_0086 => gui::RasterOp::Or,           // SRCPAINT
+        0x0088_00C6 => gui::RasterOp::And,          // SRCAND
+        0x0066_0046 => gui::RasterOp::Xor,          // SRCINVERT
+        0x0033_0008 => gui::RasterOp::CopyInverted, // NOTSRCCOPY
+        0x0055_0009 => gui::RasterOp::Invert,       // DSTINVERT
+        0x0000_0042 => gui::RasterOp::Clear,        // BLACKNESS
+        0x00FF_0062 => gui::RasterOp::Set,          // WHITENESS
+        _ => return None,
+    })
 }
 
 fn resize_bitmap(snapshot: gui::BitmapSnapshot, width: usize, height: usize) -> Option<Vec<u32>> {

@@ -129,9 +129,11 @@ redimensionnements. Sont couverts `CreateSolidBrush`, `CreatePen`,
 `GetSysColor`/`GetSysColorBrush` pour le sous-ensemble de couleurs du thème,
 `SetTextColor`, `SetBkColor`, `SetBkMode` (texte opaque ou transparent),
 `TextOutA`, `Rectangle`, `Ellipse`, `FillRect`, `FrameRect`, `PatBlt` (PATCOPY,
-BLACKNESS et WHITENESS), `BitBlt`/`StretchBlt` SRCCOPY window-to-window,
-`CreateCompatibleBitmap`, `CreateDIBSection` 32bpp BI_RGB et blits entre bitmap
-mémoire et fenêtre, `GetDC` et `ReleaseDC`. `CreateFontA/W` choisit une police
+BLACKNESS, WHITENESS, PATINVERT, PATAND, PATOR, DSTINVERT), `BitBlt`/`StretchBlt`
+avec un sous-ensemble de ROP (SRCCOPY, SRCPAINT, SRCAND, SRCINVERT, NOTSRCCOPY,
+DSTINVERT, BLACKNESS, WHITENESS), `CreateCompatibleBitmap`, `CreateDIBSection`
+32bpp BI_RGB et blits entre bitmap mémoire et fenêtre, `GetDC` et `ReleaseDC`.
+`CreateFontA/W` choisit une police
 core X approximative selon la taille; la famille et plusieurs attributs LOGFONT
 ne sont pas fidèlement rendus. Manquent encore les autres formats DIB, les autres
 ROP, les régions
