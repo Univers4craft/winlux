@@ -200,6 +200,7 @@ pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_SIZE: u32 = 0x0005;
 pub const WM_PAINT: u32 = 0x000F;
 pub const WM_CLOSE: u32 = 0x0010;
+pub const WM_CHAR: u32 = 0x0102;
 pub const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
 pub const SW_SHOW: i32 = 5;

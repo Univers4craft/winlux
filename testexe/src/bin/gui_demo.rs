@@ -10,6 +10,8 @@ use winlux_testexe::*;
 
 static mut GOT_PAINT: u32 = 0;
 static mut GOT_DESTROY: u32 = 0;
+static mut GOT_CHAR: u32 = 0;
+static mut LAST_CHAR: usize = 0;
 
 /// Peinture de la scène de démonstration : panneau, titre, barres d'accent et
 /// ellipse « blob ». Chaque commande passe par GDI invité → noyau → backend.
@@ -82,6 +84,11 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             GOT_DESTROY += 1;
             0
         }
+        WM_CHAR => {
+            GOT_CHAR += 1;
+            LAST_CHAR = wparam;
+            0
+        }
         _ => DefWindowProcA(hwnd, msg, wparam, lparam),
     }
 }
@@ -144,6 +151,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
         }
 
         check!(GOT_PAINT >= 1, "WM_PAINT via PeekMessage");
+        if GOT_CHAR > 0 {
+            check!(LAST_CHAR != 0, "WM_CHAR traduit depuis le clavier");
+        }
         DestroyWindow(hwnd);
         check!(GOT_DESTROY >= 1, "WM_DESTROY destruction");
         finish()

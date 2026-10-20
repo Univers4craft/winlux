@@ -260,14 +260,14 @@ pub unsafe extern "win64" fn translate_message(msg: *const Msg) -> i32 {
     // effectif (majuscules, ponctuation, accents) ; à défaut on retombe sur la
     // disposition US non modifiée.
     if m.message == gui::WM_KEYDOWN {
-        if let Some(ch) = gui::take_key_char(m.wparam) {
-            gui::post_to_window(
+        if let Some(ch) = gui::take_key_char(m.hwnd, m.wparam, m.lparam) {
+            return gui::post_to_window(
                 m.hwnd,
                 gui::Msg::new(m.hwnd, gui::WM_CHAR, ch as usize, m.lparam),
-            );
+            ) as i32;
         }
     }
-    1
+    0
 }
 
 pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {

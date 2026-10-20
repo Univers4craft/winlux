@@ -104,7 +104,11 @@ Deux backends sont disponibles : *headless* (par défaut, aucun affichage, sert
 aux tests) et **X11** (`gui_x11.rs`), qui crée de vraies fenêtres sur le serveur
 X, rend le thème « blob » (dégradé vertical violet→bleu avec accent) et traduit
 les événements X en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`→
-`WM_SIZE`, boutons, souris, clavier, `WM_DELETE_WINDOW`→`WM_CLOSE`).
+`WM_SIZE`, boutons et mouvements de souris, keysyms→`VK_*`/`WM_KEYDOWN`/
+`WM_KEYUP`, `WM_DELETE_WINDOW`→`WM_CLOSE`). `TranslateMessage` publie les
+`WM_CHAR` correspondants pour les caractères ASCII/Latin-1 et les caractères
+BMP Unicode pris en charge ; la composition IME, les caractères hors BMP et
+les API d’état/focus clavier restent à implémenter.
 
 La couche de dessin GDI est amorcée : les primitives invitées n’écrivent pas
 directement dans la fenêtre, elles empilent des commandes (`FillRect`,

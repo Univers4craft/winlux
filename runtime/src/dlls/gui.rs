@@ -317,32 +317,61 @@ pub const VK_RETURN: usize = 0x0D;
 pub const VK_ESCAPE: usize = 0x1B;
 pub const VK_SPACE: usize = 0x20;
 
-/// Caractères en attente de `TranslateMessage`, indexés par touche virtuelle.
-/// Le backend X11 y dépose la traduction de la disposition clavier effective ;
-/// la valeur 0 signifie « touche sans caractère » (flèches, Ctrl, F1…).
-fn key_chars() -> &'static Mutex<HashMap<usize, u16>> {
-    static K: OnceLock<Mutex<HashMap<usize, u16>>> = OnceLock::new();
+#[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
+struct KeyCharKey {
+    hwnd: usize,
+    vk: usize,
+    lparam: isize,
+}
+
+/// Caractères en attente de `TranslateMessage`, associés au message clavier
+/// précis. La file conserve l'ordre lorsque plusieurs frappes identiques sont
+/// récupérées par un seul appel à `PeekMessage`.
+fn key_chars() -> &'static Mutex<HashMap<KeyCharKey, VecDeque<Option<u16>>>> {
+    static K: OnceLock<Mutex<HashMap<KeyCharKey, VecDeque<Option<u16>>>>> = OnceLock::new();
     K.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Enregistre le caractère produit par la prochaine pression d'une touche.
-pub fn set_key_char(vk: usize, ch: u16) {
-    lock(key_chars()).insert(vk, ch);
+/// Enregistre le caractère produit par une pression (ou `None` si elle n'en
+/// produit pas, par exemple quand Ctrl est enfoncé).
+pub fn set_key_char(hwnd: usize, vk: usize, lparam: isize, ch: Option<u16>) {
+    let key = KeyCharKey { hwnd, vk, lparam };
+    let mut pending = lock(key_chars());
+    let chars = pending.entry(key).or_default();
+    // Une application qui ne traduit jamais ses messages clavier ne doit pas
+    // faire croître cette file sans limite.
+    if chars.len() == 32 {
+        chars.pop_front();
+    }
+    chars.push_back(ch);
 }
 
 /// Caractère à synthétiser pour un `WM_KEYDOWN`, consommé une seule fois.
-pub fn take_key_char(vk: usize) -> Option<u16> {
-    if let Some(ch) = lock(key_chars()).remove(&vk) {
-        return (ch != 0).then_some(ch);
+pub fn take_key_char(hwnd: usize, vk: usize, lparam: isize) -> Option<u16> {
+    let key = KeyCharKey { hwnd, vk, lparam };
+    let queued = {
+        let mut pending = lock(key_chars());
+        let result = pending.get_mut(&key).and_then(VecDeque::pop_front);
+        if pending.get(&key).is_some_and(VecDeque::is_empty) {
+            pending.remove(&key);
+        }
+        result
+    };
+    match queued {
+        Some(ch) => ch,
+        None => vk_to_char(vk),
     }
-    vk_to_char(vk)
+}
+
+fn discard_key_chars(hwnd: usize) {
+    lock(key_chars()).retain(|key, _| key.hwnd != hwnd);
 }
 
 /// Traduction par défaut d'une touche virtuelle, utilisée quand le backend n'a
 /// rien enregistré (message clavier synthétique) : disposition US non modifiée.
 pub fn vk_to_char(vk: usize) -> Option<u16> {
     match vk {
-        0x08 | 0x09 | 0x0D | 0x1B | 0x20 => Some(vk as u16),
+        VK_BACK | VK_TAB | VK_RETURN | VK_ESCAPE | VK_SPACE => Some(vk as u16),
         0x30..=0x39 => Some(vk as u16),              // chiffres
         0x41..=0x5A => Some(vk as u16 + 0x20),       // lettres (minuscules)
         _ => None,
@@ -754,6 +783,7 @@ pub fn destroy_window(hwnd: usize) -> bool {
     };
     // Les DC de la fenêtre ne servent plus (le code invité ne doit pas peindre).
     lock(dcs()).retain(|_, d| d.hwnd != hwnd);
+    discard_key_chars(hwnd);
     // WM_DESTROY synchrone auprès du wndproc de la fenêtre détruite.
     if let Some(wp) = wnd_proc {
         unsafe { call_wndproc(wp, hwnd, WM_DESTROY, 0, 0) };
@@ -950,6 +980,49 @@ mod tests {
         assert_eq!(r.height(), 50);
         assert_eq!(r.right, 110);
         assert_eq!(r.bottom, 70);
+    }
+
+    #[test]
+    fn les_caracteres_clavier_sont_fifo_et_associes_au_message() {
+        let hwnd = usize::MAX - 0x100;
+        let vk = 0x41; // VK_A
+        let lparam = (30isize << 16) | 1;
+        set_key_char(hwnd, vk, lparam, Some(b'a' as u16));
+        set_key_char(hwnd, vk, lparam, Some(b'A' as u16));
+        assert_eq!(take_key_char(hwnd, vk, lparam), Some(b'a' as u16));
+        assert_eq!(take_key_char(hwnd, vk, lparam), Some(b'A' as u16));
+
+        // Une traduction X11 explicite « sans caractère » bloque le repli VK_A.
+        let ctrl_lparam = (30isize << 16) | 2;
+        set_key_char(hwnd, vk, ctrl_lparam, None);
+        assert_eq!(take_key_char(hwnd, vk, ctrl_lparam), None);
+        assert_eq!(take_key_char(hwnd, vk, ctrl_lparam), Some(b'a' as u16));
+
+        discard_key_chars(hwnd);
+    }
+
+    #[test]
+    fn translate_message_publie_wm_char_uniquement_pour_une_touche_traduite() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+
+        let key = Msg::new(hwnd, WM_KEYDOWN, 0x41, (30isize << 16) | 1);
+        assert_eq!(unsafe { crate::dlls::user32::translate_message(&key) }, 1);
+        let ch = take_message(&q, hwnd, WM_CHAR, WM_CHAR).expect("WM_CHAR généré");
+        assert_eq!(ch.wparam, b'a' as usize);
+        assert_eq!(ch.lparam, key.lparam);
+
+        let arrow = Msg::new(hwnd, WM_KEYDOWN, 0x25, (75isize << 16) | 1);
+        assert_eq!(unsafe { crate::dlls::user32::translate_message(&arrow) }, 0);
+        let ctrl_a_lparam = (30isize << 16) | 2;
+        set_key_char(hwnd, 0x41, ctrl_a_lparam, None);
+        let ctrl_a = Msg::new(hwnd, WM_KEYDOWN, 0x41, ctrl_a_lparam);
+        assert_eq!(unsafe { crate::dlls::user32::translate_message(&ctrl_a) }, 0);
+        let paint = Msg::new(hwnd, WM_PAINT, 0, 0);
+        assert_eq!(unsafe { crate::dlls::user32::translate_message(&paint) }, 0);
+        assert!(take_message(&q, hwnd, WM_CHAR, WM_CHAR).is_none());
+
+        destroy_window(hwnd);
     }
 
     /// WndProc inerte : `destroy_window` l'appelle de façon synchrone.

@@ -49,7 +49,7 @@
 - [x] Ajouter les API de base `GetSystemInfo`, version OS, horloge FILETIME et plusieurs primitives `Rtl*`.
 - [x] Ajouter les premières API GUI (`user32`, `gdi32`) et réseau (`ws2_32`).
 - [x] Construire le noyau fenêtres/messages (`gui.rs`) : classes, table HWND, file par thread, appel du `WndProc` invité, thème « blob » violet-bleu, avec un test PE `gui_suite.exe` (séquence WM_CREATE/WM_SIZE/WM_PAINT/WM_DESTROY).
-- [x] Relier le noyau à un backend X11 réel (`gui_x11.rs`, x11rb) : vraies fenêtres, dégradé violet→bleu + accent rendus côté serveur, événements X traduits en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`→`WM_SIZE`, clics, clavier, `WM_DELETE_WINDOW`→`WM_CLOSE`), avec démo `gui_demo.exe`. Backend *headless* conservé par défaut pour les tests (`WINLUX_GUI=headless`).
+- [x] Relier le noyau à un backend X11 réel (`gui_x11.rs`, x11rb) : vraies fenêtres, dégradé violet→bleu + accent rendus côté serveur, événements X traduits en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`→`WM_SIZE`, souris, clavier X11→`VK_*`/`WM_KEYDOWN`/`WM_KEYUP`, `WM_DELETE_WINDOW`→`WM_CLOSE`). `TranslateMessage` produit `WM_CHAR` (ASCII/Latin-1 et BMP) ; tracé GDI et saisie vérifiés par `gui_demo.exe` sous Xvfb. Backend *headless* conservé pour les tests (`WINLUX_GUI=headless`).
 - [x] Ajouter la couche de dessin GDI : commandes (`FillRect`, `FrameRect`, `Ellipse`, `Text`) accumulées par cycle de peinture puis rejouées par le backend (y compris à chaque `Expose`), pinceaux/plumes (`CreateSolidBrush`, `CreatePen`, `SelectObject`, `DeleteObject`, `GetStockObject`), couleurs et mode de fond (`SetTextColor`, `SetBkColor`, `SetBkMode`), `TextOutA`, `Rectangle`, `Ellipse` et `GetDC`/`ReleaseDC`. `gui_demo.exe` vérifie le tracé et le rendu a été contrôlé par capture X11 (`xwd`).
 - [x] Relier sockets TCP/UDP, erreurs WSA et résolveur `getaddrinfo` A/W aux interfaces POSIX (tests loopback).
 - [x] Ajouter un registre persistant partagé Linux/Windows.
@@ -75,7 +75,7 @@
 - [x] Ajouter les flux `FILE*` de la CRT (`fopen`/`fclose`, `fread`/`fwrite`, `fgets`/`fputs`, `fseek`/`ftell`, `feof`, `fprintf`, `vfprintf`, `vsprintf`, `remove`/`rename`) avec tests unitaires et PE.
 - [x] Ajouter les entrées formatées `scanf`/`sscanf`/`fscanf` et leurs variantes `v*` (entiers, flottants, chaînes, jeux de caractères, largeur, `*`, `%n`) avec tests unitaires et PE.
 - [ ] Continuer la CRT : locale, `_snscanf`, `fgetpos`/`fsetpos` et formats positionnels.
-- [ ] Poursuivre le rendu X11 : décorations/titre maison si absence de WM, redimensionnement (`WM_SIZE` → `SetWindowPos`), `SetFocus`/clavier virtuel et gestion du focus X ; compléter GDI (couleurs système `GetSysColor`, polices `CreateFont`, `PatBlt`, `BitBlt`/`StretchBlt`).
+- [ ] Poursuivre le rendu X11 : décorations/titre maison si absence de WM, redimensionnement (`WM_SIZE` → `SetWindowPos`), `SetFocus`/`GetKeyState` et gestion du focus X ; compléter GDI (couleurs système `GetSysColor`, polices `CreateFont`, `PatBlt`, `BitBlt`/`StretchBlt`).
 - [ ] Intégrer un véritable runtime CLR compatible pour exécuter les `.exe` .NET; sans CLR, `paint.net` ne fonctionne pas.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
 - [ ] Ajouter les formats audio compressés et les codecs vidéo; Media Foundation n’est pas encore reliée à une chaîne complète.

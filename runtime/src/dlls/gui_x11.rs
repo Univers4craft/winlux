@@ -162,20 +162,13 @@ impl X11Backend {
         None
     }
 
-    /// Keysym X11 d'un keycode au niveau demandé (0 = base, 1 = Maj).
-    fn key_sym(&mut self, keycode: u8, shift: bool) -> Option<u32> {
+    /// Keysyms X11 associés à un keycode (table de niveaux chargée à la demande).
+    fn key_syms(&mut self, keycode: u8) -> Option<Vec<u32>> {
         if !self.keymap.contains_key(&keycode) {
             let reply = self.conn.get_keyboard_mapping(keycode, 1).ok()?.reply().ok()?;
-            let per = (reply.keysyms_per_keycode as usize).max(1);
-            let syms = reply.keysyms.chunks(per).next()?.to_vec();
-            self.keymap.insert(keycode, syms);
+            self.keymap.insert(keycode, reply.keysyms);
         }
-        let syms = self.keymap.get(&keycode)?;
-        let level = usize::from(shift);
-        syms.get(level)
-            .copied()
-            .filter(|s| *s != 0)
-            .or_else(|| syms.first().copied().filter(|s| *s != 0))
+        self.keymap.get(&keycode).cloned()
     }
 
     fn paint_fill(&self, w: &XWin, r: &Rect, color: u32) {
@@ -323,29 +316,35 @@ impl X11Backend {
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let shift = e.state.contains(x11rb::protocol::xproto::KeyButMask::SHIFT);
                 let ctrl = e.state.contains(x11rb::protocol::xproto::KeyButMask::CONTROL);
-                let sym = self.key_sym(e.detail, shift);
-                let vk = keysym_to_vk(sym.unwrap_or(0)).unwrap_or(e.detail as usize);
+                let caps = e.state.contains(x11rb::protocol::xproto::KeyButMask::LOCK);
+                let syms = self.key_syms(e.detail);
+                let base = syms.as_deref().and_then(base_keysym);
+                let sym = syms.as_deref().and_then(|s| effective_keysym(s, shift, caps));
+                // Le VK désigne la touche physique (niveau non modifié), tandis
+                // que le caractère tient compte de Maj/Caps Lock.
+                let vk = base.and_then(keysym_to_vk).unwrap_or(e.detail as usize);
+                let extended = vk_is_extended(vk);
+                let lparam = key_lparam(e.detail, false, extended);
                 // Caractère effectif pour `TranslateMessage` ; Ctrl+lettre ne
                 // produit pas de caractère (raccourci clavier).
-                let ch = if ctrl { 0 } else { sym.map(keysym_to_char).unwrap_or(0) };
-                gui::set_key_char(vk, ch);
+                let ch = if ctrl { None } else { sym.map(keysym_to_char).filter(|c| *c != 0) };
+                gui::set_key_char(hwnd, vk, lparam, ch);
                 Some(PendingEvent {
                     hwnd,
                     message: gui::WM_KEYDOWN,
                     wparam: vk,
-                    lparam: key_lparam(e.detail, false),
+                    lparam,
                 })
             }
             Event::KeyRelease(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                let shift = e.state.contains(x11rb::protocol::xproto::KeyButMask::SHIFT);
-                let sym = self.key_sym(e.detail, shift);
-                let vk = keysym_to_vk(sym.unwrap_or(0)).unwrap_or(e.detail as usize);
+                let base = self.key_syms(e.detail).as_deref().and_then(base_keysym);
+                let vk = base.and_then(keysym_to_vk).unwrap_or(e.detail as usize);
                 Some(PendingEvent {
                     hwnd,
                     message: gui::WM_KEYUP,
                     wparam: vk,
-                    lparam: key_lparam(e.detail, true),
+                    lparam: key_lparam(e.detail, true, vk_is_extended(vk)),
                 })
             }
             _ => None,
@@ -383,10 +382,10 @@ fn button_wparam(detail: u8) -> usize {
 /// Convertit un keysym X11 en code de touche virtuelle Win32 (`VK_*`).
 fn keysym_to_vk(sym: u32) -> Option<usize> {
     let vk = match sym {
-        0xFF08 => 0x08,                                  // VK_BACK
-        0xFF09 => 0x09,                                  // VK_TAB
-        0xFF0D => 0x0D,                                  // VK_RETURN
-        0xFF1B => 0x1B,                                  // VK_ESCAPE
+        0xFF08 => gui::VK_BACK,
+        0xFF09 => gui::VK_TAB,
+        0xFF0D => gui::VK_RETURN,
+        0xFF1B => gui::VK_ESCAPE,
         0xFFFF => 0x2E,                                  // VK_DELETE
         0xFF51 => 0x25,                                  // VK_LEFT
         0xFF52 => 0x26,                                  // VK_UP
@@ -402,19 +401,61 @@ fn keysym_to_vk(sym: u32) -> Option<usize> {
         0xFFE3 | 0xFFE4 => 0x11,                          // VK_CONTROL
         0xFFE9 | 0xFFEA => 0x12,                          // VK_MENU
         0xFFE5 => 0x14,                                   // VK_CAPITAL
-        // ASCII imprimable : les lettres deviennent des VK majuscules, les
-        // chiffres et la ponctuation gardent leur code.
-        0x20..=0x7E => {
+        // ASCII imprimable : VK_A..VK_Z, chiffres et touches OEM Windows.
+        0x20 => gui::VK_SPACE,
+        0x21..=0x7E => {
             let c = sym as u8;
-            if c.is_ascii_lowercase() {
-                (c - 0x20) as usize
-            } else {
-                c as usize
+            match c {
+                b'0'..=b'9' | b'A'..=b'Z' => c as usize,
+                b'a'..=b'z' => (c - b'a' + b'A') as usize,
+                b'!' => b'1' as usize,
+                b'@' => b'2' as usize,
+                b'#' => b'3' as usize,
+                b'$' => b'4' as usize,
+                b'%' => b'5' as usize,
+                b'^' => b'6' as usize,
+                b'&' => b'7' as usize,
+                b'*' => b'8' as usize,
+                b'(' => b'9' as usize,
+                b')' => b'0' as usize,
+                b'-' | b'_' => 0xBD, // VK_OEM_MINUS
+                b'=' | b'+' => 0xBB, // VK_OEM_PLUS
+                b'[' | b'{' => 0xDB, // VK_OEM_4
+                b']' | b'}' => 0xDD, // VK_OEM_6
+                b'\\' | b'|' => 0xDC, // VK_OEM_5
+                b';' | b':' => 0xBA, // VK_OEM_1
+                b'\'' | b'"' => 0xDE, // VK_OEM_7
+                b',' | b'<' => 0xBC, // VK_OEM_COMMA
+                b'.' | b'>' => 0xBE, // VK_OEM_PERIOD
+                b'/' | b'?' => 0xBF, // VK_OEM_2
+                b'`' | b'~' => 0xC0, // VK_OEM_3
+                _ => return None,
             }
         }
         _ => return None,
     };
     Some(vk)
+}
+
+/// Premier keysym non nul : VK codes restent stables sous Maj et Caps Lock.
+fn base_keysym(syms: &[u32]) -> Option<u32> {
+    syms.first().copied().filter(|sym| *sym != 0)
+}
+
+/// Sélectionne le niveau effectif d'une touche, en appliquant Caps Lock aux
+/// lettres mais pas aux chiffres ni à la ponctuation.
+fn effective_keysym(syms: &[u32], shift: bool, caps: bool) -> Option<u32> {
+    let base = base_keysym(syms)?;
+    let is_letter = matches!(base, 0x41..=0x5A | 0x61..=0x7A);
+    let level = (if is_letter { shift ^ caps } else { shift }) as usize;
+    syms.get(level)
+        .copied()
+        .filter(|sym| *sym != 0)
+        .or(Some(base))
+}
+
+fn vk_is_extended(vk: usize) -> bool {
+    matches!(vk, 0x21..=0x2E)
 }
 
 /// Caractère produit par un keysym, 0 si la touche n'en produit pas.
@@ -426,17 +467,72 @@ fn keysym_to_char(sym: u32) -> u16 {
         0xFF1B => 0x1B, // Échap
         0x20..=0x7E => sym as u16,
         0xA0..=0xFF => sym as u16, // Latin-1 (é, à, ç…)
+        0x0100_0000..=0x0110_FFFF => {
+            let codepoint = sym & 0x00FF_FFFF;
+            char::from_u32(codepoint)
+                .and_then(|ch| u16::try_from(ch as u32).ok())
+                .unwrap_or(0)
+        }
         _ => 0,
     }
 }
 
 /// `lParam` d'un message clavier : une répétition, code matériel, transition.
-fn key_lparam(keycode: u8, up: bool) -> isize {
-    let scan = (keycode as isize) << 16;
+fn key_lparam(keycode: u8, up: bool, extended: bool) -> isize {
+    let scan = ((keycode as isize) << 16) | if extended { 1 << 24 } else { 0 };
     if up {
         scan | (1 << 30) | (1 << 31)
     } else {
         scan | 1
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn les_keysyms_deviennent_des_codes_vk_win32() {
+        assert_eq!(keysym_to_vk(b'a' as u32), Some(0x41));
+        assert_eq!(keysym_to_vk(b'A' as u32), Some(0x41));
+        assert_eq!(keysym_to_vk(b'7' as u32), Some(0x37));
+        assert_eq!(keysym_to_vk(b';' as u32), Some(0xBA)); // VK_OEM_1
+        assert_eq!(keysym_to_vk(b'!' as u32), Some(0x31)); // touche 1
+        assert_eq!(keysym_to_vk(b'?' as u32), Some(0xBF)); // VK_OEM_2
+        assert_eq!(keysym_to_vk(0xFF53), Some(0x27)); // VK_RIGHT
+        assert_eq!(keysym_to_vk(0xFFC2), Some(0x74)); // VK_F5
+        assert_eq!(keysym_to_vk(0xFFE3), Some(0x11)); // VK_CONTROL
+        assert_eq!(keysym_to_vk(0x1008_FF12), None);
+    }
+
+    #[test]
+    fn niveaux_clavier_gerent_maj_caps_et_ponctuation() {
+        let letter = [b'a' as u32, b'A' as u32];
+        assert_eq!(effective_keysym(&letter, false, false), Some(b'a' as u32));
+        assert_eq!(effective_keysym(&letter, true, false), Some(b'A' as u32));
+        assert_eq!(effective_keysym(&letter, false, true), Some(b'A' as u32));
+        assert_eq!(effective_keysym(&letter, true, true), Some(b'a' as u32));
+
+        let digit = [b'1' as u32, b'!' as u32];
+        assert_eq!(effective_keysym(&digit, false, true), Some(b'1' as u32));
+        assert_eq!(effective_keysym(&digit, true, false), Some(b'!' as u32));
+        assert_eq!(base_keysym(&digit), Some(b'1' as u32));
+    }
+
+    #[test]
+    fn caracteres_et_parametres_de_messages_clavier_sont_traduits() {
+        assert_eq!(keysym_to_char(b'!' as u32), b'!' as u16);
+        assert_eq!(keysym_to_char(0xE9), 0xE9); // é Latin-1
+        assert_eq!(keysym_to_char(0x0100_00E9), 0xE9); // é Unicode keysym
+        assert_eq!(keysym_to_char(0x0101_F600), 0); // supplementary plane non pris en charge
+        assert_eq!(keysym_to_char(0xFF0D), 0x0D); // Entrée
+        assert_eq!(keysym_to_char(0xFF51), 0); // flèche : pas de WM_CHAR
+
+        assert_eq!(key_lparam(38, false, false), (38isize << 16) | 1);
+        assert_eq!(
+            key_lparam(113, true, true),
+            (113isize << 16) | (1 << 24) | (1 << 30) | (1 << 31),
+        );
     }
 }
 
