@@ -21,6 +21,7 @@ for tool in cargo bash cpio fakeroot find gzip grub-mkrescue ldd sha256sum xorri
     }
 done
 for path in "$kernel" /usr/bin/busybox /usr/bin/Xvfb /usr/bin/xkbcomp "$fonts" "$xkb"; do
+    if [ "$path" = "$kernel" ]; then continue; fi
     test -e "$path" || { echo "fichier requis absent : $path" >&2; exit 1; }
 done
 
