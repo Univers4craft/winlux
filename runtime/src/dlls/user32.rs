@@ -222,6 +222,7 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
             if m.message == gui::WM_QUIT {
                 return 0;
             }
+            gui::observe_key_message(&m);
             write_msg(out, &m);
             return 1;
         }
@@ -243,6 +244,7 @@ pub unsafe extern "win64" fn peek_message_a(out: *mut Msg, hwnd: usize, min: u32
                 gui::prepend_message(&q, m);
                 return -1;
             }
+            gui::observe_key_message(&m);
             write_msg(out, &m);
             return 1;
         }
@@ -355,6 +357,30 @@ pub extern "win64" fn get_focus() -> usize {
     gui::focused_window()
 }
 
+pub extern "win64" fn get_key_state(vk: i32) -> i16 {
+    if !(0..256).contains(&vk) {
+        return 0;
+    }
+    gui::get_key_state(vk as usize)
+}
+
+pub extern "win64" fn get_async_key_state(vk: i32) -> i16 {
+    if !(0..256).contains(&vk) {
+        return 0;
+    }
+    gui::get_async_key_state(vk as usize)
+}
+
+pub unsafe extern "win64" fn get_keyboard_state(out: *mut u8) -> i32 {
+    if out.is_null() {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    let state = gui::get_keyboard_state();
+    std::ptr::copy_nonoverlapping(state.as_ptr(), out, state.len());
+    1
+}
+
 pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
     if hwnd != 0 {
         let Some(owner) = gui::window_owner(hwnd) else {
@@ -372,6 +398,10 @@ pub unsafe extern "win64" fn set_focus(hwnd: usize) -> usize {
     };
     if old == hwnd {
         return old;
+    }
+    if hwnd == 0 {
+        gui::clear_current_thread_keyboard_state();
+        gui::clear_async_key_down_states();
     }
 
     // Met à jour le backend avant les callbacks : un SetFocus réentrant depuis
@@ -679,6 +709,8 @@ pub fn exports() -> crate::dlls::Exports {
         "UpdateWindow"=>fn update_window, "DestroyWindow"=>fn destroy_window,
         "IsWindow"=>fn is_window, "GetWindowRect"=>fn get_window_rect,
         "GetFocus"=>fn get_focus, "SetFocus"=>fn set_focus,
+        "GetKeyState"=>fn get_key_state, "GetAsyncKeyState"=>fn get_async_key_state,
+        "GetKeyboardState"=>fn get_keyboard_state,
         "GetClientRect"=>fn get_client_rect, "SetWindowTextA"=>fn set_window_text_a,
         "SetWindowPos"=>fn set_window_pos, "MoveWindow"=>fn move_window,
         "GetWindowTextA"=>fn get_window_text_a, "GetWindowTextLengthA"=>fn get_window_text_length_a,

@@ -204,6 +204,9 @@ pub const WM_CLOSE: u32 = 0x0010;
 pub const WM_SETFOCUS: u32 = 0x0007;
 pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const WM_CHAR: u32 = 0x0102;
+pub const WM_KEYDOWN: u32 = 0x0100;
+pub const WM_KEYUP: u32 = 0x0101;
+pub const VK_A: i32 = 0x41;
 pub const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
 pub const SWP_NOSIZE: u32 = 0x0001;
@@ -351,6 +354,7 @@ extern "C" {
     pub fn PeekMessageA(msg: *mut Msg, hwnd: Handle, min: u32, max: u32, remove: u32) -> i32;
     pub fn DispatchMessageA(msg: *const Msg) -> isize;
     pub fn TranslateMessage(msg: *const Msg) -> i32;
+    pub fn PostMessageA(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> i32;
     pub fn PostQuitMessage(code: i32);
     pub fn ShowWindow(hwnd: Handle, cmd: i32) -> i32;
     pub fn UpdateWindow(hwnd: Handle) -> i32;
@@ -358,6 +362,9 @@ extern "C" {
     pub fn IsWindow(hwnd: Handle) -> i32;
     pub fn GetFocus() -> Handle;
     pub fn SetFocus(hwnd: Handle) -> Handle;
+    pub fn GetKeyState(vk: i32) -> i16;
+    pub fn GetAsyncKeyState(vk: i32) -> i16;
+    pub fn GetKeyboardState(state: *mut u8) -> i32;
     pub fn GetClientRect(hwnd: Handle, out: *mut Rect) -> i32;
     pub fn GetWindowRect(hwnd: Handle, out: *mut Rect) -> i32;
     pub fn SetWindowPos(hwnd: Handle, after: Handle, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;

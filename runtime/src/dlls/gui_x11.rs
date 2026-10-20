@@ -333,6 +333,7 @@ impl X11Backend {
                 let vk = base.and_then(keysym_to_vk).unwrap_or(e.detail as usize);
                 let extended = vk_is_extended(vk);
                 let lparam = key_lparam(e.detail, false, extended);
+                gui::update_async_key_state(vk, true);
                 // Caractère effectif pour `TranslateMessage` ; Ctrl+lettre ne
                 // produit pas de caractère (raccourci clavier).
                 let ch = if ctrl { None } else { sym.map(keysym_to_char).filter(|c| *c != 0) };
@@ -348,6 +349,7 @@ impl X11Backend {
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let base = self.key_syms(e.detail).as_deref().and_then(base_keysym);
                 let vk = base.and_then(keysym_to_vk).unwrap_or(e.detail as usize);
+                gui::update_async_key_state(vk, false);
                 Some(PendingEvent {
                     hwnd,
                     message: gui::WM_KEYUP,
@@ -408,7 +410,9 @@ fn keysym_to_vk(sym: u32) -> Option<usize> {
         0xFFE1 | 0xFFE2 => 0x10,                          // VK_SHIFT
         0xFFE3 | 0xFFE4 => 0x11,                          // VK_CONTROL
         0xFFE9 | 0xFFEA => 0x12,                          // VK_MENU
-        0xFFE5 => 0x14,                                   // VK_CAPITAL
+        0xFFE5 => gui::VK_CAPITAL,
+        0xFF7F => gui::VK_NUMLOCK,
+        0xFF14 => gui::VK_SCROLL,
         // ASCII imprimable : VK_A..VK_Z, chiffres et touches OEM Windows.
         0x20 => gui::VK_SPACE,
         0x21..=0x7E => {

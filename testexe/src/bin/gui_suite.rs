@@ -104,6 +104,22 @@ pub extern "C" fn mainCRTStartup() -> ! {
     check!(SetFocus(core::ptr::null_mut()) == hwnd && GetFocus().is_null() && GOT_KILLFOCUS == 1, "SetFocus(NULL) envoie WM_KILLFOCUS");
     check!(SetFocus(hwnd).is_null() && GetFocus() == hwnd && GOT_SETFOCUS == 2, "SetFocus reprend le focus");
 
+    let mut keyboard: [u8; 256] = [0; 256];
+    check!(GetKeyState(VK_A) == 0, "GetKeyState initial");
+    check!(GetKeyboardState(keyboard.as_mut_ptr()) != 0 && keyboard[VK_A as usize] == 0, "GetKeyboardState initial");
+    SetLastError(0);
+    check!(GetKeyboardState(core::ptr::null_mut()) == 0 && GetLastError() == 87, "GetKeyboardState rejette un pointeur nul");
+    check!(PostMessageA(hwnd, WM_KEYDOWN, VK_A as usize, (30isize << 16) | 1) != 0, "PostMessage WM_KEYDOWN");
+    let mut key_msg: Msg = core::mem::zeroed();
+    check!(PeekMessageA(&mut key_msg, core::ptr::null_mut(), WM_KEYDOWN, WM_KEYDOWN, 0) > 0, "PeekMessage clavier sans retrait");
+    check!(GetKeyState(VK_A) == 0, "GetKeyState inchangé sans retrait");
+    check!(PeekMessageA(&mut key_msg, core::ptr::null_mut(), WM_KEYDOWN, WM_KEYDOWN, 1) > 0, "PeekMessage clavier avec retrait");
+    check!(GetKeyState(VK_A) as u16 & 0x8000 != 0, "GetKeyState bit pressé");
+    check!(GetKeyboardState(keyboard.as_mut_ptr()) != 0 && keyboard[VK_A as usize] & 0x80 != 0, "GetKeyboardState bit pressé");
+    check!(PostMessageA(hwnd, WM_KEYUP, VK_A as usize, (30isize << 16) | (1 << 30) | (1 << 31)) != 0, "PostMessage WM_KEYUP");
+    check!(PeekMessageA(&mut key_msg, core::ptr::null_mut(), WM_KEYUP, WM_KEYUP, 1) > 0, "PeekMessage relâchement avec retrait");
+    check!(GetKeyState(VK_A) as u16 & 0x8000 == 0, "GetKeyState bit relâché");
+
     check!(IsWindow(hwnd) != 0, "IsWindow apres creation");
 
     let mut rect: Rect = Default::default();

@@ -16,6 +16,12 @@ static mut GOT_FOCUS: u32 = 0;
 static mut GOT_KILLFOCUS: u32 = 0;
 static mut GOT_CHAR: u32 = 0;
 static mut LAST_CHAR: usize = 0;
+static mut GOT_KEYDOWN: u32 = 0;
+static mut GOT_KEYUP: u32 = 0;
+static mut THREAD_KEY_STATE_MATCH: u32 = 0;
+static mut KEYBOARD_STATE_MATCH: u32 = 0;
+static mut ASYNC_KEY_PRESSED: u32 = 0;
+static mut THREAD_KEY_UP_CLEAR: u32 = 0;
 
 /// Peinture de la scène de démonstration : panneau, titre, barres d'accent et
 /// ellipse « blob ». Chaque commande passe par GDI invité → noyau → backend.
@@ -111,6 +117,22 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             LAST_CHAR = wparam;
             0
         }
+        WM_KEYDOWN => {
+            GOT_KEYDOWN += 1;
+            let vk = wparam as i32;
+            THREAD_KEY_STATE_MATCH |= ((GetKeyState(vk) as u16 & 0x8000) != 0) as u32;
+            let mut keys: [u8; 256] = [0; 256];
+            if GetKeyboardState(keys.as_mut_ptr()) != 0 && wparam < 256 {
+                KEYBOARD_STATE_MATCH |= (keys[wparam] & 0x80 != 0) as u32;
+            }
+            ASYNC_KEY_PRESSED |= ((GetAsyncKeyState(vk) as u16 & 1) != 0) as u32;
+            0
+        }
+        WM_KEYUP => {
+            GOT_KEYUP += 1;
+            THREAD_KEY_UP_CLEAR |= ((GetKeyState(wparam as i32) as u16 & 0x8000) == 0) as u32;
+            0
+        }
         _ => DefWindowProcA(hwnd, msg, wparam, lparam),
     }
 }
@@ -178,6 +200,14 @@ pub extern "C" fn mainCRTStartup() -> ! {
         }
         if GOT_CHAR > 0 {
             check!(LAST_CHAR != 0, "WM_CHAR traduit depuis le clavier");
+        }
+        if GOT_KEYDOWN > 0 {
+            check!(THREAD_KEY_STATE_MATCH != 0, "GetKeyState reflète WM_KEYDOWN");
+            check!(KEYBOARD_STATE_MATCH != 0, "GetKeyboardState reflète WM_KEYDOWN");
+            check!(ASYNC_KEY_PRESSED != 0, "GetAsyncKeyState détecte la pression");
+        }
+        if GOT_KEYUP > 0 {
+            check!(THREAD_KEY_UP_CLEAR != 0, "GetKeyState reflète WM_KEYUP");
         }
         if GOT_FOCUS > 0 {
             if GOT_KILLFOCUS > 0 {

@@ -381,6 +381,141 @@ pub const VK_TAB: usize = 0x09;
 pub const VK_RETURN: usize = 0x0D;
 pub const VK_ESCAPE: usize = 0x1B;
 pub const VK_SPACE: usize = 0x20;
+pub const VK_CAPITAL: usize = 0x14;
+pub const VK_NUMLOCK: usize = 0x90;
+pub const VK_SCROLL: usize = 0x91;
+
+const KEY_STATE_COUNT: usize = 256;
+
+fn thread_keyboard_states() -> &'static Mutex<HashMap<ThreadId, [u8; KEY_STATE_COUNT]>> {
+    static K: OnceLock<Mutex<HashMap<ThreadId, [u8; KEY_STATE_COUNT]>>> = OnceLock::new();
+    K.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+#[derive(Clone)]
+struct AsyncKeyboardState {
+    keys: [u8; KEY_STATE_COUNT],
+    pressed_since_query: [bool; KEY_STATE_COUNT],
+}
+
+impl Default for AsyncKeyboardState {
+    fn default() -> Self {
+        Self { keys: [0; KEY_STATE_COUNT], pressed_since_query: [false; KEY_STATE_COUNT] }
+    }
+}
+
+fn async_keyboard_state() -> &'static Mutex<AsyncKeyboardState> {
+    static K: OnceLock<Mutex<AsyncKeyboardState>> = OnceLock::new();
+    K.get_or_init(|| Mutex::new(AsyncKeyboardState::default()))
+}
+
+fn is_toggle_key(vk: usize) -> bool {
+    matches!(vk, VK_CAPITAL | VK_NUMLOCK | VK_SCROLL)
+}
+
+fn transition_key_state(byte: &mut u8, vk: usize, down: bool) {
+    if down {
+        if *byte & 0x80 == 0 && is_toggle_key(vk) {
+            *byte ^= 0x01;
+        }
+        *byte |= 0x80;
+    } else {
+        *byte &= !0x80;
+    }
+}
+
+/// Met à jour l'état Win32 du thread quand il retire WM_KEYDOWN/WM_KEYUP.
+/// Ainsi `GetKeyState` reflète l'événement actuellement traité, même si X11 a
+/// déjà livré la pression et le relâchement dans un seul tour de boucle.
+pub fn observe_key_message(msg: &Msg) {
+    if msg.wparam >= KEY_STATE_COUNT {
+        return;
+    }
+    match msg.message {
+        WM_KEYDOWN => update_thread_key_state(msg.wparam, true),
+        WM_KEYUP => update_thread_key_state(msg.wparam, false),
+        _ => {}
+    }
+}
+
+fn update_thread_key_state(vk: usize, down: bool) {
+    let tid = std::thread::current().id();
+    let mut states = lock(thread_keyboard_states());
+    let keys = states.entry(tid).or_insert([0; KEY_STATE_COUNT]);
+    transition_key_state(&mut keys[vk], vk, down);
+}
+
+/// `SHORT` GetKeyState : bit 15 = pressé, bit 0 = bascule (Caps/Num/Scroll).
+pub fn get_key_state(vk: usize) -> i16 {
+    if vk >= KEY_STATE_COUNT {
+        return 0;
+    }
+    let tid = std::thread::current().id();
+    let byte = lock(thread_keyboard_states())
+        .get(&tid)
+        .map(|keys| keys[vk])
+        .unwrap_or(0);
+    byte as i8 as i16
+}
+
+/// Copie l'état clavier des 256 touches virtuelles du thread courant.
+pub fn get_keyboard_state() -> [u8; KEY_STATE_COUNT] {
+    let tid = std::thread::current().id();
+    lock(thread_keyboard_states())
+        .get(&tid)
+        .copied()
+        .unwrap_or([0; KEY_STATE_COUNT])
+}
+
+/// Enregistre l'état hôte consulté par `GetAsyncKeyState`.
+pub fn update_async_key_state(vk: usize, down: bool) {
+    if vk >= KEY_STATE_COUNT {
+        return;
+    }
+    let mut state = lock(async_keyboard_state());
+    let was_down = state.keys[vk] & 0x80 != 0;
+    transition_key_state(&mut state.keys[vk], vk, down);
+    if down && !was_down {
+        state.pressed_since_query[vk] = true;
+    }
+}
+
+/// `SHORT` GetAsyncKeyState : état courant en bit 15, pression depuis le
+/// dernier appel en bit 0 (ce dernier est consommé par la lecture).
+pub fn get_async_key_state(vk: usize) -> i16 {
+    if vk >= KEY_STATE_COUNT {
+        return 0;
+    }
+    let mut state = lock(async_keyboard_state());
+    let down = state.keys[vk] & 0x80 != 0;
+    let pressed = std::mem::replace(&mut state.pressed_since_query[vk], false);
+    (((if down { 1u16 } else { 0 }) << 15) | if pressed { 1 } else { 0 }) as i16
+}
+
+fn clear_thread_keyboard_state(owner: &ThreadId) {
+    if let Some(keys) = lock(thread_keyboard_states()).get_mut(owner) {
+        for byte in keys {
+            *byte &= 0x01; // conserve les états de bascule
+        }
+    }
+}
+
+pub fn clear_thread_keyboard_state_for_window(hwnd: usize) {
+    if let Some(owner) = window_owner(hwnd) {
+        clear_thread_keyboard_state(&owner);
+    }
+}
+
+pub fn clear_current_thread_keyboard_state() {
+    clear_thread_keyboard_state(&std::thread::current().id());
+}
+
+pub fn clear_async_key_down_states() {
+    let mut state = lock(async_keyboard_state());
+    for byte in &mut state.keys {
+        *byte &= 0x01;
+    }
+}
 
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq)]
 struct KeyCharKey {
@@ -781,6 +916,8 @@ pub fn pump_backend() {
             continue;
         }
         if e.message == WM_KILLFOCUS {
+            clear_thread_keyboard_state_for_window(e.hwnd);
+            clear_async_key_down_states();
             let cleared = clear_focus_from_backend(e.hwnd);
             if cleared {
                 post_to_window(e.hwnd, Msg::new(e.hwnd, WM_KILLFOCUS, 0, 0));
@@ -862,11 +999,11 @@ pub fn request_paint(hwnd: usize) {
 
 pub fn destroy_window(hwnd: usize) -> bool {
     // Capture du wndproc et du parent avant retrait de la table.
-    let (wnd_proc, parent) = {
+    let (wnd_proc, parent, owner) = {
         let mut map = lock(windows());
         match map.remove(&hwnd) {
-            Some(w) => (Some(w.wnd_proc), w.parent),
-            None => (None, 0),
+            Some(w) => (Some(w.wnd_proc), w.parent, Some(w.owner)),
+            None => (None, 0, None),
         }
     };
     // Les DC de la fenêtre ne servent plus (le code invité ne doit pas peindre).
@@ -876,6 +1013,10 @@ pub fn destroy_window(hwnd: usize) -> bool {
     // WM_DESTROY synchrone auprès du wndproc de la fenêtre détruite.
     if let Some(wp) = wnd_proc {
         if had_focus {
+            if let Some(owner) = owner.as_ref() {
+                clear_thread_keyboard_state(owner);
+            }
+            clear_async_key_down_states();
             unsafe { call_wndproc(wp, hwnd, WM_KILLFOCUS, 0, 0) };
         }
         unsafe { call_wndproc(wp, hwnd, WM_DESTROY, 0, 0) };
@@ -891,6 +1032,7 @@ pub fn destroy_window(hwnd: usize) -> bool {
         destroy_window(c);
     }
     let _ = parent;
+    let _ = owner;
     true
 }
 
@@ -1152,6 +1294,30 @@ mod tests {
         assert_eq!(focused_window(), hwnd);
         destroy_window(hwnd);
         assert_eq!(focused_window(), 0);
+    }
+
+    #[test]
+    fn etats_clavier_thread_async_et_touches_a_bascule() {
+        let vk = 0xE7;
+        update_thread_key_state(vk, true);
+        assert_ne!(get_key_state(vk) as u16 & 0x8000, 0);
+        assert_ne!(get_keyboard_state()[vk] & 0x80, 0);
+        update_thread_key_state(vk, false);
+        assert_eq!(get_key_state(vk) as u16 & 0x8000, 0);
+
+        update_async_key_state(vk, true);
+        assert_eq!(get_async_key_state(vk) as u16 & 0x8001, 0x8001);
+        assert_eq!(get_async_key_state(vk) as u16 & 0x8001, 0x8000);
+        update_async_key_state(vk, false);
+        assert_eq!(get_async_key_state(vk), 0);
+
+        update_thread_key_state(VK_CAPITAL, true);
+        assert_eq!(get_key_state(VK_CAPITAL) as u16 & 0x8001, 0x8001);
+        update_thread_key_state(VK_CAPITAL, false);
+        assert_eq!(get_key_state(VK_CAPITAL) as u16 & 0x8001, 1);
+        update_thread_key_state(VK_CAPITAL, true);
+        assert_eq!(get_key_state(VK_CAPITAL) as u16 & 0x8001, 0x8000);
+        update_thread_key_state(VK_CAPITAL, false);
     }
 
     /// WndProc inerte : `destroy_window` l'appelle de façon synchrone.

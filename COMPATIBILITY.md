@@ -108,9 +108,11 @@ les événements X en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`�
 `WM_KEYUP`, `WM_DELETE_WINDOW`→`WM_CLOSE`). `TranslateMessage` publie les
 `WM_CHAR` correspondants pour les caractères ASCII/Latin-1 et les caractères
 BMP Unicode pris en charge ; la composition IME, les caractères hors BMP et
-`GetKeyState`/`GetKeyboardState` restent à implémenter. `GetFocus`/`SetFocus`
-fonctionnent par thread et `FocusIn`/`FocusOut` déclenchent `WM_SETFOCUS`/
-`WM_KILLFOCUS`. `SetWindowPos` et
+les touches mortes restent à implémenter. `GetKeyState`, `GetAsyncKeyState` et
+`GetKeyboardState` sont pris en charge en sous-ensemble : état de thread mis à
+jour au retrait des messages clavier, état asynchrone alimenté par X11 et
+tableau de 256 touches virtuelles. `GetFocus`/`SetFocus` fonctionnent par thread
+et `FocusIn`/`FocusOut` déclenchent `WM_SETFOCUS`/`WM_KILLFOCUS`. `SetWindowPos` et
 `MoveWindow` déplacent/redimensionnent les fenêtres, actualisent les rectangles
 Win32 et publient `WM_MOVE`/`WM_SIZE` ; les changements de taille externes via
 `ConfigureNotify` sont également reflétés. Le z-order et les notifications
