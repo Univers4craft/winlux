@@ -18,6 +18,8 @@ use x11rb::wrapper::ConnectionExt as _;
 struct XWin {
     window: Window,
     gc: Gcontext,
+    x: i32,
+    y: i32,
     width: u16,
     height: u16,
 }
@@ -34,6 +36,8 @@ pub struct X11Backend {
     by_xwin: HashMap<u32, usize>,
     /// Événements lus pendant `wait`, consommés par le prochain `pump`.
     pending: Vec<Event>,
+    /// Événement supplémentaire issu d'un ConfigureNotify simultanément move/size.
+    deferred_events: Vec<PendingEvent>,
     /// Dernière liste de commandes GDI par fenêtre, rejouée à chaque Expose.
     content: HashMap<usize, Vec<DrawCmd>>,
     /// Police « core » utilisée pour le texte (ouverte à la première demande).
@@ -60,6 +64,7 @@ impl X11Backend {
             windows: HashMap::new(),
             by_xwin: HashMap::new(),
             pending: Vec::new(),
+            deferred_events: Vec::new(),
             content: HashMap::new(),
             font: None,
             keymap: HashMap::new(),
@@ -363,17 +368,46 @@ impl X11Backend {
 
     fn on_configure(&mut self, e: ConfigureNotifyEvent) -> Option<PendingEvent> {
         let hwnd = *self.by_xwin.get(&e.window)?;
-        let (old_w, old_h) = {
+        let (old_x, old_y, old_w, old_h, window, root) = {
             let w = self.windows.get(&hwnd)?;
-            (w.width, w.height)
+            (w.x, w.y, w.width, w.height, w.window, self.conn.setup().roots[self.screen].root)
         };
+        // ConfigureNotify.x/y sont relatifs au parent; traduire l'origine vers
+        // la racine couvre les fenêtres reparentées par un gestionnaire X11.
+        let (x, y) = self
+            .conn
+            .translate_coordinates(window, root, 0, 0)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .map(|reply| (reply.dst_x as i32, reply.dst_y as i32))
+            .unwrap_or((e.x as i32, e.y as i32));
         if let Some(w) = self.windows.get_mut(&hwnd) {
+            w.x = x;
+            w.y = y;
             w.width = e.width;
             w.height = e.height;
         }
-        if e.width != old_w || e.height != old_h {
+        let moved = x != old_x || y != old_y;
+        let resized = e.width != old_w || e.height != old_h;
+        if resized {
             let lparam = ((e.height as isize) << 16) | (e.width as isize & 0xFFFF);
+            if moved {
+                self.deferred_events.push(PendingEvent {
+                    hwnd,
+                    message: gui::WM_MOVE,
+                    wparam: 0,
+                    lparam: pack_i16_pair(x, y),
+                });
+            }
             return Some(PendingEvent { hwnd, message: gui::WM_SIZE, wparam: 0, lparam });
+        }
+        if moved {
+            return Some(PendingEvent {
+                hwnd,
+                message: gui::WM_MOVE,
+                wparam: 0,
+                lparam: pack_i16_pair(x, y),
+            });
         }
         None
     }
@@ -387,6 +421,10 @@ fn button_wparam(detail: u8) -> usize {
         3 => 0x0010, // MK_RBUTTON
         _ => 0,
     }
+}
+
+fn pack_i16_pair(low: i32, high: i32) -> isize {
+    (((high as u16 as u32) << 16) | low as u16 as u32) as isize
 }
 
 /// Convertit un keysym X11 en code de touche virtuelle Win32 (`VK_*`).
@@ -555,11 +593,12 @@ impl gui::GuiBackend for X11Backend {
         while let Ok(Some(ev)) = self.conn.poll_for_event() {
             evs.push(ev);
         }
-        let mut out = Vec::new();
+        let mut out = std::mem::take(&mut self.deferred_events);
         for ev in evs {
             if let Some(p) = self.translate(ev) {
                 out.push(p);
             }
+            out.append(&mut self.deferred_events);
         }
         out
     }
@@ -657,7 +696,10 @@ impl gui::GuiBackend for X11Backend {
         let _ = self.conn.create_gc(gc, win, &CreateGCAux::new().graphics_exposures(0));
 
         let _ = self.conn.flush();
-        self.windows.insert(hwnd, XWin { window: win, gc, width: w, height: h });
+        self.windows.insert(
+            hwnd,
+            XWin { window: win, gc, x: x as i32, y: y as i32, width: w, height: h },
+        );
         self.by_xwin.insert(win, hwnd);
     }
 
@@ -712,6 +754,8 @@ impl gui::GuiBackend for X11Backend {
         let height = rect.height().max(1).min(u16::MAX as i32) as u16;
         let window = match self.windows.get_mut(&hwnd) {
             Some(w) => {
+                w.x = x;
+                w.y = y;
                 w.width = width;
                 w.height = height;
                 w.window

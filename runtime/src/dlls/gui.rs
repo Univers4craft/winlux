@@ -927,6 +927,11 @@ pub fn pump_backend() {
         if e.message == WM_SIZE {
             let packed = e.lparam as u32;
             update_window_size(e.hwnd, (packed & 0xFFFF) as i32, (packed >> 16) as i32);
+        } else if e.message == WM_MOVE {
+            let packed = e.lparam as u32;
+            let x = (packed as u16 as i16) as i32;
+            let y = ((packed >> 16) as u16 as i16) as i32;
+            update_window_position(e.hwnd, x, y);
         }
         let m = Msg {
             hwnd: e.hwnd,
@@ -1086,6 +1091,17 @@ fn update_window_size(hwnd: usize, width: i32, height: i32) {
     if let Some(window) = lock(windows()).get_mut(&hwnd) {
         window.rect.right = window.rect.left.saturating_add(width);
         window.rect.bottom = window.rect.top.saturating_add(height);
+    }
+}
+
+fn update_window_position(hwnd: usize, x: i32, y: i32) {
+    if let Some(window) = lock(windows()).get_mut(&hwnd) {
+        let width = window.rect.width();
+        let height = window.rect.height();
+        window.rect.left = x;
+        window.rect.top = y;
+        window.rect.right = x.saturating_add(width);
+        window.rect.bottom = y.saturating_add(height);
     }
 }
 

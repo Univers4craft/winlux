@@ -12,6 +12,8 @@ static mut GOT_PAINT: u32 = 0;
 static mut GOT_DESTROY: u32 = 0;
 static mut GOT_SIZE: u32 = 0;
 static mut CLIENT_SIZE_MATCH: u32 = 0;
+static mut GOT_MOVE: u32 = 0;
+static mut WINDOW_POSITION_MATCH: u32 = 0;
 static mut GOT_FOCUS: u32 = 0;
 static mut GOT_KILLFOCUS: u32 = 0;
 static mut GOT_CHAR: u32 = 0;
@@ -102,6 +104,16 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             CLIENT_SIZE_MATCH = (GetClientRect(hwnd, &mut client) != 0
                 && client.right == expected_w
                 && client.bottom == expected_h) as u32;
+            0
+        }
+        WM_MOVE => {
+            GOT_MOVE += 1;
+            let expected_x = (lparam as u32 as u16 as i16) as i32;
+            let expected_y = ((lparam as u32 >> 16) as u16 as i16) as i32;
+            let mut rect: Rect = core::mem::zeroed();
+            WINDOW_POSITION_MATCH = (GetWindowRect(hwnd, &mut rect) != 0
+                && rect.left == expected_x
+                && rect.top == expected_y) as u32;
             0
         }
         WM_SETFOCUS => {
@@ -197,6 +209,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
         check!(GOT_PAINT >= 1, "WM_PAINT via PeekMessage");
         if GOT_SIZE > 1 {
             check!(CLIENT_SIZE_MATCH != 0, "GetClientRect synchronise avec ConfigureNotify");
+        }
+        if GOT_MOVE > 0 {
+            check!(WINDOW_POSITION_MATCH != 0, "GetWindowRect synchronise avec ConfigureNotify");
         }
         if GOT_CHAR > 0 {
             check!(LAST_CHAR != 0, "WM_CHAR traduit depuis le clavier");

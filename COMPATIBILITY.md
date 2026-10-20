@@ -115,7 +115,8 @@ tableau de 256 touches virtuelles. `GetFocus`/`SetFocus` fonctionnent par thread
 et `FocusIn`/`FocusOut` déclenchent `WM_SETFOCUS`/`WM_KILLFOCUS`. `SetWindowPos` et
 `MoveWindow` déplacent/redimensionnent les fenêtres, actualisent les rectangles
 Win32 et publient `WM_MOVE`/`WM_SIZE` ; les changements de taille externes via
-`ConfigureNotify` sont également reflétés. Le z-order et les notifications
+`ConfigureNotify` sont également reflétés, de même que les déplacements externes.
+Le z-order et les notifications
 `WINDOWPOS` avancées ne sont pas encore gérés.
 
 La couche de dessin GDI est amorcée : les primitives invitées n’écrivent pas
