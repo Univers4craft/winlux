@@ -127,6 +127,7 @@ chaque `Expose` : le contenu survit donc aux rafraîchissements et aux
 redimensionnements. Sont couverts `CreateSolidBrush`, `CreatePen`,
 `SelectObject`, `DeleteObject`, `GetStockObject` (pinceaux/plumes standard),
 `GetSysColor`/`GetSysColorBrush` pour le sous-ensemble de couleurs du thème,
+`GetObjectA/W` pour les bitmaps, pinceaux, plumes et polices pris en charge,
 `SetTextColor`, `SetBkColor`, `SetBkMode` (texte opaque ou transparent),
 `TextOutA`, `Rectangle`, `Ellipse`, `FillRect`, `FrameRect`, `PatBlt` (PATCOPY,
 BLACKNESS, WHITENESS, PATINVERT, PATAND, PATOR, DSTINVERT), `BitBlt`/`StretchBlt`
