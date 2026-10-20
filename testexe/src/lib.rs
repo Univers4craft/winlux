@@ -211,6 +211,35 @@ pub struct BitmapInfoHeader {
     pub colors_important: u32,
 }
 
+#[repr(C)]
+pub struct BitmapObject {
+    pub bm_type: i32,
+    pub bm_width: i32,
+    pub bm_height: i32,
+    pub bm_width_bytes: i32,
+    pub bm_planes: u16,
+    pub bm_bits_pixel: u16,
+    pub bm_bits: *mut c_void,
+}
+
+#[repr(C)]
+pub struct LogFontW {
+    pub height: i32,
+    pub width: i32,
+    pub escapement: i32,
+    pub orientation: i32,
+    pub weight: i32,
+    pub italic: u8,
+    pub underline: u8,
+    pub strikeout: u8,
+    pub charset: u8,
+    pub out_precision: u8,
+    pub clip_precision: u8,
+    pub quality: u8,
+    pub pitch_and_family: u8,
+    pub face: [u16; 32],
+}
+
 pub const WM_CREATE: u32 = 0x0001;
 pub const WM_DESTROY: u32 = 0x0002;
 pub const WM_MOVE: u32 = 0x0003;
@@ -400,6 +429,8 @@ extern "C" {
 #[link(name = "gdi32", kind = "raw-dylib")]
 extern "C" {
     pub fn GetStockObject(index: i32) -> Handle;
+    pub fn GetObjectA(obj: Handle, size: i32, out: *mut c_void) -> i32;
+    pub fn GetObjectW(obj: Handle, size: i32, out: *mut c_void) -> i32;
     pub fn CreateSolidBrush(color: u32) -> Handle;
     pub fn CreatePen(style: u32, width: i32, color: u32) -> Handle;
     pub fn CreateCompatibleDC(dc: Handle) -> Handle;

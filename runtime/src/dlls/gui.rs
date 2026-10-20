@@ -716,8 +716,18 @@ pub enum GdiObject {
         height: usize,
         pixels: Vec<u32>,
         dib_bits: Option<Vec<u8>>,
+        dib_bit_count: u16,
+        dib_stride: usize,
         top_down: bool,
     },
+}
+
+#[derive(Clone, Debug)]
+pub enum GdiObjectInfo {
+    Brush { style: u32, color: u32, hatch: usize },
+    Pen { style: u32, width: i32, color: u32 },
+    Font(FontSpec),
+    Bitmap { width: usize, height: usize, width_bytes: usize, bits_per_pixel: u16, bits: usize },
 }
 
 fn dcs() -> &'static Mutex<HashMap<usize, DcState>> {
@@ -931,22 +941,30 @@ pub fn create_compatible_bitmap(width: i32, height: i32) -> Option<usize> {
             height: height as usize,
             pixels: vec![0; pixels],
             dib_bits: None,
+            dib_bit_count: 32,
+            dib_stride: width as usize * 4,
             top_down: false,
         },
     );
     Some(handle)
 }
 
-/// Crée une DIB section 32bpp et expose son tampon BGRX stable à l'invité.
-pub fn create_dib_section(width: i32, height: i32, top_down: bool) -> Option<(usize, *mut u8)> {
-    if width <= 0 || height <= 0 {
+/// Crée une DIB section 24/32bpp et expose son tampon BGR(X) stable à l'invité.
+pub fn create_dib_section(
+    width: i32,
+    height: i32,
+    bit_count: u16,
+    top_down: bool,
+) -> Option<(usize, *mut u8)> {
+    if width <= 0 || height <= 0 || !matches!(bit_count, 24 | 32) {
         return None;
     }
     let pixels = (width as usize).checked_mul(height as usize)?;
     if pixels > 4 * 1024 * 1024 {
         return None;
     }
-    let bytes = pixels.checked_mul(4)?;
+    let stride = ((width as usize * bit_count as usize + 31) / 32) * 4;
+    let bytes = stride.checked_mul(height as usize)?;
     let mut dib_bits = vec![0u8; bytes];
     let bits_ptr = dib_bits.as_mut_ptr();
     let handle = next_handle(0x0021_0000);
@@ -957,6 +975,8 @@ pub fn create_dib_section(width: i32, height: i32, top_down: bool) -> Option<(us
             height: height as usize,
             pixels: vec![0; pixels],
             dib_bits: Some(dib_bits),
+            dib_bit_count: bit_count,
+            dib_stride: stride,
             top_down,
         },
     );
@@ -968,13 +988,17 @@ fn bitmap_color_at(
     height: usize,
     pixels: &[u32],
     dib_bits: Option<&[u8]>,
+    dib_bit_count: u16,
+    dib_stride: usize,
     top_down: bool,
     x: usize,
     y: usize,
 ) -> u32 {
     let index = if top_down { y } else { height - 1 - y } * width + x;
     if let Some(bytes) = dib_bits {
-        let offset = index * 4;
+        let bytes_per_pixel = (dib_bit_count / 8) as usize;
+        let row = if top_down { y } else { height - 1 - y };
+        let offset = row * dib_stride + x * bytes_per_pixel;
         let b = bytes[offset] as u32;
         let g = bytes[offset + 1] as u32;
         let r = bytes[offset + 2] as u32;
@@ -989,6 +1013,8 @@ fn set_bitmap_color(
     height: usize,
     pixels: &mut [u32],
     dib_bits: &mut Option<Vec<u8>>,
+    dib_bit_count: u16,
+    dib_stride: usize,
     top_down: bool,
     x: usize,
     y: usize,
@@ -997,11 +1023,15 @@ fn set_bitmap_color(
     let index = if top_down { y } else { height - 1 - y } * width + x;
     pixels[index] = color;
     if let Some(bytes) = dib_bits {
-        let offset = index * 4;
+        let bytes_per_pixel = (dib_bit_count / 8) as usize;
+        let row = if top_down { y } else { height - 1 - y };
+        let offset = row * dib_stride + x * bytes_per_pixel;
         bytes[offset] = ((color >> 16) & 0xFF) as u8; // B
         bytes[offset + 1] = ((color >> 8) & 0xFF) as u8; // G
         bytes[offset + 2] = (color & 0xFF) as u8; // R
-        bytes[offset + 3] = 0;
+        if bytes_per_pixel == 4 {
+            bytes[offset + 3] = 0;
+        }
     }
 }
 
@@ -1019,7 +1049,7 @@ pub fn bitmap_snapshot(hdc: usize, rect: Rect) -> Option<BitmapSnapshot> {
         return None;
     }
     let objects = lock(objects());
-    let Some(GdiObject::Bitmap { width: bitmap_width, height: bitmap_height, pixels, dib_bits, top_down }) = objects.get(&bitmap) else {
+    let Some(GdiObject::Bitmap { width: bitmap_width, height: bitmap_height, pixels, dib_bits, dib_bit_count, dib_stride, top_down }) = objects.get(&bitmap) else {
         return None;
     };
     let mut copy = vec![0; count];
@@ -1034,6 +1064,8 @@ pub fn bitmap_snapshot(hdc: usize, rect: Rect) -> Option<BitmapSnapshot> {
                     *bitmap_height,
                     pixels,
                     dib_bits.as_deref(),
+                    *dib_bit_count,
+                    *dib_stride,
                     *top_down,
                     sx as usize,
                     sy as usize,
@@ -1053,6 +1085,53 @@ pub fn font_spec(handle: usize) -> Option<FontSpec> {
         None if is_stock_font(handle) => Some(FontSpec::default()),
         None => None,
     }
+}
+
+/// Détails Win32 de l'objet utilisés par `GetObjectA/W`.
+pub fn object_info(handle: usize) -> Option<GdiObjectInfo> {
+    {
+        let map = lock(objects());
+        if let Some(object) = map.get(&handle) {
+            return Some(match object {
+                GdiObject::Brush(color) | GdiObject::SystemBrush(color) => GdiObjectInfo::Brush {
+                    style: 0,
+                    color: *color,
+                    hatch: 0,
+                },
+                GdiObject::Pen { width, color } => GdiObjectInfo::Pen {
+                    style: 0,
+                    width: *width as i32,
+                    color: *color,
+                },
+                GdiObject::Font(spec) => GdiObjectInfo::Font(spec.clone()),
+                GdiObject::Bitmap { width, height, dib_bits, dib_stride, dib_bit_count, .. } => GdiObjectInfo::Bitmap {
+                    width: *width,
+                    height: *height,
+                    width_bytes: *dib_stride,
+                    bits_per_pixel: *dib_bit_count,
+                    bits: dib_bits.as_ref().map(|data| data.as_ptr() as usize).unwrap_or(0),
+                },
+            });
+        }
+    }
+    if (1..=6).contains(&handle) {
+        return Some(GdiObjectInfo::Brush {
+            style: if handle == 6 { 1 } else { 0 }, // BS_NULL for NULL_BRUSH
+            color: object_color(handle).unwrap_or(0),
+            hatch: 0,
+        });
+    }
+    if (7..=9).contains(&handle) {
+        return Some(GdiObjectInfo::Pen {
+            style: if handle == 9 { 5 } else { 0 }, // PS_NULL for NULL_PEN
+            width: 1,
+            color: object_color(handle).unwrap_or(0),
+        });
+    }
+    if is_stock_font(handle) {
+        return Some(GdiObjectInfo::Font(FontSpec::default()));
+    }
+    None
 }
 
 /// Supprime un objet créé par l'invité. Les objets « stock » ne sont pas
@@ -1125,7 +1204,7 @@ pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
 
 fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
     let mut map = lock(objects());
-    let Some(GdiObject::Bitmap { width, height, pixels, dib_bits, top_down }) = map.get_mut(&handle) else {
+    let Some(GdiObject::Bitmap { width, height, pixels, dib_bits, dib_bit_count, dib_stride, top_down }) = map.get_mut(&handle) else {
         return false;
     };
     let bounds = Rect::from_size(0, 0, *width as i32, *height as i32);
@@ -1136,6 +1215,8 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 *height,
                 pixels,
                 dib_bits.as_deref(),
+                *dib_bit_count,
+                *dib_stride,
                 *top_down,
                 x as usize,
                 y as usize,
@@ -1145,6 +1226,8 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 *height,
                 pixels,
                 dib_bits,
+                *dib_bit_count,
+                *dib_stride,
                 *top_down,
                 x as usize,
                 y as usize,

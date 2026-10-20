@@ -21,6 +21,73 @@ pub struct BitmapInfoHeader {
     pub colors_important: u32,
 }
 
+#[repr(C)]
+pub struct BitmapObject {
+    pub bm_type: i32,
+    pub bm_width: i32,
+    pub bm_height: i32,
+    pub bm_width_bytes: i32,
+    pub bm_planes: u16,
+    pub bm_bits_pixel: u16,
+    pub bm_bits: *mut c_void,
+}
+
+#[repr(C)]
+pub struct LogBrush {
+    pub style: u32,
+    pub color: u32,
+    pub hatch: usize,
+}
+
+#[repr(C)]
+pub struct WinPoint {
+    pub x: i32,
+    pub y: i32,
+}
+
+#[repr(C)]
+pub struct LogPen {
+    pub style: u32,
+    pub width: WinPoint,
+    pub color: u32,
+}
+
+#[repr(C)]
+pub struct LogFontA {
+    pub height: i32,
+    pub width: i32,
+    pub escapement: i32,
+    pub orientation: i32,
+    pub weight: i32,
+    pub italic: u8,
+    pub underline: u8,
+    pub strikeout: u8,
+    pub charset: u8,
+    pub out_precision: u8,
+    pub clip_precision: u8,
+    pub quality: u8,
+    pub pitch_and_family: u8,
+    pub face: [u8; 32],
+}
+
+#[repr(C)]
+pub struct LogFontW {
+    pub height: i32,
+    pub width: i32,
+    pub escapement: i32,
+    pub orientation: i32,
+    pub weight: i32,
+    pub italic: u8,
+    pub underline: u8,
+    pub strikeout: u8,
+    pub charset: u8,
+    pub out_precision: u8,
+    pub clip_precision: u8,
+    pub quality: u8,
+    pub pitch_and_family: u8,
+    pub face: [u16; 32],
+}
+
 pub extern "win64" fn get_stock_object(index: i32) -> usize {
     if index >= 0 { (index as usize) + 1 } else { 0 }
 }
@@ -99,6 +166,101 @@ pub extern "win64" fn select_object(hdc: usize, obj: usize) -> usize {
 
 pub extern "win64" fn delete_object(obj: usize) -> i32 {
     gui::delete_object(obj) as i32
+}
+
+pub unsafe extern "win64" fn get_object_a(obj: usize, size: i32, out: *mut c_void) -> i32 {
+    get_object_common(obj, size, out, false)
+}
+
+pub unsafe extern "win64" fn get_object_w(obj: usize, size: i32, out: *mut c_void) -> i32 {
+    get_object_common(obj, size, out, true)
+}
+
+unsafe fn get_object_common(obj: usize, size: i32, out: *mut c_void, wide: bool) -> i32 {
+    let Some(info) = gui::object_info(obj) else { return 0 };
+    let needed = match &info {
+        gui::GdiObjectInfo::Brush { .. } => core::mem::size_of::<LogBrush>(),
+        gui::GdiObjectInfo::Pen { .. } => core::mem::size_of::<LogPen>(),
+        gui::GdiObjectInfo::Font(_) => {
+            if wide { core::mem::size_of::<LogFontW>() } else { core::mem::size_of::<LogFontA>() }
+        }
+        gui::GdiObjectInfo::Bitmap { .. } => core::mem::size_of::<BitmapObject>(),
+    };
+    if out.is_null() && size == 0 {
+        return needed as i32;
+    }
+    if out.is_null() || size < needed as i32 {
+        crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
+        return 0;
+    }
+    match info {
+        gui::GdiObjectInfo::Brush { style, color, hatch } => {
+            std::ptr::write_unaligned(out.cast::<LogBrush>(), LogBrush { style, color, hatch });
+        }
+        gui::GdiObjectInfo::Pen { style, width, color } => {
+            std::ptr::write_unaligned(out.cast::<LogPen>(), LogPen {
+                style,
+                width: WinPoint { x: width, y: 0 },
+                color,
+            });
+        }
+        gui::GdiObjectInfo::Bitmap { width, height, width_bytes, bits_per_pixel, bits } => {
+            std::ptr::write_unaligned(out.cast::<BitmapObject>(), BitmapObject {
+                bm_type: 0,
+                bm_width: width as i32,
+                bm_height: height as i32,
+                bm_width_bytes: width_bytes as i32,
+                bm_planes: 1,
+                bm_bits_pixel: bits_per_pixel,
+                bm_bits: bits as *mut c_void,
+            });
+        }
+        gui::GdiObjectInfo::Font(font) if wide => {
+            let mut face = [0u16; 32];
+            for (dst, ch) in face.iter_mut().zip(font.face.encode_utf16()) {
+                *dst = ch;
+            }
+            std::ptr::write_unaligned(out.cast::<LogFontW>(), LogFontW {
+                height: font.height,
+                width: font.width,
+                escapement: 0,
+                orientation: 0,
+                weight: font.weight,
+                italic: font.italic as u8,
+                underline: font.underline as u8,
+                strikeout: font.strikeout as u8,
+                charset: 1,
+                out_precision: 0,
+                clip_precision: 0,
+                quality: 0,
+                pitch_and_family: 0,
+                face,
+            });
+        }
+        gui::GdiObjectInfo::Font(font) => {
+            let mut face = [0u8; 32];
+            let ansi = crate::dlls::encode_ansi(&font.face);
+            let count = ansi.len().min(face.len() - 1);
+            face[..count].copy_from_slice(&ansi[..count]);
+            std::ptr::write_unaligned(out.cast::<LogFontA>(), LogFontA {
+                height: font.height,
+                width: font.width,
+                escapement: 0,
+                orientation: 0,
+                weight: font.weight,
+                italic: font.italic as u8,
+                underline: font.underline as u8,
+                strikeout: font.strikeout as u8,
+                charset: 1,
+                out_precision: 0,
+                clip_precision: 0,
+                quality: 0,
+                pitch_and_family: 0,
+                face,
+            });
+        }
+    }
+    needed as i32
 }
 
 pub extern "win64" fn set_text_color(hdc: usize, color: u32) -> u32 {
@@ -324,7 +486,7 @@ pub extern "win64" fn create_compatible_bitmap(dc: usize, width: i32, height: i3
     }
 }
 
-/// Crée une DIB section 32bpp BI_RGB; le tampon exposé utilise des pixels BGRX.
+/// Crée une DIB section 24/32bpp BI_RGB; le tampon exposé utilise des pixels BGR(X).
 pub unsafe extern "win64" fn create_dib_section(
     dc: usize,
     info: *const BitmapInfoHeader,
@@ -347,7 +509,7 @@ pub unsafe extern "win64" fn create_dib_section(
         || header.height == 0
         || header.height == i32::MIN
         || header.planes != 1
-        || header.bit_count != 32
+        || !matches!(header.bit_count, 24 | 32)
         || header.compression != 0 // BI_RGB
         || usage != 0 // DIB_RGB_COLORS
         || section != 0
@@ -357,7 +519,7 @@ pub unsafe extern "win64" fn create_dib_section(
         return 0;
     }
     let Some((bitmap, pixel_bits)) =
-        gui::create_dib_section(header.width, header.height.abs(), header.height < 0)
+        gui::create_dib_section(header.width, header.height.abs(), header.bit_count, header.height < 0)
     else {
         crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
         return 0;
@@ -467,6 +629,7 @@ pub fn exports() -> crate::dlls::Exports {
         "CreateSolidBrush"=>fn create_solid_brush,
         "CreatePen"=>fn create_pen,
         "CreateFontA"=>fn create_font_a, "CreateFontW"=>fn create_font_w,
+        "GetObjectA"=>fn get_object_a, "GetObjectW"=>fn get_object_w,
         "SelectObject"=>fn select_object,
         "DeleteObject"=>fn delete_object,
         "SetTextColor"=>fn set_text_color,

@@ -132,6 +132,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
 
     let fixed_w: [u16; 6] = [b'f' as u16, b'i' as u16, b'x' as u16, b'e' as u16, b'd' as u16, 0];
     let font_w = CreateFontW(14, 0, 0, 0, 400, 0, 1, 0, 1, 0, 0, 0, 0, fixed_w.as_ptr());
+    let mut font_info: LogFontW = core::mem::zeroed();
+    check!(GetObjectW(font_w, core::mem::size_of::<LogFontW>() as i32, &mut font_info as *mut _ as *mut core::ffi::c_void) == core::mem::size_of::<LogFontW>() as i32 && font_info.height == 14 && font_info.face[0] == b'f' as u16, "GetObjectW LOGFONT");
     let font_hdc = GetDC(hwnd);
     let old_font = SelectObject(font_hdc, font_w);
     check!(!font_w.is_null() && !old_font.is_null(), "CreateFontW/SelectObject");
@@ -141,6 +143,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
 
     let memory_dc = CreateCompatibleDC(core::ptr::null_mut());
     let bitmap = CreateCompatibleBitmap(memory_dc, 8, 8);
+    let mut bitmap_info: BitmapObject = core::mem::zeroed();
+    check!(GetObjectA(bitmap, core::mem::size_of::<BitmapObject>() as i32, &mut bitmap_info as *mut _ as *mut core::ffi::c_void) == core::mem::size_of::<BitmapObject>() as i32 && bitmap_info.bm_width == 8 && bitmap_info.bm_height == 8 && bitmap_info.bm_bits.is_null(), "GetObjectA BITMAP compatible");
     let old_bitmap = SelectObject(memory_dc, bitmap);
     let bitmap_brush = CreateSolidBrush(0x0000_FF00);
     SelectObject(memory_dc, bitmap_brush);
@@ -170,6 +174,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
     };
     let mut dib_bits: *mut core::ffi::c_void = core::ptr::null_mut();
     let dib = CreateDIBSection(dib_dc, &dib_info, 0, &mut dib_bits, core::ptr::null_mut(), 0);
+    let mut dib_object: BitmapObject = core::mem::zeroed();
+    check!(GetObjectA(dib, core::mem::size_of::<BitmapObject>() as i32, &mut dib_object as *mut _ as *mut core::ffi::c_void) == core::mem::size_of::<BitmapObject>() as i32 && dib_object.bm_width == 4 && dib_object.bm_height == 4 && dib_object.bm_bits == dib_bits, "GetObjectA DIBSECTION");
     SelectObject(dib_dc, dib);
     for pixel in 0..16 {
         let p = dib_bits.cast::<u8>().add(pixel * 4);
