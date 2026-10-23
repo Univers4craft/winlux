@@ -20,8 +20,12 @@ for tool in cargo bash cpio fakeroot find gzip grub-mkrescue ldd sha256sum xorri
         exit 1
     }
 done
-for path in "$kernel" /usr/bin/busybox /usr/bin/Xvfb /usr/bin/xkbcomp "$fonts" "$xkb"; do
-    if [ "$path" = "$kernel" ]; then continue; fi
+if ! test -r "$kernel"; then
+    echo "noyau absent ou illisible : $kernel" >&2
+    echo "indiquez un noyau lisible avec WINLUX_KERNEL=/chemin/vers/vmlinuz" >&2
+    exit 1
+fi
+for path in /usr/bin/busybox /usr/bin/Xvfb /usr/bin/xkbcomp "$fonts" "$xkb"; do
     test -e "$path" || { echo "fichier requis absent : $path" >&2; exit 1; }
 done
 
@@ -39,10 +43,15 @@ bash scripts/build-tests.sh
 
 cp "$root/target/release/winlux" "$stage/usr/bin/winlux"
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
-chmod 755 "$stage/usr/bin/winlux" "$stage/opt/winlux/scripts/test-runtime.sh"
+cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
+chmod 755 \
+    "$stage/usr/bin/winlux" \
+    "$stage/opt/winlux/scripts/test-runtime.sh" \
+    "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
+cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
 
 copy_shared_libraries() {
     binary=$1
@@ -58,7 +67,10 @@ copy_shared_libraries() {
 cp /usr/bin/busybox "$stage/bin/busybox"
 chmod 755 "$stage/bin/busybox"
 ln -s busybox "$stage/bin/sh"
+ln -s busybox "$stage/bin/true"
 ln -s ../../bin/busybox "$stage/usr/bin/dirname"
+ln -s ../../bin/busybox "$stage/usr/bin/mktemp"
+ln -s ../../bin/busybox "$stage/usr/bin/timeout"
 cp /usr/bin/Xvfb "$stage/usr/bin/Xvfb"
 cp /usr/bin/xkbcomp "$stage/usr/bin/xkbcomp"
 chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp"
@@ -80,13 +92,21 @@ export PATH HOME XKB_CONFIG_ROOT
 /bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 /bin/busybox mkdir -p /tmp/.X11-unix /run /root/.local/share/winlux
 /bin/busybox chmod 1777 /tmp
+/bin/busybox ip link set lo up
 
 echo "Winlux live test: headless PE suite"
 WINLUX_BIN=/usr/bin/winlux \
 WINLUX_TESTDIR=/opt/winlux/tests \
     /bin/sh /opt/winlux/scripts/test-runtime.sh
-headless_status=$?
-echo "WINLUX_LIVE_HEADLESS_EXIT=$headless_status"
+sequential_status=$?
+echo "WINLUX_LIVE_SEQUENTIAL_EXIT=$sequential_status"
+
+echo "Winlux live test: parallel PE suite"
+WINLUX_BIN=/usr/bin/winlux \
+WINLUX_TESTDIR=/opt/winlux/tests \
+    /bin/sh /opt/winlux/scripts/test-runtime-parallel.sh
+parallel_status=$?
+echo "WINLUX_LIVE_PARALLEL_EXIT=$parallel_status"
 
 echo "Winlux live test: Xvfb GUI rendering"
 /usr/bin/Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp \
@@ -105,7 +125,9 @@ fi
 echo "WINLUX_LIVE_X11_EXIT=$x11_status"
 
 result=0
-if [ "$headless_status" -ne 0 ] || [ "$x11_status" -ne 0 ]; then
+if [ "$sequential_status" -ne 0 ] || \
+   [ "$parallel_status" -ne 0 ] || \
+   [ "$x11_status" -ne 0 ]; then
     result=1
 fi
 echo "WINLUX_LIVE_RESULT=$result"

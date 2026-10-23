@@ -8,7 +8,7 @@ Winlux est un runtime expérimental Linux qui charge des exécutables **Windows 
 
 ## État testé
 
-Les exécutables de test incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, des tests de DLL réelle/import différé, `findfiles.exe`, `crt_suite.exe` (chaînes, conversions, mathématiques, tri) et deux tests GUI (`gui_suite.exe` pour le cycle de vie et le redimensionnement, `gui_demo.exe` pour le tracé GDI et le rendu X11). Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux.
+Les 62 tests unitaires du runtime et neuf exécutables PE couvrent le chargeur et les principales API implémentées. Les exécutables incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, des tests de DLL réelle/import différé, `findfiles.exe`, `crt_suite.exe` (chaînes, conversions, mathématiques, tri) et deux tests GUI (`gui_suite.exe` pour le cycle de vie et le redimensionnement, `gui_demo.exe` pour le tracé GDI et le rendu X11). Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux, séquentiellement ou tous en parallèle.
 
 Le runtime contient notamment un chargeur PE, les relocations et imports, un PEB/TEB minimal, du TLS, des DLL intégrées partielles, le registre Winlux persistant, des fichiers mappés vers Linux (énumération, fichiers temporaires, métadonnées) et une passerelle Winsock/ALSA expérimentale.
 
@@ -37,6 +37,7 @@ cargo test -p winlux
 scripts/build-tests.sh
 cargo build --release -p winlux
 scripts/test-runtime.sh
+scripts/test-runtime-parallel.sh
 ```
 
 Lancement manuel d’un PE :
@@ -53,21 +54,31 @@ target/release/winlux chemin/vers/programme.exe [arguments...]
 - `testexe/` : exécutables Windows de test.
 - `testdll/` : DLL Windows de test.
 - `integration/` : fichiers préparatoires binfmt, MIME, `.desktop` et script d’installation.
-- `scripts/` : compilation, tests et première ébauche du pipeline ISO.
+- `scripts/` : compilation, tests locaux séquentiels/parallèles et pipeline ISO/QEMU.
 - `theme/` : palette CSS expérimentale, non raccordée à un shell graphique.
 - `TODO.md` : feuille de route maintenue.
 - `COMPATIBILITY.md` : état détaillé de compatibilité et limites connues.
 
 ## Intégration Linux et ISO
 
-La configuration binfmt et le fichier `.desktop` sont des préparatifs, pas une intégration hôte validée. `integration/install.sh` modifie des emplacements système et nécessite une revue ainsi que des privilèges d’administration pour être exécuté. Le script ISO requiert un répertoire staging Linux **déjà bootable** et `xorriso`; il ne construit pas encore l’OS de l’ISO.
+La configuration binfmt et le fichier `.desktop` sont des préparatifs, pas une intégration hôte validée. `integration/install.sh` modifie des emplacements système et nécessite une revue ainsi que des privilèges d’administration pour être exécuté.
+
+`scripts/build-live-iso.sh` construit une image de test autonome avec un initramfs minimal, Winlux, les neuf PE, leur DLL, Xvfb et un démarrage GRUB BIOS/UEFI. Le noyau fourni doit être lisible par l’utilisateur :
+
+```sh
+WINLUX_KERNEL=/chemin/vers/vmlinuz scripts/build-live-iso.sh
+scripts/test-live-iso-qemu.sh build/winlux-live-test.iso bios
+scripts/test-live-iso-qemu.sh build/winlux-live-test.iso uefi
+```
+
+La VM exécute la suite séquentielle, les neuf PE simultanément et le test graphique X11. Le test QEMU exige 1 Gio de RAM et 2 CPU par défaut, configurables avec `WINLUX_QEMU_MEMORY` et `WINLUX_QEMU_CPUS`. L’ISO est une image de validation automatisée, pas encore un bureau Winlux destiné aux utilisateurs.
 
 ## Limites importantes
 
 - PE32+ x86-64 seulement; le runtime n’est pas un noyau Windows.
 - `user32`/`gdi32` sont partiels : le noyau fenêtres/messages, `SetWindowPos`/`MoveWindow`, les API de focus et d’état clavier de base, un backend X11 (thème « blob » violet-bleu, keysyms traduits en `VK_*` et `WM_CHAR` via `TranslateMessage`) et des primitives GDI de base (`GetSysColor`, `CreateFontA/W` sur polices core, `CreateCompatibleBitmap`/`CreateDIBSection` 32bpp, pinceaux/plumes, `FillRect`/`FrameRect`/`PatBlt`/`BitBlt`/`StretchBlt` SRCCOPY/`Rectangle`/`Ellipse`, `TextOutA` opaque ou transparent) existent, mais les contrôles, les autres formats DIB, les décorations et la plupart des API clavier avancées manquent encore.
 - `mscoree` émet un diagnostic; aucun CLR n’est intégré. `paint.net` ne fonctionne donc pas actuellement.
-- Les codecs compressés, DirectX, les pilotes, le registre Windows complet, les services SCM complets, les E/S overlapped et de nombreuses API Win32 ne sont pas implémentés.
+- Les codecs compressés, DirectX, les pilotes, le registre Windows complet, les services SCM complets, les sémantiques avancées des E/S overlapped et de nombreuses API Win32 ne sont pas implémentés.
 - `FreeLibrary` ne démonte pas encore une DLL chargée.
 - Le pont audio WAV/ALSA dépend de l’environnement Linux et n’a pas été validé sur plusieurs périphériques.
 

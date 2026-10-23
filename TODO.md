@@ -2,14 +2,15 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (47 tests), compilation release et les neuf exécutables PE de test réussissent. Relancer les scripts après chaque changement.
+- Dernière validation connue : `cargo test -p winlux` (62 tests), compilation release, les neuf exécutables PE en séquentiel et en parallèle, puis l'ISO sous QEMU BIOS et UEFI réussissent. Relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
 - [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe`, `findfiles.exe`, `crt_suite.exe`, `gui_suite.exe` et `gui_demo.exe` sous Winlux.
-- [x] Ajouter 47 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT, IOCP et le noyau fenêtres/messages.
+- [x] Ajouter 62 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT, IOCP et le noyau fenêtres/messages.
+- [x] Exécuter les neuf PE simultanément avec isolation, temporisation et journaux par processus.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
@@ -98,14 +99,15 @@
 
 ## Priorité 4 — ISO de test
 
-- [ ] Choisir une base Linux minimale pour l’ISO; le script actuel n’engendre pas à lui seul une image bootable.
-- [ ] Construire automatiquement l’arborescence de staging.
-- [ ] Installer Winlux, binfmt, MIME, `.desktop` et les tests dans cette arborescence.
-- [ ] Ajouter un démarrage BIOS et UEFI avec GRUB ou un autre chargeur adapté.
-- [ ] Ajouter un script de lancement automatique des tests P1 dans la VM; `scripts/test-runtime.sh` teste actuellement les binaires localement.
-- [ ] Générer l’ISO avec `xorriso` et produire une somme SHA-256.
-- [ ] Ajouter un test automatisé dans QEMU avec sortie et code de retour vérifiés.
-- [ ] Documenter la RAM, le nombre de CPU et les options nécessaires à la VM.
+- [x] Construire une base Linux minimale en initramfs pour l’ISO de validation.
+- [x] Construire automatiquement l’arborescence de staging.
+- [x] Installer Winlux, les neuf PE, leur DLL et Xvfb dans cette arborescence.
+- [ ] Intégrer binfmt, MIME et `.desktop` dans une future image de bureau; ils ne sont pas nécessaires à l’image de validation.
+- [x] Ajouter un démarrage BIOS et UEFI avec GRUB.
+- [x] Lancer automatiquement les tests séquentiels, parallèles et X11 dans la VM.
+- [x] Générer l’ISO avec `xorriso` et produire une somme SHA-256.
+- [x] Ajouter un test automatisé dans QEMU avec vérification des marqueurs de résultat.
+- [x] Documenter la RAM, le nombre de CPU et les options nécessaires à la VM.
 
 ## Priorité 5 — Thème Windows 11
 
@@ -118,10 +120,11 @@
 
 ## Priorité 6 — Qualité et livraison
 
-- [ ] Ajouter une CI pour `cargo check`, les builds des `.exe` de test et les tests sous Winlux.
-- [ ] Ajouter `rustfmt` et `clippy` avec une configuration stable.
+- [x] Ajouter une CI pour `cargo check`, les builds des `.exe` de test et les tests sous Winlux.
+- [ ] Normaliser le code existant avec `rustfmt`, traiter la dette Clippy puis rendre ces contrôles bloquants dans la CI.
 - [ ] Ajouter des logs structurés et un niveau de verbosité configurable.
 - [ ] Documenter la compilation, l’installation, le dépannage et la génération ISO.
-- [ ] Ajouter une licence et les mentions de provenance des composants externes.
+- [x] Ajouter une licence GPL-3.0-or-later.
+- [ ] Ajouter les mentions de provenance des composants externes distribués dans les futures images publiées.
 - [ ] Créer des releases reproductibles avec binaires, ISO, sommes et notes de version.
 - [ ] Committer une première version stable après validation du pipeline complet.

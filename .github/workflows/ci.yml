@@ -124,6 +124,9 @@ jobs:
       - name: Exécuter les tests runtime
         run: bash scripts/test-runtime.sh
 
+      - name: Exécuter les neuf PE en parallèle
+        run: bash scripts/test-runtime-parallel.sh
+
       - name: Rapport des PE générés
         if: always()
         run: |
