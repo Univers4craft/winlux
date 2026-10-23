@@ -251,6 +251,7 @@ pub const WM_KILLFOCUS: u32 = 0x0008;
 pub const WM_CHAR: u32 = 0x0102;
 pub const WM_KEYDOWN: u32 = 0x0100;
 pub const WM_KEYUP: u32 = 0x0101;
+pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const VK_A: i32 = 0x41;
 pub const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;

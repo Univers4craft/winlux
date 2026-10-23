@@ -113,6 +113,9 @@
 
 ## Priorité 5 — Thème Windows 11
 
+- [x] Ajouter un prototype de bureau GDI HiDPI : fond d'écran, raccourcis,
+  barre des tâches, menu Démarrer interactif, applications épinglées et zone
+  système Wi-Fi/volume/batterie/heure.
 - [ ] Choisir la pile graphique de l’environnement cible : GTK, Qt ou autre.
 - [ ] Créer les composants : barre des tâches, menu de démarrage, fenêtres, notifications et explorateur de fichiers; le CSS actuel est une palette isolée, pas un shell graphique.
 - [ ] Ajouter les icônes et polices libres compatibles avec la licence du projet.

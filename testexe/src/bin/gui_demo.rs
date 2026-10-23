@@ -23,6 +23,178 @@ static mut THREAD_KEY_STATE_MATCH: u32 = 0;
 static mut KEYBOARD_STATE_MATCH: u32 = 0;
 static mut ASYNC_KEY_PRESSED: u32 = 0;
 static mut THREAD_KEY_UP_CLEAR: u32 = 0;
+static mut START_MENU_OPEN: u32 = 1;
+
+/// Première base du bureau Winlux : fond, barre des tâches, zone système et
+/// menu Démarrer. Tout est rendu par le même chemin GDI invité → X11 que les
+/// futures applications du shell.
+unsafe fn draw_desktop_scene(hdc: Handle, start_open: bool) {
+    let night = CreateSolidBrush(0x0069_3D0B);
+    let blue = CreateSolidBrush(0x00C0_7D2E);
+    let violet = CreateSolidBrush(0x00A3_4F6A);
+    let glow = CreateSolidBrush(0x00E8_AA52);
+    let taskbar = CreateSolidBrush(0x00F8_F8F8);
+    let surface = CreateSolidBrush(0x00FF_FFFF);
+    let elevated = CreateSolidBrush(0x00F5_F5F5);
+    let border = CreateSolidBrush(0x00DF_DFDF);
+    let shadow = CreateSolidBrush(0x0048_4848);
+    let accent = CreateSolidBrush(0x00C0_6700);
+    let green = CreateSolidBrush(0x0048_A337);
+    let orange = CreateSolidBrush(0x0000_94F5);
+    let purple = CreateSolidBrush(0x00A4_57A0);
+    let cyan = CreateSolidBrush(0x00D9_AA22);
+
+    FillRect(hdc, &Rect { left: 0, top: 0, right: 1280, bottom: 720 }, night);
+    // Fond abstrait libre : grandes formes superposées, nettes à toute échelle.
+    SelectObject(hdc, violet);
+    Ellipse(hdc, 540, -260, 1410, 610);
+    SelectObject(hdc, blue);
+    Ellipse(hdc, 700, -80, 1380, 600);
+    SelectObject(hdc, glow);
+    Ellipse(hdc, 610, 180, 1180, 750);
+    SelectObject(hdc, night);
+    Ellipse(hdc, 760, 190, 1240, 670);
+    FillRect(hdc, &Rect { left: 0, top: 0, right: 430, bottom: 664 }, night);
+
+    let title_font = CreateFontA(24, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
+    let body_font = CreateFontA(15, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
+    let small_font = CreateFontA(12, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
+    let old_font = SelectObject(hdc, body_font);
+    SetBkMode(hdc, 1);
+
+    // Raccourcis du bureau.
+    FillRect(hdc, &Rect { left: 26, top: 28, right: 68, bottom: 70 }, accent);
+    FillRect(hdc, &Rect { left: 26, top: 104, right: 68, bottom: 146 }, green);
+    FillRect(hdc, &Rect { left: 26, top: 180, right: 68, bottom: 222 }, purple);
+    SetTextColor(hdc, 0x00FF_FFFF);
+    TextOutA(hdc, 24, 76, c"This PC".as_ptr(), -1);
+    TextOutA(hdc, 19, 152, c"Files".as_ptr(), -1);
+    TextOutA(hdc, 11, 228, c"Recycle Bin".as_ptr(), -1);
+
+    // Barre des tâches.
+    FillRect(hdc, &Rect { left: 0, top: 664, right: 1280, bottom: 720 }, taskbar);
+    FillRect(hdc, &Rect { left: 0, top: 664, right: 1280, bottom: 665 }, border);
+
+    // Bouton Démarrer : quatre carreaux bleus.
+    FillRect(hdc, &Rect { left: 482, top: 679, right: 493, bottom: 690 }, accent);
+    FillRect(hdc, &Rect { left: 496, top: 679, right: 507, bottom: 690 }, accent);
+    FillRect(hdc, &Rect { left: 482, top: 693, right: 493, bottom: 704 }, accent);
+    FillRect(hdc, &Rect { left: 496, top: 693, right: 507, bottom: 704 }, accent);
+    // Recherche et applications centrales.
+    SelectObject(hdc, accent);
+    Ellipse(hdc, 526, 681, 545, 700);
+    FillRect(hdc, &Rect { left: 543, top: 699, right: 551, bottom: 702 }, accent);
+    FillRect(hdc, &Rect { left: 572, top: 677, right: 600, bottom: 705 }, green);
+    FillRect(hdc, &Rect { left: 617, top: 677, right: 645, bottom: 705 }, purple);
+    FillRect(hdc, &Rect { left: 662, top: 677, right: 690, bottom: 705 }, orange);
+    FillRect(hdc, &Rect { left: 707, top: 677, right: 735, bottom: 705 }, cyan);
+    FillRect(hdc, &Rect { left: 477, top: 715, right: 512, bottom: 718 }, accent);
+
+    // Zone système : flèche, Wi-Fi, volume, batterie, heure/date.
+    SelectObject(hdc, small_font);
+    SetTextColor(hdc, 0x0030_3030);
+    TextOutA(hdc, 1018, 684, c"^".as_ptr(), -1);
+    FillRect(hdc, &Rect { left: 1044, top: 697, right: 1048, bottom: 704 }, accent);
+    FillRect(hdc, &Rect { left: 1051, top: 692, right: 1055, bottom: 704 }, accent);
+    FillRect(hdc, &Rect { left: 1058, top: 687, right: 1062, bottom: 704 }, accent);
+    FillRect(hdc, &Rect { left: 1078, top: 689, right: 1085, bottom: 700 }, accent);
+    FillRect(hdc, &Rect { left: 1085, top: 686, right: 1090, bottom: 703 }, accent);
+    TextOutA(hdc, 1092, 687, c"))".as_ptr(), -1);
+    FrameRect(hdc, &Rect { left: 1120, top: 686, right: 1146, bottom: 702 }, accent);
+    FillRect(hdc, &Rect { left: 1123, top: 689, right: 1141, bottom: 699 }, green);
+    FillRect(hdc, &Rect { left: 1146, top: 691, right: 1149, bottom: 697 }, accent);
+    TextOutA(hdc, 1154, 674, c"14:32".as_ptr(), -1);
+    TextOutA(hdc, 1148, 694, c"23/10/2026".as_ptr(), -1);
+
+    if start_open {
+        // Ombre puis panneau Démarrer centré au-dessus de la barre.
+        FillRect(hdc, &Rect { left: 337, top: 101, right: 955, bottom: 651 }, shadow);
+        FillRect(hdc, &Rect { left: 330, top: 94, right: 948, bottom: 644 }, surface);
+        FrameRect(hdc, &Rect { left: 330, top: 94, right: 948, bottom: 644 }, border);
+
+        let search = Rect { left: 370, top: 124, right: 908, bottom: 168 };
+        FillRect(hdc, &search, elevated);
+        FrameRect(hdc, &search, border);
+        SelectObject(hdc, accent);
+        Ellipse(hdc, 390, 137, 407, 154);
+        FillRect(hdc, &Rect { left: 404, top: 151, right: 412, bottom: 154 }, accent);
+        SelectObject(hdc, body_font);
+        SetTextColor(hdc, 0x0060_6060);
+        TextOutA(hdc, 426, 137, c"Search apps, settings and files".as_ptr(), -1);
+
+        SelectObject(hdc, title_font);
+        SetTextColor(hdc, 0x001F_1F1F);
+        TextOutA(hdc, 370, 194, c"Pinned".as_ptr(), -1);
+        SelectObject(hdc, small_font);
+        TextOutA(hdc, 840, 201, c"All apps  >".as_ptr(), -1);
+
+        // Deux rangées d'applications épinglées.
+        FillRect(hdc, &Rect { left: 386, top: 238, right: 426, bottom: 278 }, accent);
+        FillRect(hdc, &Rect { left: 482, top: 238, right: 522, bottom: 278 }, green);
+        FillRect(hdc, &Rect { left: 578, top: 238, right: 618, bottom: 278 }, purple);
+        FillRect(hdc, &Rect { left: 674, top: 238, right: 714, bottom: 278 }, orange);
+        FillRect(hdc, &Rect { left: 770, top: 238, right: 810, bottom: 278 }, cyan);
+        FillRect(hdc, &Rect { left: 866, top: 238, right: 906, bottom: 278 }, accent);
+        FillRect(hdc, &Rect { left: 386, top: 322, right: 426, bottom: 362 }, cyan);
+        FillRect(hdc, &Rect { left: 482, top: 322, right: 522, bottom: 362 }, accent);
+        FillRect(hdc, &Rect { left: 578, top: 322, right: 618, bottom: 362 }, green);
+        FillRect(hdc, &Rect { left: 674, top: 322, right: 714, bottom: 362 }, purple);
+        FillRect(hdc, &Rect { left: 770, top: 322, right: 810, bottom: 362 }, orange);
+        FillRect(hdc, &Rect { left: 866, top: 322, right: 906, bottom: 362 }, cyan);
+        SetTextColor(hdc, 0x001F_1F1F);
+        TextOutA(hdc, 382, 284, c"Edge".as_ptr(), -1);
+        TextOutA(hdc, 472, 284, c"Files".as_ptr(), -1);
+        TextOutA(hdc, 564, 284, c"Settings".as_ptr(), -1);
+        TextOutA(hdc, 668, 284, c"Photos".as_ptr(), -1);
+        TextOutA(hdc, 762, 284, c"Store".as_ptr(), -1);
+        TextOutA(hdc, 850, 284, c"Terminal".as_ptr(), -1);
+        TextOutA(hdc, 374, 368, c"Windows apps".as_ptr(), -1);
+        TextOutA(hdc, 469, 368, c"Linux apps".as_ptr(), -1);
+        TextOutA(hdc, 568, 368, c"Browser".as_ptr(), -1);
+        TextOutA(hdc, 660, 368, c"Notepad".as_ptr(), -1);
+        TextOutA(hdc, 757, 368, c"Media".as_ptr(), -1);
+        TextOutA(hdc, 852, 368, c"Winlux".as_ptr(), -1);
+
+        SelectObject(hdc, title_font);
+        TextOutA(hdc, 370, 414, c"Recommended".as_ptr(), -1);
+        SelectObject(hdc, small_font);
+        FillRect(hdc, &Rect { left: 370, top: 454, right: 410, bottom: 494 }, accent);
+        FillRect(hdc, &Rect { left: 640, top: 454, right: 680, bottom: 494 }, green);
+        SetTextColor(hdc, 0x001F_1F1F);
+        TextOutA(hdc, 426, 455, c"Welcome to Winlux".as_ptr(), -1);
+        TextOutA(hdc, 426, 476, c"Get started".as_ptr(), -1);
+        TextOutA(hdc, 696, 455, c"Shared applications".as_ptr(), -1);
+        TextOutA(hdc, 696, 476, c"Linux + Windows".as_ptr(), -1);
+
+        FillRect(hdc, &Rect { left: 330, top: 548, right: 948, bottom: 644 }, elevated);
+        FillRect(hdc, &Rect { left: 330, top: 548, right: 948, bottom: 549 }, border);
+        SelectObject(hdc, accent);
+        Ellipse(hdc, 374, 573, 414, 613);
+        SelectObject(hdc, body_font);
+        SetTextColor(hdc, 0x001F_1F1F);
+        TextOutA(hdc, 430, 584, c"Damien".as_ptr(), -1);
+        TextOutA(hdc, 862, 584, c"Power".as_ptr(), -1);
+    }
+
+    SelectObject(hdc, old_font);
+    DeleteObject(night);
+    DeleteObject(blue);
+    DeleteObject(violet);
+    DeleteObject(glow);
+    DeleteObject(taskbar);
+    DeleteObject(surface);
+    DeleteObject(elevated);
+    DeleteObject(border);
+    DeleteObject(shadow);
+    DeleteObject(accent);
+    DeleteObject(green);
+    DeleteObject(orange);
+    DeleteObject(purple);
+    DeleteObject(cyan);
+    DeleteObject(title_font);
+    DeleteObject(body_font);
+    DeleteObject(small_font);
+}
 
 /// Variante visuelle du centre de contrôle consacrée aux applications Linux
 /// et Windows. Activée par `WINLUX_APPS_DEMO=1` pour produire une capture
@@ -153,6 +325,12 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     let mut ps: PaintStruct = core::mem::zeroed();
     let hdc = BeginPaint(hwnd, &mut ps);
     if hdc.is_null() {
+        return;
+    }
+
+    if GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0 {
+        draw_desktop_scene(hdc, START_MENU_OPEN != 0);
+        EndPaint(hwnd, &ps);
         return;
     }
 
@@ -434,6 +612,17 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             THREAD_KEY_UP_CLEAR |= ((GetKeyState(wparam as i32) as u16 & 0x8000) == 0) as u32;
             0
         }
+        WM_LBUTTONDOWN => {
+            if GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0 {
+                let x = (lparam as u32 & 0xFFFF) as i32;
+                let y = ((lparam as u32 >> 16) & 0xFFFF) as i32;
+                if (468..=520).contains(&x) && (664..=720).contains(&y) {
+                    START_MENU_OPEN ^= 1;
+                    InvalidateRect(hwnd, core::ptr::null(), 1);
+                }
+            }
+            0
+        }
         _ => DefWindowProcA(hwnd, msg, wparam, lparam),
     }
 }
@@ -444,7 +633,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
         // Durée courte pendant les tests automatiques, plus longue en démo
         // manuelle pour laisser le temps d'observer la fenêtre.
         let testing = GetEnvironmentVariableA(c"WINLUX_TEST".as_ptr(), core::ptr::null_mut(), 0) > 0;
-        let duration = if testing { 300u32 } else { 3000 };
+        let desktop = GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0;
+        let duration = if testing { 300u32 } else if desktop { 15000 } else { 3000 };
 
         let class = c"WinluxDemoClass";
         let wc = WndClassExA {
@@ -464,15 +654,21 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let atom = RegisterClassExA(&wc);
         check!(atom != 0, "RegisterClassExA");
 
+        let title = if desktop { c"Winlux Desktop" } else { c"Winlux Control Center" };
+        let (window_x, window_y, window_width, window_height) = if desktop {
+            (0, 0, 1280, 720)
+        } else {
+            (120, 80, 720, 480)
+        };
         let hwnd = CreateWindowExA(
             0,
             class.as_ptr(),
-            c"Winlux Control Center".as_ptr(),
+            title.as_ptr(),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
-            120,
-            80,
-            720,
-            480,
+            window_x,
+            window_y,
+            window_width,
+            window_height,
             core::ptr::null_mut(),
             core::ptr::null_mut(),
             core::ptr::null_mut(),

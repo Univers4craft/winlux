@@ -9,6 +9,13 @@ fonctions partagées entre les deux environnements. Une seconde vue
 programmes Windows EXE/MSI, avec les actions d'installation et de
 désinstallation pour chaque environnement.
 
+Le démonstrateur fournit également une première vue « Winlux Desktop » en
+1280×720 logique : fond abstrait, raccourcis, barre des tâches centrée, menu
+Démarrer avec recherche/applications/recommandations et zone système
+Wi-Fi-volume-batterie-heure. Le bouton Démarrer ouvre et ferme réellement le
+menu via les messages souris Win32. La mise à l'échelle DPI produit la même vue
+en 1920×1080 à 150 % et 2560×1440 à 200 %.
+
 ## État et travaux restants
 
 Le fichier CSS reste une référence pour le futur shell GTK/Qt. Le runtime X11
