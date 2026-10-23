@@ -132,8 +132,9 @@ Le z-order et les notifications
 `WINDOWPOS` avancées ne sont pas encore gérés.
 
 Le prototype de shell utilise ce backend pour rendre un bureau HiDPI complet :
-papier peint vectoriel, raccourcis, barre des tâches pleine largeur, état réseau/
-audio/batterie placé à gauche et menu Démarrer inspiré de Cinnamon. Les icônes
+papier peint vectoriel, raccourcis, barre des tâches compacte pleine largeur,
+bouton Démarrer réduit à son icône, état réseau/audio/batterie placé à droite et
+menu Démarrer inspiré de Cinnamon avec des angles sobres. Les icônes
 d’applications proviennent réellement des fichiers `.desktop` et thèmes XDG :
 leurs PNG sont décodés avec alpha, mis en cache et filtrés lors des changements
 d’échelle, tandis que la typographie Xft reste vectorielle. Il s’agit encore

@@ -117,7 +117,7 @@
 
 - [x] Ajouter un prototype de bureau GDI HiDPI : fond d'écran, raccourcis,
   barre des tâches pleine largeur, menu Démarrer inspiré de Cinnamon,
-  applications épinglées et zone système réseau/volume/batterie/heure à gauche.
+  applications épinglées et zone système réseau/volume/batterie/heure à droite.
 - [x] Reprendre le prototype avec un système visuel professionnel : surfaces
   arrondies, profondeur, palette cohérente et hiérarchie typographique.
 - [x] Charger les vraies icônes PNG des applications depuis leurs fichiers
