@@ -24,12 +24,141 @@ static mut KEYBOARD_STATE_MATCH: u32 = 0;
 static mut ASYNC_KEY_PRESSED: u32 = 0;
 static mut THREAD_KEY_UP_CLEAR: u32 = 0;
 
+/// Variante visuelle du centre de contrôle consacrée aux applications Linux
+/// et Windows. Activée par `WINLUX_APPS_DEMO=1` pour produire une capture
+/// séparée sans retirer la page de paramètres unifiés.
+unsafe fn draw_apps_scene(hdc: Handle) {
+    let background = CreateSolidBrush(0x00F3_F3F3);
+    let surface = CreateSolidBrush(0x00FF_FFFF);
+    let sidebar = CreateSolidBrush(0x00FA_FAFA);
+    let border = CreateSolidBrush(0x00E5_E5E5);
+    let accent = CreateSolidBrush(0x00C0_6700);
+    let selection = CreateSolidBrush(0x00F5_E7D6);
+    let linux = CreateSolidBrush(0x002F_9E49);
+    let warning = CreateSolidBrush(0x0000_A5FF);
+    let secondary = CreateSolidBrush(0x00E8_E8E8);
+
+    let full = Rect { left: 0, top: 0, right: 720, bottom: 480 };
+    let topbar = Rect { left: 0, top: 0, right: 720, bottom: 48 };
+    let navigation = Rect { left: 0, top: 48, right: 204, bottom: 480 };
+    FillRect(hdc, &full, background);
+    FillRect(hdc, &topbar, surface);
+    FillRect(hdc, &navigation, sidebar);
+    let top_border = Rect { left: 0, top: 47, right: 720, bottom: 48 };
+    FillRect(hdc, &top_border, border);
+
+    SelectObject(hdc, accent);
+    Ellipse(hdc, 16, 12, 40, 36);
+    Ellipse(hdc, 666, 10, 696, 40);
+
+    SetBkMode(hdc, 1);
+    SetTextColor(hdc, 0x001F_1F1F);
+    let title_font = CreateFontA(18, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
+    let body_font = CreateFontA(14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
+    let old_font = SelectObject(hdc, title_font);
+    TextOutA(hdc, 50, 16, c"Winlux Control Center".as_ptr(), -1);
+
+    SelectObject(hdc, body_font);
+    SetTextColor(hdc, 0x0060_6060);
+    TextOutA(hdc, 28, 88, c"Overview".as_ptr(), -1);
+    TextOutA(hdc, 28, 124, c"Settings".as_ptr(), -1);
+    let selected = Rect { left: 10, top: 150, right: 194, bottom: 184 };
+    FillRect(hdc, &selected, selection);
+    let selected_mark = Rect { left: 10, top: 157, right: 14, bottom: 177 };
+    FillRect(hdc, &selected_mark, accent);
+    SetTextColor(hdc, 0x001F_1F1F);
+    TextOutA(hdc, 28, 160, c"Applications".as_ptr(), -1);
+    SetTextColor(hdc, 0x0060_6060);
+    TextOutA(hdc, 28, 204, c"Linux packages".as_ptr(), -1);
+    TextOutA(hdc, 28, 236, c"Windows programs".as_ptr(), -1);
+    TextOutA(hdc, 28, 268, c"Updates".as_ptr(), -1);
+    TextOutA(hdc, 28, 300, c"Storage".as_ptr(), -1);
+
+    SelectObject(hdc, title_font);
+    SetTextColor(hdc, 0x001F_1F1F);
+    TextOutA(hdc, 224, 68, c"Applications".as_ptr(), -1);
+    SelectObject(hdc, body_font);
+
+    let search = Rect { left: 220, top: 102, right: 690, bottom: 140 };
+    FillRect(hdc, &search, surface);
+    FrameRect(hdc, &search, border);
+    SetTextColor(hdc, 0x0060_6060);
+    TextOutA(hdc, 238, 114, c"Search Linux packages or Windows programs".as_ptr(), -1);
+
+    let linux_card = Rect { left: 220, top: 154, right: 448, bottom: 400 };
+    let windows_card = Rect { left: 460, top: 154, right: 690, bottom: 400 };
+    FillRect(hdc, &linux_card, surface);
+    FillRect(hdc, &windows_card, surface);
+    FrameRect(hdc, &linux_card, border);
+    FrameRect(hdc, &windows_card, border);
+
+    let linux_icon = Rect { left: 238, top: 172, right: 270, bottom: 204 };
+    let windows_icon = Rect { left: 478, top: 172, right: 510, bottom: 204 };
+    FillRect(hdc, &linux_icon, linux);
+    FillRect(hdc, &windows_icon, accent);
+    SetTextColor(hdc, 0x001F_1F1F);
+    TextOutA(hdc, 284, 176, c"Linux apps".as_ptr(), -1);
+    TextOutA(hdc, 524, 176, c"Windows apps".as_ptr(), -1);
+    SetTextColor(hdc, 0x0060_6060);
+    TextOutA(hdc, 238, 212, c"APT / Flatpak".as_ptr(), -1);
+    TextOutA(hdc, 478, 212, c"EXE / MSI".as_ptr(), -1);
+
+    SetTextColor(hdc, 0x001F_1F1F);
+    TextOutA(hdc, 238, 250, c"Firefox".as_ptr(), -1);
+    TextOutA(hdc, 238, 300, c"VLC media player".as_ptr(), -1);
+    TextOutA(hdc, 478, 250, c"Notepad++".as_ptr(), -1);
+    TextOutA(hdc, 478, 300, c"Paint.NET".as_ptr(), -1);
+    SetTextColor(hdc, 0x0060_6060);
+    TextOutA(hdc, 238, 270, c"Installed".as_ptr(), -1);
+    TextOutA(hdc, 238, 320, c"Installed".as_ptr(), -1);
+    TextOutA(hdc, 478, 270, c"Installed".as_ptr(), -1);
+    FillRect(hdc, &Rect { left: 478, top: 320, right: 486, bottom: 328 }, warning);
+    TextOutA(hdc, 492, 316, c"Needs .NET".as_ptr(), -1);
+
+    let linux_install = Rect { left: 238, top: 352, right: 329, bottom: 382 };
+    let linux_remove = Rect { left: 339, top: 352, right: 430, bottom: 382 };
+    let windows_install = Rect { left: 478, top: 352, right: 569, bottom: 382 };
+    let windows_remove = Rect { left: 581, top: 352, right: 672, bottom: 382 };
+    FillRect(hdc, &linux_install, linux);
+    FillRect(hdc, &linux_remove, secondary);
+    FillRect(hdc, &windows_install, accent);
+    FillRect(hdc, &windows_remove, secondary);
+    SetTextColor(hdc, 0x00FF_FFFF);
+    TextOutA(hdc, 256, 360, c"Install".as_ptr(), -1);
+    TextOutA(hdc, 496, 360, c"Install".as_ptr(), -1);
+    SetTextColor(hdc, 0x001F_1F1F);
+    TextOutA(hdc, 347, 360, c"Uninstall".as_ptr(), -1);
+    TextOutA(hdc, 589, 360, c"Uninstall".as_ptr(), -1);
+
+    SetTextColor(hdc, 0x0060_6060);
+    TextOutA(hdc, 224, 424, c"Select an installed app to update or uninstall it".as_ptr(), -1);
+
+    SelectObject(hdc, old_font);
+    DeleteObject(background);
+    DeleteObject(surface);
+    DeleteObject(sidebar);
+    DeleteObject(border);
+    DeleteObject(accent);
+    DeleteObject(selection);
+    DeleteObject(linux);
+    DeleteObject(warning);
+    DeleteObject(secondary);
+    DeleteObject(title_font);
+    DeleteObject(body_font);
+}
+
 /// Peinture d'une vue de paramètres : barre d'application, navigation latérale,
 /// cartes et bouton d'accent. Chaque commande passe par GDI invité → backend.
 unsafe fn draw_scene(hwnd: Handle, first: bool) {
     let mut ps: PaintStruct = core::mem::zeroed();
     let hdc = BeginPaint(hwnd, &mut ps);
     if hdc.is_null() {
+        return;
+    }
+
+    if GetEnvironmentVariableA(c"WINLUX_APPS_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0 {
+        draw_apps_scene(hdc);
+        EndPaint(hwnd, &ps);
         return;
     }
 
