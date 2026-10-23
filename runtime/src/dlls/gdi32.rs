@@ -3,7 +3,12 @@
 //! liste à chaque cycle de peinture.
 
 use crate::dlls::gui::{self, DrawCmd, FontSpec, Rect};
+use std::collections::HashMap;
 use std::ffi::c_void;
+use std::fs::File;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -575,6 +580,138 @@ pub unsafe extern "win64" fn text_out_a(hdc: usize, x: i32, y: i32, text: *const
     1
 }
 
+type IconCache = HashMap<(String, usize, u32), Vec<u32>>;
+static ICON_CACHE: OnceLock<Mutex<IconCache>> = OnceLock::new();
+
+fn desktop_icon_name(request: &str) -> Option<String> {
+    if !request.ends_with(".desktop") {
+        return Some(request.to_string());
+    }
+    let mut candidates = Vec::new();
+    if Path::new(request).is_absolute() {
+        candidates.push(PathBuf::from(request));
+    } else {
+        if let Ok(home) = std::env::var("HOME") {
+            candidates.push(PathBuf::from(home).join(".local/share/applications").join(request));
+        }
+        candidates.push(PathBuf::from("/usr/local/share/applications").join(request));
+        candidates.push(PathBuf::from("/usr/share/applications").join(request));
+    }
+    for path in candidates {
+        let Ok(file) = File::open(path) else { continue };
+        for line in BufReader::new(file).lines().map_while(Result::ok) {
+            if let Some(icon) = line.strip_prefix("Icon=") {
+                let icon = icon.trim();
+                if !icon.is_empty() { return Some(icon.to_string()); }
+            }
+        }
+    }
+    None
+}
+
+fn resolve_icon_path(request: &str) -> Option<PathBuf> {
+    let icon = desktop_icon_name(request)?;
+    let direct = PathBuf::from(&icon);
+    if direct.is_file() && direct.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("png")) {
+        return Some(direct);
+    }
+    let icon = icon.strip_suffix(".png").unwrap_or(&icon);
+    let themes = ["Mint-L", "Mint-Y", "Mint-X", "hicolor", "HighContrast", "Yaru"];
+    let sections = ["apps", "places", "categories", "status", "devices", "mimetypes", "legacy"];
+    let sizes = ["512", "256@2x", "256x256", "256", "128@2x", "128x128", "128", "96x96", "64@2x", "64x64", "64", "48x48", "48", "32x32", "32"];
+    for theme in themes {
+        for size in sizes {
+            for section in sections {
+                for candidate in [
+                    PathBuf::from("/usr/share/icons").join(theme).join(section).join(size).join(format!("{icon}.png")),
+                    PathBuf::from("/usr/share/icons").join(theme).join(size).join(section).join(format!("{icon}.png")),
+                ] {
+                    if candidate.is_file() { return Some(candidate); }
+                }
+            }
+        }
+    }
+    let pixmap = PathBuf::from("/usr/share/pixmaps").join(format!("{icon}.png"));
+    pixmap.is_file().then_some(pixmap)
+}
+
+fn decode_png(path: &Path) -> Option<(usize, usize, Vec<[u8; 4]>)> {
+    let file = File::open(path).ok()?;
+    let mut decoder = png::Decoder::new(BufReader::new(file));
+    decoder.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
+    let mut reader = decoder.read_info().ok()?;
+    let info = reader.info();
+    if info.width == 0 || info.height == 0 || info.width > 4096 || info.height > 4096 {
+        return None;
+    }
+    let output_size = reader.output_buffer_size()?;
+    if output_size > 64 * 1024 * 1024 { return None; }
+    let mut buffer = vec![0; output_size];
+    let info = reader.next_frame(&mut buffer).ok()?;
+    let bytes = &buffer[..info.buffer_size()];
+    let count = (info.width as usize).checked_mul(info.height as usize)?;
+    let mut rgba = Vec::with_capacity(count);
+    match info.color_type {
+        png::ColorType::Rgba => rgba.extend(bytes.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]])),
+        png::ColorType::Rgb => rgba.extend(bytes.chunks_exact(3).map(|p| [p[0], p[1], p[2], 255])),
+        png::ColorType::GrayscaleAlpha => rgba.extend(bytes.chunks_exact(2).map(|p| [p[0], p[0], p[0], p[1]])),
+        png::ColorType::Grayscale => rgba.extend(bytes.iter().map(|p| [*p, *p, *p, 255])),
+        png::ColorType::Indexed => return None,
+    }
+    (rgba.len() == count).then_some((info.width as usize, info.height as usize, rgba))
+}
+
+fn icon_pixels(request: &str, size: usize, background: u32) -> Option<Vec<u32>> {
+    let key = (request.to_string(), size, background);
+    let cache = ICON_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
+    if let Some(pixels) = cache.lock().ok()?.get(&key).cloned() { return Some(pixels); }
+    let (width, height, source) = decode_png(&resolve_icon_path(request)?)?;
+    let scale = (size as f32 / width as f32).min(size as f32 / height as f32);
+    let fitted_width = ((width as f32 * scale).round() as usize).clamp(1, size);
+    let fitted_height = ((height as f32 * scale).round() as usize).clamp(1, size);
+    let offset_x = (size - fitted_width) / 2;
+    let offset_y = (size - fitted_height) / 2;
+    let bg = [(background & 0xff) as u8, ((background >> 8) & 0xff) as u8, ((background >> 16) & 0xff) as u8];
+    let mut output = vec![background; size * size];
+    for y in 0..fitted_height {
+        let sy = ((y as f32 + 0.5) * height as f32 / fitted_height as f32 - 0.5).clamp(0.0, height.saturating_sub(1) as f32);
+        let y0 = sy.floor() as usize;
+        let y1 = (y0 + 1).min(height - 1);
+        let fy = sy - y0 as f32;
+        for x in 0..fitted_width {
+            let sx = ((x as f32 + 0.5) * width as f32 / fitted_width as f32 - 0.5).clamp(0.0, width.saturating_sub(1) as f32);
+            let x0 = sx.floor() as usize;
+            let x1 = (x0 + 1).min(width - 1);
+            let fx = sx - x0 as f32;
+            let sample = |channel: usize| {
+                let top = source[y0 * width + x0][channel] as f32 * (1.0 - fx) + source[y0 * width + x1][channel] as f32 * fx;
+                let bottom = source[y1 * width + x0][channel] as f32 * (1.0 - fx) + source[y1 * width + x1][channel] as f32 * fx;
+                top * (1.0 - fy) + bottom * fy
+            };
+            let alpha = sample(3) / 255.0;
+            let channel = |index: usize| (sample(index) * alpha + bg[index] as f32 * (1.0 - alpha)).round() as u32;
+            output[(offset_y + y) * size + offset_x + x] = channel(0) | (channel(1) << 8) | (channel(2) << 16);
+        }
+    }
+    cache.lock().ok()?.insert(key, output.clone());
+    Some(output)
+}
+
+/// Extension Winlux : charge l'icône PNG réelle déclarée par un fichier
+/// `.desktop`, la redimensionne avec filtrage et la dessine via le chemin GDI.
+pub unsafe extern "win64" fn winlux_draw_icon_a(
+    hdc: usize, request: *const u8, x: i32, y: i32, size: i32, background: u32,
+) -> i32 {
+    if request.is_null() || gui::dc_window(hdc).is_none() || !(1..=512).contains(&size) {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let request = crate::dlls::cstr(request);
+    let Some(pixels) = icon_pixels(&request, size as usize, background) else { return 0 };
+    let rect = Rect { left: x, top: y, right: x + size, bottom: y + size };
+    gui::record(hdc, DrawCmd::Bitmap { rect, pixels, rop: gui::RasterOp::Copy }) as i32
+}
+
 /// `Rectangle(hdc, left, top, right, bottom, pen, brush)` : cadre + intérieur.
 pub unsafe extern "win64" fn rectangle(
     hdc: usize,
@@ -643,6 +780,7 @@ pub fn exports() -> crate::dlls::Exports {
         "DeleteDC"=>fn delete_dc,
         "GetDeviceCaps"=>fn get_device_caps,
         "TextOutA"=>fn text_out_a,
+        "WinluxDrawIconA"=>fn winlux_draw_icon_a,
         "Rectangle"=>fn rectangle,
         "Ellipse"=>fn ellipse,
     }

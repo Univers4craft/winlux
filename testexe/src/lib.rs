@@ -486,6 +486,7 @@ extern "C" {
     pub fn BitBlt(dst: Handle, x: i32, y: i32, width: i32, height: i32, src: Handle, sx: i32, sy: i32, rop: u32) -> i32;
     pub fn StretchBlt(dst: Handle, x: i32, y: i32, width: i32, height: i32, src: Handle, sx: i32, sy: i32, sw: i32, sh: i32, rop: u32) -> i32;
     pub fn TextOutA(hdc: Handle, x: i32, y: i32, text: *const c_char, count: i32) -> i32;
+    pub fn WinluxDrawIconA(hdc: Handle, request: *const c_char, x: i32, y: i32, size: i32, background: u32) -> i32;
     pub fn Rectangle(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32, pen: Handle, brush: Handle) -> i32;
     pub fn Ellipse(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32) -> i32;
 }

@@ -132,10 +132,12 @@ Le z-order et les notifications
 `WINDOWPOS` avancées ne sont pas encore gérés.
 
 Le prototype de shell utilise ce backend pour rendre un bureau HiDPI complet :
-papier peint vectoriel, raccourcis, barre des tâches flottante, état réseau/audio/
-batterie et menu Démarrer interactif. Sa grille, ses surfaces arrondies, ses icônes
-et ses polices vectorielles ont été vérifiées en 1080p, 1440p et 4K. Il s’agit
-encore d’un prototype dans `gui_demo.exe`, pas d’un gestionnaire de bureau autonome.
+papier peint vectoriel, raccourcis, barre des tâches pleine largeur, état réseau/
+audio/batterie placé à gauche et menu Démarrer inspiré de Cinnamon. Les icônes
+d’applications proviennent réellement des fichiers `.desktop` et thèmes XDG :
+leurs PNG sont décodés avec alpha, mis en cache et filtrés lors des changements
+d’échelle, tandis que la typographie Xft reste vectorielle. Il s’agit encore
+d’un prototype dans `gui_demo.exe`, pas d’un gestionnaire de bureau autonome.
 
 La couche de dessin GDI est amorcée : les primitives invitées n’écrivent pas
 directement dans la fenêtre, elles empilent des commandes (`FillRect`,

@@ -2,14 +2,14 @@
 
 ## État actuel
 
-- Dernière validation locale : `cargo test -p winlux` (69 tests), compilation release et les neuf exécutables PE en séquentiel et en parallèle réussissent. La dernière validation ISO sous QEMU BIOS et UEFI réussit également; relancer les scripts après chaque changement.
+- Dernière validation locale : `cargo test -p winlux` (70 tests), compilation release et les neuf exécutables PE en séquentiel et en parallèle réussissent. La dernière validation ISO sous QEMU BIOS et UEFI réussit également; relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
 - [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe`, `findfiles.exe`, `crt_suite.exe`, `gui_suite.exe` et `gui_demo.exe` sous Winlux.
-- [x] Ajouter 69 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT, IOCP, COM/OLE et le noyau fenêtres/messages.
+- [x] Ajouter 70 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT, IOCP, COM/OLE et le noyau fenêtres/messages.
 - [x] Exécuter les neuf PE simultanément avec isolation, temporisation et journaux par processus.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
@@ -116,10 +116,12 @@
 ## Priorité 5 — Thème Windows 11
 
 - [x] Ajouter un prototype de bureau GDI HiDPI : fond d'écran, raccourcis,
-  barre des tâches, menu Démarrer interactif, applications épinglées et zone
-  système Wi-Fi/volume/batterie/heure.
+  barre des tâches pleine largeur, menu Démarrer inspiré de Cinnamon,
+  applications épinglées et zone système réseau/volume/batterie/heure à gauche.
 - [x] Reprendre le prototype avec un système visuel professionnel : surfaces
-  arrondies, profondeur, palette cohérente, icônes dessinées et hiérarchie typographique.
+  arrondies, profondeur, palette cohérente et hiérarchie typographique.
+- [x] Charger les vraies icônes PNG des applications depuis leurs fichiers
+  `.desktop` et thèmes XDG, avec cache, alpha et interpolation bilinéaire HiDPI.
 - [ ] Choisir la pile graphique de l’environnement cible : GTK, Qt ou autre.
 - [ ] Créer les composants : barre des tâches, menu de démarrage, fenêtres, notifications et explorateur de fichiers; le CSS actuel est une palette isolée, pas un shell graphique.
 - [ ] Ajouter les icônes et polices libres compatibles avec la licence du projet.

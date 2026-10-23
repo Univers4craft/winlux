@@ -32,6 +32,26 @@ struct XFont {
     char_width: i16,
 }
 
+fn bilinear_colorref(pixels: &[u32], width: usize, height: usize, x: f32, y: f32) -> u32 {
+    let x = x.clamp(0.0, width.saturating_sub(1) as f32);
+    let y = y.clamp(0.0, height.saturating_sub(1) as f32);
+    let x0 = x.floor() as usize;
+    let y0 = y.floor() as usize;
+    let x1 = (x0 + 1).min(width - 1);
+    let y1 = (y0 + 1).min(height - 1);
+    let fx = x - x0 as f32;
+    let fy = y - y0 as f32;
+    let channel = |shift: u32| {
+        let value = |px: u32| ((px >> shift) & 0xff) as f32;
+        let top = value(pixels[y0 * width + x0]) * (1.0 - fx)
+            + value(pixels[y0 * width + x1]) * fx;
+        let bottom = value(pixels[y1 * width + x0]) * (1.0 - fx)
+            + value(pixels[y1 * width + x1]) * fx;
+        (top * (1.0 - fy) + bottom * fy).round() as u32
+    };
+    channel(0) | (channel(8) << 8) | (channel(16) << 16)
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct XRenderColor {
@@ -756,10 +776,12 @@ impl X11Backend {
         );
     }
 
-    fn paint_bitmap(&self, window: &XWin, rect: &Rect, pixels: &[u32], rop: gui::RasterOp) {
-        let Some(dst) = Self::to_x_rect(window, rect) else { return };
-        let source_width = rect.width();
-        let source_height = rect.height();
+    fn paint_bitmap(&self, window: &XWin, source: &Rect, destination: &Rect, pixels: &[u32], rop: gui::RasterOp) {
+        let Some(dst) = Self::to_x_rect(window, destination) else { return };
+        let source_width = source.width();
+        let source_height = source.height();
+        let destination_width = destination.width();
+        let destination_height = destination.height();
         if source_width <= 0 || source_height <= 0 {
             return;
         }
@@ -769,8 +791,6 @@ impl X11Backend {
         if pixels.len() < source_count {
             return;
         }
-        let Some(source_left) = (dst.x as i32).checked_sub(rect.left) else { return };
-        let Some(source_top) = (dst.y as i32).checked_sub(rect.top) else { return };
         let setup = self.conn.setup();
         let depth = setup.roots[self.screen].root_depth;
         let Some(format) = setup.pixmap_formats.iter().find(|f| f.depth == depth) else { return };
@@ -791,9 +811,15 @@ impl X11Backend {
         let mut color_pixels = HashMap::new();
         for y in 0..dst.height as usize {
             for x in 0..dst.width as usize {
-                let source_index = (source_top as usize + y) * source_width as usize
-                    + source_left as usize + x;
-                let colorref = pixels[source_index];
+                let destination_x = dst.x as i32 + x as i32 - destination.left;
+                let destination_y = dst.y as i32 + y as i32 - destination.top;
+                let source_x = (destination_x as f32 + 0.5) * source_width as f32
+                    / destination_width as f32 - 0.5;
+                let source_y = (destination_y as f32 + 0.5) * source_height as f32
+                    / destination_height as f32 - 0.5;
+                let colorref = bilinear_colorref(
+                    pixels, source_width as usize, source_height as usize, source_x, source_y,
+                );
                 let pixel = *color_pixels
                     .entry(colorref)
                     .or_insert_with(|| self.alloc_color(colorref));
@@ -876,7 +902,10 @@ impl X11Backend {
                     let destination = self.scaled_rect(destination);
                     self.paint_blit(w, *source_hwnd, &source, &destination, *stretch, *rop)
                 }
-                DrawCmd::Bitmap { rect, pixels, rop } => self.paint_bitmap(w, rect, pixels, *rop),
+                DrawCmd::Bitmap { rect, pixels, rop } => {
+                    let destination = self.scaled_rect(rect);
+                    self.paint_bitmap(w, rect, &destination, pixels, *rop)
+                }
             }
         }
     }
@@ -1237,6 +1266,14 @@ mod tests {
         assert_eq!(dpi_scale(192.0, None), 2.0);
         assert_eq!(dpi_scale(96.0, Some(2.5)), 2.5);
         assert_eq!(dpi_scale(500.0, None), 3.0);
+    }
+
+    #[test]
+    fn interpolation_bilineaire_des_bitmaps_est_stable() {
+        let pixels = [0x0000_0000, 0x0000_00ff, 0x0000_ff00, 0x00ff_0000];
+        assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.0, 0.0), 0x0000_0000);
+        assert_eq!(bilinear_colorref(&pixels, 2, 2, 1.0, 1.0), 0x00ff_0000);
+        assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.5, 0.5), 0x0040_4040);
     }
 }
 
