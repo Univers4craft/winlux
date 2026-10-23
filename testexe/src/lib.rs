@@ -99,7 +99,22 @@ pub struct Win32FindDataW {
 }
 
 #[repr(C)]
+#[derive(Clone,Copy,Default)]
 pub struct FileTime { pub low: u32, pub high: u32 }
+#[repr(C)]
+#[derive(Clone,Copy,Default,Eq,PartialEq)]
+pub struct Guid { pub data1:u32,pub data2:u16,pub data3:u16,pub data4:[u8;8] }
+#[repr(C)]
+#[derive(Clone,Copy,Default)]
+pub struct StatStg { pub name:*mut u16,pub kind:u32,pub size:u64,pub modified:FileTime,pub created:FileTime,pub accessed:FileTime,pub mode:u32,pub locks_supported:u32,pub clsid:Guid,pub state_bits:u32,pub reserved:u32 }
+#[repr(C)]
+pub struct IStreamVTable {
+    pub query_interface:unsafe extern "system" fn(Handle,*const Guid,*mut Handle)->i32,pub add_ref:unsafe extern "system" fn(Handle)->u32,pub release:unsafe extern "system" fn(Handle)->u32,
+    pub read:unsafe extern "system" fn(Handle,*mut c_void,u32,*mut u32)->i32,pub write:unsafe extern "system" fn(Handle,*const c_void,u32,*mut u32)->i32,
+    pub seek:unsafe extern "system" fn(Handle,i64,u32,*mut u64)->i32,pub set_size:unsafe extern "system" fn(Handle,u64)->i32,pub copy_to:unsafe extern "system" fn(Handle,Handle,u64,*mut u64,*mut u64)->i32,
+    pub commit:unsafe extern "system" fn(Handle,u32)->i32,pub revert:unsafe extern "system" fn(Handle)->i32,pub lock_region:unsafe extern "system" fn(Handle,u64,u64,u32)->i32,pub unlock_region:unsafe extern "system" fn(Handle,u64,u64,u32)->i32,
+    pub stat:unsafe extern "system" fn(Handle,*mut StatStg,u32)->i32,pub clone_stream:unsafe extern "system" fn(Handle,*mut Handle)->i32,
+}
 #[repr(C)]
 pub struct Win32FileAttributeData {
     pub attributes: u32,
@@ -328,6 +343,12 @@ extern "system" {
     pub fn HeapAlloc(heap: Handle, flags: u32, size: usize) -> *mut c_void;
     pub fn HeapReAlloc(heap: Handle, flags: u32, p: *mut c_void, size: usize) -> *mut c_void;
     pub fn HeapFree(heap: Handle, flags: u32, p: *mut c_void) -> i32;
+    pub fn GlobalAlloc(flags:u32,size:usize)->Handle;
+    pub fn GlobalReAlloc(memory:Handle,size:usize,flags:u32)->Handle;
+    pub fn GlobalLock(memory:Handle)->*mut c_void;
+    pub fn GlobalUnlock(memory:Handle)->i32;
+    pub fn GlobalSize(memory:Handle)->usize;
+    pub fn GlobalFree(memory:Handle)->Handle;
     pub fn VirtualAlloc(addr: *mut c_void, size: usize, kind: u32, prot: u32) -> *mut c_void;
     pub fn VirtualFree(addr: *mut c_void, size: usize, kind: u32) -> i32;
     pub fn VirtualProtect(addr: *mut c_void, size: usize, prot: u32, old: *mut u32) -> i32;
@@ -355,6 +376,14 @@ extern "system" {
     pub fn WideCharToMultiByte(cp: u32, flags: u32, w: *const u16, n: i32, out: *mut u8, cap: i32, default: *const u8, used: *mut i32) -> i32;
     pub fn WriteConsoleW(h: Handle, buf: *const u16, n: u32, written: *mut u32, r: *mut c_void) -> i32;
     pub fn Sleep(ms: u32);
+}
+
+#[link(name = "ole32", kind = "raw-dylib")]
+extern "system" {
+    pub fn CoInitializeEx(reserved:Handle,coinit:u32)->i32;pub fn CoUninitialize();
+    pub fn CoTaskMemAlloc(size:usize)->*mut c_void;pub fn CoTaskMemRealloc(memory:*mut c_void,size:usize)->*mut c_void;pub fn CoTaskMemFree(memory:*mut c_void);
+    pub fn CoCreateGuid(out:*mut Guid)->i32;pub fn CLSIDFromString(value:*const u16,out:*mut Guid)->i32;pub fn StringFromGUID2(guid:*const Guid,out:*mut u16,capacity:i32)->i32;
+    pub fn CreateStreamOnHGlobal(memory:Handle,delete_on_release:i32,out:*mut Handle)->i32;pub fn GetHGlobalFromStream(stream:Handle,out:*mut Handle)->i32;
 }
 
 #[link(name = "ws2_32", kind = "raw-dylib")]

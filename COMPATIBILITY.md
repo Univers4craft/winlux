@@ -18,6 +18,11 @@ des codecs, des services et parfois d’un runtime managé.
   sont bridées.
 - Des DLL courantes sont intégrées : `user32`, `gdi32`, `advapi32`, `ole32`,
   `bcrypt`, `version`, `shell32`, `ws2_32`, `mfplat` et `winmm`.
+- La fondation COM/OLE gère l’initialisation d’appartement par thread,
+  `CoTaskMemAlloc/Realloc/Free`, les GUID, la mémoire globale Win32 et un vrai
+  `IStream` en mémoire partageant son `HGLOBAL` (lecture, écriture, seek, taille,
+  métadonnées, copie et clone). L’activation générique par `CoCreateInstance`,
+  l’automatisation et les serveurs COM ne sont pas encore disponibles.
 - Le registre de base est partagé avec Linux et persiste dans
   `$XDG_DATA_HOME/winlux/registry.tsv` (ou `~/.local/share/winlux`).
 - Le SCM local persiste les définitions de services dans le registre Winlux et

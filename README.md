@@ -8,9 +8,9 @@ Winlux est un runtime expérimental Linux qui charge des exécutables **Windows 
 
 ## État testé
 
-Les 66 tests unitaires du runtime et neuf exécutables PE couvrent le chargeur et les principales API implémentées. Les exécutables incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, des tests de DLL réelle/import différé, `findfiles.exe`, `crt_suite.exe` (chaînes, conversions, mathématiques, tri) et deux tests GUI (`gui_suite.exe` pour le cycle de vie et le redimensionnement, `gui_demo.exe` pour le tracé GDI et le rendu X11). Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux, séquentiellement ou tous en parallèle.
+Les 69 tests unitaires du runtime et neuf exécutables PE couvrent le chargeur et les principales API implémentées. Les exécutables incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, des tests de DLL réelle/import différé, `findfiles.exe`, `crt_suite.exe` (chaînes, conversions, mathématiques, tri) et deux tests GUI (`gui_suite.exe` pour le cycle de vie et le redimensionnement, `gui_demo.exe` pour le tracé GDI et le rendu X11). Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux, séquentiellement ou tous en parallèle.
 
-Le runtime contient notamment un chargeur PE, les relocations et imports, un PEB/TEB minimal, du TLS, des DLL intégrées partielles, le registre Winlux persistant, des fichiers mappés vers Linux (énumération, fichiers temporaires, métadonnées) et une passerelle Winsock/ALSA expérimentale.
+Le runtime contient notamment un chargeur PE, les relocations et imports, un PEB/TEB minimal, du TLS, des DLL intégrées partielles, le registre Winlux persistant, des fichiers mappés vers Linux (énumération, fichiers temporaires, métadonnées), une fondation COM/OLE native (`CoInitializeEx`, GUID, mémoire COM et `IStream` sur `HGLOBAL`) et une passerelle Winsock/ALSA expérimentale.
 
 Le sous-ensemble de processus implémente `CreateProcessA/W` pour lancer un programme Linux ou un PE enfant via Winlux, avec attente, code de sortie, blocs d’environnement A/W et `CREATE_SUSPENDED`/`ResumeThread`. L’héritage des handles et les attributs étendus ne sont pas encore implémentés. Les fichiers prennent en charge des E/S overlapped élémentaires via `ReadFile`/`WriteFile`, `GetOverlappedResult`, une annulation best-effort avec `CancelIo/CancelIoEx` et un sous-ensemble IOCP.
 
@@ -84,6 +84,7 @@ La VM exécute la suite séquentielle, les neuf PE simultanément et le test gra
 - PE32+ x86-64 seulement; le runtime n’est pas un noyau Windows.
 - `user32`/`gdi32` sont partiels : le noyau fenêtres/messages, les boucles de messages A/W, les titres Unicode, `SetWindowPos`/`MoveWindow`, les API de focus et d'état clavier de base, un backend X11 avec mise à l'échelle DPI et texte Xft antialiasé, ainsi que des primitives GDI de base existent, mais les contrôles, les autres formats DIB, les décorations et la plupart des API clavier avancées manquent encore.
 - Le pont `dotnet`/Mono permet d'essayer les applications managées compatibles Linux, mais aucun CLR Windows complet n'est intégré. WPF/WinForms et `paint.net` ne fonctionnent donc pas encore correctement.
+- COM/OLE possède désormais ses primitives de base et ses flux mémoire, mais l’activation des classes COM, l’automatisation, le glisser-déposer et les serveurs COM applicatifs restent à implémenter.
 - Les codecs compressés, DirectX, les pilotes, le registre Windows complet, les services SCM complets, les sémantiques avancées des E/S overlapped et de nombreuses API Win32 ne sont pas implémentés.
 - `FreeLibrary` ne démonte pas encore une DLL chargée.
 - Le pont audio WAV/ALSA dépend de l’environnement Linux et n’a pas été validé sur plusieurs périphériques.

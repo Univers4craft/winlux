@@ -11,6 +11,12 @@ pub static mut PROCESS_HEAP: usize = 0;
 struct VmRegion { size: usize, committed: Vec<bool>, protection: Vec<u32>, allocation_protection: u32 }
 static ALLOCS: OnceLock<Mutex<HashMap<usize, VmRegion>>> = OnceLock::new();
 static HEAP_ALLOCS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
+pub(crate) struct GlobalMemory {
+    pub(crate) bytes: Vec<u8>,
+    locks: u32,
+    flags: u32,
+}
+static GLOBAL_MEMORY: OnceLock<Mutex<HashMap<usize, Arc<Mutex<GlobalMemory>>>>> = OnceLock::new();
 enum FileHandle { File(Arc<Mutex<File>>) }
 static HANDLES: OnceLock<Mutex<HashMap<usize, FileHandle>>> = OnceLock::new();
 struct IoResult { done:bool,bytes:u32,error:u32 }
@@ -557,6 +563,23 @@ pub unsafe extern "win64" fn heap_realloc(_heap:usize,flags:u32,p:*mut c_void,si
     if flags&8!=0&&size>old{std::ptr::write_bytes((q as *mut u8).add(old),0,size-old);}q
 }
 pub unsafe extern "win64" fn heap_free(_heap: usize, _flags: u32, p: *mut c_void) -> i32 {if p.is_null(){crate::process::set_last_error(87);return 0;}if lock(HEAP_ALLOCS.get_or_init(||Mutex::new(HashMap::new()))).remove(&(p as usize)).is_none(){crate::process::set_last_error(87);return 0;}libc::free(p);1 }
+pub(crate) fn create_global_memory(size:usize,flags:u32)->Option<(usize,Arc<Mutex<GlobalMemory>>)> {
+    let mut bytes=Vec::new();bytes.try_reserve_exact(size).ok()?;bytes.resize(size,0);
+    let memory=Arc::new(Mutex::new(GlobalMemory{bytes,locks:0,flags}));let handle=next_handle();
+    lock(GLOBAL_MEMORY.get_or_init(||Mutex::new(HashMap::new()))).insert(handle,Arc::clone(&memory));Some((handle,memory))
+}
+pub(crate) fn lookup_global_memory(handle:usize)->Option<Arc<Mutex<GlobalMemory>>>{lock(GLOBAL_MEMORY.get_or_init(||Mutex::new(HashMap::new()))).get(&handle).cloned()}
+pub(crate) fn free_global_memory(handle:usize)->bool{lock(GLOBAL_MEMORY.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle).is_some()}
+pub extern "win64" fn global_alloc(flags:u32,size:usize)->usize{match create_global_memory(size,flags){Some((handle,_))=>handle,None=>{crate::process::set_last_error(8);0}}}
+pub extern "win64" fn global_realloc(handle:usize,size:usize,flags:u32)->usize{
+    let Some(memory)=lookup_global_memory(handle)else{crate::process::set_last_error(6);return 0;};let mut memory=lock(&memory);let old=memory.bytes.len();
+    if size>old&&memory.bytes.try_reserve_exact(size-old).is_err(){crate::process::set_last_error(8);return 0;}memory.bytes.resize(size,0);memory.flags=flags;handle
+}
+pub extern "win64" fn global_lock(handle:usize)->*mut c_void{let Some(memory)=lookup_global_memory(handle)else{crate::process::set_last_error(6);return std::ptr::null_mut();};let mut memory=lock(&memory);memory.locks=memory.locks.saturating_add(1);memory.bytes.as_mut_ptr().cast()}
+pub extern "win64" fn global_unlock(handle:usize)->i32{let Some(memory)=lookup_global_memory(handle)else{crate::process::set_last_error(6);return 0;};let mut memory=lock(&memory);if memory.locks==0{crate::process::set_last_error(158);return 0;}memory.locks-=1;crate::process::set_last_error(0);i32::from(memory.locks!=0)}
+pub extern "win64" fn global_size(handle:usize)->usize{let Some(memory)=lookup_global_memory(handle)else{crate::process::set_last_error(6);return 0;};let size=lock(&memory).bytes.len();size}
+pub extern "win64" fn global_flags(handle:usize)->u32{let Some(memory)=lookup_global_memory(handle)else{crate::process::set_last_error(6);return u32::MAX;};let memory=lock(&memory);(memory.flags&0x7f00)|memory.locks.min(0xff)}
+pub extern "win64" fn global_free(handle:usize)->usize{if handle==0{return 0;}if free_global_memory(handle){0}else{crate::process::set_last_error(6);handle}}
 pub unsafe extern "win64" fn virtual_alloc(addr: *mut c_void, size: usize, _kind: u32, prot: u32) -> *mut c_void {
     const MEM_COMMIT:u32=0x1000;const MEM_RESERVE:u32=0x2000;const MEM_RESET:u32=0x80000;
     const PAGE:usize=4096;const GRANULARITY:usize=65536;
@@ -876,7 +899,7 @@ pub fn exports() -> crate::dlls::Exports { crate::exports! {
   "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
   "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"GetCurrentThreadId"=>fn get_current_thread_id,
  "GetLastError"=>fn get_last_error, "SetLastError"=>fn set_last_error, "GetProcessHeap"=>fn get_process_heap,
-   "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
+   "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"GlobalAlloc"=>fn global_alloc,"GlobalReAlloc"=>fn global_realloc,"GlobalLock"=>fn global_lock,"GlobalUnlock"=>fn global_unlock,"GlobalSize"=>fn global_size,"GlobalFlags"=>fn global_flags,"GlobalFree"=>fn global_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
   "GetTickCount"=>fn get_tick_count,"GetTickCount64"=>fn get_tick_count64,"GetCurrentProcessId"=>fn get_current_process_id,"CreateThread"=>fn create_thread,"CloseHandle"=>fn close_handle,"GetEnvironmentVariableA"=>fn get_environment_variable_a,"SetEnvironmentVariableA"=>fn set_environment_variable_a,
   "GetSystemInfo"=>fn get_system_info,"GetNativeSystemInfo"=>fn get_native_system_info,"GetSystemTimeAsFileTime"=>fn get_system_time_as_file_time,"GetSystemTimePreciseAsFileTime"=>fn get_system_time_as_file_time,"GetVersion"=>fn get_version,"GetVersionExA"=>fn get_version_ex_a,"GetVersionExW"=>fn get_version_ex_w,
    "GetCurrentDirectoryA"=>fn get_current_directory_a,"SetCurrentDirectoryA"=>fn set_current_directory_a,"GetTempPathA"=>fn get_temp_path_a,"GetTempFileNameA"=>fn get_temp_file_name_a,"GetModuleFileNameA"=>fn get_module_file_name_a,"GetFileAttributesA"=>fn get_file_attributes_a,"GetFileAttributesExA"=>fn get_file_attributes_ex_a,"DeleteFileA"=>fn delete_file_a,"CreateDirectoryA"=>fn create_directory_a,"CreateFileW"=>fn create_file_w,"GetFullPathNameA"=>fn get_full_path_name_a,"CopyFileA"=>fn copy_file_a,"MoveFileA"=>fn move_file_a,"RemoveDirectoryA"=>fn remove_directory_a,

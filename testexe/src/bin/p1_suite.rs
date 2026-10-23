@@ -51,6 +51,42 @@ pub extern "C" fn mainCRTStartup() -> ! {
             check!(!grown.is_null() && *grown == 0x5a && *grown.add(7) == 0, "HeapReAlloc conserve et zero-initialise l'extension");
             if !grown.is_null() { check!(HeapFree(heap, 0, grown as _) != 0, "HeapFree après HeapReAlloc"); }
         }
+        // --- mémoire globale et COM/OLE natifs ---
+        let global=GlobalAlloc(0x42,4);let global_ptr=GlobalLock(global)as *mut u8;
+        let global_ok=!global.is_null()&&!global_ptr.is_null()&&*global_ptr.add(3)==0;
+        if !global_ptr.is_null(){*global_ptr=0x57;let _=GlobalUnlock(global);}
+        let grown_global=GlobalReAlloc(global,12,0x42);let grown_ptr=GlobalLock(grown_global)as *mut u8;
+        let global_grown_ok=grown_global==global&&GlobalSize(global)==12&&!grown_ptr.is_null()&&*grown_ptr==0x57&&*grown_ptr.add(11)==0;
+        if !grown_ptr.is_null(){let _=GlobalUnlock(grown_global);}
+        check!(global_ok&&global_grown_ok&&GlobalFree(grown_global).is_null(),"GlobalAlloc/ReAlloc/Lock/Free partageable");
+
+        let com_first=CoInitializeEx(null_mut(),0);let com_again=CoInitializeEx(null_mut(),0);let com_conflict=CoInitializeEx(null_mut(),2);
+        check!(com_first==0&&com_again==1&&com_conflict==0x8001_0106u32 as i32,"CoInitializeEx respecte l'appartement du thread");CoUninitialize();CoUninitialize();
+
+        let guid_ascii=b"{00112233-4455-6677-8899-AABBCCDDEEFF}";let mut guid_text=[0u16;39];
+        for(index,byte)in guid_ascii.iter().enumerate(){guid_text[index]=*byte as u16;}
+        let mut guid=Guid::default();let mut guid_back=[0u16;39];
+        let guid_parsed=CLSIDFromString(guid_text.as_ptr(),&mut guid)==0&&guid==Guid{data1:0x0011_2233,data2:0x4455,data3:0x6677,data4:[0x88,0x99,0xaa,0xbb,0xcc,0xdd,0xee,0xff]};
+        let guid_rendered=StringFromGUID2(&guid,guid_back.as_mut_ptr(),39)==39&&guid_back==guid_text;
+        let mut generated_guid=Guid::default();let guid_generated=CoCreateGuid(&mut generated_guid)==0&&generated_guid.data3>>12==4&&generated_guid.data4[0]>>6==2;
+        check!(guid_parsed&&guid_rendered&&guid_generated,"GUID COM analyse, formatage et UUID v4");
+
+        let task_memory=CoTaskMemAlloc(4)as *mut u8;let task_memory_ok=!task_memory.is_null();if !task_memory.is_null(){*task_memory=0x43;}
+        let task_memory=CoTaskMemRealloc(task_memory as _,16)as *mut u8;check!(task_memory_ok&&!task_memory.is_null()&&*task_memory==0x43,"CoTaskMemAlloc/Realloc/Free");CoTaskMemFree(task_memory as _);
+
+        let mut stream=null_mut();let stream_created=CreateStreamOnHGlobal(null_mut(),1,&mut stream)==0&&!stream.is_null();let mut stream_ok=false;
+        if stream_created {
+            let vtable=&**(stream as *const *const IStreamVTable);let payload=*b"COM natif";let mut transferred=0u32;
+            let wrote=(vtable.write)(stream,payload.as_ptr()as _,9,&mut transferred)==0&&transferred==9;let mut position=99u64;
+            let seeked=(vtable.seek)(stream,0,0,&mut position)==0&&position==0;let mut output=[0u8;9];
+            let read=(vtable.read)(stream,output.as_mut_ptr()as _,9,&mut transferred)==0&&transferred==9&&output==payload;
+            let mut stat=StatStg::default();let stated=(vtable.stat)(stream,&mut stat,1)==0&&stat.kind==2&&stat.size==9;
+            let mut stream_global=null_mut();let shared=GetHGlobalFromStream(stream,&mut stream_global)==0&&GlobalSize(stream_global)==9;
+            let shared_ptr=GlobalLock(stream_global)as *const u8;let shared_data=!shared_ptr.is_null()&&core::slice::from_raw_parts(shared_ptr,9)==payload;if !shared_ptr.is_null(){let _=GlobalUnlock(stream_global);}
+            let mut clone=null_mut();let cloned=(vtable.clone_stream)(stream,&mut clone)==0&&!clone.is_null();if !clone.is_null(){let clone_vtable=&**(clone as *const *const IStreamVTable);let _=(clone_vtable.release)(clone);}
+            stream_ok=wrote&&seeked&&read&&stated&&shared&&shared_data&&cloned;let _=(vtable.release)(stream);
+        }
+        check!(stream_ok,"IStream sur HGLOBAL: lecture, écriture, seek, stat et clone");
         let v = VirtualAlloc(null_mut(), 65536, 0x3000, 0x04) as *mut u32;
         check!(!v.is_null() && (v as usize) % 65536 == 0, "VirtualAlloc aligne sur 64 Ko");
         *v.add(100) = 0xdead;
