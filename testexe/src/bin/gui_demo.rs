@@ -60,7 +60,7 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     let title_font = CreateFontA(18, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
     let body_font = CreateFontA(14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
     let old_font = SelectObject(hdc, title_font);
-    let titled = TextOutA(hdc, 50, 16, c"Winlux Settings".as_ptr(), -1);
+    let titled = TextOutA(hdc, 50, 16, c"Winlux Control Center".as_ptr(), -1);
 
     // Navigation de type Windows 11.
     SelectObject(hdc, body_font);
@@ -68,61 +68,72 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     FillRect(hdc, &selected, selection);
     let selected_mark = Rect { left: 10, top: 85, right: 14, bottom: 105 };
     FillRect(hdc, &selected_mark, accent);
-    TextOutA(hdc, 28, 88, c"System".as_ptr(), -1);
+    TextOutA(hdc, 28, 88, c"Overview".as_ptr(), -1);
     SetTextColor(hdc, 0x0060_6060);
-    TextOutA(hdc, 28, 128, c"Bluetooth & devices".as_ptr(), -1);
-    TextOutA(hdc, 28, 164, c"Network & internet".as_ptr(), -1);
-    TextOutA(hdc, 28, 200, c"Personalization".as_ptr(), -1);
-    TextOutA(hdc, 28, 236, c"Apps".as_ptr(), -1);
-    TextOutA(hdc, 28, 272, c"Accounts".as_ptr(), -1);
-    TextOutA(hdc, 28, 308, c"Windows compatibility".as_ptr(), -1);
+    TextOutA(hdc, 18, 130, c"LINUX".as_ptr(), -1);
+    TextOutA(hdc, 28, 158, c"Linux system".as_ptr(), -1);
+    TextOutA(hdc, 28, 190, c"Network".as_ptr(), -1);
+    TextOutA(hdc, 28, 222, c"Audio & devices".as_ptr(), -1);
+    TextOutA(hdc, 18, 266, c"WINDOWS".as_ptr(), -1);
+    TextOutA(hdc, 28, 294, c"Compatibility".as_ptr(), -1);
+    TextOutA(hdc, 28, 326, c"Windows apps".as_ptr(), -1);
+    TextOutA(hdc, 28, 358, c"Registry & DLLs".as_ptr(), -1);
 
     // Titre de page et trois cartes de réglages.
     SelectObject(hdc, title_font);
     SetTextColor(hdc, 0x001F_1F1F);
-    TextOutA(hdc, 224, 68, c"System".as_ptr(), -1);
+    TextOutA(hdc, 224, 68, c"Unified settings".as_ptr(), -1);
     SelectObject(hdc, body_font);
 
-    let display_card = Rect { left: 220, top: 104, right: 690, bottom: 172 };
-    let sound_card = Rect { left: 220, top: 184, right: 690, bottom: 252 };
-    let about_card = Rect { left: 220, top: 264, right: 690, bottom: 332 };
-    FillRect(hdc, &display_card, surface);
-    FillRect(hdc, &sound_card, surface);
-    FillRect(hdc, &about_card, surface);
-    let framed = FrameRect(hdc, &display_card, border)
-        & FrameRect(hdc, &sound_card, border)
-        & FrameRect(hdc, &about_card, border);
+    let linux_card = Rect { left: 220, top: 104, right: 448, bottom: 292 };
+    let windows_card = Rect { left: 460, top: 104, right: 690, bottom: 292 };
+    let shared_card = Rect { left: 220, top: 306, right: 690, bottom: 394 };
+    FillRect(hdc, &linux_card, surface);
+    FillRect(hdc, &windows_card, surface);
+    FillRect(hdc, &shared_card, surface);
+    let framed = FrameRect(hdc, &linux_card, border)
+        & FrameRect(hdc, &windows_card, border)
+        & FrameRect(hdc, &shared_card, border);
 
-    let display_icon = Rect { left: 238, top: 122, right: 270, bottom: 154 };
-    let sound_icon = Rect { left: 238, top: 202, right: 270, bottom: 234 };
-    let about_icon = Rect { left: 238, top: 282, right: 270, bottom: 314 };
-    FillRect(hdc, &display_icon, accent);
-    FillRect(hdc, &sound_icon, accent);
-    FillRect(hdc, &about_icon, accent);
+    let linux_icon = Rect { left: 238, top: 122, right: 270, bottom: 154 };
+    let windows_icon = Rect { left: 478, top: 122, right: 510, bottom: 154 };
+    FillRect(hdc, &linux_icon, success);
+    FillRect(hdc, &windows_icon, accent);
 
     SetTextColor(hdc, 0x001F_1F1F);
-    TextOutA(hdc, 288, 118, c"Display".as_ptr(), -1);
-    TextOutA(hdc, 288, 198, c"Sound".as_ptr(), -1);
-    TextOutA(hdc, 288, 278, c"About Winlux".as_ptr(), -1);
+    TextOutA(hdc, 286, 122, c"Linux".as_ptr(), -1);
+    TextOutA(hdc, 526, 122, c"Windows".as_ptr(), -1);
     SetTextColor(hdc, 0x0060_6060);
-    TextOutA(hdc, 288, 140, c"1920 x 1080  |  Scale 100%".as_ptr(), -1);
-    TextOutA(hdc, 288, 220, c"Linux audio bridge ready".as_ptr(), -1);
+    TextOutA(hdc, 238, 170, c"Host system".as_ptr(), -1);
+    TextOutA(hdc, 238, 198, c"Network & audio".as_ptr(), -1);
+    TextOutA(hdc, 238, 226, c"Updates & drivers".as_ptr(), -1);
+    TextOutA(hdc, 478, 170, c"EXE compatibility".as_ptr(), -1);
+    TextOutA(hdc, 478, 198, c"Runtime & DLLs".as_ptr(), -1);
+    TextOutA(hdc, 478, 226, c"Registry & apps".as_ptr(), -1);
+
+    let linux_action = Rect { left: 238, top: 250, right: 426, bottom: 278 };
+    let windows_action = Rect { left: 478, top: 250, right: 672, bottom: 278 };
+    FillRect(hdc, &linux_action, selection);
+    FillRect(hdc, &windows_action, selection);
+    SetTextColor(hdc, 0x001F_1F1F);
+    TextOutA(hdc, 286, 257, c"Open Linux".as_ptr(), -1);
+    TextOutA(hdc, 520, 257, c"Windows options".as_ptr(), -1);
 
     // Exerce aussi le texte opaque, sans casser la présentation de la carte.
     let previous_mode = SetBkMode(hdc, 2);
     let previous_bgc = SetBkColor(hdc, 0x00FF_FFFF);
-    let opaque_text = TextOutA(hdc, 288, 300, c"PE32+ x64 runtime active".as_ptr(), -1);
+    let opaque_text = TextOutA(hdc, 244, 326, c"Shared integration".as_ptr(), -1);
     SetBkMode(hdc, 1);
 
-    // État de compatibilité et bouton principal.
-    let status_dot = Rect { left: 224, top: 366, right: 234, bottom: 376 };
+    // État commun et bouton principal.
+    let status_dot = Rect { left: 226, top: 360, right: 236, bottom: 370 };
     FillRect(hdc, &status_dot, success);
-    SetTextColor(hdc, 0x001F_1F1F);
-    TextOutA(hdc, 244, 360, c"Windows compatibility services are running".as_ptr(), -1);
+    SetTextColor(hdc, 0x0060_6060);
+    TextOutA(hdc, 246, 354, c"Files, clipboard and accounts connected".as_ptr(), -1);
     let action = Rect { left: 520, top: 402, right: 690, bottom: 438 };
     FillRect(hdc, &action, accent);
     SetTextColor(hdc, 0x00FF_FFFF);
-    TextOutA(hdc, 570, 413, c"Check now".as_ptr(), -1);
+    TextOutA(hdc, 558, 413, c"Manage both".as_ptr(), -1);
 
     // Petites opérations ROP conservées pour la couverture fonctionnelle.
     SelectObject(hdc, accent);
@@ -327,7 +338,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let hwnd = CreateWindowExA(
             0,
             class.as_ptr(),
-            c"Winlux Settings".as_ptr(),
+            c"Winlux Control Center".as_ptr(),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             120,
             80,

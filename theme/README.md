@@ -2,8 +2,9 @@
 
 Cette base fournit une palette claire et des composants visuels inspirés de
 Windows 11, sans reprendre de fichiers Microsoft. La palette est maintenant
-reliée au backend X11 et la démonstration PE affiche une vue de paramètres avec
-navigation, cartes, états et accent bleu.
+reliée au backend X11 et la démonstration PE affiche un centre de paramètres
+unifié : réglages Linux d'un côté, compatibilité Windows de l'autre, puis les
+fonctions partagées entre les deux environnements.
 
 ## État et travaux restants
 
