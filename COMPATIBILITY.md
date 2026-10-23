@@ -69,6 +69,11 @@ des codecs, des services et parfois d’un runtime managé.
   TSV; il ne reproduit ni les vues 32/64 bits ni les règles ACL du registre Windows.
 - Les DLL intégrées utilisent des fonctions Linux natives et ne dépendent pas
   de Wine ni de bibliothèques Windows existantes.
+- Les PE managés 32/64 bits sont détectés avant le chargeur natif. Un apphost
+  moderne accompagné de son `.dll` et de son `.runtimeconfig.json` est relayé
+  vers `dotnet`; un ancien assembly CLR est relayé vers Mono. Le runtime doit
+  être installé sur l'hôte (`WINLUX_DOTNET`/`WINLUX_MONO` permettent de choisir
+  son chemin).
 
 ## Stratégie d’intercouche
 
@@ -136,9 +141,10 @@ BLACKNESS, WHITENESS, PATINVERT, PATAND, PATOR, DSTINVERT), `BitBlt`/`StretchBlt
 avec un sous-ensemble de ROP (SRCCOPY, SRCPAINT, SRCAND, SRCINVERT, NOTSRCCOPY,
 DSTINVERT, BLACKNESS, WHITENESS), `CreateCompatibleBitmap`, `CreateDIBSection`
 32bpp BI_RGB et blits entre bitmap mémoire et fenêtre, `GetDC` et `ReleaseDC`.
-`CreateFontA/W` choisit une police
-core X approximative selon la taille; la famille et plusieurs attributs LOGFONT
-ne sont pas fidèlement rendus. Manquent encore les autres formats DIB, les autres
+`CreateFontA/W` utilise Xft/Fontconfig pour un texte vectoriel antialiasé et le
+backend applique une échelle DPI commune aux fenêtres, formes, textes et entrées.
+Les polices X11 core ne servent plus que de repli; plusieurs attributs LOGFONT
+restent approximatifs. Manquent encore les autres formats DIB, les autres
 ROP, les régions
 et le double tampon.
 L’association `.desktop` et binfmt est préparée, mais n’a pas été
@@ -147,10 +153,12 @@ encore un staging Linux bootable.
 
 ## Cas .NET et paint.net
 
-`paint.net` est un logiciel .NET et graphique. Pour l’exécuter réellement, il
-faudra intégrer un CLR compatible et implémenter une pile GUI suffisante. Le
-module `mscoree` actuel fournit un diagnostic explicite, mais ne prétend pas
-exécuter du code managé.
+Winlux peut maintenant reconnaître un assembly CLR PE32/PE32+ et un apphost
+.NET moderne. Les applications console, services et outils managés réellement
+multiplateformes peuvent être confiés au runtime Linux `dotnet` ou à Mono.
+WPF et WinForms restent toutefois des technologies Windows : `paint.net`
+nécessite encore un CLR Windows compatible et une pile GUI beaucoup plus large.
+Le module `mscoree` conserve un diagnostic sûr quand aucun pont ne s'applique.
 
 ## Politique anti-crash
 

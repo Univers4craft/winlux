@@ -1,5 +1,6 @@
 mod crash;
 mod loader;
+mod managed;
 mod paths;
 mod pe;
 mod printf;
@@ -27,6 +28,24 @@ fn main() {
     };
     let exe = PathBuf::from(exe);
     let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+    let source = match std::fs::read(&exe) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("winlux: lecture impossible de {} : {error}", exe.display());
+            std::process::exit(1);
+        }
+    };
+    if let Some(target) = managed::detect(&exe, &source) {
+        eprintln!("winlux: {} détectée, utilisation du pont natif", managed::description(&target));
+        match managed::run(&target, &rest) {
+            Ok(status) => std::process::exit(status.code().unwrap_or(1)),
+            Err(error) => {
+                eprintln!("winlux: {error}");
+                eprintln!("winlux: les interfaces WPF/WinForms restent limitées tant que leurs API Windows ne sont pas complètes");
+                std::process::exit(1);
+            }
+        }
+    }
     let image = match loader::load(&exe, true) {
         Ok(m) => m,
         Err(e) => {

@@ -2,7 +2,7 @@
 
 ## État actuel
 
-- Dernière validation connue : `cargo test -p winlux` (62 tests), compilation release, les neuf exécutables PE en séquentiel et en parallèle, puis l'ISO sous QEMU BIOS et UEFI réussissent. Relancer les scripts après chaque changement.
+- Dernière validation connue : `cargo test -p winlux` (66 tests), compilation release, les neuf exécutables PE en séquentiel et en parallèle, puis l'ISO sous QEMU BIOS et UEFI réussissent. Relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
@@ -41,6 +41,7 @@
 
 - [x] Ajouter des DLL intégrées courantes : `user32`, `advapi32`, `ole32`, `bcrypt`, `version` et `shell32`.
 - [x] Ajouter un diagnostic explicite pour les exécutables gérés dépendant de `mscoree.dll`.
+- [x] Détecter les en-têtes CLR PE32/PE32+ et les apphosts modernes, puis relayer les assemblies vers `dotnet` ou Mono lorsqu'un runtime Linux compatible est installé.
 - [x] Relier les API de base fichiers/répertoires Windows au système de fichiers Linux.
 - [x] Ajouter des variantes Unicode `W` pour les chemins, fichiers et variables d’environnement.
 - [x] Ajouter `GetFullPathName`, `CopyFile`, `MoveFile`, `CreateDirectory` et `RemoveDirectory` en A/W ou A selon l’API.
@@ -81,7 +82,7 @@
 - [x] Ajouter les entrées formatées `scanf`/`sscanf`/`fscanf` et leurs variantes `v*` (entiers, flottants, chaînes, jeux de caractères, largeur, `*`, `%n`) avec tests unitaires et PE.
 - [ ] Continuer la CRT : locale, `_snscanf`, `fgetpos`/`fsetpos` et formats positionnels.
 - [ ] Poursuivre le rendu X11 : décorations/titre maison si absence de WM; compléter GDI (autres formats DIB/bitmap, ROP restants, polices/métriques complètes et texte sur DC mémoire).
-- [ ] Intégrer un véritable runtime CLR compatible pour exécuter les `.exe` .NET; sans CLR, `paint.net` ne fonctionne pas.
+- [ ] Intégrer un véritable runtime CLR Windows et les couches WPF/WinForms; le pont Linux `dotnet`/Mono ne suffit pas pour `paint.net`.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
 - [ ] Ajouter les formats audio compressés et les codecs vidéo; Media Foundation n’est pas encore reliée à une chaîne complète.
 - [ ] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (elles restent mappées jusqu’à la fin du processus).
