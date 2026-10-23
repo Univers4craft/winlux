@@ -13,7 +13,12 @@ désinstallation pour chaque environnement.
 
 Le fichier CSS reste une référence pour le futur shell GTK/Qt. Le runtime X11
 utilise sa propre palette Rust afin de conserver un rendu autonome des
-applications Windows exécutées par Winlux.
+applications Windows exécutées par Winlux. Le backend calcule maintenant une
+échelle depuis le DPI déclaré par l'écran (1× à 3×), applique la même échelle
+aux fenêtres, formes, textes et entrées souris, et accepte
+`WINLUX_UI_SCALE` comme surcharge de diagnostic. Les textes utilisent
+Xft/Fontconfig pour obtenir des glyphes vectoriels antialiasés ; les anciennes
+polices X11 « core » restent le repli quand Xft est indisponible.
 
 - Choisir et construire un shell graphique Linux libre.
 - Créer barre des tâches, lanceur/menu, explorateur et centre de notifications.

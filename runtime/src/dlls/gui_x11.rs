@@ -5,6 +5,7 @@
 use crate::dlls::gui::{self, BitmapSnapshot, DrawCmd, FontSpec, PendingEvent, Rect};
 use crate::dlls::gui::theme;
 use std::collections::HashMap;
+use std::ffi::{c_char, c_int, c_uchar, c_ulong, c_void, CString};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ChangeGCAux, ConfigureNotifyEvent, ConfigureWindowAux, ConnectionExt as _,
@@ -29,6 +30,208 @@ struct XFont {
     id: u32,
     ascent: i16,
     char_width: i16,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct XRenderColor {
+    red: u16,
+    green: u16,
+    blue: u16,
+    alpha: u16,
+}
+
+#[repr(C)]
+struct XftColor {
+    pixel: c_ulong,
+    color: XRenderColor,
+}
+
+#[repr(C)]
+struct XftFont {
+    ascent: c_int,
+    descent: c_int,
+    height: c_int,
+    max_advance_width: c_int,
+    charset: *mut c_void,
+    pattern: *mut c_void,
+}
+
+#[repr(C)]
+#[derive(Default)]
+struct XGlyphInfo {
+    width: u16,
+    height: u16,
+    x: i16,
+    y: i16,
+    x_off: i16,
+    y_off: i16,
+}
+
+type Display = c_void;
+type Visual = c_void;
+type XftDraw = c_void;
+
+struct XftApi {
+    x11: *mut c_void,
+    xft: *mut c_void,
+    open_display: unsafe extern "C" fn(*const c_char) -> *mut Display,
+    close_display: unsafe extern "C" fn(*mut Display) -> c_int,
+    default_screen: unsafe extern "C" fn(*mut Display) -> c_int,
+    default_visual: unsafe extern "C" fn(*mut Display, c_int) -> *mut Visual,
+    default_colormap: unsafe extern "C" fn(*mut Display, c_int) -> c_ulong,
+    flush: unsafe extern "C" fn(*mut Display) -> c_int,
+    sync: unsafe extern "C" fn(*mut Display, c_int) -> c_int,
+    draw_create: unsafe extern "C" fn(*mut Display, c_ulong, *mut Visual, c_ulong) -> *mut XftDraw,
+    draw_destroy: unsafe extern "C" fn(*mut XftDraw),
+    font_open_name: unsafe extern "C" fn(*mut Display, c_int, *const c_char) -> *mut XftFont,
+    font_close: unsafe extern "C" fn(*mut Display, *mut XftFont),
+    color_alloc: unsafe extern "C" fn(*mut Display, *mut Visual, c_ulong, *const XRenderColor, *mut XftColor) -> c_int,
+    color_free: unsafe extern "C" fn(*mut Display, *mut Visual, c_ulong, *mut XftColor),
+    text_extents: unsafe extern "C" fn(*mut Display, *mut XftFont, *const c_uchar, c_int, *mut XGlyphInfo),
+    draw_string: unsafe extern "C" fn(*mut XftDraw, *const XftColor, *mut XftFont, c_int, c_int, *const c_uchar, c_int),
+}
+
+unsafe impl Send for XftApi {}
+
+impl XftApi {
+    unsafe fn load() -> Option<Self> {
+        unsafe fn open(name: &[u8]) -> *mut c_void {
+            libc::dlopen(name.as_ptr().cast(), libc::RTLD_LAZY | libc::RTLD_LOCAL)
+        }
+        unsafe fn symbol<T: Copy>(library: *mut c_void, name: &[u8]) -> Option<T> {
+            let ptr = libc::dlsym(library, name.as_ptr().cast());
+            if ptr.is_null() { None } else { Some(std::mem::transmute_copy(&ptr)) }
+        }
+
+        let x11 = open(b"libX11.so.6\0");
+        let xft = open(b"libXft.so.2\0");
+        if x11.is_null() || xft.is_null() {
+            if !x11.is_null() { libc::dlclose(x11); }
+            if !xft.is_null() { libc::dlclose(xft); }
+            return None;
+        }
+        macro_rules! required {
+            ($library:expr, $name:expr) => {
+                match symbol($library, $name) {
+                    Some(value) => value,
+                    None => {
+                        libc::dlclose(xft);
+                        libc::dlclose(x11);
+                        return None;
+                    }
+                }
+            };
+        }
+        Some(Self {
+            x11,
+            xft,
+            open_display: required!(x11, b"XOpenDisplay\0"),
+            close_display: required!(x11, b"XCloseDisplay\0"),
+            default_screen: required!(x11, b"XDefaultScreen\0"),
+            default_visual: required!(x11, b"XDefaultVisual\0"),
+            default_colormap: required!(x11, b"XDefaultColormap\0"),
+            flush: required!(x11, b"XFlush\0"),
+            sync: required!(x11, b"XSync\0"),
+            draw_create: required!(xft, b"XftDrawCreate\0"),
+            draw_destroy: required!(xft, b"XftDrawDestroy\0"),
+            font_open_name: required!(xft, b"XftFontOpenName\0"),
+            font_close: required!(xft, b"XftFontClose\0"),
+            color_alloc: required!(xft, b"XftColorAllocValue\0"),
+            color_free: required!(xft, b"XftColorFree\0"),
+            text_extents: required!(xft, b"XftTextExtentsUtf8\0"),
+            draw_string: required!(xft, b"XftDrawStringUtf8\0"),
+        })
+    }
+}
+
+struct XftRenderer {
+    api: XftApi,
+    display: *mut Display,
+    screen: c_int,
+    visual: *mut Visual,
+    colormap: c_ulong,
+    fonts: HashMap<FontSpec, *mut XftFont>,
+}
+
+unsafe impl Send for XftRenderer {}
+
+impl XftRenderer {
+    unsafe fn connect() -> Option<Self> {
+        let api = XftApi::load()?;
+        let display = (api.open_display)(std::ptr::null());
+        if display.is_null() { return None; }
+        let screen = (api.default_screen)(display);
+        let visual = (api.default_visual)(display, screen);
+        let colormap = (api.default_colormap)(display, screen);
+        if visual.is_null() {
+            (api.close_display)(display);
+            return None;
+        }
+        Some(Self { api, display, screen, visual, colormap, fonts: HashMap::new() })
+    }
+
+    fn font(&mut self, spec: &FontSpec) -> Option<*mut XftFont> {
+        if let Some(font) = self.fonts.get(spec) { return Some(*font); }
+        let family = if spec.face.is_empty() || spec.face.eq_ignore_ascii_case("fixed") {
+            "Noto Sans"
+        } else {
+            spec.face.as_str()
+        };
+        let size = spec.height.saturating_abs().max(9);
+        let weight = if spec.weight >= 600 { "bold" } else { "regular" };
+        let slant = if spec.italic { "italic" } else { "roman" };
+        let pattern = CString::new(format!("{family}:pixelsize={size}:weight={weight}:slant={slant}:antialias=true:hinting=true")).ok()?;
+        let font = unsafe { (self.api.font_open_name)(self.display, self.screen, pattern.as_ptr()) };
+        if font.is_null() { return None; }
+        self.fonts.insert(spec.clone(), font);
+        Some(font)
+    }
+
+    fn measure(&mut self, spec: &FontSpec, text: &[u8]) -> Option<(i32, i32, i32)> {
+        let font = self.font(spec)?;
+        let mut extents = XGlyphInfo::default();
+        unsafe {
+            (self.api.text_extents)(self.display, font, text.as_ptr(), text.len() as c_int, &mut extents);
+            Some((extents.x_off.max(extents.width as i16) as i32, (*font).height.max(1), (*font).ascent.max(1)))
+        }
+    }
+
+    fn draw(&mut self, drawable: u32, spec: &FontSpec, x: i32, baseline: i32, text: &[u8], colorref: u32) -> bool {
+        let Some(font) = self.font(spec) else { return false };
+        let render = XRenderColor {
+            red: ((colorref & 0xFF) as u16) * 257,
+            green: (((colorref >> 8) & 0xFF) as u16) * 257,
+            blue: (((colorref >> 16) & 0xFF) as u16) * 257,
+            alpha: u16::MAX,
+        };
+        unsafe {
+            let draw = (self.api.draw_create)(self.display, drawable as c_ulong, self.visual, self.colormap);
+            if draw.is_null() { return false; }
+            let mut color = std::mem::zeroed::<XftColor>();
+            if (self.api.color_alloc)(self.display, self.visual, self.colormap, &render, &mut color) == 0 {
+                (self.api.draw_destroy)(draw);
+                return false;
+            }
+            (self.api.draw_string)(draw, &color, font, x, baseline, text.as_ptr(), text.len() as c_int);
+            (self.api.color_free)(self.display, self.visual, self.colormap, &mut color);
+            (self.api.draw_destroy)(draw);
+            (self.api.flush)(self.display);
+            (self.api.sync)(self.display, 0);
+        }
+        true
+    }
+}
+
+impl Drop for XftRenderer {
+    fn drop(&mut self) {
+        unsafe {
+            for (_, font) in self.fonts.drain() { (self.api.font_close)(self.display, font); }
+            (self.api.close_display)(self.display);
+            libc::dlclose(self.api.xft);
+            libc::dlclose(self.api.x11);
+        }
+    }
 }
 
 fn font_candidates(spec: &FontSpec) -> Vec<Vec<u8>> {
@@ -68,6 +271,14 @@ fn font_candidates(spec: &FontSpec) -> Vec<Vec<u8>> {
     unique
 }
 
+fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
+    let automatic = ((dpi.max(1.0) / 96.0) * 4.0).round() / 4.0;
+    requested
+        .filter(|value| value.is_finite() && *value > 0.0)
+        .unwrap_or(automatic)
+        .clamp(1.0, 3.0)
+}
+
 pub struct X11Backend {
     conn: RustConnection,
     screen: usize,
@@ -86,6 +297,10 @@ pub struct X11Backend {
     content: HashMap<usize, Vec<DrawCmd>>,
     /// Polices « core » ouvertes à la demande, indexées par les attributs GDI.
     fonts: HashMap<FontSpec, XFont>,
+    /// Rendu vectoriel antialiasé Xft/Fontconfig, si les bibliothèques hôte sont présentes.
+    xft: Option<XftRenderer>,
+    /// Facteur DPI appliqué aux coordonnées logiques Win32.
+    scale: f32,
     /// Table de correspondance keycode X11 → keysyms (lue à la demande).
     keymap: HashMap<u8, Vec<u32>>,
 }
@@ -97,6 +312,16 @@ impl X11Backend {
         let setup = conn.setup();
         let scr = &setup.roots[screen];
         let colormap = scr.default_colormap;
+        let dpi_x = if scr.width_in_millimeters > 0 {
+            scr.width_in_pixels as f32 * 25.4 / scr.width_in_millimeters as f32
+        } else {
+            96.0
+        };
+        let requested_scale = std::env::var("WINLUX_UI_SCALE")
+            .ok()
+            .and_then(|value| value.parse::<f32>().ok())
+            .filter(|value| value.is_finite() && *value > 0.0);
+        let scale = dpi_scale(dpi_x, requested_scale);
         let wm_protocols = conn.intern_atom(false, b"WM_PROTOCOLS").ok()?.reply().ok()?.atom;
         let wm_delete = conn.intern_atom(false, b"WM_DELETE_WINDOW").ok()?.reply().ok()?.atom;
         Some(X11Backend {
@@ -111,8 +336,34 @@ impl X11Backend {
             deferred_events: Vec::new(),
             content: HashMap::new(),
             fonts: HashMap::new(),
+            xft: unsafe { XftRenderer::connect() },
+            scale,
             keymap: HashMap::new(),
         })
+    }
+
+    fn scaled(&self, value: i32) -> i32 {
+        (value as f32 * self.scale).round() as i32
+    }
+
+    fn logical(&self, value: i32) -> i32 {
+        (value as f32 / self.scale).round() as i32
+    }
+
+    fn scaled_rect(&self, rect: &Rect) -> Rect {
+        Rect {
+            left: self.scaled(rect.left),
+            top: self.scaled(rect.top),
+            right: self.scaled(rect.right),
+            bottom: self.scaled(rect.bottom),
+        }
+    }
+
+    fn scaled_font(&self, spec: &FontSpec) -> FontSpec {
+        let mut scaled = spec.clone();
+        scaled.height = self.scaled(spec.height).max(1);
+        if spec.width != 0 { scaled.width = self.scaled(spec.width).max(1); }
+        scaled
     }
 
     /// Alloue un pixel vrai-color depuis un COLORREF du thème.
@@ -277,6 +528,46 @@ impl X11Backend {
         bk: Option<u32>,
         spec: &FontSpec,
     ) {
+        let utf8 = text.as_bytes();
+        if utf8.is_empty() { return; }
+        let vector_metrics = self.xft.as_mut().and_then(|xft| xft.measure(spec, utf8));
+        if let Some((width, height, ascent)) = vector_metrics {
+            if let Some(background) = bk {
+                self.paint_fill(
+                    w,
+                    &Rect { left: x, top: y, right: x + width.max(1), bottom: y + height.max(1) },
+                    background,
+                );
+            }
+            // Xft utilise une seconde connexion Xlib. Ce round-trip garantit
+            // que les surfaces envoyées par x11rb sont posées avant les glyphes.
+            let _ = self.conn.flush();
+            if let Ok(cookie) = self.conn.get_input_focus() { let _ = cookie.reply(); }
+            let drawn = self
+                .xft
+                .as_mut()
+                .map(|xft| xft.draw(w.window, spec, x, y + ascent, utf8, color))
+                .unwrap_or(false);
+            if drawn {
+                if spec.underline {
+                    self.paint_fill(
+                        w,
+                        &Rect { left: x, top: y + ascent + 1, right: x + width.max(1), bottom: y + ascent + 2 },
+                        color,
+                    );
+                }
+                if spec.strikeout {
+                    let middle = y + ascent / 2;
+                    self.paint_fill(
+                        w,
+                        &Rect { left: x, top: middle, right: x + width.max(1), bottom: middle + 1 },
+                        color,
+                    );
+                }
+                return;
+            }
+        }
+
         let font = match self.ensure_font(spec) {
             Some(f) => f,
             None => return,
@@ -560,17 +851,30 @@ impl X11Backend {
     fn paint_cmds(&mut self, w: &XWin, cmds: &[DrawCmd]) {
         for cmd in cmds {
             match cmd {
-                DrawCmd::FillRect { rect, color } => self.paint_fill(w, rect, *color),
-                DrawCmd::FrameRect { rect, color, width } => {
-                    self.paint_frame(w, rect, *color, *width)
+                DrawCmd::FillRect { rect, color } => {
+                    let rect = self.scaled_rect(rect);
+                    self.paint_fill(w, &rect, *color)
                 }
-                DrawCmd::Ellipse { rect, color } => self.paint_ellipse(w, rect, *color),
-                DrawCmd::PatternRect { rect, color, rop } => self.paint_pattern(w, rect, *color, *rop),
+                DrawCmd::FrameRect { rect, color, width } => {
+                    let rect = self.scaled_rect(rect);
+                    self.paint_frame(w, &rect, *color, self.scaled(*width as i32).max(1) as u16)
+                }
+                DrawCmd::Ellipse { rect, color } => {
+                    let rect = self.scaled_rect(rect);
+                    self.paint_ellipse(w, &rect, *color)
+                }
+                DrawCmd::PatternRect { rect, color, rop } => {
+                    let rect = self.scaled_rect(rect);
+                    self.paint_pattern(w, &rect, *color, *rop)
+                }
                 DrawCmd::Text { x, y, text, color, bk, font } => {
-                    self.paint_text(w, *x, *y, text, *color, *bk, font)
+                    let font = self.scaled_font(font);
+                    self.paint_text(w, self.scaled(*x), self.scaled(*y), text, *color, *bk, &font)
                 }
                 DrawCmd::Blit { source_hwnd, source, destination, stretch, rop } => {
-                    self.paint_blit(w, *source_hwnd, source, destination, *stretch, *rop)
+                    let source = self.scaled_rect(source);
+                    let destination = self.scaled_rect(destination);
+                    self.paint_blit(w, *source_hwnd, &source, &destination, *stretch, *rop)
                 }
                 DrawCmd::Bitmap { rect, pixels, rop } => self.paint_bitmap(w, rect, pixels, *rop),
             }
@@ -604,19 +908,25 @@ impl X11Backend {
             }
             Event::ButtonPress(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                let lparam = ((e.event_y as isize) << 16) | (e.event_x as isize & 0xFFFF);
+                let x = self.logical(e.event_x as i32);
+                let y = self.logical(e.event_y as i32);
+                let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
                 let wparam = button_wparam(e.detail);
                 Some(PendingEvent { hwnd, message: gui::WM_LBUTTONDOWN, wparam, lparam })
             }
             Event::ButtonRelease(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                let lparam = ((e.event_y as isize) << 16) | (e.event_x as isize & 0xFFFF);
+                let x = self.logical(e.event_x as i32);
+                let y = self.logical(e.event_y as i32);
+                let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
                 let wparam = button_wparam(e.detail);
                 Some(PendingEvent { hwnd, message: gui::WM_LBUTTONUP, wparam, lparam })
             }
             Event::MotionNotify(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                let lparam = ((e.event_y as isize) << 16) | (e.event_x as isize & 0xFFFF);
+                let x = self.logical(e.event_x as i32);
+                let y = self.logical(e.event_y as i32);
+                let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
                 Some(PendingEvent { hwnd, message: gui::WM_MOUSEMOVE, wparam: 0, lparam })
             }
             Event::FocusIn(e) => {
@@ -692,13 +1002,15 @@ impl X11Backend {
         let moved = x != old_x || y != old_y;
         let resized = e.width != old_w || e.height != old_h;
         if resized {
-            let lparam = ((e.height as isize) << 16) | (e.width as isize & 0xFFFF);
+            let logical_width = self.logical(e.width as i32).clamp(1, u16::MAX as i32);
+            let logical_height = self.logical(e.height as i32).clamp(1, u16::MAX as i32);
+            let lparam = ((logical_height as isize) << 16) | (logical_width as isize & 0xFFFF);
             if moved {
                 self.deferred_events.push(PendingEvent {
                     hwnd,
                     message: gui::WM_MOVE,
                     wparam: 0,
-                    lparam: pack_i16_pair(x, y),
+                    lparam: pack_i16_pair(self.logical(x), self.logical(y)),
                 });
             }
             return Some(PendingEvent { hwnd, message: gui::WM_SIZE, wparam: 0, lparam });
@@ -708,7 +1020,7 @@ impl X11Backend {
                 hwnd,
                 message: gui::WM_MOVE,
                 wparam: 0,
-                lparam: pack_i16_pair(x, y),
+                lparam: pack_i16_pair(self.logical(x), self.logical(y)),
             });
         }
         None
@@ -917,6 +1229,15 @@ mod tests {
             (113isize << 16) | (1 << 24) | (1 << 30) | (1 << 31),
         );
     }
+
+    #[test]
+    fn echelle_dpi_couvre_1080p_1440p_et_4k() {
+        assert_eq!(dpi_scale(96.0, None), 1.0);
+        assert_eq!(dpi_scale(144.0, None), 1.5);
+        assert_eq!(dpi_scale(192.0, None), 2.0);
+        assert_eq!(dpi_scale(96.0, Some(2.5)), 2.5);
+        assert_eq!(dpi_scale(500.0, None), 3.0);
+    }
 }
 
 impl gui::GuiBackend for X11Backend {
@@ -963,10 +1284,10 @@ impl gui::GuiBackend for X11Backend {
         // Profondeur CopyFromParent (0) : le serveur prend celle de la racine.
         let visual = scr.root_visual;
 
-        let x = rect.left.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        let y = rect.top.clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        let w = rect.width().max(1).clamp(1, u16::MAX as i32) as u16;
-        let h = rect.height().max(1).clamp(1, u16::MAX as i32) as u16;
+        let x = self.scaled(rect.left).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let y = self.scaled(rect.top).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let w = self.scaled(rect.width()).max(1).clamp(1, u16::MAX as i32) as u16;
+        let h = self.scaled(rect.height()).max(1).clamp(1, u16::MAX as i32) as u16;
 
         let win = match self.conn.generate_id() {
             Ok(id) => id,
@@ -1081,10 +1402,10 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn set_window_rect(&mut self, hwnd: usize, rect: Rect) {
-        let x = rect.left.clamp(i16::MIN as i32, i16::MAX as i32);
-        let y = rect.top.clamp(i16::MIN as i32, i16::MAX as i32);
-        let width = rect.width().max(1).min(u16::MAX as i32) as u16;
-        let height = rect.height().max(1).min(u16::MAX as i32) as u16;
+        let x = self.scaled(rect.left).clamp(i16::MIN as i32, i16::MAX as i32);
+        let y = self.scaled(rect.top).clamp(i16::MIN as i32, i16::MAX as i32);
+        let width = self.scaled(rect.width()).max(1).min(u16::MAX as i32) as u16;
+        let height = self.scaled(rect.height()).max(1).min(u16::MAX as i32) as u16;
         let window = match self.windows.get_mut(&hwnd) {
             Some(w) => {
                 w.x = x;

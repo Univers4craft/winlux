@@ -53,8 +53,8 @@ unsafe fn draw_apps_scene(hdc: Handle) {
 
     SetBkMode(hdc, 1);
     SetTextColor(hdc, 0x001F_1F1F);
-    let title_font = CreateFontA(18, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
-    let body_font = CreateFontA(14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
+    let title_font = CreateFontA(20, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
+    let body_font = CreateFontA(14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
     let old_font = SelectObject(hdc, title_font);
     TextOutA(hdc, 50, 16, c"Winlux Control Center".as_ptr(), -1);
 
@@ -186,8 +186,8 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
 
     let previous = SetTextColor(hdc, 0x001F_1F1F);
     let previous_bk = SetBkMode(hdc, 1);
-    let title_font = CreateFontA(18, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
-    let body_font = CreateFontA(14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
+    let title_font = CreateFontA(20, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
+    let body_font = CreateFontA(14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
     let old_font = SelectObject(hdc, title_font);
     let titled = TextOutA(hdc, 50, 16, c"Winlux Control Center".as_ptr(), -1);
 
