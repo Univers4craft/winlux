@@ -102,7 +102,7 @@ messages par thread, appel du `WndProc` invité et une boucle `GetMessage`/
 `DispatchMessage` complète (testée par `gui_suite.exe` et `gui_demo.exe`).
 Deux backends sont disponibles : *headless* (par défaut, aucun affichage, sert
 aux tests) et **X11** (`gui_x11.rs`), qui crée de vraies fenêtres sur le serveur
-X, rend le thème « blob » (dégradé vertical violet→bleu avec accent) et traduit
+X, rend une palette claire inspirée de Windows 11 avec accent bleu et traduit
 les événements X en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`→
 `WM_SIZE`, boutons et mouvements de souris, keysyms→`VK_*`/`WM_KEYDOWN`/
 `WM_KEYUP`, `WM_DELETE_WINDOW`→`WM_CLOSE`). `TranslateMessage` publie les
@@ -116,6 +116,8 @@ et `FocusIn`/`FocusOut` déclenchent `WM_SETFOCUS`/`WM_KILLFOCUS`. `SetWindowPos
 `MoveWindow` déplacent/redimensionnent les fenêtres, actualisent les rectangles
 Win32 et publient `WM_MOVE`/`WM_SIZE` ; les changements de taille externes via
 `ConfigureNotify` sont également reflétés, de même que les déplacements externes.
+Les variantes A/W des principales boucles de messages et les titres de fenêtre
+Unicode (`Set/GetWindowTextW`) partagent le même noyau et sont testés par un PE.
 Le z-order et les notifications
 `WINDOWPOS` avancées ne sont pas encore gérés.
 

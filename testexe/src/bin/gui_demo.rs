@@ -1,7 +1,6 @@
-//! Démonstration graphique Winlux : ouvre une fenêtre avec le thème « blob »
-//! violet-bleu (dégradé vertical + accent), laisse la boucle de messages
-//! tourner puis se ferme. Sert de test PE pour `PeekMessageA` et de vérification
-//! visuelle du backend X11 (le rendu est contrôlé par les checks ci-dessous).
+//! Démonstration graphique Winlux : ouvre une vue « Paramètres » claire,
+//! inspirée de Windows 11 sans reprendre ses ressources propriétaires. Sert
+//! de test PE pour `PeekMessageA` et de vérification visuelle du backend X11.
 
 #![no_std]
 #![no_main]
@@ -25,8 +24,8 @@ static mut KEYBOARD_STATE_MATCH: u32 = 0;
 static mut ASYNC_KEY_PRESSED: u32 = 0;
 static mut THREAD_KEY_UP_CLEAR: u32 = 0;
 
-/// Peinture de la scène de démonstration : panneau, titre, barres d'accent et
-/// ellipse « blob ». Chaque commande passe par GDI invité → noyau → backend.
+/// Peinture d'une vue de paramètres : barre d'application, navigation latérale,
+/// cartes et bouton d'accent. Chaque commande passe par GDI invité → backend.
 unsafe fn draw_scene(hwnd: Handle, first: bool) {
     let mut ps: PaintStruct = core::mem::zeroed();
     let hdc = BeginPaint(hwnd, &mut ps);
@@ -34,50 +33,114 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
         return;
     }
 
-    // Panneau supérieur gauche (surface plum) et son cadre accent.
-    let panel = Rect { left: 24, top: 24, right: 320, bottom: 150 };
-    let surface = CreateSolidBrush(0x003A_2555);
-    let accent = CreateSolidBrush(0x00C8_6BF0);
-    let filled = FillRect(hdc, &panel, surface);
-    let framed = FrameRect(hdc, &panel, accent);
+    let background = CreateSolidBrush(0x00F3_F3F3);
+    let surface = CreateSolidBrush(0x00FF_FFFF);
+    let sidebar = CreateSolidBrush(0x00FA_FAFA);
+    let border = CreateSolidBrush(0x00E5_E5E5);
+    let accent = CreateSolidBrush(0x00C0_6700); // #0067C0 en COLORREF
+    let selection = CreateSolidBrush(0x00F5_E7D6);
+    let success = CreateSolidBrush(0x002F_9E49);
 
-    // Titre en clair : fond transparent et police GDI de taille 16 (repli sur
-    // une police core disponible côté serveur X).
-    let previous = SetTextColor(hdc, 0x00FF_FFFF);
+    let full = Rect { left: 0, top: 0, right: 720, bottom: 480 };
+    let topbar = Rect { left: 0, top: 0, right: 720, bottom: 48 };
+    let navigation = Rect { left: 0, top: 48, right: 204, bottom: 480 };
+    let filled = FillRect(hdc, &full, background);
+    FillRect(hdc, &topbar, surface);
+    FillRect(hdc, &navigation, sidebar);
+    let top_border = Rect { left: 0, top: 47, right: 720, bottom: 48 };
+    FillRect(hdc, &top_border, border);
+
+    // Marque d'application et avatar, tous deux rendus avec des primitives GDI.
+    SelectObject(hdc, accent);
+    let app_icon = Ellipse(hdc, 16, 12, 40, 36);
+    let avatar = Ellipse(hdc, 666, 10, 696, 40);
+
+    let previous = SetTextColor(hdc, 0x001F_1F1F);
     let previous_bk = SetBkMode(hdc, 1);
-    let font = CreateFontA(16, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
-    let old_font = SelectObject(hdc, font);
-    let titled = TextOutA(hdc, 48, 56, c"Winlux GDI".as_ptr(), -1);
-    SelectObject(hdc, old_font);
+    let title_font = CreateFontA(18, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
+    let body_font = CreateFontA(14, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"fixed".as_ptr());
+    let old_font = SelectObject(hdc, title_font);
+    let titled = TextOutA(hdc, 50, 16, c"Winlux Settings".as_ptr(), -1);
 
-    // Second libellé en mode opaque (2) : le fond du DC est peint derrière les
-    // glyphes ; on le choisit de la couleur du panneau pour rester cohérent.
+    // Navigation de type Windows 11.
+    SelectObject(hdc, body_font);
+    let selected = Rect { left: 10, top: 78, right: 194, bottom: 112 };
+    FillRect(hdc, &selected, selection);
+    let selected_mark = Rect { left: 10, top: 85, right: 14, bottom: 105 };
+    FillRect(hdc, &selected_mark, accent);
+    TextOutA(hdc, 28, 88, c"System".as_ptr(), -1);
+    SetTextColor(hdc, 0x0060_6060);
+    TextOutA(hdc, 28, 128, c"Bluetooth & devices".as_ptr(), -1);
+    TextOutA(hdc, 28, 164, c"Network & internet".as_ptr(), -1);
+    TextOutA(hdc, 28, 200, c"Personalization".as_ptr(), -1);
+    TextOutA(hdc, 28, 236, c"Apps".as_ptr(), -1);
+    TextOutA(hdc, 28, 272, c"Accounts".as_ptr(), -1);
+    TextOutA(hdc, 28, 308, c"Windows compatibility".as_ptr(), -1);
+
+    // Titre de page et trois cartes de réglages.
+    SelectObject(hdc, title_font);
+    SetTextColor(hdc, 0x001F_1F1F);
+    TextOutA(hdc, 224, 68, c"System".as_ptr(), -1);
+    SelectObject(hdc, body_font);
+
+    let display_card = Rect { left: 220, top: 104, right: 690, bottom: 172 };
+    let sound_card = Rect { left: 220, top: 184, right: 690, bottom: 252 };
+    let about_card = Rect { left: 220, top: 264, right: 690, bottom: 332 };
+    FillRect(hdc, &display_card, surface);
+    FillRect(hdc, &sound_card, surface);
+    FillRect(hdc, &about_card, surface);
+    let framed = FrameRect(hdc, &display_card, border)
+        & FrameRect(hdc, &sound_card, border)
+        & FrameRect(hdc, &about_card, border);
+
+    let display_icon = Rect { left: 238, top: 122, right: 270, bottom: 154 };
+    let sound_icon = Rect { left: 238, top: 202, right: 270, bottom: 234 };
+    let about_icon = Rect { left: 238, top: 282, right: 270, bottom: 314 };
+    FillRect(hdc, &display_icon, accent);
+    FillRect(hdc, &sound_icon, accent);
+    FillRect(hdc, &about_icon, accent);
+
+    SetTextColor(hdc, 0x001F_1F1F);
+    TextOutA(hdc, 288, 118, c"Display".as_ptr(), -1);
+    TextOutA(hdc, 288, 198, c"Sound".as_ptr(), -1);
+    TextOutA(hdc, 288, 278, c"About Winlux".as_ptr(), -1);
+    SetTextColor(hdc, 0x0060_6060);
+    TextOutA(hdc, 288, 140, c"1920 x 1080  |  Scale 100%".as_ptr(), -1);
+    TextOutA(hdc, 288, 220, c"Linux audio bridge ready".as_ptr(), -1);
+
+    // Exerce aussi le texte opaque, sans casser la présentation de la carte.
     let previous_mode = SetBkMode(hdc, 2);
-    let previous_bgc = SetBkColor(hdc, 0x003A_2555);
-    let opaque_text = TextOutA(hdc, 48, 68, c"fond opaque".as_ptr(), -1);
+    let previous_bgc = SetBkColor(hdc, 0x00FF_FFFF);
+    let opaque_text = TextOutA(hdc, 288, 300, c"PE32+ x64 runtime active".as_ptr(), -1);
     SetBkMode(hdc, 1);
 
-    // Deux barres d'accent posées sur le panneau.
-    let bars = CreateSolidBrush(0x00B4_4BEE);
-    let bar1 = Rect { left: 48, top: 88, right: 300, bottom: 106 };
-    let bar2 = Rect { left: 48, top: 112, right: 220, bottom: 130 };
-    let bars_filled = FillRect(hdc, &bar1, bars) & FillRect(hdc, &bar2, bars);
-    SelectObject(hdc, bars);
-    let pat_blt = PatBlt(hdc, 48, 136, 120, 8, 0x00F0_0021); // PATCOPY
-    let pat_invert = PatBlt(hdc, 176, 136, 120, 8, 0x005A_0049); // PATINVERT
-    let bit_blt = BitBlt(hdc, 350, 24, 120, 70, hdc, 24, 24, 0x00CC_0020); // SRCCOPY
-    let stretch_blt = StretchBlt(hdc, 350, 112, 120, 36, hdc, 48, 88, 252, 18, 0x00CC_0020);
-    let xor_blt = BitBlt(hdc, 350, 160, 16, 16, hdc, 48, 88, 0x0066_0046); // SRCINVERT
+    // État de compatibilité et bouton principal.
+    let status_dot = Rect { left: 224, top: 366, right: 234, bottom: 376 };
+    FillRect(hdc, &status_dot, success);
+    SetTextColor(hdc, 0x001F_1F1F);
+    TextOutA(hdc, 244, 360, c"Windows compatibility services are running".as_ptr(), -1);
+    let action = Rect { left: 520, top: 402, right: 690, bottom: 438 };
+    FillRect(hdc, &action, accent);
+    SetTextColor(hdc, 0x00FF_FFFF);
+    TextOutA(hdc, 570, 413, c"Check now".as_ptr(), -1);
+
+    // Petites opérations ROP conservées pour la couverture fonctionnelle.
+    SelectObject(hdc, accent);
+    let pat_blt = PatBlt(hdc, 202, 470, 4, 4, 0x00F0_0021);
+    let pat_invert = PatBlt(hdc, 208, 470, 4, 4, 0x005A_0049);
+    let bit_blt = BitBlt(hdc, 214, 470, 4, 4, hdc, 202, 470, 0x00CC_0020);
+    let stretch_blt = StretchBlt(hdc, 220, 470, 8, 4, hdc, 202, 470, 4, 4, 0x00CC_0020);
+    let xor_blt = BitBlt(hdc, 230, 470, 4, 4, hdc, 202, 470, 0x0066_0046);
 
     // Bitmap compatible hors écran : PatBlt remplit le buffer, puis SRCCOPY le
     // transfère dans la fenêtre avant que le HBITMAP ne soit détruit.
     let memory_dc = CreateCompatibleDC(hdc);
     let memory_bitmap = CreateCompatibleBitmap(hdc, 40, 32);
     let _old_bitmap = SelectObject(memory_dc, memory_bitmap);
-    let memory_brush = CreateSolidBrush(0x0000_D070);
+    let memory_brush = CreateSolidBrush(0x00C0_6700);
     SelectObject(memory_dc, memory_brush);
     let memory_fill = PatBlt(memory_dc, 0, 0, 40, 32, 0x00F0_0021);
-    let memory_blit = BitBlt(hdc, 500, 24, 40, 32, memory_dc, 0, 0, 0x00CC_0020);
+    let memory_blit = BitBlt(hdc, 650, 452, 40, 24, memory_dc, 0, 0, 0x00CC_0020);
     DeleteDC(memory_dc);
     let bitmap_deleted = DeleteObject(memory_bitmap);
     let memory_brush_deleted = DeleteObject(memory_brush);
@@ -88,8 +151,8 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
         let capture_dc = CreateCompatibleDC(hdc);
         let capture_bitmap = CreateCompatibleBitmap(hdc, 32, 32);
         SelectObject(capture_dc, capture_bitmap);
-        let captured = BitBlt(capture_dc, 0, 0, 32, 32, hdc, 24, 24, 0x00CC_0020);
-        let recopy = BitBlt(hdc, 600, 24, 32, 32, capture_dc, 0, 0, 0x00CC_0020);
+        let captured = BitBlt(capture_dc, 0, 0, 32, 32, hdc, 220, 104, 0x00CC_0020);
+        let recopy = BitBlt(hdc, 652, 448, 24, 24, capture_dc, 0, 0, 0x00CC_0020);
         if first {
             check!(captured == 1 && recopy == 1, "BitBlt fenêtre→bitmap→fenêtre");
         }
@@ -122,7 +185,7 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
             *pixel.add(2) = 0xFF; // R
             *pixel.add(3) = 0;
         }
-        let dib_blit = BitBlt(hdc, 550, 80, 8, 8, dib_dc, 0, 0, 0x00CC_0020);
+        let dib_blit = BitBlt(hdc, 682, 464, 8, 8, dib_dc, 0, 0, 0x00CC_0020);
         DeleteDC(dib_dc);
         let dib_deleted = DeleteObject(dib);
         if first {
@@ -130,22 +193,22 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
         }
     }
 
-    // Accent « blob » : ellipse pleine avec le pinceau sélectionné.
-    SelectObject(hdc, accent);
-    let blob = Ellipse(hdc, 480, 300, 640, 440);
+    // Les opérations de validation ci-dessus sont rejouées par le backend ;
+    // on recouvre leur zone technique pour garder une capture propre.
+    let test_strip = Rect { left: 198, top: 448, right: 720, bottom: 480 };
+    FillRect(hdc, &test_strip, background);
 
     if first {
-        check!(!surface.is_null() && !accent.is_null() && !bars.is_null(), "CreateSolidBrush");
-        check!(filled == 1, "FillRect panneau");
-        check!(framed == 1, "FrameRect panneau");
+        check!(!background.is_null() && !surface.is_null() && !accent.is_null(), "CreateSolidBrush");
+        check!(filled == 1, "FillRect surfaces Windows 11");
+        check!(framed == 1, "FrameRect cartes");
         check!(previous == 0, "SetTextColor ancienne valeur");
         check!(previous_bk == 2, "SetBkMode ancien mode opague");
-        check!(!font.is_null() && !old_font.is_null(), "CreateFontA/SelectObject");
+        check!(!title_font.is_null() && !body_font.is_null() && !old_font.is_null(), "CreateFontA/SelectObject");
         check!(titled == 1, "TextOutA titre");
         check!(previous_mode == 1, "SetBkMode retour transparent");
         check!(previous_bgc == 0x00FF_FFFF, "SetBkColor ancienne valeur");
         check!(opaque_text == 1, "TextOutA fond opaque");
-        check!(bars_filled == 1, "FillRect barres accent");
         check!(pat_blt == 1, "PatBlt PATCOPY");
         check!(pat_invert == 1, "PatBlt PATINVERT");
         check!(bit_blt == 1, "BitBlt SRCCOPY");
@@ -154,13 +217,19 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
         check!(!memory_dc.is_null() && !memory_bitmap.is_null(), "CreateCompatibleBitmap mémoire");
         check!(memory_fill == 1 && memory_blit == 1, "PatBlt/BitBlt bitmap mémoire");
         check!(bitmap_deleted != 0 && memory_brush_deleted != 0, "DeleteObject bitmap mémoire");
-        check!(blob == 1, "Ellipse blob");
+        check!(app_icon == 1 && avatar == 1, "Ellipse icones");
     }
 
+    SelectObject(hdc, old_font);
+    DeleteObject(background);
     DeleteObject(surface);
+    DeleteObject(sidebar);
+    DeleteObject(border);
     DeleteObject(accent);
-    DeleteObject(bars);
-    DeleteObject(font);
+    DeleteObject(selection);
+    DeleteObject(success);
+    DeleteObject(title_font);
+    DeleteObject(body_font);
     EndPaint(hwnd, &ps);
 }
 
@@ -258,7 +327,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let hwnd = CreateWindowExA(
             0,
             class.as_ptr(),
-            c"Winlux - theme blob".as_ptr(),
+            c"Winlux Settings".as_ptr(),
             WS_OVERLAPPEDWINDOW | WS_VISIBLE,
             120,
             80,

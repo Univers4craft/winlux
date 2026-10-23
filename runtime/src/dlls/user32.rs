@@ -234,6 +234,10 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
     }
 }
 
+pub unsafe extern "win64" fn get_message_w(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
+    get_message_a(out, hwnd, min, max)
+}
+
 pub unsafe extern "win64" fn peek_message_a(out: *mut Msg, hwnd: usize, min: u32, max: u32, remove: u32) -> i32 {
     gui::pump_backend();
     let q = gui::current_queue();
@@ -256,6 +260,10 @@ pub unsafe extern "win64" fn peek_message_a(out: *mut Msg, hwnd: usize, min: u32
     } else {
         0
     }
+}
+
+pub unsafe extern "win64" fn peek_message_w(out: *mut Msg, hwnd: usize, min: u32, max: u32, remove: u32) -> i32 {
+    peek_message_a(out, hwnd, min, max, remove)
 }
 
 pub unsafe extern "win64" fn translate_message(msg: *const Msg) -> i32 {
@@ -292,6 +300,10 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
     }
 }
 
+pub unsafe extern "win64" fn dispatch_message_w(msg: *const Msg) -> isize {
+    dispatch_message_a(msg)
+}
+
 pub unsafe extern "win64" fn post_quit_message(code: i32) {
     let q = gui::current_queue();
     gui::post_quit(&q, code);
@@ -306,6 +318,10 @@ pub unsafe extern "win64" fn post_message_a(hwnd: usize, message: u32, wparam: u
     if gui::post_to_window(hwnd, m) { 1 } else { 0 }
 }
 
+pub unsafe extern "win64" fn post_message_w(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> i32 {
+    post_message_a(hwnd, message, wparam, lparam)
+}
+
 pub unsafe extern "win64" fn send_message_a(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
     if hwnd == 0 {
         crate::process::set_last_error(87);
@@ -315,6 +331,10 @@ pub unsafe extern "win64" fn send_message_a(hwnd: usize, message: u32, wparam: u
         Some(wp) => gui::call_wndproc(wp, hwnd, message, wparam, lparam),
         None => gui::def_window_proc(hwnd, message, wparam, lparam),
     }
+}
+
+pub unsafe extern "win64" fn send_message_w(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
+    send_message_a(hwnd, message, wparam, lparam)
 }
 
 // ---------- Propriétés de fenêtre ----------
@@ -562,6 +582,16 @@ pub unsafe extern "win64" fn set_window_text_a(hwnd: usize, text: *const u8) -> 
     }
 }
 
+pub unsafe extern "win64" fn set_window_text_w(hwnd: usize, text: *const u16) -> i32 {
+    let t = read_class_name_w(text);
+    if gui::set_title(hwnd, &t) {
+        with_backend(|b| b.set_title(hwnd, &t));
+        1
+    } else {
+        0
+    }
+}
+
 pub unsafe extern "win64" fn get_window_text_a(hwnd: usize, buf: *mut u8, cap: i32) -> i32 {
     match gui::title_of(hwnd) {
         Some(t) => crate::dlls::put_a(&t, buf, cap.max(0) as u32) as i32,
@@ -569,8 +599,21 @@ pub unsafe extern "win64" fn get_window_text_a(hwnd: usize, buf: *mut u8, cap: i
     }
 }
 
+pub unsafe extern "win64" fn get_window_text_w(hwnd: usize, buf: *mut u16, cap: i32) -> i32 {
+    match gui::title_of(hwnd) {
+        Some(t) => crate::dlls::put_w(&t, buf, cap.max(0) as u32) as i32,
+        None => 0,
+    }
+}
+
 pub unsafe extern "win64" fn get_window_text_length_a(hwnd: usize) -> i32 {
     gui::title_of(hwnd).map(|t| t.len() as i32).unwrap_or(0)
+}
+
+pub unsafe extern "win64" fn get_window_text_length_w(hwnd: usize) -> i32 {
+    gui::title_of(hwnd)
+        .map(|t| t.encode_utf16().count() as i32)
+        .unwrap_or(0)
 }
 
 // ---------- Peinture ----------
@@ -711,18 +754,25 @@ pub fn exports() -> crate::dlls::Exports {
         "RegisterClassExA"=>fn register_class_ex_a, "RegisterClassExW"=>fn register_class_ex_w,
         "CreateWindowExA"=>fn create_window_ex_a, "CreateWindowExW"=>fn create_window_ex_w,
         "DefWindowProcA"=>fn def_window_proc_a, "DefWindowProcW"=>fn def_window_proc_w,
-        "GetMessageA"=>fn get_message_a, "PeekMessageA"=>fn peek_message_a,
-        "TranslateMessage"=>fn translate_message, "DispatchMessageA"=>fn dispatch_message_a,
-        "PostQuitMessage"=>fn post_quit_message, "PostMessageA"=>fn post_message_a,
-        "SendMessageA"=>fn send_message_a, "ShowWindow"=>fn show_window,
+        "GetMessageA"=>fn get_message_a, "GetMessageW"=>fn get_message_w,
+        "PeekMessageA"=>fn peek_message_a, "PeekMessageW"=>fn peek_message_w,
+        "TranslateMessage"=>fn translate_message,
+        "DispatchMessageA"=>fn dispatch_message_a, "DispatchMessageW"=>fn dispatch_message_w,
+        "PostQuitMessage"=>fn post_quit_message,
+        "PostMessageA"=>fn post_message_a, "PostMessageW"=>fn post_message_w,
+        "SendMessageA"=>fn send_message_a, "SendMessageW"=>fn send_message_w,
+        "ShowWindow"=>fn show_window,
         "UpdateWindow"=>fn update_window, "DestroyWindow"=>fn destroy_window,
         "IsWindow"=>fn is_window, "GetWindowRect"=>fn get_window_rect,
         "GetFocus"=>fn get_focus, "SetFocus"=>fn set_focus,
         "GetKeyState"=>fn get_key_state, "GetAsyncKeyState"=>fn get_async_key_state,
         "GetKeyboardState"=>fn get_keyboard_state,
-        "GetClientRect"=>fn get_client_rect, "SetWindowTextA"=>fn set_window_text_a,
+        "GetClientRect"=>fn get_client_rect,
+        "SetWindowTextA"=>fn set_window_text_a, "SetWindowTextW"=>fn set_window_text_w,
         "SetWindowPos"=>fn set_window_pos, "MoveWindow"=>fn move_window,
-        "GetWindowTextA"=>fn get_window_text_a, "GetWindowTextLengthA"=>fn get_window_text_length_a,
+        "GetWindowTextA"=>fn get_window_text_a, "GetWindowTextW"=>fn get_window_text_w,
+        "GetWindowTextLengthA"=>fn get_window_text_length_a,
+        "GetWindowTextLengthW"=>fn get_window_text_length_w,
         "BeginPaint"=>fn begin_paint, "EndPaint"=>fn end_paint,
         "InvalidateRect"=>fn invalidate_rect, "ValidateRect"=>fn validate_rect,
         "GetDC"=>fn get_dc, "ReleaseDC"=>fn release_dc,

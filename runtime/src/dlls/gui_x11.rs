@@ -1,6 +1,6 @@
 //! Backend X11 de Winlux : crée de vraies fenêtres sur le serveur X et traduit
-//! ses événements en messages Win32. Le fond utilise le thème « blob »
-//! violet-bleu (dégradé vertical + accent) défini dans `gui::theme`.
+//! ses événements en messages Win32. Le fond utilise la palette claire
+//! Winlux inspirée de Windows 11, définie dans `gui::theme`.
 
 use crate::dlls::gui::{self, BitmapSnapshot, DrawCmd, FontSpec, PendingEvent, Rect};
 use crate::dlls::gui::theme;
@@ -130,7 +130,8 @@ impl X11Backend {
         }
     }
 
-    /// Dessine le thème « blob » : dégradé vertical violet→bleu + accent.
+    /// Dessine un fond clair avec un dégradé discret, proche des surfaces
+    /// d'application de Windows 11. Le contenu GDI invité est posé ensuite.
     fn paint_theme(&self, w: &XWin) {
         let bands = 32u32;
         let h = w.height.max(1) as u32;
@@ -151,23 +152,6 @@ impl X11Backend {
                     height: band_h,
                 }],
             );
-        }
-        // Accent « blob » : une ellipse centrée en magenta-violet.
-        let accent = self.alloc_color(theme::ACCENT_VIOLET);
-        let _ = self.conn.change_gc(w.gc, &ChangeGCAux::new().foreground(accent));
-        let size = w.width.min(w.height).saturating_mul(2) / 3;
-        if size > 8 {
-            let cx = w.width as i16 / 2;
-            let cy = w.height as i16 / 2;
-            let arc = x11rb::protocol::xproto::Arc {
-                x: cx - size as i16 / 2,
-                y: cy - size as i16 / 2,
-                width: size,
-                height: size,
-                angle1: 0,
-                angle2: 360 * 64,
-            };
-            let _ = self.conn.poly_fill_arc(w.window, w.gc, &[arc]);
         }
         let _ = self.conn.flush();
     }

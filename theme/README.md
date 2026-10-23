@@ -1,14 +1,14 @@
 # Thème Winlux
 
-Cette première base fournit une palette et des composants visuels inspirés de
-Windows 11, sans reprendre de fichiers Microsoft. Elle est destinée au futur
-environnement graphique de l'ISO ; le runtime lui-même reste indépendant du
-serveur graphique.
+Cette base fournit une palette claire et des composants visuels inspirés de
+Windows 11, sans reprendre de fichiers Microsoft. La palette est maintenant
+reliée au backend X11 et la démonstration PE affiche une vue de paramètres avec
+navigation, cartes, états et accent bleu.
 
 ## État et travaux restants
 
-Le fichier CSS n'est pas encore branché à une application GTK/Qt ni à un shell
-de bureau. Il ne crée pas de fenêtres et ne change pas l'apparence des
+Le fichier CSS reste une référence pour le futur shell GTK/Qt. Le runtime X11
+utilise sa propre palette Rust afin de conserver un rendu autonome des
 applications Windows exécutées par Winlux.
 
 - Choisir et construire un shell graphique Linux libre.

@@ -94,6 +94,28 @@ pub extern "C" fn mainCRTStartup() -> ! {
     check!(!hwnd.is_null(), "CreateWindowExA");
     MAIN_HWND = hwnd;
 
+    let unicode_title: [u16; 9] = [
+        b'W' as u16, b'i' as u16, b'n' as u16, b'l' as u16,
+        b'u' as u16, b'x' as u16, b' ' as u16, 0x00E9, 0,
+    ];
+    let mut title_out = [0u16; 16];
+    let title_set = SetWindowTextW(hwnd, unicode_title.as_ptr());
+    let title_len = GetWindowTextLengthW(hwnd);
+    let title_read = GetWindowTextW(hwnd, title_out.as_mut_ptr(), title_out.len() as i32);
+    check!(title_set != 0 && title_len == 8 && title_read == 8 && title_out[..9] == unicode_title, "titres de fenêtre Unicode W");
+
+    let mut unicode_msg: Msg = core::mem::zeroed();
+    let posted_w = PostMessageW(hwnd, 0x8001, 7, 9);
+    let peeked_w = PeekMessageW(&mut unicode_msg, hwnd, 0x8001, 0x8001, 1);
+    let dispatched_w = DispatchMessageW(&unicode_msg);
+    let sent_w = SendMessageW(hwnd, 0, 0, 0);
+    let posted_for_get = PostMessageW(hwnd, 0x8002, 11, 13);
+    let got_w = GetMessageW(&mut unicode_msg, hwnd, 0x8002, 0x8002);
+    check!(posted_w != 0 && peeked_w > 0 && dispatched_w == 0 && sent_w == 0
+        && posted_for_get != 0 && got_w > 0 && unicode_msg.message == 0x8002
+        && unicode_msg.wparam == 11 && unicode_msg.lparam == 13,
+        "boucle de messages Unicode W");
+
     SetLastError(0);
     check!(SetWindowPos(core::ptr::null_mut(), core::ptr::null_mut(), 0, 0, 10, 10, 0) == 0 && GetLastError() == 1400, "SetWindowPos rejette HWND invalide");
     SetLastError(0);
@@ -120,7 +142,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
     check!(PeekMessageA(&mut key_msg, core::ptr::null_mut(), WM_KEYUP, WM_KEYUP, 1) > 0, "PeekMessage relâchement avec retrait");
     check!(GetKeyState(VK_A) as u16 & 0x8000 == 0, "GetKeyState bit relâché");
 
-    check!(GetSysColor(5) == 0x003A_2555, "GetSysColor COLOR_WINDOW");
+    check!(GetSysColor(5) == 0x00FF_FFFF, "GetSysColor COLOR_WINDOW");
     check!(GetSysColor(-1) == 0, "GetSysColor index inconnu");
     let sys_brush = GetSysColorBrush(5);
     check!(!sys_brush.is_null() && sys_brush == GetSysColorBrush(5), "GetSysColorBrush stable");

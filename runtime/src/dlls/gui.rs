@@ -48,31 +48,30 @@ pub const SW_SHOW: i32 = 5;
 
 pub const CW_USEDEFAULT: i32 = 0x8000_0000u32 as i32;
 
-// ---------- Thème « blob » violet-bleu ----------
+// ---------- Thème Winlux clair inspiré de Windows 11 ----------
 ///
 /// Palette utilisée par tout le rendu de Winlux (fond de fenêtre, accent,
 /// dégradés). Une teinte Windows `COLORREF` est encodée `0x00BBGGRR`.
 pub mod theme {
     #![allow(dead_code)] // palette complète utilisée progressivement par le rendu
-    /// Fond profond (indigo-violet sombre), le « blob » dans son ensemble.
-    pub const BG_DEEP: u32 = 0x002A_1B3D;      // #3D1B2A -> indigo sombre
-    pub const BG_SURFACE: u32 = 0x003A_2555;    // surface de fenêtre
-    pub const BG_ELEVATED: u32 = 0x004B_2F72;   // surfaces surélevées
-    /// Accent principal (violet).
-    pub const ACCENT: u32 = 0x00B4_4BEE;        // #EE4BB4 -> magenta-violet
-    pub const ACCENT_VIOLET: u32 = 0x00C8_6BF0; // #F06BC8 -> violet vif
-    /// Accent secondaire (bleu).
-    pub const ACCENT_BLUE: u32 = 0x00E9_6BB5;   // #B56BE9 -> bleu-violet
-    pub const ACCENT_CYAN: u32 = 0x00F0_9A6B;   // #6B9AF0 -> bleu clair
+    /// Surfaces claires proches de la palette Windows 11, sans ressource Microsoft.
+    pub const BG_DEEP: u32 = 0x00F3_F3F3;       // #F3F3F3
+    pub const BG_SURFACE: u32 = 0x00FF_FFFF;    // #FFFFFF
+    pub const BG_ELEVATED: u32 = 0x00FA_FAFA;   // #FAFAFA
+    /// Accent principal bleu.
+    pub const ACCENT: u32 = 0x00C0_6700;        // #0067C0
+    pub const ACCENT_VIOLET: u32 = 0x00E6_8A74; // #748AE6
+    pub const ACCENT_BLUE: u32 = 0x00E6_8A74;   // #748AE6
+    pub const ACCENT_CYAN: u32 = 0x00FF_CD60;   // #60CDFF
     /// Texte.
-    pub const TEXT: u32 = 0x00F4_EEFB;          // presque blanc teinté
-    pub const TEXT_DIM: u32 = 0x00B9_A8CC;      // texte atténué
+    pub const TEXT: u32 = 0x001F_1F1F;          // #1F1F1F
+    pub const TEXT_DIM: u32 = 0x0060_6060;      // #606060
     /// Sélection / survol.
-    pub const SELECTION: u32 = 0x009A_4BE0;
-    pub const HOVER: u32 = 0x007A_3BC0;
-    /// Arrête du dégradé « blob » (haut → bas), du violet au bleu.
-    pub const GRADIENT_TOP: u32 = 0x00D8_4BF0;  // #F04BD8
-    pub const GRADIENT_BOTTOM: u32 = 0x00C8_6B4B; // #4B6BC8 -> bleu
+    pub const SELECTION: u32 = 0x00F5_E7D6;     // #D6E7F5
+    pub const HOVER: u32 = 0x00ED_EDED;         // #EDEDED
+    /// Dégradé très léger du fond d'application.
+    pub const GRADIENT_TOP: u32 = 0x00FF_FBF7;  // #F7FBFF
+    pub const GRADIENT_BOTTOM: u32 = BG_DEEP;
 
     /// Sous-ensemble de la palette `GetSysColor`, harmonisé avec le thème.
     pub fn system_color(index: i32) -> Option<u32> {
@@ -112,7 +111,7 @@ pub mod theme {
     }
 
     /// Interpole linéairement deux COLORREF (composante par composante),
-    /// utilisé pour les dégradés de type « blob ».
+    /// utilisé pour le dégradé discret du fond d'application.
     pub fn lerp_colorref(a: u32, b: u32, t: f32) -> u32 {
         let t = t.clamp(0.0, 1.0);
         let ch = |shift: u8| {

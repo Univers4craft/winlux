@@ -396,10 +396,15 @@ extern "C" {
     ) -> Handle;
     pub fn DefWindowProcA(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
     pub fn GetMessageA(msg: *mut Msg, hwnd: Handle, min: u32, max: u32) -> i32;
+    pub fn GetMessageW(msg: *mut Msg, hwnd: Handle, min: u32, max: u32) -> i32;
     pub fn PeekMessageA(msg: *mut Msg, hwnd: Handle, min: u32, max: u32, remove: u32) -> i32;
+    pub fn PeekMessageW(msg: *mut Msg, hwnd: Handle, min: u32, max: u32, remove: u32) -> i32;
     pub fn DispatchMessageA(msg: *const Msg) -> isize;
+    pub fn DispatchMessageW(msg: *const Msg) -> isize;
     pub fn TranslateMessage(msg: *const Msg) -> i32;
     pub fn PostMessageA(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> i32;
+    pub fn PostMessageW(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> i32;
+    pub fn SendMessageW(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
     pub fn PostQuitMessage(code: i32);
     pub fn ShowWindow(hwnd: Handle, cmd: i32) -> i32;
     pub fn UpdateWindow(hwnd: Handle) -> i32;
@@ -412,6 +417,9 @@ extern "C" {
     pub fn GetKeyboardState(state: *mut u8) -> i32;
     pub fn GetClientRect(hwnd: Handle, out: *mut Rect) -> i32;
     pub fn GetWindowRect(hwnd: Handle, out: *mut Rect) -> i32;
+    pub fn SetWindowTextW(hwnd: Handle, text: *const u16) -> i32;
+    pub fn GetWindowTextW(hwnd: Handle, text: *mut u16, cap: i32) -> i32;
+    pub fn GetWindowTextLengthW(hwnd: Handle) -> i32;
     pub fn SetWindowPos(hwnd: Handle, after: Handle, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
     pub fn MoveWindow(hwnd: Handle, x: i32, y: i32, cx: i32, cy: i32, repaint: i32) -> i32;
     pub fn BeginPaint(hwnd: Handle, ps: *mut PaintStruct) -> Handle;
