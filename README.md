@@ -14,6 +14,8 @@ Le runtime contient notamment un chargeur PE, les relocations et imports, un PEB
 
 Le sous-ensemble de processus implémente `CreateProcessA/W` pour lancer un programme Linux ou un PE enfant via Winlux, avec attente, code de sortie, blocs d’environnement A/W et `CREATE_SUSPENDED`/`ResumeThread`. L’héritage des handles et les attributs étendus ne sont pas encore implémentés. Les fichiers prennent en charge des E/S overlapped élémentaires via `ReadFile`/`WriteFile`, `GetOverlappedResult`, une annulation best-effort avec `CancelIo/CancelIoEx` et un sous-ensemble IOCP.
 
+Le prototype de bureau X11 possède maintenant un thème professionnel HiDPI : papier peint vectoriel, raccourcis, barre des tâches flottante, zone système et menu Démarrer interactif avec recherche, applications épinglées, recommandations et profil. Le même rendu a été contrôlé en 1920×1080 à 150 %, 2560×1440 à 200 % et 3840×2160 à 300 % avec du texte Xft antialiasé.
+
 ## Prérequis
 
 - Linux x86-64

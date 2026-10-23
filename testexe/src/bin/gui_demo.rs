@@ -25,175 +25,141 @@ static mut ASYNC_KEY_PRESSED: u32 = 0;
 static mut THREAD_KEY_UP_CLEAR: u32 = 0;
 static mut START_MENU_OPEN: u32 = 1;
 
+unsafe fn fill_round_rect(hdc: Handle, rect: Rect, radius: i32, brush: Handle) {
+    let width=rect.right-rect.left;let height=rect.bottom-rect.top;let radius=radius.min(width/2).min(height/2).max(1);
+    FillRect(hdc,&Rect{left:rect.left+radius,top:rect.top,right:rect.right-radius,bottom:rect.bottom},brush);
+    FillRect(hdc,&Rect{left:rect.left,top:rect.top+radius,right:rect.right,bottom:rect.bottom-radius},brush);
+    SelectObject(hdc,brush);
+    Ellipse(hdc,rect.left,rect.top,rect.left+radius*2,rect.top+radius*2);
+    Ellipse(hdc,rect.right-radius*2,rect.top,rect.right,rect.top+radius*2);
+    Ellipse(hdc,rect.left,rect.bottom-radius*2,rect.left+radius*2,rect.bottom);
+    Ellipse(hdc,rect.right-radius*2,rect.bottom-radius*2,rect.right,rect.bottom);
+}
+
+unsafe fn round_panel(hdc:Handle,rect:Rect,radius:i32,shadow:Handle,border:Handle,surface:Handle){
+    fill_round_rect(hdc,Rect{left:rect.left+6,top:rect.top+8,right:rect.right+6,bottom:rect.bottom+8},radius,shadow);
+    fill_round_rect(hdc,rect,radius,border);
+    fill_round_rect(hdc,Rect{left:rect.left+1,top:rect.top+1,right:rect.right-1,bottom:rect.bottom-1},radius-1,surface);
+}
+
+unsafe fn draw_windows_mark(hdc:Handle,x:i32,y:i32,size:i32,brush:Handle){
+    let gap=(size/8).max(2);let cell=(size-gap)/2;
+    FillRect(hdc,&Rect{left:x,top:y,right:x+cell,bottom:y+cell},brush);
+    FillRect(hdc,&Rect{left:x+cell+gap,top:y,right:x+size,bottom:y+cell},brush);
+    FillRect(hdc,&Rect{left:x,top:y+cell+gap,right:x+cell,bottom:y+size},brush);
+    FillRect(hdc,&Rect{left:x+cell+gap,top:y+cell+gap,right:x+size,bottom:y+size},brush);
+}
+
+unsafe fn draw_search_mark(hdc:Handle,x:i32,y:i32,brush:Handle,inside:Handle){
+    SelectObject(hdc,brush);Ellipse(hdc,x,y,x+17,y+17);SelectObject(hdc,inside);Ellipse(hdc,x+4,y+4,x+13,y+13);
+    FillRect(hdc,&Rect{left:x+14,top:y+14,right:x+22,bottom:y+18},brush);
+}
+
 /// Première base du bureau Winlux : fond, barre des tâches, zone système et
 /// menu Démarrer. Tout est rendu par le même chemin GDI invité → X11 que les
 /// futures applications du shell.
 unsafe fn draw_desktop_scene(hdc: Handle, start_open: bool) {
-    let night = CreateSolidBrush(0x0069_3D0B);
-    let blue = CreateSolidBrush(0x00C0_7D2E);
-    let violet = CreateSolidBrush(0x00A3_4F6A);
-    let glow = CreateSolidBrush(0x00E8_AA52);
-    let taskbar = CreateSolidBrush(0x00F8_F8F8);
-    let surface = CreateSolidBrush(0x00FF_FFFF);
-    let elevated = CreateSolidBrush(0x00F5_F5F5);
-    let border = CreateSolidBrush(0x00DF_DFDF);
-    let shadow = CreateSolidBrush(0x0048_4848);
-    let accent = CreateSolidBrush(0x00C0_6700);
-    let green = CreateSolidBrush(0x0048_A337);
-    let orange = CreateSolidBrush(0x0000_94F5);
-    let purple = CreateSolidBrush(0x00A4_57A0);
-    let cyan = CreateSolidBrush(0x00D9_AA22);
+    let wall=CreateSolidBrush(0x0020_100B);let wall_mid=CreateSolidBrush(0x0052_2911);let wall_blue=CreateSolidBrush(0x0091_5522);let wall_violet=CreateSolidBrush(0x007A_3E4D);let wall_dark=CreateSolidBrush(0x0031_180C);
+    let surface=CreateSolidBrush(0x00FC_FAF9);let elevated=CreateSolidBrush(0x00F7_F3F1);let glass=CreateSolidBrush(0x00F2_EDEC);let border=CreateSolidBrush(0x00E5_DCD8);let shadow=CreateSolidBrush(0x0020_1510);
+    let text=CreateSolidBrush(0x0024_2120);let muted=CreateSolidBrush(0x0085_7066);let accent=CreateSolidBrush(0x00D8_640A);let accent_soft=CreateSolidBrush(0x00FF_F1E8);
+    let green=CreateSolidBrush(0x006B_A022);let orange=CreateSolidBrush(0x001B_87F4);let purple=CreateSolidBrush(0x00B4_58A8);let cyan=CreateSolidBrush(0x00C7_9B13);let navy=CreateSolidBrush(0x0040_281C);let white=CreateSolidBrush(0x00FF_FFFF);
 
-    FillRect(hdc, &Rect { left: 0, top: 0, right: 1280, bottom: 720 }, night);
-    // Fond abstrait libre : grandes formes superposées, nettes à toute échelle.
-    SelectObject(hdc, violet);
-    Ellipse(hdc, 540, -260, 1410, 610);
-    SelectObject(hdc, blue);
-    Ellipse(hdc, 700, -80, 1380, 600);
-    SelectObject(hdc, glow);
-    Ellipse(hdc, 610, 180, 1180, 750);
-    SelectObject(hdc, night);
-    Ellipse(hdc, 760, 190, 1240, 670);
-    FillRect(hdc, &Rect { left: 0, top: 0, right: 430, bottom: 664 }, night);
+    FillRect(hdc,&Rect{left:0,top:0,right:1280,bottom:720},wall);
+    // Papier peint abstrait composé de halos concentriques et d'un horizon doux.
+    SelectObject(hdc,wall_violet);Ellipse(hdc,570,-360,1450,520);
+    SelectObject(hdc,wall_mid);Ellipse(hdc,660,-210,1420,550);
+    SelectObject(hdc,wall_blue);Ellipse(hdc,770,-90,1400,540);
+    SelectObject(hdc,wall_dark);Ellipse(hdc,690,180,1360,850);
+    SelectObject(hdc,wall_violet);Ellipse(hdc,850,295,1260,705);
+    fill_round_rect(hdc,Rect{left:-120,top:552,right:680,bottom:710},80,wall_mid);
+    fill_round_rect(hdc,Rect{left:-180,top:592,right:790,bottom:720},64,wall_dark);
 
-    let title_font = CreateFontA(24, 0, 0, 0, 700, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
-    let body_font = CreateFontA(15, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
-    let small_font = CreateFontA(12, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
-    let old_font = SelectObject(hdc, body_font);
-    SetBkMode(hdc, 1);
+    let display_font=CreateFontA(30,0,0,0,600,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
+    let title_font=CreateFontA(19,0,0,0,600,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
+    let body_font=CreateFontA(14,0,0,0,400,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
+    let medium_font=CreateFontA(13,0,0,0,600,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
+    let small_font=CreateFontA(11,0,0,0,400,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
+    let icon_font=CreateFontA(16,0,0,0,700,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
+    let old_font=SelectObject(hdc,body_font);SetBkMode(hdc,1);
 
-    // Raccourcis du bureau.
-    FillRect(hdc, &Rect { left: 26, top: 28, right: 68, bottom: 70 }, accent);
-    FillRect(hdc, &Rect { left: 26, top: 104, right: 68, bottom: 146 }, green);
-    FillRect(hdc, &Rect { left: 26, top: 180, right: 68, bottom: 222 }, purple);
-    SetTextColor(hdc, 0x00FF_FFFF);
-    TextOutA(hdc, 24, 76, c"This PC".as_ptr(), -1);
-    TextOutA(hdc, 19, 152, c"Files".as_ptr(), -1);
-    TextOutA(hdc, 11, 228, c"Recycle Bin".as_ptr(), -1);
+    // Identité du bureau, discrète et structurée.
+    SelectObject(hdc,display_font);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,38,32,c"Winlux".as_ptr(),-1);
+    SelectObject(hdc,small_font);SetTextColor(hdc,0x00E8_D8D1);TextOutA(hdc,41,68,c"Linux freedom. Windows familiarity.".as_ptr(),-1);
+    fill_round_rect(hdc,Rect{left:38,top:102,right:108,bottom:174},18,glass);draw_windows_mark(hdc,58,120,30,accent);
+    fill_round_rect(hdc,Rect{left:38,top:196,right:108,bottom:268},18,glass);FillRect(hdc,&Rect{left:55,top:218,right:92,bottom:247},green);FillRect(hdc,&Rect{left:55,top:214,right:73,bottom:220},green);
+    fill_round_rect(hdc,Rect{left:38,top:290,right:108,bottom:362},18,glass);FrameRect(hdc,&Rect{left:58,top:310,right:88,bottom:344},purple);FillRect(hdc,&Rect{left:63,top:305,right:83,bottom:312},purple);
+    SelectObject(hdc,small_font);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,51,178,c"This PC".as_ptr(),-1);TextOutA(hdc,57,272,c"Files".as_ptr(),-1);TextOutA(hdc,43,366,c"Recycle Bin".as_ptr(),-1);
 
-    // Barre des tâches.
-    FillRect(hdc, &Rect { left: 0, top: 664, right: 1280, bottom: 720 }, taskbar);
-    FillRect(hdc, &Rect { left: 0, top: 664, right: 1280, bottom: 665 }, border);
-
-    // Bouton Démarrer : quatre carreaux bleus.
-    FillRect(hdc, &Rect { left: 482, top: 679, right: 493, bottom: 690 }, accent);
-    FillRect(hdc, &Rect { left: 496, top: 679, right: 507, bottom: 690 }, accent);
-    FillRect(hdc, &Rect { left: 482, top: 693, right: 493, bottom: 704 }, accent);
-    FillRect(hdc, &Rect { left: 496, top: 693, right: 507, bottom: 704 }, accent);
-    // Recherche et applications centrales.
-    SelectObject(hdc, accent);
-    Ellipse(hdc, 526, 681, 545, 700);
-    FillRect(hdc, &Rect { left: 543, top: 699, right: 551, bottom: 702 }, accent);
-    FillRect(hdc, &Rect { left: 572, top: 677, right: 600, bottom: 705 }, green);
-    FillRect(hdc, &Rect { left: 617, top: 677, right: 645, bottom: 705 }, purple);
-    FillRect(hdc, &Rect { left: 662, top: 677, right: 690, bottom: 705 }, orange);
-    FillRect(hdc, &Rect { left: 707, top: 677, right: 735, bottom: 705 }, cyan);
-    FillRect(hdc, &Rect { left: 477, top: 715, right: 512, bottom: 718 }, accent);
-
-    // Zone système : flèche, Wi-Fi, volume, batterie, heure/date.
-    SelectObject(hdc, small_font);
-    SetTextColor(hdc, 0x0030_3030);
-    TextOutA(hdc, 1018, 684, c"^".as_ptr(), -1);
-    FillRect(hdc, &Rect { left: 1044, top: 697, right: 1048, bottom: 704 }, accent);
-    FillRect(hdc, &Rect { left: 1051, top: 692, right: 1055, bottom: 704 }, accent);
-    FillRect(hdc, &Rect { left: 1058, top: 687, right: 1062, bottom: 704 }, accent);
-    FillRect(hdc, &Rect { left: 1078, top: 689, right: 1085, bottom: 700 }, accent);
-    FillRect(hdc, &Rect { left: 1085, top: 686, right: 1090, bottom: 703 }, accent);
-    TextOutA(hdc, 1092, 687, c"))".as_ptr(), -1);
-    FrameRect(hdc, &Rect { left: 1120, top: 686, right: 1146, bottom: 702 }, accent);
-    FillRect(hdc, &Rect { left: 1123, top: 689, right: 1141, bottom: 699 }, green);
-    FillRect(hdc, &Rect { left: 1146, top: 691, right: 1149, bottom: 697 }, accent);
-    TextOutA(hdc, 1154, 674, c"14:32".as_ptr(), -1);
-    TextOutA(hdc, 1148, 694, c"23/10/2026".as_ptr(), -1);
-
-    if start_open {
-        // Ombre puis panneau Démarrer centré au-dessus de la barre.
-        FillRect(hdc, &Rect { left: 337, top: 101, right: 955, bottom: 651 }, shadow);
-        FillRect(hdc, &Rect { left: 330, top: 94, right: 948, bottom: 644 }, surface);
-        FrameRect(hdc, &Rect { left: 330, top: 94, right: 948, bottom: 644 }, border);
-
-        let search = Rect { left: 370, top: 124, right: 908, bottom: 168 };
-        FillRect(hdc, &search, elevated);
-        FrameRect(hdc, &search, border);
-        SelectObject(hdc, accent);
-        Ellipse(hdc, 390, 137, 407, 154);
-        FillRect(hdc, &Rect { left: 404, top: 151, right: 412, bottom: 154 }, accent);
-        SelectObject(hdc, body_font);
-        SetTextColor(hdc, 0x0060_6060);
-        TextOutA(hdc, 426, 137, c"Search apps, settings and files".as_ptr(), -1);
-
-        SelectObject(hdc, title_font);
-        SetTextColor(hdc, 0x001F_1F1F);
-        TextOutA(hdc, 370, 194, c"Pinned".as_ptr(), -1);
-        SelectObject(hdc, small_font);
-        TextOutA(hdc, 840, 201, c"All apps  >".as_ptr(), -1);
-
-        // Deux rangées d'applications épinglées.
-        FillRect(hdc, &Rect { left: 386, top: 238, right: 426, bottom: 278 }, accent);
-        FillRect(hdc, &Rect { left: 482, top: 238, right: 522, bottom: 278 }, green);
-        FillRect(hdc, &Rect { left: 578, top: 238, right: 618, bottom: 278 }, purple);
-        FillRect(hdc, &Rect { left: 674, top: 238, right: 714, bottom: 278 }, orange);
-        FillRect(hdc, &Rect { left: 770, top: 238, right: 810, bottom: 278 }, cyan);
-        FillRect(hdc, &Rect { left: 866, top: 238, right: 906, bottom: 278 }, accent);
-        FillRect(hdc, &Rect { left: 386, top: 322, right: 426, bottom: 362 }, cyan);
-        FillRect(hdc, &Rect { left: 482, top: 322, right: 522, bottom: 362 }, accent);
-        FillRect(hdc, &Rect { left: 578, top: 322, right: 618, bottom: 362 }, green);
-        FillRect(hdc, &Rect { left: 674, top: 322, right: 714, bottom: 362 }, purple);
-        FillRect(hdc, &Rect { left: 770, top: 322, right: 810, bottom: 362 }, orange);
-        FillRect(hdc, &Rect { left: 866, top: 322, right: 906, bottom: 362 }, cyan);
-        SetTextColor(hdc, 0x001F_1F1F);
-        TextOutA(hdc, 382, 284, c"Edge".as_ptr(), -1);
-        TextOutA(hdc, 472, 284, c"Files".as_ptr(), -1);
-        TextOutA(hdc, 564, 284, c"Settings".as_ptr(), -1);
-        TextOutA(hdc, 668, 284, c"Photos".as_ptr(), -1);
-        TextOutA(hdc, 762, 284, c"Store".as_ptr(), -1);
-        TextOutA(hdc, 850, 284, c"Terminal".as_ptr(), -1);
-        TextOutA(hdc, 374, 368, c"Windows apps".as_ptr(), -1);
-        TextOutA(hdc, 469, 368, c"Linux apps".as_ptr(), -1);
-        TextOutA(hdc, 568, 368, c"Browser".as_ptr(), -1);
-        TextOutA(hdc, 660, 368, c"Notepad".as_ptr(), -1);
-        TextOutA(hdc, 757, 368, c"Media".as_ptr(), -1);
-        TextOutA(hdc, 852, 368, c"Winlux".as_ptr(), -1);
-
-        SelectObject(hdc, title_font);
-        TextOutA(hdc, 370, 414, c"Recommended".as_ptr(), -1);
-        SelectObject(hdc, small_font);
-        FillRect(hdc, &Rect { left: 370, top: 454, right: 410, bottom: 494 }, accent);
-        FillRect(hdc, &Rect { left: 640, top: 454, right: 680, bottom: 494 }, green);
-        SetTextColor(hdc, 0x001F_1F1F);
-        TextOutA(hdc, 426, 455, c"Welcome to Winlux".as_ptr(), -1);
-        TextOutA(hdc, 426, 476, c"Get started".as_ptr(), -1);
-        TextOutA(hdc, 696, 455, c"Shared applications".as_ptr(), -1);
-        TextOutA(hdc, 696, 476, c"Linux + Windows".as_ptr(), -1);
-
-        FillRect(hdc, &Rect { left: 330, top: 548, right: 948, bottom: 644 }, elevated);
-        FillRect(hdc, &Rect { left: 330, top: 548, right: 948, bottom: 549 }, border);
-        SelectObject(hdc, accent);
-        Ellipse(hdc, 374, 573, 414, 613);
-        SelectObject(hdc, body_font);
-        SetTextColor(hdc, 0x001F_1F1F);
-        TextOutA(hdc, 430, 584, c"Damien".as_ptr(), -1);
-        TextOutA(hdc, 862, 584, c"Power".as_ptr(), -1);
+    // Carte de contexte en haut à droite, visible lorsque le menu est fermé.
+    if !start_open {
+        round_panel(hdc,Rect{left:1002,top:34,right:1240,bottom:132},20,shadow,border,glass);
+        SelectObject(hdc,title_font);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,1024,54,c"14:32".as_ptr(),-1);
+        SelectObject(hdc,small_font);SetTextColor(hdc,0x00E8_D8D1);TextOutA(hdc,1026,84,c"Friday, 23 October".as_ptr(),-1);TextOutA(hdc,1148,57,c"18 C".as_ptr(),-1);TextOutA(hdc,1148,82,c"Connected".as_ptr(),-1);
     }
 
-    SelectObject(hdc, old_font);
-    DeleteObject(night);
-    DeleteObject(blue);
-    DeleteObject(violet);
-    DeleteObject(glow);
-    DeleteObject(taskbar);
-    DeleteObject(surface);
-    DeleteObject(elevated);
-    DeleteObject(border);
-    DeleteObject(shadow);
-    DeleteObject(accent);
-    DeleteObject(green);
-    DeleteObject(orange);
-    DeleteObject(purple);
-    DeleteObject(cyan);
-    DeleteObject(title_font);
-    DeleteObject(body_font);
-    DeleteObject(small_font);
+    // Barre des tâches flottante et zone système séparée.
+    round_panel(hdc,Rect{left:350,top:661,right:930,bottom:713},20,shadow,border,glass);
+    round_panel(hdc,Rect{left:984,top:661,right:1260,bottom:713},20,shadow,border,glass);
+    if start_open{fill_round_rect(hdc,Rect{left:368,top:668,right:410,bottom:706},12,accent_soft);}
+    draw_windows_mark(hdc,379,678,20,accent);draw_search_mark(hdc,430,679,text,glass);
+    fill_round_rect(hdc,Rect{left:478,top:671,right:512,bottom:705},9,green);FillRect(hdc,&Rect{left:486,top:680,right:504,bottom:697},white);
+    fill_round_rect(hdc,Rect{left:526,top:671,right:560,bottom:705},9,purple);SelectObject(hdc,white);Ellipse(hdc,536,681,550,695);SelectObject(hdc,purple);Ellipse(hdc,540,685,546,691);
+    fill_round_rect(hdc,Rect{left:574,top:671,right:608,bottom:705},9,orange);SelectObject(hdc,icon_font);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,583,678,c">_".as_ptr(),-1);
+    fill_round_rect(hdc,Rect{left:622,top:671,right:656,bottom:705},9,cyan);FillRect(hdc,&Rect{left:631,top:681,right:647,bottom:696},white);
+    fill_round_rect(hdc,Rect{left:670,top:671,right:704,bottom:705},9,accent);draw_windows_mark(hdc,679,680,16,white);
+    FillRect(hdc,&Rect{left:374,top:709,right:404,bottom:712},accent);
+
+    SelectObject(hdc,small_font);SetTextColor(hdc,0x0024_2120);TextOutA(hdc,1001,678,c"^".as_ptr(),-1);
+    FillRect(hdc,&Rect{left:1029,top:692,right:1032,bottom:699},text);FillRect(hdc,&Rect{left:1035,top:687,right:1038,bottom:699},text);FillRect(hdc,&Rect{left:1041,top:682,right:1044,bottom:699},text);
+    FillRect(hdc,&Rect{left:1060,top:687,right:1066,bottom:697},text);FillRect(hdc,&Rect{left:1066,top:684,right:1071,bottom:700},text);TextOutA(hdc,1073,684,c"))".as_ptr(),-1);
+    FrameRect(hdc,&Rect{left:1100,top:684,right:1128,bottom:700},text);FillRect(hdc,&Rect{left:1103,top:687,right:1124,bottom:697},green);FillRect(hdc,&Rect{left:1128,top:689,right:1131,bottom:695},text);
+    SelectObject(hdc,medium_font);TextOutA(hdc,1151,675,c"14:32".as_ptr(),-1);SelectObject(hdc,small_font);SetTextColor(hdc,0x0085_7066);TextOutA(hdc,1142,694,c"23/10/2026".as_ptr(),-1);
+
+    if start_open {
+        let menu=Rect{left:292,top:54,right:988,bottom:646};round_panel(hdc,menu,24,shadow,border,surface);
+        // En-tête de recherche.
+        fill_round_rect(hdc,Rect{left:334,top:86,right:946,bottom:134},16,elevated);draw_search_mark(hdc,354,101,muted,elevated);
+        SelectObject(hdc,body_font);SetTextColor(hdc,0x0085_7066);TextOutA(hdc,389,102,c"Search apps, settings and documents".as_ptr(),-1);
+        fill_round_rect(hdc,Rect{left:891,top:96,right:928,bottom:124},9,surface);SelectObject(hdc,small_font);TextOutA(hdc,902,102,c"/".as_ptr(),-1);
+
+        SelectObject(hdc,title_font);SetTextColor(hdc,0x0024_2120);TextOutA(hdc,334,160,c"Pinned".as_ptr(),-1);
+        fill_round_rect(hdc,Rect{left:846,top:154,right:946,bottom:184},10,elevated);SelectObject(hdc,small_font);TextOutA(hdc,869,162,c"All apps  >".as_ptr(),-1);
+
+        // Applications : tuiles homogènes et glyphes dessinés.
+        fill_round_rect(hdc,Rect{left:346,top:203,right:394,bottom:251},13,accent);SelectObject(hdc,white);Ellipse(hdc,357,214,383,240);SelectObject(hdc,accent);Ellipse(hdc,364,221,383,240);
+        fill_round_rect(hdc,Rect{left:449,top:203,right:497,bottom:251},13,green);FillRect(hdc,&Rect{left:459,top:218,right:487,bottom:239},white);FillRect(hdc,&Rect{left:459,top:214,right:474,bottom:220},white);
+        fill_round_rect(hdc,Rect{left:552,top:203,right:600,bottom:251},13,purple);SelectObject(hdc,white);Ellipse(hdc,563,214,589,240);SelectObject(hdc,purple);Ellipse(hdc,570,221,582,233);
+        fill_round_rect(hdc,Rect{left:655,top:203,right:703,bottom:251},13,orange);FillRect(hdc,&Rect{left:666,top:214,right:692,bottom:240},white);SelectObject(hdc,orange);Ellipse(hdc,671,220,678,227);Ellipse(hdc,681,217,689,225);
+        fill_round_rect(hdc,Rect{left:758,top:203,right:806,bottom:251},13,cyan);FrameRect(hdc,&Rect{left:770,top:218,right:794,bottom:239},white);SelectObject(hdc,white);Ellipse(hdc,776,210,788,224);
+        fill_round_rect(hdc,Rect{left:861,top:203,right:909,bottom:251},13,navy);SelectObject(hdc,icon_font);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,873,217,c">_".as_ptr(),-1);
+
+        fill_round_rect(hdc,Rect{left:346,top:295,right:394,bottom:343},13,accent_soft);draw_windows_mark(hdc,359,308,22,accent);
+        fill_round_rect(hdc,Rect{left:449,top:295,right:497,bottom:343},13,elevated);SelectObject(hdc,green);Ellipse(hdc,460,306,486,332);SetTextColor(hdc,0x00FF_FFFF);SelectObject(hdc,medium_font);TextOutA(hdc,469,312,c"L".as_ptr(),-1);
+        fill_round_rect(hdc,Rect{left:552,top:295,right:600,bottom:343},13,accent);SelectObject(hdc,white);Ellipse(hdc,563,306,589,332);SelectObject(hdc,accent);Ellipse(hdc,570,313,589,332);
+        fill_round_rect(hdc,Rect{left:655,top:295,right:703,bottom:343},13,elevated);SelectObject(hdc,icon_font);SetTextColor(hdc,0x0024_2120);TextOutA(hdc,672,310,c"N".as_ptr(),-1);
+        fill_round_rect(hdc,Rect{left:758,top:295,right:806,bottom:343},13,orange);SelectObject(hdc,icon_font);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,774,310,c">".as_ptr(),-1);
+        fill_round_rect(hdc,Rect{left:861,top:295,right:909,bottom:343},13,accent);draw_windows_mark(hdc,874,308,22,white);
+
+        SelectObject(hdc,small_font);SetTextColor(hdc,0x0024_2120);
+        TextOutA(hdc,356,259,c"Edge".as_ptr(),-1);TextOutA(hdc,459,259,c"Files".as_ptr(),-1);TextOutA(hdc,557,259,c"Settings".as_ptr(),-1);TextOutA(hdc,662,259,c"Photos".as_ptr(),-1);TextOutA(hdc,766,259,c"Store".as_ptr(),-1);TextOutA(hdc,864,259,c"Terminal".as_ptr(),-1);
+        TextOutA(hdc,337,351,c"Windows apps".as_ptr(),-1);TextOutA(hdc,444,351,c"Linux apps".as_ptr(),-1);TextOutA(hdc,555,351,c"Browser".as_ptr(),-1);TextOutA(hdc,658,351,c"Notepad".as_ptr(),-1);TextOutA(hdc,765,351,c"Media".as_ptr(),-1);TextOutA(hdc,867,351,c"Winlux".as_ptr(),-1);
+
+        SelectObject(hdc,title_font);TextOutA(hdc,334,394,c"Recommended".as_ptr(),-1);SelectObject(hdc,small_font);SetTextColor(hdc,0x0085_7066);TextOutA(hdc,865,400,c"More  >".as_ptr(),-1);
+        fill_round_rect(hdc,Rect{left:334,top:430,right:627,bottom:506},16,elevated);fill_round_rect(hdc,Rect{left:646,top:430,right:946,bottom:506},16,elevated);
+        fill_round_rect(hdc,Rect{left:350,top:444,right:400,bottom:494},12,accent_soft);draw_windows_mark(hdc,363,457,24,accent);
+        fill_round_rect(hdc,Rect{left:662,top:444,right:712,bottom:494},12,green);SelectObject(hdc,white);Ellipse(hdc,674,456,700,482);
+        SelectObject(hdc,medium_font);SetTextColor(hdc,0x0024_2120);TextOutA(hdc,416,447,c"Welcome to Winlux".as_ptr(),-1);TextOutA(hdc,728,447,c"Shared applications".as_ptr(),-1);
+        SelectObject(hdc,small_font);SetTextColor(hdc,0x0085_7066);TextOutA(hdc,416,470,c"Finish setting up your desktop".as_ptr(),-1);TextOutA(hdc,728,470,c"Linux and Windows in one place".as_ptr(),-1);
+
+        FillRect(hdc,&Rect{left:293,top:536,right:987,bottom:537},border);fill_round_rect(hdc,Rect{left:316,top:554,right:965,bottom:628},18,elevated);
+        SelectObject(hdc,accent);Ellipse(hdc,336,570,378,612);draw_windows_mark(hdc,348,582,18,white);
+        SelectObject(hdc,medium_font);SetTextColor(hdc,0x0024_2120);TextOutA(hdc,392,577,c"Damien".as_ptr(),-1);SelectObject(hdc,small_font);SetTextColor(hdc,0x0085_7066);TextOutA(hdc,392,597,c"Local session".as_ptr(),-1);
+        fill_round_rect(hdc,Rect{left:850,top:568,right:934,bottom:614},13,surface);SelectObject(hdc,body_font);SetTextColor(hdc,0x0024_2120);TextOutA(hdc,871,582,c"Power".as_ptr(),-1);
+    }
+
+    SelectObject(hdc,old_font);
+    DeleteObject(wall);DeleteObject(wall_mid);DeleteObject(wall_blue);DeleteObject(wall_violet);DeleteObject(wall_dark);DeleteObject(surface);DeleteObject(elevated);DeleteObject(glass);DeleteObject(border);DeleteObject(shadow);DeleteObject(text);DeleteObject(muted);DeleteObject(accent);DeleteObject(accent_soft);DeleteObject(green);DeleteObject(orange);DeleteObject(purple);DeleteObject(cyan);DeleteObject(navy);DeleteObject(white);
+    DeleteObject(display_font);DeleteObject(title_font);DeleteObject(body_font);DeleteObject(medium_font);DeleteObject(small_font);DeleteObject(icon_font);
 }
 
 /// Variante visuelle du centre de contrôle consacrée aux applications Linux
@@ -616,7 +582,7 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             if GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0 {
                 let x = (lparam as u32 & 0xFFFF) as i32;
                 let y = ((lparam as u32 >> 16) & 0xFFFF) as i32;
-                if (468..=520).contains(&x) && (664..=720).contains(&y) {
+                if (360..=418).contains(&x) && (658..=720).contains(&y) {
                     START_MENU_OPEN ^= 1;
                     InvalidateRect(hwnd, core::ptr::null(), 1);
                 }

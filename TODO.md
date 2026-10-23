@@ -118,12 +118,14 @@
 - [x] Ajouter un prototype de bureau GDI HiDPI : fond d'écran, raccourcis,
   barre des tâches, menu Démarrer interactif, applications épinglées et zone
   système Wi-Fi/volume/batterie/heure.
+- [x] Reprendre le prototype avec un système visuel professionnel : surfaces
+  arrondies, profondeur, palette cohérente, icônes dessinées et hiérarchie typographique.
 - [ ] Choisir la pile graphique de l’environnement cible : GTK, Qt ou autre.
 - [ ] Créer les composants : barre des tâches, menu de démarrage, fenêtres, notifications et explorateur de fichiers; le CSS actuel est une palette isolée, pas un shell graphique.
 - [ ] Ajouter les icônes et polices libres compatibles avec la licence du projet.
 - [ ] Définir les variantes clair/sombre et les paramètres d’accessibilité.
 - [ ] Intégrer le thème dans l’ISO sans dépendance propriétaire.
-- [ ] Tester le rendu sur différentes résolutions et facteurs d’échelle.
+- [x] Tester le rendu en 1920×1080 (150 %), 2560×1440 (200 %) et 3840×2160 (300 %).
 
 ## Priorité 6 — Qualité et livraison
 
