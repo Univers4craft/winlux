@@ -144,7 +144,7 @@ saturent pas la palette du serveur. Il s’agit encore
 d’un prototype dans `gui_demo.exe`, pas d’un gestionnaire de bureau autonome.
 
 Le mécanisme `winlux-update` récupère un manifeste et un paquet depuis la
-dernière release GitHub, valide leur SHA-256, refuse les chemins d’archive
+dernière release GitHub, avec jeton API en lecture pour un dépôt privé, valide leur SHA-256, refuse les chemins d’archive
 dangereux, remplace atomiquement le cœur du runtime et garde une sauvegarde de
 retour arrière. Il ne met pas encore à jour un système Linux complet ni une
 partition racine A/B.

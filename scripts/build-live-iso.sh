@@ -89,7 +89,7 @@ ln -s busybox "$stage/bin/true"
 ln -s ../../bin/busybox "$stage/usr/bin/dirname"
 ln -s ../../bin/busybox "$stage/usr/bin/mktemp"
 ln -s ../../bin/busybox "$stage/usr/bin/timeout"
-for applet in cp cut grep head mkdir mv rm sed sha256sum tar wc; do
+for applet in cp cut grep head mkdir mv rm sed sha256sum tar tr wc; do
     ln -s ../../bin/busybox "$stage/usr/bin/$applet"
 done
 cp /usr/bin/curl "$stage/usr/bin/curl"

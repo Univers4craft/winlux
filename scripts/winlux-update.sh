@@ -4,6 +4,7 @@ set -eu
 repository=${WINLUX_UPDATE_REPOSITORY:-Univers4craft/winlux}
 target_root=${WINLUX_UPDATE_ROOT:-/}
 manifest_source=${WINLUX_UPDATE_MANIFEST:-https://github.com/$repository/releases/latest/download/winlux-update-manifest.txt}
+update_token=${WINLUX_UPDATE_TOKEN:-${GH_TOKEN:-}}
 state_dir="$target_root/var/lib/winlux"
 backup_dir="$state_dir/update-backup"
 
@@ -14,15 +15,31 @@ usage() {
 download() {
     source=$1
     destination=$2
+    accept=${3:-application/octet-stream}
     case "$source" in
         file://*) cp "${source#file://}" "$destination" ;;
-        https://github.com/*|https://objects.githubusercontent.com/*)
+        https://github.com/*|https://objects.githubusercontent.com/*|https://api.github.com/*)
             command -v curl >/dev/null 2>&1 || { echo "curl est requis" >&2; exit 1; }
-            curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-                --output "$destination" "$source"
+            set -- curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+                --header "Accept: $accept" --header "X-GitHub-Api-Version: 2022-11-28" \
+                --output "$destination"
+            if test -n "$update_token"; then
+                set -- "$@" --header "Authorization: Bearer $update_token"
+            fi
+            if ! "$@" "$source"; then
+                echo "téléchargement GitHub impossible; pour un dépôt privé, définissez WINLUX_UPDATE_TOKEN" >&2
+                exit 1
+            fi
             ;;
         *) echo "source de mise à jour refusée : $source" >&2; exit 1 ;;
     esac
+}
+
+asset_api_url() {
+    name=$1
+    metadata=$2
+    tr -d '\n\r' <"$metadata" |
+        sed -n "s#.*\"url\"[[:space:]]*:[[:space:]]*\"\\(https://api.github.com/repos/$repository/releases/assets/[0-9][0-9]*\\)\"[^{}]*\"name\"[[:space:]]*:[[:space:]]*\"$name\".*#\\1#p"
 }
 
 manifest_value() {
@@ -35,7 +52,15 @@ manifest_value() {
 
 fetch_manifest() {
     manifest=$1
-    download "$manifest_source" "$manifest"
+    if test -n "$update_token" && test -z "${WINLUX_UPDATE_MANIFEST:-}"; then
+        release_metadata="$work/release.json"
+        download "https://api.github.com/repos/$repository/releases/latest" "$release_metadata" "application/vnd.github+json"
+        manifest_api=$(asset_api_url winlux-update-manifest.txt "$release_metadata")
+        test -n "$manifest_api" || { echo "manifeste absent de la dernière release" >&2; exit 1; }
+        download "$manifest_api" "$manifest"
+    else
+        download "$manifest_source" "$manifest"
+    fi
     test "$(manifest_value format "$manifest")" = 1 || { echo "format de manifeste inconnu" >&2; exit 1; }
     version=$(manifest_value version "$manifest")
     asset=$(manifest_value asset "$manifest")
@@ -90,6 +115,9 @@ test "$mode" = --apply || exit 0
 
 if test -n "${WINLUX_UPDATE_ASSET_DIR:-}"; then
     asset_source="file://$WINLUX_UPDATE_ASSET_DIR/$asset"
+elif test -n "$update_token" && test -n "${release_metadata:-}"; then
+    asset_source=$(asset_api_url "$asset" "$release_metadata")
+    test -n "$asset_source" || { echo "actif $asset absent de la dernière release" >&2; exit 1; }
 else
     asset_source="https://github.com/$repository/releases/download/$version/$asset"
 fi

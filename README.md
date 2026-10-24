@@ -100,6 +100,8 @@ winlux-update --apply
 winlux-update --rollback
 ```
 
+Pour un dépôt GitHub privé, fournissez un jeton en lecture dans `WINLUX_UPDATE_TOKEN` (ou `GH_TOKEN`). L’outil passe alors par l’API GitHub authentifiée et ne journalise pas le jeton. Pour un dépôt public, aucune authentification n’est nécessaire.
+
 L’outil n’accepte que les actifs GitHub en HTTPS, vérifie strictement le manifeste, la somme SHA-256 et les chemins de l’archive, installe les fichiers par renommage atomique et conserve la version précédente. À ce stade il met à jour le cœur Winlux (`winlux`, `winlux-update` et le numéro de version), pas encore l’intégralité d’une future distribution Linux en mode A/B.
 
 ## Limites importantes
