@@ -25,6 +25,19 @@ pub struct SystemInfo {
 }
 
 #[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SystemTime {
+    pub year: u16,
+    pub month: u16,
+    pub day_of_week: u16,
+    pub day: u16,
+    pub hour: u16,
+    pub minute: u16,
+    pub second: u16,
+    pub milliseconds: u16,
+}
+
+#[repr(C)]
 pub struct OsVersionInfoA {
     pub size: u32,
     pub major: u32,
@@ -367,6 +380,7 @@ extern "system" {
     pub fn GetVersionExA(out: *mut OsVersionInfoA) -> i32;
     pub fn GetTickCount64() -> u64;
     pub fn GetSystemTimeAsFileTime(out: *mut u64);
+    pub fn GetLocalTime(out: *mut SystemTime);
     pub fn GetEnvironmentVariableA(name: *const c_char, buf: *mut c_char, size: u32) -> u32;
     pub fn GetEnvironmentVariableW(name: *const u16, buf: *mut u16, size: u32) -> u32;
     pub fn SetEnvironmentVariableW(name: *const u16, value: *const u16) -> i32;

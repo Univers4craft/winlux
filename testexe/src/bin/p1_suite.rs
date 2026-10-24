@@ -286,6 +286,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let mut filetime = 0u64;
         GetSystemTimeAsFileTime(&mut filetime);
         check!(filetime > 116_444_736_000_000_000, "GetSystemTimeAsFileTime");
+        let mut local_time = SystemTime::default();
+        GetLocalTime(&mut local_time);
+        check!(local_time.year >= 2024 && (1..=12).contains(&local_time.month) && (1..=31).contains(&local_time.day) && local_time.hour < 24 && local_time.minute < 60, "GetLocalTime fournit une date locale valide");
         let ntdll = GetModuleHandleA(c"ntdll.dll".as_ptr());
         let rtl_get_version = GetProcAddress(ntdll, c"RtlGetVersion".as_ptr());
         let rtl_ok = if rtl_get_version.is_null() { false } else {

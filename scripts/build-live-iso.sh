@@ -165,7 +165,15 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /bin/sh
     fi
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
-        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_UI_SCALE=1.5 \
+        tray_battery=100
+        for capacity in /sys/class/power_supply/BAT*/capacity; do
+            if test -r "$capacity"; then tray_battery=$(/bin/busybox cat "$capacity"); break; fi
+        done
+        tray_network=0
+        for state in /sys/class/net/*/operstate; do
+            if test -r "$state" && test "$(/bin/busybox cat "$state")" = up; then tray_network=1; break; fi
+        done
+        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_UI_SCALE=1.5 WINLUX_TRAY_VOLUME=70 WINLUX_TRAY_BATTERY="$tray_battery" WINLUX_TRAY_NETWORK="$tray_network" \
             /usr/bin/winlux /opt/winlux/tests/gui_demo.exe
         /bin/busybox sleep 1
     done

@@ -32,6 +32,31 @@ static mut VOLUME_LEVEL: u32 = 78;
 static mut BATTERY_LEVEL: u32 = 73;
 static mut NETWORK_CONNECTED: u32 = 1;
 
+unsafe fn environment_percentage(name: *const core::ffi::c_char, fallback: u32) -> u32 {
+    let mut value = [0i8; 16];
+    let len = GetEnvironmentVariableA(name, value.as_mut_ptr(), value.len() as u32);
+    if len == 0 || len >= value.len() as u32 { return fallback; }
+    let mut parsed = 0u32;
+    for index in 0..len as usize {
+        let byte = value[index] as u8;
+        if !byte.is_ascii_digit() { return fallback; }
+        parsed = parsed.saturating_mul(10).saturating_add((byte - b'0') as u32);
+    }
+    parsed.min(100)
+}
+
+unsafe fn draw_clock(hdc: Handle, time_font: Handle, date_font: Handle, text: Handle, muted: Handle) {
+    let mut now = SystemTime::default();
+    GetLocalTime(&mut now);
+    let hour = now.hour.min(99) as u8; let minute = now.minute.min(99) as u8;
+    let day = now.day.min(99) as u8; let month = now.month.min(99) as u8; let year = (now.year % 100) as u8;
+    let clock = [b'0' + hour / 10, b'0' + hour % 10, b':', b'0' + minute / 10, b'0' + minute % 10];
+    let date = [b'0' + day / 10, b'0' + day % 10, b'/', b'0' + month / 10, b'0' + month % 10, b'/', b'0' + year / 10, b'0' + year % 10];
+    SelectObject(hdc, time_font); SetTextColor(hdc, 0x0024_201E); TextOutA(hdc, 1224, 681, clock.as_ptr() as *const core::ffi::c_char, clock.len() as i32);
+    SelectObject(hdc, date_font); SetTextColor(hdc, 0x0083_746D); TextOutA(hdc, 1220, 700, date.as_ptr() as *const core::ffi::c_char, date.len() as i32);
+    let _ = (text, muted);
+}
+
 unsafe fn fill_round_rect(hdc: Handle, rect: Rect, radius: i32, brush: Handle) {
     let width=rect.right-rect.left;let height=rect.bottom-rect.top;let radius=radius.min(width/2).min(height/2).max(1);
     FillRect(hdc,&Rect{left:rect.left+radius,top:rect.top,right:rect.right-radius,bottom:rect.bottom},brush);
@@ -163,7 +188,7 @@ unsafe fn draw_desktop_scene(hdc: Handle, start_open: bool) {
     draw_volume_status(hdc,1131,684,VOLUME_LEVEL,text,muted);
     FrameRect(hdc,&Rect{left:1171,top:688,right:1201,bottom:704},text);FillRect(hdc,&Rect{left:1174,top:691,right:1174+((24*BATTERY_LEVEL.min(100))/100) as i32,bottom:701},if BATTERY_LEVEL>20{green}else{accent});FillRect(hdc,&Rect{left:1201,top:693,right:1204,bottom:699},text);
     FillRect(hdc,&Rect{left:1212,top:682,right:1213,bottom:713},border);
-    SelectObject(hdc,medium_font);SetTextColor(hdc,0x0024_201E);TextOutA(hdc,1224,681,c"14:32".as_ptr(),-1);SelectObject(hdc,tiny_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,1220,700,c"23/10/26".as_ptr(),-1);
+    draw_clock(hdc,medium_font,tiny_font,text,muted);
 
     SelectObject(hdc,old_font);
     DeleteObject(wall);DeleteObject(wall_blue);DeleteObject(wall_purple);DeleteObject(wall_teal);DeleteObject(wall_dark);DeleteObject(surface);DeleteObject(sidebar);DeleteObject(elevated);DeleteObject(taskbar);DeleteObject(border);DeleteObject(shadow);DeleteObject(text);DeleteObject(muted);DeleteObject(accent);DeleteObject(accent_dark);DeleteObject(accent_soft);DeleteObject(green);DeleteObject(white);
@@ -655,6 +680,11 @@ pub extern "C" fn mainCRTStartup() -> ! {
         // manuelle pour laisser le temps d'observer la fenêtre.
         let testing = GetEnvironmentVariableA(c"WINLUX_TEST".as_ptr(), core::ptr::null_mut(), 0) > 0;
         let desktop = GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0;
+        if desktop {
+            VOLUME_LEVEL = environment_percentage(c"WINLUX_TRAY_VOLUME".as_ptr(), VOLUME_LEVEL);
+            BATTERY_LEVEL = environment_percentage(c"WINLUX_TRAY_BATTERY".as_ptr(), BATTERY_LEVEL);
+            NETWORK_CONNECTED = environment_percentage(c"WINLUX_TRAY_NETWORK".as_ptr(), NETWORK_CONNECTED).min(1);
+        }
         let duration = if testing { 300u32 } else if desktop { 3_600_000 } else { 3000 };
 
         let class = c"WinluxDemoClass";

@@ -64,6 +64,22 @@ pub struct SystemInfo {
     pub processor_revision: u16,
 }
 
+/// Layout-compatible with Win32 `SYSTEMTIME`.  Keeping this API in kernel32
+/// lets guest applications present the host's local clock without scraping a
+/// Linux-specific source themselves.
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SystemTime {
+    pub year: u16,
+    pub month: u16,
+    pub day_of_week: u16,
+    pub day: u16,
+    pub hour: u16,
+    pub minute: u16,
+    pub second: u16,
+    pub milliseconds: u16,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct MemoryBasicInformation {
@@ -543,6 +559,18 @@ pub unsafe extern "win64" fn get_system_info(out:*mut SystemInfo){if out.is_null
 pub unsafe extern "win64" fn get_native_system_info(out:*mut SystemInfo){get_system_info(out)}
 fn filetime_now()->u64{const EPOCH:u64=116_444_736_000_000_000;let d=std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();EPOCH.saturating_add(d.as_secs().saturating_mul(10_000_000)).saturating_add((d.subsec_nanos()/100)as u64)}
 pub unsafe extern "win64" fn get_system_time_as_file_time(out:*mut u64){if out.is_null(){crate::process::set_last_error(87);return;}*out=filetime_now()}
+pub unsafe extern "win64" fn get_local_time(out:*mut SystemTime){
+    if out.is_null(){crate::process::set_last_error(87);return;}
+    let seconds=libc::time(std::ptr::null_mut());
+    let mut local:libc::tm=std::mem::zeroed();
+    if seconds==(-1 as libc::time_t)||libc::localtime_r(&seconds,&mut local).is_null(){crate::process::set_last_error(31);return;}
+    std::ptr::write(out,SystemTime{
+        year:(local.tm_year+1900).clamp(0,u16::MAX as i32)as u16,month:(local.tm_mon+1).clamp(0,u16::MAX as i32)as u16,
+        day_of_week:local.tm_wday.clamp(0,u16::MAX as i32)as u16,day:local.tm_mday.clamp(0,u16::MAX as i32)as u16,
+        hour:local.tm_hour.clamp(0,u16::MAX as i32)as u16,minute:local.tm_min.clamp(0,u16::MAX as i32)as u16,
+        second:local.tm_sec.clamp(0,u16::MAX as i32)as u16,milliseconds:0,
+    });
+}
 pub extern "win64" fn get_version()->u32{10u32|(19045u32<<16)}
 pub unsafe extern "win64" fn get_version_ex_a(info:*mut u8)->i32{if info.is_null(){crate::process::set_last_error(87);return 0;}let size=std::ptr::read_unaligned(info as *const u32);if size<148{crate::process::set_last_error(87);return 0;}std::ptr::write_unaligned(info.add(4)as *mut u32,10);std::ptr::write_unaligned(info.add(8)as *mut u32,0);std::ptr::write_unaligned(info.add(12)as *mut u32,19045);std::ptr::write_unaligned(info.add(16)as *mut u32,2);std::ptr::write_bytes(info.add(20),0,128);1}
 pub unsafe extern "win64" fn get_version_ex_w(info:*mut u16)->i32{if info.is_null(){crate::process::set_last_error(87);return 0;}let size=std::ptr::read_unaligned(info as *const u32);if size<276{crate::process::set_last_error(87);return 0;}std::ptr::write_unaligned(info.add(2)as *mut u32,10);std::ptr::write_unaligned(info.add(4)as *mut u32,0);std::ptr::write_unaligned(info.add(6)as *mut u32,19045);std::ptr::write_unaligned(info.add(8)as *mut u32,2);std::ptr::write_bytes(info.add(10),0,128);1}
@@ -901,7 +929,7 @@ pub fn exports() -> crate::dlls::Exports { crate::exports! {
  "GetLastError"=>fn get_last_error, "SetLastError"=>fn set_last_error, "GetProcessHeap"=>fn get_process_heap,
    "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"GlobalAlloc"=>fn global_alloc,"GlobalReAlloc"=>fn global_realloc,"GlobalLock"=>fn global_lock,"GlobalUnlock"=>fn global_unlock,"GlobalSize"=>fn global_size,"GlobalFlags"=>fn global_flags,"GlobalFree"=>fn global_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
   "GetTickCount"=>fn get_tick_count,"GetTickCount64"=>fn get_tick_count64,"GetCurrentProcessId"=>fn get_current_process_id,"CreateThread"=>fn create_thread,"CloseHandle"=>fn close_handle,"GetEnvironmentVariableA"=>fn get_environment_variable_a,"SetEnvironmentVariableA"=>fn set_environment_variable_a,
-  "GetSystemInfo"=>fn get_system_info,"GetNativeSystemInfo"=>fn get_native_system_info,"GetSystemTimeAsFileTime"=>fn get_system_time_as_file_time,"GetSystemTimePreciseAsFileTime"=>fn get_system_time_as_file_time,"GetVersion"=>fn get_version,"GetVersionExA"=>fn get_version_ex_a,"GetVersionExW"=>fn get_version_ex_w,
+  "GetSystemInfo"=>fn get_system_info,"GetNativeSystemInfo"=>fn get_native_system_info,"GetSystemTimeAsFileTime"=>fn get_system_time_as_file_time,"GetSystemTimePreciseAsFileTime"=>fn get_system_time_as_file_time,"GetLocalTime"=>fn get_local_time,"GetVersion"=>fn get_version,"GetVersionExA"=>fn get_version_ex_a,"GetVersionExW"=>fn get_version_ex_w,
    "GetCurrentDirectoryA"=>fn get_current_directory_a,"SetCurrentDirectoryA"=>fn set_current_directory_a,"GetTempPathA"=>fn get_temp_path_a,"GetTempFileNameA"=>fn get_temp_file_name_a,"GetModuleFileNameA"=>fn get_module_file_name_a,"GetFileAttributesA"=>fn get_file_attributes_a,"GetFileAttributesExA"=>fn get_file_attributes_ex_a,"DeleteFileA"=>fn delete_file_a,"CreateDirectoryA"=>fn create_directory_a,"CreateFileW"=>fn create_file_w,"GetFullPathNameA"=>fn get_full_path_name_a,"CopyFileA"=>fn copy_file_a,"MoveFileA"=>fn move_file_a,"RemoveDirectoryA"=>fn remove_directory_a,
    "GetEnvironmentVariableW"=>fn get_environment_variable_w,"SetEnvironmentVariableW"=>fn set_environment_variable_w,"GetCurrentDirectoryW"=>fn get_current_directory_w,"SetCurrentDirectoryW"=>fn set_current_directory_w,
    "GetTempPathW"=>fn get_temp_path_w,"GetTempFileNameW"=>fn get_temp_file_name_w,"GetModuleFileNameW"=>fn get_module_file_name_w,"GetFileAttributesW"=>fn get_file_attributes_w,"GetFileAttributesExW"=>fn get_file_attributes_ex_w,"DeleteFileW"=>fn delete_file_w,"CreateDirectoryW"=>fn create_directory_w,"GetFullPathNameW"=>fn get_full_path_name_w,"CopyFileW"=>fn copy_file_w,"MoveFileW"=>fn move_file_w,"RemoveDirectoryW"=>fn remove_directory_w,"SetEndOfFile"=>fn set_end_of_file,"Sleep"=>fn sleep,
