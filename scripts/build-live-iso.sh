@@ -270,17 +270,18 @@ mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"
 cp "$work/winlux-initramfs.cpio.gz" "$iso_root/boot/winlux-initramfs.cpio.gz"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
-set default=0
-set timeout=3
+set default=1
+set timeout=0
+set timeout_style=hidden
 if serial --unit=0 --speed=115200; then
     terminal_input serial console
     terminal_output serial console
 fi
-menuentry "Winlux live test (headless + Xvfb)" {
+menuentry "Winlux diagnostic (headless + Xvfb)" {
     linux /boot/vmlinuz console=ttyS0,115200n8 rdinit=/init panic=1 loglevel=4
     initrd /boot/winlux-initramfs.cpio.gz
 }
-menuentry "Winlux desktop preview (1920x1080)" {
+menuentry "Winlux Desktop" {
     linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rdinit=/init panic=1 loglevel=3 winlux.interactive=1 video=1920x1080
     initrd /boot/winlux-initramfs.cpio.gz
 }
