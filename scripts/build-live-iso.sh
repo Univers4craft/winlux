@@ -153,6 +153,7 @@ export PATH HOME XKB_CONFIG_ROOT
 /bin/busybox mdev -s 2>/dev/null || true
 /bin/busybox mkdir -p /tmp/.X11-unix /run /root/.local/share/winlux
 /bin/busybox chmod 1777 /tmp
+/bin/busybox rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
 /bin/busybox ip link set lo up
 
 if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
