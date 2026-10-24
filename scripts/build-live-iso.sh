@@ -38,7 +38,7 @@ if ! test -r "$kernel"; then
     echo "indiquez un noyau lisible avec WINLUX_KERNEL=/chemin/vers/vmlinuz" >&2
     exit 1
 fi
-for path in /usr/bin/busybox /usr/bin/curl /usr/bin/install /usr/bin/Xvfb /usr/bin/xkbcomp "$xorg" "$xorg_modules" "$fonts" "$xkb" "$truetype_fonts" /etc/fonts /etc/ssl/certs/ca-certificates.crt; do
+for path in /usr/bin/busybox /usr/bin/curl /usr/bin/install /usr/bin/udevadm /usr/bin/Xvfb /usr/bin/xkbcomp "$xorg" "$xorg_modules" "$fonts" "$xkb" "$truetype_fonts" /usr/lib/udev/rules.d /etc/fonts /etc/ssl/certs/ca-certificates.crt; do
     test -e "$path" || { echo "fichier requis absent : $path" >&2; exit 1; }
 done
 test -r /usr/share/X11/xorg.conf.d/40-libinput.conf || { echo "configuration libinput Xorg absente" >&2; exit 1; }
@@ -54,7 +54,7 @@ mkdir -p \
     "$stage/lib/modules/$kernel_release" \
     "$stage/opt/winlux/scripts" "$stage/opt/winlux/tests" "$stage/proc" \
     "$stage/root/.local/share/winlux" "$stage/run" "$stage/sys" "$stage/tmp" \
-    "$stage/usr/bin" "$stage/usr/lib" "$stage/usr/lib/xorg" "$stage/usr/share/fonts/X11" \
+    "$stage/usr/bin" "$stage/usr/lib" "$stage/usr/lib/systemd" "$stage/usr/lib/udev" "$stage/usr/lib/xorg" "$stage/usr/share/fonts/X11" \
     "$stage/usr/share/applications" "$stage/usr/share/fonts/truetype" \
     "$stage/usr/share/icons" "$stage/usr/share/pixmaps" \
     "$stage/usr/share/X11" "$stage/etc/fonts"
@@ -101,6 +101,9 @@ for applet in cp cut grep head mkdir mv rm sed sha256sum tar tr wc; do
 done
 cp /usr/bin/curl "$stage/usr/bin/curl"
 cp /usr/bin/install "$stage/usr/bin/install"
+cp /usr/bin/udevadm "$stage/usr/bin/udevadm"
+ln -s ../../bin/udevadm "$stage/usr/lib/systemd/systemd-udevd"
+cp -a /usr/lib/udev/rules.d "$stage/usr/lib/udev/rules.d"
 cp /usr/bin/Xvfb "$stage/usr/bin/Xvfb"
 cp /usr/bin/xkbcomp "$stage/usr/bin/xkbcomp"
 cp "$xorg" "$stage/usr/bin/Xorg"
@@ -118,6 +121,7 @@ copy_shared_libraries /usr/bin/Xvfb
 copy_shared_libraries /usr/bin/xkbcomp
 copy_shared_libraries /usr/bin/curl
 copy_shared_libraries /usr/bin/install
+copy_shared_libraries /usr/bin/udevadm
 copy_shared_libraries "$xorg"
 mkdir -p "$stage$(dirname -- "$xft_library")"
 cp -L "$xft_library" "$stage$xft_library"
@@ -156,6 +160,7 @@ export PATH HOME XKB_CONFIG_ROOT
 /bin/busybox mount -t proc proc /proc 2>/dev/null || true
 /bin/busybox mount -t sysfs sysfs /sys 2>/dev/null || true
 /bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+/usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio_dma_buf.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-gpu.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-input.ko 2>/dev/null || true
@@ -165,6 +170,8 @@ export PATH HOME XKB_CONFIG_ROOT
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/serio-raw.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/psmouse.ko 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
+/usr/bin/udevadm trigger --action=add 2>/dev/null || true
+/usr/bin/udevadm settle --timeout=3 2>/dev/null || true
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
