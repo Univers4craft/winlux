@@ -16,7 +16,7 @@ test -f "$iso" || { echo "ISO absente : $iso" >&2; exit 1; }
 mkdir -p "$(dirname -- "$log")"
 
 set -- qemu-system-x86_64 \
-    -m "${WINLUX_QEMU_MEMORY:-1024}" \
+    -m "${WINLUX_QEMU_MEMORY:-2048}" \
     -smp "${WINLUX_QEMU_CPUS:-2}" \
     -accel tcg \
     -display none \

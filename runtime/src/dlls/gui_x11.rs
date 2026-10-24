@@ -4,6 +4,7 @@
 
 use crate::dlls::gui::{self, BitmapSnapshot, DrawCmd, FontSpec, PendingEvent, Rect};
 use crate::dlls::gui::theme;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uchar, c_ulong, c_void, CString};
 use x11rb::connection::Connection;
@@ -317,6 +318,9 @@ pub struct X11Backend {
     content: HashMap<usize, Vec<DrawCmd>>,
     /// Polices « core » ouvertes à la demande, indexées par les attributs GDI.
     fonts: HashMap<FontSpec, XFont>,
+    /// Pixels X11 déjà alloués, notamment pour éviter des milliers d'aller-retours
+    /// lors du rafraîchissement animé des icônes PNG.
+    color_cache: RefCell<HashMap<u32, u32>>,
     /// Rendu vectoriel antialiasé Xft/Fontconfig, si les bibliothèques hôte sont présentes.
     xft: Option<XftRenderer>,
     /// Facteur DPI appliqué aux coordonnées logiques Win32.
@@ -356,6 +360,7 @@ impl X11Backend {
             deferred_events: Vec::new(),
             content: HashMap::new(),
             fonts: HashMap::new(),
+            color_cache: RefCell::new(HashMap::new()),
             xft: unsafe { XftRenderer::connect() },
             scale,
             keymap: HashMap::new(),
@@ -388,17 +393,22 @@ impl X11Backend {
 
     /// Alloue un pixel vrai-color depuis un COLORREF du thème.
     fn alloc_color(&self, colorref: u32) -> u32 {
+        if let Some(pixel) = self.color_cache.borrow().get(&colorref).copied() {
+            return pixel;
+        }
         let rgb = theme::colorref_to_rgb(colorref);
         let r = (((rgb >> 16) & 0xFF) as u16) * 257;
         let g = (((rgb >> 8) & 0xFF) as u16) * 257;
         let b = ((rgb & 0xFF) as u16) * 257;
-        match self.conn.alloc_color(self.colormap, r, g, b) {
+        let pixel = match self.conn.alloc_color(self.colormap, r, g, b) {
             Ok(reply) => match reply.reply() {
                 Ok(c) => c.pixel,
                 Err(_) => rgb,
             },
             Err(_) => rgb,
-        }
+        };
+        self.color_cache.borrow_mut().insert(colorref, pixel);
+        pixel
     }
 
     /// Dessine un fond clair avec un dégradé discret, proche des surfaces

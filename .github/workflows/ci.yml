@@ -89,6 +89,9 @@ jobs:
       - name: Aucune erreur de compilation
         run: cargo check -p winlux --all-targets
 
+      - name: Valider mise à jour et retour arrière
+        run: bash scripts/test-updater.sh
+
   # 3. Compile les .exe Windows puis les exécute sous Winlux.
   runtime-tests:
     name: Tests runtime (PE)

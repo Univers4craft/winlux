@@ -132,13 +132,22 @@ Le z-order et les notifications
 `WINDOWPOS` avancées ne sont pas encore gérés.
 
 Le prototype de shell utilise ce backend pour rendre un bureau HiDPI complet :
-papier peint vectoriel, raccourcis, barre des tâches compacte pleine largeur,
-bouton Démarrer réduit à son icône, état réseau/audio/batterie placé à droite et
-menu Démarrer inspiré de Cinnamon avec des angles sobres. Les icônes
+papier peint vectoriel animé avec accent violet, raccourcis déplaçables avec
+mode grille ou placement libre, barre des tâches compacte pleine largeur,
+bouton Démarrer réduit à son icône, état réseau/audio/batterie dynamique placé à
+droite et menu Démarrer compact inspiré de Cinnamon avec des angles sobres. Les icônes
 d’applications proviennent réellement des fichiers `.desktop` et thèmes XDG :
 leurs PNG sont décodés avec alpha, mis en cache et filtrés lors des changements
-d’échelle, tandis que la typographie Xft reste vectorielle. Il s’agit encore
+d’échelle, tandis que la typographie Xft reste vectorielle. Les couleurs X11
+allouées sont également mises en cache afin que les animations longues ne
+saturent pas la palette du serveur. Il s’agit encore
 d’un prototype dans `gui_demo.exe`, pas d’un gestionnaire de bureau autonome.
+
+Le mécanisme `winlux-update` récupère un manifeste et un paquet depuis la
+dernière release GitHub, valide leur SHA-256, refuse les chemins d’archive
+dangereux, remplace atomiquement le cœur du runtime et garde une sauvegarde de
+retour arrière. Il ne met pas encore à jour un système Linux complet ni une
+partition racine A/B.
 
 La couche de dessin GDI est amorcée : les primitives invitées n’écrivent pas
 directement dans la fenêtre, elles empilent des commandes (`FillRect`,
@@ -162,8 +171,8 @@ restent approximatifs. Manquent encore les autres formats DIB, les autres
 ROP, les régions
 et le double tampon.
 L’association `.desktop` et binfmt est préparée, mais n’a pas été
-installée ni validée sur une session de bureau réelle. Le script ISO requiert
-encore un staging Linux bootable.
+installée ni validée sur une session de bureau réelle. Le script ISO produit
+maintenant le staging Linux bootable utilisé par les tests et la VM persistante.
 
 ## Cas .NET et paint.net
 

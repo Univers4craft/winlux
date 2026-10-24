@@ -128,6 +128,10 @@
 - [ ] Définir les variantes clair/sombre et les paramètres d’accessibilité.
 - [ ] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [x] Tester le rendu en 1920×1080 (150 %), 2560×1440 (200 %) et 3840×2160 (300 %).
+- [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
+  des indicateurs réseau, volume et batterie sans libellés dans la zone système.
+- [x] Permettre le déplacement des raccourcis du bureau en mode grille ou libre,
+  avec le choix exposé dans les paramètres.
 
 ## Priorité 6 — Qualité et livraison
 
@@ -135,7 +139,11 @@
 - [ ] Normaliser le code existant avec `rustfmt`, traiter la dette Clippy puis rendre ces contrôles bloquants dans la CI.
 - [ ] Ajouter des logs structurés et un niveau de verbosité configurable.
 - [ ] Documenter la compilation, l’installation, le dépannage et la génération ISO.
+- [x] Ajouter un paquet de mise à jour GitHub vérifié par SHA-256, une installation
+  atomique et un retour arrière automatisé.
+- [x] Créer une VM graphique persistante QCOW2 issue de la racine Winlux.
 - [x] Ajouter une licence GPL-3.0-or-later.
 - [ ] Ajouter les mentions de provenance des composants externes distribués dans les futures images publiées.
-- [ ] Créer des releases reproductibles avec binaires, ISO, sommes et notes de version.
+- [ ] Publier également l’ISO et ses sommes dans les releases; le paquet du cœur
+  Winlux, son manifeste et les notes sont déjà générés par le workflow de tag.
 - [ ] Committer une première version stable après validation du pipeline complet.

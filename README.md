@@ -14,7 +14,7 @@ Le runtime contient notamment un chargeur PE, les relocations et imports, un PEB
 
 Le sous-ensemble de processus implémente `CreateProcessA/W` pour lancer un programme Linux ou un PE enfant via Winlux, avec attente, code de sortie, blocs d’environnement A/W et `CREATE_SUSPENDED`/`ResumeThread`. L’héritage des handles et les attributs étendus ne sont pas encore implémentés. Les fichiers prennent en charge des E/S overlapped élémentaires via `ReadFile`/`WriteFile`, `GetOverlappedResult`, une annulation best-effort avec `CancelIo/CancelIoEx` et un sous-ensemble IOCP.
 
-Le prototype de bureau X11 possède maintenant un thème professionnel HiDPI : papier peint vectoriel, barre des tâches compacte pleine largeur, bouton Démarrer réduit à son icône, indicateurs système à droite et menu inspiré de Cinnamon aux angles sobres, avec profil, emplacements, catégories, recherche et accès aux paramètres Linux/Windows. Les applications utilisent leurs vraies icônes PNG déclarées par les fichiers `.desktop` et les thèmes XDG; le runtime les met en cache, conserve leur transparence et les redimensionne par interpolation bilinéaire. Le même rendu est conçu pour 1920×1080 à 150 %, 2560×1440 à 200 % et 3840×2160 à 300 % avec du texte Xft antialiasé.
+Le prototype de bureau X11 possède maintenant un thème professionnel HiDPI : papier peint vectoriel animé avec accents violets, barre des tâches compacte pleine largeur, bouton Démarrer réduit à son icône, indicateurs réseau/audio/batterie dynamiques à droite et menu inspiré de Cinnamon plus compact, avec profil, emplacements, catégories, recherche et accès aux paramètres Linux/Windows. Les raccourcis du bureau peuvent être alignés sur une grille ou déplacés librement, y compris en se superposant. Les applications utilisent leurs vraies icônes PNG déclarées par les fichiers `.desktop` et les thèmes XDG; le runtime les met en cache, conserve leur transparence et les redimensionne par interpolation bilinéaire. Le même rendu est conçu pour 1920×1080 à 150 %, 2560×1440 à 200 % et 3840×2160 à 300 % avec du texte Xft antialiasé.
 
 ## Prérequis
 
@@ -69,7 +69,7 @@ multiplateformes ; il ne rend pas encore WPF ou WinForms compatibles.
 
 ## Intégration Linux et ISO
 
-La configuration binfmt et le fichier `.desktop` sont des préparatifs, pas une intégration hôte validée. `integration/install.sh` modifie des emplacements système et nécessite une revue ainsi que des privilèges d’administration pour être exécuté.
+La configuration binfmt et le fichier `.desktop` sont des préparatifs, pas une intégration hôte validée. `integration/install.sh` installe par défaut le runtime, l’outil de mise à jour et leur version dans `/usr`; il modifie des emplacements système et nécessite donc une revue ainsi que des privilèges d’administration.
 
 `scripts/build-live-iso.sh` construit une image de test autonome avec un initramfs minimal, Winlux, les neuf PE, leur DLL, Xvfb et un démarrage GRUB BIOS/UEFI. Le noyau fourni doit être lisible par l’utilisateur :
 
@@ -79,7 +79,28 @@ scripts/test-live-iso-qemu.sh build/winlux-live-test.iso bios
 scripts/test-live-iso-qemu.sh build/winlux-live-test.iso uefi
 ```
 
-La VM exécute la suite séquentielle, les neuf PE simultanément et le test graphique X11. Le test QEMU exige 1 Gio de RAM et 2 CPU par défaut, configurables avec `WINLUX_QEMU_MEMORY` et `WINLUX_QEMU_CPUS`. L’ISO est une image de validation automatisée, pas encore un bureau Winlux destiné aux utilisateurs.
+La VM automatisée exécute la suite séquentielle, les neuf PE simultanément et le test graphique X11. Le test QEMU utilise 2 Gio de RAM et 2 CPU par défaut, configurables avec `WINLUX_QEMU_MEMORY` et `WINLUX_QEMU_CPUS`; cette marge évite l’échec de décompression de l’initramfs enrichi sous UEFI.
+
+Une VM graphique persistante de prévisualisation peut aussi être créée puis démarrée avec :
+
+```sh
+scripts/create-test-vm.sh --create-only
+scripts/create-test-vm.sh
+```
+
+Elle utilise par défaut un disque QCOW2 extensible de 24 Gio, 4 Gio de RAM, 4 CPU, KVM lorsqu’il est disponible et un affichage 1920×1080. La définition peut être changée avec `WINLUX_VM_WIDTH` et `WINLUX_VM_HEIGHT`. Le disque est construit à partir de la racine de l’ISO; cette image reste une préversion technique, pas encore une distribution installable généraliste.
+
+## Mises à jour GitHub
+
+Chaque tag `v*` déclenche le workflow de release, qui reteste Winlux puis publie un paquet du runtime et un manifeste SHA-256. Sur une installation Winlux :
+
+```sh
+winlux-update --check
+winlux-update --apply
+winlux-update --rollback
+```
+
+L’outil n’accepte que les actifs GitHub en HTTPS, vérifie strictement le manifeste, la somme SHA-256 et les chemins de l’archive, installe les fichiers par renommage atomique et conserve la version précédente. À ce stade il met à jour le cœur Winlux (`winlux`, `winlux-update` et le numéro de version), pas encore l’intégralité d’une future distribution Linux en mode A/B.
 
 ## Limites importantes
 

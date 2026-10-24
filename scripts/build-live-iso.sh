@@ -11,10 +11,17 @@ work="$root/build/winlux-live-test"
 stage="$work/initramfs-root"
 iso_root="$work/iso-root"
 kernel=${WINLUX_KERNEL:-/boot/vmlinuz}
+kernel_release=${WINLUX_KERNEL_RELEASE:-$(uname -r)}
+virtio_dma_module="/lib/modules/$kernel_release/kernel/drivers/virtio/virtio_dma_buf.ko.zst"
+virtio_gpu_module="/lib/modules/$kernel_release/kernel/drivers/gpu/drm/virtio/virtio-gpu.ko.zst"
 fonts=${WINLUX_X11_FONTS:-/usr/share/fonts/X11/misc}
 xkb=${WINLUX_XKB_DATA:-/usr/share/X11/xkb}
+xorg=${WINLUX_XORG:-/usr/lib/xorg/Xorg}
+xorg_modules=${WINLUX_XORG_MODULES:-/usr/lib/xorg/modules}
+truetype_fonts=${WINLUX_TRUETYPE_FONTS:-/usr/share/fonts/truetype/dejavu}
+xft_library=${WINLUX_XFT_LIBRARY:-$(ldconfig -p | awk '$1 == "libXft.so.2" { print $NF; exit }')}
 
-for tool in cargo bash cpio fakeroot find gzip grub-mkrescue ldd sha256sum xorriso; do
+for tool in cargo bash cpio fakeroot find gzip grub-mkrescue ldd ldconfig sha256sum xorriso zstd; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "outil requis absent : $tool" >&2
         exit 1
@@ -25,27 +32,38 @@ if ! test -r "$kernel"; then
     echo "indiquez un noyau lisible avec WINLUX_KERNEL=/chemin/vers/vmlinuz" >&2
     exit 1
 fi
-for path in /usr/bin/busybox /usr/bin/Xvfb /usr/bin/xkbcomp "$fonts" "$xkb"; do
+for path in /usr/bin/busybox /usr/bin/curl /usr/bin/install /usr/bin/Xvfb /usr/bin/xkbcomp "$xorg" "$xorg_modules" "$fonts" "$xkb" "$truetype_fonts" /etc/fonts /etc/ssl/certs/ca-certificates.crt; do
     test -e "$path" || { echo "fichier requis absent : $path" >&2; exit 1; }
+done
+test -r "$xft_library" || { echo "bibliothèque Xft absente : $xft_library" >&2; exit 1; }
+for module in "$virtio_dma_module" "$virtio_gpu_module"; do
+    test -r "$module" || { echo "module noyau requis absent : $module" >&2; exit 1; }
 done
 
 mkdir -p "$root/build"
 rm -rf "$work"
 mkdir -p \
     "$stage/bin" "$stage/dev" "$stage/etc" "$stage/lib" "$stage/lib64" \
+    "$stage/lib/modules/$kernel_release" \
     "$stage/opt/winlux/scripts" "$stage/opt/winlux/tests" "$stage/proc" \
     "$stage/root/.local/share/winlux" "$stage/run" "$stage/sys" "$stage/tmp" \
-    "$stage/usr/bin" "$stage/usr/lib" "$stage/usr/share/fonts/X11" "$stage/usr/share/X11"
+    "$stage/usr/bin" "$stage/usr/lib" "$stage/usr/lib/xorg" "$stage/usr/share/fonts/X11" \
+    "$stage/usr/share/applications" "$stage/usr/share/fonts/truetype" \
+    "$stage/usr/share/icons" "$stage/usr/share/pixmaps" \
+    "$stage/usr/share/X11" "$stage/etc/fonts"
 
 cd "$root"
 cargo build --release -p winlux
 bash scripts/build-tests.sh
 
 cp "$root/target/release/winlux" "$stage/usr/bin/winlux"
+cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
+mkdir -p "$stage/usr/share/winlux"
+git -C "$root" describe --tags --always >"$stage/usr/share/winlux/version"
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 chmod 755 \
-    "$stage/usr/bin/winlux" \
+    "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo; do
@@ -71,14 +89,54 @@ ln -s busybox "$stage/bin/true"
 ln -s ../../bin/busybox "$stage/usr/bin/dirname"
 ln -s ../../bin/busybox "$stage/usr/bin/mktemp"
 ln -s ../../bin/busybox "$stage/usr/bin/timeout"
+for applet in cp cut grep head mkdir mv rm sed sha256sum tar wc; do
+    ln -s ../../bin/busybox "$stage/usr/bin/$applet"
+done
+cp /usr/bin/curl "$stage/usr/bin/curl"
+cp /usr/bin/install "$stage/usr/bin/install"
 cp /usr/bin/Xvfb "$stage/usr/bin/Xvfb"
 cp /usr/bin/xkbcomp "$stage/usr/bin/xkbcomp"
-chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp"
+cp "$xorg" "$stage/usr/bin/Xorg"
+zstd -q -d -c "$virtio_dma_module" >"$stage/lib/modules/$kernel_release/virtio_dma_buf.ko"
+zstd -q -d -c "$virtio_gpu_module" >"$stage/lib/modules/$kernel_release/virtio-gpu.ko"
+chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/Xorg"
 copy_shared_libraries "$root/target/release/winlux"
 copy_shared_libraries /usr/bin/Xvfb
 copy_shared_libraries /usr/bin/xkbcomp
+copy_shared_libraries /usr/bin/curl
+copy_shared_libraries /usr/bin/install
+copy_shared_libraries "$xorg"
+mkdir -p "$stage$(dirname -- "$xft_library")"
+cp -L "$xft_library" "$stage$xft_library"
+copy_shared_libraries "$xft_library"
+cp -a "$xorg_modules" "$stage/usr/lib/xorg/modules"
+find "$xorg_modules" -type f -name '*.so' | while IFS= read -r module; do
+    copy_shared_libraries "$module"
+done
 cp -a "$fonts" "$stage/usr/share/fonts/X11/misc"
 cp -a "$xkb" "$stage/usr/share/X11/xkb"
+cp -a "$truetype_fonts" "$stage/usr/share/fonts/truetype/dejavu"
+cp -a /etc/fonts/. "$stage/etc/fonts/"
+mkdir -p "$stage/etc/ssl/certs"
+cp /etc/ssl/certs/ca-certificates.crt "$stage/etc/ssl/certs/ca-certificates.crt"
+if test -d /usr/share/fontconfig; then
+    cp -a /usr/share/fontconfig "$stage/usr/share/fontconfig"
+fi
+
+# Le shell ne copie que les icônes réellement utilisées dans la préversion VM.
+for icon in firefox system-file-manager org.gnome.Terminal preferences-desktop mintinstall audacity \
+    computer user-home user-trash folder-documents folder-download distributor-logo-linux-mint; do
+    source=$(find -L /usr/share/icons /usr/share/pixmaps -type f -name "$icon.png" 2>/dev/null | \
+        awk 'NR == 1 { fallback=$0 } /\/256(@2x)?\// { print; found=1; exit } /\/128(@2x)?\// { candidate=$0 } END { if (!found) print candidate ? candidate : fallback }' | head -1)
+    if test -n "$source"; then
+        cp "$source" "$stage/usr/share/pixmaps/$icon.png"
+    fi
+done
+for desktop_file in cinnamon-settings.desktop nemo.desktop org.gnome.Terminal.desktop mintinstall.desktop audacity.desktop; do
+    source="/usr/share/applications/$desktop_file"
+    test -r "$source" || { echo "lanceur requis absent : $source" >&2; exit 1; }
+    cp "$source" "$stage/usr/share/applications/$desktop_file"
+done
 
 cat >"$stage/init" <<'INIT'
 #!/bin/sh
@@ -90,9 +148,29 @@ export PATH HOME XKB_CONFIG_ROOT
 /bin/busybox mount -t proc proc /proc 2>/dev/null || true
 /bin/busybox mount -t sysfs sysfs /sys 2>/dev/null || true
 /bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio_dma_buf.ko 2>/dev/null || true
+/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-gpu.ko 2>/dev/null || true
+/bin/busybox mdev -s 2>/dev/null || true
 /bin/busybox mkdir -p /tmp/.X11-unix /run /root/.local/share/winlux
 /bin/busybox chmod 1777 /tmp
 /bin/busybox ip link set lo up
+
+if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
+    echo "Winlux desktop preview: starting Xorg"
+    /usr/bin/Xorg :0 -noreset -nolisten tcp -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
+    xorg_pid=$!
+    /bin/busybox sleep 3
+    if ! /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; then
+        /bin/busybox cat /tmp/Xorg.0.log /tmp/xorg-console.log >&2
+        /bin/sh
+    fi
+    while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
+        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_UI_SCALE=1.5 \
+            /usr/bin/winlux /opt/winlux/tests/gui_demo.exe
+        /bin/busybox sleep 1
+    done
+    /bin/sh
+fi
 
 echo "Winlux live test: headless PE suite"
 WINLUX_BIN=/usr/bin/winlux \
@@ -164,6 +242,10 @@ if serial --unit=0 --speed=115200; then
 fi
 menuentry "Winlux live test (headless + Xvfb)" {
     linux /boot/vmlinuz console=ttyS0,115200n8 rdinit=/init panic=1 loglevel=4
+    initrd /boot/winlux-initramfs.cpio.gz
+}
+menuentry "Winlux desktop preview (1920x1080)" {
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rdinit=/init panic=1 loglevel=3 winlux.interactive=1 video=1920x1080
     initrd /boot/winlux-initramfs.cpio.gz
 }
 GRUB
