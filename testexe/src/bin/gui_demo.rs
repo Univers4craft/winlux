@@ -732,23 +732,12 @@ pub extern "C" fn mainCRTStartup() -> ! {
         // Boucle de messages sur PeekMessageA : on traite ce qui arrive et on
         // pulse sinon, jusqu'à expiration de la durée demandée.
         let start = GetTickCount();
-        let mut animation_frame = 0u32;
         let mut msg: Msg = core::mem::zeroed();
         while GetTickCount().wrapping_sub(start) < duration {
             if PeekMessageA(&mut msg, core::ptr::null_mut(), 0, 0, 1) > 0 {
                 TranslateMessage(&msg);
                 DispatchMessageA(&msg);
             } else {
-                if desktop {
-                    // Le fond évolue lentement : un rafraîchissement espacé laisse
-                    // aussi les cartes virtuelles sans accélération 2D terminer
-                    // chaque scène complète avant la suivante.
-                    let next_frame = GetTickCount().wrapping_sub(start) / 5000;
-                    if next_frame != animation_frame {
-                        animation_frame = next_frame;
-                        InvalidateRect(hwnd, core::ptr::null(), 0);
-                    }
-                }
                 Sleep(10);
             }
         }
