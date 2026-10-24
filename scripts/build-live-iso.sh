@@ -178,6 +178,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     /usr/bin/Xorg :0 -noreset -nolisten tcp -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
     xorg_pid=$!
     /bin/busybox sleep 3
+    echo "Winlux Xorg input probe:"
+    /bin/busybox grep -Ei 'libinput|input device|mouse|keyboard|error' /tmp/Xorg.0.log 2>/dev/null || true
     if ! /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; then
         /bin/busybox cat /tmp/Xorg.0.log /tmp/xorg-console.log >&2
         /bin/sh
