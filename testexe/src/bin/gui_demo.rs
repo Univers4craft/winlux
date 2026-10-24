@@ -23,7 +23,10 @@ static mut THREAD_KEY_STATE_MATCH: u32 = 0;
 static mut KEYBOARD_STATE_MATCH: u32 = 0;
 static mut ASYNC_KEY_PRESSED: u32 = 0;
 static mut THREAD_KEY_UP_CLEAR: u32 = 0;
-static mut START_MENU_OPEN: u32 = 1;
+// Un bureau démarre fermé. Le menu ne s'affiche qu'après un clic explicite
+// sur le bouton Winlux, comme sur un poste de travail normal.
+static mut START_MENU_OPEN: u32 = 0;
+static mut BOOT_SPLASH_UNTIL: u32 = 0;
 static mut DESKTOP_ICON_X: [i32; 3] = [42, 42, 42];
 static mut DESKTOP_ICON_Y: [i32; 3] = [112, 205, 298];
 static mut DRAGGED_DESKTOP_ICON: i32 = -1;
@@ -109,10 +112,23 @@ unsafe fn draw_volume_status(hdc: Handle, x: i32, y: i32, level: u32, foreground
     }
 }
 
+unsafe fn draw_boot_splash(hdc: Handle) {
+    let background=CreateSolidBrush(0x0022_1009);let purple=CreateSolidBrush(0x00ED_3A7C);let white=CreateSolidBrush(0x00FF_FFFF);let muted=CreateSolidBrush(0x00E8_D8D1);
+    FillRect(hdc,&Rect{left:0,top:0,right:1280,bottom:720},background);
+    SelectObject(hdc,purple);Ellipse(hdc,566,250,714,398);draw_windows_mark(hdc,606,290,68,white);
+    let title=CreateFontA(30,0,0,0,650,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());let body=CreateFontA(14,0,0,0,400,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
+    SelectObject(hdc,title);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,571,425,c"Winlux".as_ptr(),-1);SelectObject(hdc,body);SetTextColor(hdc,0x00E8_D8D1);TextOutA(hdc,523,463,c"Preparing your desktop...".as_ptr(),-1);
+    DeleteObject(title);DeleteObject(body);DeleteObject(background);DeleteObject(purple);DeleteObject(white);DeleteObject(muted);
+}
+
 /// Première base du bureau Winlux : fond, barre des tâches, zone système et
 /// menu Démarrer. Tout est rendu par le même chemin GDI invité → X11 que les
 /// futures applications du shell.
 unsafe fn draw_desktop_scene(hdc: Handle, start_open: bool) {
+    if BOOT_SPLASH_UNTIL != 0 && (GetTickCount().wrapping_sub(BOOT_SPLASH_UNTIL) as i32) < 0 {
+        draw_boot_splash(hdc);
+        return;
+    }
     let wall=CreateSolidBrush(0x0030_1810);let wall_blue=CreateSolidBrush(0x008C_4A20);let wall_purple=CreateSolidBrush(0x00ED_3A7C);let wall_teal=CreateSolidBrush(0x0085_6630);let wall_dark=CreateSolidBrush(0x0022_1009);
     let surface=CreateSolidBrush(0x00FC_F9F7);let sidebar=CreateSolidBrush(0x00F0_EAE7);let elevated=CreateSolidBrush(0x00F6_F2F0);let taskbar=CreateSolidBrush(0x00F4_EFEC);let border=CreateSolidBrush(0x00D9_CFCB);let shadow=CreateSolidBrush(0x0020_1510);
     let text=CreateSolidBrush(0x0024_201E);let muted=CreateSolidBrush(0x0083_746D);let accent=CreateSolidBrush(0x00D8_4A8A);let accent_dark=CreateSolidBrush(0x00A0_2860);let accent_soft=CreateSolidBrush(0x00F4_E4EF);let green=CreateSolidBrush(0x005B_8F43);let white=CreateSolidBrush(0x00FF_FFFF);
@@ -131,17 +147,13 @@ unsafe fn draw_desktop_scene(hdc: Handle, start_open: bool) {
 
     SelectObject(hdc,display_font);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,38,30,c"Winlux".as_ptr(),-1);
     SelectObject(hdc,small_font);SetTextColor(hdc,0x00E8_D8D1);TextOutA(hdc,41,67,c"One desktop. Linux and Windows applications.".as_ptr(),-1);
-    draw_installed_icon(hdc,c"computer".as_ptr(),DESKTOP_ICON_X[0],DESKTOP_ICON_Y[0],48,0x00F4_EFEC,accent_soft);draw_installed_icon(hdc,c"user-home".as_ptr(),DESKTOP_ICON_X[1],DESKTOP_ICON_Y[1],48,0x00F4_EFEC,accent_soft);draw_installed_icon(hdc,c"user-trash".as_ptr(),DESKTOP_ICON_X[2],DESKTOP_ICON_Y[2],48,0x00F4_EFEC,accent_soft);
-    SelectObject(hdc,small_font);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,DESKTOP_ICON_X[0],DESKTOP_ICON_Y[0]+51,c"Computer".as_ptr(),-1);TextOutA(hdc,DESKTOP_ICON_X[1]+6,DESKTOP_ICON_Y[1]+51,c"Home".as_ptr(),-1);TextOutA(hdc,DESKTOP_ICON_X[2]+4,DESKTOP_ICON_Y[2]+51,c"Trash".as_ptr(),-1);
 
     if start_open {
         round_panel(hdc,Rect{left:16,top:108,right:930,bottom:665},8,shadow,border,surface);
         fill_round_rect(hdc,Rect{left:18,top:110,right:112,bottom:663},6,sidebar);
         SelectObject(hdc,accent);Ellipse(hdc,37,128,93,184);draw_windows_mark(hdc,53,144,24,white);
         SelectObject(hdc,medium_font);SetTextColor(hdc,0x0024_201E);TextOutA(hdc,40,191,c"Damien".as_ptr(),-1);
-        draw_installed_icon(hdc,c"user-home".as_ptr(),43,226,34,0x00F0_EAE7,accent_soft);draw_installed_icon(hdc,c"folder-documents".as_ptr(),43,278,34,0x00F0_EAE7,accent_soft);draw_installed_icon(hdc,c"folder-download".as_ptr(),43,330,34,0x00F0_EAE7,accent_soft);
-        SelectObject(hdc,tiny_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,41,262,c"Home".as_ptr(),-1);TextOutA(hdc,32,314,c"Documents".as_ptr(),-1);TextOutA(hdc,31,366,c"Downloads".as_ptr(),-1);
-        FillRect(hdc,&Rect{left:34,top:570,right:96,bottom:571},border);SelectObject(hdc,medium_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,39,586,c"Lock".as_ptr(),-1);TextOutA(hdc,39,614,c"Power".as_ptr(),-1);
+        SelectObject(hdc,tiny_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,34,252,c"Winlux".as_ptr(),-1);TextOutA(hdc,27,272,c"Desktop".as_ptr(),-1);
 
         FillRect(hdc,&Rect{left:112,top:110,right:113,bottom:663},border);
         SelectObject(hdc,title_font);SetTextColor(hdc,0x0024_201E);TextOutA(hdc,136,130,c"Applications".as_ptr(),-1);
@@ -164,11 +176,7 @@ unsafe fn draw_desktop_scene(hdc: Handle, start_open: bool) {
         fill_round_rect(hdc,Rect{left:716,top:278,right:796,bottom:310},4,if FREE_DESKTOP_LAYOUT==0{accent_soft}else{surface});SetTextColor(hdc,if FREE_DESKTOP_LAYOUT==0{0x007C_430F}else{0x0083_746D});TextOutA(hdc,739,286,c"Grid".as_ptr(),-1);
         fill_round_rect(hdc,Rect{left:804,top:278,right:894,bottom:310},4,if FREE_DESKTOP_LAYOUT!=0{accent_soft}else{surface});SetTextColor(hdc,if FREE_DESKTOP_LAYOUT!=0{0x007C_430F}else{0x0083_746D});TextOutA(hdc,827,286,c"Free".as_ptr(),-1);
 
-        draw_installed_icon(hdc,c"firefox".as_ptr(),359,330,34,0x00FC_F9F7,accent_soft);draw_installed_icon(hdc,c"nemo.desktop".as_ptr(),359,379,34,0x00FC_F9F7,accent_soft);draw_installed_icon(hdc,c"org.gnome.Terminal.desktop".as_ptr(),359,428,34,0x00FC_F9F7,accent_soft);draw_installed_icon(hdc,c"mintinstall.desktop".as_ptr(),359,477,34,0x00FC_F9F7,accent_soft);draw_installed_icon(hdc,c"audacity.desktop".as_ptr(),359,526,34,0x00FC_F9F7,accent_soft);
-        SelectObject(hdc,medium_font);SetTextColor(hdc,0x0024_201E);TextOutA(hdc,408,334,c"Firefox Web Browser".as_ptr(),-1);TextOutA(hdc,408,383,c"Files".as_ptr(),-1);TextOutA(hdc,408,432,c"Terminal".as_ptr(),-1);TextOutA(hdc,408,481,c"Software Manager".as_ptr(),-1);TextOutA(hdc,408,530,c"Audacity".as_ptr(),-1);
-        SelectObject(hdc,small_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,408,352,c"Browse the web".as_ptr(),-1);TextOutA(hdc,408,401,c"Browse Linux and Windows files".as_ptr(),-1);TextOutA(hdc,408,450,c"Command line".as_ptr(),-1);TextOutA(hdc,408,499,c"Install or remove applications".as_ptr(),-1);TextOutA(hdc,408,548,c"Audio editor".as_ptr(),-1);
-        FillRect(hdc,&Rect{left:344,top:575,right:908,bottom:576},border);SelectObject(hdc,small_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,352,596,c"Real icons from installed applications".as_ptr(),-1);
-        fill_round_rect(hdc,Rect{left:742,top:586,right:894,bottom:624},4,accent);SelectObject(hdc,medium_font);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,774,596,c"Manage apps".as_ptr(),-1);
+        FillRect(hdc,&Rect{left:344,top:340,right:908,bottom:341},border);SelectObject(hdc,small_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,352,363,c"Only installed applications are shown here.".as_ptr(),-1);TextOutA(hdc,352,384,c"Use Settings to configure the Winlux desktop.".as_ptr(),-1);
     }
 
     // Barre compacte pleine largeur : menu et applications à gauche, système à droite.
@@ -177,8 +185,6 @@ unsafe fn draw_desktop_scene(hdc: Handle, start_open: bool) {
     draw_installed_icon(hdc,c"distributor-logo-linux-mint".as_ptr(),16,683,30,if start_open{0x00F4_E4EF}else{0x00F4_EFEC},accent);
     FillRect(hdc,&Rect{left:14,top:717,right:50,bottom:720},accent);
 
-    draw_installed_icon(hdc,c"firefox".as_ptr(),74,681,32,0x00F4_EFEC,accent_soft);draw_installed_icon(hdc,c"nemo.desktop".as_ptr(),122,681,32,0x00F4_EFEC,accent_soft);draw_installed_icon(hdc,c"org.gnome.Terminal.desktop".as_ptr(),170,681,32,0x00F4_EFEC,accent_soft);draw_installed_icon(hdc,c"cinnamon-settings.desktop".as_ptr(),218,681,32,0x00F4_EFEC,accent_soft);draw_installed_icon(hdc,c"mintinstall.desktop".as_ptr(),266,681,32,0x00F4_EFEC,accent_soft);draw_installed_icon(hdc,c"audacity.desktop".as_ptr(),314,681,32,0x00F4_EFEC,accent_soft);
-    FillRect(hdc,&Rect{left:76,top:717,right:104,bottom:720},accent);
     SelectObject(hdc,small_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,936,691,c"Desktop 1".as_ptr(),-1);TextOutA(hdc,1060,691,c"^".as_ptr(),-1);
 
     // Zone système compacte : icônes d'état uniquement, horloge collée à droite.
@@ -684,6 +690,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             VOLUME_LEVEL = environment_percentage(c"WINLUX_TRAY_VOLUME".as_ptr(), VOLUME_LEVEL);
             BATTERY_LEVEL = environment_percentage(c"WINLUX_TRAY_BATTERY".as_ptr(), BATTERY_LEVEL);
             NETWORK_CONNECTED = environment_percentage(c"WINLUX_TRAY_NETWORK".as_ptr(), NETWORK_CONNECTED).min(1);
+            BOOT_SPLASH_UNTIL = GetTickCount().wrapping_add(1400);
         }
         let duration = if testing { 300u32 } else if desktop { 3_600_000 } else { 3000 };
 
@@ -732,12 +739,17 @@ pub extern "C" fn mainCRTStartup() -> ! {
         // Boucle de messages sur PeekMessageA : on traite ce qui arrive et on
         // pulse sinon, jusqu'à expiration de la durée demandée.
         let start = GetTickCount();
+        let mut splash_finished = !desktop;
         let mut msg: Msg = core::mem::zeroed();
         while GetTickCount().wrapping_sub(start) < duration {
             if PeekMessageA(&mut msg, core::ptr::null_mut(), 0, 0, 1) > 0 {
                 TranslateMessage(&msg);
                 DispatchMessageA(&msg);
             } else {
+                if !splash_finished && (GetTickCount().wrapping_sub(BOOT_SPLASH_UNTIL) as i32) >= 0 {
+                    splash_finished = true;
+                    InvalidateRect(hwnd, core::ptr::null(), 0);
+                }
                 Sleep(10);
             }
         }

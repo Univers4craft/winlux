@@ -35,6 +35,7 @@ fi
 for path in /usr/bin/busybox /usr/bin/curl /usr/bin/install /usr/bin/Xvfb /usr/bin/xkbcomp "$xorg" "$xorg_modules" "$fonts" "$xkb" "$truetype_fonts" /etc/fonts /etc/ssl/certs/ca-certificates.crt; do
     test -e "$path" || { echo "fichier requis absent : $path" >&2; exit 1; }
 done
+test -r /usr/share/X11/xorg.conf.d/40-libinput.conf || { echo "configuration libinput Xorg absente" >&2; exit 1; }
 test -r "$xft_library" || { echo "bibliothèque Xft absente : $xft_library" >&2; exit 1; }
 for module in "$virtio_dma_module" "$virtio_gpu_module"; do
     test -r "$module" || { echo "module noyau requis absent : $module" >&2; exit 1; }
@@ -115,6 +116,8 @@ find "$xorg_modules" -type f -name '*.so' | while IFS= read -r module; do
 done
 cp -a "$fonts" "$stage/usr/share/fonts/X11/misc"
 cp -a "$xkb" "$stage/usr/share/X11/xkb"
+mkdir -p "$stage/usr/share/X11/xorg.conf.d"
+cp /usr/share/X11/xorg.conf.d/40-libinput.conf "$stage/usr/share/X11/xorg.conf.d/40-libinput.conf"
 cp -a "$truetype_fonts" "$stage/usr/share/fonts/truetype/dejavu"
 cp -a /etc/fonts/. "$stage/etc/fonts/"
 mkdir -p "$stage/etc/ssl/certs"
@@ -124,20 +127,13 @@ if test -d /usr/share/fontconfig; then
 fi
 
 # Le shell ne copie que les icônes réellement utilisées dans la préversion VM.
-for icon in firefox system-file-manager org.gnome.Terminal preferences-desktop mintinstall audacity \
-    computer user-home user-trash folder-documents folder-download distributor-logo-linux-mint; do
+for icon in preferences-desktop distributor-logo-linux-mint; do
     source=$(find -L /usr/share/icons /usr/share/pixmaps -type f -name "$icon.png" 2>/dev/null | \
         awk 'NR == 1 { fallback=$0 } /\/256(@2x)?\// { print; found=1; exit } /\/128(@2x)?\// { candidate=$0 } END { if (!found) print candidate ? candidate : fallback }' | head -1)
     if test -n "$source"; then
         cp "$source" "$stage/usr/share/pixmaps/$icon.png"
     fi
 done
-for desktop_file in cinnamon-settings.desktop nemo.desktop org.gnome.Terminal.desktop mintinstall.desktop audacity.desktop; do
-    source="/usr/share/applications/$desktop_file"
-    test -r "$source" || { echo "lanceur requis absent : $source" >&2; exit 1; }
-    cp "$source" "$stage/usr/share/applications/$desktop_file"
-done
-
 cat >"$stage/init" <<'INIT'
 #!/bin/sh
 PATH=/bin:/usr/bin:/sbin:/usr/sbin

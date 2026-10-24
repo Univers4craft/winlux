@@ -54,6 +54,8 @@ exec qemu-system-x86_64 \
     -display gtk,full-screen=on,zoom-to-fit=on \
     -device qemu-xhci \
     -device usb-tablet \
+    -device virtio-mouse-pci \
+    -device virtio-keyboard-pci \
     -drive "file=$disk,if=virtio,format=qcow2,cache=writeback" \
     -drive "file=$iso,media=cdrom,readonly=on" \
     -kernel "$kernel" \
