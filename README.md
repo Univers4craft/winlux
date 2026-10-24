@@ -102,6 +102,12 @@ scripts/create-test-vm.sh
 
 Elle utilise par défaut un disque QCOW2 extensible de 24 Gio, 4 Gio de RAM, 4 CPU, KVM lorsqu’il est disponible et un affichage 1920×1080. La définition peut être changée avec `WINLUX_VM_WIDTH` et `WINLUX_VM_HEIGHT`. Le disque est construit à partir de la racine de l’ISO; cette image reste une préversion technique, pas encore une distribution installable généraliste. La résolution du bureau suit la taille de la fenêtre QEMU (redimensionnement ou plein écran) et le pointeur est dessiné par Xorg en curseur logiciel, donc toujours visible. Ajoutez `winlux.debug=1` à la ligne de commande du noyau pour journaliser les clics et les changements de mode sur la console série.
 
+### Bureau, Explorer et navigateur
+
+Le bureau de l’ISO est un shell maison au style Windows 11 (`testexe/src/shell/`) : animation de démarrage, menu Démarrer et barre des tâches animés, fenêtres déplaçables, redimensionnables et ancrables (glisser en haut pour agrandir, sur un bord pour la moitié de l’écran). **Explorer** y est le gestionnaire de fichiers : onglets, double volet, modes Très grandes / Grandes / Moyennes / Petites icônes, Liste, Détails, Mosaïques et mode compact, tri, recherche récursive, barre d’adresse qui accepte les chemins Windows et Linux, couper / copier / coller / renommer, corbeille freedesktop. C: est le dossier personnel et Z: la racine Linux.
+
+Le navigateur par défaut est **Microsoft Edge**, lancé par `winlux-browser` (repli sur Chromium ou Firefox s’il est absent). Sur un système installé : `sudo /usr/share/winlux/install-edge.sh` ajoute le dépôt officiel Microsoft et fait d’Edge le navigateur par défaut. Pour l’embarquer dans l’ISO : `WINLUX_EDGE_DEB=/chemin/microsoft-edge-stable.deb scripts/build-live-iso.sh`.
+
 ## Mises à jour GitHub
 
 Chaque tag `v*` déclenche le workflow de release, qui reteste Winlux puis publie un paquet du runtime et un manifeste SHA-256. Sur une installation Winlux :

@@ -1,0 +1,37 @@
+#!/bin/sh
+# Navigateur par défaut de Winlux : Microsoft Edge.
+#
+# Ouvre les adresses données (ou la page d'accueil) dans Edge, quel que soit
+# son canal (stable, bêta, dev). Si Edge n'est pas installé, propose de
+# l'installer et se replie sur un autre navigateur présent, pour qu'un lien
+# ne reste jamais sans réponse. WINLUX_BROWSER force un autre programme.
+set -u
+
+if [ -n "${WINLUX_BROWSER:-}" ] && command -v "$WINLUX_BROWSER" >/dev/null 2>&1; then
+    exec "$WINLUX_BROWSER" "$@"
+fi
+
+# Chromium (donc Edge) refuse de tourner en root sans --no-sandbox ; c'est le
+# cas de l'ISO live de Winlux, où la session tourne en root.
+uid=$(id -u 2>/dev/null || /bin/busybox id -u 2>/dev/null || echo 1000)
+sandbox=
+if [ "$uid" = 0 ]; then sandbox=--no-sandbox; fi
+
+for edge in microsoft-edge-stable microsoft-edge microsoft-edge-beta microsoft-edge-dev /opt/microsoft/msedge/microsoft-edge; do
+    if command -v "$edge" >/dev/null 2>&1; then
+        exec "$edge" $sandbox "$@"
+    fi
+done
+
+message="Microsoft Edge n'est pas installé. Installez-le avec : sudo $(dirname -- "$0")/../share/winlux/install-edge.sh"
+if command -v notify-send >/dev/null 2>&1; then
+    notify-send --app-name=Winlux --icon=web-browser "Winlux" "$message" 2>/dev/null || true
+else
+    printf 'Winlux : %s\n' "$message" >&2
+fi
+for other in chromium chromium-browser google-chrome-stable firefox; do
+    if command -v "$other" >/dev/null 2>&1; then
+        case "$other" in chromium*|google-chrome*) exec "$other" $sandbox "$@" ;; *) exec "$other" "$@" ;; esac
+    fi
+done
+exit 1

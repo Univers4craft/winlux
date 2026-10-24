@@ -45,8 +45,14 @@ grep -q '^Terminal=false$' "$dest/usr/share/applications/winlux.desktop" || fail
 grep -q ':/usr/bin/winlux:F$' "$dest/etc/binfmt.d/winlux.conf" || fail "binfmt incorrect"
 grep -q '^application/x-msdownload=winlux.desktop;autre.desktop;$' "$dest/etc/xdg/mimeapps.list" || fail "association existante non prioritaire"
 grep -q '^application/x-ms-dos-executable=winlux.desktop;$' "$dest/etc/xdg/mimeapps.list" || fail "association absente"
+test -x "$dest/usr/bin/winlux-browser" || fail "winlux-browser non installé"
+grep -q '^Exec=/usr/bin/winlux-browser %U$' "$dest/usr/share/applications/winlux-browser.desktop" || fail "Exec du navigateur incorrect"
+for type in x-scheme-handler/http x-scheme-handler/https text/html; do
+    grep -q "^$type=winlux-browser.desktop;$" "$dest/etc/xdg/mimeapps.list" || fail "$type n'ouvre pas Edge par défaut"
+done
 DESTDIR="$dest" WINLUX_VERSION=test sh "$root/integration/install.sh" /usr >/dev/null
 test "$(grep -c 'winlux.desktop' "$dest/etc/xdg/mimeapps.list")" -eq 4 || fail "réinstallation non idempotente"
+test "$(grep -c 'winlux-browser.desktop' "$dest/etc/xdg/mimeapps.list")" -eq 4 || fail "réinstallation du navigateur non idempotente"
 ok "installation DESTDIR et associations MIME"
 
 DESTDIR="$dest" sh "$dest/usr/share/winlux/uninstall.sh" /usr >/dev/null
@@ -54,6 +60,19 @@ test ! -e "$dest/usr/bin/winlux" || fail "winlux non désinstallé"
 test ! -e "$dest/etc/binfmt.d/winlux.conf" || fail "binfmt non désinstallé"
 cmp -s "$dest/etc/xdg/mimeapps.list" "$work/mimeapps.avant" || fail "mimeapps.list non restauré"
 ok "désinstallation et restauration de mimeapps.list"
+
+# --- Navigateur par défaut : Microsoft Edge ----------------------------------
+edgebin="$work/edge-bin"
+mkdir -p "$edgebin"
+printf '#!/bin/sh\nprintf "%%s\\n" "$@" >"%s/edge.log"\n' "$work" >"$edgebin/microsoft-edge-stable"
+printf '#!/bin/sh\nprintf "firefox %%s\\n" "$@" >"%s/edge.log"\n' "$work" >"$edgebin/firefox"
+chmod +x "$edgebin/microsoft-edge-stable" "$edgebin/firefox"
+PATH="$edgebin:/usr/bin:/bin" sh "$root/integration/winlux-browser" https://www.bing.com
+grep -q '^https://www.bing.com$' "$work/edge.log" || fail "winlux-browser n'ouvre pas Edge"
+rm "$edgebin/microsoft-edge-stable"
+PATH="$edgebin:/usr/bin:/bin" sh "$root/integration/winlux-browser" https://example.org 2>/dev/null
+grep -q '^firefox https://example.org$' "$work/edge.log" || fail "pas de repli quand Edge est absent"
+ok "winlux-browser préfère Edge et se replie sur un autre navigateur"
 
 # --- Lanceur de double-clic ------------------------------------------------
 fake="$work/bin"

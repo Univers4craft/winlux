@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Microsoft Edge (Winlux)
+GenericName=Navigateur web
+Comment=Ouvre les pages web dans Microsoft Edge, le navigateur par défaut de Winlux
+Exec=/usr/bin/winlux-browser %U
+Icon=microsoft-edge
+Terminal=false
+Categories=Network;WebBrowser;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;text/html;application/xhtml+xml;
+StartupNotify=true

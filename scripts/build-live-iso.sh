@@ -65,6 +65,8 @@ bash scripts/build-tests.sh
 
 cp "$root/target/release/winlux" "$stage/usr/bin/winlux"
 cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
+cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
+chmod 755 "$stage/usr/bin/winlux-browser"
 mkdir -p "$stage/usr/share/winlux"
 git -C "$root" describe --tags --always >"$stage/usr/share/winlux/version"
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
@@ -77,6 +79,21 @@ for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite 
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
+
+# Dossier personnel de la session live (C: dans Winlux) : dossiers usuels,
+# un mot de bienvenue et un .exe d'exemple à ouvrir depuis l'Explorer.
+for folder in Bureau Documents Images Musique "Téléchargements" "Vidéos"; do
+    mkdir -p "$stage/root/$folder"
+done
+cat >"$stage/root/Documents/Bienvenue dans Winlux.txt" <<'WELCOME'
+Bienvenue dans Winlux !
+
+- Explorer (icône dossier de la barre des tâches) parcourt vos fichiers :
+  C: est votre dossier personnel Linux, Z: la racine du système.
+- Double-cliquez sur un .exe pour le lancer directement dans Winlux.
+- Onglets : Ctrl+T, double volet : F3, recherche : Ctrl+F.
+WELCOME
+cp "$root/target/x86_64-pc-windows-msvc/release/hello.exe" "$stage/root/Téléchargements/Bonjour.exe"
 
 copy_shared_libraries() {
     binary=$1
@@ -125,6 +142,29 @@ copy_shared_libraries /usr/bin/curl
 copy_shared_libraries /usr/bin/install
 copy_shared_libraries /usr/bin/udevadm
 copy_shared_libraries "$xorg"
+# Terminal Linux pour le bouton Terminal de la barre des tâches (facultatif).
+if command -v xterm >/dev/null 2>&1; then
+    cp "$(command -v xterm)" "$stage/usr/bin/xterm"
+    chmod 755 "$stage/usr/bin/xterm"
+    copy_shared_libraries "$(command -v xterm)"
+fi
+# Microsoft Edge, navigateur par défaut : intégré seulement si un paquet
+# .deb officiel est fourni (WINLUX_EDGE_DEB=/chemin/microsoft-edge-stable.deb,
+# téléchargé depuis https://www.microsoft.com/edge). Sinon le bouton Edge
+# affiche une notification.
+if [ -n "${WINLUX_EDGE_DEB:-}" ]; then
+    test -r "$WINLUX_EDGE_DEB" || { echo "paquet Edge illisible : $WINLUX_EDGE_DEB" >&2; exit 1; }
+    dpkg-deb -x "$WINLUX_EDGE_DEB" "$stage"
+    test -x "$stage/opt/microsoft/msedge/msedge" || { echo "paquet Edge inattendu" >&2; exit 1; }
+    missing=$(ldd "$stage/opt/microsoft/msedge/msedge" | awk '/not found/ { print $1 }')
+    if [ -n "$missing" ]; then
+        echo "bibliothèques manquantes pour Edge sur cette machine : $missing" >&2
+        echo "installez-les (sudo apt install microsoft-edge-stable les tire) puis relancez" >&2
+        exit 1
+    fi
+    copy_shared_libraries "$stage/opt/microsoft/msedge/msedge"
+    ln -sf /opt/microsoft/msedge/microsoft-edge "$stage/usr/bin/microsoft-edge-stable"
+fi
 mkdir -p "$stage$(dirname -- "$xft_library")"
 cp -L "$xft_library" "$stage$xft_library"
 copy_shared_libraries "$xft_library"
@@ -178,6 +218,9 @@ export PATH HOME XKB_CONFIG_ROOT
 /bin/busybox mount -t proc proc /proc 2>/dev/null || true
 /bin/busybox mount -t sysfs sysfs /sys 2>/dev/null || true
 /bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+/bin/busybox mkdir -p /dev/shm /dev/pts
+/bin/busybox mount -t tmpfs -o mode=1777 tmpfs /dev/shm 2>/dev/null || true
+/bin/busybox mount -t devpts devpts /dev/pts 2>/dev/null || true
 /usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio_dma_buf.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-gpu.ko 2>/dev/null || true
@@ -326,7 +369,7 @@ menuentry "Winlux diagnostic (headless + Xvfb)" {
     initrd /boot/winlux-initramfs.cpio.gz
 }
 menuentry "Winlux Desktop" {
-    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rdinit=/init panic=1 loglevel=3 winlux.interactive=1
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
     initrd /boot/winlux-initramfs.cpio.gz
 }
 GRUB
