@@ -755,7 +755,7 @@ pub unsafe extern "win64" fn create_thread(_attrs: usize, stack: usize, start: u
     if builder.spawn(move||{let mut s=lock(&state.state);while s.suspend_count!=0{s=state.changed.wait(s).unwrap_or_else(std::sync::PoisonError::into_inner);}drop(s);crate::process::thread_attach_current();let code=f(param);crate::process::thread_detach_current();release_iocp_slots_for_current_thread();let _gate=sync_gate();let mut s=lock(&state.state);s.exit_code=code;s.finished=true;state.changed.notify_all();}).is_err(){remove_sync(handle);crate::process::set_last_error(8);return 0;}
     if !id.is_null(){*id=tid;}handle
 }
-fn split_windows_command_line(line:&str)->Vec<String>{
+pub(crate) fn split_windows_command_line(line:&str)->Vec<String>{
     let mut out=Vec::new();let mut arg=String::new();let mut chars=line.chars().peekable();let mut quoted=false;
     while let Some(c)=chars.next(){
         if c=='\\'{let mut slashes=1usize;while chars.peek()==Some(&'\\'){chars.next();slashes+=1;}if chars.peek()==Some(&'"'){chars.next();arg.extend(std::iter::repeat('\\').take(slashes/2));if slashes%2==1{arg.push('"')}else{quoted=!quoted;}}else{arg.extend(std::iter::repeat('\\').take(slashes));}continue;}
@@ -837,7 +837,7 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(count:u32,handles:*const 
         if timeout==0{return 258;}if timeout!=u32::MAX&&start.elapsed().as_millis()>=timeout as u128{return 258;}std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
-fn env_value(name:&str)->Option<String>{std::env::var_os(name).or_else(||std::env::vars_os().find(|(k,_)|k.to_string_lossy().eq_ignore_ascii_case(name)).map(|(_,v)|v)).map(|v|v.to_string_lossy().into_owned())}
+pub(crate) fn env_value(name:&str)->Option<String>{std::env::var_os(name).or_else(||std::env::vars_os().find(|(k,_)|k.to_string_lossy().eq_ignore_ascii_case(name)).map(|(_,v)|v)).map(|v|v.to_string_lossy().into_owned())}
 fn set_env_value(name:&str,value:Option<&str>)->Result<(),u32>{if name.is_empty()||name.contains('='){return Err(87);}if let Some(v)=value{std::env::set_var(name,v);}else{std::env::remove_var(name);}Ok(())}
 fn write_a_text(s:&str,buf:*mut u8,size:u32)->u32{let b=crate::dlls::encode_ansi(s);if buf.is_null()||size as usize<=b.len(){b.len().saturating_add(1).min(u32::MAX as usize)as u32}else{unsafe{std::ptr::copy_nonoverlapping(b.as_ptr(),buf,b.len());*buf.add(b.len())=0;}b.len()as u32}}
 fn write_w_text(s:&str,buf:*mut u16,size:u32)->u32{unsafe{crate::dlls::put_w(s,buf,size)}}

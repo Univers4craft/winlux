@@ -2,7 +2,7 @@
 
 ## État actuel
 
-- Dernière validation locale : `cargo test -p winlux` (71 tests), compilation release et les neuf exécutables PE en séquentiel et en parallèle réussissent. La dernière validation ISO sous QEMU BIOS et UEFI réussit également; relancer les scripts après chaque changement.
+- Dernière validation locale : `cargo test -p winlux` (81 tests), compilation release et les neuf exécutables PE en séquentiel et en parallèle réussissent. La dernière validation ISO sous QEMU BIOS et UEFI réussit également; relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
@@ -88,7 +88,8 @@
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
 - [ ] Ajouter les formats audio compressés et les codecs vidéo; Media Foundation n’est pas encore reliée à une chaîne complète.
 - [ ] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (elles restent mappées jusqu’à la fin du processus).
-- [ ] Tester des exécutables compilés avec MSVC, MinGW et clang-cl, pas uniquement les tests Rust.
+- [x] Exécuter de vrais programmes C compilés par MinGW-w64 : démarrage de la CRT msvcrt (`__getmainargs`, `_initterm`, constructeurs globaux, `atexit`/`_onexit`, `_iob`/`__iob_func`), `_errno`, verrous `_lock`, environnement, temps (`time`, `localtime`, `strftime`, `clock`), `rand` Microsoft, E/S bas niveau `_open`/`_read`/`_write`, signaux, `_beginthreadex`; compléments kernel32 (console, pages de code, `GetEnvironmentStrings`, `FormatMessage`, `lstr*`, `RaiseException`…). Vérifié par `testc/mingw_suite.c` (40 contrôles) en CI.
+- [ ] Faire tourner des programmes C++ MinGW (exceptions : `RtlUnwindEx`, `RtlVirtualUnwind`, `RtlLookupFunctionEntry`) et des exécutables MSVC/clang-cl réels.
 - [x] Documenter explicitement les limites : 64 bits uniquement, absence de noyau Windows et compatibilité API partielle.
 
 ## Priorité 3 — Double-clic et intégration Linux
@@ -115,6 +116,10 @@
 - [x] Documenter la RAM, le nombre de CPU et les options nécessaires à la VM.
 
 ## Priorité 5 — Thème Windows 11
+
+- [ ] VM : afficher un pointeur de souris visible sur le bureau.
+- [ ] VM : adapter automatiquement la résolution du bureau à la taille de la fenêtre de la VM.
+- [ ] Refaire l’interface du bureau (barre des tâches, menu Démarrer) pour un rendu plus proche de Windows 11.
 
 - [x] Ajouter un prototype de bureau GDI HiDPI : fond d'écran, raccourcis,
   barre des tâches pleine largeur, menu Démarrer inspiré de Cinnamon,

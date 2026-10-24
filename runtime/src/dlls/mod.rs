@@ -3,10 +3,12 @@
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
 pub mod kernel32;
+pub mod kernel32_misc;
 pub mod msvcrt;
 pub mod crt;
 pub mod crt_stdio;
 pub mod crt_scan;
+pub mod crt_runtime;
 pub mod ntdll;
 pub mod user32;
 pub mod gui;
@@ -60,14 +62,15 @@ fn fake_module() -> usize {
 fn builtins() -> &'static Vec<Builtin> {
     static B: OnceLock<Vec<Builtin>> = OnceLock::new();
     B.get_or_init(|| {
-        let crt = { let mut e = msvcrt::exports(); e.extend(crt::exports()); e.extend(crt_stdio::exports()); e.extend(crt_scan::exports()); e };
+        let crt = { let mut e = msvcrt::exports(); e.extend(crt::exports()); e.extend(crt_stdio::exports()); e.extend(crt_scan::exports()); e.extend(crt_runtime::exports()); e };
         let mut ucrt = crt.clone();
         ucrt.extend(msvcrt::ucrt_exports());
         ucrt.extend(crt::exports());
         ucrt.extend(crt_stdio::exports());
         ucrt.extend(crt_scan::exports());
+        ucrt.extend(crt_runtime::exports());
         vec![
-            Builtin { name: "kernel32", exports: { let mut e=kernel32::exports(); e.extend(winfile::exports()); e }, handle: fake_module() },
+            Builtin { name: "kernel32", exports: { let mut e=kernel32::exports(); e.extend(winfile::exports()); e.extend(kernel32_misc::exports()); e }, handle: fake_module() },
             Builtin { name: "ntdll", exports: ntdll::exports(), handle: fake_module() },
             Builtin { name: "msvcrt", exports: crt, handle: fake_module() },
             Builtin { name: "ucrtbase", exports: ucrt, handle: fake_module() },

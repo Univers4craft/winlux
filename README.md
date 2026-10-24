@@ -40,7 +40,11 @@ scripts/build-tests.sh
 cargo build --release -p winlux
 scripts/test-runtime.sh
 scripts/test-runtime-parallel.sh
+scripts/build-mingw-tests.sh   # nécessite gcc-mingw-w64-x86-64
+scripts/test-mingw.sh
 ```
+
+`testc/` contient des programmes C compilés par MinGW-w64, donc de vrais exécutables Windows produits par un compilateur tiers et non par Rust : ils valident le code de démarrage de la CRT `msvcrt.dll` et les API qu'il utilise.
 
 Lancement manuel d’un PE :
 

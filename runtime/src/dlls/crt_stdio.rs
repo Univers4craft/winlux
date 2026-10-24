@@ -27,6 +27,7 @@ fn registry() -> &'static Mutex<HashMap<usize, Arc<Stream>>> {
 }
 
 fn lookup(p: *mut c_void) -> Option<Arc<Stream>> {
+    std_stream(0);
     registry().lock().unwrap_or_else(std::sync::PoisonError::into_inner).get(&(p as usize)).cloned()
 }
 
@@ -48,14 +49,28 @@ fn free_slot(p: *mut c_void) {
     }
 }
 
+/// Taille d'un `FILE` de msvcrt.dll : le code compilé avec MinGW calcule
+/// `stdout` comme `&__iob_func()[1]`, donc les trois flux standard doivent
+/// être contigus avec ce pas.
+const MSVCRT_FILE_SIZE: usize = 48;
+static mut IOB: [u64; 3 * MSVCRT_FILE_SIZE / 8] = [0; 3 * MSVCRT_FILE_SIZE / 8];
+
 fn std_stream(index: usize) -> *mut c_void {
     static STD: OnceLock<[usize; 3]> = OnceLock::new();
     let handles = STD.get_or_init(|| {
-        let mk = |k| register(k, None) as usize;
-        [mk(Kind::Stdin), mk(Kind::Stdout), mk(Kind::Stderr)]
+        let base = std::ptr::addr_of_mut!(IOB) as usize;
+        let mut reg = registry().lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut out = [0usize; 3];
+        for (i, kind) in [Kind::Stdin, Kind::Stdout, Kind::Stderr].into_iter().enumerate() {
+            out[i] = base + i * MSVCRT_FILE_SIZE;
+            reg.insert(out[i], Arc::new(Stream { kind, file: Mutex::new(None), eof: AtomicBool::new(false), err: AtomicBool::new(false) }));
+        }
+        out
     });
     if index < 3 { handles[index] as *mut c_void } else { std::ptr::null_mut() }
 }
+
+pub unsafe extern "win64" fn iob_func() -> *mut c_void { std_stream(0) }
 
 fn parse_mode(mode: &str) -> Option<(bool, OpenOptions)> {
     let m = mode.as_bytes();
@@ -149,8 +164,10 @@ pub unsafe extern "win64" fn fopen_s(result: *mut *mut c_void, path: *const u8, 
 pub unsafe extern "win64" fn fclose(p: *mut c_void) -> i32 {
     let s = match lookup(p) { Some(s) => s, None => return -1 };
     let ok = flush_stream(&s);
+    // Les flux standard vivent dans `_iob` : on les vide sans les libérer.
+    if s.kind != Kind::Disk { return if ok { 0 } else { -1 }; }
     registry().lock().unwrap_or_else(std::sync::PoisonError::into_inner).remove(&(p as usize));
-    if s.kind == Kind::Disk { *s.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None; }
+    *s.file.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
     free_slot(p);
     if ok { 0 } else { -1 }
 }
@@ -338,7 +355,7 @@ pub fn exports() -> crate::dlls::Exports {
         "_fseeki64" => fn fseek, "_ftelli64" => fn ftell,
         "feof" => fn feof, "ferror" => fn ferror, "clearerr" => fn clearerr,
         "fflush" => fn fflush, "setvbuf" => fn setvbuf, "setbuf" => fn setvbuf, "_fileno" => fn fileno,
-        "__acrt_iob_func" => fn acrt_iob_func, "_filelength" => fn filelength,
+        "__acrt_iob_func" => fn acrt_iob_func, "__iob_func" => fn iob_func, "_iob" => data IOB, "_filelength" => fn filelength,
         "remove" => fn remove_file, "rename" => fn rename_file,
         "fprintf" => fn fprintf_thunk,
         "vfprintf" => fn vfprintf_thunk, "vsprintf" => fn vsprintf_thunk,

@@ -133,6 +133,14 @@ jobs:
       - name: Tester l'intégration bureau (double-clic)
         run: sh scripts/test-integration.sh
 
+      - name: Installer MinGW-w64
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64
+
+      - name: Compiler et exécuter les tests C MinGW
+        run: |
+          sh scripts/build-mingw-tests.sh
+          sh scripts/test-mingw.sh
+
       - name: Rapport des PE générés
         if: always()
         run: |

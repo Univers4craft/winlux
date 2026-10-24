@@ -17,6 +17,5 @@ pub unsafe extern "win64" fn memset(d:*mut c_void,c:i32,n:usize)->*mut c_void{st
 pub unsafe extern "win64" fn memcmp(a:*const c_void,b:*const c_void,n:usize)->i32{std::slice::from_raw_parts(a as *const u8,n).cmp(std::slice::from_raw_parts(b as *const u8,n)) as i32}
 pub unsafe extern "win64" fn memmove(d:*mut c_void,s:*const c_void,n:usize)->*mut c_void{std::ptr::copy(s as *const u8,d as *mut u8,n);d}
 pub unsafe extern "win64" fn atoi(s:*const u8)->i32{crate::dlls::cstr(s).trim().parse().unwrap_or(0)}
-pub extern "win64" fn exit(c:i32)->!{crate::dlls::kernel32::flush_and_exit(c)}
-pub fn exports()->crate::dlls::Exports{crate::exports!{"printf"=>fn printf_thunk,"sprintf"=>fn sprintf_thunk,"puts"=>fn puts,"malloc"=>fn malloc,"free"=>fn free,"strlen"=>fn strlen,"strcmp"=>fn strcmp,"memcpy"=>fn memcpy,"memset"=>fn memset,"memcmp"=>fn memcmp,"memmove"=>fn memmove,"atoi"=>fn atoi,"exit"=>fn exit}}
+pub fn exports()->crate::dlls::Exports{crate::exports!{"printf"=>fn printf_thunk,"sprintf"=>fn sprintf_thunk,"puts"=>fn puts,"malloc"=>fn malloc,"free"=>fn free,"strlen"=>fn strlen,"strcmp"=>fn strcmp,"memcpy"=>fn memcpy,"memset"=>fn memset,"memcmp"=>fn memcmp,"memmove"=>fn memmove,"atoi"=>fn atoi}}
 pub fn ucrt_exports()->crate::dlls::Exports{crate::exports!{}}
