@@ -282,6 +282,10 @@ pub const WM_KEYUP: u32 = 0x0101;
 pub const WM_MOUSEMOVE: u32 = 0x0200;
 pub const WM_LBUTTONDOWN: u32 = 0x0201;
 pub const WM_LBUTTONUP: u32 = 0x0202;
+pub const WM_RBUTTONDOWN: u32 = 0x0204;
+pub const WM_RBUTTONUP: u32 = 0x0205;
+pub const WM_MBUTTONDOWN: u32 = 0x0207;
+pub const WM_MOUSEWHEEL: u32 = 0x020A;
 pub const VK_A: i32 = 0x41;
 pub const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
@@ -301,6 +305,7 @@ extern "system" {
     pub fn CreateFileW(path: *const u16, access: u32, share: u32, sec: *mut c_void, creation: u32, flags: u32, template: Handle) -> Handle;
     pub fn GetFileSize(h: Handle, high: *mut u32) -> u32;
     pub fn SetEndOfFile(h: Handle) -> i32;
+    pub fn GetFileAttributesA(path: *const c_char) -> u32;
     pub fn GetFileAttributesExA(path: *const c_char, level: u32, data: *mut Win32FileAttributeData) -> i32;
     pub fn GetFileAttributesExW(path: *const u16, level: u32, data: *mut Win32FileAttributeData) -> i32;
     pub fn GetTempFileNameA(path: *const c_char, prefix: *const c_char, unique: u32, output: *mut c_char) -> u32;
@@ -392,6 +397,11 @@ extern "system" {
     pub fn WideCharToMultiByte(cp: u32, flags: u32, w: *const u16, n: i32, out: *mut u8, cap: i32, default: *const u8, used: *mut i32) -> i32;
     pub fn WriteConsoleW(h: Handle, buf: *const u16, n: u32, written: *mut u32, r: *mut c_void) -> i32;
     pub fn Sleep(ms: u32);
+}
+
+#[link(name = "shell32", kind = "raw-dylib")]
+extern "system" {
+    pub fn ShellExecuteA(hwnd: Handle, verb: *const c_char, file: *const c_char, params: *const c_char, dir: *const c_char, show: i32) -> Handle;
 }
 
 #[link(name = "ole32", kind = "raw-dylib")]
@@ -502,6 +512,7 @@ extern "C" {
     pub fn BitBlt(dst: Handle, x: i32, y: i32, width: i32, height: i32, src: Handle, sx: i32, sy: i32, rop: u32) -> i32;
     pub fn StretchBlt(dst: Handle, x: i32, y: i32, width: i32, height: i32, src: Handle, sx: i32, sy: i32, sw: i32, sh: i32, rop: u32) -> i32;
     pub fn TextOutA(hdc: Handle, x: i32, y: i32, text: *const c_char, count: i32) -> i32;
+    pub fn GetTextExtentPoint32A(hdc: Handle, text: *const c_char, count: i32, size: *mut [i32; 2]) -> i32;
     pub fn WinluxDrawIconA(hdc: Handle, request: *const c_char, x: i32, y: i32, size: i32, background: u32) -> i32;
     pub fn Rectangle(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32, pen: Handle, brush: Handle) -> i32;
     pub fn Ellipse(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32) -> i32;
@@ -627,6 +638,31 @@ pub fn cstr_eq(p: *const c_char, expected: &[u8]) -> bool {
         n == expected.len() && core::slice::from_raw_parts(p as *const u8, n) == expected
     }
 }
+
+// Sonde de pile appelée par le code généré pour les fonctions dont les
+// variables locales dépassent une page (4 Kio) : touche chaque page entre le
+// pointeur de pile et la nouvelle limite, sans modifier aucun registre.
+core::arch::global_asm!(
+    ".globl __chkstk",
+    "__chkstk:",
+    "push rcx",
+    "push rax",
+    "lea rcx, [rsp + 24]",
+    "cmp rax, 0x1000",
+    "jb 2f",
+    "1:",
+    "sub rcx, 0x1000",
+    "test [rcx], rcx",
+    "sub rax, 0x1000",
+    "cmp rax, 0x1000",
+    "ja 1b",
+    "2:",
+    "sub rcx, rax",
+    "test [rcx], rcx",
+    "pop rax",
+    "pop rcx",
+    "ret",
+);
 
 /// Certaines fonctions précompilées de `core` référencent le gestionnaire
 /// d'exceptions C++ de MSVC dans leurs tables de déroulement. Les tests sont

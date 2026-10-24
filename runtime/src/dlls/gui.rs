@@ -1362,6 +1362,8 @@ pub trait GuiBackend: Send {
     /// Taille actuelle de l'écran en unités logiques Win32. Elle suit les
     /// changements de résolution (RandR) pour SM_CXSCREEN/SM_CYSCREEN.
     fn screen_size(&mut self) -> Option<(i32, i32)> { None }
+    /// Largeur et hauteur logiques d'un texte dans une police GDI.
+    fn measure_text(&mut self, _font: &FontSpec, _text: &str) -> Option<(i32, i32)> { None }
 }
 
 struct HeadlessBackend;
@@ -1400,6 +1402,17 @@ fn with_backend<F: FnOnce(&mut dyn GuiBackend)>(f: F) {
 }
 
 /// Taille de l'écran (logique) ou 1920×1080 sans affichage réel.
+/// Mesure d'un texte (GetTextExtentPoint32) : le backend si possible, sinon
+/// une estimation à ~0,55 em par caractère.
+pub fn measure_text(font: &FontSpec, text: &str) -> (i32, i32) {
+    let mut out = None;
+    with_backend(|b| out = b.measure_text(font, text));
+    out.unwrap_or_else(|| {
+        let h = if font.height == 0 { 13 } else { font.height.abs() };
+        (text.chars().count() as i32 * h * 55 / 100, h)
+    })
+}
+
 pub fn screen_size() -> (i32, i32) {
     let mut size = None;
     with_backend(|b| size = b.screen_size());

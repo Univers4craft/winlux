@@ -4,12 +4,22 @@
 
 #![no_std]
 #![no_main]
+#![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
 
 #[path = "../shell/desktop.rs"]
 mod desktop;
+#[path = "../shell/gfx.rs"]
+mod gfx;
+#[path = "../shell/wm.rs"]
+mod wm;
+#[path = "../shell/explorer.rs"]
+mod explorer;
+#[path = "../shell/settings.rs"]
+mod settings;
 
+static mut DESKTOP: bool = false;
 static mut GOT_PAINT: u32 = 0;
 static mut GOT_DESTROY: u32 = 0;
 static mut GOT_SIZE: u32 = 0;
@@ -437,6 +447,7 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
         WM_CHAR => {
             GOT_CHAR += 1;
             LAST_CHAR = wparam;
+            if DESKTOP { desktop::on_key(hwnd, 0, wparam as u16); }
             0
         }
         WM_KEYDOWN => {
@@ -448,6 +459,7 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
                 KEYBOARD_STATE_MATCH |= (keys[wparam] & 0x80 != 0) as u32;
             }
             ASYNC_KEY_PRESSED |= ((GetAsyncKeyState(vk) as u16 & 1) != 0) as u32;
+            if DESKTOP { desktop::on_key(hwnd, wparam as u32, 0); }
             0
         }
         WM_KEYUP => {
@@ -455,14 +467,17 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             THREAD_KEY_UP_CLEAR |= ((GetKeyState(wparam as i32) as u16 & 0x8000) == 0) as u32;
             0
         }
-        WM_LBUTTONDOWN | WM_MOUSEMOVE | WM_LBUTTONUP => {
-            if GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0 {
+        WM_LBUTTONDOWN | WM_MOUSEMOVE | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_MBUTTONDOWN | WM_MOUSEWHEEL => {
+            if DESKTOP {
                 let x = (lparam as u32 & 0xFFFF) as i16 as i32;
                 let y = ((lparam as u32 >> 16) & 0xFFFF) as i16 as i32;
                 match msg {
                     WM_LBUTTONDOWN => desktop::on_button_down(hwnd, x, y),
                     WM_MOUSEMOVE => desktop::on_mouse_move(hwnd, x, y),
-                    _ => desktop::on_button_up(hwnd),
+                    WM_LBUTTONUP => desktop::on_button_up(hwnd, x, y),
+                    WM_RBUTTONDOWN => desktop::on_other(hwnd, wm::Mouse::RightDown, x, y),
+                    WM_MBUTTONDOWN => desktop::on_other(hwnd, wm::Mouse::MiddleDown, x, y),
+                    _ => desktop::on_other(hwnd, wm::Mouse::Wheel((wparam >> 16) as u16 as i16 as i32), x, y),
                 }
             }
             0
@@ -478,6 +493,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         // manuelle pour laisser le temps d'observer la fenêtre.
         let testing = GetEnvironmentVariableA(c"WINLUX_TEST".as_ptr(), core::ptr::null_mut(), 0) > 0;
         let desktop = GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0;
+        DESKTOP = desktop;
         if desktop {
             let mut align = [0i8; 8];
             let align_len = GetEnvironmentVariableA(c"WINLUX_TASKBAR_ALIGN".as_ptr(), align.as_mut_ptr(), align.len() as u32);
@@ -536,7 +552,6 @@ pub extern "C" fn mainCRTStartup() -> ! {
         // Boucle de messages sur PeekMessageA : on traite ce qui arrive et on
         // pulse sinon, jusqu'à expiration de la durée demandée.
         let start = GetTickCount();
-        let mut splash_finished = !desktop;
         let mut last_tick = start;
         let mut msg: Msg = core::mem::zeroed();
         while GetTickCount().wrapping_sub(start) < duration {
@@ -544,15 +559,14 @@ pub extern "C" fn mainCRTStartup() -> ! {
                 TranslateMessage(&msg);
                 DispatchMessageA(&msg);
             } else {
-                if !splash_finished && !desktop::splash_active() {
-                    splash_finished = true;
-                    InvalidateRect(hwnd, core::ptr::null(), 0);
+                if desktop {
+                    desktop::frame(hwnd);
+                    if GetTickCount().wrapping_sub(last_tick) >= 500 {
+                        last_tick = GetTickCount();
+                        desktop::tick(hwnd);
+                    }
                 }
-                if desktop && GetTickCount().wrapping_sub(last_tick) >= 500 {
-                    last_tick = GetTickCount();
-                    desktop::tick(hwnd);
-                }
-                Sleep(10);
+                Sleep(if desktop { 4 } else { 10 });
             }
         }
 

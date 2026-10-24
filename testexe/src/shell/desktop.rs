@@ -1,104 +1,61 @@
 //! Bureau Winlux inspiré de Windows 11, dessiné entièrement par GDI invité :
-//! fond « bloom », barre des tâches centrée ou alignée à gauche, menu
-//! Démarrer flottant, zone de notification et icônes du bureau.
+//! écran de démarrage animé, fond « bloom », barre des tâches centrée ou
+//! alignée à gauche, menu Démarrer animé, zone de notification, icônes du
+//! bureau et fenêtres des applications intégrées (voir `wm.rs`).
 //!
 //! Toute la mise en page découle de la taille réelle de l'écran : quand la
 //! résolution change (fenêtre de VM redimensionnée), le bureau se réadapte.
 //! Les textes sont en Windows-1252 car ils passent par `TextOutA`.
 
 use winlux_testexe::*;
+use crate::gfx::*;
+use crate::wm::{self, Gfx, Mouse};
+use crate::explorer;
 
 pub const TASKBAR_HEIGHT: i32 = 48;
 const BUTTON: i32 = 44;
 const BUTTON_GAP: i32 = 4;
 const TASKBAR_BUTTONS: i32 = 7;
+const START_OPEN_MS: i32 = 230;
+const START_CLOSE_MS: i32 = 140;
+const SPLASH_MIN_MS: u32 = 2600;
+const INTRO_MS: i32 = 520;
 
 pub static mut SCREEN_W: i32 = 1280;
 pub static mut SCREEN_H: i32 = 720;
 pub static mut START_OPEN: bool = false;
 pub static mut ALIGN_LEFT: bool = false;
-pub static mut ACTIVE_BUTTON: i32 = -1;
-pub static mut BOOT_SPLASH_UNTIL: u32 = 0;
 pub static mut VOLUME_LEVEL: u32 = 78;
 pub static mut BATTERY_LEVEL: u32 = 73;
 pub static mut BATTERY_PRESENT: u32 = 0;
 pub static mut NETWORK_CONNECTED: u32 = 1;
+static mut START_ANIM: u32 = 0;
+static mut START_CLOSING: bool = false;
+static mut HOVER_BUTTON: i32 = -1;
+static mut HOVER_START_ITEM: i32 = -1;
 static mut ICON_X: [i32; 3] = [12, 12, 12];
 static mut ICON_Y: [i32; 3] = [12, 108, 204];
 static mut DRAGGED_ICON: i32 = -1;
+static mut SELECTED_ICON: i32 = -1;
+static mut ICON_CLICK_TIME: u32 = 0;
 static mut LAST_MINUTE: u16 = 99;
+/// Démarrage : début de l'écran de chargement, étape de préchargement en
+/// cours et fin du fondu d'arrivée sur le bureau.
+static mut BOOT_START: u32 = 0;
+static mut BOOT_STEP: u32 = 0;
+static mut BOOT_DONE: bool = false;
+static mut INTRO_START: u32 = 0;
+static mut LAST_FRAME: u32 = 0;
+/// Notification façon Windows 11, au-dessus de la zone de notification.
+static mut TOAST: [u8; 120] = [0; 120];
+static mut TOAST_LEN: usize = 0;
+static mut TOAST_START: u32 = 0;
+const TOAST_MS: i32 = 4500;
+/// Atténuation du fond (0 = noir, 1000 = normal) pendant le fondu.
+static mut FADE: i32 = 1000;
 
-const fn rgb(r: u32, g: u32, b: u32) -> u32 { r | (g << 8) | (b << 16) }
-
-/// Pinceaux d'une peinture, libérés ensemble à la fin.
-struct Brushes { items: [(u32, Handle); 96], len: usize }
-impl Brushes {
-    fn new() -> Self { Brushes { items: [(0, core::ptr::null_mut()); 96], len: 0 } }
-    unsafe fn get(&mut self, color: u32) -> Handle {
-        for i in 0..self.len { if self.items[i].0 == color { return self.items[i].1; } }
-        let brush = CreateSolidBrush(color);
-        if self.len < self.items.len() { self.items[self.len] = (color, brush); self.len += 1; }
-        brush
-    }
-}
-impl Brushes {
-    unsafe fn release(&mut self) { for i in 0..self.len { DeleteObject(self.items[i].1); } self.len = 0; }
-}
-
-struct Fonts { title: Handle, body: Handle, semibold: Handle, small: Handle, icon: Handle }
-impl Fonts {
-    unsafe fn new() -> Self {
-        let f = |h: i32, w: i32| CreateFontA(h, 0, 0, 0, w, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr());
-        Fonts { title: f(15, 600), body: f(13, 400), semibold: f(13, 600), small: f(11, 400), icon: f(14, 700) }
-    }
-}
-impl Fonts {
-    unsafe fn release(&self) { for f in [self.title, self.body, self.semibold, self.small, self.icon] { DeleteObject(f); } }
-}
-
-unsafe fn text(hdc: Handle, font: Handle, color: u32, x: i32, y: i32, s: &[u8]) {
-    SelectObject(hdc, font);
-    SetTextColor(hdc, color);
-    TextOutA(hdc, x, y, s.as_ptr() as *const core::ffi::c_char, s.len() as i32);
-}
-/// Largeur approximative d'un texte (DejaVu/Segoe : ~0,56 em par glyphe).
-fn text_width(s: &[u8], height: i32) -> i32 { (s.len() as i32 * height * 56) / 100 }
-unsafe fn text_centered(hdc: Handle, font: Handle, height: i32, color: u32, cx: i32, y: i32, s: &[u8]) {
-    text(hdc, font, color, cx - text_width(s, height) / 2, y, s);
-}
-
-unsafe fn fill(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, bt: i32, color: u32) {
-    FillRect(hdc, &Rect { left: l, top: t, right: r, bottom: bt }, b.get(color));
-}
-unsafe fn ellipse(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, bt: i32, color: u32) {
-    SelectObject(hdc, b.get(color));
-    Ellipse(hdc, l, t, r, bt);
-}
-unsafe fn round_rect(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, bt: i32, radius: i32, color: u32) {
-    let radius = radius.min((r - l) / 2).min((bt - t) / 2).max(1);
-    fill(hdc, b, l + radius, t, r - radius, bt, color);
-    fill(hdc, b, l, t + radius, r, bt - radius, color);
-    ellipse(hdc, b, l, t, l + radius * 2, t + radius * 2, color);
-    ellipse(hdc, b, r - radius * 2, t, r, t + radius * 2, color);
-    ellipse(hdc, b, l, bt - radius * 2, l + radius * 2, bt, color);
-    ellipse(hdc, b, r - radius * 2, bt - radius * 2, r, bt, color);
-}
-/// Surface flottante : ombre douce, liseré et fond.
-unsafe fn panel(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, bt: i32, radius: i32, surface: u32, border: u32) {
-    round_rect(hdc, b, l - 2, t + 2, r + 2, bt + 6, radius + 2, rgb(8, 14, 32));
-    round_rect(hdc, b, l - 1, t, r + 1, bt + 3, radius + 1, rgb(14, 22, 44));
-    round_rect(hdc, b, l, t, r, bt, radius, border);
-    round_rect(hdc, b, l + 1, t + 1, r - 1, bt - 1, radius - 1, surface);
-}
-
-fn mix(a: u32, c: u32, t: i32, n: i32) -> u32 {
-    let ch = |shift: u32| {
-        let x = ((a >> shift) & 0xff) as i32;
-        let y = ((c >> shift) & 0xff) as i32;
-        (x + (y - x) * t / n.max(1)) as u32
-    };
-    ch(0) | (ch(8) << 8) | (ch(16) << 16)
-}
+fn now() -> u32 { unsafe { GetTickCount() } }
+fn since(t: u32) -> i32 { now().wrapping_sub(t).min(1_000_000) as i32 }
 
 // ---------- Géométrie partagée par le dessin et les clics ----------
 
@@ -120,127 +77,50 @@ fn button_rect(l: &Layout, index: i32) -> Rect {
     let x = l.buttons_x + index * (BUTTON + BUTTON_GAP);
     Rect { left: x, top: l.bar_top + 2, right: x + BUTTON, bottom: l.bar_top + 2 + BUTTON }
 }
-fn inside(r: &Rect, x: i32, y: i32) -> bool { x >= r.left && x < r.right && y >= r.top && y < r.bottom }
 
 // Contenu du menu Démarrer : zones cliquables calculées depuis le panneau.
-fn align_toggle_rect(l: &Layout) -> Rect {
-    let s = &l.start;
+fn align_toggle_rect(s: &Rect) -> Rect {
     Rect { left: s.right - 230, top: s.bottom - 48, right: s.right - 70, bottom: s.bottom - 16 }
 }
+fn power_rect(s: &Rect) -> Rect { Rect { left: s.right - 62, top: s.bottom - 50, right: s.right - 22, bottom: s.bottom - 14 } }
+const PIN_COLS: i32 = 6;
+const PIN_CELL_H: i32 = 84;
+fn pin_rows(s: &Rect) -> i32 { if s.bottom - s.top > 560 { 2 } else { 1 } }
+fn pinned_cell(s: &Rect, i: i32) -> Rect {
+    let (l, r) = (s.left + 28, s.right - 28);
+    let cw = (r - l) / PIN_COLS;
+    let x = l + (i % PIN_COLS) * cw;
+    let y = s.top + 118 + (i / PIN_COLS) * PIN_CELL_H;
+    Rect { left: x + 4, top: y, right: x + cw - 4, bottom: y + PIN_CELL_H - 6 }
+}
+fn recommended_cell(s: &Rect, i: i32) -> Rect {
+    let (l, r) = (s.left + 28, s.right - 28);
+    let col_w = (r - l) / 2;
+    let y = s.top + 118 + pin_rows(s) * PIN_CELL_H + 54 + (i / 2) * 56;
+    let x = l + (i % 2) * col_w;
+    Rect { left: x, top: y, right: x + col_w - 8, bottom: y + 50 }
+}
 
-// ---------- Icônes vectorielles ----------
+/// Position du menu Démarrer : il glisse depuis la barre des tâches.
+unsafe fn start_offset() -> i32 {
+    let t = since(START_ANIM);
+    if START_CLOSING {
+        if t >= START_CLOSE_MS { START_OPEN = false; START_CLOSING = false; return 0; }
+        ease_out(t, START_CLOSE_MS) * 60 / 1000
+    } else if t < START_OPEN_MS {
+        (1000 - ease_out(t, START_OPEN_MS)) * 70 / 1000
+    } else { 0 }
+}
 
-#[derive(Clone, Copy)]
-enum Glyph { Start, Search, Folder, Browser, Terminal, Store, Settings, Computer, Trash, Notes, Photos, Music, Mail, Calc, Exe }
-
-unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y: i32, s: i32) {
-    match g {
-        Glyph::Start => {
-            let gap = (s / 12).max(1);
-            let c = (s - gap) / 2;
-            fill(hdc, b, x, y, x + c, y + c, rgb(0x2B, 0xA4, 0xF2));
-            fill(hdc, b, x + c + gap, y, x + s, y + c, rgb(0x45, 0xB8, 0xFF));
-            fill(hdc, b, x, y + c + gap, x + c, y + s, rgb(0x16, 0x84, 0xE0));
-            fill(hdc, b, x + c + gap, y + c + gap, x + s, y + s, rgb(0x2B, 0xA4, 0xF2));
-        }
-        Glyph::Search => {
-            let r = s * 2 / 3;
-            ellipse(hdc, b, x, y, x + r, y + r, rgb(0xF2, 0xF2, 0xF2));
-            ellipse(hdc, b, x + s / 8, y + s / 8, x + r - s / 8, y + r - s / 8, rgb(0x2A, 0x2D, 0x34));
-            let t = (s / 9).max(2);
-            for k in 0..(s / 3) { fill(hdc, b, x + r - t + k - 1, y + r - t + k - 1, x + r + k, y + r + k, rgb(0xF2, 0xF2, 0xF2)); }
-        }
-        Glyph::Folder => {
-            round_rect(hdc, b, x, y + s / 8, x + s / 2, y + s / 3, 2, rgb(0xE0, 0x9E, 0x2A));
-            round_rect(hdc, b, x, y + s / 4, x + s, y + s * 7 / 8, 3, rgb(0xF4, 0xB8, 0x3E));
-            fill(hdc, b, x, y + s / 3, x + s, y + s * 3 / 8, rgb(0xFF, 0xD1, 0x66));
-        }
-        Glyph::Browser => {
-            ellipse(hdc, b, x, y, x + s, y + s, rgb(0x0F, 0x9D, 0x8A));
-            ellipse(hdc, b, x + s / 8, y + s / 8, x + s * 7 / 8, y + s * 7 / 8, rgb(0x1A, 0x73, 0xE8));
-            ellipse(hdc, b, x + s / 3, y + s / 4, x + s * 3 / 4, y + s * 2 / 3, rgb(0x7F, 0xE0, 0xD0));
-            ellipse(hdc, b, x + s * 2 / 5, y + s / 3, x + s * 2 / 3, y + s * 3 / 5, rgb(0x1A, 0x73, 0xE8));
-        }
-        Glyph::Terminal => {
-            round_rect(hdc, b, x, y + s / 8, x + s, y + s * 7 / 8, 3, rgb(0x5A, 0x5F, 0x6B));
-            round_rect(hdc, b, x + 1, y + s / 8 + 1, x + s - 1, y + s * 7 / 8 - 1, 3, rgb(0x16, 0x18, 0x1D));
-            text(hdc, f.icon, rgb(0xE6, 0xE6, 0xE6), x + s / 6, y + s / 4, b">_");
-        }
-        Glyph::Store => {
-            round_rect(hdc, b, x + s / 8, y + s / 4, x + s * 7 / 8, y + s, 3, rgb(0x0F, 0x6C, 0xBD));
-            ellipse(hdc, b, x + s / 3, y, x + s * 2 / 3, y + s / 2, rgb(0x0F, 0x6C, 0xBD));
-            ellipse(hdc, b, x + s * 3 / 8, y + s / 12, x + s * 5 / 8, y + s * 5 / 12, rgb(0x20, 0x24, 0x2C));
-            fill(hdc, b, x + s / 8, y + s / 4, x + s * 7 / 8, y + s / 2, rgb(0x0F, 0x6C, 0xBD));
-            let c = s / 6;
-            let (cx, cy) = (x + s / 2, y + s * 5 / 8);
-            fill(hdc, b, cx - c - 1, cy - c - 1, cx - 1, cy - 1, rgb(0xF2, 0x50, 0x22));
-            fill(hdc, b, cx + 1, cy - c - 1, cx + c + 1, cy - 1, rgb(0x7F, 0xBA, 0x00));
-            fill(hdc, b, cx - c - 1, cy + 1, cx - 1, cy + c + 1, rgb(0x00, 0xA4, 0xEF));
-            fill(hdc, b, cx + 1, cy + 1, cx + c + 1, cy + c + 1, rgb(0xFF, 0xB9, 0x00));
-        }
-        Glyph::Settings => {
-            let c = s / 2;
-            let t = s / 7;
-            fill(hdc, b, x + c - t, y, x + c + t, y + s, rgb(0x9A, 0xA3, 0xAE));
-            fill(hdc, b, x, y + c - t, x + s, y + c + t, rgb(0x9A, 0xA3, 0xAE));
-            ellipse(hdc, b, x + s / 10, y + s / 10, x + s * 9 / 10, y + s * 9 / 10, rgb(0x9A, 0xA3, 0xAE));
-            ellipse(hdc, b, x + s * 3 / 10, y + s * 3 / 10, x + s * 7 / 10, y + s * 7 / 10, rgb(0x3B, 0x40, 0x48));
-        }
-        Glyph::Computer => {
-            round_rect(hdc, b, x, y + s / 10, x + s, y + s * 3 / 4, 3, rgb(0x3A, 0x3F, 0x48));
-            fill(hdc, b, x + 2, y + s / 10 + 2, x + s - 2, y + s * 3 / 4 - 2, rgb(0x3D, 0x9B, 0xF5));
-            fill(hdc, b, x + 2, y + s * 2 / 5, x + s - 2, y + s * 3 / 4 - 2, rgb(0x2B, 0x7F, 0xDA));
-            fill(hdc, b, x + s * 2 / 5, y + s * 3 / 4, x + s * 3 / 5, y + s * 7 / 8, rgb(0x8C, 0x93, 0x9C));
-            round_rect(hdc, b, x + s / 4, y + s * 7 / 8 - 1, x + s * 3 / 4, y + s, 2, rgb(0xB8, 0xBE, 0xC6));
-        }
-        Glyph::Trash => {
-            round_rect(hdc, b, x + s / 6, y + s / 4, x + s * 5 / 6, y + s, 3, rgb(0xD8, 0xDE, 0xE6));
-            fill(hdc, b, x + s / 10, y + s / 8, x + s * 9 / 10, y + s / 4, rgb(0xEE, 0xF1, 0xF5));
-            fill(hdc, b, x + s * 2 / 5, y + s / 20, x + s * 3 / 5, y + s / 8, rgb(0xEE, 0xF1, 0xF5));
-            for k in 1..4 { let lx = x + s / 6 + k * (s * 2 / 3) / 4; fill(hdc, b, lx - 1, y + s / 3, lx + 1, y + s * 9 / 10, rgb(0x9A, 0xA3, 0xAE)); }
-        }
-        Glyph::Notes => {
-            round_rect(hdc, b, x + s / 8, y, x + s * 7 / 8, y + s, 3, rgb(0xF5, 0xF7, 0xFA));
-            fill(hdc, b, x + s / 8, y, x + s * 7 / 8, y + s / 5, rgb(0x2B, 0x88, 0xD8));
-            for k in 0..4 { let ly = y + s * 2 / 5 + k * s / 7; fill(hdc, b, x + s / 4, ly, x + s * 3 / 4, ly + 2, rgb(0x9A, 0xA3, 0xAE)); }
-        }
-        Glyph::Photos => {
-            round_rect(hdc, b, x, y + s / 8, x + s, y + s * 7 / 8, 4, rgb(0x2F, 0x86, 0xD6));
-            ellipse(hdc, b, x + s * 3 / 5, y + s / 4, x + s * 4 / 5, y + s * 9 / 20, rgb(0xFF, 0xD3, 0x4F));
-            ellipse(hdc, b, x + s / 10, y + s / 2, x + s * 3 / 4, y + s * 6 / 5, rgb(0x34, 0xC7, 0x59));
-            ellipse(hdc, b, x + s / 2, y + s * 3 / 5, x + s * 11 / 10, y + s * 6 / 5, rgb(0x2A, 0xA8, 0x4A));
-            // Recadre les collines dans la vignette.
-            fill(hdc, b, x - s / 4, y + s * 7 / 8, x + s * 5 / 4, y + s * 5 / 4, rgb(0x24, 0x27, 0x2F));
-            fill(hdc, b, x + s, y, x + s * 5 / 4, y + s * 5 / 4, rgb(0x24, 0x27, 0x2F));
-        }
-        Glyph::Music => {
-            round_rect(hdc, b, x, y, x + s, y + s, 5, rgb(0xE8, 0x3E, 0x6C));
-            ellipse(hdc, b, x + s / 4, y + s / 2, x + s / 2, y + s * 3 / 4, rgb(0xFF, 0xFF, 0xFF));
-            fill(hdc, b, x + s / 2 - 2, y + s / 5, x + s / 2, y + s * 5 / 8, rgb(0xFF, 0xFF, 0xFF));
-            fill(hdc, b, x + s / 2 - 2, y + s / 5, x + s * 3 / 4, y + s / 5 + 3, rgb(0xFF, 0xFF, 0xFF));
-        }
-        Glyph::Mail => {
-            round_rect(hdc, b, x, y + s / 5, x + s, y + s * 4 / 5, 3, rgb(0x10, 0x6E, 0xBE));
-            for k in 0..(s / 2) { fill(hdc, b, x + k, y + s / 5 + k * 3 / 5, x + s - k, y + s / 5 + k * 3 / 5 + 2, rgb(0x5C, 0xB4, 0xFF)); }
-        }
-        Glyph::Calc => {
-            round_rect(hdc, b, x + s / 8, y, x + s * 7 / 8, y + s, 3, rgb(0x3B, 0x40, 0x48));
-            fill(hdc, b, x + s / 4, y + s / 8, x + s * 3 / 4, y + s / 3, rgb(0xC8, 0xE6, 0xC9));
-            for r in 0..3 { for c in 0..3 {
-                let bx = x + s / 4 + c * s / 6;
-                let by = y + s * 5 / 12 + r * s / 6;
-                fill(hdc, b, bx, by, bx + s / 9, by + s / 9, if c == 2 { rgb(0xFF, 0x98, 0x00) } else { rgb(0xC0, 0xC6, 0xCE) });
-            } }
-        }
-        Glyph::Exe => {
-            round_rect(hdc, b, x, y + s / 8, x + s, y + s * 7 / 8, 3, rgb(0x3B, 0x40, 0x48));
-            fill(hdc, b, x + 1, y + s / 8 + 1, x + s - 1, y + s / 3, rgb(0x60, 0x6A, 0x78));
-            glyph(hdc, b, f, Glyph::Start, x + s / 3, y + s * 2 / 5, s / 3);
-        }
-    }
+unsafe fn set_start(open: bool) {
+    if open == (START_OPEN && !START_CLOSING) { return; }
+    START_ANIM = now();
+    if open { START_OPEN = true; START_CLOSING = false; } else if START_OPEN { START_CLOSING = true; }
 }
 
 // ---------- Fond d'écran « bloom » ----------
+
+fn fc(c: u32) -> u32 { unsafe { if FADE >= 1000 { c } else { mix(0, c, FADE, 1000) } } }
 
 unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
     let top = rgb(0x06, 0x12, 0x33);
@@ -249,7 +129,7 @@ unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
     for i in 0..bands {
         let y0 = l.h * i / bands;
         let y1 = l.h * (i + 1) / bands;
-        fill(hdc, b, 0, y0, l.w, y1, mix(top, bottom, i, bands - 1));
+        fill(hdc, b, 0, y0, l.w, y1, fc(mix(top, bottom, i, bands - 1)));
     }
     // Fleur stylisée : pétales verticaux en éventail, du plus sombre à
     // l'extérieur au plus clair au centre, éclairés depuis leur base.
@@ -262,20 +142,21 @@ unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
         (r * 3 / 5, r * 9 / 20, r * 8 / 5, rgb(0x15, 0x48, 0xA8), rgb(0x4E, 0x96, 0xF0)),
         (0, r / 2, r * 2, rgb(0x1E, 0x60, 0xD0), rgb(0xB4, 0xD8, 0xFF)),
     ];
+    // Pendant les animations, moins de dégradés : le dessin reste fluide.
+    let steps = if wm::animating() || START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS { 14 } else { 28 };
     for (dx, rx, ry, outer, inner) in petals {
-        let steps = 28;
         for k in 0..steps {
             let sx = rx * (steps - k) / steps;
             let sy = ry * (steps - k) / steps;
             let px = cx + dx;
-            ellipse(hdc, b, px - sx, base - sy, px + sx, base, mix(outer, inner, k, steps - 1));
+            ellipse(hdc, b, px - sx, base - sy, px + sx, base, fc(mix(outer, inner, k, steps - 1)));
         }
     }
 }
 
 // ---------- Barre des tâches ----------
 
-const TASKBAR_GLYPHS: [Glyph; 7] = [Glyph::Start, Glyph::Search, Glyph::Folder, Glyph::Browser, Glyph::Terminal, Glyph::Store, Glyph::Settings];
+const TASKBAR_GLYPHS: [Glyph; 7] = [Glyph::Start, Glyph::Search, Glyph::Folder, Glyph::Edge, Glyph::Terminal, Glyph::Store, Glyph::Settings];
 
 unsafe fn draw_wifi(hdc: Handle, b: &mut Brushes, x: i32, y: i32, on: bool) {
     let c = if on { rgb(0xF2, 0xF2, 0xF2) } else { rgb(0x7A, 0x80, 0x8A) };
@@ -302,21 +183,29 @@ unsafe fn draw_battery(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32)
 
 unsafe fn two_digits(v: u16) -> [u8; 2] { [b'0' + (v / 10 % 10) as u8, b'0' + (v % 10) as u8] }
 
-unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
-    fill(hdc, b, 0, l.bar_top, l.w, l.h, rgb(0x1C, 0x1F, 0x26));
-    fill(hdc, b, 0, l.bar_top, l.w, l.bar_top + 1, rgb(0x34, 0x38, 0x42));
+
+unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) {
+    let top = l.bar_top + dy;
+    fill(hdc, b, 0, top, l.w, l.h, rgb(0x1C, 0x1F, 0x26));
+    fill(hdc, b, 0, top, l.w, top + 1, rgb(0x34, 0x38, 0x42));
     for (i, g) in TASKBAR_GLYPHS.iter().enumerate() {
-        let r = button_rect(l, i as i32);
-        let active = (i == 0 && START_OPEN) || ACTIVE_BUTTON == i as i32;
-        if active { round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 5, rgb(0x2E, 0x33, 0x3D)); }
+        let mut r = button_rect(l, i as i32);
+        r.top += dy; r.bottom += dy;
+        let app = match i { 2 => Some(wm::APP_EXPLORER), 6 => Some(wm::APP_SETTINGS), _ => None };
+        let running = app.map_or(false, wm::is_open);
+        let focused = app.map_or(false, wm::is_active) || (i == 0 && START_OPEN && !START_CLOSING);
+        if focused { round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 5, rgb(0x2E, 0x33, 0x3D)); }
+        else if HOVER_BUTTON == i as i32 { round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 5, rgb(0x29, 0x2D, 0x36)); }
         glyph(hdc, b, f, *g, r.left + 10, r.top + 10, 24);
-        if i >= 2 && i <= 4 {
+        if running {
             // Indicateur d'application ouverte, comme sous Windows 11.
             let cx = (r.left + r.right) / 2;
-            let half = if active { 8 } else { 3 };
-            round_rect(hdc, b, cx - half, r.bottom - 3, cx + half, r.bottom, 1, if active { rgb(0x4C, 0xC2, 0xFF) } else { rgb(0x9A, 0xA3, 0xAE) });
+            let half = if focused { 8 } else { 3 };
+            round_rect(hdc, b, cx - half, r.bottom - 3, cx + half, r.bottom, 1, if focused { ACCENT } else { rgb(0x9A, 0xA3, 0xAE) });
         }
     }
+    wm::TASKBAR_SLOT[wm::APP_EXPLORER] = button_rect(l, 2);
+    wm::TASKBAR_SLOT[wm::APP_SETTINGS] = button_rect(l, 6);
 
     // Zone de notification : chevron, réseau, volume, batterie, horloge.
     let mut now = SystemTime::default();
@@ -330,43 +219,69 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let clock = [h0, h1, b':', m0, m1];
     let date = [d0, d1, b'/', o0, o1, b'/', b'0' + (year / 1000 % 10) as u8, b'0' + (year / 100 % 10) as u8, b'0' + (year / 10 % 10) as u8, b'0' + (year % 10) as u8];
     let right = l.w - 12;
-    text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), right - text_width(&clock, 13), l.bar_top + 8, &clock);
-    text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), right - text_width(&date, 13), l.bar_top + 26, &date);
+    text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), right - text_width(&clock, 13), top + 8, &clock);
+    text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), right - text_width(&date, 13), top + 26, &date);
     let tray = right - 92 - 96;
-    round_rect(hdc, b, tray - 4, l.bar_top + 6, tray + 88, l.bar_top + 42, 5, rgb(0x24, 0x28, 0x31));
-    draw_wifi(hdc, b, tray + 6, l.bar_top + 17, NETWORK_CONNECTED != 0);
-    draw_volume(hdc, b, tray + 30, l.bar_top + 17, VOLUME_LEVEL);
-    if BATTERY_PRESENT != 0 { draw_battery(hdc, b, tray + 58, l.bar_top + 17, BATTERY_LEVEL); }
-    else { text(hdc, f.small, rgb(0xC8, 0xCD, 0xD4), tray + 60, l.bar_top + 17, b"CA"); }
-    text(hdc, f.semibold, rgb(0xC8, 0xCD, 0xD4), tray - 24, l.bar_top + 14, b"^");
+    round_rect(hdc, b, tray - 4, top + 6, tray + 88, top + 42, 5, rgb(0x24, 0x28, 0x31));
+    draw_wifi(hdc, b, tray + 6, top + 17, NETWORK_CONNECTED != 0);
+    draw_volume(hdc, b, tray + 30, top + 17, VOLUME_LEVEL);
+    if BATTERY_PRESENT != 0 { draw_battery(hdc, b, tray + 58, top + 17, BATTERY_LEVEL); }
+    else { text(hdc, f.small, rgb(0xC8, 0xCD, 0xD4), tray + 60, top + 17, b"CA"); }
+    text(hdc, f.semibold, rgb(0xC8, 0xCD, 0xD4), tray - 24, top + 14, b"^");
 }
 
 // ---------- Menu Démarrer ----------
 
-struct App { name: &'static [u8], glyph: Glyph }
+#[derive(Clone, Copy, PartialEq)]
+enum Launch { Explorer, Edge, Terminal, Store, Settings, Documents, Pc, Pictures, Music, Notes, Calc, Mail, Welcome, Programs }
+
+struct App { name: &'static [u8], glyph: Glyph, launch: Launch }
 const PINNED: [App; 12] = [
-    App { name: b"Explorateur", glyph: Glyph::Folder },
-    App { name: b"Navigateur", glyph: Glyph::Browser },
-    App { name: b"Terminal", glyph: Glyph::Terminal },
-    App { name: b"Logith\xE8que", glyph: Glyph::Store },
-    App { name: b"Param\xE8tres", glyph: Glyph::Settings },
-    App { name: b"Bloc-notes", glyph: Glyph::Notes },
-    App { name: b"Photos", glyph: Glyph::Photos },
-    App { name: b"Musique", glyph: Glyph::Music },
-    App { name: b"Courrier", glyph: Glyph::Mail },
-    App { name: b"Calculatrice", glyph: Glyph::Calc },
-    App { name: b"Ce PC", glyph: Glyph::Computer },
-    App { name: b"Programmes .exe", glyph: Glyph::Exe },
+    App { name: b"Explorer", glyph: Glyph::Folder, launch: Launch::Explorer },
+    App { name: b"Microsoft Edge", glyph: Glyph::Edge, launch: Launch::Edge },
+    App { name: b"Terminal", glyph: Glyph::Terminal, launch: Launch::Terminal },
+    App { name: b"Logith\xE8que", glyph: Glyph::Store, launch: Launch::Store },
+    App { name: b"Param\xE8tres", glyph: Glyph::Settings, launch: Launch::Settings },
+    App { name: b"Bloc-notes", glyph: Glyph::Notes, launch: Launch::Notes },
+    App { name: b"Photos", glyph: Glyph::Photos, launch: Launch::Pictures },
+    App { name: b"Musique", glyph: Glyph::Music, launch: Launch::Music },
+    App { name: b"Courrier", glyph: Glyph::Mail, launch: Launch::Mail },
+    App { name: b"Calculatrice", glyph: Glyph::Calc, launch: Launch::Calc },
+    App { name: b"Ce PC", glyph: Glyph::Computer, launch: Launch::Pc },
+    App { name: b"Programmes .exe", glyph: Glyph::Exe, launch: Launch::Programs },
 ];
-const RECOMMENDED: [(&[u8], &[u8], Glyph); 4] = [
-    (b"Bienvenue dans Winlux", b"Prise en main", Glyph::Start),
-    (b"Applications Windows", b"Ouvrez un .exe d'un double-clic", Glyph::Exe),
-    (b"Documents", b"Dossier personnel Linux", Glyph::Folder),
-    (b"Notes de version", b"Mises \xE0 jour du syst\xE8me", Glyph::Notes),
+const RECOMMENDED: [(&[u8], &[u8], Glyph, Launch); 4] = [
+    (b"Bienvenue dans Winlux", b"Prise en main", Glyph::Start, Launch::Welcome),
+    (b"Applications Windows", b"Ouvrez un .exe d'un double-clic", Glyph::Exe, Launch::Programs),
+    (b"Documents", b"Dossier personnel Linux", Glyph::Folder, Launch::Documents),
+    (b"Notes de version", b"Mises \xE0 jour du syst\xE8me", Glyph::Notes, Launch::Welcome),
 ];
 
+unsafe fn shell_open(target: &core::ffi::CStr) -> bool {
+    ShellExecuteA(core::ptr::null_mut(), c"open".as_ptr(), target.as_ptr(), core::ptr::null(), core::ptr::null(), 1) as isize > 32
+}
+
+/// Lance une application depuis la barre des tâches ou le menu Démarrer.
+unsafe fn launch(what: Launch) {
+    match what {
+        Launch::Explorer => if wm::is_open(wm::APP_EXPLORER) { wm::open(wm::APP_EXPLORER) } else { explorer::open_home() },
+        Launch::Pc | Launch::Programs => explorer::open_pc(),
+        Launch::Documents | Launch::Welcome => explorer::open_documents(),
+        Launch::Pictures => explorer::open_at(b"::home"),
+        Launch::Music => explorer::open_at(b"::home"),
+        Launch::Settings => wm::open(wm::APP_SETTINGS),
+        Launch::Edge => { if !shell_open(c"shell:browser") { toast(b"Microsoft Edge n'est pas encore install\xE9 sur ce syst\xE8me."); } }
+        Launch::Terminal => { if !shell_open(c"shell:terminal") { toast(b"Aucun terminal n'est install\xE9."); } }
+        Launch::Mail => { let _ = shell_open(c"mailto:"); }
+        Launch::Notes | Launch::Calc | Launch::Store => {}
+    }
+}
+
 unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
-    let s = &l.start;
+    let dy = start_offset();
+    if !START_OPEN { return; }
+    let s0 = l.start;
+    let s = &Rect { left: s0.left, top: s0.top + dy, right: s0.right, bottom: s0.bottom + dy };
     let surface = rgb(0x24, 0x27, 0x2F);
     panel(hdc, b, s.left, s.top, s.right, s.bottom, 8, surface, rgb(0x3A, 0x3F, 0x4A));
     let pad = 28;
@@ -376,43 +291,35 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     // Recherche.
     round_rect(hdc, b, inner_l, s.top + 24, inner_r, s.top + 60, 18, rgb(0x1A, 0x1D, 0x23));
     round_rect(hdc, b, inner_l + 1, s.top + 25, inner_r - 1, s.top + 59, 17, rgb(0x2E, 0x32, 0x3B));
-    fill(hdc, b, inner_l + 18, s.top + 57, inner_r - 18, s.top + 59, rgb(0x4C, 0xC2, 0xFF));
+    fill(hdc, b, inner_l + 18, s.top + 57, inner_r - 18, s.top + 59, ACCENT);
     glyph(hdc, b, f, Glyph::Search, inner_l + 14, s.top + 34, 16);
     text(hdc, f.body, rgb(0x9A, 0xA3, 0xAE), inner_l + 42, s.top + 34, b"Rechercher des applications, param\xE8tres et documents");
 
     // Épinglé.
-    let mut y = s.top + 82;
+    let y = s.top + 82;
     text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, b"\xC9pingl\xE9");
     let all = b"Toutes les applications  >";
     let all_w = text_width(all, 11) + 20;
     round_rect(hdc, b, inner_r - all_w, y - 4, inner_r, y + 22, 4, rgb(0x31, 0x35, 0x3F));
     text(hdc, f.small, rgb(0xE6, 0xE6, 0xE6), inner_r - all_w + 10, y + 2, all);
-    y += 36;
-    let cols = 6;
-    let cell_w = (inner_r - inner_l) / cols;
-    let cell_h = 84;
-    let rows = if s.bottom - s.top > 560 { 2 } else { 1 };
-    for (i, app) in PINNED.iter().take((cols * rows) as usize).enumerate() {
-        let c = i as i32 % cols;
-        let r = i as i32 / cols;
-        let cx = inner_l + c * cell_w + cell_w / 2;
-        let top = y + r * cell_h;
-        glyph(hdc, b, f, app.glyph, cx - 16, top + 10, 32);
-        text_centered(hdc, f.small, 11, rgb(0xE6, 0xE6, 0xE6), cx, top + 52, app.name);
+    for (i, app) in PINNED.iter().take((PIN_COLS * pin_rows(s)) as usize).enumerate() {
+        let c = pinned_cell(s, i as i32);
+        if HOVER_START_ITEM == i as i32 { round_rect(hdc, b, c.left, c.top, c.right, c.bottom, 5, rgb(0x31, 0x35, 0x3F)); }
+        let cx = (c.left + c.right) / 2;
+        glyph(hdc, b, f, app.glyph, cx - 16, c.top + 10, 32);
+        text_centered(hdc, f.small, 11, rgb(0xE6, 0xE6, 0xE6), cx, c.top + 52, app.name);
     }
-    y += rows * cell_h + 20;
 
     // Recommandé.
-    if y + 150 < s.bottom - 72 {
-        text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, b"Recommand\xE9");
-        y += 34;
-        let col_w = (inner_r - inner_l) / 2;
-        for (i, (title, sub, g)) in RECOMMENDED.iter().enumerate() {
-            let x = inner_l + (i as i32 % 2) * col_w;
-            let top = y + (i as i32 / 2) * 56;
-            glyph(hdc, b, f, *g, x + 8, top + 8, 28);
-            text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), x + 48, top + 6, title);
-            text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), x + 48, top + 24, sub);
+    let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
+    if ry + 150 < s.bottom - 72 {
+        text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, ry, b"Recommand\xE9");
+        for (i, (title, sub, g, _)) in RECOMMENDED.iter().enumerate() {
+            let c = recommended_cell(s, i as i32);
+            if HOVER_START_ITEM == 100 + i as i32 { round_rect(hdc, b, c.left, c.top, c.right, c.bottom, 5, rgb(0x31, 0x35, 0x3F)); }
+            glyph(hdc, b, f, *g, c.left + 8, c.top + 10, 28);
+            text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), c.left + 48, c.top + 8, title);
+            text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), c.left + 48, c.top + 26, sub);
         }
     }
 
@@ -423,16 +330,60 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     ellipse(hdc, b, inner_l + 6, ay, inner_l + 38, ay + 32, rgb(0x5B, 0x6B, 0xD8));
     text_centered(hdc, f.semibold, 13, rgb(0xFF, 0xFF, 0xFF), inner_l + 22, ay + 8, b"D");
     text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), inner_l + 50, ay + 8, b"Damien");
-    let t = align_toggle_rect(l);
-    round_rect(hdc, b, t.left, t.top, t.right, t.bottom, 4, rgb(0x31, 0x35, 0x3F));
+    let t = align_toggle_rect(s);
+    round_rect(hdc, b, t.left, t.top, t.right, t.bottom, 4, if HOVER_START_ITEM == 200 { rgb(0x3A, 0x3F, 0x4A) } else { rgb(0x31, 0x35, 0x3F) });
     let label: &[u8] = if ALIGN_LEFT { b"Barre : \xE0 gauche" } else { b"Barre : centr\xE9e" };
     text_centered(hdc, f.small, 11, rgb(0xE6, 0xE6, 0xE6), (t.left + t.right) / 2, t.top + 9, label);
     // Bouton d'alimentation.
     let (px, py) = (inner_r - 30, ay + 4);
+    let pbg = if HOVER_START_ITEM == 201 { rgb(0x31, 0x35, 0x3F) } else { rgb(0x1F, 0x22, 0x29) };
+    if HOVER_START_ITEM == 201 { round_rect(hdc, b, px - 8, py - 6, px + 32, py + 30, 4, pbg); }
     ellipse(hdc, b, px, py, px + 24, py + 24, rgb(0xE6, 0xE6, 0xE6));
-    ellipse(hdc, b, px + 3, py + 3, px + 21, py + 21, rgb(0x1F, 0x22, 0x29));
-    fill(hdc, b, px + 8, py - 1, px + 16, py + 8, rgb(0x1F, 0x22, 0x29));
+    ellipse(hdc, b, px + 3, py + 3, px + 21, py + 21, pbg);
+    fill(hdc, b, px + 8, py - 1, px + 16, py + 8, pbg);
     fill(hdc, b, px + 11, py - 1, px + 13, py + 12, rgb(0xE6, 0xE6, 0xE6));
+}
+
+/// Élément du menu Démarrer sous le pointeur : 0..11 épinglés, 100..103
+/// recommandés, 200 bascule d'alignement, 201 alimentation, -1 rien.
+fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
+    let s = &l.start;
+    for i in 0..(PIN_COLS * pin_rows(s)) { if inside(&pinned_cell(s, i), x, y) { return i; } }
+    let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
+    if ry + 150 < s.bottom - 72 { for i in 0..4 { if inside(&recommended_cell(s, i), x, y) { return 100 + i; } } }
+    if inside(&align_toggle_rect(s), x, y) { return 200; }
+    if inside(&power_rect(s), x, y) { return 201; }
+    -1
+}
+
+// ---------- Notifications ----------
+
+pub unsafe fn toast(msg: &[u8]) {
+    let n = msg.len().min(TOAST.len());
+    TOAST[..n].copy_from_slice(&msg[..n]);
+    TOAST_LEN = n;
+    TOAST_START = now();
+}
+
+unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if TOAST_LEN == 0 { return; }
+    let t = since(TOAST_START);
+    if t > TOAST_MS { TOAST_LEN = 0; return; }
+    // Entrée par la droite, sortie en glissant vers le bas.
+    let slide = if t < 260 { (1000 - ease_out(t, 260)) * 380 / 1000 } else { 0 };
+    let drop = if t > TOAST_MS - 220 { ease_out(t - (TOAST_MS - 220), 220) * 140 / 1000 } else { 0 };
+    let w = 364;
+    let x = l.w - w - 12 + slide;
+    let y = l.bar_top - 112 + drop;
+    panel(hdc, b, x, y, x + w, y + 100, 8, rgb(0x2B, 0x2B, 0x2B), rgb(0x3D, 0x3D, 0x3D));
+    glyph(hdc, b, f, Glyph::Start, x + 16, y + 16, 16);
+    text(hdc, f.caption, rgb(0xC5, 0xC5, 0xC5), x + 42, y + 16, b"Winlux");
+    let msg = &TOAST[..TOAST_LEN];
+    // Retour à la ligne simple au dernier espace qui tient.
+    let per_line = ((w - 40) * 100 / (13 * 56)) as usize;
+    let cut = if msg.len() > per_line { msg[..per_line].iter().rposition(|&c| c == b' ').unwrap_or(per_line) } else { msg.len() };
+    text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), x + 16, y + 46, &msg[..cut]);
+    if cut < msg.len() { text_fit(hdc, f.body, 13, rgb(0xF2, 0xF2, 0xF2), x + 16, y + 66, &msg[(cut + 1).min(msg.len())..], w - 32); }
 }
 
 // ---------- Icônes du bureau ----------
@@ -442,7 +393,7 @@ const DESKTOP_ICONS: [(&[u8], Glyph); 3] = [(b"Ce PC", Glyph::Computer), (b"Docu
 unsafe fn desktop_icons(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     for (i, (name, g)) in DESKTOP_ICONS.iter().enumerate() {
         let (x, y) = (ICON_X[i], ICON_Y[i]);
-        if DRAGGED_ICON == i as i32 { round_rect(hdc, b, x, y, x + 76, y + 84, 4, rgb(0x2A, 0x4E, 0x8C)); }
+        if DRAGGED_ICON == i as i32 || SELECTED_ICON == i as i32 { round_rect(hdc, b, x, y, x + 76, y + 84, 4, fc(rgb(0x2A, 0x4E, 0x8C))); }
         glyph(hdc, b, f, *g, x + 18, y + 8, 40);
         text_centered(hdc, f.small, 11, rgb(0x00, 0x00, 0x00), x + 39, y + 59, name);
         text_centered(hdc, f.small, 11, rgb(0xFF, 0xFF, 0xFF), x + 38, y + 58, name);
@@ -451,13 +402,50 @@ unsafe fn desktop_icons(hdc: Handle, b: &mut Brushes, f: &Fonts) {
 
 // ---------- Écran de démarrage ----------
 
+/// Logo et cercle de points qui tournent, comme au démarrage de Windows 11 ;
+/// en dessous, l'étape de chargement en cours.
 unsafe fn boot_splash(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     fill(hdc, b, 0, 0, l.w, l.h, rgb(0, 0, 0));
-    glyph(hdc, b, f, Glyph::Start, l.w / 2 - 40, l.h / 2 - 90, 80);
-    let phase = (GetTickCount() / 120 % 8) as i32;
-    for k in 0..5 {
-        let x = l.w / 2 - 40 + k * 18 + phase;
-        ellipse(hdc, b, x, l.h / 2 + 50, x + 6, l.h / 2 + 56, rgb(0xE6, 0xE6, 0xE6));
+    let t = since(BOOT_START);
+    // Le logo apparaît en fondu pendant 400 ms.
+    let a = ease_out(t, 400);
+    let size = 96;
+    let (lx, ly) = (l.w / 2 - size / 2, l.h / 2 - size - 30);
+    let gap = 4;
+    let c = (size - gap) / 2;
+    let blue = |k: u32| mix(0, k, a, 1000);
+    fill(hdc, b, lx, ly, lx + c, ly + c, blue(rgb(0x2B, 0xA4, 0xF2)));
+    fill(hdc, b, lx + c + gap, ly, lx + size, ly + c, blue(rgb(0x45, 0xB8, 0xFF)));
+    fill(hdc, b, lx, ly + c + gap, lx + c, ly + size, blue(rgb(0x16, 0x84, 0xE0)));
+    fill(hdc, b, lx + c + gap, ly + c + gap, lx + size, ly + size, blue(rgb(0x2B, 0xA4, 0xF2)));
+    // Cercle de chargement : cinq points qui accélèrent puis ralentissent.
+    if t > 500 {
+        let (cx, cy, radius) = (l.w / 2, l.h / 2 + 70, 22);
+        let cycle = 2200;
+        for k in 0..5 {
+            let local = (t - 500 - k * 110).rem_euclid(cycle);
+            let u = local * 1000 / cycle;
+            // Angle « slow-fast-slow » sur deux tours, puis pause invisible.
+            if u > 880 { continue; }
+            let v = u * 1000 / 880;
+            let angle = 270 + (v * 720 / 1000) - sin_milli(v * 360 / 1000) * 70 / 1000;
+            let x = cx + cos_milli(angle) * radius / 1000;
+            let y = cy + sin_milli(angle) * radius / 1000;
+            let d = 5;
+            ellipse(hdc, b, x - d / 2, y - d / 2, x + d - d / 2, y + d - d / 2, rgb(0xF2, 0xF2, 0xF2));
+        }
+    }
+    let label: &[u8] = match BOOT_STEP {
+        0 | 1 => b"Chargement des polices",
+        2 => b"Pr\xE9paration de l'Explorer",
+        3 => b"Pr\xE9paration du bureau",
+        _ => b"Bienvenue",
+    };
+    if t > 700 { text_centered(hdc, f.body, 13, rgb(0x9A, 0xA3, 0xAE), l.w / 2, l.h - 90, label); }
+    // Préchauffage des polices : un texte de chaque taille hors de l'écran,
+    // pour que le premier affichage du bureau ne marque pas de pause.
+    if BOOT_STEP <= 1 {
+        for font in [f.title, f.body, f.semibold, f.small, f.icon, f.large, f.caption, f.display] { text(hdc, font, rgb(0, 0, 0), -4000, -4000, b"Winlux"); }
     }
 }
 
@@ -472,37 +460,70 @@ pub unsafe fn init(volume: u32, battery: u32, battery_present: u32, network: u32
     ALIGN_LEFT = align_left;
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
-    BOOT_SPLASH_UNTIL = GetTickCount().wrapping_add(1400);
+    wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
+    BOOT_START = now();
+    let mut v = [0i8; 4];
+    if GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0 { BOOT_DONE = true; BOOT_STEP = 4; }
 }
 
-pub unsafe fn splash_active() -> bool {
-    BOOT_SPLASH_UNTIL != 0 && (GetTickCount().wrapping_sub(BOOT_SPLASH_UNTIL) as i32) < 0
-}
+pub unsafe fn splash_active() -> bool { !BOOT_DONE }
 
 pub unsafe fn draw(hdc: Handle) {
     let l = layout();
     let mut b = Brushes::new();
     let f = Fonts::new();
     SetBkMode(hdc, 1);
-    if splash_active() {
+    if !BOOT_DONE {
         boot_splash(hdc, &mut b, &f, &l);
     } else {
+        let intro = since(INTRO_START);
+        FADE = if INTRO_START == 0 || intro >= INTRO_MS { 1000 } else { ease_out(intro, INTRO_MS) };
         wallpaper(hdc, &mut b, &l);
-        desktop_icons(hdc, &mut b, &f);
-        if START_OPEN { start_menu(hdc, &mut b, &f, &l); }
-        taskbar(hdc, &mut b, &f, &l);
+        if FADE > 600 { desktop_icons(hdc, &mut b, &f); }
+        {
+            let mut g = Gfx { hdc, b: &mut b, f: &f };
+            wm::draw(&mut g);
+        }
+        start_menu(hdc, &mut b, &f, &l);
+        draw_toast(hdc, &mut b, &f, &l);
+        let bar_dy = if FADE < 1000 { (1000 - ease_out(intro, INTRO_MS)) * TASKBAR_HEIGHT / 1000 } else { 0 };
+        taskbar(hdc, &mut b, &f, &l, bar_dy);
     }
     f.release();
     b.release();
 }
 
-/// Appelé régulièrement par la boucle de messages : suit la résolution de
-/// l'écran et rafraîchit l'horloge à chaque nouvelle minute.
+/// Appelé à chaque tour de la boucle de messages : fait avancer le
+/// démarrage et repeint à ~60 images/s tant qu'une animation est en cours.
+pub unsafe fn frame(hwnd: Handle) {
+    if !BOOT_DONE {
+        // Une étape de préchargement par image, sans bloquer l'animation.
+        match BOOT_STEP {
+            0 | 1 if since(BOOT_START) > 300 => BOOT_STEP += 1,
+            2 if since(BOOT_START) > 900 => { explorer::preload(); BOOT_STEP = 3; }
+            3 if since(BOOT_START) > 1600 => BOOT_STEP = 4,
+            4 if since(BOOT_START) as u32 >= SPLASH_MIN_MS => { BOOT_DONE = true; INTRO_START = now(); }
+            _ => {}
+        }
+    }
+    let animating = !BOOT_DONE || wm::animating() || since(INTRO_START) < INTRO_MS + 40
+        || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40) || START_CLOSING
+        || (TOAST_LEN > 0 && (since(TOAST_START) < 300 || since(TOAST_START) > TOAST_MS - 260));
+    if animating && since(LAST_FRAME) >= 15 {
+        LAST_FRAME = now();
+        InvalidateRect(hwnd, core::ptr::null(), 0);
+    }
+}
+
+/// Appelé deux fois par seconde : suit la résolution de l'écran, rafraîchit
+/// l'horloge à chaque nouvelle minute et les champs de saisie qui clignotent.
 pub unsafe fn tick(hwnd: Handle) {
     let (w, h) = (GetSystemMetrics(0).max(640), GetSystemMetrics(1).max(400));
     if w != SCREEN_W || h != SCREEN_H {
         SCREEN_W = w;
         SCREEN_H = h;
+        wm::WORK = rect(0, 0, w, h - TASKBAR_HEIGHT);
+        wm::on_resize();
         for i in 0..3 {
             ICON_X[i] = ICON_X[i].min(w - 80);
             ICON_Y[i] = ICON_Y[i].min(h - TASKBAR_HEIGHT - 90);
@@ -513,18 +534,32 @@ pub unsafe fn tick(hwnd: Handle) {
     }
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
-    if now.minute != LAST_MINUTE && !splash_active() {
+    let apps = BOOT_DONE && wm::tick();
+    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
 
+unsafe fn repaint(hwnd: Handle) { InvalidateRect(hwnd, core::ptr::null(), 0); }
+
 pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
+    if !BOOT_DONE { return; }
     let l = layout();
     if y >= l.bar_top {
         for i in 0..TASKBAR_BUTTONS {
             if inside(&button_rect(&l, i), x, y) {
-                if i == 0 { START_OPEN = !START_OPEN; } else { ACTIVE_BUTTON = if ACTIVE_BUTTON == i { -1 } else { i }; START_OPEN = false; }
-                InvalidateRect(hwnd, core::ptr::null(), 0);
+                if i == 0 { set_start(!(START_OPEN && !START_CLOSING)); }
+                else {
+                    set_start(false);
+                    match i {
+                        2 => if wm::is_open(wm::APP_EXPLORER) { wm::toggle(wm::APP_EXPLORER) } else { explorer::open_home() },
+                        3 => launch(Launch::Edge),
+                        4 => launch(Launch::Terminal),
+                        6 => wm::toggle(wm::APP_SETTINGS),
+                        _ => {}
+                    }
+                }
+                repaint(hwnd);
                 return;
             }
         }
@@ -532,48 +567,89 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         if x >= tray && x < tray + 24 { NETWORK_CONNECTED ^= 1; }
         else if x >= tray + 24 && x < tray + 52 { VOLUME_LEVEL = match VOLUME_LEVEL { 67..=100 => 45, 34..=66 => 18, 1..=33 => 0, _ => 82 }; }
         else { return; }
-        InvalidateRect(hwnd, core::ptr::null(), 0);
+        repaint(hwnd);
         return;
     }
-    if START_OPEN {
-        if inside(&align_toggle_rect(&l), x, y) {
-            ALIGN_LEFT = !ALIGN_LEFT;
-        } else if !inside(&l.start, x, y) {
-            START_OPEN = false;
+    if START_OPEN && !START_CLOSING {
+        if inside(&l.start, x, y) {
+            match start_item_at(&l, x, y) {
+                200 => ALIGN_LEFT = !ALIGN_LEFT,
+                201 => {}
+                i @ 0..=11 => { set_start(false); launch(PINNED[i as usize].launch); }
+                i @ 100..=103 => { set_start(false); launch(RECOMMENDED[(i - 100) as usize].3); }
+                _ => return,
+            }
         } else {
-            return;
+            set_start(false);
         }
-        InvalidateRect(hwnd, core::ptr::null(), 0);
+        repaint(hwnd);
         return;
     }
+    let mut rp = false;
+    if wm::on_button_down(x, y, &mut rp) { SELECTED_ICON = -1; if rp { repaint(hwnd); } return; }
     for i in (0..3).rev() {
         if x >= ICON_X[i] && x < ICON_X[i] + 76 && y >= ICON_Y[i] && y < ICON_Y[i] + 84 {
-            DRAGGED_ICON = i as i32;
-            InvalidateRect(hwnd, core::ptr::null(), 0);
+            // Double-clic : ouvre l'emplacement dans l'Explorer.
+            if SELECTED_ICON == i as i32 && since(ICON_CLICK_TIME) < 500 {
+                SELECTED_ICON = -1;
+                match i { 0 => explorer::open_pc(), 1 => explorer::open_documents(), _ => explorer::open_trash() }
+            } else {
+                DRAGGED_ICON = i as i32;
+                SELECTED_ICON = i as i32;
+                ICON_CLICK_TIME = now();
+            }
+            repaint(hwnd);
             return;
         }
     }
+    if SELECTED_ICON >= 0 || rp { SELECTED_ICON = -1; repaint(hwnd); }
 }
 
 pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
-    if DRAGGED_ICON < 0 { return; }
+    if !BOOT_DONE { return; }
     let l = layout();
-    let i = DRAGGED_ICON as usize;
-    // Grille de 96 px, comme l'alignement automatique de Windows.
-    let gx = ((x - 38).max(0) + 48) / 96 * 96 + 12;
-    let gy = ((y - 42).max(0) + 48) / 96 * 96 + 12;
-    let nx = gx.min(l.w - 80);
-    let ny = gy.min(l.bar_top - 90);
-    if nx != ICON_X[i] || ny != ICON_Y[i] {
-        ICON_X[i] = nx;
-        ICON_Y[i] = ny;
-        InvalidateRect(hwnd, core::ptr::null(), 0);
+    let mut rp = false;
+    let hb = if y >= l.bar_top { (0..TASKBAR_BUTTONS).find(|&i| inside(&button_rect(&l, i), x, y)).unwrap_or(-1) } else { -1 };
+    if hb != HOVER_BUTTON { HOVER_BUTTON = hb; rp = true; }
+    let hs = if START_OPEN && inside(&l.start, x, y) { start_item_at(&l, x, y) } else { -1 };
+    if hs != HOVER_START_ITEM { HOVER_START_ITEM = hs; rp = true; }
+    if DRAGGED_ICON >= 0 {
+        let i = DRAGGED_ICON as usize;
+        // Grille de 96 px, comme l'alignement automatique de Windows.
+        let gx = ((x - 38).max(0) + 48) / 96 * 96 + 12;
+        let gy = ((y - 42).max(0) + 48) / 96 * 96 + 12;
+        let nx = gx.min(l.w - 80);
+        let ny = gy.min(l.bar_top - 90);
+        if nx != ICON_X[i] || ny != ICON_Y[i] { ICON_X[i] = nx; ICON_Y[i] = ny; rp = true; }
+    } else if !START_OPEN {
+        wm::on_mouse_move(x, y, &mut rp);
     }
+    if rp { repaint(hwnd); }
 }
 
-pub unsafe fn on_button_up(hwnd: Handle) {
-    if DRAGGED_ICON >= 0 {
-        DRAGGED_ICON = -1;
-        InvalidateRect(hwnd, core::ptr::null(), 0);
+pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
+    let mut rp = false;
+    if DRAGGED_ICON >= 0 { DRAGGED_ICON = -1; rp = true; }
+    wm::on_button_up(x, y, &mut rp);
+    if rp { repaint(hwnd); }
+}
+
+/// Molette (`delta` en multiples de 120), clic droit ou milieu.
+pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
+    if !BOOT_DONE || START_OPEN { return; }
+    let mut rp = false;
+    wm::on_other(ev, x, y, &mut rp);
+    if rp { repaint(hwnd); }
+}
+
+/// Clavier : touche Windows pour le menu Démarrer, Échap pour le fermer,
+/// le reste va à la fenêtre active.
+pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
+    if !BOOT_DONE { return; }
+    if ch == 0 && (vk == 0x5B || vk == 0x5C) { set_start(!(START_OPEN && !START_CLOSING)); repaint(hwnd); return; }
+    if START_OPEN && !START_CLOSING {
+        if ch == 27 || vk == 0x1B { set_start(false); repaint(hwnd); }
+        return;
     }
+    if wm::on_key(vk, ch) { repaint(hwnd); }
 }

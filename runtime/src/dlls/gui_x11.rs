@@ -1688,6 +1688,16 @@ impl gui::GuiBackend for X11Backend {
         }
     }
 
+    fn measure_text(&mut self, font: &FontSpec, text: &str) -> Option<(i32, i32)> {
+        let spec = self.scaled_font(font);
+        if let Some((w, h, _)) = self.xft.as_mut().and_then(|xft| xft.measure(&spec, text.as_bytes())) {
+            return Some((self.logical(w), self.logical(h)));
+        }
+        let f = self.ensure_font(&spec)?;
+        let w = text.chars().count() as i32 * f.char_width as i32;
+        Some((self.logical(w), font.height.abs().max(f.ascent as i32)))
+    }
+
     fn capture(&mut self, hwnd: usize, rect: Rect) -> Option<BitmapSnapshot> {
         let mut window = self.windows.get(&hwnd).copied()?;
         if let Some(&(pixmap, width, height)) = self.back.get(&hwnd) {

@@ -580,6 +580,32 @@ pub unsafe extern "win64" fn text_out_a(hdc: usize, x: i32, y: i32, text: *const
     1
 }
 
+/// `SIZE` Win32.
+#[repr(C)]
+pub struct Size { cx: i32, cy: i32 }
+
+unsafe fn text_extent(hdc: usize, s: &str, size: *mut Size) -> i32 {
+    if size.is_null() { crate::process::set_last_error(87); return 0; }
+    let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    let (cx, cy) = gui::measure_text(&font, s);
+    std::ptr::write_unaligned(size, Size { cx, cy });
+    1
+}
+
+/// `GetTextExtentPoint32A(hdc, text, count, size)` : taille du texte dans la
+/// police sélectionnée du DC (fenêtre ou mémoire).
+pub unsafe extern "win64" fn get_text_extent_point32_a(hdc: usize, text: *const u8, count: i32, size: *mut Size) -> i32 {
+    if text.is_null() || count < 0 { crate::process::set_last_error(87); return 0; }
+    let s = crate::dlls::decode_ansi(std::slice::from_raw_parts(text, count as usize));
+    text_extent(hdc, &s, size)
+}
+
+pub unsafe extern "win64" fn get_text_extent_point32_w(hdc: usize, text: *const u16, count: i32, size: *mut Size) -> i32 {
+    if text.is_null() || count < 0 { crate::process::set_last_error(87); return 0; }
+    let s = String::from_utf16_lossy(std::slice::from_raw_parts(text, count as usize));
+    text_extent(hdc, &s, size)
+}
+
 type IconCache = HashMap<(String, usize, u32), Vec<u32>>;
 static ICON_CACHE: OnceLock<Mutex<IconCache>> = OnceLock::new();
 
@@ -781,6 +807,10 @@ pub fn exports() -> crate::dlls::Exports {
         "GetDeviceCaps"=>fn get_device_caps,
         "TextOutA"=>fn text_out_a,
         "WinluxDrawIconA"=>fn winlux_draw_icon_a,
+        "GetTextExtentPoint32A"=>fn get_text_extent_point32_a,
+        "GetTextExtentPoint32W"=>fn get_text_extent_point32_w,
+        "GetTextExtentPointA"=>fn get_text_extent_point32_a,
+        "GetTextExtentPointW"=>fn get_text_extent_point32_w,
         "Rectangle"=>fn rectangle,
         "Ellipse"=>fn ellipse,
     }
