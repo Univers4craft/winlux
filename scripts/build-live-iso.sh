@@ -14,6 +14,7 @@ kernel=${WINLUX_KERNEL:-/boot/vmlinuz}
 kernel_release=${WINLUX_KERNEL_RELEASE:-$(uname -r)}
 virtio_dma_module="/lib/modules/$kernel_release/kernel/drivers/virtio/virtio_dma_buf.ko.zst"
 virtio_gpu_module="/lib/modules/$kernel_release/kernel/drivers/gpu/drm/virtio/virtio-gpu.ko.zst"
+virtio_input_module="/lib/modules/$kernel_release/kernel/drivers/virtio/virtio_input.ko.zst"
 fonts=${WINLUX_X11_FONTS:-/usr/share/fonts/X11/misc}
 xkb=${WINLUX_XKB_DATA:-/usr/share/X11/xkb}
 xorg=${WINLUX_XORG:-/usr/lib/xorg/Xorg}
@@ -37,7 +38,7 @@ for path in /usr/bin/busybox /usr/bin/curl /usr/bin/install /usr/bin/Xvfb /usr/b
 done
 test -r /usr/share/X11/xorg.conf.d/40-libinput.conf || { echo "configuration libinput Xorg absente" >&2; exit 1; }
 test -r "$xft_library" || { echo "bibliothèque Xft absente : $xft_library" >&2; exit 1; }
-for module in "$virtio_dma_module" "$virtio_gpu_module"; do
+for module in "$virtio_dma_module" "$virtio_gpu_module" "$virtio_input_module"; do
     test -r "$module" || { echo "module noyau requis absent : $module" >&2; exit 1; }
 done
 
@@ -100,6 +101,7 @@ cp /usr/bin/xkbcomp "$stage/usr/bin/xkbcomp"
 cp "$xorg" "$stage/usr/bin/Xorg"
 zstd -q -d -c "$virtio_dma_module" >"$stage/lib/modules/$kernel_release/virtio_dma_buf.ko"
 zstd -q -d -c "$virtio_gpu_module" >"$stage/lib/modules/$kernel_release/virtio-gpu.ko"
+zstd -q -d -c "$virtio_input_module" >"$stage/lib/modules/$kernel_release/virtio-input.ko"
 chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/Xorg"
 copy_shared_libraries "$root/target/release/winlux"
 copy_shared_libraries /usr/bin/Xvfb
@@ -146,6 +148,7 @@ export PATH HOME XKB_CONFIG_ROOT
 /bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio_dma_buf.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-gpu.ko 2>/dev/null || true
+/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-input.ko 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
 /bin/busybox mkdir -p /tmp/.X11-unix /run /root/.local/share/winlux
 /bin/busybox chmod 1777 /tmp
@@ -162,15 +165,16 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /bin/sh
     fi
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
-        tray_battery=100
+        tray_battery=0
+        tray_battery_present=0
         for capacity in /sys/class/power_supply/BAT*/capacity; do
-            if test -r "$capacity"; then tray_battery=$(/bin/busybox cat "$capacity"); break; fi
+            if test -r "$capacity"; then tray_battery=$(/bin/busybox cat "$capacity"); tray_battery_present=1; break; fi
         done
         tray_network=0
         for state in /sys/class/net/*/operstate; do
             if test -r "$state" && test "$(/bin/busybox cat "$state")" = up; then tray_network=1; break; fi
         done
-        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_UI_SCALE=1.5 WINLUX_TRAY_VOLUME=70 WINLUX_TRAY_BATTERY="$tray_battery" WINLUX_TRAY_NETWORK="$tray_network" \
+        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_UI_SCALE=1.5 WINLUX_TRAY_VOLUME=70 WINLUX_TRAY_BATTERY="$tray_battery" WINLUX_TRAY_BATTERY_PRESENT="$tray_battery_present" WINLUX_TRAY_NETWORK="$tray_network" \
             /usr/bin/winlux /opt/winlux/tests/gui_demo.exe
         /bin/busybox sleep 1
     done

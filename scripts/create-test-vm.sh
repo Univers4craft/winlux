@@ -15,9 +15,11 @@ cpus=${WINLUX_VM_CPUS:-4}
 width=${WINLUX_VM_WIDTH:-1920}
 height=${WINLUX_VM_HEIGHT:-1080}
 iso=${WINLUX_VM_ISO:-"$root/build/winlux-live-test.iso"}
+auto_stop=${WINLUX_VM_AUTO_STOP_SECONDS:-60}
 
 command -v qemu-system-x86_64 >/dev/null 2>&1 || { echo "qemu-system-x86_64 est requis" >&2; exit 1; }
 command -v qemu-img >/dev/null 2>&1 || { echo "qemu-img est requis" >&2; exit 1; }
+command -v timeout >/dev/null 2>&1 || { echo "timeout est requis" >&2; exit 1; }
 test -f "$iso" || { echo "ISO absente : $iso" >&2; exit 1; }
 kernel="$root/build/winlux-live-test/iso-root/boot/vmlinuz"
 stage="$root/build/winlux-live-test/initramfs-root"
@@ -43,8 +45,9 @@ if test "$mode" = --create-only; then
     echo "Disque persistant créé sans démarrer QEMU."
     exit 0
 fi
-echo "Démarrage de la préversion graphique avec $memory Mio, $cpus CPU, accélération $accel."
-exec qemu-system-x86_64 \
+case "$auto_stop" in *[!0-9]*|'') echo "WINLUX_VM_AUTO_STOP_SECONDS doit être un entier positif" >&2; exit 2 ;; esac
+echo "Démarrage de la préversion graphique avec $memory Mio, $cpus CPU, accélération $accel. Arrêt forcé dans $auto_stop secondes."
+exec timeout --foreground --signal=TERM -k 5s "$auto_stop" qemu-system-x86_64 \
     -name "Winlux Desktop Preview" \
     -machine q35,accel="$accel" \
     -cpu "$cpu" \

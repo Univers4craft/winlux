@@ -33,6 +33,7 @@ static mut DRAGGED_DESKTOP_ICON: i32 = -1;
 static mut FREE_DESKTOP_LAYOUT: u32 = 0;
 static mut VOLUME_LEVEL: u32 = 78;
 static mut BATTERY_LEVEL: u32 = 73;
+static mut BATTERY_PRESENT: u32 = 0;
 static mut NETWORK_CONNECTED: u32 = 1;
 
 unsafe fn environment_percentage(name: *const core::ffi::c_char, fallback: u32) -> u32 {
@@ -192,7 +193,7 @@ unsafe fn draw_desktop_scene(hdc: Handle, start_open: bool) {
     let network_brush=if NETWORK_CONNECTED!=0{text}else{muted};
     FillRect(hdc,&Rect{left:1098,top:698,right:1101,bottom:706},network_brush);FillRect(hdc,&Rect{left:1103,top:694,right:1106,bottom:706},network_brush);FillRect(hdc,&Rect{left:1108,top:690,right:1111,bottom:706},network_brush);FillRect(hdc,&Rect{left:1113,top:686,right:1116,bottom:706},network_brush);
     draw_volume_status(hdc,1131,684,VOLUME_LEVEL,text,muted);
-    FrameRect(hdc,&Rect{left:1171,top:688,right:1201,bottom:704},text);FillRect(hdc,&Rect{left:1174,top:691,right:1174+((24*BATTERY_LEVEL.min(100))/100) as i32,bottom:701},if BATTERY_LEVEL>20{green}else{accent});FillRect(hdc,&Rect{left:1201,top:693,right:1204,bottom:699},text);
+    if BATTERY_PRESENT != 0 {FrameRect(hdc,&Rect{left:1171,top:688,right:1201,bottom:704},text);FillRect(hdc,&Rect{left:1174,top:691,right:1174+((24*BATTERY_LEVEL.min(100))/100) as i32,bottom:701},if BATTERY_LEVEL>20{green}else{accent});FillRect(hdc,&Rect{left:1201,top:693,right:1204,bottom:699},text);} else {SelectObject(hdc,tiny_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,1170,691,c"AC".as_ptr(),-1);}
     FillRect(hdc,&Rect{left:1212,top:682,right:1213,bottom:713},border);
     draw_clock(hdc,medium_font,tiny_font,text,muted);
 
@@ -689,6 +690,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         if desktop {
             VOLUME_LEVEL = environment_percentage(c"WINLUX_TRAY_VOLUME".as_ptr(), VOLUME_LEVEL);
             BATTERY_LEVEL = environment_percentage(c"WINLUX_TRAY_BATTERY".as_ptr(), BATTERY_LEVEL);
+            BATTERY_PRESENT = environment_percentage(c"WINLUX_TRAY_BATTERY_PRESENT".as_ptr(), 0).min(1);
             NETWORK_CONNECTED = environment_percentage(c"WINLUX_TRAY_NETWORK".as_ptr(), NETWORK_CONNECTED).min(1);
             BOOT_SPLASH_UNTIL = GetTickCount().wrapping_add(1400);
         }
