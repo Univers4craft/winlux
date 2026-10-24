@@ -15,6 +15,11 @@ kernel_release=${WINLUX_KERNEL_RELEASE:-$(uname -r)}
 virtio_dma_module="/lib/modules/$kernel_release/kernel/drivers/virtio/virtio_dma_buf.ko.zst"
 virtio_gpu_module="/lib/modules/$kernel_release/kernel/drivers/gpu/drm/virtio/virtio-gpu.ko.zst"
 virtio_input_module="/lib/modules/$kernel_release/kernel/drivers/virtio/virtio_input.ko.zst"
+serio_raw_module="/lib/modules/$kernel_release/kernel/drivers/input/serio/serio_raw.ko.zst"
+psmouse_module="/lib/modules/$kernel_release/kernel/drivers/input/mouse/psmouse.ko.zst"
+hid_module="/lib/modules/$kernel_release/kernel/drivers/hid/hid.ko.zst"
+usbhid_module="/lib/modules/$kernel_release/kernel/drivers/hid/usbhid/usbhid.ko.zst"
+hid_generic_module="/lib/modules/$kernel_release/kernel/drivers/hid/hid-generic.ko.zst"
 fonts=${WINLUX_X11_FONTS:-/usr/share/fonts/X11/misc}
 xkb=${WINLUX_XKB_DATA:-/usr/share/X11/xkb}
 xorg=${WINLUX_XORG:-/usr/lib/xorg/Xorg}
@@ -38,7 +43,7 @@ for path in /usr/bin/busybox /usr/bin/curl /usr/bin/install /usr/bin/Xvfb /usr/b
 done
 test -r /usr/share/X11/xorg.conf.d/40-libinput.conf || { echo "configuration libinput Xorg absente" >&2; exit 1; }
 test -r "$xft_library" || { echo "bibliothèque Xft absente : $xft_library" >&2; exit 1; }
-for module in "$virtio_dma_module" "$virtio_gpu_module" "$virtio_input_module"; do
+for module in "$virtio_dma_module" "$virtio_gpu_module" "$virtio_input_module" "$serio_raw_module" "$psmouse_module" "$hid_module" "$usbhid_module" "$hid_generic_module"; do
     test -r "$module" || { echo "module noyau requis absent : $module" >&2; exit 1; }
 done
 
@@ -102,6 +107,11 @@ cp "$xorg" "$stage/usr/bin/Xorg"
 zstd -q -d -c "$virtio_dma_module" >"$stage/lib/modules/$kernel_release/virtio_dma_buf.ko"
 zstd -q -d -c "$virtio_gpu_module" >"$stage/lib/modules/$kernel_release/virtio-gpu.ko"
 zstd -q -d -c "$virtio_input_module" >"$stage/lib/modules/$kernel_release/virtio-input.ko"
+zstd -q -d -c "$serio_raw_module" >"$stage/lib/modules/$kernel_release/serio-raw.ko"
+zstd -q -d -c "$psmouse_module" >"$stage/lib/modules/$kernel_release/psmouse.ko"
+zstd -q -d -c "$hid_module" >"$stage/lib/modules/$kernel_release/hid.ko"
+zstd -q -d -c "$usbhid_module" >"$stage/lib/modules/$kernel_release/usbhid.ko"
+zstd -q -d -c "$hid_generic_module" >"$stage/lib/modules/$kernel_release/hid-generic.ko"
 chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/Xorg"
 copy_shared_libraries "$root/target/release/winlux"
 copy_shared_libraries /usr/bin/Xvfb
@@ -149,6 +159,12 @@ export PATH HOME XKB_CONFIG_ROOT
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio_dma_buf.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-gpu.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-input.ko 2>/dev/null || true
+/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid.ko 2>/dev/null || true
+/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/usbhid.ko 2>/dev/null || true
+/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid-generic.ko 2>/dev/null || true
+/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/serio-raw.ko 2>/dev/null || true
+/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/psmouse.ko 2>/dev/null || true
+/bin/busybox mdev -s 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
 /bin/busybox mkdir -p /tmp/.X11-unix /run /root/.local/share/winlux
 /bin/busybox chmod 1777 /tmp
