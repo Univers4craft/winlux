@@ -4,7 +4,7 @@
 
 use crate::dlls::gui::{self, BitmapSnapshot, DrawCmd, FontSpec, PendingEvent, Rect};
 use crate::dlls::gui::theme;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uchar, c_ulong, c_void, CString};
 use x11rb::connection::Connection;
@@ -101,7 +101,6 @@ struct XftApi {
     default_screen: unsafe extern "C" fn(*mut Display) -> c_int,
     default_visual: unsafe extern "C" fn(*mut Display, c_int) -> *mut Visual,
     default_colormap: unsafe extern "C" fn(*mut Display, c_int) -> c_ulong,
-    flush: unsafe extern "C" fn(*mut Display) -> c_int,
     sync: unsafe extern "C" fn(*mut Display, c_int) -> c_int,
     draw_create: unsafe extern "C" fn(*mut Display, c_ulong, *mut Visual, c_ulong) -> *mut XftDraw,
     draw_destroy: unsafe extern "C" fn(*mut XftDraw),
@@ -152,7 +151,6 @@ impl XftApi {
             default_screen: required!(x11, b"XDefaultScreen\0"),
             default_visual: required!(x11, b"XDefaultVisual\0"),
             default_colormap: required!(x11, b"XDefaultColormap\0"),
-            flush: required!(x11, b"XFlush\0"),
             sync: required!(x11, b"XSync\0"),
             draw_create: required!(xft, b"XftDrawCreate\0"),
             draw_destroy: required!(xft, b"XftDrawDestroy\0"),
@@ -237,10 +235,13 @@ impl XftRenderer {
             (self.api.draw_string)(draw, &color, font, x, baseline, text.as_ptr(), text.len() as c_int);
             (self.api.color_free)(self.display, self.visual, self.colormap, &mut color);
             (self.api.draw_destroy)(draw);
-            (self.api.flush)(self.display);
-            (self.api.sync)(self.display, 0);
         }
         true
+    }
+
+    /// Attend que le serveur ait traité les glyphes envoyés par Xlib.
+    fn sync(&self) {
+        unsafe { (self.api.sync)(self.display, 0); }
     }
 }
 
@@ -327,6 +328,14 @@ pub struct X11Backend {
     scale: f32,
     /// Table de correspondance keycode X11 → keysyms (lue à la demande).
     keymap: HashMap<u8, Vec<u32>>,
+    /// Tampon arrière de chaque fenêtre : la peinture y est composée puis
+    /// recopiée d'un bloc, sans scintillement, et les Expose sont servis
+    /// sans rejouer les commandes GDI.
+    back: HashMap<usize, (u32, u16, u16)>,
+    /// Requêtes de dessin x11rb pas encore vues par la connexion Xlib (Xft).
+    x11_dirty: Cell<bool>,
+    /// Glyphes Xft pas encore confirmés par le serveur.
+    xft_dirty: Cell<bool>,
 }
 
 impl X11Backend {
@@ -364,6 +373,9 @@ impl X11Backend {
             xft: unsafe { XftRenderer::connect() },
             scale,
             keymap: HashMap::new(),
+            back: HashMap::new(),
+            x11_dirty: Cell::new(false),
+            xft_dirty: Cell::new(false),
         })
     }
 
@@ -458,9 +470,51 @@ impl X11Backend {
         pixel
     }
 
+    /// Les glyphes Xft passent par une seconde connexion : avant de reprendre
+    /// le dessin x11rb, on attend qu'ils soient posés.
+    fn before_x11(&self) {
+        if self.xft_dirty.replace(false) {
+            if let Some(xft) = self.xft.as_ref() { xft.sync(); }
+        }
+        self.x11_dirty.set(true);
+    }
+
+    /// Inverse de `before_x11` : un seul aller-retour pour toute une suite de
+    /// textes, au lieu de deux par texte.
+    fn before_xft(&self) {
+        if self.x11_dirty.replace(false) {
+            let _ = self.conn.flush();
+            if let Ok(cookie) = self.conn.get_input_focus() { let _ = cookie.reply(); }
+        }
+        self.xft_dirty.set(true);
+    }
+
+    /// Tampon arrière à la taille actuelle de la fenêtre (recréé si besoin).
+    fn back_buffer(&mut self, hwnd: usize, w: &XWin) -> Option<u32> {
+        if let Some(&(pixmap, width, height)) = self.back.get(&hwnd) {
+            if width == w.width && height == w.height { return Some(pixmap); }
+            let _ = self.conn.free_pixmap(pixmap);
+            self.back.remove(&hwnd);
+        }
+        if std::env::var_os("WINLUX_NO_BACKBUFFER").is_some_and(|v| !v.is_empty()) { return None; }
+        let depth = self.conn.setup().roots[self.screen].root_depth;
+        let pixmap = self.conn.generate_id().ok()?;
+        self.conn.create_pixmap(depth, pixmap, w.window, w.width.max(1), w.height.max(1)).ok()?.check().ok()?;
+        self.back.insert(hwnd, (pixmap, w.width, w.height));
+        Some(pixmap)
+    }
+
+    /// Recopie une zone du tampon arrière vers la fenêtre.
+    fn present(&self, w: &XWin, pixmap: u32, x: i16, y: i16, width: u16, height: u16) {
+        self.before_x11();
+        let _ = self.conn.copy_area(pixmap, w.window, w.gc, x, y, x, y, width, height);
+        let _ = self.conn.flush();
+    }
+
     /// Dessine un fond clair avec un dégradé discret, proche des surfaces
     /// d'application de Windows 11. Le contenu GDI invité est posé ensuite.
     fn paint_theme(&self, w: &XWin) {
+        self.before_x11();
         let bands = 32u32;
         let h = w.height.max(1) as u32;
         for i in 0..bands {
@@ -610,22 +664,23 @@ impl X11Backend {
         let vector_metrics = self.xft.as_mut().and_then(|xft| xft.measure(spec, utf8));
         if let Some((width, height, ascent)) = vector_metrics {
             if let Some(background) = bk {
+                self.before_x11();
                 self.paint_fill(
                     w,
                     &Rect { left: x, top: y, right: x + width.max(1), bottom: y + height.max(1) },
                     background,
                 );
             }
-            // Xft utilise une seconde connexion Xlib. Ce round-trip garantit
-            // que les surfaces envoyées par x11rb sont posées avant les glyphes.
-            let _ = self.conn.flush();
-            if let Ok(cookie) = self.conn.get_input_focus() { let _ = cookie.reply(); }
+            // Xft utilise une seconde connexion Xlib : les surfaces envoyées
+            // par x11rb doivent être posées avant les glyphes.
+            self.before_xft();
             let drawn = self
                 .xft
                 .as_mut()
                 .map(|xft| xft.draw(w.window, spec, x, y + ascent, utf8, color))
                 .unwrap_or(false);
             if drawn {
+                if spec.underline || spec.strikeout { self.before_x11(); }
                 if spec.underline {
                     self.paint_fill(
                         w,
@@ -645,6 +700,7 @@ impl X11Backend {
             }
         }
 
+        self.before_x11();
         let font = match self.ensure_font(spec) {
             Some(f) => f,
             None => return,
@@ -717,7 +773,10 @@ impl X11Backend {
         stretch: bool,
         rop: gui::RasterOp,
     ) {
-        let Some(source_window) = self.windows.get(&source_hwnd).copied() else { return };
+        let Some(mut source_window) = self.windows.get(&source_hwnd).copied() else { return };
+        if let Some(&(pixmap, width, height)) = self.back.get(&source_hwnd) {
+            if width == source_window.width && height == source_window.height { source_window.window = pixmap; }
+        }
         let Some(src) = Self::to_x_rect(&source_window, source_rect) else { return };
         let Some(dst) = Self::to_x_rect(destination_window, destination_rect) else { return };
 
@@ -933,6 +992,7 @@ impl X11Backend {
     /// Rejoue la liste de commandes GDI d'une fenêtre.
     fn paint_cmds(&mut self, w: &XWin, cmds: &[DrawCmd]) {
         for cmd in cmds {
+            if !matches!(cmd, DrawCmd::Text { .. }) { self.before_x11(); }
             match cmd {
                 DrawCmd::FillRect { rect, color } => {
                     let rect = self.scaled_rect(rect);
@@ -971,8 +1031,14 @@ impl X11Backend {
         match ev {
             Event::Expose(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
-                // count > 0 : d'autres Expose suivent, on attend le dernier.
-                if e.count == 0 {
+                let buffered = self.windows.get(&hwnd).copied().and_then(|w| {
+                    let &(pixmap, width, height) = self.back.get(&hwnd)?;
+                    (width == w.width && height == w.height).then_some((w, pixmap))
+                });
+                if let Some((w, pixmap)) = buffered {
+                    self.present(&w, pixmap, e.x as i16, e.y as i16, e.width, e.height);
+                } else if e.count == 0 {
+                    // count > 0 : d'autres Expose suivent, on attend le dernier.
                     if let Some(w) = self.windows.get(&hwnd).copied() {
                         self.paint_theme(&w);
                         let content = self.content.get(&hwnd).cloned().unwrap_or_default();
@@ -1000,23 +1066,30 @@ impl X11Backend {
                     eprintln!("Winlux X11 button {} at {x},{y}", e.detail);
                 }
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
-                let wparam = button_wparam(e.detail);
-                Some(PendingEvent { hwnd, message: gui::WM_LBUTTONDOWN, wparam, lparam })
+                if let Some((message, delta)) = wheel_message(e.detail) {
+                    // La molette Win32 donne des coordonnées écran.
+                    let lparam = pack_i16_pair(self.logical(e.root_x as i32), self.logical(e.root_y as i32));
+                    let wparam = ((delta as u16 as usize) << 16) | button_state(e.state);
+                    return Some(PendingEvent { hwnd, message, wparam, lparam });
+                }
+                let wparam = button_wparam(e.detail) | button_state(e.state);
+                Some(PendingEvent { hwnd, message: button_message(e.detail, true), wparam, lparam })
             }
             Event::ButtonRelease(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
+                if wheel_message(e.detail).is_some() { return None; }
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
-                let wparam = button_wparam(e.detail);
-                Some(PendingEvent { hwnd, message: gui::WM_LBUTTONUP, wparam, lparam })
+                let wparam = button_state(e.state) & !button_wparam(e.detail);
+                Some(PendingEvent { hwnd, message: button_message(e.detail, false), wparam, lparam })
             }
             Event::MotionNotify(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
-                Some(PendingEvent { hwnd, message: gui::WM_MOUSEMOVE, wparam: 0, lparam })
+                Some(PendingEvent { hwnd, message: gui::WM_MOUSEMOVE, wparam: button_state(e.state), lparam })
             }
             Event::FocusIn(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
@@ -1123,10 +1196,46 @@ impl X11Backend {
 fn button_wparam(detail: u8) -> usize {
     match detail {
         1 => 0x0001, // MK_LBUTTON
-        2 => 0x0002, // MK_MBUTTON
-        3 => 0x0010, // MK_RBUTTON
+        2 => 0x0010, // MK_MBUTTON
+        3 => 0x0002, // MK_RBUTTON
         _ => 0,
     }
+}
+
+/// Message Win32 d'un bouton X11 (1 gauche, 2 milieu, 3 droit).
+fn button_message(detail: u8, down: bool) -> u32 {
+    match (detail, down) {
+        (2, true) => gui::WM_MBUTTONDOWN,
+        (2, false) => gui::WM_MBUTTONUP,
+        (3, true) => gui::WM_RBUTTONDOWN,
+        (3, false) => gui::WM_RBUTTONUP,
+        (_, true) => gui::WM_LBUTTONDOWN,
+        (_, false) => gui::WM_LBUTTONUP,
+    }
+}
+
+/// Boutons X11 4/5 (molette verticale) et 6/7 (horizontale) : un cran vaut
+/// `WHEEL_DELTA` (120), positif vers le haut ou vers la droite.
+fn wheel_message(detail: u8) -> Option<(u32, i16)> {
+    match detail {
+        4 => Some((gui::WM_MOUSEWHEEL, 120)),
+        5 => Some((gui::WM_MOUSEWHEEL, -120)),
+        6 => Some((gui::WM_MOUSEHWHEEL, -120)),
+        7 => Some((gui::WM_MOUSEHWHEEL, 120)),
+        _ => None,
+    }
+}
+
+/// Boutons et modificateurs enfoncés (masque d'état X11) en bits MK_*.
+fn button_state(state: x11rb::protocol::xproto::KeyButMask) -> usize {
+    use x11rb::protocol::xproto::KeyButMask;
+    let mut bits = 0;
+    if state.contains(KeyButMask::BUTTON1) { bits |= 0x0001; }
+    if state.contains(KeyButMask::BUTTON3) { bits |= 0x0002; }
+    if state.contains(KeyButMask::SHIFT) { bits |= 0x0004; }
+    if state.contains(KeyButMask::CONTROL) { bits |= 0x0008; }
+    if state.contains(KeyButMask::BUTTON2) { bits |= 0x0010; }
+    bits
 }
 
 fn pack_i16_pair(low: i32, high: i32) -> isize {
@@ -1484,15 +1593,23 @@ impl gui::GuiBackend for X11Backend {
 
     fn draw(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
         self.content.insert(hwnd, cmds.to_vec());
-        if let Some(w) = self.windows.get(&hwnd).copied() {
+        let Some(w) = self.windows.get(&hwnd).copied() else { return };
+        if let Some(pixmap) = self.back_buffer(hwnd, &w) {
+            let target = XWin { window: pixmap, ..w };
+            self.paint_theme(&target);
+            self.paint_cmds(&target, cmds);
+            self.present(&w, pixmap, 0, 0, w.width, w.height);
+        } else {
             self.paint_theme(&w);
             self.paint_cmds(&w, cmds);
+            self.before_x11();
             let _ = self.conn.flush();
         }
     }
 
     fn destroy_window(&mut self, hwnd: usize) {
         self.content.remove(&hwnd);
+        if let Some((pixmap, _, _)) = self.back.remove(&hwnd) { let _ = self.conn.free_pixmap(pixmap); }
         if let Some(w) = self.windows.remove(&hwnd) {
             self.by_xwin.remove(&w.window);
             let _ = self.conn.free_gc(w.gc);
@@ -1572,7 +1689,11 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn capture(&mut self, hwnd: usize, rect: Rect) -> Option<BitmapSnapshot> {
-        let window = self.windows.get(&hwnd).copied()?;
+        let mut window = self.windows.get(&hwnd).copied()?;
+        if let Some(&(pixmap, width, height)) = self.back.get(&hwnd) {
+            if width == window.width && height == window.height { window.window = pixmap; }
+        }
+        self.before_x11();
         let area = Self::to_x_rect(&window, &rect)?;
         let setup = self.conn.setup();
         let screen = &setup.roots[self.screen];
@@ -1641,6 +1762,9 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn invalidate(&mut self, hwnd: usize) {
+        // Avec un tampon arrière, effacer la fenêtre ne ferait que clignoter :
+        // la prochaine peinture recouvre tout d'un bloc.
+        if self.back.contains_key(&hwnd) { return; }
         if let Some(w) = self.windows.get(&hwnd) {
             let _ = self.conn.clear_area(false, w.window, 0, 0, 0, 0);
             let _ = self.conn.flush();
