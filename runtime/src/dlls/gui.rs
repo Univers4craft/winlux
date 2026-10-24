@@ -1353,6 +1353,9 @@ pub trait GuiBackend: Send {
     fn wait(&mut self, _timeout_ms: u32) -> bool {
         false
     }
+    /// Taille actuelle de l'écran en unités logiques Win32. Elle suit les
+    /// changements de résolution (RandR) pour SM_CXSCREEN/SM_CYSCREEN.
+    fn screen_size(&mut self) -> Option<(i32, i32)> { None }
 }
 
 struct HeadlessBackend;
@@ -1388,6 +1391,13 @@ pub fn init() {
 fn with_backend<F: FnOnce(&mut dyn GuiBackend)>(f: F) {
     let mut b = lock(backend());
     f(b.as_mut());
+}
+
+/// Taille de l'écran (logique) ou 1920×1080 sans affichage réel.
+pub fn screen_size() -> (i32, i32) {
+    let mut size = None;
+    with_backend(|b| size = b.screen_size());
+    size.unwrap_or((1920, 1080))
 }
 
 /// Interroge le backend et publie les messages traduits dans les files cibles.

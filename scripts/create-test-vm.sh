@@ -49,11 +49,11 @@ fi
 case "$auto_stop" in *[!0-9]*|'') echo "WINLUX_VM_AUTO_STOP_SECONDS doit être un entier positif" >&2; exit 2 ;; esac
 echo "Démarrage de la préversion graphique avec $memory Mio, $cpus CPU, accélération $accel. Arrêt forcé dans $auto_stop secondes."
 rm -f "$monitor"
-# The tablet is an absolute pointing device.  Let GTK grab it as soon as the
-# pointer enters the guest: without this, some compositors keep the host
-# pointer and the desktop appears to have no mouse.
-# The guest kernel ships virtio-input; use that proven path rather than an
-# emulated USB tablet which is not enumerated by this minimal boot image.
+# A virtio tablet provides absolute pointer coordinates without capturing the
+# host's mouse.  The guest image includes virtio-input; its USB HID stack is
+# not guaranteed to enumerate an emulated USB tablet.
+# xres/yres only set the initial mode: resizing the QEMU window announces a
+# new preferred mode to the guest, which applies it with xrandr.
 exec timeout --foreground --signal=TERM -k 5s "$auto_stop" qemu-system-x86_64 \
     -name "Winlux Desktop Preview" \
     -machine q35,accel="$accel" \
@@ -61,12 +61,12 @@ exec timeout --foreground --signal=TERM -k 5s "$auto_stop" qemu-system-x86_64 \
     -m "$memory" \
     -smp "$cpus" \
     -device "virtio-vga,xres=$width,yres=$height" \
-    -display gtk,full-screen=on,zoom-to-fit=on,grab-on-hover=on \
-    -device virtio-mouse-pci \
+    -display gtk,full-screen=on,zoom-to-fit=on \
+    -device virtio-tablet-pci \
     -device virtio-keyboard-pci \
     -monitor "unix:$monitor,server=on,wait=off" \
     -drive "file=$disk,if=virtio,format=qcow2,cache=writeback" \
     -drive "file=$iso,media=cdrom,readonly=on" \
     -kernel "$kernel" \
-    -append "root=/dev/vda rw rootfstype=ext4 init=/init panic=1 loglevel=3 winlux.interactive=1 video=${width}x${height} console=tty1 console=ttyS0,115200n8" \
+    -append "root=/dev/vda rw rootfstype=ext4 init=/init panic=1 loglevel=3 winlux.interactive=1 console=tty1 console=ttyS0,115200n8" \
     -serial "file:$vm_dir/serial.log"

@@ -367,6 +367,53 @@ impl X11Backend {
         })
     }
 
+    /// Construit le curseur flèche (contour noir, intérieur blanc) à partir
+    /// d'un motif 12×19 agrandi selon l'échelle d'interface.
+    fn arrow_cursor(&self) -> Option<u32> {
+        const ARROW: [&[u8; 12]; 19] = [
+            b"X           ", b"XX          ", b"XoX         ", b"XooX        ",
+            b"XoooX       ", b"XooooX      ", b"XoooooX     ", b"XooooooX    ",
+            b"XoooooooX   ", b"XooooooooX  ", b"XoooooooooX ", b"XooooooXXXXX",
+            b"XoooXooX    ", b"XooXXooX    ", b"XoX  XooX   ", b"XX   XooX   ",
+            b"X     XooX  ", b"      XooX  ", b"       XX   ",
+        ];
+        let scale = self.scale.max(1.0);
+        let width = (12.0 * scale).ceil() as u16;
+        let height = (19.0 * scale).ceil() as u16;
+        let setup = self.conn.setup();
+        let pad = setup.pixmap_formats.iter().find(|f| f.depth == 1).map(|f| f.scanline_pad as usize).unwrap_or(32);
+        let lsb_first = setup.bitmap_format_bit_order == x11rb::protocol::xproto::ImageOrder::LSB_FIRST;
+        let stride = (width as usize).div_ceil(pad) * pad / 8;
+        let mut source = vec![0u8; stride * height as usize];
+        let mut mask = vec![0u8; stride * height as usize];
+        for y in 0..height as usize {
+            for x in 0..width as usize {
+                let row = ARROW[((y as f32 / scale) as usize).min(18)];
+                let cell = row[((x as f32 / scale) as usize).min(11)];
+                let bit = if lsb_first { 1u8 << (x % 8) } else { 0x80u8 >> (x % 8) };
+                let at = y * stride + x / 8;
+                if cell != b' ' { mask[at] |= bit; }
+                if cell == b'o' { source[at] |= bit; }
+            }
+        }
+        let root = setup.roots[self.screen].root;
+        let mut pixmaps = [0u32; 2];
+        for (slot, data) in [&source, &mask].into_iter().enumerate() {
+            let pixmap = self.conn.generate_id().ok()?;
+            self.conn.create_pixmap(1, pixmap, root, width, height).ok()?;
+            let gc = self.conn.generate_id().ok()?;
+            self.conn.create_gc(gc, pixmap, &x11rb::protocol::xproto::CreateGCAux::new()).ok()?;
+            self.conn.put_image(x11rb::protocol::xproto::ImageFormat::Z_PIXMAP, pixmap, gc, width, height, 0, 0, 0, 1, data).ok()?;
+            let _ = self.conn.free_gc(gc);
+            pixmaps[slot] = pixmap;
+        }
+        let cursor = self.conn.generate_id().ok()?;
+        let created = self.conn.create_cursor(cursor, pixmaps[0], pixmaps[1], u16::MAX, u16::MAX, u16::MAX, 0, 0, 0, 0, 0);
+        for p in pixmaps { let _ = self.conn.free_pixmap(p); }
+        created.ok()?.check().ok()?;
+        Some(cursor)
+    }
+
     fn scaled(&self, value: i32) -> i32 {
         (value as f32 * self.scale).round() as i32
     }
@@ -949,6 +996,9 @@ impl X11Backend {
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
+                if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
+                    eprintln!("Winlux X11 button {} at {x},{y}", e.detail);
+                }
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
                 let wparam = button_wparam(e.detail);
                 Some(PendingEvent { hwnd, message: gui::WM_LBUTTONDOWN, wparam, lparam })
@@ -978,6 +1028,9 @@ impl X11Backend {
             }
             Event::KeyPress(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
+                if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
+                    eprintln!("Winlux X11 keycode {}", e.detail);
+                }
                 let shift = e.state.contains(x11rb::protocol::xproto::KeyButMask::SHIFT);
                 let ctrl = e.state.contains(x11rb::protocol::xproto::KeyButMask::CONTROL);
                 let caps = e.state.contains(x11rb::protocol::xproto::KeyButMask::LOCK);
@@ -1325,6 +1378,14 @@ impl gui::GuiBackend for X11Backend {
         }
     }
 
+    fn screen_size(&mut self) -> Option<(i32, i32)> {
+        // La géométrie de la racine est relue à chaque appel : après un
+        // changement de mode RandR, la valeur du setup initial est périmée.
+        let root = self.conn.setup().roots[self.screen].root;
+        let geometry = self.conn.get_geometry(root).ok()?.reply().ok()?;
+        Some((self.logical(geometry.width as i32).max(1), self.logical(geometry.height as i32).max(1)))
+    }
+
     fn create_window(&mut self, hwnd: usize, title: &str, rect: Rect) {
         let setup = self.conn.setup();
         let scr = &setup.roots[self.screen];
@@ -1341,6 +1402,20 @@ impl gui::GuiBackend for X11Backend {
             Err(_) => return,
         };
         let bg = self.alloc_color(theme::BG_DEEP);
+        // Pointeur flèche façon Windows, à l'échelle de l'interface. Un
+        // serveur Xorg nu n'a que la croix X ou le petit curseur de police.
+        let pointer_cursor = self.arrow_cursor().or_else(|| {
+            let font = self.conn.generate_id().ok()?;
+            self.conn.open_font(font, b"cursor").ok()?.check().ok()?;
+            let cursor = self.conn.generate_id().ok()?;
+            let created = self.conn.create_glyph_cursor(
+                cursor, font, font, 68, 69,
+                u16::MAX, u16::MAX, u16::MAX, 0, 0, 0,
+            );
+            let _ = self.conn.close_font(font);
+            created.ok()?.check().ok()?;
+            Some(cursor)
+        });
         let aux = CreateWindowAux::new()
             .background_pixel(bg)
             .event_mask(
@@ -1353,6 +1428,7 @@ impl gui::GuiBackend for X11Backend {
                     | x11rb::protocol::xproto::EventMask::KEY_PRESS
                     | x11rb::protocol::xproto::EventMask::KEY_RELEASE,
             );
+        let aux = if let Some(cursor) = pointer_cursor { aux.cursor(cursor) } else { aux };
 
         if self.conn
             .create_window(
@@ -1370,8 +1446,10 @@ impl gui::GuiBackend for X11Backend {
             )
             .is_err()
         {
+            if let Some(cursor) = pointer_cursor { let _ = self.conn.free_cursor(cursor); }
             return;
         }
+        if let Some(cursor) = pointer_cursor { let _ = self.conn.free_cursor(cursor); }
 
         // Demande la fermeture propre via WM_DELETE_WINDOW.
         let _ = self.conn.change_property32(

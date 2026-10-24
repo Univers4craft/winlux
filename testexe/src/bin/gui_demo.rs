@@ -7,6 +7,9 @@
 
 use winlux_testexe::*;
 
+#[path = "../shell/desktop.rs"]
+mod desktop;
+
 static mut GOT_PAINT: u32 = 0;
 static mut GOT_DESTROY: u32 = 0;
 static mut GOT_SIZE: u32 = 0;
@@ -23,19 +26,6 @@ static mut THREAD_KEY_STATE_MATCH: u32 = 0;
 static mut KEYBOARD_STATE_MATCH: u32 = 0;
 static mut ASYNC_KEY_PRESSED: u32 = 0;
 static mut THREAD_KEY_UP_CLEAR: u32 = 0;
-// Un bureau démarre fermé. Le menu ne s'affiche qu'après un clic explicite
-// sur le bouton Winlux, comme sur un poste de travail normal.
-static mut START_MENU_OPEN: u32 = 0;
-static mut BOOT_SPLASH_UNTIL: u32 = 0;
-static mut DESKTOP_ICON_X: [i32; 3] = [42, 42, 42];
-static mut DESKTOP_ICON_Y: [i32; 3] = [112, 205, 298];
-static mut DRAGGED_DESKTOP_ICON: i32 = -1;
-static mut FREE_DESKTOP_LAYOUT: u32 = 0;
-static mut VOLUME_LEVEL: u32 = 78;
-static mut BATTERY_LEVEL: u32 = 73;
-static mut BATTERY_PRESENT: u32 = 0;
-static mut NETWORK_CONNECTED: u32 = 1;
-
 unsafe fn environment_percentage(name: *const core::ffi::c_char, fallback: u32) -> u32 {
     let mut value = [0i8; 16];
     let len = GetEnvironmentVariableA(name, value.as_mut_ptr(), value.len() as u32);
@@ -47,159 +37,6 @@ unsafe fn environment_percentage(name: *const core::ffi::c_char, fallback: u32) 
         parsed = parsed.saturating_mul(10).saturating_add((byte - b'0') as u32);
     }
     parsed.min(100)
-}
-
-unsafe fn draw_clock(hdc: Handle, time_font: Handle, date_font: Handle, text: Handle, muted: Handle) {
-    let mut now = SystemTime::default();
-    GetLocalTime(&mut now);
-    let hour = now.hour.min(99) as u8; let minute = now.minute.min(99) as u8;
-    let day = now.day.min(99) as u8; let month = now.month.min(99) as u8; let year = (now.year % 100) as u8;
-    let clock = [b'0' + hour / 10, b'0' + hour % 10, b':', b'0' + minute / 10, b'0' + minute % 10];
-    let date = [b'0' + day / 10, b'0' + day % 10, b'/', b'0' + month / 10, b'0' + month % 10, b'/', b'0' + year / 10, b'0' + year % 10];
-    SelectObject(hdc, time_font); SetTextColor(hdc, 0x0024_201E); TextOutA(hdc, 1224, 681, clock.as_ptr() as *const core::ffi::c_char, clock.len() as i32);
-    SelectObject(hdc, date_font); SetTextColor(hdc, 0x0083_746D); TextOutA(hdc, 1220, 700, date.as_ptr() as *const core::ffi::c_char, date.len() as i32);
-    let _ = (text, muted);
-}
-
-unsafe fn fill_round_rect(hdc: Handle, rect: Rect, radius: i32, brush: Handle) {
-    let width=rect.right-rect.left;let height=rect.bottom-rect.top;let radius=radius.min(width/2).min(height/2).max(1);
-    FillRect(hdc,&Rect{left:rect.left+radius,top:rect.top,right:rect.right-radius,bottom:rect.bottom},brush);
-    FillRect(hdc,&Rect{left:rect.left,top:rect.top+radius,right:rect.right,bottom:rect.bottom-radius},brush);
-    SelectObject(hdc,brush);
-    Ellipse(hdc,rect.left,rect.top,rect.left+radius*2,rect.top+radius*2);
-    Ellipse(hdc,rect.right-radius*2,rect.top,rect.right,rect.top+radius*2);
-    Ellipse(hdc,rect.left,rect.bottom-radius*2,rect.left+radius*2,rect.bottom);
-    Ellipse(hdc,rect.right-radius*2,rect.bottom-radius*2,rect.right,rect.bottom);
-}
-
-unsafe fn round_panel(hdc:Handle,rect:Rect,radius:i32,shadow:Handle,border:Handle,surface:Handle){
-    fill_round_rect(hdc,Rect{left:rect.left+6,top:rect.top+8,right:rect.right+6,bottom:rect.bottom+8},radius,shadow);
-    fill_round_rect(hdc,rect,radius,border);
-    fill_round_rect(hdc,Rect{left:rect.left+1,top:rect.top+1,right:rect.right-1,bottom:rect.bottom-1},radius-1,surface);
-}
-
-unsafe fn draw_windows_mark(hdc:Handle,x:i32,y:i32,size:i32,brush:Handle){
-    let gap=(size/8).max(2);let cell=(size-gap)/2;
-    FillRect(hdc,&Rect{left:x,top:y,right:x+cell,bottom:y+cell},brush);
-    FillRect(hdc,&Rect{left:x+cell+gap,top:y,right:x+size,bottom:y+cell},brush);
-    FillRect(hdc,&Rect{left:x,top:y+cell+gap,right:x+cell,bottom:y+size},brush);
-    FillRect(hdc,&Rect{left:x+cell+gap,top:y+cell+gap,right:x+size,bottom:y+size},brush);
-}
-
-unsafe fn draw_search_mark(hdc:Handle,x:i32,y:i32,brush:Handle,inside:Handle){
-    SelectObject(hdc,brush);Ellipse(hdc,x,y,x+17,y+17);SelectObject(hdc,inside);Ellipse(hdc,x+4,y+4,x+13,y+13);
-    FillRect(hdc,&Rect{left:x+14,top:y+14,right:x+22,bottom:y+18},brush);
-}
-
-unsafe fn draw_installed_icon(hdc: Handle, request: *const core::ffi::c_char, x: i32, y: i32, size: i32, background: u32, fallback: Handle) {
-    if WinluxDrawIconA(hdc, request, x, y, size, background) == 0 {
-        fill_round_rect(hdc, Rect { left: x, top: y, right: x + size, bottom: y + size }, (size / 4).max(4), fallback);
-    }
-}
-
-unsafe fn draw_volume_status(hdc: Handle, x: i32, y: i32, level: u32, foreground: Handle, dimmed: Handle) {
-    SelectObject(hdc, if level == 0 { dimmed } else { foreground });
-    FillRect(hdc, &Rect { left: x, top: y + 8, right: x + 6, bottom: y + 16 }, if level == 0 { dimmed } else { foreground });
-    FillRect(hdc, &Rect { left: x + 6, top: y + 5, right: x + 11, bottom: y + 19 }, if level == 0 { dimmed } else { foreground });
-    if level == 0 {
-        FillRect(hdc, &Rect { left: x + 15, top: y + 7, right: x + 18, bottom: y + 17 }, dimmed);
-        FillRect(hdc, &Rect { left: x + 12, top: y + 11, right: x + 21, bottom: y + 14 }, dimmed);
-    } else {
-        let bars = if level < 34 { 1 } else if level < 67 { 2 } else { 3 };
-        for index in 0..bars {
-            let height = 5 + index as i32 * 4;
-            FillRect(hdc, &Rect { left: x + 14 + index as i32 * 4, top: y + 12 - height / 2, right: x + 16 + index as i32 * 4, bottom: y + 12 + height / 2 }, foreground);
-        }
-    }
-}
-
-unsafe fn draw_boot_splash(hdc: Handle) {
-    let background=CreateSolidBrush(0x0022_1009);let purple=CreateSolidBrush(0x00ED_3A7C);let white=CreateSolidBrush(0x00FF_FFFF);let muted=CreateSolidBrush(0x00E8_D8D1);
-    FillRect(hdc,&Rect{left:0,top:0,right:1280,bottom:720},background);
-    SelectObject(hdc,purple);Ellipse(hdc,566,250,714,398);draw_windows_mark(hdc,606,290,68,white);
-    let title=CreateFontA(30,0,0,0,650,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());let body=CreateFontA(14,0,0,0,400,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
-    SelectObject(hdc,title);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,571,425,c"Winlux".as_ptr(),-1);SelectObject(hdc,body);SetTextColor(hdc,0x00E8_D8D1);TextOutA(hdc,523,463,c"Preparing your desktop...".as_ptr(),-1);
-    DeleteObject(title);DeleteObject(body);DeleteObject(background);DeleteObject(purple);DeleteObject(white);DeleteObject(muted);
-}
-
-/// Première base du bureau Winlux : fond, barre des tâches, zone système et
-/// menu Démarrer. Tout est rendu par le même chemin GDI invité → X11 que les
-/// futures applications du shell.
-unsafe fn draw_desktop_scene(hdc: Handle, start_open: bool) {
-    if BOOT_SPLASH_UNTIL != 0 && (GetTickCount().wrapping_sub(BOOT_SPLASH_UNTIL) as i32) < 0 {
-        draw_boot_splash(hdc);
-        return;
-    }
-    let wall=CreateSolidBrush(0x0030_1810);let wall_blue=CreateSolidBrush(0x008C_4A20);let wall_purple=CreateSolidBrush(0x00ED_3A7C);let wall_teal=CreateSolidBrush(0x0085_6630);let wall_dark=CreateSolidBrush(0x0022_1009);
-    let surface=CreateSolidBrush(0x00FC_F9F7);let sidebar=CreateSolidBrush(0x00F0_EAE7);let elevated=CreateSolidBrush(0x00F6_F2F0);let taskbar=CreateSolidBrush(0x00F4_EFEC);let border=CreateSolidBrush(0x00D9_CFCB);let shadow=CreateSolidBrush(0x0020_1510);
-    let text=CreateSolidBrush(0x0024_201E);let muted=CreateSolidBrush(0x0083_746D);let accent=CreateSolidBrush(0x00D8_4A8A);let accent_dark=CreateSolidBrush(0x00A0_2860);let accent_soft=CreateSolidBrush(0x00F4_E4EF);let green=CreateSolidBrush(0x005B_8F43);let white=CreateSolidBrush(0x00FF_FFFF);
-    FillRect(hdc,&Rect{left:0,top:0,right:1280,bottom:720},wall);
-    let animation=((GetTickCount()/35)%160) as i32;let animation=if animation<80{animation}else{160-animation};
-    SelectObject(hdc,wall_purple);Ellipse(hdc,500+animation,-420,1450+animation,520);SelectObject(hdc,wall_blue);Ellipse(hdc,610,-330,1480,540);SelectObject(hdc,wall_teal);Ellipse(hdc,790,-110,1395,520);SelectObject(hdc,wall_dark);Ellipse(hdc,690,225,1410,910);
-    fill_round_rect(hdc,Rect{left:-170,top:524,right:650,bottom:704},92,wall_blue);fill_round_rect(hdc,Rect{left:-230,top:590,right:790,bottom:720},64,wall_dark);
-
-    let display_font=CreateFontA(30,0,0,0,650,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
-    let title_font=CreateFontA(20,0,0,0,650,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
-    let body_font=CreateFontA(14,0,0,0,400,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
-    let medium_font=CreateFontA(13,0,0,0,600,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
-    let small_font=CreateFontA(11,0,0,0,400,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
-    let tiny_font=CreateFontA(10,0,0,0,400,0,0,0,1,0,0,0,0,c"Segoe UI".as_ptr());
-    let old_font=SelectObject(hdc,body_font);SetBkMode(hdc,1);
-
-    SelectObject(hdc,display_font);SetTextColor(hdc,0x00FF_FFFF);TextOutA(hdc,38,30,c"Winlux".as_ptr(),-1);
-    SelectObject(hdc,small_font);SetTextColor(hdc,0x00E8_D8D1);TextOutA(hdc,41,67,c"One desktop. Linux and Windows applications.".as_ptr(),-1);
-
-    if start_open {
-        round_panel(hdc,Rect{left:16,top:108,right:930,bottom:665},8,shadow,border,surface);
-        fill_round_rect(hdc,Rect{left:18,top:110,right:112,bottom:663},6,sidebar);
-        SelectObject(hdc,accent);Ellipse(hdc,37,128,93,184);draw_windows_mark(hdc,53,144,24,white);
-        SelectObject(hdc,medium_font);SetTextColor(hdc,0x0024_201E);TextOutA(hdc,40,191,c"Damien".as_ptr(),-1);
-        SelectObject(hdc,tiny_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,34,252,c"Winlux".as_ptr(),-1);TextOutA(hdc,27,272,c"Desktop".as_ptr(),-1);
-
-        FillRect(hdc,&Rect{left:112,top:110,right:113,bottom:663},border);
-        SelectObject(hdc,title_font);SetTextColor(hdc,0x0024_201E);TextOutA(hdc,136,130,c"Applications".as_ptr(),-1);
-        fill_round_rect(hdc,Rect{left:130,top:164,right:315,bottom:200},4,accent_soft);FillRect(hdc,&Rect{left:130,top:172,right:134,bottom:193},accent);
-        SelectObject(hdc,medium_font);SetTextColor(hdc,0x007C_430F);TextOutA(hdc,150,175,c"All applications".as_ptr(),-1);
-        SelectObject(hdc,body_font);SetTextColor(hdc,0x005F_5652);TextOutA(hdc,150,218,c"Accessories".as_ptr(),-1);TextOutA(hdc,150,250,c"Internet".as_ptr(),-1);TextOutA(hdc,150,282,c"Graphics".as_ptr(),-1);TextOutA(hdc,150,314,c"Office".as_ptr(),-1);TextOutA(hdc,150,346,c"Sound & Video".as_ptr(),-1);TextOutA(hdc,150,378,c"System Tools".as_ptr(),-1);TextOutA(hdc,150,410,c"Administration".as_ptr(),-1);TextOutA(hdc,150,442,c"Windows apps".as_ptr(),-1);
-        FillRect(hdc,&Rect{left:330,top:126,right:331,bottom:575},border);
-
-        fill_round_rect(hdc,Rect{left:350,top:128,right:906,bottom:172},5,elevated);draw_search_mark(hdc,367,140,muted,elevated);SelectObject(hdc,body_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,402,142,c"Search apps, files and settings".as_ptr(),-1);
-        SelectObject(hdc,small_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,353,188,c"SYSTEM AND DESKTOP".as_ptr(),-1);
-
-        fill_round_rect(hdc,Rect{left:344,top:207,right:908,bottom:262},5,elevated);
-        draw_installed_icon(hdc,c"cinnamon-settings.desktop".as_ptr(),359,217,34,0x00F6_F2F0,accent_soft);
-        SelectObject(hdc,medium_font);SetTextColor(hdc,0x0024_201E);TextOutA(hdc,408,216,c"System Settings".as_ptr(),-1);
-        SelectObject(hdc,small_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,408,236,c"Linux hardware and Windows compatibility".as_ptr(),-1);
-        fill_round_rect(hdc,Rect{left:688,top:217,right:786,bottom:251},4,surface);SelectObject(hdc,small_font);SetTextColor(hdc,0x005B_8F43);TextOutA(hdc,704,226,c"Linux".as_ptr(),-1);
-        fill_round_rect(hdc,Rect{left:794,top:217,right:894,bottom:251},4,accent_soft);SetTextColor(hdc,0x007C_430F);TextOutA(hdc,807,226,c"Windows".as_ptr(),-1);
-
-        fill_round_rect(hdc,Rect{left:344,top:270,right:908,bottom:318},5,elevated);SelectObject(hdc,medium_font);SetTextColor(hdc,0x0024_201E);TextOutA(hdc,359,278,c"Desktop icon layout".as_ptr(),-1);SelectObject(hdc,small_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,359,297,c"Align to grid or place and stack icons freely".as_ptr(),-1);
-        fill_round_rect(hdc,Rect{left:716,top:278,right:796,bottom:310},4,if FREE_DESKTOP_LAYOUT==0{accent_soft}else{surface});SetTextColor(hdc,if FREE_DESKTOP_LAYOUT==0{0x007C_430F}else{0x0083_746D});TextOutA(hdc,739,286,c"Grid".as_ptr(),-1);
-        fill_round_rect(hdc,Rect{left:804,top:278,right:894,bottom:310},4,if FREE_DESKTOP_LAYOUT!=0{accent_soft}else{surface});SetTextColor(hdc,if FREE_DESKTOP_LAYOUT!=0{0x007C_430F}else{0x0083_746D});TextOutA(hdc,827,286,c"Free".as_ptr(),-1);
-
-        FillRect(hdc,&Rect{left:344,top:340,right:908,bottom:341},border);SelectObject(hdc,small_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,352,363,c"Only installed applications are shown here.".as_ptr(),-1);TextOutA(hdc,352,384,c"Use Settings to configure the Winlux desktop.".as_ptr(),-1);
-    }
-
-    // Barre compacte pleine largeur : menu et applications à gauche, système à droite.
-    FillRect(hdc,&Rect{left:0,top:674,right:1280,bottom:720},taskbar);FillRect(hdc,&Rect{left:0,top:674,right:1280,bottom:675},border);
-    if start_open { fill_round_rect(hdc,Rect{left:8,top:678,right:56,bottom:716},6,accent_soft); }
-    draw_installed_icon(hdc,c"distributor-logo-linux-mint".as_ptr(),16,683,30,if start_open{0x00F4_E4EF}else{0x00F4_EFEC},accent);
-    FillRect(hdc,&Rect{left:14,top:717,right:50,bottom:720},accent);
-
-    SelectObject(hdc,small_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,936,691,c"Desktop 1".as_ptr(),-1);TextOutA(hdc,1060,691,c"^".as_ptr(),-1);
-
-    // Zone système compacte : icônes d'état uniquement, horloge collée à droite.
-    FillRect(hdc,&Rect{left:1082,top:682,right:1083,bottom:713},border);
-    let network_brush=if NETWORK_CONNECTED!=0{text}else{muted};
-    FillRect(hdc,&Rect{left:1098,top:698,right:1101,bottom:706},network_brush);FillRect(hdc,&Rect{left:1103,top:694,right:1106,bottom:706},network_brush);FillRect(hdc,&Rect{left:1108,top:690,right:1111,bottom:706},network_brush);FillRect(hdc,&Rect{left:1113,top:686,right:1116,bottom:706},network_brush);
-    draw_volume_status(hdc,1131,684,VOLUME_LEVEL,text,muted);
-    if BATTERY_PRESENT != 0 {FrameRect(hdc,&Rect{left:1171,top:688,right:1201,bottom:704},text);FillRect(hdc,&Rect{left:1174,top:691,right:1174+((24*BATTERY_LEVEL.min(100))/100) as i32,bottom:701},if BATTERY_LEVEL>20{green}else{accent});FillRect(hdc,&Rect{left:1201,top:693,right:1204,bottom:699},text);} else {SelectObject(hdc,tiny_font);SetTextColor(hdc,0x0083_746D);TextOutA(hdc,1170,691,c"AC".as_ptr(),-1);}
-    FillRect(hdc,&Rect{left:1212,top:682,right:1213,bottom:713},border);
-    draw_clock(hdc,medium_font,tiny_font,text,muted);
-
-    SelectObject(hdc,old_font);
-    DeleteObject(wall);DeleteObject(wall_blue);DeleteObject(wall_purple);DeleteObject(wall_teal);DeleteObject(wall_dark);DeleteObject(surface);DeleteObject(sidebar);DeleteObject(elevated);DeleteObject(taskbar);DeleteObject(border);DeleteObject(shadow);DeleteObject(text);DeleteObject(muted);DeleteObject(accent);DeleteObject(accent_dark);DeleteObject(accent_soft);DeleteObject(green);DeleteObject(white);
-    DeleteObject(display_font);DeleteObject(title_font);DeleteObject(body_font);DeleteObject(medium_font);DeleteObject(small_font);DeleteObject(tiny_font);
 }
 
 /// Variante visuelle du centre de contrôle consacrée aux applications Linux
@@ -335,7 +172,7 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     }
 
     if GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0 {
-        draw_desktop_scene(hdc, START_MENU_OPEN != 0);
+        desktop::draw(hdc);
         EndPaint(hwnd, &ps);
         return;
     }
@@ -618,62 +455,16 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             THREAD_KEY_UP_CLEAR |= ((GetKeyState(wparam as i32) as u16 & 0x8000) == 0) as u32;
             0
         }
-        WM_LBUTTONDOWN => {
+        WM_LBUTTONDOWN | WM_MOUSEMOVE | WM_LBUTTONUP => {
             if GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0 {
-                let x = (lparam as u32 & 0xFFFF) as i32;
-                let y = ((lparam as u32 >> 16) & 0xFFFF) as i32;
-                if (8..=56).contains(&x) && (674..=720).contains(&y) {
-                    START_MENU_OPEN ^= 1;
-                    InvalidateRect(hwnd, core::ptr::null(), 1);
-                } else if START_MENU_OPEN != 0 && (716..=796).contains(&x) && (278..=310).contains(&y) {
-                    FREE_DESKTOP_LAYOUT = 0;
-                    DESKTOP_ICON_X = [42, 42, 42];
-                    DESKTOP_ICON_Y = [112, 205, 298];
-                    InvalidateRect(hwnd, core::ptr::null(), 1);
-                } else if START_MENU_OPEN != 0 && (804..=894).contains(&x) && (278..=310).contains(&y) {
-                    FREE_DESKTOP_LAYOUT = 1;
-                    InvalidateRect(hwnd, core::ptr::null(), 1);
-                } else if (1090..=1122).contains(&x) && (674..=720).contains(&y) {
-                    NETWORK_CONNECTED ^= 1;
-                    InvalidateRect(hwnd, core::ptr::null(), 1);
-                } else if (1124..=1165).contains(&x) && (674..=720).contains(&y) {
-                    VOLUME_LEVEL = match VOLUME_LEVEL { 67..=100 => 45, 34..=66 => 18, 1..=33 => 0, _ => 82 };
-                    InvalidateRect(hwnd, core::ptr::null(), 1);
-                } else if (1166..=1208).contains(&x) && (674..=720).contains(&y) {
-                    BATTERY_LEVEL = if BATTERY_LEVEL > 25 { BATTERY_LEVEL - 25 } else { 100 };
-                    InvalidateRect(hwnd, core::ptr::null(), 1);
-                } else if START_MENU_OPEN == 0 && y < 674 {
-                    for index in (0..3).rev() {
-                        if (DESKTOP_ICON_X[index]..=DESKTOP_ICON_X[index]+64).contains(&x)
-                            && (DESKTOP_ICON_Y[index]..=DESKTOP_ICON_Y[index]+72).contains(&y) {
-                            DRAGGED_DESKTOP_ICON = index as i32;
-                            break;
-                        }
-                    }
+                let x = (lparam as u32 & 0xFFFF) as i16 as i32;
+                let y = ((lparam as u32 >> 16) & 0xFFFF) as i16 as i32;
+                match msg {
+                    WM_LBUTTONDOWN => desktop::on_button_down(hwnd, x, y),
+                    WM_MOUSEMOVE => desktop::on_mouse_move(hwnd, x, y),
+                    _ => desktop::on_button_up(hwnd),
                 }
             }
-            0
-        }
-        WM_MOUSEMOVE => {
-            if DRAGGED_DESKTOP_ICON >= 0 {
-                let x = (lparam as u32 & 0xFFFF) as i32;
-                let y = ((lparam as u32 >> 16) & 0xFFFF) as i32;
-                let index = DRAGGED_DESKTOP_ICON as usize;
-                let raw_x = (x - 24).clamp(4, 1212);
-                let raw_y = (y - 24).clamp(92, 590);
-                if FREE_DESKTOP_LAYOUT != 0 {
-                    DESKTOP_ICON_X[index] = raw_x;
-                    DESKTOP_ICON_Y[index] = raw_y;
-                } else {
-                    DESKTOP_ICON_X[index] = 18 + (raw_x / 76) * 76;
-                    DESKTOP_ICON_Y[index] = 100 + ((raw_y - 92) / 88) * 88;
-                }
-                InvalidateRect(hwnd, core::ptr::null(), 1);
-            }
-            0
-        }
-        WM_LBUTTONUP => {
-            DRAGGED_DESKTOP_ICON = -1;
             0
         }
         _ => DefWindowProcA(hwnd, msg, wparam, lparam),
@@ -688,11 +479,15 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let testing = GetEnvironmentVariableA(c"WINLUX_TEST".as_ptr(), core::ptr::null_mut(), 0) > 0;
         let desktop = GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0;
         if desktop {
-            VOLUME_LEVEL = environment_percentage(c"WINLUX_TRAY_VOLUME".as_ptr(), VOLUME_LEVEL);
-            BATTERY_LEVEL = environment_percentage(c"WINLUX_TRAY_BATTERY".as_ptr(), BATTERY_LEVEL);
-            BATTERY_PRESENT = environment_percentage(c"WINLUX_TRAY_BATTERY_PRESENT".as_ptr(), 0).min(1);
-            NETWORK_CONNECTED = environment_percentage(c"WINLUX_TRAY_NETWORK".as_ptr(), NETWORK_CONNECTED).min(1);
-            BOOT_SPLASH_UNTIL = GetTickCount().wrapping_add(1400);
+            let mut align = [0i8; 8];
+            let align_len = GetEnvironmentVariableA(c"WINLUX_TASKBAR_ALIGN".as_ptr(), align.as_mut_ptr(), align.len() as u32);
+            desktop::init(
+                environment_percentage(c"WINLUX_TRAY_VOLUME".as_ptr(), 78),
+                environment_percentage(c"WINLUX_TRAY_BATTERY".as_ptr(), 73),
+                environment_percentage(c"WINLUX_TRAY_BATTERY_PRESENT".as_ptr(), 0).min(1),
+                environment_percentage(c"WINLUX_TRAY_NETWORK".as_ptr(), 1).min(1),
+                align_len == 4 && align[0] as u8 == b'l',
+            );
         }
         let duration = if testing { 300u32 } else if desktop { 3_600_000 } else { 3000 };
 
@@ -716,7 +511,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
 
         let title = if desktop { c"Winlux Desktop" } else { c"Winlux Control Center" };
         let (window_x, window_y, window_width, window_height) = if desktop {
-            (0, 0, 1280, 720)
+            (0, 0, desktop::SCREEN_W, desktop::SCREEN_H)
         } else {
             (120, 80, 720, 480)
         };
@@ -742,15 +537,20 @@ pub extern "C" fn mainCRTStartup() -> ! {
         // pulse sinon, jusqu'à expiration de la durée demandée.
         let start = GetTickCount();
         let mut splash_finished = !desktop;
+        let mut last_tick = start;
         let mut msg: Msg = core::mem::zeroed();
         while GetTickCount().wrapping_sub(start) < duration {
             if PeekMessageA(&mut msg, core::ptr::null_mut(), 0, 0, 1) > 0 {
                 TranslateMessage(&msg);
                 DispatchMessageA(&msg);
             } else {
-                if !splash_finished && (GetTickCount().wrapping_sub(BOOT_SPLASH_UNTIL) as i32) >= 0 {
+                if !splash_finished && !desktop::splash_active() {
                     splash_finished = true;
                     InvalidateRect(hwnd, core::ptr::null(), 0);
+                }
+                if desktop && GetTickCount().wrapping_sub(last_tick) >= 500 {
+                    last_tick = GetTickCount();
+                    desktop::tick(hwnd);
                 }
                 Sleep(10);
             }

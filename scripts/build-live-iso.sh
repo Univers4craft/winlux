@@ -38,7 +38,7 @@ if ! test -r "$kernel"; then
     echo "indiquez un noyau lisible avec WINLUX_KERNEL=/chemin/vers/vmlinuz" >&2
     exit 1
 fi
-for path in /usr/bin/busybox /usr/bin/curl /usr/bin/install /usr/bin/udevadm /usr/bin/Xvfb /usr/bin/xkbcomp "$xorg" "$xorg_modules" "$fonts" "$xkb" "$truetype_fonts" /usr/lib/udev/rules.d /etc/fonts /etc/ssl/certs/ca-certificates.crt; do
+for path in /usr/bin/busybox /usr/bin/xrandr /usr/bin/curl /usr/bin/install /usr/bin/udevadm /usr/bin/Xvfb /usr/bin/xkbcomp "$xorg" "$xorg_modules" "$fonts" "$xkb" "$truetype_fonts" /usr/lib/udev/rules.d /etc/fonts /etc/ssl/certs/ca-certificates.crt; do
     test -e "$path" || { echo "fichier requis absent : $path" >&2; exit 1; }
 done
 test -r /usr/share/X11/xorg.conf.d/40-libinput.conf || { echo "configuration libinput Xorg absente" >&2; exit 1; }
@@ -106,6 +106,7 @@ ln -s ../../bin/udevadm "$stage/usr/lib/systemd/systemd-udevd"
 cp -a /usr/lib/udev/rules.d "$stage/usr/lib/udev/rules.d"
 cp /usr/bin/Xvfb "$stage/usr/bin/Xvfb"
 cp /usr/bin/xkbcomp "$stage/usr/bin/xkbcomp"
+cp /usr/bin/xrandr "$stage/usr/bin/xrandr"
 cp "$xorg" "$stage/usr/bin/Xorg"
 zstd -q -d -c "$virtio_dma_module" >"$stage/lib/modules/$kernel_release/virtio_dma_buf.ko"
 zstd -q -d -c "$virtio_gpu_module" >"$stage/lib/modules/$kernel_release/virtio-gpu.ko"
@@ -115,10 +116,11 @@ zstd -q -d -c "$psmouse_module" >"$stage/lib/modules/$kernel_release/psmouse.ko"
 zstd -q -d -c "$hid_module" >"$stage/lib/modules/$kernel_release/hid.ko"
 zstd -q -d -c "$usbhid_module" >"$stage/lib/modules/$kernel_release/usbhid.ko"
 zstd -q -d -c "$hid_generic_module" >"$stage/lib/modules/$kernel_release/hid-generic.ko"
-chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/Xorg"
+chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/xrandr" "$stage/usr/bin/Xorg"
 copy_shared_libraries "$root/target/release/winlux"
 copy_shared_libraries /usr/bin/Xvfb
 copy_shared_libraries /usr/bin/xkbcomp
+copy_shared_libraries /usr/bin/xrandr
 copy_shared_libraries /usr/bin/curl
 copy_shared_libraries /usr/bin/install
 copy_shared_libraries /usr/bin/udevadm
@@ -134,6 +136,22 @@ cp -a "$fonts" "$stage/usr/share/fonts/X11/misc"
 cp -a "$xkb" "$stage/usr/share/X11/xkb"
 mkdir -p "$stage/usr/share/X11/xorg.conf.d"
 cp /usr/share/X11/xorg.conf.d/40-libinput.conf "$stage/usr/share/X11/xorg.conf.d/40-libinput.conf"
+# Données de libinput (quirks) : sans elles, les périphériques de pointage
+# absolus comme la tablette virtio sont mal reconnus.
+if test -d /usr/share/libinput; then
+    mkdir -p "$stage/usr/share"
+    cp -a /usr/share/libinput "$stage/usr/share/libinput"
+fi
+# Curseur logiciel : il est dessiné dans l'image de l'écran, donc toujours
+# visible dans une VM, alors que le curseur matériel virtio-gpu dépend de
+# l'affichage de l'hôte (QEMU GTK, SPICE, VNC…).
+cat >"$stage/usr/share/X11/xorg.conf.d/20-winlux-display.conf" <<'XCONF'
+Section "Device"
+    Identifier "Winlux display"
+    Driver "modesetting"
+    Option "SWcursor" "on"
+EndSection
+XCONF
 cp -a "$truetype_fonts" "$stage/usr/share/fonts/truetype/dejavu"
 cp -a /etc/fonts/. "$stage/etc/fonts/"
 mkdir -p "$stage/etc/ssl/certs"
@@ -186,12 +204,38 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     xorg_pid=$!
     /bin/busybox sleep 3
     echo "Winlux Xorg input probe:"
-    /bin/busybox grep -Ei 'libinput|input device|mouse|keyboard|error' /tmp/Xorg.0.log 2>/dev/null || true
+    /bin/busybox grep -Ei 'libinput|input device|mouse|keyboard|error|cursor|config' /tmp/Xorg.0.log 2>/dev/null || true
     if ! /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; then
         /bin/busybox cat /tmp/Xorg.0.log /tmp/xorg-console.log >&2
         /bin/sh
     fi
+    # Quand la fenêtre de la VM change de taille, QEMU annonce un nouveau
+    # mode préféré : on l'applique pour que le bureau suive la fenêtre.
+    (
+        while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
+            if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then
+                modes=$(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox grep -E '[*+]' | /bin/busybox tr -s ' ' | /bin/busybox tr '\n' ';')
+                if test "$modes" != "${last_modes:-}"; then echo "Winlux xrandr: $modes"; last_modes=$modes; fi
+            fi
+            # Sorties dont le mode préféré (+) n'est pas le mode actif (*).
+            for output in $(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox awk '
+                / connected/ { name=$1; next }
+                /^ +[0-9]+x[0-9]+/ && /\+/ && !/\*/ && name != "" { print name; name="" }'); do
+                DISPLAY=:0 /usr/bin/xrandr --output "$output" --auto 2>/dev/null || true
+            done
+            /bin/busybox sleep 1
+        done
+    ) &
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
+        # Échelle d'interface choisie d'après la hauteur de l'écran au lancement.
+        screen_height=$(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox awk '/\*/ { split($1, size, "x"); print size[2]; exit }')
+        ui_scale=1
+        if test "${screen_height:-0}" -ge 2000; then ui_scale=2
+        elif test "${screen_height:-0}" -ge 1400; then ui_scale=1.5
+        elif test "${screen_height:-0}" -ge 1000; then ui_scale=1.25
+        fi
+        input_diag=
+        if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then input_diag=1; fi
         tray_battery=0
         tray_battery_present=0
         for capacity in /sys/class/power_supply/BAT*/capacity; do
@@ -201,7 +245,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         for state in /sys/class/net/*/operstate; do
             if test -r "$state" && test "$(/bin/busybox cat "$state")" = up; then tray_network=1; break; fi
         done
-        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_UI_SCALE=1.5 WINLUX_TRAY_VOLUME=70 WINLUX_TRAY_BATTERY="$tray_battery" WINLUX_TRAY_BATTERY_PRESENT="$tray_battery_present" WINLUX_TRAY_NETWORK="$tray_network" \
+        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_INPUT_DIAG="$input_diag" WINLUX_UI_SCALE="$ui_scale" WINLUX_TRAY_VOLUME=70 WINLUX_TRAY_BATTERY="$tray_battery" WINLUX_TRAY_BATTERY_PRESENT="$tray_battery_present" WINLUX_TRAY_NETWORK="$tray_network" \
             /usr/bin/winlux /opt/winlux/tests/gui_demo.exe
         /bin/busybox sleep 1
     done
@@ -282,7 +326,7 @@ menuentry "Winlux diagnostic (headless + Xvfb)" {
     initrd /boot/winlux-initramfs.cpio.gz
 }
 menuentry "Winlux Desktop" {
-    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rdinit=/init panic=1 loglevel=3 winlux.interactive=1 video=1920x1080
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rdinit=/init panic=1 loglevel=3 winlux.interactive=1
     initrd /boot/winlux-initramfs.cpio.gz
 }
 GRUB

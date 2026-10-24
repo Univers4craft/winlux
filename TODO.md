@@ -113,13 +113,15 @@
 - [x] Lancer automatiquement les tests séquentiels, parallèles et X11 dans la VM.
 - [x] Générer l’ISO avec `xorriso` et produire une somme SHA-256.
 - [x] Ajouter un test automatisé dans QEMU avec vérification des marqueurs de résultat.
+- [ ] Réparer `scripts/test-live-iso-qemu.sh` : depuis que GRUB démarre par défaut sur le bureau, il n’atteint plus l’entrée de diagnostic (la suite de diagnostic elle-même passe en démarrage direct du noyau).
 - [x] Documenter la RAM, le nombre de CPU et les options nécessaires à la VM.
 
 ## Priorité 5 — Thème Windows 11
 
-- [ ] VM : afficher un pointeur de souris visible sur le bureau.
-- [ ] VM : adapter automatiquement la résolution du bureau à la taille de la fenêtre de la VM.
-- [ ] Refaire l’interface du bureau (barre des tâches, menu Démarrer) pour un rendu plus proche de Windows 11.
+- [x] VM : pointeur flèche visible (curseur logiciel Xorg `SWcursor`, flèche dessinée à l’échelle de l’interface).
+- [x] VM : la résolution suit la taille de la fenêtre QEMU (nouveau mode préféré appliqué par `xrandr`, bureau relu via `GetSystemMetrics` et réagencé); vérifié en passant de 1920×1080 à 1280×800 dans QEMU.
+- [x] Refaire l’interface du bureau façon Windows 11 : fond « fleur », barre des tâches sombre centrée ou à gauche (`WINLUX_TASKBAR_ALIGN=left` ou bouton du menu), menu Démarrer flottant (recherche, épinglés, recommandés, utilisateur, alimentation), zone de notification et icônes vectorielles.
+- [ ] Mémoriser l’alignement de la barre des tâches et ouvrir de vraies applications depuis la barre et le menu.
 
 - [x] Ajouter un prototype de bureau GDI HiDPI : fond d'écran, raccourcis,
   barre des tâches pleine largeur, menu Démarrer inspiré de Cinnamon,

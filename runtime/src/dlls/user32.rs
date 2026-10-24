@@ -716,8 +716,8 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
     use crate::dlls::gui::theme;
     let _ = theme::ACCENT; // thème présent et lié
     match index {
-        0 => 1920, // SM_CXSCREEN
-        1 => 1080, // SM_CYSCREEN
+        0 | 16 | 78 => gui::screen_size().0, // SM_CXSCREEN, SM_CXFULLSCREEN, SM_CXVIRTUALSCREEN
+        1 | 17 | 79 => gui::screen_size().1, // SM_CYSCREEN, SM_CYFULLSCREEN, SM_CYVIRTUALSCREEN
         2 => 4,    // SM_CYCAPTION
         3 => 4,    // SM_CXBORDER
         4 => 4,    // SM_CYBORDER

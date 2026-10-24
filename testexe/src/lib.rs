@@ -628,6 +628,12 @@ pub fn cstr_eq(p: *const c_char, expected: &[u8]) -> bool {
     }
 }
 
+/// Certaines fonctions précompilées de `core` référencent le gestionnaire
+/// d'exceptions C++ de MSVC dans leurs tables de déroulement. Les tests sont
+/// compilés avec `panic = "abort"` : aucun déroulement ne l'appellera.
+#[no_mangle]
+pub extern "C" fn __CxxFrameHandler3() -> i32 { 1 }
+
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {
     out(b"panic\n");

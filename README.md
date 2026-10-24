@@ -100,7 +100,7 @@ scripts/create-test-vm.sh --create-only
 scripts/create-test-vm.sh
 ```
 
-Elle utilise par défaut un disque QCOW2 extensible de 24 Gio, 4 Gio de RAM, 4 CPU, KVM lorsqu’il est disponible et un affichage 1920×1080. La définition peut être changée avec `WINLUX_VM_WIDTH` et `WINLUX_VM_HEIGHT`. Le disque est construit à partir de la racine de l’ISO; cette image reste une préversion technique, pas encore une distribution installable généraliste.
+Elle utilise par défaut un disque QCOW2 extensible de 24 Gio, 4 Gio de RAM, 4 CPU, KVM lorsqu’il est disponible et un affichage 1920×1080. La définition peut être changée avec `WINLUX_VM_WIDTH` et `WINLUX_VM_HEIGHT`. Le disque est construit à partir de la racine de l’ISO; cette image reste une préversion technique, pas encore une distribution installable généraliste. La résolution du bureau suit la taille de la fenêtre QEMU (redimensionnement ou plein écran) et le pointeur est dessiné par Xorg en curseur logiciel, donc toujours visible. Ajoutez `winlux.debug=1` à la ligne de commande du noyau pour journaliser les clics et les changements de mode sur la console série.
 
 ## Mises à jour GitHub
 
