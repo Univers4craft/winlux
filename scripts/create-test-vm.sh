@@ -49,6 +49,9 @@ fi
 case "$auto_stop" in *[!0-9]*|'') echo "WINLUX_VM_AUTO_STOP_SECONDS doit être un entier positif" >&2; exit 2 ;; esac
 echo "Démarrage de la préversion graphique avec $memory Mio, $cpus CPU, accélération $accel. Arrêt forcé dans $auto_stop secondes."
 rm -f "$monitor"
+# The tablet is an absolute pointing device.  Let GTK grab it as soon as the
+# pointer enters the guest: without this, some compositors keep the host
+# pointer and the desktop appears to have no mouse.
 exec timeout --foreground --signal=TERM -k 5s "$auto_stop" qemu-system-x86_64 \
     -name "Winlux Desktop Preview" \
     -machine q35,accel="$accel" \
@@ -56,10 +59,9 @@ exec timeout --foreground --signal=TERM -k 5s "$auto_stop" qemu-system-x86_64 \
     -m "$memory" \
     -smp "$cpus" \
     -device "virtio-vga,xres=$width,yres=$height" \
-    -display gtk,full-screen=on,zoom-to-fit=on \
+    -display gtk,full-screen=on,zoom-to-fit=on,grab-on-hover=on \
     -device qemu-xhci \
     -device usb-tablet \
-    -device virtio-mouse-pci \
     -device virtio-keyboard-pci \
     -monitor "unix:$monitor,server=on,wait=off" \
     -drive "file=$disk,if=virtio,format=qcow2,cache=writeback" \
