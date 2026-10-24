@@ -26,6 +26,17 @@ fn main() {
         eprintln!("winlux: usage: winlux PROGRAM.exe [arguments...]");
         std::process::exit(2);
     };
+    if exe == "--version" {
+        println!("winlux {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
+    if exe == "--inspect" {
+        let Some(path) = args.next() else {
+            eprintln!("winlux: usage: winlux --inspect PROGRAM.exe");
+            std::process::exit(2);
+        };
+        std::process::exit(inspect(&PathBuf::from(path)));
+    }
     let exe = PathBuf::from(exe);
     let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
     let source = match std::fs::read(&exe) {
@@ -62,4 +73,43 @@ fn main() {
     dlls::kernel32::init();
     process::init_process(&image, &rest);
     process::run(image);
+}
+
+/// Indique comment lancer un fichier sans l'exécuter : `console` ou `gui` sur
+/// la sortie standard, ou la raison du refus sur la sortie d'erreur. Utilisé
+/// par `winlux-open` pour décider d'ouvrir un terminal lors d'un double-clic.
+fn inspect(exe: &std::path::Path) -> i32 {
+    let source = match std::fs::read(exe) {
+        Ok(bytes) => bytes,
+        Err(error) => {
+            eprintln!("lecture impossible de {} : {error}", exe.display());
+            return 1;
+        }
+    };
+    if managed::detect(exe, &source).is_none() {
+        match pe::PeImage::parse(&source) {
+            Ok(image) if image.is_dll() => {
+                eprintln!("{} est une DLL, pas un programme lançable directement", exe.display());
+                return 1;
+            }
+            Ok(_) => {}
+            Err(error) => {
+                eprintln!("{error}");
+                return 1;
+            }
+        }
+    }
+    match pe::peek_subsystem(&source) {
+        Some(2) => println!("gui"),
+        Some(3) => println!("console"),
+        Some(other) => {
+            eprintln!("sous-système Windows {other} non pris en charge (pilote, EFI ou application native)");
+            return 1;
+        }
+        None => {
+            eprintln!("en-tête PE invalide : sous-système illisible");
+            return 1;
+        }
+    }
+    0
 }

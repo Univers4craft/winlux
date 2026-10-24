@@ -86,6 +86,20 @@ pub fn rd64(b: &[u8], o: usize) -> Option<u64> {
     b.get(o..o + 8).map(|s| u64::from_le_bytes(s.try_into().unwrap()))
 }
 
+/// Lit le champ Subsystem de l'en-tête optionnel sans valider l'image.
+/// Le champ est au même décalage en PE32 et PE32+, ce qui permet de classer
+/// aussi les assemblies .NET AnyCPU avant de choisir comment les lancer.
+pub fn peek_subsystem(file: &[u8]) -> Option<u16> {
+    if file.get(..2) != Some(b"MZ") {
+        return None;
+    }
+    let pe = rd32(file, 0x3c)? as usize;
+    if file.get(pe..pe.checked_add(4)?) != Some(b"PE\0\0") {
+        return None;
+    }
+    rd16(file, pe.checked_add(24 + 68)?)
+}
+
 impl PeImage {
     pub fn parse(file: &[u8]) -> Result<PeImage, PeError> {
         if file.len() < 0x40 {
@@ -200,6 +214,18 @@ mod tests {
         let mut b = vec![0u8; 0x80];
         b[..2].copy_from_slice(b"MZ");
         assert!(matches!(PeImage::parse(&b), Err(PeError::NotPe)));
+    }
+
+    #[test]
+    fn lit_le_sous_systeme_sans_charger() {
+        let mut b = vec![0u8; 0x200];
+        b[..2].copy_from_slice(b"MZ");
+        b[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        b[0x80..0x84].copy_from_slice(b"PE\0\0");
+        b[0x80 + 24 + 68] = 2;
+        assert_eq!(peek_subsystem(&b), Some(2));
+        assert_eq!(peek_subsystem(&b[..0x90]), None);
+        assert_eq!(peek_subsystem(b"MZ"), None);
     }
 
     #[test]

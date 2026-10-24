@@ -1,0 +1,152 @@
+#!/bin/sh
+# Lanceur de double-clic pour les exécutables Windows.
+#
+# Appelé par winlux.desktop avec le chemin du fichier choisi dans le
+# gestionnaire de fichiers. Les programmes console s'ouvrent dans un terminal
+# qui reste ouvert à la fin; les programmes graphiques sont lancés directement.
+# Les erreurs sont affichées dans une boîte de dialogue lorsque c'est possible.
+set -u
+
+winlux=${WINLUX_RUNTIME:-winlux}
+state=${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/winlux
+log="$state/last-launch.log"
+
+show_error() {
+    title="Winlux"
+    message=$1
+    if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        if command -v kdialog >/dev/null 2>&1; then
+            kdialog --title "$title" --error "$message" && return
+        elif command -v zenity >/dev/null 2>&1; then
+            zenity --error --title="$title" --no-wrap --text="$message" && return
+        elif command -v notify-send >/dev/null 2>&1; then
+            notify-send --app-name=Winlux --icon=dialog-error "$title" "$message" && return
+        elif command -v xmessage >/dev/null 2>&1; then
+            xmessage -center "$title : $message" && return
+        fi
+    fi
+    printf 'Winlux : %s\n' "$message" >&2
+}
+
+# Exécute le programme dans le terminal déjà ouvert puis attend Entrée pour
+# laisser le temps de lire la sortie.
+run_in_terminal() {
+    exe=$1
+    shift
+    cd "$(dirname -- "$exe")" 2>/dev/null || true
+    "$winlux" "$exe" "$@"
+    status=$?
+    printf '\n[%s s’est terminé avec le code %s]\n' "$(basename -- "$exe")" "$status"
+    printf 'Appuyez sur Entrée pour fermer cette fenêtre.'
+    read -r _ || true
+    exit "$status"
+}
+
+# Ouvre un émulateur de terminal disponible en lui passant chaque argument
+# séparément, sans passer par un shell : les chemins avec espaces restent intacts.
+open_terminal() {
+    if [ -n "${WINLUX_TERMINAL:-}" ]; then
+        exec "$WINLUX_TERMINAL" -e "$@"
+    fi
+    case "${XDG_CURRENT_DESKTOP:-}" in
+        *KDE*) order="konsole gnome-terminal kgx xfce4-terminal x-terminal-emulator xterm" ;;
+        *XFCE*) order="xfce4-terminal konsole gnome-terminal kgx x-terminal-emulator xterm" ;;
+        *) order="gnome-terminal kgx konsole xfce4-terminal x-terminal-emulator xterm" ;;
+    esac
+    for term in $order; do
+        command -v "$term" >/dev/null 2>&1 || continue
+        case "$term" in
+            gnome-terminal|kgx) exec "$term" -- "$@" ;;
+            xfce4-terminal) exec "$term" -x "$@" ;;
+            *) exec "$term" -e "$@" ;;
+        esac
+    done
+    return 1
+}
+
+# Décode les séquences %XX d'une URI file:// (octet par octet, en sh POSIX).
+uri_decode() {
+    rest=$1
+    out=
+    while [ -n "$rest" ]; do
+        case "$rest" in
+            %[0-9A-Fa-f][0-9A-Fa-f]*)
+                hex=${rest#%}
+                hex=${hex%"${hex#??}"}
+                out="$out$(printf "\\$(printf '%03o' "0x$hex")")"
+                rest=${rest#%??}
+                ;;
+            *)
+                char=${rest%"${rest#?}"}
+                out="$out$char"
+                rest=${rest#?}
+                ;;
+        esac
+    done
+    printf '%s' "$out"
+}
+
+if [ "${1:-}" = "--in-terminal" ]; then
+    shift
+    run_in_terminal "$@"
+fi
+
+if [ $# -lt 1 ]; then
+    show_error "Aucun fichier à ouvrir."
+    exit 2
+fi
+
+exe=$1
+shift
+case "$exe" in
+    file://*)
+        exe=$(uri_decode "${exe#file://}")
+        ;;
+esac
+case "$exe" in
+    /*) ;;
+    *) exe="$(pwd)/$exe" ;;
+esac
+
+if ! command -v "$winlux" >/dev/null 2>&1; then
+    show_error "Le runtime Winlux est introuvable ($winlux). Réinstallez Winlux."
+    exit 127
+fi
+if [ ! -e "$exe" ]; then
+    show_error "Le fichier « $exe » n’existe pas."
+    exit 1
+fi
+if [ ! -r "$exe" ]; then
+    show_error "Le fichier « $(basename -- "$exe") » n’est pas lisible : vérifiez ses permissions."
+    exit 1
+fi
+
+reason=$("$winlux" --inspect "$exe" 2>&1 >/dev/null)
+kind=$("$winlux" --inspect "$exe" 2>/dev/null)
+if [ -z "$kind" ]; then
+    show_error "Impossible d’ouvrir « $(basename -- "$exe") » : ${reason:-format inconnu}."
+    exit 1
+fi
+
+if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && [ ! -t 1 ]; then
+    self=$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")
+    open_terminal "$self" --in-terminal "$exe" "$@"
+    show_error "Aucun terminal trouvé pour afficher ce programme console. Installez Konsole ou définissez WINLUX_TERMINAL."
+    exit 1
+fi
+
+# Programme graphique (ou console lancée depuis un terminal) : le dossier du
+# programme devient le répertoire courant, comme dans l'explorateur Windows.
+mkdir -p "$state" 2>/dev/null || log=/dev/null
+cd "$(dirname -- "$exe")" 2>/dev/null || true
+if [ "$kind" = console ]; then
+    exec "$winlux" "$exe" "$@"
+fi
+"$winlux" "$exe" "$@" 2>"$log"
+status=$?
+if [ "$status" -ne 0 ] && grep -q '^winlux:' "$log" 2>/dev/null; then
+    detail=$(grep '^winlux:' "$log" | tail -n 3 | sed 's/^winlux: //')
+    show_error "« $(basename -- "$exe") » s’est arrêté (code $status).
+$detail"
+fi
+exit "$status"

@@ -130,6 +130,9 @@ jobs:
       - name: Exécuter les neuf PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
+      - name: Tester l'intégration bureau (double-clic)
+        run: sh scripts/test-integration.sh
+
       - name: Rapport des PE générés
         if: always()
         run: |

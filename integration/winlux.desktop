@@ -1,9 +1,12 @@
 [Desktop Entry]
 Type=Application
-Name=Winlux Windows executable
-Comment=Exécuter un programme Windows PE avec Winlux
-Exec=/usr/bin/winlux %f
-Terminal=true
+Name=Winlux
+GenericName=Programme Windows
+Comment=Exécuter un programme Windows avec Winlux
+Exec=/usr/bin/winlux-open %f
+Icon=application-x-ms-dos-executable
+Terminal=false
 NoDisplay=true
-MimeType=application/x-ms-dos-executable;application/x-msdownload;
-StartupNotify=false
+MimeType=application/x-ms-dos-executable;application/x-msdownload;application/vnd.microsoft.portable-executable;application/x-dosexec;
+StartupNotify=true
+Categories=System;

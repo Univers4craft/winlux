@@ -2,14 +2,14 @@
 
 ## État actuel
 
-- Dernière validation locale : `cargo test -p winlux` (70 tests), compilation release et les neuf exécutables PE en séquentiel et en parallèle réussissent. La dernière validation ISO sous QEMU BIOS et UEFI réussit également; relancer les scripts après chaque changement.
+- Dernière validation locale : `cargo test -p winlux` (71 tests), compilation release et les neuf exécutables PE en séquentiel et en parallèle réussissent. La dernière validation ISO sous QEMU BIOS et UEFI réussit également; relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
 - [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe`, `findfiles.exe`, `crt_suite.exe`, `gui_suite.exe` et `gui_demo.exe` sous Winlux.
-- [x] Ajouter 70 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT, IOCP, COM/OLE et le noyau fenêtres/messages.
+- [x] Ajouter 71 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT, IOCP, COM/OLE et le noyau fenêtres/messages.
 - [x] Exécuter les neuf PE simultanément avec isolation, temporisation et journaux par processus.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
@@ -93,12 +93,13 @@
 
 ## Priorité 3 — Double-clic et intégration Linux
 
-- [ ] Installer le binaire dans un chemin stable (`/usr/bin/winlux` ou `/usr/local/bin/winlux`); l’installation n’a pas été validée sur l’hôte.
+- [x] Installer le runtime et le lanceur dans un chemin stable (`/usr/bin` par défaut, préfixe et `DESTDIR` configurables), avec association MIME par défaut dans `/etc/xdg/mimeapps.list`; validé dans une racine temporaire par `scripts/test-integration.sh`.
+- [ ] Valider l’installation réelle sur l’hôte (`sudo integration/install.sh`).
 - [ ] Tester l’enregistrement binfmt sur une machine Linux réelle (fichier de configuration préparé, mais non installé/validé).
-- [ ] Ajouter une procédure de désinstallation propre du binfmt, du MIME et du fichier `.desktop`.
-- [ ] Gérer les chemins contenant des espaces, les permissions et les exécutables sur volumes montés.
-- [ ] Définir le comportement du terminal pour les programmes console et GUI (le `.desktop` actuel force encore `Terminal=true`).
-- [ ] Ajouter une détection du fichier `.exe` et des messages d’erreur graphiques ou textuels adaptés.
+- [x] Ajouter une procédure de désinstallation propre du binfmt, du MIME et du fichier `.desktop` (`integration/uninstall.sh`, restaure les associations précédentes).
+- [x] Gérer les chemins contenant des espaces ou des URI `file://`, les fichiers illisibles et les volumes montés `noexec` (le lanceur lit le fichier au lieu de l’exécuter; le dossier du programme devient le répertoire courant).
+- [x] Définir le comportement du terminal : `winlux --inspect` lit le sous-système PE, `winlux-open` ouvre un terminal (Konsole, GNOME Terminal, XFCE, xterm ou `WINLUX_TERMINAL`) qui reste ouvert pour les programmes console et lance directement les programmes graphiques.
+- [x] Ajouter une détection du fichier `.exe` et des messages d’erreur graphiques (kdialog, zenity, notify-send, xmessage) ou textuels adaptés.
 - [ ] Tester le double-clic depuis plusieurs environnements de bureau : GNOME, KDE et XFCE.
 
 ## Priorité 4 — ISO de test

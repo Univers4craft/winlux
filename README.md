@@ -61,7 +61,7 @@ multiplateformes ; il ne rend pas encore WPF ou WinForms compatibles.
 - `runtime/` : runtime Linux et chargeur PE.
 - `testexe/` : exécutables Windows de test.
 - `testdll/` : DLL Windows de test.
-- `integration/` : fichiers préparatoires binfmt, MIME, `.desktop` et script d’installation.
+- `integration/` : binfmt, MIME, `.desktop`, lanceur de double-clic et scripts d’installation/désinstallation.
 - `scripts/` : compilation, tests locaux séquentiels/parallèles et pipeline ISO/QEMU.
 - `theme/` : palette CSS expérimentale, non raccordée à un shell graphique.
 - `TODO.md` : feuille de route maintenue.
@@ -69,7 +69,15 @@ multiplateformes ; il ne rend pas encore WPF ou WinForms compatibles.
 
 ## Intégration Linux et ISO
 
-La configuration binfmt et le fichier `.desktop` sont des préparatifs, pas une intégration hôte validée. `integration/install.sh` installe par défaut le runtime, l’outil de mise à jour et leur version dans `/usr`; il modifie des emplacements système et nécessite donc une revue ainsi que des privilèges d’administration.
+`integration/install.sh` installe le runtime, le lanceur de double-clic `winlux-open`, l’outil de mise à jour, l’enregistrement binfmt et l’association MIME des `.exe` (par défaut dans `/usr`; il modifie des emplacements système et nécessite des privilèges d’administration) :
+
+```sh
+cargo build --release -p winlux
+sudo integration/install.sh          # ou /usr/local
+sudo integration/uninstall.sh        # retire tout et restaure les associations précédentes
+```
+
+Au double-clic, `winlux-open` lit le sous-système du PE (`winlux --inspect`) : un programme console s’ouvre dans un terminal qui reste ouvert à la fin, un programme graphique est lancé directement depuis son dossier. Les erreurs (fichier illisible, programme 32 bits, DLL…) s’affichent dans une boîte de dialogue. `WINLUX_TERMINAL` force un émulateur de terminal précis. `scripts/test-integration.sh` valide l’installation dans une racine temporaire et le lanceur; l’installation réelle sur un bureau KDE, GNOME ou XFCE reste à valider.
 
 `scripts/build-live-iso.sh` construit une image de test autonome avec un initramfs minimal, Winlux, les neuf PE, leur DLL, Xvfb et un démarrage GRUB BIOS/UEFI. Le noyau fourni doit être lisible par l’utilisateur :
 
