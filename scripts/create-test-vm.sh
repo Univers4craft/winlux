@@ -51,7 +51,7 @@ exec qemu-system-x86_64 \
     -m "$memory" \
     -smp "$cpus" \
     -device "virtio-vga,xres=$width,yres=$height" \
-    -display gtk,zoom-to-fit=on \
+    -display gtk,full-screen=on,zoom-to-fit=off \
     -device qemu-xhci \
     -device usb-tablet \
     -drive "file=$disk,if=virtio,format=qcow2,cache=writeback" \
