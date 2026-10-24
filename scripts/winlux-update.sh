@@ -1,153 +1,453 @@
 #!/bin/sh
+# Versioned system updates. Personal data and /etc are never in the payload.
 set -eu
 
 repository=${WINLUX_UPDATE_REPOSITORY:-Univers4craft/winlux}
 target_root=${WINLUX_UPDATE_ROOT:-/}
+test -d "$target_root" || { echo "racine de mise à jour absente" >&2; exit 1; }
+target_root=$(CDPATH= cd -- "$target_root" && pwd -P)
 manifest_source=${WINLUX_UPDATE_MANIFEST:-https://github.com/$repository/releases/latest/download/winlux-update-manifest.txt}
 update_token=${WINLUX_UPDATE_TOKEN:-${GH_TOKEN:-}}
 state_dir="$target_root/var/lib/winlux"
-backup_dir="$state_dir/update-backup"
+config="$target_root/etc/winlux/update.conf"
+token_file="$target_root/etc/winlux/update.token"
+work=
+lock_owned=0
+transaction=0
+transaction_backup=
+updater_tools=
 
-usage() {
-    echo "usage: winlux-update --check | --apply | --rollback"
+# State/configuration paths must not redirect a confined update onto the host.
+for internal in var var/lib var/lib/winlux run run/winlux etc etc/winlux; do
+    if test -L "$target_root/$internal"; then echo "répertoire d'état symbolique refusé : $internal" >&2; exit 1; fi
+    if test -e "$target_root/$internal" && ! test -d "$target_root/$internal"; then echo "répertoire d'état invalide : $internal" >&2; exit 1; fi
+done
+if test -L "$config"; then echo "configuration de mise à jour symbolique refusée" >&2; exit 1; fi
+
+fail() { echo "$*" >&2; exit 1; }
+tool() {
+    applet=$1; shift
+    if test -n "$updater_tools"; then "$updater_tools" "$applet" "$@";
+    elif test -x /bin/busybox; then /bin/busybox "$applet" "$@";
+    else command "$applet" "$@"; fi
 }
-
+# Keep the running installer independent of files/libraries being replaced.
+# The Winlux image supplies a statically linked BusyBox. Its private copy also
+# remains usable for rollback if /bin/busybox is one of the updated files.
+cp() { tool cp "$@"; }
+cut() { tool cut "$@"; }
+grep() { tool grep "$@"; }
+mkdir() { tool mkdir "$@"; }
+mktemp() { tool mktemp "$@"; }
+mv() { tool mv "$@"; }
+rm() { tool rm "$@"; }
+sed() { tool sed "$@"; }
+sha256sum() { tool sha256sum "$@"; }
+tar() { tool tar "$@"; }
+tr() { tool tr "$@"; }
+wc() { tool wc "$@"; }
+prepare_tools() {
+    if test -z "$work"; then work=$(mktemp -d "${TMPDIR:-/tmp}/winlux-update.XXXXXX"); fi
+    if test -x /bin/busybox && test -z "$updater_tools"; then
+        cp /bin/busybox "$work/busybox"
+        tool chmod 755 "$work/busybox"
+        "$work/busybox" true || fail "outils privés de mise à jour inutilisables"
+        updater_tools="$work/busybox"
+    fi
+}
+load_token() {
+    # Explicit environment credentials take priority. This file belongs to the
+    # guest OS and must never be populated with credentials from the host.
+    test -z "$update_token" || return 0
+    if test -L "$token_file"; then fail "fichier d'accès GitHub symbolique refusé"; fi
+    test -e "$token_file" || return 0
+    test -f "$token_file" && test -r "$token_file" || fail "fichier d'accès GitHub illisible"
+    case "$(tool stat -c %a "$token_file")" in 600|400) ;; *) fail "le fichier d'accès GitHub doit être privé (chmod 600)" ;; esac
+    test "$(wc -l <"$token_file")" -eq 1 || fail "fichier d'accès GitHub invalide"
+    update_token=$(sed -n '1p' "$token_file")
+    case "$update_token" in ''|*[!A-Za-z0-9_]*) fail "fichier d'accès GitHub invalide" ;; esac
+}
+value() {
+    result=$(sed -n "s/^$1=//p" "$2")
+    test -n "$result" && test "$(printf '%s\n' "$result" | wc -l)" -eq 1 || return 1
+    printf '%s' "$result"
+}
+safe_name() { case "$1" in ''|*[!A-Za-z0-9._+-]*) return 1 ;; esac; }
+safe_path() {
+    case "$1" in ''|/*|*/|*//*|*[!A-Za-z0-9._+@%=/:-]*) return 1 ;; esac
+    case "/$1/" in */../*|*/./*) return 1 ;; esac
+    case "$1" in usr/*|lib/*|lib64/*|bin/*|opt/winlux/*|boot/*|init) return 0 ;; *) return 1 ;; esac
+}
+safe_link() {
+    link_path=$1; link_target=$2
+    case "$link_target" in ''|*[!A-Za-z0-9._+@%=/:-]*) return 1 ;; esac
+    case "$link_target" in /*) link_absolute=$link_target ;; *) link_absolute="${link_path%/*}/$link_target" ;; esac
+    resolved=$(printf '%s\n' "$link_absolute" | tool awk -F/ '
+        { n=0; for(i=1;i<=NF;i++) { if($i=="" || $i==".") continue;
+          if($i=="..") { if(n==0) exit 1; n--; } else parts[++n]=$i; }
+          for(i=1;i<=n;i++) printf "%s%s", i==1 ? "" : "/", parts[i]; print ""; }') || return 1
+    safe_path "$resolved"
+}
+# Existing parent links may point within the managed tree (e.g. /lib -> usr/lib),
+# but must not redirect installation into user data or outside a test root.
+safe_parent() {
+    relative=$1; prefix=; parent=${relative%/*}
+    test "$parent" != "$relative" || return 0
+    old_ifs=$IFS; IFS=/; set -- $parent; IFS=$old_ifs
+    for part do
+        prefix=${prefix:+$prefix/}$part
+        existing="$target_root/$prefix"
+        if test -e "$existing" || test -L "$existing"; then
+            test -d "$existing" || fail "parent non répertoire : $prefix"
+            real=$(tool readlink -f "$existing") || fail "parent illisible : $prefix"
+            if test "$target_root" = /; then rel=${real#/};
+            else case "$real" in "$target_root"/*) rel=${real#"$target_root"/} ;; *) fail "parent hors racine : $prefix" ;; esac; fi
+            case "$rel" in
+                bin|bin/*|usr|usr/*|lib|lib/*|lib64|lib64/*|opt|opt/winlux|opt/winlux/*|boot|boot/*) ;;
+                etc|etc/winlux) test "$relative" = etc/winlux/update.conf || fail "parent hors système : $prefix" ;;
+                *) fail "parent hors système : $prefix" ;;
+            esac
+        fi
+    done
+}
+current_version() {
+    if test -f "$target_root/usr/share/winlux/version"; then sed -n '1p' "$target_root/usr/share/winlux/version"; else echo none; fi
+}
+current_scope() {
+    if test -f "$target_root/usr/share/winlux/update-scope"; then sed -n '1p' "$target_root/usr/share/winlux/update-scope"; else echo runtime; fi
+}
+up_to_date() { test "$(current_version)" = "$version" && { test "$scope" = runtime || test "$(current_scope)" = system; }; }
+write_action() {
+    mkdir -p "$target_root/run/winlux"
+    requested_action=$1
+    # A later runtime update must not hide a pending kernel reboot.
+    if test -f "$target_root/run/winlux/update-action" && grep -qx reboot "$target_root/run/winlux/update-action"; then requested_action=reboot; fi
+    printf '%s\n' "$requested_action" >"$target_root/run/winlux/update-action.new"
+    mv -fT "$target_root/run/winlux/update-action.new" "$target_root/run/winlux/update-action"
+}
+restore_backup() {
+    restoring=$1
+    test -f "$restoring/restore.list" || return 1
+    # Validate the entire backup before restoring its first file.
+    while read -r kind digest mode path; do
+        safe_path "$path" || return 1
+        safe_parent "$path"
+        case "$kind" in
+            F) test -f "$restoring/files/$path" && ! test -L "$restoring/files/$path" || return 1
+               test "$(sha256sum "$restoring/files/$path" | cut -d' ' -f1)" = "$digest" || return 1 ;;
+            L) test -L "$restoring/files/$path" || return 1
+               test "$(tool readlink "$restoring/files/$path")" = "$digest" || return 1
+               safe_link "$path" "$digest" || return 1 ;;
+            A) ;;
+            *) return 1 ;;
+        esac
+    done <"$restoring/restore.list"
+    while read -r kind digest mode path; do
+        destination="$target_root/$path"
+        if test "$kind" = A; then rm -f "$destination" || return 1;
+        else
+            mkdir -p "${destination%/*}" || return 1
+            rm -f "$destination.winlux-restore.$$" || return 1
+            cp -a "$restoring/files/$path" "$destination.winlux-restore.$$" || return 1
+            mv -fT "$destination.winlux-restore.$$" "$destination" || return 1
+        fi
+    done <"$restoring/restore.list"
+    if test -f "$restoring/installed-files.before"; then
+        cp "$restoring/installed-files.before" "$state_dir/installed-files.new" || return 1
+        mv -fT "$state_dir/installed-files.new" "$state_dir/installed-files" || return 1
+    else rm -f "$state_dir/installed-files" || return 1; fi
+}
+cleanup() {
+    status=$?; trap - EXIT HUP INT TERM
+    if test "$transaction" -eq 1; then
+        echo "Installation interrompue : restauration des fichiers précédents." >&2
+        if restore_backup "$transaction_backup"; then rm -f "$state_dir/update-transaction";
+        else echo "RESTAURATION INCOMPLÈTE : sauvegarde conservée dans $transaction_backup" >&2; fi
+        status=1
+    fi
+    if test "$lock_owned" -eq 1; then rm -f "$state_dir/update.lock/pid"; tool rmdir "$state_dir/update.lock" || true; fi
+    if test -n "$work"; then rm -rf "$work"; fi
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT
+trap 'exit 143' HUP TERM
+lock() {
+    mkdir -p "$state_dir"
+    if ! mkdir "$state_dir/update.lock" 2>/dev/null; then
+        if test -d "$state_dir/update.lock" && ! test -L "$state_dir/update.lock" && test -f "$state_dir/update.lock/pid"; then
+            previous_pid=$(sed -n '1p' "$state_dir/update.lock/pid")
+            case "$previous_pid" in ''|*[!0-9]*) fail "verrou de mise à jour invalide" ;; esac
+            if ! kill -0 "$previous_pid" 2>/dev/null; then
+                rm -f "$state_dir/update.lock/pid"
+                tool rmdir "$state_dir/update.lock" || fail "verrou périmé non récupérable"
+                mkdir "$state_dir/update.lock" || fail "une mise à jour a démarré simultanément"
+            else fail "une mise à jour est déjà en cours (PID $previous_pid)"; fi
+        else fail "une mise à jour est déjà en cours (verrou $state_dir/update.lock)"; fi
+    fi
+    lock_owned=1; printf '%s\n' "$$" >"$state_dir/update.lock/pid"
+    prepare_tools
+    if test -f "$state_dir/update-transaction"; then
+        interrupted=$(sed -n '1p' "$state_dir/update-transaction")
+        case "$interrupted" in update-backup.*) safe_name "$interrupted" || fail "journal invalide" ;; *) fail "journal invalide" ;; esac
+        echo "Récupération de la dernière installation interrompue."
+        restore_backup "$state_dir/$interrupted" || fail "récupération impossible ; sauvegarde $state_dir/$interrupted conservée"
+        rm -f "$state_dir/update-transaction"
+    fi
+}
 download() {
-    source=$1
-    destination=$2
-    accept=${3:-application/octet-stream}
+    source=$1; destination=$2; accept=${3:-application/octet-stream}
     case "$source" in
         file://*) cp "${source#file://}" "$destination" ;;
         https://github.com/*|https://objects.githubusercontent.com/*|https://api.github.com/*)
-            command -v curl >/dev/null 2>&1 || { echo "curl est requis" >&2; exit 1; }
-            set -- curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
-                --header "Accept: $accept" --header "X-GitHub-Api-Version: 2022-11-28" \
-                --output "$destination"
-            if test -n "$update_token"; then
-                set -- "$@" --header "Authorization: Bearer $update_token"
-            fi
-            if ! "$@" "$source"; then
-                echo "téléchargement GitHub impossible; pour un dépôt privé, définissez WINLUX_UPDATE_TOKEN" >&2
-                exit 1
-            fi
-            ;;
-        *) echo "source de mise à jour refusée : $source" >&2; exit 1 ;;
+            command -v curl >/dev/null 2>&1 || fail "curl est requis"
+            set -- curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
+                --connect-timeout 15 --max-time 300 --header "Accept: $accept" \
+                --header "X-GitHub-Api-Version: 2022-11-28" --output "$destination"
+            if test -n "$update_token"; then set -- "$@" --header "Authorization: Bearer $update_token"; fi
+            "$@" "$source" || fail "téléchargement GitHub impossible ; vérifiez le réseau et WINLUX_UPDATE_TOKEN pour un dépôt privé" ;;
+        *) fail "source de mise à jour refusée : $source" ;;
     esac
 }
-
 asset_api_url() {
-    name=$1
-    metadata=$2
-    tr -d '\n\r' <"$metadata" |
-        sed -n "s#.*\"url\"[[:space:]]*:[[:space:]]*\"\\(https://api.github.com/repos/$repository/releases/assets/[0-9][0-9]*\\)\"[^{}]*\"name\"[[:space:]]*:[[:space:]]*\"$name\".*#\\1#p"
+    tr -d '\n\r' <"$2" | sed -n "s#.*\"url\"[[:space:]]*:[[:space:]]*\"\\(https://api.github.com/repos/$repository/releases/assets/[0-9][0-9]*\\)\"[^{}]*\"name\"[[:space:]]*:[[:space:]]*\"$1\".*#\\1#p"
 }
-
-manifest_value() {
-    key=$1
-    file=$2
-    value=$(sed -n "s/^$key=//p" "$file")
-    test "$(printf '%s\n' "$value" | wc -l)" -eq 1 || return 1
-    printf '%s' "$value"
+validate_manifest() {
+    manifest=$1
+    format=$(value format "$manifest") || fail "format absent du manifeste"
+    case "$format" in 1|2) ;; *) fail "format de manifeste inconnu" ;; esac
+    version=$(value version "$manifest") || fail "version absente"
+    asset=$(value asset "$manifest") || fail "actif absent"
+    checksum=$(value sha256 "$manifest") || fail "SHA-256 absent"
+    safe_name "$version" && safe_name "$asset" || fail "version ou nom d'actif invalide"
+    case "$checksum" in *[!0-9a-f]*|'') fail "somme SHA-256 invalide" ;; esac
+    test "${#checksum}" -eq 64 || fail "somme SHA-256 invalide"
+    scope=runtime; action=restart-session; components=runtime,updater
+    if test "$format" = 2; then
+        scope=$(value scope "$manifest") || fail "portée absente"
+        action=$(value action "$manifest") || fail "action absente"
+        components=$(value components "$manifest") || fail "composants absents"
+        case "$scope:$action" in system:reboot|runtime:restart-session) ;; *) fail "portée/action incohérente" ;; esac
+        case "$components" in *[!A-Za-z0-9,._+-]*|'') fail "composants invalides" ;; esac
+    fi
 }
-
 fetch_manifest() {
     manifest=$1
+    load_token
     if test -n "$update_token" && test -z "${WINLUX_UPDATE_MANIFEST:-}"; then
         release_metadata="$work/release.json"
         download "https://api.github.com/repos/$repository/releases/latest" "$release_metadata" "application/vnd.github+json"
         manifest_api=$(asset_api_url winlux-update-manifest.txt "$release_metadata")
-        test -n "$manifest_api" || { echo "manifeste absent de la dernière release" >&2; exit 1; }
+        test -n "$manifest_api" || fail "manifeste absent de la dernière release"
         download "$manifest_api" "$manifest"
-    else
-        download "$manifest_source" "$manifest"
-    fi
-    test "$(manifest_value format "$manifest")" = 1 || { echo "format de manifeste inconnu" >&2; exit 1; }
-    version=$(manifest_value version "$manifest")
-    asset=$(manifest_value asset "$manifest")
-    checksum=$(manifest_value sha256 "$manifest")
-    case "$version" in *[!A-Za-z0-9._-]*|'') echo "version de manifeste invalide" >&2; exit 1 ;; esac
-    case "$asset" in *[!A-Za-z0-9._-]*|'') echo "nom d'actif invalide" >&2; exit 1 ;; esac
-    case "$checksum" in *[!0-9a-f]*|'') echo "somme SHA-256 invalide" >&2; exit 1 ;; esac
-    test "${#checksum}" -eq 64 || { echo "somme SHA-256 invalide" >&2; exit 1; }
+    else download "$manifest_source" "$manifest"; fi
+    validate_manifest "$manifest"
+    cp "$manifest" "$state_dir/available-manifest.new"
+    mv -fT "$state_dir/available-manifest.new" "$state_dir/available-manifest"
 }
-
-current_version() {
-    if test -f "$target_root/usr/share/winlux/version"; then
-        sed -n '1p' "$target_root/usr/share/winlux/version"
-    else
-        echo none
-    fi
+list_updates() {
+    echo "Version installée : $(current_version)"
+    if test -f "$target_root/run/winlux/update-action"; then echo "Action en attente : $(sed -n '1p' "$target_root/run/winlux/update-action")"; fi
+    if ! test -f "$state_dir/available-manifest"; then echo "Aucune vérification disponible. Lancez une recherche de mises à jour (--check)."; return; fi
+    validate_manifest "$state_dir/available-manifest"
+    echo "Version disponible : $version"
+    if up_to_date; then echo "Winlux est à jour."; return; fi
+    echo "Portée : $scope"
+    echo "Composants : $components"
+    if test "$action" = reboot; then echo "Action après installation : redémarrage du système";
+    else echo "Action après installation : redémarrage de la session graphique"; fi
+    echo "Les données personnelles et la configuration sont conservées."
 }
 
 mode=${1:-}
 case "$mode" in
-    --check|--apply|--rollback) ;;
-    *) usage >&2; exit 2 ;;
+    --list) test "$#" -eq 1 || fail "arguments inattendus"; list_updates; exit 0 ;;
+    --auto)
+        test "$#" -le 2 || fail "arguments inattendus"
+        case "${2:-status}" in
+            status) if test -f "$config" && grep -qx 'auto=enabled' "$config"; then echo enabled; else echo disabled; fi; exit 0 ;;
+            enable|disable)
+                lock; safe_parent etc/winlux/update.conf; mkdir -p "${config%/*}"
+                if test -f "$config"; then sed '/^auto=/d' "$config" >"$config.new"; else : >"$config.new"; fi
+                if test "$2" = enable; then printf 'auto=enabled\n' >>"$config.new"; else printf 'auto=disabled\n' >>"$config.new"; fi
+                tool chmod 644 "$config.new"; mv -fT "$config.new" "$config"
+                echo "Mises à jour automatiques : $2"; exit 0 ;;
+            *) fail "usage : winlux-update --auto enable|disable|status" ;;
+        esac ;;
+    --auto-run)
+        test "$#" -eq 1 || fail "arguments inattendus"
+        if ! test -f "$config" || ! grep -qx 'auto=enabled' "$config"; then exit 0; fi
+        mode=--apply ;;
+    --check|--apply|--rollback) test "$#" -eq 1 || fail "arguments inattendus" ;;
+    *) echo "usage : winlux-update --check | --list | --apply | --rollback | --auto enable|disable|status | --auto-run" >&2; exit 2 ;;
 esac
-
+lock
 if test "$mode" = --rollback; then
-    test -d "$backup_dir" || { echo "aucune sauvegarde Winlux" >&2; exit 1; }
-    test -f "$backup_dir/usr/bin/winlux" || { echo "sauvegarde incomplète" >&2; exit 1; }
-    install -Dm755 "$backup_dir/usr/bin/winlux" "$target_root/usr/bin/winlux.rollback"
-    mv "$target_root/usr/bin/winlux.rollback" "$target_root/usr/bin/winlux"
-    if test -f "$backup_dir/usr/bin/winlux-update"; then
-        install -Dm755 "$backup_dir/usr/bin/winlux-update" "$target_root/usr/bin/winlux-update.rollback"
-        mv "$target_root/usr/bin/winlux-update.rollback" "$target_root/usr/bin/winlux-update"
-    fi
-    install -Dm644 "$backup_dir/usr/share/winlux/version" "$target_root/usr/share/winlux/version.rollback"
-    mv "$target_root/usr/share/winlux/version.rollback" "$target_root/usr/share/winlux/version"
-    echo "Retour à Winlux $(current_version) effectué."
+    test -f "$state_dir/rollback-current" || fail "aucune sauvegarde Winlux"
+    backup_name=$(sed -n '1p' "$state_dir/rollback-current")
+    case "$backup_name" in update-backup.*) safe_name "$backup_name" || fail "nom de sauvegarde invalide" ;; *) fail "nom de sauvegarde invalide" ;; esac
+    backup="$state_dir/$backup_name"
+    action=$(value action "$backup/metadata") || fail "action de restauration absente"
+    case "$action" in reboot|restart-session) ;; *) fail "action de restauration invalide" ;; esac
+    restore_backup "$backup" || fail "sauvegarde incomplète ou restauration impossible"
+    write_action "$action"
+    echo "Retour à Winlux $(current_version) effectué. Action requise : $(sed -n '1p' "$target_root/run/winlux/update-action")."
     exit 0
 fi
 
-work=$(mktemp -d "${TMPDIR:-/tmp}/winlux-update.XXXXXX")
-trap 'rm -rf "$work"' EXIT HUP INT TERM
-manifest="$work/manifest.txt"
-fetch_manifest "$manifest"
-installed=$(current_version)
-echo "Version installée : $installed"
-echo "Version disponible : $version"
-if test "$installed" = "$version"; then
-    echo "Winlux est à jour."
-    exit 0
-fi
+if test -z "$work"; then work=$(mktemp -d "${TMPDIR:-/tmp}/winlux-update.XXXXXX"); fi
+fetch_manifest "$work/manifest.txt"
+list_updates
 test "$mode" = --apply || exit 0
-
-if test -n "${WINLUX_UPDATE_ASSET_DIR:-}"; then
-    asset_source="file://$WINLUX_UPDATE_ASSET_DIR/$asset"
+if up_to_date; then exit 0; fi
+if test -n "${WINLUX_UPDATE_ASSET_DIR:-}"; then asset_source="file://$WINLUX_UPDATE_ASSET_DIR/$asset";
 elif test -n "$update_token" && test -n "${release_metadata:-}"; then
     asset_source=$(asset_api_url "$asset" "$release_metadata")
-    test -n "$asset_source" || { echo "actif $asset absent de la dernière release" >&2; exit 1; }
-else
-    asset_source="https://github.com/$repository/releases/download/$version/$asset"
-fi
-bundle="$work/$asset"
+    test -n "$asset_source" || fail "actif $asset absent de la dernière release"
+else asset_source="https://github.com/$repository/releases/download/$version/$asset"; fi
+bundle="$work/bundle.tar.gz"
 download "$asset_source" "$bundle"
-actual=$(sha256sum "$bundle" | cut -d' ' -f1)
-test "$actual" = "$checksum" || { echo "échec de la vérification SHA-256" >&2; exit 1; }
-
-tar -tzf "$bundle" >"$work/files.txt"
+test "$(sha256sum "$bundle" | cut -d' ' -f1)" = "$checksum" || fail "échec de la vérification SHA-256"
+tar -tzf "$bundle" >"$work/archive.list"
+tar -tvzf "$bundle" >"$work/archive.types"
+while IFS= read -r entry; do case "$entry" in -*|d*) ;; *) fail "liens ou fichiers spéciaux interdits dans l'archive" ;; esac; done <"$work/archive.types"
+sed -e 's#^\./##' -e 's#/$##' -e '/^$/d' "$work/archive.list" >"$work/archive.names"
 while IFS= read -r entry; do
-    case "$entry" in
-        /*|*../*|../*|*'/..') echo "chemin dangereux dans le paquet : $entry" >&2; exit 1 ;;
-    esac
-done <"$work/files.txt"
-mkdir -p "$work/payload"
-tar -xzf "$bundle" -C "$work/payload"
-test -x "$work/payload/usr/bin/winlux" || { echo "runtime absent du paquet" >&2; exit 1; }
-test -x "$work/payload/usr/bin/winlux-update" || { echo "outil de mise à jour absent du paquet" >&2; exit 1; }
-test -f "$work/payload/usr/share/winlux/version" || { echo "version absente du paquet" >&2; exit 1; }
-test "$(sed -n '1p' "$work/payload/usr/share/winlux/version")" = "$version" || { echo "version du paquet incohérente" >&2; exit 1; }
-
-mkdir -p "$backup_dir/usr/bin" "$backup_dir/usr/share/winlux" "$target_root/usr/bin" "$target_root/usr/share/winlux"
-if test -f "$target_root/usr/bin/winlux"; then cp "$target_root/usr/bin/winlux" "$backup_dir/usr/bin/winlux"; fi
-if test -f "$target_root/usr/bin/winlux-update"; then cp "$target_root/usr/bin/winlux-update" "$backup_dir/usr/bin/winlux-update"; fi
-if test -f "$target_root/usr/share/winlux/version"; then cp "$target_root/usr/share/winlux/version" "$backup_dir/usr/share/winlux/version"; else printf 'none\n' >"$backup_dir/usr/share/winlux/version"; fi
-
-install -Dm755 "$work/payload/usr/bin/winlux" "$target_root/usr/bin/winlux.new"
-install -Dm755 "$work/payload/usr/bin/winlux-update" "$target_root/usr/bin/winlux-update.new"
-install -Dm644 "$work/payload/usr/share/winlux/version" "$target_root/usr/share/winlux/version.new"
-mv "$target_root/usr/bin/winlux.new" "$target_root/usr/bin/winlux"
-mv "$target_root/usr/bin/winlux-update.new" "$target_root/usr/bin/winlux-update"
-mv "$target_root/usr/share/winlux/version.new" "$target_root/usr/share/winlux/version"
-echo "Winlux $version installé. Une sauvegarde restaurable est disponible avec --rollback."
+    case "$entry" in ''|/*|*//*|*[!A-Za-z0-9._+@%=/:-]*) fail "chemin dangereux dans le paquet : $entry" ;; esac
+    case "/$entry/" in */../*|*/./*) fail "chemin dangereux dans le paquet : $entry" ;; esac
+    if test "$format" = 2; then case "$entry" in FILES|LINKS|META|payload|payload/*) ;; *) fail "entrée inattendue : $entry" ;; esac
+    else case "$entry" in usr|usr/bin|usr/share|usr/share/winlux|usr/bin/winlux|usr/bin/winlux-update|usr/share/winlux/version) ;; *) fail "entrée runtime inattendue : $entry" ;; esac; fi
+done <"$work/archive.names"
+test -z "$(tool sort "$work/archive.names" | tool uniq -d)" || fail "entrées dupliquées dans le paquet"
+mkdir -p "$work/extracted"
+tar -xzf "$bundle" -C "$work/extracted"
+if test "$format" = 2; then
+    for key in format version scope action components; do
+        test "$(value "$key" "$work/extracted/META")" = "$(value "$key" "$work/manifest.txt")" || fail "métadonnées du paquet incohérentes : $key"
+    done
+    payload="$work/extracted/payload"; files="$work/extracted/FILES"; links="$work/extracted/LINKS"
+    test -f "$files" && test -f "$links" || fail "inventaire du paquet absent"
+else
+    payload="$work/extracted"; files="$work/legacy-files"; links="$work/legacy-links"
+    : >"$files"; : >"$links"
+    for path in usr/bin/winlux usr/bin/winlux-update usr/share/winlux/version; do
+        test -f "$payload/$path" || fail "fichier runtime absent : $path"
+        file_mode=644; case "$path" in usr/bin/*) file_mode=755 ;; esac
+        printf '%s %s %s\n' "$(sha256sum "$payload/$path" | cut -d' ' -f1)" "$file_mode" "$path" >>"$files"
+    done
+fi
+: >"$work/new-files"
+while read -r digest file_mode path extra; do
+    test -z "${extra:-}" && safe_path "$path" || fail "inventaire fichiers invalide"
+    case "$file_mode" in 644|755) ;; *) fail "droits de fichier refusés : $path" ;; esac
+    test -f "$payload/$path" && ! test -L "$payload/$path" || fail "fichier absent : $path"
+    test "$(sha256sum "$payload/$path" | cut -d' ' -f1)" = "$digest" || fail "fichier altéré : $path"
+    printf '%s\n' "$path" >>"$work/new-files"
+done <"$files"
+tool find "$payload" -type f | sed "s#^$payload/##" | tool sort >"$work/actual-files"
+tool sort "$work/new-files" >"$work/listed-files"
+tool cmp -s "$work/actual-files" "$work/listed-files" || fail "l'inventaire ne correspond pas aux fichiers du paquet"
+while read -r path link_target extra; do
+    test -z "${extra:-}" && safe_path "$path" && safe_link "$path" "$link_target" || fail "lien dangereux dans l'inventaire : $path"
+    printf '%s\n' "$path" >>"$work/new-files"
+done <"$links"
+test -z "$(tool sort "$work/new-files" | tool uniq -d)" || fail "fichiers/liens dupliqués"
+test -x "$payload/usr/bin/winlux" && test -x "$payload/usr/bin/winlux-update" || fail "runtime ou outil de mise à jour absent"
+test "$(sed -n '1p' "$payload/usr/share/winlux/version")" = "$version" || fail "version du paquet incohérente"
+if test "$scope" = system; then
+    test -x "$payload/init" && test -f "$payload/opt/winlux/tests/gui_demo.exe" && test -f "$payload/boot/vmlinuz" && test -f "$payload/boot/winlux-initramfs.cpio.gz" || fail "paquet système incomplet"
+    tool find "$payload/lib/modules" -type f | grep -q . || fail "modules noyau absents"
+fi
+cp "$work/new-files" "$work/targets"
+cp "$work/new-files" "$work/managed-files"
+if test -f "$state_dir/installed-files"; then
+    while IFS= read -r path; do
+        safe_path "$path" || fail "inventaire installé invalide"
+        if test "$scope" = system; then printf '%s\n' "$path" >>"$work/targets";
+        else printf '%s\n' "$path" >>"$work/managed-files"; fi
+    done <"$state_dir/installed-files"
+fi
+tool sort -u "$work/targets" >"$work/targets.sorted"
+tool sort -u "$work/managed-files" >"$work/managed-files.sorted"
+# A payload must never replace a parent directory with a file or link.
+while IFS= read -r path; do
+    safe_parent "$path"
+    if test -d "$target_root/$path" && ! test -L "$target_root/$path"; then fail "répertoire à la place d'un fichier : $path"; fi
+    parent=${path%/*}
+    while test "$parent" != "$path"; do
+        if grep -Fxq "$parent" "$work/new-files"; then fail "un fichier masque un parent : $parent"; fi
+        path=$parent; parent=${path%/*}
+    done
+done <"$work/targets.sorted"
+# The manifest announces the maximum restart requirement. Decide the actual
+# action from changed files; replacing only the desktop does not reboot Linux.
+action=restart-session
+if test "$scope" = system; then
+    while IFS= read -r path; do
+        case "$path" in
+            boot/*|init|bin/*|lib/*|lib64/*|usr/lib/*|usr/bin/Xorg|usr/bin/udevadm|usr/share/X11/xorg.conf.d/*)
+                unchanged=0
+                if test -f "$payload/$path" && ! test -L "$target_root/$path" && test -f "$target_root/$path"; then
+                    if tool cmp -s "$payload/$path" "$target_root/$path"; then unchanged=1; fi
+                elif test -L "$target_root/$path"; then
+                    new_target=$(tool awk -v wanted="$path" '$1 == wanted {print $2}' "$links")
+                    if test -n "$new_target" && test "$(tool readlink "$target_root/$path")" = "$new_target"; then unchanged=1; fi
+                elif ! test -e "$target_root/$path" && ! grep -Fxq "$path" "$work/new-files"; then unchanged=1;
+                fi
+                if test "$unchanged" -eq 0; then action=reboot; break; fi ;;
+        esac
+    done <"$work/targets.sorted"
+fi
+transaction_backup=$(mktemp -d "$state_dir/update-backup.XXXXXX")
+tool chmod 700 "$transaction_backup"
+mkdir -p "$transaction_backup/files"
+: >"$transaction_backup/restore.list"
+printf 'action=%s\n' "$action" >"$transaction_backup/metadata"
+if test -f "$state_dir/installed-files"; then cp "$state_dir/installed-files" "$transaction_backup/installed-files.before"; fi
+while IFS= read -r path; do
+    original="$target_root/$path"
+    if test -L "$original"; then
+        link_target=$(tool readlink "$original")
+        safe_link "$path" "$link_target" || fail "lien installé non restaurable : $path"
+        mkdir -p "$transaction_backup/files/$(tool dirname "$path")"
+        cp -a "$original" "$transaction_backup/files/$path"
+        printf 'L %s - %s\n' "$link_target" "$path" >>"$transaction_backup/restore.list"
+    elif test -f "$original"; then
+        mkdir -p "$transaction_backup/files/$(tool dirname "$path")"
+        cp -a "$original" "$transaction_backup/files/$path"
+        printf 'F %s - %s\n' "$(sha256sum "$original" | cut -d' ' -f1)" "$path" >>"$transaction_backup/restore.list"
+    elif test -e "$original"; then fail "type installé non pris en charge : $path";
+    else printf 'A - - %s\n' "$path" >>"$transaction_backup/restore.list"; fi
+done <"$work/targets.sorted"
+printf '%s\n' "${transaction_backup##*/}" >"$state_dir/update-transaction.new"
+mv -fT "$state_dir/update-transaction.new" "$state_dir/update-transaction"
+tool sync
+transaction=1
+while read -r digest file_mode path; do
+    destination="$target_root/$path"
+    mkdir -p "${destination%/*}"
+    rm -f "$destination.winlux-new.$$"
+    cp "$payload/$path" "$destination.winlux-new.$$"
+    tool chmod "$file_mode" "$destination.winlux-new.$$"
+    mv -fT "$destination.winlux-new.$$" "$destination"
+done <"$files"
+while read -r path link_target; do
+    destination="$target_root/$path"
+    mkdir -p "${destination%/*}"
+    rm -f "$destination.winlux-new.$$"
+    tool ln -s "$link_target" "$destination.winlux-new.$$"
+    mv -fT "$destination.winlux-new.$$" "$destination"
+done <"$links"
+if test "$scope" = system; then
+    while IFS= read -r path; do if ! grep -Fxq "$path" "$work/new-files"; then rm -f "$target_root/$path"; fi; done <"$work/targets.sorted"
+fi
+cp "$work/managed-files.sorted" "$state_dir/installed-files.new"
+mv -fT "$state_dir/installed-files.new" "$state_dir/installed-files"
+printf '%s\n' "${transaction_backup##*/}" >"$state_dir/rollback-current.new"
+mv -fT "$state_dir/rollback-current.new" "$state_dir/rollback-current"
+write_action "$action"
+tool sync
+rm -f "$state_dir/update-transaction"
+transaction=0
+echo "Winlux $version installé ($scope). Sauvegarde complète disponible avec --rollback."
+echo "Action requise : $(sed -n '1p' "$target_root/run/winlux/update-action"). Les redémarrages du système restent soumis à votre accord."

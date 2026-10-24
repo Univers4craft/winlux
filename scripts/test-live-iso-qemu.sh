@@ -20,6 +20,7 @@ set -- qemu-system-x86_64 \
     -smp "${WINLUX_QEMU_CPUS:-2}" \
     -accel tcg \
     -display none \
+    -nic none \
     -monitor none \
     -serial stdio \
     -no-reboot \
@@ -53,7 +54,11 @@ esac
 
 echo "Test QEMU $mode de $iso"
 set +e
-timeout "$timeout_seconds" "$@" >"$log" 2>&1
+# Select GRUB's diagnostic hotkey while the hidden menu is waiting. Repeating
+# covers BIOS and slower UEFI firmware without changing the delivered ISO.
+(
+    for attempt in $(seq 1 80); do printf d || exit 0; sleep 0.5; done
+) | timeout "$timeout_seconds" "$@" >"$log" 2>&1
 qemu_status=$?
 set -e
 

@@ -2,6 +2,21 @@
 
 ## État actuel
 
+### Fiabilisation du bureau et de la VM
+
+- [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer.
+- [x] Bloquer les copies dans un descendant, les collisions et les alias de chemins ; tester le couper/coller et les raccourcis.
+- [x] Corriger Ctrl+L, les touches Windows, AltGr et la disposition XKB réelle.
+- [x] Détecter les images/disques périmés par empreinte des sources et conserver le disque précédent lors d'un rafraîchissement.
+- [x] Charger le noyau et la racine persistante du disque depuis GRUB.
+- [x] Ajouter DHCP, route, DNS et renouvellement réseau, avec tests isolés.
+- [x] Paramètres Linux/Windows, télémétrie réelle et commandes système avec journaux.
+- [x] Centre graphique de mise à jour, paquets système complets, jeton pour dépôt privé, automatique, restauration et demande de redémarrage.
+- [ ] Ajouter un installateur autonome BIOS/UEFI qui ne nécessite plus l'ISO comme chargeur initial.
+- [ ] Passer Explorer entièrement aux chemins Unicode Win32 W.
+- [ ] Exécuter le bureau en utilisateur non privilégié avec autorisation ciblée des actions système.
+- [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation.
+
 - Dernière validation locale : `cargo test -p winlux` (81 tests), compilation release et les neuf exécutables PE en séquentiel et en parallèle réussissent. La dernière validation ISO sous QEMU BIOS et UEFI réussit également; relancer les scripts après chaque changement.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
@@ -113,7 +128,7 @@
 - [x] Lancer automatiquement les tests séquentiels, parallèles et X11 dans la VM.
 - [x] Générer l’ISO avec `xorriso` et produire une somme SHA-256.
 - [x] Ajouter un test automatisé dans QEMU avec vérification des marqueurs de résultat.
-- [ ] Réparer `scripts/test-live-iso-qemu.sh` : depuis que GRUB démarre par défaut sur le bureau, il n’atteint plus l’entrée de diagnostic (la suite de diagnostic elle-même passe en démarrage direct du noyau).
+- [x] Sélectionner l'entrée de diagnostic dans `scripts/test-live-iso-qemu.sh` et vérifier BIOS/UEFI sans modifier l'ISO livrée.
 - [x] Documenter la RAM, le nombre de CPU et les options nécessaires à la VM.
 
 ## Priorité 5 — Thème Windows 11

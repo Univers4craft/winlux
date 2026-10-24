@@ -92,6 +92,11 @@ jobs:
       - name: Valider mise à jour et retour arrière
         run: bash scripts/test-updater.sh
 
+      - name: Valider le réseau et les commandes des paramètres
+        run: |
+          sh scripts/test-network.sh
+          sh scripts/test-control.sh
+
   # 3. Compile les .exe Windows puis les exécute sous Winlux.
   runtime-tests:
     name: Tests runtime (PE)
@@ -127,7 +132,7 @@ jobs:
       - name: Exécuter les tests runtime
         run: bash scripts/test-runtime.sh
 
-      - name: Exécuter les neuf PE en parallèle
+      - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
       - name: Tester l'intégration bureau (double-clic)

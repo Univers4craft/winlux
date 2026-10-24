@@ -25,7 +25,9 @@ jobs:
           bash scripts/test-runtime.sh
           bash scripts/test-runtime-parallel.sh
       - name: Construire le paquet de mise à jour
-        run: bash scripts/build-update-bundle.sh "$GITHUB_REF_NAME"
+        # Runtime releases are explicit; a complete OS release must first build
+        # its ISO stage, then call build-update-bundle.sh --system.
+        run: bash scripts/build-update-bundle.sh --runtime "$GITHUB_REF_NAME"
       - name: Publier la release GitHub
         env:
           GH_TOKEN: ${{ github.token }}

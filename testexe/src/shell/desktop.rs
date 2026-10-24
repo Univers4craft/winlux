@@ -15,7 +15,7 @@ use crate::explorer;
 pub const TASKBAR_HEIGHT: i32 = 48;
 const BUTTON: i32 = 44;
 const BUTTON_GAP: i32 = 4;
-const TASKBAR_BUTTONS: i32 = 7;
+const TASKBAR_BUTTONS: i32 = 3;
 const START_OPEN_MS: i32 = 230;
 const START_CLOSE_MS: i32 = 140;
 const SPLASH_MIN_MS: u32 = 2600;
@@ -25,10 +25,10 @@ pub static mut SCREEN_W: i32 = 1280;
 pub static mut SCREEN_H: i32 = 720;
 pub static mut START_OPEN: bool = false;
 pub static mut ALIGN_LEFT: bool = false;
-pub static mut VOLUME_LEVEL: u32 = 78;
-pub static mut BATTERY_LEVEL: u32 = 73;
+pub static mut VOLUME_LEVEL: u32 = 0;
+pub static mut BATTERY_LEVEL: u32 = 0;
 pub static mut BATTERY_PRESENT: u32 = 0;
-pub static mut NETWORK_CONNECTED: u32 = 1;
+pub static mut NETWORK_CONNECTED: u32 = 0;
 static mut START_ANIM: u32 = 0;
 static mut START_CLOSING: bool = false;
 static mut HOVER_BUTTON: i32 = -1;
@@ -156,7 +156,8 @@ unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
 
 // ---------- Barre des tâches ----------
 
-const TASKBAR_GLYPHS: [Glyph; 7] = [Glyph::Start, Glyph::Search, Glyph::Folder, Glyph::Edge, Glyph::Terminal, Glyph::Store, Glyph::Settings];
+// Seules les applications reellement fournies sont epinglees.
+const TASKBAR_GLYPHS: [Glyph; 3] = [Glyph::Start, Glyph::Folder, Glyph::Settings];
 
 unsafe fn draw_wifi(hdc: Handle, b: &mut Brushes, x: i32, y: i32, on: bool) {
     let c = if on { rgb(0xF2, 0xF2, 0xF2) } else { rgb(0x7A, 0x80, 0x8A) };
@@ -191,7 +192,7 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
     for (i, g) in TASKBAR_GLYPHS.iter().enumerate() {
         let mut r = button_rect(l, i as i32);
         r.top += dy; r.bottom += dy;
-        let app = match i { 2 => Some(wm::APP_EXPLORER), 6 => Some(wm::APP_SETTINGS), _ => None };
+        let app = match i { 1 => Some(wm::APP_EXPLORER), 2 => Some(wm::APP_SETTINGS), _ => None };
         let running = app.map_or(false, wm::is_open);
         let focused = app.map_or(false, wm::is_active) || (i == 0 && START_OPEN && !START_CLOSING);
         if focused { round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 5, rgb(0x2E, 0x33, 0x3D)); }
@@ -204,8 +205,8 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
             round_rect(hdc, b, cx - half, r.bottom - 3, cx + half, r.bottom, 1, if focused { ACCENT } else { rgb(0x9A, 0xA3, 0xAE) });
         }
     }
-    wm::TASKBAR_SLOT[wm::APP_EXPLORER] = button_rect(l, 2);
-    wm::TASKBAR_SLOT[wm::APP_SETTINGS] = button_rect(l, 6);
+    wm::TASKBAR_SLOT[wm::APP_EXPLORER] = button_rect(l, 1);
+    wm::TASKBAR_SLOT[wm::APP_SETTINGS] = button_rect(l, 2);
 
     // Zone de notification : chevron, réseau, volume, batterie, horloge.
     let mut now = SystemTime::default();
@@ -233,47 +234,32 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
 // ---------- Menu Démarrer ----------
 
 #[derive(Clone, Copy, PartialEq)]
-enum Launch { Explorer, Edge, Terminal, Store, Settings, Documents, Pc, Pictures, Music, Notes, Calc, Mail, Welcome, Programs }
+enum Launch { Explorer, Settings, Documents, Pc, Programs, Updates }
 
 struct App { name: &'static [u8], glyph: Glyph, launch: Launch }
-const PINNED: [App; 12] = [
+const PINNED: [App; 6] = [
     App { name: b"Explorer", glyph: Glyph::Folder, launch: Launch::Explorer },
-    App { name: b"Microsoft Edge", glyph: Glyph::Edge, launch: Launch::Edge },
-    App { name: b"Terminal", glyph: Glyph::Terminal, launch: Launch::Terminal },
-    App { name: b"Logith\xE8que", glyph: Glyph::Store, launch: Launch::Store },
     App { name: b"Param\xE8tres", glyph: Glyph::Settings, launch: Launch::Settings },
-    App { name: b"Bloc-notes", glyph: Glyph::Notes, launch: Launch::Notes },
-    App { name: b"Photos", glyph: Glyph::Photos, launch: Launch::Pictures },
-    App { name: b"Musique", glyph: Glyph::Music, launch: Launch::Music },
-    App { name: b"Courrier", glyph: Glyph::Mail, launch: Launch::Mail },
-    App { name: b"Calculatrice", glyph: Glyph::Calc, launch: Launch::Calc },
+    App { name: b"Mises \xE0 jour", glyph: Glyph::Store, launch: Launch::Updates },
+    App { name: b"Documents", glyph: Glyph::Folder, launch: Launch::Documents },
     App { name: b"Ce PC", glyph: Glyph::Computer, launch: Launch::Pc },
     App { name: b"Programmes .exe", glyph: Glyph::Exe, launch: Launch::Programs },
 ];
 const RECOMMENDED: [(&[u8], &[u8], Glyph, Launch); 4] = [
-    (b"Bienvenue dans Winlux", b"Prise en main", Glyph::Start, Launch::Welcome),
+    (b"Mises \xE0 jour", b"Syst\xE8me, pilotes et applications", Glyph::Store, Launch::Updates),
     (b"Applications Windows", b"Ouvrez un .exe d'un double-clic", Glyph::Exe, Launch::Programs),
     (b"Documents", b"Dossier personnel Linux", Glyph::Folder, Launch::Documents),
-    (b"Notes de version", b"Mises \xE0 jour du syst\xE8me", Glyph::Notes, Launch::Welcome),
+    (b"Param\xE8tres Linux et Windows", b"Clavier, r\xE9seau et alimentation", Glyph::Settings, Launch::Settings),
 ];
-
-unsafe fn shell_open(target: &core::ffi::CStr) -> bool {
-    ShellExecuteA(core::ptr::null_mut(), c"open".as_ptr(), target.as_ptr(), core::ptr::null(), core::ptr::null(), 1) as isize > 32
-}
 
 /// Lance une application depuis la barre des tâches ou le menu Démarrer.
 unsafe fn launch(what: Launch) {
     match what {
         Launch::Explorer => if wm::is_open(wm::APP_EXPLORER) { wm::open(wm::APP_EXPLORER) } else { explorer::open_home() },
         Launch::Pc | Launch::Programs => explorer::open_pc(),
-        Launch::Documents | Launch::Welcome => explorer::open_documents(),
-        Launch::Pictures => explorer::open_at(b"::home"),
-        Launch::Music => explorer::open_at(b"::home"),
+        Launch::Documents => explorer::open_documents(),
         Launch::Settings => wm::open(wm::APP_SETTINGS),
-        Launch::Edge => { if !shell_open(c"shell:browser") { toast(b"Microsoft Edge n'est pas encore install\xE9 sur ce syst\xE8me."); } }
-        Launch::Terminal => { if !shell_open(c"shell:terminal") { toast(b"Aucun terminal n'est install\xE9."); } }
-        Launch::Mail => { let _ = shell_open(c"mailto:"); }
-        Launch::Notes | Launch::Calc | Launch::Store => {}
+        Launch::Updates => crate::settings::open_page(6),
     }
 }
 
@@ -288,19 +274,13 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let inner_l = s.left + pad;
     let inner_r = s.right - pad;
 
-    // Recherche.
-    round_rect(hdc, b, inner_l, s.top + 24, inner_r, s.top + 60, 18, rgb(0x1A, 0x1D, 0x23));
-    round_rect(hdc, b, inner_l + 1, s.top + 25, inner_r - 1, s.top + 59, 17, rgb(0x2E, 0x32, 0x3B));
-    fill(hdc, b, inner_l + 18, s.top + 57, inner_r - 18, s.top + 59, ACCENT);
-    glyph(hdc, b, f, Glyph::Search, inner_l + 14, s.top + 34, 16);
-    text(hdc, f.body, rgb(0x9A, 0xA3, 0xAE), inner_l + 42, s.top + 34, b"Rechercher des applications, param\xE8tres et documents");
+    text(hdc, f.large, rgb(0xF2, 0xF2, 0xF2), inner_l, s.top + 28, b"Winlux");
 
     // Épinglé.
     let y = s.top + 82;
     text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, b"\xC9pingl\xE9");
-    let all = b"Toutes les applications  >";
+    let all = b"Applications int\xE9gr\xE9es";
     let all_w = text_width(all, 11) + 20;
-    round_rect(hdc, b, inner_r - all_w, y - 4, inner_r, y + 22, 4, rgb(0x31, 0x35, 0x3F));
     text(hdc, f.small, rgb(0xE6, 0xE6, 0xE6), inner_r - all_w + 10, y + 2, all);
     for (i, app) in PINNED.iter().take((PIN_COLS * pin_rows(s)) as usize).enumerate() {
         let c = pinned_cell(s, i as i32);
@@ -348,7 +328,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
 /// recommandés, 200 bascule d'alignement, 201 alimentation, -1 rien.
 fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     let s = &l.start;
-    for i in 0..(PIN_COLS * pin_rows(s)) { if inside(&pinned_cell(s, i), x, y) { return i; } }
+    for i in 0..PINNED.len() as i32 { if inside(&pinned_cell(s, i), x, y) { return i; } }
     let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
     if ry + 150 < s.bottom - 72 { for i in 0..4 { if inside(&recommended_cell(s, i), x, y) { return 100 + i; } } }
     if inside(&align_toggle_rect(s), x, y) { return 200; }
@@ -458,6 +438,7 @@ pub unsafe fn init(volume: u32, battery: u32, battery_present: u32, network: u32
     BATTERY_PRESENT = battery_present;
     NETWORK_CONNECTED = network;
     ALIGN_LEFT = align_left;
+    crate::settings::system_tick();
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
     wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
@@ -534,8 +515,9 @@ pub unsafe fn tick(hwnd: Handle) {
     }
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
+    let system = crate::settings::system_tick();
     let apps = BOOT_DONE && wm::tick();
-    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps {
+    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
@@ -552,10 +534,8 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 else {
                     set_start(false);
                     match i {
-                        2 => if wm::is_open(wm::APP_EXPLORER) { wm::toggle(wm::APP_EXPLORER) } else { explorer::open_home() },
-                        3 => launch(Launch::Edge),
-                        4 => launch(Launch::Terminal),
-                        6 => wm::toggle(wm::APP_SETTINGS),
+                        1 => if wm::is_open(wm::APP_EXPLORER) { wm::toggle(wm::APP_EXPLORER) } else { explorer::open_home() },
+                        2 => wm::toggle(wm::APP_SETTINGS),
                         _ => {}
                     }
                 }
@@ -564,8 +544,8 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             }
         }
         let tray = l.w - 12 - 92 - 96;
-        if x >= tray && x < tray + 24 { NETWORK_CONNECTED ^= 1; }
-        else if x >= tray + 24 && x < tray + 52 { VOLUME_LEVEL = match VOLUME_LEVEL { 67..=100 => 45, 34..=66 => 18, 1..=33 => 0, _ => 82 }; }
+        if x >= tray && x < tray + 24 { crate::settings::open_page(2); }
+        else if x >= tray + 24 && x < tray + 88 { crate::settings::open_page(3); }
         else { return; }
         repaint(hwnd);
         return;
@@ -573,9 +553,9 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
     if START_OPEN && !START_CLOSING {
         if inside(&l.start, x, y) {
             match start_item_at(&l, x, y) {
-                200 => ALIGN_LEFT = !ALIGN_LEFT,
-                201 => {}
-                i @ 0..=11 => { set_start(false); launch(PINNED[i as usize].launch); }
+                200 => { crate::settings::control(if ALIGN_LEFT { c"align-center" } else { c"align-left" }); }
+                201 => { crate::settings::control(c"poweroff"); }
+                i @ 0..=5 => { set_start(false); launch(PINNED[i as usize].launch); }
                 i @ 100..=103 => { set_start(false); launch(RECOMMENDED[(i - 100) as usize].3); }
                 _ => return,
             }

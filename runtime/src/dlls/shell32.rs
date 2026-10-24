@@ -91,7 +91,9 @@ pub fn resolve(file: &str, params: &str) -> Result<(PathBuf, Vec<String>), isize
         if !path.exists() { return Err(SE_ERR_FNF); }
         let ext = path.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
         if path.is_file() && matches!(ext.as_str(), "exe" | "com" | "scr") {
-            let me = std::env::current_exe().map_err(|_| SE_ERR_FNF)?;
+            // The desktop launcher opens a terminal for console PEs and gives
+            // graphical programs an error dialog when execution fails.
+            let me = which("winlux-open").or_else(|| std::env::current_exe().ok()).ok_or(SE_ERR_FNF)?;
             let mut a = vec![path.to_string_lossy().into_owned()];
             a.extend(args);
             return Ok((me, a));
@@ -192,6 +194,10 @@ mod tests {
         std::fs::write(&edge, b"#!/bin/sh\n").unwrap();
         let old_path = std::env::var_os("PATH");
         std::env::set_var("PATH", &bin);
+        let launcher = bin.join("winlux-open");
+        std::fs::write(&launcher, b"#!/bin/sh\n").unwrap();
+        assert_eq!(resolve(exe.to_str().unwrap(), "-a").unwrap(),
+            (launcher, vec![exe.to_string_lossy().into_owned(), "-a".into()]));
         let (program, args) = resolve("www.bing.com", "").unwrap();
         assert_eq!(program, edge);
         assert_eq!(args, vec!["https://www.bing.com".to_string()]);

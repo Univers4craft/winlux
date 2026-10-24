@@ -11,14 +11,14 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 test -x "$runtime" || { echo "runtime absent : $runtime" >&2; exit 1; }
 command -v timeout >/dev/null 2>&1 || { echo "timeout est requis" >&2; exit 1; }
 
-names="hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo"
+names="hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression"
 for name in $names; do
     exe="$testdir/$name.exe"
     test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
     mkdir -p "$work/$name/home" "$work/$name/data"
 done
 
-echo "Lancement parallèle des neuf exécutables PE..."
+echo "Lancement parallèle des dix exécutables PE..."
 for name in $names; do
     (
         set +e

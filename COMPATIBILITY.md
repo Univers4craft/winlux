@@ -143,11 +143,15 @@ allouées sont également mises en cache afin que les animations longues ne
 saturent pas la palette du serveur. Il s’agit encore
 d’un prototype dans `gui_demo.exe`, pas d’un gestionnaire de bureau autonome.
 
-Le mécanisme `winlux-update` récupère un manifeste et un paquet depuis la
-dernière release GitHub, avec jeton API en lecture pour un dépôt privé, valide leur SHA-256, refuse les chemins d’archive
-dangereux, remplace atomiquement le cœur du runtime et garde une sauvegarde de
-retour arrière. Il ne met pas encore à jour un système Linux complet ni une
-partition racine A/B.
+Le mécanisme `winlux-update` récupère le manifeste de la dernière release
+GitHub, avec jeton de lecture configuré dans Paramètres pour un dépôt privé.
+Les paquets système incluent bureau, outils, applications embarquées, noyau,
+modules et bibliothèques ; les paquets runtime réduits sont explicitement
+identifiés. Inventaires, SHA-256, chemins et liens sont vérifiés, les fichiers
+précédents sauvegardés et une installation interrompue restaurée. Les données
+et configurations sont conservées. Une relance de session ou un redémarrage
+explicite est demandé selon les composants changés. La protection A/B contre
+une panne d'alimentation reste à ajouter.
 
 La couche de dessin GDI est amorcée : les primitives invitées n’écrivent pas
 directement dans la fenêtre, elles empilent des commandes (`FillRect`,

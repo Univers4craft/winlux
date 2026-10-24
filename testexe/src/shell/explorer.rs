@@ -25,8 +25,10 @@ use crate::wm::{self, Frame, Gfx, Mouse};
 pub const CUSTOM_TITLE: bool = true;
 
 const MAX_ENTRIES: usize = 1024;
-const NAME_LEN: usize = 128;
 const PATH_LEN: usize = 260;
+// FIND_DATA fournit jusqu'à 259 octets : le libellé affiché doit rester le
+// même nom que celui utilisé par les opérations sur les fichiers.
+const NAME_LEN: usize = PATH_LEN;
 const MAX_TABS: usize = 6;
 const HISTORY: usize = 12;
 const CLIP_MAX: usize = 64;
@@ -47,7 +49,7 @@ enum Kind { Folder, Exe, Image, Audio, Video, Archive, Code, Pdf, Text, File, Dr
 #[derive(Clone, Copy)]
 struct Entry {
     name: [u8; NAME_LEN],
-    len: u8,
+    len: u16,
     dir: bool,
     hidden: bool,
     kind: Kind,
@@ -66,7 +68,12 @@ struct Path { buf: [u8; PATH_LEN], len: u16 }
 const EMPTY_PATH: Path = Path { buf: [0; PATH_LEN], len: 0 };
 impl Path {
     fn get(&self) -> &[u8] { &self.buf[..self.len as usize] }
-    fn set(&mut self, s: &[u8]) { let n = s.len().min(PATH_LEN - 1); self.buf[..n].copy_from_slice(&s[..n]); self.len = n as u16; }
+    fn set(&mut self, s: &[u8]) -> bool {
+        if !valid_path(s) { return false; }
+        self.buf[..s.len()].copy_from_slice(s);
+        self.len = s.len() as u16;
+        true
+    }
     fn is(&self, s: &[u8]) -> bool { self.get() == s }
 }
 
@@ -128,6 +135,7 @@ static mut SORT_DESC: bool = false;
 enum Focus { List, Search, Address, Rename }
 static mut FOCUS: Focus = Focus::List;
 static mut ADDRESS: Field = EMPTY_FIELD;
+static mut ADDRESS_SELECTED: bool = false;
 static mut RENAME: Field = EMPTY_FIELD;
 static mut RENAME_INDEX: usize = usize::MAX;
 /// Nom entièrement sélectionné au début d'un renommage : la première frappe le remplace.
@@ -175,22 +183,31 @@ fn extension(name: &[u8]) -> &[u8] {
 }
 
 /// Construit `dir\name` dans `out` et renvoie sa longueur.
+/// Zéro signifie chemin non représentable : jamais de chemin tronqué.
 fn join(out: &mut [u8; PATH_LEN + NAME_LEN + 2], dir: &[u8], name: &[u8]) -> usize {
-    let mut n = dir.len().min(PATH_LEN);
-    out[..n].copy_from_slice(&dir[..n]);
-    if n > 0 && out[n - 1] != b'\\' { out[n] = b'\\'; n += 1; }
-    let m = name.len().min(NAME_LEN);
-    out[n..n + m].copy_from_slice(&name[..m]);
-    n += m;
+    out[0] = 0;
+    let sep = !dir.is_empty() && !matches!(dir.last(), Some(b'\\' | b'/'));
+    let n = dir.len() + usize::from(sep) + name.len();
+    if n == 0 || n >= PATH_LEN || dir.contains(&0) || name.contains(&0) { return 0; }
+    out[..dir.len()].copy_from_slice(dir);
+    let at = dir.len() + usize::from(sep);
+    if sep { out[dir.len()] = b'\\'; }
+    out[at..n].copy_from_slice(name);
     out[n] = 0;
     n
 }
 
+fn valid_path(s: &[u8]) -> bool { s.len() < PATH_LEN && !s.contains(&0) }
+
+fn valid_component(name: &[u8]) -> bool {
+    !name.is_empty() && valid_path(name) && !name.iter().any(|&c| c < 32 || matches!(c, b'\\' | b'/' | b':' | b'*' | b'?' | b'"' | b'<' | b'>' | b'|'))
+}
+
 /// Copie en chaîne C terminée par zéro.
 fn cstr<'a>(buf: &'a mut [u8; PATH_LEN + NAME_LEN + 2], s: &[u8]) -> *const core::ffi::c_char {
-    let n = s.len().min(buf.len() - 1);
-    buf[..n].copy_from_slice(&s[..n]);
-    buf[n] = 0;
+    if !valid_path(s) || s.is_empty() { buf[0] = 0; return core::ptr::null(); }
+    buf[..s.len()].copy_from_slice(s);
+    buf[s.len()] = 0;
     buf.as_ptr() as *const core::ffi::c_char
 }
 
@@ -358,11 +375,11 @@ unsafe fn tab() -> &'static mut Tab { &mut TABS[CUR] }
 unsafe fn pane() -> &'static mut Pane { let t = tab(); &mut t.panes[t.focus] }
 
 unsafe fn add_entry(p: &mut Pane, name: &[u8], dir: bool, hidden: bool, size: u64, mtime: u64, kind: Option<Kind>) {
-    if p.count >= MAX_ENTRIES { p.truncated = true; return; }
+    if p.count >= MAX_ENTRIES || !valid_path(name) || name.is_empty() { p.truncated = true; return; }
     let e = &mut p.entries[p.count];
-    let n = name.len().min(NAME_LEN);
+    let n = name.len();
     e.name[..n].copy_from_slice(&name[..n]);
-    e.len = n as u8;
+    e.len = n as u16;
     e.dir = dir;
     e.hidden = hidden;
     e.size = size;
@@ -381,17 +398,22 @@ fn find_name(d: &Win32FindDataA) -> &[u8] {
 unsafe fn read_dir(p: &mut Pane, dir: &[u8], prefix: &[u8], filter: &[u8], depth: u32) {
     let mut pattern = [0u8; PATH_LEN + NAME_LEN + 2];
     let n = join(&mut pattern, dir, b"*");
-    let _ = n;
+    if n == 0 { p.truncated = true; return; }
     let mut data: Win32FindDataA = core::mem::zeroed();
     let h = FindFirstFileA(pattern.as_ptr() as *const core::ffi::c_char, &mut data);
     if h as isize == -1 { if prefix.is_empty() { p.missing = !exists_dir(dir); } return; }
     // Sous-dossiers à parcourir ensuite (recherche profonde).
     let mut subdirs = [[0u8; NAME_LEN]; 48];
-    let mut sublen = [0u8; 48];
+    let mut sublen = [0u16; 48];
     let mut nsub = 0;
     loop {
         let name = find_name(&data);
-        if name != b"." && name != b".." && !name.is_empty() {
+        if name != b"." && name != b".." && !valid_component(name) {
+            // FindFirstFileA remplace un caractère hors CP1252 par « ? ».
+            // Un tel nom ne doit jamais désigner un autre fichier lors d'une
+            // suppression, d'un déplacement ou d'un collage.
+            p.truncated = true;
+        } else if name != b"." && name != b".." && !name.is_empty() {
             let dir_flag = data.attributes & 0x10 != 0;
             let hidden = data.attributes & 0x2 != 0 || name[0] == b'.';
             let size = ((data.size_high as u64) << 32) | data.size_low as u64;
@@ -400,14 +422,16 @@ unsafe fn read_dir(p: &mut Pane, dir: &[u8], prefix: &[u8], filter: &[u8], depth
             } else {
                 if contains_ci(name, filter) && (SHOW_HIDDEN || !hidden) {
                     let mut full = [0u8; PATH_LEN + NAME_LEN + 2];
-                    let m = if prefix.is_empty() { name.len().min(NAME_LEN) } else { join(&mut full, prefix, name) };
+                    let m = if prefix.is_empty() && valid_path(name) { name.len() } else { join(&mut full, prefix, name) };
                     if prefix.is_empty() { full[..m].copy_from_slice(&name[..m]); }
-                    add_entry(p, &full[..m.min(NAME_LEN)], dir_flag, hidden, size, data.write_time, Some(kind_of(name, dir_flag)));
+                    if m != 0 { add_entry(p, &full[..m], dir_flag, hidden, size, data.write_time, Some(kind_of(name, dir_flag))); }
+                    else { p.truncated = true; }
                 }
                 if dir_flag && !hidden && nsub < subdirs.len() {
-                    let m = name.len().min(NAME_LEN);
+                    let m = name.len();
+                    if m >= NAME_LEN { p.truncated = true; if FindNextFileA(h, &mut data) == 0 { break; } continue; }
                     subdirs[nsub][..m].copy_from_slice(&name[..m]);
-                    sublen[nsub] = m as u8;
+                    sublen[nsub] = m as u16;
                     nsub += 1;
                 }
             }
@@ -424,7 +448,8 @@ unsafe fn read_dir(p: &mut Pane, dir: &[u8], prefix: &[u8], filter: &[u8], depth
             let mut pre = [0u8; PATH_LEN + NAME_LEN + 2];
             let pn = if prefix.is_empty() { pre[..name.len()].copy_from_slice(name); name.len() } else { join(&mut pre, prefix, name) };
             let (sub_s, pre_s) = (sub, pre);
-            read_dir(p, &sub_s[..sn], &pre_s[..pn.min(NAME_LEN)], filter, depth - 1);
+            if sn != 0 && pn != 0 { read_dir(p, &sub_s[..sn], &pre_s[..pn], filter, depth - 1); }
+            else { p.truncated = true; }
         }
     }
 }
@@ -486,6 +511,7 @@ unsafe fn rebuild_view(p: &mut Pane) {
 fn max_scroll_hint(_p: &Pane) -> i32 { i32::MAX }
 
 unsafe fn navigate_pane(p: &mut Pane, target: &[u8], record: bool) {
+    if !valid_path(target) || target.is_empty() { notify(b"Chemin trop long : aucun nom n'a \xE9t\xE9 tronqu\xE9."); return; }
     if record && !p.loc.get().is_empty() && !p.loc.is(target) {
         if p.nback == HISTORY { for i in 1..HISTORY { p.back[i - 1] = p.back[i]; } p.nback -= 1; }
         p.back[p.nback] = p.loc;
@@ -544,6 +570,7 @@ unsafe fn item_path(p: &Pane, index: usize, out: &mut [u8; PATH_LEN + NAME_LEN +
 unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
     let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
     let n = item_path(p, index, &mut path);
+    if n == 0 { notify(b"Chemin trop long pour cette version d'Explorer."); return; }
     if p.entries[index].dir {
         if new_tab { open_tab(&path[..n]); } else { navigate(&path[..n]); }
         return;
@@ -798,6 +825,10 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     round_rect(g.hdc, g.b, a.left, a.top, a.right, a.bottom, 5, if editing { p.accent } else { p.border });
     round_rect(g.hdc, g.b, a.left + 1, a.top + 1, a.right - 1, a.bottom - (if editing { 2 } else { 1 }), 4, if hovered(&a) && !editing { p.hover } else { p.surface });
     if editing {
+        if ADDRESS_SELECTED {
+            let w = text_width(ADDRESS.get(), 13).min(a.right - a.left - 24);
+            fill(g.hdc, g.b, a.left + 10, a.top + 5, a.left + 14 + w, a.bottom - 5, p.selected);
+        }
         text_fit(g.hdc, g.f.body, 13, p.text, a.left + 12, a.top + 8, ADDRESS.get(), a.right - a.left - 24);
         let cx = a.left + 12 + text_width(ADDRESS.get(), 13).min(a.right - a.left - 30);
         if GetTickCount() / 530 % 2 == 0 { fill(g.hdc, g.b, cx, a.top + 7, cx + 1, a.bottom - 7, p.text); }
@@ -1091,7 +1122,7 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
     fill(g.hdc, g.b, s.left, s.top, s.right, s.bottom, p.window);
     fill(g.hdc, g.b, s.left, s.top, s.right, s.top + 1, p.border);
     let pn = pane();
-    let mut buf = [0u8; 120];
+    let mut buf = [0u8; 256];
     let mut n = write_num(&mut buf, 0, pn.nview as u64);
     let label: &[u8] = if pn.nview > 1 { b" \xE9l\xE9ments" } else { b" \xE9l\xE9ment" };
     buf[n..n + label.len()].copy_from_slice(label); n += label.len();
@@ -1110,7 +1141,7 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
             } }
         }
     }
-    if pn.truncated { let l3 = b"  (liste limit\xE9e \xE0 1024)"; buf[n..n + l3.len()].copy_from_slice(l3); n += l3.len(); }
+    if pn.truncated { let l3 = b"  (limite atteinte ou noms non repr\xE9sentables masqu\xE9s)"; buf[n..n + l3.len()].copy_from_slice(l3); n += l3.len(); }
     text(g.hdc, g.f.small, p.text2, s.left + 14, s.top + 8, &buf[..n]);
     if (MESSAGE_UNTIL.wrapping_sub(GetTickCount()) as i32) > 0 {
         let w = text_width(MESSAGE.get(), 11);
@@ -1255,12 +1286,15 @@ unsafe fn menu_hit(geo: &Geo, f: &Frame, x: i32, y: i32) -> Option<Option<Item>>
 unsafe fn unique_name(dir: &[u8], base: &[u8], ext: &[u8], out: &mut [u8; PATH_LEN + NAME_LEN + 2]) -> usize {
     for k in 1..100u64 {
         let mut name = [0u8; NAME_LEN];
-        let mut n = base.len().min(80);
-        name[..n].copy_from_slice(&base[..n]);
+        let suffix_len = if k > 1 { if k < 10 { 4 } else { 5 } } else { 0 };
+        if base.len() + ext.len() + suffix_len >= NAME_LEN { return 0; }
+        let mut n = base.len();
+        name[..n].copy_from_slice(base);
         if k > 1 { name[n] = b' '; name[n + 1] = b'('; n = write_num(&mut name, n + 2, k); name[n] = b')'; n += 1; }
         name[n..n + ext.len()].copy_from_slice(ext);
         n += ext.len();
         let len = join(out, dir, &name[..n]);
+        if len == 0 { return 0; }
         let a = GetFileAttributesA(out.as_ptr() as *const core::ffi::c_char);
         if a == u32::MAX { return len; }
     }
@@ -1315,8 +1349,9 @@ unsafe fn commit_rename() {
     }
     let mut from = [0u8; PATH_LEN + NAME_LEN + 2];
     let mut to = [0u8; PATH_LEN + NAME_LEN + 2];
-    join(&mut from, p.loc.get(), old_name);
-    join(&mut to, p.loc.get(), RENAME.get());
+    if join(&mut from, p.loc.get(), old_name) == 0 || join(&mut to, p.loc.get(), RENAME.get()) == 0 {
+        notify(b"Chemin trop long : renommage annul\xE9."); return;
+    }
     if MoveFileA(from.as_ptr() as *const core::ffi::c_char, to.as_ptr() as *const core::ffi::c_char) == 0 { notify(b"Renommage impossible."); return; }
     let new_name = RENAME;
     reload(p);
@@ -1332,62 +1367,213 @@ unsafe fn copy_selection(cut: bool) {
         if !is_sel(p, i) || NCLIP == CLIP_MAX { continue; }
         let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
         let n = item_path(p, i, &mut path);
-        CLIP[NCLIP].set(&path[..n]);
+        if n == 0 || !CLIP[NCLIP].set(&path[..n]) { notify(b"Chemin trop long : \xE9l\xE9ment ignor\xE9."); continue; }
         NCLIP += 1;
     }
     if NCLIP > 0 { notify(if cut { b"\xC9l\xE9ments coup\xE9s : collez-les dans un autre dossier." } else { b"\xC9l\xE9ments copi\xE9s." }); }
 }
 
-/// Copie récursive d'un dossier (CreateDirectoryA + CopyFileA).
-unsafe fn copy_tree(from: &[u8], to: &[u8], depth: u32) -> bool {
+/// GetFullPathNameA résout aussi les alias C:/Z: et les liens symboliques
+/// existants dans Winlux. La destination est reconstruite depuis son parent
+/// existant avant toute création.
+unsafe fn canonical_path(path: &[u8]) -> Option<Path> {
+    let mut source = [0u8; PATH_LEN + NAME_LEN + 2];
+    let mut result = EMPTY_PATH;
+    let n = GetFullPathNameA(cstr(&mut source, path), PATH_LEN as u32, result.buf.as_mut_ptr().cast(), core::ptr::null_mut()) as usize;
+    if n == 0 || n >= PATH_LEN { return None; }
+    result.len = n as u16;
+    Some(result)
+}
+
+fn same_or_descendant(path: &[u8], ancestor: &[u8]) -> bool {
+    let trim = |s: &[u8]| { let mut n = s.len(); while n > 3 && matches!(s[n - 1], b'\\' | b'/') { n -= 1; } n };
+    let (pn, an) = (trim(path), trim(ancestor));
+    an != 0 && pn >= an && cmp_ci(&path[..an], &ancestor[..an]).is_eq()
+        && (pn == an || matches!(ancestor[an - 1], b'\\' | b'/') || matches!(path[an], b'\\' | b'/'))
+}
+
+unsafe fn safe_destination(from: &[u8], destination_dir: &[u8]) -> bool {
+    match (canonical_path(from), canonical_path(destination_dir)) {
+        (Some(src), Some(dst)) => !same_or_descendant(dst.get(), src.get()),
+        _ => false,
+    }
+}
+
+/// Première passe en lecture seule : longueur de tous les chemins, droits de
+/// lecture et cycles de liens contrôlés avant de créer la destination.
+unsafe fn preflight_tree(from: &[u8], to: &[u8], ancestors: &mut [Path; 17], depth: usize) -> bool {
+    if depth >= ancestors.len() || !valid_path(from) || !valid_path(to) { return false; }
+    let Some(canonical) = canonical_path(from) else { return false; };
+    if ancestors[..depth].iter().any(|p| cmp_ci(p.get(), canonical.get()).is_eq()) { return false; }
     let mut buf = [0u8; PATH_LEN + NAME_LEN + 2];
     let a = GetFileAttributesA(cstr(&mut buf, from));
     if a == u32::MAX { return false; }
-    let mut fb = [0u8; PATH_LEN + NAME_LEN + 2];
-    let mut tb = [0u8; PATH_LEN + NAME_LEN + 2];
-    if a & 0x10 == 0 { return CopyFileA(cstr(&mut fb, from), cstr(&mut tb, to), 1) != 0; }
-    if depth > 16 || CreateDirectoryA(cstr(&mut tb, to), core::ptr::null_mut()) == 0 { return false; }
+    if a & 0x10 == 0 { return true; }
+    ancestors[depth] = canonical;
     let mut pattern = [0u8; PATH_LEN + NAME_LEN + 2];
-    join(&mut pattern, from, b"*");
+    if join(&mut pattern, from, b"*") == 0 { return false; }
     let mut data: Win32FindDataA = core::mem::zeroed();
-    let h = FindFirstFileA(pattern.as_ptr() as *const core::ffi::c_char, &mut data);
-    if h as isize == -1 { return true; }
-    let mut ok = true;
-    loop {
+    let h = FindFirstFileA(pattern.as_ptr().cast(), &mut data);
+    if h as isize == -1 { return GetLastError() == 2 || GetLastError() == 18; }
+    let ok = loop {
         let name = find_name(&data);
         if name != b"." && name != b".." && !name.is_empty() {
+            if !valid_component(name) { break false; }
             let mut f2 = [0u8; PATH_LEN + NAME_LEN + 2];
             let mut t2 = [0u8; PATH_LEN + NAME_LEN + 2];
             let fnl = join(&mut f2, from, name);
             let tnl = join(&mut t2, to, name);
-            ok &= copy_tree(&f2[..fnl], &t2[..tnl], depth + 1);
+            if fnl == 0 || tnl == 0 || !preflight_tree(&f2[..fnl], &t2[..tnl], ancestors, depth + 1) { break false; }
         }
-        if FindNextFileA(h, &mut data) == 0 { break; }
-    }
+        if FindNextFileA(h, &mut data) == 0 { break GetLastError() == 2 || GetLastError() == 18; }
+    };
     FindClose(h);
     ok
+}
+
+/// Ne retire que l'arbre de destination créé par cette copie, jamais la source.
+unsafe fn rollback_copy(path: &[u8], depth: usize) -> bool {
+    if depth > 17 { return false; }
+    let mut buf = [0u8; PATH_LEN + NAME_LEN + 2];
+    let a = GetFileAttributesA(cstr(&mut buf, path));
+    if a == u32::MAX { return true; }
+    if a & 0x10 == 0 { return DeleteFileA(buf.as_ptr().cast()) != 0; }
+    let mut pattern = [0u8; PATH_LEN + NAME_LEN + 2];
+    if join(&mut pattern, path, b"*") == 0 { return false; }
+    let mut data: Win32FindDataA = core::mem::zeroed();
+    let h = FindFirstFileA(pattern.as_ptr().cast(), &mut data);
+    let mut ok = true;
+    if h as isize != -1 {
+        loop {
+            let name = find_name(&data);
+            if name != b"." && name != b".." && !name.is_empty() {
+                if !valid_component(name) { ok = false; if FindNextFileA(h, &mut data) == 0 { break; } continue; }
+                let mut child = [0u8; PATH_LEN + NAME_LEN + 2];
+                let n = join(&mut child, path, name);
+                if n == 0 || !rollback_copy(&child[..n], depth + 1) { ok = false; }
+            }
+            if FindNextFileA(h, &mut data) == 0 { break; }
+        }
+        FindClose(h);
+    } else if GetLastError() != 2 && GetLastError() != 18 { return false; }
+    ok && RemoveDirectoryA(cstr(&mut buf, path)) != 0
+}
+
+/// CREATE_NEW réserve le nom de façon atomique. Un échec de lecture/écriture
+/// ne supprime que le fichier dont cette fonction a créé le handle.
+unsafe fn copy_file_new(from: &[u8], to: &[u8]) -> bool {
+    let mut fb = [0u8; PATH_LEN + NAME_LEN + 2];
+    let mut tb = [0u8; PATH_LEN + NAME_LEN + 2];
+    let source = CreateFileA(cstr(&mut fb, from), 0x8000_0000, 1, core::ptr::null_mut(), 3, 0x80, core::ptr::null_mut());
+    if source as isize == -1 { return false; }
+    let target = CreateFileA(cstr(&mut tb, to), 0x4000_0000, 0, core::ptr::null_mut(), 1, 0x80, core::ptr::null_mut());
+    if target as isize == -1 { CloseHandle(source); return false; }
+    let mut block = [0u8; 32768];
+    let ok = loop {
+        let mut read = 0;
+        if ReadFile(source, block.as_mut_ptr(), block.len() as u32, &mut read, core::ptr::null_mut()) == 0 { break false; }
+        if read == 0 { break true; }
+        let mut at = 0;
+        while at < read {
+            let mut written = 0;
+            if WriteFile(target, block.as_ptr().add(at as usize), read - at, &mut written, core::ptr::null_mut()) == 0 || written == 0 { break; }
+            at += written;
+        }
+        if at != read { break false; }
+    };
+    CloseHandle(source);
+    let ok = CloseHandle(target) != 0 && ok;
+    if !ok && DeleteFileA(tb.as_ptr().cast()) == 0 { notify(b"Copie interrompue : le fichier cible partiel reste accessible."); }
+    ok
+}
+
+unsafe fn copy_tree_inner(from: &[u8], to: &[u8], depth: u32, created: &mut bool) -> bool {
+    if !valid_path(from) || !valid_path(to) { return false; }
+    let mut buf = [0u8; PATH_LEN + NAME_LEN + 2];
+    let a = GetFileAttributesA(cstr(&mut buf, from));
+    if a == u32::MAX { return false; }
+    let mut tb = [0u8; PATH_LEN + NAME_LEN + 2];
+    if a & 0x10 == 0 { let ok = copy_file_new(from, to); *created = ok; return ok; }
+    if depth > 16 || CreateDirectoryA(cstr(&mut tb, to), core::ptr::null_mut()) == 0 { return false; }
+    *created = true;
+    let mut pattern = [0u8; PATH_LEN + NAME_LEN + 2];
+    if join(&mut pattern, from, b"*") == 0 { return false; }
+    let mut data: Win32FindDataA = core::mem::zeroed();
+    let h = FindFirstFileA(pattern.as_ptr() as *const core::ffi::c_char, &mut data);
+    if h as isize == -1 { return GetLastError() == 2 || GetLastError() == 18; }
+    let ok = loop {
+        let name = find_name(&data);
+        if name != b"." && name != b".." && !name.is_empty() {
+            if !valid_component(name) { break false; }
+            let mut f2 = [0u8; PATH_LEN + NAME_LEN + 2];
+            let mut t2 = [0u8; PATH_LEN + NAME_LEN + 2];
+            let fnl = join(&mut f2, from, name);
+            let tnl = join(&mut t2, to, name);
+            let mut child_created = false;
+            if fnl == 0 || tnl == 0 || !copy_tree_inner(&f2[..fnl], &t2[..tnl], depth + 1, &mut child_created) { break false; }
+        }
+        if FindNextFileA(h, &mut data) == 0 { break GetLastError() == 2 || GetLastError() == 18; }
+    };
+    FindClose(h);
+    ok
+}
+
+unsafe fn copy_tree(from: &[u8], to: &[u8]) -> bool {
+    let Some(dir) = parent(to) else { return false; };
+    if !safe_destination(from, dir) { return false; }
+    let mut ancestors = [EMPTY_PATH; 17];
+    if !preflight_tree(from, to, &mut ancestors, 0) { return false; }
+    let mut buf = [0u8; PATH_LEN + NAME_LEN + 2];
+    if GetFileAttributesA(cstr(&mut buf, to)) != u32::MAX { return false; }
+    let mut created = false;
+    if copy_tree_inner(from, to, 0, &mut created) { return true; }
+    if created && !rollback_copy(to, 0) { notify(b"Copie interrompue : une copie partielle reste dans le dossier cible."); }
+    false
 }
 
 unsafe fn paste() {
     let p = pane();
     if NCLIP == 0 || p.loc.is(HOME) || p.loc.is(PC) { return; }
     let mut failed = 0;
+    let mut sources_kept = 0;
+    let mut clip_remaining = 0;
     for k in 0..NCLIP {
         let src = CLIP[k];
+        if CLIP_CUT {
+            if let Some(source_dir) = parent(src.get()) {
+                if let (Some(a), Some(b)) = (canonical_path(source_dir), canonical_path(p.loc.get())) {
+                    // Couper puis coller au même endroit ne doit ni renommer
+                    // la source en « (2) » ni la recopier.
+                    if cmp_ci(a.get(), b.get()).is_eq() { continue; }
+                }
+            }
+        }
+        if !safe_destination(src.get(), p.loc.get()) {
+            failed += 1;
+            if CLIP_CUT { CLIP[clip_remaining] = src; clip_remaining += 1; }
+            continue;
+        }
         let name = last_component(src.get());
         let (base, ext) = match name.iter().rposition(|&c| c == b'.') { Some(i) if i > 0 => (&name[..i], &name[i..]), _ => (name, &b""[..]) };
         let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
         let mut direct = [0u8; PATH_LEN + NAME_LEN + 2];
         let dn = join(&mut direct, p.loc.get(), name);
+        if dn == 0 { failed += 1; if CLIP_CUT { CLIP[clip_remaining] = src; clip_remaining += 1; } continue; }
         let n = if GetFileAttributesA(direct.as_ptr() as *const core::ffi::c_char) == u32::MAX { dst[..dn + 1].copy_from_slice(&direct[..dn + 1]); dn } else { unique_name(p.loc.get(), base, ext, &mut dst) };
-        if n == 0 { failed += 1; continue; }
+        if n == 0 { failed += 1; if CLIP_CUT { CLIP[clip_remaining] = src; clip_remaining += 1; } continue; }
         let mut sb = [0u8; PATH_LEN + NAME_LEN + 2];
-        let ok = if CLIP_CUT { MoveFileA(cstr(&mut sb, src.get()), dst.as_ptr() as *const core::ffi::c_char) != 0 || (copy_tree(src.get(), &dst[..n], 0) && false) } else { copy_tree(src.get(), &dst[..n], 0) };
+        let moved = CLIP_CUT && MoveFileA(cstr(&mut sb, src.get()), dst.as_ptr().cast()) != 0;
+        let ok = moved || copy_tree(src.get(), &dst[..n]);
         if !ok { failed += 1; }
+        if CLIP_CUT && !moved {
+            CLIP[clip_remaining] = src; clip_remaining += 1;
+            if ok { sources_kept += 1; }
+        }
     }
-    if CLIP_CUT { NCLIP = 0; }
+    if CLIP_CUT { NCLIP = clip_remaining; }
     reload(p);
-    if failed > 0 { notify(b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre coll\xE9s."); }
+    if failed > 0 { notify(b"Collage refus\xE9 ou incomplet : chemin trop long, cycle ou droits. Sources conserv\xE9es."); }
+    else if sources_kept > 0 { notify(b"Copie termin\xE9e. D\xE9placement indisponible : sources conserv\xE9es."); }
     // L'autre volet affiche peut-être le dossier source ou cible.
     let t = tab();
     if t.dual { let other = &mut t.panes[1 - t.focus]; reload(other); }
@@ -1409,6 +1595,7 @@ unsafe fn delete_selection() {
         if !is_sel(p, i) { continue; }
         let mut src = [0u8; PATH_LEN + NAME_LEN + 2];
         let sn = item_path(p, i, &mut src);
+        if sn == 0 { failed += 1; continue; }
         let name = p.entries[i].name();
         if in_trash {
             // Déjà dans la Corbeille : suppression définitive des fichiers.
@@ -1419,15 +1606,16 @@ unsafe fn delete_selection() {
         let (base, ext) = match name.iter().rposition(|&c| c == b'.') { Some(k) if k > 0 && !p.entries[i].dir => (&name[..k], &name[k..]), _ => (name, &b""[..]) };
         let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
         let dn = unique_name(TRASH, base, ext, &mut dst);
-        if dn == 0 || MoveFileA(src.as_ptr() as *const core::ffi::c_char, dst.as_ptr() as *const core::ffi::c_char) == 0 { failed += 1; continue; }
+        if dn == 0 { failed += 1; continue; }
         // Fichier .trashinfo : chemin d'origine et date de suppression.
         let trashed = &dst[TRASH.len() + 1..dn];
         let mut info = [0u8; PATH_LEN + NAME_LEN + 2];
         let mut nm = [0u8; NAME_LEN + 12];
-        let tl = trashed.len().min(NAME_LEN);
+        let tl = trashed.len();
         nm[..tl].copy_from_slice(&trashed[..tl]);
         nm[tl..tl + 10].copy_from_slice(b".trashinfo");
-        join(&mut info, b"C:\\.local\\share\\Trash\\info", &nm[..tl + 10]);
+        if join(&mut info, b"C:\\.local\\share\\Trash\\info", &nm[..tl + 10]) == 0 { failed += 1; continue; }
+        if MoveFileA(src.as_ptr().cast(), dst.as_ptr().cast()) == 0 { failed += 1; continue; }
         let h = CreateFileA(info.as_ptr() as *const core::ffi::c_char, 0x4000_0000, 0, core::ptr::null_mut(), 2, 0x80, core::ptr::null_mut());
         if h as isize != -1 {
             let mut body = [0u8; 700];
@@ -1447,8 +1635,16 @@ unsafe fn delete_selection() {
             }
             body[n] = b'\n'; n += 1;
             let mut written = 0u32;
-            WriteFile(h, body.as_ptr(), n as u32, &mut written, core::ptr::null_mut());
+            let ok = WriteFile(h, body.as_ptr(), n as u32, &mut written, core::ptr::null_mut()) != 0 && written as usize == n;
             CloseHandle(h);
+            if !ok {
+                DeleteFileA(info.as_ptr().cast());
+                if MoveFileA(dst.as_ptr().cast(), src.as_ptr().cast()) == 0 { notify(b"Corbeille incompl\xE8te : l'\xE9l\xE9ment reste accessible dans la Corbeille."); }
+                failed += 1;
+            }
+        } else {
+            if MoveFileA(dst.as_ptr().cast(), src.as_ptr().cast()) == 0 { notify(b"Corbeille incompl\xE8te : l'\xE9l\xE9ment reste accessible dans la Corbeille."); }
+            failed += 1;
         }
     }
     reload(p);
@@ -1669,6 +1865,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
         let loc = pane().loc;
         if loc.is(HOME) { ADDRESS.set(b"Accueil"); } else if loc.is(PC) { ADDRESS.set(b"Ce PC"); } else { ADDRESS.set(loc.get()); }
         FOCUS = Focus::Address;
+        ADDRESS_SELECTED = true;
         return true;
     }
     if inside(&search_rect(geo), x, y) { FOCUS = Focus::Search; return true; }
@@ -1760,9 +1957,37 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
 
 unsafe fn p_is_dir_renamed() -> bool { let p = pane(); RENAME_INDEX < p.count && p.entries[RENAME_INDEX].dir }
 
+fn ansi_char(ch: u16) -> Option<u8> {
+    if ch < 256 { return Some(ch as u8); }
+    const CP1252: [u16; 32] = [0x20ac,0x0081,0x201a,0x0192,0x201e,0x2026,0x2020,0x2021,0x02c6,0x2030,0x0160,0x2039,0x0152,0x008d,0x017d,0x008f,0x0090,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,0x02dc,0x2122,0x0161,0x203a,0x0153,0x009d,0x017e,0x0178];
+    CP1252.iter().position(|&c| c == ch).map(|i| i as u8 + 0x80)
+}
+
+unsafe fn focus_address() {
+    let loc = pane().loc;
+    ADDRESS.set(if loc.is(HOME) { b"Accueil" } else if loc.is(PC) { b"Ce PC" } else { loc.get() });
+    ADDRESS_SELECTED = true;
+    FOCUS = Focus::Address;
+}
+
+unsafe fn window_shortcut(vk: u32, control: bool) -> bool {
+    match vk {
+        0x72 => toggle_dual(),
+        0x54 if control => { let loc = pane().loc; open_tab(loc.get()); }
+        0x57 if control => close_tab(CUR),
+        0x4C if control => focus_address(),
+        0x46 if control => FOCUS = Focus::Search,
+        0x41 if control && FOCUS == Focus::Address => ADDRESS_SELECTED = true,
+        _ => return false,
+    }
+    true
+}
+
 /// Clavier : `ch` pour un caractère tapé, sinon `vk` (touche virtuelle).
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
     if NTABS == 0 { return false; }
+    // Les raccourcis de fenêtre fonctionnent aussi lorsqu'un champ est actif.
+    if ch == 0 && window_shortcut(vk, ctrl()) { return true; }
     let field: Option<&mut Field> = match FOCUS {
         Focus::Search => Some(&mut pane().search),
         Focus::Address => Some(&mut *core::ptr::addr_of_mut!(ADDRESS)),
@@ -1770,6 +1995,12 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         Focus::List => None,
     };
     if let Some(fl) = field {
+        if FOCUS == Focus::Address && ADDRESS_SELECTED && ch != 0 && ch != 13 && ch != 27 {
+            fl.len = 0;
+            ADDRESS_SELECTED = false;
+            if ch == 8 { return true; }
+        }
+        if ch >= 32 && ansi_char(ch).is_none() { notify(b"Ce caract\xE8re n'est pas encore repr\xE9sentable dans les chemins ANSI d'Explorer."); return true; }
         if FOCUS == Focus::Rename && RENAME_FRESH && ch != 0 && ch != 13 && ch != 27 {
             RENAME_FRESH = false;
             // Comme sous Windows, l'extension est conservée si on retape le nom.
@@ -1779,7 +2010,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             ext[..el].copy_from_slice(&fl.buf[ext_start..fl.len]);
             fl.len = 0;
             if ch == 8 { return true; }
-            fl.push(if ch < 256 { ch as u8 } else { b'?' });
+            fl.push(ansi_char(ch).unwrap_or_default());
             for &c in &ext[..el] { fl.push(c); }
             RENAME_TAIL = el;
             return true;
@@ -1790,7 +2021,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             let at = fl.len - tail;
             if fl.len < PATH_LEN - 1 {
                 for k in (at..fl.len).rev() { fl.buf[k + 1] = fl.buf[k]; }
-                fl.buf[at] = if ch < 256 { ch as u8 } else { b'?' };
+                fl.buf[at] = ansi_char(ch).unwrap_or_default();
                 fl.len += 1;
             }
             return true;
@@ -1818,7 +2049,12 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                             } else {
                                 // Accepte aussi un chemin Linux (/home/…) : Z:\ est la racine.
                                 let mut t = EMPTY_PATH;
-                                if s.first() == Some(&b'/') { let mut b2 = [0u8; PATH_LEN]; b2[..2].copy_from_slice(b"Z:"); let n = s.len().min(PATH_LEN - 3); for (k, &c) in s[..n].iter().enumerate() { b2[2 + k] = if c == b'/' { b'\\' } else { c }; } t.set(&b2[..n + 2]); }
+                                if s.first() == Some(&b'/') {
+                                    if s.len() + 2 >= PATH_LEN { notify(b"Chemin trop long : adresse conserv\xE9e sans modification."); return true; }
+                                    let mut b2 = [0u8; PATH_LEN]; b2[..2].copy_from_slice(b"Z:");
+                                    for (k, &c) in s.iter().enumerate() { b2[2 + k] = if c == b'/' { b'\\' } else { c }; }
+                                    t.set(&b2[..s.len() + 2]);
+                                }
                                 else { t.set(s); }
                                 let mut tl = t.len as usize;
                                 while tl > 3 && t.buf[tl - 1] == b'\\' { tl -= 1; }
@@ -1852,7 +2088,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                     return true;
                 }
                 27 => { if FOCUS == Focus::Search { pane().search.len = 0; reload(pane()); } FOCUS = Focus::List; return true; }
-                c if c >= 32 => { let b = if c < 256 { c as u8 } else { b'?' }; fl.push(b); }
+                c if c >= 32 => fl.push(ansi_char(c).unwrap_or_default()),
                 _ => return false,
             }
             if FOCUS == Focus::Search { let p = pane(); if p.deep { reload(p); } rebuild_view(p); p.scroll = 0; }
@@ -1880,7 +2116,6 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     let move_to = |p: &mut Pane, v: usize| { let i = p.view[v] as usize; p.sel = [0; MAX_ENTRIES / 64]; set_sel(p, i, true); p.anchor = i; };
     match vk {
         0x74 => reload(p),                                             // F5
-        0x72 => toggle_dual(),                                         // F3
         0x71 => if let Some(i) = first_sel(p) { start_rename(i) },     // F2
         0x2E => delete_selection(),                                    // Suppr
         0x08 => go_back(),                                             // Retour arrière
@@ -1901,10 +2136,6 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         0x43 if c => copy_selection(false),
         0x58 if c => copy_selection(true),
         0x56 if c => paste(),
-        0x54 if c => open_tab(pane().loc.get()),
-        0x57 if c => close_tab(CUR),
-        0x46 if c => FOCUS = Focus::Search,
-        0x4C if c => { let loc = p.loc; ADDRESS.set(loc.get()); FOCUS = Focus::Address; }
         0x4E if c && shift() => new_item(true),
         _ => return false,
     }
@@ -1914,4 +2145,85 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
 pub unsafe fn tick(_f: &Frame) -> bool {
     // Curseur clignotant dans un champ, message temporaire de la barre d'état.
     FOCUS != Focus::List || MESSAGE_UNTIL != 0 && { let alive = (MESSAGE_UNTIL.wrapping_sub(GetTickCount()) as i32) > -1000; if !alive { MESSAGE_UNTIL = 0; } alive }
+}
+
+/// Exécuté uniquement par le programme PE `explorer_regression.exe` ; le
+/// linker retire cette fonction inutilisée de l'exécutable du bureau.
+#[doc(hidden)]
+pub unsafe fn regression_checks() {
+    let mut scratch = [0u8; PATH_LEN + NAME_LEN + 2];
+    let long_name = [b'a'; 200];
+    let mut path = EMPTY_PATH;
+    path.set(b"C:\\original");
+    check!(!path.set(&[b'x'; PATH_LEN]) && path.is(b"C:\\original"), "Explorer refuse un chemin trop long sans le tronquer");
+    let n = join(&mut scratch, b"C:\\test", &long_name);
+    check!(n == 208 && &scratch[8..n] == &long_name, "Explorer conserve les noms de plus de 128 octets");
+    check!(join(&mut scratch, &[b'x'; 200], &[b'y'; 80]) == 0 && scratch[0] == 0, "Explorer refuse les chemins joints hors buffer");
+    check!(!valid_component(b"?.txt") && !valid_component(b"literal\\name") && valid_component(&long_name), "Explorer refuse les noms ANSI ambigus avant une operation");
+    check!(same_or_descendant(b"C:\\source\\child", b"c:\\source") && !same_or_descendant(b"C:\\source2", b"C:\\source"), "Explorer compare les limites de composants des descendants");
+
+    let mut raw = [0i8; PATH_LEN];
+    sprintf(raw.as_mut_ptr(), c"Z:\\tmp\\wlexp-%u".as_ptr(), GetCurrentProcessId());
+    let rn = strlen(raw.as_ptr());
+    let root = core::slice::from_raw_parts(raw.as_ptr().cast::<u8>(), rn);
+    let created = CreateDirectoryA(raw.as_ptr(), core::ptr::null_mut()) != 0;
+    check!(created, "Explorer cree son dossier de regression isole");
+    if !created { return; }
+    let mut src = [0u8; PATH_LEN + NAME_LEN + 2];
+    let sn = join(&mut src, root, b"source");
+    CreateDirectoryA(src.as_ptr().cast(), core::ptr::null_mut());
+    let mut child = [0u8; PATH_LEN + NAME_LEN + 2];
+    let cn = join(&mut child, &src[..sn], b"child");
+    CreateDirectoryA(child.as_ptr().cast(), core::ptr::null_mut());
+    let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
+    let dn = join(&mut dst, root, b"copied");
+    CreateDirectoryA(dst.as_ptr().cast(), core::ptr::null_mut());
+    let mut file = [0u8; PATH_LEN + NAME_LEN + 2];
+    let fnl = join(&mut file, &src[..sn], &long_name);
+    let h = CreateFileA(file.as_ptr().cast(), 0x4000_0000, 7, core::ptr::null_mut(), 1, 0x80, core::ptr::null_mut());
+    let mut written = 0;
+    let wrote = h as isize != -1 && WriteFile(h, b"original".as_ptr(), 8, &mut written, core::ptr::null_mut()) != 0;
+    if h as isize != -1 { CloseHandle(h); }
+    check!(wrote && written == 8, "Explorer prepare un vrai fichier au nom long");
+    check!(!copy_file_new(&file[..fnl], &file[..fnl]) && GetFileAttributesA(file.as_ptr().cast()) != u32::MAX, "Une collision de copie ne supprime jamais un fichier existant");
+    NTABS = 1; CUR = 0;
+    navigate_pane(&mut TABS[0].panes[0], &src[..sn], false);
+    let i = select_named(pane(), &long_name);
+    check!(i.is_some(), "Explorer lit le nom long integral depuis FindFirstFileA");
+    if i.is_some() {
+        copy_selection(true);
+        paste();
+        check!(NCLIP == 0 && GetFileAttributesA(file.as_ptr().cast()) != u32::MAX && select_named(pane(), &long_name).is_some(), "Couper-coller dans le meme dossier ne renomme pas la source");
+        copy_selection(false);
+        check!(NCLIP == 1 && CLIP[0].get() == &file[..fnl], "Explorer copie le chemin integral dans le presse-papiers");
+        navigate_pane(pane(), &dst[..dn], false);
+        paste();
+        let n = join(&mut scratch, &dst[..dn], &long_name);
+        check!(n != 0 && GetFileAttributesA(scratch.as_ptr().cast()) != u32::MAX && GetFileAttributesA(file.as_ptr().cast()) != u32::MAX, "Explorer colle le nom exact et conserve la source");
+    }
+    let mut recursive = [0u8; PATH_LEN + NAME_LEN + 2];
+    let recn = join(&mut recursive, &child[..cn], b"source");
+    check!(!copy_tree(&src[..sn], &recursive[..recn]) && GetFileAttributesA(recursive.as_ptr().cast()) == u32::MAX, "Explorer interdit une copie recursive dans son sous-dossier avant creation");
+    let mut alias = [0u8; PATH_LEN + NAME_LEN + 2];
+    let an = join(&mut alias, &src[..sn], b"child\\..\\child");
+    check!(!safe_destination(&src[..sn], &alias[..an]), "Explorer resout les alias avec .. avant de copier");
+    let mut deep_target = [0u8; PATH_LEN + NAME_LEN + 2];
+    let tn = join(&mut deep_target, root, &[b'd'; 100]);
+    CreateDirectoryA(deep_target.as_ptr().cast(), core::ptr::null_mut());
+    let mut too_long = [0u8; PATH_LEN + NAME_LEN + 2];
+    let ln = join(&mut too_long, &deep_target[..tn], b"copy");
+    check!(!copy_tree(&src[..sn], &too_long[..ln]) && GetFileAttributesA(too_long.as_ptr().cast()) == u32::MAX, "Une copie dont les enfants depassent MAX_PATH est refusee sans arbre partiel");
+
+    navigate_pane(pane(), &src[..sn], false);
+    focus_address();
+    key(0, b'Z' as u16);
+    check!(ADDRESS.get() == b"Z" && !ADDRESS_SELECTED, "Ctrl+L selectionne et la frappe remplace toute l'adresse");
+    FOCUS = Focus::Address;
+    let dual = tab().dual;
+    check!(window_shortcut(0x72, false) && tab().dual != dual, "F3 fonctionne pendant la saisie d'une adresse");
+    FOCUS = Focus::Address;
+    let tabs = NTABS;
+    check!(window_shortcut(0x54, true) && NTABS == tabs + 1, "Ctrl+T fonctionne pendant la saisie d'une adresse");
+    check!(ansi_char(0x20AC) == Some(0x80) && ansi_char(0x03A9).is_none(), "Explorer preserve Euro et refuse les conversions ANSI destructrices");
+    check!(rollback_copy(root, 0), "Explorer nettoie ses seuls fichiers de regression");
 }

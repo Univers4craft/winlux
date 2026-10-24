@@ -93,6 +93,56 @@ type Display = c_void;
 type Visual = c_void;
 type XftDraw = c_void;
 
+/// Xlib applique la vraie table XKB du serveur (AZERTY/QWERTY, AltGr,
+/// groupes et Caps Lock). Le rendu Xft peut être absent sans perdre le clavier.
+struct XkbKeyboard {
+    library: *mut c_void,
+    display: *mut Display,
+    close: unsafe extern "C" fn(*mut Display) -> c_int,
+    lookup: unsafe extern "C" fn(*mut Display, u8, u32, *mut u32, *mut c_ulong) -> c_int,
+    symbol: unsafe extern "C" fn(*mut Display, u8, c_int, c_int) -> c_ulong,
+}
+
+unsafe impl Send for XkbKeyboard {}
+
+impl XkbKeyboard {
+    unsafe fn connect() -> Option<Self> {
+        unsafe fn symbol<T: Copy>(lib: *mut c_void, name: &[u8]) -> Option<T> {
+            let ptr = libc::dlsym(lib, name.as_ptr().cast());
+            if ptr.is_null() { None } else { Some(std::mem::transmute_copy(&ptr)) }
+        }
+        let library = libc::dlopen(c"libX11.so.6".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
+        if library.is_null() { return None; }
+        let api = (|| {
+            let open: unsafe extern "C" fn(*const c_char) -> *mut Display = symbol(library, b"XOpenDisplay\0")?;
+            let close = symbol(library, b"XCloseDisplay\0")?;
+            let lookup = symbol(library, b"XkbLookupKeySym\0")?;
+            let key_symbol = symbol(library, b"XkbKeycodeToKeysym\0")?;
+            let display = open(std::ptr::null());
+            if display.is_null() { return None; }
+            Some(Self { library, display, close, lookup, symbol: key_symbol })
+        })();
+        if api.is_none() { libc::dlclose(library); }
+        api
+    }
+
+    fn translate(&self, code: u8, state: u16) -> Option<(u32, u32, u32, u32)> {
+        let mut consumed = 0;
+        let mut effective = 0;
+        unsafe {
+            if (self.lookup)(self.display, code, state as u32, &mut consumed, &mut effective) == 0 { return None; }
+            let group = ((state >> 13) & 3) as c_int;
+            let base = (self.symbol)(self.display, code, group, 0) as u32;
+            let shifted = (self.symbol)(self.display, code, group, 1) as u32;
+            Some((base, shifted, effective as u32, consumed))
+        }
+    }
+}
+
+impl Drop for XkbKeyboard {
+    fn drop(&mut self) { unsafe { (self.close)(self.display); libc::dlclose(self.library); } }
+}
+
 struct XftApi {
     x11: *mut c_void,
     xft: *mut c_void,
@@ -328,6 +378,7 @@ pub struct X11Backend {
     scale: f32,
     /// Table de correspondance keycode X11 → keysyms (lue à la demande).
     keymap: HashMap<u8, Vec<u32>>,
+    keyboard: Option<XkbKeyboard>,
     /// Tampon arrière de chaque fenêtre : la peinture y est composée puis
     /// recopiée d'un bloc, sans scintillement, et les Expose sont servis
     /// sans rejouer les commandes GDI.
@@ -373,6 +424,7 @@ impl X11Backend {
             xft: unsafe { XftRenderer::connect() },
             scale,
             keymap: HashMap::new(),
+            keyboard: unsafe { XkbKeyboard::connect() },
             back: HashMap::new(),
             x11_dirty: Cell::new(false),
             xft_dirty: Cell::new(false),
@@ -1109,16 +1161,23 @@ impl X11Backend {
                 let caps = e.state.contains(x11rb::protocol::xproto::KeyButMask::LOCK);
                 let syms = self.key_syms(e.detail);
                 let base = syms.as_deref().and_then(base_keysym);
-                let sym = syms.as_deref().and_then(|s| effective_keysym(s, shift, caps));
+                let xkb = self.keyboard.as_ref().and_then(|k| k.translate(e.detail, e.state.into()));
+                let level3 = e.state.contains(x11rb::protocol::xproto::KeyButMask::MOD5);
+                let sym = xkb.map(|(_, _, sym, _)| sym).or_else(|| syms.as_deref().and_then(|s| effective_keysym(s, shift, caps, level3)));
                 // Le VK désigne la touche physique (niveau non modifié), tandis
                 // que le caractère tient compte de Maj/Caps Lock.
-                let vk = base.and_then(keysym_to_vk).unwrap_or(e.detail as usize);
+                let vk = xkb.and_then(|(base, shifted, _, _)| key_levels_to_vk(base, shifted))
+                    .or_else(|| syms.as_deref().and_then(|s| key_levels_to_vk(base.unwrap_or(0), s.get(1).copied().unwrap_or(0))))
+                    .unwrap_or(e.detail as usize);
                 let extended = vk_is_extended(vk);
                 let lparam = key_lparam(e.detail, false, extended);
                 gui::update_async_key_state(vk, true);
                 // Caractère effectif pour `TranslateMessage` ; Ctrl+lettre ne
                 // produit pas de caractère (raccourci clavier).
-                let ch = if ctrl { None } else { sym.map(keysym_to_char).filter(|c| *c != 0) };
+                // AltGr peut être encodé Ctrl+Alt par le serveur : XKB indique
+                // les modificateurs consommés pour le caractère de niveau 3.
+                let altgr = level3 || xkb.is_some_and(|(_, _, _, consumed)| consumed & 0x84 != 0 && e.state.contains(x11rb::protocol::xproto::KeyButMask::MOD1));
+                let ch = if ctrl && !altgr { None } else { sym.map(keysym_to_char).filter(|c| *c != 0) };
                 gui::set_key_char(hwnd, vk, lparam, ch);
                 Some(PendingEvent {
                     hwnd,
@@ -1129,8 +1188,11 @@ impl X11Backend {
             }
             Event::KeyRelease(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                let base = self.key_syms(e.detail).as_deref().and_then(base_keysym);
-                let vk = base.and_then(keysym_to_vk).unwrap_or(e.detail as usize);
+                let syms = self.key_syms(e.detail);
+                let vk = self.keyboard.as_ref().and_then(|k| k.translate(e.detail, e.state.into()))
+                    .and_then(|(base, shifted, _, _)| key_levels_to_vk(base, shifted))
+                    .or_else(|| syms.as_deref().and_then(|s| key_levels_to_vk(s.first().copied().unwrap_or(0), s.get(1).copied().unwrap_or(0))))
+                    .unwrap_or(e.detail as usize);
                 gui::update_async_key_state(vk, false);
                 Some(PendingEvent {
                     hwnd,
@@ -1138,6 +1200,11 @@ impl X11Backend {
                     wparam: vk,
                     lparam: key_lparam(e.detail, true, vk_is_extended(vk)),
                 })
+            }
+            Event::MappingNotify(_) => {
+                self.keymap.clear();
+                self.keyboard = unsafe { XkbKeyboard::connect() };
+                None
             }
             _ => None,
         }
@@ -1294,6 +1361,10 @@ fn keysym_to_vk(sym: u32) -> Option<usize> {
         0xFFE1 | 0xFFE2 => 0x10,                          // VK_SHIFT
         0xFFE3 | 0xFFE4 => 0x11,                          // VK_CONTROL
         0xFFE9 | 0xFFEA => 0x12,                          // VK_MENU
+        0xFE03 | 0xFF7E => 0x12,                          // ISO_Level3_Shift / Mode_switch (AltGr)
+        0xFFEB => 0x5B,                                  // Super_L / VK_LWIN
+        0xFFEC => 0x5C,                                  // Super_R / VK_RWIN
+        0xFF67 => 0x5D,                                  // Menu / VK_APPS
         0xFFE5 => gui::VK_CAPITAL,
         0xFF7F => gui::VK_NUMLOCK,
         0xFF14 => gui::VK_SCROLL,
@@ -1340,18 +1411,28 @@ fn base_keysym(syms: &[u32]) -> Option<u32> {
 
 /// Sélectionne le niveau effectif d'une touche, en appliquant Caps Lock aux
 /// lettres mais pas aux chiffres ni à la ponctuation.
-fn effective_keysym(syms: &[u32], shift: bool, caps: bool) -> Option<u32> {
-    let base = base_keysym(syms)?;
+fn effective_keysym(syms: &[u32], shift: bool, caps: bool, level3: bool) -> Option<u32> {
+    let group = if level3 && syms.get(2).is_some_and(|sym| *sym != 0) { 2 } else { 0 };
+    let base = syms.get(group).copied().filter(|sym| *sym != 0)?;
     let is_letter = matches!(base, 0x41..=0x5A | 0x61..=0x7A);
     let level = (if is_letter { shift ^ caps } else { shift }) as usize;
-    syms.get(level)
+    syms.get(group + level)
         .copied()
         .filter(|sym| *sym != 0)
         .or(Some(base))
 }
 
+fn key_levels_to_vk(base: u32, shifted: u32) -> Option<usize> {
+    // Sur AZERTY le chiffre est au niveau Maj (&/1, é/2…), mais le VK reste
+    // VK_1/VK_2 ; les lettres suivent la disposition choisie sur le serveur.
+    if matches!(shifted, 0x30..=0x39) && !matches!(base, 0x41..=0x5A | 0x61..=0x7A) {
+        return Some(shifted as usize);
+    }
+    keysym_to_vk(base)
+}
+
 fn vk_is_extended(vk: usize) -> bool {
-    matches!(vk, 0x21..=0x2E)
+    matches!(vk, 0x21..=0x2E | 0x5B..=0x5D)
 }
 
 /// Caractère produit par un keysym, 0 si la touche n'en produit pas.
@@ -1363,6 +1444,7 @@ fn keysym_to_char(sym: u32) -> u16 {
         0xFF1B => 0x1B, // Échap
         0x20..=0x7E => sym as u16,
         0xA0..=0xFF => sym as u16, // Latin-1 (é, à, ç…)
+        0x20AC => 0x20AC, // EuroSign, keysym historique de l'AltGr+E
         0x0100_0000..=0x0110_FFFF => {
             let codepoint = sym & 0x00FF_FFFF;
             char::from_u32(codepoint)
@@ -1398,21 +1480,58 @@ mod tests {
         assert_eq!(keysym_to_vk(0xFF53), Some(0x27)); // VK_RIGHT
         assert_eq!(keysym_to_vk(0xFFC2), Some(0x74)); // VK_F5
         assert_eq!(keysym_to_vk(0xFFE3), Some(0x11)); // VK_CONTROL
+        assert_eq!(keysym_to_vk(0xFFEB), Some(0x5B)); // Super gauche
+        assert_eq!(keysym_to_vk(0xFFEC), Some(0x5C)); // Super droit
+        assert_eq!(keysym_to_vk(0xFE03), Some(0x12)); // AltGr
         assert_eq!(keysym_to_vk(0x1008_FF12), None);
     }
 
     #[test]
     fn niveaux_clavier_gerent_maj_caps_et_ponctuation() {
         let letter = [b'a' as u32, b'A' as u32];
-        assert_eq!(effective_keysym(&letter, false, false), Some(b'a' as u32));
-        assert_eq!(effective_keysym(&letter, true, false), Some(b'A' as u32));
-        assert_eq!(effective_keysym(&letter, false, true), Some(b'A' as u32));
-        assert_eq!(effective_keysym(&letter, true, true), Some(b'a' as u32));
+        assert_eq!(effective_keysym(&letter, false, false, false), Some(b'a' as u32));
+        assert_eq!(effective_keysym(&letter, true, false, false), Some(b'A' as u32));
+        assert_eq!(effective_keysym(&letter, false, true, false), Some(b'A' as u32));
+        assert_eq!(effective_keysym(&letter, true, true, false), Some(b'a' as u32));
 
         let digit = [b'1' as u32, b'!' as u32];
-        assert_eq!(effective_keysym(&digit, false, true), Some(b'1' as u32));
-        assert_eq!(effective_keysym(&digit, true, false), Some(b'!' as u32));
+        assert_eq!(effective_keysym(&digit, false, true, false), Some(b'1' as u32));
+        assert_eq!(effective_keysym(&digit, true, false, false), Some(b'!' as u32));
         assert_eq!(base_keysym(&digit), Some(b'1' as u32));
+    }
+
+    #[test]
+    fn dispositions_azerty_et_altgr_preservent_raccourcis_et_texte() {
+        assert_eq!(key_levels_to_vk(b'&' as u32, b'1' as u32), Some(0x31));
+        assert_eq!(key_levels_to_vk(0xE9, b'2' as u32), Some(0x32));
+        assert_eq!(key_levels_to_vk(b'a' as u32, b'A' as u32), Some(0x41));
+        let french_e = [b'e' as u32, b'E' as u32, 0x20AC, 0x0100_00A2];
+        assert_eq!(effective_keysym(&french_e, false, false, true), Some(0x20AC));
+        assert_eq!(effective_keysym(&french_e, true, false, true), Some(0x0100_00A2));
+        assert_eq!(keysym_to_char(0x20AC), 0x20AC);
+        assert_eq!(keysym_to_char(0x0100_03A9), 0x03A9);
+        assert_eq!(keysym_to_char(0x0100_D800), 0); // surrogate invalide
+    }
+
+    #[test]
+    #[ignore = "requires an X11 server configured with setxkbmap fr"]
+    fn xkb_azerty_reel_produit_altgr_et_touche_windows() {
+        let keyboard = unsafe { XkbKeyboard::connect() }.expect("libX11/XKB");
+        let (conn, _) = x11rb::connect(None).expect("X11");
+        let setup = conn.setup();
+        let mapping = conn.get_keyboard_mapping(setup.min_keycode, setup.max_keycode - setup.min_keycode + 1).unwrap().reply().unwrap();
+        let width = mapping.keysyms_per_keycode as usize;
+        let code = |sym| mapping.keysyms.chunks(width).position(|row| row.first() == Some(&sym))
+            .map(|i| setup.min_keycode + i as u8).expect("keysym in French keymap");
+        let e = code(b'e' as u32);
+        assert_eq!(keyboard.translate(e, 0).unwrap().2, b'e' as u32);
+        assert_eq!(keyboard.translate(e, 1).unwrap().2, b'E' as u32);
+        assert_eq!(keyboard.translate(e, 2).unwrap().2, b'E' as u32);
+        assert_eq!(keysym_to_char(keyboard.translate(e, 128).unwrap().2), 0x20AC);
+        let (base, shifted, _, _) = keyboard.translate(code(b'&' as u32), 0).unwrap();
+        assert_eq!(key_levels_to_vk(base, shifted), Some(0x31));
+        let (base, shifted, _, _) = keyboard.translate(code(0xFFEB), 0).unwrap();
+        assert_eq!(key_levels_to_vk(base, shifted), Some(0x5B));
     }
 
     #[test]

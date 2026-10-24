@@ -27,7 +27,7 @@ xorg_modules=${WINLUX_XORG_MODULES:-/usr/lib/xorg/modules}
 truetype_fonts=${WINLUX_TRUETYPE_FONTS:-/usr/share/fonts/truetype/dejavu}
 xft_library=${WINLUX_XFT_LIBRARY:-$(ldconfig -p | awk '$1 == "libXft.so.2" { print $NF; exit }')}
 
-for tool in cargo bash cpio fakeroot find gzip grub-mkrescue ldd ldconfig sha256sum xorriso zstd; do
+for tool in cargo bash cpio depmod modprobe fakeroot find gzip grub-mkrescue grub-script-check ldd ldconfig sha256sum xorriso zstd; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "outil requis absent : $tool" >&2
         exit 1
@@ -50,7 +50,7 @@ done
 mkdir -p "$root/build"
 rm -rf "$work"
 mkdir -p \
-    "$stage/bin" "$stage/dev" "$stage/etc" "$stage/lib" "$stage/lib64" \
+    "$stage/bin" "$stage/boot" "$stage/dev" "$stage/etc/winlux" "$stage/lib" "$stage/lib64" "$stage/sbin" \
     "$stage/lib/modules/$kernel_release" \
     "$stage/opt/winlux/scripts" "$stage/opt/winlux/tests" "$stage/proc" \
     "$stage/root/.local/share/winlux" "$stage/run" "$stage/sys" "$stage/tmp" \
@@ -65,17 +65,22 @@ bash scripts/build-tests.sh
 
 cp "$root/target/release/winlux" "$stage/usr/bin/winlux"
 cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
-cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
-chmod 755 "$stage/usr/bin/winlux-browser"
+cp "$root/scripts/winlux-control.sh" "$stage/usr/bin/winlux-control"
+cp "$root/scripts/winlux-network.sh" "$stage/usr/bin/winlux-network"
 mkdir -p "$stage/usr/share/winlux"
-git -C "$root" describe --tags --always >"$stage/usr/share/winlux/version"
+cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
+cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
+cp "$root/integration/winlux-open" "$stage/usr/bin/winlux-open"
+chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script"
+mkdir -p "$stage/usr/share/winlux"
+printf '%s\n' "${WINLUX_BUILD_VERSION:-$(git -C "$root" describe --tags --always --dirty)}" >"$stage/usr/share/winlux/version"
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -113,9 +118,11 @@ ln -s busybox "$stage/bin/true"
 ln -s ../../bin/busybox "$stage/usr/bin/dirname"
 ln -s ../../bin/busybox "$stage/usr/bin/mktemp"
 ln -s ../../bin/busybox "$stage/usr/bin/timeout"
-for applet in cp cut grep head mkdir mv rm sed sha256sum tar tr wc; do
+for applet in awk cat chmod chown cmp cp cut date env find grep head id ip ipcalc kill killall ln ls mkdir modprobe mount mountpoint mv od printf ps pwd readlink reboot poweroff rm rmdir sed sha256sum sleep sort stat sync tar tee touch tr truncate umount uname wc xargs; do
     ln -s ../../bin/busybox "$stage/usr/bin/$applet"
 done
+ln -s ../bin/busybox "$stage/sbin/modprobe"
+cp /bin/bash "$stage/bin/bash"
 cp /usr/bin/curl "$stage/usr/bin/curl"
 cp /usr/bin/install "$stage/usr/bin/install"
 cp /usr/bin/udevadm "$stage/usr/bin/udevadm"
@@ -141,7 +148,55 @@ copy_shared_libraries /usr/bin/xrandr
 copy_shared_libraries /usr/bin/curl
 copy_shared_libraries /usr/bin/install
 copy_shared_libraries /usr/bin/udevadm
+copy_shared_libraries /bin/bash
 copy_shared_libraries "$xorg"
+for utility in setxkbmap xinput amixer; do
+    if command -v "$utility" >/dev/null 2>&1; then
+        cp "$(command -v "$utility")" "$stage/usr/bin/$utility"
+        copy_shared_libraries "$(command -v "$utility")"
+    fi
+done
+if test -d /usr/share/alsa; then
+    mkdir -p "$stage/usr/share/alsa"
+    # Base ALSA mixer profiles cover the emulated cards. Machine-specific UCM
+    # profiles are not used by this VM and need a separate hardware package.
+    for profile in alsa.conf cards pcm; do
+        if test -e "/usr/share/alsa/$profile"; then cp -a "/usr/share/alsa/$profile" "$stage/usr/share/alsa/$profile"; fi
+    done
+fi
+# Keep normal module names and dependency metadata so udev/modprobe can bind
+# network, audio and common input devices instead of relying on host drivers.
+for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio; do
+    modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
+        test "$directive" = insmod || continue
+        destination="$stage${module%.zst}"
+        mkdir -p "$(dirname -- "$destination")"
+        case "$module" in *.zst) zstd -q -d -c "$module" >"$destination" ;; *) cp "$module" "$destination" ;; esac
+    done
+done
+depmod -b "$stage" "$kernel_release" 2>/dev/null
+for metadata in modules.builtin modules.builtin.modinfo; do
+    if test -f "/lib/modules/$kernel_release/$metadata"; then cp "/lib/modules/$kernel_release/$metadata" "$stage/lib/modules/$kernel_release/$metadata"; fi
+done
+cat >"$stage/etc/passwd" <<'PASSWD'
+root:x:0:0:Winlux:/root:/bin/sh
+PASSWD
+cat >"$stage/etc/group" <<'GROUP'
+root:x:0:
+audio:x:29:root
+video:x:44:root
+input:x:109:root
+GROUP
+cat >"$stage/etc/winlux/input.conf" <<'INPUT'
+XKB_LAYOUT=fr
+TAP_TO_CLICK=1
+INPUT
+cat >"$stage/etc/winlux/preferences.conf" <<'PREFS'
+TASKBAR_ALIGN=left
+THEME=dark
+PREFS
+cp -L "$kernel" "$stage/boot/vmlinuz"
+printf '%s\n' "$kernel_release" >"$stage/usr/share/winlux/kernel-version"
 # Terminal Linux pour le bouton Terminal de la barre des tâches (facultatif).
 if command -v xterm >/dev/null 2>&1; then
     cp "$(command -v xterm)" "$stage/usr/bin/xterm"
@@ -199,6 +254,13 @@ cp /etc/ssl/certs/ca-certificates.crt "$stage/etc/ssl/certs/ca-certificates.crt"
 if test -d /usr/share/fontconfig; then
     cp -a /usr/share/fontconfig "$stage/usr/share/fontconfig"
 fi
+# Supply standard command locations too: third-party launchers may use
+# /bin/readlink or /bin/cat rather than looking them up in PATH.
+for applet in $(/usr/bin/busybox --list); do
+    case "$applet" in '['|'[[') continue ;; esac
+    if ! test -e "$stage/usr/bin/$applet"; then ln -s ../../bin/busybox "$stage/usr/bin/$applet"; fi
+    if ! test -e "$stage/bin/$applet"; then ln -s busybox "$stage/bin/$applet"; fi
+done
 
 # Le shell ne copie que les icônes réellement utilisées dans la préversion VM.
 for icon in preferences-desktop distributor-logo-linux-mint; do
@@ -214,6 +276,7 @@ PATH=/bin:/usr/bin:/sbin:/usr/sbin
 HOME=/root
 XKB_CONFIG_ROOT=/usr/share/X11/xkb
 export PATH HOME XKB_CONFIG_ROOT
+umask 077
 
 /bin/busybox mount -t proc proc /proc 2>/dev/null || true
 /bin/busybox mount -t sysfs sysfs /sys 2>/dev/null || true
@@ -230,6 +293,7 @@ export PATH HOME XKB_CONFIG_ROOT
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid-generic.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/serio-raw.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/psmouse.ko 2>/dev/null || true
+for driver in virtio_net e1000 e1000e snd_hda_intel snd_intel8x0; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
@@ -240,6 +304,44 @@ echo "Winlux input devices detected:"
 /bin/busybox chmod 1777 /tmp
 /bin/busybox rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
 /bin/busybox ip link set lo up
+/bin/busybox mkdir -p /run/winlux /etc/winlux
+/bin/busybox touch /etc/winlux/live-session
+echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
+/bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
+# BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
+# explicitly so the graphical power button really shuts down the guest.
+trap '/bin/busybox sync; /bin/busybox poweroff -f' USR2
+trap '/bin/busybox sync; /bin/busybox reboot -f' TERM
+/usr/bin/winlux-network start &
+if /bin/busybox grep -qw 'winlux.smoke=1' /proc/cmdline; then
+    # An explicit diagnostic boot, only used with a disposable test disk.
+    for attempt in $(/bin/busybox seq 1 20); do
+        /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+        /bin/busybox sleep 1
+    done
+    /bin/busybox ip -4 addr
+    /bin/busybox ip route
+    /bin/busybox cat /etc/resolv.conf 2>/dev/null || true
+    network_status=1
+    if /usr/bin/curl --fail --silent --show-error --connect-timeout 10 --max-time 20 https://api.github.com/ >/run/winlux/network-probe.json; then network_status=0; fi
+    echo "WINLUX_NETWORK_HTTPS_EXIT=$network_status"
+    count=$(/bin/busybox cat /etc/winlux/smoke-count 2>/dev/null || echo 0)
+    case "$count" in ''|*[!0-9]*) count=0 ;; esac
+    count=$((count + 1))
+    echo "$count" >/etc/winlux/smoke-count
+    echo "WINLUX_PERSISTENCE_COUNT=$count"
+    /usr/bin/winlux-control status
+    /bin/busybox cat /run/winlux/control.txt
+    /bin/busybox sync
+    /bin/busybox poweroff -f
+    while :; do /bin/busybox sleep 2; done
+fi
+(
+    while :; do
+        /usr/bin/winlux-update --auto-run >>/run/winlux/auto-update.log 2>&1 || true
+        /bin/busybox sleep 1800
+    done
+) &
 
 if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     echo "Winlux desktop preview: starting Xorg"
@@ -252,6 +354,12 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /bin/busybox cat /tmp/Xorg.0.log /tmp/xorg-console.log >&2
         /bin/sh
     fi
+    (
+        while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
+            DISPLAY=:0 /usr/bin/winlux-control status 2>/dev/null || true
+            /bin/busybox sleep 3
+        done
+    ) &
     # Quand la fenêtre de la VM change de taille, QEMU annonce un nouveau
     # mode préféré : on l'applique pour que le bureau suive la fenêtre.
     (
@@ -270,6 +378,16 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         done
     ) &
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
+        keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
+        case "$keyboard_layout" in fr|us) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
+        tapping=$(/bin/busybox sed -n 's/^TAP_TO_CLICK=//p' /etc/winlux/input.conf 2>/dev/null)
+        case "$tapping" in 0|1)
+            for device in $(DISPLAY=:0 /usr/bin/xinput --list --id-only 2>/dev/null); do
+                DISPLAY=:0 /usr/bin/xinput set-prop "$device" 'libinput Tapping Enabled' "$tapping" 2>/dev/null || true
+            done ;;
+        esac
+        taskbar_align=$(/bin/busybox sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null)
+        desktop_theme=$(/bin/busybox sed -n 's/^THEME=//p' /etc/winlux/preferences.conf 2>/dev/null)
         # Échelle d'interface choisie d'après la hauteur de l'écran au lancement.
         screen_height=$(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox awk '/\*/ { split($1, size, "x"); print size[2]; exit }')
         ui_scale=1
@@ -288,8 +406,22 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         for state in /sys/class/net/*/operstate; do
             if test -r "$state" && test "$(/bin/busybox cat "$state")" = up; then tray_network=1; break; fi
         done
-        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_INPUT_DIAG="$input_diag" WINLUX_UI_SCALE="$ui_scale" WINLUX_TRAY_VOLUME=70 WINLUX_TRAY_BATTERY="$tray_battery" WINLUX_TRAY_BATTERY_PRESENT="$tray_battery_present" WINLUX_TRAY_NETWORK="$tray_network" \
-            /usr/bin/winlux /opt/winlux/tests/gui_demo.exe
+        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_INPUT_DIAG="$input_diag" WINLUX_UI_SCALE="$ui_scale" WINLUX_TASKBAR_ALIGN="$taskbar_align" WINLUX_THEME="$desktop_theme" WINLUX_TRAY_BATTERY="$tray_battery" WINLUX_TRAY_BATTERY_PRESENT="$tray_battery_present" WINLUX_TRAY_NETWORK="$tray_network" \
+            /usr/bin/winlux /opt/winlux/tests/gui_demo.exe &
+        desktop_pid=$!
+        echo "WINLUX_DESKTOP_READY pid=$desktop_pid"
+        while /bin/busybox kill -0 "$desktop_pid" 2>/dev/null; do
+            request=$(/bin/busybox cat /run/winlux/session-action 2>/dev/null)
+            update=$(/bin/busybox cat /run/winlux/update-action 2>/dev/null)
+            if test "$request" = restart-session || test "$update" = restart-session; then
+                /bin/busybox rm -f /run/winlux/session-action
+                if test "$update" = restart-session; then /bin/busybox rm -f /run/winlux/update-action; fi
+                /bin/busybox kill "$desktop_pid" 2>/dev/null || true
+                break
+            fi
+            /bin/busybox sleep 1
+        done
+        wait "$desktop_pid" 2>/dev/null || true
         /bin/busybox sleep 1
     done
     /bin/sh
@@ -337,6 +469,7 @@ echo "WINLUX_LIVE_RESULT=$result"
 while :; do /bin/busybox sleep 2; done
 INIT
 chmod 755 "$stage/init"
+"$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"
 
 export WINLUX_LIVE_STAGE="$stage"
 export WINLUX_LIVE_CPIO="$work/winlux-initramfs.cpio"
@@ -358,21 +491,38 @@ cp -L "$kernel" "$iso_root/boot/vmlinuz"
 cp "$work/winlux-initramfs.cpio.gz" "$iso_root/boot/winlux-initramfs.cpio.gz"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
-set timeout=0
+set timeout=2
 set timeout_style=hidden
 if serial --unit=0 --speed=115200; then
     terminal_input serial console
     terminal_output serial console
 fi
-menuentry "Winlux diagnostic (headless + Xvfb)" {
+menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
     linux /boot/vmlinuz console=ttyS0,115200n8 rdinit=/init panic=1 loglevel=4
     initrd /boot/winlux-initramfs.cpio.gz
 }
-menuentry "Winlux Desktop" {
+function winlux_live {
     linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
     initrd /boot/winlux-initramfs.cpio.gz
 }
+menuentry "Winlux Desktop" {
+    if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then
+        if test -f "($winlux_root)/boot/vmlinuz"; then
+            # Load the updated kernel and persistent root from the disk.
+            linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+        else
+            winlux_live
+        fi
+    else
+        winlux_live
+    fi
+}
+menuentry "Winlux persistent network diagnostic" --hotkey=s {
+    search --no-floppy --label WINLUX_ROOT --set=winlux_root
+    linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1
+}
 GRUB
+grub-script-check "$iso_root/boot/grub/grub.cfg"
 
 mkdir -p "$(dirname -- "$out")"
 grub-mkrescue -o "$out" "$iso_root"

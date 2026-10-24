@@ -8,7 +8,7 @@ Winlux est un runtime expérimental Linux qui charge des exécutables **Windows 
 
 ## État testé
 
-Les 70 tests unitaires du runtime et neuf exécutables PE couvrent le chargeur et les principales API implémentées. Les exécutables incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, des tests de DLL réelle/import différé, `findfiles.exe`, `crt_suite.exe` (chaînes, conversions, mathématiques, tri) et deux tests GUI (`gui_suite.exe` pour le cycle de vie et le redimensionnement, `gui_demo.exe` pour le tracé GDI et le rendu X11). Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux, séquentiellement ou tous en parallèle.
+Les tests unitaires du runtime et dix exécutables PE couvrent le chargeur et les principales API implémentées. Les exécutables incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, des tests de DLL réelle/import différé, `findfiles.exe`, `crt_suite.exe`, les tests GUI et `explorer_regression.exe` (noms longs, copies, chemins et raccourcis). Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux, séquentiellement ou tous en parallèle.
 
 Le runtime contient notamment un chargeur PE, les relocations et imports, un PEB/TEB minimal, du TLS, des DLL intégrées partielles, le registre Winlux persistant, des fichiers mappés vers Linux (énumération, fichiers temporaires, métadonnées), une fondation COM/OLE native (`CoInitializeEx`, GUID, mémoire COM et `IStream` sur `HGLOBAL`) et une passerelle Winsock/ALSA expérimentale.
 
@@ -40,6 +40,9 @@ scripts/build-tests.sh
 cargo build --release -p winlux
 scripts/test-runtime.sh
 scripts/test-runtime-parallel.sh
+scripts/test-network.sh
+scripts/test-control.sh
+scripts/test-updater.sh
 scripts/build-mingw-tests.sh   # nécessite gcc-mingw-w64-x86-64
 scripts/test-mingw.sh
 ```
@@ -98,9 +101,15 @@ Une VM graphique persistante de prévisualisation peut aussi être créée puis 
 ```sh
 scripts/create-test-vm.sh --create-only
 scripts/create-test-vm.sh
+# Après reconstruction de l'ISO, réinitialiser explicitement le disque :
+scripts/create-test-vm.sh --refresh  # conserve l'ancien disque en sauvegarde
 ```
 
-Elle utilise par défaut un disque QCOW2 extensible de 24 Gio, 4 Gio de RAM, 4 CPU, KVM lorsqu’il est disponible et un affichage 1920×1080. La définition peut être changée avec `WINLUX_VM_WIDTH` et `WINLUX_VM_HEIGHT`. Le disque est construit à partir de la racine de l’ISO; cette image reste une préversion technique, pas encore une distribution installable généraliste. La résolution du bureau suit la taille de la fenêtre QEMU (redimensionnement ou plein écran) et le pointeur est dessiné par Xorg en curseur logiciel, donc toujours visible. Ajoutez `winlux.debug=1` à la ligne de commande du noyau pour journaliser les clics et les changements de mode sur la console série.
+Elle utilise par défaut un disque QCOW2 extensible de 24 Gio, 4 Gio de RAM, 4 CPU, KVM lorsqu’il est disponible et un affichage 1920×1080. La définition peut être changée avec `WINLUX_VM_WIDTH` et `WINLUX_VM_HEIGHT`. Une empreinte des sources empêche d'utiliser par erreur un stage ou un disque ancien. `--refresh` crée une nouvelle racine et conserve l'ancien disque complet ; il ne migre pas automatiquement ses données. Pour conserver la racine courante, utilisez les mises à jour dans l'OS.
+
+Dans le gestionnaire de VM, démarrez sur l'ISO avec un disque virtio portant le label `WINLUX_ROOT` : GRUB charge alors le noyau et la racine depuis ce disque. Les données, préférences et mises à jour survivent au redémarrage. Sans ce disque, l'ISO démarre une session Live en mémoire, signalée dans Paramètres. L'image reste une préversion technique sans installateur généraliste. La résolution du bureau suit la fenêtre QEMU et le curseur logiciel Xorg reste visible. Ajoutez `winlux.debug=1` au noyau pour les traces d'entrée. La tablette virtio utilise des coordonnées absolues et évite la capture relative du pointeur.
+
+Le démarrage configure les cartes virtuelles par DHCP (adresse, route et DNS), avec renouvellement du bail. `winlux-network restart` renouvelle la connexion ; le journal se trouve dans `/run/winlux/network.log`. Les dispositions AZERTY/QWERTY et les options libinput sont disponibles dans Paramètres. Un trackpad de l'hôte présenté comme tablette par l'hyperviseur conserve ses réglages physiques sur l'hôte.
 
 ### Bureau, Explorer et navigateur
 
@@ -108,19 +117,25 @@ Le bureau de l’ISO est un shell maison au style Windows 11 (`testexe/src/shell
 
 Le navigateur par défaut est **Microsoft Edge**, lancé par `winlux-browser` (repli sur Chromium ou Firefox s’il est absent). Sur un système installé : `sudo /usr/share/winlux/install-edge.sh` ajoute le dépôt officiel Microsoft et fait d’Edge le navigateur par défaut. Pour l’embarquer dans l’ISO : `WINLUX_EDGE_DEB=/chemin/microsoft-edge-stable.deb scripts/build-live-iso.sh`.
 
+Paramètres propose les pages Linux, compatibilité Windows, réseau, audio/batterie, clavier/trackpad, apparence et mises à jour. Les commandes passent par `winlux-control`, avec télémétrie réelle, exécution en arrière-plan et journal visible. Les applications non installées ne possèdent pas de bouton fictif. Explorer bloque les copies dans un descendant et les chemins tronqués ; les noms Unicode hors Windows-1252 restent à prendre en charge avec les API fichiers larges.
+
 ## Mises à jour GitHub
 
 Chaque tag `v*` déclenche le workflow de release, qui reteste Winlux puis publie un paquet du runtime et un manifeste SHA-256. Sur une installation Winlux :
 
 ```sh
 winlux-update --check
+winlux-update --list
 winlux-update --apply
 winlux-update --rollback
+winlux-update --auto enable  # désactiver avec disable
 ```
 
 Pour un dépôt GitHub privé, fournissez un jeton en lecture dans `WINLUX_UPDATE_TOKEN` (ou `GH_TOKEN`). L’outil passe alors par l’API GitHub authentifiée et ne journalise pas le jeton. Pour un dépôt public, aucune authentification n’est nécessaire.
 
-L’outil n’accepte que les actifs GitHub en HTTPS, vérifie strictement le manifeste, la somme SHA-256 et les chemins de l’archive, installe les fichiers par renommage atomique et conserve la version précédente. À ce stade il met à jour le cœur Winlux (`winlux`, `winlux-update` et le numéro de version), pas encore l’intégralité d’une future distribution Linux en mode A/B.
+Le paquet `scripts/build-update-bundle.sh --system VERSION` comprend le bureau, le runtime, l'outil de mise à jour, les applications embarquées, les scripts, le noyau, les pilotes, les bibliothèques et le démarrage. Il exige un stage ISO correspondant exactement aux sources. `--runtime` produit un paquet réduit, utilisé par la CI lorsqu'aucune image système n'a été construite. Le manifeste affiche clairement cette portée dans l'interface.
+
+L’outil valide les manifestes, SHA-256, inventaires et liens, verrouille les opérations concurrentes, conserve les fichiers précédents et restaure une installation interrompue. Les données personnelles et `/etc` sont préservés ; les nouveaux réglages par défaut sont consultables dans `/usr/share/winlux/defaults/etc`. Un changement du bureau seul relance la session ; un changement du noyau ou des composants système demande un redémarrage explicite. L'automatique vérifie toutes les trente minutes sans redémarrer la machine sans action de l'utilisateur. Cette mise à jour transactionnelle n'est pas encore un schéma A/B résistant à toute coupure d'alimentation.
 
 ## Limites importantes
 

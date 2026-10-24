@@ -498,10 +498,10 @@ pub extern "C" fn mainCRTStartup() -> ! {
             let mut align = [0i8; 8];
             let align_len = GetEnvironmentVariableA(c"WINLUX_TASKBAR_ALIGN".as_ptr(), align.as_mut_ptr(), align.len() as u32);
             desktop::init(
-                environment_percentage(c"WINLUX_TRAY_VOLUME".as_ptr(), 78),
-                environment_percentage(c"WINLUX_TRAY_BATTERY".as_ptr(), 73),
+                environment_percentage(c"WINLUX_TRAY_VOLUME".as_ptr(), 0),
+                environment_percentage(c"WINLUX_TRAY_BATTERY".as_ptr(), 0),
                 environment_percentage(c"WINLUX_TRAY_BATTERY_PRESENT".as_ptr(), 0).min(1),
-                environment_percentage(c"WINLUX_TRAY_NETWORK".as_ptr(), 1).min(1),
+                environment_percentage(c"WINLUX_TRAY_NETWORK".as_ptr(), 0).min(1),
                 align_len == 4 && align[0] as u8 == b'l',
             );
         }
