@@ -6,7 +6,7 @@ use crate::gfx::*;
 use crate::wm::{Frame, Gfx, Mouse};
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 7] = [b"Syst\xE8me Linux", b"Applications Windows", b"R\xE9seau", b"Son et batterie", b"Clavier et pav\xE9 tactile", b"Apparence", b"Mises \xE0 jour"];
+const PAGES: [&[u8]; 8] = [b"Syst\xE8me Linux", b"Applications Windows", b"R\xE9seau", b"Son et batterie", b"Clavier et pav\xE9 tactile", b"Apparence", b"Mises \xE0 jour", b"\xC9cran et d\xE9finition"];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
 struct Buffer { bytes: [u8; CAPACITY], len: usize }
@@ -16,6 +16,9 @@ static mut STATUS: Buffer = EMPTY;
 static mut ACTION: Buffer = EMPTY;
 static mut LOG: Buffer = EMPTY;
 static mut UPDATES: Buffer = EMPTY;
+static mut PROGRESS: Buffer = EMPTY;
+static mut SELECTED_MODE: usize = 0;
+static mut LAST_ANIMATION: u32 = 0;
 static mut PAGE: usize = 0;
 static mut SCROLL: usize = 0;
 static mut LAST_POLL: u32 = 0;
@@ -53,23 +56,32 @@ unsafe fn read(path: &core::ffi::CStr, target: &mut Buffer) -> bool {
     changed
 }
 unsafe fn value(key: &[u8]) -> &'static [u8] {
-    for line in STATUS.get().split(|&c| c == b'\n') {
+    field(STATUS.get(), key)
+}
+fn field<'a>(data: &'a [u8], key: &[u8]) -> &'a [u8] {
+    for line in data.split(|&c| c == b'\n') {
         if line.len() > key.len() && &line[..key.len()] == key && line[key.len()] == b'=' { return &line[key.len() + 1..]; }
     }
     b""
 }
 unsafe fn available() -> bool { value(b"control_available") == b"1" }
+unsafe fn updating() -> bool {
+    // The Linux helper checks the owner PID; a stale progress file must never
+    // lock the interface forever after a killed updater.
+    value(b"update_busy") == b"1"
+}
 fn number(s: &[u8]) -> u32 { s.iter().take_while(|c| c.is_ascii_digit()).fold(0u32, |n, &c| n.saturating_mul(10).saturating_add((c - b'0') as u32)) }
 
 /// Telemetrie reelle pour la barre, meme quand Parametres est ferme.
 pub unsafe fn system_tick() -> bool {
     let now = GetTickCount();
-    if LAST_POLL != 0 && now.wrapping_sub(LAST_POLL) < 1500 { return false; }
+    if LAST_POLL != 0 && now.wrapping_sub(LAST_POLL) < 250 { return false; }
     LAST_POLL = now;
     let mut changed = read(c"Z:\\run\\winlux\\control.txt", &mut STATUS);
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
     changed |= read(if PAGE == 6 { c"Z:\\run\\winlux\\update.log" } else { c"Z:\\run\\winlux\\action.log" }, &mut LOG);
     changed |= read(c"Z:\\run\\winlux\\updates.txt", &mut UPDATES);
+    changed |= read(c"Z:\\run\\winlux\\update-progress", &mut PROGRESS);
     if available() {
         crate::desktop::NETWORK_CONNECTED = number(value(b"network_connected"));
         crate::desktop::BATTERY_PRESENT = number(value(b"battery_present"));
@@ -89,6 +101,10 @@ pub unsafe fn system_tick() -> bool {
     changed
 }
 pub unsafe fn control(action: &core::ffi::CStr) -> bool {
+    if updating() && matches!(action.to_bytes(), b"poweroff" | b"reboot" | b"restart-session" | b"update-apply" | b"update-rollback") {
+        crate::desktop::toast(b"Installation en cours : attendez la fin avant de red\xE9marrer.");
+        return false;
+    }
     if ShellExecuteA(core::ptr::null_mut(), c"open".as_ptr(), c"winlux-control".as_ptr(), action.as_ptr(), core::ptr::null(), 0) as isize > 32 {
         ACTION = EMPTY;
         let s = b"Operation en cours..."; ACTION.bytes[..s.len()].copy_from_slice(s); ACTION.len = s.len();
@@ -116,7 +132,7 @@ unsafe fn save_token(erase: bool) {
 }
 fn content(f: &Frame) -> Rect {
     let nav = if f.client.right - f.client.left < 700 { 156 } else { 210 };
-    rect(f.client.left + nav + 20, f.client.top + 20, f.client.right - 20, f.client.bottom - 20)
+    rect(f.client.left + nav + 26, f.client.top + 42, f.client.right - 26, f.client.bottom - 20)
 }
 fn nav_rect(f: &Frame, i: usize) -> Rect {
     let c = content(f);
@@ -138,13 +154,26 @@ fn token_rect(c: &Rect, part: i32) -> Rect {
 }
 unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i32) {
     let p = pal(); let r = button_rect(c, row, col);
-    round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, if HOVER == id { p.hover } else { p.surface2 });
+    if r.bottom > c.bottom - 24 { return; }
+    let disabled = updating() && (PAGE == 0 || PAGE == 6 && id != 4);
+    let selected = match (PAGE, id) {
+        (4, 0) => value(b"layout") == b"fr", (4, 1) => value(b"layout") == b"us",
+        (4, 3) => value(b"tap") == b"1", (4, 4) => value(b"tap") == b"0",
+        (5, 0) => value(b"align") == b"left", (5, 1) => value(b"align") == b"center",
+        (5, 3) => value(b"theme") == b"dark", (5, 4) => value(b"theme") == b"light",
+        (7, 3) => value(b"display_policy") == b"fixed", (7, 4) => value(b"display_policy") != b"fixed", _ => false,
+    };
+    let primary = PAGE == 6 && id == 1 || PAGE == 7 && id == 2;
+    round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 7, if selected { p.accent } else { p.border });
+    round_rect(g.hdc, g.b, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, 6, if disabled { p.surface } else if primary { p.accent } else if selected { p.selected } else if HOVER == id { p.hover } else { p.surface2 });
     let mut end = label.len(); while end > 0 && text_width(&label[..end], 11) > r.right - r.left - 12 { end -= 1; }
-    text_centered(g.hdc, g.f.small, 11, p.text, (r.left + r.right) / 2, r.top + 12, &label[..end]);
+    text_centered(g.hdc, g.f.small, 11, if disabled { p.text3 } else if primary { rgb(18, 24, 34) } else { p.text }, (r.left + r.right) / 2, r.top + 12, &label[..end]);
 }
 unsafe fn row(g: &mut Gfx, c: &Rect, y: i32, label: &[u8], val: &[u8]) {
     if c.top + y + 42 >= c.bottom - 30 { return; }
     let p = pal();
+    round_rect(g.hdc, g.b, c.left - 8, c.top + y - 7, c.right + 8, c.top + y + 45, 8, p.border);
+    round_rect(g.hdc, g.b, c.left - 7, c.top + y - 6, c.right + 7, c.top + y + 44, 7, p.surface);
     let mut label_end = label.len(); while label_end > 0 && text_width(&label[..label_end], 13) > c.right - c.left { label_end -= 1; }
     text(g.hdc, g.f.semibold, p.text, c.left, c.top + y, &label[..label_end]);
     let mut end = val.len(); while end > 0 && text_width(&val[..end], 13) > c.right - c.left { end -= 1; }
@@ -222,15 +251,17 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let mut end = name.len(); while end > 0 && text_width(&name[..end], 13) > r.right - r.left - 16 { end -= 1; }
         text(g.hdc, g.f.body, p.text, r.left + 8, r.top + 9, &name[..end]);
     }
+    text(g.hdc, g.f.small, p.text3, c.left, c.top - 22, b"WINLUX  /  PR\xC9F\xC9RENCES DE L'ORDINATEUR");
     text(g.hdc, g.f.large, p.text, c.left, c.top, PAGES[PAGE]);
+    fill(g.hdc, g.b, c.left, c.top + 30, c.left + 44, c.top + 33, p.accent);
     match PAGE {
         0 => {
-            row(g, &c, 44, b"Winlux / noyau Linux", value(b"version"));
-            text(g.hdc, g.f.small, p.text2, c.left, c.top + 88, value(b"kernel"));
+            row(g, &c, 44, b"Version de Winlux", value(b"version"));
             button(g, &c, 0, 0, b"Relancer le bureau", 0); button(g, &c, 0, 1, b"Red\xE9marrer", 1); button(g, &c, 0, 2, b"Arr\xEAter", 2);
-            row(g, &c, 170, b"P\xE9riph\xE9riques d'entr\xE9e d\xE9tect\xE9s", value(b"input_devices"));
-            row(g, &c, 230, b"Stockage du syst\xE8me", if value(b"persistent") == b"1" { b"Disque persistant : r\xE9glages et mises \xE0 jour conserv\xE9s." } else { b"Session Live en RAM : modifications perdues au red\xE9marrage." });
-            journal(g, &c, 296, LOG.get());
+            row(g, &c, 170, b"Noyau Linux", value(b"kernel"));
+            row(g, &c, 230, b"P\xE9riph\xE9riques d'entr\xE9e d\xE9tect\xE9s", value(b"input_devices"));
+            row(g, &c, 290, b"Stockage du syst\xE8me", if value(b"persistent") == b"1" { b"Disque persistant : r\xE9glages et mises \xE0 jour conserv\xE9s." } else { b"Session Live en RAM : modifications perdues au red\xE9marrage." });
+            journal(g, &c, 356, LOG.get());
         }
         1 => {
             row(g, &c, 44, b"Couche Windows / Win32", b"Runtime Winlux - .exe via Explorer");
@@ -261,10 +292,35 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 0, 0, b"Aligner \xE0 gauche", 0); button(g, &c, 0, 1, b"Centrer", 1);
             button(g, &c, 1, 0, b"Th\xE8me sombre", 3); button(g, &c, 1, 1, b"Th\xE8me clair", 4);
             row(g, &c, 214, b"Stockage", if value(b"persistent") == b"1" { b"Les pr\xE9f\xE9rences sont conserv\xE9es sur le disque." } else { b"Session Live : les r\xE9glages durent jusqu'au red\xE9marrage." });
+            button(g, &c, 4, 0, b"R\xE9glages de l'\xE9cran", 12);
+        }
+        7 => {
+            row(g, &c, 44, b"D\xE9finition actuellement appliqu\xE9e", value(b"display_current"));
+            let modes = value(b"display_modes");
+            let count = modes.split(|&v| v == b',').filter(|v| !v.is_empty()).count();
+            if count > 0 { SELECTED_MODE = SELECTED_MODE.min(count - 1); }
+            let chosen = modes.split(|&v| v == b',').nth(SELECTED_MODE).unwrap_or(b"Indisponible");
+            button(g, &c, 0, 0, b"D\xE9finition pr\xE9c\xE9dente", 0); button(g, &c, 0, 1, b"D\xE9finition suivante", 1); button(g, &c, 0, 2, b"Appliquer", 2);
+            button(g, &c, 1, 0, b"Image fixe", 3); button(g, &c, 1, 1, b"Suivre la fen\xEAtre VM", 4); button(g, &c, 1, 2, b"Actualiser", 5);
+            row(g, &c, 214, b"D\xE9finition s\xE9lectionn\xE9e (modes r\xE9els de l'\xE9cran)", chosen);
+            row(g, &c, 274, b"\xC9chelle du texte et des contr\xF4les", match value(b"display_scale") { b"1" => b"100 %", b"1.25" => b"125 %", b"1.5" => b"150 %", b"2" => b"200 %", _ => b"Automatique" });
+            button(g, &c, 5, 0, b"\xC9chelle -", 15); button(g, &c, 5, 1, b"Automatique", 16); button(g, &c, 5, 2, b"\xC9chelle +", 17);
+            row(g, &c, 420, b"Application de l'\xE9chelle", b"Relancez le bureau apr\xE8s modification de l'\xE9chelle.");
         }
         _ => {
-            row(g, &c, 44, b"Automatique (syst\xE8me et outil de mise \xE0 jour)", value(b"update_auto"));
-            button(g, &c, 0, 0, b"Rechercher", 0); button(g, &c, 0, 1, b"Tout installer", 1); button(g, &c, 0, 2, b"Restaurer", 2);
+            if updating() {
+                draw_installation(g, &c);
+                return;
+            }
+            let restart = value(b"update_action");
+            if restart == b"reboot" {
+                row(g, &c, 44, b"Installation termin\xE9e - red\xE9marrage requis", b"Red\xE9marrez maintenant, ou \xE9teignez puis rallumez la machine.");
+            } else if field(PROGRESS.get(), b"phase") == b"error" {
+                row(g, &c, 44, b"L'installation n'a pas abouti", b"Consultez le journal avant de r\xE9essayer.");
+            } else {
+                row(g, &c, 44, b"Protection et mises \xE0 jour du syst\xE8me", if value(b"update_auto") == b"enabled" { b"Recherche automatique activ\xE9e - sans red\xE9marrage impos\xE9." } else { b"Installation sur demande - vos donn\xE9es sont conserv\xE9es." });
+            }
+            button(g, &c, 0, 0, b"Rechercher", 0); button(g, &c, 0, 1, if restart == b"reboot" { b"Red\xE9marrer maintenant" } else { b"Tout installer" }, 1); button(g, &c, 0, 2, b"Restaurer", 2);
             button(g, &c, 1, 0, if value(b"update_auto") == b"enabled" { b"D\xE9sactiver auto" } else { b"Activer auto" }, 3);
             button(g, &c, 1, 1, if SHOW_LOG { b"Voir les modifications" } else { b"Afficher le journal" }, 4);
             button(g, &c, 1, 2, if value(b"update_action") == b"reboot" { b"Red\xE9marrer l'OS" } else { b"Relancer le bureau" }, 5);
@@ -295,7 +351,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     text(g.hdc, g.f.small, p.text2, c.left, c.bottom - 16, &notice[..end]);
 }
 
-fn hit(f: &Frame, x: i32, y: i32) -> i32 { let c = content(f); for i in 0..6 { if inside(&button_rect(&c, i / 3, i % 3), x, y) { return i; } } -1 }
+fn hit(f: &Frame, x: i32, y: i32) -> i32 { let c = content(f); for i in 0..24 { let r = button_rect(&c, i / 3, i % 3); if r.bottom <= c.bottom - 24 && inside(&r, x, y) { return i; } } -1 }
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if let Mouse::Wheel(delta) = ev { if delta < 0 { SCROLL = SCROLL.saturating_add(3); } else { SCROLL = SCROLL.saturating_sub(3); } return true; }
     if ev == Mouse::Move { let h = hit(f, x, y); let changed = h != HOVER; HOVER = h; return changed; }
@@ -315,7 +371,20 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (3, 0) => Some(c"volume-down"), (3, 1) => Some(c"volume-mute"), (3, 2) => Some(c"volume-up"),
         (4, 0) => Some(c"keyboard-fr"), (4, 1) => Some(c"keyboard-us"), (4, 3) => Some(c"tap-on"), (4, 4) => Some(c"tap-off"),
         (5, 0) => Some(c"align-left"), (5, 1) => Some(c"align-center"), (5, 3) => Some(c"theme-dark"), (5, 4) => Some(c"theme-light"),
-        (6, 0) => { SHOW_LOG = false; SCROLL = 0; Some(c"update-check") }, (6, 1) => { SHOW_LOG = true; SCROLL = 0; Some(c"update-apply") }, (6, 2) => { SHOW_LOG = true; SCROLL = 0; Some(c"update-rollback") },
+        (5, 12) => { open_page(7); return true; },
+        (7, 0) => { SELECTED_MODE = SELECTED_MODE.saturating_sub(1); return true; },
+        (7, 1) => { let n = value(b"display_modes").split(|&v| v == b',').count(); SELECTED_MODE = (SELECTED_MODE + 1).min(n.saturating_sub(1)); return true; },
+        (7, 2) => {
+            let chosen = value(b"display_modes").split(|&v| v == b',').nth(SELECTED_MODE).unwrap_or(b"");
+            if chosen.is_empty() || chosen.len() > 24 { return true; }
+            let mut command = [0u8; 64]; let prefix = b"display-mode-";
+            command[..prefix.len()].copy_from_slice(prefix); command[prefix.len()..prefix.len() + chosen.len()].copy_from_slice(chosen);
+            if let Ok(cstr) = core::ffi::CStr::from_bytes_until_nul(&command) { control(cstr); }
+            return true;
+        },
+        (7, 3) => Some(c"display-fixed"), (7, 4) => Some(c"display-follow"), (7, 5) => Some(c"status"),
+        (7, 15) => Some(c"display-scale-down"), (7, 16) => Some(c"display-scale-auto"), (7, 17) => Some(c"display-scale-up"),
+        (6, 0) => { SHOW_LOG = false; SCROLL = 0; Some(c"update-check") }, (6, 1) => { SHOW_LOG = true; SCROLL = 0; Some(if value(b"update_action") == b"reboot" { c"reboot" } else { c"update-apply" }) }, (6, 2) => { SHOW_LOG = true; SCROLL = 0; Some(c"update-rollback") },
         (6, 3) => Some(if value(b"update_auto") == b"enabled" { c"update-auto-off" } else { c"update-auto-on" }),
         (6, 4) => { SHOW_LOG = !SHOW_LOG; SCROLL = 0; return true; },
         (6, 5) => Some(if value(b"update_action") == b"reboot" { c"reboot" } else { c"restart-session" }),
@@ -338,4 +407,30 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     }
     match vk { 0x26 => { SCROLL = SCROLL.saturating_sub(1); true }, 0x28 => { SCROLL = SCROLL.saturating_add(1); true }, 0x21 => { SCROLL = SCROLL.saturating_sub(10); true }, 0x22 => { SCROLL = SCROLL.saturating_add(10); true }, 0x24 => { SCROLL = 0; true }, 0x23 => { SCROLL = usize::MAX; true }, 0x74 => { control(c"status"); true }, _ => false }
 }
-pub unsafe fn tick(_f: &Frame) -> bool { system_tick() }
+unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
+    let p = pal();
+    row(g, c, 54, b"Installation en cours", b"N'\xE9teignez pas la machine. L'arr\xEAt est temporairement verrouill\xE9.");
+    let phase = field(PROGRESS.get(), b"phase");
+    let title: &[u8] = match phase { b"downloading" => b"T\xE9l\xE9chargement du paquet", b"verifying" => b"V\xE9rification de l'int\xE9grit\xE9", b"backing-up" => b"Sauvegarde des fichiers pr\xE9c\xE9dents", b"installing" => b"Installation des composants", b"restoring" => b"Restauration de la sauvegarde", b"finalizing" => b"Finalisation et synchronisation", _ => b"Pr\xE9paration de la mise \xE0 jour" };
+    text(g.hdc, g.f.large, p.text, c.left + 12, c.top + 140, title);
+    let bar = rect(c.left, c.top + 188, c.right, c.top + 198);
+    round_rect(g.hdc, g.b, bar.left, bar.top, bar.right, bar.bottom, 5, p.surface2);
+    let percent = number(field(PROGRESS.get(), b"percent")).min(100);
+    if percent > 0 {
+        round_rect(g.hdc, g.b, bar.left, bar.top, bar.left + (bar.right - bar.left) * percent as i32 / 100, bar.bottom, 5, p.accent);
+    } else {
+        let width = (bar.right - bar.left) / 5;
+        let x = bar.left + (GetTickCount() / 12 % (bar.right - bar.left - width).max(1) as u32) as i32;
+        round_rect(g.hdc, g.b, x, bar.top, x + width, bar.bottom, 5, p.accent);
+    }
+    row(g, c, 238, b"\xC9l\xE9ment trait\xE9 en temps r\xE9el", field(PROGRESS.get(), b"item"));
+    row(g, c, 300, b"Fichiers termin\xE9s dans cette \xE9tape", field(PROGRESS.get(), b"done"));
+    text(g.hdc, g.f.small, p.text3, c.right - 140, c.top + 300, b"Nombre total");
+    text(g.hdc, g.f.body, p.text, c.right - 140, c.top + 322, field(PROGRESS.get(), b"total"));
+    journal(g, c, 366, LOG.get());
+}
+pub unsafe fn tick(_f: &Frame) -> bool {
+    let changed = system_tick();
+    if updating() && GetTickCount().wrapping_sub(LAST_ANIMATION) > 90 { LAST_ANIMATION = GetTickCount(); return true; }
+    changed
+}

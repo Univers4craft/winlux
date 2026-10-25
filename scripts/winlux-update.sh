@@ -16,6 +16,17 @@ lock_owned=0
 transaction=0
 transaction_backup=
 updater_tools=
+recovered=0
+
+# Progress follows actual phases/files, not a synthetic timer. The inhibitor
+# is independent of the GUI so automatic updates are protected as well.
+progress() {
+    mkdir -p "$target_root/run/winlux" "$state_dir"
+    printf 'phase=%s\npercent=%s\ndone=%s\ntotal=%s\nitem=%s\n' "$1" "$2" "$3" "$4" "$5" >"$target_root/run/winlux/update-progress.new.$$"
+    mv -fT "$target_root/run/winlux/update-progress.new.$$" "$target_root/run/winlux/update-progress"
+}
+inhibit() { mkdir -p "$target_root/run/winlux"; printf '%s\n' "$$" >"$target_root/run/winlux/update-inhibit"; }
+boot_id() { sed -n '1p' "$target_root/proc/sys/kernel/random/boot_id" 2>/dev/null || echo unknown; }
 
 # State/configuration paths must not redirect a confined update onto the host.
 for internal in var var/lib var/lib/winlux run run/winlux etc etc/winlux; do
@@ -121,7 +132,11 @@ write_action() {
     mkdir -p "$target_root/run/winlux"
     requested_action=$1
     # A later runtime update must not hide a pending kernel reboot.
-    if test -f "$target_root/run/winlux/update-action" && grep -qx reboot "$target_root/run/winlux/update-action"; then requested_action=reboot; fi
+    if { test -f "$target_root/run/winlux/update-action" && grep -qx reboot "$target_root/run/winlux/update-action"; } || { test -f "$state_dir/pending-reboot"; }; then requested_action=reboot; fi
+    if test "$requested_action" = reboot; then
+        printf '%s\n' "$(boot_id)" >"$state_dir/pending-reboot.new"
+        mv -fT "$state_dir/pending-reboot.new" "$state_dir/pending-reboot"
+    fi
     printf '%s\n' "$requested_action" >"$target_root/run/winlux/update-action.new"
     mv -fT "$target_root/run/winlux/update-action.new" "$target_root/run/winlux/update-action"
 }
@@ -160,12 +175,17 @@ restore_backup() {
 cleanup() {
     status=$?; trap - EXIT HUP INT TERM
     if test "$transaction" -eq 1; then
+        progress restoring 0 0 0 'Restauration après interruption'
         echo "Installation interrompue : restauration des fichiers précédents." >&2
-        if restore_backup "$transaction_backup"; then rm -f "$state_dir/update-transaction";
+        if restore_backup "$transaction_backup"; then rm -f "$state_dir/update-transaction"; write_action reboot; tool sync;
         else echo "RESTAURATION INCOMPLÈTE : sauvegarde conservée dans $transaction_backup" >&2; fi
         status=1
     fi
-    if test "$lock_owned" -eq 1; then rm -f "$state_dir/update.lock/pid"; tool rmdir "$state_dir/update.lock" || true; fi
+    if test "$lock_owned" -eq 1; then
+        if test "$status" -ne 0 && test -f "$target_root/run/winlux/update-inhibit"; then progress error 0 0 0 'Échec : consulter le journal et la sauvegarde'; fi
+        rm -f "$target_root/run/winlux/update-inhibit" "$state_dir/update.lock/pid" "$state_dir/update.lock/boot-id"
+        tool rmdir "$state_dir/update.lock" || true
+    fi
     if test -n "$work"; then rm -rf "$work"; fi
     exit "$status"
 }
@@ -178,21 +198,28 @@ lock() {
         if test -d "$state_dir/update.lock" && ! test -L "$state_dir/update.lock" && test -f "$state_dir/update.lock/pid"; then
             previous_pid=$(sed -n '1p' "$state_dir/update.lock/pid")
             case "$previous_pid" in ''|*[!0-9]*) fail "verrou de mise à jour invalide" ;; esac
-            if ! kill -0 "$previous_pid" 2>/dev/null; then
-                rm -f "$state_dir/update.lock/pid"
+            previous_boot=$(sed -n '1p' "$state_dir/update.lock/boot-id" 2>/dev/null || true)
+            if ! kill -0 "$previous_pid" 2>/dev/null || { test -n "$previous_boot" && test "$previous_boot" != unknown && test "$previous_boot" != "$(boot_id)"; }; then
+                rm -f "$state_dir/update.lock/pid" "$state_dir/update.lock/boot-id"
                 tool rmdir "$state_dir/update.lock" || fail "verrou périmé non récupérable"
                 mkdir "$state_dir/update.lock" || fail "une mise à jour a démarré simultanément"
             else fail "une mise à jour est déjà en cours (PID $previous_pid)"; fi
         else fail "une mise à jour est déjà en cours (verrou $state_dir/update.lock)"; fi
     fi
     lock_owned=1; printf '%s\n' "$$" >"$state_dir/update.lock/pid"
+    boot_id >"$state_dir/update.lock/boot-id"
     prepare_tools
     if test -f "$state_dir/update-transaction"; then
         interrupted=$(sed -n '1p' "$state_dir/update-transaction")
         case "$interrupted" in update-backup.*) safe_name "$interrupted" || fail "journal invalide" ;; *) fail "journal invalide" ;; esac
         echo "Récupération de la dernière installation interrompue."
+        inhibit
+        progress restoring 0 0 0 'Récupération de la transaction interrompue'
         restore_backup "$state_dir/$interrupted" || fail "récupération impossible ; sauvegarde $state_dir/$interrupted conservée"
         rm -f "$state_dir/update-transaction"
+        recovered=1
+        write_action reboot
+        tool sync
     fi
 }
 download() {
@@ -289,6 +316,11 @@ list_updates() {
 
 mode=${1:-}
 case "$mode" in
+    --busy)
+        pid=$(sed -n '1p' "$target_root/run/winlux/update-inhibit" 2>/dev/null || true)
+        case "$pid" in ''|0|*[!0-9]*) exit 1 ;; esac
+        kill -0 "$pid" 2>/dev/null; exit $? ;;
+    --boot) test "$#" -eq 1 || fail 'arguments inattendus' ;;
     --list) test "$#" -eq 1 || fail "arguments inattendus"; list_updates; exit 0 ;;
     --auto)
         test "$#" -le 2 || fail "arguments inattendus"
@@ -310,6 +342,21 @@ case "$mode" in
     *) echo "usage : winlux-update --check | --list | --apply | --rollback | --auto enable|disable|status | --auto-run" >&2; exit 2 ;;
 esac
 lock
+if test "$mode" = --boot; then
+    if test -f "$state_dir/pending-reboot"; then
+        previous_boot=$(sed -n '1p' "$state_dir/pending-reboot")
+        this_boot=$(boot_id)
+        if test "$previous_boot" != unknown && test "$this_boot" != unknown && test "$previous_boot" != "$this_boot" && test "$recovered" = 0; then
+            rm -f "$state_dir/pending-reboot" "$target_root/run/winlux/update-action"
+            progress idle 100 0 0 'Mise à jour finalisée au démarrage'
+            tool sync
+        else printf 'reboot\n' >"$target_root/run/winlux/update-action"; fi
+    fi
+    if test "$recovered" = 1; then progress ready 100 0 0 'Système restauré : redémarrage conseillé';
+    else progress idle 100 0 0 'Démarrage du système terminé'; fi
+    exit 0
+fi
+if test "$mode" = --apply || test "$mode" = --rollback; then inhibit; progress checking 0 0 0 'Recherche et préparation'; fi
 if test "$mode" = --rollback; then
     test -f "$state_dir/rollback-current" || fail "aucune sauvegarde Winlux"
     backup_name=$(sed -n '1p' "$state_dir/rollback-current")
@@ -317,8 +364,10 @@ if test "$mode" = --rollback; then
     backup="$state_dir/$backup_name"
     action=$(value action "$backup/metadata") || fail "action de restauration absente"
     case "$action" in reboot|restart-session) ;; *) fail "action de restauration invalide" ;; esac
+    progress restoring 0 0 0 'Restauration de la sauvegarde'
     restore_backup "$backup" || fail "sauvegarde incomplète ou restauration impossible"
     write_action "$action"
+    progress ready 100 0 0 'Restauration terminée'
     echo "Retour à Winlux $(current_version) effectué. Action requise : $(sed -n '1p' "$target_root/run/winlux/update-action")."
     exit 0
 fi
@@ -327,14 +376,16 @@ if test -z "$work"; then work=$(mktemp -d "${TMPDIR:-/tmp}/winlux-update.XXXXXX"
 fetch_manifest "$work/manifest.txt"
 list_updates
 test "$mode" = --apply || exit 0
-if up_to_date; then exit 0; fi
+if up_to_date; then progress idle 100 0 0 'Winlux est déjà à jour'; exit 0; fi
 if test -n "${WINLUX_UPDATE_ASSET_DIR:-}"; then asset_source="file://$WINLUX_UPDATE_ASSET_DIR/$asset";
 elif test -n "$update_token" && test -n "${release_metadata:-}"; then
     asset_source=$(asset_api_url "$asset" "$release_metadata")
     test -n "$asset_source" || fail "actif $asset absent de la dernière release"
 else asset_source="https://github.com/$repository/releases/download/$version/$asset"; fi
 bundle="$work/bundle.tar.gz"
+progress downloading 0 0 0 "$asset"
 download "$asset_source" "$bundle"
+progress verifying 10 0 0 'Vérification SHA-256 et inventaire'
 test "$(sha256sum "$bundle" | cut -d' ' -f1)" = "$checksum" || fail "échec de la vérification SHA-256"
 tar -tzf "$bundle" >"$work/archive.list"
 tar -tvzf "$bundle" >"$work/archive.types"
@@ -432,7 +483,9 @@ mkdir -p "$transaction_backup/files"
 : >"$transaction_backup/restore.list"
 printf 'action=%s\n' "$action" >"$transaction_backup/metadata"
 if test -f "$state_dir/installed-files"; then cp "$state_dir/installed-files" "$transaction_backup/installed-files.before"; fi
+progress_total=$(wc -l <"$work/targets.sorted"); progress_done=0
 while IFS= read -r path; do
+    progress backing-up "$((20 + progress_done * 20 / (progress_total + 1)))" "$progress_done" "$progress_total" "$path"
     original="$target_root/$path"
     if test -L "$original"; then
         link_target=$(tool readlink "$original")
@@ -446,25 +499,31 @@ while IFS= read -r path; do
         printf 'F %s - %s\n' "$(sha256sum "$original" | cut -d' ' -f1)" "$path" >>"$transaction_backup/restore.list"
     elif test -e "$original"; then fail "type installé non pris en charge : $path";
     else printf 'A - - %s\n' "$path" >>"$transaction_backup/restore.list"; fi
+    progress_done=$((progress_done + 1))
 done <"$work/targets.sorted"
 printf '%s\n' "${transaction_backup##*/}" >"$state_dir/update-transaction.new"
 mv -fT "$state_dir/update-transaction.new" "$state_dir/update-transaction"
 tool sync
 transaction=1
+progress_total=$(( $(wc -l <"$files") + $(wc -l <"$links") )); progress_done=0
 while read -r digest file_mode path; do
+    progress installing "$((40 + progress_done * 55 / (progress_total + 1)))" "$progress_done" "$progress_total" "$path"
     destination="$target_root/$path"
     mkdir -p "${destination%/*}"
     rm -f "$destination.winlux-new.$$"
     cp "$payload/$path" "$destination.winlux-new.$$"
     tool chmod "$file_mode" "$destination.winlux-new.$$"
     mv -fT "$destination.winlux-new.$$" "$destination"
+    progress_done=$((progress_done + 1))
 done <"$files"
 while read -r path link_target; do
+    progress installing "$((40 + progress_done * 55 / (progress_total + 1)))" "$progress_done" "$progress_total" "$path"
     destination="$target_root/$path"
     mkdir -p "${destination%/*}"
     rm -f "$destination.winlux-new.$$"
     tool ln -s "$link_target" "$destination.winlux-new.$$"
     mv -fT "$destination.winlux-new.$$" "$destination"
+    progress_done=$((progress_done + 1))
 done <"$links"
 if test "$scope" = system; then
     while IFS= read -r path; do if ! grep -Fxq "$path" "$work/new-files"; then rm -f "$target_root/$path"; fi; done <"$work/targets.sorted"
@@ -474,8 +533,11 @@ mv -fT "$state_dir/installed-files.new" "$state_dir/installed-files"
 printf '%s\n' "${transaction_backup##*/}" >"$state_dir/rollback-current.new"
 mv -fT "$state_dir/rollback-current.new" "$state_dir/rollback-current"
 write_action "$action"
+progress finalizing 98 "$progress_done" "$progress_total" 'Synchronisation des fichiers sur disque'
 tool sync
 rm -f "$state_dir/update-transaction"
 transaction=0
+tool sync
+progress ready 100 "$progress_done" "$progress_total" 'Installation terminée : redémarrage conseillé'
 echo "Winlux $version installé ($scope). Sauvegarde complète disponible avec --rollback."
 echo "Action requise : $(sed -n '1p' "$target_root/run/winlux/update-action"). Les redémarrages du système restent soumis à votre accord."

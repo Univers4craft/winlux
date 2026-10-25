@@ -10,6 +10,8 @@ stage="$test_root/stage"
 boot="$test_root/boot"
 assets="$test_root/assets"
 mkdir -p "$fixture/usr/bin" "$fixture/usr/share/winlux" "$fixture/home/user" "$fixture/etc/winlux" "$assets"
+mkdir -p "$fixture/proc/sys/kernel/random"
+printf 'boot-a\n' >"$fixture/proc/sys/kernel/random/boot_id"
 printf '#!/bin/sh\necho old\n' >"$fixture/usr/bin/winlux"
 chmod 755 "$fixture/usr/bin/winlux"
 printf 'old\n' >"$fixture/usr/share/winlux/version"
@@ -85,6 +87,9 @@ rm "$fixture/etc/winlux/update.token"
 WINLUX_UPDATE_ROOT="$fixture" WINLUX_UPDATE_MANIFEST=file:///not-present "$updater" --list | grep -q 'runtime,updater'
 update --apply
 test "$(cat "$fixture/usr/share/winlux/version")" = updater-runtime
+grep -qx 'phase=ready' "$fixture/run/winlux/update-progress"
+test "$(sed -n 's/^done=//p' "$fixture/run/winlux/update-progress")" = "$(sed -n 's/^total=//p' "$fixture/run/winlux/update-progress")"
+if update --busy; then echo 'inhibiteur non libéré après installation' >&2; exit 1; fi
 test "$("$fixture/usr/bin/winlux")" = new
 test "$(cat "$fixture/run/winlux/update-action")" = restart-session
 cmp -s "$updater" "$fixture/usr/bin/winlux-update"
@@ -113,9 +118,10 @@ printf '%s\n' "$saved_backup" >"$fixture/var/lib/winlux/update-transaction"
 printf '#!/bin/sh\necho interrupted\n' >"$fixture/usr/bin/winlux"
 mkdir "$fixture/var/lib/winlux/update.lock"
 printf '2147483647\n' >"$fixture/var/lib/winlux/update.lock/pid"
-update --check >/dev/null
+update --boot >/dev/null
 test "$("$fixture/usr/bin/winlux")" = old
 test ! -e "$fixture/var/lib/winlux/update-transaction"
+grep -qx 'reboot' "$fixture/run/winlux/update-action"
 
 # A bad checksum, duplicate record, unexpected payload, or archive link must fail
 # before changing the installed version or touching the user's files.
@@ -229,6 +235,13 @@ test "$(update --auto status)" = disabled
 
 # An otherwise identical system bundle with only a desktop change restarts the
 # session; a changed kernel requires a reboot. Directory links remain links.
+# A session/process restart is not a reboot; a cold start is a new boot ID.
+update --boot
+test -f "$fixture/var/lib/winlux/pending-reboot"
+printf 'boot-b\n' >"$fixture/proc/sys/kernel/random/boot_id"
+update --boot
+test ! -f "$fixture/var/lib/winlux/pending-reboot"
+test ! -f "$fixture/run/winlux/update-action"
 printf 'desktop-newer\n' >"$stage/opt/winlux/tests/gui_demo.exe"
 ln -s /usr/share/winlux "$stage/usr/share/directory-link"
 printf 'updater-desktop\n' >"$stage/usr/share/winlux/version"
@@ -236,7 +249,7 @@ if test -f "$root/scripts/source-fingerprint.sh"; then sh "$root/scripts/source-
 WINLUX_UPDATE_STAGE="$stage" WINLUX_UPDATE_BOOT="$boot" "$root/scripts/build-update-bundle.sh" --system updater-desktop >/dev/null
 cp "$root/build/winlux-update-updater-desktop.tar.gz" "$assets/"
 cp "$root/build/winlux-update-manifest.txt" "$assets/manifest.txt"
-rm "$fixture/run/winlux/update-action"
+rm -f "$fixture/run/winlux/update-action"
 PATH="$test_root/busybox-tools" WINLUX_UPDATE_ROOT="$fixture" WINLUX_UPDATE_MANIFEST="file://$assets/manifest.txt" WINLUX_UPDATE_ASSET_DIR="$assets" /bin/busybox sh "$updater" --apply
 test "$(cat "$fixture/run/winlux/update-action")" = restart-session
 test -L "$fixture/usr/share/directory-link"

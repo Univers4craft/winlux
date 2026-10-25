@@ -67,6 +67,8 @@ cp "$root/target/release/winlux" "$stage/usr/bin/winlux"
 cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
 cp "$root/scripts/winlux-control.sh" "$stage/usr/bin/winlux-control"
 cp "$root/scripts/winlux-network.sh" "$stage/usr/bin/winlux-network"
+cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
+chmod 755 "$stage/usr/bin/winlux-display"
 mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
 cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
@@ -285,6 +287,25 @@ umask 077
 /bin/busybox mkdir -p /dev/shm /dev/pts
 /bin/busybox mount -t tmpfs -o mode=1777 tmpfs /dev/shm 2>/dev/null || true
 /bin/busybox mount -t devpts devpts /dev/pts 2>/dev/null || true
+/bin/busybox mount -t tmpfs -o mode=0755 tmpfs /run 2>/dev/null || true
+/bin/busybox mount -t tmpfs -o mode=1777 tmpfs /tmp 2>/dev/null || true
+/bin/busybox mkdir -p /run/winlux
+safe_power() {
+    if /usr/bin/winlux-update --busy; then
+        echo 'Installation en cours : arrêt/redémarrage différé. Réessayez après la fin.'
+        return
+    fi
+    /bin/busybox sync
+    /bin/busybox mount -o remount,ro / 2>/dev/null || true
+    /bin/busybox "$1" -f
+}
+trap 'safe_power poweroff' USR2
+trap 'safe_power reboot' TERM
+# Recovery uses static BusyBox before loading drivers/shared user services.
+while ! /usr/bin/winlux-update --boot >/run/winlux/boot-update.log 2>&1; do
+    echo 'Récupération système impossible. Bureau bloqué, journal : /run/winlux/boot-update.log'
+    /bin/sh
+done
 /usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio_dma_buf.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-gpu.ko 2>/dev/null || true
@@ -311,8 +332,6 @@ echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
 # explicitly so the graphical power button really shuts down the guest.
-trap '/bin/busybox sync; /bin/busybox poweroff -f' USR2
-trap '/bin/busybox sync; /bin/busybox reboot -f' TERM
 /usr/bin/winlux-network start &
 if /bin/busybox grep -qw 'winlux.smoke=1' /proc/cmdline; then
     # An explicit diagnostic boot, only used with a disposable test disk.
@@ -369,12 +388,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
                 modes=$(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox grep -E '[*+]' | /bin/busybox tr -s ' ' | /bin/busybox tr '\n' ';')
                 if test "$modes" != "${last_modes:-}"; then echo "Winlux xrandr: $modes"; last_modes=$modes; fi
             fi
-            # Sorties dont le mode préféré (+) n'est pas le mode actif (*).
-            for output in $(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox awk '
-                / connected/ { name=$1; next }
-                /^ +[0-9]+x[0-9]+/ && /\+/ && !/\*/ && name != "" { print name; name="" }'); do
-                DISPLAY=:0 /usr/bin/xrandr --output "$output" --auto 2>/dev/null || true
-            done
+            # Follow the preferred VM mode, or keep the user's fixed mode.
+            DISPLAY=:0 /usr/bin/winlux-display sync 2>/dev/null || true
             /bin/busybox sleep 1
         done
     ) &
@@ -396,6 +411,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         elif test "${screen_height:-0}" -ge 1400; then ui_scale=1.5
         elif test "${screen_height:-0}" -ge 1000; then ui_scale=1.25
         fi
+        saved_scale=$(/bin/busybox sed -n 's/^UI_SCALE=//p' /etc/winlux/display.conf 2>/dev/null)
+        case "$saved_scale" in 1|1.25|1.5|2) ui_scale=$saved_scale ;; esac
         input_diag=
         if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then input_diag=1; fi
         tray_battery=0
@@ -414,7 +431,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         while /bin/busybox kill -0 "$desktop_pid" 2>/dev/null; do
             request=$(/bin/busybox cat /run/winlux/session-action 2>/dev/null)
             update=$(/bin/busybox cat /run/winlux/update-action 2>/dev/null)
-            if test "$request" = restart-session || test "$update" = restart-session; then
+            if test "$request" = restart-session && ! /usr/bin/winlux-update --busy; then
                 /bin/busybox rm -f /run/winlux/session-action
                 if test "$update" = restart-session; then /bin/busybox rm -f /run/winlux/update-action; fi
                 /bin/busybox kill "$desktop_pid" 2>/dev/null || true
