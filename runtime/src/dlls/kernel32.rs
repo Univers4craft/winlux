@@ -828,6 +828,56 @@ pub extern "win64" fn set_event(h:usize)->i32{let Some(SyncHandle::Event(v))=loo
 pub extern "win64" fn reset_event(h:usize)->i32{let Some(SyncHandle::Event(v))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};let _gate=sync_gate();*lock(&v.signaled)=false;1}
 pub unsafe extern "win64" fn create_mutex_a(_sec:usize,initial:i32,name:*const u8)->usize{let obj=SyncHandle::Mutex(Arc::new(MutexObject{state:Mutex::new(MutexState{owner:if initial!=0{Some(std::thread::current().id())}else{None},recursion:usize::from(initial!=0)}),changed:Condvar::new()}));add_sync(obj,named_event(name))}
 pub extern "win64" fn release_mutex(h:usize)->i32{let Some(SyncHandle::Mutex(m))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};if leave_mutex(&m){1}else{0}}
+
+unsafe fn open_named_sync(name: *const u8, event: bool) -> usize {
+    if name.is_null() { crate::process::set_last_error(87); return 0; }
+    let key = crate::dlls::cstr(name).to_lowercase();
+    let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
+    let Some((object, count)) = names.get_mut(&key) else {
+        crate::process::set_last_error(2); return 0;
+    };
+    if !matches!((&*object, event), (SyncHandle::Event(_), true) | (SyncHandle::Mutex(_), false)) {
+        crate::process::set_last_error(6); return 0;
+    }
+    let h = next_handle();
+    lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, object.clone());
+    *count += 1;
+    h
+}
+#[cfg(test)]
+mod reviewed_named_sync_tests {
+    use super::*;
+    #[test]
+    fn opened_event_keeps_name_alive_until_last_close() {
+        unsafe {
+            let name = b"winlux-reviewed-event\0";
+            let first = create_event_a(0, 1, 1, name.as_ptr());
+            let second = open_event_a(0, 0, name.as_ptr());
+            assert_ne!(second, 0);
+            assert_eq!(open_mutex_a(0, 0, name.as_ptr()), 0);
+            assert_eq!(close_handle(first), 1);
+            let third = open_event_a(0, 0, name.as_ptr());
+            assert_ne!(third, 0);
+            assert_eq!(wait_for_single_object(third, 0), 0);
+            assert_eq!(close_handle(second), 1);
+            assert_eq!(close_handle(third), 1);
+            assert_eq!(open_event_a(0, 0, name.as_ptr()), 0);
+            let mutex = create_mutex_a(0, 0, name.as_ptr());
+            let opened = open_mutex_a(0, 0, name.as_ptr());
+            assert_ne!(opened, 0);
+            assert_eq!(close_handle(mutex), 1);
+            assert_eq!(close_handle(opened), 1);
+        }
+    }
+}
+pub unsafe extern "win64" fn open_event_a(_access: u32, _inherit: i32, name: *const u8) -> usize {
+    if _inherit != 0 { crate::process::set_last_error(50); return 0; }
+    open_named_sync(name, true)
+}
+pub unsafe extern "win64" fn open_mutex_a(_access: u32, _inherit: i32, name: *const u8) -> usize {
+    if _inherit != 0 { crate::process::set_last_error(50); return 0; }
+    open_named_sync(name, false)
+}
 pub extern "win64" fn wait_for_single_object(h:usize,timeout:u32)->u32{let Some(obj)=lookup_sync(h)else{crate::process::set_last_error(6);return u32::MAX;};match obj{SyncHandle::Event(e)=>wait_event(&e,timeout),SyncHandle::Mutex(m)=>wait_mutex(&m,timeout),SyncHandle::Thread(t)=>wait_thread(&t,timeout),SyncHandle::Process(p)=>wait_process(&p,timeout),SyncHandle::CompletionPort(p)=>wait_iocp(&p,timeout)}}
 pub unsafe extern "win64" fn wait_for_multiple_objects(count:u32,handles:*const usize,wait_all:i32,timeout:u32)->u32{
     if count==0||count>64||handles.is_null(){crate::process::set_last_error(87);return u32::MAX;}
@@ -1536,7 +1586,8 @@ pub fn exports() -> crate::dlls::Exports { crate::exports! {
   "GetLongPathNameA"=>fn get_long_path_name_a,"GetLongPathNameW"=>fn get_long_path_name_w,"GetShortPathNameA"=>fn get_short_path_name_a,"GetShortPathNameW"=>fn get_short_path_name_w,
   "CompareStringA"=>fn compare_string_a,"CompareStringW"=>fn compare_string_w,"CompareStringOrdinal"=>fn compare_string_ordinal,
   "GetStringTypeW"=>fn get_string_type_w,
-  "LCMapStringW"=>fn lc_map_string_w
+  "LCMapStringW"=>fn lc_map_string_w,
+  "OpenEventA"=>fn open_event_a,"OpenMutexA"=>fn open_mutex_a
   } }
 
 #[cfg(test)]

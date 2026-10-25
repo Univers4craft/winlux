@@ -450,10 +450,15 @@ pub unsafe extern "win64" fn rtl_pc_to_file_header(
     pc: *const c_void, base: *mut *const c_void,
 ) -> *const c_void {
     if base.is_null() { return std::ptr::null(); }
-    // Renvoie le module principal comme base par défaut.
-    let b = crate::process::peb();
-    if b != 0 { *base = b as *const c_void; b as *const c_void }
-    else { *base = pc; pc }
+    let modules = crate::loader::MODULES.lock().unwrap();
+    for module in modules.iter() {
+        if module.contains(pc as usize) {
+            *base = module.base as *const c_void;
+            return *base;
+        }
+    }
+    *base = std::ptr::null();
+    std::ptr::null()
 }
 
 // ============================================================
