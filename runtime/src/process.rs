@@ -30,6 +30,7 @@ pub const PEB_IMAGE_BASE: usize = 0x10;
 pub const PEB_PROCESS_PARAMETERS: usize = 0x20;
 pub const PEB_PROCESS_HEAP: usize = 0x30;
 
+pub const DLL_PROCESS_DETACH: u32 = 0;
 pub const DLL_PROCESS_ATTACH: u32 = 1;
 pub const DLL_THREAD_ATTACH: u32 = 2;
 pub const DLL_THREAD_DETACH: u32 = 3;

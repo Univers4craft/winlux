@@ -809,7 +809,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         check!(dyn_ok, "LoadLibrary/GetProcAddress DLL dynamique");
         check!(
             FreeLibrary(dyn_dll) != 0,
-            "FreeLibrary conserve la DLL jusqu'à la fin du processus"
+            "FreeLibrary décharge la DLL"
         );
         check!(
             GetCurrentProcess() as usize == usize::MAX

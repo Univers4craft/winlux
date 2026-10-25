@@ -30,6 +30,7 @@ pub struct Module {
     pub pe: PeImage,
     pub tls: Option<TlsInfo>,
     pub initialized: bool,
+    pub ref_count: usize,
 }
 
 impl Module {
@@ -71,8 +72,48 @@ pub fn find_module_by_name(name: &str) -> Option<Module> {
         .cloned()
 }
 
+pub fn find_module_by_path(path: &Path) -> Option<Module> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    MODULES
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|m| m.path == canonical || m.path == path)
+        .cloned()
+}
+
 pub fn main_module() -> Option<Module> {
     MODULES.lock().unwrap().first().cloned()
+}
+
+pub fn increment_ref(base: usize) {
+    let mut mods = MODULES.lock().unwrap();
+    if let Some(m) = mods.iter_mut().find(|m| m.base == base) {
+        m.ref_count = m.ref_count.saturating_add(1);
+    }
+}
+
+pub fn decrement_ref(base: usize) -> Option<usize> {
+    let mut mods = MODULES.lock().unwrap();
+    if let Some(m) = mods.iter_mut().find(|m| m.base == base) {
+        m.ref_count = m.ref_count.saturating_sub(1);
+        Some(m.ref_count)
+    } else {
+        None
+    }
+}
+
+pub fn remove_module(base: usize) -> Option<Module> {
+    let mut mods = MODULES.lock().unwrap();
+    if let Some(pos) = mods.iter().position(|m| m.base == base) {
+        // Ne jamais retirer l'exécutable principal (index 0).
+        if pos == 0 {
+            return None;
+        }
+        Some(mods.remove(pos))
+    } else {
+        None
+    }
 }
 
 fn round_up(v: usize, a: usize) -> usize {
@@ -103,6 +144,11 @@ unsafe fn map_at(hint: usize, size: usize, fixed: bool) -> Option<usize> {
 
 /// Charge un module et toutes ses dépendances. Renvoie l'index dans MODULES.
 pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
+    // Si le module est déjà chargé, incrémenter le compteur de références.
+    if let Some(existing) = find_module_by_path(path) {
+        increment_ref(existing.base);
+        return Ok(existing);
+    }
     let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
     let pe = PeImage::parse(&file).map_err(|e| format!("{} : {e}", path.display()))?;
     let size = round_up(pe.size_of_image as usize, PAGE);
@@ -172,6 +218,7 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
         pe,
         tls: None,
         initialized: false,
+        ref_count: 1,
     };
 
     let delta = base.wrapping_sub(m.pe.image_base as usize);
@@ -595,6 +642,7 @@ mod tests {
             },
             tls: None,
             initialized: false,
+            ref_count: 1,
         };
         assert_eq!(export_by_name(&m, "demo"), Some(m.base + 0x250));
         assert_eq!(export_by_ordinal(&m, 7), Some(m.base + 0x250));
@@ -624,6 +672,7 @@ mod tests {
             },
             tls: None,
             initialized: false,
+            ref_count: 1,
         };
         assert_eq!(delay_rva(&m, 1, 0x120).unwrap(), 0x120);
         assert_eq!(delay_rva(&m, 0, 0x1100).unwrap(), 0x100);
@@ -668,6 +717,7 @@ mod tests {
             },
             tls: None,
             initialized: false,
+            ref_count: 1,
         };
         resolve_imports(&m).unwrap();
         assert_ne!(unsafe { *(m.base as *const usize).add(0x1a0 / 8) }, 0);

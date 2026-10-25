@@ -1901,6 +1901,7 @@ pub unsafe extern "win64" fn load_library_a(name: *const u8) -> usize {
         return 0;
     }
     if let Some(h) = crate::dlls::module_handle(&n) {
+        crate::loader::increment_ref(h);
         return h;
     }
     let Some(importer) = crate::loader::main_module() else {
@@ -1936,15 +1937,32 @@ pub unsafe extern "win64" fn load_library_w(name: *const u16) -> usize {
     };
     load_library_a(s.as_ptr() as *const u8)
 }
-pub extern "win64" fn free_library(module: usize) -> i32 {
+pub unsafe extern "win64" fn free_library(module: usize) -> i32 {
     if crate::dlls::builtin_by_handle(module).is_some() {
         return 1;
     }
-    if crate::loader::find_module_by_addr(module).is_some_and(|m| m.base == module) {
-        1
-    } else {
+    let Some(m) = crate::loader::find_module_by_addr(module).filter(|m| m.base == module) else {
         crate::process::set_last_error(6);
-        0
+        return 0;
+    };
+    match crate::loader::decrement_ref(module) {
+        Some(0) => {
+            if m.initialized {
+                if let Some(entry) = m.entry() {
+                    let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
+                        std::mem::transmute(entry);
+                    dllmain(m.base, crate::process::DLL_PROCESS_DETACH, 0);
+                }
+            }
+            crate::loader::remove_module(module);
+            libc::munmap(m.base as *mut _, m.size);
+            1
+        }
+        Some(_) => 1,
+        None => {
+            crate::process::set_last_error(6);
+            0
+        }
     }
 }
 pub extern "win64" fn get_current_process() -> usize {

@@ -101,7 +101,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Implémenter `CREATE_SUSPENDED`/`ResumeThread` pour les enfants via un lanceur Linux suspendu avant l’exécution du programme.
 - [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
-- [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
+- [ ] Continuer `ntdll` : TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes (exceptions/unwinding SEH implémentés).
 - [x] Étendre la CRT : chaînes étroites/larges, conversions (`strtol`, `strtod`, `_itoa`, `_itow`), classification de caractères, fonctions mathématiques, `qsort`/`bsearch` et formatage borné (`_snprintf`, `_snwprintf`), avec tests unitaires et PE (`crt_suite`).
 - [x] Ajouter les flux `FILE*` de la CRT (`fopen`/`fclose`, `fread`/`fwrite`, `fgets`/`fputs`, `fseek`/`ftell`, `feof`, `fprintf`, `vfprintf`, `vsprintf`, `remove`/`rename`) avec tests unitaires et PE.
 - [x] Ajouter les entrées formatées `scanf`/`sscanf`/`fscanf` et leurs variantes `v*` (entiers, flottants, chaînes, jeux de caractères, largeur, `*`, `%n`) avec tests unitaires et PE.
@@ -113,9 +113,9 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
 - [x] Décoder MP3 et AAC ADTS mono/stéréo dans PlaySound, tester limites mémoire, concurrence et sortie ALSA null ; inclure les bibliothèques dans l'ISO.
 - [ ] Ajouter les autres formats audio compressés et les codecs vidéo ; Media Foundation/DirectShow ne constituent pas encore une chaîne de lecture complète.
-- [ ] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (elles restent mappées jusqu’à la fin du processus).
+- [x] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (compteur de références, `DllMain(DLL_PROCESS_DETACH)` et `munmap`).
 - [x] Exécuter de vrais programmes C compilés par MinGW-w64 : démarrage de la CRT msvcrt (`__getmainargs`, `_initterm`, constructeurs globaux, `atexit`/`_onexit`, `_iob`/`__iob_func`), `_errno`, verrous `_lock`, environnement, temps (`time`, `localtime`, `strftime`, `clock`), `rand` Microsoft, E/S bas niveau `_open`/`_read`/`_write`, signaux, `_beginthreadex`; compléments kernel32 (console, pages de code, `GetEnvironmentStrings`, `FormatMessage`, `lstr*`, `RaiseException`…). Vérifié par `testc/mingw_suite.c` (40 contrôles) en CI.
-- [ ] Faire tourner des programmes C++ MinGW (exceptions : `RtlUnwindEx`, `RtlVirtualUnwind`, `RtlLookupFunctionEntry`) et des exécutables MSVC/clang-cl réels.
+- [ ] Faire tourner des programmes C++ MinGW (déroulement SEH implémenté : `RtlCaptureContext`, `RtlVirtualUnwind`, `RtlUnwindEx` ; test `cpp_exceptions.cpp` ajouté) et des exécutables MSVC/clang-cl réels.
 - [x] Documenter explicitement les limites : 64 bits uniquement, absence de noyau Windows et compatibilité API partielle.
 
 ## Priorité 3 — Double-clic et intégration Linux
