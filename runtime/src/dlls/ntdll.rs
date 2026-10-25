@@ -564,12 +564,44 @@ pub unsafe extern "win64" fn rtl_capture_context(ctx: *mut c_void) {
     std::ptr::write_unaligned(ctx as *mut u32, 0x0010_001F);
 }
 
-/// `RtlLookupFunctionEntry` : stub, renvoie NULL (pas de table d'exception).
+/// `RtlLookupFunctionEntry` : cherche l'entrée RUNTIME_FUNCTION dans le
+/// répertoire d'exceptions (.pdata) du module contenant `pc`.
 pub unsafe extern "win64" fn rtl_lookup_function_entry(
-    _pc: u64,
-    _image_base: *mut u64,
+    pc: u64,
+    image_base: *mut u64,
     _history: *mut c_void,
 ) -> *mut c_void {
+    let Some(m) = crate::loader::find_module_by_addr(pc as usize) else {
+        return std::ptr::null_mut();
+    };
+    let base = m.base;
+    if !image_base.is_null() {
+        *image_base = base as u64;
+    }
+    // Data directory index 3 = IMAGE_DIRECTORY_ENTRY_EXCEPTION
+    let Some(dir) = m.pe.dirs.get(3) else {
+        return std::ptr::null_mut();
+    };
+    if dir.rva == 0 || dir.size == 0 {
+        return std::ptr::null_mut();
+    }
+    let rva = (pc as usize).wrapping_sub(base) as u32;
+    let table = (base + dir.rva as usize) as *const [u32; 3];
+    let count = dir.size as usize / 12;
+    // Binary search: the table is sorted by BeginAddress.
+    let mut lo = 0usize;
+    let mut hi = count;
+    while lo < hi {
+        let mid = lo + (hi - lo) / 2;
+        let entry = &*table.add(mid);
+        if rva < entry[0] {
+            hi = mid;
+        } else if rva >= entry[1] {
+            lo = mid + 1;
+        } else {
+            return table.add(mid) as *mut c_void;
+        }
+    }
     std::ptr::null_mut()
 }
 
