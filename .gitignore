@@ -2,3 +2,4 @@ target/
 /build/
 *.iso
 *.qcow2
+.claude/
