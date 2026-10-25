@@ -452,3 +452,129 @@ pub unsafe fn tick(_f: &Frame) -> bool {
     if updating() && GetTickCount().wrapping_sub(LAST_ANIMATION) > 90 { LAST_ANIMATION = GetTickCount(); return true; }
     changed
 }
+
+/// Applique les effets secondaires des bascules (thème, barre des tâches…).
+unsafe fn apply_toggle_effects() {
+    DARK = DARK_MODE;
+    crate::gfx::HIGH_CONTRAST = HIGH_CONTRAST;
+    crate::desktop::ALIGN_LEFT = TASKBAR_LEFT;
+    crate::desktop::VOLUME_LEVEL = VOLUME as u32;
+    save_preferences();
+}
+
+// ── Persistance des préférences ────────────────────────────────────
+
+const PREFS_DIR: &core::ffi::CStr = c"C:\\.config\\winlux";
+const PREFS_PATH: &core::ffi::CStr = c"C:\\.config\\winlux\\preferences.conf";
+static mut PREFS_LOADED: bool = false;
+
+unsafe fn save_preferences() {
+    use winlux_testexe::*;
+    CreateDirectoryA(c"C:\\.config".as_ptr(), core::ptr::null_mut());
+    CreateDirectoryA(PREFS_DIR.as_ptr(), core::ptr::null_mut());
+    let h = CreateFileA(PREFS_PATH.as_ptr(), 0x40000000, 0, core::ptr::null_mut(), 2, 0x80, core::ptr::null_mut());
+    if h as isize == -1 { return; }
+    let mut buf = [0u8; 256];
+    let mut n = 0usize;
+    let align: &[u8] = if TASKBAR_LEFT { b"TASKBAR_ALIGN=left\n" } else { b"TASKBAR_ALIGN=center\n" };
+    buf[n..n + align.len()].copy_from_slice(align); n += align.len();
+    let theme: &[u8] = if DARK_MODE { b"THEME=dark\n" } else { b"THEME=light\n" };
+    buf[n..n + theme.len()].copy_from_slice(theme); n += theme.len();
+    let hc: &[u8] = if HIGH_CONTRAST { b"HIGH_CONTRAST=1\n" } else { b"HIGH_CONTRAST=0\n" };
+    buf[n..n + hc.len()].copy_from_slice(hc); n += hc.len();
+    let acc = crate::gfx::ACCENT;
+    let hex = b"0123456789ABCDEF";
+    let prefix = b"ACCENT=0x";
+    buf[n..n + prefix.len()].copy_from_slice(prefix); n += prefix.len();
+    for shift in [20u32, 16, 12, 8, 4, 0] {
+        buf[n] = hex[((acc >> shift) & 0xF) as usize]; n += 1;
+    }
+    buf[n] = b'\n'; n += 1;
+    let mut written = 0u32;
+    WriteFile(h, buf.as_ptr(), n as u32, &mut written, core::ptr::null_mut());
+    CloseHandle(h);
+}
+
+unsafe fn load_preferences() {
+    use winlux_testexe::*;
+    let h = CreateFileA(PREFS_PATH.as_ptr(), 0x80000000u32, 1, core::ptr::null_mut(), 3, 0x80, core::ptr::null_mut());
+    if h as isize == -1 { return; }
+    let mut buf = [0u8; 512];
+    let mut nread = 0u32;
+    ReadFile(h, buf.as_mut_ptr(), buf.len() as u32, &mut nread, core::ptr::null_mut());
+    CloseHandle(h);
+    let data = &buf[..nread as usize];
+    for line in data.split(|&c| c == b'\n') {
+        if line.is_empty() { continue; }
+        if let Some(pos) = line.iter().position(|&c| c == b'=') {
+            let (key, val) = (&line[..pos], &line[pos + 1..]);
+            match key {
+                b"TASKBAR_ALIGN" => {
+                    TASKBAR_LEFT = val == b"left";
+                    crate::desktop::ALIGN_LEFT = TASKBAR_LEFT;
+                }
+                b"THEME" => {
+                    DARK_MODE = val != b"light";
+                    DARK = DARK_MODE;
+                }
+                b"HIGH_CONTRAST" => {
+                    HIGH_CONTRAST = val == b"1";
+                    crate::gfx::HIGH_CONTRAST = HIGH_CONTRAST;
+                }
+                b"ACCENT" => {
+                    if val.len() >= 4 {
+                        let hex_str = if val.starts_with(b"0x") || val.starts_with(b"0X") { &val[2..] } else { val };
+                        let mut v = 0u32;
+                        for &c in hex_str {
+                            let d = match c {
+                                b'0'..=b'9' => c - b'0',
+                                b'a'..=b'f' => c - b'a' + 10,
+                                b'A'..=b'F' => c - b'A' + 10,
+                                _ => break,
+                            };
+                            v = (v << 4) | d as u32;
+                        }
+                        if v != 0 { crate::gfx::ACCENT = v; }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+// ── Commandes externes ─────────────────────────────────────────────
+
+pub unsafe fn control(cmd: &core::ffi::CStr) {
+    let s = cmd.to_bytes();
+    match s {
+        b"align-left" => {
+            TASKBAR_LEFT = true;
+            apply_toggle_effects();
+        }
+        b"align-center" => {
+            TASKBAR_LEFT = false;
+            apply_toggle_effects();
+        }
+        b"poweroff" => {
+            crate::desktop::toast(b"Arr\xEAt en cours\x85");
+        }
+        _ => {}
+    }
+}
+
+pub unsafe fn open_page(index: usize) {
+    if index < CATS.len() {
+        CUR_CAT = CATS[index];
+        SCROLL_Y = 0;
+    }
+    crate::wm::open(crate::wm::APP_SETTINGS);
+}
+
+pub unsafe fn system_tick() -> bool {
+    if !PREFS_LOADED {
+        PREFS_LOADED = true;
+        load_preferences();
+    }
+    false
+}

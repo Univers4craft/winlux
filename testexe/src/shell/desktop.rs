@@ -51,6 +51,11 @@ static mut TOAST: [u8; 120] = [0; 120];
 static mut TOAST_LEN: usize = 0;
 static mut TOAST_START: u32 = 0;
 const TOAST_MS: i32 = 4500;
+/// Panneau de notifications (centre d'action simplifié).
+static mut NOTIF_PANEL: bool = false;
+static mut NOTIF_HISTORY: [[u8; 120]; 8] = [[0; 120]; 8];
+static mut NOTIF_LENS: [usize; 8] = [0; 8];
+static mut NOTIF_COUNT: usize = 0;
 /// Atténuation du fond (0 = noir, 1000 = normal) pendant le fondu.
 static mut FADE: i32 = 1000;
 
@@ -118,11 +123,62 @@ unsafe fn set_start(open: bool) {
     if open { START_OPEN = true; START_CLOSING = false; } else if START_OPEN { START_CLOSING = true; }
 }
 
-// ---------- Fond d'écran « bloom » ----------
+// ---------- Fond d'écran ----------
 
 fn fc(c: u32) -> u32 { unsafe { if FADE >= 1000 { c } else { mix(0, c, FADE, 1000) } } }
 
-unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
+static mut WP_DC: Handle = core::ptr::null_mut();
+static mut WP_W: i32 = 0;
+static mut WP_H: i32 = 0;
+static mut WP_TRIED: bool = false;
+
+unsafe fn load_wallpaper(hdc: Handle) {
+    if WP_TRIED { return; }
+    WP_TRIED = true;
+    let path = c"Z:\\usr\\share\\winlux\\wallpaper.bmp";
+    let f = CreateFileA(path.as_ptr(), 0x8000_0000, 1, core::ptr::null_mut(), 3, 0, core::ptr::null_mut());
+    if f.is_null() || f == -1isize as Handle { return; }
+    let fsize = GetFileSize(f, core::ptr::null_mut());
+    if fsize < 54 + 12 { CloseHandle(f); return; }
+    let mut hdr = [0u8; 54];
+    let mut read = 0u32;
+    ReadFile(f, hdr.as_mut_ptr(), 54, &mut read, core::ptr::null_mut());
+    if read != 54 || hdr[0] != b'B' || hdr[1] != b'M' { CloseHandle(f); return; }
+    let off = u32::from_le_bytes([hdr[10], hdr[11], hdr[12], hdr[13]]);
+    let w = i32::from_le_bytes([hdr[18], hdr[19], hdr[20], hdr[21]]);
+    let h = i32::from_le_bytes([hdr[22], hdr[23], hdr[24], hdr[25]]);
+    let bpp = u16::from_le_bytes([hdr[28], hdr[29]]);
+    if w <= 0 || h == 0 || (bpp != 24 && bpp != 32) { CloseHandle(f); return; }
+    let abs_h = if h < 0 { -h } else { h };
+    let stride = ((w as u32 * bpp as u32 / 8 + 3) & !3) as usize;
+    let pixel_bytes = stride * abs_h as usize;
+    let info = BitmapInfoHeader {
+        size: 40, width: w, height: abs_h, planes: 1, bit_count: bpp,
+        compression: 0, ..Default::default()
+    };
+    let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
+    let mem_dc = CreateCompatibleDC(hdc);
+    let dib = CreateDIBSection(mem_dc, &info, 0, &mut bits, core::ptr::null_mut(), 0);
+    if dib.is_null() || bits.is_null() { DeleteDC(mem_dc); CloseHandle(f); return; }
+    SelectObject(mem_dc, dib);
+    SetFilePointer(f, off as i32, core::ptr::null_mut(), 0);
+    let dst = bits as *mut u8;
+    let mut total = 0usize;
+    while total < pixel_bytes {
+        let chunk = (pixel_bytes - total).min(65536) as u32;
+        let mut got = 0u32;
+        ReadFile(f, dst.add(total), chunk, &mut got, core::ptr::null_mut());
+        if got == 0 { break; }
+        total += got as usize;
+    }
+    CloseHandle(f);
+    if total < pixel_bytes { DeleteObject(dib); DeleteDC(mem_dc); return; }
+    WP_DC = mem_dc;
+    WP_W = w;
+    WP_H = abs_h;
+}
+
+unsafe fn wallpaper_bloom(hdc: Handle, b: &mut Brushes, l: &Layout) {
     let top = rgb(0x06, 0x12, 0x33);
     let bottom = rgb(0x0C, 0x2E, 0x6E);
     let bands = 48;
@@ -131,8 +187,6 @@ unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
         let y1 = l.h * (i + 1) / bands;
         fill(hdc, b, 0, y0, l.w, y1, fc(mix(top, bottom, i, bands - 1)));
     }
-    // Fleur stylisée : pétales verticaux en éventail, du plus sombre à
-    // l'extérieur au plus clair au centre, éclairés depuis leur base.
     let r = l.h.min(l.w * 3 / 4) * 9 / 25;
     let (cx, base) = (l.w / 2, l.h * 3 / 5 + r / 3);
     let petals: [(i32, i32, i32, u32, u32); 5] = [
@@ -142,7 +196,6 @@ unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
         (r * 3 / 5, r * 9 / 20, r * 8 / 5, rgb(0x15, 0x48, 0xA8), rgb(0x4E, 0x96, 0xF0)),
         (0, r / 2, r * 2, rgb(0x1E, 0x60, 0xD0), rgb(0xB4, 0xD8, 0xFF)),
     ];
-    // Pendant les animations, moins de dégradés : le dessin reste fluide.
     let steps = if wm::animating() || START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS { 14 } else { 28 };
     for (dx, rx, ry, outer, inner) in petals {
         for k in 0..steps {
@@ -151,6 +204,15 @@ unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
             let px = cx + dx;
             ellipse(hdc, b, px - sx, base - sy, px + sx, base, fc(mix(outer, inner, k, steps - 1)));
         }
+    }
+}
+
+unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
+    load_wallpaper(hdc);
+    if !WP_DC.is_null() && FADE >= 1000 {
+        StretchBlt(hdc, 0, 0, l.w, l.h, WP_DC, 0, 0, WP_W, WP_H, 0x00CC_0020);
+    } else {
+        wallpaper_bloom(hdc, b, l);
     }
 }
 
@@ -234,7 +296,7 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
 // ---------- Menu Démarrer ----------
 
 #[derive(Clone, Copy, PartialEq)]
-enum Launch { Explorer, Settings, Documents, Pc, Programs, Updates }
+enum Launch { Explorer, Settings, Documents, Pc, Programs, Updates, Terminal, Browser }
 
 struct App { name: &'static [u8], glyph: Glyph, launch: Launch }
 const PINNED: [App; 6] = [
@@ -246,8 +308,8 @@ const PINNED: [App; 6] = [
     App { name: b"Programmes .exe", glyph: Glyph::Exe, launch: Launch::Programs },
 ];
 const RECOMMENDED: [(&[u8], &[u8], Glyph, Launch); 4] = [
-    (b"Mises \xE0 jour", b"Syst\xE8me, pilotes et applications", Glyph::Store, Launch::Updates),
-    (b"Applications Windows", b"Ouvrez un .exe d'un double-clic", Glyph::Exe, Launch::Programs),
+    (b"Terminal", b"Ouvrir un terminal Linux", Glyph::Computer, Launch::Terminal),
+    (b"Navigateur", b"Ouvrir le navigateur web", Glyph::Store, Launch::Browser),
     (b"Documents", b"Dossier personnel Linux", Glyph::Folder, Launch::Documents),
     (b"Param\xE8tres Linux et Windows", b"Clavier, r\xE9seau et alimentation", Glyph::Settings, Launch::Settings),
 ];
@@ -260,6 +322,16 @@ unsafe fn launch(what: Launch) {
         Launch::Documents => explorer::open_documents(),
         Launch::Settings => wm::open(wm::APP_SETTINGS),
         Launch::Updates => crate::settings::open_page(6),
+        Launch::Terminal => {
+            static TERM: &[u16] = &[b'x' as u16, b't' as u16, b'e' as u16, b'r' as u16, b'm' as u16, 0];
+            static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+            ShellExecuteW(core::ptr::null_mut(), OPEN.as_ptr(), TERM.as_ptr(), core::ptr::null(), core::ptr::null(), 1);
+        }
+        Launch::Browser => {
+            static BROWSER: &[u16] = &[b'w' as u16, b'i' as u16, b'n' as u16, b'l' as u16, b'u' as u16, b'x' as u16, b'-' as u16, b'b' as u16, b'r' as u16, b'o' as u16, b'w' as u16, b's' as u16, b'e' as u16, b'r' as u16, 0];
+            static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+            ShellExecuteW(core::ptr::null_mut(), OPEN.as_ptr(), BROWSER.as_ptr(), core::ptr::null(), core::ptr::null(), 1);
+        }
     }
 }
 
@@ -343,6 +415,20 @@ pub unsafe fn toast(msg: &[u8]) {
     TOAST[..n].copy_from_slice(&msg[..n]);
     TOAST_LEN = n;
     TOAST_START = now();
+    // Historique pour le panneau de notifications.
+    if NOTIF_COUNT < NOTIF_HISTORY.len() {
+        NOTIF_HISTORY[NOTIF_COUNT][..n].copy_from_slice(&msg[..n]);
+        NOTIF_LENS[NOTIF_COUNT] = n;
+        NOTIF_COUNT += 1;
+    } else {
+        for i in 1..NOTIF_HISTORY.len() {
+            NOTIF_HISTORY[i - 1] = NOTIF_HISTORY[i];
+            NOTIF_LENS[i - 1] = NOTIF_LENS[i];
+        }
+        let last = NOTIF_HISTORY.len() - 1;
+        NOTIF_HISTORY[last][..n].copy_from_slice(&msg[..n]);
+        NOTIF_LENS[last] = n;
+    }
 }
 
 unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
@@ -364,6 +450,41 @@ unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let cut = if msg.len() > per_line { msg[..per_line].iter().rposition(|&c| c == b' ').unwrap_or(per_line) } else { msg.len() };
     text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), x + 16, y + 46, &msg[..cut]);
     if cut < msg.len() { text_fit(hdc, f.body, 13, rgb(0xF2, 0xF2, 0xF2), x + 16, y + 66, &msg[(cut + 1).min(msg.len())..], w - 32); }
+}
+
+// ---------- Panneau de notifications ----------
+
+unsafe fn draw_notif_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if !NOTIF_PANEL { return; }
+    let w = 380;
+    let x = l.w - w - 12;
+    let header_h = 44;
+    let row_h = 56;
+    let rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
+    let empty_h = 60;
+    let h = header_h + if rows == 0 { empty_h } else { rows as i32 * row_h } + 8;
+    let y = l.bar_top - 12 - h;
+    panel(hdc, b, x, y, x + w, y + h, 8, rgb(0x24, 0x27, 0x2F), rgb(0x3A, 0x3F, 0x4A));
+    text(hdc, f.semibold, rgb(0xF2, 0xF2, 0xF2), x + 16, y + 14, b"Notifications");
+    if NOTIF_COUNT > 0 {
+        let clr = rect(x + w - 120, y + 8, x + w - 16, y + 36);
+        round_rect(hdc, b, clr.left, clr.top, clr.right, clr.bottom, 4, rgb(0x31, 0x35, 0x3F));
+        text(hdc, f.small, rgb(0xC5, 0xC5, 0xC5), clr.left + 10, clr.top + 7, b"Tout effacer");
+    }
+    fill(hdc, b, x + 1, y + header_h - 1, x + w - 1, y + header_h, rgb(0x3A, 0x3F, 0x4A));
+    if rows == 0 {
+        text_centered(hdc, f.body, 13, rgb(0x9A, 0xA3, 0xAE), x + w / 2, y + header_h + 20, b"Aucune notification");
+    } else {
+        for i in 0..rows {
+            let idx = if NOTIF_COUNT <= NOTIF_HISTORY.len() { i } else { i };
+            let ry = y + header_h + (rows - 1 - i) as i32 * row_h;
+            if i > 0 { fill(hdc, b, x + 16, ry - 1, x + w - 16, ry, rgb(0x34, 0x38, 0x42)); }
+            glyph(hdc, b, f, Glyph::Start, x + 16, ry + 10, 14);
+            text(hdc, f.caption, rgb(0xC5, 0xC5, 0xC5), x + 38, ry + 8, b"Winlux");
+            let msg = &NOTIF_HISTORY[idx][..NOTIF_LENS[idx]];
+            text_fit(hdc, f.body, 13, rgb(0xF2, 0xF2, 0xF2), x + 16, ry + 28, msg, w - 32);
+        }
+    }
 }
 
 // ---------- Icônes du bureau ----------
@@ -466,6 +587,7 @@ pub unsafe fn draw(hdc: Handle) {
             wm::draw(&mut g);
         }
         start_menu(hdc, &mut b, &f, &l);
+        draw_notif_panel(hdc, &mut b, &f, &l);
         draw_toast(hdc, &mut b, &f, &l);
         let bar_dy = if FADE < 1000 { (1000 - ease_out(intro, INTRO_MS)) * TASKBAR_HEIGHT / 1000 } else { 0 };
         taskbar(hdc, &mut b, &f, &l, bar_dy);
@@ -544,9 +666,27 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             }
         }
         let tray = l.w - 12 - 92 - 96;
-        if x >= tray && x < tray + 24 { crate::settings::open_page(2); }
+        if x >= tray - 28 && x < tray { NOTIF_PANEL = !NOTIF_PANEL; }
+        else if x >= tray && x < tray + 24 { crate::settings::open_page(2); }
         else if x >= tray + 24 && x < tray + 88 { crate::settings::open_page(3); }
         else { return; }
+        repaint(hwnd);
+        return;
+    }
+    if NOTIF_PANEL && y < l.bar_top {
+        let pw = 380;
+        let px = l.w - pw - 12;
+        let rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
+        let ph = 44 + if rows == 0 { 60 } else { rows as i32 * 56 } + 8;
+        let py = l.bar_top - 12 - ph;
+        if x >= px && x < px + pw && y >= py && y < py + ph {
+            if NOTIF_COUNT > 0 && x >= px + pw - 120 && x < px + pw - 16 && y >= py + 8 && y < py + 36 {
+                NOTIF_COUNT = 0;
+                for i in 0..NOTIF_LENS.len() { NOTIF_LENS[i] = 0; }
+            }
+        } else {
+            NOTIF_PANEL = false;
+        }
         repaint(hwnd);
         return;
     }

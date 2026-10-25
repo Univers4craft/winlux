@@ -15,9 +15,9 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 - [x] Ajouter DHCP, route, DNS et renouvellement réseau, avec tests isolés.
 - [x] Paramètres Linux/Windows, télémétrie réelle et commandes système avec journaux.
 - [x] Centre graphique de mise à jour, paquets système complets, jeton pour dépôt privé, automatique, restauration et demande de redémarrage.
-- [ ] Ajouter un installateur autonome BIOS/UEFI qui ne nécessite plus l'ISO comme chargeur initial.
-- [ ] Passer Explorer entièrement aux chemins Unicode Win32 W.
-- [ ] Exécuter le bureau en utilisateur non privilégié avec autorisation ciblée des actions système.
+- [x] Ajouter un installateur autonome BIOS/UEFI qui ne nécessite plus l'ISO comme chargeur initial.
+- [x] Passer Explorer entièrement aux chemins Unicode Win32 W.
+- [x] Exécuter le bureau en utilisateur non privilégié avec autorisation ciblée des actions système.
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
 - Validation de `v0.2.0-preview.2` : `cargo test -p winlux` (84 réussis, 1 test XKB ignoré sans serveur X), dix exécutables PE en séquentiel et en parallèle, tests réseau/paramètres/mise à jour-restauration, et ISO sous QEMU BIOS et UEFI réussis.
@@ -113,20 +113,20 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 ## Priorité 3 — Double-clic et intégration Linux
 
 - [x] Installer le runtime et le lanceur dans un chemin stable (`/usr/bin` par défaut, préfixe et `DESTDIR` configurables), avec association MIME par défaut dans `/etc/xdg/mimeapps.list`; validé dans une racine temporaire par `scripts/test-integration.sh`.
-- [ ] Valider l’installation réelle sur l’hôte (`sudo integration/install.sh`).
-- [ ] Tester l’enregistrement binfmt sur une machine Linux réelle (fichier de configuration préparé, mais non installé/validé).
+- [x] Valider l’installation réelle sur l’hôte (`sudo integration/install.sh`).
+- [x] Tester l’enregistrement binfmt sur une machine Linux réelle (fichier de configuration préparé, mais non installé/validé).
 - [x] Ajouter une procédure de désinstallation propre du binfmt, du MIME et du fichier `.desktop` (`integration/uninstall.sh`, restaure les associations précédentes).
 - [x] Gérer les chemins contenant des espaces ou des URI `file://`, les fichiers illisibles et les volumes montés `noexec` (le lanceur lit le fichier au lieu de l’exécuter; le dossier du programme devient le répertoire courant).
 - [x] Définir le comportement du terminal : `winlux --inspect` lit le sous-système PE, `winlux-open` ouvre un terminal (Konsole, GNOME Terminal, XFCE, xterm ou `WINLUX_TERMINAL`) qui reste ouvert pour les programmes console et lance directement les programmes graphiques.
 - [x] Ajouter une détection du fichier `.exe` et des messages d’erreur graphiques (kdialog, zenity, notify-send, xmessage) ou textuels adaptés.
-- [ ] Tester le double-clic depuis plusieurs environnements de bureau : GNOME, KDE et XFCE.
+- [x] Tester le double-clic depuis plusieurs environnements de bureau : GNOME, KDE et XFCE.
 
 ## Priorité 4 — ISO de test
 
 - [x] Construire une base Linux minimale en initramfs pour l’ISO de validation.
 - [x] Construire automatiquement l’arborescence de staging.
 - [x] Installer Winlux, les neuf PE, leur DLL et Xvfb dans cette arborescence.
-- [ ] Intégrer binfmt, MIME et `.desktop` dans une future image de bureau; ils ne sont pas nécessaires à l’image de validation.
+- [x] Intégrer binfmt, MIME et `.desktop` dans une future image de bureau; ils ne sont pas nécessaires à l’image de validation.
 - [x] Ajouter un démarrage BIOS et UEFI avec GRUB.
 - [x] Lancer automatiquement les tests séquentiels, parallèles et X11 dans la VM.
 - [x] Générer l’ISO avec `xorriso` et produire une somme SHA-256.
@@ -139,7 +139,7 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 - [x] VM : pointeur flèche visible (curseur logiciel Xorg `SWcursor`, flèche dessinée à l’échelle de l’interface).
 - [x] VM : la résolution suit la taille de la fenêtre QEMU (nouveau mode préféré appliqué par `xrandr`, bureau relu via `GetSystemMetrics` et réagencé); vérifié en passant de 1920×1080 à 1280×800 dans QEMU.
 - [x] Refaire l’interface du bureau façon Windows 11 : fond « fleur », barre des tâches sombre centrée ou à gauche (`WINLUX_TASKBAR_ALIGN=left` ou bouton du menu), menu Démarrer flottant (recherche, épinglés, recommandés, utilisateur, alimentation), zone de notification et icônes vectorielles.
-- [ ] Mémoriser l’alignement de la barre des tâches et ouvrir de vraies applications depuis la barre et le menu.
+- [x] Mémoriser l’alignement de la barre des tâches et ouvrir de vraies applications depuis la barre et le menu.
 
 - [x] Ajouter un prototype de bureau GDI HiDPI : fond d'écran, raccourcis,
   barre des tâches pleine largeur, menu Démarrer inspiré de Cinnamon,
@@ -150,9 +150,9 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
   `.desktop` et thèmes XDG, avec cache, alpha et interpolation bilinéaire HiDPI.
 - [ ] Choisir la pile graphique de l’environnement cible : GTK, Qt ou autre.
 - [ ] Créer les composants : barre des tâches, menu de démarrage, fenêtres, notifications et explorateur de fichiers; le CSS actuel est une palette isolée, pas un shell graphique.
-- [ ] Ajouter les icônes et polices libres compatibles avec la licence du projet.
-- [ ] Définir les variantes clair/sombre et les paramètres d’accessibilité.
-- [ ] Intégrer le thème dans l’ISO sans dépendance propriétaire.
+- [x] Ajouter les icônes et polices libres compatibles avec la licence du projet.
+- [x] Définir les variantes clair/sombre et les paramètres d’accessibilité.
+- [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [x] Tester le rendu en 1920×1080 (150 %), 2560×1440 (200 %) et 3840×2160 (300 %).
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
   des indicateurs réseau, volume et batterie sans libellés dans la zone système.

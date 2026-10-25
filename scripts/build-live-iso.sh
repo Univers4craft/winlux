@@ -78,6 +78,13 @@ mkdir -p "$stage/usr/share/winlux"
 printf '%s\n' "${WINLUX_BUILD_VERSION:-$(cat "$root/VERSION")}" >"$stage/usr/share/winlux/version"
 sh "$root/scripts/build-info.sh" "$(cat "$stage/usr/share/winlux/version")" system >"$stage/usr/share/winlux/BUILD-INFO"
 printf 'system\n' >"$stage/usr/share/winlux/update-scope"
+
+# Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
+wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
+if test -f "$wallpaper_src"; then
+    convert "$wallpaper_src" -type TrueColor BMP3:"$stage/usr/share/winlux/wallpaper.bmp"
+fi
+
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 chmod 755 \
@@ -275,6 +282,27 @@ for icon in preferences-desktop distributor-logo-linux-mint; do
         cp "$source" "$stage/usr/share/pixmaps/$icon.png"
     fi
 done
+# --- Intégration binfmt/MIME/.desktop (tâches 9-10) ---
+# Configuration binfmt : le noyau lance automatiquement winlux pour les .exe MZ.
+mkdir -p "$stage/etc/binfmt.d"
+cp "$root/integration/winlux-binfmt.conf" "$stage/etc/binfmt.d/winlux.conf"
+# Type MIME pour les .exe.
+mkdir -p "$stage/usr/share/mime/packages"
+cp "$root/integration/x-ms-dos-executable.xml" "$stage/usr/share/mime/packages/winlux.xml"
+# .desktop pour ouvrir les .exe depuis un gestionnaire de fichiers.
+cp "$root/integration/winlux.desktop" "$stage/usr/share/applications/winlux.desktop"
+cp "$root/integration/winlux-browser.desktop" "$stage/usr/share/applications/winlux-browser.desktop"
+# Xsession et .desktop pour les display managers (installation sur disque).
+cp "$root/scripts/xsession-winlux" "$stage/usr/share/winlux/xsession-winlux"
+cp "$root/scripts/winlux-session.desktop" "$stage/usr/share/applications/winlux-session.desktop"
+chmod 755 "$stage/usr/share/winlux/xsession-winlux"
+# Thème : polices DejaVu déjà copiées ; on s'assure que fontconfig est à jour
+# et qu'aucune dépendance propriétaire n'est requise (pas de Segoe UI, pas de
+# polices Microsoft). Le runtime traduit les noms de police Windows vers DejaVu.
+if command -v fc-cache >/dev/null 2>&1; then
+    fc-cache -f "$stage/usr/share/fonts" 2>/dev/null || true
+fi
+
 cat >"$stage/init" <<'INIT'
 #!/bin/sh
 PATH=/bin:/usr/bin:/sbin:/usr/sbin
@@ -324,6 +352,12 @@ for driver in virtio_net e1000 e1000e snd_hda_intel snd_intel8x0; do /bin/busybo
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
+# Enregistrer binfmt pour les .exe (MZ) si le système de fichiers est monté.
+if /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null; then
+    if test -r /etc/binfmt.d/winlux.conf; then
+        /bin/busybox cat /etc/binfmt.d/winlux.conf > /proc/sys/fs/binfmt_misc/register 2>/dev/null || true
+    fi
+fi
 /bin/busybox mkdir -p /tmp/.X11-unix /run /root/.local/share/winlux
 /bin/busybox chmod 1777 /tmp
 /bin/busybox rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
