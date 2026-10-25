@@ -145,6 +145,7 @@ zstd -q -d -c "$usbhid_module" >"$stage/lib/modules/$kernel_release/usbhid.ko"
 zstd -q -d -c "$hid_generic_module" >"$stage/lib/modules/$kernel_release/hid-generic.ko"
 chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/xrandr" "$stage/usr/bin/Xorg"
 copy_shared_libraries "$root/target/release/winlux"
+sh "$root/scripts/copy-audio-libraries.sh" "$stage"
 copy_shared_libraries /usr/bin/Xvfb
 copy_shared_libraries /usr/bin/xkbcomp
 copy_shared_libraries /usr/bin/xrandr

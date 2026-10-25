@@ -106,8 +106,11 @@ d'erreur DirectShow. Aucun faux objet COM de lecture vidéo n'est exposé.
 La passerelle `winmm!PlaySoundA/W` décode déjà les fichiers RIFF/WAVE PCM 8/16/24/32 bits
 et IEEE float 32 bits, puis tente une sortie ALSA dynamique via `libasound.so.2`.
 Le parseur est testé; la lecture physique dépend de la présence d’ALSA et d’un périphérique
-audio accessible, et n’a pas été validée sur plusieurs machines. Les codecs compressés,
-Media Foundation/DirectShow et la lecture vidéo restent à faire.
+audio accessible, et n’a pas été validée sur plusieurs machines. MP3 et AAC ADTS
+mono/stéréo sont aussi décodés via libmpg123/libfaad2, avec limites mémoire et
+tests de fichiers réels. Voir [les codecs audio](docs/AUDIO-CODECS.md) pour les
+dépendances et restrictions. Media Foundation/DirectShow et la lecture vidéo
+restent à faire ; cela ne garantit pas .NET ou Photoshop.
 
 `FreeLibrary` ne démonte pas encore le mapping PE : les DLL chargées restent
 présentes jusqu’à la fin du processus afin de ne pas invalider des pointeurs

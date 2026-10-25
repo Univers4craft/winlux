@@ -25,6 +25,8 @@ Reportés après revue, sans effacer les commits d'origine :
   ni gestion du bouton fermer ; risque de masquer le contenu des applications.
 
 Ces limites ne permettent pas d'annoncer une compatibilité multimédia complète.
+Les décodeurs MP3/AAC ont depuis été repris séparément avec FFI corrigée,
+bornes mémoire et tests réels : voir [le lot audio](docs/AUDIO-CODECS.md).
 
 ## PR #3
 
