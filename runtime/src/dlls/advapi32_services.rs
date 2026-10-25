@@ -153,55 +153,7 @@ pub unsafe extern "win64" fn query_service_status_ex(service:usize,level:u32,sta
 pub unsafe extern "win64" fn close_service_handle(handle_value:usize)->i32{if lock(handles()).remove(&handle_value).is_some(){1}else{crate::process::set_last_error(6);0}}
 pub unsafe extern "win64" fn delete_service(service:usize)->i32{let Some(ScmHandle::Service(name))=handle(service)else{return fail(ERROR_INVALID_HANDLE as u32);};let mut all=lock(services());let Some(r)=all.get_mut(&name)else{return fail(ERROR_SERVICE_DOES_NOT_EXIST as u32);};refresh(r);if r.state==SERVICE_RUNNING{return fail(1072);}let sub=std::ffi::CString::new(reg_path(&name)).unwrap();let rc=crate::dlls::advapi32::reg_delete_key_a(HKEY_LOCAL_MACHINE,sub.as_ptr()as *const u8);if rc!=0&&rc!=2{crate::process::set_last_error(rc as u32);return 0;}all.remove(&name);1}
 
-// ---------- Service control dispatcher ----------
-static SERVICE_CTRL_HANDLER: OnceLock<Mutex<Option<(usize, usize)>>> = OnceLock::new();
-
-pub unsafe extern "win64" fn start_service_ctrl_dispatcher_a(table: *const u8) -> i32 {
-    if table.is_null() { return fail(ERROR_INVALID_PARAMETER as u32); }
-    let service_name = match std::env::var("WINLUX_SERVICE_NAME") {
-        Ok(n) => n,
-        Err(_) => { crate::process::set_last_error(ERROR_CALL_NOT_IMPLEMENTED as u32); return 0; }
-    };
-    let mut entry = table as *const u64;
-    let mut found_proc: usize = 0;
-    loop {
-        let name_ptr = *entry as *const u8;
-        let proc_ptr = *entry.add(1) as usize;
-        if name_ptr.is_null() && proc_ptr == 0 { break; }
-        if !name_ptr.is_null() {
-            let entry_name = crate::dlls::cstr(name_ptr);
-            if entry_name.eq_ignore_ascii_case(&service_name) || found_proc == 0 { found_proc = proc_ptr; }
-        } else if found_proc == 0 { found_proc = proc_ptr; }
-        entry = entry.add(2);
-    }
-    if found_proc == 0 { crate::process::set_last_error(ERROR_INVALID_PARAMETER as u32); return 0; }
-    let name_cstr = std::ffi::CString::new(service_name).unwrap();
-    type ServiceMainFn = unsafe extern "win64" fn(u32, *const *const u8);
-    let proc = found_proc;
-    let name_ptr = name_cstr.as_ptr() as usize;
-    let t = std::thread::spawn(move || {
-        let argv: [*const u8; 1] = [name_ptr as *const u8];
-        let f: ServiceMainFn = std::mem::transmute(proc);
-        f(1, argv.as_ptr());
-    });
-    let _ = t.join();
-    1
-}
-
-pub unsafe extern "win64" fn register_service_ctrl_handler_ex_a(
-    _name: *const u8, handler: usize, context: usize,
-) -> usize {
-    if handler == 0 { crate::process::set_last_error(ERROR_INVALID_PARAMETER as u32); return 0; }
-    *lock(SERVICE_CTRL_HANDLER.get_or_init(|| Mutex::new(None))) = Some((handler, context));
-    0x6000_0001
-}
-
-pub unsafe extern "win64" fn set_service_status(handle: usize, _status: *const u8) -> i32 {
-    if handle == 0 { return fail(ERROR_INVALID_HANDLE as u32); }
-    1
-}
-
-pub fn exports()->crate::dlls::Exports{crate::exports!{"OpenSCManagerA"=>fn open_sc_manager_a,"CreateServiceA"=>fn create_service_a,"OpenServiceA"=>fn open_service_a,"StartServiceA"=>fn start_service_a,"ControlService"=>fn control_service,"QueryServiceStatusEx"=>fn query_service_status_ex,"CloseServiceHandle"=>fn close_service_handle,"DeleteService"=>fn delete_service,"StartServiceCtrlDispatcherA"=>fn start_service_ctrl_dispatcher_a,"RegisterServiceCtrlHandlerExA"=>fn register_service_ctrl_handler_ex_a,"SetServiceStatus"=>fn set_service_status}}
+pub fn exports()->crate::dlls::Exports{crate::exports!{"OpenSCManagerA"=>fn open_sc_manager_a,"CreateServiceA"=>fn create_service_a,"OpenServiceA"=>fn open_service_a,"StartServiceA"=>fn start_service_a,"ControlService"=>fn control_service,"QueryServiceStatusEx"=>fn query_service_status_ex,"CloseServiceHandle"=>fn close_service_handle,"DeleteService"=>fn delete_service}}
 
 #[cfg(test)]
 mod tests {

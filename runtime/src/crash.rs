@@ -8,20 +8,11 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_
         let rip = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as usize;
         let rsp = (*uc).uc_mcontext.gregs[libc::REG_RSP as usize] as usize;
         let addr = (*info).si_addr() as usize;
-
-        let is_stack_overflow = (sig == libc::SIGSEGV || sig == libc::SIGBUS)
-            && addr != 0
-            && rsp.wrapping_sub(addr) < 2 * 4096;
-
-        let (what, code) = if is_stack_overflow {
-            (b"debordement de pile (EXCEPTION_STACK_OVERFLOW)\n".as_slice(), 0xC000_00FDu32)
-        } else {
-            match sig {
-                libc::SIGSEGV | libc::SIGBUS => (b"acces memoire invalide (EXCEPTION_ACCESS_VIOLATION)\n".as_slice(), 0xC000_0005u32),
-                libc::SIGILL => (b"instruction illegale (EXCEPTION_ILLEGAL_INSTRUCTION)\n".as_slice(), 0xC000_001D),
-                libc::SIGFPE => (b"division par zero (EXCEPTION_INT_DIVIDE_BY_ZERO)\n".as_slice(), 0xC000_0094),
-                _ => (b"signal inattendu\n".as_slice(), 0xC000_0001),
-            }
+        let (what, code) = match sig {
+            libc::SIGSEGV | libc::SIGBUS => (b"acces memoire invalide (EXCEPTION_ACCESS_VIOLATION)\n".as_slice(), 0xC000_0005u32),
+            libc::SIGILL => (b"instruction illegale (EXCEPTION_ILLEGAL_INSTRUCTION)\n".as_slice(), 0xC000_001D),
+            libc::SIGFPE => (b"division par zero (EXCEPTION_INT_DIVIDE_BY_ZERO)\n".as_slice(), 0xC000_0094),
+            _ => (b"signal inattendu\n".as_slice(), 0xC000_0001),
         };
         // Un gestionnaire de signal ne doit ni allouer ni prendre de verrou :
         // le processus peut avoir été interrompu au milieu de malloc ou d'un
@@ -58,23 +49,6 @@ pub fn install() {
         sa.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
         for s in [libc::SIGSEGV, libc::SIGBUS, libc::SIGILL, libc::SIGFPE] {
             libc::sigaction(s, &sa, std::ptr::null_mut());
-        }
-    }
-}
-
-/// Configure une page de garde au bas de la pile du thread courant.
-pub fn setup_guard_page() {
-    unsafe {
-        let mut attr: libc::pthread_attr_t = std::mem::zeroed();
-        if libc::pthread_getattr_np(libc::pthread_self(), &mut attr) == 0 {
-            let mut stack_addr: *mut libc::c_void = std::ptr::null_mut();
-            let mut stack_size: usize = 0;
-            if libc::pthread_attr_getstack(&attr, &mut stack_addr, &mut stack_size) == 0
-                && !stack_addr.is_null()
-            {
-                libc::mprotect(stack_addr, 4096, libc::PROT_NONE);
-            }
-            libc::pthread_attr_destroy(&mut attr);
         }
     }
 }

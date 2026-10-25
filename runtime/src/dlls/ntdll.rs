@@ -406,407 +406,55 @@ pub extern "win64" fn rtl_decode_pointer(ptr: *mut c_void) -> *mut c_void {
 }
 
 // ============================================================
-//  SEH – déroulement x64 table-based (exceptions C++/MinGW)
+//  SEH stubs (x64 table-based unwinding)
 // ============================================================
 
-const CONTEXT_SIZE: usize = 1232;
-const UNW_FLAG_EHANDLER: u8 = 1;
-const UNW_FLAG_UHANDLER: u8 = 2;
-const UNW_FLAG_CHAININFO: u8 = 4;
-
-/// Pointeur vers un registre général dans un CONTEXT x64, par index Windows.
-fn ctx_gpr(ctx: *mut u8, idx: u8) -> *mut u64 {
-    let off = match idx {
-        0  => 0x78,  // Rax
-        1  => 0x80,  // Rcx
-        2  => 0x88,  // Rdx
-        3  => 0x90,  // Rbx
-        4  => 0x98,  // Rsp
-        5  => 0xA0,  // Rbp
-        6  => 0xA8,  // Rsi
-        7  => 0xB0,  // Rdi
-        8  => 0xB8,  // R8
-        9  => 0xC0,  // R9
-        10 => 0xC8,  // R10
-        11 => 0xD0,  // R11
-        12 => 0xD8,  // R12
-        13 => 0xE0,  // R13
-        14 => 0xE8,  // R14
-        15 => 0xF0,  // R15
-        _  => 0x78,
-    };
-    unsafe { ctx.add(off) as *mut u64 }
-}
-
-#[inline(always)]
-fn ctx_rsp(ctx: *mut u8) -> *mut u64 { ctx_gpr(ctx, 4) }
-#[inline(always)]
-fn ctx_rip(ctx: *mut u8) -> *mut u64 { unsafe { ctx.add(0xF8) as *mut u64 } }
-
-/// `RtlCaptureContext` : remplit un CONTEXT avec les registres réels du thread.
+/// `RtlCaptureContext` : remplit un CONTEXT pour le thread courant.
+/// Stub : on met tout à zéro sauf ContextFlags.
 pub unsafe extern "win64" fn rtl_capture_context(ctx: *mut c_void) {
     if ctx.is_null() { return; }
-    let p = ctx as *mut u8;
-    std::ptr::write_bytes(p, 0, CONTEXT_SIZE);
+    std::ptr::write_bytes(ctx as *mut u8, 0, 1232); // CONTEXT size on x64
     // CONTEXT_AMD64 | CONTEXT_FULL
-    *(p.add(0x30) as *mut u32) = 0x0010_001F;
-
-    let rbx: u64; let rbp: u64; let rsi: u64; let rdi: u64;
-    let r12: u64; let r13: u64; let r14: u64; let r15: u64;
-    let rsp_val: u64; let rip_val: u64;
-    std::arch::asm!(
-        "mov {rbx}, rbx",
-        "mov {rbp}, rbp",
-        "mov {rsi}, rsi",
-        "mov {rdi}, rdi",
-        "mov {r12}, r12",
-        "mov {r13}, r13",
-        "mov {r14}, r14",
-        "mov {r15}, r15",
-        "lea {rsp_val}, [rsp+8]",
-        "mov {rip_val}, [rsp]",
-        rbx = out(reg) rbx,
-        rbp = out(reg) rbp,
-        rsi = out(reg) rsi,
-        rdi = out(reg) rdi,
-        r12 = out(reg) r12,
-        r13 = out(reg) r13,
-        r14 = out(reg) r14,
-        r15 = out(reg) r15,
-        rsp_val = out(reg) rsp_val,
-        rip_val = out(reg) rip_val,
-    );
-    *ctx_gpr(p, 3)  = rbx;
-    *ctx_gpr(p, 5)  = rbp;
-    *ctx_gpr(p, 6)  = rsi;
-    *ctx_gpr(p, 7)  = rdi;
-    *ctx_gpr(p, 12) = r12;
-    *ctx_gpr(p, 13) = r13;
-    *ctx_gpr(p, 14) = r14;
-    *ctx_gpr(p, 15) = r15;
-    *ctx_rsp(p)      = rsp_val;
-    *ctx_rip(p)      = rip_val;
+    std::ptr::write_unaligned(ctx as *mut u32, 0x0010_001F);
 }
 
-/// `RtlLookupFunctionEntry` : recherche binaire dans .pdata pour l'adresse PC.
+/// `RtlLookupFunctionEntry` : stub, renvoie NULL (pas de table d'exception).
 pub unsafe extern "win64" fn rtl_lookup_function_entry(
-    pc: u64, image_base: *mut u64, _history: *mut c_void,
+    _pc: u64, _image_base: *mut u64, _history: *mut c_void,
 ) -> *mut c_void {
-    let addr = pc as usize;
-    let modules = crate::loader::MODULES.lock().unwrap();
-    for m in modules.iter() {
-        if !m.contains(addr) { continue; }
-        let d = m.pe.dir(crate::pe::DIR_EXCEPTION);
-        if d.rva == 0 || d.size == 0 {
-            if !image_base.is_null() { *image_base = m.base as u64; }
-            return std::ptr::null_mut();
-        }
-        let rva = (addr - m.base) as u32;
-        let count = d.size as usize / 12;
-        let pdata = m.base + d.rva as usize;
-        let mut lo: usize = 0;
-        let mut hi: usize = count;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let entry = pdata + mid * 12;
-            let begin = *(entry as *const u32);
-            let end = *((entry + 4) as *const u32);
-            if rva < begin { hi = mid; }
-            else if rva >= end { lo = mid + 1; }
-            else {
-                if !image_base.is_null() { *image_base = m.base as u64; }
-                return entry as *mut c_void;
-            }
-        }
-        if !image_base.is_null() { *image_base = m.base as u64; }
-        return std::ptr::null_mut();
-    }
     std::ptr::null_mut()
 }
 
-/// Traite les codes de déroulement d'une UNWIND_INFO pour restaurer l'état.
-unsafe fn process_unwind_codes(
-    base: usize, unwind_info: usize, offset_in_prolog: u32,
-    ctx: *mut u8, apply: bool,
-) -> (u8, usize) {
-    let info = unwind_info;
-    let flags = (*((info) as *const u8) >> 3) & 0x1F;
-    let size_of_prolog = *((info + 1) as *const u8);
-    let count_of_codes = *((info + 2) as *const u8) as usize;
-    let frame_reg = *((info + 3) as *const u8) & 0x0F;
-    let frame_off = ((*((info + 3) as *const u8) >> 4) & 0x0F) as u64 * 16;
-
-    // Si le frame register est utilisé et qu'on est après le prologue,
-    // on base RSP sur le frame register.
-    if apply && frame_reg != 0 && offset_in_prolog >= size_of_prolog as u32 {
-        *ctx_rsp(ctx) = (*ctx_gpr(ctx, frame_reg)).wrapping_sub(frame_off);
-    }
-
-    let codes_base = info + 4;
-    let mut i = 0usize;
-    while i < count_of_codes {
-        let code_off = *((codes_base + i * 2) as *const u8);
-        let op_byte = *((codes_base + i * 2 + 1) as *const u8);
-        let op = op_byte & 0x0F;
-        let op_info = (op_byte >> 4) & 0x0F;
-        // Ne traiter le code que si on est au-delà du point dans le prologue
-        let active = apply && (offset_in_prolog >= size_of_prolog as u32 || offset_in_prolog > code_off as u32);
-        match op {
-            0 => {
-                // UWOP_PUSH_NONVOL
-                if active {
-                    let rsp = *ctx_rsp(ctx);
-                    *ctx_gpr(ctx, op_info) = *(rsp as *const u64);
-                    *ctx_rsp(ctx) = rsp + 8;
-                }
-                i += 1;
-            }
-            1 => {
-                // UWOP_ALLOC_LARGE
-                if op_info == 0 {
-                    let slots = *((codes_base + (i + 1) * 2) as *const u16) as u64;
-                    if active { *ctx_rsp(ctx) = (*ctx_rsp(ctx)).wrapping_add(slots * 8); }
-                    i += 2;
-                } else {
-                    let lo = *((codes_base + (i + 1) * 2) as *const u16) as u64;
-                    let hi = *((codes_base + (i + 2) * 2) as *const u16) as u64;
-                    let size = lo | (hi << 16);
-                    if active { *ctx_rsp(ctx) = (*ctx_rsp(ctx)).wrapping_add(size); }
-                    i += 3;
-                }
-            }
-            2 => {
-                // UWOP_ALLOC_SMALL
-                if active { *ctx_rsp(ctx) = (*ctx_rsp(ctx)).wrapping_add(op_info as u64 * 8 + 8); }
-                i += 1;
-            }
-            3 => {
-                // UWOP_SET_FPREG – déjà géré ci-dessus
-                i += 1;
-            }
-            4 => {
-                // UWOP_SAVE_NONVOL
-                let offset = *((codes_base + (i + 1) * 2) as *const u16) as u64 * 8;
-                if active {
-                    let addr = (*ctx_rsp(ctx)).wrapping_add(offset);
-                    *ctx_gpr(ctx, op_info) = *(addr as *const u64);
-                }
-                i += 2;
-            }
-            5 => {
-                // UWOP_SAVE_NONVOL_FAR
-                let lo = *((codes_base + (i + 1) * 2) as *const u16) as u64;
-                let hi = *((codes_base + (i + 2) * 2) as *const u16) as u64;
-                let offset = lo | (hi << 16);
-                if active {
-                    let addr = (*ctx_rsp(ctx)).wrapping_add(offset);
-                    *ctx_gpr(ctx, op_info) = *(addr as *const u64);
-                }
-                i += 3;
-            }
-            6 | 8 => {
-                // UWOP_SAVE_XMM128 / UWOP_EPILOG – skip 1 extra slot
-                i += 2;
-            }
-            7 | 9 => {
-                // UWOP_SAVE_XMM128_FAR / UWOP_SPARE – skip 2 extra slots
-                i += 3;
-            }
-            10 => {
-                // UWOP_PUSH_MACHFRAME
-                if active {
-                    let rsp = *ctx_rsp(ctx);
-                    if op_info != 0 { *ctx_rsp(ctx) = rsp.wrapping_add(8); }
-                    let new_rsp = *ctx_rsp(ctx);
-                    *ctx_rip(ctx) = *(new_rsp as *const u64);
-                    *ctx_rsp(ctx) = *((new_rsp.wrapping_add(24)) as *const u64);
-                }
-                i += 1;
-            }
-            _ => { i += 1; }
-        }
-    }
-
-    // Emplacement des données du handler après les codes (aligné sur u32)
-    let aligned_count = (count_of_codes + 1) & !1;
-    let after_codes = codes_base + aligned_count * 2;
-    (flags, after_codes)
-}
-
-/// `RtlVirtualUnwind` : déroule une frame à partir de la RUNTIME_FUNCTION.
+/// `RtlVirtualUnwind` : stub SEH.
 pub unsafe extern "win64" fn rtl_virtual_unwind(
-    _handler_type: u32, image_base: u64, control_pc: u64,
-    function_entry: *const c_void, context: *mut c_void,
-    handler_data: *mut *mut c_void, establisher_frame: *mut u64,
-    _context_pointers: *mut c_void,
+    _type: u32, _base: u64, _pc: u64, _entry: *const c_void,
+    _ctx: *mut c_void, _handler_data: *mut *mut c_void,
+    establisher_frame: *mut u64, _ctx_pointers: *mut c_void,
 ) -> *mut c_void {
-    let ctx = context as *mut u8;
-    if function_entry.is_null() || ctx.is_null() {
-        if !establisher_frame.is_null() { *establisher_frame = 0; }
-        return std::ptr::null_mut();
-    }
-
-    let base = image_base as usize;
-    let rf = function_entry as *const u8;
-    let begin_addr = *(rf as *const u32);
-    let unwind_rva = *((rf as usize + 8) as *const u32);
-
-    let mut unwind_info = base + unwind_rva as usize;
-    let offset_in_prolog = (control_pc as u32).saturating_sub(begin_addr + image_base as u32);
-
-    // Traiter les infos de déroulement (avec chaînage éventuel)
-    let mut handler: *mut c_void = std::ptr::null_mut();
-    loop {
-        let (flags, after_codes) = process_unwind_codes(base, unwind_info, offset_in_prolog, ctx, true);
-
-        if flags & UNW_FLAG_CHAININFO != 0 {
-            // RUNTIME_FUNCTION chaînée juste après les codes
-            let chained = after_codes;
-            let chained_unwind_rva = *((chained + 8) as *const u32);
-            unwind_info = base + chained_unwind_rva as usize;
-            continue;
-        }
-
-        if flags & (UNW_FLAG_EHANDLER | UNW_FLAG_UHANDLER) != 0 {
-            let handler_rva = *(after_codes as *const u32);
-            handler = (base + handler_rva as usize) as *mut c_void;
-            if !handler_data.is_null() {
-                *handler_data = (after_codes + 4) as *mut c_void;
-            }
-        }
-        break;
-    }
-
-    // Dépiler l'adresse de retour pour obtenir le RIP de l'appelant
-    let rsp = *ctx_rsp(ctx);
-    *ctx_rip(ctx) = *(rsp as *const u64);
-    *ctx_rsp(ctx) = rsp + 8;
-
-    if !establisher_frame.is_null() {
-        *establisher_frame = *ctx_rsp(ctx);
-    }
-
-    handler
+    if !establisher_frame.is_null() { *establisher_frame = 0; }
+    std::ptr::null_mut()
 }
 
-/// `RtlUnwindEx` : boucle de déroulement pour la propagation d'exceptions C++.
+/// `RtlUnwindEx` : stub.
 pub unsafe extern "win64" fn rtl_unwind_ex(
-    target_frame: *mut c_void, target_ip: *mut c_void,
-    exception_record: *mut c_void, return_value: *mut c_void,
-    original_context: *mut c_void, _history: *mut c_void,
+    _target_frame: *mut c_void, _target_ip: *mut c_void,
+    _exception_record: *mut c_void, _return_value: *mut c_void,
+    _ctx: *mut c_void, _history: *mut c_void,
 ) {
-    let ctx = original_context as *mut u8;
-    if ctx.is_null() { return; }
-
-    let max_iterations = 256;
-    for _ in 0..max_iterations {
-        let rip = *ctx_rip(ctx);
-        if rip == 0 { break; }
-
-        let mut image_base: u64 = 0;
-        let entry = rtl_lookup_function_entry(rip, &mut image_base, std::ptr::null_mut());
-
-        if entry.is_null() {
-            // Fonction feuille : l'adresse de retour est à [RSP]
-            let rsp = *ctx_rsp(ctx);
-            if rsp == 0 { break; }
-            *ctx_rip(ctx) = *(rsp as *const u64);
-            *ctx_rsp(ctx) = rsp + 8;
-            continue;
-        }
-
-        let mut handler_data: *mut c_void = std::ptr::null_mut();
-        let mut establisher: u64 = 0;
-        let handler = rtl_virtual_unwind(
-            0, image_base, rip, entry,
-            ctx as *mut c_void, &mut handler_data,
-            &mut establisher, std::ptr::null_mut(),
-        );
-
-        // Frame cible atteinte : placer la valeur de retour et le RIP cible
-        if !target_frame.is_null() && establisher == target_frame as u64 {
-            *ctx_gpr(ctx, 0) = return_value as u64; // RAX = valeur de retour
-            *ctx_rip(ctx)    = target_ip as u64;
-            break;
-        }
-
-        // Appeler le handler de déroulement s'il existe
-        if !handler.is_null() && !exception_record.is_null() {
-            let flags_ptr = (exception_record as *mut u8).add(4) as *mut u32;
-            *flags_ptr |= 2; // EXCEPTION_UNWINDING
-            if target_frame.is_null() { *flags_ptr |= 4; } // EXCEPTION_EXIT_UNWIND
-
-            type HandlerFn = unsafe extern "win64" fn(
-                *mut c_void, u64, *mut c_void, *mut c_void,
-            ) -> i32;
-            let handler_fn: HandlerFn = std::mem::transmute(handler);
-            let _disposition = handler_fn(
-                exception_record, establisher, ctx as *mut c_void, handler_data,
-            );
-        }
-
-        if *ctx_rsp(ctx) == 0 { break; }
-    }
+    // Les programmes qui arrivent ici sans SEH réel vont probablement planter,
+    // mais c'est le mieux qu'on puisse faire sans déroulement complet.
 }
 
-/// `RtlRaiseException` : lève une exception, passe par VEH puis termine.
-pub unsafe extern "win64" fn rtl_raise_exception(record: *mut c_void) {
-    if record.is_null() { return; }
-    let mut ctx_buf = vec![0u8; CONTEXT_SIZE];
-    let ctx = ctx_buf.as_mut_ptr() as *mut c_void;
-    rtl_capture_context(ctx);
-    // Essayer les Vectored Exception Handlers
-    let veh = VEH_HANDLERS.get().map(|m| lock(m).clone()).unwrap_or_default();
-    for &(_id, handler) in &veh {
-        #[repr(C)]
-        struct Ptrs { record: *mut c_void, context: *mut c_void }
-        let mut ptrs = Ptrs { record, context: ctx };
-        type VehFn = unsafe extern "win64" fn(*mut Ptrs) -> i32;
-        let f: VehFn = std::mem::transmute(handler);
-        if f(&mut ptrs) == -1 { return; } // EXCEPTION_CONTINUE_EXECUTION
-    }
-    let code = *(record as *const u32);
-    eprintln!("winlux: exception non gérée 0x{code:08X}");
-    std::process::exit(code as i32);
-}
-
-/// `RtlCaptureStackBackTrace` : marche arrière sur la chaîne RBP.
-pub unsafe extern "win64" fn rtl_capture_stack_back_trace(
-    frames_to_skip: u32, frames_to_capture: u32,
-    back_trace: *mut *mut c_void, _hash: *mut u32,
-) -> u16 {
-    if back_trace.is_null() || frames_to_capture == 0 { return 0; }
-    let mut rbp: u64;
-    std::arch::asm!("mov {}, rbp", out(reg) rbp);
-    let mut count = 0u32;
-    let mut skipped = 0u32;
-    let mut frame = rbp;
-    while frame != 0 && count < frames_to_capture {
-        let ret = *((frame as usize + 8) as *const u64);
-        if ret == 0 { break; }
-        if skipped < frames_to_skip {
-            skipped += 1;
-        } else {
-            *back_trace.add(count as usize) = ret as *mut c_void;
-            count += 1;
-        }
-        frame = *(frame as *const u64);
-        if frame < 0x1000 || frame > 0x7FFF_FFFF_FFFF { break; }
-    }
-    count as u16
-}
-
-/// `RtlPcToFileHeader` : trouve le module contenant l'adresse donnée.
+/// `RtlPcToFileHeader` : trouve le module contenant l'adresse.
 pub unsafe extern "win64" fn rtl_pc_to_file_header(
     pc: *const c_void, base: *mut *const c_void,
 ) -> *const c_void {
     if base.is_null() { return std::ptr::null(); }
-    let addr = pc as usize;
     let modules = crate::loader::MODULES.lock().unwrap();
-    for m in modules.iter() {
-        if m.contains(addr) {
-            *base = m.base as *const c_void;
-            return m.base as *const c_void;
+    for module in modules.iter() {
+        if module.contains(pc as usize) {
+            *base = module.base as *const c_void;
+            return *base;
         }
     }
     *base = std::ptr::null();
@@ -1469,8 +1117,6 @@ pub fn exports() -> crate::dlls::Exports { crate::exports! {
     "RtlLookupFunctionEntry" => fn rtl_lookup_function_entry,
     "RtlVirtualUnwind" => fn rtl_virtual_unwind,
     "RtlUnwindEx" => fn rtl_unwind_ex,
-    "RtlRaiseException" => fn rtl_raise_exception,
-    "RtlCaptureStackBackTrace" => fn rtl_capture_stack_back_trace,
     "RtlPcToFileHeader" => fn rtl_pc_to_file_header,
     // --- Rtl : VEH ---
     "RtlAddVectoredExceptionHandler" => fn rtl_add_vectored_exception_handler,

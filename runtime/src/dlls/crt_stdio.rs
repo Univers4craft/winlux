@@ -389,6 +389,14 @@ mod tests {
             assert_eq!(fwrite(payload.as_ptr(), 1, payload.len(), f), payload.len());
             assert_eq!(fflush(f), 0);
             assert_eq!(ftell(f), payload.len() as i64);
+            let mut saved = -1;
+            assert_eq!(fgetpos(f, &mut saved), 0);
+            assert_eq!(saved, payload.len() as i64);
+            assert_eq!(fseek(f, 0, 0), 0);
+            assert_eq!(fsetpos(f, &saved), 0);
+            assert_eq!(ftell(f), saved);
+            assert_eq!(fgetpos(f, std::ptr::null_mut()), -1);
+            assert_eq!(fsetpos(f, std::ptr::null()), -1);
             assert_eq!(fseek(f, 0, 0), 0);
             let mut buf = [0u8; 32];
             let read = fread(buf.as_mut_ptr(), 1, 7, f);

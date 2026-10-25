@@ -340,128 +340,6 @@ crate::varargs_thunk!(snwprintf_c99_thunk => imp_snwprintf_c99);
 crate::varargs_thunk!(snwprintf_s_thunk => imp_snwprintf_s);
 crate::varargs_thunk!(vsnwprintf_thunk => imp_vsnwprintf);
 
-// ---------- Locale ----------
-static LOCALE_BUF: std::sync::OnceLock<std::sync::Mutex<Vec<u8>>> = std::sync::OnceLock::new();
-pub unsafe extern "win64" fn setlocale(_cat: i32, locale: *const u8) -> *const u8 {
-    let buf = LOCALE_BUF.get_or_init(|| std::sync::Mutex::new(b"C\0".to_vec()));
-    if locale.is_null() { return buf.lock().unwrap().as_ptr(); }
-    let s = crate::dlls::cstr(locale);
-    let r = if s.is_empty() || s == "C" || s == "POSIX" { "C" } else { &s };
-    let mut b = buf.lock().unwrap();
-    b.clear(); b.extend_from_slice(r.as_bytes()); b.push(0);
-    b.as_ptr()
-}
-pub extern "win64" fn _configthreadlocale(flag: i32) -> i32 { if flag == 0 { 2 } else { flag } }
-pub extern "win64" fn _get_current_locale() -> usize { 0 }
-pub extern "win64" fn _free_locale(_loc: usize) {}
-pub extern "win64" fn _create_locale(_cat: i32, _loc: *const u8) -> usize { 0 }
-static LCONV_BUF: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
-pub extern "win64" fn localeconv() -> *const u8 {
-    LCONV_BUF.get_or_init(|| {
-        let mut v = vec![0u8; 64];
-        v[0] = b'.'; // decimal_point = "."
-        v
-    }).as_ptr()
-}
-
-// ---------- _snscanf ----------
-unsafe fn skip_ws(buf: *const u8, pos: &mut usize, end: usize) {
-    while *pos < end && (*buf.add(*pos) as char).is_ascii_whitespace() { *pos += 1; }
-}
-
-pub unsafe extern "win64" fn snscanf(
-    buf: *const u8, count: usize, fmt: *const u8,
-    a0: u64, a1: u64, a2: u64, a3: u64, a4: u64,
-) -> i32 {
-    if buf.is_null() || fmt.is_null() { return -1; }
-    let end = count;
-    let mut bp = 0usize;
-    let mut fp = 0usize;
-    let mut matched = 0i32;
-    let args = [a0, a1, a2, a3, a4];
-    let mut ai = 0usize;
-    macro_rules! next_arg { () => { { let v = if ai < args.len() { args[ai] } else { 0 }; ai += 1; v } } }
-    loop {
-        let fc = *fmt.add(fp);
-        if fc == 0 { break; }
-        fp += 1;
-        if (fc as char).is_ascii_whitespace() {
-            skip_ws(buf, &mut bp, end);
-            continue;
-        }
-        if fc != b'%' {
-            if bp >= end || *buf.add(bp) != fc { break; }
-            bp += 1;
-            continue;
-        }
-        let spec = *fmt.add(fp);
-        if spec == 0 { break; }
-        fp += 1;
-        match spec {
-            b'd' | b'i' => {
-                skip_ws(buf, &mut bp, end);
-                let start = bp;
-                if bp < end && (*buf.add(bp) == b'-' || *buf.add(bp) == b'+') { bp += 1; }
-                while bp < end && (*buf.add(bp) as char).is_ascii_digit() { bp += 1; }
-                if bp == start { break; }
-                let s = std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf.add(start), bp - start));
-                let Ok(v) = s.parse::<i64>() else { break };
-                let p = next_arg!() as *mut i32;
-                if !p.is_null() { *p = v as i32; }
-                matched += 1;
-            }
-            b'u' => {
-                skip_ws(buf, &mut bp, end);
-                let start = bp;
-                while bp < end && (*buf.add(bp) as char).is_ascii_digit() { bp += 1; }
-                if bp == start { break; }
-                let s = std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf.add(start), bp - start));
-                let Ok(v) = s.parse::<u64>() else { break };
-                let p = next_arg!() as *mut u32;
-                if !p.is_null() { *p = v as u32; }
-                matched += 1;
-            }
-            b'x' | b'X' => {
-                skip_ws(buf, &mut bp, end);
-                if bp + 1 < end && *buf.add(bp) == b'0' && (*buf.add(bp + 1) == b'x' || *buf.add(bp + 1) == b'X') { bp += 2; }
-                let start = bp;
-                while bp < end && (*buf.add(bp) as char).is_ascii_hexdigit() { bp += 1; }
-                if bp == start { break; }
-                let s = std::str::from_utf8_unchecked(std::slice::from_raw_parts(buf.add(start), bp - start));
-                let Ok(v) = u64::from_str_radix(s, 16) else { break };
-                let p = next_arg!() as *mut u32;
-                if !p.is_null() { *p = v as u32; }
-                matched += 1;
-            }
-            b's' => {
-                skip_ws(buf, &mut bp, end);
-                let p = next_arg!() as *mut u8;
-                let start = bp;
-                while bp < end && !(*buf.add(bp) as char).is_ascii_whitespace() && *buf.add(bp) != 0 { bp += 1; }
-                if bp == start { break; }
-                if !p.is_null() {
-                    std::ptr::copy_nonoverlapping(buf.add(start), p, bp - start);
-                    *p.add(bp - start) = 0;
-                }
-                matched += 1;
-            }
-            b'c' => {
-                if bp >= end { break; }
-                let p = next_arg!() as *mut u8;
-                if !p.is_null() { *p = *buf.add(bp); }
-                bp += 1;
-                matched += 1;
-            }
-            b'n' => {
-                let p = next_arg!() as *mut i32;
-                if !p.is_null() { *p = bp as i32; }
-            }
-            _ => break,
-        }
-    }
-    if matched == 0 && bp >= end { -1 } else { matched }
-}
-
 pub fn exports()->crate::dlls::Exports{
     crate::exports!{
         "strcpy"=>fn strcpy,"strncpy"=>fn strncpy,"strcat"=>fn strcat,"strncat"=>fn strncat,
@@ -494,10 +372,6 @@ pub fn exports()->crate::dlls::Exports{
         "_itow"=>fn itow,"_ltow"=>fn itow,"_i64tow"=>fn i64tow,"_ui64tow"=>fn ui64tow,"_ultow"=>fn ultow,
         "_snwprintf"=>fn snwprintf_thunk,"swprintf"=>fn snwprintf_c99_thunk,"_snwprintf_s"=>fn snwprintf_s_thunk,
         "_vsnwprintf"=>fn vsnwprintf_thunk,
-        "setlocale"=>fn setlocale,"_configthreadlocale"=>fn _configthreadlocale,
-        "_get_current_locale"=>fn _get_current_locale,"_free_locale"=>fn _free_locale,"_create_locale"=>fn _create_locale,
-        "localeconv"=>fn localeconv,
-        "_snscanf"=>fn snscanf,
     }
 }
 

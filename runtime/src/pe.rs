@@ -12,7 +12,6 @@ pub const PE32_MAGIC: u16 = 0x10b;
 
 pub const DIR_EXPORT: usize = 0;
 pub const DIR_IMPORT: usize = 1;
-pub const DIR_EXCEPTION: usize = 3;
 pub const DIR_BASERELOC: usize = 5;
 pub const DIR_TLS: usize = 9;
 pub const DIR_DELAY_IMPORT: usize = 13;

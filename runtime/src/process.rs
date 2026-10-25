@@ -232,21 +232,6 @@ fn setup_static_tls(teb: usize) {
     unsafe { *((teb + TEB_TLS_POINTER) as *mut usize) = array };
 }
 
-fn propagate_static_tls_to_other_threads(caller_teb: usize, tls: &loader::TlsInfo, index: usize) {
-    let threads = THREAD_TEBS.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let raw = tls.raw_end.saturating_sub(tls.raw_start);
-    for &t in threads.iter() {
-        if t == caller_teb || t == 0 { continue; }
-        unsafe {
-            let array = *((t + TEB_TLS_POINTER) as *const usize);
-            if array == 0 { continue; }
-            let block = alloc_zeroed((raw + tls.zero_fill + 16).max(16));
-            std::ptr::copy_nonoverlapping(tls.raw_start as *const u8, block as *mut u8, raw);
-            *((array + index * 8) as *mut usize) = block;
-        }
-    }
-}
-
 fn run_tls_callbacks(m: &Module, reason: u32) {
     let Some(t) = &m.tls else { return };
     if t.callbacks_addr == 0 {
@@ -275,10 +260,10 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
         if index >= 512 { return false; }
         let array = unsafe { *((thread_teb + TEB_TLS_POINTER) as *const usize) };
         if array == 0 { return false; }
-        Some((tls.clone(), array, index, thread_teb))
+        Some((tls.clone(), array, index))
     } else { None };
     if !loader::mark_initialized(m.base) { return true; }
-    if let Some((tls,array,index,caller_teb)) = tls_context {
+    if let Some((tls,array,index)) = tls_context {
         let raw = tls.raw_end.saturating_sub(tls.raw_start);
         let block = alloc_zeroed((raw + tls.zero_fill + 16).max(16));
         unsafe {
@@ -286,7 +271,6 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
             *((array + index * 8) as *mut usize) = block;
             if tls.index_addr != 0 { *(tls.index_addr as *mut u32) = index as u32; }
         }
-        propagate_static_tls_to_other_threads(caller_teb, &tls, index);
     }
     run_tls_callbacks(m, DLL_PROCESS_ATTACH);
     if let Some(entry) = m.entry() {

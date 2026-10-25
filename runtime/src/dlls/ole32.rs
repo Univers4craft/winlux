@@ -659,33 +659,84 @@ pub unsafe extern "win64" fn get_hglobal_from_stream(stream: *mut c_void, out: *
 }
 
 // ---------- Class factory registry ----------
-struct ClassFactoryEntry { clsid: Guid, punk: usize, context: u32 }
-static CLASS_FACTORIES: std::sync::OnceLock<Mutex<Vec<ClassFactoryEntry>>> = std::sync::OnceLock::new();
+struct ClassFactoryEntry { cookie: u32, clsid: Guid, punk: usize, context: u32 }
+static CLASS_FACTORIES: std::sync::OnceLock<Mutex<Vec<Arc<ClassFactoryEntry>>>> = std::sync::OnceLock::new();
+impl Drop for ClassFactoryEntry {
+    fn drop(&mut self) {
+        unsafe {
+            let vtable = *(self.punk as *const *const usize);
+            let release: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtable.add(2));
+            release(self.punk);
+        }
+    }
+}
 static NEXT_CF_COOKIE: AtomicU32 = AtomicU32::new(1);
 
 pub unsafe extern "win64" fn co_register_class_object(
     clsid: *const Guid, punk: usize, ctx: u32, _flags: u32, cookie: *mut u32,
 ) -> i32 {
-    if clsid.is_null() || punk == 0 || cookie.is_null() { return E_INVALIDARG; }
+    if cookie.is_null() { return E_POINTER; }
+    *cookie = 0;
+    if clsid.is_null() || punk == 0 || ctx == 0 { return E_INVALIDARG; }
+    // Seules les fabriques multi-usages sont actuellement prises en charge.
+    if _flags != 1 { return E_NOTIMPL; }
     let guid = *clsid;
     let c = NEXT_CF_COOKIE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let vtable = *(punk as *const *const usize);
     let addref: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtable.add(1));
     addref(punk);
     CLASS_FACTORIES.get_or_init(|| Mutex::new(Vec::new()))
-        .lock().unwrap().push(ClassFactoryEntry { clsid: guid, punk, context: ctx });
+        .lock().unwrap().push(Arc::new(ClassFactoryEntry { cookie: c, clsid: guid, punk, context: ctx }));
     *cookie = c;
     S_OK
 }
 
 pub unsafe extern "win64" fn co_revoke_class_object(cookie: u32) -> i32 {
     let mut factories = CLASS_FACTORIES.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
-    if cookie == 0 || (cookie as usize) > factories.len() { return S_OK; }
-    let entry = factories.remove((cookie - 1) as usize);
-    let vtable = *(entry.punk as *const *const usize);
-    let release: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtable.add(2));
-    release(entry.punk);
+    let Some(index) = factories.iter().position(|entry| entry.cookie == cookie) else { return E_INVALIDARG; };
+    let entry = factories.remove(index);
+    // Release peut réentrer dans COM : ne pas garder le verrou du registre.
+    drop(factories);
+    drop(entry);
     S_OK
+}
+
+#[cfg(test)]
+mod reviewed_factory_tests {
+    use super::*;
+    #[repr(C)]
+    struct Factory { vtable: *const usize, refs: AtomicU32, cookie: AtomicU32 }
+    unsafe extern "win64" fn qi(_: usize, _: *const Guid, _: *mut *mut c_void) -> i32 { E_NOINTERFACE }
+    unsafe extern "win64" fn addref(p: usize) -> u32 { (*(p as *const Factory)).refs.fetch_add(1, Ordering::SeqCst) + 1 }
+    unsafe extern "win64" fn release(p: usize) -> u32 { (*(p as *const Factory)).refs.fetch_sub(1, Ordering::SeqCst) - 1 }
+    unsafe extern "win64" fn create(p: usize, _: usize, _: *const Guid, out: *mut *mut c_void) -> i32 {
+        // La fabrique peut se révoquer pendant CreateInstance, sans deadlock.
+        let cookie = (*(p as *const Factory)).cookie.load(Ordering::SeqCst);
+        assert_eq!(co_revoke_class_object(cookie), S_OK);
+        assert_eq!((*(p as *const Factory)).refs.load(Ordering::SeqCst), 2);
+        *out = std::ptr::null_mut();
+        E_NOINTERFACE
+    }
+    #[test]
+    fn cookies_stay_stable_and_callbacks_can_reenter() {
+        unsafe {
+            let vt = [qi as *const () as usize, addref as *const () as usize, release as *const () as usize, create as *const () as usize];
+            let first = Factory { vtable: vt.as_ptr(), refs: AtomicU32::new(1), cookie: AtomicU32::new(0) };
+            let second = Factory { vtable: vt.as_ptr(), refs: AtomicU32::new(1), cookie: AtomicU32::new(0) };
+            let cls1 = Guid { data1: 0x776c0001, ..Guid::default() };
+            let cls2 = Guid { data1: 0x776c0002, ..Guid::default() };
+            let mut a = 0; let mut b = 0;
+            assert_eq!(co_register_class_object(&cls1, &first as *const _ as usize, 1, 1, &mut a), S_OK);
+            assert_eq!(co_register_class_object(&cls2, &second as *const _ as usize, 1, 1, &mut b), S_OK);
+            second.cookie.store(b, Ordering::SeqCst);
+            assert_eq!(co_revoke_class_object(a), S_OK);
+            assert_eq!(first.refs.load(Ordering::SeqCst), 1);
+            let mut out = std::ptr::null_mut();
+            assert_eq!(co_create_instance(&cls2, 0, 1, &IID_IUNKNOWN, &mut out), E_NOINTERFACE);
+            assert_eq!(second.refs.load(Ordering::SeqCst), 1);
+            assert_eq!(co_revoke_class_object(b), E_INVALIDARG);
+        }
+    }
 }
 
 pub unsafe extern "win64" fn co_create_instance(
@@ -699,16 +750,17 @@ pub unsafe extern "win64" fn co_create_instance(
     let guid = *rclsid;
     let iid = *riid;
     let factories = CLASS_FACTORIES.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
-    for entry in factories.iter() {
-        if entry.clsid == guid && (entry.context & ctx) != 0 {
-            let vtable = *(entry.punk as *const *const usize);
-            // IClassFactory::CreateInstance is vtable[3]
-            let create_instance: unsafe extern "win64" fn(usize, usize, *const Guid, *mut *mut c_void) -> i32 =
-                std::mem::transmute(*vtable.add(3));
-            return create_instance(entry.punk, outer, &iid, out);
-        }
-    }
-    0x8004_0154u32 as i32 // REGDB_E_CLASSNOTREG
+    let Some(entry) = factories.iter().find(|entry| entry.clsid == guid && (entry.context & ctx) != 0) else {
+        return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
+    };
+    let entry = Arc::clone(entry);
+    drop(factories);
+    let punk = entry.punk;
+    let vtable = *(punk as *const *const usize);
+    let create: unsafe extern "win64" fn(usize, usize, *const Guid, *mut *mut c_void) -> i32 = std::mem::transmute(*vtable.add(3));
+    let result = create(punk, outer, &iid, out);
+    drop(entry);
+    result
 }
 
 pub fn exports() -> crate::dlls::Exports {
