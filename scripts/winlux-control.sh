@@ -70,6 +70,7 @@ status() {
         printf 'icon_pc=%s\n' "$(pref ICON_PC | sed 's/^$/0/')"
         printf 'icon_docs=%s\n' "$(pref ICON_DOCS | sed 's/^$/0/')"
         printf 'icon_trash=%s\n' "$(pref ICON_TRASH | sed 's/^$/0/')"
+        printf 'reduce_motion=%s\n' "$(pref REDUCE_MOTION | sed 's/^$/0/')"
         printf 'control_available=1\n'
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
         if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi
@@ -140,6 +141,8 @@ perform() {
         icon-docs-off) save "$config/preferences.conf" ICON_DOCS 0 ;;
         icon-trash-on)  save "$config/preferences.conf" ICON_TRASH 1 ;;
         icon-trash-off) save "$config/preferences.conf" ICON_TRASH 0 ;;
+        reduce-motion-on)  save "$config/preferences.conf" REDUCE_MOTION 1 ;;
+        reduce-motion-off) save "$config/preferences.conf" REDUCE_MOTION 0 ;;
         display-follow|display-fixed) winlux-display "${action#display-}" ;;
         display-mode-*) mode=${action#display-mode-}; case "$mode" in *[!0-9x]*|'') return 1 ;; esac; winlux-display mode "$mode" ;;
         display-scale-auto) winlux-display scale auto ;;

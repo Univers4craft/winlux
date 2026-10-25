@@ -41,6 +41,7 @@ static mut ICON_CLICK_TIME: u32 = 0;
 pub static mut SHOW_ICON_PC: bool = false;
 pub static mut SHOW_ICON_DOCS: bool = false;
 pub static mut SHOW_ICON_TRASH: bool = false;
+pub static mut REDUCE_MOTION: bool = false;
 static mut LAST_MINUTE: u16 = 99;
 /// Démarrage : début de l'écran de chargement, étape de préchargement en
 /// cours et fin du fondu d'arrivée sur le bureau.
@@ -173,6 +174,13 @@ fn recommended_cell(s: &Rect, i: i32) -> Rect {
 
 /// Position du menu Démarrer : il glisse depuis la barre des tâches.
 unsafe fn start_offset() -> i32 {
+    if REDUCE_MOTION {
+        if START_CLOSING {
+            START_OPEN = false;
+            START_CLOSING = false;
+        }
+        return 0;
+    }
     let t = since(START_ANIM);
     if START_CLOSING {
         if t >= START_CLOSE_MS {
@@ -1017,16 +1025,15 @@ unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         TOAST_LEN = 0;
         return;
     }
-    // Entrée par la droite, sortie en glissant vers le bas.
-    let slide = if t < 260 {
+    let slide = if REDUCE_MOTION || t >= 260 {
+        0
+    } else {
         (1000 - ease_out(t, 260)) * 380 / 1000
-    } else {
-        0
     };
-    let drop = if t > TOAST_MS - 220 {
-        ease_out(t - (TOAST_MS - 220), 220) * 140 / 1000
-    } else {
+    let drop = if REDUCE_MOTION || t <= TOAST_MS - 220 {
         0
+    } else {
+        ease_out(t - (TOAST_MS - 220), 220) * 140 / 1000
     };
     let w = 364;
     let x = l.w - w - 12 + slide;
@@ -1374,7 +1381,9 @@ pub unsafe fn init(
     wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
     BOOT_START = now();
     let mut v = [0i8; 4];
-    if GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0 {
+    if REDUCE_MOTION
+        || GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0
+    {
         BOOT_DONE = true;
         BOOT_STEP = 4;
     }
@@ -1393,7 +1402,7 @@ pub unsafe fn draw(hdc: Handle) {
         boot_splash(hdc, &mut b, &f, &l);
     } else {
         let intro = since(INTRO_START);
-        FADE = if INTRO_START == 0 || intro >= INTRO_MS {
+        FADE = if REDUCE_MOTION || INTRO_START == 0 || intro >= INTRO_MS {
             1000
         } else {
             ease_out(intro, INTRO_MS)
