@@ -553,29 +553,48 @@ pub extern "win64" fn rtl_decode_pointer(ptr: *mut c_void) -> *mut c_void {
 //  SEH : x64 table-based exception handling
 // ============================================================
 
-// CONTEXT offsets (x64 Windows)
+// CONTEXT offsets (x64 Windows) — used by global_asm! and RtlVirtualUnwind
+#[allow(dead_code)]
 const CTX_FLAGS: usize = 0x30;
+#[allow(dead_code)]
 const CTX_RAX: usize = 0x78;
+#[allow(dead_code)]
 const CTX_RCX: usize = 0x80;
+#[allow(dead_code)]
 const CTX_RDX: usize = 0x88;
+#[allow(dead_code)]
 const CTX_RBX: usize = 0x90;
 const CTX_RSP: usize = 0x98;
+#[allow(dead_code)]
 const CTX_RBP: usize = 0xA0;
+#[allow(dead_code)]
 const CTX_RSI: usize = 0xA8;
+#[allow(dead_code)]
 const CTX_RDI: usize = 0xB0;
+#[allow(dead_code)]
 const CTX_R8: usize = 0xB8;
+#[allow(dead_code)]
 const CTX_R9: usize = 0xC0;
+#[allow(dead_code)]
 const CTX_R10: usize = 0xC8;
+#[allow(dead_code)]
 const CTX_R11: usize = 0xD0;
+#[allow(dead_code)]
 const CTX_R12: usize = 0xD8;
+#[allow(dead_code)]
 const CTX_R13: usize = 0xE0;
+#[allow(dead_code)]
 const CTX_R14: usize = 0xE8;
+#[allow(dead_code)]
 const CTX_R15: usize = 0xF0;
 const CTX_RIP: usize = 0xF8;
 const CTX_XMM0: usize = 0x1A0;
+#[allow(dead_code)]
 const CTX_SIZE: usize = 1232;
 
+#[allow(dead_code)]
 const CONTEXT_AMD64: u32 = 0x0010_0000;
+#[allow(dead_code)]
 const CONTEXT_FULL: u32 = CONTEXT_AMD64 | 0x0F;
 
 const UNW_FLAG_EHANDLER: u8 = 0x01;
@@ -616,7 +635,7 @@ core::arch::global_asm!(
     "mov rdi, rcx",
     "push rcx",
     "xor eax, eax",
-    "mov ecx, 154",         // 1232 / 8 = 154
+    "mov ecx, 154", // 1232 / 8 = 154
     "rep stosq",
     "pop rcx",
     "pop rdi",
@@ -754,10 +773,18 @@ pub unsafe extern "win64" fn rtl_virtual_unwind(
             // In the prolog, skip codes past the current position
             if in_prolog && code_offset > (rva - func_start) as u8 {
                 match unwind_op {
-                    1 if op_info == 0 => { i += 1; }
-                    1 if op_info == 1 => { i += 2; }
-                    4 | 8 => { i += 1; }
-                    5 | 9 => { i += 2; }
+                    1 if op_info == 0 => {
+                        i += 1;
+                    }
+                    1 if op_info == 1 => {
+                        i += 2;
+                    }
+                    4 | 8 => {
+                        i += 1;
+                    }
+                    5 | 9 => {
+                        i += 2;
+                    }
                     _ => {}
                 }
                 continue;
@@ -792,7 +819,10 @@ pub unsafe extern "win64" fn rtl_virtual_unwind(
                 }
                 // UWOP_SET_FPREG
                 3 => {
-                    ctx_set_rsp(ctx, ctx_get_gpr(ctx, frame_register).wrapping_sub(frame_offset));
+                    ctx_set_rsp(
+                        ctx,
+                        ctx_get_gpr(ctx, frame_register).wrapping_sub(frame_offset),
+                    );
                 }
                 // UWOP_SAVE_NONVOL
                 4 => {
@@ -818,11 +848,7 @@ pub unsafe extern "win64" fn rtl_virtual_unwind(
                     i += 1;
                     let addr = frame_base + offset;
                     let xmm_off = CTX_XMM0 + op_info as usize * 16;
-                    std::ptr::copy_nonoverlapping(
-                        addr as *const u8,
-                        ctx.add(xmm_off),
-                        16,
-                    );
+                    std::ptr::copy_nonoverlapping(addr as *const u8, ctx.add(xmm_off), 16);
                 }
                 // UWOP_SAVE_XMM128_FAR
                 9 => {
@@ -832,11 +858,7 @@ pub unsafe extern "win64" fn rtl_virtual_unwind(
                     let offset = lo | (hi << 16);
                     let addr = frame_base + offset;
                     let xmm_off = CTX_XMM0 + op_info as usize * 16;
-                    std::ptr::copy_nonoverlapping(
-                        addr as *const u8,
-                        ctx.add(xmm_off),
-                        16,
-                    );
+                    std::ptr::copy_nonoverlapping(addr as *const u8, ctx.add(xmm_off), 16);
                 }
                 // UWOP_PUSH_MACHFRAME
                 10 => {
@@ -933,6 +955,7 @@ type ExceptionHandler = unsafe extern "win64" fn(
     dispatcher_context: *mut DispatcherContext,
 ) -> i32;
 
+#[allow(dead_code)]
 const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
 const _EXCEPTION_EXECUTE_HANDLER: i32 = 1;
 
