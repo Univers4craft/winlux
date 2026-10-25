@@ -30,6 +30,7 @@ pub struct Module {
     pub pe: PeImage,
     pub tls: Option<TlsInfo>,
     pub initialized: bool,
+    pub ref_count: usize,
 }
 
 impl Module {
@@ -85,6 +86,14 @@ unsafe fn map_at(hint: usize, size: usize, fixed: bool) -> Option<usize> {
 
 /// Charge un module et toutes ses dépendances. Renvoie l'index dans MODULES.
 pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
+    {
+        let n = dlls::normalize(&path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default());
+        let mut mods = MODULES.lock().unwrap();
+        if let Some(m) = mods.iter_mut().find(|m| dlls::normalize(&m.name) == n) {
+            m.ref_count += 1;
+            return Ok(m.clone());
+        }
+    }
     let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
     let pe = PeImage::parse(&file).map_err(|e| format!("{} : {e}", path.display()))?;
     let size = round_up(pe.size_of_image as usize, PAGE);
@@ -130,7 +139,7 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
     }
 
     let name = path.file_name().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    let mut m = Module { name, path: path.to_path_buf(), base, size, pe, tls: None, initialized: false };
+    let mut m = Module { name, path: path.to_path_buf(), base, size, pe, tls: None, initialized: false, ref_count: 1 };
 
     let delta = base.wrapping_sub(m.pe.image_base as usize);
     if delta != 0 {
@@ -451,6 +460,45 @@ fn protect(m: &Module) {
     }
 }
 
+/// Décharge un module : décrémente le compteur de références et libère
+/// la mémoire si le compteur atteint zéro.
+pub fn free_library(base: usize) -> bool {
+    let mut mods = MODULES.lock().unwrap();
+    let idx = match mods.iter().position(|m| m.base == base) {
+        Some(i) => i,
+        None => return false,
+    };
+    if mods[idx].ref_count > 1 {
+        mods[idx].ref_count -= 1;
+        return true;
+    }
+    let m = mods.remove(idx);
+    drop(mods);
+
+    let is_dll = m.pe.characteristics & crate::pe::IMAGE_FILE_DLL != 0;
+    if is_dll {
+        if let Some(entry) = m.entry() {
+            if m.initialized {
+                type DllMainFn = unsafe extern "win64" fn(usize, u32, usize) -> i32;
+                let f: DllMainFn = unsafe { std::mem::transmute(entry) };
+                unsafe { f(m.base, 0, 0); }
+            }
+        }
+    }
+
+    unsafe { libc::munmap(m.base as *mut _, m.size); }
+    true
+}
+
+/// Incrémente le compteur de références d'un module.
+pub fn increment_ref(base: usize) -> bool {
+    let mut mods = MODULES.lock().unwrap();
+    match mods.iter_mut().find(|m| m.base == base) {
+        Some(m) => { m.ref_count += 1; true }
+        None => false,
+    }
+}
+
 /// Marque un module comme initialisé ; renvoie faux s'il l'était déjà.
 pub fn mark_initialized(base: usize) -> bool {
     let mut mods = MODULES.lock().unwrap();
@@ -488,7 +536,7 @@ mod tests {
         let mut dirs = vec![DataDir::default(); 16];
         dirs[DIR_EXPORT] = DataDir { rva: 0x100, size: 0x80 };
         let m = Module { name: "demo.dll".into(), path: "demo.dll".into(), base: image.as_ptr() as usize, size: image.len(),
-            pe: PeImage { characteristics: 0, entry_rva: 0, image_base: 0, section_alignment: 0x1000, size_of_image: image.len() as u32, size_of_headers: 0, subsystem: 3, dll_characteristics: 0, stack_reserve: 0, stack_commit: 0, dirs, sections: vec![] }, tls: None, initialized: false };
+            pe: PeImage { characteristics: 0, entry_rva: 0, image_base: 0, section_alignment: 0x1000, size_of_image: image.len() as u32, size_of_headers: 0, subsystem: 3, dll_characteristics: 0, stack_reserve: 0, stack_commit: 0, dirs, sections: vec![] }, tls: None, initialized: false, ref_count: 1 };
         assert_eq!(export_by_name(&m, "demo"), Some(m.base + 0x250));
         assert_eq!(export_by_ordinal(&m, 7), Some(m.base + 0x250));
         assert_eq!(export_by_ordinal(&m, 6), None);
@@ -497,7 +545,7 @@ mod tests {
     #[test]
     fn valide_les_references_dimports_differees() {
         let m = Module { name: "x".into(), path: "x".into(), base: 0x1000, size: 0x1000,
-            pe: PeImage { characteristics: 0, entry_rva: 0, image_base: 0, section_alignment: 0, size_of_image: 0, size_of_headers: 0, subsystem: 0, dll_characteristics: 0, stack_reserve: 0, stack_commit: 0, dirs: vec![DataDir::default(); 16], sections: vec![] }, tls: None, initialized: false };
+            pe: PeImage { characteristics: 0, entry_rva: 0, image_base: 0, section_alignment: 0, size_of_image: 0, size_of_headers: 0, subsystem: 0, dll_characteristics: 0, stack_reserve: 0, stack_commit: 0, dirs: vec![DataDir::default(); 16], sections: vec![] }, tls: None, initialized: false, ref_count: 1 };
         assert_eq!(delay_rva(&m, 1, 0x120).unwrap(), 0x120);
         assert_eq!(delay_rva(&m, 0, 0x1100).unwrap(), 0x100);
         assert!(delay_rva(&m, 1, 0x2000).is_err());
@@ -518,7 +566,7 @@ mod tests {
         let mut dirs = vec![DataDir::default(); 16];
         dirs[DIR_DELAY_IMPORT] = DataDir { rva: 0x100, size: 0x40 };
         let m = Module { name: "delay.exe".into(), path: "delay.exe".into(), base: image.as_ptr() as usize, size: image.len(),
-            pe: PeImage { characteristics: 0, entry_rva: 0, image_base: 0, section_alignment: 0x1000, size_of_image: image.len() as u32, size_of_headers: 0, subsystem: 3, dll_characteristics: 0, stack_reserve: 0, stack_commit: 0, dirs, sections: vec![] }, tls: None, initialized: false };
+            pe: PeImage { characteristics: 0, entry_rva: 0, image_base: 0, section_alignment: 0x1000, size_of_image: image.len() as u32, size_of_headers: 0, subsystem: 3, dll_characteristics: 0, stack_reserve: 0, stack_commit: 0, dirs, sections: vec![] }, tls: None, initialized: false, ref_count: 1 };
         resolve_imports(&m).unwrap();
         assert_ne!(unsafe { *(m.base as *const usize).add(0x1a0 / 8) }, 0);
         assert_ne!(unsafe { *(m.base as *const usize).add(0x1c0 / 8) }, 0);

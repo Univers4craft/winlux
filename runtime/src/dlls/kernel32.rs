@@ -828,6 +828,8 @@ pub extern "win64" fn set_event(h:usize)->i32{let Some(SyncHandle::Event(v))=loo
 pub extern "win64" fn reset_event(h:usize)->i32{let Some(SyncHandle::Event(v))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};let _gate=sync_gate();*lock(&v.signaled)=false;1}
 pub unsafe extern "win64" fn create_mutex_a(_sec:usize,initial:i32,name:*const u8)->usize{let obj=SyncHandle::Mutex(Arc::new(MutexObject{state:Mutex::new(MutexState{owner:if initial!=0{Some(std::thread::current().id())}else{None},recursion:usize::from(initial!=0)}),changed:Condvar::new()}));add_sync(obj,named_event(name))}
 pub extern "win64" fn release_mutex(h:usize)->i32{let Some(SyncHandle::Mutex(m))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};if leave_mutex(&m){1}else{0}}
+pub unsafe extern "win64" fn open_event_a(_access:u32,_inherit:i32,name:*const u8)->usize{if name.is_null(){crate::process::set_last_error(87);return 0;}let n=crate::dlls::cstr(name);let key=n.to_lowercase();let names=lock(SYNC_NAMES.get_or_init(||Mutex::new(HashMap::new())));match names.get(&key){Some((s@SyncHandle::Event(_),_))=>{let h=next_handle();lock(SYNCS.get_or_init(||Mutex::new(HashMap::new()))).insert(h,s.clone());h},_=>{crate::process::set_last_error(2);0}}}
+pub unsafe extern "win64" fn open_mutex_a(_access:u32,_inherit:i32,name:*const u8)->usize{if name.is_null(){crate::process::set_last_error(87);return 0;}let n=crate::dlls::cstr(name);let key=n.to_lowercase();let names=lock(SYNC_NAMES.get_or_init(||Mutex::new(HashMap::new())));match names.get(&key){Some((s@SyncHandle::Mutex(_),_))=>{let h=next_handle();lock(SYNCS.get_or_init(||Mutex::new(HashMap::new()))).insert(h,s.clone());h},_=>{crate::process::set_last_error(2);0}}}
 pub extern "win64" fn wait_for_single_object(h:usize,timeout:u32)->u32{let Some(obj)=lookup_sync(h)else{crate::process::set_last_error(6);return u32::MAX;};match obj{SyncHandle::Event(e)=>wait_event(&e,timeout),SyncHandle::Mutex(m)=>wait_mutex(&m,timeout),SyncHandle::Thread(t)=>wait_thread(&t,timeout),SyncHandle::Process(p)=>wait_process(&p,timeout),SyncHandle::CompletionPort(p)=>wait_iocp(&p,timeout)}}
 pub unsafe extern "win64" fn wait_for_multiple_objects(count:u32,handles:*const usize,wait_all:i32,timeout:u32)->u32{
     if count==0||count>64||handles.is_null(){crate::process::set_last_error(87);return u32::MAX;}
@@ -1496,6 +1498,37 @@ pub unsafe extern "win64" fn lc_map_string_w(_locale: u32, flags: u32, src: *con
     copy as i32
 }
 
+// ---------- Handle inheritance flags ----------
+static HANDLE_FLAGS: OnceLock<Mutex<HashMap<usize, u32>>> = OnceLock::new();
+pub unsafe extern "win64" fn set_handle_information(handle:usize,mask:u32,flags:u32)->i32{let mut hf=lock(HANDLE_FLAGS.get_or_init(||Mutex::new(HashMap::new())));let e=hf.entry(handle).or_insert(0);*e=(*e&!mask)|(flags&mask);1}
+pub unsafe extern "win64" fn get_handle_information(handle:usize,flags:*mut u32)->i32{if flags.is_null(){crate::process::set_last_error(87);return 0;}let hf=lock(HANDLE_FLAGS.get_or_init(||Mutex::new(HashMap::new())));*flags=hf.get(&handle).copied().unwrap_or(0);1}
+pub extern "win64" fn duplicate_handle(_src_proc:usize,src:usize,_dst_proc:usize,dst:*mut usize,_access:u32,inherit:i32,_options:u32)->i32{
+    if dst.is_null(){crate::process::set_last_error(87);return 0;}
+    let h=next_handle();
+    if let Some(obj)=lookup_sync(src){lock(SYNCS.get_or_init(||Mutex::new(HashMap::new()))).insert(h,obj);unsafe{*dst=h;}
+        if inherit!=0{lock(HANDLE_FLAGS.get_or_init(||Mutex::new(HashMap::new()))).insert(h,1);}return 1;}
+    let handles=lock(HANDLES.get_or_init(||Mutex::new(HashMap::new())));
+    if let Some(fh)=handles.get(&src){match fh{FileHandle::File(f)=>{let dup=FileHandle::File(f.clone());drop(handles);lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).insert(h,dup);unsafe{*dst=h;}return 1;}}}
+    drop(handles);unsafe{*dst=src;}1
+}
+
+// ---------- PROC_THREAD_ATTRIBUTE_LIST ----------
+pub unsafe extern "win64" fn initialize_proc_thread_attribute_list(list:*mut u8,count:u32,_flags:u32,size:*mut usize)->i32{
+    let needed=8+count as usize*24;
+    if list.is_null(){if !size.is_null(){*size=needed;}crate::process::set_last_error(122);return 0;}
+    if !size.is_null()&&*size<needed{*size=needed;crate::process::set_last_error(122);return 0;}
+    std::ptr::write_bytes(list,0,needed);*(list as *mut u32)=count;if !size.is_null(){*size=needed;}1
+}
+pub unsafe extern "win64" fn update_proc_thread_attribute_list(list:*mut u8,_flags:u32,attribute:usize,value:*const c_void,size:usize,_prev:*mut c_void,_ret:*mut usize)->i32{
+    if list.is_null()||value.is_null(){crate::process::set_last_error(87);return 0;}
+    let max=*(list as *const u32);let cur=*(list.add(4) as *mut u32);
+    if cur>=max{crate::process::set_last_error(87);return 0;}
+    let entry=list.add(8+cur as usize*24);
+    *(entry as *mut usize)=attribute;*((entry as *mut usize).add(1))=value as usize;*((entry as *mut usize).add(2))=size;
+    *(list.add(4) as *mut u32)=cur+1;1
+}
+pub unsafe extern "win64" fn delete_proc_thread_attribute_list(_list:*mut u8){}
+
 pub fn exports() -> crate::dlls::Exports { crate::exports! {
   "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
   "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
@@ -1536,7 +1569,10 @@ pub fn exports() -> crate::dlls::Exports { crate::exports! {
   "GetLongPathNameA"=>fn get_long_path_name_a,"GetLongPathNameW"=>fn get_long_path_name_w,"GetShortPathNameA"=>fn get_short_path_name_a,"GetShortPathNameW"=>fn get_short_path_name_w,
   "CompareStringA"=>fn compare_string_a,"CompareStringW"=>fn compare_string_w,"CompareStringOrdinal"=>fn compare_string_ordinal,
   "GetStringTypeW"=>fn get_string_type_w,
-  "LCMapStringW"=>fn lc_map_string_w
+  "LCMapStringW"=>fn lc_map_string_w,
+  "OpenEventA"=>fn open_event_a,"OpenMutexA"=>fn open_mutex_a,
+  "SetHandleInformation"=>fn set_handle_information,"GetHandleInformation"=>fn get_handle_information,"DuplicateHandle"=>fn duplicate_handle,
+  "InitializeProcThreadAttributeList"=>fn initialize_proc_thread_attribute_list,"UpdateProcThreadAttributeList"=>fn update_proc_thread_attribute_list,"DeleteProcThreadAttributeList"=>fn delete_proc_thread_attribute_list
   } }
 
 #[cfg(test)]

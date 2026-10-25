@@ -342,6 +342,18 @@ unsafe extern "win64" fn imp_vsprintf(args: *const u64) -> i32 {
 
 // Ponts variadiques pour la sortie formatée sur flux.
 
+pub unsafe extern "win64" fn fgetpos(p: *mut c_void, pos: *mut i64) -> i32 {
+    if p.is_null() || pos.is_null() { return -1; }
+    let off = ftell(p);
+    if off < 0 { return -1; }
+    *pos = off;
+    0
+}
+pub unsafe extern "win64" fn fsetpos(p: *mut c_void, pos: *const i64) -> i32 {
+    if p.is_null() || pos.is_null() { return -1; }
+    fseek(p, *pos, 0)
+}
+
 crate::varargs_thunk!(fprintf_thunk => imp_fprintf);
 crate::varargs_thunk!(vfprintf_thunk => imp_vfprintf);
 crate::varargs_thunk!(vsprintf_thunk => imp_vsprintf);
@@ -351,7 +363,7 @@ pub fn exports() -> crate::dlls::Exports {
         "fopen" => fn fopen, "_wfopen" => fn wfopen, "fopen_s" => fn fopen_s, "fclose" => fn fclose,
         "fread" => fn fread, "fwrite" => fn fwrite, "fgets" => fn fgets, "fputs" => fn fputs,
         "fgetc" => fn fgetc, "fputc" => fn fputc, "getc" => fn fgetc, "putc" => fn fputc,
-        "fseek" => fn fseek, "ftell" => fn ftell, "rewind" => fn rewind,
+        "fseek" => fn fseek, "ftell" => fn ftell, "rewind" => fn rewind, "fgetpos" => fn fgetpos, "fsetpos" => fn fsetpos,
         "_fseeki64" => fn fseek, "_ftelli64" => fn ftell,
         "feof" => fn feof, "ferror" => fn ferror, "clearerr" => fn clearerr,
         "fflush" => fn fflush, "setvbuf" => fn setvbuf, "setbuf" => fn setvbuf, "_fileno" => fn fileno,

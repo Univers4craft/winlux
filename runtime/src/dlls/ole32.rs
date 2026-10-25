@@ -658,18 +658,57 @@ pub unsafe extern "win64" fn get_hglobal_from_stream(stream: *mut c_void, out: *
     S_OK
 }
 
-pub unsafe extern "win64" fn co_create_instance(
-    _rclsid: *const c_void,
-    _outer: usize,
-    _ctx: u32,
-    _riid: *const c_void,
-    out: *mut *mut c_void,
+// ---------- Class factory registry ----------
+struct ClassFactoryEntry { clsid: Guid, punk: usize, context: u32 }
+static CLASS_FACTORIES: std::sync::OnceLock<Mutex<Vec<ClassFactoryEntry>>> = std::sync::OnceLock::new();
+static NEXT_CF_COOKIE: AtomicU32 = AtomicU32::new(1);
+
+pub unsafe extern "win64" fn co_register_class_object(
+    clsid: *const Guid, punk: usize, ctx: u32, _flags: u32, cookie: *mut u32,
 ) -> i32 {
-    if out.is_null() {
-        return E_POINTER;
-    }
+    if clsid.is_null() || punk == 0 || cookie.is_null() { return E_INVALIDARG; }
+    let guid = *clsid;
+    let c = NEXT_CF_COOKIE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let vtable = *(punk as *const *const usize);
+    let addref: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtable.add(1));
+    addref(punk);
+    CLASS_FACTORIES.get_or_init(|| Mutex::new(Vec::new()))
+        .lock().unwrap().push(ClassFactoryEntry { clsid: guid, punk, context: ctx });
+    *cookie = c;
+    S_OK
+}
+
+pub unsafe extern "win64" fn co_revoke_class_object(cookie: u32) -> i32 {
+    let mut factories = CLASS_FACTORIES.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
+    if cookie == 0 || (cookie as usize) > factories.len() { return S_OK; }
+    let entry = factories.remove((cookie - 1) as usize);
+    let vtable = *(entry.punk as *const *const usize);
+    let release: unsafe extern "win64" fn(usize) -> u32 = std::mem::transmute(*vtable.add(2));
+    release(entry.punk);
+    S_OK
+}
+
+pub unsafe extern "win64" fn co_create_instance(
+    rclsid: *const Guid, outer: usize, ctx: u32,
+    riid: *const Guid, out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() { return E_POINTER; }
     *out = std::ptr::null_mut();
-    E_NOINTERFACE
+    if rclsid.is_null() || riid.is_null() { return E_INVALIDARG; }
+    if outer != 0 { return 0x8004_0110u32 as i32; } // CLASS_E_NOAGGREGATION
+    let guid = *rclsid;
+    let iid = *riid;
+    let factories = CLASS_FACTORIES.get_or_init(|| Mutex::new(Vec::new())).lock().unwrap();
+    for entry in factories.iter() {
+        if entry.clsid == guid && (entry.context & ctx) != 0 {
+            let vtable = *(entry.punk as *const *const usize);
+            // IClassFactory::CreateInstance is vtable[3]
+            let create_instance: unsafe extern "win64" fn(usize, usize, *const Guid, *mut *mut c_void) -> i32 =
+                std::mem::transmute(*vtable.add(3));
+            return create_instance(entry.punk, outer, &iid, out);
+        }
+    }
+    0x8004_0154u32 as i32 // REGDB_E_CLASSNOTREG
 }
 
 pub fn exports() -> crate::dlls::Exports {
@@ -680,7 +719,8 @@ pub fn exports() -> crate::dlls::Exports {
         "CoCreateGuid"=>fn co_create_guid,"CLSIDFromString"=>fn clsid_from_string,"IIDFromString"=>fn clsid_from_string,
         "StringFromGUID2"=>fn string_from_guid2,"StringFromCLSID"=>fn string_from_clsid,"StringFromIID"=>fn string_from_clsid,
         "CreateStreamOnHGlobal"=>fn create_stream_on_hglobal,"GetHGlobalFromStream"=>fn get_hglobal_from_stream,
-        "CoCreateInstance"=>fn co_create_instance
+        "CoCreateInstance"=>fn co_create_instance,
+        "CoRegisterClassObject"=>fn co_register_class_object,"CoRevokeClassObject"=>fn co_revoke_class_object
     }
 }
 
