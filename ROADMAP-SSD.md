@@ -223,6 +223,39 @@ Ces points précisent ou complètent les rubriques précédentes.
 - [ ] Diagnostic intégré exportable, avec suppression des tokens, mots de
   passe et autres informations sensibles des rapports.
 
+## 13. Fonctionnalités distinctives de Winlux
+
+- [ ] Assistant de compatibilité `.exe` : analyser un logiciel avant son
+  lancement, expliquer les blocages observés et proposer uniquement les
+  composants réellement pris en charge. Distinguer « fonctionne »,
+  « partiellement compatible », « bloqué » et « non testé », avec version du
+  logiciel, configuration et résultats vérifiables.
+- [ ] Mode d'essai isolé pour les applications, avec limites d'accès aux
+  fichiers. Vérifier réellement l'isolation avant de la présenter comme
+  une protection de sécurité.
+- [ ] Sauvegarde avant installation permettant d'annuler les changements
+  suivis d'un logiciel sans perdre les documents personnels ; documenter
+  les modifications qui ne peuvent pas être restaurées.
+- [ ] Historique des fichiers pour retrouver une version précédente d'un
+  document modifié ou supprimé, avec réglage de l'espace utilisé.
+- [ ] Assistant de migration depuis Windows ou Linux : documents, favoris
+  et réglages compatibles, avec aperçu avant copie et sans modifier la source.
+- [ ] Profils Portable, Bureau et Jeu regroupant énergie, affichage et
+  notifications, sans promesse de gains de performances non mesurés.
+- [ ] Panneau de confidentialité pour les accès au microphone, à la caméra
+  et aux dossiers, avec permissions effectivement appliquées et indication
+  claire des limites de contrôle des applications natives et Windows.
+- [ ] Mode dépannage guidé pour les applications et périphériques, avec
+  explications et rapport partageable nettoyé des informations sensibles.
+- [ ] Première configuration guidée : clavier, son, réseau, affichage et
+  mises à jour vérifiés au premier démarrage.
+- [ ] Mode concentration : suspendre les notifications non essentielles et
+  différer les installations automatiques, sans interrompre une transaction
+  de mise à jour déjà engagée.
+
+Priorité distinctive proposée : l'assistant de compatibilité `.exe`, fondé
+sur des résultats mesurés plutôt que sur la seule présence d'API ou de composants.
+
 ## Suivi
 
 Cocher une fonctionnalité uniquement après validation réelle. Documenter le
