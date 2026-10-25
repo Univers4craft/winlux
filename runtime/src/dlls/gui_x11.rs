@@ -2,8 +2,8 @@
 //! ses événements en messages Win32. Le fond utilise la palette claire
 //! Winlux inspirée de Windows 11, définie dans `gui::theme`.
 
-use crate::dlls::gui::{self, BitmapSnapshot, DrawCmd, FontSpec, PendingEvent, Rect};
 use crate::dlls::gui::theme;
+use crate::dlls::gui::{self, BitmapSnapshot, DrawCmd, FontSpec, PendingEvent, Rect};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uchar, c_ulong, c_void, CString};
@@ -44,10 +44,9 @@ fn bilinear_colorref(pixels: &[u32], width: usize, height: usize, x: f32, y: f32
     let fy = y - y0 as f32;
     let channel = |shift: u32| {
         let value = |px: u32| ((px >> shift) & 0xff) as f32;
-        let top = value(pixels[y0 * width + x0]) * (1.0 - fx)
-            + value(pixels[y0 * width + x1]) * fx;
-        let bottom = value(pixels[y1 * width + x0]) * (1.0 - fx)
-            + value(pixels[y1 * width + x1]) * fx;
+        let top = value(pixels[y0 * width + x0]) * (1.0 - fx) + value(pixels[y0 * width + x1]) * fx;
+        let bottom =
+            value(pixels[y1 * width + x0]) * (1.0 - fx) + value(pixels[y1 * width + x1]) * fx;
         (top * (1.0 - fy) + bottom * fy).round() as u32
     };
     channel(0) | (channel(8) << 8) | (channel(16) << 16)
@@ -109,20 +108,37 @@ impl XkbKeyboard {
     unsafe fn connect() -> Option<Self> {
         unsafe fn symbol<T: Copy>(lib: *mut c_void, name: &[u8]) -> Option<T> {
             let ptr = libc::dlsym(lib, name.as_ptr().cast());
-            if ptr.is_null() { None } else { Some(std::mem::transmute_copy(&ptr)) }
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute_copy(&ptr))
+            }
         }
         let library = libc::dlopen(c"libX11.so.6".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
-        if library.is_null() { return None; }
+        if library.is_null() {
+            return None;
+        }
         let api = (|| {
-            let open: unsafe extern "C" fn(*const c_char) -> *mut Display = symbol(library, b"XOpenDisplay\0")?;
+            let open: unsafe extern "C" fn(*const c_char) -> *mut Display =
+                symbol(library, b"XOpenDisplay\0")?;
             let close = symbol(library, b"XCloseDisplay\0")?;
             let lookup = symbol(library, b"XkbLookupKeySym\0")?;
             let key_symbol = symbol(library, b"XkbKeycodeToKeysym\0")?;
             let display = open(std::ptr::null());
-            if display.is_null() { return None; }
-            Some(Self { library, display, close, lookup, symbol: key_symbol })
+            if display.is_null() {
+                return None;
+            }
+            Some(Self {
+                library,
+                display,
+                close,
+                lookup,
+                symbol: key_symbol,
+            })
         })();
-        if api.is_none() { libc::dlclose(library); }
+        if api.is_none() {
+            libc::dlclose(library);
+        }
         api
     }
 
@@ -130,7 +146,16 @@ impl XkbKeyboard {
         let mut consumed = 0;
         let mut effective = 0;
         unsafe {
-            if (self.lookup)(self.display, code, state as u32, &mut consumed, &mut effective) == 0 { return None; }
+            if (self.lookup)(
+                self.display,
+                code,
+                state as u32,
+                &mut consumed,
+                &mut effective,
+            ) == 0
+            {
+                return None;
+            }
             let group = ((state >> 13) & 3) as c_int;
             let base = (self.symbol)(self.display, code, group, 0) as u32;
             let shifted = (self.symbol)(self.display, code, group, 1) as u32;
@@ -140,7 +165,12 @@ impl XkbKeyboard {
 }
 
 impl Drop for XkbKeyboard {
-    fn drop(&mut self) { unsafe { (self.close)(self.display); libc::dlclose(self.library); } }
+    fn drop(&mut self) {
+        unsafe {
+            (self.close)(self.display);
+            libc::dlclose(self.library);
+        }
+    }
 }
 
 struct XftApi {
@@ -156,10 +186,25 @@ struct XftApi {
     draw_destroy: unsafe extern "C" fn(*mut XftDraw),
     font_open_name: unsafe extern "C" fn(*mut Display, c_int, *const c_char) -> *mut XftFont,
     font_close: unsafe extern "C" fn(*mut Display, *mut XftFont),
-    color_alloc: unsafe extern "C" fn(*mut Display, *mut Visual, c_ulong, *const XRenderColor, *mut XftColor) -> c_int,
+    color_alloc: unsafe extern "C" fn(
+        *mut Display,
+        *mut Visual,
+        c_ulong,
+        *const XRenderColor,
+        *mut XftColor,
+    ) -> c_int,
     color_free: unsafe extern "C" fn(*mut Display, *mut Visual, c_ulong, *mut XftColor),
-    text_extents: unsafe extern "C" fn(*mut Display, *mut XftFont, *const c_uchar, c_int, *mut XGlyphInfo),
-    draw_string: unsafe extern "C" fn(*mut XftDraw, *const XftColor, *mut XftFont, c_int, c_int, *const c_uchar, c_int),
+    text_extents:
+        unsafe extern "C" fn(*mut Display, *mut XftFont, *const c_uchar, c_int, *mut XGlyphInfo),
+    draw_string: unsafe extern "C" fn(
+        *mut XftDraw,
+        *const XftColor,
+        *mut XftFont,
+        c_int,
+        c_int,
+        *const c_uchar,
+        c_int,
+    ),
 }
 
 unsafe impl Send for XftApi {}
@@ -171,14 +216,22 @@ impl XftApi {
         }
         unsafe fn symbol<T: Copy>(library: *mut c_void, name: &[u8]) -> Option<T> {
             let ptr = libc::dlsym(library, name.as_ptr().cast());
-            if ptr.is_null() { None } else { Some(std::mem::transmute_copy(&ptr)) }
+            if ptr.is_null() {
+                None
+            } else {
+                Some(std::mem::transmute_copy(&ptr))
+            }
         }
 
         let x11 = open(b"libX11.so.6\0");
         let xft = open(b"libXft.so.2\0");
         if x11.is_null() || xft.is_null() {
-            if !x11.is_null() { libc::dlclose(x11); }
-            if !xft.is_null() { libc::dlclose(xft); }
+            if !x11.is_null() {
+                libc::dlclose(x11);
+            }
+            if !xft.is_null() {
+                libc::dlclose(xft);
+            }
             return None;
         }
         macro_rules! required {
@@ -229,7 +282,9 @@ impl XftRenderer {
     unsafe fn connect() -> Option<Self> {
         let api = XftApi::load()?;
         let display = (api.open_display)(std::ptr::null());
-        if display.is_null() { return None; }
+        if display.is_null() {
+            return None;
+        }
         let screen = (api.default_screen)(display);
         let visual = (api.default_visual)(display, screen);
         let colormap = (api.default_colormap)(display, screen);
@@ -237,22 +292,41 @@ impl XftRenderer {
             (api.close_display)(display);
             return None;
         }
-        Some(Self { api, display, screen, visual, colormap, fonts: HashMap::new() })
+        Some(Self {
+            api,
+            display,
+            screen,
+            visual,
+            colormap,
+            fonts: HashMap::new(),
+        })
     }
 
     fn font(&mut self, spec: &FontSpec) -> Option<*mut XftFont> {
-        if let Some(font) = self.fonts.get(spec) { return Some(*font); }
+        if let Some(font) = self.fonts.get(spec) {
+            return Some(*font);
+        }
         let family = if spec.face.is_empty() || spec.face.eq_ignore_ascii_case("fixed") {
             "Noto Sans"
         } else {
             spec.face.as_str()
         };
         let size = spec.height.saturating_abs().max(9);
-        let weight = if spec.weight >= 600 { "bold" } else { "regular" };
+        let weight = if spec.weight >= 600 {
+            "bold"
+        } else {
+            "regular"
+        };
         let slant = if spec.italic { "italic" } else { "roman" };
-        let pattern = CString::new(format!("{family}:pixelsize={size}:weight={weight}:slant={slant}:antialias=true:hinting=true")).ok()?;
-        let font = unsafe { (self.api.font_open_name)(self.display, self.screen, pattern.as_ptr()) };
-        if font.is_null() { return None; }
+        let pattern = CString::new(format!(
+            "{family}:pixelsize={size}:weight={weight}:slant={slant}:antialias=true:hinting=true"
+        ))
+        .ok()?;
+        let font =
+            unsafe { (self.api.font_open_name)(self.display, self.screen, pattern.as_ptr()) };
+        if font.is_null() {
+            return None;
+        }
         self.fonts.insert(spec.clone(), font);
         Some(font)
     }
@@ -261,13 +335,33 @@ impl XftRenderer {
         let font = self.font(spec)?;
         let mut extents = XGlyphInfo::default();
         unsafe {
-            (self.api.text_extents)(self.display, font, text.as_ptr(), text.len() as c_int, &mut extents);
-            Some((extents.x_off.max(extents.width as i16) as i32, (*font).height.max(1), (*font).ascent.max(1)))
+            (self.api.text_extents)(
+                self.display,
+                font,
+                text.as_ptr(),
+                text.len() as c_int,
+                &mut extents,
+            );
+            Some((
+                extents.x_off.max(extents.width as i16) as i32,
+                (*font).height.max(1),
+                (*font).ascent.max(1),
+            ))
         }
     }
 
-    fn draw(&mut self, drawable: u32, spec: &FontSpec, x: i32, baseline: i32, text: &[u8], colorref: u32) -> bool {
-        let Some(font) = self.font(spec) else { return false };
+    fn draw(
+        &mut self,
+        drawable: u32,
+        spec: &FontSpec,
+        x: i32,
+        baseline: i32,
+        text: &[u8],
+        colorref: u32,
+    ) -> bool {
+        let Some(font) = self.font(spec) else {
+            return false;
+        };
         let render = XRenderColor {
             red: ((colorref & 0xFF) as u16) * 257,
             green: (((colorref >> 8) & 0xFF) as u16) * 257,
@@ -275,14 +369,36 @@ impl XftRenderer {
             alpha: u16::MAX,
         };
         unsafe {
-            let draw = (self.api.draw_create)(self.display, drawable as c_ulong, self.visual, self.colormap);
-            if draw.is_null() { return false; }
+            let draw = (self.api.draw_create)(
+                self.display,
+                drawable as c_ulong,
+                self.visual,
+                self.colormap,
+            );
+            if draw.is_null() {
+                return false;
+            }
             let mut color = std::mem::zeroed::<XftColor>();
-            if (self.api.color_alloc)(self.display, self.visual, self.colormap, &render, &mut color) == 0 {
+            if (self.api.color_alloc)(
+                self.display,
+                self.visual,
+                self.colormap,
+                &render,
+                &mut color,
+            ) == 0
+            {
                 (self.api.draw_destroy)(draw);
                 return false;
             }
-            (self.api.draw_string)(draw, &color, font, x, baseline, text.as_ptr(), text.len() as c_int);
+            (self.api.draw_string)(
+                draw,
+                &color,
+                font,
+                x,
+                baseline,
+                text.as_ptr(),
+                text.len() as c_int,
+            );
             (self.api.color_free)(self.display, self.visual, self.colormap, &mut color);
             (self.api.draw_destroy)(draw);
         }
@@ -291,14 +407,18 @@ impl XftRenderer {
 
     /// Attend que le serveur ait traité les glyphes envoyés par Xlib.
     fn sync(&self) {
-        unsafe { (self.api.sync)(self.display, 0); }
+        unsafe {
+            (self.api.sync)(self.display, 0);
+        }
     }
 }
 
 impl Drop for XftRenderer {
     fn drop(&mut self) {
         unsafe {
-            for (_, font) in self.fonts.drain() { (self.api.font_close)(self.display, font); }
+            for (_, font) in self.fonts.drain() {
+                (self.api.font_close)(self.display, font);
+            }
             (self.api.close_display)(self.display);
             libc::dlclose(self.api.xft);
             libc::dlclose(self.api.x11);
@@ -307,7 +427,11 @@ impl Drop for XftRenderer {
 }
 
 fn font_candidates(spec: &FontSpec) -> Vec<Vec<u8>> {
-    let height = if spec.height == 0 { 13 } else { spec.height.saturating_abs().max(1) };
+    let height = if spec.height == 0 {
+        13
+    } else {
+        spec.height.saturating_abs().max(1)
+    };
     let size = if height <= 8 {
         b"5x8".as_slice()
     } else if height <= 10 {
@@ -406,8 +530,18 @@ impl X11Backend {
             .and_then(|value| value.parse::<f32>().ok())
             .filter(|value| value.is_finite() && *value > 0.0);
         let scale = dpi_scale(dpi_x, requested_scale);
-        let wm_protocols = conn.intern_atom(false, b"WM_PROTOCOLS").ok()?.reply().ok()?.atom;
-        let wm_delete = conn.intern_atom(false, b"WM_DELETE_WINDOW").ok()?.reply().ok()?.atom;
+        let wm_protocols = conn
+            .intern_atom(false, b"WM_PROTOCOLS")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        let wm_delete = conn
+            .intern_atom(false, b"WM_DELETE_WINDOW")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
         Some(X11Backend {
             conn,
             screen,
@@ -435,18 +569,38 @@ impl X11Backend {
     /// d'un motif 12×19 agrandi selon l'échelle d'interface.
     fn arrow_cursor(&self) -> Option<u32> {
         const ARROW: [&[u8; 12]; 19] = [
-            b"X           ", b"XX          ", b"XoX         ", b"XooX        ",
-            b"XoooX       ", b"XooooX      ", b"XoooooX     ", b"XooooooX    ",
-            b"XoooooooX   ", b"XooooooooX  ", b"XoooooooooX ", b"XooooooXXXXX",
-            b"XoooXooX    ", b"XooXXooX    ", b"XoX  XooX   ", b"XX   XooX   ",
-            b"X     XooX  ", b"      XooX  ", b"       XX   ",
+            b"X           ",
+            b"XX          ",
+            b"XoX         ",
+            b"XooX        ",
+            b"XoooX       ",
+            b"XooooX      ",
+            b"XoooooX     ",
+            b"XooooooX    ",
+            b"XoooooooX   ",
+            b"XooooooooX  ",
+            b"XoooooooooX ",
+            b"XooooooXXXXX",
+            b"XoooXooX    ",
+            b"XooXXooX    ",
+            b"XoX  XooX   ",
+            b"XX   XooX   ",
+            b"X     XooX  ",
+            b"      XooX  ",
+            b"       XX   ",
         ];
         let scale = self.scale.max(1.0);
         let width = (12.0 * scale).ceil() as u16;
         let height = (19.0 * scale).ceil() as u16;
         let setup = self.conn.setup();
-        let pad = setup.pixmap_formats.iter().find(|f| f.depth == 1).map(|f| f.scanline_pad as usize).unwrap_or(32);
-        let lsb_first = setup.bitmap_format_bit_order == x11rb::protocol::xproto::ImageOrder::LSB_FIRST;
+        let pad = setup
+            .pixmap_formats
+            .iter()
+            .find(|f| f.depth == 1)
+            .map(|f| f.scanline_pad as usize)
+            .unwrap_or(32);
+        let lsb_first =
+            setup.bitmap_format_bit_order == x11rb::protocol::xproto::ImageOrder::LSB_FIRST;
         let stride = (width as usize).div_ceil(pad) * pad / 8;
         let mut source = vec![0u8; stride * height as usize];
         let mut mask = vec![0u8; stride * height as usize];
@@ -454,26 +608,65 @@ impl X11Backend {
             for x in 0..width as usize {
                 let row = ARROW[((y as f32 / scale) as usize).min(18)];
                 let cell = row[((x as f32 / scale) as usize).min(11)];
-                let bit = if lsb_first { 1u8 << (x % 8) } else { 0x80u8 >> (x % 8) };
+                let bit = if lsb_first {
+                    1u8 << (x % 8)
+                } else {
+                    0x80u8 >> (x % 8)
+                };
                 let at = y * stride + x / 8;
-                if cell != b' ' { mask[at] |= bit; }
-                if cell == b'o' { source[at] |= bit; }
+                if cell != b' ' {
+                    mask[at] |= bit;
+                }
+                if cell == b'o' {
+                    source[at] |= bit;
+                }
             }
         }
         let root = setup.roots[self.screen].root;
         let mut pixmaps = [0u32; 2];
         for (slot, data) in [&source, &mask].into_iter().enumerate() {
             let pixmap = self.conn.generate_id().ok()?;
-            self.conn.create_pixmap(1, pixmap, root, width, height).ok()?;
+            self.conn
+                .create_pixmap(1, pixmap, root, width, height)
+                .ok()?;
             let gc = self.conn.generate_id().ok()?;
-            self.conn.create_gc(gc, pixmap, &x11rb::protocol::xproto::CreateGCAux::new()).ok()?;
-            self.conn.put_image(x11rb::protocol::xproto::ImageFormat::Z_PIXMAP, pixmap, gc, width, height, 0, 0, 0, 1, data).ok()?;
+            self.conn
+                .create_gc(gc, pixmap, &x11rb::protocol::xproto::CreateGCAux::new())
+                .ok()?;
+            self.conn
+                .put_image(
+                    x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                    pixmap,
+                    gc,
+                    width,
+                    height,
+                    0,
+                    0,
+                    0,
+                    1,
+                    data,
+                )
+                .ok()?;
             let _ = self.conn.free_gc(gc);
             pixmaps[slot] = pixmap;
         }
         let cursor = self.conn.generate_id().ok()?;
-        let created = self.conn.create_cursor(cursor, pixmaps[0], pixmaps[1], u16::MAX, u16::MAX, u16::MAX, 0, 0, 0, 0, 0);
-        for p in pixmaps { let _ = self.conn.free_pixmap(p); }
+        let created = self.conn.create_cursor(
+            cursor,
+            pixmaps[0],
+            pixmaps[1],
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+            0,
+            0,
+            0,
+            0,
+            0,
+        );
+        for p in pixmaps {
+            let _ = self.conn.free_pixmap(p);
+        }
         created.ok()?.check().ok()?;
         Some(cursor)
     }
@@ -498,7 +691,9 @@ impl X11Backend {
     fn scaled_font(&self, spec: &FontSpec) -> FontSpec {
         let mut scaled = spec.clone();
         scaled.height = self.scaled(spec.height).max(1);
-        if spec.width != 0 { scaled.width = self.scaled(spec.width).max(1); }
+        if spec.width != 0 {
+            scaled.width = self.scaled(spec.width).max(1);
+        }
         scaled
     }
 
@@ -526,7 +721,9 @@ impl X11Backend {
     /// le dessin x11rb, on attend qu'ils soient posés.
     fn before_x11(&self) {
         if self.xft_dirty.replace(false) {
-            if let Some(xft) = self.xft.as_ref() { xft.sync(); }
+            if let Some(xft) = self.xft.as_ref() {
+                xft.sync();
+            }
         }
         self.x11_dirty.set(true);
     }
@@ -536,7 +733,9 @@ impl X11Backend {
     fn before_xft(&self) {
         if self.x11_dirty.replace(false) {
             let _ = self.conn.flush();
-            if let Ok(cookie) = self.conn.get_input_focus() { let _ = cookie.reply(); }
+            if let Ok(cookie) = self.conn.get_input_focus() {
+                let _ = cookie.reply();
+            }
         }
         self.xft_dirty.set(true);
     }
@@ -544,14 +743,22 @@ impl X11Backend {
     /// Tampon arrière à la taille actuelle de la fenêtre (recréé si besoin).
     fn back_buffer(&mut self, hwnd: usize, w: &XWin) -> Option<u32> {
         if let Some(&(pixmap, width, height)) = self.back.get(&hwnd) {
-            if width == w.width && height == w.height { return Some(pixmap); }
+            if width == w.width && height == w.height {
+                return Some(pixmap);
+            }
             let _ = self.conn.free_pixmap(pixmap);
             self.back.remove(&hwnd);
         }
-        if std::env::var_os("WINLUX_NO_BACKBUFFER").is_some_and(|v| !v.is_empty()) { return None; }
+        if std::env::var_os("WINLUX_NO_BACKBUFFER").is_some_and(|v| !v.is_empty()) {
+            return None;
+        }
         let depth = self.conn.setup().roots[self.screen].root_depth;
         let pixmap = self.conn.generate_id().ok()?;
-        self.conn.create_pixmap(depth, pixmap, w.window, w.width.max(1), w.height.max(1)).ok()?.check().ok()?;
+        self.conn
+            .create_pixmap(depth, pixmap, w.window, w.width.max(1), w.height.max(1))
+            .ok()?
+            .check()
+            .ok()?;
         self.back.insert(hwnd, (pixmap, w.width, w.height));
         Some(pixmap)
     }
@@ -559,7 +766,9 @@ impl X11Backend {
     /// Recopie une zone du tampon arrière vers la fenêtre.
     fn present(&self, w: &XWin, pixmap: u32, x: i16, y: i16, width: u16, height: u16) {
         self.before_x11();
-        let _ = self.conn.copy_area(pixmap, w.window, w.gc, x, y, x, y, width, height);
+        let _ = self
+            .conn
+            .copy_area(pixmap, w.window, w.gc, x, y, x, y, width, height);
         let _ = self.conn.flush();
     }
 
@@ -573,7 +782,9 @@ impl X11Backend {
             let t = i as f32 / (bands - 1) as f32;
             let c = theme::lerp_colorref(theme::GRADIENT_TOP, theme::GRADIENT_BOTTOM, t);
             let pixel = self.alloc_color(c);
-            let _ = self.conn.change_gc(w.gc, &ChangeGCAux::new().foreground(pixel));
+            let _ = self
+                .conn
+                .change_gc(w.gc, &ChangeGCAux::new().foreground(pixel));
             let y = (i * h / bands) as i16;
             let band_h = ((i + 1) * h / bands - i * h / bands).max(1) as u16;
             let _ = self.conn.poly_fill_rectangle(
@@ -609,7 +820,9 @@ impl X11Backend {
 
     fn set_foreground(&self, w: &XWin, color: u32) {
         let pixel = self.alloc_color(color);
-        let _ = self.conn.change_gc(w.gc, &ChangeGCAux::new().foreground(pixel));
+        let _ = self
+            .conn
+            .change_gc(w.gc, &ChangeGCAux::new().foreground(pixel));
     }
 
     /// Ouvre une police core de taille voisine; replie vers `fixed` si le
@@ -654,7 +867,12 @@ impl X11Backend {
     /// Keysyms X11 associés à un keycode (table de niveaux chargée à la demande).
     fn key_syms(&mut self, keycode: u8) -> Option<Vec<u32>> {
         if !self.keymap.contains_key(&keycode) {
-            let reply = self.conn.get_keyboard_mapping(keycode, 1).ok()?.reply().ok()?;
+            let reply = self
+                .conn
+                .get_keyboard_mapping(keycode, 1)
+                .ok()?
+                .reply()
+                .ok()?;
             self.keymap.insert(keycode, reply.keysyms);
         }
         self.keymap.get(&keycode).cloned()
@@ -671,10 +889,30 @@ impl X11Backend {
         self.set_foreground(w, color);
         let t = width.max(1) as i32;
         let edges = [
-            Rect { left: r.left, top: r.top, right: r.right, bottom: r.top + t },
-            Rect { left: r.left, top: r.bottom - t, right: r.right, bottom: r.bottom },
-            Rect { left: r.left, top: r.top + t, right: r.left + t, bottom: r.bottom - t },
-            Rect { left: r.right - t, top: r.top + t, right: r.right, bottom: r.bottom - t },
+            Rect {
+                left: r.left,
+                top: r.top,
+                right: r.right,
+                bottom: r.top + t,
+            },
+            Rect {
+                left: r.left,
+                top: r.bottom - t,
+                right: r.right,
+                bottom: r.bottom,
+            },
+            Rect {
+                left: r.left,
+                top: r.top + t,
+                right: r.left + t,
+                bottom: r.bottom - t,
+            },
+            Rect {
+                left: r.right - t,
+                top: r.top + t,
+                right: r.right,
+                bottom: r.bottom - t,
+            },
         ];
         let xs: Vec<_> = edges.iter().filter_map(|e| Self::to_x_rect(w, e)).collect();
         if !xs.is_empty() {
@@ -699,9 +937,20 @@ impl X11Backend {
 
     fn paint_line(&self, w: &XWin, x1: i32, y1: i32, x2: i32, y2: i32, color: u32) {
         self.set_foreground(w, color);
-        let p1 = x11rb::protocol::xproto::Point { x: x1 as i16, y: y1 as i16 };
-        let p2 = x11rb::protocol::xproto::Point { x: x2 as i16, y: y2 as i16 };
-        let _ = self.conn.poly_line(x11rb::protocol::xproto::CoordMode::ORIGIN, w.window, w.gc, &[p1, p2]);
+        let p1 = x11rb::protocol::xproto::Point {
+            x: x1 as i16,
+            y: y1 as i16,
+        };
+        let p2 = x11rb::protocol::xproto::Point {
+            x: x2 as i16,
+            y: y2 as i16,
+        };
+        let _ = self.conn.poly_line(
+            x11rb::protocol::xproto::CoordMode::ORIGIN,
+            w.window,
+            w.gc,
+            &[p1, p2],
+        );
     }
 
     /// Pose un texte ANSI. `bk` est la couleur de fond (`Some`) quand le mode
@@ -719,14 +968,21 @@ impl X11Backend {
         spec: &FontSpec,
     ) {
         let utf8 = text.as_bytes();
-        if utf8.is_empty() { return; }
+        if utf8.is_empty() {
+            return;
+        }
         let vector_metrics = self.xft.as_mut().and_then(|xft| xft.measure(spec, utf8));
         if let Some((width, height, ascent)) = vector_metrics {
             if let Some(background) = bk {
                 self.before_x11();
                 self.paint_fill(
                     w,
-                    &Rect { left: x, top: y, right: x + width.max(1), bottom: y + height.max(1) },
+                    &Rect {
+                        left: x,
+                        top: y,
+                        right: x + width.max(1),
+                        bottom: y + height.max(1),
+                    },
                     background,
                 );
             }
@@ -739,11 +995,18 @@ impl X11Backend {
                 .map(|xft| xft.draw(w.window, spec, x, y + ascent, utf8, color))
                 .unwrap_or(false);
             if drawn {
-                if spec.underline || spec.strikeout { self.before_x11(); }
+                if spec.underline || spec.strikeout {
+                    self.before_x11();
+                }
                 if spec.underline {
                     self.paint_fill(
                         w,
-                        &Rect { left: x, top: y + ascent + 1, right: x + width.max(1), bottom: y + ascent + 2 },
+                        &Rect {
+                            left: x,
+                            top: y + ascent + 1,
+                            right: x + width.max(1),
+                            bottom: y + ascent + 2,
+                        },
                         color,
                     );
                 }
@@ -751,7 +1014,12 @@ impl X11Backend {
                     let middle = y + ascent / 2;
                     self.paint_fill(
                         w,
-                        &Rect { left: x, top: middle, right: x + width.max(1), bottom: middle + 1 },
+                        &Rect {
+                            left: x,
+                            top: middle,
+                            right: x + width.max(1),
+                            bottom: middle + 1,
+                        },
                         color,
                     );
                 }
@@ -800,8 +1068,8 @@ impl X11Backend {
             let _ = self.conn.poly_text8(w.window, w.gc, px, py, &item);
         }
         if spec.underline || spec.strikeout {
-            let width = (bytes.len() as i32 * font.char_width as i32)
-                .clamp(1, u16::MAX as i32) as u16;
+            let width =
+                (bytes.len() as i32 * font.char_width as i32).clamp(1, u16::MAX as i32) as u16;
             let mut lines = Vec::new();
             if spec.underline {
                 lines.push(x11rb::protocol::xproto::Rectangle {
@@ -832,12 +1100,20 @@ impl X11Backend {
         stretch: bool,
         rop: gui::RasterOp,
     ) {
-        let Some(mut source_window) = self.windows.get(&source_hwnd).copied() else { return };
+        let Some(mut source_window) = self.windows.get(&source_hwnd).copied() else {
+            return;
+        };
         if let Some(&(pixmap, width, height)) = self.back.get(&source_hwnd) {
-            if width == source_window.width && height == source_window.height { source_window.window = pixmap; }
+            if width == source_window.width && height == source_window.height {
+                source_window.window = pixmap;
+            }
         }
-        let Some(src) = Self::to_x_rect(&source_window, source_rect) else { return };
-        let Some(dst) = Self::to_x_rect(destination_window, destination_rect) else { return };
+        let Some(src) = Self::to_x_rect(&source_window, source_rect) else {
+            return;
+        };
+        let Some(dst) = Self::to_x_rect(destination_window, destination_rect) else {
+            return;
+        };
 
         if !stretch || (src.width == dst.width && src.height == dst.height) {
             let width = src.width.min(dst.width);
@@ -877,26 +1153,36 @@ impl X11Backend {
         rop: gui::RasterOp,
     ) {
         let depth = self.conn.setup().roots[self.screen].root_depth;
-        let Some(format) = self.conn.setup().pixmap_formats.iter().find(|f| f.depth == depth) else {
+        let Some(format) = self
+            .conn
+            .setup()
+            .pixmap_formats
+            .iter()
+            .find(|f| f.depth == depth)
+        else {
             return;
         };
         let bits_per_pixel = format.bits_per_pixel as usize;
         let pad = format.scanline_pad as usize;
         if bits_per_pixel == 0
             || bits_per_pixel > 32
-            || bits_per_pixel % 8 != 0
+            || !bits_per_pixel.is_multiple_of(8)
             || pad < 8
-            || pad % 8 != 0
+            || !pad.is_multiple_of(8)
         {
             return;
         }
         let bytes_per_pixel = bits_per_pixel / 8;
-        let stride = |width: usize| ((width * bits_per_pixel + pad - 1) / pad) * (pad / 8);
+        let stride = |width: usize| (width * bits_per_pixel).div_ceil(pad) * (pad / 8);
         let src_stride = stride(src.width as usize);
         let dst_stride = stride(dst.width as usize);
         const MAX_IMAGE_BYTES: usize = 256 * 1024 - 64;
-        let Some(src_len) = src_stride.checked_mul(src.height as usize) else { return };
-        let Some(dst_len) = dst_stride.checked_mul(dst.height as usize) else { return };
+        let Some(src_len) = src_stride.checked_mul(src.height as usize) else {
+            return;
+        };
+        let Some(dst_len) = dst_stride.checked_mul(dst.height as usize) else {
+            return;
+        };
         if src_len > MAX_IMAGE_BYTES || dst_len > MAX_IMAGE_BYTES {
             return;
         }
@@ -951,8 +1237,17 @@ impl X11Backend {
         );
     }
 
-    fn paint_bitmap(&self, window: &XWin, source: &Rect, destination: &Rect, pixels: &[u32], rop: gui::RasterOp) {
-        let Some(dst) = Self::to_x_rect(window, destination) else { return };
+    fn paint_bitmap(
+        &self,
+        window: &XWin,
+        source: &Rect,
+        destination: &Rect,
+        pixels: &[u32],
+        rop: gui::RasterOp,
+    ) {
+        let Some(dst) = Self::to_x_rect(window, destination) else {
+            return;
+        };
         let source_width = source.width();
         let source_height = source.height();
         let destination_width = destination.width();
@@ -968,16 +1263,25 @@ impl X11Backend {
         }
         let setup = self.conn.setup();
         let depth = setup.roots[self.screen].root_depth;
-        let Some(format) = setup.pixmap_formats.iter().find(|f| f.depth == depth) else { return };
+        let Some(format) = setup.pixmap_formats.iter().find(|f| f.depth == depth) else {
+            return;
+        };
         let bits_per_pixel = format.bits_per_pixel as usize;
         let pad = format.scanline_pad as usize;
-        if bits_per_pixel == 0 || bits_per_pixel > 32 || bits_per_pixel % 8 != 0 || pad < 8 || pad % 8 != 0 {
+        if bits_per_pixel == 0
+            || bits_per_pixel > 32
+            || !bits_per_pixel.is_multiple_of(8)
+            || pad < 8
+            || !pad.is_multiple_of(8)
+        {
             return;
         }
         let bytes_per_pixel = bits_per_pixel / 8;
-        let stride = |width: usize| ((width * bits_per_pixel + pad - 1) / pad) * (pad / 8);
+        let stride = |width: usize| (width * bits_per_pixel).div_ceil(pad) * (pad / 8);
         let row_bytes = stride(dst.width as usize);
-        let Some(image_len) = row_bytes.checked_mul(dst.height as usize) else { return };
+        let Some(image_len) = row_bytes.checked_mul(dst.height as usize) else {
+            return;
+        };
         const MAX_IMAGE_BYTES: usize = 256 * 1024 - 64;
         if image_len > MAX_IMAGE_BYTES {
             return;
@@ -989,11 +1293,17 @@ impl X11Backend {
                 let destination_x = dst.x as i32 + x as i32 - destination.left;
                 let destination_y = dst.y as i32 + y as i32 - destination.top;
                 let source_x = (destination_x as f32 + 0.5) * source_width as f32
-                    / destination_width as f32 - 0.5;
+                    / destination_width as f32
+                    - 0.5;
                 let source_y = (destination_y as f32 + 0.5) * source_height as f32
-                    / destination_height as f32 - 0.5;
+                    / destination_height as f32
+                    - 0.5;
                 let colorref = bilinear_colorref(
-                    pixels, source_width as usize, source_height as usize, source_x, source_y,
+                    pixels,
+                    source_width as usize,
+                    source_height as usize,
+                    source_x,
+                    source_y,
                 );
                 let pixel = *color_pixels
                     .entry(colorref)
@@ -1003,18 +1313,18 @@ impl X11Backend {
                     _ => pixel.to_be_bytes(),
                 };
                 let offset = y * row_bytes + x * bytes_per_pixel;
-                let bytes = if setup.image_byte_order == x11rb::protocol::xproto::ImageOrder::LSB_FIRST {
-                    &pixel_bytes[..bytes_per_pixel]
-                } else {
-                    &pixel_bytes[4 - bytes_per_pixel..]
-                };
+                let bytes =
+                    if setup.image_byte_order == x11rb::protocol::xproto::ImageOrder::LSB_FIRST {
+                        &pixel_bytes[..bytes_per_pixel]
+                    } else {
+                        &pixel_bytes[4 - bytes_per_pixel..]
+                    };
                 image[offset..offset + bytes_per_pixel].copy_from_slice(bytes);
             }
         }
-        let _ = self.conn.change_gc(
-            window.gc,
-            &ChangeGCAux::new().function(x11_function(rop)),
-        );
+        let _ = self
+            .conn
+            .change_gc(window.gc, &ChangeGCAux::new().function(x11_function(rop)));
         let _ = self.conn.put_image(
             x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
             window.window,
@@ -1036,11 +1346,12 @@ impl X11Backend {
     fn paint_pattern(&self, window: &XWin, rect: &Rect, color: u32, rop: gui::RasterOp) {
         if let Some(xr) = Self::to_x_rect(window, rect) {
             self.set_foreground(window, color);
-            let _ = self.conn.change_gc(
-                window.gc,
-                &ChangeGCAux::new().function(x11_function(rop)),
-            );
-            let _ = self.conn.poly_fill_rectangle(window.window, window.gc, &[xr]);
+            let _ = self
+                .conn
+                .change_gc(window.gc, &ChangeGCAux::new().function(x11_function(rop)));
+            let _ = self
+                .conn
+                .poly_fill_rectangle(window.window, window.gc, &[xr]);
             let _ = self.conn.change_gc(
                 window.gc,
                 &ChangeGCAux::new().function(x11rb::protocol::xproto::GX::COPY),
@@ -1051,7 +1362,9 @@ impl X11Backend {
     /// Rejoue la liste de commandes GDI d'une fenêtre.
     fn paint_cmds(&mut self, w: &XWin, cmds: &[DrawCmd]) {
         for cmd in cmds {
-            if !matches!(cmd, DrawCmd::Text { .. }) { self.before_x11(); }
+            if !matches!(cmd, DrawCmd::Text { .. }) {
+                self.before_x11();
+            }
             match cmd {
                 DrawCmd::FillRect { rect, color } => {
                     let rect = self.scaled_rect(rect);
@@ -1069,11 +1382,32 @@ impl X11Backend {
                     let rect = self.scaled_rect(rect);
                     self.paint_pattern(w, &rect, *color, *rop)
                 }
-                DrawCmd::Text { x, y, text, color, bk, font } => {
+                DrawCmd::Text {
+                    x,
+                    y,
+                    text,
+                    color,
+                    bk,
+                    font,
+                } => {
                     let font = self.scaled_font(font);
-                    self.paint_text(w, self.scaled(*x), self.scaled(*y), text, *color, *bk, &font)
+                    self.paint_text(
+                        w,
+                        self.scaled(*x),
+                        self.scaled(*y),
+                        text,
+                        *color,
+                        *bk,
+                        &font,
+                    )
                 }
-                DrawCmd::Blit { source_hwnd, source, destination, stretch, rop } => {
+                DrawCmd::Blit {
+                    source_hwnd,
+                    source,
+                    destination,
+                    stretch,
+                    rop,
+                } => {
                     let source = self.scaled_rect(source);
                     let destination = self.scaled_rect(destination);
                     self.paint_blit(w, *source_hwnd, &source, &destination, *stretch, *rop)
@@ -1082,9 +1416,20 @@ impl X11Backend {
                     let destination = self.scaled_rect(rect);
                     self.paint_bitmap(w, rect, &destination, pixels, *rop)
                 }
-                DrawCmd::Line { x1, y1, x2, y2, color } => {
-                    self.paint_line(w, self.scaled(*x1), self.scaled(*y1), self.scaled(*x2), self.scaled(*y2), *color)
-                }
+                DrawCmd::Line {
+                    x1,
+                    y1,
+                    x2,
+                    y2,
+                    color,
+                } => self.paint_line(
+                    w,
+                    self.scaled(*x1),
+                    self.scaled(*y1),
+                    self.scaled(*x2),
+                    self.scaled(*y2),
+                    *color,
+                ),
             }
         }
     }
@@ -1108,14 +1453,24 @@ impl X11Backend {
                         let _ = self.conn.flush();
                     }
                 }
-                Some(PendingEvent { hwnd, message: gui::WM_PAINT, wparam: 0, lparam: 0 })
+                Some(PendingEvent {
+                    hwnd,
+                    message: gui::WM_PAINT,
+                    wparam: 0,
+                    lparam: 0,
+                })
             }
             Event::ConfigureNotify(e) => self.on_configure(e),
             Event::ClientMessage(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
                 let data = e.data.as_data32();
                 if e.type_ == self.wm_protocols && data[0] == self.wm_delete {
-                    Some(PendingEvent { hwnd, message: gui::WM_CLOSE, wparam: 0, lparam: 0 })
+                    Some(PendingEvent {
+                        hwnd,
+                        message: gui::WM_CLOSE,
+                        wparam: 0,
+                        lparam: 0,
+                    })
                 } else {
                     None
                 }
@@ -1130,36 +1485,69 @@ impl X11Backend {
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
                 if let Some((message, delta)) = wheel_message(e.detail) {
                     // La molette Win32 donne des coordonnées écran.
-                    let lparam = pack_i16_pair(self.logical(e.root_x as i32), self.logical(e.root_y as i32));
+                    let lparam =
+                        pack_i16_pair(self.logical(e.root_x as i32), self.logical(e.root_y as i32));
                     let wparam = ((delta as u16 as usize) << 16) | button_state(e.state);
-                    return Some(PendingEvent { hwnd, message, wparam, lparam });
+                    return Some(PendingEvent {
+                        hwnd,
+                        message,
+                        wparam,
+                        lparam,
+                    });
                 }
                 let wparam = button_wparam(e.detail) | button_state(e.state);
-                Some(PendingEvent { hwnd, message: button_message(e.detail, true), wparam, lparam })
+                Some(PendingEvent {
+                    hwnd,
+                    message: button_message(e.detail, true),
+                    wparam,
+                    lparam,
+                })
             }
             Event::ButtonRelease(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
-                if wheel_message(e.detail).is_some() { return None; }
+                if wheel_message(e.detail).is_some() {
+                    return None;
+                }
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
                 let wparam = button_state(e.state) & !button_wparam(e.detail);
-                Some(PendingEvent { hwnd, message: button_message(e.detail, false), wparam, lparam })
+                Some(PendingEvent {
+                    hwnd,
+                    message: button_message(e.detail, false),
+                    wparam,
+                    lparam,
+                })
             }
             Event::MotionNotify(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
                 let lparam = ((y as isize) << 16) | (x as isize & 0xFFFF);
-                Some(PendingEvent { hwnd, message: gui::WM_MOUSEMOVE, wparam: button_state(e.state), lparam })
+                Some(PendingEvent {
+                    hwnd,
+                    message: gui::WM_MOUSEMOVE,
+                    wparam: button_state(e.state),
+                    lparam,
+                })
             }
             Event::FocusIn(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                Some(PendingEvent { hwnd, message: gui::WM_SETFOCUS, wparam: 0, lparam: 0 })
+                Some(PendingEvent {
+                    hwnd,
+                    message: gui::WM_SETFOCUS,
+                    wparam: 0,
+                    lparam: 0,
+                })
             }
             Event::FocusOut(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
-                Some(PendingEvent { hwnd, message: gui::WM_KILLFOCUS, wparam: 0, lparam: 0 })
+                Some(PendingEvent {
+                    hwnd,
+                    message: gui::WM_KILLFOCUS,
+                    wparam: 0,
+                    lparam: 0,
+                })
             }
             Event::KeyPress(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
@@ -1167,17 +1555,30 @@ impl X11Backend {
                     eprintln!("Winlux X11 keycode {}", e.detail);
                 }
                 let shift = e.state.contains(x11rb::protocol::xproto::KeyButMask::SHIFT);
-                let ctrl = e.state.contains(x11rb::protocol::xproto::KeyButMask::CONTROL);
+                let ctrl = e
+                    .state
+                    .contains(x11rb::protocol::xproto::KeyButMask::CONTROL);
                 let caps = e.state.contains(x11rb::protocol::xproto::KeyButMask::LOCK);
                 let syms = self.key_syms(e.detail);
                 let base = syms.as_deref().and_then(base_keysym);
-                let xkb = self.keyboard.as_ref().and_then(|k| k.translate(e.detail, e.state.into()));
+                let xkb = self
+                    .keyboard
+                    .as_ref()
+                    .and_then(|k| k.translate(e.detail, e.state.into()));
                 let level3 = e.state.contains(x11rb::protocol::xproto::KeyButMask::MOD5);
-                let sym = xkb.map(|(_, _, sym, _)| sym).or_else(|| syms.as_deref().and_then(|s| effective_keysym(s, shift, caps, level3)));
+                let sym = xkb.map(|(_, _, sym, _)| sym).or_else(|| {
+                    syms.as_deref()
+                        .and_then(|s| effective_keysym(s, shift, caps, level3))
+                });
                 // Le VK désigne la touche physique (niveau non modifié), tandis
                 // que le caractère tient compte de Maj/Caps Lock.
-                let vk = xkb.and_then(|(base, shifted, _, _)| key_levels_to_vk(base, shifted))
-                    .or_else(|| syms.as_deref().and_then(|s| key_levels_to_vk(base.unwrap_or(0), s.get(1).copied().unwrap_or(0))))
+                let vk = xkb
+                    .and_then(|(base, shifted, _, _)| key_levels_to_vk(base, shifted))
+                    .or_else(|| {
+                        syms.as_deref().and_then(|s| {
+                            key_levels_to_vk(base.unwrap_or(0), s.get(1).copied().unwrap_or(0))
+                        })
+                    })
                     .unwrap_or(e.detail as usize);
                 let extended = vk_is_extended(vk);
                 let lparam = key_lparam(e.detail, false, extended);
@@ -1186,8 +1587,16 @@ impl X11Backend {
                 // produit pas de caractère (raccourci clavier).
                 // AltGr peut être encodé Ctrl+Alt par le serveur : XKB indique
                 // les modificateurs consommés pour le caractère de niveau 3.
-                let altgr = level3 || xkb.is_some_and(|(_, _, _, consumed)| consumed & 0x84 != 0 && e.state.contains(x11rb::protocol::xproto::KeyButMask::MOD1));
-                let ch = if ctrl && !altgr { None } else { sym.map(keysym_to_char).filter(|c| *c != 0) };
+                let altgr = level3
+                    || xkb.is_some_and(|(_, _, _, consumed)| {
+                        consumed & 0x84 != 0
+                            && e.state.contains(x11rb::protocol::xproto::KeyButMask::MOD1)
+                    });
+                let ch = if ctrl && !altgr {
+                    None
+                } else {
+                    sym.map(keysym_to_char).filter(|c| *c != 0)
+                };
                 gui::set_key_char(hwnd, vk, lparam, ch);
                 Some(PendingEvent {
                     hwnd,
@@ -1199,9 +1608,19 @@ impl X11Backend {
             Event::KeyRelease(e) => {
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let syms = self.key_syms(e.detail);
-                let vk = self.keyboard.as_ref().and_then(|k| k.translate(e.detail, e.state.into()))
+                let vk = self
+                    .keyboard
+                    .as_ref()
+                    .and_then(|k| k.translate(e.detail, e.state.into()))
                     .and_then(|(base, shifted, _, _)| key_levels_to_vk(base, shifted))
-                    .or_else(|| syms.as_deref().and_then(|s| key_levels_to_vk(s.first().copied().unwrap_or(0), s.get(1).copied().unwrap_or(0))))
+                    .or_else(|| {
+                        syms.as_deref().and_then(|s| {
+                            key_levels_to_vk(
+                                s.first().copied().unwrap_or(0),
+                                s.get(1).copied().unwrap_or(0),
+                            )
+                        })
+                    })
                     .unwrap_or(e.detail as usize);
                 gui::update_async_key_state(vk, false);
                 Some(PendingEvent {
@@ -1224,7 +1643,14 @@ impl X11Backend {
         let hwnd = *self.by_xwin.get(&e.window)?;
         let (old_x, old_y, old_w, old_h, window, root) = {
             let w = self.windows.get(&hwnd)?;
-            (w.x, w.y, w.width, w.height, w.window, self.conn.setup().roots[self.screen].root)
+            (
+                w.x,
+                w.y,
+                w.width,
+                w.height,
+                w.window,
+                self.conn.setup().roots[self.screen].root,
+            )
         };
         // ConfigureNotify.x/y sont relatifs au parent; traduire l'origine vers
         // la racine couvre les fenêtres reparentées par un gestionnaire X11.
@@ -1255,7 +1681,12 @@ impl X11Backend {
                     lparam: pack_i16_pair(self.logical(x), self.logical(y)),
                 });
             }
-            return Some(PendingEvent { hwnd, message: gui::WM_SIZE, wparam: 0, lparam });
+            return Some(PendingEvent {
+                hwnd,
+                message: gui::WM_SIZE,
+                wparam: 0,
+                lparam,
+            });
         }
         if moved {
             return Some(PendingEvent {
@@ -1307,11 +1738,21 @@ fn wheel_message(detail: u8) -> Option<(u32, i16)> {
 fn button_state(state: x11rb::protocol::xproto::KeyButMask) -> usize {
     use x11rb::protocol::xproto::KeyButMask;
     let mut bits = 0;
-    if state.contains(KeyButMask::BUTTON1) { bits |= 0x0001; }
-    if state.contains(KeyButMask::BUTTON3) { bits |= 0x0002; }
-    if state.contains(KeyButMask::SHIFT) { bits |= 0x0004; }
-    if state.contains(KeyButMask::CONTROL) { bits |= 0x0008; }
-    if state.contains(KeyButMask::BUTTON2) { bits |= 0x0010; }
+    if state.contains(KeyButMask::BUTTON1) {
+        bits |= 0x0001;
+    }
+    if state.contains(KeyButMask::BUTTON3) {
+        bits |= 0x0002;
+    }
+    if state.contains(KeyButMask::SHIFT) {
+        bits |= 0x0004;
+    }
+    if state.contains(KeyButMask::CONTROL) {
+        bits |= 0x0008;
+    }
+    if state.contains(KeyButMask::BUTTON2) {
+        bits |= 0x0010;
+    }
     bits
 }
 
@@ -1357,24 +1798,24 @@ fn keysym_to_vk(sym: u32) -> Option<usize> {
         0xFF09 => gui::VK_TAB,
         0xFF0D => gui::VK_RETURN,
         0xFF1B => gui::VK_ESCAPE,
-        0xFFFF => 0x2E,                                  // VK_DELETE
-        0xFF51 => 0x25,                                  // VK_LEFT
-        0xFF52 => 0x26,                                  // VK_UP
-        0xFF53 => 0x27,                                  // VK_RIGHT
-        0xFF54 => 0x28,                                  // VK_DOWN
-        0xFF50 => 0x24,                                  // VK_HOME
-        0xFF57 => 0x23,                                  // VK_END
-        0xFF55 => 0x21,                                  // VK_PRIOR
-        0xFF56 => 0x22,                                  // VK_NEXT
-        0xFF63 => 0x2D,                                  // VK_INSERT
+        0xFFFF => 0x2E,                                    // VK_DELETE
+        0xFF51 => 0x25,                                    // VK_LEFT
+        0xFF52 => 0x26,                                    // VK_UP
+        0xFF53 => 0x27,                                    // VK_RIGHT
+        0xFF54 => 0x28,                                    // VK_DOWN
+        0xFF50 => 0x24,                                    // VK_HOME
+        0xFF57 => 0x23,                                    // VK_END
+        0xFF55 => 0x21,                                    // VK_PRIOR
+        0xFF56 => 0x22,                                    // VK_NEXT
+        0xFF63 => 0x2D,                                    // VK_INSERT
         0xFFBE..=0xFFC9 => 0x70 + (sym - 0xFFBE) as usize, // VK_F1..VK_F12
-        0xFFE1 | 0xFFE2 => 0x10,                          // VK_SHIFT
-        0xFFE3 | 0xFFE4 => 0x11,                          // VK_CONTROL
-        0xFFE9 | 0xFFEA => 0x12,                          // VK_MENU
-        0xFE03 | 0xFF7E => 0x12,                          // ISO_Level3_Shift / Mode_switch (AltGr)
-        0xFFEB => 0x5B,                                  // Super_L / VK_LWIN
-        0xFFEC => 0x5C,                                  // Super_R / VK_RWIN
-        0xFF67 => 0x5D,                                  // Menu / VK_APPS
+        0xFFE1 | 0xFFE2 => 0x10,                           // VK_SHIFT
+        0xFFE3 | 0xFFE4 => 0x11,                           // VK_CONTROL
+        0xFFE9 | 0xFFEA => 0x12,                           // VK_MENU
+        0xFE03 | 0xFF7E => 0x12,                           // ISO_Level3_Shift / Mode_switch (AltGr)
+        0xFFEB => 0x5B,                                    // Super_L / VK_LWIN
+        0xFFEC => 0x5C,                                    // Super_R / VK_RWIN
+        0xFF67 => 0x5D,                                    // Menu / VK_APPS
         0xFFE5 => gui::VK_CAPITAL,
         0xFF7F => gui::VK_NUMLOCK,
         0xFF14 => gui::VK_SCROLL,
@@ -1395,17 +1836,17 @@ fn keysym_to_vk(sym: u32) -> Option<usize> {
                 b'*' => b'8' as usize,
                 b'(' => b'9' as usize,
                 b')' => b'0' as usize,
-                b'-' | b'_' => 0xBD, // VK_OEM_MINUS
-                b'=' | b'+' => 0xBB, // VK_OEM_PLUS
-                b'[' | b'{' => 0xDB, // VK_OEM_4
-                b']' | b'}' => 0xDD, // VK_OEM_6
+                b'-' | b'_' => 0xBD,  // VK_OEM_MINUS
+                b'=' | b'+' => 0xBB,  // VK_OEM_PLUS
+                b'[' | b'{' => 0xDB,  // VK_OEM_4
+                b']' | b'}' => 0xDD,  // VK_OEM_6
                 b'\\' | b'|' => 0xDC, // VK_OEM_5
-                b';' | b':' => 0xBA, // VK_OEM_1
+                b';' | b':' => 0xBA,  // VK_OEM_1
                 b'\'' | b'"' => 0xDE, // VK_OEM_7
-                b',' | b'<' => 0xBC, // VK_OEM_COMMA
-                b'.' | b'>' => 0xBE, // VK_OEM_PERIOD
-                b'/' | b'?' => 0xBF, // VK_OEM_2
-                b'`' | b'~' => 0xC0, // VK_OEM_3
+                b',' | b'<' => 0xBC,  // VK_OEM_COMMA
+                b'.' | b'>' => 0xBE,  // VK_OEM_PERIOD
+                b'/' | b'?' => 0xBF,  // VK_OEM_2
+                b'`' | b'~' => 0xC0,  // VK_OEM_3
                 _ => return None,
             }
         }
@@ -1422,7 +1863,11 @@ fn base_keysym(syms: &[u32]) -> Option<u32> {
 /// Sélectionne le niveau effectif d'une touche, en appliquant Caps Lock aux
 /// lettres mais pas aux chiffres ni à la ponctuation.
 fn effective_keysym(syms: &[u32], shift: bool, caps: bool, level3: bool) -> Option<u32> {
-    let group = if level3 && syms.get(2).is_some_and(|sym| *sym != 0) { 2 } else { 0 };
+    let group = if level3 && syms.get(2).is_some_and(|sym| *sym != 0) {
+        2
+    } else {
+        0
+    };
     let base = syms.get(group).copied().filter(|sym| *sym != 0)?;
     let is_letter = matches!(base, 0x41..=0x5A | 0x61..=0x7A);
     let level = (if is_letter { shift ^ caps } else { shift }) as usize;
@@ -1454,7 +1899,7 @@ fn keysym_to_char(sym: u32) -> u16 {
         0xFF1B => 0x1B, // Échap
         0x20..=0x7E => sym as u16,
         0xA0..=0xFF => sym as u16, // Latin-1 (é, à, ç…)
-        0x20AC => 0x20AC, // EuroSign, keysym historique de l'AltGr+E
+        0x20AC => 0x20AC,          // EuroSign, keysym historique de l'AltGr+E
         0x0100_0000..=0x0110_FFFF => {
             let codepoint = sym & 0x00FF_FFFF;
             char::from_u32(codepoint)
@@ -1499,14 +1944,32 @@ mod tests {
     #[test]
     fn niveaux_clavier_gerent_maj_caps_et_ponctuation() {
         let letter = [b'a' as u32, b'A' as u32];
-        assert_eq!(effective_keysym(&letter, false, false, false), Some(b'a' as u32));
-        assert_eq!(effective_keysym(&letter, true, false, false), Some(b'A' as u32));
-        assert_eq!(effective_keysym(&letter, false, true, false), Some(b'A' as u32));
-        assert_eq!(effective_keysym(&letter, true, true, false), Some(b'a' as u32));
+        assert_eq!(
+            effective_keysym(&letter, false, false, false),
+            Some(b'a' as u32)
+        );
+        assert_eq!(
+            effective_keysym(&letter, true, false, false),
+            Some(b'A' as u32)
+        );
+        assert_eq!(
+            effective_keysym(&letter, false, true, false),
+            Some(b'A' as u32)
+        );
+        assert_eq!(
+            effective_keysym(&letter, true, true, false),
+            Some(b'a' as u32)
+        );
 
         let digit = [b'1' as u32, b'!' as u32];
-        assert_eq!(effective_keysym(&digit, false, true, false), Some(b'1' as u32));
-        assert_eq!(effective_keysym(&digit, true, false, false), Some(b'!' as u32));
+        assert_eq!(
+            effective_keysym(&digit, false, true, false),
+            Some(b'1' as u32)
+        );
+        assert_eq!(
+            effective_keysym(&digit, true, false, false),
+            Some(b'!' as u32)
+        );
         assert_eq!(base_keysym(&digit), Some(b'1' as u32));
     }
 
@@ -1516,8 +1979,14 @@ mod tests {
         assert_eq!(key_levels_to_vk(0xE9, b'2' as u32), Some(0x32));
         assert_eq!(key_levels_to_vk(b'a' as u32, b'A' as u32), Some(0x41));
         let french_e = [b'e' as u32, b'E' as u32, 0x20AC, 0x0100_00A2];
-        assert_eq!(effective_keysym(&french_e, false, false, true), Some(0x20AC));
-        assert_eq!(effective_keysym(&french_e, true, false, true), Some(0x0100_00A2));
+        assert_eq!(
+            effective_keysym(&french_e, false, false, true),
+            Some(0x20AC)
+        );
+        assert_eq!(
+            effective_keysym(&french_e, true, false, true),
+            Some(0x0100_00A2)
+        );
         assert_eq!(keysym_to_char(0x20AC), 0x20AC);
         assert_eq!(keysym_to_char(0x0100_03A9), 0x03A9);
         assert_eq!(keysym_to_char(0x0100_D800), 0); // surrogate invalide
@@ -1529,15 +1998,28 @@ mod tests {
         let keyboard = unsafe { XkbKeyboard::connect() }.expect("libX11/XKB");
         let (conn, _) = x11rb::connect(None).expect("X11");
         let setup = conn.setup();
-        let mapping = conn.get_keyboard_mapping(setup.min_keycode, setup.max_keycode - setup.min_keycode + 1).unwrap().reply().unwrap();
+        let mapping = conn
+            .get_keyboard_mapping(setup.min_keycode, setup.max_keycode - setup.min_keycode + 1)
+            .unwrap()
+            .reply()
+            .unwrap();
         let width = mapping.keysyms_per_keycode as usize;
-        let code = |sym| mapping.keysyms.chunks(width).position(|row| row.first() == Some(&sym))
-            .map(|i| setup.min_keycode + i as u8).expect("keysym in French keymap");
+        let code = |sym| {
+            mapping
+                .keysyms
+                .chunks(width)
+                .position(|row| row.first() == Some(&sym))
+                .map(|i| setup.min_keycode + i as u8)
+                .expect("keysym in French keymap")
+        };
         let e = code(b'e' as u32);
         assert_eq!(keyboard.translate(e, 0).unwrap().2, b'e' as u32);
         assert_eq!(keyboard.translate(e, 1).unwrap().2, b'E' as u32);
         assert_eq!(keyboard.translate(e, 2).unwrap().2, b'E' as u32);
-        assert_eq!(keysym_to_char(keyboard.translate(e, 128).unwrap().2), 0x20AC);
+        assert_eq!(
+            keysym_to_char(keyboard.translate(e, 128).unwrap().2),
+            0x20AC
+        );
         let (base, shifted, _, _) = keyboard.translate(code(b'&' as u32), 0).unwrap();
         assert_eq!(key_levels_to_vk(base, shifted), Some(0x31));
         let (base, shifted, _, _) = keyboard.translate(code(0xFFEB), 0).unwrap();
@@ -1621,7 +2103,10 @@ impl gui::GuiBackend for X11Backend {
         // changement de mode RandR, la valeur du setup initial est périmée.
         let root = self.conn.setup().roots[self.screen].root;
         let geometry = self.conn.get_geometry(root).ok()?.reply().ok()?;
-        Some((self.logical(geometry.width as i32).max(1), self.logical(geometry.height as i32).max(1)))
+        Some((
+            self.logical(geometry.width as i32).max(1),
+            self.logical(geometry.height as i32).max(1),
+        ))
     }
 
     fn create_window(&mut self, hwnd: usize, title: &str, rect: Rect) {
@@ -1630,8 +2115,12 @@ impl gui::GuiBackend for X11Backend {
         // Profondeur CopyFromParent (0) : le serveur prend celle de la racine.
         let visual = scr.root_visual;
 
-        let x = self.scaled(rect.left).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
-        let y = self.scaled(rect.top).clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let x = self
+            .scaled(rect.left)
+            .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
+        let y = self
+            .scaled(rect.top)
+            .clamp(i16::MIN as i32, i16::MAX as i32) as i16;
         let w = self.scaled(rect.width()).max(1).clamp(1, u16::MAX as i32) as u16;
         let h = self.scaled(rect.height()).max(1).clamp(1, u16::MAX as i32) as u16;
 
@@ -1647,28 +2136,40 @@ impl gui::GuiBackend for X11Backend {
             self.conn.open_font(font, b"cursor").ok()?.check().ok()?;
             let cursor = self.conn.generate_id().ok()?;
             let created = self.conn.create_glyph_cursor(
-                cursor, font, font, 68, 69,
-                u16::MAX, u16::MAX, u16::MAX, 0, 0, 0,
+                cursor,
+                font,
+                font,
+                68,
+                69,
+                u16::MAX,
+                u16::MAX,
+                u16::MAX,
+                0,
+                0,
+                0,
             );
             let _ = self.conn.close_font(font);
             created.ok()?.check().ok()?;
             Some(cursor)
         });
-        let aux = CreateWindowAux::new()
-            .background_pixel(bg)
-            .event_mask(
-                x11rb::protocol::xproto::EventMask::EXPOSURE
-                    | x11rb::protocol::xproto::EventMask::STRUCTURE_NOTIFY
-                    | x11rb::protocol::xproto::EventMask::BUTTON_PRESS
-                    | x11rb::protocol::xproto::EventMask::BUTTON_RELEASE
-                    | x11rb::protocol::xproto::EventMask::POINTER_MOTION
-                    | x11rb::protocol::xproto::EventMask::FOCUS_CHANGE
-                    | x11rb::protocol::xproto::EventMask::KEY_PRESS
-                    | x11rb::protocol::xproto::EventMask::KEY_RELEASE,
-            );
-        let aux = if let Some(cursor) = pointer_cursor { aux.cursor(cursor) } else { aux };
+        let aux = CreateWindowAux::new().background_pixel(bg).event_mask(
+            x11rb::protocol::xproto::EventMask::EXPOSURE
+                | x11rb::protocol::xproto::EventMask::STRUCTURE_NOTIFY
+                | x11rb::protocol::xproto::EventMask::BUTTON_PRESS
+                | x11rb::protocol::xproto::EventMask::BUTTON_RELEASE
+                | x11rb::protocol::xproto::EventMask::POINTER_MOTION
+                | x11rb::protocol::xproto::EventMask::FOCUS_CHANGE
+                | x11rb::protocol::xproto::EventMask::KEY_PRESS
+                | x11rb::protocol::xproto::EventMask::KEY_RELEASE,
+        );
+        let aux = if let Some(cursor) = pointer_cursor {
+            aux.cursor(cursor)
+        } else {
+            aux
+        };
 
-        if self.conn
+        if self
+            .conn
             .create_window(
                 0, // CopyFromParent depth
                 win,
@@ -1684,10 +2185,14 @@ impl gui::GuiBackend for X11Backend {
             )
             .is_err()
         {
-            if let Some(cursor) = pointer_cursor { let _ = self.conn.free_cursor(cursor); }
+            if let Some(cursor) = pointer_cursor {
+                let _ = self.conn.free_cursor(cursor);
+            }
             return;
         }
-        if let Some(cursor) = pointer_cursor { let _ = self.conn.free_cursor(cursor); }
+        if let Some(cursor) = pointer_cursor {
+            let _ = self.conn.free_cursor(cursor);
+        }
 
         // Demande la fermeture propre via WM_DELETE_WINDOW.
         let _ = self.conn.change_property32(
@@ -1710,21 +2215,35 @@ impl gui::GuiBackend for X11Backend {
             Ok(id) => id,
             Err(_) => return,
         };
-        let _ = self.conn.create_gc(gc, win, &CreateGCAux::new().graphics_exposures(0));
+        let _ = self
+            .conn
+            .create_gc(gc, win, &CreateGCAux::new().graphics_exposures(0));
 
         let _ = self.conn.flush();
         self.windows.insert(
             hwnd,
-            XWin { window: win, gc, x: x as i32, y: y as i32, width: w, height: h },
+            XWin {
+                window: win,
+                gc,
+                x: x as i32,
+                y: y as i32,
+                width: w,
+                height: h,
+            },
         );
         self.by_xwin.insert(win, hwnd);
     }
 
     fn draw(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
         self.content.insert(hwnd, cmds.to_vec());
-        let Some(w) = self.windows.get(&hwnd).copied() else { return };
+        let Some(w) = self.windows.get(&hwnd).copied() else {
+            return;
+        };
         if let Some(pixmap) = self.back_buffer(hwnd, &w) {
-            let target = XWin { window: pixmap, ..w };
+            let target = XWin {
+                window: pixmap,
+                ..w
+            };
             self.paint_theme(&target);
             self.paint_cmds(&target, cmds);
             self.present(&w, pixmap, 0, 0, w.width, w.height);
@@ -1738,7 +2257,9 @@ impl gui::GuiBackend for X11Backend {
 
     fn destroy_window(&mut self, hwnd: usize) {
         self.content.remove(&hwnd);
-        if let Some((pixmap, _, _)) = self.back.remove(&hwnd) { let _ = self.conn.free_pixmap(pixmap); }
+        if let Some((pixmap, _, _)) = self.back.remove(&hwnd) {
+            let _ = self.conn.free_pixmap(pixmap);
+        }
         if let Some(w) = self.windows.remove(&hwnd) {
             self.by_xwin.remove(&w.window);
             let _ = self.conn.free_gc(w.gc);
@@ -1773,8 +2294,12 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn set_window_rect(&mut self, hwnd: usize, rect: Rect) {
-        let x = self.scaled(rect.left).clamp(i16::MIN as i32, i16::MAX as i32);
-        let y = self.scaled(rect.top).clamp(i16::MIN as i32, i16::MAX as i32);
+        let x = self
+            .scaled(rect.left)
+            .clamp(i16::MIN as i32, i16::MAX as i32);
+        let y = self
+            .scaled(rect.top)
+            .clamp(i16::MIN as i32, i16::MAX as i32);
         let width = self.scaled(rect.width()).max(1).min(u16::MAX as i32) as u16;
         let height = self.scaled(rect.height()).max(1).min(u16::MAX as i32) as u16;
         let window = match self.windows.get_mut(&hwnd) {
@@ -1804,11 +2329,9 @@ impl gui::GuiBackend for X11Backend {
         } else {
             return;
         };
-        let _ = self.conn.set_input_focus(
-            x11rb::protocol::xproto::InputFocus::PARENT,
-            focus,
-            0u32,
-        );
+        let _ = self
+            .conn
+            .set_input_focus(x11rb::protocol::xproto::InputFocus::PARENT, focus, 0u32);
         let _ = self.conn.flush();
         // SetFocus est synchrone côté Win32 : le round-trip force le serveur à
         // traiter la requête et rend FocusIn/FocusOut immédiatement pompables.
@@ -1819,7 +2342,11 @@ impl gui::GuiBackend for X11Backend {
 
     fn measure_text(&mut self, font: &FontSpec, text: &str) -> Option<(i32, i32)> {
         let spec = self.scaled_font(font);
-        if let Some((w, h, _)) = self.xft.as_mut().and_then(|xft| xft.measure(&spec, text.as_bytes())) {
+        if let Some((w, h, _)) = self
+            .xft
+            .as_mut()
+            .and_then(|xft| xft.measure(&spec, text.as_bytes()))
+        {
             return Some((self.logical(w), self.logical(h)));
         }
         let f = self.ensure_font(&spec)?;
@@ -1830,7 +2357,9 @@ impl gui::GuiBackend for X11Backend {
     fn capture(&mut self, hwnd: usize, rect: Rect) -> Option<BitmapSnapshot> {
         let mut window = self.windows.get(&hwnd).copied()?;
         if let Some(&(pixmap, width, height)) = self.back.get(&hwnd) {
-            if width == window.width && height == window.height { window.window = pixmap; }
+            if width == window.width && height == window.height {
+                window.window = pixmap;
+            }
         }
         self.before_x11();
         let area = Self::to_x_rect(&window, &rect)?;
@@ -1846,11 +2375,16 @@ impl gui::GuiBackend for X11Backend {
         let format = setup.pixmap_formats.iter().find(|f| f.depth == depth)?;
         let bits_per_pixel = format.bits_per_pixel as usize;
         let pad = format.scanline_pad as usize;
-        if bits_per_pixel == 0 || bits_per_pixel > 32 || bits_per_pixel % 8 != 0 || pad < 8 || pad % 8 != 0 {
+        if bits_per_pixel == 0
+            || bits_per_pixel > 32
+            || !bits_per_pixel.is_multiple_of(8)
+            || pad < 8
+            || !pad.is_multiple_of(8)
+        {
             return None;
         }
         let bytes_per_pixel = bits_per_pixel / 8;
-        let stride = ((area.width as usize * bits_per_pixel + pad - 1) / pad) * (pad / 8);
+        let stride = (area.width as usize * bits_per_pixel).div_ceil(pad) * (pad / 8);
         let image_len = stride.checked_mul(area.height as usize)?;
         if image_len > 256 * 1024 * 1024 {
             return None;
@@ -1903,7 +2437,9 @@ impl gui::GuiBackend for X11Backend {
     fn invalidate(&mut self, hwnd: usize) {
         // Avec un tampon arrière, effacer la fenêtre ne ferait que clignoter :
         // la prochaine peinture recouvre tout d'un bloc.
-        if self.back.contains_key(&hwnd) { return; }
+        if self.back.contains_key(&hwnd) {
+            return;
+        }
         if let Some(w) = self.windows.get(&hwnd) {
             let _ = self.conn.clear_area(false, w.window, 0, 0, 0, 0);
             let _ = self.conn.flush();

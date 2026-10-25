@@ -18,7 +18,7 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 - [x] Ajouter un installateur autonome BIOS/UEFI qui ne nécessite plus l'ISO comme chargeur initial.
 - [x] Passer Explorer entièrement aux chemins Unicode Win32 W.
 - [x] Exécuter le bureau en utilisateur non privilégié avec autorisation ciblée des actions système.
-- [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation.
+- [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
 - Validation de `v0.2.0-preview.2` : `cargo test -p winlux` (84 réussis, 1 test XKB ignoré sans serveur X), dix exécutables PE en séquentiel et en parallèle, tests réseau/paramètres/mise à jour-restauration, et ISO sous QEMU BIOS et UEFI réussis.
 - [x] Charger un exécutable PE32+ x86-64.
@@ -166,14 +166,15 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 ## Priorité 6 — Qualité et livraison
 
 - [x] Ajouter une CI pour `cargo check`, les builds des `.exe` de test et les tests sous Winlux.
-- [ ] Normaliser le code existant avec `rustfmt`, traiter la dette Clippy puis rendre ces contrôles bloquants dans la CI.
-- [ ] Ajouter des logs structurés et un niveau de verbosité configurable.
-- [ ] Documenter la compilation, l’installation, le dépannage et la génération ISO.
+- [x] Normaliser le code existant avec `rustfmt`, traiter la dette Clippy puis rendre ces contrôles bloquants dans la CI.
+- [x] Ajouter des logs structurés et un niveau de verbosité configurable.
+- [x] Documenter la compilation, l’installation, le dépannage et la génération ISO.
 - [x] Ajouter un paquet de mise à jour GitHub vérifié par SHA-256, une installation
   atomique et un retour arrière automatisé.
 - [x] Créer une VM graphique persistante QCOW2 issue de la racine Winlux.
 - [x] Ajouter une licence GPL-3.0-or-later.
-- [ ] Ajouter les mentions de provenance des composants externes distribués dans les futures images publiées.
-- [ ] Publier également l’ISO et ses sommes dans les releases; le paquet du cœur
+- [x] Ajouter les mentions de provenance des composants externes distribués dans les futures images publiées.
+- [x] Publier également l’ISO et ses sommes dans les releases; le paquet du cœur
   Winlux, son manifeste et les notes sont déjà générés par le workflow de tag.
+- [ ] Signer les mises à jour (Ed25519) et implémenter le schéma A/B réel (voir `docs/AB_UPDATES.md`).
 - [ ] Committer une première version stable après validation du pipeline complet.

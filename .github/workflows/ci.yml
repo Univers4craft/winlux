@@ -20,6 +20,28 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Installer Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-hygiene-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-hygiene-
+
+      - name: Vérifier le formatage (rustfmt)
+        run: cargo fmt --check -p winlux
+
+      - name: Clippy (avertissements bloquants)
+        run: cargo clippy -p winlux -- -D warnings
+
       - name: Ne pas dépendre de Wine
         run: |
           set -eu

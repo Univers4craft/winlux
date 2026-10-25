@@ -57,7 +57,7 @@ fn format_ok(rate: u32, channels: u16) -> bool {
 fn finish(w: Wave) -> Option<Wave> {
     if !format_ok(w.rate, w.channels)
         || w.samples.is_empty()
-        || w.samples.len() % w.channels as usize != 0
+        || !w.samples.len().is_multiple_of(w.channels as usize)
     {
         None
     } else {

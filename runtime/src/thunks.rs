@@ -28,11 +28,23 @@ pub fn log_missing(label: &str, called: bool) {
         }
         l.push(key);
     }
-    let exe = crate::loader::main_module().map(|m| m.name).unwrap_or_default();
+    let exe = crate::loader::main_module()
+        .map(|m| m.name)
+        .unwrap_or_default();
     if let Some(dir) = crate::paths::data_dir() {
         let _ = std::fs::create_dir_all(&dir);
-        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(dir.join("manquants.log")) {
-            let _ = writeln!(f, "{}\t{}\t{}", exe, label, if called { "appelée" } else { "importée" });
+        if let Ok(mut f) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(dir.join("manquants.log"))
+        {
+            let _ = writeln!(
+                f,
+                "{}\t{}\t{}",
+                exe,
+                label,
+                if called { "appelée" } else { "importée" }
+            );
         }
     }
 }
@@ -44,9 +56,15 @@ extern "win64" fn missing_called(info: *const Missing) -> u64 {
         eprintln!("winlux: {label} non implémentée, appel ignoré (renvoie 0)");
         return 0;
     }
-    eprintln!("\nwinlux: le programme a appelé {label}, qui n'est pas encore implémentée dans Winlux.");
-    eprintln!("winlux: c'est noté dans le journal des fonctions manquantes ({}).",
-        crate::paths::data_dir().map(|d| d.join("manquants.log").display().to_string()).unwrap_or_default());
+    eprintln!(
+        "\nwinlux: le programme a appelé {label}, qui n'est pas encore implémentée dans Winlux."
+    );
+    eprintln!(
+        "winlux: c'est noté dans le journal des fonctions manquantes ({}).",
+        crate::paths::data_dir()
+            .map(|d| d.join("manquants.log").display().to_string())
+            .unwrap_or_default()
+    );
     eprintln!("winlux: (WINLUX_MISSING=ignore permet de continuer en renvoyant 0, à vos risques)");
     crate::dlls::kernel32::flush_and_exit(0xC000_0139u32 as i32)
 }
@@ -74,8 +92,14 @@ pub fn alloc_code(code: &[u8]) -> usize {
     if p.cur + need > p.end {
         let size = 64 * 1024;
         let m = unsafe {
-            libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
-                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0)
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
         };
         assert!(m != libc::MAP_FAILED, "mmap des ponts");
         p.cur = m as usize;
