@@ -212,7 +212,7 @@ printf 'updater-system\n' >"$stage/usr/share/winlux/version"
 SOURCE_DATE_EPOCH=0 sh "$root/scripts/build-info.sh" updater-system system >"$stage/usr/share/winlux/BUILD-INFO"
 grep -q '^built_at_utc=1970-01-01T00:00:00Z$' "$stage/usr/share/winlux/BUILD-INFO"
 if test -f "$root/scripts/source-fingerprint.sh"; then sh "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"; fi
-WINLUX_UPDATE_STAGE="$stage" WINLUX_UPDATE_BOOT="$boot" "$root/scripts/build-update-bundle.sh" --system updater-system >/dev/null
+WINLUX_UPDATE_INCLUDE_BOOT=1 WINLUX_UPDATE_STAGE="$stage" WINLUX_UPDATE_BOOT="$boot" "$root/scripts/build-update-bundle.sh" --system updater-system >/dev/null
 tar -xOf "$root/build/winlux-update-updater-system.tar.gz" payload/usr/share/winlux/BUILD-INFO >"$test_root/packaged-build-info"
 cmp "$stage/usr/share/winlux/BUILD-INFO" "$test_root/packaged-build-info"
 cp "$root/build/winlux-update-updater-system.tar.gz" "$assets/"
