@@ -8,8 +8,15 @@ use winlux_testexe::*;
 pub extern "C" fn mainCRTStartup() -> ! {
     out(b"Bonjour depuis un .exe Windows, execute par Winlux !\n");
     unsafe {
-        printf(c"printf : %d + %d = %d, pi ~ %.4f, hex %#x, chaine \"%s\"\n".as_ptr(),
-               2, 40, 42, 3.14159265f64, 255u32, c"ok".as_ptr());
+        printf(
+            c"printf : %d + %d = %d, pi ~ %.4f, hex %#x, chaine \"%s\"\n".as_ptr(),
+            2,
+            40,
+            42,
+            3.14159265f64,
+            255u32,
+            c"ok".as_ptr(),
+        );
         ExitProcess(0)
     }
 }

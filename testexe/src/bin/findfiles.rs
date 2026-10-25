@@ -9,50 +9,134 @@ use winlux_testexe::*;
 pub extern "C" fn mainCRTStartup() -> ! {
     unsafe {
         let mut path = [0 as c_char; 128];
-        sprintf(path.as_mut_ptr(), c"Z:\\tmp\\winlux-find-%u.txt".as_ptr(), GetCurrentProcessId());
+        sprintf(
+            path.as_mut_ptr(),
+            c"Z:\\tmp\\winlux-find-%u.txt".as_ptr(),
+            GetCurrentProcessId(),
+        );
         let file = CreateFileA(path.as_ptr(), 0xC000_0000, 7, null_mut(), 2, 0, null_mut());
         let payload = b"find-test";
         let mut written = 0;
-        let created = file as usize != usize::MAX && WriteFile(file, payload.as_ptr(), payload.len() as u32, &mut written, null_mut()) != 0;
+        let created = file as usize != usize::MAX
+            && WriteFile(
+                file,
+                payload.as_ptr(),
+                payload.len() as u32,
+                &mut written,
+                null_mut(),
+            ) != 0;
         let mut data: Win32FindDataA = core::mem::zeroed();
         let search = FindFirstFileA(path.as_ptr(), &mut data);
-        let found = search as usize != usize::MAX && data.size_low == payload.len() as u32 && strlen(data.file_name.as_ptr()) != 0;
+        let found = search as usize != usize::MAX
+            && data.size_low == payload.len() as u32
+            && strlen(data.file_name.as_ptr()) != 0;
         let end = found && FindNextFileA(search, &mut data) == 0 && GetLastError() == 2;
-        let closed_search = if search as usize != usize::MAX { FindClose(search) != 0 } else { false };
+        let closed_search = if search as usize != usize::MAX {
+            FindClose(search) != 0
+        } else {
+            false
+        };
         let mut wide_path = [0u16; 128];
         let mut path_len = 0usize;
-        while path_len < path.len() && path[path_len] != 0 { wide_path[path_len] = path[path_len] as u8 as u16; path_len += 1; }
+        while path_len < path.len() && path[path_len] != 0 {
+            wide_path[path_len] = path[path_len] as u8 as u16;
+            path_len += 1;
+        }
         let mut wide_data: Win32FindDataW = core::mem::zeroed();
         let wide_search = FindFirstFileW(wide_path.as_ptr(), &mut wide_data);
-        let wide_found = wide_search as usize != usize::MAX && wide_data.size_low == payload.len() as u32 && wide_data.file_name[0] != 0;
+        let wide_found = wide_search as usize != usize::MAX
+            && wide_data.size_low == payload.len() as u32
+            && wide_data.file_name[0] != 0;
         let wide_end = wide_found && FindNextFileW(wide_search, &mut wide_data) == 0;
-        let wide_closed = if wide_search as usize != usize::MAX { FindClose(wide_search) != 0 } else { false };
-        let closed_file = if file as usize != usize::MAX { CloseHandle(file) != 0 } else { false };
+        let wide_closed = if wide_search as usize != usize::MAX {
+            FindClose(wide_search) != 0
+        } else {
+            false
+        };
+        let closed_file = if file as usize != usize::MAX {
+            CloseHandle(file) != 0
+        } else {
+            false
+        };
         let deleted = DeleteFileA(path.as_ptr()) != 0;
         let mut temp_name = [0 as c_char; 260];
-        let temp_id = GetTempFileNameA(c"Z:\\tmp".as_ptr(), c"wxl".as_ptr(), 0, temp_name.as_mut_ptr());
+        let temp_id = GetTempFileNameA(
+            c"Z:\\tmp".as_ptr(),
+            c"wxl".as_ptr(),
+            0,
+            temp_name.as_mut_ptr(),
+        );
         let mut file_info: Win32FileAttributeData = core::mem::zeroed();
-        let temp_created = temp_id != 0 && GetFileAttributesExA(temp_name.as_ptr(), 0, &mut file_info) != 0 && file_info.size_low == 0;
-        let temp_handle = if temp_created { CreateFileA(temp_name.as_ptr(), 0xC000_0000, 7, null_mut(), 3, 0, null_mut()) } else { usize::MAX as Handle };
+        let temp_created = temp_id != 0
+            && GetFileAttributesExA(temp_name.as_ptr(), 0, &mut file_info) != 0
+            && file_info.size_low == 0;
+        let temp_handle = if temp_created {
+            CreateFileA(
+                temp_name.as_ptr(),
+                0xC000_0000,
+                7,
+                null_mut(),
+                3,
+                0,
+                null_mut(),
+            )
+        } else {
+            usize::MAX as Handle
+        };
         let mut temp_written = 0u32;
-        let wrote = temp_handle as usize != usize::MAX && WriteFile(temp_handle, b"abc".as_ptr(), 3, &mut temp_written, null_mut()) != 0;
-        let truncated = wrote && SetFilePointer(temp_handle, 1, null_mut(), 0) == 1 && SetEndOfFile(temp_handle) != 0
-            && GetFileAttributesExA(temp_name.as_ptr(), 0, &mut file_info) != 0 && file_info.size_low == 1;
-        if temp_handle as usize != usize::MAX { CloseHandle(temp_handle); }
+        let wrote = temp_handle as usize != usize::MAX
+            && WriteFile(
+                temp_handle,
+                b"abc".as_ptr(),
+                3,
+                &mut temp_written,
+                null_mut(),
+            ) != 0;
+        let truncated = wrote
+            && SetFilePointer(temp_handle, 1, null_mut(), 0) == 1
+            && SetEndOfFile(temp_handle) != 0
+            && GetFileAttributesExA(temp_name.as_ptr(), 0, &mut file_info) != 0
+            && file_info.size_low == 1;
+        if temp_handle as usize != usize::MAX {
+            CloseHandle(temp_handle);
+        }
         let temp_removed = temp_created && DeleteFileA(temp_name.as_ptr()) != 0;
-        let temp_dir_w = [b'Z' as u16,b':' as u16,b'\\' as u16,b't' as u16,b'm' as u16,b'p' as u16,0];
-        let temp_prefix_w = [b'w' as u16,b'l' as u16,b'x' as u16,0];
+        let temp_dir_w = [
+            b'Z' as u16,
+            b':' as u16,
+            b'\\' as u16,
+            b't' as u16,
+            b'm' as u16,
+            b'p' as u16,
+            0,
+        ];
+        let temp_prefix_w = [b'w' as u16, b'l' as u16, b'x' as u16, 0];
         let mut temp_name_w = [0u16; 260];
-        let temp_id_w = GetTempFileNameW(temp_dir_w.as_ptr(), temp_prefix_w.as_ptr(), 0, temp_name_w.as_mut_ptr());
-        let wide_temp_ok = temp_id_w != 0 && GetFileAttributesExW(temp_name_w.as_ptr(), 0, &mut file_info) != 0
+        let temp_id_w = GetTempFileNameW(
+            temp_dir_w.as_ptr(),
+            temp_prefix_w.as_ptr(),
+            0,
+            temp_name_w.as_mut_ptr(),
+        );
+        let wide_temp_ok = temp_id_w != 0
+            && GetFileAttributesExW(temp_name_w.as_ptr(), 0, &mut file_info) != 0
             && DeleteFileW(temp_name_w.as_ptr()) != 0;
-        check!(created && written == payload.len() as u32, "création du fichier de recherche");
+        check!(
+            created && written == payload.len() as u32,
+            "création du fichier de recherche"
+        );
         check!(found, "FindFirstFileA nom et taille");
         check!(end, "FindNextFileA fin d'énumération");
         check!(wide_found && wide_end && wide_closed, "FindFirst/NextFileW");
-        check!(temp_created && wrote && temp_written == 3 && truncated && temp_removed, "GetTempFileName/GetFileAttributesEx/SetEndOfFile");
+        check!(
+            temp_created && wrote && temp_written == 3 && truncated && temp_removed,
+            "GetTempFileName/GetFileAttributesEx/SetEndOfFile"
+        );
         check!(wide_temp_ok, "GetTempFileNameW/GetFileAttributesExW");
-        check!(closed_search && closed_file && deleted, "FindClose et nettoyage");
+        check!(
+            closed_search && closed_file && deleted,
+            "FindClose et nettoyage"
+        );
     }
     finish()
 }

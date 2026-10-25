@@ -81,7 +81,7 @@ fn unhex(s: &str) -> Option<Vec<u8>> {
         return None;
     }
     let mut out = Vec::with_capacity(s.len() / 2);
-    for pair in s.as_bytes().chunks_exact(2) {
+    for pair in s.as_bytes().as_chunks::<2>().0 {
         let nib = |x: u8| match x {
             b'0'..=b'9' => Some(x - b'0'),
             b'a'..=b'f' => Some(x - b'a' + 10),

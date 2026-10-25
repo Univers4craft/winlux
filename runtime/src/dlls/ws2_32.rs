@@ -165,7 +165,7 @@ pub unsafe extern "win64" fn wsa_startup(requested: u16, data: *mut u8) -> i32 {
     0
 }
 pub extern "win64" fn wsa_cleanup() -> i32 {
-    let old = STARTUPS.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
+    let old = STARTUPS.try_update(Ordering::AcqRel, Ordering::Acquire, |n| {
         if n > 0 {
             Some(n - 1)
         } else {

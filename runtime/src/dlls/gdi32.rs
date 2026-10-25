@@ -845,13 +845,27 @@ fn decode_png(path: &Path) -> Option<(usize, usize, Vec<[u8; 4]>)> {
     let count = (info.width as usize).checked_mul(info.height as usize)?;
     let mut rgba = Vec::with_capacity(count);
     match info.color_type {
-        png::ColorType::Rgba => {
-            rgba.extend(bytes.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]]))
-        }
-        png::ColorType::Rgb => rgba.extend(bytes.chunks_exact(3).map(|p| [p[0], p[1], p[2], 255])),
-        png::ColorType::GrayscaleAlpha => {
-            rgba.extend(bytes.chunks_exact(2).map(|p| [p[0], p[0], p[0], p[1]]))
-        }
+        png::ColorType::Rgba => rgba.extend(
+            bytes
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .map(|p| [p[0], p[1], p[2], p[3]]),
+        ),
+        png::ColorType::Rgb => rgba.extend(
+            bytes
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .map(|p| [p[0], p[1], p[2], 255]),
+        ),
+        png::ColorType::GrayscaleAlpha => rgba.extend(
+            bytes
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|p| [p[0], p[0], p[0], p[1]]),
+        ),
         png::ColorType::Grayscale => rgba.extend(bytes.iter().map(|p| [*p, *p, *p, 255])),
         png::ColorType::Indexed => return None,
     }
