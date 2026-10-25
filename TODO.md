@@ -1,5 +1,8 @@
 # Feuille de route Winlux
 
+La feuille de route détaillée pour l'installation sur SSD et l'usage quotidien
+se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
+
 ## État actuel
 
 ### Fiabilisation du bureau et de la VM
