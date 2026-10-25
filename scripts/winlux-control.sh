@@ -102,6 +102,18 @@ if ! mkdir "$run/control.lock" 2>/dev/null; then message 'Une operation est deja
 trap 'rmdir "$run/control.lock" 2>/dev/null || true' EXIT HUP INT TERM
 action=$1
 message 'Operation en cours...'
+# Root-only actions are delegated to the init supervisor via a request file
+# when winlux-control runs as a non-root user.
+needs_root() {
+    case "$1" in network-renew|poweroff|reboot|update-check|update-apply|update-rollback|update-auto-on|update-auto-off) return 0 ;; esac
+    return 1
+}
+if needs_root "$action" && test "$(id -u)" -ne 0; then
+    printf '%s\n' "$action" > "$run/system-action.tmp.$$"
+    mv "$run/system-action.tmp.$$" "$run/system-action"
+    status
+    exit 0
+fi
 perform() {
     case "$action" in
         network-renew) winlux-network restart ;;

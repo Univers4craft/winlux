@@ -365,12 +365,21 @@ if /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev
         /bin/busybox cat /etc/binfmt.d/winlux.conf > /proc/sys/fs/binfmt_misc/register 2>/dev/null || true
     fi
 fi
-/bin/busybox mkdir -p /tmp/.X11-unix /run /root/.local/share/winlux
+/bin/busybox mkdir -p /tmp/.X11-unix /run
 /bin/busybox chmod 1777 /tmp
 /bin/busybox rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
 /bin/busybox ip link set lo up
 /bin/busybox mkdir -p /run/winlux /etc/winlux
 /bin/busybox touch /etc/winlux/live-session
+# Non-root desktop user — winlux-control keeps system writes via a setuid
+# helper or group permissions; the shell itself no longer runs as root.
+/bin/busybox addgroup -g 1000 winlux 2>/dev/null || true
+/bin/busybox adduser -D -u 1000 -G winlux -h /home/winlux -s /bin/sh winlux 2>/dev/null || true
+/bin/busybox mkdir -p /home/winlux/.local/share/winlux
+/bin/busybox chown -R winlux:winlux /home/winlux
+/bin/busybox chgrp winlux /run/winlux /etc/winlux
+/bin/busybox chmod 775 /run/winlux /etc/winlux
+/bin/busybox chmod g+s /run/winlux /etc/winlux
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
@@ -408,7 +417,7 @@ fi
 
 if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     echo "Winlux desktop preview: starting Xorg"
-    /usr/bin/Xorg :0 -noreset -nolisten tcp -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
+    /usr/bin/Xorg :0 -noreset -nolisten tcp -ac -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
     xorg_pid=$!
     /bin/busybox sleep 3
     echo "Winlux Xorg input probe:"
@@ -419,7 +428,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     fi
     (
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
-            DISPLAY=:0 /usr/bin/winlux-control status 2>/dev/null || true
+            /bin/busybox su winlux -c 'DISPLAY=:0 /usr/bin/winlux-control status' 2>/dev/null || true
             /bin/busybox sleep 3
         done
     ) &
@@ -428,27 +437,27 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     (
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
             if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then
-                modes=$(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox grep -E '[*+]' | /bin/busybox tr -s ' ' | /bin/busybox tr '\n' ';')
+                modes=$(/bin/busybox su winlux -c 'DISPLAY=:0 /usr/bin/xrandr --query' 2>/dev/null | /bin/busybox grep -E '[*+]' | /bin/busybox tr -s ' ' | /bin/busybox tr '\n' ';')
                 if test "$modes" != "${last_modes:-}"; then echo "Winlux xrandr: $modes"; last_modes=$modes; fi
             fi
             # Follow the preferred VM mode, or keep the user's fixed mode.
-            DISPLAY=:0 /usr/bin/winlux-display sync 2>/dev/null || true
+            /bin/busybox su winlux -c 'DISPLAY=:0 /usr/bin/winlux-display sync' 2>/dev/null || true
             /bin/busybox sleep 1
         done
     ) &
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
         keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
-        case "$keyboard_layout" in fr|us) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
+        case "$keyboard_layout" in fr|us) /bin/busybox su winlux -c "DISPLAY=:0 /usr/bin/setxkbmap $keyboard_layout" 2>/dev/null || true ;; esac
         tapping=$(/bin/busybox sed -n 's/^TAP_TO_CLICK=//p' /etc/winlux/input.conf 2>/dev/null)
         case "$tapping" in 0|1)
-            for device in $(DISPLAY=:0 /usr/bin/xinput --list --id-only 2>/dev/null); do
-                DISPLAY=:0 /usr/bin/xinput set-prop "$device" 'libinput Tapping Enabled' "$tapping" 2>/dev/null || true
+            for device in $(/bin/busybox su winlux -c 'DISPLAY=:0 /usr/bin/xinput --list --id-only' 2>/dev/null); do
+                /bin/busybox su winlux -c "DISPLAY=:0 /usr/bin/xinput set-prop $device 'libinput Tapping Enabled' $tapping" 2>/dev/null || true
             done ;;
         esac
         taskbar_align=$(/bin/busybox sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null)
         desktop_theme=$(/bin/busybox sed -n 's/^THEME=//p' /etc/winlux/preferences.conf 2>/dev/null)
         # Échelle d'interface choisie d'après la hauteur de l'écran au lancement.
-        screen_height=$(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox awk '/\*/ { split($1, size, "x"); print size[2]; exit }')
+        screen_height=$(/bin/busybox su winlux -c 'DISPLAY=:0 /usr/bin/xrandr --query' 2>/dev/null | /bin/busybox awk '/\*/ { split($1, size, "x"); print size[2]; exit }')
         ui_scale=1
         if test "${screen_height:-0}" -ge 2000; then ui_scale=2
         elif test "${screen_height:-0}" -ge 1400; then ui_scale=1.5
@@ -467,8 +476,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         for state in /sys/class/net/*/operstate; do
             if test -r "$state" && test "$(/bin/busybox cat "$state")" = up; then tray_network=1; break; fi
         done
-        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_INPUT_DIAG="$input_diag" WINLUX_UI_SCALE="$ui_scale" WINLUX_TASKBAR_ALIGN="$taskbar_align" WINLUX_THEME="$desktop_theme" WINLUX_TRAY_BATTERY="$tray_battery" WINLUX_TRAY_BATTERY_PRESENT="$tray_battery_present" WINLUX_TRAY_NETWORK="$tray_network" \
-            /usr/bin/winlux /opt/winlux/tests/gui_demo.exe &
+        /bin/busybox su winlux -c "DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_INPUT_DIAG=$input_diag WINLUX_UI_SCALE=$ui_scale WINLUX_TASKBAR_ALIGN=$taskbar_align WINLUX_THEME=$desktop_theme WINLUX_TRAY_BATTERY=$tray_battery WINLUX_TRAY_BATTERY_PRESENT=$tray_battery_present WINLUX_TRAY_NETWORK=$tray_network HOME=/home/winlux /usr/bin/winlux /opt/winlux/tests/gui_demo.exe" &
         desktop_pid=$!
         echo "WINLUX_DESKTOP_READY pid=$desktop_pid"
         while /bin/busybox kill -0 "$desktop_pid" 2>/dev/null; do
@@ -479,6 +487,13 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
                 if test "$update" = restart-session; then /bin/busybox rm -f /run/winlux/update-action; fi
                 /bin/busybox kill "$desktop_pid" 2>/dev/null || true
                 break
+            fi
+            # Root-delegated actions from winlux-control running as the
+            # desktop user: execute them here where we are still root.
+            sys_action=$(/bin/busybox cat /run/winlux/system-action 2>/dev/null)
+            if test -n "$sys_action"; then
+                /bin/busybox rm -f /run/winlux/system-action
+                /usr/bin/winlux-control "$sys_action" &
             fi
             /bin/busybox sleep 1
         done

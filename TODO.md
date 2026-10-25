@@ -21,7 +21,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Centre graphique de mise à jour, paquets système complets, jeton pour dépôt privé, automatique, restauration et demande de redémarrage.
 - [x] Ajouter un installateur autonome BIOS/UEFI qui ne nécessite plus l'ISO comme chargeur initial.
 - [x] Passer Explorer entièrement aux chemins Unicode Win32 W.
-- [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
+- [x] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
 - Validation de `v0.2.0-preview.2` : `cargo test -p winlux` (84 réussis, 1 test XKB ignoré sans serveur X), dix exécutables PE en séquentiel et en parallèle, tests réseau/paramètres/mise à jour-restauration, et ISO sous QEMU BIOS et UEFI réussis.
