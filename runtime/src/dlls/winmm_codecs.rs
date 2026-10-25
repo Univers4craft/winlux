@@ -413,7 +413,9 @@ fn decode_aac(raw: &[u8], limit: usize) -> Option<Wave> {
             }
             if mono {
                 let mono_samples: Vec<i16> = samples
-                    .as_chunks::<2>().0.iter()
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2) as i16)
                     .collect();
                 append_pcm(&mut wave.samples, &mono_samples, limit)?;
