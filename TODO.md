@@ -169,8 +169,8 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
   recalé sur une grille, positions temporaires).
 - [x] Démarrer avec un bureau vide ; rendre les icônes système facultatives et
   désactivées par défaut dans Paramètres.
-- [ ] Ajouter la création explicite de raccourcis d'applications, leur
-  persistance et le choix entre placement sur grille ou libre.
+- [ ] Ajouter la création explicite de raccourcis d'applications et le
+  choix entre placement sur grille ou libre (positions des icônes du bureau persistées).
 
 ## Priorité 6 — Qualité et livraison
 

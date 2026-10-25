@@ -1232,6 +1232,70 @@ fn icon_visible(i: usize) -> bool {
     }
 }
 
+const ICONS_PATH: &core::ffi::CStr = c"Z:\\run\\winlux\\desktop-icons.dat";
+
+unsafe fn save_icon_positions() {
+    let file = CreateFileA(
+        ICONS_PATH.as_ptr(),
+        0x4000_0000, // GENERIC_WRITE
+        0,
+        core::ptr::null_mut(),
+        2, // CREATE_ALWAYS
+        0,
+        core::ptr::null_mut(),
+    );
+    if file.is_null() || file == -1isize as Handle {
+        return;
+    }
+    let mut buf = [0u8; 24]; // 3 icons * (x:i32 + y:i32) = 24 bytes
+    for i in 0..3 {
+        let off = i * 8;
+        buf[off..off + 4].copy_from_slice(&ICON_X[i].to_le_bytes());
+        buf[off + 4..off + 8].copy_from_slice(&ICON_Y[i].to_le_bytes());
+    }
+    let mut written = 0u32;
+    WriteFile(file, buf.as_ptr(), 24, &mut written, core::ptr::null_mut());
+    CloseHandle(file);
+}
+
+unsafe fn load_icon_positions() {
+    let file = CreateFileA(
+        ICONS_PATH.as_ptr(),
+        0x8000_0000, // GENERIC_READ
+        1,           // FILE_SHARE_READ
+        core::ptr::null_mut(),
+        3, // OPEN_EXISTING
+        0,
+        core::ptr::null_mut(),
+    );
+    if file.is_null() || file == -1isize as Handle {
+        return;
+    }
+    let mut buf = [0u8; 24];
+    let mut nread = 0u32;
+    ReadFile(
+        file,
+        buf.as_mut_ptr(),
+        24,
+        &mut nread,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(file);
+    if nread != 24 {
+        return;
+    }
+    for i in 0..3 {
+        let off = i * 8;
+        ICON_X[i] = i32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+        ICON_Y[i] = i32::from_le_bytes([
+            buf[off + 4],
+            buf[off + 5],
+            buf[off + 6],
+            buf[off + 7],
+        ]);
+    }
+}
+
 unsafe fn desktop_icons(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     for (i, (name, g)) in DESKTOP_ICONS.iter().enumerate() {
         if !icon_visible(i) {
@@ -1379,6 +1443,7 @@ pub unsafe fn init(
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
     wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
+    load_icon_positions();
     BOOT_START = now();
     let mut v = [0i8; 4];
     if REDUCE_MOTION
@@ -1674,6 +1739,7 @@ pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
     let mut rp = false;
     if DRAGGED_ICON >= 0 {
         DRAGGED_ICON = -1;
+        save_icon_positions();
         rp = true;
     }
     wm::on_button_up(x, y, &mut rp);
