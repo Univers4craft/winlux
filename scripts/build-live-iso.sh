@@ -78,6 +78,13 @@ mkdir -p "$stage/usr/share/winlux"
 printf '%s\n' "${WINLUX_BUILD_VERSION:-$(cat "$root/VERSION")}" >"$stage/usr/share/winlux/version"
 sh "$root/scripts/build-info.sh" "$(cat "$stage/usr/share/winlux/version")" system >"$stage/usr/share/winlux/BUILD-INFO"
 printf 'system\n' >"$stage/usr/share/winlux/update-scope"
+
+# Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
+wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
+if test -f "$wallpaper_src"; then
+    convert "$wallpaper_src" -type TrueColor BMP3:"$stage/usr/share/winlux/wallpaper.bmp"
+fi
+
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 chmod 755 \
