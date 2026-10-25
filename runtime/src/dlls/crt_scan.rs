@@ -430,6 +430,17 @@ unsafe extern "win64" fn imp_fscanf(args: *const u64) -> i32 {
     let data = crate::dlls::crt_stdio::read_to_end(stream);
     scan(&data, nul_terminated(fmt), &mut v)
 }
+unsafe extern "win64" fn imp_snscanf(args: *const u64) -> i32 {
+    let mut v = crate::thunks::VaList::new(args);
+    let buf = v.next_u64() as *const u8;
+    let count = v.next_u64() as usize;
+    let fmt = v.next_ptr::<u8>();
+    if buf.is_null() {
+        return -1;
+    }
+    let data = std::slice::from_raw_parts(buf, count);
+    scan(data, nul_terminated(fmt), &mut v)
+}
 unsafe extern "win64" fn imp_vsscanf(args: *const u64) -> i32 {
     let buf = *args as *const u8;
     let fmt = *args.add(1) as *const u8;
@@ -456,12 +467,14 @@ fn read_all_stdin() -> Vec<u8> {
 crate::varargs_thunk!(sscanf_thunk => imp_sscanf);
 crate::varargs_thunk!(scanf_thunk => imp_scanf);
 crate::varargs_thunk!(fscanf_thunk => imp_fscanf);
+crate::varargs_thunk!(snscanf_thunk => imp_snscanf);
 crate::varargs_thunk!(vsscanf_thunk => imp_vsscanf);
 crate::varargs_thunk!(vfscanf_thunk => imp_vfscanf);
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "sscanf" => fn sscanf_thunk, "scanf" => fn scanf_thunk, "fscanf" => fn fscanf_thunk,
+        "_snscanf" => fn snscanf_thunk,
         "vsscanf" => fn vsscanf_thunk, "vfscanf" => fn vfscanf_thunk,
     }
 }
@@ -561,6 +574,34 @@ mod tests {
             );
             assert_eq!(n, 0);
             assert_eq!(count, 2);
+        }
+    }
+
+    #[test]
+    fn snscanf_limite_buffer() {
+        unsafe {
+            let mut val = 0i32;
+            let args = [&mut val as *mut i32 as u64];
+            // Buffer contains "123 456" but we limit to 3 bytes → only "123"
+            let data = b"123 456";
+            let n = scan(
+                &data[..3],
+                b"%d",
+                &mut crate::thunks::VaList::new(args.as_ptr()),
+            );
+            assert_eq!(n, 1);
+            assert_eq!(val, 123);
+            // With full buffer, second field is also available
+            let mut v2 = 0i32;
+            let args2 = [&mut val as *mut i32 as u64, &mut v2 as *mut i32 as u64];
+            let n = scan(
+                data,
+                b"%d %d",
+                &mut crate::thunks::VaList::new(args2.as_ptr()),
+            );
+            assert_eq!(n, 2);
+            assert_eq!(val, 123);
+            assert_eq!(v2, 456);
         }
     }
 }

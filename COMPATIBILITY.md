@@ -73,7 +73,8 @@ des codecs, des services et parfois d’un runtime managé.
   couche de flux `FILE*` (`fopen`/`fread`/`fwrite`/`fgets`/`fseek`/`fprintf`/
   `remove`/`rename`) et les entrées formatées `scanf`/`sscanf`/`fscanf`.
   `fgetpos`/`fsetpos` permettent de sauvegarder/restaurer la position des flux.
-  La locale et `_snscanf` restent absents.
+  `_snscanf` est disponible pour la lecture bornée. La locale reste absente
+  (seule la locale C est acceptée par `setlocale`).
 - Le registre propose un sous-ensemble Win32 et une persistance propriétaire
   TSV; il ne reproduit ni les vues 32/64 bits ni les règles ACL du registre Windows.
 - Les DLL intégrées utilisent des fonctions Linux natives et ne dépendent pas
