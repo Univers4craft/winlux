@@ -247,11 +247,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
     if w.minimized && w.anim != Anim::Minimize { return; }
     let radius = if w.maximized { 0 } else { 8 };
     let active = ACTIVE == app;
-    // Ombre, liseré et fond « Mica ».
-    if !w.maximized {
-        round_rect(g.hdc, g.b, shown.left - 3, shown.top + 1, shown.right + 3, shown.bottom + 8, radius + 4, mix(p.shadow, rgb(0, 0, 0), 1, 2));
-        round_rect(g.hdc, g.b, shown.left - 1, shown.top, shown.right + 1, shown.bottom + 3, radius + 2, p.shadow);
-    }
+    // Liseré fin et fond « Mica » (pas d'ombre lourde).
     round_rect(g.hdc, g.b, shown.left, shown.top, shown.right, shown.bottom, radius, if active { mix(p.border, p.accent, 2, 10) } else { p.border });
     round_rect(g.hdc, g.b, shown.left + 1, shown.top + 1, shown.right - 1, shown.bottom - 1, radius, p.mica);
     if !content || shown.right - shown.left < 200 || shown.bottom - shown.top < 120 {

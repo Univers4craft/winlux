@@ -82,10 +82,8 @@ pub unsafe fn round_rect(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, b
     ellipse(hdc, b, l, bt - radius * 2, l + radius * 2, bt, color);
     ellipse(hdc, b, r - radius * 2, bt - radius * 2, r, bt, color);
 }
-/// Surface flottante : ombre douce, liseré et fond.
+/// Surface flottante : liseré fin et fond, sans ombre lourde.
 pub unsafe fn panel(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, bt: i32, radius: i32, surface: u32, border: u32) {
-    round_rect(hdc, b, l - 2, t + 2, r + 2, bt + 6, radius + 2, rgb(8, 14, 32));
-    round_rect(hdc, b, l - 1, t, r + 1, bt + 3, radius + 1, rgb(14, 22, 44));
     round_rect(hdc, b, l, t, r, bt, radius, border);
     round_rect(hdc, b, l + 1, t + 1, r - 1, bt - 1, radius - 1, surface);
 }
@@ -249,29 +247,41 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
             ellipse(hdc, b, x + s * 2 / 5, y + s / 3, x + s * 2 / 3, y + s * 3 / 5, rgb(0x1A, 0x73, 0xE8));
         }
         Glyph::Terminal => {
-            round_rect(hdc, b, x, y + s / 8, x + s, y + s * 7 / 8, 3, rgb(0x5A, 0x5F, 0x6B));
-            round_rect(hdc, b, x + 1, y + s / 8 + 1, x + s - 1, y + s * 7 / 8 - 1, 3, rgb(0x16, 0x18, 0x1D));
-            text(hdc, f.icon, rgb(0xE6, 0xE6, 0xE6), x + s / 6, y + s / 4, b">_");
+            round_rect(hdc, b, x, y + s / 8, x + s, y + s * 7 / 8, 3, rgb(0x38, 0x3B, 0x44));
+            round_rect(hdc, b, x + 1, y + s / 8 + 1, x + s - 1, y + s * 7 / 8 - 1, 2, rgb(0x0C, 0x0C, 0x0C));
+            fill(hdc, b, x + 2, y + s / 8 + 1, x + s - 2, y + s / 4, rgb(0x4C, 0x2F, 0x8A));
+            text(hdc, f.icon, rgb(0xCC, 0xCC, 0xCC), x + s / 6, y + s / 3, b">_");
         }
         Glyph::Store => {
-            round_rect(hdc, b, x + s / 8, y + s / 4, x + s * 7 / 8, y + s, 3, rgb(0x0F, 0x6C, 0xBD));
-            ellipse(hdc, b, x + s / 3, y, x + s * 2 / 3, y + s / 2, rgb(0x0F, 0x6C, 0xBD));
-            ellipse(hdc, b, x + s * 3 / 8, y + s / 12, x + s * 5 / 8, y + s * 5 / 12, rgb(0x20, 0x24, 0x2C));
-            fill(hdc, b, x + s / 8, y + s / 4, x + s * 7 / 8, y + s / 2, rgb(0x0F, 0x6C, 0xBD));
-            let c = s / 6;
-            let (cx, cy) = (x + s / 2, y + s * 5 / 8);
-            fill(hdc, b, cx - c - 1, cy - c - 1, cx - 1, cy - 1, rgb(0xF2, 0x50, 0x22));
-            fill(hdc, b, cx + 1, cy - c - 1, cx + c + 1, cy - 1, rgb(0x7F, 0xBA, 0x00));
-            fill(hdc, b, cx - c - 1, cy + 1, cx - 1, cy + c + 1, rgb(0x00, 0xA4, 0xEF));
-            fill(hdc, b, cx + 1, cy + 1, cx + c + 1, cy + c + 1, rgb(0xFF, 0xB9, 0x00));
+            let sc = rgb(0x0F, 0x6C, 0xBD);
+            let w = rgb(0xFF, 0xFF, 0xFF);
+            // Un sac représente le magasin, pas un bouclier de sécurité.
+            ellipse(hdc, b, x + s / 3, y + s / 12, x + s * 2 / 3, y + s / 2, sc);
+            ellipse(hdc, b, x + s * 5 / 12, y + s / 6, x + s * 7 / 12, y + s * 5 / 12, glyph_bg());
+            round_rect(hdc, b, x + s / 6, y + s / 3, x + s * 5 / 6, y + s * 11 / 12, 3, sc);
+            let t = (s / 12).max(1);
+            fill(hdc, b, x + s / 2 - t, y + s / 2, x + s / 2 + t, y + s * 3 / 4, w);
+            fill(hdc, b, x + s * 3 / 8, y + s * 5 / 8 - t, x + s * 5 / 8, y + s * 5 / 8 + t, w);
         }
         Glyph::Settings => {
-            let c = s / 2;
-            let t = s / 7;
-            fill(hdc, b, x + c - t, y, x + c + t, y + s, rgb(0x9A, 0xA3, 0xAE));
-            fill(hdc, b, x, y + c - t, x + s, y + c + t, rgb(0x9A, 0xA3, 0xAE));
-            ellipse(hdc, b, x + s / 10, y + s / 10, x + s * 9 / 10, y + s * 9 / 10, rgb(0x9A, 0xA3, 0xAE));
-            ellipse(hdc, b, x + s * 3 / 10, y + s * 3 / 10, x + s * 7 / 10, y + s * 7 / 10, rgb(0x3B, 0x40, 0x48));
+            let gc = rgb(0x9A, 0xA3, 0xAE);
+            let cx = x + s / 2;
+            let cy = y + s / 2;
+            let tw = (s / 7).max(2);
+            fill(hdc, b, cx - tw, y, cx + tw, y + s / 4, gc);
+            fill(hdc, b, cx - tw, y + s * 3 / 4, cx + tw, y + s, gc);
+            fill(hdc, b, x, cy - tw, x + s / 4, cy + tw, gc);
+            fill(hdc, b, x + s * 3 / 4, cy - tw, x + s, cy + tw, gc);
+            let d = s / 4;
+            let dt = (s / 8).max(1);
+            fill(hdc, b, cx - d - dt, cy - d - dt, cx - d + dt, cy - d + dt, gc);
+            fill(hdc, b, cx + d - dt, cy - d - dt, cx + d + dt, cy - d + dt, gc);
+            fill(hdc, b, cx - d - dt, cy + d - dt, cx - d + dt, cy + d + dt, gc);
+            fill(hdc, b, cx + d - dt, cy + d - dt, cx + d + dt, cy + d + dt, gc);
+            let r = s * 3 / 8;
+            ellipse(hdc, b, cx - r, cy - r, cx + r, cy + r, gc);
+            let ir = s * 3 / 16;
+            ellipse(hdc, b, cx - ir, cy - ir, cx + ir, cy + ir, glyph_bg());
         }
         Glyph::Computer => {
             round_rect(hdc, b, x, y + s / 10, x + s, y + s * 3 / 4, 3, rgb(0x3A, 0x3F, 0x48));
@@ -281,10 +291,11 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
             round_rect(hdc, b, x + s / 4, y + s * 7 / 8 - 1, x + s * 3 / 4, y + s, 2, rgb(0xB8, 0xBE, 0xC6));
         }
         Glyph::Trash => {
-            round_rect(hdc, b, x + s / 6, y + s / 4, x + s * 5 / 6, y + s, 3, rgb(0xD8, 0xDE, 0xE6));
-            fill(hdc, b, x + s / 10, y + s / 8, x + s * 9 / 10, y + s / 4, rgb(0xEE, 0xF1, 0xF5));
-            fill(hdc, b, x + s * 2 / 5, y + s / 20, x + s * 3 / 5, y + s / 8, rgb(0xEE, 0xF1, 0xF5));
-            for k in 1..4 { let lx = x + s / 6 + k * (s * 2 / 3) / 4; fill(hdc, b, lx - 1, y + s / 3, lx + 1, y + s * 9 / 10, rgb(0x9A, 0xA3, 0xAE)); }
+            let lid = rgb(0xC8, 0xCD, 0xD4);
+            let body = rgb(0xA8, 0xAE, 0xB8);
+            fill(hdc, b, x + s * 2 / 5, y + s / 12, x + s * 3 / 5, y + s * 3 / 16, lid);
+            fill(hdc, b, x + s / 8, y + s * 3 / 16, x + s * 7 / 8, y + s / 4 + 1, lid);
+            round_rect(hdc, b, x + s / 5, y + s * 5 / 16, x + s * 4 / 5, y + s * 9 / 10, 3, body);
         }
         Glyph::Notes => {
             round_rect(hdc, b, x + s / 8, y, x + s * 7 / 8, y + s, 3, rgb(0xF5, 0xF7, 0xFA));

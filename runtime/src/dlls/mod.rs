@@ -23,6 +23,7 @@ pub mod msvcrt;
 pub mod ntdll;
 pub mod ole32;
 pub mod oleaut32;
+pub mod quartz;
 pub mod resource;
 pub mod shell32;
 pub mod shlwapi;
@@ -191,6 +192,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "oleaut32",
                 exports: oleaut32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "quartz",
+                exports: quartz::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "mfreadwrite",
+                exports: mfplat::exports(),
                 handle: fake_module(),
             },
         ]

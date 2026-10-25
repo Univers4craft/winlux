@@ -1,4 +1,4 @@
-//! Décodage WAVE PCM/IEEE-float et pont de sortie vers ALSA (Linux), sans
+//! Décodage WAVE PCM/IEEE-float, MP3/AAC et pont de sortie vers ALSA (Linux), sans
 //! DLL Windows ni framework de compatibilité tiers.
 
 use std::ffi::{c_char, c_int, c_void, CString};
@@ -74,6 +74,8 @@ struct Wave {
     rate: u32,
     samples: Vec<i16>,
 }
+#[path = "winmm_codecs.rs"]
+mod codecs;
 fn le16(b: &[u8], o: usize) -> Option<u16> {
     Some(u16::from_le_bytes(b.get(o..o + 2)?.try_into().ok()?))
 }
@@ -342,11 +344,14 @@ fn play_sound_path(name: &str, flags: u32) -> i32 {
         }
     };
     let mut raw = Vec::new();
-    if f.take(256 * 1024 * 1024).read_to_end(&mut raw).is_err() {
+    if f.take((codecs::MAX_INPUT + 1) as u64)
+        .read_to_end(&mut raw)
+        .is_err()
+    {
         crate::process::set_last_error(31);
         return 0;
     }
-    let Some(wave) = decode_wave(&raw) else {
+    let Some(wave) = codecs::decode(&raw) else {
         crate::process::set_last_error(50);
         return 0;
     };
