@@ -359,7 +359,87 @@ pub extern "win64" fn get_rop2(_hdc: usize) -> i32 { 13 }
 pub extern "win64" fn realize_palette(_hdc: usize) -> u32 { 0 }
 pub extern "win64" fn select_palette(_hdc: usize, _pal: usize, _force: i32) -> usize { 0 }
 
-// ── GetDIBits / SetDIBitsToDevice (stubs) ──────────────────────────
+// ── GetDIBits / SetDIBitsToDevice / StretchDIBits ──────────────────
+
+use crate::dlls::gdi32::BitmapInfoHeader;
+
+unsafe fn decode_dib_pixels(
+    info: &BitmapInfoHeader, bits: *const u8,
+    src_x: i32, src_y: i32, src_w: usize, src_h: usize,
+) -> Option<Vec<u32>> {
+    if bits.is_null() || src_w == 0 || src_h == 0 { return None; }
+    let bpp = info.bit_count as usize;
+    if !matches!(bpp, 1 | 4 | 8 | 16 | 24 | 32) { return None; }
+    let abs_h = info.height.unsigned_abs() as usize;
+    let top_down = info.height < 0;
+    let stride = ((info.width as usize * bpp + 31) / 32) * 4;
+    let count = src_w.checked_mul(src_h)?;
+    if count > 8 * 1024 * 1024 { return None; }
+    let palette_offset = std::mem::size_of::<BitmapInfoHeader>();
+    let mut pixels = Vec::with_capacity(count);
+    for dy in 0..src_h {
+        let row = if top_down {
+            (src_y as usize).wrapping_add(dy)
+        } else {
+            abs_h.checked_sub(1)?.checked_sub((src_y as usize).wrapping_add(dy))?
+        };
+        if row >= abs_h { pixels.extend(std::iter::repeat_n(0u32, src_w)); continue; }
+        let row_ptr = bits.add(row * stride);
+        for dx in 0..src_w {
+            let x = (src_x as usize).wrapping_add(dx);
+            if x >= info.width as usize { pixels.push(0); continue; }
+            let color = match bpp {
+                32 => {
+                    let off = x * 4;
+                    let b = *row_ptr.add(off) as u32;
+                    let g = *row_ptr.add(off + 1) as u32;
+                    let r = *row_ptr.add(off + 2) as u32;
+                    r | (g << 8) | (b << 16)
+                }
+                24 => {
+                    let off = x * 3;
+                    let b = *row_ptr.add(off) as u32;
+                    let g = *row_ptr.add(off + 1) as u32;
+                    let r = *row_ptr.add(off + 2) as u32;
+                    r | (g << 8) | (b << 16)
+                }
+                16 => {
+                    let off = x * 2;
+                    let v = u16::from_le_bytes([*row_ptr.add(off), *row_ptr.add(off + 1)]);
+                    let r = ((v >> 10) & 0x1F) as u32 * 255 / 31;
+                    let g = ((v >> 5) & 0x1F) as u32 * 255 / 31;
+                    let b = (v & 0x1F) as u32 * 255 / 31;
+                    r | (g << 8) | (b << 16)
+                }
+                8 => {
+                    let idx = *row_ptr.add(x) as usize;
+                    read_palette_entry(bits, palette_offset, idx)
+                }
+                4 => {
+                    let byte = *row_ptr.add(x / 2);
+                    let idx = if x % 2 == 0 { (byte >> 4) as usize } else { (byte & 0x0F) as usize };
+                    read_palette_entry(bits, palette_offset, idx)
+                }
+                1 => {
+                    let byte = *row_ptr.add(x / 8);
+                    let bit = (byte >> (7 - (x % 8))) & 1;
+                    read_palette_entry(bits, palette_offset, bit as usize)
+                }
+                _ => 0,
+            };
+            pixels.push(color);
+        }
+    }
+    Some(pixels)
+}
+
+unsafe fn read_palette_entry(info_base: *const u8, palette_offset: usize, idx: usize) -> u32 {
+    let entry = info_base.add(palette_offset + idx * 4);
+    let b = *entry as u32;
+    let g = *entry.add(1) as u32;
+    let r = *entry.add(2) as u32;
+    r | (g << 8) | (b << 16)
+}
 
 pub unsafe extern "win64" fn get_dib_its(
     _hdc: usize, _bmp: usize, _start: u32, _lines: u32,
@@ -367,16 +447,62 @@ pub unsafe extern "win64" fn get_dib_its(
 ) -> i32 { 0 }
 
 pub unsafe extern "win64" fn set_di_bits_to_device(
-    _hdc: usize, _x: i32, _y: i32, _w: u32, _h: u32,
-    _src_x: i32, _src_y: i32, _start: u32, _lines: u32,
-    _bits: *const c_void, _info: *const c_void, _usage: u32,
-) -> i32 { 0 }
+    hdc: usize, x_dst: i32, y_dst: i32, w: u32, h: u32,
+    src_x: i32, src_y: i32, _start: u32, lines: u32,
+    bits: *const c_void, info: *const c_void, _usage: u32,
+) -> i32 {
+    if bits.is_null() || info.is_null() || w == 0 || h == 0 || lines == 0 { return 0; }
+    let header = std::ptr::read_unaligned(info as *const BitmapInfoHeader);
+    let draw_h = (h as usize).min(lines as usize);
+    let draw_w = w as usize;
+    let Some(pixels) = decode_dib_pixels(
+        &header, bits as *const u8, src_x, src_y, draw_w, draw_h,
+    ) else { return 0; };
+    let rect = Rect { left: x_dst, top: y_dst, right: x_dst + draw_w as i32, bottom: y_dst + draw_h as i32 };
+    gui::record(hdc, DrawCmd::Bitmap { rect, pixels, rop: gui::RasterOp::Copy });
+    draw_h as i32
+}
 
 pub unsafe extern "win64" fn stretch_di_bits(
-    _hdc: usize, _x: i32, _y: i32, _w: i32, _h: i32,
-    _src_x: i32, _src_y: i32, _sw: i32, _sh: i32,
-    _bits: *const c_void, _info: *const c_void, _usage: u32, _rop: u32,
-) -> i32 { 0 }
+    hdc: usize, x_dst: i32, y_dst: i32, w_dst: i32, h_dst: i32,
+    src_x: i32, src_y: i32, src_w: i32, src_h: i32,
+    bits: *const c_void, info: *const c_void, _usage: u32, rop: u32,
+) -> i32 {
+    if bits.is_null() || info.is_null() || w_dst == 0 || h_dst == 0 || src_w <= 0 || src_h <= 0 {
+        return 0;
+    }
+    let header = std::ptr::read_unaligned(info as *const BitmapInfoHeader);
+    let Some(src_pixels) = decode_dib_pixels(
+        &header, bits as *const u8, src_x, src_y, src_w as usize, src_h as usize,
+    ) else { return 0; };
+    let operation = match rop {
+        0x00CC_0020 => gui::RasterOp::Copy,
+        0x00EE_0086 => gui::RasterOp::Or,
+        0x0088_00C6 => gui::RasterOp::And,
+        0x0066_0046 => gui::RasterOp::Xor,
+        0x0033_0008 => gui::RasterOp::CopyInverted,
+        _ => gui::RasterOp::Copy,
+    };
+    let abs_w = w_dst.unsigned_abs() as usize;
+    let abs_h = h_dst.unsigned_abs() as usize;
+    let count = match abs_w.checked_mul(abs_h) {
+        Some(c) if c <= 8 * 1024 * 1024 => c,
+        _ => return 0,
+    };
+    let mut dst_pixels = Vec::with_capacity(count);
+    for dy in 0..abs_h {
+        for dx in 0..abs_w {
+            let sy = dy * src_h as usize / abs_h;
+            let sx = dx * src_w as usize / abs_w;
+            dst_pixels.push(src_pixels[sy * src_w as usize + sx]);
+        }
+    }
+    let (left, right) = if w_dst >= 0 { (x_dst, x_dst + w_dst) } else { (x_dst + w_dst, x_dst) };
+    let (top, bottom) = if h_dst >= 0 { (y_dst, y_dst + h_dst) } else { (y_dst + h_dst, y_dst) };
+    let rect = Rect { left, top, right, bottom };
+    gui::record(hdc, DrawCmd::Bitmap { rect, pixels: dst_pixels, rop: operation });
+    abs_h as i32
+}
 
 // ── CreateFontIndirect ─────────────────────────────────────────────
 
@@ -404,15 +530,114 @@ pub unsafe extern "win64" fn create_font_indirect_w(lf: *const crate::dlls::gdi3
     })
 }
 
-// ── EnumFontFamilies (stub — renvoie 1, pas d'appel du callback) ──
+// ── EnumFontFamilies ──────────────────────────────────────────────
+
+#[repr(C)]
+struct EnumLogFontExA {
+    log_font: crate::dlls::gdi32::LogFontA,
+    full_name: [u8; 64],
+    style: [u8; 32],
+    script: [u8; 32],
+}
+
+#[repr(C)]
+struct NewTextMetricA {
+    height: i32, ascent: i32, descent: i32,
+    internal_leading: i32, external_leading: i32,
+    ave_char_width: i32, max_char_width: i32,
+    weight: i32, overhang: i32,
+    digitized_aspect_x: i32, digitized_aspect_y: i32,
+    first_char: u8, last_char: u8, default_char: u8, break_char: u8,
+    italic: u8, underlined: u8, struck_out: u8,
+    pitch_and_family: u8, char_set: u8,
+    _pad: [u8; 3],
+    flags: u32, size_em: u32, cell_height: u32, avg_width: u32,
+}
+
+const BUILTIN_FONTS: &[(&str, i32)] = &[
+    ("Segoe UI", 400), ("Arial", 400), ("Tahoma", 400),
+    ("Courier New", 400), ("Times New Roman", 400),
+    ("Consolas", 400), ("Verdana", 400),
+];
+
+type EnumFontCallbackA = unsafe extern "win64" fn(*const EnumLogFontExA, *const NewTextMetricA, u32, isize) -> i32;
 
 pub unsafe extern "win64" fn enum_font_families_ex_a(
-    _hdc: usize, _logfont: *const c_void, _proc: usize, _lparam: isize, _flags: u32,
-) -> i32 { 1 }
+    _hdc: usize, logfont: *const c_void, proc_addr: usize, lparam: isize, _flags: u32,
+) -> i32 {
+    if proc_addr == 0 { return 1; }
+    let callback: EnumFontCallbackA = std::mem::transmute(proc_addr);
+    let filter_face = if !logfont.is_null() {
+        let lf = &*(logfont as *const crate::dlls::gdi32::LogFontA);
+        let len = lf.face.iter().position(|&b| b == 0).unwrap_or(lf.face.len());
+        if len > 0 { Some(crate::dlls::decode_ansi(&lf.face[..len])) } else { None }
+    } else { None };
+    for &(name, weight) in BUILTIN_FONTS {
+        if let Some(ref f) = filter_face {
+            if !f.is_empty() && !f.eq_ignore_ascii_case(name) { continue; }
+        }
+        let h = 16;
+        let mut elf: EnumLogFontExA = std::mem::zeroed();
+        elf.log_font.height = h;
+        elf.log_font.weight = weight;
+        elf.log_font.charset = 0;
+        elf.log_font.pitch_and_family = 0x32;
+        let face_bytes = name.as_bytes();
+        let n = face_bytes.len().min(31);
+        elf.log_font.face[..n].copy_from_slice(&face_bytes[..n]);
+        let name_bytes = name.as_bytes();
+        let n2 = name_bytes.len().min(63);
+        elf.full_name[..n2].copy_from_slice(&name_bytes[..n2]);
+        elf.style[..7].copy_from_slice(b"Regular");
+        let avg_w = h * 45 / 100;
+        let ntm = NewTextMetricA {
+            height: h, ascent: h * 80 / 100, descent: h * 20 / 100,
+            internal_leading: 0, external_leading: 0,
+            ave_char_width: avg_w, max_char_width: avg_w * 2,
+            weight, overhang: 0,
+            digitized_aspect_x: 96, digitized_aspect_y: 96,
+            first_char: 0x20, last_char: 0xFF, default_char: b'?', break_char: b' ',
+            italic: 0, underlined: 0, struck_out: 0,
+            pitch_and_family: 0x32, char_set: 0,
+            _pad: [0; 3],
+            flags: 0x04, size_em: h as u32, cell_height: h as u32, avg_width: avg_w as u32,
+        };
+        let rc = callback(&elf, &ntm, 0x04, lparam);
+        if rc == 0 { return 0; }
+    }
+    1
+}
 
 pub unsafe extern "win64" fn enum_font_families_ex_w(
-    _hdc: usize, _logfont: *const c_void, _proc: usize, _lparam: isize, _flags: u32,
-) -> i32 { 1 }
+    _hdc: usize, logfont: *const c_void, proc_addr: usize, lparam: isize, _flags: u32,
+) -> i32 {
+    if proc_addr == 0 { return 1; }
+    let filter_face = if !logfont.is_null() {
+        let lf = &*(logfont as *const crate::dlls::gdi32::LogFontW);
+        let len = lf.face.iter().position(|&c| c == 0).unwrap_or(lf.face.len());
+        if len > 0 { Some(String::from_utf16_lossy(&lf.face[..len])) } else { None }
+    } else { None };
+    enum_font_families_ex_a(
+        _hdc,
+        if !logfont.is_null() {
+            let lf_w = &*(logfont as *const crate::dlls::gdi32::LogFontW);
+            let face_u = filter_face.as_deref().unwrap_or("");
+            let face_bytes = face_u.as_bytes();
+            let mut lf_a: crate::dlls::gdi32::LogFontA = std::mem::zeroed();
+            lf_a.height = lf_w.height;
+            lf_a.weight = lf_w.weight;
+            lf_a.charset = lf_w.charset;
+            let n = face_bytes.len().min(31);
+            lf_a.face[..n].copy_from_slice(&face_bytes[..n]);
+            &lf_a as *const _ as *const c_void
+        } else {
+            std::ptr::null()
+        },
+        proc_addr,
+        lparam,
+        _flags,
+    )
+}
 
 // ── GetCharWidth / ABC (stub) ──────────────────────────────────────
 
