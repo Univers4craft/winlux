@@ -126,6 +126,7 @@ jobs:
 
       - name: Valider le réseau et les commandes des paramètres
         run: |
+          sh scripts/test-install-safety.sh
           sh scripts/test-network.sh
           sh scripts/test-control.sh
           sh scripts/test-display.sh

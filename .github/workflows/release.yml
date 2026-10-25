@@ -18,6 +18,9 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Vérifier la version publiée
+        run: test "$GITHUB_REF_NAME" = "$(cat VERSION)"
+
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
@@ -29,7 +32,10 @@ jobs:
             xorriso grub-pc-bin grub-efi-amd64-bin \
             linux-image-generic xserver-xorg-core \
             x11-xserver-utils gcc-mingw-w64-x86-64 \
-            cpio fakeroot zstd
+            cpio fakeroot zstd kmod busybox-static \
+            xvfb x11-xkb-utils xfonts-base fonts-dejavu-core \
+            xserver-xorg-input-libinput libxft2 libmpg123-0 libfaad2 libasound2t64 \
+            curl udev ffmpeg libarchive-tools parted dosfstools qemu-system-x86 ovmf
 
       - name: Compiler et tester
         run: |
@@ -46,8 +52,8 @@ jobs:
         run: |
           kernel=$(ls /boot/vmlinuz-* 2>/dev/null | head -1)
           if [ -z "$kernel" ]; then
-            echo "Noyau introuvable, ISO ignorée" >&2
-            echo "SKIP_ISO=true" >> "$GITHUB_ENV"
+            echo "Noyau introuvable : publication refusée" >&2
+            exit 1
           else
             release=$(basename "$kernel" | sed 's/^vmlinuz-//')
             WINLUX_KERNEL="$kernel" \
@@ -55,6 +61,14 @@ jobs:
               bash scripts/build-live-iso.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
             echo "SKIP_ISO=false" >> "$GITHUB_ENV"
           fi
+
+      - name: Valider l'ISO et l'installation avant publication
+        run: |
+          test "$SKIP_ISO" = "false"
+          sh scripts/test-install-safety.sh
+          sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" bios
+          sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" uefi
+          sh scripts/test-install-vm-guest.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
 
       - name: Calculer les sommes SHA-256
         run: |

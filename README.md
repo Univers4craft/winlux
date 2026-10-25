@@ -84,6 +84,11 @@ Valeurs par défaut : disque QCOW2 extensible de 24 Gio, 4 Gio de RAM, 4 CPU, af
 
 Un disque préparé portant le label `WINLUX_ROOT` permet la persistance. Sans lui, la session Live fonctionne en mémoire et perd ses modifications à l’arrêt. Ces scripts ne constituent pas un installateur SSD généraliste.
 
+Un installateur disque expérimental existe séparément : il efface un disque
+entier après contrôles et confirmation explicite. Voir [ses protections et les
+tests requis](docs/INSTALLER-SAFETY.md) avant toute utilisation ; ne pas le lancer
+sur un SSD contenant des données.
+
 Dans Explorer, **C:** correspond au dossier personnel Linux, **Z:** à la racine Linux. Un navigateur n’est pas garanti dans chaque ISO : Edge peut être embarqué avec `WINLUX_EDGE_DEB`, sinon le lanceur cherche les navigateurs installés compatibles.
 
 ## Mises à jour GitHub
@@ -103,7 +108,7 @@ winlux-update --auto enable   # disable pour désactiver
 | `--system` | Bureau, runtime, applications embarquées, scripts, noyau, pilotes, bibliothèques et démarrage, depuis un stage ISO vérifié. |
 | `--runtime` | Runtime et outil de mise à jour uniquement ; ne fournit pas les nouvelles bibliothèques système. |
 
-**GitHub Actions teste le code et publie des paquets runtime sur les tags stables. La génération complète d’ISO dans Actions reste à mettre en place.** Les tags `v*-preview.*` sont exclus du workflow runtime pour préserver les releases système.
+**GitHub Actions teste le code ; le workflow de release construit une ISO et impose les tests Live et disque installé en BIOS/UEFI avant publication.** Cette chaîne de release doit encore être exécutée sur GitHub pour être validée sur ses runners. Le paquet de mise à jour publié par ce workflow reste de portée **runtime**. Les tags `v*-preview.*` en sont exclus pour préserver les releases système manuelles ; les autres tags doivent correspondre à `VERSION`.
 
 Après construction et tests de l’ISO, `scripts/build-update-bundle.sh --system` prépare le paquet complet. Il faut ensuite publier sur la même release l’ISO, ses sommes de contrôle, le paquet, le manifeste et les notes référencées. Les notes viennent de `docs/releases/VERSION.md`.
 
@@ -157,7 +162,7 @@ ALSA_CONFIG_PATH="$PWD/runtime/tests/audio/alsa-null.conf" cargo test -p winlux 
 - WPF, WinForms, Photoshop, DirectX et logiciels Windows complexes non garantis compatibles.
 - COM, services, héritage des handles et sémantiques avancées des E/S encore partiels.
 - Lecture vidéo et validation audio sur des périphériques physiques à poursuivre.
-- Installation SSD, génération d’ISO sur GitHub et validation matérielle élargie à développer.
+- Installateur disque encore expérimental, chaîne ISO à valider sur les runners GitHub et validation matérielle élargie à poursuivre.
 
 Les parties écartées après revue ne sont pas présentées comme fonctionnelles : voir [la revue runtime](REVIEW-INTEGRATION.md) et [la revue graphique](REVIEW-GRAPHICS.md).
 

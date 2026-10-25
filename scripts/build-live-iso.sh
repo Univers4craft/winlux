@@ -82,7 +82,14 @@ printf 'system\n' >"$stage/usr/share/winlux/update-scope"
 # Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
 wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
 if test -f "$wallpaper_src"; then
-    convert "$wallpaper_src" -type TrueColor BMP3:"$stage/usr/share/winlux/wallpaper.bmp"
+    if command -v convert >/dev/null 2>&1; then
+        convert "$wallpaper_src" -type TrueColor BMP3:"$stage/usr/share/winlux/wallpaper.bmp"
+    elif command -v ffmpeg >/dev/null 2>&1; then
+        ffmpeg -hide_banner -loglevel error -i "$wallpaper_src" -frames:v 1 -pix_fmt bgr24 "$stage/usr/share/winlux/wallpaper.bmp"
+    else
+        echo 'fond PNG : ImageMagick (convert) ou ffmpeg requis' >&2
+        exit 1
+    fi
 fi
 
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
@@ -178,7 +185,7 @@ if test -d /usr/share/alsa; then
 fi
 # Keep normal module names and dependency metadata so udev/modprobe can bind
 # network, audio and common input devices instead of relying on host drivers.
-for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio; do
+for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1; do
     modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
         test "$directive" = insmod || continue
         destination="$stage${module%.zst}"
