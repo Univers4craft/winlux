@@ -15,7 +15,7 @@
 //! - double-clic : dossier ouvert sur place, `.exe` lancé dans Winlux, autre
 //!   fichier ouvert avec l'application Linux associée.
 //!
-//! Tout passe par les API Win32 du runtime (`FindFirstFileA`, `MoveFileA`…) :
+//! Tout passe par les API Win32 Unicode du runtime (`FindFirstFileW`, `MoveFileW`…) :
 //! Explorer est lui-même un programme Windows qui s'exécute dans Winlux.
 
 use winlux_testexe::*;
@@ -211,6 +211,41 @@ fn cstr<'a>(buf: &'a mut [u8; PATH_LEN + NAME_LEN + 2], s: &[u8]) -> *const core
     buf.as_ptr() as *const core::ffi::c_char
 }
 
+/// Convertit un chemin interne (Windows-1252 / ASCII) en chaîne wide (UTF-16)
+/// terminée par zéro, pour les API Win32 W.
+fn wstr(buf: &mut [u16; PATH_LEN + NAME_LEN + 2], s: &[u8]) -> *const u16 {
+    if !valid_path(s) || s.is_empty() { buf[0] = 0; return core::ptr::null(); }
+    for (i, &c) in s.iter().enumerate() { buf[i] = c as u16; }
+    buf[s.len()] = 0;
+    buf.as_ptr()
+}
+
+/// Construit `dir\name` en wide (UTF-16) dans `buf` et renvoie la longueur.
+fn wjoin(buf: &mut [u16; PATH_LEN + NAME_LEN + 2], dir: &[u8], name: &[u8]) -> usize {
+    let sep = !dir.is_empty() && !matches!(dir.last(), Some(b'\\' | b'/'));
+    let n = dir.len() + usize::from(sep) + name.len();
+    if n == 0 || n >= PATH_LEN || dir.contains(&0) || name.contains(&0) { buf[0] = 0; return 0; }
+    for (i, &c) in dir.iter().enumerate() { buf[i] = c as u16; }
+    let at = dir.len() + usize::from(sep);
+    if sep { buf[dir.len()] = b'\\' as u16; }
+    for (i, &c) in name.iter().enumerate() { buf[at + i] = c as u16; }
+    buf[n] = 0;
+    n
+}
+
+/// Lit le nom de fichier depuis Win32FindDataW (UTF-16 → Windows-1252).
+fn find_name_w(d: &Win32FindDataW) -> &[u8] {
+    static mut NAME_BUF: [u8; 260] = [0; 260];
+    let raw = &d.file_name;
+    let n = raw.iter().position(|&c| c == 0).unwrap_or(260);
+    unsafe {
+        for i in 0..n {
+            NAME_BUF[i] = if raw[i] <= 0xFF { raw[i] as u8 } else { b'?' };
+        }
+        &NAME_BUF[..n]
+    }
+}
+
 fn parent(path: &[u8]) -> Option<&[u8]> {
     if path.len() <= 3 { return None; }
     let i = path.iter().rposition(|&c| c == b'\\')?;
@@ -225,8 +260,8 @@ fn last_component(path: &[u8]) -> &[u8] {
 }
 
 fn exists_dir(path: &[u8]) -> bool {
-    let mut buf = [0u8; PATH_LEN + NAME_LEN + 2];
-    let a = unsafe { GetFileAttributesA(cstr(&mut buf, path)) };
+    let mut buf = [0u16; PATH_LEN + NAME_LEN + 2];
+    let a = unsafe { GetFileAttributesW(wstr(&mut buf, path)) };
     a != u32::MAX && a & 0x10 != 0
 }
 
@@ -388,30 +423,20 @@ unsafe fn add_entry(p: &mut Pane, name: &[u8], dir: bool, hidden: bool, size: u6
     p.count += 1;
 }
 
-fn find_name(d: &Win32FindDataA) -> &[u8] {
-    let raw = unsafe { &*(&d.file_name as *const [core::ffi::c_char; 260] as *const [u8; 260]) };
-    let n = raw.iter().position(|&c| c == 0).unwrap_or(260);
-    &raw[..n]
-}
-
 /// Lit un dossier : `prefix` est ajouté devant chaque nom (recherche profonde).
 unsafe fn read_dir(p: &mut Pane, dir: &[u8], prefix: &[u8], filter: &[u8], depth: u32) {
-    let mut pattern = [0u8; PATH_LEN + NAME_LEN + 2];
-    let n = join(&mut pattern, dir, b"*");
+    let mut wpattern = [0u16; PATH_LEN + NAME_LEN + 2];
+    let n = wjoin(&mut wpattern, dir, b"*");
     if n == 0 { p.truncated = true; return; }
-    let mut data: Win32FindDataA = core::mem::zeroed();
-    let h = FindFirstFileA(pattern.as_ptr() as *const core::ffi::c_char, &mut data);
+    let mut data: Win32FindDataW = core::mem::zeroed();
+    let h = FindFirstFileW(wpattern.as_ptr(), &mut data);
     if h as isize == -1 { if prefix.is_empty() { p.missing = !exists_dir(dir); } return; }
-    // Sous-dossiers à parcourir ensuite (recherche profonde).
     let mut subdirs = [[0u8; NAME_LEN]; 48];
     let mut sublen = [0u16; 48];
     let mut nsub = 0;
     loop {
-        let name = find_name(&data);
+        let name = find_name_w(&data);
         if name != b"." && name != b".." && !valid_component(name) {
-            // FindFirstFileA remplace un caractère hors CP1252 par « ? ».
-            // Un tel nom ne doit jamais désigner un autre fichier lors d'une
-            // suppression, d'un déplacement ou d'un collage.
             p.truncated = true;
         } else if name != b"." && name != b".." && !name.is_empty() {
             let dir_flag = data.attributes & 0x10 != 0;
@@ -429,14 +454,14 @@ unsafe fn read_dir(p: &mut Pane, dir: &[u8], prefix: &[u8], filter: &[u8], depth
                 }
                 if dir_flag && !hidden && nsub < subdirs.len() {
                     let m = name.len();
-                    if m >= NAME_LEN { p.truncated = true; if FindNextFileA(h, &mut data) == 0 { break; } continue; }
+                    if m >= NAME_LEN { p.truncated = true; if FindNextFileW(h, &mut data) == 0 { break; } continue; }
                     subdirs[nsub][..m].copy_from_slice(&name[..m]);
                     sublen[nsub] = m as u16;
                     nsub += 1;
                 }
             }
         }
-        if FindNextFileA(h, &mut data) == 0 || p.count >= MAX_ENTRIES { break; }
+        if FindNextFileW(h, &mut data) == 0 || p.count >= MAX_ENTRIES { break; }
     }
     FindClose(h);
     if depth > 0 {
@@ -575,7 +600,10 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         if new_tab { open_tab(&path[..n]); } else { navigate(&path[..n]); }
         return;
     }
-    let r = ShellExecuteA(core::ptr::null_mut(), c"open".as_ptr(), path.as_ptr() as *const core::ffi::c_char, core::ptr::null(), core::ptr::null(), 1);
+    let mut wpath = [0u16; PATH_LEN + NAME_LEN + 2];
+    wstr(&mut wpath, &path[..n]);
+    let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    let r = ShellExecuteW(core::ptr::null_mut(), wopen.as_ptr(), wpath.as_ptr(), core::ptr::null(), core::ptr::null(), 1);
     if (r as isize) <= 32 { notify(b"Aucune application ne sait ouvrir ce fichier."); }
 }
 
@@ -1295,7 +1323,8 @@ unsafe fn unique_name(dir: &[u8], base: &[u8], ext: &[u8], out: &mut [u8; PATH_L
         n += ext.len();
         let len = join(out, dir, &name[..n]);
         if len == 0 { return 0; }
-        let a = GetFileAttributesA(out.as_ptr() as *const core::ffi::c_char);
+        let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
+        let a = GetFileAttributesW(wstr(&mut wb, &out[..len]));
         if a == u32::MAX { return len; }
     }
     0
@@ -1315,8 +1344,10 @@ unsafe fn new_item(folder: bool) {
     let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
     let n = if folder { unique_name(p.loc.get(), b"Nouveau dossier", b"", &mut path) } else { unique_name(p.loc.get(), b"Nouveau document texte", b".txt", &mut path) };
     if n == 0 { return; }
-    let ok = if folder { CreateDirectoryA(path.as_ptr() as *const core::ffi::c_char, core::ptr::null_mut()) != 0 } else {
-        let h = CreateFileA(path.as_ptr() as *const core::ffi::c_char, 0x4000_0000, 0, core::ptr::null_mut(), 1, 0x80, core::ptr::null_mut());
+    let mut wp = [0u16; PATH_LEN + NAME_LEN + 2];
+    wstr(&mut wp, &path[..n]);
+    let ok = if folder { CreateDirectoryW(wp.as_ptr(), core::ptr::null_mut()) != 0 } else {
+        let h = CreateFileW(wp.as_ptr(), 0x4000_0000, 0, core::ptr::null_mut(), 1, 0x80, core::ptr::null_mut());
         if h as isize != -1 { CloseHandle(h); true } else { false }
     };
     if !ok { notify(b"Impossible de cr\xE9er l'\xE9l\xE9ment ici (droits insuffisants ?)."); return; }
@@ -1352,7 +1383,11 @@ unsafe fn commit_rename() {
     if join(&mut from, p.loc.get(), old_name) == 0 || join(&mut to, p.loc.get(), RENAME.get()) == 0 {
         notify(b"Chemin trop long : renommage annul\xE9."); return;
     }
-    if MoveFileA(from.as_ptr() as *const core::ffi::c_char, to.as_ptr() as *const core::ffi::c_char) == 0 { notify(b"Renommage impossible."); return; }
+    let mut wfrom = [0u16; PATH_LEN + NAME_LEN + 2];
+    let mut wto = [0u16; PATH_LEN + NAME_LEN + 2];
+    wstr(&mut wfrom, &from[..from.iter().position(|&c| c == 0).unwrap_or(from.len())]);
+    wstr(&mut wto, &to[..to.iter().position(|&c| c == 0).unwrap_or(to.len())]);
+    if MoveFileW(wfrom.as_ptr(), wto.as_ptr()) == 0 { notify(b"Renommage impossible."); return; }
     let new_name = RENAME;
     reload(p);
     select_named(p, new_name.get());
@@ -1373,14 +1408,17 @@ unsafe fn copy_selection(cut: bool) {
     if NCLIP > 0 { notify(if cut { b"\xC9l\xE9ments coup\xE9s : collez-les dans un autre dossier." } else { b"\xC9l\xE9ments copi\xE9s." }); }
 }
 
-/// GetFullPathNameA résout aussi les alias C:/Z: et les liens symboliques
+/// GetFullPathNameW résout aussi les alias C:/Z: et les liens symboliques
 /// existants dans Winlux. La destination est reconstruite depuis son parent
 /// existant avant toute création.
 unsafe fn canonical_path(path: &[u8]) -> Option<Path> {
-    let mut source = [0u8; PATH_LEN + NAME_LEN + 2];
-    let mut result = EMPTY_PATH;
-    let n = GetFullPathNameA(cstr(&mut source, path), PATH_LEN as u32, result.buf.as_mut_ptr().cast(), core::ptr::null_mut()) as usize;
+    let mut wsrc = [0u16; PATH_LEN + NAME_LEN + 2];
+    wstr(&mut wsrc, path);
+    let mut wout = [0u16; PATH_LEN];
+    let n = GetFullPathNameW(wsrc.as_ptr(), PATH_LEN as u32, wout.as_mut_ptr(), core::ptr::null_mut()) as usize;
     if n == 0 || n >= PATH_LEN { return None; }
+    let mut result = EMPTY_PATH;
+    for i in 0..n { result.buf[i] = if wout[i] <= 0xFF { wout[i] as u8 } else { b'?' }; }
     result.len = n as u16;
     Some(result)
 }
@@ -1405,18 +1443,18 @@ unsafe fn preflight_tree(from: &[u8], to: &[u8], ancestors: &mut [Path; 17], dep
     if depth >= ancestors.len() || !valid_path(from) || !valid_path(to) { return false; }
     let Some(canonical) = canonical_path(from) else { return false; };
     if ancestors[..depth].iter().any(|p| cmp_ci(p.get(), canonical.get()).is_eq()) { return false; }
-    let mut buf = [0u8; PATH_LEN + NAME_LEN + 2];
-    let a = GetFileAttributesA(cstr(&mut buf, from));
+    let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
+    let a = GetFileAttributesW(wstr(&mut wb, from));
     if a == u32::MAX { return false; }
     if a & 0x10 == 0 { return true; }
     ancestors[depth] = canonical;
-    let mut pattern = [0u8; PATH_LEN + NAME_LEN + 2];
-    if join(&mut pattern, from, b"*") == 0 { return false; }
-    let mut data: Win32FindDataA = core::mem::zeroed();
-    let h = FindFirstFileA(pattern.as_ptr().cast(), &mut data);
+    let mut wpattern = [0u16; PATH_LEN + NAME_LEN + 2];
+    if wjoin(&mut wpattern, from, b"*") == 0 { return false; }
+    let mut data: Win32FindDataW = core::mem::zeroed();
+    let h = FindFirstFileW(wpattern.as_ptr(), &mut data);
     if h as isize == -1 { return GetLastError() == 2 || GetLastError() == 18; }
     let ok = loop {
-        let name = find_name(&data);
+        let name = find_name_w(&data);
         if name != b"." && name != b".." && !name.is_empty() {
             if !valid_component(name) { break false; }
             let mut f2 = [0u8; PATH_LEN + NAME_LEN + 2];
@@ -1425,7 +1463,7 @@ unsafe fn preflight_tree(from: &[u8], to: &[u8], ancestors: &mut [Path; 17], dep
             let tnl = join(&mut t2, to, name);
             if fnl == 0 || tnl == 0 || !preflight_tree(&f2[..fnl], &t2[..tnl], ancestors, depth + 1) { break false; }
         }
-        if FindNextFileA(h, &mut data) == 0 { break GetLastError() == 2 || GetLastError() == 18; }
+        if FindNextFileW(h, &mut data) == 0 { break GetLastError() == 2 || GetLastError() == 18; }
     };
     FindClose(h);
     ok
@@ -1434,39 +1472,40 @@ unsafe fn preflight_tree(from: &[u8], to: &[u8], ancestors: &mut [Path; 17], dep
 /// Ne retire que l'arbre de destination créé par cette copie, jamais la source.
 unsafe fn rollback_copy(path: &[u8], depth: usize) -> bool {
     if depth > 17 { return false; }
-    let mut buf = [0u8; PATH_LEN + NAME_LEN + 2];
-    let a = GetFileAttributesA(cstr(&mut buf, path));
+    let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
+    let a = GetFileAttributesW(wstr(&mut wb, path));
     if a == u32::MAX { return true; }
-    if a & 0x10 == 0 { return DeleteFileA(buf.as_ptr().cast()) != 0; }
-    let mut pattern = [0u8; PATH_LEN + NAME_LEN + 2];
-    if join(&mut pattern, path, b"*") == 0 { return false; }
-    let mut data: Win32FindDataA = core::mem::zeroed();
-    let h = FindFirstFileA(pattern.as_ptr().cast(), &mut data);
+    if a & 0x10 == 0 { let mut wd = [0u16; PATH_LEN + NAME_LEN + 2]; return DeleteFileW(wstr(&mut wd, path)) != 0; }
+    let mut wpattern = [0u16; PATH_LEN + NAME_LEN + 2];
+    if wjoin(&mut wpattern, path, b"*") == 0 { return false; }
+    let mut data: Win32FindDataW = core::mem::zeroed();
+    let h = FindFirstFileW(wpattern.as_ptr(), &mut data);
     let mut ok = true;
     if h as isize != -1 {
         loop {
-            let name = find_name(&data);
+            let name = find_name_w(&data);
             if name != b"." && name != b".." && !name.is_empty() {
-                if !valid_component(name) { ok = false; if FindNextFileA(h, &mut data) == 0 { break; } continue; }
+                if !valid_component(name) { ok = false; if FindNextFileW(h, &mut data) == 0 { break; } continue; }
                 let mut child = [0u8; PATH_LEN + NAME_LEN + 2];
                 let n = join(&mut child, path, name);
                 if n == 0 || !rollback_copy(&child[..n], depth + 1) { ok = false; }
             }
-            if FindNextFileA(h, &mut data) == 0 { break; }
+            if FindNextFileW(h, &mut data) == 0 { break; }
         }
         FindClose(h);
     } else if GetLastError() != 2 && GetLastError() != 18 { return false; }
-    ok && RemoveDirectoryA(cstr(&mut buf, path)) != 0
+    let mut wr = [0u16; PATH_LEN + NAME_LEN + 2];
+    ok && RemoveDirectoryW(wstr(&mut wr, path)) != 0
 }
 
 /// CREATE_NEW réserve le nom de façon atomique. Un échec de lecture/écriture
 /// ne supprime que le fichier dont cette fonction a créé le handle.
 unsafe fn copy_file_new(from: &[u8], to: &[u8]) -> bool {
-    let mut fb = [0u8; PATH_LEN + NAME_LEN + 2];
-    let mut tb = [0u8; PATH_LEN + NAME_LEN + 2];
-    let source = CreateFileA(cstr(&mut fb, from), 0x8000_0000, 1, core::ptr::null_mut(), 3, 0x80, core::ptr::null_mut());
+    let mut wfb = [0u16; PATH_LEN + NAME_LEN + 2];
+    let mut wtb = [0u16; PATH_LEN + NAME_LEN + 2];
+    let source = CreateFileW(wstr(&mut wfb, from), 0x8000_0000, 1, core::ptr::null_mut(), 3, 0x80, core::ptr::null_mut());
     if source as isize == -1 { return false; }
-    let target = CreateFileA(cstr(&mut tb, to), 0x4000_0000, 0, core::ptr::null_mut(), 1, 0x80, core::ptr::null_mut());
+    let target = CreateFileW(wstr(&mut wtb, to), 0x4000_0000, 0, core::ptr::null_mut(), 1, 0x80, core::ptr::null_mut());
     if target as isize == -1 { CloseHandle(source); return false; }
     let mut block = [0u8; 32768];
     let ok = loop {
@@ -1483,26 +1522,26 @@ unsafe fn copy_file_new(from: &[u8], to: &[u8]) -> bool {
     };
     CloseHandle(source);
     let ok = CloseHandle(target) != 0 && ok;
-    if !ok && DeleteFileA(tb.as_ptr().cast()) == 0 { notify(b"Copie interrompue : le fichier cible partiel reste accessible."); }
+    if !ok { let mut wd = [0u16; PATH_LEN + NAME_LEN + 2]; if DeleteFileW(wstr(&mut wd, to)) == 0 { notify(b"Copie interrompue : le fichier cible partiel reste accessible."); } }
     ok
 }
 
 unsafe fn copy_tree_inner(from: &[u8], to: &[u8], depth: u32, created: &mut bool) -> bool {
     if !valid_path(from) || !valid_path(to) { return false; }
-    let mut buf = [0u8; PATH_LEN + NAME_LEN + 2];
-    let a = GetFileAttributesA(cstr(&mut buf, from));
+    let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
+    let a = GetFileAttributesW(wstr(&mut wb, from));
     if a == u32::MAX { return false; }
-    let mut tb = [0u8; PATH_LEN + NAME_LEN + 2];
     if a & 0x10 == 0 { let ok = copy_file_new(from, to); *created = ok; return ok; }
-    if depth > 16 || CreateDirectoryA(cstr(&mut tb, to), core::ptr::null_mut()) == 0 { return false; }
+    let mut wt = [0u16; PATH_LEN + NAME_LEN + 2];
+    if depth > 16 || CreateDirectoryW(wstr(&mut wt, to), core::ptr::null_mut()) == 0 { return false; }
     *created = true;
-    let mut pattern = [0u8; PATH_LEN + NAME_LEN + 2];
-    if join(&mut pattern, from, b"*") == 0 { return false; }
-    let mut data: Win32FindDataA = core::mem::zeroed();
-    let h = FindFirstFileA(pattern.as_ptr() as *const core::ffi::c_char, &mut data);
+    let mut wpattern = [0u16; PATH_LEN + NAME_LEN + 2];
+    if wjoin(&mut wpattern, from, b"*") == 0 { return false; }
+    let mut data: Win32FindDataW = core::mem::zeroed();
+    let h = FindFirstFileW(wpattern.as_ptr(), &mut data);
     if h as isize == -1 { return GetLastError() == 2 || GetLastError() == 18; }
     let ok = loop {
-        let name = find_name(&data);
+        let name = find_name_w(&data);
         if name != b"." && name != b".." && !name.is_empty() {
             if !valid_component(name) { break false; }
             let mut f2 = [0u8; PATH_LEN + NAME_LEN + 2];
@@ -1512,7 +1551,7 @@ unsafe fn copy_tree_inner(from: &[u8], to: &[u8], depth: u32, created: &mut bool
             let mut child_created = false;
             if fnl == 0 || tnl == 0 || !copy_tree_inner(&f2[..fnl], &t2[..tnl], depth + 1, &mut child_created) { break false; }
         }
-        if FindNextFileA(h, &mut data) == 0 { break GetLastError() == 2 || GetLastError() == 18; }
+        if FindNextFileW(h, &mut data) == 0 { break GetLastError() == 2 || GetLastError() == 18; }
     };
     FindClose(h);
     ok
@@ -1523,8 +1562,8 @@ unsafe fn copy_tree(from: &[u8], to: &[u8]) -> bool {
     if !safe_destination(from, dir) { return false; }
     let mut ancestors = [EMPTY_PATH; 17];
     if !preflight_tree(from, to, &mut ancestors, 0) { return false; }
-    let mut buf = [0u8; PATH_LEN + NAME_LEN + 2];
-    if GetFileAttributesA(cstr(&mut buf, to)) != u32::MAX { return false; }
+    let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
+    if GetFileAttributesW(wstr(&mut wb, to)) != u32::MAX { return false; }
     let mut created = false;
     if copy_tree_inner(from, to, 0, &mut created) { return true; }
     if created && !rollback_copy(to, 0) { notify(b"Copie interrompue : une copie partielle reste dans le dossier cible."); }
@@ -1559,10 +1598,12 @@ unsafe fn paste() {
         let mut direct = [0u8; PATH_LEN + NAME_LEN + 2];
         let dn = join(&mut direct, p.loc.get(), name);
         if dn == 0 { failed += 1; if CLIP_CUT { CLIP[clip_remaining] = src; clip_remaining += 1; } continue; }
-        let n = if GetFileAttributesA(direct.as_ptr() as *const core::ffi::c_char) == u32::MAX { dst[..dn + 1].copy_from_slice(&direct[..dn + 1]); dn } else { unique_name(p.loc.get(), base, ext, &mut dst) };
+        let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
+        let n = if GetFileAttributesW(wstr(&mut wd, &direct[..dn])) == u32::MAX { dst[..dn + 1].copy_from_slice(&direct[..dn + 1]); dn } else { unique_name(p.loc.get(), base, ext, &mut dst) };
         if n == 0 { failed += 1; if CLIP_CUT { CLIP[clip_remaining] = src; clip_remaining += 1; } continue; }
-        let mut sb = [0u8; PATH_LEN + NAME_LEN + 2];
-        let moved = CLIP_CUT && MoveFileA(cstr(&mut sb, src.get()), dst.as_ptr().cast()) != 0;
+        let mut wsrc_b = [0u16; PATH_LEN + NAME_LEN + 2];
+        let mut wdst_b = [0u16; PATH_LEN + NAME_LEN + 2];
+        let moved = CLIP_CUT && MoveFileW(wstr(&mut wsrc_b, src.get()), wstr(&mut wdst_b, &dst[..n])) != 0;
         let ok = moved || copy_tree(src.get(), &dst[..n]);
         if !ok { failed += 1; }
         if CLIP_CUT && !moved {
@@ -1585,10 +1626,10 @@ unsafe fn delete_selection() {
     let p = pane();
     if p.loc.is(HOME) || p.loc.is(PC) { return; }
     let in_trash = p.loc.is(TRASH);
-    let mut b1 = [0u8; PATH_LEN + NAME_LEN + 2];
-    CreateDirectoryA(cstr(&mut b1, b"C:\\.local\\share\\Trash"), core::ptr::null_mut());
-    CreateDirectoryA(cstr(&mut b1, TRASH), core::ptr::null_mut());
-    CreateDirectoryA(cstr(&mut b1, b"C:\\.local\\share\\Trash\\info"), core::ptr::null_mut());
+    let mut w1 = [0u16; PATH_LEN + NAME_LEN + 2];
+    CreateDirectoryW(wstr(&mut w1, b"C:\\.local\\share\\Trash"), core::ptr::null_mut());
+    CreateDirectoryW(wstr(&mut w1, TRASH), core::ptr::null_mut());
+    CreateDirectoryW(wstr(&mut w1, b"C:\\.local\\share\\Trash\\info"), core::ptr::null_mut());
     let mut failed = 0;
     for v in 0..p.nview {
         let i = p.view[v] as usize;
@@ -1598,8 +1639,9 @@ unsafe fn delete_selection() {
         if sn == 0 { failed += 1; continue; }
         let name = p.entries[i].name();
         if in_trash {
-            // Déjà dans la Corbeille : suppression définitive des fichiers.
-            let ok = if p.entries[i].dir { RemoveDirectoryA(src.as_ptr() as *const core::ffi::c_char) != 0 } else { DeleteFileA(src.as_ptr() as *const core::ffi::c_char) != 0 };
+            let mut ws = [0u16; PATH_LEN + NAME_LEN + 2];
+            wstr(&mut ws, &src[..sn]);
+            let ok = if p.entries[i].dir { RemoveDirectoryW(ws.as_ptr()) != 0 } else { DeleteFileW(ws.as_ptr()) != 0 };
             if !ok { failed += 1; }
             continue;
         }
@@ -1615,8 +1657,12 @@ unsafe fn delete_selection() {
         nm[..tl].copy_from_slice(&trashed[..tl]);
         nm[tl..tl + 10].copy_from_slice(b".trashinfo");
         if join(&mut info, b"C:\\.local\\share\\Trash\\info", &nm[..tl + 10]) == 0 { failed += 1; continue; }
-        if MoveFileA(src.as_ptr().cast(), dst.as_ptr().cast()) == 0 { failed += 1; continue; }
-        let h = CreateFileA(info.as_ptr() as *const core::ffi::c_char, 0x4000_0000, 0, core::ptr::null_mut(), 2, 0x80, core::ptr::null_mut());
+        let mut wsrc2 = [0u16; PATH_LEN + NAME_LEN + 2];
+        let mut wdst2 = [0u16; PATH_LEN + NAME_LEN + 2];
+        if MoveFileW(wstr(&mut wsrc2, &src[..sn]), wstr(&mut wdst2, &dst[..dn])) == 0 { failed += 1; continue; }
+        let mut winfo = [0u16; PATH_LEN + NAME_LEN + 2];
+        let info_len = info.iter().position(|&c| c == 0).unwrap_or(info.len());
+        let h = CreateFileW(wstr(&mut winfo, &info[..info_len]), 0x4000_0000, 0, core::ptr::null_mut(), 2, 0x80, core::ptr::null_mut());
         if h as isize != -1 {
             let mut body = [0u8; 700];
             let head = b"[Trash Info]\nPath=";
@@ -1638,12 +1684,17 @@ unsafe fn delete_selection() {
             let ok = WriteFile(h, body.as_ptr(), n as u32, &mut written, core::ptr::null_mut()) != 0 && written as usize == n;
             CloseHandle(h);
             if !ok {
-                DeleteFileA(info.as_ptr().cast());
-                if MoveFileA(dst.as_ptr().cast(), src.as_ptr().cast()) == 0 { notify(b"Corbeille incompl\xE8te : l'\xE9l\xE9ment reste accessible dans la Corbeille."); }
+                let mut wdi = [0u16; PATH_LEN + NAME_LEN + 2];
+                DeleteFileW(wstr(&mut wdi, &info[..info_len]));
+                let mut wd2 = [0u16; PATH_LEN + NAME_LEN + 2];
+                let mut ws2 = [0u16; PATH_LEN + NAME_LEN + 2];
+                if MoveFileW(wstr(&mut wd2, &dst[..dn]), wstr(&mut ws2, &src[..sn])) == 0 { notify(b"Corbeille incompl\xE8te : l'\xE9l\xE9ment reste accessible dans la Corbeille."); }
                 failed += 1;
             }
         } else {
-            if MoveFileA(dst.as_ptr().cast(), src.as_ptr().cast()) == 0 { notify(b"Corbeille incompl\xE8te : l'\xE9l\xE9ment reste accessible dans la Corbeille."); }
+            let mut wd3 = [0u16; PATH_LEN + NAME_LEN + 2];
+            let mut ws3 = [0u16; PATH_LEN + NAME_LEN + 2];
+            if MoveFileW(wstr(&mut wd3, &dst[..dn]), wstr(&mut ws3, &src[..sn])) == 0 { notify(b"Corbeille incompl\xE8te : l'\xE9l\xE9ment reste accessible dans la Corbeille."); }
             failed += 1;
         }
     }
@@ -1709,8 +1760,10 @@ unsafe fn resort_all() { for t in TABS[..NTABS].iter_mut() { for pn in t.panes.i
 unsafe fn open_terminal() {
     let p = pane();
     let dir: &[u8] = if p.loc.is(HOME) || p.loc.is(PC) { b"C:\\" } else { p.loc.get() };
-    let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
-    let r = ShellExecuteA(core::ptr::null_mut(), c"open".as_ptr(), c"shell:terminal".as_ptr(), core::ptr::null(), cstr(&mut b, dir), 1);
+    let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
+    let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    let wterm: [u16; 15] = [b's' as u16, b'h' as u16, b'e' as u16, b'l' as u16, b'l' as u16, b':' as u16, b't' as u16, b'e' as u16, b'r' as u16, b'm' as u16, b'i' as u16, b'n' as u16, b'a' as u16, b'l' as u16, 0];
+    let r = ShellExecuteW(core::ptr::null_mut(), wopen.as_ptr(), wterm.as_ptr(), core::ptr::null(), wstr(&mut wb, dir), 1);
     if (r as isize) <= 32 { notify(b"Aucun terminal n'est install\xE9."); }
 }
 
@@ -2043,8 +2096,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                             if cmp_ci(s, b"Accueil").is_eq() { navigate(HOME); }
                             else if cmp_ci(s, b"Ce PC").is_eq() { navigate(PC); }
                             else if s.starts_with(b"http") || s.starts_with(b"www.") {
-                                let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
-                                ShellExecuteA(core::ptr::null_mut(), c"open".as_ptr(), cstr(&mut b, s), core::ptr::null(), core::ptr::null(), 1);
+                                let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
+                                let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+                                ShellExecuteW(core::ptr::null_mut(), wopen.as_ptr(), wstr(&mut wb, s), core::ptr::null(), core::ptr::null(), 1);
                                 FOCUS = Focus::List;
                             } else {
                                 // Accepte aussi un chemin Linux (/home/…) : Z:\ est la racine.
@@ -2061,8 +2115,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                                 t.len = tl as u16;
                                 if exists_dir(t.get()) { navigate(t.get()); }
                                 else {
-                                    let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
-                                    let r = ShellExecuteA(core::ptr::null_mut(), c"open".as_ptr(), cstr(&mut b, t.get()), core::ptr::null(), core::ptr::null(), 1);
+                                    let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
+                                    let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+                                    let r = ShellExecuteW(core::ptr::null_mut(), wopen.as_ptr(), wstr(&mut wb, t.get()), core::ptr::null(), core::ptr::null(), 1);
                                     if (r as isize) <= 32 { notify(b"Winlux ne trouve pas cet emplacement."); } else { FOCUS = Focus::List; }
                                 }
                             }
@@ -2166,53 +2221,56 @@ pub unsafe fn regression_checks() {
     sprintf(raw.as_mut_ptr(), c"Z:\\tmp\\wlexp-%u".as_ptr(), GetCurrentProcessId());
     let rn = strlen(raw.as_ptr());
     let root = core::slice::from_raw_parts(raw.as_ptr().cast::<u8>(), rn);
-    let created = CreateDirectoryA(raw.as_ptr(), core::ptr::null_mut()) != 0;
+    let mut wr = [0u16; PATH_LEN + NAME_LEN + 2];
+    for i in 0..rn { wr[i] = raw[i] as u16; } wr[rn] = 0;
+    let created = CreateDirectoryW(wr.as_ptr(), core::ptr::null_mut()) != 0;
     check!(created, "Explorer cree son dossier de regression isole");
     if !created { return; }
     let mut src = [0u8; PATH_LEN + NAME_LEN + 2];
     let sn = join(&mut src, root, b"source");
-    CreateDirectoryA(src.as_ptr().cast(), core::ptr::null_mut());
+    let mut ws = [0u16; PATH_LEN + NAME_LEN + 2];
+    CreateDirectoryW(wstr(&mut ws, &src[..sn]), core::ptr::null_mut());
     let mut child = [0u8; PATH_LEN + NAME_LEN + 2];
     let cn = join(&mut child, &src[..sn], b"child");
-    CreateDirectoryA(child.as_ptr().cast(), core::ptr::null_mut());
+    CreateDirectoryW(wstr(&mut ws, &child[..cn]), core::ptr::null_mut());
     let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
     let dn = join(&mut dst, root, b"copied");
-    CreateDirectoryA(dst.as_ptr().cast(), core::ptr::null_mut());
+    CreateDirectoryW(wstr(&mut ws, &dst[..dn]), core::ptr::null_mut());
     let mut file = [0u8; PATH_LEN + NAME_LEN + 2];
     let fnl = join(&mut file, &src[..sn], &long_name);
-    let h = CreateFileA(file.as_ptr().cast(), 0x4000_0000, 7, core::ptr::null_mut(), 1, 0x80, core::ptr::null_mut());
+    let h = CreateFileW(wstr(&mut ws, &file[..fnl]), 0x4000_0000, 7, core::ptr::null_mut(), 1, 0x80, core::ptr::null_mut());
     let mut written = 0;
     let wrote = h as isize != -1 && WriteFile(h, b"original".as_ptr(), 8, &mut written, core::ptr::null_mut()) != 0;
     if h as isize != -1 { CloseHandle(h); }
     check!(wrote && written == 8, "Explorer prepare un vrai fichier au nom long");
-    check!(!copy_file_new(&file[..fnl], &file[..fnl]) && GetFileAttributesA(file.as_ptr().cast()) != u32::MAX, "Une collision de copie ne supprime jamais un fichier existant");
+    check!(!copy_file_new(&file[..fnl], &file[..fnl]) && { let mut wc = [0u16; PATH_LEN + NAME_LEN + 2]; GetFileAttributesW(wstr(&mut wc, &file[..fnl])) != u32::MAX }, "Une collision de copie ne supprime jamais un fichier existant");
     NTABS = 1; CUR = 0;
     navigate_pane(&mut TABS[0].panes[0], &src[..sn], false);
     let i = select_named(pane(), &long_name);
-    check!(i.is_some(), "Explorer lit le nom long integral depuis FindFirstFileA");
+    check!(i.is_some(), "Explorer lit le nom long integral depuis FindFirstFileW");
     if i.is_some() {
         copy_selection(true);
         paste();
-        check!(NCLIP == 0 && GetFileAttributesA(file.as_ptr().cast()) != u32::MAX && select_named(pane(), &long_name).is_some(), "Couper-coller dans le meme dossier ne renomme pas la source");
+        check!(NCLIP == 0 && { let mut wc = [0u16; PATH_LEN + NAME_LEN + 2]; GetFileAttributesW(wstr(&mut wc, &file[..fnl])) != u32::MAX } && select_named(pane(), &long_name).is_some(), "Couper-coller dans le meme dossier ne renomme pas la source");
         copy_selection(false);
         check!(NCLIP == 1 && CLIP[0].get() == &file[..fnl], "Explorer copie le chemin integral dans le presse-papiers");
         navigate_pane(pane(), &dst[..dn], false);
         paste();
         let n = join(&mut scratch, &dst[..dn], &long_name);
-        check!(n != 0 && GetFileAttributesA(scratch.as_ptr().cast()) != u32::MAX && GetFileAttributesA(file.as_ptr().cast()) != u32::MAX, "Explorer colle le nom exact et conserve la source");
+        check!(n != 0 && { let mut wc = [0u16; PATH_LEN + NAME_LEN + 2]; GetFileAttributesW(wstr(&mut wc, &scratch[..n])) != u32::MAX } && { let mut wc2 = [0u16; PATH_LEN + NAME_LEN + 2]; GetFileAttributesW(wstr(&mut wc2, &file[..fnl])) != u32::MAX }, "Explorer colle le nom exact et conserve la source");
     }
     let mut recursive = [0u8; PATH_LEN + NAME_LEN + 2];
     let recn = join(&mut recursive, &child[..cn], b"source");
-    check!(!copy_tree(&src[..sn], &recursive[..recn]) && GetFileAttributesA(recursive.as_ptr().cast()) == u32::MAX, "Explorer interdit une copie recursive dans son sous-dossier avant creation");
+    check!(!copy_tree(&src[..sn], &recursive[..recn]) && { let mut wc = [0u16; PATH_LEN + NAME_LEN + 2]; GetFileAttributesW(wstr(&mut wc, &recursive[..recn])) == u32::MAX }, "Explorer interdit une copie recursive dans son sous-dossier avant creation");
     let mut alias = [0u8; PATH_LEN + NAME_LEN + 2];
     let an = join(&mut alias, &src[..sn], b"child\\..\\child");
     check!(!safe_destination(&src[..sn], &alias[..an]), "Explorer resout les alias avec .. avant de copier");
     let mut deep_target = [0u8; PATH_LEN + NAME_LEN + 2];
     let tn = join(&mut deep_target, root, &[b'd'; 100]);
-    CreateDirectoryA(deep_target.as_ptr().cast(), core::ptr::null_mut());
+    CreateDirectoryW(wstr(&mut ws, &deep_target[..tn]), core::ptr::null_mut());
     let mut too_long = [0u8; PATH_LEN + NAME_LEN + 2];
     let ln = join(&mut too_long, &deep_target[..tn], b"copy");
-    check!(!copy_tree(&src[..sn], &too_long[..ln]) && GetFileAttributesA(too_long.as_ptr().cast()) == u32::MAX, "Une copie dont les enfants depassent MAX_PATH est refusee sans arbre partiel");
+    check!(!copy_tree(&src[..sn], &too_long[..ln]) && { let mut wc = [0u16; PATH_LEN + NAME_LEN + 2]; GetFileAttributesW(wstr(&mut wc, &too_long[..ln])) == u32::MAX }, "Une copie dont les enfants depassent MAX_PATH est refusee sans arbre partiel");
 
     navigate_pane(pane(), &src[..sn], false);
     focus_address();

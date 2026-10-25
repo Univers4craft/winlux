@@ -306,6 +306,7 @@ extern "system" {
     pub fn GetFileSize(h: Handle, high: *mut u32) -> u32;
     pub fn SetEndOfFile(h: Handle) -> i32;
     pub fn GetFileAttributesA(path: *const c_char) -> u32;
+    pub fn GetFileAttributesW(path: *const u16) -> u32;
     pub fn GetFileAttributesExA(path: *const c_char, level: u32, data: *mut Win32FileAttributeData) -> i32;
     pub fn GetFileAttributesExW(path: *const u16, level: u32, data: *mut Win32FileAttributeData) -> i32;
     pub fn GetTempFileNameA(path: *const c_char, prefix: *const c_char, unique: u32, output: *mut c_char) -> u32;
@@ -338,8 +339,11 @@ extern "system" {
     pub fn DeleteFileW(path: *const u16) -> i32;
     pub fn CopyFileA(src: *const c_char, dst: *const c_char, fail_if_exists: i32) -> i32;
     pub fn MoveFileA(src: *const c_char, dst: *const c_char) -> i32;
+    pub fn MoveFileW(src: *const u16, dst: *const u16) -> i32;
     pub fn CreateDirectoryA(path: *const c_char, sec: *mut c_void) -> i32;
+    pub fn CreateDirectoryW(path: *const u16, sec: *mut c_void) -> i32;
     pub fn RemoveDirectoryA(path: *const c_char) -> i32;
+    pub fn RemoveDirectoryW(path: *const u16) -> i32;
     pub fn FindFirstFileA(path: *const c_char, data: *mut Win32FindDataA) -> Handle;
     pub fn FindNextFileA(search: Handle, data: *mut Win32FindDataA) -> i32;
     pub fn FindFirstFileW(path: *const u16, data: *mut Win32FindDataW) -> Handle;
@@ -402,6 +406,7 @@ extern "system" {
 #[link(name = "shell32", kind = "raw-dylib")]
 extern "system" {
     pub fn ShellExecuteA(hwnd: Handle, verb: *const c_char, file: *const c_char, params: *const c_char, dir: *const c_char, show: i32) -> Handle;
+    pub fn ShellExecuteW(hwnd: Handle, verb: *const u16, file: *const u16, params: *const u16, dir: *const u16, show: i32) -> Handle;
 }
 
 #[link(name = "ole32", kind = "raw-dylib")]
