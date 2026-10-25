@@ -646,6 +646,7 @@ pub unsafe extern "win64" fn create_stream_on_hglobal(
     S_OK
 }
 
+#[allow(dangerous_implicit_autorefs)]
 pub unsafe extern "win64" fn get_hglobal_from_stream(stream: *mut c_void, out: *mut usize) -> i32 {
     if stream.is_null() || out.is_null() {
         return E_INVALIDARG;
@@ -654,7 +655,7 @@ pub unsafe extern "win64" fn get_hglobal_from_stream(stream: *mut c_void, out: *
     if (*stream).vtable != &STREAM_VTABLE {
         return E_INVALIDARG;
     }
-    *out = (&(*stream).shared).global;
+    *out = (*stream).shared.global;
     S_OK
 }
 

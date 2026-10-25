@@ -2,36 +2,36 @@
 //! avec la convention d'appel Windows. Le chargeur relie directement les
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
-pub mod kernel32;
-pub mod kernel32_misc;
-pub mod msvcrt;
-pub mod crt;
-pub mod crt_stdio;
-pub mod crt_scan;
-pub mod crt_runtime;
-pub mod ntdll;
-pub mod user32;
-pub mod gui;
-pub mod gui_x11;
 pub mod advapi32;
 pub mod advapi32_services;
-pub mod ole32;
 pub mod bcrypt;
-pub mod version;
-pub mod shell32;
-pub mod mscoree;
-pub mod ws2_32;
+pub mod comctl32;
+pub mod crt;
+pub mod crt_runtime;
+pub mod crt_scan;
+pub mod crt_stdio;
 pub mod gdi32;
 pub mod gdi32_ext;
+pub mod gui;
+pub mod gui_x11;
+pub mod kernel32;
+pub mod kernel32_misc;
 pub mod mfplat;
-pub mod winmm;
-pub mod winfile;
-pub mod resource;
 pub mod mmap;
-pub mod comctl32;
-pub mod shlwapi;
+pub mod mscoree;
+pub mod msvcrt;
+pub mod ntdll;
+pub mod ole32;
 pub mod oleaut32;
+pub mod resource;
+pub mod shell32;
+pub mod shlwapi;
+pub mod user32;
 pub mod user32_ext;
+pub mod version;
+pub mod winfile;
+pub mod winmm;
+pub mod ws2_32;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -69,7 +69,14 @@ fn fake_module() -> usize {
 fn builtins() -> &'static Vec<Builtin> {
     static B: OnceLock<Vec<Builtin>> = OnceLock::new();
     B.get_or_init(|| {
-        let crt = { let mut e = msvcrt::exports(); e.extend(crt::exports()); e.extend(crt_stdio::exports()); e.extend(crt_scan::exports()); e.extend(crt_runtime::exports()); e };
+        let crt = {
+            let mut e = msvcrt::exports();
+            e.extend(crt::exports());
+            e.extend(crt_stdio::exports());
+            e.extend(crt_scan::exports());
+            e.extend(crt_runtime::exports());
+            e
+        };
         let mut ucrt = crt.clone();
         ucrt.extend(msvcrt::ucrt_exports());
         ucrt.extend(crt::exports());
@@ -77,24 +84,115 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(crt_scan::exports());
         ucrt.extend(crt_runtime::exports());
         vec![
-            Builtin { name: "kernel32", exports: { let mut e=kernel32::exports(); e.extend(winfile::exports()); e.extend(kernel32_misc::exports()); e.extend(resource::exports()); e.extend(mmap::exports()); e }, handle: fake_module() },
-            Builtin { name: "ntdll", exports: ntdll::exports(), handle: fake_module() },
-            Builtin { name: "msvcrt", exports: crt, handle: fake_module() },
-            Builtin { name: "ucrtbase", exports: ucrt, handle: fake_module() },
-            Builtin { name: "user32", exports: { let mut e=user32::exports(); e.extend(user32_ext::exports()); e }, handle: fake_module() },
-            Builtin { name: "advapi32", exports: { let mut e=advapi32::exports(); e.extend(advapi32_services::exports()); e }, handle: fake_module() },
-            Builtin { name: "ole32", exports: ole32::exports(), handle: fake_module() },
-            Builtin { name: "bcrypt", exports: bcrypt::exports(), handle: fake_module() },
-            Builtin { name: "version", exports: version::exports(), handle: fake_module() },
-            Builtin { name: "shell32", exports: shell32::exports(), handle: fake_module() },
-            Builtin { name: "mscoree", exports: mscoree::exports(), handle: fake_module() },
-            Builtin { name: "ws2_32", exports: ws2_32::exports(), handle: fake_module() },
-            Builtin { name: "gdi32", exports: { let mut e=gdi32::exports(); e.extend(gdi32_ext::exports()); e }, handle: fake_module() },
-            Builtin { name: "mfplat", exports: mfplat::exports(), handle: fake_module() },
-            Builtin { name: "winmm", exports: winmm::exports(), handle: fake_module() },
-            Builtin { name: "comctl32", exports: comctl32::exports(), handle: fake_module() },
-            Builtin { name: "shlwapi", exports: shlwapi::exports(), handle: fake_module() },
-            Builtin { name: "oleaut32", exports: oleaut32::exports(), handle: fake_module() },
+            Builtin {
+                name: "kernel32",
+                exports: {
+                    let mut e = kernel32::exports();
+                    e.extend(winfile::exports());
+                    e.extend(kernel32_misc::exports());
+                    e.extend(resource::exports());
+                    e.extend(mmap::exports());
+                    e
+                },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ntdll",
+                exports: ntdll::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "msvcrt",
+                exports: crt,
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ucrtbase",
+                exports: ucrt,
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "user32",
+                exports: {
+                    let mut e = user32::exports();
+                    e.extend(user32_ext::exports());
+                    e
+                },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "advapi32",
+                exports: {
+                    let mut e = advapi32::exports();
+                    e.extend(advapi32_services::exports());
+                    e
+                },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ole32",
+                exports: ole32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "bcrypt",
+                exports: bcrypt::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "version",
+                exports: version::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "shell32",
+                exports: shell32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "mscoree",
+                exports: mscoree::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "ws2_32",
+                exports: ws2_32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "gdi32",
+                exports: {
+                    let mut e = gdi32::exports();
+                    e.extend(gdi32_ext::exports());
+                    e
+                },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "mfplat",
+                exports: mfplat::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winmm",
+                exports: winmm::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "comctl32",
+                exports: comctl32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "shlwapi",
+                exports: shlwapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "oleaut32",
+                exports: oleaut32::exports(),
+                handle: fake_module(),
+            },
         ]
     })
 }
@@ -115,9 +213,15 @@ pub fn normalize(dll: &str) -> String {
         return "msvcrt".into();
     }
     // Alias courants pour les DLL de contrôles communs / shell.
-    if base == "comctl32" || base == "iertutil" { return "comctl32".into(); }
-    if base == "shlwapi" { return "shlwapi".into(); }
-    if base == "oleaut32" { return "oleaut32".into(); }
+    if base == "comctl32" || base == "iertutil" {
+        return "comctl32".into();
+    }
+    if base == "shlwapi" {
+        return "shlwapi".into();
+    }
+    if base == "oleaut32" {
+        return "oleaut32".into();
+    }
     base.to_string()
 }
 
@@ -129,7 +233,13 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
     let b = builtins().iter().find(|b| b.name == normalized)?;
     let r = b.exports.get(func).copied();
     // Les API « A/W » d'api-ms-win-core peuvent aussi vivre dans ntdll (Rtl*).
-    r.or_else(|| if normalized == "kernel32" { lookup("ntdll", func) } else { None })
+    r.or_else(|| {
+        if normalized == "kernel32" {
+            lookup("ntdll", func)
+        } else {
+            None
+        }
+    })
 }
 
 /// HMODULE d'une DLL intégrée ou d'une DLL réelle déjà chargée.
@@ -159,20 +269,44 @@ pub unsafe fn cstr(p: *const u8) -> String {
 /// Codepage ANSI par défaut de Winlux (Windows-1252), convertie vers UTF-8
 /// pour l'interface Linux. Les API Unicode `W` évitent cette conversion.
 pub fn decode_ansi(bytes: &[u8]) -> String {
-    const CP1252: [u16; 32] = [0x20ac,0x0081,0x201a,0x0192,0x201e,0x2026,0x2020,0x2021,0x02c6,0x2030,0x0160,0x2039,0x0152,0x008d,0x017d,0x008f,0x0090,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,0x02dc,0x2122,0x0161,0x203a,0x0153,0x009d,0x017e,0x0178];
-    bytes.iter().map(|&b| {
-        let n=if (0x80..=0x9f).contains(&b){CP1252[(b-0x80)as usize] as u32}else{b as u32};
-        char::from_u32(n).unwrap_or('\u{fffd}')
-    }).collect()
+    const CP1252: [u16; 32] = [
+        0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160,
+        0x2039, 0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022,
+        0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
+    ];
+    bytes
+        .iter()
+        .map(|&b| {
+            let n = if (0x80..=0x9f).contains(&b) {
+                CP1252[(b - 0x80) as usize] as u32
+            } else {
+                b as u32
+            };
+            char::from_u32(n).unwrap_or('\u{fffd}')
+        })
+        .collect()
 }
 
 pub fn encode_ansi(text: &str) -> Vec<u8> {
-    text.chars().map(|c| {
-        let n=c as u32;
-        if n<=0x7f||(0xa0..=0xff).contains(&n){return n as u8;}
-        const CP1252:[u16;32]=[0x20ac,0x0081,0x201a,0x0192,0x201e,0x2026,0x2020,0x2021,0x02c6,0x2030,0x0160,0x2039,0x0152,0x008d,0x017d,0x008f,0x0090,0x2018,0x2019,0x201c,0x201d,0x2022,0x2013,0x2014,0x02dc,0x2122,0x0161,0x203a,0x0153,0x009d,0x017e,0x0178];
-        CP1252.iter().position(|&x|x as u32==n).map(|i|i as u8+0x80).unwrap_or(b'?')
-    }).collect()
+    text.chars()
+        .map(|c| {
+            let n = c as u32;
+            if n <= 0x7f || (0xa0..=0xff).contains(&n) {
+                return n as u8;
+            }
+            const CP1252: [u16; 32] = [
+                0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030,
+                0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c,
+                0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d,
+                0x017e, 0x0178,
+            ];
+            CP1252
+                .iter()
+                .position(|&x| x as u32 == n)
+                .map(|i| i as u8 + 0x80)
+                .unwrap_or(b'?')
+        })
+        .collect()
 }
 
 pub unsafe fn wstr(p: *const u16) -> String {

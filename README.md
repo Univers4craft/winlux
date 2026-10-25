@@ -55,7 +55,9 @@ Lancement manuel d’un PE :
 target/release/winlux chemin/vers/programme.exe [arguments...]
 ```
 
-`WINLUX_TRACE=1` active les traces du chargeur. Par défaut, l’appel d’un import non implémenté arrête le programme et l’enregistre dans le journal Winlux. `WINLUX_MISSING=ignore` permet de continuer en renvoyant zéro, avec les risques de résultats incorrects.
+`WINLUX_LOG=debug` ou `--verbose` active les messages de débogage. `WINLUX_LOG=trace` (ou `WINLUX_TRACE=1`) active les traces complètes du chargeur. `WINLUX_LOG=debug,json` produit des logs structurés JSON sur stderr. Par défaut, seuls les avertissements et erreurs sont affichés. Voir [docs/BUILD.md](docs/BUILD.md) pour tous les niveaux.
+
+Par défaut, l’appel d’un import non implémenté arrête le programme et l’enregistre dans le journal Winlux. `WINLUX_MISSING=ignore` permet de continuer en renvoyant zéro, avec les risques de résultats incorrects.
 
 Winlux détecte aussi les en-têtes CLR PE32/PE32+ et les apphosts .NET modernes.
 Il délègue les assemblies modernes au pilote Linux `dotnet` et les anciens
@@ -71,8 +73,10 @@ multiplateformes ; il ne rend pas encore WPF ou WinForms compatibles.
 - `integration/` : binfmt, MIME, `.desktop`, lanceur de double-clic et scripts d’installation/désinstallation.
 - `scripts/` : compilation, tests locaux séquentiels/parallèles et pipeline ISO/QEMU.
 - `theme/` : palette CSS expérimentale, non raccordée à un shell graphique.
+- `docs/` : documentation détaillée (compilation, installation, ISO, architecture A/B).
 - `TODO.md` : feuille de route maintenue.
 - `COMPATIBILITY.md` : état détaillé de compatibilité et limites connues.
+- `NOTICES` : provenance et licences des composants externes.
 
 ## Intégration Linux et ISO
 

@@ -55,7 +55,9 @@ pub fn teb() -> usize {
     // ARCH_GET_GS vérifie d'abord qu'un TEB Winlux a effectivement été installé.
     let mut base = 0usize;
     let rc = unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1004, &mut base as *mut usize) };
-    if rc != 0 { return 0; }
+    if rc != 0 {
+        return 0;
+    }
     base
 }
 
@@ -76,8 +78,14 @@ pub fn last_error() -> u32 {
 
 fn alloc_zeroed(size: usize) -> usize {
     unsafe {
-        let p = libc::mmap(std::ptr::null_mut(), size, libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS, -1, 0);
+        let p = libc::mmap(
+            std::ptr::null_mut(),
+            size,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
         assert!(p != libc::MAP_FAILED);
         p as usize
     }
@@ -94,18 +102,18 @@ pub fn quote_arg(a: &str) -> String {
         match c {
             '\\' => bs += 1,
             '"' => {
-                s.extend(std::iter::repeat('\\').take(bs * 2 + 1));
+                s.extend(std::iter::repeat_n('\\', bs * 2 + 1));
                 s.push('"');
                 bs = 0;
             }
             _ => {
-                s.extend(std::iter::repeat('\\').take(bs));
+                s.extend(std::iter::repeat_n('\\', bs));
                 s.push(c);
                 bs = 0;
             }
         }
     }
-    s.extend(std::iter::repeat('\\').take(bs * 2));
+    s.extend(std::iter::repeat_n('\\', bs * 2));
     s.push('"');
     s
 }
@@ -124,7 +132,13 @@ mod tests {
 }
 
 fn unicode_string(at: usize, s: &[u16]) {
-    let buf = Box::leak(s.iter().copied().chain([0]).collect::<Vec<u16>>().into_boxed_slice());
+    let buf = Box::leak(
+        s.iter()
+            .copied()
+            .chain([0])
+            .collect::<Vec<u16>>()
+            .into_boxed_slice(),
+    );
     unsafe {
         *(at as *mut u16) = (s.len() * 2) as u16;
         *((at + 2) as *mut u16) = (s.len() * 2 + 2) as u16;
@@ -136,7 +150,11 @@ pub fn init_process(exe: &Module, args: &[String]) {
     let exe_win = crate::paths::to_windows(&exe.path);
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());
-    let cmd = all.iter().map(|a| quote_arg(a)).collect::<Vec<_>>().join(" ");
+    let cmd = all
+        .iter()
+        .map(|a| quote_arg(a))
+        .collect::<Vec<_>>()
+        .join(" ");
     let cmd_w: Vec<u16> = cmd.encode_utf16().collect();
     let mut cmd_a = crate::dlls::encode_ansi(&cmd);
     cmd_a.push(0);
@@ -160,7 +178,10 @@ pub fn init_process(exe: &Module, args: &[String]) {
     let mut command_line_w = cmd_w;
     command_line_w.push(0);
     PEB.store(peb, Ordering::Relaxed);
-    let _ = PROCESS.set(ProcessInfo { command_line_w, command_line_a: cmd_a });
+    let _ = PROCESS.set(ProcessInfo {
+        command_line_w,
+        command_line_a: cmd_a,
+    });
 }
 
 /// Crée le TEB du thread courant et fait pointer GS dessus.
@@ -185,28 +206,87 @@ pub fn init_thread() -> usize {
         }
     }
     setup_static_tls(teb);
-    let mut threads=THREAD_TEBS.get_or_init(||Mutex::new(Vec::new())).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if !threads.contains(&teb){threads.push(teb);}
+    let mut threads = THREAD_TEBS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !threads.contains(&teb) {
+        threads.push(teb);
+    }
     teb
 }
 
 /// Lit une valeur TLS Win32 du TEB courant.
-pub fn tls_value(index:u32)->Option<usize>{
-    let t=teb();if t==0{return None;}let i=index as usize;
-    unsafe{if i<TLS_SLOTS{Some(*((t+TEB_TLS_SLOTS+i*8)as *const usize))}else if i<TLS_SLOTS+TLS_EXPANSION_SLOTS{let p=*((t+TEB_TLS_EXPANSION_POINTER)as *const usize);if p==0{Some(0)}else{Some(*((p+(i-TLS_SLOTS)*8)as *const usize))}}else{None}}
+pub fn tls_value(index: u32) -> Option<usize> {
+    let t = teb();
+    if t == 0 {
+        return None;
+    }
+    let i = index as usize;
+    unsafe {
+        if i < TLS_SLOTS {
+            Some(*((t + TEB_TLS_SLOTS + i * 8) as *const usize))
+        } else if i < TLS_SLOTS + TLS_EXPANSION_SLOTS {
+            let p = *((t + TEB_TLS_EXPANSION_POINTER) as *const usize);
+            if p == 0 {
+                Some(0)
+            } else {
+                Some(*((p + (i - TLS_SLOTS) * 8) as *const usize))
+            }
+        } else {
+            None
+        }
+    }
 }
 
 /// Écrit une valeur TLS Win32 du TEB courant, allouant le tableau d'expansion si nécessaire.
-pub fn set_tls_value(index:u32,value:usize)->bool{
-    let t=teb();if t==0{return false;}let i=index as usize;
-    unsafe{if i<TLS_SLOTS{*((t+TEB_TLS_SLOTS+i*8)as *mut usize)=value;true}else if i<TLS_SLOTS+TLS_EXPANSION_SLOTS{let slot=t+TEB_TLS_EXPANSION_POINTER;let mut p=*(slot as *const usize);if p==0{p=alloc_zeroed(TLS_EXPANSION_SLOTS*8);*(slot as *mut usize)=p;}*((p+(i-TLS_SLOTS)*8)as *mut usize)=value;true}else{false}}
+pub fn set_tls_value(index: u32, value: usize) -> bool {
+    let t = teb();
+    if t == 0 {
+        return false;
+    }
+    let i = index as usize;
+    unsafe {
+        if i < TLS_SLOTS {
+            *((t + TEB_TLS_SLOTS + i * 8) as *mut usize) = value;
+            true
+        } else if i < TLS_SLOTS + TLS_EXPANSION_SLOTS {
+            let slot = t + TEB_TLS_EXPANSION_POINTER;
+            let mut p = *(slot as *const usize);
+            if p == 0 {
+                p = alloc_zeroed(TLS_EXPANSION_SLOTS * 8);
+                *(slot as *mut usize) = p;
+            }
+            *((p + (i - TLS_SLOTS) * 8) as *mut usize) = value;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 /// `TlsFree` vide l'emplacement sur les TEB de tous les threads connus avant réutilisation.
-pub fn clear_tls_value_all_threads(index:u32)->bool{
-    let i=index as usize;if i>=TLS_SLOTS+TLS_EXPANSION_SLOTS{return false;}
-    let threads=THREAD_TEBS.get_or_init(||Mutex::new(Vec::new())).lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    unsafe{for &t in threads.iter(){if i<TLS_SLOTS{*((t+TEB_TLS_SLOTS+i*8)as *mut usize)=0;}else{let p=*((t+TEB_TLS_EXPANSION_POINTER)as *const usize);if p!=0{*((p+(i-TLS_SLOTS)*8)as *mut usize)=0;}}}}
+pub fn clear_tls_value_all_threads(index: u32) -> bool {
+    let i = index as usize;
+    if i >= TLS_SLOTS + TLS_EXPANSION_SLOTS {
+        return false;
+    }
+    let threads = THREAD_TEBS
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    unsafe {
+        for &t in threads.iter() {
+            if i < TLS_SLOTS {
+                *((t + TEB_TLS_SLOTS + i * 8) as *mut usize) = 0;
+            } else {
+                let p = *((t + TEB_TLS_EXPANSION_POINTER) as *const usize);
+                if p != 0 {
+                    *((p + (i - TLS_SLOTS) * 8) as *mut usize) = 0;
+                }
+            }
+        }
+    }
     true
 }
 
@@ -252,30 +332,49 @@ fn run_tls_callbacks(m: &Module, reason: u32) {
 pub fn initialize_dynamic_module(m: &Module) -> bool {
     let tls_context = if let Some(tls) = &m.tls {
         let thread_teb = teb();
-        if thread_teb == 0 { return false; }
+        if thread_teb == 0 {
+            return false;
+        }
         let modules = loader::MODULES.lock().unwrap().clone();
-        let index = modules.iter().take_while(|x| x.base != m.base).filter(|x| x.tls.is_some()).count();
+        let index = modules
+            .iter()
+            .take_while(|x| x.base != m.base)
+            .filter(|x| x.tls.is_some())
+            .count();
         // Le tableau du TEB fait 512 entrées (4 KiB); refuser explicitement
         // plutôt que d'écrire hors limites si l'image dépasse cette capacité.
-        if index >= 512 { return false; }
+        if index >= 512 {
+            return false;
+        }
         let array = unsafe { *((thread_teb + TEB_TLS_POINTER) as *const usize) };
-        if array == 0 { return false; }
+        if array == 0 {
+            return false;
+        }
         Some((tls.clone(), array, index))
-    } else { None };
-    if !loader::mark_initialized(m.base) { return true; }
-    if let Some((tls,array,index)) = tls_context {
+    } else {
+        None
+    };
+    if !loader::mark_initialized(m.base) {
+        return true;
+    }
+    if let Some((tls, array, index)) = tls_context {
         let raw = tls.raw_end.saturating_sub(tls.raw_start);
         let block = alloc_zeroed((raw + tls.zero_fill + 16).max(16));
         unsafe {
             std::ptr::copy_nonoverlapping(tls.raw_start as *const u8, block as *mut u8, raw);
             *((array + index * 8) as *mut usize) = block;
-            if tls.index_addr != 0 { *(tls.index_addr as *mut u32) = index as u32; }
+            if tls.index_addr != 0 {
+                *(tls.index_addr as *mut u32) = index as u32;
+            }
         }
     }
     run_tls_callbacks(m, DLL_PROCESS_ATTACH);
     if let Some(entry) = m.entry() {
-        let dllmain: extern "win64" fn(usize, u32, usize) -> i32 = unsafe { std::mem::transmute(entry) };
-        if dllmain(m.base, DLL_PROCESS_ATTACH, 1) == 0 { return false; }
+        let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
+            unsafe { std::mem::transmute(entry) };
+        if dllmain(m.base, DLL_PROCESS_ATTACH, 1) == 0 {
+            return false;
+        }
     }
     true
 }
@@ -286,7 +385,8 @@ pub fn thread_attach_current() {
     for m in mods.into_iter().skip(1) {
         run_tls_callbacks(&m, DLL_THREAD_ATTACH);
         if let Some(e) = m.entry() {
-            let dllmain: extern "win64" fn(usize, u32, usize) -> i32 = unsafe { std::mem::transmute(e) };
+            let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
+                unsafe { std::mem::transmute(e) };
             let _ = dllmain(m.base, DLL_THREAD_ATTACH, 1);
         }
     }
@@ -297,7 +397,8 @@ pub fn thread_detach_current() {
     for m in mods.into_iter().skip(1).rev() {
         run_tls_callbacks(&m, DLL_THREAD_DETACH);
         if let Some(e) = m.entry() {
-            let dllmain: extern "win64" fn(usize, u32, usize) -> i32 = unsafe { std::mem::transmute(e) };
+            let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
+                unsafe { std::mem::transmute(e) };
             let _ = dllmain(m.base, DLL_THREAD_DETACH, 1);
         }
     }
@@ -316,7 +417,8 @@ fn start(exe: Module) -> u32 {
         run_tls_callbacks(m, DLL_PROCESS_ATTACH);
         if let Some(e) = m.entry() {
             trace!("DllMain de {}", m.name);
-            let dllmain: extern "win64" fn(usize, u32, usize) -> i32 = unsafe { std::mem::transmute(e) };
+            let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
+                unsafe { std::mem::transmute(e) };
             if dllmain(m.base, DLL_PROCESS_ATTACH, 1) == 0 {
                 eprintln!("winlux: l'initialisation de {} a échoué", m.name);
                 return 0xC000_0142;

@@ -1,0 +1,48 @@
+Winlux — Notices de provenance des composants externes
+======================================================
+
+Winlux est un logiciel original distribué sous licence GPL-3.0-or-later.
+Le runtime et le bureau sont écrits de zéro ; aucun code Wine, Proton ou
+autre couche de compatibilité tierce n'est utilisé.
+
+Les bibliothèques Rust suivantes sont compilées dans le binaire Winlux :
+
+  libc 0.2          — MIT OR Apache-2.0
+    Liaisons FFI vers les API C POSIX/Linux.
+    https://crates.io/crates/libc
+
+  png 0.18           — MIT OR Apache-2.0
+    Décodage d'images PNG pour les icônes d'applications.
+    https://crates.io/crates/png
+
+  x11rb 0.14         — MIT OR Apache-2.0
+    Client X11 pur Rust pour le backend graphique.
+    https://crates.io/crates/x11rb
+
+Dépendances transitives compilées statiquement :
+
+  adler2              — 0BSD OR MIT OR Apache-2.0
+  bitflags 2          — MIT OR Apache-2.0
+  cfg-if              — MIT OR Apache-2.0
+  crc32fast           — MIT OR Apache-2.0
+  fdeflate            — MIT OR Apache-2.0
+  flate2              — MIT OR Apache-2.0
+  gethostname         — Apache-2.0
+  miniz_oxide         — MIT OR Zlib OR Apache-2.0
+  rustix              — MIT OR Apache-2.0
+  simd-adler32        — MIT
+  x11rb-protocol      — MIT OR Apache-2.0
+  zlib-rs             — Zlib
+
+L'image ISO de test utilise également :
+
+  Noyau Linux         — GPL-2.0-only (non modifié, fourni séparément)
+  GRUB                — GPL-3.0-or-later (non modifié, fourni séparément)
+  BusyBox (initramfs) — GPL-2.0-only (non modifié, fourni séparément)
+  Xvfb / Xorg         — MIT (non modifié, fourni séparément)
+
+Microsoft Edge, lorsqu'il est embarqué via WINLUX_EDGE_DEB, est distribué
+selon les conditions de licence de Microsoft et n'est pas inclus par défaut.
+
+Tous les composants externes sont utilisés sans modification. Aucun code
+propriétaire n'est requis pour compiler ou exécuter Winlux.
