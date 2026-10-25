@@ -4,7 +4,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::collections::{HashMap,HashSet,VecDeque};
 use std::process::{Child, Command};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};
 use std::thread::ThreadId;
 
 pub static mut PROCESS_HEAP: usize = 0;
@@ -931,6 +931,571 @@ pub unsafe extern "win64" fn write_console_w(_h:usize,buf:*const u16,n:u32,writt
 pub extern "win64" fn query_performance_frequency(out:*mut i64)->i32 { unsafe{if out.is_null(){return 0;}*out=1_000_000_000;}1 }
 pub extern "win64" fn query_performance_counter(out:*mut i64)->i32 { unsafe{if out.is_null(){return 0;}*out=CLOCK_START.get_or_init(std::time::Instant::now).elapsed().as_nanos() as i64;}1 }
 pub fn flush_and_exit(code:i32)->! { let _=std::io::Write::flush(&mut std::io::stdout()); std::process::exit(code) }
+
+// ---------- Fonctions supplémentaires kernel32 ----------
+
+// --- HeapCreate / HeapDestroy / HeapSize ---
+static HEAPS: OnceLock<Mutex<HashMap<usize, ()>>> = OnceLock::new();
+pub unsafe extern "win64" fn heap_create(_options: u32, _initial: usize, _max: usize) -> usize {
+    let h = next_handle();
+    lock(HEAPS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, ());
+    h
+}
+pub unsafe extern "win64" fn heap_destroy(heap: usize) -> i32 {
+    lock(HEAPS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&heap);
+    1
+}
+pub unsafe extern "win64" fn heap_size(_heap: usize, _flags: u32, p: *const c_void) -> usize {
+    if p.is_null() { return usize::MAX; }
+    let allocs = lock(HEAP_ALLOCS.get().unwrap());
+    allocs.get(&(p as usize)).copied().unwrap_or(usize::MAX)
+}
+pub unsafe extern "win64" fn heap_validate(_heap: usize, _flags: u32, _p: *const c_void) -> i32 { 1 }
+pub unsafe extern "win64" fn heap_set_information(_heap: usize, _class: u32, _info: *const c_void, _size: usize) -> i32 { 1 }
+
+// --- FindFirstFileA/W / FindNextFileA/W / FindClose ---
+#[repr(C)]
+pub struct Win32FindDataA {
+    pub attributes: u32,
+    pub creation_time: [u32; 2],
+    pub last_access_time: [u32; 2],
+    pub last_write_time: [u32; 2],
+    pub file_size_high: u32,
+    pub file_size_low: u32,
+    pub reserved0: u32,
+    pub reserved1: u32,
+    pub file_name: [u8; 260],
+    pub alternate_name: [u8; 14],
+}
+
+struct FindState { entries: Vec<(String, std::fs::Metadata)>, pos: usize }
+static FIND_HANDLES: OnceLock<Mutex<HashMap<usize, FindState>>> = OnceLock::new();
+
+fn glob_match(pattern: &str, name: &str) -> bool {
+    if pattern == "*" || pattern == "*.*" { return true; }
+    let pl = pattern.to_ascii_lowercase();
+    let nl = name.to_ascii_lowercase();
+    let mut pi = pl.as_bytes().iter().peekable();
+    let mut ni = nl.as_bytes().iter().peekable();
+    fn m(p: &mut std::iter::Peekable<std::slice::Iter<u8>>, n: &mut std::iter::Peekable<std::slice::Iter<u8>>) -> bool {
+        loop {
+            match p.peek() {
+                None => return n.peek().is_none(),
+                Some(&&b'*') => { p.next(); if p.peek().is_none() { return true; } while n.peek().is_some() { let mut p2 = p.clone(); let mut n2 = n.clone(); if m(&mut p2, &mut n2) { return true; } n.next(); } return false; }
+                Some(&&b'?') => { p.next(); if n.next().is_none() { return false; } }
+                Some(&&c) => { if n.next() != Some(&c) { return false; } p.next(); }
+            }
+        }
+    }
+    m(&mut pi, &mut ni)
+}
+
+unsafe fn fill_find_data_a(data: *mut Win32FindDataA, name: &str, meta: &std::fs::Metadata) {
+    std::ptr::write_bytes(data, 0, 1);
+    let d = &mut *data;
+    d.attributes = if meta.is_dir() { 0x10 } else { 0x80 }; // FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_NORMAL
+    if name.starts_with('.') { d.attributes |= 0x02; } // FILE_ATTRIBUTE_HIDDEN
+    let size = meta.len();
+    d.file_size_low = size as u32;
+    d.file_size_high = (size >> 32) as u32;
+    // Write the name
+    let bytes = crate::dlls::encode_ansi(name);
+    let n = bytes.len().min(259);
+    d.file_name[..n].copy_from_slice(&bytes[..n]);
+}
+
+pub unsafe extern "win64" fn find_first_file_a(pattern: *const u8, data: *mut Win32FindDataA) -> usize {
+    if pattern.is_null() || data.is_null() { crate::process::set_last_error(87); return usize::MAX; }
+    let pat_str = crate::dlls::cstr(pattern);
+    let path = crate::paths::to_linux(&pat_str);
+    let (dir, file_pattern) = match path.parent() {
+        Some(d) if d.as_os_str().is_empty() => (std::path::PathBuf::from("."), path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "*".into())),
+        Some(d) => (d.to_path_buf(), path.file_name().map(|f| f.to_string_lossy().to_string()).unwrap_or_else(|| "*".into())),
+        None => { crate::process::set_last_error(3); return usize::MAX; }
+    };
+    let Ok(read) = std::fs::read_dir(&dir) else { crate::process::set_last_error(3); return usize::MAX; };
+    let mut entries = Vec::new();
+    for entry in read.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        if glob_match(&file_pattern, &name) {
+            if let Ok(meta) = entry.metadata() { entries.push((name, meta)); }
+        }
+    }
+    if entries.is_empty() { crate::process::set_last_error(18); return usize::MAX; } // ERROR_NO_MORE_FILES
+    fill_find_data_a(data, &entries[0].0, &entries[0].1);
+    let h = next_handle();
+    lock(FIND_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, FindState { entries, pos: 1 });
+    h
+}
+
+pub unsafe extern "win64" fn find_next_file_a(handle: usize, data: *mut Win32FindDataA) -> i32 {
+    if data.is_null() { crate::process::set_last_error(87); return 0; }
+    let mut handles = lock(FIND_HANDLES.get_or_init(|| Mutex::new(HashMap::new())));
+    let Some(state) = handles.get_mut(&handle) else { crate::process::set_last_error(6); return 0; };
+    if state.pos >= state.entries.len() { crate::process::set_last_error(18); return 0; }
+    let (name, meta) = &state.entries[state.pos];
+    fill_find_data_a(data, name, meta);
+    state.pos += 1;
+    1
+}
+
+pub extern "win64" fn find_close(handle: usize) -> i32 {
+    lock(FIND_HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).remove(&handle);
+    1
+}
+
+// --- SRW Locks (Slim Reader/Writer) ---
+// SRW Lock : atomic spinlock (state: -1 = exclusive, 0 = free, >0 = shared count)
+struct SrwLockState { state: AtomicI32 }
+static SRW_LOCKS: OnceLock<Mutex<HashMap<usize, Arc<SrwLockState>>>> = OnceLock::new();
+
+fn get_srw(p: usize) -> Arc<SrwLockState> {
+    let mut map = lock(SRW_LOCKS.get_or_init(|| Mutex::new(HashMap::new())));
+    map.entry(p).or_insert_with(|| Arc::new(SrwLockState { state: AtomicI32::new(0) })).clone()
+}
+
+pub extern "win64" fn initialize_srw_lock(p: usize) {
+    if p != 0 { unsafe { std::ptr::write_bytes(p as *mut u8, 0, 8); } }
+}
+pub extern "win64" fn acquire_srw_lock_exclusive(p: usize) {
+    let srw = get_srw(p);
+    loop {
+        if srw.state.compare_exchange(0, -1, Ordering::Acquire, Ordering::Relaxed).is_ok() { return; }
+        std::hint::spin_loop();
+    }
+}
+pub extern "win64" fn release_srw_lock_exclusive(p: usize) {
+    let srw = get_srw(p);
+    srw.state.store(0, Ordering::Release);
+}
+pub extern "win64" fn acquire_srw_lock_shared(p: usize) {
+    let srw = get_srw(p);
+    loop {
+        let s = srw.state.load(Ordering::Relaxed);
+        if s >= 0 && srw.state.compare_exchange(s, s + 1, Ordering::Acquire, Ordering::Relaxed).is_ok() { return; }
+        std::hint::spin_loop();
+    }
+}
+pub extern "win64" fn release_srw_lock_shared(p: usize) {
+    let srw = get_srw(p);
+    srw.state.fetch_sub(1, Ordering::Release);
+}
+pub extern "win64" fn try_acquire_srw_lock_exclusive(p: usize) -> u8 {
+    let srw = get_srw(p);
+    if srw.state.compare_exchange(0, -1, Ordering::Acquire, Ordering::Relaxed).is_ok() { 1 } else { 0 }
+}
+pub extern "win64" fn try_acquire_srw_lock_shared(p: usize) -> u8 {
+    let srw = get_srw(p);
+    let s = srw.state.load(Ordering::Relaxed);
+    if s >= 0 && srw.state.compare_exchange(s, s + 1, Ordering::Acquire, Ordering::Relaxed).is_ok() { 1 } else { 0 }
+}
+
+// --- Condition Variables ---
+struct CondVarState { cv: Condvar, mu: Mutex<()> }
+static COND_VARS: OnceLock<Mutex<HashMap<usize, Arc<CondVarState>>>> = OnceLock::new();
+
+fn get_condvar(p: usize) -> Arc<CondVarState> {
+    let mut map = lock(COND_VARS.get_or_init(|| Mutex::new(HashMap::new())));
+    map.entry(p).or_insert_with(|| Arc::new(CondVarState { cv: Condvar::new(), mu: Mutex::new(()) })).clone()
+}
+
+pub extern "win64" fn initialize_condition_variable(p: usize) {
+    if p != 0 { unsafe { std::ptr::write_bytes(p as *mut u8, 0, 8); } }
+}
+pub extern "win64" fn sleep_condition_variable_srw(cv: usize, srw: usize, ms: u32, _flags: u32) -> i32 {
+    let cond = get_condvar(cv);
+    let guard = cond.mu.lock().unwrap();
+    release_srw_lock_exclusive(srw);
+    if ms == u32::MAX {
+        drop(cond.cv.wait(guard).unwrap());
+    } else {
+        drop(cond.cv.wait_timeout(guard, std::time::Duration::from_millis(ms as u64)).unwrap());
+    }
+    acquire_srw_lock_exclusive(srw);
+    1
+}
+pub extern "win64" fn sleep_condition_variable_cs(cv: usize, cs: usize, ms: u32) -> i32 {
+    let cond = get_condvar(cv);
+    let guard = cond.mu.lock().unwrap();
+    unsafe { leave_critical_section(cs as *mut c_void); }
+    if ms == u32::MAX {
+        drop(cond.cv.wait(guard).unwrap());
+    } else {
+        drop(cond.cv.wait_timeout(guard, std::time::Duration::from_millis(ms as u64)).unwrap());
+    }
+    unsafe { enter_critical_section(cs as *mut c_void); }
+    1
+}
+pub extern "win64" fn wake_condition_variable(cv: usize) {
+    let cond = get_condvar(cv);
+    cond.cv.notify_one();
+}
+pub extern "win64" fn wake_all_condition_variable(cv: usize) {
+    let cond = get_condvar(cv);
+    cond.cv.notify_all();
+}
+
+// --- InitOnce ---
+pub extern "win64" fn init_once_begin_initialize(init_once: usize, _flags: u32, pending: *mut i32, _context: *mut usize) -> i32 {
+    if init_once == 0 || pending.is_null() { crate::process::set_last_error(87); return 0; }
+    unsafe {
+        let val = std::ptr::read_volatile(init_once as *const u32);
+        if val == 2 { *pending = 0; return 1; } // already done
+        *pending = 1;
+    }
+    1
+}
+pub extern "win64" fn init_once_complete(init_once: usize, _flags: u32, _context: usize) -> i32 {
+    if init_once == 0 { return 0; }
+    unsafe { std::ptr::write_volatile(init_once as *mut u32, 2); }
+    1
+}
+pub extern "win64" fn init_once_initialize(init_once: usize) {
+    if init_once != 0 { unsafe { std::ptr::write_bytes(init_once as *mut u8, 0, 8); } }
+}
+
+// --- Fiber Local Storage (FLS) ---
+static FLS_CALLBACKS: OnceLock<Mutex<HashMap<u32, usize>>> = OnceLock::new();
+static FLS_NEXT: AtomicU32 = AtomicU32::new(0);
+
+pub extern "win64" fn fls_alloc(callback: usize) -> u32 {
+    let slot = FLS_NEXT.fetch_add(1, Ordering::Relaxed);
+    if callback != 0 {
+        lock(FLS_CALLBACKS.get_or_init(|| Mutex::new(HashMap::new()))).insert(slot, callback);
+    }
+    slot
+}
+pub extern "win64" fn fls_free(slot: u32) -> i32 {
+    lock(FLS_CALLBACKS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&slot);
+    1
+}
+pub extern "win64" fn fls_get_value(slot: u32) -> *mut c_void {
+    crate::process::tls_value(slot).unwrap_or(0) as *mut c_void
+}
+pub unsafe extern "win64" fn fls_set_value(slot: u32, data: *mut c_void) -> i32 {
+    crate::process::set_tls_value(slot, data as usize);
+    1
+}
+
+// --- Interlocked SList ---
+pub extern "win64" fn initialize_slist_head(head: usize) {
+    if head != 0 { unsafe { std::ptr::write_bytes(head as *mut u8, 0, 16); } }
+}
+pub unsafe extern "win64" fn interlocked_push_entry_slist(head: usize, entry: usize) -> usize {
+    if head == 0 || entry == 0 { return 0; }
+    let next_ptr = head as *mut usize;
+    let count_ptr = (head + 8) as *mut u32;
+    let old = std::ptr::read_volatile(next_ptr);
+    std::ptr::write_volatile(entry as *mut usize, old);
+    std::ptr::write_volatile(next_ptr, entry);
+    let c = std::ptr::read_volatile(count_ptr);
+    std::ptr::write_volatile(count_ptr, c.wrapping_add(1));
+    old
+}
+pub unsafe extern "win64" fn interlocked_pop_entry_slist(head: usize) -> usize {
+    if head == 0 { return 0; }
+    let next_ptr = head as *mut usize;
+    let count_ptr = (head + 8) as *mut u32;
+    let top = std::ptr::read_volatile(next_ptr);
+    if top == 0 { return 0; }
+    let next = std::ptr::read_volatile(top as *const usize);
+    std::ptr::write_volatile(next_ptr, next);
+    let c = std::ptr::read_volatile(count_ptr);
+    std::ptr::write_volatile(count_ptr, c.saturating_sub(1));
+    top
+}
+pub unsafe extern "win64" fn interlocked_flush_slist(head: usize) -> usize {
+    if head == 0 { return 0; }
+    let next_ptr = head as *mut usize;
+    let count_ptr = (head + 8) as *mut u32;
+    let first = std::ptr::read_volatile(next_ptr);
+    std::ptr::write_volatile(next_ptr, 0);
+    std::ptr::write_volatile(count_ptr, 0);
+    first
+}
+pub unsafe extern "win64" fn query_depth_slist(head: usize) -> u16 {
+    if head == 0 { return 0; }
+    let count_ptr = (head + 8) as *const u32;
+    std::ptr::read_volatile(count_ptr) as u16
+}
+
+// --- Encode/Decode Pointer ---
+pub extern "win64" fn encode_pointer(ptr: usize) -> usize { ptr ^ 0xDEAD_BEEF_CAFE_BABE }
+pub extern "win64" fn decode_pointer(ptr: usize) -> usize { ptr ^ 0xDEAD_BEEF_CAFE_BABE }
+
+// --- Helpers (hostname, date/time without chrono/nix) ---
+fn get_hostname_string() -> String {
+    let mut buf = [0u8; 256];
+    if unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) } == 0 {
+        let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        String::from_utf8_lossy(&buf[..len]).into_owned()
+    } else {
+        "WINLUX".into()
+    }
+}
+
+fn format_local_date() -> String {
+    unsafe {
+        let mut t: libc::time_t = 0;
+        libc::time(&mut t);
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        format!("{:02}/{:02}/{:04}", tm.tm_mday, tm.tm_mon + 1, tm.tm_year + 1900)
+    }
+}
+
+fn format_local_time() -> String {
+    unsafe {
+        let mut t: libc::time_t = 0;
+        libc::time(&mut t);
+        let mut tm: libc::tm = std::mem::zeroed();
+        libc::localtime_r(&t, &mut tm);
+        format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
+    }
+}
+
+// --- GetLogicalDrives, GetComputerName, GetUserName ---
+pub extern "win64" fn get_logical_drives() -> u32 { 0x04 | 0x0200_0000 } // C: and Z:
+
+pub unsafe extern "win64" fn get_computer_name_a(buf: *mut u8, size: *mut u32) -> i32 {
+    if buf.is_null() || size.is_null() { crate::process::set_last_error(87); return 0; }
+    let name = get_hostname_string();
+    let upper = name.to_ascii_uppercase();
+    let n = upper.len();
+    if (*size as usize) <= n { *size = (n + 1) as u32; crate::process::set_last_error(122); return 0; }
+    std::ptr::copy_nonoverlapping(upper.as_bytes().as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    *size = n as u32;
+    1
+}
+
+pub unsafe extern "win64" fn get_computer_name_w(buf: *mut u16, size: *mut u32) -> i32 {
+    if buf.is_null() || size.is_null() { crate::process::set_last_error(87); return 0; }
+    let name = get_hostname_string();
+    let upper = name.to_ascii_uppercase();
+    crate::dlls::put_w(&upper, buf, *size);
+    *size = upper.encode_utf16().count() as u32;
+    1
+}
+
+// --- GetLocaleInfoA/W ---
+pub unsafe extern "win64" fn get_locale_info_a(locale: u32, lc_type: u32, buf: *mut u8, cap: i32) -> i32 {
+    let _ = locale;
+    let val = match lc_type & 0xFFFF {
+        0x01 => "fr-FR",    // LOCALE_SLANGUAGE
+        0x02 => "fr",       // LOCALE_SABBREVLANGNAME
+        0x03 => "français", // LOCALE_SNATIVELANGNAME
+        0x04 => "FR",       // LOCALE_SCOUNTRY
+        0x07 => "France",   // LOCALE_SNATIVECTRYNAME
+        0x0E => "€",        // LOCALE_SCURRENCY
+        0x0F => ",",        // LOCALE_SDECIMAL
+        0x10 => " ",        // LOCALE_STHOUSAND
+        0x11 => "3;0",      // LOCALE_SGROUPING
+        0x1D => "dd/MM/yyyy", // LOCALE_SSHORTDATE
+        0x1E => "dddd d MMMM yyyy", // LOCALE_SLONGDATE
+        0x1F => "HH:mm",   // LOCALE_STIMEFORMAT
+        0x25 => "/",        // LOCALE_SDATE
+        0x26 => ":",        // LOCALE_STIME
+        _ => "",
+    };
+    if buf.is_null() || cap == 0 { return (val.len() + 1) as i32; }
+    crate::dlls::put_a(val, buf, cap as u32) as i32
+}
+
+pub unsafe extern "win64" fn get_locale_info_w(locale: u32, lc_type: u32, buf: *mut u16, cap: i32) -> i32 {
+    // Delegate via A version for simplicity
+    let mut a_buf = [0u8; 256];
+    let n = get_locale_info_a(locale, lc_type, a_buf.as_mut_ptr(), 256);
+    if n == 0 { return 0; }
+    let s = crate::dlls::decode_ansi(&a_buf[..(n as usize).saturating_sub(1)]);
+    if buf.is_null() || cap == 0 { return (s.encode_utf16().count() + 1) as i32; }
+    crate::dlls::put_w(&s, buf, cap as u32) as i32
+}
+
+// --- GetDateFormatA/W, GetTimeFormatA/W (basic) ---
+pub unsafe extern "win64" fn get_date_format_a(_locale: u32, _flags: u32, _date: *const u8, _fmt: *const u8, buf: *mut u8, cap: i32) -> i32 {
+    let s = format_local_date();
+    if buf.is_null() || cap == 0 { return (s.len() + 1) as i32; }
+    crate::dlls::put_a(&s, buf, cap as u32) as i32
+}
+
+pub unsafe extern "win64" fn get_time_format_a(_locale: u32, _flags: u32, _time: *const u8, _fmt: *const u8, buf: *mut u8, cap: i32) -> i32 {
+    let s = format_local_time();
+    if buf.is_null() || cap == 0 { return (s.len() + 1) as i32; }
+    crate::dlls::put_a(&s, buf, cap as u32) as i32
+}
+
+// --- GetNumberOfProcessors ---
+pub extern "win64" fn get_active_processor_count(_group: u16) -> u32 {
+    std::thread::available_parallelism().map(|n| n.get() as u32).unwrap_or(1)
+}
+
+// --- Waitable Timer (stubs) ---
+pub extern "win64" fn create_waitable_timer_a(_attr: usize, manual: i32, _name: *const u8) -> usize {
+    let _ = manual;
+    next_handle()
+}
+pub unsafe extern "win64" fn set_waitable_timer(_h: usize, _due: *const i64, _period: i32, _routine: usize, _arg: usize, _resume: i32) -> i32 { 1 }
+pub extern "win64" fn cancel_waitable_timer(_h: usize) -> i32 { 1 }
+
+// --- GetFileInformationByHandle ---
+#[repr(C)]
+pub struct ByHandleFileInformation {
+    pub attributes: u32,
+    pub creation_time: [u32; 2],
+    pub last_access_time: [u32; 2],
+    pub last_write_time: [u32; 2],
+    pub volume_serial: u32,
+    pub file_size_high: u32,
+    pub file_size_low: u32,
+    pub number_of_links: u32,
+    pub file_index_high: u32,
+    pub file_index_low: u32,
+}
+
+pub unsafe extern "win64" fn get_file_information_by_handle(handle: usize, info: *mut ByHandleFileInformation) -> i32 {
+    if info.is_null() { crate::process::set_last_error(87); return 0; }
+    let handles = lock(HANDLES.get().unwrap());
+    let Some(FileHandle::File(file)) = handles.get(&handle) else { crate::process::set_last_error(6); return 0; };
+    let f = lock(file);
+    let Ok(meta) = f.metadata() else { crate::process::set_last_error(6); return 0; };
+    drop(f);
+    drop(handles);
+    let size = meta.len();
+    std::ptr::write_bytes(info, 0, 1);
+    (*info).attributes = if meta.is_dir() { 0x10 } else { 0x80 };
+    (*info).file_size_low = size as u32;
+    (*info).file_size_high = (size >> 32) as u32;
+    (*info).number_of_links = 1;
+    1
+}
+
+// --- ReadDirectoryChangesW (stub) ---
+pub unsafe extern "win64" fn read_directory_changes_w(_h: usize, _buf: *mut c_void, _len: u32, _subtree: i32, _filter: u32, _bytes: *mut u32, _ov: usize, _routine: usize) -> i32 {
+    crate::process::set_last_error(120); // ERROR_CALL_NOT_IMPLEMENTED
+    0
+}
+
+// --- CreateNamedPipeA / ConnectNamedPipe (stubs) ---
+pub unsafe extern "win64" fn create_named_pipe_a(_name: *const u8, _open_mode: u32, _pipe_mode: u32, _max: u32, _out_size: u32, _in_size: u32, _timeout: u32, _sa: usize) -> usize {
+    crate::process::set_last_error(120);
+    usize::MAX
+}
+pub extern "win64" fn connect_named_pipe(_h: usize, _ov: usize) -> i32 { crate::process::set_last_error(120); 0 }
+pub extern "win64" fn disconnect_named_pipe(_h: usize) -> i32 { 1 }
+
+// --- CreateFileMappingA/W, MapViewOfFile, UnmapViewOfFile (stubs) ---
+pub unsafe extern "win64" fn create_file_mapping_a(_file: usize, _sa: usize, _protect: u32, _high: u32, _low: u32, _name: *const u8) -> usize {
+    let h = next_handle();
+    h
+}
+pub unsafe extern "win64" fn create_file_mapping_w(_file: usize, _sa: usize, _protect: u32, _high: u32, _low: u32, _name: *const u16) -> usize {
+    let h = next_handle();
+    h
+}
+
+static MAPPINGS: OnceLock<Mutex<HashMap<usize, Vec<u8>>>> = OnceLock::new();
+
+pub unsafe extern "win64" fn map_view_of_file(_mapping: usize, _access: u32, _high: u32, _low: u32, bytes: usize) -> *mut c_void {
+    let size = if bytes == 0 { 4096 } else { bytes };
+    let mem = vec![0u8; size];
+    let ptr = mem.as_ptr() as *mut c_void;
+    lock(MAPPINGS.get_or_init(|| Mutex::new(HashMap::new()))).insert(ptr as usize, mem);
+    ptr
+}
+pub unsafe extern "win64" fn unmap_view_of_file(base: *const c_void) -> i32 {
+    lock(MAPPINGS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&(base as usize));
+    1
+}
+
+// --- GetUserNameA/W ---
+pub unsafe extern "win64" fn get_user_name_a(buf: *mut u8, size: *mut u32) -> i32 {
+    if buf.is_null() || size.is_null() { crate::process::set_last_error(87); return 0; }
+    let name = std::env::var("USER").unwrap_or_else(|_| "user".into());
+    let n = name.len();
+    if (*size as usize) <= n { *size = (n + 1) as u32; crate::process::set_last_error(122); return 0; }
+    std::ptr::copy_nonoverlapping(name.as_bytes().as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    *size = (n + 1) as u32;
+    1
+}
+
+// --- GetPrivateProfileStringA/W, WritePrivateProfileStringA ---
+pub unsafe extern "win64" fn get_private_profile_string_a(_section: *const u8, _key: *const u8, default: *const u8, buf: *mut u8, size: u32, _file: *const u8) -> u32 {
+    // Stub: always return the default
+    if buf.is_null() || size == 0 { return 0; }
+    if default.is_null() { *buf = 0; return 0; }
+    crate::dlls::put_a(&crate::dlls::cstr(default), buf, size)
+}
+pub unsafe extern "win64" fn write_private_profile_string_a(_section: *const u8, _key: *const u8, _value: *const u8, _file: *const u8) -> i32 { 1 }
+
+// --- GetLongPathNameA/W, GetShortPathNameA/W ---
+pub unsafe extern "win64" fn get_long_path_name_a(short: *const u8, buf: *mut u8, cap: u32) -> u32 {
+    if short.is_null() { crate::process::set_last_error(87); return 0; }
+    let s = crate::dlls::cstr(short);
+    crate::dlls::put_a(&s, buf, cap)
+}
+pub unsafe extern "win64" fn get_long_path_name_w(short: *const u16, buf: *mut u16, cap: u32) -> u32 {
+    if short.is_null() { crate::process::set_last_error(87); return 0; }
+    let s = crate::dlls::wstr(short);
+    crate::dlls::put_w(&s, buf, cap)
+}
+pub unsafe extern "win64" fn get_short_path_name_a(long: *const u8, buf: *mut u8, cap: u32) -> u32 { get_long_path_name_a(long, buf, cap) }
+pub unsafe extern "win64" fn get_short_path_name_w(long: *const u16, buf: *mut u16, cap: u32) -> u32 { get_long_path_name_w(long, buf, cap) }
+
+// --- CompareStringA/W, CompareStringOrdinal ---
+pub unsafe extern "win64" fn compare_string_a(_locale: u32, _flags: u32, s1: *const u8, n1: i32, s2: *const u8, n2: i32) -> i32 {
+    let a = if n1 < 0 { crate::dlls::cstr(s1) } else { crate::dlls::decode_ansi(std::slice::from_raw_parts(s1, n1 as usize)) };
+    let b = if n2 < 0 { crate::dlls::cstr(s2) } else { crate::dlls::decode_ansi(std::slice::from_raw_parts(s2, n2 as usize)) };
+    match a.to_lowercase().cmp(&b.to_lowercase()) { std::cmp::Ordering::Less => 1, std::cmp::Ordering::Equal => 2, std::cmp::Ordering::Greater => 3 }
+}
+pub unsafe extern "win64" fn compare_string_w(_locale: u32, _flags: u32, s1: *const u16, n1: i32, s2: *const u16, n2: i32) -> i32 {
+    let a = if n1 < 0 { crate::dlls::wstr(s1) } else { String::from_utf16_lossy(std::slice::from_raw_parts(s1, n1 as usize)) };
+    let b = if n2 < 0 { crate::dlls::wstr(s2) } else { String::from_utf16_lossy(std::slice::from_raw_parts(s2, n2 as usize)) };
+    match a.to_lowercase().cmp(&b.to_lowercase()) { std::cmp::Ordering::Less => 1, std::cmp::Ordering::Equal => 2, std::cmp::Ordering::Greater => 3 }
+}
+pub unsafe extern "win64" fn compare_string_ordinal(s1: *const u16, n1: i32, s2: *const u16, n2: i32, ignore_case: i32) -> i32 {
+    let a = if n1 < 0 { crate::dlls::wstr(s1) } else { String::from_utf16_lossy(std::slice::from_raw_parts(s1, n1 as usize)) };
+    let b = if n2 < 0 { crate::dlls::wstr(s2) } else { String::from_utf16_lossy(std::slice::from_raw_parts(s2, n2 as usize)) };
+    let (aa, bb) = if ignore_case != 0 { (a.to_lowercase(), b.to_lowercase()) } else { (a, b) };
+    match aa.cmp(&bb) { std::cmp::Ordering::Less => 1, std::cmp::Ordering::Equal => 2, std::cmp::Ordering::Greater => 3 }
+}
+
+// --- GetStringTypeA/W ---
+pub unsafe extern "win64" fn get_string_type_w(_info_type: u32, src: *const u16, count: i32, char_type: *mut u16) -> i32 {
+    if src.is_null() || char_type.is_null() { crate::process::set_last_error(87); return 0; }
+    let n = if count < 0 { crate::printf::wide_len(src) } else { count as usize };
+    for i in 0..n {
+        let ch = char::from_u32(*src.add(i) as u32).unwrap_or('\0');
+        let mut t: u16 = 0;
+        if ch.is_uppercase() { t |= 0x01; } // C1_UPPER
+        if ch.is_lowercase() { t |= 0x02; } // C1_LOWER
+        if ch.is_ascii_digit() { t |= 0x04; } // C1_DIGIT
+        if ch.is_whitespace() { t |= 0x08; } // C1_SPACE
+        if ch.is_ascii_punctuation() { t |= 0x10; } // C1_PUNCT
+        if ch.is_control() { t |= 0x20; } // C1_CNTRL
+        if ch.is_ascii_hexdigit() { t |= 0x80; } // C1_XDIGIT
+        if ch.is_alphabetic() { t |= 0x100; } // C1_ALPHA
+        *char_type.add(i) = t;
+    }
+    1
+}
+
+// --- LCMapStringA/W (basic) ---
+pub unsafe extern "win64" fn lc_map_string_w(_locale: u32, flags: u32, src: *const u16, src_count: i32, dst: *mut u16, dst_count: i32) -> i32 {
+    if src.is_null() { crate::process::set_last_error(87); return 0; }
+    let n = if src_count < 0 { crate::printf::wide_len(src) + 1 } else { src_count as usize };
+    let s = String::from_utf16_lossy(std::slice::from_raw_parts(src, n));
+    let transformed = if flags & 0x100 != 0 { s.to_lowercase() } // LCMAP_LOWERCASE
+    else if flags & 0x200 != 0 { s.to_uppercase() } // LCMAP_UPPERCASE
+    else { s };
+    let w: Vec<u16> = transformed.encode_utf16().collect();
+    if dst.is_null() || dst_count == 0 { return w.len() as i32; }
+    let copy = w.len().min(dst_count as usize);
+    std::ptr::copy_nonoverlapping(w.as_ptr(), dst, copy);
+    copy as i32
+}
+
 pub fn exports() -> crate::dlls::Exports { crate::exports! {
   "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
   "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
@@ -948,7 +1513,30 @@ pub fn exports() -> crate::dlls::Exports { crate::exports! {
  "QueryPerformanceFrequency"=>fn query_performance_frequency, "QueryPerformanceCounter"=>fn query_performance_counter,
   "GetStartupInfoA"=>fn get_startup_info_a,"GetStartupInfoW"=>fn get_startup_info_w,"SetFilePointerEx"=>fn set_file_pointer_ex,"GetFileSizeEx"=>fn get_file_size_ex,"GetFileType"=>fn get_file_type,
   "SetFileAttributesA"=>fn set_file_attributes_a,"SetFileAttributesW"=>fn set_file_attributes_w,"GetFileTime"=>fn get_file_time,"SetFileTime"=>fn set_file_time,"LockFile"=>fn lock_file,"UnlockFile"=>fn unlock_file,
-  "GetDiskFreeSpaceExA"=>fn get_disk_free_space_ex_a,"GetDiskFreeSpaceExW"=>fn get_disk_free_space_ex_w,"GetVolumeInformationA"=>fn get_volume_information_a,"GetVolumeInformationW"=>fn get_volume_information_w,"GetDriveTypeA"=>fn get_drive_type_a,"GetDriveTypeW"=>fn get_drive_type_w,"MoveFileExA"=>fn move_file_ex_a,"MoveFileExW"=>fn move_file_ex_w
+  "GetDiskFreeSpaceExA"=>fn get_disk_free_space_ex_a,"GetDiskFreeSpaceExW"=>fn get_disk_free_space_ex_w,"GetVolumeInformationA"=>fn get_volume_information_a,"GetVolumeInformationW"=>fn get_volume_information_w,"GetDriveTypeA"=>fn get_drive_type_a,"GetDriveTypeW"=>fn get_drive_type_w,"MoveFileExA"=>fn move_file_ex_a,"MoveFileExW"=>fn move_file_ex_w,
+  // --- Nouvelles fonctions supplémentaires ---
+  "HeapCreate"=>fn heap_create,"HeapDestroy"=>fn heap_destroy,"HeapSize"=>fn heap_size,"HeapValidate"=>fn heap_validate,"HeapSetInformation"=>fn heap_set_information,
+  "FindFirstFileA"=>fn find_first_file_a,"FindNextFileA"=>fn find_next_file_a,"FindClose"=>fn find_close,
+  "InitializeSRWLock"=>fn initialize_srw_lock,"AcquireSRWLockExclusive"=>fn acquire_srw_lock_exclusive,"ReleaseSRWLockExclusive"=>fn release_srw_lock_exclusive,"AcquireSRWLockShared"=>fn acquire_srw_lock_shared,"ReleaseSRWLockShared"=>fn release_srw_lock_shared,"TryAcquireSRWLockExclusive"=>fn try_acquire_srw_lock_exclusive,"TryAcquireSRWLockShared"=>fn try_acquire_srw_lock_shared,
+  "InitializeConditionVariable"=>fn initialize_condition_variable,"SleepConditionVariableSRW"=>fn sleep_condition_variable_srw,"SleepConditionVariableCS"=>fn sleep_condition_variable_cs,"WakeConditionVariable"=>fn wake_condition_variable,"WakeAllConditionVariable"=>fn wake_all_condition_variable,
+  "InitOnceBeginInitialize"=>fn init_once_begin_initialize,"InitOnceComplete"=>fn init_once_complete,"InitOnceInitialize"=>fn init_once_initialize,
+  "FlsAlloc"=>fn fls_alloc,"FlsFree"=>fn fls_free,"FlsGetValue"=>fn fls_get_value,"FlsSetValue"=>fn fls_set_value,
+  "InitializeSListHead"=>fn initialize_slist_head,"InterlockedPushEntrySList"=>fn interlocked_push_entry_slist,"InterlockedPopEntrySList"=>fn interlocked_pop_entry_slist,"InterlockedFlushSList"=>fn interlocked_flush_slist,"QueryDepthSList"=>fn query_depth_slist,
+  "EncodePointer"=>fn encode_pointer,"DecodePointer"=>fn decode_pointer,
+  "GetLogicalDrives"=>fn get_logical_drives,"GetComputerNameA"=>fn get_computer_name_a,"GetComputerNameW"=>fn get_computer_name_w,
+  "GetLocaleInfoA"=>fn get_locale_info_a,"GetLocaleInfoW"=>fn get_locale_info_w,
+  "GetDateFormatA"=>fn get_date_format_a,"GetTimeFormatA"=>fn get_time_format_a,
+  "GetActiveProcessorCount"=>fn get_active_processor_count,
+  "CreateWaitableTimerA"=>fn create_waitable_timer_a,"SetWaitableTimer"=>fn set_waitable_timer,"CancelWaitableTimer"=>fn cancel_waitable_timer,
+  "GetFileInformationByHandle"=>fn get_file_information_by_handle,"ReadDirectoryChangesW"=>fn read_directory_changes_w,
+  "CreateNamedPipeA"=>fn create_named_pipe_a,"ConnectNamedPipe"=>fn connect_named_pipe,"DisconnectNamedPipe"=>fn disconnect_named_pipe,
+  "CreateFileMappingA"=>fn create_file_mapping_a,"CreateFileMappingW"=>fn create_file_mapping_w,"MapViewOfFile"=>fn map_view_of_file,"UnmapViewOfFile"=>fn unmap_view_of_file,
+  "GetUserNameA"=>fn get_user_name_a,
+  "GetPrivateProfileStringA"=>fn get_private_profile_string_a,"WritePrivateProfileStringA"=>fn write_private_profile_string_a,
+  "GetLongPathNameA"=>fn get_long_path_name_a,"GetLongPathNameW"=>fn get_long_path_name_w,"GetShortPathNameA"=>fn get_short_path_name_a,"GetShortPathNameW"=>fn get_short_path_name_w,
+  "CompareStringA"=>fn compare_string_a,"CompareStringW"=>fn compare_string_w,"CompareStringOrdinal"=>fn compare_string_ordinal,
+  "GetStringTypeW"=>fn get_string_type_w,
+  "LCMapStringW"=>fn lc_map_string_w
   } }
 
 #[cfg(test)]

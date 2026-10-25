@@ -786,32 +786,910 @@ pub unsafe extern "win64" fn ellipse(
     1
 }
 
+// =====================================================================
+// TextOutW (manquant)
+// =====================================================================
+
+pub unsafe extern "win64" fn text_out_w(hdc: usize, x: i32, y: i32, text: *const u16, count: i32) -> i32 {
+    if text.is_null() || gui::dc_window(hdc).is_none() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let len = if count < 0 {
+        let mut p = text;
+        let mut n = 0;
+        while *p != 0 { p = p.add(1); n += 1; }
+        n
+    } else {
+        count as usize
+    };
+    let chars = std::slice::from_raw_parts(text, len);
+    let s = String::from_utf16_lossy(chars);
+    let color = gui::dc_text_color(hdc);
+    let bk = if gui::dc_bk_mode(hdc) == 1 { None } else { Some(gui::dc_bk_color(hdc)) };
+    let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    gui::record(hdc, DrawCmd::Text { x, y, text: s, color, bk, font });
+    1
+}
+
+// =====================================================================
+// ExtTextOutA/W
+// =====================================================================
+
+pub unsafe extern "win64" fn ext_text_out_a(
+    hdc: usize, x: i32, y: i32, _options: u32, _clip: *const Rect,
+    text: *const u8, count: u32, _dx: *const i32,
+) -> i32 {
+    if count == 0 || text.is_null() {
+        return 1; // Rien à dessiner, mais succès
+    }
+    text_out_a(hdc, x, y, text, count as i32)
+}
+
+pub unsafe extern "win64" fn ext_text_out_w(
+    hdc: usize, x: i32, y: i32, _options: u32, _clip: *const Rect,
+    text: *const u16, count: u32, _dx: *const i32,
+) -> i32 {
+    if count == 0 || text.is_null() {
+        return 1;
+    }
+    text_out_w(hdc, x, y, text, count as i32)
+}
+
+// =====================================================================
+// DrawTextA/W (fonctions complètes dans gdi32, contrairement à user32)
+// =====================================================================
+
+pub unsafe extern "win64" fn draw_text_a(
+    hdc: usize, text: *const u8, count: i32, rect: *mut Rect, format: u32,
+) -> i32 {
+    if rect.is_null() { return 0; }
+    let len = if count == -1 {
+        let mut p = text; let mut n = 0;
+        while !p.is_null() && *p != 0 { p = p.add(1); n += 1; }
+        n
+    } else { count as usize };
+    let bytes = std::slice::from_raw_parts(text, len);
+    let s = crate::dlls::decode_ansi(bytes);
+    draw_text_gdi(hdc, &s, &mut *rect, format)
+}
+
+pub unsafe extern "win64" fn draw_text_w(
+    hdc: usize, text: *const u16, count: i32, rect: *mut Rect, format: u32,
+) -> i32 {
+    if rect.is_null() { return 0; }
+    let len = if count == -1 {
+        let mut p = text; let mut n = 0;
+        while !p.is_null() && *p != 0 { p = p.add(1); n += 1; }
+        n
+    } else { count as usize };
+    let chars: Vec<u16> = std::slice::from_raw_parts(text, len).to_vec();
+    let s = String::from_utf16_lossy(&chars);
+    draw_text_gdi(hdc, &s, &mut *rect, format)
+}
+
+fn draw_text_gdi(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
+    const DT_CALCRECT: u32 = 0x0400;
+    const DT_CENTER: u32 = 0x0001;
+    const DT_VCENTER: u32 = 0x0004;
+    const DT_SINGLELINE: u32 = 0x0020;
+
+    let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    let (tw, th) = gui::measure_text(&font, text);
+
+    if format & DT_CALCRECT != 0 {
+        rect.right = rect.left + tw;
+        rect.bottom = rect.top + th;
+        return th;
+    }
+
+    let mut x = rect.left;
+    let mut y = rect.top;
+    if format & DT_CENTER != 0 {
+        x = rect.left + (rect.width() - tw) / 2;
+    }
+    if format & DT_SINGLELINE != 0 && format & DT_VCENTER != 0 {
+        y = rect.top + (rect.height() - th) / 2;
+    }
+
+    let color = gui::dc_text_color(hdc);
+    let bk = if gui::dc_bk_mode(hdc) == 1 { None } else { Some(gui::dc_bk_color(hdc)) };
+    gui::record(hdc, DrawCmd::Text { x, y, text: text.to_string(), color, bk, font });
+    th
+}
+
+// =====================================================================
+// Line drawing : MoveToEx, LineTo, Polyline, Polygon
+// =====================================================================
+
+use std::sync::atomic::AtomicI32;
+
+// Position courante du « crayon » par DC (approximation thread-local)
+fn pen_pos() -> &'static Mutex<HashMap<usize, (i32, i32)>> {
+    static P: OnceLock<Mutex<HashMap<usize, (i32, i32)>>> = OnceLock::new();
+    P.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn lock_pen() -> std::sync::MutexGuard<'static, HashMap<usize, (i32, i32)>> {
+    pen_pos().lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+pub unsafe extern "win64" fn move_to_ex(hdc: usize, x: i32, y: i32, prev: *mut gui::Point) -> i32 {
+    let mut map = lock_pen();
+    let old = map.insert(hdc, (x, y)).unwrap_or((0, 0));
+    if !prev.is_null() {
+        (*prev).x = old.0;
+        (*prev).y = old.1;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn line_to(hdc: usize, x: i32, y: i32) -> i32 {
+    let (x0, y0) = {
+        let mut map = lock_pen();
+        let pos = map.entry(hdc).or_insert((0, 0));
+        let old = *pos;
+        *pos = (x, y);
+        old
+    };
+    // Dessiner la ligne comme un FrameRect fin
+    let color = gui::object_color(gui::dc_brush(hdc)).unwrap_or(0);
+    let rect = Rect {
+        left: x0.min(x), top: y0.min(y),
+        right: x0.max(x) + 1, bottom: y0.max(y) + 1,
+    };
+    gui::record(hdc, DrawCmd::FrameRect { rect, color, width: 1 });
+    1
+}
+
+pub unsafe extern "win64" fn polyline(hdc: usize, points: *const gui::Point, count: i32) -> i32 {
+    if points.is_null() || count < 2 {
+        return 0;
+    }
+    let pts = std::slice::from_raw_parts(points, count as usize);
+    let color = gui::object_color(gui::dc_brush(hdc)).unwrap_or(0);
+    for w in pts.windows(2) {
+        let rect = Rect {
+            left: w[0].x.min(w[1].x), top: w[0].y.min(w[1].y),
+            right: w[0].x.max(w[1].x) + 1, bottom: w[0].y.max(w[1].y) + 1,
+        };
+        gui::record(hdc, DrawCmd::FrameRect { rect, color, width: 1 });
+    }
+    1
+}
+
+pub unsafe extern "win64" fn polygon(hdc: usize, points: *const gui::Point, count: i32) -> i32 {
+    if points.is_null() || count < 2 {
+        return 0;
+    }
+    // Dessine les arêtes comme un polyline fermé
+    polyline(hdc, points, count);
+    // Fermer le polygone
+    let pts = std::slice::from_raw_parts(points, count as usize);
+    let first = pts[0];
+    let last = pts[count as usize - 1];
+    let color = gui::object_color(gui::dc_brush(hdc)).unwrap_or(0);
+    let rect = Rect {
+        left: first.x.min(last.x), top: first.y.min(last.y),
+        right: first.x.max(last.x) + 1, bottom: first.y.max(last.y) + 1,
+    };
+    gui::record(hdc, DrawCmd::FrameRect { rect, color, width: 1 });
+    1
+}
+
+pub unsafe extern "win64" fn polyline_to(hdc: usize, points: *const gui::Point, count: u32) -> i32 {
+    let _ = (hdc, points, count);
+    1
+}
+
+pub unsafe extern "win64" fn poly_bezier(hdc: usize, points: *const gui::Point, count: u32) -> i32 {
+    let _ = (hdc, points, count);
+    1
+}
+
+pub unsafe extern "win64" fn poly_bezier_to(hdc: usize, points: *const gui::Point, count: u32) -> i32 {
+    let _ = (hdc, points, count);
+    1
+}
+
+// =====================================================================
+// RoundRect
+// =====================================================================
+
+pub unsafe extern "win64" fn round_rect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32, _rx: i32, _ry: i32) -> i32 {
+    // On dessine un rectangle simple (sans arrondi) comme approximation
+    // Utiliser le pen et brush courants du DC
+    let pen = gui::dc_pen(hdc);
+    let brush = gui::dc_brush(hdc);
+    rectangle(hdc, left, top, right, bottom, pen, brush)
+}
+
+// =====================================================================
+// SetPixel / GetPixel
+// =====================================================================
+
+pub unsafe extern "win64" fn set_pixel(hdc: usize, x: i32, y: i32, color: u32) -> u32 {
+    let rect = Rect { left: x, top: y, right: x + 1, bottom: y + 1 };
+    gui::record(hdc, DrawCmd::FillRect { rect, color });
+    color
+}
+
+pub unsafe extern "win64" fn get_pixel(_hdc: usize, _x: i32, _y: i32) -> u32 {
+    // Pas d'accès en lecture aux pixels pour l'instant
+    0x00FF_FFFF // CLR_INVALID
+}
+
+pub unsafe extern "win64" fn set_pixel_v(hdc: usize, x: i32, y: i32, color: u32) -> i32 {
+    set_pixel(hdc, x, y, color);
+    1
+}
+
+// =====================================================================
+// Region functions
+// =====================================================================
+
+static NEXT_REGION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x0020_0000);
+
+pub extern "win64" fn create_rect_rgn(_left: i32, _top: i32, _right: i32, _bottom: i32) -> usize {
+    NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub extern "win64" fn create_rect_rgn_indirect(_rect: *const Rect) -> usize {
+    NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub extern "win64" fn create_elliptic_rgn(_left: i32, _top: i32, _right: i32, _bottom: i32) -> usize {
+    NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub extern "win64" fn combine_rgn(_dest: usize, _src1: usize, _src2: usize, _mode: i32) -> i32 {
+    1 // SIMPLEREGION
+}
+
+pub extern "win64" fn set_rect_rgn(_rgn: usize, _left: i32, _top: i32, _right: i32, _bottom: i32) -> i32 {
+    1
+}
+
+pub extern "win64" fn delete_rgn(rgn: usize) -> i32 {
+    let _ = rgn;
+    1
+}
+
+pub extern "win64" fn offset_rgn(_rgn: usize, _x: i32, _y: i32) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn get_rgn_box(_rgn: usize, rect: *mut Rect) -> i32 {
+    if !rect.is_null() {
+        *rect = Rect { left: 0, top: 0, right: 0, bottom: 0 };
+    }
+    1
+}
+
+pub extern "win64" fn pt_in_region(_rgn: usize, _x: i32, _y: i32) -> i32 {
+    0
+}
+
+pub extern "win64" fn rect_in_region(_rgn: usize, _rect: *const Rect) -> i32 {
+    0
+}
+
+pub extern "win64" fn equal_rgn(_rgn1: usize, _rgn2: usize) -> i32 {
+    0
+}
+
+// =====================================================================
+// Clipping
+// =====================================================================
+
+pub extern "win64" fn select_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {
+    1 // SIMPLEREGION
+}
+
+pub extern "win64" fn ext_select_clip_rgn(_hdc: usize, _rgn: usize, _mode: i32) -> i32 {
+    1
+}
+
+pub extern "win64" fn intersect_clip_rect(_hdc: usize, _left: i32, _top: i32, _right: i32, _bottom: i32) -> i32 {
+    1
+}
+
+pub extern "win64" fn exclude_clip_rect(_hdc: usize, _left: i32, _top: i32, _right: i32, _bottom: i32) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn get_clip_box(_hdc: usize, rect: *mut Rect) -> i32 {
+    if !rect.is_null() {
+        let (w, h) = gui::screen_size();
+        *rect = Rect { left: 0, top: 0, right: w, bottom: h };
+    }
+    1
+}
+
+pub extern "win64" fn get_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {
+    0 // Pas de clipping region
+}
+
+// =====================================================================
+// DC state : SaveDC / RestoreDC
+// =====================================================================
+
+pub extern "win64" fn save_dc(hdc: usize) -> i32 {
+    gui::save_dc(hdc)
+}
+
+pub extern "win64" fn restore_dc(hdc: usize, saved_dc: i32) -> i32 {
+    gui::restore_dc(hdc, saved_dc) as i32
+}
+
+// =====================================================================
+// Map mode / viewport / window origin
+// =====================================================================
+
+pub extern "win64" fn get_map_mode(hdc: usize) -> i32 {
+    gui::dc_map_mode(hdc)
+}
+
+pub extern "win64" fn set_map_mode(hdc: usize, mode: i32) -> i32 {
+    gui::set_dc_map_mode(hdc, mode)
+}
+
+pub unsafe extern "win64" fn set_viewport_org_ex(_hdc: usize, _x: i32, _y: i32, prev: *mut gui::Point) -> i32 {
+    if !prev.is_null() {
+        (*prev).x = 0;
+        (*prev).y = 0;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn get_viewport_org_ex(_hdc: usize, pt: *mut gui::Point) -> i32 {
+    if !pt.is_null() {
+        (*pt).x = 0;
+        (*pt).y = 0;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn set_window_org_ex(_hdc: usize, _x: i32, _y: i32, prev: *mut gui::Point) -> i32 {
+    if !prev.is_null() {
+        (*prev).x = 0;
+        (*prev).y = 0;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn get_window_org_ex(_hdc: usize, pt: *mut gui::Point) -> i32 {
+    if !pt.is_null() {
+        (*pt).x = 0;
+        (*pt).y = 0;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn set_viewport_ext_ex(_hdc: usize, _x: i32, _y: i32, prev: *mut Size) -> i32 {
+    if !prev.is_null() {
+        (*prev).cx = 1;
+        (*prev).cy = 1;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn get_viewport_ext_ex(_hdc: usize, sz: *mut Size) -> i32 {
+    if !sz.is_null() {
+        (*sz).cx = 1;
+        (*sz).cy = 1;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn set_window_ext_ex(_hdc: usize, _x: i32, _y: i32, prev: *mut Size) -> i32 {
+    if !prev.is_null() {
+        (*prev).cx = 1;
+        (*prev).cy = 1;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn get_window_ext_ex(_hdc: usize, sz: *mut Size) -> i32 {
+    if !sz.is_null() {
+        (*sz).cx = 1;
+        (*sz).cy = 1;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn dp_to_lp(_hdc: usize, _points: *mut gui::Point, _count: i32) -> i32 {
+    1 // En mode MM_TEXT, pas de transformation
+}
+
+pub unsafe extern "win64" fn lp_to_dp(_hdc: usize, _points: *mut gui::Point, _count: i32) -> i32 {
+    1
+}
+
+// =====================================================================
+// Font : CreateFontIndirectA/W
+// =====================================================================
+
+#[repr(C)]
+#[derive(Clone)]
+struct LogFontFields {
+    height: i32,
+    width: i32,
+    escapement: i32,
+    orientation: i32,
+    weight: i32,
+    italic: u8,
+    underline: u8,
+    strikeout: u8,
+    charset: u8,
+    out_precision: u8,
+    clip_precision: u8,
+    quality: u8,
+    pitch_and_family: u8,
+    // face_name : 32 chars (A) or 32 wchars (W) follows
+}
+
+pub unsafe extern "win64" fn create_font_indirect_a(lf: *const c_void) -> usize {
+    if lf.is_null() {
+        return 0;
+    }
+    let f = &*(lf as *const LogFontFields);
+    let face_ptr = (lf as *const u8).add(std::mem::size_of::<LogFontFields>());
+    let mut face_bytes = Vec::new();
+    for i in 0..32 {
+        let b = *face_ptr.add(i);
+        if b == 0 { break; }
+        face_bytes.push(b);
+    }
+    let face = crate::dlls::decode_ansi(&face_bytes);
+    let spec = FontSpec {
+        height: f.height.abs(),
+        width: f.width,
+        weight: f.weight,
+        italic: f.italic != 0,
+        underline: f.underline != 0,
+        strikeout: f.strikeout != 0,
+        face,
+    };
+    gui::create_font(spec)
+}
+
+pub unsafe extern "win64" fn create_font_indirect_w(lf: *const c_void) -> usize {
+    if lf.is_null() {
+        return 0;
+    }
+    let f = &*(lf as *const LogFontFields);
+    let face_ptr = (lf as *const u8).add(std::mem::size_of::<LogFontFields>()) as *const u16;
+    let mut face_chars = Vec::new();
+    for i in 0..32 {
+        let c = *face_ptr.add(i);
+        if c == 0 { break; }
+        face_chars.push(c);
+    }
+    let face = String::from_utf16_lossy(&face_chars);
+    let spec = FontSpec {
+        height: f.height.abs(),
+        width: f.width,
+        weight: f.weight,
+        italic: f.italic != 0,
+        underline: f.underline != 0,
+        strikeout: f.strikeout != 0,
+        face,
+    };
+    gui::create_font(spec)
+}
+
+// =====================================================================
+// GetTextMetrics A/W
+// =====================================================================
+
+/// TEXTMETRICA minimal (56 bytes en Win32, 60 en Win64 — on écrit les champs
+/// utiles aux offsets corrects).
+#[repr(C)]
+struct TextMetric {
+    height: i32,
+    ascent: i32,
+    descent: i32,
+    internal_leading: i32,
+    external_leading: i32,
+    ave_char_width: i32,
+    max_char_width: i32,
+    weight: i32,
+    overhang: i32,
+    digitized_aspect_x: i32,
+    digitized_aspect_y: i32,
+    first_char: u8,
+    last_char: u8,
+    default_char: u8,
+    break_char: u8,
+    italic: u8,
+    underlined: u8,
+    struck_out: u8,
+    pitch_and_family: u8,
+    charset: u8,
+    _pad: [u8; 3],
+}
+
+pub unsafe extern "win64" fn get_text_metrics_a(hdc: usize, tm: *mut c_void) -> i32 {
+    if tm.is_null() {
+        return 0;
+    }
+    let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    let h = if font.height > 0 { font.height } else { 13 };
+    let out = &mut *(tm as *mut TextMetric);
+    out.height = h;
+    out.ascent = (h * 80) / 100;
+    out.descent = h - out.ascent;
+    out.internal_leading = 0;
+    out.external_leading = 0;
+    out.ave_char_width = (h * 45) / 100;
+    out.max_char_width = h;
+    out.weight = font.weight;
+    out.overhang = 0;
+    out.digitized_aspect_x = 96;
+    out.digitized_aspect_y = 96;
+    out.first_char = 0x20;
+    out.last_char = 0xFF;
+    out.default_char = b'?';
+    out.break_char = b' ';
+    out.italic = font.italic as u8;
+    out.underlined = font.underline as u8;
+    out.struck_out = font.strikeout as u8;
+    out.pitch_and_family = 0x22; // VARIABLE_PITCH | FF_SWISS
+    out.charset = 0; // ANSI_CHARSET
+    1
+}
+
+pub unsafe extern "win64" fn get_text_metrics_w(hdc: usize, tm: *mut c_void) -> i32 {
+    // La structure TEXTMETRICW a les mêmes champs avant les chars, qui passent de
+    // u8 à u16 — mais en pratique les offsets sont proches. On réutilise la version A.
+    get_text_metrics_a(hdc, tm)
+}
+
+// =====================================================================
+// EnumFontFamiliesEx
+// =====================================================================
+
+pub unsafe extern "win64" fn enum_font_families_ex_a(
+    _hdc: usize, _logfont: *const c_void, _callback: usize, _lparam: isize, _flags: u32,
+) -> i32 {
+    // Stub : ne rapporte aucune police
+    1
+}
+
+pub unsafe extern "win64" fn enum_font_families_ex_w(
+    _hdc: usize, _logfont: *const c_void, _callback: usize, _lparam: isize, _flags: u32,
+) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn enum_fonts_a(
+    _hdc: usize, _name: *const u8, _callback: usize, _lparam: isize,
+) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn enum_fonts_w(
+    _hdc: usize, _name: *const u16, _callback: usize, _lparam: isize,
+) -> i32 {
+    1
+}
+
+// =====================================================================
+// GetTextFaceA/W
+// =====================================================================
+
+pub unsafe extern "win64" fn get_text_face_a(hdc: usize, count: i32, buf: *mut u8) -> i32 {
+    let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    if buf.is_null() {
+        return font.face.len() as i32 + 1;
+    }
+    crate::dlls::put_a(&font.face, buf, count as u32) as i32
+}
+
+pub unsafe extern "win64" fn get_text_face_w(hdc: usize, count: i32, buf: *mut u16) -> i32 {
+    let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    if buf.is_null() {
+        return font.face.len() as i32 + 1;
+    }
+    crate::dlls::put_w(&font.face, buf, count as u32) as i32
+}
+
+// =====================================================================
+// Bitmap : GetDIBits, SetDIBitsToDevice, StretchDIBits, GetBitmapBits
+// =====================================================================
+
+pub unsafe extern "win64" fn get_dib_its(
+    _hdc: usize, _bmp: usize, _start: u32, _lines: u32,
+    _bits: *mut c_void, _info: *mut c_void, _usage: u32,
+) -> i32 {
+    0 // Stub
+}
+
+pub unsafe extern "win64" fn set_dib_its_to_device(
+    _hdc: usize, _x: i32, _y: i32, _w: u32, _h: u32,
+    _src_x: i32, _src_y: i32, _start: u32, _lines: u32,
+    _bits: *const c_void, _info: *const c_void, _usage: u32,
+) -> i32 {
+    0
+}
+
+pub unsafe extern "win64" fn stretch_dib_its(
+    _hdc: usize, _xd: i32, _yd: i32, _wd: i32, _hd: i32,
+    _xs: i32, _ys: i32, _ws: i32, _hs: i32,
+    _bits: *const c_void, _info: *const c_void, _usage: u32, _rop: u32,
+) -> i32 {
+    0
+}
+
+pub unsafe extern "win64" fn get_bitmap_bits(_bmp: usize, _count: i32, _bits: *mut c_void) -> i32 {
+    0
+}
+
+pub unsafe extern "win64" fn set_bitmap_bits(_bmp: usize, _count: u32, _bits: *const c_void) -> i32 {
+    0
+}
+
+// =====================================================================
+// Misc GDI
+// =====================================================================
+
+pub extern "win64" fn get_current_object(hdc: usize, obj_type: u32) -> usize {
+    match obj_type {
+        1 => gui::dc_bitmap(hdc),  // OBJ_PEN → bitmap (approx)
+        2 => gui::dc_brush(hdc),   // OBJ_BRUSH
+        6 => gui::dc_font(hdc),    // OBJ_FONT
+        7 => gui::dc_bitmap(hdc),  // OBJ_BITMAP
+        _ => 0,
+    }
+}
+
+pub extern "win64" fn get_object_type(obj: usize) -> u32 {
+    if let Some(info) = gui::object_info(obj) {
+        match info {
+            gui::GdiObjectInfo::Brush { .. } => 2,
+            gui::GdiObjectInfo::Pen { .. } => 1,
+            gui::GdiObjectInfo::Font { .. } => 6,
+            gui::GdiObjectInfo::Bitmap { .. } => 7,
+        }
+    } else {
+        0
+    }
+}
+
+pub extern "win64" fn get_stock_brush(index: i32) -> usize {
+    get_stock_object(index)
+}
+
+pub extern "win64" fn get_text_color(hdc: usize) -> u32 {
+    gui::dc_text_color(hdc)
+}
+
+pub extern "win64" fn get_bk_color(hdc: usize) -> u32 {
+    gui::dc_bk_color(hdc)
+}
+
+pub extern "win64" fn get_bk_mode(hdc: usize) -> i32 {
+    gui::dc_bk_mode(hdc) as i32
+}
+
+pub extern "win64" fn set_rop2(_hdc: usize, _mode: i32) -> i32 {
+    13 // R2_COPYPEN
+}
+
+pub extern "win64" fn get_rop2(_hdc: usize) -> i32 {
+    13
+}
+
+pub extern "win64" fn set_stretch_blt_mode(_hdc: usize, _mode: i32) -> i32 {
+    1 // ancien mode
+}
+
+pub extern "win64" fn get_stretch_blt_mode(_hdc: usize) -> i32 {
+    4 // HALFTONE
+}
+
+pub extern "win64" fn set_poly_fill_mode(_hdc: usize, _mode: i32) -> i32 {
+    1 // ancien mode
+}
+
+pub extern "win64" fn get_poly_fill_mode(_hdc: usize) -> i32 {
+    1 // ALTERNATE
+}
+
+pub extern "win64" fn set_text_align(_hdc: usize, _mode: u32) -> u32 {
+    0
+}
+
+pub extern "win64" fn get_text_align(_hdc: usize) -> u32 {
+    0 // TA_LEFT | TA_TOP
+}
+
+pub unsafe extern "win64" fn get_text_character_extra(_hdc: usize) -> i32 {
+    0
+}
+
+pub unsafe extern "win64" fn set_text_character_extra(_hdc: usize, _extra: i32) -> i32 {
+    0
+}
+
+pub extern "win64" fn create_compatible_dc_from(dc: usize) -> usize {
+    create_compatible_dc(dc)
+}
+
+pub extern "win64" fn create_dc_a(_driver: *const u8, _device: *const u8, _output: *const u8, _init: *const c_void) -> usize {
+    gui::create_dc(0) // DC sans fenêtre
+}
+
+pub extern "win64" fn create_dc_w(_driver: *const u16, _device: *const u16, _output: *const u16, _init: *const c_void) -> usize {
+    gui::create_dc(0)
+}
+
+pub extern "win64" fn create_ic_a(_driver: *const u8, _device: *const u8, _output: *const u8, _init: *const c_void) -> usize {
+    gui::create_dc(0)
+}
+
+pub extern "win64" fn create_ic_w(_driver: *const u16, _device: *const u16, _output: *const u16, _init: *const c_void) -> usize {
+    gui::create_dc(0)
+}
+
+pub unsafe extern "win64" fn get_current_position_ex(hdc: usize, pt: *mut gui::Point) -> i32 {
+    if pt.is_null() { return 0; }
+    let map = lock_pen();
+    let (x, y) = map.get(&hdc).copied().unwrap_or((0, 0));
+    (*pt).x = x;
+    (*pt).y = y;
+    1
+}
+
+pub extern "win64" fn set_brush_org_ex(_hdc: usize, _x: i32, _y: i32, _prev: *mut gui::Point) -> i32 {
+    1
+}
+
+pub extern "win64" fn get_nearest_color(_hdc: usize, color: u32) -> u32 {
+    color
+}
+
+pub extern "win64" fn realize_palette(_hdc: usize) -> u32 {
+    0
+}
+
+pub extern "win64" fn select_palette(_hdc: usize, _pal: usize, _force: i32) -> usize {
+    0
+}
+
+pub extern "win64" fn create_palette(_pal: *const c_void) -> usize {
+    0
+}
+
+pub unsafe extern "win64" fn get_char_width_32a(hdc: usize, first: u32, last: u32, widths: *mut i32) -> i32 {
+    if widths.is_null() || first > last { return 0; }
+    let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    let avg_w = if font.height > 0 { (font.height * 45) / 100 } else { 7 };
+    for i in 0..=(last - first) {
+        *widths.add(i as usize) = avg_w;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn get_char_width_32w(hdc: usize, first: u32, last: u32, widths: *mut i32) -> i32 {
+    get_char_width_32a(hdc, first, last, widths)
+}
+
+pub unsafe extern "win64" fn get_char_abc_widths_a(hdc: usize, first: u32, last: u32, abc: *mut c_void) -> i32 {
+    let _ = (hdc, first, last, abc);
+    0
+}
+
+pub unsafe extern "win64" fn get_char_abc_widths_w(hdc: usize, first: u32, last: u32, abc: *mut c_void) -> i32 {
+    let _ = (hdc, first, last, abc);
+    0
+}
+
+pub extern "win64" fn gdi_flush() -> i32 {
+    1
+}
+
+pub extern "win64" fn gdi_set_batch_limit(_limit: u32) -> u32 {
+    1
+}
+
+pub extern "win64" fn gdi_get_batch_limit() -> u32 {
+    1
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        // --- Objects ---
         "GetStockObject"=>fn get_stock_object,
         "CreateSolidBrush"=>fn create_solid_brush,
         "CreatePen"=>fn create_pen,
         "CreateFontA"=>fn create_font_a, "CreateFontW"=>fn create_font_w,
+        "CreateFontIndirectA"=>fn create_font_indirect_a,
+        "CreateFontIndirectW"=>fn create_font_indirect_w,
         "GetObjectA"=>fn get_object_a, "GetObjectW"=>fn get_object_w,
+        "GetObjectType"=>fn get_object_type,
+        "GetCurrentObject"=>fn get_current_object,
         "SelectObject"=>fn select_object,
         "DeleteObject"=>fn delete_object,
-        "SetTextColor"=>fn set_text_color,
-        "SetBkColor"=>fn set_bk_color,
-        "SetBkMode"=>fn set_bk_mode,
-        "PatBlt"=>fn pat_blt,
-        "BitBlt"=>fn bit_blt, "StretchBlt"=>fn stretch_blt,
-        "CreateCompatibleDC"=>fn create_compatible_dc,
-        "CreateCompatibleBitmap"=>fn create_compatible_bitmap,
-        "CreateDIBSection"=>fn create_dib_section,
-        "DeleteDC"=>fn delete_dc,
-        "GetDeviceCaps"=>fn get_device_caps,
-        "TextOutA"=>fn text_out_a,
-        "WinluxDrawIconA"=>fn winlux_draw_icon_a,
+        // --- DC colors ---
+        "SetTextColor"=>fn set_text_color, "GetTextColor"=>fn get_text_color,
+        "SetBkColor"=>fn set_bk_color, "GetBkColor"=>fn get_bk_color,
+        "SetBkMode"=>fn set_bk_mode, "GetBkMode"=>fn get_bk_mode,
+        // --- Text output ---
+        "TextOutA"=>fn text_out_a, "TextOutW"=>fn text_out_w,
+        "ExtTextOutA"=>fn ext_text_out_a, "ExtTextOutW"=>fn ext_text_out_w,
+        "DrawTextA"=>fn draw_text_a, "DrawTextW"=>fn draw_text_w,
         "GetTextExtentPoint32A"=>fn get_text_extent_point32_a,
         "GetTextExtentPoint32W"=>fn get_text_extent_point32_w,
         "GetTextExtentPointA"=>fn get_text_extent_point32_a,
         "GetTextExtentPointW"=>fn get_text_extent_point32_w,
-        "Rectangle"=>fn rectangle,
-        "Ellipse"=>fn ellipse,
+        "SetTextAlign"=>fn set_text_align, "GetTextAlign"=>fn get_text_align,
+        "SetTextCharacterExtra"=>fn set_text_character_extra,
+        "GetTextCharacterExtra"=>fn get_text_character_extra,
+        // --- Text metrics ---
+        "GetTextMetricsA"=>fn get_text_metrics_a, "GetTextMetricsW"=>fn get_text_metrics_w,
+        "GetTextFaceA"=>fn get_text_face_a, "GetTextFaceW"=>fn get_text_face_w,
+        "GetCharWidth32A"=>fn get_char_width_32a, "GetCharWidth32W"=>fn get_char_width_32w,
+        "GetCharABCWidthsA"=>fn get_char_abc_widths_a, "GetCharABCWidthsW"=>fn get_char_abc_widths_w,
+        // --- Font enum ---
+        "EnumFontFamiliesExA"=>fn enum_font_families_ex_a,
+        "EnumFontFamiliesExW"=>fn enum_font_families_ex_w,
+        "EnumFontsA"=>fn enum_fonts_a, "EnumFontsW"=>fn enum_fonts_w,
+        // --- Raster ops ---
+        "PatBlt"=>fn pat_blt,
+        "BitBlt"=>fn bit_blt, "StretchBlt"=>fn stretch_blt,
+        "SetROP2"=>fn set_rop2, "GetROP2"=>fn get_rop2,
+        "SetStretchBltMode"=>fn set_stretch_blt_mode, "GetStretchBltMode"=>fn get_stretch_blt_mode,
+        // --- Drawing primitives ---
+        "Rectangle"=>fn rectangle, "Ellipse"=>fn ellipse, "RoundRect"=>fn round_rect,
+        "MoveToEx"=>fn move_to_ex, "LineTo"=>fn line_to,
+        "Polyline"=>fn polyline, "Polygon"=>fn polygon,
+        "PolylineTo"=>fn polyline_to,
+        "PolyBezier"=>fn poly_bezier, "PolyBezierTo"=>fn poly_bezier_to,
+        "SetPixel"=>fn set_pixel, "GetPixel"=>fn get_pixel, "SetPixelV"=>fn set_pixel_v,
+        "GetCurrentPositionEx"=>fn get_current_position_ex,
+        "SetPolyFillMode"=>fn set_poly_fill_mode, "GetPolyFillMode"=>fn get_poly_fill_mode,
+        // --- DC management ---
+        "CreateCompatibleDC"=>fn create_compatible_dc,
+        "CreateCompatibleBitmap"=>fn create_compatible_bitmap,
+        "CreateDIBSection"=>fn create_dib_section,
+        "CreateDCA"=>fn create_dc_a, "CreateDCW"=>fn create_dc_w,
+        "CreateICA"=>fn create_ic_a, "CreateICW"=>fn create_ic_w,
+        "DeleteDC"=>fn delete_dc,
+        "GetDeviceCaps"=>fn get_device_caps,
+        "SaveDC"=>fn save_dc, "RestoreDC"=>fn restore_dc,
+        // --- Map mode ---
+        "GetMapMode"=>fn get_map_mode, "SetMapMode"=>fn set_map_mode,
+        "SetViewportOrgEx"=>fn set_viewport_org_ex, "GetViewportOrgEx"=>fn get_viewport_org_ex,
+        "SetWindowOrgEx"=>fn set_window_org_ex, "GetWindowOrgEx"=>fn get_window_org_ex,
+        "SetViewportExtEx"=>fn set_viewport_ext_ex, "GetViewportExtEx"=>fn get_viewport_ext_ex,
+        "SetWindowExtEx"=>fn set_window_ext_ex, "GetWindowExtEx"=>fn get_window_ext_ex,
+        "DPtoLP"=>fn dp_to_lp, "LPtoDP"=>fn lp_to_dp,
+        // --- Clipping ---
+        "SelectClipRgn"=>fn select_clip_rgn, "ExtSelectClipRgn"=>fn ext_select_clip_rgn,
+        "IntersectClipRect"=>fn intersect_clip_rect, "ExcludeClipRect"=>fn exclude_clip_rect,
+        "GetClipBox"=>fn get_clip_box, "GetClipRgn"=>fn get_clip_rgn,
+        // --- Regions ---
+        "CreateRectRgn"=>fn create_rect_rgn, "CreateRectRgnIndirect"=>fn create_rect_rgn_indirect,
+        "CreateEllipticRgn"=>fn create_elliptic_rgn,
+        "CombineRgn"=>fn combine_rgn, "SetRectRgn"=>fn set_rect_rgn,
+        "OffsetRgn"=>fn offset_rgn, "GetRgnBox"=>fn get_rgn_box,
+        "PtInRegion"=>fn pt_in_region, "RectInRegion"=>fn rect_in_region,
+        "EqualRgn"=>fn equal_rgn,
+        // --- Bitmap ---
+        "GetDIBits"=>fn get_dib_its, "SetDIBitsToDevice"=>fn set_dib_its_to_device,
+        "StretchDIBits"=>fn stretch_dib_its,
+        "GetBitmapBits"=>fn get_bitmap_bits, "SetBitmapBits"=>fn set_bitmap_bits,
+        // --- Misc ---
+        "SetBrushOrgEx"=>fn set_brush_org_ex,
+        "GetNearestColor"=>fn get_nearest_color,
+        "RealizePalette"=>fn realize_palette,
+        "SelectPalette"=>fn select_palette,
+        "CreatePalette"=>fn create_palette,
+        "GdiFlush"=>fn gdi_flush,
+        "GdiSetBatchLimit"=>fn gdi_set_batch_limit, "GdiGetBatchLimit"=>fn gdi_get_batch_limit,
+        // --- Custom ---
+        "WinluxDrawIconA"=>fn winlux_draw_icon_a,
     }
 }

@@ -837,7 +837,6 @@ pub fn dc_brush(hdc: usize) -> usize {
     with_dc(hdc, |d| d.brush, 0)
 }
 
-/// Handle de la plume sélectionnée dans un DC.
 pub fn dc_pen(hdc: usize) -> usize {
     with_dc(hdc, |d| d.pen, 0)
 }
@@ -1627,11 +1626,7 @@ pub fn get_window_style(hwnd: usize) -> u32 {
     lock(windows()).get(&hwnd).map(|w| w.style).unwrap_or(0)
 }
 
-pub fn set_window_style(hwnd: usize, style: u32) {
-    if let Some(w) = lock(windows()).get_mut(&hwnd) {
-        w.style = style;
-    }
-}
+// set_window_style est défini plus bas avec return de l'ancien style
 
 /// Renvoie l'origine (left, top) de la fenêtre en coordonnées écran.
 pub fn window_origin(hwnd: usize) -> (i32, i32) {
@@ -1786,6 +1781,271 @@ pub fn def_window_proc(hwnd: usize, message: u32, _wparam: usize, _lparam: isize
         WM_ERASEBKGND => 1, // on « efface » en peignant nous-mêmes
         _ => 0,
     }
+}
+
+// ---------- Accesseurs étendus pour les couches user32/gdi32 ----------
+
+/// Renvoie le style WS_* de la fenêtre.
+pub fn window_style(hwnd: usize) -> Option<u32> {
+    lock(windows()).get(&hwnd).map(|w| w.style)
+}
+
+/// Renvoie le style étendu WS_EX_* de la fenêtre.
+pub fn window_ex_style(hwnd: usize) -> Option<u32> {
+    lock(windows()).get(&hwnd).map(|w| w.ex_style)
+}
+
+/// Met à jour le style WS_* et renvoie l'ancien.
+pub fn set_window_style(hwnd: usize, style: u32) -> Option<u32> {
+    let mut map = lock(windows());
+    let w = map.get_mut(&hwnd)?;
+    Some(std::mem::replace(&mut w.style, style))
+}
+
+/// Met à jour le style étendu et renvoie l'ancien.
+pub fn set_window_ex_style(hwnd: usize, ex_style: u32) -> Option<u32> {
+    let mut map = lock(windows());
+    let w = map.get_mut(&hwnd)?;
+    Some(std::mem::replace(&mut w.ex_style, ex_style))
+}
+
+/// Nom de classe d'une fenêtre.
+pub fn window_class(hwnd: usize) -> Option<String> {
+    lock(windows()).get(&hwnd).map(|w| w.class.clone())
+}
+
+/// Le hwnd parent d'une fenêtre.
+pub fn window_parent(hwnd: usize) -> Option<usize> {
+    lock(windows()).get(&hwnd).map(|w| w.parent)
+}
+
+/// Modifie le parent d'une fenêtre ; renvoie l'ancien.
+pub fn set_window_parent(hwnd: usize, new_parent: usize) -> Option<usize> {
+    let mut map = lock(windows());
+    let w = map.get_mut(&hwnd)?;
+    Some(std::mem::replace(&mut w.parent, new_parent))
+}
+
+/// La fenêtre est-elle visible ?
+pub fn is_window_visible(hwnd: usize) -> bool {
+    lock(windows()).get(&hwnd).map_or(false, |w| w.visible)
+}
+
+/// La fenêtre existe-t-elle ?
+pub fn is_window(hwnd: usize) -> bool {
+    lock(windows()).contains_key(&hwnd)
+}
+
+/// Modifie le wndproc ; renvoie l'ancien.
+pub fn set_wnd_proc(hwnd: usize, new_proc: usize) -> Option<usize> {
+    let mut map = lock(windows());
+    let w = map.get_mut(&hwnd)?;
+    Some(std::mem::replace(&mut w.wnd_proc, new_proc))
+}
+
+/// Énumère les HWNDs de toutes les fenêtres de premier niveau.
+pub fn enum_top_level_windows() -> Vec<usize> {
+    lock(windows())
+        .iter()
+        .filter(|(_, w)| w.parent == 0)
+        .map(|(h, _)| *h)
+        .collect()
+}
+
+/// Cherche une fenêtre par nom de classe et/ou titre.
+pub fn find_window(class: Option<&str>, title: Option<&str>) -> Option<usize> {
+    lock(windows())
+        .iter()
+        .find(|(_, w)| {
+            if let Some(c) = class {
+                if !c.eq_ignore_ascii_case(&w.class) {
+                    return false;
+                }
+            }
+            if let Some(t) = title {
+                if w.title != t {
+                    return false;
+                }
+            }
+            true
+        })
+        .map(|(h, _)| *h)
+}
+
+/// Renvoie un « voisin » de la fenêtre (GetWindow / GW_*).
+pub fn get_window_relative(hwnd: usize, cmd: u32) -> Option<usize> {
+    let map = lock(windows());
+    if !map.contains_key(&hwnd) {
+        return None;
+    }
+    // GW_HWNDFIRST=0 GW_HWNDLAST=1 GW_HWNDNEXT=2 GW_HWNDPREV=3
+    // GW_OWNER=4 GW_CHILD=5
+    match cmd {
+        4 => {
+            // GW_OWNER : même chose que parent ici
+            map.get(&hwnd).and_then(|w| if w.parent != 0 { Some(w.parent) } else { None })
+        }
+        5 => {
+            // GW_CHILD : premier enfant
+            let parent = hwnd;
+            map.iter()
+                .find(|(_, w)| w.parent == parent)
+                .map(|(h, _)| *h)
+        }
+        _ => None,
+    }
+}
+
+/// Sauvegarde DC : empile l'état courant, renvoie l'identifiant de pile.
+pub fn save_dc(hdc: usize) -> i32 {
+    let dcs_lock = lock(dcs());
+    if let Some(dc) = dcs_lock.get(&hdc) {
+        let state = *dc;
+        drop(dcs_lock);
+        let stack = dc_save_stack();
+        let mut stk = lock(stack);
+        let entry = stk.entry(hdc).or_insert_with(Vec::new);
+        entry.push(state);
+        entry.len() as i32
+    } else {
+        0
+    }
+}
+
+/// Restaure DC depuis la pile.
+pub fn restore_dc(hdc: usize, saved_dc: i32) -> bool {
+    let stack = dc_save_stack();
+    let mut stk = lock(stack);
+    let entry = match stk.get_mut(&hdc) {
+        Some(e) if !e.is_empty() => e,
+        _ => return false,
+    };
+    if saved_dc == -1 {
+        if let Some(state) = entry.pop() {
+            let mut dcs_lock = lock(dcs());
+            if let Some(dc) = dcs_lock.get_mut(&hdc) {
+                *dc = state;
+            }
+            return true;
+        }
+        false
+    } else if saved_dc > 0 && (saved_dc as usize) <= entry.len() {
+        let idx = (saved_dc as usize) - 1;
+        let state = entry[idx];
+        entry.truncate(idx);
+        let mut dcs_lock = lock(dcs());
+        if let Some(dc) = dcs_lock.get_mut(&hdc) {
+            *dc = state;
+        }
+        true
+    } else {
+        false
+    }
+}
+
+fn dc_save_stack() -> &'static Mutex<HashMap<usize, Vec<DcState>>> {
+    static S: OnceLock<Mutex<HashMap<usize, Vec<DcState>>>> = OnceLock::new();
+    S.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+// ---------- Capture souris ----------
+
+static CAPTURE_HWND: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+pub fn set_capture(hwnd: usize) -> usize {
+    CAPTURE_HWND.swap(hwnd, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn release_capture() -> bool {
+    CAPTURE_HWND.swap(0, std::sync::atomic::Ordering::Relaxed) != 0
+}
+
+pub fn get_capture() -> usize {
+    CAPTURE_HWND.load(std::sync::atomic::Ordering::Relaxed)
+}
+
+// ---------- Timers ----------
+
+use std::sync::atomic::AtomicUsize;
+
+static NEXT_TIMER_ID: AtomicUsize = AtomicUsize::new(1);
+
+struct TimerEntry {
+    hwnd: usize,
+    id: usize,
+    interval_ms: u32,
+    callback: usize,
+    #[allow(dead_code)]
+    next_fire: u64,
+}
+
+fn timers() -> &'static Mutex<Vec<TimerEntry>> {
+    static T: OnceLock<Mutex<Vec<TimerEntry>>> = OnceLock::new();
+    T.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+pub fn set_timer(hwnd: usize, id: usize, interval: u32, callback: usize) -> usize {
+    let mut t = lock(timers());
+    // Remplacer un timer existant avec le même (hwnd, id)
+    t.retain(|e| !(e.hwnd == hwnd && e.id == id));
+    let real_id = if id == 0 {
+        NEXT_TIMER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+    } else {
+        id
+    };
+    t.push(TimerEntry {
+        hwnd,
+        id: real_id,
+        interval_ms: interval,
+        callback,
+        next_fire: 0,
+    });
+    real_id
+}
+
+pub fn kill_timer(hwnd: usize, id: usize) -> bool {
+    let mut t = lock(timers());
+    let before = t.len();
+    t.retain(|e| !(e.hwnd == hwnd && e.id == id));
+    t.len() < before
+}
+
+// ---------- Curseur ----------
+
+static CURSOR_HANDLE: AtomicUsize = AtomicUsize::new(0x0001_0000);
+static SHOW_CURSOR_COUNT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+
+pub fn load_cursor(_instance: usize, _name: usize) -> usize {
+    // Renvoie un handle de curseur factice
+    0x0001_0000
+}
+
+pub fn set_cursor(cursor: usize) -> usize {
+    CURSOR_HANDLE.swap(cursor, std::sync::atomic::Ordering::Relaxed)
+}
+
+pub fn show_cursor(show: bool) -> i32 {
+    if show {
+        SHOW_CURSOR_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1
+    } else {
+        SHOW_CURSOR_COUNT.fetch_sub(1, std::sync::atomic::Ordering::Relaxed) - 1
+    }
+}
+
+// ---------- DC map mode / viewport ----------
+
+/// Renvoie le map mode du DC (par défaut MM_TEXT = 1).
+pub fn dc_map_mode(hdc: usize) -> i32 {
+    // Pas stocké dans DcState pour l'instant, toujours MM_TEXT.
+    let _ = hdc;
+    1
+}
+
+/// Définit le map mode ; renvoie l'ancien.
+pub fn set_dc_map_mode(hdc: usize, _mode: i32) -> i32 {
+    // stub : on retourne toujours MM_TEXT
+    let _ = hdc;
+    1
 }
 
 #[cfg(test)]
