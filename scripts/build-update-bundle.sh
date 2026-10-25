@@ -4,7 +4,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 scope=system
 case "${1:-}" in --system) shift ;; --runtime) scope=runtime; shift ;; esac
-version=${1:-$(git -C "$root" describe --tags --always)}
+version=${1:-$(cat "$root/VERSION")}
 case "$version" in *[!A-Za-z0-9._+-]*|'') echo "version invalide : $version" >&2; exit 1 ;; esac
 test "$#" -le 1 || { echo 'usage: build-update-bundle.sh [--system|--runtime] [version]' >&2; exit 2; }
 for tool in tar sha256sum find sort readlink; do command -v "$tool" >/dev/null 2>&1 || { echo "$tool est requis" >&2; exit 1; }; done
@@ -19,6 +19,7 @@ if test "$scope" = system; then
     stage=${WINLUX_UPDATE_STAGE:-"$root/build/winlux-live-test/initramfs-root"}
     boot=${WINLUX_UPDATE_BOOT:-"$root/build/winlux-live-test/iso-root/boot"}
     for required in init usr/bin/winlux opt/winlux/tests/gui_demo.exe; do test -f "$stage/$required" || { echo "stage système incomplet : $required ; reconstruisez l'ISO" >&2; exit 1; }; done
+    test "$(cat "$stage/usr/share/winlux/version")" = "$version" || { echo 'version du stage différente du paquet demandé ; reconstruisez l’ISO avec cette version' >&2; exit 1; }
     test -d "$stage/lib/modules" || { echo 'modules noyau absents du stage' >&2; exit 1; }
     # Shared libraries are replaced by a complete OS update; the installer must
     # retain a utility binary that does not depend on those live libraries.

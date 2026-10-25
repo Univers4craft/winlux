@@ -17,7 +17,7 @@
 - [ ] Exécuter le bureau en utilisateur non privilégié avec autorisation ciblée des actions système.
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation.
 
-- Dernière validation locale : `cargo test -p winlux` (81 tests), compilation release et les neuf exécutables PE en séquentiel et en parallèle réussissent. La dernière validation ISO sous QEMU BIOS et UEFI réussit également; relancer les scripts après chaque changement.
+- Validation de `v0.2.0-preview.2` : `cargo test -p winlux` (84 réussis, 1 test XKB ignoré sans serveur X), dix exécutables PE en séquentiel et en parallèle, tests réseau/paramètres/mise à jour-restauration, et ISO sous QEMU BIOS et UEFI réussis.
 - [x] Charger un exécutable PE32+ x86-64.
 - [x] Appliquer les relocations et résoudre les imports de base.
 - [x] Initialiser un PEB/TEB minimal via `GS`.
@@ -153,8 +153,12 @@
 - [x] Tester le rendu en 1920×1080 (150 %), 2560×1440 (200 %) et 3840×2160 (300 %).
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
   des indicateurs réseau, volume et batterie sans libellés dans la zone système.
-- [x] Permettre le déplacement des raccourcis du bureau en mode grille ou libre,
-  avec le choix exposé dans les paramètres.
+- [x] Permettre le déplacement des icônes du prototype de bureau (placement
+  recalé sur une grille, positions temporaires).
+- [ ] Démarrer avec un bureau vide ; rendre les icônes système facultatives et
+  désactivées par défaut dans Paramètres.
+- [ ] Ajouter la création explicite de raccourcis d'applications, leur
+  persistance et le choix entre placement sur grille ou libre.
 
 ## Priorité 6 — Qualité et livraison
 

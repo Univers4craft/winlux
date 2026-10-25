@@ -73,6 +73,7 @@ multiplateformes ; il ne rend pas encore WPF ou WinForms compatibles.
 - `theme/` : palette CSS expérimentale, non raccordée à un shell graphique.
 - `TODO.md` : feuille de route maintenue.
 - `COMPATIBILITY.md` : état détaillé de compatibilité et limites connues.
+- `INTERFACE.md` : état du prototype graphique et exigences de l'interface cible.
 
 ## Intégration Linux et ISO
 
@@ -121,7 +122,7 @@ Paramètres propose les pages Linux, compatibilité Windows, réseau, audio/batt
 
 ## Mises à jour GitHub
 
-Chaque tag `v*` déclenche le workflow de release, qui reteste Winlux puis publie un paquet du runtime et un manifeste SHA-256. Sur une installation Winlux :
+Le système ne se met pas à jour depuis les commits : il lit le manifeste de la dernière **release publiée**. Les tags stables `v*` déclenchent le workflow runtime. Les tags `v*-preview.*` sont exclus de ce workflow pour ne pas écraser une release système complète avec un paquet réduit. La version système de référence se trouve dans `VERSION`. Sur une installation Winlux :
 
 ```sh
 winlux-update --check
@@ -135,6 +136,8 @@ Pour un dépôt GitHub privé, fournissez un jeton en lecture dans `WINLUX_UPDAT
 
 Le paquet `scripts/build-update-bundle.sh --system VERSION` comprend le bureau, le runtime, l'outil de mise à jour, les applications embarquées, les scripts, le noyau, les pilotes, les bibliothèques et le démarrage. Il exige un stage ISO correspondant exactement aux sources. `--runtime` produit un paquet réduit, utilisé par la CI lorsqu'aucune image système n'a été construite. Le manifeste affiche clairement cette portée dans l'interface.
 
+Pour publier une préversion système : construire l'ISO avec `scripts/build-live-iso.sh`, exécuter les tests QEMU, puis `scripts/build-update-bundle.sh --system` (même `VERSION`). Publier sur le tag correspondant l'ISO, sa somme SHA-256, `winlux-update-VERSION.tar.gz` et `winlux-update-manifest.txt`. La release doit être désignée comme dernière release (`--latest`), non brouillon et non marquée « prerelease », car l'API `/releases/latest` exclut les prereleases ; son titre et ses notes doivent préciser qu'il s'agit d'une préversion expérimentale. Ne jamais inclure de jeton dans ces fichiers.
+
 L’outil valide les manifestes, SHA-256, inventaires et liens, verrouille les opérations concurrentes, conserve les fichiers précédents et restaure une installation interrompue. Les données personnelles et `/etc` sont préservés ; les nouveaux réglages par défaut sont consultables dans `/usr/share/winlux/defaults/etc`. Un changement du bureau seul relance la session ; un changement du noyau ou des composants système demande un redémarrage explicite. L'automatique vérifie toutes les trente minutes sans redémarrer la machine sans action de l'utilisateur. Cette mise à jour transactionnelle n'est pas encore un schéma A/B résistant à toute coupure d'alimentation.
 
 ## Limites importantes
@@ -147,7 +150,11 @@ L’outil valide les manifestes, SHA-256, inventaires et liens, verrouille les o
 - `FreeLibrary` ne démonte pas encore une DLL chargée.
 - Le pont audio WAV/ALSA dépend de l’environnement Linux et n’a pas été validé sur plusieurs périphériques.
 
-Voir [COMPATIBILITY.md](COMPATIBILITY.md) pour les détails et [TODO.md](TODO.md) pour les travaux restants.
+Voir [COMPATIBILITY.md](COMPATIBILITY.md) pour les détails de compatibilité,
+[INTERFACE.md](INTERFACE.md) pour les exigences du bureau et
+[TODO.md](TODO.md) pour la feuille de route générale. La compatibilité .NET
+Windows, notamment WinForms et WPF, reste un objectif à construire par étapes ;
+le pont Linux actuel ne la fournit pas.
 
 ## Licence
 

@@ -131,17 +131,19 @@ Unicode (`Set/GetWindowTextW`) partagent le même noyau et sont testés par un P
 Le z-order et les notifications
 `WINDOWPOS` avancées ne sont pas encore gérés.
 
-Le prototype de shell utilise ce backend pour rendre un bureau HiDPI complet :
-papier peint vectoriel animé avec accent violet, raccourcis déplaçables avec
-mode grille ou placement libre, barre des tâches compacte pleine largeur,
-bouton Démarrer réduit à son icône, état réseau/audio/batterie dynamique placé à
-droite et menu Démarrer compact inspiré de Cinnamon avec des angles sobres. Les icônes
-d’applications proviennent réellement des fichiers `.desktop` et thèmes XDG :
-leurs PNG sont décodés avec alpha, mis en cache et filtrés lors des changements
-d’échelle, tandis que la typographie Xft reste vectorielle. Les couleurs X11
-allouées sont également mises en cache afin que les animations longues ne
-saturent pas la palette du serveur. Il s’agit encore
-d’un prototype dans `gui_demo.exe`, pas d’un gestionnaire de bureau autonome.
+Le prototype de shell utilise ce backend pour rendre un bureau HiDPI avec
+papier peint vectoriel animé, barre des tâches, menu Démarrer et zone système
+réseau/audio/batterie. Le code affiche actuellement trois icônes système
+prédéfinies (« Ce PC », « Documents », « Corbeille »), les déplace en mémoire
+et les recale sur une grille ; leur visibilité et leur position ne sont pas
+encore des préférences persistantes. Ce comportement devra évoluer vers un
+bureau vide par défaut, avec raccourcis créés volontairement et icônes système
+activables dans Paramètres. Les icônes PNG des applications Linux peuvent être
+lues depuis les fichiers `.desktop` et thèmes XDG ; elles sont décodées avec
+alpha, mises en cache et filtrées lors des changements d’échelle. Les couleurs
+X11 allouées sont également mises en cache afin que les animations longues ne
+saturent pas la palette du serveur. Il s’agit encore d’un prototype dans
+`gui_demo.exe`, pas d’un gestionnaire de bureau autonome.
 
 Le mécanisme `winlux-update` récupère le manifeste de la dernière release
 GitHub, avec jeton de lecture configuré dans Paramètres pour un dépôt privé.
@@ -178,14 +180,55 @@ L’association `.desktop` et binfmt est préparée, mais n’a pas été
 installée ni validée sur une session de bureau réelle. Le script ISO produit
 maintenant le staging Linux bootable utilisé par les tests et la VM persistante.
 
-## Cas .NET et paint.net
+## Objectif de compatibilité .NET Windows
 
-Winlux peut maintenant reconnaître un assembly CLR PE32/PE32+ et un apphost
-.NET moderne. Les applications console, services et outils managés réellement
-multiplateformes peuvent être confiés au runtime Linux `dotnet` ou à Mono.
-WPF et WinForms restent toutefois des technologies Windows : `paint.net`
-nécessite encore un CLR Windows compatible et une pile GUI beaucoup plus large.
-Le module `mscoree` conserve un diagnostic sûr quand aucun pont ne s'applique.
+La compatibilité des applications Windows .NET est un objectif du projet, et
+pas seulement une limite à documenter. La cible à terme comprend les
+applications .NET Framework et .NET modernes qui dépendent d'API Windows, ainsi
+que les interfaces WinForms et WPF. Le pont Linux actuel ne remplit pas cet
+objectif à lui seul :
+
+- Winlux détecte les assemblies CLR PE32/PE32+ et les apphosts .NET modernes.
+- Les programmes managés réellement multiplateformes peuvent être relayés vers
+  `dotnet` Linux ou Mono lorsqu'un runtime compatible est installé.
+- Ce relais n'exécute pas un CLR Windows et ne fournit pas les API Win32, les
+  composants natifs ou les dépendances Windows attendues par une application
+  .NET de bureau.
+- WinForms et WPF nécessitent leurs propres couches de compatibilité graphique
+  et système. Un assembly qui démarre sous `dotnet` Linux n'est donc pas une
+  preuve de compatibilité WinForms/WPF.
+
+Le travail est à mener par étapes et à valider avec des applications de
+référence :
+
+1. Définir les versions de .NET, les architectures et les applications de
+   bureau prioritaires ; détecter les dépendances manquantes avant le lancement
+   et produire des diagnostics exploitables.
+2. Construire une voie d'exécution fiable pour les assemblies et apphosts
+   Windows, avec résolution des runtimes et dépendances, comportement de
+   lancement cohérent, codes de sortie et journalisation. Le relais vers le
+   runtime Linux reste un chemin distinct pour les applications réellement
+   multiplateformes.
+3. Étendre les API système, le chargement des DLL natives, COM/OLE, la CRT et
+   les API graphiques requises par les applications choisies ; ne pas traiter
+   une simple résolution d'import comme une implémentation fonctionnelle.
+4. Ajouter WinForms par incréments, en couvrant le cycle de vie des fenêtres,
+   les contrôles, les événements, le dessin, le texte, le DPI et les dialogues
+   employés par les applications de référence.
+5. Étudier puis construire les composants requis par WPF : runtime managé,
+   liaison de données et ressources, rendu texte, composition et primitives
+   graphiques. WPF constitue une étape distincte et plus vaste que le seul
+   lancement d'un assembly CLR.
+6. Maintenir des tests d'intégration reproductibles par version et application,
+   et publier pour chacune les fonctions validées, les régressions et les
+   limites connues. `paint.net` peut servir de cible de référence, sans être
+   considéré comme compatible avant que ses scénarios réels passent ces tests.
+
+La stratégie d'implémentation du CLR et des couches de bureau reste à choisir
+sur la base des applications prioritaires et de prototypes mesurables. Le
+module `mscoree` conserve un diagnostic explicite lorsqu'aucun chemin
+d'exécution pris en charge ne s'applique ; il ne doit pas masquer une
+incompatibilité par un succès artificiel.
 
 ## Politique anti-crash
 

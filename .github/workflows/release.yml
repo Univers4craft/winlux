@@ -2,7 +2,10 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    # System previews are built and tested with a full ISO locally, then
+    # uploaded with their system manifest. Never overwrite them with a
+    # runtime-only package from this workflow.
+    tags: ['v*', '!v*-preview.*']
 
 permissions:
   contents: write

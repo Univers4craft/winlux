@@ -558,7 +558,8 @@ pub fn exports() -> crate::dlls::Exports {
         "SelectClipRgn" => fn select_clip_rgn,
         "IntersectClipRect" => fn intersect_clip_rect,
         "ExcludeClipRect" => fn exclude_clip_rect,
-        "DeleteObject" => fn delete_rgn,
+        // DeleteObject reste fourni par gdi32 : le stub de région ne doit
+        // pas accepter les objets système ni empêcher la libération réelle.
         "CombineRgn" => fn combine_rgn,
         "SetRectRgn" => fn set_rect_rgn,
         "GetPixel" => fn get_pixel,

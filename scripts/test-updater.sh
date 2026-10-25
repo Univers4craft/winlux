@@ -202,6 +202,7 @@ printf 'library-new\n' >"$stage/lib64/winlux.so"
 printf 'new default\n' >"$stage/etc/winlux/settings.conf"
 printf 'kernel-new\n' >"$boot/vmlinuz"
 printf 'initramfs-new\n' >"$boot/winlux-initramfs.cpio.gz"
+printf 'updater-system\n' >"$stage/usr/share/winlux/version"
 if test -f "$root/scripts/source-fingerprint.sh"; then sh "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"; fi
 WINLUX_UPDATE_STAGE="$stage" WINLUX_UPDATE_BOOT="$boot" "$root/scripts/build-update-bundle.sh" --system updater-system >/dev/null
 cp "$root/build/winlux-update-updater-system.tar.gz" "$assets/"
@@ -230,6 +231,7 @@ test "$(update --auto status)" = disabled
 # session; a changed kernel requires a reboot. Directory links remain links.
 printf 'desktop-newer\n' >"$stage/opt/winlux/tests/gui_demo.exe"
 ln -s /usr/share/winlux "$stage/usr/share/directory-link"
+printf 'updater-desktop\n' >"$stage/usr/share/winlux/version"
 if test -f "$root/scripts/source-fingerprint.sh"; then sh "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"; fi
 WINLUX_UPDATE_STAGE="$stage" WINLUX_UPDATE_BOOT="$boot" "$root/scripts/build-update-bundle.sh" --system updater-desktop >/dev/null
 cp "$root/build/winlux-update-updater-desktop.tar.gz" "$assets/"
@@ -241,6 +243,7 @@ test -L "$fixture/usr/share/directory-link"
 # Replacing an existing directory link must replace the link itself, never move
 # a temporary file into its (absolute, and on this test host external) target.
 printf 'desktop-newest\n' >"$stage/opt/winlux/tests/gui_demo.exe"
+printf 'updater-desktop-2\n' >"$stage/usr/share/winlux/version"
 if test -f "$root/scripts/source-fingerprint.sh"; then sh "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"; fi
 WINLUX_UPDATE_STAGE="$stage" WINLUX_UPDATE_BOOT="$boot" "$root/scripts/build-update-bundle.sh" --system updater-desktop-2 >/dev/null
 cp "$root/build/winlux-update-updater-desktop-2.tar.gz" "$assets/"
