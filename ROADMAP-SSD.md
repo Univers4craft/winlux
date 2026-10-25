@@ -186,6 +186,43 @@ Les premiers réglages d'écran et les cartes de paramètres ont été ajoutés 
 - [ ] Validation du stockage, réseau, audio, affichage et périphériques du portable.
 - [ ] Sauvegarde externe vérifiée avant toute installation sur le disque principal.
 
+## 11. Fluidité des fenêtres — priorité ergonomique
+
+Diagnostiquer et mesurer avant de choisir les optimisations. Les pistes
+ci-dessous ne constituent pas encore une cause confirmée des ralentissements.
+Prioriser le déplacement et le redimensionnement avant les animations décoratives.
+
+- [ ] Mesurer le temps de rendu, la latence des entrées et les saccades pendant
+  le déplacement et le redimensionnement des fenêtres.
+- [ ] Regrouper les événements de mouvement de souris pour utiliser la position
+  la plus récente sans accumuler de retard ni perdre les clics.
+- [ ] Éviter de redessiner tout le bureau à chaque mouvement ; limiter le travail
+  aux zones réellement modifiées lorsque le backend le permet.
+- [ ] Mettre en cache le contenu des fenêtres et ne recalculer que ce qui change.
+- [ ] Séparer le déplacement d'une fenêtre du rendu de son contenu : déplacer
+  sa surface plutôt que reconstruire chaque élément.
+- [ ] Éviter les lectures de fichiers et commandes système dans le chemin de dessin.
+- [ ] Viser une cadence régulière adaptée à l'écran, avec limitation du travail
+  inutile lorsque l'interface est immobile.
+- [ ] Tester déplacement et redimensionnement en 1080p, 1440p et 4K.
+- [ ] Comparer les mesures avant/après sur la même configuration et vérifier
+  l'absence de scintillement, de traces de fenêtres et de régressions d'entrée.
+
+## 12. Compléments pour l'usage quotidien
+
+Ces points précisent ou complètent les rubriques précédentes.
+
+- [ ] Gestionnaire des tâches permettant de voir et arrêter une application bloquée.
+- [ ] Sauvegarde automatique des documents compatibles et récupération après plantage.
+- [ ] Recherche globale dans les applications, fichiers et paramètres.
+- [ ] Montage et éjection des clés USB avec notifications et gestion des erreurs.
+- [ ] Détection du manque d'espace disque, notamment avant une installation
+  ou une mise à jour, avec indication de l'espace requis.
+- [ ] Raccourcis cohérents : Alt+Tab, Alt+F4, capture d'écran et verrouillage.
+- [ ] Accessibilité : navigation clavier, taille du pointeur et contraste.
+- [ ] Diagnostic intégré exportable, avec suppression des tokens, mots de
+  passe et autres informations sensibles des rapports.
+
 ## Suivi
 
 Cocher une fonctionnalité uniquement après validation réelle. Documenter le
