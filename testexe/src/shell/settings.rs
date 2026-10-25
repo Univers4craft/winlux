@@ -194,6 +194,9 @@ pub unsafe fn system_tick() -> bool {
             b"dark" => DARK = true,
             _ => {}
         }
+        crate::desktop::SHOW_ICON_PC = value(b"icon_pc") == b"1";
+        crate::desktop::SHOW_ICON_DOCS = value(b"icon_docs") == b"1";
+        crate::desktop::SHOW_ICON_TRASH = value(b"icon_trash") == b"1";
     }
     changed
 }
@@ -334,6 +337,9 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (5, 1) => value(b"align") == b"center",
         (5, 3) => value(b"theme") == b"dark",
         (5, 4) => value(b"theme") == b"light",
+        (5, 20) => crate::desktop::SHOW_ICON_PC,
+        (5, 21) => crate::desktop::SHOW_ICON_DOCS,
+        (5, 22) => crate::desktop::SHOW_ICON_TRASH,
         (7, 3) => value(b"display_policy") == b"fixed",
         (7, 4) => value(b"display_policy") != b"fixed",
         _ => false,
@@ -795,6 +801,16 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 },
             );
             button(g, &c, 4, 0, b"R\xE9glages de l'\xE9cran", 12);
+            row(
+                g,
+                &c,
+                300,
+                b"Ic\xF4nes du bureau",
+                b"Afficher ou masquer les ic\xF4nes syst\xE8me sur le bureau.",
+            );
+            button(g, &c, 6, 0, b"Ce PC", 20);
+            button(g, &c, 6, 1, b"Documents", 21);
+            button(g, &c, 6, 2, b"Corbeille", 22);
         }
         7 => {
             row(
@@ -1139,6 +1155,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             open_page(7);
             return true;
         }
+        (5, 20) => Some(if crate::desktop::SHOW_ICON_PC { c"icon-pc-off" } else { c"icon-pc-on" }),
+        (5, 21) => Some(if crate::desktop::SHOW_ICON_DOCS { c"icon-docs-off" } else { c"icon-docs-on" }),
+        (5, 22) => Some(if crate::desktop::SHOW_ICON_TRASH { c"icon-trash-off" } else { c"icon-trash-on" }),
         (7, 0) => {
             SELECTED_MODE = SELECTED_MODE.saturating_sub(1);
             return true;

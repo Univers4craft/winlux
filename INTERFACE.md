@@ -35,16 +35,16 @@ Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
 - Le menu et la barre donnent accès à un petit ensemble d'applications
   intégrées ; le catalogue complet des applications installées et la gestion
   dynamique des épingles restent à réaliser.
-- Le bureau dessine actuellement trois icônes système prédéfinies (« Ce PC »,
-  « Documents », « Corbeille »). Elles peuvent être déplacées, mais leurs
-  positions ne sont pas sauvegardées et le code les recale sur une grille.
-  L'affichage d'icônes système n'est pas réglable depuis Paramètres.
+- Le bureau démarre sans icônes par défaut. Les icônes système (Ce PC,
+  Documents, Corbeille) sont réglables individuellement dans Paramètres >
+  Apparence > Icônes du bureau ; elles sont désactivées par défaut. Le
+  déplacement fonctionne (grille temporaire, positions non sauvegardées).
 - Paramètres contient actuellement des pages système Linux, applications
   Windows, réseau, son/batterie, clavier/trackpad, apparence et mises à jour.
   Les pages Écran et définition et À propos (BUILD-INFO) sont aussi présentes.
-  Les options d'apparence visibles incluent le thème clair/sombre et
-  l'alignement de la barre des tâches ; elles ne constituent pas encore un
-  panneau de personnalisation complet.
+  Les options d'apparence visibles incluent le thème clair/sombre,
+  l'alignement de la barre des tâches et les icônes du bureau ; elles ne
+  constituent pas encore un panneau de personnalisation complet.
 - Le shell est un prototype de test graphique ; il ne remplace pas encore un
   environnement de bureau Linux et n'est pas livré comme gestionnaire de
   fenêtres autonome.
@@ -53,9 +53,9 @@ Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
 
 ### Comportement cible
 
-- [ ] Démarrer sur un bureau sans icône par défaut, y compris après une
+- [x] Démarrer sur un bureau sans icône par défaut, y compris après une
   installation neuve ou une réinitialisation des préférences.
-- [ ] Ajouter dans Paramètres une rubrique « Icônes du bureau » avec une
+- [x] Ajouter dans Paramètres une rubrique « Icônes du bureau » avec une
   option indépendante par icône système ; toutes sont désactivées par défaut.
 - [ ] Permettre la création, le renommage et la suppression de raccourcis
   applicatifs depuis l'interface, sans supprimer l'application cible.

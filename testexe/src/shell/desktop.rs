@@ -38,6 +38,9 @@ static mut ICON_Y: [i32; 3] = [12, 108, 204];
 static mut DRAGGED_ICON: i32 = -1;
 static mut SELECTED_ICON: i32 = -1;
 static mut ICON_CLICK_TIME: u32 = 0;
+pub static mut SHOW_ICON_PC: bool = false;
+pub static mut SHOW_ICON_DOCS: bool = false;
+pub static mut SHOW_ICON_TRASH: bool = false;
 static mut LAST_MINUTE: u16 = 99;
 /// Démarrage : début de l'écran de chargement, étape de préchargement en
 /// cours et fin du fondu d'arrivée sur le bureau.
@@ -1211,8 +1214,22 @@ const DESKTOP_ICONS: [(&[u8], Glyph); 3] = [
     (b"Corbeille", Glyph::Trash),
 ];
 
+fn icon_visible(i: usize) -> bool {
+    unsafe {
+        match i {
+            0 => SHOW_ICON_PC,
+            1 => SHOW_ICON_DOCS,
+            2 => SHOW_ICON_TRASH,
+            _ => false,
+        }
+    }
+}
+
 unsafe fn desktop_icons(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     for (i, (name, g)) in DESKTOP_ICONS.iter().enumerate() {
+        if !icon_visible(i) {
+            continue;
+        }
         let (x, y) = (ICON_X[i], ICON_Y[i]);
         if DRAGGED_ICON == i as i32 || SELECTED_ICON == i as i32 {
             round_rect(hdc, b, x, y, x + 76, y + 84, 4, fc(rgb(0x2A, 0x4E, 0x8C)));
@@ -1571,6 +1588,9 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         return;
     }
     for i in (0..3).rev() {
+        if !icon_visible(i) {
+            continue;
+        }
         if x >= ICON_X[i] && x < ICON_X[i] + 76 && y >= ICON_Y[i] && y < ICON_Y[i] + 84 {
             // Double-clic : ouvre l'emplacement dans l'Explorer.
             if SELECTED_ICON == i as i32 && since(ICON_CLICK_TIME) < 500 {

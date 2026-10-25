@@ -167,7 +167,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
   des indicateurs réseau, volume et batterie sans libellés dans la zone système.
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
   recalé sur une grille, positions temporaires).
-- [ ] Démarrer avec un bureau vide ; rendre les icônes système facultatives et
+- [x] Démarrer avec un bureau vide ; rendre les icônes système facultatives et
   désactivées par défaut dans Paramètres.
 - [ ] Ajouter la création explicite de raccourcis d'applications, leur
   persistance et le choix entre placement sur grille ou libre.

@@ -67,6 +67,9 @@ status() {
         printf 'update_auto=%s\n' "$(winlux-update --auto status 2>/dev/null || printf 'indisponible')"
         if test -s "$config/update.token" && ! test -L "$config/update.token"; then printf 'update_auth=configured\n'; else printf 'update_auth=missing\n'; fi
         printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
+        printf 'icon_pc=%s\n' "$(pref ICON_PC | sed 's/^$/0/')"
+        printf 'icon_docs=%s\n' "$(pref ICON_DOCS | sed 's/^$/0/')"
+        printf 'icon_trash=%s\n' "$(pref ICON_TRASH | sed 's/^$/0/')"
         printf 'control_available=1\n'
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
         if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi
@@ -119,6 +122,12 @@ perform() {
             save "$config/input.conf" TAP_TO_CLICK "$tap" ;;
         align-left|align-center) save "$config/preferences.conf" TASKBAR_ALIGN "${action#align-}" ;;
         theme-dark|theme-light) save "$config/preferences.conf" THEME "${action#theme-}" ;;
+        icon-pc-on)    save "$config/preferences.conf" ICON_PC 1 ;;
+        icon-pc-off)   save "$config/preferences.conf" ICON_PC 0 ;;
+        icon-docs-on)  save "$config/preferences.conf" ICON_DOCS 1 ;;
+        icon-docs-off) save "$config/preferences.conf" ICON_DOCS 0 ;;
+        icon-trash-on)  save "$config/preferences.conf" ICON_TRASH 1 ;;
+        icon-trash-off) save "$config/preferences.conf" ICON_TRASH 0 ;;
         display-follow|display-fixed) winlux-display "${action#display-}" ;;
         display-mode-*) mode=${action#display-mode-}; case "$mode" in *[!0-9x]*|'') return 1 ;; esac; winlux-display mode "$mode" ;;
         display-scale-auto) winlux-display scale auto ;;
