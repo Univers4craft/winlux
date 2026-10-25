@@ -160,7 +160,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Créer les composants du prototype : barre des tâches, menu Démarrer, fenêtres, notifications et Explorer ; le CSS reste une référence séparée.
 - [x] Ajouter les icônes et polices libres compatibles avec la licence du projet.
 - [x] Définir les variantes clair/sombre et le réglage d'échelle.
-- [ ] Compléter l'accessibilité : contraste, taille du pointeur, réduction des animations et navigation accessible complète.
+- [ ] Compléter l'accessibilité : taille du pointeur et navigation accessible complète (contraste élevé et réduction des animations ajoutés).
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [ ] Revalider le rendu du bureau courant en 1080p, 1440p et 4K, avec captures et interactions ; les tests X11 généraux ne prouvent pas cette matrice complète.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher

@@ -198,6 +198,7 @@ pub unsafe fn system_tick() -> bool {
         crate::desktop::SHOW_ICON_DOCS = value(b"icon_docs") == b"1";
         crate::desktop::SHOW_ICON_TRASH = value(b"icon_trash") == b"1";
         crate::desktop::REDUCE_MOTION = value(b"reduce_motion") == b"1";
+        crate::gfx::HIGH_CONTRAST = value(b"high_contrast") == b"1";
     }
     changed
 }
@@ -342,6 +343,7 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (5, 21) => crate::desktop::SHOW_ICON_DOCS,
         (5, 22) => crate::desktop::SHOW_ICON_TRASH,
         (5, 23) => crate::desktop::REDUCE_MOTION,
+        (5, 24) => crate::gfx::HIGH_CONTRAST,
         (7, 3) => value(b"display_policy") == b"fixed",
         (7, 4) => value(b"display_policy") != b"fixed",
         _ => false,
@@ -821,6 +823,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 b"R\xE9duire les animations du bureau et des menus.",
             );
             button(g, &c, 8, 0, b"R\xE9duire", 23);
+            row(
+                g,
+                &c,
+                492,
+                b"Contraste \xE9lev\xE9",
+                b"Bordures et couleurs haute visibilit\xE9.",
+            );
+            button(g, &c, 10, 0, b"Contraste \xE9lev\xE9", 24);
         }
         7 => {
             row(
@@ -1169,6 +1179,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (5, 21) => Some(if crate::desktop::SHOW_ICON_DOCS { c"icon-docs-off" } else { c"icon-docs-on" }),
         (5, 22) => Some(if crate::desktop::SHOW_ICON_TRASH { c"icon-trash-off" } else { c"icon-trash-on" }),
         (5, 23) => Some(if crate::desktop::REDUCE_MOTION { c"reduce-motion-off" } else { c"reduce-motion-on" }),
+        (5, 24) => Some(if crate::gfx::HIGH_CONTRAST { c"contrast-off" } else { c"contrast-high" }),
         (7, 0) => {
             SELECTED_MODE = SELECTED_MODE.saturating_sub(1);
             return true;
