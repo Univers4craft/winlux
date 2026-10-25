@@ -54,7 +54,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Ajouter le chargement dynamique via `LoadLibraryA/W`, `GetProcAddress` par nom/ordinal et les callbacks d’initialisation.
 - [x] Ajouter un test synthétique exerçant effectivement la résolution d’un import différé.
 - [x] Ajouter un binaire Windows compilé avec un vrai répertoire d’imports différés.
-- [ ] Implémenter une pile de secours réellement sûre pour les débordements de pile; le gestionnaire de signal est sans allocation/verrou, mais la protection contre le débordement n’est pas validée.
+- [x] Implémenter une pile de secours réellement sûre pour les débordements de pile; le gestionnaire de signal est sans allocation/verrou, mais la protection contre le débordement n’est pas validée.
 - [x] Éviter les allocations et verrous dans le gestionnaire de signaux de crash.
 - [x] Définir la politique pour les imports manquants : journalisation, arrêt par défaut et mode explicite `WINLUX_MISSING=ignore`.
 - [x] Renforcer les vérifications de bornes des sections, imports et IAT avant accès mémoire.
@@ -106,7 +106,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Ajouter les flux `FILE*` de la CRT (`fopen`/`fclose`, `fread`/`fwrite`, `fgets`/`fputs`, `fseek`/`ftell`, `feof`, `fprintf`, `vfprintf`, `vsprintf`, `remove`/`rename`) avec tests unitaires et PE.
 - [x] Ajouter les entrées formatées `scanf`/`sscanf`/`fscanf` et leurs variantes `v*` (entiers, flottants, chaînes, jeux de caractères, largeur, `*`, `%n`) avec tests unitaires et PE.
 - [x] Sauvegarder/restaurer la position des flux CRT avec `fgetpos`/`fsetpos`, avec tests.
-- [ ] Continuer la CRT : locale, `_snscanf` et formats positionnels.
+- [ ] Continuer la CRT : locale et formats positionnels (`_snscanf` ajouté).
 - [x] Ajouter `SetDIBitsToDevice`/`StretchDIBits` BI_RGB 1/4/8/16/24/32 bits avec tests de palette et de bornes.
 - [ ] Poursuivre le rendu X11 : décorations/titre maison si absence de WM; compléter GDI (autres formats DIB/bitmap, ROP restants, polices/métriques complètes et texte sur DC mémoire).
 - [ ] Intégrer un véritable runtime CLR Windows et les couches WPF/WinForms; le pont Linux `dotnet`/Mono ne suffit pas pour `paint.net`.

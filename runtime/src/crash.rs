@@ -2,6 +2,16 @@
 //! (accès mémoire invalide, instruction illégale…), on affiche où, dans
 //! quel module, puis on quitte avec le code d'exception Windows.
 
+fn is_stack_overflow(addr: usize, rsp: usize) -> bool {
+    // A faulting address within 64 KiB below the stack pointer strongly
+    // suggests the thread hit its guard page.  On Linux the guard page
+    // sits right below the mapped stack, so after a deep recursion RSP
+    // passes the last valid page and the next touch faults.
+    let page = 4096usize;
+    let margin = 16 * page;
+    addr < rsp && rsp.saturating_sub(addr) <= margin
+}
+
 extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
         let uc = ctx as *mut libc::ucontext_t;
@@ -9,6 +19,10 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_
         let rsp = (*uc).uc_mcontext.gregs[libc::REG_RSP as usize] as usize;
         let addr = (*info).si_addr() as usize;
         let (what, code) = match sig {
+            libc::SIGSEGV | libc::SIGBUS if is_stack_overflow(addr, rsp) => (
+                b"debordement de pile (EXCEPTION_STACK_OVERFLOW)\n".as_slice(),
+                0xC000_00FDu32,
+            ),
             libc::SIGSEGV | libc::SIGBUS => (
                 b"acces memoire invalide (EXCEPTION_ACCESS_VIOLATION)\n".as_slice(),
                 0xC000_0005u32,
@@ -64,6 +78,9 @@ pub fn install() {
             -1,
             0,
         );
+        if stack == libc::MAP_FAILED {
+            return;
+        }
         let ss = libc::stack_t {
             ss_sp: stack,
             ss_flags: 0,
