@@ -6,7 +6,7 @@ use crate::gfx::*;
 use crate::wm::{Frame, Gfx, Mouse};
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 8] = [b"Syst\xE8me Linux", b"Applications Windows", b"R\xE9seau", b"Son et batterie", b"Clavier et pav\xE9 tactile", b"Apparence", b"Mises \xE0 jour", b"\xC9cran et d\xE9finition"];
+const PAGES: [&[u8]; 9] = [b"Syst\xE8me Linux", b"Applications Windows", b"R\xE9seau", b"Son et batterie", b"Clavier et pav\xE9 tactile", b"Apparence", b"Mises \xE0 jour", b"\xC9cran et d\xE9finition", b"\xC0 propos"];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
 struct Buffer { bytes: [u8; CAPACITY], len: usize }
@@ -17,6 +17,7 @@ static mut ACTION: Buffer = EMPTY;
 static mut LOG: Buffer = EMPTY;
 static mut UPDATES: Buffer = EMPTY;
 static mut PROGRESS: Buffer = EMPTY;
+static mut BUILD_INFO: Buffer = EMPTY;
 static mut SELECTED_MODE: usize = 0;
 static mut LAST_ANIMATION: u32 = 0;
 static mut PAGE: usize = 0;
@@ -82,6 +83,7 @@ pub unsafe fn system_tick() -> bool {
     changed |= read(if PAGE == 6 { c"Z:\\run\\winlux\\update.log" } else { c"Z:\\run\\winlux\\action.log" }, &mut LOG);
     changed |= read(c"Z:\\run\\winlux\\updates.txt", &mut UPDATES);
     changed |= read(c"Z:\\run\\winlux\\update-progress", &mut PROGRESS);
+    if PAGE == 8 { changed |= read(c"Z:\\usr\\share\\winlux\\BUILD-INFO", &mut BUILD_INFO); }
     if available() {
         crate::desktop::NETWORK_CONNECTED = number(value(b"network_connected"));
         crate::desktop::BATTERY_PRESENT = number(value(b"battery_present"));
@@ -255,6 +257,22 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     text(g.hdc, g.f.large, p.text, c.left, c.top, PAGES[PAGE]);
     fill(g.hdc, g.b, c.left, c.top + 30, c.left + 44, c.top + 33, p.accent);
     match PAGE {
+        8 => {
+            let info = BUILD_INFO.get();
+            let version = field(info, b"version");
+            row(g, &c, 44, b"Version de Winlux", if version.is_empty() { value(b"version") } else { version });
+            row(g, &c, 104, b"Commit GitHub", field(info, b"commit"));
+            row(g, &c, 164, b"Construction (UTC)", field(info, b"built_at_utc"));
+            row(g, &c, 224, b"Type de livrable", match field(info, b"scope") {
+                b"system" => b"Syst\xE8me complet", b"runtime" => b"Runtime uniquement", _ => b"Information indisponible",
+            });
+            row(g, &c, 284, b"Sources suivies lors de la construction", match field(info, b"tracked_sources") {
+                b"clean" => b"Sans modification locale suivie", b"modified" => b"Modifications locales non valid\xE9es", _ => b"Information indisponible",
+            });
+            row(g, &c, 344, b"Provenance", if info.is_empty() {
+                b"BUILD-INFO absent : ancienne image ou installation sans m\xE9tadonn\xE9es."
+            } else { b"Informations du livrable install\xE9, pas de la derni\xE8re release GitHub." });
+        }
         0 => {
             row(g, &c, 44, b"Version de Winlux", value(b"version"));
             button(g, &c, 0, 0, b"Relancer le bureau", 0); button(g, &c, 0, 1, b"Red\xE9marrer", 1); button(g, &c, 0, 2, b"Arr\xEAter", 2);

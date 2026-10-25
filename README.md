@@ -84,6 +84,8 @@ Le paquet système conserve les métadonnées de son ISO. `tracked_sources=modif
 signale des changements suivis non validés ; sans dépôt Git, le commit est `unknown`.
 La date concerne la construction du livrable, pas nécessairement la compilation
 d'un binaire réutilisé. `SOURCE_DATE_EPOCH` permet de fixer cette date.
+Ces informations sont visibles dans **Paramètres → À propos**. Une ancienne
+image sans `BUILD-INFO` affiche explicitement que les métadonnées sont absentes.
 
 `integration/install.sh` installe le runtime, le lanceur de double-clic `winlux-open`, l’outil de mise à jour, l’enregistrement binfmt et l’association MIME des `.exe` (par défaut dans `/usr`; il modifie des emplacements système et nécessite des privilèges d’administration) :
 
