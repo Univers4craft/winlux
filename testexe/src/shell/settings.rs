@@ -7,7 +7,7 @@ use crate::wm::{Frame, Gfx, Mouse};
 
 pub const CUSTOM_TITLE: bool = false;
 const PAGES: [&[u8]; 7] = [b"Syst\xE8me Linux", b"Applications Windows", b"R\xE9seau", b"Son et batterie", b"Clavier et pav\xE9 tactile", b"Apparence", b"Mises \xE0 jour"];
-const CAPACITY: usize = 8192;
+const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
 struct Buffer { bytes: [u8; CAPACITY], len: usize }
 const EMPTY: Buffer = Buffer { bytes: [0; CAPACITY], len: 0 };
@@ -31,7 +31,8 @@ unsafe fn read(path: &core::ffi::CStr, target: &mut Buffer) -> bool {
     let mut count = 0;
     if file as isize != -1 && !file.is_null() {
         let size = GetFileSize(file, core::ptr::null_mut());
-        if size != u32::MAX && size > (CAPACITY - 1) as u32 { SetFilePointer(file, (size - (CAPACITY - 1) as u32) as i32, core::ptr::null_mut(), 0); }
+        // Garder le début des notes (version/résumé), la fin des journaux.
+        if path.to_bytes().ends_with(b".log") && size != u32::MAX && size > (CAPACITY - 1) as u32 { SetFilePointer(file, (size - (CAPACITY - 1) as u32) as i32, core::ptr::null_mut(), 0); }
         ReadFile(file, raw.as_mut_ptr(), (CAPACITY - 1) as u32, &mut count, core::ptr::null_mut());
         CloseHandle(file);
     }
@@ -42,7 +43,9 @@ unsafe fn read(path: &core::ffi::CStr, target: &mut Buffer) -> bool {
     while begin < count as usize && raw[begin] & 0xc0 == 0x80 { begin += 1; }
     let source = core::str::from_utf8(&raw[begin..count as usize]).unwrap_or("");
     for ch in source.chars().take(CAPACITY - 1) {
+        if ch.is_control() && ch != '\n' && ch != '\t' { continue; }
         next.bytes[next.len] = match ch as u32 { 0..=255 => ch as u8, 0x2019 => b'\'', 0x2013 | 0x2014 => b'-', 0x20ac => 0x80, 0x153 => 0x9c, _ => b'?' };
+        if ch == '\t' { next.bytes[next.len] = b' '; }
         next.len += 1;
     }
     let changed = next.len != target.len || next.get() != target.get();
@@ -152,10 +155,54 @@ unsafe fn journal(g: &mut Gfx, c: &Rect, start: i32, data: &[u8]) {
     if c.top + start >= bottom { return; }
     fill(g.hdc, g.b, c.left, c.top + start, c.right, bottom, p.mica);
     let rows = ((bottom - c.top - start - 12) / 18).max(0) as usize;
-    for (i, line) in data.split(|&v| v == b'\n').skip(SCROLL).take(rows).enumerate() {
-        let mut end = line.len(); while end > 0 && text_width(&line[..end], 11) > c.right - c.left - 20 { end -= 1; }
-        text(g.hdc, g.f.small, p.text2, c.left + 10, c.top + start + 8 + i as i32 * 18, &line[..end]);
+    let width = (c.right - c.left - 20).max(20);
+    let mut total: usize = 0;
+    let detailed = PAGE == 6 && !SHOW_LOG;
+    for line in data.split(|&v| v == b'\n').filter_map(|line| journal_line(line, detailed)) {
+        let mut rest = line;
+        loop {
+            total += 1;
+            let n = wrap_len(rest, width);
+            if n == rest.len() { break; }
+            rest = &rest[n..];
+        }
     }
+    SCROLL = SCROLL.min(total.saturating_sub(rows));
+    let mut index = 0;
+    for line in data.split(|&v| v == b'\n').filter_map(|line| journal_line(line, detailed)) {
+        let mut rest = line;
+        loop {
+            let n = wrap_len(rest, width);
+            if index >= SCROLL && index < SCROLL + rows {
+                text(g.hdc, g.f.small, p.text2, c.left + 10, c.top + start + 8 + (index - SCROLL) as i32 * 18, &rest[..n]);
+            }
+            index += 1;
+            if n == rest.len() { break; }
+            rest = &rest[n..];
+        }
+    }
+}
+
+fn journal_line(mut line: &[u8], detailed: bool) -> Option<&[u8]> {
+    if detailed {
+        // Le titre/version est déjà affiché ; réserver la place aux détails
+        // plutôt qu'aux lignes vides et aux marqueurs de titres Markdown.
+        if line.is_empty() || line.starts_with(b"# ") { return None; }
+        if line.starts_with(b"##") {
+            while line.first() == Some(&b'#') { line = &line[1..]; }
+            if line.first() == Some(&b' ') { line = &line[1..]; }
+        }
+    }
+    Some(line)
+}
+
+// Retour à la ligne par mots, sans perdre les lignes longues ni les accents.
+fn wrap_len(line: &[u8], width: i32) -> usize {
+    let mut end = 0;
+    while end < line.len() && text_width(&line[..end + 1], 11) <= width { end += 1; }
+    if end == line.len() { return end; }
+    let word = line[..end].iter().rposition(|&v| v == b' ');
+    word.map(|n| n + 1).filter(|&n| n > 0).unwrap_or(end.max(1))
 }
 
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
@@ -219,7 +266,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(g, &c, 44, b"Automatique (syst\xE8me et outil de mise \xE0 jour)", value(b"update_auto"));
             button(g, &c, 0, 0, b"Rechercher", 0); button(g, &c, 0, 1, b"Tout installer", 1); button(g, &c, 0, 2, b"Restaurer", 2);
             button(g, &c, 1, 0, if value(b"update_auto") == b"enabled" { b"D\xE9sactiver auto" } else { b"Activer auto" }, 3);
-            button(g, &c, 1, 1, if SHOW_LOG { b"Liste des composants" } else { b"Afficher le journal" }, 4);
+            button(g, &c, 1, 1, if SHOW_LOG { b"Voir les modifications" } else { b"Afficher le journal" }, 4);
             button(g, &c, 1, 2, if value(b"update_action") == b"reboot" { b"Red\xE9marrer l'OS" } else { b"Relancer le bureau" }, 5);
             text(g.hdc, g.f.semibold, p.text, c.left, c.top + 208, if value(b"update_auth") == b"configured" { b"GitHub priv\xE9 : jeton enregistr\xE9" } else { b"GitHub priv\xE9 : jeton requis" });
             let tr = token_rect(&c, 0);
@@ -238,7 +285,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 text_centered(g.hdc, g.f.small, 11, p.text, (r.left + r.right) / 2, r.top + 12, name);
             }
             text(g.hdc, g.f.small, p.text3, c.left, c.top + 280, b"Acc\xE8s aux releases du d\xE9p\xF4t priv\xE9 ; jeton conserv\xE9 uniquement dans Winlux.");
-            journal(g, &c, 310, if SHOW_LOG { LOG.get() } else if UPDATES.len == 0 { b"Cliquez Rechercher pour recuperer la liste des mises a jour." } else { UPDATES.get() });
+            text(g.hdc, g.f.semibold, p.text, c.left, c.top + 308, if SHOW_LOG { b"Journal d'installation" } else { b"Modifications apport\xE9es par la mise \xE0 jour" });
+            journal(g, &c, 334, if SHOW_LOG { LOG.get() } else if UPDATES.len == 0 { b"Cliquez Rechercher pour afficher les modifications.\nMolette ou touches Haut/Bas pour lire la suite." } else { UPDATES.get() });
+            text(g.hdc, g.f.small, p.text3, c.left, c.bottom - 30, b"Molette / Haut-Bas : d\xE9filer ; Page suivante/pr\xE9c\xE9dente : lecture rapide.");
         }
     }
     let notice = if !available() { b"Service Winlux indisponible : les actions n\xE9cessitent Winlux.".as_slice() } else { ACTION.get().split(|&v| v == b'\n').next().unwrap_or(b"") };
@@ -287,6 +336,6 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         }
         return true;
     }
-    match vk { 0x26 => { SCROLL = SCROLL.saturating_sub(1); true }, 0x28 => { SCROLL = SCROLL.saturating_add(1); true }, 0x74 => { control(c"status"); true }, _ => false }
+    match vk { 0x26 => { SCROLL = SCROLL.saturating_sub(1); true }, 0x28 => { SCROLL = SCROLL.saturating_add(1); true }, 0x21 => { SCROLL = SCROLL.saturating_sub(10); true }, 0x22 => { SCROLL = SCROLL.saturating_add(10); true }, 0x24 => { SCROLL = 0; true }, 0x23 => { SCROLL = usize::MAX; true }, 0x74 => { control(c"status"); true }, _ => false }
 }
 pub unsafe fn tick(_f: &Frame) -> bool { system_tick() }

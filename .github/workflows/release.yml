@@ -35,9 +35,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -- "build/winlux-update-$GITHUB_REF_NAME.tar.gz" build/winlux-update-manifest.txt
+          if grep -q '^notes_asset=' build/winlux-update-manifest.txt; then
+            set -- "$@" build/winlux-release-notes.txt
+          fi
           gh release create "$GITHUB_REF_NAME" \
-            "build/winlux-update-$GITHUB_REF_NAME.tar.gz" \
-            build/winlux-update-manifest.txt \
+            "$@" \
             --repo "$GITHUB_REPOSITORY" \
             --generate-notes \
             --title "Winlux $GITHUB_REF_NAME"

@@ -230,6 +230,13 @@ validate_manifest() {
         case "$scope:$action" in system:reboot|runtime:restart-session) ;; *) fail "portée/action incohérente" ;; esac
         case "$components" in *[!A-Za-z0-9,._+-]*|'') fail "composants invalides" ;; esac
     fi
+    notes_asset=$(value notes_asset "$manifest" || true)
+    notes_checksum=$(value notes_sha256 "$manifest" || true)
+    if test -n "$notes_asset$notes_checksum"; then
+        safe_name "$notes_asset" || fail "nom des notes invalide"
+        case "$notes_checksum" in *[!0-9a-f]*|'') fail "SHA-256 des notes invalide" ;; esac
+        test "${#notes_checksum}" -eq 64 || fail "SHA-256 des notes invalide"
+    fi
 }
 fetch_manifest() {
     manifest=$1
@@ -242,6 +249,23 @@ fetch_manifest() {
         download "$manifest_api" "$manifest"
     else download "$manifest_source" "$manifest"; fi
     validate_manifest "$manifest"
+    # Plain text only, bounded and bound to this manifest by its checksum.
+    # Old releases without a notes asset remain supported.
+    if test -n "$notes_asset"; then
+        if test -n "${WINLUX_UPDATE_ASSET_DIR:-}"; then notes_source="file://$WINLUX_UPDATE_ASSET_DIR/$notes_asset";
+        elif test -n "${release_metadata:-}"; then
+            notes_source=$(asset_api_url "$notes_asset" "$release_metadata")
+            test -n "$notes_source" || fail "notes absentes de la release GitHub"
+        else notes_source="https://github.com/$repository/releases/download/$version/$notes_asset"; fi
+        download "$notes_source" "$work/notes.txt"
+        test "$(wc -c <"$work/notes.txt")" -le 24576 || fail "notes de version trop longues"
+        test "$(sha256sum "$work/notes.txt" | cut -d' ' -f1)" = "$notes_checksum" || fail "SHA-256 des notes incorrect"
+        cp "$work/notes.txt" "$state_dir/available-notes.new"
+        mv -fT "$state_dir/available-notes.new" "$state_dir/available-notes"
+    else
+        printf 'Cette release ne fournit pas encore de notes détaillées.\n' >"$state_dir/available-notes"
+    fi
+    printf '%s\n' "$version" >"$state_dir/available-notes-version"
     cp "$manifest" "$state_dir/available-manifest.new"
     mv -fT "$state_dir/available-manifest.new" "$state_dir/available-manifest"
 }
@@ -251,12 +275,16 @@ list_updates() {
     if ! test -f "$state_dir/available-manifest"; then echo "Aucune vérification disponible. Lancez une recherche de mises à jour (--check)."; return; fi
     validate_manifest "$state_dir/available-manifest"
     echo "Version disponible : $version"
-    if up_to_date; then echo "Winlux est à jour."; return; fi
+    if up_to_date; then echo "Winlux est à jour."; fi
     echo "Portée : $scope"
     echo "Composants : $components"
     if test "$action" = reboot; then echo "Action après installation : redémarrage du système";
     else echo "Action après installation : redémarrage de la session graphique"; fi
     echo "Les données personnelles et la configuration sont conservées."
+    printf '\nModifications détaillées — %s\n\n' "$version"
+    if test "$(sed -n '1p' "$state_dir/available-notes-version" 2>/dev/null || true)" = "$version" && test -r "$state_dir/available-notes"; then
+        cat "$state_dir/available-notes"
+    else echo "Notes non disponibles. Lancez Rechercher pour les récupérer."; fi
 }
 
 mode=${1:-}

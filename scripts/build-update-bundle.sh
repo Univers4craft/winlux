@@ -78,6 +78,13 @@ manifest="$root/build/winlux-update-manifest.txt"
 tar -C "$work/package" --owner=0 --group=0 --numeric-owner -czf "$work/bundle.tar.gz" META FILES LINKS payload
 checksum=$(sha256sum "$work/bundle.tar.gz" | cut -d' ' -f1)
 { cat "$work/package/META"; printf 'asset=%s\nsha256=%s\n' "$(basename -- "$bundle")" "$checksum"; } >"$work/manifest.txt"
+notes_source=${WINLUX_UPDATE_NOTES:-"$root/docs/releases/$version.md"}
+if test -f "$notes_source"; then
+    test "$(wc -c <"$notes_source")" -le 24576 || { echo 'notes de version trop longues (24 Kio maximum)' >&2; exit 1; }
+    cp "$notes_source" "$work/notes.txt"
+    printf 'notes_asset=winlux-release-notes.txt\nnotes_sha256=%s\n' "$(sha256sum "$work/notes.txt" | cut -d' ' -f1)" >>"$work/manifest.txt"
+    mv "$work/notes.txt" "$root/build/winlux-release-notes.txt"
+fi
 mv "$work/bundle.tar.gz" "$bundle"
 mv "$work/manifest.txt" "$manifest"
 echo "Paquet de mise à jour $scope : $bundle"
