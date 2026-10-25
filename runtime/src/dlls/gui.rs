@@ -647,6 +647,8 @@ pub enum DrawCmd {
     Blit { source_hwnd: usize, source: Rect, destination: Rect, stretch: bool, rop: RasterOp },
     /// Copie depuis une bitmap mémoire (pixels stockés en COLORREF).
     Bitmap { rect: Rect, pixels: Vec<u32>, rop: RasterOp },
+    /// Ligne entre deux points.
+    Line { x1: i32, y1: i32, x2: i32, y2: i32, color: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -833,6 +835,11 @@ pub fn dc_text_color(hdc: usize) -> u32 {
 /// Handle du pinceau sélectionné dans un DC.
 pub fn dc_brush(hdc: usize) -> usize {
     with_dc(hdc, |d| d.brush, 0)
+}
+
+/// Handle de la plume sélectionnée dans un DC.
+pub fn dc_pen(hdc: usize) -> usize {
+    with_dc(hdc, |d| d.pen, 0)
 }
 
 /// Handle de la police sélectionnée dans le DC.
@@ -1299,6 +1306,24 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 }
             }
         }
+        DrawCmd::Line { x1, y1, x2, y2, color } => {
+            // Bresenham simplifié
+            let (mut cx, mut cy) = (*x1, *y1);
+            let dx = (*x2 - *x1).abs();
+            let dy = -(*y2 - *y1).abs();
+            let sx = if *x1 < *x2 { 1 } else { -1 };
+            let sy = if *y1 < *y2 { 1 } else { -1 };
+            let mut err = dx + dy;
+            loop {
+                if cx >= 0 && cy >= 0 && cx < bounds.right && cy < bounds.bottom {
+                    put(cx, cy, *color, RasterOp::Copy);
+                }
+                if cx == *x2 && cy == *y2 { break; }
+                let e2 = 2 * err;
+                if e2 >= dy { err += dy; cx += sx; }
+                if e2 <= dx { err += dx; cy += sy; }
+            }
+        }
         DrawCmd::Text { .. } | DrawCmd::Blit { .. } => {}
     }
     true
@@ -1596,6 +1621,21 @@ pub fn capture_window(hwnd: usize, rect: Rect) -> Option<BitmapSnapshot> {
 /// wndproc d'une fenêtre, si elle existe.
 pub fn wnd_proc_of(hwnd: usize) -> Option<usize> {
     lock(windows()).get(&hwnd).map(|w| w.wnd_proc)
+}
+
+pub fn get_window_style(hwnd: usize) -> u32 {
+    lock(windows()).get(&hwnd).map(|w| w.style).unwrap_or(0)
+}
+
+pub fn set_window_style(hwnd: usize, style: u32) {
+    if let Some(w) = lock(windows()).get_mut(&hwnd) {
+        w.style = style;
+    }
+}
+
+/// Renvoie l'origine (left, top) de la fenêtre en coordonnées écran.
+pub fn window_origin(hwnd: usize) -> (i32, i32) {
+    lock(windows()).get(&hwnd).map(|w| (w.rect.left, w.rect.top)).unwrap_or((0, 0))
 }
 
 pub fn window_rect(hwnd: usize) -> Option<Rect> {

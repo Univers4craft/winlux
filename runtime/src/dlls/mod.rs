@@ -22,9 +22,16 @@ pub mod shell32;
 pub mod mscoree;
 pub mod ws2_32;
 pub mod gdi32;
+pub mod gdi32_ext;
 pub mod mfplat;
 pub mod winmm;
 pub mod winfile;
+pub mod resource;
+pub mod mmap;
+pub mod comctl32;
+pub mod shlwapi;
+pub mod oleaut32;
+pub mod user32_ext;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -70,11 +77,11 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(crt_scan::exports());
         ucrt.extend(crt_runtime::exports());
         vec![
-            Builtin { name: "kernel32", exports: { let mut e=kernel32::exports(); e.extend(winfile::exports()); e.extend(kernel32_misc::exports()); e }, handle: fake_module() },
+            Builtin { name: "kernel32", exports: { let mut e=kernel32::exports(); e.extend(winfile::exports()); e.extend(kernel32_misc::exports()); e.extend(resource::exports()); e.extend(mmap::exports()); e }, handle: fake_module() },
             Builtin { name: "ntdll", exports: ntdll::exports(), handle: fake_module() },
             Builtin { name: "msvcrt", exports: crt, handle: fake_module() },
             Builtin { name: "ucrtbase", exports: ucrt, handle: fake_module() },
-            Builtin { name: "user32", exports: user32::exports(), handle: fake_module() },
+            Builtin { name: "user32", exports: { let mut e=user32::exports(); e.extend(user32_ext::exports()); e }, handle: fake_module() },
             Builtin { name: "advapi32", exports: { let mut e=advapi32::exports(); e.extend(advapi32_services::exports()); e }, handle: fake_module() },
             Builtin { name: "ole32", exports: ole32::exports(), handle: fake_module() },
             Builtin { name: "bcrypt", exports: bcrypt::exports(), handle: fake_module() },
@@ -82,9 +89,12 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin { name: "shell32", exports: shell32::exports(), handle: fake_module() },
             Builtin { name: "mscoree", exports: mscoree::exports(), handle: fake_module() },
             Builtin { name: "ws2_32", exports: ws2_32::exports(), handle: fake_module() },
-            Builtin { name: "gdi32", exports: gdi32::exports(), handle: fake_module() },
+            Builtin { name: "gdi32", exports: { let mut e=gdi32::exports(); e.extend(gdi32_ext::exports()); e }, handle: fake_module() },
             Builtin { name: "mfplat", exports: mfplat::exports(), handle: fake_module() },
             Builtin { name: "winmm", exports: winmm::exports(), handle: fake_module() },
+            Builtin { name: "comctl32", exports: comctl32::exports(), handle: fake_module() },
+            Builtin { name: "shlwapi", exports: shlwapi::exports(), handle: fake_module() },
+            Builtin { name: "oleaut32", exports: oleaut32::exports(), handle: fake_module() },
         ]
     })
 }
@@ -104,6 +114,10 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("msvcr") && base != "msvcrt" {
         return "msvcrt".into();
     }
+    // Alias courants pour les DLL de contrôles communs / shell.
+    if base == "comctl32" || base == "iertutil" { return "comctl32".into(); }
+    if base == "shlwapi" { return "shlwapi".into(); }
+    if base == "oleaut32" { return "oleaut32".into(); }
     base.to_string()
 }
 

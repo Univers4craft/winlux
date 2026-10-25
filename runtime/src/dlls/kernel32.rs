@@ -812,7 +812,17 @@ pub unsafe extern "win64" fn get_exit_code_process(handle:usize,code:*mut u32)->
 pub unsafe extern "win64" fn terminate_process(handle:usize,code:u32)->i32{let Some(SyncHandle::Process(p))=lookup_sync(handle)else{crate::process::set_last_error(6);return 0;};let mut s=lock(&p.state);let Some(child)=s.child.as_mut()else{crate::process::set_last_error(5);return 0;};if child.kill().is_err(){crate::process::set_last_error(5);return 0;}if let Some(mut child)=s.child.take(){let _=child.wait();}s.exit_code=code;p.changed.notify_all();1}
 pub unsafe extern "win64" fn get_exit_code_thread(handle:usize,code:*mut u32)->i32{if code.is_null(){crate::process::set_last_error(87);return 0;}match lookup_sync(handle){Some(SyncHandle::Thread(t))=>{let s=lock(&t.state);*code=if s.finished{s.exit_code}else{259};1},Some(SyncHandle::Process(p))=>{poll_process(&p);*code=lock(&p.state).exit_code;1},_=>{crate::process::set_last_error(6);0}}}
 pub extern "win64" fn resume_thread(handle:usize)->u32{let Some(obj)=lookup_sync(handle)else{crate::process::set_last_error(6);return u32::MAX;};match obj{SyncHandle::Thread(t)=>{let _gate=sync_gate();let mut s=lock(&t.state);if s.finished{crate::process::set_last_error(6);return u32::MAX;}let old=s.suspend_count;if old>0{s.suspend_count-=1;if s.suspend_count==0{t.changed.notify_all();}}old.min(u32::MAX as usize) as u32},SyncHandle::Process(p)=>{let mut s=lock(&p.state);if !s.suspended{return 0;}let Some(c)=s.child.as_mut()else{crate::process::set_last_error(6);return u32::MAX;};if unsafe{libc::kill(c.id()as i32,libc::SIGCONT)}!=0{crate::process::set_last_error(5);return u32::MAX;}s.suspended=false;1},_=>{crate::process::set_last_error(6);u32::MAX}}}
-pub extern "win64" fn close_handle(handle: usize) -> i32 { if handle==1||handle==2||handle==(-10isize)as usize||handle==(-11isize)as usize||handle==(-12isize)as usize{crate::process::set_last_error(6);return 0;}if lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle).is_some(){lock(IOCP_ASSOCIATIONS.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle);1}else if remove_sync(handle){1}else{crate::process::set_last_error(6);0} }
+/// Extrait le descripteur de fichier Linux (fd) depuis un handle Windows.
+/// Utilisé par le module mmap pour CreateFileMappingA.
+pub fn handle_to_fd(h: usize) -> i32 {
+    use std::os::unix::io::AsRawFd;
+    let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())));
+    match handles.get(&h) {
+        Some(FileHandle::File(f)) => lock(f).as_raw_fd(),
+        _ => -1,
+    }
+}
+pub extern "win64" fn close_handle(handle: usize) -> i32 { if handle==1||handle==2||handle==(-10isize)as usize||handle==(-11isize)as usize||handle==(-12isize)as usize{crate::process::set_last_error(6);return 0;}if lock(HANDLES.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle).is_some(){lock(IOCP_ASSOCIATIONS.get_or_init(||Mutex::new(HashMap::new()))).remove(&handle);1}else if crate::dlls::mmap::close_mapping(handle){1}else if remove_sync(handle){1}else{crate::process::set_last_error(6);0} }
 pub unsafe extern "win64" fn create_event_a(_sec:usize,manual:i32,initial:i32,name:*const u8)->usize{let obj=SyncHandle::Event(Arc::new(EventObject{manual_reset:manual!=0,signaled:Mutex::new(initial!=0),changed:Condvar::new()}));add_sync(obj,named_event(name))}
 pub extern "win64" fn set_event(h:usize)->i32{let Some(SyncHandle::Event(v))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};let _gate=sync_gate();*lock(&v.signaled)=true;if v.manual_reset{v.changed.notify_all()}else{v.changed.notify_one()}1}
 pub extern "win64" fn reset_event(h:usize)->i32{let Some(SyncHandle::Event(v))=lookup_sync(h)else{crate::process::set_last_error(6);return 0;};let _gate=sync_gate();*lock(&v.signaled)=false;1}

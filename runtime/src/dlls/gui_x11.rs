@@ -697,6 +697,13 @@ impl X11Backend {
         }
     }
 
+    fn paint_line(&self, w: &XWin, x1: i32, y1: i32, x2: i32, y2: i32, color: u32) {
+        self.set_foreground(w, color);
+        let p1 = x11rb::protocol::xproto::Point { x: x1 as i16, y: y1 as i16 };
+        let p2 = x11rb::protocol::xproto::Point { x: x2 as i16, y: y2 as i16 };
+        let _ = self.conn.poly_line(x11rb::protocol::xproto::CoordMode::ORIGIN, w.window, w.gc, &[p1, p2]);
+    }
+
     /// Pose un texte ANSI. `bk` est la couleur de fond (`Some`) quand le mode
     /// de fond est opaque, ou `None` pour un fond transparent : seul le fond
     /// décide du primitive X11 employée (`image_text8` repeint le fond,
@@ -1074,6 +1081,9 @@ impl X11Backend {
                 DrawCmd::Bitmap { rect, pixels, rop } => {
                     let destination = self.scaled_rect(rect);
                     self.paint_bitmap(w, rect, &destination, pixels, *rop)
+                }
+                DrawCmd::Line { x1, y1, x2, y2, color } => {
+                    self.paint_line(w, self.scaled(*x1), self.scaled(*y1), self.scaled(*x2), self.scaled(*y2), *color)
                 }
             }
         }
