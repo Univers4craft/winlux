@@ -26,3 +26,12 @@ Reportés après revue :
   réelles de pile ; installation de la page proposée non raccordée au démarrage.
 
 Ces fonctions ne sont pas présentées comme implémentées par cette intégration.
+
+## Graphismes et interface
+
+Voir [la revue des PR #1 et #3](REVIEW-GRAPHICS.md) pour les changements DIB,
+les icônes et les parties multimédia reportées. Le magasin reste représenté par
+un sac (et non un bouclier) ; les dents de l'engrenage restent dans la zone du glyphe.
+
+Cette intégration ne publie pas de nouvelle version ni d'ISO. Les tests de bureau
+en VM et la préparation d'une version installable restent des étapes distinctes.

@@ -74,6 +74,7 @@ multiplateformes ; il ne rend pas encore WPF ou WinForms compatibles.
 - `TODO.md` : feuille de route maintenue.
 - `COMPATIBILITY.md` : état détaillé de compatibilité et limites connues.
 - `INTERFACE.md` : état du prototype graphique et exigences de l'interface cible.
+- [Revue d’intégration des PR](REVIEW-INTEGRATION.md) : ajouts retenus et parties reportées après examen.
 
 ## Intégration Linux et ISO
 

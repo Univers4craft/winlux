@@ -21,8 +21,10 @@ des codecs, des services et parfois d’un runtime managé.
 - La fondation COM/OLE gère l’initialisation d’appartement par thread,
   `CoTaskMemAlloc/Realloc/Free`, les GUID, la mémoire globale Win32 et un vrai
   `IStream` en mémoire partageant son `HGLOBAL` (lecture, écriture, seek, taille,
-  métadonnées, copie et clone). L’activation générique par `CoCreateInstance`,
-  l’automatisation et les serveurs COM ne sont pas encore disponibles.
+  métadonnées, copie et clone). `CoRegisterClassObject`/`CoRevokeClassObject`
+  et `CoCreateInstance` prennent en charge les fabriques multi-usages enregistrées
+  dans le processus, sans agrégation. L’activation depuis le registre, les serveurs
+  hors processus et l’automatisation restent non implémentés.
 - Le registre de base est partagé avec Linux et persiste dans
   `$XDG_DATA_HOME/winlux/registry.tsv` (ou `~/.local/share/winlux`).
 - Le SCM local persiste les définitions de services dans le registre Winlux et
@@ -30,7 +32,8 @@ des codecs, des services et parfois d’un runtime managé.
   `StartServiceCtrlDispatcher` et les notifications complètes du SCM restent
   non implémentés.
 - Les événements, mutex et attentes de base sont mappés sur des primitives
-  thread-safe Linux.
+  thread-safe Linux. `OpenEventA`/`OpenMutexA` rouvrent les objets nommés du processus ;
+  l'héritage des handles n'est pas pris en charge.
 - Le runtime gère le chargement dynamique de DLL réelles avec `LoadLibraryA/W`,
   `GetProcAddress` par nom ou ordinal, les callbacks TLS et `DllMain` au chargement.
 - `CreateProcessA/W` peut lancer des exécutables Linux natifs ou relancer un PE via
@@ -69,7 +72,8 @@ des codecs, des services et parfois d’un runtime managé.
   formatage borné étroit et large (`_snprintf`/`_snprintf_s`/`_snwprintf`) et une
   couche de flux `FILE*` (`fopen`/`fread`/`fwrite`/`fgets`/`fseek`/`fprintf`/
   `remove`/`rename`) et les entrées formatées `scanf`/`sscanf`/`fscanf`.
-  La locale, `_snscanf` et `fgetpos`/`fsetpos` restent absents.
+  `fgetpos`/`fsetpos` permettent de sauvegarder/restaurer la position des flux.
+  La locale et `_snscanf` restent absents.
 - Le registre propose un sous-ensemble Win32 et une persistance propriétaire
   TSV; il ne reproduit ni les vues 32/64 bits ni les règles ACL du registre Windows.
 - Les DLL intégrées utilisent des fonctions Linux natives et ne dépendent pas
@@ -95,6 +99,9 @@ des codecs, des services et parfois d’un runtime managé.
 
 Les codecs ne sont pas une DLL universelle : les points d’entrée Media Foundation
 ne constituent pas encore une chaîne de décodage complète et sont encore partiels.
+L'alias `mfreadwrite` expose des points d'entrée renvoyant une erreur explicite pour
+les lecteurs/rédacteurs non implémentés ; `quartz` fournit uniquement les messages
+d'erreur DirectShow. Aucun faux objet COM de lecture vidéo n'est exposé.
 
 La passerelle `winmm!PlaySoundA/W` décode déjà les fichiers RIFF/WAVE PCM 8/16/24/32 bits
 et IEEE float 32 bits, puis tente une sortie ALSA dynamique via `libasound.so.2`.
@@ -173,7 +180,10 @@ DSTINVERT, BLACKNESS, WHITENESS), `CreateCompatibleBitmap`, `CreateDIBSection`
 `CreateFontA/W` utilise Xft/Fontconfig pour un texte vectoriel antialiasé et le
 backend applique une échelle DPI commune aux fenêtres, formes, textes et entrées.
 Les polices X11 core ne servent plus que de repli; plusieurs attributs LOGFONT
-restent approximatifs. Manquent encore les autres formats DIB, les autres
+restent approximatifs. `SetDIBitsToDevice` et `StretchDIBits` traitent également
+les DIB BI_RGB 1/4/8/16/24/32 bits, avec palettes RGB, limites de dimensions et
+redimensionnement au plus proche voisin. Les bandes partielles et DIB_PAL_COLORS
+restent non pris en charge. Manquent encore les autres compressions DIB, les autres
 ROP, les régions
 et le double tampon.
 L’association `.desktop` et binfmt est préparée, mais n’a pas été
