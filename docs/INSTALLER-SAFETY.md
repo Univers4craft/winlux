@@ -48,7 +48,8 @@ sudo scripts/test-install-vm.sh --iso build/winlux-validation.iso --keep-disk
 ```
 
 Ce test utilise l'installateur réel puis vérifie le disque installé en BIOS et
-UEFI sous QEMU sans affichage, avec délai maximal. Il doit réussir avant de
+UEFI sous QEMU sans affichage, avec délai maximal. Ce test ou son alternative
+isolée ci-dessous doit réussir avant de
 considérer l'installation disque comme validée. Ne pas confondre ce test avec
 le démarrage Live de l'ISO, qui n'écrit pas de disque et n'exige pas root.
 
@@ -77,11 +78,11 @@ déclenché pour publier une release lors de cette validation locale.
 
 ## Validation locale du 25 octobre 2026
 
-- Contrôles de refus et syntaxe shell : réussis.
-- Construction ISO complète avec noyau 7.0.0-38-generic : réussie.
-- Démarrage Live BIOS et UEFI : réussi, marqueurs PE séquentiels/parallèles et X11.
-- Installateur réel exécuté en VM, disque neuf de 4 Gio : réussi après inclusion
+- [x] Contrôles de refus et syntaxe shell : réussis.
+- [x] Construction ISO complète avec noyau 7.0.0-38-generic : réussie.
+- [x] Démarrage Live BIOS et UEFI : réussi, marqueurs PE séquentiels/parallèles et X11.
+- [x] Installateur réel exécuté en VM, disque neuf de 4 Gio : réussi après inclusion
   des modules NLS FAT nécessaires au montage de l'ESP.
-- Démarrage du disque installé **sans ISO** en BIOS et UEFI : réussi, mêmes marqueurs.
+- [x] Démarrage du disque installé **sans ISO** en BIOS et UEFI : réussi, mêmes marqueurs.
 - Aucun SSD physique modifié, aucune release publiée. Cela ne remplace pas une
   validation sur du matériel réel ni un test de coupure de courant.

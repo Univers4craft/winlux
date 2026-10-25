@@ -17,7 +17,7 @@ Winlux réunit un chargeur d’exécutables **Windows PE32+ x86-64**, un sous-en
 
 - Bureau maison inspiré de Windows, menu Démarrer inspiré de Cinnamon, barre des tâches pleine largeur et accents violets.
 - Fenêtres déplaçables, redimensionnables et ancrables ; texte antialiasé et mise à l’échelle HiDPI.
-- Icônes issues des applications installées et des thèmes XDG ; placement sur grille ou libre.
+- Chargement d'icônes depuis les applications installées et thèmes XDG ; les trois icônes système du bureau se déplacent sur une grille, sans persistance ni mode libre configurable.
 - Explorer : onglets, double volet, recherche, tri, copie/déplacement et corbeille.
 - Paramètres Linux/Windows, réseau, audio/batterie, clavier/trackpad, apparence, écran, mises à jour et **À propos**.
 

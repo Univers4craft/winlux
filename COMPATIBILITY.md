@@ -54,8 +54,8 @@ des codecs, des services et parfois d’un runtime managé.
   `GetQueuedCompletionStatus[Ex]`, `PostQueuedCompletionStatus`) et testé avec des
   I/O overlapped associées et la lecture par lot. Le plafond de concurrence est
   appliqué aux workers; un worker libère son slot lorsqu’il rappelle GQCS. La
-  sortie d’un worker sans nouvel appel et l’annulation d’E/S déjà bloquante
-  restent incomplètes.
+  sortie d'un worker Win32 libère également son slot (test dédié). L'annulation
+  d'E/S déjà bloquantes et les autres sémantiques IOCP avancées restent incomplètes.
 - Winsock relie les sockets POSIX, les codes d’erreur WSA et les résolutions
   `getaddrinfo` A/W; TCP loopback, `bind/listen/connect/accept/send/recv` sont
   testés, mais ce n’est pas encore une implémentation complète de Winsock.
@@ -64,8 +64,8 @@ des codecs, des services et parfois d’un runtime managé.
   suivis par Winlux. `VirtualQuery` décrit les régions mémoire que Winlux a
   lui-même réservées/commitées, pas l’ensemble des mappings Linux du processus.
 - Les opérations fichier A/W couvrent copie, déplacement, chemins absolus et
-  répertoires; partage Windows avancé, handles hérités et I/O overlapped restent
-  absents.
+  répertoires ; partage Windows avancé et handles hérités restent absents.
+  Les I/O overlapped sont disponibles dans le sous-ensemble décrit ci-dessus.
 - La CRT (`msvcrt`/`ucrtbase`) fournit les chaînes étroites et larges courantes,
   les conversions (`atoi`/`strtol`/`strtod`/`_itoa`/`_itow`), la classification de
   caractères, les fonctions mathématiques usuelles, `qsort`/`bsearch`, le
@@ -115,7 +115,7 @@ restent à faire ; cela ne garantit pas .NET ou Photoshop.
 `FreeLibrary` ne démonte pas encore le mapping PE : les DLL chargées restent
 présentes jusqu’à la fin du processus afin de ne pas invalider des pointeurs
 encore détenus par le code invité. Les handles de fichiers ignorent encore les
-partages Windows avancés et les opérations asynchrones/overlapped.
+partages Windows avancés ; les opérations overlapped restent partielles.
 
 Le noyau fenêtres/messages (`user32`) fonctionne : classes, table HWND, file de
 messages par thread, appel du `WndProc` invité et une boucle `GetMessage`/
@@ -187,8 +187,9 @@ restent approximatifs. `SetDIBitsToDevice` et `StretchDIBits` traitent égalemen
 les DIB BI_RGB 1/4/8/16/24/32 bits, avec palettes RGB, limites de dimensions et
 redimensionnement au plus proche voisin. Les bandes partielles et DIB_PAL_COLORS
 restent non pris en charge. Manquent encore les autres compressions DIB, les autres
-ROP, les régions
-et le double tampon.
+ROP et les régions. Un double tampon par pixmap et un cache des commandes
+existent déjà dans le backend X11 ; cela ne constitue pas un cache séparé de
+chaque fenêtre interne du shell ni une mesure de sa fluidité.
 L’association `.desktop` et binfmt est préparée, mais n’a pas été
 installée ni validée sur une session de bureau réelle. Le script ISO produit
 maintenant le staging Linux bootable utilisé par les tests et la VM persistante.

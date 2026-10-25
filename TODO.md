@@ -3,6 +3,10 @@
 La feuille de route détaillée pour l'installation sur SSD et l'usage quotidien
 se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 
+Audit du 25 octobre 2026 : voir [les preuves et réserves](docs/AUDIT-MARKDOWN.md).
+Une case cochée concerne uniquement le périmètre décrit ; les validations VM
+ne valent pas validation sur matériel réel. Les tâches partielles sont séparées.
+
 ## État actuel
 
 ### Fiabilisation du bureau et de la VM
@@ -17,7 +21,7 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 - [x] Centre graphique de mise à jour, paquets système complets, jeton pour dépôt privé, automatique, restauration et demande de redémarrage.
 - [x] Ajouter un installateur autonome BIOS/UEFI qui ne nécessite plus l'ISO comme chargeur initial.
 - [x] Passer Explorer entièrement aux chemins Unicode Win32 W.
-- [x] Exécuter le bureau en utilisateur non privilégié avec autorisation ciblée des actions système.
+- [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
 - Validation de `v0.2.0-preview.2` : `cargo test -p winlux` (84 réussis, 1 test XKB ignoré sans serveur X), dix exécutables PE en séquentiel et en parallèle, tests réseau/paramètres/mise à jour-restauration, et ISO sous QEMU BIOS et UEFI réussis.
@@ -27,8 +31,8 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 - [x] Fournir les API nécessaires aux tests P1.
 - [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64.
 - [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe`, `findfiles.exe`, `crt_suite.exe`, `gui_suite.exe` et `gui_demo.exe` sous Winlux.
-- [x] Ajouter 71 tests unitaires couvrant le runtime, le registre, le SCM, WAVE, Winsock, les processus, les fichiers, la CRT, IOCP, COM/OLE et le noyau fenêtres/messages.
-- [x] Exécuter les neuf PE simultanément avec isolation, temporisation et journaux par processus.
+- [x] Ajouter des tests unitaires couvrant le runtime, le registre, le SCM, l'audio, Winsock, les processus, les fichiers, la CRT, IOCP, COM/OLE et le noyau fenêtres/messages.
+- [x] Exécuter les dix PE simultanément avec isolation, temporisation et journaux par processus.
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
@@ -59,7 +63,8 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 
 - [x] Ajouter des DLL intégrées courantes : `user32`, `advapi32`, `ole32`, `bcrypt`, `version` et `shell32`.
 - [x] Ajouter la fondation COM/OLE native : appartements par thread, GUID, allocateur COM, mémoire globale et `IStream` partageable sur `HGLOBAL`, avec tests unitaires et PE.
-- [ ] Étendre COM/OLE avec l’enregistrement et l’activation des classes, les class factories, l’automatisation et les objets OLE nécessaires aux applications ciblées.
+- [x] Enregistrer/révoquer des fabriques COM multi-usages et créer leurs objets dans le processus, avec cookies stables et appels réentrants testés.
+- [ ] Compléter COM/OLE : activation depuis le registre, serveurs hors processus, automatisation et objets OLE applicatifs.
 - [x] Ajouter un diagnostic explicite pour les exécutables gérés dépendant de `mscoree.dll`.
 - [x] Détecter les en-têtes CLR PE32/PE32+ et les apphosts modernes, puis relayer les assemblies vers `dotnet` ou Mono lorsqu'un runtime Linux compatible est installé.
 - [x] Relier les API de base fichiers/répertoires Windows au système de fichiers Linux.
@@ -100,11 +105,14 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 - [x] Étendre la CRT : chaînes étroites/larges, conversions (`strtol`, `strtod`, `_itoa`, `_itow`), classification de caractères, fonctions mathématiques, `qsort`/`bsearch` et formatage borné (`_snprintf`, `_snwprintf`), avec tests unitaires et PE (`crt_suite`).
 - [x] Ajouter les flux `FILE*` de la CRT (`fopen`/`fclose`, `fread`/`fwrite`, `fgets`/`fputs`, `fseek`/`ftell`, `feof`, `fprintf`, `vfprintf`, `vsprintf`, `remove`/`rename`) avec tests unitaires et PE.
 - [x] Ajouter les entrées formatées `scanf`/`sscanf`/`fscanf` et leurs variantes `v*` (entiers, flottants, chaînes, jeux de caractères, largeur, `*`, `%n`) avec tests unitaires et PE.
-- [ ] Continuer la CRT : locale, `_snscanf`, `fgetpos`/`fsetpos` et formats positionnels.
+- [x] Sauvegarder/restaurer la position des flux CRT avec `fgetpos`/`fsetpos`, avec tests.
+- [ ] Continuer la CRT : locale, `_snscanf` et formats positionnels.
+- [x] Ajouter `SetDIBitsToDevice`/`StretchDIBits` BI_RGB 1/4/8/16/24/32 bits avec tests de palette et de bornes.
 - [ ] Poursuivre le rendu X11 : décorations/titre maison si absence de WM; compléter GDI (autres formats DIB/bitmap, ROP restants, polices/métriques complètes et texte sur DC mémoire).
 - [ ] Intégrer un véritable runtime CLR Windows et les couches WPF/WinForms; le pont Linux `dotnet`/Mono ne suffit pas pour `paint.net`.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
-- [ ] Ajouter les formats audio compressés et les codecs vidéo; Media Foundation n’est pas encore reliée à une chaîne complète.
+- [x] Décoder MP3 et AAC ADTS mono/stéréo dans PlaySound, tester limites mémoire, concurrence et sortie ALSA null ; inclure les bibliothèques dans l'ISO.
+- [ ] Ajouter les autres formats audio compressés et les codecs vidéo ; Media Foundation/DirectShow ne constituent pas encore une chaîne de lecture complète.
 - [ ] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (elles restent mappées jusqu’à la fin du processus).
 - [x] Exécuter de vrais programmes C compilés par MinGW-w64 : démarrage de la CRT msvcrt (`__getmainargs`, `_initterm`, constructeurs globaux, `atexit`/`_onexit`, `_iob`/`__iob_func`), `_errno`, verrous `_lock`, environnement, temps (`time`, `localtime`, `strftime`, `clock`), `rand` Microsoft, E/S bas niveau `_open`/`_read`/`_write`, signaux, `_beginthreadex`; compléments kernel32 (console, pages de code, `GetEnvironmentStrings`, `FormatMessage`, `lstr*`, `RaiseException`…). Vérifié par `testc/mingw_suite.c` (40 contrôles) en CI.
 - [ ] Faire tourner des programmes C++ MinGW (exceptions : `RtlUnwindEx`, `RtlVirtualUnwind`, `RtlLookupFunctionEntry`) et des exécutables MSVC/clang-cl réels.
@@ -113,19 +121,19 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 ## Priorité 3 — Double-clic et intégration Linux
 
 - [x] Installer le runtime et le lanceur dans un chemin stable (`/usr/bin` par défaut, préfixe et `DESTDIR` configurables), avec association MIME par défaut dans `/etc/xdg/mimeapps.list`; validé dans une racine temporaire par `scripts/test-integration.sh`.
-- [x] Valider l’installation réelle sur l’hôte (`sudo integration/install.sh`).
-- [x] Tester l’enregistrement binfmt sur une machine Linux réelle (fichier de configuration préparé, mais non installé/validé).
+- [ ] Valider l’installation réelle sur l’hôte (`sudo integration/install.sh`) ; les tests en racine temporaire ne constituent pas cette preuve.
+- [ ] Tester l’enregistrement binfmt sur une machine Linux réelle ; script de diagnostic et configuration présents, résultat réel non établi par cet audit.
 - [x] Ajouter une procédure de désinstallation propre du binfmt, du MIME et du fichier `.desktop` (`integration/uninstall.sh`, restaure les associations précédentes).
 - [x] Gérer les chemins contenant des espaces ou des URI `file://`, les fichiers illisibles et les volumes montés `noexec` (le lanceur lit le fichier au lieu de l’exécuter; le dossier du programme devient le répertoire courant).
 - [x] Définir le comportement du terminal : `winlux --inspect` lit le sous-système PE, `winlux-open` ouvre un terminal (Konsole, GNOME Terminal, XFCE, xterm ou `WINLUX_TERMINAL`) qui reste ouvert pour les programmes console et lance directement les programmes graphiques.
 - [x] Ajouter une détection du fichier `.exe` et des messages d’erreur graphiques (kdialog, zenity, notify-send, xmessage) ou textuels adaptés.
-- [x] Tester le double-clic depuis plusieurs environnements de bureau : GNOME, KDE et XFCE.
+- [ ] Tester le double-clic depuis GNOME, KDE et XFCE ; la présence de `test-binfmt-desktops.sh` ne prouve pas ces trois sessions.
 
 ## Priorité 4 — ISO de test
 
 - [x] Construire une base Linux minimale en initramfs pour l’ISO de validation.
 - [x] Construire automatiquement l’arborescence de staging.
-- [x] Installer Winlux, les neuf PE, leur DLL et Xvfb dans cette arborescence.
+- [x] Installer Winlux, les dix PE, leur DLL et Xvfb dans cette arborescence.
 - [x] Intégrer binfmt, MIME et `.desktop` dans une future image de bureau; ils ne sont pas nécessaires à l’image de validation.
 - [x] Ajouter un démarrage BIOS et UEFI avec GRUB.
 - [x] Lancer automatiquement les tests séquentiels, parallèles et X11 dans la VM.
@@ -148,12 +156,13 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
   arrondies, profondeur, palette cohérente et hiérarchie typographique.
 - [x] Charger les vraies icônes PNG des applications depuis leurs fichiers
   `.desktop` et thèmes XDG, avec cache, alpha et interpolation bilinéaire HiDPI.
-- [ ] Choisir la pile graphique de l’environnement cible : GTK, Qt ou autre.
-- [ ] Créer les composants : barre des tâches, menu de démarrage, fenêtres, notifications et explorateur de fichiers; le CSS actuel est une palette isolée, pas un shell graphique.
+- [x] Utiliser Rust/GDI avec backend X11 et Xft pour le prototype actuel ; le choix d'une pile de bureau définitive reste ouvert.
+- [x] Créer les composants du prototype : barre des tâches, menu Démarrer, fenêtres, notifications et Explorer ; le CSS reste une référence séparée.
 - [x] Ajouter les icônes et polices libres compatibles avec la licence du projet.
-- [x] Définir les variantes clair/sombre et les paramètres d’accessibilité.
+- [x] Définir les variantes clair/sombre et le réglage d'échelle.
+- [ ] Compléter l'accessibilité : contraste, taille du pointeur, réduction des animations et navigation accessible complète.
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
-- [x] Tester le rendu en 1920×1080 (150 %), 2560×1440 (200 %) et 3840×2160 (300 %).
+- [ ] Revalider le rendu du bureau courant en 1080p, 1440p et 4K, avec captures et interactions ; les tests X11 généraux ne prouvent pas cette matrice complète.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
   des indicateurs réseau, volume et batterie sans libellés dans la zone système.
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
@@ -170,11 +179,15 @@ se trouve dans [ROADMAP-SSD.md](ROADMAP-SSD.md).
 - [x] Ajouter des logs structurés et un niveau de verbosité configurable.
 - [x] Documenter la compilation, l’installation, le dépannage et la génération ISO.
 - [x] Ajouter un paquet de mise à jour GitHub vérifié par SHA-256, une installation
-  atomique et un retour arrière automatisé.
+  transactionnelle avec récupération et un retour arrière automatisé ; pas de garantie A/B.
 - [x] Créer une VM graphique persistante QCOW2 issue de la racine Winlux.
 - [x] Ajouter une licence GPL-3.0-or-later.
-- [x] Ajouter les mentions de provenance des composants externes distribués dans les futures images publiées.
-- [x] Publier également l’ISO et ses sommes dans les releases; le paquet du cœur
-  Winlux, son manifeste et les notes sont déjà générés par le workflow de tag.
+- [x] Fournir BUILD-INFO et sa consultation dans Paramètres → À propos.
+- [x] Sécuriser l'installateur et valider le disque installé sans ISO en BIOS/UEFI sous QEMU, avec arrêt automatique.
+- [x] Ajouter les barrières de tests Live/disque installé au workflow de release ; son exécution complète sur les runners GitHub reste à valider.
+- [x] Ajouter le fichier NOTICES au dépôt et copier les notices audio disponibles dans les ISO.
+- [ ] Vérifier et embarquer toutes les notices et les obligations de fourniture de sources pour une distribution complète ; NOTICES seul n'est pas une preuve d'empaquetage exhaustif.
+- [x] Publier ISO, sommes, paquet, manifeste et notes dans les préversions système existantes (notamment preview.4).
+- [ ] Valider une exécution complète du workflow de release modifié sur GitHub ; ses étapes de construction et tests ne constituent pas une publication déjà effectuée.
 - [ ] Signer les mises à jour (Ed25519) et implémenter le schéma A/B réel (voir `docs/AB_UPDATES.md`).
 - [ ] Committer une première version stable après validation du pipeline complet.

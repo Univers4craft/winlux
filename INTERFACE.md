@@ -5,6 +5,9 @@ construire. Le shell actuel vit dans `testexe/src/shell/` et sert notamment au
 test graphique `gui_demo.exe` ; ce n'est pas encore un gestionnaire de bureau
 autonome.
 
+Audit du 25 octobre 2026 : voir [les preuves](docs/AUDIT-MARKDOWN.md).
+Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
+
 ## Principes d'interface
 
 - **Bureau vide à la première installation** : aucun raccourci ni icône système
@@ -38,6 +41,7 @@ autonome.
   L'affichage d'icônes système n'est pas réglable depuis Paramètres.
 - Paramètres contient actuellement des pages système Linux, applications
   Windows, réseau, son/batterie, clavier/trackpad, apparence et mises à jour.
+  Les pages Écran et définition et À propos (BUILD-INFO) sont aussi présentes.
   Les options d'apparence visibles incluent le thème clair/sombre et
   l'alignement de la barre des tâches ; elles ne constituent pas encore un
   panneau de personnalisation complet.
@@ -61,6 +65,7 @@ autonome.
 - [ ] Proposer l'alignement sur une grille ou le placement libre, avec
   coordonnées enregistrées, limites de l'écran respectées et réorganisation
   après changement de résolution ou d'échelle.
+  - [x] Déplacer les trois icônes prédéfinies sur une grille et limiter leur position à l'écran ; positions uniquement en mémoire.
 - [ ] Ajouter un menu contextuel du bureau : créer un raccourci, actualiser,
   organiser, choisir l'affichage et ouvrir les paramètres pertinents.
 - [ ] Gérer sélection, multi-sélection, déplacement, menu contextuel et
@@ -86,11 +91,13 @@ Corbeille doit, elle, demander confirmation lorsque nécessaire.
   incompatibles.
 - [ ] Afficher les applications ouvertes, leur fenêtre active et leur état
   (ouverte, réduite, attention requise), avec bascule et aperçu si disponible.
+  - [x] Afficher/basculer Explorer et Paramètres dans la barre du prototype ; pas de suivi général des fenêtres Linux externes.
 - [ ] Rendre la zone de notification actionnable et accessible au clavier ;
   distinguer l'état réseau/audio/batterie de la disponibilité réelle des
   réglages correspondants.
 - [ ] Conserver les préférences de position, d'alignement et d'épinglage après
   redémarrage.
+  - [x] Conserver l'alignement de la barre et le thème sur racine persistante ; positions et épingles restent à sauvegarder.
 - [ ] Ajouter une recherche cohérente couvrant applications, fichiers et
   paramètres, avec indication de la source des résultats.
 - [ ] Clarifier les actions de session, arrêt et redémarrage et demander
@@ -118,11 +125,14 @@ expliquée.
 
 - [ ] Organiser les pages avec navigation, recherche dans les réglages,
   descriptions courtes, états de chargement, erreurs et retours de réussite.
+  - [x] Navigation latérale, cartes, télémétrie et journaux d'action ; pas de recherche transversale dans les réglages.
+- [x] Ajouter À propos avec version, commit et date lus dans BUILD-INFO, et signaler son absence sur les anciennes images.
 - [ ] Enregistrer les modifications de façon prévisible et indiquer si elles
   s'appliquent immédiatement, à la prochaine session ou après redémarrage.
 - [ ] Éviter de demander des privilèges administrateur au bureau entier ;
   demander une autorisation ciblée uniquement pour une action système qui la
   nécessite.
+  L'exigence reste ouverte : le démarrage ISO exécute encore le shell en root.
 
 ## Fonctionnalités natives pratiques à long terme
 
@@ -274,6 +284,7 @@ connaître les détails internes de Linux ou de Windows.
   de changements de résolution, sans texte ou boutons inaccessibles.
 - [ ] Compléter le redimensionnement, l'empilement et le focus des fenêtres,
   ainsi que les états maximisé, réduit et restauré.
+  - [x] Implémenter ces états pour les deux fenêtres internes Explorer/Paramètres (`wm.rs`) ; validation ergonomique complète et gestion des fenêtres externes distinctes.
 - [ ] Assurer la navigation clavier, les raccourcis cohérents, les libellés
   accessibles et un contraste suffisant dans les thèmes clair et sombre.
 - [ ] Respecter le clavier réellement configuré, les caractères Unicode,

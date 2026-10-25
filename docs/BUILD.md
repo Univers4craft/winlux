@@ -4,14 +4,15 @@
 
 | Outil | Version minimale | Usage |
 |-------|-----------------|-------|
-| Linux x86-64 | Noyau 5.4+ | Hôte d'exécution |
-| Rust stable | 1.75+ | Compilation du runtime |
+| Linux x86-64 | Voir les validations VM ; minimum non établi | Hôte d'exécution |
+| Rust stable | Version stable utilisée en CI ; MSRV non établi | Compilation du runtime |
 | Cargo | (inclus avec Rust) | Gestionnaire de paquets |
 | `x86_64-pc-windows-msvc` | cible Rust | Exécutables PE de test |
 | `rust-lld` | (inclus avec Rust) | Éditeur de liens PE |
 | `gcc-mingw-w64-x86-64` | — | Tests C MinGW (optionnel) |
 | `timeout` (coreutils) | — | Scripts de test |
-| `libasound2-dev` | — | Lecture audio WAVE (optionnel) |
+| `libasound.so.2` | Bibliothèque d'exécution | Audio ALSA (optionnel, pas besoin des en-têtes -dev) |
+| `libmpg123.so.0`, `libfaad.so.2` | Bibliothèques d'exécution | MP3/AAC et tests audio explicites |
 
 ### Installer Rust
 
@@ -38,7 +39,7 @@ Le binaire se trouve dans `target/release/winlux`.
 ## Lancer les tests
 
 ```sh
-# Tests unitaires (81 tests)
+# Tests unitaires (nombre évolutif ; voir la sortie de Cargo)
 cargo test -p winlux
 
 # Tests runtime séquentiels
@@ -98,6 +99,12 @@ sudo apt-get install -y \
   x11-xserver-utils qemu-system-x86
 ```
 
+Cette liste seule n'est pas exhaustive : voir les précontrôles de
+`scripts/build-live-iso.sh` et les paquets du workflow de release, notamment
+Xvfb, polices, libinput, BusyBox statique, codecs et conversion PNG par
+ImageMagick ou FFmpeg. Le noyau doit correspondre aux modules présents.
+Le chemin de construction reste dépendant du noyau et de la distribution hôte.
+
 ### Construire l'ISO
 
 ```sh
@@ -120,6 +127,11 @@ bash scripts/test-live-iso-qemu.sh build/winlux-live-test.iso uefi
 
 Configuration QEMU par défaut : 2 Gio RAM, 2 CPU. Configurable avec
 `WINLUX_QEMU_MEMORY` et `WINLUX_QEMU_CPUS`.
+
+L'installation autonome sur disque virtuel et les démarrages sans ISO BIOS/UEFI
+ont été validés séparément. Voir [l'installateur expérimental et ses tests](INSTALLER-SAFETY.md).
+Ne pas confondre `scripts/install.sh` (effacement d'un disque) avec
+`integration/install.sh` (installation du runtime dans un Linux existant).
 
 ### VM graphique persistante
 
@@ -191,7 +203,7 @@ Winlux utilise un système de logs structurés configurable.
 | `WINLUX_LOG=error` | Erreurs uniquement |
 | `WINLUX_LOG=warn` | Avertissements et erreurs (défaut) |
 | `WINLUX_LOG=info` | Messages informatifs |
-| `WINLUX_LOG=debug` ou `--verbose` | Détails de débogage |
+| `WINLUX_LOG=debug` | Détails de débogage ; préférer cette variable à un argument CLI non filtré |
 | `WINLUX_LOG=trace` ou `WINLUX_TRACE=1` | Traces complètes du chargeur |
 | `WINLUX_LOG=debug,json` | Format JSON structuré |
 | `WINLUX_LOG=json` | JSON en mode debug |

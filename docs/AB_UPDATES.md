@@ -83,11 +83,15 @@ L'outil `winlux-update` :
 
 ### Ce qui existe
 
-- Paquet de mise à jour avec manifeste SHA-256 (`build-update-bundle.sh`)
-- Vérification des empreintes à l'application (`winlux-update --apply`)
-- Retour arrière manuel (`winlux-update --rollback`)
-- Mise à jour automatique avec intervalle configurable
-- Verrouillage des opérations concurrentes
+- [x] Paquet de mise à jour avec manifeste SHA-256 (`build-update-bundle.sh`)
+- [x] Vérification des empreintes à l'application (`winlux-update --apply`)
+- [x] Retour arrière manuel (`winlux-update --rollback`)
+- [x] Mise à jour automatique (boucle de vérification, pas de redémarrage forcé)
+- [x] Verrouillage des opérations concurrentes
+
+Audit du 25 octobre 2026 : `scripts/test-updater.sh` couvre les transactions et
+retours arrière. Aucune case A/B ou signature n'est cochée : le schéma ci-dessus
+est une conception cible, pas le comportement du client actuel.
 
 ### À implémenter (P1)
 
