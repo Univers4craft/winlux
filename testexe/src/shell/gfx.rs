@@ -82,10 +82,8 @@ pub unsafe fn round_rect(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, b
     ellipse(hdc, b, l, bt - radius * 2, l + radius * 2, bt, color);
     ellipse(hdc, b, r - radius * 2, bt - radius * 2, r, bt, color);
 }
-/// Surface flottante : ombre douce, liseré et fond.
+/// Surface flottante : liseré fin et fond, sans ombre lourde.
 pub unsafe fn panel(hdc: Handle, b: &mut Brushes, l: i32, t: i32, r: i32, bt: i32, radius: i32, surface: u32, border: u32) {
-    round_rect(hdc, b, l - 2, t + 2, r + 2, bt + 6, radius + 2, rgb(8, 14, 32));
-    round_rect(hdc, b, l - 1, t, r + 1, bt + 3, radius + 1, rgb(14, 22, 44));
     round_rect(hdc, b, l, t, r, bt, radius, border);
     round_rect(hdc, b, l + 1, t + 1, r - 1, bt - 1, radius - 1, surface);
 }
