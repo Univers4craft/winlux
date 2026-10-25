@@ -604,6 +604,86 @@ pub extern "win64" fn lc_collate_cp_func() -> u32 {
     0
 }
 
+pub extern "win64" fn configthreadlocale(typ: i32) -> i32 {
+    // 0 = query, 1 = _ENABLE_PER_THREAD_LOCALE, 2 = _DISABLE_PER_THREAD_LOCALE
+    // En l'absence de locale par thread, renvoyer le mode global.
+    if typ == 0 {
+        2 // _DISABLE_PER_THREAD_LOCALE
+    } else {
+        // Accepter silencieusement, on n'a que la locale « C ».
+        typ
+    }
+}
+
+pub extern "win64" fn create_locale(_cat: i32, _locale: *const u8) -> usize {
+    // Retourner un handle fictif non nul pour la locale « C ».
+    static FAKE: u8 = 0;
+    &FAKE as *const u8 as usize
+}
+
+pub extern "win64" fn free_locale(_handle: usize) {}
+
+pub extern "win64" fn get_current_locale() -> usize {
+    static FAKE: u8 = 0;
+    &FAKE as *const u8 as usize
+}
+
+static PCTYPE_TABLE: [u16; 256] = {
+    let mut t = [0u16; 256];
+    // _UPPER = 1, _LOWER = 2, _DIGIT = 4, _SPACE = 8,
+    // _PUNCT = 0x10, _CONTROL = 0x20, _BLANK = 0x40, _HEX = 0x80,
+    // _ALPHA = 0x103 (includes _UPPER/_LOWER)
+    let mut i = 0;
+    while i < 256 {
+        let c = i as u8;
+        let mut v = 0u16;
+        if c <= 0x1f || c == 0x7f {
+            v |= 0x20;
+        } // control
+        if c == b' ' || c == b'\t' {
+            v |= 0x48;
+        } // space + blank
+        if c == b'\n' || c == b'\r' || c == 0x0c || c == 0x0b {
+            v |= 0x08;
+        } // space
+        if c >= b'A' && c <= b'Z' {
+            v |= 0x01 | 0x100;
+        } // upper + alpha
+        if c >= b'a' && c <= b'z' {
+            v |= 0x02 | 0x100;
+        } // lower + alpha
+        if c >= b'0' && c <= b'9' {
+            v |= 0x04;
+        } // digit
+        if (c >= b'0' && c <= b'9') || (c >= b'A' && c <= b'F') || (c >= b'a' && c <= b'f') {
+            v |= 0x80;
+        } // hex
+        if c >= b'!' && c <= b'/' {
+            v |= 0x10;
+        } // punct ranges
+        if c >= b':' && c <= b'@' {
+            v |= 0x10;
+        }
+        if c >= b'[' && c <= b'`' {
+            v |= 0x10;
+        }
+        if c >= b'{' && c <= b'~' {
+            v |= 0x10;
+        }
+        // Undo punct for alpha/digit
+        if v & (0x01 | 0x02 | 0x04) != 0 {
+            v &= !0x10;
+        }
+        t[i] = v;
+        i += 1;
+    }
+    t
+};
+
+pub extern "win64" fn pctype_func() -> *const u16 {
+    PCTYPE_TABLE.as_ptr()
+}
+
 // ---------- Gestion des exceptions C ----------
 
 /// Gestionnaire de langage des blocs `__try/__except`. Winlux ne distribue
@@ -1493,6 +1573,9 @@ pub fn exports() -> crate::dlls::Exports {
         "localeconv" => fn localeconv, "setlocale" => fn setlocale, "_wsetlocale" => fn wsetlocale,
         "___lc_codepage_func" => fn lc_codepage_func, "___mb_cur_max_func" => fn mb_cur_max_func,
         "___lc_handle_func" => fn lc_handle_func, "___lc_collate_cp_func" => fn lc_collate_cp_func,
+        "_configthreadlocale" => fn configthreadlocale, "_create_locale" => fn create_locale,
+        "_free_locale" => fn free_locale, "_get_current_locale" => fn get_current_locale,
+        "__pctype_func" => fn pctype_func,
         "__C_specific_handler" => fn c_specific_handler,
         "getenv" => fn getenv, "_wgetenv" => fn wgetenv, "_putenv" => fn putenv, "_wputenv" => fn wputenv, "_putenv_s" => fn putenv_s,
         "time" => fn time64, "_time64" => fn time64, "_time32" => fn time32,
@@ -1618,6 +1701,18 @@ mod tests {
             let mut b = [0u8; 8];
             assert_eq!(wcstombs(b.as_mut_ptr(), w.as_ptr(), 8), 3);
             assert_eq!(&b[..4], b"abc\0");
+        }
+        assert_eq!(configthreadlocale(0), 2);
+        assert_ne!(create_locale(0, std::ptr::null()), 0);
+        free_locale(0);
+        assert_ne!(get_current_locale(), 0);
+        let p = pctype_func();
+        unsafe {
+            assert_eq!(*p.add(b'A' as usize) & 0x01, 0x01); // upper
+            assert_eq!(*p.add(b'a' as usize) & 0x02, 0x02); // lower
+            assert_eq!(*p.add(b'0' as usize) & 0x04, 0x04); // digit
+            assert_eq!(*p.add(b' ' as usize) & 0x08, 0x08); // space
+            assert_eq!(*p.add(0) & 0x20, 0x20); // control
         }
     }
 
