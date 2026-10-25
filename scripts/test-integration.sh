@@ -67,6 +67,10 @@ mkdir -p "$edgebin"
 printf '#!/bin/sh\nprintf "%%s\\n" "$@" >"%s/edge.log"\n' "$work" >"$edgebin/microsoft-edge-stable"
 printf '#!/bin/sh\nprintf "firefox %%s\\n" "$@" >"%s/edge.log"\n' "$work" >"$edgebin/firefox"
 chmod +x "$edgebin/microsoft-edge-stable" "$edgebin/firefox"
+# Shadow real browsers (Chrome on CI) so only the fakes are found.
+for _b in chromium chromium-browser google-chrome-stable; do
+    ln -sf firefox "$edgebin/$_b"
+done
 PATH="$edgebin:/usr/bin:/bin" sh "$root/integration/winlux-browser" https://www.bing.com
 grep -q '^https://www.bing.com$' "$work/edge.log" || fail "winlux-browser n'ouvre pas Edge"
 rm "$edgebin/microsoft-edge-stable"
