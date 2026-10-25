@@ -67,10 +67,27 @@ mkdir -p "$edgebin"
 printf '#!/bin/sh\nprintf "%%s\\n" "$@" >"%s/edge.log"\n' "$work" >"$edgebin/microsoft-edge-stable"
 printf '#!/bin/sh\nprintf "firefox %%s\\n" "$@" >"%s/edge.log"\n' "$work" >"$edgebin/firefox"
 chmod +x "$edgebin/microsoft-edge-stable" "$edgebin/firefox"
-PATH="$edgebin:/usr/bin:/bin" sh "$root/integration/winlux-browser" https://www.bing.com
+# Only fixture browsers may be discovered. Hosted runners can have Chrome,
+# Chromium or Edge installed; launching one here is neither deterministic nor
+# safe on a headless machine. Preserve the launcher's real exec/PATH behavior
+# while excluding its absolute /opt fallback from this isolated fixture.
+ln -s "$(command -v id)" "$edgebin/id"
+ln -s "$(command -v dirname)" "$edgebin/dirname"
+printf '#!/bin/sh\nexit 0\n' >"$edgebin/notify-send"
+chmod +x "$edgebin/notify-send"
+browser_launch() (
+    export PATH="$edgebin"
+    command() {
+        test "$1" = -v || exit 99
+        case "$2" in /*) return 1 ;; esac
+        /bin/sh -c 'command -v "$1"' sh "$2"
+    }
+    . "$root/integration/winlux-browser"
+)
+browser_launch https://www.bing.com
 grep -q '^https://www.bing.com$' "$work/edge.log" || fail "winlux-browser n'ouvre pas Edge"
 rm "$edgebin/microsoft-edge-stable"
-PATH="$edgebin:/usr/bin:/bin" sh "$root/integration/winlux-browser" https://example.org 2>/dev/null
+browser_launch https://example.org 2>/dev/null
 grep -q '^firefox https://example.org$' "$work/edge.log" || fail "pas de repli quand Edge est absent"
 ok "winlux-browser préfère Edge et se replie sur un autre navigateur"
 
