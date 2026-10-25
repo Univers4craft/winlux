@@ -51,6 +51,11 @@ static mut TOAST: [u8; 120] = [0; 120];
 static mut TOAST_LEN: usize = 0;
 static mut TOAST_START: u32 = 0;
 const TOAST_MS: i32 = 4500;
+/// Panneau de notifications (centre d'action simplifié).
+static mut NOTIF_PANEL: bool = false;
+static mut NOTIF_HISTORY: [[u8; 120]; 8] = [[0; 120]; 8];
+static mut NOTIF_LENS: [usize; 8] = [0; 8];
+static mut NOTIF_COUNT: usize = 0;
 /// Atténuation du fond (0 = noir, 1000 = normal) pendant le fondu.
 static mut FADE: i32 = 1000;
 
@@ -234,7 +239,7 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
 // ---------- Menu Démarrer ----------
 
 #[derive(Clone, Copy, PartialEq)]
-enum Launch { Explorer, Settings, Documents, Pc, Programs, Updates }
+enum Launch { Explorer, Settings, Documents, Pc, Programs, Updates, Terminal, Browser }
 
 struct App { name: &'static [u8], glyph: Glyph, launch: Launch }
 const PINNED: [App; 6] = [
@@ -246,8 +251,8 @@ const PINNED: [App; 6] = [
     App { name: b"Programmes .exe", glyph: Glyph::Exe, launch: Launch::Programs },
 ];
 const RECOMMENDED: [(&[u8], &[u8], Glyph, Launch); 4] = [
-    (b"Mises \xE0 jour", b"Syst\xE8me, pilotes et applications", Glyph::Store, Launch::Updates),
-    (b"Applications Windows", b"Ouvrez un .exe d'un double-clic", Glyph::Exe, Launch::Programs),
+    (b"Terminal", b"Ouvrir un terminal Linux", Glyph::Computer, Launch::Terminal),
+    (b"Navigateur", b"Ouvrir le navigateur web", Glyph::Store, Launch::Browser),
     (b"Documents", b"Dossier personnel Linux", Glyph::Folder, Launch::Documents),
     (b"Param\xE8tres Linux et Windows", b"Clavier, r\xE9seau et alimentation", Glyph::Settings, Launch::Settings),
 ];
@@ -260,6 +265,16 @@ unsafe fn launch(what: Launch) {
         Launch::Documents => explorer::open_documents(),
         Launch::Settings => wm::open(wm::APP_SETTINGS),
         Launch::Updates => crate::settings::open_page(6),
+        Launch::Terminal => {
+            static TERM: &[u16] = &[b'x' as u16, b't' as u16, b'e' as u16, b'r' as u16, b'm' as u16, 0];
+            static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+            ShellExecuteW(core::ptr::null_mut(), OPEN.as_ptr(), TERM.as_ptr(), core::ptr::null(), core::ptr::null(), 1);
+        }
+        Launch::Browser => {
+            static BROWSER: &[u16] = &[b'w' as u16, b'i' as u16, b'n' as u16, b'l' as u16, b'u' as u16, b'x' as u16, b'-' as u16, b'b' as u16, b'r' as u16, b'o' as u16, b'w' as u16, b's' as u16, b'e' as u16, b'r' as u16, 0];
+            static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+            ShellExecuteW(core::ptr::null_mut(), OPEN.as_ptr(), BROWSER.as_ptr(), core::ptr::null(), core::ptr::null(), 1);
+        }
     }
 }
 
@@ -343,6 +358,20 @@ pub unsafe fn toast(msg: &[u8]) {
     TOAST[..n].copy_from_slice(&msg[..n]);
     TOAST_LEN = n;
     TOAST_START = now();
+    // Historique pour le panneau de notifications.
+    if NOTIF_COUNT < NOTIF_HISTORY.len() {
+        NOTIF_HISTORY[NOTIF_COUNT][..n].copy_from_slice(&msg[..n]);
+        NOTIF_LENS[NOTIF_COUNT] = n;
+        NOTIF_COUNT += 1;
+    } else {
+        for i in 1..NOTIF_HISTORY.len() {
+            NOTIF_HISTORY[i - 1] = NOTIF_HISTORY[i];
+            NOTIF_LENS[i - 1] = NOTIF_LENS[i];
+        }
+        let last = NOTIF_HISTORY.len() - 1;
+        NOTIF_HISTORY[last][..n].copy_from_slice(&msg[..n]);
+        NOTIF_LENS[last] = n;
+    }
 }
 
 unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
@@ -364,6 +393,41 @@ unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let cut = if msg.len() > per_line { msg[..per_line].iter().rposition(|&c| c == b' ').unwrap_or(per_line) } else { msg.len() };
     text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), x + 16, y + 46, &msg[..cut]);
     if cut < msg.len() { text_fit(hdc, f.body, 13, rgb(0xF2, 0xF2, 0xF2), x + 16, y + 66, &msg[(cut + 1).min(msg.len())..], w - 32); }
+}
+
+// ---------- Panneau de notifications ----------
+
+unsafe fn draw_notif_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if !NOTIF_PANEL { return; }
+    let w = 380;
+    let x = l.w - w - 12;
+    let header_h = 44;
+    let row_h = 56;
+    let rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
+    let empty_h = 60;
+    let h = header_h + if rows == 0 { empty_h } else { rows as i32 * row_h } + 8;
+    let y = l.bar_top - 12 - h;
+    panel(hdc, b, x, y, x + w, y + h, 8, rgb(0x24, 0x27, 0x2F), rgb(0x3A, 0x3F, 0x4A));
+    text(hdc, f.semibold, rgb(0xF2, 0xF2, 0xF2), x + 16, y + 14, b"Notifications");
+    if NOTIF_COUNT > 0 {
+        let clr = rect(x + w - 120, y + 8, x + w - 16, y + 36);
+        round_rect(hdc, b, clr.left, clr.top, clr.right, clr.bottom, 4, rgb(0x31, 0x35, 0x3F));
+        text(hdc, f.small, rgb(0xC5, 0xC5, 0xC5), clr.left + 10, clr.top + 7, b"Tout effacer");
+    }
+    fill(hdc, b, x + 1, y + header_h - 1, x + w - 1, y + header_h, rgb(0x3A, 0x3F, 0x4A));
+    if rows == 0 {
+        text_centered(hdc, f.body, 13, rgb(0x9A, 0xA3, 0xAE), x + w / 2, y + header_h + 20, b"Aucune notification");
+    } else {
+        for i in 0..rows {
+            let idx = if NOTIF_COUNT <= NOTIF_HISTORY.len() { i } else { i };
+            let ry = y + header_h + (rows - 1 - i) as i32 * row_h;
+            if i > 0 { fill(hdc, b, x + 16, ry - 1, x + w - 16, ry, rgb(0x34, 0x38, 0x42)); }
+            glyph(hdc, b, f, Glyph::Start, x + 16, ry + 10, 14);
+            text(hdc, f.caption, rgb(0xC5, 0xC5, 0xC5), x + 38, ry + 8, b"Winlux");
+            let msg = &NOTIF_HISTORY[idx][..NOTIF_LENS[idx]];
+            text_fit(hdc, f.body, 13, rgb(0xF2, 0xF2, 0xF2), x + 16, ry + 28, msg, w - 32);
+        }
+    }
 }
 
 // ---------- Icônes du bureau ----------
@@ -466,6 +530,7 @@ pub unsafe fn draw(hdc: Handle) {
             wm::draw(&mut g);
         }
         start_menu(hdc, &mut b, &f, &l);
+        draw_notif_panel(hdc, &mut b, &f, &l);
         draw_toast(hdc, &mut b, &f, &l);
         let bar_dy = if FADE < 1000 { (1000 - ease_out(intro, INTRO_MS)) * TASKBAR_HEIGHT / 1000 } else { 0 };
         taskbar(hdc, &mut b, &f, &l, bar_dy);
@@ -544,9 +609,27 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             }
         }
         let tray = l.w - 12 - 92 - 96;
-        if x >= tray && x < tray + 24 { crate::settings::open_page(2); }
+        if x >= tray - 28 && x < tray { NOTIF_PANEL = !NOTIF_PANEL; }
+        else if x >= tray && x < tray + 24 { crate::settings::open_page(2); }
         else if x >= tray + 24 && x < tray + 88 { crate::settings::open_page(3); }
         else { return; }
+        repaint(hwnd);
+        return;
+    }
+    if NOTIF_PANEL && y < l.bar_top {
+        let pw = 380;
+        let px = l.w - pw - 12;
+        let rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
+        let ph = 44 + if rows == 0 { 60 } else { rows as i32 * 56 } + 8;
+        let py = l.bar_top - 12 - ph;
+        if x >= px && x < px + pw && y >= py && y < py + ph {
+            if NOTIF_COUNT > 0 && x >= px + pw - 120 && x < px + pw - 16 && y >= py + 8 && y < py + 36 {
+                NOTIF_COUNT = 0;
+                for i in 0..NOTIF_LENS.len() { NOTIF_LENS[i] = 0; }
+            }
+        } else {
+            NOTIF_PANEL = false;
+        }
         repaint(hwnd);
         return;
     }

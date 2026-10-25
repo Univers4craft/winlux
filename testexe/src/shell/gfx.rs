@@ -105,6 +105,8 @@ pub fn mix(a: u32, c: u32, t: i32, n: i32) -> u32 {
 pub static mut DARK: bool = true;
 /// Couleur d'accentuation (COLORREF), bleu Windows par défaut.
 pub static mut ACCENT: u32 = rgb(0x4C, 0xC2, 0xFF);
+/// Mode contraste élevé (accessibilité).
+pub static mut HIGH_CONTRAST: bool = false;
 
 /// Palette des fenêtres façon Windows 11 (fond « Mica », surfaces, textes).
 #[derive(Clone, Copy)]
@@ -116,6 +118,15 @@ pub struct Palette {
 
 pub fn pal() -> Palette {
     let accent = unsafe { ACCENT };
+    if unsafe { HIGH_CONTRAST } {
+        return Palette {
+            window: rgb(0x00, 0x00, 0x00), mica: rgb(0x00, 0x00, 0x00), surface: rgb(0x00, 0x00, 0x00),
+            surface2: rgb(0x1A, 0x1A, 0x1A), border: rgb(0xFF, 0xFF, 0xFF), hover: rgb(0x1A, 0x1A, 0x1A),
+            pressed: rgb(0x33, 0x33, 0x33), selected: rgb(0x00, 0x00, 0x80),
+            text: rgb(0xFF, 0xFF, 0xFF), text2: rgb(0xFF, 0xFF, 0x00), text3: rgb(0x00, 0xFF, 0x00),
+            accent: rgb(0xFF, 0xFF, 0x00), on_accent: rgb(0x00, 0x00, 0x00), shadow: rgb(0x00, 0x00, 0x00),
+        };
+    }
     if unsafe { DARK } {
         Palette {
             window: rgb(0x20, 0x20, 0x20), mica: rgb(0x1C, 0x1F, 0x26), surface: rgb(0x2B, 0x2B, 0x2B),
