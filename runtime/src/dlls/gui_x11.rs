@@ -343,24 +343,6 @@ fn font_candidates(spec: &FontSpec) -> Vec<Vec<u8>> {
     unique
 }
 
-fn detect_no_wm(conn: &RustConnection, screen: usize) -> bool {
-    if std::env::var("WINLUX_NO_DECORATIONS").is_ok_and(|v| v == "1") { return true; }
-    if std::env::var("WINLUX_DECORATIONS").is_ok_and(|v| v == "0") { return true; }
-    let root = conn.setup().roots[screen].root;
-    let wm_check = match conn.intern_atom(false, b"_NET_SUPPORTING_WM_CHECK") {
-        Ok(cookie) => match cookie.reply() { Ok(r) => r.atom, Err(_) => return true },
-        Err(_) => return true,
-    };
-    let prop = conn.get_property(false, root, wm_check, AtomEnum::WINDOW, 0, 1);
-    match prop {
-        Ok(cookie) => match cookie.reply() {
-            Ok(reply) => reply.value.is_empty(),
-            Err(_) => true,
-        },
-        Err(_) => true,
-    }
-}
-
 fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
     let automatic = ((dpi.max(1.0) / 96.0) * 4.0).round() / 4.0;
     requested
@@ -368,12 +350,6 @@ fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
         .unwrap_or(automatic)
         .clamp(1.0, 3.0)
 }
-
-/// Hauteur de la barre de titre maison (en pixels logiques).
-const DECO_TITLE_HEIGHT: i32 = 30;
-const DECO_TITLE_BG: u32 = 0x00404040;
-const DECO_TITLE_FG: u32 = 0x00FFFFFF;
-const DECO_CLOSE_BG: u32 = 0x000000E0;
 
 pub struct X11Backend {
     conn: RustConnection,
@@ -411,10 +387,6 @@ pub struct X11Backend {
     x11_dirty: Cell<bool>,
     /// Glyphes Xft pas encore confirmés par le serveur.
     xft_dirty: Cell<bool>,
-    /// `true` quand aucun gestionnaire de fenêtres n'a été détecté à la connexion.
-    no_wm: bool,
-    /// Titres des fenêtres pour les décorations maison.
-    titles: HashMap<usize, String>,
 }
 
 impl X11Backend {
@@ -436,7 +408,6 @@ impl X11Backend {
         let scale = dpi_scale(dpi_x, requested_scale);
         let wm_protocols = conn.intern_atom(false, b"WM_PROTOCOLS").ok()?.reply().ok()?.atom;
         let wm_delete = conn.intern_atom(false, b"WM_DELETE_WINDOW").ok()?.reply().ok()?.atom;
-        let no_wm = detect_no_wm(&conn, screen);
         Some(X11Backend {
             conn,
             screen,
@@ -457,8 +428,6 @@ impl X11Backend {
             back: HashMap::new(),
             x11_dirty: Cell::new(false),
             xft_dirty: Cell::new(false),
-            no_wm,
-            titles: HashMap::new(),
         })
     }
 
@@ -617,55 +586,6 @@ impl X11Backend {
                     height: band_h,
                 }],
             );
-        }
-        let _ = self.conn.flush();
-    }
-
-    fn paint_decorations(&mut self, hwnd: usize, w: &XWin) {
-        if !self.no_wm { return; }
-        self.before_x11();
-        let th = self.scaled(DECO_TITLE_HEIGHT).max(1) as u16;
-        let bg = self.alloc_color(DECO_TITLE_BG);
-        let _ = self.conn.change_gc(w.gc, &ChangeGCAux::new().foreground(bg));
-        let _ = self.conn.poly_fill_rectangle(w.window, w.gc, &[
-            x11rb::protocol::xproto::Rectangle { x: 0, y: 0, width: w.width, height: th },
-        ]);
-        let close_w = th.min(w.width);
-        let close_x = w.width.saturating_sub(close_w) as i16;
-        let close_bg = self.alloc_color(DECO_CLOSE_BG);
-        let _ = self.conn.change_gc(w.gc, &ChangeGCAux::new().foreground(close_bg));
-        let _ = self.conn.poly_fill_rectangle(w.window, w.gc, &[
-            x11rb::protocol::xproto::Rectangle { x: close_x, y: 0, width: close_w, height: th },
-        ]);
-        let cross_fg = self.alloc_color(DECO_TITLE_FG);
-        let _ = self.conn.change_gc(w.gc, &ChangeGCAux::new().foreground(cross_fg).line_width(2));
-        let m = (th as i16) / 4;
-        let cx = close_x + m;
-        let cy = m;
-        let cw = close_w as i16 - m * 2;
-        let ch = th as i16 - m * 2;
-        let _ = self.conn.poly_segment(w.window, w.gc, &[
-            x11rb::protocol::xproto::Segment { x1: cx, y1: cy, x2: cx + cw, y2: cy + ch },
-            x11rb::protocol::xproto::Segment { x1: cx + cw, y1: cy, x2: cx, y2: cy + ch },
-        ]);
-        let _ = self.conn.change_gc(w.gc, &ChangeGCAux::new().line_width(0));
-        if let Some(title) = self.titles.get(&hwnd) {
-            if !title.is_empty() {
-                let spec = FontSpec { height: (th as i32 * 2 / 3).max(10), ..FontSpec::default() };
-                let text_bytes = title.as_bytes();
-                let baseline = (th as i32 * 3 / 4).max(1);
-                if let Some(ref mut xft) = unsafe { &mut *std::ptr::from_ref(self).cast_mut() }.xft {
-                    self.before_x11();
-                    let _ = self.conn.flush();
-                    if let Ok(cookie) = self.conn.get_input_focus() { let _ = cookie.reply(); }
-                    self.xft_dirty.set(true);
-                    xft.draw(w.window, &spec, 8, baseline, text_bytes, DECO_TITLE_FG);
-                } else {
-                    let title_fg = self.alloc_color(DECO_TITLE_FG);
-                    let _ = self.conn.change_gc(w.gc, &ChangeGCAux::new().foreground(title_fg));
-                    let _ = self.conn.image_text8(w.window, w.gc, 8, baseline as i16, text_bytes);
-                }
-            }
         }
         let _ = self.conn.flush();
     }
@@ -1798,7 +1718,6 @@ impl gui::GuiBackend for X11Backend {
             XWin { window: win, gc, x: x as i32, y: y as i32, width: w, height: h },
         );
         self.by_xwin.insert(win, hwnd);
-        self.titles.insert(hwnd, title.to_string());
     }
 
     fn draw(&mut self, hwnd: usize, cmds: &[DrawCmd]) {
@@ -1807,12 +1726,10 @@ impl gui::GuiBackend for X11Backend {
         if let Some(pixmap) = self.back_buffer(hwnd, &w) {
             let target = XWin { window: pixmap, ..w };
             self.paint_theme(&target);
-            self.paint_decorations(hwnd, &target);
             self.paint_cmds(&target, cmds);
             self.present(&w, pixmap, 0, 0, w.width, w.height);
         } else {
             self.paint_theme(&w);
-            self.paint_decorations(hwnd, &w);
             self.paint_cmds(&w, cmds);
             self.before_x11();
             let _ = self.conn.flush();
@@ -1821,7 +1738,6 @@ impl gui::GuiBackend for X11Backend {
 
     fn destroy_window(&mut self, hwnd: usize) {
         self.content.remove(&hwnd);
-        self.titles.remove(&hwnd);
         if let Some((pixmap, _, _)) = self.back.remove(&hwnd) { let _ = self.conn.free_pixmap(pixmap); }
         if let Some(w) = self.windows.remove(&hwnd) {
             self.by_xwin.remove(&w.window);
@@ -1843,7 +1759,6 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn set_title(&mut self, hwnd: usize, title: &str) {
-        self.titles.insert(hwnd, title.to_string());
         if let Some(w) = self.windows.get(&hwnd) {
             let title_bytes = crate::dlls::encode_ansi(title);
             let _ = self.conn.change_property8(

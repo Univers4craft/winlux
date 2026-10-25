@@ -10,12 +10,12 @@ const MF_E_UNSUPPORTED_SERVICE: i32 = 0xC00D36B4u32 as i32;
 
 // ---------- MFPlat ----------
 pub extern "win64" fn mf_startup(_version: u32, _flags: u32) -> i32 { S_OK }
-pub extern "win64" fn mf_shutdown() {}
+pub extern "win64" fn mf_shutdown() -> i32 { S_OK }
 pub unsafe extern "win64" fn mf_create_attributes(out: *mut *mut c_void, _size: u32) -> i32 {
     if !out.is_null() { *out = std::ptr::null_mut(); }
     E_NOTIMPL
 }
-pub unsafe extern "win64" fn mf_shutdown_object(_obj: *mut c_void) -> i32 { S_OK }
+pub unsafe extern "win64" fn mf_shutdown_object(_obj: *mut c_void) -> i32 { E_NOTIMPL }
 
 pub unsafe extern "win64" fn mf_create_media_session(
     _config: *mut c_void, out: *mut *mut c_void,

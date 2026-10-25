@@ -659,19 +659,16 @@ pub unsafe extern "win64" fn get_hglobal_from_stream(stream: *mut c_void, out: *
 }
 
 pub unsafe extern "win64" fn co_create_instance(
-    rclsid: *const c_void,
+    _rclsid: *const c_void,
     _outer: usize,
     _ctx: u32,
-    riid: *const c_void,
+    _riid: *const c_void,
     out: *mut *mut c_void,
 ) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }
     *out = std::ptr::null_mut();
-    if let Some(hr) = crate::dlls::quartz::try_create_dshow(rclsid as *const u8, riid as *const u8, out) {
-        return hr;
-    }
     E_NOINTERFACE
 }
 
