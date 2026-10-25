@@ -255,15 +255,13 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
         Glyph::Store => {
             let sc = rgb(0x0F, 0x6C, 0xBD);
             let w = rgb(0xFF, 0xFF, 0xFF);
-            let sl = x + s / 6;
-            let sr = x + s * 5 / 6;
-            let shield_w = sr - sl;
-            round_rect(hdc, b, sl, y + s / 10, sr, y + s * 5 / 8, 3, sc);
-            let steps = s * 5 / 16;
-            for k in 0..steps { let h = shield_w * (steps - k) / (2 * steps.max(1)); if h > 0 { fill(hdc, b, x + s / 2 - h, y + s * 5 / 8 + k, x + s / 2 + h, y + s * 5 / 8 + k + 1, sc); } }
-            let t = (s / 9).max(1);
-            line(hdc, b, x + s * 5 / 16, y + s * 7 / 16, x + s * 7 / 16, y + s * 9 / 16, t, w);
-            line(hdc, b, x + s * 7 / 16, y + s * 9 / 16 - t, x + s * 11 / 16, y + s * 5 / 16, t, w);
+            // Un sac représente le magasin, pas un bouclier de sécurité.
+            ellipse(hdc, b, x + s / 3, y + s / 12, x + s * 2 / 3, y + s / 2, sc);
+            ellipse(hdc, b, x + s * 5 / 12, y + s / 6, x + s * 7 / 12, y + s * 5 / 12, glyph_bg());
+            round_rect(hdc, b, x + s / 6, y + s / 3, x + s * 5 / 6, y + s * 11 / 12, 3, sc);
+            let t = (s / 12).max(1);
+            fill(hdc, b, x + s / 2 - t, y + s / 2, x + s / 2 + t, y + s * 3 / 4, w);
+            fill(hdc, b, x + s * 3 / 8, y + s * 5 / 8 - t, x + s * 5 / 8, y + s * 5 / 8 + t, w);
         }
         Glyph::Settings => {
             let gc = rgb(0x9A, 0xA3, 0xAE);
@@ -274,8 +272,8 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
             fill(hdc, b, cx - tw, y + s * 3 / 4, cx + tw, y + s, gc);
             fill(hdc, b, x, cy - tw, x + s / 4, cy + tw, gc);
             fill(hdc, b, x + s * 3 / 4, cy - tw, x + s, cy + tw, gc);
-            let d = s * 5 / 16;
-            let dt = (tw * 3 + 1) / 2;
+            let d = s / 4;
+            let dt = (s / 8).max(1);
             fill(hdc, b, cx - d - dt, cy - d - dt, cx - d + dt, cy - d + dt, gc);
             fill(hdc, b, cx + d - dt, cy - d - dt, cx + d + dt, cy - d + dt, gc);
             fill(hdc, b, cx - d - dt, cy + d - dt, cx - d + dt, cy + d + dt, gc);
