@@ -118,11 +118,62 @@ unsafe fn set_start(open: bool) {
     if open { START_OPEN = true; START_CLOSING = false; } else if START_OPEN { START_CLOSING = true; }
 }
 
-// ---------- Fond d'écran « bloom » ----------
+// ---------- Fond d'écran ----------
 
 fn fc(c: u32) -> u32 { unsafe { if FADE >= 1000 { c } else { mix(0, c, FADE, 1000) } } }
 
-unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
+static mut WP_DC: Handle = core::ptr::null_mut();
+static mut WP_W: i32 = 0;
+static mut WP_H: i32 = 0;
+static mut WP_TRIED: bool = false;
+
+unsafe fn load_wallpaper(hdc: Handle) {
+    if WP_TRIED { return; }
+    WP_TRIED = true;
+    let path = c"Z:\\usr\\share\\winlux\\wallpaper.bmp";
+    let f = CreateFileA(path.as_ptr(), 0x8000_0000, 1, core::ptr::null_mut(), 3, 0, core::ptr::null_mut());
+    if f.is_null() || f == -1isize as Handle { return; }
+    let fsize = GetFileSize(f, core::ptr::null_mut());
+    if fsize < 54 + 12 { CloseHandle(f); return; }
+    let mut hdr = [0u8; 54];
+    let mut read = 0u32;
+    ReadFile(f, hdr.as_mut_ptr(), 54, &mut read, core::ptr::null_mut());
+    if read != 54 || hdr[0] != b'B' || hdr[1] != b'M' { CloseHandle(f); return; }
+    let off = u32::from_le_bytes([hdr[10], hdr[11], hdr[12], hdr[13]]);
+    let w = i32::from_le_bytes([hdr[18], hdr[19], hdr[20], hdr[21]]);
+    let h = i32::from_le_bytes([hdr[22], hdr[23], hdr[24], hdr[25]]);
+    let bpp = u16::from_le_bytes([hdr[28], hdr[29]]);
+    if w <= 0 || h == 0 || (bpp != 24 && bpp != 32) { CloseHandle(f); return; }
+    let abs_h = if h < 0 { -h } else { h };
+    let stride = ((w as u32 * bpp as u32 / 8 + 3) & !3) as usize;
+    let pixel_bytes = stride * abs_h as usize;
+    let info = BitmapInfoHeader {
+        size: 40, width: w, height: abs_h, planes: 1, bit_count: bpp,
+        compression: 0, ..Default::default()
+    };
+    let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
+    let mem_dc = CreateCompatibleDC(hdc);
+    let dib = CreateDIBSection(mem_dc, &info, 0, &mut bits, core::ptr::null_mut(), 0);
+    if dib.is_null() || bits.is_null() { DeleteDC(mem_dc); CloseHandle(f); return; }
+    SelectObject(mem_dc, dib);
+    SetFilePointer(f, off as i32, core::ptr::null_mut(), 0);
+    let dst = bits as *mut u8;
+    let mut total = 0usize;
+    while total < pixel_bytes {
+        let chunk = (pixel_bytes - total).min(65536) as u32;
+        let mut got = 0u32;
+        ReadFile(f, dst.add(total), chunk, &mut got, core::ptr::null_mut());
+        if got == 0 { break; }
+        total += got as usize;
+    }
+    CloseHandle(f);
+    if total < pixel_bytes { DeleteObject(dib); DeleteDC(mem_dc); return; }
+    WP_DC = mem_dc;
+    WP_W = w;
+    WP_H = abs_h;
+}
+
+unsafe fn wallpaper_bloom(hdc: Handle, b: &mut Brushes, l: &Layout) {
     let top = rgb(0x06, 0x12, 0x33);
     let bottom = rgb(0x0C, 0x2E, 0x6E);
     let bands = 48;
@@ -131,8 +182,6 @@ unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
         let y1 = l.h * (i + 1) / bands;
         fill(hdc, b, 0, y0, l.w, y1, fc(mix(top, bottom, i, bands - 1)));
     }
-    // Fleur stylisée : pétales verticaux en éventail, du plus sombre à
-    // l'extérieur au plus clair au centre, éclairés depuis leur base.
     let r = l.h.min(l.w * 3 / 4) * 9 / 25;
     let (cx, base) = (l.w / 2, l.h * 3 / 5 + r / 3);
     let petals: [(i32, i32, i32, u32, u32); 5] = [
@@ -142,7 +191,6 @@ unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
         (r * 3 / 5, r * 9 / 20, r * 8 / 5, rgb(0x15, 0x48, 0xA8), rgb(0x4E, 0x96, 0xF0)),
         (0, r / 2, r * 2, rgb(0x1E, 0x60, 0xD0), rgb(0xB4, 0xD8, 0xFF)),
     ];
-    // Pendant les animations, moins de dégradés : le dessin reste fluide.
     let steps = if wm::animating() || START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS { 14 } else { 28 };
     for (dx, rx, ry, outer, inner) in petals {
         for k in 0..steps {
@@ -151,6 +199,15 @@ unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
             let px = cx + dx;
             ellipse(hdc, b, px - sx, base - sy, px + sx, base, fc(mix(outer, inner, k, steps - 1)));
         }
+    }
+}
+
+unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
+    load_wallpaper(hdc);
+    if !WP_DC.is_null() && FADE >= 1000 {
+        StretchBlt(hdc, 0, 0, l.w, l.h, WP_DC, 0, 0, WP_W, WP_H, 0x00CC_0020);
+    } else {
+        wallpaper_bloom(hdc, b, l);
     }
 }
 
