@@ -18,7 +18,7 @@ runtime=${WINLUX_UPDATE_RUNTIME:-"$root/target/release/winlux"}
 if test "$scope" = system; then
     stage=${WINLUX_UPDATE_STAGE:-"$root/build/winlux-live-test/initramfs-root"}
     boot=${WINLUX_UPDATE_BOOT:-"$root/build/winlux-live-test/iso-root/boot"}
-    for required in init usr/bin/winlux opt/winlux/tests/gui_demo.exe; do test -f "$stage/$required" || { echo "stage système incomplet : $required ; reconstruisez l'ISO" >&2; exit 1; }; done
+    for required in init usr/bin/winlux opt/winlux/tests/gui_demo.exe usr/share/winlux/BUILD-INFO; do test -f "$stage/$required" || { echo "stage système incomplet : $required ; reconstruisez l'ISO" >&2; exit 1; }; done
     test "$(cat "$stage/usr/share/winlux/version")" = "$version" || { echo 'version du stage différente du paquet demandé ; reconstruisez l’ISO avec cette version' >&2; exit 1; }
     test -d "$stage/lib/modules" || { echo 'modules noyau absents du stage' >&2; exit 1; }
     # Shared libraries are replaced by a complete OS update; the installer must
@@ -52,6 +52,9 @@ cp "$root/scripts/winlux-update.sh" "$raw/usr/bin/winlux-update"
 chmod 755 "$raw/usr/bin/winlux" "$raw/usr/bin/winlux-update"
 printf '%s\n' "$version" >"$raw/usr/share/winlux/version"
 printf '%s\n' "$scope" >"$raw/usr/share/winlux/update-scope"
+if test "$scope" = runtime; then
+    sh "$root/scripts/build-info.sh" "$version" runtime >"$raw/usr/share/winlux/BUILD-INFO"
+fi
 files="$work/package/FILES"
 links="$work/package/LINKS"
 : >"$files"; : >"$links"

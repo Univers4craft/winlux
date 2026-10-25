@@ -209,8 +209,12 @@ printf 'new default\n' >"$stage/etc/winlux/settings.conf"
 printf 'kernel-new\n' >"$boot/vmlinuz"
 printf 'initramfs-new\n' >"$boot/winlux-initramfs.cpio.gz"
 printf 'updater-system\n' >"$stage/usr/share/winlux/version"
+SOURCE_DATE_EPOCH=0 sh "$root/scripts/build-info.sh" updater-system system >"$stage/usr/share/winlux/BUILD-INFO"
+grep -q '^built_at_utc=1970-01-01T00:00:00Z$' "$stage/usr/share/winlux/BUILD-INFO"
 if test -f "$root/scripts/source-fingerprint.sh"; then sh "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"; fi
 WINLUX_UPDATE_STAGE="$stage" WINLUX_UPDATE_BOOT="$boot" "$root/scripts/build-update-bundle.sh" --system updater-system >/dev/null
+tar -xOf "$root/build/winlux-update-updater-system.tar.gz" payload/usr/share/winlux/BUILD-INFO >"$test_root/packaged-build-info"
+cmp "$stage/usr/share/winlux/BUILD-INFO" "$test_root/packaged-build-info"
 cp "$root/build/winlux-update-updater-system.tar.gz" "$assets/"
 cp "$root/build/winlux-update-manifest.txt" "$assets/manifest.txt"
 mkdir -p "$fixture/opt/winlux/tests" "$fixture/boot" "$fixture/lib/modules/test-kernel"
@@ -245,6 +249,7 @@ test ! -f "$fixture/run/winlux/update-action"
 printf 'desktop-newer\n' >"$stage/opt/winlux/tests/gui_demo.exe"
 ln -s /usr/share/winlux "$stage/usr/share/directory-link"
 printf 'updater-desktop\n' >"$stage/usr/share/winlux/version"
+sh "$root/scripts/build-info.sh" updater-desktop system >"$stage/usr/share/winlux/BUILD-INFO"
 if test -f "$root/scripts/source-fingerprint.sh"; then sh "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"; fi
 WINLUX_UPDATE_STAGE="$stage" WINLUX_UPDATE_BOOT="$boot" "$root/scripts/build-update-bundle.sh" --system updater-desktop >/dev/null
 cp "$root/build/winlux-update-updater-desktop.tar.gz" "$assets/"
@@ -257,6 +262,7 @@ test -L "$fixture/usr/share/directory-link"
 # a temporary file into its (absolute, and on this test host external) target.
 printf 'desktop-newest\n' >"$stage/opt/winlux/tests/gui_demo.exe"
 printf 'updater-desktop-2\n' >"$stage/usr/share/winlux/version"
+sh "$root/scripts/build-info.sh" updater-desktop-2 system >"$stage/usr/share/winlux/BUILD-INFO"
 if test -f "$root/scripts/source-fingerprint.sh"; then sh "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"; fi
 WINLUX_UPDATE_STAGE="$stage" WINLUX_UPDATE_BOOT="$boot" "$root/scripts/build-update-bundle.sh" --system updater-desktop-2 >/dev/null
 cp "$root/build/winlux-update-updater-desktop-2.tar.gz" "$assets/"
