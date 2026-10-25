@@ -35,7 +35,7 @@ case "$1" in --list) echo 12 ;; list-props) echo 'libinput Tapping Enabled (100)
 MOCK
 cat > "$work/bin/winlux-update" <<'MOCK'
 #!/bin/sh
-case "$*" in '--auto status') echo enabled ;; --list) echo 'desktop v1 -> v2' ;; *) printf 'update %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"; echo 'Update complete' ;; esac
+case "$*" in --busy) test "${WINLUX_TEST_BUSY:-0}" = 1 ;; '--auto status') echo enabled ;; --list) echo 'desktop v1 -> v2' ;; *) printf 'update %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"; echo 'Update complete' ;; esac
 MOCK
 cat > "$work/bin/winlux-network" <<'MOCK'
 #!/bin/sh
@@ -73,6 +73,11 @@ control update-check
 grep -q '^desktop v1 -> v2$' "$work/root/run/winlux/updates.txt"
 control update-apply
 grep -q '^Update complete$' "$work/root/run/winlux/update.log"
+touch "$work/root/etc/winlux/live-session"
+if WINLUX_TEST_BUSY=1 control poweroff; then echo 'ERROR: shutdown allowed during update' >&2; exit 1; fi
+if WINLUX_TEST_BUSY=1 control reboot; then echo 'ERROR: reboot allowed during update' >&2; exit 1; fi
+if WINLUX_TEST_BUSY=1 control restart-session; then echo 'ERROR: session restart allowed during update' >&2; exit 1; fi
+rm "$work/root/etc/winlux/live-session"
 printf '%s' 'ghp_testOnlyToken123' > "$work/root/run/winlux/update-token-request"
 control update-save-token
 test ! -e "$work/root/run/winlux/update-token-request"

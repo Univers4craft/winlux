@@ -2,91 +2,68 @@
 
 [![CI](https://github.com/Univers4craft/winlux/actions/workflows/ci.yml/badge.svg)](https://github.com/Univers4craft/winlux/actions/workflows/ci.yml)
 
-Winlux est un runtime expérimental Linux qui charge des exécutables **Windows PE32+ x86-64** et fournit un sous-ensemble d’API Win32 écrit en Rust. Le projet vise une interopérabilité progressive avec Linux; il ne s’appuie pas sur Wine.
+**Un environnement Linux au bureau familier, avec un runtime Windows développé en Rust, sans Wine.**
 
-> **État expérimental :** la compatibilité est partielle. Ce projet ne garantit ni l’exécution de tout logiciel Windows, ni l’absence de crash. Les applications GUI complexes et les interfaces .NET Windows restent incomplètes.
+Winlux réunit un chargeur d’exécutables **Windows PE32+ x86-64**, un sous-ensemble d’API Win32 et un prototype de bureau X11. Une ISO Linux expérimentale permet de tester l’ensemble en machine virtuelle.
 
-## État testé
+> **Préversion technique, pas un remplacement de Windows prêt à l’emploi.**
+> Tous les `.exe` ne fonctionnent pas. Photoshop, WPF et WinForms ne sont pas garantis compatibles. Privilégiez les tests en VM : l’installation généraliste sur SSD reste à développer.
 
-Les tests unitaires du runtime et dix exécutables PE couvrent le chargeur et les principales API implémentées. Les exécutables incluent `hello.exe`, `exitcode.exe`, `p1_suite.exe`, des tests de DLL réelle/import différé, `findfiles.exe`, `crt_suite.exe`, les tests GUI et `explorer_regression.exe` (noms longs, copies, chemins et raccourcis). Ils sont compilés en PE Windows x64 avec Rust et `rust-lld`, puis exécutés directement sous Winlux, séquentiellement ou tous en parallèle.
+[Compatibilité](COMPATIBILITY.md) · [Interface](INTERFACE.md) · [Feuille de route](TODO.md) · [Installation SSD : objectifs](ROADMAP-SSD.md) · [Releases](https://github.com/Univers4craft/winlux/releases)
 
-Le runtime contient notamment un chargeur PE, les relocations et imports, un PEB/TEB minimal, du TLS, des DLL intégrées partielles, le registre Winlux persistant, des fichiers mappés vers Linux (énumération, fichiers temporaires, métadonnées), une fondation COM/OLE native (`CoInitializeEx`, GUID, mémoire COM et `IStream` sur `HGLOBAL`) et une passerelle Winsock/ALSA expérimentale.
+## Ce qui existe aujourd’hui
 
-Le sous-ensemble de processus implémente `CreateProcessA/W` pour lancer un programme Linux ou un PE enfant via Winlux, avec attente, code de sortie, blocs d’environnement A/W et `CREATE_SUSPENDED`/`ResumeThread`. L’héritage des handles et les attributs étendus ne sont pas encore implémentés. Les fichiers prennent en charge des E/S overlapped élémentaires via `ReadFile`/`WriteFile`, `GetOverlappedResult`, une annulation best-effort avec `CancelIo/CancelIoEx` et un sous-ensemble IOCP.
+### Bureau
 
-Le prototype de bureau X11 possède maintenant un thème professionnel HiDPI : papier peint vectoriel animé avec accents violets, barre des tâches compacte pleine largeur, bouton Démarrer réduit à son icône, indicateurs réseau/audio/batterie dynamiques à droite et menu inspiré de Cinnamon plus compact, avec profil, emplacements, catégories, recherche et accès aux paramètres Linux/Windows. Les raccourcis du bureau peuvent être alignés sur une grille ou déplacés librement, y compris en se superposant. Les applications utilisent leurs vraies icônes PNG déclarées par les fichiers `.desktop` et les thèmes XDG; le runtime les met en cache, conserve leur transparence et les redimensionne par interpolation bilinéaire. Le même rendu est conçu pour 1920×1080 à 150 %, 2560×1440 à 200 % et 3840×2160 à 300 % avec du texte Xft antialiasé.
+- Bureau maison inspiré de Windows, menu Démarrer inspiré de Cinnamon, barre des tâches pleine largeur et accents violets.
+- Fenêtres déplaçables, redimensionnables et ancrables ; texte antialiasé et mise à l’échelle HiDPI.
+- Icônes issues des applications installées et des thèmes XDG ; placement sur grille ou libre.
+- Explorer : onglets, double volet, recherche, tri, copie/déplacement et corbeille.
+- Paramètres Linux/Windows, réseau, audio/batterie, clavier/trackpad, apparence, écran, mises à jour et **À propos**.
 
-## Prérequis
+Les indicateurs utilisent les informations exposées par Linux. Une VM ne fournit pas nécessairement la batterie ou le trackpad physiques de l’hôte. La définition, l’échelle du bureau et le zoom du visualiseur sont des réglages distincts. La validation visuelle et matérielle reste à élargir.
 
-- Linux x86-64
-- Rust stable et Cargo
-- Cible Rust `x86_64-pc-windows-msvc` et `rust-lld` pour compiler les exécutables de test
-- `timeout` pour `scripts/test-runtime.sh`
-- ALSA (`libasound.so.2`) seulement pour tenter la lecture audio WAVE
+### Compatibilité Windows
 
-Installer la cible de test, si nécessaire :
+- Chargement PE, imports, relocations, DLL réelles, TLS et structures PEB/TEB minimales.
+- API partielles pour fichiers, processus, synchronisation, registre persistant, réseau et graphismes GDI/X11.
+- CRT, fondations COM/OLE, flux `IStream` et fabriques COM multi-usages enregistrées dans le processus.
+- Audio WAVE, **MP3 et AAC ADTS mono/stéréo** via bibliothèques Linux, avec limites mémoire et tests réels.
+- Détection .NET et délégation possible à `dotnet` ou Mono installés sur Linux ; aucun CLR Windows complet intégré.
+
+Les codecs audio ne fournissent pas la lecture vidéo ni une implémentation complète de Media Foundation/DirectShow. Voir [le périmètre audio](docs/AUDIO-CODECS.md).
+
+## Démarrage rapide sur Linux
+
+Prérequis : **Linux x86-64**, Rust stable et Cargo. La compilation des PE de test nécessite la cible Windows et `rust-lld` fourni par Rust.
 
 ```sh
+git clone https://github.com/Univers4craft/winlux.git
+cd winlux
 rustup target add x86_64-pc-windows-msvc
-```
-
-## Compiler et tester
-
-Depuis la racine du dépôt :
-
-```sh
-cargo test -p winlux
-scripts/build-tests.sh
 cargo build --release -p winlux
-scripts/test-runtime.sh
-scripts/test-runtime-parallel.sh
-scripts/test-network.sh
-scripts/test-control.sh
-scripts/test-updater.sh
-scripts/build-mingw-tests.sh   # nécessite gcc-mingw-w64-x86-64
-scripts/test-mingw.sh
-```
-
-`testc/` contient des programmes C compilés par MinGW-w64, donc de vrais exécutables Windows produits par un compilateur tiers et non par Rust : ils valident le code de démarrage de la CRT `msvcrt.dll` et les API qu'il utilise.
-
-Lancement manuel d’un PE :
-
-```sh
 target/release/winlux chemin/vers/programme.exe [arguments...]
 ```
 
-`WINLUX_TRACE=1` active les traces du chargeur. Par défaut, l’appel d’un import non implémenté arrête le programme et l’enregistre dans le journal Winlux. `WINLUX_MISSING=ignore` permet de continuer en renvoyant zéro, avec les risques de résultats incorrects.
+Un dépôt privé exige une authentification. Pour l’affichage, prévoyez un serveur X11 et les bibliothèques Xft/Fontconfig. L’audio utilise ALSA ; MP3/AAC nécessitent `libmpg123.so.0` et `libfaad.so.2`. Les bibliothèques natives ne sont pas des DLL Windows.
 
-Winlux détecte aussi les en-têtes CLR PE32/PE32+ et les apphosts .NET modernes.
-Il délègue les assemblies modernes au pilote Linux `dotnet` et les anciens
-assemblages .NET Framework à `mono`. Les chemins peuvent être surchargés avec
-`WINLUX_DOTNET` et `WINLUX_MONO`. Ce pont convient aux applications managées
-multiplateformes ; il ne rend pas encore WPF ou WinForms compatibles.
+`WINLUX_TRACE=1` active les traces du chargeur. Un import non implémenté arrête normalement le programme. `WINLUX_DOTNET` et `WINLUX_MONO` précisent les pilotes .NET Linux ; ils ne rendent pas WPF/WinForms compatibles.
 
-## Arborescence
-
-- `runtime/` : runtime Linux et chargeur PE.
-- `testexe/` : exécutables Windows de test.
-- `testdll/` : DLL Windows de test.
-- `integration/` : binfmt, MIME, `.desktop`, lanceur de double-clic et scripts d’installation/désinstallation.
-- `scripts/` : compilation, tests locaux séquentiels/parallèles et pipeline ISO/QEMU.
-- `theme/` : palette CSS expérimentale, non raccordée à un shell graphique.
-- `TODO.md` : feuille de route maintenue.
-- `COMPATIBILITY.md` : état détaillé de compatibilité et limites connues.
-
-## Intégration Linux et ISO
-
-`integration/install.sh` installe le runtime, le lanceur de double-clic `winlux-open`, l’outil de mise à jour, l’enregistrement binfmt et l’association MIME des `.exe` (par défaut dans `/usr`; il modifie des emplacements système et nécessite des privilèges d’administration) :
+### Intégration au bureau Linux
 
 ```sh
-cargo build --release -p winlux
-sudo integration/install.sh          # ou /usr/local
-sudo integration/uninstall.sh        # retire tout et restaure les associations précédentes
+sudo integration/install.sh
+# Pour retirer cette intégration :
+sudo integration/uninstall.sh
 ```
 
-Au double-clic, `winlux-open` lit le sous-système du PE (`winlux --inspect`) : un programme console s’ouvre dans un terminal qui reste ouvert à la fin, un programme graphique est lancé directement depuis son dossier. Les erreurs (fichier illisible, programme 32 bits, DLL…) s’affichent dans une boîte de dialogue. `WINLUX_TERMINAL` force un émulateur de terminal précis. `scripts/test-integration.sh` valide l’installation dans une racine temporaire et le lanceur; l’installation réelle sur un bureau KDE, GNOME ou XFCE reste à valider.
+Ces commandes modifient des emplacements système. Le lanceur `winlux-open` distingue programmes console et graphiques et affiche les erreurs. L’intégration sur différentes sessions KDE/GNOME/XFCE reste à tester.
 
-`scripts/build-live-iso.sh` construit une image de test autonome avec un initramfs minimal, Winlux, les neuf PE, leur DLL, Xvfb et un démarrage GRUB BIOS/UEFI. Le noyau fourni doit être lisible par l’utilisateur :
+## ISO et machine virtuelle
+
+Les [releases](https://github.com/Univers4craft/winlux/releases) contiennent les livrables publiés. **Le code de master peut être plus récent que la dernière ISO.** Un commit ne reconstruit pas automatiquement une image existante. La version système de référence est dans [VERSION](VERSION).
+
+Sur une machine Linux équipée des dépendances du constructeur :
 
 ```sh
 WINLUX_KERNEL=/chemin/vers/vmlinuz scripts/build-live-iso.sh
@@ -94,61 +71,106 @@ scripts/test-live-iso-qemu.sh build/winlux-live-test.iso bios
 scripts/test-live-iso-qemu.sh build/winlux-live-test.iso uefi
 ```
 
-La VM automatisée exécute la suite séquentielle, les neuf PE simultanément et le test graphique X11. Le test QEMU utilise 2 Gio de RAM et 2 CPU par défaut, configurables avec `WINLUX_QEMU_MEMORY` et `WINLUX_QEMU_CPUS`; cette marge évite l’échec de décompression de l’initramfs enrichi sous UEFI.
+Le script nécessite les outils initramfs/GRUB, Xorg, polices, bibliothèques et modules attendus. Le noyau doit correspondre aux modules sélectionnés par `WINLUX_KERNEL_RELEASE` (par défaut celui de l’hôte). Ce n’est pas encore un constructeur universel indépendant de la distribution. Les bibliothèques audio sont explicitement copiées dans l’image.
 
-Une VM graphique persistante de prévisualisation peut aussi être créée puis démarrée avec :
+Pour préparer une VM persistante :
 
 ```sh
 scripts/create-test-vm.sh --create-only
 scripts/create-test-vm.sh
-# Après reconstruction de l'ISO, réinitialiser explicitement le disque :
-scripts/create-test-vm.sh --refresh  # conserve l'ancien disque en sauvegarde
 ```
 
-Elle utilise par défaut un disque QCOW2 extensible de 24 Gio, 4 Gio de RAM, 4 CPU, KVM lorsqu’il est disponible et un affichage 1920×1080. La définition peut être changée avec `WINLUX_VM_WIDTH` et `WINLUX_VM_HEIGHT`. Une empreinte des sources empêche d'utiliser par erreur un stage ou un disque ancien. `--refresh` crée une nouvelle racine et conserve l'ancien disque complet ; il ne migre pas automatiquement ses données. Pour conserver la racine courante, utilisez les mises à jour dans l'OS.
+Valeurs par défaut : disque QCOW2 extensible de 24 Gio, 4 Gio de RAM, 4 CPU, affichage 1920×1080. `WINLUX_VM_WIDTH` et `WINLUX_VM_HEIGHT` règlent la définition. Après reconstruction, `--refresh` remplace explicitement la racine de test et sauvegarde l’ancien disque ; **il ne migre pas ses données**.
 
-Dans le gestionnaire de VM, démarrez sur l'ISO avec un disque virtio portant le label `WINLUX_ROOT` : GRUB charge alors le noyau et la racine depuis ce disque. Les données, préférences et mises à jour survivent au redémarrage. Sans ce disque, l'ISO démarre une session Live en mémoire, signalée dans Paramètres. L'image reste une préversion technique sans installateur généraliste. La résolution du bureau suit la fenêtre QEMU et le curseur logiciel Xorg reste visible. Ajoutez `winlux.debug=1` au noyau pour les traces d'entrée. La tablette virtio utilise des coordonnées absolues et évite la capture relative du pointeur.
+Un disque préparé portant le label `WINLUX_ROOT` permet la persistance. Sans lui, la session Live fonctionne en mémoire et perd ses modifications à l’arrêt. Ces scripts ne constituent pas un installateur SSD généraliste.
 
-Le démarrage configure les cartes virtuelles par DHCP (adresse, route et DNS), avec renouvellement du bail. `winlux-network restart` renouvelle la connexion ; le journal se trouve dans `/run/winlux/network.log`. Les dispositions AZERTY/QWERTY et les options libinput sont disponibles dans Paramètres. Un trackpad de l'hôte présenté comme tablette par l'hyperviseur conserve ses réglages physiques sur l'hôte.
-
-### Bureau, Explorer et navigateur
-
-Le bureau de l’ISO est un shell maison au style Windows 11 (`testexe/src/shell/`) : animation de démarrage, menu Démarrer et barre des tâches animés, fenêtres déplaçables, redimensionnables et ancrables (glisser en haut pour agrandir, sur un bord pour la moitié de l’écran). **Explorer** y est le gestionnaire de fichiers : onglets, double volet, modes Très grandes / Grandes / Moyennes / Petites icônes, Liste, Détails, Mosaïques et mode compact, tri, recherche récursive, barre d’adresse qui accepte les chemins Windows et Linux, couper / copier / coller / renommer, corbeille freedesktop. C: est le dossier personnel et Z: la racine Linux.
-
-Le navigateur par défaut est **Microsoft Edge**, lancé par `winlux-browser` (repli sur Chromium ou Firefox s’il est absent). Sur un système installé : `sudo /usr/share/winlux/install-edge.sh` ajoute le dépôt officiel Microsoft et fait d’Edge le navigateur par défaut. Pour l’embarquer dans l’ISO : `WINLUX_EDGE_DEB=/chemin/microsoft-edge-stable.deb scripts/build-live-iso.sh`.
-
-Paramètres propose les pages Linux, compatibilité Windows, réseau, audio/batterie, clavier/trackpad, apparence et mises à jour. Les commandes passent par `winlux-control`, avec télémétrie réelle, exécution en arrière-plan et journal visible. Les applications non installées ne possèdent pas de bouton fictif. Explorer bloque les copies dans un descendant et les chemins tronqués ; les noms Unicode hors Windows-1252 restent à prendre en charge avec les API fichiers larges.
+Dans Explorer, **C:** correspond au dossier personnel Linux, **Z:** à la racine Linux. Un navigateur n’est pas garanti dans chaque ISO : Edge peut être embarqué avec `WINLUX_EDGE_DEB`, sinon le lanceur cherche les navigateurs installés compatibles.
 
 ## Mises à jour GitHub
 
-Chaque tag `v*` déclenche le workflow de release, qui reteste Winlux puis publie un paquet du runtime et un manifeste SHA-256. Sur une installation Winlux :
+L’outil recherche une **release publiée**, pas les derniers commits :
 
 ```sh
 winlux-update --check
 winlux-update --list
 winlux-update --apply
 winlux-update --rollback
-winlux-update --auto enable  # désactiver avec disable
+winlux-update --auto enable   # disable pour désactiver
 ```
 
-Pour un dépôt GitHub privé, fournissez un jeton en lecture dans `WINLUX_UPDATE_TOKEN` (ou `GH_TOKEN`). L’outil passe alors par l’API GitHub authentifiée et ne journalise pas le jeton. Pour un dépôt public, aucune authentification n’est nécessaire.
+| Paquet | Contenu |
+| --- | --- |
+| `--system` | Bureau, runtime, applications embarquées, scripts, noyau, pilotes, bibliothèques et démarrage, depuis un stage ISO vérifié. |
+| `--runtime` | Runtime et outil de mise à jour uniquement ; ne fournit pas les nouvelles bibliothèques système. |
 
-Le paquet `scripts/build-update-bundle.sh --system VERSION` comprend le bureau, le runtime, l'outil de mise à jour, les applications embarquées, les scripts, le noyau, les pilotes, les bibliothèques et le démarrage. Il exige un stage ISO correspondant exactement aux sources. `--runtime` produit un paquet réduit, utilisé par la CI lorsqu'aucune image système n'a été construite. Le manifeste affiche clairement cette portée dans l'interface.
+**GitHub Actions teste le code et publie des paquets runtime sur les tags stables. La génération complète d’ISO dans Actions reste à mettre en place.** Les tags `v*-preview.*` sont exclus du workflow runtime pour préserver les releases système.
 
-L’outil valide les manifestes, SHA-256, inventaires et liens, verrouille les opérations concurrentes, conserve les fichiers précédents et restaure une installation interrompue. Les données personnelles et `/etc` sont préservés ; les nouveaux réglages par défaut sont consultables dans `/usr/share/winlux/defaults/etc`. Un changement du bureau seul relance la session ; un changement du noyau ou des composants système demande un redémarrage explicite. L'automatique vérifie toutes les trente minutes sans redémarrer la machine sans action de l'utilisateur. Cette mise à jour transactionnelle n'est pas encore un schéma A/B résistant à toute coupure d'alimentation.
+Après construction et tests de l’ISO, `scripts/build-update-bundle.sh --system` prépare le paquet complet. Il faut ensuite publier sur la même release l’ISO, ses sommes de contrôle, le paquet, le manifeste et les notes référencées. Les notes viennent de `docs/releases/VERSION.md`.
 
-## Limites importantes
+L’outil utilise `/releases/latest` : les brouillons et releases marquées « prerelease » ne sont pas sélectionnés. Une préversion système publiée par ce mécanisme doit rester clairement identifiée comme expérimentale dans son titre et ses notes.
 
-- PE32+ x86-64 seulement; le runtime n’est pas un noyau Windows.
-- `user32`/`gdi32` sont partiels : le noyau fenêtres/messages, les boucles de messages A/W, les titres Unicode, `SetWindowPos`/`MoveWindow`, les API de focus et d'état clavier de base, un backend X11 avec mise à l'échelle DPI, texte Xft antialiasé et bitmaps filtrés, ainsi que des primitives GDI de base existent, mais les contrôles, les autres formats DIB, les décorations et la plupart des API clavier avancées manquent encore.
-- Le pont `dotnet`/Mono permet d'essayer les applications managées compatibles Linux, mais aucun CLR Windows complet n'est intégré. WPF/WinForms et `paint.net` ne fonctionnent donc pas encore correctement.
-- COM/OLE possède désormais ses primitives de base et ses flux mémoire, mais l’activation des classes COM, l’automatisation, le glisser-déposer et les serveurs COM applicatifs restent à implémenter.
-- Les codecs compressés, DirectX, les pilotes, le registre Windows complet, les services SCM complets, les sémantiques avancées des E/S overlapped et de nombreuses API Win32 ne sont pas implémentés.
-- `FreeLibrary` ne démonte pas encore une DLL chargée.
-- Le pont audio WAV/ALSA dépend de l’environnement Linux et n’a pas été validé sur plusieurs périphériques.
+Pour un dépôt privé, l’outil accepte notamment `WINLUX_UPDATE_TOKEN` ou `GH_TOKEN`. **Ne commitez jamais de jeton et ne l’intégrez pas à une ISO ou une release.**
 
-Voir [COMPATIBILITY.md](COMPATIBILITY.md) pour les détails et [TODO.md](TODO.md) pour les travaux restants.
+Les mises à jour vérifient inventaires et SHA-256 et conservent un retour arrière. Les arrêts normaux sont bloqués pendant l’installation ; un redémarrage requis reste signalé jusqu’au démarrage suivant. L’OS invité ne peut pas empêcher l’arrêt forcé de l’hyperviseur. Ce mécanisme n’est pas encore une architecture A/B résistante à toute coupure.
+
+### Identifier la version installée
+
+Les nouvelles constructions incluent `/usr/share/winlux/BUILD-INFO`, visible dans **Paramètres → À propos** : version, commit, date UTC, état des sources suivies et périmètre système/runtime.
+
+La date décrit la construction du livrable, pas nécessairement la compilation d’un binaire réutilisé. `SOURCE_DATE_EPOCH` permet de la fixer. Sans dépôt Git, le commit est `unknown` ; les anciennes images peuvent ne pas fournir ce fichier.
+
+## Compiler et tester
+
+```sh
+cargo test -p winlux
+scripts/build-tests.sh
+cargo build --release -p winlux
+scripts/test-runtime.sh
+scripts/test-runtime-parallel.sh
+scripts/test-integration.sh
+scripts/test-network.sh
+scripts/test-control.sh
+scripts/test-display.sh
+scripts/test-updater.sh
+scripts/test-update-notes.sh
+```
+
+Les dix PE de test sont exécutés séquentiellement et en parallèle. Les tests C tiers nécessitent MinGW-w64 ; les tests parallèles utilisent `timeout` :
+
+```sh
+scripts/build-mingw-tests.sh
+scripts/test-mingw.sh
+```
+
+Avec les bibliothèques audio installées, les tests de décodage réels et PlaySound utilisent une sortie ALSA silencieuse :
+
+```sh
+ALSA_CONFIG_PATH="$PWD/runtime/tests/audio/alsa-null.conf" cargo test -p winlux winmm::codecs -- --include-ignored
+```
+
+**Une CI verte ne certifie pas tous les logiciels Windows ni le matériel réel.** Pour signaler un problème, indiquez version/commit, logiciel concerné, étapes de reproduction et journal des imports manquants.
+
+## Limites et prochaines étapes
+
+- Exécution native ciblée sur PE32+ x86-64 ; pas de prise en charge générale des programmes 32 bits.
+- Exceptions Windows/C++, déchargement sûr des DLL et plusieurs API système à compléter.
+- WPF, WinForms, Photoshop, DirectX et logiciels Windows complexes non garantis compatibles.
+- COM, services, héritage des handles et sémantiques avancées des E/S encore partiels.
+- Lecture vidéo et validation audio sur des périphériques physiques à poursuivre.
+- Installation SSD, génération d’ISO sur GitHub et validation matérielle élargie à développer.
+
+Les parties écartées après revue ne sont pas présentées comme fonctionnelles : voir [la revue runtime](REVIEW-INTEGRATION.md) et [la revue graphique](REVIEW-GRAPHICS.md).
+
+## Organisation du dépôt
+
+| Dossier | Rôle |
+| --- | --- |
+| `runtime/` | Chargeur PE et API Win32 en Rust. |
+| `testexe/`, `testdll/`, `testc/` | Exécutables et DLL de test Windows, suites C MinGW. |
+| `integration/` | Lanceurs, associations MIME et intégration Linux. |
+| `scripts/` | Compilation, tests, ISO, VM et mises à jour. |
+| `docs/` | Documentation technique et notes de version. |
 
 ## Licence
 
-Winlux est distribué sous GNU GPL version 3 ou, à votre choix, toute version ultérieure. Voir [LICENSE](LICENSE).
+[GNU GPL version 3 ou ultérieure](LICENSE). Les bibliothèques et logiciels Linux embarqués conservent leurs licences et obligations de distribution respectives.

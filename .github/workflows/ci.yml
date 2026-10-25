@@ -86,16 +86,27 @@ jobs:
       - name: Lancer les tests unitaires
         run: cargo test -p winlux
 
+      - name: Valider les codecs audio MP3 et AAC réels
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q libmpg123-0 libfaad2 libasound2t64
+          ALSA_CONFIG_PATH="$PWD/runtime/tests/audio/alsa-null.conf" cargo test -p winlux audio_codecs -- --ignored
+          stage=$(mktemp -d)
+          sh scripts/copy-audio-libraries.sh "$stage"
+
       - name: Aucune erreur de compilation
         run: cargo check -p winlux --all-targets
 
       - name: Valider mise à jour et retour arrière
-        run: bash scripts/test-updater.sh
+        run: |
+          bash scripts/test-updater.sh
+          sh scripts/test-update-notes.sh
 
       - name: Valider le réseau et les commandes des paramètres
         run: |
           sh scripts/test-network.sh
           sh scripts/test-control.sh
+          sh scripts/test-display.sh
 
   # 3. Compile les .exe Windows puis les exécute sous Winlux.
   runtime-tests:

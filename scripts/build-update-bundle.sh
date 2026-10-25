@@ -4,7 +4,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 scope=system
 case "${1:-}" in --system) shift ;; --runtime) scope=runtime; shift ;; esac
-version=${1:-$(git -C "$root" describe --tags --always)}
+version=${1:-$(cat "$root/VERSION")}
 case "$version" in *[!A-Za-z0-9._+-]*|'') echo "version invalide : $version" >&2; exit 1 ;; esac
 test "$#" -le 1 || { echo 'usage: build-update-bundle.sh [--system|--runtime] [version]' >&2; exit 2; }
 for tool in tar sha256sum find sort readlink; do command -v "$tool" >/dev/null 2>&1 || { echo "$tool est requis" >&2; exit 1; }; done
@@ -18,7 +18,8 @@ runtime=${WINLUX_UPDATE_RUNTIME:-"$root/target/release/winlux"}
 if test "$scope" = system; then
     stage=${WINLUX_UPDATE_STAGE:-"$root/build/winlux-live-test/initramfs-root"}
     boot=${WINLUX_UPDATE_BOOT:-"$root/build/winlux-live-test/iso-root/boot"}
-    for required in init usr/bin/winlux opt/winlux/tests/gui_demo.exe; do test -f "$stage/$required" || { echo "stage système incomplet : $required ; reconstruisez l'ISO" >&2; exit 1; }; done
+    for required in init usr/bin/winlux opt/winlux/tests/gui_demo.exe usr/share/winlux/BUILD-INFO; do test -f "$stage/$required" || { echo "stage système incomplet : $required ; reconstruisez l'ISO" >&2; exit 1; }; done
+    test "$(cat "$stage/usr/share/winlux/version")" = "$version" || { echo 'version du stage différente du paquet demandé ; reconstruisez l’ISO avec cette version' >&2; exit 1; }
     test -d "$stage/lib/modules" || { echo 'modules noyau absents du stage' >&2; exit 1; }
     # Shared libraries are replaced by a complete OS update; the installer must
     # retain a utility binary that does not depend on those live libraries.
@@ -51,6 +52,9 @@ cp "$root/scripts/winlux-update.sh" "$raw/usr/bin/winlux-update"
 chmod 755 "$raw/usr/bin/winlux" "$raw/usr/bin/winlux-update"
 printf '%s\n' "$version" >"$raw/usr/share/winlux/version"
 printf '%s\n' "$scope" >"$raw/usr/share/winlux/update-scope"
+if test "$scope" = runtime; then
+    sh "$root/scripts/build-info.sh" "$version" runtime >"$raw/usr/share/winlux/BUILD-INFO"
+fi
 files="$work/package/FILES"
 links="$work/package/LINKS"
 : >"$files"; : >"$links"
@@ -77,6 +81,13 @@ manifest="$root/build/winlux-update-manifest.txt"
 tar -C "$work/package" --owner=0 --group=0 --numeric-owner -czf "$work/bundle.tar.gz" META FILES LINKS payload
 checksum=$(sha256sum "$work/bundle.tar.gz" | cut -d' ' -f1)
 { cat "$work/package/META"; printf 'asset=%s\nsha256=%s\n' "$(basename -- "$bundle")" "$checksum"; } >"$work/manifest.txt"
+notes_source=${WINLUX_UPDATE_NOTES:-"$root/docs/releases/$version.md"}
+if test -f "$notes_source"; then
+    test "$(wc -c <"$notes_source")" -le 24576 || { echo 'notes de version trop longues (24 Kio maximum)' >&2; exit 1; }
+    cp "$notes_source" "$work/notes.txt"
+    printf 'notes_asset=winlux-release-notes.txt\nnotes_sha256=%s\n' "$(sha256sum "$work/notes.txt" | cut -d' ' -f1)" >>"$work/manifest.txt"
+    mv "$work/notes.txt" "$root/build/winlux-release-notes.txt"
+fi
 mv "$work/bundle.tar.gz" "$bundle"
 mv "$work/manifest.txt" "$manifest"
 echo "Paquet de mise à jour $scope : $bundle"

@@ -1,4 +1,4 @@
-//! Décodage WAVE PCM/IEEE-float et pont de sortie vers ALSA (Linux), sans
+//! Décodage WAVE PCM/IEEE-float, MP3/AAC et pont de sortie vers ALSA (Linux), sans
 //! DLL Windows ni framework de compatibilité tiers.
 
 use std::ffi::{c_char,c_int,c_void,CString};
@@ -29,6 +29,8 @@ fn alsa()->Result<Alsa,()> {unsafe{
 }}
 
 struct Wave { channels:u16, rate:u32, samples:Vec<i16> }
+#[path = "winmm_codecs.rs"]
+mod codecs;
 fn le16(b:&[u8],o:usize)->Option<u16>{Some(u16::from_le_bytes(b.get(o..o+2)?.try_into().ok()?))}
 fn le32(b:&[u8],o:usize)->Option<u32>{Some(u32::from_le_bytes(b.get(o..o+4)?.try_into().ok()?))}
 fn decode_wave(b:&[u8])->Option<Wave>{
@@ -82,7 +84,7 @@ pub unsafe extern "win64" fn play_sound_a(name:*const u8,_module:usize,flags:u32
 fn play_sound_path(name:&str,flags:u32)->i32{
     {let mut list=lock(jobs());list.retain(|j|!j.thread.is_finished());if flags&SND_NOSTOP!=0&&!list.is_empty(){return 0;}for j in list.iter(){j.cancel.store(true,Ordering::Relaxed);}}
     let filename=crate::paths::to_linux(name);let f=match std::fs::File::open(filename){Ok(f)=>f,Err(e)=>{crate::process::set_last_error(if e.kind()==std::io::ErrorKind::NotFound{2}else{5});return 0;}};
-    let mut raw=Vec::new();if f.take(256*1024*1024).read_to_end(&mut raw).is_err(){crate::process::set_last_error(31);return 0;}let Some(wave)=decode_wave(&raw)else{crate::process::set_last_error(50);return 0;};
+    let mut raw=Vec::new();if f.take((codecs::MAX_INPUT+1) as u64).read_to_end(&mut raw).is_err(){crate::process::set_last_error(31);return 0;}let Some(wave)=codecs::decode(&raw)else{crate::process::set_last_error(50);return 0;};
     if flags&SND_ASYNC!=0{if let Err(e)=probe_audio(&wave){crate::process::set_last_error(e);return 0;}let cancel=std::sync::Arc::new(AtomicBool::new(false));let worker_cancel=cancel.clone();let Ok(thread)=std::thread::Builder::new().name("winlux-wave-playback".into()).spawn(move||{let _=play_wave_cancellable(wave,worker_cancel);})else{crate::process::set_last_error(8);return 0;};lock(jobs()).push(Job{cancel,thread});1}
     else{match play_pcm(wave){Ok(())=>1,Err(e)=>{crate::process::set_last_error(e);0}}}
 }

@@ -2,7 +2,10 @@ name: Release
 
 on:
   push:
-    tags: ['v*']
+    # System previews are built and tested with a full ISO locally, then
+    # uploaded with their system manifest. Never overwrite them with a
+    # runtime-only package from this workflow.
+    tags: ['v*', '!v*-preview.*']
 
 permissions:
   contents: write
@@ -32,9 +35,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -- "build/winlux-update-$GITHUB_REF_NAME.tar.gz" build/winlux-update-manifest.txt
+          if grep -q '^notes_asset=' build/winlux-update-manifest.txt; then
+            set -- "$@" build/winlux-release-notes.txt
+          fi
           gh release create "$GITHUB_REF_NAME" \
-            "build/winlux-update-$GITHUB_REF_NAME.tar.gz" \
-            build/winlux-update-manifest.txt \
+            "$@" \
             --repo "$GITHUB_REPOSITORY" \
             --generate-notes \
             --title "Winlux $GITHUB_REF_NAME"

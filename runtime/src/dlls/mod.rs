@@ -32,6 +32,7 @@ pub mod comctl32;
 pub mod shlwapi;
 pub mod oleaut32;
 pub mod user32_ext;
+pub mod quartz;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -95,6 +96,8 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin { name: "comctl32", exports: comctl32::exports(), handle: fake_module() },
             Builtin { name: "shlwapi", exports: shlwapi::exports(), handle: fake_module() },
             Builtin { name: "oleaut32", exports: oleaut32::exports(), handle: fake_module() },
+            Builtin { name: "quartz", exports: quartz::exports(), handle: fake_module() },
+            Builtin { name: "mfreadwrite", exports: mfplat::exports(), handle: fake_module() },
         ]
     })
 }

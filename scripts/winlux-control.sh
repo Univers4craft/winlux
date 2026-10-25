@@ -68,6 +68,8 @@ status() {
         if test -s "$config/update.token" && ! test -L "$config/update.token"; then printf 'update_auth=configured\n'; else printf 'update_auth=missing\n'; fi
         printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
         printf 'control_available=1\n'
+        if have winlux-display; then winlux-display status 2>/dev/null || true; fi
+        if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi
     } > "$run/control.txt.tmp.$$"
     mv "$run/control.txt.tmp.$$" "$run/control.txt"
     # --list lit seulement le manifeste deja en cache, sans acces reseau.
@@ -117,6 +119,17 @@ perform() {
             save "$config/input.conf" TAP_TO_CLICK "$tap" ;;
         align-left|align-center) save "$config/preferences.conf" TASKBAR_ALIGN "${action#align-}" ;;
         theme-dark|theme-light) save "$config/preferences.conf" THEME "${action#theme-}" ;;
+        display-follow|display-fixed) winlux-display "${action#display-}" ;;
+        display-mode-*) mode=${action#display-mode-}; case "$mode" in *[!0-9x]*|'') return 1 ;; esac; winlux-display mode "$mode" ;;
+        display-scale-auto) winlux-display scale auto ;;
+        display-scale-up|display-scale-down)
+            scale=$(value "$config/display.conf" UI_SCALE)
+            case "$action:$scale" in
+                display-scale-up:1) scale=1.25 ;; display-scale-up:1.25) scale=1.5 ;; display-scale-up:1.5|display-scale-up:2) scale=2 ;;
+                display-scale-down:2) scale=1.5 ;; display-scale-down:1.5) scale=1.25 ;; display-scale-down:1.25|display-scale-down:1) scale=1 ;;
+                *) scale=1.25 ;;
+            esac
+            winlux-display scale "$scale" ;;
         update-check)
             winlux-update --check || return
             winlux-update --list > "$run/updates.txt.tmp.$$" || return
@@ -144,12 +157,14 @@ perform() {
                 echo 'Acces prive GitHub enregistre.'
             fi ;;
         restart-session)
+            if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
             # Demande consommee par l'init superviseur. Ne touche pas aux
             # sessions de l'hote qui pourraient aussi executer ce script.
             test -f "$root/etc/winlux/live-session" || { echo 'Redemarrage de session reserve a Winlux Live' >&2; return 1; }
             printf 'restart-session\n' > "$run/session-action" ;;
         poweroff|reboot)
             test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
+            if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
             sync || return
             "$action" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;

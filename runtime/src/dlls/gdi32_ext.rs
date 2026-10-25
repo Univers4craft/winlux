@@ -359,7 +359,136 @@ pub extern "win64" fn get_rop2(_hdc: usize) -> i32 { 13 }
 pub extern "win64" fn realize_palette(_hdc: usize) -> u32 { 0 }
 pub extern "win64" fn select_palette(_hdc: usize, _pal: usize, _force: i32) -> usize { 0 }
 
-// ── GetDIBits / SetDIBitsToDevice (stubs) ──────────────────────────
+// ── GetDIBits / SetDIBitsToDevice / StretchDIBits ──────────────────
+
+use crate::dlls::gdi32::BitmapInfoHeader;
+
+unsafe fn decode_dib_pixels(
+    info: &BitmapInfoHeader, info_base: *const u8, bits: *const u8,
+    src_x: i32, src_y: i32, src_w: usize, src_h: usize,
+) -> Option<Vec<u32>> {
+    if bits.is_null() || src_w == 0 || src_h == 0 || info.width <= 0 || info.height == 0
+        || info.size < 40 || info.size > 124 || info.planes != 1 || info.compression != 0
+        || src_x < 0 || src_y < 0 { return None; }
+    let bpp = info.bit_count as usize;
+    if !matches!(bpp, 1 | 4 | 8 | 16 | 24 | 32) { return None; }
+    let abs_h = info.height.unsigned_abs() as usize;
+    let width = info.width as usize;
+    if (src_x as usize).checked_add(src_w)? > width
+        || (src_y as usize).checked_add(src_h)? > abs_h { return None; }
+    if width.checked_mul(abs_h)? > 8 * 1024 * 1024 { return None; }
+    let top_down = info.height < 0;
+    let stride = width.checked_mul(bpp)?.checked_add(31)? / 32 * 4;
+    let count = src_w.checked_mul(src_h)?;
+    if count > 8 * 1024 * 1024 { return None; }
+    let palette_offset = info.size as usize;
+    let palette_len = if bpp <= 8 {
+        let max = 1usize << bpp;
+        if info.colors_used == 0 { max } else { (info.colors_used as usize).min(max) }
+    } else { 0 };
+    let mut pixels = Vec::with_capacity(count);
+    for dy in 0..src_h {
+        let row = if top_down {
+            (src_y as usize).wrapping_add(dy)
+        } else {
+            abs_h.checked_sub(1)?.checked_sub((src_y as usize).wrapping_add(dy))?
+        };
+        if row >= abs_h { pixels.extend(std::iter::repeat_n(0u32, src_w)); continue; }
+        let row_ptr = bits.add(row * stride);
+        for dx in 0..src_w {
+            let x = (src_x as usize).wrapping_add(dx);
+            if x >= info.width as usize { pixels.push(0); continue; }
+            let color = match bpp {
+                32 => {
+                    let off = x * 4;
+                    let b = *row_ptr.add(off) as u32;
+                    let g = *row_ptr.add(off + 1) as u32;
+                    let r = *row_ptr.add(off + 2) as u32;
+                    r | (g << 8) | (b << 16)
+                }
+                24 => {
+                    let off = x * 3;
+                    let b = *row_ptr.add(off) as u32;
+                    let g = *row_ptr.add(off + 1) as u32;
+                    let r = *row_ptr.add(off + 2) as u32;
+                    r | (g << 8) | (b << 16)
+                }
+                16 => {
+                    let off = x * 2;
+                    let v = u16::from_le_bytes([*row_ptr.add(off), *row_ptr.add(off + 1)]);
+                    let r = ((v >> 10) & 0x1F) as u32 * 255 / 31;
+                    let g = ((v >> 5) & 0x1F) as u32 * 255 / 31;
+                    let b = (v & 0x1F) as u32 * 255 / 31;
+                    r | (g << 8) | (b << 16)
+                }
+                8 => {
+                    let idx = *row_ptr.add(x) as usize;
+                    if idx >= palette_len { return None; }
+                    read_palette_entry(info_base, palette_offset, idx)
+                }
+                4 => {
+                    let byte = *row_ptr.add(x / 2);
+                    let idx = if x % 2 == 0 { (byte >> 4) as usize } else { (byte & 0x0F) as usize };
+                    if idx >= palette_len { return None; }
+                    read_palette_entry(info_base, palette_offset, idx)
+                }
+                1 => {
+                    let byte = *row_ptr.add(x / 8);
+                    let bit = (byte >> (7 - (x % 8))) & 1;
+                    if bit as usize >= palette_len { return None; }
+                    read_palette_entry(info_base, palette_offset, bit as usize)
+                }
+                _ => 0,
+            };
+            pixels.push(color);
+        }
+    }
+    Some(pixels)
+}
+
+unsafe fn read_palette_entry(info_base: *const u8, palette_offset: usize, idx: usize) -> u32 {
+    let entry = info_base.add(palette_offset + idx * 4);
+    let b = *entry as u32;
+    let g = *entry.add(1) as u32;
+    let r = *entry.add(2) as u32;
+    r | (g << 8) | (b << 16)
+}
+
+#[cfg(test)]
+mod reviewed_dib_tests {
+    use super::*;
+    fn header(bpp: u16, height: i32) -> BitmapInfoHeader {
+        BitmapInfoHeader { size: 40, width: 2, height, planes: 1, bit_count: bpp,
+            compression: 0, size_image: 0, x_pels_per_meter: 0, y_pels_per_meter: 0,
+            colors_used: 0, colors_important: 0 }
+    }
+    #[test]
+    fn palette_is_read_from_bitmap_info_not_pixel_buffer() {
+        #[repr(C)]
+        struct Info { header: BitmapInfoHeader, colors: [[u8; 4]; 2] }
+        let mut info = Info { header: header(8, -1), colors: [[0, 0, 255, 0], [255, 0, 0, 0]] };
+        info.header.colors_used = 2;
+        let pixels = [0, 1, 0, 0];
+        unsafe {
+            assert_eq!(decode_dib_pixels(&info.header, &info as *const _ as *const u8, pixels.as_ptr(), 0, 0, 2, 1), Some(vec![0x0000ff, 0xff0000]));
+            let invalid = [2, 0, 0, 0];
+            assert!(decode_dib_pixels(&info.header, &info as *const _ as *const u8, invalid.as_ptr(), 0, 0, 2, 1).is_none());
+        }
+    }
+    #[test]
+    fn rgb_orientation_and_invalid_geometry() {
+        let mut info = header(24, 2);
+        let pixels = [255, 0, 0, 255, 0, 0, 0, 0, 0, 0, 255, 0, 0, 255, 0, 0];
+        unsafe {
+            let base = &info as *const _ as *const u8;
+            assert_eq!(decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 0, 2, 2), Some(vec![0xff, 0xff, 0xff0000, 0xff0000]));
+            assert!(decode_dib_pixels(&info, base, pixels.as_ptr(), -1, 0, 2, 1).is_none());
+            assert!(decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 2, 2, 1).is_none());
+            info.width = -2;
+            assert!(decode_dib_pixels(&info, base, pixels.as_ptr(), 0, 0, 2, 1).is_none());
+        }
+    }
+}
 
 pub unsafe extern "win64" fn get_dib_its(
     _hdc: usize, _bmp: usize, _start: u32, _lines: u32,
@@ -367,16 +496,68 @@ pub unsafe extern "win64" fn get_dib_its(
 ) -> i32 { 0 }
 
 pub unsafe extern "win64" fn set_di_bits_to_device(
-    _hdc: usize, _x: i32, _y: i32, _w: u32, _h: u32,
-    _src_x: i32, _src_y: i32, _start: u32, _lines: u32,
-    _bits: *const c_void, _info: *const c_void, _usage: u32,
-) -> i32 { 0 }
+    hdc: usize, x_dst: i32, y_dst: i32, w: u32, h: u32,
+    src_x: i32, src_y: i32, _start: u32, lines: u32,
+    bits: *const c_void, info: *const c_void, _usage: u32,
+) -> i32 {
+    if bits.is_null() || info.is_null() || w == 0 || h == 0 || lines == 0 || _usage != 0 || _start != 0 { return 0; }
+    let header = std::ptr::read_unaligned(info as *const BitmapInfoHeader);
+    // Le transfert de bandes partielles nécessite une autre origine de bits.
+    if lines < header.height.unsigned_abs() { return 0; }
+    let draw_h = (h as usize).min(lines as usize);
+    let draw_w = w as usize;
+    let Some(pixels) = decode_dib_pixels(
+        &header, info as *const u8, bits as *const u8, src_x, src_y, draw_w, draw_h,
+    ) else { return 0; };
+    let Some(right) = x_dst.checked_add(draw_w as i32) else { return 0; };
+    let Some(bottom) = y_dst.checked_add(draw_h as i32) else { return 0; };
+    let rect = Rect { left: x_dst, top: y_dst, right, bottom };
+    gui::record(hdc, DrawCmd::Bitmap { rect, pixels, rop: gui::RasterOp::Copy });
+    draw_h as i32
+}
 
 pub unsafe extern "win64" fn stretch_di_bits(
-    _hdc: usize, _x: i32, _y: i32, _w: i32, _h: i32,
-    _src_x: i32, _src_y: i32, _sw: i32, _sh: i32,
-    _bits: *const c_void, _info: *const c_void, _usage: u32, _rop: u32,
-) -> i32 { 0 }
+    hdc: usize, x_dst: i32, y_dst: i32, w_dst: i32, h_dst: i32,
+    src_x: i32, src_y: i32, src_w: i32, src_h: i32,
+    bits: *const c_void, info: *const c_void, _usage: u32, rop: u32,
+) -> i32 {
+    if bits.is_null() || info.is_null() || w_dst == 0 || h_dst == 0 || src_w <= 0 || src_h <= 0 || _usage != 0 {
+        return 0;
+    }
+    let header = std::ptr::read_unaligned(info as *const BitmapInfoHeader);
+    let Some(src_pixels) = decode_dib_pixels(
+        &header, info as *const u8, bits as *const u8, src_x, src_y, src_w as usize, src_h as usize,
+    ) else { return 0; };
+    let operation = match rop {
+        0x00CC_0020 => gui::RasterOp::Copy,
+        0x00EE_0086 => gui::RasterOp::Or,
+        0x0088_00C6 => gui::RasterOp::And,
+        0x0066_0046 => gui::RasterOp::Xor,
+        0x0033_0008 => gui::RasterOp::CopyInverted,
+        _ => return 0,
+    };
+    let abs_w = w_dst.unsigned_abs() as usize;
+    let abs_h = h_dst.unsigned_abs() as usize;
+    let count = match abs_w.checked_mul(abs_h) {
+        Some(c) if c <= 8 * 1024 * 1024 => c,
+        _ => return 0,
+    };
+    let mut dst_pixels = Vec::with_capacity(count);
+    for dy in 0..abs_h {
+        for dx in 0..abs_w {
+            let sy = (if h_dst < 0 { abs_h - 1 - dy } else { dy }) * src_h as usize / abs_h;
+            let sx = (if w_dst < 0 { abs_w - 1 - dx } else { dx }) * src_w as usize / abs_w;
+            dst_pixels.push(src_pixels[sy * src_w as usize + sx]);
+        }
+    }
+    let Some(x_end) = x_dst.checked_add(w_dst) else { return 0; };
+    let Some(y_end) = y_dst.checked_add(h_dst) else { return 0; };
+    let (left, right) = (x_dst.min(x_end), x_dst.max(x_end));
+    let (top, bottom) = (y_dst.min(y_end), y_dst.max(y_end));
+    let rect = Rect { left, top, right, bottom };
+    gui::record(hdc, DrawCmd::Bitmap { rect, pixels: dst_pixels, rop: operation });
+    abs_h as i32
+}
 
 // ── CreateFontIndirect ─────────────────────────────────────────────
 
@@ -558,7 +739,8 @@ pub fn exports() -> crate::dlls::Exports {
         "SelectClipRgn" => fn select_clip_rgn,
         "IntersectClipRect" => fn intersect_clip_rect,
         "ExcludeClipRect" => fn exclude_clip_rect,
-        "DeleteObject" => fn delete_rgn,
+        // DeleteObject reste fourni par gdi32 : le stub de région ne doit
+        // pas accepter les objets système ni empêcher la libération réelle.
         "CombineRgn" => fn combine_rgn,
         "SetRectRgn" => fn set_rect_rgn,
         "GetPixel" => fn get_pixel,
