@@ -550,18 +550,111 @@ pub extern "win64" fn rtl_decode_pointer(ptr: *mut c_void) -> *mut c_void {
 }
 
 // ============================================================
-//  SEH stubs (x64 table-based unwinding)
+//  SEH : x64 table-based exception handling
 // ============================================================
 
-/// `RtlCaptureContext` : remplit un CONTEXT pour le thread courant.
-/// Stub : on met tout à zéro sauf ContextFlags.
+// CONTEXT offsets (x64 Windows)
+const CTX_FLAGS: usize = 0x30;
+const CTX_RAX: usize = 0x78;
+const CTX_RCX: usize = 0x80;
+const CTX_RDX: usize = 0x88;
+const CTX_RBX: usize = 0x90;
+const CTX_RSP: usize = 0x98;
+const CTX_RBP: usize = 0xA0;
+const CTX_RSI: usize = 0xA8;
+const CTX_RDI: usize = 0xB0;
+const CTX_R8: usize = 0xB8;
+const CTX_R9: usize = 0xC0;
+const CTX_R10: usize = 0xC8;
+const CTX_R11: usize = 0xD0;
+const CTX_R12: usize = 0xD8;
+const CTX_R13: usize = 0xE0;
+const CTX_R14: usize = 0xE8;
+const CTX_R15: usize = 0xF0;
+const CTX_RIP: usize = 0xF8;
+const CTX_XMM0: usize = 0x1A0;
+const CTX_SIZE: usize = 1232;
+
+const CONTEXT_AMD64: u32 = 0x0010_0000;
+const CONTEXT_FULL: u32 = CONTEXT_AMD64 | 0x0F;
+
+const UNW_FLAG_EHANDLER: u8 = 0x01;
+const UNW_FLAG_UHANDLER: u8 = 0x02;
+const UNW_FLAG_CHAININFO: u8 = 0x04;
+
+fn ctx_gpr_offset(reg: u8) -> usize {
+    CTX_RAX + (reg as usize) * 8
+}
+
+unsafe fn ctx_get_gpr(ctx: *const u8, reg: u8) -> u64 {
+    (ctx.add(ctx_gpr_offset(reg)) as *const u64).read_unaligned()
+}
+unsafe fn ctx_set_gpr(ctx: *mut u8, reg: u8, val: u64) {
+    (ctx.add(ctx_gpr_offset(reg)) as *mut u64).write_unaligned(val);
+}
+unsafe fn ctx_get_rsp(ctx: *const u8) -> u64 {
+    (ctx.add(CTX_RSP) as *const u64).read_unaligned()
+}
+unsafe fn ctx_set_rsp(ctx: *mut u8, val: u64) {
+    (ctx.add(CTX_RSP) as *mut u64).write_unaligned(val);
+}
+unsafe fn ctx_get_rip(ctx: *const u8) -> u64 {
+    (ctx.add(CTX_RIP) as *const u64).read_unaligned()
+}
+unsafe fn ctx_set_rip(ctx: *mut u8, val: u64) {
+    (ctx.add(CTX_RIP) as *mut u64).write_unaligned(val);
+}
+
+// `RtlCaptureContext` implemented in assembly to read the caller's registers.
+core::arch::global_asm!(
+    ".globl winlux_rtl_capture_context",
+    ".p2align 4",
+    "winlux_rtl_capture_context:",
+    // rcx = pointer to CONTEXT (win64 first arg)
+    // Zero the whole structure first
+    "push rdi",
+    "mov rdi, rcx",
+    "push rcx",
+    "xor eax, eax",
+    "mov ecx, 154",         // 1232 / 8 = 154
+    "rep stosq",
+    "pop rcx",
+    "pop rdi",
+    // ContextFlags = CONTEXT_AMD64 | CONTEXT_FULL
+    "mov dword ptr [rcx + 0x30], 0x0010001F",
+    // Integer registers
+    "mov [rcx + 0x78], rax",
+    "mov [rcx + 0x88], rdx",
+    "mov [rcx + 0x90], rbx",
+    // RSP of caller = our RSP + 8 (return address)
+    "lea rax, [rsp + 8]",
+    "mov [rcx + 0x98], rax",
+    "mov [rcx + 0xA0], rbp",
+    "mov [rcx + 0xA8], rsi",
+    "mov [rcx + 0xB0], rdi",
+    "mov [rcx + 0xB8], r8",
+    "mov [rcx + 0xC0], r9",
+    "mov [rcx + 0xC8], r10",
+    "mov [rcx + 0xD0], r11",
+    "mov [rcx + 0xD8], r12",
+    "mov [rcx + 0xE0], r13",
+    "mov [rcx + 0xE8], r14",
+    "mov [rcx + 0xF0], r15",
+    // RIP = return address = [rsp]
+    "mov rax, [rsp]",
+    "mov [rcx + 0xF8], rax",
+    // RCX itself was clobbered by the call, store 0
+    "mov qword ptr [rcx + 0x80], 0",
+    "ret",
+);
+extern "win64" {
+    fn winlux_rtl_capture_context(ctx: *mut c_void);
+}
 pub unsafe extern "win64" fn rtl_capture_context(ctx: *mut c_void) {
     if ctx.is_null() {
         return;
     }
-    std::ptr::write_bytes(ctx as *mut u8, 0, 1232); // CONTEXT size on x64
-                                                    // CONTEXT_AMD64 | CONTEXT_FULL
-    std::ptr::write_unaligned(ctx as *mut u32, 0x0010_001F);
+    winlux_rtl_capture_context(ctx);
 }
 
 /// `RtlLookupFunctionEntry` : cherche l'entrée RUNTIME_FUNCTION dans le
@@ -571,6 +664,10 @@ pub unsafe extern "win64" fn rtl_lookup_function_entry(
     image_base: *mut u64,
     _history: *mut c_void,
 ) -> *mut c_void {
+    lookup_function_entry_impl(pc, image_base)
+}
+
+unsafe fn lookup_function_entry_impl(pc: u64, image_base: *mut u64) -> *mut c_void {
     let Some(m) = crate::loader::find_module_by_addr(pc as usize) else {
         return std::ptr::null_mut();
     };
@@ -578,7 +675,6 @@ pub unsafe extern "win64" fn rtl_lookup_function_entry(
     if !image_base.is_null() {
         *image_base = base as u64;
     }
-    // Data directory index 3 = IMAGE_DIRECTORY_ENTRY_EXCEPTION
     let Some(dir) = m.pe.dirs.get(3) else {
         return std::ptr::null_mut();
     };
@@ -588,7 +684,6 @@ pub unsafe extern "win64" fn rtl_lookup_function_entry(
     let rva = (pc as usize).wrapping_sub(base) as u32;
     let table = (base + dir.rva as usize) as *const [u32; 3];
     let count = dir.size as usize / 12;
-    // Binary search: the table is sorted by BeginAddress.
     let mut lo = 0usize;
     let mut hi = count;
     while lo < hi {
@@ -605,34 +700,335 @@ pub unsafe extern "win64" fn rtl_lookup_function_entry(
     std::ptr::null_mut()
 }
 
-/// `RtlVirtualUnwind` : stub SEH.
+/// `RtlVirtualUnwind` : déroulement d'une trame x64 à partir des
+/// codes de déroulement (.xdata) référencés par la RUNTIME_FUNCTION.
 pub unsafe extern "win64" fn rtl_virtual_unwind(
-    _type: u32,
-    _base: u64,
-    _pc: u64,
-    _entry: *const c_void,
-    _ctx: *mut c_void,
-    _handler_data: *mut *mut c_void,
+    handler_type: u32,
+    image_base: u64,
+    control_pc: u64,
+    function_entry: *const c_void,
+    context_record: *mut c_void,
+    handler_data: *mut *mut c_void,
     establisher_frame: *mut u64,
-    _ctx_pointers: *mut c_void,
+    context_pointers: *mut c_void,
 ) -> *mut c_void {
-    if !establisher_frame.is_null() {
-        *establisher_frame = 0;
+    let ctx = context_record as *mut u8;
+    let base = image_base as usize;
+    let rf = function_entry as *const [u32; 3];
+    let mut unwind_rva = (*rf)[2];
+    let mut handler: *mut c_void = std::ptr::null_mut();
+
+    // Follow CHAININFO chain
+    loop {
+        let info = (base + unwind_rva as usize) as *const u8;
+        let version_flags = info.read();
+        let _version = version_flags & 0x07;
+        let flags = (version_flags >> 3) & 0x1F;
+        let prolog_size = info.add(1).read();
+        let code_count = info.add(2).read() as usize;
+        let frame_reg_off = info.add(3).read();
+        let frame_register = frame_reg_off & 0x0F;
+        let frame_offset = ((frame_reg_off >> 4) & 0x0F) as u64 * 16;
+
+        let codes = info.add(4) as *const u16;
+        let rva = (control_pc as usize).wrapping_sub(base) as u32;
+        let func_start = (*rf)[0];
+        let in_prolog = rva < func_start + prolog_size as u32;
+
+        // If there's a frame pointer register, use it as base for stack-relative
+        // saves rather than RSP directly (handles variable-size stack frames).
+        let frame_base = if frame_register != 0 && !in_prolog {
+            ctx_get_gpr(ctx, frame_register).wrapping_sub(frame_offset)
+        } else {
+            ctx_get_rsp(ctx)
+        };
+
+        let mut i = 0usize;
+        while i < code_count {
+            let code = codes.add(i).read_unaligned();
+            let code_offset = (code & 0xFF) as u8;
+            let unwind_op = ((code >> 8) & 0x0F) as u8;
+            let op_info = ((code >> 12) & 0x0F) as u8;
+            i += 1;
+
+            // In the prolog, skip codes past the current position
+            if in_prolog && code_offset > (rva - func_start) as u8 {
+                match unwind_op {
+                    1 if op_info == 0 => { i += 1; }
+                    1 if op_info == 1 => { i += 2; }
+                    4 | 8 => { i += 1; }
+                    5 | 9 => { i += 2; }
+                    _ => {}
+                }
+                continue;
+            }
+
+            match unwind_op {
+                // UWOP_PUSH_NONVOL
+                0 => {
+                    let rsp = ctx_get_rsp(ctx);
+                    let val = (rsp as *const u64).read_unaligned();
+                    ctx_set_gpr(ctx, op_info, val);
+                    ctx_set_rsp(ctx, rsp + 8);
+                    set_ctx_pointer(context_pointers, op_info, rsp);
+                }
+                // UWOP_ALLOC_LARGE
+                1 => {
+                    let size = if op_info == 0 {
+                        let slot = codes.add(i).read_unaligned() as u64 * 8;
+                        i += 1;
+                        slot
+                    } else {
+                        let lo = codes.add(i).read_unaligned() as u64;
+                        let hi = codes.add(i + 1).read_unaligned() as u64;
+                        i += 2;
+                        lo | (hi << 16)
+                    };
+                    ctx_set_rsp(ctx, ctx_get_rsp(ctx) + size);
+                }
+                // UWOP_ALLOC_SMALL
+                2 => {
+                    ctx_set_rsp(ctx, ctx_get_rsp(ctx) + op_info as u64 * 8 + 8);
+                }
+                // UWOP_SET_FPREG
+                3 => {
+                    ctx_set_rsp(ctx, ctx_get_gpr(ctx, frame_register).wrapping_sub(frame_offset));
+                }
+                // UWOP_SAVE_NONVOL
+                4 => {
+                    let offset = codes.add(i).read_unaligned() as u64 * 8;
+                    i += 1;
+                    let addr = frame_base + offset;
+                    ctx_set_gpr(ctx, op_info, (addr as *const u64).read_unaligned());
+                    set_ctx_pointer(context_pointers, op_info, addr);
+                }
+                // UWOP_SAVE_NONVOL_FAR
+                5 => {
+                    let lo = codes.add(i).read_unaligned() as u64;
+                    let hi = codes.add(i + 1).read_unaligned() as u64;
+                    i += 2;
+                    let offset = lo | (hi << 16);
+                    let addr = frame_base + offset;
+                    ctx_set_gpr(ctx, op_info, (addr as *const u64).read_unaligned());
+                    set_ctx_pointer(context_pointers, op_info, addr);
+                }
+                // UWOP_SAVE_XMM128
+                8 => {
+                    let offset = codes.add(i).read_unaligned() as u64 * 16;
+                    i += 1;
+                    let addr = frame_base + offset;
+                    let xmm_off = CTX_XMM0 + op_info as usize * 16;
+                    std::ptr::copy_nonoverlapping(
+                        addr as *const u8,
+                        ctx.add(xmm_off),
+                        16,
+                    );
+                }
+                // UWOP_SAVE_XMM128_FAR
+                9 => {
+                    let lo = codes.add(i).read_unaligned() as u64;
+                    let hi = codes.add(i + 1).read_unaligned() as u64;
+                    i += 2;
+                    let offset = lo | (hi << 16);
+                    let addr = frame_base + offset;
+                    let xmm_off = CTX_XMM0 + op_info as usize * 16;
+                    std::ptr::copy_nonoverlapping(
+                        addr as *const u8,
+                        ctx.add(xmm_off),
+                        16,
+                    );
+                }
+                // UWOP_PUSH_MACHFRAME
+                10 => {
+                    let rsp = ctx_get_rsp(ctx);
+                    let base_off = if op_info != 0 { 8u64 } else { 0u64 };
+                    ctx_set_rip(ctx, ((rsp + base_off) as *const u64).read_unaligned());
+                    ctx_set_rsp(ctx, ((rsp + base_off + 24) as *const u64).read_unaligned());
+                    if !establisher_frame.is_null() {
+                        *establisher_frame = ctx_get_rsp(ctx);
+                    }
+                    return std::ptr::null_mut();
+                }
+                _ => {
+                    // UWOP_EPILOG (6), UWOP_SPARE_CODE (7) — skip
+                }
+            }
+        }
+
+        // Check for chained unwind info
+        if flags & UNW_FLAG_CHAININFO != 0 {
+            let aligned = (code_count + 1) & !1;
+            let chain = codes.add(aligned) as *const [u32; 3];
+            unwind_rva = (*chain)[2];
+            continue;
+        }
+
+        // Extract exception handler if flags request it
+        if (flags & UNW_FLAG_EHANDLER != 0 && handler_type == 1)
+            || (flags & UNW_FLAG_UHANDLER != 0 && handler_type == 2)
+            || (flags & (UNW_FLAG_EHANDLER | UNW_FLAG_UHANDLER) != 0 && handler_type == 0)
+        {
+            let aligned = (code_count + 1) & !1;
+            let handler_rva = codes.add(aligned).cast::<u32>().read_unaligned();
+            handler = (base + handler_rva as usize) as *mut c_void;
+            if !handler_data.is_null() {
+                *handler_data = codes.add(aligned + 2).cast::<u32>() as *mut c_void;
+            }
+        } else if !handler_data.is_null() {
+            *handler_data = std::ptr::null_mut();
+        }
+        break;
     }
-    std::ptr::null_mut()
+
+    // Pop return address → new RIP, adjust RSP
+    let rsp = ctx_get_rsp(ctx);
+    ctx_set_rip(ctx, (rsp as *const u64).read_unaligned());
+    ctx_set_rsp(ctx, rsp + 8);
+
+    if !establisher_frame.is_null() {
+        *establisher_frame = ctx_get_rsp(ctx).wrapping_sub(8);
+    }
+
+    handler
 }
 
-/// `RtlUnwindEx` : stub.
+unsafe fn set_ctx_pointer(ptrs: *mut c_void, reg: u8, addr: u64) {
+    if ptrs.is_null() || reg > 15 {
+        return;
+    }
+    // KNONVOLATILE_CONTEXT_POINTERS: 16 XMM pointers then 16 integer pointers
+    let int_base = (ptrs as *mut u64).add(16);
+    int_base.add(reg as usize).write(addr);
+}
+
+// EXCEPTION_RECORD layout offsets
+const ER_CODE: usize = 0;
+const ER_FLAGS: usize = 4;
+const ER_NPARAMS: usize = 24;
+const ER_SIZE: usize = 152;
+
+// DISPATCHER_CONTEXT layout (x64)
+#[repr(C)]
+struct DispatcherContext {
+    control_pc: u64,
+    image_base: u64,
+    function_entry: *const c_void,
+    establisher_frame: u64,
+    target_ip: u64,
+    context_record: *mut c_void,
+    language_handler: *const c_void,
+    handler_data: *const c_void,
+    history_table: *const c_void,
+    scope_index: u32,
+    _pad: u32,
+}
+
+const EXCEPTION_UNWINDING: u32 = 0x02;
+const EXCEPTION_TARGET_UNWIND: u32 = 0x20;
+
+type ExceptionHandler = unsafe extern "win64" fn(
+    exception_record: *mut c_void,
+    establisher_frame: u64,
+    context_record: *mut c_void,
+    dispatcher_context: *mut DispatcherContext,
+) -> i32;
+
+const EXCEPTION_CONTINUE_SEARCH: i32 = 0;
+const _EXCEPTION_EXECUTE_HANDLER: i32 = 1;
+
+/// `RtlUnwindEx` : déroulement SEH complet.
 pub unsafe extern "win64" fn rtl_unwind_ex(
-    _target_frame: *mut c_void,
-    _target_ip: *mut c_void,
-    _exception_record: *mut c_void,
-    _return_value: *mut c_void,
-    _ctx: *mut c_void,
+    target_frame: *mut c_void,
+    target_ip: *mut c_void,
+    exception_record: *mut c_void,
+    return_value: *mut c_void,
+    original_context: *mut c_void,
     _history: *mut c_void,
 ) {
-    // Les programmes qui arrivent ici sans SEH réel vont probablement planter,
-    // mais c'est le mieux qu'on puisse faire sans déroulement complet.
+    let target_frame_val = target_frame as u64;
+    let target_ip_val = target_ip as u64;
+    let ctx = original_context as *mut u8;
+
+    // Build or use the exception record
+    let mut local_er = [0u8; ER_SIZE];
+    let er = if exception_record.is_null() {
+        (local_er.as_mut_ptr().add(ER_CODE) as *mut u32).write(0xC0000028); // STATUS_BAD_STACK
+        (local_er.as_mut_ptr().add(ER_FLAGS) as *mut u32).write(EXCEPTION_UNWINDING);
+        (local_er.as_mut_ptr().add(ER_NPARAMS) as *mut u32).write(0);
+        local_er.as_mut_ptr() as *mut c_void
+    } else {
+        let flags = (exception_record as *mut u8).add(ER_FLAGS) as *mut u32;
+        *flags |= EXCEPTION_UNWINDING;
+        exception_record
+    };
+
+    // Walk frames and call unwind handlers
+    let mut dispatch_ctx: DispatcherContext = std::mem::zeroed();
+    let max_frames = 256u32;
+
+    for _ in 0..max_frames {
+        let rip = ctx_get_rip(ctx);
+        let rsp = ctx_get_rsp(ctx);
+        if rip == 0 {
+            break;
+        }
+
+        let mut image_base: u64 = 0;
+        let func_entry = lookup_function_entry_impl(rip, &mut image_base);
+        if func_entry.is_null() {
+            // Leaf function: RIP = [RSP], RSP += 8
+            ctx_set_rip(ctx, (rsp as *const u64).read_unaligned());
+            ctx_set_rsp(ctx, rsp + 8);
+            continue;
+        }
+
+        let mut handler_data: *mut c_void = std::ptr::null_mut();
+        let mut frame: u64 = 0;
+        let handler = rtl_virtual_unwind(
+            2, // UNW_FLAG_UHANDLER
+            image_base,
+            rip,
+            func_entry,
+            original_context,
+            &mut handler_data,
+            &mut frame,
+            std::ptr::null_mut(),
+        );
+
+        // Check if we've reached the target frame
+        if target_frame_val != 0 && frame == target_frame_val {
+            let er_flags = (er as *mut u8).add(ER_FLAGS) as *mut u32;
+            *er_flags |= EXCEPTION_TARGET_UNWIND;
+            ctx_set_rip(ctx, target_ip_val);
+            ctx_set_gpr(ctx, 0, return_value as u64); // RAX = return value
+            return;
+        }
+
+        // Call unwind handler if present
+        if !handler.is_null() {
+            dispatch_ctx.control_pc = rip;
+            dispatch_ctx.image_base = image_base;
+            dispatch_ctx.function_entry = func_entry;
+            dispatch_ctx.establisher_frame = frame;
+            dispatch_ctx.target_ip = target_ip_val;
+            dispatch_ctx.context_record = original_context;
+            dispatch_ctx.language_handler = handler;
+            dispatch_ctx.handler_data = handler_data;
+            dispatch_ctx.history_table = _history;
+            dispatch_ctx.scope_index = 0;
+
+            let handler_fn: ExceptionHandler = std::mem::transmute(handler);
+            let _result = handler_fn(er, frame, original_context, &mut dispatch_ctx);
+            // ExceptionContinueSearch: keep going
+            // ExceptionCollidedUnwind: use dispatch_ctx state
+        }
+    }
+
+    // Restore context to target
+    if target_ip_val != 0 {
+        ctx_set_rip(ctx, target_ip_val);
+    }
+    ctx_set_gpr(ctx, 0, return_value as u64);
 }
 
 /// `RtlPcToFileHeader` : trouve le module contenant l'adresse.

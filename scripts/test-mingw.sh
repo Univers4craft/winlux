@@ -18,4 +18,15 @@ set -e
 cat "$work/sortie.txt"
 test "$status" -eq 0 || { echo "mingw_suite.exe : code $status" >&2; exit 1; }
 grep -q '^atexit exécuté$' "$work/sortie.txt" || { echo "les fonctions atexit n'ont pas été exécutées" >&2; exit 1; }
+
+if test -f "$dir/cpp_exceptions.exe"; then
+    set +e
+    WINLUX_GUI=headless "$runtime" "$dir/cpp_exceptions.exe" >"$work/cpp.txt" 2>&1
+    cpp_status=$?
+    set -e
+    cat "$work/cpp.txt"
+    test "$cpp_status" -eq 0 || { echo "cpp_exceptions.exe : code $cpp_status" >&2; exit 1; }
+    grep -q 'all tests passed' "$work/cpp.txt" || { echo "cpp_exceptions : marqueur de réussite absent" >&2; exit 1; }
+fi
+
 echo "Tests MinGW réussis."
