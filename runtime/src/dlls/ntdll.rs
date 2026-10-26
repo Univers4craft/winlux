@@ -1631,16 +1631,78 @@ pub unsafe extern "win64" fn nt_query_system_information(
     }
 }
 
-/// `NtQueryVirtualMemory` : stub.
+/// `NtQueryVirtualMemory` : MemoryBasicInformation (classe 0) via /proc/self/maps.
 pub unsafe extern "win64" fn nt_query_virtual_memory(
     _handle: usize,
-    _addr: *const c_void,
-    _info_class: u32,
-    _info: *mut c_void,
-    _length: usize,
-    _return_length: *mut usize,
+    addr: *const c_void,
+    info_class: u32,
+    info: *mut c_void,
+    length: usize,
+    return_length: *mut usize,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if info_class != 0 {
+        return STATUS_NOT_IMPLEMENTED;
+    }
+    const MBI_SIZE: usize = 48;
+    if info.is_null() || length < MBI_SIZE {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    let target = addr as usize;
+    let buf = info as *mut u8;
+    std::ptr::write_bytes(buf, 0, MBI_SIZE);
+    if let Ok(maps) = std::fs::read_to_string("/proc/self/maps") {
+        for line in maps.lines() {
+            let Some((range, rest)) = line.split_once(' ') else {
+                continue;
+            };
+            let Some((start_s, end_s)) = range.split_once('-') else {
+                continue;
+            };
+            let Ok(start) = usize::from_str_radix(start_s, 16) else {
+                continue;
+            };
+            let Ok(end) = usize::from_str_radix(end_s, 16) else {
+                continue;
+            };
+            if target >= start && target < end {
+                let perms = &rest[..4.min(rest.len())];
+                let protect: u32 = match (
+                    perms.contains('r'),
+                    perms.contains('w'),
+                    perms.contains('x'),
+                ) {
+                    (true, true, true) => 0x40,   // PAGE_EXECUTE_READWRITE
+                    (true, true, false) => 0x04,  // PAGE_READWRITE
+                    (true, false, true) => 0x20,  // PAGE_EXECUTE_READ
+                    (true, false, false) => 0x02, // PAGE_READONLY
+                    _ => 0x01,                    // PAGE_NOACCESS
+                };
+                // MEMORY_BASIC_INFORMATION layout (x64):
+                // 0: BaseAddress (8), 8: AllocationBase (8), 16: AllocationProtect (4),
+                // 20: PartitionId (2), 22: pad (2), 24: RegionSize (8),
+                // 32: State (4), 36: Protect (4), 40: Type (4)
+                std::ptr::write_unaligned(buf as *mut usize, start);
+                std::ptr::write_unaligned(buf.add(8) as *mut usize, start);
+                std::ptr::write_unaligned(buf.add(16) as *mut u32, protect);
+                std::ptr::write_unaligned(buf.add(24) as *mut usize, end - start);
+                std::ptr::write_unaligned(buf.add(32) as *mut u32, 0x1000); // MEM_COMMIT
+                std::ptr::write_unaligned(buf.add(36) as *mut u32, protect);
+                std::ptr::write_unaligned(buf.add(40) as *mut u32, 0x20000); // MEM_PRIVATE
+                if !return_length.is_null() {
+                    *return_length = MBI_SIZE;
+                }
+                return STATUS_SUCCESS;
+            }
+        }
+    }
+    // Address not in any mapping: free region
+    std::ptr::write_unaligned(buf as *mut usize, target & !0xFFF);
+    std::ptr::write_unaligned(buf.add(24) as *mut usize, 4096);
+    std::ptr::write_unaligned(buf.add(32) as *mut u32, 0x10000); // MEM_FREE
+    if !return_length.is_null() {
+        *return_length = MBI_SIZE;
+    }
+    STATUS_SUCCESS
 }
 
 /// `NtDelayExecution` : dort pendant le délai spécifié.
@@ -1730,37 +1792,125 @@ pub unsafe extern "win64" fn nt_write_virtual_memory(
     STATUS_NOT_IMPLEMENTED
 }
 
-/// `NtCreateSection` : stub.
+// ---------- Section views tracking ----------
+
+static SECTION_VIEWS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
+
+/// `NtCreateSection` : crée un objet section (mémoire partagée ou fichier mappé).
 pub unsafe extern "win64" fn nt_create_section(
-    _handle: *mut usize,
+    handle: *mut usize,
     _access: u32,
     _attrs: *const c_void,
-    _max_size: *const c_void,
-    _protect: u32,
+    max_size: *const c_void,
+    protect: u32,
     _alloc: u32,
-    _file: usize,
+    file: usize,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if handle.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let size = if max_size.is_null() {
+        0u64
+    } else {
+        std::ptr::read_unaligned(max_size as *const u64)
+    };
+    let fd = if file == 0 || file == usize::MAX {
+        None
+    } else {
+        let raw = crate::dlls::kernel32::handle_to_fd(file);
+        if raw < 0 {
+            return STATUS_INVALID_HANDLE;
+        }
+        Some(raw)
+    };
+    let section = Arc::new(crate::dlls::kernel32::SectionObject {
+        fd,
+        max_size: size,
+        protect,
+    });
+    let h =
+        crate::dlls::kernel32::add_sync(crate::dlls::kernel32::SyncHandle::Section(section), None);
+    *handle = h;
+    STATUS_SUCCESS
 }
 
-/// `NtMapViewOfSection` : stub.
+/// `NtMapViewOfSection` : mappe une vue de la section dans l'espace d'adressage.
 pub unsafe extern "win64" fn nt_map_view_of_section(
-    _section: usize,
+    section: usize,
     _process: usize,
-    _base: *mut *mut c_void,
+    base: *mut *mut c_void,
     _zero_bits: usize,
     _commit: usize,
-    _offset: *mut c_void,
-    _size: *mut usize,
+    offset_ptr: *mut c_void,
+    size: *mut usize,
     _inherit: u32,
     _alloc: u32,
-    _protect: u32,
+    protect: u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if base.is_null() || size.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let Some(crate::dlls::kernel32::SyncHandle::Section(sec)) =
+        crate::dlls::kernel32::lookup_sync(section)
+    else {
+        return STATUS_INVALID_HANDLE;
+    };
+    let offset = if offset_ptr.is_null() {
+        0u64
+    } else {
+        std::ptr::read_unaligned(offset_ptr as *const u64)
+    };
+    let mut map_size = *size;
+    if map_size == 0 {
+        if sec.max_size > 0 {
+            map_size = (sec.max_size - offset) as usize;
+        } else if let Some(fd) = sec.fd {
+            let mut stat: libc::stat = std::mem::zeroed();
+            if libc::fstat(fd, &mut stat) == 0 && stat.st_size > offset as i64 {
+                map_size = (stat.st_size as u64 - offset) as usize;
+            }
+        }
+        if map_size == 0 {
+            map_size = 4096;
+        }
+    }
+    let prot = match protect & 0xFF {
+        0x02 => libc::PROT_READ,                    // PAGE_READONLY
+        0x04 => libc::PROT_READ | libc::PROT_WRITE, // PAGE_READWRITE
+        0x08 => libc::PROT_READ | libc::PROT_WRITE, // PAGE_WRITECOPY
+        0x20 => libc::PROT_READ | libc::PROT_EXEC,  // PAGE_EXECUTE_READ
+        0x40 => libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
+        _ => libc::PROT_READ | libc::PROT_WRITE,
+    };
+    let (flags, mfd) = if let Some(fd) = sec.fd {
+        (libc::MAP_SHARED, fd)
+    } else {
+        (libc::MAP_SHARED | libc::MAP_ANONYMOUS, -1)
+    };
+    let hint = *base;
+    let addr = libc::mmap(hint, map_size, prot, flags, mfd, offset as libc::off_t);
+    if addr == libc::MAP_FAILED {
+        return 0xC000_0017u32 as i32; // STATUS_NO_MEMORY
+    }
+    *base = addr;
+    *size = map_size;
+    let mut views = lock(SECTION_VIEWS.get_or_init(|| Mutex::new(HashMap::new())));
+    views.insert(addr as usize, map_size);
+    STATUS_SUCCESS
 }
 
-/// `NtUnmapViewOfSection` : stub.
-pub unsafe extern "win64" fn nt_unmap_view_of_section(_process: usize, _base: *mut c_void) -> i32 {
+/// `NtUnmapViewOfSection` : libère la vue précédemment mappée.
+pub unsafe extern "win64" fn nt_unmap_view_of_section(_process: usize, base: *mut c_void) -> i32 {
+    if base.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let size = {
+        let mut views = lock(SECTION_VIEWS.get_or_init(|| Mutex::new(HashMap::new())));
+        views.remove(&(base as usize)).unwrap_or(0)
+    };
+    if size > 0 {
+        libc::munmap(base, size);
+    }
     STATUS_SUCCESS
 }
 
@@ -1786,17 +1936,42 @@ pub unsafe extern "win64" fn nt_terminate_process(_handle: usize, code: u32) -> 
     crate::dlls::kernel32::flush_and_exit(code as i32)
 }
 
-/// `NtDuplicateObject` : stub.
+/// `NtDuplicateObject` : duplique un handle dans le même processus.
 pub unsafe extern "win64" fn nt_duplicate_object(
     _src_process: usize,
-    _src_handle: usize,
+    src_handle: usize,
     _tgt_process: usize,
-    _tgt_handle: *mut usize,
+    tgt_handle: *mut usize,
     _access: u32,
     _attrs: u32,
-    _options: u32,
+    options: u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    const DUPLICATE_CLOSE_SOURCE: u32 = 0x01;
+    if tgt_handle.is_null() && options & DUPLICATE_CLOSE_SOURCE == 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if let Some(obj) = crate::dlls::kernel32::lookup_sync(src_handle) {
+        if !tgt_handle.is_null() {
+            let new_h = crate::dlls::kernel32::add_sync(obj, None);
+            *tgt_handle = new_h;
+        }
+        if options & DUPLICATE_CLOSE_SOURCE != 0 {
+            crate::dlls::kernel32::close_handle(src_handle);
+        }
+        return STATUS_SUCCESS;
+    }
+    let dup_result = crate::dlls::kernel32::duplicate_handle_impl(src_handle);
+    if let Some(new_h) = dup_result {
+        if !tgt_handle.is_null() {
+            *tgt_handle = new_h;
+        }
+        if options & DUPLICATE_CLOSE_SOURCE != 0 {
+            crate::dlls::kernel32::close_handle(src_handle);
+        }
+        STATUS_SUCCESS
+    } else {
+        STATUS_INVALID_HANDLE
+    }
 }
 
 /// `NtCreateEvent` : stub.
@@ -2003,5 +2178,110 @@ pub fn exports() -> crate::dlls::Exports {
         "NtFlushBuffersFile" => fn nt_flush_buffers_file,
         "NtQueryAttributesFile" => fn nt_query_attributes_file,
         "NtRaiseHardError" => fn nt_raise_hard_error,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::ffi::c_void;
+
+    #[test]
+    fn section_anonyme_mappe_et_libere() {
+        unsafe {
+            let mut handle: usize = 0;
+            let size: u64 = 4096;
+            let r = nt_create_section(
+                &mut handle,
+                0xF001F,
+                std::ptr::null(),
+                &size as *const u64 as *const c_void,
+                0x04, // PAGE_READWRITE
+                0x08000000,
+                0,
+            );
+            assert_eq!(r, STATUS_SUCCESS);
+            assert_ne!(handle, 0);
+
+            let mut base: *mut c_void = std::ptr::null_mut();
+            let mut view_size: usize = 0;
+            let r = nt_map_view_of_section(
+                handle,
+                usize::MAX,
+                &mut base,
+                0,
+                0,
+                std::ptr::null_mut(),
+                &mut view_size,
+                1,
+                0,
+                0x04,
+            );
+            assert_eq!(r, STATUS_SUCCESS);
+            assert!(!base.is_null());
+            assert!(view_size >= 4096);
+
+            // Write and read back
+            std::ptr::write(base as *mut u32, 0xDEAD_BEEF);
+            assert_eq!(std::ptr::read(base as *const u32), 0xDEAD_BEEF);
+
+            let r = nt_unmap_view_of_section(usize::MAX, base);
+            assert_eq!(r, STATUS_SUCCESS);
+        }
+    }
+
+    #[test]
+    fn query_virtual_memory_region_committee() {
+        unsafe {
+            let page = libc::mmap(
+                std::ptr::null_mut(),
+                4096,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            );
+            assert_ne!(page, libc::MAP_FAILED);
+            let mut buf = [0u8; 48];
+            let mut ret_len: usize = 0;
+            let r = nt_query_virtual_memory(
+                usize::MAX,
+                page,
+                0,
+                buf.as_mut_ptr() as *mut c_void,
+                48,
+                &mut ret_len,
+            );
+            assert_eq!(r, STATUS_SUCCESS);
+            assert_eq!(ret_len, 48);
+            let state = std::ptr::read_unaligned(buf.as_ptr().add(32) as *const u32);
+            assert_eq!(state, 0x1000); // MEM_COMMIT
+            let protect = std::ptr::read_unaligned(buf.as_ptr().add(36) as *const u32);
+            assert_eq!(protect, 0x04); // PAGE_READWRITE
+            libc::munmap(page, 4096);
+        }
+    }
+
+    #[test]
+    fn duplicate_handle_duplique_un_evenement() {
+        unsafe {
+            let mut handle: usize = 0;
+            let r = nt_create_event(&mut handle, 0x1F0003, std::ptr::null(), 1, 0);
+            assert_eq!(r, STATUS_SUCCESS);
+            assert_ne!(handle, 0);
+
+            let mut dup: usize = 0;
+            let r = nt_duplicate_object(usize::MAX, handle, usize::MAX, &mut dup, 0, 0, 0);
+            assert_eq!(r, STATUS_SUCCESS);
+            assert_ne!(dup, 0);
+            assert_ne!(dup, handle);
+
+            // Both handles should work
+            let r = nt_set_event(handle, std::ptr::null_mut());
+            assert_eq!(r, STATUS_SUCCESS);
+
+            crate::dlls::kernel32::close_handle(handle);
+            crate::dlls::kernel32::close_handle(dup);
+        }
     }
 }

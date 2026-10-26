@@ -92,13 +92,21 @@ struct ProcessObject {
     state: Mutex<ProcessState>,
     changed: Condvar,
 }
+#[allow(dead_code)]
+pub(crate) struct SectionObject {
+    pub(crate) fd: Option<i32>,
+    pub(crate) max_size: u64,
+    pub(crate) protect: u32,
+}
 #[derive(Clone)]
-enum SyncHandle {
+#[allow(private_interfaces)]
+pub(crate) enum SyncHandle {
     Event(Arc<EventObject>),
     Mutex(Arc<MutexObject>),
     Thread(Arc<ThreadObject>),
     Process(Arc<ProcessObject>),
     CompletionPort(Arc<CompletionPort>),
+    Section(Arc<SectionObject>),
 }
 static SYNCS: OnceLock<Mutex<HashMap<usize, SyncHandle>>> = OnceLock::new();
 static SYNC_NAMES: OnceLock<Mutex<HashMap<String, (SyncHandle, usize)>>> = OnceLock::new();
@@ -2656,7 +2664,7 @@ fn same_sync(a: &SyncHandle, b: &SyncHandle) -> bool {
         _ => false,
     }
 }
-fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
+pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
     let obj = if let Some(name) = name {
         let key = name.to_lowercase();
         let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
@@ -2684,7 +2692,7 @@ fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, obj);
     h
 }
-fn lookup_sync(h: usize) -> Option<SyncHandle> {
+pub(crate) fn lookup_sync(h: usize) -> Option<SyncHandle> {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new())))
         .get(&h)
         .cloned()
@@ -3631,6 +3639,26 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         0
     }
 }
+pub(crate) fn duplicate_handle_impl(handle: usize) -> Option<usize> {
+    use std::os::unix::io::AsRawFd;
+    let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())));
+    let fh = handles.get(&handle)?;
+    let FileHandle::File(arc) = fh;
+    let fd = {
+        let f = lock(arc);
+        f.as_raw_fd()
+    };
+    let new_fd = unsafe { libc::dup(fd) };
+    if new_fd < 0 {
+        return None;
+    }
+    drop(handles);
+    let new_file = unsafe { std::os::unix::io::FromRawFd::from_raw_fd(new_fd) };
+    let new_h = next_handle();
+    lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
+        .insert(new_h, FileHandle::File(Arc::new(Mutex::new(new_file))));
+    Some(new_h)
+}
 pub unsafe extern "win64" fn create_event_a(
     _sec: usize,
     manual: i32,
@@ -3767,6 +3795,7 @@ pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
         SyncHandle::Thread(t) => wait_thread(&t, timeout),
         SyncHandle::Process(p) => wait_process(&p, timeout),
         SyncHandle::CompletionPort(p) => wait_iocp(&p, timeout),
+        SyncHandle::Section(_) => 0,
     }
 }
 pub unsafe extern "win64" fn wait_for_multiple_objects(
@@ -3808,6 +3837,7 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
                 SyncHandle::Thread(t) => lock(&t.state).finished,
                 SyncHandle::Process(p) => poll_process(p),
                 SyncHandle::CompletionPort(p) => iocp_is_signaled(p),
+                SyncHandle::Section(_) => true,
             });
             if ready {
                 for o in &objects {
@@ -3829,7 +3859,8 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
                         }
                         SyncHandle::Thread(_)
                         | SyncHandle::Process(_)
-                        | SyncHandle::CompletionPort(_) => {}
+                        | SyncHandle::CompletionPort(_)
+                        | SyncHandle::Section(_) => {}
                     }
                 }
                 return 0;
@@ -3852,6 +3883,7 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
                 SyncHandle::Thread(t) => wait_thread(t, 0) == 0,
                 SyncHandle::Process(p) => poll_process(p),
                 SyncHandle::CompletionPort(p) => iocp_is_signaled(p),
+                SyncHandle::Section(_) => true,
             };
             if ready {
                 return i as u32;

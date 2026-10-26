@@ -99,9 +99,10 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
 - [x] Lire les blocs d’environnement ANSI ou Unicode de `CreateProcessA/W` et les appliquer au processus enfant.
 - [x] Implémenter `CREATE_SUSPENDED`/`ResumeThread` pour les enfants via un lanceur Linux suspendu avant l’exécution du programme.
-- [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants.
+- [x] Compléter le cycle de vie des processus : héritage de handles (`STARTF_USESTDHANDLES`), duplication (`NtDuplicateObject`) et récolte robuste des enfants (condvar au lieu de busy-wait).
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
-- [ ] Continuer `ntdll` : sections et primitives bas niveau manquantes (exceptions/unwinding SEH implémentés).
+- [x] Implémenter les sections et primitives bas niveau `ntdll` : `NtCreateSection`/`NtMapViewOfSection` (mmap réel), `NtQueryVirtualMemory` (via `/proc/self/maps`), `NtDuplicateObject`; exceptions/unwinding SEH déjà en place.
+- [ ] Continuer `ntdll` : `NtCreateFile`/`NtOpenFile`, `NtReadVirtualMemory`/`NtWriteVirtualMemory` et autres fonctions Nt* restantes.
 - [x] Propager les blocs TLS statiques des DLL chargées dynamiquement à tous les threads existants.
 - [x] Étendre la CRT : chaînes étroites/larges, conversions (`strtol`, `strtod`, `_itoa`, `_itow`), classification de caractères, fonctions mathématiques, `qsort`/`bsearch` et formatage borné (`_snprintf`, `_snwprintf`), avec tests unitaires et PE (`crt_suite`).
 - [x] Ajouter les flux `FILE*` de la CRT (`fopen`/`fclose`, `fread`/`fwrite`, `fgets`/`fputs`, `fseek`/`ftell`, `feof`, `fprintf`, `vfprintf`, `vsprintf`, `remove`/`rename`) avec tests unitaires et PE.
