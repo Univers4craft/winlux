@@ -42,6 +42,8 @@ if test "$scope" = system; then
         for name in vmlinuz winlux-initramfs.cpio.gz; do test -s "$boot/$name" || { echo "fichier de démarrage absent : $boot/$name" >&2; exit 1; }; cp "$boot/$name" "$raw/boot/$name"; done
         components=runtime,desktop,applications,updater,integration,kernel,drivers,libraries,boot
     else
+        # Préserver aussi les pilotes de l'installation existante.
+        if test -d "$raw/lib/modules"; then rm -rf "$raw/lib/modules"; fi
         components=runtime,desktop,applications,updater,integration,libraries
     fi
     # New configuration defaults are visible without overwriting the user's /etc.

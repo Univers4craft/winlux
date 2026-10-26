@@ -105,7 +105,7 @@ winlux-update --auto enable   # disable pour désactiver
 
 | Paquet | Contenu |
 | --- | --- |
-| `--system` | Bureau, runtime, applications embarquées, scripts, noyau, pilotes, bibliothèques et démarrage, depuis un stage ISO vérifié. |
+| `--system` | Bureau, runtime, applications embarquées, scripts et bibliothèques depuis un stage vérifié. Noyau, modules et boot uniquement avec `WINLUX_UPDATE_INCLUDE_BOOT=1`. |
 | `--runtime` | Runtime et outil de mise à jour uniquement ; ne fournit pas les nouvelles bibliothèques système. |
 
 **GitHub Actions teste le code ; le workflow de release construit une ISO et impose les tests Live et disque installé en BIOS/UEFI avant publication.** Cette chaîne de release doit encore être exécutée sur GitHub pour être validée sur ses runners. Le paquet de mise à jour publié par ce workflow reste de portée **runtime**. Les tags `v*-preview.*` en sont exclus pour préserver les releases système manuelles ; les autres tags doivent correspondre à `VERSION`.
