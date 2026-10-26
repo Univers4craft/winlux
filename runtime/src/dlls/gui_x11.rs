@@ -33,6 +33,12 @@ struct XFont {
     char_width: i16,
 }
 
+struct BitmapCache {
+    key: [i32; 8],
+    pixels: Vec<u32>,
+    pixmap: u32,
+}
+
 fn truecolor_pixel(colorref: u32, red: u32, green: u32, blue: u32) -> u32 {
     let channel = |value: u32, mask: u32| {
         if mask == 0 {
@@ -332,7 +338,7 @@ impl XftRenderer {
         };
         let slant = if spec.italic { "italic" } else { "roman" };
         let pattern = CString::new(format!(
-            "{family}:pixelsize={size}:weight={weight}:slant={slant}:antialias=true:hinting=true"
+            "{family}:pixelsize={size}:weight={weight}:slant={slant}:antialias=true:hinting=true:hintstyle=hintfull:rgba=none:lcdfilter=lcdnone"
         ))
         .ok()?;
         let font =
@@ -509,6 +515,8 @@ pub struct X11Backend {
     /// Pixels X11 déjà alloués, notamment pour éviter des milliers d'aller-retours
     /// lors du rafraîchissement animé des icônes PNG.
     color_cache: RefCell<HashMap<u32, u32>>,
+    /// One bounded server-side cache for the large desktop background.
+    bitmap_cache: RefCell<Option<BitmapCache>>,
     /// Rendu vectoriel antialiasé Xft/Fontconfig, si les bibliothèques hôte sont présentes.
     xft: Option<XftRenderer>,
     /// Facteur DPI appliqué aux coordonnées logiques Win32.
@@ -568,6 +576,7 @@ impl X11Backend {
             content: HashMap::new(),
             fonts: HashMap::new(),
             color_cache: RefCell::new(HashMap::new()),
+            bitmap_cache: RefCell::new(None),
             xft: unsafe { XftRenderer::connect() },
             scale,
             keymap: HashMap::new(),
@@ -1302,6 +1311,38 @@ impl X11Backend {
         if rows_per_request == 0 {
             return;
         }
+        let key = [
+            source_width,
+            source_height,
+            destination_width,
+            destination_height,
+            dst.x as i32 - destination.left,
+            dst.y as i32 - destination.top,
+            dst.width as i32,
+            dst.height as i32,
+        ];
+        let cacheable = image_len > MAX_IMAGE_BYTES && matches!(rop, gui::RasterOp::Copy);
+        if cacheable {
+            if let Some(cached) = self
+                .bitmap_cache
+                .borrow()
+                .as_ref()
+                .filter(|c| c.key == key && c.pixels == pixels)
+            {
+                let _ = self.conn.copy_area(
+                    cached.pixmap,
+                    window.window,
+                    window.gc,
+                    0,
+                    0,
+                    dst.x,
+                    dst.y,
+                    dst.width,
+                    dst.height,
+                );
+                return;
+            }
+        }
         let visual = setup.roots[self.screen]
             .allowed_depths
             .iter()
@@ -1355,20 +1396,54 @@ impl X11Backend {
         let _ = self
             .conn
             .change_gc(window.gc, &ChangeGCAux::new().function(x11_function(rop)));
+        let cache_pixmap = if cacheable {
+            self.conn.generate_id().ok().filter(|&id| {
+                self.conn
+                    .create_pixmap(depth, id, window.window, dst.width, dst.height)
+                    .is_ok_and(|cookie| cookie.check().is_ok())
+            })
+        } else {
+            None
+        };
         for first_row in (0..dst.height as usize).step_by(rows_per_request) {
             let rows = rows_per_request.min(dst.height as usize - first_row);
             let _ = self.conn.put_image(
                 x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
-                window.window,
+                cache_pixmap.unwrap_or(window.window),
                 window.gc,
                 dst.width,
                 rows as u16,
-                dst.x,
-                (dst.y as i32 + first_row as i32) as i16,
+                if cache_pixmap.is_some() { 0 } else { dst.x },
+                (if cache_pixmap.is_some() {
+                    0
+                } else {
+                    dst.y as i32
+                } + first_row as i32) as i16,
                 0,
                 depth,
                 &image[first_row * row_bytes..(first_row + rows) * row_bytes],
             );
+        }
+        if let Some(pixmap) = cache_pixmap {
+            let _ = self.conn.copy_area(
+                pixmap,
+                window.window,
+                window.gc,
+                0,
+                0,
+                dst.x,
+                dst.y,
+                dst.width,
+                dst.height,
+            );
+            let old = self.bitmap_cache.replace(Some(BitmapCache {
+                key,
+                pixels: pixels.to_vec(),
+                pixmap,
+            }));
+            if let Some(old) = old {
+                let _ = self.conn.free_pixmap(old.pixmap);
+            }
         }
         let _ = self.conn.change_gc(
             window.gc,
@@ -2138,6 +2213,21 @@ mod tests {
         let mut pixels = vec![0x0000_00ff; 1920 * 1080];
         pixels[1920 * 540..].fill(0x00ff_0000);
         backend.paint_bitmap(&window, &rect, &rect, &pixels, gui::RasterOp::Copy);
+        let cached = backend.bitmap_cache.borrow().as_ref().unwrap().pixmap;
+        let started = std::time::Instant::now();
+        backend.paint_bitmap(&window, &rect, &rect, &pixels, gui::RasterOp::Copy);
+        assert_eq!(
+            backend.bitmap_cache.borrow().as_ref().unwrap().pixmap,
+            cached
+        );
+        eprintln!("1080p cached repaint: {:?}", started.elapsed());
+        // Changed content must invalidate the cache, even with identical dimensions.
+        pixels[1920 * 1080 - 1] = 0x0000_ff00;
+        backend.paint_bitmap(&window, &rect, &rect, &pixels, gui::RasterOp::Copy);
+        assert_ne!(
+            backend.bitmap_cache.borrow().as_ref().unwrap().pixmap,
+            cached
+        );
         // Synchronise and inspect both ends, beyond the former 256 KiB limit.
         let top = backend
             .conn
@@ -2194,7 +2284,7 @@ mod tests {
             }
         };
         assert_eq!(decode(&top.data), visual.red_mask);
-        assert_eq!(decode(&bottom.data), visual.blue_mask);
+        assert_eq!(decode(&bottom.data), visual.green_mask);
         backend.conn.free_gc(gc).unwrap();
         backend.conn.free_pixmap(pixmap).unwrap();
     }
@@ -2589,6 +2679,9 @@ impl gui::GuiBackend for X11Backend {
 
 impl Drop for X11Backend {
     fn drop(&mut self) {
+        if let Some(cached) = self.bitmap_cache.get_mut().take() {
+            let _ = self.conn.free_pixmap(cached.pixmap);
+        }
         for font in self.fonts.values() {
             let _ = self.conn.close_font(font.id);
         }

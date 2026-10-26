@@ -30,6 +30,11 @@ Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
 
 ## État actuel observé
 
+- Depuis `v0.2.0-preview.9`, un cache de fond X11 évite les conversions et
+  téléversements répétés d'une grande image inchangée. Le texte du bureau
+  n'a plus de doublure noire décalée ; le hinting Xft et les boutons de fenêtre
+  sont ajustés. Le tri Explorer utilise un algorithme en O(n log n).
+  Cela ne valide pas encore la fluidité de bout en bout sur chaque matériel.
 - Le backend X11 envoie les grandes images par bandes pour respecter la taille
   maximale des requêtes X11 ; les images de fond en 1080p ne sont plus ignorées
   au-delà de 256 Kio. Le test réel se lance avec

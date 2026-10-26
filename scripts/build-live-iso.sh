@@ -83,9 +83,9 @@ printf 'system\n' >"$stage/usr/share/winlux/update-scope"
 wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
 if test -f "$wallpaper_src"; then
     if command -v convert >/dev/null 2>&1; then
-        convert "$wallpaper_src" -type TrueColor BMP3:"$stage/usr/share/winlux/wallpaper.bmp"
+        convert "$wallpaper_src" -filter Lanczos -resize '1920x1080^' -gravity center -extent 1920x1080 -type TrueColor BMP3:"$stage/usr/share/winlux/wallpaper.bmp"
     elif command -v ffmpeg >/dev/null 2>&1; then
-        ffmpeg -hide_banner -loglevel error -i "$wallpaper_src" -frames:v 1 -pix_fmt bgr24 "$stage/usr/share/winlux/wallpaper.bmp"
+        ffmpeg -hide_banner -loglevel error -i "$wallpaper_src" -vf 'scale=1920:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=1920:1080,setsar=1' -frames:v 1 -pix_fmt bgr24 "$stage/usr/share/winlux/wallpaper.bmp"
     else
         echo 'fond PNG : ImageMagick (convert) ou ffmpeg requis' >&2
         exit 1

@@ -1220,17 +1220,8 @@ unsafe fn desktop_icons(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         glyph(hdc, b, f, *g, x + 18, y + 8, 40);
         text_centered(
             hdc,
-            f.small,
-            11,
-            rgb(0x00, 0x00, 0x00),
-            x + 39,
-            y + 59,
-            name,
-        );
-        text_centered(
-            hdc,
-            f.small,
-            11,
+            f.body,
+            13,
             rgb(0xFF, 0xFF, 0xFF),
             x + 38,
             y + 58,

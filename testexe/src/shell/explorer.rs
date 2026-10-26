@@ -900,16 +900,17 @@ unsafe fn rebuild_view(p: &mut Pane) {
         p.view[p.nview] = i as u16;
         p.nview += 1;
     }
-    // Tri par insertion (stable) : les dossiers listés restent petits.
-    for i in 1..p.nview {
-        let v = p.view[i];
-        let mut j = i;
-        while j > 0 && sort_less(&p.entries[v as usize], &p.entries[p.view[j - 1] as usize]) {
-            p.view[j] = p.view[j - 1];
-            j -= 1;
+    // O(n log n), without allocation. Original indices preserve equal-key order.
+    let entries = &p.entries;
+    p.view[..p.nview].sort_unstable_by(|&a, &b| {
+        if sort_less(&entries[a as usize], &entries[b as usize]) {
+            core::cmp::Ordering::Less
+        } else if sort_less(&entries[b as usize], &entries[a as usize]) {
+            core::cmp::Ordering::Greater
+        } else {
+            a.cmp(&b)
         }
-        p.view[j] = v;
-    }
+    });
     p.scroll = p.scroll.min(max_scroll_hint(p)).max(0);
 }
 

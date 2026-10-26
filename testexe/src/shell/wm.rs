@@ -551,9 +551,9 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             g.b,
             g.f,
             gl,
-            (r.left + r.right) / 2 - 5,
-            (r.top + r.bottom) / 2 - 5,
-            11,
+            (r.left + r.right) / 2 - 7,
+            (r.top + r.bottom) / 2 - 7,
+            14,
         );
         set_glyph_bg(None);
     }
