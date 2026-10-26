@@ -117,7 +117,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [ ] Ajouter les autres formats audio compressés et les codecs vidéo ; Media Foundation/DirectShow ne constituent pas encore une chaîne de lecture complète.
 - [x] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (compteur de références, `DllMain(DLL_PROCESS_DETACH)` et `munmap`).
 - [x] Exécuter de vrais programmes C compilés par MinGW-w64 : démarrage de la CRT msvcrt (`__getmainargs`, `_initterm`, constructeurs globaux, `atexit`/`_onexit`, `_iob`/`__iob_func`), `_errno`, verrous `_lock`, environnement, temps (`time`, `localtime`, `strftime`, `clock`), `rand` Microsoft, E/S bas niveau `_open`/`_read`/`_write`, signaux, `_beginthreadex`; compléments kernel32 (console, pages de code, `GetEnvironmentStrings`, `FormatMessage`, `lstr*`, `RaiseException`…). Vérifié par `testc/mingw_suite.c` (40 contrôles) en CI.
-- [ ] Faire tourner des programmes C++ MinGW (déroulement SEH implémenté : `RtlCaptureContext`, `RtlVirtualUnwind`, `RtlUnwindEx` ; test `cpp_exceptions.cpp` ajouté) et des exécutables MSVC/clang-cl réels.
+- [~] Faire tourner des programmes C++ MinGW (déroulement SEH implémenté : `RtlCaptureContext`, `RtlVirtualUnwind`, `RtlUnwindEx` ; builtins `libgcc_s_seh-1.dll` avec API `_Unwind_*` + parsing LSDA, et `libstdc++-6.dll` avec `__cxa_throw`/`__cxa_begin_catch`/`__cxa_end_catch`/`__cxa_rethrow` ; test `cpp_exceptions.cpp` ajouté) et des exécutables MSVC/clang-cl réels. Reste : test d'intégration réel avec cross-compilation MinGW.
 - [x] Documenter explicitement les limites : 64 bits uniquement, absence de noyau Windows et compatibilité API partielle.
 
 ## Priorité 3 — Double-clic et intégration Linux
