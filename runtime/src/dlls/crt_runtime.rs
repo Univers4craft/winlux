@@ -1618,12 +1618,16 @@ mod tests {
     #[test]
     fn initterm_appelle_les_initialiseurs_non_nuls() {
         CALLS.lock().unwrap().clear();
-        let table = [premier as usize, 0, second as usize];
+        let table = [
+            premier as *const () as usize,
+            0,
+            second as *const () as usize,
+        ];
         unsafe {
             initterm(table.as_ptr(), table.as_ptr().add(3));
         }
         assert_eq!(*CALLS.lock().unwrap(), vec![1, 2]);
-        let table = [echec as usize];
+        let table = [echec as *const () as usize];
         assert_eq!(
             unsafe { initterm_e(table.as_ptr(), table.as_ptr().add(1)) },
             7
@@ -1641,9 +1645,15 @@ mod tests {
         unsafe {
             assert_eq!(initialize_onexit_table(&mut t), 0);
             for _ in 0..20 {
-                assert_eq!(register_onexit_function(&mut t, premier as usize), 0);
+                assert_eq!(
+                    register_onexit_function(&mut t, premier as *const () as usize),
+                    0
+                );
             }
-            assert_eq!(register_onexit_function(&mut t, second as usize), 0);
+            assert_eq!(
+                register_onexit_function(&mut t, second as *const () as usize),
+                0
+            );
             assert_eq!(execute_onexit_table(&mut t), 0);
         }
         let calls = CALLS.lock().unwrap();
