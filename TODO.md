@@ -95,7 +95,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Ajouter un sous-ensemble IOCP : association d’un fichier, `GetQueuedCompletionStatus[Ex]` et `PostQueuedCompletionStatus`.
 - [x] Respecter le plafond de concurrence IOCP pour les threads qui retirent les paquets avec `GetQueuedCompletionStatus[Ex]`.
 - [x] Libérer le slot actif d’un thread Win32 à sa terminaison, avec test dédié.
-- [ ] Annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides.
+- [x] Annuler les I/O en attente (`CancelIo`/`CancelIoEx`) et tester les handles invalides, buffers nuls et overlapped inconnus.
 - [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
 - [x] Lire les blocs d’environnement ANSI ou Unicode de `CreateProcessA/W` et les appliquer au processus enfant.
 - [x] Implémenter `CREATE_SUSPENDED`/`ResumeThread` pour les enfants via un lanceur Linux suspendu avant l’exécution du programme.

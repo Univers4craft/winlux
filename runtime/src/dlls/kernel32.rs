@@ -2,7 +2,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::ffi::c_void;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
-use std::process::{Child, Command};
+use std::process::{Child, Command, Stdio};
 use std::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
@@ -88,6 +88,7 @@ struct ProcessState {
     suspended: bool,
 }
 struct ProcessObject {
+    pid: u32,
     state: Mutex<ProcessState>,
     changed: Condvar,
 }
@@ -2823,40 +2824,57 @@ fn wait_thread(t: &ThreadObject, timeout: u32) -> u32 {
         drop(next);
     }
 }
+fn spawn_child_reaper(obj: Arc<ProcessObject>) {
+    std::thread::spawn(move || {
+        let mut child = {
+            let mut s = lock(&obj.state);
+            match s.child.take() {
+                Some(c) => c,
+                None => return,
+            }
+        };
+        let status = child.wait();
+        let code = match status {
+            Ok(s) => s.code().unwrap_or(1) as u32,
+            Err(_) => 1,
+        };
+        let mut s = lock(&obj.state);
+        s.exit_code = code;
+        obj.changed.notify_all();
+    });
+}
 fn poll_process(p: &ProcessObject) -> bool {
-    let mut s = lock(&p.state);
-    if let Some(child) = s.child.as_mut() {
-        match child.try_wait() {
-            Ok(Some(status)) => {
-                s.exit_code = status.code().unwrap_or(1) as u32;
-                s.child = None;
-                p.changed.notify_all();
-            }
-            Ok(None) => {}
-            Err(_) => {
-                s.exit_code = 1;
-                s.child = None;
-                p.changed.notify_all();
-            }
-        }
-    }
-    s.child.is_none()
+    let s = lock(&p.state);
+    s.exit_code != 259
 }
 fn wait_process(p: &ProcessObject, timeout: u32) -> u32 {
+    let gate = sync_gate();
+    let s = lock(&p.state);
+    if s.exit_code != 259 {
+        return 0;
+    }
+    if timeout == 0 {
+        return 258;
+    }
+    drop(s);
+    drop(gate);
     let start = std::time::Instant::now();
+    let mut s = lock(&p.state);
     loop {
-        let gate = sync_gate();
-        if poll_process(p) {
+        if s.exit_code != 259 {
             return 0;
         }
-        if timeout == 0 {
-            return 258;
-        }
-        if timeout != u32::MAX && start.elapsed().as_millis() >= timeout as u128 {
-            return 258;
-        }
-        drop(gate);
-        std::thread::sleep(std::time::Duration::from_millis(2));
+        let remaining = if timeout == u32::MAX {
+            std::time::Duration::from_secs(60)
+        } else {
+            let elapsed = start.elapsed().as_millis() as u32;
+            if elapsed >= timeout {
+                return 258;
+            }
+            std::time::Duration::from_millis((timeout - elapsed) as u64)
+        };
+        let (new_s, _) = p.changed.wait_timeout(s, remaining).unwrap();
+        s = new_s;
     }
 }
 fn try_mutex(m: &MutexObject) -> bool {
@@ -3254,9 +3272,18 @@ unsafe fn create_process_common(
         let cwd = crate::paths::to_linux(&crate::dlls::cstr(current_directory));
         cmd.current_dir(cwd);
     }
-    if inherit_handles != 0 {
-        crate::process::set_last_error(120);
-        return 0;
+    const STARTF_USESTDHANDLES: u32 = 0x100;
+    if inherit_handles != 0 && !startup.is_null() && (*startup).flags & STARTF_USESTDHANDLES != 0 {
+        use std::os::unix::io::FromRawFd;
+        if let Some(fd) = resolve_std_fd((*startup).std_input) {
+            cmd.stdin(unsafe { Stdio::from_raw_fd(libc::dup(fd)) });
+        }
+        if let Some(fd) = resolve_std_fd((*startup).std_output) {
+            cmd.stdout(unsafe { Stdio::from_raw_fd(libc::dup(fd)) });
+        }
+        if let Some(fd) = resolve_std_fd((*startup).std_error) {
+            cmd.stderr(unsafe { Stdio::from_raw_fd(libc::dup(fd)) });
+        }
     }
     if let Some(env) = environment {
         cmd.env_clear();
@@ -3295,6 +3322,7 @@ unsafe fn create_process_common(
         }
     }
     let object = Arc::new(ProcessObject {
+        pid,
         state: Mutex::new(ProcessState {
             child: Some(child),
             exit_code: 259,
@@ -3302,6 +3330,7 @@ unsafe fn create_process_common(
         }),
         changed: Condvar::new(),
     });
+    spawn_child_reaper(object.clone());
     let process_handle = add_sync(SyncHandle::Process(object.clone()), None);
     let thread_handle = add_sync(SyncHandle::Process(object), None);
     std::ptr::write(
@@ -3464,17 +3493,28 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         crate::process::set_last_error(6);
         return 0;
     };
-    let mut s = lock(&p.state);
-    let Some(child) = s.child.as_mut() else {
-        crate::process::set_last_error(5);
-        return 0;
-    };
-    if child.kill().is_err() {
+    let s = lock(&p.state);
+    if s.exit_code != 259 {
         crate::process::set_last_error(5);
         return 0;
     }
-    if let Some(mut child) = s.child.take() {
-        let _ = child.wait();
+    drop(s);
+    let r = libc::kill(p.pid as i32, libc::SIGKILL);
+    if r != 0 {
+        crate::process::set_last_error(5);
+        return 0;
+    }
+    let start = std::time::Instant::now();
+    let mut s = lock(&p.state);
+    while s.exit_code == 259 {
+        let (ns, _) = p
+            .changed
+            .wait_timeout(s, std::time::Duration::from_secs(5))
+            .unwrap();
+        s = ns;
+        if start.elapsed().as_secs() >= 5 {
+            break;
+        }
     }
     s.exit_code = code;
     p.changed.notify_all();
@@ -3529,11 +3569,7 @@ pub extern "win64" fn resume_thread(handle: usize) -> u32 {
             if !s.suspended {
                 return 0;
             }
-            let Some(c) = s.child.as_mut() else {
-                crate::process::set_last_error(6);
-                return u32::MAX;
-            };
-            if unsafe { libc::kill(c.id() as i32, libc::SIGCONT) } != 0 {
+            if unsafe { libc::kill(p.pid as i32, libc::SIGCONT) } != 0 {
                 crate::process::set_last_error(5);
                 return u32::MAX;
             }
@@ -3554,6 +3590,22 @@ pub fn handle_to_fd(h: usize) -> i32 {
     match handles.get(&h) {
         Some(FileHandle::File(f)) => lock(f).as_raw_fd(),
         _ => -1,
+    }
+}
+
+fn resolve_std_fd(h: usize) -> Option<i32> {
+    match h as isize {
+        -10 => Some(0),
+        -11 => Some(1),
+        -12 => Some(2),
+        _ => {
+            let fd = handle_to_fd(h);
+            if fd >= 0 {
+                Some(fd)
+            } else {
+                None
+            }
+        }
     }
 }
 pub extern "win64" fn close_handle(handle: usize) -> i32 {
@@ -6514,5 +6566,70 @@ mod tests {
         let bad = 0xF00Dusize;
         assert_eq!(close_handle(bad), 0);
         assert_eq!(crate::process::last_error(), 6);
+    }
+
+    #[test]
+    fn create_process_herite_les_handles_std() {
+        init();
+        let tmp = format!(
+            "/tmp/winlux-inherit-{}-{}.txt",
+            std::process::id(),
+            next_handle()
+        );
+        let path_c = CString::new(tmp.clone()).unwrap();
+        let h = unsafe { create_file_a(path_c.as_ptr() as *const u8, 0xC000_0000, 0, 0, 2, 0, 0) };
+        assert_ne!(h, usize::MAX);
+        let startup = StartupInfoA {
+            cb: std::mem::size_of::<StartupInfoA>() as u32,
+            reserved: std::ptr::null_mut(),
+            desktop: std::ptr::null_mut(),
+            title: std::ptr::null_mut(),
+            x: 0,
+            y: 0,
+            x_size: 0,
+            y_size: 0,
+            x_chars: 0,
+            y_chars: 0,
+            fill_attribute: 0,
+            flags: 0x100,
+            show_window: 0,
+            reserved2_size: 0,
+            reserved2: std::ptr::null_mut(),
+            std_input: 0,
+            std_output: h,
+            std_error: h,
+        };
+        let app = CString::new("/bin/sh").unwrap();
+        let line = CString::new("sh -c \"echo inherited\"").unwrap();
+        let mut info = ProcessInformation {
+            process: 0,
+            thread: 0,
+            process_id: 0,
+            thread_id: 0,
+        };
+        assert_eq!(
+            unsafe {
+                create_process_a(
+                    app.as_ptr() as *const u8,
+                    line.as_ptr() as *const u8,
+                    0,
+                    0,
+                    1,
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    &startup,
+                    &mut info,
+                )
+            },
+            1
+        );
+        assert_eq!(wait_for_single_object(info.process, 5000), 0);
+        close_handle(info.thread);
+        close_handle(info.process);
+        close_handle(h);
+        let content = std::fs::read_to_string(&tmp).unwrap();
+        let _ = std::fs::remove_file(&tmp);
+        assert_eq!(content.trim(), "inherited");
     }
 }
