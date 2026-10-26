@@ -286,7 +286,7 @@ update --rollback
 test "$(cat "$fixture/usr/share/winlux/update-scope")" = system
 test "$(cat "$fixture/usr/share/winlux/version")" = updater-system
 # Restore the preceding complete-system backup explicitly (one rollback per apply).
-system_backup=$(find "$fixture/var/lib/winlux" -name metadata -type f | while IFS= read -r metadata; do if grep -q 'action=reboot' "$metadata"; then dirname "$metadata"; fi; done | head -1)
+system_backup=$(find "$fixture/var/lib/winlux" -name metadata -type f | while IFS= read -r metadata; do if grep -q 'action=reboot' "$metadata"; then dirname "$metadata"; exit 0; fi; done)
 printf '%s\n' "${system_backup##*/}" >"$fixture/var/lib/winlux/rollback-current"
 update --rollback
 test "$(cat "$fixture/usr/share/winlux/version")" = old
