@@ -2137,12 +2137,32 @@ pub unsafe extern "win64" fn nt_flush_buffers_file(_handle: usize, _io: *mut c_v
     STATUS_SUCCESS
 }
 
-/// `NtQueryAttributesFile` : stub.
+/// `NtQueryAttributesFile` : récupère les attributs basiques d'un fichier.
 pub unsafe extern "win64" fn nt_query_attributes_file(
-    _attrs: *const c_void,
-    _info: *mut c_void,
+    attrs: *const c_void,
+    info: *mut c_void,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    let Some(win_path) = oa_path(attrs) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let linux_path = crate::paths::to_linux(&win_path);
+    let meta = match std::fs::metadata(&linux_path) {
+        Ok(m) => m,
+        Err(_) => return STATUS_OBJECT_NAME_NOT_FOUND,
+    };
+    if !info.is_null() {
+        // FILE_BASIC_INFORMATION: 40 bytes
+        // CreationTime(8), LastAccessTime(8), LastWriteTime(8), ChangeTime(8), FileAttributes(4)
+        let buf = info as *mut u8;
+        std::ptr::write_bytes(buf, 0, 40);
+        let file_attrs: u32 = if meta.is_dir() {
+            0x10 // FILE_ATTRIBUTE_DIRECTORY
+        } else {
+            0x80 // FILE_ATTRIBUTE_NORMAL
+        };
+        std::ptr::write_unaligned(buf.add(32) as *mut u32, file_attrs);
+    }
+    STATUS_SUCCESS
 }
 
 /// `NtRaiseHardError` : affiche un message d'erreur fatal.
