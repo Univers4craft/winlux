@@ -101,7 +101,8 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Implémenter `CREATE_SUSPENDED`/`ResumeThread` pour les enfants via un lanceur Linux suspendu avant l’exécution du programme.
 - [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
-- [ ] Continuer `ntdll` : TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes (exceptions/unwinding SEH implémentés).
+- [ ] Continuer `ntdll` : sections et primitives bas niveau manquantes (exceptions/unwinding SEH implémentés).
+- [x] Propager les blocs TLS statiques des DLL chargées dynamiquement à tous les threads existants.
 - [x] Étendre la CRT : chaînes étroites/larges, conversions (`strtol`, `strtod`, `_itoa`, `_itow`), classification de caractères, fonctions mathématiques, `qsort`/`bsearch` et formatage borné (`_snprintf`, `_snwprintf`), avec tests unitaires et PE (`crt_suite`).
 - [x] Ajouter les flux `FILE*` de la CRT (`fopen`/`fclose`, `fread`/`fwrite`, `fgets`/`fputs`, `fseek`/`ftell`, `feof`, `fprintf`, `vfprintf`, `vsprintf`, `remove`/`rename`) avec tests unitaires et PE.
 - [x] Ajouter les entrées formatées `scanf`/`sscanf`/`fscanf` et leurs variantes `v*` (entiers, flottants, chaînes, jeux de caractères, largeur, `*`, `%n`) avec tests unitaires et PE.
