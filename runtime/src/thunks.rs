@@ -120,12 +120,13 @@ pub fn alloc_code(code: &[u8]) -> usize {
 /// variadiques étant dupliqués dans les registres entiers). C'est exactement
 /// le format d'un `va_list` Windows : un simple pointeur.
 pub struct VaList {
+    base: *const u64,
     p: *const u64,
 }
 
 impl VaList {
     pub fn new(p: *const u64) -> Self {
-        VaList { p }
+        VaList { base: p, p }
     }
     pub fn next_u64(&mut self) -> u64 {
         unsafe {
@@ -139,6 +140,13 @@ impl VaList {
     }
     pub fn next_ptr<T>(&mut self) -> *const T {
         self.next_u64() as usize as *const T
+    }
+    /// Accès positionnel (index 0-basé depuis le premier argument variadique).
+    pub unsafe fn get_u64(&self, index: usize) -> u64 {
+        *self.base.add(index)
+    }
+    pub unsafe fn get_f64(&self, index: usize) -> f64 {
+        f64::from_bits(*self.base.add(index))
     }
 }
 
