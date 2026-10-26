@@ -41,6 +41,10 @@ cat > "$work/bin/winlux-network" <<'MOCK'
 #!/bin/sh
 printf 'network %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"
 MOCK
+cat > "$work/bin/id" <<'MOCK'
+#!/bin/sh
+case "$1" in -u) echo 0 ;; *) command id "$@" ;; esac
+MOCK
 chmod 755 "$work/bin/"*
 control() { sh "$project/scripts/winlux-control.sh" "$@"; }
 control status
