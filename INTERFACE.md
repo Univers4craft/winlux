@@ -30,6 +30,9 @@ Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
 
 ## État actuel observé
 
+- Après une mise à jour nécessitant un redémarrage, la page dédiée affiche
+  uniquement le bouton de redémarrage et le journal ; recherche, réinstallation,
+  restauration et saisie du token ne sont plus accessibles avant le redémarrage.
 - Depuis `v0.2.0-preview.9`, un cache de fond X11 évite les conversions et
   téléversements répétés d'une grande image inchangée. Le texte du bureau
   n'a plus de doublure noire décalée ; le hinting Xft et les boutons de fenêtre
@@ -43,8 +46,10 @@ Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
 - Le prototype dessine un fond d'écran, une barre des tâches, un menu Démarrer,
   des notifications et des fenêtres intégrées Explorer/Paramètres.
 - Le menu et la barre donnent accès à un petit ensemble d'applications
-  intégrées ; le catalogue complet des applications installées et la gestion
-  dynamique des épingles restent à réaliser.
+  intégrées. Depuis la version 10, Explorer et Paramètres proposent un menu
+  contextuel pour fermer/réduire, épingler/désépingler et créer/retirer un
+  raccourci du bureau. Les épingles et la présence des raccourcis sont conservées
+  dans le profil utilisateur. Le catalogue et les fenêtres externes restent à gérer.
 - Le bureau dessine actuellement trois icônes système prédéfinies (« Ce PC »,
   « Documents », « Corbeille »). Elles peuvent être déplacées, mais leurs
   positions ne sont pas sauvegardées et le code les recale sur une grille.
@@ -99,6 +104,8 @@ Corbeille doit, elle, demander confirmation lorsque nécessaire.
 - [ ] Permettre de rechercher, lancer, épingler et désépingler une application
   depuis Démarrer ; afficher clairement les applications indisponibles ou
   incompatibles.
+  - [x] Épingler/désépingler Explorer et Paramètres par clic droit dans la barre
+    et Démarrer ; créer/retirer leurs raccourcis de bureau et conserver ces choix.
 - [ ] Afficher les applications ouvertes, leur fenêtre active et leur état
   (ouverte, réduite, attention requise), avec bascule et aperçu si disponible.
   - [x] Afficher/basculer Explorer et Paramètres dans la barre du prototype ; pas de suivi général des fenêtres Linux externes.

@@ -196,6 +196,10 @@ maintenant le staging Linux bootable utilisé par les tests et la VM persistante
 
 ## Objectif de compatibilité .NET Windows
 
+Les versions Windows de Claude et ChatGPT font partie des cibles demandées.
+Elles ne sont pas encore prises en charge ; voir le [relevé des installateurs
+et des blocages constatés](docs/CLAUDE-CHATGPT-WINDOWS.md).
+
 La compatibilité des applications Windows .NET est un objectif du projet, et
 pas seulement une limite à documenter. La cible à terme comprend les
 applications .NET Framework et .NET modernes qui dépendent d'API Windows, ainsi

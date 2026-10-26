@@ -15,7 +15,6 @@ use winlux_testexe::*;
 pub const TASKBAR_HEIGHT: i32 = 48;
 const BUTTON: i32 = 44;
 const BUTTON_GAP: i32 = 4;
-const TASKBAR_BUTTONS: i32 = 3;
 const START_OPEN_MS: i32 = 230;
 const START_CLOSE_MS: i32 = 140;
 const SPLASH_MIN_MS: u32 = 2600;
@@ -33,8 +32,19 @@ static mut START_ANIM: u32 = 0;
 static mut START_CLOSING: bool = false;
 static mut HOVER_BUTTON: i32 = -1;
 static mut HOVER_START_ITEM: i32 = -1;
-static mut ICON_X: [i32; 3] = [12, 12, 12];
-static mut ICON_Y: [i32; 3] = [12, 108, 204];
+static mut ICON_X: [i32; 5] = [12, 12, 12, 108, 108];
+static mut ICON_Y: [i32; 5] = [12, 108, 204, 12, 108];
+static mut PINNED_APPS: u8 = 3;
+static mut DESKTOP_SHORTCUTS: u8 = 0;
+static mut CONTEXT_APP: Option<usize> = None;
+static mut CONTEXT_DESKTOP: Option<usize> = None;
+static mut CONTEXT_RECT: Rect = Rect {
+    left: 0,
+    top: 0,
+    right: 0,
+    bottom: 0,
+};
+static mut CONTEXT_HOVER: i32 = -1;
 static mut DRAGGED_ICON: i32 = -1;
 static mut SELECTED_ICON: i32 = -1;
 static mut ICON_CLICK_TIME: u32 = 0;
@@ -79,7 +89,8 @@ struct Layout {
 fn layout() -> Layout {
     let (w, h) = unsafe { (SCREEN_W.max(640), SCREEN_H.max(400)) };
     let bar_top = h - TASKBAR_HEIGHT;
-    let buttons_w = TASKBAR_BUTTONS * BUTTON + (TASKBAR_BUTTONS - 1) * BUTTON_GAP;
+    let count = taskbar_count();
+    let buttons_w = count * BUTTON + (count - 1) * BUTTON_GAP;
     let buttons_x = if unsafe { ALIGN_LEFT } {
         12
     } else {
@@ -380,7 +391,215 @@ unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
 // ---------- Barre des tâches ----------
 
 // Seules les applications reellement fournies sont epinglees.
-const TASKBAR_GLYPHS: [Glyph; 3] = [Glyph::Start, Glyph::Folder, Glyph::Settings];
+fn app_bit(app: usize) -> u8 {
+    1 << app
+}
+fn app_launch(app: usize) -> Launch {
+    if app == wm::APP_EXPLORER {
+        Launch::Explorer
+    } else {
+        Launch::Settings
+    }
+}
+fn taskbar_app(slot: i32) -> Option<usize> {
+    if slot <= 0 {
+        return None;
+    }
+    let mut n = 0;
+    for app in [wm::APP_EXPLORER, wm::APP_SETTINGS] {
+        if unsafe { PINNED_APPS & app_bit(app) != 0 } || wm::is_open(app) {
+            n += 1;
+            if slot == n {
+                return Some(app);
+            }
+        }
+    }
+    None
+}
+fn taskbar_count() -> i32 {
+    1 + [wm::APP_EXPLORER, wm::APP_SETTINGS]
+        .iter()
+        .filter(|&&app| unsafe { PINNED_APPS & app_bit(app) != 0 } || wm::is_open(app))
+        .count() as i32
+}
+fn icon_visible(i: usize) -> bool {
+    i < 3 || unsafe { DESKTOP_SHORTCUTS & app_bit(i - 3) != 0 }
+}
+unsafe fn open_desktop_icon(i: usize) {
+    match i {
+        0 => explorer::open_pc(),
+        1 => explorer::open_documents(),
+        2 => explorer::open_trash(),
+        3 => launch(Launch::Explorer),
+        4 => launch(Launch::Settings),
+        _ => {}
+    }
+}
+
+const SHELL_STATE: &core::ffi::CStr = c"C:\\.local\\share\\winlux\\taskbar.dat";
+unsafe fn save_shell_state() {
+    for dir in [
+        c"C:\\.local",
+        c"C:\\.local\\share",
+        c"C:\\.local\\share\\winlux",
+    ] {
+        CreateDirectoryA(dir.as_ptr(), core::ptr::null_mut());
+    }
+    let h = CreateFileA(
+        SHELL_STATE.as_ptr(),
+        0x4000_0000,
+        0,
+        core::ptr::null_mut(),
+        2,
+        0,
+        core::ptr::null_mut(),
+    );
+    if h.is_null() || h as isize == -1 {
+        toast(b"Impossible d'enregistrer les raccourcis");
+        return;
+    }
+    let data = [b'W', b'T', 1, PINNED_APPS, DESKTOP_SHORTCUTS];
+    let mut written = 0;
+    let ok = WriteFile(
+        h,
+        data.as_ptr(),
+        data.len() as u32,
+        &mut written,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(h);
+    if ok == 0 || written != data.len() as u32 {
+        toast(b"Enregistrement incomplet des raccourcis");
+    }
+}
+unsafe fn load_shell_state() {
+    let h = CreateFileA(
+        SHELL_STATE.as_ptr(),
+        0x8000_0000,
+        1,
+        core::ptr::null_mut(),
+        3,
+        0,
+        core::ptr::null_mut(),
+    );
+    if h.is_null() || h as isize == -1 {
+        return;
+    }
+    let mut data = [0u8; 5];
+    let mut read = 0;
+    ReadFile(h, data.as_mut_ptr(), 5, &mut read, core::ptr::null_mut());
+    CloseHandle(h);
+    if read == 5 && data[..3] == [b'W', b'T', 1] && data[3] <= 3 && data[4] <= 3 {
+        PINNED_APPS = data[3];
+        DESKTOP_SHORTCUTS = data[4];
+    }
+}
+
+fn context_rows(app: usize) -> i32 {
+    if wm::is_open(app) {
+        5
+    } else {
+        3
+    }
+}
+unsafe fn open_context(app: usize, desktop: Option<usize>, x: i32, y: i32) {
+    set_start(false);
+    NOTIF_PANEL = false;
+    DRAGGED_ICON = -1;
+    CONTEXT_APP = Some(app);
+    CONTEXT_DESKTOP = desktop;
+    CONTEXT_HOVER = -1;
+    let w = 278.min(SCREEN_W);
+    let h = context_rows(app) * 34 + 8;
+    let left = x.clamp(0, (SCREEN_W - w).max(0));
+    let top = y.clamp(0, (SCREEN_H - TASKBAR_HEIGHT - h).max(0));
+    CONTEXT_RECT = rect(left, top, left + w, top + h);
+}
+unsafe fn context_row(x: i32, y: i32) -> i32 {
+    if !inside(&CONTEXT_RECT, x, y) || y < CONTEXT_RECT.top + 4 {
+        return -1;
+    }
+    let row = (y - CONTEXT_RECT.top - 4) / 34;
+    if CONTEXT_APP.is_some_and(|app| row < context_rows(app)) {
+        row
+    } else {
+        -1
+    }
+}
+unsafe fn context_action(app: usize, desktop: Option<usize>, row: i32, persist: bool) {
+    match row {
+        0 => {
+            if let Some(i) = desktop {
+                open_desktop_icon(i);
+            } else {
+                launch(app_launch(app));
+            }
+        }
+        1 => {
+            PINNED_APPS ^= app_bit(app);
+            if persist {
+                save_shell_state();
+            }
+        }
+        2 => {
+            DESKTOP_SHORTCUTS ^= app_bit(app);
+            if persist {
+                save_shell_state();
+            }
+        }
+        3 if wm::is_open(app) => wm::minimize(app),
+        4 if wm::is_open(app) => wm::close(app),
+        _ => {}
+    }
+}
+unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
+    let Some(app) = CONTEXT_APP else {
+        return;
+    };
+    let r = CONTEXT_RECT;
+    let p = pal();
+    fill(hdc, b, r.left, r.top, r.right, r.bottom, p.border);
+    fill(
+        hdc,
+        b,
+        r.left + 1,
+        r.top + 1,
+        r.right - 1,
+        r.bottom - 1,
+        p.surface,
+    );
+    let pin: &[u8] = if PINNED_APPS & app_bit(app) != 0 {
+        b"Retirer de la barre des t\xE2ches"
+    } else {
+        b"\xC9pingler \xE0 la barre des t\xE2ches"
+    };
+    let shortcut: &[u8] = if DESKTOP_SHORTCUTS & app_bit(app) != 0 {
+        b"Retirer le raccourci du bureau"
+    } else {
+        b"Cr\xE9er un raccourci sur le bureau"
+    };
+    let labels: [&[u8]; 5] = [
+        b"Ouvrir / afficher",
+        pin,
+        shortcut,
+        b"R\xE9duire la fen\xEAtre",
+        b"Fermer la fen\xEAtre",
+    ];
+    for row in 0..context_rows(app) {
+        let y = r.top + 4 + row * 34;
+        if row == CONTEXT_HOVER {
+            fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+        }
+        text(
+            hdc,
+            f.body,
+            p.text,
+            r.left + 12,
+            y + 8,
+            labels[row as usize],
+        );
+    }
+}
 
 unsafe fn draw_wifi(hdc: Handle, b: &mut Brushes, x: i32, y: i32, on: bool) {
     let c = if on {
@@ -450,15 +669,19 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
     let top = l.bar_top + dy;
     fill(hdc, b, 0, top, l.w, l.h, rgb(0x1C, 0x1F, 0x26));
     fill(hdc, b, 0, top, l.w, top + 1, rgb(0x34, 0x38, 0x42));
-    for (i, g) in TASKBAR_GLYPHS.iter().enumerate() {
-        let mut r = button_rect(l, i as i32);
+    for i in 0..taskbar_count() {
+        let mut r = button_rect(l, i);
         r.top += dy;
         r.bottom += dy;
-        let app = match i {
-            1 => Some(wm::APP_EXPLORER),
-            2 => Some(wm::APP_SETTINGS),
-            _ => None,
+        let app = taskbar_app(i);
+        let g = match app {
+            Some(wm::APP_EXPLORER) => Glyph::Folder,
+            Some(_) => Glyph::Settings,
+            None => Glyph::Start,
         };
+        if let Some(app) = app {
+            wm::TASKBAR_SLOT[app] = r;
+        }
         let running = app.map_or(false, wm::is_open);
         let focused = app.map_or(false, wm::is_active) || (i == 0 && START_OPEN && !START_CLOSING);
         if focused {
@@ -484,7 +707,7 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
                 rgb(0x29, 0x2D, 0x36),
             );
         }
-        glyph(hdc, b, f, *g, r.left + 10, r.top + 10, 24);
+        glyph(hdc, b, f, g, r.left + 10, r.top + 10, 24);
         if running {
             // Indicateur d'application ouverte, comme sous Windows 11.
             let cx = (r.left + r.right) / 2;
@@ -505,8 +728,6 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
             );
         }
     }
-    wm::TASKBAR_SLOT[wm::APP_EXPLORER] = button_rect(l, 1);
-    wm::TASKBAR_SLOT[wm::APP_SETTINGS] = button_rect(l, 2);
 
     // Zone de notification : chevron, réseau, volume, batterie, horloge.
     let mut now = SystemTime::default();
@@ -1205,28 +1426,25 @@ unsafe fn draw_notif_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) 
 
 // ---------- Icônes du bureau ----------
 
-const DESKTOP_ICONS: [(&[u8], Glyph); 3] = [
+const DESKTOP_ICONS: [(&[u8], Glyph); 5] = [
     (b"Ce PC", Glyph::Computer),
     (b"Documents", Glyph::Folder),
     (b"Corbeille", Glyph::Trash),
+    (b"Explorer", Glyph::Folder),
+    (b"Param\xE8tres", Glyph::Settings),
 ];
 
 unsafe fn desktop_icons(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     for (i, (name, g)) in DESKTOP_ICONS.iter().enumerate() {
+        if !icon_visible(i) {
+            continue;
+        }
         let (x, y) = (ICON_X[i], ICON_Y[i]);
         if DRAGGED_ICON == i as i32 || SELECTED_ICON == i as i32 {
             round_rect(hdc, b, x, y, x + 76, y + 84, 4, fc(rgb(0x2A, 0x4E, 0x8C)));
         }
         glyph(hdc, b, f, *g, x + 18, y + 8, 40);
-        text_centered(
-            hdc,
-            f.body,
-            13,
-            rgb(0xFF, 0xFF, 0xFF),
-            x + 38,
-            y + 58,
-            name,
-        );
+        text_centered(hdc, f.body, 13, rgb(0xFF, 0xFF, 0xFF), x + 38, y + 58, name);
     }
 }
 
@@ -1343,6 +1561,7 @@ pub unsafe fn init(
     NETWORK_CONNECTED = network;
     ALIGN_LEFT = align_left;
     crate::settings::system_tick();
+    load_shell_state();
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
     wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
@@ -1393,6 +1612,7 @@ pub unsafe fn draw(hdc: Handle) {
             0
         };
         taskbar(hdc, &mut b, &f, &l, bar_dy);
+        draw_context(hdc, &mut b, &f);
     }
     f.release();
     b.release();
@@ -1438,7 +1658,8 @@ pub unsafe fn tick(hwnd: Handle) {
         SCREEN_H = h;
         wm::WORK = rect(0, 0, w, h - TASKBAR_HEIGHT);
         wm::on_resize();
-        for i in 0..3 {
+        CONTEXT_APP = None;
+        for i in 0..DESKTOP_ICONS.len() {
             ICON_X[i] = ICON_X[i].min(w - 80);
             ICON_Y[i] = ICON_Y[i].min(h - TASKBAR_HEIGHT - 90);
         }
@@ -1464,22 +1685,32 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         return;
     }
     let l = layout();
+    if let Some(app) = CONTEXT_APP {
+        let row = context_row(x, y);
+        let desktop = CONTEXT_DESKTOP;
+        CONTEXT_APP = None;
+        if row >= 0 {
+            context_action(app, desktop, row, true);
+        }
+        repaint(hwnd);
+        return;
+    }
     if y >= l.bar_top {
-        for i in 0..TASKBAR_BUTTONS {
+        for i in 0..taskbar_count() {
             if inside(&button_rect(&l, i), x, y) {
                 if i == 0 {
                     set_start(!(START_OPEN && !START_CLOSING));
                 } else {
                     set_start(false);
-                    match i {
-                        1 => {
+                    match taskbar_app(i) {
+                        Some(wm::APP_EXPLORER) => {
                             if wm::is_open(wm::APP_EXPLORER) {
                                 wm::toggle(wm::APP_EXPLORER)
                             } else {
                                 explorer::open_home()
                             }
                         }
-                        2 => wm::toggle(wm::APP_SETTINGS),
+                        Some(wm::APP_SETTINGS) => wm::toggle(wm::APP_SETTINGS),
                         _ => {}
                     }
                 }
@@ -1561,16 +1792,15 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         }
         return;
     }
-    for i in (0..3).rev() {
+    for i in (0..DESKTOP_ICONS.len()).rev() {
+        if !icon_visible(i) {
+            continue;
+        }
         if x >= ICON_X[i] && x < ICON_X[i] + 76 && y >= ICON_Y[i] && y < ICON_Y[i] + 84 {
             // Double-clic : ouvre l'emplacement dans l'Explorer.
             if SELECTED_ICON == i as i32 && since(ICON_CLICK_TIME) < 500 {
                 SELECTED_ICON = -1;
-                match i {
-                    0 => explorer::open_pc(),
-                    1 => explorer::open_documents(),
-                    _ => explorer::open_trash(),
-                }
+                open_desktop_icon(i);
             } else {
                 DRAGGED_ICON = i as i32;
                 SELECTED_ICON = i as i32;
@@ -1591,9 +1821,17 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         return;
     }
     let l = layout();
+    if CONTEXT_APP.is_some() {
+        let row = context_row(x, y);
+        if row != CONTEXT_HOVER {
+            CONTEXT_HOVER = row;
+            repaint(hwnd);
+        }
+        return;
+    }
     let mut rp = false;
     let hb = if y >= l.bar_top {
-        (0..TASKBAR_BUTTONS)
+        (0..taskbar_count())
             .find(|&i| inside(&button_rect(&l, i), x, y))
             .unwrap_or(-1)
     } else {
@@ -1633,6 +1871,9 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
 }
 
 pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
+    if CONTEXT_APP.is_some() {
+        return;
+    }
     let mut rp = false;
     if DRAGGED_ICON >= 0 {
         DRAGGED_ICON = -1;
@@ -1646,7 +1887,62 @@ pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
 
 /// Molette (`delta` en multiples de 120), clic droit ou milieu.
 pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
-    if !BOOT_DONE || START_OPEN {
+    if !BOOT_DONE {
+        return;
+    }
+    if matches!(ev, Mouse::RightDown) {
+        let l = layout();
+        if y >= l.bar_top {
+            for slot in 1..taskbar_count() {
+                if inside(&button_rect(&l, slot), x, y) {
+                    if let Some(app) = taskbar_app(slot) {
+                        open_context(app, None, x, l.bar_top);
+                        repaint(hwnd);
+                        return;
+                    }
+                }
+            }
+        } else if START_OPEN && inside(&l.start, x, y) {
+            let item = start_item_at(&l, x, y);
+            if item == 0 || item == 1 {
+                open_context(item as usize, None, x, y);
+                repaint(hwnd);
+                return;
+            }
+        } else {
+            CONTEXT_APP = None;
+            let mut rp = false;
+            if wm::on_other(ev, x, y, &mut rp) {
+                if rp {
+                    repaint(hwnd);
+                }
+                return;
+            }
+            for i in (0..DESKTOP_ICONS.len()).rev() {
+                if icon_visible(i)
+                    && inside(
+                        &rect(ICON_X[i], ICON_Y[i], ICON_X[i] + 76, ICON_Y[i] + 84),
+                        x,
+                        y,
+                    )
+                {
+                    let app = if i == 4 {
+                        wm::APP_SETTINGS
+                    } else {
+                        wm::APP_EXPLORER
+                    };
+                    open_context(app, Some(i), x, y);
+                    repaint(hwnd);
+                    return;
+                }
+            }
+        }
+        if CONTEXT_APP.take().is_some() {
+            repaint(hwnd);
+            return;
+        }
+    }
+    if START_OPEN || CONTEXT_APP.is_some() {
         return;
     }
     let mut rp = false;
@@ -1660,6 +1956,22 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
 /// le reste va à la fenêtre active.
 pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     if !BOOT_DONE {
+        return;
+    }
+    if let Some(app) = CONTEXT_APP {
+        if vk == 0x1B || ch == 27 {
+            CONTEXT_APP = None;
+        } else if vk == 0x26 {
+            CONTEXT_HOVER = (CONTEXT_HOVER - 1).rem_euclid(context_rows(app));
+        } else if vk == 0x28 {
+            CONTEXT_HOVER = (CONTEXT_HOVER + 1).rem_euclid(context_rows(app));
+        } else if ch == 13 && CONTEXT_HOVER >= 0 {
+            let row = CONTEXT_HOVER;
+            let desktop = CONTEXT_DESKTOP;
+            CONTEXT_APP = None;
+            context_action(app, desktop, row, true);
+        }
+        repaint(hwnd);
         return;
     }
     if ch == 0 && (vk == 0x5B || vk == 0x5C) {
@@ -1677,4 +1989,85 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     if wm::on_key(vk, ch) {
         repaint(hwnd);
     }
+}
+
+/// Exercise the actual taskbar routing without changing the user's saved profile.
+pub unsafe fn regression_checks() {
+    let hwnd = core::ptr::null_mut();
+    let saved = (
+        PINNED_APPS,
+        DESKTOP_SHORTCUTS,
+        BOOT_DONE,
+        SCREEN_W,
+        SCREEN_H,
+    );
+    BOOT_DONE = true;
+    SCREEN_W = 1920;
+    SCREEN_H = 1080;
+    PINNED_APPS = 3;
+    DESKTOP_SHORTCUTS = 0;
+    check!(
+        taskbar_count() == 3,
+        "Barre des taches : deux applications epinglees"
+    );
+    context_action(wm::APP_EXPLORER, None, 1, false);
+    check!(
+        taskbar_count() == 2 && taskbar_app(1) == Some(wm::APP_SETTINGS),
+        "Deseepingler ne laisse aucun bouton fantome ni mauvais ciblage"
+    );
+    context_action(wm::APP_EXPLORER, None, 1, false);
+    context_action(wm::APP_SETTINGS, None, 2, false);
+    check!(
+        icon_visible(4) && !icon_visible(3),
+        "Le raccourci cree cible les Parametres"
+    );
+    context_action(wm::APP_SETTINGS, None, 2, false);
+    check!(
+        !icon_visible(4),
+        "Retirer le raccourci ne desinstalle pas l'application"
+    );
+    wm::open(wm::APP_SETTINGS);
+    context_action(wm::APP_SETTINGS, None, 1, false);
+    check!(
+        taskbar_count() == 3,
+        "Une application ouverte reste visible apres deseepinglage"
+    );
+    let l = layout();
+    let r = button_rect(&l, 2);
+    on_other(hwnd, Mouse::RightDown, r.left + 8, r.top + 8);
+    check!(
+        CONTEXT_APP == Some(wm::APP_SETTINGS),
+        "Le vrai clic droit ouvre le menu de la bonne application"
+    );
+    check!(
+        CONTEXT_RECT.bottom <= SCREEN_H - TASKBAR_HEIGHT,
+        "Le menu reste entierement au-dessus de la barre des taches"
+    );
+    on_key(hwnd, 0x1B, 0);
+    check!(CONTEXT_APP.is_none(), "Echap ferme le menu contextuel");
+    on_other(hwnd, Mouse::RightDown, r.left + 8, r.top + 8);
+    let menu = CONTEXT_RECT;
+    on_button_down(hwnd, menu.left + 12, menu.top + 4 + 4 * 34 + 12);
+    Sleep(160);
+    let mut b = Brushes::new();
+    let f = Fonts::new();
+    wm::draw(&mut Gfx {
+        hdc: hwnd,
+        b: &mut b,
+        f: &f,
+    });
+    f.release();
+    b.release();
+    check!(
+        !wm::is_open(wm::APP_SETTINGS) && taskbar_count() == 2,
+        "Fermer via le menu termine la fenetre et retire l'icone non epinglee"
+    );
+    (
+        PINNED_APPS,
+        DESKTOP_SHORTCUTS,
+        BOOT_DONE,
+        SCREEN_W,
+        SCREEN_H,
+    ) = saved;
+    CONTEXT_APP = None;
 }

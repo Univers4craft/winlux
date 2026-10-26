@@ -19,6 +19,8 @@ mod wm;
 pub extern "C" fn mainCRTStartup() -> ! {
     unsafe {
         explorer::regression_checks();
+        desktop::regression_checks();
+        settings::regression_checks();
     }
     finish()
 }

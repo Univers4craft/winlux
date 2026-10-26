@@ -66,7 +66,11 @@ status() {
         printf 'input_devices=%s\n' "$devices"
         printf 'update_auto=%s\n' "$(winlux-update --auto status 2>/dev/null || printf 'indisponible')"
         if test -s "$config/update.token" && ! test -L "$config/update.token"; then printf 'update_auth=configured\n'; else printf 'update_auth=missing\n'; fi
-        printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
+        if test -f "$root/var/lib/winlux/pending-reboot"; then
+            printf 'update_action=reboot\n'
+        else
+            printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
+        fi
         printf 'control_available=1\n'
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
         if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi

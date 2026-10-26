@@ -129,6 +129,12 @@ unsafe fn updating() -> bool {
     // lock the interface forever after a killed updater.
     value(b"update_busy") == b"1"
 }
+unsafe fn restart_required() -> bool {
+    matches!(value(b"update_action"), b"reboot" | b"restart-session")
+}
+fn restart_rect(c: &Rect) -> Rect {
+    rect(c.left, c.top + 108, c.right, c.top + 156)
+}
 fn number(s: &[u8]) -> u32 {
     s.iter()
         .take_while(|c| c.is_ascii_digit())
@@ -859,6 +865,38 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 return;
             }
             let restart = value(b"update_action");
+            if restart_required() {
+                TOKEN_FOCUS = false;
+                row(
+                    g,
+                    &c,
+                    44,
+                    b"Installation termin\xE9e",
+                    b"Un red\xE9marrage est n\xE9cessaire pour terminer la mise \xE0 jour.",
+                );
+                let r = restart_rect(&c);
+                round_rect(
+                    g.hdc,
+                    g.b,
+                    r.left,
+                    r.top,
+                    r.right,
+                    r.bottom,
+                    5,
+                    if HOVER == 0 { p.hover } else { p.accent },
+                );
+                text_centered(
+                    g.hdc,
+                    g.f.body,
+                    13,
+                    rgb(18, 24, 34),
+                    (r.left + r.right) / 2,
+                    r.top + 15,
+                    b"Red\xE9marrer pour terminer la mise \xE0 jour",
+                );
+                journal(g, &c, 198, LOG.get());
+                return;
+            }
             if restart == b"reboot" {
                 row(
                     g,
@@ -1053,6 +1091,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
 
 fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     let c = content(f);
+    if unsafe { PAGE == 6 && restart_required() } {
+        return if inside(&restart_rect(&c), x, y) {
+            0
+        } else {
+            -1
+        };
+    }
     for i in 0..24 {
         let r = button_rect(&c, i / 3, i % 3);
         if r.bottom <= c.bottom - 24 && inside(&r, x, y) {
@@ -1092,6 +1137,16 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if PAGE == 6 {
         let c = content(f);
+        if updating() {
+            return true;
+        }
+        if restart_required() {
+            TOKEN_FOCUS = false;
+            if inside(&restart_rect(&c), x, y) {
+                control(c"reboot");
+            }
+            return true;
+        }
         if inside(&token_rect(&c, 0), x, y) {
             TOKEN_FOCUS = true;
             return true;
@@ -1214,6 +1269,13 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     false
 }
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
+    if PAGE == 6 && restart_required() {
+        TOKEN_FOCUS = false;
+        if !updating() && ch == 13 {
+            control(c"reboot");
+        }
+        return true;
+    }
     if PAGE == 6 && TOKEN_FOCUS {
         match ch {
             8 => {
@@ -1349,4 +1411,43 @@ pub unsafe fn tick(_f: &Frame) -> bool {
         return true;
     }
     changed
+}
+
+pub unsafe fn regression_checks() {
+    let saved = (STATUS, PAGE);
+    PAGE = 6;
+    STATUS = EMPTY;
+    let status = b"update_action=reboot\nupdate_busy=0\n";
+    STATUS.bytes[..status.len()].copy_from_slice(status);
+    STATUS.len = status.len();
+    let f = Frame {
+        outer: rect(0, 0, 1100, 800),
+        title: rect(0, 0, 1100, 40),
+        client: rect(0, 40, 1100, 800),
+    };
+    let c = content(&f);
+    let r = restart_rect(&c);
+    check!(
+        restart_required() && hit(&f, r.right - 10, r.top + 10) == 0,
+        "Mise a jour terminee : le bouton Redemarrer occupe toute la ligne"
+    );
+    let hidden = button_rect(&c, 1, 1);
+    check!(
+        hit(&f, hidden.left + 5, hidden.top + 5) == -1,
+        "Les anciens boutons de recherche et reinstallation ne restent pas cliquables"
+    );
+    let status = b"update_action=restart-session\nupdate_busy=0\n";
+    STATUS = EMPTY;
+    STATUS.bytes[..status.len()].copy_from_slice(status);
+    STATUS.len = status.len();
+    check!(
+        restart_required(),
+        "Une mise a jour du runtime propose aussi de redemarrer"
+    );
+    STATUS = EMPTY;
+    check!(
+        !restart_required(),
+        "Sans redemarrage requis les actions normales sont conservees"
+    );
+    (STATUS, PAGE) = saved;
 }
