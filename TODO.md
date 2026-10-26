@@ -102,7 +102,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Compléter le cycle de vie des processus : héritage de handles (`STARTF_USESTDHANDLES`), duplication (`NtDuplicateObject`) et récolte robuste des enfants (condvar au lieu de busy-wait).
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
 - [x] Implémenter les sections et primitives bas niveau `ntdll` : `NtCreateSection`/`NtMapViewOfSection` (mmap réel), `NtQueryVirtualMemory` (via `/proc/self/maps`), `NtDuplicateObject`; exceptions/unwinding SEH déjà en place.
-- [ ] Continuer `ntdll` : `NtCreateFile`/`NtOpenFile`, `NtReadVirtualMemory`/`NtWriteVirtualMemory` et autres fonctions Nt* restantes.
+- [x] Continuer `ntdll` : `NtCreateFile`/`NtOpenFile` (chemin NT via OBJECT_ATTRIBUTES/UNICODE_STRING, dispositions FILE_OPEN/CREATE/SUPERSEDE), `NtReadVirtualMemory`/`NtWriteVirtualMemory` (memcpy processus courant) ; tests unitaires ajoutés.
 - [x] Propager les blocs TLS statiques des DLL chargées dynamiquement à tous les threads existants.
 - [x] Étendre la CRT : chaînes étroites/larges, conversions (`strtol`, `strtod`, `_itoa`, `_itow`), classification de caractères, fonctions mathématiques, `qsort`/`bsearch` et formatage borné (`_snprintf`, `_snwprintf`), avec tests unitaires et PE (`crt_suite`).
 - [x] Ajouter les flux `FILE*` de la CRT (`fopen`/`fclose`, `fread`/`fwrite`, `fgets`/`fputs`, `fseek`/`ftell`, `feof`, `fprintf`, `vfprintf`, `vsprintf`, `remove`/`rename`) avec tests unitaires et PE.

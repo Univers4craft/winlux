@@ -3639,6 +3639,12 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         0
     }
 }
+pub(crate) fn insert_file(file: File) -> usize {
+    let h = next_handle();
+    lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
+        .insert(h, FileHandle::File(Arc::new(Mutex::new(file))));
+    h
+}
 pub(crate) fn duplicate_handle_impl(handle: usize) -> Option<usize> {
     use std::os::unix::io::AsRawFd;
     let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())));

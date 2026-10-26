@@ -15,6 +15,10 @@ const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
 const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
 const STATUS_TIMEOUT: i32 = 0x0000_0102u32 as i32;
 const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023u32 as i32;
+const STATUS_ACCESS_DENIED: i32 = 0xC000_0022u32 as i32;
+const STATUS_OBJECT_NAME_NOT_FOUND: i32 = 0xC000_0034u32 as i32;
+const STATUS_OBJECT_NAME_COLLISION: i32 = 0xC000_0035u32 as i32;
+const STATUS_UNSUCCESSFUL: i32 = 0xC000_0001u32 as i32;
 
 fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
     m.lock().unwrap_or_else(|e| e.into_inner())
@@ -1486,33 +1490,105 @@ pub unsafe extern "win64" fn nt_close(handle: usize) -> i32 {
     STATUS_SUCCESS
 }
 
-/// `NtCreateFile` : stub, non implémenté.
+/// Extract a Windows path from OBJECT_ATTRIBUTES (offset 0x10 → UNICODE_STRING).
+unsafe fn oa_path(attrs: *const c_void) -> Option<String> {
+    if attrs.is_null() { return None; }
+    let obj_name_ptr = *((attrs as *const u8).add(0x10) as *const *const u8);
+    if obj_name_ptr.is_null() { return None; }
+    let len = ustr_len(obj_name_ptr) as usize / 2;
+    let buf = ustr_buf_w(obj_name_ptr);
+    if buf.is_null() || len == 0 { return None; }
+    let wchars = std::slice::from_raw_parts(buf, len);
+    let s = String::from_utf16_lossy(wchars);
+    // Strip NT prefixes: \??\ , \DosDevices\ , \\?\
+    let s = s.strip_prefix("\\??\\").unwrap_or(&s);
+    let s = s.strip_prefix("\\DosDevices\\").unwrap_or(s);
+    let s = s.strip_prefix("\\\\?\\").unwrap_or(s);
+    Some(s.to_string())
+}
+
+/// Map NT disposition to Rust OpenOptions.
+unsafe fn apply_disposition(o: &mut std::fs::OpenOptions, disp: u32) {
+    match disp {
+        0 => { /* FILE_SUPERSEDE: create or overwrite */ o.create(true).truncate(true); }
+        1 => { /* FILE_OPEN: open existing */ }
+        2 => { /* FILE_CREATE: create new, fail if exists */ o.create_new(true); }
+        3 => { /* FILE_OPEN_IF: open or create */ o.create(true); }
+        4 => { /* FILE_OVERWRITE: open existing, truncate */ o.truncate(true); }
+        5 => { /* FILE_OVERWRITE_IF: create or overwrite */ o.create(true).truncate(true); }
+        _ => {}
+    }
+}
+
+/// `NtCreateFile` : ouvre ou crée un fichier via un chemin NT.
 pub unsafe extern "win64" fn nt_create_file(
-    _handle: *mut usize,
-    _access: u32,
-    _attrs: *const c_void,
-    _io: *mut c_void,
+    handle: *mut usize,
+    access: u32,
+    attrs: *const c_void,
+    io: *mut c_void,
     _alloc: *const c_void,
     _file_attrs: u32,
     _share: u32,
-    _disposition: u32,
+    disposition: u32,
     _options: u32,
     _ea: *const c_void,
     _ea_len: u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if handle.is_null() { return STATUS_INVALID_PARAMETER; }
+    let Some(win_path) = oa_path(attrs) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let linux_path = crate::paths::to_linux(&win_path);
+    let want_read = access & 0x8000_0000 != 0 || access & 1 != 0 || access & 0x0008_0000 != 0;
+    let want_write = access & 0x4000_0000 != 0 || access & 2 != 0 || access & 0x0004_0000 != 0;
+    let mut o = std::fs::OpenOptions::new();
+    o.read(want_read || !want_write).write(want_write);
+    apply_disposition(&mut o, disposition);
+    match o.open(&linux_path) {
+        Ok(f) => {
+            let h = super::kernel32::insert_file(f);
+            *handle = h;
+            if !io.is_null() {
+                // IO_STATUS_BLOCK: Status = 0, Information = disposition action
+                (io as *mut u64).write(0);
+                (io as *mut u64).add(1).write(disposition as u64);
+            }
+            STATUS_SUCCESS
+        }
+        Err(e) => {
+            use std::io::ErrorKind;
+            match e.kind() {
+                ErrorKind::NotFound => STATUS_OBJECT_NAME_NOT_FOUND,
+                ErrorKind::AlreadyExists => STATUS_OBJECT_NAME_COLLISION,
+                ErrorKind::PermissionDenied => STATUS_ACCESS_DENIED,
+                _ => STATUS_UNSUCCESSFUL,
+            }
+        }
+    }
 }
 
-/// `NtOpenFile` : stub, non implémenté.
+/// `NtOpenFile` : ouvre un fichier existant via un chemin NT.
 pub unsafe extern "win64" fn nt_open_file(
-    _handle: *mut usize,
-    _access: u32,
-    _attrs: *const c_void,
-    _io: *mut c_void,
+    handle: *mut usize,
+    access: u32,
+    attrs: *const c_void,
+    io: *mut c_void,
     _share: u32,
     _options: u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    nt_create_file(
+        handle,
+        access,
+        attrs,
+        io,
+        std::ptr::null(),
+        0,    // file_attrs
+        0,    // share
+        1,    // FILE_OPEN (open existing only)
+        _options,
+        std::ptr::null(),
+        0,
+    )
 }
 
 /// `NtQueryInformationProcess` : stub minimal.
@@ -1770,26 +1846,40 @@ pub unsafe extern "win64" fn nt_protect_virtual_memory(
     STATUS_SUCCESS // Pretend it worked
 }
 
-/// `NtReadVirtualMemory` : stub.
+/// `NtReadVirtualMemory` : copie de la mémoire du processus courant.
 pub unsafe extern "win64" fn nt_read_virtual_memory(
     _process: usize,
-    _base: *const c_void,
-    _buffer: *mut c_void,
-    _size: usize,
-    _bytes_read: *mut usize,
+    base: *const c_void,
+    buffer: *mut c_void,
+    size: usize,
+    bytes_read: *mut usize,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if base.is_null() || buffer.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(base as *const u8, buffer as *mut u8, size);
+    if !bytes_read.is_null() {
+        *bytes_read = size;
+    }
+    STATUS_SUCCESS
 }
 
-/// `NtWriteVirtualMemory` : stub.
+/// `NtWriteVirtualMemory` : écriture dans la mémoire du processus courant.
 pub unsafe extern "win64" fn nt_write_virtual_memory(
     _process: usize,
-    _base: *mut c_void,
-    _buffer: *const c_void,
-    _size: usize,
-    _bytes_written: *mut usize,
+    base: *mut c_void,
+    buffer: *const c_void,
+    size: usize,
+    bytes_written: *mut usize,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if base.is_null() || buffer.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(buffer as *const u8, base as *mut u8, size);
+    if !bytes_written.is_null() {
+        *bytes_written = size;
+    }
+    STATUS_SUCCESS
 }
 
 // ---------- Section views tracking ----------
@@ -2282,6 +2372,95 @@ mod tests {
 
             crate::dlls::kernel32::close_handle(handle);
             crate::dlls::kernel32::close_handle(dup);
+        }
+    }
+
+    #[test]
+    fn nt_create_file_ouvre_un_fichier_temporaire() {
+        unsafe {
+            let dir = std::env::temp_dir().join("winlux_nt_test");
+            let _ = std::fs::create_dir_all(&dir);
+            let path = dir.join("nt_create.txt");
+            std::fs::write(&path, b"hello").unwrap();
+
+            // Build a UNICODE_STRING + OBJECT_ATTRIBUTES for the path
+            let win_path = format!("\\??\\{}", path.display());
+            let wide: Vec<u16> = win_path.encode_utf16().collect();
+
+            // UNICODE_STRING: Length(u16), MaxLen(u16), pad(4), Buffer(*const u16)
+            let mut ustr = [0u8; 16];
+            let byte_len = (wide.len() * 2) as u16;
+            std::ptr::write_unaligned(ustr.as_mut_ptr() as *mut u16, byte_len);
+            std::ptr::write_unaligned(ustr.as_mut_ptr().add(2) as *mut u16, byte_len);
+            std::ptr::write_unaligned(
+                ustr.as_mut_ptr().add(8) as *mut *const u16,
+                wide.as_ptr(),
+            );
+
+            // OBJECT_ATTRIBUTES: Length(u32), pad, RootDir(usize), ObjectName(*USTR), Attrs(u32), ...
+            let mut oa = [0u8; 48];
+            std::ptr::write_unaligned(oa.as_mut_ptr() as *mut u32, 48);
+            std::ptr::write_unaligned(
+                oa.as_mut_ptr().add(0x10) as *mut *const u8,
+                ustr.as_ptr(),
+            );
+
+            let mut handle: usize = 0;
+            let mut io = [0u64; 2];
+            let r = nt_create_file(
+                &mut handle,
+                0x8000_0000, // GENERIC_READ
+                oa.as_ptr() as *const c_void,
+                io.as_mut_ptr() as *mut c_void,
+                std::ptr::null(),
+                0x80, // FILE_ATTRIBUTE_NORMAL
+                1,    // FILE_SHARE_READ
+                1,    // FILE_OPEN
+                0,
+                std::ptr::null(),
+                0,
+            );
+            assert_eq!(r, STATUS_SUCCESS, "NtCreateFile devrait réussir");
+            assert_ne!(handle, 0);
+
+            // Close and cleanup
+            crate::dlls::kernel32::close_handle(handle);
+            let _ = std::fs::remove_file(&path);
+            let _ = std::fs::remove_dir(&dir);
+        }
+    }
+
+    #[test]
+    fn nt_read_write_virtual_memory_copie_les_donnees() {
+        unsafe {
+            let src: [u8; 8] = [1, 2, 3, 4, 5, 6, 7, 8];
+            let mut dst = [0u8; 8];
+            let mut bytes_done: usize = 0;
+
+            let r = nt_read_virtual_memory(
+                usize::MAX,
+                src.as_ptr() as *const c_void,
+                dst.as_mut_ptr() as *mut c_void,
+                8,
+                &mut bytes_done,
+            );
+            assert_eq!(r, STATUS_SUCCESS);
+            assert_eq!(bytes_done, 8);
+            assert_eq!(dst, src);
+
+            // Write
+            let new_data: [u8; 4] = [0xAA, 0xBB, 0xCC, 0xDD];
+            let mut target = [0u8; 4];
+            let r = nt_write_virtual_memory(
+                usize::MAX,
+                target.as_mut_ptr() as *mut c_void,
+                new_data.as_ptr() as *const c_void,
+                4,
+                &mut bytes_done,
+            );
+            assert_eq!(r, STATUS_SUCCESS);
+            assert_eq!(bytes_done, 4);
+            assert_eq!(target, new_data);
         }
     }
 }
