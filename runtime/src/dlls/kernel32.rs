@@ -6444,4 +6444,75 @@ mod tests {
                 .is_empty()
         );
     }
+
+    #[test]
+    fn read_write_sur_handle_invalide_echoue() {
+        init();
+        crate::process::init_thread();
+        let bad = 0xDEADusize;
+        let mut buf = [0u8; 16];
+        let mut n = 0u32;
+        assert_eq!(unsafe { write_file(bad, buf.as_ptr(), 4, &mut n, 0) }, 0);
+        assert_eq!(crate::process::last_error(), 6);
+        assert_eq!(unsafe { read_file(bad, buf.as_mut_ptr(), 4, &mut n, 0) }, 0);
+        assert_eq!(crate::process::last_error(), 6);
+    }
+
+    #[test]
+    fn cancel_io_sur_handle_invalide_echoue() {
+        init();
+        crate::process::init_thread();
+        let bad = 0xBEEFusize;
+        assert_eq!(cancel_io(bad), 0);
+        assert_eq!(crate::process::last_error(), 6);
+        assert_eq!(unsafe { cancel_io_ex(bad, std::ptr::null_mut()) }, 0);
+        assert_eq!(crate::process::last_error(), 6);
+    }
+
+    #[test]
+    fn get_overlapped_result_sur_overlapped_inconnu_echoue() {
+        init();
+        crate::process::init_thread();
+        let bad = 0xCAFEusize;
+        let mut ov = Overlapped {
+            internal: 0,
+            internal_high: 0,
+            offset: 0,
+            offset_high: 0,
+            event: 0,
+        };
+        let mut transferred = 0u32;
+        assert_eq!(
+            unsafe { get_overlapped_result(bad, &mut ov, &mut transferred, 0) },
+            0
+        );
+        assert_eq!(crate::process::last_error(), 996);
+    }
+
+    #[test]
+    fn write_file_buffer_nul_echoue() {
+        init();
+        crate::process::init_thread();
+        let path = format!("Z:\\tmp\\winlux-nullbuf-{}.bin", std::process::id());
+        let c = CString::new(path).unwrap();
+        let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0, 0) };
+        assert_ne!(h, usize::MAX);
+        let mut written = 0u32;
+        assert_eq!(
+            unsafe { write_file(h, std::ptr::null(), 10, &mut written, 0) },
+            0
+        );
+        assert_eq!(crate::process::last_error(), 87);
+        assert_eq!(close_handle(h), 1);
+        assert_eq!(unsafe { delete_file_a(c.as_ptr() as *const u8) }, 1);
+    }
+
+    #[test]
+    fn close_handle_invalide_echoue() {
+        init();
+        crate::process::init_thread();
+        let bad = 0xF00Dusize;
+        assert_eq!(close_handle(bad), 0);
+        assert_eq!(crate::process::last_error(), 6);
+    }
 }
