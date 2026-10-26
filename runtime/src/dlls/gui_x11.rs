@@ -33,6 +33,19 @@ struct XFont {
     char_width: i16,
 }
 
+fn truecolor_pixel(colorref: u32, red: u32, green: u32, blue: u32) -> u32 {
+    let channel = |value: u32, mask: u32| {
+        if mask == 0 {
+            return 0;
+        }
+        let shift = mask.trailing_zeros();
+        ((((value as u64 * (mask >> shift) as u64 + 127) / 255) as u32) << shift) & mask
+    };
+    channel(colorref & 255, red)
+        | channel((colorref >> 8) & 255, green)
+        | channel((colorref >> 16) & 255, blue)
+}
+
 fn bilinear_colorref(pixels: &[u32], width: usize, height: usize, x: f32, y: f32) -> u32 {
     let x = x.clamp(0.0, width.saturating_sub(1) as f32);
     let y = y.clamp(0.0, height.saturating_sub(1) as f32);
@@ -1282,10 +1295,21 @@ impl X11Backend {
         let Some(image_len) = row_bytes.checked_mul(dst.height as usize) else {
             return;
         };
+        // PutImage must fit in a core X11 request. Large desktop images are
+        // uploaded in whole-row bands instead of being silently discarded.
         const MAX_IMAGE_BYTES: usize = 256 * 1024 - 64;
-        if image_len > MAX_IMAGE_BYTES {
+        let rows_per_request = MAX_IMAGE_BYTES / row_bytes.max(1);
+        if rows_per_request == 0 {
             return;
         }
+        let visual = setup.roots[self.screen]
+            .allowed_depths
+            .iter()
+            .flat_map(|d| &d.visuals)
+            .find(|v| {
+                v.visual_id == setup.roots[self.screen].root_visual
+                    && v.class == x11rb::protocol::xproto::VisualClass::TRUE_COLOR
+            });
         let mut image = vec![0u8; image_len];
         let mut color_pixels = HashMap::new();
         for y in 0..dst.height as usize {
@@ -1305,9 +1329,15 @@ impl X11Backend {
                     source_x,
                     source_y,
                 );
-                let pixel = *color_pixels
-                    .entry(colorref)
-                    .or_insert_with(|| self.alloc_color(colorref));
+                // TrueColor pixels are encoded using the visual masks. Asking
+                // the server to allocate every photo colour stalls the UI.
+                let pixel = if let Some(v) = visual {
+                    truecolor_pixel(colorref, v.red_mask, v.green_mask, v.blue_mask)
+                } else {
+                    *color_pixels
+                        .entry(colorref)
+                        .or_insert_with(|| self.alloc_color(colorref))
+                };
                 let pixel_bytes = match setup.image_byte_order {
                     x11rb::protocol::xproto::ImageOrder::LSB_FIRST => pixel.to_le_bytes(),
                     _ => pixel.to_be_bytes(),
@@ -1325,18 +1355,21 @@ impl X11Backend {
         let _ = self
             .conn
             .change_gc(window.gc, &ChangeGCAux::new().function(x11_function(rop)));
-        let _ = self.conn.put_image(
-            x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
-            window.window,
-            window.gc,
-            dst.width,
-            dst.height,
-            dst.x,
-            dst.y,
-            0,
-            depth,
-            &image,
-        );
+        for first_row in (0..dst.height as usize).step_by(rows_per_request) {
+            let rows = rows_per_request.min(dst.height as usize - first_row);
+            let _ = self.conn.put_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                window.window,
+                window.gc,
+                dst.width,
+                rows as u16,
+                dst.x,
+                (dst.y as i32 + first_row as i32) as i16,
+                0,
+                depth,
+                &image[first_row * row_bytes..(first_row + rows) * row_bytes],
+            );
+        }
         let _ = self.conn.change_gc(
             window.gc,
             &ChangeGCAux::new().function(x11rb::protocol::xproto::GX::COPY),
@@ -2057,6 +2090,113 @@ mod tests {
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.0, 0.0), 0x0000_0000);
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 1.0, 1.0), 0x00ff_0000);
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.5, 0.5), 0x0040_4040);
+    }
+
+    #[test]
+    fn truecolor_respecte_les_masques_du_serveur() {
+        assert_eq!(
+            truecolor_pixel(0x0033_2211, 0xff0000, 0xff00, 0xff),
+            0x0011_2233
+        );
+        assert_eq!(truecolor_pixel(0x00ff_ffff, 0xf800, 0x07e0, 0x001f), 0xffff);
+        assert_eq!(truecolor_pixel(0, 0xf800, 0x07e0, 0x001f), 0);
+    }
+
+    #[test]
+    #[ignore = "requires an X11 server; run with xvfb-run"]
+    fn grande_bitmap_1080p_atteint_la_derniere_bande_x11() {
+        let backend = X11Backend::connect().expect("X11");
+        let root = &backend.conn.setup().roots[backend.screen];
+        let pixmap = backend.conn.generate_id().unwrap();
+        let gc = backend.conn.generate_id().unwrap();
+        backend
+            .conn
+            .create_pixmap(root.root_depth, pixmap, root.root, 1920, 1080)
+            .unwrap()
+            .check()
+            .unwrap();
+        backend
+            .conn
+            .create_gc(gc, pixmap, &CreateGCAux::new())
+            .unwrap()
+            .check()
+            .unwrap();
+        let window = XWin {
+            window: pixmap,
+            gc,
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+        };
+        let rect = Rect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        };
+        let mut pixels = vec![0x0000_00ff; 1920 * 1080];
+        pixels[1920 * 540..].fill(0x00ff_0000);
+        backend.paint_bitmap(&window, &rect, &rect, &pixels, gui::RasterOp::Copy);
+        // Synchronise and inspect both ends, beyond the former 256 KiB limit.
+        let top = backend
+            .conn
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                pixmap,
+                0,
+                0,
+                1,
+                1,
+                u32::MAX,
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
+        let bottom = backend
+            .conn
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                pixmap,
+                1919,
+                1079,
+                1,
+                1,
+                u32::MAX,
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
+        let format = backend
+            .conn
+            .setup()
+            .pixmap_formats
+            .iter()
+            .find(|f| f.depth == root.root_depth)
+            .unwrap();
+        let visual = root
+            .allowed_depths
+            .iter()
+            .flat_map(|d| &d.visuals)
+            .find(|v| v.visual_id == root.root_visual)
+            .unwrap();
+        let decode = |bytes: &[u8]| {
+            let mut value = [0u8; 4];
+            let len = (format.bits_per_pixel / 8) as usize;
+            if backend.conn.setup().image_byte_order
+                == x11rb::protocol::xproto::ImageOrder::LSB_FIRST
+            {
+                value[..len].copy_from_slice(&bytes[..len]);
+                u32::from_le_bytes(value)
+            } else {
+                value[4 - len..].copy_from_slice(&bytes[..len]);
+                u32::from_be_bytes(value)
+            }
+        };
+        assert_eq!(decode(&top.data), visual.red_mask);
+        assert_eq!(decode(&bottom.data), visual.blue_mask);
+        backend.conn.free_gc(gc).unwrap();
+        backend.conn.free_pixmap(pixmap).unwrap();
     }
 }
 

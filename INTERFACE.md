@@ -30,6 +30,11 @@ Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
 
 ## État actuel observé
 
+- Le backend X11 envoie les grandes images par bandes pour respecter la taille
+  maximale des requêtes X11 ; les images de fond en 1080p ne sont plus ignorées
+  au-delà de 256 Kio. Le test réel se lance avec
+  `xvfb-run -a -s '-screen 0 1920x1080x24' cargo test -p winlux grande_bitmap_1080p -- --ignored`.
+  Ce correctif source est postérieur à la release `v0.2.0-preview.7`.
 - Le prototype dessine un fond d'écran, une barre des tâches, un menu Démarrer,
   des notifications et des fenêtres intégrées Explorer/Paramètres.
 - Le menu et la barre donnent accès à un petit ensemble d'applications
