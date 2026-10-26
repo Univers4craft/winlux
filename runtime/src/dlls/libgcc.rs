@@ -54,7 +54,7 @@ const CTX_SIZE: usize = 1232;
 // function_entry, handler_data).
 #[repr(C)]
 struct UnwindContext {
-    ctx: [u8; CTX_SIZE],        // Windows CONTEXT
+    ctx: [u8; CTX_SIZE], // Windows CONTEXT
     image_base: u64,
     function_entry: *const c_void,
     handler_data: *const c_void,
@@ -82,18 +82,21 @@ unsafe fn phase1(exc: *mut u8) -> UnwindReason {
 
     for _ in 0..256u32 {
         let rip = ctx_get(uc.ctx.as_ptr(), CTX_RIP);
-        if rip == 0 { return UnwindReason::EndOfStack; }
+        if rip == 0 {
+            return UnwindReason::EndOfStack;
+        }
 
         let mut image_base: u64 = 0;
-        let func_entry = super::ntdll::rtl_lookup_function_entry(
-            rip,
-            &mut image_base,
-            std::ptr::null_mut(),
-        );
+        let func_entry =
+            super::ntdll::rtl_lookup_function_entry(rip, &mut image_base, std::ptr::null_mut());
         if func_entry.is_null() {
             // Leaf function — pop return address
             let rsp = ctx_get(uc.ctx.as_ptr(), CTX_RSP);
-            ctx_set(uc.ctx.as_mut_ptr(), CTX_RIP, (rsp as *const u64).read_unaligned());
+            ctx_set(
+                uc.ctx.as_mut_ptr(),
+                CTX_RIP,
+                (rsp as *const u64).read_unaligned(),
+            );
             ctx_set(uc.ctx.as_mut_ptr(), CTX_RSP, rsp + 8);
             continue;
         }
@@ -118,9 +121,8 @@ unsafe fn phase1(exc: *mut u8) -> UnwindReason {
             uc.establisher_frame = frame;
 
             // Call the personality routine (search phase)
-            type PersonalityFn = unsafe extern "C" fn(
-                i32, i32, u64, *mut u8, *mut UnwindContext,
-            ) -> i32;
+            type PersonalityFn =
+                unsafe extern "C" fn(i32, i32, u64, *mut u8, *mut UnwindContext) -> i32;
             let personality: PersonalityFn = std::mem::transmute(handler);
             let exc_class = (exc.add(UE_CLASS) as *const u64).read_unaligned();
             let reason = personality(
@@ -133,9 +135,8 @@ unsafe fn phase1(exc: *mut u8) -> UnwindReason {
             if reason == UnwindReason::HandlerFound as i32 {
                 // Store the target frame in the exception's private data
                 (exc.add(UE_PRIVATE1) as *mut u64).write_unaligned(frame);
-                (exc.add(UE_PRIVATE2) as *mut u64).write_unaligned(
-                    ctx_get(uc.ctx.as_ptr(), CTX_RIP),
-                );
+                (exc.add(UE_PRIVATE2) as *mut u64)
+                    .write_unaligned(ctx_get(uc.ctx.as_ptr(), CTX_RIP));
                 return UnwindReason::HandlerFound;
             }
         }
@@ -152,17 +153,20 @@ unsafe fn phase2(exc: *mut u8) -> UnwindReason {
 
     for _ in 0..256u32 {
         let rip = ctx_get(uc.ctx.as_ptr(), CTX_RIP);
-        if rip == 0 { return UnwindReason::EndOfStack; }
+        if rip == 0 {
+            return UnwindReason::EndOfStack;
+        }
 
         let mut image_base: u64 = 0;
-        let func_entry = super::ntdll::rtl_lookup_function_entry(
-            rip,
-            &mut image_base,
-            std::ptr::null_mut(),
-        );
+        let func_entry =
+            super::ntdll::rtl_lookup_function_entry(rip, &mut image_base, std::ptr::null_mut());
         if func_entry.is_null() {
             let rsp = ctx_get(uc.ctx.as_ptr(), CTX_RSP);
-            ctx_set(uc.ctx.as_mut_ptr(), CTX_RIP, (rsp as *const u64).read_unaligned());
+            ctx_set(
+                uc.ctx.as_mut_ptr(),
+                CTX_RIP,
+                (rsp as *const u64).read_unaligned(),
+            );
             ctx_set(uc.ctx.as_mut_ptr(), CTX_RSP, rsp + 8);
             continue;
         }
@@ -192,9 +196,8 @@ unsafe fn phase2(exc: *mut u8) -> UnwindReason {
                 _UA_CLEANUP_PHASE
             };
 
-            type PersonalityFn = unsafe extern "C" fn(
-                i32, i32, u64, *mut u8, *mut UnwindContext,
-            ) -> i32;
+            type PersonalityFn =
+                unsafe extern "C" fn(i32, i32, u64, *mut u8, *mut UnwindContext) -> i32;
             let personality: PersonalityFn = std::mem::transmute(handler);
             let exc_class = (exc.add(UE_CLASS) as *const u64).read_unaligned();
             let reason = personality(1, actions, exc_class, exc, &mut uc);
@@ -234,7 +237,9 @@ pub unsafe extern "C" fn unwind_resume(exc: *mut c_void) -> ! {
 }
 
 pub unsafe extern "C" fn unwind_delete_exception(exc: *mut c_void) {
-    if exc.is_null() { return; }
+    if exc.is_null() {
+        return;
+    }
     let cleanup_ptr = (exc as *const u8).add(UE_CLEANUP) as *const u64;
     let cleanup_fn = (*cleanup_ptr) as usize;
     if cleanup_fn != 0 {
@@ -244,16 +249,16 @@ pub unsafe extern "C" fn unwind_delete_exception(exc: *mut c_void) {
     }
 }
 
-pub unsafe extern "C" fn unwind_get_language_specific_data(
-    ctx: *mut c_void,
-) -> *mut c_void {
+pub unsafe extern "C" fn unwind_get_language_specific_data(ctx: *mut c_void) -> *mut c_void {
     let uc = ctx as *const UnwindContext;
     (*uc).handler_data as *mut c_void
 }
 
 pub unsafe extern "C" fn unwind_get_region_start(ctx: *mut c_void) -> u64 {
     let uc = ctx as *const UnwindContext;
-    if (*uc).function_entry.is_null() { return 0; }
+    if (*uc).function_entry.is_null() {
+        return 0;
+    }
     let rf = (*uc).function_entry as *const [u32; 3];
     (*uc).image_base + (*rf)[0] as u64
 }
@@ -403,7 +408,9 @@ unsafe fn read_uleb128(mut p: *const u8) -> (u64, usize) {
         p = p.add(1);
         count += 1;
         result |= ((byte & 0x7F) as u64) << shift;
-        if byte & 0x80 == 0 { break; }
+        if byte & 0x80 == 0 {
+            break;
+        }
         shift += 7;
     }
     (result, count)
@@ -421,7 +428,9 @@ unsafe fn read_sleb128(mut p: *const u8) -> (i64, usize) {
         count += 1;
         result |= ((byte & 0x7F) as i64) << shift;
         shift += 7;
-        if byte & 0x80 == 0 { break; }
+        if byte & 0x80 == 0 {
+            break;
+        }
     }
     if shift < 64 && (byte & 0x40) != 0 {
         result |= -(1i64 << shift);
@@ -430,7 +439,9 @@ unsafe fn read_sleb128(mut p: *const u8) -> (i64, usize) {
 }
 
 unsafe fn read_encoded(p: *const u8, encoding: u8) -> (u64, usize) {
-    if encoding == 0xFF { return (0, 0); }
+    if encoding == 0xFF {
+        return (0, 0);
+    }
     let base_enc = encoding & 0x0F;
     match base_enc {
         // DW_EH_PE_uleb128
@@ -464,10 +475,7 @@ pub unsafe extern "C" fn unwind_force_unwind(
     UnwindReason::FatalPhase2Error as i32
 }
 
-pub unsafe extern "C" fn unwind_backtrace(
-    _ip: *mut c_void,
-    _arg: *mut c_void,
-) -> i32 {
+pub unsafe extern "C" fn unwind_backtrace(_ip: *mut c_void, _arg: *mut c_void) -> i32 {
     UnwindReason::EndOfStack as i32
 }
 

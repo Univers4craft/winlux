@@ -44,39 +44,38 @@ pub unsafe extern "C" fn cxa_allocate_exception(size: u64) -> *mut c_void {
     let total = ALLOC_SIZE + size as usize;
     let layout = std::alloc::Layout::from_size_align(total, 16).unwrap();
     let ptr = std::alloc::alloc_zeroed(layout);
-    if ptr.is_null() { std::process::abort(); }
+    if ptr.is_null() {
+        std::process::abort();
+    }
     // Return pointer to the user object (after header + _Unwind_Exception)
     ptr.add(ALLOC_SIZE) as *mut c_void
 }
 
 // ── __cxa_free_exception ─────────────────────────────────────────────
 pub unsafe extern "C" fn cxa_free_exception(obj: *mut c_void) {
-    if obj.is_null() { return; }
+    if obj.is_null() {
+        return;
+    }
     let hdr = (obj as *mut u8).sub(ALLOC_SIZE);
     let size_guess = 256; // We don't track size; use header-only dealloc
     let total = ALLOC_SIZE + size_guess;
-    let layout = std::alloc::Layout::from_size_align(total, 16).unwrap_or_else(|_| {
-        std::alloc::Layout::from_size_align(ALLOC_SIZE, 16).unwrap()
-    });
+    let layout = std::alloc::Layout::from_size_align(total, 16)
+        .unwrap_or_else(|_| std::alloc::Layout::from_size_align(ALLOC_SIZE, 16).unwrap());
     std::alloc::dealloc(hdr, layout);
 }
 
 // ── __cxa_throw ──────────────────────────────────────────────────────
-pub unsafe extern "C" fn cxa_throw(
-    obj: *mut c_void,
-    tinfo: *mut c_void,
-    dtor: *mut c_void,
-) -> ! {
+pub unsafe extern "C" fn cxa_throw(obj: *mut c_void, tinfo: *mut c_void, dtor: *mut c_void) -> ! {
     let obj_ptr = obj as *mut u8;
     let hdr = obj_ptr.sub(ALLOC_SIZE);
 
     // Fill header
-    (hdr as *mut u64).write(tinfo as u64);                    // exception_type
-    (hdr.add(0x08) as *mut u64).write(dtor as u64);           // exception_dtor
+    (hdr as *mut u64).write(tinfo as u64); // exception_type
+    (hdr.add(0x08) as *mut u64).write(dtor as u64); // exception_dtor
 
     // Fill _Unwind_Exception (at hdr + CXA_HDR_SIZE)
     let ue = hdr.add(CXA_HDR_SIZE);
-    (ue as *mut u64).write(GXX_EXCEPTION_CLASS);              // exception_class
+    (ue as *mut u64).write(GXX_EXCEPTION_CLASS); // exception_class
     (ue.add(8) as *mut u64).write(cxa_exception_cleanup as *const () as u64);
     // private[0] and private[1] zeroed by alloc_zeroed
 
@@ -86,7 +85,9 @@ pub unsafe extern "C" fn cxa_throw(
 }
 
 unsafe extern "C" fn cxa_exception_cleanup(_reason: i32, exc: *mut c_void) {
-    if exc.is_null() { return; }
+    if exc.is_null() {
+        return;
+    }
     let ue = exc as *mut u8;
     let hdr = ue.sub(CXA_HDR_SIZE);
     let dtor_ptr = (hdr.add(0x08) as *const u64).read();
@@ -101,7 +102,9 @@ unsafe extern "C" fn cxa_exception_cleanup(_reason: i32, exc: *mut c_void) {
 
 // ── __cxa_begin_catch ────────────────────────────────────────────────
 pub unsafe extern "C" fn cxa_begin_catch(exc: *mut c_void) -> *mut c_void {
-    if exc.is_null() { return std::ptr::null_mut(); }
+    if exc.is_null() {
+        return std::ptr::null_mut();
+    }
     let ue = exc as *mut u8;
     CAUGHT_STACK.with(|s| s.borrow_mut().push(ue));
     // Return pointer to the thrown object (after _Unwind_Exception header)

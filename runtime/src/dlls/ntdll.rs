@@ -1492,12 +1492,18 @@ pub unsafe extern "win64" fn nt_close(handle: usize) -> i32 {
 
 /// Extract a Windows path from OBJECT_ATTRIBUTES (offset 0x10 → UNICODE_STRING).
 unsafe fn oa_path(attrs: *const c_void) -> Option<String> {
-    if attrs.is_null() { return None; }
+    if attrs.is_null() {
+        return None;
+    }
     let obj_name_ptr = *((attrs as *const u8).add(0x10) as *const *const u8);
-    if obj_name_ptr.is_null() { return None; }
+    if obj_name_ptr.is_null() {
+        return None;
+    }
     let len = ustr_len(obj_name_ptr) as usize / 2;
     let buf = ustr_buf_w(obj_name_ptr);
-    if buf.is_null() || len == 0 { return None; }
+    if buf.is_null() || len == 0 {
+        return None;
+    }
     let wchars = std::slice::from_raw_parts(buf, len);
     let s = String::from_utf16_lossy(wchars);
     // Strip NT prefixes: \??\ , \DosDevices\ , \\?\
@@ -1510,12 +1516,27 @@ unsafe fn oa_path(attrs: *const c_void) -> Option<String> {
 /// Map NT disposition to Rust OpenOptions.
 unsafe fn apply_disposition(o: &mut std::fs::OpenOptions, disp: u32) {
     match disp {
-        0 => { /* FILE_SUPERSEDE: create or overwrite */ o.create(true).truncate(true); }
+        0 => {
+            /* FILE_SUPERSEDE: create or overwrite */
+            o.create(true).truncate(true);
+        }
         1 => { /* FILE_OPEN: open existing */ }
-        2 => { /* FILE_CREATE: create new, fail if exists */ o.create_new(true); }
-        3 => { /* FILE_OPEN_IF: open or create */ o.create(true); }
-        4 => { /* FILE_OVERWRITE: open existing, truncate */ o.truncate(true); }
-        5 => { /* FILE_OVERWRITE_IF: create or overwrite */ o.create(true).truncate(true); }
+        2 => {
+            /* FILE_CREATE: create new, fail if exists */
+            o.create_new(true);
+        }
+        3 => {
+            /* FILE_OPEN_IF: open or create */
+            o.create(true);
+        }
+        4 => {
+            /* FILE_OVERWRITE: open existing, truncate */
+            o.truncate(true);
+        }
+        5 => {
+            /* FILE_OVERWRITE_IF: create or overwrite */
+            o.create(true).truncate(true);
+        }
         _ => {}
     }
 }
@@ -1534,7 +1555,9 @@ pub unsafe extern "win64" fn nt_create_file(
     _ea: *const c_void,
     _ea_len: u32,
 ) -> i32 {
-    if handle.is_null() { return STATUS_INVALID_PARAMETER; }
+    if handle.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
     let Some(win_path) = oa_path(attrs) else {
         return STATUS_INVALID_PARAMETER;
     };
@@ -1582,9 +1605,9 @@ pub unsafe extern "win64" fn nt_open_file(
         attrs,
         io,
         std::ptr::null(),
-        0,    // file_attrs
-        0,    // share
-        1,    // FILE_OPEN (open existing only)
+        0, // file_attrs
+        0, // share
+        1, // FILE_OPEN (open existing only)
         _options,
         std::ptr::null(),
         0,
@@ -2412,18 +2435,12 @@ mod tests {
             let byte_len = (wide.len() * 2) as u16;
             std::ptr::write_unaligned(ustr.as_mut_ptr() as *mut u16, byte_len);
             std::ptr::write_unaligned(ustr.as_mut_ptr().add(2) as *mut u16, byte_len);
-            std::ptr::write_unaligned(
-                ustr.as_mut_ptr().add(8) as *mut *const u16,
-                wide.as_ptr(),
-            );
+            std::ptr::write_unaligned(ustr.as_mut_ptr().add(8) as *mut *const u16, wide.as_ptr());
 
             // OBJECT_ATTRIBUTES: Length(u32), pad, RootDir(usize), ObjectName(*USTR), Attrs(u32), ...
             let mut oa = [0u8; 48];
             std::ptr::write_unaligned(oa.as_mut_ptr() as *mut u32, 48);
-            std::ptr::write_unaligned(
-                oa.as_mut_ptr().add(0x10) as *mut *const u8,
-                ustr.as_ptr(),
-            );
+            std::ptr::write_unaligned(oa.as_mut_ptr().add(0x10) as *mut *const u8, ustr.as_ptr());
 
             let mut handle: usize = 0;
             let mut io = [0u64; 2];

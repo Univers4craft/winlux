@@ -1175,11 +1175,31 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             open_page(7);
             return true;
         }
-        (5, 20) => Some(if crate::desktop::SHOW_ICON_PC { c"icon-pc-off" } else { c"icon-pc-on" }),
-        (5, 21) => Some(if crate::desktop::SHOW_ICON_DOCS { c"icon-docs-off" } else { c"icon-docs-on" }),
-        (5, 22) => Some(if crate::desktop::SHOW_ICON_TRASH { c"icon-trash-off" } else { c"icon-trash-on" }),
-        (5, 23) => Some(if crate::desktop::REDUCE_MOTION { c"reduce-motion-off" } else { c"reduce-motion-on" }),
-        (5, 24) => Some(if crate::gfx::HIGH_CONTRAST { c"contrast-off" } else { c"contrast-high" }),
+        (5, 20) => Some(if crate::desktop::SHOW_ICON_PC {
+            c"icon-pc-off"
+        } else {
+            c"icon-pc-on"
+        }),
+        (5, 21) => Some(if crate::desktop::SHOW_ICON_DOCS {
+            c"icon-docs-off"
+        } else {
+            c"icon-docs-on"
+        }),
+        (5, 22) => Some(if crate::desktop::SHOW_ICON_TRASH {
+            c"icon-trash-off"
+        } else {
+            c"icon-trash-on"
+        }),
+        (5, 23) => Some(if crate::desktop::REDUCE_MOTION {
+            c"reduce-motion-off"
+        } else {
+            c"reduce-motion-on"
+        }),
+        (5, 24) => Some(if crate::gfx::HIGH_CONTRAST {
+            c"contrast-off"
+        } else {
+            c"contrast-high"
+        }),
         (7, 0) => {
             SELECTED_MODE = SELECTED_MODE.saturating_sub(1);
             return true;

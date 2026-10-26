@@ -1287,12 +1287,7 @@ unsafe fn load_icon_positions() {
     for i in 0..3 {
         let off = i * 8;
         ICON_X[i] = i32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
-        ICON_Y[i] = i32::from_le_bytes([
-            buf[off + 4],
-            buf[off + 5],
-            buf[off + 6],
-            buf[off + 7],
-        ]);
+        ICON_Y[i] = i32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
     }
 }
 
@@ -1446,8 +1441,7 @@ pub unsafe fn init(
     load_icon_positions();
     BOOT_START = now();
     let mut v = [0i8; 4];
-    if REDUCE_MOTION
-        || GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0
+    if REDUCE_MOTION || GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0
     {
         BOOT_DONE = true;
         BOOT_STEP = 4;
