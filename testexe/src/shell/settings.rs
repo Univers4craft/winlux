@@ -6,7 +6,7 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 9] = [
+const PAGES: [&[u8]; 10] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -16,6 +16,7 @@ const PAGES: [&[u8]; 9] = [
     b"Mises \xE0 jour",
     b"\xC9cran et d\xE9finition",
     b"\xC0 propos",
+    b"Ex\xE9cutable",
 ];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
@@ -48,6 +49,110 @@ static mut SHOW_LOG: bool = false;
 static mut TOKEN: [u8; 256] = [0; 256];
 static mut TOKEN_LEN: usize = 0;
 static mut TOKEN_FOCUS: bool = false;
+static mut EXE_PATH: [u16; 2048] = [0; 2048];
+static mut EXE_LEN: usize = 0;
+static mut EXE_SCALE: usize = 0;
+static mut EXE_TRACE: bool = false;
+static mut EXE_NOTICE: &[u8] = b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.";
+const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
+
+fn exe_profile_path(out: &mut [u16; 2060]) {
+    unsafe {
+        out[..EXE_LEN].copy_from_slice(&EXE_PATH[..EXE_LEN]);
+        for (i, &byte) in b".winlux.ini".iter().enumerate() {
+            out[EXE_LEN + i] = byte as u16;
+        }
+    }
+}
+pub unsafe fn open_exe_settings(path: &[u16]) {
+    let len = path.iter().position(|&v| v == 0).unwrap_or(path.len());
+    if len == 0 || len >= EXE_PATH.len() {
+        return;
+    }
+    EXE_PATH.fill(0);
+    EXE_PATH[..len].copy_from_slice(&path[..len]);
+    EXE_LEN = len;
+    EXE_SCALE = 0;
+    EXE_TRACE = false;
+    let mut profile = [0u16; 2060];
+    exe_profile_path(&mut profile);
+    let h = CreateFileW(
+        profile.as_ptr(),
+        0x8000_0000,
+        1,
+        core::ptr::null_mut(),
+        3,
+        0,
+        core::ptr::null_mut(),
+    );
+    if !h.is_null() && h as isize != -1 {
+        let mut data = [0u8; 128];
+        let mut read = 0;
+        ReadFile(h, data.as_mut_ptr(), 128, &mut read, core::ptr::null_mut());
+        CloseHandle(h);
+        let data = &data[..(read as usize).min(128)];
+        EXE_SCALE = EXE_SCALES
+            .iter()
+            .position(|&v| v == field(data, b"ui_scale"))
+            .unwrap_or(0);
+        EXE_TRACE = field(data, b"trace") == b"1";
+    }
+    EXE_NOTICE = b"Un double-clic lance le programme, m\xEAme sans r\xE9glages enregistr\xE9s.";
+    PAGE = 9;
+    HOVER = -1;
+    SCROLL = 0;
+    crate::wm::open(crate::wm::APP_SETTINGS);
+}
+unsafe fn save_exe_settings(reset: bool) {
+    let mut path = [0u16; 2060];
+    exe_profile_path(&mut path);
+    if reset {
+        let attributes = GetFileAttributesW(path.as_ptr());
+        if attributes != u32::MAX && DeleteFileW(path.as_ptr()) == 0 {
+            EXE_NOTICE = b"Impossible de supprimer les r\xE9glages : v\xE9rifiez les permissions.";
+            return;
+        }
+        EXE_SCALE = 0;
+        EXE_TRACE = false;
+        EXE_NOTICE = b"Valeurs par d\xE9faut restaur\xE9es.";
+        return;
+    }
+    let h = CreateFileW(
+        path.as_ptr(),
+        0x4000_0000,
+        0,
+        core::ptr::null_mut(),
+        2,
+        0,
+        core::ptr::null_mut(),
+    );
+    if h.is_null() || h as isize == -1 {
+        EXE_NOTICE = b"Enregistrement impossible : le dossier du programme doit \xEAtre accessible en \xE9criture.";
+        return;
+    }
+    let mut data = [0u8; 48];
+    let scale = EXE_SCALES[EXE_SCALE];
+    data[..9].copy_from_slice(b"ui_scale=");
+    data[9..9 + scale.len()].copy_from_slice(scale);
+    let n = 9 + scale.len();
+    data[n..n + 7].copy_from_slice(b"\ntrace=");
+    data[n + 7] = if EXE_TRACE { b'1' } else { b'0' };
+    data[n + 8] = b'\n';
+    let mut written = 0;
+    let ok = WriteFile(
+        h,
+        data.as_ptr(),
+        (n + 9) as u32,
+        &mut written,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(h);
+    EXE_NOTICE = if ok != 0 && written == (n + 9) as u32 {
+        b"R\xE9glages enregistr\xE9s pour le prochain lancement."
+    } else {
+        b"Enregistrement incomplet : r\xE9essayez."
+    };
+}
 
 unsafe fn read(path: &core::ffi::CStr, target: &mut Buffer) -> bool {
     let file = CreateFileA(
@@ -342,6 +447,8 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (5, 4) => value(b"theme") == b"light",
         (7, 3) => value(b"display_policy") == b"fixed",
         (7, 4) => value(b"display_policy") != b"fixed",
+        (9, 0..=4) => EXE_SCALE == id as usize,
+        (9, 5) => EXE_TRACE,
         _ => false,
     };
     let primary = PAGE == 6 && id == 1 || PAGE == 7 && id == 2;
@@ -613,6 +720,61 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.accent,
     );
     match PAGE {
+        9 => {
+            if EXE_LEN == 0 {
+                row(
+                    g,
+                    &c,
+                    44,
+                    b"Choisir un programme",
+                    b"Clic droit sur un .exe dans Explorer, puis R\xE9glages de l'ex\xE9cutable.",
+                );
+                return;
+            }
+            let mut label = [b'?'; 160];
+            let n = EXE_LEN.min(label.len());
+            for i in 0..n {
+                label[i] = if EXE_PATH[i] <= 255 {
+                    EXE_PATH[i] as u8
+                } else {
+                    b'?'
+                };
+            }
+            text_fit(
+                g.hdc,
+                g.f.body,
+                13,
+                p.text2,
+                c.left,
+                c.top + 48,
+                &label[..n],
+                c.right - c.left,
+            );
+            for (i, label) in [
+                b"\xC9chelle auto".as_slice(),
+                b"100 %",
+                b"125 %",
+                b"150 %",
+                b"200 %",
+                b"Journal diagnostic",
+                b"Enregistrer",
+                b"Valeurs par d\xE9faut",
+                b"Lancer le .exe",
+            ]
+            .iter()
+            .enumerate()
+            {
+                button(g, &c, i as i32 / 3, i as i32 % 3, label, i as i32);
+            }
+            row(
+                g,
+                &c,
+                280,
+                b"Application des r\xE9glages",
+                b"Enregistrer puis relancer le programme. Aucun profil n'est obligatoire.",
+            );
+            row(g, &c, 350, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
+        }
         8 => {
             let info = BUILD_INFO.get();
             let version = field(info, b"version");
@@ -1070,7 +1232,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             text(g.hdc, g.f.small, p.text3, c.left, c.bottom - 30, b"Molette / Haut-Bas : d\xE9filer ; Page suivante/pr\xE9c\xE9dente : lecture rapide.");
         }
     }
-    let notice = if !available() {
+    let notice = if PAGE == 9 {
+        EXE_NOTICE
+    } else if !available() {
         b"Service Winlux indisponible : les actions n\xE9cessitent Winlux.".as_slice()
     } else {
         ACTION.get().split(|&v| v == b'\n').next().unwrap_or(b"")
@@ -1162,6 +1326,32 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }
     }
     let action = match (PAGE, hit(f, x, y)) {
+        (9, id) if EXE_LEN > 0 && (0..=8).contains(&id) => {
+            match id {
+                0..=4 => EXE_SCALE = id as usize,
+                5 => EXE_TRACE = !EXE_TRACE,
+                6 => save_exe_settings(false),
+                7 => save_exe_settings(true),
+                8 => {
+                    let verb = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+                    if ShellExecuteW(
+                        core::ptr::null_mut(),
+                        verb.as_ptr(),
+                        EXE_PATH.as_ptr(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        1,
+                    ) as isize
+                        <= 32
+                    {
+                        EXE_NOTICE =
+                            b"Lancement impossible : consultez le journal de lancement Winlux.";
+                    }
+                }
+                _ => {}
+            }
+            return true;
+        }
         (0, 0) => Some(c"restart-session"),
         (0, 1) => Some(c"reboot"),
         (0, 2) => Some(c"poweroff"),
@@ -1450,4 +1640,29 @@ pub unsafe fn regression_checks() {
         "Sans redemarrage requis les actions normales sont conservees"
     );
     (STATUS, PAGE) = saved;
+}
+
+pub unsafe fn regression_exe_settings(path: &[u16]) {
+    open_exe_settings(path);
+    check!(
+        EXE_SCALE == 0 && !EXE_TRACE,
+        "EXE sans profil : valeurs automatiques sans configuration obligatoire"
+    );
+    EXE_SCALE = 3;
+    EXE_TRACE = true;
+    save_exe_settings(false);
+    EXE_SCALE = 0;
+    EXE_TRACE = false;
+    open_exe_settings(path);
+    check!(
+        EXE_SCALE == 3 && EXE_TRACE,
+        "Les reglages 150 % et diagnostic sont relus pour le bon EXE"
+    );
+    save_exe_settings(true);
+    let mut sidecar = [0u16; 2060];
+    exe_profile_path(&mut sidecar);
+    check!(
+        EXE_SCALE == 0 && !EXE_TRACE && GetFileAttributesW(sidecar.as_ptr()) == u32::MAX,
+        "Restaurer les valeurs par defaut retire seulement le profil du programme"
+    );
 }

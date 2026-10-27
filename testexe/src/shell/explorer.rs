@@ -2416,6 +2416,7 @@ enum Item {
     NewText,
     Open,
     OpenTab,
+    ExeSettings,
     Cut,
     Copy,
     Paste,
@@ -2450,6 +2451,7 @@ fn item_label(i: Item) -> &'static [u8] {
         Item::NewText => b"Document texte",
         Item::Open => b"Ouvrir",
         Item::OpenTab => b"Ouvrir dans un nouvel onglet",
+        Item::ExeSettings => b"R\xE9glages de l'ex\xE9cutable",
         Item::Cut => b"Couper",
         Item::Copy => b"Copier",
         Item::Paste => b"Coller",
@@ -2506,6 +2508,7 @@ unsafe fn menu_items(out: &mut [Item; 16]) -> usize {
         Menu::Context { on_item: true, .. } => &[
             Item::Open,
             Item::OpenTab,
+            Item::ExeSettings,
             Item::Sep,
             Item::Cut,
             Item::Copy,
@@ -2530,8 +2533,18 @@ unsafe fn menu_items(out: &mut [Item; 16]) -> usize {
         ],
         Menu::None => &[],
     };
-    out[..list.len()].copy_from_slice(list);
-    list.len()
+    let p = pane();
+    let executable =
+        first_sel(p).is_some_and(|i| !p.entries[i].dir && ends_ci(p.entries[i].name(), b".exe"));
+    let mut count = 0;
+    for &item in list {
+        if item == Item::ExeSettings && !executable {
+            continue;
+        }
+        out[count] = item;
+        count += 1;
+    }
+    count
 }
 
 unsafe fn menu_origin(geo: &Geo) -> (i32, i32) {
@@ -3533,6 +3546,17 @@ unsafe fn run_item(it: Item, geo: &Geo) {
                 }
             }
         }
+        Item::ExeSettings => {
+            if let Some(i) = first_sel(p) {
+                let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
+                let n = item_path(p, i, &mut path);
+                if n > 0 && ends_ci(&path[..n], b".exe") {
+                    let mut wide = [0u16; PATH_LEN + NAME_LEN + 2];
+                    wstr(&mut wide, &path[..n]);
+                    crate::settings::open_exe_settings(&wide);
+                }
+            }
+        }
         Item::Cut => copy_selection(true),
         Item::Copy => copy_selection(false),
         Item::Paste => paste(),
@@ -4521,6 +4545,36 @@ pub unsafe fn regression_checks() {
         ansi_char(0x20AC) == Some(0x80) && ansi_char(0x03A9).is_none(),
         "Explorer preserve Euro et refuse les conversions ANSI destructrices"
     );
+    let mut program = [0u8; PATH_LEN + NAME_LEN + 2];
+    let program_len = join(&mut program, root, b"Mon programme.EXE");
+    let mut wide_program = [0u16; PATH_LEN + NAME_LEN + 2];
+    wstr(&mut wide_program, &program[..program_len]);
+    crate::settings::regression_exe_settings(&wide_program);
+    let p = pane();
+    p.count = 0;
+    p.sel = [0; MAX_ENTRIES / 64];
+    add_entry(p, b"Mon programme.EXE", false, false, 0, 0, Some(Kind::Exe));
+    set_sel(p, 0, true);
+    MENU = Menu::Context {
+        x: 0,
+        y: 0,
+        on_item: true,
+    };
+    let mut items = [Item::Sep; 16];
+    let count = menu_items(&mut items);
+    check!(
+        items[..count].contains(&Item::ExeSettings)
+            && items[..count].contains(&Item::Delete)
+            && items[..count].contains(&Item::Rename),
+        "Clic droit EXE : reglages facultatifs, renommer et supprimer restent disponibles"
+    );
+    pane().entries[0].dir = true;
+    let count = menu_items(&mut items);
+    check!(
+        !items[..count].contains(&Item::ExeSettings),
+        "Un dossier nomme .EXE ne propose pas de profil executable"
+    );
+    MENU = Menu::None;
     check!(
         rollback_copy(root, 0),
         "Explorer nettoie ses seuls fichiers de regression"

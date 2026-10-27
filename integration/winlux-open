@@ -6,6 +6,7 @@
 # qui reste ouvert à la fin; les programmes graphiques sont lancés directement.
 # Les erreurs sont affichées dans une boîte de dialogue lorsque c'est possible.
 set -u
+umask 077
 
 winlux=${WINLUX_RUNTIME:-winlux}
 state=${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/winlux
@@ -131,8 +132,16 @@ fi
 if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && [ ! -t 1 ]; then
     self=$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")
     open_terminal "$self" --in-terminal "$exe" "$@"
-    show_error "Aucun terminal trouvé pour afficher ce programme console. Installez Konsole ou définissez WINLUX_TERMINAL."
-    exit 1
+    # A missing terminal must not prevent a compatible batch/GUI-test PE from
+    # starting. Interactive console applications still need a terminal.
+    mkdir -p "$state" 2>/dev/null || log=/dev/null
+    cd "$(dirname -- "$exe")" 2>/dev/null || true
+    "$winlux" "$exe" "$@" </dev/null >"$log" 2>&1
+    status=$?
+    summary=$(tail -c 2048 "$log" 2>/dev/null)
+    show_error "« $(basename -- "$exe") » : code $status. Aucun terminal disponible ; sortie enregistrée dans $log.
+$summary"
+    exit "$status"
 fi
 
 # Programme graphique (ou console lancée depuis un terminal) : le dossier du
@@ -144,8 +153,8 @@ if [ "$kind" = console ]; then
 fi
 "$winlux" "$exe" "$@" 2>"$log"
 status=$?
-if [ "$status" -ne 0 ] && grep -q '^winlux:' "$log" 2>/dev/null; then
-    detail=$(grep '^winlux:' "$log" | tail -n 3 | sed 's/^winlux: //')
+if [ "$status" -ne 0 ]; then
+    detail=$(tail -n 5 "$log" 2>/dev/null)
     show_error "« $(basename -- "$exe") » s’est arrêté (code $status).
 $detail"
 fi

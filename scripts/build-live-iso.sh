@@ -222,6 +222,12 @@ if command -v xterm >/dev/null 2>&1; then
     chmod 755 "$stage/usr/bin/xterm"
     copy_shared_libraries "$(command -v xterm)"
 fi
+# Boîte d'erreur minimale pour les lancements sans bureau Linux complet.
+if command -v xmessage >/dev/null 2>&1; then
+    cp "$(command -v xmessage)" "$stage/usr/bin/xmessage"
+    chmod 755 "$stage/usr/bin/xmessage"
+    copy_shared_libraries "$(command -v xmessage)"
+fi
 # Microsoft Edge, navigateur par défaut : intégré seulement si un paquet
 # .deb officiel est fourni (WINLUX_EDGE_DEB=/chemin/microsoft-edge-stable.deb,
 # téléchargé depuis https://www.microsoft.com/edge). Sinon le bouton Edge

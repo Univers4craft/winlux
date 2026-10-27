@@ -30,6 +30,9 @@ Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
 
 ## État actuel observé
 
+- Explorer propose « Réglages de l'exécutable » au clic droit sur un fichier
+  .exe : échelle du rendu et diagnostic facultatifs, avec profil par programme.
+  Voir [le fonctionnement et les limites](docs/EXE-PROFILES.md).
 - Après une mise à jour nécessitant un redémarrage, la page dédiée affiche
   uniquement le bouton de redémarrage et le journal ; recherche, réinstallation,
   restauration et saisie du token ne sont plus accessibles avant le redémarrage.

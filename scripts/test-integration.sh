@@ -118,6 +118,16 @@ grep -q 'terminal' "$work/terminal.log" || fail "aucun terminal ouvert pour un p
 grep -q 'terminé avec le code 0' "$work/sortie.log" || fail "résumé de fin absent"
 ok "programme console dans un terminal (chemin avec espaces)"
 
+# No terminal in this isolated PATH: the program must still be executed.
+no_terminal="$work/no-terminal"
+mkdir -p "$no_terminal"
+for tool in dirname basename mkdir tail grep sed; do ln -s "$(command -v "$tool")" "$no_terminal/$tool"; done
+cp "$fake/kdialog" "$no_terminal/kdialog"
+env -u WINLUX_TERMINAL PATH="$no_terminal" DISPLAY=:99 XDG_STATE_HOME="$work/no-terminal-state" \
+    WINLUX_RUNTIME="$fake/winlux" WINLUX_GUI=headless "$open" "$apps/Bonjour monde.exe" </dev/null || fail "programme refuse sans terminal"
+test -s "$work/no-terminal-state/winlux/last-launch.log" || fail "sortie console perdue sans terminal"
+ok "double-clic sans terminal et sans profil : execution et sortie conservees"
+
 set +e
 launch "$apps/code.exe"; status=$?
 set -e

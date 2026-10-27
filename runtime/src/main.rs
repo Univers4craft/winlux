@@ -9,6 +9,7 @@ mod paths;
 mod pe;
 mod printf;
 mod process;
+mod profiles;
 mod thunks;
 
 use std::path::PathBuf;
@@ -40,6 +41,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    profiles::apply(&exe);
     if let Some(target) = managed::detect(&exe, &source) {
         log_info!(
             "managed",
