@@ -33,7 +33,7 @@ jobs:
             linux-image-generic xserver-xorg-core \
             x11-xserver-utils gcc-mingw-w64-x86-64 \
             cpio fakeroot zstd kmod busybox-static \
-            xvfb x11-xkb-utils xfonts-base fonts-dejavu-core \
+            xvfb xterm ncurses-base x11-xkb-utils xfonts-base fonts-dejavu-core \
             xserver-xorg-input-libinput libxft2 libcairo2 libmpg123-0 libfaad2 libasound2t64 \
             curl udev ffmpeg libarchive-tools parted dosfstools qemu-system-x86 ovmf \
             dpkg-dev libgtk-3-0t64 libnss3 libnspr4 libgbm1 libxkbcommon0 libdbus-glib-1-2

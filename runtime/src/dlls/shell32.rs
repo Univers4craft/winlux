@@ -80,6 +80,7 @@ fn terminal_candidates() -> Vec<String> {
         }
     }
     for name in [
+        "winlux-terminal",
         "x-terminal-emulator",
         "konsole",
         "gnome-terminal",

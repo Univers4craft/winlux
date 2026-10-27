@@ -1,0 +1,17 @@
+#!/bin/sh
+# Common terminal entry point; arguments remain separate, including -e commands.
+set -eu
+terminal=${WINLUX_XTERM:-/usr/bin/xterm}
+if ! test -x "$terminal"; then
+    echo 'Terminal Winlux absent : installez la mise à jour système complète.' >&2
+    exit 127
+fi
+if test "${1:-}" = --cwd; then
+    test "$#" -ge 2 || { echo 'Usage : winlux-terminal [--cwd dossier] [-e commande ...]' >&2; exit 2; }
+    cd -- "$2"
+    shift 2
+fi
+if test "$#" = 0; then set -- -e /bin/bash -i; fi
+exec "$terminal" -title 'Terminal Winlux' -tn xterm-256color -fa 'DejaVu Sans Mono' -fs 11 \
+    -u8 -bg '#171325' -fg '#eeeaf8' -cr '#ba9cff' \
+    -sb -rightbar -sl 5000 -geometry 100x28 "$@"

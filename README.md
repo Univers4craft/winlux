@@ -91,6 +91,12 @@ sur un SSD contenant des données.
 
 Dans Explorer, **C:** correspond au dossier personnel Linux, **Z:** à la racine Linux. Les images préparées avec le catalogue hors ligne installent Edge au premier démarrage. **Paramètres > Navigateurs** permet d’installer Chrome ou Firefox et de choisir le navigateur par défaut, sans téléchargement supplémentaire. Voir [Navigateurs](docs/BROWSERS.md) pour la préparation des paquets et les limites.
 
+L’image système inclut **Terminal Winlux** (xterm), avec Bash interactif, texte
+anticrénelé, UTF-8 et défilement. Il s’ouvre depuis le menu Démarrer, depuis
+**Ouvrir dans le terminal** dans Explorer (dans le dossier courant), ou
+automatiquement pour les `.exe` console. Les commandes `winlux-terminal` et
+`x-terminal-emulator` sont disponibles pour les applications.
+
 ## Mises à jour GitHub
 
 L’outil recherche une **release publiée**, pas les derniers commits :

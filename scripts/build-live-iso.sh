@@ -97,6 +97,7 @@ if test -f "$wallpaper_src"; then
 fi
 
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
+cp "$root/scripts/test-terminal-guest.sh" "$stage/opt/winlux/scripts/test-terminal-guest.sh"
 cp "$root/scripts/test-browsers-guest.sh" "$stage/opt/winlux/scripts/test-browsers-guest.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 chmod 755 \
@@ -228,12 +229,8 @@ THEME=dark
 PREFS
 cp -L "$kernel" "$stage/boot/vmlinuz"
 printf '%s\n' "$kernel_release" >"$stage/usr/share/winlux/kernel-version"
-# Terminal Linux pour le bouton Terminal de la barre des tâches (facultatif).
-if command -v xterm >/dev/null 2>&1; then
-    cp "$(command -v xterm)" "$stage/usr/bin/xterm"
-    chmod 755 "$stage/usr/bin/xterm"
-    copy_shared_libraries "$(command -v xterm)"
-fi
+# A visible, usable terminal is mandatory for desktop and console applications.
+sh "$root/scripts/stage-terminal.sh" "$stage"
 # Boîte d'erreur minimale pour les lancements sans bureau Linux complet.
 if command -v xmessage >/dev/null 2>&1; then
     cp "$(command -v xmessage)" "$stage/usr/bin/xmessage"
@@ -571,7 +568,11 @@ echo "Winlux live test: Xvfb GUI rendering"
 xvfb_pid=$!
 /bin/busybox sleep 1
 x11_status=1
+terminal_status=1
 if /bin/busybox kill -0 "$xvfb_pid" 2>/dev/null; then
+    DISPLAY=:99 /bin/sh /opt/winlux/scripts/test-terminal-guest.sh
+    terminal_status=$?
+    if test "$terminal_status" != 0; then /bin/busybox cat /tmp/winlux-terminal.log >&2; fi
     DISPLAY=:99 WINLUX_TEST=salut WINLUX_CAPTURE_TEST=1 WINLUX_DIB_TEST=1 \
         /usr/bin/winlux /opt/winlux/tests/gui_demo.exe
     x11_status=$?
@@ -584,7 +585,7 @@ echo "WINLUX_LIVE_X11_EXIT=$x11_status"
 result=0
 if [ "$sequential_status" -ne 0 ] || \
    [ "$parallel_status" -ne 0 ] || \
-   [ "$x11_status" -ne 0 ]; then
+   [ "$x11_status" -ne 0 ] || [ "$terminal_status" -ne 0 ]; then
     result=1
 fi
 echo "WINLUX_LIVE_RESULT=$result"

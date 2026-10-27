@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Terminal Winlux
+Comment=Exécuter des commandes Linux et des programmes console
+Exec=/usr/bin/winlux-terminal
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;

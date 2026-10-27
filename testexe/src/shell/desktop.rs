@@ -233,8 +233,16 @@ unsafe fn load_wallpaper(hdc: Handle) {
     WP_TRIED = true;
     let path = c"Z:\\usr\\share\\winlux\\wallpaper.bmp";
     let mut selected = [0i8; 1024];
-    let length = GetEnvironmentVariableA(c"WINLUX_WALLPAPER".as_ptr(), selected.as_mut_ptr(), selected.len() as u32);
-    let path = if length > 0 && length < selected.len() as u32 { selected.as_ptr() } else { path.as_ptr() };
+    let length = GetEnvironmentVariableA(
+        c"WINLUX_WALLPAPER".as_ptr(),
+        selected.as_mut_ptr(),
+        selected.len() as u32,
+    );
+    let path = if length > 0 && length < selected.len() as u32 {
+        selected.as_ptr()
+    } else {
+        path.as_ptr()
+    };
     let f = CreateFileA(
         path,
         0x8000_0000,
@@ -861,7 +869,7 @@ const RECOMMENDED: [(&[u8], &[u8], Glyph, Launch); 4] = [
     (
         b"Terminal",
         b"Ouvrir un terminal Linux",
-        Glyph::Computer,
+        Glyph::Terminal,
         Launch::Terminal,
     ),
     (
@@ -900,11 +908,20 @@ unsafe fn launch(what: Launch) {
         Launch::Updates => crate::settings::open_page(6),
         Launch::Terminal => {
             static TERM: &[u16] = &[
-                b'x' as u16,
+                b's' as u16,
+                b'h' as u16,
+                b'e' as u16,
+                b'l' as u16,
+                b'l' as u16,
+                b':' as u16,
                 b't' as u16,
                 b'e' as u16,
                 b'r' as u16,
                 b'm' as u16,
+                b'i' as u16,
+                b'n' as u16,
+                b'a' as u16,
+                b'l' as u16,
                 0,
             ];
             static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
