@@ -74,7 +74,7 @@ log="$work/install.log"
         fi
         sleep 1
     done
-) | timeout 240 qemu-system-x86_64 -m 3072 -smp 2 -accel tcg -display none -monitor none -serial stdio -nic none -no-reboot \
+) | timeout 240 qemu-system-x86_64 -m "${WINLUX_QEMU_MEMORY:-3072}" -smp 2 -accel tcg -display none -monitor none -serial stdio -nic none -no-reboot \
     -kernel "$stage/boot/vmlinuz" -initrd "$work/install-initramfs.gz" \
     -append 'console=ttyS0,115200 rdinit=/install-init panic=1 winlux.install-test=1' \
     -drive "file=$disk,format=raw,if=virtio" >"$log" 2>&1

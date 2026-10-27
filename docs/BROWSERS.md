@@ -44,3 +44,6 @@ défaut, les arguments URL, le refus des archives altérées et le nettoyage apr
 il installe les trois vrais paquets et vérifie le rendu local en mode headless,
 sans désactiver leur sandbox. Le paramètre noyau `winlux.browser-smoke=1`
 déclenche ce diagnostic puis éteint la VM.
+`sh scripts/test-browsers-vm.sh` crée son propre disque jetable à partir du stage
+de construction, lance ce diagnostic et vérifie les marqueurs de réussite.
+Il conserve le journal et supprime son disque après le test.

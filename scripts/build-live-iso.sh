@@ -211,6 +211,13 @@ audio:x:29:root
 video:x:44:root
 input:x:109:root
 GROUP
+cat >"$stage/etc/mdev.conf" <<'MDEV'
+null 0:0 0666
+zero 0:0 0666
+full 0:0 0666
+random 0:0 0666
+urandom 0:0 0666
+MDEV
 cat >"$stage/etc/winlux/input.conf" <<'INPUT'
 XKB_LAYOUT=fr
 TAP_TO_CLICK=1
@@ -340,6 +347,11 @@ umask 077
 /bin/busybox mount -t proc proc /proc 2>/dev/null || true
 /bin/busybox mount -t sysfs sysfs /sys 2>/dev/null || true
 /bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
+/bin/busybox chmod 666 /dev/null /dev/zero /dev/random /dev/urandom
+/bin/busybox ln -sf /proc/self/fd /dev/fd
+/bin/busybox ln -sf /proc/self/fd/0 /dev/stdin
+/bin/busybox ln -sf /proc/self/fd/1 /dev/stdout
+/bin/busybox ln -sf /proc/self/fd/2 /dev/stderr
 /bin/busybox mkdir -p /dev/shm /dev/pts
 /bin/busybox mount -t tmpfs -o mode=1777 tmpfs /dev/shm 2>/dev/null || true
 /bin/busybox mount -t devpts devpts /dev/pts 2>/dev/null || true
@@ -378,6 +390,8 @@ for driver in virtio_net e1000 e1000e snd_hda_intel snd_intel8x0; do /bin/busybo
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
+# Existing installations retain /etc, including an older mdev configuration.
+/bin/busybox chmod 666 /dev/null /dev/zero /dev/random /dev/urandom
 # Enregistrer binfmt pour les .exe (MZ) si le système de fichiers est monté.
 if /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null; then
     if test -r /etc/binfmt.d/winlux.conf; then

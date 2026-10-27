@@ -3,8 +3,8 @@ name: Release
 on:
   push:
     # System previews are built and tested with a full ISO locally, then
-    # uploaded with their system manifest. Never overwrite them with a
-    # runtime-only package from this workflow.
+    # uploaded with their system manifest. Never overwrite those manually
+    # validated preview artifacts from this workflow.
     tags: ['v*', '!v*-preview.*']
 
 permissions:
@@ -49,9 +49,6 @@ jobs:
           bash scripts/test-runtime.sh
           bash scripts/test-runtime-parallel.sh
 
-      - name: Construire le paquet de mise à jour (runtime)
-        run: bash scripts/build-update-bundle.sh --runtime "$GITHUB_REF_NAME"
-
       - name: Construire l'ISO
         run: |
           kernel=$(ls /boot/vmlinuz-* 2>/dev/null | head -1)
@@ -72,9 +69,13 @@ jobs:
         run: |
           test "$SKIP_ISO" = "false"
           sh scripts/test-install-safety.sh
+          sh scripts/test-browsers-vm.sh
           sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" bios
           sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" uefi
           sh scripts/test-install-vm-guest.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
+
+      - name: Construire la mise à jour système complète
+        run: bash scripts/build-update-bundle.sh --system "$GITHUB_REF_NAME"
 
       - name: Calculer les sommes SHA-256
         run: |
