@@ -30,6 +30,7 @@ pub struct Module {
     pub pe: PeImage,
     pub tls: Option<TlsInfo>,
     pub initialized: bool,
+    pub refcount: u32,
 }
 
 impl Module {
@@ -172,6 +173,7 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
         pe,
         tls: None,
         initialized: false,
+        refcount: 1,
     };
 
     let delta = base.wrapping_sub(m.pe.image_base as usize);
@@ -595,6 +597,7 @@ mod tests {
             },
             tls: None,
             initialized: false,
+            refcount: 1,
         };
         assert_eq!(export_by_name(&m, "demo"), Some(m.base + 0x250));
         assert_eq!(export_by_ordinal(&m, 7), Some(m.base + 0x250));
@@ -624,6 +627,7 @@ mod tests {
             },
             tls: None,
             initialized: false,
+            refcount: 1,
         };
         assert_eq!(delay_rva(&m, 1, 0x120).unwrap(), 0x120);
         assert_eq!(delay_rva(&m, 0, 0x1100).unwrap(), 0x100);
@@ -668,6 +672,7 @@ mod tests {
             },
             tls: None,
             initialized: false,
+            refcount: 1,
         };
         resolve_imports(&m).unwrap();
         assert_ne!(unsafe { *(m.base as *const usize).add(0x1a0 / 8) }, 0);
