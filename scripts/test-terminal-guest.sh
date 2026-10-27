@@ -17,6 +17,13 @@ printf 'Terminal UTF-8 : éàç — Winlux\n'
 printf 'OK\n' > /tmp/winlux-terminal-result
 COMMAND
 mkdir -p '/tmp/Terminal avec espaces'
+chmod 755 '/tmp/Terminal avec espaces'
+chmod 644 "$script"
 timeout 20 /usr/bin/winlux-terminal --cwd '/tmp/Terminal avec espaces' -e /bin/sh "$script" > /tmp/winlux-terminal.log 2>&1
+grep -qx OK "$result"
+rm "$result"
+timeout 20 /usr/bin/setpriv --reuid=winlux-web --regid=winlux-web --init-groups --reset-env \
+    env HOME=/home/winlux-web DISPLAY="$DISPLAY" \
+    /usr/bin/winlux-terminal --cwd '/tmp/Terminal avec espaces' -e /bin/sh "$script" >> /tmp/winlux-terminal.log 2>&1
 grep -qx OK "$result"
 echo 'WINLUX_LIVE_TERMINAL_EXIT=0'

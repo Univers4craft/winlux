@@ -218,6 +218,8 @@ zero 0:0 0666
 full 0:0 0666
 random 0:0 0666
 urandom 0:0 0666
+ptmx 0:0 0666
+tty 0:0 0666
 MDEV
 cat >"$stage/etc/winlux/input.conf" <<'INPUT'
 XKB_LAYOUT=fr
@@ -388,7 +390,7 @@ echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
 # Existing installations retain /etc, including an older mdev configuration.
-/bin/busybox chmod 666 /dev/null /dev/zero /dev/random /dev/urandom
+/bin/busybox chmod 666 /dev/null /dev/zero /dev/random /dev/urandom /dev/ptmx /dev/tty
 # Enregistrer binfmt pour les .exe (MZ) si le système de fichiers est monté.
 if /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null; then
     if test -r /etc/binfmt.d/winlux.conf; then
@@ -563,7 +565,7 @@ parallel_status=$?
 echo "WINLUX_LIVE_PARALLEL_EXIT=$parallel_status"
 
 echo "Winlux live test: Xvfb GUI rendering"
-/usr/bin/Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp \
+/usr/bin/Xvfb :99 -ac -screen 0 1920x1080x24 -nolisten tcp \
     -fp /usr/share/fonts/X11/misc,built-ins >/tmp/xvfb.log 2>&1 &
 xvfb_pid=$!
 /bin/busybox sleep 1
