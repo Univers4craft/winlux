@@ -11,6 +11,24 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
 
+pub const MAX_BITMAP_PIXELS: usize = 16 * 1024 * 1024;
+
+pub fn bilinear_colorref(pixels: &[u32], width: usize, height: usize, x: f32, y: f32) -> u32 {
+    let x = x.clamp(0.0, width.saturating_sub(1) as f32);
+    let y = y.clamp(0.0, height.saturating_sub(1) as f32);
+    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
+    let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
+    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
+    let channel = |shift: u32| {
+        let value = |px: u32| ((px >> shift) & 0xff) as f32;
+        let top = value(pixels[y0 * width + x0]) * (1.0 - fx) + value(pixels[y0 * width + x1]) * fx;
+        let bottom =
+            value(pixels[y1 * width + x0]) * (1.0 - fx) + value(pixels[y1 * width + x1]) * fx;
+        (top * (1.0 - fy) + bottom * fy).round() as u32
+    };
+    channel(0) | (channel(8) << 8) | (channel(16) << 16)
+}
+
 // ---------- Constantes de messages ----------
 
 pub const WM_CREATE: u32 = 0x0001;
@@ -704,6 +722,7 @@ pub enum DrawCmd {
         x2: i32,
         y2: i32,
         color: u32,
+        width: u16,
     },
 }
 
@@ -1038,7 +1057,7 @@ pub fn create_compatible_bitmap(width: i32, height: i32) -> Option<usize> {
         return None;
     }
     let pixels = (width as usize).checked_mul(height as usize)?;
-    if pixels > 4 * 1024 * 1024 {
+    if pixels > MAX_BITMAP_PIXELS {
         return None;
     }
     let handle = next_handle(0x0021_0000);
@@ -1068,7 +1087,7 @@ pub fn create_dib_section(
         return None;
     }
     let pixels = (width as usize).checked_mul(height as usize)?;
-    if pixels > 4 * 1024 * 1024 {
+    if pixels > MAX_BITMAP_PIXELS {
         return None;
     }
     let stride = (width as usize * bit_count as usize).div_ceil(32) * 4;
@@ -1153,7 +1172,7 @@ pub fn bitmap_snapshot(hdc: usize, rect: Rect) -> Option<BitmapSnapshot> {
     let width = rect.width() as usize;
     let height = rect.height() as usize;
     let count = width.checked_mul(height)?;
-    if count > 4 * 1024 * 1024 {
+    if count > MAX_BITMAP_PIXELS {
         return None;
     }
     let objects = lock(objects());
@@ -1457,6 +1476,7 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
             x2,
             y2,
             color,
+            width,
         } => {
             // Bresenham simplifié
             let (mut cx, mut cy) = (*x1, *y1);
@@ -1467,7 +1487,14 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
             let mut err = dx + dy;
             loop {
                 if cx >= 0 && cy >= 0 && cx < bounds.right && cy < bounds.bottom {
-                    put(cx, cy, *color, RasterOp::Copy);
+                    for oy in 0..(*width).max(1) as i32 {
+                        for ox in 0..(*width).max(1) as i32 {
+                            let (px, py) = (cx + ox, cy + oy);
+                            if px < bounds.right && py < bounds.bottom {
+                                put(px, py, *color, RasterOp::Copy);
+                            }
+                        }
+                    }
                 }
                 if cx == *x2 && cy == *y2 {
                     break;

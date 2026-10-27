@@ -34,7 +34,7 @@ jobs:
             x11-xserver-utils gcc-mingw-w64-x86-64 \
             cpio fakeroot zstd kmod busybox-static \
             xvfb x11-xkb-utils xfonts-base fonts-dejavu-core \
-            xserver-xorg-input-libinput libxft2 libmpg123-0 libfaad2 libasound2t64 \
+            xserver-xorg-input-libinput libxft2 libcairo2 libmpg123-0 libfaad2 libasound2t64 \
             curl udev ffmpeg libarchive-tools parted dosfstools qemu-system-x86 ovmf
 
       - name: Compiler et tester

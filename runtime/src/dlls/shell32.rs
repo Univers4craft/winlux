@@ -178,6 +178,14 @@ pub fn resolve(file: &str, params: &str) -> Result<(PathBuf, Vec<String>), isize
 fn spawn(program: &Path, args: &[String], dir: Option<PathBuf>) -> bool {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null());
+    if program
+        .file_name()
+        .is_some_and(|name| name == "winlux-open")
+    {
+        // PID 1 can leave the graphical shell attached to /dev/console.
+        // That inherited TTY is not a visible terminal for the launched app.
+        cmd.env("WINLUX_DESKTOP_LAUNCH", "1");
+    }
     if let Some(d) = dir.filter(|d| d.is_dir()) {
         cmd.current_dir(d);
     }

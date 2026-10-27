@@ -59,7 +59,7 @@ pub struct Fonts {
 impl Fonts {
     pub unsafe fn new() -> Self {
         let f = |h: i32, w: i32| {
-            CreateFontA(h, 0, 0, 0, w, 0, 0, 0, 1, 0, 0, 0, 0, c"Segoe UI".as_ptr())
+            CreateFontA(h, 0, 0, 0, w, 0, 0, 0, 1, 0, 0, 0, 0, c"DejaVu Sans".as_ptr())
         };
         Fonts {
             title: f(15, 600),
@@ -105,7 +105,7 @@ pub unsafe fn text(hdc: Handle, font: Handle, color: u32, x: i32, y: i32, s: &[u
 static mut MEASURE_DC: Handle = core::ptr::null_mut();
 static mut MEASURE_FONTS: [(i32, Handle); 8] = [(0, core::ptr::null_mut()); 8];
 
-/// Largeur réelle d'un texte (police Segoe UI normale de cette hauteur),
+/// Largeur réelle d'un texte (police DejaVu Sans normale de cette hauteur),
 /// mesurée par le runtime ; estimation à 0,56 em si la mesure échoue.
 pub fn text_width(s: &[u8], height: i32) -> i32 {
     unsafe {
@@ -132,7 +132,7 @@ pub fn text_width(s: &[u8], height: i32) -> i32 {
                             0,
                             0,
                             0,
-                            c"Segoe UI".as_ptr(),
+                            c"DejaVu Sans".as_ptr(),
                         ),
                     );
                     i
@@ -324,7 +324,6 @@ pub unsafe fn line(
     color: u32,
 ) {
     let (dx, dy) = (x1 - x0, y1 - y0);
-    let n = dx.abs().max(dy.abs()).max(1);
     if dx == 0 || dy == 0 {
         fill(
             hdc,
@@ -337,10 +336,13 @@ pub unsafe fn line(
         );
         return;
     }
-    for i in 0..=n {
-        let x = x0 + dx * i / n;
-        let y = y0 + dy * i / n;
-        fill(hdc, b, x, y, x + t, y + t, color);
+    let pen = CreatePen(0, t, color);
+    if !pen.is_null() {
+        let previous = SelectObject(hdc, pen);
+        MoveToEx(hdc, x0, y0, core::ptr::null_mut());
+        LineTo(hdc, x1, y1);
+        SelectObject(hdc, previous);
+        DeleteObject(pen);
     }
 }
 

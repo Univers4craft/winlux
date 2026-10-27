@@ -12,22 +12,27 @@ winlux=${WINLUX_RUNTIME:-winlux}
 state=${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/winlux
 log="$state/last-launch.log"
 
-show_error() {
+show_message() {
     title="Winlux"
     message=$1
+    mode=${2:-error}
+    dialog_flag=--error
+    icon=dialog-error
+    if [ "$mode" = info ]; then dialog_flag=--msgbox; icon=dialog-information; fi
     if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
         if command -v kdialog >/dev/null 2>&1; then
-            kdialog --title "$title" --error "$message" && return
+            kdialog --title "$title" "$dialog_flag" "$message" && return
         elif command -v zenity >/dev/null 2>&1; then
-            zenity --error --title="$title" --no-wrap --text="$message" && return
+            zenity "--$mode" --title="$title" --no-wrap --text="$message" && return
         elif command -v notify-send >/dev/null 2>&1; then
-            notify-send --app-name=Winlux --icon=dialog-error "$title" "$message" && return
+            notify-send --app-name=Winlux --icon="$icon" "$title" "$message" && return
         elif command -v xmessage >/dev/null 2>&1; then
             xmessage -center "$title : $message" && return
         fi
     fi
     printf 'Winlux : %s\n' "$message" >&2
 }
+show_error() { show_message "$1" error; }
 
 # Exécute le programme dans le terminal déjà ouvert puis attend Entrée pour
 # laisser le temps de lire la sortie.
@@ -129,7 +134,7 @@ if [ -z "$kind" ]; then
     exit 1
 fi
 
-if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && [ ! -t 1 ]; then
+if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && { [ "${WINLUX_DESKTOP_LAUNCH:-0}" = 1 ] || [ ! -t 1 ]; }; then
     self=$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")
     open_terminal "$self" --in-terminal "$exe" "$@"
     # A missing terminal must not prevent a compatible batch/GUI-test PE from
@@ -139,8 +144,9 @@ if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && [ ! -t 1 ]; then
     "$winlux" "$exe" "$@" </dev/null >"$log" 2>&1
     status=$?
     summary=$(tail -c 2048 "$log" 2>/dev/null)
-    show_error "« $(basename -- "$exe") » : code $status. Aucun terminal disponible ; sortie enregistrée dans $log.
-$summary"
+    mode=error; if [ "$status" -eq 0 ]; then mode=info; fi
+    show_message "« $(basename -- "$exe") » : code $status. Aucun terminal disponible ; sortie enregistrée dans $log.
+$summary" "$mode"
     exit "$status"
 fi
 

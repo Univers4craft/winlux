@@ -128,6 +128,28 @@ env -u WINLUX_TERMINAL PATH="$no_terminal" DISPLAY=:99 XDG_STATE_HOME="$work/no-
 test -s "$work/no-terminal-state/winlux/last-launch.log" || fail "sortie console perdue sans terminal"
 ok "double-clic sans terminal et sans profil : execution et sortie conservees"
 
+# A graphical desktop can inherit /dev/console: isatty(stdout) is insufficient.
+python3 - "$open" "$apps/Bonjour monde.exe" "$fake/winlux" "$no_terminal" "$work/pty-state" <<'PY'
+import os, pathlib, pty, subprocess, sys
+launcher, exe, runtime, tools, state = sys.argv[1:]
+env = os.environ.copy()
+env.pop("WINLUX_TERMINAL", None)
+env.pop("WINLUX_NO_TERMINAL", None)
+env.update(PATH=tools, DISPLAY=":99", WINLUX_GUI="headless", WINLUX_RUNTIME=runtime,
+           WINLUX_DESKTOP_LAUNCH="1", XDG_STATE_HOME=state)
+master, slave = pty.openpty()
+try:
+    assert os.isatty(slave)
+    result = subprocess.run([launcher, exe], env=env, stdin=subprocess.DEVNULL,
+                            stdout=slave, stderr=slave, timeout=10)
+    assert result.returncode == 0, result.returncode
+    assert (pathlib.Path(state)/"winlux/last-launch.log").stat().st_size > 0
+finally:
+    os.close(master)
+    os.close(slave)
+PY
+ok "console heritee du bureau : le double-clic conserve une sortie visible"
+
 set +e
 launch "$apps/code.exe"; status=$?
 set -e

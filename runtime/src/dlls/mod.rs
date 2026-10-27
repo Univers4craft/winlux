@@ -13,6 +13,7 @@ pub mod crt_stdio;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gui;
+mod gui_cairo;
 pub mod gui_x11;
 pub mod kernel32;
 pub mod kernel32_misc;

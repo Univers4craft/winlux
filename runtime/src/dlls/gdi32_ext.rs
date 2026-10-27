@@ -296,7 +296,7 @@ pub extern "win64" fn line_to(hdc: usize, x: i32, y: i32) -> i32 {
         .unwrap_or((0, 0));
     let pen = gui::dc_pen(hdc);
     let color = gui::object_color(pen).unwrap_or(0);
-    let _w = gui::object_pen_width(pen);
+    let width = gui::object_pen_width(pen);
     gui::record(
         hdc,
         DrawCmd::Line {
@@ -305,6 +305,7 @@ pub extern "win64" fn line_to(hdc: usize, x: i32, y: i32) -> i32 {
             x2: x,
             y2: y,
             color,
+            width,
         },
     );
     1
@@ -326,6 +327,7 @@ pub unsafe extern "win64" fn polyline(hdc: usize, points: *const [i32; 2], count
                 x2: w[1][0],
                 y2: w[1][1],
                 color,
+                width: gui::object_pen_width(pen),
             },
         );
     }
@@ -348,6 +350,7 @@ pub unsafe extern "win64" fn polygon(hdc: usize, points: *const [i32; 2], count:
                 x2: w[1][0],
                 y2: w[1][1],
                 color,
+                width: gui::object_pen_width(pen),
             },
         );
     }
@@ -362,6 +365,7 @@ pub unsafe extern "win64" fn polygon(hdc: usize, points: *const [i32; 2], count:
             x2: first[0],
             y2: first[1],
             color,
+            width: gui::object_pen_width(pen),
         },
     );
     1

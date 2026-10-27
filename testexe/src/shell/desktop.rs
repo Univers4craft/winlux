@@ -232,8 +232,11 @@ unsafe fn load_wallpaper(hdc: Handle) {
     }
     WP_TRIED = true;
     let path = c"Z:\\usr\\share\\winlux\\wallpaper.bmp";
+    let mut selected = [0i8; 1024];
+    let length = GetEnvironmentVariableA(c"WINLUX_WALLPAPER".as_ptr(), selected.as_mut_ptr(), selected.len() as u32);
+    let path = if length > 0 && length < selected.len() as u32 { selected.as_ptr() } else { path.as_ptr() };
     let f = CreateFileA(
-        path.as_ptr(),
+        path,
         0x8000_0000,
         1,
         core::ptr::null_mut(),

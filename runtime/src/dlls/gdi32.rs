@@ -527,11 +527,42 @@ fn bitblt_rop(rop: u32) -> Option<gui::RasterOp> {
     })
 }
 
+struct ResizeCache {
+    key: (usize, usize, usize, usize),
+    source: Vec<u32>,
+    output: Vec<u32>,
+}
+static RESIZE_CACHE: Mutex<Option<ResizeCache>> = Mutex::new(None);
+
+#[cfg(test)]
+mod scaling_tests {
+    use super::*;
+    #[test]
+    fn agrandissement_lisse_et_bitmap_4k() {
+        let image = gui::BitmapSnapshot {
+            width: 2,
+            height: 1,
+            pixels: vec![0, 0x00ff_ffff],
+        };
+        let output = resize_bitmap(image, 3, 1).unwrap();
+        assert_eq!(output, [0, 0x0080_8080, 0x00ff_ffff]);
+        let image = gui::BitmapSnapshot {
+            width: 1,
+            height: 1,
+            pixels: vec![0x0012_3456],
+        };
+        let output = resize_bitmap(image, 3840, 2160).unwrap();
+        assert_eq!(output.len(), 3840 * 2160);
+        assert_eq!(output[0], 0x0012_3456);
+        assert_eq!(output[output.len() - 1], 0x0012_3456);
+    }
+}
+
 fn resize_bitmap(snapshot: gui::BitmapSnapshot, width: usize, height: usize) -> Option<Vec<u32>> {
     let count = width.checked_mul(height)?;
     if width == 0
         || height == 0
-        || count > 4 * 1024 * 1024
+        || count > gui::MAX_BITMAP_PIXELS
         || snapshot.width == 0
         || snapshot.height == 0
     {
@@ -543,13 +574,33 @@ fn resize_bitmap(snapshot: gui::BitmapSnapshot, width: usize, height: usize) -> 
     if snapshot.width == width && snapshot.height == height {
         return Some(snapshot.pixels);
     }
+    let key = (snapshot.width, snapshot.height, width, height);
+    let cacheable = count >= 65536;
+    if cacheable {
+        if let Some(cached) = RESIZE_CACHE
+            .lock()
+            .ok()?
+            .as_ref()
+            .filter(|c| c.key == key && c.source == snapshot.pixels)
+        {
+            return Some(cached.output.clone());
+        }
+    }
     let mut output = vec![0; count];
     for y in 0..height {
-        let sy = y * snapshot.height / height;
+        let sy = (y as f32 + 0.5) * snapshot.height as f32 / height as f32 - 0.5;
         for x in 0..width {
-            let sx = x * snapshot.width / width;
-            output[y * width + x] = snapshot.pixels[sy * snapshot.width + sx];
+            let sx = (x as f32 + 0.5) * snapshot.width as f32 / width as f32 - 0.5;
+            output[y * width + x] =
+                gui::bilinear_colorref(&snapshot.pixels, snapshot.width, snapshot.height, sx, sy);
         }
+    }
+    if cacheable {
+        *RESIZE_CACHE.lock().ok()? = Some(ResizeCache {
+            key,
+            source: snapshot.pixels,
+            output: output.clone(),
+        });
     }
     Some(output)
 }
@@ -1237,20 +1288,17 @@ pub unsafe extern "win64" fn line_to(hdc: usize, x: i32, y: i32) -> i32 {
         *pos = (x, y);
         old
     };
-    // Dessiner la ligne comme un FrameRect fin
-    let color = gui::object_color(gui::dc_brush(hdc)).unwrap_or(0);
-    let rect = Rect {
-        left: x0.min(x),
-        top: y0.min(y),
-        right: x0.max(x) + 1,
-        bottom: y0.max(y) + 1,
-    };
+    let pen = gui::dc_pen(hdc);
+    let color = gui::object_color(pen).unwrap_or(0);
     gui::record(
         hdc,
-        DrawCmd::FrameRect {
-            rect,
+        DrawCmd::Line {
+            x1: x0,
+            y1: y0,
+            x2: x,
+            y2: y,
             color,
-            width: 1,
+            width: gui::object_pen_width(pen),
         },
     );
     1

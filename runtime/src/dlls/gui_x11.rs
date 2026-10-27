@@ -4,6 +4,7 @@
 
 use crate::dlls::gui::theme;
 use crate::dlls::gui::{self, BitmapSnapshot, DrawCmd, FontSpec, PendingEvent, Rect};
+use crate::dlls::gui_cairo::{Cairo, Shape};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uchar, c_ulong, c_void, CString};
@@ -52,24 +53,7 @@ fn truecolor_pixel(colorref: u32, red: u32, green: u32, blue: u32) -> u32 {
         | channel((colorref >> 16) & 255, blue)
 }
 
-fn bilinear_colorref(pixels: &[u32], width: usize, height: usize, x: f32, y: f32) -> u32 {
-    let x = x.clamp(0.0, width.saturating_sub(1) as f32);
-    let y = y.clamp(0.0, height.saturating_sub(1) as f32);
-    let x0 = x.floor() as usize;
-    let y0 = y.floor() as usize;
-    let x1 = (x0 + 1).min(width - 1);
-    let y1 = (y0 + 1).min(height - 1);
-    let fx = x - x0 as f32;
-    let fy = y - y0 as f32;
-    let channel = |shift: u32| {
-        let value = |px: u32| ((px >> shift) & 0xff) as f32;
-        let top = value(pixels[y0 * width + x0]) * (1.0 - fx) + value(pixels[y0 * width + x1]) * fx;
-        let bottom =
-            value(pixels[y1 * width + x0]) * (1.0 - fx) + value(pixels[y1 * width + x1]) * fx;
-        (top * (1.0 - fy) + bottom * fy).round() as u32
-    };
-    channel(0) | (channel(8) << 8) | (channel(16) << 16)
-}
+use crate::dlls::gui::bilinear_colorref;
 
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -293,6 +277,7 @@ struct XftRenderer {
     visual: *mut Visual,
     colormap: c_ulong,
     fonts: HashMap<FontSpec, *mut XftFont>,
+    cairo: Option<Cairo>,
 }
 
 unsafe impl Send for XftRenderer {}
@@ -318,6 +303,7 @@ impl XftRenderer {
             visual,
             colormap,
             fonts: HashMap::new(),
+            cairo: Cairo::load(),
         })
     }
 
@@ -435,10 +421,17 @@ impl XftRenderer {
 impl Drop for XftRenderer {
     fn drop(&mut self) {
         unsafe {
+            // Cairo registers XCloseDisplay callbacks. Release drawables first,
+            // but keep its code loaded until Xlib has run those callbacks.
+            let mut cairo = self.cairo.take();
+            if let Some(renderer) = cairo.as_mut() {
+                renderer.clear();
+            }
             for (_, font) in self.fonts.drain() {
                 (self.api.font_close)(self.display, font);
             }
             (self.api.close_display)(self.display);
+            drop(cairo);
             libc::dlclose(self.api.xft);
             libc::dlclose(self.api.x11);
         }
@@ -1468,9 +1461,31 @@ impl X11Backend {
     }
 
     /// Rejoue la liste de commandes GDI d'une fenêtre.
+    fn smooth_shape(&mut self, w: &XWin, color: u32, shape: Shape) -> bool {
+        if !self.xft.as_ref().is_some_and(|r| r.cairo.is_some()) {
+            return false;
+        }
+        self.before_xft();
+        let renderer = self.xft.as_mut().unwrap();
+        unsafe {
+            renderer.cairo.as_mut().unwrap().draw(
+                renderer.display.cast(),
+                renderer.visual.cast(),
+                w.window,
+                w.width as i32,
+                w.height as i32,
+                color,
+                shape,
+            )
+        }
+    }
+
     fn paint_cmds(&mut self, w: &XWin, cmds: &[DrawCmd]) {
         for cmd in cmds {
-            if !matches!(cmd, DrawCmd::Text { .. }) {
+            if !matches!(
+                cmd,
+                DrawCmd::Text { .. } | DrawCmd::Ellipse { .. } | DrawCmd::Line { .. }
+            ) {
                 self.before_x11();
             }
             match cmd {
@@ -1484,7 +1499,19 @@ impl X11Backend {
                 }
                 DrawCmd::Ellipse { rect, color } => {
                     let rect = self.scaled_rect(rect);
-                    self.paint_ellipse(w, &rect, *color)
+                    if !self.smooth_shape(
+                        w,
+                        *color,
+                        Shape::Ellipse {
+                            x: rect.left as f64,
+                            y: rect.top as f64,
+                            width: rect.width() as f64,
+                            height: rect.height() as f64,
+                        },
+                    ) {
+                        self.before_x11();
+                        self.paint_ellipse(w, &rect, *color);
+                    }
                 }
                 DrawCmd::PatternRect { rect, color, rop } => {
                     let rect = self.scaled_rect(rect);
@@ -1530,14 +1557,29 @@ impl X11Backend {
                     x2,
                     y2,
                     color,
-                } => self.paint_line(
-                    w,
-                    self.scaled(*x1),
-                    self.scaled(*y1),
-                    self.scaled(*x2),
-                    self.scaled(*y2),
-                    *color,
-                ),
+                    width,
+                } => {
+                    let (x1, y1, x2, y2) = (
+                        self.scaled(*x1),
+                        self.scaled(*y1),
+                        self.scaled(*x2),
+                        self.scaled(*y2),
+                    );
+                    if !self.smooth_shape(
+                        w,
+                        *color,
+                        Shape::Line {
+                            x1: x1 as f64,
+                            y1: y1 as f64,
+                            x2: x2 as f64,
+                            y2: y2 as f64,
+                            width: self.scaled(*width as i32) as f64,
+                        },
+                    ) {
+                        self.before_x11();
+                        self.paint_line(w, x1, y1, x2, y2, *color);
+                    }
+                }
             }
         }
     }
@@ -2165,6 +2207,109 @@ mod tests {
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.0, 0.0), 0x0000_0000);
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 1.0, 1.0), 0x00ff_0000);
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.5, 0.5), 0x0040_4040);
+    }
+
+    #[test]
+    #[ignore = "requires an X11 server with Cairo and Xft"]
+    fn contours_anticreneles_x11() {
+        let mut backend = X11Backend::connect().expect("X11");
+        assert!(backend.xft.as_ref().is_some_and(|r| r.cairo.is_some()));
+        let screen = &backend.conn.setup().roots[backend.screen];
+        let (root, depth) = (screen.root, screen.root_depth);
+        let pixmap = backend.conn.generate_id().unwrap();
+        let gc = backend.conn.generate_id().unwrap();
+        backend
+            .conn
+            .create_pixmap(depth, pixmap, root, 64, 64)
+            .unwrap()
+            .check()
+            .unwrap();
+        backend
+            .conn
+            .create_gc(gc, pixmap, &CreateGCAux::new())
+            .unwrap()
+            .check()
+            .unwrap();
+        let window = XWin {
+            window: pixmap,
+            gc,
+            x: 0,
+            y: 0,
+            width: 64,
+            height: 64,
+        };
+        backend.paint_cmds(
+            &window,
+            &[
+                DrawCmd::FillRect {
+                    rect: Rect {
+                        left: 0,
+                        top: 0,
+                        right: 64,
+                        bottom: 64,
+                    },
+                    color: 0,
+                },
+                DrawCmd::Ellipse {
+                    rect: Rect {
+                        left: 3,
+                        top: 3,
+                        right: 30,
+                        bottom: 30,
+                    },
+                    color: 0x00ff_ffff,
+                },
+                DrawCmd::Line {
+                    x1: 34,
+                    y1: 5,
+                    x2: 53,
+                    y2: 57,
+                    color: 0x00ff_ffff,
+                    width: 2,
+                },
+            ],
+        );
+        backend.before_x11();
+        let image = backend
+            .conn
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                pixmap,
+                0,
+                0,
+                64,
+                64,
+                u32::MAX,
+            )
+            .unwrap()
+            .reply()
+            .unwrap();
+        assert_eq!(
+            image.data.len(),
+            64 * 64 * 4,
+            "test requires 32-bit Xvfb pixels"
+        );
+        let gray = |data: &[u8]| {
+            data.chunks_exact(4)
+                .any(|p| p[0] > 0 && p[0] < 255 && p[0] == p[1] && p[1] == p[2])
+        };
+        let left: Vec<u8> = image
+            .data
+            .chunks_exact(64 * 4)
+            .flat_map(|row| row[..32 * 4].iter().copied())
+            .collect();
+        let right: Vec<u8> = image
+            .data
+            .chunks_exact(64 * 4)
+            .flat_map(|row| row[32 * 4..].iter().copied())
+            .collect();
+        assert!(gray(&left), "ellipse must contain fractional edge coverage");
+        assert!(
+            gray(&right),
+            "diagonal must contain fractional edge coverage"
+        );
+        backend.conn.free_gc(gc).unwrap();
+        backend.conn.free_pixmap(pixmap).unwrap();
     }
 
     #[test]

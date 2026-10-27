@@ -30,6 +30,9 @@ Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
 
 ## État actuel observé
 
+- La version 12 ajoute l'anticrénelage Cairo aux contours et le filtrage
+  bilinéaire GDI, avec captures natives 1080p/4K. Voir le
+  [diagnostic de rendu](docs/RENDERING-QUALITY.md) pour les limites restantes.
 - Explorer propose « Réglages de l'exécutable » au clic droit sur un fichier
   .exe : échelle du rendu et diagnostic facultatifs, avec profil par programme.
   Voir [le fonctionnement et les limites](docs/EXE-PROFILES.md).

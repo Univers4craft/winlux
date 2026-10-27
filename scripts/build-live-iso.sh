@@ -26,6 +26,7 @@ xorg=${WINLUX_XORG:-/usr/lib/xorg/Xorg}
 xorg_modules=${WINLUX_XORG_MODULES:-/usr/lib/xorg/modules}
 truetype_fonts=${WINLUX_TRUETYPE_FONTS:-/usr/share/fonts/truetype/dejavu}
 xft_library=${WINLUX_XFT_LIBRARY:-$(ldconfig -p | awk '$1 == "libXft.so.2" { print $NF; exit }')}
+cairo_library=${WINLUX_CAIRO_LIBRARY:-$(ldconfig -p | awk '$1 == "libcairo.so.2" { print $NF; exit }')}
 
 for tool in cargo bash cpio depmod modprobe fakeroot find gzip grub-mkrescue grub-script-check ldd ldconfig sha256sum xorriso zstd; do
     command -v "$tool" >/dev/null 2>&1 || {
@@ -43,6 +44,7 @@ for path in /usr/bin/busybox /usr/bin/xrandr /usr/bin/curl /usr/bin/install /usr
 done
 test -r /usr/share/X11/xorg.conf.d/40-libinput.conf || { echo "configuration libinput Xorg absente" >&2; exit 1; }
 test -r "$xft_library" || { echo "bibliothèque Xft absente : $xft_library" >&2; exit 1; }
+test -r "$cairo_library" || { echo "bibliothèque Cairo absente : $cairo_library" >&2; exit 1; }
 for module in "$virtio_dma_module" "$virtio_gpu_module" "$virtio_input_module" "$serio_raw_module" "$psmouse_module" "$hid_module" "$usbhid_module" "$hid_generic_module"; do
     test -r "$module" || { echo "module noyau requis absent : $module" >&2; exit 1; }
 done
@@ -248,6 +250,9 @@ fi
 mkdir -p "$stage$(dirname -- "$xft_library")"
 cp -L "$xft_library" "$stage$xft_library"
 copy_shared_libraries "$xft_library"
+mkdir -p "$stage$(dirname -- "$cairo_library")"
+cp -L "$cairo_library" "$stage$cairo_library"
+copy_shared_libraries "$cairo_library"
 cp -a "$xorg_modules" "$stage/usr/lib/xorg/modules"
 find "$xorg_modules" -type f -name '*.so' | while IFS= read -r module; do
     copy_shared_libraries "$module"

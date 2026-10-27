@@ -773,6 +773,8 @@ extern "C" {
     pub fn GetObjectW(obj: Handle, size: i32, out: *mut c_void) -> i32;
     pub fn CreateSolidBrush(color: u32) -> Handle;
     pub fn CreatePen(style: u32, width: i32, color: u32) -> Handle;
+    pub fn MoveToEx(dc: Handle, x: i32, y: i32, previous: *mut Point) -> i32;
+    pub fn LineTo(dc: Handle, x: i32, y: i32) -> i32;
     pub fn CreateCompatibleDC(dc: Handle) -> Handle;
     pub fn CreateCompatibleBitmap(dc: Handle, width: i32, height: i32) -> Handle;
     pub fn CreateDIBSection(
