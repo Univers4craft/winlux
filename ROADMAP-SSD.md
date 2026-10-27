@@ -88,7 +88,7 @@ ne doit pas être assimilée à une garantie A/B contre toute interruption.
 ## 4. Applications de base
 
 - [ ] Bloc-notes avec ouverture des `.txt`, modification et enregistrement.
-- [ ] Terminal utilisable depuis le bureau.
+- [x] Terminal utilisable depuis le bureau (xterm intégré, Explorer et `.exe` console ; validé en VM).
 - [ ] Navigateur réellement installé et accessible.
 - [ ] Calculatrice.
 - [ ] Visionneuse d'images.
