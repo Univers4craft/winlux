@@ -89,7 +89,7 @@ entier après contrôles et confirmation explicite. Voir [ses protections et les
 tests requis](docs/INSTALLER-SAFETY.md) avant toute utilisation ; ne pas le lancer
 sur un SSD contenant des données.
 
-Dans Explorer, **C:** correspond au dossier personnel Linux, **Z:** à la racine Linux. Un navigateur n’est pas garanti dans chaque ISO : Edge peut être embarqué avec `WINLUX_EDGE_DEB`, sinon le lanceur cherche les navigateurs installés compatibles.
+Dans Explorer, **C:** correspond au dossier personnel Linux, **Z:** à la racine Linux. Les images préparées avec le catalogue hors ligne installent Edge au premier démarrage. **Paramètres > Navigateurs** permet d’installer Chrome ou Firefox et de choisir le navigateur par défaut, sans téléchargement supplémentaire. Voir [Navigateurs](docs/BROWSERS.md) pour la préparation des paquets et les limites.
 
 ## Mises à jour GitHub
 

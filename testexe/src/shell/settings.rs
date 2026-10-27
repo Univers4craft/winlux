@@ -6,7 +6,7 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 10] = [
+const PAGES: [&[u8]; 11] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -17,6 +17,7 @@ const PAGES: [&[u8]; 10] = [
     b"\xC9cran et d\xE9finition",
     b"\xC0 propos",
     b"Ex\xE9cutable",
+    b"Navigateurs",
 ];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
@@ -256,6 +257,12 @@ pub unsafe fn system_tick() -> bool {
     }
     LAST_POLL = now;
     let mut changed = read(c"Z:\\run\\winlux\\control.txt", &mut STATUS);
+    if GetFileAttributesA(c"Z:\\run\\winlux\\browser-chooser".as_ptr()) != u32::MAX {
+        DeleteFileA(c"Z:\\run\\winlux\\browser-chooser".as_ptr());
+        PAGE = 10;
+        crate::wm::open(crate::wm::APP_SETTINGS);
+        changed = true;
+    }
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
     changed |= read(
         if PAGE == 6 {
@@ -449,6 +456,9 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (7, 4) => value(b"display_policy") != b"fixed",
         (9, 0..=4) => EXE_SCALE == id as usize,
         (9, 5) => EXE_TRACE,
+        (10, 1) => value(b"browser_default") == b"edge",
+        (10, 4) => value(b"browser_default") == b"chrome",
+        (10, 7) => value(b"browser_default") == b"firefox",
         _ => false,
     };
     let primary = PAGE == 6 && id == 1 || PAGE == 7 && id == 2;
@@ -720,6 +730,68 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.accent,
     );
     match PAGE {
+        10 => {
+            row(
+                g,
+                &c,
+                44,
+                b"Navigateur par d\xE9faut",
+                match value(b"browser_default") {
+                    b"chrome" => b"Google Chrome",
+                    b"firefox" => b"Mozilla Firefox",
+                    _ => b"Microsoft Edge",
+                },
+            );
+            for (i, labels) in [
+                [
+                    b"Installer Edge".as_slice(),
+                    b"Choisir Edge",
+                    b"Ouvrir Edge",
+                ],
+                [
+                    b"Installer Chrome".as_slice(),
+                    b"Choisir Chrome",
+                    b"Ouvrir Chrome",
+                ],
+                [
+                    b"Installer Firefox".as_slice(),
+                    b"Choisir Firefox",
+                    b"Ouvrir Firefox",
+                ],
+            ]
+            .iter()
+            .enumerate()
+            {
+                for (j, label) in labels.iter().enumerate() {
+                    button(g, &c, i as i32, j as i32, label, (i * 3 + j) as i32);
+                }
+            }
+            for (i, key) in [
+                b"browser_edge".as_slice(),
+                b"browser_chrome",
+                b"browser_firefox",
+            ]
+            .iter()
+            .enumerate()
+            {
+                row(
+                    g,
+                    &c,
+                    272 + i as i32 * 65,
+                    [
+                        b"Microsoft Edge".as_slice(),
+                        b"Google Chrome",
+                        b"Mozilla Firefox",
+                    ][i],
+                    match value(key) {
+                        b"installed" => b"Install\xE9",
+                        b"available" => b"Paquet pr\xEAt - installation hors ligne",
+                        b"update" => b"Mise \xE0 jour disponible",
+                        _ => b"Paquet absent de cette image",
+                    },
+                );
+            }
+        }
         9 => {
             if EXE_LEN == 0 {
                 row(
@@ -1326,6 +1398,19 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }
     }
     let action = match (PAGE, hit(f, x, y)) {
+        (10, id) if (0..=8).contains(&id) => Some(
+            [
+                c"browser-install-edge",
+                c"browser-default-edge",
+                c"browser-launch-edge",
+                c"browser-install-chrome",
+                c"browser-default-chrome",
+                c"browser-launch-chrome",
+                c"browser-install-firefox",
+                c"browser-default-firefox",
+                c"browser-launch-firefox",
+            ][id as usize],
+        ),
         (9, id) if EXE_LEN > 0 && (0..=8).contains(&id) => {
             match id {
                 0..=4 => EXE_SCALE = id as usize,

@@ -74,6 +74,8 @@ chmod 755 "$stage/usr/bin/winlux-display"
 mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
 cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
+cp "$root/scripts/winlux-browsers.sh" "$stage/usr/bin/winlux-browsers"
+chmod 755 "$stage/usr/bin/winlux-browsers"
 cp "$root/integration/winlux-open" "$stage/usr/bin/winlux-open"
 chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script"
 mkdir -p "$stage/usr/share/winlux"
@@ -95,6 +97,7 @@ if test -f "$wallpaper_src"; then
 fi
 
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
+cp "$root/scripts/test-browsers-guest.sh" "$stage/opt/winlux/scripts/test-browsers-guest.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
@@ -247,6 +250,11 @@ if [ -n "${WINLUX_EDGE_DEB:-}" ]; then
     copy_shared_libraries "$stage/opt/microsoft/msedge/msedge"
     ln -sf /opt/microsoft/msedge/microsoft-edge "$stage/usr/bin/microsoft-edge-stable"
 fi
+# Offline browser catalogue; official packages are prepared before this build.
+browser_packages=${WINLUX_BROWSER_PACKAGES:-"$root/build/browser-packages"}
+if test -f "$browser_packages/edge.deb"; then
+    sh "$root/scripts/stage-browser-packages.sh" "$stage" "$browser_packages"
+fi
 mkdir -p "$stage$(dirname -- "$xft_library")"
 cp -L "$xft_library" "$stage$xft_library"
 copy_shared_libraries "$xft_library"
@@ -382,11 +390,41 @@ fi
 /bin/busybox ip link set lo up
 /bin/busybox mkdir -p /run/winlux /etc/winlux
 /bin/busybox touch /etc/winlux/live-session
+if ! /bin/busybox grep -q '^winlux-web:' /etc/passwd; then
+    browser_uid=1001
+    while /bin/busybox awk -F: -v n="$browser_uid" '$3 == n { found=1 } END { exit !found }' /etc/passwd /etc/group; do
+        browser_uid=$((browser_uid + 1))
+    done
+    browser_gid=$(/bin/busybox awk -F: '$1 == "winlux-web" { print $3; exit }' /etc/group)
+    if test -z "$browser_gid"; then
+        browser_gid=$browser_uid
+        printf 'winlux-web:x:%s:\n' "$browser_gid" >> /etc/group
+    fi
+    printf 'winlux-web:!:%s:%s:Winlux browser:/home/winlux-web:/bin/sh\n' "$browser_uid" "$browser_gid" >> /etc/passwd
+fi
+/bin/busybox mkdir -p /home/winlux-web
+/bin/busybox chmod 755 /home
+/bin/busybox chown winlux-web:winlux-web /home/winlux-web
+/bin/busybox chmod 700 /home/winlux-web
+if test -f /usr/share/winlux/browsers/edge.deb; then
+    /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 || true
+fi
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
 # explicitly so the graphical power button really shuts down the guest.
 /usr/bin/winlux-network start &
+if /bin/busybox grep -qw 'winlux.browser-smoke=1' /proc/cmdline; then
+    result=0
+    /bin/sh /opt/winlux/scripts/test-browsers-guest.sh || result=$?
+    echo "WINLUX_BROWSERS_RESULT=$result"
+    if test "$result" != 0; then
+        /bin/busybox cat /tmp/*-dom.log /tmp/firefox-render.log /run/winlux/browser-setup.log 2>/dev/null || true
+    fi
+    /bin/busybox sync
+    /bin/busybox poweroff -f
+    while :; do /bin/busybox sleep 2; done
+fi
 if /bin/busybox grep -qw 'winlux.smoke=1' /proc/cmdline; then
     # An explicit diagnostic boot, only used with a disposable test disk.
     for attempt in $(/bin/busybox seq 1 20); do
