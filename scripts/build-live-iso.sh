@@ -625,11 +625,11 @@ if serial --unit=0 --speed=115200; then
     terminal_output serial console
 fi
 menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
-    linux /boot/vmlinuz console=ttyS0,115200n8 rdinit=/init panic=1 loglevel=4
+    linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4
     initrd /boot/winlux-initramfs.cpio.gz
 }
 function winlux_live {
-    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
     initrd /boot/winlux-initramfs.cpio.gz
 }
 menuentry "Winlux Desktop" {
