@@ -21,9 +21,10 @@ if os.geteuid() == 0:
     # Keep the temporary on the destination filesystem for atomic replacement.
     fd, temporary = tempfile.mkstemp(prefix=".saver-config-", dir=home)
     try:
-        with os.fdopen(fd, "wb") as stream: stream.write(configuration.read_bytes())
-        os.chmod(temporary, 0o600)
-        os.chown(temporary, account.pw_uid, account.pw_gid)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(configuration.read_bytes())
+            os.fchmod(stream.fileno(), 0o600)
+            os.fchown(stream.fileno(), account.pw_uid, account.pw_gid)
         os.replace(temporary, home / ".xscreensaver")
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
