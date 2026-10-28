@@ -264,6 +264,9 @@ static mut LAST_CLICK_X: i32 = -100;
 static mut LAST_CLICK_Y: i32 = -100;
 static mut ALT_TAB: bool = false;
 static mut ALT_TAB_INDEX: i32 = 0;
+pub static mut SHOW_RUN: bool = false;
+pub static mut RUN_TEXT: [u8; 256] = [0; 256];
+pub static mut RUN_LEN: usize = 0;
 /// Zone de travail (écran moins la barre des tâches) et bouton de barre des
 /// tâches de chaque application, cible de l'animation de réduction.
 pub static mut WORK: Rect = rect(0, 0, 1280, 672);
@@ -365,6 +368,12 @@ pub fn is_visible(app: usize) -> bool {
 }
 pub fn is_active(app: usize) -> bool {
     unsafe { ACTIVE == app }
+}
+pub fn is_minimized(app: usize) -> bool {
+    unsafe { WINS[app].minimized }
+}
+pub unsafe fn WINS_REF(app: usize) -> bool {
+    WINS[app].minimized
 }
 
 /// Vrai tant qu'une animation est en cours : la boucle principale repeint
@@ -838,6 +847,34 @@ pub unsafe fn draw(g: &mut Gfx) {
             i += 1;
         }
     }
+    if crate::wm::SHOW_RUN {
+        let p = pal();
+        let sw = 420;
+        let sh = 110;
+        let cx = (WORK.left + WORK.right - sw) / 2;
+        let cy = WORK.top + 60;
+        round_rect(g.hdc, g.b, cx, cy, cx + sw, cy + sh, 8, mix(p.border, p.accent, 2, 10));
+        round_rect(g.hdc, g.b, cx + 1, cy + 1, cx + sw - 1, cy + sh - 1, 7, p.surface);
+        text(g.hdc, g.f.caption, p.text, cx + 16, cy + 12, b"Ex\xE9cuter");
+        text(g.hdc, g.f.small, p.text3, cx + 16, cy + 42, b"Ouvrir :");
+        fill(g.hdc, g.b, cx + 16, cy + 64, cx + sw - 80, cy + 88, p.window);
+        fill(g.hdc, g.b, cx + 16, cy + 64, cx + sw - 80, cy + 65, p.border);
+        fill(g.hdc, g.b, cx + 16, cy + 87, cx + sw - 80, cy + 88, p.border);
+        fill(g.hdc, g.b, cx + 16, cy + 65, cx + 17, cy + 87, p.border);
+        fill(g.hdc, g.b, cx + sw - 81, cy + 65, cx + sw - 80, cy + 87, p.border);
+        if crate::wm::RUN_LEN > 0 {
+            let mut buf = [0u8; 260];
+            let mut j = 0;
+            while j < crate::wm::RUN_LEN && j < 255 {
+                buf[j] = crate::wm::RUN_TEXT[j];
+                j += 1;
+            }
+            buf[j] = 0;
+            text(g.hdc, g.f.body, p.text, cx + 22, cy + 70, &buf);
+        }
+        round_rect(g.hdc, g.b, cx + sw - 70, cy + 64, cx + sw - 16, cy + 88, 4, p.accent);
+        text(g.hdc, g.f.small, rgb(0xFF, 0xFF, 0xFF), cx + sw - 58, cy + 70, b"OK");
+    }
 }
 
 // ---------- Souris et clavier ----------
@@ -1157,6 +1194,40 @@ pub unsafe fn on_key(vk: u32, ch: u16) -> bool {
         }
     }
     if ALT_TAB {
+        return true;
+    }
+    if crate::wm::SHOW_RUN {
+        if vk == 0x1B || ch == 27 {
+            crate::wm::SHOW_RUN = false;
+            return true;
+        }
+        if ch == 8 {
+            if crate::wm::RUN_LEN > 0 {
+                crate::wm::RUN_LEN -= 1;
+                crate::wm::RUN_TEXT[crate::wm::RUN_LEN] = 0;
+            }
+            return true;
+        }
+        if ch == 13 || vk == 0x0D {
+            // try to run
+            crate::wm::SHOW_RUN = false;
+            let mut cmd = [0u16; 512];
+            let mut i = 0;
+            while i < crate::wm::RUN_LEN && i < 255 {
+                cmd[i] = crate::wm::RUN_TEXT[i] as u16;
+                i += 1;
+            }
+            cmd[i] = 0;
+            static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+            ShellExecuteW(core::ptr::null_mut(), OPEN.as_ptr(), cmd.as_ptr(), core::ptr::null(), core::ptr::null(), 1);
+            return true;
+        }
+        if ch >= 0x20 && ch < 0x7F && crate::wm::RUN_LEN < 255 {
+            crate::wm::RUN_TEXT[crate::wm::RUN_LEN] = ch as u8;
+            crate::wm::RUN_LEN += 1;
+            crate::wm::RUN_TEXT[crate::wm::RUN_LEN] = 0;
+            return true;
+        }
         return true;
     }
     if ACTIVE == usize::MAX {

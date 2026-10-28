@@ -34,7 +34,7 @@ static mut HOVER_BUTTON: i32 = -1;
 static mut HOVER_START_ITEM: i32 = -1;
 static mut ICON_X: [i32; 5] = [12, 12, 12, 108, 108];
 static mut ICON_Y: [i32; 5] = [12, 108, 204, 12, 108];
-static mut PINNED_APPS: u8 = 3;
+static mut PINNED_APPS: u8 = 7; // Explorer, Paramètres, Bloc-notes
 static mut DESKTOP_SHORTCUTS: u8 = 0;
 static mut CONTEXT_APP: Option<usize> = None;
 static mut CONTEXT_DESKTOP: Option<usize> = None;
@@ -56,6 +56,11 @@ static mut BOOT_STEP: u32 = 0;
 static mut BOOT_DONE: bool = false;
 static mut INTRO_START: u32 = 0;
 static mut LAST_FRAME: u32 = 0;
+static mut LAST_INPUT: u32 = 0;
+static mut SCREENSAVER: bool = false;
+static mut SAVER_SEED: u32 = 123456789;
+static mut SAVER_PIPES: [(i32,i32,i32,i32); 12] = [(0,0,0,0);12]; // x,y,dx,dy/color
+static mut SAVER_INIT: bool = false;
 /// Notification façon Windows 11, au-dessus de la zone de notification.
 static mut TOAST: [u8; 120] = [0; 120];
 static mut TOAST_LEN: usize = 0;
@@ -408,6 +413,8 @@ fn app_bit(app: usize) -> u8 {
 fn app_launch(app: usize) -> Launch {
     if app == wm::APP_EXPLORER {
         Launch::Explorer
+    } else if app == wm::APP_NOTEPAD {
+        Launch::Notepad
     } else {
         Launch::Settings
     }
@@ -417,7 +424,7 @@ fn taskbar_app(slot: i32) -> Option<usize> {
         return None;
     }
     let mut n = 0;
-    for app in [wm::APP_EXPLORER, wm::APP_SETTINGS] {
+    for app in [wm::APP_EXPLORER, wm::APP_NOTEPAD, wm::APP_SETTINGS] {
         if unsafe { PINNED_APPS & app_bit(app) != 0 } || wm::is_open(app) {
             n += 1;
             if slot == n {
@@ -428,7 +435,7 @@ fn taskbar_app(slot: i32) -> Option<usize> {
     None
 }
 fn taskbar_count() -> i32 {
-    1 + [wm::APP_EXPLORER, wm::APP_SETTINGS]
+    1 + [wm::APP_EXPLORER, wm::APP_NOTEPAD, wm::APP_SETTINGS]
         .iter()
         .filter(|&&app| unsafe { PINNED_APPS & app_bit(app) != 0 } || wm::is_open(app))
         .count() as i32
@@ -590,7 +597,8 @@ unsafe fn context_action(app: usize, desktop: Option<usize>, row: i32, persist: 
                 wm::open(wm::APP_SETTINGS);
             }
             3 => {
-                crate::settings::open_page(6);
+                crate::notepad::open_new();
+                wm::open(wm::APP_NOTEPAD);
             }
             _ => {}
         }
@@ -642,7 +650,7 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
             b"Ouvrir l'Explorateur",
             b"Ouvrir le terminal",
             b"Ouvrir les Param\xE8tres",
-            b"Mises \xE0 jour",
+            b"Ouvrir le Bloc-notes",
         ];
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
@@ -910,6 +918,7 @@ enum Launch {
     Updates,
     Terminal,
     Browser,
+    Notepad,
 }
 
 struct App {
@@ -917,7 +926,7 @@ struct App {
     glyph: Glyph,
     launch: Launch,
 }
-const PINNED: [App; 6] = [
+const PINNED: [App; 7] = [
     App {
         name: b"Explorer",
         glyph: Glyph::Folder,
@@ -927,6 +936,11 @@ const PINNED: [App; 6] = [
         name: b"Param\xE8tres",
         glyph: Glyph::Settings,
         launch: Launch::Settings,
+    },
+    App {
+        name: b"Bloc-notes",
+        glyph: Glyph::File,
+        launch: Launch::Notepad,
     },
     App {
         name: b"Mises \xE0 jour",
@@ -985,6 +999,10 @@ unsafe fn launch(what: Launch) {
             } else {
                 explorer::open_home()
             }
+        }
+        Launch::Notepad => {
+            crate::notepad::open_new();
+            wm::open(wm::APP_NOTEPAD);
         }
         Launch::Pc | Launch::Programs => explorer::open_pc(),
         Launch::Documents => explorer::open_documents(),
@@ -1686,6 +1704,22 @@ pub unsafe fn draw(hdc: Handle) {
     let mut b = Brushes::new();
     let f = Fonts::new();
     SetBkMode(hdc, 1);
+    if SCREENSAVER {
+        fill(hdc, &mut b, 0, 0, SCREEN_W, SCREEN_H, rgb(0x00, 0x00, 0x00));
+        for i in 0..12 {
+            let pipe = SAVER_PIPES[i];
+            let c = [rgb(0xFF,0,0), rgb(0,0xFF,0), rgb(0,0xFF,0xFF), rgb(0xFF,0,0xFF), rgb(0xFF,0xA5,0), rgb(0xA5,0,0xFF)][i%6];
+            fill(hdc, &mut b, pipe.0, pipe.1, pipe.0+10, pipe.1+10, c);
+            for j in 0..8 {
+                fill(hdc, &mut b, pipe.0 - j*3, pipe.1+2, pipe.0 - j*3 + 6, pipe.1+8, c);
+                fill(hdc, &mut b, pipe.0+2, pipe.1 - j*3, pipe.0+8, pipe.1 - j*3 + 6, c);
+            }
+        }
+        text(hdc, f.small, rgb(0x60,0x60,0x60), 12, SCREEN_H - 28, b"\xC9cran de veille");
+        f.release();
+        b.release();
+        return;
+    }
     if !BOOT_DONE {
         boot_splash(hdc, &mut b, &f, &l);
     } else {
@@ -1725,6 +1759,28 @@ pub unsafe fn draw(hdc: Handle) {
 /// Appelé à chaque tour de la boucle de messages : fait avancer le
 /// démarrage et repeint à ~60 images/s tant qu'une animation est en cours.
 pub unsafe fn frame(hwnd: Handle) {
+    if SCREENSAVER {
+        if !SAVER_INIT {
+            SAVER_INIT = true;
+            for i in 0..12 {
+                SAVER_PIPES[i] = (((i as i32) * 137 % (SCREEN_W/8)) * 8, ((i as i32) * 251 % (SCREEN_H/8)) * 8, if i%2==0 {8} else {-8}, if i%3==0 {8} else {-8});
+            }
+        }
+        // update
+        for i in 0..12 {
+            let mut p = SAVER_PIPES[i];
+            p.0 += p.2;
+            p.1 += p.3;
+            if p.0 < 0 || p.0 >= SCREEN_W { p.2 = -p.2; }
+            if p.1 < 40 || p.1 >= SCREEN_H - 48 { p.3 = -p.3; }
+            SAVER_PIPES[i] = p;
+        }
+        if since(LAST_FRAME) >= 15 {
+            LAST_FRAME = now();
+            InvalidateRect(hwnd, core::ptr::null(), 0);
+        }
+        return;
+    }
     if !BOOT_DONE {
         // Une étape de préchargement par image, sans bloquer l'animation.
         match BOOT_STEP {
@@ -1756,6 +1812,10 @@ pub unsafe fn frame(hwnd: Handle) {
 /// Appelé deux fois par seconde : suit la résolution de l'écran, rafraîchit
 /// l'horloge à chaque nouvelle minute et les champs de saisie qui clignotent.
 pub unsafe fn tick(hwnd: Handle) {
+    if SCREENSAVER {
+        InvalidateRect(hwnd, core::ptr::null(), 0);
+        return;
+    }
     let (w, h) = (GetSystemMetrics(0).max(640), GetSystemMetrics(1).max(400));
     if w != SCREEN_W || h != SCREEN_H {
         SCREEN_W = w;
@@ -1785,6 +1845,13 @@ unsafe fn repaint(hwnd: Handle) {
 }
 
 pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
+    if SCREENSAVER {
+        SCREENSAVER = false;
+        LAST_INPUT = now();
+        repaint(hwnd);
+        return;
+    }
+    LAST_INPUT = now();
     if !BOOT_DONE {
         return;
     }
@@ -1921,6 +1988,13 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
 }
 
 pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
+    if SCREENSAVER {
+        SCREENSAVER = false;
+        LAST_INPUT = now();
+        repaint(hwnd);
+        return;
+    }
+    LAST_INPUT = now();
     if !BOOT_DONE {
         return;
     }
@@ -1975,6 +2049,13 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
 }
 
 pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
+    if SCREENSAVER {
+        SCREENSAVER = false;
+        LAST_INPUT = now();
+        repaint(hwnd);
+        return;
+    }
+    LAST_INPUT = now();
     if CONTEXT_APP.is_some() {
         return;
     }
@@ -1991,6 +2072,13 @@ pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
 
 /// Molette (`delta` en multiples de 120), clic droit ou milieu.
 pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
+    if SCREENSAVER {
+        SCREENSAVER = false;
+        LAST_INPUT = now();
+        repaint(hwnd);
+        return;
+    }
+    LAST_INPUT = now();
     if wm::native_session() && ev == Mouse::RightDown {
         ShellExecuteA(
             core::ptr::null_mut(),
@@ -2073,6 +2161,77 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
 /// Clavier : touche Windows pour le menu Démarrer, Échap pour le fermer,
 /// le reste va à la fenêtre active.
 pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
+    if SCREENSAVER {
+        SCREENSAVER = false;
+        LAST_INPUT = now();
+        repaint(hwnd);
+        return;
+    }
+    LAST_INPUT = now();
+    // Win+R
+    if ch == 0 && vk == 0x52 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        if win {
+            wm::SHOW_RUN = true;
+            unsafe {
+                crate::wm::RUN_TEXT = [0; 256];
+                crate::wm::RUN_LEN = 0;
+            }
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Win+E
+    if ch == 0 && vk == 0x45 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        if win {
+            explorer::open_pc();
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Win+D
+    if ch == 0 && vk == 0x44 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        if win {
+            for app in 0..wm::APP_COUNT {
+                if wm::is_open(app) && !wm::is_visible(app) { /* already minimized */ }
+            }
+            // toggle - minimize all visible windows or restore
+            let mut any_visible = false;
+            unsafe {
+                for app in 0..wm::APP_COUNT {
+                    if wm::is_open(app) && !wm::is_minimized(app) { any_visible = true; }
+                }
+            }
+            if any_visible {
+                for app in 0..wm::APP_COUNT {
+                    if wm::is_open(app) && !wm::is_minimized(app) { wm::minimize(app); }
+                }
+            } else {
+                for app in 0..wm::APP_COUNT {
+                    if wm::is_open(app) { wm::open(app); }
+                }
+            }
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Alt+F4
+    if ch == 0 && vk == 0x73 {
+        let alt = ((GetKeyState(0x12) as u16) & 0x8000) != 0;
+        if alt {
+            for app in 0..wm::APP_COUNT {
+                if wm::is_open(app) && wm::is_active(app) {
+                    wm::close(app);
+                    repaint(hwnd);
+                    return;
+                }
+            }
+            repaint(hwnd);
+            return;
+        }
+    }
     if !BOOT_DONE {
         return;
     }
