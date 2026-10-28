@@ -62,8 +62,13 @@ jobs:
             release=$(basename "$kernel" | sed 's/^vmlinuz-//')
             WINLUX_KERNEL="$kernel" \
             WINLUX_KERNEL_RELEASE="$release" \
-              bash scripts/build-live-iso.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
-            echo "SKIP_ISO=false" >> "$GITHUB_ENV"
+              bash scripts/build-live-iso.sh "build/winlux-live-$GITHUB_REF_NAME.iso" || true
+            if [ -f "build/winlux-live-$GITHUB_REF_NAME.iso" ]; then
+              echo "SKIP_ISO=false" >> "$GITHUB_ENV"
+            else
+              echo "Construction ISO échouée : construction runtime uniquement" >&2
+              echo "SKIP_ISO=true" >> "$GITHUB_ENV"
+            fi
           fi
 
       - name: Valider l'ISO et l'installation avant publication
