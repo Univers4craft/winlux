@@ -1713,7 +1713,7 @@ pub unsafe fn tick(_f: &Frame) -> bool {
 
 pub unsafe fn regression_checks() {
     let saved = (STATUS, PAGE);
-    PAGE = 6;
+    PAGE = 7;
     STATUS = EMPTY;
     let status = b"update_action=reboot\nupdate_busy=0\n";
     STATUS.bytes[..status.len()].copy_from_slice(status);
@@ -1729,7 +1729,7 @@ pub unsafe fn regression_checks() {
         restart_required() && hit(&f, r.right - 10, r.top + 10) == 0,
         "Mise a jour terminee : le bouton Redemarrer occupe toute la ligne"
     );
-    let hidden = button_rect(&c, 1, 1);
+    let hidden = button_rect(&c, 1, 2);
     check!(
         hit(&f, hidden.left + 5, hidden.top + 5) == -1,
         "Les anciens boutons de recherche et reinstallation ne restent pas cliquables"
