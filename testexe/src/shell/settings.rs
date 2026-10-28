@@ -1197,64 +1197,22 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     g,
                     &c,
                     44,
-                    b"Protection et mises \xE0 jour du syst\xE8me",
+                    b"Mises \xE0 jour Winlux",
                     if value(b"update_auto") == b"enabled" {
-                        b"Recherche automatique activ\xE9e - sans red\xE9marrage impos\xE9."
+                        b"Recherche automatique activ\xE9e."
                     } else {
-                        b"Installation sur demande - vos donn\xE9es sont conserv\xE9es."
+                        b"Installation sur demande."
                     },
                 );
             }
             button(g, &c, 0, 0, b"Rechercher", 0);
-            button(
-                g,
-                &c,
-                0,
-                1,
-                if restart == b"reboot" {
-                    b"Red\xE9marrer maintenant"
-                } else {
-                    b"Tout installer"
-                },
-                1,
-            );
+            button(g, &c, 0, 1, b"Tout installer", 1);
             button(g, &c, 0, 2, b"Restaurer", 2);
-            button(
-                g,
-                &c,
-                1,
-                0,
-                if value(b"update_auto") == b"enabled" {
-                    b"D\xE9sactiver auto"
-                } else {
-                    b"Activer auto"
-                },
-                3,
-            );
-            button(
-                g,
-                &c,
-                1,
-                1,
-                if SHOW_LOG {
-                    b"Voir les modifications"
-                } else {
-                    b"Afficher le journal"
-                },
-                4,
-            );
-            button(
-                g,
-                &c,
-                1,
-                2,
-                if value(b"update_action") == b"reboot" {
-                    b"Red\xE9marrer l'OS"
-                } else {
-                    b"Relancer le bureau"
-                },
-                5,
-            );
+            button(g, &c, 1, 0, if value(b"update_auto") == b"enabled" { b"D\xE9sactiver auto" } else { b"Activer auto" }, 3);
+            button(g, &c, 1, 1, if SHOW_LOG { b"Masquer" } else { b"Journal" }, 4);
+            if restart == b"reboot" {
+                button(g, &c, 1, 2, b"Red\xE9marrer", 5);
+            }
             text(
                 g.hdc,
                 g.f.semibold,
