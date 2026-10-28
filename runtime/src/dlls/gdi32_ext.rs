@@ -59,21 +59,27 @@ pub(crate) struct TextMetricW {
     char_set: u8,
 }
 
-fn font_metrics(hdc: usize) -> (i32, i32, i32, i32, i32, bool, bool, bool) {
+fn font_metrics(hdc: usize) -> (i32, i32, i32, i32, i32, i32, i32, bool, bool, bool) {
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
     let h = if font.height != 0 {
         font.height.abs()
     } else {
         16
     };
-    let ascent = h * 80 / 100;
-    let descent = h - ascent;
-    let avg_w = h * 45 / 100;
+    // Métriques plus précises basées sur les polices Windows courantes
+    let ascent = (h * 73) / 100; // ~73% de la hauteur est l'ascent
+    let descent = h - ascent; // ~27% pour le descent
+    let internal_leading = (h * 5) / 100; // espace interne pour accents
+    let external_leading = (h * 12) / 100; // interligne
+    let avg_w = (h * 47) / 100; // largeur moyenne ~47% de la hauteur
+    let _max_w = avg_w * 2; // largeur max pour caractères larges (W, M)
     let weight = font.weight;
     (
         h,
         ascent,
         descent,
+        internal_leading,
+        external_leading,
         avg_w,
         weight,
         font.italic,
@@ -86,15 +92,26 @@ pub unsafe extern "win64" fn get_text_metrics_a(hdc: usize, out: *mut TextMetric
     if out.is_null() || gui::dc_window(hdc).is_none() {
         return 0;
     }
-    let (h, ascent, descent, avg_w, weight, italic, underline, strikeout) = font_metrics(hdc);
+    let (
+        h,
+        ascent,
+        descent,
+        internal_leading,
+        external_leading,
+        avg_w,
+        weight,
+        italic,
+        underline,
+        strikeout,
+    ) = font_metrics(hdc);
     std::ptr::write(
         out,
         TextMetricA {
             height: h,
             ascent,
             descent,
-            internal_leading: 0,
-            external_leading: 0,
+            internal_leading,
+            external_leading,
             ave_char_width: avg_w,
             max_char_width: avg_w * 2,
             weight,
@@ -119,15 +136,26 @@ pub unsafe extern "win64" fn get_text_metrics_w(hdc: usize, out: *mut TextMetric
     if out.is_null() || gui::dc_window(hdc).is_none() {
         return 0;
     }
-    let (h, ascent, descent, avg_w, weight, italic, underline, strikeout) = font_metrics(hdc);
+    let (
+        h,
+        ascent,
+        descent,
+        internal_leading,
+        external_leading,
+        avg_w,
+        weight,
+        italic,
+        underline,
+        strikeout,
+    ) = font_metrics(hdc);
     std::ptr::write(
         out,
         TextMetricW {
             height: h,
             ascent,
             descent,
-            internal_leading: 0,
-            external_leading: 0,
+            internal_leading,
+            external_leading,
             ave_char_width: avg_w,
             max_char_width: avg_w * 2,
             weight,

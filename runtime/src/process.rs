@@ -76,6 +76,37 @@ pub fn last_error() -> u32 {
     unsafe { *((t + TEB_LAST_ERROR) as *const u32) }
 }
 
+/// Per-thread minimal TEB for ABI regression tests. Restore GS before freeing
+/// its backing memory, including when an assertion unwinds.
+#[cfg(test)]
+pub struct TestTeb {
+    previous: usize,
+    _bytes: Box<[u8; 4096]>,
+}
+#[cfg(test)]
+impl Drop for TestTeb {
+    fn drop(&mut self) {
+        assert_eq!(
+            unsafe { libc::syscall(libc::SYS_arch_prctl, 0x1001, self.previous) },
+            0
+        );
+    }
+}
+#[cfg(test)]
+pub fn test_teb() -> TestTeb {
+    let previous = teb();
+    let mut bytes = Box::new([0u8; 4096]);
+    let base = bytes.as_mut_ptr() as usize;
+    unsafe {
+        *((base + 0x30) as *mut usize) = base;
+        assert_eq!(libc::syscall(libc::SYS_arch_prctl, 0x1001, base), 0);
+    }
+    TestTeb {
+        previous,
+        _bytes: bytes,
+    }
+}
+
 fn alloc_zeroed(size: usize) -> usize {
     unsafe {
         let p = libc::mmap(
@@ -372,7 +403,7 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
     if let Some(entry) = m.entry() {
         let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
             unsafe { std::mem::transmute(entry) };
-        if dllmain(m.base, DLL_PROCESS_ATTACH, 1) == 0 {
+        if dllmain(m.base, DLL_PROCESS_ATTACH, 0) == 0 {
             return false;
         }
     }
@@ -387,7 +418,7 @@ pub fn thread_attach_current() {
         if let Some(e) = m.entry() {
             let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
                 unsafe { std::mem::transmute(e) };
-            let _ = dllmain(m.base, DLL_THREAD_ATTACH, 1);
+            let _ = dllmain(m.base, DLL_THREAD_ATTACH, 0);
         }
     }
 }
@@ -399,7 +430,7 @@ pub fn thread_detach_current() {
         if let Some(e) = m.entry() {
             let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
                 unsafe { std::mem::transmute(e) };
-            let _ = dllmain(m.base, DLL_THREAD_DETACH, 1);
+            let _ = dllmain(m.base, DLL_THREAD_DETACH, 0);
         }
     }
 }
@@ -420,7 +451,11 @@ fn start(exe: Module) -> u32 {
             let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
                 unsafe { std::mem::transmute(e) };
             if dllmain(m.base, DLL_PROCESS_ATTACH, 1) == 0 {
-                eprintln!("winlux: l'initialisation de {} a échoué", m.name);
+                eprintln!(
+                    "winlux: l'initialisation de {} a échoué (LastError={})",
+                    m.name,
+                    last_error()
+                );
                 return 0xC000_0142;
             }
         }

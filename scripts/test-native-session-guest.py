@@ -1,6 +1,8 @@
 #!/usr/bin/python3
 """Real mixed Linux/PE window lifecycle and screensaver, in a disposable guest."""
 import os
+import json
+import signal
 from pathlib import Path
 import re
 import subprocess
@@ -140,14 +142,40 @@ print("WINLUX_NATIVE_TASKBAR_AND_MENU=0", flush=True)
 # Optional vendor executable, injected only into the disposable diagnostic disk.
 # No proprietary application is copied into the released OS image.
 external = Path("/opt/winlux-test/ChatGPT.exe")
-if external.is_file():
+name = Path("/opt/winlux-test/executable-name.txt")
+if name.is_file():
+    value = name.read_text().strip()
+    assert Path(value).name == value and value not in (".", "..")
+    external = external.parent / value
+cases = [("external", external)] if external.is_file() else []
+for label, filename in [("chatgpt", "ChatGPT.exe"), ("claude", "claude.exe")]:
+    application = Path("/opt/winlux-vendor") / label / filename
+    if application.is_file(): cases.append((label, application))
+reports = []
+for label, application in cases:
+    started = time.monotonic()
+    process = subprocess.Popen(["winlux", str(application)], cwd=application.parent,
+                               env=dict(os.environ, WINLUX_TRACE="1"),
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, errors="replace", start_new_session=True)
+    timed_out = False
     try:
-        attempt = subprocess.run(["winlux", str(external)], capture_output=True, text=True, timeout=20)
-        report = f"exit={attempt.returncode}\n{attempt.stdout}\n{attempt.stderr}"
-    except subprocess.TimeoutExpired as error:
-        report = f"timeout=20\n{error.stdout!r}\n{error.stderr!r}"
+        stdout, stderr = process.communicate(timeout=20)
+    except subprocess.TimeoutExpired:
+        timed_out = True
+        capture("native-vendor-" + label)
+        os.killpg(process.pid, signal.SIGKILL)
+        stdout, stderr = process.communicate(timeout=5)
+    else:
+        capture("native-vendor-" + label)
+    report = f"exit={process.returncode}\ntimeout={timed_out}\n{stdout}\n{stderr}"
     Path("/var/lib/winlux/chatgpt-result.txt").write_text(report)
-    print("WINLUX_CHATGPT_DIAGNOSTIC=" + report, flush=True)
+    Path("/var/lib/winlux/vendor-result.txt").write_text(f"application={application.name}\n{report}")
+    record = dict(application=application.name, path=str(application), exit_code=process.returncode,
+                  timed_out=timed_out, seconds=round(time.monotonic() - started, 2), stdout=stdout, stderr=stderr)
+    reports.append(record)
+    print("WINLUX_VENDOR_DIAGNOSTIC=" + json.dumps(record, ensure_ascii=False), flush=True)
+if reports: Path("/var/lib/winlux/vendor-results.json").write_text(json.dumps(reports, ensure_ascii=False, indent=2))
 
 run("xscreensaver-command", "-activate")
 time.sleep(3)

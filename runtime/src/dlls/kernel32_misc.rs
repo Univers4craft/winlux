@@ -11,6 +11,48 @@ const STD_OUTPUT: usize = (-11isize) as usize;
 const STD_ERROR: usize = (-12isize) as usize;
 const STD_INPUT: usize = (-10isize) as usize;
 
+static ERROR_MODE: AtomicU32 = AtomicU32::new(0);
+thread_local! { static THREAD_ERROR_MODE: std::cell::Cell<Option<u32>> = const { std::cell::Cell::new(None) }; }
+pub extern "win64" fn get_error_mode() -> u32 {
+    ERROR_MODE.load(Ordering::SeqCst)
+}
+pub extern "win64" fn set_error_mode(mode: u32) -> u32 {
+    // SEM_NOALIGNMENTFAULTEXCEPT is sticky for the lifetime of the process.
+    ERROR_MODE
+        .try_update(Ordering::SeqCst, Ordering::SeqCst, |previous| {
+            Some(mode | (previous & 4))
+        })
+        .unwrap()
+}
+pub extern "win64" fn get_thread_error_mode() -> u32 {
+    THREAD_ERROR_MODE.with(|value| value.get().unwrap_or_else(|| get_error_mode()))
+}
+pub unsafe extern "win64" fn set_thread_error_mode(mode: u32, previous: *mut u32) -> i32 {
+    if mode & !(1 | 2 | 0x8000) != 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    if !previous.is_null() {
+        *previous = get_thread_error_mode();
+    }
+    THREAD_ERROR_MODE.with(|value| value.set(Some(mode)));
+    1
+}
+pub unsafe extern "win64" fn wer_get_flags(_process: usize, flags: *mut u32) -> i32 {
+    if flags.is_null() {
+        return 0x80004003u32 as i32;
+    }
+    *flags = 0;
+    // There is no Windows Error Reporting service. Let optional callers handle
+    // an explicit unsupported HRESULT instead of pretending reports are sent.
+    crate::trace!("WerGetFlags: service WER non disponible");
+    0x80004001u32 as i32
+}
+pub extern "win64" fn wer_set_flags(_flags: u32) -> i32 {
+    crate::trace!("WerSetFlags: service WER non disponible, journal local conservé");
+    0x80004001u32 as i32
+}
+
 fn is_console(h: usize) -> bool {
     h == STD_OUTPUT || h == STD_ERROR || h == STD_INPUT
 }
@@ -562,6 +604,9 @@ pub extern "win64" fn get_user_default_ui_language() -> u16 {
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "GetErrorMode" => fn get_error_mode, "SetErrorMode" => fn set_error_mode,
+        "GetThreadErrorMode" => fn get_thread_error_mode, "SetThreadErrorMode" => fn set_thread_error_mode,
+        "WerGetFlags" => fn wer_get_flags, "WerSetFlags" => fn wer_set_flags,
         "WriteConsoleA" => fn write_console_a, "GetConsoleMode" => fn get_console_mode, "SetConsoleMode" => fn set_console_mode,
         "GetConsoleCP" => fn get_console_cp, "GetConsoleOutputCP" => fn get_console_output_cp,
         "SetConsoleCP" => fn set_console_cp, "SetConsoleOutputCP" => fn set_console_output_cp,
@@ -591,6 +636,35 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn error_mode_has_process_state_sticky_alignment_and_thread_isolation() {
+        struct Restore(u32);
+        impl Drop for Restore {
+            fn drop(&mut self) {
+                ERROR_MODE.store(self.0, Ordering::SeqCst);
+            }
+        }
+        let _restore = Restore(get_error_mode());
+        set_error_mode(1);
+        assert_eq!(set_error_mode(5), 1);
+        assert_eq!(set_error_mode(0), 5);
+        assert_eq!(get_error_mode(), 4);
+        let previous_thread = THREAD_ERROR_MODE.with(|mode| mode.replace(None));
+        let mut previous = 99;
+        assert_eq!(unsafe { set_thread_error_mode(2, &mut previous) }, 1);
+        assert_eq!(previous, 4);
+        assert_eq!(get_thread_error_mode(), 2);
+        assert_eq!(
+            std::thread::spawn(|| get_thread_error_mode())
+                .join()
+                .unwrap(),
+            4
+        );
+        assert_eq!(unsafe { set_thread_error_mode(4, std::ptr::null_mut()) }, 0);
+        assert_eq!(get_thread_error_mode(), 2);
+        THREAD_ERROR_MODE.with(|mode| mode.set(previous_thread));
+    }
 
     #[test]
     fn bloc_d_environnement_double_zero() {

@@ -6,8 +6,26 @@ use crate::dlls;
 use crate::pe::*;
 use crate::thunks;
 use crate::trace;
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
+
+thread_local! {
+    static DLL_SEARCH: RefCell<Option<Vec<PathBuf>>> = const { RefCell::new(None) };
+}
+
+/// Restrict a dynamic load and its dependency loads without changing the
+/// process CWD/PATH or leaking search options to unrelated threads.
+pub fn with_dll_search<T>(directories: Vec<PathBuf>, operation: impl FnOnce() -> T) -> T {
+    struct Restore(Option<Vec<PathBuf>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            DLL_SEARCH.with(|slot| *slot.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(DLL_SEARCH.with(|slot| slot.replace(Some(directories))));
+    operation()
+}
 
 const PAGE: usize = 4096;
 
@@ -167,7 +185,7 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
         .unwrap_or_default();
     let mut m = Module {
         name,
-        path: path.to_path_buf(),
+        path: std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf()),
         base,
         size,
         pe,
@@ -300,15 +318,32 @@ fn resolve_one(dll: &str, want: &Want, importer: &Module) -> Result<usize, Strin
 }
 
 pub fn find_dll_file(dll: &str, importer: &Path) -> Option<PathBuf> {
+    if dll.contains(['/', '\\']) || dll.as_bytes().get(1) == Some(&b':') {
+        let path = crate::paths::to_linux(dll);
+        if path.is_file() {
+            return Some(path);
+        }
+        if path.extension().is_none() {
+            let path = crate::paths::to_linux(&format!("{dll}.dll"));
+            if path.is_file() {
+                return Some(path);
+            }
+        }
+        return None;
+    }
     let mut dirs: Vec<PathBuf> = vec![];
-    if let Some(d) = importer.parent() {
-        dirs.push(d.to_path_buf());
-    }
-    if let Ok(c) = std::env::current_dir() {
-        dirs.push(c);
-    }
-    if let Some(path) = std::env::var_os("PATH") {
-        dirs.extend(std::env::split_paths(&path));
+    if let Some(scoped) = DLL_SEARCH.with(|slot| slot.borrow().clone()) {
+        dirs = scoped;
+    } else {
+        if let Some(d) = importer.parent() {
+            dirs.push(d.to_path_buf());
+        }
+        if let Ok(c) = std::env::current_dir() {
+            dirs.push(c);
+        }
+        if let Some(path) = std::env::var_os("PATH") {
+            dirs.extend(std::env::split_paths(&path));
+        }
     }
     let want = dll.to_ascii_lowercase();
     let want_dll = if want.ends_with(".dll") {
@@ -347,11 +382,20 @@ fn resolve_imports(m: &Module) -> Result<(), String> {
             o = o.checked_add(20).ok_or("table des imports trop grande")?;
         }
     }
-    // Imports différés : on les résout tout de suite, c'est plus simple et sans effet visible.
+    // A linker-generated delay thunk calls the PE's __delayLoadHelper2 on first
+    // use. Do not replace it or eagerly load optional DLLs: the application may
+    // never need them, or may implement its own failure/fallback hooks.
     let d = m.pe.dir(DIR_DELAY_IMPORT);
     if d.rva != 0 {
         let mut o = d.rva as usize;
+        let end = o
+            .checked_add(d.size as usize)
+            .filter(|end| *end <= m.size)
+            .ok_or("répertoire d'imports différés hors de l'image")?;
         loop {
+            if o.checked_add(32).is_none_or(|next| next > end) {
+                return Err("descripteur d'import différé tronqué".into());
+            }
             let attrs = rd32(b, o).ok_or("imports différés tronqués")?;
             let name = rd32(b, o + 4).ok_or("imports différés tronqués")?;
             let hmod = rd32(b, o + 8).ok_or("imports différés tronqués")?;
@@ -360,17 +404,63 @@ fn resolve_imports(m: &Module) -> Result<(), String> {
             if name == 0 && iat == 0 && int == 0 {
                 break;
             }
+            if attrs & !1 != 0 {
+                return Err("attributs d'import différé invalides".into());
+            }
             let name = delay_rva(m, attrs, name)?;
             let hmod = delay_rva(m, attrs, hmod)?;
             let iat = delay_rva(m, attrs, iat)?;
             let int = delay_rva(m, attrs, int)?;
             let dll = m.cstr_at(name as u32).ok_or("nom de DLL illisible")?;
-            fill_thunks(m, &dll, int, iat)?;
-            if hmod != 0 {
-                unsafe {
-                    *((m.base + hmod) as *mut usize) = dlls::module_handle(&dll).unwrap_or(1)
-                };
+            if name == 0 || iat == 0 || int == 0 || dll.is_empty() {
+                return Err("table d'import différé invalide".into());
             }
+            if hmod != 0 && hmod.checked_add(8).is_none_or(|end| end > m.size) {
+                return Err("handle d'import différé hors de l'image".into());
+            }
+            let bound = delay_rva(
+                m,
+                attrs,
+                rd32(b, o + 20).ok_or("imports différés tronqués")?,
+            )?;
+            let unload = delay_rva(
+                m,
+                attrs,
+                rd32(b, o + 24).ok_or("imports différés tronqués")?,
+            )?;
+            let mut index = 0usize;
+            loop {
+                let offset = index.checked_mul(8).ok_or("table différée trop grande")?;
+                let source = int
+                    .checked_add(offset)
+                    .ok_or("table différée trop grande")?;
+                let target = iat
+                    .checked_add(offset)
+                    .ok_or("table différée trop grande")?;
+                let value = rd64(b, source).ok_or("INT différée tronquée")?;
+                rd64(b, target).ok_or("IAT différée tronquée")?;
+                for table in [bound, unload].into_iter().filter(|table| *table != 0) {
+                    rd64(
+                        b,
+                        table
+                            .checked_add(offset)
+                            .ok_or("table différée trop grande")?,
+                    )
+                    .ok_or("table auxiliaire différée tronquée")?;
+                }
+                if value == 0 {
+                    break;
+                }
+                if value & (1 << 63) == 0 {
+                    let rva = u32::try_from(value)
+                        .ok()
+                        .and_then(|value| value.checked_add(2))
+                        .ok_or("nom d'import différé invalide")?;
+                    m.cstr_at(rva).ok_or("nom d'import différé illisible")?;
+                }
+                index += 1;
+            }
+            trace!("{dll} : {index} import(s) différé(s), thunks du programme conservés");
             o = o
                 .checked_add(32)
                 .ok_or("table des imports différés trop grande")?;
@@ -551,6 +641,48 @@ pub fn mark_initialized(base: usize) -> bool {
 mod tests {
     use super::*;
 
+    #[test]
+    fn restricted_dll_search_does_not_fall_back_and_restores_scope() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        let root =
+            std::env::temp_dir().join(format!("winlux-dll-search-{}-{unique}", std::process::id()));
+        let allowed = root.join("allowed");
+        let outside = root.join("outside");
+        std::fs::create_dir_all(&allowed).unwrap();
+        std::fs::create_dir_all(&outside).unwrap();
+        let filename = format!("winlux-search-{unique}.dll");
+        let module = outside.join(&filename);
+        std::fs::write(&module, b"lookup-only fixture, never executed").unwrap();
+        let importer = outside.join("application.exe");
+        with_dll_search(vec![allowed.clone()], || {
+            assert!(find_dll_file(&filename, &importer).is_none());
+            with_dll_search(vec![outside.clone()], || {
+                assert_eq!(
+                    find_dll_file(&filename.to_uppercase(), &importer),
+                    Some(module.clone())
+                );
+            });
+            assert!(find_dll_file(&filename, &importer).is_none());
+            let (name, importer) = (filename.clone(), importer.clone());
+            assert_eq!(
+                std::thread::spawn(move || find_dll_file(&name, &importer))
+                    .join()
+                    .unwrap(),
+                Some(module.clone())
+            );
+        });
+        assert_eq!(find_dll_file(&filename, &importer), Some(module.clone()));
+        let absolute = crate::paths::to_windows(&module);
+        assert_eq!(find_dll_file(&absolute, &importer), Some(module));
+        assert!(
+            find_dll_file(&format!("Z:\\missing-winlux-folder\\{filename}"), &importer).is_none()
+        );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
     fn put32(b: &mut [u8], o: usize, v: u32) {
         b[o..o + 4].copy_from_slice(&v.to_le_bytes());
     }
@@ -635,15 +767,15 @@ mod tests {
     }
 
     #[test]
-    fn relie_un_import_differe_dans_une_image_synthetique() {
+    fn preserve_le_thunk_differe_sans_charger_une_dll_optionnelle_absente() {
         let mut image = vec![0u8; 0x400];
         put32(&mut image, 0x100, 1); // grAttrs : tous les champs sont des RVA
         put32(&mut image, 0x104, 0x180); // nom de DLL
         put32(&mut image, 0x108, 0x1c0); // HMODULE
         put32(&mut image, 0x10c, 0x1a0); // IAT
         put32(&mut image, 0x110, 0x1b0); // INT
-        image[0x180..0x18d].copy_from_slice(b"kernel32.dll\0");
-        put32(&mut image, 0x1b0, 0x1ce); // RVA du hint/name moins 2
+        image[0x180..0x193].copy_from_slice(b"winlux_missing.dll\0");
+        put32(&mut image, 0x1b0, 0x1d0); // hint/name RVA
         image[0x1d0..0x1d2].copy_from_slice(&0u16.to_le_bytes());
         image[0x1d2..0x1df].copy_from_slice(b"GetTickCount\0");
         let mut dirs = vec![DataDir::default(); 16];
@@ -651,6 +783,8 @@ mod tests {
             rva: 0x100,
             size: 0x40,
         };
+        let thunk = image.as_ptr() as usize + 0x250;
+        image[0x1a0..0x1a8].copy_from_slice(&(thunk as u64).to_le_bytes());
         let m = Module {
             name: "delay.exe".into(),
             path: "delay.exe".into(),
@@ -675,7 +809,7 @@ mod tests {
             refcount: 1,
         };
         resolve_imports(&m).unwrap();
-        assert_ne!(unsafe { *(m.base as *const usize).add(0x1a0 / 8) }, 0);
-        assert_ne!(unsafe { *(m.base as *const usize).add(0x1c0 / 8) }, 0);
+        assert_eq!(unsafe { *(m.base as *const usize).add(0x1a0 / 8) }, thunk);
+        assert_eq!(unsafe { *(m.base as *const usize).add(0x1c0 / 8) }, 0);
     }
 }

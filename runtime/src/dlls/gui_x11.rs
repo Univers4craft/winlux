@@ -1921,6 +1921,12 @@ fn x11_function(rop: gui::RasterOp) -> x11rb::protocol::xproto::GX {
         gui::RasterOp::CopyInverted => GX::COPY_INVERTED,
         gui::RasterOp::Clear => GX::CLEAR,
         gui::RasterOp::Set => GX::SET,
+        gui::RasterOp::SrcErase => GX::AND_INVERTED, // (NOT source) AND destination
+        gui::RasterOp::NotSrcErase => GX::NOR,       // NOT (source OR destination)
+        gui::RasterOp::MergePaint => GX::OR_INVERTED, // (NOT source) OR destination
+        gui::RasterOp::PatCopy => GX::COPY,          // pattern copié
+        gui::RasterOp::PatPaint => GX::OR,           // approximation
+        gui::RasterOp::DstCopy => GX::COPY,          // destination copié
     }
 }
 

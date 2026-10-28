@@ -736,6 +736,12 @@ pub enum RasterOp {
     CopyInverted,
     Clear,
     Set,
+    SrcErase,    // (NOT source) AND destination
+    NotSrcErase, // NOT (source OR destination)
+    MergePaint,  // (NOT source) OR destination
+    PatCopy,     // pattern
+    PatPaint,    // DPSnoo
+    DstCopy,     // destination
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1526,6 +1532,12 @@ fn raster_color(source: u32, destination: u32, rop: RasterOp) -> u32 {
         RasterOp::CopyInverted => !source & RGB_MASK,
         RasterOp::Clear => 0,
         RasterOp::Set => RGB_MASK,
+        RasterOp::SrcErase => (!source & RGB_MASK) & destination,
+        RasterOp::NotSrcErase => !(source | destination) & RGB_MASK,
+        RasterOp::MergePaint => (!source & RGB_MASK) | destination,
+        RasterOp::PatCopy => source, // pattern copié tel quel
+        RasterOp::PatPaint => (source | (!destination & RGB_MASK)) & destination, // DPSnoo
+        RasterOp::DstCopy => destination,
     }
 }
 

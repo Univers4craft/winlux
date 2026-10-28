@@ -957,12 +957,44 @@ extern "C" {
 #[used]
 pub static _fltused: i32 = 0;
 
-// Fourni uniquement pour permettre à l'éditeur de liens de produire un
-// répertoire d'imports différés sans dépendre de delayimp.lib de Microsoft.
-// Winlux résout ces imports avant le point d'entrée.
+// Minimal real delay-load helper for the PE regressions, independent of the
+// Microsoft SDK's delayimp.lib. The loader must leave its linker thunks intact.
+static DELAY_LOAD_CALLS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
+pub fn delay_load_count() -> usize {
+    DELAY_LOAD_CALLS.load(core::sync::atomic::Ordering::SeqCst)
+}
 #[no_mangle]
-pub extern "C" fn __delayLoadHelper2(_: *const c_void, _: *mut c_void) -> *mut c_void {
-    core::ptr::null_mut()
+pub unsafe extern "system" fn __delayLoadHelper2(
+    descriptor: *const u32,
+    slot: *mut usize,
+) -> *const c_void {
+    DELAY_LOAD_CALLS.fetch_add(1, core::sync::atomic::Ordering::SeqCst);
+    if descriptor.is_null() || slot.is_null() || *descriptor != 1 {
+        ExitProcess(94);
+    }
+    let base = GetModuleHandleA(core::ptr::null()) as usize;
+    let handle_slot = (base + *descriptor.add(2) as usize) as *mut Handle;
+    let mut handle = *handle_slot;
+    if handle.is_null() {
+        handle = LoadLibraryA((base + *descriptor.add(1) as usize) as *const c_char);
+        if handle.is_null() {
+            ExitProcess(95);
+        }
+        *handle_slot = handle;
+    }
+    let index = (slot as usize - base - *descriptor.add(3) as usize) / 8;
+    let lookup = *((base + *descriptor.add(4) as usize + index * 8) as *const u64);
+    let name = if lookup & (1 << 63) != 0 {
+        (lookup & 0xffff) as usize as *const c_char
+    } else {
+        (base + lookup as usize + 2) as *const c_char
+    };
+    let address = GetProcAddress(handle, name);
+    if address.is_null() {
+        ExitProcess(96);
+    }
+    *slot = address as usize;
+    address
 }
 
 /// Écrit des octets bruts sur la sortie standard via WriteFile.

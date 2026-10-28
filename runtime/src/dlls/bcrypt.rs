@@ -1,5 +1,51 @@
 use std::ffi::c_void;
 
+/// BCryptPrimitives uses a SIZE_T length and a BOOL result, unlike BCrypt's
+/// ULONG length / NTSTATUS API. Never report success with uninitialized bytes.
+pub unsafe extern "win64" fn process_prng(buffer: *mut u8, size: usize) -> i32 {
+    if size == 0 {
+        return 1;
+    }
+    if buffer.is_null() || size > isize::MAX as usize {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let mut offset = 0;
+    while offset < size {
+        let count = libc::getrandom(
+            buffer.add(offset).cast(),
+            (size - offset).min(256 * 1024),
+            0,
+        );
+        if count > 0 {
+            offset += count as usize;
+            continue;
+        }
+        if count < 0 && *libc::__errno_location() == libc::EINTR {
+            continue;
+        }
+        // Older Linux kernels may not have getrandom. /dev/urandom is also a
+        // system CSPRNG; there is no predictable application RNG fallback.
+        let remaining = std::slice::from_raw_parts_mut(buffer.add(offset), size - offset);
+        if std::fs::File::open("/dev/urandom")
+            .and_then(|mut file| {
+                use std::io::Read;
+                file.read_exact(remaining)
+            })
+            .is_ok()
+        {
+            return 1;
+        }
+        crate::process::set_last_error(31);
+        return 0;
+    }
+    1
+}
+
+pub fn primitives_exports() -> crate::dlls::Exports {
+    crate::exports! { "ProcessPrng" => fn process_prng }
+}
+
 pub unsafe extern "win64" fn bcrypt_gen_random(
     _alg: usize,
     buf: *mut u8,
@@ -63,6 +109,23 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_prng_uses_size_t_and_rejects_invalid_buffers() {
+        let _teb = crate::process::test_teb();
+        let mut first = [0u8; 64];
+        let mut second = [0u8; 64];
+        unsafe {
+            assert_eq!(process_prng(first.as_mut_ptr(), first.len()), 1);
+            assert_eq!(process_prng(second.as_mut_ptr(), second.len()), 1);
+            assert_eq!(process_prng(std::ptr::null_mut(), 0), 1);
+            assert_eq!(process_prng(std::ptr::null_mut(), 1), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            assert_eq!(process_prng(first.as_mut_ptr(), usize::MAX), 0);
+            assert_eq!(crate::process::last_error(), 87);
+        }
+        assert_ne!(first, second);
+    }
 
     #[test]
     fn provider_rng_lit_une_source_systeme_et_refuse_les_buffers_invalides() {

@@ -1871,7 +1871,9 @@ pub unsafe extern "win64" fn get_proc_address(module: usize, name: *const u8) ->
             crate::process::set_last_error(127);
             return 0;
         }
-        return crate::dlls::lookup(dll, &crate::dlls::cstr(name)).unwrap_or_else(|| {
+        let symbol = crate::dlls::cstr(name);
+        return crate::dlls::lookup(dll, &symbol).unwrap_or_else(|| {
+            crate::trace!("GetProcAddress: {dll}!{symbol} non disponible");
             crate::process::set_last_error(127);
             0
         });
@@ -1941,6 +1943,64 @@ pub unsafe extern "win64" fn load_library_w(name: *const u16) -> usize {
         }
     };
     load_library_a(s.as_ptr() as *const u8)
+}
+pub unsafe extern "win64" fn load_library_ex_a(name: *const u8, file: usize, flags: u32) -> usize {
+    if name.is_null() || file != 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let value = crate::dlls::cstr(name);
+    if value.is_empty() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    if flags == 0 {
+        return load_library_a(name);
+    }
+    // Never execute DLL entry points for resource/data-only loading requests.
+    // AddDllDirectory/user search directories and signature flags are not yet
+    // supported; return an error rather than searching an unsafe fallback path.
+    const SEARCH: u32 = 0x100 | 0x200 | 0x800 | 0x1000;
+    if flags & !(SEARCH | 8) != 0 {
+        crate::process::set_last_error(50);
+        return 0;
+    }
+    if flags & 8 != 0 && flags & SEARCH != 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let path = crate::paths::to_linux(&value);
+    let mut directories = Vec::new();
+    if flags & (8 | 0x100) != 0 {
+        if !path.is_absolute() {
+            crate::process::set_last_error(87);
+            return 0;
+        }
+        if let Some(parent) = path.parent() {
+            directories.push(parent.to_path_buf());
+        }
+    }
+    if flags & (8 | 0x200 | 0x1000) != 0 {
+        if let Some(module) = crate::loader::main_module() {
+            if let Some(parent) = module.path.parent() {
+                directories.push(parent.to_path_buf());
+            }
+        }
+    }
+    if flags & (8 | 0x800 | 0x1000) != 0 {
+        directories.push(crate::paths::to_linux("C:\\Windows\\System32"));
+    }
+    crate::loader::with_dll_search(directories, || load_library_a(name))
+}
+pub unsafe extern "win64" fn load_library_ex_w(name: *const u16, file: usize, flags: u32) -> usize {
+    let name = match cstring_from_wide(name) {
+        Ok(value) => value,
+        Err(error) => {
+            crate::process::set_last_error(error);
+            return 0;
+        }
+    };
+    load_library_ex_a(name.as_ptr().cast(), file, flags)
 }
 pub extern "win64" fn free_library(module: usize) -> i32 {
     if crate::dlls::builtin_by_handle(module).is_some() {
@@ -5780,7 +5840,8 @@ pub fn exports() -> crate::dlls::Exports {
      "CompareStringA"=>fn compare_string_a,"CompareStringW"=>fn compare_string_w,"CompareStringOrdinal"=>fn compare_string_ordinal,
      "GetStringTypeW"=>fn get_string_type_w,
      "LCMapStringW"=>fn lc_map_string_w,
-     "OpenEventA"=>fn open_event_a,"OpenMutexA"=>fn open_mutex_a
+     "OpenEventA"=>fn open_event_a,"OpenMutexA"=>fn open_mutex_a,
+     "LoadLibraryExA"=>fn load_library_ex_a,"LoadLibraryExW"=>fn load_library_ex_w
      }
 }
 
@@ -5788,6 +5849,26 @@ pub fn exports() -> crate::dlls::Exports {
 mod tests {
     use super::*;
     use std::ffi::CString;
+
+    #[test]
+    fn load_library_ex_handles_reserved_flags_and_builtin_system_libraries() {
+        let _teb = crate::process::test_teb();
+        let name: Vec<u16> = "kernel32.dll".encode_utf16().chain(Some(0)).collect();
+        let expected = crate::dlls::module_handle("kernel32.dll").unwrap();
+        unsafe {
+            assert_eq!(load_library_ex_w(name.as_ptr(), 0, 0x800), expected);
+            assert_eq!(load_library_ex_w(name.as_ptr(), 0, 0x1000), expected);
+            assert_eq!(load_library_ex_w(name.as_ptr(), 1, 0), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            assert_eq!(load_library_ex_w(name.as_ptr(), 0, 2), 0);
+            assert_eq!(crate::process::last_error(), 50); // data-file loading is not execution
+            assert_eq!(load_library_ex_w(name.as_ptr(), 0, 8 | 0x800), 0);
+            assert_eq!(crate::process::last_error(), 87);
+            let relative = b"winlux-test-relative.dll\0";
+            assert_eq!(load_library_ex_a(relative.as_ptr(), 0, 0x100), 0);
+            assert_eq!(crate::process::last_error(), 87);
+        }
+    }
 
     #[test]
     fn fichiers_win32_font_des_allers_retours_sans_perte() {

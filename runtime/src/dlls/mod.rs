@@ -34,6 +34,7 @@ pub mod user32;
 pub mod user32_ext;
 pub mod version;
 pub mod winfile;
+pub mod winhttp;
 pub mod winmm;
 pub mod ws2_32;
 
@@ -137,6 +138,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "rpcrt4",
                 exports: rpcrt4::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winhttp",
+                exports: winhttp::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "bcryptprimitives",
+                exports: bcrypt::primitives_exports(),
                 handle: fake_module(),
             },
             Builtin {

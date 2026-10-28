@@ -417,6 +417,21 @@ unsafe extern "win64" fn imp_sscanf(args: *const u64) -> i32 {
     let fmt = v.next_ptr::<u8>();
     scan(nul_terminated(buf), nul_terminated(fmt), &mut v)
 }
+
+unsafe extern "win64" fn imp_snscanf(args: *const u64) -> i32 {
+    let mut v = crate::thunks::VaList::new(args);
+    let buf = v.next_u64() as *const u8;
+    let count = v.next_u64() as usize;
+    let fmt = v.next_ptr::<u8>();
+    let bytes = if buf.is_null() {
+        &[]
+    } else {
+        let len = crate::printf::narrow_len(buf);
+        let safe_len = len.min(count);
+        std::slice::from_raw_parts(buf, safe_len)
+    };
+    scan(bytes, nul_terminated(fmt), &mut v)
+}
 unsafe extern "win64" fn imp_scanf(args: *const u64) -> i32 {
     let mut v = crate::thunks::VaList::new(args);
     let fmt = v.next_ptr::<u8>();
@@ -454,6 +469,7 @@ fn read_all_stdin() -> Vec<u8> {
 }
 
 crate::varargs_thunk!(sscanf_thunk => imp_sscanf);
+crate::varargs_thunk!(snscanf_thunk => imp_snscanf);
 crate::varargs_thunk!(scanf_thunk => imp_scanf);
 crate::varargs_thunk!(fscanf_thunk => imp_fscanf);
 crate::varargs_thunk!(vsscanf_thunk => imp_vsscanf);
@@ -461,7 +477,7 @@ crate::varargs_thunk!(vfscanf_thunk => imp_vfscanf);
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
-        "sscanf" => fn sscanf_thunk, "scanf" => fn scanf_thunk, "fscanf" => fn fscanf_thunk,
+        "sscanf" => fn sscanf_thunk, "_snscanf" => fn snscanf_thunk, "scanf" => fn scanf_thunk, "fscanf" => fn fscanf_thunk,
         "vsscanf" => fn vsscanf_thunk, "vfscanf" => fn vfscanf_thunk,
     }
 }
@@ -561,6 +577,22 @@ mod tests {
             );
             assert_eq!(n, 0);
             assert_eq!(count, 2);
+        }
+    }
+
+    #[test]
+    fn snscanf_limite_la_taille_du_buffer() {
+        unsafe {
+            let mut val = 0i32;
+            let text = b"123456789\0";
+            let args = [&mut val as *mut i32 as u64];
+            let n = scan(
+                &text[..5],
+                b"%d",
+                &mut crate::thunks::VaList::new(args.as_ptr()),
+            );
+            assert_eq!(n, 1);
+            assert_eq!(val, 12345);
         }
     }
 }

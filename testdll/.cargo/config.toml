@@ -6,7 +6,7 @@ linker = "rust-lld"
 rustflags = [
   "-C", "linker-flavor=lld-link",
   "-C", "link-arg=/nodefaultlib",
-  "-C", "link-arg=/noentry",
+  "-C", "link-arg=/entry:DllMain",
   "-C", "link-arg=/dll",
   "-C", "link-arg=/export:winlux_add",
 ]

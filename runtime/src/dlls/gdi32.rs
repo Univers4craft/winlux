@@ -523,6 +523,12 @@ fn bitblt_rop(rop: u32) -> Option<gui::RasterOp> {
         0x0055_0009 => gui::RasterOp::Invert,       // DSTINVERT
         0x0000_0042 => gui::RasterOp::Clear,        // BLACKNESS
         0x00FF_0062 => gui::RasterOp::Set,          // WHITENESS
+        0x0044_0328 => gui::RasterOp::SrcErase,     // SRCERASE
+        0x0011_0226 => gui::RasterOp::NotSrcErase,  // NOTSRCERASE
+        0x00BB_0226 => gui::RasterOp::MergePaint,   // MERGEPAINT
+        0x00F0_0009 => gui::RasterOp::PatCopy,      // PATCOPY
+        0x00FB_0A09 => gui::RasterOp::PatPaint,     // PATPAINT
+        0x00AA_0029 => gui::RasterOp::DstCopy,      // DSTCOPY
         _ => return None,
     })
 }
