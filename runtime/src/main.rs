@@ -22,7 +22,7 @@ fn main() {
         std::process::exit(2);
     };
     if exe == "--version" {
-        println!("winlux {}", env!("CARGO_PKG_VERSION"));
+        println!("winlux {}", include_str!("../../VERSION").trim());
         return;
     }
     if exe == "--inspect" {
