@@ -37,6 +37,8 @@ static mut ICON_Y: [i32; 5] = [12, 108, 204, 12, 108];
 static mut PINNED_APPS: u8 = 7; // Explorer, Paramètres, Bloc-notes
 static mut DESKTOP_SHORTCUTS: u8 = 0;
 static mut SHOW_SYSTEM_ICONS: bool = false; // Icônes système (PC, Documents, Corbeille) désactivées par défaut
+static mut START_SHOW_ALL_APPS: bool = false; // Afficher toutes les applications au lieu des épinglées
+static mut START_CATEGORY: i32 = 0; // Catégorie sélectionnée (0 = toutes)
 static mut CONTEXT_APP: Option<usize> = None;
 static mut CONTEXT_DESKTOP: Option<usize> = None;
 static mut CONTEXT_RECT: Rect = Rect {
@@ -182,6 +184,19 @@ fn recommended_cell(s: &Rect, i: i32) -> Rect {
         top: y,
         right: x + col_w - 8,
         bottom: y + 50,
+    }
+}
+fn category_cell(s: &Rect, i: i32) -> Rect {
+    let (l, r) = (s.left + 28, s.right - 28);
+    let cat_h = 38;
+    let cat_w = (r - l) / 3;
+    let x = l + (i % 3) * cat_w;
+    let y = s.top + 118 + (i / 3) * cat_h;
+    Rect {
+        left: x + 2,
+        top: y,
+        right: x + cat_w - 2,
+        bottom: y + cat_h - 2,
     }
 }
 
