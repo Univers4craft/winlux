@@ -27,7 +27,7 @@ Les indicateurs utilisent les informations exposées par Linux. Une VM ne fourni
 ### Compatibilité Windows
 
 - Chargement PE, imports, relocations, DLL réelles, TLS et structures PEB/TEB minimales.
-- API partielles pour fichiers, processus, synchronisation, registre persistant, réseau et graphismes GDI/X11.
+- API partielles pour fichiers, processus, synchronisation, [registre persistant Win32/NT](docs/REGISTRY.md), réseau et graphismes GDI/X11.
 - CRT, fondations COM/OLE, flux `IStream` et fabriques COM multi-usages enregistrées dans le processus.
 - Audio WAVE, **MP3 et AAC ADTS mono/stéréo** via bibliothèques Linux, avec limites mémoire et tests réels.
 - Détection .NET et délégation possible à `dotnet` ou Mono installés sur Linux ; aucun CLR Windows complet intégré.

@@ -15,6 +15,96 @@ const SE_ERR_FNF: isize = 2;
 const SE_ERR_NOASSOC: isize = 31;
 const SUCCESS: isize = 42;
 
+fn split_argv_wide(line: &[u16]) -> Vec<Vec<u16>> {
+    let mut result = Vec::new();
+    let mut i = 0;
+    while i < line.len() {
+        let mut arg = Vec::new();
+        let mut quoted = false;
+        loop {
+            let start = i;
+            while i < line.len() && line[i] == b'\\' as u16 {
+                i += 1;
+            }
+            let slashes = i - start;
+            if i < line.len() && line[i] == b'"' as u16 {
+                arg.extend(std::iter::repeat_n(b'\\' as u16, slashes / 2));
+                if slashes % 2 == 1 {
+                    arg.push(b'"' as u16);
+                    i += 1;
+                } else if quoted && line.get(i + 1) == Some(&(b'"' as u16)) {
+                    arg.push(b'"' as u16);
+                    i += 2;
+                } else {
+                    quoted = !quoted;
+                    i += 1;
+                }
+                continue;
+            }
+            arg.extend(std::iter::repeat_n(b'\\' as u16, slashes));
+            if i == line.len() || !quoted && matches!(line[i], 9 | 32) {
+                break;
+            }
+            arg.push(line[i]);
+            i += 1;
+        }
+        result.push(arg);
+        while i < line.len() && matches!(line[i], 9 | 32) {
+            i += 1;
+        }
+    }
+    result
+}
+
+/// One LocalFree-compatible allocation contains both pointers and UTF-16 data.
+pub unsafe extern "win64" fn command_line_to_argv_w(
+    line: *const u16,
+    count: *mut i32,
+) -> *mut *mut u16 {
+    if line.is_null() || count.is_null() {
+        crate::process::set_last_error(87);
+        return std::ptr::null_mut();
+    }
+    *count = 0;
+    let mut length = 0;
+    while length < 32768 && *line.add(length) != 0 {
+        length += 1;
+    }
+    if length == 32768 {
+        crate::process::set_last_error(87);
+        return std::ptr::null_mut();
+    }
+    let args = if length == 0 {
+        let Some(module) = crate::loader::main_module() else {
+            crate::process::set_last_error(2);
+            return std::ptr::null_mut();
+        };
+        vec![crate::paths::to_windows(&module.path)
+            .encode_utf16()
+            .collect()]
+    } else {
+        split_argv_wide(std::slice::from_raw_parts(line, length))
+    };
+    let pointers = (args.len() + 1) * std::mem::size_of::<*mut u16>();
+    let bytes = pointers + args.iter().map(|arg| (arg.len() + 1) * 2).sum::<usize>();
+    let block = crate::dlls::kernel32::heap_alloc(0, 0, bytes) as *mut u8;
+    if block.is_null() {
+        crate::process::set_last_error(8);
+        return std::ptr::null_mut();
+    }
+    let argv = block.cast::<*mut u16>();
+    *argv.add(args.len()) = std::ptr::null_mut();
+    let mut cursor = block.add(pointers).cast::<u16>();
+    for (index, arg) in args.iter().enumerate() {
+        *argv.add(index) = cursor;
+        std::ptr::copy_nonoverlapping(arg.as_ptr(), cursor, arg.len());
+        *cursor.add(arg.len()) = 0;
+        cursor = cursor.add(arg.len() + 1);
+    }
+    *count = args.len() as i32;
+    argv
+}
+
 pub unsafe extern "win64" fn sh_get_folder_path_a(
     _owner: usize,
     _csidl: i32,
@@ -319,6 +409,7 @@ pub unsafe extern "win64" fn shell_execute_ex_w(info: *mut ShellExecuteInfo) -> 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "SHGetFolderPathA"=>fn sh_get_folder_path_a,
+        "CommandLineToArgvW"=>fn command_line_to_argv_w,
         "ShellExecuteA"=>fn shell_execute_a,"ShellExecuteW"=>fn shell_execute_w,
         "ShellExecuteExA"=>fn shell_execute_ex_a,"ShellExecuteExW"=>fn shell_execute_ex_w
     }
@@ -327,6 +418,47 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn argv_preserves_empty_unicode_and_escaped_arguments_and_localfree_ownership() {
+        let _teb = crate::process::test_teb();
+        let expected = [
+            "C:\\Program Files\\ChatGPT.exe",
+            "",
+            "deux mots",
+            "écran 😀",
+            "quote\"inside",
+            "trail \\",
+        ];
+        let line = expected
+            .iter()
+            .map(|value| crate::process::quote_arg(value))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let wide: Vec<u16> = line.encode_utf16().chain([0]).collect();
+        let mut count = 0;
+        unsafe {
+            let argv = command_line_to_argv_w(wide.as_ptr(), &mut count);
+            assert!(!argv.is_null());
+            assert_eq!(count as usize, expected.len());
+            assert!((*argv.add(expected.len())).is_null());
+            for (index, expected) in expected.iter().enumerate() {
+                let mut size = 0;
+                while *(*argv.add(index)).add(size) != 0 {
+                    size += 1;
+                }
+                assert_eq!(
+                    String::from_utf16(std::slice::from_raw_parts(*argv.add(index), size)).unwrap(),
+                    *expected
+                );
+            }
+            assert!(crate::dlls::kernel32_misc::local_free(argv.cast()).is_null());
+        }
+        assert_eq!(
+            split_argv_wide(&"  app.exe".encode_utf16().collect::<Vec<_>>()),
+            vec![vec![], "app.exe".encode_utf16().collect()]
+        );
+    }
 
     #[test]
     fn les_exe_sont_relances_dans_winlux_et_les_urls_vont_au_navigateur() {

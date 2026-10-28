@@ -266,6 +266,86 @@ fn new_key_handle(path: String) -> usize {
     h
 }
 
+/// The local Linux identity owns HKCU; this is not Windows impersonation.
+pub(crate) fn native_current_user_key_path() -> String {
+    format!("\\Registry\\User\\S-1-22-1-{}", unsafe { libc::geteuid() })
+}
+
+unsafe fn native_key_path(root: usize, name: &str) -> Result<String, i32> {
+    let (hive, path) = if name.starts_with('\\') {
+        let lower = name.to_lowercase();
+        let current = native_current_user_key_path().to_lowercase();
+        if lower == current || lower.starts_with(&(current.clone() + "\\")) {
+            (0x8000_0001, &name[current.len()..])
+        } else if lower == "\\registry\\machine" || lower.starts_with("\\registry\\machine\\") {
+            (0x8000_0002, &name[17..])
+        } else if lower == "\\registry\\user" || lower.starts_with("\\registry\\user\\") {
+            (0x8000_0003, &name[14..])
+        } else {
+            return Err(ERROR_FILE_NOT_FOUND);
+        }
+    } else {
+        (root, name)
+    };
+    if path.contains('\0') {
+        return Err(ERROR_INVALID_PARAMETER);
+    }
+    let base = resolve_existing_handle(hive)?;
+    let sub = path.replace('/', "\\").trim_matches('\\').to_lowercase();
+    let full = if sub.is_empty() {
+        base
+    } else {
+        format!("{base}\\{sub}")
+    };
+    Ok(full)
+}
+
+pub(crate) unsafe fn open_native_key(
+    root: usize,
+    name: &str,
+    _access: u32,
+    result: *mut usize,
+) -> i32 {
+    if result.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    match native_key_path(root, name) {
+        Ok(path) => open_key_path(path, result),
+        Err(error) => error,
+    }
+}
+
+pub(crate) unsafe fn create_native_key(
+    root: usize,
+    name: &str,
+    result: *mut usize,
+    disposition: *mut u32,
+) -> i32 {
+    if result.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    match native_key_path(root, name) {
+        Ok(path) => create_key_path(path, result, disposition),
+        Err(error) => error,
+    }
+}
+
+pub(crate) fn close_native_key(handle: usize) -> bool {
+    lock(key_handles()).remove(&handle).is_some()
+}
+
+pub(crate) unsafe fn query_native_value(handle: usize, name: &str) -> Result<(u32, Vec<u8>), i32> {
+    let path = resolve_existing_handle(handle)?;
+    read_registry(|registry| {
+        let value = registry
+            .keys
+            .get(&path)
+            .and_then(|key| key.values.get(&name.to_lowercase()))
+            .ok_or(ERROR_FILE_NOT_FOUND)?;
+        Ok((value.kind, value.bytes.clone()))
+    })
+}
+
 pub unsafe extern "win64" fn reg_open_key_ex_a(
     root: usize,
     subkey: *const u8,
@@ -280,6 +360,10 @@ pub unsafe extern "win64" fn reg_open_key_ex_a(
         Ok(p) => p,
         Err(e) => return e,
     };
+    open_key_path(path, result)
+}
+
+unsafe fn open_key_path(path: String, result: *mut usize) -> i32 {
     match read_registry(|r| {
         if r.keys.contains_key(&path) {
             Ok(())
@@ -313,6 +397,10 @@ pub unsafe extern "win64" fn reg_create_key_ex_a(
         Ok(p) => p,
         Err(e) => return e,
     };
+    create_key_path(path, result, disposition)
+}
+
+unsafe fn create_key_path(path: String, result: *mut usize, disposition: *mut u32) -> i32 {
     let mut created = false;
     if let Err(e) = mutate_registry(|r| {
         created = !r.keys.contains_key(&path);
@@ -737,6 +825,216 @@ mod tests {
                 0
             );
             assert_eq!(out, data);
+            // Native NT callers and Win32 callers share the same persisted key.
+            let mut current = [0u8; 16];
+            assert_eq!(
+                crate::dlls::ntdll::rtl_format_current_user_key_path(current.as_mut_ptr()),
+                0
+            );
+            let n = std::ptr::read_unaligned(current.as_ptr().cast::<u16>()) as usize / 2;
+            let p = std::ptr::read_unaligned(current.as_ptr().add(8).cast::<*const u16>());
+            let formatted = String::from_utf16(std::slice::from_raw_parts(p, n)).unwrap();
+            assert_eq!(formatted, native_current_user_key_path());
+            crate::dlls::ntdll::rtl_free_unicode_string(current.as_mut_ptr());
+            assert_eq!(std::ptr::read_unaligned(current.as_ptr().cast::<u16>()), 0);
+            let full = format!("{}\\{}", formatted, sub.to_str().unwrap());
+            let wide: Vec<u16> = full.encode_utf16().collect();
+            let mut unicode = [0u8; 16];
+            std::ptr::write_unaligned(unicode.as_mut_ptr().cast::<u16>(), (wide.len() * 2) as u16);
+            std::ptr::write_unaligned(
+                unicode.as_mut_ptr().add(2).cast::<u16>(),
+                (wide.len() * 2) as u16,
+            );
+            std::ptr::write_unaligned(
+                unicode.as_mut_ptr().add(8).cast::<*const u16>(),
+                wide.as_ptr(),
+            );
+            let mut attrs = [0u8; 48];
+            std::ptr::write_unaligned(attrs.as_mut_ptr().cast::<u32>(), 48);
+            std::ptr::write_unaligned(
+                attrs.as_mut_ptr().add(16).cast::<*const u8>(),
+                unicode.as_ptr(),
+            );
+            let mut native = 0;
+            assert_eq!(
+                crate::dlls::ntdll::nt_open_key(&mut native, 0x20019, attrs.as_ptr()),
+                0
+            );
+            let mut native_size = 4;
+            let mut native_out = [0; 4];
+            assert_eq!(
+                reg_query_value_ex_a(
+                    native,
+                    name.as_ptr().cast(),
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    native_out.as_mut_ptr(),
+                    &mut native_size
+                ),
+                0
+            );
+            assert_eq!(native_out, data);
+            let value_name: Vec<u16> = "Binary".encode_utf16().collect();
+            let mut value_string = [0u8; 16];
+            std::ptr::write_unaligned(
+                value_string.as_mut_ptr().cast::<u16>(),
+                (value_name.len() * 2) as u16,
+            );
+            std::ptr::write_unaligned(
+                value_string.as_mut_ptr().add(2).cast::<u16>(),
+                (value_name.len() * 2) as u16,
+            );
+            std::ptr::write_unaligned(
+                value_string.as_mut_ptr().add(8).cast::<*const u16>(),
+                value_name.as_ptr(),
+            );
+            let mut required = 0;
+            let mut partial = [0xccu8; 17];
+            assert_eq!(
+                crate::dlls::ntdll::nt_query_value_key(
+                    native,
+                    value_string.as_ptr(),
+                    2,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut required
+                ),
+                0xC000_0023u32 as i32
+            );
+            assert_eq!(required, 16);
+            assert_eq!(
+                crate::dlls::ntdll::nt_query_value_key(
+                    native,
+                    value_string.as_ptr(),
+                    2,
+                    partial.as_mut_ptr(),
+                    15,
+                    &mut required
+                ),
+                0x8000_0005u32 as i32
+            );
+            assert_eq!(partial[15], 0xcc);
+            assert_eq!(
+                crate::dlls::ntdll::nt_query_value_key(
+                    native,
+                    value_string.as_ptr(),
+                    2,
+                    partial.as_mut_ptr(),
+                    16,
+                    &mut required
+                ),
+                0
+            );
+            assert_eq!(&partial[12..16], &data);
+            assert_eq!(partial[16], 0xcc);
+            assert_eq!(u32::from_le_bytes(partial[4..8].try_into().unwrap()), 3);
+            for class in [0, 1] {
+                let mut buffer = [0u8; 64];
+                assert_eq!(
+                    crate::dlls::ntdll::nt_query_value_key(
+                        native,
+                        value_string.as_ptr(),
+                        class,
+                        buffer.as_mut_ptr(),
+                        64,
+                        &mut required
+                    ),
+                    0
+                );
+                let header = if class == 0 { 12 } else { 20 };
+                let native_name: Vec<u8> = value_name
+                    .iter()
+                    .flat_map(|unit| unit.to_le_bytes())
+                    .collect();
+                assert_eq!(
+                    &buffer[header..header + native_name.len()],
+                    native_name.as_slice()
+                );
+                if class == 1 {
+                    let offset = u32::from_le_bytes(buffer[8..12].try_into().unwrap()) as usize;
+                    assert_eq!(&buffer[offset..offset + 4], &data);
+                }
+            }
+            assert_eq!(crate::dlls::ntdll::nt_close(native), 0);
+            assert_ne!(crate::dlls::ntdll::nt_close(native), 0);
+            let mut native_disposition = 0;
+            assert_eq!(
+                crate::dlls::ntdll::nt_create_key(
+                    &mut native,
+                    0,
+                    attrs.as_ptr(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    &mut native_disposition
+                ),
+                0
+            );
+            assert_eq!(native_disposition, REG_OPENED_EXISTING_KEY);
+            assert!(close_native_key(native));
+            let child: Vec<u16> = "Software\\WinluxNativeCreated".encode_utf16().collect();
+            std::ptr::write_unaligned(unicode.as_mut_ptr().cast::<u16>(), (child.len() * 2) as u16);
+            std::ptr::write_unaligned(
+                unicode.as_mut_ptr().add(2).cast::<u16>(),
+                (child.len() * 2) as u16,
+            );
+            std::ptr::write_unaligned(
+                unicode.as_mut_ptr().add(8).cast::<*const u16>(),
+                child.as_ptr(),
+            );
+            std::ptr::write_unaligned(attrs.as_mut_ptr().add(8).cast::<usize>(), 0x8000_0001);
+            assert_eq!(
+                crate::dlls::ntdll::nt_create_key(
+                    &mut native,
+                    0,
+                    attrs.as_ptr(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    &mut native_disposition
+                ),
+                0
+            );
+            assert_eq!(native_disposition, REG_CREATED_NEW_KEY);
+            assert!(close_native_key(native));
+            assert_eq!(
+                reg_open_key_ex_a(
+                    0x8000_0001,
+                    c"Software\\WinluxNativeCreated".as_ptr().cast(),
+                    0,
+                    0,
+                    &mut native
+                ),
+                0
+            );
+            assert_eq!(reg_close_key(native), 0);
+            assert_ne!(
+                crate::dlls::ntdll::nt_create_key(
+                    &mut native,
+                    0,
+                    attrs.as_ptr(),
+                    0,
+                    std::ptr::null(),
+                    1,
+                    &mut native_disposition
+                ),
+                0
+            );
+            assert_eq!(open_native_key(0, "\\Registry\\Machine", 0, &mut native), 0);
+            assert!(close_native_key(native));
+            assert_eq!(
+                open_native_key(0x8000_0001, "WinluxMissingNativeKey", 0, &mut native),
+                ERROR_FILE_NOT_FOUND
+            );
+            assert_eq!(
+                open_native_key(
+                    0,
+                    "\\Registry\\User\\UnknownUser\\Software\\WinluxTest",
+                    0,
+                    &mut native
+                ),
+                ERROR_FILE_NOT_FOUND
+            );
             reg_close_key(h);
         }
         let _ = std::fs::remove_file(&path);

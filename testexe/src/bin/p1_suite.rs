@@ -269,6 +269,30 @@ pub extern "C" fn mainCRTStartup() -> ! {
             "VirtualQuery page committée"
         );
         let mut old_prot = 0u32;
+        let image = GetModuleHandleA(core::ptr::null());
+        let mut image_info: MemoryBasicInformation = core::mem::zeroed();
+        check!(
+            VirtualQuery(image as _, &mut image_info, core::mem::size_of::<MemoryBasicInformation>()) != 0
+                && image_info.allocation_base == image as _
+                && image_info.kind == 0x1000000
+                && image_info.state == 0x1000,
+            "VirtualQuery reconnaît une image PE chargée"
+        );
+        let mut image_old = 0;
+        let mut image_restore = 0;
+        check!(
+            VirtualProtect(image as _, 4096, 0x04, &mut image_old) != 0
+                && image_old == image_info.protect
+                && VirtualProtect(image as _, 4096, image_old, &mut image_restore) != 0
+                && image_restore == 0x04,
+            "VirtualProtect modifie puis restaure une page PE"
+        );
+        check!(
+            VirtualFree(image as _, 0, 0x8000) == 0
+                && VirtualFree(image as _, 4096, 0x4000) == 0
+                && VirtualAlloc(image as _, 4096, 0x1000, 0x04).is_null(),
+            "VirtualFree et VirtualAlloc ne détruisent pas une image du chargeur"
+        );
         let read_only = VirtualProtect(v as _, 4096, 0x02, &mut old_prot) != 0 && old_prot == 0x04;
         let restore = VirtualProtect(v as _, 4096, 0x04, &mut old_prot) != 0 && old_prot == 0x02;
         check!(

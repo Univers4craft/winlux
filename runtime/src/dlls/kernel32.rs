@@ -13,6 +13,21 @@ struct VmRegion {
     committed: Vec<bool>,
     protection: Vec<u32>,
     allocation_protection: u32,
+    kind: u32,
+}
+/// PE mappings belong to the loader, but must be visible to the Windows VM APIs.
+pub(crate) fn register_image(base: usize, protection: Vec<u32>) {
+    let pages = protection.len();
+    lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(
+        base,
+        VmRegion {
+            size: pages * 4096,
+            committed: vec![true; pages],
+            protection,
+            allocation_protection: 0x80,
+            kind: 0x1000000,
+        },
+    );
 }
 static ALLOCS: OnceLock<Mutex<HashMap<usize, VmRegion>>> = OnceLock::new();
 static HEAP_ALLOCS: OnceLock<Mutex<HashMap<usize, usize>>> = OnceLock::new();
@@ -2359,7 +2374,7 @@ pub unsafe extern "win64" fn virtual_alloc(
         let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
         let Some((&region_base, _r)) = maps
             .iter_mut()
-            .find(|(b, r)| base >= **b && end <= **b + r.size)
+            .find(|(b, r)| r.kind == 0x20000 && base >= **b && end <= **b + r.size)
         else {
             crate::process::set_last_error(487);
             return std::ptr::null_mut();
@@ -2384,7 +2399,7 @@ pub unsafe extern "win64" fn virtual_alloc(
         let mut maps = lock(ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
         let Some((&region_base, r)) = maps
             .iter_mut()
-            .find(|(b, r)| page_base >= **b && page_end <= **b + r.size)
+            .find(|(b, r)| r.kind == 0x20000 && page_base >= **b && page_end <= **b + r.size)
         else {
             crate::process::set_last_error(487);
             return std::ptr::null_mut();
@@ -2477,6 +2492,7 @@ pub unsafe extern "win64" fn virtual_alloc(
             committed: vec![_kind & MEM_COMMIT != 0; pages],
             protection: vec![if _kind & MEM_COMMIT != 0 { prot } else { 1 }; pages],
             allocation_protection: prot,
+            kind: 0x20000,
         },
     );
     p as *mut c_void
@@ -2500,6 +2516,10 @@ pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: 
             crate::process::set_last_error(487);
             return 0;
         };
+        if region.kind != 0x20000 {
+            crate::process::set_last_error(487);
+            return 0;
+        }
         if libc::munmap(p as *mut c_void, region.size) != 0 {
             crate::process::set_last_error(8);
             return 0;
@@ -2524,7 +2544,7 @@ pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: 
         let end = end0 & !(PAGE - 1);
         let Some((&base, region)) = maps
             .iter_mut()
-            .find(|(b, r)| start >= **b && end <= **b + r.size)
+            .find(|(b, r)| r.kind == 0x20000 && start >= **b && end <= **b + r.size)
         else {
             crate::process::set_last_error(487);
             return 0;
@@ -2611,7 +2631,6 @@ pub unsafe extern "win64" fn virtual_query(
     const MEM_COMMIT: u32 = 0x1000;
     const MEM_RESERVE: u32 = 0x2000;
     const MEM_FREE: u32 = 0x10000;
-    const MEM_PRIVATE: u32 = 0x20000;
     let required = std::mem::size_of::<MemoryBasicInformation>();
     if info.is_null() {
         crate::process::set_last_error(87);
@@ -2653,7 +2672,7 @@ pub unsafe extern "win64" fn virtual_query(
             region_size: (last - first) * PAGE,
             state: if committed { MEM_COMMIT } else { MEM_RESERVE },
             protect,
-            kind: MEM_PRIVATE,
+            kind: r.kind,
         }
     } else {
         let next = maps

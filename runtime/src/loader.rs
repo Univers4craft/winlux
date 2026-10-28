@@ -207,7 +207,7 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
 
     MODULES.lock().unwrap().push(m.clone());
     resolve_imports(&m)?;
-    protect(&m);
+    protect(&m)?;
     Ok(m)
 }
 
@@ -583,24 +583,46 @@ pub fn export_by_ordinal(m: &Module, ord: u32) -> Option<usize> {
     export_addr(m, (ord as usize).checked_sub(base)?)
 }
 
-fn protect(m: &Module) {
+fn protect(m: &Module) -> Result<(), String> {
+    // mmap initially creates RW pages. Record exactly the permissions applied
+    // below, including gaps, rather than reporting loaded images as MEM_FREE.
+    let mut pages = vec![0x04; round_up(m.size, PAGE) / PAGE];
     if (m.pe.section_alignment as usize) < PAGE {
         // Petites sections non alignées sur la page : tout reste lisible, inscriptible et exécutable.
-        unsafe {
+        let result = unsafe {
             libc::mprotect(
                 m.base as *mut _,
                 m.size,
                 libc::PROT_READ | libc::PROT_WRITE | libc::PROT_EXEC,
             )
         };
-        return;
+        if result != 0 {
+            return Err(format!(
+                "protection de {} : {}",
+                m.name,
+                std::io::Error::last_os_error()
+            ));
+        }
+        pages.fill(0x40);
+        crate::dlls::kernel32::register_image(m.base, pages);
+        return Ok(());
     }
     unsafe {
-        libc::mprotect(
+        if libc::mprotect(
             m.base as *mut _,
             round_up(m.pe.size_of_headers as usize, PAGE).max(PAGE),
             libc::PROT_READ,
-        );
+        ) != 0
+        {
+            return Err(format!(
+                "protection des en-têtes de {} : {}",
+                m.name,
+                std::io::Error::last_os_error()
+            ));
+        }
+        let headers =
+            (round_up(m.pe.size_of_headers as usize, PAGE).max(PAGE) / PAGE).min(pages.len());
+        pages[..headers].fill(0x02);
         for s in &m.pe.sections {
             let len = round_up(s.virtual_size.max(s.raw_size) as usize, PAGE);
             if len == 0 {
@@ -616,13 +638,32 @@ fn protect(m: &Module) {
             if s.characteristics & SCN_MEM_EXECUTE != 0 {
                 prot |= libc::PROT_READ | libc::PROT_EXEC;
             }
-            libc::mprotect(
+            if libc::mprotect(
                 (m.base + s.rva as usize) as *mut _,
                 len.min(m.size - s.rva as usize),
                 prot,
-            );
+            ) != 0
+            {
+                return Err(format!(
+                    "protection d'une section de {} : {}",
+                    m.name,
+                    std::io::Error::last_os_error()
+                ));
+            }
+            let first = s.rva as usize / PAGE;
+            let last = (first + len / PAGE).min(pages.len());
+            let windows = match prot {
+                0 => 0x01,
+                libc::PROT_READ => 0x02,
+                p if p == libc::PROT_READ | libc::PROT_WRITE => 0x04,
+                p if p == libc::PROT_READ | libc::PROT_EXEC => 0x20,
+                _ => 0x40,
+            };
+            pages[first..last].fill(windows);
         }
     }
+    crate::dlls::kernel32::register_image(m.base, pages);
+    Ok(())
 }
 
 /// Marque un module comme initialisé ; renvoie faux s'il l'était déjà.

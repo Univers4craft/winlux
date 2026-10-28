@@ -17,6 +17,10 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_
                 b"instruction illegale (EXCEPTION_ILLEGAL_INSTRUCTION)\n".as_slice(),
                 0xC000_001D,
             ),
+            libc::SIGTRAP => (
+                b"point d'arret logiciel (EXCEPTION_BREAKPOINT)\n".as_slice(),
+                0x8000_0003,
+            ),
             libc::SIGFPE => (
                 b"division par zero (EXCEPTION_INT_DIVIDE_BY_ZERO)\n".as_slice(),
                 0xC000_0094,
@@ -73,7 +77,13 @@ pub fn install() {
         let mut sa: libc::sigaction = std::mem::zeroed();
         sa.sa_sigaction = on_signal as *const () as usize;
         sa.sa_flags = libc::SA_SIGINFO | libc::SA_ONSTACK;
-        for s in [libc::SIGSEGV, libc::SIGBUS, libc::SIGILL, libc::SIGFPE] {
+        for s in [
+            libc::SIGSEGV,
+            libc::SIGBUS,
+            libc::SIGILL,
+            libc::SIGFPE,
+            libc::SIGTRAP,
+        ] {
             libc::sigaction(s, &sa, std::ptr::null_mut());
         }
     }

@@ -1031,8 +1031,208 @@ pub unsafe extern "win64" fn rtl_set_process_is_critical(
 
 /// `NtClose` : ferme un handle du noyau.
 pub unsafe extern "win64" fn nt_close(handle: usize) -> i32 {
-    crate::dlls::kernel32::close_handle(handle);
+    if crate::dlls::advapi32::close_native_key(handle)
+        || crate::dlls::kernel32::close_handle(handle) != 0
+    {
+        STATUS_SUCCESS
+    } else {
+        STATUS_INVALID_HANDLE
+    }
+}
+
+/// Allocate the current user's registry path, released with RtlFreeUnicodeString.
+pub unsafe extern "win64" fn rtl_format_current_user_key_path(out: *mut u8) -> i32 {
+    if out.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let text: Vec<u16> = crate::dlls::advapi32::native_current_user_key_path()
+        .encode_utf16()
+        .collect();
+    let size = (text.len() + 1) * 2;
+    let buffer = crate::dlls::kernel32::heap_alloc(0, 0, size) as *mut u16;
+    if buffer.is_null() {
+        return 0xC000_0017u32 as i32;
+    }
+    std::ptr::copy_nonoverlapping(text.as_ptr(), buffer, text.len());
+    *buffer.add(text.len()) = 0;
+    ustr_set_len(out, (text.len() * 2) as u16);
+    ustr_set_max(out, size as u16);
+    ustr_set_buf(out, buffer.cast());
     STATUS_SUCCESS
+}
+
+/// Open an existing persistent registry key; never create missing settings.
+pub unsafe extern "win64" fn nt_open_key(out: *mut usize, access: u32, attrs: *const u8) -> i32 {
+    if out.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let (root, text) = match registry_object_name(attrs) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    registry_status(crate::dlls::advapi32::open_native_key(
+        root, &text, access, out,
+    ))
+}
+
+unsafe fn registry_object_name(attrs: *const u8) -> Result<(usize, String), i32> {
+    if attrs.is_null() {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    if std::ptr::read_unaligned(attrs.cast::<u32>()) < 48 {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let root = std::ptr::read_unaligned(attrs.add(8).cast::<usize>());
+    let name = std::ptr::read_unaligned(attrs.add(16).cast::<*const u8>());
+    if name.is_null() || !ustr_len(name).is_multiple_of(2) || ustr_len(name) > ustr_max(name) {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let length = ustr_len(name) as usize / 2;
+    if length != 0 && ustr_buf_w(name).is_null() {
+        return Err(STATUS_INVALID_PARAMETER);
+    }
+    let text = if length == 0 {
+        String::new()
+    } else {
+        match String::from_utf16(std::slice::from_raw_parts(ustr_buf_w(name), length)) {
+            Ok(text) => text,
+            Err(_) => return Err(STATUS_INVALID_PARAMETER),
+        }
+    };
+    Ok((root, text))
+}
+
+fn registry_status(error: i32) -> i32 {
+    match error {
+        0 => STATUS_SUCCESS,
+        2 => 0xC000_0034u32 as i32,
+        5 => 0xC000_0022u32 as i32,
+        6 => STATUS_INVALID_HANDLE,
+        _ => STATUS_INVALID_PARAMETER,
+    }
+}
+
+pub unsafe extern "win64" fn nt_create_key(
+    out: *mut usize,
+    _access: u32,
+    attrs: *const u8,
+    _title: u32,
+    class: *const u8,
+    options: u32,
+    disposition: *mut u32,
+) -> i32 {
+    if out.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    // Volatile keys, backup/restore semantics and class metadata need separate support.
+    if options != 0 || !class.is_null() && ustr_len(class) != 0 {
+        return STATUS_NOT_IMPLEMENTED;
+    }
+    let (root, text) = match registry_object_name(attrs) {
+        Ok(value) => value,
+        Err(status) => return status,
+    };
+    registry_status(crate::dlls::advapi32::create_native_key(
+        root,
+        &text,
+        out,
+        disposition,
+    ))
+}
+
+pub unsafe extern "win64" fn nt_open_key_ex(
+    out: *mut usize,
+    access: u32,
+    attrs: *const u8,
+    options: u32,
+) -> i32 {
+    if options != 0 {
+        return STATUS_NOT_IMPLEMENTED;
+    }
+    nt_open_key(out, access, attrs)
+}
+
+pub unsafe extern "win64" fn nt_query_value_key(
+    handle: usize,
+    name: *const u8,
+    info_class: u32,
+    info: *mut u8,
+    length: u32,
+    result_length: *mut u32,
+) -> i32 {
+    if name.is_null()
+        || result_length.is_null()
+        || !ustr_len(name).is_multiple_of(2)
+        || ustr_len(name) > ustr_max(name)
+    {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let count = ustr_len(name) as usize / 2;
+    if count != 0 && ustr_buf_w(name).is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let wide = if count == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(ustr_buf_w(name), count)
+    };
+    let text = match String::from_utf16(wide) {
+        Ok(text) => text,
+        Err(_) => return STATUS_INVALID_PARAMETER,
+    };
+    if info_class > 2 {
+        return 0xC000_0003u32 as i32;
+    }
+    let (kind, data) = match crate::dlls::advapi32::query_native_value(handle, &text) {
+        Ok(value) => value,
+        Err(error) => return registry_status(error),
+    };
+    let header = if info_class == 1 { 20 } else { 12 };
+    let name_size = wide.len() * 2;
+    let data_offset = (header + name_size + 3) & !3;
+    let required = match info_class {
+        0 => header + name_size,
+        1 => data_offset + data.len(),
+        _ => header + data.len(),
+    };
+    let Ok(required_u32) = u32::try_from(required) else {
+        return 0xC000_0017u32 as i32;
+    };
+    *result_length = required_u32;
+    if (length as usize) < header {
+        return STATUS_BUFFER_TOO_SMALL;
+    }
+    if info.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let mut result = vec![0u8; required];
+    result[4..8].copy_from_slice(&kind.to_le_bytes());
+    match info_class {
+        0 => {
+            result[8..12].copy_from_slice(&(name_size as u32).to_le_bytes());
+        }
+        1 => {
+            result[8..12].copy_from_slice(&(data_offset as u32).to_le_bytes());
+            result[12..16].copy_from_slice(&(data.len() as u32).to_le_bytes());
+            result[16..20].copy_from_slice(&(name_size as u32).to_le_bytes());
+            result[data_offset..].copy_from_slice(&data);
+        }
+        _ => {
+            result[8..12].copy_from_slice(&(data.len() as u32).to_le_bytes());
+            result[12..].copy_from_slice(&data);
+        }
+    }
+    if info_class < 2 {
+        for (index, unit) in wide.iter().enumerate() {
+            result[header + index * 2..header + index * 2 + 2].copy_from_slice(&unit.to_le_bytes());
+        }
+    }
+    std::ptr::copy_nonoverlapping(result.as_ptr(), info, required.min(length as usize));
+    if (length as usize) < required {
+        0x8000_0005u32 as i32
+    } else {
+        STATUS_SUCCESS
+    }
 }
 
 /// `NtCreateFile` : stub, non implémenté.
@@ -1180,16 +1380,113 @@ pub unsafe extern "win64" fn nt_query_system_information(
     }
 }
 
-/// `NtQueryVirtualMemory` : stub.
+#[cfg(test)]
+mod memory_tests {
+    use super::*;
+
+    #[test]
+    fn nt_memory_queries_and_protection_use_real_pages_and_validate_handles() {
+        let _teb = crate::process::test_teb();
+        unsafe {
+            let process = crate::dlls::kernel32::get_current_process();
+            let allocation =
+                crate::dlls::kernel32::virtual_alloc(std::ptr::null_mut(), 8192, 0x3000, 4);
+            assert!(!allocation.is_null());
+            crate::process::set_last_error(1234);
+            let mut base = (allocation as *mut u8).add(7).cast();
+            let mut size = 2;
+            let mut old = 0;
+            assert_eq!(
+                nt_protect_virtual_memory(0, &mut base, &mut size, 2, &mut old),
+                STATUS_INVALID_HANDLE
+            );
+            assert_eq!(size, 2);
+            assert_eq!(
+                nt_protect_virtual_memory(process, &mut base, &mut size, 2, &mut old),
+                0
+            );
+            assert_eq!(base, allocation);
+            assert_eq!(size, 4096);
+            assert_eq!(old, 4);
+            assert_eq!(crate::dlls::kernel32::get_last_error(), 1234);
+            let mut info: crate::dlls::kernel32::MemoryBasicInformation = std::mem::zeroed();
+            let mut length = 0;
+            assert_eq!(
+                nt_query_virtual_memory(
+                    process,
+                    allocation,
+                    0,
+                    (&mut info as *mut crate::dlls::kernel32::MemoryBasicInformation).cast(),
+                    std::mem::size_of_val(&info),
+                    &mut length
+                ),
+                0
+            );
+            assert_eq!(info.protect, 2);
+            assert_eq!(info.region_size, 4096);
+            assert_eq!(length, std::mem::size_of_val(&info));
+            assert_eq!(
+                nt_query_virtual_memory(
+                    process,
+                    allocation,
+                    99,
+                    std::ptr::null_mut(),
+                    0,
+                    &mut length
+                ),
+                0xC000_0003u32 as i32
+            );
+            assert_ne!(
+                nt_protect_virtual_memory(process, &mut base, &mut size, 0, &mut old),
+                0
+            );
+            assert_eq!(
+                nt_protect_virtual_memory(process, &mut base, &mut size, 4, &mut old),
+                0
+            );
+            *(allocation as *mut u8) = 42;
+            assert_eq!(old, 2);
+            assert_eq!(
+                crate::dlls::kernel32::virtual_free(allocation, 0, 0x8000),
+                1
+            );
+        }
+    }
+}
+
+/// Query the current process' real Windows memory map (MemoryBasicInformation).
 pub unsafe extern "win64" fn nt_query_virtual_memory(
-    _handle: usize,
-    _addr: *const c_void,
-    _info_class: u32,
-    _info: *mut c_void,
-    _length: usize,
-    _return_length: *mut usize,
+    handle: usize,
+    addr: *const c_void,
+    info_class: u32,
+    info: *mut c_void,
+    length: usize,
+    return_length: *mut usize,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if handle != crate::dlls::kernel32::get_current_process() {
+        return STATUS_INVALID_HANDLE;
+    }
+    if info_class != 0 {
+        return 0xC000_0003u32 as i32; // STATUS_INVALID_INFO_CLASS
+    }
+    let required = std::mem::size_of::<crate::dlls::kernel32::MemoryBasicInformation>();
+    if !return_length.is_null() {
+        *return_length = required;
+    }
+    if length < required {
+        return 0xC000_0004u32 as i32;
+    }
+    if info.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let previous = crate::dlls::kernel32::get_last_error();
+    let result = crate::dlls::kernel32::virtual_query(addr, info.cast(), length);
+    crate::process::set_last_error(previous);
+    if result == 0 {
+        STATUS_INVALID_PARAMETER
+    } else {
+        STATUS_SUCCESS
+    }
 }
 
 /// `NtDelayExecution` : dort pendant le délai spécifié.
@@ -1246,15 +1543,42 @@ pub unsafe extern "win64" fn nt_free_virtual_memory(
     }
 }
 
-/// `NtProtectVirtualMemory` : stub.
+/// Apply page protections, returning the aligned range only on success.
 pub unsafe extern "win64" fn nt_protect_virtual_memory(
-    _process: usize,
-    _base: *mut *mut c_void,
-    _size: *mut usize,
-    _new_protect: u32,
-    _old_protect: *mut u32,
+    process: usize,
+    base: *mut *mut c_void,
+    size: *mut usize,
+    new_protect: u32,
+    old_protect: *mut u32,
 ) -> i32 {
-    STATUS_SUCCESS // Pretend it worked
+    if process != crate::dlls::kernel32::get_current_process() {
+        return STATUS_INVALID_HANDLE;
+    }
+    if base.is_null() || size.is_null() || old_protect.is_null() || *size == 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let start = *base as usize & !4095;
+    let Some(end) = (*base as usize)
+        .checked_add(*size)
+        .and_then(|end| end.checked_add(4095))
+        .map(|end| end & !4095)
+    else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let previous = crate::dlls::kernel32::get_last_error();
+    let result = crate::dlls::kernel32::virtual_protect(*base, *size, new_protect, old_protect);
+    let error = crate::dlls::kernel32::get_last_error();
+    crate::process::set_last_error(previous);
+    if result == 0 {
+        return match error {
+            487 => 0xC000_0018u32 as i32,
+            8 => 0xC000_0017u32 as i32,
+            _ => STATUS_INVALID_PARAMETER,
+        };
+    }
+    *base = start as *mut c_void;
+    *size = end - start;
+    STATUS_SUCCESS
 }
 
 /// `NtReadVirtualMemory` : stub.
@@ -1459,6 +1783,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlFreeHeap" => fn rtl_free_heap,
         "RtlReAllocateHeap" => fn rtl_reallocate_heap,
         "RtlInitUnicodeString" => fn rtl_init_unicode_string,
+        "RtlFormatCurrentUserKeyPath" => fn rtl_format_current_user_key_path,
         "RtlRandomEx" => fn rtl_random_ex,
         // --- Rtl : strings ---
         "RtlInitAnsiString" => fn rtl_init_ansi_string,
@@ -1526,6 +1851,10 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlSetProcessIsCritical" => fn rtl_set_process_is_critical,
         // --- Nt* ---
         "NtClose" => fn nt_close,
+        "NtOpenKey" => fn nt_open_key,
+        "NtOpenKeyEx" => fn nt_open_key_ex,
+        "NtCreateKey" => fn nt_create_key,
+        "NtQueryValueKey" => fn nt_query_value_key,
         "NtCreateFile" => fn nt_create_file,
         "NtOpenFile" => fn nt_open_file,
         "NtQueryInformationProcess" => fn nt_query_information_process,
