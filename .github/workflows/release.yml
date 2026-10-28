@@ -4,8 +4,9 @@ on:
   push:
     # System previews are built and tested with a full ISO locally, then
     # uploaded with their system manifest. Never overwrite those manually
-    # validated preview artifacts from this workflow.
-    tags: ['v*', '!v*-preview.*']
+    # validated artifacts from this workflow. v0.2.3 is also built and validated
+    # locally (full system + BIOS/UEFI installation), then published manually.
+    tags: ['v*', '!v*-preview.*', '!v0.2.3']
 
 permissions:
   contents: write

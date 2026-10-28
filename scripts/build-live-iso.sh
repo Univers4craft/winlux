@@ -641,7 +641,11 @@ fakeroot sh -c '
     chown -R 0:0 .
     find . -print0 | cpio --null --create --format=newc --quiet
 ' >"$WINLUX_LIVE_CPIO"
-gzip -n -9 -c "$WINLUX_LIVE_CPIO" >"$work/winlux-initramfs.cpio.gz"
+if command -v pigz >/dev/null 2>&1; then
+    pigz -n -9 -p 2 -c "$WINLUX_LIVE_CPIO" >"$work/winlux-initramfs.cpio.gz"
+else
+    gzip -n -9 -c "$WINLUX_LIVE_CPIO" >"$work/winlux-initramfs.cpio.gz"
+fi
 
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"
