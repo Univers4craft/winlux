@@ -36,6 +36,7 @@ static mut ICON_X: [i32; 5] = [12, 12, 12, 108, 108];
 static mut ICON_Y: [i32; 5] = [12, 108, 204, 12, 108];
 static mut PINNED_APPS: u8 = 7; // Explorer, Paramètres, Bloc-notes
 static mut DESKTOP_SHORTCUTS: u8 = 0;
+static mut SHOW_SYSTEM_ICONS: bool = false; // Icônes système (PC, Documents, Corbeille) désactivées par défaut
 static mut CONTEXT_APP: Option<usize> = None;
 static mut CONTEXT_DESKTOP: Option<usize> = None;
 static mut CONTEXT_RECT: Rect = Rect {
@@ -441,7 +442,14 @@ fn taskbar_count() -> i32 {
         .count() as i32
 }
 fn icon_visible(i: usize) -> bool {
-    i < 3 || unsafe { DESKTOP_SHORTCUTS & app_bit(i - 3) != 0 }
+    unsafe {
+        // Les 3 premières icônes sont système (PC, Documents, Corbeille)
+        if i < 3 {
+            SHOW_SYSTEM_ICONS
+        } else {
+            DESKTOP_SHORTCUTS & app_bit(i - 3) != 0
+        }
+    }
 }
 unsafe fn open_desktop_icon(i: usize) {
     match i {
@@ -476,7 +484,7 @@ unsafe fn save_shell_state() {
         toast(b"Impossible d'enregistrer les raccourcis");
         return;
     }
-    let data = [b'W', b'T', 1, PINNED_APPS, DESKTOP_SHORTCUTS];
+    let data = [b'W', b'T', 2, PINNED_APPS, DESKTOP_SHORTCUTS, if SHOW_SYSTEM_ICONS { 1 } else { 0 }];
     let mut written = 0;
     let ok = WriteFile(
         h,
@@ -503,14 +511,24 @@ unsafe fn load_shell_state() {
     if h.is_null() || h as isize == -1 {
         return;
     }
-    let mut data = [0u8; 5];
+    let mut data = [0u8; 6];
     let mut read = 0;
-    ReadFile(h, data.as_mut_ptr(), 5, &mut read, core::ptr::null_mut());
+    ReadFile(h, data.as_mut_ptr(), 6, &mut read, core::ptr::null_mut());
     CloseHandle(h);
-    if read == 5 && data[..3] == [b'W', b'T', 1] && data[3] <= 3 && data[4] <= 3 {
+    if read == 6 && data[..3] == [b'W', b'T', 2] && data[3] <= 3 && data[4] <= 3 {
         PINNED_APPS = data[3];
         DESKTOP_SHORTCUTS = data[4];
+        SHOW_SYSTEM_ICONS = data[5] != 0;
     }
+}
+
+pub unsafe fn show_system_icons() -> bool {
+    SHOW_SYSTEM_ICONS
+}
+
+pub unsafe fn set_show_system_icons(show: bool) {
+    SHOW_SYSTEM_ICONS = show;
+    save_shell_state();
 }
 
 fn context_rows(app: usize) -> i32 {

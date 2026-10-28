@@ -454,6 +454,8 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (5, 1) => value(b"align") == b"center",
         (5, 3) => value(b"theme") == b"dark",
         (5, 4) => value(b"theme") == b"light",
+        (5, 5) => crate::desktop::show_system_icons(),
+        (5, 6) => !crate::desktop::show_system_icons(),
         (7, 3) => value(b"display_policy") == b"fixed",
         (7, 4) => value(b"display_policy") != b"fixed",
         (9, 0..=4) => EXE_SCALE == id as usize,
@@ -732,6 +734,21 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.accent,
     );
     match PAGE {
+        5 => {
+            row(
+                g,
+                &c,
+                44,
+                b"Ic\xF4nes syst\xE8me du bureau",
+                if crate::desktop::show_system_icons() {
+                    b"Affich\xE9es"
+                } else {
+                    b"Masqu\xE9es"
+                },
+            );
+            button(g, &c, 2, 0, b"Afficher", 5);
+            button(g, &c, 2, 1, b"Masquer", 6);
+        }
         10 => {
             row(
                 g,
@@ -1400,6 +1417,14 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }
     }
     let action = match (PAGE, hit(f, x, y)) {
+        (5, 5) => {
+            crate::desktop::set_show_system_icons(true);
+            None
+        }
+        (5, 6) => {
+            crate::desktop::set_show_system_icons(false);
+            None
+        }
         (10, id) if (0..=8).contains(&id) => Some(
             [
                 c"browser-install-edge",
