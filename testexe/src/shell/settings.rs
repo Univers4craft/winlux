@@ -6,12 +6,13 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 11] = [
+const PAGES: [&[u8]; 12] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
     b"Son et batterie",
     b"Clavier et pav\xE9 tactile",
+    b"Souris",
     b"Apparence",
     b"Mises \xE0 jour",
     b"\xC9cran et d\xE9finition",
@@ -56,6 +57,7 @@ static mut EXE_SCALE: usize = 0;
 static mut EXE_TRACE: bool = false;
 static mut EXE_NOTICE: &[u8] = b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.";
 const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
+static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
 
 fn exe_profile_path(out: &mut [u16; 2060]) {
     unsafe {
@@ -264,7 +266,7 @@ pub unsafe fn system_tick() -> bool {
     }
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
     changed |= read(
-        if PAGE == 6 {
+        if PAGE == 7 {
             c"Z:\\run\\winlux\\update.log"
         } else {
             c"Z:\\run\\winlux\\action.log"
@@ -273,7 +275,7 @@ pub unsafe fn system_tick() -> bool {
     );
     changed |= read(c"Z:\\run\\winlux\\updates.txt", &mut UPDATES);
     changed |= read(c"Z:\\run\\winlux\\update-progress", &mut PROGRESS);
-    if PAGE == 8 {
+    if PAGE == 9 {
         changed |= read(c"Z:\\usr\\share\\winlux\\BUILD-INFO", &mut BUILD_INFO);
     }
     if available() {
@@ -444,28 +446,31 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
     if r.bottom > c.bottom - 24 {
         return;
     }
-    let disabled = updating() && (PAGE == 0 || PAGE == 6 && id != 4);
+    let disabled = updating() && (PAGE == 0 || PAGE == 7 && id != 4);
     let selected = match (PAGE, id) {
         (4, 0) => value(b"layout") == b"fr",
         (4, 1) => value(b"layout") == b"us",
         (4, 3) => value(b"tap") == b"1",
         (4, 4) => value(b"tap") == b"0",
-        (5, 0) => value(b"align") == b"left",
-        (5, 1) => value(b"align") == b"center",
-        (5, 3) => value(b"theme") == b"dark",
-        (5, 4) => value(b"theme") == b"light",
-        (5, 5) => crate::desktop::show_system_icons(),
-        (5, 6) => !crate::desktop::show_system_icons(),
-        (7, 3) => value(b"display_policy") == b"fixed",
-        (7, 4) => value(b"display_policy") != b"fixed",
-        (9, 0..=4) => EXE_SCALE == id as usize,
-        (9, 5) => EXE_TRACE,
-        (10, 1) => value(b"browser_default") == b"edge",
-        (10, 4) => value(b"browser_default") == b"chrome",
-        (10, 7) => value(b"browser_default") == b"firefox",
+        (5, 0) => unsafe { MOUSE_SPEED == 25 },
+        (5, 1) => unsafe { MOUSE_SPEED == 50 },
+        (5, 2) => unsafe { MOUSE_SPEED == 75 },
+        (6, 0) => value(b"align") == b"left",
+        (6, 1) => value(b"align") == b"center",
+        (6, 3) => value(b"theme") == b"dark",
+        (6, 4) => value(b"theme") == b"light",
+        (6, 5) => crate::desktop::show_system_icons(),
+        (6, 6) => !crate::desktop::show_system_icons(),
+        (8, 3) => value(b"display_policy") == b"fixed",
+        (8, 4) => value(b"display_policy") != b"fixed",
+        (10, 0..=4) => EXE_SCALE == id as usize,
+        (10, 5) => EXE_TRACE,
+        (11, 1) => value(b"browser_default") == b"edge",
+        (11, 4) => value(b"browser_default") == b"chrome",
+        (11, 7) => value(b"browser_default") == b"firefox",
         _ => false,
     };
-    let primary = PAGE == 6 && id == 1 || PAGE == 7 && id == 2;
+    let primary = PAGE == 7 && id == 1 || PAGE == 8 && id == 2;
     round_rect(
         g.hdc,
         g.b,
@@ -580,7 +585,7 @@ unsafe fn journal(g: &mut Gfx, c: &Rect, start: i32, data: &[u8]) {
     let rows = ((bottom - c.top - start - 12) / 18).max(0) as usize;
     let width = (c.right - c.left - 20).max(20);
     let mut total: usize = 0;
-    let detailed = PAGE == 6 && !SHOW_LOG;
+    let detailed = PAGE == 7 && !SHOW_LOG;
     for line in data
         .split(|&v| v == b'\n')
         .filter_map(|line| journal_line(line, detailed))
@@ -735,6 +740,27 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     );
     match PAGE {
         5 => {
+            let speed_str = unsafe {
+                if MOUSE_SPEED == 25 {
+                    "Lente"
+                } else if MOUSE_SPEED == 50 {
+                    "Normale"
+                } else {
+                    "Rapide"
+                }
+            };
+            row(
+                g,
+                &c,
+                44,
+                b"Rapidit\xE9 de la souris",
+                speed_str.as_bytes(),
+            );
+            button(g, &c, 2, 0, b"Lente", 0);
+            button(g, &c, 2, 1, b"Normale", 1);
+            button(g, &c, 2, 2, b"Rapide", 2);
+        }
+        6 => {
             row(
                 g,
                 &c,
@@ -749,7 +775,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 2, 0, b"Afficher", 5);
             button(g, &c, 2, 1, b"Masquer", 6);
         }
-        10 => {
+        11 => {
             row(
                 g,
                 &c,
@@ -1323,7 +1349,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             text(g.hdc, g.f.small, p.text3, c.left, c.bottom - 30, b"Molette / Haut-Bas : d\xE9filer ; Page suivante/pr\xE9c\xE9dente : lecture rapide.");
         }
     }
-    let notice = if PAGE == 9 {
+    let notice = if PAGE == 10 {
         EXE_NOTICE
     } else if !available() {
         b"Service Winlux indisponible : les actions n\xE9cessitent Winlux.".as_slice()
@@ -1346,7 +1372,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
 
 fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     let c = content(f);
-    if unsafe { PAGE == 6 && restart_required() } {
+    if unsafe { PAGE == 7 && restart_required() } {
         return if inside(&restart_rect(&c), x, y) {
             0
         } else {
@@ -1390,7 +1416,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             return true;
         }
     }
-    if PAGE == 6 {
+    if PAGE == 7 {
         let c = content(f);
         if updating() {
             return true;
@@ -1417,15 +1443,27 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }
     }
     let action = match (PAGE, hit(f, x, y)) {
-        (5, 5) => {
+        (5, 0) => {
+            unsafe { MOUSE_SPEED = 25 };
+            None
+        }
+        (5, 1) => {
+            unsafe { MOUSE_SPEED = 50 };
+            None
+        }
+        (5, 2) => {
+            unsafe { MOUSE_SPEED = 75 };
+            None
+        }
+        (6, 5) => {
             crate::desktop::set_show_system_icons(true);
             None
         }
-        (5, 6) => {
+        (6, 6) => {
             crate::desktop::set_show_system_icons(false);
             None
         }
-        (10, id) if (0..=8).contains(&id) => Some(
+        (11, id) if (0..=8).contains(&id) => Some(
             [
                 c"browser-install-edge",
                 c"browser-default-edge",
@@ -1438,7 +1476,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 c"browser-launch-firefox",
             ][id as usize],
         ),
-        (9, id) if EXE_LEN > 0 && (0..=8).contains(&id) => {
+        (10, id) if EXE_LEN > 0 && (0..=8).contains(&id) => {
             match id {
                 0..=4 => EXE_SCALE = id as usize,
                 5 => EXE_TRACE = !EXE_TRACE,
@@ -1488,12 +1526,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (4, 1) => Some(c"keyboard-us"),
         (4, 3) => Some(c"tap-on"),
         (4, 4) => Some(c"tap-off"),
-        (5, 0) => Some(c"align-left"),
-        (5, 1) => Some(c"align-center"),
-        (5, 3) => Some(c"theme-dark"),
-        (5, 4) => Some(c"theme-light"),
-        (5, 12) => {
-            open_page(7);
+        (6, 0) => Some(c"align-left"),
+        (6, 1) => Some(c"align-center"),
+        (6, 3) => Some(c"theme-dark"),
+        (6, 4) => Some(c"theme-light"),
+        (6, 12) => {
+            open_page(8);
             return true;
         }
         (7, 0) => {
@@ -1522,18 +1560,18 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             }
             return true;
         }
-        (7, 3) => Some(c"display-fixed"),
-        (7, 4) => Some(c"display-follow"),
-        (7, 5) => Some(c"status"),
-        (7, 15) => Some(c"display-scale-down"),
-        (7, 16) => Some(c"display-scale-auto"),
-        (7, 17) => Some(c"display-scale-up"),
-        (6, 0) => {
+        (8, 3) => Some(c"display-fixed"),
+        (8, 4) => Some(c"display-follow"),
+        (8, 5) => Some(c"status"),
+        (8, 15) => Some(c"display-scale-down"),
+        (8, 16) => Some(c"display-scale-auto"),
+        (8, 17) => Some(c"display-scale-up"),
+        (7, 0) => {
             SHOW_LOG = false;
             SCROLL = 0;
             Some(c"update-check")
         }
-        (6, 1) => {
+        (7, 1) => {
             SHOW_LOG = true;
             SCROLL = 0;
             Some(if value(b"update_action") == b"reboot" {
@@ -1542,22 +1580,22 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 c"update-apply"
             })
         }
-        (6, 2) => {
+        (7, 2) => {
             SHOW_LOG = true;
             SCROLL = 0;
             Some(c"update-rollback")
         }
-        (6, 3) => Some(if value(b"update_auto") == b"enabled" {
+        (7, 3) => Some(if value(b"update_auto") == b"enabled" {
             c"update-auto-off"
         } else {
             c"update-auto-on"
         }),
-        (6, 4) => {
+        (7, 4) => {
             SHOW_LOG = !SHOW_LOG;
             SCROLL = 0;
             return true;
         }
-        (6, 5) => Some(if value(b"update_action") == b"reboot" {
+        (7, 5) => Some(if value(b"update_action") == b"reboot" {
             c"reboot"
         } else {
             c"restart-session"
@@ -1571,14 +1609,14 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     false
 }
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
-    if PAGE == 6 && restart_required() {
+    if PAGE == 7 && restart_required() {
         TOKEN_FOCUS = false;
         if !updating() && ch == 13 {
             control(c"reboot");
         }
         return true;
     }
-    if PAGE == 6 && TOKEN_FOCUS {
+    if PAGE == 7 && TOKEN_FOCUS {
         match ch {
             8 => {
                 if TOKEN_LEN > 0 {
