@@ -41,6 +41,8 @@ static mut START_SHOW_ALL_APPS: bool = false; // Afficher toutes les application
 static mut START_CATEGORY: i32 = 0; // Catégorie sélectionnée (0 = toutes)
 static mut ALL_APPS: [( &'static [u8], &'static [u8], i32); 64] = [(b"", b"", 0); 64]; // (nom, exec, catégorie)
 static mut ALL_APPS_COUNT: usize = 0;
+static mut SHORTCUTS: [( &'static [u8], &'static [u8], i32, i32); 16] = [(b"", b"", 0, 0); 16]; // (nom, exec, x, y)
+static mut SHORTCUTS_COUNT: usize = 0;
 static mut CONTEXT_APP: Option<usize> = None;
 static mut CONTEXT_DESKTOP: Option<usize> = None;
 static mut CONTEXT_RECT: Rect = Rect {
@@ -1402,6 +1404,18 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 }
             }
         }
+        // Afficher les raccourcis
+        if unsafe { SHORTCUTS_COUNT } > 0 {
+            let shortcuts_y = apps_y + 40 + (displayed as i32) * 44 + 20;
+            text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, shortcuts_y, b"Raccourcis");
+            for i in 0..unsafe { SHORTCUTS_COUNT } {
+                let (name, _exec, _x, _y) = unsafe { SHORTCUTS[i] };
+                let shortcut_y = shortcuts_y + 40 + (i as i32) * 44;
+                if shortcut_y + 40 < s.bottom - 72 {
+                    text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), inner_l + 4, shortcut_y, name);
+                }
+            }
+        }
     } else if ry + 150 < s.bottom - 72 {
         text(
             hdc,
@@ -2226,6 +2240,14 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                     let app_idx = (i - 400) as usize;
                     if app_idx < unsafe { ALL_APPS_COUNT } {
                         let exec = unsafe { ALL_APPS[app_idx].1 };
+                        launch(Launch::Exec(exec));
+                    }
+                }
+                i @ 500..=515 => {
+                    set_start(false);
+                    let shortcut_idx = (i - 500) as usize;
+                    if shortcut_idx < unsafe { SHORTCUTS_COUNT } {
+                        let exec = unsafe { SHORTCUTS[shortcut_idx].1 };
                         launch(Launch::Exec(exec));
                     }
                 }

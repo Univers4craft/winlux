@@ -60,6 +60,7 @@ const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
 static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
 static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
+static mut UPDATE_FREQUENCY: u32 = 0; // 0=quotidien, 1=hebdomadaire, 2=manuel
 
 fn exe_profile_path(out: &mut [u16; 2060]) {
     unsafe {
@@ -1236,6 +1237,19 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             if restart == b"reboot" {
                 button(g, &c, 1, 2, b"Red\xE9marrer", 5);
             }
+            let freq_str = unsafe {
+                if UPDATE_FREQUENCY == 0 {
+                    "Quotidien"
+                } else if UPDATE_FREQUENCY == 1 {
+                    "Hebdomadaire"
+                } else {
+                    "Manuel"
+                }
+            };
+            row(g, &c, 324, b"Fr\xE9quence de recherche", freq_str.as_bytes());
+            button(g, &c, 2, 0, b"Quotidien", 25);
+            button(g, &c, 2, 1, b"Hebdomadaire", 26);
+            button(g, &c, 2, 2, b"Manuel", 27);
             text(
                 g.hdc,
                 g.f.semibold,
@@ -1566,6 +1580,18 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (9, 24) => {
             unsafe { HIGH_CONTRAST = false };
             Some(c"contrast-off")
+        }
+        (7, 25) => {
+            unsafe { UPDATE_FREQUENCY = 0 };
+            Some(c"update-freq-daily")
+        }
+        (7, 26) => {
+            unsafe { UPDATE_FREQUENCY = 1 };
+            Some(c"update-freq-weekly")
+        }
+        (7, 27) => {
+            unsafe { UPDATE_FREQUENCY = 2 };
+            Some(c"update-freq-manual")
         }
         (7, 0) => {
             SHOW_LOG = false;
