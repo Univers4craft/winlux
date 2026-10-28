@@ -11,17 +11,17 @@ const FONT_W: i32 = 8;
 const FONT_H: i32 = 16;
 
 #[derive(Clone)]
-struct Doc {
-    text: [u8; MAX_TEXT],
-    len: usize,
-    lines: [usize; MAX_LINES],
-    line_count: usize,
-    cursor: usize,
-    scroll_y: i32,
-    modified: bool,
+pub struct Doc {
+    pub text: [u8; MAX_TEXT],
+    pub len: usize,
+    pub lines: [usize; MAX_LINES],
+    pub line_count: usize,
+    pub cursor: usize,
+    pub scroll_y: i32,
+    pub modified: bool,
 }
 
-static mut DOC: Doc = Doc {
+pub static mut DOC: Doc = Doc {
     text: [0; MAX_TEXT],
     len: 0,
     lines: [0; MAX_LINES],

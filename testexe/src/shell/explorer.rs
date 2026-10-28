@@ -1027,6 +1027,49 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         }
         return;
     }
+    // Open .txt in integrated Notepad
+    if ends_ci(&path[..n], b".txt") {
+        crate::notepad::open_new();
+        use winlux_testexe::*;
+        let mut wide = [0u16; PATH_LEN + NAME_LEN + 2];
+        wstr(&mut wide, &path[..n]);
+        let h = CreateFileW(wide.as_ptr(), 0x80000000, 1, core::ptr::null_mut(), 3, 0, core::ptr::null_mut());
+        if !h.is_null() && (h as isize) != -1 {
+            let mut buf = [0u8; 4096];
+            let mut got = 0u32;
+            ReadFile(h, buf.as_mut_ptr(), 4096, &mut got, core::ptr::null_mut());
+            CloseHandle(h);
+            // write to notepad doc
+            unsafe {
+                let doc = &mut crate::notepad::DOC;
+                let mut i = 0;
+                while (i as u32) < got && doc.len < 8191 {
+                    if buf[i as usize] == b'\r' {
+                        i += 1;
+                        continue;
+                    }
+                    doc.text[doc.len] = buf[i as usize];
+                    doc.len += 1;
+                    i += 1;
+                }
+                doc.cursor = doc.len;
+                doc.modified = false;
+                // rebuild
+                doc.lines[0] = 0;
+                doc.line_count = 1;
+                let mut j = 0;
+                while j < doc.len && doc.line_count < 512 {
+                    if doc.text[j] == b'\n' {
+                        doc.lines[doc.line_count] = j + 1;
+                        doc.line_count += 1;
+                    }
+                    j += 1;
+                }
+            }
+        }
+        wm::open(wm::APP_NOTEPAD);
+        return;
+    }
     let mut wpath = [0u16; PATH_LEN + NAME_LEN + 2];
     wstr(&mut wpath, &path[..n]);
     let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];

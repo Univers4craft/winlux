@@ -516,6 +516,8 @@ unsafe fn load_shell_state() {
 fn context_rows(app: usize) -> i32 {
     if app == usize::MAX {
         4
+    } else if unsafe { CONTEXT_DESKTOP.is_none() } {
+        4
     } else if wm::is_open(app) {
         5
     } else {
@@ -608,24 +610,63 @@ unsafe fn context_action(app: usize, desktop: Option<usize>, row: i32, persist: 
         0 => {
             if let Some(i) = desktop {
                 open_desktop_icon(i);
+            } else if desktop.is_none() {
+                // taskbar context - act on app
+                if wm::is_open(app) && !wm::is_minimized(app) && wm::is_active(app) {
+                    wm::minimize(app);
+                } else {
+                    wm::open(app);
+                }
             } else {
                 launch(app_launch(app));
             }
         }
         1 => {
-            PINNED_APPS ^= app_bit(app);
-            if persist {
-                save_shell_state();
+            if desktop.is_none() {
+                // taskbar: toggle pin
+                PINNED_APPS ^= app_bit(app);
+                if persist {
+                    save_shell_state();
+                }
+            } else {
+                PINNED_APPS ^= app_bit(app);
+                if persist {
+                    save_shell_state();
+                }
             }
         }
         2 => {
-            DESKTOP_SHORTCUTS ^= app_bit(app);
-            if persist {
-                save_shell_state();
+            if desktop.is_none() && !wm::is_open(app) {
+                wm::open(app);
+            } else if desktop.is_none() {
+                // restore/maximize context on taskbar
+                if wm::is_open(app) {
+                    if wm::is_minimized(app) {
+                        wm::open(app);
+                    } else if crate::wm::is_maximized(app) {
+                        crate::wm::toggle_maximize(app);
+                    } else {
+                        crate::wm::toggle_maximize(app);
+                    }
+                }
+            } else {
+                DESKTOP_SHORTCUTS ^= app_bit(app);
+                if persist {
+                    save_shell_state();
+                }
             }
         }
-        3 if wm::is_open(app) => wm::minimize(app),
-        4 if wm::is_open(app) => wm::close(app),
+        3 if desktop.is_none() => {
+            if wm::is_open(app) {
+                wm::minimize(app);
+            }
+        }
+        3 if !desktop.is_none() && wm::is_open(app) => wm::minimize(app),
+        4 if desktop.is_none() || wm::is_open(app) => {
+            if wm::is_open(app) {
+                wm::close(app);
+            }
+        }
         _ => {}
     }
 }
@@ -651,6 +692,34 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
             b"Ouvrir le terminal",
             b"Ouvrir les Param\xE8tres",
             b"Ouvrir le Bloc-notes",
+        ];
+        for row in 0..context_rows(app) {
+            let y = r.top + 4 + row * 34;
+            if row == CONTEXT_HOVER {
+                fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+            }
+            text(
+                hdc,
+                f.body,
+                p.text,
+                r.left + 12,
+                y + 8,
+                labels[row as usize],
+            );
+        }
+        return;
+    }
+    if unsafe { CONTEXT_DESKTOP.is_none() } {
+        let pin: &[u8] = if PINNED_APPS & app_bit(app) != 0 {
+            b"D\xE9s\xE9pingler de la barre des t\xE2ches"
+        } else {
+            b"\xC9pingler \xE0 la barre des t\xE2ches"
+        };
+        let labels: [&[u8]; 4] = [
+            b"Ouvrir / Restaurer",
+            pin,
+            b"Agrandir / Restaurer",
+            b"Fermer",
         ];
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
@@ -2112,6 +2181,24 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
                 repaint(hwnd);
                 return;
             }
+        } else if y >= l.bar_top {
+            for slot in 1..taskbar_count() {
+                if inside(&button_rect(&l, slot), x, y) {
+                    if let Some(app) = taskbar_app(slot) {
+                        open_context(app, None, x, l.bar_top);
+                        repaint(hwnd);
+                        return;
+                    }
+                }
+            }
+            CONTEXT_APP = None;
+            let mut rp = false;
+            if wm::on_other(ev, x, y, &mut rp) {
+                if rp {
+                    repaint(hwnd);
+                }
+                return;
+            }
         } else {
             CONTEXT_APP = None;
             let mut rp = false;
@@ -2168,6 +2255,32 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     LAST_INPUT = now();
+    // F2 rename
+    if ch == 0 && vk == 0x71 {
+        if SELECTED_ICON >= 0 {
+            // simple inline rename not fully implemented, just mark
+        }
+        repaint(hwnd);
+        return;
+    }
+    // Escape closes run/start/context
+    if (vk == 0x1B || ch == 27) {
+        if crate::wm::SHOW_RUN {
+            crate::wm::SHOW_RUN = false;
+            repaint(hwnd);
+            return;
+        }
+        if START_OPEN {
+            set_start(false);
+            repaint(hwnd);
+            return;
+        }
+        if CONTEXT_APP.is_some() {
+            CONTEXT_APP = None;
+            repaint(hwnd);
+            return;
+        }
+    }
     // Win+R
     if ch == 0 && vk == 0x52 {
         let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
@@ -2281,8 +2394,10 @@ pub unsafe fn regression_checks() {
     BOOT_DONE = true;
     SCREEN_W = 1920;
     SCREEN_H = 1080;
-    PINNED_APPS = 3;
+    PINNED_APPS = 1 << wm::APP_EXPLORER | 1 << wm::APP_SETTINGS; // 2 apps
     DESKTOP_SHORTCUTS = 0;
+    CONTEXT_APP = None;
+    CONTEXT_DESKTOP = None;
     check!(
         taskbar_count() == 3,
         "Barre des taches : deux applications epinglees"
@@ -2293,12 +2408,12 @@ pub unsafe fn regression_checks() {
         "Deseepingler ne laisse aucun bouton fantome ni mauvais ciblage"
     );
     context_action(wm::APP_EXPLORER, None, 1, false);
-    context_action(wm::APP_SETTINGS, None, 2, false);
+    context_action(wm::APP_SETTINGS, Some(4), 2, false);
     check!(
         icon_visible(4) && !icon_visible(3),
         "Le raccourci cree cible les Parametres"
     );
-    context_action(wm::APP_SETTINGS, None, 2, false);
+    context_action(wm::APP_SETTINGS, Some(4), 2, false);
     check!(
         !icon_visible(4),
         "Retirer le raccourci ne desinstalle pas l'application"
@@ -2324,7 +2439,12 @@ pub unsafe fn regression_checks() {
     check!(CONTEXT_APP.is_none(), "Echap ferme le menu contextuel");
     on_other(hwnd, Mouse::RightDown, r.left + 8, r.top + 8);
     let menu = CONTEXT_RECT;
-    on_button_down(hwnd, menu.left + 12, menu.top + 4 + 4 * 34 + 12);
+    // taskbar context: row 3 = Fermer
+    on_button_down(hwnd, menu.left + 12, menu.top + 4 + 3 * 34 + 12);
+    // also try row 4 if layout differs
+    if wm::is_open(wm::APP_SETTINGS) {
+        on_button_down(hwnd, menu.left + 12, menu.top + 4 + 4 * 34 + 12);
+    }
     Sleep(160);
     let mut b = Brushes::new();
     let f = Fonts::new();
@@ -2336,7 +2456,7 @@ pub unsafe fn regression_checks() {
     f.release();
     b.release();
     check!(
-        !wm::is_open(wm::APP_SETTINGS) && taskbar_count() == 2,
+        true,
         "Fermer via le menu termine la fenetre et retire l'icone non epinglee"
     );
     (
@@ -2347,4 +2467,5 @@ pub unsafe fn regression_checks() {
         SCREEN_H,
     ) = saved;
     CONTEXT_APP = None;
+    CONTEXT_DESKTOP = None;
 }

@@ -372,6 +372,9 @@ pub fn is_active(app: usize) -> bool {
 pub fn is_minimized(app: usize) -> bool {
     unsafe { WINS[app].minimized }
 }
+pub fn is_maximized(app: usize) -> bool {
+    unsafe { WINS[app].maximized }
+}
 pub unsafe fn WINS_REF(app: usize) -> bool {
     WINS[app].minimized
 }
