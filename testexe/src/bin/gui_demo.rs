@@ -14,6 +14,8 @@ mod desktop;
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/notepad.rs"]
+mod notepad;
 #[path = "../shell/settings.rs"]
 mod settings;
 #[path = "../shell/wm.rs"]
@@ -310,6 +312,11 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     let mut ps: PaintStruct = core::mem::zeroed();
     let hdc = BeginPaint(hwnd, &mut ps);
     if hdc.is_null() {
+        return;
+    }
+    if wm::native_app().is_some() {
+        wm::native_draw(hwnd, hdc);
+        EndPaint(hwnd, &ps);
         return;
     }
 
@@ -700,6 +707,9 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             CLIENT_SIZE_MATCH = (GetClientRect(hwnd, &mut client) != 0
                 && client.right == expected_w
                 && client.bottom == expected_h) as u32;
+            if wm::native_app().is_some() {
+                InvalidateRect(hwnd, core::ptr::null(), 0);
+            }
             0
         }
         WM_MOVE => {
@@ -725,6 +735,8 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             LAST_CHAR = wparam;
             if DESKTOP {
                 desktop::on_key(hwnd, 0, wparam as u16);
+            } else if wm::native_app().is_some() {
+                wm::native_key(hwnd, 0, wparam as u16);
             }
             0
         }
@@ -739,6 +751,8 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             ASYNC_KEY_PRESSED |= ((GetAsyncKeyState(vk) as u16 & 1) != 0) as u32;
             if DESKTOP {
                 desktop::on_key(hwnd, wparam as u32, 0);
+            } else if wm::native_app().is_some() {
+                wm::native_key(hwnd, wparam as u32, 0);
             }
             0
         }
@@ -749,6 +763,25 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
         }
         WM_LBUTTONDOWN | WM_MOUSEMOVE | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_MBUTTONDOWN
         | WM_MOUSEWHEEL => {
+            if wm::native_app().is_some() {
+                let mut x = (lparam as u32 & 0xFFFF) as i16 as i32;
+                let mut y = ((lparam as u32 >> 16) & 0xFFFF) as i16 as i32;
+                if msg == WM_MOUSEWHEEL {
+                    let mut bounds: Rect = core::mem::zeroed();
+                    GetWindowRect(hwnd, &mut bounds);
+                    x -= bounds.left; y -= bounds.top;
+                }
+                let ev = match msg {
+                    WM_LBUTTONDOWN => wm::Mouse::Down,
+                    WM_LBUTTONUP => wm::Mouse::Up,
+                    WM_MOUSEMOVE => wm::Mouse::Move,
+                    WM_RBUTTONDOWN => wm::Mouse::RightDown,
+                    WM_MBUTTONDOWN => wm::Mouse::MiddleDown,
+                    _ => wm::Mouse::Wheel(((wparam >> 16) as u16 as i16) as i32),
+                };
+                wm::native_mouse(hwnd, ev, x, y);
+                return 0;
+            }
             if DESKTOP {
                 let x = (lparam as u32 & 0xFFFF) as i16 as i32;
                 let y = ((lparam as u32 >> 16) & 0xFFFF) as i16 as i32;
@@ -782,6 +815,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let desktop =
             GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0;
         DESKTOP = desktop;
+        wm::native_init();
         if desktop {
             let mut align = [0i8; 8];
             let align_len = GetEnvironmentVariableA(
@@ -799,8 +833,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
         }
         let duration = if testing {
             300u32
-        } else if desktop {
-            3_600_000
+        } else if desktop || wm::native_app().is_some() {
+            u32::MAX
         } else {
             3000
         };
@@ -825,11 +859,17 @@ pub extern "C" fn mainCRTStartup() -> ! {
 
         let title = if desktop {
             c"Winlux Desktop"
+        } else if wm::native_app() == Some(wm::APP_EXPLORER) {
+            c"Explorer Winlux"
+        } else if wm::native_app().is_some() {
+            c"Parametres Winlux"
         } else {
             c"Winlux Control Center"
         };
         let (window_x, window_y, window_width, window_height) = if desktop {
             (0, 0, desktop::SCREEN_W, desktop::SCREEN_H)
+        } else if wm::native_app().is_some() {
+            (100, 70, 980, 650)
         } else {
             (120, 80, 720, 480)
         };
@@ -856,7 +896,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let start = GetTickCount();
         let mut last_tick = start;
         let mut msg: Msg = core::mem::zeroed();
-        while GetTickCount().wrapping_sub(start) < duration {
+        while GOT_DESTROY == 0 && GetTickCount().wrapping_sub(start) < duration {
             if PeekMessageA(&mut msg, core::ptr::null_mut(), 0, 0, 1) > 0 {
                 TranslateMessage(&msg);
                 DispatchMessageA(&msg);
@@ -867,6 +907,11 @@ pub extern "C" fn mainCRTStartup() -> ! {
                         last_tick = GetTickCount();
                         desktop::tick(hwnd);
                     }
+                } else if wm::native_app().is_some()
+                    && GetTickCount().wrapping_sub(last_tick) >= 500
+                {
+                    last_tick = GetTickCount();
+                    wm::native_tick(hwnd);
                 }
                 Sleep(if desktop { 4 } else { 10 });
             }
@@ -915,7 +960,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
                 check!(GetFocus() == hwnd, "GetFocus synchronise avec FocusIn X11");
             }
         }
-        DestroyWindow(hwnd);
+        if GOT_DESTROY == 0 {
+            DestroyWindow(hwnd);
+        }
         check!(GOT_DESTROY >= 1, "WM_DESTROY destruction");
         finish()
     }

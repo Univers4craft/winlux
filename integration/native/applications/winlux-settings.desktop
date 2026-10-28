@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Paramètres Winlux
+Comment=Paramètres Linux, Windows, affichage et applications
+Exec=/usr/bin/winlux-shell-app settings
+Icon=/usr/share/winlux/native/icons/settings.svg
+StartupWMClass=winlux-settings
+Terminal=false
+Categories=Settings;System;

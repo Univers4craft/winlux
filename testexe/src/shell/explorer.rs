@@ -1103,6 +1103,9 @@ unsafe fn toggle_dual() {
 
 /// Ouvre Explorer sur un dossier (appelé par le bureau et le menu Démarrer).
 pub unsafe fn open_at(path: &[u8]) {
+    if wm::native_explorer(path) {
+        return;
+    }
     if !wm::is_open(wm::APP_EXPLORER) || NTABS == 0 {
         NTABS = 0;
         CUR = 0;

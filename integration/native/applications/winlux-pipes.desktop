@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Tuyaux 3D — écran de veille
+Comment=Aperçu de l’écran de veille animé, retour avec la souris ou le clavier
+Exec=/usr/bin/winlux-desktop-action screensaver
+Icon=preferences-desktop-screensaver
+Terminal=false
+Categories=Settings;DesktopSettings;

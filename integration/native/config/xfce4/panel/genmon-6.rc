@@ -1,0 +1,5 @@
+Command=/usr/bin/winlux-tray battery
+UseLabel=0
+Text=
+UpdatePeriod=10000
+Font=DejaVu Sans 10

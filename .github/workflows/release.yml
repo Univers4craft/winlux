@@ -41,6 +41,9 @@ jobs:
       - name: Préparer Edge, Chrome et Firefox hors ligne
         run: python3 scripts/prepare-browser-packages.py build/browser-packages
 
+      - name: Préparer le bureau natif et ses applications
+        run: python3 scripts/prepare-desktop-packages.py build/desktop-components
+
       - name: Compiler et tester
         run: |
           cargo test -p winlux
@@ -70,6 +73,7 @@ jobs:
           test "$SKIP_ISO" = "false"
           sh scripts/test-install-safety.sh
           sh scripts/test-browsers-vm.sh
+          sh scripts/test-native-session-vm.sh
           sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" bios
           sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" uefi
           sh scripts/test-install-vm-guest.sh "build/winlux-live-$GITHUB_REF_NAME.iso"

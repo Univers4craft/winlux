@@ -77,6 +77,7 @@ install_browser() {
     trap - EXIT HUP INT TERM
     rmdir "$run/browser-install.lock"
     echo "Navigateur installé : $id"
+    if command -v winlux-applications >/dev/null 2>&1; then winlux-applications refresh >/dev/null 2>&1 || true; fi
 }
 launch() {
     id=$1; shift
@@ -91,6 +92,16 @@ launch() {
         # Vendor sandbox stays enabled: the browser runs as its own user.
         home=/home/winlux-web
         test -d "$home" || { echo 'Compte navigateur non initialisé' >&2; return 1; }
+        case "$id" in edge|chrome)
+            size=$(/usr/bin/xrandr --current 2>/dev/null | awk '/\*/ {print $1;exit}')
+            width=${size%x*}; height=${size#*x}
+            case "$width:$height" in *[!0-9:]*|:|*:) width=1920; height=1080 ;; esac
+            width=$((width * 80 / 100)); height=$((height * 75 / 100))
+            test "$width" -le 1120 || width=1120
+            test "$height" -le 740 || height=740
+            set -- --no-first-run --no-default-browser-check "--window-size=$width,$height" "$@"
+            ;;
+        esac
         xhost +SI:localuser:winlux-web >/dev/null 2>&1 || true
         for helper in "${program%/*}/chrome-sandbox" "${program%/*}/msedge-sandbox"; do
             if test -f "$helper" && ! test -L "$helper"; then chown root:root "$helper"; chmod 4755 "$helper"; fi

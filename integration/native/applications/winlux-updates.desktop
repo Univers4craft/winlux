@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Mises à jour Winlux
+Exec=/usr/bin/winlux-shell-app settings 6
+Icon=system-software-update
+StartupWMClass=winlux-settings
+Terminal=false
+Categories=Settings;System;

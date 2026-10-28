@@ -16,11 +16,158 @@
 //! - `tick(frame) -> bool` est appelé deux fois par seconde.
 
 use crate::gfx::*;
+use crate::notepad;
 use winlux_testexe::*;
 
 pub const APP_EXPLORER: usize = 0;
 pub const APP_SETTINGS: usize = 1;
-pub const APP_COUNT: usize = 2;
+pub const APP_NOTEPAD: usize = 2;
+pub const APP_COUNT: usize = 3;
+
+// Native session: each built-in application owns a separate X11/Win32 window.
+// The Linux window manager handles its frame, stacking and taskbar lifecycle.
+static mut NATIVE_APP: usize = usize::MAX;
+pub unsafe fn native_session() -> bool {
+    GetEnvironmentVariableA(c"WINLUX_NATIVE_SHELL".as_ptr(), core::ptr::null_mut(), 0) > 0
+}
+pub unsafe fn native_app() -> Option<usize> {
+    (NATIVE_APP != usize::MAX).then_some(NATIVE_APP)
+}
+pub unsafe fn native_init() {
+    let mut mode = [0i8; 32];
+    let n = GetEnvironmentVariableA(c"WINLUX_SHELL_APP".as_ptr(), mode.as_mut_ptr(), 32);
+    NATIVE_APP = if n == 8 && mode[0] == b'e' as i8 {
+        APP_EXPLORER
+    } else if n == 8 && mode[0] == b's' as i8 {
+        APP_SETTINGS
+    } else {
+        usize::MAX
+    };
+    if NATIVE_APP == APP_EXPLORER {
+        let mut path = [0u8; 1024];
+        let n = GetEnvironmentVariableA(
+            c"WINLUX_SHELL_PATH".as_ptr(),
+            path.as_mut_ptr().cast(),
+            path.len() as u32,
+        );
+        if n > 0 && (n as usize) < path.len() {
+            crate::explorer::open_at(&path[..n as usize]);
+        } else {
+            crate::explorer::preload();
+            open(APP_EXPLORER);
+        }
+    } else if NATIVE_APP == APP_SETTINGS {
+        let mut page = [0i8; 8];
+        let n = GetEnvironmentVariableA(c"WINLUX_SETTINGS_PAGE".as_ptr(), page.as_mut_ptr(), 8);
+        let mut value = 0usize;
+        for &digit in page.iter().take((n as usize).min(7)) {
+            if (b'0' as i8..=b'9' as i8).contains(&digit) {
+                value = value * 10 + (digit as usize - b'0' as usize);
+            }
+        }
+        crate::settings::open_page(value);
+    }
+}
+pub unsafe fn native_launch(app: usize) {
+    let args = match app {
+        APP_EXPLORER => c"explorer",
+        APP_SETTINGS => c"settings",
+        _ => c"editor",
+    };
+    ShellExecuteA(
+        core::ptr::null_mut(),
+        c"open".as_ptr(),
+        c"winlux-shell-app".as_ptr(),
+        args.as_ptr(),
+        core::ptr::null(),
+        1,
+    );
+}
+pub unsafe fn native_settings(page: usize) -> bool {
+    if !native_session() || NATIVE_APP == APP_SETTINGS {
+        return false;
+    }
+    let value = [
+        b'0' + (page.min(99) / 10) as u8,
+        b'0' + (page.min(99) % 10) as u8,
+        0,
+    ];
+    SetEnvironmentVariableA(c"WINLUX_SETTINGS_PAGE".as_ptr(), value.as_ptr().cast());
+    native_launch(APP_SETTINGS);
+    SetEnvironmentVariableA(c"WINLUX_SETTINGS_PAGE".as_ptr(), core::ptr::null());
+    true
+}
+pub unsafe fn native_explorer(path: &[u8]) -> bool {
+    if !native_session() || NATIVE_APP == APP_EXPLORER {
+        return false;
+    }
+    let mut value = [0u8; 1024];
+    let n = path.len().min(value.len() - 1);
+    value[..n].copy_from_slice(&path[..n]);
+    SetEnvironmentVariableA(c"WINLUX_SHELL_PATH".as_ptr(), value.as_ptr().cast());
+    native_launch(APP_EXPLORER);
+    SetEnvironmentVariableA(c"WINLUX_SHELL_PATH".as_ptr(), core::ptr::null());
+    true
+}
+unsafe fn native_frame(hwnd: Handle) -> Frame {
+    let mut outer = rect(0, 0, 900, 620);
+    GetClientRect(hwnd, &mut outer);
+    let title_h = if NATIVE_APP == APP_EXPLORER { 40 } else { 0 };
+    Frame {
+        outer,
+        title: rect(0, 0, outer.right, title_h),
+        client: rect(0, title_h, outer.right, outer.bottom),
+    }
+}
+pub unsafe fn native_draw(hwnd: Handle, hdc: Handle) {
+    let f = native_frame(hwnd);
+    let fonts = Fonts::new();
+    let mut brushes = Brushes::new();
+    SetBkMode(hdc, 1);
+    fill(hdc, &mut brushes, 0, 0, f.outer.right, f.outer.bottom, pal().window);
+    app_draw(
+        NATIVE_APP,
+        &mut Gfx {
+            hdc,
+            b: &mut brushes,
+            f: &fonts,
+        },
+        &f,
+    );
+    brushes.release();
+    fonts.release();
+}
+pub unsafe fn native_mouse(hwnd: Handle, mut ev: Mouse, x: i32, y: i32) {
+    MOUSE_X = x;
+    MOUSE_Y = y;
+    if ev == Mouse::Down {
+        if now().wrapping_sub(LAST_CLICK_TIME) < 450
+            && (x - LAST_CLICK_X).abs() < 5
+            && (y - LAST_CLICK_Y).abs() < 5
+        {
+            ev = Mouse::DoubleClick;
+            LAST_CLICK_TIME = 0;
+        } else {
+            LAST_CLICK_TIME = now();
+            LAST_CLICK_X = x;
+            LAST_CLICK_Y = y;
+        }
+    }
+    if app_mouse(NATIVE_APP, ev, x, y, &native_frame(hwnd)) {
+        InvalidateRect(hwnd, core::ptr::null(), 0);
+    }
+}
+pub unsafe fn native_key(hwnd: Handle, vk: u32, ch: u16) {
+    if app_key(NATIVE_APP, vk, ch) {
+        InvalidateRect(hwnd, core::ptr::null(), 0);
+    }
+}
+pub unsafe fn native_tick(hwnd: Handle) {
+    let changed = crate::settings::system_tick();
+    if app_tick(NATIVE_APP, &native_frame(hwnd)) || changed {
+        InvalidateRect(hwnd, core::ptr::null(), 0);
+    }
+}
 
 pub const TITLE_H: i32 = 40;
 const CAPTION_W: i32 = 46;
@@ -79,7 +226,7 @@ const CLOSED: Win = Win {
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [0, 1];
+static mut Z: [usize; APP_COUNT] = [0, 1, 2];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
@@ -107,6 +254,8 @@ static mut HOVER_CAPTION: i32 = -1;
 static mut LAST_CLICK_TIME: u32 = 0;
 static mut LAST_CLICK_X: i32 = -100;
 static mut LAST_CLICK_Y: i32 = -100;
+static mut ALT_TAB: bool = false;
+static mut ALT_TAB_INDEX: i32 = 0;
 /// Zone de travail (écran moins la barre des tâches) et bouton de barre des
 /// tâches de chaque application, cible de l'animation de réduction.
 pub static mut WORK: Rect = rect(0, 0, 1280, 672);
@@ -117,18 +266,24 @@ pub static mut MOUSE_Y: i32 = -1;
 pub fn title_of(app: usize) -> &'static [u8] {
     match app {
         APP_EXPLORER => b"Explorer",
+        APP_SETTINGS => b"Param\xE8tres",
+        APP_NOTEPAD => b"Bloc-notes",
         _ => b"Param\xE8tres",
     }
 }
 fn glyph_of(app: usize) -> Glyph {
     match app {
         APP_EXPLORER => Glyph::Folder,
+        APP_SETTINGS => Glyph::Settings,
+        APP_NOTEPAD => Glyph::File,
         _ => Glyph::Settings,
     }
 }
 fn custom_title(app: usize) -> bool {
     match app {
         APP_EXPLORER => crate::explorer::CUSTOM_TITLE,
+        APP_SETTINGS => crate::settings::CUSTOM_TITLE,
+        APP_NOTEPAD => notepad::CUSTOM_TITLE,
         _ => crate::settings::CUSTOM_TITLE,
     }
 }
@@ -136,24 +291,32 @@ fn custom_title(app: usize) -> bool {
 unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
     match app {
         APP_EXPLORER => crate::explorer::draw(g, f),
+        APP_SETTINGS => crate::settings::draw(g, f),
+        APP_NOTEPAD => notepad::draw(g, f),
         _ => crate::settings::draw(g, f),
     }
 }
 unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     match app {
         APP_EXPLORER => crate::explorer::mouse(ev, x, y, f),
+        APP_SETTINGS => crate::settings::mouse(ev, x, y, f),
+        APP_NOTEPAD => notepad::mouse(ev, x, y, f),
         _ => crate::settings::mouse(ev, x, y, f),
     }
 }
 unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
     match app {
         APP_EXPLORER => crate::explorer::key(vk, ch),
+        APP_SETTINGS => crate::settings::key(vk, ch),
+        APP_NOTEPAD => notepad::key(vk, ch),
         _ => crate::settings::key(vk, ch),
     }
 }
 unsafe fn app_tick(app: usize, f: &Frame) -> bool {
     match app {
         APP_EXPLORER => crate::explorer::tick(f),
+        APP_SETTINGS => crate::settings::tick(f),
+        APP_NOTEPAD => notepad::tick(f),
         _ => crate::settings::tick(f),
     }
 }
@@ -245,6 +408,7 @@ fn default_rect(app: usize) -> Rect {
     let (ww, wh) = (wk.right - wk.left, wk.bottom - wk.top);
     let (w, h) = match app {
         APP_EXPLORER => (1100, 680),
+        APP_NOTEPAD => (900, 620),
         _ => (1040, 700),
     };
     let (w, h) = (w.min(ww - 40).max(480), h.min(wh - 40).max(320));
@@ -261,6 +425,10 @@ fn default_rect(app: usize) -> Rect {
 
 /// Ouvre l'application, ou la ramène au premier plan si elle est déjà ouverte.
 pub unsafe fn open(app: usize) {
+    if native_session() && NATIVE_APP != app {
+        native_launch(app);
+        return;
+    }
     let w = &mut WINS[app];
     if !w.open {
         *w = Win {
@@ -589,6 +757,79 @@ pub unsafe fn draw(g: &mut Gfx) {
             draw_window(g, app);
         }
     }
+    if ALT_TAB {
+        let p = pal();
+        let sw = 420;
+        let sh = 140;
+        let cx = (WORK.left + WORK.right - sw) / 2;
+        let cy = (WORK.top + WORK.bottom - sh) / 2;
+        round_rect(
+            g.hdc,
+            g.b,
+            cx,
+            cy,
+            cx + sw,
+            cy + sh,
+            12,
+            mix(p.border, p.accent, 3, 10),
+        );
+        round_rect(
+            g.hdc,
+            g.b,
+            cx + 1,
+            cy + 1,
+            cx + sw - 1,
+            cy + sh - 1,
+            11,
+            p.surface,
+        );
+        text(
+            g.hdc,
+            g.f.caption,
+            p.text,
+            cx + 16,
+            cy + 12,
+            b"Basculer entre les fen\xEAtres",
+        );
+        let mut list = [usize::MAX; APP_COUNT];
+        let mut count = 0;
+        for &a in Z.iter().rev() {
+            if WINS[a].open && !WINS[a].minimized {
+                list[count] = a;
+                count += 1;
+            }
+        }
+        let mut i = 0;
+        while i < count {
+            let app = list[i];
+            let x = cx + 16 + i as i32 * 92;
+            let y = cy + 48;
+            if (i as i32) == ALT_TAB_INDEX {
+                round_rect(
+                    g.hdc,
+                    g.b,
+                    x - 4,
+                    y - 4,
+                    x + 84,
+                    y + 76,
+                    8,
+                    mix(p.hover, p.accent, 2, 10),
+                );
+            }
+            glyph(g.hdc, g.b, g.f, glyph_of(app), x + 26, y + 8, 32);
+            let t = title_of(app);
+            // simple text clipping by drawing truncated
+            text(
+                g.hdc,
+                g.f.small,
+                p.text,
+                x - 2,
+                y + 52,
+                if t.len() > 10 { b"..." } else { t },
+            );
+            i += 1;
+        }
+    }
 }
 
 // ---------- Souris et clavier ----------
@@ -845,6 +1086,71 @@ pub unsafe fn on_other(ev: Mouse, x: i32, y: i32, repaint: &mut bool) -> bool {
 }
 
 pub unsafe fn on_key(vk: u32, ch: u16) -> bool {
+    if vk == 0x12 {
+        // Alt
+        if ch == 0 {
+            // track alt key via keydown/up context - simplified
+        }
+    }
+    if vk == 0x09 && ch == 0 {
+        // Tab
+        let alt_down = ((GetKeyState(0x12) as u16) & 0x8000) != 0;
+        if alt_down {
+            let mut list = [usize::MAX; APP_COUNT];
+            let mut count = 0;
+            for &a in Z.iter().rev() {
+                if WINS[a].open && !WINS[a].minimized {
+                    list[count] = a;
+                    count += 1;
+                }
+            }
+            if count > 0 {
+                ALT_TAB = true;
+                ALT_TAB_INDEX = (ALT_TAB_INDEX + 1) % count as i32;
+                return true;
+            }
+        } else if ALT_TAB {
+            let mut list = [usize::MAX; APP_COUNT];
+            let mut count = 0;
+            for &a in Z.iter().rev() {
+                if WINS[a].open && !WINS[a].minimized {
+                    list[count] = a;
+                    count += 1;
+                }
+            }
+            if count > 0 && ALT_TAB_INDEX >= 0 && (ALT_TAB_INDEX as usize) < count {
+                let app = list[ALT_TAB_INDEX as usize];
+                raise(app);
+            }
+            ALT_TAB = false;
+            ALT_TAB_INDEX = 0;
+            return true;
+        }
+    }
+    if vk == 0x12 && ch == 0 {
+        // if alt released
+        let alt_down = ((GetKeyState(0x12) as u16) & 0x8000) != 0;
+        if !alt_down && ALT_TAB {
+            let mut list = [usize::MAX; APP_COUNT];
+            let mut count = 0;
+            for &a in Z.iter().rev() {
+                if WINS[a].open && !WINS[a].minimized {
+                    list[count] = a;
+                    count += 1;
+                }
+            }
+            if count > 0 && ALT_TAB_INDEX >= 0 && (ALT_TAB_INDEX as usize) < count {
+                let app = list[ALT_TAB_INDEX as usize];
+                raise(app);
+            }
+            ALT_TAB = false;
+            ALT_TAB_INDEX = 0;
+            return true;
+        }
+    }
+    if ALT_TAB {
+        return true;
+    }
     if ACTIVE == usize::MAX {
         return false;
     }

@@ -2586,6 +2586,67 @@ impl gui::GuiBackend for X11Backend {
             &title_bytes,
         );
 
+        let atom = |name: &[u8]| -> Option<Atom> {
+            self.conn
+                .intern_atom(false, name)
+                .ok()?
+                .reply()
+                .ok()
+                .map(|v| v.atom)
+        };
+        if let (Some(name), Some(utf8)) = (atom(b"_NET_WM_NAME"), atom(b"UTF8_STRING")) {
+            let _ = self.conn.change_property8(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                win,
+                name,
+                utf8,
+                title.as_bytes(),
+            );
+        }
+        if let Some(pid) = atom(b"_NET_WM_PID") {
+            let _ = self.conn.change_property32(
+                x11rb::protocol::xproto::PropMode::REPLACE,
+                win,
+                pid,
+                AtomEnum::CARDINAL,
+                &[std::process::id()],
+            );
+        }
+        let class = std::env::var("WINLUX_SHELL_APP")
+            .map(|app| format!("winlux-{app}"))
+            .unwrap_or_else(|_| {
+                std::env::args()
+                    .nth(1)
+                    .and_then(|arg| {
+                        std::path::Path::new(&arg)
+                            .file_stem()
+                            .map(|s| s.to_string_lossy().into_owned())
+                    })
+                    .unwrap_or_else(|| "Winlux".into())
+            });
+        let class = format!("{class}\0{class}\0");
+        let _ = self.conn.change_property8(
+            x11rb::protocol::xproto::PropMode::REPLACE,
+            win,
+            AtomEnum::WM_CLASS,
+            AtomEnum::STRING,
+            class.as_bytes(),
+        );
+        if title == "Winlux Desktop" && std::env::var_os("WINLUX_NATIVE_SHELL").is_some() {
+            if let (Some(kind), Some(desktop)) = (
+                atom(b"_NET_WM_WINDOW_TYPE"),
+                atom(b"_NET_WM_WINDOW_TYPE_DESKTOP"),
+            ) {
+                let _ = self.conn.change_property32(
+                    x11rb::protocol::xproto::PropMode::REPLACE,
+                    win,
+                    kind,
+                    AtomEnum::ATOM,
+                    &[desktop],
+                );
+            }
+        }
+
         let gc = match self.conn.generate_id() {
             Ok(id) => id,
             Err(_) => return,
@@ -2664,6 +2725,20 @@ impl gui::GuiBackend for X11Backend {
                 AtomEnum::STRING,
                 &title_bytes,
             );
+            if let (Ok(name), Ok(utf8)) = (
+                self.conn.intern_atom(false, b"_NET_WM_NAME"),
+                self.conn.intern_atom(false, b"UTF8_STRING"),
+            ) {
+                if let (Ok(name), Ok(utf8)) = (name.reply(), utf8.reply()) {
+                    let _ = self.conn.change_property8(
+                        x11rb::protocol::xproto::PropMode::REPLACE,
+                        w.window,
+                        name.atom,
+                        utf8.atom,
+                        title.as_bytes(),
+                    );
+                }
+            }
             let _ = self.conn.flush();
         }
     }

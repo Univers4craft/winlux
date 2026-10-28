@@ -136,6 +136,9 @@ if [ -z "$kind" ]; then
     show_error "Impossible d’ouvrir « $(basename -- "$exe") » : ${reason:-format inconnu}."
     exit 1
 fi
+if command -v winlux-applications >/dev/null 2>&1; then
+    winlux-applications register "$exe" >/dev/null 2>&1 || true
+fi
 
 if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && { [ "${WINLUX_DESKTOP_LAUNCH:-0}" = 1 ] || [ ! -t 1 ]; }; then
     self=$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")

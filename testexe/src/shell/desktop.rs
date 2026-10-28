@@ -507,7 +507,9 @@ unsafe fn load_shell_state() {
 }
 
 fn context_rows(app: usize) -> i32 {
-    if wm::is_open(app) {
+    if app == usize::MAX {
+        4
+    } else if wm::is_open(app) {
         5
     } else {
         3
@@ -526,6 +528,19 @@ unsafe fn open_context(app: usize, desktop: Option<usize>, x: i32, y: i32) {
     let top = y.clamp(0, (SCREEN_H - TASKBAR_HEIGHT - h).max(0));
     CONTEXT_RECT = rect(left, top, left + w, top + h);
 }
+unsafe fn open_context_desktop(x: i32, y: i32) {
+    set_start(false);
+    NOTIF_PANEL = false;
+    DRAGGED_ICON = -1;
+    CONTEXT_APP = Some(usize::MAX);
+    CONTEXT_DESKTOP = None;
+    CONTEXT_HOVER = -1;
+    let w = 278.min(SCREEN_W);
+    let h = context_rows(usize::MAX) * 34 + 8;
+    let left = x.clamp(0, (SCREEN_W - w).max(0));
+    let top = y.clamp(0, (SCREEN_H - TASKBAR_HEIGHT - h).max(0));
+    CONTEXT_RECT = rect(left, top, left + w, top + h);
+}
 unsafe fn context_row(x: i32, y: i32) -> i32 {
     if !inside(&CONTEXT_RECT, x, y) || y < CONTEXT_RECT.top + 4 {
         return -1;
@@ -538,6 +553,49 @@ unsafe fn context_row(x: i32, y: i32) -> i32 {
     }
 }
 unsafe fn context_action(app: usize, desktop: Option<usize>, row: i32, persist: bool) {
+    if app == usize::MAX {
+        match row {
+            0 => {
+                wm::open(wm::APP_EXPLORER);
+            }
+            1 => {
+                static TERM: &[u16] = &[
+                    b's' as u16,
+                    b'h' as u16,
+                    b'e' as u16,
+                    b'l' as u16,
+                    b'l' as u16,
+                    b':' as u16,
+                    b't' as u16,
+                    b'e' as u16,
+                    b'r' as u16,
+                    b'm' as u16,
+                    b'i' as u16,
+                    b'n' as u16,
+                    b'a' as u16,
+                    b'l' as u16,
+                    0,
+                ];
+                static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+                ShellExecuteW(
+                    core::ptr::null_mut(),
+                    OPEN.as_ptr(),
+                    TERM.as_ptr(),
+                    core::ptr::null(),
+                    core::ptr::null(),
+                    1,
+                );
+            }
+            2 => {
+                wm::open(wm::APP_SETTINGS);
+            }
+            3 => {
+                crate::settings::open_page(6);
+            }
+            _ => {}
+        }
+        return;
+    }
     match row {
         0 => {
             if let Some(i) = desktop {
@@ -579,6 +637,29 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         r.bottom - 1,
         p.surface,
     );
+    if app == usize::MAX {
+        let labels: [&[u8]; 4] = [
+            b"Ouvrir l'Explorateur",
+            b"Ouvrir le terminal",
+            b"Ouvrir les Param\xE8tres",
+            b"Mises \xE0 jour",
+        ];
+        for row in 0..context_rows(app) {
+            let y = r.top + 4 + row * 34;
+            if row == CONTEXT_HOVER {
+                fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+            }
+            text(
+                hdc,
+                f.body,
+                p.text,
+                r.left + 12,
+                y + 8,
+                labels[row as usize],
+            );
+        }
+        return;
+    }
     let pin: &[u8] = if PINNED_APPS & app_bit(app) != 0 {
         b"Retirer de la barre des t\xE2ches"
     } else {
@@ -677,6 +758,9 @@ unsafe fn two_digits(v: u16) -> [u8; 2] {
 }
 
 unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) {
+    if wm::native_session() {
+        return;
+    }
     let top = l.bar_top + dy;
     fill(hdc, b, 0, top, l.w, l.h, rgb(0x1C, 0x1F, 0x26));
     fill(hdc, b, 0, top, l.w, top + 1, rgb(0x34, 0x38, 0x42));
@@ -1907,6 +1991,17 @@ pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
 
 /// Molette (`delta` en multiples de 120), clic droit ou milieu.
 pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
+    if wm::native_session() && ev == Mouse::RightDown {
+        ShellExecuteA(
+            core::ptr::null_mut(),
+            c"open".as_ptr(),
+            c"winlux-desktop-action".as_ptr(),
+            c"context".as_ptr(),
+            core::ptr::null(),
+            1,
+        );
+        return;
+    }
     if !BOOT_DONE {
         return;
     }
@@ -1956,6 +2051,9 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
                     return;
                 }
             }
+            open_context_desktop(x, y);
+            repaint(hwnd);
+            return;
         }
         if CONTEXT_APP.take().is_some() {
             repaint(hwnd);

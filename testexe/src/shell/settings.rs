@@ -259,8 +259,7 @@ pub unsafe fn system_tick() -> bool {
     let mut changed = read(c"Z:\\run\\winlux\\control.txt", &mut STATUS);
     if GetFileAttributesA(c"Z:\\run\\winlux\\browser-chooser".as_ptr()) != u32::MAX {
         DeleteFileA(c"Z:\\run\\winlux\\browser-chooser".as_ptr());
-        PAGE = 10;
-        crate::wm::open(crate::wm::APP_SETTINGS);
+        open_page(10);
         changed = true;
     }
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
@@ -347,6 +346,9 @@ pub unsafe fn control(action: &core::ffi::CStr) -> bool {
     }
 }
 pub unsafe fn open_page(page: usize) {
+    if crate::wm::native_settings(page) {
+        return;
+    }
     clear_token();
     PAGE = page.min(PAGES.len() - 1);
     SCROLL = 0;

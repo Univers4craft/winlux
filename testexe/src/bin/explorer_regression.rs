@@ -10,6 +10,8 @@ mod desktop;
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/notepad.rs"]
+mod notepad;
 #[path = "../shell/settings.rs"]
 mod settings;
 #[path = "../shell/wm.rs"]

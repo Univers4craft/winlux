@@ -98,6 +98,7 @@ fi
 
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
 cp "$root/scripts/test-terminal-guest.sh" "$stage/opt/winlux/scripts/test-terminal-guest.sh"
+cp "$root/scripts/test-native-session-guest.py" "$stage/opt/winlux/scripts/test-native-session-guest.py"
 cp "$root/scripts/test-browsers-guest.sh" "$stage/opt/winlux/scripts/test-browsers-guest.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 chmod 755 \
@@ -334,6 +335,7 @@ chmod 755 "$stage/usr/share/winlux/xsession-winlux"
 if command -v fc-cache >/dev/null 2>&1; then
     fc-cache -f "$stage/usr/share/fonts" 2>/dev/null || true
 fi
+sh "$root/scripts/stage-desktop-components.sh" "$stage"
 
 cat >"$stage/init" <<'INIT'
 #!/bin/sh
@@ -427,6 +429,24 @@ echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
 # explicitly so the graphical power button really shuts down the guest.
 /usr/bin/winlux-network start &
+if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
+    result=0
+    /usr/bin/python3 /opt/winlux/scripts/test-native-session-guest.py || result=$?
+    echo "WINLUX_NATIVE_EXIT=$result"
+    if test "$result" != 0; then
+        /bin/busybox cat /run/winlux/native-session.log /run/winlux/window-manager.log /run/winlux/panel.log /run/winlux/screensaver.log /var/lib/winlux/native-programs.log 2>/dev/null || true
+    fi
+    for service in catalogue panel screensaver window-manager; do
+        if test -f "/run/winlux/$service.pid"; then /bin/busybox kill "$(/bin/busybox cat "/run/winlux/$service.pid")" 2>/dev/null || true; fi
+    done
+    /bin/busybox killall xfdesktop mousepad xterm winlux msedge chrome firefox xfconfd dconf-service 2>/dev/null || true
+    /bin/busybox sleep 1
+    /bin/busybox killall Xvfb 2>/dev/null || true
+    /bin/busybox sync
+    /bin/busybox mount -o remount,ro / 2>/dev/null || true
+    /bin/busybox poweroff -f
+    while :; do /bin/busybox sleep 2; done
+fi
 if /bin/busybox grep -qw 'winlux.browser-smoke=1' /proc/cmdline; then
     result=0
     /bin/sh /opt/winlux/scripts/test-browsers-guest.sh || result=$?
@@ -479,6 +499,15 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /bin/busybox cat /tmp/Xorg.0.log /tmp/xorg-console.log >&2
         /bin/sh
     fi
+    export DISPLAY=:0 XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
+    export XDG_CONFIG_DIRS=/etc/xdg XDG_DATA_DIRS=/usr/local/share:/usr/share
+    export XDG_RUNTIME_DIR=/run/user/0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus
+    export WINLUX_NATIVE_SHELL=1
+    if test -d /usr/lib/locale/fr_FR.utf8; then export LANG=fr_FR.UTF-8; else export LANG=C.UTF-8; fi
+    if ! /usr/bin/winlux-native-session >/run/winlux/native-session.log 2>&1; then
+        /bin/busybox cat /run/winlux/native-session.log >&2
+        /bin/sh
+    fi
     (
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
             DISPLAY=:0 /usr/bin/winlux-control status 2>/dev/null || true
@@ -529,8 +558,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         for state in /sys/class/net/*/operstate; do
             if test -r "$state" && test "$(/bin/busybox cat "$state")" = up; then tray_network=1; break; fi
         done
-        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_INPUT_DIAG="$input_diag" WINLUX_UI_SCALE="$ui_scale" WINLUX_TASKBAR_ALIGN="$taskbar_align" WINLUX_THEME="$desktop_theme" WINLUX_TRAY_BATTERY="$tray_battery" WINLUX_TRAY_BATTERY_PRESENT="$tray_battery_present" WINLUX_TRAY_NETWORK="$tray_network" \
-            /usr/bin/winlux /opt/winlux/tests/gui_demo.exe &
+        export WINLUX_UI_SCALE="$ui_scale" WINLUX_THEME="$desktop_theme"
+        /usr/bin/xfdesktop --disable-wm-check >/run/winlux/desktop.log 2>&1 &
         desktop_pid=$!
         echo "WINLUX_DESKTOP_READY pid=$desktop_pid"
         while /bin/busybox kill -0 "$desktop_pid" 2>/dev/null; do
@@ -609,6 +638,7 @@ fakeroot sh -c '
     mknod -m 666 "$stage/dev/tty" c 5 0
     mknod -m 666 "$stage/dev/ttyS0" c 4 64
     cd "$stage"
+    chown -R 0:0 .
     find . -print0 | cpio --null --create --format=newc --quiet
 ' >"$WINLUX_LIVE_CPIO"
 gzip -n -9 -c "$WINLUX_LIVE_CPIO" >"$work/winlux-initramfs.cpio.gz"

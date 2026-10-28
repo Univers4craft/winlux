@@ -570,6 +570,7 @@ extern "system" {
     pub fn GetEnvironmentVariableA(name: *const c_char, buf: *mut c_char, size: u32) -> u32;
     pub fn GetEnvironmentVariableW(name: *const u16, buf: *mut u16, size: u32) -> u32;
     pub fn SetEnvironmentVariableW(name: *const u16, value: *const u16) -> i32;
+    pub fn SetEnvironmentVariableA(name: *const c_char, value: *const c_char) -> i32;
     pub fn TlsAlloc() -> u32;
     pub fn TlsFree(idx: u32) -> i32;
     pub fn TlsSetValue(idx: u32, v: *mut c_void) -> i32;

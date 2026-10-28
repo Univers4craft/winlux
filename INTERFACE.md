@@ -1,9 +1,20 @@
 # Interface et expérience du bureau Winlux
 
-Ce document décrit l'état du prototype graphique et la cible d'interface à
-construire. Le shell actuel vit dans `testexe/src/shell/` et sert notamment au
-test graphique `gui_demo.exe` ; ce n'est pas encore un gestionnaire de bureau
-autonome.
+La session interactive utilise désormais Openbox, xfdesktop, le panneau Xfce et
+Whisker. Explorer et Paramètres restent des applications PE du runtime, ouvertes
+dans des fenêtres indépendantes. L'ancien shell GDI dans `testexe/src/shell/`
+reste disponible pour les tests ; les constats historiques ci-dessous le
+concernent lorsqu'ils décrivent ses trois icônes ou son menu dessiné.
+
+Le menu natif expose les applications Linux et les PE enregistrés, avec les
+menus contextuels du panneau et de Whisker. Le bureau offre le clic droit,
+les fichiers, dossiers et raccourcis. Mousepad fournit un véritable éditeur
+Xfce. XScreenSaver fournit les tuyaux animés après dix minutes d'inactivité,
+ou depuis le lanceur « Pipes ». La session administrateur actuelle ne verrouille
+pas par mot de passe ; seul le moteur graphique du veilleur est exécuté sous
+un compte dédié sans privilèges.
+
+Voir [la session native et ses validations](docs/NATIVE-DESKTOP.md).
 
 Audit du 25 octobre 2026 : voir [les preuves](docs/AUDIT-MARKDOWN.md).
 Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.

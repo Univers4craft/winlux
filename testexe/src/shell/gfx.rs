@@ -59,7 +59,22 @@ pub struct Fonts {
 impl Fonts {
     pub unsafe fn new() -> Self {
         let f = |h: i32, w: i32| {
-            CreateFontA(h, 0, 0, 0, w, 0, 0, 0, 1, 0, 0, 0, 0, c"DejaVu Sans".as_ptr())
+            CreateFontA(
+                h,
+                0,
+                0,
+                0,
+                w,
+                0,
+                0,
+                0,
+                1,
+                0,
+                0,
+                0,
+                0,
+                c"DejaVu Sans".as_ptr(),
+            )
         };
         Fonts {
             title: f(15, 600),
