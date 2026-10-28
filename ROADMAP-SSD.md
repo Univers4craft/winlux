@@ -4,9 +4,13 @@ Document de suivi créé le 25 octobre 2026 à partir des fonctionnalités
 demandées. Les cases ci-dessous représentent des travaux à réaliser ou à
 valider, pas des fonctionnalités promises comme déjà opérationnelles.
 
-L'ISO actuelle est une image Live de test. L'installateur autonome sur SSD,
-le dual boot et la compatibilité générale du matériel restent à construire.
+L'ISO publiée reste une préversion Live. Un installateur disque expérimental
+et le démarrage sans ISO sont désormais validés sur disque virtuel, pas sur SSD réel.
+Le dual boot et la compatibilité générale du matériel restent à construire.
 Ne pas utiliser le disque principal comme premier terrain d'essai.
+
+Audit du 25 octobre 2026 : [preuves et réserves](docs/AUDIT-MARKDOWN.md).
+Les cases cochées sont limitées au périmètre indiqué ; une case partielle reste ouverte.
 
 ## Ordre de réalisation proposé
 
@@ -23,22 +27,23 @@ Ne pas utiliser le disque principal comme premier terrain d'essai.
 - [ ] Choix entre essayer Winlux sans installer et lancer l'installation.
 - [ ] Détection des SSD SATA, NVMe, disques USB et disques virtuels.
 - [ ] Affichage du modèle, de la capacité et des partitions de chaque disque.
+  - [x] Afficher le modèle, la capacité et le numéro de série du disque cible en console (`install.sh`) ; pas d'inventaire graphique de tous les disques.
 - [ ] Identification et protection du support contenant l'installateur.
-- [ ] Installation sur un disque entier dédié.
+- [x] Installation sur un disque entier dédié : CLI, validée uniquement sur un disque virtuel neuf de 4 Gio.
 - [ ] Installation dans un espace libre, après validation du partitionnement.
 - [ ] Partitionnement manuel pour les utilisateurs avancés.
 - [ ] Aperçu de toutes les modifications avant validation.
-- [ ] Confirmation explicite avant tout effacement.
-- [ ] Vérification de l'espace disponible et de l'état du disque.
-- [ ] Partitionnement GPT et partition de démarrage EFI.
-- [ ] Chargeur de démarrage autonome, indépendant de l'ISO.
-- [ ] Prise en charge UEFI et compatibilité BIOS lorsque nécessaire.
+- [x] Confirmation exacte du disque avant effacement ; automatisation réservée aux images loop explicitement vérifiées ou au test en VM isolée.
+- [x] Vérifier espace, lecture seule, montages, swap et volumes composites avant effacement ; pas de diagnostic SMART.
+- [x] Partitionnement GPT, partition BIOS boot, ESP et racine ext4.
+- [x] Chargeur autonome indépendant de l'ISO, validé sous QEMU.
+- [x] Démarrage UEFI et BIOS du disque installé, validé sous QEMU ; matériel réel non testé.
 - [ ] Choix du système de fichiers.
 - [ ] Activation du TRIM pour les SSD et configurations compatibles.
 - [ ] Chiffrement facultatif du système et des données.
 - [ ] Création du compte utilisateur et du mot de passe.
 - [ ] Choix de la langue, du clavier et du fuseau horaire.
-- [ ] Installation hors ligne.
+- [x] Installation hors ligne depuis une ISO et les outils préparés : test en VM sans réseau.
 - [ ] Mises à jour facultatives pendant l'installation si Internet est disponible.
 - [ ] Progression détaillée et journal d'installation.
 - [ ] Vérification du système installé avant de proposer le redémarrage.
@@ -63,6 +68,7 @@ Ne pas utiliser le disque principal comme premier terrain d'essai.
 ## 3. Sécurité et récupération
 
 - [ ] Bureau exécuté avec un compte non administrateur.
+  L'init de l'ISO lance encore le shell en root ; `xsession-winlux` seul ne valide pas cette exigence.
 - [ ] Autorisation ciblée pour les opérations sensibles.
 - [ ] Verrouillage de session et changement d'utilisateur.
 - [ ] Pare-feu configurable.
@@ -82,7 +88,7 @@ ne doit pas être assimilée à une garantie A/B contre toute interruption.
 ## 4. Applications de base
 
 - [ ] Bloc-notes avec ouverture des `.txt`, modification et enregistrement.
-- [ ] Terminal utilisable depuis le bureau.
+- [x] Terminal utilisable depuis le bureau (xterm intégré, Explorer et `.exe` console ; validé en VM).
 - [ ] Navigateur réellement installé et accessible.
 - [ ] Calculatrice.
 - [ ] Visionneuse d'images.
@@ -110,13 +116,15 @@ ne doit pas être assimilée à une garantie A/B contre toute interruption.
 
 - [ ] Tests avec de vrais logiciels en complément des exécutables de validation.
 - [ ] Renforcement des API de fichiers, processus, fenêtres et du registre.
+  - [x] Premier sous-ensemble Win32/CRT/COM/GDI renforcé et couvert par les tests runtime ; compatibilité générale toujours partielle.
 - [ ] Chemins Unicode complets.
+  - [x] API de chemins W dans Explorer et régression Euro/noms longs ; IME, hors-BMP et couverture Unicode globale restent distincts.
 - [ ] Prise en charge des installateurs Windows ciblés.
 - [ ] Amélioration du texte, des polices et de l'impression.
 - [ ] Compatibilité C++ et gestion des exceptions.
 - [ ] Travail dédié à .NET, WinForms et WPF.
 - [ ] Travail dédié aux API graphiques et à l'accélération GPU.
-- [ ] Rapports précisant ce qui fonctionne et ce qui bloque.
+- [x] Documentation des fonctions et blocages dans COMPATIBILITY et les revues runtime/graphique ; pas encore de catalogue par logiciel.
 - [ ] Choix d'une version précise de Photoshop pour une étude de compatibilité.
 
 La présence de composants ou de points d'entrée ne garantit pas le
@@ -152,6 +160,7 @@ Les premiers réglages d'écran et les cartes de paramètres ont été ajoutés 
 - [ ] Confirmation des changements d'affichage avec retour automatique après 15 secondes.
 - [ ] Fréquence, orientation et échelle par écran.
 - [ ] Fonds d'écran fixes ou animés avec réglage des performances.
+  - [x] Fond image BMP généré depuis PNG et repli vectoriel animé ; sélecteur et réglage des performances non implémentés.
 - [ ] Bureau vide par défaut et raccourcis facultatifs.
 - [ ] Conservation des positions des icônes.
 - [ ] Épinglage et désépinglage des applications.
@@ -175,13 +184,13 @@ Les premiers réglages d'écran et les cartes de paramètres ont été ajoutés 
 
 ## 10. Validation avant installation sur un SSD réel
 
-- [ ] Installation automatisée sur un disque virtuel vierge.
-- [ ] Démarrage sans ISO après installation.
+- [x] Installation automatisée sur un disque virtuel vierge (installateur réel, VM isolée).
+- [x] Démarrage sans ISO après installation en BIOS et UEFI, tests PE/X11 réussis.
 - [ ] Conservation des fichiers après plusieurs redémarrages.
 - [ ] Tests de mise à jour, restauration et échec de démarrage sur le système installé.
 - [ ] Tests d'installation interrompue sur des disques jetables.
 - [ ] Vérification que les disques non sélectionnés ne sont jamais modifiés.
-- [ ] Tests UEFI et, si retenu, BIOS.
+- [x] Tests Live et disque installé en UEFI et BIOS sous QEMU ; pas de certification matérielle.
 - [ ] Tests sur SSD externe dédié ou ordinateur de test.
 - [ ] Validation du stockage, réseau, audio, affichage et périphériques du portable.
 - [ ] Sauvegarde externe vérifiée avant toute installation sur le disque principal.
@@ -199,6 +208,7 @@ Prioriser le déplacement et le redimensionnement avant les animations décorati
 - [ ] Éviter de redessiner tout le bureau à chaque mouvement ; limiter le travail
   aux zones réellement modifiées lorsque le backend le permet.
 - [ ] Mettre en cache le contenu des fenêtres et ne recalculer que ce qui change.
+  - [x] Backend X11 : cache des commandes et pixmap de double tampon ; cache séparé des fenêtres internes du shell et mesures de fluidité encore à faire.
 - [ ] Séparer le déplacement d'une fenêtre du rendu de son contenu : déplacer
   sa surface plutôt que reconstruire chaque élément.
 - [ ] Éviter les lectures de fichiers et commandes système dans le chemin de dessin.

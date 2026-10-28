@@ -34,13 +34,22 @@ if test "$scope" = system; then
     for path in bin usr lib lib64 opt/winlux init; do
         if test -e "$stage/$path"; then mkdir -p "$raw/$(dirname -- "$path")"; cp -a "$stage/$path" "$raw/$path"; fi
     done
-    mkdir -p "$raw/boot"
-    for name in vmlinuz winlux-initramfs.cpio.gz; do test -s "$boot/$name" || { echo "fichier de démarrage absent : $boot/$name" >&2; exit 1; }; cp "$boot/$name" "$raw/boot/$name"; done
+    # Par sécurité, le noyau et l'initramfs ne sont remplacés que si
+    # WINLUX_UPDATE_INCLUDE_BOOT=1 est demandé : sur certaines machines
+    # virtuelles un noyau étranger casse l'affichage.
+    if test "${WINLUX_UPDATE_INCLUDE_BOOT:-0}" = 1; then
+        mkdir -p "$raw/boot"
+        for name in vmlinuz winlux-initramfs.cpio.gz; do test -s "$boot/$name" || { echo "fichier de démarrage absent : $boot/$name" >&2; exit 1; }; cp "$boot/$name" "$raw/boot/$name"; done
+        components=runtime,desktop,applications,updater,integration,kernel,drivers,libraries,boot
+    else
+        # Préserver aussi les pilotes de l'installation existante.
+        if test -d "$raw/lib/modules"; then rm -rf "$raw/lib/modules"; fi
+        components=runtime,desktop,applications,updater,integration,libraries
+    fi
     # New configuration defaults are visible without overwriting the user's /etc.
     if test -d "$stage/etc"; then mkdir -p "$raw/usr/share/winlux/defaults/etc"; cp -a "$stage/etc/." "$raw/usr/share/winlux/defaults/etc/"; fi
     runtime="$stage/usr/bin/winlux"
     action=reboot
-    components=runtime,desktop,applications,updater,integration,kernel,drivers,libraries,boot
 else
     test -x "$runtime" || cargo build --release -p winlux --manifest-path "$root/Cargo.toml"
     action=restart-session

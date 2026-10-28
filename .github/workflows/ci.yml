@@ -20,6 +20,28 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Installer Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-hygiene-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-hygiene-
+
+      - name: Vérifier le formatage (rustfmt)
+        run: cargo fmt --check -p winlux
+
+      - name: Clippy (avertissements bloquants)
+        run: cargo clippy -p winlux -- -D warnings
+
       - name: Ne pas dépendre de Wine
         run: |
           set -eu
@@ -86,6 +108,19 @@ jobs:
       - name: Lancer les tests unitaires
         run: cargo test -p winlux
 
+      - name: Vérifier les navigateurs hors ligne
+        run: sh scripts/test-browsers.sh
+
+      - name: Vérifier le catalogue natif Linux et Windows
+        run: python3 -B scripts/test-native-catalogue.py
+
+      - name: Vérifier les grandes images X11 en 1080p
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb xauth libx11-6 libxft2 libcairo2
+          xvfb-run -a -s '-screen 0 1920x1080x24' cargo test -p winlux grande_bitmap_1080p -- --ignored
+          xvfb-run -a -s '-screen 0 1920x1080x24' cargo test -p winlux contours_anticreneles_x11 -- --ignored
+
       - name: Valider les codecs audio MP3 et AAC réels
         run: |
           sudo apt-get update -q
@@ -104,6 +139,7 @@ jobs:
 
       - name: Valider le réseau et les commandes des paramètres
         run: |
+          sh scripts/test-install-safety.sh
           sh scripts/test-network.sh
           sh scripts/test-control.sh
           sh scripts/test-display.sh

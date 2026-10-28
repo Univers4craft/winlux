@@ -44,6 +44,12 @@ MOCK
 chmod 755 "$work/bin/"*
 control() { sh "$project/scripts/winlux-control.sh" "$@"; }
 control status
+mkdir -p "$work/root/var/lib/winlux"
+printf 'test-boot\n' > "$work/root/var/lib/winlux/pending-reboot"
+control status
+grep -qx 'update_action=reboot' "$work/root/run/winlux/control.txt"
+rm "$work/root/var/lib/winlux/pending-reboot"
+control status
 grep -q '^network_connected=1$' "$work/root/run/winlux/control.txt"
 grep -q '^network=eth0 10.0.2.15/24$' "$work/root/run/winlux/control.txt"
 grep -q '^battery=84% Charging$' "$work/root/run/winlux/control.txt"

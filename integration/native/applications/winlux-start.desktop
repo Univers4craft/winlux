@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Démarrer
+Exec=/usr/bin/winlux-start-menu
+Icon=/usr/share/winlux/native/start.svg
+NoDisplay=true
+Terminal=false

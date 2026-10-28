@@ -71,18 +71,49 @@ pub struct MemoryBasicInformation {
 
 #[repr(C)]
 pub struct StartupInfoA {
-    pub cb: u32, pub reserved: *mut c_char, pub desktop: *mut c_char, pub title: *mut c_char,
-    pub x: u32, pub y: u32, pub x_size: u32, pub y_size: u32, pub x_chars: u32, pub y_chars: u32,
-    pub fill_attribute: u32, pub flags: u32, pub show_window: u16, pub reserved2_size: u16,
-    pub reserved2: *mut u8, pub std_input: Handle, pub std_output: Handle, pub std_error: Handle,
+    pub cb: u32,
+    pub reserved: *mut c_char,
+    pub desktop: *mut c_char,
+    pub title: *mut c_char,
+    pub x: u32,
+    pub y: u32,
+    pub x_size: u32,
+    pub y_size: u32,
+    pub x_chars: u32,
+    pub y_chars: u32,
+    pub fill_attribute: u32,
+    pub flags: u32,
+    pub show_window: u16,
+    pub reserved2_size: u16,
+    pub reserved2: *mut u8,
+    pub std_input: Handle,
+    pub std_output: Handle,
+    pub std_error: Handle,
 }
 #[repr(C)]
-pub struct ProcessInformation { pub process: Handle, pub thread: Handle, pub process_id: u32, pub thread_id: u32 }
+pub struct ProcessInformation {
+    pub process: Handle,
+    pub thread: Handle,
+    pub process_id: u32,
+    pub thread_id: u32,
+}
 #[repr(C)]
-pub struct Overlapped { pub internal: usize, pub internal_high: usize, pub offset: u32, pub offset_high: u32, pub event: usize }
+pub struct Overlapped {
+    pub internal: usize,
+    pub internal_high: usize,
+    pub offset: u32,
+    pub offset_high: u32,
+    pub event: usize,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-pub struct OverlappedEntry { pub completion_key: usize, pub overlapped: *mut c_void, pub internal: usize, pub bytes_transferred: u32, pub reserved: u32 }
+pub struct OverlappedEntry {
+    pub completion_key: usize,
+    pub overlapped: *mut c_void,
+    pub internal: usize,
+    pub bytes_transferred: u32,
+    pub reserved: u32,
+}
 
 #[repr(C)]
 pub struct Win32FindDataA {
@@ -112,21 +143,50 @@ pub struct Win32FindDataW {
 }
 
 #[repr(C)]
-#[derive(Clone,Copy,Default)]
-pub struct FileTime { pub low: u32, pub high: u32 }
+#[derive(Clone, Copy, Default)]
+pub struct FileTime {
+    pub low: u32,
+    pub high: u32,
+}
 #[repr(C)]
-#[derive(Clone,Copy,Default,Eq,PartialEq)]
-pub struct Guid { pub data1:u32,pub data2:u16,pub data3:u16,pub data4:[u8;8] }
+#[derive(Clone, Copy, Default, Eq, PartialEq)]
+pub struct Guid {
+    pub data1: u32,
+    pub data2: u16,
+    pub data3: u16,
+    pub data4: [u8; 8],
+}
 #[repr(C)]
-#[derive(Clone,Copy,Default)]
-pub struct StatStg { pub name:*mut u16,pub kind:u32,pub size:u64,pub modified:FileTime,pub created:FileTime,pub accessed:FileTime,pub mode:u32,pub locks_supported:u32,pub clsid:Guid,pub state_bits:u32,pub reserved:u32 }
+#[derive(Clone, Copy, Default)]
+pub struct StatStg {
+    pub name: *mut u16,
+    pub kind: u32,
+    pub size: u64,
+    pub modified: FileTime,
+    pub created: FileTime,
+    pub accessed: FileTime,
+    pub mode: u32,
+    pub locks_supported: u32,
+    pub clsid: Guid,
+    pub state_bits: u32,
+    pub reserved: u32,
+}
 #[repr(C)]
 pub struct IStreamVTable {
-    pub query_interface:unsafe extern "system" fn(Handle,*const Guid,*mut Handle)->i32,pub add_ref:unsafe extern "system" fn(Handle)->u32,pub release:unsafe extern "system" fn(Handle)->u32,
-    pub read:unsafe extern "system" fn(Handle,*mut c_void,u32,*mut u32)->i32,pub write:unsafe extern "system" fn(Handle,*const c_void,u32,*mut u32)->i32,
-    pub seek:unsafe extern "system" fn(Handle,i64,u32,*mut u64)->i32,pub set_size:unsafe extern "system" fn(Handle,u64)->i32,pub copy_to:unsafe extern "system" fn(Handle,Handle,u64,*mut u64,*mut u64)->i32,
-    pub commit:unsafe extern "system" fn(Handle,u32)->i32,pub revert:unsafe extern "system" fn(Handle)->i32,pub lock_region:unsafe extern "system" fn(Handle,u64,u64,u32)->i32,pub unlock_region:unsafe extern "system" fn(Handle,u64,u64,u32)->i32,
-    pub stat:unsafe extern "system" fn(Handle,*mut StatStg,u32)->i32,pub clone_stream:unsafe extern "system" fn(Handle,*mut Handle)->i32,
+    pub query_interface: unsafe extern "system" fn(Handle, *const Guid, *mut Handle) -> i32,
+    pub add_ref: unsafe extern "system" fn(Handle) -> u32,
+    pub release: unsafe extern "system" fn(Handle) -> u32,
+    pub read: unsafe extern "system" fn(Handle, *mut c_void, u32, *mut u32) -> i32,
+    pub write: unsafe extern "system" fn(Handle, *const c_void, u32, *mut u32) -> i32,
+    pub seek: unsafe extern "system" fn(Handle, i64, u32, *mut u64) -> i32,
+    pub set_size: unsafe extern "system" fn(Handle, u64) -> i32,
+    pub copy_to: unsafe extern "system" fn(Handle, Handle, u64, *mut u64, *mut u64) -> i32,
+    pub commit: unsafe extern "system" fn(Handle, u32) -> i32,
+    pub revert: unsafe extern "system" fn(Handle) -> i32,
+    pub lock_region: unsafe extern "system" fn(Handle, u64, u64, u32) -> i32,
+    pub unlock_region: unsafe extern "system" fn(Handle, u64, u64, u32) -> i32,
+    pub stat: unsafe extern "system" fn(Handle, *mut StatStg, u32) -> i32,
+    pub clone_stream: unsafe extern "system" fn(Handle, *mut Handle) -> i32,
 }
 #[repr(C)]
 pub struct Win32FileAttributeData {
@@ -299,57 +359,174 @@ pub const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
 #[link(name = "kernel32", kind = "raw-dylib")]
 extern "system" {
     pub fn GetStdHandle(which: u32) -> Handle;
-    pub fn WriteFile(h: Handle, buf: *const u8, len: u32, written: *mut u32, ov: *mut c_void) -> i32;
+    pub fn WriteFile(
+        h: Handle,
+        buf: *const u8,
+        len: u32,
+        written: *mut u32,
+        ov: *mut c_void,
+    ) -> i32;
     pub fn ReadFile(h: Handle, buf: *mut u8, len: u32, read: *mut u32, ov: *mut c_void) -> i32;
-    pub fn CreateFileA(path: *const c_char, access: u32, share: u32, sec: *mut c_void, creation: u32, flags: u32, template: Handle) -> Handle;
-    pub fn CreateFileW(path: *const u16, access: u32, share: u32, sec: *mut c_void, creation: u32, flags: u32, template: Handle) -> Handle;
+    pub fn CreateFileA(
+        path: *const c_char,
+        access: u32,
+        share: u32,
+        sec: *mut c_void,
+        creation: u32,
+        flags: u32,
+        template: Handle,
+    ) -> Handle;
+    pub fn CreateFileW(
+        path: *const u16,
+        access: u32,
+        share: u32,
+        sec: *mut c_void,
+        creation: u32,
+        flags: u32,
+        template: Handle,
+    ) -> Handle;
     pub fn GetFileSize(h: Handle, high: *mut u32) -> u32;
     pub fn SetEndOfFile(h: Handle) -> i32;
     pub fn GetFileAttributesA(path: *const c_char) -> u32;
-    pub fn GetFileAttributesExA(path: *const c_char, level: u32, data: *mut Win32FileAttributeData) -> i32;
-    pub fn GetFileAttributesExW(path: *const u16, level: u32, data: *mut Win32FileAttributeData) -> i32;
-    pub fn GetTempFileNameA(path: *const c_char, prefix: *const c_char, unique: u32, output: *mut c_char) -> u32;
-    pub fn GetTempFileNameW(path: *const u16, prefix: *const u16, unique: u32, output: *mut u16) -> u32;
+    pub fn GetFileAttributesW(path: *const u16) -> u32;
+    pub fn GetFileAttributesExA(
+        path: *const c_char,
+        level: u32,
+        data: *mut Win32FileAttributeData,
+    ) -> i32;
+    pub fn GetFileAttributesExW(
+        path: *const u16,
+        level: u32,
+        data: *mut Win32FileAttributeData,
+    ) -> i32;
+    pub fn GetTempFileNameA(
+        path: *const c_char,
+        prefix: *const c_char,
+        unique: u32,
+        output: *mut c_char,
+    ) -> u32;
+    pub fn GetTempFileNameW(
+        path: *const u16,
+        prefix: *const u16,
+        unique: u32,
+        output: *mut u16,
+    ) -> u32;
     pub fn SetFilePointer(h: Handle, distance: i32, high: *mut i32, method: u32) -> u32;
     pub fn FlushFileBuffers(h: Handle) -> i32;
-    pub fn GetOverlappedResult(h: Handle, overlapped: *mut Overlapped, transferred: *mut u32, wait: i32) -> i32;
-    pub fn CreateIoCompletionPort(file: Handle, existing_port: Handle, completion_key: usize, concurrent_threads: u32) -> Handle;
-    pub fn GetQueuedCompletionStatus(port: Handle, bytes: *mut u32, key: *mut usize, overlapped: *mut *mut c_void, timeout: u32) -> i32;
-    pub fn GetQueuedCompletionStatusEx(port: Handle, entries: *mut OverlappedEntry, count: u32, removed: *mut u32, timeout: u32, alertable: i32) -> i32;
-    pub fn PostQueuedCompletionStatus(port: Handle, bytes: u32, key: usize, overlapped: *mut c_void) -> i32;
+    pub fn GetOverlappedResult(
+        h: Handle,
+        overlapped: *mut Overlapped,
+        transferred: *mut u32,
+        wait: i32,
+    ) -> i32;
+    pub fn CreateIoCompletionPort(
+        file: Handle,
+        existing_port: Handle,
+        completion_key: usize,
+        concurrent_threads: u32,
+    ) -> Handle;
+    pub fn GetQueuedCompletionStatus(
+        port: Handle,
+        bytes: *mut u32,
+        key: *mut usize,
+        overlapped: *mut *mut c_void,
+        timeout: u32,
+    ) -> i32;
+    pub fn GetQueuedCompletionStatusEx(
+        port: Handle,
+        entries: *mut OverlappedEntry,
+        count: u32,
+        removed: *mut u32,
+        timeout: u32,
+        alertable: i32,
+    ) -> i32;
+    pub fn PostQueuedCompletionStatus(
+        port: Handle,
+        bytes: u32,
+        key: usize,
+        overlapped: *mut c_void,
+    ) -> i32;
     pub fn CloseHandle(h: Handle) -> i32;
-    pub fn CreateEventA(sec: *mut c_void, manual: i32, initial: i32, name: *const c_char) -> Handle;
+    pub fn CreateEventA(sec: *mut c_void, manual: i32, initial: i32, name: *const c_char)
+        -> Handle;
     pub fn SetEvent(h: Handle) -> i32;
     pub fn ResetEvent(h: Handle) -> i32;
     pub fn CreateMutexA(sec: *mut c_void, initial_owner: i32, name: *const c_char) -> Handle;
     pub fn ReleaseMutex(h: Handle) -> i32;
     pub fn WaitForSingleObject(h: Handle, timeout: u32) -> u32;
-    pub fn WaitForMultipleObjects(count: u32, handles: *const Handle, wait_all: i32, timeout: u32) -> u32;
+    pub fn WaitForMultipleObjects(
+        count: u32,
+        handles: *const Handle,
+        wait_all: i32,
+        timeout: u32,
+    ) -> u32;
     pub fn InitializeCriticalSection(cs: *mut c_void);
     pub fn InitializeCriticalSectionAndSpinCount(cs: *mut c_void, spin: u32) -> i32;
     pub fn EnterCriticalSection(cs: *mut c_void);
     pub fn TryEnterCriticalSection(cs: *mut c_void) -> i32;
     pub fn LeaveCriticalSection(cs: *mut c_void);
     pub fn DeleteCriticalSection(cs: *mut c_void);
-    pub fn CreateThread(attrs: *mut c_void, stack: usize, start: extern "system" fn(*mut c_void) -> u32, param: *mut c_void, flags: u32, id: *mut u32) -> Handle;
+    pub fn CreateThread(
+        attrs: *mut c_void,
+        stack: usize,
+        start: extern "system" fn(*mut c_void) -> u32,
+        param: *mut c_void,
+        flags: u32,
+        id: *mut u32,
+    ) -> Handle;
     pub fn GetExitCodeThread(h: Handle, code: *mut u32) -> i32;
     pub fn ResumeThread(h: Handle) -> u32;
     pub fn DeleteFileA(path: *const c_char) -> i32;
     pub fn DeleteFileW(path: *const u16) -> i32;
     pub fn CopyFileA(src: *const c_char, dst: *const c_char, fail_if_exists: i32) -> i32;
     pub fn MoveFileA(src: *const c_char, dst: *const c_char) -> i32;
+    pub fn MoveFileW(src: *const u16, dst: *const u16) -> i32;
     pub fn CreateDirectoryA(path: *const c_char, sec: *mut c_void) -> i32;
+    pub fn CreateDirectoryW(path: *const u16, sec: *mut c_void) -> i32;
     pub fn RemoveDirectoryA(path: *const c_char) -> i32;
+    pub fn RemoveDirectoryW(path: *const u16) -> i32;
     pub fn FindFirstFileA(path: *const c_char, data: *mut Win32FindDataA) -> Handle;
     pub fn FindNextFileA(search: Handle, data: *mut Win32FindDataA) -> i32;
     pub fn FindFirstFileW(path: *const u16, data: *mut Win32FindDataW) -> Handle;
     pub fn FindNextFileW(search: Handle, data: *mut Win32FindDataW) -> i32;
     pub fn FindClose(search: Handle) -> i32;
-    pub fn GetFullPathNameA(path: *const c_char, size: u32, out: *mut c_char, file_part: *mut *mut c_char) -> u32;
-    pub fn GetFullPathNameW(path: *const u16, size: u32, out: *mut u16, file_part: *mut *mut u16) -> u32;
+    pub fn GetFullPathNameA(
+        path: *const c_char,
+        size: u32,
+        out: *mut c_char,
+        file_part: *mut *mut c_char,
+    ) -> u32;
+    pub fn GetFullPathNameW(
+        path: *const u16,
+        size: u32,
+        out: *mut u16,
+        file_part: *mut *mut u16,
+    ) -> u32;
     pub fn ExitProcess(code: u32) -> !;
-    pub fn CreateProcessA(application: *const c_char, command_line: *const c_char, process_attributes: *mut c_void, thread_attributes: *mut c_void, inherit: i32, flags: u32, environment: *const c_void, current_directory: *const c_char, startup: *const StartupInfoA, info: *mut ProcessInformation) -> i32;
-    pub fn CreateProcessW(application: *const u16, command_line: *mut u16, process_attributes: *mut c_void, thread_attributes: *mut c_void, inherit: i32, flags: u32, environment: *const c_void, current_directory: *const u16, startup: *const StartupInfoA, info: *mut ProcessInformation) -> i32;
+    pub fn CreateProcessA(
+        application: *const c_char,
+        command_line: *const c_char,
+        process_attributes: *mut c_void,
+        thread_attributes: *mut c_void,
+        inherit: i32,
+        flags: u32,
+        environment: *const c_void,
+        current_directory: *const c_char,
+        startup: *const StartupInfoA,
+        info: *mut ProcessInformation,
+    ) -> i32;
+    pub fn CreateProcessW(
+        application: *const u16,
+        command_line: *mut u16,
+        process_attributes: *mut c_void,
+        thread_attributes: *mut c_void,
+        inherit: i32,
+        flags: u32,
+        environment: *const c_void,
+        current_directory: *const u16,
+        startup: *const StartupInfoA,
+        info: *mut ProcessInformation,
+    ) -> i32;
     pub fn GetExitCodeProcess(process: Handle, code: *mut u32) -> i32;
     pub fn GetCommandLineA() -> *const c_char;
     pub fn GetCommandLineW() -> *const u16;
@@ -363,16 +540,20 @@ extern "system" {
     pub fn HeapAlloc(heap: Handle, flags: u32, size: usize) -> *mut c_void;
     pub fn HeapReAlloc(heap: Handle, flags: u32, p: *mut c_void, size: usize) -> *mut c_void;
     pub fn HeapFree(heap: Handle, flags: u32, p: *mut c_void) -> i32;
-    pub fn GlobalAlloc(flags:u32,size:usize)->Handle;
-    pub fn GlobalReAlloc(memory:Handle,size:usize,flags:u32)->Handle;
-    pub fn GlobalLock(memory:Handle)->*mut c_void;
-    pub fn GlobalUnlock(memory:Handle)->i32;
-    pub fn GlobalSize(memory:Handle)->usize;
-    pub fn GlobalFree(memory:Handle)->Handle;
+    pub fn GlobalAlloc(flags: u32, size: usize) -> Handle;
+    pub fn GlobalReAlloc(memory: Handle, size: usize, flags: u32) -> Handle;
+    pub fn GlobalLock(memory: Handle) -> *mut c_void;
+    pub fn GlobalUnlock(memory: Handle) -> i32;
+    pub fn GlobalSize(memory: Handle) -> usize;
+    pub fn GlobalFree(memory: Handle) -> Handle;
     pub fn VirtualAlloc(addr: *mut c_void, size: usize, kind: u32, prot: u32) -> *mut c_void;
     pub fn VirtualFree(addr: *mut c_void, size: usize, kind: u32) -> i32;
     pub fn VirtualProtect(addr: *mut c_void, size: usize, prot: u32, old: *mut u32) -> i32;
-    pub fn VirtualQuery(addr: *const c_void, info: *mut MemoryBasicInformation, len: usize) -> usize;
+    pub fn VirtualQuery(
+        addr: *const c_void,
+        info: *mut MemoryBasicInformation,
+        len: usize,
+    ) -> usize;
     pub fn GetTickCount() -> u32;
     pub fn QueryPerformanceCounter(out: *mut i64) -> i32;
     pub fn QueryPerformanceFrequency(out: *mut i64) -> i32;
@@ -389,27 +570,71 @@ extern "system" {
     pub fn GetEnvironmentVariableA(name: *const c_char, buf: *mut c_char, size: u32) -> u32;
     pub fn GetEnvironmentVariableW(name: *const u16, buf: *mut u16, size: u32) -> u32;
     pub fn SetEnvironmentVariableW(name: *const u16, value: *const u16) -> i32;
+    pub fn SetEnvironmentVariableA(name: *const c_char, value: *const c_char) -> i32;
     pub fn TlsAlloc() -> u32;
     pub fn TlsFree(idx: u32) -> i32;
     pub fn TlsSetValue(idx: u32, v: *mut c_void) -> i32;
     pub fn TlsGetValue(idx: u32) -> *mut c_void;
-    pub fn MultiByteToWideChar(cp: u32, flags: u32, s: *const u8, n: i32, w: *mut u16, wn: i32) -> i32;
-    pub fn WideCharToMultiByte(cp: u32, flags: u32, w: *const u16, n: i32, out: *mut u8, cap: i32, default: *const u8, used: *mut i32) -> i32;
-    pub fn WriteConsoleW(h: Handle, buf: *const u16, n: u32, written: *mut u32, r: *mut c_void) -> i32;
+    pub fn MultiByteToWideChar(
+        cp: u32,
+        flags: u32,
+        s: *const u8,
+        n: i32,
+        w: *mut u16,
+        wn: i32,
+    ) -> i32;
+    pub fn WideCharToMultiByte(
+        cp: u32,
+        flags: u32,
+        w: *const u16,
+        n: i32,
+        out: *mut u8,
+        cap: i32,
+        default: *const u8,
+        used: *mut i32,
+    ) -> i32;
+    pub fn WriteConsoleW(
+        h: Handle,
+        buf: *const u16,
+        n: u32,
+        written: *mut u32,
+        r: *mut c_void,
+    ) -> i32;
     pub fn Sleep(ms: u32);
 }
 
 #[link(name = "shell32", kind = "raw-dylib")]
 extern "system" {
-    pub fn ShellExecuteA(hwnd: Handle, verb: *const c_char, file: *const c_char, params: *const c_char, dir: *const c_char, show: i32) -> Handle;
+    pub fn ShellExecuteA(
+        hwnd: Handle,
+        verb: *const c_char,
+        file: *const c_char,
+        params: *const c_char,
+        dir: *const c_char,
+        show: i32,
+    ) -> Handle;
+    pub fn ShellExecuteW(
+        hwnd: Handle,
+        verb: *const u16,
+        file: *const u16,
+        params: *const u16,
+        dir: *const u16,
+        show: i32,
+    ) -> Handle;
 }
 
 #[link(name = "ole32", kind = "raw-dylib")]
 extern "system" {
-    pub fn CoInitializeEx(reserved:Handle,coinit:u32)->i32;pub fn CoUninitialize();
-    pub fn CoTaskMemAlloc(size:usize)->*mut c_void;pub fn CoTaskMemRealloc(memory:*mut c_void,size:usize)->*mut c_void;pub fn CoTaskMemFree(memory:*mut c_void);
-    pub fn CoCreateGuid(out:*mut Guid)->i32;pub fn CLSIDFromString(value:*const u16,out:*mut Guid)->i32;pub fn StringFromGUID2(guid:*const Guid,out:*mut u16,capacity:i32)->i32;
-    pub fn CreateStreamOnHGlobal(memory:Handle,delete_on_release:i32,out:*mut Handle)->i32;pub fn GetHGlobalFromStream(stream:Handle,out:*mut Handle)->i32;
+    pub fn CoInitializeEx(reserved: Handle, coinit: u32) -> i32;
+    pub fn CoUninitialize();
+    pub fn CoTaskMemAlloc(size: usize) -> *mut c_void;
+    pub fn CoTaskMemRealloc(memory: *mut c_void, size: usize) -> *mut c_void;
+    pub fn CoTaskMemFree(memory: *mut c_void);
+    pub fn CoCreateGuid(out: *mut Guid) -> i32;
+    pub fn CLSIDFromString(value: *const u16, out: *mut Guid) -> i32;
+    pub fn StringFromGUID2(guid: *const Guid, out: *mut u16, capacity: i32) -> i32;
+    pub fn CreateStreamOnHGlobal(memory: Handle, delete_on_release: i32, out: *mut Handle) -> i32;
+    pub fn GetHGlobalFromStream(stream: Handle, out: *mut Handle) -> i32;
 }
 
 #[link(name = "ws2_32", kind = "raw-dylib")]
@@ -427,17 +652,51 @@ extern "system" {
     pub fn getsockname(s: usize, address: *mut u8, len: *mut i32) -> i32;
     pub fn send(s: usize, data: *const u8, len: i32, flags: i32) -> i32;
     pub fn recv(s: usize, data: *mut u8, len: i32, flags: i32) -> i32;
-    pub fn getaddrinfo(node: *const c_char, service: *const c_char, hints: *const AddrInfoA, result: *mut *mut AddrInfoA) -> i32;
+    pub fn getaddrinfo(
+        node: *const c_char,
+        service: *const c_char,
+        hints: *const AddrInfoA,
+        result: *mut *mut AddrInfoA,
+    ) -> i32;
     pub fn freeaddrinfo(result: *mut AddrInfoA);
-    pub fn GetAddrInfoW(node: *const u16, service: *const u16, hints: *const AddrInfoW, result: *mut *mut AddrInfoW) -> i32;
+    pub fn GetAddrInfoW(
+        node: *const u16,
+        service: *const u16,
+        hints: *const AddrInfoW,
+        result: *mut *mut AddrInfoW,
+    ) -> i32;
     pub fn FreeAddrInfoW(result: *mut AddrInfoW);
 }
 
 #[link(name = "advapi32", kind = "raw-dylib")]
 extern "system" {
-    pub fn RegCreateKeyExA(root: Handle, sub: *const c_char, reserved: u32, class: *const c_char, options: u32, access: u32, sec: *mut c_void, result: *mut Handle, disposition: *mut u32) -> i32;
-    pub fn RegSetValueExA(key: Handle, name: *const c_char, reserved: u32, kind: u32, data: *const u8, size: u32) -> i32;
-    pub fn RegQueryValueExA(key: Handle, name: *const c_char, reserved: *mut u32, kind: *mut u32, data: *mut u8, size: *mut u32) -> i32;
+    pub fn RegCreateKeyExA(
+        root: Handle,
+        sub: *const c_char,
+        reserved: u32,
+        class: *const c_char,
+        options: u32,
+        access: u32,
+        sec: *mut c_void,
+        result: *mut Handle,
+        disposition: *mut u32,
+    ) -> i32;
+    pub fn RegSetValueExA(
+        key: Handle,
+        name: *const c_char,
+        reserved: u32,
+        kind: u32,
+        data: *const u8,
+        size: u32,
+    ) -> i32;
+    pub fn RegQueryValueExA(
+        key: Handle,
+        name: *const c_char,
+        reserved: *mut u32,
+        kind: *mut u32,
+        data: *mut u8,
+        size: *mut u32,
+    ) -> i32;
     pub fn RegDeleteValueA(key: Handle, name: *const c_char) -> i32;
     pub fn RegDeleteKeyA(root: Handle, sub: *const c_char) -> i32;
     pub fn RegCloseKey(key: Handle) -> i32;
@@ -447,8 +706,18 @@ extern "system" {
 extern "C" {
     pub fn RegisterClassExA(wc: *const WndClassExA) -> u16;
     pub fn CreateWindowExA(
-        ex_style: u32, class: *const c_char, title: *const c_char, style: u32,
-        x: i32, y: i32, cx: i32, cy: i32, parent: Handle, menu: Handle, instance: Handle, param: *mut c_void,
+        ex_style: u32,
+        class: *const c_char,
+        title: *const c_char,
+        style: u32,
+        x: i32,
+        y: i32,
+        cx: i32,
+        cy: i32,
+        parent: Handle,
+        menu: Handle,
+        instance: Handle,
+        param: *mut c_void,
     ) -> Handle;
     pub fn DefWindowProcA(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
     pub fn GetMessageA(msg: *mut Msg, hwnd: Handle, min: u32, max: u32) -> i32;
@@ -476,7 +745,15 @@ extern "C" {
     pub fn SetWindowTextW(hwnd: Handle, text: *const u16) -> i32;
     pub fn GetWindowTextW(hwnd: Handle, text: *mut u16, cap: i32) -> i32;
     pub fn GetWindowTextLengthW(hwnd: Handle) -> i32;
-    pub fn SetWindowPos(hwnd: Handle, after: Handle, x: i32, y: i32, cx: i32, cy: i32, flags: u32) -> i32;
+    pub fn SetWindowPos(
+        hwnd: Handle,
+        after: Handle,
+        x: i32,
+        y: i32,
+        cx: i32,
+        cy: i32,
+        flags: u32,
+    ) -> i32;
     pub fn MoveWindow(hwnd: Handle, x: i32, y: i32, cx: i32, cy: i32, repaint: i32) -> i32;
     pub fn BeginPaint(hwnd: Handle, ps: *mut PaintStruct) -> Handle;
     pub fn EndPaint(hwnd: Handle, ps: *const PaintStruct) -> i32;
@@ -497,24 +774,105 @@ extern "C" {
     pub fn GetObjectW(obj: Handle, size: i32, out: *mut c_void) -> i32;
     pub fn CreateSolidBrush(color: u32) -> Handle;
     pub fn CreatePen(style: u32, width: i32, color: u32) -> Handle;
+    pub fn MoveToEx(dc: Handle, x: i32, y: i32, previous: *mut Point) -> i32;
+    pub fn LineTo(dc: Handle, x: i32, y: i32) -> i32;
     pub fn CreateCompatibleDC(dc: Handle) -> Handle;
     pub fn CreateCompatibleBitmap(dc: Handle, width: i32, height: i32) -> Handle;
-    pub fn CreateDIBSection(dc: Handle, info: *const BitmapInfoHeader, usage: u32, bits: *mut *mut c_void, section: Handle, offset: u32) -> Handle;
+    pub fn CreateDIBSection(
+        dc: Handle,
+        info: *const BitmapInfoHeader,
+        usage: u32,
+        bits: *mut *mut c_void,
+        section: Handle,
+        offset: u32,
+    ) -> Handle;
     pub fn DeleteDC(dc: Handle) -> i32;
-    pub fn CreateFontA(height: i32, width: i32, escapement: i32, orientation: i32, weight: i32, italic: u32, underline: u32, strikeout: u32, charset: u32, out_precision: u32, clip_precision: u32, quality: u32, pitch_family: u32, face: *const c_char) -> Handle;
-    pub fn CreateFontW(height: i32, width: i32, escapement: i32, orientation: i32, weight: i32, italic: u32, underline: u32, strikeout: u32, charset: u32, out_precision: u32, clip_precision: u32, quality: u32, pitch_family: u32, face: *const u16) -> Handle;
+    pub fn CreateFontA(
+        height: i32,
+        width: i32,
+        escapement: i32,
+        orientation: i32,
+        weight: i32,
+        italic: u32,
+        underline: u32,
+        strikeout: u32,
+        charset: u32,
+        out_precision: u32,
+        clip_precision: u32,
+        quality: u32,
+        pitch_family: u32,
+        face: *const c_char,
+    ) -> Handle;
+    pub fn CreateFontW(
+        height: i32,
+        width: i32,
+        escapement: i32,
+        orientation: i32,
+        weight: i32,
+        italic: u32,
+        underline: u32,
+        strikeout: u32,
+        charset: u32,
+        out_precision: u32,
+        clip_precision: u32,
+        quality: u32,
+        pitch_family: u32,
+        face: *const u16,
+    ) -> Handle;
     pub fn SelectObject(hdc: Handle, obj: Handle) -> Handle;
     pub fn DeleteObject(obj: Handle) -> i32;
     pub fn SetTextColor(hdc: Handle, color: u32) -> u32;
     pub fn SetBkColor(hdc: Handle, color: u32) -> u32;
     pub fn SetBkMode(hdc: Handle, mode: i32) -> i32;
     pub fn PatBlt(hdc: Handle, x: i32, y: i32, width: i32, height: i32, rop: u32) -> i32;
-    pub fn BitBlt(dst: Handle, x: i32, y: i32, width: i32, height: i32, src: Handle, sx: i32, sy: i32, rop: u32) -> i32;
-    pub fn StretchBlt(dst: Handle, x: i32, y: i32, width: i32, height: i32, src: Handle, sx: i32, sy: i32, sw: i32, sh: i32, rop: u32) -> i32;
+    pub fn BitBlt(
+        dst: Handle,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        src: Handle,
+        sx: i32,
+        sy: i32,
+        rop: u32,
+    ) -> i32;
+    pub fn StretchBlt(
+        dst: Handle,
+        x: i32,
+        y: i32,
+        width: i32,
+        height: i32,
+        src: Handle,
+        sx: i32,
+        sy: i32,
+        sw: i32,
+        sh: i32,
+        rop: u32,
+    ) -> i32;
     pub fn TextOutA(hdc: Handle, x: i32, y: i32, text: *const c_char, count: i32) -> i32;
-    pub fn GetTextExtentPoint32A(hdc: Handle, text: *const c_char, count: i32, size: *mut [i32; 2]) -> i32;
-    pub fn WinluxDrawIconA(hdc: Handle, request: *const c_char, x: i32, y: i32, size: i32, background: u32) -> i32;
-    pub fn Rectangle(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32, pen: Handle, brush: Handle) -> i32;
+    pub fn GetTextExtentPoint32A(
+        hdc: Handle,
+        text: *const c_char,
+        count: i32,
+        size: *mut [i32; 2],
+    ) -> i32;
+    pub fn WinluxDrawIconA(
+        hdc: Handle,
+        request: *const c_char,
+        x: i32,
+        y: i32,
+        size: i32,
+        background: u32,
+    ) -> i32;
+    pub fn Rectangle(
+        hdc: Handle,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        pen: Handle,
+        brush: Handle,
+    ) -> i32;
     pub fn Ellipse(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32) -> i32;
 }
 
@@ -544,7 +902,8 @@ extern "C" {
     pub fn stricmp(a: *const c_char, b: *const c_char) -> i32;
     pub fn strlwr(s: *mut c_char) -> *mut c_char;
     pub fn strupr(s: *mut c_char) -> *mut c_char;
-    pub fn strtok_s(s: *mut c_char, delim: *const c_char, context: *mut *mut c_char) -> *mut c_char;
+    pub fn strtok_s(s: *mut c_char, delim: *const c_char, context: *mut *mut c_char)
+        -> *mut c_char;
     pub fn atol(s: *const c_char) -> i32;
     pub fn atoll(s: *const c_char) -> i64;
     pub fn strtol(s: *const c_char, end: *mut *mut c_char, base: i32) -> i32;
@@ -563,7 +922,13 @@ extern "C" {
     pub fn floor(x: f64) -> f64;
     pub fn abs(v: i32) -> i32;
     pub fn qsort(base: *mut c_void, num: usize, width: usize, compare: usize);
-    pub fn bsearch(key: *const c_void, base: *const c_void, num: usize, width: usize, compare: usize) -> *mut c_void;
+    pub fn bsearch(
+        key: *const c_void,
+        base: *const c_void,
+        num: usize,
+        width: usize,
+        compare: usize,
+    ) -> *mut c_void;
     pub fn _itoa(value: i32, buf: *mut c_char, radix: i32) -> *mut c_char;
     pub fn _i64toa(value: i64, buf: *mut c_char, radix: i32) -> *mut c_char;
     pub fn _snprintf(buf: *mut c_char, size: usize, fmt: *const c_char, ...) -> i32;
@@ -596,13 +961,21 @@ pub static _fltused: i32 = 0;
 // répertoire d'imports différés sans dépendre de delayimp.lib de Microsoft.
 // Winlux résout ces imports avant le point d'entrée.
 #[no_mangle]
-pub extern "C" fn __delayLoadHelper2(_: *const c_void, _: *mut c_void) -> *mut c_void { core::ptr::null_mut() }
+pub extern "C" fn __delayLoadHelper2(_: *const c_void, _: *mut c_void) -> *mut c_void {
+    core::ptr::null_mut()
+}
 
 /// Écrit des octets bruts sur la sortie standard via WriteFile.
 pub fn out(s: &[u8]) {
     unsafe {
         let mut n = 0u32;
-        WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), s.as_ptr(), s.len() as u32, &mut n, core::ptr::null_mut());
+        WriteFile(
+            GetStdHandle(STD_OUTPUT_HANDLE),
+            s.as_ptr(),
+            s.len() as u32,
+            &mut n,
+            core::ptr::null_mut(),
+        );
     }
 }
 
@@ -668,7 +1041,9 @@ core::arch::global_asm!(
 /// d'exceptions C++ de MSVC dans leurs tables de déroulement. Les tests sont
 /// compilés avec `panic = "abort"` : aucun déroulement ne l'appellera.
 #[no_mangle]
-pub extern "C" fn __CxxFrameHandler3() -> i32 { 1 }
+pub extern "C" fn __CxxFrameHandler3() -> i32 {
+    1
+}
 
 #[panic_handler]
 fn panic(_: &core::panic::PanicInfo) -> ! {

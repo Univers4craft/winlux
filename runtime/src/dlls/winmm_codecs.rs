@@ -57,7 +57,7 @@ fn format_ok(rate: u32, channels: u16) -> bool {
 fn finish(w: Wave) -> Option<Wave> {
     if !format_ok(w.rate, w.channels)
         || w.samples.is_empty()
-        || w.samples.len() % w.channels as usize != 0
+        || !w.samples.len().is_multiple_of(w.channels as usize)
     {
         None
     } else {
@@ -413,7 +413,9 @@ fn decode_aac(raw: &[u8], limit: usize) -> Option<Wave> {
             }
             if mono {
                 let mono_samples: Vec<i16> = samples
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|pair| ((pair[0] as i32 + pair[1] as i32) / 2) as i16)
                     .collect();
                 append_pcm(&mut wave.samples, &mono_samples, limit)?;

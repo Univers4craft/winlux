@@ -1,0 +1,5 @@
+Command=/usr/bin/winlux-tray network
+UseLabel=0
+Text=
+UpdatePeriod=3000
+Font=DejaVu Sans 10

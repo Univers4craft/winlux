@@ -1,0 +1,172 @@
+#!/usr/bin/python3
+"""Real mixed Linux/PE window lifecycle and screensaver, in a disposable guest."""
+import os
+from pathlib import Path
+import re
+import subprocess
+import time
+
+def run(*args, **kwargs):
+    kwargs.setdefault("timeout", 20)
+    return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT, **kwargs)
+
+def windows():
+    result = {}
+    try: rows = run("wmctrl", "-lG").splitlines()
+    except subprocess.CalledProcessError as error:
+        if "client list" in error.output.lower(): return result
+        if not error.output.strip():
+            # wmctrl returns 1 for a zero-length client list after the last
+            # app closes. Require the WM to remain alive before accepting it.
+            run("wmctrl", "-m")
+            return result
+        raise
+    for row in rows:
+        fields = row.split(None, 7)
+        if len(fields) == 8:
+            result[fields[0]] = (tuple(map(int, fields[2:6])), fields[7])
+    return result
+
+def wait_title(title, timeout=30):
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        for window, (_, text) in windows().items():
+            if title in text: return window
+        time.sleep(0.2)
+    raise AssertionError(f"Window not mapped: {title}; {windows()}")
+
+def wait_for(predicate, label):
+    for _ in range(50):
+        if predicate(): return
+        time.sleep(0.1)
+    raise AssertionError(label)
+
+def capture(name):
+    destination = Path("/var/lib/winlux") / (name + ".xwd")
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    run("xwd", "-root", "-silent", "-out", str(destination))
+    return destination.read_bytes()
+
+def client_ids():
+    return {int(value, 16) for value in re.findall(r"0x[0-9a-fA-F]+", run("xprop", "-root", "_NET_CLIENT_LIST"))}
+
+os.environ.update(DISPLAY=":99", WINLUX_NATIVE_SHELL="1", XDG_CURRENT_DESKTOP="XFCE",
+                  XDG_MENU_PREFIX="xfce-", XDG_RUNTIME_DIR="/run/user/0",
+                  DBUS_SESSION_BUS_ADDRESS="unix:path=/run/winlux/session-bus",
+                  XDG_CONFIG_DIRS="/etc/xdg", XDG_DATA_DIRS="/usr/local/share:/usr/share",
+                  LANG="fr_FR.UTF-8" if Path("/usr/lib/locale/fr_FR.utf8").is_dir() else "C.UTF-8", WINLUX_UI_SCALE="1")
+Path("/var/lib/winlux").mkdir(parents=True, exist_ok=True)
+log = Path("/var/lib/winlux/native-programs.log").open("w")
+server = subprocess.Popen(["Xvfb", ":99", "-ac", "-screen", "0", "1920x1080x24", "-nolisten", "tcp"], stdout=log, stderr=log)
+time.sleep(1)
+assert server.poll() is None
+print(run("winlux-native-session", timeout=60), flush=True)
+print(run("wmctrl", "-m"), flush=True)
+subprocess.Popen(["xfdesktop", "--disable-wm-check"], stdout=log, stderr=log)
+run("winlux-control", "status")
+subprocess.Popen(["winlux-shell-app", "explorer"], stdout=log, stderr=log)
+explorer = wait_title("Explorer Winlux")
+subprocess.Popen(["winlux-shell-app", "settings", "10"], stdout=log, stderr=log)
+settings = wait_title("Parametres Winlux")
+document = Path("/tmp/winlux-native-note.txt")
+document.write_text("Winlux : vrai éditeur de texte.\n")
+subprocess.Popen(["mousepad", "--disable-server", str(document)], stdout=log, stderr=log)
+editor = wait_title("winlux-native-note.txt")
+subprocess.Popen(["winlux-terminal"], stdout=log, stderr=log)
+terminal = wait_title("Terminal Winlux")
+
+for window in [explorer, settings, editor, terminal]:
+    state = run("xprop", "-id", window, "_NET_WM_STATE")
+    assert "_NET_WM_STATE_FULLSCREEN" not in state, state
+    run("wmctrl", "-ir", window, "-e", "0,120,90,800,500")
+    wait_for(lambda: all(abs(actual - expected) < 32 for actual, expected in zip(windows().get(window, ((0, 0, 0, 0), ""))[0][2:], (800, 500))), "resize")
+    run("xdotool", "windowminimize", window)
+    wait_for(lambda: "Iconic" in run("xprop", "-id", window, "WM_STATE"), "minimize")
+    run("wmctrl", "-ia", window)
+    wait_for(lambda: "Normal" in run("xprop", "-id", window, "WM_STATE"), "restore")
+    run("wmctrl", "-ir", window, "-b", "add,maximized_vert,maximized_horz")
+    wait_for(lambda: "_NET_WM_STATE_MAXIMIZED_VERT" in run("xprop", "-id", window, "_NET_WM_STATE"), "maximize")
+    run("wmctrl", "-ir", window, "-b", "remove,maximized_vert,maximized_horz")
+print("WINLUX_NATIVE_WINDOW_CONTROLS=0", flush=True)
+
+run("wmctrl", "-ia", editor)
+time.sleep(0.2)
+run("xdotool", "key", "ctrl+End")
+run("xdotool", "type", "Texte sauvegarde dans Mousepad.")
+run("xdotool", "key", "ctrl+s")
+wait_for(lambda: "Texte sauvegarde" in document.read_text(), "editor save")
+print("WINLUX_NATIVE_EDITOR_SAVE=0", flush=True)
+
+run("winlux-applications", "register", "/root/Téléchargements/Bonjour.exe")
+assert any("Bonjour" in entry.read_text() for entry in Path("/root/.local/share/applications").glob("winlux-pe-*.desktop"))
+html = Path("/tmp/winlux-native-browser.html")
+html.write_text("<!doctype html><title>Winlux browser window test</title><h1>Winlux</h1>")
+html.chmod(0o644)
+subprocess.Popen(["winlux-browsers", "--launch", "edge", "--disable-gpu", html.as_uri()], stdout=log, stderr=log)
+browser = wait_title("Winlux browser window test", 45)
+assert "_NET_WM_STATE_FULLSCREEN" not in run("xprop", "-id", browser, "_NET_WM_STATE")
+geometry = windows()[browser][0]
+assert geometry[2] < 1920 and geometry[3] < 1040, geometry
+print("WINLUX_NATIVE_EDGE_WINDOWED=0", flush=True)
+clients = client_ids()
+for window in [explorer, settings, editor, terminal, browser]:
+    assert int(window, 16) in clients, window
+run("winlux-applications", "window-icons")
+for window in [explorer, settings]:
+    icon = run("xprop", "-id", window, "_NET_WM_ICON")
+    assert "_NET_WM_ICON(CARDINAL)" in icon, icon[:200]
+for window, geometry in [(browser, "0,40,40,1100,700"), (settings, "0,1030,60,830,620"),
+                         (explorer, "0,150,120,900,580"), (editor, "0,100,750,800,240"), (terminal, "0,1040,740,780,260")]:
+    run("wmctrl", "-ir", window, "-e", geometry)
+time.sleep(1)
+capture("native-desktop")
+assert len(list(Path("/run/winlux/tray").glob("*.svg"))) >= 3, "Panel device indicators did not execute"
+subprocess.Popen(["winlux-start-menu"], stdout=log, stderr=log)
+start = wait_title("Démarrer Winlux")
+assert windows()[start][0][2] >= 640 and windows()[start][0][3] >= 600, "Start size/layout collapsed"
+time.sleep(1)
+capture("native-start-menu")
+sx, sy, sw, sh = windows()[start][0]
+run("xdotool", "mousemove", str(sx + sw - 100), str(sy + 116), "click", "1")
+time.sleep(0.3)
+capture("native-start-all")
+run("xdotool", "mousemove", str(sx + 120), str(sy + 50), "click", "1")
+run("xdotool", "type", "Bonjour")
+time.sleep(0.4)
+capture("native-start-search")
+run("xdotool", "key", "Escape")
+print("WINLUX_NATIVE_TASKBAR_AND_MENU=0", flush=True)
+
+# Optional vendor executable, injected only into the disposable diagnostic disk.
+# No proprietary application is copied into the released OS image.
+external = Path("/opt/winlux-test/ChatGPT.exe")
+if external.is_file():
+    try:
+        attempt = subprocess.run(["winlux", str(external)], capture_output=True, text=True, timeout=20)
+        report = f"exit={attempt.returncode}\n{attempt.stdout}\n{attempt.stderr}"
+    except subprocess.TimeoutExpired as error:
+        report = f"timeout=20\n{error.stdout!r}\n{error.stderr!r}"
+    Path("/var/lib/winlux/chatgpt-result.txt").write_text(report)
+    print("WINLUX_CHATGPT_DIAGNOSTIC=" + report, flush=True)
+
+run("xscreensaver-command", "-activate")
+time.sleep(3)
+print(run("xscreensaver-command", "-time"), flush=True)
+capture("native-pipes-1")
+run("pidof", "pipes")
+first = capture("native-pipes-1")
+time.sleep(1)
+second = capture("native-pipes-2")
+assert first != second, "Screensaver animation did not change"
+run("xscreensaver-command", "-deactivate")
+run("xdotool", "mousemove_relative", "2", "2")
+print("WINLUX_NATIVE_PIPES_ANIMATED=0", flush=True)
+
+for window in [explorer, settings, editor, terminal, browser]:
+    run("wmctrl", "-ic", window)
+    # Query the stable root property rather than reading the title/geometry of
+    # clients that can disappear halfway through wmctrl's enumeration.
+    wait_for(lambda: int(window, 16) not in client_ids(), "close")
+run("wmctrl", "-m")
+print("WINLUX_NATIVE_CLOSE=0", flush=True)
+print("WINLUX_NATIVE_RESULT=0", flush=True)

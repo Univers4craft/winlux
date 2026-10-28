@@ -6,27 +6,33 @@
 # qui reste ouvert à la fin; les programmes graphiques sont lancés directement.
 # Les erreurs sont affichées dans une boîte de dialogue lorsque c'est possible.
 set -u
+umask 077
 
 winlux=${WINLUX_RUNTIME:-winlux}
 state=${XDG_STATE_HOME:-${HOME:-/tmp}/.local/state}/winlux
 log="$state/last-launch.log"
 
-show_error() {
+show_message() {
     title="Winlux"
     message=$1
+    mode=${2:-error}
+    dialog_flag=--error
+    icon=dialog-error
+    if [ "$mode" = info ]; then dialog_flag=--msgbox; icon=dialog-information; fi
     if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
         if command -v kdialog >/dev/null 2>&1; then
-            kdialog --title "$title" --error "$message" && return
+            kdialog --title "$title" "$dialog_flag" "$message" && return
         elif command -v zenity >/dev/null 2>&1; then
-            zenity --error --title="$title" --no-wrap --text="$message" && return
+            zenity "--$mode" --title="$title" --no-wrap --text="$message" && return
         elif command -v notify-send >/dev/null 2>&1; then
-            notify-send --app-name=Winlux --icon=dialog-error "$title" "$message" && return
+            notify-send --app-name=Winlux --icon="$icon" "$title" "$message" && return
         elif command -v xmessage >/dev/null 2>&1; then
             xmessage -center "$title : $message" && return
         fi
     fi
     printf 'Winlux : %s\n' "$message" >&2
 }
+show_error() { show_message "$1" error; }
 
 # Exécute le programme dans le terminal déjà ouvert puis attend Entrée pour
 # laisser le temps de lire la sortie.
@@ -47,6 +53,9 @@ run_in_terminal() {
 open_terminal() {
     if [ -n "${WINLUX_TERMINAL:-}" ]; then
         exec "$WINLUX_TERMINAL" -e "$@"
+    fi
+    if command -v winlux-terminal >/dev/null 2>&1; then
+        exec winlux-terminal -e "$@"
     fi
     case "${XDG_CURRENT_DESKTOP:-}" in
         *KDE*) order="konsole gnome-terminal kgx xfce4-terminal x-terminal-emulator xterm" ;;
@@ -127,12 +136,24 @@ if [ -z "$kind" ]; then
     show_error "Impossible d’ouvrir « $(basename -- "$exe") » : ${reason:-format inconnu}."
     exit 1
 fi
+if command -v winlux-applications >/dev/null 2>&1; then
+    winlux-applications register "$exe" >/dev/null 2>&1 || true
+fi
 
-if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && [ ! -t 1 ]; then
+if [ "$kind" = console ] && [ -z "${WINLUX_NO_TERMINAL:-}" ] && { [ "${WINLUX_DESKTOP_LAUNCH:-0}" = 1 ] || [ ! -t 1 ]; }; then
     self=$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")
     open_terminal "$self" --in-terminal "$exe" "$@"
-    show_error "Aucun terminal trouvé pour afficher ce programme console. Installez Konsole ou définissez WINLUX_TERMINAL."
-    exit 1
+    # A missing terminal must not prevent a compatible batch/GUI-test PE from
+    # starting. Interactive console applications still need a terminal.
+    mkdir -p "$state" 2>/dev/null || log=/dev/null
+    cd "$(dirname -- "$exe")" 2>/dev/null || true
+    "$winlux" "$exe" "$@" </dev/null >"$log" 2>&1
+    status=$?
+    summary=$(tail -c 2048 "$log" 2>/dev/null)
+    mode=error; if [ "$status" -eq 0 ]; then mode=info; fi
+    show_message "« $(basename -- "$exe") » : code $status. Aucun terminal disponible ; sortie enregistrée dans $log.
+$summary" "$mode"
+    exit "$status"
 fi
 
 # Programme graphique (ou console lancée depuis un terminal) : le dossier du
@@ -144,8 +165,8 @@ if [ "$kind" = console ]; then
 fi
 "$winlux" "$exe" "$@" 2>"$log"
 status=$?
-if [ "$status" -ne 0 ] && grep -q '^winlux:' "$log" 2>/dev/null; then
-    detail=$(grep '^winlux:' "$log" | tail -n 3 | sed 's/^winlux: //')
+if [ "$status" -ne 0 ]; then
+    detail=$(tail -n 5 "$log" 2>/dev/null)
     show_error "« $(basename -- "$exe") » s’est arrêté (code $status).
 $detail"
 fi

@@ -42,12 +42,24 @@ unsafe fn read_class_name_w(p: *const u16) -> String {
 
 // ---------- Enregistrement de classes ----------
 
-unsafe fn register_class_common(name: String, wnd_proc: usize, background: usize, instance: usize) -> usize {
+unsafe fn register_class_common(
+    name: String,
+    wnd_proc: usize,
+    background: usize,
+    instance: usize,
+) -> usize {
     if name.is_empty() || wnd_proc == 0 {
         crate::process::set_last_error(87);
         return 0;
     }
-    if gui::register_class(&name, ClassInfo { wnd_proc, background, instance }) {
+    if gui::register_class(
+        &name,
+        ClassInfo {
+            wnd_proc,
+            background,
+            instance,
+        },
+    ) {
         // ATOM : petit entier stable, jamais nul.
         1
     } else {
@@ -100,8 +112,16 @@ pub unsafe extern "win64" fn register_class_ex_w(wcx: *const WndClassExA) -> u16
 // ---------- Création de fenêtres ----------
 
 unsafe fn create_window_common(
-    class: String, title: String, style: u32, ex_style: u32,
-    x: i32, y: i32, cx: i32, cy: i32, parent: usize, instance: usize,
+    class: String,
+    title: String,
+    style: u32,
+    ex_style: u32,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    parent: usize,
+    instance: usize,
 ) -> usize {
     let Some(info) = gui::lookup_class(&class) else {
         crate::process::set_last_error(1407); // ERROR_CLASS_DOES_NOT_EXIST
@@ -109,8 +129,16 @@ unsafe fn create_window_common(
     };
     let hwnd = gui::alloc_hwnd();
     // Tailles CW_USEDEFAULT : fenêtre raisonnable par défaut.
-    let w = if cx == gui::CW_USEDEFAULT || cx <= 0 { 800 } else { cx };
-    let h = if cy == gui::CW_USEDEFAULT || cy <= 0 { 600 } else { cy };
+    let w = if cx == gui::CW_USEDEFAULT || cx <= 0 {
+        800
+    } else {
+        cx
+    };
+    let h = if cy == gui::CW_USEDEFAULT || cy <= 0 {
+        600
+    } else {
+        cy
+    };
     let px = if x == gui::CW_USEDEFAULT { 100 } else { x };
     let py = if y == gui::CW_USEDEFAULT { 100 } else { y };
     let rect = Rect::from_size(px, py, w, h);
@@ -131,23 +159,32 @@ unsafe fn create_window_common(
         ex_style,
     };
 
-    gui::insert_window(hwnd, gui::Window {
-        class: class.clone(),
-        wnd_proc: info.wnd_proc,
-        background: info.background,
-        title: title.clone(),
-        rect,
-        visible,
-        parent,
-        owner: std::thread::current().id(),
-        needs_paint: visible,
-        style,
-        ex_style,
-        pending: Vec::new(),
-    });
+    gui::insert_window(
+        hwnd,
+        gui::Window {
+            class: class.clone(),
+            wnd_proc: info.wnd_proc,
+            background: info.background,
+            title: title.clone(),
+            rect,
+            visible,
+            parent,
+            owner: std::thread::current().id(),
+            needs_paint: visible,
+            style,
+            ex_style,
+            pending: Vec::new(),
+        },
+    );
 
     // WM_CREATE synchrone (le wndproc peut refuser la fenêtre).
-    let created = crate::dlls::gui::call_wndproc(info.wnd_proc, hwnd, gui::WM_CREATE, 0, &cs as *const CreateStructA as isize);
+    let created = crate::dlls::gui::call_wndproc(
+        info.wnd_proc,
+        hwnd,
+        gui::WM_CREATE,
+        0,
+        &cs as *const CreateStructA as isize,
+    );
     if created == -1 {
         gui::destroy_window(hwnd);
         return 0;
@@ -161,10 +198,18 @@ unsafe fn create_window_common(
     });
 
     // WM_SIZE puis, si visible, demande de peinture.
-    gui::post_to_window(hwnd, Msg {
-        hwnd, message: gui::WM_SIZE, wparam: 0, lparam: (((h as u32 as usize) << 16) | (w as u32 as usize)) as isize,
-        time: now_tick(), pt: Point::default(), l_private: 0,
-    });
+    gui::post_to_window(
+        hwnd,
+        Msg {
+            hwnd,
+            message: gui::WM_SIZE,
+            wparam: 0,
+            lparam: (((h as u32 as usize) << 16) | (w as u32 as usize)) as isize,
+            time: now_tick(),
+            pt: Point::default(),
+            l_private: 0,
+        },
+    );
     if visible {
         gui::request_paint(hwnd);
     }
@@ -177,8 +222,18 @@ fn with_backend<F: FnOnce(&mut dyn gui::GuiBackend)>(f: F) {
 }
 
 pub unsafe extern "win64" fn create_window_ex_a(
-    ex_style: u32, class: *const u8, title: *const u8, style: u32,
-    x: i32, y: i32, cx: i32, cy: i32, parent: usize, menu: usize, instance: usize, param: *mut c_void,
+    ex_style: u32,
+    class: *const u8,
+    title: *const u8,
+    style: u32,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    parent: usize,
+    menu: usize,
+    instance: usize,
+    param: *mut c_void,
 ) -> usize {
     let _ = param;
     let _ = menu;
@@ -186,12 +241,33 @@ pub unsafe extern "win64" fn create_window_ex_a(
         crate::process::set_last_error(87);
         return 0;
     }
-    create_window_common(read_class_name_a(class), read_class_name_a(title), style, ex_style, x, y, cx, cy, parent, instance)
+    create_window_common(
+        read_class_name_a(class),
+        read_class_name_a(title),
+        style,
+        ex_style,
+        x,
+        y,
+        cx,
+        cy,
+        parent,
+        instance,
+    )
 }
 
 pub unsafe extern "win64" fn create_window_ex_w(
-    ex_style: u32, class: *const u16, title: *const u16, style: u32,
-    x: i32, y: i32, cx: i32, cy: i32, parent: usize, menu: usize, instance: usize, param: *mut c_void,
+    ex_style: u32,
+    class: *const u16,
+    title: *const u16,
+    style: u32,
+    x: i32,
+    y: i32,
+    cx: i32,
+    cy: i32,
+    parent: usize,
+    menu: usize,
+    instance: usize,
+    param: *mut c_void,
 ) -> usize {
     let _ = param;
     let _ = menu;
@@ -199,17 +275,36 @@ pub unsafe extern "win64" fn create_window_ex_w(
         crate::process::set_last_error(87);
         return 0;
     }
-    create_window_common(read_class_name_w(class), read_class_name_w(title), style, ex_style, x, y, cx, cy, parent, instance)
+    create_window_common(
+        read_class_name_w(class),
+        read_class_name_w(title),
+        style,
+        ex_style,
+        x,
+        y,
+        cx,
+        cy,
+        parent,
+        instance,
+    )
 }
 
 // ---------- Boucle de messages ----------
 
 unsafe fn write_msg(out: *mut Msg, m: &Msg) {
     if !out.is_null() {
-        std::ptr::write_unaligned(out, Msg {
-            hwnd: m.hwnd, message: m.message, wparam: m.wparam, lparam: m.lparam,
-            time: m.time, pt: m.pt, l_private: m.l_private,
-        });
+        std::ptr::write_unaligned(
+            out,
+            Msg {
+                hwnd: m.hwnd,
+                message: m.message,
+                wparam: m.wparam,
+                lparam: m.lparam,
+                time: m.time,
+                pt: m.pt,
+                l_private: m.l_private,
+            },
+        );
     }
 }
 
@@ -238,7 +333,13 @@ pub unsafe extern "win64" fn get_message_w(out: *mut Msg, hwnd: usize, min: u32,
     get_message_a(out, hwnd, min, max)
 }
 
-pub unsafe extern "win64" fn peek_message_a(out: *mut Msg, hwnd: usize, min: u32, max: u32, remove: u32) -> i32 {
+pub unsafe extern "win64" fn peek_message_a(
+    out: *mut Msg,
+    hwnd: usize,
+    min: u32,
+    max: u32,
+    remove: u32,
+) -> i32 {
     gui::pump_backend();
     let q = gui::current_queue();
     if remove & 0x1 != 0 {
@@ -262,7 +363,13 @@ pub unsafe extern "win64" fn peek_message_a(out: *mut Msg, hwnd: usize, min: u32
     }
 }
 
-pub unsafe extern "win64" fn peek_message_w(out: *mut Msg, hwnd: usize, min: u32, max: u32, remove: u32) -> i32 {
+pub unsafe extern "win64" fn peek_message_w(
+    out: *mut Msg,
+    hwnd: usize,
+    min: u32,
+    max: u32,
+    remove: u32,
+) -> i32 {
     peek_message_a(out, hwnd, min, max, remove)
 }
 
@@ -309,20 +416,47 @@ pub unsafe extern "win64" fn post_quit_message(code: i32) {
     gui::post_quit(&q, code);
 }
 
-pub unsafe extern "win64" fn post_message_a(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> i32 {
+pub unsafe extern "win64" fn post_message_a(
+    hwnd: usize,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> i32 {
     if hwnd == 0 {
         crate::process::set_last_error(87);
         return 0;
     }
-    let m = Msg { hwnd, message, wparam, lparam, time: now_tick(), pt: Point::default(), l_private: 0 };
-    if gui::post_to_window(hwnd, m) { 1 } else { 0 }
+    let m = Msg {
+        hwnd,
+        message,
+        wparam,
+        lparam,
+        time: now_tick(),
+        pt: Point::default(),
+        l_private: 0,
+    };
+    if gui::post_to_window(hwnd, m) {
+        1
+    } else {
+        0
+    }
 }
 
-pub unsafe extern "win64" fn post_message_w(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> i32 {
+pub unsafe extern "win64" fn post_message_w(
+    hwnd: usize,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> i32 {
     post_message_a(hwnd, message, wparam, lparam)
 }
 
-pub unsafe extern "win64" fn send_message_a(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
+pub unsafe extern "win64" fn send_message_a(
+    hwnd: usize,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
     if hwnd == 0 {
         crate::process::set_last_error(87);
         return 0;
@@ -333,17 +467,32 @@ pub unsafe extern "win64" fn send_message_a(hwnd: usize, message: u32, wparam: u
     }
 }
 
-pub unsafe extern "win64" fn send_message_w(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
+pub unsafe extern "win64" fn send_message_w(
+    hwnd: usize,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
     send_message_a(hwnd, message, wparam, lparam)
 }
 
 // ---------- Propriétés de fenêtre ----------
 
-pub unsafe extern "win64" fn def_window_proc_a(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
+pub unsafe extern "win64" fn def_window_proc_a(
+    hwnd: usize,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
     gui::def_window_proc(hwnd, message, wparam, lparam)
 }
 
-pub unsafe extern "win64" fn def_window_proc_w(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> isize {
+pub unsafe extern "win64" fn def_window_proc_w(
+    hwnd: usize,
+    message: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
     gui::def_window_proc(hwnd, message, wparam, lparam)
 }
 
@@ -366,7 +515,11 @@ pub unsafe extern "win64" fn update_window(hwnd: usize) -> i32 {
 }
 
 pub unsafe extern "win64" fn destroy_window(hwnd: usize) -> i32 {
-    if gui::destroy_window(hwnd) { 1 } else { 0 }
+    if gui::destroy_window(hwnd) {
+        1
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "win64" fn is_window(hwnd: usize) -> i32 {
@@ -492,8 +645,16 @@ pub unsafe extern "win64" fn set_window_pos(
     };
     let left = if flags & SWP_NOMOVE != 0 { old.left } else { x };
     let top = if flags & SWP_NOMOVE != 0 { old.top } else { y };
-    let width = if flags & SWP_NOSIZE != 0 { old.width() } else { cx };
-    let height = if flags & SWP_NOSIZE != 0 { old.height() } else { cy };
+    let width = if flags & SWP_NOSIZE != 0 {
+        old.width()
+    } else {
+        cx
+    };
+    let height = if flags & SWP_NOSIZE != 0 {
+        old.height()
+    } else {
+        cy
+    };
     if width <= 0 || height <= 0 {
         crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
         return 0;
@@ -506,7 +667,12 @@ pub unsafe extern "win64" fn set_window_pos(
         crate::process::set_last_error(87);
         return 0;
     };
-    let rect = Rect { left, top, right, bottom };
+    let rect = Rect {
+        left,
+        top,
+        right,
+        bottom,
+    };
     let moved = left != old.left || top != old.top;
     let resized = width != old.width() || height != old.height();
 
@@ -627,14 +793,17 @@ pub unsafe extern "win64" fn begin_paint(hwnd: usize, ps: *mut PaintStruct) -> u
         Some(v) => v,
         None => return 0,
     };
-    std::ptr::write_unaligned(ps, PaintStruct {
-        hdc,
-        erase: 1,
-        paint: rect,
-        restore: 0,
-        inc_update: 0,
-        reserved: [0; 32],
-    });
+    std::ptr::write_unaligned(
+        ps,
+        PaintStruct {
+            hdc,
+            erase: 1,
+            paint: rect,
+            restore: 0,
+            inc_update: 0,
+            reserved: [0; 32],
+        },
+    );
     hdc
 }
 
@@ -683,7 +852,14 @@ pub unsafe extern "win64" fn frame_rect(hdc: usize, rect: *const Rect, brush: us
         return 0;
     }
     if let Some(color) = gui::object_color(brush) {
-        gui::record(hdc, gui::DrawCmd::FrameRect { rect: *rect, color, width: 1 });
+        gui::record(
+            hdc,
+            gui::DrawCmd::FrameRect {
+                rect: *rect,
+                color,
+                width: 1,
+            },
+        );
     }
     1
 }
@@ -718,13 +894,13 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
     match index {
         0 | 16 | 78 => gui::screen_size().0, // SM_CXSCREEN, SM_CXFULLSCREEN, SM_CXVIRTUALSCREEN
         1 | 17 | 79 => gui::screen_size().1, // SM_CYSCREEN, SM_CYFULLSCREEN, SM_CYVIRTUALSCREEN
-        2 => 4,    // SM_CYCAPTION
-        3 => 4,    // SM_CXBORDER
-        4 => 4,    // SM_CYBORDER
-        7 => 32,   // SM_CYHSCROLL
-        8 => 16,   // SM_CYVSCROLL
-        90 => 96,  // LOGPIXELSX
-        91 => 96,  // LOGPIXELSY
+        2 => 4,                              // SM_CYCAPTION
+        3 => 4,                              // SM_CXBORDER
+        4 => 4,                              // SM_CYBORDER
+        7 => 32,                             // SM_CYHSCROLL
+        8 => 16,                             // SM_CYVSCROLL
+        90 => 96,                            // LOGPIXELSX
+        91 => 96,                            // LOGPIXELSY
         _ => 0,
     }
 }
@@ -734,17 +910,37 @@ pub extern "win64" fn get_sys_color(index: i32) -> u32 {
 }
 
 pub extern "win64" fn get_sys_color_brush(index: i32) -> usize {
-    let Some(color) = gui::theme::system_color(index) else { return 0 };
+    let Some(color) = gui::theme::system_color(index) else {
+        return 0;
+    };
     gui::system_color_brush(index as usize, color)
 }
 
-pub unsafe extern "win64" fn message_box_a(_hwnd: usize, text: *const u8, caption: *const u8, _typ: u32) -> i32 {
-    eprintln!("winlux: MessageBoxA [{}] {}", crate::dlls::cstr(caption), crate::dlls::cstr(text));
+pub unsafe extern "win64" fn message_box_a(
+    _hwnd: usize,
+    text: *const u8,
+    caption: *const u8,
+    _typ: u32,
+) -> i32 {
+    eprintln!(
+        "winlux: MessageBoxA [{}] {}",
+        crate::dlls::cstr(caption),
+        crate::dlls::cstr(text)
+    );
     1
 }
 
-pub unsafe extern "win64" fn message_box_w(_hwnd: usize, text: *const u16, caption: *const u16, _typ: u32) -> i32 {
-    eprintln!("winlux: MessageBoxW [{}] {}", crate::dlls::wstr(caption), crate::dlls::wstr(text));
+pub unsafe extern "win64" fn message_box_w(
+    _hwnd: usize,
+    text: *const u16,
+    caption: *const u16,
+    _typ: u32,
+) -> i32 {
+    eprintln!(
+        "winlux: MessageBoxW [{}] {}",
+        crate::dlls::wstr(caption),
+        crate::dlls::wstr(text)
+    );
     1
 }
 
@@ -758,10 +954,10 @@ const GWL_STYLE: i32 = -16;
 const GWL_EXSTYLE: i32 = -20;
 const GWL_USERDATA: i32 = -21;
 const GWL_ID: i32 = -12;
-const GWLP_WNDPROC: i32 = -4;
-const GWLP_HINSTANCE: i32 = -6;
-const GWLP_USERDATA: i32 = -21;
-const GWLP_ID: i32 = -12;
+const _GWLP_WNDPROC: i32 = -4;
+const _GWLP_HINSTANCE: i32 = -6;
+const _GWLP_USERDATA: i32 = -21;
+const _GWLP_ID: i32 = -12;
 const DWL_DLGPROC: i32 = 4;
 const DWL_MSGRESULT: i32 = 0;
 const DWL_USER: i32 = 8;
@@ -782,16 +978,17 @@ unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
     match index {
         GWL_STYLE => gui::window_style(hwnd).unwrap_or(0) as isize,
         GWL_EXSTYLE => gui::window_ex_style(hwnd).unwrap_or(0) as isize,
-        GWL_WNDPROC | GWLP_WNDPROC => gui::wnd_proc_of(hwnd).unwrap_or(0) as isize,
-        GWL_USERDATA | GWLP_USERDATA => {
-            lock(user_data_map()).get(&hwnd).copied().unwrap_or(0)
-        }
-        GWL_HINSTANCE | GWLP_HINSTANCE => 0x0040_0000_isize, // faux hInstance
-        GWL_ID | GWLP_ID | DWL_DLGPROC | DWL_MSGRESULT | DWL_USER => 0,
+        GWL_WNDPROC => gui::wnd_proc_of(hwnd).unwrap_or(0) as isize,
+        GWL_USERDATA => lock(user_data_map()).get(&hwnd).copied().unwrap_or(0),
+        GWL_HINSTANCE => 0x0040_0000_isize,
+        GWL_ID | DWL_DLGPROC | DWL_MSGRESULT | DWL_USER => 0,
         _ => {
             // Offset positif = données supplémentaires de classe (cbWndExtra)
             if index >= 0 {
-                lock(user_data_map()).get(&(hwnd.wrapping_add(index as usize))).copied().unwrap_or(0)
+                lock(user_data_map())
+                    .get(&(hwnd.wrapping_add(index as usize)))
+                    .copied()
+                    .unwrap_or(0)
             } else {
                 0
             }
@@ -802,10 +999,16 @@ unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
 unsafe fn set_window_long_impl(hwnd: usize, index: i32, value: isize) -> isize {
     let old = get_window_long_impl(hwnd, index);
     match index {
-        GWL_STYLE => { gui::set_window_style(hwnd, value as u32); }
-        GWL_EXSTYLE => { gui::set_window_ex_style(hwnd, value as u32); }
-        GWL_WNDPROC | GWLP_WNDPROC => { gui::set_wnd_proc(hwnd, value as usize); }
-        GWL_USERDATA | GWLP_USERDATA => {
+        GWL_STYLE => {
+            gui::set_window_style(hwnd, value as u32);
+        }
+        GWL_EXSTYLE => {
+            gui::set_window_ex_style(hwnd, value as u32);
+        }
+        GWL_WNDPROC => {
+            gui::set_wnd_proc(hwnd, value as usize);
+        }
+        GWL_USERDATA => {
             lock(user_data_map()).insert(hwnd, value);
         }
         _ => {
@@ -891,12 +1094,20 @@ pub unsafe extern "win64" fn get_class_name_w(hwnd: usize, buf: *mut u16, max_co
     }
 }
 
-pub unsafe extern "win64" fn get_class_info_ex_a(_instance: usize, _name: *const u8, _out: *mut u8) -> i32 {
+pub unsafe extern "win64" fn get_class_info_ex_a(
+    _instance: usize,
+    _name: *const u8,
+    _out: *mut u8,
+) -> i32 {
     // Stub : renvoie 0 (non trouvé)
     0
 }
 
-pub unsafe extern "win64" fn get_class_info_ex_w(_instance: usize, _name: *const u16, _out: *mut u8) -> i32 {
+pub unsafe extern "win64" fn get_class_info_ex_w(
+    _instance: usize,
+    _name: *const u16,
+    _out: *mut u8,
+) -> i32 {
     0
 }
 
@@ -908,7 +1119,12 @@ pub unsafe extern "win64" fn adjust_window_rect(rect: *mut Rect, style: u32, men
     adjust_window_rect_ex(rect, style, menu, 0)
 }
 
-pub unsafe extern "win64" fn adjust_window_rect_ex(rect: *mut Rect, style: u32, _menu: i32, _ex_style: u32) -> i32 {
+pub unsafe extern "win64" fn adjust_window_rect_ex(
+    rect: *mut Rect,
+    style: u32,
+    _menu: i32,
+    _ex_style: u32,
+) -> i32 {
     if rect.is_null() {
         return 0;
     }
@@ -963,24 +1179,50 @@ pub extern "win64" fn set_parent(hwnd: usize, new_parent: usize) -> usize {
 // =====================================================================
 
 pub unsafe extern "win64" fn find_window_a(class: *const u8, title: *const u8) -> usize {
-    let cls = if class.is_null() { None } else { Some(crate::dlls::cstr(class)) };
-    let ttl = if title.is_null() { None } else { Some(crate::dlls::cstr(title)) };
+    let cls = if class.is_null() {
+        None
+    } else {
+        Some(crate::dlls::cstr(class))
+    };
+    let ttl = if title.is_null() {
+        None
+    } else {
+        Some(crate::dlls::cstr(title))
+    };
     gui::find_window(cls.as_deref(), ttl.as_deref()).unwrap_or(0)
 }
 
 pub unsafe extern "win64" fn find_window_w(class: *const u16, title: *const u16) -> usize {
-    let cls = if class.is_null() { None } else { Some(crate::dlls::wstr(class)) };
-    let ttl = if title.is_null() { None } else { Some(crate::dlls::wstr(title)) };
+    let cls = if class.is_null() {
+        None
+    } else {
+        Some(crate::dlls::wstr(class))
+    };
+    let ttl = if title.is_null() {
+        None
+    } else {
+        Some(crate::dlls::wstr(title))
+    };
     gui::find_window(cls.as_deref(), ttl.as_deref()).unwrap_or(0)
 }
 
-pub unsafe extern "win64" fn find_window_ex_a(parent: usize, after: usize, class: *const u8, title: *const u8) -> usize {
+pub unsafe extern "win64" fn find_window_ex_a(
+    parent: usize,
+    after: usize,
+    class: *const u8,
+    title: *const u8,
+) -> usize {
     // Simplifié : ignore parent/after et cherche globalement
     let _ = (parent, after);
     find_window_a(class, title)
 }
 
-pub unsafe extern "win64" fn find_window_ex_w(parent: usize, after: usize, class: *const u16, title: *const u16) -> usize {
+pub unsafe extern "win64" fn find_window_ex_w(
+    parent: usize,
+    after: usize,
+    class: *const u16,
+    title: *const u16,
+) -> usize {
     let _ = (parent, after);
     find_window_w(class, title)
 }
@@ -1000,7 +1242,11 @@ pub unsafe extern "win64" fn enum_windows(callback: usize, lparam: isize) -> i32
     1
 }
 
-pub unsafe extern "win64" fn enum_child_windows(_parent: usize, _callback: usize, _lparam: isize) -> i32 {
+pub unsafe extern "win64" fn enum_child_windows(
+    _parent: usize,
+    _callback: usize,
+    _lparam: isize,
+) -> i32 {
     // Stub : pas d'enfants réels
     1
 }
@@ -1059,10 +1305,11 @@ fn map_virtual_key_impl(code: u32, map_type: u32) -> u32 {
         0 => code, // MAPVK_VK_TO_VSC
         1 => code, // MAPVK_VSC_TO_VK
         2 => {
-            // MAPVK_VK_TO_CHAR
-            if code >= 0x30 && code <= 0x39 { code } // '0'-'9'
-            else if code >= 0x41 && code <= 0x5A { code } // 'A'-'Z'
-            else { 0 }
+            if (0x30..=0x39).contains(&code) || (0x41..=0x5A).contains(&code) {
+                code
+            } else {
+                0
+            }
         }
         3 => code, // MAPVK_VSC_TO_VK_EX
         _ => 0,
@@ -1148,32 +1395,64 @@ pub extern "win64" fn create_popup_menu() -> usize {
     create_menu()
 }
 
-pub unsafe extern "win64" fn append_menu_a(menu: usize, flags: u32, id: usize, text: *const u8) -> i32 {
+pub unsafe extern "win64" fn append_menu_a(
+    menu: usize,
+    flags: u32,
+    id: usize,
+    text: *const u8,
+) -> i32 {
     let _ = (menu, flags, id, text);
     1
 }
 
-pub unsafe extern "win64" fn append_menu_w(menu: usize, flags: u32, id: usize, text: *const u16) -> i32 {
+pub unsafe extern "win64" fn append_menu_w(
+    menu: usize,
+    flags: u32,
+    id: usize,
+    text: *const u16,
+) -> i32 {
     let _ = (menu, flags, id, text);
     1
 }
 
-pub unsafe extern "win64" fn insert_menu_a(menu: usize, pos: u32, flags: u32, id: usize, text: *const u8) -> i32 {
+pub unsafe extern "win64" fn insert_menu_a(
+    menu: usize,
+    pos: u32,
+    flags: u32,
+    id: usize,
+    text: *const u8,
+) -> i32 {
     let _ = (menu, pos, flags, id, text);
     1
 }
 
-pub unsafe extern "win64" fn insert_menu_w(menu: usize, pos: u32, flags: u32, id: usize, text: *const u16) -> i32 {
+pub unsafe extern "win64" fn insert_menu_w(
+    menu: usize,
+    pos: u32,
+    flags: u32,
+    id: usize,
+    text: *const u16,
+) -> i32 {
     let _ = (menu, pos, flags, id, text);
     1
 }
 
-pub unsafe extern "win64" fn insert_menu_item_a(menu: usize, item: u32, by_pos: i32, info: *const c_void) -> i32 {
+pub unsafe extern "win64" fn insert_menu_item_a(
+    menu: usize,
+    item: u32,
+    by_pos: i32,
+    info: *const c_void,
+) -> i32 {
     let _ = (menu, item, by_pos, info);
     1
 }
 
-pub unsafe extern "win64" fn insert_menu_item_w(menu: usize, item: u32, by_pos: i32, info: *const c_void) -> i32 {
+pub unsafe extern "win64" fn insert_menu_item_w(
+    menu: usize,
+    item: u32,
+    by_pos: i32,
+    info: *const c_void,
+) -> i32 {
     let _ = (menu, item, by_pos, info);
     1
 }
@@ -1202,12 +1481,27 @@ pub extern "win64" fn get_system_menu(hwnd: usize, revert: i32) -> usize {
     0
 }
 
-pub unsafe extern "win64" fn track_popup_menu(menu: usize, flags: u32, x: i32, y: i32, _reserved: i32, hwnd: usize, _rect: *const Rect) -> i32 {
+pub unsafe extern "win64" fn track_popup_menu(
+    menu: usize,
+    flags: u32,
+    x: i32,
+    y: i32,
+    _reserved: i32,
+    hwnd: usize,
+    _rect: *const Rect,
+) -> i32 {
     let _ = (menu, flags, x, y, hwnd);
     0 // Rien sélectionné
 }
 
-pub unsafe extern "win64" fn track_popup_menu_ex(menu: usize, flags: u32, x: i32, y: i32, hwnd: usize, _params: *const c_void) -> i32 {
+pub unsafe extern "win64" fn track_popup_menu_ex(
+    menu: usize,
+    flags: u32,
+    x: i32,
+    y: i32,
+    hwnd: usize,
+    _params: *const c_void,
+) -> i32 {
     let _ = (menu, flags, x, y, hwnd);
     0
 }
@@ -1247,22 +1541,42 @@ pub unsafe extern "win64" fn draw_menu_bar(hwnd: usize) -> i32 {
     1
 }
 
-pub unsafe extern "win64" fn set_menu_item_info_a(menu: usize, item: u32, by_pos: i32, info: *const c_void) -> i32 {
+pub unsafe extern "win64" fn set_menu_item_info_a(
+    menu: usize,
+    item: u32,
+    by_pos: i32,
+    info: *const c_void,
+) -> i32 {
     let _ = (menu, item, by_pos, info);
     1
 }
 
-pub unsafe extern "win64" fn set_menu_item_info_w(menu: usize, item: u32, by_pos: i32, info: *const c_void) -> i32 {
+pub unsafe extern "win64" fn set_menu_item_info_w(
+    menu: usize,
+    item: u32,
+    by_pos: i32,
+    info: *const c_void,
+) -> i32 {
     let _ = (menu, item, by_pos, info);
     1
 }
 
-pub unsafe extern "win64" fn get_menu_item_info_a(menu: usize, item: u32, by_pos: i32, info: *mut c_void) -> i32 {
+pub unsafe extern "win64" fn get_menu_item_info_a(
+    menu: usize,
+    item: u32,
+    by_pos: i32,
+    info: *mut c_void,
+) -> i32 {
     let _ = (menu, item, by_pos, info);
     0
 }
 
-pub unsafe extern "win64" fn get_menu_item_info_w(menu: usize, item: u32, by_pos: i32, info: *mut c_void) -> i32 {
+pub unsafe extern "win64" fn get_menu_item_info_w(
+    menu: usize,
+    item: u32,
+    by_pos: i32,
+    info: *mut c_void,
+) -> i32 {
     let _ = (menu, item, by_pos, info);
     0
 }
@@ -1270,29 +1584,41 @@ pub unsafe extern "win64" fn get_menu_item_info_w(menu: usize, item: u32, by_pos
 // ---------- Dialogs ----------
 
 pub unsafe extern "win64" fn dialog_box_param_a(
-    _instance: usize, _template: *const u8, _parent: usize,
-    _dlg_proc: usize, _init_param: isize,
+    _instance: usize,
+    _template: *const u8,
+    _parent: usize,
+    _dlg_proc: usize,
+    _init_param: isize,
 ) -> isize {
     -1 // IDCANCEL-ish
 }
 
 pub unsafe extern "win64" fn dialog_box_param_w(
-    _instance: usize, _template: *const u16, _parent: usize,
-    _dlg_proc: usize, _init_param: isize,
+    _instance: usize,
+    _template: *const u16,
+    _parent: usize,
+    _dlg_proc: usize,
+    _init_param: isize,
 ) -> isize {
     -1
 }
 
 pub unsafe extern "win64" fn create_dialog_param_a(
-    _instance: usize, _template: *const u8, _parent: usize,
-    _dlg_proc: usize, _init_param: isize,
+    _instance: usize,
+    _template: *const u8,
+    _parent: usize,
+    _dlg_proc: usize,
+    _init_param: isize,
 ) -> usize {
     0
 }
 
 pub unsafe extern "win64" fn create_dialog_param_w(
-    _instance: usize, _template: *const u16, _parent: usize,
-    _dlg_proc: usize, _init_param: isize,
+    _instance: usize,
+    _template: *const u16,
+    _parent: usize,
+    _dlg_proc: usize,
+    _init_param: isize,
 ) -> usize {
     0
 }
@@ -1313,14 +1639,24 @@ pub unsafe extern "win64" fn set_dlg_item_text_w(_dlg: usize, _id: i32, _text: *
     1
 }
 
-pub unsafe extern "win64" fn get_dlg_item_text_a(_dlg: usize, _id: i32, buf: *mut u8, max: i32) -> u32 {
+pub unsafe extern "win64" fn get_dlg_item_text_a(
+    _dlg: usize,
+    _id: i32,
+    buf: *mut u8,
+    max: i32,
+) -> u32 {
     if !buf.is_null() && max > 0 {
         *buf = 0;
     }
     0
 }
 
-pub unsafe extern "win64" fn get_dlg_item_text_w(_dlg: usize, _id: i32, buf: *mut u16, max: i32) -> u32 {
+pub unsafe extern "win64" fn get_dlg_item_text_w(
+    _dlg: usize,
+    _id: i32,
+    buf: *mut u16,
+    max: i32,
+) -> u32 {
     if !buf.is_null() && max > 0 {
         *buf = 0;
     }
@@ -1339,11 +1675,23 @@ pub unsafe extern "win64" fn is_dialog_message_w(_dlg: usize, _msg: *const Msg) 
     0
 }
 
-pub unsafe extern "win64" fn send_dlg_item_message_a(_dlg: usize, _id: i32, _msg: u32, _wp: usize, _lp: isize) -> isize {
+pub unsafe extern "win64" fn send_dlg_item_message_a(
+    _dlg: usize,
+    _id: i32,
+    _msg: u32,
+    _wp: usize,
+    _lp: isize,
+) -> isize {
     0
 }
 
-pub unsafe extern "win64" fn send_dlg_item_message_w(_dlg: usize, _id: i32, _msg: u32, _wp: usize, _lp: isize) -> isize {
+pub unsafe extern "win64" fn send_dlg_item_message_w(
+    _dlg: usize,
+    _id: i32,
+    _msg: u32,
+    _wp: usize,
+    _lp: isize,
+) -> isize {
     0
 }
 
@@ -1404,7 +1752,11 @@ pub extern "win64" fn get_clipboard_format_name_w(_format: u32, _buf: *mut u16, 
 // =====================================================================
 
 pub unsafe extern "win64" fn draw_text_a(
-    hdc: usize, text: *const u8, count: i32, rect: *mut Rect, format: u32,
+    hdc: usize,
+    text: *const u8,
+    count: i32,
+    rect: *mut Rect,
+    format: u32,
 ) -> i32 {
     if rect.is_null() {
         return 0;
@@ -1412,7 +1764,10 @@ pub unsafe extern "win64" fn draw_text_a(
     let len = if count == -1 {
         let mut p = text;
         let mut n = 0;
-        while !p.is_null() && *p != 0 { p = p.add(1); n += 1; }
+        while !p.is_null() && *p != 0 {
+            p = p.add(1);
+            n += 1;
+        }
         n
     } else {
         count as usize
@@ -1423,7 +1778,11 @@ pub unsafe extern "win64" fn draw_text_a(
 }
 
 pub unsafe extern "win64" fn draw_text_w(
-    hdc: usize, text: *const u16, count: i32, rect: *mut Rect, format: u32,
+    hdc: usize,
+    text: *const u16,
+    count: i32,
+    rect: *mut Rect,
+    format: u32,
 ) -> i32 {
     if rect.is_null() {
         return 0;
@@ -1431,7 +1790,10 @@ pub unsafe extern "win64" fn draw_text_w(
     let len = if count == -1 {
         let mut p = text;
         let mut n = 0;
-        while !p.is_null() && *p != 0 { p = p.add(1); n += 1; }
+        while !p.is_null() && *p != 0 {
+            p = p.add(1);
+            n += 1;
+        }
         n
     } else {
         count as usize
@@ -1471,17 +1833,24 @@ fn draw_text_impl(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
 
     let color = gui::dc_text_color(hdc);
     let bk_mode = gui::dc_bk_mode(hdc);
-    let bk = if bk_mode == 2 { Some(gui::dc_bk_color(hdc)) } else { None };
+    let bk = if bk_mode == 2 {
+        Some(gui::dc_bk_color(hdc))
+    } else {
+        None
+    };
 
     let _ = (DT_NOCLIP, DT_NOPREFIX);
-    gui::record(hdc, gui::DrawCmd::Text {
-        x,
-        y,
-        text: text.to_string(),
-        color,
-        bk,
-        font,
-    });
+    gui::record(
+        hdc,
+        gui::DrawCmd::Text {
+            x,
+            y,
+            text: text.to_string(),
+            color,
+            bk,
+            font,
+        },
+    );
 
     th
 }
@@ -1506,12 +1875,22 @@ pub unsafe extern "win64" fn get_update_rgn(_hwnd: usize, _rgn: usize, _erase: i
     1 // SIMPLEREGION
 }
 
-pub unsafe extern "win64" fn redraw_window(hwnd: usize, _rect: *const Rect, _rgn: usize, _flags: u32) -> i32 {
+pub unsafe extern "win64" fn redraw_window(
+    hwnd: usize,
+    _rect: *const Rect,
+    _rgn: usize,
+    _flags: u32,
+) -> i32 {
     gui::request_paint(hwnd);
     1
 }
 
-pub unsafe extern "win64" fn map_window_points(from: usize, to: usize, points: *mut Point, count: u32) -> i32 {
+pub unsafe extern "win64" fn map_window_points(
+    from: usize,
+    to: usize,
+    points: *mut Point,
+    count: u32,
+) -> i32 {
     if points.is_null() || count == 0 {
         return 0;
     }
@@ -1539,19 +1918,34 @@ pub unsafe extern "win64" fn map_window_points(from: usize, to: usize, points: *
 // System / Misc
 // =====================================================================
 
-pub unsafe extern "win64" fn system_parameters_info_a(action: u32, param: u32, data: *mut c_void, _update: u32) -> i32 {
+pub unsafe extern "win64" fn system_parameters_info_a(
+    action: u32,
+    param: u32,
+    data: *mut c_void,
+    _update: u32,
+) -> i32 {
     let _ = (action, param, data);
     // SPI_GETWORKAREA = 0x0030
     if action == 0x0030 && !data.is_null() {
         let rect = data as *mut Rect;
         let (w, h) = gui::screen_size();
-        (*rect) = Rect { left: 0, top: 0, right: w, bottom: h };
+        (*rect) = Rect {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: h,
+        };
         return 1;
     }
     1 // Stub : succès générique
 }
 
-pub unsafe extern "win64" fn system_parameters_info_w(action: u32, param: u32, data: *mut c_void, _update: u32) -> i32 {
+pub unsafe extern "win64" fn system_parameters_info_w(
+    action: u32,
+    param: u32,
+    data: *mut c_void,
+    _update: u32,
+) -> i32 {
     system_parameters_info_a(action, param, data, _update)
 }
 
@@ -1589,13 +1983,23 @@ pub extern "win64" fn set_foreground_window(hwnd: usize) -> i32 {
 // Hooks stubs
 // =====================================================================
 
-pub unsafe extern "win64" fn set_windows_hook_ex_a(_id: i32, _proc: usize, _module: usize, _thread: u32) -> usize {
+pub unsafe extern "win64" fn set_windows_hook_ex_a(
+    _id: i32,
+    _proc: usize,
+    _module: usize,
+    _thread: u32,
+) -> usize {
     // Handle de hook factice
     static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x00F0_0000);
     NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-pub unsafe extern "win64" fn set_windows_hook_ex_w(_id: i32, _proc: usize, _module: usize, _thread: u32) -> usize {
+pub unsafe extern "win64" fn set_windows_hook_ex_w(
+    _id: i32,
+    _proc: usize,
+    _module: usize,
+    _thread: u32,
+) -> usize {
     set_windows_hook_ex_a(_id, _proc, _module, _thread)
 }
 
@@ -1603,7 +2007,12 @@ pub extern "win64" fn unhook_windows_hook_ex(_hook: usize) -> i32 {
     1
 }
 
-pub unsafe extern "win64" fn call_next_hook_ex(_hook: usize, code: i32, wparam: usize, lparam: isize) -> isize {
+pub unsafe extern "win64" fn call_next_hook_ex(
+    _hook: usize,
+    code: i32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
     let _ = (code, wparam, lparam);
     0
 }
@@ -1632,22 +2041,46 @@ pub unsafe extern "win64" fn load_icon_w(_instance: usize, _name: *const u16) ->
     0x0001_0001
 }
 
-pub unsafe extern "win64" fn load_image_a(_instance: usize, _name: *const u8, _typ: u32, _cx: i32, _cy: i32, _flags: u32) -> usize {
+pub unsafe extern "win64" fn load_image_a(
+    _instance: usize,
+    _name: *const u8,
+    _typ: u32,
+    _cx: i32,
+    _cy: i32,
+    _flags: u32,
+) -> usize {
     0
 }
 
-pub unsafe extern "win64" fn load_image_w(_instance: usize, _name: *const u16, _typ: u32, _cx: i32, _cy: i32, _flags: u32) -> usize {
+pub unsafe extern "win64" fn load_image_w(
+    _instance: usize,
+    _name: *const u16,
+    _typ: u32,
+    _cx: i32,
+    _cy: i32,
+    _flags: u32,
+) -> usize {
     0
 }
 
-pub unsafe extern "win64" fn load_string_a(_instance: usize, _id: u32, buf: *mut u8, max: i32) -> i32 {
+pub unsafe extern "win64" fn load_string_a(
+    _instance: usize,
+    _id: u32,
+    buf: *mut u8,
+    max: i32,
+) -> i32 {
     if !buf.is_null() && max > 0 {
         *buf = 0;
     }
     0
 }
 
-pub unsafe extern "win64" fn load_string_w(_instance: usize, _id: u32, buf: *mut u16, max: i32) -> i32 {
+pub unsafe extern "win64" fn load_string_w(
+    _instance: usize,
+    _id: u32,
+    buf: *mut u16,
+    max: i32,
+) -> i32 {
     if !buf.is_null() && max > 0 {
         *buf = 0;
     }
@@ -1662,11 +2095,19 @@ pub unsafe extern "win64" fn load_accelerators_w(_instance: usize, _name: *const
     0
 }
 
-pub unsafe extern "win64" fn translate_accelerator_a(_hwnd: usize, _accel: usize, _msg: *const Msg) -> i32 {
+pub unsafe extern "win64" fn translate_accelerator_a(
+    _hwnd: usize,
+    _accel: usize,
+    _msg: *const Msg,
+) -> i32 {
     0
 }
 
-pub unsafe extern "win64" fn translate_accelerator_w(_hwnd: usize, _accel: usize, _msg: *const Msg) -> i32 {
+pub unsafe extern "win64" fn translate_accelerator_w(
+    _hwnd: usize,
+    _accel: usize,
+    _msg: *const Msg,
+) -> i32 {
     0
 }
 
@@ -1698,12 +2139,20 @@ pub extern "win64" fn vk_key_scan_w(ch: u16) -> i16 {
     ch as i16
 }
 
-pub unsafe extern "win64" fn to_unicode_ex(vk: u32, scan: u32, state: *const u8, buf: *mut u16, buf_size: i32, _flags: u32, _hkl: usize) -> i32 {
+pub unsafe extern "win64" fn to_unicode_ex(
+    vk: u32,
+    scan: u32,
+    state: *const u8,
+    buf: *mut u16,
+    buf_size: i32,
+    _flags: u32,
+    _hkl: usize,
+) -> i32 {
     let _ = (scan, state);
     if buf.is_null() || buf_size < 1 {
         return 0;
     }
-    if vk >= 0x20 && vk <= 0x7E {
+    if (0x20..=0x7E).contains(&vk) {
         *buf = vk as u16;
         1
     } else {
@@ -1711,7 +2160,14 @@ pub unsafe extern "win64" fn to_unicode_ex(vk: u32, scan: u32, state: *const u8,
     }
 }
 
-pub unsafe extern "win64" fn to_unicode(vk: u32, scan: u32, state: *const u8, buf: *mut u16, buf_size: i32, flags: u32) -> i32 {
+pub unsafe extern "win64" fn to_unicode(
+    vk: u32,
+    scan: u32,
+    state: *const u8,
+    buf: *mut u16,
+    buf_size: i32,
+    flags: u32,
+) -> i32 {
     to_unicode_ex(vk, scan, state, buf, buf_size, flags, 0)
 }
 
@@ -1743,12 +2199,24 @@ pub extern "win64" fn wait_message() -> i32 {
     1
 }
 
-pub unsafe extern "win64" fn msg_wait_for_multiple_objects(count: u32, handles: *const usize, wait_all: i32, timeout: u32, wake_mask: u32) -> u32 {
+pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
+    count: u32,
+    handles: *const usize,
+    wait_all: i32,
+    timeout: u32,
+    wake_mask: u32,
+) -> u32 {
     let _ = (count, handles, wait_all, timeout, wake_mask);
     count // WAIT_OBJECT_0 + count = signalé par message
 }
 
-pub unsafe extern "win64" fn msg_wait_for_multiple_objects_ex(count: u32, handles: *const usize, timeout: u32, wake_mask: u32, _flags: u32) -> u32 {
+pub unsafe extern "win64" fn msg_wait_for_multiple_objects_ex(
+    count: u32,
+    handles: *const usize,
+    timeout: u32,
+    wake_mask: u32,
+    _flags: u32,
+) -> u32 {
     msg_wait_for_multiple_objects(count, handles, 0, timeout, wake_mask)
 }
 
@@ -1758,7 +2226,12 @@ pub extern "win64" fn get_scroll_info(_hwnd: usize, _bar: i32, _info: *mut c_voi
     0
 }
 
-pub extern "win64" fn set_scroll_info(_hwnd: usize, _bar: i32, _info: *const c_void, _redraw: i32) -> i32 {
+pub extern "win64" fn set_scroll_info(
+    _hwnd: usize,
+    _bar: i32,
+    _info: *const c_void,
+    _redraw: i32,
+) -> i32 {
     0
 }
 
@@ -1770,7 +2243,13 @@ pub extern "win64" fn set_scroll_pos(_hwnd: usize, _bar: i32, _pos: i32, _redraw
     0
 }
 
-pub extern "win64" fn set_scroll_range(_hwnd: usize, _bar: i32, _min: i32, _max: i32, _redraw: i32) -> i32 {
+pub extern "win64" fn set_scroll_range(
+    _hwnd: usize,
+    _bar: i32,
+    _min: i32,
+    _max: i32,
+    _redraw: i32,
+) -> i32 {
     1
 }
 
@@ -1875,9 +2354,19 @@ pub unsafe extern "win64" fn get_monitor_info_a(monitor: usize, info: *mut c_voi
     let size = *(ptr as *const u32);
     if size >= 40 {
         let rc = ptr.add(4) as *mut Rect;
-        *rc = Rect { left: 0, top: 0, right: w, bottom: h };
+        *rc = Rect {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: h,
+        };
         let work = ptr.add(20) as *mut Rect;
-        *work = Rect { left: 0, top: 0, right: w, bottom: h };
+        *work = Rect {
+            left: 0,
+            top: 0,
+            right: w,
+            bottom: h,
+        };
         let flags = ptr.add(36) as *mut u32;
         *flags = 1; // MONITORINFOF_PRIMARY
     }
@@ -1888,7 +2377,12 @@ pub unsafe extern "win64" fn get_monitor_info_w(monitor: usize, info: *mut c_voi
     get_monitor_info_a(monitor, info)
 }
 
-pub extern "win64" fn enum_display_monitors(_hdc: usize, _clip: *const Rect, _proc: usize, _data: isize) -> i32 {
+pub extern "win64" fn enum_display_monitors(
+    _hdc: usize,
+    _clip: *const Rect,
+    _proc: usize,
+    _data: isize,
+) -> i32 {
     // Appeler le callback avec notre unique moniteur
     // Simplification : retourne 1 (succès) sans appeler
     1
@@ -1902,7 +2396,16 @@ pub extern "win64" fn begin_defer_window_pos(_count: i32) -> usize {
     1 // Handle factice
 }
 
-pub extern "win64" fn defer_window_pos(hdwp: usize, _hwnd: usize, _after: usize, _x: i32, _y: i32, _cx: i32, _cy: i32, _flags: u32) -> usize {
+pub extern "win64" fn defer_window_pos(
+    hdwp: usize,
+    _hwnd: usize,
+    _after: usize,
+    _x: i32,
+    _y: i32,
+    _cx: i32,
+    _cy: i32,
+    _flags: u32,
+) -> usize {
     hdwp
 }
 
@@ -1915,7 +2418,11 @@ pub extern "win64" fn char_next_a(ptr: *const u8) -> *const u8 {
         return ptr;
     }
     unsafe {
-        if *ptr == 0 { ptr } else { ptr.add(1) }
+        if *ptr == 0 {
+            ptr
+        } else {
+            ptr.add(1)
+        }
     }
 }
 

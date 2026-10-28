@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Explorer Winlux
+Comment=Parcourir les fichiers et logiciels Linux et Windows
+Exec=/usr/bin/winlux-shell-app explorer %f
+Icon=/usr/share/winlux/native/icons/explorer.svg
+StartupWMClass=winlux-explorer
+Terminal=false
+Categories=System;FileManager;
+MimeType=inode/directory;

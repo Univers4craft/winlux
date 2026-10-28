@@ -58,16 +58,32 @@ fn rd32(bytes: &[u8], offset: usize) -> Option<u32> {
 /// ou PE32+. Cette lecture précède volontairement le chargeur x86-64 afin de
 /// reconnaître aussi les assemblages AnyCPU généralement marqués PE32.
 pub fn has_clr_header(bytes: &[u8]) -> bool {
-    if bytes.get(..2) != Some(b"MZ") { return false; }
+    if bytes.get(..2) != Some(b"MZ") {
+        return false;
+    }
     let pe = match rd32(bytes, 0x3c).and_then(|v| usize::try_from(v).ok()) {
         Some(value) => value,
         None => return false,
     };
-    if bytes.get(pe..pe.saturating_add(4)) != Some(b"PE\0\0") { return false; }
-    let coff = match pe.checked_add(4) { Some(value) => value, None => return false };
-    let optional_size = match rd16(bytes, coff + 16) { Some(value) => value as usize, None => return false };
-    let optional = match coff.checked_add(20) { Some(value) => value, None => return false };
-    let magic = match rd16(bytes, optional) { Some(value) => value, None => return false };
+    if bytes.get(pe..pe.saturating_add(4)) != Some(b"PE\0\0") {
+        return false;
+    }
+    let coff = match pe.checked_add(4) {
+        Some(value) => value,
+        None => return false,
+    };
+    let optional_size = match rd16(bytes, coff + 16) {
+        Some(value) => value as usize,
+        None => return false,
+    };
+    let optional = match coff.checked_add(20) {
+        Some(value) => value,
+        None => return false,
+    };
+    let magic = match rd16(bytes, optional) {
+        Some(value) => value,
+        None => return false,
+    };
     let (count_offset, directories_offset) = match magic {
         PE32_MAGIC => (92usize, 96usize),
         PE32PLUS_MAGIC => (108usize, 112usize),
@@ -77,18 +93,29 @@ pub fn has_clr_header(bytes: &[u8]) -> bool {
         Some(value) => value,
         None => return false,
     };
-    if optional_size < required { return false; }
-    let count = match rd32(bytes, optional + count_offset) { Some(value) => value as usize, None => return false };
-    if count <= COM_DESCRIPTOR { return false; }
+    if optional_size < required {
+        return false;
+    }
+    let count = match rd32(bytes, optional + count_offset) {
+        Some(value) => value as usize,
+        None => return false,
+    };
+    if count <= COM_DESCRIPTOR {
+        return false;
+    }
     let entry = optional + directories_offset + COM_DESCRIPTOR * 8;
     matches!((rd32(bytes, entry), rd32(bytes, entry + 4)), (Some(rva), Some(size)) if rva != 0 && size != 0)
 }
 
 /// Extrait les informations CLR détaillées d'un PE (version runtime, flags).
 pub fn clr_info(bytes: &[u8]) -> Option<ClrInfo> {
-    if bytes.get(..2) != Some(b"MZ") { return None; }
+    if bytes.get(..2) != Some(b"MZ") {
+        return None;
+    }
     let pe = rd32(bytes, 0x3c)? as usize;
-    if bytes.get(pe..pe + 4) != Some(b"PE\0\0") { return None; }
+    if bytes.get(pe..pe + 4) != Some(b"PE\0\0") {
+        return None;
+    }
     let coff = pe + 4;
     let optional = coff + 20;
     let magic = rd16(bytes, optional)?;
@@ -98,11 +125,15 @@ pub fn clr_info(bytes: &[u8]) -> Option<ClrInfo> {
         _ => return None,
     };
     let count = rd32(bytes, optional + count_off)? as usize;
-    if count <= COM_DESCRIPTOR { return None; }
+    if count <= COM_DESCRIPTOR {
+        return None;
+    }
     let entry = optional + dir_off + COM_DESCRIPTOR * 8;
     let clr_rva = rd32(bytes, entry)? as usize;
     let clr_size = rd32(bytes, entry + 4)? as usize;
-    if clr_rva == 0 || clr_size == 0 { return None; }
+    if clr_rva == 0 || clr_size == 0 {
+        return None;
+    }
 
     // Trouver l'offset fichier du CLR header via les sections
     let num_sections = rd16(bytes, coff + 2)? as usize;
@@ -111,7 +142,9 @@ pub fn clr_info(bytes: &[u8]) -> Option<ClrInfo> {
     let clr_file_offset = rva_to_file_offset(bytes, sections_start, num_sections, clr_rva)?;
 
     // Lire le CLR header (IMAGE_COR20_HEADER)
-    if clr_file_offset + 16 > bytes.len() { return None; }
+    if clr_file_offset + 16 > bytes.len() {
+        return None;
+    }
     let _cb = rd32(bytes, clr_file_offset)?;
     let major = rd16(bytes, clr_file_offset + 4)?;
     let minor = rd16(bytes, clr_file_offset + 6)?;
@@ -138,10 +171,17 @@ pub fn clr_info(bytes: &[u8]) -> Option<ClrInfo> {
 }
 
 /// Convertit une RVA en offset fichier via la table des sections PE.
-fn rva_to_file_offset(bytes: &[u8], sections_start: usize, num_sections: usize, rva: usize) -> Option<usize> {
+fn rva_to_file_offset(
+    bytes: &[u8],
+    sections_start: usize,
+    num_sections: usize,
+    rva: usize,
+) -> Option<usize> {
     for i in 0..num_sections {
         let sec = sections_start + i * 40;
-        if sec + 40 > bytes.len() { break; }
+        if sec + 40 > bytes.len() {
+            break;
+        }
         let virt_size = rd32(bytes, sec + 8)? as usize;
         let virt_addr = rd32(bytes, sec + 12)? as usize;
         let raw_offset = rd32(bytes, sec + 20)? as usize;
@@ -155,13 +195,22 @@ fn rva_to_file_offset(bytes: &[u8], sections_start: usize, num_sections: usize, 
 /// Lit la chaîne de version dans l'en-tête des métadonnées CLI (signature BSJB).
 fn read_metadata_version(bytes: &[u8], offset: usize) -> String {
     // Le metadata header commence par la signature 0x424A5342 ("BSJB")
-    if offset + 16 > bytes.len() { return String::new(); }
+    if offset + 16 > bytes.len() {
+        return String::new();
+    }
     let sig = rd32(bytes, offset).unwrap_or(0);
-    if sig != 0x424A5342 { return String::new(); }
+    if sig != 0x424A5342 {
+        return String::new();
+    }
     let version_len = rd32(bytes, offset + 12).unwrap_or(0) as usize;
-    if version_len == 0 || offset + 16 + version_len > bytes.len() { return String::new(); }
+    if version_len == 0 || offset + 16 + version_len > bytes.len() {
+        return String::new();
+    }
     let version_bytes = &bytes[offset + 16..offset + 16 + version_len];
-    let end = version_bytes.iter().position(|&b| b == 0).unwrap_or(version_bytes.len());
+    let end = version_bytes
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(version_bytes.len());
     String::from_utf8_lossy(&version_bytes[..end]).into_owned()
 }
 
@@ -185,9 +234,16 @@ fn sidecars(exe: &Path) -> (PathBuf, PathBuf) {
 }
 
 /// Cherche les assemblies compagnons (dll de même nom dans le même dossier).
+#[allow(dead_code)]
 fn find_companion_assemblies(exe: &Path) -> Vec<PathBuf> {
-    let parent = match exe.parent() { Some(p) => p, None => return vec![] };
-    let stem = match exe.file_stem().and_then(|s| s.to_str()) { Some(s) => s, None => return vec![] };
+    let parent = match exe.parent() {
+        Some(p) => p,
+        None => return vec![],
+    };
+    let stem = match exe.file_stem().and_then(|s| s.to_str()) {
+        Some(s) => s,
+        None => return vec![],
+    };
     let mut companions = Vec::new();
     if let Ok(entries) = std::fs::read_dir(parent) {
         for entry in entries.filter_map(Result::ok) {
@@ -224,8 +280,13 @@ pub fn detect(exe: &Path, bytes: &[u8]) -> Option<ManagedTarget> {
             // Vérifier si dotnet peut quand même le charger (Framework >= 4.0 avec compat)
             let info = clr_info(bytes);
             if let Some(ref info) = info {
-                crate::trace!("CLR détecté : version={}, flags={:#x}, IL-only={}, 32bit={}",
-                    info.runtime_version, info.flags, info.il_only, info.requires_32bit);
+                crate::trace!(
+                    "CLR détecté : version={}, flags={:#x}, IL-only={}, 32bit={}",
+                    info.runtime_version,
+                    info.flags,
+                    info.il_only,
+                    info.requires_32bit
+                );
                 // Les assemblies mixtes (non IL-only) nécessitent Mono, car ils
                 // contiennent du code natif x86/x64 Windows qu'on ne peut pas exécuter.
                 if !info.il_only {
@@ -240,7 +301,9 @@ pub fn detect(exe: &Path, bytes: &[u8]) -> Option<ManagedTarget> {
 }
 
 fn selected_runner(configured: Option<OsString>, fallback: &str) -> OsString {
-    configured.filter(|value| !value.is_empty()).unwrap_or_else(|| fallback.into())
+    configured
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| fallback.into())
 }
 
 fn runner(variable: &str, fallback: &str) -> OsString {
@@ -306,7 +369,11 @@ pub fn run(target: &ManagedTarget, arguments: &[String]) -> Result<ExitStatus, S
         format!(
             "runtime {runtime_name} indisponible ({}) : {error}. Installez-le ou configurez {}",
             Path::new(&program).display(),
-            if matches!(target, ManagedTarget::DotNet(_)) { "WINLUX_DOTNET" } else { "WINLUX_MONO" },
+            if matches!(target, ManagedTarget::DotNet(_)) {
+                "WINLUX_DOTNET"
+            } else {
+                "WINLUX_MONO"
+            },
         )
     })
 }
@@ -355,12 +422,18 @@ mod tests {
     #[test]
     fn choisit_mono_pour_un_ancien_assembly() {
         let path = Path::new("ancien.exe");
-        assert_eq!(detect(path, &managed_pe(PE32_MAGIC)), Some(ManagedTarget::Mono(path.into())));
+        assert_eq!(
+            detect(path, &managed_pe(PE32_MAGIC)),
+            Some(ManagedTarget::Mono(path.into()))
+        );
     }
 
     #[test]
     fn la_surcharge_de_runtime_conserve_un_chemin_avec_espaces() {
         let configured = Some(OsString::from("/opt/dot net/dotnet"));
-        assert_eq!(selected_runner(configured, "dotnet"), OsString::from("/opt/dot net/dotnet"));
+        assert_eq!(
+            selected_runner(configured, "dotnet"),
+            OsString::from("/opt/dot net/dotnet")
+        );
     }
 }
