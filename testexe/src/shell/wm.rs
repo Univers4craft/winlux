@@ -15,167 +15,12 @@
 //!   (`ch` non nul pour un caractère tapé, `vk` sinon) ;
 //! - `tick(frame) -> bool` est appelé deux fois par seconde.
 
-use crate::gfx::*;
-use crate::notepad;
 use winlux_testexe::*;
+use crate::gfx::*;
 
 pub const APP_EXPLORER: usize = 0;
 pub const APP_SETTINGS: usize = 1;
-pub const APP_NOTEPAD: usize = 2;
-pub const APP_COUNT: usize = 3;
-
-// Native session: each built-in application owns a separate X11/Win32 window.
-// The Linux window manager handles its frame, stacking and taskbar lifecycle.
-static mut NATIVE_APP: usize = usize::MAX;
-pub unsafe fn native_session() -> bool {
-    GetEnvironmentVariableA(c"WINLUX_NATIVE_SHELL".as_ptr(), core::ptr::null_mut(), 0) > 0
-}
-pub unsafe fn native_app() -> Option<usize> {
-    (NATIVE_APP != usize::MAX).then_some(NATIVE_APP)
-}
-pub unsafe fn native_init() {
-    let mut mode = [0i8; 32];
-    let n = GetEnvironmentVariableA(c"WINLUX_SHELL_APP".as_ptr(), mode.as_mut_ptr(), 32);
-    NATIVE_APP = if n == 8 && mode[0] == b'e' as i8 {
-        APP_EXPLORER
-    } else if n == 8 && mode[0] == b's' as i8 {
-        APP_SETTINGS
-    } else {
-        usize::MAX
-    };
-    if NATIVE_APP == APP_EXPLORER {
-        let mut path = [0u8; 1024];
-        let n = GetEnvironmentVariableA(
-            c"WINLUX_SHELL_PATH".as_ptr(),
-            path.as_mut_ptr().cast(),
-            path.len() as u32,
-        );
-        if n > 0 && (n as usize) < path.len() {
-            crate::explorer::open_at(&path[..n as usize]);
-        } else {
-            crate::explorer::preload();
-            open(APP_EXPLORER);
-        }
-    } else if NATIVE_APP == APP_SETTINGS {
-        let mut page = [0i8; 8];
-        let n = GetEnvironmentVariableA(c"WINLUX_SETTINGS_PAGE".as_ptr(), page.as_mut_ptr(), 8);
-        let mut value = 0usize;
-        for &digit in page.iter().take((n as usize).min(7)) {
-            if (b'0' as i8..=b'9' as i8).contains(&digit) {
-                value = value * 10 + (digit as usize - b'0' as usize);
-            }
-        }
-        crate::settings::open_page(value);
-    }
-}
-pub unsafe fn native_launch(app: usize) {
-    let args = match app {
-        APP_EXPLORER => c"explorer",
-        APP_SETTINGS => c"settings",
-        _ => c"editor",
-    };
-    ShellExecuteA(
-        core::ptr::null_mut(),
-        c"open".as_ptr(),
-        c"winlux-shell-app".as_ptr(),
-        args.as_ptr(),
-        core::ptr::null(),
-        1,
-    );
-}
-pub unsafe fn native_settings(page: usize) -> bool {
-    if !native_session() || NATIVE_APP == APP_SETTINGS {
-        return false;
-    }
-    let value = [
-        b'0' + (page.min(99) / 10) as u8,
-        b'0' + (page.min(99) % 10) as u8,
-        0,
-    ];
-    SetEnvironmentVariableA(c"WINLUX_SETTINGS_PAGE".as_ptr(), value.as_ptr().cast());
-    native_launch(APP_SETTINGS);
-    SetEnvironmentVariableA(c"WINLUX_SETTINGS_PAGE".as_ptr(), core::ptr::null());
-    true
-}
-pub unsafe fn native_explorer(path: &[u8]) -> bool {
-    if !native_session() || NATIVE_APP == APP_EXPLORER {
-        return false;
-    }
-    let mut value = [0u8; 1024];
-    let n = path.len().min(value.len() - 1);
-    value[..n].copy_from_slice(&path[..n]);
-    SetEnvironmentVariableA(c"WINLUX_SHELL_PATH".as_ptr(), value.as_ptr().cast());
-    native_launch(APP_EXPLORER);
-    SetEnvironmentVariableA(c"WINLUX_SHELL_PATH".as_ptr(), core::ptr::null());
-    true
-}
-unsafe fn native_frame(hwnd: Handle) -> Frame {
-    let mut outer = rect(0, 0, 900, 620);
-    GetClientRect(hwnd, &mut outer);
-    let title_h = if NATIVE_APP == APP_EXPLORER { 40 } else { 0 };
-    Frame {
-        outer,
-        title: rect(0, 0, outer.right, title_h),
-        client: rect(0, title_h, outer.right, outer.bottom),
-    }
-}
-pub unsafe fn native_draw(hwnd: Handle, hdc: Handle) {
-    let f = native_frame(hwnd);
-    let fonts = Fonts::new();
-    let mut brushes = Brushes::new();
-    SetBkMode(hdc, 1);
-    fill(
-        hdc,
-        &mut brushes,
-        0,
-        0,
-        f.outer.right,
-        f.outer.bottom,
-        pal().window,
-    );
-    app_draw(
-        NATIVE_APP,
-        &mut Gfx {
-            hdc,
-            b: &mut brushes,
-            f: &fonts,
-        },
-        &f,
-    );
-    brushes.release();
-    fonts.release();
-}
-pub unsafe fn native_mouse(hwnd: Handle, mut ev: Mouse, x: i32, y: i32) {
-    MOUSE_X = x;
-    MOUSE_Y = y;
-    if ev == Mouse::Down {
-        if now().wrapping_sub(LAST_CLICK_TIME) < 450
-            && (x - LAST_CLICK_X).abs() < 5
-            && (y - LAST_CLICK_Y).abs() < 5
-        {
-            ev = Mouse::DoubleClick;
-            LAST_CLICK_TIME = 0;
-        } else {
-            LAST_CLICK_TIME = now();
-            LAST_CLICK_X = x;
-            LAST_CLICK_Y = y;
-        }
-    }
-    if app_mouse(NATIVE_APP, ev, x, y, &native_frame(hwnd)) {
-        InvalidateRect(hwnd, core::ptr::null(), 0);
-    }
-}
-pub unsafe fn native_key(hwnd: Handle, vk: u32, ch: u16) {
-    if app_key(NATIVE_APP, vk, ch) {
-        InvalidateRect(hwnd, core::ptr::null(), 0);
-    }
-}
-pub unsafe fn native_tick(hwnd: Handle) {
-    let changed = crate::settings::system_tick();
-    if app_tick(NATIVE_APP, &native_frame(hwnd)) || changed {
-        InvalidateRect(hwnd, core::ptr::null(), 0);
-    }
-}
+pub const APP_COUNT: usize = 2;
 
 pub const TITLE_H: i32 = 40;
 const CAPTION_W: i32 = 46;
@@ -185,31 +30,13 @@ const CLOSE_MS: i32 = 130;
 const MINIMIZE_MS: i32 = 210;
 
 #[derive(Clone, Copy, PartialEq)]
-pub enum Mouse {
-    Down,
-    Up,
-    Move,
-    Wheel(i32),
-    DoubleClick,
-    RightDown,
-    MiddleDown,
-}
+pub enum Mouse { Down, Up, Move, Wheel(i32), DoubleClick, RightDown, MiddleDown }
 
 #[derive(Clone, Copy)]
-pub struct Frame {
-    pub outer: Rect,
-    pub title: Rect,
-    pub client: Rect,
-}
+pub struct Frame { pub outer: Rect, pub title: Rect, pub client: Rect }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Anim {
-    None,
-    Open,
-    Close,
-    Minimize,
-    Restore,
-}
+enum Anim { None, Open, Close, Minimize, Restore }
 
 #[derive(Clone, Copy)]
 struct Win {
@@ -223,32 +50,18 @@ struct Win {
 }
 
 const CLOSED: Win = Win {
-    open: false,
-    minimized: false,
-    maximized: false,
-    rect: rect(0, 0, 0, 0),
-    restore: rect(0, 0, 0, 0),
-    anim: Anim::None,
-    anim_start: 0,
+    open: false, minimized: false, maximized: false,
+    rect: rect(0, 0, 0, 0), restore: rect(0, 0, 0, 0), anim: Anim::None, anim_start: 0,
 };
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [0, 1, 2];
+static mut Z: [usize; APP_COUNT] = [0, 1];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
 #[derive(Clone, Copy, PartialEq)]
-enum Drag {
-    None,
-    Move,
-    Resize {
-        left: bool,
-        top: bool,
-        right: bool,
-        bottom: bool,
-    },
-}
+enum Drag { None, Move, Resize { left: bool, top: bool, right: bool, bottom: bool } }
 static mut DRAG: Drag = Drag::None;
 static mut DRAG_APP: usize = 0;
 static mut DRAG_X: i32 = 0;
@@ -262,11 +75,6 @@ static mut HOVER_CAPTION: i32 = -1;
 static mut LAST_CLICK_TIME: u32 = 0;
 static mut LAST_CLICK_X: i32 = -100;
 static mut LAST_CLICK_Y: i32 = -100;
-static mut ALT_TAB: bool = false;
-static mut ALT_TAB_INDEX: i32 = 0;
-pub static mut SHOW_RUN: bool = false;
-pub static mut RUN_TEXT: [u8; 256] = [0; 256];
-pub static mut RUN_LEN: usize = 0;
 /// Zone de travail (écran moins la barre des tâches) et bouton de barre des
 /// tâches de chaque application, cible de l'animation de réduction.
 pub static mut WORK: Rect = rect(0, 0, 1280, 672);
@@ -275,109 +83,38 @@ pub static mut MOUSE_X: i32 = -1;
 pub static mut MOUSE_Y: i32 = -1;
 
 pub fn title_of(app: usize) -> &'static [u8] {
-    match app {
-        APP_EXPLORER => b"Explorer",
-        APP_SETTINGS => b"Param\xE8tres",
-        APP_NOTEPAD => b"Bloc-notes",
-        _ => b"Param\xE8tres",
-    }
+    match app { APP_EXPLORER => b"Explorer", _ => b"Param\xE8tres" }
 }
-fn glyph_of(app: usize) -> Glyph {
-    match app {
-        APP_EXPLORER => Glyph::Folder,
-        APP_SETTINGS => Glyph::Settings,
-        APP_NOTEPAD => Glyph::File,
-        _ => Glyph::Settings,
-    }
-}
-fn custom_title(app: usize) -> bool {
-    match app {
-        APP_EXPLORER => crate::explorer::CUSTOM_TITLE,
-        APP_SETTINGS => crate::settings::CUSTOM_TITLE,
-        APP_NOTEPAD => notepad::CUSTOM_TITLE,
-        _ => crate::settings::CUSTOM_TITLE,
-    }
-}
+fn glyph_of(app: usize) -> Glyph { match app { APP_EXPLORER => Glyph::Folder, _ => Glyph::Settings } }
+fn custom_title(app: usize) -> bool { match app { APP_EXPLORER => crate::explorer::CUSTOM_TITLE, _ => crate::settings::CUSTOM_TITLE } }
 
 unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
-    match app {
-        APP_EXPLORER => crate::explorer::draw(g, f),
-        APP_SETTINGS => crate::settings::draw(g, f),
-        APP_NOTEPAD => notepad::draw(g, f),
-        _ => crate::settings::draw(g, f),
-    }
+    match app { APP_EXPLORER => crate::explorer::draw(g, f), _ => crate::settings::draw(g, f) }
 }
 unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
-    match app {
-        APP_EXPLORER => crate::explorer::mouse(ev, x, y, f),
-        APP_SETTINGS => crate::settings::mouse(ev, x, y, f),
-        APP_NOTEPAD => notepad::mouse(ev, x, y, f),
-        _ => crate::settings::mouse(ev, x, y, f),
-    }
+    match app { APP_EXPLORER => crate::explorer::mouse(ev, x, y, f), _ => crate::settings::mouse(ev, x, y, f) }
 }
 unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
-    match app {
-        APP_EXPLORER => crate::explorer::key(vk, ch),
-        APP_SETTINGS => crate::settings::key(vk, ch),
-        APP_NOTEPAD => notepad::key(vk, ch),
-        _ => crate::settings::key(vk, ch),
-    }
+    match app { APP_EXPLORER => crate::explorer::key(vk, ch), _ => crate::settings::key(vk, ch) }
 }
 unsafe fn app_tick(app: usize, f: &Frame) -> bool {
-    match app {
-        APP_EXPLORER => crate::explorer::tick(f),
-        APP_SETTINGS => crate::settings::tick(f),
-        APP_NOTEPAD => notepad::tick(f),
-        _ => crate::settings::tick(f),
-    }
+    match app { APP_EXPLORER => crate::explorer::tick(f), _ => crate::settings::tick(f) }
 }
 
 /// Contexte de dessin passé aux applications.
-pub struct Gfx<'a> {
-    pub hdc: Handle,
-    pub b: &'a mut Brushes,
-    pub f: &'a Fonts,
-}
+pub struct Gfx<'a> { pub hdc: Handle, pub b: &'a mut Brushes, pub f: &'a Fonts }
 
-fn now() -> u32 {
-    unsafe { GetTickCount() }
-}
-fn elapsed(start: u32) -> i32 {
-    now().wrapping_sub(start).min(100_000) as i32
-}
+fn now() -> u32 { unsafe { GetTickCount() } }
+fn elapsed(start: u32) -> i32 { now().wrapping_sub(start).min(100_000) as i32 }
 
 pub fn frame_of(r: &Rect) -> Frame {
-    let title = rect(
-        r.left + 1,
-        r.top + 1,
-        r.right - 3 * CAPTION_W - 1,
-        r.top + TITLE_H,
-    );
-    Frame {
-        outer: *r,
-        title,
-        client: rect(r.left + 1, r.top + TITLE_H, r.right - 1, r.bottom - 1),
-    }
+    let title = rect(r.left + 1, r.top + 1, r.right - 3 * CAPTION_W - 1, r.top + TITLE_H);
+    Frame { outer: *r, title, client: rect(r.left + 1, r.top + TITLE_H, r.right - 1, r.bottom - 1) }
 }
 
-pub fn is_open(app: usize) -> bool {
-    unsafe { WINS[app].open }
-}
-pub fn is_visible(app: usize) -> bool {
-    unsafe { WINS[app].open && !WINS[app].minimized }
-}
-pub fn is_active(app: usize) -> bool {
-    unsafe { ACTIVE == app }
-}
-pub fn is_minimized(app: usize) -> bool {
-    unsafe { WINS[app].minimized }
-}
-pub fn is_maximized(app: usize) -> bool {
-    unsafe { WINS[app].maximized }
-}
-pub unsafe fn WINS_REF(app: usize) -> bool {
-    WINS[app].minimized
-}
+pub fn is_open(app: usize) -> bool { unsafe { WINS[app].open } }
+pub fn is_visible(app: usize) -> bool { unsafe { WINS[app].open && !WINS[app].minimized } }
+pub fn is_active(app: usize) -> bool { unsafe { ACTIVE == app } }
 
 /// Vrai tant qu'une animation est en cours : la boucle principale repeint
 /// alors à ~60 images par seconde.
@@ -385,14 +122,8 @@ pub fn animating() -> bool {
     unsafe {
         for w in WINS.iter() {
             if w.anim != Anim::None {
-                let d = match w.anim {
-                    Anim::Close => CLOSE_MS,
-                    Anim::Minimize | Anim::Restore => MINIMIZE_MS,
-                    _ => OPEN_MS,
-                };
-                if elapsed(w.anim_start) <= d + 20 {
-                    return true;
-                }
+                let d = match w.anim { Anim::Close => CLOSE_MS, Anim::Minimize | Anim::Restore => MINIMIZE_MS, _ => OPEN_MS };
+                if elapsed(w.anim_start) <= d + 20 { return true; }
             }
         }
         false
@@ -402,12 +133,7 @@ pub fn animating() -> bool {
 unsafe fn raise(app: usize) {
     let mut k = 0;
     let mut order = [0usize; APP_COUNT];
-    for &a in Z.iter() {
-        if a != app {
-            order[k] = a;
-            k += 1;
-        }
-    }
+    for &a in Z.iter() { if a != app { order[k] = a; k += 1; } }
     order[APP_COUNT - 1] = app;
     Z = order;
     ACTIVE = app;
@@ -415,51 +141,25 @@ unsafe fn raise(app: usize) {
 
 unsafe fn refresh_active() {
     ACTIVE = usize::MAX;
-    for &a in Z.iter().rev() {
-        if WINS[a].open && !WINS[a].minimized {
-            ACTIVE = a;
-            return;
-        }
-    }
+    for &a in Z.iter().rev() { if WINS[a].open && !WINS[a].minimized { ACTIVE = a; return; } }
 }
 
 fn default_rect(app: usize) -> Rect {
     let wk = unsafe { WORK };
     let (ww, wh) = (wk.right - wk.left, wk.bottom - wk.top);
-    let (w, h) = match app {
-        APP_EXPLORER => (1100, 680),
-        APP_NOTEPAD => (900, 620),
-        _ => (1040, 700),
-    };
+    let (w, h) = match app { APP_EXPLORER => (1100, 680), _ => (1040, 700) };
     let (w, h) = (w.min(ww - 40).max(480), h.min(wh - 40).max(320));
     let offset = app as i32 * 36;
     let x = wk.left + (ww - w) / 2 + offset - 18;
     let y = wk.top + (wh - h) / 2 + offset - 18;
-    rect(
-        x.max(wk.left),
-        y.max(wk.top),
-        x.max(wk.left) + w,
-        y.max(wk.top) + h,
-    )
+    rect(x.max(wk.left), y.max(wk.top), x.max(wk.left) + w, y.max(wk.top) + h)
 }
 
 /// Ouvre l'application, ou la ramène au premier plan si elle est déjà ouverte.
 pub unsafe fn open(app: usize) {
-    if native_session() && NATIVE_APP != app {
-        native_launch(app);
-        return;
-    }
     let w = &mut WINS[app];
     if !w.open {
-        *w = Win {
-            open: true,
-            minimized: false,
-            maximized: false,
-            rect: default_rect(app),
-            restore: default_rect(app),
-            anim: Anim::Open,
-            anim_start: now(),
-        };
+        *w = Win { open: true, minimized: false, maximized: false, rect: default_rect(app), restore: default_rect(app), anim: Anim::Open, anim_start: now() };
     } else if w.minimized {
         w.minimized = false;
         w.anim = Anim::Restore;
@@ -470,18 +170,12 @@ pub unsafe fn open(app: usize) {
 
 /// Clic sur le bouton de la barre des tâches : ouvre, réduit ou restaure.
 pub unsafe fn toggle(app: usize) {
-    if WINS[app].open && !WINS[app].minimized && ACTIVE == app {
-        minimize(app);
-    } else {
-        open(app);
-    }
+    if WINS[app].open && !WINS[app].minimized && ACTIVE == app { minimize(app); } else { open(app); }
 }
 
 pub unsafe fn minimize(app: usize) {
     let w = &mut WINS[app];
-    if !w.open || w.minimized {
-        return;
-    }
+    if !w.open || w.minimized { return; }
     w.minimized = true;
     w.anim = Anim::Minimize;
     w.anim_start = now();
@@ -490,26 +184,16 @@ pub unsafe fn minimize(app: usize) {
 
 pub unsafe fn close(app: usize) {
     let w = &mut WINS[app];
-    if !w.open {
-        return;
-    }
+    if !w.open { return; }
     w.anim = Anim::Close;
     w.anim_start = now();
-    if CAPTURE == app {
-        CAPTURE = usize::MAX;
-    }
+    if CAPTURE == app { CAPTURE = usize::MAX; }
 }
 
 pub unsafe fn toggle_maximize(app: usize) {
     let w = &mut WINS[app];
-    if w.maximized {
-        w.maximized = false;
-        w.rect = w.restore;
-    } else {
-        w.restore = w.rect;
-        w.maximized = true;
-        w.rect = WORK;
-    }
+    if w.maximized { w.maximized = false; w.rect = w.restore; }
+    else { w.restore = w.rect; w.maximized = true; w.rect = WORK; }
     w.anim = Anim::Open;
     w.anim_start = now().wrapping_sub(OPEN_MS as u32 / 2);
 }
@@ -517,17 +201,9 @@ pub unsafe fn toggle_maximize(app: usize) {
 /// Suit un changement de résolution : les fenêtres restent dans l'écran.
 pub unsafe fn on_resize() {
     for w in WINS.iter_mut() {
-        if !w.open {
-            continue;
-        }
-        if w.maximized {
-            w.rect = WORK;
-            continue;
-        }
-        let (rw, rh) = (
-            (w.rect.right - w.rect.left).min(WORK.right - WORK.left),
-            (w.rect.bottom - w.rect.top).min(WORK.bottom - WORK.top),
-        );
+        if !w.open { continue; }
+        if w.maximized { w.rect = WORK; continue; }
+        let (rw, rh) = ((w.rect.right - w.rect.left).min(WORK.right - WORK.left), (w.rect.bottom - w.rect.top).min(WORK.bottom - WORK.top));
         let x = w.rect.left.clamp(WORK.left, WORK.right - rw);
         let y = w.rect.top.clamp(WORK.top, WORK.bottom - rh);
         w.rect = rect(x, y, x + rw, y + rh);
@@ -536,23 +212,13 @@ pub unsafe fn on_resize() {
 
 // ---------- Dessin ----------
 
-fn lerp(a: i32, b: i32, t: i32) -> i32 {
-    a + (b - a) * t / 1000
-}
+fn lerp(a: i32, b: i32, t: i32) -> i32 { a + (b - a) * t / 1000 }
 fn lerp_rect(a: &Rect, b: &Rect, t: i32) -> Rect {
-    rect(
-        lerp(a.left, b.left, t),
-        lerp(a.top, b.top, t),
-        lerp(a.right, b.right, t),
-        lerp(a.bottom, b.bottom, t),
-    )
+    rect(lerp(a.left, b.left, t), lerp(a.top, b.top, t), lerp(a.right, b.right, t), lerp(a.bottom, b.bottom, t))
 }
 fn scaled(r: &Rect, milli: i32, dy: i32) -> Rect {
     let (cx, cy) = ((r.left + r.right) / 2, (r.top + r.bottom) / 2);
-    let (hw, hh) = (
-        (r.right - r.left) * milli / 2000,
-        (r.bottom - r.top) * milli / 2000,
-    );
+    let (hw, hh) = ((r.right - r.left) * milli / 2000, (r.bottom - r.top) * milli / 2000);
     rect(cx - hw, cy - hh + dy, cx + hw, cy + hh + dy)
 }
 
@@ -567,123 +233,33 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
     let t = elapsed(w.anim_start);
     // Rectangle affiché : animé, ou définitif.
     let (shown, content) = match w.anim {
-        Anim::Open if t < OPEN_MS => {
-            let e = ease_out(t, OPEN_MS);
-            (
-                scaled(&w.rect, 940 + e * 60 / 1000, (1000 - e) * 18 / 1000),
-                e > 700,
-            )
-        }
-        Anim::Close if t < CLOSE_MS => {
-            let e = ease_out(t, CLOSE_MS);
-            (scaled(&w.rect, 1000 - e * 60 / 1000, e * 10 / 1000), false)
-        }
-        Anim::Close => {
-            WINS[app].open = false;
-            WINS[app].anim = Anim::None;
-            refresh_active();
-            return;
-        }
-        Anim::Minimize if t < MINIMIZE_MS => (
-            lerp_rect(&w.rect, &TASKBAR_SLOT[app], ease_out(t, MINIMIZE_MS)),
-            false,
-        ),
-        Anim::Restore if t < MINIMIZE_MS => (
-            lerp_rect(&TASKBAR_SLOT[app], &w.rect, ease_out(t, MINIMIZE_MS)),
-            false,
-        ),
+        Anim::Open if t < OPEN_MS => { let e = ease_out(t, OPEN_MS); (scaled(&w.rect, 940 + e * 60 / 1000, (1000 - e) * 18 / 1000), e > 700) }
+        Anim::Close if t < CLOSE_MS => { let e = ease_out(t, CLOSE_MS); (scaled(&w.rect, 1000 - e * 60 / 1000, e * 10 / 1000), false) }
+        Anim::Close => { WINS[app].open = false; WINS[app].anim = Anim::None; refresh_active(); return; }
+        Anim::Minimize if t < MINIMIZE_MS => (lerp_rect(&w.rect, &TASKBAR_SLOT[app], ease_out(t, MINIMIZE_MS)), false),
+        Anim::Restore if t < MINIMIZE_MS => (lerp_rect(&TASKBAR_SLOT[app], &w.rect, ease_out(t, MINIMIZE_MS)), false),
         _ => {
-            if w.anim != Anim::None {
-                WINS[app].anim = Anim::None;
-            }
-            if w.minimized {
-                return;
-            }
+            if w.anim != Anim::None { WINS[app].anim = Anim::None; }
+            if w.minimized { return; }
             (w.rect, true)
         }
     };
-    if w.minimized && w.anim != Anim::Minimize {
-        return;
-    }
+    if w.minimized && w.anim != Anim::Minimize { return; }
     let radius = if w.maximized { 0 } else { 8 };
     let active = ACTIVE == app;
     // Liseré fin et fond « Mica » (pas d'ombre lourde).
-    round_rect(
-        g.hdc,
-        g.b,
-        shown.left,
-        shown.top,
-        shown.right,
-        shown.bottom,
-        radius,
-        if active {
-            mix(p.border, p.accent, 2, 10)
-        } else {
-            p.border
-        },
-    );
-    round_rect(
-        g.hdc,
-        g.b,
-        shown.left + 1,
-        shown.top + 1,
-        shown.right - 1,
-        shown.bottom - 1,
-        radius,
-        p.mica,
-    );
+    round_rect(g.hdc, g.b, shown.left, shown.top, shown.right, shown.bottom, radius, if active { mix(p.border, p.accent, 2, 10) } else { p.border });
+    round_rect(g.hdc, g.b, shown.left + 1, shown.top + 1, shown.right - 1, shown.bottom - 1, radius, p.mica);
     if !content || shown.right - shown.left < 200 || shown.bottom - shown.top < 120 {
-        glyph(
-            g.hdc,
-            g.b,
-            g.f,
-            glyph_of(app),
-            (shown.left + shown.right) / 2 - 16,
-            (shown.top + shown.bottom) / 2 - 16,
-            32,
-        );
+        glyph(g.hdc, g.b, g.f, glyph_of(app), (shown.left + shown.right) / 2 - 16, (shown.top + shown.bottom) / 2 - 16, 32);
         return;
     }
     let fr = frame_of(&shown);
-    fill(
-        g.hdc,
-        g.b,
-        fr.client.left,
-        fr.client.top,
-        fr.client.right,
-        fr.client.bottom - radius,
-        p.window,
-    );
-    if radius > 0 {
-        round_rect(
-            g.hdc,
-            g.b,
-            fr.client.left,
-            fr.client.bottom - radius * 2,
-            fr.client.right,
-            fr.client.bottom,
-            radius - 1,
-            p.window,
-        );
-    }
+    fill(g.hdc, g.b, fr.client.left, fr.client.top, fr.client.right, fr.client.bottom - radius, p.window);
+    if radius > 0 { round_rect(g.hdc, g.b, fr.client.left, fr.client.bottom - radius * 2, fr.client.right, fr.client.bottom, radius - 1, p.window); }
     if !custom_title(app) {
-        glyph(
-            g.hdc,
-            g.b,
-            g.f,
-            glyph_of(app),
-            fr.title.left + 14,
-            fr.title.top + 11,
-            16,
-        );
-        text(
-            g.hdc,
-            g.f.caption,
-            if active { p.text } else { p.text3 },
-            fr.title.left + 42,
-            fr.title.top + 12,
-            title_of(app),
-        );
+        glyph(g.hdc, g.b, g.f, glyph_of(app), fr.title.left + 14, fr.title.top + 11, 16);
+        text(g.hdc, g.f.caption, if active { p.text } else { p.text3 }, fr.title.left + 42, fr.title.top + 12, title_of(app));
     }
     app_draw(app, g, &fr);
     // Boutons de légende : réduire, agrandir/restaurer, fermer.
@@ -691,58 +267,14 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         let r = caption_rect(&shown, i);
         let hover = HOVER_CAPTION == i && ACTIVE == app;
         if hover {
-            let c = if i == 2 {
-                rgb(0xC4, 0x2B, 0x1C)
-            } else {
-                p.hover
-            };
-            if i == 2 && radius > 0 {
-                round_rect(
-                    g.hdc,
-                    g.b,
-                    r.left,
-                    r.top,
-                    r.right,
-                    r.bottom + 8,
-                    radius - 1,
-                    c,
-                );
-                fill(g.hdc, g.b, r.left, r.top, r.right - radius, r.bottom, c);
-                fill(g.hdc, g.b, r.left, r.top + radius, r.right, r.bottom, c);
-            } else {
-                fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, c);
-            }
+            let c = if i == 2 { rgb(0xC4, 0x2B, 0x1C) } else { p.hover };
+            if i == 2 && radius > 0 { round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom + 8, radius - 1, c); fill(g.hdc, g.b, r.left, r.top, r.right - radius, r.bottom, c); fill(g.hdc, g.b, r.left, r.top + radius, r.right, r.bottom, c); }
+            else { fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, c); }
         }
-        let gl = match i {
-            0 => Glyph::Minimize,
-            1 => {
-                if w.maximized {
-                    Glyph::Restore
-                } else {
-                    Glyph::Maximize
-                }
-            }
-            _ => Glyph::Close,
-        };
-        let bg = if hover {
-            if i == 2 {
-                rgb(0xC4, 0x2B, 0x1C)
-            } else {
-                p.hover
-            }
-        } else {
-            p.mica
-        };
+        let gl = match i { 0 => Glyph::Minimize, 1 => if w.maximized { Glyph::Restore } else { Glyph::Maximize }, _ => Glyph::Close };
+        let bg = if hover { if i == 2 { rgb(0xC4, 0x2B, 0x1C) } else { p.hover } } else { p.mica };
         set_glyph_bg(Some(bg));
-        glyph(
-            g.hdc,
-            g.b,
-            g.f,
-            gl,
-            (r.left + r.right) / 2 - 7,
-            (r.top + r.bottom) / 2 - 7,
-            14,
-        );
+        glyph(g.hdc, g.b, g.f, gl, (r.left + r.right) / 2 - 5, (r.top + r.bottom) / 2 - 5, 11);
         set_glyph_bg(None);
     }
 }
@@ -751,133 +283,10 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
 pub unsafe fn draw(g: &mut Gfx) {
     if let Some(r) = SNAP_PREVIEW {
         let p = pal();
-        round_rect(
-            g.hdc,
-            g.b,
-            r.left + 6,
-            r.top + 6,
-            r.right - 6,
-            r.bottom - 6,
-            8,
-            mix(p.accent, p.mica, 6, 10),
-        );
-        round_rect(
-            g.hdc,
-            g.b,
-            r.left + 8,
-            r.top + 8,
-            r.right - 8,
-            r.bottom - 8,
-            7,
-            mix(p.accent, p.mica, 8, 10),
-        );
+        round_rect(g.hdc, g.b, r.left + 6, r.top + 6, r.right - 6, r.bottom - 6, 8, mix(p.accent, p.mica, 6, 10));
+        round_rect(g.hdc, g.b, r.left + 8, r.top + 8, r.right - 8, r.bottom - 8, 7, mix(p.accent, p.mica, 8, 10));
     }
-    for &app in Z.iter() {
-        if WINS[app].open {
-            draw_window(g, app);
-        }
-    }
-    if ALT_TAB {
-        let p = pal();
-        let sw = 420;
-        let sh = 140;
-        let cx = (WORK.left + WORK.right - sw) / 2;
-        let cy = (WORK.top + WORK.bottom - sh) / 2;
-        round_rect(
-            g.hdc,
-            g.b,
-            cx,
-            cy,
-            cx + sw,
-            cy + sh,
-            12,
-            mix(p.border, p.accent, 3, 10),
-        );
-        round_rect(
-            g.hdc,
-            g.b,
-            cx + 1,
-            cy + 1,
-            cx + sw - 1,
-            cy + sh - 1,
-            11,
-            p.surface,
-        );
-        text(
-            g.hdc,
-            g.f.caption,
-            p.text,
-            cx + 16,
-            cy + 12,
-            b"Basculer entre les fen\xEAtres",
-        );
-        let mut list = [usize::MAX; APP_COUNT];
-        let mut count = 0;
-        for &a in Z.iter().rev() {
-            if WINS[a].open && !WINS[a].minimized {
-                list[count] = a;
-                count += 1;
-            }
-        }
-        let mut i = 0;
-        while i < count {
-            let app = list[i];
-            let x = cx + 16 + i as i32 * 92;
-            let y = cy + 48;
-            if (i as i32) == ALT_TAB_INDEX {
-                round_rect(
-                    g.hdc,
-                    g.b,
-                    x - 4,
-                    y - 4,
-                    x + 84,
-                    y + 76,
-                    8,
-                    mix(p.hover, p.accent, 2, 10),
-                );
-            }
-            glyph(g.hdc, g.b, g.f, glyph_of(app), x + 26, y + 8, 32);
-            let t = title_of(app);
-            // simple text clipping by drawing truncated
-            text(
-                g.hdc,
-                g.f.small,
-                p.text,
-                x - 2,
-                y + 52,
-                if t.len() > 10 { b"..." } else { t },
-            );
-            i += 1;
-        }
-    }
-    if crate::wm::SHOW_RUN {
-        let p = pal();
-        let sw = 420;
-        let sh = 110;
-        let cx = (WORK.left + WORK.right - sw) / 2;
-        let cy = WORK.top + 60;
-        round_rect(g.hdc, g.b, cx, cy, cx + sw, cy + sh, 8, mix(p.border, p.accent, 2, 10));
-        round_rect(g.hdc, g.b, cx + 1, cy + 1, cx + sw - 1, cy + sh - 1, 7, p.surface);
-        text(g.hdc, g.f.caption, p.text, cx + 16, cy + 12, b"Ex\xE9cuter");
-        text(g.hdc, g.f.small, p.text3, cx + 16, cy + 42, b"Ouvrir :");
-        fill(g.hdc, g.b, cx + 16, cy + 64, cx + sw - 80, cy + 88, p.window);
-        fill(g.hdc, g.b, cx + 16, cy + 64, cx + sw - 80, cy + 65, p.border);
-        fill(g.hdc, g.b, cx + 16, cy + 87, cx + sw - 80, cy + 88, p.border);
-        fill(g.hdc, g.b, cx + 16, cy + 65, cx + 17, cy + 87, p.border);
-        fill(g.hdc, g.b, cx + sw - 81, cy + 65, cx + sw - 80, cy + 87, p.border);
-        if crate::wm::RUN_LEN > 0 {
-            let mut buf = [0u8; 260];
-            let mut j = 0;
-            while j < crate::wm::RUN_LEN && j < 255 {
-                buf[j] = crate::wm::RUN_TEXT[j];
-                j += 1;
-            }
-            buf[j] = 0;
-            text(g.hdc, g.f.body, p.text, cx + 22, cy + 70, &buf);
-        }
-        round_rect(g.hdc, g.b, cx + sw - 70, cy + 64, cx + sw - 16, cy + 88, 4, p.accent);
-        text(g.hdc, g.f.small, rgb(0xFF, 0xFF, 0xFF), cx + sw - 58, cy + 70, b"OK");
-    }
+    for &app in Z.iter() { if WINS[app].open { draw_window(g, app); } }
 }
 
 // ---------- Souris et clavier ----------
@@ -887,13 +296,7 @@ unsafe fn top_at(x: i32, y: i32) -> Option<usize> {
         let w = &WINS[app];
         if w.open && !w.minimized && w.anim != Anim::Close {
             let r = w.rect;
-            if x >= r.left - BORDER
-                && x < r.right + BORDER
-                && y >= r.top - BORDER
-                && y < r.bottom + BORDER
-            {
-                return Some(app);
-            }
+            if x >= r.left - BORDER && x < r.right + BORDER && y >= r.top - BORDER && y < r.bottom + BORDER { return Some(app); }
         }
     }
     None
@@ -902,38 +305,25 @@ unsafe fn top_at(x: i32, y: i32) -> Option<usize> {
 unsafe fn snap_target(x: i32, y: i32) -> Option<Rect> {
     let wk = WORK;
     let mid = (wk.left + wk.right) / 2;
-    if y <= wk.top + 2 {
-        Some(wk)
-    } else if x <= wk.left + 2 {
-        Some(rect(wk.left, wk.top, mid, wk.bottom))
-    } else if x >= wk.right - 3 {
-        Some(rect(mid, wk.top, wk.right, wk.bottom))
-    } else {
-        None
-    }
+    if y <= wk.top + 2 { Some(wk) }
+    else if x <= wk.left + 2 { Some(rect(wk.left, wk.top, mid, wk.bottom)) }
+    else if x >= wk.right - 3 { Some(rect(mid, wk.top, wk.right, wk.bottom)) }
+    else { None }
 }
 
 /// Bouton gauche enfoncé : renvoie vrai si une fenêtre l'a pris.
 pub unsafe fn on_button_down(x: i32, y: i32, repaint: &mut bool) -> bool {
     let Some(app) = top_at(x, y) else {
-        if ACTIVE != usize::MAX {
-            ACTIVE = usize::MAX;
-            *repaint = true;
-        }
+        if ACTIVE != usize::MAX { ACTIVE = usize::MAX; *repaint = true; }
         return false;
     };
-    if ACTIVE != app || Z[APP_COUNT - 1] != app {
-        raise(app);
-        *repaint = true;
-    }
+    if ACTIVE != app || Z[APP_COUNT - 1] != app { raise(app); *repaint = true; }
     let w = WINS[app];
     let r = w.rect;
     let fr = frame_of(&r);
     // Double-clic : même endroit en moins de 500 ms.
     let t = now();
-    let double = t.wrapping_sub(LAST_CLICK_TIME) < 500
-        && (x - LAST_CLICK_X).abs() < 5
-        && (y - LAST_CLICK_Y).abs() < 5;
+    let double = t.wrapping_sub(LAST_CLICK_TIME) < 500 && (x - LAST_CLICK_X).abs() < 5 && (y - LAST_CLICK_Y).abs() < 5;
     LAST_CLICK_TIME = if double { 0 } else { t };
     LAST_CLICK_X = x;
     LAST_CLICK_Y = y;
@@ -944,57 +334,26 @@ pub unsafe fn on_button_down(x: i32, y: i32, repaint: &mut bool) -> bool {
         let top = y < r.top + 4;
         let bottom = y >= r.bottom - 4;
         if left || right || top || bottom {
-            DRAG = Drag::Resize {
-                left,
-                top,
-                right,
-                bottom,
-            };
-            DRAG_APP = app;
-            DRAG_X = x;
-            DRAG_Y = y;
-            DRAG_RECT = r;
+            DRAG = Drag::Resize { left, top, right, bottom };
+            DRAG_APP = app; DRAG_X = x; DRAG_Y = y; DRAG_RECT = r;
             return true;
         }
     }
     for i in 0..3 {
         if inside(&caption_rect(&r, i), x, y) {
-            match i {
-                0 => minimize(app),
-                1 => toggle_maximize(app),
-                _ => close(app),
-            }
+            match i { 0 => minimize(app), 1 => toggle_maximize(app), _ => close(app) }
             *repaint = true;
             return true;
         }
     }
-    let ev = if double {
-        Mouse::DoubleClick
-    } else {
-        Mouse::Down
-    };
+    let ev = if double { Mouse::DoubleClick } else { Mouse::Down };
     if inside(&fr.client, x, y) || (custom_title(app) && inside(&fr.title, x, y)) {
-        if app_mouse(app, ev, x, y, &fr) {
-            *repaint = true;
-            CAPTURE = app;
-            return true;
-        }
-        if inside(&fr.client, x, y) {
-            CAPTURE = app;
-            return true;
-        }
+        if app_mouse(app, ev, x, y, &fr) { *repaint = true; CAPTURE = app; return true; }
+        if inside(&fr.client, x, y) { CAPTURE = app; return true; }
     }
     if y < r.top + TITLE_H {
-        if double {
-            toggle_maximize(app);
-            *repaint = true;
-            return true;
-        }
-        DRAG = Drag::Move;
-        DRAG_APP = app;
-        DRAG_X = x;
-        DRAG_Y = y;
-        DRAG_RECT = r;
+        if double { toggle_maximize(app); *repaint = true; return true; }
+        DRAG = Drag::Move; DRAG_APP = app; DRAG_X = x; DRAG_Y = y; DRAG_RECT = r;
     }
     true
 }
@@ -1007,53 +366,29 @@ pub unsafe fn on_mouse_move(x: i32, y: i32, repaint: &mut bool) -> bool {
             let w = &mut WINS[DRAG_APP];
             if w.maximized {
                 // Sortir du plein écran en tirant la barre de titre.
-                if (y - DRAG_Y).abs() < 6 && (x - DRAG_X).abs() < 6 {
-                    return true;
-                }
-                let (rw, rh) = (
-                    w.restore.right - w.restore.left,
-                    w.restore.bottom - w.restore.top,
-                );
+                if (y - DRAG_Y).abs() < 6 && (x - DRAG_X).abs() < 6 { return true; }
+                let (rw, rh) = (w.restore.right - w.restore.left, w.restore.bottom - w.restore.top);
                 w.maximized = false;
                 let left = x - rw * (x - w.rect.left) / (w.rect.right - w.rect.left).max(1);
                 w.rect = rect(left, w.rect.top, left + rw, w.rect.top + rh);
                 DRAG_RECT = w.rect;
-                DRAG_X = x;
-                DRAG_Y = y;
+                DRAG_X = x; DRAG_Y = y;
             }
             let (dx, dy) = (x - DRAG_X, y - DRAG_Y);
             let nt = (DRAG_RECT.top + dy).clamp(WORK.top, WORK.bottom - TITLE_H);
-            w.rect = rect(
-                DRAG_RECT.left + dx,
-                nt,
-                DRAG_RECT.right + dx,
-                nt + DRAG_RECT.bottom - DRAG_RECT.top,
-            );
+            w.rect = rect(DRAG_RECT.left + dx, nt, DRAG_RECT.right + dx, nt + DRAG_RECT.bottom - DRAG_RECT.top);
             SNAP_PREVIEW = snap_target(x, y);
             *repaint = true;
             true
         }
-        Drag::Resize {
-            left,
-            top,
-            right,
-            bottom,
-        } => {
+        Drag::Resize { left, top, right, bottom } => {
             let w = &mut WINS[DRAG_APP];
             let (dx, dy) = (x - DRAG_X, y - DRAG_Y);
             let mut r = DRAG_RECT;
-            if left {
-                r.left = (r.left + dx).min(r.right - 480);
-            }
-            if right {
-                r.right = (r.right + dx).max(r.left + 480);
-            }
-            if top {
-                r.top = (r.top + dy).clamp(WORK.top, r.bottom - 320);
-            }
-            if bottom {
-                r.bottom = (r.bottom + dy).max(r.top + 320);
-            }
+            if left { r.left = (r.left + dx).min(r.right - 480); }
+            if right { r.right = (r.right + dx).max(r.left + 480); }
+            if top { r.top = (r.top + dy).clamp(WORK.top, r.bottom - 320); }
+            if bottom { r.bottom = (r.bottom + dy).max(r.top + 320); }
             w.rect = r;
             *repaint = true;
             true
@@ -1061,27 +396,12 @@ pub unsafe fn on_mouse_move(x: i32, y: i32, repaint: &mut bool) -> bool {
         Drag::None => {
             let mut hover = -1;
             if let Some(app) = top_at(x, y) {
-                if app == ACTIVE {
-                    for i in 0..3 {
-                        if inside(&caption_rect(&WINS[app].rect, i), x, y) {
-                            hover = i;
-                        }
-                    }
-                }
+                if app == ACTIVE { for i in 0..3 { if inside(&caption_rect(&WINS[app].rect, i), x, y) { hover = i; } } }
             }
-            if hover != HOVER_CAPTION {
-                HOVER_CAPTION = hover;
-                *repaint = true;
-            }
-            let target = if CAPTURE != usize::MAX {
-                Some(CAPTURE)
-            } else {
-                top_at(x, y)
-            };
+            if hover != HOVER_CAPTION { HOVER_CAPTION = hover; *repaint = true; }
+            let target = if CAPTURE != usize::MAX { Some(CAPTURE) } else { top_at(x, y) };
             if let Some(app) = target {
-                if app_mouse(app, Mouse::Move, x, y, &frame_of(&WINS[app].rect)) {
-                    *repaint = true;
-                }
+                if app_mouse(app, Mouse::Move, x, y, &frame_of(&WINS[app].rect)) { *repaint = true; }
                 return true;
             }
             false
@@ -1095,9 +415,7 @@ pub unsafe fn on_button_up(x: i32, y: i32, repaint: &mut bool) -> bool {
             if let Some(target) = SNAP_PREVIEW.take() {
                 let w = &mut WINS[DRAG_APP];
                 w.restore = DRAG_RECT;
-                if target.left == WORK.left && target.right == WORK.right {
-                    w.maximized = true;
-                }
+                if target.left == WORK.left && target.right == WORK.right { w.maximized = true; }
                 w.rect = target;
                 w.anim = Anim::Open;
                 w.anim_start = now().wrapping_sub(OPEN_MS as u32 / 2);
@@ -1110,9 +428,7 @@ pub unsafe fn on_button_up(x: i32, y: i32, repaint: &mut bool) -> bool {
     if CAPTURE != usize::MAX {
         let app = CAPTURE;
         CAPTURE = usize::MAX;
-        if WINS[app].open && app_mouse(app, Mouse::Up, x, y, &frame_of(&WINS[app].rect)) {
-            *repaint = true;
-        }
+        if WINS[app].open && app_mouse(app, Mouse::Up, x, y, &frame_of(&WINS[app].rect)) { *repaint = true; }
         return true;
     }
     false
@@ -1120,131 +436,21 @@ pub unsafe fn on_button_up(x: i32, y: i32, repaint: &mut bool) -> bool {
 
 /// Molette, clic droit ou milieu : vers la fenêtre sous le pointeur.
 pub unsafe fn on_other(ev: Mouse, x: i32, y: i32, repaint: &mut bool) -> bool {
-    let Some(app) = top_at(x, y) else {
-        return false;
-    };
-    if !matches!(ev, Mouse::Wheel(_)) && ACTIVE != app {
-        raise(app);
-        *repaint = true;
-    }
-    if app_mouse(app, ev, x, y, &frame_of(&WINS[app].rect)) {
-        *repaint = true;
-    }
+    let Some(app) = top_at(x, y) else { return false };
+    if !matches!(ev, Mouse::Wheel(_)) && ACTIVE != app { raise(app); *repaint = true; }
+    if app_mouse(app, ev, x, y, &frame_of(&WINS[app].rect)) { *repaint = true; }
     true
 }
 
 pub unsafe fn on_key(vk: u32, ch: u16) -> bool {
-    if vk == 0x12 {
-        // Alt
-        if ch == 0 {
-            // track alt key via keydown/up context - simplified
-        }
-    }
-    if vk == 0x09 && ch == 0 {
-        // Tab
-        let alt_down = ((GetKeyState(0x12) as u16) & 0x8000) != 0;
-        if alt_down {
-            let mut list = [usize::MAX; APP_COUNT];
-            let mut count = 0;
-            for &a in Z.iter().rev() {
-                if WINS[a].open && !WINS[a].minimized {
-                    list[count] = a;
-                    count += 1;
-                }
-            }
-            if count > 0 {
-                ALT_TAB = true;
-                ALT_TAB_INDEX = (ALT_TAB_INDEX + 1) % count as i32;
-                return true;
-            }
-        } else if ALT_TAB {
-            let mut list = [usize::MAX; APP_COUNT];
-            let mut count = 0;
-            for &a in Z.iter().rev() {
-                if WINS[a].open && !WINS[a].minimized {
-                    list[count] = a;
-                    count += 1;
-                }
-            }
-            if count > 0 && ALT_TAB_INDEX >= 0 && (ALT_TAB_INDEX as usize) < count {
-                let app = list[ALT_TAB_INDEX as usize];
-                raise(app);
-            }
-            ALT_TAB = false;
-            ALT_TAB_INDEX = 0;
-            return true;
-        }
-    }
-    if vk == 0x12 && ch == 0 {
-        // if alt released
-        let alt_down = ((GetKeyState(0x12) as u16) & 0x8000) != 0;
-        if !alt_down && ALT_TAB {
-            let mut list = [usize::MAX; APP_COUNT];
-            let mut count = 0;
-            for &a in Z.iter().rev() {
-                if WINS[a].open && !WINS[a].minimized {
-                    list[count] = a;
-                    count += 1;
-                }
-            }
-            if count > 0 && ALT_TAB_INDEX >= 0 && (ALT_TAB_INDEX as usize) < count {
-                let app = list[ALT_TAB_INDEX as usize];
-                raise(app);
-            }
-            ALT_TAB = false;
-            ALT_TAB_INDEX = 0;
-            return true;
-        }
-    }
-    if ALT_TAB {
-        return true;
-    }
-    if crate::wm::SHOW_RUN {
-        if vk == 0x1B || ch == 27 {
-            crate::wm::SHOW_RUN = false;
-            return true;
-        }
-        if ch == 8 {
-            if crate::wm::RUN_LEN > 0 {
-                crate::wm::RUN_LEN -= 1;
-                crate::wm::RUN_TEXT[crate::wm::RUN_LEN] = 0;
-            }
-            return true;
-        }
-        if ch == 13 || vk == 0x0D {
-            // try to run
-            crate::wm::SHOW_RUN = false;
-            let mut cmd = [0u16; 512];
-            let mut i = 0;
-            while i < crate::wm::RUN_LEN && i < 255 {
-                cmd[i] = crate::wm::RUN_TEXT[i] as u16;
-                i += 1;
-            }
-            cmd[i] = 0;
-            static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-            ShellExecuteW(core::ptr::null_mut(), OPEN.as_ptr(), cmd.as_ptr(), core::ptr::null(), core::ptr::null(), 1);
-            return true;
-        }
-        if ch >= 0x20 && ch < 0x7F && crate::wm::RUN_LEN < 255 {
-            crate::wm::RUN_TEXT[crate::wm::RUN_LEN] = ch as u8;
-            crate::wm::RUN_LEN += 1;
-            crate::wm::RUN_TEXT[crate::wm::RUN_LEN] = 0;
-            return true;
-        }
-        return true;
-    }
-    if ACTIVE == usize::MAX {
-        return false;
-    }
+    if ACTIVE == usize::MAX { return false; }
     app_key(ACTIVE, vk, ch)
 }
 
 pub unsafe fn tick() -> bool {
     let mut repaint = false;
     for app in 0..APP_COUNT {
-        if WINS[app].open && !WINS[app].minimized {
-            repaint |= app_tick(app, &frame_of(&WINS[app].rect));
-        }
+        if WINS[app].open && !WINS[app].minimized { repaint |= app_tick(app, &frame_of(&WINS[app].rect)); }
     }
     repaint
 }

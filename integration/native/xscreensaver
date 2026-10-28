@@ -1,8 +1,0 @@
-timeout:        0:10:00
-cycle:          0:10:00
-lock:           False
-fade:           False
-unfade:         False
-mode:           one
-selected:       0
-programs:       GL: /usr/libexec/xscreensaver/pipes -root

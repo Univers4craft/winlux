@@ -12,10 +12,7 @@ pub struct Opts {
     pub three_digit_exp: bool,
 }
 
-pub const MSVCRT: Opts = Opts {
-    wide: false,
-    three_digit_exp: true,
-};
+pub const MSVCRT: Opts = Opts { wide: false, three_digit_exp: true };
 
 #[derive(Default)]
 struct Spec {
@@ -73,13 +70,7 @@ fn fmt_int(out: &mut Vec<u8>, s: &Spec, neg: bool, mag: u64, conv: u8) {
     let mut v = mag;
     while v > 0 {
         let d = (v % radix) as u8;
-        digits.push(if d < 10 {
-            b'0' + d
-        } else if upper {
-            b'A' + d - 10
-        } else {
-            b'a' + d - 10
-        });
+        digits.push(if d < 10 { b'0' + d } else if upper { b'A' + d - 10 } else { b'a' + d - 10 });
         v /= radix;
     }
     if let Some(p) = s.prec {
@@ -106,10 +97,7 @@ fn fmt_int(out: &mut Vec<u8>, s: &Spec, neg: bool, mag: u64, conv: u8) {
     }
     let plen = prefix.len();
     prefix.extend_from_slice(&digits);
-    let s2 = Spec {
-        zero: s.zero && s.prec.is_none(),
-        ..*s
-    };
+    let s2 = Spec { zero: s.zero && s.prec.is_none(), ..*s };
     pad(out, &prefix, &s2, plen);
 }
 
@@ -197,11 +185,7 @@ fn fmt_float(out: &mut Vec<u8>, s: &Spec, v: f64, conv: u8, o: Opts) {
                 if a == 0.0 {
                     "0x0p+0".into()
                 } else {
-                    let (lead, e) = if exp == 0 {
-                        (0, -1022)
-                    } else {
-                        (1, exp - 1023)
-                    };
+                    let (lead, e) = if exp == 0 { (0, -1022) } else { (1, exp - 1023) };
                     let mut h = format!("{:013x}", man);
                     while h.ends_with('0') {
                         h.pop();
@@ -228,10 +212,7 @@ fn fmt_float(out: &mut Vec<u8>, s: &Spec, v: f64, conv: u8, o: Opts) {
     }
     let plen = full.len();
     full.push_str(&body);
-    let s2 = Spec {
-        zero: s.zero && a.is_finite(),
-        ..*s
-    };
+    let s2 = Spec { zero: s.zero && a.is_finite(), ..*s };
     pad(out, full.as_bytes(), &s2, plen);
 }
 
@@ -286,9 +267,7 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
                 i += 1;
             }
             if i > st {
-                s.width = std::str::from_utf8(&fmt[st..i])
-                    .ok()
-                    .and_then(|x| x.parse().ok());
+                s.width = std::str::from_utf8(&fmt[st..i]).ok().and_then(|x| x.parse().ok());
             }
         }
         if i < fmt.len() && fmt[i] == b'.' {
@@ -302,12 +281,7 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
                 while i < fmt.len() && fmt[i].is_ascii_digit() {
                     i += 1;
                 }
-                s.prec = Some(
-                    std::str::from_utf8(&fmt[st..i])
-                        .ok()
-                        .and_then(|x| x.parse().ok())
-                        .unwrap_or(0),
-                );
+                s.prec = Some(std::str::from_utf8(&fmt[st..i]).ok().and_then(|x| x.parse().ok()).unwrap_or(0));
             }
         }
         let mut len = Len::None;
@@ -399,8 +373,7 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
                 } else if wide {
                     let n = wide_len(p as *const u16);
                     let n = s.prec.map_or(n, |pr| pr.min(n));
-                    String::from_utf16_lossy(std::slice::from_raw_parts(p as *const u16, n))
-                        .into_bytes()
+                    String::from_utf16_lossy(std::slice::from_raw_parts(p as *const u16, n)).into_bytes()
                 } else {
                     let mut n = 0;
                     let lim = s.prec.unwrap_or(usize::MAX);

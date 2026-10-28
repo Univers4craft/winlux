@@ -118,38 +118,6 @@ grep -q 'terminal' "$work/terminal.log" || fail "aucun terminal ouvert pour un p
 grep -q 'terminé avec le code 0' "$work/sortie.log" || fail "résumé de fin absent"
 ok "programme console dans un terminal (chemin avec espaces)"
 
-# No terminal in this isolated PATH: the program must still be executed.
-no_terminal="$work/no-terminal"
-mkdir -p "$no_terminal"
-for tool in dirname basename mkdir tail grep sed; do ln -s "$(command -v "$tool")" "$no_terminal/$tool"; done
-cp "$fake/kdialog" "$no_terminal/kdialog"
-env -u WINLUX_TERMINAL PATH="$no_terminal" DISPLAY=:99 XDG_STATE_HOME="$work/no-terminal-state" \
-    WINLUX_RUNTIME="$fake/winlux" WINLUX_GUI=headless "$open" "$apps/Bonjour monde.exe" </dev/null || fail "programme refuse sans terminal"
-test -s "$work/no-terminal-state/winlux/last-launch.log" || fail "sortie console perdue sans terminal"
-ok "double-clic sans terminal et sans profil : execution et sortie conservees"
-
-# A graphical desktop can inherit /dev/console: isatty(stdout) is insufficient.
-python3 - "$open" "$apps/Bonjour monde.exe" "$fake/winlux" "$no_terminal" "$work/pty-state" <<'PY'
-import os, pathlib, pty, subprocess, sys
-launcher, exe, runtime, tools, state = sys.argv[1:]
-env = os.environ.copy()
-env.pop("WINLUX_TERMINAL", None)
-env.pop("WINLUX_NO_TERMINAL", None)
-env.update(PATH=tools, DISPLAY=":99", WINLUX_GUI="headless", WINLUX_RUNTIME=runtime,
-           WINLUX_DESKTOP_LAUNCH="1", XDG_STATE_HOME=state)
-master, slave = pty.openpty()
-try:
-    assert os.isatty(slave)
-    result = subprocess.run([launcher, exe], env=env, stdin=subprocess.DEVNULL,
-                            stdout=slave, stderr=slave, timeout=10)
-    assert result.returncode == 0, result.returncode
-    assert (pathlib.Path(state)/"winlux/last-launch.log").stat().st_size > 0
-finally:
-    os.close(master)
-    os.close(slave)
-PY
-ok "console heritee du bureau : le double-clic conserve une sortie visible"
-
 set +e
 launch "$apps/code.exe"; status=$?
 set -e

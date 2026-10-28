@@ -7,10 +7,6 @@
 # ne reste jamais sans réponse. WINLUX_BROWSER force un autre programme.
 set -u
 
-if [ -f /etc/winlux/live-session ] && command -v winlux-browsers >/dev/null 2>&1; then
-    exec winlux-browsers --open "$@"
-fi
-
 if [ -n "${WINLUX_BROWSER:-}" ] && command -v "$WINLUX_BROWSER" >/dev/null 2>&1; then
     exec "$WINLUX_BROWSER" "$@"
 fi

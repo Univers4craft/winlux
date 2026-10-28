@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=X-XFCE-Helper
-X-XFCE-Category=TerminalEmulator
-Name=Terminal Winlux
-Icon=utilities-terminal
-X-XFCE-Binaries=winlux-terminal;
-X-XFCE-Commands=/usr/bin/winlux-terminal;
-X-XFCE-CommandsWithParameter=/usr/bin/winlux-terminal -e %s;

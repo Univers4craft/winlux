@@ -3,8 +3,8 @@ name: Release
 on:
   push:
     # System previews are built and tested with a full ISO locally, then
-    # uploaded with their system manifest. Never overwrite those manually
-    # validated preview artifacts from this workflow.
+    # uploaded with their system manifest. Never overwrite them with a
+    # runtime-only package from this workflow.
     tags: ['v*', '!v*-preview.*']
 
 permissions:
@@ -17,33 +17,9 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
-      - name: Vérifier la version publiée
-        run: test "$GITHUB_REF_NAME" = "$(cat VERSION)"
-
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
-
-      - name: Installer les outils système
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q \
-            xorriso grub-pc-bin grub-efi-amd64-bin \
-            linux-image-generic xserver-xorg-core \
-            x11-xserver-utils gcc-mingw-w64-x86-64 \
-            cpio fakeroot zstd kmod busybox-static \
-            xvfb xterm ncurses-base x11-xkb-utils xfonts-base fonts-dejavu-core \
-            xserver-xorg-input-libinput libxft2 libcairo2 libmpg123-0 libfaad2 libasound2t64 \
-            curl udev ffmpeg libarchive-tools parted dosfstools qemu-system-x86 ovmf \
-            dpkg-dev libgtk-3-0t64 libnss3 libnspr4 libgbm1 libxkbcommon0 libdbus-glib-1-2
-
-      - name: Préparer Edge, Chrome et Firefox hors ligne
-        run: python3 scripts/prepare-browser-packages.py build/browser-packages
-
-      - name: Préparer le bureau natif et ses applications
-        run: python3 scripts/prepare-desktop-packages.py build/desktop-components
-
       - name: Compiler et tester
         run: |
           cargo test -p winlux
@@ -51,55 +27,17 @@ jobs:
           bash scripts/build-tests.sh
           bash scripts/test-runtime.sh
           bash scripts/test-runtime-parallel.sh
-
-      - name: Construire l'ISO
-        run: |
-          kernel=$(ls /boot/vmlinuz-* 2>/dev/null | head -1)
-          if [ -z "$kernel" ]; then
-            echo "Noyau introuvable : publication refusée" >&2
-            exit 1
-          else
-            release=$(basename "$kernel" | sed 's/^vmlinuz-//')
-            WINLUX_KERNEL="$kernel" \
-            WINLUX_KERNEL_RELEASE="$release" \
-              bash scripts/build-live-iso.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
-            echo "SKIP_ISO=false" >> "$GITHUB_ENV"
-          fi
-
-      - name: Valider l'ISO et l'installation avant publication
-        env:
-          WINLUX_QEMU_MEMORY: 4096
-        run: |
-          test "$SKIP_ISO" = "false"
-          sh scripts/test-install-safety.sh
-          sh scripts/test-browsers-vm.sh
-          sh scripts/test-native-session-vm.sh
-          sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" bios
-          sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" uefi
-          # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
-          WINLUX_QEMU_MEMORY=6144 sh scripts/test-install-vm-guest.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
-
-      - name: Construire la mise à jour système complète
-        run: bash scripts/build-update-bundle.sh --system "$GITHUB_REF_NAME"
-
-      - name: Calculer les sommes SHA-256
-        run: |
-          cd build
-          sha256sum winlux-update-"$GITHUB_REF_NAME".tar.gz > winlux-update-"$GITHUB_REF_NAME".tar.gz.sha256
-          if [ "$SKIP_ISO" = "false" ]; then
-            sha256sum winlux-live-"$GITHUB_REF_NAME".iso > winlux-live-"$GITHUB_REF_NAME".iso.sha256
-          fi
-
+      - name: Construire le paquet de mise à jour
+        # Runtime releases are explicit; a complete OS release must first build
+        # its ISO stage, then call build-update-bundle.sh --system.
+        run: bash scripts/build-update-bundle.sh --runtime "$GITHUB_REF_NAME"
       - name: Publier la release GitHub
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -- "build/winlux-update-$GITHUB_REF_NAME.tar.gz" "build/winlux-update-$GITHUB_REF_NAME.tar.gz.sha256" build/winlux-update-manifest.txt
+          set -- "build/winlux-update-$GITHUB_REF_NAME.tar.gz" build/winlux-update-manifest.txt
           if grep -q '^notes_asset=' build/winlux-update-manifest.txt; then
             set -- "$@" build/winlux-release-notes.txt
-          fi
-          if [ "$SKIP_ISO" = "false" ]; then
-            set -- "$@" "build/winlux-live-$GITHUB_REF_NAME.iso" "build/winlux-live-$GITHUB_REF_NAME.iso.sha256"
           fi
           gh release create "$GITHUB_REF_NAME" \
             "$@" \

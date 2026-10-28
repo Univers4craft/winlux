@@ -1,35 +1,39 @@
-# Thème et prototype de bureau Winlux
+# Thème Winlux
 
-La palette CSS de ce dossier est une référence visuelle, pas le moteur du
-bureau. Le prototype actuel est écrit en Rust/GDI dans `testexe/src/shell/`
-et rendu par X11/Xft. Il est embarqué dans les ISO de test ; GTK/Qt ne sont
-pas des dépendances de ce shell.
+Cette base fournit une palette claire et des composants visuels inspirés de
+Windows 11, sans reprendre de fichiers Microsoft. La palette est maintenant
+reliée au backend X11 et la démonstration PE affiche un centre de paramètres
+unifié : réglages Linux d'un côté, compatibilité Windows de l'autre, puis les
+fonctions partagées entre les deux environnements. Une seconde vue
+« Applications » présente au même endroit les paquets Linux APT/Flatpak et les
+programmes Windows EXE/MSI, avec les actions d'installation et de
+désinstallation pour chaque environnement.
 
-## Réalisé dans le prototype
+Le démonstrateur fournit également une première vue « Winlux Desktop » en
+1280×720 logique : fond abstrait, raccourcis, barre des tâches centrée, menu
+Démarrer avec recherche/applications/recommandations et zone système
+Wi-Fi-volume-batterie-heure. Le bouton Démarrer ouvre et ferme réellement le
+menu via les messages souris Win32. La mise à l'échelle DPI produit la même vue
+en 1920×1080 à 150 % et 2560×1440 à 200 %.
 
-- [x] Fond d'écran image BMP fourni par le constructeur depuis un PNG, avec repli vectoriel animé.
-- [x] Barre des tâches pleine largeur, menu Démarrer ouvrable/fermable et fenêtres Explorer/Paramètres.
-- [x] États réduit, maximisé, restauré, empilement et focus des fenêtres internes.
-- [x] Thèmes clair/sombre et alignement de la barre enregistrés par `winlux-control` sur racine persistante.
-- [x] Texte antialiasé Xft/Fontconfig et échelle DPI configurable ; repli sur les polices X11 core.
-- [x] Paramètres Linux/Windows, mises à jour et À propos avec métadonnées de construction.
-- [x] Intégration dans une ISO bootable testée en BIOS/UEFI.
+## État et travaux restants
 
-## Reste à faire
+Le fichier CSS reste une référence pour le futur shell GTK/Qt. Le runtime X11
+utilise sa propre palette Rust afin de conserver un rendu autonome des
+applications Windows exécutées par Winlux. Le backend calcule maintenant une
+échelle depuis le DPI déclaré par l'écran (1× à 3×), applique la même échelle
+aux fenêtres, formes, textes et entrées souris, et accepte
+`WINLUX_UI_SCALE` comme surcharge de diagnostic. Les textes utilisent
+Xft/Fontconfig pour obtenir des glyphes vectoriels antialiasés ; les anciennes
+polices X11 « core » restent le repli quand Xft est indisponible.
 
-- [ ] Rendre les trois icônes système facultatives et démarrer avec un bureau vide.
-- [ ] Créer/renommer/supprimer des raccourcis applicatifs et sauvegarder leurs positions.
-- [ ] Ajouter le placement libre configurable ; le déplacement actuel est recalé sur une grille.
-- [ ] Alimenter un catalogue d'applications installées, une vraie recherche Démarrer et des épingles modifiables.
-- [ ] Relier un centre d'applications aux gestionnaires Linux et aux installateurs/désinstallateurs Windows.
-- [ ] Compléter l'accessibilité, la navigation clavier et la matrice de tests visuels 1080p/1440p/4K.
-- [ ] Gérer les fenêtres Linux externes et le presse-papiers inter-applications comme un environnement de bureau complet.
-- [ ] Exécuter le bureau ISO en utilisateur non administrateur avec autorisations ciblées.
-
-La vue Applications actuelle n'est pas un gestionnaire APT/Flatpak/EXE/MSI
-fonctionnel. Les trois icônes de bureau restent prédéfinies et leurs positions
-temporaires. Le script Xsession permet un lancement par un display manager,
-mais ne suffit pas à sécuriser le démarrage root de l'ISO.
-
-Audit du 25 octobre 2026 : [preuves et réserves](../docs/AUDIT-MARKDOWN.md).
-Voir aussi [INTERFACE.md](../INTERFACE.md) pour les objectifs complets.
+- Choisir et construire un shell graphique Linux libre.
+- Créer barre des tâches, lanceur/menu, explorateur et centre de notifications.
+- Relier le shell au runtime : lancement, liste des fenêtres, focus, fermeture,
+  presse-papiers et chemins Windows/Linux.
+- Relier la vue Applications aux gestionnaires APT/Flatpak et au suivi des
+  installateurs/désinstallateurs EXE/MSI ; l'écran actuel est le prototype
+  visuel exécuté par `gui_demo.exe`.
+- Ajouter les variantes clair/sombre, le clavier, l'accessibilité et les tests
+  sur plusieurs résolutions.
+- Intégrer ces composants à une image ISO Linux réellement amorçable.

@@ -1,16 +1,21 @@
-#![allow(clippy::too_many_arguments, clippy::type_complexity)]
-
 mod crash;
-mod dlls;
 mod loader;
-pub mod log;
 mod managed;
 mod paths;
 mod pe;
 mod printf;
 mod process;
-mod profiles;
 mod thunks;
+mod dlls;
+
+#[macro_export]
+macro_rules! trace {
+    ($($arg:tt)*) => {
+        if std::env::var_os("WINLUX_TRACE").is_some() {
+            eprintln!("winlux: {}", format_args!($($arg)*));
+        }
+    };
+}
 
 use std::path::PathBuf;
 
@@ -41,18 +46,13 @@ fn main() {
             std::process::exit(1);
         }
     };
-    profiles::apply(&exe);
     if let Some(target) = managed::detect(&exe, &source) {
-        log_info!(
-            "managed",
-            "{} détectée, utilisation du pont natif",
-            managed::description(&target)
-        );
+        eprintln!("winlux: {} détectée, utilisation du pont natif", managed::description(&target));
         match managed::run(&target, &rest) {
             Ok(status) => std::process::exit(status.code().unwrap_or(1)),
             Err(error) => {
-                log_error!("managed", "{error}");
-                log_error!("managed", "les interfaces WPF/WinForms restent limitées tant que leurs API Windows ne sont pas complètes");
+                eprintln!("winlux: {error}");
+                eprintln!("winlux: les interfaces WPF/WinForms restent limitées tant que leurs API Windows ne sont pas complètes");
                 std::process::exit(1);
             }
         }
@@ -60,25 +60,16 @@ fn main() {
     let image = match loader::load(&exe, true) {
         Ok(m) => m,
         Err(e) => {
-            log_error!("loader", "chargement impossible : {e}");
+            eprintln!("winlux: chargement impossible : {e}");
             std::process::exit(1);
         }
     };
     if image.pe.is_dll() {
-        log_error!(
-            "loader",
-            "{} est une DLL, pas un exécutable lançable directement",
-            exe.display()
-        );
+        eprintln!("winlux: {} est une DLL, pas un exécutable lançable directement", exe.display());
         std::process::exit(1);
     }
-    trace!(
-        "sous-système PE : {}, DLL flags=0x{:04x}, stack reserve/commit={}/{}",
-        image.pe.subsystem_name(),
-        image.pe.dll_characteristics,
-        image.pe.stack_reserve,
-        image.pe.stack_commit
-    );
+    trace!("sous-système PE : {}, DLL flags=0x{:04x}, stack reserve/commit={}/{}",
+        image.pe.subsystem_name(), image.pe.dll_characteristics, image.pe.stack_reserve, image.pe.stack_commit);
     dlls::kernel32::init();
     process::init_process(&image, &rest);
     process::run(image);
@@ -98,10 +89,7 @@ fn inspect(exe: &std::path::Path) -> i32 {
     if managed::detect(exe, &source).is_none() {
         match pe::PeImage::parse(&source) {
             Ok(image) if image.is_dll() => {
-                eprintln!(
-                    "{} est une DLL, pas un programme lançable directement",
-                    exe.display()
-                );
+                eprintln!("{} est une DLL, pas un programme lançable directement", exe.display());
                 return 1;
             }
             Ok(_) => {}

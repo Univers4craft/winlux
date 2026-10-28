@@ -11,24 +11,6 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
 
-pub const MAX_BITMAP_PIXELS: usize = 16 * 1024 * 1024;
-
-pub fn bilinear_colorref(pixels: &[u32], width: usize, height: usize, x: f32, y: f32) -> u32 {
-    let x = x.clamp(0.0, width.saturating_sub(1) as f32);
-    let y = y.clamp(0.0, height.saturating_sub(1) as f32);
-    let (x0, y0) = (x.floor() as usize, y.floor() as usize);
-    let (x1, y1) = ((x0 + 1).min(width - 1), (y0 + 1).min(height - 1));
-    let (fx, fy) = (x - x0 as f32, y - y0 as f32);
-    let channel = |shift: u32| {
-        let value = |px: u32| ((px >> shift) & 0xff) as f32;
-        let top = value(pixels[y0 * width + x0]) * (1.0 - fx) + value(pixels[y0 * width + x1]) * fx;
-        let bottom =
-            value(pixels[y1 * width + x0]) * (1.0 - fx) + value(pixels[y1 * width + x1]) * fx;
-        (top * (1.0 - fy) + bottom * fy).round() as u32
-    };
-    channel(0) | (channel(8) << 8) | (channel(16) << 16)
-}
-
 // ---------- Constantes de messages ----------
 
 pub const WM_CREATE: u32 = 0x0001;
@@ -79,49 +61,49 @@ pub const CW_USEDEFAULT: i32 = 0x8000_0000u32 as i32;
 pub mod theme {
     #![allow(dead_code)] // palette complète utilisée progressivement par le rendu
     /// Surfaces claires proches de la palette Windows 11, sans ressource Microsoft.
-    pub const BG_DEEP: u32 = 0x00F3_F3F3; // #F3F3F3
-    pub const BG_SURFACE: u32 = 0x00FF_FFFF; // #FFFFFF
-    pub const BG_ELEVATED: u32 = 0x00FA_FAFA; // #FAFAFA
+    pub const BG_DEEP: u32 = 0x00F3_F3F3;       // #F3F3F3
+    pub const BG_SURFACE: u32 = 0x00FF_FFFF;    // #FFFFFF
+    pub const BG_ELEVATED: u32 = 0x00FA_FAFA;   // #FAFAFA
     /// Accent principal bleu.
-    pub const ACCENT: u32 = 0x00C0_6700; // #0067C0
+    pub const ACCENT: u32 = 0x00C0_6700;        // #0067C0
     pub const ACCENT_VIOLET: u32 = 0x00E6_8A74; // #748AE6
-    pub const ACCENT_BLUE: u32 = 0x00E6_8A74; // #748AE6
-    pub const ACCENT_CYAN: u32 = 0x00FF_CD60; // #60CDFF
+    pub const ACCENT_BLUE: u32 = 0x00E6_8A74;   // #748AE6
+    pub const ACCENT_CYAN: u32 = 0x00FF_CD60;   // #60CDFF
     /// Texte.
-    pub const TEXT: u32 = 0x001F_1F1F; // #1F1F1F
-    pub const TEXT_DIM: u32 = 0x0060_6060; // #606060
+    pub const TEXT: u32 = 0x001F_1F1F;          // #1F1F1F
+    pub const TEXT_DIM: u32 = 0x0060_6060;      // #606060
     /// Sélection / survol.
-    pub const SELECTION: u32 = 0x00F5_E7D6; // #D6E7F5
-    pub const HOVER: u32 = 0x00ED_EDED; // #EDEDED
+    pub const SELECTION: u32 = 0x00F5_E7D6;     // #D6E7F5
+    pub const HOVER: u32 = 0x00ED_EDED;         // #EDEDED
     /// Dégradé très léger du fond d'application.
-    pub const GRADIENT_TOP: u32 = 0x00FF_FBF7; // #F7FBFF
+    pub const GRADIENT_TOP: u32 = 0x00FF_FBF7;  // #F7FBFF
     pub const GRADIENT_BOTTOM: u32 = BG_DEEP;
 
     /// Sous-ensemble de la palette `GetSysColor`, harmonisé avec le thème.
     pub fn system_color(index: i32) -> Option<u32> {
         Some(match index {
-            0 => 0x00C0_C0C0,  // COLOR_SCROLLBAR
-            1 => BG_DEEP,      // COLOR_BACKGROUND / DESKTOP
-            2 => GRADIENT_TOP, // COLOR_ACTIVECAPTION
-            3 => BG_ELEVATED,  // COLOR_INACTIVECAPTION
-            4 => BG_SURFACE,   // COLOR_MENU
-            5 => BG_SURFACE,   // COLOR_WINDOW
-            6 => BG_DEEP,      // COLOR_WINDOWFRAME
+            0 => 0x00C0_C0C0,             // COLOR_SCROLLBAR
+            1 => BG_DEEP,                 // COLOR_BACKGROUND / DESKTOP
+            2 => GRADIENT_TOP,            // COLOR_ACTIVECAPTION
+            3 => BG_ELEVATED,             // COLOR_INACTIVECAPTION
+            4 => BG_SURFACE,              // COLOR_MENU
+            5 => BG_SURFACE,              // COLOR_WINDOW
+            6 => BG_DEEP,                 // COLOR_WINDOWFRAME
             7 | 8 | 9 | 14 | 18 | 23 => TEXT,
-            10 => ACCENT,           // COLOR_ACTIVEBORDER
-            11 => BG_ELEVATED,      // COLOR_INACTIVEBORDER
-            12 => BG_DEEP,          // COLOR_APPWORKSPACE
-            13 => ACCENT,           // COLOR_HIGHLIGHT
-            15 => BG_ELEVATED,      // COLOR_BTNFACE
-            16 | 21 => BG_DEEP,     // COLOR_BTNSHADOW / 3DDKSHADOW
-            17 | 19 => TEXT_DIM,    // COLOR_GRAYTEXT / INACTIVECAPTIONTEXT
-            20 | 22 => 0x00FF_FFFF, // COLOR_BTNHIGHLIGHT / 3DLIGHT
-            24 => BG_ELEVATED,      // COLOR_INFOBK
-            26 => ACCENT_VIOLET,    // COLOR_HOTLIGHT
-            27 => GRADIENT_BOTTOM,  // COLOR_GRADIENTACTIVECAPTION
-            28 => BG_ELEVATED,      // COLOR_GRADIENTINACTIVECAPTION
-            29 => HOVER,            // COLOR_MENUHILIGHT
-            30 => BG_SURFACE,       // COLOR_MENUBAR
+            10 => ACCENT,                 // COLOR_ACTIVEBORDER
+            11 => BG_ELEVATED,            // COLOR_INACTIVEBORDER
+            12 => BG_DEEP,                // COLOR_APPWORKSPACE
+            13 => ACCENT,                 // COLOR_HIGHLIGHT
+            15 => BG_ELEVATED,            // COLOR_BTNFACE
+            16 | 21 => BG_DEEP,           // COLOR_BTNSHADOW / 3DDKSHADOW
+            17 | 19 => TEXT_DIM,          // COLOR_GRAYTEXT / INACTIVECAPTIONTEXT
+            20 | 22 => 0x00FF_FFFF,       // COLOR_BTNHIGHLIGHT / 3DLIGHT
+            24 => BG_ELEVATED,            // COLOR_INFOBK
+            26 => ACCENT_VIOLET,          // COLOR_HOTLIGHT
+            27 => GRADIENT_BOTTOM,        // COLOR_GRADIENTACTIVECAPTION
+            28 => BG_ELEVATED,            // COLOR_GRADIENTINACTIVECAPTION
+            29 => HOVER,                  // COLOR_MENUHILIGHT
+            30 => BG_SURFACE,             // COLOR_MENUBAR
             _ => return None,
         })
     }
@@ -146,6 +128,7 @@ pub mod theme {
         (ch(16) << 16) | (ch(8) << 8) | ch(0)
     }
 }
+
 
 // ---------- Structures Win32 (x86-64) ----------
 
@@ -173,12 +156,7 @@ impl Rect {
         self.bottom - self.top
     }
     pub fn from_size(x: i32, y: i32, w: i32, h: i32) -> Self {
-        Rect {
-            left: x,
-            top: y,
-            right: x + w,
-            bottom: y + h,
-        }
+        Rect { left: x, top: y, right: x + w, bottom: y + h }
     }
 }
 
@@ -197,15 +175,7 @@ pub struct Msg {
 impl Msg {
     /// Message neutre : horodatage, position et donnée privée à zéro.
     pub fn new(hwnd: usize, message: u32, wparam: usize, lparam: isize) -> Msg {
-        Msg {
-            hwnd,
-            message,
-            wparam,
-            lparam,
-            time: 0,
-            pt: Point::default(),
-            l_private: 0,
-        }
+        Msg { hwnd, message, wparam, lparam, time: 0, pt: Point::default(), l_private: 0 }
     }
 }
 
@@ -341,10 +311,7 @@ pub fn current_queue() -> Arc<Queue> {
     if let Some(q) = map.get(&tid) {
         return q.clone();
     }
-    let q = Arc::new(Queue {
-        items: Mutex::new(VecDeque::new()),
-        changed: Condvar::new(),
-    });
+    let q = Arc::new(Queue { items: Mutex::new(VecDeque::new()), changed: Condvar::new() });
     map.insert(tid, q.clone());
     q
 }
@@ -354,10 +321,7 @@ fn queue_for(tid: ThreadId) -> Arc<Queue> {
     if let Some(q) = map.get(&tid) {
         return q.clone();
     }
-    let q = Arc::new(Queue {
-        items: Mutex::new(VecDeque::new()),
-        changed: Condvar::new(),
-    });
+    let q = Arc::new(Queue { items: Mutex::new(VecDeque::new()), changed: Condvar::new() });
     map.insert(tid, q.clone());
     q
 }
@@ -427,9 +391,7 @@ pub fn set_focus_from_backend(hwnd: usize) -> Option<usize> {
 
 /// Efface le focus reçu d'un backend uniquement si cette HWND le détient encore.
 pub fn clear_focus_from_backend(hwnd: usize) -> bool {
-    let Some(owner) = window_owner(hwnd) else {
-        return false;
-    };
+    let Some(owner) = window_owner(hwnd) else { return false };
     let mut map = lock(focused_windows());
     if map.get(&owner).copied() == Some(hwnd) {
         map.remove(&owner);
@@ -472,10 +434,7 @@ struct AsyncKeyboardState {
 
 impl Default for AsyncKeyboardState {
     fn default() -> Self {
-        Self {
-            keys: [0; KEY_STATE_COUNT],
-            pressed_since_query: [false; KEY_STATE_COUNT],
-        }
+        Self { keys: [0; KEY_STATE_COUNT], pressed_since_query: [false; KEY_STATE_COUNT] }
     }
 }
 
@@ -647,8 +606,8 @@ fn discard_key_chars(hwnd: usize) {
 pub fn vk_to_char(vk: usize) -> Option<u16> {
     match vk {
         VK_BACK | VK_TAB | VK_RETURN | VK_ESCAPE | VK_SPACE => Some(vk as u16),
-        0x30..=0x39 => Some(vk as u16),        // chiffres
-        0x41..=0x5A => Some(vk as u16 + 0x20), // lettres (minuscules)
+        0x30..=0x39 => Some(vk as u16),              // chiffres
+        0x41..=0x5A => Some(vk as u16 + 0x20),       // lettres (minuscules)
         _ => None,
     }
 }
@@ -660,13 +619,7 @@ pub fn vk_to_char(vk: usize) -> Option<u16> {
 /// # Sécurité
 /// `wnd_proc` doit être une adresse de fonction invité valide. L'appel se fait
 /// sans verrou tenu pour permettre les réentrances (le wndproc peut rappeler des API).
-pub unsafe fn call_wndproc(
-    wnd_proc: usize,
-    hwnd: usize,
-    msg: u32,
-    wparam: usize,
-    lparam: isize,
-) -> isize {
+pub unsafe fn call_wndproc(wnd_proc: usize, hwnd: usize, msg: u32, wparam: usize, lparam: isize) -> isize {
     let f: extern "win64" fn(usize, u32, usize, isize) -> isize = std::mem::transmute(wnd_proc);
     f(hwnd, msg, wparam, lparam)
 }
@@ -685,45 +638,17 @@ pub enum DrawCmd {
     /// Texte ANSI dont `x,y` désignent le coin haut-gauche. `bk` est la couleur
     /// de fond posée derrière les glyphes (`SetBkColor`), ou `None` quand le mode
     /// de fond est transparent (`SetBkMode(TRANSPARENT)`).
-    Text {
-        x: i32,
-        y: i32,
-        text: String,
-        color: u32,
-        bk: Option<u32>,
-        font: FontSpec,
-    },
+    Text { x: i32, y: i32, text: String, color: u32, bk: Option<u32>, font: FontSpec },
     /// Ellipse inscrite dans le rectangle.
     Ellipse { rect: Rect, color: u32 },
     /// ROP binaire entre le pinceau courant et le contenu existant.
-    PatternRect {
-        rect: Rect,
-        color: u32,
-        rop: RasterOp,
-    },
+    PatternRect { rect: Rect, color: u32, rop: RasterOp },
     /// Copie de pixels entre deux fenêtres X11 (SRCCOPY).
-    Blit {
-        source_hwnd: usize,
-        source: Rect,
-        destination: Rect,
-        stretch: bool,
-        rop: RasterOp,
-    },
+    Blit { source_hwnd: usize, source: Rect, destination: Rect, stretch: bool, rop: RasterOp },
     /// Copie depuis une bitmap mémoire (pixels stockés en COLORREF).
-    Bitmap {
-        rect: Rect,
-        pixels: Vec<u32>,
-        rop: RasterOp,
-    },
+    Bitmap { rect: Rect, pixels: Vec<u32>, rop: RasterOp },
     /// Ligne entre deux points.
-    Line {
-        x1: i32,
-        y1: i32,
-        x2: i32,
-        y2: i32,
-        color: u32,
-        width: u16,
-    },
+    Line { x1: i32, y1: i32, x2: i32, y2: i32, color: u32 },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -791,10 +716,7 @@ pub struct DcState {
 pub enum GdiObject {
     Brush(u32),
     SystemBrush(u32),
-    Pen {
-        width: u16,
-        color: u32,
-    },
+    Pen { width: u16, color: u32 },
     Font(FontSpec),
     Bitmap {
         width: usize,
@@ -809,24 +731,10 @@ pub enum GdiObject {
 
 #[derive(Clone, Debug)]
 pub enum GdiObjectInfo {
-    Brush {
-        style: u32,
-        color: u32,
-        hatch: usize,
-    },
-    Pen {
-        style: u32,
-        width: i32,
-        color: u32,
-    },
+    Brush { style: u32, color: u32, hatch: usize },
+    Pen { style: u32, width: i32, color: u32 },
     Font(FontSpec),
-    Bitmap {
-        width: usize,
-        height: usize,
-        width_bytes: usize,
-        bits_per_pixel: u16,
-        bits: usize,
-    },
+    Bitmap { width: usize, height: usize, width_bytes: usize, bits_per_pixel: u16, bits: usize },
 }
 
 fn dcs() -> &'static Mutex<HashMap<usize, DcState>> {
@@ -862,19 +770,16 @@ fn next_handle(base: usize) -> usize {
 /// Crée un DC associé à une fenêtre (ou mémoire si `hwnd == 0`).
 pub fn create_dc(hwnd: usize) -> usize {
     let hdc = next_handle(0x0011_0000);
-    lock(dcs()).insert(
-        hdc,
-        DcState {
-            hwnd,
-            text_color: 0x0000_0000,
-            bk_color: 0x00FF_FFFF,
-            bk_mode: 2,
-            brush: 5, // BLACK_BRUSH stock
-            pen: 8,   // BLACK_PEN stock
-            font: 14, // SYSTEM_FONT stock
-            bitmap: 0,
-        },
-    );
+    lock(dcs()).insert(hdc, DcState {
+        hwnd,
+        text_color: 0x0000_0000,
+        bk_color: 0x00FF_FFFF,
+        bk_mode: 2,
+        brush: 5, // BLACK_BRUSH stock
+        pen: 8,   // BLACK_PEN stock
+        font: 14, // SYSTEM_FONT stock
+        bitmap: 0,
+    });
     hdc
 }
 
@@ -899,39 +804,27 @@ fn with_dc<T>(hdc: usize, f: impl FnOnce(&mut DcState) -> T, default: T) -> T {
 }
 
 pub fn set_dc_text_color(hdc: usize, color: u32) -> u32 {
-    with_dc(
-        hdc,
-        |d| {
-            let old = d.text_color;
-            d.text_color = color;
-            old
-        },
-        0,
-    )
+    with_dc(hdc, |d| {
+        let old = d.text_color;
+        d.text_color = color;
+        old
+    }, 0)
 }
 
 pub fn set_dc_bk_color(hdc: usize, color: u32) -> u32 {
-    with_dc(
-        hdc,
-        |d| {
-            let old = d.bk_color;
-            d.bk_color = color;
-            old
-        },
-        0,
-    )
+    with_dc(hdc, |d| {
+        let old = d.bk_color;
+        d.bk_color = color;
+        old
+    }, 0)
 }
 
 pub fn set_dc_bk_mode(hdc: usize, mode: u32) -> u32 {
-    with_dc(
-        hdc,
-        |d| {
-            let old = d.bk_mode;
-            d.bk_mode = mode;
-            old
-        },
-        0,
-    )
+    with_dc(hdc, |d| {
+        let old = d.bk_mode;
+        d.bk_mode = mode;
+        old
+    }, 0)
 }
 
 /// Couleur de texte courante d'un DC (utilisée par `TextOutA`).
@@ -970,42 +863,39 @@ pub fn dc_bk_mode(hdc: usize) -> u32 {
 
 /// Sélectionne un pinceau ou une plume selon la nature de l'objet.
 pub fn select_object(hdc: usize, obj: usize) -> usize {
-    let kind_pen =
-        is_stock_pen(obj) || matches!(lock(objects()).get(&obj), Some(GdiObject::Pen { .. }));
+    let kind_pen = is_stock_pen(obj)
+        || matches!(lock(objects()).get(&obj), Some(GdiObject::Pen { .. }));
     let kind_font = !kind_pen
-        && (is_stock_font(obj) || matches!(lock(objects()).get(&obj), Some(GdiObject::Font(_))));
+        && (is_stock_font(obj)
+            || matches!(lock(objects()).get(&obj), Some(GdiObject::Font(_))));
     let kind_bitmap = !kind_pen
         && !kind_font
         && matches!(lock(objects()).get(&obj), Some(GdiObject::Bitmap { .. }));
-    with_dc(
-        hdc,
-        |d| {
-            if kind_pen {
-                let old = d.pen;
-                d.pen = obj;
-                old
-            } else if kind_font {
-                let old = d.font;
-                d.font = obj;
-                old
-            } else if kind_bitmap {
-                let old = d.bitmap;
-                d.bitmap = obj;
-                old
-            } else {
-                let old = d.brush;
-                d.brush = obj;
-                old
-            }
-        },
-        0,
-    )
+    with_dc(hdc, |d| {
+        if kind_pen {
+            let old = d.pen;
+            d.pen = obj;
+            old
+        } else if kind_font {
+            let old = d.font;
+            d.font = obj;
+            old
+        } else if kind_bitmap {
+            let old = d.bitmap;
+            d.bitmap = obj;
+            old
+        } else {
+            let old = d.brush;
+            d.brush = obj;
+            old
+        }
+    }, 0)
 }
 
 /// Objets « stock » plume : `GetStockObject(WHITE_PEN)` → 7, `BLACK_PEN` → 8,
 /// `NULL_PEN` → 9.
 fn is_stock_pen(handle: usize) -> bool {
-    matches!(handle, 7..=9)
+    matches!(handle, 7 | 8 | 9)
 }
 
 fn is_stock_font(handle: usize) -> bool {
@@ -1035,13 +925,7 @@ pub fn create_pen(style: u32, width: i32, color: u32) -> usize {
     // Les styles pointillés ne sont pas distingués : toute plume est pleine.
     let _ = style;
     let h = next_handle(0x0021_0000);
-    lock(objects()).insert(
-        h,
-        GdiObject::Pen {
-            width: width.max(1) as u16,
-            color,
-        },
-    );
+    lock(objects()).insert(h, GdiObject::Pen { width: width.max(1) as u16, color });
     h
 }
 
@@ -1057,7 +941,7 @@ pub fn create_compatible_bitmap(width: i32, height: i32) -> Option<usize> {
         return None;
     }
     let pixels = (width as usize).checked_mul(height as usize)?;
-    if pixels > MAX_BITMAP_PIXELS {
+    if pixels > 4 * 1024 * 1024 {
         return None;
     }
     let handle = next_handle(0x0021_0000);
@@ -1087,10 +971,10 @@ pub fn create_dib_section(
         return None;
     }
     let pixels = (width as usize).checked_mul(height as usize)?;
-    if pixels > MAX_BITMAP_PIXELS {
+    if pixels > 4 * 1024 * 1024 {
         return None;
     }
-    let stride = (width as usize * bit_count as usize).div_ceil(32) * 4;
+    let stride = ((width as usize * bit_count as usize + 31) / 32) * 4;
     let bytes = stride.checked_mul(height as usize)?;
     let mut dib_bits = vec![0u8; bytes];
     let bits_ptr = dib_bits.as_mut_ptr();
@@ -1172,28 +1056,17 @@ pub fn bitmap_snapshot(hdc: usize, rect: Rect) -> Option<BitmapSnapshot> {
     let width = rect.width() as usize;
     let height = rect.height() as usize;
     let count = width.checked_mul(height)?;
-    if count > MAX_BITMAP_PIXELS {
+    if count > 4 * 1024 * 1024 {
         return None;
     }
     let objects = lock(objects());
-    let Some(GdiObject::Bitmap {
-        width: bitmap_width,
-        height: bitmap_height,
-        pixels,
-        dib_bits,
-        dib_bit_count,
-        dib_stride,
-        top_down,
-    }) = objects.get(&bitmap)
-    else {
+    let Some(GdiObject::Bitmap { width: bitmap_width, height: bitmap_height, pixels, dib_bits, dib_bit_count, dib_stride, top_down }) = objects.get(&bitmap) else {
         return None;
     };
     let mut copy = vec![0; count];
     for y in 0..height {
         let sy = rect.top as i64 + y as i64;
-        if sy < 0 || sy >= *bitmap_height as i64 {
-            continue;
-        }
+        if sy < 0 || sy >= *bitmap_height as i64 { continue; }
         for x in 0..width {
             let sx = rect.left as i64 + x as i64;
             if sx >= 0 && sx < *bitmap_width as i64 {
@@ -1211,11 +1084,7 @@ pub fn bitmap_snapshot(hdc: usize, rect: Rect) -> Option<BitmapSnapshot> {
             }
         }
     }
-    Some(BitmapSnapshot {
-        width,
-        height,
-        pixels: copy,
-    })
+    Some(BitmapSnapshot { width, height, pixels: copy })
 }
 
 /// Description d'une police créée, ou police système par défaut pour un objet
@@ -1246,22 +1115,12 @@ pub fn object_info(handle: usize) -> Option<GdiObjectInfo> {
                     color: *color,
                 },
                 GdiObject::Font(spec) => GdiObjectInfo::Font(spec.clone()),
-                GdiObject::Bitmap {
-                    width,
-                    height,
-                    dib_bits,
-                    dib_stride,
-                    dib_bit_count,
-                    ..
-                } => GdiObjectInfo::Bitmap {
+                GdiObject::Bitmap { width, height, dib_bits, dib_stride, dib_bit_count, .. } => GdiObjectInfo::Bitmap {
                     width: *width,
                     height: *height,
                     width_bytes: *dib_stride,
                     bits_per_pixel: *dib_bit_count,
-                    bits: dib_bits
-                        .as_ref()
-                        .map(|data| data.as_ptr() as usize)
-                        .unwrap_or(0),
+                    bits: dib_bits.as_ref().map(|data| data.as_ptr() as usize).unwrap_or(0),
                 },
             });
         }
@@ -1349,26 +1208,14 @@ pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
     }
     let mut map = lock(windows());
     match map.get_mut(&target) {
-        Some(w) => {
-            w.pending.push(cmd);
-            true
-        }
+        Some(w) => { w.pending.push(cmd); true }
         None => false,
     }
 }
 
 fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
     let mut map = lock(objects());
-    let Some(GdiObject::Bitmap {
-        width,
-        height,
-        pixels,
-        dib_bits,
-        dib_bit_count,
-        dib_stride,
-        top_down,
-    }) = map.get_mut(&handle)
-    else {
+    let Some(GdiObject::Bitmap { width, height, pixels, dib_bits, dib_bit_count, dib_stride, top_down }) = map.get_mut(&handle) else {
         return false;
     };
     let bounds = Rect::from_size(0, 0, *width as i32, *height as i32);
@@ -1407,18 +1254,12 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 }
             }
         }
-        DrawCmd::FrameRect {
-            rect,
-            color,
-            width: line,
-        } => {
+        DrawCmd::FrameRect { rect, color, width: line } => {
             let line = (*line as i32).max(1);
             for y in rect.top.max(0)..rect.bottom.min(bounds.bottom) {
                 for x in rect.left.max(0)..rect.right.min(bounds.right) {
-                    if x < rect.left + line
-                        || x >= rect.right - line
-                        || y < rect.top + line
-                        || y >= rect.bottom - line
+                    if x < rect.left + line || x >= rect.right - line
+                        || y < rect.top + line || y >= rect.bottom - line
                     {
                         put(x, y, *color, RasterOp::Copy);
                     }
@@ -1449,16 +1290,10 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 }
             }
         }
-        DrawCmd::Bitmap {
-            rect,
-            pixels: source,
-            rop,
-        } => {
+        DrawCmd::Bitmap { rect, pixels: source, rop } => {
             let sw = rect.width().max(0) as usize;
             let sh = rect.height().max(0) as usize;
-            let Some(required) = sw.checked_mul(sh) else {
-                return false;
-            };
+            let Some(required) = sw.checked_mul(sh) else { return false };
             if required > source.len() {
                 return false;
             }
@@ -1470,14 +1305,7 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 }
             }
         }
-        DrawCmd::Line {
-            x1,
-            y1,
-            x2,
-            y2,
-            color,
-            width,
-        } => {
+        DrawCmd::Line { x1, y1, x2, y2, color } => {
             // Bresenham simplifié
             let (mut cx, mut cy) = (*x1, *y1);
             let dx = (*x2 - *x1).abs();
@@ -1487,27 +1315,12 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
             let mut err = dx + dy;
             loop {
                 if cx >= 0 && cy >= 0 && cx < bounds.right && cy < bounds.bottom {
-                    for oy in 0..(*width).max(1) as i32 {
-                        for ox in 0..(*width).max(1) as i32 {
-                            let (px, py) = (cx + ox, cy + oy);
-                            if px < bounds.right && py < bounds.bottom {
-                                put(px, py, *color, RasterOp::Copy);
-                            }
-                        }
-                    }
+                    put(cx, cy, *color, RasterOp::Copy);
                 }
-                if cx == *x2 && cy == *y2 {
-                    break;
-                }
+                if cx == *x2 && cy == *y2 { break; }
                 let e2 = 2 * err;
-                if e2 >= dy {
-                    err += dy;
-                    cx += sx;
-                }
-                if e2 <= dx {
-                    err += dx;
-                    cy += sy;
-                }
+                if e2 >= dy { err += dy; cx += sx; }
+                if e2 <= dx { err += dx; cy += sy; }
             }
         }
         DrawCmd::Text { .. } | DrawCmd::Blit { .. } => {}
@@ -1531,10 +1344,7 @@ fn raster_color(source: u32, destination: u32, rop: RasterOp) -> u32 {
 
 /// Retire les commandes accumulées depuis le dernier `EndPaint`.
 pub fn take_pending(hwnd: usize) -> Vec<DrawCmd> {
-    lock(windows())
-        .get_mut(&hwnd)
-        .map(|w| std::mem::take(&mut w.pending))
-        .unwrap_or_default()
+    lock(windows()).get_mut(&hwnd).map(|w| std::mem::take(&mut w.pending)).unwrap_or_default()
 }
 
 // ---------- Backend ----------
@@ -1562,9 +1372,7 @@ pub trait GuiBackend: Send {
     fn set_focus(&mut self, _hwnd: usize) {}
     fn invalidate(&mut self, _hwnd: usize) {}
     /// Lit une zone de la fenêtre en pixels COLORREF (pour les blits vers un DC mémoire).
-    fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> {
-        None
-    }
+    fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> { None }
     /// Joue la liste de commandes GDI d'une fenêtre (thème + contenu). Le
     /// backend X11 conserve la liste pour la rejouer à chaque Expose; headless
     /// ignore le rendu.
@@ -1577,13 +1385,9 @@ pub trait GuiBackend: Send {
     }
     /// Taille actuelle de l'écran en unités logiques Win32. Elle suit les
     /// changements de résolution (RandR) pour SM_CXSCREEN/SM_CYSCREEN.
-    fn screen_size(&mut self) -> Option<(i32, i32)> {
-        None
-    }
+    fn screen_size(&mut self) -> Option<(i32, i32)> { None }
     /// Largeur et hauteur logiques d'un texte dans une police GDI.
-    fn measure_text(&mut self, _font: &FontSpec, _text: &str) -> Option<(i32, i32)> {
-        None
-    }
+    fn measure_text(&mut self, _font: &FontSpec, _text: &str) -> Option<(i32, i32)> { None }
 }
 
 struct HeadlessBackend;
@@ -1594,9 +1398,7 @@ impl GuiBackend for HeadlessBackend {}
 /// `WINLUX_GUI=headless`; sinon headless. Retombe sur headless si la connexion
 /// échoue.
 fn build_backend() -> Box<dyn GuiBackend> {
-    let force_headless = std::env::var("WINLUX_GUI")
-        .map(|v| v == "headless")
-        .unwrap_or(false);
+    let force_headless = std::env::var("WINLUX_GUI").map(|v| v == "headless").unwrap_or(false);
     if !force_headless && std::env::var_os("DISPLAY").is_some() {
         if let Some(b) = crate::dlls::gui_x11::X11Backend::connect() {
             crate::trace!("backend graphique : X11");
@@ -1630,11 +1432,7 @@ pub fn measure_text(font: &FontSpec, text: &str) -> (i32, i32) {
     let mut out = None;
     with_backend(|b| out = b.measure_text(font, text));
     out.unwrap_or_else(|| {
-        let h = if font.height == 0 {
-            13
-        } else {
-            font.height.abs()
-        };
+        let h = if font.height == 0 { 13 } else { font.height.abs() };
         (text.chars().count() as i32 * h * 55 / 100, h)
     })
 }
@@ -1744,15 +1542,7 @@ pub fn request_paint(hwnd: usize) {
     if let Some(tid) = owner {
         post_to_thread(
             tid,
-            Msg {
-                hwnd,
-                message: WM_PAINT,
-                wparam: 0,
-                lparam: 0,
-                time: 0,
-                pt: Point::default(),
-                l_private: 0,
-            },
+            Msg { hwnd, message: WM_PAINT, wparam: 0, lparam: 0, time: 0, pt: Point::default(), l_private: 0 },
         );
     }
 }
@@ -1806,11 +1596,7 @@ pub fn register_class(name: &str, info: ClassInfo) -> bool {
 }
 
 pub fn lookup_class(name: &str) -> Option<ClassInfo> {
-    lock(classes()).get(name).map(|c| ClassInfo {
-        wnd_proc: c.wnd_proc,
-        background: c.background,
-        instance: c.instance,
-    })
+    lock(classes()).get(name).map(|c| ClassInfo { wnd_proc: c.wnd_proc, background: c.background, instance: c.instance })
 }
 
 // ---------- Accès utilisés par user32 ----------
@@ -1844,10 +1630,7 @@ pub fn get_window_style(hwnd: usize) -> u32 {
 
 /// Renvoie l'origine (left, top) de la fenêtre en coordonnées écran.
 pub fn window_origin(hwnd: usize) -> (i32, i32) {
-    lock(windows())
-        .get(&hwnd)
-        .map(|w| (w.rect.left, w.rect.top))
-        .unwrap_or((0, 0))
+    lock(windows()).get(&hwnd).map(|w| (w.rect.left, w.rect.top)).unwrap_or((0, 0))
 }
 
 pub fn window_rect(hwnd: usize) -> Option<Rect> {
@@ -1855,7 +1638,7 @@ pub fn window_rect(hwnd: usize) -> Option<Rect> {
 }
 
 pub fn window_owner(hwnd: usize) -> Option<ThreadId> {
-    lock(windows()).get(&hwnd).map(|w| w.owner)
+    lock(windows()).get(&hwnd).map(|w| w.owner.clone())
 }
 
 /// Remplace le rectangle logique et renvoie son ancienne valeur.
@@ -1958,10 +1741,7 @@ pub fn prepend_message(q: &Queue, m: Msg) {
 /// Regarde sans retirer.
 pub fn peek_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
     let items = lock(&q.items);
-    items
-        .iter()
-        .find(|m| match_filter(m, hwnd, min, max))
-        .copied()
+    items.iter().find(|m| match_filter(m, hwnd, min, max)).copied()
 }
 
 fn match_filter(m: &Msg, hwnd: usize, min: u32, max: u32) -> bool {
@@ -2048,11 +1828,10 @@ pub fn set_window_parent(hwnd: usize, new_parent: usize) -> Option<usize> {
 
 /// La fenêtre est-elle visible ?
 pub fn is_window_visible(hwnd: usize) -> bool {
-    lock(windows()).get(&hwnd).is_some_and(|w| w.visible)
+    lock(windows()).get(&hwnd).map_or(false, |w| w.visible)
 }
 
 /// La fenêtre existe-t-elle ?
-#[allow(dead_code)]
 pub fn is_window(hwnd: usize) -> bool {
     lock(windows()).contains_key(&hwnd)
 }
@@ -2104,8 +1883,7 @@ pub fn get_window_relative(hwnd: usize, cmd: u32) -> Option<usize> {
     match cmd {
         4 => {
             // GW_OWNER : même chose que parent ici
-            map.get(&hwnd)
-                .and_then(|w| if w.parent != 0 { Some(w.parent) } else { None })
+            map.get(&hwnd).and_then(|w| if w.parent != 0 { Some(w.parent) } else { None })
         }
         5 => {
             // GW_CHILD : premier enfant
@@ -2126,7 +1904,7 @@ pub fn save_dc(hdc: usize) -> i32 {
         drop(dcs_lock);
         let stack = dc_save_stack();
         let mut stk = lock(stack);
-        let entry = stk.entry(hdc).or_default();
+        let entry = stk.entry(hdc).or_insert_with(Vec::new);
         entry.push(state);
         entry.len() as i32
     } else {
@@ -2192,12 +1970,12 @@ use std::sync::atomic::AtomicUsize;
 
 static NEXT_TIMER_ID: AtomicUsize = AtomicUsize::new(1);
 
-#[allow(dead_code)]
 struct TimerEntry {
     hwnd: usize,
     id: usize,
     interval_ms: u32,
     callback: usize,
+    #[allow(dead_code)]
     next_fire: u64,
 }
 
@@ -2280,18 +2058,15 @@ mod tests {
     fn file_messages_par_thread_est_isolee() {
         let q = current_queue();
         lock(&q.items).clear();
-        post_to_thread(
-            std::thread::current().id(),
-            Msg {
-                hwnd: 1,
-                message: WM_PAINT,
-                wparam: 0,
-                lparam: 0,
-                time: 0,
-                pt: Point::default(),
-                l_private: 0,
-            },
-        );
+        post_to_thread(std::thread::current().id(), Msg {
+            hwnd: 1,
+            message: WM_PAINT,
+            wparam: 0,
+            lparam: 0,
+            time: 0,
+            pt: Point::default(),
+            l_private: 0,
+        });
         assert_eq!(lock(&q.items).len(), 1);
         lock(&q.items).clear();
     }
@@ -2340,10 +2115,7 @@ mod tests {
         let ctrl_a_lparam = (30isize << 16) | 2;
         set_key_char(hwnd, 0x41, ctrl_a_lparam, None);
         let ctrl_a = Msg::new(hwnd, WM_KEYDOWN, 0x41, ctrl_a_lparam);
-        assert_eq!(
-            unsafe { crate::dlls::user32::translate_message(&ctrl_a) },
-            0
-        );
+        assert_eq!(unsafe { crate::dlls::user32::translate_message(&ctrl_a) }, 0);
         let paint = Msg::new(hwnd, WM_PAINT, 0, 0);
         assert_eq!(unsafe { crate::dlls::user32::translate_message(&paint) }, 0);
         assert!(take_message(&q, hwnd, WM_CHAR, WM_CHAR).is_none());
@@ -2408,23 +2180,20 @@ mod tests {
     fn fenetre_de_test() -> usize {
         let hwnd = alloc_hwnd();
         let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
-        insert_window(
-            hwnd,
-            Window {
-                class: "Test".to_string(),
-                wnd_proc: proc_addr as usize,
-                background: 0,
-                title: "test".to_string(),
-                rect: Rect::from_size(0, 0, 200, 100),
-                visible: true,
-                parent: 0,
-                owner: std::thread::current().id(),
-                needs_paint: false,
-                style: 0,
-                ex_style: 0,
-                pending: Vec::new(),
-            },
-        );
+        insert_window(hwnd, Window {
+            class: "Test".to_string(),
+            wnd_proc: proc_addr as usize,
+            background: 0,
+            title: "test".to_string(),
+            rect: Rect::from_size(0, 0, 200, 100),
+            visible: true,
+            parent: 0,
+            owner: std::thread::current().id(),
+            needs_paint: false,
+            style: 0,
+            ex_style: 0,
+            pending: Vec::new(),
+        });
         hwnd
     }
 
@@ -2465,24 +2234,12 @@ mod tests {
 
     #[test]
     fn les_rops_simples_combinent_source_et_destination() {
-        assert_eq!(
-            raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::Copy),
-            0x00FF_0000
-        );
+        assert_eq!(raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::Copy), 0x00FF_0000);
         assert_eq!(raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::And), 0);
-        assert_eq!(
-            raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::Or),
-            0x00FF_FF00
-        );
-        assert_eq!(
-            raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::Xor),
-            0x00FF_FF00
-        );
+        assert_eq!(raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::Or), 0x00FF_FF00);
+        assert_eq!(raster_color(0x00FF_0000, 0x0000_FF00, RasterOp::Xor), 0x00FF_FF00);
         assert_eq!(raster_color(0, 0x0012_3456, RasterOp::Invert), 0x00ED_CBA9);
-        assert_eq!(
-            raster_color(0x0012_3456, 0, RasterOp::CopyInverted),
-            0x00ED_CBA9
-        );
+        assert_eq!(raster_color(0x0012_3456, 0, RasterOp::CopyInverted), 0x00ED_CBA9);
         assert_eq!(raster_color(0x00FF_FFFF, 0, RasterOp::Set), 0x00FF_FFFF);
         assert_eq!(raster_color(0x00FF_FFFF, 0x00FF_FFFF, RasterOp::Clear), 0);
     }
@@ -2538,32 +2295,16 @@ mod tests {
         let hwnd = fenetre_de_test();
         let hdc = create_dc(hwnd);
         let rect = Rect::from_size(10, 10, 40, 20);
-        assert!(record(
-            hdc,
-            DrawCmd::FillRect {
-                rect,
-                color: 0x0000_00FF
-            }
-        ));
-        assert!(record(
-            hdc,
-            DrawCmd::FrameRect {
-                rect,
-                color: 0x0000_00FF,
-                width: 1
-            }
-        ));
-        assert!(record(
-            hdc,
-            DrawCmd::Text {
-                x: 4,
-                y: 8,
-                text: "salut".to_string(),
-                color: 0x00FF_FFFF,
-                bk: None,
-                font: FontSpec::default(),
-            }
-        ));
+        assert!(record(hdc, DrawCmd::FillRect { rect, color: 0x0000_00FF }));
+        assert!(record(hdc, DrawCmd::FrameRect { rect, color: 0x0000_00FF, width: 1 }));
+        assert!(record(hdc, DrawCmd::Text {
+            x: 4,
+            y: 8,
+            text: "salut".to_string(),
+            color: 0x00FF_FFFF,
+            bk: None,
+            font: FontSpec::default(),
+        }));
         assert_eq!(take_pending(hwnd).len(), 3);
         // La prise vide la file : le prochain `EndPaint` ne rejoue rien.
         assert!(take_pending(hwnd).is_empty());
@@ -2578,13 +2319,10 @@ mod tests {
 
     #[test]
     fn un_dc_inconnu_ne_recoit_aucune_commande() {
-        assert!(!record(
-            0x00DE_AD00,
-            DrawCmd::FillRect {
-                rect: Rect::from_size(0, 0, 1, 1),
-                color: 0,
-            }
-        ));
+        assert!(!record(0x00DE_AD00, DrawCmd::FillRect {
+            rect: Rect::from_size(0, 0, 1, 1),
+            color: 0,
+        }));
         assert_eq!(dc_window(0x00DE_AD00), None);
         // Sans DC, les réglages sont sans effet et renvoient la valeur neutre.
         assert_eq!(set_dc_bk_mode(0x00DE_AD00, 1), 0);

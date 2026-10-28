@@ -1,23 +1,9 @@
 # Interface et expérience du bureau Winlux
 
-La session interactive utilise désormais Openbox, xfdesktop, le panneau Xfce et
-un menu GTK inspiré de Windows 11. Explorer et Paramètres restent des applications PE du runtime, ouvertes
-dans des fenêtres indépendantes. L'ancien shell GDI dans `testexe/src/shell/`
-reste disponible pour les tests ; les constats historiques ci-dessous le
-concernent lorsqu'ils décrivent ses trois icônes ou son menu dessiné.
-
-Le menu natif expose les applications Linux et les PE enregistrés, avec les
-menus contextuels du panneau et du menu Démarrer. Le bureau offre le clic droit,
-les fichiers, dossiers et raccourcis. Mousepad fournit un véritable éditeur
-Xfce. XScreenSaver fournit les tuyaux animés après dix minutes d'inactivité,
-ou depuis le lanceur « Pipes ». La session administrateur actuelle ne verrouille
-pas par mot de passe ; seul le moteur graphique du veilleur est exécuté sous
-un compte dédié sans privilèges.
-
-Voir [la session native et ses validations](docs/NATIVE-DESKTOP.md).
-
-Audit du 25 octobre 2026 : voir [les preuves](docs/AUDIT-MARKDOWN.md).
-Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
+Ce document décrit l'état du prototype graphique et la cible d'interface à
+construire. Le shell actuel vit dans `testexe/src/shell/` et sert notamment au
+test graphique `gui_demo.exe` ; ce n'est pas encore un gestionnaire de bureau
+autonome.
 
 ## Principes d'interface
 
@@ -41,39 +27,17 @@ Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
 
 ## État actuel observé
 
-- La version 12 ajoute l'anticrénelage Cairo aux contours et le filtrage
-  bilinéaire GDI, avec captures natives 1080p/4K. Voir le
-  [diagnostic de rendu](docs/RENDERING-QUALITY.md) pour les limites restantes.
-- Explorer propose « Réglages de l'exécutable » au clic droit sur un fichier
-  .exe : échelle du rendu et diagnostic facultatifs, avec profil par programme.
-  Voir [le fonctionnement et les limites](docs/EXE-PROFILES.md).
-- Après une mise à jour nécessitant un redémarrage, la page dédiée affiche
-  uniquement le bouton de redémarrage et le journal ; recherche, réinstallation,
-  restauration et saisie du token ne sont plus accessibles avant le redémarrage.
-- Depuis `v0.2.0-preview.9`, un cache de fond X11 évite les conversions et
-  téléversements répétés d'une grande image inchangée. Le texte du bureau
-  n'a plus de doublure noire décalée ; le hinting Xft et les boutons de fenêtre
-  sont ajustés. Le tri Explorer utilise un algorithme en O(n log n).
-  Cela ne valide pas encore la fluidité de bout en bout sur chaque matériel.
-- Le backend X11 envoie les grandes images par bandes pour respecter la taille
-  maximale des requêtes X11 ; les images de fond en 1080p ne sont plus ignorées
-  au-delà de 256 Kio. Le test réel se lance avec
-  `xvfb-run -a -s '-screen 0 1920x1080x24' cargo test -p winlux grande_bitmap_1080p -- --ignored`.
-  Ce correctif source est postérieur à la release `v0.2.0-preview.7`.
 - Le prototype dessine un fond d'écran, une barre des tâches, un menu Démarrer,
   des notifications et des fenêtres intégrées Explorer/Paramètres.
 - Le menu et la barre donnent accès à un petit ensemble d'applications
-  intégrées. Depuis la version 10, Explorer et Paramètres proposent un menu
-  contextuel pour fermer/réduire, épingler/désépingler et créer/retirer un
-  raccourci du bureau. Les épingles et la présence des raccourcis sont conservées
-  dans le profil utilisateur. Le catalogue et les fenêtres externes restent à gérer.
+  intégrées ; le catalogue complet des applications installées et la gestion
+  dynamique des épingles restent à réaliser.
 - Le bureau dessine actuellement trois icônes système prédéfinies (« Ce PC »,
   « Documents », « Corbeille »). Elles peuvent être déplacées, mais leurs
   positions ne sont pas sauvegardées et le code les recale sur une grille.
   L'affichage d'icônes système n'est pas réglable depuis Paramètres.
 - Paramètres contient actuellement des pages système Linux, applications
   Windows, réseau, son/batterie, clavier/trackpad, apparence et mises à jour.
-  Les pages Écran et définition et À propos (BUILD-INFO) sont aussi présentes.
   Les options d'apparence visibles incluent le thème clair/sombre et
   l'alignement de la barre des tâches ; elles ne constituent pas encore un
   panneau de personnalisation complet.
@@ -97,7 +61,6 @@ Une sous-tâche cochée ne valide pas toute la cible dont elle dépend.
 - [ ] Proposer l'alignement sur une grille ou le placement libre, avec
   coordonnées enregistrées, limites de l'écran respectées et réorganisation
   après changement de résolution ou d'échelle.
-  - [x] Déplacer les trois icônes prédéfinies sur une grille et limiter leur position à l'écran ; positions uniquement en mémoire.
 - [ ] Ajouter un menu contextuel du bureau : créer un raccourci, actualiser,
   organiser, choisir l'affichage et ouvrir les paramètres pertinents.
 - [ ] Gérer sélection, multi-sélection, déplacement, menu contextuel et
@@ -121,17 +84,13 @@ Corbeille doit, elle, demander confirmation lorsque nécessaire.
 - [ ] Permettre de rechercher, lancer, épingler et désépingler une application
   depuis Démarrer ; afficher clairement les applications indisponibles ou
   incompatibles.
-  - [x] Épingler/désépingler Explorer et Paramètres par clic droit dans la barre
-    et Démarrer ; créer/retirer leurs raccourcis de bureau et conserver ces choix.
 - [ ] Afficher les applications ouvertes, leur fenêtre active et leur état
   (ouverte, réduite, attention requise), avec bascule et aperçu si disponible.
-  - [x] Afficher/basculer Explorer et Paramètres dans la barre du prototype ; pas de suivi général des fenêtres Linux externes.
 - [ ] Rendre la zone de notification actionnable et accessible au clavier ;
   distinguer l'état réseau/audio/batterie de la disponibilité réelle des
   réglages correspondants.
 - [ ] Conserver les préférences de position, d'alignement et d'épinglage après
   redémarrage.
-  - [x] Conserver l'alignement de la barre et le thème sur racine persistante ; positions et épingles restent à sauvegarder.
 - [ ] Ajouter une recherche cohérente couvrant applications, fichiers et
   paramètres, avec indication de la source des résultats.
 - [ ] Clarifier les actions de session, arrêt et redémarrage et demander
@@ -159,14 +118,11 @@ expliquée.
 
 - [ ] Organiser les pages avec navigation, recherche dans les réglages,
   descriptions courtes, états de chargement, erreurs et retours de réussite.
-  - [x] Navigation latérale, cartes, télémétrie et journaux d'action ; pas de recherche transversale dans les réglages.
-- [x] Ajouter À propos avec version, commit et date lus dans BUILD-INFO, et signaler son absence sur les anciennes images.
 - [ ] Enregistrer les modifications de façon prévisible et indiquer si elles
   s'appliquent immédiatement, à la prochaine session ou après redémarrage.
 - [ ] Éviter de demander des privilèges administrateur au bureau entier ;
   demander une autorisation ciblée uniquement pour une action système qui la
   nécessite.
-  L'exigence reste ouverte : le démarrage ISO exécute encore le shell en root.
 
 ## Fonctionnalités natives pratiques à long terme
 
@@ -318,7 +274,6 @@ connaître les détails internes de Linux ou de Windows.
   de changements de résolution, sans texte ou boutons inaccessibles.
 - [ ] Compléter le redimensionnement, l'empilement et le focus des fenêtres,
   ainsi que les états maximisé, réduit et restauré.
-  - [x] Implémenter ces états pour les deux fenêtres internes Explorer/Paramètres (`wm.rs`) ; validation ergonomique complète et gestion des fenêtres externes distinctes.
 - [ ] Assurer la navigation clavier, les raccourcis cohérents, les libellés
   accessibles et un contraste suffisant dans les thèmes clair et sombre.
 - [ ] Respecter le clavier réellement configuré, les caractères Unicode,

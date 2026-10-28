@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=X-XFCE-Helper
-X-XFCE-Category=FileManager
-Name=Explorer Winlux
-Icon=system-file-manager
-X-XFCE-Binaries=winlux-shell-app;
-X-XFCE-Commands=/usr/bin/winlux-shell-app explorer;
-X-XFCE-CommandsWithParameter=/usr/bin/winlux-shell-app explorer "%s";

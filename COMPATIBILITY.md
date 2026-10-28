@@ -6,9 +6,6 @@ réalisable avec quelques DLL de remplacement. Les programmes dépendent aussi
 du noyau Windows, de son ordonnanceur, de DirectX, du registre, des pilotes,
 des codecs, des services et parfois d’un runtime managé.
 
-Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir le
-[diagnostic et les blocages constatés](docs/CHATGPT-WINDOWS.md).
-
 ## Ce qui est déjà partagé
 
 - Les exécutables PE64 peuvent être chargés directement par le runtime.
@@ -21,12 +18,6 @@ Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir l
   sont bridées.
 - Des DLL courantes sont intégrées : `user32`, `gdi32`, `advapi32`, `ole32`,
   `bcrypt`, `version`, `shell32`, `ws2_32`, `mfplat` et `winmm`.
-- Les contrats API-set COM, registre, RTL, sécurité, eventing et downlevel
-  sont redirigés vers les backends correspondants. Cela ne complète pas leurs
-  fonctions manquantes. `rpcrt4` fournit uniquement `UuidCreate` (UUID v4),
-  sans transport RPC. Les fournisseurs ETW peuvent être enregistrés et retirés
-  dans le processus ; les écritures restent inactives, sans session de capture,
-  contrôleur ETW ni journal ETL.
 - La fondation COM/OLE gère l’initialisation d’appartement par thread,
   `CoTaskMemAlloc/Realloc/Free`, les GUID, la mémoire globale Win32 et un vrai
   `IStream` en mémoire partageant son `HGLOBAL` (lecture, écriture, seek, taille,
@@ -63,8 +54,8 @@ Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir l
   `GetQueuedCompletionStatus[Ex]`, `PostQueuedCompletionStatus`) et testé avec des
   I/O overlapped associées et la lecture par lot. Le plafond de concurrence est
   appliqué aux workers; un worker libère son slot lorsqu’il rappelle GQCS. La
-  sortie d'un worker Win32 libère également son slot (test dédié). L'annulation
-  d'E/S déjà bloquantes et les autres sémantiques IOCP avancées restent incomplètes.
+  sortie d’un worker sans nouvel appel et l’annulation d’E/S déjà bloquante
+  restent incomplètes.
 - Winsock relie les sockets POSIX, les codes d’erreur WSA et les résolutions
   `getaddrinfo` A/W; TCP loopback, `bind/listen/connect/accept/send/recv` sont
   testés, mais ce n’est pas encore une implémentation complète de Winsock.
@@ -73,8 +64,8 @@ Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir l
   suivis par Winlux. `VirtualQuery` décrit les régions mémoire que Winlux a
   lui-même réservées/commitées, pas l’ensemble des mappings Linux du processus.
 - Les opérations fichier A/W couvrent copie, déplacement, chemins absolus et
-  répertoires ; partage Windows avancé et handles hérités restent absents.
-  Les I/O overlapped sont disponibles dans le sous-ensemble décrit ci-dessus.
+  répertoires; partage Windows avancé, handles hérités et I/O overlapped restent
+  absents.
 - La CRT (`msvcrt`/`ucrtbase`) fournit les chaînes étroites et larges courantes,
   les conversions (`atoi`/`strtol`/`strtod`/`_itoa`/`_itow`), la classification de
   caractères, les fonctions mathématiques usuelles, `qsort`/`bsearch`, le
@@ -124,7 +115,7 @@ restent à faire ; cela ne garantit pas .NET ou Photoshop.
 `FreeLibrary` ne démonte pas encore le mapping PE : les DLL chargées restent
 présentes jusqu’à la fin du processus afin de ne pas invalider des pointeurs
 encore détenus par le code invité. Les handles de fichiers ignorent encore les
-partages Windows avancés ; les opérations overlapped restent partielles.
+partages Windows avancés et les opérations asynchrones/overlapped.
 
 Le noyau fenêtres/messages (`user32`) fonctionne : classes, table HWND, file de
 messages par thread, appel du `WndProc` invité et une boucle `GetMessage`/
@@ -196,18 +187,13 @@ restent approximatifs. `SetDIBitsToDevice` et `StretchDIBits` traitent égalemen
 les DIB BI_RGB 1/4/8/16/24/32 bits, avec palettes RGB, limites de dimensions et
 redimensionnement au plus proche voisin. Les bandes partielles et DIB_PAL_COLORS
 restent non pris en charge. Manquent encore les autres compressions DIB, les autres
-ROP et les régions. Un double tampon par pixmap et un cache des commandes
-existent déjà dans le backend X11 ; cela ne constitue pas un cache séparé de
-chaque fenêtre interne du shell ni une mesure de sa fluidité.
+ROP, les régions
+et le double tampon.
 L’association `.desktop` et binfmt est préparée, mais n’a pas été
 installée ni validée sur une session de bureau réelle. Le script ISO produit
 maintenant le staging Linux bootable utilisé par les tests et la VM persistante.
 
 ## Objectif de compatibilité .NET Windows
-
-Les versions Windows de Claude et ChatGPT font partie des cibles demandées.
-Elles ne sont pas encore prises en charge ; voir le [relevé des installateurs
-et des blocages constatés](docs/CLAUDE-CHATGPT-WINDOWS.md).
 
 La compatibilité des applications Windows .NET est un objectif du projet, et
 pas seulement une limite à documenter. La cible à terme comprend les

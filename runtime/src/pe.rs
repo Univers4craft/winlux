@@ -80,12 +80,10 @@ pub fn rd16(b: &[u8], o: usize) -> Option<u16> {
     b.get(o..o + 2).map(|s| u16::from_le_bytes([s[0], s[1]]))
 }
 pub fn rd32(b: &[u8], o: usize) -> Option<u32> {
-    b.get(o..o + 4)
-        .map(|s| u32::from_le_bytes(s.try_into().unwrap()))
+    b.get(o..o + 4).map(|s| u32::from_le_bytes(s.try_into().unwrap()))
 }
 pub fn rd64(b: &[u8], o: usize) -> Option<u64> {
-    b.get(o..o + 8)
-        .map(|s| u64::from_le_bytes(s.try_into().unwrap()))
+    b.get(o..o + 8).map(|s| u64::from_le_bytes(s.try_into().unwrap()))
 }
 
 /// Lit le champ Subsystem de l'en-tête optionnel sans valider l'image.
@@ -155,9 +153,7 @@ impl PeImage {
                 let mut v = Vec::with_capacity(nsections);
                 let mut s = opt + opt_size;
                 for _ in 0..nsections {
-                    let h = file
-                        .get(s..s + 40)
-                        .ok_or(PeError::Bad("table des sections tronquée"))?;
+                    let h = file.get(s..s + 40).ok_or(PeError::Bad("table des sections tronquée"))?;
                     let name_end = h[..8].iter().position(|&c| c == 0).unwrap_or(8);
                     v.push(Section {
                         name: String::from_utf8_lossy(&h[..name_end]).into_owned(),
@@ -214,10 +210,7 @@ mod tests {
 
     #[test]
     fn rejette_un_fichier_non_pe() {
-        assert!(matches!(
-            PeImage::parse(b"not an exe"),
-            Err(PeError::TooSmall)
-        ));
+        assert!(matches!(PeImage::parse(b"not an exe"), Err(PeError::TooSmall)));
         let mut b = vec![0u8; 0x80];
         b[..2].copy_from_slice(b"MZ");
         assert!(matches!(PeImage::parse(&b), Err(PeError::NotPe)));

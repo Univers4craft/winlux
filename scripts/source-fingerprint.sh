@@ -4,7 +4,7 @@ set -eu
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root"
 {
-    for directory in runtime testexe testdll integration scripts assets .cargo; do
+    for directory in runtime testexe testdll integration scripts .cargo; do
         test ! -d "$directory" || find "$directory" -type f
     done
     printf '%s\n' Cargo.toml Cargo.lock VERSION

@@ -433,28 +433,15 @@ done <"$links"
 test -z "$(tool sort "$work/new-files" | tool uniq -d)" || fail "fichiers/liens dupliqués"
 test -x "$payload/usr/bin/winlux" && test -x "$payload/usr/bin/winlux-update" || fail "runtime ou outil de mise à jour absent"
 test "$(sed -n '1p' "$payload/usr/share/winlux/version")" = "$version" || fail "version du paquet incohérente"
-include_boot=0
 if test "$scope" = system; then
-    test -x "$payload/init" && test -f "$payload/opt/winlux/tests/gui_demo.exe" || fail "paquet système incomplet"
-    case ",$components," in *,boot,*|*,kernel,*|*,drivers,*) include_boot=1 ;; esac
-    if test "$include_boot" = 1; then
-        test -f "$payload/boot/vmlinuz" && test -f "$payload/boot/winlux-initramfs.cpio.gz" || fail "démarrage système incomplet"
-        tool find "$payload/lib/modules" -type f | grep -q . || fail "modules noyau absents"
-    else
-        if grep -Eq '^(boot|lib/modules)(/|$)' "$work/new-files"; then fail 'fichiers de démarrage non annoncés'; fi
-    fi
+    test -x "$payload/init" && test -f "$payload/opt/winlux/tests/gui_demo.exe" && test -f "$payload/boot/vmlinuz" && test -f "$payload/boot/winlux-initramfs.cpio.gz" || fail "paquet système incomplet"
+    tool find "$payload/lib/modules" -type f | grep -q . || fail "modules noyau absents"
 fi
 cp "$work/new-files" "$work/targets"
 cp "$work/new-files" "$work/managed-files"
 if test -f "$state_dir/installed-files"; then
     while IFS= read -r path; do
         safe_path "$path" || fail "inventaire installé invalide"
-        if test "$scope" = system && test "$include_boot" = 0; then
-            case "$path" in boot/*|lib/modules/*)
-                printf '%s\n' "$path" >>"$work/managed-files"
-                continue ;;
-            esac
-        fi
         if test "$scope" = system; then printf '%s\n' "$path" >>"$work/targets";
         else printf '%s\n' "$path" >>"$work/managed-files"; fi
     done <"$state_dir/installed-files"

@@ -26,7 +26,6 @@ xorg=${WINLUX_XORG:-/usr/lib/xorg/Xorg}
 xorg_modules=${WINLUX_XORG_MODULES:-/usr/lib/xorg/modules}
 truetype_fonts=${WINLUX_TRUETYPE_FONTS:-/usr/share/fonts/truetype/dejavu}
 xft_library=${WINLUX_XFT_LIBRARY:-$(ldconfig -p | awk '$1 == "libXft.so.2" { print $NF; exit }')}
-cairo_library=${WINLUX_CAIRO_LIBRARY:-$(ldconfig -p | awk '$1 == "libcairo.so.2" { print $NF; exit }')}
 
 for tool in cargo bash cpio depmod modprobe fakeroot find gzip grub-mkrescue grub-script-check ldd ldconfig sha256sum xorriso zstd; do
     command -v "$tool" >/dev/null 2>&1 || {
@@ -44,7 +43,6 @@ for path in /usr/bin/busybox /usr/bin/xrandr /usr/bin/curl /usr/bin/install /usr
 done
 test -r /usr/share/X11/xorg.conf.d/40-libinput.conf || { echo "configuration libinput Xorg absente" >&2; exit 1; }
 test -r "$xft_library" || { echo "bibliothèque Xft absente : $xft_library" >&2; exit 1; }
-test -r "$cairo_library" || { echo "bibliothèque Cairo absente : $cairo_library" >&2; exit 1; }
 for module in "$virtio_dma_module" "$virtio_gpu_module" "$virtio_input_module" "$serio_raw_module" "$psmouse_module" "$hid_module" "$usbhid_module" "$hid_generic_module"; do
     test -r "$module" || { echo "module noyau requis absent : $module" >&2; exit 1; }
 done
@@ -74,32 +72,13 @@ chmod 755 "$stage/usr/bin/winlux-display"
 mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
 cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
-cp "$root/scripts/winlux-browsers.sh" "$stage/usr/bin/winlux-browsers"
-chmod 755 "$stage/usr/bin/winlux-browsers"
 cp "$root/integration/winlux-open" "$stage/usr/bin/winlux-open"
 chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script"
 mkdir -p "$stage/usr/share/winlux"
 printf '%s\n' "${WINLUX_BUILD_VERSION:-$(cat "$root/VERSION")}" >"$stage/usr/share/winlux/version"
 sh "$root/scripts/build-info.sh" "$(cat "$stage/usr/share/winlux/version")" system >"$stage/usr/share/winlux/BUILD-INFO"
 printf 'system\n' >"$stage/usr/share/winlux/update-scope"
-
-# Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
-wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
-if test -f "$wallpaper_src"; then
-    if command -v convert >/dev/null 2>&1; then
-        convert "$wallpaper_src" -filter Lanczos -resize '1920x1080^' -gravity center -extent 1920x1080 -type TrueColor BMP3:"$stage/usr/share/winlux/wallpaper.bmp"
-    elif command -v ffmpeg >/dev/null 2>&1; then
-        ffmpeg -hide_banner -loglevel error -i "$wallpaper_src" -vf 'scale=1920:1080:force_original_aspect_ratio=increase:flags=lanczos,crop=1920:1080,setsar=1' -frames:v 1 -pix_fmt bgr24 "$stage/usr/share/winlux/wallpaper.bmp"
-    else
-        echo 'fond PNG : ImageMagick (convert) ou ffmpeg requis' >&2
-        exit 1
-    fi
-fi
-
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
-cp "$root/scripts/test-terminal-guest.sh" "$stage/opt/winlux/scripts/test-terminal-guest.sh"
-cp "$root/scripts/test-native-session-guest.py" "$stage/opt/winlux/scripts/test-native-session-guest.py"
-cp "$root/scripts/test-browsers-guest.sh" "$stage/opt/winlux/scripts/test-browsers-guest.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
@@ -192,7 +171,7 @@ if test -d /usr/share/alsa; then
 fi
 # Keep normal module names and dependency metadata so udev/modprobe can bind
 # network, audio and common input devices instead of relying on host drivers.
-for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1; do
+for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio; do
     modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
         test "$directive" = insmod || continue
         destination="$stage${module%.zst}"
@@ -213,15 +192,6 @@ audio:x:29:root
 video:x:44:root
 input:x:109:root
 GROUP
-cat >"$stage/etc/mdev.conf" <<'MDEV'
-null 0:0 0666
-zero 0:0 0666
-full 0:0 0666
-random 0:0 0666
-urandom 0:0 0666
-ptmx 0:0 0666
-tty 0:0 0666
-MDEV
 cat >"$stage/etc/winlux/input.conf" <<'INPUT'
 XKB_LAYOUT=fr
 TAP_TO_CLICK=1
@@ -232,13 +202,11 @@ THEME=dark
 PREFS
 cp -L "$kernel" "$stage/boot/vmlinuz"
 printf '%s\n' "$kernel_release" >"$stage/usr/share/winlux/kernel-version"
-# A visible, usable terminal is mandatory for desktop and console applications.
-sh "$root/scripts/stage-terminal.sh" "$stage"
-# Boîte d'erreur minimale pour les lancements sans bureau Linux complet.
-if command -v xmessage >/dev/null 2>&1; then
-    cp "$(command -v xmessage)" "$stage/usr/bin/xmessage"
-    chmod 755 "$stage/usr/bin/xmessage"
-    copy_shared_libraries "$(command -v xmessage)"
+# Terminal Linux pour le bouton Terminal de la barre des tâches (facultatif).
+if command -v xterm >/dev/null 2>&1; then
+    cp "$(command -v xterm)" "$stage/usr/bin/xterm"
+    chmod 755 "$stage/usr/bin/xterm"
+    copy_shared_libraries "$(command -v xterm)"
 fi
 # Microsoft Edge, navigateur par défaut : intégré seulement si un paquet
 # .deb officiel est fourni (WINLUX_EDGE_DEB=/chemin/microsoft-edge-stable.deb,
@@ -257,17 +225,9 @@ if [ -n "${WINLUX_EDGE_DEB:-}" ]; then
     copy_shared_libraries "$stage/opt/microsoft/msedge/msedge"
     ln -sf /opt/microsoft/msedge/microsoft-edge "$stage/usr/bin/microsoft-edge-stable"
 fi
-# Offline browser catalogue; official packages are prepared before this build.
-browser_packages=${WINLUX_BROWSER_PACKAGES:-"$root/build/browser-packages"}
-if test -f "$browser_packages/edge.deb"; then
-    sh "$root/scripts/stage-browser-packages.sh" "$stage" "$browser_packages"
-fi
 mkdir -p "$stage$(dirname -- "$xft_library")"
 cp -L "$xft_library" "$stage$xft_library"
 copy_shared_libraries "$xft_library"
-mkdir -p "$stage$(dirname -- "$cairo_library")"
-cp -L "$cairo_library" "$stage$cairo_library"
-copy_shared_libraries "$cairo_library"
 cp -a "$xorg_modules" "$stage/usr/lib/xorg/modules"
 find "$xorg_modules" -type f -name '*.so' | while IFS= read -r module; do
     copy_shared_libraries "$module"
@@ -315,28 +275,6 @@ for icon in preferences-desktop distributor-logo-linux-mint; do
         cp "$source" "$stage/usr/share/pixmaps/$icon.png"
     fi
 done
-# --- Intégration binfmt/MIME/.desktop (tâches 9-10) ---
-# Configuration binfmt : le noyau lance automatiquement winlux pour les .exe MZ.
-mkdir -p "$stage/etc/binfmt.d"
-cp "$root/integration/winlux-binfmt.conf" "$stage/etc/binfmt.d/winlux.conf"
-# Type MIME pour les .exe.
-mkdir -p "$stage/usr/share/mime/packages"
-cp "$root/integration/x-ms-dos-executable.xml" "$stage/usr/share/mime/packages/winlux.xml"
-# .desktop pour ouvrir les .exe depuis un gestionnaire de fichiers.
-cp "$root/integration/winlux.desktop" "$stage/usr/share/applications/winlux.desktop"
-cp "$root/integration/winlux-browser.desktop" "$stage/usr/share/applications/winlux-browser.desktop"
-# Xsession et .desktop pour les display managers (installation sur disque).
-cp "$root/scripts/xsession-winlux" "$stage/usr/share/winlux/xsession-winlux"
-cp "$root/scripts/winlux-session.desktop" "$stage/usr/share/applications/winlux-session.desktop"
-chmod 755 "$stage/usr/share/winlux/xsession-winlux"
-# Thème : polices DejaVu déjà copiées ; on s'assure que fontconfig est à jour
-# et qu'aucune dépendance propriétaire n'est requise (pas de Segoe UI, pas de
-# polices Microsoft). Le runtime traduit les noms de police Windows vers DejaVu.
-if command -v fc-cache >/dev/null 2>&1; then
-    fc-cache -f "$stage/usr/share/fonts" 2>/dev/null || true
-fi
-sh "$root/scripts/stage-desktop-components.sh" "$stage"
-
 cat >"$stage/init" <<'INIT'
 #!/bin/sh
 PATH=/bin:/usr/bin:/sbin:/usr/sbin
@@ -348,11 +286,6 @@ umask 077
 /bin/busybox mount -t proc proc /proc 2>/dev/null || true
 /bin/busybox mount -t sysfs sysfs /sys 2>/dev/null || true
 /bin/busybox mount -t devtmpfs devtmpfs /dev 2>/dev/null || true
-/bin/busybox chmod 666 /dev/null /dev/zero /dev/random /dev/urandom
-/bin/busybox ln -sf /proc/self/fd /dev/fd
-/bin/busybox ln -sf /proc/self/fd/0 /dev/stdin
-/bin/busybox ln -sf /proc/self/fd/1 /dev/stdout
-/bin/busybox ln -sf /proc/self/fd/2 /dev/stderr
 /bin/busybox mkdir -p /dev/shm /dev/pts
 /bin/busybox mount -t tmpfs -o mode=1777 tmpfs /dev/shm 2>/dev/null || true
 /bin/busybox mount -t devpts devpts /dev/pts 2>/dev/null || true
@@ -391,73 +324,17 @@ for driver in virtio_net e1000 e1000e snd_hda_intel snd_intel8x0; do /bin/busybo
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
-# Existing installations retain /etc, including an older mdev configuration.
-/bin/busybox chmod 666 /dev/null /dev/zero /dev/random /dev/urandom /dev/ptmx /dev/tty
-# Enregistrer binfmt pour les .exe (MZ) si le système de fichiers est monté.
-if /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null; then
-    if test -r /etc/binfmt.d/winlux.conf; then
-        /bin/busybox cat /etc/binfmt.d/winlux.conf > /proc/sys/fs/binfmt_misc/register 2>/dev/null || true
-    fi
-fi
 /bin/busybox mkdir -p /tmp/.X11-unix /run /root/.local/share/winlux
 /bin/busybox chmod 1777 /tmp
 /bin/busybox rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
 /bin/busybox ip link set lo up
 /bin/busybox mkdir -p /run/winlux /etc/winlux
 /bin/busybox touch /etc/winlux/live-session
-if ! /bin/busybox grep -q '^winlux-web:' /etc/passwd; then
-    browser_uid=1001
-    while /bin/busybox awk -F: -v n="$browser_uid" '$3 == n { found=1 } END { exit !found }' /etc/passwd /etc/group; do
-        browser_uid=$((browser_uid + 1))
-    done
-    browser_gid=$(/bin/busybox awk -F: '$1 == "winlux-web" { print $3; exit }' /etc/group)
-    if test -z "$browser_gid"; then
-        browser_gid=$browser_uid
-        printf 'winlux-web:x:%s:\n' "$browser_gid" >> /etc/group
-    fi
-    printf 'winlux-web:!:%s:%s:Winlux browser:/home/winlux-web:/bin/sh\n' "$browser_uid" "$browser_gid" >> /etc/passwd
-fi
-/bin/busybox mkdir -p /home/winlux-web
-/bin/busybox chmod 755 /home
-/bin/busybox chown winlux-web:winlux-web /home/winlux-web
-/bin/busybox chmod 700 /home/winlux-web
-if test -f /usr/share/winlux/browsers/edge.deb; then
-    /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 || true
-fi
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
 # explicitly so the graphical power button really shuts down the guest.
 /usr/bin/winlux-network start &
-if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
-    result=0
-    /usr/bin/python3 /opt/winlux/scripts/test-native-session-guest.py || result=$?
-    echo "WINLUX_NATIVE_EXIT=$result"
-    if test "$result" != 0; then
-        /bin/busybox cat /run/winlux/native-session.log /run/winlux/window-manager.log /run/winlux/panel.log /run/winlux/screensaver.log /var/lib/winlux/native-programs.log 2>/dev/null || true
-    fi
-    for service in catalogue panel screensaver window-manager; do
-        if test -f "/run/winlux/$service.pid"; then /bin/busybox kill "$(/bin/busybox cat "/run/winlux/$service.pid")" 2>/dev/null || true; fi
-    done
-    /bin/busybox killall xfdesktop mousepad xterm winlux msedge chrome firefox xfconfd dconf-service 2>/dev/null || true
-    /bin/busybox sleep 1
-    /bin/busybox killall Xvfb 2>/dev/null || true
-    /bin/busybox sync
-    /bin/busybox mount -o remount,ro / 2>/dev/null || true
-    /bin/busybox poweroff -f
-    while :; do /bin/busybox sleep 2; done
-fi
-if /bin/busybox grep -qw 'winlux.browser-smoke=1' /proc/cmdline; then
-    result=0
-    /bin/sh /opt/winlux/scripts/test-browsers-guest.sh || result=$?
-    echo "WINLUX_BROWSERS_RESULT=$result"
-    if test "$result" != 0; then
-        /bin/busybox cat /tmp/*-dom.log /tmp/firefox-render.log /run/winlux/browser-setup.log 2>/dev/null || true
-    fi
-    /bin/busybox sync
-    /bin/busybox poweroff -f
-    while :; do /bin/busybox sleep 2; done
-fi
 if /bin/busybox grep -qw 'winlux.smoke=1' /proc/cmdline; then
     # An explicit diagnostic boot, only used with a disposable test disk.
     for attempt in $(/bin/busybox seq 1 20); do
@@ -497,15 +374,6 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     /bin/busybox grep -Ei 'libinput|input device|mouse|keyboard|error|cursor|config' /tmp/Xorg.0.log 2>/dev/null || true
     if ! /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; then
         /bin/busybox cat /tmp/Xorg.0.log /tmp/xorg-console.log >&2
-        /bin/sh
-    fi
-    export DISPLAY=:0 XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
-    export XDG_CONFIG_DIRS=/etc/xdg XDG_DATA_DIRS=/usr/local/share:/usr/share
-    export XDG_RUNTIME_DIR=/run/user/0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus
-    export WINLUX_NATIVE_SHELL=1
-    if test -d /usr/lib/locale/fr_FR.utf8; then export LANG=fr_FR.UTF-8; else export LANG=C.UTF-8; fi
-    if ! /usr/bin/winlux-native-session >/run/winlux/native-session.log 2>&1; then
-        /bin/busybox cat /run/winlux/native-session.log >&2
         /bin/sh
     fi
     (
@@ -558,8 +426,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         for state in /sys/class/net/*/operstate; do
             if test -r "$state" && test "$(/bin/busybox cat "$state")" = up; then tray_network=1; break; fi
         done
-        export WINLUX_UI_SCALE="$ui_scale" WINLUX_THEME="$desktop_theme"
-        /usr/bin/xfdesktop --disable-wm-check >/run/winlux/desktop.log 2>&1 &
+        DISPLAY=:0 WINLUX_DESKTOP_DEMO=1 WINLUX_INPUT_DIAG="$input_diag" WINLUX_UI_SCALE="$ui_scale" WINLUX_TASKBAR_ALIGN="$taskbar_align" WINLUX_THEME="$desktop_theme" WINLUX_TRAY_BATTERY="$tray_battery" WINLUX_TRAY_BATTERY_PRESENT="$tray_battery_present" WINLUX_TRAY_NETWORK="$tray_network" \
+            /usr/bin/winlux /opt/winlux/tests/gui_demo.exe &
         desktop_pid=$!
         echo "WINLUX_DESKTOP_READY pid=$desktop_pid"
         while /bin/busybox kill -0 "$desktop_pid" 2>/dev/null; do
@@ -594,16 +462,12 @@ parallel_status=$?
 echo "WINLUX_LIVE_PARALLEL_EXIT=$parallel_status"
 
 echo "Winlux live test: Xvfb GUI rendering"
-/usr/bin/Xvfb :99 -ac -screen 0 1920x1080x24 -nolisten tcp \
+/usr/bin/Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp \
     -fp /usr/share/fonts/X11/misc,built-ins >/tmp/xvfb.log 2>&1 &
 xvfb_pid=$!
 /bin/busybox sleep 1
 x11_status=1
-terminal_status=1
 if /bin/busybox kill -0 "$xvfb_pid" 2>/dev/null; then
-    DISPLAY=:99 /bin/sh /opt/winlux/scripts/test-terminal-guest.sh
-    terminal_status=$?
-    if test "$terminal_status" != 0; then /bin/busybox cat /tmp/winlux-terminal.log >&2; fi
     DISPLAY=:99 WINLUX_TEST=salut WINLUX_CAPTURE_TEST=1 WINLUX_DIB_TEST=1 \
         /usr/bin/winlux /opt/winlux/tests/gui_demo.exe
     x11_status=$?
@@ -616,7 +480,7 @@ echo "WINLUX_LIVE_X11_EXIT=$x11_status"
 result=0
 if [ "$sequential_status" -ne 0 ] || \
    [ "$parallel_status" -ne 0 ] || \
-   [ "$x11_status" -ne 0 ] || [ "$terminal_status" -ne 0 ]; then
+   [ "$x11_status" -ne 0 ]; then
     result=1
 fi
 echo "WINLUX_LIVE_RESULT=$result"
@@ -638,7 +502,6 @@ fakeroot sh -c '
     mknod -m 666 "$stage/dev/tty" c 5 0
     mknod -m 666 "$stage/dev/ttyS0" c 4 64
     cd "$stage"
-    chown -R 0:0 .
     find . -print0 | cpio --null --create --format=newc --quiet
 ' >"$WINLUX_LIVE_CPIO"
 gzip -n -9 -c "$WINLUX_LIVE_CPIO" >"$work/winlux-initramfs.cpio.gz"
@@ -655,11 +518,11 @@ if serial --unit=0 --speed=115200; then
     terminal_output serial console
 fi
 menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
-    linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4
+    linux /boot/vmlinuz console=ttyS0,115200n8 rdinit=/init panic=1 loglevel=4
     initrd /boot/winlux-initramfs.cpio.gz
 }
 function winlux_live {
-    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
     initrd /boot/winlux-initramfs.cpio.gz
 }
 menuentry "Winlux Desktop" {

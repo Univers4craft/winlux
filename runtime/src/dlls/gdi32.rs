@@ -94,11 +94,7 @@ pub struct LogFontW {
 }
 
 pub extern "win64" fn get_stock_object(index: i32) -> usize {
-    if index >= 0 {
-        (index as usize) + 1
-    } else {
-        0
-    }
+    if index >= 0 { (index as usize) + 1 } else { 0 }
 }
 
 pub extern "win64" fn create_solid_brush(color: u32) -> usize {
@@ -125,11 +121,7 @@ fn create_font_common(
         italic: italic != 0,
         underline: underline != 0,
         strikeout: strikeout != 0,
-        face: if face.is_empty() {
-            "fixed".to_string()
-        } else {
-            face
-        },
+        face: if face.is_empty() { "fixed".to_string() } else { face },
     })
 }
 
@@ -149,11 +141,7 @@ pub unsafe extern "win64" fn create_font_a(
     _pitch_and_family: u32,
     face: *const u8,
 ) -> usize {
-    let face = if face.is_null() {
-        String::new()
-    } else {
-        crate::dlls::cstr(face)
-    };
+    let face = if face.is_null() { String::new() } else { crate::dlls::cstr(face) };
     create_font_common(height, width, weight, italic, underline, strikeout, face)
 }
 
@@ -173,11 +161,7 @@ pub unsafe extern "win64" fn create_font_w(
     _pitch_and_family: u32,
     face: *const u16,
 ) -> usize {
-    let face = if face.is_null() {
-        String::new()
-    } else {
-        crate::dlls::wstr(face)
-    };
+    let face = if face.is_null() { String::new() } else { crate::dlls::wstr(face) };
     create_font_common(height, width, weight, italic, underline, strikeout, face)
 }
 
@@ -198,18 +182,12 @@ pub unsafe extern "win64" fn get_object_w(obj: usize, size: i32, out: *mut c_voi
 }
 
 unsafe fn get_object_common(obj: usize, size: i32, out: *mut c_void, wide: bool) -> i32 {
-    let Some(info) = gui::object_info(obj) else {
-        return 0;
-    };
+    let Some(info) = gui::object_info(obj) else { return 0 };
     let needed = match &info {
         gui::GdiObjectInfo::Brush { .. } => core::mem::size_of::<LogBrush>(),
         gui::GdiObjectInfo::Pen { .. } => core::mem::size_of::<LogPen>(),
         gui::GdiObjectInfo::Font(_) => {
-            if wide {
-                core::mem::size_of::<LogFontW>()
-            } else {
-                core::mem::size_of::<LogFontA>()
-            }
+            if wide { core::mem::size_of::<LogFontW>() } else { core::mem::size_of::<LogFontA>() }
         }
         gui::GdiObjectInfo::Bitmap { .. } => core::mem::size_of::<BitmapObject>(),
     };
@@ -221,103 +199,70 @@ unsafe fn get_object_common(obj: usize, size: i32, out: *mut c_void, wide: bool)
         return 0;
     }
     match info {
-        gui::GdiObjectInfo::Brush {
-            style,
-            color,
-            hatch,
-        } => {
-            std::ptr::write_unaligned(
-                out.cast::<LogBrush>(),
-                LogBrush {
-                    style,
-                    color,
-                    hatch,
-                },
-            );
+        gui::GdiObjectInfo::Brush { style, color, hatch } => {
+            std::ptr::write_unaligned(out.cast::<LogBrush>(), LogBrush { style, color, hatch });
         }
-        gui::GdiObjectInfo::Pen {
-            style,
-            width,
-            color,
-        } => {
-            std::ptr::write_unaligned(
-                out.cast::<LogPen>(),
-                LogPen {
-                    style,
-                    width: WinPoint { x: width, y: 0 },
-                    color,
-                },
-            );
+        gui::GdiObjectInfo::Pen { style, width, color } => {
+            std::ptr::write_unaligned(out.cast::<LogPen>(), LogPen {
+                style,
+                width: WinPoint { x: width, y: 0 },
+                color,
+            });
         }
-        gui::GdiObjectInfo::Bitmap {
-            width,
-            height,
-            width_bytes,
-            bits_per_pixel,
-            bits,
-        } => {
-            std::ptr::write_unaligned(
-                out.cast::<BitmapObject>(),
-                BitmapObject {
-                    bm_type: 0,
-                    bm_width: width as i32,
-                    bm_height: height as i32,
-                    bm_width_bytes: width_bytes as i32,
-                    bm_planes: 1,
-                    bm_bits_pixel: bits_per_pixel,
-                    bm_bits: bits as *mut c_void,
-                },
-            );
+        gui::GdiObjectInfo::Bitmap { width, height, width_bytes, bits_per_pixel, bits } => {
+            std::ptr::write_unaligned(out.cast::<BitmapObject>(), BitmapObject {
+                bm_type: 0,
+                bm_width: width as i32,
+                bm_height: height as i32,
+                bm_width_bytes: width_bytes as i32,
+                bm_planes: 1,
+                bm_bits_pixel: bits_per_pixel,
+                bm_bits: bits as *mut c_void,
+            });
         }
         gui::GdiObjectInfo::Font(font) if wide => {
             let mut face = [0u16; 32];
             for (dst, ch) in face.iter_mut().zip(font.face.encode_utf16()) {
                 *dst = ch;
             }
-            std::ptr::write_unaligned(
-                out.cast::<LogFontW>(),
-                LogFontW {
-                    height: font.height,
-                    width: font.width,
-                    escapement: 0,
-                    orientation: 0,
-                    weight: font.weight,
-                    italic: font.italic as u8,
-                    underline: font.underline as u8,
-                    strikeout: font.strikeout as u8,
-                    charset: 1,
-                    out_precision: 0,
-                    clip_precision: 0,
-                    quality: 0,
-                    pitch_and_family: 0,
-                    face,
-                },
-            );
+            std::ptr::write_unaligned(out.cast::<LogFontW>(), LogFontW {
+                height: font.height,
+                width: font.width,
+                escapement: 0,
+                orientation: 0,
+                weight: font.weight,
+                italic: font.italic as u8,
+                underline: font.underline as u8,
+                strikeout: font.strikeout as u8,
+                charset: 1,
+                out_precision: 0,
+                clip_precision: 0,
+                quality: 0,
+                pitch_and_family: 0,
+                face,
+            });
         }
         gui::GdiObjectInfo::Font(font) => {
             let mut face = [0u8; 32];
             let ansi = crate::dlls::encode_ansi(&font.face);
             let count = ansi.len().min(face.len() - 1);
             face[..count].copy_from_slice(&ansi[..count]);
-            std::ptr::write_unaligned(
-                out.cast::<LogFontA>(),
-                LogFontA {
-                    height: font.height,
-                    width: font.width,
-                    escapement: 0,
-                    orientation: 0,
-                    weight: font.weight,
-                    italic: font.italic as u8,
-                    underline: font.underline as u8,
-                    strikeout: font.strikeout as u8,
-                    charset: 1,
-                    out_precision: 0,
-                    clip_precision: 0,
-                    quality: 0,
-                    pitch_and_family: 0,
-                    face,
-                },
-            );
+            std::ptr::write_unaligned(out.cast::<LogFontA>(), LogFontA {
+                height: font.height,
+                width: font.width,
+                escapement: 0,
+                orientation: 0,
+                weight: font.weight,
+                italic: font.italic as u8,
+                underline: font.underline as u8,
+                strikeout: font.strikeout as u8,
+                charset: 1,
+                out_precision: 0,
+                clip_precision: 0,
+                quality: 0,
+                pitch_and_family: 0,
+                face,
+            });
         }
     }
     needed as i32
@@ -357,23 +302,20 @@ pub unsafe extern "win64" fn pat_blt(
         0x0000_0042 => (Some(0), gui::RasterOp::Clear),
         0x00FF_0062 => (Some(0x00FF_FFFF), gui::RasterOp::Set),
         0x005A_0049 => (gui::object_color(gui::dc_brush(hdc)), gui::RasterOp::Xor), // PATINVERT
-        0x0055_0009 => (Some(0), gui::RasterOp::Invert),                            // DSTINVERT
+        0x0055_0009 => (Some(0), gui::RasterOp::Invert), // DSTINVERT
         0x00A0_00C9 => (gui::object_color(gui::dc_brush(hdc)), gui::RasterOp::And), // PATAND
-        0x00FA_0089 => (gui::object_color(gui::dc_brush(hdc)), gui::RasterOp::Or),  // PATOR
+        0x00FA_0089 => (gui::object_color(gui::dc_brush(hdc)), gui::RasterOp::Or), // PATOR
         _ => {
             crate::process::set_last_error(87);
             return 0;
         }
     };
     if let Some(color) = color {
-        gui::record(
-            hdc,
-            DrawCmd::PatternRect {
-                rect: Rect::from_size(x, y, width, height),
-                color,
-                rop: operation,
-            },
-        );
+        gui::record(hdc, DrawCmd::PatternRect {
+            rect: Rect::from_size(x, y, width, height),
+            color,
+            rop: operation,
+        });
     }
     1
 }
@@ -390,9 +332,7 @@ pub extern "win64" fn bit_blt(
     src_y: i32,
     rop: u32,
 ) -> i32 {
-    blit_common(
-        dst_hdc, x, y, width, height, src_hdc, src_x, src_y, width, height, rop, false,
-    )
+    blit_common(dst_hdc, x, y, width, height, src_hdc, src_x, src_y, width, height, rop, false)
 }
 
 /// Copie/redimensionne une aire entre DC de fenêtre par rééchantillonnage X11.
@@ -410,7 +350,8 @@ pub extern "win64" fn stretch_blt(
     rop: u32,
 ) -> i32 {
     blit_common(
-        dst_hdc, x, y, width, height, src_hdc, src_x, src_y, src_width, src_height, rop, true,
+        dst_hdc, x, y, width, height, src_hdc, src_x, src_y,
+        src_width, src_height, rop, true,
     )
 }
 
@@ -466,26 +407,10 @@ fn blit_common(
         crate::process::set_last_error(87);
         return 0;
     };
-    let source = Rect {
-        left: src_x,
-        top: src_y,
-        right: src_right,
-        bottom: src_bottom,
-    };
-    let destination = Rect {
-        left: x,
-        top: y,
-        right: dst_right,
-        bottom: dst_bottom,
-    };
+    let source = Rect { left: src_x, top: src_y, right: src_right, bottom: src_bottom };
+    let destination = Rect { left: x, top: y, right: dst_right, bottom: dst_bottom };
     let cmd = if src_hwnd != 0 && dst_hwnd != 0 {
-        DrawCmd::Blit {
-            source_hwnd: src_hwnd,
-            source,
-            destination,
-            stretch,
-            rop: operation,
-        }
+        DrawCmd::Blit { source_hwnd: src_hwnd, source, destination, stretch, rop: operation }
     } else {
         let snapshot = if src_hwnd == 0 {
             gui::bitmap_snapshot(src_hdc, source)
@@ -500,17 +425,9 @@ fn blit_common(
             crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
             return 0;
         };
-        DrawCmd::Bitmap {
-            rect: destination,
-            pixels,
-            rop: operation,
-        }
+        DrawCmd::Bitmap { rect: destination, pixels, rop: operation }
     };
-    if gui::record(dst_hdc, cmd) {
-        1
-    } else {
-        0
-    }
+    if gui::record(dst_hdc, cmd) { 1 } else { 0 }
 }
 
 fn bitblt_rop(rop: u32) -> Option<gui::RasterOp> {
@@ -527,44 +444,10 @@ fn bitblt_rop(rop: u32) -> Option<gui::RasterOp> {
     })
 }
 
-struct ResizeCache {
-    key: (usize, usize, usize, usize),
-    source: Vec<u32>,
-    output: Vec<u32>,
-}
-static RESIZE_CACHE: Mutex<Option<ResizeCache>> = Mutex::new(None);
-
-#[cfg(test)]
-mod scaling_tests {
-    use super::*;
-    #[test]
-    fn agrandissement_lisse_et_bitmap_4k() {
-        let image = gui::BitmapSnapshot {
-            width: 2,
-            height: 1,
-            pixels: vec![0, 0x00ff_ffff],
-        };
-        let output = resize_bitmap(image, 3, 1).unwrap();
-        assert_eq!(output, [0, 0x0080_8080, 0x00ff_ffff]);
-        let image = gui::BitmapSnapshot {
-            width: 1,
-            height: 1,
-            pixels: vec![0x0012_3456],
-        };
-        let output = resize_bitmap(image, 3840, 2160).unwrap();
-        assert_eq!(output.len(), 3840 * 2160);
-        assert_eq!(output[0], 0x0012_3456);
-        assert_eq!(output[output.len() - 1], 0x0012_3456);
-    }
-}
-
 fn resize_bitmap(snapshot: gui::BitmapSnapshot, width: usize, height: usize) -> Option<Vec<u32>> {
     let count = width.checked_mul(height)?;
-    if width == 0
-        || height == 0
-        || count > gui::MAX_BITMAP_PIXELS
-        || snapshot.width == 0
-        || snapshot.height == 0
+    if width == 0 || height == 0 || count > 4 * 1024 * 1024
+        || snapshot.width == 0 || snapshot.height == 0
     {
         return None;
     }
@@ -574,33 +457,13 @@ fn resize_bitmap(snapshot: gui::BitmapSnapshot, width: usize, height: usize) -> 
     if snapshot.width == width && snapshot.height == height {
         return Some(snapshot.pixels);
     }
-    let key = (snapshot.width, snapshot.height, width, height);
-    let cacheable = count >= 65536;
-    if cacheable {
-        if let Some(cached) = RESIZE_CACHE
-            .lock()
-            .ok()?
-            .as_ref()
-            .filter(|c| c.key == key && c.source == snapshot.pixels)
-        {
-            return Some(cached.output.clone());
-        }
-    }
     let mut output = vec![0; count];
     for y in 0..height {
-        let sy = (y as f32 + 0.5) * snapshot.height as f32 / height as f32 - 0.5;
+        let sy = y * snapshot.height / height;
         for x in 0..width {
-            let sx = (x as f32 + 0.5) * snapshot.width as f32 / width as f32 - 0.5;
-            output[y * width + x] =
-                gui::bilinear_colorref(&snapshot.pixels, snapshot.width, snapshot.height, sx, sy);
+            let sx = x * snapshot.width / width;
+            output[y * width + x] = snapshot.pixels[sy * snapshot.width + sx];
         }
-    }
-    if cacheable {
-        *RESIZE_CACHE.lock().ok()? = Some(ResizeCache {
-            key,
-            source: snapshot.pixels,
-            output: output.clone(),
-        });
     }
     Some(output)
 }
@@ -660,12 +523,9 @@ pub unsafe extern "win64" fn create_dib_section(
         crate::process::set_last_error(87);
         return 0;
     }
-    let Some((bitmap, pixel_bits)) = gui::create_dib_section(
-        header.width,
-        header.height.abs(),
-        header.bit_count,
-        header.height < 0,
-    ) else {
+    let Some((bitmap, pixel_bits)) =
+        gui::create_dib_section(header.width, header.height.abs(), header.bit_count, header.height < 0)
+    else {
         crate::process::set_last_error(8); // ERROR_NOT_ENOUGH_MEMORY
         return 0;
     };
@@ -684,11 +544,11 @@ pub extern "win64" fn delete_dc(dc: usize) -> i32 {
 
 pub extern "win64" fn get_device_caps(_dc: usize, index: i32) -> i32 {
     match index {
-        8 => 1920,  // HORZRES
-        10 => 1080, // VERTRES
-        12 => 24,   // BITSPIXEL
-        90 => 96,   // LOGPIXELSX
-        88 => 96,   // LOGPIXELSY
+        8 => 1920,   // HORZRES
+        10 => 1080,  // VERTRES
+        12 => 24,    // BITSPIXEL
+        90 => 96,    // LOGPIXELSX
+        88 => 96,    // LOGPIXELSY
         _ => 0,
     }
 }
@@ -697,13 +557,7 @@ pub extern "win64" fn get_device_caps(_dc: usize, index: i32) -> i32 {
 ///
 /// # Sécurité
 /// `text` doit pointer sur `count` octets lisibles.
-pub unsafe extern "win64" fn text_out_a(
-    hdc: usize,
-    x: i32,
-    y: i32,
-    text: *const u8,
-    count: i32,
-) -> i32 {
+pub unsafe extern "win64" fn text_out_a(hdc: usize, x: i32, y: i32, text: *const u8, count: i32) -> i32 {
     if text.is_null() || gui::dc_window(hdc).is_none() {
         crate::process::set_last_error(87); // ERROR_INVALID_PARAMETER
         return 0;
@@ -722,32 +576,16 @@ pub unsafe extern "win64" fn text_out_a(
         Some(gui::dc_bk_color(hdc))
     };
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
-    gui::record(
-        hdc,
-        DrawCmd::Text {
-            x,
-            y,
-            text: s,
-            color,
-            bk,
-            font,
-        },
-    );
+    gui::record(hdc, DrawCmd::Text { x, y, text: s, color, bk, font });
     1
 }
 
 /// `SIZE` Win32.
 #[repr(C)]
-pub struct Size {
-    cx: i32,
-    cy: i32,
-}
+pub struct Size { cx: i32, cy: i32 }
 
 unsafe fn text_extent(hdc: usize, s: &str, size: *mut Size) -> i32 {
-    if size.is_null() {
-        crate::process::set_last_error(87);
-        return 0;
-    }
+    if size.is_null() { crate::process::set_last_error(87); return 0; }
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
     let (cx, cy) = gui::measure_text(&font, s);
     std::ptr::write_unaligned(size, Size { cx, cy });
@@ -756,30 +594,14 @@ unsafe fn text_extent(hdc: usize, s: &str, size: *mut Size) -> i32 {
 
 /// `GetTextExtentPoint32A(hdc, text, count, size)` : taille du texte dans la
 /// police sélectionnée du DC (fenêtre ou mémoire).
-pub unsafe extern "win64" fn get_text_extent_point32_a(
-    hdc: usize,
-    text: *const u8,
-    count: i32,
-    size: *mut Size,
-) -> i32 {
-    if text.is_null() || count < 0 {
-        crate::process::set_last_error(87);
-        return 0;
-    }
+pub unsafe extern "win64" fn get_text_extent_point32_a(hdc: usize, text: *const u8, count: i32, size: *mut Size) -> i32 {
+    if text.is_null() || count < 0 { crate::process::set_last_error(87); return 0; }
     let s = crate::dlls::decode_ansi(std::slice::from_raw_parts(text, count as usize));
     text_extent(hdc, &s, size)
 }
 
-pub unsafe extern "win64" fn get_text_extent_point32_w(
-    hdc: usize,
-    text: *const u16,
-    count: i32,
-    size: *mut Size,
-) -> i32 {
-    if text.is_null() || count < 0 {
-        crate::process::set_last_error(87);
-        return 0;
-    }
+pub unsafe extern "win64" fn get_text_extent_point32_w(hdc: usize, text: *const u16, count: i32, size: *mut Size) -> i32 {
+    if text.is_null() || count < 0 { crate::process::set_last_error(87); return 0; }
     let s = String::from_utf16_lossy(std::slice::from_raw_parts(text, count as usize));
     text_extent(hdc, &s, size)
 }
@@ -796,11 +618,7 @@ fn desktop_icon_name(request: &str) -> Option<String> {
         candidates.push(PathBuf::from(request));
     } else {
         if let Ok(home) = std::env::var("HOME") {
-            candidates.push(
-                PathBuf::from(home)
-                    .join(".local/share/applications")
-                    .join(request),
-            );
+            candidates.push(PathBuf::from(home).join(".local/share/applications").join(request));
         }
         candidates.push(PathBuf::from("/usr/local/share/applications").join(request));
         candidates.push(PathBuf::from("/usr/share/applications").join(request));
@@ -810,9 +628,7 @@ fn desktop_icon_name(request: &str) -> Option<String> {
         for line in BufReader::new(file).lines().map_while(Result::ok) {
             if let Some(icon) = line.strip_prefix("Icon=") {
                 let icon = icon.trim();
-                if !icon.is_empty() {
-                    return Some(icon.to_string());
-                }
+                if !icon.is_empty() { return Some(icon.to_string()); }
             }
         }
     }
@@ -822,53 +638,21 @@ fn desktop_icon_name(request: &str) -> Option<String> {
 fn resolve_icon_path(request: &str) -> Option<PathBuf> {
     let icon = desktop_icon_name(request)?;
     let direct = PathBuf::from(&icon);
-    if direct.is_file()
-        && direct
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-    {
+    if direct.is_file() && direct.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("png")) {
         return Some(direct);
     }
     let icon = icon.strip_suffix(".png").unwrap_or(&icon);
-    let themes = [
-        "Mint-L",
-        "Mint-Y",
-        "Mint-X",
-        "hicolor",
-        "HighContrast",
-        "Yaru",
-    ];
-    let sections = [
-        "apps",
-        "places",
-        "categories",
-        "status",
-        "devices",
-        "mimetypes",
-        "legacy",
-    ];
-    let sizes = [
-        "512", "256@2x", "256x256", "256", "128@2x", "128x128", "128", "96x96", "64@2x", "64x64",
-        "64", "48x48", "48", "32x32", "32",
-    ];
+    let themes = ["Mint-L", "Mint-Y", "Mint-X", "hicolor", "HighContrast", "Yaru"];
+    let sections = ["apps", "places", "categories", "status", "devices", "mimetypes", "legacy"];
+    let sizes = ["512", "256@2x", "256x256", "256", "128@2x", "128x128", "128", "96x96", "64@2x", "64x64", "64", "48x48", "48", "32x32", "32"];
     for theme in themes {
         for size in sizes {
             for section in sections {
                 for candidate in [
-                    PathBuf::from("/usr/share/icons")
-                        .join(theme)
-                        .join(section)
-                        .join(size)
-                        .join(format!("{icon}.png")),
-                    PathBuf::from("/usr/share/icons")
-                        .join(theme)
-                        .join(size)
-                        .join(section)
-                        .join(format!("{icon}.png")),
+                    PathBuf::from("/usr/share/icons").join(theme).join(section).join(size).join(format!("{icon}.png")),
+                    PathBuf::from("/usr/share/icons").join(theme).join(size).join(section).join(format!("{icon}.png")),
                 ] {
-                    if candidate.is_file() {
-                        return Some(candidate);
-                    }
+                    if candidate.is_file() { return Some(candidate); }
                 }
             }
         }
@@ -887,36 +671,16 @@ fn decode_png(path: &Path) -> Option<(usize, usize, Vec<[u8; 4]>)> {
         return None;
     }
     let output_size = reader.output_buffer_size()?;
-    if output_size > 64 * 1024 * 1024 {
-        return None;
-    }
+    if output_size > 64 * 1024 * 1024 { return None; }
     let mut buffer = vec![0; output_size];
     let info = reader.next_frame(&mut buffer).ok()?;
     let bytes = &buffer[..info.buffer_size()];
     let count = (info.width as usize).checked_mul(info.height as usize)?;
     let mut rgba = Vec::with_capacity(count);
     match info.color_type {
-        png::ColorType::Rgba => rgba.extend(
-            bytes
-                .as_chunks::<4>()
-                .0
-                .iter()
-                .map(|p| [p[0], p[1], p[2], p[3]]),
-        ),
-        png::ColorType::Rgb => rgba.extend(
-            bytes
-                .as_chunks::<3>()
-                .0
-                .iter()
-                .map(|p| [p[0], p[1], p[2], 255]),
-        ),
-        png::ColorType::GrayscaleAlpha => rgba.extend(
-            bytes
-                .as_chunks::<2>()
-                .0
-                .iter()
-                .map(|p| [p[0], p[0], p[0], p[1]]),
-        ),
+        png::ColorType::Rgba => rgba.extend(bytes.chunks_exact(4).map(|p| [p[0], p[1], p[2], p[3]])),
+        png::ColorType::Rgb => rgba.extend(bytes.chunks_exact(3).map(|p| [p[0], p[1], p[2], 255])),
+        png::ColorType::GrayscaleAlpha => rgba.extend(bytes.chunks_exact(2).map(|p| [p[0], p[0], p[0], p[1]])),
         png::ColorType::Grayscale => rgba.extend(bytes.iter().map(|p| [*p, *p, *p, 255])),
         png::ColorType::Indexed => return None,
     }
@@ -926,46 +690,33 @@ fn decode_png(path: &Path) -> Option<(usize, usize, Vec<[u8; 4]>)> {
 fn icon_pixels(request: &str, size: usize, background: u32) -> Option<Vec<u32>> {
     let key = (request.to_string(), size, background);
     let cache = ICON_CACHE.get_or_init(|| Mutex::new(HashMap::new()));
-    if let Some(pixels) = cache.lock().ok()?.get(&key).cloned() {
-        return Some(pixels);
-    }
+    if let Some(pixels) = cache.lock().ok()?.get(&key).cloned() { return Some(pixels); }
     let (width, height, source) = decode_png(&resolve_icon_path(request)?)?;
     let scale = (size as f32 / width as f32).min(size as f32 / height as f32);
     let fitted_width = ((width as f32 * scale).round() as usize).clamp(1, size);
     let fitted_height = ((height as f32 * scale).round() as usize).clamp(1, size);
     let offset_x = (size - fitted_width) / 2;
     let offset_y = (size - fitted_height) / 2;
-    let bg = [
-        (background & 0xff) as u8,
-        ((background >> 8) & 0xff) as u8,
-        ((background >> 16) & 0xff) as u8,
-    ];
+    let bg = [(background & 0xff) as u8, ((background >> 8) & 0xff) as u8, ((background >> 16) & 0xff) as u8];
     let mut output = vec![background; size * size];
     for y in 0..fitted_height {
-        let sy = ((y as f32 + 0.5) * height as f32 / fitted_height as f32 - 0.5)
-            .clamp(0.0, height.saturating_sub(1) as f32);
+        let sy = ((y as f32 + 0.5) * height as f32 / fitted_height as f32 - 0.5).clamp(0.0, height.saturating_sub(1) as f32);
         let y0 = sy.floor() as usize;
         let y1 = (y0 + 1).min(height - 1);
         let fy = sy - y0 as f32;
         for x in 0..fitted_width {
-            let sx = ((x as f32 + 0.5) * width as f32 / fitted_width as f32 - 0.5)
-                .clamp(0.0, width.saturating_sub(1) as f32);
+            let sx = ((x as f32 + 0.5) * width as f32 / fitted_width as f32 - 0.5).clamp(0.0, width.saturating_sub(1) as f32);
             let x0 = sx.floor() as usize;
             let x1 = (x0 + 1).min(width - 1);
             let fx = sx - x0 as f32;
             let sample = |channel: usize| {
-                let top = source[y0 * width + x0][channel] as f32 * (1.0 - fx)
-                    + source[y0 * width + x1][channel] as f32 * fx;
-                let bottom = source[y1 * width + x0][channel] as f32 * (1.0 - fx)
-                    + source[y1 * width + x1][channel] as f32 * fx;
+                let top = source[y0 * width + x0][channel] as f32 * (1.0 - fx) + source[y0 * width + x1][channel] as f32 * fx;
+                let bottom = source[y1 * width + x0][channel] as f32 * (1.0 - fx) + source[y1 * width + x1][channel] as f32 * fx;
                 top * (1.0 - fy) + bottom * fy
             };
             let alpha = sample(3) / 255.0;
-            let channel = |index: usize| {
-                (sample(index) * alpha + bg[index] as f32 * (1.0 - alpha)).round() as u32
-            };
-            output[(offset_y + y) * size + offset_x + x] =
-                channel(0) | (channel(1) << 8) | (channel(2) << 16);
+            let channel = |index: usize| (sample(index) * alpha + bg[index] as f32 * (1.0 - alpha)).round() as u32;
+            output[(offset_y + y) * size + offset_x + x] = channel(0) | (channel(1) << 8) | (channel(2) << 16);
         }
     }
     cache.lock().ok()?.insert(key, output.clone());
@@ -975,35 +726,16 @@ fn icon_pixels(request: &str, size: usize, background: u32) -> Option<Vec<u32>> 
 /// Extension Winlux : charge l'icône PNG réelle déclarée par un fichier
 /// `.desktop`, la redimensionne avec filtrage et la dessine via le chemin GDI.
 pub unsafe extern "win64" fn winlux_draw_icon_a(
-    hdc: usize,
-    request: *const u8,
-    x: i32,
-    y: i32,
-    size: i32,
-    background: u32,
+    hdc: usize, request: *const u8, x: i32, y: i32, size: i32, background: u32,
 ) -> i32 {
     if request.is_null() || gui::dc_window(hdc).is_none() || !(1..=512).contains(&size) {
         crate::process::set_last_error(87);
         return 0;
     }
     let request = crate::dlls::cstr(request);
-    let Some(pixels) = icon_pixels(&request, size as usize, background) else {
-        return 0;
-    };
-    let rect = Rect {
-        left: x,
-        top: y,
-        right: x + size,
-        bottom: y + size,
-    };
-    gui::record(
-        hdc,
-        DrawCmd::Bitmap {
-            rect,
-            pixels,
-            rop: gui::RasterOp::Copy,
-        },
-    ) as i32
+    let Some(pixels) = icon_pixels(&request, size as usize, background) else { return 0 };
+    let rect = Rect { left: x, top: y, right: x + size, bottom: y + size };
+    gui::record(hdc, DrawCmd::Bitmap { rect, pixels, rop: gui::RasterOp::Copy }) as i32
 }
 
 /// `Rectangle(hdc, left, top, right, bottom, pen, brush)` : cadre + intérieur.
@@ -1020,19 +752,9 @@ pub unsafe extern "win64" fn rectangle(
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     }
-    let rect = Rect {
-        left,
-        top,
-        right,
-        bottom,
-    };
+    let rect = Rect { left, top, right, bottom };
     if let Some(color) = gui::object_color(brush) {
-        let inner = Rect {
-            left: left + 1,
-            top: top + 1,
-            right: right - 1,
-            bottom: bottom - 1,
-        };
+        let inner = Rect { left: left + 1, top: top + 1, right: right - 1, bottom: bottom - 1 };
         if inner.width() > 0 && inner.height() > 0 {
             gui::record(hdc, DrawCmd::FillRect { rect: inner, color });
         }
@@ -1056,12 +778,7 @@ pub unsafe extern "win64" fn ellipse(
         crate::process::set_last_error(1400);
         return 0;
     }
-    let rect = Rect {
-        left,
-        top,
-        right,
-        bottom,
-    };
+    let rect = Rect { left, top, right, bottom };
     let brush = gui::dc_brush(hdc);
     if let Some(color) = gui::object_color(brush) {
         gui::record(hdc, DrawCmd::Ellipse { rect, color });
@@ -1073,13 +790,7 @@ pub unsafe extern "win64" fn ellipse(
 // TextOutW (manquant)
 // =====================================================================
 
-pub unsafe extern "win64" fn text_out_w(
-    hdc: usize,
-    x: i32,
-    y: i32,
-    text: *const u16,
-    count: i32,
-) -> i32 {
+pub unsafe extern "win64" fn text_out_w(hdc: usize, x: i32, y: i32, text: *const u16, count: i32) -> i32 {
     if text.is_null() || gui::dc_window(hdc).is_none() {
         crate::process::set_last_error(87);
         return 0;
@@ -1087,10 +798,7 @@ pub unsafe extern "win64" fn text_out_w(
     let len = if count < 0 {
         let mut p = text;
         let mut n = 0;
-        while *p != 0 {
-            p = p.add(1);
-            n += 1;
-        }
+        while *p != 0 { p = p.add(1); n += 1; }
         n
     } else {
         count as usize
@@ -1098,23 +806,9 @@ pub unsafe extern "win64" fn text_out_w(
     let chars = std::slice::from_raw_parts(text, len);
     let s = String::from_utf16_lossy(chars);
     let color = gui::dc_text_color(hdc);
-    let bk = if gui::dc_bk_mode(hdc) == 1 {
-        None
-    } else {
-        Some(gui::dc_bk_color(hdc))
-    };
+    let bk = if gui::dc_bk_mode(hdc) == 1 { None } else { Some(gui::dc_bk_color(hdc)) };
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
-    gui::record(
-        hdc,
-        DrawCmd::Text {
-            x,
-            y,
-            text: s,
-            color,
-            bk,
-            font,
-        },
-    );
+    gui::record(hdc, DrawCmd::Text { x, y, text: s, color, bk, font });
     1
 }
 
@@ -1123,14 +817,8 @@ pub unsafe extern "win64" fn text_out_w(
 // =====================================================================
 
 pub unsafe extern "win64" fn ext_text_out_a(
-    hdc: usize,
-    x: i32,
-    y: i32,
-    _options: u32,
-    _clip: *const Rect,
-    text: *const u8,
-    count: u32,
-    _dx: *const i32,
+    hdc: usize, x: i32, y: i32, _options: u32, _clip: *const Rect,
+    text: *const u8, count: u32, _dx: *const i32,
 ) -> i32 {
     if count == 0 || text.is_null() {
         return 1; // Rien à dessiner, mais succès
@@ -1139,14 +827,8 @@ pub unsafe extern "win64" fn ext_text_out_a(
 }
 
 pub unsafe extern "win64" fn ext_text_out_w(
-    hdc: usize,
-    x: i32,
-    y: i32,
-    _options: u32,
-    _clip: *const Rect,
-    text: *const u16,
-    count: u32,
-    _dx: *const i32,
+    hdc: usize, x: i32, y: i32, _options: u32, _clip: *const Rect,
+    text: *const u16, count: u32, _dx: *const i32,
 ) -> i32 {
     if count == 0 || text.is_null() {
         return 1;
@@ -1159,52 +841,28 @@ pub unsafe extern "win64" fn ext_text_out_w(
 // =====================================================================
 
 pub unsafe extern "win64" fn draw_text_a(
-    hdc: usize,
-    text: *const u8,
-    count: i32,
-    rect: *mut Rect,
-    format: u32,
+    hdc: usize, text: *const u8, count: i32, rect: *mut Rect, format: u32,
 ) -> i32 {
-    if rect.is_null() {
-        return 0;
-    }
+    if rect.is_null() { return 0; }
     let len = if count == -1 {
-        let mut p = text;
-        let mut n = 0;
-        while !p.is_null() && *p != 0 {
-            p = p.add(1);
-            n += 1;
-        }
+        let mut p = text; let mut n = 0;
+        while !p.is_null() && *p != 0 { p = p.add(1); n += 1; }
         n
-    } else {
-        count as usize
-    };
+    } else { count as usize };
     let bytes = std::slice::from_raw_parts(text, len);
     let s = crate::dlls::decode_ansi(bytes);
     draw_text_gdi(hdc, &s, &mut *rect, format)
 }
 
 pub unsafe extern "win64" fn draw_text_w(
-    hdc: usize,
-    text: *const u16,
-    count: i32,
-    rect: *mut Rect,
-    format: u32,
+    hdc: usize, text: *const u16, count: i32, rect: *mut Rect, format: u32,
 ) -> i32 {
-    if rect.is_null() {
-        return 0;
-    }
+    if rect.is_null() { return 0; }
     let len = if count == -1 {
-        let mut p = text;
-        let mut n = 0;
-        while !p.is_null() && *p != 0 {
-            p = p.add(1);
-            n += 1;
-        }
+        let mut p = text; let mut n = 0;
+        while !p.is_null() && *p != 0 { p = p.add(1); n += 1; }
         n
-    } else {
-        count as usize
-    };
+    } else { count as usize };
     let chars: Vec<u16> = std::slice::from_raw_parts(text, len).to_vec();
     let s = String::from_utf16_lossy(&chars);
     draw_text_gdi(hdc, &s, &mut *rect, format)
@@ -1235,28 +893,16 @@ fn draw_text_gdi(hdc: usize, text: &str, rect: &mut Rect, format: u32) -> i32 {
     }
 
     let color = gui::dc_text_color(hdc);
-    let bk = if gui::dc_bk_mode(hdc) == 1 {
-        None
-    } else {
-        Some(gui::dc_bk_color(hdc))
-    };
-    gui::record(
-        hdc,
-        DrawCmd::Text {
-            x,
-            y,
-            text: text.to_string(),
-            color,
-            bk,
-            font,
-        },
-    );
+    let bk = if gui::dc_bk_mode(hdc) == 1 { None } else { Some(gui::dc_bk_color(hdc)) };
+    gui::record(hdc, DrawCmd::Text { x, y, text: text.to_string(), color, bk, font });
     th
 }
 
 // =====================================================================
 // Line drawing : MoveToEx, LineTo, Polyline, Polygon
 // =====================================================================
+
+use std::sync::atomic::AtomicI32;
 
 // Position courante du « crayon » par DC (approximation thread-local)
 fn pen_pos() -> &'static Mutex<HashMap<usize, (i32, i32)>> {
@@ -1265,9 +911,7 @@ fn pen_pos() -> &'static Mutex<HashMap<usize, (i32, i32)>> {
 }
 
 fn lock_pen() -> std::sync::MutexGuard<'static, HashMap<usize, (i32, i32)>> {
-    pen_pos()
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
+    pen_pos().lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 pub unsafe extern "win64" fn move_to_ex(hdc: usize, x: i32, y: i32, prev: *mut gui::Point) -> i32 {
@@ -1288,19 +932,13 @@ pub unsafe extern "win64" fn line_to(hdc: usize, x: i32, y: i32) -> i32 {
         *pos = (x, y);
         old
     };
-    let pen = gui::dc_pen(hdc);
-    let color = gui::object_color(pen).unwrap_or(0);
-    gui::record(
-        hdc,
-        DrawCmd::Line {
-            x1: x0,
-            y1: y0,
-            x2: x,
-            y2: y,
-            color,
-            width: gui::object_pen_width(pen),
-        },
-    );
+    // Dessiner la ligne comme un FrameRect fin
+    let color = gui::object_color(gui::dc_brush(hdc)).unwrap_or(0);
+    let rect = Rect {
+        left: x0.min(x), top: y0.min(y),
+        right: x0.max(x) + 1, bottom: y0.max(y) + 1,
+    };
+    gui::record(hdc, DrawCmd::FrameRect { rect, color, width: 1 });
     1
 }
 
@@ -1312,19 +950,10 @@ pub unsafe extern "win64" fn polyline(hdc: usize, points: *const gui::Point, cou
     let color = gui::object_color(gui::dc_brush(hdc)).unwrap_or(0);
     for w in pts.windows(2) {
         let rect = Rect {
-            left: w[0].x.min(w[1].x),
-            top: w[0].y.min(w[1].y),
-            right: w[0].x.max(w[1].x) + 1,
-            bottom: w[0].y.max(w[1].y) + 1,
+            left: w[0].x.min(w[1].x), top: w[0].y.min(w[1].y),
+            right: w[0].x.max(w[1].x) + 1, bottom: w[0].y.max(w[1].y) + 1,
         };
-        gui::record(
-            hdc,
-            DrawCmd::FrameRect {
-                rect,
-                color,
-                width: 1,
-            },
-        );
+        gui::record(hdc, DrawCmd::FrameRect { rect, color, width: 1 });
     }
     1
 }
@@ -1341,19 +970,10 @@ pub unsafe extern "win64" fn polygon(hdc: usize, points: *const gui::Point, coun
     let last = pts[count as usize - 1];
     let color = gui::object_color(gui::dc_brush(hdc)).unwrap_or(0);
     let rect = Rect {
-        left: first.x.min(last.x),
-        top: first.y.min(last.y),
-        right: first.x.max(last.x) + 1,
-        bottom: first.y.max(last.y) + 1,
+        left: first.x.min(last.x), top: first.y.min(last.y),
+        right: first.x.max(last.x) + 1, bottom: first.y.max(last.y) + 1,
     };
-    gui::record(
-        hdc,
-        DrawCmd::FrameRect {
-            rect,
-            color,
-            width: 1,
-        },
-    );
+    gui::record(hdc, DrawCmd::FrameRect { rect, color, width: 1 });
     1
 }
 
@@ -1367,11 +987,7 @@ pub unsafe extern "win64" fn poly_bezier(hdc: usize, points: *const gui::Point, 
     1
 }
 
-pub unsafe extern "win64" fn poly_bezier_to(
-    hdc: usize,
-    points: *const gui::Point,
-    count: u32,
-) -> i32 {
+pub unsafe extern "win64" fn poly_bezier_to(hdc: usize, points: *const gui::Point, count: u32) -> i32 {
     let _ = (hdc, points, count);
     1
 }
@@ -1380,15 +996,7 @@ pub unsafe extern "win64" fn poly_bezier_to(
 // RoundRect
 // =====================================================================
 
-pub unsafe extern "win64" fn round_rect(
-    hdc: usize,
-    left: i32,
-    top: i32,
-    right: i32,
-    bottom: i32,
-    _rx: i32,
-    _ry: i32,
-) -> i32 {
+pub unsafe extern "win64" fn round_rect(hdc: usize, left: i32, top: i32, right: i32, bottom: i32, _rx: i32, _ry: i32) -> i32 {
     // On dessine un rectangle simple (sans arrondi) comme approximation
     // Utiliser le pen et brush courants du DC
     let pen = gui::dc_pen(hdc);
@@ -1401,12 +1009,7 @@ pub unsafe extern "win64" fn round_rect(
 // =====================================================================
 
 pub unsafe extern "win64" fn set_pixel(hdc: usize, x: i32, y: i32, color: u32) -> u32 {
-    let rect = Rect {
-        left: x,
-        top: y,
-        right: x + 1,
-        bottom: y + 1,
-    };
+    let rect = Rect { left: x, top: y, right: x + 1, bottom: y + 1 };
     gui::record(hdc, DrawCmd::FillRect { rect, color });
     color
 }
@@ -1425,8 +1028,7 @@ pub unsafe extern "win64" fn set_pixel_v(hdc: usize, x: i32, y: i32, color: u32)
 // Region functions
 // =====================================================================
 
-static NEXT_REGION: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0x0020_0000);
+static NEXT_REGION: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0x0020_0000);
 
 pub extern "win64" fn create_rect_rgn(_left: i32, _top: i32, _right: i32, _bottom: i32) -> usize {
     NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
@@ -1436,12 +1038,7 @@ pub extern "win64" fn create_rect_rgn_indirect(_rect: *const Rect) -> usize {
     NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
-pub extern "win64" fn create_elliptic_rgn(
-    _left: i32,
-    _top: i32,
-    _right: i32,
-    _bottom: i32,
-) -> usize {
+pub extern "win64" fn create_elliptic_rgn(_left: i32, _top: i32, _right: i32, _bottom: i32) -> usize {
     NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
@@ -1449,17 +1046,10 @@ pub extern "win64" fn combine_rgn(_dest: usize, _src1: usize, _src2: usize, _mod
     1 // SIMPLEREGION
 }
 
-pub extern "win64" fn set_rect_rgn(
-    _rgn: usize,
-    _left: i32,
-    _top: i32,
-    _right: i32,
-    _bottom: i32,
-) -> i32 {
+pub extern "win64" fn set_rect_rgn(_rgn: usize, _left: i32, _top: i32, _right: i32, _bottom: i32) -> i32 {
     1
 }
 
-#[allow(dead_code)]
 pub extern "win64" fn delete_rgn(rgn: usize) -> i32 {
     let _ = rgn;
     1
@@ -1471,12 +1061,7 @@ pub extern "win64" fn offset_rgn(_rgn: usize, _x: i32, _y: i32) -> i32 {
 
 pub unsafe extern "win64" fn get_rgn_box(_rgn: usize, rect: *mut Rect) -> i32 {
     if !rect.is_null() {
-        *rect = Rect {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
+        *rect = Rect { left: 0, top: 0, right: 0, bottom: 0 };
     }
     1
 }
@@ -1505,35 +1090,18 @@ pub extern "win64" fn ext_select_clip_rgn(_hdc: usize, _rgn: usize, _mode: i32) 
     1
 }
 
-pub extern "win64" fn intersect_clip_rect(
-    _hdc: usize,
-    _left: i32,
-    _top: i32,
-    _right: i32,
-    _bottom: i32,
-) -> i32 {
+pub extern "win64" fn intersect_clip_rect(_hdc: usize, _left: i32, _top: i32, _right: i32, _bottom: i32) -> i32 {
     1
 }
 
-pub extern "win64" fn exclude_clip_rect(
-    _hdc: usize,
-    _left: i32,
-    _top: i32,
-    _right: i32,
-    _bottom: i32,
-) -> i32 {
+pub extern "win64" fn exclude_clip_rect(_hdc: usize, _left: i32, _top: i32, _right: i32, _bottom: i32) -> i32 {
     1
 }
 
 pub unsafe extern "win64" fn get_clip_box(_hdc: usize, rect: *mut Rect) -> i32 {
     if !rect.is_null() {
         let (w, h) = gui::screen_size();
-        *rect = Rect {
-            left: 0,
-            top: 0,
-            right: w,
-            bottom: h,
-        };
+        *rect = Rect { left: 0, top: 0, right: w, bottom: h };
     }
     1
 }
@@ -1566,12 +1134,7 @@ pub extern "win64" fn set_map_mode(hdc: usize, mode: i32) -> i32 {
     gui::set_dc_map_mode(hdc, mode)
 }
 
-pub unsafe extern "win64" fn set_viewport_org_ex(
-    _hdc: usize,
-    _x: i32,
-    _y: i32,
-    prev: *mut gui::Point,
-) -> i32 {
+pub unsafe extern "win64" fn set_viewport_org_ex(_hdc: usize, _x: i32, _y: i32, prev: *mut gui::Point) -> i32 {
     if !prev.is_null() {
         (*prev).x = 0;
         (*prev).y = 0;
@@ -1587,12 +1150,7 @@ pub unsafe extern "win64" fn get_viewport_org_ex(_hdc: usize, pt: *mut gui::Poin
     1
 }
 
-pub unsafe extern "win64" fn set_window_org_ex(
-    _hdc: usize,
-    _x: i32,
-    _y: i32,
-    prev: *mut gui::Point,
-) -> i32 {
+pub unsafe extern "win64" fn set_window_org_ex(_hdc: usize, _x: i32, _y: i32, prev: *mut gui::Point) -> i32 {
     if !prev.is_null() {
         (*prev).x = 0;
         (*prev).y = 0;
@@ -1608,12 +1166,7 @@ pub unsafe extern "win64" fn get_window_org_ex(_hdc: usize, pt: *mut gui::Point)
     1
 }
 
-pub unsafe extern "win64" fn set_viewport_ext_ex(
-    _hdc: usize,
-    _x: i32,
-    _y: i32,
-    prev: *mut Size,
-) -> i32 {
+pub unsafe extern "win64" fn set_viewport_ext_ex(_hdc: usize, _x: i32, _y: i32, prev: *mut Size) -> i32 {
     if !prev.is_null() {
         (*prev).cx = 1;
         (*prev).cy = 1;
@@ -1629,12 +1182,7 @@ pub unsafe extern "win64" fn get_viewport_ext_ex(_hdc: usize, sz: *mut Size) -> 
     1
 }
 
-pub unsafe extern "win64" fn set_window_ext_ex(
-    _hdc: usize,
-    _x: i32,
-    _y: i32,
-    prev: *mut Size,
-) -> i32 {
+pub unsafe extern "win64" fn set_window_ext_ex(_hdc: usize, _x: i32, _y: i32, prev: *mut Size) -> i32 {
     if !prev.is_null() {
         (*prev).cx = 1;
         (*prev).cy = 1;
@@ -1690,9 +1238,7 @@ pub unsafe extern "win64" fn create_font_indirect_a(lf: *const c_void) -> usize 
     let mut face_bytes = Vec::new();
     for i in 0..32 {
         let b = *face_ptr.add(i);
-        if b == 0 {
-            break;
-        }
+        if b == 0 { break; }
         face_bytes.push(b);
     }
     let face = crate::dlls::decode_ansi(&face_bytes);
@@ -1717,9 +1263,7 @@ pub unsafe extern "win64" fn create_font_indirect_w(lf: *const c_void) -> usize 
     let mut face_chars = Vec::new();
     for i in 0..32 {
         let c = *face_ptr.add(i);
-        if c == 0 {
-            break;
-        }
+        if c == 0 { break; }
         face_chars.push(c);
     }
     let face = String::from_utf16_lossy(&face_chars);
@@ -1807,40 +1351,26 @@ pub unsafe extern "win64" fn get_text_metrics_w(hdc: usize, tm: *mut c_void) -> 
 // =====================================================================
 
 pub unsafe extern "win64" fn enum_font_families_ex_a(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _callback: usize,
-    _lparam: isize,
-    _flags: u32,
+    _hdc: usize, _logfont: *const c_void, _callback: usize, _lparam: isize, _flags: u32,
 ) -> i32 {
     // Stub : ne rapporte aucune police
     1
 }
 
 pub unsafe extern "win64" fn enum_font_families_ex_w(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _callback: usize,
-    _lparam: isize,
-    _flags: u32,
+    _hdc: usize, _logfont: *const c_void, _callback: usize, _lparam: isize, _flags: u32,
 ) -> i32 {
     1
 }
 
 pub unsafe extern "win64" fn enum_fonts_a(
-    _hdc: usize,
-    _name: *const u8,
-    _callback: usize,
-    _lparam: isize,
+    _hdc: usize, _name: *const u8, _callback: usize, _lparam: isize,
 ) -> i32 {
     1
 }
 
 pub unsafe extern "win64" fn enum_fonts_w(
-    _hdc: usize,
-    _name: *const u16,
-    _callback: usize,
-    _lparam: isize,
+    _hdc: usize, _name: *const u16, _callback: usize, _lparam: isize,
 ) -> i32 {
     1
 }
@@ -1870,48 +1400,24 @@ pub unsafe extern "win64" fn get_text_face_w(hdc: usize, count: i32, buf: *mut u
 // =====================================================================
 
 pub unsafe extern "win64" fn get_dib_its(
-    _hdc: usize,
-    _bmp: usize,
-    _start: u32,
-    _lines: u32,
-    _bits: *mut c_void,
-    _info: *mut c_void,
-    _usage: u32,
+    _hdc: usize, _bmp: usize, _start: u32, _lines: u32,
+    _bits: *mut c_void, _info: *mut c_void, _usage: u32,
 ) -> i32 {
     0 // Stub
 }
 
 pub unsafe extern "win64" fn set_dib_its_to_device(
-    _hdc: usize,
-    _x: i32,
-    _y: i32,
-    _w: u32,
-    _h: u32,
-    _src_x: i32,
-    _src_y: i32,
-    _start: u32,
-    _lines: u32,
-    _bits: *const c_void,
-    _info: *const c_void,
-    _usage: u32,
+    _hdc: usize, _x: i32, _y: i32, _w: u32, _h: u32,
+    _src_x: i32, _src_y: i32, _start: u32, _lines: u32,
+    _bits: *const c_void, _info: *const c_void, _usage: u32,
 ) -> i32 {
     0
 }
 
 pub unsafe extern "win64" fn stretch_dib_its(
-    _hdc: usize,
-    _xd: i32,
-    _yd: i32,
-    _wd: i32,
-    _hd: i32,
-    _xs: i32,
-    _ys: i32,
-    _ws: i32,
-    _hs: i32,
-    _bits: *const c_void,
-    _info: *const c_void,
-    _usage: u32,
-    _rop: u32,
+    _hdc: usize, _xd: i32, _yd: i32, _wd: i32, _hd: i32,
+    _xs: i32, _ys: i32, _ws: i32, _hs: i32,
+    _bits: *const c_void, _info: *const c_void, _usage: u32, _rop: u32,
 ) -> i32 {
     0
 }
@@ -1920,11 +1426,7 @@ pub unsafe extern "win64" fn get_bitmap_bits(_bmp: usize, _count: i32, _bits: *m
     0
 }
 
-pub unsafe extern "win64" fn set_bitmap_bits(
-    _bmp: usize,
-    _count: u32,
-    _bits: *const c_void,
-) -> i32 {
+pub unsafe extern "win64" fn set_bitmap_bits(_bmp: usize, _count: u32, _bits: *const c_void) -> i32 {
     0
 }
 
@@ -1934,10 +1436,10 @@ pub unsafe extern "win64" fn set_bitmap_bits(
 
 pub extern "win64" fn get_current_object(hdc: usize, obj_type: u32) -> usize {
     match obj_type {
-        1 => gui::dc_bitmap(hdc), // OBJ_PEN → bitmap (approx)
-        2 => gui::dc_brush(hdc),  // OBJ_BRUSH
-        6 => gui::dc_font(hdc),   // OBJ_FONT
-        7 => gui::dc_bitmap(hdc), // OBJ_BITMAP
+        1 => gui::dc_bitmap(hdc),  // OBJ_PEN → bitmap (approx)
+        2 => gui::dc_brush(hdc),   // OBJ_BRUSH
+        6 => gui::dc_font(hdc),    // OBJ_FONT
+        7 => gui::dc_bitmap(hdc),  // OBJ_BITMAP
         _ => 0,
     }
 }
@@ -1955,7 +1457,6 @@ pub extern "win64" fn get_object_type(obj: usize) -> u32 {
     }
 }
 
-#[allow(dead_code)]
 pub extern "win64" fn get_stock_brush(index: i32) -> usize {
     get_stock_object(index)
 }
@@ -2012,51 +1513,28 @@ pub unsafe extern "win64" fn set_text_character_extra(_hdc: usize, _extra: i32) 
     0
 }
 
-#[allow(dead_code)]
 pub extern "win64" fn create_compatible_dc_from(dc: usize) -> usize {
     create_compatible_dc(dc)
 }
 
-pub extern "win64" fn create_dc_a(
-    _driver: *const u8,
-    _device: *const u8,
-    _output: *const u8,
-    _init: *const c_void,
-) -> usize {
+pub extern "win64" fn create_dc_a(_driver: *const u8, _device: *const u8, _output: *const u8, _init: *const c_void) -> usize {
     gui::create_dc(0) // DC sans fenêtre
 }
 
-pub extern "win64" fn create_dc_w(
-    _driver: *const u16,
-    _device: *const u16,
-    _output: *const u16,
-    _init: *const c_void,
-) -> usize {
+pub extern "win64" fn create_dc_w(_driver: *const u16, _device: *const u16, _output: *const u16, _init: *const c_void) -> usize {
     gui::create_dc(0)
 }
 
-pub extern "win64" fn create_ic_a(
-    _driver: *const u8,
-    _device: *const u8,
-    _output: *const u8,
-    _init: *const c_void,
-) -> usize {
+pub extern "win64" fn create_ic_a(_driver: *const u8, _device: *const u8, _output: *const u8, _init: *const c_void) -> usize {
     gui::create_dc(0)
 }
 
-pub extern "win64" fn create_ic_w(
-    _driver: *const u16,
-    _device: *const u16,
-    _output: *const u16,
-    _init: *const c_void,
-) -> usize {
+pub extern "win64" fn create_ic_w(_driver: *const u16, _device: *const u16, _output: *const u16, _init: *const c_void) -> usize {
     gui::create_dc(0)
 }
 
 pub unsafe extern "win64" fn get_current_position_ex(hdc: usize, pt: *mut gui::Point) -> i32 {
-    if pt.is_null() {
-        return 0;
-    }
+    if pt.is_null() { return 0; }
     let map = lock_pen();
     let (x, y) = map.get(&hdc).copied().unwrap_or((0, 0));
     (*pt).x = x;
@@ -2064,12 +1542,7 @@ pub unsafe extern "win64" fn get_current_position_ex(hdc: usize, pt: *mut gui::P
     1
 }
 
-pub extern "win64" fn set_brush_org_ex(
-    _hdc: usize,
-    _x: i32,
-    _y: i32,
-    _prev: *mut gui::Point,
-) -> i32 {
+pub extern "win64" fn set_brush_org_ex(_hdc: usize, _x: i32, _y: i32, _prev: *mut gui::Point) -> i32 {
     1
 }
 
@@ -2089,52 +1562,26 @@ pub extern "win64" fn create_palette(_pal: *const c_void) -> usize {
     0
 }
 
-pub unsafe extern "win64" fn get_char_width_32a(
-    hdc: usize,
-    first: u32,
-    last: u32,
-    widths: *mut i32,
-) -> i32 {
-    if widths.is_null() || first > last {
-        return 0;
-    }
+pub unsafe extern "win64" fn get_char_width_32a(hdc: usize, first: u32, last: u32, widths: *mut i32) -> i32 {
+    if widths.is_null() || first > last { return 0; }
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
-    let avg_w = if font.height > 0 {
-        (font.height * 45) / 100
-    } else {
-        7
-    };
+    let avg_w = if font.height > 0 { (font.height * 45) / 100 } else { 7 };
     for i in 0..=(last - first) {
         *widths.add(i as usize) = avg_w;
     }
     1
 }
 
-pub unsafe extern "win64" fn get_char_width_32w(
-    hdc: usize,
-    first: u32,
-    last: u32,
-    widths: *mut i32,
-) -> i32 {
+pub unsafe extern "win64" fn get_char_width_32w(hdc: usize, first: u32, last: u32, widths: *mut i32) -> i32 {
     get_char_width_32a(hdc, first, last, widths)
 }
 
-pub unsafe extern "win64" fn get_char_abc_widths_a(
-    hdc: usize,
-    first: u32,
-    last: u32,
-    abc: *mut c_void,
-) -> i32 {
+pub unsafe extern "win64" fn get_char_abc_widths_a(hdc: usize, first: u32, last: u32, abc: *mut c_void) -> i32 {
     let _ = (hdc, first, last, abc);
     0
 }
 
-pub unsafe extern "win64" fn get_char_abc_widths_w(
-    hdc: usize,
-    first: u32,
-    last: u32,
-    abc: *mut c_void,
-) -> i32 {
+pub unsafe extern "win64" fn get_char_abc_widths_w(hdc: usize, first: u32, last: u32, abc: *mut c_void) -> i32 {
     let _ = (hdc, first, last, abc);
     0
 }

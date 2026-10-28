@@ -1,8 +1,0 @@
-[Desktop Entry]
-Type=X-XFCE-Helper
-X-XFCE-Category=WebBrowser
-Name=Navigateur Winlux
-Icon=web-browser
-X-XFCE-Binaries=winlux-browser;
-X-XFCE-Commands=/usr/bin/winlux-browser;
-X-XFCE-CommandsWithParameter=/usr/bin/winlux-browser "%s";

@@ -66,13 +66,8 @@ status() {
         printf 'input_devices=%s\n' "$devices"
         printf 'update_auto=%s\n' "$(winlux-update --auto status 2>/dev/null || printf 'indisponible')"
         if test -s "$config/update.token" && ! test -L "$config/update.token"; then printf 'update_auth=configured\n'; else printf 'update_auth=missing\n'; fi
-        if test -f "$root/var/lib/winlux/pending-reboot"; then
-            printf 'update_action=reboot\n'
-        else
-            printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
-        fi
+        printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
         printf 'control_available=1\n'
-        if have winlux-browsers; then winlux-browsers --status 2>/dev/null || true; fi
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
         if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi
     } > "$run/control.txt.tmp.$$"
@@ -106,9 +101,6 @@ action=$1
 message 'Operation en cours...'
 perform() {
     case "$action" in
-        browser-install-edge|browser-install-chrome|browser-install-firefox) winlux-browsers --install "${action#browser-install-}" ;;
-        browser-default-edge|browser-default-chrome|browser-default-firefox) winlux-browsers --default "${action#browser-default-}" ;;
-        browser-launch-edge|browser-launch-chrome|browser-launch-firefox) winlux-browsers --launch "${action#browser-launch-}" >"$run/browser.log" 2>&1 & ;;
         network-renew) winlux-network restart ;;
         volume-up|volume-down|volume-mute)
             if have wpctl; then
