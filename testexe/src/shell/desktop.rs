@@ -1206,17 +1206,30 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         b"Winlux",
     );
 
-    // Épinglé.
+    // Épinglé / Toutes les applications.
     let y = s.top + 82;
+    let title: &[u8] = unsafe {
+        if START_SHOW_ALL_APPS {
+            b"Toutes mes applications"
+        } else {
+            b"\xC9pingl\xE9"
+        }
+    };
     text(
         hdc,
         f.title,
         rgb(0xF2, 0xF2, 0xF2),
         inner_l + 4,
         y,
-        b"\xC9pingl\xE9",
+        title,
     );
-    let all = b"Applications int\xE9gr\xE9es";
+    let all: &[u8] = unsafe {
+        if START_SHOW_ALL_APPS {
+            b"\xC9pingl\xE9"
+        } else {
+            b"Toutes mes applications"
+        }
+    };
     let all_w = text_width(all, 11) + 20;
     text(
         hdc,
@@ -1257,9 +1270,61 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         );
     }
 
-    // Recommandé.
+    // Recommandé / Catégories.
     let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
-    if ry + 150 < s.bottom - 72 {
+    if START_SHOW_ALL_APPS {
+        // Afficher les catégories
+        text(
+            hdc,
+            f.title,
+            rgb(0xF2, 0xF2, 0xF2),
+            inner_l + 4,
+            ry,
+            b"Cat\xE9gories",
+        );
+        let categories: [&[u8]; 12] = [
+            b"Toutes",
+            b"Accessoires",
+            b"Bureau",
+            b"Graphisme",
+            b"Internet",
+            b"Son et vid\xE9o",
+            b"Web",
+            b"Programmation",
+            b"Pr\xE9f\xE9rences",
+            b"Administration",
+            b"Favoris",
+            b"R\xE9cents",
+        ];
+        for (i, cat) in categories.iter().enumerate() {
+            let c = category_cell(s, i as i32);
+            if START_CATEGORY == i as i32 {
+                round_rect(
+                    hdc,
+                    b,
+                    c.left,
+                    c.top,
+                    c.right,
+                    c.bottom,
+                    5,
+                    rgb(0x58, 0x65, 0xF2),
+                );
+            }
+            text_centered(
+                hdc,
+                f.small,
+                11,
+                if START_CATEGORY == i as i32 {
+                    rgb(0xFF, 0xFF, 0xFF)
+                } else {
+                    rgb(0xE6, 0xE6, 0xE6)
+                },
+                (c.left + c.right) / 2,
+                c.top + 10,
+                cat,
+            );
+        }
+    } else if ry + 150 < s.bottom - 72 {
         text(
             hdc,
             f.title,
@@ -1402,19 +1467,36 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
 }
 
 /// Élément du menu Démarrer sous le pointeur : 0..11 épinglés, 100..103
-/// recommandés, 200 bascule d'alignement, 201 alimentation, -1 rien.
+/// recommandés, 200 bascule d'alignement, 201 alimentation, 300 toutes mes applications,
+/// 301..312 catégories, -1 rien.
 fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     let s = &l.start;
-    for i in 0..PINNED.len() as i32 {
-        if inside(&pinned_cell(s, i), x, y) {
-            return i;
-        }
+    let y0 = s.top + 82;
+    let all_w = unsafe {
+        text_width(if START_SHOW_ALL_APPS { b"\xC9pingl\xE9" } else { b"Toutes mes applications" }, 11) + 20
+    };
+    let inner_r = s.right - 28;
+    if x >= inner_r - all_w + 10 && x < inner_r + 10 && y >= y0 + 2 && y < y0 + 20 {
+        return 300;
     }
-    let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
-    if ry + 150 < s.bottom - 72 {
-        for i in 0..4 {
-            if inside(&recommended_cell(s, i), x, y) {
-                return 100 + i;
+    if unsafe { START_SHOW_ALL_APPS } {
+        for i in 0..12 {
+            if inside(&category_cell(s, i), x, y) {
+                return 301 + i;
+            }
+        }
+    } else {
+        for i in 0..PINNED.len() as i32 {
+            if inside(&pinned_cell(s, i), x, y) {
+                return i;
+            }
+        }
+        let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
+        if ry + 150 < s.bottom - 72 {
+            for i in 0..4 {
+                if inside(&recommended_cell(s, i), x, y) {
+                    return 100 + i;
+                }
             }
         }
     }
@@ -2040,6 +2122,12 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 }
                 201 => {
                     crate::settings::control(c"poweroff");
+                }
+                300 => {
+                    START_SHOW_ALL_APPS = !START_SHOW_ALL_APPS;
+                }
+                i @ 301..=312 => {
+                    START_CATEGORY = i - 301;
                 }
                 i @ 0..=5 => {
                     set_start(false);
