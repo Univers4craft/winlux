@@ -32,6 +32,7 @@ status() {
         printf 'persistent=%s\n' "$persistent"
         printf 'layout=%s\n' "$(input XKB_LAYOUT | sed 's/^$/fr/')"
         printf 'tap=%s\n' "$(input TAP_TO_CLICK | sed 's/^$/0/')"
+        printf 'mouse_speed=%s\n' "$(input MOUSE_SPEED | sed 's/^$/50/')"
         printf 'align=%s\n' "$(pref TASKBAR_ALIGN)"
         printf 'theme=%s\n' "$(pref THEME)"
         printf 'network='; if have ip; then
@@ -125,6 +126,18 @@ perform() {
             tap=0; test "$action" != tap-on || tap=1
             apply_tap "$tap" || return
             save "$config/input.conf" TAP_TO_CLICK "$tap" ;;
+        mouse-slow|mouse-normal|mouse-fast)
+            case "$action" in mouse-slow) speed=25; acceleration=-0.5 ;; mouse-normal) speed=50; acceleration=0 ;; mouse-fast) speed=75; acceleration=0.5 ;; esac
+            have xinput || { echo 'xinput indisponible' >&2; return 1; }
+            found=0
+            for id in $(xinput --list --id-only); do
+                if xinput list-props "$id" 2>/dev/null | grep -q 'libinput Accel Speed ('; then
+                    xinput set-prop "$id" 'libinput Accel Speed' "$acceleration" || return
+                    found=1
+                fi
+            done
+            test "$found" = 1 || { echo 'Aucune souris avec acceleration libinput exposee' >&2; return 1; }
+            save "$config/input.conf" MOUSE_SPEED "$speed" ;;
         align-left|align-center) save "$config/preferences.conf" TASKBAR_ALIGN "${action#align-}" ;;
         theme-dark|theme-light) save "$config/preferences.conf" THEME "${action#theme-}" ;;
         display-follow|display-fixed) winlux-display "${action#display-}" ;;

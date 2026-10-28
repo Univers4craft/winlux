@@ -14,7 +14,7 @@ paquet n'est installé sur l'hôte par le script de préparation.
 - Mousepad est l'[éditeur maintenu par Xfce](https://docs.xfce.org/apps/mousepad/start).
   Les textes peuvent être ouverts, modifiés et sauvegardés ; xterm lance Bash.
 - Démarrer propose une recherche, une grille épinglée, « Toutes les applications »
-  avec défilement, les applications récemment lancées et l'alimentation. Le clic
+  avec catégories et défilement, les applications récemment lancées et l'alimentation. Le clic
   droit ouvre une application, l'épingle ou crée son raccourci sur le bureau.
   Les épingles sont conservées dans `~/.config/winlux/start.json`. L'apparence
   reprend la disposition Windows 11, avec une implémentation propre à Winlux.

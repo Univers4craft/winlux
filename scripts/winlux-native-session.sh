@@ -14,6 +14,13 @@ export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus
 export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
 export XDG_CONFIG_DIRS=/etc/xdg XDG_DATA_DIRS=/usr/local/share:/usr/share
 /usr/bin/winlux-native-config
+# Restore the user's input choice on each session, without resetting defaults.
+speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
+case "$speed" in
+    25) /usr/bin/winlux-control mouse-slow || true ;;
+    50) /usr/bin/winlux-control mouse-normal || true ;;
+    75) /usr/bin/winlux-control mouse-fast || true ;;
+esac
 for query in /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders /usr/bin/gdk-pixbuf-query-loaders; do
     if test -x "$query"; then "$query" --update-cache; break; fi
 done

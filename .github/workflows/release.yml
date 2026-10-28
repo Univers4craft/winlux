@@ -31,7 +31,7 @@ jobs:
           sudo apt-get install -y -q \
             xorriso grub-pc-bin grub-efi-amd64-bin \
             linux-image-generic xserver-xorg-core \
-            x11-xserver-utils gcc-mingw-w64-x86-64 \
+            x11-xserver-utils xinput gcc-mingw-w64-x86-64 \
             cpio fakeroot zstd kmod busybox-static \
             xvfb xterm ncurses-base x11-xkb-utils xfonts-base fonts-dejavu-core \
             xserver-xorg-input-libinput libxft2 libcairo2 libmpg123-0 libfaad2 libasound2t64 \
@@ -54,22 +54,17 @@ jobs:
 
       - name: Construire l'ISO
         run: |
-          kernel=$(ls /boot/vmlinuz-* 2>/dev/null | head -1)
-          if [ -z "$kernel" ]; then
-            echo "Noyau introuvable : construction ISO ignorée" >&2
-            echo "SKIP_ISO=true" >> "$GITHUB_ENV"
-          else
-            release=$(basename "$kernel" | sed 's/^vmlinuz-//')
-            WINLUX_KERNEL="$kernel" \
-            WINLUX_KERNEL_RELEASE="$release" \
-              bash scripts/build-live-iso.sh "build/winlux-live-$GITHUB_REF_NAME.iso" || true
-            if [ -f "build/winlux-live-$GITHUB_REF_NAME.iso" ]; then
-              echo "SKIP_ISO=false" >> "$GITHUB_ENV"
-            else
-              echo "Construction ISO échouée : construction runtime uniquement" >&2
-              echo "SKIP_ISO=true" >> "$GITHUB_ENV"
-            fi
-          fi
+          kernel=$(find /boot -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -1)
+          test -n "$kernel"
+          release=$(basename "$kernel" | sed 's/^vmlinuz-//')
+          # Ubuntu restricts /boot to root; copy only the kernel, then build
+          # unprivileged. Never publish a runtime fallback as a system release.
+          sudo install -m 644 "$kernel" "$RUNNER_TEMP/winlux-kernel"
+          WINLUX_KERNEL="$RUNNER_TEMP/winlux-kernel" \
+          WINLUX_KERNEL_RELEASE="$release" \
+            bash scripts/build-live-iso.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
+          test -s "build/winlux-live-$GITHUB_REF_NAME.iso"
+          echo "SKIP_ISO=false" >> "$GITHUB_ENV"
 
       - name: Valider l'ISO et l'installation avant publication
         env:
@@ -87,11 +82,9 @@ jobs:
 
       - name: Construire la mise à jour
         run: |
-          if [ "$SKIP_ISO" = "false" ]; then
-            bash scripts/build-update-bundle.sh --system "$GITHUB_REF_NAME"
-          else
-            bash scripts/build-update-bundle.sh --runtime
-          fi
+          bash scripts/build-update-bundle.sh --system "$GITHUB_REF_NAME"
+          grep -qx 'scope=system' build/winlux-update-manifest.txt
+          grep -q '^components=.*desktop.*applications' build/winlux-update-manifest.txt
 
       - name: Calculer les sommes SHA-256
         run: |

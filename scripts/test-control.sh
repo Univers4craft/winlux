@@ -31,7 +31,7 @@ printf 'setxkbmap %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"
 MOCK
 cat > "$work/bin/xinput" <<'MOCK'
 #!/bin/sh
-case "$1" in --list) echo 12 ;; list-props) echo 'libinput Tapping Enabled (100): 0' ;; set-prop) printf 'xinput %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG" ;; esac
+case "$1" in --list) echo 12 ;; list-props) printf 'libinput Tapping Enabled (100): 0\nlibinput Accel Speed (101): 0\n' ;; set-prop) printf 'xinput %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG" ;; esac
 MOCK
 cat > "$work/bin/winlux-update" <<'MOCK'
 #!/bin/sh
@@ -61,6 +61,12 @@ control status
 grep -q '^persistent=0$' "$work/root/run/winlux/control.txt"
 grep -q '^audio=Volume: 0.45$' "$work/root/run/winlux/control.txt"
 control keyboard-us
+control mouse-fast
+grep -qx 'MOUSE_SPEED=75' "$work/root/etc/winlux/input.conf"
+grep -qx 'xinput set-prop 12 libinput Accel Speed 0.5' "$work/commands"
+grep -qx 'mouse_speed=75' "$work/root/run/winlux/control.txt"
+control mouse-slow
+grep -qx 'MOUSE_SPEED=25' "$work/root/etc/winlux/input.conf"
 grep -q '^XKB_LAYOUT=us$' "$work/root/etc/winlux/input.conf"
 grep -q '^setxkbmap -layout us$' "$work/commands"
 if WINLUX_TEST_KEYBOARD_FAIL=1 control keyboard-fr; then echo 'ERROR: failed-layout accepted' >&2; exit 1; fi

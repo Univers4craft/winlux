@@ -13,6 +13,17 @@ STATE = Path.home() / ".config/winlux/start.json"
 DEFAULTS = ["winlux-explorer.desktop", "winlux-browser-edge.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
 
+def category(app):
+    """Use installed desktop metadata, including generated Windows launchers."""
+    categories = set((app.get_categories() or "").split(";")) if hasattr(app, "get_categories") else set()
+    for key, label in [("Settings", "Paramètres"), ("Network", "Internet"),
+                       ("Office", "Bureautique"), ("Graphics", "Graphisme"),
+                       ("AudioVideo", "Audio et vidéo"), ("Game", "Jeux"),
+                       ("Development", "Développement"), ("System", "Système"),
+                       ("Utility", "Accessoires")]:
+        if key in categories: return label
+    return "Autres applications"
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -167,7 +178,16 @@ class Start(Gtk.Application):
         self.toggle.set_label("‹  Retour" if listing else "Toutes les applications  ›")
         self.results = sorted((app for app in self.apps.values() if query in app.get_display_name().casefold()), key=lambda app: app.get_display_name().casefold())
         if listing:
-            for app in self.results: self.content.pack_start(self.app_button(app), False, False, 0)
+            previous = None
+            if not query: self.results.sort(key=lambda app: (category(app), app.get_display_name().casefold()))
+            for app in self.results:
+                group = category(app)
+                if not query and group != previous:
+                    heading = Gtk.Label(label=group, xalign=0, margin_top=10)
+                    heading.get_style_context().add_class("heading")
+                    self.content.pack_start(heading, False, False, 0)
+                    previous = group
+                self.content.pack_start(self.app_button(app), False, False, 0)
             if not self.results: self.content.pack_start(Gtk.Label(label="Aucune application trouvée"), False, False, 0)
         else:
             grid = Gtk.Grid(column_homogeneous=True, column_spacing=4, row_spacing=12)

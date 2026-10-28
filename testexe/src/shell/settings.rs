@@ -668,6 +668,11 @@ fn wrap_len(line: &[u8], width: i32) -> usize {
 }
 
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
+    MOUSE_SPEED = match value(b"mouse_speed") {
+        b"25" => 25,
+        b"75" => 75,
+        _ => 50,
+    };
     let p = pal();
     let c = content(f);
     // Conserver le panneau Mica et les accents de la nouvelle interface,
@@ -1459,15 +1464,15 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     let action = match (PAGE, hit(f, x, y)) {
         (5, 0) => {
             unsafe { MOUSE_SPEED = 25 };
-            None
+            Some(c"mouse-slow")
         }
         (5, 1) => {
             unsafe { MOUSE_SPEED = 50 };
-            None
+            Some(c"mouse-normal")
         }
         (5, 2) => {
             unsafe { MOUSE_SPEED = 75 };
-            None
+            Some(c"mouse-fast")
         }
         (6, 5) => {
             crate::desktop::set_show_system_icons(true);
