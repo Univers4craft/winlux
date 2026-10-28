@@ -58,6 +58,8 @@ static mut EXE_TRACE: bool = false;
 static mut EXE_NOTICE: &[u8] = b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.";
 const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
+static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
+static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
 
 fn exe_profile_path(out: &mut [u16; 2060]) {
     unsafe {
@@ -1104,6 +1106,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 0, 0, b"D\xE9finition pr\xE9c\xE9dente", 0);
             button(g, &c, 0, 1, b"D\xE9finition suivante", 1);
             button(g, &c, 0, 2, b"Appliquer", 2);
+            button(g, &c, 0, 3, b"Conserver", 18);
+            button(g, &c, 0, 4, b"R\xE9tablir", 19);
             button(g, &c, 1, 0, b"Image fixe", 3);
             button(g, &c, 1, 1, b"Suivre la fen\xEAtre VM", 4);
             button(g, &c, 1, 2, b"Actualiser", 5);

@@ -39,6 +39,8 @@ static mut DESKTOP_SHORTCUTS: u8 = 0;
 static mut SHOW_SYSTEM_ICONS: bool = false; // Icônes système (PC, Documents, Corbeille) désactivées par défaut
 static mut START_SHOW_ALL_APPS: bool = false; // Afficher toutes les applications au lieu des épinglées
 static mut START_CATEGORY: i32 = 0; // Catégorie sélectionnée (0 = toutes)
+static mut ALL_APPS: [( &'static [u8], &'static [u8], i32); 64] = [(b"", b"", 0); 64]; // (nom, exec, catégorie)
+static mut ALL_APPS_COUNT: usize = 0;
 static mut CONTEXT_APP: Option<usize> = None;
 static mut CONTEXT_DESKTOP: Option<usize> = None;
 static mut CONTEXT_RECT: Rect = Rect {
@@ -82,6 +84,43 @@ fn now() -> u32 {
 }
 fn since(t: u32) -> i32 {
     now().wrapping_sub(t).min(1_000_000) as i32
+}
+
+fn init_apps() {
+    unsafe {
+        if ALL_APPS_COUNT > 0 {
+            return;
+        }
+        let apps: [(&'static [u8], &'static [u8], i32); 21] = [
+            (b"Terminal", b"xterm", 1),
+            (b"Explorateur de fichiers", b"nemo", 1),
+            (b"Bloc-notes", b"mousepad", 1),
+            (b"Calculatrice", b"galculator", 1),
+            (b"Archives", b"file-roller", 1),
+            (b"Visionneuse d'images", b"xviewer", 3),
+            (b"GIMP", b"gimp", 3),
+            (b"Inkscape", b"inkscape", 3),
+            (b"Firefox", b"firefox", 4),
+            (b"Chromium", b"chromium", 4),
+            (b"Thunderbird", b"thunderbird", 4),
+            (b"VLC", b"vlc", 5),
+            (b"Rhythmbox", b"rhythmbox", 5),
+            (b"Audacity", b"audacity", 5),
+            (b"VS Code", b"code", 7),
+            (b"Vim", b"vim", 7),
+            (b"Geany", b"geany", 7),
+            (b"Param\xE8tres", b"cinnamon-settings", 8),
+            (b"Gestionnaire de paquets", b"mintinstall", 9),
+            (b"Disques", b"gnome-disks", 9),
+            (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
+        ];
+        for (name, exec, cat) in apps.iter() {
+            if ALL_APPS_COUNT < 64 {
+                ALL_APPS[ALL_APPS_COUNT] = (*name, *exec, *cat);
+                ALL_APPS_COUNT += 1;
+            }
+        }
+    }
 }
 
 // ---------- Géométrie partagée par le dessin et les clics ----------
@@ -1021,6 +1060,7 @@ enum Launch {
     Terminal,
     Browser,
     Notepad,
+    Exec(&'static [u8]),
 }
 
 struct App {
@@ -1161,6 +1201,23 @@ unsafe fn launch(what: Launch) {
                 core::ptr::null_mut(),
                 OPEN.as_ptr(),
                 BROWSER.as_ptr(),
+                core::ptr::null(),
+                core::ptr::null(),
+                1,
+            );
+        }
+        Launch::Exec(cmd) => {
+            let mut wcmd = [0u16; 256];
+            for (i, &b) in cmd.iter().enumerate() {
+                if i < 255 {
+                    wcmd[i] = b as u16;
+                }
+            }
+            static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+            ShellExecuteW(
+                core::ptr::null_mut(),
+                OPEN.as_ptr(),
+                wcmd.as_ptr(),
                 core::ptr::null(),
                 core::ptr::null(),
                 1,
@@ -1324,6 +1381,27 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 cat,
             );
         }
+        // Afficher les applications de la catégorie sélectionnée
+        let apps_y = ry + 120;
+        text(
+            hdc,
+            f.title,
+            rgb(0xF2, 0xF2, 0xF2),
+            inner_l + 4,
+            apps_y,
+            b"Applications",
+        );
+        let mut displayed = 0;
+        for i in 0..unsafe { ALL_APPS_COUNT } {
+            let (name, _exec, cat) = unsafe { ALL_APPS[i] };
+            if START_CATEGORY == 0 || cat == START_CATEGORY {
+                let app_y = apps_y + 40 + (displayed as i32) * 44;
+                if app_y + 40 < s.bottom - 72 {
+                    text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), inner_l + 4, app_y, name);
+                    displayed += 1;
+                }
+            }
+        }
     } else if ry + 150 < s.bottom - 72 {
         text(
             hdc,
@@ -1468,7 +1546,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
 
 /// Élément du menu Démarrer sous le pointeur : 0..11 épinglés, 100..103
 /// recommandés, 200 bascule d'alignement, 201 alimentation, 300 toutes mes applications,
-/// 301..312 catégories, -1 rien.
+/// 301..312 catégories, 400..463 applications, -1 rien.
 fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     let s = &l.start;
     let y0 = s.top + 82;
@@ -1483,6 +1561,19 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
         for i in 0..12 {
             if inside(&category_cell(s, i), x, y) {
                 return 301 + i;
+            }
+        }
+        let apps_y = s.top + 118 + pin_rows(s) * PIN_CELL_H + 140;
+        let inner_l = s.left + 28;
+        let mut displayed = 0;
+        for i in 0..unsafe { ALL_APPS_COUNT } {
+            let cat = unsafe { ALL_APPS[i].2 };
+            if unsafe { START_CATEGORY == 0 || cat == START_CATEGORY } {
+                let app_y = apps_y + (displayed as i32) * 44;
+                if y >= app_y && y < app_y + 40 && x >= inner_l + 4 && x < inner_r {
+                    return 400 + i as i32;
+                }
+                displayed += 1;
             }
         }
     } else {
@@ -1868,6 +1959,7 @@ pub unsafe fn init(
     ALIGN_LEFT = align_left;
     crate::settings::system_tick();
     load_shell_state();
+    init_apps();
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
     wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
@@ -2128,6 +2220,14 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 }
                 i @ 301..=312 => {
                     START_CATEGORY = i - 301;
+                }
+                i @ 400..=463 => {
+                    set_start(false);
+                    let app_idx = (i - 400) as usize;
+                    if app_idx < unsafe { ALL_APPS_COUNT } {
+                        let exec = unsafe { ALL_APPS[app_idx].1 };
+                        launch(Launch::Exec(exec));
+                    }
                 }
                 i @ 0..=5 => {
                     set_start(false);
