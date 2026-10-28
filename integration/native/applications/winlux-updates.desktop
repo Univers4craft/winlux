@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Mises à jour Winlux
-Exec=/usr/bin/winlux-shell-app settings 6
+Exec=/usr/bin/winlux-shell-app settings 7
 Icon=/usr/share/winlux/native/icons/settings.svg
 StartupWMClass=winlux-settings
 Terminal=false

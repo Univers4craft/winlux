@@ -68,8 +68,22 @@ subprocess.Popen(["xfdesktop", "--disable-wm-check"], stdout=log, stderr=log)
 run("winlux-control", "status")
 subprocess.Popen(["winlux-shell-app", "explorer"], stdout=log, stderr=log)
 explorer = wait_title("Explorer Winlux")
-subprocess.Popen(["winlux-shell-app", "settings", "10"], stdout=log, stderr=log)
+subprocess.Popen(["winlux-shell-app", "settings", "11"], stdout=log, stderr=log)
 settings = wait_title("Parametres Winlux")
+def settings_page(window):
+    pid = int(run("xprop", "-id", str(window), "_NET_WM_PID").split("=")[-1].strip())
+    return b"WINLUX_SETTINGS_PAGE=" + Path(f"/proc/{pid}/environ").read_bytes().split(b"WINLUX_SETTINGS_PAGE=", 1)[1].split(b"\0", 1)[0]
+
+assert settings_page(settings) == b"WINLUX_SETTINGS_PAGE=11"
+from gi.repository import Gio
+previous = client_ids()
+Gio.DesktopAppInfo.new_from_filename("/usr/share/applications/winlux-updates.desktop").launch([], None)
+wait_for(lambda: len(client_ids() - previous) == 1, "updates launcher opens its own window")
+updates = (client_ids() - previous).pop()
+assert settings_page(updates) == b"WINLUX_SETTINGS_PAGE=7"
+capture("native-settings-updates")
+run("wmctrl", "-ic", hex(updates))
+print("WINLUX_NATIVE_SETTINGS_ROUTES=0", flush=True)
 document = Path("/tmp/winlux-native-note.txt")
 document.write_text("Winlux : vrai éditeur de texte.\n")
 subprocess.Popen(["mousepad", "--disable-server", str(document)], stdout=log, stderr=log)

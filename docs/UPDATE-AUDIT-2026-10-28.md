@@ -38,6 +38,18 @@ runtime n'est autorisé.
 
 ## Validation et livraison
 
+La préparation de v0.2.3 a aussi révélé des pages de paramètres masquées par
+des cas de navigation dupliqués. Écran, À propos, Exécutable, Accessibilité et
+Effets visuels ont désormais des pages distinctes ; Mises à jour utilise à
+nouveau son vrai contenu. Les lanceurs natifs ouvrent les pages 7 (mises à
+jour) et 11 (navigateurs). Les identifiants des clics Souris correspondent
+maintenant aux boutons dessinés. Les pseudo-boutons de conservation de
+résolution et de fréquence, sans implémentation et qui débordaient ou
+recouvraient d'autres contrôles, ont été retirés ; l'activation automatique
+réelle du service de mise à jour est conservée. La compilation refuse les
+cas de navigation dupliqués et le diagnostic VM vérifie les pages ouvertes
+par les vrais lanceurs du bureau.
+
 Les tests de contrôle couvrent l'appel libinput, la sauvegarde et la télémétrie
 de la vitesse. Ils utilisent un périphérique simulé et ne remplacent pas un
 essai de souris dans une VM. Les changements de source ne réparent pas les

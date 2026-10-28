@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Choisir un navigateur
-Exec=/usr/bin/winlux-shell-app settings 10
+Exec=/usr/bin/winlux-shell-app settings 11
 Icon=web-browser
 Terminal=false
 Categories=Settings;Network;

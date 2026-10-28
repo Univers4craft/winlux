@@ -1,12 +1,13 @@
 //! Paramètres Linux/Windows : navigation Mica et commandes système réelles.
 //! Les actions passent par winlux-control et les états viennent du système.
+#![deny(unreachable_patterns)]
 
 use crate::gfx::*;
 use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 12] = [
+const PAGES: [&[u8]; 14] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -19,6 +20,8 @@ const PAGES: [&[u8]; 12] = [
     b"\xC0 propos",
     b"Ex\xE9cutable",
     b"Navigateurs",
+    b"Accessibilit\xE9",
+    b"Effets visuels",
 ];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
@@ -60,7 +63,6 @@ const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
 static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
 static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
-static mut UPDATE_FREQUENCY: u32 = 0; // 0=quotidien, 1=hebdomadaire, 2=manuel
 static mut ENABLE_BLUR: bool = true; // Effet de flou activé
 static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
 static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
@@ -108,7 +110,7 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
         EXE_TRACE = field(data, b"trace") == b"1";
     }
     EXE_NOTICE = b"Un double-clic lance le programme, m\xEAme sans r\xE9glages enregistr\xE9s.";
-    PAGE = 9;
+    PAGE = 10;
     HOVER = -1;
     SCROLL = 0;
     crate::wm::open(crate::wm::APP_SETTINGS);
@@ -268,7 +270,7 @@ pub unsafe fn system_tick() -> bool {
     let mut changed = read(c"Z:\\run\\winlux\\control.txt", &mut STATUS);
     if GetFileAttributesA(c"Z:\\run\\winlux\\browser-chooser".as_ptr()) != u32::MAX {
         DeleteFileA(c"Z:\\run\\winlux\\browser-chooser".as_ptr());
-        open_page(10);
+        open_page(11);
         changed = true;
     }
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
@@ -466,8 +468,8 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (6, 1) => value(b"align") == b"center",
         (6, 3) => value(b"theme") == b"dark",
         (6, 4) => value(b"theme") == b"light",
-        (6, 5) => crate::desktop::show_system_icons(),
-        (6, 6) => !crate::desktop::show_system_icons(),
+        (6, 12) => crate::desktop::show_system_icons(),
+        (6, 13) => !crate::desktop::show_system_icons(),
         (8, 3) => value(b"display_policy") == b"fixed",
         (8, 4) => value(b"display_policy") != b"fixed",
         (10, 0..=4) => EXE_SCALE == id as usize,
@@ -768,11 +770,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 b"Rapidit\xE9 de la souris",
                 speed_str.as_bytes(),
             );
-            button(g, &c, 2, 0, b"Lente", 0);
-            button(g, &c, 2, 1, b"Normale", 1);
-            button(g, &c, 2, 2, b"Rapide", 2);
+            button(g, &c, 0, 0, b"Lente", 0);
+            button(g, &c, 0, 1, b"Normale", 1);
+            button(g, &c, 0, 2, b"Rapide", 2);
         }
-        9 => {
+        12 => {
             row(g, &c, 44, b"Accessibilit\xE9", b"Options d'accessibilit\xE9.");
             let pointer_str = unsafe {
                 if POINTER_SIZE == 1 {
@@ -784,42 +786,27 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 }
             };
             row(g, &c, 84, b"Taille du pointeur", pointer_str.as_bytes());
-            button(g, &c, 0, 0, b"Normal", 20);
-            button(g, &c, 0, 1, b"Grand", 21);
-            button(g, &c, 0, 2, b"Tr\xE8s grand", 22);
+            button(g, &c, 0, 0, b"Normal", 0);
+            button(g, &c, 0, 1, b"Grand", 1);
+            button(g, &c, 0, 2, b"Tr\xE8s grand", 2);
             row(g, &c, 124, b"Contraste \xE9lev\xE9", if unsafe { HIGH_CONTRAST } { b"Activ\xE9" } else { b"D\xE9sactiv\xE9" });
-            button(g, &c, 1, 0, b"Activer", 23);
-            button(g, &c, 1, 1, b"D\xE9sactiver", 24);
+            button(g, &c, 1, 0, b"Activer", 3);
+            button(g, &c, 1, 1, b"D\xE9sactiver", 4);
         }
-        10 => {
+        13 => {
             row(g, &c, 44, b"Effets visuels", b"Options d'effet visuels.");
             row(g, &c, 84, b"Effet de flou", if unsafe { ENABLE_BLUR } { b"Activ\xE9" } else { b"D\xE9sactiv\xE9" });
-            button(g, &c, 0, 0, b"Activer", 30);
-            button(g, &c, 0, 1, b"D\xE9sactiver", 31);
+            button(g, &c, 0, 0, b"Activer", 0);
+            button(g, &c, 0, 1, b"D\xE9sactiver", 1);
             row(g, &c, 124, b"Animations fluides", if unsafe { ENABLE_SMOOTH_ANIM } { b"Activ\xE9es" } else { b"D\xE9sactiv\xE9es" });
-            button(g, &c, 1, 0, b"Activer", 32);
-            button(g, &c, 1, 1, b"D\xE9sactiver", 33);
+            button(g, &c, 1, 0, b"Activer", 3);
+            button(g, &c, 1, 1, b"D\xE9sactiver", 4);
             row(g, &c, 164, b"Miniatures des fen\xEAtres", if unsafe { ENABLE_THUMBNAILS } { b"Activ\xE9es" } else { b"D\xE9sactiv\xE9es" });
-            button(g, &c, 2, 0, b"Activer", 34);
-            button(g, &c, 2, 1, b"D\xE9sactiver", 35);
+            button(g, &c, 2, 0, b"Activer", 6);
+            button(g, &c, 2, 1, b"D\xE9sactiver", 7);
             row(g, &c, 204, b"Th\xE8me automatique", if unsafe { AUTO_THEME } { b"Activ\xE9" } else { b"D\xE9sactiv\xE9" });
-            button(g, &c, 3, 0, b"Activer", 36);
-            button(g, &c, 3, 1, b"D\xE9sactiver", 37);
-        }
-        6 => {
-            row(
-                g,
-                &c,
-                44,
-                b"Ic\xF4nes syst\xE8me du bureau",
-                if crate::desktop::show_system_icons() {
-                    b"Affich\xE9es"
-                } else {
-                    b"Masqu\xE9es"
-                },
-            );
-            button(g, &c, 2, 0, b"Afficher", 5);
-            button(g, &c, 2, 1, b"Masquer", 6);
+            button(g, &c, 3, 0, b"Activer", 9);
+            button(g, &c, 3, 1, b"D\xE9sactiver", 10);
         }
         11 => {
             row(
@@ -883,7 +870,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 );
             }
         }
-        9 => {
+        10 => {
             if EXE_LEN == 0 {
                 row(
                     g,
@@ -938,7 +925,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             row(g, &c, 350, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
         }
-        8 => {
+        9 => {
             let info = BUILD_INFO.get();
             let version = field(info, b"version");
             row(
@@ -1102,7 +1089,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             journal(g, &c, 336, LOG.get());
         }
-        5 => {
+        6 => {
             row(
                 g,
                 &c,
@@ -1125,9 +1112,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     b"Session Live : les r\xE9glages durent jusqu'au red\xE9marrage."
                 },
             );
-            button(g, &c, 4, 0, b"R\xE9glages de l'\xE9cran", 12);
+            row(g, &c, 260, b"Ic\xF4nes syst\xE8me du bureau", if crate::desktop::show_system_icons() { b"Affich\xE9es" } else { b"Masqu\xE9es" });
+            button(g, &c, 4, 0, b"Afficher", 12);
+            button(g, &c, 4, 1, b"Masquer", 13);
+            button(g, &c, 6, 0, b"R\xE9glages de l'\xE9cran", 18);
         }
-        7 => {
+        8 => {
             row(
                 g,
                 &c,
@@ -1150,8 +1140,6 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 0, 0, b"D\xE9finition pr\xE9c\xE9dente", 0);
             button(g, &c, 0, 1, b"D\xE9finition suivante", 1);
             button(g, &c, 0, 2, b"Appliquer", 2);
-            button(g, &c, 0, 3, b"Conserver", 18);
-            button(g, &c, 0, 4, b"R\xE9tablir", 19);
             button(g, &c, 1, 0, b"Image fixe", 3);
             button(g, &c, 1, 1, b"Suivre la fen\xEAtre VM", 4);
             button(g, &c, 1, 2, b"Actualiser", 5);
@@ -1186,7 +1174,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 b"Relancez le bureau apr\xE8s modification de l'\xE9chelle.",
             );
         }
-        _ => {
+        7 => {
             if updating() {
                 draw_installation(g, &c);
                 return;
@@ -1261,19 +1249,6 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             if restart == b"reboot" {
                 button(g, &c, 1, 2, b"Red\xE9marrer", 5);
             }
-            let freq_str = unsafe {
-                if UPDATE_FREQUENCY == 0 {
-                    "Quotidien"
-                } else if UPDATE_FREQUENCY == 1 {
-                    "Hebdomadaire"
-                } else {
-                    "Manuel"
-                }
-            };
-            row(g, &c, 324, b"Fr\xE9quence de recherche", freq_str.as_bytes());
-            button(g, &c, 2, 0, b"Quotidien", 25);
-            button(g, &c, 2, 1, b"Hebdomadaire", 26);
-            button(g, &c, 2, 2, b"Manuel", 27);
             text(
                 g.hdc,
                 g.f.semibold,
@@ -1367,6 +1342,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             text(g.hdc, g.f.small, p.text3, c.left, c.bottom - 30, b"Molette / Haut-Bas : d\xE9filer ; Page suivante/pr\xE9c\xE9dente : lecture rapide.");
         }
+        _ => {}
     }
     let notice = if PAGE == 10 {
         EXE_NOTICE
@@ -1474,11 +1450,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             unsafe { MOUSE_SPEED = 75 };
             Some(c"mouse-fast")
         }
-        (6, 5) => {
+        (6, 12) => {
             crate::desktop::set_show_system_icons(true);
             None
         }
-        (6, 6) => {
+        (6, 13) => {
             crate::desktop::set_show_system_icons(false);
             None
         }
@@ -1533,7 +1509,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             return true;
         }
         (1, 2) => {
-            open_page(6);
+            open_page(7);
             return true;
         }
         (2, 0) => Some(c"network-renew"),
@@ -1549,20 +1525,20 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (6, 1) => Some(c"align-center"),
         (6, 3) => Some(c"theme-dark"),
         (6, 4) => Some(c"theme-light"),
-        (6, 12) => {
+        (6, 18) => {
             open_page(8);
             return true;
         }
-        (7, 0) => {
+        (8, 0) => {
             SELECTED_MODE = SELECTED_MODE.saturating_sub(1);
             return true;
         }
-        (7, 1) => {
+        (8, 1) => {
             let n = value(b"display_modes").split(|&v| v == b',').count();
             SELECTED_MODE = (SELECTED_MODE + 1).min(n.saturating_sub(1));
             return true;
         }
-        (7, 2) => {
+        (8, 2) => {
             let chosen = value(b"display_modes")
                 .split(|&v| v == b',')
                 .nth(SELECTED_MODE)
@@ -1585,67 +1561,55 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (8, 15) => Some(c"display-scale-down"),
         (8, 16) => Some(c"display-scale-auto"),
         (8, 17) => Some(c"display-scale-up"),
-        (9, 20) => {
+        (12, 0) => {
             unsafe { POINTER_SIZE = 1 };
             Some(c"pointer-normal")
         }
-        (9, 21) => {
+        (12, 1) => {
             unsafe { POINTER_SIZE = 2 };
             Some(c"pointer-large")
         }
-        (9, 22) => {
+        (12, 2) => {
             unsafe { POINTER_SIZE = 3 };
             Some(c"pointer-xlarge")
         }
-        (9, 23) => {
+        (12, 3) => {
             unsafe { HIGH_CONTRAST = true };
             Some(c"contrast-on")
         }
-        (9, 24) => {
+        (12, 4) => {
             unsafe { HIGH_CONTRAST = false };
             Some(c"contrast-off")
         }
-        (7, 25) => {
-            unsafe { UPDATE_FREQUENCY = 0 };
-            Some(c"update-freq-daily")
-        }
-        (7, 26) => {
-            unsafe { UPDATE_FREQUENCY = 1 };
-            Some(c"update-freq-weekly")
-        }
-        (7, 27) => {
-            unsafe { UPDATE_FREQUENCY = 2 };
-            Some(c"update-freq-manual")
-        }
-        (10, 30) => {
+        (13, 0) => {
             unsafe { ENABLE_BLUR = true };
             Some(c"blur-on")
         }
-        (10, 31) => {
+        (13, 1) => {
             unsafe { ENABLE_BLUR = false };
             Some(c"blur-off")
         }
-        (10, 32) => {
+        (13, 3) => {
             unsafe { ENABLE_SMOOTH_ANIM = true };
             Some(c"smooth-on")
         }
-        (10, 33) => {
+        (13, 4) => {
             unsafe { ENABLE_SMOOTH_ANIM = false };
             Some(c"smooth-off")
         }
-        (10, 34) => {
+        (13, 6) => {
             unsafe { ENABLE_THUMBNAILS = true };
             Some(c"thumb-on")
         }
-        (10, 35) => {
+        (13, 7) => {
             unsafe { ENABLE_THUMBNAILS = false };
             Some(c"thumb-off")
         }
-        (10, 36) => {
+        (13, 9) => {
             unsafe { AUTO_THEME = true };
             Some(c"auto-theme-on")
         }
-        (10, 37) => {
+        (13, 10) => {
             unsafe { AUTO_THEME = false };
             Some(c"auto-theme-off")
         }
