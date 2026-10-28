@@ -165,7 +165,7 @@ saturent pas la palette du serveur. Il s’agit encore d’un prototype dans
 `gui_demo.exe`, pas d’un gestionnaire de bureau autonome.
 
 Le mécanisme `winlux-update` récupère le manifeste de la dernière release
-GitHub, avec jeton de lecture configuré dans Paramètres pour un dépôt privé.
+publique GitHub, directement par son URL publique.
 Les paquets système incluent bureau, outils, applications embarquées, noyau,
 modules et bibliothèques ; les paquets runtime réduits sont explicitement
 identifiés. Inventaires, SHA-256, chemins et liens sont vérifiés, les fichiers

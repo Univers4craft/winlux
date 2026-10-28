@@ -47,43 +47,6 @@ update --list | grep -q 'Aucune vérification'
 build_runtime updater-runtime
 update --check
 
-# Private repositories use a guest-specific credential file. A fake curl checks
-# the selected authorization header without making any network call or logging
-# the secret, and confirms environment overrides retain their priority.
-mkdir "$test_root/fake-network"
-printf '{"assets":[{"url":"https://api.github.com/repos/Univers4craft/winlux/releases/assets/123","name":"winlux-update-manifest.txt"}]}\n' >"$test_root/release.json"
-cat >"$test_root/fake-network/curl" <<'CURL'
-#!/bin/sh
-set -eu
-authorized=0
-destination=
-url=
-while test "$#" -gt 0; do
-    case "$1" in
-        --header) if test "$2" = "Authorization: Bearer $WINLUX_TEST_EXPECT_TOKEN"; then authorized=1; fi; shift 2 ;;
-        --output) destination=$2; shift 2 ;;
-        https://*) url=$1; shift ;;
-        *) shift ;;
-    esac
-done
-test "$authorized" = 1 || { echo 'autorisation de test incorrecte' >&2; exit 1; }
-case "$url" in
-    */releases/latest) cp "$WINLUX_TEST_RELEASE" "$destination" ;;
-    */releases/assets/123) cp "$WINLUX_TEST_MANIFEST" "$destination" ;;
-    *) exit 1 ;;
-esac
-CURL
-chmod 755 "$test_root/fake-network/curl"
-printf 'file_token\n' >"$fixture/etc/winlux/update.token"
-chmod 600 "$fixture/etc/winlux/update.token"
-env -u WINLUX_UPDATE_MANIFEST -u WINLUX_UPDATE_TOKEN -u GH_TOKEN PATH="$test_root/fake-network:$PATH" WINLUX_UPDATE_ROOT="$fixture" WINLUX_TEST_EXPECT_TOKEN=file_token WINLUX_TEST_RELEASE="$test_root/release.json" WINLUX_TEST_MANIFEST="$assets/manifest.txt" "$updater" --check >"$test_root/token-test.log" 2>&1
-env -u WINLUX_UPDATE_MANIFEST PATH="$test_root/fake-network:$PATH" WINLUX_UPDATE_ROOT="$fixture" WINLUX_UPDATE_TOKEN=explicit_token GH_TOKEN=github_token WINLUX_TEST_EXPECT_TOKEN=explicit_token WINLUX_TEST_RELEASE="$test_root/release.json" WINLUX_TEST_MANIFEST="$assets/manifest.txt" "$updater" --check >>"$test_root/token-test.log" 2>&1
-env -u WINLUX_UPDATE_MANIFEST -u WINLUX_UPDATE_TOKEN PATH="$test_root/fake-network:$PATH" WINLUX_UPDATE_ROOT="$fixture" GH_TOKEN=github_token WINLUX_TEST_EXPECT_TOKEN=github_token WINLUX_TEST_RELEASE="$test_root/release.json" WINLUX_TEST_MANIFEST="$assets/manifest.txt" "$updater" --check >>"$test_root/token-test.log" 2>&1
-if grep -Eq 'file_token|explicit_token|github_token' "$test_root/token-test.log"; then echo 'jeton affiché dans le journal' >&2; exit 1; fi
-chmod 644 "$fixture/etc/winlux/update.token"
-if env -u WINLUX_UPDATE_TOKEN -u GH_TOKEN WINLUX_UPDATE_ROOT="$fixture" WINLUX_UPDATE_MANIFEST="file://$assets/manifest.txt" "$updater" --check >>"$test_root/token-test.log" 2>&1; then echo 'jeton non privé accepté' >&2; exit 1; fi
-rm "$fixture/etc/winlux/update.token"
-
 WINLUX_UPDATE_ROOT="$fixture" WINLUX_UPDATE_MANIFEST=file:///not-present "$updater" --list | grep -q 'runtime,updater'
 update --apply
 test "$(cat "$fixture/usr/share/winlux/version")" = updater-runtime

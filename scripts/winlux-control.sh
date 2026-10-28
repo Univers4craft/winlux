@@ -66,7 +66,6 @@ status() {
         if test -r "$root/proc/bus/input/devices"; then devices=$(awk '/^N: Name=/ { n++ } END { print n+0 }' "$root/proc/bus/input/devices"); fi
         printf 'input_devices=%s\n' "$devices"
         printf 'update_auto=%s\n' "$(winlux-update --auto status 2>/dev/null || printf 'indisponible')"
-        if test -s "$config/update.token" && ! test -L "$config/update.token"; then printf 'update_auth=configured\n'; else printf 'update_auth=missing\n'; fi
         if test -f "$root/var/lib/winlux/pending-reboot"; then
             printf 'update_action=reboot\n'
         else
@@ -159,24 +158,6 @@ perform() {
         update-rollback) winlux-update --rollback ;;
         update-auto-on) winlux-update --auto enable ;;
         update-auto-off) winlux-update --auto disable ;;
-        update-save-token)
-            request="$run/update-token-request"
-            test -f "$request" && ! test -L "$request" || { echo 'Demande de jeton absente ou invalide.' >&2; return 1; }
-            chmod 600 "$request" || return
-            length=$(wc -c < "$request")
-            if test "$length" -eq 0; then
-                rm -f "$config/update.token" "$request" || return
-                echo 'Acces prive GitHub efface.'
-            elif test "$length" -gt 255 || test "$(wc -l < "$request")" -ne 0 || LC_ALL=C grep -q '[^A-Za-z0-9_]' "$request"; then
-                rm -f "$request"
-                echo 'Format de jeton invalide. Utilisez un jeton GitHub sans espace.' >&2
-                return 1
-            else
-                printf '\n' >> "$request" || return
-                mv -f "$request" "$config/update.token" || return
-                chmod 600 "$config/update.token" || return
-                echo 'Acces prive GitHub enregistre.'
-            fi ;;
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
             # Demande consommee par l'init superviseur. Ne touche pas aux

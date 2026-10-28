@@ -7,10 +7,8 @@ target_root=${WINLUX_UPDATE_ROOT:-/}
 test -d "$target_root" || { echo "racine de mise à jour absente" >&2; exit 1; }
 target_root=$(CDPATH= cd -- "$target_root" && pwd -P)
 manifest_source=${WINLUX_UPDATE_MANIFEST:-https://github.com/$repository/releases/latest/download/winlux-update-manifest.txt}
-update_token=${WINLUX_UPDATE_TOKEN:-${GH_TOKEN:-}}
 state_dir="$target_root/var/lib/winlux"
 config="$target_root/etc/winlux/update.conf"
-token_file="$target_root/etc/winlux/update.token"
 work=
 lock_owned=0
 transaction=0
@@ -65,18 +63,6 @@ prepare_tools() {
         "$work/busybox" true || fail "outils privés de mise à jour inutilisables"
         updater_tools="$work/busybox"
     fi
-}
-load_token() {
-    # Explicit environment credentials take priority. This file belongs to the
-    # guest OS and must never be populated with credentials from the host.
-    test -z "$update_token" || return 0
-    if test -L "$token_file"; then fail "fichier d'accès GitHub symbolique refusé"; fi
-    test -e "$token_file" || return 0
-    test -f "$token_file" && test -r "$token_file" || fail "fichier d'accès GitHub illisible"
-    case "$(tool stat -c %a "$token_file")" in 600|400) ;; *) fail "le fichier d'accès GitHub doit être privé (chmod 600)" ;; esac
-    test "$(wc -l <"$token_file")" -eq 1 || fail "fichier d'accès GitHub invalide"
-    update_token=$(sed -n '1p' "$token_file")
-    case "$update_token" in ''|*[!A-Za-z0-9_]*) fail "fichier d'accès GitHub invalide" ;; esac
 }
 value() {
     result=$(sed -n "s/^$1=//p" "$2")
@@ -226,18 +212,13 @@ download() {
     source=$1; destination=$2; accept=${3:-application/octet-stream}
     case "$source" in
         file://*) cp "${source#file://}" "$destination" ;;
-        https://github.com/*|https://objects.githubusercontent.com/*|https://api.github.com/*)
+        https://github.com/*|https://objects.githubusercontent.com/*)
             command -v curl >/dev/null 2>&1 || fail "curl est requis"
             set -- curl --fail --silent --show-error --location --proto '=https' --proto-redir '=https' --tlsv1.2 \
-                --connect-timeout 15 --max-time 300 --header "Accept: $accept" \
-                --header "X-GitHub-Api-Version: 2022-11-28" --output "$destination"
-            if test -n "$update_token"; then set -- "$@" --header "Authorization: Bearer $update_token"; fi
-            "$@" "$source" || fail "téléchargement GitHub impossible ; vérifiez le réseau et WINLUX_UPDATE_TOKEN pour un dépôt privé" ;;
+                --connect-timeout 15 --max-time 300 --header "Accept: $accept" --output "$destination"
+            "$@" "$source" || fail "téléchargement de la release publique GitHub impossible ; vérifiez le réseau" ;;
         *) fail "source de mise à jour refusée : $source" ;;
     esac
-}
-asset_api_url() {
-    tr -d '\n\r' <"$2" | sed -n "s#.*\"url\"[[:space:]]*:[[:space:]]*\"\\(https://api.github.com/repos/$repository/releases/assets/[0-9][0-9]*\\)\"[^{}]*\"name\"[[:space:]]*:[[:space:]]*\"$1\".*#\\1#p"
 }
 validate_manifest() {
     manifest=$1
@@ -267,22 +248,12 @@ validate_manifest() {
 }
 fetch_manifest() {
     manifest=$1
-    load_token
-    if test -n "$update_token" && test -z "${WINLUX_UPDATE_MANIFEST:-}"; then
-        release_metadata="$work/release.json"
-        download "https://api.github.com/repos/$repository/releases/latest" "$release_metadata" "application/vnd.github+json"
-        manifest_api=$(asset_api_url winlux-update-manifest.txt "$release_metadata")
-        test -n "$manifest_api" || fail "manifeste absent de la dernière release"
-        download "$manifest_api" "$manifest"
-    else download "$manifest_source" "$manifest"; fi
+    download "$manifest_source" "$manifest"
     validate_manifest "$manifest"
     # Plain text only, bounded and bound to this manifest by its checksum.
     # Old releases without a notes asset remain supported.
     if test -n "$notes_asset"; then
         if test -n "${WINLUX_UPDATE_ASSET_DIR:-}"; then notes_source="file://$WINLUX_UPDATE_ASSET_DIR/$notes_asset";
-        elif test -n "${release_metadata:-}"; then
-            notes_source=$(asset_api_url "$notes_asset" "$release_metadata")
-            test -n "$notes_source" || fail "notes absentes de la release GitHub"
         else notes_source="https://github.com/$repository/releases/download/$version/$notes_asset"; fi
         download "$notes_source" "$work/notes.txt"
         test "$(wc -c <"$work/notes.txt")" -le 24576 || fail "notes de version trop longues"
@@ -378,9 +349,6 @@ list_updates
 test "$mode" = --apply || exit 0
 if up_to_date; then progress idle 100 0 0 'Winlux est déjà à jour'; exit 0; fi
 if test -n "${WINLUX_UPDATE_ASSET_DIR:-}"; then asset_source="file://$WINLUX_UPDATE_ASSET_DIR/$asset";
-elif test -n "$update_token" && test -n "${release_metadata:-}"; then
-    asset_source=$(asset_api_url "$asset" "$release_metadata")
-    test -n "$asset_source" || fail "actif $asset absent de la dernière release"
 else asset_source="https://github.com/$repository/releases/download/$version/$asset"; fi
 bundle="$work/bundle.tar.gz"
 progress downloading 0 0 0 "$asset"

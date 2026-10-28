@@ -90,23 +90,7 @@ if WINLUX_TEST_BUSY=1 control poweroff; then echo 'ERROR: shutdown allowed durin
 if WINLUX_TEST_BUSY=1 control reboot; then echo 'ERROR: reboot allowed during update' >&2; exit 1; fi
 if WINLUX_TEST_BUSY=1 control restart-session; then echo 'ERROR: session restart allowed during update' >&2; exit 1; fi
 rm "$work/root/etc/winlux/live-session"
-printf '%s' 'ghp_testOnlyToken123' > "$work/root/run/winlux/update-token-request"
-control update-save-token
-test ! -e "$work/root/run/winlux/update-token-request"
-test "$(stat -c %a "$work/root/etc/winlux/update.token")" = 600
-printf '%s\n' 'ghp_testOnlyToken123' > "$work/expected-token"
-cmp -s "$work/expected-token" "$work/root/etc/winlux/update.token"
-grep -q '^update_auth=configured$' "$work/root/run/winlux/control.txt"
-if grep -rq 'ghp_testOnlyToken123' "$work/root/run" "$work/commands"; then echo 'ERROR: token leaked into state or logs' >&2; exit 1; fi
-: > "$work/root/run/winlux/update-token-request"
-control update-save-token
-test ! -e "$work/root/etc/winlux/update.token"
-grep -q '^update_auth=missing$' "$work/root/run/winlux/control.txt"
-printf '%s' 'invalid secret with spaces' > "$work/root/run/winlux/update-token-request"
-if control update-save-token; then echo 'ERROR: invalid token accepted' >&2; exit 1; fi
-test ! -e "$work/root/run/winlux/update-token-request"
-if grep -rq 'invalid secret with spaces' "$work/root/run"; then echo 'ERROR: invalid token logged' >&2; exit 1; fi
 if control reboot; then echo 'ERROR: refused-host-reboot failed' >&2; exit 1; fi
 grep -q 'Arret reserve a Winlux Live' "$work/root/run/winlux/action.log"
 if control 'keyboard-fr;reboot'; then echo 'ERROR: invalid-action failed' >&2; exit 1; fi
-echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, private token lifecycle, host protection'
+echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, host protection'

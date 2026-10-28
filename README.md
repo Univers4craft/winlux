@@ -121,7 +121,7 @@ Après construction et tests de l’ISO, `scripts/build-update-bundle.sh --syste
 
 L’outil utilise `/releases/latest` : les brouillons et releases marquées « prerelease » ne sont pas sélectionnés. Une préversion système publiée par ce mécanisme doit rester clairement identifiée comme expérimentale dans son titre et ses notes.
 
-Pour un dépôt privé, l’outil accepte notamment `WINLUX_UPDATE_TOKEN` ou `GH_TOKEN`. **Ne commitez jamais de jeton et ne l’intégrez pas à une ISO ou une release.**
+Les mises à jour utilisent uniquement les URL publiques des releases GitHub. Aucun jeton GitHub n’est configuré, stocké ou transmis par l’OS.
 
 Les mises à jour vérifient inventaires et SHA-256 et conservent un retour arrière. Les arrêts normaux sont bloqués pendant l’installation ; un redémarrage requis reste signalé jusqu’au démarrage suivant. L’OS invité ne peut pas empêcher l’arrêt forcé de l’hyperviseur. Ce mécanisme n’est pas encore une architecture A/B résistante à toute coupure.
 

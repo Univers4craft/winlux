@@ -51,9 +51,6 @@ static mut SCROLL: usize = 0;
 static mut LAST_POLL: u32 = 0;
 static mut HOVER: i32 = -1;
 static mut SHOW_LOG: bool = false;
-static mut TOKEN: [u8; 256] = [0; 256];
-static mut TOKEN_LEN: usize = 0;
-static mut TOKEN_FOCUS: bool = false;
 static mut EXE_PATH: [u16; 2048] = [0; 2048];
 static mut EXE_LEN: usize = 0;
 static mut EXE_SCALE: usize = 0;
@@ -360,53 +357,11 @@ pub unsafe fn open_page(page: usize) {
     if crate::wm::native_settings(page) {
         return;
     }
-    clear_token();
     PAGE = page.min(PAGES.len() - 1);
     SCROLL = 0;
     LAST_POLL = 0;
     crate::wm::open(crate::wm::APP_SETTINGS);
     system_tick();
-}
-unsafe fn clear_token() {
-    TOKEN.fill(0);
-    TOKEN_LEN = 0;
-    TOKEN_FOCUS = false;
-}
-unsafe fn save_token(erase: bool) {
-    if TOKEN_LEN == 0 && !erase {
-        crate::desktop::toast(b"Saisissez un jeton GitHub, ou utilisez Effacer.");
-        return;
-    }
-    let path = c"Z:\\run\\winlux\\update-token-request";
-    let file = CreateFileA(
-        path.as_ptr(),
-        0x4000_0000,
-        0,
-        core::ptr::null_mut(),
-        2,
-        0,
-        core::ptr::null_mut(),
-    );
-    if file as isize == -1 || file.is_null() {
-        crate::desktop::toast(b"Impossible d'enregistrer la demande de jeton.");
-        return;
-    }
-    let size = if erase { 0 } else { TOKEN_LEN as u32 };
-    let mut written = 0;
-    let success = WriteFile(
-        file,
-        TOKEN.as_ptr(),
-        size,
-        &mut written,
-        core::ptr::null_mut(),
-    ) != 0
-        && written == size;
-    CloseHandle(file);
-    clear_token();
-    if !success || !control(c"update-save-token") {
-        DeleteFileA(path.as_ptr());
-        crate::desktop::toast(b"Le jeton n'a pas pu \xEAtre enregistr\xE9.");
-    }
 }
 fn content(f: &Frame) -> Rect {
     let nav = if f.client.right - f.client.left < 700 {
@@ -439,15 +394,6 @@ fn button_rect(c: &Rect, row: i32, col: i32) -> Rect {
         c.left + col * (w + 8) + w,
         c.top + 144 + row * 44,
     )
-}
-fn token_rect(c: &Rect, part: i32) -> Rect {
-    let reserve = ((c.right - c.left) / 3).clamp(140, 220);
-    let left = c.right - reserve;
-    match part {
-        0 => rect(c.left, c.top + 232, left - 8, c.top + 268),
-        1 => rect(left, c.top + 232, left + reserve / 2 - 4, c.top + 268),
-        _ => rect(left + reserve / 2 + 4, c.top + 232, c.right, c.top + 268),
-    }
 }
 unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i32) {
     let p = pal();
@@ -1181,7 +1127,6 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             }
             let restart = value(b"update_action");
             if restart_required() {
-                TOKEN_FOCUS = false;
                 row(
                     g,
                     &c,
@@ -1249,79 +1194,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             if restart == b"reboot" {
                 button(g, &c, 1, 2, b"Red\xE9marrer", 5);
             }
+            text(g.hdc, g.f.small, p.text3, c.left, c.top + 208, b"Les mises \xE0 jour sont t\xE9l\xE9charg\xE9es depuis les releases publiques GitHub.");
             text(
                 g.hdc,
                 g.f.semibold,
                 p.text,
                 c.left,
-                c.top + 208,
-                if value(b"update_auth") == b"configured" {
-                    b"GitHub priv\xE9 : jeton enregistr\xE9"
-                } else {
-                    b"GitHub priv\xE9 : jeton requis"
-                },
-            );
-            let tr = token_rect(&c, 0);
-            round_rect(
-                g.hdc,
-                g.b,
-                tr.left,
-                tr.top,
-                tr.right,
-                tr.bottom,
-                4,
-                if TOKEN_FOCUS { p.accent } else { p.border },
-            );
-            fill(
-                g.hdc,
-                g.b,
-                tr.left + 1,
-                tr.top + 1,
-                tr.right - 1,
-                tr.bottom - 1,
-                p.mica,
-            );
-            if TOKEN_LEN == 0 {
-                text(
-                    g.hdc,
-                    g.f.small,
-                    p.text3,
-                    tr.left + 8,
-                    tr.top + 12,
-                    b"Jeton GitHub (masqu\xE9)",
-                );
-            } else {
-                let masked = [b'*'; 256];
-                let n = TOKEN_LEN.min(((tr.right - tr.left - 20).max(0) / 7) as usize);
-                text(
-                    g.hdc,
-                    g.f.body,
-                    p.text,
-                    tr.left + 8,
-                    tr.top + 12,
-                    &masked[..n],
-                );
-            }
-            for (i, name) in [b"Enregistrer".as_slice(), b"Effacer"].iter().enumerate() {
-                let r = token_rect(&c, i as i32 + 1);
-                round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.surface2);
-                text_centered(
-                    g.hdc,
-                    g.f.small,
-                    11,
-                    p.text,
-                    (r.left + r.right) / 2,
-                    r.top + 12,
-                    name,
-                );
-            }
-            text(g.hdc, g.f.small, p.text3, c.left, c.top + 280, b"Acc\xE8s aux releases du d\xE9p\xF4t priv\xE9 ; jeton conserv\xE9 uniquement dans Winlux.");
-            text(
-                g.hdc,
-                g.f.semibold,
-                p.text,
-                c.left,
-                c.top + 308,
+                c.top + 244,
                 if SHOW_LOG {
                     b"Journal d'installation"
                 } else {
@@ -1331,7 +1210,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             journal(
                 g,
                 &c,
-                334,
+                270,
                 if SHOW_LOG {
                     LOG.get()
                 } else if UPDATES.len == 0 {
@@ -1402,7 +1281,6 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     for i in 0..PAGES.len() {
         if inside(&nav_rect(f, i), x, y) {
-            clear_token();
             PAGE = i;
             SCROLL = 0;
             HOVER = -1;
@@ -1417,23 +1295,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             return true;
         }
         if restart_required() {
-            TOKEN_FOCUS = false;
             if inside(&restart_rect(&c), x, y) {
                 control(c"reboot");
             }
-            return true;
-        }
-        if inside(&token_rect(&c, 0), x, y) {
-            TOKEN_FOCUS = true;
-            return true;
-        }
-        TOKEN_FOCUS = false;
-        if inside(&token_rect(&c, 1), x, y) {
-            save_token(false);
-            return true;
-        }
-        if inside(&token_rect(&c, 2), x, y) {
-            save_token(true);
             return true;
         }
     }
@@ -1657,31 +1521,8 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
 }
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
     if PAGE == 7 && restart_required() {
-        TOKEN_FOCUS = false;
         if !updating() && ch == 13 {
             control(c"reboot");
-        }
-        return true;
-    }
-    if PAGE == 7 && TOKEN_FOCUS {
-        match ch {
-            8 => {
-                if TOKEN_LEN > 0 {
-                    TOKEN_LEN -= 1;
-                    TOKEN[TOKEN_LEN] = 0;
-                }
-            }
-            13 => save_token(false),
-            27 => {
-                TOKEN_FOCUS = false;
-            }
-            _ if ch < 128 && (ch as u8).is_ascii_alphanumeric() || ch == b'_' as u16 => {
-                if TOKEN_LEN < TOKEN.len() - 1 {
-                    TOKEN[TOKEN_LEN] = ch as u8;
-                    TOKEN_LEN += 1;
-                }
-            }
-            _ => {}
         }
         return true;
     }
