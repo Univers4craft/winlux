@@ -76,7 +76,8 @@ jobs:
           sh scripts/test-native-session-vm.sh
           sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" bios
           sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" uefi
-          sh scripts/test-install-vm-guest.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
+          # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
+          WINLUX_QEMU_MEMORY=6144 sh scripts/test-install-vm-guest.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
 
       - name: Construire la mise à jour système complète
         run: bash scripts/build-update-bundle.sh --system "$GITHUB_REF_NAME"

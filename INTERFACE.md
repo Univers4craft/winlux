@@ -1,13 +1,13 @@
 # Interface et expérience du bureau Winlux
 
 La session interactive utilise désormais Openbox, xfdesktop, le panneau Xfce et
-Whisker. Explorer et Paramètres restent des applications PE du runtime, ouvertes
+un menu GTK inspiré de Windows 11. Explorer et Paramètres restent des applications PE du runtime, ouvertes
 dans des fenêtres indépendantes. L'ancien shell GDI dans `testexe/src/shell/`
 reste disponible pour les tests ; les constats historiques ci-dessous le
 concernent lorsqu'ils décrivent ses trois icônes ou son menu dessiné.
 
 Le menu natif expose les applications Linux et les PE enregistrés, avec les
-menus contextuels du panneau et de Whisker. Le bureau offre le clic droit,
+menus contextuels du panneau et du menu Démarrer. Le bureau offre le clic droit,
 les fichiers, dossiers et raccourcis. Mousepad fournit un véritable éditeur
 Xfce. XScreenSaver fournit les tuyaux animés après dix minutes d'inactivité,
 ou depuis le lanceur « Pipes ». La session administrateur actuelle ne verrouille

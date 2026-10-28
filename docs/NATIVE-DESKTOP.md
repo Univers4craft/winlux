@@ -1,7 +1,7 @@
 # Session native Winlux
 
 La session interactive associe Openbox (fenêtres), xfdesktop (bureau),
-xfce4-panel (tâches et indicateurs) et Whisker (Démarrer). Les composants sont
+xfce4-panel (tâches et indicateurs) et un menu GTK inspiré de Windows 11. Les composants sont
 préparés depuis les dépôts Ubuntu signés, dans un répertoire isolé : aucun
 paquet n'est installé sur l'hôte par le script de préparation.
 
@@ -13,8 +13,12 @@ paquet n'est installé sur l'hôte par le script de préparation.
 - Les fenêtres EWMH apparaissent dans le panneau, y compris celles du runtime.
 - Mousepad est l'[éditeur maintenu par Xfce](https://docs.xfce.org/apps/mousepad/start).
   Les textes peuvent être ouverts, modifiés et sauvegardés ; xterm lance Bash.
-- Whisker propose « Toutes les applications », une recherche, le défilement et
-  les actions contextuelles natives. Les PE sont découverts dans les raccourcis
+- Démarrer propose une recherche, une grille épinglée, « Toutes les applications »
+  avec défilement, les applications récemment lancées et l'alimentation. Le clic
+  droit ouvre une application, l'épingle ou crée son raccourci sur le bureau.
+  Les épingles sont conservées dans `~/.config/winlux/start.json`. L'apparence
+  reprend la disposition Windows 11, avec une implémentation propre à Winlux.
+  Les PE sont découverts dans les raccourcis
   Windows et le registre, ou enregistrés par `winlux-open` au premier lancement.
   Les icônes embarquées sont extraites quand elles existent. Un programme présent
   dans ce catalogue n'est pas nécessairement compatible avec le runtime.
@@ -51,3 +55,13 @@ sous `build/native-vm.*`. La publication automatise ce contrôle.
 
 La compatibilité générale des EXE, .NET et Photoshop reste indépendante du
 gestionnaire de fenêtres. L'affichage natif n'ajoute pas les API Windows manquantes.
+
+Pour reproduire un diagnostic de programme tiers sans le distribuer dans l'ISO,
+définir `WINLUX_EXTERNAL_EXE=/chemin/programme.exe` et éventuellement
+`WINLUX_EXTERNAL_DLLS=1` pour les DLL voisines. Le programme est ajouté uniquement
+au disque jetable ; son résultat figure dans `chatgpt-result.txt` et le journal
+série. Ce diagnostic de chargement ne valide pas une installation MSIX complète.
+
+Le diagnostic de l'installateur utilise 6 Gio parce qu'il embarque une seconde
+copie de l'ISO et extrait l'image dans son propre RAM-disque. Ce réglage du test
+ne doit pas être confondu avec les essais du bureau natif à 4 Gio.

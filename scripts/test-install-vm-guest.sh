@@ -9,6 +9,8 @@ test -x "$bsdtar" || { echo 'bsdtar requis (ou WINLUX_BSDTAR=/chemin/bsdtar)' >&
 test -r "$iso" && test -f "$stage/init" || { echo 'construisez l’ISO et son stage' >&2; exit 1; }
 for tool in fakeroot cpio gzip qemu-system-x86_64 timeout; do command -v "$tool" >/dev/null; done
 work=$(mktemp -d "$root/build/install-guest.XXXXXX")
+accel=tcg
+if test -r /dev/kvm && test -w /dev/kvm; then accel=kvm; fi
 echo "Artefacts et journaux du test : $work"
 # Les artefacts restent disponibles, y compris sur échec. Aucun disque préexistant.
 guest="$work/root"
@@ -59,6 +61,7 @@ fakeroot sh -c '
     mknod -m 600 dev/console c 5 1
     mknod -m 666 dev/null c 1 3
     mknod -m 666 dev/zero c 1 5
+    chown -R 0:0 .
     find . -print0 | cpio --null --create --format=newc --quiet
 ' sh "$guest" >"$work/install.cpio"
 gzip -1 -c "$work/install.cpio" >"$work/install-initramfs.gz"
@@ -74,14 +77,14 @@ log="$work/install.log"
         fi
         sleep 1
     done
-) | timeout 240 qemu-system-x86_64 -m "${WINLUX_QEMU_MEMORY:-3072}" -smp 2 -accel tcg -display none -monitor none -serial stdio -nic none -no-reboot \
+) | timeout 240 qemu-system-x86_64 -m "${WINLUX_QEMU_MEMORY:-6144}" -smp 2 -accel "$accel" -display none -monitor none -serial stdio -nic none -no-reboot \
     -kernel "$stage/boot/vmlinuz" -initrd "$work/install-initramfs.gz" \
-    -append 'console=ttyS0,115200 rdinit=/install-init panic=1 winlux.install-test=1' \
+    -append 'console=ttyS0,115200 rootfstype=ramfs rdinit=/install-init panic=1 winlux.install-test=1' \
     -drive "file=$disk,format=raw,if=virtio" >"$log" 2>&1
 grep -q '^WINLUX_INSTALL_EXIT=0' "$log" || { tail -n 60 "$log"; exit 1; }
 for mode in bios uefi; do
     log="$work/$mode.log"
-    set -- qemu-system-x86_64 -m 2048 -smp 2 -accel tcg -display none -monitor none -serial stdio -nic none -no-reboot -drive "file=$disk,format=raw,if=virtio"
+    set -- qemu-system-x86_64 -m 2048 -smp 2 -accel "$accel" -display none -monitor none -serial stdio -nic none -no-reboot -drive "file=$disk,format=raw,if=virtio"
     if test "$mode" = uefi; then
         cp "${WINLUX_OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}" "$work/vars.fd"
         set -- "$@" -machine q35 -drive "if=pflash,format=raw,unit=0,readonly=on,file=${WINLUX_OVMF:-/usr/share/OVMF/OVMF_CODE_4M.fd}" -drive "if=pflash,format=raw,unit=1,file=$work/vars.fd"

@@ -769,7 +769,8 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
                 if msg == WM_MOUSEWHEEL {
                     let mut bounds: Rect = core::mem::zeroed();
                     GetWindowRect(hwnd, &mut bounds);
-                    x -= bounds.left; y -= bounds.top;
+                    x -= bounds.left;
+                    y -= bounds.top;
                 }
                 let ev = match msg {
                     WM_LBUTTONDOWN => wm::Mouse::Down,

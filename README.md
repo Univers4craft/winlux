@@ -15,7 +15,7 @@ Winlux réunit un chargeur d’exécutables **Windows PE32+ x86-64**, un sous-en
 
 ### Bureau
 
-- Bureau X11 avec Openbox, xfdesktop et panneau Xfce : menu Démarrer Whisker, barre des tâches pleine largeur et accents violets. L'ancien bureau GDI reste dans les tests du runtime.
+- Bureau X11 avec Openbox, xfdesktop et panneau Xfce : menu Démarrer inspiré de Windows 11, barre des tâches pleine largeur et accents violets. L'ancien bureau GDI reste dans les tests du runtime.
 - Applications Linux et fenêtres PE prises en charge déplaçables, redimensionnables, minimisables et fermables ; les fenêtres actives apparaissent dans la barre des tâches.
 - Menu des applications Linux installées et des exécutables Windows enregistrés au premier lancement ou découverts dans leurs raccourcis et le registre. Le catalogue ne garantit pas leur compatibilité d'exécution.
 - Clic droit natif sur le bureau et les lanceurs ; éditeur de texte **Mousepad** maintenu par Xfce, terminal xterm/Bash et écran de veille animé **Pipes** de XScreenSaver.

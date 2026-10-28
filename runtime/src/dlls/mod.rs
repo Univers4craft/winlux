@@ -10,6 +10,7 @@ pub mod crt;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
+pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gui;
@@ -26,6 +27,7 @@ pub mod ole32;
 pub mod oleaut32;
 pub mod quartz;
 pub mod resource;
+pub mod rpcrt4;
 pub mod shell32;
 pub mod shlwapi;
 pub mod user32;
@@ -127,8 +129,14 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = advapi32::exports();
                     e.extend(advapi32_services::exports());
+                    e.extend(eventing::exports());
                     e
                 },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "rpcrt4",
+                exports: rpcrt4::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -218,8 +226,28 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-crt-") || base == "vcruntime140" || base == "vcruntime140_1" {
         return "ucrtbase".into();
     }
-    if base.starts_with("api-ms-win-core-") || base == "kernelbase" {
+    if base.starts_with("api-ms-win-core-com-l1-") {
+        return "ole32".into();
+    }
+    if base.starts_with("api-ms-win-core-localregistry-l1-") {
+        return "advapi32".into();
+    }
+    if base.starts_with("api-ms-win-core-rtlsupport-l1-") {
+        return "ntdll".into();
+    }
+    if base.starts_with("api-ms-win-core-")
+        || base.starts_with("api-ms-win-downlevel-kernel32-l2-")
+        || base == "kernelbase"
+    {
         return "kernel32".into();
+    }
+    // Security API-set contracts expose the same public security functions
+    // implemented by our Advapi32 backend, rather than a separate disk DLL.
+    if base.starts_with("api-ms-win-security-base-l1-") {
+        return "advapi32".into();
+    }
+    if base.starts_with("api-ms-win-eventing-provider-l1-") {
+        return "advapi32".into();
     }
     if base.starts_with("msvcr") && base != "msvcrt" {
         return "msvcrt".into();
@@ -353,12 +381,56 @@ pub unsafe fn put_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use super::normalize;
+    use super::{lookup, normalize};
 
     #[test]
     fn normalise_les_alias_de_dll() {
         assert_eq!(normalize("KERNELBASE.dll"), "kernel32");
         assert_eq!(normalize("api-ms-win-crt-runtime-l1-1-0.dll"), "ucrtbase");
         assert_eq!(normalize("C:\\Windows\\System32\\MSVCR120.DLL"), "msvcrt");
+    }
+
+    #[test]
+    fn api_sets_reutilisent_leurs_veritables_exports() {
+        for (contract, host, symbol) in [
+            (
+                "api-ms-win-eventing-provider-l1-1-0.dll",
+                "advapi32",
+                "EventRegister",
+            ),
+            (
+                "api-ms-win-core-localregistry-l1-1-0.dll",
+                "advapi32",
+                "RegOpenKeyExW",
+            ),
+            ("api-ms-win-core-com-l1-1-0.dll", "ole32", "CoInitializeEx"),
+            (
+                "api-ms-win-core-rtlsupport-l1-1-0.dll",
+                "ntdll",
+                "RtlUnwindEx",
+            ),
+            (
+                "api-ms-win-downlevel-kernel32-l2-1-0.dll",
+                "kernel32",
+                "GetCurrentProcessId",
+            ),
+        ] {
+            let expected = lookup(host, symbol).expect("backend export must exist");
+            assert_eq!(
+                lookup(&normalize(contract), symbol),
+                Some(expected),
+                "{contract}"
+            );
+        }
+        assert_eq!(normalize("api-ms-win-security-base-l1-1-0.dll"), "advapi32");
+        assert!(lookup(
+            &normalize("api-ms-win-security-base-l1-1-0.dll"),
+            "SetSecurityDescriptorDacl"
+        )
+        .is_none());
+        assert_eq!(
+            normalize("api-ms-win-security-unknown-l1-1-0.dll"),
+            "api-ms-win-security-unknown-l1-1-0"
+        );
     }
 }

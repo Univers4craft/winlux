@@ -15,7 +15,10 @@
   </property>
  </property>
  <property name="plugins" type="empty">
-  <property name="plugin-1" type="string" value="whiskermenu"/>
+  <property name="plugin-1" type="string" value="launcher">
+   <property name="items" type="array"><value type="string" value="/usr/share/applications/winlux-start.desktop"/></property>
+   <property name="show-label" type="bool" value="false"/>
+  </property>
   <property name="plugin-2" type="string" value="tasklist">
    <property name="show-labels" type="bool" value="false"/>
    <property name="grouping" type="uint" value="0"/>

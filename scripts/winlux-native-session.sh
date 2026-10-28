@@ -17,8 +17,8 @@ export XDG_CONFIG_DIRS=/etc/xdg XDG_DATA_DIRS=/usr/local/share:/usr/share
 for query in /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders /usr/bin/gdk-pixbuf-query-loaders; do
     if test -x "$query"; then "$query" --update-cache; break; fi
 done
-update-desktop-database /usr/share/applications 2>/dev/null || true
-update-mime-database /usr/share/mime 2>/dev/null || true
+# Shared MIME and desktop caches are generated when building the image,
+# rather than scanning the full database on every cold boot.
 /usr/bin/winlux-applications refresh
 /usr/bin/openbox --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
 echo $! > /run/winlux/window-manager.pid

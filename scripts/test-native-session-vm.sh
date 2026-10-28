@@ -10,6 +10,22 @@ accel=tcg
 if test -r /dev/kvm && test -w /dev/kvm; then accel=kvm; fi
 truncate -s 10G "$disk"
 fakeroot sh -c 'chown -R 0:0 "$1"; mkfs.ext4 -q -F -L WINLUX_NATIVE -d "$1" "$2"' sh "$stage" "$disk"
+if test -n "${WINLUX_EXTERNAL_EXE:-}"; then
+    test -r "$WINLUX_EXTERNAL_EXE"
+    debugfs -w -R 'mkdir /opt/winlux-test' "$disk" >/dev/null 2>&1
+    # Fixed destination; debugfs syntax is not a shell command interpreter.
+    case "$WINLUX_EXTERNAL_EXE" in *'"'*|*'\\'*|*'
+'*) echo 'unsupported diagnostic filename' >&2; exit 1 ;; esac
+    debugfs -w -R "write \"$WINLUX_EXTERNAL_EXE\" /opt/winlux-test/ChatGPT.exe" "$disk" >/dev/null 2>&1
+    if test "${WINLUX_EXTERNAL_DLLS:-0}" = 1; then
+        for library in "$(dirname -- "$WINLUX_EXTERNAL_EXE")"/*.dll; do
+            test -f "$library" || continue
+            name=$(basename -- "$library")
+            case "$name" in *[!A-Za-z0-9._-]*) echo 'unsupported vendor DLL name' >&2; exit 1 ;; esac
+            debugfs -w -R "write \"$library\" /opt/winlux-test/$name" "$disk" >/dev/null 2>&1
+        done
+    fi
+fi
 echo "Native desktop diagnostic ($accel): $work"
 result=0
 timeout -k 5s "${WINLUX_NATIVE_TEST_TIMEOUT:-600}" qemu-system-x86_64 \
@@ -18,7 +34,7 @@ timeout -k 5s "${WINLUX_NATIVE_TEST_TIMEOUT:-600}" qemu-system-x86_64 \
     -kernel "$stage/boot/vmlinuz" \
     -append 'root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0 panic=1 loglevel=3 winlux.native-smoke=1' \
     -drive "file=$disk,if=virtio,format=raw" > "$log" 2>&1 || result=$?
-for name in native-desktop native-start-menu native-pipes-1 native-pipes-2; do
+for name in native-desktop native-start-menu native-start-all native-start-search native-pipes-1 native-pipes-2; do
     debugfs -R "dump /var/lib/winlux/$name.xwd $work/$name.xwd" "$disk" >/dev/null 2>&1 || true
     if test -s "$work/$name.xwd" && command -v convert >/dev/null 2>&1; then
         convert "$work/$name.xwd" "$work/$name.png"
@@ -27,6 +43,7 @@ for name in native-desktop native-start-menu native-pipes-1 native-pipes-2; do
     fi
 done
 debugfs -R "dump /var/lib/winlux/native-programs.log $work/programs.log" "$disk" >/dev/null 2>&1 || true
+debugfs -R "dump /var/lib/winlux/chatgpt-result.txt $work/chatgpt-result.txt" "$disk" >/dev/null 2>&1 || true
 for marker in WINLUX_NATIVE_WINDOW_CONTROLS=0 WINLUX_NATIVE_EDITOR_SAVE=0 WINLUX_NATIVE_EDGE_WINDOWED=0 WINLUX_NATIVE_TASKBAR_AND_MENU=0 WINLUX_NATIVE_PIPES_ANIMATED=0 WINLUX_NATIVE_CLOSE=0 WINLUX_NATIVE_RESULT=0 WINLUX_NATIVE_EXIT=0; do
     if ! grep -q "$marker" "$log"; then
         echo "Missing $marker; see $work" >&2

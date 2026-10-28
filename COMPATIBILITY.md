@@ -6,6 +6,9 @@ réalisable avec quelques DLL de remplacement. Les programmes dépendent aussi
 du noyau Windows, de son ordonnanceur, de DirectX, du registre, des pilotes,
 des codecs, des services et parfois d’un runtime managé.
 
+Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir le
+[diagnostic et les blocages constatés](docs/CHATGPT-WINDOWS.md).
+
 ## Ce qui est déjà partagé
 
 - Les exécutables PE64 peuvent être chargés directement par le runtime.
@@ -18,6 +21,12 @@ des codecs, des services et parfois d’un runtime managé.
   sont bridées.
 - Des DLL courantes sont intégrées : `user32`, `gdi32`, `advapi32`, `ole32`,
   `bcrypt`, `version`, `shell32`, `ws2_32`, `mfplat` et `winmm`.
+- Les contrats API-set COM, registre, RTL, sécurité, eventing et downlevel
+  sont redirigés vers les backends correspondants. Cela ne complète pas leurs
+  fonctions manquantes. `rpcrt4` fournit uniquement `UuidCreate` (UUID v4),
+  sans transport RPC. Les fournisseurs ETW peuvent être enregistrés et retirés
+  dans le processus ; les écritures restent inactives, sans session de capture,
+  contrôleur ETW ni journal ETL.
 - La fondation COM/OLE gère l’initialisation d’appartement par thread,
   `CoTaskMemAlloc/Realloc/Free`, les GUID, la mémoire globale Win32 et un vrai
   `IStream` en mémoire partageant son `HGLOBAL` (lecture, écriture, seek, taille,

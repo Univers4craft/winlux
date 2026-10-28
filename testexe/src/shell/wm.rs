@@ -124,7 +124,15 @@ pub unsafe fn native_draw(hwnd: Handle, hdc: Handle) {
     let fonts = Fonts::new();
     let mut brushes = Brushes::new();
     SetBkMode(hdc, 1);
-    fill(hdc, &mut brushes, 0, 0, f.outer.right, f.outer.bottom, pal().window);
+    fill(
+        hdc,
+        &mut brushes,
+        0,
+        0,
+        f.outer.right,
+        f.outer.bottom,
+        pal().window,
+    );
     app_draw(
         NATIVE_APP,
         &mut Gfx {

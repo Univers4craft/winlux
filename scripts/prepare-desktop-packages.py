@@ -11,7 +11,8 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad",
             "dbus-x11", "adwaita-icon-theme", "libgl1-mesa-dri", "xdg-utils",
             "python3-minimal", "xfce4-genmon-plugin", "alsa-utils", "librsvg2-common",
             "x11-utils", "x11-xserver-utils", "xfdesktop4", "locales", "libglib2.0-bin",
-            "libgdk-pixbuf2.0-bin", "desktop-file-utils", "shared-mime-info", "x11-apps"]
+            "libgdk-pixbuf2.0-bin", "desktop-file-utils", "shared-mime-info", "x11-apps",
+            "python3-gi", "gir1.2-gtk-3.0"]
 
 def main():
     work = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/desktop-components").resolve()

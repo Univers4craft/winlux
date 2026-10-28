@@ -2,7 +2,7 @@
 set -eu
 case "${1:-}" in
     context) exec /usr/bin/xdotool key --clearmodifiers super+F10 ;;
-    menu) exec /usr/bin/xfce4-popup-whiskermenu ;;
+    menu) exec /usr/bin/winlux-start-menu ;;
     refresh) /usr/bin/winlux-applications refresh; exec /usr/bin/xrefresh ;;
     folder|text)
         directory="${HOME:-/root}/Bureau"; mkdir -p "$directory"

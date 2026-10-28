@@ -7,7 +7,8 @@ busybox mount -t proc proc /proc
 busybox grep -qw 'winlux.install-test=1' /proc/cmdline || exit 2
 busybox mount -t sysfs sysfs /sys
 busybox mount -t devtmpfs devtmpfs /dev
-busybox mount -t tmpfs -o size=1536m tmpfs /tmp
+# The installer verifies/extracts the complete native payload in this fixture.
+busybox mount -t tmpfs -o size=50% tmpfs /tmp
 mkdir -p /dev/pts
 busybox mount -t devpts devpts /dev/pts
 echo WINLUX_INSTALL_TEST_BEGIN
