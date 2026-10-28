@@ -762,6 +762,25 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 2, 1, b"Normale", 1);
             button(g, &c, 2, 2, b"Rapide", 2);
         }
+        9 => {
+            row(g, &c, 44, b"Accessibilit\xE9", b"Options d'accessibilit\xE9.");
+            let pointer_str = unsafe {
+                if POINTER_SIZE == 1 {
+                    "Normal"
+                } else if POINTER_SIZE == 2 {
+                    "Grand"
+                } else {
+                    "Tres grand"
+                }
+            };
+            row(g, &c, 84, b"Taille du pointeur", pointer_str.as_bytes());
+            button(g, &c, 0, 0, b"Normal", 20);
+            button(g, &c, 0, 1, b"Grand", 21);
+            button(g, &c, 0, 2, b"Tr\xE8s grand", 22);
+            row(g, &c, 124, b"Contraste \xE9lev\xE9", if unsafe { HIGH_CONTRAST } { b"Activ\xE9" } else { b"D\xE9sactiv\xE9" });
+            button(g, &c, 1, 0, b"Activer", 23);
+            button(g, &c, 1, 1, b"D\xE9sactiver", 24);
+        }
         6 => {
             row(
                 g,
@@ -1528,6 +1547,26 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (8, 15) => Some(c"display-scale-down"),
         (8, 16) => Some(c"display-scale-auto"),
         (8, 17) => Some(c"display-scale-up"),
+        (9, 20) => {
+            unsafe { POINTER_SIZE = 1 };
+            Some(c"pointer-normal")
+        }
+        (9, 21) => {
+            unsafe { POINTER_SIZE = 2 };
+            Some(c"pointer-large")
+        }
+        (9, 22) => {
+            unsafe { POINTER_SIZE = 3 };
+            Some(c"pointer-xlarge")
+        }
+        (9, 23) => {
+            unsafe { HIGH_CONTRAST = true };
+            Some(c"contrast-on")
+        }
+        (9, 24) => {
+            unsafe { HIGH_CONTRAST = false };
+            Some(c"contrast-off")
+        }
         (7, 0) => {
             SHOW_LOG = false;
             SCROLL = 0;
