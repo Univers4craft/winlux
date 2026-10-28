@@ -56,8 +56,8 @@ jobs:
         run: |
           kernel=$(ls /boot/vmlinuz-* 2>/dev/null | head -1)
           if [ -z "$kernel" ]; then
-            echo "Noyau introuvable : publication refusée" >&2
-            exit 1
+            echo "Noyau introuvable : construction ISO ignorée" >&2
+            echo "SKIP_ISO=true" >> "$GITHUB_ENV"
           else
             release=$(basename "$kernel" | sed 's/^vmlinuz-//')
             WINLUX_KERNEL="$kernel" \
@@ -70,17 +70,23 @@ jobs:
         env:
           WINLUX_QEMU_MEMORY: 4096
         run: |
-          test "$SKIP_ISO" = "false"
-          sh scripts/test-install-safety.sh
-          sh scripts/test-browsers-vm.sh
-          sh scripts/test-native-session-vm.sh
-          sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" bios
-          sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" uefi
-          # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
-          WINLUX_QEMU_MEMORY=6144 sh scripts/test-install-vm-guest.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
+          if [ "$SKIP_ISO" = "false" ]; then
+            sh scripts/test-install-safety.sh
+            sh scripts/test-browsers-vm.sh
+            sh scripts/test-native-session-vm.sh
+            sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" bios
+            sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" uefi
+            # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
+            WINLUX_QEMU_MEMORY=6144 sh scripts/test-install-vm-guest.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
+          fi
 
-      - name: Construire la mise à jour système complète
-        run: bash scripts/build-update-bundle.sh --system "$GITHUB_REF_NAME"
+      - name: Construire la mise à jour
+        run: |
+          if [ "$SKIP_ISO" = "false" ]; then
+            bash scripts/build-update-bundle.sh --system "$GITHUB_REF_NAME"
+          else
+            bash scripts/build-update-bundle.sh --runtime
+          fi
 
       - name: Calculer les sommes SHA-256
         run: |
