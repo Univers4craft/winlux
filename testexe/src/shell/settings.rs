@@ -61,6 +61,10 @@ static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
 static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
 static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
 static mut UPDATE_FREQUENCY: u32 = 0; // 0=quotidien, 1=hebdomadaire, 2=manuel
+static mut ENABLE_BLUR: bool = true; // Effet de flou activé
+static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
+static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
+static mut AUTO_THEME: bool = false; // Thème automatique
 
 fn exe_profile_path(out: &mut [u16; 2060]) {
     unsafe {
@@ -781,6 +785,21 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(g, &c, 124, b"Contraste \xE9lev\xE9", if unsafe { HIGH_CONTRAST } { b"Activ\xE9" } else { b"D\xE9sactiv\xE9" });
             button(g, &c, 1, 0, b"Activer", 23);
             button(g, &c, 1, 1, b"D\xE9sactiver", 24);
+        }
+        10 => {
+            row(g, &c, 44, b"Effets visuels", b"Options d'effet visuels.");
+            row(g, &c, 84, b"Effet de flou", if unsafe { ENABLE_BLUR } { b"Activ\xE9" } else { b"D\xE9sactiv\xE9" });
+            button(g, &c, 0, 0, b"Activer", 30);
+            button(g, &c, 0, 1, b"D\xE9sactiver", 31);
+            row(g, &c, 124, b"Animations fluides", if unsafe { ENABLE_SMOOTH_ANIM } { b"Activ\xE9es" } else { b"D\xE9sactiv\xE9es" });
+            button(g, &c, 1, 0, b"Activer", 32);
+            button(g, &c, 1, 1, b"D\xE9sactiver", 33);
+            row(g, &c, 164, b"Miniatures des fen\xEAtres", if unsafe { ENABLE_THUMBNAILS } { b"Activ\xE9es" } else { b"D\xE9sactiv\xE9es" });
+            button(g, &c, 2, 0, b"Activer", 34);
+            button(g, &c, 2, 1, b"D\xE9sactiver", 35);
+            row(g, &c, 204, b"Th\xE8me automatique", if unsafe { AUTO_THEME } { b"Activ\xE9" } else { b"D\xE9sactiv\xE9" });
+            button(g, &c, 3, 0, b"Activer", 36);
+            button(g, &c, 3, 1, b"D\xE9sactiver", 37);
         }
         6 => {
             row(
@@ -1592,6 +1611,38 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (7, 27) => {
             unsafe { UPDATE_FREQUENCY = 2 };
             Some(c"update-freq-manual")
+        }
+        (10, 30) => {
+            unsafe { ENABLE_BLUR = true };
+            Some(c"blur-on")
+        }
+        (10, 31) => {
+            unsafe { ENABLE_BLUR = false };
+            Some(c"blur-off")
+        }
+        (10, 32) => {
+            unsafe { ENABLE_SMOOTH_ANIM = true };
+            Some(c"smooth-on")
+        }
+        (10, 33) => {
+            unsafe { ENABLE_SMOOTH_ANIM = false };
+            Some(c"smooth-off")
+        }
+        (10, 34) => {
+            unsafe { ENABLE_THUMBNAILS = true };
+            Some(c"thumb-on")
+        }
+        (10, 35) => {
+            unsafe { ENABLE_THUMBNAILS = false };
+            Some(c"thumb-off")
+        }
+        (10, 36) => {
+            unsafe { AUTO_THEME = true };
+            Some(c"auto-theme-on")
+        }
+        (10, 37) => {
+            unsafe { AUTO_THEME = false };
+            Some(c"auto-theme-off")
         }
         (7, 0) => {
             SHOW_LOG = false;

@@ -43,6 +43,12 @@ static mut ALL_APPS: [( &'static [u8], &'static [u8], i32); 64] = [(b"", b"", 0)
 static mut ALL_APPS_COUNT: usize = 0;
 static mut SHORTCUTS: [( &'static [u8], &'static [u8], i32, i32); 16] = [(b"", b"", 0, 0); 16]; // (nom, exec, x, y)
 static mut SHORTCUTS_COUNT: usize = 0;
+static mut START_SEARCH: [u8; 64] = [0; 64]; // Texte de recherche
+static mut START_SEARCH_LEN: usize = 0;
+static mut ENABLE_BLUR: bool = true; // Effet de flou activé
+static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
+static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
+static mut AUTO_THEME: bool = false; // Thème automatique
 static mut CONTEXT_APP: Option<usize> = None;
 static mut CONTEXT_DESKTOP: Option<usize> = None;
 static mut CONTEXT_RECT: Rect = Rect {
@@ -1282,6 +1288,14 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         y,
         title,
     );
+    // Barre de recherche
+    let search_y = y + 40;
+    round_rect(hdc, b, inner_l, search_y, inner_r, search_y + 36, 18, rgb(0x31, 0x35, 0x3F));
+    if unsafe { START_SEARCH_LEN > 0 } {
+        text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), inner_l + 8, search_y + 8, unsafe { &START_SEARCH[..START_SEARCH_LEN] });
+    } else {
+        text(hdc, f.body, rgb(0x88, 0x88, 0x88), inner_l + 8, search_y + 8, b"Rechercher...");
+    }
     let all: &[u8] = unsafe {
         if START_SHOW_ALL_APPS {
             b"\xC9pingl\xE9"
@@ -1396,7 +1410,8 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         let mut displayed = 0;
         for i in 0..unsafe { ALL_APPS_COUNT } {
             let (name, _exec, cat) = unsafe { ALL_APPS[i] };
-            if START_CATEGORY == 0 || cat == START_CATEGORY {
+            let matches_search = unsafe { START_SEARCH_LEN == 0 || name[..name.len().min(START_SEARCH_LEN)].iter().zip(START_SEARCH[..START_SEARCH_LEN].iter()).any(|(&a, &b)| a.to_ascii_lowercase() == b.to_ascii_lowercase()) };
+            if (START_CATEGORY == 0 || cat == START_CATEGORY) && matches_search {
                 let app_y = apps_y + 40 + (displayed as i32) * 44;
                 if app_y + 40 < s.bottom - 72 {
                     text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), inner_l + 4, app_y, name);
