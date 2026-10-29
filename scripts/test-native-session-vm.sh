@@ -8,6 +8,8 @@ disk="$work/test.raw"
 log="$work/serial.log"
 accel=tcg
 if test -r /dev/kvm && test -w /dev/kvm; then accel=kvm; fi
+accel=${WINLUX_QEMU_ACCEL:-$accel}
+case "$accel" in kvm|tcg) ;; *) echo 'accélérateur de diagnostic invalide' >&2; exit 1 ;; esac
 truncate -s 10G "$disk"
 fakeroot sh -c 'chown -R 0:0 "$1"; mkfs.ext4 -q -F -L WINLUX_NATIVE -d "$1" "$2"' sh "$stage" "$disk"
 if test -n "${WINLUX_EXTERNAL_EXE:-}"; then

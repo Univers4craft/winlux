@@ -33,7 +33,7 @@ def windows():
             result[fields[0]] = (tuple(map(int, fields[2:6])), fields[7])
     return result
 
-def wait_title(title, timeout=30):
+def wait_title(title, timeout=90):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for window, (_, text) in windows().items():
@@ -66,7 +66,7 @@ log = Path("/var/lib/winlux/native-programs.log").open("w")
 server = subprocess.Popen(["Xvfb", ":99", "-ac", "-screen", "0", "1920x1080x24", "-nolisten", "tcp"], stdout=log, stderr=log)
 time.sleep(1)
 assert server.poll() is None
-print(run("winlux-native-session", timeout=60), flush=True)
+print(run("winlux-native-session", timeout=180), flush=True)
 file_manager = run("gdbus", "introspect", "--session", "--dest", "org.xfce.FileManager",
                    "--object-path", "/org/xfce/FileManager", timeout=60)
 assert "Launch" in file_manager, "Desktop file manager cannot launch files"

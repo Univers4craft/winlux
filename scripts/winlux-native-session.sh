@@ -8,6 +8,8 @@ mkdir -p "$XDG_RUNTIME_DIR" /run/winlux /var/lib/dbus
 if ! test -e /var/run && ! test -L /var/run; then ln -s /run /var/run; fi
 chmod 700 "$XDG_RUNTIME_DIR"
 /usr/bin/dbus-uuidgen --ensure=/etc/machine-id
+chmod 644 /etc/machine-id
+chmod 755 /var/lib/dbus
 ln -sf /etc/machine-id /var/lib/dbus/machine-id
 if ! test -S /run/winlux/session-bus; then
     /usr/bin/dbus-daemon --session --fork --address=unix:path=/run/winlux/session-bus --print-address=1 > /run/winlux/dbus-address 2>/run/winlux/session-bus.log
@@ -18,22 +20,54 @@ export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
 /usr/bin/winlux-native-config
 # Hardware services run on the system bus; applications use the session bus.
+mkdir -p /run/dbus
+chmod 755 /run/dbus
 if ! test -S /run/dbus/system_bus_socket; then
-    mkdir -p /run/dbus
     /usr/bin/dbus-daemon --system --fork >/run/winlux/system-bus.log 2>&1
 fi
 # Winlux uses its own init, so start hardware daemons directly instead of
 # relying on systemd activation from the distribution's D-Bus service files.
+wait_bus_name() {
+    bus=$1; name=$2; service_pid=$3; service_log=$4
+    for attempt in $(seq 1 150); do
+        if /usr/bin/gdbus call "--$bus" --dest org.freedesktop.DBus \
+            --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner \
+            --timeout 2 "$name" 2>/dev/null | grep -q true; then return 0; fi
+        if ! kill -0 "$service_pid" 2>/dev/null; then
+            echo "Service arrêté avant son enregistrement D-Bus : $name" >&2
+            cat "$service_log" >&2
+            return 1
+        fi
+        sleep 0.2
+    done
+    echo "Service D-Bus indisponible : $name ; journal : $service_log" >&2
+    cat "$service_log" >&2
+    return 1
+}
 if test -x /usr/lib/polkit-1/polkitd; then
-    /usr/lib/polkit-1/polkitd --no-debug >/run/winlux/polkit.log 2>&1 &
+    /usr/lib/polkit-1/polkitd >/run/winlux/polkit.log 2>&1 &
+    wait_bus_name system org.freedesktop.PolicyKit1 "$!" /run/winlux/polkit.log
 fi
 if test -x /usr/libexec/udisks2/udisksd; then
     /usr/libexec/udisks2/udisksd --no-debug >/run/winlux/udisks.log 2>&1 &
+    wait_bus_name system org.freedesktop.UDisks2 "$!" /run/winlux/udisks.log
 fi
 if test -x /usr/sbin/NetworkManager; then
     /usr/sbin/NetworkManager --no-daemon >/run/winlux/network-manager.log 2>&1 &
     echo $! >/run/winlux/network-manager.pid
 fi
+# Start the desktop file service after its hardware dependencies are ready.
+# An early GVfs activation could otherwise time out on software-emulated CPUs.
+/usr/bin/Thunar --daemon >/run/winlux/file-manager.log 2>&1 &
+wait_bus_name session org.xfce.FileManager "$!" /run/winlux/file-manager.log
+# Name ownership precedes GTK/GVfs initialization. Wait for an actual method
+# reply so the desktop cannot send file-launch requests to a busy startup loop.
+/usr/bin/gdbus call --session --dest org.xfce.FileManager \
+    --object-path /org/xfce/FileManager --method org.freedesktop.DBus.Peer.Ping \
+    --timeout 90 >>/run/winlux/file-manager.log 2>&1 || {
+        cat /run/winlux/file-manager.log >&2
+        exit 1
+    }
 for bluetooth in /usr/lib/bluetooth/bluetoothd /usr/libexec/bluetooth/bluetoothd; do
     if test -x "$bluetooth"; then "$bluetooth" -n >/run/winlux/bluetooth.log 2>&1 & break; fi
 done
