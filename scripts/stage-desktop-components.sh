@@ -4,7 +4,7 @@ set -eu
 stage=${1:?stage required}
 project=$(CDPATH= cd -- "$(dirname "$0")/.." && pwd)
 components=${WINLUX_DESKTOP_COMPONENTS:-"$project/build/desktop-components/root"}
-for program in openbox xfdesktop xfce4-panel xfce4-popup-whiskermenu mousepad xscreensaver xscreensaver-command wmctrl xdotool dbus-daemon python3; do
+for program in openbox xfdesktop xfce4-panel xfce4-popup-whiskermenu mousepad Thunar xscreensaver xscreensaver-command wmctrl xdotool dbus-daemon python3; do
     test -x "$components/usr/bin/$program" || { echo "Composant natif absent : $program ; préparez les paquets du bureau." >&2; exit 1; }
 done
 # Never follow a pre-existing BusyBox applet link while copying a real tool.
@@ -32,7 +32,7 @@ cp -a "$project/integration/native/applications/." "$stage/usr/share/application
 cp --remove-destination "$components/usr/libexec/xscreensaver/xscreensaver-gfx" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx.real"
 cp --remove-destination "$project/scripts/winlux-saver-gfx.py" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx"
 chmod 755 "$stage/usr/libexec/xscreensaver/xscreensaver-gfx" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx.real"
-for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu'; do
+for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu'; do
     source=${pair%:*}; destination=${pair#*:}
     cp --remove-destination "$project/scripts/$source" "$stage/usr/bin/$destination"
     chmod 755 "$stage/usr/bin/$destination"

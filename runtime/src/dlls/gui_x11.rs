@@ -1594,6 +1594,10 @@ impl X11Backend {
                 });
                 if let Some((w, pixmap)) = buffered {
                     self.present(&w, pixmap, e.x as i16, e.y as i16, e.width, e.height);
+                    // Le contenu est déjà restauré depuis le tampon serveur.
+                    // Ne pas refaire tout le dessin GDI lors d'un déplacement
+                    // ou du passage d'une autre fenêtre devant celle-ci.
+                    return None;
                 } else if e.count == 0 {
                     // count > 0 : d'autres Expose suivent, on attend le dernier.
                     if let Some(w) = self.windows.get(&hwnd).copied() {

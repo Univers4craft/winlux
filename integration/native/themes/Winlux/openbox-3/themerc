@@ -1,16 +1,16 @@
 border.width: 1
-padding.width: 8
-padding.height: 7
+padding.width: 10
+padding.height: 9
 window.client.padding.width: 1
 window.client.padding.height: 1
-window.active.client.color: #30263e
-window.inactive.client.color: #26242d
-window.active.border.color: #8864a4
-window.inactive.border.color: #44394e
+window.active.client.color: #242a38
+window.inactive.client.color: #202430
+window.active.border.color: #8178b7
+window.inactive.border.color: #343b4b
 window.active.title.bg: flat solid
-window.active.title.bg.color: #30263e
+window.active.title.bg.color: #242a38
 window.inactive.title.bg: flat solid
-window.inactive.title.bg.color: #26242d
+window.inactive.title.bg.color: #202430
 window.active.label.bg: parentrelative
 window.active.label.text.color: #f5efff
 window.inactive.label.bg: parentrelative
@@ -21,6 +21,9 @@ window.active.button.unpressed.image.color: #e5d7f3
 window.active.button.hover.bg: flat solid
 window.active.button.hover.bg.color: #634779
 window.active.button.hover.image.color: #ffffff
+window.active.button.close.hover.bg: flat solid
+window.active.button.close.hover.bg.color: #c42b3b
+window.active.button.close.hover.image.color: #ffffff
 window.active.button.pressed.bg: flat solid
 window.active.button.pressed.bg.color: #8864a4
 window.inactive.button.unpressed.bg: parentrelative

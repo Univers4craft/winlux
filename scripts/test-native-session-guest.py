@@ -63,6 +63,10 @@ server = subprocess.Popen(["Xvfb", ":99", "-ac", "-screen", "0", "1920x1080x24",
 time.sleep(1)
 assert server.poll() is None
 print(run("winlux-native-session", timeout=60), flush=True)
+file_manager = run("gdbus", "introspect", "--session", "--dest", "org.xfce.FileManager",
+                   "--object-path", "/org/xfce/FileManager", timeout=60)
+assert "Launch" in file_manager, "Desktop file manager cannot launch files"
+print("WINLUX_NATIVE_DESKTOP_FILE_SERVICE=0", flush=True)
 print(run("wmctrl", "-m"), flush=True)
 subprocess.Popen(["xfdesktop", "--disable-wm-check"], stdout=log, stderr=log)
 run("winlux-control", "status")

@@ -1,5 +1,28 @@
 # Session native Winlux
 
+Thunar fournit le service D-Bus `org.xfce.FileManager` utilisé par xfdesktop
+pour ouvrir les fichiers et les lanceurs du bureau. Les fichiers de service
+seuls (fournis par les données XFCE) ne suffisent pas : la construction exige
+également le binaire Thunar et la validation VM active ce service.
+
+Paramètres utilise désormais une fenêtre GTK redimensionnable, une recherche
+de catégories et des pages défilantes. Les opérations de contrôle s'exécutent
+sans bloquer l'interface ; la page des mises à jour affiche progression et
+journal. Les catégories avancées Applications, Programmes Windows,
+Accessibilité et Effets visuels ouvrent encore les écrans PE existants.
+`WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings` conserve l'ancien écran.
+Le test `xvfb-run -a /usr/bin/python3 -B scripts/test-settings-native.py`
+vérifie la navigation sans effectuer d'action système.
+
+Le rendu X11 restaure les zones découvertes depuis son tampon lorsqu'il est
+valide, sans demander un redessin GDI complet. Le thème Openbox Winlux partage
+les couleurs des Paramètres et agrandit les décorations. Ces changements ne
+constituent pas une mesure du débit d'images sur toutes les machines.
+
+La vérification des empreintes du paquet de mise à jour s'effectue en un appel
+groupé après validation des chemins. Les vérifications de sécurité et la
+sauvegarde de restauration sont conservées.
+
 La session interactive associe Openbox (fenêtres), xfdesktop (bureau),
 xfce4-panel (tâches et indicateurs) et un menu GTK inspiré de Windows 11. Les composants sont
 préparés depuis les dépôts Ubuntu signés, dans un répertoire isolé : aucun

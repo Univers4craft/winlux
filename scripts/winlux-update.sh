@@ -392,13 +392,20 @@ else
     done
 fi
 : >"$work/new-files"
+: >"$work/file-checksums"
 while read -r digest file_mode path extra; do
     test -z "${extra:-}" && safe_path "$path" || fail "inventaire fichiers invalide"
     case "$file_mode" in 644|755) ;; *) fail "droits de fichier refusés : $path" ;; esac
     test -f "$payload/$path" && ! test -L "$payload/$path" || fail "fichier absent : $path"
-    test "$(sha256sum "$payload/$path" | cut -d' ' -f1)" = "$digest" || fail "fichier altéré : $path"
+    printf '%s  %s\n' "$digest" "$path" >>"$work/file-checksums"
     printf '%s\n' "$path" >>"$work/new-files"
 done <"$files"
+# Une seule invocation pour tous les fichiers, au lieu de plusieurs processus
+# par fichier. Les chemins ont été validés avant de changer de répertoire.
+if ! (cd "$payload" && sha256sum -c "$work/file-checksums" >"$work/checksum-results"); then
+    tool tail -n 20 "$work/checksum-results" >&2
+    fail "un ou plusieurs fichiers du paquet sont altérés"
+fi
 tool find "$payload" -type f | sed "s#^$payload/##" | tool sort >"$work/actual-files"
 tool sort "$work/new-files" >"$work/listed-files"
 tool cmp -s "$work/actual-files" "$work/listed-files" || fail "l'inventaire ne correspond pas aux fichiers du paquet"

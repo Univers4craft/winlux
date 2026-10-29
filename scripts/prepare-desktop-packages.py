@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 
-PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad",
+PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "thunar",
             "xfconf", "xscreensaver", "xscreensaver-gl", "wmctrl", "xdotool",
             "dbus-x11", "adwaita-icon-theme", "libgl1-mesa-dri", "xdg-utils",
             "python3-minimal", "xfce4-genmon-plugin", "alsa-utils", "librsvg2-common",
