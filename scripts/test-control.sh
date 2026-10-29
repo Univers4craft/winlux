@@ -73,7 +73,17 @@ if WINLUX_TEST_KEYBOARD_FAIL=1 control keyboard-fr; then echo 'ERROR: failed-lay
 grep -q '^XKB_LAYOUT=us$' "$work/root/etc/winlux/input.conf"
 control tap-on
 grep -q '^TAP_TO_CLICK=1$' "$work/root/etc/winlux/input.conf"
+cat > "$work/bin/xfconf-query" <<'MOCK'
+#!/bin/sh
+printf 'xfconf %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"
+case " $* " in *' -s '*) exit 0 ;; *) exit 1 ;; esac
+MOCK
+chmod 755 "$work/bin/xfconf-query"
+control align-center
+grep -qx 'TASKBAR_ALIGN=center' "$work/root/etc/winlux/preferences.conf"
+grep -q 'xfconf -c xfce4-panel -p /plugins/plugin-3/expand -s true' "$work/commands"
 control align-left
+grep -q 'xfconf -c xfce4-panel -p /plugins/plugin-3/expand -s false' "$work/commands"
 control theme-light
 grep -q '^TASKBAR_ALIGN=left$' "$work/root/etc/winlux/preferences.conf"
 grep -q '^THEME=light$' "$work/root/etc/winlux/preferences.conf"

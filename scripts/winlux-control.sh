@@ -8,6 +8,7 @@ run="$root/run/winlux"
 config="$root/etc/winlux"
 mkdir -p "$run" "$config"
 export DISPLAY=${DISPLAY:-:0}
+export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/winlux/session-bus}
 
 value() { if test -r "$1"; then sed -n "s/^$2=//p" "$1" | head -n 1; fi; }
 pref() { value "$config/preferences.conf" "$1"; }
@@ -137,13 +138,22 @@ perform() {
             done
             test "$found" = 1 || { echo 'Aucune souris avec acceleration libinput exposee' >&2; return 1; }
             save "$config/input.conf" MOUSE_SPEED "$speed" ;;
-        align-left) save "$config/preferences.conf" TASKBAR_ALIGN left ;;
-        align-center)
-            save "$config/preferences.conf" TASKBAR_ALIGN center
-            # Réinitialise seulement le panneau Winlux afin d'appliquer les
-            # deux espaces extensibles qui centrent Démarrer et les fenêtres.
-            if have winlux-native-config; then winlux-native-config --reset-panel; fi
-            if have xfce4-panel; then xfce4-panel -r || true; fi ;;
+        align-left|align-center)
+            alignment=${action#align-}
+            if have xfconf-query; then
+                # XFConf conserve les propriétés en mémoire : modifier le XML
+                # derrière son dos ne change pas le panneau en cours.
+                for spec in 'plugin-8:string:separator' 'plugin-8/style:uint:0' 'plugin-8/expand:bool:true'; do
+                    property=${spec%%:*}; rest=${spec#*:}; kind=${rest%%:*}; setting=${rest#*:}
+                    if ! xfconf-query -c xfce4-panel -p "/plugins/$property" >/dev/null 2>&1; then
+                        xfconf-query -c xfce4-panel -p "/plugins/$property" -n -t "$kind" -s "$setting" || return
+                    fi
+                done
+                xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a -t int -s 3 -t int -s 1 -t int -s 2 -t int -s 8 -t int -s 4 -t int -s 5 -t int -s 6 -t int -s 7 || return
+                expand=false; test "$alignment" != center || expand=true
+                xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand -s "$expand" || return
+            fi
+            save "$config/preferences.conf" TASKBAR_ALIGN "$alignment" ;;
         desktop-icon-recycle)
             mkdir -p "$HOME/Bureau"
             printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=Corbeille' 'Icon=user-trash' 'URL=trash:///' > "$HOME/Bureau/winlux-recycle-bin.desktop"

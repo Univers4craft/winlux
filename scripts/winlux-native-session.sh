@@ -14,6 +14,8 @@ export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus
 export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
 export XDG_CONFIG_DIRS=/etc/xdg XDG_DATA_DIRS=/usr/local/share:/usr/share
 /usr/bin/winlux-native-config
+alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
+case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
 # Restore the user's input choice on each session, without resetting defaults.
 speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
 case "$speed" in

@@ -11,6 +11,10 @@ on:
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   release:
     runs-on: ubuntu-latest
@@ -54,6 +58,11 @@ jobs:
           bash scripts/build-tests.sh
           bash scripts/test-runtime.sh
           bash scripts/test-runtime-parallel.sh
+          sh scripts/test-control.sh
+          sh scripts/test-browsers.sh
+          sh scripts/test-updater.sh
+          sh scripts/test-update-notes.sh
+          sh scripts/test-install-safety.sh
 
       - name: Construire l'ISO
         run: |
@@ -69,14 +78,21 @@ jobs:
           test -s "build/winlux-live-$GITHUB_REF_NAME.iso"
           echo "SKIP_ISO=false" >> "$GITHUB_ENV"
 
+      - name: Valider les navigateurs en VM
+        env:
+          WINLUX_QEMU_MEMORY: 4096
+        run: sh scripts/test-browsers-vm.sh
+
+      - name: Valider le bureau natif en VM
+        env:
+          WINLUX_QEMU_MEMORY: 4096
+        run: sh scripts/test-native-session-vm.sh
+
       - name: Valider l'ISO et l'installation avant publication
         env:
           WINLUX_QEMU_MEMORY: 4096
         run: |
           if [ "$SKIP_ISO" = "false" ]; then
-            sh scripts/test-install-safety.sh
-            sh scripts/test-browsers-vm.sh
-            sh scripts/test-native-session-vm.sh
             sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" bios
             sh scripts/test-live-iso-qemu.sh "build/winlux-live-$GITHUB_REF_NAME.iso" uefi
             # The diagnostic embeds a second ISO copy in RAM, unlike normal boot.
@@ -92,6 +108,8 @@ jobs:
             build/browser-vm.*/serial.log
             build/native-vm.*/serial.log
             build/native-vm.*/programs.log
+            build/qemu-*.log
+            build/install-guest.*/*.log
 
       - name: Construire la mise à jour
         run: |
