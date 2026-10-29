@@ -139,5 +139,8 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             "$@" \
             --repo "$GITHUB_REPOSITORY" \
-            --generate-notes \
+            --draft --verify-tag \
+            --notes-file "docs/releases/$GITHUB_REF_NAME.md" \
             --title "Winlux $GITHUB_REF_NAME"
+          # Le manifeste latest ne devient visible qu'après tous les uploads.
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

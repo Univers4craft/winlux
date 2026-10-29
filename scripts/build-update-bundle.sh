@@ -74,6 +74,16 @@ while IFS= read -r source; do
     if test -L "$source"; then
         target=$(readlink "$source")
         case "$target" in ''|*[!A-Za-z0-9._+@%=/:-]*) echo "cible de lien invalide : $path" >&2; exit 1 ;; esac
+        # Les paquets Ubuntu contiennent des liens vers la configuration de
+        # l'installation (/etc, /var). Ils restent gérés par l'installation
+        # initiale, en dehors de l'inventaire remplaçable de l'updater.
+        case "$target" in /*) link_absolute=$target ;; *) link_absolute="${path%/*}/$target" ;; esac
+        resolved=$(printf '%s\n' "$link_absolute" | awk -F/ '{ n=0; for(i=1;i<=NF;i++) { if($i=="" || $i==".") continue; if($i=="..") { if(n==0) exit 1; n--; } else parts[++n]=$i; } for(i=1;i<=n;i++) printf "%s%s", i==1 ? "" : "/", parts[i]; print ""; }') || { echo "lien hors racine : $path" >&2; exit 1; }
+        case "$resolved" in
+            etc/*|var/*) echo "Lien de configuration préservé : $path -> $target" >&2; continue ;;
+            usr/*|lib/*|lib64/*|bin/*|opt/winlux/*|boot/*|init) ;;
+            *) echo "lien hors système : $path -> $target" >&2; exit 1 ;;
+        esac
         printf '%s %s\n' "$path" "$target" >>"$links"
     elif test -d "$source"; then mkdir -p "$payload/$path";
     elif test -f "$source"; then
