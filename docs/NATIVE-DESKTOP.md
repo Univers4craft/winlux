@@ -1,5 +1,16 @@
 # Session native Winlux
 
+Ancrage : Windows+Flèche gauche/droite place la fenêtre sur une moitié de
+l'écran ; Windows+Espace ouvre Démarrer. La capture de Windows seule a été
+retirée car elle bloquait les combinaisons ; les profils Winlux existants sont
+migrés au démarrage sans modifier les raccourcis personnalisés.
+
+`xvfb-run -a -s '-screen 0 1920x1080x24 -noreset' /usr/bin/python3 -B scripts/test-window-performance.py`
+vérifie les deux ancrages et mesure douze déplacements/redimensionnements
+(médiane, percentile 95, maximum). Ces délais incluent les processus de test et
+les allers-retours X11, et ne mesurent pas le rythme des images affichées.
+La validation VM produit aussi `window-latency.json` avec la fenêtre Terminal.
+
 Thunar fournit le service D-Bus `org.xfce.FileManager` utilisé par xfdesktop
 pour ouvrir les fichiers et les lanceurs du bureau. Les fichiers de service
 seuls (fournis par les données XFCE) ne suffisent pas : la construction exige

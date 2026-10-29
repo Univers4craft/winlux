@@ -6,6 +6,7 @@ import shutil
 import pwd
 import grp
 import sys
+import xml.etree.ElementTree as ET
 
 if os.geteuid() == 0:
     try:
@@ -31,6 +32,28 @@ for path in (source / "config").rglob("*"):
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.exists() or (reset_panel and path.name == "xfce4-panel.xml"):
             shutil.copyfile(path, target)
+# Migrer uniquement le raccourci livré par Winlux, sans toucher aux raccourcis
+# personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox.
+openbox_config = home / ".config/openbox/rc.xml"
+if openbox_config.is_file():
+    namespace = "http://openbox.org/3.4/rc"
+    ET.register_namespace("", namespace)
+    try:
+        tree = ET.parse(openbox_config)
+        keyboard = tree.getroot().find(f"{{{namespace}}}keyboard")
+        changed = False
+        if keyboard is not None:
+            for binding in list(keyboard):
+                commands = binding.findall(f"{{{namespace}}}action/{{{namespace}}}command")
+                if binding.get("key") == "Super_L" and len(commands) == 1 and commands[0].text == "winlux-start-menu":
+                    keyboard.remove(binding)
+                    changed = True
+        if changed:
+            temporary = openbox_config.with_suffix(".xml.tmp")
+            tree.write(temporary, encoding="utf-8", xml_declaration=True)
+            temporary.replace(openbox_config)
+    except ET.ParseError:
+        print("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée.", file=sys.stderr)
 if not (home / ".xscreensaver").exists(): shutil.copyfile(source / "xscreensaver", home / ".xscreensaver")
 user_dirs = home / ".config/user-dirs.dirs"
 if not user_dirs.exists():

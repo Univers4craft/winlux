@@ -45,6 +45,7 @@ jobs:
             libqt5core5t64 libqt5gui5t64 libqt5widgets5t64 \
             libqt6core6t64 libqt6gui6t64 libqt6widgets6t64 \
             python3-gi gir1.2-gtk-3.0
+          sudo apt-get install -y -q openbox wmctrl xdotool
 
       - name: Préparer Edge, Chrome et Firefox hors ligne
         run: python3 scripts/prepare-browser-packages.py build/browser-packages
@@ -65,6 +66,7 @@ jobs:
           sh scripts/test-update-notes.sh
           sh scripts/test-install-safety.sh
           xvfb-run -a /usr/bin/python3 -B scripts/test-settings-native.py
+          xvfb-run -a -s '-screen 0 1920x1080x24 -noreset' /usr/bin/python3 -B scripts/test-window-performance.py
 
       - name: Construire l'ISO
         run: |
@@ -110,6 +112,7 @@ jobs:
             build/browser-vm.*/serial.log
             build/native-vm.*/serial.log
             build/native-vm.*/programs.log
+            build/native-vm.*/window-latency.json
             build/qemu-*.log
             build/install-guest.*/*.log
 

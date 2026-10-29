@@ -99,7 +99,9 @@ bundle="$root/build/winlux-update-$version.tar.gz"
 manifest="$root/build/winlux-update-manifest.txt"
 tar -C "$work/package" --owner=0 --group=0 --numeric-owner -czf "$work/bundle.tar.gz" META FILES LINKS payload
 checksum=$(sha256sum "$work/bundle.tar.gz" | cut -d' ' -f1)
-{ cat "$work/package/META"; printf 'asset=%s\nsha256=%s\n' "$(basename -- "$bundle")" "$checksum"; } >"$work/manifest.txt"
+{ cat "$work/package/META"; printf 'asset=%s\nsha256=%s\n' "$(basename -- "$bundle")" "$checksum";
+  printf 'download_bytes=%s\nunpacked_kib=%s\n' "$(wc -c <"$work/bundle.tar.gz" | tr -d ' ')" "$(du -sk "$payload" | cut -f1)";
+} >"$work/manifest.txt"
 notes_source=${WINLUX_UPDATE_NOTES:-"$root/docs/releases/$version.md"}
 if test -f "$notes_source"; then
     test "$(wc -c <"$notes_source")" -le 24576 || { echo 'notes de version trop longues (24 Kio maximum)' >&2; exit 1; }

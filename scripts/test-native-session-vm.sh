@@ -50,6 +50,8 @@ debugfs -R "dump /var/lib/winlux/native-programs.log $work/programs.log" "$disk"
 debugfs -R "dump /var/lib/winlux/chatgpt-result.txt $work/chatgpt-result.txt" "$disk" >/dev/null 2>&1 || true
 debugfs -R "dump /var/lib/winlux/vendor-result.txt $work/vendor-result.txt" "$disk" >/dev/null 2>&1 || true
 debugfs -R "dump /var/lib/winlux/vendor-results.json $work/vendor-results.json" "$disk" >/dev/null 2>&1 || true
+debugfs -R "dump /var/lib/winlux/window-latency.json $work/window-latency.json" "$disk" >/dev/null 2>&1 || true
+grep -q 'WINLUX_NATIVE_WINDOW_SNAPPING=0' "$log" || { tail -60 "$log"; exit 1; }
 for marker in WINLUX_NATIVE_DESKTOP_FILE_SERVICE=0 WINLUX_NATIVE_SETTINGS_ROUTES=0 WINLUX_NATIVE_WINDOW_CONTROLS=0 WINLUX_NATIVE_EDITOR_SAVE=0 WINLUX_NATIVE_EDGE_WINDOWED=0 WINLUX_NATIVE_TASKBAR_AND_MENU=0 WINLUX_NATIVE_PIPES_ANIMATED=0 WINLUX_NATIVE_CLOSE=0 WINLUX_NATIVE_RESULT=0 WINLUX_NATIVE_EXIT=0; do
     if ! grep -q "$marker" "$log"; then
         echo "Missing $marker; see $work" >&2

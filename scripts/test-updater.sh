@@ -45,6 +45,14 @@ test "$(update --auto status)" = disabled
 WINLUX_UPDATE_ROOT="$fixture" WINLUX_UPDATE_MANIFEST=file:///not-present "$updater" --auto-run
 update --list | grep -q 'Aucune vérification'
 build_runtime updater-runtime
+cp "$assets/manifest.txt" "$test_root/space-manifest.saved"
+sed '/^download_bytes=/d; /^unpacked_kib=/d' "$test_root/space-manifest.saved" > "$assets/manifest.txt"
+printf 'download_bytes=999999999999\nunpacked_kib=999999999999\n' >> "$assets/manifest.txt"
+expected_version=old
+expect_failure update --apply
+grep -q 'Espace insuffisant' "$test_root/expected-error.log"
+test ! -f "$fixture/var/lib/winlux/update-transaction"
+cp "$test_root/space-manifest.saved" "$assets/manifest.txt"
 # Un /tmp inutilisable ne doit plus empêcher la préparation sur disque.
 TMPDIR="$test_root/absent-tmpfs" update --check
 test -z "$(find "$fixture/var/lib/winlux" -maxdepth 1 -name 'update-work.*' -print)"

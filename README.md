@@ -115,6 +115,11 @@ La préparation (téléchargement et décompression) utilise
 ce dossier à la fin. Elle n'utilise pas le `/tmp` en RAM de la session Live.
 L'installation nécessite de l'espace pour le paquet, son contenu décompressé
 et la sauvegarde de restauration.
+Les nouveaux manifestes annoncent `download_bytes` et `unpacked_kib` afin de
+contrôler une estimation prudente avant téléchargement, avec une marge de
+64 Mio et la sauvegarde des fichiers système. L'espace est revérifié avant
+décompression et installation. Avec un ancien manifeste sans tailles, le
+premier contrôle ne peut avoir lieu qu'après téléchargement.
 
 | Paquet | Contenu |
 | --- | --- |

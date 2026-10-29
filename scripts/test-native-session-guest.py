@@ -109,6 +109,33 @@ for window in [explorer, settings, editor, terminal]:
     run("wmctrl", "-ir", window, "-b", "remove,maximized_vert,maximized_horz")
 print("WINLUX_NATIVE_WINDOW_CONTROLS=0", flush=True)
 
+# Exercise the delivered Openbox bindings, not just manual wmctrl placement.
+run("xdotool", "windowactivate", "--sync", terminal)
+run("xdotool", "key", "--clearmodifiers", "super+Left")
+wait_for(lambda: abs(windows()[terminal][0][0]) < 32 and abs(windows()[terminal][0][2] - 960) < 32, "snap left")
+run("xdotool", "key", "--clearmodifiers", "super+Right")
+wait_for(lambda: abs(windows()[terminal][0][0] - 960) < 32 and abs(windows()[terminal][0][2] - 960) < 32, "snap right")
+print("WINLUX_NATIVE_WINDOW_SNAPPING=0", flush=True)
+
+# End-to-end geometry acknowledgement latency. This includes subprocess and
+# X11 round trips; it is not a measurement of the visible display frame rate.
+timings = {"move_ms": [], "resize_ms": []}
+for i in range(12):
+    started = time.monotonic()
+    x, y = 80 + i * 8, 80 + i * 4
+    run("xdotool", "windowmove", "--sync", terminal, str(x), str(y))
+    timings["move_ms"].append((time.monotonic() - started) * 1000)
+    started = time.monotonic()
+    width, height = 700 + i * 8, 400 + i * 4
+    run("xdotool", "windowsize", "--sync", terminal, str(width), str(height))
+    timings["resize_ms"].append((time.monotonic() - started) * 1000)
+report = {key: {"median": round(sorted(values)[len(values)//2], 2),
+                "p95": round(sorted(values)[-1], 2),
+                "maximum": round(max(values), 2), "samples": len(values)}
+          for key, values in timings.items()}
+Path("/var/lib/winlux/window-latency.json").write_text(json.dumps(report, indent=2))
+print("WINLUX_WINDOW_LATENCY=" + json.dumps(report), flush=True)
+
 run("wmctrl", "-ia", editor)
 time.sleep(0.2)
 run("xdotool", "key", "ctrl+End")

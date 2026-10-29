@@ -63,6 +63,12 @@ prepare_work() {
         work=$(mktemp -d "$state_dir/update-work.XXXXXX") || fail "espace de préparation indisponible sur le disque : $state_dir"
     fi
 }
+require_space() {
+    space_path=$1; required_kib=$2
+    available_kib=$(tool df -Pk "$space_path" | tool awk 'END {print $4}')
+    case "$available_kib" in ''|*[!0-9]*) fail "impossible de mesurer l'espace libre : $space_path" ;; esac
+    test "$available_kib" -ge "$required_kib" || fail "Espace insuffisant sur $space_path : $required_kib Kio requis, $available_kib Kio disponibles. Libérez de l'espace puis réessayez."
+}
 prepare_tools() {
     prepare_work
     if test -x /bin/busybox && test -z "$updater_tools"; then
@@ -356,6 +362,29 @@ fetch_manifest "$work/manifest.txt"
 list_updates
 test "$mode" = --apply || exit 0
 if up_to_date; then progress idle 100 0 0 'Winlux est déjà à jour'; exit 0; fi
+download_bytes=$(value download_bytes "$work/manifest.txt" || true)
+unpacked_kib=$(value unpacked_kib "$work/manifest.txt" || true)
+if test -n "$download_bytes$unpacked_kib"; then
+    for size in "$download_bytes" "$unpacked_kib"; do
+        case "$size" in ''|*[!0-9]*) fail "taille invalide dans le manifeste" ;; esac
+        test "${#size}" -le 12 || fail "taille excessive dans le manifeste"
+    done
+    # Prévoir archive, décompression, copie de restauration et marge.
+    # L'estimation inclut les arbres gérés, jamais les documents personnels.
+    backup_kib=0
+    for tree in usr bin lib lib64 opt/winlux boot; do
+        if test -e "$target_root/$tree"; then
+            tree_kib=$(tool du -sk "$target_root/$tree" | tool cut -f1)
+            backup_kib=$((backup_kib + tree_kib))
+        fi
+    done
+    required_kib=$(( (download_bytes + 1023) / 1024 + unpacked_kib * 2 + backup_kib + 65536 ))
+    require_space "$state_dir" "$required_kib"
+    require_space "$target_root" "$required_kib"
+    echo "Prévalidation espace : $required_kib Kio requis (archive, décompression, restauration et marge)."
+else
+    echo "Ancien manifeste sans tailles : contrôle avant décompression uniquement."
+fi
 if test -n "${WINLUX_UPDATE_ASSET_DIR:-}"; then asset_source="file://$WINLUX_UPDATE_ASSET_DIR/$asset";
 else asset_source="https://github.com/$repository/releases/download/$version/$asset"; fi
 bundle="$work/bundle.tar.gz"
@@ -375,6 +404,8 @@ while IFS= read -r entry; do
 done <"$work/archive.names"
 test -z "$(tool sort "$work/archive.names" | tool uniq -d)" || fail "entrées dupliquées dans le paquet"
 mkdir -p "$work/extracted"
+archive_kib=$(tool awk '$3 ~ /^[0-9]+$/ {bytes += $3} END {printf "%.0f", bytes/1024+1}' "$work/archive.types")
+require_space "$state_dir" "$((archive_kib + 65536))"
 tar -xzf "$bundle" -C "$work/extracted"
 if test "$format" = 2; then
     for key in format version scope action components; do
@@ -473,6 +504,18 @@ if test "$scope" = system; then
         esac
     done <"$work/targets.sorted"
 fi
+# Revérifier après téléchargement et validation : d'autres applications
+# peuvent avoir consommé de l'espace depuis le premier contrôle.
+remaining_kib=$(tool du -sk "$payload" | tool cut -f1)
+backup_kib=0
+for tree in usr bin lib lib64 opt/winlux boot; do
+    if test -e "$target_root/$tree"; then
+        tree_kib=$(tool du -sk "$target_root/$tree" | tool cut -f1)
+        backup_kib=$((backup_kib + tree_kib))
+    fi
+done
+require_space "$state_dir" "$((remaining_kib + backup_kib + 65536))"
+require_space "$target_root" "$((remaining_kib + 65536))"
 transaction_backup=$(mktemp -d "$state_dir/update-backup.XXXXXX")
 tool chmod 700 "$transaction_backup"
 mkdir -p "$transaction_backup/files"
