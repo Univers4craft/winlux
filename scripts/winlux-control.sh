@@ -137,7 +137,29 @@ perform() {
             done
             test "$found" = 1 || { echo 'Aucune souris avec acceleration libinput exposee' >&2; return 1; }
             save "$config/input.conf" MOUSE_SPEED "$speed" ;;
-        align-left|align-center) save "$config/preferences.conf" TASKBAR_ALIGN "${action#align-}" ;;
+        align-left) save "$config/preferences.conf" TASKBAR_ALIGN left ;;
+        align-center)
+            save "$config/preferences.conf" TASKBAR_ALIGN center
+            # Réinitialise seulement le panneau Winlux afin d'appliquer les
+            # deux espaces extensibles qui centrent Démarrer et les fenêtres.
+            if have winlux-native-config; then winlux-native-config --reset-panel; fi
+            if have xfce4-panel; then xfce4-panel -r || true; fi ;;
+        desktop-icon-recycle)
+            mkdir -p "$HOME/Bureau"
+            printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=Corbeille' 'Icon=user-trash' 'URL=trash:///' > "$HOME/Bureau/winlux-recycle-bin.desktop"
+            chmod 755 "$HOME/Bureau/winlux-recycle-bin.desktop" ;;
+        desktop-icon-explorer)
+            mkdir -p "$HOME/Bureau"
+            cp /usr/share/applications/winlux-explorer.desktop "$HOME/Bureau/winlux-explorer.desktop"
+            chmod 755 "$HOME/Bureau/winlux-explorer.desktop" ;;
+        desktop-icon-computer)
+            mkdir -p "$HOME/Bureau"
+            printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=Ce PC' 'Icon=computer' 'URL=file:///' > "$HOME/Bureau/winlux-computer.desktop"
+            chmod 755 "$HOME/Bureau/winlux-computer.desktop" ;;
+        desktop-icon-documents)
+            mkdir -p "$HOME/Bureau"
+            printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=Documents' 'Icon=folder-documents' "URL=file://$HOME/Documents" > "$HOME/Bureau/winlux-documents.desktop"
+            chmod 755 "$HOME/Bureau/winlux-documents.desktop" ;;
         theme-dark|theme-light) save "$config/preferences.conf" THEME "${action#theme-}" ;;
         display-follow|display-fixed) winlux-display "${action#display-}" ;;
         display-mode-*) mode=${action#display-mode-}; case "$mode" in *[!0-9x]*|'') return 1 ;; esac; winlux-display mode "$mode" ;;

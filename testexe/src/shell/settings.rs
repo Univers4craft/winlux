@@ -414,8 +414,6 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (6, 1) => value(b"align") == b"center",
         (6, 3) => value(b"theme") == b"dark",
         (6, 4) => value(b"theme") == b"light",
-        (6, 12) => crate::desktop::show_system_icons(),
-        (6, 13) => !crate::desktop::show_system_icons(),
         (8, 3) => value(b"display_policy") == b"fixed",
         (8, 4) => value(b"display_policy") != b"fixed",
         (10, 0..=4) => EXE_SCALE == id as usize,
@@ -1058,9 +1056,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     b"Session Live : les r\xE9glages durent jusqu'au red\xE9marrage."
                 },
             );
-            row(g, &c, 260, b"Ic\xF4nes syst\xE8me du bureau", if crate::desktop::show_system_icons() { b"Affich\xE9es" } else { b"Masqu\xE9es" });
-            button(g, &c, 4, 0, b"Afficher", 12);
-            button(g, &c, 4, 1, b"Masquer", 13);
+            row(g, &c, 260, b"Ic\xF4nes du bureau", b"Ajoutez seulement les ic\xF4nes que vous voulez afficher.");
+            button(g, &c, 4, 0, b"Afficher Corbeille", 12);
+            button(g, &c, 4, 1, b"Afficher Explorateur", 13);
+            button(g, &c, 5, 0, b"Afficher Ce PC", 14);
+            button(g, &c, 5, 1, b"Afficher Documents", 15);
             button(g, &c, 6, 0, b"R\xE9glages de l'\xE9cran", 18);
         }
         8 => {
@@ -1314,14 +1314,10 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             unsafe { MOUSE_SPEED = 75 };
             Some(c"mouse-fast")
         }
-        (6, 12) => {
-            crate::desktop::set_show_system_icons(true);
-            None
-        }
-        (6, 13) => {
-            crate::desktop::set_show_system_icons(false);
-            None
-        }
+        (6, 12) => Some(c"desktop-icon-recycle"),
+        (6, 13) => Some(c"desktop-icon-explorer"),
+        (6, 14) => Some(c"desktop-icon-computer"),
+        (6, 15) => Some(c"desktop-icon-documents"),
         (11, id) if (0..=8).contains(&id) => Some(
             [
                 c"browser-install-edge",
