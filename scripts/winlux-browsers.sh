@@ -109,7 +109,7 @@ launch() {
         mkdir -p "$run"
         if /usr/bin/setpriv --reuid=winlux-web --regid=winlux-web --init-groups --reset-env \
             env HOME="$home" USER=winlux-web LOGNAME=winlux-web DISPLAY="${DISPLAY:-:0}" \
-            "$program" "$@"; then return 0; else
+            /usr/bin/dbus-run-session -- "$program" "$@"; then return 0; else
             printf 'Le navigateur a échoué. Consultez le journal navigateur.\n' > "$run/action.txt"
             printf '1\n' > "$run/browser-chooser"
             return 1

@@ -19,12 +19,11 @@ for browser in edge chrome; do
     mkdir -p "$profile"
     chown winlux-web:winlux-web "$profile"
     chmod 700 "$profile"
-    # Les services DBus ne sont volontairement pas présents dans cette VM de
-    # test. Isoler le profil et /dev/shm évite que Chromium/Edge attende ces
-    # services avant de rendre le document local ; le sandbox reste actif.
-    timeout 45 winlux-browsers --launch "$browser" --headless --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-background-networking --user-data-dir="$profile" --dump-dom file:///tmp/browser-test.html > "/tmp/$browser-dom.log" 2>&1 &
+    # L'émulation TCG de la CI est plus lente qu'une VM accélérée par KVM.
+    echo "WINLUX_BROWSER_${browser}_START"
+    timeout 120 winlux-browsers --launch "$browser" --headless --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-background-networking --user-data-dir="$profile" --dump-dom file:///tmp/browser-test.html > "/tmp/$browser-dom.log" 2>&1 &
     runner=$!
-    for attempt in $(seq 1 45); do
+    for attempt in $(seq 1 120); do
         grep -q '<title>WINLUX_BROWSER_OK</title>' "/tmp/$browser-dom.log" && break
         kill -0 "$runner" 2>/dev/null || break
         sleep 1
@@ -33,7 +32,11 @@ for browser in edge chrome; do
     # owns this isolated account and explicitly stops it after observing render.
     /bin/busybox pkill -TERM -u "$(id -u winlux-web)" 2>/dev/null || true
     wait "$runner" || true
-    grep -q '<title>WINLUX_BROWSER_OK</title>' "/tmp/$browser-dom.log"
+    if ! grep -q '<title>WINLUX_BROWSER_OK</title>' "/tmp/$browser-dom.log"; then
+        echo "WINLUX_BROWSER_${browser}_RESULT=1"
+        cat "/tmp/$browser-dom.log"
+        exit 1
+    fi
     echo "WINLUX_BROWSER_${browser}_RESULT=0"
 done
 timeout 45 winlux-browsers --launch firefox --headless --screenshot /home/winlux-web/browser-test.png file:///tmp/browser-test.html > /tmp/firefox-render.log 2>&1

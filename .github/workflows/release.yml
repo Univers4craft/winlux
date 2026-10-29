@@ -83,6 +83,16 @@ jobs:
             WINLUX_QEMU_MEMORY=6144 sh scripts/test-install-vm-guest.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
           fi
 
+      - name: Conserver les journaux de validation
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-logs
+          path: |
+            build/browser-vm.*/serial.log
+            build/native-vm.*/serial.log
+            build/native-vm.*/programs.log
+
       - name: Construire la mise à jour
         run: |
           bash scripts/build-update-bundle.sh --system "$GITHUB_REF_NAME"
