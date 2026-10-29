@@ -15,7 +15,12 @@ for browser in edge chrome firefox; do
     winlux-browsers --install "$browser"
 done
 for browser in edge chrome; do
-    timeout 45 winlux-browsers --launch "$browser" --headless --disable-gpu --no-first-run --no-default-browser-check --disable-background-networking --dump-dom file:///tmp/browser-test.html > "/tmp/$browser-dom.log" 2>&1 &
+    profile="/tmp/${browser}-profile"
+    mkdir -p "$profile"
+    # Les services DBus ne sont volontairement pas présents dans cette VM de
+    # test. Isoler le profil et /dev/shm évite que Chromium/Edge attende ces
+    # services avant de rendre le document local ; le sandbox reste actif.
+    timeout 45 winlux-browsers --launch "$browser" --headless --disable-gpu --disable-dev-shm-usage --no-first-run --no-default-browser-check --disable-background-networking --user-data-dir="$profile" --dump-dom file:///tmp/browser-test.html > "/tmp/$browser-dom.log" 2>&1 &
     runner=$!
     for attempt in $(seq 1 45); do
         grep -q '<title>WINLUX_BROWSER_OK</title>' "/tmp/$browser-dom.log" && break
