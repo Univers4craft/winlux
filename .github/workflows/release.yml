@@ -37,7 +37,8 @@ jobs:
             xvfb xterm ncurses-base x11-xkb-utils xfonts-base fonts-dejavu-core \
             xserver-xorg-input-libinput libxft2 libcairo2 libmpg123-0 libfaad2 libasound2t64 \
             curl udev ffmpeg libarchive-tools parted dosfstools qemu-system-x86 ovmf \
-            dpkg-dev libgtk-3-0t64 libnss3 libnspr4 libgbm1 libxkbcommon0 libdbus-glib-1-2
+            dpkg-dev libgtk-3-0t64 libnss3 libnspr4 libgbm1 libxkbcommon0 libdbus-glib-1-2 \
+            libqt5core5t64 libqt5gui5t64 libqt5widgets5t64
 
       - name: Préparer Edge, Chrome et Firefox hors ligne
         run: python3 scripts/prepare-browser-packages.py build/browser-packages
