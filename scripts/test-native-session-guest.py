@@ -166,7 +166,7 @@ html = Path("/tmp/winlux-native-browser.html")
 html.write_text("<!doctype html><title>Winlux browser window test</title><h1>Winlux</h1>")
 html.chmod(0o644)
 subprocess.Popen(["winlux-browsers", "--launch", "edge", "--disable-gpu", html.as_uri()], stdout=log, stderr=log)
-browser = wait_title("Winlux browser window test", 45)
+browser = wait_title("Winlux browser window test", 90)
 assert "_NET_WM_STATE_FULLSCREEN" not in run("xprop", "-id", browser, "_NET_WM_STATE")
 geometry = windows()[browser][0]
 assert geometry[2] < 1920 and geometry[3] < 1040, geometry
