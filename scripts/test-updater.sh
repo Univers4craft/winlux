@@ -45,10 +45,13 @@ test "$(update --auto status)" = disabled
 WINLUX_UPDATE_ROOT="$fixture" WINLUX_UPDATE_MANIFEST=file:///not-present "$updater" --auto-run
 update --list | grep -q 'Aucune vérification'
 build_runtime updater-runtime
-update --check
+# Un /tmp inutilisable ne doit plus empêcher la préparation sur disque.
+TMPDIR="$test_root/absent-tmpfs" update --check
+test -z "$(find "$fixture/var/lib/winlux" -maxdepth 1 -name 'update-work.*' -print)"
 
 WINLUX_UPDATE_ROOT="$fixture" WINLUX_UPDATE_MANIFEST=file:///not-present "$updater" --list | grep -q 'runtime,updater'
-update --apply
+TMPDIR="$test_root/absent-tmpfs" update --apply
+test -z "$(find "$fixture/var/lib/winlux" -maxdepth 1 -name 'update-work.*' -print)"
 test "$(cat "$fixture/usr/share/winlux/version")" = updater-runtime
 grep -qx 'phase=ready' "$fixture/run/winlux/update-progress"
 test "$(sed -n 's/^done=//p' "$fixture/run/winlux/update-progress")" = "$(sed -n 's/^total=//p' "$fixture/run/winlux/update-progress")"

@@ -55,8 +55,16 @@ sha256sum() { tool sha256sum "$@"; }
 tar() { tool tar "$@"; }
 tr() { tool tr "$@"; }
 wc() { tool wc "$@"; }
+prepare_work() {
+    # Le paquet compressé et sa racine décompressée dépassent facilement le
+    # tmpfs /tmp d'une VM de 4 Gio. Préparer sur le disque de l'installation.
+    if test -z "$work"; then
+        mkdir -p "$state_dir"
+        work=$(mktemp -d "$state_dir/update-work.XXXXXX") || fail "espace de préparation indisponible sur le disque : $state_dir"
+    fi
+}
 prepare_tools() {
-    if test -z "$work"; then work=$(mktemp -d "${TMPDIR:-/tmp}/winlux-update.XXXXXX"); fi
+    prepare_work
     if test -x /bin/busybox && test -z "$updater_tools"; then
         cp /bin/busybox "$work/busybox"
         tool chmod 755 "$work/busybox"
@@ -343,7 +351,7 @@ if test "$mode" = --rollback; then
     exit 0
 fi
 
-if test -z "$work"; then work=$(mktemp -d "${TMPDIR:-/tmp}/winlux-update.XXXXXX"); fi
+prepare_work
 fetch_manifest "$work/manifest.txt"
 list_updates
 test "$mode" = --apply || exit 0

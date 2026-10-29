@@ -110,6 +110,12 @@ winlux-update --rollback
 winlux-update --auto enable   # disable pour désactiver
 ```
 
+La préparation (téléchargement et décompression) utilise
+`/var/lib/winlux/update-work.*` sur le disque de l'installation, puis supprime
+ce dossier à la fin. Elle n'utilise pas le `/tmp` en RAM de la session Live.
+L'installation nécessite de l'espace pour le paquet, son contenu décompressé
+et la sauvegarde de restauration.
+
 | Paquet | Contenu |
 | --- | --- |
 | `--system` | Bureau, runtime, applications embarquées, scripts et bibliothèques depuis un stage vérifié. Noyau, modules et boot uniquement avec `WINLUX_UPDATE_INCLUDE_BOOT=1`. |
