@@ -17,6 +17,8 @@ done
 for browser in edge chrome; do
     profile="/tmp/${browser}-profile"
     mkdir -p "$profile"
+    chown winlux-web:winlux-web "$profile"
+    chmod 700 "$profile"
     # Les services DBus ne sont volontairement pas présents dans cette VM de
     # test. Isoler le profil et /dev/shm évite que Chromium/Edge attende ces
     # services avant de rendre le document local ; le sandbox reste actif.
