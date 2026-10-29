@@ -7,6 +7,14 @@ run="$task_root/run/winlux"
 sys="$task_root/sys/class/net"
 hook=${WINLUX_DHCP_HOOK:-/usr/share/winlux/udhcpc.script}
 mkdir -p "$run"
+if test -z "$task_root" && command -v nmcli >/dev/null 2>&1 && nmcli -t -f RUNNING general 2>/dev/null | grep -qx running; then
+    case "${1:-status}" in
+        start) exec nmcli networking on ;;
+        restart) nmcli networking off; exec nmcli networking on ;;
+        stop) exec nmcli networking off ;;
+        status) exec nmcli device status ;;
+    esac
+fi
 ipcmd() { if test -n "${WINLUX_IP:-}"; then "$WINLUX_IP" "$@"; else /bin/busybox ip "$@"; fi; }
 dhcp() { if test -n "${WINLUX_UDHCPC:-}"; then "$WINLUX_UDHCPC" "$@"; else /bin/busybox udhcpc "$@"; fi; }
 stop() {

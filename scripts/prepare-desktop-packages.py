@@ -12,7 +12,10 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "python3-minimal", "xfce4-genmon-plugin", "alsa-utils", "librsvg2-common",
             "x11-utils", "x11-xserver-utils", "xfdesktop4", "locales", "libglib2.0-bin",
             "libgdk-pixbuf2.0-bin", "desktop-file-utils", "shared-mime-info", "x11-apps",
-            "python3-gi", "gir1.2-gtk-3.0"]
+            "python3-gi", "gir1.2-gtk-3.0", "network-manager", "network-manager-gnome",
+            "bluez", "blueman", "brightnessctl", "flatpak", "gvfs", "gvfs-backends",
+            "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
+            "xfce4-settings", "policykit-1-gnome", "wpasupplicant"]
 
 def main():
     work = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/desktop-components").resolve()
@@ -34,6 +37,10 @@ def main():
                "-o", f"Dir::Log={work / 'log'}", "-o", "Acquire::Retries=2",
                "-o", f"Dir::Etc::sourcelist={sources}", "-o", "Dir::Etc::sourceparts=-"]
     subprocess.run(["apt-get", *options, "update"], check=True)
+    plan = subprocess.check_output(["apt-get", *options, "--simulate", "--no-install-recommends", "install", *PACKAGES], text=True)
+    selected = {(name.split(":", 1)[0], version) for name, version in
+                re.findall(r"^Inst (\S+) (?:\[[^\]]*\] )?\((\S+)", plan, re.MULTILINE)}
+    if not selected: raise RuntimeError("Empty native desktop dependency plan")
     subprocess.run(["apt-get", *options, "--download-only", "--yes",
                     "--no-install-recommends", "install", *PACKAGES], check=True)
     root = work / "root"
@@ -44,6 +51,9 @@ def main():
     root.mkdir()
     (work / ".winlux-components").touch()
     for package in sorted((work / "cache/archives").glob("*.deb")):
+        metadata = subprocess.check_output(["dpkg-deb", "-f", str(package), "Package", "Version"], text=True)
+        fields = dict(line.split(": ", 1) for line in metadata.splitlines() if ": " in line)
+        if (fields.get("Package"), fields.get("Version")) not in selected: continue
         subprocess.run(["dpkg-deb", "-x", str(package), str(root)], check=True)
     print(f"Native desktop payload ready: {root}")
 

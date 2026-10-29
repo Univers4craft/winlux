@@ -10,7 +10,11 @@ import time
 
 def run(*args, **kwargs):
     kwargs.setdefault("timeout", 20)
-    return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT, **kwargs)
+    try:
+        return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT, **kwargs)
+    except subprocess.CalledProcessError as error:
+        print(error.output, flush=True)
+        raise
 
 def windows():
     result = {}
@@ -67,6 +71,11 @@ file_manager = run("gdbus", "introspect", "--session", "--dest", "org.xfce.FileM
                    "--object-path", "/org/xfce/FileManager", timeout=60)
 assert "Launch" in file_manager, "Desktop file manager cannot launch files"
 print("WINLUX_NATIVE_DESKTOP_FILE_SERVICE=0", flush=True)
+for service,object_path in [("org.freedesktop.NetworkManager","/org/freedesktop/NetworkManager"),
+                            ("org.freedesktop.UDisks2","/org/freedesktop/UDisks2")]:
+    print(run("gdbus","call","--system","--dest",service,"--object-path",object_path,
+              "--method","org.freedesktop.DBus.Peer.Ping",timeout=40),flush=True)
+print("WINLUX_NATIVE_HARDWARE_SERVICES=0",flush=True)
 print(run("wmctrl", "-m"), flush=True)
 subprocess.Popen(["xfdesktop", "--disable-wm-check"], stdout=log, stderr=log)
 run("winlux-control", "status")
@@ -75,15 +84,22 @@ explorer = wait_title("Explorer Winlux")
 subprocess.Popen(["winlux-shell-app", "settings", "11"], stdout=log, stderr=log)
 settings = wait_title("Parametres Winlux")
 def settings_page(window):
-    pid = int(run("xprop", "-id", str(window), "_NET_WM_PID").split("=")[-1].strip())
-    return b"WINLUX_SETTINGS_PAGE=" + Path(f"/proc/{pid}/environ").read_bytes().split(b"WINLUX_SETTINGS_PAGE=", 1)[1].split(b"\0", 1)[0]
+    try:
+        pid = int(run("xprop", "-id", str(window), "_NET_WM_PID").split("=")[-1].strip())
+        environment=Path(f"/proc/{pid}/environ").read_bytes().split(b"WINLUX_SETTINGS_PAGE=",1)
+        return b"WINLUX_SETTINGS_PAGE="+environment[1].split(b"\0",1)[0] if len(environment)==2 else b""
+    except (OSError,ValueError,subprocess.CalledProcessError):return b""
 
 assert settings_page(settings) == b"WINLUX_SETTINGS_PAGE=11"
 from gi.repository import Gio
 previous = client_ids()
 Gio.DesktopAppInfo.new_from_filename("/usr/share/applications/winlux-updates.desktop").launch([], None)
-wait_for(lambda: len(client_ids() - previous) == 1, "updates launcher opens its own window")
-updates = (client_ids() - previous).pop()
+def update_windows():
+    return [int(identifier,16) for identifier,(_,title) in windows().items()
+            if int(identifier,16) not in previous and "Parametres Winlux" in title and
+            settings_page(identifier)==b"WINLUX_SETTINGS_PAGE=7"]
+wait_for(lambda: len(update_windows())==1,"updates launcher opens its own settings window")
+updates=update_windows()[0]
 assert settings_page(updates) == b"WINLUX_SETTINGS_PAGE=7"
 capture("native-settings-updates")
 run("wmctrl", "-ic", hex(updates))

@@ -18,6 +18,9 @@
     <keybind key="W-e"><action name="Execute"><command>winlux-shell-app explorer</command></action></keybind>
     <keybind key="W-Return"><action name="Execute"><command>winlux-terminal</command></action></keybind>
     <keybind key="W-space"><action name="Execute"><command>winlux-start-menu</command></action></keybind>
+    <keybind key="C-S-Escape"><action name="Execute"><command>winlux-system-tools tasks</command></action></keybind>
+    <keybind key="W-a"><action name="Execute"><command>winlux-system-tools quick</command></action></keybind>
+    <keybind key="W-n"><action name="Execute"><command>winlux-system-tools notifications</command></action></keybind>
     <keybind key="W-F10"><action name="ShowMenu"><menu>root-menu</menu></action></keybind>
     <keybind key="W-Up"><action name="Maximize"/></keybind>
     <keybind key="W-Down"><action name="UnmaximizeFull"/></keybind>

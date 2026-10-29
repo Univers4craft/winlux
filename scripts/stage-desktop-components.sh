@@ -9,11 +9,23 @@ for program in openbox xfdesktop xfce4-panel xfce4-popup-whiskermenu mousepad Th
 done
 # Never follow a pre-existing BusyBox applet link while copying a real tool.
 cp -a --remove-destination "$components/usr/." "$stage/usr/"
-for directory in dbus-1 xdg gtk-3.0 fonts; do
+# Some Ubuntu packages still ship outside /usr (notably cryptsetup and udev).
+# Retain those dependencies as well as the merged-/usr package contents.
+for directory in lib lib64 bin sbin; do
+    if test -d "$components/$directory" && ! test -L "$components/$directory"; then
+        mkdir -p "$stage/$directory"
+        cp -a --remove-destination "$components/$directory/." "$stage/$directory/"
+    fi
+done
+for directory in dbus-1 xdg gtk-3.0 fonts NetworkManager bluetooth udisks2 polkit-1; do
     if test -d "$components/etc/$directory"; then
         mkdir -p "$stage/etc/$directory"
         cp -a --remove-destination "$components/etc/$directory/." "$stage/etc/$directory/"
     fi
+done
+for name in winlux-system-tools winlux-notifications winlux-personalize winlux-session-startup winlux-popup; do
+    cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
+    chmod 755 "$stage/usr/bin/$name"
 done
 # Both legacy /lib and merged-/usr search locations exist in this small OS.
 # Keep libc and its loader coherent, not shadowed by the earlier host copies.
@@ -25,6 +37,8 @@ done
 cp -L --remove-destination "$components/usr/lib/x86_64-linux-gnu/ld-linux-x86-64.so.2" "$stage/lib64/ld-linux-x86-64.so.2"
 mkdir -p "$stage/usr/share/winlux/native"
 cp -a "$project/integration/native/." "$stage/usr/share/winlux/native/"
+mkdir -p "$stage/usr/share/dbus-1/services"
+cp "$project/integration/native/dbus/org.freedesktop.Notifications.service" "$stage/usr/share/dbus-1/services/"
 mkdir -p "$stage/usr/share/themes" "$stage/usr/share/xfce4/helpers"
 cp -a "$project/integration/native/themes/." "$stage/usr/share/themes/"
 cp -a "$project/integration/native/helpers/." "$stage/usr/share/xfce4/helpers/"

@@ -1,0 +1,5 @@
+Command=/usr/bin/winlux-tray notifications
+UseLabel=0
+Text=
+UpdatePeriod=5000
+Font=DejaVu Sans 10

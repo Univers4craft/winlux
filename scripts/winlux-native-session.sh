@@ -3,7 +3,9 @@
 set -eu
 export DISPLAY=${DISPLAY:-:0}
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/0}
+export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
 mkdir -p "$XDG_RUNTIME_DIR" /run/winlux /var/lib/dbus
+if ! test -e /var/run && ! test -L /var/run; then ln -s /run /var/run; fi
 chmod 700 "$XDG_RUNTIME_DIR"
 /usr/bin/dbus-uuidgen --ensure=/etc/machine-id
 ln -sf /etc/machine-id /var/lib/dbus/machine-id
@@ -12,8 +14,33 @@ if ! test -S /run/winlux/session-bus; then
 fi
 export DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus
 export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
-export XDG_CONFIG_DIRS=/etc/xdg XDG_DATA_DIRS=/usr/local/share:/usr/share
+export XDG_CONFIG_DIRS=/etc/xdg
+export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
 /usr/bin/winlux-native-config
+# Hardware services run on the system bus; applications use the session bus.
+if ! test -S /run/dbus/system_bus_socket; then
+    mkdir -p /run/dbus
+    /usr/bin/dbus-daemon --system --fork >/run/winlux/system-bus.log 2>&1
+fi
+# Winlux uses its own init, so start hardware daemons directly instead of
+# relying on systemd activation from the distribution's D-Bus service files.
+if test -x /usr/lib/polkit-1/polkitd; then
+    /usr/lib/polkit-1/polkitd --no-debug >/run/winlux/polkit.log 2>&1 &
+fi
+if test -x /usr/libexec/udisks2/udisksd; then
+    /usr/libexec/udisks2/udisksd --no-debug >/run/winlux/udisks.log 2>&1 &
+fi
+if test -x /usr/sbin/NetworkManager; then
+    /usr/sbin/NetworkManager --no-daemon >/run/winlux/network-manager.log 2>&1 &
+    echo $! >/run/winlux/network-manager.pid
+fi
+for bluetooth in /usr/lib/bluetooth/bluetoothd /usr/libexec/bluetooth/bluetoothd; do
+    if test -x "$bluetooth"; then "$bluetooth" -n >/run/winlux/bluetooth.log 2>&1 & break; fi
+done
+/usr/bin/xfsettingsd --daemon >/run/winlux/xfsettings.log 2>&1
+/usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
+/usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
+/usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
 case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
 # Restore the user's input choice on each session, without resetting defaults.
@@ -38,6 +65,7 @@ done
 /usr/bin/wmctrl -m >/dev/null
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
+/usr/bin/winlux-session-startup >/run/winlux/startup-apps.log 2>&1
 # Xfconf activates its own session-bus service. Set wallpaper per real output.
 for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
     property="/backdrop/screen0/monitor$output/workspace0/last-image"

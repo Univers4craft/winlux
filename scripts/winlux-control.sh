@@ -143,13 +143,13 @@ perform() {
             if have xfconf-query; then
                 # XFConf conserve les propriétés en mémoire : modifier le XML
                 # derrière son dos ne change pas le panneau en cours.
-                for spec in 'plugin-8:string:separator' 'plugin-8/style:uint:0' 'plugin-8/expand:bool:true'; do
+                for spec in 'plugin-8:string:separator' 'plugin-8/style:uint:0' 'plugin-8/expand:bool:true' 'plugin-9:string:genmon'; do
                     property=${spec%%:*}; rest=${spec#*:}; kind=${rest%%:*}; setting=${rest#*:}
                     if ! xfconf-query -c xfce4-panel -p "/plugins/$property" >/dev/null 2>&1; then
                         xfconf-query -c xfce4-panel -p "/plugins/$property" -n -t "$kind" -s "$setting" || return
                     fi
                 done
-                xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a -t int -s 3 -t int -s 1 -t int -s 2 -t int -s 8 -t int -s 4 -t int -s 5 -t int -s 6 -t int -s 7 || return
+                xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a -t int -s 3 -t int -s 1 -t int -s 2 -t int -s 8 -t int -s 4 -t int -s 5 -t int -s 6 -t int -s 9 -t int -s 7 || return
                 expand=false; test "$alignment" != center || expand=true
                 xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand -s "$expand" || return
             fi

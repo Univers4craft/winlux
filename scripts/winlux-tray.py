@@ -44,8 +44,13 @@ elif kind == "network":
     if not active: body += '<path d="m4 4 16 16" stroke="#cf8ea9" stroke-width="2"/>'
     tooltip = ("Wi-Fi : " if wireless else "Ethernet : ") + ", ".join(path.name for path in active) if active else "Réseau déconnecté"
     identity, page = f"network-{int(bool(active))}-{int(wireless)}", 2
+elif kind == "notifications":
+    body = f'<path d="M5 17h14l-2-4V9a5 5 0 0 0-10 0v4zm5 3h4" fill="none" stroke="{color}" stroke-width="2"/>'
+    tooltip, identity, page = "Centre de notifications", "notifications", 0
 else:
     raise SystemExit(2)
 icon = directory / (identity + ".svg")
 if not icon.exists(): icon.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">{body}</svg>')
-print(f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>/usr/bin/winlux-shell-app settings {page}</click>")
+target = "notifications" if kind == "notifications" else "quick"
+command = "/usr/bin/winlux-popup volume" if kind=="audio" else "/usr/bin/winlux-popup power" if kind=="battery" else f"/usr/bin/winlux-system-tools {target}"
+print(f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>{command}</click>")

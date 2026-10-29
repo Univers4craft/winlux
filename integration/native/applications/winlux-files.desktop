@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Fichiers et périphériques
+Exec=/usr/bin/winlux-system-tools files
+Icon=system-file-manager
+Categories=System;FileManager;
+Terminal=false

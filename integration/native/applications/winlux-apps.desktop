@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Applications et démarrage
+Exec=/usr/bin/winlux-system-tools apps
+Icon=system-software-install
+Categories=Settings;PackageManager;
+Terminal=false

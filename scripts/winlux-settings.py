@@ -64,6 +64,11 @@ class Settings(Gtk.Window):
           .card { background: #242a38; border-radius: 8px; padding: 16px; }
         """)
         Gtk.StyleContext.add_provider_for_screen(self.get_screen(), css, 600)
+        personal = Path.home() / ".config/gtk-3.0/gtk.css"
+        if personal.is_file():
+            override = Gtk.CssProvider()
+            override.load_from_path(str(personal))
+            Gtk.StyleContext.add_provider_for_screen(self.get_screen(), override, 800)
         outer = Gtk.Box()
         self.add(outer)
         side = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
@@ -115,6 +120,11 @@ class Settings(Gtk.Window):
             button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
         self.buttons = flow
+        if self.page in (1, 2, 3, 6):
+            tool = {1:"apps", 2:"quick", 3:"quick", 6:"appearance"}[self.page]
+            shortcut = Gtk.Button(label={1:"Installer, désinstaller et gérer le démarrage",2:"Wi-Fi et Bluetooth",3:"Réglages rapides",6:"Thèmes, accent, fond et barre des tâches"}[self.page])
+            shortcut.connect("clicked", lambda *_: subprocess.Popen(["winlux-system-tools", tool]))
+            self.body.pack_start(shortcut, False, False, 0)
         if self.page == 8:
             self.modes = Gtk.ComboBoxText()
             status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)

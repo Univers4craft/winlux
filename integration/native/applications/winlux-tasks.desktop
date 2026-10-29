@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Gestionnaire de tâches
+Exec=/usr/bin/winlux-system-tools tasks
+Icon=utilities-system-monitor
+Categories=System;Monitor;
+Terminal=false

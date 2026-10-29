@@ -66,6 +66,10 @@ jobs:
           sh scripts/test-update-notes.sh
           sh scripts/test-install-safety.sh
           xvfb-run -a /usr/bin/python3 -B scripts/test-settings-native.py
+          xvfb-run -a dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-desktop-tools.py
+          for popup in start volume power; do
+            xvfb-run -a dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-shell-popups.py "$popup"
+          done
           xvfb-run -a -s '-screen 0 1920x1080x24 -noreset' /usr/bin/python3 -B scripts/test-window-performance.py
 
       - name: Construire l'ISO
@@ -113,6 +117,7 @@ jobs:
             build/native-vm.*/serial.log
             build/native-vm.*/programs.log
             build/native-vm.*/window-latency.json
+            build/native-vm.*/session-logs/*.log
             build/qemu-*.log
             build/install-guest.*/*.log
 

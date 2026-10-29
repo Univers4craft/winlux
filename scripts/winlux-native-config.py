@@ -10,6 +10,33 @@ import xml.etree.ElementTree as ET
 
 if os.geteuid() == 0:
     try:
+        pwd.getpwnam("messagebus")
+    except KeyError:
+        used = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
+        bus_uid = 990
+        while bus_uid in used: bus_uid += 1
+        with Path("/etc/group").open("a") as stream: stream.write(f"messagebus:x:{bus_uid}:\n")
+        with Path("/etc/passwd").open("a") as stream: stream.write(f"messagebus:!:{bus_uid}:{bus_uid}:D-Bus:/nonexistent:/bin/false\n")
+    bus_group=grp.getgrnam("messagebus")
+    helper=Path("/usr/lib/dbus-1.0/dbus-daemon-launch-helper")
+    if helper.is_file():
+        os.chown(helper,0,bus_group.gr_gid)
+        helper.chmod(0o4754)
+    try: pwd.getpwnam("polkitd")
+    except KeyError:
+        used={entry.pw_uid for entry in pwd.getpwall()}|{entry.gr_gid for entry in grp.getgrall()}
+        uid=980
+        while uid in used:uid+=1
+        with Path("/etc/group").open("a") as stream:stream.write(f"polkitd:x:{uid}:\n")
+        with Path("/etc/passwd").open("a") as stream:stream.write(f"polkitd:!:{uid}:{uid}:PolicyKit:/nonexistent:/bin/false\n")
+    policy_user=pwd.getpwnam("polkitd")
+    policy_state=Path("/var/lib/polkit-1")
+    policy_state.mkdir(parents=True,exist_ok=True)
+    os.chown(policy_state,policy_user.pw_uid,policy_user.pw_gid)
+    policy_state.chmod(0o700)
+    for directory in ("/var/lib/NetworkManager","/var/lib/bluetooth","/var/lib/udisks2"):
+        Path(directory).mkdir(parents=True,exist_ok=True)
+    try:
         saver = pwd.getpwnam("winlux-saver")
     except KeyError:
         occupied = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
@@ -43,6 +70,13 @@ if openbox_config.is_file():
         keyboard = tree.getroot().find(f"{{{namespace}}}keyboard")
         changed = False
         if keyboard is not None:
+            keys = {binding.get("key") for binding in keyboard}
+            for key, page in [("C-S-Escape", "tasks"), ("W-a", "quick"), ("W-n", "notifications")]:
+                if key not in keys:
+                    binding = ET.SubElement(keyboard, f"{{{namespace}}}keybind", key=key)
+                    action = ET.SubElement(binding, f"{{{namespace}}}action", name="Execute")
+                    ET.SubElement(action, f"{{{namespace}}}command").text = "winlux-system-tools " + page
+                    changed = True
             for binding in list(keyboard):
                 commands = binding.findall(f"{{{namespace}}}action/{{{namespace}}}command")
                 if binding.get("key") == "Super_L" and len(commands) == 1 and commands[0].text == "winlux-start-menu":

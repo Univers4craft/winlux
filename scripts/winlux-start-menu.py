@@ -5,13 +5,18 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import threading
 import gi
 gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, Gio, GLib
 
 STATE = Path.home() / ".config/winlux/start.json"
 DEFAULTS = ["winlux-explorer.desktop", "winlux-browser-edge.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
+SETTINGS = [("Système et alimentation", 0), ("Applications et démarrage", 1), ("Réseau Wi-Fi", 2),
+            ("Son et batterie", 3), ("Clavier", 4), ("Souris", 5), ("Personnalisation fond écran thème", 6),
+            ("Mises à jour", 7), ("Écran résolution", 8), ("À propos version", 9), ("Navigateurs", 11)]
 
 def category(app):
     """Use installed desktop metadata, including generated Windows launchers."""
@@ -30,6 +35,9 @@ class Start(Gtk.Application):
         self.window = None
         self.context = None
         self.all_apps = False
+        self.file_generation = 0
+        self.file_query = ""
+        self.file_results = []
         try: self.state = json.loads(STATE.read_text())
         except (OSError, ValueError): self.state = {"pins": DEFAULTS, "recent": []}
 
@@ -41,7 +49,7 @@ class Start(Gtk.Application):
 
     def do_activate(self):
         if self.window and self.window.get_visible():
-            self.window.hide()
+            self.hide()
             return
         if not self.window: self.build()
         self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all() if app.should_show() and app.get_id()}
@@ -58,6 +66,7 @@ class Start(Gtk.Application):
         self.window.show_all()
         self.window.present()
         self.search.grab_focus()
+        GLib.idle_add(self.grab_pointer)
 
     def build(self):
         self.window = Gtk.ApplicationWindow(application=self, title="Démarrer Winlux")
@@ -70,6 +79,8 @@ class Start(Gtk.Application):
         self.window.connect("delete-event", lambda *_: self.hide())
         self.window.connect("focus-out-event", self.blur)
         self.window.connect("key-press-event", self.key)
+        self.window.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
+        self.window.connect("button-press-event", self.outside_click)
         css = Gtk.CssProvider()
         css.load_from_data(b"""
           #winlux-start { background: #242238; color: #f7f5ff; border: 1px solid #6b5f92; border-radius: 8px; }
@@ -86,7 +97,7 @@ class Start(Gtk.Application):
         self.window.add(outer)
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin=28)
         outer.pack_start(body, True, True, 0)
-        self.search = Gtk.SearchEntry(placeholder_text="Rechercher une application")
+        self.search = Gtk.SearchEntry(placeholder_text="Applications, fichiers et paramètres")
         self.search.connect("search-changed", lambda *_: self.render())
         self.search.connect("activate", self.first_result)
         body.pack_start(self.search, False, False, 0)
@@ -114,12 +125,26 @@ class Start(Gtk.Application):
         outer.pack_end(footer, False, False, 0)
 
     def hide(self):
+        if self.window.has_grab():self.window.grab_remove()
+        self.window.get_display().get_default_seat().ungrab()
         self.window.hide()
         return True
 
+    def grab_pointer(self):
+        if self.window.get_visible() and not self.context:
+            self.pointer_status=self.window.get_display().get_default_seat().grab(self.window.get_window(),Gdk.SeatCapabilities.POINTER,
+                False,None,None,None,None)
+            if self.pointer_status==Gdk.GrabStatus.SUCCESS:self.window.grab_add()
+        return False
+
+    def outside_click(self, _, event):
+        x,y=self.window.get_position();width,height=self.window.get_size()
+        if not (x<=event.x_root<x+width and y<=event.y_root<y+height):return self.hide()
+        return False
+
     def blur(self, *_):
         def later():
-            if not self.window.is_active() and not self.context: self.window.hide()
+            if not self.window.is_active() and not self.context: self.hide()
             return False
         GLib.timeout_add(150, later)
         return False
@@ -132,7 +157,11 @@ class Start(Gtk.Application):
         self.render()
 
     def first_result(self, *_):
-        if self.results: self.launch(self.results[0])
+        query=self.search.get_text().strip().casefold()
+        setting=next((page for label,page in SETTINGS if query and query in label.casefold()),None)
+        if setting is not None:self.open_setting(setting)
+        elif self.results:self.launch(self.results[0])
+        elif self.file_results:self.open_file(self.file_results[0])
 
     def launch(self, app):
         try:
@@ -178,6 +207,24 @@ class Start(Gtk.Application):
         self.toggle.set_label("‹  Retour" if listing else "Toutes les applications  ›")
         self.results = sorted((app for app in self.apps.values() if query in app.get_display_name().casefold()), key=lambda app: app.get_display_name().casefold())
         if listing:
+            if query:
+                for label, page in SETTINGS:
+                    if query in label.casefold():
+                        button = Gtk.Button(label="Paramètres · " + label)
+                        button.connect("clicked", lambda _, target=page: self.open_setting(target))
+                        self.content.pack_start(button, False, False, 0)
+                if query != self.file_query:
+                    self.file_query = query
+                    self.file_generation += 1
+                    self.file_results = []
+                    if len(query) >= 2:
+                        threading.Thread(target=self.find_files, args=(query, self.file_generation), daemon=True).start()
+                for path in self.file_results:
+                    button = Gtk.Button(label="Fichier · " + str(path.relative_to(Path.home())))
+                    button.connect("clicked", lambda _, target=path: self.open_file(target))
+                    self.content.pack_start(button, False, False, 0)
+                if len(self.file_results) == 30:
+                    self.content.pack_start(Gtk.Label(label="30 premiers fichiers affichés. Précisez la recherche.", xalign=0), False, False, 0)
             previous = None
             if not query: self.results.sort(key=lambda app: (category(app), app.get_display_name().casefold()))
             for app in self.results:
@@ -203,14 +250,50 @@ class Start(Gtk.Application):
                 self.content.pack_start(Gtk.Label(label="Vos applications récemment ouvertes apparaîtront ici.", xalign=0, wrap=True), False, False, 0)
         self.content.show_all()
 
+    def open_setting(self, page):
+        subprocess.Popen(["winlux-shell-app", "settings", str(page)])
+        self.hide()
+
+    def open_file(self, path):
+        self.hide()
+        try:Gio.AppInfo.launch_default_for_uri(path.as_uri(),self.window.get_display().get_app_launch_context())
+        except GLib.Error as error:
+            dialog=Gtk.MessageDialog(transient_for=self.window,modal=True,message_type=Gtk.MessageType.ERROR,
+                buttons=Gtk.ButtonsType.CLOSE,text="Impossible d’ouvrir ce fichier",secondary_text=str(error))
+            dialog.run();dialog.destroy()
+
+    def find_files(self, query, generation):
+        # Bounded name search in visible personal directories. Never follows
+        # directory symlinks or scans the system disks from the UI thread.
+        matches, visited = [], 0
+        for directory, folders, files in os.walk(Path.home(), followlinks=False):
+            if generation != self.file_generation: return
+            folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
+            for name in folders + files:
+                visited += 1
+                if not name.startswith(".") and query in name.casefold(): matches.append(Path(directory, name))
+                if len(matches) >= 30 or visited >= 30000: break
+            if len(matches) >= 30 or visited >= 30000: break
+        def deliver():
+            if generation == self.file_generation:
+                self.file_results = matches
+                self.render()
+            return False
+        GLib.idle_add(deliver)
+
     def menu(self, widget, event, actions):
+        if self.window.has_grab():self.window.grab_remove()
+        self.window.get_display().get_default_seat().ungrab()
         menu = Gtk.Menu()
         self.context = menu
         for title, callback in actions:
             item = Gtk.MenuItem(label=title)
             item.connect("activate", lambda _, action=callback: action())
             menu.append(item)
-        menu.connect("deactivate", lambda *_: setattr(self, "context", None))
+        def deactivate(*_):
+            self.context=None
+            GLib.idle_add(self.grab_pointer)
+        menu.connect("deactivate", deactivate)
         menu.show_all()
         if event: menu.popup_at_pointer(event)
         else: menu.popup_at_widget(widget, Gdk.Gravity.NORTH_EAST, Gdk.Gravity.SOUTH_EAST, None)

@@ -428,12 +428,14 @@ echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
 # explicitly so the graphical power button really shuts down the guest.
-/usr/bin/winlux-network start &
+if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
 if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     result=0
     /usr/bin/python3 /opt/winlux/scripts/test-native-session-guest.py || result=$?
     echo "WINLUX_NATIVE_EXIT=$result"
     if test "$result" != 0; then
+        /bin/busybox mkdir -p /var/lib/winlux/session-logs
+        /bin/busybox cp /run/winlux/*.log /var/lib/winlux/session-logs/ 2>/dev/null || true
         /bin/busybox cat /run/winlux/native-session.log /run/winlux/window-manager.log /run/winlux/panel.log /run/winlux/screensaver.log /var/lib/winlux/native-programs.log 2>/dev/null || true
     fi
     for service in catalogue panel screensaver window-manager; do
@@ -500,7 +502,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /bin/sh
     fi
     export DISPLAY=:0 XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
-    export XDG_CONFIG_DIRS=/etc/xdg XDG_DATA_DIRS=/usr/local/share:/usr/share
+    export XDG_CONFIG_DIRS=/etc/xdg
+    export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
     export XDG_RUNTIME_DIR=/run/user/0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus
     export WINLUX_NATIVE_SHELL=1
     if test -d /usr/lib/locale/fr_FR.utf8; then export LANG=fr_FR.UTF-8; else export LANG=C.UTF-8; fi
