@@ -8,7 +8,7 @@ use winlux_testexe::*;
 mod calc;
 #[path = "../shell/gfx.rs"]
 mod gfx;
-#[path = "../shell/wm.rs"]
+#[path = "../shell/wm_standalone.rs"]
 mod wm;
 
 #[no_mangle]
@@ -27,7 +27,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             lpszClassName: c"WinluxCalc".as_ptr(),
         };
         RegisterClassA(&class);
-        
+
         let hwnd = CreateWindowExA(
             0,
             c"WinluxCalc".as_ptr(),
@@ -42,42 +42,43 @@ pub extern "C" fn mainCRTStartup() -> ! {
             GetModuleHandleA(core::ptr::null()),
             core::ptr::null_mut(),
         );
-        
+
         ShowWindow(hwnd, 1);
         UpdateWindow(hwnd);
-        
+
         let mut msg: MSG = core::mem::zeroed();
         while GetMessageA(&mut msg, core::ptr::null_mut(), 0, 0) != 0 {
             TranslateMessage(&msg);
             DispatchMessageA(&msg);
         }
-        
-        ExitProcess(msg.wParam as u32)
+
+        ExitProcess(msg.wparam as u32)
     }
 }
 
 unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize {
     match msg {
-        0x0002 => { // WM_DESTROY
+        0x0002 => {
             PostQuitMessage(0);
             0
         }
-        0x000F => { // WM_PAINT
+        0x000F => {
             let mut ps: PAINTSTRUCT = core::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
-            let mut frame = wm::Frame::new(hwnd);
-            wm::resize_frame(&mut frame);
-            let mut gfx = wm::Gfx::new(hdc, &frame);
-            calc::draw(&mut gfx, &frame);
-            gfx.release();
+            let fonts = gfx::Fonts::new();
+            let mut brushes = gfx::Brushes::new();
+            SetBkMode(hdc, 1);
+            let frame = wm::Frame::new(hwnd);
+            calc::draw(&mut wm::Gfx { hdc, b: &mut brushes, f: &fonts }, &frame);
+            brushes.release();
+            fonts.release();
             EndPaint(hwnd, &ps);
             0
         }
-        0x0201 => { // WM_LBUTTONDOWN
+        0x0201 => {
             let x = (lparam & 0xFFFF) as i32;
             let y = ((lparam >> 16) & 0xFFFF) as i32;
-            let mut frame = wm::Frame::new(hwnd);
-            wm::resize_frame(&mut frame);
+            let frame = wm::Frame::new(hwnd);
             calc::mouse(wm::Mouse::LeftClick, x, y, &frame);
             InvalidateRect(hwnd, core::ptr::null_mut(), 1);
             0

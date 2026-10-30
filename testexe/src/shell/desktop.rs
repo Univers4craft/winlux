@@ -12,7 +12,6 @@ mod utilities;
 use crate::explorer;
 use crate::gfx::*;
 use crate::wm::{self, Gfx, Mouse};
-use utilities;
 use winlux_testexe::*;
 
 pub const TASKBAR_HEIGHT: i32 = 48;
