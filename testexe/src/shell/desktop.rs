@@ -2565,6 +2565,23 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             return;
         }
     }
+    // Win+Shift+S (Screenshot)
+    if ch == 0 && vk == 0x53 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
+        if win && shift {
+            launch(Launch::Exec(b"screenshot.exe"));
+            return;
+        }
+    }
+    // Win+E (Explorateur de fichiers)
+    if ch == 0 && vk == 0x45 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        if win {
+            launch(Launch::Explorer);
+            return;
+        }
+    }
     // Win+R
     if ch == 0 && vk == 0x52 {
         let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
