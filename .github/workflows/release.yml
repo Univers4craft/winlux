@@ -17,7 +17,8 @@ concurrency:
 
 jobs:
   release:
-    runs-on: ubuntu-latest
+    # The desktop packages and native libraries are built against Ubuntu Noble.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
         with:
