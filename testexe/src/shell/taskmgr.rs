@@ -126,7 +126,7 @@ unsafe fn refresh_procs() {
         return;
     }
     loop {
-        let name = &fd.cFileName;
+        let name = &fd.file_name;
         // Vérifier si c'est un nombre (PID)
         let mut is_pid = true;
         let mut pid: u32 = 0;

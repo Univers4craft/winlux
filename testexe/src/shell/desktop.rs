@@ -12,7 +12,6 @@ mod utilities;
 use crate::explorer;
 use crate::gfx::*;
 use crate::wm::{self, Gfx, Mouse};
-use utilities;
 use winlux_testexe::*;
 
 pub const TASKBAR_HEIGHT: i32 = 48;
@@ -42,9 +41,9 @@ static mut DESKTOP_SHORTCUTS: u8 = 0;
 static mut SHOW_SYSTEM_ICONS: bool = false; // Icônes système (PC, Documents, Corbeille) désactivées par défaut
 static mut START_SHOW_ALL_APPS: bool = false; // Afficher toutes les applications au lieu des épinglées
 static mut START_CATEGORY: i32 = 0; // Catégorie sélectionnée (0 = toutes)
-static mut ALL_APPS: [( &'static [u8], &'static [u8], i32); 64] = [(b"", b"", 0); 64]; // (nom, exec, catégorie)
+static mut ALL_APPS: [(&'static [u8], &'static [u8], i32); 64] = [(b"", b"", 0); 64]; // (nom, exec, catégorie)
 static mut ALL_APPS_COUNT: usize = 0;
-static mut SHORTCUTS: [( &'static [u8], &'static [u8], i32, i32); 16] = [(b"", b"", 0, 0); 16]; // (nom, exec, x, y)
+static mut SHORTCUTS: [(&'static [u8], &'static [u8], i32, i32); 16] = [(b"", b"", 0, 0); 16]; // (nom, exec, x, y)
 static mut SHORTCUTS_COUNT: usize = 0;
 static mut START_SEARCH: [u8; 64] = [0; 64]; // Texte de recherche
 static mut START_SEARCH_LEN: usize = 0;
@@ -75,7 +74,7 @@ static mut LAST_FRAME: u32 = 0;
 static mut LAST_INPUT: u32 = 0;
 static mut SCREENSAVER: bool = false;
 static mut SAVER_SEED: u32 = 123456789;
-static mut SAVER_PIPES: [(i32,i32,i32,i32); 12] = [(0,0,0,0);12]; // x,y,dx,dy/color
+static mut SAVER_PIPES: [(i32, i32, i32, i32); 12] = [(0, 0, 0, 0); 12]; // x,y,dx,dy/color
 static mut SAVER_INIT: bool = false;
 /// Notification façon Windows 11, au-dessus de la zone de notification.
 static mut TOAST: [u8; 120] = [0; 120];
@@ -102,7 +101,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 28] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 29] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
             (b"Bloc-notes", b"mousepad", 1),
@@ -500,7 +499,12 @@ fn taskbar_app(slot: i32) -> Option<usize> {
         return None;
     }
     let mut n = 0;
-    for app in [wm::APP_EXPLORER, wm::APP_NOTEPAD, wm::APP_UTILITIES, wm::APP_SETTINGS] {
+    for app in [
+        wm::APP_EXPLORER,
+        wm::APP_NOTEPAD,
+        wm::APP_UTILITIES,
+        wm::APP_SETTINGS,
+    ] {
         if unsafe { PINNED_APPS & app_bit(app) != 0 } || wm::is_open(app) {
             n += 1;
             if slot == n {
@@ -511,10 +515,15 @@ fn taskbar_app(slot: i32) -> Option<usize> {
     None
 }
 fn taskbar_count() -> i32 {
-    1 + [wm::APP_EXPLORER, wm::APP_NOTEPAD, wm::APP_UTILITIES, wm::APP_SETTINGS]
-        .iter()
-        .filter(|&&app| unsafe { PINNED_APPS & app_bit(app) != 0 } || wm::is_open(app))
-        .count() as i32
+    1 + [
+        wm::APP_EXPLORER,
+        wm::APP_NOTEPAD,
+        wm::APP_UTILITIES,
+        wm::APP_SETTINGS,
+    ]
+    .iter()
+    .filter(|&&app| unsafe { PINNED_APPS & app_bit(app) != 0 } || wm::is_open(app))
+    .count() as i32
 }
 fn icon_visible(i: usize) -> bool {
     unsafe {
@@ -559,7 +568,14 @@ unsafe fn save_shell_state() {
         toast(b"Impossible d'enregistrer les raccourcis");
         return;
     }
-    let data = [b'W', b'T', 2, PINNED_APPS, DESKTOP_SHORTCUTS, if SHOW_SYSTEM_ICONS { 1 } else { 0 }];
+    let data = [
+        b'W',
+        b'T',
+        2,
+        PINNED_APPS,
+        DESKTOP_SHORTCUTS,
+        if SHOW_SYSTEM_ICONS { 1 } else { 0 },
+    ];
     let mut written = 0;
     let ok = WriteFile(
         h,
@@ -1312,21 +1328,37 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             b"\xC9pingl\xE9"
         }
     };
-    text(
-        hdc,
-        f.title,
-        rgb(0xF2, 0xF2, 0xF2),
-        inner_l + 4,
-        y,
-        title,
-    );
+    text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, title);
     // Barre de recherche
     let search_y = y + 40;
-    round_rect(hdc, b, inner_l, search_y, inner_r, search_y + 36, 18, rgb(0x31, 0x35, 0x3F));
+    round_rect(
+        hdc,
+        b,
+        inner_l,
+        search_y,
+        inner_r,
+        search_y + 36,
+        18,
+        rgb(0x31, 0x35, 0x3F),
+    );
     if unsafe { START_SEARCH_LEN > 0 } {
-        text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), inner_l + 8, search_y + 8, unsafe { &START_SEARCH[..START_SEARCH_LEN] });
+        text(
+            hdc,
+            f.body,
+            rgb(0xE6, 0xE6, 0xE6),
+            inner_l + 8,
+            search_y + 8,
+            unsafe { &START_SEARCH[..START_SEARCH_LEN] },
+        );
     } else {
-        text(hdc, f.body, rgb(0x88, 0x88, 0x88), inner_l + 8, search_y + 8, b"Rechercher...");
+        text(
+            hdc,
+            f.body,
+            rgb(0x88, 0x88, 0x88),
+            inner_l + 8,
+            search_y + 8,
+            b"Rechercher...",
+        );
     }
     let all: &[u8] = unsafe {
         if START_SHOW_ALL_APPS {
@@ -1442,7 +1474,13 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         let mut displayed = 0;
         for i in 0..unsafe { ALL_APPS_COUNT } {
             let (name, _exec, cat) = unsafe { ALL_APPS[i] };
-            let matches_search = unsafe { START_SEARCH_LEN == 0 || name[..name.len().min(START_SEARCH_LEN)].iter().zip(START_SEARCH[..START_SEARCH_LEN].iter()).any(|(&a, &b)| a.to_ascii_lowercase() == b.to_ascii_lowercase()) };
+            let matches_search = unsafe {
+                START_SEARCH_LEN == 0
+                    || name[..name.len().min(START_SEARCH_LEN)]
+                        .iter()
+                        .zip(START_SEARCH[..START_SEARCH_LEN].iter())
+                        .any(|(&a, &b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+            };
             if (START_CATEGORY == 0 || cat == START_CATEGORY) && matches_search {
                 let app_y = apps_y + 40 + (displayed as i32) * 44;
                 if app_y + 40 < s.bottom - 72 {
@@ -1454,12 +1492,26 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         // Afficher les raccourcis
         if unsafe { SHORTCUTS_COUNT } > 0 {
             let shortcuts_y = apps_y + 40 + (displayed as i32) * 44 + 20;
-            text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, shortcuts_y, b"Raccourcis");
+            text(
+                hdc,
+                f.title,
+                rgb(0xF2, 0xF2, 0xF2),
+                inner_l + 4,
+                shortcuts_y,
+                b"Raccourcis",
+            );
             for i in 0..unsafe { SHORTCUTS_COUNT } {
                 let (name, _exec, _x, _y) = unsafe { SHORTCUTS[i] };
                 let shortcut_y = shortcuts_y + 40 + (i as i32) * 44;
                 if shortcut_y + 40 < s.bottom - 72 {
-                    text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), inner_l + 4, shortcut_y, name);
+                    text(
+                        hdc,
+                        f.body,
+                        rgb(0xE6, 0xE6, 0xE6),
+                        inner_l + 4,
+                        shortcut_y,
+                        name,
+                    );
                 }
             }
         }
@@ -1612,7 +1664,14 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     let s = &l.start;
     let y0 = s.top + 82;
     let all_w = unsafe {
-        text_width(if START_SHOW_ALL_APPS { b"\xC9pingl\xE9" } else { b"Toutes mes applications" }, 11) + 20
+        text_width(
+            if START_SHOW_ALL_APPS {
+                b"\xC9pingl\xE9"
+            } else {
+                b"Toutes mes applications"
+            },
+            11,
+        ) + 20
     };
     let inner_r = s.right - 28;
     if x >= inner_r - all_w + 10 && x < inner_r + 10 && y >= y0 + 2 && y < y0 + 20 {
@@ -2045,14 +2104,44 @@ pub unsafe fn draw(hdc: Handle) {
         fill(hdc, &mut b, 0, 0, SCREEN_W, SCREEN_H, rgb(0x00, 0x00, 0x00));
         for i in 0..12 {
             let pipe = SAVER_PIPES[i];
-            let c = [rgb(0xFF,0,0), rgb(0,0xFF,0), rgb(0,0xFF,0xFF), rgb(0xFF,0,0xFF), rgb(0xFF,0xA5,0), rgb(0xA5,0,0xFF)][i%6];
-            fill(hdc, &mut b, pipe.0, pipe.1, pipe.0+10, pipe.1+10, c);
+            let c = [
+                rgb(0xFF, 0, 0),
+                rgb(0, 0xFF, 0),
+                rgb(0, 0xFF, 0xFF),
+                rgb(0xFF, 0, 0xFF),
+                rgb(0xFF, 0xA5, 0),
+                rgb(0xA5, 0, 0xFF),
+            ][i % 6];
+            fill(hdc, &mut b, pipe.0, pipe.1, pipe.0 + 10, pipe.1 + 10, c);
             for j in 0..8 {
-                fill(hdc, &mut b, pipe.0 - j*3, pipe.1+2, pipe.0 - j*3 + 6, pipe.1+8, c);
-                fill(hdc, &mut b, pipe.0+2, pipe.1 - j*3, pipe.0+8, pipe.1 - j*3 + 6, c);
+                fill(
+                    hdc,
+                    &mut b,
+                    pipe.0 - j * 3,
+                    pipe.1 + 2,
+                    pipe.0 - j * 3 + 6,
+                    pipe.1 + 8,
+                    c,
+                );
+                fill(
+                    hdc,
+                    &mut b,
+                    pipe.0 + 2,
+                    pipe.1 - j * 3,
+                    pipe.0 + 8,
+                    pipe.1 - j * 3 + 6,
+                    c,
+                );
             }
         }
-        text(hdc, f.small, rgb(0x60,0x60,0x60), 12, SCREEN_H - 28, b"\xC9cran de veille");
+        text(
+            hdc,
+            f.small,
+            rgb(0x60, 0x60, 0x60),
+            12,
+            SCREEN_H - 28,
+            b"\xC9cran de veille",
+        );
         f.release();
         b.release();
         return;
@@ -2100,7 +2189,12 @@ pub unsafe fn frame(hwnd: Handle) {
         if !SAVER_INIT {
             SAVER_INIT = true;
             for i in 0..12 {
-                SAVER_PIPES[i] = (((i as i32) * 137 % (SCREEN_W/8)) * 8, ((i as i32) * 251 % (SCREEN_H/8)) * 8, if i%2==0 {8} else {-8}, if i%3==0 {8} else {-8});
+                SAVER_PIPES[i] = (
+                    ((i as i32) * 137 % (SCREEN_W / 8)) * 8,
+                    ((i as i32) * 251 % (SCREEN_H / 8)) * 8,
+                    if i % 2 == 0 { 8 } else { -8 },
+                    if i % 3 == 0 { 8 } else { -8 },
+                );
             }
         }
         // update
@@ -2108,8 +2202,12 @@ pub unsafe fn frame(hwnd: Handle) {
             let mut p = SAVER_PIPES[i];
             p.0 += p.2;
             p.1 += p.3;
-            if p.0 < 0 || p.0 >= SCREEN_W { p.2 = -p.2; }
-            if p.1 < 40 || p.1 >= SCREEN_H - 48 { p.3 = -p.3; }
+            if p.0 < 0 || p.0 >= SCREEN_W {
+                p.2 = -p.2;
+            }
+            if p.1 < 40 || p.1 >= SCREEN_H - 48 {
+                p.3 = -p.3;
+            }
             SAVER_PIPES[i] = p;
         }
         if since(LAST_FRAME) >= 15 {
@@ -2583,7 +2681,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Shift+S (Screenshot)
     if ch == 0 && vk == 0x53 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
         if win && shift {
             launch(Launch::Exec(b"screenshot.exe"));
@@ -2592,7 +2691,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+E (Explorateur de fichiers)
     if ch == 0 && vk == 0x45 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         if win {
             launch(Launch::Explorer);
             return;
@@ -2600,7 +2700,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+R
     if ch == 0 && vk == 0x52 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         if win {
             wm::SHOW_RUN = true;
             unsafe {
@@ -2613,7 +2714,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+E
     if ch == 0 && vk == 0x45 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         if win {
             explorer::open_pc();
             repaint(hwnd);
@@ -2622,7 +2724,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+D
     if ch == 0 && vk == 0x44 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         if win {
             for app in 0..wm::APP_COUNT {
                 if wm::is_open(app) && !wm::is_visible(app) { /* already minimized */ }
@@ -2631,16 +2734,22 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             let mut any_visible = false;
             unsafe {
                 for app in 0..wm::APP_COUNT {
-                    if wm::is_open(app) && !wm::is_minimized(app) { any_visible = true; }
+                    if wm::is_open(app) && !wm::is_minimized(app) {
+                        any_visible = true;
+                    }
                 }
             }
             if any_visible {
                 for app in 0..wm::APP_COUNT {
-                    if wm::is_open(app) && !wm::is_minimized(app) { wm::minimize(app); }
+                    if wm::is_open(app) && !wm::is_minimized(app) {
+                        wm::minimize(app);
+                    }
                 }
             } else {
                 for app in 0..wm::APP_COUNT {
-                    if wm::is_open(app) { wm::open(app); }
+                    if wm::is_open(app) {
+                        wm::open(app);
+                    }
                 }
             }
             repaint(hwnd);

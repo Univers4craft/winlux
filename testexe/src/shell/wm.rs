@@ -17,14 +17,15 @@
 
 use crate::gfx::*;
 use crate::notepad;
+use crate::utilities;
 use winlux_testexe::*;
 
 pub const APP_EXPLORER: usize = 0;
 pub const APP_SETTINGS: usize = 1;
 pub const APP_NOTEPAD: usize = 2;
 pub const APP_TASKMGR: usize = 3;
-pub const APP_UTILITIES: usize = APP_SETTINGS;
-pub const APP_COUNT: usize = 4;
+pub const APP_UTILITIES: usize = 4;
+pub const APP_COUNT: usize = 5;
 
 // Native session: each built-in application owns a separate X11/Win32 window.
 // The Linux window manager handles its frame, stacking and taskbar lifecycle.
@@ -236,7 +237,7 @@ const CLOSED: Win = Win {
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3];
+static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
@@ -282,6 +283,7 @@ pub fn title_of(app: usize) -> &'static [u8] {
         APP_SETTINGS => b"Param\xE8tres",
         APP_NOTEPAD => b"Bloc-notes",
         APP_TASKMGR => b"Gestionnaire des t\xE2ches",
+        APP_UTILITIES => b"Utilitaires",
         _ => b"Param\xE8tres",
     }
 }
@@ -291,6 +293,7 @@ fn glyph_of(app: usize) -> Glyph {
         APP_SETTINGS => Glyph::Settings,
         APP_NOTEPAD => Glyph::File,
         APP_TASKMGR => Glyph::Computer,
+        APP_UTILITIES => Glyph::Tools,
         _ => Glyph::Settings,
     }
 }
@@ -300,6 +303,7 @@ fn custom_title(app: usize) -> bool {
         APP_SETTINGS => crate::settings::CUSTOM_TITLE,
         APP_NOTEPAD => notepad::CUSTOM_TITLE,
         APP_TASKMGR => crate::taskmgr::CUSTOM_TITLE,
+        APP_UTILITIES => utilities::CUSTOM_TITLE,
         _ => crate::settings::CUSTOM_TITLE,
     }
 }
@@ -310,6 +314,7 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
         APP_SETTINGS => crate::settings::draw(g, f),
         APP_NOTEPAD => notepad::draw(g, f),
         APP_TASKMGR => crate::taskmgr::draw(g, f),
+        APP_UTILITIES => utilities::draw(g, f),
         _ => crate::settings::draw(g, f),
     }
 }
@@ -319,6 +324,7 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         APP_SETTINGS => crate::settings::mouse(ev, x, y, f),
         APP_NOTEPAD => notepad::mouse(ev, x, y, f),
         APP_TASKMGR => crate::taskmgr::mouse(ev, x, y, f),
+        APP_UTILITIES => utilities::mouse(ev, x, y, f),
         _ => crate::settings::mouse(ev, x, y, f),
     }
 }
@@ -328,6 +334,7 @@ unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
         APP_SETTINGS => crate::settings::key(vk, ch),
         APP_NOTEPAD => notepad::key(vk, ch),
         APP_TASKMGR => crate::taskmgr::key(vk, ch),
+        APP_UTILITIES => utilities::key(vk, ch),
         _ => crate::settings::key(vk, ch),
     }
 }
@@ -337,6 +344,7 @@ unsafe fn app_tick(app: usize, f: &Frame) -> bool {
         APP_SETTINGS => crate::settings::tick(f),
         APP_NOTEPAD => notepad::tick(f),
         APP_TASKMGR => crate::taskmgr::tick(f),
+        APP_UTILITIES => utilities::tick(f),
         _ => crate::settings::tick(f),
     }
 }
@@ -866,15 +874,65 @@ pub unsafe fn draw(g: &mut Gfx) {
         let sh = 110;
         let cx = (WORK.left + WORK.right - sw) / 2;
         let cy = WORK.top + 60;
-        round_rect(g.hdc, g.b, cx, cy, cx + sw, cy + sh, 8, mix(p.border, p.accent, 2, 10));
-        round_rect(g.hdc, g.b, cx + 1, cy + 1, cx + sw - 1, cy + sh - 1, 7, p.surface);
+        round_rect(
+            g.hdc,
+            g.b,
+            cx,
+            cy,
+            cx + sw,
+            cy + sh,
+            8,
+            mix(p.border, p.accent, 2, 10),
+        );
+        round_rect(
+            g.hdc,
+            g.b,
+            cx + 1,
+            cy + 1,
+            cx + sw - 1,
+            cy + sh - 1,
+            7,
+            p.surface,
+        );
         text(g.hdc, g.f.caption, p.text, cx + 16, cy + 12, b"Ex\xE9cuter");
         text(g.hdc, g.f.small, p.text3, cx + 16, cy + 42, b"Ouvrir :");
-        fill(g.hdc, g.b, cx + 16, cy + 64, cx + sw - 80, cy + 88, p.window);
-        fill(g.hdc, g.b, cx + 16, cy + 64, cx + sw - 80, cy + 65, p.border);
-        fill(g.hdc, g.b, cx + 16, cy + 87, cx + sw - 80, cy + 88, p.border);
+        fill(
+            g.hdc,
+            g.b,
+            cx + 16,
+            cy + 64,
+            cx + sw - 80,
+            cy + 88,
+            p.window,
+        );
+        fill(
+            g.hdc,
+            g.b,
+            cx + 16,
+            cy + 64,
+            cx + sw - 80,
+            cy + 65,
+            p.border,
+        );
+        fill(
+            g.hdc,
+            g.b,
+            cx + 16,
+            cy + 87,
+            cx + sw - 80,
+            cy + 88,
+            p.border,
+        );
         fill(g.hdc, g.b, cx + 16, cy + 65, cx + 17, cy + 87, p.border);
-        fill(g.hdc, g.b, cx + sw - 81, cy + 65, cx + sw - 80, cy + 87, p.border);
+        fill(
+            g.hdc,
+            g.b,
+            cx + sw - 81,
+            cy + 65,
+            cx + sw - 80,
+            cy + 87,
+            p.border,
+        );
         if crate::wm::RUN_LEN > 0 {
             let mut buf = [0u8; 260];
             let mut j = 0;
@@ -885,8 +943,24 @@ pub unsafe fn draw(g: &mut Gfx) {
             buf[j] = 0;
             text(g.hdc, g.f.body, p.text, cx + 22, cy + 70, &buf);
         }
-        round_rect(g.hdc, g.b, cx + sw - 70, cy + 64, cx + sw - 16, cy + 88, 4, p.accent);
-        text(g.hdc, g.f.small, rgb(0xFF, 0xFF, 0xFF), cx + sw - 58, cy + 70, b"OK");
+        round_rect(
+            g.hdc,
+            g.b,
+            cx + sw - 70,
+            cy + 64,
+            cx + sw - 16,
+            cy + 88,
+            4,
+            p.accent,
+        );
+        text(
+            g.hdc,
+            g.f.small,
+            rgb(0xFF, 0xFF, 0xFF),
+            cx + sw - 58,
+            cy + 70,
+            b"OK",
+        );
     }
 }
 
@@ -1232,7 +1306,14 @@ pub unsafe fn on_key(vk: u32, ch: u16) -> bool {
             }
             cmd[i] = 0;
             static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-            ShellExecuteW(core::ptr::null_mut(), OPEN.as_ptr(), cmd.as_ptr(), core::ptr::null(), core::ptr::null(), 1);
+            ShellExecuteW(
+                core::ptr::null_mut(),
+                OPEN.as_ptr(),
+                cmd.as_ptr(),
+                core::ptr::null(),
+                core::ptr::null(),
+                1,
+            );
             return true;
         }
         if ch >= 0x20 && ch < 0x7F && crate::wm::RUN_LEN < 255 {

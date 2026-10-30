@@ -244,7 +244,10 @@ unsafe fn updating() -> bool {
     value(b"update_busy") == b"1"
 }
 unsafe fn already_up_to_date() -> bool {
-    UPDATES.get().split(|&c| c == b'\n').any(|line| line == b"Winlux est \xE0 jour.")
+    UPDATES
+        .get()
+        .split(|&c| c == b'\n')
+        .any(|line| line == b"Winlux est \xE0 jour.")
 }
 unsafe fn restart_required() -> bool {
     matches!(value(b"update_action"), b"reboot" | b"restart-session")
@@ -710,19 +713,19 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     "Rapide"
                 }
             };
-            row(
-                g,
-                &c,
-                44,
-                b"Rapidit\xE9 de la souris",
-                speed_str.as_bytes(),
-            );
+            row(g, &c, 44, b"Rapidit\xE9 de la souris", speed_str.as_bytes());
             button(g, &c, 0, 0, b"Lente", 0);
             button(g, &c, 0, 1, b"Normale", 1);
             button(g, &c, 0, 2, b"Rapide", 2);
         }
         12 => {
-            row(g, &c, 44, b"Accessibilit\xE9", b"Options d'accessibilit\xE9.");
+            row(
+                g,
+                &c,
+                44,
+                b"Accessibilit\xE9",
+                b"Options d'accessibilit\xE9.",
+            );
             let pointer_str = unsafe {
                 if POINTER_SIZE == 1 {
                     "Normal"
@@ -736,22 +739,72 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 0, 0, b"Normal", 0);
             button(g, &c, 0, 1, b"Grand", 1);
             button(g, &c, 0, 2, b"Tr\xE8s grand", 2);
-            row(g, &c, 124, b"Contraste \xE9lev\xE9", if unsafe { HIGH_CONTRAST } { b"Activ\xE9" } else { b"D\xE9sactiv\xE9" });
+            row(
+                g,
+                &c,
+                124,
+                b"Contraste \xE9lev\xE9",
+                if unsafe { HIGH_CONTRAST } {
+                    b"Activ\xE9"
+                } else {
+                    b"D\xE9sactiv\xE9"
+                },
+            );
             button(g, &c, 1, 0, b"Activer", 3);
             button(g, &c, 1, 1, b"D\xE9sactiver", 4);
         }
         13 => {
             row(g, &c, 44, b"Effets visuels", b"Options d'effet visuels.");
-            row(g, &c, 84, b"Effet de flou", if unsafe { ENABLE_BLUR } { b"Activ\xE9" } else { b"D\xE9sactiv\xE9" });
+            row(
+                g,
+                &c,
+                84,
+                b"Effet de flou",
+                if unsafe { ENABLE_BLUR } {
+                    b"Activ\xE9"
+                } else {
+                    b"D\xE9sactiv\xE9"
+                },
+            );
             button(g, &c, 0, 0, b"Activer", 0);
             button(g, &c, 0, 1, b"D\xE9sactiver", 1);
-            row(g, &c, 124, b"Animations fluides", if unsafe { ENABLE_SMOOTH_ANIM } { b"Activ\xE9es" } else { b"D\xE9sactiv\xE9es" });
+            row(
+                g,
+                &c,
+                124,
+                b"Animations fluides",
+                if unsafe { ENABLE_SMOOTH_ANIM } {
+                    b"Activ\xE9es"
+                } else {
+                    b"D\xE9sactiv\xE9es"
+                },
+            );
             button(g, &c, 1, 0, b"Activer", 3);
             button(g, &c, 1, 1, b"D\xE9sactiver", 4);
-            row(g, &c, 164, b"Miniatures des fen\xEAtres", if unsafe { ENABLE_THUMBNAILS } { b"Activ\xE9es" } else { b"D\xE9sactiv\xE9es" });
+            row(
+                g,
+                &c,
+                164,
+                b"Miniatures des fen\xEAtres",
+                if unsafe { ENABLE_THUMBNAILS } {
+                    b"Activ\xE9es"
+                } else {
+                    b"D\xE9sactiv\xE9es"
+                },
+            );
             button(g, &c, 2, 0, b"Activer", 6);
             button(g, &c, 2, 1, b"D\xE9sactiver", 7);
-            row(g, &c, 204, b"Th\xE8me automatique", if unsafe { AUTO_THEME } { b"Activ\xE9" } else { b"D\xE9sactiv\xE9" });
+            row(
+                g,
+                &c,
+                204,
+                b"Th\xE8me automatique",
+                if unsafe { AUTO_THEME } {
+                    b"Activ\xE9"
+                } else {
+                    b"D\xE9sactiv\xE9"
+                },
+            );
             button(g, &c, 3, 0, b"Activer", 9);
             button(g, &c, 3, 1, b"D\xE9sactiver", 10);
         }
@@ -1059,7 +1112,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     b"Session Live : les r\xE9glages durent jusqu'au red\xE9marrage."
                 },
             );
-            row(g, &c, 260, b"Ic\xF4nes du bureau", b"Ajoutez seulement les ic\xF4nes que vous voulez afficher.");
+            row(
+                g,
+                &c,
+                260,
+                b"Ic\xF4nes du bureau",
+                b"Ajoutez seulement les ic\xF4nes que vous voulez afficher.",
+            );
             button(g, &c, 4, 0, b"Afficher Corbeille", 12);
             button(g, &c, 4, 1, b"Afficher Explorateur", 13);
             button(g, &c, 5, 0, b"Afficher Ce PC", 14);
@@ -1194,8 +1253,26 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 button(g, &c, 0, 1, b"Tout installer", 1);
             }
             button(g, &c, 0, 2, b"Restaurer", 2);
-            button(g, &c, 1, 0, if value(b"update_auto") == b"enabled" { b"D\xE9sactiver auto" } else { b"Activer auto" }, 3);
-            button(g, &c, 1, 1, if SHOW_LOG { b"Masquer" } else { b"Journal" }, 4);
+            button(
+                g,
+                &c,
+                1,
+                0,
+                if value(b"update_auto") == b"enabled" {
+                    b"D\xE9sactiver auto"
+                } else {
+                    b"Activer auto"
+                },
+                3,
+            );
+            button(
+                g,
+                &c,
+                1,
+                1,
+                if SHOW_LOG { b"Masquer" } else { b"Journal" },
+                4,
+            );
             if restart == b"reboot" {
                 button(g, &c, 1, 2, b"Red\xE9marrer", 5);
             }

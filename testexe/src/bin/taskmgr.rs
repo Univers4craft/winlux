@@ -8,7 +8,7 @@ use winlux_testexe::*;
 mod taskmgr;
 #[path = "../shell/gfx.rs"]
 mod gfx;
-#[path = "../shell/wm.rs"]
+#[path = "../shell/wm_standalone.rs"]
 mod wm;
 
 #[no_mangle]
@@ -52,7 +52,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
             DispatchMessageA(&msg);
         }
 
-        ExitProcess(msg.wParam as u32)
+        ExitProcess(msg.wparam as u32)
     }
 }
 
@@ -65,7 +65,7 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wparam: usize, lparam:
         0x000F => {
             // WM_PAINT
             let mut ps: PAINTSTRUCT = core::mem::zeroed();
-            let hdc = BeginPaint(hwnd, &ps);
+            let hdc = BeginPaint(hwnd, &mut ps);
             let mut outer = Rect { left: 0, top: 0, right: 1000, bottom: 650 };
             GetClientRect(hwnd, &mut outer);
             let frame = wm::Frame {
