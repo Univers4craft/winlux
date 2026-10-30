@@ -101,7 +101,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 28] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 29] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
             (b"Bloc-notes", b"mousepad", 1),
@@ -130,6 +130,7 @@ fn init_apps() {
             (b"Gestionnaire de paquets", b"mintinstall", 9),
             (b"Disques", b"gnome-disks", 9),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
+            (b"Gestionnaire des t\xE2ches", b"taskmgr", 9),
         ];
         for (name, exec, cat) in apps.iter() {
             if ALL_APPS_COUNT < 64 {
@@ -1257,6 +1258,11 @@ unsafe fn launch(what: Launch) {
             );
         }
         Launch::Exec(cmd) => {
+            // Gestionnaire des tâches intégré dans le WM
+            if cmd == b"taskmgr" {
+                wm::open(wm::APP_TASKMGR);
+                return;
+            }
             let mut wcmd = [0u16; 256];
             for (i, &b) in cmd.iter().enumerate() {
                 if i < 255 {
@@ -2659,6 +2665,16 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         }
         if CONTEXT_APP.is_some() {
             CONTEXT_APP = None;
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Ctrl+Shift+Escape (Gestionnaire des tâches)
+    if ch == 0 && vk == 0x1B {
+        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
+        if ctrl && shift {
+            wm::open(wm::APP_TASKMGR);
             repaint(hwnd);
             return;
         }

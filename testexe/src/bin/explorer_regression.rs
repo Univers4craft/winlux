@@ -14,6 +14,8 @@ mod gfx;
 mod notepad;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/taskmgr.rs"]
+mod taskmgr;
 #[path = "../shell/utilities.rs"]
 mod utilities;
 #[path = "../shell/wm.rs"]
