@@ -9,6 +9,15 @@ case "$out" in
 esac
 work="$root/build/winlux-live-test"
 stage="$work/initramfs-root"
+apt_base=${WINLUX_APT_BASE:-"$root/build/apt-base/root.tar"}
+if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
+    test -s "$apt_base" || { echo "Base APT native absente : préparez-la avec scripts/prepare-apt-base.py (--kernel et --kernel-release)." >&2; exit 1; }
+    native_codename=$(. /etc/os-release; printf '%s\n' "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")
+    test "$native_codename" = noble && test "$(dpkg --print-architecture)" = amd64 || {
+        echo 'La construction APT native nécessite un hôte Ubuntu Noble amd64 (ou dérivé compatible).' >&2
+        exit 1
+    }
+fi
 iso_root="$work/iso-root"
 kernel=${WINLUX_KERNEL:-/boot/vmlinuz}
 kernel_release=${WINLUX_KERNEL_RELEASE:-$(uname -r)}
@@ -67,6 +76,8 @@ bash scripts/build-tests.sh
 
 cp "$root/target/release/winlux" "$stage/usr/bin/winlux"
 cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
+cp "$root/scripts/winlux-update-progress.py" "$stage/usr/bin/winlux-update-progress"
+chmod 755 "$stage/usr/bin/winlux-update-progress"
 cp "$root/scripts/winlux-control.sh" "$stage/usr/bin/winlux-control"
 cp "$root/scripts/winlux-network.sh" "$stage/usr/bin/winlux-network"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
@@ -99,6 +110,7 @@ fi
 cp "$root/scripts/test-runtime.sh" "$stage/opt/winlux/scripts/test-runtime.sh"
 cp "$root/scripts/test-terminal-guest.sh" "$stage/opt/winlux/scripts/test-terminal-guest.sh"
 cp "$root/scripts/test-native-session-guest.py" "$stage/opt/winlux/scripts/test-native-session-guest.py"
+cp "$root/scripts/test-apt-native-guest.py" "$stage/opt/winlux/scripts/test-apt-native-guest.py"
 cp "$root/scripts/test-browsers-guest.sh" "$stage/opt/winlux/scripts/test-browsers-guest.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
 chmod 755 \
@@ -364,6 +376,9 @@ safe_power() {
         echo 'Installation en cours : arrêt/redémarrage différé. Réessayez après la fin.'
         return
     fi
+    # Ask remaining background services to terminate before flushing disks.
+    /bin/busybox kill -TERM -1 2>/dev/null || true
+    /bin/busybox sleep 5
     /bin/busybox sync
     /bin/busybox mount -o remount,ro / 2>/dev/null || true
     /bin/busybox "$1" -f
@@ -373,6 +388,14 @@ trap 'safe_power reboot' TERM
 # Recovery uses static BusyBox before loading drivers/shared user services.
 while ! /usr/bin/winlux-update --boot >/run/winlux/boot-update.log 2>&1; do
     echo 'Récupération système impossible. Bureau bloqué, journal : /run/winlux/boot-update.log'
+    if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
+        /bin/busybox cat /run/winlux/boot-update.log
+        /bin/busybox mkdir -p /var/lib/winlux
+        /bin/busybox cp /run/winlux/boot-update.log /var/lib/winlux/native-boot-failure.log
+        echo 'WINLUX_NATIVE_EXIT=1'
+        /bin/busybox sync
+        /bin/busybox poweroff -f
+    fi
     /bin/sh
 done
 /usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
@@ -629,6 +652,9 @@ while :; do /bin/busybox sleep 2; done
 INIT
 chmod 755 "$stage/init"
 "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"
+if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
+    python3 "$root/scripts/stage-apt-root.py" "$stage" "$apt_base" --package "$root/build/winlux-desktop.deb"
+fi
 
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"

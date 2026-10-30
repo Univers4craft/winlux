@@ -35,8 +35,13 @@ elif kind == "audio":
     tooltip = "Audio indisponible" if level is None else "Son coupé" if muted else f"Volume : {level}%"
     identity, page = f"audio-{wave}", 3
 elif kind == "network":
-    active = [p for p in Path("/sys/class/net").iterdir() if p.name != "lo" and (p / "operstate").read_text().strip() == "up"]
-    wireless = any((path / "wireless").exists() for path in active)
+    try:
+        routes = subprocess.check_output(["ip", "-4", "route", "show", "default"], text=True, timeout=2).splitlines()
+        fields = routes[0].split() if routes else []
+        interface = fields[fields.index("dev") + 1] if "dev" in fields else ""
+    except (OSError, subprocess.SubprocessError, IndexError): interface = ""
+    active = [Path("/sys/class/net") / interface] if interface and "/" not in interface else []
+    wireless = bool(active and (active[0] / "wireless").exists())
     if wireless:
         body = f'<path d="M2 9q10-10 20 0M5 13q7-7 14 0M9 17q3-3 6 0" fill="none" stroke="{color}" stroke-width="2"/><circle cx="12" cy="21" r="1.3" fill="{color}"/>'
     else:

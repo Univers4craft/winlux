@@ -320,3 +320,9 @@ test "$(cat "$fixture/usr/share/winlux/version")" = updater-legacy
 update --rollback
 test "$(cat "$fixture/usr/share/winlux/version")" = old
 echo "Mises à jour runtime/système, auto, restauration complète et rejets de paquets dangereux validés."
+printf 'format=3\nbackend=apt\nbase=ubuntu-noble\nversion=native\n' >"$assets/manifest.txt"
+expected_version=old
+expect_failure update --apply
+grep -q 'migration automatique' "$test_root/expected-error.log"
+test "$(cat "$fixture/home/user/document.txt")" = 'my document'
+echo "Migration implicite vers la base APT refusée sans modification de l'installation."

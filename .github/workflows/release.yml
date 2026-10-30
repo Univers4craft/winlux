@@ -66,6 +66,7 @@ jobs:
           sh scripts/test-updater.sh
           sh scripts/test-update-notes.sh
           sh scripts/test-install-safety.sh
+          /usr/bin/python3 -B scripts/test-apt-metadata.py
           xvfb-run -a /usr/bin/python3 -B scripts/test-settings-native.py
           xvfb-run -a dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-desktop-tools.py
           for popup in start volume power; do
@@ -81,6 +82,7 @@ jobs:
           # Ubuntu restricts /boot to root; copy only the kernel, then build
           # unprivileged. Never publish a runtime fallback as a system release.
           sudo install -m 644 "$kernel" "$RUNNER_TEMP/winlux-kernel"
+          python3 scripts/prepare-apt-base.py --kernel "$RUNNER_TEMP/winlux-kernel" --kernel-release "$release"
           WINLUX_KERNEL="$RUNNER_TEMP/winlux-kernel" \
           WINLUX_KERNEL_RELEASE="$release" \
             bash scripts/build-live-iso.sh "build/winlux-live-$GITHUB_REF_NAME.iso"
@@ -131,7 +133,8 @@ jobs:
       - name: Calculer les sommes SHA-256
         run: |
           cd build
-          sha256sum winlux-update-"$GITHUB_REF_NAME".tar.gz > winlux-update-"$GITHUB_REF_NAME".tar.gz.sha256
+          asset=$(sed -n 's/^asset=//p' winlux-update-manifest.txt)
+          sha256sum "$asset" > "$asset.sha256"
           if [ "$SKIP_ISO" = "false" ]; then
             sha256sum winlux-live-"$GITHUB_REF_NAME".iso > winlux-live-"$GITHUB_REF_NAME".iso.sha256
           fi
@@ -140,7 +143,8 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -- "build/winlux-update-$GITHUB_REF_NAME.tar.gz" "build/winlux-update-$GITHUB_REF_NAME.tar.gz.sha256" build/winlux-update-manifest.txt
+          asset=$(sed -n 's/^asset=//p' build/winlux-update-manifest.txt)
+          set -- "build/$asset" "build/$asset.sha256" build/winlux-update-manifest.txt
           if grep -q '^notes_asset=' build/winlux-update-manifest.txt; then
             set -- "$@" build/winlux-release-notes.txt
           fi

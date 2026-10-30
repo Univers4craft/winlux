@@ -16,6 +16,20 @@ def check():
             assert window.body.get_children()[0].get_text() == title
             assert window.progress.get_visible() == (index == 7)
         assert window.process is None, "Navigation launched a system action"
+        namespace = window.poll.__globals__
+        original_read = namespace["read"]
+        try:
+            namespace["read"] = lambda path: "Winlux est à jour.\n" if path == "/run/winlux/updates.txt" else original_read(path)
+            window.nav.select_row(window.nav.get_row_at_index(7))
+            window.poll()
+            assert not window.install_button.get_parent().get_visible(), "Install button shown for current version"
+        finally:
+            namespace["read"] = original_read
+        window.show_update_error("update-apply", 1)
+        dialogs = [widget for widget in Gtk.Window.list_toplevels() if isinstance(widget, Gtk.MessageDialog)]
+        assert len(dialogs) == 1, "Update error dialog was not displayed"
+        assert "Étape :" in dialogs[0].get_property("secondary-text")
+        dialogs[0].destroy()
     except Exception as error:
         failures.append(error)
     finally:

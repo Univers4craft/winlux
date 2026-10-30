@@ -39,7 +39,7 @@ timeout -k 5s "${WINLUX_NATIVE_TEST_TIMEOUT:-600}" qemu-system-x86_64 \
     -display none -monitor none -serial stdio -no-reboot -nic none \
     -kernel "$stage/boot/vmlinuz" \
     -append 'root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0 panic=1 loglevel=3 winlux.native-smoke=1' \
-    -drive "file=$disk,if=virtio,format=raw" > "$log" 2>&1 || result=$?
+    -drive "file=$disk,if=virtio,format=raw" </dev/null > "$log" 2>&1 || result=$?
 for name in native-desktop native-start-menu native-start-all native-start-search native-settings-updates native-vendor-external native-vendor-chatgpt native-vendor-claude native-pipes-1 native-pipes-2; do
     debugfs -R "dump /var/lib/winlux/$name.xwd $work/$name.xwd" "$disk" >/dev/null 2>&1 || true
     if test -s "$work/$name.xwd" && command -v convert >/dev/null 2>&1; then
@@ -63,5 +63,8 @@ for marker in WINLUX_NATIVE_DESKTOP_FILE_SERVICE=0 WINLUX_NATIVE_HARDWARE_SERVIC
     fi
 done
 test "$result" = 0 || { tail -60 "$log"; exit 1; }
+if test -f "$stage/usr/share/winlux/update-backend" && grep -qx apt "$stage/usr/share/winlux/update-backend"; then
+    grep -q 'WINLUX_NATIVE_APT_RESULT=0' "$log" || { tail -60 "$log"; exit 1; }
+fi
 if test "${WINLUX_KEEP_TEST_DISK:-0}" != 1; then rm "$disk"; fi
 echo "OK: mixed PE/Linux windows, controls, editor, catalogue, panel and animated pipes. Captures: $work"

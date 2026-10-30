@@ -47,6 +47,7 @@ class Settings(Gtk.Window):
         self.connect("destroy", Gtk.main_quit)
         self.page = min(13, max(0, int(os.environ.get("WINLUX_SETTINGS_PAGE", "0"))))
         self.process = None
+        self.active_action = None
         css = Gtk.CssProvider()
         css.load_from_data(b"""
           window { background: #181b24; color: #ecedf5; }
@@ -115,10 +116,12 @@ class Settings(Gtk.Window):
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
                            row_spacing=8, column_spacing=8)
         self.body.pack_start(flow, False, False, 0)
+        self.install_button = None
         for title, action in actions:
             button = Gtk.Button(label=title)
             button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
+            if action == "update-apply": self.install_button = button
         self.buttons = flow
         if self.page in (1, 2, 3, 6):
             tool = {1:"apps", 2:"quick", 3:"quick", 6:"appearance"}[self.page]
@@ -152,6 +155,8 @@ class Settings(Gtk.Window):
         self.poll()
         self.body.show_all()
         self.progress.set_visible(self.page == 7)
+        if self.install_button is not None:
+            self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
 
     def execute(self, action):
         if self.process is not None or self.busy: return
@@ -162,30 +167,71 @@ class Settings(Gtk.Window):
             dialog.destroy()
             if answer != Gtk.ResponseType.OK: return
         self.process = subprocess.Popen(["winlux-control", action], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        self.active_action = action
         self.notice.set_text("Opération en cours…")
         self.buttons.set_sensitive(False)
 
     def poll(self):
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.busy = status.get("update_busy") == "1"
-        if self.process is not None and self.process.poll() is not None: self.process = None
+        if self.process is not None and self.process.poll() is not None:
+            result = self.process.returncode
+            action = self.active_action
+            self.process = None
+            self.active_action = None
+            if result and action in ("update-check", "update-apply", "update-rollback"):
+                self.show_update_error(action, result)
         self.buttons.set_sensitive(self.process is None and not self.busy)
         fields = FIELDS.get(self.page, [])
         text = "\n".join(f"{label} : {status.get(key) or 'Indisponible'}" for label, key in fields)
         if self.page == 7: text = read("/run/winlux/updates.txt")
+        if self.install_button is not None:
+            self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
         if self.state.get_text() != text: self.state.set_text(text)
         if self.process is None: self.notice.set_text(read("/run/winlux/action.txt").strip())
         progress = dict(line.split("=", 1) for line in read("/run/winlux/update-progress").splitlines() if "=" in line)
-        try: fraction = min(1, max(0, float(progress.get("percent", "0")) / 100))
+        try: percent = int(progress.get("percent", "-1"))
+        except ValueError: percent = -1
+        try: fraction = min(1, max(0, percent / 100))
         except ValueError: fraction = 0
-        self.progress.set_fraction(fraction)
-        self.progress.set_text(progress.get("item", ""))
+        if percent < 0: self.progress.pulse()
+        else: self.progress.set_fraction(fraction)
+        item = progress.get("item", "")
+        if progress.get("unit") == "bytes":
+            try:
+                done, total = int(progress.get("done", "0")), int(progress.get("total", "0"))
+                amount = f"{done / 1048576:.1f} Mio" + (f" / {total / 1048576:.1f} Mio" if total else "")
+                item = f"{item} · {amount}" + (f" · {percent} %" if percent >= 0 else "")
+            except ValueError: pass
+        elif progress.get("phase") in ("backing-up", "installing"):
+            try:
+                done, total = int(progress.get("done", "0")), int(progress.get("total", "0"))
+                if total: item = f"{progress.get('phase') == 'installing' and 'Installation' or 'Sauvegarde'} · {done}/{total} fichiers · {done * 100 // total} %\n{item}"
+            except ValueError: pass
+        self.progress.set_text(item)
         self.progress.set_visible(self.page == 7)
         if self.page == 7:
             journal = read("/run/winlux/update.log")[-12000:]
             if self.details.get_text() != journal: self.details.set_text(journal)
         return True
+
+    def show_update_error(self, action, result):
+        stages = {"checking": "Recherche et préparation", "downloading": "Téléchargement", "verifying": "Vérification",
+                  "extracting": "Décompression", "backing-up": "Sauvegarde",
+                  "installing": "Installation", "finalizing": "Finalisation", "restoring": "Restauration"}
+        phase = read("/run/winlux/update-error-phase").strip()
+        stage = stages.get(phase, phase or {"update-check": "Recherche", "update-apply": "Mise à jour",
+                                           "update-rollback": "Restauration"}[action])
+        log = read("/run/winlux/update.log").strip()
+        detail = log[-3000:] if log else "Aucun détail n’a été écrit dans le journal."
+        dialog = Gtk.MessageDialog(transient_for=self, modal=False, message_type=Gtk.MessageType.ERROR,
+                                   buttons=Gtk.ButtonsType.CLOSE, text="La mise à jour a échoué")
+        dialog.format_secondary_text(f"Étape : {stage} (code {result})\n\nDernières lignes du journal :\n{detail}")
+        for child in dialog.get_message_area().get_children():
+            if isinstance(child, Gtk.Label): child.set_selectable(True)
+        dialog.connect("response", lambda window, _: window.destroy())
+        dialog.show_all()
 
 if __name__ == "__main__":
     Settings()

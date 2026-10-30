@@ -315,6 +315,8 @@ class Start(Gtk.Application):
             if not target.exists():
                 shutil.copyfile(source, target)
                 target.chmod(0o755)
+                subprocess.run(["gio", "set", "-t", "string", str(target), "metadata::trusted", "true"],
+                               check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         self.menu(widget, event, [("Ouvrir", lambda: self.launch(app)),
                                  ("Détacher du menu Démarrer" if identifier in self.state.get("pins", DEFAULTS) else "Épingler au menu Démarrer", pin),
                                  ("Créer un raccourci sur le bureau", shortcut)])

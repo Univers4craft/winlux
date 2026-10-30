@@ -6,6 +6,10 @@ repository=${WINLUX_UPDATE_REPOSITORY:-Univers4craft/winlux}
 target_root=${WINLUX_UPDATE_ROOT:-/}
 test -d "$target_root" || { echo "racine de mise à jour absente" >&2; exit 1; }
 target_root=$(CDPATH= cd -- "$target_root" && pwd -P)
+if test -f "$target_root/usr/share/winlux/update-backend" && grep -qx apt "$target_root/usr/share/winlux/update-backend"; then
+    test "$target_root" = / || { echo 'Exécutez le moteur APT dans le système cible.' >&2; exit 1; }
+    exec /usr/bin/winlux-update-apt "$@"
+fi
 manifest_source=${WINLUX_UPDATE_MANIFEST:-https://github.com/$repository/releases/latest/download/winlux-update-manifest.txt}
 state_dir="$target_root/var/lib/winlux"
 config="$target_root/etc/winlux/update.conf"
@@ -15,6 +19,7 @@ transaction=0
 transaction_backup=
 updater_tools=
 recovered=0
+download_cache=
 
 # Progress follows actual phases/files, not a synthetic timer. The inhibitor
 # is independent of the GUI so automatic updates are protected as well.
@@ -182,6 +187,10 @@ restore_backup() {
 }
 cleanup() {
     status=$?; trap - EXIT HUP INT TERM
+    if test "$status" -ne 0 && test "$lock_owned" -eq 1 && test -f "$target_root/run/winlux/update-inhibit"; then
+        failure_phase=$(sed -n 's/^phase=//p' "$target_root/run/winlux/update-progress" 2>/dev/null || true)
+        printf '%s\n' "$failure_phase" >"$target_root/run/winlux/update-error-phase" || true
+    fi
     if test "$transaction" -eq 1; then
         progress restoring 0 0 0 'Restauration après interruption'
         echo "Installation interrompue : restauration des fichiers précédents." >&2
@@ -194,6 +203,7 @@ cleanup() {
         rm -f "$target_root/run/winlux/update-inhibit" "$state_dir/update.lock/pid" "$state_dir/update.lock/boot-id"
         tool rmdir "$state_dir/update.lock" || true
     fi
+    if test "$status" -eq 0 && test -n "$download_cache"; then rm -f "$download_cache"; fi
     if test -n "$work"; then rm -rf "$work"; fi
     exit "$status"
 }
@@ -245,7 +255,11 @@ download() {
 validate_manifest() {
     manifest=$1
     format=$(value format "$manifest") || fail "format absent du manifeste"
-    case "$format" in 1|2) ;; *) fail "format de manifeste inconnu" ;; esac
+    case "$format" in
+        1|2) ;;
+        3) fail "Cette version utilise APT natif : installez la nouvelle image Winlux. La migration automatique de l'ancien système n'est pas prise en charge." ;;
+        *) fail "format de manifeste inconnu" ;;
+    esac
     version=$(value version "$manifest") || fail "version absente"
     asset=$(value asset "$manifest") || fail "actif absent"
     checksum=$(value sha256 "$manifest") || fail "SHA-256 absent"
@@ -298,6 +312,10 @@ list_updates() {
     if up_to_date; then echo "Winlux est à jour."; fi
     echo "Portée : $scope"
     echo "Composants : $components"
+    shown_bytes=$(value download_bytes "$state_dir/available-manifest" || true)
+    case "$shown_bytes" in ''|*[!0-9]*) ;; *) echo "Taille à télécharger : $shown_bytes octets" ;; esac
+    shown_kib=$(value unpacked_kib "$state_dir/available-manifest" || true)
+    case "$shown_kib" in ''|*[!0-9]*) ;; *) echo "Taille décompressée : $shown_kib Kio (hors sauvegarde et marge)" ;; esac
     if test "$action" = reboot; then echo "Action après installation : redémarrage du système";
     else echo "Action après installation : redémarrage de la session graphique"; fi
     echo "Les données personnelles et la configuration sont conservées."
@@ -397,9 +415,25 @@ if test -n "${WINLUX_UPDATE_ASSET_DIR:-}"; then asset_source="file://$WINLUX_UPD
 else asset_source="https://github.com/$repository/releases/download/$version/$asset"; fi
 bundle="$work/bundle.tar.gz"
 progress downloading 0 0 0 "$asset"
-download "$asset_source" "$bundle"
+progress_helper="$target_root/usr/bin/winlux-update-progress"
+if test -x "$progress_helper" && command -v python3 >/dev/null 2>&1; then
+    download_cache="$state_dir/download-$checksum.part"
+    test ! -L "$download_cache" || fail 'cache de téléchargement symbolique refusé'
+    test ! -e "$download_cache" || test -f "$download_cache" || fail 'cache de téléchargement invalide'
+    bundle="$download_cache"
+    WINLUX_PROGRESS_FILE="$target_root/run/winlux/update-progress" "$progress_helper" download "$asset_source" "${download_bytes:-0}" "$bundle" || fail 'échec du téléchargement'
+else
+    download "$asset_source" "$bundle"
+fi
 progress verifying 10 0 0 'Vérification SHA-256 et inventaire'
-test "$(sha256sum "$bundle" | cut -d' ' -f1)" = "$checksum" || fail "échec de la vérification SHA-256"
+if test -x "$progress_helper" && command -v python3 >/dev/null 2>&1; then
+    actual_checksum=$(WINLUX_PROGRESS_FILE="$target_root/run/winlux/update-progress" "$progress_helper" hash "$bundle" 0) || fail 'échec du calcul SHA-256'
+else actual_checksum=$(sha256sum "$bundle" | cut -d' ' -f1); fi
+if test "$actual_checksum" != "$checksum"; then
+    if test -n "$download_cache"; then rm -f "$download_cache"; download_cache=; fi
+    fail "échec de la vérification SHA-256 : le paquet téléchargé est incorrect"
+fi
+progress verifying -1 0 0 'Contrôle du contenu de l’archive'
 tar -tzf "$bundle" >"$work/archive.list"
 tar -tvzf "$bundle" >"$work/archive.types"
 while IFS= read -r entry; do case "$entry" in -*|d*) ;; *) fail "liens ou fichiers spéciaux interdits dans l'archive" ;; esac; done <"$work/archive.types"
@@ -414,7 +448,9 @@ test -z "$(tool sort "$work/archive.names" | tool uniq -d)" || fail "entrées du
 mkdir -p "$work/extracted"
 archive_kib=$(tool awk '$3 ~ /^[0-9]+$/ {bytes += $3} END {printf "%.0f", bytes/1024+1}' "$work/archive.types")
 require_space "$state_dir" "$((archive_kib + 65536))"
+progress extracting -1 0 0 'Décompression du paquet sur disque'
 tar -xzf "$bundle" -C "$work/extracted"
+progress verifying -1 0 0 'Vérification des fichiers et de leur emplacement'
 if test "$format" = 2; then
     for key in format version scope action components; do
         test "$(value "$key" "$work/extracted/META")" = "$(value "$key" "$work/manifest.txt")" || fail "métadonnées du paquet incohérentes : $key"
@@ -484,14 +520,14 @@ fi
 tool sort -u "$work/targets" >"$work/targets.sorted"
 tool sort -u "$work/managed-files" >"$work/managed-files.sorted"
 # A payload must never replace a parent directory with a file or link.
+progress verifying -1 0 0 'Contrôle des chemins avant installation'
+tool awk 'NR == FNR { files[$0] = 1; next }
+    { path = $0; while (sub(/\/[^\/]*$/, "", path))
+        if (path in files) { print "un fichier masque un parent : " path > "/dev/stderr"; exit 1 } }' \
+    "$work/new-files" "$work/targets.sorted" || fail 'conflit de chemins dans le paquet'
 while IFS= read -r path; do
     safe_parent "$path"
     if test -d "$target_root/$path" && ! test -L "$target_root/$path"; then fail "répertoire à la place d'un fichier : $path"; fi
-    parent=${path%/*}
-    while test "$parent" != "$path"; do
-        if grep -Fxq "$parent" "$work/new-files"; then fail "un fichier masque un parent : $parent"; fi
-        path=$parent; parent=${path%/*}
-    done
 done <"$work/targets.sorted"
 # The manifest announces the maximum restart requirement. Decide the actual
 # action from changed files; replacing only the desktop does not reboot Linux.

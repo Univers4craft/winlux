@@ -4,6 +4,7 @@ import json
 import configparser
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -16,19 +17,33 @@ def apply(kind,value):
     except (OSError,ValueError): state={"theme":"dark","accent":"#8178b7"}
     if kind=="theme" and value not in ("dark","light"): raise ValueError("Thème inconnu")
     if kind=="accent" and not re.fullmatch(r"#[0-9a-fA-F]{6}",value): raise ValueError("Couleur invalide")
-    if kind=="wallpaper":
+    if kind in ("wallpaper", "start-icon") and not (kind == "start-icon" and value == "default"):
         path=Path(value).resolve(strict=True)
         if not path.is_file(): raise ValueError("Image invalide")
         from gi.repository import GdkPixbuf
         if not GdkPixbuf.Pixbuf.get_file_info(str(path)): raise ValueError("Format d’image non reconnu")
         value=str(path)
     if kind=="panel-size" and value not in ("32","40","48","56","64"): raise ValueError("Taille invalide")
-    if kind not in ("theme","accent","wallpaper","panel-size"): raise ValueError("Réglage inconnu")
+    if kind not in ("theme","accent","wallpaper","panel-size","start-icon"): raise ValueError("Réglage inconnu")
     def query(channel,prop,value,typ):
         args=["xfconf-query","-c",channel,"-p",prop]
         exists=subprocess.run(args,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
         subprocess.run(args+([] if exists else ["-n","-t",typ])+["-s",value],check=True)
-    if kind=="wallpaper":
+    if kind=="start-icon":
+        folder=HOME/".local/share/winlux/start"
+        folder.mkdir(parents=True,exist_ok=True)
+        icon="/usr/share/winlux/native/start.svg"
+        if value != "default":
+            image=Path(value)
+            if image.stat().st_size > 20 * 1024 * 1024: raise ValueError("Image trop volumineuse")
+            suffix=image.suffix.lower() if re.fullmatch(r"\.[a-z0-9]{1,8}", image.suffix.lower()) else ".img"
+            icon=str(folder/("icon"+suffix))
+            if image != Path(icon): shutil.copyfile(image,icon)
+        launcher=folder/"winlux-start.desktop"
+        launcher.write_text("[Desktop Entry]\nType=Application\nName=Démarrer\nExec=/usr/bin/winlux-start-menu\nIcon="+icon+"\nTerminal=false\n")
+        subprocess.run(["xfconf-query","-c","xfce4-panel","-p","/plugins/plugin-1/items",
+                        "-a","-t","string","-s",str(launcher)],check=True)
+    elif kind=="wallpaper":
         props=subprocess.check_output(["xfconf-query","-c","xfce4-desktop","-l"],text=True).splitlines()
         targets=[p for p in props if p.endswith("/last-image")]
         if not targets: raise ValueError("Le service de fond d’écran n’est pas initialisé")

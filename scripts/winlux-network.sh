@@ -7,7 +7,7 @@ run="$task_root/run/winlux"
 sys="$task_root/sys/class/net"
 hook=${WINLUX_DHCP_HOOK:-/usr/share/winlux/udhcpc.script}
 mkdir -p "$run"
-if test -z "$task_root" && command -v nmcli >/dev/null 2>&1 && nmcli -t -f RUNNING general 2>/dev/null | grep -qx running; then
+if test "${WINLUX_NETWORK_FORCE_DHCP:-0}" != 1 && test -z "$task_root" && command -v nmcli >/dev/null 2>&1 && nmcli -t -f RUNNING general 2>/dev/null | grep -qx running; then
     case "${1:-status}" in
         start) exec nmcli networking on ;;
         restart) nmcli networking off; exec nmcli networking on ;;
@@ -35,6 +35,13 @@ case "${1:-status}" in
             test -d "$entry" || continue
             interface=${entry##*/}
             case "$interface" in lo|*[!a-zA-Z0-9_.:-]*) continue ;; esac
+            if test -n "${WINLUX_NETWORK_INTERFACE:-}" && test "$interface" != "$WINLUX_NETWORK_INTERFACE"; then continue; fi
+            # The emergency DHCP client must not race Wi-Fi association or
+            # create routes on unrelated virtual interfaces.
+            if test "${WINLUX_NETWORK_FORCE_DHCP:-0}" = 1; then
+                test ! -d "$entry/wireless" || continue
+                test -e "$entry/device" || continue
+            fi
             # Ethernet, Wi-Fi and virtual NICs all expose this interface.  A
             # Wi-Fi radio still needs an association before DHCP can succeed.
             ipcmd link set "$interface" up || continue

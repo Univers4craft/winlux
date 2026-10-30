@@ -21,6 +21,10 @@ save() {
     mv "$tmp" "$file"
 }
 have() { command -v "$1" >/dev/null 2>&1; }
+trust_desktop() {
+    chmod 755 "$1" || return
+    if have gio; then gio set -t string "$1" metadata::trusted true 2>/dev/null || true; fi
+}
 message() { printf '%s\n' "$*" > "$run/action.txt.tmp.$$"; mv "$run/action.txt.tmp.$$" "$run/action.txt"; }
 status() {
     {
@@ -157,19 +161,19 @@ perform() {
         desktop-icon-recycle)
             mkdir -p "$HOME/Bureau"
             printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=Corbeille' 'Icon=user-trash' 'URL=trash:///' > "$HOME/Bureau/winlux-recycle-bin.desktop"
-            chmod 755 "$HOME/Bureau/winlux-recycle-bin.desktop" ;;
+            trust_desktop "$HOME/Bureau/winlux-recycle-bin.desktop" ;;
         desktop-icon-explorer)
             mkdir -p "$HOME/Bureau"
             cp /usr/share/applications/winlux-explorer.desktop "$HOME/Bureau/winlux-explorer.desktop"
-            chmod 755 "$HOME/Bureau/winlux-explorer.desktop" ;;
+            trust_desktop "$HOME/Bureau/winlux-explorer.desktop" ;;
         desktop-icon-computer)
             mkdir -p "$HOME/Bureau"
             printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=Ce PC' 'Icon=computer' 'URL=file:///' > "$HOME/Bureau/winlux-computer.desktop"
-            chmod 755 "$HOME/Bureau/winlux-computer.desktop" ;;
+            trust_desktop "$HOME/Bureau/winlux-computer.desktop" ;;
         desktop-icon-documents)
             mkdir -p "$HOME/Bureau"
             printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=Documents' 'Icon=folder-documents' "URL=file://$HOME/Documents" > "$HOME/Bureau/winlux-documents.desktop"
-            chmod 755 "$HOME/Bureau/winlux-documents.desktop" ;;
+            trust_desktop "$HOME/Bureau/winlux-documents.desktop" ;;
         theme-dark|theme-light) save "$config/preferences.conf" THEME "${action#theme-}" ;;
         display-follow|display-fixed) winlux-display "${action#display-}" ;;
         display-mode-*) mode=${action#display-mode-}; case "$mode" in *[!0-9x]*|'') return 1 ;; esac; winlux-display mode "$mode" ;;
@@ -199,6 +203,7 @@ perform() {
         poweroff|reboot)
             test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
+            /usr/bin/winlux-close-session || return
             sync || return
             "$action" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
@@ -206,12 +211,18 @@ perform() {
 }
 log="$run/action.log"
 case "$action" in update-*) log="$run/update.log" ;; esac
+case "$action" in update-check|update-apply|update-rollback) rm -f "$run/update-error-phase" ;; esac
 if perform > "$log" 2>&1; then
     message 'Operation terminee.'
     result=0
 else
     result=$?
-    message "Echec de l'operation. Le journal indique la cause."
+    if test "${action#update-}" != "$action"; then
+        detail=$(tail -n 1 "$log")
+        message "Echec de la mise à jour : ${detail:-aucun détail dans le journal}"
+    else
+        message "Echec de l'operation. Le journal indique la cause."
+    fi
 fi
 status
 exit "$result"

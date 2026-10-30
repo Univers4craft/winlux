@@ -95,9 +95,11 @@ class Tools(Gtk.Window):
         return True
 
     def quick(self):
-        self.label("Les boutons matériels nécessitent le service et le périphérique correspondants.")
+        self.label("Ethernet est prioritaire quand il est disponible. Le Wi-Fi peut rester configuré et prendre le relais lorsque le câble est débranché. Dans une VM, la connexion apparaît généralement comme Ethernet.")
         for title, args, binary in [
             ("Réseaux Wi-Fi disponibles", ["nmcli","-f","SSID,SIGNAL,SECURITY","device","wifi","list"],"nmcli"),
+            ("Actualiser la recherche Wi-Fi", ["nmcli","device","wifi","rescan"],"nmcli"),
+            ("État des cartes Ethernet et Wi-Fi", ["nmcli","device","status"],"nmcli"),
             ("Wi-Fi : activer", ["nmcli","radio","wifi","on"],"nmcli"),
             ("Wi-Fi : désactiver", ["nmcli","radio","wifi","off"],"nmcli"),
             ("Configurer les réseaux", ["nm-connection-editor"],"nm-connection-editor"),
@@ -112,8 +114,8 @@ class Tools(Gtk.Window):
             ("Alimentation", ["winlux-shell-app","settings","0"],"winlux-shell-app")]:
             self.button(title, lambda command=args: self.command(command), bool(shutil.which(binary)))
         ssid=self.entry("Nom du réseau Wi-Fi à rejoindre")
-        self.button("Se connecter au réseau",lambda:self.command(["nmcli","device","wifi","connect",ssid.get_text()]) if ssid.get_text() else None,bool(shutil.which("nmcli")))
-        self.label("Les identifiants sont demandés par l’agent réseau lorsque le réseau est protégé.")
+        self.button("Se connecter au réseau",lambda:self.command(["nmcli","--wait","90","device","wifi","connect",ssid.get_text()]) if ssid.get_text() else None,bool(shutil.which("nmcli")))
+        self.label("Pour un réseau protégé, l’agent réseau demande le mot de passe. Si le point d’accès et l’agent proposent WPS, appuyez sur le bouton WPS de la box pendant la connexion. Les réseaux cachés et réglages avancés sont accessibles dans Configurer les réseaux.")
 
     def notification_call(self, method, parameters=None):
         try:
@@ -206,9 +208,30 @@ class Tools(Gtk.Window):
         chooser = Gtk.FileChooserButton(title="Choisir un fond d’écran")
         chooser.connect("file-set", lambda widget: self.command(["winlux-personalize","wallpaper",widget.get_filename()]))
         self.content.pack_start(chooser, False, False, 0)
+        icon = Gtk.FileChooserButton(title="Choisir l’icône du menu Démarrer")
+        icon.connect("file-set", lambda widget: self.command(["winlux-personalize", "start-icon", widget.get_filename()]))
+        self.label("Icône du menu Démarrer")
+        self.content.pack_start(icon, False, False, 0)
+        self.button("Rétablir l’icône Démarrer par défaut", lambda: self.command(["winlux-personalize", "start-icon", "default"]))
         for size in (32,40,48,56,64): self.button(f"Barre des tâches : {size} px", lambda value=size: self.command(["winlux-personalize","panel-size",str(value)]))
 
     def apps(self):
+        if Path("/usr/share/winlux/apt-base").is_file():
+            self.label("Applications Linux natives (APT)")
+            native = self.entry("Nom du paquet Ubuntu, par exemple vlc")
+            self.button("Actualiser le catalogue APT", lambda:self.command(["apt-get","update"]))
+            def apt(action):
+                name = native.get_text().strip()
+                if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]+",name):
+                    message(self,"Entrez un nom de paquet valide.");return
+                dialog=Gtk.MessageDialog(transient_for=self,modal=True,buttons=Gtk.ButtonsType.OK_CANCEL,
+                    text=("Installer " if action=="install" else "Désinstaller ")+name+" ?")
+                answer=dialog.run();dialog.destroy()
+                if answer==Gtk.ResponseType.OK:
+                    self.command(["env","DEBIAN_FRONTEND=noninteractive","apt-get","-y",
+                                  "-o","Dpkg::Options::=--force-confold",action,name])
+            self.button("Installer le paquet Linux",lambda:apt("install"))
+            self.button("Désinstaller le paquet Linux",lambda:apt("remove"))
         self.label("Navigateurs intégrés et applications Flatpak installées pour votre profil.")
         self.button("Gérer les navigateurs", lambda: self.command(["winlux-shell-app","settings","11"]))
         identity = self.entry("Identifiant Flatpak, par exemple org.videolan.VLC")

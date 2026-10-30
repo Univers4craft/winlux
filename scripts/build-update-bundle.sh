@@ -31,6 +31,10 @@ if test "$scope" = system; then
         expected=$(sh "$root/scripts/source-fingerprint.sh")
         test -f "$stage/usr/share/winlux/source-fingerprint" && test "$(cat "$stage/usr/share/winlux/source-fingerprint")" = "$expected" || { echo "stage système périmé ; reconstruisez l'ISO avant le paquet système" >&2; exit 1; }
     fi
+    if test -f "$stage/usr/share/winlux/update-backend" && grep -qx apt "$stage/usr/share/winlux/update-backend"; then
+        python3 "$root/scripts/build-apt-update.py" "$stage" "$version" "$root/build"
+        exit 0
+    fi
     for path in bin usr lib lib64 opt/winlux init; do
         if test -e "$stage/$path"; then mkdir -p "$raw/$(dirname -- "$path")"; cp -a "$stage/$path" "$raw/$path"; fi
     done
@@ -58,6 +62,8 @@ fi
 mkdir -p "$raw/usr/bin" "$raw/usr/share/winlux"
 cp "$runtime" "$raw/usr/bin/winlux"
 cp "$root/scripts/winlux-update.sh" "$raw/usr/bin/winlux-update"
+cp "$root/scripts/winlux-update-progress.py" "$raw/usr/bin/winlux-update-progress"
+chmod 755 "$raw/usr/bin/winlux-update-progress"
 chmod 755 "$raw/usr/bin/winlux" "$raw/usr/bin/winlux-update"
 printf '%s\n' "$version" >"$raw/usr/share/winlux/version"
 printf '%s\n' "$scope" >"$raw/usr/share/winlux/update-scope"

@@ -9,8 +9,9 @@ fail() { echo "Winlux boot: $*" >&2; exec "$B" sh; }
 while read -r module; do "$B" insmod "/$module" 2>/dev/null || true; done </modules-to-load
 "$B" mdev -s
 root_device=
+recovery=0
 for argument in $("$B" cat /proc/cmdline); do
-    case "$argument" in root=*) root_device=${argument#root=} ;; esac
+    case "$argument" in root=*) root_device=${argument#root=} ;; winlux.recovery=1) recovery=1 ;; esac
 done
 if test -n "$root_device"; then
     for attempt in $("$B" seq 1 60); do
@@ -20,6 +21,25 @@ if test -n "$root_device"; then
         "$B" sleep 0.5
     done
     "$B" awk '$2 == "/newroot" {mounted=1} END {exit !mounted}' /proc/mounts || fail "persistent root not found: $root_device"
+    if test "$recovery" = 1; then
+        "$B" mkdir -p /newroot/dev /newroot/proc /newroot/sys /newroot/run
+        for directory in dev proc sys; do
+            "$B" mount --bind "/$directory" "/newroot/$directory" || fail "recovery mount failed: $directory"
+        done
+        "$B" mount -t tmpfs -o mode=0755 tmpfs /newroot/run || fail 'recovery runtime mount failed'
+        while :; do
+            echo
+            echo 'Winlux - secours : 1 restaurer la mise à jour précédente, 2 console, 3 redémarrer'
+            echo 'La restauration nécessite une sauvegarde valide. Une clé USB Winlux permet aussi de démarrer.'
+            printf '> '
+            read -r choice || choice=2
+            case "$choice" in
+                1) "$B" chroot /newroot /bin/busybox sh /usr/bin/winlux-update --rollback && echo 'Restauration terminée. Redémarrez avec 3.' || echo 'Restauration impossible. Utilisez la console ou une clé USB de secours.' ;;
+                2) echo 'Racine installée : /newroot. Tapez exit pour revenir au menu.'; "$B" sh ;;
+                3) "$B" sync; "$B" reboot -f ;;
+            esac
+        done
+    fi
 else
     found=0
     for attempt in $("$B" seq 1 60); do

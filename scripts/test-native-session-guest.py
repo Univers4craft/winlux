@@ -62,6 +62,8 @@ os.environ.update(DISPLAY=":99", WINLUX_NATIVE_SHELL="1", XDG_CURRENT_DESKTOP="X
                   XDG_CONFIG_DIRS="/etc/xdg", XDG_DATA_DIRS="/usr/local/share:/usr/share",
                   LANG="fr_FR.UTF-8" if Path("/usr/lib/locale/fr_FR.utf8").is_dir() else "C.UTF-8", WINLUX_UI_SCALE="1")
 Path("/var/lib/winlux").mkdir(parents=True, exist_ok=True)
+if Path("/usr/share/winlux/update-backend").exists():
+    print(run("python3", "/opt/winlux/scripts/test-apt-native-guest.py", timeout=300), flush=True)
 log = Path("/var/lib/winlux/native-programs.log").open("w")
 server = subprocess.Popen(["Xvfb", ":99", "-ac", "-screen", "0", "1920x1080x24", "-nolisten", "tcp"], stdout=log, stderr=log)
 time.sleep(1)

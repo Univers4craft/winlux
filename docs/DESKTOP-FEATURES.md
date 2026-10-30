@@ -1,5 +1,20 @@
 # Fonctions du bureau
 
+## Mises à jour
+
+Les paramètres natifs affichent une fenêtre en cas d'échec d'une recherche,
+installation ou restauration : elle indique l'étape connue, le code de retour
+et les dernières lignes du journal, sélectionnables pour les copier. Le journal
+complet de la session reste consultable dans `/run/winlux/update.log`.
+Les tailles annoncées et l'action prévue sont indiquées avant installation.
+L'espace nécessaire est contrôlé avant le téléchargement et la préparation.
+Le téléchargement et le SHA-256 affichent une progression mesurée ; les
+étapes dont la durée ne peut pas être mesurée restent indéterminées. Un paquet
+partiel est conservé pour reprendre un téléchargement interrompu lorsque le
+serveur le permet, puis vérifié intégralement avant toute installation.
+Les paquets runtime et système existants restent distincts ; les mises à jour
+différentielles fichier par fichier ne sont pas encore prises en charge.
+
 ## Recherche
 
 Démarrer recherche les applications XDG, les catégories de Paramètres et les
@@ -9,6 +24,12 @@ entrées et 30 résultats. Elle ne parcourt pas les fichiers système et ne
 recherche pas le contenu des documents. Entrée ouvre le premier résultat.
 
 ## Réglages rapides et matériel
+
+Les commandes Arrêter et Redémarrer demandent d'abord aux fenêtres de se
+fermer normalement. Si une fenêtre reste ouverte pendant 30 secondes,
+l'opération est annulée pour permettre d'enregistrer le travail. Une mise à
+jour en cours bloque aussi l'arrêt. Une fois les fenêtres fermées, les
+services reçoivent une demande d'arrêt avant la synchronisation des disques.
 
 Démarrer se ferme au clic extérieur ou sur Échap. Le clic sur le son ouvre
 un panneau compact avec volume réel, curseur 0–100 %, silence et accès aux
@@ -24,6 +45,15 @@ les périphériques de rétroéclairage réellement disponibles. L'absence d'un
 adaptateur, d'un pilote, d'un rétroéclairage ou d'un service est une erreur
 explicite, pas un changement d'état simulé. La présence de ces outils ne
 garantit pas la prise en charge de tous les chipsets physiques.
+
+La route Ethernet est préférée au Wi-Fi par défaut, sans désactiver la radio
+ni supprimer ses profils. Dans une VM, l'accès fourni par l'hôte apparaît
+généralement sous forme de carte Ethernet. Si aucune route n'existe et que
+NetworkManager ne gère pas une carte filaire connectée, un client DHCP de
+secours tente d'obtenir une adresse. Les réglages permettent de lister les
+réseaux, gérer la radio et ouvrir l'éditeur de connexions ; l'agent réseau
+demande le mot de passe. Le WPS dépend de l'agent, de l'adaptateur et du point
+d'accès ; il n'est pas garanti sur tous les matériels.
 
 ## Notifications
 
@@ -52,6 +82,23 @@ le profil. Les applications ouvertes peuvent nécessiter d'être rouvertes pour
 charger leur nouveau style. Les CSS utilisateur extérieurs au bloc généré
 Winlux sont conservés.
 
+Une image peut aussi remplacer l'icône Démarrer ; un bouton rétablit celle
+livrée avec Winlux. Les raccourcis créés volontairement depuis Démarrer et les
+icônes ajoutées par Paramètres sont marqués comme fiables lorsque le service
+de métadonnées du bureau le permet ; les autres fichiers ne sont pas approuvés
+automatiquement.
+
+## Secours au démarrage
+
+Une nouvelle installation depuis une image intégrant ce changement propose
+« Winlux secours » dans GRUB. L'initramfs monte l'installation et donne accès
+à une restauration de la sauvegarde de mise à jour ou à une console. La
+restauration dépend d'une sauvegarde valide et des outils présents sur le
+disque ; elle ne répare pas tous les problèmes de démarrage ou matériels.
+Conserver une clé USB d'installation Winlux permet de démarrer si le disque,
+GRUB, le noyau ou l'initramfs ne fonctionne plus. Cette entrée n'est pas
+ajoutée automatiquement aux installations déjà présentes.
+
 ## Fichiers
 
 « Fichiers et périphériques » complète l'Explorer PE existant avec Thunar :
@@ -69,6 +116,11 @@ une action explicite ; l'installation et la désinstallation utilisent des
 identifiants d'application validés et nécessitent Internet. Ce gestionnaire
 ne transforme pas la racine Winlux en distribution APT et n'exécute pas les
 scripts de maintenance de paquets DEB arbitraires.
+
+La future image avec [APT natif](NATIVE-APT.md) utilise une base Ubuntu
+configurée et un paquet Winlux protégé. Elle ajoute les applications APT
+dans ce même panneau ; ce changement ne convertit pas une installation
+existante et n’est pas inclus dans la release 0.2.6 déjà lancée.
 
 Les applications par défaut couvrent texte, PNG, JPEG, PDF, HTML et dossiers.
 Les choix de démarrage produisent des fichiers XDG dans `~/.config/autostart`,

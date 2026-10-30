@@ -243,6 +243,9 @@ unsafe fn updating() -> bool {
     // lock the interface forever after a killed updater.
     value(b"update_busy") == b"1"
 }
+unsafe fn already_up_to_date() -> bool {
+    UPDATES.get().split(|&c| c == b'\n').any(|line| line == b"Winlux est \xE0 jour.")
+}
 unsafe fn restart_required() -> bool {
     matches!(value(b"update_action"), b"reboot" | b"restart-session")
 }
@@ -1187,7 +1190,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 );
             }
             button(g, &c, 0, 0, b"Rechercher", 0);
-            button(g, &c, 0, 1, b"Tout installer", 1);
+            if !already_up_to_date() {
+                button(g, &c, 0, 1, b"Tout installer", 1);
+            }
             button(g, &c, 0, 2, b"Restaurer", 2);
             button(g, &c, 1, 0, if value(b"update_auto") == b"enabled" { b"D\xE9sactiver auto" } else { b"Activer auto" }, 3);
             button(g, &c, 1, 1, if SHOW_LOG { b"Masquer" } else { b"Journal" }, 4);
@@ -1479,6 +1484,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             Some(c"update-check")
         }
         (7, 1) => {
+            if already_up_to_date() {
+                return true;
+            }
             SHOW_LOG = true;
             SCROLL = 0;
             Some(if value(b"update_action") == b"reboot" {

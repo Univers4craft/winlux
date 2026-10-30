@@ -12,6 +12,8 @@ import sys
 import tempfile
 
 binary = "/usr/libexec/xscreensaver/xscreensaver-gfx.real"
+if Path("/usr/libexec/xscreensaver/xscreensaver-gfx.distribution").is_file():
+    binary = "/usr/libexec/xscreensaver/xscreensaver-gfx.distribution"
 if os.geteuid() == 0:
     account = pwd.getpwnam("winlux-saver")
     home = Path(account.pw_dir)

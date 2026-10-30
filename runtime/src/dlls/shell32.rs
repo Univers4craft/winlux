@@ -482,7 +482,11 @@ mod tests {
         let edge = bin.join("microsoft-edge-stable");
         std::fs::write(&edge, b"#!/bin/sh\n").unwrap();
         let old_path = std::env::var_os("PATH");
-        std::env::set_var("PATH", &bin);
+        let mut paths = vec![bin.clone()];
+        if let Some(ref old) = old_path {
+            paths.extend(std::env::split_paths(old));
+        }
+        std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
         let launcher = bin.join("winlux-open");
         std::fs::write(&launcher, b"#!/bin/sh\n").unwrap();
         assert_eq!(

@@ -153,7 +153,7 @@ if test "$split_root" = 1; then
 fi
 cat >"$work/target/boot/grub/grub.cfg" <<EOF
 set default=0
-set timeout=3
+set timeout=8
 serial --unit=0 --speed=115200
 terminal_input console serial
 terminal_output console serial
@@ -168,6 +168,15 @@ menuentry "Winlux diagnostic installé" --hotkey=d {
     $initrd_line
 }
 EOF
+if test "$split_root" = 1; then
+    cat >>"$work/target/boot/grub/grub.cfg" <<EOF
+menuentry "Winlux secours (restauration ou console)" --hotkey=s {
+    search --no-floppy --fs-uuid $fsuuid --set=root
+    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1
+    initrd /boot/winlux-initramfs.cpio.gz
+}
+EOF
+fi
 grub-script-check "$work/target/boot/grub/grub.cfg"
 grub-install --target=i386-pc --boot-directory="$work/target/boot" --recheck "$device"
 # Les noms EFI sont ASCII ; éviter de dépendre du module NLS iso8859-1 de l'hôte.

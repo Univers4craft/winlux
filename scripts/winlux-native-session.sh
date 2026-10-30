@@ -53,8 +53,14 @@ if test -x /usr/libexec/udisks2/udisksd; then
     wait_bus_name system org.freedesktop.UDisks2 "$!" /run/winlux/udisks.log
 fi
 if test -x /usr/sbin/NetworkManager; then
+    mkdir -p /etc/netplan /etc/NetworkManager/system-connections
+    if test -x /usr/sbin/wpa_supplicant; then
+        /usr/sbin/wpa_supplicant -u -s >/run/winlux/wpa-supplicant.log 2>&1 &
+    fi
     /usr/sbin/NetworkManager --no-daemon >/run/winlux/network-manager.log 2>&1 &
-    echo $! >/run/winlux/network-manager.pid
+    network_pid=$!
+    echo "$network_pid" >/run/winlux/network-manager.pid
+    /usr/bin/winlux-network-watch "$network_pid" >/run/winlux/network-fallback.log 2>&1 &
 fi
 # Start the desktop file service after its hardware dependencies are ready.
 # An early GVfs activation could otherwise time out on software-emulated CPUs.
@@ -68,6 +74,7 @@ wait_bus_name session org.xfce.FileManager "$!" /run/winlux/file-manager.log
         cat /run/winlux/file-manager.log >&2
         exit 1
     }
+/usr/bin/winlux-trust-shortcuts
 for bluetooth in /usr/lib/bluetooth/bluetoothd /usr/libexec/bluetooth/bluetoothd; do
     if test -x "$bluetooth"; then "$bluetooth" -n >/run/winlux/bluetooth.log 2>&1 & break; fi
 done
