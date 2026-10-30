@@ -13,8 +13,8 @@ apt_base=${WINLUX_APT_BASE:-"$root/build/apt-base/root.tar"}
 if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
     test -s "$apt_base" || { echo "Base APT native absente : préparez-la avec scripts/prepare-apt-base.py (--kernel et --kernel-release)." >&2; exit 1; }
     native_codename=$(. /etc/os-release; printf '%s\n' "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")
-    test "$native_codename" = noble && test "$(dpkg --print-architecture)" = amd64 || {
-        echo 'La construction APT native nécessite un hôte Ubuntu Noble amd64 (ou dérivé compatible).' >&2
+    test "$native_codename" = resolute && test "$(dpkg --print-architecture)" = amd64 || {
+        echo 'La construction APT native nécessite un hôte Ubuntu Resolute amd64 (ou dérivé compatible).' >&2
         exit 1
     }
 fi
@@ -454,6 +454,8 @@ echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
 # explicitly so the graphical power button really shuts down the guest.
+# Démarrer les services systemd activés par les paquets APT.
+if test -x /usr/bin/systemctl; then /usr/bin/systemctl --boot-start; fi
 if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
 if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     result=0
