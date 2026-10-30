@@ -8,9 +8,24 @@ pub const CUSTOM_TITLE: bool = false;
 
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let r = f.client;
-    fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, rgb(0x1E, 0x1E, 0x1E));
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        r.top,
+        r.right,
+        r.bottom,
+        rgb(0x1E, 0x1E, 0x1E),
+    );
 
-    text(g.hdc, g.f.title, rgb(0xCC, 0xCC, 0xCC), r.left + 16, r.top + 16, b"Informations systeme");
+    text(
+        g.hdc,
+        g.f.title,
+        rgb(0xCC, 0xCC, 0xCC),
+        r.left + 16,
+        r.top + 16,
+        b"Informations systeme",
+    );
 
     let y = r.top + 50;
     let labels: [&[u8]; 6] = [
@@ -32,8 +47,22 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     ];
 
     for i in 0..6 {
-        text(g.hdc, g.f.body, rgb(0x88, 0x88, 0x88), r.left + 16, y + (i as i32) * 35, labels[i]);
-        text(g.hdc, g.f.body, rgb(0xCC, 0xCC, 0xCC), r.left + 16, y + (i as i32) * 35 + 18, values[i]);
+        text(
+            g.hdc,
+            g.f.body,
+            rgb(0x88, 0x88, 0x88),
+            r.left + 16,
+            y + (i as i32) * 35,
+            labels[i],
+        );
+        text(
+            g.hdc,
+            g.f.body,
+            rgb(0xCC, 0xCC, 0xCC),
+            r.left + 16,
+            y + (i as i32) * 35 + 18,
+            values[i],
+        );
     }
 }
 

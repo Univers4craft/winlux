@@ -1033,7 +1033,15 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         use winlux_testexe::*;
         let mut wide = [0u16; PATH_LEN + NAME_LEN + 2];
         wstr(&mut wide, &path[..n]);
-        let h = CreateFileW(wide.as_ptr(), 0x80000000, 1, core::ptr::null_mut(), 3, 0, core::ptr::null_mut());
+        let h = CreateFileW(
+            wide.as_ptr(),
+            0x80000000,
+            1,
+            core::ptr::null_mut(),
+            3,
+            0,
+            core::ptr::null_mut(),
+        );
         if !h.is_null() && (h as isize) != -1 {
             let mut buf = [0u8; 4096];
             let mut got = 0u32;

@@ -1939,8 +1939,24 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
         Glyph::Tools => {
             let c = pal().text;
             fill(hdc, b, x + s / 6, y + s / 4, x + s / 3, y + s * 3 / 4, c);
-            fill(hdc, b, x + s * 2 / 5, y + s / 4, x + s * 3 / 5, y + s * 3 / 4, c);
-            fill(hdc, b, x + s * 2 / 3, y + s / 4, x + s * 5 / 6, y + s * 3 / 4, c);
+            fill(
+                hdc,
+                b,
+                x + s * 2 / 5,
+                y + s / 4,
+                x + s * 3 / 5,
+                y + s * 3 / 4,
+                c,
+            );
+            fill(
+                hdc,
+                b,
+                x + s * 2 / 3,
+                y + s / 4,
+                x + s * 5 / 6,
+                y + s * 3 / 4,
+                c,
+            );
         }
     }
 }

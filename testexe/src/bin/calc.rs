@@ -69,7 +69,14 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             let mut brushes = gfx::Brushes::new();
             SetBkMode(hdc, 1);
             let frame = wm::Frame::new(hwnd);
-            calc::draw(&mut wm::Gfx { hdc, b: &mut brushes, f: &fonts }, &frame);
+            calc::draw(
+                &mut wm::Gfx {
+                    hdc,
+                    b: &mut brushes,
+                    f: &fonts,
+                },
+                &frame,
+            );
             brushes.release();
             fonts.release();
             EndPaint(hwnd, &ps);

@@ -16,10 +16,33 @@ static mut EDITING: bool = false;
 
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let r = f.client;
-    fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, rgb(0x1E, 0x1E, 0x1E));
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        r.top,
+        r.right,
+        r.bottom,
+        rgb(0x1E, 0x1E, 0x1E),
+    );
 
-    fill(g.hdc, g.b, r.left, r.top, r.right, r.top + 32, rgb(0x2D, 0x2D, 0x30));
-    text(g.hdc, g.f.body, rgb(0xCC, 0xCC, 0xCC), r.left + 8, r.top + 8, b"Post-it");
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        r.top,
+        r.right,
+        r.top + 32,
+        rgb(0x2D, 0x2D, 0x30),
+    );
+    text(
+        g.hdc,
+        g.f.body,
+        rgb(0xCC, 0xCC, 0xCC),
+        r.left + 8,
+        r.top + 8,
+        b"Post-it",
+    );
 
     let selector_y = r.top + 40;
     let note_w = 40;
@@ -32,7 +55,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         };
         fill(g.hdc, g.b, nx, selector_y, nx + note_w, selector_y + 30, bg);
         let label: &[u8] = if NOTE_LEN[i] > 0 { b"*" } else { b"+" };
-        text(g.hdc, g.f.small, rgb(0x00, 0x00, 0x00), nx + 14, selector_y + 8, label);
+        text(
+            g.hdc,
+            g.f.small,
+            rgb(0x00, 0x00, 0x00),
+            nx + 14,
+            selector_y + 8,
+            label,
+        );
     }
 
     let text_y = selector_y + 40;
@@ -49,16 +79,53 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let note_data = &NOTES[CURRENT_NOTE][..NOTE_LEN[CURRENT_NOTE]];
     let mut y_pos = text_y + 8;
     for line in note_data.split(|&b| b == b'\n') {
-        text(g.hdc, g.f.body, rgb(0x00, 0x00, 0x00), r.left + 24, y_pos, line);
+        text(
+            g.hdc,
+            g.f.body,
+            rgb(0x00, 0x00, 0x00),
+            r.left + 24,
+            y_pos,
+            line,
+        );
         y_pos += 16;
     }
 
     let btn_y = r.bottom - 50;
-    fill(g.hdc, g.b, r.left + 16, btn_y, r.left + 116, btn_y + 30, rgb(0x0A, 0x84, 0xFF));
-    text(g.hdc, g.f.body, rgb(0xFF, 0xFF, 0xFF), r.left + 24, btn_y + 8, b"Nouvelle");
+    fill(
+        g.hdc,
+        g.b,
+        r.left + 16,
+        btn_y,
+        r.left + 116,
+        btn_y + 30,
+        rgb(0x0A, 0x84, 0xFF),
+    );
+    text(
+        g.hdc,
+        g.f.body,
+        rgb(0xFF, 0xFF, 0xFF),
+        r.left + 24,
+        btn_y + 8,
+        b"Nouvelle",
+    );
 
-    fill(g.hdc, g.b, r.left + 124, btn_y, r.left + 224, btn_y + 30, rgb(0x5A, 0x5A, 0x5C));
-    text(g.hdc, g.f.body, rgb(0xFF, 0xFF, 0xFF), r.left + 132, btn_y + 8, b"Supprimer");
+    fill(
+        g.hdc,
+        g.b,
+        r.left + 124,
+        btn_y,
+        r.left + 224,
+        btn_y + 30,
+        rgb(0x5A, 0x5A, 0x5C),
+    );
+    text(
+        g.hdc,
+        g.f.body,
+        rgb(0xFF, 0xFF, 0xFF),
+        r.left + 132,
+        btn_y + 8,
+        b"Supprimer",
+    );
 }
 
 pub unsafe fn mouse(_ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {

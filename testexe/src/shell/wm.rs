@@ -865,15 +865,65 @@ pub unsafe fn draw(g: &mut Gfx) {
         let sh = 110;
         let cx = (WORK.left + WORK.right - sw) / 2;
         let cy = WORK.top + 60;
-        round_rect(g.hdc, g.b, cx, cy, cx + sw, cy + sh, 8, mix(p.border, p.accent, 2, 10));
-        round_rect(g.hdc, g.b, cx + 1, cy + 1, cx + sw - 1, cy + sh - 1, 7, p.surface);
+        round_rect(
+            g.hdc,
+            g.b,
+            cx,
+            cy,
+            cx + sw,
+            cy + sh,
+            8,
+            mix(p.border, p.accent, 2, 10),
+        );
+        round_rect(
+            g.hdc,
+            g.b,
+            cx + 1,
+            cy + 1,
+            cx + sw - 1,
+            cy + sh - 1,
+            7,
+            p.surface,
+        );
         text(g.hdc, g.f.caption, p.text, cx + 16, cy + 12, b"Ex\xE9cuter");
         text(g.hdc, g.f.small, p.text3, cx + 16, cy + 42, b"Ouvrir :");
-        fill(g.hdc, g.b, cx + 16, cy + 64, cx + sw - 80, cy + 88, p.window);
-        fill(g.hdc, g.b, cx + 16, cy + 64, cx + sw - 80, cy + 65, p.border);
-        fill(g.hdc, g.b, cx + 16, cy + 87, cx + sw - 80, cy + 88, p.border);
+        fill(
+            g.hdc,
+            g.b,
+            cx + 16,
+            cy + 64,
+            cx + sw - 80,
+            cy + 88,
+            p.window,
+        );
+        fill(
+            g.hdc,
+            g.b,
+            cx + 16,
+            cy + 64,
+            cx + sw - 80,
+            cy + 65,
+            p.border,
+        );
+        fill(
+            g.hdc,
+            g.b,
+            cx + 16,
+            cy + 87,
+            cx + sw - 80,
+            cy + 88,
+            p.border,
+        );
         fill(g.hdc, g.b, cx + 16, cy + 65, cx + 17, cy + 87, p.border);
-        fill(g.hdc, g.b, cx + sw - 81, cy + 65, cx + sw - 80, cy + 87, p.border);
+        fill(
+            g.hdc,
+            g.b,
+            cx + sw - 81,
+            cy + 65,
+            cx + sw - 80,
+            cy + 87,
+            p.border,
+        );
         if crate::wm::RUN_LEN > 0 {
             let mut buf = [0u8; 260];
             let mut j = 0;
@@ -884,8 +934,24 @@ pub unsafe fn draw(g: &mut Gfx) {
             buf[j] = 0;
             text(g.hdc, g.f.body, p.text, cx + 22, cy + 70, &buf);
         }
-        round_rect(g.hdc, g.b, cx + sw - 70, cy + 64, cx + sw - 16, cy + 88, 4, p.accent);
-        text(g.hdc, g.f.small, rgb(0xFF, 0xFF, 0xFF), cx + sw - 58, cy + 70, b"OK");
+        round_rect(
+            g.hdc,
+            g.b,
+            cx + sw - 70,
+            cy + 64,
+            cx + sw - 16,
+            cy + 88,
+            4,
+            p.accent,
+        );
+        text(
+            g.hdc,
+            g.f.small,
+            rgb(0xFF, 0xFF, 0xFF),
+            cx + sw - 58,
+            cy + 70,
+            b"OK",
+        );
     }
 }
 
@@ -1231,7 +1297,14 @@ pub unsafe fn on_key(vk: u32, ch: u16) -> bool {
             }
             cmd[i] = 0;
             static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-            ShellExecuteW(core::ptr::null_mut(), OPEN.as_ptr(), cmd.as_ptr(), core::ptr::null(), core::ptr::null(), 1);
+            ShellExecuteW(
+                core::ptr::null_mut(),
+                OPEN.as_ptr(),
+                cmd.as_ptr(),
+                core::ptr::null(),
+                core::ptr::null(),
+                1,
+            );
             return true;
         }
         if ch >= 0x20 && ch < 0x7F && crate::wm::RUN_LEN < 255 {

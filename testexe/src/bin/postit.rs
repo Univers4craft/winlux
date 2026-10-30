@@ -4,10 +4,10 @@
 
 use winlux_testexe::*;
 
-#[path = "../shell/postit.rs"]
-mod postit;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/postit.rs"]
+mod postit;
 #[path = "../shell/wm_standalone.rs"]
 mod wm;
 
@@ -69,7 +69,14 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             let mut brushes = gfx::Brushes::new();
             SetBkMode(hdc, 1);
             let frame = wm::Frame::new(hwnd);
-            postit::draw(&mut wm::Gfx { hdc, b: &mut brushes, f: &fonts }, &frame);
+            postit::draw(
+                &mut wm::Gfx {
+                    hdc,
+                    b: &mut brushes,
+                    f: &fonts,
+                },
+                &frame,
+            );
             brushes.release();
             fonts.release();
             EndPaint(hwnd, &ps);

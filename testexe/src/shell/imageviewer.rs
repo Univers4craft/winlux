@@ -17,56 +17,222 @@ static mut FILE_COUNT: usize = 0;
 
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let r = f.client;
-    fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, rgb(0x1E, 0x1E, 0x1E));
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        r.top,
+        r.right,
+        r.bottom,
+        rgb(0x1E, 0x1E, 0x1E),
+    );
 
     if !IMAGE_LOADED {
-        text_centered(g.hdc, g.f.title, 13, rgb(0xCC, 0xCC, 0xCC), (r.left + r.right) / 2, r.top + 40, b"Visionneuse d'images");
-        text_centered(g.hdc, g.f.body, 11, rgb(0x88, 0x88, 0x88), (r.left + r.right) / 2, r.top + 80, b"Glissez une image ici");
-        text_centered(g.hdc, g.f.body, 11, rgb(0x88, 0x88, 0x88), (r.left + r.right) / 2, r.top + 100, b"Formats : PNG, JPG, BMP, WEBP");
+        text_centered(
+            g.hdc,
+            g.f.title,
+            13,
+            rgb(0xCC, 0xCC, 0xCC),
+            (r.left + r.right) / 2,
+            r.top + 40,
+            b"Visionneuse d'images",
+        );
+        text_centered(
+            g.hdc,
+            g.f.body,
+            11,
+            rgb(0x88, 0x88, 0x88),
+            (r.left + r.right) / 2,
+            r.top + 80,
+            b"Glissez une image ici",
+        );
+        text_centered(
+            g.hdc,
+            g.f.body,
+            11,
+            rgb(0x88, 0x88, 0x88),
+            (r.left + r.right) / 2,
+            r.top + 100,
+            b"Formats : PNG, JPG, BMP, WEBP",
+        );
         return;
     }
 
     let img_rect = get_image_rect(r);
-    fill(g.hdc, g.b, img_rect.left, img_rect.top, img_rect.right, img_rect.bottom, rgb(0x30, 0x30, 0x30));
-    text_centered(g.hdc, g.f.body, 11, rgb(0x88, 0x88, 0x88), (img_rect.left + img_rect.right) / 2, (img_rect.top + img_rect.bottom) / 2, &IMAGE_PATH[..IMAGE_PATH_LEN]);
+    fill(
+        g.hdc,
+        g.b,
+        img_rect.left,
+        img_rect.top,
+        img_rect.right,
+        img_rect.bottom,
+        rgb(0x30, 0x30, 0x30),
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        rgb(0x88, 0x88, 0x88),
+        (img_rect.left + img_rect.right) / 2,
+        (img_rect.top + img_rect.bottom) / 2,
+        &IMAGE_PATH[..IMAGE_PATH_LEN],
+    );
 
     let toolbar_y = r.bottom - 60;
-    fill(g.hdc, g.b, r.left, toolbar_y, r.right, r.bottom, rgb(0x2D, 0x2D, 0x30));
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        toolbar_y,
+        r.right,
+        r.bottom,
+        rgb(0x2D, 0x2D, 0x30),
+    );
 
     let btn_w = 80;
     let btn_x = r.left + 16;
 
     if CURRENT_INDEX > 0 {
-        fill(g.hdc, g.b, btn_x, toolbar_y + 10, btn_x + btn_w, toolbar_y + 50, rgb(0x0A, 0x84, 0xFF));
-        text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), btn_x + btn_w / 2, toolbar_y + 25, b"Prec.");
+        fill(
+            g.hdc,
+            g.b,
+            btn_x,
+            toolbar_y + 10,
+            btn_x + btn_w,
+            toolbar_y + 50,
+            rgb(0x0A, 0x84, 0xFF),
+        );
+        text_centered(
+            g.hdc,
+            g.f.body,
+            11,
+            rgb(0xFF, 0xFF, 0xFF),
+            btn_x + btn_w / 2,
+            toolbar_y + 25,
+            b"Prec.",
+        );
     }
 
     if FILE_COUNT > 0 && CURRENT_INDEX < FILE_COUNT - 1 {
-        fill(g.hdc, g.b, btn_x + btn_w + 8, toolbar_y + 10, btn_x + btn_w * 2 + 8, toolbar_y + 50, rgb(0x0A, 0x84, 0xFF));
-        text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), btn_x + btn_w + 8 + btn_w / 2, toolbar_y + 25, b"Suivant");
+        fill(
+            g.hdc,
+            g.b,
+            btn_x + btn_w + 8,
+            toolbar_y + 10,
+            btn_x + btn_w * 2 + 8,
+            toolbar_y + 50,
+            rgb(0x0A, 0x84, 0xFF),
+        );
+        text_centered(
+            g.hdc,
+            g.f.body,
+            11,
+            rgb(0xFF, 0xFF, 0xFF),
+            btn_x + btn_w + 8 + btn_w / 2,
+            toolbar_y + 25,
+            b"Suivant",
+        );
     }
 
     let zoom_x = r.right - 16 - btn_w * 3 - 16;
-    fill(g.hdc, g.b, zoom_x, toolbar_y + 10, zoom_x + btn_w, toolbar_y + 50, rgb(0x3C, 0x3C, 0x3C));
-    text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), zoom_x + btn_w / 2, toolbar_y + 25, b"-");
+    fill(
+        g.hdc,
+        g.b,
+        zoom_x,
+        toolbar_y + 10,
+        zoom_x + btn_w,
+        toolbar_y + 50,
+        rgb(0x3C, 0x3C, 0x3C),
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        rgb(0xFF, 0xFF, 0xFF),
+        zoom_x + btn_w / 2,
+        toolbar_y + 25,
+        b"-",
+    );
 
-    fill(g.hdc, g.b, zoom_x + btn_w + 8, toolbar_y + 10, zoom_x + btn_w * 2 + 8, toolbar_y + 50, rgb(0x3C, 0x3C, 0x3C));
-    text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), zoom_x + btn_w + 8 + btn_w / 2, toolbar_y + 25, b"+");
+    fill(
+        g.hdc,
+        g.b,
+        zoom_x + btn_w + 8,
+        toolbar_y + 10,
+        zoom_x + btn_w * 2 + 8,
+        toolbar_y + 50,
+        rgb(0x3C, 0x3C, 0x3C),
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        rgb(0xFF, 0xFF, 0xFF),
+        zoom_x + btn_w + 8 + btn_w / 2,
+        toolbar_y + 25,
+        b"+",
+    );
 
-    fill(g.hdc, g.b, zoom_x + btn_w * 2 + 16, toolbar_y + 10, zoom_x + btn_w * 3 + 16, toolbar_y + 50, rgb(0x3C, 0x3C, 0x3C));
-    text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), zoom_x + btn_w * 2 + 16 + btn_w / 2, toolbar_y + 25, b"100%");
+    fill(
+        g.hdc,
+        g.b,
+        zoom_x + btn_w * 2 + 16,
+        toolbar_y + 10,
+        zoom_x + btn_w * 3 + 16,
+        toolbar_y + 50,
+        rgb(0x3C, 0x3C, 0x3C),
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        rgb(0xFF, 0xFF, 0xFF),
+        zoom_x + btn_w * 2 + 16 + btn_w / 2,
+        toolbar_y + 25,
+        b"100%",
+    );
 
     let rot_x = zoom_x - btn_w - 8;
-    fill(g.hdc, g.b, rot_x, toolbar_y + 10, rot_x + btn_w, toolbar_y + 50, rgb(0x3C, 0x3C, 0x3C));
-    text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), rot_x + btn_w / 2, toolbar_y + 25, b"Rot");
+    fill(
+        g.hdc,
+        g.b,
+        rot_x,
+        toolbar_y + 10,
+        rot_x + btn_w,
+        toolbar_y + 50,
+        rgb(0x3C, 0x3C, 0x3C),
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        rgb(0xFF, 0xFF, 0xFF),
+        rot_x + btn_w / 2,
+        toolbar_y + 25,
+        b"Rot",
+    );
 
     let zoom_label = format_zoom();
-    text(g.hdc, g.f.small, rgb(0xCC, 0xCC, 0xCC), r.left + 16, r.top + 10, &zoom_label);
+    text(
+        g.hdc,
+        g.f.small,
+        rgb(0xCC, 0xCC, 0xCC),
+        r.left + 16,
+        r.top + 10,
+        &zoom_label,
+    );
 
     if FILE_COUNT > 0 {
         let info = format_index();
         let iw = text_width(&info, 11);
-        text(g.hdc, g.f.small, rgb(0xCC, 0xCC, 0xCC), r.right - 16 - iw, r.top + 10, &info);
+        text(
+            g.hdc,
+            g.f.small,
+            rgb(0xCC, 0xCC, 0xCC),
+            r.right - 16 - iw,
+            r.top + 10,
+            &info,
+        );
     }
 }
 
@@ -149,7 +315,11 @@ pub unsafe fn mouse(_ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             return true;
         }
 
-        if x >= btn_x + btn_w + 8 && x < btn_x + btn_w * 2 + 8 && FILE_COUNT > 0 && CURRENT_INDEX < FILE_COUNT - 1 {
+        if x >= btn_x + btn_w + 8
+            && x < btn_x + btn_w * 2 + 8
+            && FILE_COUNT > 0
+            && CURRENT_INDEX < FILE_COUNT - 1
+        {
             CURRENT_INDEX += 1;
             load_image(CURRENT_INDEX);
             return true;

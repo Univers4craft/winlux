@@ -15,12 +15,44 @@ static mut ZOOM: f32 = 1.0;
 
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let r = f.client;
-    fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, rgb(0x1E, 0x1E, 0x1E));
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        r.top,
+        r.right,
+        r.bottom,
+        rgb(0x1E, 0x1E, 0x1E),
+    );
 
     if !PDF_LOADED {
-        text_centered(g.hdc, g.f.title, 13, rgb(0xCC, 0xCC, 0xCC), (r.left + r.right) / 2, r.top + 40, b"Lecteur PDF");
-        text_centered(g.hdc, g.f.body, 11, rgb(0x88, 0x88, 0x88), (r.left + r.right) / 2, r.top + 80, b"Glissez un fichier PDF ici");
-        text_centered(g.hdc, g.f.body, 11, rgb(0x88, 0x88, 0x88), (r.left + r.right) / 2, r.top + 100, b"Support basique");
+        text_centered(
+            g.hdc,
+            g.f.title,
+            13,
+            rgb(0xCC, 0xCC, 0xCC),
+            (r.left + r.right) / 2,
+            r.top + 40,
+            b"Lecteur PDF",
+        );
+        text_centered(
+            g.hdc,
+            g.f.body,
+            11,
+            rgb(0x88, 0x88, 0x88),
+            (r.left + r.right) / 2,
+            r.top + 80,
+            b"Glissez un fichier PDF ici",
+        );
+        text_centered(
+            g.hdc,
+            g.f.body,
+            11,
+            rgb(0x88, 0x88, 0x88),
+            (r.left + r.right) / 2,
+            r.top + 100,
+            b"Support basique",
+        );
         return;
     }
 
@@ -30,39 +62,153 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         right: r.right - 16,
         bottom: r.bottom - 60,
     };
-    fill(g.hdc, g.b, pdf_rect.left, pdf_rect.top, pdf_rect.right, pdf_rect.bottom, rgb(0xFF, 0xFF, 0xFF));
+    fill(
+        g.hdc,
+        g.b,
+        pdf_rect.left,
+        pdf_rect.top,
+        pdf_rect.right,
+        pdf_rect.bottom,
+        rgb(0xFF, 0xFF, 0xFF),
+    );
 
     let page_info = format_page();
-    let pi_len = page_info.iter().position(|&b| b == 0).unwrap_or(page_info.len());
-    text_centered(g.hdc, g.f.body, 11, rgb(0x00, 0x00, 0x00), (pdf_rect.left + pdf_rect.right) / 2, pdf_rect.top + 20, &page_info[..pi_len]);
+    let pi_len = page_info
+        .iter()
+        .position(|&b| b == 0)
+        .unwrap_or(page_info.len());
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        rgb(0x00, 0x00, 0x00),
+        (pdf_rect.left + pdf_rect.right) / 2,
+        pdf_rect.top + 20,
+        &page_info[..pi_len],
+    );
 
-    text(g.hdc, g.f.small, rgb(0x00, 0x00, 0x00), pdf_rect.left + 8, pdf_rect.bottom - 20, &PDF_PATH[..PDF_PATH_LEN]);
+    text(
+        g.hdc,
+        g.f.small,
+        rgb(0x00, 0x00, 0x00),
+        pdf_rect.left + 8,
+        pdf_rect.bottom - 20,
+        &PDF_PATH[..PDF_PATH_LEN],
+    );
 
     let toolbar_y = r.bottom - 50;
-    fill(g.hdc, g.b, r.left, toolbar_y, r.right, r.bottom, rgb(0x2D, 0x2D, 0x30));
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        toolbar_y,
+        r.right,
+        r.bottom,
+        rgb(0x2D, 0x2D, 0x30),
+    );
 
     let btn_w = 80;
     let btn_x = r.left + 16;
 
     if CURRENT_PAGE > 1 {
-        fill(g.hdc, g.b, btn_x, toolbar_y + 10, btn_x + btn_w, toolbar_y + 40, rgb(0x0A, 0x84, 0xFF));
-        text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), btn_x + btn_w / 2, toolbar_y + 22, b"Prec.");
+        fill(
+            g.hdc,
+            g.b,
+            btn_x,
+            toolbar_y + 10,
+            btn_x + btn_w,
+            toolbar_y + 40,
+            rgb(0x0A, 0x84, 0xFF),
+        );
+        text_centered(
+            g.hdc,
+            g.f.body,
+            11,
+            rgb(0xFF, 0xFF, 0xFF),
+            btn_x + btn_w / 2,
+            toolbar_y + 22,
+            b"Prec.",
+        );
     }
 
     if CURRENT_PAGE < TOTAL_PAGES {
-        fill(g.hdc, g.b, btn_x + btn_w + 8, toolbar_y + 10, btn_x + btn_w * 2 + 8, toolbar_y + 40, rgb(0x0A, 0x84, 0xFF));
-        text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), btn_x + btn_w + 8 + btn_w / 2, toolbar_y + 22, b"Suivant");
+        fill(
+            g.hdc,
+            g.b,
+            btn_x + btn_w + 8,
+            toolbar_y + 10,
+            btn_x + btn_w * 2 + 8,
+            toolbar_y + 40,
+            rgb(0x0A, 0x84, 0xFF),
+        );
+        text_centered(
+            g.hdc,
+            g.f.body,
+            11,
+            rgb(0xFF, 0xFF, 0xFF),
+            btn_x + btn_w + 8 + btn_w / 2,
+            toolbar_y + 22,
+            b"Suivant",
+        );
     }
 
     let zoom_x = r.right - 16 - btn_w * 3 - 16;
-    fill(g.hdc, g.b, zoom_x, toolbar_y + 10, zoom_x + btn_w, toolbar_y + 40, rgb(0x3C, 0x3C, 0x3C));
-    text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), zoom_x + btn_w / 2, toolbar_y + 22, b"-");
+    fill(
+        g.hdc,
+        g.b,
+        zoom_x,
+        toolbar_y + 10,
+        zoom_x + btn_w,
+        toolbar_y + 40,
+        rgb(0x3C, 0x3C, 0x3C),
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        rgb(0xFF, 0xFF, 0xFF),
+        zoom_x + btn_w / 2,
+        toolbar_y + 22,
+        b"-",
+    );
 
-    fill(g.hdc, g.b, zoom_x + btn_w + 8, toolbar_y + 10, zoom_x + btn_w * 2 + 8, toolbar_y + 40, rgb(0x3C, 0x3C, 0x3C));
-    text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), zoom_x + btn_w + 8 + btn_w / 2, toolbar_y + 22, b"+");
+    fill(
+        g.hdc,
+        g.b,
+        zoom_x + btn_w + 8,
+        toolbar_y + 10,
+        zoom_x + btn_w * 2 + 8,
+        toolbar_y + 40,
+        rgb(0x3C, 0x3C, 0x3C),
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        rgb(0xFF, 0xFF, 0xFF),
+        zoom_x + btn_w + 8 + btn_w / 2,
+        toolbar_y + 22,
+        b"+",
+    );
 
-    fill(g.hdc, g.b, zoom_x + btn_w * 2 + 16, toolbar_y + 10, zoom_x + btn_w * 3 + 16, toolbar_y + 40, rgb(0x3C, 0x3C, 0x3C));
-    text_centered(g.hdc, g.f.body, 11, rgb(0xFF, 0xFF, 0xFF), zoom_x + btn_w * 2 + 16 + btn_w / 2, toolbar_y + 22, b"100%");
+    fill(
+        g.hdc,
+        g.b,
+        zoom_x + btn_w * 2 + 16,
+        toolbar_y + 10,
+        zoom_x + btn_w * 3 + 16,
+        toolbar_y + 40,
+        rgb(0x3C, 0x3C, 0x3C),
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        rgb(0xFF, 0xFF, 0xFF),
+        zoom_x + btn_w * 2 + 16 + btn_w / 2,
+        toolbar_y + 22,
+        b"100%",
+    );
 }
 
 pub unsafe fn mouse(_ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
