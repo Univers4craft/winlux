@@ -78,6 +78,11 @@ scripts/test-live-iso-qemu.sh build/winlux-live-test.iso uefi
 
 Le script nécessite les outils initramfs/GRUB, Xorg, polices, bibliothèques et modules attendus. Le noyau doit correspondre aux modules sélectionnés par `WINLUX_KERNEL_RELEASE` (par défaut celui de l’hôte). Ce n’est pas encore un constructeur universel indépendant de la distribution. Les bibliothèques audio sont explicitement copiées dans l’image.
 
+Le démarrage Live utilise un petit initramfs et une racine SquashFS montée
+depuis le support, avec une couche d’écriture en mémoire. `squashfs-tools`
+est requis pour construire l’image et l’installer. Le bureau complet n’est
+plus chargé directement par GRUB dans son espace mémoire limité.
+
 Pour préparer une VM persistante :
 
 ```sh

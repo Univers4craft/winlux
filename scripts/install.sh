@@ -64,9 +64,23 @@ xorriso -osirrox on -indev "$iso" -extract /boot/vmlinuz "$work/vmlinuz" >/dev/n
 xorriso -osirrox on -indev "$iso" -extract /boot/winlux-initramfs.cpio.gz "$work/initramfs.gz" >/dev/null || die 'extraction de l’initramfs impossible'
 test -s "$work/vmlinuz" && test -s "$work/initramfs.gz" || die 'ISO incomplète'
 gzip -t "$work/initramfs.gz"
+root_extent=$(xorriso -indev "$iso" -find /boot/winlux-rootfs.squashfs -exec report_lba -- 2>/dev/null |
+    awk -F, '/^File data lba:/ {gsub(/[[:space:]]/, "", $2); print $2}')
+split_root=0
 # bsdtar refuse par défaut les chemins absolus, traversées .. et parents symlink.
 # Déployer uniquement une ISO Winlux de confiance ; aucune signature n'est encore disponible.
-bsdtar -xf "$work/initramfs.gz" -C "$work/source" --no-same-owner
+if test -n "$root_extent"; then
+    case "$root_extent" in *[!0-9]*) die 'étendue SquashFS invalide ou fragmentée' ;; esac
+    test "${#root_extent}" -le 12 || die 'étendue SquashFS excessive'
+    command -v unsquashfs >/dev/null 2>&1 || die 'squashfs-tools requis pour cette ISO'
+    # Read the filesystem directly from its ISO extent; no second compressed
+    # copy in /tmp, whose capacity is deliberately limited in the live session.
+    rmdir "$work/source"
+    unsquashfs -no-progress -processors 2 -offset "$((root_extent * 2048))" -d "$work/source" "$iso"
+    split_root=1
+else
+    bsdtar -xf "$work/initramfs.gz" -C "$work/source" --no-same-owner
+fi
 for path in init usr/bin/winlux usr/share/winlux/BUILD-INFO; do
     test -f "$work/source/$path" && test ! -L "$work/source/$path" || die "racine ISO incomplète : $path"
 done
@@ -130,6 +144,13 @@ partuuid=$(blkid -s PARTUUID -o value "$target")
 case "$partuuid" in ''|*[!a-fA-F0-9-]*) die 'PARTUUID invalide' ;; esac
 fsuuid=$(blkid -s UUID -o value "$target")
 case "$fsuuid" in ''|*[!a-fA-F0-9-]*) die 'UUID ext4 invalide' ;; esac
+root_argument="PARTUUID=$partuuid"
+initrd_line=
+if test "$split_root" = 1; then
+    root_argument="UUID=$fsuuid"
+    initrd_line='initrd /boot/winlux-initramfs.cpio.gz'
+    printf '1\n' >"$work/target/boot/winlux-split-root"
+fi
 cat >"$work/target/boot/grub/grub.cfg" <<EOF
 set default=0
 set timeout=3
@@ -138,11 +159,13 @@ terminal_input console serial
 terminal_output console serial
 menuentry "Winlux Desktop installé" {
     search --no-floppy --fs-uuid $fsuuid --set=root
-    linux /boot/vmlinuz root=PARTUUID=$partuuid rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 winlux.interactive=1
+    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 winlux.interactive=1
+    $initrd_line
 }
 menuentry "Winlux diagnostic installé" --hotkey=d {
     search --no-floppy --fs-uuid $fsuuid --set=root
-    linux /boot/vmlinuz root=PARTUUID=$partuuid rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8
+    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8
+    $initrd_line
 }
 EOF
 grub-script-check "$work/target/boot/grub/grub.cfg"
@@ -156,4 +179,4 @@ umount "$work/target/boot/efi"
 esp_mounted=0
 umount "$work/target"
 mounted=0
-echo "Installation complète sur $device. Le démarrage sans initrd nécessite les pilotes racine intégrés au noyau."
+echo "Installation complète sur $device."

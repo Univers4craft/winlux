@@ -39,7 +39,7 @@ copy_binary() {
         cp -L "$lib" "$guest$lib"
     done
 }
-for tool in readlink lsblk findmnt swapon flock losetup parted partprobe mkfs.ext4 mkfs.fat mount umount grub-install grub-script-check blkid xorriso gzip cp du df; do
+for tool in readlink lsblk findmnt swapon flock losetup parted partprobe mkfs.ext4 mkfs.fat mount umount grub-install grub-script-check blkid xorriso gzip unsquashfs cp du df; do
     binary=$(command -v "$tool")
     copy_binary "$binary" "$tool"
 done
@@ -54,6 +54,7 @@ test ! -f /etc/mke2fs.conf || cp /etc/mke2fs.conf "$guest/etc/"
 for binary in /usr/lib/grub/i386-pc/grub-bios-setup /usr/lib/grub/x86_64-efi/grub-bios-setup; do
     test ! -f "$binary" || copy_binary "$binary" grub-bios-setup
 done
+mkfifo "$work/archive.pipe"
 fakeroot sh -c '
     set -eu
     cd "$1"
@@ -63,8 +64,11 @@ fakeroot sh -c '
     mknod -m 666 dev/zero c 1 5
     chown -R 0:0 .
     find . -print0 | cpio --null --create --format=newc --quiet
-' sh "$guest" >"$work/install.cpio"
-gzip -1 -c "$work/install.cpio" >"$work/install-initramfs.gz"
+' sh "$guest" >"$work/archive.pipe" &
+archive_pid=$!
+gzip -1 <"$work/archive.pipe" >"$work/install-initramfs.gz"
+wait "$archive_pid"
+rm "$work/archive.pipe"
 disk="$work/installed.img"
 truncate -s 4G "$disk"
 log="$work/install.log"
@@ -95,3 +99,9 @@ for mode in bios uefi; do
     done
     echo "Disque installé validé : $mode"
 done
+# Retain logs on success, and every diagnostic artefact on failure. The
+# disposable root and embedded ISO otherwise consume the runner's disk space
+# needed for the release bundle after these checks have passed.
+rm -rf -- "$guest"
+rm -f "$work/install-initramfs.gz"
+if test "${WINLUX_KEEP_TEST_DISK:-0}" != 1; then rm "$disk"; fi

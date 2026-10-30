@@ -28,7 +28,7 @@ truetype_fonts=${WINLUX_TRUETYPE_FONTS:-/usr/share/fonts/truetype/dejavu}
 xft_library=${WINLUX_XFT_LIBRARY:-$(ldconfig -p | awk '$1 == "libXft.so.2" { print $NF; exit }')}
 cairo_library=${WINLUX_CAIRO_LIBRARY:-$(ldconfig -p | awk '$1 == "libcairo.so.2" { print $NF; exit }')}
 
-for tool in cargo bash cpio depmod modprobe fakeroot find gzip grub-mkrescue grub-script-check ldd ldconfig sha256sum xorriso zstd; do
+for tool in cargo bash cpio depmod modprobe fakeroot find gzip grub-mkrescue grub-script-check ldd ldconfig sha256sum xorriso zstd mksquashfs; do
     command -v "$tool" >/dev/null 2>&1 || {
         echo "outil requis absent : $tool" >&2
         exit 1
@@ -356,7 +356,7 @@ umask 077
 /bin/busybox mkdir -p /dev/shm /dev/pts
 /bin/busybox mount -t tmpfs -o mode=1777 tmpfs /dev/shm 2>/dev/null || true
 /bin/busybox mount -t devpts devpts /dev/pts 2>/dev/null || true
-/bin/busybox mount -t tmpfs -o mode=0755 tmpfs /run 2>/dev/null || true
+/bin/busybox awk '$2 == "/run" {mounted=1} END {exit !mounted}' /proc/mounts || /bin/busybox mount -t tmpfs -o mode=0755 tmpfs /run
 /bin/busybox mount -t tmpfs -o mode=1777 tmpfs /tmp 2>/dev/null || true
 /bin/busybox mkdir -p /run/winlux
 safe_power() {
@@ -630,29 +630,9 @@ INIT
 chmod 755 "$stage/init"
 "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"
 
-export WINLUX_LIVE_STAGE="$stage"
-export WINLUX_LIVE_CPIO="$work/winlux-initramfs.cpio"
-fakeroot sh -c '
-    set -eu
-    stage=$WINLUX_LIVE_STAGE
-    mknod -m 600 "$stage/dev/console" c 5 1
-    mknod -m 666 "$stage/dev/null" c 1 3
-    mknod -m 666 "$stage/dev/zero" c 1 5
-    mknod -m 666 "$stage/dev/tty" c 5 0
-    mknod -m 666 "$stage/dev/ttyS0" c 4 64
-    cd "$stage"
-    chown -R 0:0 .
-    find . -print0 | cpio --null --create --format=newc --quiet
-' >"$WINLUX_LIVE_CPIO"
-if command -v pigz >/dev/null 2>&1; then
-    pigz -n -9 -p 2 -c "$WINLUX_LIVE_CPIO" >"$work/winlux-initramfs.cpio.gz"
-else
-    gzip -n -9 -c "$WINLUX_LIVE_CPIO" >"$work/winlux-initramfs.cpio.gz"
-fi
-
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"
-cp "$work/winlux-initramfs.cpio.gz" "$iso_root/boot/winlux-initramfs.cpio.gz"
+sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
 set timeout=2
@@ -673,7 +653,12 @@ menuentry "Winlux Desktop" {
     if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then
         if test -f "($winlux_root)/boot/vmlinuz"; then
             # Load the updated kernel and persistent root from the disk.
-            linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+            if test -f "($winlux_root)/boot/winlux-split-root"; then
+                linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+                initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
+            else
+                linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+            fi
         else
             winlux_live
         fi
@@ -683,7 +668,12 @@ menuentry "Winlux Desktop" {
 }
 menuentry "Winlux persistent network diagnostic" --hotkey=s {
     search --no-floppy --label WINLUX_ROOT --set=winlux_root
-    linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1
+    if test -f "($winlux_root)/boot/winlux-split-root"; then
+        linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1
+        initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
+    else
+        linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1
+    fi
 }
 GRUB
 grub-script-check "$iso_root/boot/grub/grub.cfg"

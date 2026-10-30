@@ -34,7 +34,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q \
-            xorriso grub-pc-bin grub-efi-amd64-bin \
+            xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin \
             linux-image-generic xserver-xorg-core \
             x11-xserver-utils xinput gcc-mingw-w64-x86-64 \
             cpio fakeroot zstd kmod busybox-static mtools \
