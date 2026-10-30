@@ -22,6 +22,8 @@ const START_OPEN_MS: i32 = 230;
 const START_CLOSE_MS: i32 = 140;
 const SPLASH_MIN_MS: u32 = 2600;
 const INTRO_MS: i32 = 520;
+const RECENTER_MS: i32 = 200;
+const TRAY_RESERVED: i32 = 236;
 
 pub static mut SCREEN_W: i32 = 1280;
 pub static mut SCREEN_H: i32 = 720;
@@ -50,6 +52,10 @@ static mut START_SEARCH: [u8; 64] = [0; 64]; // Texte de recherche
 static mut START_SEARCH_LEN: usize = 0;
 static mut ENABLE_BLUR: bool = true; // Effet de flou activé
 static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
+static mut RECENTER_ANIM: u32 = 0;
+static mut RECENTER_FROM: i32 = 0;
+static mut RECENTER_TARGET: i32 = 0;
+static mut PREV_TASKBAR_COUNT: i32 = 0;
 static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
 static mut AUTO_THEME: bool = false; // Thème automatique
 static mut CONTEXT_APP: Option<usize> = None;
@@ -156,17 +162,44 @@ fn layout() -> Layout {
     let bar_top = h - TASKBAR_HEIGHT;
     let count = taskbar_count();
     let buttons_w = count * BUTTON + (count - 1) * BUTTON_GAP;
+    let available = w - TRAY_RESERVED;
     let buttons_x = if unsafe { ALIGN_LEFT } {
         12
     } else {
-        (w - buttons_w) / 2
+        unsafe {
+            let target = (available - buttons_w) / 2;
+            if PREV_TASKBAR_COUNT == 0 {
+                PREV_TASKBAR_COUNT = count;
+                RECENTER_TARGET = target;
+                RECENTER_FROM = target;
+            } else if count != PREV_TASKBAR_COUNT {
+                RECENTER_FROM = if RECENTER_ANIM != 0 {
+                    let prev_t = ease_out(since(RECENTER_ANIM), RECENTER_MS);
+                    RECENTER_FROM + (RECENTER_TARGET - RECENTER_FROM) * prev_t / 1000
+                } else {
+                    RECENTER_TARGET
+                };
+                RECENTER_TARGET = target;
+                RECENTER_ANIM = now();
+                PREV_TASKBAR_COUNT = count;
+            }
+            if RECENTER_ANIM != 0 && ENABLE_SMOOTH_ANIM {
+                let t = ease_out(since(RECENTER_ANIM), RECENTER_MS);
+                if t >= 1000 {
+                    RECENTER_ANIM = 0;
+                }
+                RECENTER_FROM + (RECENTER_TARGET - RECENTER_FROM) * t / 1000
+            } else {
+                target
+            }
+        }
     };
     let sw = 640.min(w - 24);
     let sh = 600.min(bar_top - 24);
     let sx = if unsafe { ALIGN_LEFT } {
         12
     } else {
-        (w - sw) / 2
+        (available - sw) / 2
     };
     let st = bar_top - 12 - sh;
     Layout {
@@ -2133,6 +2166,7 @@ pub unsafe fn frame(hwnd: Handle) {
         || since(INTRO_START) < INTRO_MS + 40
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)
         || START_CLOSING
+        || (RECENTER_ANIM != 0 && since(RECENTER_ANIM) < RECENTER_MS + 40)
         || (TOAST_LEN > 0 && (since(TOAST_START) < 300 || since(TOAST_START) > TOAST_MS - 260));
     if animating && since(LAST_FRAME) >= 15 {
         LAST_FRAME = now();
