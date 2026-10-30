@@ -88,6 +88,13 @@ static mut NOTIF_LENS: [usize; 8] = [0; 8];
 static mut NOTIF_COUNT: usize = 0;
 /// Atténuation du fond (0 = noir, 1000 = normal) pendant le fondu.
 static mut FADE: i32 = 1000;
+/// Sous-menu d'alimentation ouvert (Arrêter, Redémarrer, Verrouiller).
+static mut POWER_MENU: bool = false;
+static mut POWER_HOVER: i32 = -1;
+/// Confirmation de déconnexion/arrêt en cours.
+static mut SHUTDOWN_FADE: i32 = 0;
+static mut SHUTDOWN_START: u32 = 0;
+static mut SHUTDOWN_ACTION: u8 = 0; // 1=poweroff, 2=reboot, 3=lock
 
 fn now() -> u32 {
     unsafe { GetTickCount() }
@@ -284,6 +291,10 @@ unsafe fn set_start(open: bool) {
         START_CLOSING = false;
     } else if START_OPEN {
         START_CLOSING = true;
+    }
+    if !open {
+        POWER_MENU = false;
+        POWER_HOVER = -1;
     }
 }
 
@@ -1655,6 +1666,32 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         py + 12,
         rgb(0xE6, 0xE6, 0xE6),
     );
+    // Sous-menu d'alimentation.
+    if POWER_MENU {
+        let pr = power_rect(&l.start);
+        let menu_w = 180;
+        let item_h = 36;
+        let menu_h = item_h * 3 + 8;
+        let mx = pr.right - menu_w;
+        let my = pr.top - menu_h - 4;
+        panel(hdc, b, mx, my, mx + menu_w, my + menu_h, 8,
+            rgb(0x2C, 0x2C, 0x2C), rgb(0x50, 0x50, 0x50));
+        let items: [&[u8]; 3] = [
+            b"Arr\xEAter",
+            b"Red\xE9marrer",
+            b"Verrouiller",
+        ];
+        let icons: [&[u8]; 3] = [b"\xA4", b"\xA5", b"\xA3"];
+        for i in 0..3i32 {
+            let iy = my + 4 + i * item_h;
+            let hover = POWER_HOVER == i;
+            if hover {
+                round_rect(hdc, b, mx + 4, iy, mx + menu_w - 4, iy + item_h, 4,
+                    rgb(0x40, 0x44, 0x4C));
+            }
+            text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), mx + 40, iy + 10, items[i as usize]);
+        }
+    }
 }
 
 /// Élément du menu Démarrer sous le pointeur : 0..11 épinglés, 100..103
@@ -1716,6 +1753,20 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     }
     if inside(&power_rect(s), x, y) {
         return 201;
+    }
+    if unsafe { POWER_MENU } {
+        let pr = power_rect(s);
+        let menu_w = 180;
+        let item_h = 36;
+        let menu_h = item_h * 3 + 8;
+        let mx = pr.right - menu_w;
+        let my = pr.top - menu_h - 4;
+        for i in 0..3 {
+            let iy = my + 4 + i * item_h;
+            if x >= mx && x < mx + menu_w && y >= iy && y < iy + item_h {
+                return 210 + i;
+            }
+        }
     }
     -1
 }
@@ -2080,6 +2131,7 @@ pub unsafe fn init(
     crate::settings::system_tick();
     load_shell_state();
     init_apps();
+    crate::login::init();
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
     wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
@@ -2088,6 +2140,10 @@ pub unsafe fn init(
     if GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0 {
         BOOT_DONE = true;
         BOOT_STEP = 4;
+    }
+    let mut v2 = [0i8; 4];
+    if GetEnvironmentVariableA(c"WINLUX_NO_LOGIN".as_ptr(), v2.as_mut_ptr(), 4) > 0 {
+        crate::login::skip_login();
     }
 }
 
@@ -2148,6 +2204,11 @@ pub unsafe fn draw(hdc: Handle) {
     }
     if !BOOT_DONE {
         boot_splash(hdc, &mut b, &f, &l);
+    } else if !crate::login::logged_in() {
+        f.release();
+        b.release();
+        crate::login::draw(hdc, l.w, l.h);
+        return;
     } else {
         let intro = since(INTRO_START);
         FADE = if INTRO_START == 0 || intro >= INTRO_MS {
@@ -2170,6 +2231,49 @@ pub unsafe fn draw(hdc: Handle) {
         start_menu(hdc, &mut b, &f, &l);
         draw_notif_panel(hdc, &mut b, &f, &l);
         draw_toast(hdc, &mut b, &f, &l);
+        // Overlay de fermeture.
+        if SHUTDOWN_ACTION > 0 {
+            let t = since(SHUTDOWN_START);
+            SHUTDOWN_FADE = ease_out(t, 800).min(1000);
+            let alpha = SHUTDOWN_FADE;
+            // Fond sombre progressif.
+            if alpha > 0 {
+                fill(hdc, &mut b, 0, 0, l.w, l.h, rgb(0, 0, 0));
+            }
+            let label: &[u8] = match SHUTDOWN_ACTION {
+                1 => b"Arr\xEAt en cours...",
+                2 => b"Red\xE9marrage en cours...",
+                _ => b"",
+            };
+            if !label.is_empty() {
+                text_centered(hdc, f.large, 22,
+                    mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
+                    l.w / 2, l.h / 2 - 30, label);
+                // Cercle de chargement.
+                let cx = l.w / 2;
+                let cy = l.h / 2 + 20;
+                let dots = 5;
+                let radius = 16;
+                for k in 0..dots {
+                    let angle = (t / 3 + k * 70) % 360;
+                    let (sin_a, cos_a) = crate::login::approx_sincos(angle as i32);
+                    let dx = cx + (sin_a * radius) / 1000;
+                    let dy = cy - (cos_a * radius) / 1000;
+                    let dot_alpha = (1000 - k as i32 * 200).max(200);
+                    ellipse(hdc, &mut b, dx - 3, dy - 3, dx + 3, dy + 3,
+                        mix(0, rgb(0xFF, 0xFF, 0xFF), dot_alpha * alpha / 1000, 1000));
+                }
+            }
+            if alpha >= 980 && SHUTDOWN_ACTION > 0 {
+                let action = SHUTDOWN_ACTION;
+                SHUTDOWN_ACTION = 0;
+                match action {
+                    1 => { crate::settings::control(c"poweroff"); }
+                    2 => { crate::settings::control(c"reboot"); }
+                    _ => {}
+                }
+            }
+        }
         let bar_dy = if FADE < 1000 {
             (1000 - ease_out(intro, INTRO_MS)) * TASKBAR_HEIGHT / 1000
         } else {
@@ -2177,6 +2281,9 @@ pub unsafe fn draw(hdc: Handle) {
         };
         taskbar(hdc, &mut b, &f, &l, bar_dy);
         draw_context(hdc, &mut b, &f);
+        if crate::login::uac_visible() {
+            crate::login::draw_uac(hdc, l.w, l.h);
+        }
     }
     f.release();
     b.release();
@@ -2227,17 +2334,30 @@ pub unsafe fn frame(hwnd: Handle) {
             3 if since(BOOT_START) > 1600 => BOOT_STEP = 4,
             4 if since(BOOT_START) as u32 >= SPLASH_MIN_MS => {
                 BOOT_DONE = true;
-                INTRO_START = now();
+                if crate::login::logged_in() {
+                    INTRO_START = now();
+                }
             }
             _ => {}
         }
+    }
+    if BOOT_DONE && !crate::login::logged_in() {
+        if crate::login::animating() && since(LAST_FRAME) >= 15 {
+            LAST_FRAME = now();
+            InvalidateRect(hwnd, core::ptr::null(), 0);
+        }
+        if crate::login::logged_in() {
+            INTRO_START = now();
+        }
+        return;
     }
     let animating = !BOOT_DONE
         || wm::animating()
         || since(INTRO_START) < INTRO_MS + 40
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)
         || START_CLOSING
-        || (TOAST_LEN > 0 && (since(TOAST_START) < 300 || since(TOAST_START) > TOAST_MS - 260));
+        || (TOAST_LEN > 0 && (since(TOAST_START) < 300 || since(TOAST_START) > TOAST_MS - 260))
+        || SHUTDOWN_ACTION > 0;
     if animating && since(LAST_FRAME) >= 15 {
         LAST_FRAME = now();
         InvalidateRect(hwnd, core::ptr::null(), 0);
@@ -2280,6 +2400,15 @@ unsafe fn repaint(hwnd: Handle) {
 }
 
 pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
+    if crate::login::uac_visible() {
+        crate::login::uac_on_click(x, y, SCREEN_W, SCREEN_H);
+        repaint(hwnd);
+        return;
+    }
+    if !crate::login::logged_in() && BOOT_DONE {
+        crate::login::on_click(hwnd, x, y, SCREEN_W, SCREEN_H);
+        return;
+    }
     if SCREENSAVER {
         SCREENSAVER = false;
         LAST_INPUT = now();
@@ -2372,7 +2501,31 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                     });
                 }
                 201 => {
-                    crate::settings::control(c"poweroff");
+                    POWER_MENU = !POWER_MENU;
+                    POWER_HOVER = -1;
+                }
+                // Sous-menu alimentation.
+                210 => {
+                    // Arrêter
+                    set_start(false);
+                    POWER_MENU = false;
+                    SHUTDOWN_ACTION = 1;
+                    SHUTDOWN_START = now();
+                    SHUTDOWN_FADE = 0;
+                }
+                211 => {
+                    // Redémarrer
+                    set_start(false);
+                    POWER_MENU = false;
+                    SHUTDOWN_ACTION = 2;
+                    SHUTDOWN_START = now();
+                    SHUTDOWN_FADE = 0;
+                }
+                212 => {
+                    // Verrouiller
+                    set_start(false);
+                    POWER_MENU = false;
+                    crate::login::lock_screen();
                 }
                 300 => {
                     START_SHOW_ALL_APPS = !START_SHOW_ALL_APPS;
@@ -2476,7 +2629,7 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         HOVER_BUTTON = hb;
         rp = true;
     }
-    let hs = if START_OPEN && inside(&l.start, x, y) {
+    let hs = if START_OPEN {
         start_item_at(&l, x, y)
     } else {
         -1
@@ -2484,6 +2637,13 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
     if hs != HOVER_START_ITEM {
         HOVER_START_ITEM = hs;
         rp = true;
+    }
+    if POWER_MENU {
+        let ph = if hs >= 210 && hs <= 212 { hs - 210 } else { -1 };
+        if ph != POWER_HOVER {
+            POWER_HOVER = ph;
+            rp = true;
+        }
     }
     if DRAGGED_ICON >= 0 {
         let i = DRAGGED_ICON as usize;
@@ -2636,6 +2796,15 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
 /// Clavier : touche Windows pour le menu Démarrer, Échap pour le fermer,
 /// le reste va à la fenêtre active.
 pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
+    if crate::login::uac_visible() {
+        crate::login::uac_on_key(vk, ch);
+        repaint(hwnd);
+        return;
+    }
+    if !crate::login::logged_in() && BOOT_DONE {
+        crate::login::on_key(hwnd, vk, ch);
+        return;
+    }
     if SCREENSAVER {
         SCREENSAVER = false;
         LAST_INPUT = now();
@@ -2686,6 +2855,16 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
         if win && shift {
             launch(Launch::Exec(b"screenshot.exe"));
+            return;
+        }
+    }
+    // Win+L (Verrouiller)
+    if ch == 0 && vk == 0x4C {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        if win {
+            crate::login::lock_screen();
+            repaint(hwnd);
             return;
         }
     }
