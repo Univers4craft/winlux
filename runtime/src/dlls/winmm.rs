@@ -479,7 +479,6 @@ unsafe impl Send for WaveHdrPtr {}
 struct RecordConfig {
     channels: u16,
     rate: u32,
-    bits_per_sample: u16,
 }
 
 struct RecordState {
@@ -504,10 +503,10 @@ unsafe fn wavehdr_buffer_length(pwh: *mut u8) -> u32 {
     *((pwh as *const u8).add(8) as *const u32)
 }
 unsafe fn wavehdr_bytes_recorded(pwh: *mut u8) -> *mut u32 {
-    (pwh as *mut u8).add(12) as *mut u32
+    pwh.add(12) as *mut u32
 }
 unsafe fn wavehdr_flags(pwh: *mut u8) -> *mut u32 {
-    (pwh as *mut u8).add(16) as *mut u32
+    pwh.add(16) as *mut u32
 }
 
 fn capture_thread(
@@ -579,10 +578,8 @@ fn capture_thread(
         } else if rc == -11 {
             // EAGAIN
             std::thread::sleep(std::time::Duration::from_millis(2));
-        } else if rc < 0 {
-            if unsafe { (a.recover)(pcm, rc as c_int, 1) } < 0 {
-                break;
-            }
+        } else if rc < 0 && unsafe { (a.recover)(pcm, rc as c_int, 1) } < 0 {
+            break;
         }
     }
 
@@ -628,14 +625,13 @@ pub unsafe extern "win64" fn wave_in_open(
         config: RecordConfig {
             channels,
             rate: sample_rate,
-            bits_per_sample,
         },
         buffers: std::sync::Arc::new(Mutex::new(Vec::new())),
         cancel: std::sync::Arc::new(AtomicBool::new(false)),
         thread: None,
     });
     if !phwi.is_null() {
-        *phwi = 1usize as *mut c_void; // sentinel handle
+        *phwi = std::ptr::dangling_mut::<c_void>();
     }
     0
 }
