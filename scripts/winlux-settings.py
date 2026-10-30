@@ -149,6 +149,9 @@ class Settings(Gtk.Window):
         self.details = self.label("")
         if self.page == 7:
             self.label("La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.", "subtitle")
+            recovery = Gtk.Button(label="Secours et restauration")
+            recovery.connect("clicked", lambda *_: subprocess.Popen(["winlux-system-tools", "recovery"]))
+            self.body.pack_start(recovery, False, False, 0)
             restart = Gtk.Button(label="Redémarrer après installation")
             restart.connect("clicked", lambda *_: self.execute("reboot"))
             self.body.pack_start(restart, False, False, 0)
@@ -166,7 +169,11 @@ class Settings(Gtk.Window):
             answer = dialog.run()
             dialog.destroy()
             if answer != Gtk.ResponseType.OK: return
-        self.process = subprocess.Popen(["winlux-control", action], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        try:
+            self.process = subprocess.Popen(["winlux-control", action], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        except OSError as error:
+            self.show_error("Impossible de lancer l’opération", str(error))
+            return
         self.active_action = action
         self.notice.set_text("Opération en cours…")
         self.buttons.set_sensitive(False)
@@ -181,6 +188,9 @@ class Settings(Gtk.Window):
             self.active_action = None
             if result and action in ("update-check", "update-apply", "update-rollback"):
                 self.show_update_error(action, result)
+            elif result:
+                detail = read("/run/winlux/action.log").strip()[-3000:] or "Aucun détail n’a été écrit dans le journal."
+                self.show_error("L’opération a échoué", f"Code : {result}\n\n{detail}")
         self.buttons.set_sensitive(self.process is None and not self.busy)
         fields = FIELDS.get(self.page, [])
         text = "\n".join(f"{label} : {status.get(key) or 'Indisponible'}" for label, key in fields)
@@ -225,9 +235,12 @@ class Settings(Gtk.Window):
                                            "update-rollback": "Restauration"}[action])
         log = read("/run/winlux/update.log").strip()
         detail = log[-3000:] if log else "Aucun détail n’a été écrit dans le journal."
+        self.show_error("La mise à jour a échoué", f"Étape : {stage} (code {result})\n\nDernières lignes du journal :\n{detail}")
+
+    def show_error(self, title, detail):
         dialog = Gtk.MessageDialog(transient_for=self, modal=False, message_type=Gtk.MessageType.ERROR,
-                                   buttons=Gtk.ButtonsType.CLOSE, text="La mise à jour a échoué")
-        dialog.format_secondary_text(f"Étape : {stage} (code {result})\n\nDernières lignes du journal :\n{detail}")
+                                   buttons=Gtk.ButtonsType.CLOSE, text=title)
+        dialog.format_secondary_text(detail)
         for child in dialog.get_message_area().get_children():
             if isinstance(child, Gtk.Label): child.set_selectable(True)
         dialog.connect("response", lambda window, _: window.destroy())

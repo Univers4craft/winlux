@@ -23,6 +23,10 @@ asynchrone, ne suit pas les dossiers symboliques et est limitée à 30 000
 entrées et 30 résultats. Elle ne parcourt pas les fichiers système et ne
 recherche pas le contenu des documents. Entrée ouvre le premier résultat.
 
+L'accueil propose des raccourcis vers le clavier, le réseau, l'apparence et
+le secours lors de la première session. « Terminer » enregistre le choix dans
+le profil ; fermer la fenêtre permet de le reprendre plus tard.
+
 ## Réglages rapides et matériel
 
 Les commandes Arrêter et Redémarrer demandent d'abord aux fenêtres de se
@@ -81,6 +85,8 @@ hauteur de panneau. GTK, XFCE et les décorations Openbox sont configurés dans
 le profil. Les applications ouvertes peuvent nécessiter d'être rouvertes pour
 charger leur nouveau style. Les CSS utilisateur extérieurs au bloc généré
 Winlux sont conservés.
+Une réinitialisation explicite propose de revenir au thème, à l'accent, au
+fond, à l'icône Démarrer et à la taille de barre par défaut.
 
 Une image peut aussi remplacer l'icône Démarrer ; un bouton rétablit celle
 livrée avec Winlux. Les raccourcis créés volontairement depuis Démarrer et les
@@ -107,6 +113,15 @@ favoris GTK, miniatures via Tumbler, accès aux volumes via GVfs/UDisks et
 les textes (64 Kio maximum) et les images jusqu'à 20 Mio et 40 mégapixels.
 Les autres formats ne sont pas interprétés. Aucun support de fichiers
 exécutables n'est requis pour cet aperçu.
+La page Fichiers et le menu du bureau donnent accès à Thunar pour ses menus
+contextuels, favoris, onglets et volumes ; l'Explorer Winlux reste disponible.
+
+## Fenêtres
+
+Windows + flèches gauche/droite placent une fenêtre sur une moitié d'écran.
+Windows + Ctrl + flèche gauche/droite la place dans un coin supérieur ;
+Windows + Maj + flèche gauche/droite choisit le coin inférieur. Ces raccourcis
+ne remplacent pas un aperçu d'ancrage à la souris, qui reste à développer.
 
 ## Applications
 

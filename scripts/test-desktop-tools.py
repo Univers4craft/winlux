@@ -40,10 +40,11 @@ with tempfile.TemporaryDirectory(prefix="winlux-desktop-check.") as temporary:
 
 module=runpy.run_path(str(project/"winlux-system-tools.py"),run_name="tools_test")
 Gtk,GLib=module["Gtk"],module["GLib"]
-windows=[module["Tools"](page) for page in ("quick","notifications","tasks","appearance","apps","files")]
+assert module["split_nmcli"](r"aa\:bb\:cc\:dd\:ee\:ff:Nom\: invité:90:WPA2") == ["aa:bb:cc:dd:ee:ff", "Nom: invité", "90", "WPA2"]
+windows=[module["Tools"](page) for page in ("quick","notifications","tasks","appearance","apps","files","recovery")]
 assert all(window.process is None for window in windows)
 def close():
     for window in windows:window.destroy()
     return False
 GLib.timeout_add(200,close);Gtk.main()
-print("OK: six outils construits sans action système")
+print("OK: sept outils construits sans action système et décodage des réseaux")

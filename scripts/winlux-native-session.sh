@@ -107,6 +107,9 @@ done
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
 /usr/bin/winlux-session-startup >/run/winlux/startup-apps.log 2>&1
+if test ! -f "$HOME/.config/winlux/welcome-complete" && test "${WINLUX_NO_WELCOME:-0}" != 1 && ! grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
+    /usr/bin/winlux-welcome >/run/winlux/welcome.log 2>&1 &
+fi
 # Xfconf activates its own session-bus service. Set wallpaper per real output.
 for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
     property="/backdrop/screen0/monitor$output/workspace0/last-image"

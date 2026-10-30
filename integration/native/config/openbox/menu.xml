@@ -2,6 +2,7 @@
 <openbox_menu xmlns="http://openbox.org/3.4/menu">
  <menu id="root-menu" label="Bureau Winlux">
   <item label="Ouvrir Explorer"><action name="Execute"><command>winlux-shell-app explorer</command></action></item>
+  <item label="Fichiers et périphériques"><action name="Execute"><command>winlux-system-tools files</command></action></item>
   <item label="Ouvrir le terminal"><action name="Execute"><command>winlux-terminal</command></action></item>
   <separator/>
   <menu id="new-menu" label="Nouveau">
@@ -9,6 +10,7 @@
    <item label="Document texte"><action name="Execute"><command>winlux-desktop-action text</command></action></item>
   </menu>
   <item label="Actualiser"><action name="Execute"><command>winlux-desktop-action refresh</command></action></item>
+  <item label="Personnaliser le bureau"><action name="Execute"><command>winlux-system-tools appearance</command></action></item>
   <separator/>
   <item label="Écran de veille : tuyaux 3D"><action name="Execute"><command>winlux-desktop-action screensaver</command></action></item>
   <item label="Réglages de l’écran de veille"><action name="Execute"><command>winlux-desktop-action screensaver-settings</command></action></item>

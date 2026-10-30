@@ -8,6 +8,7 @@ import shutil
 import signal
 import subprocess
 import sys
+import threading
 import time
 import gi
 gi.require_version("Gtk", "3.0")
@@ -39,7 +40,7 @@ class Tools(Gtk.Window):
         self.add(self.box)
         self.box.pack_start(Gtk.Label(label={"quick":"Réglages rapides", "notifications":"Notifications",
             "tasks":"Gestionnaire de tâches", "appearance":"Personnalisation", "apps":"Applications",
-            "files":"Fichiers et périphériques"}.get(page, "Winlux"), xalign=0), False, False, 0)
+            "files":"Fichiers et périphériques", "recovery":"Secours et restauration"}.get(page, "Winlux"), xalign=0), False, False, 0)
         self.notice = Gtk.Label(label="", xalign=0, wrap=True, selectable=True)
         self.box.pack_end(self.notice, False, False, 0)
         self.content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
@@ -96,6 +97,32 @@ class Tools(Gtk.Window):
 
     def quick(self):
         self.label("Ethernet est prioritaire quand il est disponible. Le Wi-Fi peut rester configuré et prendre le relais lorsque le câble est débranché. Dans une VM, la connexion apparaît généralement comme Ethernet.")
+        networks = Gtk.ComboBoxText()
+        self.content.pack_start(networks, False, False, 0)
+        def scan():
+            self.notice.set_text("Recherche des réseaux Wi-Fi…")
+            def worker():
+                try:
+                    result = subprocess.run(["nmcli", "-t", "-f", "BSSID,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes"],
+                                            capture_output=True, text=True, timeout=30, check=True)
+                    rows = [split_nmcli(line) for line in result.stdout.splitlines()]
+                    def display():
+                        networks.remove_all()
+                        count = 0
+                        for row in rows:
+                            if len(row) != 4 or not row[0] or not row[1]: continue
+                            networks.append(row[0], f"{row[1]} · {row[2]} % · {row[3] or 'Ouvert'}")
+                            count += 1
+                        if count: networks.set_active(0)
+                        self.notice.set_text(f"{count} réseau(x) trouvé(s)." if count else "Aucun réseau visible ou aucune carte Wi-Fi disponible.")
+                        return False
+                    GLib.idle_add(display)
+                except (OSError, subprocess.SubprocessError) as error:
+                    detail = getattr(error, "stderr", "") or str(error)
+                    GLib.idle_add(lambda: (self.notice.set_text("Recherche Wi-Fi impossible : " + detail.strip()), False)[1])
+            threading.Thread(target=worker, daemon=True).start()
+        self.button("Rechercher les réseaux Wi-Fi", scan, bool(shutil.which("nmcli")))
+        self.button("Se connecter au réseau sélectionné", lambda: self.command(["nmcli", "--wait", "90", "device", "wifi", "connect", networks.get_active_id()]) if networks.get_active_id() else self.notice.set_text("Choisissez d’abord un réseau."), bool(shutil.which("nmcli")))
         for title, args, binary in [
             ("Réseaux Wi-Fi disponibles", ["nmcli","-f","SSID,SIGNAL,SECURITY","device","wifi","list"],"nmcli"),
             ("Actualiser la recherche Wi-Fi", ["nmcli","device","wifi","rescan"],"nmcli"),
@@ -214,12 +241,22 @@ class Tools(Gtk.Window):
         self.content.pack_start(icon, False, False, 0)
         self.button("Rétablir l’icône Démarrer par défaut", lambda: self.command(["winlux-personalize", "start-icon", "default"]))
         for size in (32,40,48,56,64): self.button(f"Barre des tâches : {size} px", lambda value=size: self.command(["winlux-personalize","panel-size",str(value)]))
+        self.button("Options avancées de la barre des tâches", lambda: self.command(["xfce4-panel", "--preferences"]), bool(shutil.which("xfce4-panel")))
+        def reset_appearance():
+            dialog = Gtk.MessageDialog(transient_for=self, modal=True, buttons=Gtk.ButtonsType.OK_CANCEL,
+                                       text="Rétablir l’apparence Winlux par défaut ?",
+                                       secondary_text="Le thème, l’accent, le fond, l’icône Démarrer et la taille de la barre seront réinitialisés.")
+            result = dialog.run(); dialog.destroy()
+            if result == Gtk.ResponseType.OK: self.command(["winlux-personalize", "reset", "default"])
+        self.button("Rétablir l’apparence par défaut", reset_appearance)
 
     def apps(self):
         if Path("/usr/share/winlux/apt-base").is_file():
             self.label("Applications Linux natives (APT)")
             native = self.entry("Nom du paquet Ubuntu, par exemple vlc")
             self.button("Actualiser le catalogue APT", lambda:self.command(["apt-get","update"]))
+            self.button("Rechercher dans les paquets APT", lambda: self.command(["apt-cache", "search", native.get_text().strip()]) if native.get_text().strip() else self.notice.set_text("Saisissez une recherche."))
+            self.button("Lister les paquets installés", lambda: self.command(["dpkg-query", "-W", "-f=${binary:Package} ${Version}\\n"]))
             def apt(action):
                 name = native.get_text().strip()
                 if not re.fullmatch(r"[a-z0-9][a-z0-9+.-]+",name):
@@ -244,9 +281,17 @@ class Tools(Gtk.Window):
             else: args += [app]
             self.command(args)
         self.button("Activer le catalogue Flathub", lambda: self.command(["flatpak","remote-add","--user","--if-not-exists","flathub","https://dl.flathub.org/repo/flathub.flatpakrepo"]),bool(shutil.which("flatpak")))
+        self.button("Rechercher une application Flatpak", lambda: self.command(["flatpak", "search", identity.get_text().strip()]) if identity.get_text().strip() else self.notice.set_text("Saisissez une recherche."), bool(shutil.which("flatpak")))
         self.button("Installer", lambda: flatpak("install"),bool(shutil.which("flatpak")))
         self.button("Désinstaller", lambda: flatpak("uninstall"),bool(shutil.which("flatpak")))
         self.button("Lister les applications Flatpak", lambda: self.command(["flatpak","list","--user"]),bool(shutil.which("flatpak")))
+        def update_flatpak():
+            dialog = Gtk.MessageDialog(transient_for=self, modal=True, buttons=Gtk.ButtonsType.OK_CANCEL,
+                                       text="Mettre à jour les applications Flatpak de ce profil ?")
+            response = dialog.run(); dialog.destroy()
+            if response == Gtk.ResponseType.OK:
+                self.command(["flatpak", "update", "--user", "--noninteractive"])
+        self.button("Mettre à jour les applications Flatpak", update_flatpak, bool(shutil.which("flatpak")))
         self.label("Applications par défaut")
         types=Gtk.ComboBoxText()
         for mime,label in [("text/plain","Documents texte"),("image/png","Images PNG"),("image/jpeg","Images JPEG"),
@@ -278,6 +323,7 @@ class Tools(Gtk.Window):
 
     def files(self):
         self.label("L’Explorateur natif propose les favoris dans sa barre latérale, les miniatures et les périphériques amovibles.")
+        self.button("Ouvrir le gestionnaire de fichiers complet", lambda: self.command(["Thunar"]), bool(shutil.which("Thunar")))
         for label,path in [("Dossier personnel",HOME),("Documents",HOME/"Documents"),("Téléchargements",HOME/"Téléchargements")]:
             self.button(label,lambda target=path:self.command(["Thunar",str(target)]))
         self.button("Corbeille",lambda:self.command(["Thunar","trash:///"]))
@@ -286,6 +332,19 @@ class Tools(Gtk.Window):
         self.label("Favoris : ouvrez un dossier puis utilisez Ctrl+D dans l’Explorateur natif. Éjection : bouton à côté du périphérique dans la barre latérale.")
         self.button("Lister les périphériques USB",lambda:self.command(["lsblk","-o","NAME,SIZE,TRAN,MOUNTPOINTS,MODEL"]))
         self.button("Gestion des disques et éjection",lambda:self.command(["gnome-disks"]),bool(shutil.which("gnome-disks")))
+
+    def recovery(self):
+        self.label("En cas de problème, une sauvegarde Winlux peut permettre de revenir à la version précédente. Les documents personnels ne sont pas une sauvegarde système : gardez-en également une copie sur un autre support.")
+        if Path("/usr/share/winlux/update-backend").is_file() and read("/usr/share/winlux/update-backend").strip() == "apt":
+            available = Path("/var/cache/winlux/previous.deb").is_file()
+        else:
+            name = read("/var/lib/winlux/rollback-current").strip()
+            available = bool(re.fullmatch(r"update-backup\.[A-Za-z0-9._+-]+", name)) and (Path("/var/lib/winlux") / name / "restore.list").is_file()
+        self.label("Sauvegarde précédente détectée." if available else "Aucune sauvegarde précédente détectée.")
+        self.label("Pour restaurer, ouvrez Mises à jour et choisissez Restaurer. Une confirmation est demandée avant toute modification.")
+        self.button("Ouvrir les mises à jour", lambda: self.command(["winlux-shell-app", "settings", "7"]))
+        self.label("Si le bureau ne démarre plus : utilisez l’entrée Winlux secours au démarrage si elle est disponible. Sinon, démarrez sur une clé USB d’installation Winlux. Le menu de secours ne remplace pas une sauvegarde de vos documents.")
+        self.button("Ouvrir le guide d’accueil", lambda: self.command(["winlux-welcome"]))
 
     def pick(self,folder=False):
         dialog=Gtk.FileChooserDialog(title="Choisir un dossier" if folder else "Choisir un fichier",transient_for=self,
@@ -322,8 +381,19 @@ class Tools(Gtk.Window):
         except (OSError,GLib.Error) as error:area.add(Gtk.Label(label=str(error),wrap=True))
         dialog.show_all();dialog.run();dialog.destroy()
 
+def split_nmcli(line):
+    fields, field, escaped = [], [], False
+    for char in line:
+        if escaped: field.append(char); escaped = False
+        elif char == "\\": escaped = True
+        elif char == ":": fields.append("".join(field)); field = []
+        else: field.append(char)
+    if escaped: field.append("\\")
+    fields.append("".join(field))
+    return fields
+
 if __name__ == "__main__":
     page = sys.argv[1] if len(sys.argv)>1 else "quick"
-    if page not in ("quick","notifications","tasks","appearance","apps","files"): raise SystemExit(2)
+    if page not in ("quick","notifications","tasks","appearance","apps","files","recovery"): raise SystemExit(2)
     Tools(page)
     Gtk.main()

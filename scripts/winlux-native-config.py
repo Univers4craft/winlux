@@ -77,6 +77,14 @@ if openbox_config.is_file():
                     action = ET.SubElement(binding, f"{{{namespace}}}action", name="Execute")
                     ET.SubElement(action, f"{{{namespace}}}command").text = "winlux-system-tools " + page
                     changed = True
+            default_rc = source / "config/openbox/rc.xml"
+            if default_rc.is_file():
+                defaults = ET.parse(default_rc).getroot().find(f"{{{namespace}}}keyboard")
+                if defaults is not None:
+                    for binding in defaults:
+                        if binding.get("key") in ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right") and binding.get("key") not in keys:
+                            keyboard.append(ET.fromstring(ET.tostring(binding)))
+                            changed = True
             for binding in list(keyboard):
                 commands = binding.findall(f"{{{namespace}}}action/{{{namespace}}}command")
                 if binding.get("key") == "Super_L" and len(commands) == 1 and commands[0].text == "winlux-start-menu":

@@ -94,6 +94,10 @@ def apply(kind,value):
 if __name__=="__main__":
     try:
         if len(sys.argv)!=3: raise ValueError("usage : winlux-personalize theme|accent|wallpaper|panel-size VALEUR")
-        apply(sys.argv[1],sys.argv[2])
+        if sys.argv[1] == "reset" and sys.argv[2] == "default":
+            for kind, value in (("theme", "dark"), ("accent", "#8178b7"), ("panel-size", "40"),
+                                ("start-icon", "default"), ("wallpaper", "/usr/share/winlux/wallpaper.bmp")):
+                apply(kind, value)
+        else: apply(sys.argv[1],sys.argv[2])
     except (OSError,ValueError,subprocess.SubprocessError) as error:
         print(str(error),file=sys.stderr);raise SystemExit(1)
