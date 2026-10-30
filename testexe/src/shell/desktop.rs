@@ -102,7 +102,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 26] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 28] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
             (b"Bloc-notes", b"mousepad", 1),
@@ -110,6 +110,8 @@ fn init_apps() {
             (b"Capture d'\xE9cran", b"screenshot.exe", 1),
             (b"Visionneuse", b"imageviewer.exe", 1),
             (b"Post-it", b"postit.exe", 1),
+            (b"Lecteur PDF", b"pdfviewer.exe", 1),
+            (b"Lecteur audio", b"audioplayer.exe", 5),
             (b"Infos syst\xE8me", b"sysinfo.exe", 8),
             (b"Utilitaires", b"utilities-terminal", 2),
             (b"Archives", b"file-roller", 1),
