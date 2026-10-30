@@ -11,6 +11,12 @@
 
 ## À FAIRE (par priorité)
 
+### Priorité IMMÉDIATE (★★★★★)
+
+- [ ] **Corbeille fonctionnelle** : Permettre "Supprimer" -> corbeille, restaurer, vider. Très attendu.
+- [ ] **Copie avec progression + pause/annuler** : UX visuelle (barre de progression + vitesse, ETA) dans l'Explorateur.
+- [ ] **Centre de réglages rapides plus complet** : Étendre (réseau/volume/éclairage/batterie). Sur VM sans Wi-Fi, afficher clairement "Ethernet virtuel" au lieu de "Wi-Fi indisponible".
+
 
 ### État actuel
 
