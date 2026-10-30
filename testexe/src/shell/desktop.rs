@@ -2997,6 +2997,7 @@ pub unsafe fn regression_checks() {
         SCREEN_H,
     );
     BOOT_DONE = true;
+    crate::login::skip_login();
     SCREEN_W = 1920;
     SCREEN_H = 1080;
     PINNED_APPS = 1 << wm::APP_EXPLORER | 1 << wm::APP_SETTINGS; // 2 apps
