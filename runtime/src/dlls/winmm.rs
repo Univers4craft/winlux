@@ -615,7 +615,11 @@ pub unsafe extern "win64" fn wave_in_open(
         return 4; // MMSYSERR_ALLOCATED
     }
     *state = Some(RecordState {
-        config: RecordConfig { channels, rate: sample_rate, bits_per_sample },
+        config: RecordConfig {
+            channels,
+            rate: sample_rate,
+            bits_per_sample,
+        },
         buffers: std::sync::Arc::new(Mutex::new(Vec::new())),
         cancel: std::sync::Arc::new(AtomicBool::new(false)),
         thread: None,
@@ -631,7 +635,9 @@ pub unsafe extern "win64" fn wave_in_prepare_header(
     pwh: *mut u8,
     _cbwh: u32,
 ) -> u32 {
-    if pwh.is_null() { return 6; } // MMSYSERR_NODRIVER
+    if pwh.is_null() {
+        return 6;
+    } // MMSYSERR_NODRIVER
     *wavehdr_flags(pwh) |= WHDR_PREPARED;
     0
 }
@@ -641,7 +647,9 @@ pub unsafe extern "win64" fn wave_in_unprepare_header(
     pwh: *mut u8,
     _cbwh: u32,
 ) -> u32 {
-    if pwh.is_null() { return 6; }
+    if pwh.is_null() {
+        return 6;
+    }
     *wavehdr_flags(pwh) &= !WHDR_PREPARED;
     0
 }
@@ -651,7 +659,9 @@ pub unsafe extern "win64" fn wave_in_add_buffer(
     pwh: *mut u8,
     _cbwh: u32,
 ) -> u32 {
-    if pwh.is_null() { return 6; }
+    if pwh.is_null() {
+        return 6;
+    }
     *wavehdr_bytes_recorded(pwh) = 0;
     *wavehdr_flags(pwh) &= !WHDR_DONE;
     let state = lock(record_lock());
@@ -678,8 +688,11 @@ pub unsafe extern "win64" fn wave_in_start(_hwi: *mut c_void) -> u32 {
             .name("winlux-wave-capture".into())
             .spawn(move || capture_thread(channels, rate, bufs, cancel))
         {
-            Ok(handle) => { s.thread = Some(handle); 0 }
-            Err(_) => 8 // MMSYSERR_NOMEM
+            Ok(handle) => {
+                s.thread = Some(handle);
+                0
+            }
+            Err(_) => 8, // MMSYSERR_NOMEM
         }
     } else {
         6
