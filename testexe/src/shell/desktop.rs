@@ -102,15 +102,18 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 23] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 26] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
             (b"Bloc-notes", b"mousepad", 1),
             (b"Calculatrice", b"calc.exe", 1),
             (b"Capture d'\xE9cran", b"screenshot.exe", 1),
+            (b"Visionneuse", b"imageviewer.exe", 1),
+            (b"Post-it", b"postit.exe", 1),
+            (b"Infos syst\xE8me", b"sysinfo.exe", 8),
             (b"Utilitaires", b"utilities-terminal", 2),
             (b"Archives", b"file-roller", 1),
-            (b"Visionneuse d'images", b"xviewer", 3),
+            (b"Visionneuse Linux", b"xviewer", 3),
             (b"GIMP", b"gimp", 3),
             (b"Inkscape", b"inkscape", 3),
             (b"Firefox", b"firefox", 4),
