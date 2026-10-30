@@ -417,8 +417,306 @@ pub unsafe extern "win64" fn mci_send_string_a(
 pub extern "win64" fn time_get_time() -> u32 {
     crate::dlls::kernel32::get_tick_count()
 }
+
+// ---------------------------------------------------------------------------
+// waveIn* – capture audio via ALSA (Linux), exposée comme l'API Win32
+// ---------------------------------------------------------------------------
+
+type PcmRead = unsafe extern "C" fn(*mut c_void, *mut c_void, usize) -> isize;
+type PcmStart = unsafe extern "C" fn(*mut c_void) -> c_int;
+
+struct AlsaCapture {
+    lib: *mut c_void,
+    open: PcmOpen,
+    set_params: PcmSetParams,
+    readi: PcmRead,
+    start: PcmStart,
+    recover: PcmRecover,
+    drop_pcm: PcmDrop,
+    close: PcmClose,
+}
+unsafe impl Send for AlsaCapture {}
+unsafe impl Sync for AlsaCapture {}
+impl Drop for AlsaCapture {
+    fn drop(&mut self) {
+        unsafe { dlclose(self.lib); }
+    }
+}
+fn alsa_capture() -> Result<AlsaCapture, ()> {
+    unsafe {
+        let lib = dlopen(c"libasound.so.2".as_ptr(), 2);
+        if lib.is_null() {
+            return Err(());
+        }
+        macro_rules! sym {
+            ($n:literal,$t:ty) => {{
+                let p = dlsym(lib, concat!($n, "\0").as_ptr() as *const c_char);
+                if p.is_null() {
+                    dlclose(lib);
+                    return Err(());
+                }
+                std::mem::transmute::<*mut c_void, $t>(p)
+            }};
+        }
+        Ok(AlsaCapture {
+            lib,
+            open: sym!("snd_pcm_open", PcmOpen),
+            set_params: sym!("snd_pcm_set_params", PcmSetParams),
+            readi: sym!("snd_pcm_readi", PcmRead),
+            start: sym!("snd_pcm_start", PcmStart),
+            recover: sym!("snd_pcm_recover", PcmRecover),
+            drop_pcm: sym!("snd_pcm_drop", PcmDrop),
+            close: sym!("snd_pcm_close", PcmClose),
+        })
+    }
+}
+
+struct WaveHdrPtr(*mut u8);
+unsafe impl Send for WaveHdrPtr {}
+
+struct RecordConfig {
+    channels: u16,
+    rate: u32,
+    bits_per_sample: u16,
+}
+
+struct RecordState {
+    config: RecordConfig,
+    buffers: std::sync::Arc<Mutex<Vec<WaveHdrPtr>>>,
+    cancel: std::sync::Arc<AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+}
+
+static RECORD: OnceLock<Mutex<Option<RecordState>>> = OnceLock::new();
+fn record_lock() -> &'static Mutex<Option<RecordState>> {
+    RECORD.get_or_init(|| Mutex::new(None))
+}
+
+const WHDR_DONE: u32 = 0x01;
+const WHDR_PREPARED: u32 = 0x02;
+
+unsafe fn wavehdr_data_ptr(pwh: *mut u8) -> *mut u8 {
+    *(pwh as *const *mut u8)
+}
+unsafe fn wavehdr_buffer_length(pwh: *mut u8) -> u32 {
+    *((pwh as *const u8).add(8) as *const u32)
+}
+unsafe fn wavehdr_bytes_recorded(pwh: *mut u8) -> *mut u32 {
+    (pwh as *mut u8).add(12) as *mut u32
+}
+unsafe fn wavehdr_flags(pwh: *mut u8) -> *mut u32 {
+    (pwh as *mut u8).add(16) as *mut u32
+}
+
+fn capture_thread(
+    config_channels: u16,
+    config_rate: u32,
+    buffers: std::sync::Arc<Mutex<Vec<WaveHdrPtr>>>,
+    cancel: std::sync::Arc<AtomicBool>,
+) {
+    let Ok(a) = alsa_capture() else { return };
+    let default = CString::new("default").unwrap();
+    let mut pcm = std::ptr::null_mut();
+    // mode 1 = SND_PCM_STREAM_CAPTURE
+    if unsafe { (a.open)(&mut pcm, default.as_ptr(), 1, 0) } < 0 {
+        return;
+    }
+    // S16_LE=2, RW_INTERLEAVED=3
+    if unsafe { (a.set_params)(pcm, 2, 3, config_channels as u32, config_rate, 1, 500_000) } < 0 {
+        unsafe { (a.close)(pcm); }
+        return;
+    }
+    if unsafe { (a.start)(pcm) } < 0 {
+        unsafe { (a.close)(pcm); }
+        return;
+    }
+
+    let bytes_per_frame = config_channels as usize * 2; // 16-bit
+    let mut local_buf = vec![0i16; 1024 * config_channels as usize];
+
+    while !cancel.load(Ordering::Relaxed) {
+        let frames = local_buf.len() / config_channels as usize;
+        let rc = unsafe { (a.readi)(pcm, local_buf.as_mut_ptr() as *mut c_void, frames) };
+        if rc > 0 {
+            let captured_bytes = rc as usize * bytes_per_frame;
+            let src = unsafe {
+                std::slice::from_raw_parts(local_buf.as_ptr() as *const u8, captured_bytes)
+            };
+            let mut src_off = 0usize;
+            while src_off < captured_bytes {
+                let mut list = lock(&buffers);
+                if list.is_empty() {
+                    break;
+                }
+                let pwh = list[0].0;
+                unsafe {
+                    let buf_ptr = wavehdr_data_ptr(pwh);
+                    let buf_len = wavehdr_buffer_length(pwh) as usize;
+                    let recorded = *wavehdr_bytes_recorded(pwh) as usize;
+                    let space = buf_len.saturating_sub(recorded);
+                    let copy = (captured_bytes - src_off).min(space);
+                    if copy > 0 {
+                        std::ptr::copy_nonoverlapping(
+                            src.as_ptr().add(src_off),
+                            buf_ptr.add(recorded),
+                            copy,
+                        );
+                        *wavehdr_bytes_recorded(pwh) = (recorded + copy) as u32;
+                        src_off += copy;
+                    }
+                    if *wavehdr_bytes_recorded(pwh) as usize >= buf_len {
+                        *wavehdr_flags(pwh) |= WHDR_DONE;
+                        list.remove(0);
+                    }
+                }
+            }
+        } else if rc == -11 {
+            // EAGAIN
+            std::thread::sleep(std::time::Duration::from_millis(2));
+        } else if rc < 0 {
+            if unsafe { (a.recover)(pcm, rc as c_int, 1) } < 0 {
+                break;
+            }
+        }
+    }
+
+    unsafe {
+        (a.drop_pcm)(pcm);
+        (a.close)(pcm);
+    }
+}
+
+pub unsafe extern "win64" fn wave_in_get_num_devs() -> u32 {
+    if alsa_capture().is_ok() { 1 } else { 0 }
+}
+
+pub unsafe extern "win64" fn wave_in_open(
+    phwi: *mut *mut c_void,
+    device_id: u32,
+    pwfx: *const u8,
+    _callback: usize,
+    _instance: usize,
+    _flags: u32,
+) -> u32 {
+    if device_id != 0 && device_id != u32::MAX {
+        return 2; // MMSYSERR_BADDEVICEID
+    }
+    if pwfx.is_null() {
+        return 11; // WAVERR_BADFORMAT
+    }
+    let channels = *(pwfx.add(2) as *const u16);
+    let sample_rate = *(pwfx.add(4) as *const u32);
+    let bits_per_sample = *(pwfx.add(14) as *const u16);
+    if !(channels == 1 || channels == 2) || sample_rate == 0 || bits_per_sample != 16 {
+        return 11;
+    }
+    let mut state = lock(record_lock());
+    if state.is_some() {
+        return 4; // MMSYSERR_ALLOCATED
+    }
+    *state = Some(RecordState {
+        config: RecordConfig { channels, rate: sample_rate, bits_per_sample },
+        buffers: std::sync::Arc::new(Mutex::new(Vec::new())),
+        cancel: std::sync::Arc::new(AtomicBool::new(false)),
+        thread: None,
+    });
+    if !phwi.is_null() {
+        *phwi = 1usize as *mut c_void; // sentinel handle
+    }
+    0
+}
+
+pub unsafe extern "win64" fn wave_in_prepare_header(
+    _hwi: *mut c_void,
+    pwh: *mut u8,
+    _cbwh: u32,
+) -> u32 {
+    if pwh.is_null() { return 6; } // MMSYSERR_NODRIVER
+    *wavehdr_flags(pwh) |= WHDR_PREPARED;
+    0
+}
+
+pub unsafe extern "win64" fn wave_in_unprepare_header(
+    _hwi: *mut c_void,
+    pwh: *mut u8,
+    _cbwh: u32,
+) -> u32 {
+    if pwh.is_null() { return 6; }
+    *wavehdr_flags(pwh) &= !WHDR_PREPARED;
+    0
+}
+
+pub unsafe extern "win64" fn wave_in_add_buffer(
+    _hwi: *mut c_void,
+    pwh: *mut u8,
+    _cbwh: u32,
+) -> u32 {
+    if pwh.is_null() { return 6; }
+    *wavehdr_bytes_recorded(pwh) = 0;
+    *wavehdr_flags(pwh) &= !WHDR_DONE;
+    let state = lock(record_lock());
+    if let Some(ref s) = *state {
+        lock(&s.buffers).push(WaveHdrPtr(pwh));
+        0
+    } else {
+        6
+    }
+}
+
+pub unsafe extern "win64" fn wave_in_start(_hwi: *mut c_void) -> u32 {
+    let mut state = lock(record_lock());
+    if let Some(ref mut s) = *state {
+        if s.thread.is_some() {
+            return 0; // already recording
+        }
+        s.cancel.store(false, Ordering::Relaxed);
+        let channels = s.config.channels;
+        let rate = s.config.rate;
+        let bufs = s.buffers.clone();
+        let cancel = s.cancel.clone();
+        match std::thread::Builder::new()
+            .name("winlux-wave-capture".into())
+            .spawn(move || capture_thread(channels, rate, bufs, cancel))
+        {
+            Ok(handle) => { s.thread = Some(handle); 0 }
+            Err(_) => 8 // MMSYSERR_NOMEM
+        }
+    } else {
+        6
+    }
+}
+
+pub unsafe extern "win64" fn wave_in_stop(_hwi: *mut c_void) -> u32 {
+    let mut state = lock(record_lock());
+    if let Some(ref mut s) = *state {
+        s.cancel.store(true, Ordering::Relaxed);
+        if let Some(t) = s.thread.take() {
+            let _ = t.join();
+        }
+        // mark remaining buffers as done
+        let mut bufs = lock(&s.buffers);
+        for b in bufs.drain(..) {
+            *wavehdr_flags(b.0) |= WHDR_DONE;
+        }
+        0
+    } else {
+        6
+    }
+}
+
+pub unsafe extern "win64" fn wave_in_reset(_hwi: *mut c_void) -> u32 {
+    wave_in_stop(_hwi)
+}
+
+pub unsafe extern "win64" fn wave_in_close(_hwi: *mut c_void) -> u32 {
+    wave_in_stop(_hwi);
+    let mut state = lock(record_lock());
+    *state = None;
+    0
+}
+
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {"PlaySoundA"=>fn play_sound_a,"PlaySoundW"=>fn play_sound_w,"mciSendStringA"=>fn mci_send_string_a,"timeGetTime"=>fn time_get_time}
+    crate::exports! {"PlaySoundA"=>fn play_sound_a,"PlaySoundW"=>fn play_sound_w,"mciSendStringA"=>fn mci_send_string_a,"timeGetTime"=>fn time_get_time,"waveInGetNumDevs"=>fn wave_in_get_num_devs,"waveInOpen"=>fn wave_in_open,"waveInPrepareHeader"=>fn wave_in_prepare_header,"waveInUnprepareHeader"=>fn wave_in_unprepare_header,"waveInAddBuffer"=>fn wave_in_add_buffer,"waveInStart"=>fn wave_in_start,"waveInStop"=>fn wave_in_stop,"waveInReset"=>fn wave_in_reset,"waveInClose"=>fn wave_in_close}
 }
 
 #[cfg(test)]
