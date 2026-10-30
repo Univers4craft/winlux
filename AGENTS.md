@@ -1,5 +1,16 @@
 # Règles de travail pour les agents
 
+## SUIVI DES TÂCHES (OBLIGATOIRE)
+
+**Source unique de vérité : [GitHub Projects](https://github.com/Univers4craft/winlux/projects)**
+
+- **Avant d'agir** : Consulte le board GitHub Projects. Prends une carte "À faire" non assignée et passe-la en "En cours".
+- **Pendant l'action** : Travaille uniquement sur cette carte. N'invente pas de nouvelles tâches sans les ajouter au projet GitHub Projects.
+- **Après avoir terminé** : Teste (`cargo test -p winlux`, `scripts/build-tests.sh`, `scripts/test-runtime.sh` si pertinent). Puis **passe la carte en "Fait/Done"** et ajoute un commentaire avec le hash du commit poussé (`git log -1 --oneline`).
+- **Miroirs uniquement** : `TODO.md`, `TRACKING.md` et le wiki GitHub sont des miroirs/générés. Ils ne doivent **PAS** être considérés comme source de vérité. Seul le [GitHub Projects](https://github.com/Univers4craft/winlux/projects) fait foi.
+- **À jour en temps réel** : À chaque fois que tu fais quelque chose de concret, tu dois mettre à jour le board immédiatement. Utilise `gh project` si les droits le permettent.
+- **Wiki** : Le [wiki GitHub](https://github.com/Univers4craft/winlux/wiki) doit refléter l'état du projet et pointer systématiquement vers le GitHub Projects comme suivi principal.
+
 ## Efficacité
 
 - Comprendre la demande et son périmètre avant d'agir. Pour une question ou une
