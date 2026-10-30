@@ -6,7 +6,7 @@ use std::ffi::{c_void, CString};
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 const ERROR_SUCCESS: i32 = 0;
 const ERROR_FILE_NOT_FOUND: i32 = 2;
@@ -48,9 +48,7 @@ static NEXT_KEY_HANDLE: AtomicUsize = AtomicUsize::new(0x4000_0000);
 #[cfg(test)]
 pub(crate) static REGISTRY_TEST_LOCK: Mutex<()> = Mutex::new(());
 
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 fn cache() -> &'static Mutex<RegistryData> {
     REGISTRY.get_or_init(|| Mutex::new(RegistryData::default()))
 }

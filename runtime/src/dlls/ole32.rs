@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::ffi::c_void;
 use std::io::Read;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::{Arc, Mutex};
 
 const S_OK: i32 = 0;
 const S_FALSE: i32 = 1;
@@ -114,11 +114,7 @@ struct ComStream {
     cursor: Mutex<u64>,
 }
 
-fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
-    mutex
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 
 fn guid_text(guid: &Guid) -> String {
     format!(

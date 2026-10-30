@@ -248,9 +248,7 @@ static JOBS: OnceLock<Mutex<Vec<Job>>> = OnceLock::new();
 fn jobs() -> &'static Mutex<Vec<Job>> {
     JOBS.get_or_init(|| Mutex::new(Vec::new()))
 }
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 fn play_wave_cancellable(wave: Wave, cancel: std::sync::Arc<AtomicBool>) -> Result<(), u32> {
     let a = alsa().map_err(|_| 50u32)?;
     let default = CString::new("default").unwrap();

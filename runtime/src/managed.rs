@@ -44,15 +44,7 @@ pub struct ClrInfo {
     pub requires_32bit: bool,
 }
 
-fn rd16(bytes: &[u8], offset: usize) -> Option<u16> {
-    let value = bytes.get(offset..offset.checked_add(2)?)?;
-    Some(u16::from_le_bytes([value[0], value[1]]))
-}
-
-fn rd32(bytes: &[u8], offset: usize) -> Option<u32> {
-    let value = bytes.get(offset..offset.checked_add(4)?)?;
-    Some(u32::from_le_bytes(value.try_into().ok()?))
-}
+use crate::pe::{rd16, rd32};
 
 /// Détecte le répertoire IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR dans un PE32
 /// ou PE32+. Cette lecture précède volontairement le chargeur x86-64 afin de

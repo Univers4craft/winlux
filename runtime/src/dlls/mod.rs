@@ -309,6 +309,10 @@ pub fn builtin_by_handle(h: usize) -> Option<&'static str> {
 
 // ---------- Utilitaires partagés par les DLL ----------
 
+pub(crate) fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 pub unsafe fn cstr(p: *const u8) -> String {
     if p.is_null() {
         return String::new();
@@ -317,14 +321,15 @@ pub unsafe fn cstr(p: *const u8) -> String {
     decode_ansi(std::slice::from_raw_parts(p, n))
 }
 
+const CP1252: [u16; 32] = [
+    0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160,
+    0x2039, 0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022,
+    0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
+];
+
 /// Codepage ANSI par défaut de Winlux (Windows-1252), convertie vers UTF-8
 /// pour l'interface Linux. Les API Unicode `W` évitent cette conversion.
 pub fn decode_ansi(bytes: &[u8]) -> String {
-    const CP1252: [u16; 32] = [
-        0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160,
-        0x2039, 0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022,
-        0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
-    ];
     bytes
         .iter()
         .map(|&b| {
@@ -345,12 +350,6 @@ pub fn encode_ansi(text: &str) -> Vec<u8> {
             if n <= 0x7f || (0xa0..=0xff).contains(&n) {
                 return n as u8;
             }
-            const CP1252: [u16; 32] = [
-                0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030,
-                0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c,
-                0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d,
-                0x017e, 0x0178,
-            ];
             CP1252
                 .iter()
                 .position(|&x| x as u32 == n)
