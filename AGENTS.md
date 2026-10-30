@@ -2,14 +2,13 @@
 
 ## SUIVI DES TÂCHES (OBLIGATOIRE)
 
-**Source unique de vérité : [GitHub Projects](https://github.com/Univers4craft/winlux/projects)**
+**Source unique de vérité : [Suivi.md](Suivi.md)**
 
-- **Avant d'agir** : Consulte le board GitHub Projects. Prends une carte "À faire" non assignée et passe-la en "En cours".
-- **Pendant l'action** : Travaille uniquement sur cette carte. N'invente pas de nouvelles tâches sans les ajouter au projet GitHub Projects.
-- **Après avoir terminé** : Teste (`cargo test -p winlux`, `scripts/build-tests.sh`, `scripts/test-runtime.sh` si pertinent). Puis **passe la carte en "Fait/Done"** et ajoute un commentaire avec le hash du commit poussé (`git log -1 --oneline`).
-- **Miroirs uniquement** : `TODO.md`, `TRACKING.md` et le wiki GitHub sont des miroirs/générés. Ils ne doivent **PAS** être considérés comme source de vérité. Seul le [GitHub Projects](https://github.com/Univers4craft/winlux/projects) fait foi.
-- **À jour en temps réel** : À chaque fois que tu fais quelque chose de concret, tu dois mettre à jour le board immédiatement. Utilise `gh project` si les droits le permettent.
-- **Wiki** : Le [wiki GitHub](https://github.com/Univers4craft/winlux/wiki) doit refléter l'état du projet et pointer systématiquement vers le GitHub Projects comme suivi principal.
+- **Avant d'agir** : Consulte `Suivi.md`. Prends une tâche non cochée dans "À FAIRE" et commence à la réaliser. **Coche-la `[x]` IMMÉDIATEMENT** en la déplaçant vers "DÉJÀ FAIT" ou en la marquant faite.
+- **Pendant l'action** : Travaille uniquement sur cette tâche. Si tu découvres une sous-tâche nécessaire, ajoute-la à `Suivi.md` dans la bonne section.
+- **Après avoir terminé** : Teste (`cargo test -p winlux`, `scripts/build-tests.sh`, `scripts/test-runtime.sh` si pertinent). **Met à jour `Suivi.md`** pour marquer la tâche comme `[x]` avec contexte si besoin. Commit et push.
+- **À jour en temps réel** : À CHAQUE action concrète (ajout, correction, refactor), `Suivi.md` DOIT être mis à jour dans le même commit ou juste après. Pas "plus tard".
+- **Miroirs** : `TODO.md` et `TRACKING.md` sont des miroirs. `Suivi.md` est la source à consulter et à mettre à jour en priorité.
 
 ## Efficacité
 

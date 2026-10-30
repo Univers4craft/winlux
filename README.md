@@ -9,9 +9,9 @@ Winlux réunit un chargeur d’exécutables **Windows PE32+ x86-64**, un sous-en
 > **Préversion technique, pas un remplacement de Windows prêt à l’emploi.**
 > Tous les `.exe` ne fonctionnent pas. Photoshop, WPF et WinForms ne sont pas garantis compatibles. Privilégiez les tests en VM : l’installation généraliste sur SSD reste à développer.
 
-[Compatibilité](COMPATIBILITY.md) · [Interface](INTERFACE.md) · [Suivi complet](TRACKING.md) · [Suivi du projet (GitHub Projects)](https://github.com/Univers4craft/winlux/projects) · [Feuille de route](TODO.md) · [Installation SSD : objectifs](ROADMAP-SSD.md) · [Releases](https://github.com/Univers4craft/winlux/releases)
+[Compatibilité](COMPATIBILITY.md) · [Interface](INTERFACE.md) · [**Suivi**](Suivi.md) · [Feuille de route](TODO.md) · [Installation SSD : objectifs](ROADMAP-SSD.md) · [Releases](https://github.com/Univers4craft/winlux/releases)
 
-> Le suivi des tâches est centralisé dans [TRACKING.md](TRACKING.md) (extrait de tous les fichiers `.md`) et dans [GitHub Projects](https://github.com/Univers4craft/winlux/projects). `TODO.md` reste à jour pour un aperçu rapide.
+> **[Suivi.md](Suivi.md)** est la source unique de vérité pour les tâches à faire et réalisées. Il doit être mis à jour à chaque action.
 
 ## Ce qui existe aujourd’hui
 
