@@ -1,0 +1,417 @@
+# Suivi du projet Winlux
+
+> **Source unique de vérité** — Ce fichier regroupe toutes les tâches extraites de TOUS les fichiers Markdown du dépôt.
+> Mis à jour automatiquement par analyse des fichiers `.md`.
+> GitHub Projects : https://github.com/Univers4craft/winlux/projects
+
+## Statistiques
+
+- **Fichiers analysés** : 41
+- **Tâches réalisées** : 165
+- **Tâches restantes** : 234
+- **Total** : 399
+
+## Réalisé
+
+- [x] Afficher/basculer Explorer et Paramètres dans la barre du prototype ; pas de suivi général des fenêtres Linux externes. _(source: INTERFACE.md)_
+- [x] Ajouter À propos avec version, commit et date lus dans BUILD-INFO, et signaler son absence sur les anciennes images. _(source: INTERFACE.md)_
+- [x] Conserver l'alignement de la barre et le thème sur racine persistante ; positions et épingles restent à sauvegarder. _(source: INTERFACE.md)_
+- [x] Déplacer les trois icônes prédéfinies sur une grille et limiter leur position à l'écran ; positions uniquement en mémoire. _(source: INTERFACE.md)_
+- [x] Implémenter ces états pour les deux fenêtres internes Explorer/Paramètres (`wm.rs`) ; validation ergonomique complète et gestion des fenêtres externes distinctes. _(source: INTERFACE.md)_
+- [x] Navigation latérale, cartes, télémétrie et journaux d'action ; pas de recherche transversale dans les réglages. _(source: INTERFACE.md)_
+- [x] Épingler/désépingler Explorer et Paramètres par clic droit dans la barre _(source: INTERFACE.md)_
+- [x] API de chemins W dans Explorer et régression Euro/noms longs ; IME, hors-BMP et couverture Unicode globale restent distincts. _(source: ROADMAP-SSD.md)_
+- [x] Afficher le modèle, la capacité et le numéro de série du disque cible en console (`install.sh`) ; pas d'inventaire graphique de tous les disques. _(source: ROADMAP-SSD.md)_
+- [x] Backend X11 : cache des commandes et pixmap de double tampon ; cache séparé des fenêtres internes du shell et mesures de fluidité encore à faire. _(source: ROADMAP-SSD.md)_
+- [x] Chargeur autonome indépendant de l'ISO, validé sous QEMU. _(source: ROADMAP-SSD.md)_
+- [x] Confirmation exacte du disque avant effacement ; automatisation réservée aux images loop explicitement vérifiées ou au test en VM isolée. _(source: ROADMAP-SSD.md)_
+- [x] Documentation des fonctions et blocages dans COMPATIBILITY et les revues runtime/graphique ; pas encore de catalogue par logiciel. _(source: ROADMAP-SSD.md)_
+- [x] Démarrage UEFI et BIOS du disque installé, validé sous QEMU ; matériel réel non testé. _(source: ROADMAP-SSD.md)_
+- [x] Démarrage sans ISO après installation en BIOS et UEFI, tests PE/X11 réussis. _(source: ROADMAP-SSD.md)_
+- [x] Fond image BMP généré depuis PNG et repli vectoriel animé ; sélecteur et réglage des performances non implémentés. _(source: ROADMAP-SSD.md)_
+- [x] Installation automatisée sur un disque virtuel vierge (installateur réel, VM isolée). _(source: ROADMAP-SSD.md)_
+- [x] Installation hors ligne depuis une ISO et les outils préparés : test en VM sans réseau. _(source: ROADMAP-SSD.md)_
+- [x] Installation sur un disque entier dédié : CLI, validée uniquement sur un disque virtuel neuf de 4 Gio. _(source: ROADMAP-SSD.md)_
+- [x] Partitionnement GPT, partition BIOS boot, ESP et racine ext4. _(source: ROADMAP-SSD.md)_
+- [x] Premier sous-ensemble Win32/CRT/COM/GDI renforcé et couvert par les tests runtime ; compatibilité générale toujours partielle. _(source: ROADMAP-SSD.md)_
+- [x] Terminal utilisable depuis le bureau (xterm intégré, Explorer et `.exe` console ; validé en VM). _(source: ROADMAP-SSD.md)_
+- [x] Tests Live et disque installé en UEFI et BIOS sous QEMU ; pas de certification matérielle. _(source: ROADMAP-SSD.md)_
+- [x] Vérifier espace, lecture seule, montages, swap et volumes composites avant effacement ; pas de diagnostic SMART. _(source: ROADMAP-SSD.md)_
+- [x] Ajouter DHCP, route, DNS et renouvellement réseau, avec tests isolés. _(source: TODO.md)_
+- [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble). _(source: TODO.md)_
+- [x] Ajouter `GetFullPathName`, `CopyFile`, `MoveFile`, `CreateDirectory` et `RemoveDirectory` en A/W ou A selon l’API. _(source: TODO.md)_
+- [x] Ajouter `GetKeyState`, `GetAsyncKeyState` et `GetKeyboardState` : état thread mis à jour lors du retrait de `WM_KEYDOWN`/`WM_KEYUP`, état asynchrone alimenté par les événements X11, bits pressé/bascule et tableau de 256 touches; tests unitaires, PE et saisie Xvfb. _(source: TODO.md)_
+- [x] Ajouter `GetTempFileNameA/W`, `GetFileAttributesExA/W` et `SetEndOfFile` avec tests fonctionnels. _(source: TODO.md)_
+- [x] Ajouter `ReadFile`/`WriteFile` overlapped avec offsets, `ERROR_IO_PENDING`, signal d’événement et `GetOverlappedResult`. _(source: TODO.md)_
+- [x] Ajouter `SetDIBitsToDevice`/`StretchDIBits` BI_RGB 1/4/8/16/24/32 bits avec tests de palette et de bornes. _(source: TODO.md)_
+- [x] Ajouter `VirtualQuery`, `WaitForMultipleObjects` wait-any/wait-all et les sections critiques récursives. _(source: TODO.md)_
+- [x] Ajouter des DLL intégrées courantes : `user32`, `advapi32`, `ole32`, `bcrypt`, `version` et `shell32`. _(source: TODO.md)_
+- [x] Ajouter des logs structurés et un niveau de verbosité configurable. _(source: TODO.md)_
+- [x] Ajouter des tests unitaires couvrant le runtime, le registre, le SCM, l'audio, Winsock, les processus, les fichiers, la CRT, IOCP, COM/OLE et le noyau fenêtres/messages. _(source: TODO.md)_
+- [x] Ajouter des tests unitaires pour le parsing PE et le quoting de la ligne de commande. _(source: TODO.md)_
+- [x] Ajouter des variantes Unicode `W` pour les chemins, fichiers et variables d’environnement. _(source: TODO.md)_
+- [x] Ajouter la couche de dessin GDI : commandes (`FillRect`, `FrameRect`, `Ellipse`, `Text`, `BitBlt`, `StretchBlt`) accumulées par cycle de peinture puis rejouées par le backend (y compris à chaque `Expose`), pinceaux/plumes/polices (`CreateSolidBrush`, `CreatePen`, `CreateFontA/W`, `SelectObject`, `DeleteObject`, `GetStockObject`, `GetObjectA/W`), `GetSysColor`/`GetSysColorBrush`, `PatBlt` (PATCOPY/BLACKNESS/WHITENESS/PATINVERT/PATAND/PATOR/DSTINVERT), `CreateCompatibleBitmap`/`CreateDIBSection` 32bpp et DC mémoire pour `SRCCOPY`, `SRCPAINT`, `SRCAND`, `SRCINVERT`, `NOTSRCCOPY`, couleurs et mode de fond (`SetTextColor`, `SetBkColor`, `SetBkMode`), `TextOutA`, `Rectangle`, `Ellipse` et `GetDC`/`ReleaseDC`. `gui_demo.exe` vérifie le tracé; rendu et blits contrôlés par capture X11 (`xwd`). _(source: TODO.md)_
+- [x] Ajouter la fondation COM/OLE native : appartements par thread, GUID, allocateur COM, mémoire globale et `IStream` partageable sur `HGLOBAL`, avec tests unitaires et PE. _(source: TODO.md)_
+- [x] Ajouter la validation des références d’imports différés et leur conversion RVA/VA. _(source: TODO.md)_
+- [x] Ajouter le chargement dynamique via `LoadLibraryA/W`, `GetProcAddress` par nom/ordinal et les callbacks d’initialisation. _(source: TODO.md)_
+- [x] Ajouter le décodage WAVE PCM/float et un pont ALSA optionnel pour `PlaySoundA/W` (parseur testé; sortie physique encore à valider sur machine audio). _(source: TODO.md)_
+- [x] Ajouter le fichier NOTICES au dépôt et copier les notices audio disponibles dans les ISO. _(source: TODO.md)_
+- [x] Ajouter le focus clavier par thread (`GetFocus`/`SetFocus`), les notifications synchrones `WM_SETFOCUS`/`WM_KILLFOCUS`, la perte de focus à la destruction et la traduction des événements X11 `FocusIn`/`FocusOut`; testé par `gui_suite.exe` et par injection de focus sous Xvfb. _(source: TODO.md)_
+- [x] Ajouter les API de base `GetSystemInfo`, version OS, horloge FILETIME et plusieurs primitives `Rtl*`. _(source: TODO.md)_
+- [x] Ajouter les barrières de tests Live/disque installé au workflow de release ; son exécution complète sur les runners GitHub reste à valider. _(source: TODO.md)_
+- [x] Ajouter les entrées formatées `scanf`/`sscanf`/`fscanf` et leurs variantes `v*` (entiers, flottants, chaînes, jeux de caractères, largeur, `*`, `%n`) avec tests unitaires et PE. _(source: TODO.md)_
+- [x] Ajouter les fichiers binfmt, MIME et `.desktop`. _(source: TODO.md)_
+- [x] Ajouter les flux `FILE*` de la CRT (`fopen`/`fclose`, `fread`/`fwrite`, `fgets`/`fputs`, `fseek`/`ftell`, `feof`, `fprintf`, `vfprintf`, `vsprintf`, `remove`/`rename`) avec tests unitaires et PE. _(source: TODO.md)_
+- [x] Ajouter les icônes et polices libres compatibles avec la licence du projet. _(source: TODO.md)_
+- [x] Ajouter les premiers points d’entrée multimédia `mfplat` et `winmm`. _(source: TODO.md)_
+- [x] Ajouter les premières API GUI (`user32`, `gdi32`) et réseau (`ws2_32`). _(source: TODO.md)_
+- [x] Ajouter les primitives de synchronisation `Event`, `Mutex` et `WaitForSingleObject`. _(source: TODO.md)_
+- [x] Ajouter les variantes Unicode de la boucle de messages et des titres (`GetMessageW`, `PeekMessageW`, `DispatchMessageW`, `PostMessageW`, `SendMessageW`, `Set/GetWindowTextW`) avec tests PE. _(source: TODO.md)_
+- [x] Ajouter l’énumération de répertoires `FindFirstFileA/W`, `FindNextFileA/W` et `FindClose` avec motifs `*`/`?` et tests PE. _(source: TODO.md)_
+- [x] Ajouter un binaire Windows compilé avec un vrai répertoire d’imports différés. _(source: TODO.md)_
+- [x] Ajouter un diagnostic explicite pour les exécutables gérés dépendant de `mscoree.dll`. _(source: TODO.md)_
+- [x] Ajouter un démarrage BIOS et UEFI avec GRUB. _(source: TODO.md)_
+- [x] Ajouter un installateur autonome BIOS/UEFI qui ne nécessite plus l'ISO comme chargeur initial. _(source: TODO.md)_
+- [x] Ajouter un paquet de mise à jour GitHub vérifié par SHA-256, une installation _(source: TODO.md)_
+- [x] Ajouter un premier script de génération ISO. _(source: TODO.md)_
+- [x] Ajouter un prototype de bureau GDI HiDPI : fond d'écran, raccourcis, _(source: TODO.md)_
+- [x] Ajouter un registre persistant partagé Linux/Windows. _(source: TODO.md)_
+- [x] Ajouter un sous-ensemble IOCP : association d’un fichier, `GetQueuedCompletionStatus[Ex]` et `PostQueuedCompletionStatus`. _(source: TODO.md)_
+- [x] Ajouter un test automatisé dans QEMU avec vérification des marqueurs de résultat. _(source: TODO.md)_
+- [x] Ajouter un test dédié aux exports par nom et par ordinal. _(source: TODO.md)_
+- [x] Ajouter un test d’intégration automatisé des trois exécutables de référence. _(source: TODO.md)_
+- [x] Ajouter un test d’intégration avec une DLL réelle. _(source: TODO.md)_
+- [x] Ajouter un test synthétique exerçant effectivement la résolution d’un import différé. _(source: TODO.md)_
+- [x] Ajouter une CI pour `cargo check`, les builds des `.exe` de test et les tests sous Winlux. _(source: TODO.md)_
+- [x] Ajouter une annulation best-effort des opérations overlapped en attente avec `CancelIo` et `CancelIoEx`. _(source: TODO.md)_
+- [x] Ajouter une base de thème visuel inspirée de Windows 11. _(source: TODO.md)_
+- [x] Ajouter une couche SCM locale, non privilégiée, qui persiste les définitions et lance/arrête les services en processus utilisateur. _(source: TODO.md)_
+- [x] Ajouter une détection du fichier `.exe` et des messages d’erreur graphiques (kdialog, zenity, notify-send, xmessage) ou textuels adaptés. _(source: TODO.md)_
+- [x] Ajouter une licence GPL-3.0-or-later. _(source: TODO.md)_
+- [x] Ajouter une procédure de désinstallation propre du binfmt, du MIME et du fichier `.desktop` (`integration/uninstall.sh`, restaure les associations précédentes). _(source: TODO.md)_
+- [x] Améliorer la gestion de `VirtualAlloc`/`VirtualFree`, dont l’alignement 64 Ko. _(source: TODO.md)_
+- [x] Appliquer les relocations et résoudre les imports de base. _(source: TODO.md)_
+- [x] Bloquer les copies dans un descendant, les collisions et les alias de chemins ; tester le couper/coller et les raccourcis. _(source: TODO.md)_
+- [x] Centre graphique de mise à jour, paquets système complets, jeton pour dépôt privé, automatique, restauration et demande de redémarrage. _(source: TODO.md)_
+- [x] Charger le noyau et la racine persistante du disque depuis GRUB. _(source: TODO.md)_
+- [x] Charger les vraies icônes PNG des applications depuis leurs fichiers _(source: TODO.md)_
+- [x] Charger un exécutable PE32+ x86-64. _(source: TODO.md)_
+- [x] Construire automatiquement l’arborescence de staging. _(source: TODO.md)_
+- [x] Construire le noyau fenêtres/messages (`gui.rs`) : classes, table HWND, file par thread, appel du `WndProc` invité et palette claire inspirée de Windows 11, avec un test PE `gui_suite.exe` (séquence WM_CREATE/WM_SIZE/WM_PAINT/WM_DESTROY). _(source: TODO.md)_
+- [x] Construire une base Linux minimale en initramfs pour l’ISO de validation. _(source: TODO.md)_
+- [x] Continuer la CRT : locale, `_snscanf` et formats positionnels. (_snscanf ajouté, formats positionnels en attente) _(source: TODO.md)_
+- [x] Corriger Ctrl+L, les touches Windows, AltGr et la disposition XKB réelle. _(source: TODO.md)_
+- [x] Corriger la gestion de `GetTickCount` et utiliser une horloge monotone globale. _(source: TODO.md)_
+- [x] Créer les composants du prototype : barre des tâches, menu Démarrer, fenêtres, notifications et Explorer ; le CSS reste une référence séparée. _(source: TODO.md)_
+- [x] Créer une VM graphique persistante QCOW2 issue de la racine Winlux. _(source: TODO.md)_
+- [x] Documenter explicitement les limites : 64 bits uniquement, absence de noyau Windows et compatibilité API partielle. _(source: TODO.md)_
+- [x] Documenter la RAM, le nombre de CPU et les options nécessaires à la VM. _(source: TODO.md)_
+- [x] Documenter la compilation, l’installation, le dépannage et la génération ISO. _(source: TODO.md)_
+- [x] Déclencher les callbacks TLS et `DllMain` lors de la création de threads Win32. _(source: TODO.md)_
+- [x] Décoder MP3 et AAC ADTS mono/stéréo dans PlaySound, tester limites mémoire, concurrence et sortie ALSA null ; inclure les bibliothèques dans l'ISO. _(source: TODO.md)_
+- [x] Définir la politique pour les imports manquants : journalisation, arrêt par défaut et mode explicite `WINLUX_MISSING=ignore`. _(source: TODO.md)_
+- [x] Définir le comportement du terminal : `winlux --inspect` lit le sous-système PE, `winlux-open` ouvre un terminal (Konsole, GNOME Terminal, XFCE, xterm ou `WINLUX_TERMINAL`) qui reste ouvert pour les programmes console et lance directement les programmes graphiques. _(source: TODO.md)_
+- [x] Définir les variantes clair/sombre et le réglage d'échelle. _(source: TODO.md)_
+- [x] Détecter les en-têtes CLR PE32/PE32+ et les apphosts modernes, puis relayer les assemblies vers `dotnet` ou Mono lorsqu'un runtime Linux compatible est installé. _(source: TODO.md)_
+- [x] Détecter les images/disques périmés par empreinte des sources et conserver le disque précédent lors d'un rafraîchissement. _(source: TODO.md)_
+- [x] Enregistrer/révoquer des fabriques COM multi-usages et créer leurs objets dans le processus, avec cookies stables et appels réentrants testés. _(source: TODO.md)_
+- [x] Exécuter `hello.exe`, `exitcode.exe`, `p1_suite.exe`, `dll_import.exe`, `delay_import.exe`, `findfiles.exe`, `crt_suite.exe`, `gui_suite.exe` et `gui_demo.exe` sous Winlux. _(source: TODO.md)_
+- [x] Exécuter de vrais programmes C compilés par MinGW-w64 : démarrage de la CRT msvcrt (`__getmainargs`, `_initterm`, constructeurs globaux, `atexit`/`_onexit`, `_iob`/`__iob_func`), `_errno`, verrous `_lock`, environnement, temps (`time`, `localtime`, `strftime`, `clock`), `rand` Microsoft, E/S bas niveau `_open`/`_read`/`_write`, signaux, `_beginthreadex`; compléments kernel32 (console, pages de code, `GetEnvironmentStrings`, `FormatMessage`, `lstr*`, `RaiseException`…). Vérifié par `testc/mingw_suite.c` (40 contrôles) en CI. _(source: TODO.md)_
+- [x] Exécuter les dix PE simultanément avec isolation, temporisation et journaux par processus. _(source: TODO.md)_
+- [x] Fournir BUILD-INFO et sa consultation dans Paramètres → À propos. _(source: TODO.md)_
+- [x] Fournir les API nécessaires aux tests P1. _(source: TODO.md)_
+- [x] Générer l’ISO avec `xorriso` et produire une somme SHA-256. _(source: TODO.md)_
+- [x] Gérer les chemins contenant des espaces ou des URI `file://`, les fichiers illisibles et les volumes montés `noexec` (le lanceur lit le fichier au lieu de l’exécuter; le dossier du programme devient le répertoire courant). _(source: TODO.md)_
+- [x] Implémenter `CREATE_SUSPENDED`/`ResumeThread` pour les enfants via un lanceur Linux suspendu avant l’exécution du programme. _(source: TODO.md)_
+- [x] Implémenter `SetWindowPos` et `MoveWindow` : subset de flags `SWP_NOMOVE`/`SWP_NOSIZE`/`SWP_NOREDRAW`, rectangles HWND actualisés, messages `WM_MOVE`/`WM_SIZE`, configuration de la vraie fenêtre X11 et synchronisation des positions/tailles via `ConfigureNotify`; testé par `gui_suite.exe` en headless et sous Xvfb. _(source: TODO.md)_
+- [x] Implémenter `VirtualProtect`, `MEM_DECOMMIT` et le recommit de mémoire. _(source: TODO.md)_
+- [x] Implémenter les conversions UTF-8 et Windows-1252 avec vérification des buffers. _(source: TODO.md)_
+- [x] Implémenter les ponts `printf`/`sprintf` variadiques Windows x64. _(source: TODO.md)_
+- [x] Initialiser un PEB/TEB minimal via `GS`. _(source: TODO.md)_
+- [x] Installer Winlux, les dix PE, leur DLL et Xvfb dans cette arborescence. _(source: TODO.md)_
+- [x] Installer le runtime et le lanceur dans un chemin stable (`/usr/bin` par défaut, préfixe et `DESTDIR` configurables), avec association MIME par défaut dans `/etc/xdg/mimeapps.list`; validé dans une racine temporaire par `scripts/test-integration.sh`. _(source: TODO.md)_
+- [x] Intégrer binfmt, MIME et `.desktop` dans une future image de bureau; ils ne sont pas nécessaires à l’image de validation. _(source: TODO.md)_
+- [x] Intégrer le thème dans l’ISO sans dépendance propriétaire. _(source: TODO.md)_
+- [x] Isoler les valeurs TLS Win32 par thread. _(source: TODO.md)_
+- [x] Lancer automatiquement les tests séquentiels, parallèles et X11 dans la VM. _(source: TODO.md)_
+- [x] Libérer le slot actif d’un thread Win32 à sa terminaison, avec test dédié. _(source: TODO.md)_
+- [x] Lire les blocs d’environnement ANSI ou Unicode de `CreateProcessA/W` et les appliquer au processus enfant. _(source: TODO.md)_
+- [x] Mémoriser l’alignement de la barre des tâches et ouvrir de vraies applications depuis la barre et le menu. _(source: TODO.md)_
+- [x] Normaliser le code existant avec `rustfmt`, traiter la dette Clippy puis rendre ces contrôles bloquants dans la CI. _(source: TODO.md)_
+- [x] Paramètres Linux/Windows, télémétrie réelle et commandes système avec journaux. _(source: TODO.md)_
+- [x] Passer Explorer entièrement aux chemins Unicode Win32 W. _(source: TODO.md)_
+- [x] Permettre le déplacement des icônes du prototype de bureau (placement _(source: TODO.md)_
+- [x] Poursuivre le rendu X11 : décorations/titre maison si absence de WM; compléter GDI (autres formats DIB/bitmap, ROP restants, polices/métriques complètes et texte sur DC mémoire). (ROP SRCERASE/NOTSRCERASE/MERGEPAINT/PATCOPY/PATPAINT/DSTCOPY ajoutés, métriques de police améliorées) _(source: TODO.md)_
+- [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer. _(source: TODO.md)_
+- [x] Publier ISO, sommes, paquet, manifeste et notes dans les préversions système existantes (notamment preview.4). _(source: TODO.md)_
+- [x] Refaire l’interface du bureau façon Windows 11 : fond « fleur », barre des tâches sombre centrée ou à gauche (`WINLUX_TASKBAR_ALIGN=left` ou bouton du menu), menu Démarrer flottant (recherche, épinglés, recommandés, utilisateur, alimentation), zone de notification et icônes vectorielles. _(source: TODO.md)_
+- [x] Relier le noyau à un backend X11 réel (`gui_x11.rs`, x11rb) : vraies fenêtres, surfaces claires et accent bleu rendus côté serveur, événements X traduits en messages Win32 (`Expose`→`WM_PAINT`, `ConfigureNotify`→`WM_SIZE`, souris, clavier X11→`VK_*`/`WM_KEYDOWN`/`WM_KEYUP`, `WM_DELETE_WINDOW`→`WM_CLOSE`). `TranslateMessage` produit `WM_CHAR` (ASCII/Latin-1 et BMP) ; tracé GDI et saisie vérifiés par `gui_demo.exe` sous Xvfb. Backend *headless* conservé pour les tests (`WINLUX_GUI=headless`). _(source: TODO.md)_
+- [x] Relier les API de base fichiers/répertoires Windows au système de fichiers Linux. _(source: TODO.md)_
+- [x] Relier sockets TCP/UDP, erreurs WSA et résolveur `getaddrinfo` A/W aux interfaces POSIX (tests loopback). _(source: TODO.md)_
+- [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher _(source: TODO.md)_
+- [x] Renforcer les vérifications de bornes des sections, imports et IAT avant accès mémoire. _(source: TODO.md)_
+- [x] Reprendre le prototype avec un système visuel professionnel : surfaces _(source: TODO.md)_
+- [x] Respecter le plafond de concurrence IOCP pour les threads qui retirent les paquets avec `GetQueuedCompletionStatus[Ex]`. _(source: TODO.md)_
+- [x] Sauvegarder/restaurer la position des flux CRT avec `fgetpos`/`fsetpos`, avec tests. _(source: TODO.md)_
+- [x] Sécuriser l'installateur et valider le disque installé sans ISO en BIOS/UEFI sous QEMU, avec arrêt automatique. _(source: TODO.md)_
+- [x] Sélectionner l'entrée de diagnostic dans `scripts/test-live-iso-qemu.sh` et vérifier BIOS/UEFI sans modifier l'ISO livrée. _(source: TODO.md)_
+- [x] Utiliser Rust/GDI avec backend X11 et Xft pour le prototype actuel ; le choix d'une pile de bureau définitive reste ouvert. _(source: TODO.md)_
+- [x] VM : la résolution suit la taille de la fenêtre QEMU (nouveau mode préféré appliqué par `xrandr`, bureau relu via `GetSystemMetrics` et réagencé); vérifié en passant de 1920×1080 à 1280×800 dans QEMU. _(source: TODO.md)_
+- [x] VM : pointeur flèche visible (curseur logiciel Xorg `SWcursor`, flèche dessinée à l’échelle de l’interface). _(source: TODO.md)_
+- [x] Valider les indices TLS, les libérer avec `TlsFree` et invalider les valeurs obsolètes. _(source: TODO.md)_
+- [x] Étendre la CRT : chaînes étroites/larges, conversions (`strtol`, `strtod`, `_itoa`, `_itow`), classification de caractères, fonctions mathématiques, `qsort`/`bsearch` et formatage borné (`_snprintf`, `_snwprintf`), avec tests unitaires et PE (`crt_suite`). _(source: TODO.md)_
+- [x] Éviter les allocations et verrous dans le gestionnaire de signaux de crash. _(source: TODO.md)_
+- [x] Mise à jour automatique (boucle de vérification, pas de redémarrage forcé) _(source: docs/AB_UPDATES.md)_
+- [x] Paquet de mise à jour avec manifeste SHA-256 (`build-update-bundle.sh`) _(source: docs/AB_UPDATES.md)_
+- [x] Retour arrière manuel (`winlux-update --rollback`) _(source: docs/AB_UPDATES.md)_
+- [x] Verrouillage des opérations concurrentes _(source: docs/AB_UPDATES.md)_
+- [x] Vérification des empreintes à l'application (`winlux-update --apply`) _(source: docs/AB_UPDATES.md)_
+- [x] Corriger les redirections API-set COM, registre, RTL, sécurité et downlevel _(source: docs/CHATGPT-WINDOWS.md)_
+- [x] Fournir `CommandLineToArgvW` et confirmer que le véritable programme _(source: docs/CHATGPT-WINDOWS.md)_
+- [x] Fournir `EventRegister`, `EventUnregister`, `EventWriteTransfer` et le contrat _(source: docs/CHATGPT-WINDOWS.md)_
+- [x] Fournir `rpcrt4!UuidCreate` avec de véritables UUID v4 aléatoires, sans _(source: docs/CHATGPT-WINDOWS.md)_
+- [x] Fournir un premier backend WinHTTP synchrone HTTP/HTTPS via curl, avec _(source: docs/CHATGPT-WINDOWS.md)_
+- [x] Relier les premières opérations NT du registre au backend Win32 existant. _(source: docs/CHATGPT-WINDOWS.md)_
+- [x] Suivre les images PE dans `VirtualQuery`/`VirtualProtect` et relier les _(source: docs/CHATGPT-WINDOWS.md)_
+- [x] Construction ISO complète avec noyau 7.0.0-38-generic : réussie. _(source: docs/INSTALLER-SAFETY.md)_
+- [x] Contrôles de refus et syntaxe shell : réussis. _(source: docs/INSTALLER-SAFETY.md)_
+- [x] Démarrage Live BIOS et UEFI : réussi, marqueurs PE séquentiels/parallèles et X11. _(source: docs/INSTALLER-SAFETY.md)_
+- [x] Démarrage du disque installé **sans ISO** en BIOS et UEFI : réussi, mêmes marqueurs. _(source: docs/INSTALLER-SAFETY.md)_
+- [x] Installateur réel exécuté en VM, disque neuf de 4 Gio : réussi après inclusion _(source: docs/INSTALLER-SAFETY.md)_
+
+## À faire
+
+- [ ] **Accessibilité intégrée** : réglage de la taille du texte et du _(source: INTERFACE.md)_
+- [ ] **Aide hors ligne** : fournir des guides accessibles sans réseau pour _(source: INTERFACE.md)_
+- [ ] **Applications par défaut** : choisir quelle application ouvre chaque _(source: INTERFACE.md)_
+- [ ] **Assistant de première installation** : langue, disposition clavier, _(source: INTERFACE.md)_
+- [ ] **Centre d'applications unifié** : rechercher, installer, lancer, mettre _(source: INTERFACE.md)_
+- [ ] **Configuration initiale reprenable** : permettre de configurer la langue, _(source: INTERFACE.md)_
+- [ ] **Diagnostic compréhensible** : expliquer les erreurs de lancement en _(source: INTERFACE.md)_
+- [ ] **Désinstallation maîtrisée** : répertorier les fichiers connus de _(source: INTERFACE.md)_
+- [ ] **Emplacements des fichiers** : expliquer où sont stockés les fichiers _(source: INTERFACE.md)_
+- [ ] **Export et transfert de profils** : sauvegarder puis restaurer ou _(source: INTERFACE.md)_
+- [ ] **Fiche avant installation** : afficher l'architecture, les dépendances _(source: INTERFACE.md)_
+- [ ] **Gestionnaire de périphériques** : lister le matériel détecté, son état _(source: INTERFACE.md)_
+- [ ] **Gestionnaire de tâches accessible** : lister les applications en cours, _(source: INTERFACE.md)_
+- [ ] **Glisser-déposer inter-applications** avec indication de l'action _(source: INTERFACE.md)_
+- [ ] **Historique système** : consulter les installations, mises à jour, _(source: INTERFACE.md)_
+- [ ] **Importation de données** : guider la copie de documents et autres _(source: INTERFACE.md)_
+- [ ] **Mode de récupération** : proposer un démarrage de secours, une _(source: INTERFACE.md)_
+- [ ] **Mode économie d'énergie** : proposer des réglages adaptés aux _(source: INTERFACE.md)_
+- [ ] **Outils courants** : capture d'écran, raccourcis clavier configurables, _(source: INTERFACE.md)_
+- [ ] **Permissions compréhensibles** : montrer les accès aux fichiers et _(source: INTERFACE.md)_
+- [ ] **Presse-papiers cohérent** entre applications Linux et Windows, avec _(source: INTERFACE.md)_
+- [ ] **Profils par application Windows** : regrouper les préférences de _(source: INTERFACE.md)_
+- [ ] **Prévisualisation des mises à jour** : afficher l'espace requis, les _(source: INTERFACE.md)_
+- [ ] **Recherche globale** dans les applications, fichiers et réglages, avec _(source: INTERFACE.md)_
+- [ ] **Sauvegarde et récupération** : proposer une sauvegarde des préférences, _(source: INTERFACE.md)_
+- [ ] **Session invitée temporaire** : proposer un environnement de session _(source: INTERFACE.md)_
+- [ ] **Vue du stockage** : répartir l'espace utilisé par le système, les _(source: INTERFACE.md)_
+- [ ] **Vérification du matériel** : résumer au premier démarrage l'état de _(source: INTERFACE.md)_
+- [ ] Afficher les applications ouvertes, leur fenêtre active et leur état _(source: INTERFACE.md)_
+- [ ] Ajouter dans Paramètres une rubrique « Icônes du bureau » avec une _(source: INTERFACE.md)_
+- [ ] Ajouter un menu contextuel du bureau : créer un raccourci, actualiser, _(source: INTERFACE.md)_
+- [ ] Ajouter une recherche cohérente couvrant applications, fichiers et _(source: INTERFACE.md)_
+- [ ] Assurer la navigation clavier, les raccourcis cohérents, les libellés _(source: INTERFACE.md)_
+- [ ] Clarifier les actions de session, arrêt et redémarrage et demander _(source: INTERFACE.md)_
+- [ ] Compléter le redimensionnement, l'empilement et le focus des fenêtres, _(source: INTERFACE.md)_
+- [ ] Conserver les préférences de position, d'alignement et d'épinglage après _(source: INTERFACE.md)_
+- [ ] Démarrer sur un bureau sans icône par défaut, y compris après une _(source: INTERFACE.md)_
+- [ ] Enregistrer les modifications de façon prévisible et indiquer si elles _(source: INTERFACE.md)_
+- [ ] Gérer sélection, multi-sélection, déplacement, menu contextuel et _(source: INTERFACE.md)_
+- [ ] Ne créer aucun raccourci de bureau de manière implicite lors de _(source: INTERFACE.md)_
+- [ ] Organiser les pages avec navigation, recherche dans les réglages, _(source: INTERFACE.md)_
+- [ ] Permettre de rechercher, lancer, épingler et désépingler une application _(source: INTERFACE.md)_
+- [ ] Permettre la création, le renommage et la suppression de raccourcis _(source: INTERFACE.md)_
+- [ ] Proposer l'alignement sur une grille ou le placement libre, avec _(source: INTERFACE.md)_
+- [ ] Prévoir les comportements de fenêtres multiples, bureaux virtuels et _(source: INTERFACE.md)_
+- [ ] Prévoir un bouton pour restaurer les préférences ou la disposition du _(source: INTERFACE.md)_
+- [ ] Rendre la zone de notification actionnable et accessible au clavier ; _(source: INTERFACE.md)_
+- [ ] Respecter le clavier réellement configuré, les caractères Unicode, _(source: INTERFACE.md)_
+- [ ] Répertorier les applications réellement installées depuis les entrées _(source: INTERFACE.md)_
+- [ ] Séparer clairement les commandes gérées par Winlux de celles qui relèvent _(source: INTERFACE.md)_
+- [ ] Tester les fenêtres, menus et pages à basse résolution, en HiDPI et lors _(source: INTERFACE.md)_
+- [ ] Valider l'intégration avec les environnements Linux ciblés et garder une _(source: INTERFACE.md)_
+- [ ] Éviter de demander des privilèges administrateur au bureau entier ; _(source: INTERFACE.md)_
+- [ ] Accessibilité : navigation clavier, taille du pointeur et contraste. _(source: ROADMAP-SSD.md)_
+- [ ] Accessibilité : taille du texte, contraste et navigation clavier. _(source: ROADMAP-SSD.md)_
+- [ ] Activation du TRIM pour les SSD et configurations compatibles. _(source: ROADMAP-SSD.md)_
+- [ ] Affichage du modèle, de la capacité et des partitions de chaque disque. _(source: ROADMAP-SSD.md)_
+- [ ] Amélioration du texte, des polices et de l'impression. _(source: ROADMAP-SSD.md)_
+- [ ] Aperçu de toutes les modifications avant validation. _(source: ROADMAP-SSD.md)_
+- [ ] Assistant de compatibilité `.exe` : analyser un logiciel avant son _(source: ROADMAP-SSD.md)_
+- [ ] Assistant de migration depuis Windows ou Linux : documents, favoris _(source: ROADMAP-SSD.md)_
+- [ ] Assistant graphique d'installation en français. _(source: ROADMAP-SSD.md)_
+- [ ] Associations de fichiers modifiables. _(source: ROADMAP-SSD.md)_
+- [ ] Autorisation ciblée pour les opérations sensibles. _(source: ROADMAP-SSD.md)_
+- [ ] Avertissements concernant BitLocker, le démarrage rapide et les _(source: ROADMAP-SSD.md)_
+- [ ] Batterie réelle, chargeur et autonomie. _(source: ROADMAP-SSD.md)_
+- [ ] Bloc-notes avec ouverture des `.txt`, modification et enregistrement. _(source: ROADMAP-SSD.md)_
+- [ ] Bureau exécuté avec un compte non administrateur. _(source: ROADMAP-SSD.md)_
+- [ ] Bureau vide par défaut et raccourcis facultatifs. _(source: ROADMAP-SSD.md)_
+- [ ] Calculatrice. _(source: ROADMAP-SSD.md)_
+- [ ] Capture d'écran. _(source: ROADMAP-SSD.md)_
+- [ ] Catalogue des applications Linux disponibles. _(source: ROADMAP-SSD.md)_
+- [ ] Chemins Unicode complets. _(source: ROADMAP-SSD.md)_
+- [ ] Chiffrement facultatif du système et des données. _(source: ROADMAP-SSD.md)_
+- [ ] Choix d'une version précise de Photoshop pour une étude de compatibilité. _(source: ROADMAP-SSD.md)_
+- [ ] Choix de la langue, du clavier et du fuseau horaire. _(source: ROADMAP-SSD.md)_
+- [ ] Choix du système de fichiers. _(source: ROADMAP-SSD.md)_
+- [ ] Choix entre essayer Winlux sans installer et lancer l'installation. _(source: ROADMAP-SSD.md)_
+- [ ] Comparer les mesures avant/après sur la même configuration et vérifier _(source: ROADMAP-SSD.md)_
+- [ ] Compatibilité C++ et gestion des exceptions. _(source: ROADMAP-SSD.md)_
+- [ ] Confirmation des changements d'affichage avec retour automatique après 15 secondes. _(source: ROADMAP-SSD.md)_
+- [ ] Conservation des fichiers après plusieurs redémarrages. _(source: ROADMAP-SSD.md)_
+- [ ] Conservation des partitions de données existantes. _(source: ROADMAP-SSD.md)_
+- [ ] Conservation des positions des icônes. _(source: ROADMAP-SSD.md)_
+- [ ] Copier-coller entre l'hôte et Winlux. _(source: ROADMAP-SSD.md)_
+- [ ] Création du compte utilisateur et du mot de passe. _(source: ROADMAP-SSD.md)_
+- [ ] Demande de retirer la clé USB ou l'ISO après installation. _(source: ROADMAP-SSD.md)_
+- [ ] Diagnostic des composants Windows manquants. _(source: ROADMAP-SSD.md)_
+- [ ] Diagnostic intégré exportable, avec suppression des tokens, mots de _(source: ROADMAP-SSD.md)_
+- [ ] Désinstallation avec choix de conserver ou supprimer les réglages. _(source: ROADMAP-SSD.md)_
+- [ ] Détection des SSD SATA, NVMe, disques USB et disques virtuels. _(source: ROADMAP-SSD.md)_
+- [ ] Détection des systèmes déjà installés. _(source: ROADMAP-SSD.md)_
+- [ ] Détection du manque d'espace disque, notamment avant une installation _(source: ROADMAP-SSD.md)_
+- [ ] Environnements séparés lorsque nécessaire. _(source: ROADMAP-SSD.md)_
+- [ ] Fiche de compatibilité par logiciel et par version. _(source: ROADMAP-SSD.md)_
+- [ ] Fonds d'écran fixes ou animés avec réglage des performances. _(source: ROADMAP-SSD.md)_
+- [ ] Fréquence, orientation et échelle par écran. _(source: ROADMAP-SSD.md)_
+- [ ] Gestion Ethernet, Wi-Fi et Bluetooth sur matériel réel. _(source: ROADMAP-SSD.md)_
+- [ ] Gestion de plusieurs écrans. _(source: ROADMAP-SSD.md)_
+- [ ] Gestion des disques et périphériques depuis les paramètres. _(source: ROADMAP-SSD.md)_
+- [ ] Gestion des dépendances et des mises à jour applicatives. _(source: ROADMAP-SSD.md)_
+- [ ] Gestion du capot et des touches multimédias. _(source: ROADMAP-SSD.md)_
+- [ ] Gestion prudente des partitions EFI existantes. _(source: ROADMAP-SSD.md)_
+- [ ] Gestionnaire d'archives. _(source: ROADMAP-SSD.md)_
+- [ ] Gestionnaire des tâches permettant de voir et arrêter une application bloquée. _(source: ROADMAP-SSD.md)_
+- [ ] Hibernation lorsque le matériel et le stockage la permettent. _(source: ROADMAP-SSD.md)_
+- [ ] Historique des fichiers pour retrouver une version précédente d'un _(source: ROADMAP-SSD.md)_
+- [ ] Historique des installations et des erreurs. _(source: ROADMAP-SSD.md)_
+- [ ] Identification et protection du support contenant l'installateur. _(source: ROADMAP-SSD.md)_
+- [ ] Imprimantes et scanners. _(source: ROADMAP-SSD.md)_
+- [ ] Installation dans un espace libre, après validation du partitionnement. _(source: ROADMAP-SSD.md)_
+- [ ] Installation à côté de Windows ou d'une distribution Linux. _(source: ROADMAP-SSD.md)_
+- [ ] Intégration SPICE adaptée. _(source: ROADMAP-SSD.md)_
+- [ ] Inventaire des applications effectivement installées. _(source: ROADMAP-SSD.md)_
+- [ ] Lecteur audio et vidéo. _(source: ROADMAP-SSD.md)_
+- [ ] Liste déroulante des résolutions en remplacement de la sélection précédente/suivante. _(source: ROADMAP-SSD.md)_
+- [ ] Manettes. _(source: ROADMAP-SSD.md)_
+- [ ] Menu de démarrage permettant de choisir le système. _(source: ROADMAP-SSD.md)_
+- [ ] Mesurer le temps de rendu, la latence des entrées et les saccades pendant _(source: ROADMAP-SSD.md)_
+- [ ] Mettre en cache le contenu des fenêtres et ne recalculer que ce qui change. _(source: ROADMAP-SSD.md)_
+- [ ] Mises à jour facultatives pendant l'installation si Internet est disponible. _(source: ROADMAP-SSD.md)_
+- [ ] Mode concentration : suspendre les notifications non essentielles et _(source: ROADMAP-SSD.md)_
+- [ ] Mode d'essai isolé pour les applications, avec limites d'accès aux _(source: ROADMAP-SSD.md)_
+- [ ] Mode de récupération accessible au démarrage. _(source: ROADMAP-SSD.md)_
+- [ ] Mode dépannage guidé pour les applications et périphériques, avec _(source: ROADMAP-SSD.md)_
+- [ ] Moniteur système : processus, mémoire, processeur et stockage. _(source: ROADMAP-SSD.md)_
+- [ ] Montage et éjection des clés USB avec notifications et gestion des erreurs. _(source: ROADMAP-SSD.md)_
+- [ ] Navigateur réellement installé et accessible. _(source: ROADMAP-SSD.md)_
+- [ ] Notifications interactives et réglables. _(source: ROADMAP-SSD.md)_
+- [ ] Panneau de confidentialité pour les accès au microphone, à la caméra _(source: ROADMAP-SSD.md)_
+- [ ] Pare-feu configurable. _(source: ROADMAP-SSD.md)_
+- [ ] Partage de dossiers. _(source: ROADMAP-SSD.md)_
+- [ ] Partitionnement manuel pour les utilisateurs avancés. _(source: ROADMAP-SSD.md)_
+- [ ] Pilotes et firmwares redistribuables nécessaires au matériel ciblé. _(source: ROADMAP-SSD.md)_
+- [ ] Poursuivre l'harmonisation et la structuration des pages de paramètres. _(source: ROADMAP-SSD.md)_
+- [ ] Première configuration guidée : clavier, son, réseau, affichage et _(source: ROADMAP-SSD.md)_
+- [ ] Prise en charge des installateurs Windows ciblés. _(source: ROADMAP-SSD.md)_
+- [ ] Procédure de désinstallation de Winlux sans supprimer les autres systèmes. _(source: ROADMAP-SSD.md)_
+- [ ] Procédure de réparation du démarrage. _(source: ROADMAP-SSD.md)_
+- [ ] Procédure simple de sauvegarde et restauration d'une VM de test. _(source: ROADMAP-SSD.md)_
+- [ ] Profils Portable, Bureau et Jeu regroupant énergie, affichage et _(source: ROADMAP-SSD.md)_
+- [ ] Profils d'alimentation et suivi thermique. _(source: ROADMAP-SSD.md)_
+- [ ] Progression détaillée et journal d'installation. _(source: ROADMAP-SSD.md)_
+- [ ] Raccourcis cohérents : Alt+Tab, Alt+F4, capture d'écran et verrouillage. _(source: ROADMAP-SSD.md)_
+- [ ] Rapports d'erreur exportables sans mots de passe ni tokens. _(source: ROADMAP-SSD.md)_
+- [ ] Recherche d'applications et de fichiers. _(source: ROADMAP-SSD.md)_
+- [ ] Recherche dans Démarrer. _(source: ROADMAP-SSD.md)_
+- [ ] Recherche globale dans les applications, fichiers et paramètres. _(source: ROADMAP-SSD.md)_
+- [ ] Redimensionnement des partitions uniquement après sauvegarde et _(source: ROADMAP-SSD.md)_
+- [ ] Regrouper les événements de mouvement de souris pour utiliser la position _(source: ROADMAP-SSD.md)_
+- [ ] Renforcement des API de fichiers, processus, fenêtres et du registre. _(source: ROADMAP-SSD.md)_
+- [ ] Réglage de la luminosité. _(source: ROADMAP-SSD.md)_
+- [ ] Réglages de date, heure et synchronisation. _(source: ROADMAP-SSD.md)_
+- [ ] Réparation du chargeur de démarrage. _(source: ROADMAP-SSD.md)_
+- [ ] Sauvegarde automatique des documents compatibles et récupération après plantage. _(source: ROADMAP-SSD.md)_
+- [ ] Sauvegarde avant installation permettant d'annuler les changements _(source: ROADMAP-SSD.md)_
+- [ ] Sauvegarde et restauration des documents et réglages. _(source: ROADMAP-SSD.md)_
+- [ ] Sauvegarde externe vérifiée avant toute installation sur le disque principal. _(source: ROADMAP-SSD.md)_
+- [ ] Signature cryptographique des mises à jour. _(source: ROADMAP-SSD.md)_
+- [ ] Son, microphone et sélection des sorties. _(source: ROADMAP-SSD.md)_
+- [ ] Suivi des installateurs et désinstallateurs Windows connus. _(source: ROADMAP-SSD.md)_
+- [ ] Synchronisation de l'heure. _(source: ROADMAP-SSD.md)_
+- [ ] Système A/B conservant un système démarrable si la nouvelle version échoue. _(source: ROADMAP-SSD.md)_
+- [ ] Séparer le déplacement d'une fenêtre du rendu de son contenu : déplacer _(source: ROADMAP-SSD.md)_
+- [ ] Tester déplacement et redimensionnement en 1080p, 1440p et 4K. _(source: ROADMAP-SSD.md)_
+- [ ] Tests automatisés clavier, souris et trackpad. _(source: ROADMAP-SSD.md)_
+- [ ] Tests avec de vrais logiciels en complément des exécutables de validation. _(source: ROADMAP-SSD.md)_
+- [ ] Tests d'installation interrompue sur des disques jetables. _(source: ROADMAP-SSD.md)_
+- [ ] Tests de mise à jour, restauration et échec de démarrage sur le système installé. _(source: ROADMAP-SSD.md)_
+- [ ] Tests sur SSD externe dédié ou ordinateur de test. _(source: ROADMAP-SSD.md)_
+- [ ] Trackpad : toucher pour cliquer, défilement et gestes compatibles. _(source: ROADMAP-SSD.md)_
+- [ ] Travail dédié aux API graphiques et à l'accélération GPU. _(source: ROADMAP-SSD.md)_
+- [ ] Travail dédié à .NET, WinForms et WPF. _(source: ROADMAP-SSD.md)_
+- [ ] Validation de la détection du stockage, des périphériques USB et des écrans. _(source: ROADMAP-SSD.md)_
+- [ ] Validation des modes fixe/adaptatif et du suivi d'installation sur les _(source: ROADMAP-SSD.md)_
+- [ ] Validation du redimensionnement et du plein écran. _(source: ROADMAP-SSD.md)_
+- [ ] Validation du stockage, réseau, audio, affichage et périphériques du portable. _(source: ROADMAP-SSD.md)_
+- [ ] Veille et reprise. _(source: ROADMAP-SSD.md)_
+- [ ] Verrouillage de session et changement d'utilisateur. _(source: ROADMAP-SSD.md)_
+- [ ] Viser une cadence régulière adaptée à l'écran, avec limitation du travail _(source: ROADMAP-SSD.md)_
+- [ ] Visionneuse d'images. _(source: ROADMAP-SSD.md)_
+- [ ] Vérification du système installé avant de proposer le redémarrage. _(source: ROADMAP-SSD.md)_
+- [ ] Vérification et réparation des systèmes de fichiers. _(source: ROADMAP-SSD.md)_
+- [ ] Vérification qu'aucune icône ne représente une application inexistante. _(source: ROADMAP-SSD.md)_
+- [ ] Vérification que les disques non sélectionnés ne sont jamais modifiés. _(source: ROADMAP-SSD.md)_
+- [ ] Webcam. _(source: ROADMAP-SSD.md)_
+- [ ] Épinglage et désépinglage des applications. _(source: ROADMAP-SSD.md)_
+- [ ] Étude et validation d'une chaîne de démarrage compatible Secure Boot. _(source: ROADMAP-SSD.md)_
+- [ ] Éviter de redessiner tout le bureau à chaque mouvement ; limiter le travail _(source: ROADMAP-SSD.md)_
+- [ ] Éviter les lectures de fichiers et commandes système dans le chemin de dessin. _(source: ROADMAP-SSD.md)_
+- [ ] Ajouter la création explicite de raccourcis d'applications, leur _(source: TODO.md)_
+- [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités. _(source: TODO.md)_
+- [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API. _(source: TODO.md)_
+- [ ] Ajouter les autres formats audio compressés et les codecs vidéo ; Media Foundation/DirectShow ne constituent pas encore une chaîne de lecture complète. _(source: TODO.md)_
+- [ ] Annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides. _(source: TODO.md)_
+- [ ] Committer une première version stable après validation du pipeline complet. _(source: TODO.md)_
+- [ ] Compléter COM/OLE : activation depuis le registre, serveurs hors processus, automatisation et objets OLE applicatifs. _(source: TODO.md)_
+- [ ] Compléter l'accessibilité : contraste, taille du pointeur, réduction des animations et navigation accessible complète. _(source: TODO.md)_
+- [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants. _(source: TODO.md)_
+- [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes. _(source: TODO.md)_
+- [ ] Continuer à remplacer les implémentations partielles de `kernel32`, `msvcrt` et `ntdll`; ces modules ne constituent pas des DLL Windows complètes. _(source: TODO.md)_
+- [ ] Démarrer avec un bureau vide ; rendre les icônes système facultatives et _(source: TODO.md)_
+- [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root). _(source: TODO.md)_
+- [ ] Faire tourner des programmes C++ MinGW (exceptions : `RtlUnwindEx`, `RtlVirtualUnwind`, `RtlLookupFunctionEntry`) et des exécutables MSVC/clang-cl réels. _(source: TODO.md)_
+- [ ] Implémenter `StartServiceCtrlDispatcher` et le canal de contrôle/notification des vrais services Windows. _(source: TODO.md)_
+- [ ] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (elles restent mappées jusqu’à la fin du processus). _(source: TODO.md)_
+- [ ] Implémenter une pile de secours réellement sûre pour les débordements de pile; le gestionnaire de signal est sans allocation/verrou, mais la protection contre le débordement n’est pas validée. _(source: TODO.md)_
+- [ ] Intégrer un véritable runtime CLR Windows et les couches WPF/WinForms; le pont Linux `dotnet`/Mono ne suffit pas pour `paint.net`. _(source: TODO.md)_
+- [ ] Revalider le rendu du bureau courant en 1080p, 1440p et 4K, avec captures et interactions ; les tests X11 généraux ne prouvent pas cette matrice complète. _(source: TODO.md)_
+- [ ] Signer les mises à jour (Ed25519) et implémenter le schéma A/B réel (voir `docs/AB_UPDATES.md`). _(source: TODO.md)_
+- [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`). _(source: TODO.md)_
+- [ ] Tester le double-clic depuis GNOME, KDE et XFCE ; la présence de `test-binfmt-desktops.sh` ne prouve pas ces trois sessions. _(source: TODO.md)_
+- [ ] Tester l’enregistrement binfmt sur une machine Linux réelle ; script de diagnostic et configuration présents, résultat réel non établi par cet audit. _(source: TODO.md)_
+- [ ] Valider l’installation réelle sur l’hôte (`sudo integration/install.sh`) ; les tests en racine temporaire ne constituent pas cette preuve. _(source: TODO.md)_
+- [ ] Valider une exécution complète du workflow de release modifié sur GitHub ; ses étapes de construction et tests ne constituent pas une publication déjà effectuée. _(source: TODO.md)_
+- [ ] Vérifier et embarquer toutes les notices et les obligations de fourniture de sources pour une distribution complète ; NOTICES seul n'est pas une preuve d'empaquetage exhaustif. _(source: TODO.md)_
+- [ ] Bascule atomique dans la configuration GRUB _(source: docs/AB_UPDATES.md)_
+- [ ] Canal de mise à jour bêta/stable _(source: docs/AB_UPDATES.md)_
+- [ ] Journal d'audit des mises à jour appliquées _(source: docs/AB_UPDATES.md)_
+- [ ] Mises à jour delta (seuls les fichiers modifiés sont téléchargés) _(source: docs/AB_UPDATES.md)_
+- [ ] Partitionnement A/B réel avec deux slots sur le disque _(source: docs/AB_UPDATES.md)_
+- [ ] Retour arrière automatique par le chargeur si le démarrage échoue _(source: docs/AB_UPDATES.md)_
+- [ ] Rotation des clés de release _(source: docs/AB_UPDATES.md)_
+- [ ] Signature Ed25519 du manifeste (génération en CI, vérification côté client) _(source: docs/AB_UPDATES.md)_
+- [ ] Validation automatique du slot après démarrage réussi _(source: docs/AB_UPDATES.md)_
+- [ ] Fournir une installation MSIX et une activation adaptées ; ne pas confondre _(source: docs/CHATGPT-WINDOWS.md)_
+- [ ] Implémenter la lecture Unicode des fichiers INI (`GetPrivateProfileStringW`). _(source: docs/CHATGPT-WINDOWS.md)_
+- [ ] Relever puis implémenter les prochaines dépendances et fonctions Windows _(source: docs/CHATGPT-WINDOWS.md)_
+- [ ] Tester le démarrage complet, la connexion utilisateur, les conversations, _(source: docs/CHATGPT-WINDOWS.md)_
+- [ ] Implémenter et tester les dépendances Windows requises (CLR/WPF, _(source: docs/CLAUDE-CHATGPT-WINDOWS.md)_
+- [ ] Obtenir l'installateur Claude et le paquet exact de ChatGPT visé. _(source: docs/CLAUDE-CHATGPT-WINDOWS.md)_
+- [ ] Relever versions, architectures, signatures et dépendances des binaires _(source: docs/CLAUDE-CHATGPT-WINDOWS.md)_
+- [ ] Tester dans une VM jetable : installation, lancement de l'interface, _(source: docs/CLAUDE-CHATGPT-WINDOWS.md)_
+- [ ] Tester mise à jour et désinstallation sans perte de données personnelles. _(source: docs/CLAUDE-CHATGPT-WINDOWS.md)_
