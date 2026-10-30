@@ -6,7 +6,7 @@ runtime=${WINLUX_BIN:-$root/target/release/winlux}
 testdir=${WINLUX_TESTDIR:-$root/target/x86_64-pc-windows-msvc/release}
 
 test -x "$runtime" || { echo "runtime absent : $runtime" >&2; exit 1; }
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression calc screenshot imageviewer postit sysinfo pdfviewer audioplayer; do
     exe="$testdir/$name.exe"
     test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
     printf '\n== %s ==\n' "$name"
