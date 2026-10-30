@@ -439,7 +439,9 @@ unsafe impl Send for AlsaCapture {}
 unsafe impl Sync for AlsaCapture {}
 impl Drop for AlsaCapture {
     fn drop(&mut self) {
-        unsafe { dlclose(self.lib); }
+        unsafe {
+            dlclose(self.lib);
+        }
     }
 }
 fn alsa_capture() -> Result<AlsaCapture, ()> {
@@ -523,11 +525,15 @@ fn capture_thread(
     }
     // S16_LE=2, RW_INTERLEAVED=3
     if unsafe { (a.set_params)(pcm, 2, 3, config_channels as u32, config_rate, 1, 500_000) } < 0 {
-        unsafe { (a.close)(pcm); }
+        unsafe {
+            (a.close)(pcm);
+        }
         return;
     }
     if unsafe { (a.start)(pcm) } < 0 {
-        unsafe { (a.close)(pcm); }
+        unsafe {
+            (a.close)(pcm);
+        }
         return;
     }
 
@@ -587,7 +593,11 @@ fn capture_thread(
 }
 
 pub unsafe extern "win64" fn wave_in_get_num_devs() -> u32 {
-    if alsa_capture().is_ok() { 1 } else { 0 }
+    if alsa_capture().is_ok() {
+        1
+    } else {
+        0
+    }
 }
 
 pub unsafe extern "win64" fn wave_in_open(
