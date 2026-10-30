@@ -7,9 +7,12 @@
 //! résolution change (fenêtre de VM redimensionnée), le bureau se réadapte.
 //! Les textes sont en Windows-1252 car ils passent par `TextOutA`.
 
+#[path = "utilities.rs"]
+mod utilities;
 use crate::explorer;
 use crate::gfx::*;
 use crate::wm::{self, Gfx, Mouse};
+use utilities;
 use winlux_testexe::*;
 
 pub const TASKBAR_HEIGHT: i32 = 48;
@@ -34,7 +37,7 @@ static mut HOVER_BUTTON: i32 = -1;
 static mut HOVER_START_ITEM: i32 = -1;
 static mut ICON_X: [i32; 5] = [12, 12, 12, 108, 108];
 static mut ICON_Y: [i32; 5] = [12, 108, 204, 12, 108];
-static mut PINNED_APPS: u8 = 7; // Explorer, Paramètres, Bloc-notes
+static mut PINNED_APPS: u8 = 15; // Explorer, Paramètres, Bloc-notes, Utilitaires
 static mut DESKTOP_SHORTCUTS: u8 = 0;
 static mut SHOW_SYSTEM_ICONS: bool = false; // Icônes système (PC, Documents, Corbeille) désactivées par défaut
 static mut START_SHOW_ALL_APPS: bool = false; // Afficher toutes les applications au lieu des épinglées
@@ -99,11 +102,13 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 21] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 23] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
             (b"Bloc-notes", b"mousepad", 1),
-            (b"Calculatrice", b"galculator", 1),
+            (b"Calculatrice", b"calc.exe", 1),
+            (b"Capture d'\xE9cran", b"screenshot.exe", 1),
+            (b"Utilitaires", b"utilities-terminal", 2),
             (b"Archives", b"file-roller", 1),
             (b"Visionneuse d'images", b"xviewer", 3),
             (b"GIMP", b"gimp", 3),
@@ -478,6 +483,8 @@ fn app_launch(app: usize) -> Launch {
         Launch::Explorer
     } else if app == wm::APP_NOTEPAD {
         Launch::Notepad
+    } else if app == wm::APP_UTILITIES {
+        Launch::Settings
     } else {
         Launch::Settings
     }
@@ -487,7 +494,7 @@ fn taskbar_app(slot: i32) -> Option<usize> {
         return None;
     }
     let mut n = 0;
-    for app in [wm::APP_EXPLORER, wm::APP_NOTEPAD, wm::APP_SETTINGS] {
+    for app in [wm::APP_EXPLORER, wm::APP_NOTEPAD, wm::APP_UTILITIES, wm::APP_SETTINGS] {
         if unsafe { PINNED_APPS & app_bit(app) != 0 } || wm::is_open(app) {
             n += 1;
             if slot == n {
@@ -498,7 +505,7 @@ fn taskbar_app(slot: i32) -> Option<usize> {
     None
 }
 fn taskbar_count() -> i32 {
-    1 + [wm::APP_EXPLORER, wm::APP_NOTEPAD, wm::APP_SETTINGS]
+    1 + [wm::APP_EXPLORER, wm::APP_NOTEPAD, wm::APP_UTILITIES, wm::APP_SETTINGS]
         .iter()
         .filter(|&&app| unsafe { PINNED_APPS & app_bit(app) != 0 } || wm::is_open(app))
         .count() as i32
@@ -595,7 +602,7 @@ pub unsafe fn set_show_system_icons(show: bool) {
 
 fn context_rows(app: usize) -> i32 {
     if app == usize::MAX {
-        4
+        5
     } else if unsafe { CONTEXT_DESKTOP.is_none() } {
         4
     } else if wm::is_open(app) {
@@ -682,6 +689,9 @@ unsafe fn context_action(app: usize, desktop: Option<usize>, row: i32, persist: 
                 crate::notepad::open_new();
                 wm::open(wm::APP_NOTEPAD);
             }
+            4 => {
+                wm::open(wm::APP_UTILITIES);
+            }
             _ => {}
         }
         return;
@@ -767,11 +777,12 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         p.surface,
     );
     if app == usize::MAX {
-        let labels: [&[u8]; 4] = [
+        let labels: [&[u8]; 5] = [
             b"Ouvrir l'Explorateur",
             b"Ouvrir le terminal",
             b"Ouvrir les Param\xE8tres",
             b"Ouvrir le Bloc-notes",
+            b"Ouvrir les Utilitaires",
         ];
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
@@ -928,6 +939,8 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         let app = taskbar_app(i);
         let g = match app {
             Some(wm::APP_EXPLORER) => Glyph::Folder,
+            Some(wm::APP_NOTEPAD) => Glyph::File,
+            Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1076,7 +1089,7 @@ struct App {
     glyph: Glyph,
     launch: Launch,
 }
-const PINNED: [App; 7] = [
+const PINNED: [App; 8] = [
     App {
         name: b"Explorer",
         glyph: Glyph::Folder,
@@ -1091,6 +1104,11 @@ const PINNED: [App; 7] = [
         name: b"Bloc-notes",
         glyph: Glyph::File,
         launch: Launch::Notepad,
+    },
+    App {
+        name: b"Utilitaires",
+        glyph: Glyph::Tools,
+        launch: Launch::Settings,
     },
     App {
         name: b"Mises \xE0 jour",
@@ -1156,7 +1174,10 @@ unsafe fn launch(what: Launch) {
         }
         Launch::Pc | Launch::Programs => explorer::open_pc(),
         Launch::Documents => explorer::open_documents(),
-        Launch::Settings => wm::open(wm::APP_SETTINGS),
+        Launch::Settings => {
+            // Si on veut ouvrir les utilitaires, on passe par l'icône dédiée
+            wm::open(wm::APP_SETTINGS);
+        }
         Launch::Updates => crate::settings::open_page(6),
         Launch::Terminal => {
             static TERM: &[u16] = &[
