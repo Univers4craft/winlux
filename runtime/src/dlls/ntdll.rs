@@ -774,6 +774,8 @@ pub unsafe extern "win64" fn rtl_virtual_unwind(
     let rf = function_entry as *const [u32; 3];
     let mut unwind_rva = (*rf)[2];
     let mut handler: *mut c_void = std::ptr::null_mut();
+    let mut last_frame_register: u8 = 0;
+    let mut last_frame_base: u64 = 0;
 
     // Follow CHAININFO chain
     loop {
@@ -915,6 +917,10 @@ pub unsafe extern "win64" fn rtl_virtual_unwind(
             }
         }
 
+        // Remember frame info from this iteration for establisher_frame
+        last_frame_register = frame_register;
+        last_frame_base = frame_base;
+
         // Check for chained unwind info
         if flags & UNW_FLAG_CHAININFO != 0 {
             let aligned = (code_count + 1) & !1;
@@ -946,7 +952,15 @@ pub unsafe extern "win64" fn rtl_virtual_unwind(
     ctx_set_rsp(ctx, rsp + 8);
 
     if !establisher_frame.is_null() {
-        *establisher_frame = ctx_get_rsp(ctx).wrapping_sub(8);
+        if last_frame_register != 0 {
+            // For functions with a frame pointer, the establisher frame is
+            // frame_register_value - frame_offset (already computed as frame_base).
+            *establisher_frame = last_frame_base;
+        } else {
+            // For functions without a frame pointer, the establisher frame is
+            // RSP at function entry = RSP before we popped the return address.
+            *establisher_frame = rsp;
+        }
     }
 
     handler
