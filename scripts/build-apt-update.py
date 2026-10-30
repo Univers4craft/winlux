@@ -16,7 +16,7 @@ def build(stage, version, output):
     shutil.copy2(package, asset)
     digest = hashlib.sha256(asset.read_bytes()).hexdigest()
     size = int(data.get("Installed-Size", "0")) or sum(p.stat().st_size for p in (stage/"opt/winlux").rglob("*") if p.is_file()) // 1024
-    text = (f"format=3\nbackend=apt\nbase=ubuntu-noble\nversion={version}\nscope=system\naction=reboot\n"
+    text = (f"format=3\nbackend=apt\nbase=ubuntu-resolute\nversion={version}\nscope=system\naction=reboot\n"
             f"components=runtime,desktop,applications,updater,integration\nasset={asset.name}\nsha256={digest}\n"
             f"download_bytes={asset.stat().st_size}\nunpacked_kib={size}\n")
     (output / "winlux-update-manifest.txt").write_text(text)
