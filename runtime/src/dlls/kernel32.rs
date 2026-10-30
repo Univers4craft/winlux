@@ -246,7 +246,9 @@ pub fn process_heap() -> usize {
 }
 
 pub fn init() {
-    PROCESS_HEAP.compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed).ok();
+    PROCESS_HEAP
+        .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+        .ok();
     let _ = ALLOCS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let _ = HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new()));
     let _ = HANDLES.get_or_init(|| Mutex::new(HashMap::new()));
