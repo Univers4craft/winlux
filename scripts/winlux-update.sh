@@ -92,6 +92,14 @@ safe_path() {
 safe_link() {
     link_path=$1; link_target=$2
     case "$link_target" in ''|*[!A-Za-z0-9._+@%=/:-]*) return 1 ;; esac
+    # Ubuntu masks obsolete systemd units with this harmless exact target.
+    # Other links into /dev remain forbidden, as do masks outside unit dirs.
+    if test "$link_target" = /dev/null; then
+        case "${link_path%/*}:${link_path##*/}" in
+            lib/systemd/system:*.service|usr/lib/systemd/system:*.service) return 0 ;;
+            *) return 1 ;;
+        esac
+    fi
     case "$link_target" in /*) link_absolute=$link_target ;; *) link_absolute="${link_path%/*}/$link_target" ;; esac
     resolved=$(printf '%s\n' "$link_absolute" | tool awk -F/ '
         { n=0; for(i=1;i<=NF;i++) { if($i=="" || $i==".") continue;

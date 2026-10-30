@@ -131,6 +131,14 @@ printf 'usr/bin/unsafe ../../../../etc/shadow\n' >"$test_root/custom/LINKS"
 publish_custom updater-runtime
 expect_failure update --apply
 reset_custom
+printf 'usr/bin/unsafe /dev/null\n' >"$test_root/custom/LINKS"
+publish_custom updater-runtime
+expect_failure update --apply
+reset_custom
+printf 'usr/lib/systemd/system/unsafe.service /dev/sda\n' >"$test_root/custom/LINKS"
+publish_custom updater-runtime
+expect_failure update --apply
+reset_custom
 sed 's/^version=.*/version=wrong/' "$test_root/custom/META" >"$test_root/META"
 mv "$test_root/META" "$test_root/custom/META"
 publish_custom updater-runtime
@@ -179,6 +187,11 @@ ln -s ../../bin/busybox "$stage/usr/bin/dirname"
 mkdir -p "$stage/usr/lib/ssl" "$fixture/usr/lib/ssl"
 ln -s /etc/ssl/certs "$stage/usr/lib/ssl/certs"
 ln -s /etc/ssl/certs "$fixture/usr/lib/ssl/certs"
+mkdir -p "$stage/lib/systemd/system" "$stage/usr/lib/systemd/system"
+ln -s /dev/null "$stage/lib/systemd/system/alsa-utils.service"
+ln -s /dev/null "$stage/usr/lib/systemd/system/x11-common.service"
+printf 'unused unit\n' >"$stage/usr/lib/systemd/system/system-systemd\x2dcryptsetup.slice"
+printf 'unused unit\n' >"$stage/usr/lib/systemd/system/system-systemd\x2dveritysetup.slice"
 printf 'desktop-new\n' >"$stage/opt/winlux/tests/gui_demo.exe"
 printf 'driver-new\n' >"$stage/lib/modules/test-kernel/input.ko"
 printf 'library-new\n' >"$stage/lib64/winlux.so"
@@ -190,6 +203,9 @@ SOURCE_DATE_EPOCH=0 sh "$root/scripts/build-info.sh" updater-system system >"$st
 grep -q '^built_at_utc=1970-01-01T00:00:00Z$' "$stage/usr/share/winlux/BUILD-INFO"
 if test -f "$root/scripts/source-fingerprint.sh"; then sh "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"; fi
 WINLUX_UPDATE_INCLUDE_BOOT=1 WINLUX_UPDATE_STAGE="$stage" WINLUX_UPDATE_BOOT="$boot" "$root/scripts/build-update-bundle.sh" --system updater-system >/dev/null
+if tar -tzf "$root/build/winlux-update-updater-system.tar.gz" | grep -Fq 'system-systemd\x2d'; then
+    echo 'Unité systemd non représentable incluse dans le paquet' >&2; exit 1
+fi
 if tar -xOf "$root/build/winlux-update-updater-system.tar.gz" LINKS | grep -q 'usr/lib/ssl/certs'; then
     echo 'Lien de configuration inclus dans le paquet remplaçable' >&2; exit 1
 fi
@@ -204,6 +220,8 @@ printf 'driver-old\n' >"$fixture/lib/modules/test-kernel/input.ko"
 update --auto enable
 test "$(update --auto status)" = enabled
 update --auto-run
+test "$(readlink "$fixture/lib/systemd/system/alsa-utils.service")" = /dev/null
+test "$(readlink "$fixture/usr/lib/systemd/system/x11-common.service")" = /dev/null
 test "$(cat "$fixture/run/winlux/update-action")" = reboot
 test "$(cat "$fixture/usr/share/winlux/update-scope")" = system
 test "$(cat "$fixture/opt/winlux/tests/gui_demo.exe")" = desktop-new

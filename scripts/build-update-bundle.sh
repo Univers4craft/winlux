@@ -70,6 +70,13 @@ links="$work/package/LINKS"
 find "$raw" -mindepth 1 -print | LC_ALL=C sort >"$work/paths"
 while IFS= read -r source; do
     path=${source#"$raw"/}
+    # These systemd slice names contain literal backslashes and cannot be
+    # represented by the format-2 inventory. Winlux uses its own init;
+    # retain any existing copies instead of replacing them.
+    case "$path" in
+        'usr/lib/systemd/system/system-systemd\x2dcryptsetup.slice'|'usr/lib/systemd/system/system-systemd\x2dveritysetup.slice')
+            echo "Unité systemd conservée : $path" >&2; continue ;;
+    esac
     case "$path" in ''|*[!A-Za-z0-9._+@%=/:-]*) echo "nom de fichier non pris en charge : $path" >&2; exit 1 ;; esac
     if test -L "$source"; then
         target=$(readlink "$source")
@@ -80,6 +87,12 @@ while IFS= read -r source; do
         case "$target" in /*) link_absolute=$target ;; *) link_absolute="${path%/*}/$target" ;; esac
         resolved=$(printf '%s\n' "$link_absolute" | awk -F/ '{ n=0; for(i=1;i<=NF;i++) { if($i=="" || $i==".") continue; if($i=="..") { if(n==0) exit 1; n--; } else parts[++n]=$i; } for(i=1;i<=n;i++) printf "%s%s", i==1 ? "" : "/", parts[i]; print ""; }') || { echo "lien hors racine : $path" >&2; exit 1; }
         case "$resolved" in
+            dev/null)
+                test "$target" = /dev/null || { echo "cible de masque non canonique : $path -> $target" >&2; exit 1; }
+                case "${path%/*}:${path##*/}" in
+                    lib/systemd/system:*.service|usr/lib/systemd/system:*.service) ;;
+                    *) echo "masque /dev/null hors unité système : $path" >&2; exit 1 ;;
+                esac ;;
             etc/*|var/*) echo "Lien de configuration préservé : $path -> $target" >&2; continue ;;
             usr/*|lib/*|lib64/*|bin/*|opt/winlux/*|boot/*|init) ;;
             *) echo "lien hors système : $path -> $target" >&2; exit 1 ;;
