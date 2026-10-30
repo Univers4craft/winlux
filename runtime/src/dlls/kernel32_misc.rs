@@ -283,41 +283,111 @@ pub extern "win64" fn unhandled_exception_filter(_info: usize) -> i32 {
     1
 } // EXCEPTION_EXECUTE_HANDLER
 
-/// `RaiseException` sans dispatcher SEH : le programme est arrêté avec le
-/// code de l'exception, comme le ferait Windows pour une exception non gérée.
-pub unsafe extern "win64" fn raise_exception(
+// `RaiseException` : point d'entrée assembleur qui capture le contexte de
+// l'appelant, puis appelle le helper Rust pour dispatcher via SEH.
+core::arch::global_asm!(
+    ".globl winlux_raise_exception_asm",
+    ".p2align 4",
+    "winlux_raise_exception_asm:",
+    // rcx=code, rdx=flags, r8=nargs, r9=args, [rsp]=return addr
+    "mov [rsp+8],  rcx",
+    "mov [rsp+16], rdx",
+    "mov [rsp+24], r8",
+    "mov [rsp+32], r9",
+    "push rbp",
+    "mov rbp, rsp",
+    // Allocate CONTEXT(1232) + call shadow(48) = 1280, 16-aligned
+    "sub rsp, 1280",
+    // ctx at rsp+48
+    // Zero the CONTEXT area
+    "lea rdi, [rsp+48]",
+    "xor eax, eax",
+    "mov ecx, 154", // 1232/8 = 154 qwords
+    "rep stosq",
+    // ContextFlags
+    "mov dword ptr [rsp + 48 + 0x30], 0x0010001F",
+    // RIP = caller return address
+    "mov rax, [rbp+8]",
+    "mov [rsp + 48 + 0xF8], rax",
+    // RSP = caller's RSP (after call instruction)
+    "lea rax, [rbp + 16]",
+    "mov [rsp + 48 + 0x98], rax",
+    // RBP = saved rbp (caller's rbp)
+    "mov rax, [rbp]",
+    "mov [rsp + 48 + 0xA0], rax",
+    // Callee-saved registers
+    "mov [rsp + 48 + 0x90], rbx",
+    "mov [rsp + 48 + 0xA8], rsi",
+    "mov [rsp + 48 + 0xB0], rdi",
+    "mov [rsp + 48 + 0xD8], r12",
+    "mov [rsp + 48 + 0xE0], r13",
+    "mov [rsp + 48 + 0xE8], r14",
+    "mov [rsp + 48 + 0xF0], r15",
+    // Volatile regs from shadow space
+    "mov rax, [rbp+16]",
+    "mov [rsp + 48 + 0x80], rax", // RCX
+    "mov rax, [rbp+24]",
+    "mov [rsp + 48 + 0x88], rax", // RDX
+    "mov rax, [rbp+32]",
+    "mov [rsp + 48 + 0xB8], rax", // R8
+    "mov rax, [rbp+40]",
+    "mov [rsp + 48 + 0xC0], rax", // R9
+    "mov [rsp + 48 + 0xC8], r10",
+    "mov [rsp + 48 + 0xD0], r11",
+    // Call raise_exception_with_context(code, flags, nargs, args, ctx)
+    "mov ecx, [rbp+16]",
+    "mov edx, [rbp+24]",
+    "mov r8d, [rbp+32]",
+    "mov r9, [rbp+40]",
+    "lea rax, [rsp+48]",
+    "mov [rsp+32], rax",
+    "call {helper}",
+    // If helper returns (unhandled exception was fatal), clean up
+    "add rsp, 1280",
+    "pop rbp",
+    "ret",
+    helper = sym raise_exception_with_context,
+);
+extern "C" {
+    pub fn winlux_raise_exception_asm();
+}
+
+unsafe extern "win64" fn raise_exception_with_context(
     code: u32,
     flags: u32,
     nargs: u32,
-    args: *const usize,
+    args: *const u64,
+    ctx: *mut u8,
 ) {
-    let detail = if nargs > 0 && !args.is_null() {
-        let a = std::slice::from_raw_parts(args, nargs.min(15) as usize);
-        format!(
-            " (arguments : {})",
-            a.iter()
-                .map(|v| format!("0x{v:x}"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        )
-    } else {
-        String::new()
-    };
-    // 0x406D1388 : convention MSVC pour nommer un thread dans le débogueur.
+    use crate::dlls::ntdll;
+
     if code == 0x406D_1388 {
         return;
     }
+
+    let mut er = [0u8; ntdll::ER_SIZE];
+    let er_ptr = er.as_mut_ptr();
+    (er_ptr.add(ntdll::ER_CODE) as *mut u32).write(code);
+    (er_ptr.add(ntdll::ER_FLAGS) as *mut u32).write(flags);
+    (er_ptr.add(ntdll::ER_RECORD) as *mut u64).write(0);
+    (er_ptr.add(ntdll::ER_ADDRESS) as *mut u64).write((ctx.add(0xF8) as *const u64).read());
+    let n = nargs.min(15) as usize;
+    (er_ptr.add(ntdll::ER_NPARAMS) as *mut u32).write(n as u32);
+    if n > 0 && !args.is_null() {
+        std::ptr::copy_nonoverlapping(args as *const u8, er_ptr.add(ntdll::ER_INFO), n * 8);
+    }
+
+    if ntdll::dispatch_exception(er_ptr, ctx) {
+        return;
+    }
+
     let _ = std::io::stdout().flush();
-    eprintln!(
-        "\nwinlux: exception Windows 0x{code:08X} levée par le programme{}{detail}",
-        if flags & 1 != 0 {
-            ", non continuable"
-        } else {
-            ""
-        }
-    );
+    eprintln!("\nwinlux: exception Windows 0x{code:08X} non gérée");
     if code == 0xE06D_7363 {
-        eprintln!("winlux: il s'agit d'une exception C++ MSVC non rattrapée (déroulement SEH pas encore pris en charge)");
+        eprintln!("winlux: exception C++ MSVC non rattrapée");
+    }
+    if code == 0x2047_4343 {
+        eprintln!("winlux: exception C++ GCC non rattrapée");
     }
     crate::dlls::kernel32::flush_and_exit(code as i32)
 }
@@ -576,7 +646,7 @@ pub fn exports() -> crate::dlls::Exports {
         "GetSystemDirectoryA" => fn get_system_directory_a, "GetSystemDirectoryW" => fn get_system_directory_w,
         "GetWindowsDirectoryA" => fn get_windows_directory_a, "GetWindowsDirectoryW" => fn get_windows_directory_w,
         "SetUnhandledExceptionFilter" => fn set_unhandled_exception_filter, "UnhandledExceptionFilter" => fn unhandled_exception_filter,
-        "RaiseException" => fn raise_exception, "IsDebuggerPresent" => fn is_debugger_present,
+        "RaiseException" => fn winlux_raise_exception_asm, "IsDebuggerPresent" => fn is_debugger_present,
         "OutputDebugStringA" => fn output_debug_string_a, "OutputDebugStringW" => fn output_debug_string_w,
         "IsProcessorFeaturePresent" => fn is_processor_feature_present, "SwitchToThread" => fn switch_to_thread, "ExitThread" => fn exit_thread,
         "lstrlenA" => fn lstrlen_a, "lstrlenW" => fn lstrlen_w, "lstrcpyA" => fn lstrcpy_a, "lstrcpyW" => fn lstrcpy_w,

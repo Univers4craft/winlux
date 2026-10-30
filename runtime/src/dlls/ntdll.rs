@@ -593,8 +593,7 @@ const CTX_R14: usize = 0xE8;
 const CTX_R15: usize = 0xF0;
 const CTX_RIP: usize = 0xF8;
 const CTX_XMM0: usize = 0x1A0;
-#[allow(dead_code)]
-const CTX_SIZE: usize = 1232;
+pub(crate) const CTX_SIZE: usize = 1232;
 
 #[allow(dead_code)]
 const CONTEXT_AMD64: u32 = 0x0010_0000;
@@ -678,6 +677,41 @@ pub unsafe extern "win64" fn rtl_capture_context(ctx: *mut c_void) {
         return;
     }
     winlux_rtl_capture_context(ctx);
+}
+
+// `RtlRestoreContext` — restore all registers from CONTEXT and jump to RIP.
+core::arch::global_asm!(
+    ".globl winlux_rtl_restore_context",
+    ".p2align 4",
+    "winlux_rtl_restore_context:",
+    // rcx = pointer to CONTEXT
+    // Restore RSP first, push target RIP for ret
+    "mov rsp, [rcx + 0x98]",
+    "push qword ptr [rcx + 0xF8]",
+    // Restore all integer registers
+    "mov rax, [rcx + 0x78]",
+    "mov rdx, [rcx + 0x88]",
+    "mov rbx, [rcx + 0x90]",
+    "mov rbp, [rcx + 0xA0]",
+    "mov rsi, [rcx + 0xA8]",
+    "mov rdi, [rcx + 0xB0]",
+    "mov r8,  [rcx + 0xB8]",
+    "mov r9,  [rcx + 0xC0]",
+    "mov r10, [rcx + 0xC8]",
+    "mov r11, [rcx + 0xD0]",
+    "mov r12, [rcx + 0xD8]",
+    "mov r13, [rcx + 0xE0]",
+    "mov r14, [rcx + 0xE8]",
+    "mov r15, [rcx + 0xF0]",
+    // RCX last (it was our pointer)
+    "mov rcx, [rcx + 0x80]",
+    "ret",
+);
+extern "win64" {
+    pub(crate) fn winlux_rtl_restore_context(ctx: *mut c_void);
+}
+pub unsafe extern "win64" fn rtl_restore_context(ctx: *mut c_void, _er: *mut c_void) {
+    winlux_rtl_restore_context(ctx);
 }
 
 /// `RtlLookupFunctionEntry` : cherche l'entrée RUNTIME_FUNCTION dans le
@@ -928,10 +962,13 @@ unsafe fn set_ctx_pointer(ptrs: *mut c_void, reg: u8, addr: u64) {
 }
 
 // EXCEPTION_RECORD layout offsets
-const ER_CODE: usize = 0;
-const ER_FLAGS: usize = 4;
-const ER_NPARAMS: usize = 24;
-const ER_SIZE: usize = 152;
+pub(crate) const ER_CODE: usize = 0;
+pub(crate) const ER_FLAGS: usize = 4;
+pub(crate) const ER_RECORD: usize = 8;
+pub(crate) const ER_ADDRESS: usize = 16;
+pub(crate) const ER_NPARAMS: usize = 24;
+pub(crate) const ER_INFO: usize = 32;
+pub(crate) const ER_SIZE: usize = 152;
 
 // DISPATCHER_CONTEXT layout (x64)
 #[repr(C)]
@@ -1022,17 +1059,14 @@ pub unsafe extern "win64" fn rtl_unwind_ex(
             std::ptr::null_mut(),
         );
 
-        // Check if we've reached the target frame
-        if target_frame_val != 0 && frame == target_frame_val {
-            let er_flags = (er as *mut u8).add(ER_FLAGS) as *mut u32;
-            *er_flags |= EXCEPTION_TARGET_UNWIND;
-            ctx_set_rip(ctx, target_ip_val);
-            ctx_set_gpr(ctx, 0, return_value as u64); // RAX = return value
-            return;
-        }
-
         // Call unwind handler if present
         if !handler.is_null() {
+            // Set TARGET_UNWIND flag at the target frame
+            if target_frame_val != 0 && frame == target_frame_val {
+                let er_flags = (er as *mut u8).add(ER_FLAGS) as *mut u32;
+                *er_flags |= EXCEPTION_TARGET_UNWIND;
+            }
+
             dispatch_ctx.control_pc = rip;
             dispatch_ctx.image_base = image_base;
             dispatch_ctx.function_entry = func_entry;
@@ -1046,16 +1080,96 @@ pub unsafe extern "win64" fn rtl_unwind_ex(
 
             let handler_fn: ExceptionHandler = std::mem::transmute(handler);
             let _result = handler_fn(er, frame, original_context, &mut dispatch_ctx);
-            // ExceptionContinueSearch: keep going
-            // ExceptionCollidedUnwind: use dispatch_ctx state
+        }
+
+        // At the target frame, restore context (handler set up RIP/RSP/RAX)
+        if target_frame_val != 0 && frame == target_frame_val {
+            ctx_set_gpr(ctx, 0, return_value as u64);
+            winlux_rtl_restore_context(original_context);
+        }
+    }
+}
+
+/// Première passe SEH : cherche un gestionnaire pour l'exception.
+/// Retourne `true` si un gestionnaire a été trouvé (et le contrôle a été
+/// transféré via `RtlUnwindEx` + `RtlRestoreContext` — ne devrait pas revenir).
+pub(crate) unsafe fn dispatch_exception(er: *mut u8, ctx: *mut u8) -> bool {
+    let mut search_ctx = [0u8; CTX_SIZE];
+    std::ptr::copy_nonoverlapping(ctx, search_ctx.as_mut_ptr(), CTX_SIZE);
+    let sctx = search_ctx.as_mut_ptr();
+
+    let mut dispatch_ctx: DispatcherContext = std::mem::zeroed();
+
+    for _ in 0..256u32 {
+        let rip = ctx_get_rip(sctx);
+        if rip == 0 {
+            break;
+        }
+
+        let mut image_base: u64 = 0;
+        let func_entry = lookup_function_entry_impl(rip, &mut image_base);
+        if func_entry.is_null() {
+            let rsp = ctx_get_rsp(sctx);
+            ctx_set_rip(sctx, (rsp as *const u64).read_unaligned());
+            ctx_set_rsp(sctx, rsp + 8);
+            continue;
+        }
+
+        let mut handler_data: *mut c_void = std::ptr::null_mut();
+        let mut frame: u64 = 0;
+        let handler = rtl_virtual_unwind(
+            UNW_FLAG_EHANDLER as u32,
+            image_base,
+            rip,
+            func_entry,
+            sctx as *mut c_void,
+            &mut handler_data,
+            &mut frame,
+            std::ptr::null_mut(),
+        );
+
+        if !handler.is_null() {
+            dispatch_ctx.control_pc = rip;
+            dispatch_ctx.image_base = image_base;
+            dispatch_ctx.function_entry = func_entry;
+            dispatch_ctx.establisher_frame = frame;
+            dispatch_ctx.target_ip = 0;
+            dispatch_ctx.context_record = ctx as *mut c_void;
+            dispatch_ctx.language_handler = handler;
+            dispatch_ctx.handler_data = handler_data;
+            dispatch_ctx.history_table = std::ptr::null();
+            dispatch_ctx.scope_index = 0;
+
+            let handler_fn: ExceptionHandler = std::mem::transmute(handler);
+            let result = handler_fn(
+                er as *mut c_void,
+                frame,
+                ctx as *mut c_void,
+                &mut dispatch_ctx,
+            );
+
+            if result == _EXCEPTION_EXECUTE_HANDLER {
+                let nparams = *(er.add(ER_NPARAMS) as *const u32);
+                let return_value = if nparams > 0 {
+                    *(er.add(ER_INFO) as *const u64) as usize
+                } else {
+                    0
+                };
+
+                rtl_unwind_ex(
+                    frame as *mut c_void,
+                    rip as *mut c_void,
+                    er as *mut c_void,
+                    return_value as *mut c_void,
+                    ctx as *mut c_void,
+                    std::ptr::null_mut(),
+                );
+                return true;
+            }
         }
     }
 
-    // Restore context to target
-    if target_ip_val != 0 {
-        ctx_set_rip(ctx, target_ip_val);
-    }
-    ctx_set_gpr(ctx, 0, return_value as u64);
+    false
 }
 
 /// `RtlPcToFileHeader` : trouve le module contenant l'adresse.
@@ -2251,6 +2365,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlLookupFunctionEntry" => fn rtl_lookup_function_entry,
         "RtlVirtualUnwind" => fn rtl_virtual_unwind,
         "RtlUnwindEx" => fn rtl_unwind_ex,
+        "RtlRestoreContext" => fn rtl_restore_context,
         "RtlPcToFileHeader" => fn rtl_pc_to_file_header,
         // --- Rtl : VEH ---
         "RtlAddVectoredExceptionHandler" => fn rtl_add_vectored_exception_handler,
