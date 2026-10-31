@@ -715,6 +715,8 @@ pub enum Glyph {
     NetDrive,
     /// Bouton Éjecter.
     Eject,
+    Clock,
+    Shield,
 }
 
 pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y: i32, s: i32) {
@@ -2254,6 +2256,38 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                 y + s * 3 / 4,
                 c,
             );
+        }
+        Glyph::Clock => {
+            let p = pal();
+            ellipse(hdc, b, x + 1, y + 1, x + s - 1, y + s - 1, p.accent);
+            let t = (s / 9).max(2);
+            ellipse(hdc, b, x + 1 + t, y + 1 + t, x + s - 1 - t, y + s - 1 - t, glyph_bg());
+            let cx = x + s / 2;
+            let cy = y + s / 2;
+            let w = (s / 14).max(1);
+            fill(hdc, b, cx - w, y + s / 4, cx + w, cy + w, p.text);
+            fill(hdc, b, cx - w, cy - w, x + s * 2 / 3 + 1, cy + w, p.text);
+        }
+        Glyph::Shield => {
+            let p = pal();
+            let cx = x + s / 2;
+            let top = y + s / 10;
+            let mid = y + s * 11 / 20;
+            fill(hdc, b, x + s / 6, top + 2, x + s * 5 / 6, mid, p.accent);
+            fill(hdc, b, cx - 1, top, cx + 1, top + 2, p.accent);
+            let h = (y + s * 19 / 20 - mid).max(1);
+            for i in 0..h {
+                let half = (s / 3) * (h - i) / h;
+                fill(hdc, b, cx - half, mid + i, cx + half, mid + i + 1, p.accent);
+            }
+            // Coche claire au centre.
+            let w = (s / 12).max(1);
+            for i in 0..s / 6 {
+                fill(hdc, b, x + s / 3 + i, y + s / 2 + i, x + s / 3 + i + w, y + s / 2 + i + w, p.on_accent);
+            }
+            for i in 0..s / 3 {
+                fill(hdc, b, x + s / 2 + i - 1, y + s * 2 / 3 - i, x + s / 2 + i - 1 + w, y + s * 2 / 3 - i + w, p.on_accent);
+            }
         }
         Glyph::Wifi => {
             let c = pal().text;
