@@ -89,6 +89,17 @@ cp "$root/scripts/winlux-browsers.sh" "$stage/usr/bin/winlux-browsers"
 chmod 755 "$stage/usr/bin/winlux-browsers"
 cp "$root/integration/winlux-open" "$stage/usr/bin/winlux-open"
 chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script"
+
+# Installateur et outils associés
+cp "$root/scripts/winlux-installer.py" "$stage/usr/bin/winlux-installer"
+cp "$root/scripts/winlux-hw-detect.sh" "$stage/usr/bin/winlux-hw-detect"
+cp "$root/scripts/winlux-first-boot.sh" "$stage/usr/bin/winlux-first-boot"
+cp "$root/scripts/install.sh" "$stage/opt/winlux/scripts/install.sh"
+cp "$root/scripts/install-safety.sh" "$stage/opt/winlux/scripts/install-safety.sh"
+chmod 755 "$stage/usr/bin/winlux-installer" "$stage/usr/bin/winlux-hw-detect" "$stage/usr/bin/winlux-first-boot" "$stage/opt/winlux/scripts/install.sh"
+cp "$root/integration/winlux-installer.desktop" "$stage/usr/share/applications/winlux-installer.desktop"
+mkdir -p "$stage/root/Bureau"
+cp "$root/integration/winlux-installer.desktop" "$stage/root/Bureau/winlux-installer.desktop"
 mkdir -p "$stage/usr/share/winlux"
 printf '%s\n' "${WINLUX_BUILD_VERSION:-$(cat "$root/VERSION")}" >"$stage/usr/share/winlux/version"
 sh "$root/scripts/build-info.sh" "$(cat "$stage/usr/share/winlux/version")" system >"$stage/usr/share/winlux/BUILD-INFO"
@@ -696,6 +707,9 @@ menuentry "Winlux Desktop" {
     else
         winlux_live
     fi
+}
+menuentry "Installer Winlux sur le disque" --hotkey=i {
+    winlux_live
 }
 menuentry "Winlux persistent network diagnostic" --hotkey=s {
     search --no-floppy --label WINLUX_ROOT --set=winlux_root
