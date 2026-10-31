@@ -40,7 +40,10 @@ pub unsafe extern "win64" fn winlux_create_pty(cols: u32, rows: u32) -> usize {
         libc::close(master);
         return 0;
     }
-    let slave = libc::open(slave_name.as_ptr() as *const _, libc::O_RDWR | libc::O_NOCTTY);
+    let slave = libc::open(
+        slave_name.as_ptr() as *const _,
+        libc::O_RDWR | libc::O_NOCTTY,
+    );
     if slave < 0 {
         libc::close(master);
         return 0;
@@ -78,11 +81,8 @@ pub unsafe extern "win64" fn winlux_create_pty(cols: u32, rows: u32) -> usize {
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "/bin/bash".into());
         let c_shell = std::ffi::CString::new(shell).unwrap_or_else(|_| c"/bin/bash".into());
-        let argv: [*const libc::c_char; 3] = [
-            c_shell.as_ptr(),
-            c"--login".as_ptr(),
-            std::ptr::null(),
-        ];
+        let argv: [*const libc::c_char; 3] =
+            [c_shell.as_ptr(), c"--login".as_ptr(), std::ptr::null()];
         libc::execvp(c_shell.as_ptr(), argv.as_ptr());
         libc::_exit(127);
     }
@@ -160,11 +160,7 @@ pub unsafe extern "win64" fn winlux_write_pty(
 }
 
 /// Redimensionne le PTY (TIOCSWINSZ).
-pub unsafe extern "win64" fn winlux_resize_pty(
-    handle: usize,
-    cols: u32,
-    rows: u32,
-) -> i32 {
+pub unsafe extern "win64" fn winlux_resize_pty(handle: usize, cols: u32, rows: u32) -> i32 {
     let map = pty_map().lock().unwrap();
     let Some(pty) = map.get(&handle) else {
         return 0;
