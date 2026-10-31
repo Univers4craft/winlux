@@ -4730,169 +4730,6 @@ pub extern "win64" fn tls_get_value(i: u32) -> *mut c_void {
     crate::process::set_last_error(0);
     value as *mut c_void
 }
-fn cp1252_decode(b: u8) -> char {
-    const C: [u16; 32] = [
-        0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160,
-        0x2039, 0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022,
-        0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
-    ];
-    if (0x80..=0x9f).contains(&b) {
-        char::from_u32(C[(b - 0x80) as usize] as u32).unwrap()
-    } else {
-        char::from_u32(b as u32).unwrap()
-    }
-}
-fn decode_windows_bytes(cp: u32, flags: u32, bytes: &[u8]) -> Result<String, u32> {
-    if flags & !0x0b != 0 {
-        return Err(87);
-    }
-    match cp {
-        65001 => {
-            if flags & 8 != 0 {
-                String::from_utf8(bytes.to_vec()).map_err(|_| 1113)
-            } else {
-                Ok(String::from_utf8_lossy(bytes).into_owned())
-            }
-        }
-        0 | 1252 => Ok(bytes.iter().copied().map(cp1252_decode).collect()),
-        _ => Err(87),
-    }
-}
-fn cp1252_encode(c: char) -> Option<u8> {
-    let n = c as u32;
-    if n <= 0x7f || (0xa0..=0xff).contains(&n) {
-        return Some(n as u8);
-    }
-    const C: [u16; 32] = [
-        0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160,
-        0x2039, 0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022,
-        0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
-    ];
-    C.iter()
-        .position(|&x| x as u32 == n)
-        .map(|i| i as u8 + 0x80)
-}
-pub unsafe extern "win64" fn multi_byte_to_wide(
-    cp: u32,
-    flags: u32,
-    s: *const u8,
-    n: i32,
-    w: *mut u16,
-    wn: i32,
-) -> i32 {
-    if s.is_null() || n == 0 || n < -1 || wn < 0 {
-        crate::process::set_last_error(87);
-        return 0;
-    }
-    let count = if n == -1 {
-        crate::printf::narrow_len(s) + 1
-    } else {
-        n as usize
-    };
-    let bytes = std::slice::from_raw_parts(s, count);
-    let text = match decode_windows_bytes(cp, flags, bytes) {
-        Ok(s) => s,
-        Err(e) => {
-            crate::process::set_last_error(e);
-            return 0;
-        }
-    };
-    let out: Vec<u16> = text.encode_utf16().collect();
-    if out.len() > i32::MAX as usize {
-        crate::process::set_last_error(87);
-        return 0;
-    }
-    if w.is_null() {
-        return out.len() as i32;
-    }
-    if (wn as usize) < out.len() {
-        crate::process::set_last_error(122);
-        return 0;
-    }
-    if !out.is_empty() {
-        std::ptr::copy_nonoverlapping(out.as_ptr(), w, out.len());
-    }
-    out.len() as i32
-}
-pub unsafe extern "win64" fn wide_char_to_multi_byte(
-    cp: u32,
-    flags: u32,
-    w: *const u16,
-    n: i32,
-    out: *mut u8,
-    cap: i32,
-    default: *const u8,
-    used: *mut i32,
-) -> i32 {
-    if w.is_null() || n == 0 || n < -1 || cap < 0 {
-        crate::process::set_last_error(87);
-        return 0;
-    }
-    if flags & !0x480 != 0 {
-        crate::process::set_last_error(87);
-        return 0;
-    }
-    if cp == 65001 && (!default.is_null() || !used.is_null()) {
-        crate::process::set_last_error(87);
-        return 0;
-    }
-    let count = if n == -1 {
-        crate::printf::wide_len(w) + 1
-    } else {
-        n as usize
-    };
-    let units = std::slice::from_raw_parts(w, count);
-    let text = if flags & 0x80 != 0 {
-        match String::from_utf16(units) {
-            Ok(s) => s,
-            Err(_) => {
-                crate::process::set_last_error(1113);
-                return 0;
-            }
-        }
-    } else {
-        String::from_utf16_lossy(units)
-    };
-    let mut substituted = false;
-    let bytes = match cp {
-        65001 => text.as_bytes().to_vec(),
-        0 | 1252 => text
-            .chars()
-            .map(|c| {
-                cp1252_encode(c).unwrap_or_else(|| {
-                    substituted = true;
-                    if default.is_null() {
-                        b'?'
-                    } else {
-                        *default
-                    }
-                })
-            })
-            .collect(),
-        _ => {
-            crate::process::set_last_error(87);
-            return 0;
-        }
-    };
-    if !used.is_null() {
-        *used = i32::from(substituted);
-    }
-    if bytes.len() > i32::MAX as usize {
-        crate::process::set_last_error(87);
-        return 0;
-    }
-    if out.is_null() {
-        return bytes.len() as i32;
-    }
-    if (cap as usize) < bytes.len() {
-        crate::process::set_last_error(122);
-        return 0;
-    }
-    if !bytes.is_empty() {
-        std::ptr::copy_nonoverlapping(bytes.as_ptr(), out, bytes.len());
-    }
-    bytes.len() as i32
-}
 pub unsafe extern "win64" fn write_console_w(
     _h: usize,
     buf: *const u16,
@@ -5438,30 +5275,7 @@ fn get_hostname_string() -> String {
     }
 }
 
-fn format_local_date() -> String {
-    unsafe {
-        let mut t: libc::time_t = 0;
-        libc::time(&mut t);
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        format!(
-            "{:02}/{:02}/{:04}",
-            tm.tm_mday,
-            tm.tm_mon + 1,
-            tm.tm_year + 1900
-        )
-    }
-}
 
-fn format_local_time() -> String {
-    unsafe {
-        let mut t: libc::time_t = 0;
-        libc::time(&mut t);
-        let mut tm: libc::tm = std::mem::zeroed();
-        libc::localtime_r(&t, &mut tm);
-        format!("{:02}:{:02}:{:02}", tm.tm_hour, tm.tm_min, tm.tm_sec)
-    }
-}
 
 // --- GetLogicalDrives, GetComputerName, GetUserName ---
 pub extern "win64" fn get_logical_drives() -> u32 {
@@ -5501,85 +5315,10 @@ pub unsafe extern "win64" fn get_computer_name_w(buf: *mut u16, size: *mut u32) 
 }
 
 // --- GetLocaleInfoA/W ---
-pub unsafe extern "win64" fn get_locale_info_a(
-    locale: u32,
-    lc_type: u32,
-    buf: *mut u8,
-    cap: i32,
-) -> i32 {
-    let _ = locale;
-    let val = match lc_type & 0xFFFF {
-        0x01 => "fr-FR",            // LOCALE_SLANGUAGE
-        0x02 => "fr",               // LOCALE_SABBREVLANGNAME
-        0x03 => "français",         // LOCALE_SNATIVELANGNAME
-        0x04 => "FR",               // LOCALE_SCOUNTRY
-        0x07 => "France",           // LOCALE_SNATIVECTRYNAME
-        0x0E => "€",                // LOCALE_SCURRENCY
-        0x0F => ",",                // LOCALE_SDECIMAL
-        0x10 => " ",                // LOCALE_STHOUSAND
-        0x11 => "3;0",              // LOCALE_SGROUPING
-        0x1D => "dd/MM/yyyy",       // LOCALE_SSHORTDATE
-        0x1E => "dddd d MMMM yyyy", // LOCALE_SLONGDATE
-        0x1F => "HH:mm",            // LOCALE_STIMEFORMAT
-        0x25 => "/",                // LOCALE_SDATE
-        0x26 => ":",                // LOCALE_STIME
-        _ => "",
-    };
-    if buf.is_null() || cap == 0 {
-        return (val.len() + 1) as i32;
-    }
-    crate::dlls::put_a(val, buf, cap as u32) as i32
-}
 
-pub unsafe extern "win64" fn get_locale_info_w(
-    locale: u32,
-    lc_type: u32,
-    buf: *mut u16,
-    cap: i32,
-) -> i32 {
-    // Delegate via A version for simplicity
-    let mut a_buf = [0u8; 256];
-    let n = get_locale_info_a(locale, lc_type, a_buf.as_mut_ptr(), 256);
-    if n == 0 {
-        return 0;
-    }
-    let s = crate::dlls::decode_ansi(&a_buf[..(n as usize).saturating_sub(1)]);
-    if buf.is_null() || cap == 0 {
-        return (s.encode_utf16().count() + 1) as i32;
-    }
-    crate::dlls::put_w(&s, buf, cap as u32) as i32
-}
 
 // --- GetDateFormatA/W, GetTimeFormatA/W (basic) ---
-pub unsafe extern "win64" fn get_date_format_a(
-    _locale: u32,
-    _flags: u32,
-    _date: *const u8,
-    _fmt: *const u8,
-    buf: *mut u8,
-    cap: i32,
-) -> i32 {
-    let s = format_local_date();
-    if buf.is_null() || cap == 0 {
-        return (s.len() + 1) as i32;
-    }
-    crate::dlls::put_a(&s, buf, cap as u32) as i32
-}
 
-pub unsafe extern "win64" fn get_time_format_a(
-    _locale: u32,
-    _flags: u32,
-    _time: *const u8,
-    _fmt: *const u8,
-    buf: *mut u8,
-    cap: i32,
-) -> i32 {
-    let s = format_local_time();
-    if buf.is_null() || cap == 0 {
-        return (s.len() + 1) as i32;
-    }
-    crate::dlls::put_a(&s, buf, cap as u32) as i32
-}
 
 // --- GetNumberOfProcessors ---
 pub extern "win64" fn get_active_processor_count(_group: u16) -> u32 {
@@ -5993,59 +5732,11 @@ pub unsafe extern "win64" fn get_product_info(
     1
 }
 
-pub unsafe extern "win64" fn get_time_zone_information(tz: *mut u8) -> u32 {
-    if tz.is_null() {
-        return u32::MAX;
-    }
-    std::ptr::write_bytes(tz, 0, 172);
-    0 // TIME_ZONE_ID_UNKNOWN
-}
 
-pub unsafe extern "win64" fn get_dynamic_time_zone_information(tz: *mut u8) -> u32 {
-    if tz.is_null() {
-        return u32::MAX;
-    }
-    std::ptr::write_bytes(tz, 0, 288);
-    0
-}
 
-pub unsafe extern "win64" fn system_time_to_file_time(st: *const u16, ft: *mut u64) -> i32 {
-    if st.is_null() || ft.is_null() {
-        return 0;
-    }
-    *ft = 132_000_000_000_000_000; // approximate epoch
-    1
-}
 
-pub unsafe extern "win64" fn file_time_to_system_time(ft: *const u64, st: *mut u16) -> i32 {
-    if ft.is_null() || st.is_null() {
-        return 0;
-    }
-    // return 2024-01-01 00:00:00 as placeholder
-    let fields: [u16; 8] = [2024, 1, 1, 1, 0, 0, 0, 0];
-    std::ptr::copy_nonoverlapping(fields.as_ptr(), st, 8);
-    1
-}
 
-pub unsafe extern "win64" fn file_time_to_local_file_time(ft: *const u64, local: *mut u64) -> i32 {
-    if ft.is_null() || local.is_null() {
-        return 0;
-    }
-    *local = *ft;
-    1
-}
 
-pub unsafe extern "win64" fn system_time_to_tz_specific_local_time(
-    _tz: usize,
-    _universal: *const u16,
-    local: *mut u16,
-) -> i32 {
-    if local.is_null() {
-        return 0;
-    }
-    get_local_time(local as *mut SystemTime);
-    1
-}
 
 pub unsafe extern "win64" fn get_system_time(st: *mut u16) {
     if st.is_null() {
@@ -6310,7 +6001,7 @@ pub fn exports() -> crate::dlls::Exports {
       "GetEnvironmentVariableW"=>fn get_environment_variable_w,"SetEnvironmentVariableW"=>fn set_environment_variable_w,"GetCurrentDirectoryW"=>fn get_current_directory_w,"SetCurrentDirectoryW"=>fn set_current_directory_w,
       "GetTempPathW"=>fn get_temp_path_w,"GetTempFileNameW"=>fn get_temp_file_name_w,"GetModuleFileNameW"=>fn get_module_file_name_w,"GetFileAttributesW"=>fn get_file_attributes_w,"GetFileAttributesExW"=>fn get_file_attributes_ex_w,"DeleteFileW"=>fn delete_file_w,"CreateDirectoryW"=>fn create_directory_w,"GetFullPathNameW"=>fn get_full_path_name_w,"CopyFileW"=>fn copy_file_w,"MoveFileW"=>fn move_file_w,"RemoveDirectoryW"=>fn remove_directory_w,"SetEndOfFile"=>fn set_end_of_file,"Sleep"=>fn sleep,
      "TlsAlloc"=>fn tls_alloc, "TlsFree"=>fn tls_free, "TlsSetValue"=>fn tls_set_value, "TlsGetValue"=>fn tls_get_value,
-     "MultiByteToWideChar"=>fn multi_byte_to_wide,"WideCharToMultiByte"=>fn wide_char_to_multi_byte,"WriteConsoleW"=>fn write_console_w,
+     "WriteConsoleW"=>fn write_console_w,
     "QueryPerformanceFrequency"=>fn query_performance_frequency, "QueryPerformanceCounter"=>fn query_performance_counter,
      "GetStartupInfoA"=>fn get_startup_info_a,"GetStartupInfoW"=>fn get_startup_info_w,"SetFilePointerEx"=>fn set_file_pointer_ex,"GetFileSizeEx"=>fn get_file_size_ex,"GetFileType"=>fn get_file_type,
      "SetFileAttributesA"=>fn set_file_attributes_a,"SetFileAttributesW"=>fn set_file_attributes_w,"GetFileTime"=>fn get_file_time,"SetFileTime"=>fn set_file_time,"LockFile"=>fn lock_file,"UnlockFile"=>fn unlock_file,
@@ -6325,8 +6016,6 @@ pub fn exports() -> crate::dlls::Exports {
      "InitializeSListHead"=>fn initialize_slist_head,"InterlockedPushEntrySList"=>fn interlocked_push_entry_slist,"InterlockedPopEntrySList"=>fn interlocked_pop_entry_slist,"InterlockedFlushSList"=>fn interlocked_flush_slist,"QueryDepthSList"=>fn query_depth_slist,
      "EncodePointer"=>fn encode_pointer,"DecodePointer"=>fn decode_pointer,
      "GetLogicalDrives"=>fn get_logical_drives,"GetComputerNameA"=>fn get_computer_name_a,"GetComputerNameW"=>fn get_computer_name_w,
-     "GetLocaleInfoA"=>fn get_locale_info_a,"GetLocaleInfoW"=>fn get_locale_info_w,
-     "GetDateFormatA"=>fn get_date_format_a,"GetTimeFormatA"=>fn get_time_format_a,
      "GetActiveProcessorCount"=>fn get_active_processor_count,
      "CreateWaitableTimerA"=>fn create_waitable_timer_a,"SetWaitableTimer"=>fn set_waitable_timer,"CancelWaitableTimer"=>fn cancel_waitable_timer,
      "GetFileInformationByHandle"=>fn get_file_information_by_handle,"ReadDirectoryChangesW"=>fn read_directory_changes_w,
@@ -6342,9 +6031,6 @@ pub fn exports() -> crate::dlls::Exports {
      "LoadLibraryExA"=>fn load_library_ex_a,"LoadLibraryExW"=>fn load_library_ex_w,
      // --- API Electron / Chromium ---
      "GetProductInfo"=>fn get_product_info,
-     "GetTimeZoneInformation"=>fn get_time_zone_information,"GetDynamicTimeZoneInformation"=>fn get_dynamic_time_zone_information,
-     "SystemTimeToFileTime"=>fn system_time_to_file_time,"FileTimeToSystemTime"=>fn file_time_to_system_time,
-     "FileTimeToLocalFileTime"=>fn file_time_to_local_file_time,"SystemTimeToTzSpecificLocalTime"=>fn system_time_to_tz_specific_local_time,
      "GetSystemTime"=>fn get_system_time,
      "GetProcessTimes"=>fn get_process_times,"GetThreadTimes"=>fn get_thread_times,
      "SetHandleInformation"=>fn set_handle_information,"GetHandleInformation"=>fn get_handle_information,"DuplicateHandle"=>fn duplicate_handle,
@@ -6791,40 +6477,6 @@ mod tests {
         assert_eq!(reused, i);
         assert!(tls_get_value(reused).is_null());
         tls_free(reused);
-    }
-
-    #[test]
-    fn conversions_unicode_utf8_et_ansi_cp1252_sont_symetriques() {
-        let input = [b'A', 0x80];
-        let mut wide = [0u16; 4];
-        assert_eq!(
-            unsafe { multi_byte_to_wide(1252, 0, input.as_ptr(), 2, wide.as_mut_ptr(), 4) },
-            2
-        );
-        assert_eq!(&wide[..2], &[b'A' as u16, 0x20ac]);
-        let mut narrow = [0u8; 4];
-        let mut used = 0;
-        assert_eq!(
-            unsafe {
-                wide_char_to_multi_byte(
-                    1252,
-                    0,
-                    wide.as_ptr(),
-                    2,
-                    narrow.as_mut_ptr(),
-                    4,
-                    std::ptr::null(),
-                    &mut used,
-                )
-            },
-            2
-        );
-        assert_eq!(&narrow[..2], &input);
-        assert_eq!(used, 0);
-        assert_eq!(
-            unsafe { multi_byte_to_wide(65001, 8, [0xffu8].as_ptr(), 1, wide.as_mut_ptr(), 4) },
-            0
-        );
     }
 
     #[test]

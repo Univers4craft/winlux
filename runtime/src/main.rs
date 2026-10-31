@@ -11,6 +11,7 @@ mod dlls;
 mod firewall;
 mod gpu;
 mod imaging;
+mod intl;
 mod loader;
 pub mod log;
 mod managed;
@@ -58,6 +59,13 @@ fn main() {
     if exe == "--power" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(power::cli::main(&rest));
+    }
+    if exe == "--intl" {
+        std::process::exit(intl::report());
+    }
+    if exe == "--text" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(intl::text::cli(&rest));
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());
