@@ -19,6 +19,9 @@ static mut GOT_DESTROY: u32 = 0;
 static mut LAST_MOVE: isize = 0;
 static mut LAST_SIZE: isize = 0;
 static mut MAIN_HWND: Handle = core::ptr::null_mut();
+static mut TRAY_RIGHT_UP: u32 = 0;
+static mut TRAY_CONTEXT: u32 = 0;
+const WM_TRAY: u32 = 0x8044;
 
 unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize {
     match msg {
@@ -53,6 +56,18 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
         }
         WM_DESTROY => {
             GOT_DESTROY += 1;
+            0
+        }
+        // Icône de zone de notification en NOTIFYICON_VERSION_4 :
+        // lParam = MAKELONG(événement, uID), wParam = position du clic.
+        WM_TRAY => {
+            if lparam >> 16 == 9 && wparam == (6 << 16) | 5 {
+                match (lparam & 0xFFFF) as u32 {
+                    0x0205 => TRAY_RIGHT_UP += 1,
+                    0x007B => TRAY_CONTEXT += 1,
+                    _ => {}
+                }
+            }
             0
         }
         _ => DefWindowProcA(hwnd, msg, wparam, lparam),
@@ -540,6 +555,53 @@ pub extern "C" fn mainCRTStartup() -> ! {
         }
         check!(GOT_MOVE == move_before + 1, "MoveWindow publie WM_MOVE");
 
+        // Zone de notification : l'assistant factice de test-runtime.sh répond
+        // à la première icône par un clic droit (événements lup/rup).
+        let mut nid = [0u8; 976];
+        nid[0..4].copy_from_slice(&976u32.to_le_bytes());
+        nid[8..16].copy_from_slice(&(hwnd as usize).to_le_bytes());
+        nid[16..20].copy_from_slice(&9u32.to_le_bytes());
+        nid[20..24].copy_from_slice(&(0x01u32 | 0x04).to_le_bytes()); // NIF_MESSAGE | NIF_TIP
+        nid[24..28].copy_from_slice(&WM_TRAY.to_le_bytes());
+        for (i, unit) in [b'W', b'i', b'n', b'l', b'u', b'x'].iter().enumerate() {
+            nid[40 + i * 2] = *unit;
+        }
+        nid[816..820].copy_from_slice(&4u32.to_le_bytes()); // NOTIFYICON_VERSION_4
+        check!(
+            Shell_NotifyIconW(0, nid.as_ptr()) != 0,
+            "Shell_NotifyIcon NIM_ADD"
+        );
+        check!(
+            Shell_NotifyIconW(0, nid.as_ptr()) == 0,
+            "NIM_ADD en double refusé"
+        );
+        check!(Shell_NotifyIconW(4, nid.as_ptr()) != 0, "NIM_SETVERSION");
+        if helper_configured() {
+            let mut tray_msg: Msg = core::mem::zeroed();
+            let start = GetTickCount();
+            while (TRAY_RIGHT_UP == 0 || TRAY_CONTEXT == 0)
+                && GetTickCount().wrapping_sub(start) < 5000
+            {
+                if PeekMessageW(&mut tray_msg, hwnd, WM_TRAY, WM_TRAY, 1) > 0 {
+                    DispatchMessageW(&tray_msg);
+                } else {
+                    Sleep(10);
+                }
+            }
+            check!(
+                TRAY_RIGHT_UP == 1 && TRAY_CONTEXT == 1,
+                "clic droit sur l'icône de notification transmis (version 4)"
+            );
+        }
+        check!(
+            Shell_NotifyIconW(2, nid.as_ptr()) != 0,
+            "Shell_NotifyIcon NIM_DELETE"
+        );
+        check!(
+            Shell_NotifyIconW(1, nid.as_ptr()) == 0,
+            "NIM_MODIFY après suppression"
+        );
+
         // Destruction explicite → WM_DESTROY.
         DestroyWindow(hwnd);
         check!(GOT_DESTROY >= 1, "WM_DESTROY recu");
@@ -548,4 +610,14 @@ pub extern "C" fn mainCRTStartup() -> ! {
 
         finish()
     }
+}
+
+/// Assistant de zone de notification factice fourni par scripts/test-runtime.sh.
+unsafe fn helper_configured() -> bool {
+    let mut value = [0u8; 8];
+    GetEnvironmentVariableA(
+        c"WINLUX_NOTIFY_ICON_HELPER".as_ptr(),
+        value.as_mut_ptr() as *mut _,
+        value.len() as u32,
+    ) != 0
 }

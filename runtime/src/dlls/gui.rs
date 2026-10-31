@@ -1937,6 +1937,10 @@ pub fn with_backend_public<F: FnOnce(&mut dyn GuiBackend)>(f: F) {
 
 /// Capture d'une zone de l'écran (unités logiques), `None` sans affichage réel.
 pub fn capture_screen(rect: Rect) -> Option<BitmapSnapshot> {
+    // Lire l'écran montre aussi les fenêtres des autres programmes.
+    if !crate::permissions::allowed(crate::permissions::Capability::Screen) {
+        return None;
+    }
     let mut captured = None;
     with_backend(|backend| captured = backend.capture_screen(rect));
     captured
