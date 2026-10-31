@@ -44,7 +44,10 @@ fn main() {
     };
     profiles::apply(&exe);
     if managed::has_clr_header(&source) {
-        log_info!("managed", "assembly .NET détectée, exécution via le CLR Winlux intégré");
+        log_info!(
+            "managed",
+            "assembly .NET détectée, exécution via le CLR Winlux intégré"
+        );
         let code = clr::execute_assembly(&source);
         std::process::exit(code);
     }

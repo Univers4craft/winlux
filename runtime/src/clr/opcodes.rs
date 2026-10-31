@@ -267,10 +267,13 @@ pub fn decode(il: &[u8], offset: usize) -> Option<Instruction> {
             _ => return None,
         };
         let operand = match op {
-            OpCode::Ldarg | OpCode::Ldarga | OpCode::Starg | OpCode::Ldloc
-            | OpCode::Ldloca | OpCode::Stloc => 2,
-            OpCode::Sizeof | OpCode::Constrained | OpCode::Ldftn
-            | OpCode::Ldvirtftn => 4,
+            OpCode::Ldarg
+            | OpCode::Ldarga
+            | OpCode::Starg
+            | OpCode::Ldloc
+            | OpCode::Ldloca
+            | OpCode::Stloc => 2,
+            OpCode::Sizeof | OpCode::Constrained | OpCode::Ldftn | OpCode::Ldvirtftn => 4,
             OpCode::Unaligned => 1,
             _ => 0,
         };
@@ -471,38 +474,80 @@ pub fn decode(il: &[u8], offset: usize) -> Option<Instruction> {
             _ => return None,
         };
         let operand = match op {
-            OpCode::Ldarg_S | OpCode::Ldarga_S | OpCode::Starg_S
-            | OpCode::Ldloc_S | OpCode::Ldloca_S | OpCode::Stloc_S
+            OpCode::Ldarg_S
+            | OpCode::Ldarga_S
+            | OpCode::Starg_S
+            | OpCode::Ldloc_S
+            | OpCode::Ldloca_S
+            | OpCode::Stloc_S
             | OpCode::Ldc_I4_S
-            | OpCode::Br_S | OpCode::Brfalse_S | OpCode::Brtrue_S
-            | OpCode::Beq_S | OpCode::Bge_S | OpCode::Bgt_S | OpCode::Ble_S
-            | OpCode::Blt_S | OpCode::Bne_Un_S | OpCode::Bge_Un_S
-            | OpCode::Bgt_Un_S | OpCode::Ble_Un_S | OpCode::Blt_Un_S
+            | OpCode::Br_S
+            | OpCode::Brfalse_S
+            | OpCode::Brtrue_S
+            | OpCode::Beq_S
+            | OpCode::Bge_S
+            | OpCode::Bgt_S
+            | OpCode::Ble_S
+            | OpCode::Blt_S
+            | OpCode::Bne_Un_S
+            | OpCode::Bge_Un_S
+            | OpCode::Bgt_Un_S
+            | OpCode::Ble_Un_S
+            | OpCode::Blt_Un_S
             | OpCode::Leave_S => 1,
 
             OpCode::Ldc_I4
             | OpCode::Ldc_R4
-            | OpCode::Br | OpCode::Brfalse | OpCode::Brtrue
-            | OpCode::Beq | OpCode::Bge | OpCode::Bgt | OpCode::Ble
-            | OpCode::Blt | OpCode::Bne_Un | OpCode::Bge_Un | OpCode::Bgt_Un
-            | OpCode::Ble_Un | OpCode::Blt_Un
+            | OpCode::Br
+            | OpCode::Brfalse
+            | OpCode::Brtrue
+            | OpCode::Beq
+            | OpCode::Bge
+            | OpCode::Bgt
+            | OpCode::Ble
+            | OpCode::Blt
+            | OpCode::Bne_Un
+            | OpCode::Bge_Un
+            | OpCode::Bgt_Un
+            | OpCode::Ble_Un
+            | OpCode::Blt_Un
             | OpCode::Leave
-            | OpCode::Jmp | OpCode::Call | OpCode::Calli | OpCode::Callvirt
-            | OpCode::Newobj | OpCode::Castclass | OpCode::Isinst
-            | OpCode::Ldfld | OpCode::Ldflda | OpCode::Stfld
-            | OpCode::Ldsfld | OpCode::Ldsflda | OpCode::Stsfld
-            | OpCode::Box | OpCode::Unbox | OpCode::Unbox_Any
-            | OpCode::Newarr | OpCode::Ldelema | OpCode::Ldelem | OpCode::Stelem
-            | OpCode::Cpobj | OpCode::Ldobj | OpCode::Stobj
-            | OpCode::Ldstr | OpCode::Ldtoken | OpCode::Initobj
-            | OpCode::Mkrefany | OpCode::Refanyval => 4,
+            | OpCode::Jmp
+            | OpCode::Call
+            | OpCode::Calli
+            | OpCode::Callvirt
+            | OpCode::Newobj
+            | OpCode::Castclass
+            | OpCode::Isinst
+            | OpCode::Ldfld
+            | OpCode::Ldflda
+            | OpCode::Stfld
+            | OpCode::Ldsfld
+            | OpCode::Ldsflda
+            | OpCode::Stsfld
+            | OpCode::Box
+            | OpCode::Unbox
+            | OpCode::Unbox_Any
+            | OpCode::Newarr
+            | OpCode::Ldelema
+            | OpCode::Ldelem
+            | OpCode::Stelem
+            | OpCode::Cpobj
+            | OpCode::Ldobj
+            | OpCode::Stobj
+            | OpCode::Ldstr
+            | OpCode::Ldtoken
+            | OpCode::Initobj
+            | OpCode::Mkrefany
+            | OpCode::Refanyval => 4,
 
             OpCode::Ldc_I8 | OpCode::Ldc_R8 => 8,
 
             OpCode::Switch => {
-                let n = il.get(offset + 1..offset + 5).map(|s| {
-                    u32::from_le_bytes(s.try_into().unwrap()) as usize
-                }).unwrap_or(0);
+                let n = il
+                    .get(offset + 1..offset + 5)
+                    .map(|s| u32::from_le_bytes(s.try_into().unwrap()) as usize)
+                    .unwrap_or(0);
                 4 + n * 4
             }
 

@@ -84,7 +84,9 @@ impl GcHeap {
 
     pub fn collect(&mut self) {
         for obj in &self.objects {
-            unsafe { (**obj).flags &= !MARK_BIT; }
+            unsafe {
+                (**obj).flags &= !MARK_BIT;
+            }
         }
 
         for &root in &self.roots {
@@ -99,7 +101,9 @@ impl GcHeap {
             if !marked {
                 let size = unsafe { (*obj).size } as usize;
                 let layout = Layout::from_size_align(size, OBJ_ALIGN).unwrap();
-                unsafe { dealloc(obj as *mut u8, layout); }
+                unsafe {
+                    dealloc(obj as *mut u8, layout);
+                }
                 freed += size;
             }
             marked
@@ -110,8 +114,12 @@ impl GcHeap {
             self.gc_threshold = self.gc_threshold.saturating_mul(2);
         }
 
-        crate::log_debug!("clr-gc", "collecte : {} octets libérés, {} objets restants",
-            freed, self.objects.len());
+        crate::log_debug!(
+            "clr-gc",
+            "collecte : {} octets libérés, {} objets restants",
+            freed,
+            self.objects.len()
+        );
     }
 
     fn mark(&self, data_ptr: *mut u8) {
@@ -131,9 +139,8 @@ impl GcHeap {
             let slot = unsafe { *(data_ptr.add(i * 8) as *const usize) };
             if slot != 0 {
                 let candidate = slot as *mut u8;
-                let candidate_hdr = unsafe {
-                    candidate.sub(std::mem::size_of::<ObjHeader>())
-                } as *mut ObjHeader;
+                let candidate_hdr =
+                    unsafe { candidate.sub(std::mem::size_of::<ObjHeader>()) } as *mut ObjHeader;
                 if self.objects.contains(&candidate_hdr) {
                     self.mark(candidate);
                 }
@@ -151,7 +158,9 @@ impl Drop for GcHeap {
         for &obj in &self.objects {
             let size = unsafe { (*obj).size } as usize;
             let layout = Layout::from_size_align(size, OBJ_ALIGN).unwrap();
-            unsafe { dealloc(obj as *mut u8, layout); }
+            unsafe {
+                dealloc(obj as *mut u8, layout);
+            }
         }
     }
 }

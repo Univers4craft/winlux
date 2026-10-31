@@ -68,7 +68,10 @@ impl TypeInfo {
     }
 
     pub fn find_static_field(&self, name: &str) -> Option<(usize, &FieldInfo)> {
-        self.static_fields.iter().enumerate().find(|(_, f)| f.name == name)
+        self.static_fields
+            .iter()
+            .enumerate()
+            .find(|(_, f)| f.name == name)
     }
 }
 
@@ -150,7 +153,11 @@ impl TypeRegistry {
                 static_fields: Vec::new(),
                 vtable: Vec::new(),
                 interfaces: Vec::new(),
-                instance_size: if is_vt { element_size_of_builtin(id) } else { 8 },
+                instance_size: if is_vt {
+                    element_size_of_builtin(id)
+                } else {
+                    8
+                },
                 is_value_type: is_vt,
                 is_enum: false,
                 is_interface: false,
@@ -193,22 +200,35 @@ impl TypeRegistry {
     }
 
     pub fn is_subclass_of(&self, child: TypeId, parent: TypeId) -> bool {
-        if child == parent { return true; }
+        if child == parent {
+            return true;
+        }
         let mut current = child;
         loop {
-            let Some(ti) = self.get(current) else { return false; };
-            if ti.parent == 0 { return false; }
-            if ti.parent == parent { return true; }
+            let Some(ti) = self.get(current) else {
+                return false;
+            };
+            if ti.parent == 0 {
+                return false;
+            }
+            if ti.parent == parent {
+                return true;
+            }
             current = ti.parent;
         }
     }
 
     pub fn alloc_static_data(&mut self, type_id: TypeId, size: usize) {
-        self.static_data.entry(type_id).or_insert_with(|| vec![0u8; size]);
+        self.static_data
+            .entry(type_id)
+            .or_insert_with(|| vec![0u8; size]);
     }
 
     pub fn static_field_ptr(&mut self, type_id: TypeId, offset: usize) -> *mut u8 {
-        let data = self.static_data.entry(type_id).or_insert_with(|| vec![0u8; 256]);
+        let data = self
+            .static_data
+            .entry(type_id)
+            .or_insert_with(|| vec![0u8; 256]);
         if offset < data.len() {
             unsafe { data.as_mut_ptr().add(offset) }
         } else {
@@ -225,8 +245,11 @@ pub fn element_size(et: &ElementType) -> usize {
         ElementType::I4 | ElementType::U4 | ElementType::R4 => 4,
         ElementType::I8 | ElementType::U8 | ElementType::R8 => 8,
         ElementType::IntPtr | ElementType::UIntPtr => 8,
-        ElementType::String | ElementType::Object | ElementType::Class(_)
-        | ElementType::SzArray(_) | ElementType::Array(_) => 8,
+        ElementType::String
+        | ElementType::Object
+        | ElementType::Class(_)
+        | ElementType::SzArray(_)
+        | ElementType::Array(_) => 8,
         ElementType::ValueType(_) => 8,
         ElementType::GenericInst(_, _) => 8,
         ElementType::ByRef(_) | ElementType::Ptr(_) => 8,

@@ -25,7 +25,13 @@ pub fn dispatch_internal_call(
         ("System.IO", "Path", m) => path_dispatch(m, args),
         ("System.Runtime.InteropServices", "Marshal", m) => marshal_dispatch(m, args),
         _ => {
-            crate::log_warn!("clr-bcl", "appel interne inconnu: {}.{}::{}", namespace, class, method);
+            crate::log_warn!(
+                "clr-bcl",
+                "appel interne inconnu: {}.{}::{}",
+                namespace,
+                class,
+                method
+            );
             None
         }
     }
@@ -184,15 +190,13 @@ fn math_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     };
 
     match method {
-        "Abs" => {
-            match args.last()? {
-                Value::I32(v) => Some(Value::I32(v.wrapping_abs())),
-                Value::I64(v) => Some(Value::I64(v.wrapping_abs())),
-                Value::F64(v) => Some(Value::F64(v.abs())),
-                Value::F32(v) => Some(Value::F32(v.abs())),
-                _ => Some(Value::I32(0)),
-            }
-        }
+        "Abs" => match args.last()? {
+            Value::I32(v) => Some(Value::I32(v.wrapping_abs())),
+            Value::I64(v) => Some(Value::I64(v.wrapping_abs())),
+            Value::F64(v) => Some(Value::F64(v.abs())),
+            Value::F32(v) => Some(Value::F32(v.abs())),
+            _ => Some(Value::I32(0)),
+        },
         "Sqrt" => Some(Value::F64(to_f64(args.last()?).sqrt())),
         "Sin" => Some(Value::F64(to_f64(args.last()?).sin())),
         "Cos" => Some(Value::F64(to_f64(args.last()?).cos())),
@@ -202,13 +206,21 @@ fn math_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         "Atan" => Some(Value::F64(to_f64(args.last()?).atan())),
         "Atan2" => {
             if args.len() >= 2 {
-                Some(Value::F64(to_f64(&args[args.len()-2]).atan2(to_f64(&args[args.len()-1]))))
-            } else { Some(Value::F64(0.0)) }
+                Some(Value::F64(
+                    to_f64(&args[args.len() - 2]).atan2(to_f64(&args[args.len() - 1])),
+                ))
+            } else {
+                Some(Value::F64(0.0))
+            }
         }
         "Pow" => {
             if args.len() >= 2 {
-                Some(Value::F64(to_f64(&args[args.len()-2]).powf(to_f64(&args[args.len()-1]))))
-            } else { Some(Value::F64(0.0)) }
+                Some(Value::F64(
+                    to_f64(&args[args.len() - 2]).powf(to_f64(&args[args.len() - 1])),
+                ))
+            } else {
+                Some(Value::F64(0.0))
+            }
         }
         "Log" => Some(Value::F64(to_f64(args.last()?).ln())),
         "Log10" => Some(Value::F64(to_f64(args.last()?).log10())),
@@ -220,37 +232,51 @@ fn math_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         "Truncate" => Some(Value::F64(to_f64(args.last()?).trunc())),
         "Min" => {
             if args.len() >= 2 {
-                match (&args[args.len()-2], &args[args.len()-1]) {
+                match (&args[args.len() - 2], &args[args.len() - 1]) {
                     (Value::I32(a), Value::I32(b)) => Some(Value::I32(*a.min(b))),
                     (Value::I64(a), Value::I64(b)) => Some(Value::I64(*a.min(b))),
-                    _ => Some(Value::F64(to_f64(&args[args.len()-2]).min(to_f64(&args[args.len()-1]))))
+                    _ => Some(Value::F64(
+                        to_f64(&args[args.len() - 2]).min(to_f64(&args[args.len() - 1])),
+                    )),
                 }
-            } else { Some(Value::I32(0)) }
+            } else {
+                Some(Value::I32(0))
+            }
         }
         "Max" => {
             if args.len() >= 2 {
-                match (&args[args.len()-2], &args[args.len()-1]) {
+                match (&args[args.len() - 2], &args[args.len() - 1]) {
                     (Value::I32(a), Value::I32(b)) => Some(Value::I32(*a.max(b))),
                     (Value::I64(a), Value::I64(b)) => Some(Value::I64(*a.max(b))),
-                    _ => Some(Value::F64(to_f64(&args[args.len()-2]).max(to_f64(&args[args.len()-1]))))
+                    _ => Some(Value::F64(
+                        to_f64(&args[args.len() - 2]).max(to_f64(&args[args.len() - 1])),
+                    )),
                 }
-            } else { Some(Value::I32(0)) }
-        }
-        "Sign" => {
-            match args.last()? {
-                Value::I32(v) => Some(Value::I32(v.signum())),
-                Value::I64(v) => Some(Value::I32(v.signum() as i32)),
-                Value::F64(v) => Some(Value::I32(if *v > 0.0 { 1 } else if *v < 0.0 { -1 } else { 0 })),
-                _ => Some(Value::I32(0)),
+            } else {
+                Some(Value::I32(0))
             }
         }
+        "Sign" => match args.last()? {
+            Value::I32(v) => Some(Value::I32(v.signum())),
+            Value::I64(v) => Some(Value::I32(v.signum() as i32)),
+            Value::F64(v) => Some(Value::I32(if *v > 0.0 {
+                1
+            } else if *v < 0.0 {
+                -1
+            } else {
+                0
+            })),
+            _ => Some(Value::I32(0)),
+        },
         "Clamp" => {
             if args.len() >= 3 {
-                let val = to_f64(&args[args.len()-3]);
-                let min = to_f64(&args[args.len()-2]);
-                let max = to_f64(&args[args.len()-1]);
+                let val = to_f64(&args[args.len() - 3]);
+                let min = to_f64(&args[args.len() - 2]);
+                let max = to_f64(&args[args.len() - 1]);
                 Some(Value::F64(val.clamp(min, max)))
-            } else { Some(Value::F64(0.0)) }
+            } else {
+                Some(Value::F64(0.0))
+            }
         }
         "get_PI" | "PI" => Some(Value::F64(std::f64::consts::PI)),
         "get_E" | "E" => Some(Value::F64(std::f64::consts::E)),
@@ -272,39 +298,39 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
             }
             Some(alloc_managed_string(&result))
         }
-        "get_Length" => {
-            match args.first() {
-                Some(Value::Ref(p)) if !p.is_null() => {
-                    let len = unsafe { *((*p) as *const u32) } as i32;
-                    Some(Value::I32(len))
-                }
-                _ => Some(Value::I32(0)),
+        "get_Length" => match args.first() {
+            Some(Value::Ref(p)) if !p.is_null() => {
+                let len = unsafe { *((*p) as *const u32) } as i32;
+                Some(Value::I32(len))
             }
-        }
-        "IsNullOrEmpty" => {
-            match args.last() {
-                Some(Value::Null) => Some(Value::I32(1)),
-                Some(Value::Ref(p)) if p.is_null() => Some(Value::I32(1)),
-                Some(Value::Ref(p)) => {
-                    let len = unsafe { *(*p as *const u32) };
-                    Some(Value::I32(if len == 0 { 1 } else { 0 }))
-                }
-                _ => Some(Value::I32(1)),
+            _ => Some(Value::I32(0)),
+        },
+        "IsNullOrEmpty" => match args.last() {
+            Some(Value::Null) => Some(Value::I32(1)),
+            Some(Value::Ref(p)) if p.is_null() => Some(Value::I32(1)),
+            Some(Value::Ref(p)) => {
+                let len = unsafe { *(*p as *const u32) };
+                Some(Value::I32(if len == 0 { 1 } else { 0 }))
             }
-        }
+            _ => Some(Value::I32(1)),
+        },
         "op_Equality" => {
             if args.len() >= 2 {
-                let a = value_to_string(&args[args.len()-2]);
-                let b = value_to_string(&args[args.len()-1]);
+                let a = value_to_string(&args[args.len() - 2]);
+                let b = value_to_string(&args[args.len() - 1]);
                 Some(Value::I32(if a == b { 1 } else { 0 }))
-            } else { Some(Value::I32(0)) }
+            } else {
+                Some(Value::I32(0))
+            }
         }
         "op_Inequality" => {
             if args.len() >= 2 {
-                let a = value_to_string(&args[args.len()-2]);
-                let b = value_to_string(&args[args.len()-1]);
+                let a = value_to_string(&args[args.len() - 2]);
+                let b = value_to_string(&args[args.len() - 1]);
                 Some(Value::I32(if a != b { 1 } else { 0 }))
-            } else { Some(Value::I32(1)) }
+            } else {
+                Some(Value::I32(1))
+            }
         }
         "Substring" => {
             let this_str = match args.first() {
@@ -349,21 +375,27 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 let haystack = value_to_string(&args[0]);
                 let needle = value_to_string(&args[1]);
                 Some(Value::I32(if haystack.contains(&needle) { 1 } else { 0 }))
-            } else { Some(Value::I32(0)) }
+            } else {
+                Some(Value::I32(0))
+            }
         }
         "StartsWith" => {
             if args.len() >= 2 {
                 let s = value_to_string(&args[0]);
                 let prefix = value_to_string(&args[1]);
                 Some(Value::I32(if s.starts_with(&prefix) { 1 } else { 0 }))
-            } else { Some(Value::I32(0)) }
+            } else {
+                Some(Value::I32(0))
+            }
         }
         "EndsWith" => {
             if args.len() >= 2 {
                 let s = value_to_string(&args[0]);
                 let suffix = value_to_string(&args[1]);
                 Some(Value::I32(if s.ends_with(&suffix) { 1 } else { 0 }))
-            } else { Some(Value::I32(0)) }
+            } else {
+                Some(Value::I32(0))
+            }
         }
         "Replace" => {
             if args.len() >= 3 {
@@ -371,7 +403,9 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 let from = value_to_string(&args[1]);
                 let to = value_to_string(&args[2]);
                 Some(alloc_managed_string(&s.replace(&from, &to)))
-            } else { Some(Value::Null) }
+            } else {
+                Some(Value::Null)
+            }
         }
         "IndexOf" => {
             if args.len() >= 2 {
@@ -379,10 +413,14 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 let needle = value_to_string(&args[1]);
                 let idx = s.find(&needle).map(|i| i as i32).unwrap_or(-1);
                 Some(Value::I32(idx))
-            } else { Some(Value::I32(-1)) }
+            } else {
+                Some(Value::I32(-1))
+            }
         }
         "Format" => {
-            if args.is_empty() { return Some(alloc_managed_string("")); }
+            if args.is_empty() {
+                return Some(alloc_managed_string(""));
+            }
             let fmt = value_to_string(&args[0]);
             let mut result = fmt;
             for (i, a) in args.iter().skip(1).enumerate() {
@@ -394,17 +432,20 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         "get_Chars" => {
             if args.len() >= 2 {
                 let s = value_to_string(&args[0]);
-                let idx = match &args[1] { Value::I32(i) => *i as usize, _ => 0 };
+                let idx = match &args[1] {
+                    Value::I32(i) => *i as usize,
+                    _ => 0,
+                };
                 let ch = s.chars().nth(idx).unwrap_or('\0') as i32;
                 Some(Value::I32(ch))
-            } else { Some(Value::I32(0)) }
-        }
-        "ToString" => {
-            match args.first() {
-                Some(v) => Some(alloc_managed_string(&value_to_string(v))),
-                None => Some(alloc_managed_string("")),
+            } else {
+                Some(Value::I32(0))
             }
         }
+        "ToString" => match args.first() {
+            Some(v) => Some(alloc_managed_string(&value_to_string(v))),
+            None => Some(alloc_managed_string("")),
+        },
         _ => {
             crate::log_debug!("clr-bcl", "String.{} non implémenté", method);
             Some(Value::Null)
@@ -416,21 +457,22 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
 
 fn object_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     match method {
-        "ToString" => {
-            match args.first() {
-                Some(Value::Ref(p)) if !p.is_null() => {
-                    let type_id = unsafe {
-                        let hdr = (*p).sub(std::mem::size_of::<gc::ObjHeader>()) as *const gc::ObjHeader;
-                        (*hdr).type_id
-                    };
-                    let name = types::with_types(|reg| {
-                        reg.get(type_id).map(|t| t.full_name()).unwrap_or_else(|| "System.Object".into())
-                    });
-                    Some(alloc_managed_string(&name))
-                }
-                _ => Some(alloc_managed_string("System.Object")),
+        "ToString" => match args.first() {
+            Some(Value::Ref(p)) if !p.is_null() => {
+                let type_id = unsafe {
+                    let hdr =
+                        (*p).sub(std::mem::size_of::<gc::ObjHeader>()) as *const gc::ObjHeader;
+                    (*hdr).type_id
+                };
+                let name = types::with_types(|reg| {
+                    reg.get(type_id)
+                        .map(|t| t.full_name())
+                        .unwrap_or_else(|| "System.Object".into())
+                });
+                Some(alloc_managed_string(&name))
             }
-        }
+            _ => Some(alloc_managed_string("System.Object")),
+        },
         "GetType" => Some(Value::Null),
         "Equals" => {
             if args.len() >= 2 {
@@ -442,16 +484,16 @@ fn object_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                     _ => false,
                 };
                 Some(Value::I32(if eq { 1 } else { 0 }))
-            } else { Some(Value::I32(0)) }
-        }
-        "GetHashCode" => {
-            match args.first() {
-                Some(Value::Ref(p)) => Some(Value::I32(*p as i32)),
-                Some(Value::I32(v)) => Some(Value::I32(*v)),
-                Some(Value::I64(v)) => Some(Value::I32(*v as i32)),
-                _ => Some(Value::I32(0)),
+            } else {
+                Some(Value::I32(0))
             }
         }
+        "GetHashCode" => match args.first() {
+            Some(Value::Ref(p)) => Some(Value::I32(*p as i32)),
+            Some(Value::I32(v)) => Some(Value::I32(*v)),
+            Some(Value::I64(v)) => Some(Value::I32(*v as i32)),
+            _ => Some(Value::I32(0)),
+        },
         "ReferenceEquals" => {
             if args.len() >= 2 {
                 let eq = match (&args[0], &args[1]) {
@@ -460,7 +502,9 @@ fn object_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                     _ => false,
                 };
                 Some(Value::I32(if eq { 1 } else { 0 }))
-            } else { Some(Value::I32(0)) }
+            } else {
+                Some(Value::I32(0))
+            }
         }
         ".ctor" => Some(Value::I32(0)),
         "MemberwiseClone" => args.first().cloned().or(Some(Value::Null)),
@@ -476,15 +520,13 @@ fn object_dispatch(method: &str, args: &[Value]) -> Option<Value> {
 
 fn array_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     match method {
-        "get_Length" | "GetLength" => {
-            match args.first() {
-                Some(Value::Ref(p)) if !p.is_null() => {
-                    let len = unsafe { *(*p as *const u64) } as i32;
-                    Some(Value::I32(len))
-                }
-                _ => Some(Value::I32(0)),
+        "get_Length" | "GetLength" => match args.first() {
+            Some(Value::Ref(p)) if !p.is_null() => {
+                let len = unsafe { *(*p as *const u64) } as i32;
+                Some(Value::I32(len))
             }
-        }
+            _ => Some(Value::I32(0)),
+        },
         "Copy" => Some(Value::I32(0)),
         "Clear" => Some(Value::I32(0)),
         "Reverse" => Some(Value::I32(0)),
@@ -521,47 +563,39 @@ fn gc_dispatch(method: &str, _args: &[Value]) -> Option<Value> {
 fn convert_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     let val = args.last()?;
     match method {
-        "ToInt32" => {
-            match val {
-                Value::I32(v) => Some(Value::I32(*v)),
-                Value::I64(v) => Some(Value::I32(*v as i32)),
-                Value::F64(v) => Some(Value::I32(*v as i32)),
-                Value::F32(v) => Some(Value::I32(*v as i32)),
-                Value::Ref(p) if !p.is_null() => {
-                    let s = read_managed_string(*p);
-                    Some(Value::I32(s.parse::<i32>().unwrap_or(0)))
-                }
-                _ => Some(Value::I32(0)),
+        "ToInt32" => match val {
+            Value::I32(v) => Some(Value::I32(*v)),
+            Value::I64(v) => Some(Value::I32(*v as i32)),
+            Value::F64(v) => Some(Value::I32(*v as i32)),
+            Value::F32(v) => Some(Value::I32(*v as i32)),
+            Value::Ref(p) if !p.is_null() => {
+                let s = read_managed_string(*p);
+                Some(Value::I32(s.parse::<i32>().unwrap_or(0)))
             }
-        }
-        "ToInt64" => {
-            match val {
-                Value::I32(v) => Some(Value::I64(*v as i64)),
-                Value::I64(v) => Some(Value::I64(*v)),
-                Value::F64(v) => Some(Value::I64(*v as i64)),
-                Value::Ref(p) if !p.is_null() => {
-                    let s = read_managed_string(*p);
-                    Some(Value::I64(s.parse::<i64>().unwrap_or(0)))
-                }
-                _ => Some(Value::I64(0)),
+            _ => Some(Value::I32(0)),
+        },
+        "ToInt64" => match val {
+            Value::I32(v) => Some(Value::I64(*v as i64)),
+            Value::I64(v) => Some(Value::I64(*v)),
+            Value::F64(v) => Some(Value::I64(*v as i64)),
+            Value::Ref(p) if !p.is_null() => {
+                let s = read_managed_string(*p);
+                Some(Value::I64(s.parse::<i64>().unwrap_or(0)))
             }
-        }
-        "ToDouble" => {
-            match val {
-                Value::I32(v) => Some(Value::F64(*v as f64)),
-                Value::I64(v) => Some(Value::F64(*v as f64)),
-                Value::F64(v) => Some(Value::F64(*v)),
-                Value::F32(v) => Some(Value::F64(*v as f64)),
-                Value::Ref(p) if !p.is_null() => {
-                    let s = read_managed_string(*p);
-                    Some(Value::F64(s.parse::<f64>().unwrap_or(0.0)))
-                }
-                _ => Some(Value::F64(0.0)),
+            _ => Some(Value::I64(0)),
+        },
+        "ToDouble" => match val {
+            Value::I32(v) => Some(Value::F64(*v as f64)),
+            Value::I64(v) => Some(Value::F64(*v as f64)),
+            Value::F64(v) => Some(Value::F64(*v)),
+            Value::F32(v) => Some(Value::F64(*v as f64)),
+            Value::Ref(p) if !p.is_null() => {
+                let s = read_managed_string(*p);
+                Some(Value::F64(s.parse::<f64>().unwrap_or(0.0)))
             }
-        }
-        "ToString" => {
-            Some(alloc_managed_string(&value_to_string(val)))
-        }
+            _ => Some(Value::F64(0.0)),
+        },
+        "ToString" => Some(alloc_managed_string(&value_to_string(val))),
         "ToBoolean" => {
             let b = match val {
                 Value::I32(v) => *v != 0,
@@ -571,18 +605,14 @@ fn convert_dispatch(method: &str, args: &[Value]) -> Option<Value> {
             };
             Some(Value::I32(if b { 1 } else { 0 }))
         }
-        "ToByte" => {
-            match val {
-                Value::I32(v) => Some(Value::I32((*v as u8) as i32)),
-                _ => Some(Value::I32(0)),
-            }
-        }
-        "ToChar" => {
-            match val {
-                Value::I32(v) => Some(Value::I32((*v as u16) as i32)),
-                _ => Some(Value::I32(0)),
-            }
-        }
+        "ToByte" => match val {
+            Value::I32(v) => Some(Value::I32((*v as u8) as i32)),
+            _ => Some(Value::I32(0)),
+        },
+        "ToChar" => match val {
+            Value::I32(v) => Some(Value::I32((*v as u16) as i32)),
+            _ => Some(Value::I32(0)),
+        },
         _ => {
             crate::log_debug!("clr-bcl", "Convert.{} non implémenté", method);
             Some(Value::I32(0))
@@ -623,7 +653,11 @@ fn file_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 Some(Value::Ref(p)) if !p.is_null() => read_managed_string(*p),
                 _ => return Some(Value::I32(0)),
             };
-            Some(Value::I32(if std::path::Path::new(&path).exists() { 1 } else { 0 }))
+            Some(Value::I32(if std::path::Path::new(&path).exists() {
+                1
+            } else {
+                0
+            }))
         }
         "ReadAllText" => {
             let path = match args.last() {
@@ -637,8 +671,8 @@ fn file_dispatch(method: &str, args: &[Value]) -> Option<Value> {
         }
         "WriteAllText" => {
             if args.len() >= 2 {
-                let path = value_to_string(&args[args.len()-2]);
-                let content = value_to_string(&args[args.len()-1]);
+                let path = value_to_string(&args[args.len() - 2]);
+                let content = value_to_string(&args[args.len() - 1]);
                 let _ = std::fs::write(&path, &content);
             }
             Some(Value::I32(0))
@@ -707,26 +741,22 @@ fn marshal_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     match method {
         "SizeOf" => Some(Value::I32(8)),
         "GetLastWin32Error" | "GetLastPInvokeError" => Some(Value::I32(0)),
-        "PtrToStringAnsi" | "PtrToStringUni" => {
-            match args.last() {
-                Some(Value::Ref(p)) if !p.is_null() => {
-                    let s = unsafe { std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char) };
-                    Some(alloc_managed_string(&s.to_string_lossy()))
-                }
-                _ => Some(Value::Null),
+        "PtrToStringAnsi" | "PtrToStringUni" => match args.last() {
+            Some(Value::Ref(p)) if !p.is_null() => {
+                let s = unsafe { std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char) };
+                Some(alloc_managed_string(&s.to_string_lossy()))
             }
-        }
-        "StringToHGlobalAnsi" | "StringToHGlobalUni" => {
-            match args.last() {
-                Some(Value::Ref(p)) if !p.is_null() => {
-                    let s = read_managed_string(*p);
-                    let c = std::ffi::CString::new(s).unwrap_or_default();
-                    let ptr = c.into_raw();
-                    Some(Value::Ref(ptr as *mut u8))
-                }
-                _ => Some(Value::Ref(std::ptr::null_mut())),
+            _ => Some(Value::Null),
+        },
+        "StringToHGlobalAnsi" | "StringToHGlobalUni" => match args.last() {
+            Some(Value::Ref(p)) if !p.is_null() => {
+                let s = read_managed_string(*p);
+                let c = std::ffi::CString::new(s).unwrap_or_default();
+                let ptr = c.into_raw();
+                Some(Value::Ref(ptr as *mut u8))
             }
-        }
+            _ => Some(Value::Ref(std::ptr::null_mut())),
+        },
         "FreeHGlobal" => Some(Value::I32(0)),
         "AllocHGlobal" => {
             let size = match args.last() {

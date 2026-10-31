@@ -100,15 +100,15 @@ impl Assembly {
         if clr_rva == 0 {
             return Err(err("pas d'en-tête CLR"));
         }
-        let clr_off = rva_to_offset(&sections, clr_rva)
-            .ok_or_else(|| err("RVA CLR hors sections"))?;
+        let clr_off =
+            rva_to_offset(&sections, clr_rva).ok_or_else(|| err("RVA CLR hors sections"))?;
 
         let clr_flags = rd32(&data, clr_off + 16);
         let meta_rva = rd32(&data, clr_off + 8);
         let entry_point_token = rd32(&data, clr_off + 20);
 
-        let meta_off = rva_to_offset(&sections, meta_rva)
-            .ok_or_else(|| err("RVA metadata hors sections"))?;
+        let meta_off =
+            rva_to_offset(&sections, meta_rva).ok_or_else(|| err("RVA metadata hors sections"))?;
 
         if rd32(&data, meta_off) != BSJB_SIGNATURE {
             return Err(err("signature BSJB manquante"));
@@ -134,16 +134,30 @@ impl Assembly {
             let off = rd32(&data, cursor) as usize;
             let size = rd32(&data, cursor + 4) as usize;
             let name_start = cursor + 8;
-            let name_end = data[name_start..].iter().position(|&b| b == 0)
-                .unwrap_or(0) + name_start;
+            let name_end =
+                data[name_start..].iter().position(|&b| b == 0).unwrap_or(0) + name_start;
             let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
             let abs_off = meta_off + off;
             match name {
-                "#Strings" => { strings_offset = abs_off; strings_size = size; }
-                "#US" => { us_offset = abs_off; us_size = size; }
-                "#Blob" => { blob_offset = abs_off; blob_size = size; }
-                "#GUID" => { guid_offset = abs_off; guid_size = size; }
-                "#~" | "#-" => { tables_offset = abs_off; }
+                "#Strings" => {
+                    strings_offset = abs_off;
+                    strings_size = size;
+                }
+                "#US" => {
+                    us_offset = abs_off;
+                    us_size = size;
+                }
+                "#Blob" => {
+                    blob_offset = abs_off;
+                    blob_size = size;
+                }
+                "#GUID" => {
+                    guid_offset = abs_off;
+                    guid_size = size;
+                }
+                "#~" | "#-" => {
+                    tables_offset = abs_off;
+                }
                 _ => {}
             }
             let name_len = name_end - name_start + 1;
@@ -182,10 +196,14 @@ impl Assembly {
             data,
             sections,
             clr_header_rva: clr_rva,
-            strings_offset, strings_size,
-            us_offset, us_size,
-            blob_offset, blob_size,
-            guid_offset, guid_size,
+            strings_offset,
+            strings_size,
+            us_offset,
+            us_size,
+            blob_offset,
+            blob_size,
+            guid_offset,
+            guid_size,
             tables_data_offset,
             row_counts,
             row_offsets: [0; 64],
@@ -204,10 +222,17 @@ impl Assembly {
 
     fn coded_index_size(&self, ci: CodedIndex) -> usize {
         let bits = ci.tag_bits();
-        let max_rows = ci.tables().iter().filter_map(|t| {
-            t.map(|tid| self.row_counts[tid as usize])
-        }).max().unwrap_or(0);
-        if max_rows < (1u32 << (16 - bits)) { 2 } else { 4 }
+        let max_rows = ci
+            .tables()
+            .iter()
+            .filter_map(|t| t.map(|tid| self.row_counts[tid as usize]))
+            .max()
+            .unwrap_or(0);
+        if max_rows < (1u32 << (16 - bits)) {
+            2
+        } else {
+            4
+        }
     }
 
     fn compute_row_sizes(&mut self) {
@@ -216,46 +241,83 @@ impl Assembly {
         let b = self.blob_idx_size;
 
         let tid_size = |t: TableId| -> usize {
-            if self.row_counts[t as usize] < 0x10000 { 2 } else { 4 }
+            if self.row_counts[t as usize] < 0x10000 {
+                2
+            } else {
+                4
+            }
         };
 
         let ci = |c: CodedIndex| -> usize { self.coded_index_size(c) };
 
         let sizes: [(u8, usize); 34] = [
-            (0x00, 2 + s + g + g + g),                           // Module
-            (0x01, ci(CodedIndex::ResolutionScope) + s + s),      // TypeRef
-            (0x02, 4 + s + s + ci(CodedIndex::TypeDefOrRef) + tid_size(TableId::Field) + tid_size(TableId::MethodDef)), // TypeDef
-            (0x04, 2 + s + b),                                   // Field
-            (0x06, 4 + 2 + 2 + s + b + tid_size(TableId::Param)),// MethodDef
-            (0x08, 2 + 2 + s),                                   // Param
-            (0x09, tid_size(TableId::TypeDef) + ci(CodedIndex::TypeDefOrRef)), // InterfaceImpl
-            (0x0A, ci(CodedIndex::MemberRefParent) + s + b),     // MemberRef
-            (0x0B, 2 + ci(CodedIndex::HasConstant) + b),         // Constant
-            (0x0C, ci(CodedIndex::HasCustomAttribute) + ci(CodedIndex::CustomAttributeType) + b), // CustomAttribute
-            (0x0D, ci(CodedIndex::HasFieldMarshal) + b),         // FieldMarshal
-            (0x0E, 2 + ci(CodedIndex::HasDeclSecurity) + b),    // DeclSecurity
-            (0x0F, 2 + 4 + tid_size(TableId::TypeDef)),         // ClassLayout
-            (0x10, 4 + tid_size(TableId::Field)),                // FieldLayout
-            (0x11, b),                                            // StandAloneSig
+            (0x00, 2 + s + g + g + g),                       // Module
+            (0x01, ci(CodedIndex::ResolutionScope) + s + s), // TypeRef
+            (
+                0x02,
+                4 + s
+                    + s
+                    + ci(CodedIndex::TypeDefOrRef)
+                    + tid_size(TableId::Field)
+                    + tid_size(TableId::MethodDef),
+            ), // TypeDef
+            (0x04, 2 + s + b),                               // Field
+            (0x06, 4 + 2 + 2 + s + b + tid_size(TableId::Param)), // MethodDef
+            (0x08, 2 + 2 + s),                               // Param
+            (
+                0x09,
+                tid_size(TableId::TypeDef) + ci(CodedIndex::TypeDefOrRef),
+            ), // InterfaceImpl
+            (0x0A, ci(CodedIndex::MemberRefParent) + s + b), // MemberRef
+            (0x0B, 2 + ci(CodedIndex::HasConstant) + b),     // Constant
+            (
+                0x0C,
+                ci(CodedIndex::HasCustomAttribute) + ci(CodedIndex::CustomAttributeType) + b,
+            ), // CustomAttribute
+            (0x0D, ci(CodedIndex::HasFieldMarshal) + b),     // FieldMarshal
+            (0x0E, 2 + ci(CodedIndex::HasDeclSecurity) + b), // DeclSecurity
+            (0x0F, 2 + 4 + tid_size(TableId::TypeDef)),      // ClassLayout
+            (0x10, 4 + tid_size(TableId::Field)),            // FieldLayout
+            (0x11, b),                                       // StandAloneSig
             (0x12, tid_size(TableId::TypeDef) + tid_size(TableId::Event)), // EventMap
-            (0x14, 2 + s + ci(CodedIndex::TypeDefOrRef)),        // Event
-            (0x15, tid_size(TableId::TypeDef) + tid_size(TableId::Property)), // PropertyMap
-            (0x17, 2 + s + b),                                   // Property
-            (0x18, 2 + tid_size(TableId::MethodDef) + ci(CodedIndex::HasSemantics)), // MethodSemantics
-            (0x19, tid_size(TableId::TypeDef) + ci(CodedIndex::MethodDefOrRef) + ci(CodedIndex::MethodDefOrRef)), // MethodImpl
-            (0x1A, s),                                            // ModuleRef
-            (0x1B, b),                                            // TypeSpec
-            (0x1C, 2 + ci(CodedIndex::MemberForwarded) + s + tid_size(TableId::ModuleRef)), // ImplMap
-            (0x1D, 4 + tid_size(TableId::Field)),                // FieldRVA
-            (0x20, 4 + 2 + 2 + 2 + 2 + 4 + b + s + s),         // Assembly
-            (0x23, 2 + 2 + 2 + 2 + 4 + b + s + s + b),         // AssemblyRef
-            (0x26, 4 + s + b),                                   // File
+            (0x14, 2 + s + ci(CodedIndex::TypeDefOrRef)),    // Event
+            (
+                0x15,
+                tid_size(TableId::TypeDef) + tid_size(TableId::Property),
+            ), // PropertyMap
+            (0x17, 2 + s + b),                               // Property
+            (
+                0x18,
+                2 + tid_size(TableId::MethodDef) + ci(CodedIndex::HasSemantics),
+            ), // MethodSemantics
+            (
+                0x19,
+                tid_size(TableId::TypeDef)
+                    + ci(CodedIndex::MethodDefOrRef)
+                    + ci(CodedIndex::MethodDefOrRef),
+            ), // MethodImpl
+            (0x1A, s),                                       // ModuleRef
+            (0x1B, b),                                       // TypeSpec
+            (
+                0x1C,
+                2 + ci(CodedIndex::MemberForwarded) + s + tid_size(TableId::ModuleRef),
+            ), // ImplMap
+            (0x1D, 4 + tid_size(TableId::Field)),            // FieldRVA
+            (0x20, 4 + 2 + 2 + 2 + 2 + 4 + b + s + s),       // Assembly
+            (0x23, 2 + 2 + 2 + 2 + 4 + b + s + s + b),       // AssemblyRef
+            (0x26, 4 + s + b),                               // File
             (0x27, 4 + 4 + s + s + ci(CodedIndex::Implementation)), // ExportedType
             (0x28, 4 + 4 + s + ci(CodedIndex::Implementation)), // ManifestResource
-            (0x29, tid_size(TableId::TypeDef) + tid_size(TableId::TypeDef)), // NestedClass
-            (0x2A, 2 + 2 + ci(CodedIndex::TypeOrMethodDef) + s),// GenericParam
-            (0x2B, ci(CodedIndex::MethodDefOrRef) + b),          // MethodSpec
-            (0x2C, tid_size(TableId::GenericParam) + ci(CodedIndex::TypeDefOrRef)), // GenericParamConstraint
+            (
+                0x29,
+                tid_size(TableId::TypeDef) + tid_size(TableId::TypeDef),
+            ), // NestedClass
+            (0x2A, 2 + 2 + ci(CodedIndex::TypeOrMethodDef) + s), // GenericParam
+            (0x2B, ci(CodedIndex::MethodDefOrRef) + b),      // MethodSpec
+            (
+                0x2C,
+                tid_size(TableId::GenericParam) + ci(CodedIndex::TypeDefOrRef),
+            ), // GenericParamConstraint
         ];
 
         for (tid, size) in sizes {
@@ -284,7 +346,11 @@ impl Assembly {
     }
 
     fn read_idx(&self, data: &[u8], off: &mut usize, size: usize) -> u32 {
-        let v = if size == 2 { rd16(data, *off) as u32 } else { rd32(data, *off) };
+        let v = if size == 2 {
+            rd16(data, *off) as u32
+        } else {
+            rd32(data, *off)
+        };
         *off += size;
         v
     }
@@ -314,7 +380,11 @@ impl Assembly {
     }
 
     fn table_idx(&self, table: TableId, data: &[u8], off: &mut usize) -> u32 {
-        let size = if self.row_counts[table as usize] < 0x10000 { 2 } else { 4 };
+        let size = if self.row_counts[table as usize] < 0x10000 {
+            2
+        } else {
+            4
+        };
         self.read_idx(data, off, size)
     }
 
@@ -341,11 +411,17 @@ impl Assembly {
             return String::new();
         }
         let (blob_len, hdr) = decode_blob_length(&self.data[start..]);
-        if blob_len == 0 { return String::new(); }
+        if blob_len == 0 {
+            return String::new();
+        }
         let str_start = start + hdr;
         let byte_count = blob_len.saturating_sub(1);
-        let bytes = self.data.get(str_start..str_start + byte_count).unwrap_or(&[]);
-        let u16s: Vec<u16> = bytes.chunks_exact(2)
+        let bytes = self
+            .data
+            .get(str_start..str_start + byte_count)
+            .unwrap_or(&[]);
+        let u16s: Vec<u16> = bytes
+            .chunks_exact(2)
             .map(|c| u16::from_le_bytes([c[0], c[1]]))
             .collect();
         String::from_utf16_lossy(&u16s)
@@ -375,7 +451,11 @@ impl Assembly {
         let mvid = self.guid_idx(d, &mut o);
         let _enc_id = self.guid_idx(d, &mut o);
         let _enc_base = self.guid_idx(d, &mut o);
-        ModuleRow { generation, name, mvid }
+        ModuleRow {
+            generation,
+            name,
+            mvid,
+        }
     }
 
     pub fn get_type_ref(&self, row: u32) -> TypeRefRow {
@@ -384,7 +464,11 @@ impl Assembly {
         let resolution_scope = self.coded_idx(CodedIndex::ResolutionScope, d, &mut o);
         let name = self.str_idx(d, &mut o);
         let namespace = self.str_idx(d, &mut o);
-        TypeRefRow { resolution_scope, name, namespace }
+        TypeRefRow {
+            resolution_scope,
+            name,
+            namespace,
+        }
     }
 
     pub fn get_type_def(&self, row: u32) -> TypeDefRow {
@@ -396,7 +480,14 @@ impl Assembly {
         let extends = self.coded_idx(CodedIndex::TypeDefOrRef, d, &mut o);
         let field_list = self.table_idx(TableId::Field, d, &mut o);
         let method_list = self.table_idx(TableId::MethodDef, d, &mut o);
-        TypeDefRow { flags, name, namespace, extends, field_list, method_list }
+        TypeDefRow {
+            flags,
+            name,
+            namespace,
+            extends,
+            field_list,
+            method_list,
+        }
     }
 
     pub fn get_field(&self, row: u32) -> FieldRow {
@@ -405,7 +496,11 @@ impl Assembly {
         let flags = self.read_u16(d, &mut o);
         let name = self.str_idx(d, &mut o);
         let signature = self.blob_idx(d, &mut o);
-        FieldRow { flags, name, signature }
+        FieldRow {
+            flags,
+            name,
+            signature,
+        }
     }
 
     pub fn get_method_def(&self, row: u32) -> MethodDefRow {
@@ -417,7 +512,14 @@ impl Assembly {
         let name = self.str_idx(d, &mut o);
         let signature = self.blob_idx(d, &mut o);
         let param_list = self.table_idx(TableId::Param, d, &mut o);
-        MethodDefRow { rva, impl_flags, flags, name, signature, param_list }
+        MethodDefRow {
+            rva,
+            impl_flags,
+            flags,
+            name,
+            signature,
+            param_list,
+        }
     }
 
     pub fn get_param(&self, row: u32) -> ParamRow {
@@ -426,7 +528,11 @@ impl Assembly {
         let flags = self.read_u16(d, &mut o);
         let sequence = self.read_u16(d, &mut o);
         let name = self.str_idx(d, &mut o);
-        ParamRow { flags, sequence, name }
+        ParamRow {
+            flags,
+            sequence,
+            name,
+        }
     }
 
     pub fn get_member_ref(&self, row: u32) -> MemberRefRow {
@@ -435,7 +541,11 @@ impl Assembly {
         let class = self.coded_idx(CodedIndex::MemberRefParent, d, &mut o);
         let name = self.str_idx(d, &mut o);
         let signature = self.blob_idx(d, &mut o);
-        MemberRefRow { class, name, signature }
+        MemberRefRow {
+            class,
+            name,
+            signature,
+        }
     }
 
     pub fn get_type_spec(&self, row: u32) -> TypeSpecRow {
@@ -459,7 +569,12 @@ impl Assembly {
         let member_forwarded = self.coded_idx(CodedIndex::MemberForwarded, d, &mut o);
         let import_name = self.str_idx(d, &mut o);
         let import_scope = self.table_idx(TableId::ModuleRef, d, &mut o);
-        ImplMapRow { mapping_flags, member_forwarded, import_name, import_scope }
+        ImplMapRow {
+            mapping_flags,
+            member_forwarded,
+            import_name,
+            import_scope,
+        }
     }
 
     pub fn get_module_ref(&self, row: u32) -> ModuleRefRow {
@@ -481,7 +596,17 @@ impl Assembly {
         let public_key = self.blob_idx(d, &mut o);
         let name = self.str_idx(d, &mut o);
         let culture = self.str_idx(d, &mut o);
-        AssemblyRow { hash_alg, major, minor, build, revision, flags, public_key, name, culture }
+        AssemblyRow {
+            hash_alg,
+            major,
+            minor,
+            build,
+            revision,
+            flags,
+            public_key,
+            name,
+            culture,
+        }
     }
 
     pub fn get_assembly_ref(&self, row: u32) -> AssemblyRefRow {
@@ -496,7 +621,17 @@ impl Assembly {
         let name = self.str_idx(d, &mut o);
         let culture = self.str_idx(d, &mut o);
         let hash_value = self.blob_idx(d, &mut o);
-        AssemblyRefRow { major, minor, build, revision, flags, public_key_or_token, name, culture, hash_value }
+        AssemblyRefRow {
+            major,
+            minor,
+            build,
+            revision,
+            flags,
+            public_key_or_token,
+            name,
+            culture,
+            hash_value,
+        }
     }
 
     pub fn get_nested_class(&self, row: u32) -> NestedClassRow {
@@ -504,7 +639,10 @@ impl Assembly {
         let mut o = 0;
         let nested_class = self.table_idx(TableId::TypeDef, d, &mut o);
         let enclosing_class = self.table_idx(TableId::TypeDef, d, &mut o);
-        NestedClassRow { nested_class, enclosing_class }
+        NestedClassRow {
+            nested_class,
+            enclosing_class,
+        }
     }
 
     pub fn get_generic_param(&self, row: u32) -> GenericParamRow {
@@ -514,7 +652,12 @@ impl Assembly {
         let flags = self.read_u16(d, &mut o);
         let owner = self.coded_idx(CodedIndex::TypeOrMethodDef, d, &mut o);
         let name = self.str_idx(d, &mut o);
-        GenericParamRow { number, flags, owner, name }
+        GenericParamRow {
+            number,
+            flags,
+            owner,
+            name,
+        }
     }
 
     pub fn get_method_spec(&self, row: u32) -> MethodSpecRow {
@@ -522,7 +665,10 @@ impl Assembly {
         let mut o = 0;
         let method = self.coded_idx(CodedIndex::MethodDefOrRef, d, &mut o);
         let instantiation = self.blob_idx(d, &mut o);
-        MethodSpecRow { method, instantiation }
+        MethodSpecRow {
+            method,
+            instantiation,
+        }
     }
 
     pub fn get_class_layout(&self, row: u32) -> ClassLayoutRow {
@@ -531,7 +677,11 @@ impl Assembly {
         let packing_size = self.read_u16(d, &mut o);
         let class_size = self.read_u32_val(d, &mut o);
         let parent = self.table_idx(TableId::TypeDef, d, &mut o);
-        ClassLayoutRow { packing_size, class_size, parent }
+        ClassLayoutRow {
+            packing_size,
+            class_size,
+            parent,
+        }
     }
 
     pub fn get_field_rva(&self, row: u32) -> FieldRvaRow {
@@ -569,9 +719,13 @@ impl Assembly {
     }
 
     pub fn method_body(&self, rva: u32) -> Option<MethodBody> {
-        if rva == 0 { return None; }
+        if rva == 0 {
+            return None;
+        }
         let data = self.rva_data_from(rva);
-        if data.is_empty() { return None; }
+        if data.is_empty() {
+            return None;
+        }
         parse_method_body(data)
     }
 
@@ -727,7 +881,9 @@ fn parse_method_body(data: &[u8]) -> Option<MethodBody> {
                 } else {
                     break;
                 }
-                if !has_more { break; }
+                if !has_more {
+                    break;
+                }
                 sect_off = (sect_off + 3) & !3;
             }
         }
@@ -875,15 +1031,24 @@ pub fn decode_method_sig(blob: &[u8]) -> MethodSig {
     for _ in 0..param_count {
         param_types.push(decode_type(blob, &mut off));
     }
-    MethodSig { calling_convention: cc, generic_param_count, ret_type, param_types }
+    MethodSig {
+        calling_convention: cc,
+        generic_param_count,
+        ret_type,
+        param_types,
+    }
 }
 
 pub fn decode_locals_sig(blob: &[u8]) -> Vec<ElementType> {
-    if blob.is_empty() { return Vec::new(); }
+    if blob.is_empty() {
+        return Vec::new();
+    }
     let mut off = 0;
     let tag = blob.get(off).copied().unwrap_or(0);
     off += 1;
-    if tag != 0x07 { return Vec::new(); }
+    if tag != 0x07 {
+        return Vec::new();
+    }
     let count = decode_compressed_u32(blob, &mut off);
     let mut types = Vec::with_capacity(count as usize);
     for _ in 0..count {

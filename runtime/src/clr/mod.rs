@@ -3,18 +3,18 @@
 //! Fournit un interpréteur CIL complet avec GC, système de types,
 //! BCL minimale et pont P/Invoke vers les DLL Win32 natives.
 
-pub mod opcodes;
-pub mod tables;
-pub mod metadata;
-pub mod gc;
-pub mod types;
-pub mod il;
 pub mod bcl;
-pub mod pinvoke;
 pub mod exceptions;
+pub mod gc;
+pub mod il;
+pub mod metadata;
+pub mod opcodes;
+pub mod pinvoke;
+pub mod tables;
+pub mod types;
 
+use il::{ExecResult, Interpreter, Value};
 use metadata::Assembly;
-use il::{Interpreter, Value, ExecResult};
 
 pub fn init() {
     types::init();
@@ -33,9 +33,12 @@ pub fn execute_assembly(pe_data: &[u8]) -> i32 {
         }
     };
 
-    crate::log_info!("clr", "assembly chargée: {} types, {} méthodes",
+    crate::log_info!(
+        "clr",
+        "assembly chargée: {} types, {} méthodes",
         assembly.row_count(tables::TableId::TypeDef),
-        assembly.row_count(tables::TableId::MethodDef));
+        assembly.row_count(tables::TableId::MethodDef)
+    );
 
     load_types(&assembly);
 
@@ -51,18 +54,16 @@ pub fn execute_assembly(pe_data: &[u8]) -> i32 {
     run_cctors(&mut interp);
 
     match interp.execute_token(entry_token, vec![]) {
-        ExecResult::Return(val) => {
-            match val {
-                Value::I32(code) => {
-                    crate::log_info!("clr", "programme terminé avec code {}", code);
-                    code
-                }
-                _ => {
-                    crate::log_info!("clr", "programme terminé normalement");
-                    0
-                }
+        ExecResult::Return(val) => match val {
+            Value::I32(code) => {
+                crate::log_info!("clr", "programme terminé avec code {}", code);
+                code
             }
-        }
+            _ => {
+                crate::log_info!("clr", "programme terminé normalement");
+                0
+            }
+        },
         ExecResult::Exit(code) => {
             crate::log_info!("clr", "Environment.Exit({})", code);
             code
@@ -73,11 +74,27 @@ pub fn execute_assembly(pe_data: &[u8]) -> i32 {
             -1
         }
         ExecResult::PInvoke { module, name, args } => {
-            crate::log_warn!("clr", "P/Invoke non résolu au niveau racine: {}.{}", module, name);
+            crate::log_warn!(
+                "clr",
+                "P/Invoke non résolu au niveau racine: {}.{}",
+                module,
+                name
+            );
             -1
         }
-        ExecResult::InternalCall { namespace, class, method, args } => {
-            crate::log_warn!("clr", "appel interne non résolu: {}.{}::{}", namespace, class, method);
+        ExecResult::InternalCall {
+            namespace,
+            class,
+            method,
+            args,
+        } => {
+            crate::log_warn!(
+                "clr",
+                "appel interne non résolu: {}.{}::{}",
+                namespace,
+                class,
+                method
+            );
             -1
         }
     }
@@ -99,15 +116,13 @@ fn load_types(assembly: &Assembly) {
 
         let extends_type_id = resolve_extends(assembly, td.extends);
 
-        let is_value_type = extends_type_id == types::with_types(|reg| {
-            reg.find_by_name("System", "ValueType").unwrap_or(0)
-        }) || extends_type_id == types::with_types(|reg| {
-            reg.find_by_name("System", "Enum").unwrap_or(0)
-        });
+        let is_value_type = extends_type_id
+            == types::with_types(|reg| reg.find_by_name("System", "ValueType").unwrap_or(0))
+            || extends_type_id
+                == types::with_types(|reg| reg.find_by_name("System", "Enum").unwrap_or(0));
 
-        let is_enum = extends_type_id == types::with_types(|reg| {
-            reg.find_by_name("System", "Enum").unwrap_or(0)
-        });
+        let is_enum = extends_type_id
+            == types::with_types(|reg| reg.find_by_name("System", "Enum").unwrap_or(0));
 
         let method_range = assembly.type_methods(row);
         let field_range = assembly.type_fields(row);
@@ -118,7 +133,9 @@ fn load_types(assembly: &Assembly) {
         let mut static_offset = 0usize;
 
         for f_row in field_range {
-            if f_row > field_count { break; }
+            if f_row > field_count {
+                break;
+            }
             let fr = assembly.get_field(f_row);
             let f_name = assembly.get_string(fr.name);
             let sig_blob = assembly.get_blob(fr.signature);
@@ -133,7 +150,11 @@ fn load_types(assembly: &Assembly) {
             let fi = types::FieldInfo {
                 name: f_name.to_string(),
                 field_type,
-                offset: if fr.is_static() { static_offset } else { offset },
+                offset: if fr.is_static() {
+                    static_offset
+                } else {
+                    offset
+                },
                 metadata_row: f_row,
             };
 
@@ -149,7 +170,9 @@ fn load_types(assembly: &Assembly) {
         let mut methods = Vec::new();
         let mut vtable_slot = 0usize;
         for m_row in method_range {
-            if m_row > method_count { break; }
+            if m_row > method_count {
+                break;
+            }
             let md = assembly.get_method_def(m_row);
             let m_name = assembly.get_string(md.name);
 
@@ -187,12 +210,17 @@ fn load_types(assembly: &Assembly) {
             });
         }
 
-        let vtable: Vec<u32> = methods.iter()
+        let vtable: Vec<u32> = methods
+            .iter()
             .filter(|m| m.is_virtual)
             .map(|m| m.token)
             .collect();
 
-        let instance_size = if is_value_type { offset.max(1) } else { offset + 8 };
+        let instance_size = if is_value_type {
+            offset.max(1)
+        } else {
+            offset + 8
+        };
 
         let ti = types::TypeInfo {
             id: 0,
@@ -222,7 +250,11 @@ fn load_types(assembly: &Assembly) {
         }
     }
 
-    crate::log_info!("clr", "{} types utilisateur chargés", type_count.saturating_sub(1));
+    crate::log_info!(
+        "clr",
+        "{} types utilisateur chargés",
+        type_count.saturating_sub(1)
+    );
 }
 
 fn resolve_extends(assembly: &Assembly, coded: u32) -> types::TypeId {
@@ -232,21 +264,19 @@ fn resolve_extends(assembly: &Assembly, coded: u32) -> types::TypeId {
     let (table, row) = tables::CodedIndex::TypeDefOrRef.decode(coded);
     match table {
         Some(tables::TableId::TypeDef) => {
-            if row == 0 { return types::TYPE_OBJECT; }
+            if row == 0 {
+                return types::TYPE_OBJECT;
+            }
             let td = assembly.get_type_def(row);
             let name = assembly.get_string(td.name);
             let ns = assembly.get_string(td.namespace);
-            types::with_types(|reg| {
-                reg.find_by_name(ns, name).unwrap_or(types::TYPE_OBJECT)
-            })
+            types::with_types(|reg| reg.find_by_name(ns, name).unwrap_or(types::TYPE_OBJECT))
         }
         Some(tables::TableId::TypeRef) => {
             let tr = assembly.get_type_ref(row);
             let name = assembly.get_string(tr.name);
             let ns = assembly.get_string(tr.namespace);
-            types::with_types(|reg| {
-                reg.find_by_name(ns, name).unwrap_or(types::TYPE_OBJECT)
-            })
+            types::with_types(|reg| reg.find_by_name(ns, name).unwrap_or(types::TYPE_OBJECT))
         }
         Some(tables::TableId::TypeSpec) => types::TYPE_OBJECT,
         _ => types::TYPE_OBJECT,

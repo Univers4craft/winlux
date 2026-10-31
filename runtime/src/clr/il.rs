@@ -74,9 +74,14 @@ impl Value {
 
     fn default_for(et: &ElementType) -> Value {
         match et {
-            ElementType::Boolean | ElementType::I1 | ElementType::U1
-            | ElementType::I2 | ElementType::U2 | ElementType::I4
-            | ElementType::U4 | ElementType::Char => Value::I32(0),
+            ElementType::Boolean
+            | ElementType::I1
+            | ElementType::U1
+            | ElementType::I2
+            | ElementType::U2
+            | ElementType::I4
+            | ElementType::U4
+            | ElementType::Char => Value::I32(0),
             ElementType::I8 | ElementType::U8 => Value::I64(0),
             ElementType::R4 => Value::F32(0.0),
             ElementType::R8 => Value::F64(0.0),
@@ -106,8 +111,17 @@ pub enum ExecResult {
     Return(Value),
     Exit(i32),
     Exception(String),
-    PInvoke { module: String, name: String, args: Vec<Value> },
-    InternalCall { namespace: String, class: String, method: String, args: Vec<Value> },
+    PInvoke {
+        module: String,
+        name: String,
+        args: Vec<Value>,
+    },
+    InternalCall {
+        namespace: String,
+        class: String,
+        method: String,
+        args: Vec<Value>,
+    },
 }
 
 impl Interpreter {
@@ -129,7 +143,11 @@ impl Interpreter {
                 let mod_row = self.assembly.get_module_ref(imp.import_scope);
                 let module = self.assembly.get_string(mod_row.name).to_string();
                 let import_name = self.assembly.get_string(imp.import_name).to_string();
-                return ExecResult::PInvoke { module, name: import_name, args };
+                return ExecResult::PInvoke {
+                    module,
+                    name: import_name,
+                    args,
+                };
             }
         }
 
@@ -138,12 +156,22 @@ impl Interpreter {
             let td = self.assembly.get_type_def(type_row);
             let ns = self.assembly.get_string(td.namespace).to_string();
             let cls = self.assembly.get_string(td.name).to_string();
-            return ExecResult::InternalCall { namespace: ns, class: cls, method: name, args };
+            return ExecResult::InternalCall {
+                namespace: ns,
+                class: cls,
+                method: name,
+                args,
+            };
         }
 
         let body = match self.assembly.method_body(md.rva) {
             Some(b) => b,
-            None => return ExecResult::Exception(format!("corps de méthode introuvable pour {name} (RVA {:#x})", md.rva)),
+            None => {
+                return ExecResult::Exception(format!(
+                    "corps de méthode introuvable pour {name} (RVA {:#x})",
+                    md.rva
+                ))
+            }
         };
 
         let sig_blob = self.assembly.get_blob(md.signature);
@@ -180,21 +208,31 @@ impl Interpreter {
             0x0A => {
                 let mr = self.assembly.get_member_ref(row);
                 let name = self.assembly.get_string(mr.name).to_string();
-                let (parent_table, parent_row) = super::tables::CodedIndex::MemberRefParent.decode(mr.class);
+                let (parent_table, parent_row) =
+                    super::tables::CodedIndex::MemberRefParent.decode(mr.class);
                 let (ns, cls) = match parent_table {
                     Some(TableId::TypeRef) => {
                         let tr = self.assembly.get_type_ref(parent_row);
-                        (self.assembly.get_string(tr.namespace).to_string(),
-                         self.assembly.get_string(tr.name).to_string())
+                        (
+                            self.assembly.get_string(tr.namespace).to_string(),
+                            self.assembly.get_string(tr.name).to_string(),
+                        )
                     }
                     Some(TableId::TypeDef) => {
                         let td = self.assembly.get_type_def(parent_row);
-                        (self.assembly.get_string(td.namespace).to_string(),
-                         self.assembly.get_string(td.name).to_string())
+                        (
+                            self.assembly.get_string(td.namespace).to_string(),
+                            self.assembly.get_string(td.name).to_string(),
+                        )
                     }
                     _ => (String::new(), String::new()),
                 };
-                ExecResult::InternalCall { namespace: ns, class: cls, method: name, args }
+                ExecResult::InternalCall {
+                    namespace: ns,
+                    class: cls,
+                    method: name,
+                    args,
+                }
             }
             _ => ExecResult::Exception(format!("token non supporté : {token:#x}")),
         }
@@ -219,7 +257,13 @@ impl Interpreter {
             }
             let frame = &self.frames[depth - 1];
             if frame.ip >= frame.code.len() {
-                let ret = self.frames.pop().unwrap().eval_stack.pop().unwrap_or(Value::Null);
+                let ret = self
+                    .frames
+                    .pop()
+                    .unwrap()
+                    .eval_stack
+                    .pop()
+                    .unwrap_or(Value::Null);
                 if self.frames.is_empty() {
                     return ExecResult::Return(ret);
                 }
@@ -227,10 +271,16 @@ impl Interpreter {
                 continue;
             }
 
-            let instr = match opcodes::decode(&self.frames[depth - 1].code, self.frames[depth - 1].ip) {
-                Some(i) => i,
-                None => return ExecResult::Exception(format!("opcode invalide à IP={}", self.frames[depth - 1].ip)),
-            };
+            let instr =
+                match opcodes::decode(&self.frames[depth - 1].code, self.frames[depth - 1].ip) {
+                    Some(i) => i,
+                    None => {
+                        return ExecResult::Exception(format!(
+                            "opcode invalide à IP={}",
+                            self.frames[depth - 1].ip
+                        ))
+                    }
+                };
             let next_ip = instr.offset + instr.size;
 
             match self.step(instr.op, instr.offset, next_ip) {
@@ -243,15 +293,13 @@ impl Interpreter {
                 StepResult::Branch(target) => {
                     self.frames.last_mut().unwrap().ip = target;
                 }
-                StepResult::Call(result) => {
-                    match result {
-                        ExecResult::Return(v) => {
-                            self.frames.last_mut().unwrap().eval_stack.push(v);
-                            self.frames.last_mut().unwrap().ip = next_ip;
-                        }
-                        other => return other,
+                StepResult::Call(result) => match result {
+                    ExecResult::Return(v) => {
+                        self.frames.last_mut().unwrap().eval_stack.push(v);
+                        self.frames.last_mut().unwrap().ip = next_ip;
                     }
-                }
+                    other => return other,
+                },
                 StepResult::Return(v) => {
                     self.frames.pop();
                     if self.frames.is_empty() {
@@ -269,17 +317,37 @@ impl Interpreter {
         let f = self.frames.last_mut().unwrap();
         let code = &f.code;
 
-        macro_rules! push { ($v:expr) => { f.eval_stack.push($v) } }
-        macro_rules! pop { () => { f.eval_stack.pop().unwrap_or(Value::Null) } }
+        macro_rules! push {
+            ($v:expr) => {
+                f.eval_stack.push($v)
+            };
+        }
+        macro_rules! pop {
+            () => {
+                f.eval_stack.pop().unwrap_or(Value::Null)
+            };
+        }
 
         match op {
             OpCode::Nop | OpCode::Break => StepResult::Continue,
 
             // --- Chargement d'arguments ---
-            OpCode::Ldarg_0 => { push!(f.args.get(0).copied().unwrap_or(Value::Null)); StepResult::Continue }
-            OpCode::Ldarg_1 => { push!(f.args.get(1).copied().unwrap_or(Value::Null)); StepResult::Continue }
-            OpCode::Ldarg_2 => { push!(f.args.get(2).copied().unwrap_or(Value::Null)); StepResult::Continue }
-            OpCode::Ldarg_3 => { push!(f.args.get(3).copied().unwrap_or(Value::Null)); StepResult::Continue }
+            OpCode::Ldarg_0 => {
+                push!(f.args.get(0).copied().unwrap_or(Value::Null));
+                StepResult::Continue
+            }
+            OpCode::Ldarg_1 => {
+                push!(f.args.get(1).copied().unwrap_or(Value::Null));
+                StepResult::Continue
+            }
+            OpCode::Ldarg_2 => {
+                push!(f.args.get(2).copied().unwrap_or(Value::Null));
+                StepResult::Continue
+            }
+            OpCode::Ldarg_3 => {
+                push!(f.args.get(3).copied().unwrap_or(Value::Null));
+                StepResult::Continue
+            }
             OpCode::Ldarg_S => {
                 let idx = opcodes::read_u8(code, offset + 1) as usize;
                 push!(f.args.get(idx).copied().unwrap_or(Value::Null));
@@ -294,43 +362,116 @@ impl Interpreter {
             OpCode::Starg_S => {
                 let idx = opcodes::read_u8(code, offset + 1) as usize;
                 let v = pop!();
-                if idx < f.args.len() { f.args[idx] = v; }
+                if idx < f.args.len() {
+                    f.args[idx] = v;
+                }
                 StepResult::Continue
             }
 
             // --- Variables locales ---
-            OpCode::Ldloc_0 => { push!(f.locals.get(0).copied().unwrap_or(Value::Null)); StepResult::Continue }
-            OpCode::Ldloc_1 => { push!(f.locals.get(1).copied().unwrap_or(Value::Null)); StepResult::Continue }
-            OpCode::Ldloc_2 => { push!(f.locals.get(2).copied().unwrap_or(Value::Null)); StepResult::Continue }
-            OpCode::Ldloc_3 => { push!(f.locals.get(3).copied().unwrap_or(Value::Null)); StepResult::Continue }
+            OpCode::Ldloc_0 => {
+                push!(f.locals.get(0).copied().unwrap_or(Value::Null));
+                StepResult::Continue
+            }
+            OpCode::Ldloc_1 => {
+                push!(f.locals.get(1).copied().unwrap_or(Value::Null));
+                StepResult::Continue
+            }
+            OpCode::Ldloc_2 => {
+                push!(f.locals.get(2).copied().unwrap_or(Value::Null));
+                StepResult::Continue
+            }
+            OpCode::Ldloc_3 => {
+                push!(f.locals.get(3).copied().unwrap_or(Value::Null));
+                StepResult::Continue
+            }
             OpCode::Ldloc_S => {
                 let idx = opcodes::read_u8(code, offset + 1) as usize;
                 push!(f.locals.get(idx).copied().unwrap_or(Value::Null));
                 StepResult::Continue
             }
-            OpCode::Stloc_0 => { let v = pop!(); if !f.locals.is_empty() { f.locals[0] = v; } StepResult::Continue }
-            OpCode::Stloc_1 => { let v = pop!(); if f.locals.len() > 1 { f.locals[1] = v; } StepResult::Continue }
-            OpCode::Stloc_2 => { let v = pop!(); if f.locals.len() > 2 { f.locals[2] = v; } StepResult::Continue }
-            OpCode::Stloc_3 => { let v = pop!(); if f.locals.len() > 3 { f.locals[3] = v; } StepResult::Continue }
+            OpCode::Stloc_0 => {
+                let v = pop!();
+                if !f.locals.is_empty() {
+                    f.locals[0] = v;
+                }
+                StepResult::Continue
+            }
+            OpCode::Stloc_1 => {
+                let v = pop!();
+                if f.locals.len() > 1 {
+                    f.locals[1] = v;
+                }
+                StepResult::Continue
+            }
+            OpCode::Stloc_2 => {
+                let v = pop!();
+                if f.locals.len() > 2 {
+                    f.locals[2] = v;
+                }
+                StepResult::Continue
+            }
+            OpCode::Stloc_3 => {
+                let v = pop!();
+                if f.locals.len() > 3 {
+                    f.locals[3] = v;
+                }
+                StepResult::Continue
+            }
             OpCode::Stloc_S => {
                 let idx = opcodes::read_u8(code, offset + 1) as usize;
                 let v = pop!();
-                if idx < f.locals.len() { f.locals[idx] = v; }
+                if idx < f.locals.len() {
+                    f.locals[idx] = v;
+                }
                 StepResult::Continue
             }
 
             // --- Constantes ---
-            OpCode::Ldnull => { push!(Value::Null); StepResult::Continue }
-            OpCode::Ldc_I4_M1 => { push!(Value::I32(-1)); StepResult::Continue }
-            OpCode::Ldc_I4_0 => { push!(Value::I32(0)); StepResult::Continue }
-            OpCode::Ldc_I4_1 => { push!(Value::I32(1)); StepResult::Continue }
-            OpCode::Ldc_I4_2 => { push!(Value::I32(2)); StepResult::Continue }
-            OpCode::Ldc_I4_3 => { push!(Value::I32(3)); StepResult::Continue }
-            OpCode::Ldc_I4_4 => { push!(Value::I32(4)); StepResult::Continue }
-            OpCode::Ldc_I4_5 => { push!(Value::I32(5)); StepResult::Continue }
-            OpCode::Ldc_I4_6 => { push!(Value::I32(6)); StepResult::Continue }
-            OpCode::Ldc_I4_7 => { push!(Value::I32(7)); StepResult::Continue }
-            OpCode::Ldc_I4_8 => { push!(Value::I32(8)); StepResult::Continue }
+            OpCode::Ldnull => {
+                push!(Value::Null);
+                StepResult::Continue
+            }
+            OpCode::Ldc_I4_M1 => {
+                push!(Value::I32(-1));
+                StepResult::Continue
+            }
+            OpCode::Ldc_I4_0 => {
+                push!(Value::I32(0));
+                StepResult::Continue
+            }
+            OpCode::Ldc_I4_1 => {
+                push!(Value::I32(1));
+                StepResult::Continue
+            }
+            OpCode::Ldc_I4_2 => {
+                push!(Value::I32(2));
+                StepResult::Continue
+            }
+            OpCode::Ldc_I4_3 => {
+                push!(Value::I32(3));
+                StepResult::Continue
+            }
+            OpCode::Ldc_I4_4 => {
+                push!(Value::I32(4));
+                StepResult::Continue
+            }
+            OpCode::Ldc_I4_5 => {
+                push!(Value::I32(5));
+                StepResult::Continue
+            }
+            OpCode::Ldc_I4_6 => {
+                push!(Value::I32(6));
+                StepResult::Continue
+            }
+            OpCode::Ldc_I4_7 => {
+                push!(Value::I32(7));
+                StepResult::Continue
+            }
+            OpCode::Ldc_I4_8 => {
+                push!(Value::I32(8));
+                StepResult::Continue
+            }
             OpCode::Ldc_I4_S => {
                 push!(Value::I32(opcodes::read_i8(code, offset + 1) as i32));
                 StepResult::Continue
@@ -358,49 +499,154 @@ impl Interpreter {
                 push!(v);
                 StepResult::Continue
             }
-            OpCode::Pop => { pop!(); StepResult::Continue }
+            OpCode::Pop => {
+                pop!();
+                StepResult::Continue
+            }
 
             // --- Arithmétique ---
-            OpCode::Add => { let b = pop!(); let a = pop!(); push!(arith_add(a, b)); StepResult::Continue }
-            OpCode::Sub => { let b = pop!(); let a = pop!(); push!(arith_sub(a, b)); StepResult::Continue }
-            OpCode::Mul => { let b = pop!(); let a = pop!(); push!(arith_mul(a, b)); StepResult::Continue }
+            OpCode::Add => {
+                let b = pop!();
+                let a = pop!();
+                push!(arith_add(a, b));
+                StepResult::Continue
+            }
+            OpCode::Sub => {
+                let b = pop!();
+                let a = pop!();
+                push!(arith_sub(a, b));
+                StepResult::Continue
+            }
+            OpCode::Mul => {
+                let b = pop!();
+                let a = pop!();
+                push!(arith_mul(a, b));
+                StepResult::Continue
+            }
             OpCode::Div => {
-                let b = pop!(); let a = pop!();
+                let b = pop!();
+                let a = pop!();
                 if matches!(b, Value::I32(0) | Value::I64(0)) {
                     return StepResult::Err("System.DivideByZeroException".into());
                 }
-                push!(arith_div(a, b)); StepResult::Continue
-            }
-            OpCode::Div_Un => {
-                let b = pop!(); let a = pop!();
-                push!(Value::I32((a.as_i32() as u32).wrapping_div(b.as_i32().max(1) as u32) as i32));
+                push!(arith_div(a, b));
                 StepResult::Continue
             }
-            OpCode::Rem => { let b = pop!(); let a = pop!(); push!(arith_rem(a, b)); StepResult::Continue }
+            OpCode::Div_Un => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(
+                    (a.as_i32() as u32).wrapping_div(b.as_i32().max(1) as u32) as i32
+                ));
+                StepResult::Continue
+            }
+            OpCode::Rem => {
+                let b = pop!();
+                let a = pop!();
+                push!(arith_rem(a, b));
+                StepResult::Continue
+            }
             OpCode::Rem_Un => {
-                let b = pop!(); let a = pop!();
-                push!(Value::I32((a.as_i32() as u32).wrapping_rem(b.as_i32().max(1) as u32) as i32));
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(
+                    (a.as_i32() as u32).wrapping_rem(b.as_i32().max(1) as u32) as i32
+                ));
                 StepResult::Continue
             }
             OpCode::Neg => {
                 let v = pop!();
-                push!(match v { Value::I32(x) => Value::I32(-x), Value::I64(x) => Value::I64(-x), Value::F64(x) => Value::F64(-x), _ => Value::I32(0) });
+                push!(match v {
+                    Value::I32(x) => Value::I32(-x),
+                    Value::I64(x) => Value::I64(-x),
+                    Value::F64(x) => Value::F64(-x),
+                    _ => Value::I32(0),
+                });
                 StepResult::Continue
             }
-            OpCode::And => { let b = pop!(); let a = pop!(); push!(Value::I32(a.as_i32() & b.as_i32())); StepResult::Continue }
-            OpCode::Or  => { let b = pop!(); let a = pop!(); push!(Value::I32(a.as_i32() | b.as_i32())); StepResult::Continue }
-            OpCode::Xor => { let b = pop!(); let a = pop!(); push!(Value::I32(a.as_i32() ^ b.as_i32())); StepResult::Continue }
-            OpCode::Not => { let v = pop!(); push!(Value::I32(!v.as_i32())); StepResult::Continue }
-            OpCode::Shl => { let b = pop!(); let a = pop!(); push!(Value::I32(a.as_i32().wrapping_shl(b.as_i32() as u32))); StepResult::Continue }
-            OpCode::Shr => { let b = pop!(); let a = pop!(); push!(Value::I32(a.as_i32().wrapping_shr(b.as_i32() as u32))); StepResult::Continue }
-            OpCode::Shr_Un => { let b = pop!(); let a = pop!(); push!(Value::I32((a.as_i32() as u32).wrapping_shr(b.as_i32() as u32) as i32)); StepResult::Continue }
+            OpCode::And => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(a.as_i32() & b.as_i32()));
+                StepResult::Continue
+            }
+            OpCode::Or => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(a.as_i32() | b.as_i32()));
+                StepResult::Continue
+            }
+            OpCode::Xor => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(a.as_i32() ^ b.as_i32()));
+                StepResult::Continue
+            }
+            OpCode::Not => {
+                let v = pop!();
+                push!(Value::I32(!v.as_i32()));
+                StepResult::Continue
+            }
+            OpCode::Shl => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(a.as_i32().wrapping_shl(b.as_i32() as u32)));
+                StepResult::Continue
+            }
+            OpCode::Shr => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(a.as_i32().wrapping_shr(b.as_i32() as u32)));
+                StepResult::Continue
+            }
+            OpCode::Shr_Un => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(
+                    (a.as_i32() as u32).wrapping_shr(b.as_i32() as u32) as i32
+                ));
+                StepResult::Continue
+            }
 
             // --- Comparaisons ---
-            OpCode::Ceq => { let b = pop!(); let a = pop!(); push!(Value::I32(if a.as_i64() == b.as_i64() { 1 } else { 0 })); StepResult::Continue }
-            OpCode::Cgt => { let b = pop!(); let a = pop!(); push!(Value::I32(if a.as_i64() > b.as_i64() { 1 } else { 0 })); StepResult::Continue }
-            OpCode::Cgt_Un => { let b = pop!(); let a = pop!(); push!(Value::I32(if (a.as_i64() as u64) > (b.as_i64() as u64) { 1 } else { 0 })); StepResult::Continue }
-            OpCode::Clt => { let b = pop!(); let a = pop!(); push!(Value::I32(if a.as_i64() < b.as_i64() { 1 } else { 0 })); StepResult::Continue }
-            OpCode::Clt_Un => { let b = pop!(); let a = pop!(); push!(Value::I32(if (a.as_i64() as u64) < (b.as_i64() as u64) { 1 } else { 0 })); StepResult::Continue }
+            OpCode::Ceq => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(if a.as_i64() == b.as_i64() { 1 } else { 0 }));
+                StepResult::Continue
+            }
+            OpCode::Cgt => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(if a.as_i64() > b.as_i64() { 1 } else { 0 }));
+                StepResult::Continue
+            }
+            OpCode::Cgt_Un => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(if (a.as_i64() as u64) > (b.as_i64() as u64) {
+                    1
+                } else {
+                    0
+                }));
+                StepResult::Continue
+            }
+            OpCode::Clt => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(if a.as_i64() < b.as_i64() { 1 } else { 0 }));
+                StepResult::Continue
+            }
+            OpCode::Clt_Un => {
+                let b = pop!();
+                let a = pop!();
+                push!(Value::I32(if (a.as_i64() as u64) < (b.as_i64() as u64) {
+                    1
+                } else {
+                    0
+                }));
+                StepResult::Continue
+            }
 
             // --- Branchements courts ---
             OpCode::Br_S => {
@@ -410,27 +656,65 @@ impl Interpreter {
             OpCode::Brfalse_S => {
                 let v = pop!();
                 if !v.is_truthy() {
-                    StepResult::Branch((next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize)
-                } else { f.ip = next_ip; StepResult::Continue }
+                    StepResult::Branch(
+                        (next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize,
+                    )
+                } else {
+                    f.ip = next_ip;
+                    StepResult::Continue
+                }
             }
             OpCode::Brtrue_S => {
                 let v = pop!();
                 if v.is_truthy() {
-                    StepResult::Branch((next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize)
-                } else { f.ip = next_ip; StepResult::Continue }
+                    StepResult::Branch(
+                        (next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize,
+                    )
+                } else {
+                    f.ip = next_ip;
+                    StepResult::Continue
+                }
             }
-            OpCode::Beq_S  => { let b = pop!(); let a = pop!(); branch_cond_s(a.as_i64() == b.as_i64(), code, offset, next_ip) }
-            OpCode::Bge_S  => { let b = pop!(); let a = pop!(); branch_cond_s(a.as_i64() >= b.as_i64(), code, offset, next_ip) }
-            OpCode::Bgt_S  => { let b = pop!(); let a = pop!(); branch_cond_s(a.as_i64() >  b.as_i64(), code, offset, next_ip) }
-            OpCode::Ble_S  => { let b = pop!(); let a = pop!(); branch_cond_s(a.as_i64() <= b.as_i64(), code, offset, next_ip) }
-            OpCode::Blt_S  => { let b = pop!(); let a = pop!(); branch_cond_s(a.as_i64() <  b.as_i64(), code, offset, next_ip) }
-            OpCode::Bne_Un_S => { let b = pop!(); let a = pop!(); branch_cond_s(a.as_i64() != b.as_i64(), code, offset, next_ip) }
+            OpCode::Beq_S => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond_s(a.as_i64() == b.as_i64(), code, offset, next_ip)
+            }
+            OpCode::Bge_S => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond_s(a.as_i64() >= b.as_i64(), code, offset, next_ip)
+            }
+            OpCode::Bgt_S => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond_s(a.as_i64() > b.as_i64(), code, offset, next_ip)
+            }
+            OpCode::Ble_S => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond_s(a.as_i64() <= b.as_i64(), code, offset, next_ip)
+            }
+            OpCode::Blt_S => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond_s(a.as_i64() < b.as_i64(), code, offset, next_ip)
+            }
+            OpCode::Bne_Un_S => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond_s(a.as_i64() != b.as_i64(), code, offset, next_ip)
+            }
             OpCode::Bge_Un_S | OpCode::Bgt_Un_S | OpCode::Ble_Un_S | OpCode::Blt_Un_S => {
-                let b = pop!(); let a = pop!();
-                let au = a.as_i64() as u64; let bu = b.as_i64() as u64;
+                let b = pop!();
+                let a = pop!();
+                let au = a.as_i64() as u64;
+                let bu = b.as_i64() as u64;
                 let cond = match op {
-                    OpCode::Bge_Un_S => au >= bu, OpCode::Bgt_Un_S => au > bu,
-                    OpCode::Ble_Un_S => au <= bu, _ => au < bu,
+                    OpCode::Bge_Un_S => au >= bu,
+                    OpCode::Bgt_Un_S => au > bu,
+                    OpCode::Ble_Un_S => au <= bu,
+                    _ => au < bu,
                 };
                 branch_cond_s(cond, code, offset, next_ip)
             }
@@ -443,27 +727,65 @@ impl Interpreter {
             OpCode::Brfalse => {
                 let v = pop!();
                 if !v.is_truthy() {
-                    StepResult::Branch((next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize)
-                } else { f.ip = next_ip; StepResult::Continue }
+                    StepResult::Branch(
+                        (next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize,
+                    )
+                } else {
+                    f.ip = next_ip;
+                    StepResult::Continue
+                }
             }
             OpCode::Brtrue => {
                 let v = pop!();
                 if v.is_truthy() {
-                    StepResult::Branch((next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize)
-                } else { f.ip = next_ip; StepResult::Continue }
+                    StepResult::Branch(
+                        (next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize,
+                    )
+                } else {
+                    f.ip = next_ip;
+                    StepResult::Continue
+                }
             }
-            OpCode::Beq  => { let b = pop!(); let a = pop!(); branch_cond(a.as_i64() == b.as_i64(), code, offset, next_ip) }
-            OpCode::Bge  => { let b = pop!(); let a = pop!(); branch_cond(a.as_i64() >= b.as_i64(), code, offset, next_ip) }
-            OpCode::Bgt  => { let b = pop!(); let a = pop!(); branch_cond(a.as_i64() >  b.as_i64(), code, offset, next_ip) }
-            OpCode::Ble  => { let b = pop!(); let a = pop!(); branch_cond(a.as_i64() <= b.as_i64(), code, offset, next_ip) }
-            OpCode::Blt  => { let b = pop!(); let a = pop!(); branch_cond(a.as_i64() <  b.as_i64(), code, offset, next_ip) }
-            OpCode::Bne_Un => { let b = pop!(); let a = pop!(); branch_cond(a.as_i64() != b.as_i64(), code, offset, next_ip) }
+            OpCode::Beq => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond(a.as_i64() == b.as_i64(), code, offset, next_ip)
+            }
+            OpCode::Bge => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond(a.as_i64() >= b.as_i64(), code, offset, next_ip)
+            }
+            OpCode::Bgt => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond(a.as_i64() > b.as_i64(), code, offset, next_ip)
+            }
+            OpCode::Ble => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond(a.as_i64() <= b.as_i64(), code, offset, next_ip)
+            }
+            OpCode::Blt => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond(a.as_i64() < b.as_i64(), code, offset, next_ip)
+            }
+            OpCode::Bne_Un => {
+                let b = pop!();
+                let a = pop!();
+                branch_cond(a.as_i64() != b.as_i64(), code, offset, next_ip)
+            }
             OpCode::Bge_Un | OpCode::Bgt_Un | OpCode::Ble_Un | OpCode::Blt_Un => {
-                let b = pop!(); let a = pop!();
-                let au = a.as_i64() as u64; let bu = b.as_i64() as u64;
+                let b = pop!();
+                let a = pop!();
+                let au = a.as_i64() as u64;
+                let bu = b.as_i64() as u64;
                 let cond = match op {
-                    OpCode::Bge_Un => au >= bu, OpCode::Bgt_Un => au > bu,
-                    OpCode::Ble_Un => au <= bu, _ => au < bu,
+                    OpCode::Bge_Un => au >= bu,
+                    OpCode::Bgt_Un => au > bu,
+                    OpCode::Ble_Un => au <= bu,
+                    _ => au < bu,
                 };
                 branch_cond(cond, code, offset, next_ip)
             }
@@ -482,32 +804,114 @@ impl Interpreter {
             }
 
             // --- Conversions ---
-            OpCode::Conv_I1 => { let v = pop!(); push!(Value::I32(v.as_i32() as i8 as i32)); StepResult::Continue }
-            OpCode::Conv_I2 => { let v = pop!(); push!(Value::I32(v.as_i32() as i16 as i32)); StepResult::Continue }
-            OpCode::Conv_I4 => { let v = pop!(); push!(Value::I32(v.as_i32())); StepResult::Continue }
-            OpCode::Conv_I8 => { let v = pop!(); push!(Value::I64(v.as_i64())); StepResult::Continue }
-            OpCode::Conv_R4 => { let v = pop!(); push!(Value::F32(v.as_f64() as f32)); StepResult::Continue }
-            OpCode::Conv_R8 => { let v = pop!(); push!(Value::F64(v.as_f64())); StepResult::Continue }
-            OpCode::Conv_U1 => { let v = pop!(); push!(Value::I32(v.as_i32() as u8 as i32)); StepResult::Continue }
-            OpCode::Conv_U2 => { let v = pop!(); push!(Value::I32(v.as_i32() as u16 as i32)); StepResult::Continue }
-            OpCode::Conv_U4 => { let v = pop!(); push!(Value::I32(v.as_i32())); StepResult::Continue }
-            OpCode::Conv_U8 => { let v = pop!(); push!(Value::I64(v.as_i64())); StepResult::Continue }
-            OpCode::Conv_I => { let v = pop!(); push!(Value::I64(v.as_i64())); StepResult::Continue }
-            OpCode::Conv_U => { let v = pop!(); push!(Value::I64(v.as_i64())); StepResult::Continue }
-            OpCode::Conv_R_Un => { let v = pop!(); push!(Value::F64(v.as_i64() as u64 as f64)); StepResult::Continue }
-            OpCode::Conv_Ovf_I1 | OpCode::Conv_Ovf_I2 | OpCode::Conv_Ovf_I4
-            | OpCode::Conv_Ovf_I8 | OpCode::Conv_Ovf_U1 | OpCode::Conv_Ovf_U2
-            | OpCode::Conv_Ovf_U4 | OpCode::Conv_Ovf_U8 | OpCode::Conv_Ovf_I
-            | OpCode::Conv_Ovf_U | OpCode::Conv_Ovf_I1_Un | OpCode::Conv_Ovf_I2_Un
-            | OpCode::Conv_Ovf_I4_Un | OpCode::Conv_Ovf_I8_Un | OpCode::Conv_Ovf_U1_Un
-            | OpCode::Conv_Ovf_U2_Un | OpCode::Conv_Ovf_U4_Un | OpCode::Conv_Ovf_U8_Un
-            | OpCode::Conv_Ovf_I_Un | OpCode::Conv_Ovf_U_Un => {
-                // Simplifié : pas de vérification de débordement
-                let v = pop!(); push!(Value::I64(v.as_i64())); StepResult::Continue
+            OpCode::Conv_I1 => {
+                let v = pop!();
+                push!(Value::I32(v.as_i32() as i8 as i32));
+                StepResult::Continue
             }
-            OpCode::Add_Ovf | OpCode::Add_Ovf_Un => { let b = pop!(); let a = pop!(); push!(arith_add(a, b)); StepResult::Continue }
-            OpCode::Sub_Ovf | OpCode::Sub_Ovf_Un => { let b = pop!(); let a = pop!(); push!(arith_sub(a, b)); StepResult::Continue }
-            OpCode::Mul_Ovf | OpCode::Mul_Ovf_Un => { let b = pop!(); let a = pop!(); push!(arith_mul(a, b)); StepResult::Continue }
+            OpCode::Conv_I2 => {
+                let v = pop!();
+                push!(Value::I32(v.as_i32() as i16 as i32));
+                StepResult::Continue
+            }
+            OpCode::Conv_I4 => {
+                let v = pop!();
+                push!(Value::I32(v.as_i32()));
+                StepResult::Continue
+            }
+            OpCode::Conv_I8 => {
+                let v = pop!();
+                push!(Value::I64(v.as_i64()));
+                StepResult::Continue
+            }
+            OpCode::Conv_R4 => {
+                let v = pop!();
+                push!(Value::F32(v.as_f64() as f32));
+                StepResult::Continue
+            }
+            OpCode::Conv_R8 => {
+                let v = pop!();
+                push!(Value::F64(v.as_f64()));
+                StepResult::Continue
+            }
+            OpCode::Conv_U1 => {
+                let v = pop!();
+                push!(Value::I32(v.as_i32() as u8 as i32));
+                StepResult::Continue
+            }
+            OpCode::Conv_U2 => {
+                let v = pop!();
+                push!(Value::I32(v.as_i32() as u16 as i32));
+                StepResult::Continue
+            }
+            OpCode::Conv_U4 => {
+                let v = pop!();
+                push!(Value::I32(v.as_i32()));
+                StepResult::Continue
+            }
+            OpCode::Conv_U8 => {
+                let v = pop!();
+                push!(Value::I64(v.as_i64()));
+                StepResult::Continue
+            }
+            OpCode::Conv_I => {
+                let v = pop!();
+                push!(Value::I64(v.as_i64()));
+                StepResult::Continue
+            }
+            OpCode::Conv_U => {
+                let v = pop!();
+                push!(Value::I64(v.as_i64()));
+                StepResult::Continue
+            }
+            OpCode::Conv_R_Un => {
+                let v = pop!();
+                push!(Value::F64(v.as_i64() as u64 as f64));
+                StepResult::Continue
+            }
+            OpCode::Conv_Ovf_I1
+            | OpCode::Conv_Ovf_I2
+            | OpCode::Conv_Ovf_I4
+            | OpCode::Conv_Ovf_I8
+            | OpCode::Conv_Ovf_U1
+            | OpCode::Conv_Ovf_U2
+            | OpCode::Conv_Ovf_U4
+            | OpCode::Conv_Ovf_U8
+            | OpCode::Conv_Ovf_I
+            | OpCode::Conv_Ovf_U
+            | OpCode::Conv_Ovf_I1_Un
+            | OpCode::Conv_Ovf_I2_Un
+            | OpCode::Conv_Ovf_I4_Un
+            | OpCode::Conv_Ovf_I8_Un
+            | OpCode::Conv_Ovf_U1_Un
+            | OpCode::Conv_Ovf_U2_Un
+            | OpCode::Conv_Ovf_U4_Un
+            | OpCode::Conv_Ovf_U8_Un
+            | OpCode::Conv_Ovf_I_Un
+            | OpCode::Conv_Ovf_U_Un => {
+                // Simplifié : pas de vérification de débordement
+                let v = pop!();
+                push!(Value::I64(v.as_i64()));
+                StepResult::Continue
+            }
+            OpCode::Add_Ovf | OpCode::Add_Ovf_Un => {
+                let b = pop!();
+                let a = pop!();
+                push!(arith_add(a, b));
+                StepResult::Continue
+            }
+            OpCode::Sub_Ovf | OpCode::Sub_Ovf_Un => {
+                let b = pop!();
+                let a = pop!();
+                push!(arith_sub(a, b));
+                StepResult::Continue
+            }
+            OpCode::Mul_Ovf | OpCode::Mul_Ovf_Un => {
+                let b = pop!();
+                let a = pop!();
+                push!(arith_mul(a, b));
+                StepResult::Continue
+            }
 
             // --- Chaînes ---
             OpCode::Ldstr => {
@@ -534,7 +938,12 @@ impl Interpreter {
                 let token = opcodes::read_u32(code, offset + 1);
                 f.ip = next_ip;
                 let sig = self.get_method_sig(token);
-                let argc = sig.param_types.len() + if sig.calling_convention & 0x20 != 0 { 1 } else { 0 };
+                let argc = sig.param_types.len()
+                    + if sig.calling_convention & 0x20 != 0 {
+                        1
+                    } else {
+                        0
+                    };
                 let has_this = sig.calling_convention & 0x20 != 0;
                 let f = self.frames.last_mut().unwrap();
                 let mut args = Vec::with_capacity(argc);
@@ -565,7 +974,11 @@ impl Interpreter {
                 let result = self.execute_token(token, args);
                 match result {
                     ExecResult::Return(_) | ExecResult::InternalCall { .. } => {
-                        self.frames.last_mut().unwrap().eval_stack.push(Value::Ref(obj_ptr));
+                        self.frames
+                            .last_mut()
+                            .unwrap()
+                            .eval_stack
+                            .push(Value::Ref(obj_ptr));
                         return StepResult::Call(ExecResult::Return(Value::Ref(obj_ptr)));
                     }
                     other => return StepResult::Delegate(other),
@@ -598,7 +1011,9 @@ impl Interpreter {
                 drop(f);
                 let field_offset = self.resolve_field_offset(token);
                 if !obj.is_null() {
-                    unsafe { *(obj.add(field_offset) as *mut i64) = val.as_i64(); }
+                    unsafe {
+                        *(obj.add(field_offset) as *mut i64) = val.as_i64();
+                    }
                 }
                 StepResult::Continue
             }
@@ -629,7 +1044,9 @@ impl Interpreter {
                 let arr = pop!().as_ref();
                 let len = if !arr.is_null() {
                     unsafe { *(arr as *const u64) as i32 }
-                } else { 0 };
+                } else {
+                    0
+                };
                 push!(Value::I32(len));
                 StepResult::Continue
             }
@@ -638,7 +1055,9 @@ impl Interpreter {
                 let arr = pop!().as_ref();
                 let val = if !arr.is_null() {
                     unsafe { *(arr.add(8 + idx * 4) as *const i32) }
-                } else { 0 };
+                } else {
+                    0
+                };
                 push!(Value::I32(val));
                 StepResult::Continue
             }
@@ -647,7 +1066,9 @@ impl Interpreter {
                 let arr = pop!().as_ref();
                 let val = if !arr.is_null() {
                     unsafe { *(arr.add(8 + idx * 8) as *const i64) }
-                } else { 0 };
+                } else {
+                    0
+                };
                 push!(Value::I64(val));
                 StepResult::Continue
             }
@@ -656,7 +1077,9 @@ impl Interpreter {
                 let arr = pop!().as_ref();
                 let val = if !arr.is_null() {
                     unsafe { Value::Ref(*(arr.add(8 + idx * 8) as *const *mut u8)) }
-                } else { Value::Null };
+                } else {
+                    Value::Null
+                };
                 push!(val);
                 StepResult::Continue
             }
@@ -665,7 +1088,9 @@ impl Interpreter {
                 let arr = pop!().as_ref();
                 let val = if !arr.is_null() {
                     unsafe { *arr.add(8 + idx) as i32 }
-                } else { 0 };
+                } else {
+                    0
+                };
                 push!(Value::I32(val));
                 StepResult::Continue
             }
@@ -674,7 +1099,9 @@ impl Interpreter {
                 let arr = pop!().as_ref();
                 let val = if !arr.is_null() {
                     unsafe { *(arr.add(8 + idx * 2) as *const i16) as i32 }
-                } else { 0 };
+                } else {
+                    0
+                };
                 push!(Value::I32(val));
                 StepResult::Continue
             }
@@ -683,7 +1110,9 @@ impl Interpreter {
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
                 if !arr.is_null() {
-                    unsafe { *(arr.add(8 + idx * 4) as *mut i32) = val; }
+                    unsafe {
+                        *(arr.add(8 + idx * 4) as *mut i32) = val;
+                    }
                 }
                 StepResult::Continue
             }
@@ -692,7 +1121,9 @@ impl Interpreter {
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
                 if !arr.is_null() {
-                    unsafe { *(arr.add(8 + idx * 8) as *mut i64) = val; }
+                    unsafe {
+                        *(arr.add(8 + idx * 8) as *mut i64) = val;
+                    }
                 }
                 StepResult::Continue
             }
@@ -701,7 +1132,9 @@ impl Interpreter {
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
                 if !arr.is_null() {
-                    unsafe { *(arr.add(8 + idx * 8) as *mut *mut u8) = val; }
+                    unsafe {
+                        *(arr.add(8 + idx * 8) as *mut *mut u8) = val;
+                    }
                 }
                 StepResult::Continue
             }
@@ -710,7 +1143,9 @@ impl Interpreter {
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
                 if !arr.is_null() {
-                    unsafe { *arr.add(8 + idx) = val; }
+                    unsafe {
+                        *arr.add(8 + idx) = val;
+                    }
                 }
                 StepResult::Continue
             }
@@ -718,43 +1153,74 @@ impl Interpreter {
             // --- Indirections ---
             OpCode::Ldind_I4 | OpCode::Ldind_U4 => {
                 let ptr = pop!().as_ref();
-                let val = if !ptr.is_null() { unsafe { *(ptr as *const i32) } } else { 0 };
+                let val = if !ptr.is_null() {
+                    unsafe { *(ptr as *const i32) }
+                } else {
+                    0
+                };
                 push!(Value::I32(val));
                 StepResult::Continue
             }
             OpCode::Ldind_I8 => {
                 let ptr = pop!().as_ref();
-                let val = if !ptr.is_null() { unsafe { *(ptr as *const i64) } } else { 0 };
+                let val = if !ptr.is_null() {
+                    unsafe { *(ptr as *const i64) }
+                } else {
+                    0
+                };
                 push!(Value::I64(val));
                 StepResult::Continue
             }
             OpCode::Ldind_I | OpCode::Ldind_Ref => {
                 let ptr = pop!().as_ref();
-                let val = if !ptr.is_null() { unsafe { Value::Ref(*(ptr as *const *mut u8)) } } else { Value::Null };
+                let val = if !ptr.is_null() {
+                    unsafe { Value::Ref(*(ptr as *const *mut u8)) }
+                } else {
+                    Value::Null
+                };
                 push!(val);
                 StepResult::Continue
             }
             OpCode::Stind_I4 => {
                 let val = pop!().as_i32();
                 let ptr = pop!().as_ref();
-                if !ptr.is_null() { unsafe { *(ptr as *mut i32) = val; } }
+                if !ptr.is_null() {
+                    unsafe {
+                        *(ptr as *mut i32) = val;
+                    }
+                }
                 StepResult::Continue
             }
             OpCode::Stind_I8 => {
                 let val = pop!().as_i64();
                 let ptr = pop!().as_ref();
-                if !ptr.is_null() { unsafe { *(ptr as *mut i64) = val; } }
+                if !ptr.is_null() {
+                    unsafe {
+                        *(ptr as *mut i64) = val;
+                    }
+                }
                 StepResult::Continue
             }
             OpCode::Stind_Ref | OpCode::Stind_I => {
                 let val = pop!().as_ref();
                 let ptr = pop!().as_ref();
-                if !ptr.is_null() { unsafe { *(ptr as *mut *mut u8) = val; } }
+                if !ptr.is_null() {
+                    unsafe {
+                        *(ptr as *mut *mut u8) = val;
+                    }
+                }
                 StepResult::Continue
             }
-            OpCode::Ldind_I1 | OpCode::Ldind_U1 | OpCode::Ldind_I2 | OpCode::Ldind_U2
-            | OpCode::Ldind_R4 | OpCode::Ldind_R8
-            | OpCode::Stind_I1 | OpCode::Stind_I2 | OpCode::Stind_R4 | OpCode::Stind_R8 => {
+            OpCode::Ldind_I1
+            | OpCode::Ldind_U1
+            | OpCode::Ldind_I2
+            | OpCode::Ldind_U2
+            | OpCode::Ldind_R4
+            | OpCode::Ldind_R8
+            | OpCode::Stind_I1
+            | OpCode::Stind_I2
+            | OpCode::Stind_R4
+            | OpCode::Stind_R8 => {
                 // Simplifié
                 StepResult::Continue
             }
@@ -770,7 +1236,9 @@ impl Interpreter {
                 let val = pop!();
                 let ptr = gc::with_gc(|gc| {
                     let p = gc.alloc(types::TYPE_OBJECT, 16);
-                    unsafe { *(p as *mut i64) = val.as_i64(); }
+                    unsafe {
+                        *(p as *mut i64) = val.as_i64();
+                    }
                     p
                 });
                 push!(Value::Ref(ptr));
@@ -816,7 +1284,9 @@ impl Interpreter {
                 let _token = opcodes::read_u32(code, offset + 2);
                 let ptr = pop!().as_ref();
                 if !ptr.is_null() {
-                    unsafe { std::ptr::write_bytes(ptr, 0, 16); }
+                    unsafe {
+                        std::ptr::write_bytes(ptr, 0, 16);
+                    }
                 }
                 StepResult::Continue
             }
@@ -833,11 +1303,19 @@ impl Interpreter {
             }
 
             // Préfixes (ignorés)
-            OpCode::Volatile | OpCode::Unaligned | OpCode::Tail | OpCode::Readonly
+            OpCode::Volatile
+            | OpCode::Unaligned
+            | OpCode::Tail
+            | OpCode::Readonly
             | OpCode::Constrained => StepResult::Continue,
 
-            OpCode::Ldloc | OpCode::Ldloca | OpCode::Stloc | OpCode::Starg
-            | OpCode::Ldarga | OpCode::Ldarga_S | OpCode::Ldloca_S => {
+            OpCode::Ldloc
+            | OpCode::Ldloca
+            | OpCode::Stloc
+            | OpCode::Starg
+            | OpCode::Ldarga
+            | OpCode::Ldarga_S
+            | OpCode::Ldloca_S => {
                 // Formes longues et adresses
                 let idx = match op {
                     OpCode::Ldloc | OpCode::Stloc | OpCode::Ldloca => {
@@ -847,8 +1325,15 @@ impl Interpreter {
                     _ => opcodes::read_u8(code, offset + 1) as usize,
                 };
                 match op {
-                    OpCode::Ldloc => { push!(f.locals.get(idx).copied().unwrap_or(Value::Null)); }
-                    OpCode::Stloc => { let v = pop!(); if idx < f.locals.len() { f.locals[idx] = v; } }
+                    OpCode::Ldloc => {
+                        push!(f.locals.get(idx).copied().unwrap_or(Value::Null));
+                    }
+                    OpCode::Stloc => {
+                        let v = pop!();
+                        if idx < f.locals.len() {
+                            f.locals[idx] = v;
+                        }
+                    }
                     OpCode::Ldloca | OpCode::Ldloca_S => {
                         if idx < f.locals.len() {
                             push!(Value::Ref(&mut f.locals[idx] as *mut Value as *mut u8));
@@ -863,7 +1348,12 @@ impl Interpreter {
                             push!(Value::Null);
                         }
                     }
-                    OpCode::Starg => { let v = pop!(); if idx < f.args.len() { f.args[idx] = v; } }
+                    OpCode::Starg => {
+                        let v = pop!();
+                        if idx < f.args.len() {
+                            f.args[idx] = v;
+                        }
+                    }
                     _ => {}
                 }
                 StepResult::Continue
@@ -897,12 +1387,15 @@ impl Interpreter {
                 let mr = self.assembly.get_member_ref(row);
                 let name = self.assembly.get_string(mr.name);
                 types::with_types(|reg| {
-                    let (parent_table, parent_row) = super::tables::CodedIndex::MemberRefParent.decode(mr.class);
+                    let (parent_table, parent_row) =
+                        super::tables::CodedIndex::MemberRefParent.decode(mr.class);
                     let (ns, cls) = match parent_table {
                         Some(TableId::TypeRef) => {
                             let tr = self.assembly.get_type_ref(parent_row);
-                            (self.assembly.get_string(tr.namespace).to_string(),
-                             self.assembly.get_string(tr.name).to_string())
+                            (
+                                self.assembly.get_string(tr.namespace).to_string(),
+                                self.assembly.get_string(tr.name).to_string(),
+                            )
                         }
                         _ => (String::new(), String::new()),
                     };
@@ -955,7 +1448,9 @@ impl Interpreter {
                 let name = self.assembly.get_string(td.name);
                 if let Some(tid) = reg.find_by_name(ns, name) {
                     let ptr = reg.static_field_ptr(tid, offset);
-                    unsafe { *(ptr as *mut i64) = val.as_i64(); }
+                    unsafe {
+                        *(ptr as *mut i64) = val.as_i64();
+                    }
                 }
             });
         }

@@ -37,7 +37,9 @@ impl ClrException {
             (*hdr).type_id
         };
         let type_name = types::with_types(|reg| {
-            reg.get(type_id).map(|t| t.full_name()).unwrap_or_else(|| "Exception".into())
+            reg.get(type_id)
+                .map(|t| t.full_name())
+                .unwrap_or_else(|| "Exception".into())
         });
         ClrException {
             type_id,
@@ -47,52 +49,93 @@ impl ClrException {
     }
 
     pub fn null_reference() -> Self {
-        Self::new(TYPE_EXCEPTION, "NullReferenceException: Object reference not set to an instance of an object.")
+        Self::new(
+            TYPE_EXCEPTION,
+            "NullReferenceException: Object reference not set to an instance of an object.",
+        )
     }
 
     pub fn invalid_cast(from: &str, to: &str) -> Self {
-        Self::new(TYPE_EXCEPTION, &format!("InvalidCastException: Unable to cast object of type '{}' to type '{}'.", from, to))
+        Self::new(
+            TYPE_EXCEPTION,
+            &format!(
+                "InvalidCastException: Unable to cast object of type '{}' to type '{}'.",
+                from, to
+            ),
+        )
     }
 
     pub fn index_out_of_range() -> Self {
-        Self::new(TYPE_EXCEPTION, "IndexOutOfRangeException: Index was outside the bounds of the array.")
+        Self::new(
+            TYPE_EXCEPTION,
+            "IndexOutOfRangeException: Index was outside the bounds of the array.",
+        )
     }
 
     pub fn overflow() -> Self {
-        Self::new(TYPE_EXCEPTION, "OverflowException: Arithmetic operation resulted in an overflow.")
+        Self::new(
+            TYPE_EXCEPTION,
+            "OverflowException: Arithmetic operation resulted in an overflow.",
+        )
     }
 
     pub fn divide_by_zero() -> Self {
-        Self::new(TYPE_EXCEPTION, "DivideByZeroException: Attempted to divide by zero.")
+        Self::new(
+            TYPE_EXCEPTION,
+            "DivideByZeroException: Attempted to divide by zero.",
+        )
     }
 
     pub fn stack_overflow() -> Self {
-        Self::new(TYPE_EXCEPTION, "StackOverflowException: Operation caused a stack overflow.")
+        Self::new(
+            TYPE_EXCEPTION,
+            "StackOverflowException: Operation caused a stack overflow.",
+        )
     }
 
     pub fn not_implemented(what: &str) -> Self {
-        Self::new(TYPE_EXCEPTION, &format!("NotImplementedException: {}", what))
+        Self::new(
+            TYPE_EXCEPTION,
+            &format!("NotImplementedException: {}", what),
+        )
     }
 
     pub fn argument(param: &str, msg: &str) -> Self {
-        Self::new(TYPE_EXCEPTION, &format!("ArgumentException: {} (Parameter '{}')", msg, param))
+        Self::new(
+            TYPE_EXCEPTION,
+            &format!("ArgumentException: {} (Parameter '{}')", msg, param),
+        )
     }
 
     pub fn argument_null(param: &str) -> Self {
-        Self::new(TYPE_EXCEPTION, &format!("ArgumentNullException: Value cannot be null. (Parameter '{}')", param))
+        Self::new(
+            TYPE_EXCEPTION,
+            &format!(
+                "ArgumentNullException: Value cannot be null. (Parameter '{}')",
+                param
+            ),
+        )
     }
 
     pub fn invalid_operation(msg: &str) -> Self {
-        Self::new(TYPE_EXCEPTION, &format!("InvalidOperationException: {}", msg))
+        Self::new(
+            TYPE_EXCEPTION,
+            &format!("InvalidOperationException: {}", msg),
+        )
     }
 
     pub fn file_not_found(path: &str) -> Self {
-        Self::new(TYPE_EXCEPTION, &format!("FileNotFoundException: Could not find file '{}'.", path))
+        Self::new(
+            TYPE_EXCEPTION,
+            &format!("FileNotFoundException: Could not find file '{}'.", path),
+        )
     }
 
     pub fn type_name(&self) -> String {
         types::with_types(|reg| {
-            reg.get(self.type_id).map(|t| t.full_name()).unwrap_or_else(|| "System.Exception".into())
+            reg.get(self.type_id)
+                .map(|t| t.full_name())
+                .unwrap_or_else(|| "System.Exception".into())
         })
     }
 }
@@ -165,16 +208,10 @@ fn exception_matches(exception: &ClrException, class_token: u32) -> bool {
         return true;
     }
 
-    types::with_types(|reg| {
-        reg.is_subclass_of(exception.type_id, TYPE_EXCEPTION)
-    })
+    types::with_types(|reg| reg.is_subclass_of(exception.type_id, TYPE_EXCEPTION))
 }
 
-pub fn find_leave_target(
-    clauses: &[ExceptionClause],
-    ip: usize,
-    target: usize,
-) -> Option<usize> {
+pub fn find_leave_target(clauses: &[ExceptionClause], ip: usize, target: usize) -> Option<usize> {
     for clause in clauses {
         if clause.flags != COR_ILEXCEPTION_CLAUSE_FINALLY {
             continue;

@@ -1,7 +1,7 @@
 //! Pont P/Invoke : appels managés vers les DLL natives Win32 du runtime Winlux.
 
-use super::il::Value;
 use super::bcl::{alloc_managed_string, read_managed_string};
+use super::il::Value;
 
 pub fn dispatch_pinvoke(module: &str, name: &str, args: &[Value]) -> Option<Value> {
     let module_lower = module.to_lowercase();
@@ -19,14 +19,24 @@ pub fn dispatch_pinvoke(module: &str, name: &str, args: &[Value]) -> Option<Valu
         "ole32" => ole32_dispatch(name, args),
         "ntdll" => ntdll_dispatch(name, args),
         _ => {
-            crate::log_warn!("clr-pinvoke", "module P/Invoke inconnu: {} (fonction {})", module, name);
+            crate::log_warn!(
+                "clr-pinvoke",
+                "module P/Invoke inconnu: {} (fonction {})",
+                module,
+                name
+            );
             try_generic_dll_call(module_base, name, args)
         }
     }
 }
 
 fn try_generic_dll_call(module: &str, name: &str, args: &[Value]) -> Option<Value> {
-    crate::log_debug!("clr-pinvoke", "tentative d'appel générique: {}.{}", module, name);
+    crate::log_debug!(
+        "clr-pinvoke",
+        "tentative d'appel générique: {}.{}",
+        module,
+        name
+    );
     Some(Value::I32(0))
 }
 
@@ -37,9 +47,7 @@ fn kernel32_dispatch(name: &str, args: &[Value]) -> Option<Value> {
         "GetLastError" => Some(Value::I32(0)),
         "SetLastError" => Some(Value::I32(0)),
         "GetCurrentProcess" => Some(Value::I64(-1)),
-        "GetCurrentProcessId" => {
-            Some(Value::I32(std::process::id() as i32))
-        }
+        "GetCurrentProcessId" => Some(Value::I32(std::process::id() as i32)),
         "GetCurrentThread" => Some(Value::I64(-2)),
         "GetCurrentThreadId" => Some(Value::I32(0)),
         "CloseHandle" => Some(Value::I32(1)),
@@ -73,21 +81,15 @@ fn kernel32_dispatch(name: &str, args: &[Value]) -> Option<Value> {
 
         "CreateFileA" | "CreateFileW" => Some(Value::I64(-1)),
 
-        "GetModuleHandleA" | "GetModuleHandleW" => {
-            Some(Value::I64(0x400000))
-        }
-        "GetModuleFileNameA" | "GetModuleFileNameW" => {
-            Some(Value::I32(0))
-        }
+        "GetModuleHandleA" | "GetModuleHandleW" => Some(Value::I64(0x400000)),
+        "GetModuleFileNameA" | "GetModuleFileNameW" => Some(Value::I32(0)),
         "GetProcAddress" => Some(Value::I64(0)),
         "LoadLibraryA" | "LoadLibraryW" | "LoadLibraryExA" | "LoadLibraryExW" => {
             let lib_name = match args.last() {
-                Some(Value::Ref(p)) if !p.is_null() => {
-                    unsafe {
-                        let c = std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char);
-                        c.to_string_lossy().to_string()
-                    }
-                }
+                Some(Value::Ref(p)) if !p.is_null() => unsafe {
+                    let c = std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char);
+                    c.to_string_lossy().to_string()
+                },
                 _ => String::new(),
             };
             crate::log_debug!("clr-pinvoke", "LoadLibrary: {}", lib_name);
@@ -116,7 +118,9 @@ fn kernel32_dispatch(name: &str, args: &[Value]) -> Option<Value> {
                         .duration_since(std::time::UNIX_EPOCH)
                         .unwrap_or_default()
                         .as_nanos() as u64;
-                    unsafe { *(*p as *mut u64) = ns; }
+                    unsafe {
+                        *(*p as *mut u64) = ns;
+                    }
                 }
             }
             Some(Value::I32(1))
@@ -124,7 +128,9 @@ fn kernel32_dispatch(name: &str, args: &[Value]) -> Option<Value> {
         "QueryPerformanceFrequency" => {
             if let Some(Value::Ref(p)) = args.last() {
                 if !p.is_null() {
-                    unsafe { *(*p as *mut u64) = 1_000_000_000; }
+                    unsafe {
+                        *(*p as *mut u64) = 1_000_000_000;
+                    }
                 }
             }
             Some(Value::I32(1))
@@ -170,15 +176,9 @@ fn kernel32_dispatch(name: &str, args: &[Value]) -> Option<Value> {
         }
         "HeapFree" | "LocalFree" | "GlobalFree" => Some(Value::I32(1)),
 
-        "GetEnvironmentVariableA" | "GetEnvironmentVariableW" => {
-            Some(Value::I32(0))
-        }
-        "SetEnvironmentVariableA" | "SetEnvironmentVariableW" => {
-            Some(Value::I32(1))
-        }
-        "GetCommandLineA" | "GetCommandLineW" => {
-            Some(Value::Ref(std::ptr::null_mut()))
-        }
+        "GetEnvironmentVariableA" | "GetEnvironmentVariableW" => Some(Value::I32(0)),
+        "SetEnvironmentVariableA" | "SetEnvironmentVariableW" => Some(Value::I32(1)),
+        "GetCommandLineA" | "GetCommandLineW" => Some(Value::Ref(std::ptr::null_mut())),
 
         "ExitProcess" => {
             let code = match args.last() {
@@ -188,11 +188,12 @@ fn kernel32_dispatch(name: &str, args: &[Value]) -> Option<Value> {
             std::process::exit(code);
         }
 
-        "InitializeCriticalSection" | "InitializeCriticalSectionAndSpinCount"
-        | "EnterCriticalSection" | "LeaveCriticalSection"
-        | "DeleteCriticalSection" | "TryEnterCriticalSection" => {
-            Some(Value::I32(1))
-        }
+        "InitializeCriticalSection"
+        | "InitializeCriticalSectionAndSpinCount"
+        | "EnterCriticalSection"
+        | "LeaveCriticalSection"
+        | "DeleteCriticalSection"
+        | "TryEnterCriticalSection" => Some(Value::I32(1)),
 
         "CreateMutexA" | "CreateMutexW" | "CreateEventA" | "CreateEventW" => {
             Some(Value::I64(0x1000))
@@ -201,9 +202,10 @@ fn kernel32_dispatch(name: &str, args: &[Value]) -> Option<Value> {
         "WaitForSingleObject" => Some(Value::I32(0)),
         "WaitForMultipleObjects" => Some(Value::I32(0)),
 
-        "GetSystemDirectoryA" | "GetSystemDirectoryW" | "GetWindowsDirectoryA" | "GetWindowsDirectoryW" => {
-            Some(Value::I32(0))
-        }
+        "GetSystemDirectoryA"
+        | "GetSystemDirectoryW"
+        | "GetWindowsDirectoryA"
+        | "GetWindowsDirectoryW" => Some(Value::I32(0)),
         "GetTempPathA" | "GetTempPathW" => Some(Value::I32(0)),
 
         "OutputDebugStringA" | "OutputDebugStringW" => Some(Value::I32(0)),
@@ -237,7 +239,8 @@ fn user32_dispatch(name: &str, args: &[Value]) -> Option<Value> {
                     } else {
                         unsafe {
                             std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char)
-                                .to_string_lossy().to_string()
+                                .to_string_lossy()
+                                .to_string()
                         }
                     }
                 }
@@ -287,11 +290,12 @@ fn crt_dispatch(name: &str, args: &[Value]) -> Option<Value> {
             if let Some(Value::Ref(p)) = args.first() {
                 if !p.is_null() {
                     let s = unsafe {
-                        std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char)
-                            .to_string_lossy()
+                        std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char).to_string_lossy()
                     };
                     print!("{}", s);
-                    if name == "puts" { println!(); }
+                    if name == "puts" {
+                        println!();
+                    }
                 }
             }
             Some(Value::I32(0))
@@ -313,15 +317,13 @@ fn crt_dispatch(name: &str, args: &[Value]) -> Option<Value> {
         "free" | "calloc" | "realloc" => Some(Value::I32(0)),
         "memcpy" | "memmove" => args.first().cloned().or(Some(Value::I32(0))),
         "memset" => args.first().cloned().or(Some(Value::I32(0))),
-        "strlen" => {
-            match args.first() {
-                Some(Value::Ref(p)) if !p.is_null() => {
-                    let s = unsafe { std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char) };
-                    Some(Value::I32(s.to_bytes().len() as i32))
-                }
-                _ => Some(Value::I32(0)),
+        "strlen" => match args.first() {
+            Some(Value::Ref(p)) if !p.is_null() => {
+                let s = unsafe { std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char) };
+                Some(Value::I32(s.to_bytes().len() as i32))
             }
-        }
+            _ => Some(Value::I32(0)),
+        },
         "strcmp" | "stricmp" | "_stricmp" => Some(Value::I32(0)),
         "atoi" | "atol" => Some(Value::I32(0)),
         "exit" | "_exit" => {

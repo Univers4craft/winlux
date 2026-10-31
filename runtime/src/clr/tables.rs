@@ -41,17 +41,39 @@ pub enum TableId {
 
 impl TableId {
     pub const ALL: &[TableId] = &[
-        TableId::Module, TableId::TypeRef, TableId::TypeDef,
-        TableId::Field, TableId::MethodDef, TableId::Param,
-        TableId::InterfaceImpl, TableId::MemberRef, TableId::Constant,
-        TableId::CustomAttribute, TableId::FieldMarshal, TableId::DeclSecurity,
-        TableId::ClassLayout, TableId::FieldLayout, TableId::StandAloneSig,
-        TableId::EventMap, TableId::Event, TableId::PropertyMap,
-        TableId::Property, TableId::MethodSemantics, TableId::MethodImpl,
-        TableId::ModuleRef, TableId::TypeSpec, TableId::ImplMap,
-        TableId::FieldRva, TableId::Assembly, TableId::AssemblyRef,
-        TableId::File, TableId::ExportedType, TableId::ManifestResource,
-        TableId::NestedClass, TableId::GenericParam, TableId::MethodSpec,
+        TableId::Module,
+        TableId::TypeRef,
+        TableId::TypeDef,
+        TableId::Field,
+        TableId::MethodDef,
+        TableId::Param,
+        TableId::InterfaceImpl,
+        TableId::MemberRef,
+        TableId::Constant,
+        TableId::CustomAttribute,
+        TableId::FieldMarshal,
+        TableId::DeclSecurity,
+        TableId::ClassLayout,
+        TableId::FieldLayout,
+        TableId::StandAloneSig,
+        TableId::EventMap,
+        TableId::Event,
+        TableId::PropertyMap,
+        TableId::Property,
+        TableId::MethodSemantics,
+        TableId::MethodImpl,
+        TableId::ModuleRef,
+        TableId::TypeSpec,
+        TableId::ImplMap,
+        TableId::FieldRva,
+        TableId::Assembly,
+        TableId::AssemblyRef,
+        TableId::File,
+        TableId::ExportedType,
+        TableId::ManifestResource,
+        TableId::NestedClass,
+        TableId::GenericParam,
+        TableId::MethodSpec,
         TableId::GenericParamConstraint,
     ];
 
@@ -67,9 +89,15 @@ impl Token {
     pub fn new(table: TableId, row: u32) -> Self {
         Self(((table as u32) << 24) | (row & 0x00FF_FFFF))
     }
-    pub fn table(self) -> u8 { (self.0 >> 24) as u8 }
-    pub fn rid(self) -> u32 { self.0 & 0x00FF_FFFF }
-    pub fn is_nil(self) -> bool { self.rid() == 0 }
+    pub fn table(self) -> u8 {
+        (self.0 >> 24) as u8
+    }
+    pub fn rid(self) -> u32 {
+        self.0 & 0x00FF_FFFF
+    }
+    pub fn is_nil(self) -> bool {
+        self.rid() == 0
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -97,11 +125,21 @@ pub struct TypeDefRow {
 }
 
 impl TypeDefRow {
-    pub fn is_interface(&self) -> bool { self.flags & 0x20 != 0 }
-    pub fn is_abstract(&self) -> bool { self.flags & 0x80 != 0 }
-    pub fn is_sealed(&self) -> bool { self.flags & 0x100 != 0 }
-    pub fn is_value_type(&self) -> bool { false }
-    pub fn visibility(&self) -> u32 { self.flags & 0x07 }
+    pub fn is_interface(&self) -> bool {
+        self.flags & 0x20 != 0
+    }
+    pub fn is_abstract(&self) -> bool {
+        self.flags & 0x80 != 0
+    }
+    pub fn is_sealed(&self) -> bool {
+        self.flags & 0x100 != 0
+    }
+    pub fn is_value_type(&self) -> bool {
+        false
+    }
+    pub fn visibility(&self) -> u32 {
+        self.flags & 0x07
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -112,7 +150,9 @@ pub struct FieldRow {
 }
 
 impl FieldRow {
-    pub fn is_static(&self) -> bool { self.flags & 0x10 != 0 }
+    pub fn is_static(&self) -> bool {
+        self.flags & 0x10 != 0
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -126,11 +166,21 @@ pub struct MethodDefRow {
 }
 
 impl MethodDefRow {
-    pub fn is_static(&self) -> bool { self.flags & 0x10 != 0 }
-    pub fn is_virtual(&self) -> bool { self.flags & 0x40 != 0 }
-    pub fn is_abstract(&self) -> bool { self.flags & 0x0400 != 0 }
-    pub fn is_pinvoke(&self) -> bool { self.flags & 0x2000 != 0 }
-    pub fn is_cctor(&self) -> bool { self.flags & 0x10 != 0 && self.flags & 0x1800 == 0x1800 }
+    pub fn is_static(&self) -> bool {
+        self.flags & 0x10 != 0
+    }
+    pub fn is_virtual(&self) -> bool {
+        self.flags & 0x40 != 0
+    }
+    pub fn is_abstract(&self) -> bool {
+        self.flags & 0x0400 != 0
+    }
+    pub fn is_pinvoke(&self) -> bool {
+        self.flags & 0x2000 != 0
+    }
+    pub fn is_cctor(&self) -> bool {
+        self.flags & 0x10 != 0 && self.flags & 0x1800 == 0x1800
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -342,27 +392,74 @@ impl CodedIndex {
 
     pub fn tables(self) -> &'static [Option<TableId>] {
         match self {
-            Self::TypeDefOrRef => &[Some(TableId::TypeDef), Some(TableId::TypeRef), Some(TableId::TypeSpec)],
-            Self::HasConstant => &[Some(TableId::Field), Some(TableId::Param), Some(TableId::Property)],
+            Self::TypeDefOrRef => &[
+                Some(TableId::TypeDef),
+                Some(TableId::TypeRef),
+                Some(TableId::TypeSpec),
+            ],
+            Self::HasConstant => &[
+                Some(TableId::Field),
+                Some(TableId::Param),
+                Some(TableId::Property),
+            ],
             Self::HasCustomAttribute => &[
-                Some(TableId::MethodDef), Some(TableId::Field), Some(TableId::TypeRef),
-                Some(TableId::TypeDef), Some(TableId::Param), Some(TableId::InterfaceImpl),
-                Some(TableId::MemberRef), Some(TableId::Module), None/*Permission*/,
-                Some(TableId::Property), Some(TableId::Event), Some(TableId::StandAloneSig),
-                Some(TableId::ModuleRef), Some(TableId::TypeSpec), Some(TableId::Assembly),
-                Some(TableId::AssemblyRef), Some(TableId::File), Some(TableId::ExportedType),
-                Some(TableId::ManifestResource), Some(TableId::GenericParam),
-                Some(TableId::GenericParamConstraint), Some(TableId::MethodSpec),
+                Some(TableId::MethodDef),
+                Some(TableId::Field),
+                Some(TableId::TypeRef),
+                Some(TableId::TypeDef),
+                Some(TableId::Param),
+                Some(TableId::InterfaceImpl),
+                Some(TableId::MemberRef),
+                Some(TableId::Module),
+                None, /*Permission*/
+                Some(TableId::Property),
+                Some(TableId::Event),
+                Some(TableId::StandAloneSig),
+                Some(TableId::ModuleRef),
+                Some(TableId::TypeSpec),
+                Some(TableId::Assembly),
+                Some(TableId::AssemblyRef),
+                Some(TableId::File),
+                Some(TableId::ExportedType),
+                Some(TableId::ManifestResource),
+                Some(TableId::GenericParam),
+                Some(TableId::GenericParamConstraint),
+                Some(TableId::MethodSpec),
             ],
             Self::HasFieldMarshal => &[Some(TableId::Field), Some(TableId::Param)],
-            Self::HasDeclSecurity => &[Some(TableId::TypeDef), Some(TableId::MethodDef), Some(TableId::Assembly)],
-            Self::MemberRefParent => &[Some(TableId::TypeDef), Some(TableId::TypeRef), Some(TableId::ModuleRef), Some(TableId::MethodDef), Some(TableId::TypeSpec)],
+            Self::HasDeclSecurity => &[
+                Some(TableId::TypeDef),
+                Some(TableId::MethodDef),
+                Some(TableId::Assembly),
+            ],
+            Self::MemberRefParent => &[
+                Some(TableId::TypeDef),
+                Some(TableId::TypeRef),
+                Some(TableId::ModuleRef),
+                Some(TableId::MethodDef),
+                Some(TableId::TypeSpec),
+            ],
             Self::HasSemantics => &[Some(TableId::Event), Some(TableId::Property)],
             Self::MethodDefOrRef => &[Some(TableId::MethodDef), Some(TableId::MemberRef)],
             Self::MemberForwarded => &[Some(TableId::Field), Some(TableId::MethodDef)],
-            Self::Implementation => &[Some(TableId::File), Some(TableId::AssemblyRef), Some(TableId::ExportedType)],
-            Self::CustomAttributeType => &[None, None, Some(TableId::MethodDef), Some(TableId::MemberRef), None],
-            Self::ResolutionScope => &[Some(TableId::Module), Some(TableId::ModuleRef), Some(TableId::AssemblyRef), Some(TableId::TypeRef)],
+            Self::Implementation => &[
+                Some(TableId::File),
+                Some(TableId::AssemblyRef),
+                Some(TableId::ExportedType),
+            ],
+            Self::CustomAttributeType => &[
+                None,
+                None,
+                Some(TableId::MethodDef),
+                Some(TableId::MemberRef),
+                None,
+            ],
+            Self::ResolutionScope => &[
+                Some(TableId::Module),
+                Some(TableId::ModuleRef),
+                Some(TableId::AssemblyRef),
+                Some(TableId::TypeRef),
+            ],
             Self::TypeOrMethodDef => &[Some(TableId::TypeDef), Some(TableId::MethodDef)],
         }
     }
