@@ -20,6 +20,8 @@ mod settings;
 mod diskcleaner;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
+#[path = "../shell/terminal.rs"]
+mod terminal;
 #[path = "../shell/utilities.rs"]
 mod utilities;
 #[path = "../shell/wm.rs"]
