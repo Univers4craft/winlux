@@ -4,6 +4,8 @@
 #![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
+#[path = "../shell/admin_ui.rs"]
+mod admin_ui;
 #[path = "../shell/bsod.rs"]
 mod bsod;
 #[path = "../shell/desktop.rs"]
@@ -18,10 +20,16 @@ mod eventviewer;
 mod explorer;
 #[path = "../shell/filehistory.rs"]
 mod filehistory;
+#[path = "../shell/firewall.rs"]
+mod firewall;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/locale.rs"]
+mod locale;
 #[path = "../shell/login.rs"]
 mod login;
+#[path = "../shell/netdrives.rs"]
+mod netdrives;
 #[path = "../shell/notepad.rs"]
 mod notepad;
 #[path = "../shell/notifications.rs"]
@@ -30,14 +38,20 @@ mod notifications;
 mod restore;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/settings_cpu.rs"]
+mod settings_cpu;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
+#[path = "../shell/taskschd.rs"]
+mod taskschd;
 #[path = "../shell/terminal.rs"]
 mod terminal;
 #[path = "../shell/utilities.rs"]
 mod utilities;
 #[path = "../shell/weather.rs"]
 mod weather;
+#[path = "../shell/welcome.rs"]
+mod welcome;
 #[path = "../shell/wm.rs"]
 mod wm;
 
@@ -48,6 +62,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         desktop::regression_checks();
         settings::regression_checks();
         filehistory::regression_checks();
+        welcome::regression_checks();
     }
     finish()
 }

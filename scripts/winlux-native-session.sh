@@ -76,7 +76,9 @@ wait_bus_name session org.xfce.FileManager "$!" /run/winlux/file-manager.log
     }
 /usr/bin/winlux-trust-shortcuts
 has_bluetooth=false
-if test -d /sys/class/bluetooth && ls /sys/class/bluetooth/ >/dev/null 2>&1 && test -n "$(ls -A /sys/class/bluetooth/ 2>/dev/null)"; then
+if test "$(cat /run/winlux/hw/has-bluetooth 2>/dev/null)" = 1; then
+    has_bluetooth=true
+elif test -d /sys/class/bluetooth && test -n "$(ls -A /sys/class/bluetooth/ 2>/dev/null)"; then
     has_bluetooth=true
 fi
 if "$has_bluetooth"; then
@@ -89,6 +91,8 @@ if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
     /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
 fi
 /usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
+# Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
+if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
 /usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
 case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
@@ -99,6 +103,8 @@ case "$speed" in
     50) /usr/bin/winlux-control mouse-normal || true ;;
     75) /usr/bin/winlux-control mouse-fast || true ;;
 esac
+# Profil processeur et courbe de ventilateurs choisis dans les Parametres.
+if test -s /etc/winlux/cpu.conf; then /usr/bin/winlux-control cpu-restore || true; fi
 for query in /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders /usr/bin/gdk-pixbuf-query-loaders; do
     if test -x "$query"; then "$query" --update-cache; break; fi
 done
@@ -126,7 +132,12 @@ for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); d
         /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5
     fi
 done
-LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
+gpu_count=$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)
+if test "$gpu_count" -gt 0; then
+    /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
+else
+    LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
+fi
 echo $! > /run/winlux/screensaver.pid
 (
     while :; do

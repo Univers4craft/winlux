@@ -311,7 +311,7 @@
 - [ ] Navigateur réellement installé et accessible. _(source: ROADMAP-SSD.md)_
 - [ ] Notifications interactives et réglables. _(source: ROADMAP-SSD.md)_
 - [ ] Panneau de confidentialité pour les accès au microphone, à la caméra _(source: ROADMAP-SSD.md)_
-- [ ] Pare-feu configurable. _(source: ROADMAP-SSD.md)_
+- [x] Pare-feu configurable. _(source: ROADMAP-SSD.md)_
 - [ ] Partage de dossiers. _(source: ROADMAP-SSD.md)_
 - [ ] Partitionnement manuel pour les utilisateurs avancés. _(source: ROADMAP-SSD.md)_
 - [ ] Pilotes et firmwares redistribuables nécessaires au matériel ciblé. _(source: ROADMAP-SSD.md)_

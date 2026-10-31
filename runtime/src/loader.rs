@@ -52,6 +52,40 @@ pub struct Module {
 }
 
 impl Module {
+    /// Noms des DLL importées, lus dans l'image chargée en mémoire.
+    pub fn import_names(&self) -> Vec<String> {
+        let dir = self.pe.dir(1);
+        let mut names = Vec::new();
+        if dir.rva == 0 || dir.size < 20 {
+            return names;
+        }
+        let end = (dir.rva as usize)
+            .saturating_add(dir.size as usize)
+            .min(self.size);
+        let mut desc = dir.rva as usize;
+        while desc + 20 <= end && names.len() < 512 {
+            // SAFETY: le descripteur est dans l'image mappée (borné par `size`).
+            let name_rva =
+                unsafe { ((self.base + desc + 12) as *const u32).read_unaligned() } as usize;
+            if name_rva == 0 || name_rva >= self.size {
+                break;
+            }
+            let mut name = String::new();
+            for i in 0..260 {
+                if name_rva + i >= self.size {
+                    break;
+                }
+                let b = unsafe { *((self.base + name_rva + i) as *const u8) };
+                if b == 0 {
+                    break;
+                }
+                name.push(b as char);
+            }
+            names.push(name);
+            desc += 20;
+        }
+        names
+    }
     pub fn entry(&self) -> Option<usize> {
         (self.pe.entry_rva != 0).then(|| self.base + self.pe.entry_rva as usize)
     }
@@ -109,8 +143,49 @@ pub fn find_module_by_name(name: &str) -> Option<Module> {
         .cloned()
 }
 
+pub fn find_module_by_path(path: &Path) -> Option<Module> {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    MODULES
+        .lock()
+        .unwrap()
+        .iter()
+        .find(|m| m.path == canonical || m.path == path)
+        .cloned()
+}
+
 pub fn main_module() -> Option<Module> {
     MODULES.lock().unwrap().first().cloned()
+}
+
+pub fn increment_ref(base: usize) {
+    let mut mods = MODULES.lock().unwrap();
+    if let Some(m) = mods.iter_mut().find(|m| m.base == base) {
+        m.refcount = m.refcount.saturating_add(1);
+    }
+}
+
+#[allow(dead_code)]
+pub fn decrement_ref(base: usize) -> Option<u32> {
+    let mut mods = MODULES.lock().unwrap();
+    if let Some(m) = mods.iter_mut().find(|m| m.base == base) {
+        m.refcount = m.refcount.saturating_sub(1);
+        Some(m.refcount)
+    } else {
+        None
+    }
+}
+
+#[allow(dead_code)]
+pub fn remove_module(base: usize) -> Option<Module> {
+    let mut mods = MODULES.lock().unwrap();
+    if let Some(pos) = mods.iter().position(|m| m.base == base) {
+        if pos == 0 {
+            return None;
+        }
+        Some(mods.remove(pos))
+    } else {
+        None
+    }
 }
 
 fn round_up(v: usize, a: usize) -> usize {
@@ -141,6 +216,10 @@ unsafe fn map_at(hint: usize, size: usize, fixed: bool) -> Option<usize> {
 
 /// Charge un module et toutes ses dépendances. Renvoie l'index dans MODULES.
 pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
+    if let Some(existing) = find_module_by_path(path) {
+        increment_ref(existing.base);
+        return Ok(existing);
+    }
     let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
     let pe = PeImage::parse(&file).map_err(|e| format!("{} : {e}", path.display()))?;
     let size = round_up(pe.size_of_image as usize, PAGE);

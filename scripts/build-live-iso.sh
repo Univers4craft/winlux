@@ -75,12 +75,16 @@ cargo build --release -p winlux
 bash scripts/build-tests.sh
 
 cp "$root/target/release/winlux" "$stage/usr/bin/winlux"
+# Lecteurs réseau (FTP, SFTP, SMB, NFS, WebDAV, S3) : même binaire.
+ln -sf winlux "$stage/usr/bin/winlux-drives"
 cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
 cp "$root/scripts/winlux-update-progress.py" "$stage/usr/bin/winlux-update-progress"
 chmod 755 "$stage/usr/bin/winlux-update-progress"
 cp "$root/scripts/winlux-control.sh" "$stage/usr/bin/winlux-control"
 cp "$root/scripts/winlux-journal.sh" "$stage/usr/bin/winlux-journal"
 cp "$root/scripts/winlux-restore.sh" "$stage/usr/bin/winlux-restore"
+cp "$root/scripts/winlux-sysupdate.sh" "$stage/usr/bin/winlux-sysupdate"
+chmod 755 "$stage/usr/bin/winlux-sysupdate"
 cp "$root/scripts/winlux-network.sh" "$stage/usr/bin/winlux-network"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
@@ -96,7 +100,9 @@ cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
 cp "$root/scripts/winlux-browsers.sh" "$stage/usr/bin/winlux-browsers"
 chmod 755 "$stage/usr/bin/winlux-browsers"
 cp "$root/integration/winlux-open" "$stage/usr/bin/winlux-open"
-chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-journal" "$stage/usr/bin/winlux-restore" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script"
+cp "$root/scripts/winlux-hardware.sh" "$stage/usr/bin/winlux-hardware"
+cp "$root/scripts/winlux-firmware.sh" "$stage/usr/bin/winlux-firmware"
+chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-journal" "$stage/usr/bin/winlux-restore" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script" "$stage/usr/bin/winlux-hardware" "$stage/usr/bin/winlux-firmware"
 
 # Installateur et outils associés
 cp "$root/scripts/winlux-installer.py" "$stage/usr/bin/winlux-installer"
@@ -104,8 +110,30 @@ cp "$root/scripts/winlux-hw-detect.sh" "$stage/usr/bin/winlux-hw-detect"
 cp "$root/scripts/winlux-first-boot.sh" "$stage/usr/bin/winlux-first-boot"
 cp "$root/scripts/install.sh" "$stage/opt/winlux/scripts/install.sh"
 cp "$root/scripts/install-safety.sh" "$stage/opt/winlux/scripts/install-safety.sh"
+mkdir -p "$stage/usr/share/winlux"
+cp "$root/scripts/winlux-recovery.sh" "$stage/usr/share/winlux/winlux-recovery.sh"
+cp "$root/scripts/winlux_autoinstall.py" "$stage/usr/share/winlux/winlux_autoinstall.py"
+cp "$root/scripts/winlux-secureboot.sh" "$stage/usr/bin/winlux-secureboot"
+chmod 755 "$stage/usr/share/winlux/winlux-recovery.sh" "$stage/usr/bin/winlux-secureboot"
+# The installer copies the signed boot chain to the target ESP from these paths.
+if test "${WINLUX_SECUREBOOT:-0}" = 1; then
+    mkdir -p "$stage/usr/lib/shim" "$stage/usr/lib/grub/x86_64-efi-signed"
+    cp /usr/lib/shim/shimx64.efi.signed /usr/lib/shim/mmx64.efi "$stage/usr/lib/shim/"
+    cp /usr/lib/grub/x86_64-efi-signed/*.efi.signed "$stage/usr/lib/grub/x86_64-efi-signed/"
+fi
+mkdir -p "$stage/usr/share/winlux/autoinstall"
+cp "$root/integration/autoinstall/"*.yaml "$stage/usr/share/winlux/autoinstall/"
 chmod 755 "$stage/usr/bin/winlux-installer" "$stage/usr/bin/winlux-hw-detect" "$stage/usr/bin/winlux-first-boot" "$stage/opt/winlux/scripts/install.sh"
+mkdir -p "$stage/usr/lib/winlux/python"
+for tool in benchmark profiles migrate; do
+    cp "$root/scripts/winlux_$tool.py" "$stage/usr/lib/winlux/python/winlux_$tool.py"
+done
+for tool in benchmark:benchmark profile:profiles migrate:migrate; do
+    printf '#!/bin/sh\nexec /usr/bin/python3 /usr/lib/winlux/python/winlux_%s.py "$@"\n' "${tool#*:}" >"$stage/usr/bin/winlux-${tool%%:*}"
+    chmod 755 "$stage/usr/bin/winlux-${tool%%:*}"
+done
 cp "$root/integration/winlux-installer.desktop" "$stage/usr/share/applications/winlux-installer.desktop"
+cp "$root/integration/winlux-migrate.desktop" "$stage/usr/share/applications/winlux-migrate.desktop"
 mkdir -p "$stage/root/Bureau"
 cp "$root/integration/winlux-installer.desktop" "$stage/root/Bureau/winlux-installer.desktop"
 mkdir -p "$stage/usr/share/winlux"
@@ -322,6 +350,8 @@ fi
 # Curseur logiciel : il est dessiné dans l'image de l'écran, donc toujours
 # visible dans une VM, alors que le curseur matériel virtio-gpu dépend de
 # l'affichage de l'hôte (QEMU GTK, SPICE, VNC…).
+# Curseur logiciel : configuration de base pour VM. Sur matériel réel,
+# winlux-hardware remplace ce fichier par une configuration GPU appropriée.
 cat >"$stage/usr/share/X11/xorg.conf.d/20-winlux-display.conf" <<'XCONF'
 Section "Device"
     Identifier "Winlux display"
@@ -432,10 +462,16 @@ done
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid-generic.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/serio-raw.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/psmouse.ko 2>/dev/null || true
-for driver in virtio_net e1000 e1000e snd_hda_intel snd_intel8x0; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
+for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
+/usr/bin/winlux-hardware >/dev/null 2>&1 || true
+/usr/bin/winlux-firmware >/dev/null 2>&1 || true
+# Profil d'utilisation choisi à l'installation (sysctl, gouverneur CPU, E/S, GPU).
+if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
+    /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
+fi
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
@@ -479,6 +515,24 @@ echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 # Démarrer les services systemd activés par les paquets APT.
 if test -x /usr/bin/systemctl; then /usr/bin/systemctl --boot-start; fi
 if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
+# Services maison : pare-feu (nftables, journal des blocages, alertes) et
+# planificateur de tâches (déclencheurs horaires, démarrage, événements).
+/usr/bin/winlux --firewall daemon >>/run/winlux/firewall.log 2>&1 &
+/usr/bin/winlux --tasks daemon >>/run/winlux/tasks.log 2>&1 &
+# Paquets demandés par un fichier de réponse : installés une fois, dès que le réseau répond.
+if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
+    /bin/busybox mkdir -p /var/log
+    (
+        for attempt in $(/bin/busybox seq 1 60); do
+            /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+            /bin/busybox sleep 5
+        done
+        packages=$(/bin/busybox grep -E '^[a-z0-9][a-z0-9+.-]+$' /etc/winlux/first-boot-packages | /bin/busybox tr '\n' ' ')
+        if /usr/bin/apt-get update && DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y $packages; then
+            /bin/busybox mv /etc/winlux/first-boot-packages /etc/winlux/first-boot-packages.done
+        fi
+    ) >>/var/log/winlux-first-boot-packages.log 2>&1 &
+fi
 if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     result=0
     /usr/bin/python3 /opt/winlux/scripts/test-native-session-guest.py || result=$?
@@ -536,6 +590,7 @@ fi
 (
     while :; do
         /usr/bin/winlux-update --auto-run >>/run/winlux/auto-update.log 2>&1 || true
+        /usr/bin/winlux-sysupdate --tick >>/run/winlux/sysupdate-auto.log 2>&1 || true
         /bin/busybox sleep 1800
     done
 ) &
@@ -570,6 +625,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     fi
     # Bureau à distance : relancé au démarrage s'il était activé.
     DISPLAY=:0 /usr/bin/winlux-remote-config ensure >/dev/null 2>&1 || true
+    # Tâches planifiées « à l'ouverture de session ».
+    /usr/bin/winlux --tasks fire logon >>/run/winlux/tasks.log 2>&1 &
     (
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
             DISPLAY=:0 /usr/bin/winlux-control status 2>/dev/null || true
@@ -591,7 +648,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     ) &
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
         keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
-        case "$keyboard_layout" in fr|us|de) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
+        case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
         tapping=$(/bin/busybox sed -n 's/^TAP_TO_CLICK=//p' /etc/winlux/input.conf 2>/dev/null)
         case "$tapping" in 0|1)
             for device in $(DISPLAY=:0 /usr/bin/xinput --list --id-only 2>/dev/null); do
@@ -697,8 +754,8 @@ cp -L "$kernel" "$iso_root/boot/vmlinuz"
 sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
-set timeout=2
-set timeout_style=hidden
+set timeout=5
+set timeout_style=menu
 if serial --unit=0 --speed=115200; then
     terminal_input serial console
     terminal_output serial console
@@ -731,6 +788,25 @@ menuentry "Winlux Desktop" {
 menuentry "Installer Winlux sur le disque" --hotkey=i {
     winlux_live
 }
+menuentry "Winlux Recovery (secours)" --hotkey=r {
+    if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then
+        if test -f "($winlux_root)/boot/winlux-split-root"; then
+            linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1
+            initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
+        else
+            linux /boot/vmlinuz root=LABEL=WINLUX_ROOT rw rootfstype=ext4 console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1
+            initrd /boot/winlux-initramfs.cpio.gz
+        fi
+    else
+        echo "Aucune installation Winlux (WINLUX_ROOT) trouvée sur les disques."
+        echo "Le mode récupération répare un système installé."
+        sleep 6
+    fi
+}
+menuentry "Vérifier l'intégrité du média puis démarrer" --hotkey=v {
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=3 vt.global_cursor_default=0 winlux.check-iso=1 winlux.interactive=1
+    initrd /boot/winlux-initramfs.cpio.gz
+}
 menuentry "Winlux persistent network diagnostic" --hotkey=s {
     search --no-floppy --label WINLUX_ROOT --set=winlux_root
     if test -f "($winlux_root)/boot/winlux-split-root"; then
@@ -743,8 +819,27 @@ menuentry "Winlux persistent network diagnostic" --hotkey=s {
 GRUB
 grub-script-check "$iso_root/boot/grub/grub.cfg"
 
+# Answer file for unattended installs, if supplied: the installer finds it at the medium root.
+if test -n "${WINLUX_AUTOINSTALL:-}"; then
+    case "$WINLUX_AUTOINSTALL" in *.json) answer=winlux-autoinstall.json ;; *) answer=winlux-autoinstall.yaml ;; esac
+    cp "$WINLUX_AUTOINSTALL" "$iso_root/$answer"
+fi
+
+secureboot=${WINLUX_SECUREBOOT:-0}
+if test "$secureboot" = 1; then
+    sh "$root/scripts/winlux-secureboot.sh" prepare-iso "$iso_root" "Winlux $(cat "$stage/usr/share/winlux/version")"
+fi
+
+# Per-file manifest checked at boot by the "Vérifier l'intégrité" entry.
+(cd "$iso_root" && find . -type f ! -name winlux.sha256 ! -path './boot/grub/efi.img' -print | sed 's|^\./||' | LC_ALL=C sort | xargs -d '\n' sha256sum) >"$work/winlux.sha256"
+mv "$work/winlux.sha256" "$iso_root/winlux.sha256"
+
 mkdir -p "$(dirname -- "$out")"
-grub-mkrescue -o "$out" "$iso_root"
+if test "$secureboot" = 1; then
+    sh "$root/scripts/winlux-secureboot.sh" make-iso "$iso_root" "$out"
+else
+    grub-mkrescue -o "$out" "$iso_root"
+fi
 sha256sum "$out" >"$out.sha256"
 echo "ISO live créée : $out"
 echo "Somme SHA-256 : $out.sha256"
