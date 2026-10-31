@@ -2246,12 +2246,23 @@ pub fn kill_timer(hwnd: usize, id: usize) -> bool {
 
 // ---------- Curseur ----------
 
-static CURSOR_HANDLE: AtomicUsize = AtomicUsize::new(0x0001_0000);
+pub static CURSOR_HANDLE: AtomicUsize = AtomicUsize::new(0x0001_0001);
 static SHOW_CURSOR_COUNT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
-pub fn load_cursor(_instance: usize, _name: usize) -> usize {
-    // Renvoie un handle de curseur factice
-    0x0001_0000
+pub fn load_cursor(_instance: usize, name: usize) -> usize {
+    match name {
+        32512 => 0x0001_0001, // IDC_ARROW
+        32513 => 0x0001_0002, // IDC_IBEAM
+        32514 => 0x0001_0003, // IDC_WAIT
+        32515 => 0x0001_0004, // IDC_CROSS
+        32642 => 0x0001_0005, // IDC_SIZENWSE
+        32643 => 0x0001_0006, // IDC_SIZENESW
+        32644 => 0x0001_0007, // IDC_SIZEWE
+        32645 => 0x0001_0008, // IDC_SIZENS
+        32646 => 0x0001_0009, // IDC_SIZEALL
+        32649 => 0x0001_000A, // IDC_HAND
+        _ => 0x0001_0001,
+    }
 }
 
 pub fn set_cursor(cursor: usize) -> usize {

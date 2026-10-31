@@ -277,6 +277,44 @@ pub static mut TASKBAR_SLOT: [Rect; APP_COUNT] = [rect(0, 0, 0, 0); APP_COUNT];
 pub static mut MOUSE_X: i32 = -1;
 pub static mut MOUSE_Y: i32 = -1;
 
+static mut CUR_ARROW: Handle = core::ptr::null_mut();
+static mut CUR_SIZEWE: Handle = core::ptr::null_mut();
+static mut CUR_SIZENS: Handle = core::ptr::null_mut();
+static mut CUR_SIZENWSE: Handle = core::ptr::null_mut();
+static mut CUR_SIZENESW: Handle = core::ptr::null_mut();
+static mut CUR_HAND: Handle = core::ptr::null_mut();
+static mut CUR_IBEAM: Handle = core::ptr::null_mut();
+static mut CURSORS_LOADED: bool = false;
+
+unsafe fn load_cursors() {
+    if CURSORS_LOADED {
+        return;
+    }
+    CUR_ARROW = LoadCursorW(core::ptr::null_mut(), IDC_ARROW);
+    CUR_SIZEWE = LoadCursorW(core::ptr::null_mut(), IDC_SIZEWE);
+    CUR_SIZENS = LoadCursorW(core::ptr::null_mut(), IDC_SIZENS);
+    CUR_SIZENWSE = LoadCursorW(core::ptr::null_mut(), IDC_SIZENWSE);
+    CUR_SIZENESW = LoadCursorW(core::ptr::null_mut(), IDC_SIZENESW);
+    CUR_HAND = LoadCursorW(core::ptr::null_mut(), IDC_HAND);
+    CUR_IBEAM = LoadCursorW(core::ptr::null_mut(), IDC_IBEAM);
+    CURSORS_LOADED = true;
+}
+
+unsafe fn resize_cursor(left: bool, top: bool, right: bool, bottom: bool) -> Handle {
+    match (left || right, top || bottom) {
+        (true, false) => CUR_SIZEWE,
+        (false, true) => CUR_SIZENS,
+        (true, true) => {
+            if (left && top) || (right && bottom) {
+                CUR_SIZENWSE
+            } else {
+                CUR_SIZENESW
+            }
+        }
+        _ => CUR_ARROW,
+    }
+}
+
 pub fn title_of(app: usize) -> &'static [u8] {
     match app {
         APP_EXPLORER => b"Explorer",
@@ -1086,11 +1124,12 @@ pub unsafe fn on_button_down(x: i32, y: i32, repaint: &mut bool) -> bool {
 pub unsafe fn on_mouse_move(x: i32, y: i32, repaint: &mut bool) -> bool {
     MOUSE_X = x;
     MOUSE_Y = y;
+    load_cursors();
     match DRAG {
         Drag::Move => {
+            SetCursor(CUR_ARROW);
             let w = &mut WINS[DRAG_APP];
             if w.maximized {
-                // Sortir du plein écran en tirant la barre de titre.
                 if (y - DRAG_Y).abs() < 6 && (x - DRAG_X).abs() < 6 {
                     return true;
                 }
@@ -1123,6 +1162,7 @@ pub unsafe fn on_mouse_move(x: i32, y: i32, repaint: &mut bool) -> bool {
             right,
             bottom,
         } => {
+            SetCursor(resize_cursor(left, top, right, bottom));
             let w = &mut WINS[DRAG_APP];
             let (dx, dy) = (x - DRAG_X, y - DRAG_Y);
             let mut r = DRAG_RECT;
@@ -1144,15 +1184,28 @@ pub unsafe fn on_mouse_move(x: i32, y: i32, repaint: &mut bool) -> bool {
         }
         Drag::None => {
             let mut hover = -1;
+            let mut cursor = CUR_ARROW;
             if let Some(app) = top_at(x, y) {
+                let r = WINS[app].rect;
+                if !WINS[app].maximized {
+                    let on_left = x < r.left + 4;
+                    let on_right = x >= r.right - 4;
+                    let on_top = y < r.top + 4;
+                    let on_bottom = y >= r.bottom - 4;
+                    if on_left || on_right || on_top || on_bottom {
+                        cursor = resize_cursor(on_left, on_top, on_right, on_bottom);
+                    }
+                }
                 if app == ACTIVE {
                     for i in 0..3 {
-                        if inside(&caption_rect(&WINS[app].rect, i), x, y) {
+                        if inside(&caption_rect(&r, i), x, y) {
                             hover = i;
+                            cursor = CUR_HAND;
                         }
                     }
                 }
             }
+            SetCursor(cursor);
             if hover != HOVER_CAPTION {
                 HOVER_CAPTION = hover;
                 *repaint = true;

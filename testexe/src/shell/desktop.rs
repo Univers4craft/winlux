@@ -1476,10 +1476,11 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             let (name, _exec, cat) = unsafe { ALL_APPS[i] };
             let matches_search = unsafe {
                 START_SEARCH_LEN == 0
-                    || name[..name.len().min(START_SEARCH_LEN)]
-                        .iter()
-                        .zip(START_SEARCH[..START_SEARCH_LEN].iter())
-                        .any(|(&a, &b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+                    || name.len() >= START_SEARCH_LEN && name.windows(START_SEARCH_LEN).any(|w| {
+                        w.iter()
+                            .zip(START_SEARCH[..START_SEARCH_LEN].iter())
+                            .all(|(&a, &b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
+                    })
             };
             if (START_CATEGORY == 0 || cat == START_CATEGORY) && matches_search {
                 let app_y = apps_y + 40 + (displayed as i32) * 44;

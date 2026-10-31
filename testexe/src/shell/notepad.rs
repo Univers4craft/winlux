@@ -372,8 +372,38 @@ unsafe fn draw_char(g: &mut Gfx, c: u8, x: i32, y: i32) {
     }
 }
 
-pub unsafe fn mouse(_ev: Mouse, _x: i32, _y: i32, _f: &Frame) -> bool {
-    true
+pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
+    let r = f.client;
+    let ey = r.top + 52;
+    let ex = r.left + 48;
+    match ev {
+        Mouse::Down => {
+            if y >= ey && y < r.bottom - 24 && x >= ex {
+                let line_idx = ((y - ey + DOC.scroll_y) / FONT_H) as usize;
+                let col = ((x - ex) / FONT_W).max(0) as usize;
+                if line_idx < DOC.line_count {
+                    let start = DOC.lines[line_idx];
+                    let end = if line_idx + 1 < DOC.line_count {
+                        let e = DOC.lines[line_idx + 1];
+                        if e > 0 && DOC.text[e - 1] == b'\n' { e - 1 } else { e }
+                    } else {
+                        DOC.len
+                    };
+                    let line_len = end - start;
+                    DOC.cursor = start + col.min(line_len);
+                    return true;
+                }
+            }
+            false
+        }
+        Mouse::Wheel(delta) => {
+            let new_scroll = (DOC.scroll_y - delta * FONT_H).max(0);
+            let max_scroll = ((DOC.line_count as i32) * FONT_H - (r.bottom - 24 - ey)).max(0);
+            DOC.scroll_y = new_scroll.min(max_scroll);
+            true
+        }
+        _ => false,
+    }
 }
 
 pub unsafe fn key(vk: u32, ch: u16) -> bool {

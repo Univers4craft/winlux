@@ -1199,7 +1199,103 @@ pub unsafe fn mouse(ev: Mouse, mx: i32, my: i32, f: &Frame) -> bool {
 }
 
 pub unsafe fn key(vk: u32, _ch: u16) -> bool {
-    false
+    match vk {
+        0x26 => {
+            // VK_UP
+            if TAB == 0 || TAB == 5 {
+                if SELECTED_ROW > 0 {
+                    SELECTED_ROW -= 1;
+                    if SELECTED_ROW < SCROLL_Y {
+                        SCROLL_Y = SELECTED_ROW;
+                    }
+                } else if PROC_COUNT > 0 {
+                    SELECTED_ROW = 0;
+                }
+                return true;
+            }
+            false
+        }
+        0x28 => {
+            // VK_DOWN
+            if TAB == 0 || TAB == 5 {
+                if SELECTED_ROW < 0 {
+                    SELECTED_ROW = 0;
+                } else if (SELECTED_ROW as usize) < PROC_COUNT.saturating_sub(1) {
+                    SELECTED_ROW += 1;
+                }
+                let visible = 5i32;
+                if SELECTED_ROW >= SCROLL_Y + visible {
+                    SCROLL_Y = SELECTED_ROW - visible + 1;
+                }
+                return true;
+            }
+            false
+        }
+        0x24 => {
+            // VK_HOME
+            if TAB == 0 || TAB == 5 {
+                SELECTED_ROW = 0;
+                SCROLL_Y = 0;
+                return true;
+            }
+            false
+        }
+        0x23 => {
+            // VK_END
+            if TAB == 0 || TAB == 5 {
+                if PROC_COUNT > 0 {
+                    SELECTED_ROW = (PROC_COUNT - 1) as i32;
+                    SCROLL_Y = PROC_COUNT.saturating_sub(5) as i32;
+                }
+                return true;
+            }
+            false
+        }
+        0x2E => {
+            // VK_DELETE → tuer le processus sélectionné
+            if (TAB == 0 || TAB == 5) && SELECTED_ROW >= 0 && (SELECTED_ROW as usize) < PROC_COUNT {
+                let pid = PROCS[SELECTED_ROW as usize].pid;
+                if pid > 1 {
+                    let mut path = [0u8; 32];
+                    let prefix = b"/proc/";
+                    let mut pos = 0;
+                    for &c in prefix {
+                        path[pos] = c;
+                        pos += 1;
+                    }
+                    let mut digits = [0u8; 10];
+                    let mut dlen = 0;
+                    let mut p = pid;
+                    loop {
+                        digits[dlen] = b'0' + (p % 10) as u8;
+                        dlen += 1;
+                        p /= 10;
+                        if p == 0 { break; }
+                    }
+                    for i in (0..dlen).rev() {
+                        path[pos] = digits[i];
+                        pos += 1;
+                    }
+                    path[pos] = 0;
+                    // Signal SIGKILL via /proc/pid - placeholder: the runtime
+                    // does not expose kill() yet; the button click already does
+                    // the same thing (placeholder too).
+                }
+                SELECTED_ROW = -1;
+                return true;
+            }
+            false
+        }
+        0x09 => {
+            // VK_TAB → cycle through tabs
+            let next = (TAB + 1) % 7;
+            TAB = next;
+            SCROLL_Y = 0;
+            SELECTED_ROW = -1;
+            true
+        }
+        _ => false,
+    }
 }
 
 pub unsafe fn tick(f: &Frame) -> bool {

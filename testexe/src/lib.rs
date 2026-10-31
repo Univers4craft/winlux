@@ -400,6 +400,15 @@ pub const SWP_NOMOVE: u32 = 0x0002;
 pub const SW_SHOW: i32 = 5;
 pub const SW_SHOWNORMAL: i32 = 1;
 
+pub const IDC_ARROW: usize = 32512;
+pub const IDC_IBEAM: usize = 32513;
+pub const IDC_SIZENWSE: usize = 32642;
+pub const IDC_SIZENESW: usize = 32643;
+pub const IDC_SIZEWE: usize = 32644;
+pub const IDC_SIZENS: usize = 32645;
+pub const IDC_SIZEALL: usize = 32646;
+pub const IDC_HAND: usize = 32649;
+
 pub const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
 
 #[link(name = "kernel32", kind = "raw-dylib")]
@@ -811,6 +820,8 @@ extern "C" {
     pub fn GetSystemMetrics(index: i32) -> i32;
     pub fn GetSysColor(index: i32) -> u32;
     pub fn GetSysColorBrush(index: i32) -> Handle;
+    pub fn SetCursor(cursor: Handle) -> Handle;
+    pub fn LoadCursorW(instance: Handle, name: usize) -> Handle;
 }
 
 #[link(name = "gdi32", kind = "raw-dylib")]
