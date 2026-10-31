@@ -4,11 +4,14 @@
 
 ## Résumé
 
-**Paint.NET ne fonctionne pas encore.** Avec la PR « lanceur .NET autonome »,
-son lanceur natif (`paintdotnet.exe`) traverse `hostfxr.dll` et
-`hostpolicy.dll`, puis charge le runtime que l'appli embarque
-(`coreclr.dll`). L'initialisation de coreclr s'arrête ensuite sur une
-exception C++ MSVC, car Winlux ne sait pas encore la dérouler.
+**Paint.NET ne fonctionne pas encore.** Son lanceur natif
+(`paintdotnet.exe`) traverse `hostfxr.dll` et `hostpolicy.dll`, puis démarre
+le runtime que l'appli embarque (`coreclr.dll`). Depuis la PR 2, coreclr
+s'initialise, charge `System.Private.CoreLib.dll`, exécute du code managé et
+charge l'assembly principale `paintdotnet.dll`. Il s'arrête ensuite : une
+exception C++ interne à coreclr est relancée en boucle, coreclr affiche
+« Stack overflow. » puis lève une exception managée non gérée (HRESULT
+0x8007007E, module introuvable).
 
 ## Obtenir l'appli
 
@@ -76,17 +79,42 @@ Fonctions ajoutées pour y arriver :
 - `oleaut32` : les ordinaux publics (BSTR, VARIANT, SAFEARRAY).
 - `shlwapi` : `PathRemoveFileSpecW` et `PathRemoveExtensionW`.
 
+Ajouté par la PR 2 (démarrage de coreclr) :
+
+- La répartition SEH x64 (`runtime/src/dlls/seh.rs`) : `RaiseException`,
+  `RtlCaptureContext`, `RtlLookupFunctionEntry`, `RtlVirtualUnwind`,
+  `RtlUnwindEx` avec consolidation, `RtlRestoreContext`, gestionnaires
+  vectorisés et tables de fonctions dynamiques
+  (`RtlAddFunctionTable`, `RtlInstallFunctionTableCallback`) pour le code du
+  JIT. Les exceptions C++ MSVC de coreclr remontent jusqu'à leur `catch`.
+- `GlobalMemoryStatusEx` (lu dans `/proc/meminfo`, nécessaire au tas du
+  GC), `GetProcessGroupAffinity`, `FlushProcessWriteBuffers`,
+  `WaitForMultipleObjectsEx`, `OpenEventW`, `OpenThreadToken`.
+- `CreateThread` accepte `STACK_SIZE_PARAM_IS_A_RESERVATION` : sans lui, le
+  thread du finaliseur ne démarrait pas et coreclr attendait sans fin.
+- `VirtualQuery` décrit aussi la pile du thread et les projections Linux :
+  coreclr y lit les bornes de sa pile.
+- Les DLL relogées sont placées sur 64 Kio, comme sous Windows : coreclr
+  refusait sinon l'en-tête de `System.Private.CoreLib.dll`.
+- Le déroulage lit correctement `UWOP_SAVE_XMM128` (code 8) ; il le prenait
+  pour `UWOP_PUSH_MACHFRAME` et plantait dans les stubs de coreclr.
+- `VerSetConditionMask` et `VerifyVersionInfoW` (coreclr refusait « Windows
+  7 minimum »), `InitializeContext2`, `CopyContext`, `LocateXStateFeature`,
+  `IsWow64Process2`, `SetThreadDescription`, `GetTempPath2W`,
+  `GetLocaleInfoEx`, `GetUserDefaultLocaleName`, `LocaleNameToLCID`,
+  `GetUserPreferredUILanguages`, `EventSetInformation`,
+  `RtlDllShutdownInProgress`.
+- Diagnostic : `WINLUX_APITRACE=1` journalise chaque appel d'API intégrée
+  avec son appelant, et `WINLUX_LOG=trace` chaque exception levée.
+
 ## Ce qui casse, dans l'ordre où on le rencontre
 
-1. **coreclr : exceptions C++ et SEH.** `GetProcessGroupAffinity` manque
-   d'abord. Quand on l'ignore, coreclr lève une exception C++ (0xE06D7363)
-   que Winlux ne sait pas propager : il manque la répartition SEH x64 vers
-   `__CxxFrameHandler4`. Il manque aussi 136 imports de coreclr, dont
-   `AddVectoredExceptionHandler`, `RtlAddFunctionTable` (code du JIT),
-   `RtlRestoreContext`, `SuspendThread`/`GetThreadContext`/`SetThreadContext`
-   (suspension des threads par le GC), `FlushProcessWriteBuffers`, les
-   minuteurs de pool de threads et `CoGetObjectContext`. Il en manque 43
-   dans clrjit, surtout des fonctions mathématiques.
+1. **coreclr, après le chargement de `paintdotnet.dll`** : une exception C++
+   interne est relancée en boucle jusqu'au débordement de pile. Restent
+   aussi à faire `QueueUserAPC2`, `SuspendThread`/`GetThreadContext`/
+   `SetThreadContext` (suspension des threads par le GC), la conversion des
+   signaux matériels (SIGSEGV) en exceptions SEH pour les
+   `NullReferenceException`, et les imports de clrjit encore absents.
 2. **BCL** : `System.Private.CoreLib` appelle directement 147 fonctions de
    kernel32, 34 de `System.Globalization.Native` (ICU) et quelques-unes de
    `ntdll`, `advapi32` et `ole32`.
@@ -101,11 +129,11 @@ Fonctions ajoutées pour y arriver :
 
 ## Ordre des PRs
 
-1. Lanceur .NET autonome jusqu'au chargement de coreclr *(cette PR)*.
+1. Lanceur .NET autonome jusqu'au chargement de coreclr (#133).
 2. coreclr : répartition SEH x64 et exceptions C++ MSVC, VEH, tables de
-   fonctions dynamiques, suspension de threads, et imports manquants de
-   coreclr et clrjit. Objectif : faire tourner un « Hello world » .NET 9
-   autonome.
+   fonctions dynamiques et imports de démarrage *(cette PR : coreclr exécute
+   du code managé)*. Suite : suspension de threads, exceptions matérielles,
+   imports de clrjit, jusqu'à un « Hello world » .NET 9 autonome.
 3. BCL : imports directs de CoreLib et globalisation.
 4. WIC : décodeurs et encodeurs branchés sur les décodeurs maison.
 5. Direct2D et DirectWrite.

@@ -78,6 +78,79 @@ fn is_current_process(h: usize) -> bool {
 
 // --- Affinité ----------------------------------------------------------------
 
+/// GetProcessGroupAffinity : Winlux présente tous les processeurs dans un
+/// seul groupe (le groupe 0), comme un PC de 64 cœurs ou moins.
+pub unsafe extern "win64" fn get_process_group_affinity(
+    _h: usize,
+    count: *mut u16,
+    groups: *mut u16,
+) -> i32 {
+    if count.is_null() {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if *count < 1 || groups.is_null() {
+        *count = 1;
+        set_last_error(122); // ERROR_INSUFFICIENT_BUFFER
+        return 0;
+    }
+    *groups = 0;
+    *count = 1;
+    1
+}
+
+/// Les processus Winlux ne sont jamais placés dans un objet tâche (job).
+pub unsafe extern "win64" fn is_process_in_job(
+    _process: usize,
+    _job: usize,
+    result: *mut i32,
+) -> i32 {
+    if result.is_null() {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    *result = 0;
+    1
+}
+
+/// QueryInformationJobObject : sans objet tâche, aucune limite ne
+/// s'applique ; la structure demandée est rendue à zéro (aucun drapeau de
+/// limite, aucun plafond de CPU).
+pub unsafe extern "win64" fn query_information_job_object(
+    _job: usize,
+    _class: u32,
+    info: *mut u8,
+    len: u32,
+    ret_len: *mut u32,
+) -> i32 {
+    if info.is_null() && len != 0 {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    if !info.is_null() {
+        std::ptr::write_bytes(info, 0, len as usize);
+    }
+    if !ret_len.is_null() {
+        *ret_len = len;
+    }
+    1
+}
+
+thread_local! {
+    static STACK_GUARANTEE: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+/// SetThreadStackGuarantee : mémorise la réserve demandée pour le
+/// traitement d'un débordement de pile et renvoie la précédente.
+pub unsafe extern "win64" fn set_thread_stack_guarantee(size: *mut u32) -> i32 {
+    if size.is_null() {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    }
+    let previous = STACK_GUARANTEE.with(|g| g.replace((*size).max(g.get())));
+    *size = previous;
+    1
+}
+
 pub unsafe extern "win64" fn get_process_affinity_mask(
     h: usize,
     process: *mut u64,
@@ -766,6 +839,10 @@ pub unsafe extern "win64" fn get_numa_available_memory_node(node: u8, out: *mut 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "GetProcessAffinityMask" => fn get_process_affinity_mask,
+        "GetProcessGroupAffinity" => fn get_process_group_affinity,
+        "IsProcessInJob" => fn is_process_in_job,
+        "QueryInformationJobObject" => fn query_information_job_object,
+        "SetThreadStackGuarantee" => fn set_thread_stack_guarantee,
         "SetProcessAffinityMask" => fn set_process_affinity_mask,
         "SetThreadAffinityMask" => fn set_thread_affinity_mask,
         "GetThreadGroupAffinity" => fn get_thread_group_affinity,

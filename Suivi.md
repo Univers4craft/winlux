@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **203**
+- Réalisé : **204**
 - À faire ou en cours : **44**
-- Total : **247**
-- Progression : **82.2%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126, #127, #111, #119 et #133, issues #10 à #98)
+- Total : **248**
+- Progression : **82.3%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126, #127, #111, #119, #133 et PR 2 Paint.NET, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -97,6 +97,7 @@
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] coreclr embarqué démarré : répartition SEH x64 (`seh.rs` : RtlVirtualUnwind, RtlUnwindEx, RtlRestoreContext, VEH, tables de fonctions dynamiques), exceptions C++ MSVC de coreclr, tas du GC, thread du finaliseur, System.Private.CoreLib puis `paintdotnet.dll` chargées et code managé exécuté (images relogées sur 64 Kio, VirtualQuery des piles, VerifyVersionInfo, InitializeContext2, locales nommées) (`docs/PAINTNET.md`).
 - [x] Lanceur .NET autonome : un apphost qui embarque `coreclr.dll` (Paint.NET 5.1.12) traverse hostfxr et hostpolicy jusqu'au chargement de coreclr ; CRT universelle `__stdio_common_*`, chaînes `*_s`, ordinaux oleaut32, `ungetc` (`docs/PAINTNET.md`).
 
 - [x] Gestionnaire de tâches style Windows 11 (#39).
