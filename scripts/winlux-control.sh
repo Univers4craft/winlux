@@ -132,6 +132,8 @@ status() {
         printf 'cpu_threads=%s\n' "$(cat "$root/run/winlux/hw/cpu-threads" 2>/dev/null || echo 1)"
         printf 'wifi=%s\n' "$(cat "$root/run/winlux/hw/has-wifi" 2>/dev/null || echo 0)"
         printf 'touchpad=%s\n' "$(cat "$root/run/winlux/hw/has-touchpad" 2>/dev/null || echo 0)"
+        # Réglages réellement acceptés par le pavé (rien sans pavé tactile).
+        if have winlux-touchpad; then winlux-touchpad status 2>/dev/null || true; fi
         printf 'webcam=%s\n' "$(cat "$root/run/winlux/hw/has-webcam" 2>/dev/null || echo 0)"
         welcome=$(pref WELCOME_DONE); printf 'welcome_done=%s\n' "${welcome:-0}"
         welcome=$(pref WELCOME_STEP); printf 'welcome_step=%s\n' "${welcome:-0}"
@@ -286,6 +288,7 @@ perform() {
                 printf '%s\n' "$tz" > /etc/timezone || return
             fi
             save "$config/locale.conf" TIMEZONE "$tz" ;;
+        touchpad-set) winlux-touchpad set "${2:-}" "${3:-}" ;;
         tap-on|tap-off)
             tap=0; test "$action" != tap-on || tap=1
             apply_tap "$tap" || return

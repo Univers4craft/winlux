@@ -26,6 +26,9 @@ if test -r "$input_conf"; then
     esac
 fi
 
+# Pavé tactile : réglages mémorisés (deux doigts, toucher-clic, vitesse).
+winlux-touchpad apply 2>/dev/null || true
+
 locale_conf=/etc/winlux/locale.conf
 winlux_lang=fr
 if test -r "$locale_conf"; then

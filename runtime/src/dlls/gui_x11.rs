@@ -534,6 +534,10 @@ pub struct X11Backend {
     overlay: crate::overlay::Overlay,
     /// Taille et couleur du pointeur (réglages d'accessibilité appliqués).
     pointer_style: (u8, u8),
+    /// Gestes du pavé tactile (XInput 2.4) disponibles sur ce serveur.
+    gestures: bool,
+    /// Échelle du pincement au dernier cran de zoom envoyé.
+    pinch_last: f32,
 }
 
 impl X11Backend {
@@ -553,6 +557,14 @@ impl X11Backend {
             .and_then(|value| value.parse::<f32>().ok())
             .filter(|value| value.is_finite() && *value > 0.0);
         let scale = dpi_scale(dpi_x, requested_scale);
+        // Pincer pour zoomer : XInput 2.4 (Xorg 21.1+, pilote libinput).
+        let gestures = {
+            use x11rb::protocol::xinput::ConnectionExt as _;
+            conn.xinput_xi_query_version(2, 4)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .is_some_and(|v| (v.major_version, v.minor_version) >= (2, 4))
+        };
         let wm_protocols = conn
             .intern_atom(false, b"WM_PROTOCOLS")
             .ok()?
@@ -590,6 +602,8 @@ impl X11Backend {
             x11_cursors: HashMap::new(),
             current_cursor: 0x0001_0001,
             pointer_style: (1, 0),
+            gestures,
+            pinch_last: 1.0,
         })
     }
 
@@ -1958,6 +1972,32 @@ impl X11Backend {
                     lparam,
                 })
             }
+            Event::XinputGesturePinchBegin(_) => {
+                crate::power::note_activity();
+                self.pinch_last = 1.0;
+                None
+            }
+            Event::XinputGesturePinchUpdate(e) => {
+                crate::power::note_activity();
+                let hwnd = *self.by_xwin.get(&e.event)?;
+                let scale = e.scale as f32 / 65536.0;
+                let (delta, last) = pinch_step(self.pinch_last, scale)?;
+                self.pinch_last = last;
+                // Comme un pavé tactile de précision sous Windows : le
+                // pincement devient Ctrl + molette (zoom des applications).
+                let lparam =
+                    pack_i16_pair(self.logical(e.root_x >> 16), self.logical(e.root_y >> 16));
+                Some(PendingEvent {
+                    hwnd,
+                    message: gui::WM_MOUSEWHEEL,
+                    wparam: ((delta as u16 as usize) << 16) | 0x0008,
+                    lparam,
+                })
+            }
+            Event::XinputGesturePinchEnd(_) => {
+                self.pinch_last = 1.0;
+                None
+            }
             Event::ButtonRelease(e) => {
                 gui::raw_mouse_button(e.detail, false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
@@ -2176,6 +2216,21 @@ fn button_wparam(detail: u8) -> usize {
         2 => 0x0010, // MK_MBUTTON
         3 => 0x0002, // MK_RBUTTON
         _ => 0,
+    }
+}
+
+/// Pincement : un cran de zoom (±120) chaque fois que l'échelle a varié
+/// de 10 % depuis le dernier cran. Renvoie (delta, nouvelle référence).
+fn pinch_step(last: f32, scale: f32) -> Option<(i16, f32)> {
+    const STEP: f32 = 1.1;
+    if !scale.is_finite() || scale <= 0.0 {
+        None
+    } else if scale >= last * STEP {
+        Some((120, last * STEP))
+    } else if scale <= last / STEP {
+        Some((-120, last / STEP))
+    } else {
+        None
     }
 }
 
@@ -2399,6 +2454,20 @@ fn key_lparam(keycode: u8, up: bool, extended: bool) -> isize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinch_becomes_ctrl_wheel_steps() {
+        // Écarter les doigts : un cran de zoom tous les 10 %.
+        assert_eq!(pinch_step(1.0, 1.05), None);
+        let (d, last) = pinch_step(1.0, 1.12).unwrap();
+        assert_eq!(d, 120);
+        assert!((last - 1.1).abs() < 1e-5);
+        assert_eq!(pinch_step(last, 1.15), None);
+        // Rapprocher : cran négatif.
+        assert_eq!(pinch_step(1.0, 0.85).map(|v| v.0), Some(-120));
+        assert_eq!(pinch_step(1.0, f32::NAN), None);
+        assert_eq!(pinch_step(1.0, 0.0), None);
+    }
 
     #[test]
     fn loupe_agrandissement_lisse_ou_net() {
@@ -2976,6 +3045,20 @@ impl gui::GuiBackend for X11Backend {
             .is_err()
         {
             return;
+        }
+
+        if self.gestures {
+            use x11rb::protocol::xinput::{ConnectionExt as _, EventMask, XIEventMask};
+            // XI_GesturePinchBegin/Update/End (27..29), périphérique maître
+            // « tous » (1) : absents des constantes de xcb-proto 1.15.
+            let mask = XIEventMask::from((1u32 << 27) | (1 << 28) | (1 << 29));
+            let _ = self.conn.xinput_xi_select_events(
+                win,
+                &[EventMask {
+                    deviceid: 1,
+                    mask: vec![mask],
+                }],
+            );
         }
 
         // Demande la fermeture propre via WM_DELETE_WINDOW.

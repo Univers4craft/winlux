@@ -16,6 +16,8 @@ mod graphics;
 mod about;
 #[path = "settings_display.rs"]
 mod screens;
+#[path = "settings_input.rs"]
+mod input;
 
 pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
@@ -717,10 +719,6 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
     let disabled = updating() && (PAGE == 0 || PAGE == 7 && id != 4)
         || PAGE == PAGE_SYSUPDATE && sysupdate_busy() && id >= 18;
     let selected = match (PAGE, id) {
-        (4, 0) => value(b"layout") == b"fr",
-        (4, 1) => value(b"layout") == b"us",
-        (4, 3) => value(b"tap") == b"1",
-        (4, 4) => value(b"tap") == b"0",
         (5, 0) => unsafe { MOUSE_SPEED == 25 },
         (5, 1) => unsafe { MOUSE_SPEED == 50 },
         (5, 2) => unsafe { MOUSE_SPEED == 75 },
@@ -1065,6 +1063,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     match PAGE {
         PAGE_GRAPHICS => graphics::draw(g, f),
         8 => screens::draw(g, f),
+        4 => input::draw(g, f),
         PAGE_PERSONALIZE => crate::personalize::draw_settings(g, &c),
         5 => {
             let speed_str = unsafe {
@@ -1359,28 +1358,6 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             button(g, &c, 3, 0, tr4(&[b"Options d'alimentation", b"Power options", b"Opciones de energ\xEDa", b"Energieoptionen"]), 9);
             journal(g, &c, 280, LOG.get());
-        }
-        4 => {
-            row(g, &c, 44, tr4(&[b"Disposition actuelle", b"Current layout", b"Distribuci\xF3n actual", b"Aktuelles Layout"]), value(b"layout"));
-            button(g, &c, 0, 0, tr4(&[b"AZERTY fran\xE7ais", b"French AZERTY", b"AZERTY franc\xE9s", b"AZERTY Franz\xF6sisch"]), 0);
-            button(g, &c, 0, 1, b"QWERTY US", 1);
-            button(g, &c, 1, 0, tr4(&[b"Activer toucher-clic", b"Turn on tap to click", b"Activar tocar para hacer clic", b"Tippen zum Klicken aktivieren"]), 3);
-            button(g, &c, 1, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 4);
-            row(
-                g,
-                &c,
-                214,
-                tr4(&[b"Toucher-clic (0 = non, 1 = oui)", b"Tap to click (0 = no, 1 = yes)", b"Tocar para hacer clic (0 = no, 1 = s\xED)", b"Tippen zum Klicken (0 = nein, 1 = ja)"]),
-                value(b"tap"),
-            );
-            row(
-                g,
-                &c,
-                274,
-                tr4(&[b"Pav\xE9 tactile en VM", b"Touchpad in a VM", b"Panel t\xE1ctil en VM", b"Touchpad in einer VM"]),
-                tr4(&[b"SPICE expose souvent une tablette, pas le pav\xE9 physique.", b"SPICE often exposes a tablet, not the physical touchpad.", b"SPICE suele exponer una tableta, no el panel f\xEDsico.", b"SPICE stellt oft ein Tablet bereit, nicht das physische Touchpad."]),
-            );
-            journal(g, &c, 336, LOG.get());
         }
         6 => {
             row(
@@ -2034,6 +2011,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if ev == Mouse::Move && PAGE == 8 {
         return screens::hover(f, x, y);
     }
+    if ev == Mouse::Move && PAGE == 4 {
+        return input::hover(f, x, y);
+    }
     if ev == Mouse::Move && PAGE == PAGE_GRAPHICS {
         let h = graphics::hit(f, x, y);
         let changed = h != graphics::HOVER;
@@ -2085,6 +2065,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if PAGE == 8 {
         return screens::click(f, x, y);
+    }
+    if PAGE == 4 {
+        return input::click(f, x, y);
     }
     if PAGE == 12 {
         return crate::a11y::page_mouse(ev, x, y, &content(f));
@@ -2199,10 +2182,6 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (PAGE_POWER, 23) if pvalue(b"power_can_hibernate") == b"1" => Some(c"power-hibernate"),
         (PAGE_POWER, 24) => Some(c"power-brightness-down"),
         (PAGE_POWER, 25) => Some(c"power-brightness-up"),
-        (4, 0) => Some(c"keyboard-fr"),
-        (4, 1) => Some(c"keyboard-us"),
-        (4, 3) => Some(c"tap-on"),
-        (4, 4) => Some(c"tap-off"),
         (6, 0) => Some(c"align-left"),
         (6, 1) => Some(c"align-center"),
         (6, 3) => {

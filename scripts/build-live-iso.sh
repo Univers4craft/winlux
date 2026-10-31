@@ -95,6 +95,10 @@ chmod 755 "$stage/usr/bin/winlux-display"
 mkdir -p "$stage/usr/lib/winlux/sleep.d"
 cp "$root/scripts/winlux-sleep-display.sh" "$stage/usr/lib/winlux/sleep.d/10-display"
 chmod 755 "$stage/usr/lib/winlux/sleep.d/10-display"
+cp "$root/scripts/winlux-touchpad.sh" "$stage/usr/bin/winlux-touchpad"
+chmod 755 "$stage/usr/bin/winlux-touchpad"
+cp "$root/scripts/winlux-sleep-touchpad.sh" "$stage/usr/lib/winlux/sleep.d/20-touchpad"
+chmod 755 "$stage/usr/lib/winlux/sleep.d/20-touchpad"
 cp "$root/scripts/winlux-prime-run.sh" "$stage/usr/bin/winlux-prime-run"
 chmod 755 "$stage/usr/bin/winlux-prime-run"
 # Historique des fichiers, sessions multi-utilisateur, bureau à distance
@@ -743,12 +747,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
         keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
         case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
-        tapping=$(/bin/busybox sed -n 's/^TAP_TO_CLICK=//p' /etc/winlux/input.conf 2>/dev/null)
-        case "$tapping" in 0|1)
-            for device in $(DISPLAY=:0 /usr/bin/xinput --list --id-only 2>/dev/null); do
-                DISPLAY=:0 /usr/bin/xinput set-prop "$device" 'libinput Tapping Enabled' "$tapping" 2>/dev/null || true
-            done ;;
-        esac
+        # Pavé tactile : toucher-clic, deux doigts, défilement naturel, vitesse.
+        DISPLAY=:0 /usr/bin/winlux-touchpad apply 2>/dev/null || true
         taskbar_align=$(/bin/busybox sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null)
         desktop_theme=$(/bin/busybox sed -n 's/^THEME=//p' /etc/winlux/preferences.conf 2>/dev/null)
         # Échelle du bureau : la plus grande demandée parmi les écrans
