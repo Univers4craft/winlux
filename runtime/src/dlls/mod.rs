@@ -4,6 +4,7 @@
 
 pub mod advapi32;
 pub mod advapi32_services;
+pub mod audio_com;
 pub mod bcrypt;
 pub mod comctl32;
 pub mod crt;
@@ -14,6 +15,7 @@ pub mod crypt32;
 pub mod d3d11;
 pub mod d3d_shader;
 pub mod dbghelp;
+pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
 pub mod dxgi;
@@ -32,6 +34,7 @@ pub mod libgcc;
 pub mod libstdcpp;
 pub mod mfplat;
 pub mod mmap;
+pub mod mmdevapi;
 pub mod mscoree;
 pub mod msvcrt;
 pub mod ntdll;
@@ -57,8 +60,10 @@ pub mod winhttp;
 pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
+pub mod winmm_waveout;
 pub mod wintrust;
 pub mod ws2_32;
+pub mod xaudio2;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -223,7 +228,46 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "winmm",
-                exports: winmm::exports(),
+                exports: {
+                    let mut e = winmm::exports();
+                    e.extend(winmm_waveout::exports());
+                    e
+                },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dsound",
+                exports: dsound::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "mmdevapi",
+                exports: mmdevapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "audioses",
+                exports: mmdevapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "avrt",
+                exports: mmdevapi::avrt_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "xaudio2_9",
+                exports: xaudio2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "xaudio2_8",
+                exports: xaudio2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "xaudio2_7",
+                exports: xaudio2::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -434,6 +478,13 @@ pub fn normalize(dll: &str) -> String {
     // Alias courants pour les DLL de contrôles communs / shell.
     if base == "comctl32" || base == "iertutil" {
         return "comctl32".into();
+    }
+    // XAudio2 redistribuable (NuGet) et anciennes versions 2.x par COM.
+    if base == "xaudio2_9redist" {
+        return "xaudio2_9".into();
+    }
+    if base.starts_with("xaudio2_") && base != "xaudio2_8" && base != "xaudio2_9" {
+        return "xaudio2_7".into();
     }
     if base == "shlwapi" {
         return "shlwapi".into();
