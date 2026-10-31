@@ -281,7 +281,7 @@ pub fn title_of(app: usize) -> &'static [u8] {
     match app {
         APP_EXPLORER => b"Explorer",
         APP_SETTINGS => b"Param\xE8tres",
-        APP_NOTEPAD => b"Bloc-notes",
+        APP_NOTEPAD => b"\xC9\x64iteur",
         APP_TASKMGR => b"Gestionnaire des t\xE2ches",
         APP_UTILITIES => b"Utilitaires",
         _ => b"Param\xE8tres",
@@ -291,7 +291,7 @@ fn glyph_of(app: usize) -> Glyph {
     match app {
         APP_EXPLORER => Glyph::Folder,
         APP_SETTINGS => Glyph::Settings,
-        APP_NOTEPAD => Glyph::File,
+        APP_NOTEPAD => Glyph::Code,
         APP_TASKMGR => Glyph::Computer,
         APP_UTILITIES => Glyph::Tools,
         _ => Glyph::Settings,
@@ -445,7 +445,7 @@ fn default_rect(app: usize) -> Rect {
     let (ww, wh) = (wk.right - wk.left, wk.bottom - wk.top);
     let (w, h) = match app {
         APP_EXPLORER => (1100, 680),
-        APP_NOTEPAD => (900, 620),
+        APP_NOTEPAD => (1000, 680),
         APP_TASKMGR => (1000, 650),
         _ => (1040, 700),
     };

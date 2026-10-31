@@ -36,7 +36,7 @@ static mut HOVER_BUTTON: i32 = -1;
 static mut HOVER_START_ITEM: i32 = -1;
 static mut ICON_X: [i32; 5] = [12, 12, 12, 108, 108];
 static mut ICON_Y: [i32; 5] = [12, 108, 204, 12, 108];
-static mut PINNED_APPS: u8 = 15; // Explorer, Paramètres, Bloc-notes, Utilitaires
+static mut PINNED_APPS: u8 = 15; // Explorer, Paramètres, Éditeur, Utilitaires
 static mut DESKTOP_SHORTCUTS: u8 = 0;
 static mut SHOW_SYSTEM_ICONS: bool = false; // Icônes système (PC, Documents, Corbeille) désactivées par défaut
 static mut START_SHOW_ALL_APPS: bool = false; // Afficher toutes les applications au lieu des épinglées
@@ -104,7 +104,7 @@ fn init_apps() {
         let apps: [(&'static [u8], &'static [u8], i32); 29] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
-            (b"Bloc-notes", b"mousepad", 1),
+            (b"\xC9\x64iteur", b"mousepad", 1),
             (b"Calculatrice", b"calc.exe", 1),
             (b"Capture d'\xE9cran", b"screenshot.exe", 1),
             (b"Visionneuse", b"imageviewer.exe", 1),
@@ -803,7 +803,7 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
             b"Ouvrir l'Explorateur",
             b"Ouvrir le terminal",
             b"Ouvrir les Param\xE8tres",
-            b"Ouvrir le Bloc-notes",
+            b"Ouvrir l'\xC9\x64iteur",
             b"Ouvrir les Utilitaires",
         ];
         for row in 0..context_rows(app) {
@@ -961,7 +961,7 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         let app = taskbar_app(i);
         let g = match app {
             Some(wm::APP_EXPLORER) => Glyph::Folder,
-            Some(wm::APP_NOTEPAD) => Glyph::File,
+            Some(wm::APP_NOTEPAD) => Glyph::Code,
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
@@ -1123,8 +1123,8 @@ const PINNED: [App; 8] = [
         launch: Launch::Settings,
     },
     App {
-        name: b"Bloc-notes",
-        glyph: Glyph::File,
+        name: b"\xC9\x64iteur",
+        glyph: Glyph::Code,
         launch: Launch::Notepad,
     },
     App {
