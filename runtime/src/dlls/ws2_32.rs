@@ -19,9 +19,9 @@ const WSA_INVALID_PARAMETER: i32 = 10022;
 const WSAENOTSOCK: i32 = 10038;
 const WSAEFAULT: i32 = 10014;
 const WSAEINVAL: i32 = 10022;
-const WSAENOBUFS: i32 = 10055;
+const _WSAENOBUFS: i32 = 10055;
 const WSAEOPNOTSUPP: i32 = 10045;
-const WSAEWOULDBLOCK: i32 = 10035;
+const _WSAEWOULDBLOCK: i32 = 10035;
 const WSAENOPROTOOPT: i32 = 10042;
 const SOCKET_ERROR: i32 = -1;
 const WSAHOST_NOT_FOUND: i32 = 11001;
@@ -116,7 +116,7 @@ thread_local! {static LAST_WSA_ERROR: Cell<i32> = const { Cell::new(0) };}
 
 #[repr(C)]
 #[derive(Default, Clone)]
-struct WsaNetworkEvents {
+pub(crate) struct WsaNetworkEvents {
     network_events: i32,
     error_code: [i32; 10],
 }
@@ -137,7 +137,7 @@ fn event_assoc() -> &'static Mutex<HashMap<usize, (usize, i32)>> {
 }
 
 #[repr(C)]
-struct WsaBuf {
+pub(crate) struct WsaBuf {
     len: u32,
     buf: *mut u8,
 }
@@ -149,20 +149,20 @@ struct WinLinger {
 }
 
 #[repr(C)]
-struct WinFdSet {
+pub(crate) struct WinFdSet {
     count: u32,
     // followed by count SOCKET values (usize each)
 }
 
 #[repr(C)]
-struct WinTimeval {
+pub(crate) struct WinTimeval {
     sec: i32,
     usec: i32,
 }
 
 // hostent for gethostbyname/gethostbyaddr
 #[repr(C)]
-struct WinHostent {
+pub(crate) struct WinHostent {
     h_name: *mut c_char,
     h_aliases: *mut *mut c_char,
     h_addrtype: i16,
@@ -183,7 +183,7 @@ unsafe impl Send for HostentBuf {}
 static INET_NTOA_BUF: OnceLock<Mutex<[u8; 16]>> = OnceLock::new();
 
 #[repr(C)]
-struct WinServent {
+pub(crate) struct WinServent {
     s_name: *mut c_char,
     s_aliases: *mut *mut c_char,
     s_port: i16,
@@ -1334,7 +1334,7 @@ pub unsafe extern "win64" fn select(
 
 // ── WSAPoll (= poll) ────────────────────────────────────────────────────
 #[repr(C)]
-struct WsaPollFd {
+pub(crate) struct WsaPollFd {
     fd: usize,
     events: i16,
     revents: i16,
@@ -1364,8 +1364,8 @@ pub unsafe extern "win64" fn wsa_poll(fds: *mut WsaPollFd, nfds: u32, timeout: i
         set_error(last_error());
         return SOCKET_ERROR;
     }
-    for i in 0..n {
-        (*fds.add(i)).revents = pfds[i].revents;
+    for (i, pfd) in pfds.iter().enumerate().take(n) {
+        (*fds.add(i)).revents = pfd.revents;
     }
     rc
 }
@@ -1446,8 +1446,8 @@ pub unsafe extern "win64" fn inet_ntop_w(
         set_error(WSAEFAULT);
         return std::ptr::null();
     }
-    for i in 0..len {
-        *dst.add(i) = buf[i] as u16;
+    for (i, &b) in buf[..len].iter().enumerate() {
+        *dst.add(i) = b as u16;
     }
     *dst.add(len) = 0;
     dst
@@ -1809,17 +1809,19 @@ pub unsafe extern "win64" fn get_name_info_w(
     }
     if !host.is_null() {
         let len = hbuf.iter().position(|b| *b == 0).unwrap_or(hbuf.len());
-        for i in 0..len.min(host_len as usize - 1) {
-            *host.add(i) = hbuf[i] as u16;
+        let n = len.min(host_len as usize - 1);
+        for (i, &b) in hbuf[..n].iter().enumerate() {
+            *host.add(i) = b as u16;
         }
-        *host.add(len.min(host_len as usize - 1)) = 0;
+        *host.add(n) = 0;
     }
     if !serv.is_null() {
         let len = sbuf.iter().position(|b| *b == 0).unwrap_or(sbuf.len());
-        for i in 0..len.min(serv_len as usize - 1) {
-            *serv.add(i) = sbuf[i] as u16;
+        let n = len.min(serv_len as usize - 1);
+        for (i, &b) in sbuf[..n].iter().enumerate() {
+            *serv.add(i) = b as u16;
         }
-        *serv.add(len.min(serv_len as usize - 1)) = 0;
+        *serv.add(n) = 0;
     }
     0
 }
