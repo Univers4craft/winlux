@@ -1027,8 +1027,21 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         }
         return;
     }
-    // Open .txt in integrated Notepad
-    if ends_ci(&path[..n], b".txt") {
+    // Open text files in integrated editor
+    if ends_ci(&path[..n], b".txt")
+        || ends_ci(&path[..n], b".rs")
+        || ends_ci(&path[..n], b".c")
+        || ends_ci(&path[..n], b".h")
+        || ends_ci(&path[..n], b".py")
+        || ends_ci(&path[..n], b".js")
+        || ends_ci(&path[..n], b".sh")
+        || ends_ci(&path[..n], b".toml")
+        || ends_ci(&path[..n], b".json")
+        || ends_ci(&path[..n], b".md")
+        || ends_ci(&path[..n], b".cfg")
+        || ends_ci(&path[..n], b".conf")
+        || ends_ci(&path[..n], b".log")
+    {
         crate::notepad::open_new();
         use winlux_testexe::*;
         let mut wide = [0u16; PATH_LEN + NAME_LEN + 2];
@@ -1043,36 +1056,21 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
             core::ptr::null_mut(),
         );
         if !h.is_null() && (h as isize) != -1 {
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 32768];
             let mut got = 0u32;
-            ReadFile(h, buf.as_mut_ptr(), 4096, &mut got, core::ptr::null_mut());
+            ReadFile(h, buf.as_mut_ptr(), buf.len() as u32, &mut got, core::ptr::null_mut());
             CloseHandle(h);
-            // write to notepad doc
+            // Extract filename from path
+            let mut fname_start = 0;
+            let mut k = 0;
+            while k < n {
+                if path[k] == b'\\' || path[k] == b'/' {
+                    fname_start = k + 1;
+                }
+                k += 1;
+            }
             unsafe {
-                let doc = &mut crate::notepad::DOC;
-                let mut i = 0;
-                while (i as u32) < got && doc.len < 8191 {
-                    if buf[i as usize] == b'\r' {
-                        i += 1;
-                        continue;
-                    }
-                    doc.text[doc.len] = buf[i as usize];
-                    doc.len += 1;
-                    i += 1;
-                }
-                doc.cursor = doc.len;
-                doc.modified = false;
-                // rebuild
-                doc.lines[0] = 0;
-                doc.line_count = 1;
-                let mut j = 0;
-                while j < doc.len && doc.line_count < 512 {
-                    if doc.text[j] == b'\n' {
-                        doc.lines[doc.line_count] = j + 1;
-                        doc.line_count += 1;
-                    }
-                    j += 1;
-                }
+                crate::notepad::load_into_active(&buf[..got as usize], &path[fname_start..n]);
             }
         }
         wm::open(wm::APP_NOTEPAD);
