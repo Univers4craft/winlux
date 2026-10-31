@@ -325,33 +325,28 @@ pub extern "win64" fn unhandled_exception_filter(_info: usize) -> i32 {
     1
 } // EXCEPTION_EXECUTE_HANDLER
 
-/// `RaiseException` sans dispatcher SEH : le programme est arrêté avec le
-/// code de l'exception, comme le ferait Windows pour une exception non gérée.
-pub unsafe extern "win64" fn raise_exception(
-    code: u32,
-    flags: u32,
-    nargs: u32,
-    args: *const usize,
-) {
-    let detail = if nargs > 0 && !args.is_null() {
-        let a = std::slice::from_raw_parts(args, nargs.min(15) as usize);
+pub fn current_unhandled_filter() -> usize {
+    UNHANDLED_FILTER.load(Ordering::Acquire)
+}
+
+/// Exception que ni les gestionnaires du programme ni son filtre de dernier
+/// recours n'ont prise en charge : diagnostic puis arrêt avec son code, comme
+/// le ferait Windows.
+pub fn report_unhandled(code: u32, flags: u32, args: &[usize]) -> ! {
+    let detail = if args.is_empty() {
+        String::new()
+    } else {
         format!(
             " (arguments : {})",
-            a.iter()
+            args.iter()
                 .map(|v| format!("0x{v:x}"))
                 .collect::<Vec<_>>()
                 .join(", ")
         )
-    } else {
-        String::new()
     };
-    // 0x406D1388 : convention MSVC pour nommer un thread dans le débogueur.
-    if code == 0x406D_1388 {
-        return;
-    }
     let _ = std::io::stdout().flush();
     eprintln!(
-        "\nwinlux: exception Windows 0x{code:08X} levée par le programme{}{detail}",
+        "\nwinlux: exception Windows 0x{code:08X} non gérée par le programme{}{detail}",
         if flags & 1 != 0 {
             ", non continuable"
         } else {
@@ -359,8 +354,9 @@ pub unsafe extern "win64" fn raise_exception(
         }
     );
     if code == 0xE06D_7363 {
-        eprintln!("winlux: il s'agit d'une exception C++ MSVC non rattrapée (déroulement SEH pas encore pris en charge)");
+        eprintln!("winlux: il s'agit d'une exception C++ MSVC qu'aucun bloc catch n'a rattrapée");
     }
+    crate::log_error!("seh", "exception 0x{code:08X} non gérée");
     crate::dlls::kernel32::flush_and_exit(code as i32)
 }
 pub extern "win64" fn is_debugger_present() -> i32 {
@@ -698,7 +694,7 @@ pub fn exports() -> crate::dlls::Exports {
         "GetSystemDirectoryA" => fn get_system_directory_a, "GetSystemDirectoryW" => fn get_system_directory_w,
         "GetWindowsDirectoryA" => fn get_windows_directory_a, "GetWindowsDirectoryW" => fn get_windows_directory_w,
         "SetUnhandledExceptionFilter" => fn set_unhandled_exception_filter, "UnhandledExceptionFilter" => fn unhandled_exception_filter,
-        "RaiseException" => fn raise_exception, "IsDebuggerPresent" => fn is_debugger_present,
+        "IsDebuggerPresent" => fn is_debugger_present,
         "OutputDebugStringA" => fn output_debug_string_a, "OutputDebugStringW" => fn output_debug_string_w,
         "IsProcessorFeaturePresent" => fn is_processor_feature_present, "SwitchToThread" => fn switch_to_thread, "ExitThread" => fn exit_thread,
         "lstrlenA" => fn lstrlen_a, "lstrlenW" => fn lstrlen_w, "lstrcpyA" => fn lstrcpy_a, "lstrcpyW" => fn lstrcpy_w,

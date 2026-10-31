@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **215**
+- Réalisé : **216**
 - À faire ou en cours : **37**
-- Total : **252**
-- Progression : **85.3%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, issues #77 à #98 fermées, nouvelles issues #137 à #140)
+- Total : **253**
+- Progression : **85.4%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140)
 
 ## À FAIRE (par priorité)
 
@@ -91,6 +91,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] coreclr embarqué démarré : répartition SEH x64 (`seh.rs` : RtlVirtualUnwind, RtlUnwindEx, RtlRestoreContext, VEH, tables de fonctions dynamiques), exceptions C++ MSVC de coreclr, tas du GC, thread du finaliseur, System.Private.CoreLib puis `paintdotnet.dll` chargées et code managé exécuté (images relogées sur 64 Kio, VirtualQuery des piles, VerifyVersionInfo, InitializeContext2, locales nommées) (`docs/PAINTNET.md`).
 - [x] Issues fermées le 31/10/2026 car livrées sur master : impression (#77 par #111), audio des .exe (#78 par #115), manettes, webcam, micro et Bluetooth (#79 par #114), alimentation et batterie (#80 par #107), Store et polices (#81, #82 par #123 et #129), planificateur et pare-feu (#83, #84 par #112), presse-papiers Win+V et capture d'écran (#85, #86 par #109), sauvegarde, multi-utilisateur et bureau à distance (#87, #88, #89 par #119), CPU (#90 par #103), GPU (#91 par #104), Direct3D 9/12 (#92 par #127), installateur (#93 par #75, #116 et #118 ; #94 par #76 ; #95 par #100 ; #96 par #101 ; #97 par #105 ; #98 par #102).
 - [x] Aussi mergés : signalement de bugs vers GitHub (#121), visionneuse d'images (#126), noms de paquets Ubuntu 26.04 (#128), base APT vérifiée dans QEMU (#132), CLR maison (#73), SEH/TLS/services (#63), localisation (#72), détection du matériel (#61).
 - [x] Lanceur .NET autonome : un apphost qui embarque `coreclr.dll` (Paint.NET 5.1.12) traverse hostfxr et hostpolicy jusqu'au chargement de coreclr ; CRT universelle `__stdio_common_*`, chaînes `*_s`, ordinaux oleaut32, `ungetc` (`docs/PAINTNET.md`).

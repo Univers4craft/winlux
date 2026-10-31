@@ -84,8 +84,37 @@ pub unsafe extern "win64" fn event_write_transfer(
     0
 }
 
+/// EventSetInformation : les traits du fournisseur (nom, groupe) ne
+/// servent qu'aux sessions ETW, qui n'existent pas ; un fournisseur
+/// enregistré accepte donc l'information, comme Windows sans session.
+pub extern "win64" fn event_set_information(
+    handle: u64,
+    _class: u32,
+    _info: *const c_void,
+    _len: u32,
+) -> u32 {
+    let state = providers()
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    if handle != 0 && !state.entries.contains_key(&handle) {
+        return 6;
+    }
+    0
+}
+
+/// EventEnabled / EventProviderEnabled : aucune session n'écoute.
+pub extern "win64" fn event_enabled(_handle: u64, _descriptor: *const c_void) -> u8 {
+    0
+}
+pub extern "win64" fn event_provider_enabled(_handle: u64, _level: u8, _keyword: u64) -> u8 {
+    0
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "EventSetInformation" => fn event_set_information,
+        "EventEnabled" => fn event_enabled,
+        "EventProviderEnabled" => fn event_provider_enabled,
         "EventRegister" => fn event_register,
         "EventUnregister" => fn event_unregister,
         "EventWriteTransfer" => fn event_write_transfer,
