@@ -27,7 +27,8 @@ pub const APP_TASKMGR: usize = 3;
 pub const APP_UTILITIES: usize = 4;
 pub const APP_CLEANUP: usize = 5;
 pub const APP_TERMINAL: usize = 6;
-pub const APP_COUNT: usize = 7;
+pub const APP_DISKMGR: usize = 7;
+pub const APP_COUNT: usize = 8;
 
 // Native session: each built-in application owns a separate X11/Win32 window.
 // The Linux window manager handles its frame, stacking and taskbar lifecycle.
@@ -239,7 +240,7 @@ const CLOSED: Win = Win {
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6];
+static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
@@ -438,6 +439,7 @@ pub fn title_of(app: usize) -> &'static [u8] {
         APP_UTILITIES => b"Utilitaires",
         APP_CLEANUP => b"Nettoyage de disque",
         APP_TERMINAL => b"Terminal",
+        APP_DISKMGR => b"Gestion des disques",
         _ => b"Param\xE8tres",
     }
 }
@@ -450,6 +452,7 @@ fn glyph_of(app: usize) -> Glyph {
         APP_UTILITIES => Glyph::Tools,
         APP_CLEANUP => Glyph::Drive,
         APP_TERMINAL => Glyph::Terminal,
+        APP_DISKMGR => Glyph::Drive,
         _ => Glyph::Settings,
     }
 }
@@ -462,6 +465,7 @@ fn custom_title(app: usize) -> bool {
         APP_UTILITIES => utilities::CUSTOM_TITLE,
         APP_CLEANUP => crate::diskcleaner::CUSTOM_TITLE,
         APP_TERMINAL => crate::terminal::CUSTOM_TITLE,
+        APP_DISKMGR => crate::diskmgr::CUSTOM_TITLE,
         _ => crate::settings::CUSTOM_TITLE,
     }
 }
@@ -475,6 +479,7 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
         APP_UTILITIES => utilities::draw(g, f),
         APP_CLEANUP => crate::diskcleaner::draw(g, f),
         APP_TERMINAL => crate::terminal::draw(g, f),
+        APP_DISKMGR => crate::diskmgr::draw(g, f),
         _ => crate::settings::draw(g, f),
     }
 }
@@ -487,6 +492,7 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         APP_UTILITIES => utilities::mouse(ev, x, y, f),
         APP_CLEANUP => crate::diskcleaner::mouse(ev, x, y, f),
         APP_TERMINAL => crate::terminal::mouse(ev, x, y, f),
+        APP_DISKMGR => crate::diskmgr::mouse(ev, x, y, f),
         _ => crate::settings::mouse(ev, x, y, f),
     }
 }
@@ -499,6 +505,7 @@ unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
         APP_UTILITIES => utilities::key(vk, ch),
         APP_CLEANUP => crate::diskcleaner::key(vk, ch),
         APP_TERMINAL => crate::terminal::key(vk, ch),
+        APP_DISKMGR => crate::diskmgr::key(vk, ch),
         _ => crate::settings::key(vk, ch),
     }
 }
@@ -511,6 +518,7 @@ unsafe fn app_tick(app: usize, f: &Frame) -> bool {
         APP_UTILITIES => utilities::tick(f),
         APP_CLEANUP => crate::diskcleaner::tick(f),
         APP_TERMINAL => crate::terminal::tick(f),
+        APP_DISKMGR => crate::diskmgr::tick(f),
         _ => crate::settings::tick(f),
     }
 }
@@ -565,6 +573,9 @@ pub unsafe fn WINS_REF(app: usize) -> bool {
 /// Vrai tant qu'une animation est en cours : la boucle principale repeint
 /// alors à ~60 images par seconde.
 pub fn animating() -> bool {
+    if theme_animating() {
+        return true;
+    }
     unsafe {
         if TASK_VIEW || SNAP_LAYOUT_VISIBLE {
             return true;
@@ -616,6 +627,7 @@ fn default_rect(app: usize) -> Rect {
         APP_EXPLORER => (1100, 680),
         APP_NOTEPAD => (1000, 680),
         APP_TASKMGR => (1000, 650),
+        APP_DISKMGR => (1000, 650),
         _ => (1040, 700),
     };
     let (w, h) = (w.min(ww - 40).max(480), h.min(wh - 40).max(320));
@@ -760,18 +772,23 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
     let w = WINS[app];
     let p = pal();
     let t = elapsed(w.anim_start);
-    // Rectangle affiché : animé, ou définitif.
-    let (shown, content) = match w.anim {
+    // Rectangle affiché et opacité (0..1000) selon l'animation.
+    let (shown, content, opacity) = match w.anim {
         Anim::Open if t < OPEN_MS => {
             let e = ease_out(t, OPEN_MS);
             (
                 scaled(&w.rect, 940 + e * 60 / 1000, (1000 - e) * 18 / 1000),
                 e > 700,
+                e,
             )
         }
         Anim::Close if t < CLOSE_MS => {
             let e = ease_out(t, CLOSE_MS);
-            (scaled(&w.rect, 1000 - e * 60 / 1000, e * 10 / 1000), false)
+            (
+                scaled(&w.rect, 1000 - e * 60 / 1000, e * 10 / 1000),
+                false,
+                1000 - e,
+            )
         }
         Anim::Close => {
             WINS[app].open = false;
@@ -779,14 +796,18 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             refresh_active();
             return;
         }
-        Anim::Minimize if t < MINIMIZE_MS => (
-            lerp_rect(&w.rect, &TASKBAR_SLOT[app], ease_out(t, MINIMIZE_MS)),
-            false,
-        ),
-        Anim::Restore if t < MINIMIZE_MS => (
-            lerp_rect(&TASKBAR_SLOT[app], &w.rect, ease_out(t, MINIMIZE_MS)),
-            false,
-        ),
+        Anim::Minimize if t < MINIMIZE_MS => {
+            let e = ease_out(t, MINIMIZE_MS);
+            (
+                lerp_rect(&w.rect, &TASKBAR_SLOT[app], e),
+                false,
+                1000 - e,
+            )
+        }
+        Anim::Restore if t < MINIMIZE_MS => {
+            let e = ease_out(t, MINIMIZE_MS);
+            (lerp_rect(&TASKBAR_SLOT[app], &w.rect, e), false, e)
+        }
         _ => {
             if w.anim != Anim::None {
                 WINS[app].anim = Anim::None;
@@ -794,7 +815,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             if w.minimized {
                 return;
             }
-            (w.rect, true)
+            (w.rect, true, 1000)
         }
     };
     if w.minimized && w.anim != Anim::Minimize {
@@ -802,6 +823,8 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
     }
     let radius = if w.maximized { 0 } else { 8 };
     let active = ACTIVE == app;
+    let bg = p.mica;
+    let fade = |c: u32| -> u32 { mix(bg, c, opacity, 1000) };
     // Liseré fin et fond « Mica » (pas d'ombre lourde).
     round_rect(
         g.hdc,
@@ -811,11 +834,11 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         shown.right,
         shown.bottom,
         radius,
-        if active {
+        fade(if active {
             mix(p.border, p.accent, 2, 10)
         } else {
             p.border
-        },
+        }),
     );
     round_rect(
         g.hdc,
@@ -825,7 +848,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         shown.right - 1,
         shown.bottom - 1,
         radius,
-        p.mica,
+        fade(p.mica),
     );
     if !content || shown.right - shown.left < 200 || shown.bottom - shown.top < 120 {
         glyph(
@@ -847,7 +870,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         fr.client.top,
         fr.client.right,
         fr.client.bottom - radius,
-        p.window,
+        fade(p.window),
     );
     if radius > 0 {
         round_rect(
@@ -858,7 +881,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             fr.client.right,
             fr.client.bottom,
             radius - 1,
-            p.window,
+            fade(p.window),
         );
     }
     if !custom_title(app) {
@@ -874,7 +897,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         text(
             g.hdc,
             g.f.caption,
-            if active { p.text } else { p.text3 },
+            fade(if active { p.text } else { p.text3 }),
             fr.title.left + 42,
             fr.title.top + 12,
             title_of(app),

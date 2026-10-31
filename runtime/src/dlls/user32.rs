@@ -970,9 +970,7 @@ fn user_data_map() -> &'static Mutex<HashMap<usize, isize>> {
     M.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 
 unsafe fn get_window_long_impl(hwnd: usize, index: i32) -> isize {
     match index {

@@ -17,29 +17,15 @@ const FIND_H: i32 = 32;
 const STATUS_H: i32 = 22;
 const CHAR_H: i32 = 15;
 
-// Couleurs de l'éditeur (thème sombre)
-const BG: u32 = 0x001E1E1E;       // rgb(0x1E,0x1E,0x1E) little-endian COLORREF
-const BG_GUTTER: u32 = 0x00252526;
-const BG_MENU: u32 = 0x002D2D30;
-const BG_TAB: u32 = 0x002D2D30;
-const BG_TAB_ACTIVE: u32 = 0x001E1E1E;
-const BG_STATUS: u32 = 0x00007ACC;
-const BG_FIND: u32 = 0x00333337;
-const BG_SELECTION: u32 = 0x00264F78;
-const BG_FIND_MATCH: u32 = 0x00515C6A;
-const TEXT_DEFAULT: u32 = 0x00D4D4D4;
-const TEXT_GUTTER: u32 = 0x00858585;
-const TEXT_MENU: u32 = 0x00CCCCCC;
-const TEXT_TAB: u32 = 0x00969696;
-const TEXT_TAB_ACTIVE: u32 = 0x00FFFFFF;
-const TEXT_STATUS: u32 = 0x00FFFFFF;
+// Syntax highlighting colors (editor-specific, not theme chrome)
 const TEXT_KEYWORD: u32 = 0x00C586C0; // purple-pink
 const TEXT_TYPE: u32 = 0x004EC9B0;    // teal
 const TEXT_STRING: u32 = 0x006AC3CE;  // light teal (escaped repr)
 const TEXT_COMMENT: u32 = 0x006A9955; // green
 const TEXT_NUMBER: u32 = 0x00B5CEA8;  // light green
-const TEXT_OPERATOR: u32 = 0x00D4D4D4;
 const TEXT_PREPROC: u32 = 0x009CDCFE; // light blue
+
+static mut HOVER_TAB: i32 = -1;
 
 static mut MONO_FONT: Handle = core::ptr::null_mut();
 
@@ -310,19 +296,26 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let d = &ST.tabs[ST.active];
     let r = f.client;
     let tr = f.title;
+    let p = pal();
 
     // === Tab bar (in title area) ===
-    fill(g.hdc, g.b, tr.left, tr.top, tr.right, tr.bottom, BG_TAB);
+    fill(g.hdc, g.b, tr.left, tr.top, tr.right, tr.bottom, p.surface);
     let mut tx = tr.left + 4;
     for i in 0..ST.tab_count {
         let t = &ST.tabs[i];
         let name = &t.name[..t.name_len];
         let tw = text_width(name, 11) + 24;
-        let bg = if i == ST.active { BG_TAB_ACTIVE } else { BG_TAB };
-        let fg = if i == ST.active { TEXT_TAB_ACTIVE } else { TEXT_TAB };
+        let bg = if i == ST.active {
+            p.window
+        } else if HOVER_TAB == i as i32 {
+            p.hover
+        } else {
+            p.surface
+        };
+        let fg = if i == ST.active { p.text } else { p.text3 };
         fill(g.hdc, g.b, tx, tr.top, tx + tw, tr.bottom, bg);
         if i == ST.active {
-            fill(g.hdc, g.b, tx, tr.bottom - 2, tx + tw, tr.bottom, BG_STATUS);
+            fill(g.hdc, g.b, tx, tr.bottom - 2, tx + tw, tr.bottom, p.accent);
         }
         let label_y = tr.top + (tr.bottom - tr.top - 11) / 2;
         if t.modified {
@@ -334,22 +327,22 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         // Close button
         let cx = tx + tw - 16;
         let cy = tr.top + (tr.bottom - tr.top) / 2;
-        text(g.hdc, g.f.small, TEXT_TAB, cx - 2, cy - 6, b"x");
+        text(g.hdc, g.f.small, p.text3, cx - 2, cy - 6, b"x");
         tx += tw + 2;
     }
     // "+" button
     if ST.tab_count < MAX_TABS {
-        round_rect(g.hdc, g.b, tx + 2, tr.top + 6, tx + 22, tr.bottom - 6, 3, rgb(0x3C, 0x3C, 0x3C));
-        text(g.hdc, g.f.small, TEXT_TAB, tx + 7, tr.top + 8, b"+");
+        round_rect(g.hdc, g.b, tx + 2, tr.top + 6, tx + 22, tr.bottom - 6, 4, p.surface2);
+        text(g.hdc, g.f.small, p.text3, tx + 7, tr.top + 8, b"+");
     }
 
     // === Menu bar ===
     let my = r.top;
-    fill(g.hdc, g.b, r.left, my, r.right, my + MENU_H, BG_MENU);
+    fill(g.hdc, g.b, r.left, my, r.right, my + MENU_H, p.surface);
     let menus: [&[u8]; 4] = [b"Fichier", b"\xC9\x64ition", b"Affichage", b"Aide"];
     let mut mx = r.left + 8;
     for item in &menus {
-        text(g.hdc, g.f.small, TEXT_MENU, mx, my + 6, *item);
+        text(g.hdc, g.f.small, p.text2, mx, my + 6, *item);
         mx += text_width(*item, 11) + 16;
     }
 
@@ -357,41 +350,41 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let find_y = my + MENU_H;
     let ey = if ST.find_open {
         let fh = if ST.replace_open { FIND_H * 2 } else { FIND_H };
-        fill(g.hdc, g.b, r.left, find_y, r.right, find_y + fh, BG_FIND);
+        fill(g.hdc, g.b, r.left, find_y, r.right, find_y + fh, p.surface2);
         // Find field
         let field_x = r.left + 80;
         let field_w = (r.right - r.left - 160).min(400).max(120);
-        round_rect(g.hdc, g.b, field_x, find_y + 4, field_x + field_w, find_y + FIND_H - 4, 3, rgb(0x3C, 0x3C, 0x3C));
-        text(g.hdc, g.f.small, TEXT_MENU, r.left + 8, find_y + 9, b"Chercher:");
-        text(g.hdc, mono(), TEXT_DEFAULT, field_x + 4, find_y + 8, &ST.find_buf[..ST.find_len]);
+        round_rect(g.hdc, g.b, field_x, find_y + 4, field_x + field_w, find_y + FIND_H - 4, 4, p.surface);
+        text(g.hdc, g.f.small, p.text2, r.left + 8, find_y + 9, b"Chercher:");
+        text(g.hdc, mono(), p.text, field_x + 4, find_y + 8, &ST.find_buf[..ST.find_len]);
         // Cursor in find field
         if ST.find_focused {
             let fcx = field_x + 4 + text_width(&ST.find_buf[..ST.find_len], CHAR_H);
-            fill(g.hdc, g.b, fcx, find_y + 7, fcx + 1, find_y + FIND_H - 7, TEXT_DEFAULT);
+            fill(g.hdc, g.b, fcx, find_y + 7, fcx + 1, find_y + FIND_H - 7, p.text);
         }
         // Match count
         let mut mbuf = [0u8; 32];
         let mc = format_usize(ST.find_matches, &mut mbuf);
-        text(g.hdc, g.f.small, TEXT_TAB, field_x + field_w + 8, find_y + 9, &mbuf[..mc]);
+        text(g.hdc, g.f.small, p.text3, field_x + field_w + 8, find_y + 9, &mbuf[..mc]);
         // Close button
-        text(g.hdc, g.f.small, TEXT_TAB, r.right - 24, find_y + 9, b"x");
+        text(g.hdc, g.f.small, p.text3, r.right - 24, find_y + 9, b"x");
 
         if ST.replace_open {
             let ry = find_y + FIND_H;
-            round_rect(g.hdc, g.b, field_x, ry + 4, field_x + field_w, ry + FIND_H - 4, 3, rgb(0x3C, 0x3C, 0x3C));
-            text(g.hdc, g.f.small, TEXT_MENU, r.left + 8, ry + 9, b"Remplacer:");
-            text(g.hdc, mono(), TEXT_DEFAULT, field_x + 4, ry + 8, &ST.replace_buf[..ST.replace_len]);
+            round_rect(g.hdc, g.b, field_x, ry + 4, field_x + field_w, ry + FIND_H - 4, 4, p.surface);
+            text(g.hdc, g.f.small, p.text2, r.left + 8, ry + 9, b"Remplacer:");
+            text(g.hdc, mono(), p.text, field_x + 4, ry + 8, &ST.replace_buf[..ST.replace_len]);
             if !ST.find_focused {
                 let rcx = field_x + 4 + text_width(&ST.replace_buf[..ST.replace_len], CHAR_H);
-                fill(g.hdc, g.b, rcx, ry + 7, rcx + 1, ry + FIND_H - 7, TEXT_DEFAULT);
+                fill(g.hdc, g.b, rcx, ry + 7, rcx + 1, ry + FIND_H - 7, p.text);
             }
             // "Remplacer" button
             let bx = field_x + field_w + 8;
-            round_rect(g.hdc, g.b, bx, ry + 4, bx + 72, ry + FIND_H - 4, 3, rgb(0x3C, 0x3C, 0x3C));
-            text(g.hdc, g.f.small, TEXT_MENU, bx + 6, ry + 9, b"Rempl.");
+            round_rect(g.hdc, g.b, bx, ry + 4, bx + 72, ry + FIND_H - 4, 4, p.surface);
+            text(g.hdc, g.f.small, p.text2, bx + 6, ry + 9, b"Rempl.");
             // "Tout remplacer" button
-            round_rect(g.hdc, g.b, bx + 78, ry + 4, bx + 150, ry + FIND_H - 4, 3, rgb(0x3C, 0x3C, 0x3C));
-            text(g.hdc, g.f.small, TEXT_MENU, bx + 84, ry + 9, b"Tout");
+            round_rect(g.hdc, g.b, bx + 78, ry + 4, bx + 150, ry + FIND_H - 4, 4, p.surface);
+            text(g.hdc, g.f.small, p.text2, bx + 84, ry + 9, b"Tout");
         }
 
         find_y + fh
@@ -400,11 +393,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     };
 
     // === Editor background ===
-    fill(g.hdc, g.b, r.left, ey, r.right, r.bottom - STATUS_H, BG);
+    fill(g.hdc, g.b, r.left, ey, r.right, r.bottom - STATUS_H, p.window);
 
     // === Line number gutter ===
-    fill(g.hdc, g.b, r.left, ey, r.left + GUTTER_W, r.bottom - STATUS_H, BG_GUTTER);
-    line(g.hdc, g.b, r.left + GUTTER_W, ey, r.left + GUTTER_W, r.bottom - STATUS_H, 1, rgb(0x3A, 0x3A, 0x3A));
+    fill(g.hdc, g.b, r.left, ey, r.left + GUTTER_W, r.bottom - STATUS_H, p.surface);
+    line(g.hdc, g.b, r.left + GUTTER_W, ey, r.left + GUTTER_W, r.bottom - STATUS_H, 1, p.border);
 
     let editor_x = r.left + GUTTER_W + 4;
     let editor_y = ey;
@@ -429,7 +422,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let mut nbuf = [0u8; 32];
         let nc = format_usize(li + 1, &mut nbuf);
         let nw = text_width(&nbuf[..nc], CHAR_H);
-        text(g.hdc, mono(), TEXT_GUTTER, r.left + GUTTER_W - 4 - nw, y, &nbuf[..nc]);
+        text(g.hdc, mono(), p.text3, r.left + GUTTER_W - 4 - nw, y, &nbuf[..nc]);
 
         let ls = d.lines[li];
         let le = line_end(d, li);
@@ -441,12 +434,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             if line_sa < line_sb {
                 let sx = editor_x + (line_sa as i32) * cw - d.scroll_x;
                 let ex = editor_x + (line_sb as i32) * cw - d.scroll_x;
-                fill(g.hdc, g.b, sx, y, ex, y + CHAR_H, BG_SELECTION);
+                fill(g.hdc, g.b, sx, y, ex, y + CHAR_H, p.selected);
             }
             // If selection spans past this line end, highlight to edge
             if sel_a <= le && sel_b > le && li + 1 < d.line_count {
                 let sx = editor_x + ((le - ls) as i32) * cw - d.scroll_x;
-                fill(g.hdc, g.b, sx, y, sx + cw, y + CHAR_H, BG_SELECTION);
+                fill(g.hdc, g.b, sx, y, sx + cw, y + CHAR_H, p.selected);
             }
         }
 
@@ -471,19 +464,19 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let cy = editor_y + (cl as i32) * CHAR_H - d.scroll_y;
         if cy >= editor_y && cy < r.bottom - STATUS_H {
             let cx = editor_x + cc * cw - d.scroll_x;
-            fill(g.hdc, g.b, cx, cy, cx + 2, cy + CHAR_H, rgb(0xAE, 0xAF, 0xAD));
+            fill(g.hdc, g.b, cx, cy, cx + 2, cy + CHAR_H, p.text2);
         }
     }
 
     // === Status bar ===
-    fill(g.hdc, g.b, r.left, r.bottom - STATUS_H, r.right, r.bottom, BG_STATUS);
+    fill(g.hdc, g.b, r.left, r.bottom - STATUS_H, r.right, r.bottom, p.accent);
     let cl = line_of(d, d.cursor) + 1;
     let cc = col_of(d, d.cursor) + 1;
     let mut sbuf = [0u8; 80];
     let sn = format_status(&mut sbuf, cl, cc, d.lang);
-    text(g.hdc, g.f.small, TEXT_STATUS, r.right - 280, r.bottom - STATUS_H + 5, &sbuf[..sn]);
+    text(g.hdc, g.f.small, p.on_accent, r.right - 280, r.bottom - STATUS_H + 5, &sbuf[..sn]);
     // Left side: tab name
-    text(g.hdc, g.f.small, TEXT_STATUS, r.left + 8, r.bottom - STATUS_H + 5, &d.name[..d.name_len]);
+    text(g.hdc, g.f.small, p.on_accent, r.left + 8, r.bottom - STATUS_H + 5, &d.name[..d.name_len]);
 }
 
 unsafe fn draw_line_highlighted(g: &mut Gfx, d: &Doc, start: usize, end: usize, x0: i32, y: i32) {
@@ -513,7 +506,8 @@ unsafe fn draw_line_highlighted(g: &mut Gfx, d: &Doc, start: usize, end: usize, 
 }
 
 fn token_color(d: &Doc, pos: usize, line_end: usize, lang: Lang) -> (u32, usize) {
-    if lang == Lang::Plain { return (TEXT_DEFAULT, 1); }
+    let text_default = unsafe { pal().text };
+    if lang == Lang::Plain { return (text_default, 1); }
 
     let c = d.text[pos];
 
@@ -568,10 +562,11 @@ fn token_color(d: &Doc, pos: usize, line_end: usize, lang: Lang) -> (u32, usize)
         return (color, i - pos);
     }
 
-    (TEXT_OPERATOR, 1)
+    (text_default, 1)
 }
 
 fn classify_word(w: &[u8], lang: Lang) -> u32 {
+    let text_default = unsafe { pal().text };
     match lang {
         Lang::Rust => {
             if matches!(w,
@@ -592,7 +587,7 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
             ) {
                 TEXT_TYPE
             } else {
-                TEXT_DEFAULT
+                text_default
             }
         }
         Lang::C => {
@@ -614,7 +609,7 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
             ) {
                 TEXT_TYPE
             } else {
-                TEXT_DEFAULT
+                text_default
             }
         }
         Lang::Python => {
@@ -634,7 +629,7 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
             ) {
                 TEXT_TYPE
             } else {
-                TEXT_DEFAULT
+                text_default
             }
         }
         Lang::Js => {
@@ -653,7 +648,7 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
             ) {
                 TEXT_TYPE
             } else {
-                TEXT_DEFAULT
+                text_default
             }
         }
         Lang::Shell => {
@@ -665,28 +660,27 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
             ) {
                 TEXT_KEYWORD
             } else {
-                TEXT_DEFAULT
+                text_default
             }
         }
-        Lang::Plain => TEXT_DEFAULT,
+        Lang::Plain => text_default,
     }
 }
 
 unsafe fn highlight_find_matches(g: &mut Gfx, d: &Doc, ls: usize, le: usize, x0: i32, y: i32, cw: i32) {
     if ST.find_len == 0 { return; }
+    let p = pal();
     let mut i = ls;
     while i + ST.find_len <= le {
         if bytes_eq(&d.text[i..i + ST.find_len], &ST.find_buf[..ST.find_len]) {
             let cx = x0 + ((i - ls) as i32) * cw;
             let ex = cx + (ST.find_len as i32) * cw;
-            // Draw highlight behind text
-            fill(g.hdc, g.b, cx, y, ex, y + CHAR_H, BG_FIND_MATCH);
-            // Redraw the matched text on top
+            fill(g.hdc, g.b, cx, y, ex, y + CHAR_H, p.hover);
             for j in 0..ST.find_len {
                 let ch = d.text[i + j];
                 if ch >= 0x20 {
                     let buf = [ch];
-                    text(g.hdc, mono(), rgb(0xFF, 0xD7, 0x00), cx + (j as i32) * cw, y, &buf);
+                    text(g.hdc, mono(), p.accent, cx + (j as i32) * cw, y, &buf);
                 }
             }
             i += ST.find_len;
@@ -786,6 +780,25 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     let cw = char_w();
     let r = f.client;
     let tr = f.title;
+
+    // === Tab hover tracking ===
+    if ev == Mouse::Move {
+        let old = HOVER_TAB;
+        HOVER_TAB = -1;
+        if y >= tr.top && y < tr.bottom {
+            let mut tx = tr.left + 4;
+            for i in 0..ST.tab_count {
+                let t = &ST.tabs[i];
+                let tw = text_width(&t.name[..t.name_len], 11) + 24;
+                if x >= tx && x < tx + tw && i != ST.active {
+                    HOVER_TAB = i as i32;
+                    break;
+                }
+                tx += tw + 2;
+            }
+        }
+        if HOVER_TAB != old { return true; }
+    }
 
     // === Tab bar clicks ===
     if y >= tr.top && y < tr.bottom {
