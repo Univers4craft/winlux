@@ -148,7 +148,11 @@ for node in tree.body:
     if isinstance(node, ast.Assign) and isinstance(node.targets[0], ast.Name):
         if node.targets[0].id in ("STEPS", "STEP_KEYS", "TRANSLATIONS"):
             values[node.targets[0].id] = ast.literal_eval(node.value)
-assert len(values["STEPS"]) == len(values["STEP_KEYS"]) == 12
+assert len(values["STEPS"]) == len(values["STEP_KEYS"]) == 14
+import winlux_autoinstall  # noqa: E402
+assert values["STEP_KEYS"] == winlux_autoinstall.STEP_KEYS, "pages de l'installateur et de l'install silencieuse"
+for key in ("disk", "account", "summary"):
+    assert values["STEP_KEYS"].index(key) == getattr(winlux_autoinstall, "STEP_" + key.upper()), key
 for key in ("benchmark", "profile", "migration"):
     assert key in values["STEP_KEYS"]
 assert values["STEP_KEYS"].index("disk") < values["STEP_KEYS"].index("benchmark"), "le benchmark lit le disque choisi"

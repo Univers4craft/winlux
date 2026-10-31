@@ -4,18 +4,25 @@
 
 ## Statistiques
 
-- Réalisé : **124**
-- À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Réalisé : **172**
+- À faire ou en cours : **40**
+- Total : **212**
+- Progression : **81.1%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100 et #101, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
 ### Priorité IMMÉDIATE (★★★★★)
 
-- [ ] **Corbeille fonctionnelle** : Permettre "Supprimer" -> corbeille, restaurer, vider. Très attendu.
-- [ ] **Copie avec progression + pause/annuler** : UX visuelle (barre de progression + vitesse, ETA) dans l'Explorateur.
-- [ ] **Centre de réglages rapides plus complet** : Étendre (réseau/volume/éclairage/batterie). Sur VM sans Wi-Fi, afficher clairement "Ethernet virtuel" au lieu de "Wi-Fi indisponible".
+- [x] **Localisation multilingue** : Module i18n (locale.rs) avec 150 chaînes en FR/EN/ES/DE. Page Localisation dans Paramètres (langue, clavier, fuseau horaire).
+- [x] **Interface multilingue** : Remplacement des chaînes françaises par `tr()` dans desktop.rs, explorer.rs, wm.rs, settings.rs.
+- [x] **Actions contrôle localisation** : winlux-control.sh gère lang-*/keyboard-*/tz-*, 8 dispositions clavier, locale.conf.
+- [x] **Installateur multilingue** : Choix de la langue et du clavier lors de l'installation sur disque vierge.
+- [x] **Session multilingue** : xsession-winlux lit locale.conf et exporte WINLUX_LANG au démarrage.
+- [x] **Gestion fuseau horaire** : timedatectl/ln -sf dans winlux-control.sh, 12 fuseaux courants dans l'interface.
+- [ ] **Corbeille fonctionnelle** (#10) : l'envoi vers la corbeille existe ; reste à permettre "Supprimer" -> corbeille, restaurer, vider. Très attendu.
+- [ ] **Copie avec progression + pause/annuler** (#11) : UX visuelle (barre de progression + vitesse, ETA) dans l'Explorateur.
+- [ ] **Centre de réglages rapides plus complet** (#12) : réseau (#51) et volume (#64) livrés ; reste la luminosité, la batterie (#80) et l'affichage "Ethernet virtuel" sur VM sans Wi-Fi.
 
 
 ### État actuel
@@ -63,7 +70,63 @@
 - [ ] Committer une première version stable après validation du pipeline complet.
 
 
+## EN COURS
+
+### Pull requests ouvertes
+
+- [ ] Détection et configuration automatique du matériel (#61).
+- [ ] SEH, TLS statique, services Windows et compléments ntdll (#63, lié à #17, #21, #25).
+- [ ] Localisation multilingue FR/EN/ES/DE (#72).
+- [ ] Runtime CLR .NET intégré (#73, lié à #22).
+- [ ] Installateur : partitionnement guidé, chiffrement LUKS et compte local (#75, lié à #93).
+- [ ] Installateur : connexion Wi-Fi/proxy et import des données Windows (#76, lié à #94).
+
+### Chantiers démarrés (issue ouverte, PR à venir)
+
+- [ ] Matériel : impression winspool.drv + CUPS (#77), audio des .exe DirectSound/WASAPI/XAudio2 (#78), manettes/webcam/micro/Bluetooth (#79), alimentation et batterie (#80), gestion CPU avancée (#90), gestion GPU et monitoring (#91).
+- [ ] Graphisme 3D : Direct3D 9 et 12 avec backend Vulkan (#92).
+- [ ] Applications du shell : store de logiciels (#81), gestionnaire de polices (#82), planificateur de tâches (#83), pare-feu (#84), capture et enregistrement d'écran (#86), sauvegarde (#87), bureau à distance (#89).
+- [ ] Bureau : historique du presse-papiers Win+V (#85), multi-utilisateur complet (#88), accessibilité loupe/lecteur d'écran/contraste (#28).
+- [ ] Installateur : mode récupération, Secure Boot et installation silencieuse (#95), benchmark et profils d'utilisation (#96), personnalisation visuelle (#97).
+
 ## DÉJÀ FAIT
+
+### Livré par pull requests (fin octobre 2026)
+
+- [x] Gestionnaire de tâches style Windows 11 (#39).
+- [x] Enregistreur vocal natif avec capture ALSA (#40).
+- [x] Suppression des alertes Bluetooth au démarrage (#41).
+- [x] Arrêt et redémarrage propres avec écran de fermeture (#42).
+- [x] Centrage dynamique des icônes de la barre des tâches (#43).
+- [x] Écran de connexion, invite UAC, verrouillage Win+L et menu alimentation (#44).
+- [x] Snap layouts et bureaux virtuels (#45).
+- [x] Centre de notifications Windows 11 (#46).
+- [x] Thème automatique, transitions et fondu des fenêtres (#47).
+- [x] Nettoyage de disque intégré au shell (#48).
+- [x] Recherche globale (menu Démarrer + Win+S) (#49).
+- [x] Éditeur de texte avancé avec coloration syntaxique (#50).
+- [x] Panneau réseau Wi-Fi/Ethernet dans la barre des tâches (#51).
+- [x] Support Electron (Claude.exe, ChatGPT.exe) et paint.net (#52).
+- [x] Widget météo et gestionnaire de disques (#53).
+- [x] Terminal natif intégré au shell (#54).
+- [x] Audit UX : layout DPI, performance GDI et détails manquants (#55).
+- [x] Cohérence visuelle et thèmes dans toutes les apps (#56).
+- [x] Défilement fluide partout (#57).
+- [x] Rendu graphique : animations, RoundRect natif, alpha (#58).
+- [x] Corrections UX : curseurs, clavier des apps, recherche Start, souris Notepad (#59).
+- [x] Glisser-déposer de fichiers et Ctrl+C/V entre Explorer et bureau (#60).
+- [x] Paramètres : pages Localisation et Gestionnaire de fichiers (#62).
+- [x] Mixeur de volume dans la barre des tâches et réglages de localisation (#64).
+- [x] Registre Windows complet (énumération, clés pré-remplies), COM/OLE étendu, SafeArray, crash handler enrichi (#65).
+- [x] WinSock complet pour le réseau des .exe (#66).
+- [x] Installateur graphique pour ordinateur vierge, multilingue, GPT BIOS/UEFI, détection matériel (#67).
+- [x] Correction du ghosting des fenêtres lors du déplacement (#68).
+- [x] Écran bleu (BSOD), journalisation centralisée, observateur d'événements et points de restauration (#69).
+- [x] Traduction Direct3D 11 vers OpenGL (#70).
+- [x] DLL libgcc_s_seh-1 / libstdc++-6 et NtCreateFile/NtOpenFile réels (#71).
+- [x] Premier démarrage (OOBE) : thème, choix des apps, compte local avec avatar (#74).
+- [x] Compatibilité systemd (shim `systemctl`, hook APT) et passage à Ubuntu 26.04 LTS (#38).
+- [x] Suppression des doublons et correction d'un data race (#36).
 
 
 ### État actuel
@@ -178,6 +241,11 @@
 - [x] Ajouter un test automatisé dans QEMU avec vérification des marqueurs de résultat.
 - [x] Sélectionner l'entrée de diagnostic dans `scripts/test-live-iso-qemu.sh` et vérifier BIOS/UEFI sans modifier l'ISO livrée.
 - [x] Documenter la RAM, le nombre de CPU et les options nécessaires à la VM.
+- [x] Mode récupération « Winlux Recovery » : réparer GRUB (BIOS, UEFI, Secure Boot), restaurer le point précédent, terminal de secours, fsck (`docs/RECOVERY.md`).
+- [x] Vérification d'intégrité du média au démarrage : manifeste `winlux.sha256` par fichier, entrée GRUB dédiée.
+- [x] Installation silencieuse : fichier de réponse YAML/JSON, pages préconfigurées sautées, compte local uniquement (`docs/AUTOINSTALL.md`, `scripts/test-autoinstall.py`).
+- [x] Installateur : benchmark matériel (note 1,0 à 9,9), profils d'utilisation (Gaming, Bureautique, Développement, Serveur) et migration réseau depuis un autre PC (#101, `scripts/test-installer-oobe.py`).
+- [x] Secure Boot : shim signé, GRUB signé, MokManager, clé MOK et signature du noyau, ISO hybride `WINLUX_SECUREBOOT=1` validée sous OVMF (`docs/SECURE-BOOT.md`, `scripts/test-secureboot-qemu.sh`).
 
 ### Priorité 5 — Thème Windows 11
 
@@ -194,6 +262,9 @@
 - [x] Définir les variantes clair/sombre et le réglage d'échelle.
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
+- [x] Fenêtre « Bienvenue » au premier login (`welcome.rs`) : visite guidée en 8 étapes (Démarrer, Explorer, Paramètres, Terminal, raccourcis, confidentialité, choix du thème clair/sombre et de l’alignement), rouvrable depuis Démarrer (#98).
+- [x] Paramètres > Mises à jour système : mode automatique, manuel ou planifié (jour/heure) pour APT (`winlux-sysupdate`) et Winlux, liste des paquets, journal et notification quand des mises à jour sont disponibles (#98).
+- [x] Paramètres > Confidentialité : télémétrie et historique de localisation désactivés par défaut, autorisations micro/caméra/localisation des .exe (micro refusé appliqué par `winmm`) (#98).
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
 
 ### Priorité 6 — Qualité et livraison
@@ -210,6 +281,12 @@
 - [x] Ajouter les barrières de tests Live/disque installé au workflow de release ; son exécution complète sur les runners GitHub reste à valider.
 - [x] Ajouter le fichier NOTICES au dépôt et copier les notices audio disponibles dans les ISO.
 - [x] Publier ISO, sommes, paquet, manifeste et notes dans les préversions système existantes (notamment preview.4).
+- [x] Ajouter un système d'internationalisation (locale.rs) avec tables de chaînes FR/EN/ES/DE (150 entrées).
+- [x] Ajouter une page Localisation dans les Paramètres (choix langue, 8 claviers, 12 fuseaux horaires).
+- [x] Remplacer les chaînes françaises codées en dur par des appels `tr()` dans le bureau, l'explorateur et le gestionnaire de fenêtres.
+- [x] Étendre winlux-control.sh avec les actions lang-*/tz-* et 8 dispositions clavier.
+- [x] Ajouter le choix de langue et clavier à l'installateur (install.sh).
+- [x] Lire locale.conf au démarrage de session (xsession-winlux, export WINLUX_LANG).
 
 
 ---
