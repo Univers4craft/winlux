@@ -54,6 +54,8 @@ mod notifications;
 mod personalize;
 #[path = "../shell/restore.rs"]
 mod restore;
+#[path = "../shell/regedit.rs"]
+mod regedit;
 #[path = "../shell/settings.rs"]
 mod settings;
 #[path = "../shell/snip.rs"]

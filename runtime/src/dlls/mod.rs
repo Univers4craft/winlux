@@ -69,6 +69,7 @@ pub mod seh;
 pub mod setupapi;
 pub mod shell32;
 pub mod shlwapi;
+pub mod shlwapi_reg;
 pub mod spirv;
 pub mod taskschd;
 pub mod user32;
