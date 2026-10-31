@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **174**
+- Réalisé : **175**
 - À faire ou en cours : **41**
-- Total : **215**
-- Progression : **80.9%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #103 et #107, issues #10 à #98)
+- Total : **216**
+- Progression : **81.0%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103 et #107, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -249,6 +249,7 @@
 - [x] Mode récupération « Winlux Recovery » : réparer GRUB (BIOS, UEFI, Secure Boot), restaurer le point précédent, terminal de secours, fsck (`docs/RECOVERY.md`).
 - [x] Vérification d'intégrité du média au démarrage : manifeste `winlux.sha256` par fichier, entrée GRUB dédiée.
 - [x] Installation silencieuse : fichier de réponse YAML/JSON, pages préconfigurées sautées, compte local uniquement (`docs/AUTOINSTALL.md`, `scripts/test-autoinstall.py`).
+- [x] Installateur : benchmark matériel (note 1,0 à 9,9), profils d'utilisation (Gaming, Bureautique, Développement, Serveur) et migration réseau depuis un autre PC (#101, `scripts/test-installer-oobe.py`).
 - [x] Secure Boot : shim signé, GRUB signé, MokManager, clé MOK et signature du noyau, ISO hybride `WINLUX_SECUREBOOT=1` validée sous OVMF (`docs/SECURE-BOOT.md`, `scripts/test-secureboot-qemu.sh`).
 
 ### Priorité 5 — Thème Windows 11
