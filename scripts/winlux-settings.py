@@ -12,11 +12,11 @@ PAGES = ["Système", "Applications", "Réseau", "Son", "Clavier",
          "Programmes Windows", "Navigateurs", "Accessibilité", "Effets visuels",
          "Localisation", "Gestionnaire de fichiers", "Son avancé", "Mises à jour système",
          "Confidentialité", "Processeur", "Lecteurs réseau", "Personnalisation du bureau",
-         "Alimentation et batterie"]
+         "Bluetooth et appareils", "Alimentation et batterie"]
 FIELDS = {
     0: [("Version", "version"), ("Noyau", "kernel")],
     2: [("Connexion", "network")], 3: [("Volume", "audio")],
-    22: [("Batterie", "battery"), ("Mode", "power_profile"), ("Écran éteint après", "power_screen_now"),
+    23: [("Batterie", "battery"), ("Mode", "power_profile"), ("Écran éteint après", "power_screen_now"),
          ("Veille après", "power_sleep_now"), ("Capot", "power_lid"), ("Bouton d'alimentation", "power_button"),
          ("Luminosité (%)", "power_brightness")],
     4: [("Disposition", "layout"), ("Toucher-clic", "tap")],
@@ -36,7 +36,7 @@ ACTIONS = {
         ("Ajouter Ce PC", "desktop-icon-computer"), ("Ajouter Documents", "desktop-icon-documents")],
     7: [("Rechercher", "update-check"), ("Installer", "update-apply"), ("Restaurer", "update-rollback"),
         ("Mises à jour auto : activer", "update-auto-on"), ("Désactiver", "update-auto-off")],
-    22: [("Performances maximales", "power-profile-performance"), ("Équilibré", "power-profile-balanced"),
+    23: [("Performances maximales", "power-profile-performance"), ("Équilibré", "power-profile-balanced"),
          ("Économie d'énergie", "power-profile-saver"), ("Écran (secteur)", "power-screen-ac"),
          ("Écran (batterie)", "power-screen-dc"), ("Veille (secteur)", "power-sleep-ac"),
          ("Veille (batterie)", "power-sleep-dc"), ("Capot", "power-lid"), ("Bouton d'alimentation", "power-button"),

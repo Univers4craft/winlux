@@ -14,13 +14,17 @@ pub const PAGE_CPU: usize = 19;
 /// Page « Lecteurs réseau » (FTP, SFTP, SMB… montés comme un disque).
 pub const PAGE_NETDRIVES: usize = 20;
 pub const PAGE_PERSONALIZE: usize = 21;
+/// Page « Bluetooth et appareils » (ouverte depuis la barre des tâches).
+pub const BLUETOOTH_PAGE: usize = 22;
 /// Page « Alimentation et batterie » (icône batterie de la barre des tâches).
-pub const PAGE_POWER: usize = 22;
-const PAGE_COUNT: usize = 23;
+pub const PAGE_POWER: usize = 23;
+const PAGE_COUNT: usize = 24;
+/// Appareils Bluetooth affichés (une ligne de boutons chacun).
+const BT_ROWS: usize = 5;
 /// Ordre d'affichage du menu : la personnalisation suit l'apparence,
 /// l'alimentation suit le son et la batterie.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 22, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -46,6 +50,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_PROCESSOR),
         tr(S_NETWORK_DRIVES),
         tr(S_PERSONALIZATION),
+        tr(S_BLUETOOTH_DEVICES),
         tr(S_POWER_BATTERY),
     ]
 }
@@ -71,6 +76,8 @@ static mut UPDATES: Buffer = EMPTY;
 static mut PROGRESS: Buffer = EMPTY;
 static mut BUILD_INFO: Buffer = EMPTY;
 static mut SYSUPDATES: Buffer = EMPTY;
+static mut BLUETOOTH: Buffer = EMPTY;
+static mut BT_CMD: [u8; 64] = [0; 64];
 /// `/run/winlux/power.txt`, écrit par `winlux --power` (démon et commandes).
 static mut POWER: Buffer = EMPTY;
 /// Nombre de mises à jour système déjà signalé (u32::MAX : pas encore lu).
@@ -362,6 +369,14 @@ pub unsafe fn system_tick() -> bool {
         &mut LOG,
     );
     changed |= read(c"Z:\\run\\winlux\\updates.txt", &mut UPDATES);
+    changed |= read(c"Z:\\run\\winlux\\bluetooth.txt", &mut BLUETOOTH);
+    crate::desktop::BLUETOOTH_STATE = if field(BLUETOOTH.get(), b"powered") != b"1" {
+        0
+    } else if number(field(BLUETOOTH.get(), b"connected")) > 0 {
+        2
+    } else {
+        1
+    };
     changed |= read(c"Z:\\run\\winlux\\update-progress", &mut PROGRESS);
     if PAGE == 9 {
         changed |= read(c"Z:\\usr\\share\\winlux\\BUILD-INFO", &mut BUILD_INFO);
@@ -461,6 +476,115 @@ fn push_number(buf: &mut [u8], at: usize, v: u32) -> usize {
         }
     }
     push(buf, at, &digits[i..])
+}
+/// Lignes `device=MAC|nom|type|appairé|connecté` de bluetooth.txt.
+fn bt_device(data: &[u8], index: usize) -> Option<&[u8]> {
+    data.split(|&c| c == b'\n')
+        .filter_map(|l| l.strip_prefix(b"device="))
+        .nth(index)
+}
+fn bt_field(dev: &[u8], i: usize) -> &[u8] {
+    dev.split(|&c| c == b'|').nth(i).unwrap_or(b"")
+}
+/// Commande `bluetooth-<verbe> <MAC>` pour winlux-control.
+unsafe fn bt_command(verb: &[u8], mac: &[u8]) -> Option<&'static core::ffi::CStr> {
+    let buf = &mut *core::ptr::addr_of_mut!(BT_CMD);
+    let n = verb.len() + 1 + mac.len();
+    if mac.len() != 17 || n >= buf.len() {
+        return None;
+    }
+    buf[..verb.len()].copy_from_slice(verb);
+    buf[verb.len()] = b' ';
+    buf[verb.len() + 1..n].copy_from_slice(mac);
+    buf[n] = 0;
+    core::ffi::CStr::from_bytes_with_nul(&buf[..=n]).ok()
+}
+/// Action du bouton principal d'un appareil : appairer, connecter, déconnecter.
+fn bt_primary(dev: &[u8]) -> (&'static [u8], &'static [u8]) {
+    match (bt_field(dev, 3), bt_field(dev, 4)) {
+        (b"1", b"1") => (b"bluetooth-disconnect", b"D\xE9connecter"),
+        (b"1", _) => (b"bluetooth-connect", b"Connecter"),
+        _ => (b"bluetooth-pair", b"Appairer"),
+    }
+}
+unsafe fn draw_bluetooth(g: &mut Gfx, c: &Rect) {
+    let bt = BLUETOOTH.get();
+    let state: &[u8] = if field(bt, b"present") != b"1" {
+        b"Aucun adaptateur Bluetooth d\xE9tect\xE9 (BlueZ)."
+    } else if field(bt, b"powered") != b"1" {
+        b"D\xE9sactiv\xE9"
+    } else if field(bt, b"discovering") == b"1" {
+        b"Activ\xE9 - recherche d'appareils en cours..."
+    } else {
+        b"Activ\xE9 - visible pour les appareils \xE0 proximit\xE9"
+    };
+    row(g, c, 44, b"Bluetooth", state);
+    button(g, c, 0, 0, b"Activer", 0);
+    button(g, c, 0, 1, b"D\xE9sactiver", 1);
+    button(g, c, 0, 2, b"Rechercher des appareils", 2);
+    let mut shown = 0;
+    for k in 0..BT_ROWS {
+        let Some(dev) = bt_device(bt, k) else { break };
+        let mut label = [0u8; 96];
+        let mut n = 0;
+        let kind: &[u8] = match bt_field(dev, 2) {
+            b"audio" => b" (audio)",
+            b"clavier" => b" (clavier)",
+            b"souris" => b" (souris)",
+            b"manette" => b" (manette)",
+            b"telephone" => b" (t\xE9l\xE9phone)",
+            _ => b"",
+        };
+        let status: &[u8] = if bt_field(dev, 4) == b"1" {
+            b" - connect\xE9"
+        } else {
+            b""
+        };
+        for part in [bt_field(dev, 1), kind, status] {
+            let take = part.len().min(label.len() - n);
+            label[n..n + take].copy_from_slice(&part[..take]);
+            n += take;
+        }
+        let row_i = k as i32 + 1;
+        let id = 3 + 3 * k as i32;
+        button(g, c, row_i, 0, &label[..n], id);
+        button(g, c, row_i, 1, bt_primary(dev).1, id + 1);
+        if bt_field(dev, 3) == b"1" {
+            button(g, c, row_i, 2, b"Oublier", id + 2);
+        }
+        shown += 1;
+    }
+    let y = 108 + (shown.max(1) + 1) * 44 + 16;
+    if shown == 0 && field(bt, b"powered") == b"1" {
+        row(
+            g,
+            c,
+            108 + 44,
+            b"Appareils",
+            b"Aucun appareil : lancez une recherche et mettez l'appareil en mode appairage.",
+        );
+    }
+    let mut summary = [0u8; 96];
+    let mut n = 0;
+    for part in [
+        b"Manettes : ".as_slice(),
+        value(b"gamepads"),
+        b"   Webcams : ".as_slice(),
+        value(b"cameras"),
+    ] {
+        let take = part.len().min(summary.len() - n);
+        summary[n..n + take].copy_from_slice(&part[..take]);
+        n += take;
+    }
+    row(
+        g,
+        c,
+        y,
+        b"P\xE9riph\xE9riques des programmes Windows",
+        &summary[..n],
+    );
+    row(g, c, y + 60, b"Micro par d\xE9faut", value(b"microphone"));
+    journal(g, c, y + 124, LOG.get());
 }
 pub unsafe fn control(action: &core::ffi::CStr) -> bool {
     if (updating() || sysupdate_busy())
@@ -591,6 +715,10 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (PAGE_PRIVACY, 11) => value(b"privacy_location") == b"allow",
         (PAGE_PRIVACY, 18) => value(b"privacy_location_history") != b"on",
         (PAGE_PRIVACY, 19) => value(b"privacy_location_history") == b"on",
+        (BLUETOOTH_PAGE, 0) => field(BLUETOOTH.get(), b"powered") == b"1",
+        (BLUETOOTH_PAGE, 1) => {
+            field(BLUETOOTH.get(), b"present") == b"1" && field(BLUETOOTH.get(), b"powered") != b"1"
+        }
         _ => false,
     };
     let primary = PAGE == 7 && id == 1
@@ -1632,6 +1760,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         PAGE_PRIVACY => draw_privacy(g, &c),
         PAGE_CPU => crate::settings_cpu::draw(g, &c),
         PAGE_NETDRIVES => crate::netdrives::draw(g, &c),
+        BLUETOOTH_PAGE => draw_bluetooth(g, &c),
         _ => {}
     }
     if PAGE == PAGE_NETDRIVES {
@@ -2270,6 +2399,21 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }),
         (PAGE_PRIVACY, 18) => Some(c"privacy-history-off"),
         (PAGE_PRIVACY, 19) => Some(c"privacy-history-on"),
+        (BLUETOOTH_PAGE, 0) => Some(c"bluetooth-on"),
+        (BLUETOOTH_PAGE, 1) => Some(c"bluetooth-off"),
+        (BLUETOOTH_PAGE, 2) => Some(c"bluetooth-scan"),
+        (BLUETOOTH_PAGE, id) if id >= 3 => {
+            let k = (id - 3) as usize / 3;
+            let Some(dev) = bt_device(BLUETOOTH.get(), k) else {
+                return true;
+            };
+            let mac = bt_field(dev, 0);
+            match (id - 3) % 3 {
+                1 => bt_command(bt_primary(dev).0, mac),
+                2 if bt_field(dev, 3) == b"1" => bt_command(b"bluetooth-remove", mac),
+                _ => None,
+            }
+        }
         _ => None,
     };
     if let Some(a) = action {

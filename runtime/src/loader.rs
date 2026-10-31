@@ -377,7 +377,8 @@ fn resolve_one(dll: &str, want: &Want, importer: &Module) -> Result<usize, Strin
     if dlls::is_builtin(&ndll) {
         let found = match want {
             Want::Name(n) => dlls::lookup(&ndll, n),
-            Want::Ordinal(_) => None,
+            // Les DLL intégrées exportent leurs ordinaux sous le nom « #n ».
+            Want::Ordinal(o) => dlls::lookup(&ndll, &format!("#{o}")),
         };
         return Ok(match found {
             Some(a) => a,

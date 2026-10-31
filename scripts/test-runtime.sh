@@ -22,13 +22,14 @@ printf '30000000\n' > "$battery/energy_now"
 printf '40000000\n' > "$battery/energy_full"
 printf '10000000\n' > "$battery/power_now"
 
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression voicerecorder power_api; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression voicerecorder power_api audio_suite; do
     exe="$testdir/$name.exe"
     test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
     printf '\n== %s ==\n' "$name"
     if [ "$name" = exitcode ]; then expected=42; else expected=0; fi
     set +e
-    WINLUX_TEST=salut WINLUX_GUI=headless WINLUX_POWER_ROOT="$power_root" "$runtime" "$exe"
+    # Sortie audio nulle cadencée : pas de carte son sur les runners CI.
+    WINLUX_AUDIO=null WINLUX_TEST=salut WINLUX_GUI=headless WINLUX_POWER_ROOT="$power_root" "$runtime" "$exe"
     actual=$?
     set -e
     test "$actual" -eq "$expected" || {

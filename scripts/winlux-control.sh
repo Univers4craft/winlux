@@ -78,6 +78,30 @@ status() {
         devices=0
         if test -r "$root/proc/bus/input/devices"; then devices=$(awk '/^N: Name=/ { n++ } END { print n+0 }' "$root/proc/bus/input/devices"); fi
         printf 'input_devices=%s\n' "$devices"
+        # Périphériques des programmes Windows : manettes (XInput/DirectInput),
+        # webcams (Media Foundation) et micro (waveIn/WASAPI).
+        pads=0
+        if test -r "$root/proc/bus/input/devices"; then pads=$(awk '/^H: Handlers=/ && / js[0-9]/ { n++ } END { print n+0 }' "$root/proc/bus/input/devices"); fi
+        printf 'gamepads=%s\n' "$pads"
+        cams=0
+        for cam in "$root"/sys/class/video4linux/video*; do
+            test -r "$cam/name" || continue
+            # Un seul nœud de capture par caméra UVC (index 0).
+            test "$(cat "$cam/index" 2>/dev/null || echo 0)" = 0 || continue
+            cams=$((cams + 1))
+        done
+        printf 'cameras=%s\n' "$cams"
+        printf 'microphone='
+        if have wpctl && mic=$(wpctl inspect @DEFAULT_AUDIO_SOURCE@ 2>/dev/null | sed -n 's/.*node.description = "\(.*\)"/\1/p' | head -n 1) && test -n "$mic"; then
+            printf '%s\n' "$mic"
+        elif test -r "$root/proc/asound/pcm" && grep -q 'capture' "$root/proc/asound/pcm"; then
+            grep 'capture' "$root/proc/asound/pcm" | head -n 1 | cut -d: -f3 | sed 's/^ *//'
+        else printf 'Aucun micro detecte\n'; fi
+        bluetooth="$run/bluetooth.txt"
+        if have winlux-bluetooth; then winlux-bluetooth status 2>/dev/null || true; fi
+        printf 'bluetooth_present=%s\n' "$(value "$bluetooth" present | sed 's/^$/0/')"
+        printf 'bluetooth_powered=%s\n' "$(value "$bluetooth" powered | sed 's/^$/0/')"
+        printf 'bluetooth_connected=%s\n' "$(value "$bluetooth" connected | sed 's/^$/0/')"
         printf 'update_auto=%s\n' "$(winlux-update --auto status 2>/dev/null || printf 'indisponible')"
         if test -f "$root/var/lib/winlux/pending-reboot"; then
             printf 'update_action=reboot\n'
@@ -212,6 +236,9 @@ perform() {
                 iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')
                 test -n "$iface" && nmcli device disconnect "$iface" || true
             fi ;;
+        bluetooth-on|bluetooth-off|bluetooth-scan) winlux-bluetooth "${action#bluetooth-}" ;;
+        bluetooth-pair|bluetooth-connect|bluetooth-disconnect|bluetooth-remove)
+            winlux-bluetooth "${action#bluetooth-}" "${2:-}" ;;
         volume-up|volume-down|volume-mute)
             if have wpctl; then
                 case "$action" in volume-up) wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;; volume-down) wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;; *) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;; esac
@@ -370,7 +397,7 @@ perform() {
 log="$run/action.log"
 case "$action" in update-*) log="$run/update.log" ;; sysupdate-*) log="$run/sysupdate.log" ;; esac
 case "$action" in update-check|update-apply|update-rollback) rm -f "$run/update-error-phase" ;; esac
-if perform > "$log" 2>&1; then
+if perform "$@" > "$log" 2>&1; then
     message 'Operation terminee.'
     result=0
 else

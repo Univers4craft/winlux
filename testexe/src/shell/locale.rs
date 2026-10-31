@@ -236,9 +236,10 @@ pub const S_PRIVACY: usize = 157;
 pub const S_PROCESSOR: usize = 158;
 pub const S_NETWORK_DRIVES: usize = 159;
 pub const S_PERSONALIZATION: usize = 160;
-pub const S_POWER_BATTERY: usize = 161;
+pub const S_BLUETOOTH_DEVICES: usize = 161;
+pub const S_POWER_BATTERY: usize = 162;
 
-const STRING_COUNT: usize = 162;
+const STRING_COUNT: usize = 163;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -426,6 +427,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Processeur",
     b"Lecteurs r\xE9seau",
     b"Personnalisation",
+    b"Bluetooth et appareils",
     b"Alimentation et batterie",
 ];
 
@@ -613,6 +615,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Processor",
     b"Network drives",
     b"Personalization",
+    b"Bluetooth & devices",
     b"Power and battery",
 ];
 
@@ -800,6 +803,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Procesador",
     b"Unidades de red",
     b"Personalizaci\xF3n",
+    b"Bluetooth y dispositivos",
     b"Energ\xEDa y bater\xEDa",
 ];
 
@@ -987,6 +991,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Prozessor",
     b"Netzlaufwerke",
     b"Personalisierung",
+    b"Bluetooth und Ger\xE4te",
     b"Energie und Akku",
 ];
 

@@ -726,7 +726,13 @@ pub unsafe extern "win64" fn start_service_ctrl_dispatcher_a(
         return 0;
     }
     let svc_name = std::env::var("WINLUX_SERVICE_NAME").unwrap_or_default();
-    let sock_path = control_sock_path(&svc_name);
+    run_service_dispatcher(&svc_name, table)
+}
+
+/// Corps de `StartServiceCtrlDispatcherA` pour le service `svc_name` (le nom
+/// vient de `WINLUX_SERVICE_NAME`, posé par le gestionnaire de services).
+unsafe fn run_service_dispatcher(svc_name: &str, table: *const u8) -> i32 {
+    let sock_path = control_sock_path(svc_name);
     let _ = std::fs::remove_file(&sock_path);
     let listener = match UnixListener::bind(&sock_path) {
         Ok(l) => l,
@@ -913,8 +919,9 @@ mod tests {
 
     #[test]
     fn dispatcher_recoit_le_controle_et_signale_larret() {
+        // Nom passé directement au répartiteur : aucune variable
+        // d'environnement partagée avec les autres tests.
         let svc_name = format!("winlux-test-ctrl-{}", std::process::id());
-        std::env::set_var("WINLUX_SERVICE_NAME", &svc_name);
 
         static STOP_FLAG: AtomicU32 = AtomicU32::new(0);
         static HANDLER_CODE: AtomicU32 = AtomicU32::new(0);
@@ -959,14 +966,32 @@ mod tests {
         table_bytes.extend_from_slice(&0usize.to_ne_bytes()); // null name
         table_bytes.extend_from_slice(&0usize.to_ne_bytes()); // null proc
 
+        let thread_name = svc_name.clone();
         let dispatcher_thread = std::thread::spawn(move || unsafe {
             // name_cstr must stay alive for the duration.
             let _keep = name_cstr;
-            start_service_ctrl_dispatcher_a(table_bytes.as_ptr())
+            run_service_dispatcher(&thread_name, table_bytes.as_ptr())
         });
 
-        // Give the service time to start and listen.
-        std::thread::sleep(std::time::Duration::from_millis(200));
+        // Wait until the service has registered its handler and reported
+        // SERVICE_RUNNING (the socket is bound before the service starts):
+        // a control sent earlier would be dropped and the test would hang.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let ready = {
+                let disp = lock(dispatcher());
+                disp.handler.is_some()
+                    && disp.current_state.load(Ordering::Relaxed) == SERVICE_RUNNING
+            };
+            if ready {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "le service de test n'a pas démarré"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
 
         // Send stop control via the socket.
         assert!(send_control_to_service(&svc_name, SERVICE_CONTROL_STOP).is_ok());

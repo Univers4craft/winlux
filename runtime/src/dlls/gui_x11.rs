@@ -1746,6 +1746,7 @@ impl X11Backend {
             }
             Event::ButtonPress(e) => {
                 crate::power::note_activity();
+                gui::raw_mouse_button(e.detail, true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
@@ -1774,6 +1775,7 @@ impl X11Backend {
                 })
             }
             Event::ButtonRelease(e) => {
+                gui::raw_mouse_button(e.detail, false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
@@ -1791,6 +1793,7 @@ impl X11Backend {
             }
             Event::MotionNotify(e) => {
                 crate::power::note_activity();
+                gui::raw_mouse_motion(e.root_x as i32, e.root_y as i32);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
@@ -1822,6 +1825,7 @@ impl X11Backend {
             }
             Event::KeyPress(e) => {
                 crate::power::note_activity();
+                gui::raw_key(e.detail, true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
                     eprintln!("Winlux X11 keycode {}", e.detail);
@@ -1878,6 +1882,7 @@ impl X11Backend {
                 })
             }
             Event::KeyRelease(e) => {
+                gui::raw_key(e.detail, false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let syms = self.key_syms(e.detail);
                 let vk = self
