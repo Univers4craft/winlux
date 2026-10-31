@@ -345,6 +345,7 @@ pub struct WaveHdr {
     pub data: *mut u8,
     pub buffer_length: u32,
     pub bytes_recorded: u32,
+    pub user: usize,
     pub flags: u32,
     pub loops: u32,
     pub next: *mut WaveHdr,
