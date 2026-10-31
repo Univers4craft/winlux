@@ -65,7 +65,32 @@ pub unsafe extern "win64" fn cxa_free_exception(obj: *mut c_void) {
 }
 
 // ── __cxa_throw ──────────────────────────────────────────────────────
-pub unsafe extern "win64" fn cxa_throw(
+// Trampoline captures PE caller's RIP/RSP before the Rust prologue runs.
+core::arch::global_asm!(
+    ".globl winlux_cxa_throw",
+    ".p2align 4",
+    "winlux_cxa_throw:",
+    // On entry: [rsp]=ret_addr, RCX=obj, RDX=tinfo, R8=dtor
+    "sub rsp, 56",
+    "mov [rsp+48], rcx",
+    "mov [rsp+40], rdx",
+    "mov [rsp+32], r8",
+    "mov rcx, [rsp+56]",   // caller RIP (return address)
+    "lea rdx, [rsp+64]",   // caller RSP
+    "call {store}",
+    "mov rcx, [rsp+48]",
+    "mov rdx, [rsp+40]",
+    "mov r8, [rsp+32]",
+    "add rsp, 56",
+    "jmp {inner}",
+    store = sym super::libgcc::store_throw_ctx,
+    inner = sym cxa_throw_inner,
+);
+extern "win64" {
+    pub fn winlux_cxa_throw(obj: *mut c_void, tinfo: *mut c_void, dtor: *mut c_void) -> !;
+}
+
+unsafe extern "win64" fn cxa_throw_inner(
     obj: *mut c_void,
     tinfo: *mut c_void,
     dtor: *mut c_void,
@@ -81,10 +106,8 @@ pub unsafe extern "win64" fn cxa_throw(
     let ue = hdr.add(CXA_HDR_SIZE);
     (ue as *mut u64).write(GXX_EXCEPTION_CLASS); // exception_class
     (ue.add(8) as *mut u64).write(cxa_exception_cleanup as *const () as u64);
-    // private[0] and private[1] zeroed by alloc_zeroed
 
     super::libgcc::unwind_raise_exception(ue as *mut c_void);
-    // If _Unwind_RaiseException returns, call terminate
     std::process::abort();
 }
 
@@ -146,14 +169,32 @@ pub unsafe extern "win64" fn cxa_end_catch() {
 }
 
 // ── __cxa_rethrow ────────────────────────────────────────────────────
-pub unsafe extern "win64" fn cxa_rethrow() -> ! {
+core::arch::global_asm!(
+    ".globl winlux_cxa_rethrow",
+    ".p2align 4",
+    "winlux_cxa_rethrow:",
+    // No params to save
+    "sub rsp, 40",
+    "mov rcx, [rsp+40]",   // caller RIP
+    "lea rdx, [rsp+48]",   // caller RSP
+    "call {store}",
+    "add rsp, 40",
+    "jmp {inner}",
+    store = sym super::libgcc::store_throw_ctx,
+    inner = sym cxa_rethrow_inner,
+);
+extern "win64" {
+    pub fn winlux_cxa_rethrow() -> !;
+}
+
+unsafe extern "win64" fn cxa_rethrow_inner() -> ! {
     let ue = CAUGHT_STACK.with(|s| {
         let stack = s.borrow();
         stack.last().copied()
     });
     match ue {
         Some(ue) => {
-            super::libgcc::unwind_resume(ue as *mut c_void);
+            super::libgcc::unwind_resume_inner(ue as *mut c_void);
         }
         None => std::process::abort(),
     }
@@ -216,10 +257,10 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "__cxa_allocate_exception" => fn cxa_allocate_exception,
         "__cxa_free_exception" => fn cxa_free_exception,
-        "__cxa_throw" => fn cxa_throw,
+        "__cxa_throw" => fn winlux_cxa_throw,
         "__cxa_begin_catch" => fn cxa_begin_catch,
         "__cxa_end_catch" => fn cxa_end_catch,
-        "__cxa_rethrow" => fn cxa_rethrow,
+        "__cxa_rethrow" => fn winlux_cxa_rethrow,
         "__cxa_current_exception_type" => fn cxa_current_exception_type,
         "__cxa_pure_virtual" => fn cxa_pure_virtual,
         "__cxa_atexit" => fn cxa_atexit,

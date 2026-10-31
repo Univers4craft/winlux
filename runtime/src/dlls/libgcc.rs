@@ -40,9 +40,36 @@ const UE_SIZE: usize = 32;
 // ── CONTEXT offsets (must match ntdll.rs) ────────────────────────────
 const CTX_RAX: usize = 0x78;
 const CTX_RDX: usize = 0x88;
+#[allow(dead_code)]
+const CTX_RBX: usize = 0x90;
 const CTX_RSP: usize = 0x98;
+#[allow(dead_code)]
+const CTX_RBP: usize = 0xA0;
+#[allow(dead_code)]
+const CTX_RSI: usize = 0xA8;
+#[allow(dead_code)]
+const CTX_RDI: usize = 0xB0;
+#[allow(dead_code)]
+const CTX_R12: usize = 0xD8;
+#[allow(dead_code)]
+const CTX_R13: usize = 0xE0;
+#[allow(dead_code)]
+const CTX_R14: usize = 0xE8;
+#[allow(dead_code)]
+const CTX_R15: usize = 0xF0;
 const CTX_RIP: usize = 0xF8;
 const CTX_SIZE: usize = 1232;
+
+// ── PE caller context (set by naked cxa_throw / _Unwind_Resume) ─────
+use std::sync::atomic::{AtomicU64, Ordering};
+pub static THROW_CALLER_RIP: AtomicU64 = AtomicU64::new(0);
+pub static THROW_CALLER_RSP: AtomicU64 = AtomicU64::new(0);
+
+#[inline(never)]
+pub unsafe extern "win64" fn store_throw_ctx(rip: u64, rsp: u64) {
+    THROW_CALLER_RIP.store(rip, Ordering::Relaxed);
+    THROW_CALLER_RSP.store(rsp, Ordering::Relaxed);
+}
 
 // ── _Unwind_Context ──────────────────────────────────────────────────
 // We piggyback on the DISPATCHER_CONTEXT + CONTEXT pair that SEH gives us.
@@ -74,11 +101,15 @@ unsafe fn ctx_set(c: *mut u8, off: usize, v: u64) {
 // who can catch the exception.
 unsafe fn phase1(exc: *mut u8) -> UnwindReason {
     let mut uc = std::mem::zeroed::<UnwindContext>();
-    // Capture caller's context
-    super::ntdll::rtl_capture_context(uc.ctx.as_mut_ptr() as *mut c_void);
-    // We are several frames deep (phase1 <- _Unwind_RaiseException <- __cxa_throw
-    // <- throw).  Walk a few frames to get to the throwing frame.
-    // Actually we start from here and keep going.
+    // Start directly from the PE frame that threw (set by naked cxa_throw).
+    let throw_rip = THROW_CALLER_RIP.load(Ordering::Relaxed);
+    let throw_rsp = THROW_CALLER_RSP.load(Ordering::Relaxed);
+    if throw_rip != 0 {
+        ctx_set(uc.ctx.as_mut_ptr(), CTX_RIP, throw_rip);
+        ctx_set(uc.ctx.as_mut_ptr(), CTX_RSP, throw_rsp);
+    } else {
+        super::ntdll::rtl_capture_context(uc.ctx.as_mut_ptr() as *mut c_void);
+    }
 
     for _ in 0..256u32 {
         let rip = ctx_get(uc.ctx.as_ptr(), CTX_RIP);
@@ -149,7 +180,14 @@ unsafe fn phase2(exc: *mut u8) -> UnwindReason {
     let target_frame = (exc.add(UE_PRIVATE1) as *const u64).read_unaligned();
 
     let mut uc = std::mem::zeroed::<UnwindContext>();
-    super::ntdll::rtl_capture_context(uc.ctx.as_mut_ptr() as *mut c_void);
+    let throw_rip = THROW_CALLER_RIP.load(Ordering::Relaxed);
+    let throw_rsp = THROW_CALLER_RSP.load(Ordering::Relaxed);
+    if throw_rip != 0 {
+        ctx_set(uc.ctx.as_mut_ptr(), CTX_RIP, throw_rip);
+        ctx_set(uc.ctx.as_mut_ptr(), CTX_RSP, throw_rsp);
+    } else {
+        super::ntdll::rtl_capture_context(uc.ctx.as_mut_ptr() as *mut c_void);
+    }
 
     for _ in 0..256u32 {
         let rip = ctx_get(uc.ctx.as_ptr(), CTX_RIP);
@@ -203,15 +241,36 @@ unsafe fn phase2(exc: *mut u8) -> UnwindReason {
             let reason = personality(1, actions, exc_class, exc, &mut uc);
 
             if reason == UnwindReason::InstallContext as i32 {
-                return UnwindReason::InstallContext;
+                restore_context(&uc);
             }
         }
 
         if frame == target_frame {
-            return UnwindReason::InstallContext;
+            restore_context(&uc);
         }
     }
     UnwindReason::FatalPhase2Error
+}
+
+unsafe fn restore_context(uc: &UnwindContext) -> ! {
+    let ctx_ptr = uc.ctx.as_ptr();
+    std::arch::asm!(
+        "mov rbx, [r11 + 0x90]",
+        "mov rbp, [r11 + 0xA0]",
+        "mov rsi, [r11 + 0xA8]",
+        "mov rdi, [r11 + 0xB0]",
+        "mov r12, [r11 + 0xD8]",
+        "mov r13, [r11 + 0xE0]",
+        "mov r14, [r11 + 0xE8]",
+        "mov r15, [r11 + 0xF0]",
+        "mov rsp, [r11 + 0x98]",
+        "mov rax, [r11 + 0x78]",
+        "mov rdx, [r11 + 0x88]",
+        "mov rcx, [r11 + 0xF8]",
+        "jmp rcx",
+        in("r11") ctx_ptr,
+        options(noreturn),
+    );
 }
 
 // ====================================================================
@@ -230,7 +289,27 @@ pub unsafe extern "win64" fn unwind_raise_exception(exc: *mut c_void) -> i32 {
     UnwindReason::FatalPhase2Error as i32
 }
 
-pub unsafe extern "win64" fn unwind_resume(exc: *mut c_void) -> ! {
+core::arch::global_asm!(
+    ".globl winlux_unwind_resume",
+    ".p2align 4",
+    "winlux_unwind_resume:",
+    // RCX = exc (one param to save)
+    "sub rsp, 40",
+    "mov [rsp+32], rcx",
+    "mov rcx, [rsp+40]",   // caller RIP
+    "lea rdx, [rsp+48]",   // caller RSP
+    "call {store}",
+    "mov rcx, [rsp+32]",
+    "add rsp, 40",
+    "jmp {inner}",
+    store = sym store_throw_ctx,
+    inner = sym unwind_resume_inner,
+);
+extern "win64" {
+    pub fn winlux_unwind_resume(exc: *mut c_void) -> !;
+}
+
+pub unsafe extern "win64" fn unwind_resume_inner(exc: *mut c_void) -> ! {
     let exc = exc as *mut u8;
     phase2(exc);
     std::process::abort();
@@ -484,7 +563,7 @@ pub unsafe extern "win64" fn unwind_backtrace(_ip: *mut c_void, _arg: *mut c_voi
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "_Unwind_RaiseException" => fn unwind_raise_exception,
-        "_Unwind_Resume" => fn unwind_resume,
+        "_Unwind_Resume" => fn winlux_unwind_resume,
         "_Unwind_DeleteException" => fn unwind_delete_exception,
         "_Unwind_GetLanguageSpecificData" => fn unwind_get_language_specific_data,
         "_Unwind_GetRegionStart" => fn unwind_get_region_start,
