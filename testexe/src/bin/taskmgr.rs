@@ -4,10 +4,10 @@
 
 use winlux_testexe::*;
 
-#[path = "../shell/taskmgr.rs"]
-mod taskmgr;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/taskmgr.rs"]
+mod taskmgr;
 #[path = "../shell/wm_standalone.rs"]
 mod wm;
 
@@ -66,17 +66,31 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             // WM_PAINT
             let mut ps: PAINTSTRUCT = core::mem::zeroed();
             let hdc = BeginPaint(hwnd, &mut ps);
-            let mut outer = Rect { left: 0, top: 0, right: 1000, bottom: 650 };
+            let mut outer = Rect {
+                left: 0,
+                top: 0,
+                right: 1000,
+                bottom: 650,
+            };
             GetClientRect(hwnd, &mut outer);
             let frame = wm::Frame {
                 outer,
-                title: Rect { left: 0, top: 0, right: outer.right, bottom: 0 },
+                title: Rect {
+                    left: 0,
+                    top: 0,
+                    right: outer.right,
+                    bottom: 0,
+                },
                 client: outer,
             };
             let fonts = gfx::Fonts::new();
             let mut brushes = gfx::Brushes::new();
             SetBkMode(hdc, 1);
-            let mut g = wm::Gfx { hdc, b: &mut brushes, f: &fonts };
+            let mut g = wm::Gfx {
+                hdc,
+                b: &mut brushes,
+                f: &fonts,
+            };
             taskmgr::draw(&mut g, &frame);
             brushes.release();
             fonts.release();
@@ -87,11 +101,21 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             // WM_LBUTTONDOWN
             let x = (lparam & 0xFFFF) as i16 as i32;
             let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
-            let mut outer = Rect { left: 0, top: 0, right: 1000, bottom: 650 };
+            let mut outer = Rect {
+                left: 0,
+                top: 0,
+                right: 1000,
+                bottom: 650,
+            };
             GetClientRect(hwnd, &mut outer);
             let frame = wm::Frame {
                 outer,
-                title: Rect { left: 0, top: 0, right: outer.right, bottom: 0 },
+                title: Rect {
+                    left: 0,
+                    top: 0,
+                    right: outer.right,
+                    bottom: 0,
+                },
                 client: outer,
             };
             if taskmgr::mouse(wm::Mouse::Down, x, y, &frame) {
@@ -103,11 +127,21 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             // WM_MOUSEMOVE
             let x = (lparam & 0xFFFF) as i16 as i32;
             let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
-            let mut outer = Rect { left: 0, top: 0, right: 1000, bottom: 650 };
+            let mut outer = Rect {
+                left: 0,
+                top: 0,
+                right: 1000,
+                bottom: 650,
+            };
             GetClientRect(hwnd, &mut outer);
             let frame = wm::Frame {
                 outer,
-                title: Rect { left: 0, top: 0, right: outer.right, bottom: 0 },
+                title: Rect {
+                    left: 0,
+                    top: 0,
+                    right: outer.right,
+                    bottom: 0,
+                },
                 client: outer,
             };
             if taskmgr::mouse(wm::Mouse::Move, x, y, &frame) {
@@ -120,11 +154,21 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             let delta = ((wparam >> 16) as i16 as i32) / 120;
             let x = (lparam & 0xFFFF) as i16 as i32;
             let y = ((lparam >> 16) & 0xFFFF) as i16 as i32;
-            let mut outer = Rect { left: 0, top: 0, right: 1000, bottom: 650 };
+            let mut outer = Rect {
+                left: 0,
+                top: 0,
+                right: 1000,
+                bottom: 650,
+            };
             GetClientRect(hwnd, &mut outer);
             let frame = wm::Frame {
                 outer,
-                title: Rect { left: 0, top: 0, right: outer.right, bottom: 0 },
+                title: Rect {
+                    left: 0,
+                    top: 0,
+                    right: outer.right,
+                    bottom: 0,
+                },
                 client: outer,
             };
             if taskmgr::mouse(wm::Mouse::Wheel(delta), x, y, &frame) {

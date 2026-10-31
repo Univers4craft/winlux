@@ -1058,7 +1058,13 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         if !h.is_null() && (h as isize) != -1 {
             let mut buf = [0u8; 32768];
             let mut got = 0u32;
-            ReadFile(h, buf.as_mut_ptr(), buf.len() as u32, &mut got, core::ptr::null_mut());
+            ReadFile(
+                h,
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                &mut got,
+                core::ptr::null_mut(),
+            );
             CloseHandle(h);
             // Extract filename from path
             let mut fname_start = 0;

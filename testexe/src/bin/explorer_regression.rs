@@ -6,20 +6,20 @@
 use winlux_testexe::*;
 #[path = "../shell/desktop.rs"]
 mod desktop;
+#[path = "../shell/diskcleaner.rs"]
+mod diskcleaner;
 #[path = "../shell/explorer.rs"]
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/login.rs"]
 mod login;
-#[path = "../shell/notifications.rs"]
-mod notifications;
 #[path = "../shell/notepad.rs"]
 mod notepad;
+#[path = "../shell/notifications.rs"]
+mod notifications;
 #[path = "../shell/settings.rs"]
 mod settings;
-#[path = "../shell/diskcleaner.rs"]
-mod diskcleaner;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
 #[path = "../shell/utilities.rs"]

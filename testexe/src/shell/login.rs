@@ -66,7 +66,13 @@ pub unsafe fn init() {
     );
     if handle as isize > 0 {
         let mut read = 0u32;
-        ReadFile(handle, buf.as_mut_ptr() as _, buf.len() as u32, &mut read, core::ptr::null_mut());
+        ReadFile(
+            handle,
+            buf.as_mut_ptr() as _,
+            buf.len() as u32,
+            &mut read,
+            core::ptr::null_mut(),
+        );
         CloseHandle(handle);
         let data = &buf[..read as usize];
         for line in data.split(|&c| c == b'\n') {
@@ -153,7 +159,13 @@ unsafe fn check_password() -> bool {
         return pwd == b"winlux";
     }
     let mut read = 0u32;
-    ReadFile(handle, buf.as_mut_ptr() as _, buf.len() as u32, &mut read, core::ptr::null_mut());
+    ReadFile(
+        handle,
+        buf.as_mut_ptr() as _,
+        buf.len() as u32,
+        &mut read,
+        core::ptr::null_mut(),
+    );
     CloseHandle(handle);
     let data = &buf[..read as usize];
     for line in data.split(|&c| c == b'\n') {
@@ -192,7 +204,11 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
         }
     }
 
-    let fade_alpha = if LOGIN_FADE_START > 0 { 1000 - LOGIN_FADE } else { 1000 };
+    let fade_alpha = if LOGIN_FADE_START > 0 {
+        1000 - LOGIN_FADE
+    } else {
+        1000
+    };
 
     // Fond dégradé bleu sombre.
     let bg_top = rgb(0x00, 0x47, 0x8A);
@@ -202,8 +218,18 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
         let y0 = h * i / steps;
         let y1 = h * (i + 1) / steps;
         let r = mix(bg_top & 0xFF, bg_bot & 0xFF, i as i32, steps as i32);
-        let g = mix((bg_top >> 8) & 0xFF, (bg_bot >> 8) & 0xFF, i as i32, steps as i32);
-        let bl = mix((bg_top >> 16) & 0xFF, (bg_bot >> 16) & 0xFF, i as i32, steps as i32);
+        let g = mix(
+            (bg_top >> 8) & 0xFF,
+            (bg_bot >> 8) & 0xFF,
+            i as i32,
+            steps as i32,
+        );
+        let bl = mix(
+            (bg_top >> 16) & 0xFF,
+            (bg_bot >> 16) & 0xFF,
+            i as i32,
+            steps as i32,
+        );
         fill(hdc, &mut b, 0, y0, w, y1, rgb(r, g, bl));
     }
 
@@ -216,15 +242,39 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
     time_buf[2] = b':';
     time_buf[3] = b'0' + (st.minute / 10) as u8;
     time_buf[4] = b'0' + (st.minute % 10) as u8;
-    text_centered(hdc, f.display, 28, mix(0, rgb(0xFF, 0xFF, 0xFF), fade_alpha, 1000), w / 2, h / 6, &time_buf[..5]);
+    text_centered(
+        hdc,
+        f.display,
+        28,
+        mix(0, rgb(0xFF, 0xFF, 0xFF), fade_alpha, 1000),
+        w / 2,
+        h / 6,
+        &time_buf[..5],
+    );
 
     // Date sous l'heure.
     let jours: [&[u8]; 7] = [
-        b"dimanche", b"lundi", b"mardi", b"mercredi", b"jeudi", b"vendredi", b"samedi",
+        b"dimanche",
+        b"lundi",
+        b"mardi",
+        b"mercredi",
+        b"jeudi",
+        b"vendredi",
+        b"samedi",
     ];
     let mois: [&[u8]; 12] = [
-        b"janvier", b"f\xE9vrier", b"mars", b"avril", b"mai", b"juin",
-        b"juillet", b"ao\xFBt", b"septembre", b"octobre", b"novembre", b"d\xE9cembre",
+        b"janvier",
+        b"f\xE9vrier",
+        b"mars",
+        b"avril",
+        b"mai",
+        b"juin",
+        b"juillet",
+        b"ao\xFBt",
+        b"septembre",
+        b"octobre",
+        b"novembre",
+        b"d\xE9cembre",
     ];
     let dow = (st.day_of_week as usize) % 7;
     let mon = ((st.month as usize).wrapping_sub(1)) % 12;
@@ -246,7 +296,15 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
     let mois_nom = mois[mon];
     date_buf[pos..pos + mois_nom.len()].copy_from_slice(mois_nom);
     pos += mois_nom.len();
-    text_centered(hdc, f.body, 13, mix(0, rgb(0xCC, 0xCC, 0xCC), fade_alpha, 1000), w / 2, h / 6 + 36, &date_buf[..pos]);
+    text_centered(
+        hdc,
+        f.body,
+        13,
+        mix(0, rgb(0xCC, 0xCC, 0xCC), fade_alpha, 1000),
+        w / 2,
+        h / 6 + 36,
+        &date_buf[..pos],
+    );
 
     let center_y = h / 2 - 20;
 
@@ -266,13 +324,28 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
             1000
         };
         let err_color = mix(0, rgb(0xFF, 0x66, 0x66), alpha.min(fade_alpha), 1000);
-        text_centered(hdc, f.small, 11, err_color, w / 2, center_y + 140, b"Mot de passe incorrect");
+        text_centered(
+            hdc,
+            f.small,
+            11,
+            err_color,
+            w / 2,
+            center_y + 140,
+            b"Mot de passe incorrect",
+        );
     }
 
     // Bouton "Autres utilisateurs" en bas à gauche (si >1 user).
     if USER_COUNT > 1 {
         let label = b"Autres utilisateurs";
-        text(hdc, f.small, mix(0, rgb(0xAA, 0xAA, 0xAA), fade_alpha, 1000), 20, h - 36, label);
+        text(
+            hdc,
+            f.small,
+            mix(0, rgb(0xAA, 0xAA, 0xAA), fade_alpha, 1000),
+            20,
+            h - 36,
+            label,
+        );
     }
 
     // Boutons d'alimentation en bas à droite.
@@ -296,18 +369,41 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
     let avatar_size = 80;
     let ax = w / 2 - avatar_size / 2;
     let ay = cy - avatar_size / 2 - 30;
-    ellipse(hdc, b, ax, ay, ax + avatar_size, ay + avatar_size,
-        mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000));
-    let initial = if name.is_empty() { b'?' } else { name[0].to_ascii_uppercase() };
+    ellipse(
+        hdc,
+        b,
+        ax,
+        ay,
+        ax + avatar_size,
+        ay + avatar_size,
+        mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000),
+    );
+    let initial = if name.is_empty() {
+        b'?'
+    } else {
+        name[0].to_ascii_uppercase()
+    };
     let initial_buf = [initial];
-    text_centered(hdc, f.display, 28,
+    text_centered(
+        hdc,
+        f.display,
+        28,
         mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-        w / 2, ay + avatar_size / 2 - 16, &initial_buf);
+        w / 2,
+        ay + avatar_size / 2 - 16,
+        &initial_buf,
+    );
 
     // Nom d'utilisateur.
-    text_centered(hdc, f.large, 22,
+    text_centered(
+        hdc,
+        f.large,
+        22,
         mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-        w / 2, ay + avatar_size + 8, name);
+        w / 2,
+        ay + avatar_size + 8,
+        name,
+    );
 
     // Champ mot de passe.
     if user.has_password {
@@ -321,56 +417,137 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
         } else {
             mix(0, rgb(0x60, 0x80, 0xA0), alpha, 1000)
         };
-        round_rect(hdc, b, fx - 1, fy - 1, fx + field_w + 1, fy + field_h + 1, 4, border_color);
-        round_rect(hdc, b, fx, fy, fx + field_w, fy + field_h, 4,
-            mix(0, rgb(0x1A, 0x3A, 0x5C), alpha, 1000));
+        round_rect(
+            hdc,
+            b,
+            fx - 1,
+            fy - 1,
+            fx + field_w + 1,
+            fy + field_h + 1,
+            4,
+            border_color,
+        );
+        round_rect(
+            hdc,
+            b,
+            fx,
+            fy,
+            fx + field_w,
+            fy + field_h,
+            4,
+            mix(0, rgb(0x1A, 0x3A, 0x5C), alpha, 1000),
+        );
 
         // Contenu du champ.
         if PASSWORD_LEN > 0 {
             if SHOW_PASSWORD {
-                text(hdc, f.body, mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-                    fx + 12, fy + 10, &PASSWORD[..PASSWORD_LEN]);
+                text(
+                    hdc,
+                    f.body,
+                    mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
+                    fx + 12,
+                    fy + 10,
+                    &PASSWORD[..PASSWORD_LEN],
+                );
             } else {
                 let mut dots = [0xB7u8; 64]; // middle dot en Windows-1252
-                text(hdc, f.body, mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-                    fx + 12, fy + 10, &dots[..PASSWORD_LEN]);
+                text(
+                    hdc,
+                    f.body,
+                    mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
+                    fx + 12,
+                    fy + 10,
+                    &dots[..PASSWORD_LEN],
+                );
             }
         } else {
-            text(hdc, f.caption, mix(0, rgb(0x80, 0x90, 0xA0), alpha, 1000),
-                fx + 12, fy + 11, b"Mot de passe");
+            text(
+                hdc,
+                f.caption,
+                mix(0, rgb(0x80, 0x90, 0xA0), alpha, 1000),
+                fx + 12,
+                fy + 11,
+                b"Mot de passe",
+            );
         }
 
         // Curseur clignotant.
         if (now() / 530) % 2 == 0 {
             let cursor_x = if PASSWORD_LEN > 0 {
-                fx + 12 + text_width(if SHOW_PASSWORD { &PASSWORD[..PASSWORD_LEN] } else { &[0xB7; 1] }, 13) *
-                    if SHOW_PASSWORD { 1 } else { PASSWORD_LEN as i32 }
+                fx + 12
+                    + text_width(
+                        if SHOW_PASSWORD {
+                            &PASSWORD[..PASSWORD_LEN]
+                        } else {
+                            &[0xB7; 1]
+                        },
+                        13,
+                    ) * if SHOW_PASSWORD {
+                        1
+                    } else {
+                        PASSWORD_LEN as i32
+                    }
             } else {
                 fx + 12
             };
-            fill(hdc, b, cursor_x, fy + 8, cursor_x + 1, fy + field_h - 8,
-                mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000));
+            fill(
+                hdc,
+                b,
+                cursor_x,
+                fy + 8,
+                cursor_x + 1,
+                fy + field_h - 8,
+                mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
+            );
         }
 
         // Bouton connexion (flèche ->).
         let btn_x = fx + field_w + 8;
         let btn_y = fy;
-        round_rect(hdc, b, btn_x, btn_y, btn_x + field_h, btn_y + field_h, 4,
-            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000));
-        text_centered(hdc, f.semibold, 13,
+        round_rect(
+            hdc,
+            b,
+            btn_x,
+            btn_y,
+            btn_x + field_h,
+            btn_y + field_h,
+            4,
+            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000),
+        );
+        text_centered(
+            hdc,
+            f.semibold,
+            13,
             mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-            btn_x + field_h / 2, btn_y + 10, b"\x1A");
+            btn_x + field_h / 2,
+            btn_y + 10,
+            b"\x1A",
+        );
     } else {
         // Pas de mot de passe : bouton "Se connecter".
         let btn_w = 160;
         let btn_h = 36;
         let bx = w / 2 - btn_w / 2;
         let by = ay + avatar_size + 44;
-        round_rect(hdc, b, bx, by, bx + btn_w, by + btn_h, 4,
-            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000));
-        text_centered(hdc, f.semibold, 13,
+        round_rect(
+            hdc,
+            b,
+            bx,
+            by,
+            bx + btn_w,
+            by + btn_h,
+            4,
+            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000),
+        );
+        text_centered(
+            hdc,
+            f.semibold,
+            13,
             mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-            w / 2, by + 10, b"Se connecter");
+            w / 2,
+            by + 10,
+            b"Se connecter",
+        );
     }
 }
 
@@ -389,10 +566,16 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
 
         let selected = i == SELECTED_USER;
         if selected {
-            round_rect(hdc, b,
-                cx - card_w / 2 - 4, cy - 4,
-                cx + card_w / 2 + 4, cy + card_h + 4,
-                8, mix(0, rgb(0xFF, 0xFF, 0xFF), alpha / 6, 1000));
+            round_rect(
+                hdc,
+                b,
+                cx - card_w / 2 - 4,
+                cy - 4,
+                cx + card_w / 2 + 4,
+                cy + card_h + 4,
+                8,
+                mix(0, rgb(0xFF, 0xFF, 0xFF), alpha / 6, 1000),
+            );
         }
 
         // Avatar.
@@ -404,24 +587,57 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
         } else {
             rgb(0x00, 0x78, 0xD4)
         };
-        ellipse(hdc, b, ax, ay, ax + avatar_size, ay + avatar_size,
-            mix(0, avatar_bg, alpha, 1000));
-        let initial = if name.is_empty() { b'?' } else { name[0].to_ascii_uppercase() };
+        ellipse(
+            hdc,
+            b,
+            ax,
+            ay,
+            ax + avatar_size,
+            ay + avatar_size,
+            mix(0, avatar_bg, alpha, 1000),
+        );
+        let initial = if name.is_empty() {
+            b'?'
+        } else {
+            name[0].to_ascii_uppercase()
+        };
         let initial_buf = [initial];
-        text_centered(hdc, f.large, 22,
+        text_centered(
+            hdc,
+            f.large,
+            22,
             mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-            cx, ay + avatar_size / 2 - 12, &initial_buf);
+            cx,
+            ay + avatar_size / 2 - 12,
+            &initial_buf,
+        );
 
         // Nom.
-        text_centered(hdc, f.body, 13,
+        text_centered(
+            hdc,
+            f.body,
+            13,
             mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-            cx, ay + avatar_size + 10, name);
+            cx,
+            ay + avatar_size + 10,
+            name,
+        );
 
         // Rôle.
-        let role = if user.is_root { b"Administrateur" as &[u8] } else { b"Utilisateur" };
-        text_centered(hdc, f.caption, 12,
+        let role = if user.is_root {
+            b"Administrateur" as &[u8]
+        } else {
+            b"Utilisateur"
+        };
+        text_centered(
+            hdc,
+            f.caption,
+            12,
             mix(0, rgb(0x99, 0xBB, 0xDD), alpha, 1000),
-            cx, ay + avatar_size + 28, role);
+            cx,
+            ay + avatar_size + 28,
+            role,
+        );
     }
 
     // Champ mot de passe sous la grille si l'utilisateur sélectionné en a un.
@@ -437,17 +653,46 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
         } else {
             mix(0, rgb(0x60, 0x80, 0xA0), alpha, 1000)
         };
-        round_rect(hdc, b, fx - 1, fy - 1, fx + field_w + 1, fy + field_h + 1, 4, border_color);
-        round_rect(hdc, b, fx, fy, fx + field_w, fy + field_h, 4,
-            mix(0, rgb(0x1A, 0x3A, 0x5C), alpha, 1000));
+        round_rect(
+            hdc,
+            b,
+            fx - 1,
+            fy - 1,
+            fx + field_w + 1,
+            fy + field_h + 1,
+            4,
+            border_color,
+        );
+        round_rect(
+            hdc,
+            b,
+            fx,
+            fy,
+            fx + field_w,
+            fy + field_h,
+            4,
+            mix(0, rgb(0x1A, 0x3A, 0x5C), alpha, 1000),
+        );
 
         if PASSWORD_LEN > 0 {
             let mut dots = [0xB7u8; 64];
-            text(hdc, f.body, mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-                fx + 12, fy + 10, &dots[..PASSWORD_LEN]);
+            text(
+                hdc,
+                f.body,
+                mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
+                fx + 12,
+                fy + 10,
+                &dots[..PASSWORD_LEN],
+            );
         } else {
-            text(hdc, f.caption, mix(0, rgb(0x80, 0x90, 0xA0), alpha, 1000),
-                fx + 12, fy + 11, b"Mot de passe");
+            text(
+                hdc,
+                f.caption,
+                mix(0, rgb(0x80, 0x90, 0xA0), alpha, 1000),
+                fx + 12,
+                fy + 11,
+                b"Mot de passe",
+            );
         }
 
         // Curseur.
@@ -457,27 +702,62 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
             } else {
                 fx + 12
             };
-            fill(hdc, b, cursor_x, fy + 8, cursor_x + 1, fy + field_h - 8,
-                mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000));
+            fill(
+                hdc,
+                b,
+                cursor_x,
+                fy + 8,
+                cursor_x + 1,
+                fy + field_h - 8,
+                mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
+            );
         }
 
         // Bouton connexion.
         let btn_x = fx + field_w + 8;
-        round_rect(hdc, b, btn_x, fy, btn_x + field_h, fy + field_h, 4,
-            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000));
-        text_centered(hdc, f.semibold, 13,
+        round_rect(
+            hdc,
+            b,
+            btn_x,
+            fy,
+            btn_x + field_h,
+            fy + field_h,
+            4,
+            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000),
+        );
+        text_centered(
+            hdc,
+            f.semibold,
+            13,
             mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-            btn_x + field_h / 2, fy + 10, b"\x1A");
+            btn_x + field_h / 2,
+            fy + 10,
+            b"\x1A",
+        );
     } else {
         let btn_w = 160;
         let btn_h = 36;
         let bx = w / 2 - btn_w / 2;
         let by = cy + card_h + 24;
-        round_rect(hdc, b, bx, by, bx + btn_w, by + btn_h, 4,
-            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000));
-        text_centered(hdc, f.semibold, 13,
+        round_rect(
+            hdc,
+            b,
+            bx,
+            by,
+            bx + btn_w,
+            by + btn_h,
+            4,
+            mix(0, rgb(0x00, 0x78, 0xD4), alpha, 1000),
+        );
+        text_centered(
+            hdc,
+            f.semibold,
+            13,
             mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
-            w / 2, by + 10, b"Se connecter");
+            w / 2,
+            by + 10,
+            b"Se connecter",
+        );
     }
 }
 
@@ -488,28 +768,56 @@ unsafe fn draw_power_buttons(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, h:
     let by = h - btn_size - 12;
 
     // Bouton arrêt.
-    ellipse(hdc, b, bx, by, bx + btn_size, by + btn_size,
-        mix(0, rgb(0x40, 0x50, 0x60), alpha, 1000));
+    ellipse(
+        hdc,
+        b,
+        bx,
+        by,
+        bx + btn_size,
+        by + btn_size,
+        mix(0, rgb(0x40, 0x50, 0x60), alpha, 1000),
+    );
     // Icône power (cercle + barre).
     let cx_p = bx + btn_size / 2;
     let cy_p = by + btn_size / 2;
     let r = 8;
-    fill(hdc, b, cx_p - 1, cy_p - r - 2, cx_p + 1, cy_p - 2,
-        mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000));
+    fill(
+        hdc,
+        b,
+        cx_p - 1,
+        cy_p - r - 2,
+        cx_p + 1,
+        cy_p - 2,
+        mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
+    );
     for angle_step in 0..12 {
         let a = (angle_step * 30 + 60) as f64 * core::f64::consts::PI / 180.0;
         // Approximation sans libm : 8 points sur le cercle.
         let (sin_a, cos_a) = approx_sincos(angle_step * 30 + 60);
         let px = cx_p + (sin_a * r as i32) / 1000;
         let py = cy_p - (cos_a * r as i32) / 1000;
-        fill(hdc, b, px, py, px + 2, py + 2,
-            mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000));
+        fill(
+            hdc,
+            b,
+            px,
+            py,
+            px + 2,
+            py + 2,
+            mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
+        );
     }
 
     // Bouton redémarrage.
     let rx = bx + btn_size + gap;
-    ellipse(hdc, b, rx, by, rx + btn_size, by + btn_size,
-        mix(0, rgb(0x40, 0x50, 0x60), alpha, 1000));
+    ellipse(
+        hdc,
+        b,
+        rx,
+        by,
+        rx + btn_size,
+        by + btn_size,
+        mix(0, rgb(0x40, 0x50, 0x60), alpha, 1000),
+    );
     // Icône refresh (flèche circulaire simplifiée).
     let cx_r = rx + btn_size / 2;
     let cy_r = by + btn_size / 2;
@@ -517,17 +825,33 @@ unsafe fn draw_power_buttons(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, h:
         let (sin_a, cos_a) = approx_sincos(angle_step * 36);
         let px = cx_r + (sin_a * 7) / 1000;
         let py = cy_r - (cos_a * 7) / 1000;
-        fill(hdc, b, px, py, px + 2, py + 2,
-            mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000));
+        fill(
+            hdc,
+            b,
+            px,
+            py,
+            px + 2,
+            py + 2,
+            mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
+        );
     }
 }
 
 /// Approximation sin/cos en millièmes (pas de libm en no_std).
 pub fn approx_sincos(deg: i32) -> (i32, i32) {
     let table: [(i32, i32); 13] = [
-        (0, 1000), (174, 985), (342, 940), (500, 866),
-        (643, 766), (766, 643), (866, 500), (940, 342),
-        (985, 174), (1000, 0), (985, -174), (940, -342),
+        (0, 1000),
+        (174, 985),
+        (342, 940),
+        (500, 866),
+        (643, 766),
+        (766, 643),
+        (866, 500),
+        (940, 342),
+        (985, 174),
+        (1000, 0),
+        (985, -174),
+        (940, -342),
         (866, -500),
     ];
     let d = ((deg % 360) + 360) % 360;
@@ -740,7 +1064,13 @@ unsafe fn check_root_password(pwd: &[u8]) -> bool {
         return pwd == b"winlux";
     }
     let mut read = 0u32;
-    ReadFile(handle, buf.as_mut_ptr() as _, buf.len() as u32, &mut read, core::ptr::null_mut());
+    ReadFile(
+        handle,
+        buf.as_mut_ptr() as _,
+        buf.len() as u32,
+        &mut read,
+        core::ptr::null_mut(),
+    );
     CloseHandle(handle);
     let data = &buf[..read as usize];
     for line in data.split(|&c| c == b'\n') {
@@ -778,36 +1108,84 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
     let dh = 260;
     let dx = w / 2 - dw / 2;
     let dy = h / 2 - dh / 2;
-    panel(hdc, &mut b, dx, dy, dx + dw, dy + dh, 8,
-        rgb(0x2C, 0x2C, 0x2C), rgb(0x50, 0x50, 0x50));
+    panel(
+        hdc,
+        &mut b,
+        dx,
+        dy,
+        dx + dw,
+        dy + dh,
+        8,
+        rgb(0x2C, 0x2C, 0x2C),
+        rgb(0x50, 0x50, 0x50),
+    );
 
     // Barre jaune UAC en haut.
     fill(hdc, &mut b, dx, dy, dx + dw, dy + 4, rgb(0xFF, 0xB9, 0x00));
 
     // Titre.
-    text_centered(hdc, f.semibold, 13, rgb(0xFF, 0xFF, 0xFF),
-        w / 2, dy + 20, b"Contr\xF4le de compte utilisateur");
+    text_centered(
+        hdc,
+        f.semibold,
+        13,
+        rgb(0xFF, 0xFF, 0xFF),
+        w / 2,
+        dy + 20,
+        b"Contr\xF4le de compte utilisateur",
+    );
 
     // Icône bouclier (triangle simplifié).
     let sx = dx + 30;
     let sy = dy + 54;
     fill(hdc, &mut b, sx, sy, sx + 28, sy + 28, rgb(0xFF, 0xB9, 0x00));
-    fill(hdc, &mut b, sx + 4, sy + 4, sx + 24, sy + 24, rgb(0x2C, 0x2C, 0x2C));
+    fill(
+        hdc,
+        &mut b,
+        sx + 4,
+        sy + 4,
+        sx + 24,
+        sy + 24,
+        rgb(0x2C, 0x2C, 0x2C),
+    );
     text(hdc, f.icon, rgb(0xFF, 0xB9, 0x00), sx + 8, sy + 6, b"!");
 
     // Message.
-    text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), sx + 40, sy + 2,
-        b"Voulez-vous autoriser cette application");
-    text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), sx + 40, sy + 18,
-        b"\xE0 apporter des modifications ?");
+    text(
+        hdc,
+        f.body,
+        rgb(0xE6, 0xE6, 0xE6),
+        sx + 40,
+        sy + 2,
+        b"Voulez-vous autoriser cette application",
+    );
+    text(
+        hdc,
+        f.body,
+        rgb(0xE6, 0xE6, 0xE6),
+        sx + 40,
+        sy + 18,
+        b"\xE0 apporter des modifications ?",
+    );
 
     // Nom de l'application.
-    text(hdc, f.semibold, rgb(0xFF, 0xFF, 0xFF), dx + 30, dy + 100,
-        &UAC_APP_NAME[..UAC_APP_NAME_LEN]);
+    text(
+        hdc,
+        f.semibold,
+        rgb(0xFF, 0xFF, 0xFF),
+        dx + 30,
+        dy + 100,
+        &UAC_APP_NAME[..UAC_APP_NAME_LEN],
+    );
 
     // Champ mot de passe root.
-    text(hdc, f.caption, rgb(0x99, 0x99, 0x99), dx + 30, dy + 130,
-        b"Mot de passe administrateur (root) :");
+    text(
+        hdc,
+        f.caption,
+        rgb(0x99, 0x99, 0x99),
+        dx + 30,
+        dy + 130,
+        b"Mot de passe administrateur (root) :",
+    );
     let fx = dx + 30;
     let fy = dy + 148;
     let field_w = dw - 60;
@@ -817,22 +1195,58 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
     } else {
         rgb(0x50, 0x60, 0x70)
     };
-    round_rect(hdc, &mut b, fx - 1, fy - 1, fx + field_w + 1, fy + field_h + 1, 4, border_color);
-    round_rect(hdc, &mut b, fx, fy, fx + field_w, fy + field_h, 4, rgb(0x1A, 0x1A, 0x2A));
+    round_rect(
+        hdc,
+        &mut b,
+        fx - 1,
+        fy - 1,
+        fx + field_w + 1,
+        fy + field_h + 1,
+        4,
+        border_color,
+    );
+    round_rect(
+        hdc,
+        &mut b,
+        fx,
+        fy,
+        fx + field_w,
+        fy + field_h,
+        4,
+        rgb(0x1A, 0x1A, 0x2A),
+    );
 
     if UAC_PASSWORD_LEN > 0 {
         let mut dots = [0xB7u8; 64];
-        text(hdc, f.body, rgb(0xFF, 0xFF, 0xFF), fx + 8, fy + 8,
-            &dots[..UAC_PASSWORD_LEN]);
+        text(
+            hdc,
+            f.body,
+            rgb(0xFF, 0xFF, 0xFF),
+            fx + 8,
+            fy + 8,
+            &dots[..UAC_PASSWORD_LEN],
+        );
     } else {
-        text(hdc, f.caption, rgb(0x60, 0x70, 0x80), fx + 8, fy + 9,
-            b"Mot de passe");
+        text(
+            hdc,
+            f.caption,
+            rgb(0x60, 0x70, 0x80),
+            fx + 8,
+            fy + 9,
+            b"Mot de passe",
+        );
     }
 
     // Erreur.
     if UAC_ERROR && since(UAC_ERROR_TIME) < 3000 {
-        text(hdc, f.small, rgb(0xFF, 0x66, 0x66), dx + 30, dy + 186,
-            b"Mot de passe incorrect");
+        text(
+            hdc,
+            f.small,
+            rgb(0xFF, 0x66, 0x66),
+            dx + 30,
+            dy + 186,
+            b"Mot de passe incorrect",
+        );
     }
 
     // Boutons Oui / Non.
@@ -840,15 +1254,45 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
     let btn_h = 30;
     let btn_y = dy + dh - btn_h - 16;
     // Oui
-    round_rect(hdc, &mut b, dx + dw - btn_w * 2 - 24, btn_y, dx + dw - btn_w - 16, btn_y + btn_h, 4,
-        rgb(0x00, 0x78, 0xD4));
-    text_centered(hdc, f.semibold, 13, rgb(0xFF, 0xFF, 0xFF),
-        dx + dw - btn_w - 16 - btn_w / 2 - 4, btn_y + 7, b"Oui");
+    round_rect(
+        hdc,
+        &mut b,
+        dx + dw - btn_w * 2 - 24,
+        btn_y,
+        dx + dw - btn_w - 16,
+        btn_y + btn_h,
+        4,
+        rgb(0x00, 0x78, 0xD4),
+    );
+    text_centered(
+        hdc,
+        f.semibold,
+        13,
+        rgb(0xFF, 0xFF, 0xFF),
+        dx + dw - btn_w - 16 - btn_w / 2 - 4,
+        btn_y + 7,
+        b"Oui",
+    );
     // Non
-    round_rect(hdc, &mut b, dx + dw - btn_w - 8, btn_y, dx + dw - 8, btn_y + btn_h, 4,
-        rgb(0x40, 0x44, 0x4C));
-    text_centered(hdc, f.semibold, 13, rgb(0xE6, 0xE6, 0xE6),
-        dx + dw - 8 - btn_w / 2, btn_y + 7, b"Non");
+    round_rect(
+        hdc,
+        &mut b,
+        dx + dw - btn_w - 8,
+        btn_y,
+        dx + dw - 8,
+        btn_y + btn_h,
+        4,
+        rgb(0x40, 0x44, 0x4C),
+    );
+    text_centered(
+        hdc,
+        f.semibold,
+        13,
+        rgb(0xE6, 0xE6, 0xE6),
+        dx + dw - 8 - btn_w / 2,
+        btn_y + 7,
+        b"Non",
+    );
 
     f.release();
     b.release();
@@ -867,7 +1311,8 @@ pub unsafe fn uac_on_click(x: i32, y: i32, w: i32, h: i32) {
     let btn_y = dy + dh - btn_h - 16;
 
     // Bouton Oui.
-    if x >= dx + dw - btn_w * 2 - 24 && x < dx + dw - btn_w - 16 && y >= btn_y && y < btn_y + btn_h {
+    if x >= dx + dw - btn_w * 2 - 24 && x < dx + dw - btn_w - 16 && y >= btn_y && y < btn_y + btn_h
+    {
         if check_root_password(&UAC_PASSWORD[..UAC_PASSWORD_LEN]) {
             UAC_RESULT = 1;
             UAC_VISIBLE = false;
