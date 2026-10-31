@@ -74,8 +74,15 @@ truncate -s 12G "$disk"
 log="$work/install.log"
 install_status=0
 (
+    answered=0
     for attempt in $(seq 1 540); do
         if grep -Eq 'WINLUX_INSTALL_EXIT=|Kernel panic' "$log" 2>/dev/null; then exit 0; fi
+        # Language then keyboard prompts: keep the defaults (Enter).
+        asked=$(grep -o 'Choix \[1\]' "$log" 2>/dev/null | wc -l)
+        while test "$answered" -lt "$asked"; do
+            printf '\n'
+            answered=$((answered + 1))
+        done
         if grep -q 'Saisissez exactement' "$log" 2>/dev/null; then
             printf 'EFFACER /dev/vda\n'
             exit 0
