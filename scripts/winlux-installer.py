@@ -3,13 +3,13 @@
 
 Lance l'installation de Winlux sur un disque physique depuis le Live USB/DVD.
 Interface GTK3 avec étapes : langue, licence, réseau, partitionnement guidé,
-import Windows, chiffrement LUKS, compte local, progression.
+import Windows, chiffrement LUKS, performances, profil d'utilisation, compte local,
+migration depuis un autre PC, progression.
 """
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
-import cairo
 import gzip
 import html
 import json
@@ -31,6 +31,14 @@ INSTALL_SH = os.path.join(SCRIPT_DIR, "install.sh")
 SECUREBOOT_SH = next((p for p in (os.path.join(SCRIPT_DIR, "winlux-secureboot.sh"), "/usr/bin/winlux-secureboot") if os.path.exists(p)), None)
 sys.path[:0] = [SCRIPT_DIR, "/usr/share/winlux"]
 import winlux_autoinstall as autoinstall  # noqa: E402
+# Modules partagés : à côté du script dans le dépôt, /usr/lib/winlux/python une fois installé.
+for _path in (SCRIPT_DIR, "/usr/lib/winlux/python"):
+    if os.path.isfile(os.path.join(_path, "winlux_benchmark.py")):
+        sys.path.insert(0, _path)
+        break
+import winlux_benchmark  # noqa: E402
+import winlux_migrate  # noqa: E402
+import winlux_profiles  # noqa: E402
 
 CSS = b"""
 @define-color bg_primary #0078D4;
@@ -255,24 +263,79 @@ list.wifi-list row:selected .card {
     border: 2px solid @accent;
     background-color: shade(@bg_card, 1.15);
 }
+.score-big {
+    color: @fg_primary;
+    font-size: 44px;
+    font-weight: bold;
+}
+.score-value {
+    color: @fg_primary;
+    font-size: 18px;
+    font-weight: bold;
+}
+levelbar.score-bar trough {
+    background-color: @bg_surface;
+    border-radius: 3px;
+    min-height: 6px;
+}
+levelbar.score-bar block.filled {
+    background-color: @accent;
+    border-radius: 3px;
+}
+levelbar.score-bar block.empty {
+    background-color: transparent;
+}
+.badge {
+    background-color: alpha(@accent, 0.25);
+    color: @accent_hover;
+    border-radius: 10px;
+    padding: 2px 10px;
+    font-size: 11px;
+    font-weight: bold;
+}
+.tip {
+    color: @fg_secondary;
+    font-size: 12px;
+}
+/* Independent of the system GTK theme (light Adwaita in the live session). */
+window.installer-window radiobutton label,
+window.installer-window checkbutton label,
+label.card {
+    color: @fg_primary;
+}
+.btn-primary, .btn-secondary, .btn-danger {
+    background-image: none;
+    box-shadow: none;
+    text-shadow: none;
+    -gtk-icon-shadow: none;
+}
+.btn-secondary:hover {
+    background-color: shade(@bg_surface, 1.2);
+}
+window.installer-window list,
+window.installer-window list row {
+    background-color: transparent;
+    color: @fg_primary;
+}
+window.installer-window list row:selected {
+    background-color: alpha(@accent, 0.35);
+}
 /* Keep the dark look whatever GTK theme the live session ships. */
 .installer-content label, .installer-content radiobutton label, .installer-content checkbutton label {
     color: @fg_primary;
 }
 .installer-content .card-detail, .installer-content .page-subtitle, .installer-content .progress-text,
-.installer-content .hw-info {
+.installer-content .hw-info, .installer-content .tip {
     color: @fg_secondary;
 }
 .installer-content .warning-text, .installer-content .disk-warn {
     color: @danger;
 }
+.installer-content .badge {
+    color: @accent_hover;
+}
 radiobutton:disabled label, checkbutton:disabled label {
     color: alpha(@fg_secondary, 0.5);
-}
-button.btn-primary, button.btn-secondary, button.btn-danger {
-    background-image: none;
-    box-shadow: none;
-    text-shadow: none;
 }
 button.btn-primary label, button.btn-secondary label, button.btn-danger label {
     color: @fg_primary;
@@ -285,7 +348,6 @@ entry.input-field, combobox button {
     background-color: @bg_surface;
     color: @fg_primary;
 }
-
 """
 
 LANGUAGES = [
@@ -331,7 +393,7 @@ PART_COLORS = {
 TRANSLATIONS = {
     "fr_FR": {
         "steps": ["Langue", "Clavier", "Licence", "Réseau", "Partitionnement",
-                  "Import Windows", "Chiffrement", "Compte local", "Résumé", "Installation", "Terminé"],
+                  "Import Windows", "Chiffrement", "Performances", "Profil d'utilisation", "Compte local", "Migration", "Résumé", "Installation", "Terminé"],
         "choose_language": "Choisissez votre langue",
         "language_subtitle": "Cette langue sera utilisée pendant l'installation et comme langue par défaut du système.",
         "choose_keyboard": "Choisissez la disposition du clavier",
@@ -406,6 +468,11 @@ TRANSLATIONS = {
         "summary_user": "Utilisateur",
         "summary_autologin": "Connexion automatique",
         "summary_local_account": "Compte : local (aucun compte en ligne)",
+        "summary_profile": "Profil d'utilisation",
+        "summary_profile_apps": "+ applications recommandées",
+        "summary_benchmark": "Note de performance",
+        "summary_benchmark_none": "non mesurée",
+        "summary_migration": "Transfert de PC",
         "summary_timezone": "Fuseau horaire",
         "summary_packages": "Paquets supplémentaires",
         "summary_answer_file": "Fichier de réponse",
@@ -486,7 +553,7 @@ TRANSLATIONS = {
     },
     "en_US": {
         "steps": ["Language", "Keyboard", "License", "Network", "Partitioning",
-                  "Windows Import", "Encryption", "Local account", "Summary", "Installing", "Done"],
+                  "Windows Import", "Encryption", "Performance", "Usage profile", "Local account", "Migration", "Summary", "Installing", "Done"],
         "choose_language": "Choose your language",
         "language_subtitle": "This language will be used during installation and as the default system language.",
         "choose_keyboard": "Choose your keyboard layout",
@@ -561,6 +628,11 @@ TRANSLATIONS = {
         "summary_user": "User",
         "summary_autologin": "Automatic login",
         "summary_local_account": "Account: local (no online account)",
+        "summary_profile": "Usage profile",
+        "summary_profile_apps": "+ recommended apps",
+        "summary_benchmark": "Performance score",
+        "summary_benchmark_none": "not measured",
+        "summary_migration": "PC transfer",
         "summary_timezone": "Time zone",
         "summary_packages": "Additional packages",
         "summary_answer_file": "Answer file",
@@ -641,7 +713,7 @@ TRANSLATIONS = {
     },
     "de_DE": {
         "steps": ["Sprache", "Tastatur", "Lizenz", "Netzwerk", "Partitionierung",
-                  "Windows-Import", "Verschlüsselung", "Lokales Konto", "Zusammenfassung", "Installation", "Fertig"],
+                  "Windows-Import", "Verschlüsselung", "Leistung", "Nutzungsprofil", "Lokales Konto", "Migration", "Zusammenfassung", "Installation", "Fertig"],
         "choose_language": "Wählen Sie Ihre Sprache",
         "language_subtitle": "Diese Sprache wird während der Installation und als Standardsystemsprache verwendet.",
         "choose_keyboard": "Wählen Sie Ihr Tastaturlayout",
@@ -716,6 +788,11 @@ TRANSLATIONS = {
         "summary_user": "Benutzer",
         "summary_autologin": "Automatische Anmeldung",
         "summary_local_account": "Konto: lokal (kein Online-Konto)",
+        "summary_profile": "Nutzungsprofil",
+        "summary_profile_apps": "+ empfohlene Anwendungen",
+        "summary_benchmark": "Leistungsbewertung",
+        "summary_benchmark_none": "nicht gemessen",
+        "summary_migration": "PC-Übertragung",
         "summary_timezone": "Zeitzone",
         "summary_packages": "Zusätzliche Pakete",
         "summary_answer_file": "Antwortdatei",
@@ -796,7 +873,7 @@ TRANSLATIONS = {
     },
     "es_ES": {
         "steps": ["Idioma", "Teclado", "Licencia", "Red", "Particionamiento",
-                  "Importar Windows", "Cifrado", "Cuenta local", "Resumen", "Instalación", "Terminado"],
+                  "Importar Windows", "Cifrado", "Rendimiento", "Perfil de uso", "Cuenta local", "Migración", "Resumen", "Instalación", "Terminado"],
         "choose_language": "Elija su idioma",
         "language_subtitle": "Este idioma se usará durante la instalación y como idioma predeterminado del sistema.",
         "choose_keyboard": "Elija la disposición del teclado",
@@ -871,6 +948,11 @@ TRANSLATIONS = {
         "summary_user": "Usuario",
         "summary_autologin": "Inicio automático",
         "summary_local_account": "Cuenta: local (sin cuenta en línea)",
+        "summary_profile": "Perfil de uso",
+        "summary_profile_apps": "+ aplicaciones recomendadas",
+        "summary_benchmark": "Puntuación de rendimiento",
+        "summary_benchmark_none": "no medida",
+        "summary_migration": "Transferencia de PC",
         "summary_timezone": "Zona horaria",
         "summary_packages": "Paquetes adicionales",
         "summary_answer_file": "Archivo de respuestas",
@@ -951,7 +1033,7 @@ TRANSLATIONS = {
     },
     "it_IT": {
         "steps": ["Lingua", "Tastiera", "Licenza", "Rete", "Partizionamento",
-                  "Importa Windows", "Crittografia", "Account locale", "Riepilogo", "Installazione", "Completato"],
+                  "Importa Windows", "Crittografia", "Prestazioni", "Profilo d'uso", "Account locale", "Migrazione", "Riepilogo", "Installazione", "Completato"],
         "choose_language": "Scegli la tua lingua",
         "language_subtitle": "Questa lingua verrà utilizzata durante l'installazione e come lingua predefinita del sistema.",
         "choose_keyboard": "Scegli il layout della tastiera",
@@ -1026,6 +1108,11 @@ TRANSLATIONS = {
         "summary_user": "Utente",
         "summary_autologin": "Accesso automatico",
         "summary_local_account": "Account: locale (nessun account online)",
+        "summary_profile": "Profilo d'uso",
+        "summary_profile_apps": "+ applicazioni consigliate",
+        "summary_benchmark": "Punteggio prestazioni",
+        "summary_benchmark_none": "non misurato",
+        "summary_migration": "Trasferimento PC",
         "summary_timezone": "Fuso orario",
         "summary_packages": "Pacchetti aggiuntivi",
         "summary_answer_file": "File di risposta",
@@ -1106,7 +1193,7 @@ TRANSLATIONS = {
     },
     "pt_BR": {
         "steps": ["Idioma", "Teclado", "Licença", "Rede", "Particionamento",
-                  "Importar Windows", "Criptografia", "Conta local", "Resumo", "Instalação", "Concluído"],
+                  "Importar Windows", "Criptografia", "Desempenho", "Perfil de uso", "Conta local", "Migração", "Resumo", "Instalação", "Concluído"],
         "choose_language": "Escolha seu idioma",
         "language_subtitle": "Este idioma será usado durante a instalação e como idioma padrão do sistema.",
         "choose_keyboard": "Escolha o layout do teclado",
@@ -1181,6 +1268,11 @@ TRANSLATIONS = {
         "summary_user": "Usuário",
         "summary_autologin": "Login automático",
         "summary_local_account": "Conta: local (sem conta online)",
+        "summary_profile": "Perfil de uso",
+        "summary_profile_apps": "+ aplicativos recomendados",
+        "summary_benchmark": "Nota de desempenho",
+        "summary_benchmark_none": "não medida",
+        "summary_migration": "Transferência de PC",
         "summary_timezone": "Fuso horário",
         "summary_packages": "Pacotes adicionais",
         "summary_answer_file": "Arquivo de resposta",
@@ -1440,11 +1532,25 @@ STEPS = [
     "Partitionnement",
     "Import Windows",
     "Chiffrement",
+    "Performances",
+    "Profil d'utilisation",
     "Compte local",
+    "Migration",
     "Résumé",
     "Installation",
     "Terminé",
 ]
+# Clés des pages, dans le même ordre que STEPS et que winlux_autoinstall.STEP_KEYS.
+STEP_KEYS = ["language", "keyboard", "license", "network", "disk", "import", "encryption",
+             "benchmark", "profile", "account", "migration", "summary", "progress", "done"]
+
+
+def step_index(key):
+    return STEP_KEYS.index(key)
+
+
+def page_name(key):
+    return f"page_{key}"
 
 
 def human_size(size_bytes):
@@ -1838,7 +1944,7 @@ class PartitionBar(Gtk.DrawingArea):
         bar_y = 4
         bar_h = 36
         label_y = bar_y + bar_h + 14
-        cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.select_font_face("sans-serif", 0, 0)  # slant/weight NORMAL, sans importer cairo
         cr.set_source_rgba(0.18, 0.18, 0.27, 1.0)
         self._rounded_rect(cr, 0, bar_y, w, bar_h, 6)
         cr.fill()
@@ -2235,6 +2341,13 @@ class InstallerApp(Gtk.Application):
         self.detect_done = False
         self.install_thread = None
         self.install_cancelled = False
+        self.bench_state = "idle"
+        self.bench_device = None
+        self.bench_proc = None
+        self.benchmark = None
+        self.profile_chosen_by_user = False
+        self.config["profile"] = "office"
+        self.config["install_apps"] = True
 
     def do_activate(self):
         provider = Gtk.CssProvider()
@@ -2288,7 +2401,10 @@ class InstallerApp(Gtk.Application):
         self.build_partition_page()
         self.build_import_page()
         self.build_encryption_page()
+        self.build_benchmark_page()
+        self.build_profile_page()
         self.build_account_page()
+        self.build_migration_page()
         self.build_summary_page()
         self.build_progress_page()
         self.build_done_page()
@@ -2365,7 +2481,7 @@ class InstallerApp(Gtk.Application):
             self.skip_steps.add(autoinstall.STEP_SUMMARY)
             self.refresh_summary()
             self.start_installation()
-        elif self.current_step == autoinstall.STEP_DISK:
+        elif STEP_KEYS[self.current_step] == "disk":
             self.current_step = self.next_step(self.current_step, 1)
             self.update_step()
 
@@ -2391,20 +2507,23 @@ class InstallerApp(Gtk.Application):
                 ctx.add_class("active")
             elif i < self.current_step:
                 ctx.add_class("done")
-        if self.current_step == 8:
+        key = STEP_KEYS[self.current_step]
+        if key == "summary":
             self.refresh_summary()
-        page_name = f"page_{self.current_step}"
-        self.pages.set_visible_child_name(page_name)
-        if self.current_step == 3 and not self.wifi_scanned:
+        self.pages.set_visible_child_name(page_name(key))
+        if key == "network" and not self.wifi_scanned:
             self.on_wifi_scan(None)
-        self.btn_back.set_visible(0 < self.current_step < 9 and self.next_step(self.current_step, -1) < self.current_step
-                                  and self.next_step(self.current_step, -1) not in self.skip_steps)
-        if self.current_step == 8:
+        if key == "benchmark" and self.bench_state == "idle":
+            self.start_benchmark()
+        previous = self.next_step(self.current_step, -1)
+        self.btn_back.set_visible(0 < self.current_step < step_index("progress") and previous < self.current_step
+                                  and previous not in self.skip_steps)
+        if key == "summary":
             self.btn_next.set_label(tr("btn_install"))
             self.btn_next.get_style_context().remove_class("btn-primary")
             self.btn_next.get_style_context().add_class("btn-danger")
             self.btn_next.set_visible(True)
-        elif self.current_step >= 9:
+        elif self.current_step >= step_index("progress"):
             self.btn_next.set_visible(False)
             self.btn_back.set_visible(False)
         else:
@@ -2416,32 +2535,35 @@ class InstallerApp(Gtk.Application):
 
     def validate_step(self):
         ok = True
-        if self.current_step == 2:
+        key = STEP_KEYS[self.current_step]
+        if key == "license":
             ok = self.config["license_accepted"]
-        elif self.current_step == 3:
+        elif key == "network":
             ok = not self.config["proxy_enabled"] or self.proxy_settings() is not None
             self.proxy_error.set_text("" if ok else tr("network_proxy_invalid"))
-        elif self.current_step == 4:
+        elif key == "disk":
             itype = self.config["install_type"]
             ok = self.config["disk"] is not None and (
                 itype == "full"
                 or (itype == "dualboot" and self.dualboot_target is not None)
                 or (itype == "manual" and self.manual_ready()))
-        elif self.current_step == 5:
+        elif key == "import":
             fits = self.import_fits()
             ok = self.win_detect_state == "done" and fits
             self.import_space.set_text("" if fits else tr("import_too_big"))
-        elif self.current_step == 6:
+        elif key == "encryption":
             if self.config["luks_enabled"]:
                 pp = self.config["luks_passphrase"]
                 pp_confirm = self.luks_confirm_entry.get_text() if hasattr(self, 'luks_confirm_entry') else ""
                 ok = len(pp) >= 8 and pp == pp_confirm and passphrase_is_ascii(pp)
             else:
                 ok = True
-        elif self.current_step == 7:
+        elif key == "account":
             ok = (len(self.config["username"]) >= 2
                   and len(self.config["password"]) >= 1
                   and re.match(r'^[a-z_][a-z0-9_-]*$', self.config["username"]) is not None)
+        elif key == "migration":
+            ok = self.migration.ready()
         self.btn_next.set_sensitive(ok)
 
     def on_back(self, _btn):
@@ -2451,25 +2573,29 @@ class InstallerApp(Gtk.Application):
             self.update_step()
 
     def on_next(self, _btn):
-        if self.current_step == 8:
+        key = STEP_KEYS[self.current_step]
+        if key == "summary":
             self.start_installation()
         elif self.current_step < len(STEPS) - 1:
-            if self.current_step == 0:
+            if key == "language":
                 self.update_ui_language()
             target = self.next_step(self.current_step, 1)
-            if self.current_step == 3:
+            if key == "network":
                 self.apply_live_proxy()
-            if target == 5:
+            if target > step_index("disk") and self.bench_device != (self.config["disk"] or {}).get("path"):
+                # Le benchmark lit le disque choisi : on le relance si le disque a changé.
+                self.bench_state = "idle"
+            if target == step_index("import"):
                 # Aussi quand le fichier de réponse a fait sauter la page des disques.
                 self.start_windows_detection()
-            if target == 6:
+            if target == step_index("encryption"):
                 self.refresh_encryption_page()
-            if target == 8:
+            if target == step_index("summary"):
                 self.refresh_summary()
             self.current_step = target
             self.update_step()
 
-    # ── Page 0 : Langue ──────────────────────────────────────────
+    # ── Page : Langue ──────────────────────────────────────────
 
     def build_language_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -2494,7 +2620,7 @@ class InstallerApp(Gtk.Application):
             kb_label.get_style_context().add_class("card-detail")
             row.pack_end(kb_label, False, False, 8)
             box.pack_start(row, False, False, 0)
-        self.pages.add_named(box, "page_0")
+        self.pages.add_named(box, page_name("language"))
 
     def on_lang_toggle(self, btn, locale, kb):
         if btn.get_active():
@@ -2508,7 +2634,7 @@ class InstallerApp(Gtk.Application):
             if i < len(steps):
                 lbl.set_text(f"  {i + 1}. {steps[i]}")
 
-    # ── Page 1 : Clavier ─────────────────────────────────────────
+    # ── Page : Clavier ─────────────────────────────────────────
 
     def build_keyboard_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -2545,13 +2671,13 @@ class InstallerApp(Gtk.Application):
         test_entry.get_style_context().add_class("input-field")
         test_entry.set_placeholder_text("Tapez ici pour tester...")
         box.pack_start(test_entry, False, False, 0)
-        self.pages.add_named(box, "page_1")
+        self.pages.add_named(box, page_name("keyboard"))
 
     def on_kb_toggle(self, btn, layout):
         if btn.get_active():
             self.config["keyboard"] = layout
 
-    # ── Page 2 : Licence ─────────────────────────────────────────
+    # ── Page : Licence ─────────────────────────────────────────
 
     def build_license_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -2576,13 +2702,13 @@ class InstallerApp(Gtk.Application):
         accept.connect("toggled", self.on_license_toggle)
         accept.set_margin_top(12)
         box.pack_start(accept, False, False, 0)
-        self.pages.add_named(box, "page_2")
+        self.pages.add_named(box, page_name("license"))
 
     def on_license_toggle(self, btn):
         self.config["license_accepted"] = btn.get_active()
         self.validate_step()
 
-    # ── Page 3 : Réseau ──────────────────────────────────────────
+    # ── Page : Réseau ──────────────────────────────────────────
 
     def build_network_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -2668,7 +2794,7 @@ class InstallerApp(Gtk.Application):
         self.proxy_port.set_sensitive(False)
         self.wifi_scanned = False
         self.wifi_selected = None
-        self.pages.add_named(box, "page_3")
+        self.pages.add_named(box, page_name("network"))
 
     def on_wifi_scan(self, _btn):
         self.wifi_scanned = True
@@ -2797,7 +2923,7 @@ class InstallerApp(Gtk.Application):
         if proxy:
             os.environ["no_proxy"] = os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
 
-    # ── Page 4 : Partitionnement ─────────────────────────────────
+    # ── Page : Partitionnement ─────────────────────────────────
 
     def build_partition_page(self):
         scroll = Gtk.ScrolledWindow()
@@ -2917,7 +3043,7 @@ class InstallerApp(Gtk.Application):
         box.pack_start(hw_frame, False, False, 0)
 
         scroll.add(box)
-        self.pages.add_named(scroll, "page_4")
+        self.pages.add_named(scroll, page_name("disk"))
 
     def _format_scale_mb(self, scale, value):
         return human_size(value * MIB)
@@ -3081,7 +3207,7 @@ class InstallerApp(Gtk.Application):
         self.refresh_layout_preview()
         self.validate_step()
 
-    # ── Page 5 : Import Windows ──────────────────────────────────
+    # ── Page : Import Windows ──────────────────────────────────
 
     def build_import_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -3129,7 +3255,7 @@ class InstallerApp(Gtk.Application):
         self.import_on_target = False
         self.import_total_bytes = 0
         self.import_plan = None
-        self.pages.add_named(box, "page_5")
+        self.pages.add_named(box, page_name("import"))
 
     def start_windows_detection(self):
         if self.win_detect_state == "idle":
@@ -3243,7 +3369,7 @@ class InstallerApp(Gtk.Application):
         # Garde ~12 Go pour le système et les mises à jour.
         return self.import_total_bytes <= room - 12 * 1024**3
 
-    # ── Page 6 : Chiffrement ─────────────────────────────────────
+    # ── Page : Chiffrement ─────────────────────────────────────
 
     def build_encryption_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -3322,7 +3448,7 @@ class InstallerApp(Gtk.Application):
         skip_info.set_line_wrap(True)
         box.pack_start(skip_info, False, False, 0)
 
-        self.pages.add_named(box, "page_6")
+        self.pages.add_named(box, page_name("encryption"))
 
     def refresh_encryption_page(self):
         if self.config["install_type"] == "manual":
@@ -3388,7 +3514,238 @@ class InstallerApp(Gtk.Application):
             self.luks_error_label.set_text("")
         self.validate_step()
 
-    # ── Page 7 : Compte local ────────────────────────────────────
+    # ── Page : Performances (benchmark) ──────────────────────────
+
+    BENCH_ROWS = [("cpu", "Processeur"), ("ram", "Mémoire"), ("disk", "Disque"), ("gpu", "Graphique")]
+
+    def build_benchmark_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        title = Gtk.Label(label="Évaluation des performances", xalign=0)
+        title.get_style_context().add_class("page-title")
+        box.pack_start(title, False, False, 0)
+        sub = Gtk.Label(
+            label="Test rapide de votre matériel (environ 10 secondes) pour régler Winlux au mieux. "
+                  "Le disque est seulement lu : rien n'est écrit avant le lancement de l'installation.",
+            xalign=0)
+        sub.get_style_context().add_class("page-subtitle")
+        sub.set_line_wrap(True)
+        box.pack_start(sub, False, False, 0)
+        head = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=20)
+        head.get_style_context().add_class("card")
+        self.bench_base = Gtk.Label(label="–")
+        self.bench_base.get_style_context().add_class("score-big")
+        head.pack_start(self.bench_base, False, False, 8)
+        head_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+        head_text.set_valign(Gtk.Align.CENTER)
+        head_title = Gtk.Label(label="Note globale", xalign=0)
+        head_title.get_style_context().add_class("card-title")
+        head_text.pack_start(head_title, False, False, 0)
+        self.bench_status = Gtk.Label(label="Le test démarre…", xalign=0)
+        self.bench_status.get_style_context().add_class("card-detail")
+        self.bench_status.set_line_wrap(True)
+        head_text.pack_start(self.bench_status, False, False, 0)
+        head.pack_start(head_text, True, True, 0)
+        self.bench_retry = Gtk.Button(label="Relancer")
+        self.bench_retry.get_style_context().add_class("btn-secondary")
+        self.bench_retry.set_valign(Gtk.Align.CENTER)
+        self.bench_retry.connect("clicked", lambda _b: self.start_benchmark())
+        self.bench_retry.set_sensitive(False)
+        head.pack_end(self.bench_retry, False, False, 0)
+        box.pack_start(head, False, False, 0)
+        grid = Gtk.Grid(column_spacing=16, row_spacing=10)
+        grid.get_style_context().add_class("card")
+        self.bench_widgets = {}
+        for row, (key, label) in enumerate(self.BENCH_ROWS):
+            name = Gtk.Label(label=label, xalign=0)
+            name.get_style_context().add_class("card-title")
+            name.set_size_request(110, -1)
+            grid.attach(name, 0, row, 1, 1)
+            bar = Gtk.LevelBar(min_value=0, max_value=9.9)
+            bar.get_style_context().add_class("score-bar")
+            bar.set_hexpand(True)
+            bar.set_valign(Gtk.Align.CENTER)
+            bar.set_size_request(160, -1)
+            grid.attach(bar, 1, row, 1, 1)
+            value = Gtk.Label(label="…")
+            value.get_style_context().add_class("score-value")
+            value.set_size_request(48, -1)
+            grid.attach(value, 2, row, 1, 1)
+            detail = Gtk.Label(label="en attente", xalign=0)
+            detail.get_style_context().add_class("card-detail")
+            detail.set_ellipsize(Pango.EllipsizeMode.END)
+            detail.set_hexpand(True)
+            grid.attach(detail, 3, row, 1, 1)
+            self.bench_widgets[key] = (bar, value, detail)
+        box.pack_start(grid, False, False, 0)
+        tips_title = Gtk.Label(label="Recommandations", xalign=0)
+        tips_title.get_style_context().add_class("card-title")
+        tips_title.set_margin_top(8)
+        box.pack_start(tips_title, False, False, 0)
+        self.bench_tips = Gtk.Label(label="", xalign=0)
+        self.bench_tips.get_style_context().add_class("tip")
+        self.bench_tips.set_line_wrap(True)
+        box.pack_start(self.bench_tips, False, False, 0)
+        self.pages.add_named(box, page_name("benchmark"))
+
+    def start_benchmark(self):
+        if self.bench_proc and self.bench_proc.poll() is None:
+            self.bench_proc.kill()
+        device = (self.config.get("disk") or {}).get("path")
+        self.bench_device = device
+        self.bench_state = "running"
+        self.benchmark = None
+        self.bench_retry.set_sensitive(False)
+        self.bench_base.set_text("–")
+        self.bench_status.set_text("Test en cours… vous pouvez continuer, il se termine en arrière-plan.")
+        self.bench_tips.set_text("")
+        for bar, value, detail in self.bench_widgets.values():
+            bar.set_value(0)
+            value.set_text("…")
+            detail.set_text("en attente")
+        argv = [sys.executable, winlux_benchmark.__file__, "--json-lines"]
+        if device:
+            argv += ["--device", device]
+        try:
+            proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        except OSError as e:
+            self.bench_status.set_text(f"Test impossible : {e}")
+            self.bench_state = "done"
+            self.bench_retry.set_sensitive(True)
+            return
+        self.bench_proc = proc
+        threading.Thread(target=self.read_benchmark, args=(proc,), daemon=True).start()
+
+    def read_benchmark(self, proc):
+        for line in proc.stdout:
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            GLib.idle_add(self.on_benchmark_event, proc, event)
+        proc.wait()
+        GLib.idle_add(self.on_benchmark_exit, proc)
+
+    def on_benchmark_event(self, proc, event):
+        if proc is not self.bench_proc:
+            return False
+        kind = event.get("event")
+        if kind == "start" and event["test"] in self.bench_widgets:
+            self.bench_widgets[event["test"]][2].set_text("mesure en cours…")
+        elif kind == "result" and event["test"] in self.bench_widgets:
+            bar, value, detail = self.bench_widgets[event["test"]]
+            result = event["result"]
+            bar.set_value(result["score"])
+            value.set_text(winlux_benchmark.fr_number(result["score"], 1))
+            detail.set_text(result["detail"])
+            detail.set_tooltip_text(result["detail"])
+        elif kind == "done":
+            self.benchmark = event["summary"]
+            self.bench_state = "done"
+            self.bench_base.set_text(winlux_benchmark.fr_number(self.benchmark["base_score"], 1))
+            self.bench_status.set_text("Déterminée par le composant le plus lent, sur une échelle de 1,0 à 9,9. "
+                                       "L'écriture disque sera mesurée pendant l'installation.")
+            tips = self.benchmark["recommendations"] or ["Aucun réglage particulier nécessaire."]
+            self.bench_tips.set_text("\n".join(f"•  {t}" for t in tips))
+            self.bench_retry.set_sensitive(True)
+            if not self.profile_chosen_by_user:
+                self.select_profile(self.benchmark["recommended_profile"])
+            self.refresh_profile_badges()
+        return False
+
+    def on_benchmark_exit(self, proc):
+        if proc is self.bench_proc and self.bench_state == "running":
+            self.bench_state = "done"
+            self.bench_status.set_text("Le test s'est arrêté avant la fin. Vous pouvez le relancer ou continuer.")
+            self.bench_retry.set_sensitive(True)
+        return False
+
+    # ── Page : Profil d'utilisation ──────────────────────────────
+
+    def build_profile_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        title = Gtk.Label(label="Comment allez-vous utiliser ce PC ?", xalign=0)
+        title.get_style_context().add_class("page-title")
+        box.pack_start(title, False, False, 0)
+        sub = Gtk.Label(
+            label="Winlux règle le processeur, la mémoire, le disque et la carte graphique selon votre usage. "
+                  "Vous pourrez en changer plus tard (winlux-profile --set).",
+            xalign=0)
+        sub.get_style_context().add_class("page-subtitle")
+        sub.set_line_wrap(True)
+        box.pack_start(sub, False, False, 0)
+        grid = Gtk.Grid(column_spacing=12, row_spacing=12, column_homogeneous=True)
+        self.profile_buttons = {}
+        self.profile_cards = {}
+        self.profile_badges = {}
+        group = None
+        for i, pid in enumerate(winlux_profiles.ORDER):
+            profile = winlux_profiles.PROFILES[pid]
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+            card.get_style_context().add_class("card")
+            top = Gtk.Box(spacing=8)
+            rb = Gtk.RadioButton.new_with_label_from_widget(group, profile["name"])
+            rb.get_style_context().add_class("card-title")
+            group = group or rb
+            rb.connect("toggled", self.on_profile_toggle, pid)
+            top.pack_start(rb, False, False, 0)
+            badge = Gtk.Label(label="Recommandé pour ce PC")
+            badge.get_style_context().add_class("badge")
+            badge.set_no_show_all(True)
+            top.pack_end(badge, False, False, 0)
+            card.pack_start(top, False, False, 0)
+            desc = Gtk.Label(label=profile["description"], xalign=0)
+            desc.get_style_context().add_class("card-detail")
+            desc.set_line_wrap(True)
+            desc.set_max_width_chars(40)
+            card.pack_start(desc, False, False, 0)
+            tune = Gtk.Label(label=winlux_profiles.summary_line(pid), xalign=0)
+            tune.get_style_context().add_class("hw-info")
+            tune.set_line_wrap(True)
+            card.pack_start(tune, False, False, 0)
+            apps = Gtk.Label(label="Apps : " + ", ".join(profile["apps"]), xalign=0)
+            apps.get_style_context().add_class("tip")
+            apps.set_line_wrap(True)
+            apps.set_max_width_chars(40)
+            card.pack_start(apps, False, False, 0)
+            grid.attach(card, i % 2, i // 2, 1, 1)
+            self.profile_buttons[pid] = rb
+            self.profile_cards[pid] = card
+            self.profile_badges[pid] = badge
+        box.pack_start(grid, False, False, 0)
+        apps_check = Gtk.CheckButton(label="Installer les applications recommandées au premier démarrage (connexion Internet requise)")
+        apps_check.set_active(True)
+        apps_check.set_margin_top(8)
+        apps_check.connect("toggled", lambda b: self.config.update({"install_apps": b.get_active()}))
+        box.pack_start(apps_check, False, False, 0)
+        self.selecting_profile = False
+        self.select_profile("office")
+        self.pages.add_named(box, page_name("profile"))
+
+    def select_profile(self, pid):
+        self.selecting_profile = True
+        self.profile_buttons[pid].set_active(True)
+        self.selecting_profile = False
+        self.config["profile"] = pid
+        for other, card in self.profile_cards.items():
+            ctx = card.get_style_context()
+            if other == pid:
+                ctx.add_class("selected")
+            else:
+                ctx.remove_class("selected")
+
+    def on_profile_toggle(self, btn, pid):
+        if not btn.get_active():
+            return
+        if not self.selecting_profile:
+            self.profile_chosen_by_user = True
+            self.select_profile(pid)
+
+    def refresh_profile_badges(self):
+        recommended = (self.benchmark or {}).get("recommended_profile")
+        for pid, badge in self.profile_badges.items():
+            badge.set_visible(pid == recommended)
+
+    # ── Page : Compte local ────────────────────────────────────
 
     def build_account_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -3435,7 +3792,7 @@ class InstallerApp(Gtk.Application):
         autologin.connect("toggled", lambda b: self.config.update({"autologin": b.get_active()}))
         autologin.set_margin_top(8)
         box.pack_start(autologin, False, False, 0)
-        self.pages.add_named(box, "page_7")
+        self.pages.add_named(box, page_name("account"))
 
     def on_account_changed(self, entry, key):
         if key == "password_confirm":
@@ -3456,7 +3813,28 @@ class InstallerApp(Gtk.Application):
             self.account_error.set_text(tr("username_invalid"))
         self.validate_step()
 
-    # ── Page 8 : Résumé ──────────────────────────────────────────
+    # ── Page : Migration depuis un autre PC ──────────────────────
+
+    def build_migration_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        title = Gtk.Label(label="Transférer depuis un autre PC", xalign=0)
+        title.get_style_context().add_class("page-title")
+        box.pack_start(title, False, False, 0)
+        sub = Gtk.Label(
+            label="Récupérez vos documents, images et paramètres depuis un PC du même réseau. "
+                  "Le transfert a lieu à la fin de l'installation, directement dans votre nouveau compte.",
+            xalign=0)
+        sub.get_style_context().add_class("page-subtitle")
+        sub.set_line_wrap(True)
+        box.pack_start(sub, False, False, 0)
+        self.migration = winlux_migrate.MigrationPanel(Gtk, GLib, self.validate_step)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.add(self.migration.widget)
+        box.pack_start(scroll, True, True, 0)
+        self.pages.add_named(box, page_name("migration"))
+
+    # ── Page : Résumé ──────────────────────────────────────────
 
     def build_summary_page(self):
         self.summary_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -3475,7 +3853,7 @@ class InstallerApp(Gtk.Application):
         self.summary_warn.get_style_context().add_class("disk-warn")
         self.summary_warn.set_margin_top(12)
         self.summary_box.pack_start(self.summary_warn, False, False, 0)
-        self.pages.add_named(self.summary_box, "page_8")
+        self.pages.add_named(self.summary_box, page_name("summary"))
 
     def summary_partition_lines(self):
         itype = self.config["install_type"]
@@ -3523,6 +3901,14 @@ class InstallerApp(Gtk.Application):
         else:
             lines.append(f"{tr('summary_import')} : {tr('summary_import_none')}")
         lines.append(tr("summary_local_account"))
+        profile_line = f"{tr('summary_profile')} : {winlux_profiles.PROFILES[self.config['profile']]['name']}"
+        if self.config["install_apps"]:
+            profile_line += " " + tr("summary_profile_apps")
+        lines.append(profile_line)
+        score = (winlux_benchmark.fr_number(self.benchmark["base_score"], 1) if self.benchmark
+                 else tr("summary_benchmark_none"))
+        lines.append(f"{tr('summary_benchmark')} : {score}")
+        lines.append(f"{tr('summary_migration')} : {self.migration.describe()}")
         if self.config.get("timezone"):
             lines.append(f"{tr('summary_timezone')} : {self.config['timezone']}")
         if self.config.get("packages"):
@@ -3547,7 +3933,7 @@ class InstallerApp(Gtk.Application):
         else:
             self.summary_warn.set_text("")
 
-    # ── Page 9 : Progression ─────────────────────────────────────
+    # ── Page : Progression ─────────────────────────────────────
 
     def build_progress_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -3576,7 +3962,7 @@ class InstallerApp(Gtk.Application):
         scroll.add(self.progress_log)
         scroll.set_margin_top(16)
         box.pack_start(scroll, True, True, 0)
-        self.pages.add_named(box, "page_9")
+        self.pages.add_named(box, page_name("progress"))
 
     def set_progress(self, fraction, text):
         def do():
@@ -3589,7 +3975,7 @@ class InstallerApp(Gtk.Application):
             self.progress_log.scroll_to_mark(mark, 0, True, 0, 1)
         GLib.idle_add(do)
 
-    # ── Page 10 : Terminé ─────────────────────────────────────────
+    # ── Page : Terminé ─────────────────────────────────────────
 
     def build_done_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -3618,7 +4004,7 @@ class InstallerApp(Gtk.Application):
         close_btn.connect("clicked", lambda _: self.quit())
         btn_box.pack_start(close_btn, False, False, 0)
         box.pack_start(btn_box, False, False, 0)
-        self.pages.add_named(box, "page_10")
+        self.pages.add_named(box, page_name("done"))
 
     def on_reboot(self, _btn):
         try:
@@ -3631,7 +4017,7 @@ class InstallerApp(Gtk.Application):
     # ── Installation ─────────────────────────────────────────────
 
     def start_installation(self):
-        self.current_step = 9
+        self.current_step = step_index("progress")
         self.update_step()
         self.install_cancelled = False
         self.install_thread = threading.Thread(target=self.run_installation, daemon=True)
@@ -3686,6 +4072,7 @@ class InstallerApp(Gtk.Application):
             self.set_progress(0.12, tr("progress_formatting"))
             self.format_layout(layout)
             self.mount_target(layout, target)
+            self.measure_disk_write(target)
             if iso_path and os.path.isfile(iso_path):
                 split_root = self.copy_from_iso(iso_path, work)
             else:
@@ -3705,6 +4092,7 @@ class InstallerApp(Gtk.Application):
             self.import_windows_data(target)
             self.set_progress(0.90, tr("progress_firstboot"))
             self.configure_first_boot(target)
+            self.run_migration(target)
             self.set_progress(0.95, tr("progress_sync"))
             subprocess.run(["sync"], timeout=60)
         except subprocess.CalledProcessError as e:
@@ -4105,8 +4493,11 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             "answer_file": self.answer_path,
             "luks_enabled": self.config["luks_enabled"],
             "install_type": self.config["install_type"],
+            "profile": self.config["profile"],
             "install_date": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
+        profile = winlux_profiles.build_config(self.config["profile"], self.benchmark, self.config["install_apps"])
+        winlux_profiles.write_config(root_path, profile, self.benchmark)
         with open(f"{etc}/install-config.json", "w") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
         timezone = self.config.get("timezone")
@@ -4292,6 +4683,36 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         shutil.rmtree(WIN_IMPORT_STAGE, ignore_errors=True)
         self.unmount_windows()
 
+    def measure_disk_write(self, target):
+        """Complète le benchmark : écriture sur la partition fraîchement formatée."""
+        if not self.benchmark or "disk" not in self.benchmark["results"]:
+            return
+        try:
+            result = winlux_benchmark.bench_disk_write(target)
+        except OSError as e:
+            self.set_progress(0.16, f"Mesure d'écriture disque impossible : {e}")
+            return
+        self.benchmark["results"]["disk"].update(result)
+        self.set_progress(0.16, f"Disque : {result['detail']}")
+
+    def run_migration(self, root_path):
+        panel = self.migration
+        if not panel.enabled or not panel.session:
+            return
+        folders, settings = panel.selection()
+        home = f"{root_path}/home/{self.config['username']}"
+
+        def report(fraction, text):
+            self.set_progress(0.91 + 0.04 * fraction, text)
+        try:
+            errors = panel.session.pull(home, folders, settings, report, uid=1000, gid=1000)
+        except Exception as e:
+            errors = [str(e)]
+        finally:
+            panel.session.close()
+        for err in errors:
+            self.set_progress(0.95, f"Avertissement transfert : {err}")
+
     def post_install(self):
         self.cleanup_windows_import()
         self.set_progress(1.0, tr("progress_done"))
@@ -4300,7 +4721,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             GLib.timeout_add_seconds(10, lambda: self.on_reboot(None))
 
     def show_done(self):
-        self.current_step = 10
+        self.current_step = step_index("done")
         self.update_step()
 
     def install_error(self, message):
@@ -4309,7 +4730,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         def do():
             self.done_title.set_text(tr("error_title"))
             self.done_sub.set_text(message)
-            self.current_step = 10
+            self.current_step = step_index("done")
             self.update_step()
         GLib.idle_add(do)
 

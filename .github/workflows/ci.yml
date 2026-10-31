@@ -114,6 +114,9 @@ jobs:
       - name: Vérifier le catalogue natif Linux et Windows
         run: python3 -B scripts/test-native-catalogue.py
 
+      - name: Vérifier benchmark, profils et migration de l'installateur
+        run: python3 -B scripts/test-installer-oobe.py
+
       - name: Vérifier les fichiers de réponse d'installation silencieuse
         run: python3 -B scripts/test-autoinstall.py
 
