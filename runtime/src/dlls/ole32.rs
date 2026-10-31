@@ -837,6 +837,11 @@ pub unsafe extern "win64" fn co_create_instance(
         .iter()
         .find(|entry| entry.clsid == guid && (entry.context & ctx) != 0)
     else {
+        drop(factories);
+        // Classes intégrées au runtime (planificateur de tâches…).
+        if let Some(hr) = crate::dlls::taskschd::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
     let entry = Arc::clone(entry);

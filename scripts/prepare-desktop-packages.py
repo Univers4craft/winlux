@@ -16,6 +16,10 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "bluez", "blueman", "brightnessctl", "flatpak", "gvfs", "gvfs-backends",
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
             "xfce4-settings", "policykit-1-gnome", "wpasupplicant",
+            "pciutils", "usbutils", "linux-firmware", "mesa-vulkan-drivers",
+            "libgl1-mesa-glx", "irqbalance",
+            # Lecteurs réseau montés comme disques (winlux-drives).
+            "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",
             # Voix du Narrateur (Parametres > Accessibilite).
             "espeak-ng"]
 

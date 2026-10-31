@@ -36,6 +36,8 @@ i=0; while kill -0 "$pid" 2>/dev/null; do i=$((i + 1)); test "$i" -lt 30 || { ec
 # Débit borné.
 speak --rate 99 "Vite"
 wait_for 'espeak-ng -v fr -s 290 -- Vite'
+speak --lang de --rate 5 "Hallo"
+wait_for 'espeak-ng -v de -s 190 -- Hallo'
 speak --stop
 # Son système généré localement : WAV valide.
 speak --sound notification

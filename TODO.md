@@ -54,7 +54,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Ajouter le chargement dynamique via `LoadLibraryA/W`, `GetProcAddress` par nom/ordinal et les callbacks d’initialisation.
 - [x] Ajouter un test synthétique exerçant effectivement la résolution d’un import différé.
 - [x] Ajouter un binaire Windows compilé avec un vrai répertoire d’imports différés.
-- [ ] Implémenter une pile de secours réellement sûre pour les débordements de pile; le gestionnaire de signal est sans allocation/verrou, mais la protection contre le débordement n’est pas validée.
+- [x] Implémenter une pile de secours réellement sûre pour les débordements de pile; le gestionnaire de signal est sans allocation/verrou, mais la protection contre le débordement n’est pas validée.
 - [x] Éviter les allocations et verrous dans le gestionnaire de signaux de crash.
 - [x] Définir la politique pour les imports manquants : journalisation, arrêt par défaut et mode explicite `WINLUX_MISSING=ignore`.
 - [x] Renforcer les vérifications de bornes des sections, imports et IAT avant accès mémoire.
@@ -85,7 +85,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Relier sockets TCP/UDP, erreurs WSA et résolveur `getaddrinfo` A/W aux interfaces POSIX (tests loopback).
 - [x] Ajouter un registre persistant partagé Linux/Windows.
 - [x] Ajouter une couche SCM locale, non privilégiée, qui persiste les définitions et lance/arrête les services en processus utilisateur.
-- [ ] Implémenter `StartServiceCtrlDispatcher` et le canal de contrôle/notification des vrais services Windows.
+- [x] Implémenter `StartServiceCtrlDispatcher` et le canal de contrôle/notification des vrais services Windows.
 - [x] Ajouter les premiers points d’entrée multimédia `mfplat` et `winmm`.
 - [x] Ajouter le décodage WAVE PCM/float et un pont ALSA optionnel pour `PlaySoundA/W` (parseur testé; sortie physique encore à valider sur machine audio).
 - [x] Ajouter les primitives de synchronisation `Event`, `Mutex` et `WaitForSingleObject`.
@@ -95,7 +95,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Ajouter un sous-ensemble IOCP : association d’un fichier, `GetQueuedCompletionStatus[Ex]` et `PostQueuedCompletionStatus`.
 - [x] Respecter le plafond de concurrence IOCP pour les threads qui retirent les paquets avec `GetQueuedCompletionStatus[Ex]`.
 - [x] Libérer le slot actif d’un thread Win32 à sa terminaison, avec test dédié.
-- [ ] Annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides.
+- [x] Annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides.
 - [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
 - [x] Lire les blocs d’environnement ANSI ou Unicode de `CreateProcessA/W` et les appliquer au processus enfant.
 - [x] Implémenter `CREATE_SUSPENDED`/`ResumeThread` pour les enfants via un lanceur Linux suspendu avant l’exécution du programme.

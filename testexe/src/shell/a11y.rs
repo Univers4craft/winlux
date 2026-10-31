@@ -29,7 +29,7 @@ static mut LAST_SPOKEN_AT: u32 = 0;
 /// Prépare les paramètres de `winlux-speak` : débit puis texte entre
 /// guillemets (les guillemets et barres obliques inverses du texte sont
 /// remplacés pour respecter le découpage de ligne de commande Windows).
-pub fn speech_command(text: &[u8], rate: u8, out: &mut [u8; 600]) -> usize {
+pub fn speech_command(text: &[u8], rate: u8, lang: &[u8], out: &mut [u8; 600]) -> usize {
     fn push(out: &mut [u8; 600], n: &mut usize, bytes: &[u8]) {
         for &c in bytes {
             if *n < out.len() - 2 {
@@ -39,7 +39,9 @@ pub fn speech_command(text: &[u8], rate: u8, out: &mut [u8; 600]) -> usize {
         }
     }
     let mut n = 0;
-    push(out, &mut n, b"--rate ");
+    push(out, &mut n, b"--lang ");
+    push(out, &mut n, lang);
+    push(out, &mut n, b" --rate ");
     let rate = rate.clamp(1, 10);
     if rate == 10 {
         push(out, &mut n, b"10");
@@ -93,7 +95,12 @@ pub unsafe fn speak(text: &[u8]) {
     LAST_SPOKEN_LEN = n;
     LAST_SPOKEN_AT = now();
     let mut params = [0u8; 600];
-    speech_command(text, A11Y.narrator_rate, &mut params);
+    speech_command(
+        text,
+        A11Y.narrator_rate,
+        t(&[b"fr", b"en", b"es", b"de"]),
+        &mut params,
+    );
     run_speak(&params);
 }
 
@@ -166,9 +173,33 @@ pub enum Sound {
 /// et fait clignoter l'écran.
 pub unsafe fn sound_event(kind: Sound, detail: &[u8]) {
     let (name, label): (&[u8], &[u8]) = match kind {
-        Sound::Notification => (b"--sound notification\0", b"[Son de notification] "),
-        Sound::Warning => (b"--sound warning\0", b"[Son d'avertissement] "),
-        Sound::Toggle => (b"--sound toggle\0", b"[Son de confirmation] "),
+        Sound::Notification => (
+            b"--sound notification\0",
+            t(&[
+                b"[Son de notification] ",
+                b"[Notification sound] ",
+                b"[Sonido de notificaci\xF3n] ",
+                b"[Benachrichtigungston] ",
+            ]),
+        ),
+        Sound::Warning => (
+            b"--sound warning\0",
+            t(&[
+                b"[Son d'avertissement] ",
+                b"[Warning sound] ",
+                b"[Sonido de advertencia] ",
+                b"[Warnton] ",
+            ]),
+        ),
+        Sound::Toggle => (
+            b"--sound toggle\0",
+            t(&[
+                b"[Son de confirmation] ",
+                b"[Confirmation sound] ",
+                b"[Sonido de confirmaci\xF3n] ",
+                b"[Best\xE4tigungston] ",
+            ]),
+        ),
     };
     // Le Narrateur lit déjà le message : pas de son par-dessus la voix.
     if !A11Y.narrator {
@@ -209,9 +240,19 @@ pub unsafe fn on_settings_changed() {
     if A11Y.narrator != WAS_NARRATOR {
         WAS_NARRATOR = A11Y.narrator;
         if A11Y.narrator {
-            speak(b"Narrateur activ\xE9. Touche Ins\xE9rer plus fl\xE8ches pour parcourir l'\xE9cran, Ctrl pour faire taire la voix.");
+            speak(t(&[
+                b"Narrateur activ\xE9. Touche Ins\xE9rer plus fl\xE8ches pour parcourir l'\xE9cran, Ctrl pour faire taire la voix.",
+                b"Narrator on. Insert plus arrows to browse the screen, Ctrl to stop speaking.",
+                b"Narrador activado. Insert m\xE1s flechas para recorrer la pantalla, Ctrl para callar.",
+                b"Sprachausgabe ein. Einfg und Pfeile zum Navigieren, Strg zum Stoppen.",
+            ]));
         } else {
-            speak(b"Narrateur d\xE9sactiv\xE9.");
+            speak(t(&[
+                b"Narrateur d\xE9sactiv\xE9.",
+                b"Narrator off.",
+                b"Narrador desactivado.",
+                b"Sprachausgabe aus.",
+            ]));
         }
     }
     if !A11Y.sticky {
@@ -274,7 +315,10 @@ pub unsafe fn frame(hwnd: Handle) {
     if active != LAST_ACTIVE {
         LAST_ACTIVE = active;
         if active != usize::MAX {
-            announce_pair(crate::wm::title_of(active), b", fen\xEAtre");
+            announce_pair(
+                crate::wm::title_of(active),
+                t(&[b", fen\xEAtre", b", window", b", ventana", b", Fenster"]),
+            );
         }
     }
     if HOVER_PENDING && since(HOVER_AT) >= 280 {
@@ -345,9 +389,9 @@ unsafe fn toggle_message(on: bool, what: &[u8]) {
         &[
             what,
             if on {
-                b" activ\xE9es".as_slice()
+                t(&[b" activ\xE9es", b" on", b" activadas", b" ein"])
             } else {
-                b" d\xE9sactiv\xE9es"
+                t(&[b" d\xE9sactiv\xE9es", b" off", b" desactivadas", b" aus"])
             },
         ],
     );
@@ -376,9 +420,9 @@ pub fn zoom_step(current: u16, up: bool) -> u16 {
 
 unsafe fn announce_zoom() {
     let mut buf = [0u8; 64];
-    let mut n = join(&mut buf, &[b"Loupe "]);
+    let mut n = join(&mut buf, &[t(&ITEMS[5].label), b" "]);
     n += write_num(&mut buf[n..], A11Y.mag_zoom as u32);
-    n += join(&mut buf[n..], &[b" pour cent"]);
+    n += join(&mut buf[n..], &[b" %"]);
     announce(&buf[..n]);
 }
 
@@ -420,7 +464,12 @@ unsafe fn hotkey(hwnd: Handle, vk: u32) -> bool {
         0x1B if win && A11Y.magnifier => {
             A11Y.magnifier = false;
             save_and_apply();
-            announce(b"Loupe ferm\xE9e");
+            announce(t(&[
+                b"Loupe ferm\xE9e",
+                b"Magnifier closed",
+                b"Lupa cerrada",
+                b"Lupe geschlossen",
+            ]));
             repaint();
             true
         }
@@ -434,10 +483,10 @@ unsafe fn hotkey(hwnd: Handle, vk: u32) -> bool {
             }
             save_and_apply();
             announce(match vk {
-                0x46 => b"Loupe plein \xE9cran".as_slice(),
-                0x4C => b"Loupe en lentille",
-                0x44 => b"Loupe ancr\xE9e",
-                _ => b"Couleurs invers\xE9es",
+                0x46 => t(&ITEMS[7].options[0]),
+                0x4C => t(&ITEMS[7].options[1]),
+                0x44 => t(&ITEMS[7].options[2]),
+                _ => t(&ITEMS[9].label),
             });
             repaint();
             true
@@ -452,7 +501,15 @@ unsafe fn hotkey(hwnd: Handle, vk: u32) -> bool {
         0x2C if alt && shift => {
             A11Y.contrast = if A11Y.contrast == 0 { 1 } else { 0 };
             save_and_apply();
-            toggle_message(A11Y.contrast != 0, b"Couleurs \xE0 contraste \xE9lev\xE9");
+            toggle_message(
+                A11Y.contrast != 0,
+                t(&[
+                    b"Couleurs \xE0 contraste \xE9lev\xE9",
+                    b"High contrast",
+                    b"Alto contraste",
+                    b"Hoher Kontrast",
+                ]),
+            );
             repaint();
             true
         }
@@ -491,8 +548,11 @@ unsafe fn narrator_key(vk: u32) -> bool {
         }
         0x26 => {
             match crate::wm::active_window() {
-                Some((app, _)) => announce_pair(b"Fen\xEAtre ", crate::wm::title_of(app)),
-                None => speak(b"Bureau"),
+                Some((app, _)) => announce_pair(
+                    t(&[b"Fen\xEAtre ", b"Window ", b"Ventana ", b"Fenster "]),
+                    crate::wm::title_of(app),
+                ),
+                None => speak(t(&[b"Bureau", b"Desktop", b"Escritorio", b"Desktop"])),
             }
             true
         }
@@ -575,7 +635,7 @@ pub unsafe fn key_down(hwnd: Handle, vk: u32) -> bool {
                 SHIFT_COUNT = 0;
                 A11Y.sticky = !A11Y.sticky;
                 save_and_apply();
-                toggle_message(A11Y.sticky, b"Touches r\xE9manentes");
+                toggle_message(A11Y.sticky, t(&ITEMS[16].label));
                 return true;
             }
         } else {
@@ -665,9 +725,14 @@ unsafe fn echo(ch: u16) {
         return;
     }
     match ch {
-        0x20 => speak(b"espace"),
-        0x08 => speak(b"retour arri\xE8re"),
-        0x0D => speak(b"entr\xE9e"),
+        0x20 => speak(t(&[b"espace", b"space", b"espacio", b"Leerzeichen"])),
+        0x08 => speak(t(&[
+            b"retour arri\xE8re",
+            b"backspace",
+            b"retroceso",
+            b"R\xFCcktaste",
+        ])),
+        0x0D => speak(t(&[b"entr\xE9e", b"enter", b"intro", b"Eingabe"])),
         0x21..=0xFF => speak(&[ch as u8]),
         _ => {}
     }
@@ -885,9 +950,9 @@ pub unsafe fn regression_checks() {
     (STICKY_LATCHED, STICKY_LOCKED) = saved;
     // Synthèse vocale : texte nettoyé pour la ligne de commande.
     let mut out = [0u8; 600];
-    let n = speech_command(b"Ouvrir \"C:\\x\"  maintenant", 7, &mut out);
+    let n = speech_command(b"Ouvrir \"C:\\x\"  maintenant", 7, b"fr", &mut out);
     check!(
-        &out[..n] == b"--rate 7 \"Ouvrir C: x maintenant\"",
+        &out[..n] == b"--lang fr --rate 7 \"Ouvrir C: x maintenant\"",
         "Narrateur : parametres de winlux-speak"
     );
     // Réglages : aller-retour du fichier.
@@ -911,143 +976,331 @@ pub unsafe fn regression_checks() {
 
 // ---------- Page Paramètres > Accessibilité ----------
 
+/// Texte traduit : français, anglais, espagnol, allemand (Windows-1252).
+pub type Tr = [&'static [u8]; 4];
+
+/// Texte dans la langue de l'interface (Paramètres > Localisation).
+pub fn t(s: &Tr) -> &'static [u8] {
+    s[match unsafe { crate::locale::CURRENT_LANG } {
+        crate::locale::Lang::Fr => 0,
+        crate::locale::Lang::En => 1,
+        crate::locale::Lang::Es => 2,
+        crate::locale::Lang::De => 3,
+    }]
+}
+
+const fn same(s: &'static [u8]) -> Tr {
+    [s, s, s, s]
+}
+
 /// Réglage de la page : libellé, aide et choix proposés. Les réglages
 /// « pas à pas » (zoom, débit) ont deux choix : moins et plus.
 struct Item {
-    section: &'static [u8],
-    label: &'static [u8],
-    help: &'static [u8],
-    options: &'static [&'static [u8]],
+    section: Tr,
+    label: Tr,
+    help: Tr,
+    options: &'static [Tr],
 }
 
-const OFF_ON: &[&[u8]] = &[b"D\xE9sactiv\xE9", b"Activ\xE9"];
-const OFF_ON_F: &[&[u8]] = &[b"D\xE9sactiv\xE9es", b"Activ\xE9es"];
-const NO_YES: &[&[u8]] = &[b"Non", b"Oui"];
-const STEP: &[&[u8]] = &[b"-", b"+"];
+const NONE: Tr = same(b"");
+const OFF_ON: &[Tr] = &[
+    [b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"],
+    [b"Activ\xE9", b"On", b"Activado", b"Ein"],
+];
+const OFF_ON_F: &[Tr] = &[
+    [b"D\xE9sactiv\xE9es", b"Off", b"Desactivadas", b"Aus"],
+    [b"Activ\xE9es", b"On", b"Activadas", b"Ein"],
+];
+const NO_YES: &[Tr] = &[
+    [b"Non", b"No", b"No", b"Nein"],
+    [b"Oui", b"Yes", b"S\xED", b"Ja"],
+];
+const STEP: &[Tr] = &[same(b"-"), same(b"+")];
+const DIGITS5: &[Tr] = &[same(b"1"), same(b"2"), same(b"3"), same(b"4"), same(b"5")];
+const CARET_LABELS: &[Tr] = &[same(b"1"), same(b"2"), same(b"3"), same(b"4"), same(b"6")];
 const CARETS: [u8; 5] = [1, 2, 3, 4, 6];
 const SLOW: [u16; 4] = [0, 300, 700, 1000];
 const BOUNCE: [u16; 4] = [0, 300, 500, 1000];
+const DELAYS: &[Tr] = &[
+    [b"Aucun", b"None", b"Ninguno", b"Keine"],
+    [b"0,3 s", b"0.3 s", b"0,3 s", b"0,3 s"],
+    [b"0,7 s", b"0.7 s", b"0,7 s", b"0,7 s"],
+    [b"1 s", b"1 s", b"1 s", b"1 s"],
+];
+const BOUNCES: &[Tr] = &[
+    [b"Aucun", b"None", b"Ninguno", b"Keine"],
+    [b"0,3 s", b"0.3 s", b"0,3 s", b"0,3 s"],
+    [b"0,5 s", b"0.5 s", b"0,5 s", b"0,5 s"],
+    [b"1 s", b"1 s", b"1 s", b"1 s"],
+];
+
+/// Noms des thèmes de contraste (mêmes couleurs que `gfx::contrast_colors`).
+const CONTRAST_TR: &[Tr] = &[
+    [b"Aucun", b"None", b"Ninguno", b"Keins"],
+    [b"Aquatique", b"Aquatic", b"Acu\xE1tico", b"Aquatisch"],
+    [b"D\xE9sert", b"Desert", b"Desierto", b"W\xFCste"],
+    [b"Cr\xE9puscule", b"Dusk", b"Crep\xFAsculo", b"D\xE4mmerung"],
+    [
+        b"Ciel nocturne",
+        b"Night sky",
+        b"Cielo nocturno",
+        b"Nachthimmel",
+    ],
+];
 
 const ITEMS: [Item; 20] = [
     Item {
-        section: b"Vision",
-        label: b"Th\xE8mes de contraste",
-        help: b"Couleurs \xE0 fort contraste pour le bureau et les applications (Alt + Maj + Impr. \xE9cran).",
-        options: &CONTRAST_NAMES,
+        section: [b"Vision", b"Vision", b"Visi\xF3n", b"Sehen"],
+        label: [b"Th\xE8mes de contraste", b"Contrast themes", b"Temas de contraste", b"Kontrastdesigns"],
+        help: [
+            b"Couleurs \xE0 fort contraste pour le bureau et les applications (Alt + Maj + Impr. \xE9cran).",
+            b"High contrast colours for the desktop and apps (Alt + Shift + Print Screen).",
+            b"Colores de alto contraste para el escritorio y las aplicaciones (Alt + May\xFAs + Impr Pant).",
+            b"Kontrastfarben f\xFCr Desktop und Apps (Alt + Umschalt + Druck).",
+        ],
+        options: CONTRAST_TR,
     },
     Item {
-        section: b"",
-        label: b"Taille du pointeur",
-        help: b"Agrandit la fl\xE8che de la souris.",
-        options: &[b"1", b"2", b"3", b"4", b"5"],
+        section: NONE,
+        label: [b"Taille du pointeur", b"Pointer size", b"Tama\xF1o del puntero", b"Zeigergr\xF6\xDFe"],
+        help: [
+            b"Agrandit la fl\xE8che de la souris.",
+            b"Makes the mouse arrow bigger.",
+            b"Agranda la flecha del rat\xF3n.",
+            b"Vergr\xF6\xDFert den Mauszeiger.",
+        ],
+        options: DIGITS5,
     },
     Item {
-        section: b"",
-        label: b"Couleur du pointeur",
-        help: b"Un pointeur noir ou vert vif reste visible sur tous les fonds.",
-        options: &[b"Blanc", b"Noir", b"Vert vif"],
+        section: NONE,
+        label: [b"Couleur du pointeur", b"Pointer colour", b"Color del puntero", b"Zeigerfarbe"],
+        help: [
+            b"Un pointeur noir ou vert vif reste visible sur tous les fonds.",
+            b"A black or bright green pointer stays visible on any background.",
+            b"Un puntero negro o verde vivo se ve sobre cualquier fondo.",
+            b"Ein schwarzer oder hellgr\xFCner Zeiger bleibt \xFCberall sichtbar.",
+        ],
+        options: &[
+            [b"Blanc", b"White", b"Blanco", b"Wei\xDF"],
+            [b"Noir", b"Black", b"Negro", b"Schwarz"],
+            [b"Vert vif", b"Lime", b"Verde vivo", b"Hellgr\xFCn"],
+        ],
     },
     Item {
-        section: b"",
-        label: b"\xC9paisseur du curseur de texte",
-        help: b"Barre clignotante des champs de saisie, en pixels.",
-        options: &[b"1", b"2", b"3", b"4", b"6"],
+        section: NONE,
+        label: [
+            b"\xC9paisseur du curseur de texte",
+            b"Text cursor thickness",
+            b"Grosor del cursor de texto",
+            b"Breite des Textcursors",
+        ],
+        help: [
+            b"Barre clignotante des champs de saisie, en pixels.",
+            b"Blinking bar in text fields, in pixels.",
+            b"Barra parpadeante de los campos de texto, en p\xEDxeles.",
+            b"Blinkender Strich in Eingabefeldern, in Pixeln.",
+        ],
+        options: CARET_LABELS,
     },
     Item {
-        section: b"",
-        label: b"Effets d'animation",
-        help: b"Ouverture des fen\xEAtres, menus et transitions.",
+        section: NONE,
+        label: [b"Effets d'animation", b"Animation effects", b"Efectos de animaci\xF3n", b"Animationseffekte"],
+        help: [
+            b"Ouverture des fen\xEAtres, menus et transitions.",
+            b"Window opening, menus and transitions.",
+            b"Apertura de ventanas, men\xFAs y transiciones.",
+            b"Fenster\xF6ffnung, Men\xFCs und \xDCberg\xE4nge.",
+        ],
         options: OFF_ON_F,
     },
     Item {
-        section: b"Loupe",
-        label: b"Loupe",
-        help: b"Win + Plus pour zoomer, Win + Moins pour r\xE9duire, Win + \xC9chap pour quitter.",
+        section: [b"Loupe", b"Magnifier", b"Lupa", b"Bildschirmlupe"],
+        label: [b"Loupe", b"Magnifier", b"Lupa", b"Bildschirmlupe"],
+        help: [
+            b"Win + Plus pour zoomer, Win + Moins pour r\xE9duire, Win + \xC9chap pour quitter.",
+            b"Win + Plus to zoom in, Win + Minus to zoom out, Win + Esc to quit.",
+            b"Win + M\xE1s para ampliar, Win + Menos para reducir, Win + Esc para salir.",
+            b"Win + Plus vergr\xF6\xDFert, Win + Minus verkleinert, Win + Esc beendet.",
+        ],
         options: OFF_ON_F,
     },
     Item {
-        section: b"",
-        label: b"Niveau de zoom",
-        help: b"",
+        section: NONE,
+        label: [b"Niveau de zoom", b"Zoom level", b"Nivel de zoom", b"Zoomstufe"],
+        help: NONE,
         options: STEP,
     },
     Item {
-        section: b"",
-        label: b"Affichage",
-        help: b"Plein \xE9cran, lentille autour du pointeur ou bandeau ancr\xE9 (Ctrl + Alt + F, L, D).",
-        options: &[b"Plein \xE9cran", b"Lentille", b"Ancr\xE9"],
+        section: NONE,
+        label: [b"Affichage", b"View", b"Vista", b"Ansicht"],
+        help: [
+            b"Plein \xE9cran, lentille autour du pointeur ou bandeau ancr\xE9 (Ctrl + Alt + F, L, D).",
+            b"Full screen, lens around the pointer or docked band (Ctrl + Alt + F, L, D).",
+            b"Pantalla completa, lente junto al puntero o banda acoplada (Ctrl + Alt + F, L, D).",
+            b"Vollbild, Linse am Zeiger oder angedockt (Strg + Alt + F, L, D).",
+        ],
+        options: &[
+            [b"Plein \xE9cran", b"Full screen", b"Completa", b"Vollbild"],
+            [b"Lentille", b"Lens", b"Lente", b"Linse"],
+            [b"Ancr\xE9", b"Docked", b"Acoplada", b"Angedockt"],
+        ],
     },
     Item {
-        section: b"",
-        label: b"Lisser les bords",
-        help: b"Adoucit les images et le texte agrandis.",
+        section: NONE,
+        label: [b"Lisser les bords", b"Smooth edges", b"Suavizar bordes", b"Kanten gl\xE4tten"],
+        help: [
+            b"Adoucit les images et le texte agrandis.",
+            b"Softens magnified images and text.",
+            b"Suaviza las im\xE1genes y el texto ampliados.",
+            b"Gl\xE4ttet vergr\xF6\xDFerte Bilder und Texte.",
+        ],
         options: NO_YES,
     },
     Item {
-        section: b"",
-        label: b"Inverser les couleurs",
-        help: b"Dans la zone agrandie (Ctrl + Alt + I).",
+        section: NONE,
+        label: [b"Inverser les couleurs", b"Invert colours", b"Invertir colores", b"Farben umkehren"],
+        help: [
+            b"Dans la zone agrandie (Ctrl + Alt + I).",
+            b"In the magnified area (Ctrl + Alt + I).",
+            b"En la zona ampliada (Ctrl + Alt + I).",
+            b"Im vergr\xF6\xDFerten Bereich (Strg + Alt + I).",
+        ],
         options: NO_YES,
     },
     Item {
-        section: b"Narrateur",
-        label: b"Narrateur",
-        help: b"Lit l'\xE9cran \xE0 voix haute (Win + Ctrl + Entr\xE9e). Ins\xE9rer + fl\xE8ches pour parcourir.",
+        section: [b"Narrateur", b"Narrator", b"Narrador", b"Sprachausgabe"],
+        label: [b"Narrateur", b"Narrator", b"Narrador", b"Sprachausgabe"],
+        help: [
+            b"Lit l'\xE9cran \xE0 voix haute (Win + Ctrl + Entr\xE9e). Ins\xE9rer + fl\xE8ches pour parcourir.",
+            b"Reads the screen aloud (Win + Ctrl + Enter). Insert + arrows to browse.",
+            b"Lee la pantalla en voz alta (Win + Ctrl + Intro). Insert + flechas para recorrer.",
+            b"Liest den Bildschirm vor (Win + Strg + Eingabe). Einfg + Pfeile zum Navigieren.",
+        ],
         options: OFF_ON,
     },
     Item {
-        section: b"",
-        label: b"Vitesse de la voix",
-        help: b"",
+        section: NONE,
+        label: [b"Vitesse de la voix", b"Voice speed", b"Velocidad de la voz", b"Sprechtempo"],
+        help: NONE,
         options: STEP,
     },
     Item {
-        section: b"",
-        label: b"Lire les caract\xE8res saisis",
-        help: b"Annonce chaque touche tap\xE9e.",
+        section: NONE,
+        label: [
+            b"Lire les caract\xE8res saisis",
+            b"Read typed characters",
+            b"Leer los caracteres escritos",
+            b"Eingegebene Zeichen vorlesen",
+        ],
+        help: [
+            b"Annonce chaque touche tap\xE9e.",
+            b"Announces each key you type.",
+            b"Anuncia cada tecla pulsada.",
+            b"Sagt jede getippte Taste an.",
+        ],
         options: NO_YES,
     },
     Item {
-        section: b"",
-        label: b"Lire le texte sous le pointeur",
-        help: b"Boutons, menus et titres survol\xE9s par la souris.",
+        section: NONE,
+        label: [
+            b"Lire le texte sous le pointeur",
+            b"Read text under the pointer",
+            b"Leer el texto bajo el puntero",
+            b"Text unter dem Zeiger vorlesen",
+        ],
+        help: [
+            b"Boutons, menus et titres survol\xE9s par la souris.",
+            b"Buttons, menus and titles under the mouse.",
+            b"Botones, men\xFAs y t\xEDtulos bajo el rat\xF3n.",
+            b"Schaltfl\xE4chen, Men\xFCs und Titel unter der Maus.",
+        ],
         options: NO_YES,
     },
     Item {
-        section: b"Audio",
-        label: b"Sous-titres des sons syst\xE8me",
-        help: b"Affiche le nom du son jou\xE9 au-dessus de la barre des t\xE2ches.",
+        section: [b"Audio", b"Audio", b"Audio", b"Audio"],
+        label: [
+            b"Sous-titres des sons syst\xE8me",
+            b"Captions for system sounds",
+            b"Subt\xEDtulos de sonidos del sistema",
+            b"Untertitel f\xFCr Systemkl\xE4nge",
+        ],
+        help: [
+            b"Affiche le nom du son jou\xE9 au-dessus de la barre des t\xE2ches.",
+            b"Shows the name of the sound above the taskbar.",
+            b"Muestra el nombre del sonido sobre la barra de tareas.",
+            b"Zeigt den Namen des Klangs \xFCber der Taskleiste.",
+        ],
         options: NO_YES,
     },
     Item {
-        section: b"",
-        label: b"Faire clignoter l'\xE9cran",
-        help: b"Signale visuellement les alertes sonores.",
+        section: NONE,
+        label: [
+            b"Faire clignoter l'\xE9cran",
+            b"Flash the screen",
+            b"Hacer parpadear la pantalla",
+            b"Bildschirm blinken lassen",
+        ],
+        help: [
+            b"Signale visuellement les alertes sonores.",
+            b"Shows audio alerts visually.",
+            b"Indica visualmente las alertas sonoras.",
+            b"Zeigt akustische Warnungen sichtbar an.",
+        ],
         options: NO_YES,
     },
     Item {
-        section: b"Clavier",
-        label: b"Touches r\xE9manentes",
-        help: b"Maj, Ctrl, Alt ou Windows restent actives pour la touche suivante. Maj cinq fois : marche/arr\xEAt.",
+        section: [b"Clavier", b"Keyboard", b"Teclado", b"Tastatur"],
+        label: [b"Touches r\xE9manentes", b"Sticky Keys", b"Teclas especiales", b"Einrastfunktion"],
+        help: [
+            b"Maj, Ctrl, Alt ou Windows restent actives pour la touche suivante. Maj cinq fois : marche/arr\xEAt.",
+            b"Shift, Ctrl, Alt or Windows stay active for the next key. Press Shift five times to toggle.",
+            b"May\xFAs, Ctrl, Alt o Windows siguen activas para la tecla siguiente. May\xFAs cinco veces: activar.",
+            b"Umschalt, Strg, Alt oder Windows bleiben f\xFCr die n\xE4chste Taste aktiv. F\xFCnfmal Umschalt: ein/aus.",
+        ],
         options: OFF_ON_F,
     },
     Item {
-        section: b"",
-        label: b"Touches filtres",
-        help: b"Ignore les frappes br\xE8ves ou r\xE9p\xE9t\xE9es.",
+        section: NONE,
+        label: [b"Touches filtres", b"Filter Keys", b"Teclas filtro", b"Anschlagverz\xF6gerung"],
+        help: [
+            b"Ignore les frappes br\xE8ves ou r\xE9p\xE9t\xE9es.",
+            b"Ignores brief or repeated keystrokes.",
+            b"Ignora pulsaciones breves o repetidas.",
+            b"Ignoriert kurze oder wiederholte Anschl\xE4ge.",
+        ],
         options: OFF_ON_F,
     },
     Item {
-        section: b"",
-        label: b"Dur\xE9e d'appui requise",
-        help: b"Une touche doit rester enfonc\xE9e ce temps pour compter.",
-        options: &[b"Aucune", b"0,3 s", b"0,7 s", b"1 s"],
+        section: NONE,
+        label: [
+            b"Dur\xE9e d'appui requise",
+            b"Required hold time",
+            b"Tiempo de pulsaci\xF3n",
+            b"Erforderliche Haltedauer",
+        ],
+        help: [
+            b"Une touche doit rester enfonc\xE9e ce temps pour compter.",
+            b"A key must be held this long to count.",
+            b"La tecla debe mantenerse este tiempo para contar.",
+            b"Eine Taste muss so lange gedr\xFCckt werden.",
+        ],
+        options: DELAYS,
     },
     Item {
-        section: b"",
-        label: b"Ignorer les frappes r\xE9p\xE9t\xE9es",
-        help: b"D\xE9lai pendant lequel une m\xEAme touche n'est pas reprise.",
-        options: &[b"Aucun", b"0,3 s", b"0,5 s", b"1 s"],
+        section: NONE,
+        label: [
+            b"Ignorer les frappes r\xE9p\xE9t\xE9es",
+            b"Ignore repeated keystrokes",
+            b"Ignorar pulsaciones repetidas",
+            b"Wiederholte Anschl\xE4ge ignorieren",
+        ],
+        help: [
+            b"D\xE9lai pendant lequel une m\xEAme touche n'est pas reprise.",
+            b"Delay during which the same key is not accepted again.",
+            b"Tiempo durante el que no se acepta la misma tecla.",
+            b"Zeit, in der dieselbe Taste nicht erneut z\xE4hlt.",
+        ],
+        options: BOUNCES,
     },
 ];
 
@@ -1123,7 +1376,10 @@ fn item_status(a: &A11y, item: usize, out: &mut [u8; 48]) -> usize {
         }
         11 => {
             let n = write_num(out, a.narrator_rate as u32);
-            n + join(&mut out[n..], &[b" sur 10"])
+            n + join(
+                &mut out[n..],
+                &[t(&[b" sur 10", b" of 10", b" de 10", b" von 10"])],
+            )
         }
         _ => 0,
     }
@@ -1149,14 +1405,14 @@ fn chip_width(label: &[u8]) -> i32 {
 fn layout_rows(c: &Rect, scroll: i32, out: &mut [RowGeo; 20]) -> i32 {
     let mut y = c.top + 44 + PREVIEW_H + 12 - scroll;
     for (i, item) in ITEMS.iter().enumerate() {
-        if !item.section.is_empty() {
+        if !item.section[0].is_empty() {
             y += SECTION_H;
         }
         let row = rect(c.left - 8, y, c.right + 8, y + ROW_H - 6);
         let mut x = c.right - 4;
         let mut chips = [rect(0, 0, 0, 0); 5];
         for (j, label) in item.options.iter().enumerate().rev() {
-            let w = chip_width(label);
+            let w = chip_width(t(label));
             chips[j] = rect(x - w, y + 13, x, y + 41);
             x -= w + 6;
         }
@@ -1204,7 +1460,12 @@ unsafe fn draw_preview(g: &mut crate::wm::Gfx, c: &Rect) {
         p.text3,
         c.left + 4,
         top + 10,
-        b"APER\xC7U EN DIRECT",
+        t(&[
+            b"APER\xC7U EN DIRECT",
+            b"LIVE PREVIEW",
+            b"VISTA PREVIA",
+            b"LIVE-VORSCHAU",
+        ]),
     );
     // Fenêtre miniature dans la palette active.
     let w = rect(
@@ -1230,7 +1491,12 @@ unsafe fn draw_preview(g: &mut crate::wm::Gfx, c: &Rect) {
         p.text,
         w.left + 10,
         w.top + 7,
-        b"Document - \xC9diteur",
+        t(&[
+            b"Document - \xC9diteur",
+            b"Document - Editor",
+            b"Documento - Editor",
+            b"Dokument - Editor",
+        ]),
     );
     fill(
         g.hdc,
@@ -1277,7 +1543,7 @@ unsafe fn draw_preview(g: &mut crate::wm::Gfx, c: &Rect) {
         p.on_accent,
         (button.left + button.right) / 2,
         button.top + 5,
-        b"Enregistrer",
+        t(&[b"Enregistrer", b"Save", b"Guardar", b"Speichern"]),
     );
     text(
         g.hdc,
@@ -1285,7 +1551,12 @@ unsafe fn draw_preview(g: &mut crate::wm::Gfx, c: &Rect) {
         p.text3,
         button.right + 10,
         button.top + 5,
-        b"Lien d\xE9sactiv\xE9",
+        t(&[
+            b"Lien d\xE9sactiv\xE9",
+            b"Disabled link",
+            b"Enlace inactivo",
+            b"Inaktiver Link",
+        ]),
     );
     // Pointeur à la taille et à la couleur choisies.
     const ARROW: [&[u8; 12]; 19] = [
@@ -1343,28 +1614,30 @@ unsafe fn draw_preview(g: &mut crate::wm::Gfx, c: &Rect) {
     let x = px + 60;
     if x + 120 < box_.right {
         let mut zoom = [0u8; 48];
-        let mut n = join(&mut zoom, &[b"Loupe : "]);
+        let mut narr = [0u8; 48];
+        let narr_len = join(
+            &mut narr,
+            &[
+                t(&ITEMS[10].label),
+                b" : ",
+                t(&OFF_ON[A11Y.narrator as usize]),
+            ],
+        );
+        let mut n = join(&mut zoom, &[t(&ITEMS[5].label), b" : "]);
         if A11Y.magnifier {
             n += write_num(&mut zoom[n..], A11Y.mag_zoom as u32);
             n += join(&mut zoom[n..], &[b" %"]);
         } else {
-            n += join(&mut zoom[n..], &[b"arr\xEAt\xE9e"]);
+            n += join(&mut zoom[n..], &[t(&OFF_ON_F[0])]);
         }
         for (label, on) in [
             (&zoom[..n], A11Y.magnifier),
-            (
-                if A11Y.narrator {
-                    b"Narrateur : actif".as_slice()
-                } else {
-                    b"Narrateur : arr\xEAt\xE9"
-                },
-                A11Y.narrator,
-            ),
+            (&narr[..narr_len], A11Y.narrator),
             (
                 if A11Y.sticky {
-                    b"Touches r\xE9manentes".as_slice()
+                    t(&ITEMS[16].label)
                 } else {
-                    b"Clavier standard"
+                    t(&ITEMS[16].section)
                 },
                 A11Y.sticky || A11Y.filter,
             ),
@@ -1405,14 +1678,14 @@ pub unsafe fn page_draw(g: &mut crate::wm::Gfx, c: &Rect) {
     let min_top = c.top + 40;
     for (i, item) in ITEMS.iter().enumerate() {
         let r = geo[i].row;
-        if !item.section.is_empty() && r.top - SECTION_H + 6 >= min_top && r.bottom <= c.bottom {
+        if !item.section[0].is_empty() && r.top - SECTION_H + 6 >= min_top && r.bottom <= c.bottom {
             text(
                 g.hdc,
                 g.f.title,
                 p.text,
                 c.left,
                 r.top - SECTION_H + 8,
-                item.section,
+                t(&item.section),
             );
         }
         if r.top < min_top || r.bottom > c.bottom {
@@ -1448,12 +1721,12 @@ pub unsafe fn page_draw(g: &mut crate::wm::Gfx, c: &Rect) {
             p.text,
             c.left,
             r.top + 9,
-            item.label,
+            t(&item.label),
             label_w,
         );
         let mut status = [0u8; 48];
         let n = item_status(&A11Y, i, &mut status);
-        let help: &[u8] = if n > 0 { &status[..n] } else { item.help };
+        let help: &[u8] = if n > 0 { &status[..n] } else { t(&item.help) };
         text_fit(
             g.hdc,
             g.f.small,
@@ -1502,7 +1775,7 @@ pub unsafe fn page_draw(g: &mut crate::wm::Gfx, c: &Rect) {
                 if on { p.on_accent } else { p.text },
                 (chip.left + chip.right) / 2,
                 chip.top + 7,
-                label,
+                t(label),
             );
         }
     }
@@ -1528,7 +1801,12 @@ unsafe fn choose(item: usize, option: usize) {
     item_set(&mut A11Y, item, option);
     PAGE_FOCUS = item;
     if !a11y_save() {
-        announce(b"Enregistrement impossible");
+        announce(t(&[
+            b"Enregistrement impossible",
+            b"Could not save",
+            b"No se pudo guardar",
+            b"Speichern fehlgeschlagen",
+        ]));
     }
     on_settings_changed();
     let mut buf = [0u8; 120];
@@ -1537,9 +1815,9 @@ unsafe fn choose(item: usize, option: usize) {
     let value: &[u8] = if n > 0 {
         &status[..n]
     } else {
-        ITEMS[item].options[option.min(ITEMS[item].options.len() - 1)]
+        t(&ITEMS[item].options[option.min(ITEMS[item].options.len() - 1)])
     };
-    let n = join(&mut buf, &[ITEMS[item].label, b" : ", value]);
+    let n = join(&mut buf, &[t(&ITEMS[item].label), b" : ", value]);
     announce(&buf[..n]);
 }
 
@@ -1582,7 +1860,7 @@ pub unsafe fn page_key(vk: u32) -> bool {
             let target = PAGE_FOCUS as i32 * ROW_H + PREVIEW_H - 2 * ROW_H;
             PAGE_SCROLL = target.max(0);
             let mut buf = [0u8; 120];
-            let n = join(&mut buf, &[ITEMS[PAGE_FOCUS].label]);
+            let n = join(&mut buf, &[t(&ITEMS[PAGE_FOCUS].label)]);
             announce(&buf[..n]);
             true
         }

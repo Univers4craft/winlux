@@ -13,6 +13,7 @@ pub mod crt_scan;
 pub mod crt_stdio;
 pub mod crypt32;
 pub mod d3d11;
+pub mod d3d_shader;
 pub mod dbghelp;
 pub mod dwmapi;
 pub mod dwrite;
@@ -20,11 +21,13 @@ pub mod dxgi;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
+pub mod gl_bindings;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
 pub mod iphlpapi;
 pub mod kernel32;
+pub mod kernel32_cpu;
 pub mod kernel32_misc;
 pub mod libgcc;
 pub mod libstdcpp;
@@ -44,6 +47,7 @@ pub mod sechost;
 pub mod setupapi;
 pub mod shell32;
 pub mod shlwapi;
+pub mod taskschd;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
@@ -113,9 +117,11 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = kernel32::exports();
                     e.extend(winfile::exports());
                     e.extend(kernel32_misc::exports());
+                    e.extend(kernel32_cpu::exports());
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(crate::mounts::exports());
                     e
                 },
                 handle: fake_module(),

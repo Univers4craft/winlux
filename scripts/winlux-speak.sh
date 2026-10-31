@@ -1,6 +1,6 @@
 #!/bin/sh
 # Voix du Narrateur Winlux et sons système du bureau.
-#   winlux-speak [--rate 1-10] "texte"   lit le texte (interrompt la lecture en cours)
+#   winlux-speak [--lang fr|en|es|de] [--rate 1-10] "texte"   lit le texte (interrompt la lecture en cours)
 #   winlux-speak --stop                  fait taire la voix
 #   winlux-speak --sound NOM             joue un son : notification, warning, toggle
 # Moteurs essayés : piper (voix neuronale, modèle dans /usr/share/winlux/piper),
@@ -31,8 +31,10 @@ detach() {
 }
 
 language() {
-    case "${WINLUX_SPEAK_LANG:-${LANG:-fr}}" in
+    case "${voice_lang:-${WINLUX_SPEAK_LANG:-${LANG:-fr}}}" in
         en*) printf 'en' ;;
+        es*) printf 'es' ;;
+        de*) printf 'de' ;;
         *) printf 'fr' ;;
     esac
 }
@@ -117,11 +119,13 @@ play_sound() {
 }
 
 rate=5
+voice_lang=
 while test $# -gt 0; do
     case "$1" in
         --stop) stop_voice; exit 0 ;;
         --sound) shift; play_sound "${1:-notification}"; exit $? ;;
         --rate) shift; rate=${1:-5}; shift ;;
+        --lang) shift; voice_lang=${1:-}; shift ;;
         --) shift; break ;;
         *) break ;;
     esac
