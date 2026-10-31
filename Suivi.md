@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **224**
-- À faire ou en cours : **43**
+- Réalisé : **225**
+- À faire ou en cours : **42**
 - Total : **267**
-- Progression : **83.9%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169)
+- Progression : **84.3%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169)
 
 ## À FAIRE (par priorité)
 
@@ -33,7 +33,7 @@
 - [x] Disques branchés (#168) : clés USB, disques externes et partition d'un Windows existant montés avec une lettre (`winlux --volumes`), NTFS en lecture/écriture, droits de l'utilisateur, même lettre au même volume, veille prolongée / démarrage rapide / volume « sale » détectés → lecture seule + message clair, bouton Réparer dans Gestion des disques, BitLocker expliqué (`docs/VOLUMES.md`).
 - [ ] Réseau local partagé Linux ↔ Windows (#168) : ports locaux joignables des deux côtés, ports ouverts affichés dans le pare-feu avec le nom de l'appli, proxy système commun.
 - [x] Écran de verrouillage de la session native au style Windows 11 (`winlux-lock`) : Windows+L, Démarrer > Verrouiller, inactivité, mot de passe au réveil, réglages dans Paramètres > Confidentialité et sécurité (#158).
-- [ ] Permissions des applications Windows : demande claire (dossiers personnels, webcam, micro, écran, réseau), choix mémorisé et révocable dans Paramètres (#158).
+- [x] Permissions des applications Windows : demande claire (dossiers personnels, webcam, micro, écran ; réseau autorisé d'office mais blocable), choix mémorisé et révocable dans Paramètres > Confidentialité et sécurité (#158).
 - [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
