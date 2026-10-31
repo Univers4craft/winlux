@@ -26,5 +26,5 @@ Winlux est un projet expérimental qui combine un chargeur d'exécutables PE32+ 
 
 - **Tâches réalisées** : 124+ (82.7%)
 - **Tâches restantes** : 26 prioritaires + ~200 secondaires
-- **Version actuelle** : v0.2.10 (préversion technique)
+- **Version actuelle** : v0.2.11 (préversion technique)
 - **Licence** : GPL-3.0-or-later

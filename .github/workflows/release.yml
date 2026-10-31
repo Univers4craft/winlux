@@ -112,6 +112,11 @@ jobs:
           WINLUX_KERNEL_RELEASE="$release" \
             bash scripts/build-live-iso.sh "build/winlux-live-$RELEASE_NAME.iso"
           test -s "build/winlux-live-$RELEASE_NAME.iso"
+          # GitHub refuses release assets of 2 GiB or more: fail here, on PRs
+          # too, rather than at the very last publishing step.
+          size=$(stat -c %s "build/winlux-live-$RELEASE_NAME.iso")
+          echo "Taille de l'ISO : $size octets"
+          test "$size" -lt 2147483648 || { echo "ISO trop grande pour une release GitHub (limite 2 Gio)" >&2; exit 1; }
           echo "SKIP_ISO=false" >> "$GITHUB_ENV"
 
       - name: Valider les navigateurs en VM
