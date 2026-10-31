@@ -273,6 +273,13 @@ pub extern "win64" fn get_std_handle(which: u32) -> usize {
 fn next_handle() -> usize {
     NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
 }
+
+pub(crate) fn insert_file(f: File) -> usize {
+    let h = next_handle();
+    lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
+        .insert(h, FileHandle::File(Arc::new(Mutex::new(f))));
+    h
+}
 fn post_iocp(port: &CompletionPort, packet: CompletionPacket) {
     lock(&port.state).queue.push_back(packet);
     port.changed.notify_all();
