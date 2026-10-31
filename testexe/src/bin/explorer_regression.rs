@@ -16,6 +16,8 @@ mod diskmgr;
 mod eventviewer;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/filehistory.rs"]
+mod filehistory;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/login.rs"]
@@ -45,6 +47,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         explorer::regression_checks();
         desktop::regression_checks();
         settings::regression_checks();
+        filehistory::regression_checks();
     }
     finish()
 }

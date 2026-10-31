@@ -20,6 +20,8 @@ mod diskmgr;
 mod eventviewer;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/filehistory.rs"]
+mod filehistory;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/login.rs"]

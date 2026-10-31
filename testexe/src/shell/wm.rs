@@ -30,7 +30,8 @@ pub const APP_TERMINAL: usize = 6;
 pub const APP_DISKMGR: usize = 7;
 pub const APP_EVENTVIEWER: usize = 8;
 pub const APP_RESTORE: usize = 9;
-pub const APP_COUNT: usize = 10;
+pub const APP_FILEHISTORY: usize = 10;
+pub const APP_COUNT: usize = 11;
 
 // Native session: each built-in application owns a separate X11/Win32 window.
 // The Linux window manager handles its frame, stacking and taskbar lifecycle.
@@ -274,7 +275,7 @@ const CLOSED: Win = Win {
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
@@ -523,6 +524,7 @@ pub fn title_of(app: usize) -> &'static [u8] {
         APP_DISKMGR => b"Gestion des disques",
         APP_EVENTVIEWER => b"Observateur d'\xE9v\xE9nements",
         APP_RESTORE => b"Restauration syst\xE8me",
+        APP_FILEHISTORY => b"Historique des fichiers",
         _ => b"Param\xE8tres",
     }
 }
@@ -538,6 +540,7 @@ pub fn glyph_of(app: usize) -> Glyph {
         APP_DISKMGR => Glyph::Drive,
         APP_EVENTVIEWER => Glyph::Details,
         APP_RESTORE => Glyph::Refresh,
+        APP_FILEHISTORY => Glyph::Archive,
         _ => Glyph::Settings,
     }
 }
@@ -553,6 +556,7 @@ fn custom_title(app: usize) -> bool {
         APP_DISKMGR => crate::diskmgr::CUSTOM_TITLE,
         APP_EVENTVIEWER => crate::eventviewer::CUSTOM_TITLE,
         APP_RESTORE => crate::restore::CUSTOM_TITLE,
+        APP_FILEHISTORY => crate::filehistory::CUSTOM_TITLE,
         _ => crate::settings::CUSTOM_TITLE,
     }
 }
@@ -569,6 +573,7 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
         APP_DISKMGR => crate::diskmgr::draw(g, f),
         APP_EVENTVIEWER => crate::eventviewer::draw(g, f),
         APP_RESTORE => crate::restore::draw(g, f),
+        APP_FILEHISTORY => crate::filehistory::draw(g, f),
         _ => crate::settings::draw(g, f),
     }
 }
@@ -584,6 +589,7 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         APP_DISKMGR => crate::diskmgr::mouse(ev, x, y, f),
         APP_EVENTVIEWER => crate::eventviewer::mouse(ev, x, y, f),
         APP_RESTORE => crate::restore::mouse(ev, x, y, f),
+        APP_FILEHISTORY => crate::filehistory::mouse(ev, x, y, f),
         _ => crate::settings::mouse(ev, x, y, f),
     }
 }
@@ -599,6 +605,7 @@ unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
         APP_DISKMGR => crate::diskmgr::key(vk, ch),
         APP_EVENTVIEWER => crate::eventviewer::key(vk, ch),
         APP_RESTORE => crate::restore::key(vk, ch),
+        APP_FILEHISTORY => crate::filehistory::key(vk, ch),
         _ => crate::settings::key(vk, ch),
     }
 }
@@ -614,6 +621,7 @@ unsafe fn app_tick(app: usize, f: &Frame) -> bool {
         APP_DISKMGR => crate::diskmgr::tick(f),
         APP_EVENTVIEWER => crate::eventviewer::tick(f),
         APP_RESTORE => crate::restore::tick(f),
+        APP_FILEHISTORY => crate::filehistory::tick(f),
         _ => crate::settings::tick(f),
     }
 }
@@ -725,6 +733,7 @@ fn default_rect(app: usize) -> Rect {
         APP_EXPLORER => (1100, 680),
         APP_NOTEPAD => (1000, 680),
         APP_TASKMGR => (1000, 650),
+        APP_FILEHISTORY => (1040, 700),
         APP_DISKMGR => (1000, 650),
         _ => (1040, 700),
     };

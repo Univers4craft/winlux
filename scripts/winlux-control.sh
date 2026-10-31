@@ -264,13 +264,22 @@ perform() {
         restore-create) winlux-restore create "$2" ;;
         restore-list|restore-status) winlux-restore "${action#restore-}" ;;
         restore-restore|restore-delete) winlux-restore "${action#restore-}" "$2" ;;
+        backup-status|backup-request|backup-list|backup-prune) winlux-backup "${action#backup-}" "$2" ;;
+        backup-drives) winlux-backup drives ;;
+        backup-run)
+            # Une sauvegarde peut durer : elle ne bloque pas les autres réglages.
+            winlux-backup status "$2"
+            (winlux-backup run "$2" >"$run/backup/$2.log" 2>&1 &) ;;
+        session-*) shift; winlux-sessions "${action#session-}" "$@" ;;
+        remote-*) shift; winlux-remote-config "${action#remote-}" "$@" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
     esac
 }
 log="$run/action.log"
 case "$action" in update-*) log="$run/update.log" ;; esac
 case "$action" in update-check|update-apply|update-rollback) rm -f "$run/update-error-phase" ;; esac
-if perform > "$log" 2>&1; then
+shift
+if perform "$action" "$@" > "$log" 2>&1; then
     message 'Operation terminee.'
     result=0
 else
