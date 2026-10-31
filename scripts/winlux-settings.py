@@ -228,6 +228,22 @@ _TR = {
     'Code : {code}\n\n{detail}': ('Code: {code}\n\n{detail}', 'Código: {code}\n\n{detail}', 'Code: {code}\n\n{detail}'),
     'Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}': ('Step: {stage} (code {code})\n\nLast lines of the log:\n{detail}', 'Etapa: {stage} (código {code})\n\nÚltimas líneas del registro:\n{detail}', 'Schritt: {stage} (Code {code})\n\nLetzte Zeilen des Protokolls:\n{detail}'),
     '{done}/{total} fichiers': ('{done}/{total} files', '{done}/{total} archivos', '{done}/{total} Dateien'),
+    # Page Processeur : temps de démarrage.
+    'Temps de démarrage': ('Startup time', 'Tiempo de arranque', 'Startzeit'),
+    'Dernier démarrage : {value}': ('Last startup: {value}', 'Último arranque: {value}', 'Letzter Start: {value}'),
+    'précédent {value}': ('previous {value}', 'anterior {value}', 'vorher {value}'),
+    'meilleur {value}': ('best {value}', 'mejor {value}', 'bester {value}'),
+    'Étape la plus longue : {name} ({value})': ('Longest step: {name} ({value})', 'Paso más largo: {name} ({value})', 'Längster Schritt: {name} ({value})'),
+    'Mesuré de l’allumage jusqu’au lancement du bureau.': ('Measured from power-on to the desktop starting.', 'Medido desde el encendido hasta el inicio del escritorio.', 'Gemessen vom Einschalten bis zum Start des Desktops.'),
+    'Temps de démarrage pas encore mesuré.': ('Startup time not measured yet.', 'Tiempo de arranque aún no medido.', 'Startzeit noch nicht gemessen.'),
+    'Noyau et micrologiciel': ('Kernel and firmware', 'Núcleo y firmware', 'Kernel und Firmware'),
+    'Vérification du système': ('System check', 'Comprobación del sistema', 'Systemprüfung'),
+    'Pilotes': ('Drivers', 'Controladores', 'Treiber'),
+    'Détection du matériel': ('Hardware detection', 'Detección del hardware', 'Hardwareerkennung'),
+    'Services': ('Services', 'Servicios', 'Dienste'),
+    'Affichage': ('Display', 'Pantalla', 'Anzeige'),
+    'Session': ('Session', 'Sesión', 'Sitzung'),
+    'Bureau': ('Desktop', 'Escritorio', 'Desktop'),
 }
 
 
@@ -244,6 +260,7 @@ PAGES = [_t("Système"), _t("Applications"), _t("Réseau"), _t("Son"), _t("Clavi
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
          _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes")]
 GRAPHICS_PAGE = 24
+CPU_PAGE = 19
 PRIVACY_PAGE = 18
 LOCK_DELAYS = (0, 60, 180, 300, 600, 900, 1800, 3600)
 
@@ -359,6 +376,45 @@ def gpu_summary():
     if report.get("gpu_hybrid") == "1":
         lines.append(_t("\nGPU par application : clic droit sur un .exe > Réglages de l'exécutable."))
     return "\n".join(lines)
+
+BOOT_STEPS = {"init": "Noyau et micrologiciel", "recovery": "Vérification du système", "drivers": "Pilotes",
+              "hardware": "Détection du matériel", "services": "Services", "xorg": "Affichage",
+              "session": "Session", "desktop": "Bureau"}
+
+
+def seconds(ms):
+    """Durée lisible en secondes, virgule décimale sauf en anglais."""
+    try: text = f"{int(ms) / 1000:.1f} s"
+    except ValueError: return "?"
+    return text if _LANG == "en" else text.replace(".", ",")
+
+
+def boot_summary(report):
+    """Temps du dernier démarrage, mesuré par l'init (winlux --boot-time)."""
+    if report.get("boot_known") != "1" or not report.get("boot_total_ms"):
+        return _t("Temps de démarrage pas encore mesuré.")
+    total = _t("Dernier démarrage : {value}").format(value=seconds(report["boot_total_ms"]))
+    extra = []
+    if report.get("boot_previous_ms"): extra.append(_t("précédent {value}").format(value=seconds(report["boot_previous_ms"])))
+    if report.get("boot_best_ms") and report.get("boot_count", "1") != "1":
+        extra.append(_t("meilleur {value}").format(value=seconds(report["boot_best_ms"])))
+    lines = [total + (f" ({', '.join(extra)})" if extra else "")]
+    steps = []
+    for item in report.get("boot_phases", "").split(","):
+        name, _, ms = item.partition(":")
+        if name and ms: steps.append(f"{_t(BOOT_STEPS.get(name, name))} {seconds(ms)}")
+    if report.get("boot_slowest") and report.get("boot_slowest_ms"):
+        lines.append(_t("Étape la plus longue : {name} ({value})").format(
+            name=_t(BOOT_STEPS.get(report["boot_slowest"], report["boot_slowest"])), value=seconds(report["boot_slowest_ms"])))
+    if steps: lines.append(" · ".join(steps))
+    lines.append(_t("Mesuré de l’allumage jusqu’au lancement du bureau."))
+    return "\n".join(lines)
+
+
+def cpu_summary():
+    report = dict(line.split("=", 1) for line in read("/run/winlux/cpu.txt").splitlines() if "=" in line)
+    return _t("Temps de démarrage") + "\n" + boot_summary(report)
+
 
 # Rapport de winlux-update (toujours écrit en français) : traduit à l'affichage.
 UPDATE_PREFIXES = ("Version installée : ", "Version disponible : ", "Action en attente : ", "Portée : ",
@@ -493,7 +549,7 @@ class Settings(Gtk.Window):
             button = Gtk.Button(label=_t("Appliquer la définition"))
             button.connect("clicked", lambda *_: self.execute("display-mode-" + self.modes.get_active_text()) if self.modes.get_active_text() else None)
             self.body.pack_start(button, False, False, 0)
-        if self.page in (1, 10, 12, 13, GRAPHICS_PAGE):
+        if self.page in (1, 10, 12, 13, CPU_PAGE, GRAPHICS_PAGE):
             self.label(_t("Ouvrir les réglages détaillés de cette catégorie :"))
             button = Gtk.Button(label=_t("Réglages avancés"))
             legacy_page = self.page
@@ -637,6 +693,7 @@ class Settings(Gtk.Window):
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
+        if self.page == CPU_PAGE: text = cpu_summary()
         if self.page == PRIVACY_PAGE: text = privacy_summary(status)
         if self.page in (8, GRAPHICS_PAGE) and VIRTUAL_MACHINE:
             name = _VM_NAMES.get(VIRTUAL_MACHINE, "VM")
