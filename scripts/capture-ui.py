@@ -52,7 +52,7 @@ def targets(runtime, testdir):
     if Path(runtime).is_file() and demo.is_file():
         pe = {"WINLUX_AUDIO": "null", "WINLUX_NO_SPLASH": "1", "WINLUX_NO_LOGIN": "1", "WINLUX_NO_OOBE": "1"}
         found.append(("bureau-pe", [str(runtime), str(demo)], dict(pe, WINLUX_DESKTOP_DEMO="1")))
-        for app in ("explorer", "store", "fonts", "taskschd", "firewall"):
+        for app in ("explorer", "store", "fonts", "programs", "taskschd", "firewall"):
             found.append((f"appli-{app}", [str(runtime), str(demo)],
                           dict(pe, WINLUX_NATIVE_SHELL="1", WINLUX_SHELL_APP=app)))
     return found

@@ -30,6 +30,8 @@ mod explorer;
 mod filehistory;
 #[path = "../shell/fonts.rs"]
 mod fonts;
+#[path = "../shell/programs.rs"]
+mod programs;
 #[path = "../shell/thumbs.rs"]
 mod thumbs;
 #[path = "../shell/firewall.rs"]
