@@ -4,9 +4,9 @@
 
 ## Statistiques
 
-- Réalisé : **221**
+- Réalisé : **222**
 - À faire ou en cours : **40**
-- Total : **261**
+- Total : **262**
 - Progression : **84.7%**
 - Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158, presse-papiers Windows ↔ Linux #161)
 
@@ -89,6 +89,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [ ] Traduire réellement l'installateur : choisir English ne traduit aujourd'hui que la barre des étapes (#140).
 - [ ] Glisser-déposer entre applis Windows et Linux (XDND ↔ `WM_DROPFILES`/`IDropTarget`, `DoDragDrop` vers Thunar), suite du pont presse-papiers (#159).
 - [ ] Démarrage sous 10 secondes et mode jeu : temps de démarrage mesuré et affiché livré, mode jeu livré, reste la réduction des étapes les plus longues (mesure en VM KVM) (#153).
+- [ ] Compatibilité Linux ↔ Windows du texte, des polices, de la langue, du clavier et de l'heure : livré dans la PR de #183 ; restent les clés de registre dynamiques, `ToUnicode`/`VkKeyScan` selon la disposition et les pages 1250/1251/866 (#183, `docs/INTL.md`).
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
 ## DÉJÀ FAIT
@@ -96,6 +97,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 ### Livré par pull requests (fin octobre 2026)
 
 - [x] Mode jeu : un `.exe` Direct3D/OpenGL/Vulkan/XInput déclenche `winlux --gamemode daemon` (gouverneur performances sur secteur, priorité du jeu, sauvegardes et mises à jour en pause et en basse priorité, swappiness et compactage mémoire, veille bloquée), tout est restauré à la fermeture ; réglage dans Paramètres > Processeur, actions affichées selon le matériel (#153, `docs/PERFORMANCES.md`).
+- [x] Accents, polices, langue, clavier et heure (#183, `docs/INTL.md`) : pages de code 1252/850/858/437/8859/UTF-8 et API A/W complètes, console en page OEM, noms ZIP Windows (OEM, champ Unicode Path), `winlux --text` (UTF-16, CRLF), locale et formats suivis depuis Paramètres et glibc, disposition clavier XKB → HKL, touches mortes, fuseau TZif et vraies conversions FILETIME (les dates de fichiers des .exe valaient toutes le 1er janvier 2024), polices de `C:\Windows\Fonts` visibles de Linux et remplacements Arial/Segoe UI.
 - [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).
 
 - [x] Captures d'écran automatiques et mode machine virtuelle (#156) : `scripts/capture-ui.py` photographie sous Xvfb les 25 pages des Paramètres, le menu Démarrer, les popups, les outils système, Bienvenue et les applis maison PE (bureau, Explorateur, Store, Polices, Planificateur, Pare-feu) ; `scripts/compare-captures.py` les compare à la dernière version verte de master (job CI « Captures d'écran », artefacts `captures-ui` et `captures-ui-diff`, alerte au-delà de 2 % de pixels changés). `winlux-hardware` détecte l'hyperviseur (`/run/winlux/hw/virtual-machine`) et ne compte plus les cartes émulées comme GPU : curseur logiciel conservé, économiseur en GL logiciel, « Suivre la taille de la VM » seulement en VM.

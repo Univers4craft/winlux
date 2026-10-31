@@ -14,6 +14,7 @@ mod firewall;
 mod gamemode;
 mod gpu;
 mod imaging;
+mod intl;
 mod launch;
 mod loader;
 pub mod log;
@@ -63,6 +64,13 @@ fn main() {
     if exe == "--power" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(power::cli::main(&rest));
+    }
+    if exe == "--intl" {
+        std::process::exit(intl::report());
+    }
+    if exe == "--text" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(intl::text::cli(&rest));
     }
     if exe == "--boot-time" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();

@@ -760,19 +760,6 @@ pub extern "win64" fn map_virtual_key_a(_code: u32, _map_type: u32) -> u32 {
 pub extern "win64" fn map_virtual_key_w(_code: u32, _map_type: u32) -> u32 {
     0
 }
-pub unsafe extern "win64" fn get_keyboard_layout_name_a(_buf: *mut u8) -> i32 {
-    if !_buf.is_null() {
-        let s = b"0000040C\0";
-        std::ptr::copy_nonoverlapping(s.as_ptr(), _buf, 9);
-    }
-    1
-}
-pub extern "win64" fn get_keyboard_layout(_thread: u32) -> usize {
-    0x0000040C
-} // Français
-pub extern "win64" fn activate_keyboard_layout(_layout: usize, _flags: u32) -> usize {
-    0x0000040C
-}
 pub extern "win64" fn to_unicode_ex(
     _vk: u32,
     _scan: u32,
@@ -915,9 +902,6 @@ pub fn exports() -> crate::dlls::Exports {
         "RemovePropA"=>fn remove_prop_a, "RemovePropW"=>fn remove_prop_w,
         "GetDCEx"=>fn get_dc_ex, "RedrawWindow"=>fn redraw_window, "GetUpdateRect"=>fn get_update_rect,
         "MapVirtualKeyA"=>fn map_virtual_key_a, "MapVirtualKeyW"=>fn map_virtual_key_w,
-        "GetKeyboardLayoutNameA"=>fn get_keyboard_layout_name_a,
-        "GetKeyboardLayout"=>fn get_keyboard_layout,
-        "ActivateKeyboardLayout"=>fn activate_keyboard_layout,
         "ToUnicodeEx"=>fn to_unicode_ex,
         "RegisterWindowMessageA"=>fn register_window_message_a,
         "RegisterWindowMessageW"=>fn register_window_message_w,
