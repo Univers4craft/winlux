@@ -1798,6 +1798,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         EXE_NOTICE
     } else if PAGE == PAGE_PRINTERS {
         printers::notice()
+    } else if PAGE == PAGE_GRAPHICS {
+        graphics::runtime_notice()
     } else if !available() {
         b"Service Winlux indisponible : les actions n\xE9cessitent Winlux.".as_slice()
     } else {
@@ -2055,6 +2057,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     for (pos, &i) in NAV_ORDER.iter().enumerate() {
         if inside(&nav_rect(f, pos), x, y) {
+            if i == PAGE_GRAPHICS {
+                graphics::RUNTIME_LOADED = false;
+            }
             PAGE = i;
             SCROLL = 0;
             HOVER = -1;

@@ -4,7 +4,10 @@ un catalogue Windows simulés : index fusionné, fiche, installations, mises à
 jour et refus des installateurs sans empreinte valide."""
 import gzip
 import hashlib
+import io
 import json
+import tarfile
+import zipfile
 import os
 from pathlib import Path
 import struct
@@ -169,7 +172,45 @@ esac
     conf = home / ".config/winlux/store-sources.d"
     conf.mkdir(parents=True)
     (conf / "local.json").write_text(json.dumps({"id": "local", "name": "Catalogue local", "file": str(catalog)}))
-    mock(bindir, "winlux", 'printf "winlux %s\\n" "$*" >> "$LOG"\n')
+    mock(bindir, "winlux", 'printf "winlux %s\\n" "$*" >> "$LOG"\n'
+         'if [ "$1" = --msiexec ] && [ "$2" = --info ]; then printf "{AAAA-BBBB}\\tApp\\t1\\n"; fi\n')
+
+    # --- Dépôt Scoop (archive .tar.gz de manifestes) ---
+    pe64 = b"MZ" + b"\0" * 0x3A + (0x40).to_bytes(4, "little") + b"PE\0\0\x64\x86" + b"\0" * 64
+    pe32 = pe64.replace(b"PE\0\0\x64\x86", b"PE\0\0\x4c\x01")
+    def zip_of(name, exe):
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w") as z:
+            z.writestr(f"Demo-2.0/{name}", exe)
+            z.writestr("Demo-2.0/lisez-moi.txt", "ok")
+        path = w / f"{name}.zip"
+        path.write_bytes(buf.getvalue())
+        return path, hashlib.sha256(buf.getvalue()).hexdigest()
+    demo, demo_sha = zip_of("demo.exe", pe64)
+    old32, old32_sha = zip_of("vieux.exe", pe32)
+    manifests = {
+        "demo": {"version": "2.0", "description": "Lecteur vidéo de démonstration",
+                 "homepage": "https://www.demo.example.org/", "license": {"identifier": "MIT"},
+                 "architecture": {"64bit": {"url": demo.as_uri() + "#/demo.zip", "hash": demo_sha}},
+                 "extract_dir": "Demo-2.0", "shortcuts": [["demo.exe", "Démo Player"]]},
+        "vieux": {"version": "1", "description": "Outil", "extract_dir": "Demo-2.0",
+                  "architecture": {"64bit": {"url": old32.as_uri(), "hash": old32_sha}},
+                  "shortcuts": [["vieux.exe", "Vieux"]]},
+        "script": {"version": "1", "architecture": {"64bit": {"url": demo.as_uri(), "hash": demo_sha}},
+                   "installer": {"script": "Remove-Item x"}, "shortcuts": [["a.exe", "Script"]]},
+        "x86": {"version": "1", "url": demo.as_uri(), "hash": demo_sha, "shortcuts": [["a.exe", "Trente-deux"]]},
+        "md5": {"version": "1", "architecture": {"64bit": {"url": demo.as_uri(), "hash": "md5:00"}},
+                "shortcuts": [["a.exe", "Md5"]]},
+    }
+    tarball = w / "extras.tar.gz"
+    with tarfile.open(tarball, "w:gz") as tar:
+        for name, m in manifests.items():
+            raw = json.dumps(m).encode()
+            info = tarfile.TarInfo(f"Extras-master/bucket/{name}.json")
+            info.size = len(raw)
+            tar.addfile(info, io.BytesIO(raw))
+    (conf / "scoop.json").write_text(json.dumps({"id": "scoop", "name": "Scoop Extras", "format": "scoop",
+                                                 "file": str(tarball)}))
 
     def st(*args, code=0):
         r = subprocess.run([sys.executable, "-I", "-B", str(store), *args], env=env, capture_output=True, text=True)
@@ -232,8 +273,39 @@ esac
     st("install-file", "C:\\Téléchargements\\jeu.exe")
     check(f"winlux {home}/Téléchargements/jeu.exe" in log.read_text(), "installation d'un .exe local")
     (home / "a.msi").write_bytes(b"x")
-    st("install-file", str(home / "a.msi"), code=3)
-    check("msiexec" in (run / "store-progress.txt").read_text(), "message msiexec")
+    st("install-file", str(home / "a.msi"))
+    check(f"winlux --msiexec /i {home}/a.msi /qn" in log.read_text(), "msiexec intégré")
+
+    # Scoop : seules les applications 64 bits sans script sont proposées.
+    check("windows:scoop/demo" in lines, "application Scoop listée")
+    check(not any(k in lines for k in ("windows:scoop/script", "windows:scoop/x86", "windows:scoop/md5")),
+          "manifestes Scoop non pris en charge écartés")
+    d = lines["windows:scoop/demo"]
+    check(d[2] == "Démo Player" and d[1] == "multimedia" and d[4] == "demo.example.org" and d[10] == "Scoop Extras",
+          "fiche Scoop")
+    st("install", "windows:scoop/demo")
+    exe = home / "Program Files/Démo Player/demo.exe"
+    lnk = home / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs/Démo Player.lnk"
+    check(exe.read_bytes() == pe64 and lnk.is_file(), "application portable installée")
+    check("C:\\Program Files\\Démo Player\\demo.exe".encode("utf-16-le") in lnk.read_bytes(), "raccourci .lnk")
+    st("install", "windows:scoop/vieux", code=8)
+    check(not (home / "Program Files/Vieux").exists(), "programme 32 bits refusé proprement")
+    st("remove", "windows:scoop/demo")
+    check(not exe.parent.exists() and not lnk.exists(), "application portable désinstallée")
+    msi_cat = w / "msi.json"
+    (w / "app.msi").write_bytes(b"msi")
+    msi_sha = hashlib.sha256(b"msi").hexdigest()
+    msi_cat.write_text(json.dumps({"apps": [{"id": "outil", "name": "Outil MSI", "version": "3",
+                                             "installer": {"url": (w / "app.msi").as_uri(), "sha256": msi_sha,
+                                                           "type": "msi"}}]}))
+    (conf / "msi.json").write_text(json.dumps({"id": "msi", "file": str(msi_cat)}))
+    st("refresh")
+    st("install", "windows:msi/outil")
+    check("winlux --msiexec /i" in log.read_text() and "msi_outil.msi /qn" in log.read_text(), "paquet .msi du catalogue")
+    state = json.loads((home / ".local/share/winlux/store-state.json").read_text())
+    check(state["windows"]["msi/outil"]["msi"] == "{AAAA-BBBB}", "code produit MSI retenu")
+    st("remove", "windows:msi/outil")
+    check("winlux --msiexec /x {AAAA-BBBB} /qn" in log.read_text(), "désinstallation MSI")
     st("install", "apt:inconnu", code=2)
     (run / "store.lock").mkdir()
     st("install", "apt:gimp", code=1)

@@ -11,6 +11,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 
 ### Fiabilisation du bureau et de la VM
 
+- [x] Direct3D 9 et 12 (backend Vulkan, repli OpenGL puis processeur), DXVA2 H.264 par VA-API et réglages dans Paramètres > Graphismes (#92) ; shaders DXBC/DXIL et décodage Media Foundation restent à faire.
 - [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer.
 - [x] Bloquer les copies dans un descendant, les collisions et les alias de chemins ; tester le couper/coller et les raccourcis.
 - [x] Corriger Ctrl+L, les touches Windows, AltGr et la disposition XKB réelle.

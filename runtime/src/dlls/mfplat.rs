@@ -7,6 +7,7 @@ use std::ffi::c_void;
 
 // ---------- HRESULT courants ----------
 const S_OK: i32 = 0;
+const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
 const E_NOTIMPL: i32 = 0x80004001u32 as i32;
 const MF_E_UNSUPPORTED_SERVICE: i32 = 0xC00D36BAu32 as i32;
 const E_POINTER: i32 = 0x80004003u32 as i32;
@@ -234,8 +235,71 @@ pub unsafe extern "win64" fn mf_create_sink_writer_from_url(
     E_NOTIMPL
 }
 
+/// Énumération des transformations (décodeurs…) : Winlux n'en fournit pas
+/// encore côté Media Foundation, matériel compris. Une liste vide fait
+/// choisir à l'application son propre décodeur, comme sur un Windows sans
+/// codec ; le décodage matériel passe par DXVA2 (`dxva2.dll`).
+pub unsafe extern "win64" fn mft_enum_ex(
+    _category: *const c_void,
+    _flags: u32,
+    _input: *const c_void,
+    _output: *const c_void,
+    activates: *mut *mut c_void,
+    count: *mut u32,
+) -> i32 {
+    if activates.is_null() || count.is_null() {
+        return E_INVALIDARG;
+    }
+    *activates = std::ptr::null_mut();
+    *count = 0;
+    S_OK
+}
+
+pub unsafe extern "win64" fn mft_enum2(
+    category: *const c_void,
+    flags: u32,
+    input: *const c_void,
+    output: *const c_void,
+    _attrs: *mut c_void,
+    activates: *mut *mut c_void,
+    count: *mut u32,
+) -> i32 {
+    mft_enum_ex(category, flags, input, output, activates, count)
+}
+
+pub unsafe extern "win64" fn mft_enum(
+    _category: *const c_void, // GUID par valeur = par adresse en x64
+    _flags: u32,
+    _input: *const c_void,
+    _output: *const c_void,
+    _attrs: *mut c_void,
+    clsids: *mut *mut c_void,
+    count: *mut u32,
+) -> i32 {
+    if clsids.is_null() || count.is_null() {
+        return E_INVALIDARG;
+    }
+    *clsids = std::ptr::null_mut();
+    *count = 0;
+    S_OK
+}
+
+pub unsafe extern "win64" fn mf_create_dxgi_device_manager(
+    _token: *mut u32,
+    out: *mut *mut c_void,
+) -> i32 {
+    if !out.is_null() {
+        *out = std::ptr::null_mut();
+    }
+    E_NOTIMPL
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "MFTEnumEx"                       => fn mft_enum_ex,
+        "MFTEnum2"                        => fn mft_enum2,
+        "MFTEnum"                         => fn mft_enum,
+        "MFCreateDXGIDeviceManager"       => fn mf_create_dxgi_device_manager,
         "MFStartup"                       => fn mf_startup,
         "MFShutdown"                      => fn mf_shutdown,
         "MFCreateAttributes"              => fn mf_create_attributes,

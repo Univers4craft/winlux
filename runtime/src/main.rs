@@ -15,6 +15,7 @@ mod loader;
 pub mod log;
 mod managed;
 mod mounts;
+mod msi;
 mod netdrive;
 mod overlay;
 mod paths;
@@ -105,6 +106,10 @@ fn main() {
     }
     let exe = PathBuf::from(exe);
     let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+    // msiexec.exe est fourni par Winlux lui-même (module msi).
+    if exe.as_os_str() == "--msiexec" || (msi::is_msiexec(&exe) && !is_real_pe(&exe)) {
+        std::process::exit(msi::cli(&rest));
+    }
     let source = match std::fs::read(&exe) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -197,6 +202,16 @@ fn gpu_command(flag: &std::ffi::OsStr, args: &mut std::env::ArgsOs) -> Option<i3
         }
         _ => None,
     }
+}
+
+/// Vrai si le fichier existe et commence par la signature MZ d'un PE.
+fn is_real_pe(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 2];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .is_ok()
+        && magic == *b"MZ"
 }
 
 fn backup_registry() {
