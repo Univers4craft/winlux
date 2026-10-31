@@ -877,6 +877,65 @@ unsafe fn load_shell_state() {
     }
 }
 
+const ICONS_PATH: &core::ffi::CStr = c"C:\\.local\\share\\winlux\\desktop-icons.dat";
+
+unsafe fn save_icon_positions() {
+    let file = CreateFileA(
+        ICONS_PATH.as_ptr(),
+        0x4000_0000, // GENERIC_WRITE
+        0,
+        core::ptr::null_mut(),
+        2, // CREATE_ALWAYS
+        0,
+        core::ptr::null_mut(),
+    );
+    if file.is_null() || file as isize == -1 {
+        return;
+    }
+    let mut buf = [0u8; 40]; // 5 icons * (x:i32 + y:i32) = 40 bytes
+    for i in 0..5 {
+        let off = i * 8;
+        buf[off..off + 4].copy_from_slice(&ICON_X[i].to_le_bytes());
+        buf[off + 4..off + 8].copy_from_slice(&ICON_Y[i].to_le_bytes());
+    }
+    let mut written = 0u32;
+    WriteFile(file, buf.as_ptr(), 40, &mut written, core::ptr::null_mut());
+    CloseHandle(file);
+}
+
+unsafe fn load_icon_positions() {
+    let file = CreateFileA(
+        ICONS_PATH.as_ptr(),
+        0x8000_0000, // GENERIC_READ
+        1,           // FILE_SHARE_READ
+        core::ptr::null_mut(),
+        3, // OPEN_EXISTING
+        0,
+        core::ptr::null_mut(),
+    );
+    if file.is_null() || file as isize == -1 {
+        return;
+    }
+    let mut buf = [0u8; 40];
+    let mut nread = 0u32;
+    ReadFile(
+        file,
+        buf.as_mut_ptr(),
+        40,
+        &mut nread,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(file);
+    if nread != 40 {
+        return;
+    }
+    for i in 0..5 {
+        let off = i * 8;
+        ICON_X[i] = i32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+        ICON_Y[i] = i32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
+    }
+}
+
 pub unsafe fn show_system_icons() -> bool {
     SHOW_SYSTEM_ICONS
 }
@@ -3054,6 +3113,7 @@ pub unsafe fn init(
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
     wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
+    load_icon_positions();
     BOOT_START = now();
     let mut v = [0i8; 4];
     if GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0 {
@@ -3908,6 +3968,7 @@ pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
     let mut rp = false;
     if DRAGGED_ICON >= 0 {
         DRAGGED_ICON = -1;
+        save_icon_positions();
         rp = true;
     }
     wm::on_button_up(x, y, &mut rp);

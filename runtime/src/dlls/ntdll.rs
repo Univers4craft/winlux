@@ -556,40 +556,332 @@ pub extern "win64" fn rtl_decode_pointer(ptr: *mut c_void) -> *mut c_void {
 // ============================================================
 
 /// `RtlCaptureContext` : remplit un CONTEXT pour le thread courant.
-/// Stub : on met tout à zéro sauf ContextFlags.
 pub unsafe extern "win64" fn rtl_capture_context(ctx: *mut c_void) {
     if ctx.is_null() {
         return;
     }
-    std::ptr::write_bytes(ctx as *mut u8, 0, 1232); // CONTEXT size on x64
-                                                    // CONTEXT_AMD64 | CONTEXT_FULL
-    std::ptr::write_unaligned(ctx as *mut u32, 0x0010_001F);
+    let c = ctx as *mut u8;
+    std::ptr::write_bytes(c, 0, 1232);
+    // CONTEXT_AMD64 | CONTEXT_FULL
+    std::ptr::write_unaligned(c as *mut u32, 0x0010_001F);
+    // Capture callee-saved registers.  The function uses win64 ABI so
+    // RCX held `ctx` on entry.  We cannot perfectly capture the caller's
+    // volatile registers, but the unwinder only needs RSP, RIP, and the
+    // callee-saved set (RBX, RBP, RSI, RDI, R12-R15).
+    std::arch::asm!(
+        // RBX
+        "mov [rcx + 0x90], rbx",
+        // RBP
+        "mov [rcx + 0xA0], rbp",
+        // RSI
+        "mov [rcx + 0xA8], rsi",
+        // RDI
+        "mov [rcx + 0xB0], rdi",
+        // R12
+        "mov [rcx + 0xD8], r12",
+        // R13
+        "mov [rcx + 0xE0], r13",
+        // R14
+        "mov [rcx + 0xE8], r14",
+        // R15
+        "mov [rcx + 0xF0], r15",
+        // RSP of caller = current RSP + 8 (return address)
+        "lea rax, [rsp + 8]",
+        "mov [rcx + 0x98], rax",
+        // RIP = return address
+        "mov rax, [rsp]",
+        "mov [rcx + 0xF8], rax",
+        in("rcx") c,
+        out("rax") _,
+        options(nostack, preserves_flags),
+    );
 }
 
-/// `RtlLookupFunctionEntry` : stub, renvoie NULL (pas de table d'exception).
+// ── CONTEXT register offsets ────────────────────────────────────────
+const CTX_RAX: usize = 0x78;
+const CTX_RCX: usize = 0x80;
+const CTX_RDX: usize = 0x88;
+const CTX_RBX: usize = 0x90;
+const CTX_RSP: usize = 0x98;
+const CTX_RBP: usize = 0xA0;
+const CTX_RSI: usize = 0xA8;
+const CTX_RDI: usize = 0xB0;
+const CTX_R8: usize = 0xB8;
+const CTX_R9: usize = 0xC0;
+const CTX_R10: usize = 0xC8;
+const CTX_R11: usize = 0xD0;
+const CTX_R12: usize = 0xD8;
+const CTX_R13: usize = 0xE0;
+const CTX_R14: usize = 0xE8;
+const CTX_R15: usize = 0xF0;
+const CTX_RIP: usize = 0xF8;
+
+#[allow(dead_code)]
+const REG_OFFSETS: [usize; 16] = [
+    CTX_RAX, CTX_RCX, CTX_RDX, CTX_RBX, CTX_RSP, CTX_RBP, CTX_RSI, CTX_RDI, CTX_R8, CTX_R9,
+    CTX_R10, CTX_R11, CTX_R12, CTX_R13, CTX_R14, CTX_R15,
+];
+
+unsafe fn ctx_get(c: *const u8, off: usize) -> u64 {
+    (c.add(off) as *const u64).read_unaligned()
+}
+unsafe fn ctx_set(c: *mut u8, off: usize, v: u64) {
+    (c.add(off) as *mut u64).write_unaligned(v);
+}
+
+/// `RtlLookupFunctionEntry` : cherche dans .pdata du module contenant `pc`.
 pub unsafe extern "win64" fn rtl_lookup_function_entry(
-    _pc: u64,
-    _image_base: *mut u64,
+    pc: u64,
+    image_base: *mut u64,
     _history: *mut c_void,
 ) -> *mut c_void {
+    let addr = pc as usize;
+    let modules = crate::loader::MODULES.lock().unwrap();
+    for module in modules.iter() {
+        if !module.contains(addr) {
+            continue;
+        }
+        let base = module.base;
+        let rva = (addr - base) as u32;
+        // Data directory index 3 = exception table (.pdata)
+        let exc_dir = match module.pe.dirs.get(3) {
+            Some(d) if d.rva != 0 && d.size >= 12 => d,
+            _ => return std::ptr::null_mut(),
+        };
+        let count = (exc_dir.size / 12) as usize;
+        let table = base + exc_dir.rva as usize;
+        // Binary search over RUNTIME_FUNCTION (begin, end, unwind_info – 3×u32)
+        let mut lo = 0usize;
+        let mut hi = count;
+        while lo < hi {
+            let mid = lo + (hi - lo) / 2;
+            let entry = table + mid * 12;
+            let begin = (entry as *const u32).read_unaligned();
+            let end = ((entry + 4) as *const u32).read_unaligned();
+            if rva < begin {
+                hi = mid;
+            } else if rva >= end {
+                lo = mid + 1;
+            } else {
+                if !image_base.is_null() {
+                    *image_base = base as u64;
+                }
+                return entry as *mut c_void;
+            }
+        }
+        return std::ptr::null_mut();
+    }
     std::ptr::null_mut()
 }
 
-/// `RtlVirtualUnwind` : stub SEH.
+// UNW_FLAG constants
+const UNW_FLAG_EHANDLER: u8 = 1;
+const UNW_FLAG_UHANDLER: u8 = 2;
+const UNW_FLAG_CHAININFO: u8 = 4;
+
+/// `RtlVirtualUnwind` : déroulement SEH basé sur .xdata.
 pub unsafe extern "win64" fn rtl_virtual_unwind(
-    _type: u32,
-    _base: u64,
-    _pc: u64,
-    _entry: *const c_void,
-    _ctx: *mut c_void,
-    _handler_data: *mut *mut c_void,
+    handler_type: u32,
+    base: u64,
+    pc: u64,
+    entry: *const c_void,
+    ctx: *mut c_void,
+    handler_data: *mut *mut c_void,
     establisher_frame: *mut u64,
     _ctx_pointers: *mut c_void,
 ) -> *mut c_void {
+    let base = base as usize;
+    let c = ctx as *mut u8;
+
+    // Read RUNTIME_FUNCTION
+    let rf = entry as *const u32;
+    let fn_begin = rf.read_unaligned() as usize;
+    let unwind_rva = rf.add(2).read_unaligned() as usize;
+    let ui = (base + unwind_rva) as *const u8;
+
+    let version_flags = ui.read();
+    let _version = version_flags & 0x7;
+    let flags = version_flags >> 3;
+    let prolog_size = ui.add(1).read();
+    let code_count = ui.add(2).read() as usize;
+    let frame_reg_off = ui.add(3).read();
+    let frame_reg = (frame_reg_off & 0xF) as usize;
+    let frame_off = ((frame_reg_off >> 4) as usize) * 16;
+
+    let codes_ptr = ui.add(4);
+    let pc_offset = (pc as usize).saturating_sub(base + fn_begin) as u32;
+
+    // Apply unwind codes to restore the caller's context
+    let mut i = 0usize;
+    while i < code_count {
+        let slot = codes_ptr.add(i * 2);
+        let offset_in_prolog = slot.read();
+        let op_info = slot.add(1).read();
+        let op = op_info & 0xF;
+        let info = (op_info >> 4) as usize;
+
+        // Skip unwind codes for instructions we haven't reached yet
+        if pc_offset <= prolog_size as u32 && (offset_in_prolog as u32) > pc_offset {
+            // Skip this code (and any extra slots it uses)
+            i += 1 + unwind_code_extra_slots(op, info);
+            continue;
+        }
+
+        match op {
+            0 => {
+                // UWOP_PUSH_NONVOL: register was pushed
+                let rsp = ctx_get(c, CTX_RSP);
+                let val = (rsp as *const u64).read_unaligned();
+                if info < 16 {
+                    ctx_set(c, REG_OFFSETS[info], val);
+                }
+                ctx_set(c, CTX_RSP, rsp + 8);
+                i += 1;
+            }
+            1 => {
+                // UWOP_ALLOC_LARGE
+                let rsp = ctx_get(c, CTX_RSP);
+                if info == 0 {
+                    let size =
+                        (codes_ptr.add((i + 1) * 2) as *const u16).read_unaligned() as u64 * 8;
+                    ctx_set(c, CTX_RSP, rsp + size);
+                    i += 2;
+                } else {
+                    let lo = (codes_ptr.add((i + 1) * 2) as *const u16).read_unaligned() as u64;
+                    let hi = (codes_ptr.add((i + 2) * 2) as *const u16).read_unaligned() as u64;
+                    let size = lo | (hi << 16);
+                    ctx_set(c, CTX_RSP, rsp + size);
+                    i += 3;
+                }
+            }
+            2 => {
+                // UWOP_ALLOC_SMALL
+                let rsp = ctx_get(c, CTX_RSP);
+                ctx_set(c, CTX_RSP, rsp + (info as u64 + 1) * 8);
+                i += 1;
+            }
+            3 => {
+                // UWOP_SET_FPREG: RSP = frame_register - frame_offset
+                // (during unwinding this is reversed)
+                if frame_reg > 0 && frame_reg < 16 {
+                    let fp_val = ctx_get(c, REG_OFFSETS[frame_reg]);
+                    ctx_set(c, CTX_RSP, fp_val.wrapping_sub(frame_off as u64));
+                }
+                i += 1;
+            }
+            4 => {
+                // UWOP_SAVE_NONVOL: register saved at RSP + offset*8
+                let off = (codes_ptr.add((i + 1) * 2) as *const u16).read_unaligned() as u64 * 8;
+                let rsp = ctx_get(c, CTX_RSP);
+                if info < 16 {
+                    let val = ((rsp + off) as *const u64).read_unaligned();
+                    ctx_set(c, REG_OFFSETS[info], val);
+                }
+                i += 2;
+            }
+            5 => {
+                // UWOP_SAVE_NONVOL_FAR: register saved at RSP + 32-bit offset
+                let lo = (codes_ptr.add((i + 1) * 2) as *const u16).read_unaligned() as u64;
+                let hi = (codes_ptr.add((i + 2) * 2) as *const u16).read_unaligned() as u64;
+                let off = lo | (hi << 16);
+                let rsp = ctx_get(c, CTX_RSP);
+                if info < 16 {
+                    let val = ((rsp + off) as *const u64).read_unaligned();
+                    ctx_set(c, REG_OFFSETS[info], val);
+                }
+                i += 3;
+            }
+            6 => {
+                // UWOP_SAVE_XMM128: skip (we don't track XMM in CONTEXT)
+                i += 2;
+            }
+            7 => {
+                // UWOP_SAVE_XMM128_FAR: skip
+                i += 3;
+            }
+            8 => {
+                // UWOP_PUSH_MACHFRAME
+                let rsp = ctx_get(c, CTX_RSP);
+                let base_off = if info == 1 { 8u64 } else { 0u64 }; // error code
+                let new_rip = ((rsp + base_off) as *const u64).read_unaligned();
+                let new_rsp = ((rsp + base_off + 24) as *const u64).read_unaligned();
+                ctx_set(c, CTX_RIP, new_rip);
+                ctx_set(c, CTX_RSP, new_rsp);
+                i += 1;
+            }
+            _ => {
+                i += 1;
+            }
+        }
+    }
+
+    // Handle chained unwind info
+    if flags & UNW_FLAG_CHAININFO != 0 {
+        // After the unwind codes (aligned to even count), there's another RUNTIME_FUNCTION
+        let aligned_count = (code_count + 1) & !1;
+        let chain = codes_ptr.add(aligned_count * 2) as *const c_void;
+        return rtl_virtual_unwind(
+            handler_type,
+            base as u64,
+            pc,
+            chain,
+            ctx,
+            handler_data,
+            establisher_frame,
+            _ctx_pointers,
+        );
+    }
+
+    // After unwinding codes, RSP should point to the return address.
+    // Pop it into RIP.
+    let rsp = ctx_get(c, CTX_RSP);
+    let ret_addr = (rsp as *const u64).read_unaligned();
+    ctx_set(c, CTX_RIP, ret_addr);
+    ctx_set(c, CTX_RSP, rsp + 8);
+
     if !establisher_frame.is_null() {
-        *establisher_frame = 0;
+        *establisher_frame = ctx_get(c, CTX_RSP);
+    }
+
+    // Check if this function has an exception/unwind handler
+    let want_ehandler = handler_type & (UNW_FLAG_EHANDLER as u32) != 0;
+    let want_uhandler = handler_type & (UNW_FLAG_UHANDLER as u32) != 0;
+    let has_ehandler = flags & UNW_FLAG_EHANDLER != 0;
+    let has_uhandler = flags & UNW_FLAG_UHANDLER != 0;
+
+    if (want_ehandler && has_ehandler) || (want_uhandler && has_uhandler) {
+        // Handler RVA is after the unwind codes, aligned to 4-byte boundary
+        let aligned_count = (code_count + 1) & !1;
+        let handler_rva_ptr = codes_ptr.add(aligned_count * 2) as *const u32;
+        let handler_rva = handler_rva_ptr.read_unaligned() as usize;
+        let handler_addr = base + handler_rva;
+        // Language-specific data follows the handler RVA
+        if !handler_data.is_null() {
+            *handler_data = handler_rva_ptr.add(1) as *mut c_void;
+        }
+        return handler_addr as *mut c_void;
+    }
+
+    if !handler_data.is_null() {
+        *handler_data = std::ptr::null_mut();
     }
     std::ptr::null_mut()
+}
+
+fn unwind_code_extra_slots(op: u8, info: usize) -> usize {
+    match op {
+        0 | 2 | 3 | 8 => 0,
+        1 => {
+            if info == 0 {
+                1
+            } else {
+                2
+            }
+        }
+        4 | 6 => 1,
+        5 | 7 => 2,
+        _ => 0,
+    }
 }
 
 /// `RtlUnwindEx` : stub.
@@ -1671,26 +1963,40 @@ pub unsafe extern "win64" fn nt_protect_virtual_memory(
     STATUS_SUCCESS
 }
 
-/// `NtReadVirtualMemory` : stub.
+/// `NtReadVirtualMemory` : copie de la mémoire du processus courant.
 pub unsafe extern "win64" fn nt_read_virtual_memory(
     _process: usize,
-    _base: *const c_void,
-    _buffer: *mut c_void,
-    _size: usize,
-    _bytes_read: *mut usize,
+    base: *const c_void,
+    buffer: *mut c_void,
+    size: usize,
+    bytes_read: *mut usize,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if base.is_null() || buffer.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(base as *const u8, buffer as *mut u8, size);
+    if !bytes_read.is_null() {
+        *bytes_read = size;
+    }
+    STATUS_SUCCESS
 }
 
-/// `NtWriteVirtualMemory` : stub.
+/// `NtWriteVirtualMemory` : écriture dans la mémoire du processus courant.
 pub unsafe extern "win64" fn nt_write_virtual_memory(
     _process: usize,
-    _base: *mut c_void,
-    _buffer: *const c_void,
-    _size: usize,
-    _bytes_written: *mut usize,
+    base: *mut c_void,
+    buffer: *const c_void,
+    size: usize,
+    bytes_written: *mut usize,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if base.is_null() || buffer.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(buffer as *const u8, base as *mut u8, size);
+    if !bytes_written.is_null() {
+        *bytes_written = size;
+    }
+    STATUS_SUCCESS
 }
 
 /// `NtCreateSection` : stub.
@@ -1749,17 +2055,42 @@ pub unsafe extern "win64" fn nt_terminate_process(_handle: usize, code: u32) -> 
     crate::dlls::kernel32::flush_and_exit(code as i32)
 }
 
-/// `NtDuplicateObject` : stub.
+/// `NtDuplicateObject` : duplique un handle dans le même processus.
 pub unsafe extern "win64" fn nt_duplicate_object(
     _src_process: usize,
-    _src_handle: usize,
+    src_handle: usize,
     _tgt_process: usize,
-    _tgt_handle: *mut usize,
+    tgt_handle: *mut usize,
     _access: u32,
     _attrs: u32,
-    _options: u32,
+    options: u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    const DUPLICATE_CLOSE_SOURCE: u32 = 0x01;
+    if tgt_handle.is_null() && options & DUPLICATE_CLOSE_SOURCE == 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if let Some(obj) = super::kernel32::lookup_sync(src_handle) {
+        if !tgt_handle.is_null() {
+            let new_h = super::kernel32::add_sync(obj, None);
+            *tgt_handle = new_h;
+        }
+        if options & DUPLICATE_CLOSE_SOURCE != 0 {
+            super::kernel32::close_handle(src_handle);
+        }
+        return STATUS_SUCCESS;
+    }
+    let dup_result = super::kernel32::duplicate_handle_impl(src_handle);
+    if let Some(new_h) = dup_result {
+        if !tgt_handle.is_null() {
+            *tgt_handle = new_h;
+        }
+        if options & DUPLICATE_CLOSE_SOURCE != 0 {
+            super::kernel32::close_handle(src_handle);
+        }
+        STATUS_SUCCESS
+    } else {
+        STATUS_INVALID_HANDLE
+    }
 }
 
 /// `NtCreateEvent` : stub.
@@ -1835,12 +2166,26 @@ pub unsafe extern "win64" fn nt_flush_buffers_file(_handle: usize, _io: *mut c_v
     STATUS_SUCCESS
 }
 
-/// `NtQueryAttributesFile` : stub.
+/// `NtQueryAttributesFile` : récupère les attributs basiques d'un fichier.
 pub unsafe extern "win64" fn nt_query_attributes_file(
-    _attrs: *const c_void,
-    _info: *mut c_void,
+    attrs: *const c_void,
+    info: *mut c_void,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    let Some(win_path) = oa_path(attrs) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let linux_path = crate::paths::to_linux(&win_path);
+    let meta = match std::fs::metadata(&linux_path) {
+        Ok(m) => m,
+        Err(_) => return STATUS_OBJECT_NAME_NOT_FOUND,
+    };
+    if !info.is_null() {
+        let buf = info as *mut u8;
+        std::ptr::write_bytes(buf, 0, 40);
+        let file_attrs: u32 = if meta.is_dir() { 0x10 } else { 0x80 };
+        std::ptr::write_unaligned(buf.add(32) as *mut u32, file_attrs);
+    }
+    STATUS_SUCCESS
 }
 
 /// `NtRaiseHardError` : affiche un message d'erreur fatal.
