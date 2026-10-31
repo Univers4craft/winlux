@@ -395,6 +395,17 @@ pub(crate) fn release_iocp_slots_for_current_thread() {
     }
 }
 pub(crate) fn io_error_code(e: &std::io::Error) -> u32 {
+    match e.raw_os_error() {
+        Some(libc::ENAMETOOLONG) => return 206, // ERROR_FILENAME_EXCED_RANGE
+        Some(libc::ELOOP) => return 1921,       // ERROR_CANT_RESOLVE_FILENAME
+        Some(libc::EROFS) => return 19,         // ERROR_WRITE_PROTECT
+        Some(libc::ENOSPC) | Some(libc::EDQUOT) => return 112, // ERROR_DISK_FULL
+        Some(libc::EXDEV) => return 17,         // ERROR_NOT_SAME_DEVICE
+        Some(libc::ENOTEMPTY) => return 145,    // ERROR_DIR_NOT_EMPTY
+        Some(libc::EISDIR) | Some(libc::EPERM) => return 5, // ERROR_ACCESS_DENIED
+        Some(libc::EBUSY) | Some(libc::ETXTBSY) => return 32, // ERROR_SHARING_VIOLATION
+        _ => {}
+    }
     match e.kind() {
         std::io::ErrorKind::NotFound => 2,
         std::io::ErrorKind::PermissionDenied => 5,
@@ -986,8 +997,43 @@ pub unsafe extern "win64" fn create_file_a(
         crate::process::set_last_error(87);
         return usize::MAX;
     }
-    let p = crate::paths::to_linux(&crate::dlls::cstr(path));
+    create_file_str(
+        &crate::dlls::cstr(path),
+        access,
+        _share,
+        _sec,
+        creation,
+        _flags,
+        _template,
+    )
+}
+/// Corps commun de `create_file_a` et `create_file_w` : le chemin est déjà décodé
+/// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
+fn want_write_access(access: u32) -> bool {
+    // GENERIC_WRITE, GENERIC_ALL, FILE_WRITE_DATA, FILE_APPEND_DATA.
+    access & (0x4000_0000 | 0x1000_0000 | 0x2 | 0x4) != 0
+}
+unsafe fn create_file_str(
+    path: &str,
+    access: u32,
+    _share: u32,
+    _sec: usize,
+    creation: u32,
+    _flags: u32,
+    _template: usize,
+) -> usize {
+    let p = crate::paths::to_linux(path);
     let existed = p.exists();
+    // Fichier en lecture seule : refusé en écriture même pour root, comme
+    // l'attribut FILE_ATTRIBUTE_READONLY de Windows.
+    if want_write_access(access) {
+        if let Ok(m) = std::fs::metadata(&p) {
+            if m.is_file() && crate::dlls::winfile::no_write_bits(&m) {
+                crate::process::set_last_error(5);
+                return usize::MAX;
+            }
+        }
+    }
     let want_read = access & 0x8000_0000 != 0 || access & 1 != 0;
     let want_write = access & 0x4000_0000 != 0 || access & 2 != 0;
     let mut o = OpenOptions::new();
@@ -1088,29 +1134,7 @@ fn filetime_parts(t: u64) -> FileTime {
         high: (t >> 32) as u32,
     }
 }
-fn metadata_to_find_data(
-    path: &std::path::Path,
-    metadata: &std::fs::Metadata,
-) -> Win32FileAttributeData {
-    let mut attributes = 0;
-    if metadata.is_dir() {
-        attributes |= 0x10;
-    }
-    if metadata.permissions().readonly() {
-        attributes |= 1;
-    }
-    if path
-        .file_name()
-        .is_some_and(|n| n.to_string_lossy().starts_with('.'))
-    {
-        attributes |= 2;
-    }
-    if metadata.is_file() {
-        attributes |= 0x20;
-    }
-    if attributes == 0 {
-        attributes = 0x80;
-    }
+fn metadata_to_find_data(attributes: u32, metadata: &std::fs::Metadata) -> Win32FileAttributeData {
     let zero = std::time::UNIX_EPOCH;
     Win32FileAttributeData {
         attributes,
@@ -1121,8 +1145,16 @@ fn metadata_to_find_data(
         )),
         access_time: filetime_parts(system_time_to_filetime(metadata.accessed().unwrap_or(zero))),
         write_time: filetime_parts(system_time_to_filetime(metadata.modified().unwrap_or(zero))),
-        size_high: (metadata.len() >> 32) as u32,
-        size_low: metadata.len() as u32,
+        size_high: if metadata.is_dir() {
+            0
+        } else {
+            (metadata.len() >> 32) as u32
+        },
+        size_low: if metadata.is_dir() {
+            0
+        } else {
+            metadata.len() as u32
+        },
     }
 }
 pub unsafe extern "win64" fn get_file_attributes_ex_a(
@@ -1135,9 +1167,9 @@ pub unsafe extern "win64" fn get_file_attributes_ex_a(
         return 0;
     }
     let p = crate::paths::to_linux(&crate::dlls::cstr(path));
-    match std::fs::metadata(&p) {
-        Ok(m) => {
-            std::ptr::write_unaligned(data, metadata_to_find_data(&p, &m));
+    match crate::dlls::winfile::attributes(&p) {
+        Ok((a, m)) => {
+            std::ptr::write_unaligned(data, metadata_to_find_data(a, &m));
             1
         }
         Err(e) => {
@@ -1170,9 +1202,9 @@ pub unsafe extern "win64" fn get_file_attributes_ex_w(
         crate::process::set_last_error(87);
         return 0;
     }
-    match std::fs::metadata(&p) {
-        Ok(m) => {
-            std::ptr::write_unaligned(data, metadata_to_find_data(&p, &m));
+    match crate::dlls::winfile::attributes(&p) {
+        Ok((a, m)) => {
+            std::ptr::write_unaligned(data, metadata_to_find_data(a, &m));
             1
         }
         Err(e) => {
@@ -1512,7 +1544,12 @@ pub unsafe extern "win64" fn set_file_attributes_a(path: *const u8, attributes: 
         crate::process::set_last_error(87);
         return 0;
     }
-    let p = crate::paths::to_linux(&crate::dlls::cstr(path));
+    set_file_attributes_str(&crate::dlls::cstr(path), attributes)
+}
+/// Corps commun de `set_file_attributes_a` et `set_file_attributes_w` : le chemin est déjà décodé
+/// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
+unsafe fn set_file_attributes_str(path: &str, attributes: u32) -> i32 {
+    let p = crate::paths::to_linux(path);
     let m = match std::fs::metadata(&p) {
         Ok(m) => m,
         Err(e) => {
@@ -1520,9 +1557,26 @@ pub unsafe extern "win64" fn set_file_attributes_a(path: *const u8, attributes: 
             return 0;
         }
     };
-    let mut perms = m.permissions();
-    perms.set_readonly(attributes & 0x1 != 0);
-    match std::fs::set_permissions(&p, perms) {
+    // Windows ignore la lecture seule sur un dossier : ne pas le verrouiller.
+    if m.is_dir() {
+        return 1;
+    }
+    // Lecture seule : on retire tous les droits d'écriture. Sinon on rend
+    // l'écriture au seul propriétaire (jamais « écriture pour tous », que
+    // ferait `set_readonly(false)`).
+    use std::os::unix::fs::PermissionsExt;
+    let mode = m.permissions().mode();
+    let new_mode = if attributes & 0x1 != 0 {
+        mode & !0o222
+    } else if mode & 0o222 == 0 {
+        mode | 0o200
+    } else {
+        mode
+    };
+    if new_mode == mode {
+        return 1;
+    }
+    match std::fs::set_permissions(&p, std::fs::Permissions::from_mode(new_mode)) {
         Ok(()) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
@@ -1539,7 +1593,7 @@ pub unsafe extern "win64" fn set_file_attributes_w(path: *const u16, attributes:
             return 0;
         }
     };
-    set_file_attributes_a(s.as_ptr() as *const u8, attributes)
+    set_file_attributes_str(&s.to_string_lossy(), attributes)
 }
 
 pub unsafe extern "win64" fn get_file_time(
@@ -1712,7 +1766,17 @@ pub unsafe extern "win64" fn get_disk_free_space_ex_a(
         crate::process::set_last_error(87);
         return 0;
     }
-    match disk_free(&crate::dlls::cstr(path)) {
+    get_disk_free_space_ex_str(&crate::dlls::cstr(path), available, total, free)
+}
+/// Corps commun de `get_disk_free_space_ex_a` et `get_disk_free_space_ex_w` : le chemin est déjà décodé
+/// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
+unsafe fn get_disk_free_space_ex_str(
+    path: &str,
+    available: *mut i64,
+    total: *mut i64,
+    free: *mut i64,
+) -> i32 {
+    match disk_free(path) {
         Some((a, t, f)) => {
             if !available.is_null() {
                 *available = a as i64;
@@ -1745,7 +1809,7 @@ pub unsafe extern "win64" fn get_disk_free_space_ex_w(
             return 0;
         }
     };
-    get_disk_free_space_ex_a(s.as_ptr() as *const u8, available, total, free)
+    get_disk_free_space_ex_str(&s.to_string_lossy(), available, total, free)
 }
 
 unsafe fn write_volume_info_a(
@@ -1923,8 +1987,13 @@ pub unsafe extern "win64" fn get_module_handle_a(name: *const u8) -> usize {
     if name.is_null() {
         return crate::loader::main_module().map(|m| m.base).unwrap_or(0);
     }
-    let n = crate::dlls::cstr(name);
-    crate::dlls::module_handle(&n).unwrap_or(0)
+    get_module_handle_str(&crate::dlls::cstr(name))
+}
+/// Corps commun de `get_module_handle_a` et `get_module_handle_w` : le chemin est déjà décodé
+/// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
+unsafe fn get_module_handle_str(name: &str) -> usize {
+    let n = name;
+    crate::dlls::module_handle(n).unwrap_or(0)
 }
 pub unsafe extern "win64" fn get_module_handle_w(name: *const u16) -> usize {
     if name.is_null() {
@@ -1937,7 +2006,7 @@ pub unsafe extern "win64" fn get_module_handle_w(name: *const u16) -> usize {
             return 0;
         }
     };
-    get_module_handle_a(s.as_ptr() as *const u8)
+    get_module_handle_str(&s.to_string_lossy())
 }
 pub unsafe extern "win64" fn get_proc_address(module: usize, name: *const u8) -> usize {
     if name.is_null() {
@@ -1980,12 +2049,17 @@ pub unsafe extern "win64" fn load_library_a(name: *const u8) -> usize {
         crate::process::set_last_error(87);
         return 0;
     }
-    let n = crate::dlls::cstr(name);
+    load_library_str(&crate::dlls::cstr(name))
+}
+/// Corps commun de `load_library_a` et `load_library_w` : le chemin est déjà décodé
+/// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
+unsafe fn load_library_str(name: &str) -> usize {
+    let n = name;
     if n.is_empty() {
         crate::process::set_last_error(87);
         return 0;
     }
-    if let Some(h) = crate::dlls::module_handle(&n) {
+    if let Some(h) = crate::dlls::module_handle(n) {
         {
             let mut mods = crate::loader::MODULES.lock().unwrap();
             if let Some(m) = mods.iter_mut().find(|m| m.base == h) {
@@ -1998,7 +2072,7 @@ pub unsafe extern "win64" fn load_library_a(name: *const u8) -> usize {
         crate::process::set_last_error(126);
         return 0;
     };
-    let Some(path) = crate::loader::find_dll_file(&n, &importer.path) else {
+    let Some(path) = crate::loader::find_dll_file(n, &importer.path) else {
         crate::process::set_last_error(126);
         return 0;
     };
@@ -2025,7 +2099,7 @@ pub unsafe extern "win64" fn load_library_w(name: *const u16) -> usize {
             return 0;
         }
     };
-    load_library_a(s.as_ptr() as *const u8)
+    load_library_str(&s.to_string_lossy())
 }
 pub unsafe extern "win64" fn load_library_ex_a(name: *const u8, file: usize, flags: u32) -> usize {
     if name.is_null() || file != 0 {
@@ -4172,7 +4246,12 @@ pub unsafe extern "win64" fn set_current_directory_a(path: *const u8) -> i32 {
         crate::process::set_last_error(87);
         return 0;
     }
-    match std::env::set_current_dir(crate::paths::to_linux(&crate::dlls::cstr(path))) {
+    set_current_directory_str(&crate::dlls::cstr(path))
+}
+/// Corps commun de `set_current_directory_a` et `set_current_directory_w` : le chemin est déjà décodé
+/// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
+unsafe fn set_current_directory_str(path: &str) -> i32 {
+    match std::env::set_current_dir(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
@@ -4220,26 +4299,14 @@ pub unsafe extern "win64" fn get_file_attributes_a(path: *const u8) -> u32 {
         crate::process::set_last_error(87);
         return u32::MAX;
     }
-    let p = crate::paths::to_linux(&crate::dlls::cstr(path));
-    match std::fs::metadata(&p) {
-        Ok(m) => {
-            let mut a = 0u32;
-            if m.is_dir() {
-                a |= 0x10;
-            }
-            if m.permissions().readonly() {
-                a |= 0x1;
-            }
-            if p.file_name()
-                .is_some_and(|n| n.to_string_lossy().starts_with('.'))
-            {
-                a |= 0x2;
-            }
-            if a == 0 {
-                a = if m.is_file() { 0x20 } else { 0x80 };
-            }
-            a
-        }
+    get_file_attributes_str(&crate::dlls::cstr(path))
+}
+/// Corps commun de `get_file_attributes_a` et `get_file_attributes_w` : le chemin est déjà décodé
+/// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
+unsafe fn get_file_attributes_str(path: &str) -> u32 {
+    let p = crate::paths::to_linux(path);
+    match crate::dlls::winfile::attributes(&p) {
+        Ok((a, _)) => a,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
             u32::MAX
@@ -4251,7 +4318,12 @@ pub unsafe extern "win64" fn delete_file_a(path: *const u8) -> i32 {
         crate::process::set_last_error(87);
         return 0;
     }
-    match std::fs::remove_file(crate::paths::to_linux(&crate::dlls::cstr(path))) {
+    delete_file_str(&crate::dlls::cstr(path))
+}
+/// Corps commun de `delete_file_a` et `delete_file_w` : le chemin est déjà décodé
+/// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
+unsafe fn delete_file_str(path: &str) -> i32 {
+    match std::fs::remove_file(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
@@ -4264,7 +4336,12 @@ pub unsafe extern "win64" fn create_directory_a(path: *const u8, _sec: usize) ->
         crate::process::set_last_error(87);
         return 0;
     }
-    match std::fs::create_dir(crate::paths::to_linux(&crate::dlls::cstr(path))) {
+    create_directory_str(&crate::dlls::cstr(path), _sec)
+}
+/// Corps commun de `create_directory_a` et `create_directory_w` : le chemin est déjà décodé
+/// (ANSI pour « A », UTF-16 pour « W »), sans repasser par la page de code.
+unsafe fn create_directory_str(path: &str, _sec: usize) -> i32 {
+    match std::fs::create_dir(crate::paths::to_linux(path)) {
         Ok(()) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
@@ -4288,8 +4365,8 @@ pub unsafe extern "win64" fn create_file_w(
             return usize::MAX;
         }
     };
-    create_file_a(
-        s.as_ptr() as *const u8,
+    create_file_str(
+        &s.to_string_lossy(),
         access,
         share,
         sec,
@@ -4376,7 +4453,7 @@ pub unsafe extern "win64" fn set_current_directory_w(path: *const u16) -> i32 {
             return 0;
         }
     };
-    set_current_directory_a(s.as_ptr() as *const u8)
+    set_current_directory_str(&s.to_string_lossy())
 }
 pub unsafe extern "win64" fn get_temp_path_w(size: u32, buf: *mut u16) -> u32 {
     let ret = write_w_text(&temp_path(), buf, size);
@@ -4414,7 +4491,7 @@ pub unsafe extern "win64" fn get_file_attributes_w(path: *const u16) -> u32 {
             return u32::MAX;
         }
     };
-    get_file_attributes_a(s.as_ptr() as *const u8)
+    get_file_attributes_str(&s.to_string_lossy())
 }
 pub unsafe extern "win64" fn delete_file_w(path: *const u16) -> i32 {
     let s = match cstring_from_wide(path) {
@@ -4424,7 +4501,7 @@ pub unsafe extern "win64" fn delete_file_w(path: *const u16) -> i32 {
             return 0;
         }
     };
-    delete_file_a(s.as_ptr() as *const u8)
+    delete_file_str(&s.to_string_lossy())
 }
 pub unsafe extern "win64" fn create_directory_w(path: *const u16, sec: usize) -> i32 {
     let s = match cstring_from_wide(path) {
@@ -4434,32 +4511,15 @@ pub unsafe extern "win64" fn create_directory_w(path: *const u16, sec: usize) ->
             return 0;
         }
     };
-    create_directory_a(s.as_ptr() as *const u8, sec)
+    create_directory_str(&s.to_string_lossy(), sec)
 }
-fn normalize_host_path(path: std::path::PathBuf) -> std::path::PathBuf {
-    use std::path::Component;
-    let mut out = std::path::PathBuf::new();
-    for c in path.components() {
-        match c {
-            Component::CurDir => {}
-            Component::ParentDir => {
-                if !out.pop() && !out.is_absolute() {
-                    out.push("..");
-                }
-            }
-            other => out.push(other.as_os_str()),
-        }
-    }
-    out
-}
+/// `GetFullPathName` travaille sur le texte, comme Windows : pas d'accès
+/// disque, liens non suivis, `C:\Users\<nom>\Documents` reste tel quel.
 fn full_windows_path(name: &str) -> Result<String, u32> {
-    let p = crate::paths::to_linux(name);
-    let p = if p.is_absolute() {
-        p
-    } else {
-        std::env::current_dir().map_err(|_| 31u32)?.join(p)
-    };
-    Ok(crate::paths::to_windows(&normalize_host_path(p)))
+    if name.is_empty() {
+        return Err(87);
+    }
+    Ok(crate::paths::full_windows(name))
 }
 pub unsafe extern "win64" fn get_full_path_name_a(
     name: *const u8,
@@ -4648,12 +4708,26 @@ pub unsafe extern "win64" fn move_file_w(src: *const u16, dst: *const u16) -> i3
         }
     }
 }
+/// `RemoveDirectory` sur un lien vers un dossier supprime le lien, jamais
+/// le contenu de la cible (comportement Windows pour les liens et jonctions).
+fn remove_dir_or_link(p: &std::path::Path) -> std::io::Result<()> {
+    match std::fs::symlink_metadata(p) {
+        Ok(m) if m.file_type().is_symlink() => {
+            if p.is_dir() {
+                std::fs::remove_file(p)
+            } else {
+                Err(std::io::Error::from_raw_os_error(libc::ENOTDIR))
+            }
+        }
+        _ => std::fs::remove_dir(p),
+    }
+}
 pub unsafe extern "win64" fn remove_directory_a(path: *const u8) -> i32 {
     if path.is_null() {
         crate::process::set_last_error(87);
         return 0;
     }
-    match std::fs::remove_dir(crate::paths::to_linux(&crate::dlls::cstr(path))) {
+    match remove_dir_or_link(&crate::paths::to_linux(&crate::dlls::cstr(path))) {
         Ok(()) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));
@@ -4669,7 +4743,7 @@ pub unsafe extern "win64" fn remove_directory_w(path: *const u16) -> i32 {
             return 0;
         }
     };
-    match std::fs::remove_dir(crate::paths::to_linux(&s.to_string_lossy())) {
+    match remove_dir_or_link(&crate::paths::to_linux(&s.to_string_lossy())) {
         Ok(()) => 1,
         Err(e) => {
             crate::process::set_last_error(io_error_code(&e));

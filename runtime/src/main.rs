@@ -118,6 +118,7 @@ fn main() {
         }
     };
     backup_registry();
+    paths::install_windows_env();
     if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
         crash::set_exe_name(name);
     }
