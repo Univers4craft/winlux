@@ -26,6 +26,8 @@ mod diskmgr;
 mod eventviewer;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/fonts.rs"]
+mod fonts;
 #[path = "../shell/firewall.rs"]
 mod firewall;
 #[path = "../shell/gfx.rs"]
@@ -48,6 +50,8 @@ mod restore;
 mod settings;
 #[path = "../shell/snip.rs"]
 mod snip;
+#[path = "../shell/store.rs"]
+mod store;
 #[path = "../shell/settings_cpu.rs"]
 mod settings_cpu;
 #[path = "../shell/taskmgr.rs"]
