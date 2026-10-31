@@ -24,6 +24,7 @@ mod netdrive;
 mod overlay;
 mod paths;
 mod pe;
+mod permissions;
 mod power;
 mod printf;
 mod process;
@@ -32,6 +33,7 @@ pub mod quality;
 mod registry;
 mod tasks;
 mod thunks;
+mod volumes;
 
 use std::path::PathBuf;
 
@@ -77,6 +79,10 @@ fn main() {
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());
+    }
+    if exe == "--volumes" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(volumes::cli(&rest));
     }
     if exe == "--tasks" || exe == "--firewall" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();

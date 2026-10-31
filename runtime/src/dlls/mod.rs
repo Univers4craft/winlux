@@ -54,6 +54,7 @@ pub mod mmap;
 pub mod mmdevapi;
 pub mod mscoree;
 pub mod msvcrt;
+pub mod notifyicon;
 pub mod ntdll;
 pub mod ole32;
 pub mod oleaut32;

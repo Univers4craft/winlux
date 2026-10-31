@@ -11,6 +11,9 @@ use winlux_testexe::*;
 mod printers;
 #[path = "settings_gpu.rs"]
 mod graphics;
+/// Page « À propos » (logo, version, caractéristiques de l'appareil).
+#[path = "about.rs"]
+mod about;
 
 pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
@@ -1268,62 +1271,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             row(g, &c, 410, tr4(&[b"P\xE9rim\xE8tre", b"Scope", b"Alcance", b"Umfang"]), tr4(&[b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.", b"Winlux rendering scale and traces; missing APIs still need implementing.", b"Escala del renderizado de Winlux y trazas; las API que faltan quedan por implementar.", b"Skalierung der Winlux-Darstellung und Ablaufprotokolle; fehlende APIs m\xFCssen noch implementiert werden."]));
         }
-        9 => {
-            let info = BUILD_INFO.get();
-            let version = field(info, b"version");
-            row(
-                g,
-                &c,
-                44,
-                tr4(&[b"Version de Winlux", b"Winlux version", b"Versi\xF3n de Winlux", b"Winlux-Version"]),
-                if version.is_empty() {
-                    value(b"version")
-                } else {
-                    version
-                },
-            );
-            row(g, &c, 104, tr4(&[b"Commit GitHub", b"GitHub commit", b"Commit de GitHub", b"GitHub-Commit"]), field(info, b"commit"));
-            row(
-                g,
-                &c,
-                164,
-                tr4(&[b"Construction (UTC)", b"Build (UTC)", b"Compilaci\xF3n (UTC)", b"Build (UTC)"]),
-                field(info, b"built_at_utc"),
-            );
-            row(
-                g,
-                &c,
-                224,
-                tr4(&[b"Type de livrable", b"Build type", b"Tipo de entrega", b"Build-Typ"]),
-                match field(info, b"scope") {
-                    b"system" => tr4(&[b"Syst\xE8me complet", b"Full system", b"Sistema completo", b"Vollst\xE4ndiges System"]),
-                    b"runtime" => tr4(&[b"Runtime uniquement", b"Runtime only", b"Solo runtime", b"Nur Runtime"]),
-                    _ => tr4(&[b"Information indisponible", b"Information unavailable", b"Informaci\xF3n no disponible", b"Information nicht verf\xFCgbar"]),
-                },
-            );
-            row(
-                g,
-                &c,
-                284,
-                tr4(&[b"Sources suivies lors de la construction", b"Sources tracked during the build", b"Fuentes seguidas durante la compilaci\xF3n", b"Beim Build verfolgte Quellen"]),
-                match field(info, b"tracked_sources") {
-                    b"clean" => tr4(&[b"Sans modification locale suivie", b"No tracked local changes", b"Sin cambios locales seguidos", b"Keine verfolgten lokalen \xC4nderungen"]),
-                    b"modified" => tr4(&[b"Modifications locales non valid\xE9es", b"Uncommitted local changes", b"Cambios locales sin confirmar", b"Nicht festgeschriebene lokale \xC4nderungen"]),
-                    _ => tr4(&[b"Information indisponible", b"Information unavailable", b"Informaci\xF3n no disponible", b"Information nicht verf\xFCgbar"]),
-                },
-            );
-            row(
-                g,
-                &c,
-                344,
-                tr4(&[b"Provenance", b"Origin", b"Procedencia", b"Herkunft"]),
-                if info.is_empty() {
-                    tr4(&[b"BUILD-INFO absent : ancienne image ou installation sans m\xE9tadonn\xE9es.", b"BUILD-INFO missing: old image or installation without metadata.", b"Falta BUILD-INFO: imagen antigua o instalaci\xF3n sin metadatos.", b"BUILD-INFO fehlt: altes Image oder Installation ohne Metadaten."])
-                } else {
-                    tr4(&[b"Informations du livrable install\xE9, pas de la derni\xE8re release GitHub.", b"Information about the installed build, not the latest GitHub release.", b"Informaci\xF3n de la versi\xF3n instalada, no de la \xFAltima release de GitHub.", b"Informationen zum installierten Build, nicht zum neuesten GitHub-Release."])
-                },
-            );
-        }
+        9 => about::draw(g, &c, BUILD_INFO.get(), value(b"version")),
         0 => {
             row(g, &c, 44, tr4(&[b"Version de Winlux", b"Winlux version", b"Versi\xF3n de Winlux", b"Winlux-Version"]), value(b"version"));
             button(g, &c, 0, 0, tr4(&[b"Relancer le bureau", b"Restart the desktop", b"Reiniciar el escritorio", b"Desktop neu starten"]), 0);

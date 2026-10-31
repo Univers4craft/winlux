@@ -66,6 +66,8 @@ mod taskschd;
 mod terminal;
 #[path = "../shell/utilities.rs"]
 mod utilities;
+#[path = "../shell/volumes.rs"]
+mod volumes;
 #[path = "../shell/weather.rs"]
 mod weather;
 #[path = "../shell/welcome.rs"]

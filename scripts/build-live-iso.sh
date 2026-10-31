@@ -122,6 +122,7 @@ cp "$root/scripts/winlux-installer.py" "$stage/usr/bin/winlux-installer"
 cp "$root/scripts/winlux-hw-detect.sh" "$stage/usr/bin/winlux-hw-detect"
 cp "$root/scripts/winlux-first-boot.sh" "$stage/usr/bin/winlux-first-boot"
 cp "$root/scripts/install.sh" "$stage/opt/winlux/scripts/install.sh"
+cp "$root/scripts/winlux-grub-theme.sh" "$stage/opt/winlux/scripts/winlux-grub-theme.sh"
 cp "$root/scripts/install-safety.sh" "$stage/opt/winlux/scripts/install-safety.sh"
 mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-recovery.sh" "$stage/usr/share/winlux/winlux-recovery.sh"
@@ -155,6 +156,11 @@ sh "$root/scripts/build-info.sh" "$(cat "$stage/usr/share/winlux/version")" syst
 printf 'system\n' >"$stage/usr/share/winlux/update-scope"
 mkdir -p "$stage/usr/share/winlux/avatars"
 cp "$root"/assets/avatars/avatar-*.svg "$stage/usr/share/winlux/avatars/"
+# Identité visuelle : logo, fonds Winlux et thème GRUB repris par l'installateur.
+mkdir -p "$stage/usr/share/winlux/brand" "$stage/usr/share/winlux/wallpapers"
+cp "$root"/assets/brand/winlux-logo*.svg "$root"/assets/brand/winlux-logo-*.png "$stage/usr/share/winlux/brand/"
+cp "$root"/assets/wallpapers/winlux-prisme-*.png "$stage/usr/share/winlux/wallpapers/"
+sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$stage/usr/share/winlux/grub-theme"
 
 # Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
 wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
@@ -566,6 +572,8 @@ if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
 # Services maison : pare-feu (nftables, journal des blocages, alertes) et
 # planificateur de tâches (déclencheurs horaires, démarrage, événements).
 /usr/bin/winlux --firewall daemon >>/run/winlux/firewall.log 2>&1 &
+# Disques branchés (clé USB, NTFS d'un Windows) : montage avec une lettre.
+/usr/bin/winlux --volumes daemon >>/run/winlux/volumes.log 2>&1 &
 /usr/bin/winlux --tasks daemon >>/run/winlux/tasks.log 2>&1 &
 # Mode jeu : processeur et mémoire pour le jeu tant qu'il tourne.
 /usr/bin/winlux --gamemode daemon >>/run/winlux/gamemode.log 2>&1 &
@@ -836,13 +844,26 @@ fi
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"
 sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"
+# Thème GRUB Winlux (logo Prisme) ; repli texte si la police manque.
+sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$iso_root/boot/grub/themes/winlux"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
 set timeout=5
 set timeout_style=menu
+set winlux_term=console
+if loadfont /boot/grub/themes/winlux/unicode.pf2; then
+    insmod all_video
+    insmod gfxterm
+    insmod png
+    set gfxmode=auto
+    if terminal_output gfxterm; then
+        set theme=/boot/grub/themes/winlux/theme.txt
+        set winlux_term=gfxterm
+    fi
+fi
 if serial --unit=0 --speed=115200; then
     terminal_input serial console
-    terminal_output serial console
+    terminal_output serial $winlux_term
 fi
 menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
     linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4
