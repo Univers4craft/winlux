@@ -49,19 +49,16 @@ static mut SHORTCUTS_COUNT: usize = 0;
 static mut START_SEARCH: [u8; 64] = [0; 64]; // Texte de recherche
 static mut START_SEARCH_LEN: usize = 0;
 static mut POWER_MENU: bool = false;
-static mut START_SEARCH_ACTIVE: bool = false; // Le champ de recherche a le focus
-static mut SEARCH_OVERLAY: bool = false; // Overlay de recherche (Win+S)
+static mut START_SEARCH_ACTIVE: bool = false;
+static mut SEARCH_OVERLAY: bool = false;
 static mut SEARCH_BUF: [u8; 64] = [0; 64];
 static mut SEARCH_BUF_LEN: usize = 0;
-static mut SEARCH_HOVER: i32 = -1; // Résultat survolé dans l'overlay
-static mut ENABLE_BLUR: bool = true; // Effet de flou activé
-static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
+static mut SEARCH_HOVER: i32 = -1;
+use crate::gfx::{ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS, AUTO_THEME};
 static mut RECENTER_ANIM: u32 = 0;
 static mut RECENTER_FROM: i32 = 0;
 static mut RECENTER_TARGET: i32 = 0;
 static mut PREV_TASKBAR_COUNT: i32 = 0;
-static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
-static mut AUTO_THEME: bool = false; // Thème automatique
 static mut CONTEXT_APP: Option<usize> = None;
 static mut CONTEXT_DESKTOP: Option<usize> = None;
 static mut CONTEXT_RECT: Rect = Rect {
@@ -2477,6 +2474,7 @@ pub unsafe fn frame(hwnd: Handle) {
     }
     let animating = !BOOT_DONE
         || wm::animating()
+        || crate::gfx::theme_animating()
         || notifications::animating()
         || since(INTRO_START) < INTRO_MS + 40
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)

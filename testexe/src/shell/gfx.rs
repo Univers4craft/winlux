@@ -249,6 +249,17 @@ pub static mut DARK: bool = true;
 pub static mut ACCENT: u32 = rgb(0x4C, 0xC2, 0xFF);
 /// Mode contraste élevé (accessibilité).
 pub static mut HIGH_CONTRAST: bool = false;
+/// Réglages visuels partagés (source unique).
+pub static mut ENABLE_BLUR: bool = true;
+pub static mut ENABLE_SMOOTH_ANIM: bool = true;
+pub static mut ENABLE_THUMBNAILS: bool = true;
+pub static mut AUTO_THEME: bool = false;
+
+// Transition fluide entre thèmes.
+static mut THEME_ANIM_START: u32 = 0;
+static mut THEME_ANIM_DUR: i32 = 300;
+static mut PREV_DARK: bool = true;
+static mut TRANSITIONING: bool = false;
 
 /// Palette des fenêtres façon Windows 11 (fond « Mica », surfaces, textes).
 #[derive(Clone, Copy)]
@@ -269,7 +280,7 @@ pub struct Palette {
     pub shadow: u32,
 }
 
-pub fn pal() -> Palette {
+fn raw_pal(dark: bool) -> Palette {
     let accent = unsafe { ACCENT };
     if unsafe { HIGH_CONTRAST } {
         return Palette {
@@ -289,7 +300,7 @@ pub fn pal() -> Palette {
             shadow: rgb(0x00, 0x00, 0x00),
         };
     }
-    if unsafe { DARK } {
+    if dark {
         Palette {
             window: rgb(0x20, 0x20, 0x20),
             mica: rgb(0x1C, 0x1F, 0x26),
@@ -325,6 +336,70 @@ pub fn pal() -> Palette {
             shadow: rgb(0x2A, 0x30, 0x40),
         }
     }
+}
+
+fn mix_pal(a: &Palette, b: &Palette, t: i32, n: i32) -> Palette {
+    Palette {
+        window: mix(a.window, b.window, t, n),
+        mica: mix(a.mica, b.mica, t, n),
+        surface: mix(a.surface, b.surface, t, n),
+        surface2: mix(a.surface2, b.surface2, t, n),
+        border: mix(a.border, b.border, t, n),
+        hover: mix(a.hover, b.hover, t, n),
+        pressed: mix(a.pressed, b.pressed, t, n),
+        selected: mix(a.selected, b.selected, t, n),
+        text: mix(a.text, b.text, t, n),
+        text2: mix(a.text2, b.text2, t, n),
+        text3: mix(a.text3, b.text3, t, n),
+        accent: mix(a.accent, b.accent, t, n),
+        on_accent: mix(a.on_accent, b.on_accent, t, n),
+        shadow: mix(a.shadow, b.shadow, t, n),
+    }
+}
+
+pub fn pal() -> Palette {
+    unsafe {
+        let target = raw_pal(DARK);
+        if !TRANSITIONING {
+            return target;
+        }
+        let elapsed = GetTickCount().wrapping_sub(THEME_ANIM_START) as i32;
+        if elapsed >= THEME_ANIM_DUR {
+            TRANSITIONING = false;
+            return target;
+        }
+        let e = ease_out(elapsed, THEME_ANIM_DUR);
+        let prev = raw_pal(PREV_DARK);
+        mix_pal(&prev, &target, e, 1000)
+    }
+}
+
+/// Vrai si une transition de thème est en cours (la boucle doit repeindre).
+pub fn theme_animating() -> bool {
+    unsafe { TRANSITIONING }
+}
+
+/// Bascule le thème avec transition fluide.
+pub unsafe fn set_theme(dark: bool) {
+    if DARK == dark {
+        return;
+    }
+    PREV_DARK = DARK;
+    DARK = dark;
+    TRANSITIONING = true;
+    THEME_ANIM_START = GetTickCount();
+}
+
+/// Vérifie l'heure et bascule le thème si auto-thème est activé.
+/// Jour (8h–20h) → clair, nuit → sombre.
+pub unsafe fn check_auto_theme() {
+    if !AUTO_THEME {
+        return;
+    }
+    let mut st = SystemTime::default();
+    GetLocalTime(&mut st);
+    let dark = st.hour < 8 || st.hour >= 20;
+    set_theme(dark);
 }
 
 /// Trait épais entre deux points (petits carrés le long du segment).
