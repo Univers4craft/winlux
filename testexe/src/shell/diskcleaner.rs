@@ -119,38 +119,103 @@ unsafe fn populate_categories() {
 
     let items: [(&[u8], &[u8], u32); 7] = [
         (
-            b"Fichiers temporaires",
-            b"Programmes et syst\xE8me : caches de compilation, fichiers .tmp",
+            tr4(&[
+                b"Fichiers temporaires",
+                b"Temporary files",
+                b"Archivos temporales",
+                b"Tempor\xE4re Dateien",
+            ]),
+            tr4(&[
+                b"Programmes et syst\xE8me : caches de compilation, fichiers .tmp",
+                b"Programs and system: build caches, .tmp files",
+                b"Programas y sistema: cach\xE9s de compilaci\xF3n, archivos .tmp",
+                b"Programme und System: Build-Caches, .tmp-Dateien",
+            ]),
             524_288, // 512 Mo
         ),
         (
-            b"Cache APT",
-            b"Paquets t\xE9l\xE9charg\xE9s par le gestionnaire de paquets",
+            tr4(&[b"Cache APT", b"APT cache", b"Cach\xE9 de APT", b"APT-Cache"]),
+            tr4(&[
+                b"Paquets t\xE9l\xE9charg\xE9s par le gestionnaire de paquets",
+                b"Packages downloaded by the package manager",
+                b"Paquetes descargados por el gestor de paquetes",
+                b"Vom Paketmanager heruntergeladene Pakete",
+            ]),
             1_048_576, // 1 Go
         ),
         (
-            b"Journaux anciens",
-            b"Fichiers journaux de plus de 7 jours dans /var/log",
+            tr4(&[
+                b"Journaux anciens",
+                b"Old logs",
+                b"Registros antiguos",
+                b"Alte Protokolle",
+            ]),
+            tr4(&[
+                b"Fichiers journaux de plus de 7 jours dans /var/log",
+                b"Log files older than 7 days in /var/log",
+                b"Archivos de registro de m\xE1s de 7 d\xEDas en /var/log",
+                b"Protokolldateien in /var/log, die \xE4lter als 7 Tage sind",
+            ]),
             204_800, // 200 Mo
         ),
         (
-            b"Corbeille",
-            b"\xC9l\xE9ments supprim\xE9s en attente de vidange",
+            tr4(&[
+                b"Corbeille",
+                b"Recycle Bin",
+                b"Papelera de reciclaje",
+                b"Papierkorb",
+            ]),
+            tr4(&[
+                b"\xC9l\xE9ments supprim\xE9s en attente de vidange",
+                b"Deleted items waiting to be emptied",
+                b"Elementos eliminados pendientes de vaciar",
+                b"Gel\xF6schte Elemente, die noch geleert werden m\xFCssen",
+            ]),
             102_400, // 100 Mo
         ),
         (
-            b"Miniatures",
-            b"Cache de miniatures d'images et de documents",
+            tr4(&[
+                b"Miniatures",
+                b"Thumbnails",
+                b"Miniaturas",
+                b"Miniaturansichten",
+            ]),
+            tr4(&[
+                b"Cache de miniatures d'images et de documents",
+                b"Thumbnail cache for pictures and documents",
+                b"Cach\xE9 de miniaturas de im\xE1genes y documentos",
+                b"Miniaturansicht-Cache f\xFCr Bilder und Dokumente",
+            ]),
             81_920, // 80 Mo
         ),
         (
-            b"Cache navigateur",
-            b"Pages, images et scripts mis en cache par le navigateur",
+            tr4(&[
+                b"Cache navigateur",
+                b"Browser cache",
+                b"Cach\xE9 del navegador",
+                b"Browser-Cache",
+            ]),
+            tr4(&[
+                b"Pages, images et scripts mis en cache par le navigateur",
+                b"Pages, images and scripts cached by the browser",
+                b"P\xE1ginas, im\xE1genes y scripts almacenados en cach\xE9 por el navegador",
+                b"Vom Browser zwischengespeicherte Seiten, Bilder und Skripte",
+            ]),
             358_400, // 350 Mo
         ),
         (
-            b"Fichiers de crash",
-            b"Rapports d'erreur et vidages m\xE9moire (core dumps)",
+            tr4(&[
+                b"Fichiers de crash",
+                b"Crash files",
+                b"Archivos de bloqueo",
+                b"Absturzdateien",
+            ]),
+            tr4(&[
+                b"Rapports d'erreur et vidages m\xE9moire (core dumps)",
+                b"Error reports and memory dumps (core dumps)",
+                b"Informes de errores y volcados de memoria (core dumps)",
+                b"Fehlerberichte und Speicherabbilder (Core-Dumps)",
+            ]),
             153_600, // 150 Mo
         ),
     ];
@@ -318,7 +383,12 @@ unsafe fn draw_initial(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text,
         x + w / 2,
         y + h / 4 + 36,
-        b"Nettoyage de disque",
+        tr4(&[
+            b"Nettoyage de disque",
+            b"Disk Cleanup",
+            b"Liberador de espacio en disco",
+            b"Datentr\xE4gerbereinigung",
+        ]),
     );
 
     // Description
@@ -329,7 +399,12 @@ unsafe fn draw_initial(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text2,
         x + w / 2,
         y + h / 4 + 60,
-        b"Analysez et lib\xE9rez de l'espace disque",
+        tr4(&[
+            b"Analysez et lib\xE9rez de l'espace disque",
+            b"Analyze and free up disk space",
+            b"Analice y libere espacio en disco",
+            b"Speicherplatz analysieren und freigeben",
+        ]),
     );
     text_centered(
         g.hdc,
@@ -338,7 +413,12 @@ unsafe fn draw_initial(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text2,
         x + w / 2,
         y + h / 4 + 78,
-        b"en supprimant les fichiers inutiles.",
+        tr4(&[
+            b"en supprimant les fichiers inutiles.",
+            b"by deleting unnecessary files.",
+            b"eliminando los archivos innecesarios.",
+            b"durch L\xF6schen unn\xF6tiger Dateien.",
+        ]),
     );
 
     // Info disque
@@ -346,7 +426,12 @@ unsafe fn draw_initial(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     if DISK_TOTAL_KB > 0 {
         let n = fmt_size_u64(&mut buf, DISK_FREE_KB);
         let mut line = [0u8; 64];
-        let prefix = b"Espace libre : ";
+        let prefix = tr4(&[
+            b"Espace libre : ",
+            b"Free space: ",
+            b"Espacio libre: ",
+            b"Freier Speicher: ",
+        ]);
         line[..prefix.len()].copy_from_slice(prefix);
         line[prefix.len()..prefix.len() + n].copy_from_slice(&buf[..n]);
         text_centered(
@@ -388,7 +473,12 @@ unsafe fn draw_initial(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         btn_fg,
         x + w / 2,
         btn_y + 10,
-        b"Analyser le disque",
+        tr4(&[
+            b"Analyser le disque",
+            b"Analyze disk",
+            b"Analizar el disco",
+            b"Datentr\xE4ger analysieren",
+        ]),
     );
 }
 
@@ -402,7 +492,12 @@ unsafe fn draw_scanning(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text,
         x + w / 2,
         y + h / 3 - 10,
-        b"Analyse en cours...",
+        tr4(&[
+            b"Analyse en cours...",
+            b"Analyzing...",
+            b"Analizando...",
+            b"Wird analysiert...",
+        ]),
     );
 
     // Barre de progression
@@ -489,7 +584,12 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text,
         x + 60,
         y + 12,
-        b"Nettoyage de disque",
+        tr4(&[
+            b"Nettoyage de disque",
+            b"Disk Cleanup",
+            b"Liberador de espacio en disco",
+            b"Datentr\xE4gerbereinigung",
+        ]),
     );
 
     // Espace à libérer
@@ -497,7 +597,12 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let mut buf = [0u8; 32];
     let n = fmt_size(&mut buf, total);
     let mut line_buf = [0u8; 64];
-    let prefix = b"Espace \xE0 lib\xE9rer : ";
+    let prefix = tr4(&[
+        b"Espace \xE0 lib\xE9rer : ",
+        b"Space to free up: ",
+        b"Espacio que se liberar\xE1: ",
+        b"Freizugebender Speicher: ",
+    ]);
     line_buf[..prefix.len()].copy_from_slice(prefix);
     line_buf[prefix.len()..prefix.len() + n].copy_from_slice(&buf[..n]);
     text(
@@ -702,7 +807,7 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         let mut size_buf = [0u8; 32];
         let sn = fmt_size(&mut size_buf, cat.size_kb);
         let mut line2 = [0u8; 48];
-        let prefix2 = b"Taille : ";
+        let prefix2 = tr4(&[b"Taille : ", b"Size: ", b"Tama\xF1o: ", b"Gr\xF6\xDFe: "]);
         line2[..prefix2.len()].copy_from_slice(prefix2);
         line2[prefix2.len()..prefix2.len() + sn].copy_from_slice(&size_buf[..sn]);
         text(
@@ -748,7 +853,7 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         clean_fg,
         clean_x + clean_w / 2,
         clean_y + 8,
-        b"Nettoyer",
+        tr4(&[b"Nettoyer", b"Clean up", b"Limpiar", b"Bereinigen"]),
     );
 
     // Bouton Annuler
@@ -772,7 +877,7 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text,
         cancel_x + cancel_w / 2,
         clean_y + 8,
-        b"Fermer",
+        tr4(&[b"Fermer", b"Close", b"Cerrar", b"Schlie\xDFen"]),
     );
 }
 
@@ -786,7 +891,12 @@ unsafe fn draw_cleaning(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text,
         x + w / 2,
         y + h / 3 - 10,
-        b"Nettoyage en cours...",
+        tr4(&[
+            b"Nettoyage en cours...",
+            b"Cleaning up...",
+            b"Limpiando...",
+            b"Wird bereinigt...",
+        ]),
     );
 
     // Barre de progression
@@ -842,7 +952,12 @@ unsafe fn draw_cleaning(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         for i in 0..CAT_COUNT {
             if CATS[i].checked {
                 if checked_idx == idx {
-                    let prefix = b"Suppression : ";
+                    let prefix = tr4(&[
+                        b"Suppression : ",
+                        b"Deleting: ",
+                        b"Eliminando: ",
+                        b"Wird gel\xF6scht: ",
+                    ]);
                     let mut line = [0u8; 80];
                     line[..prefix.len()].copy_from_slice(prefix);
                     let nlen = CATS[i].name_len.min(80 - prefix.len());
@@ -901,14 +1016,24 @@ unsafe fn draw_done(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text,
         x + w / 2,
         y + h / 4 + 44,
-        b"Nettoyage termin\xE9",
+        tr4(&[
+            b"Nettoyage termin\xE9",
+            b"Cleanup complete",
+            b"Limpieza completada",
+            b"Bereinigung abgeschlossen",
+        ]),
     );
 
     // Espace libéré
     let mut buf = [0u8; 32];
     let n = fmt_size(&mut buf, TOTAL_FREED);
     let mut line2 = [0u8; 64];
-    let prefix = b"Espace lib\xE9r\xE9 : ";
+    let prefix = tr4(&[
+        b"Espace lib\xE9r\xE9 : ",
+        b"Space freed: ",
+        b"Espacio liberado: ",
+        b"Freigegebener Speicher: ",
+    ]);
     line2[..prefix.len()].copy_from_slice(prefix);
     line2[prefix.len()..prefix.len() + n].copy_from_slice(&buf[..n]);
     text_centered(
@@ -925,7 +1050,12 @@ unsafe fn draw_done(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let new_free = DISK_FREE_KB + TOTAL_FREED as u64;
     let n2 = fmt_size_u64(&mut buf, new_free);
     let mut line3 = [0u8; 64];
-    let prefix2 = b"Espace libre : ";
+    let prefix2 = tr4(&[
+        b"Espace libre : ",
+        b"Free space: ",
+        b"Espacio libre: ",
+        b"Freier Speicher: ",
+    ]);
     line3[..prefix2.len()].copy_from_slice(prefix2);
     line3[prefix2.len()..prefix2.len() + n2].copy_from_slice(&buf[..n2]);
     text_centered(
@@ -962,7 +1092,7 @@ unsafe fn draw_done(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         btn_fg,
         x + w / 2,
         btn_y + 10,
-        b"Fermer",
+        tr4(&[b"Fermer", b"Close", b"Cerrar", b"Schlie\xDFen"]),
     );
 }
 

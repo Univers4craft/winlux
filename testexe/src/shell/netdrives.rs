@@ -212,7 +212,11 @@ unsafe fn get(i: usize) -> &'static [u8] {
 unsafe fn letter() -> u8 {
     if LETTER == 0 {
         let l = field(status(), b"next_letter");
-        LETTER = l.first().copied().filter(u8::is_ascii_uppercase).unwrap_or(b'N');
+        LETTER = l
+            .first()
+            .copied()
+            .filter(u8::is_ascii_uppercase)
+            .unwrap_or(b'N');
     }
     LETTER
 }
@@ -284,7 +288,14 @@ unsafe fn write_request() -> bool {
         }
     };
     put(b"letter", &[letter()]);
-    put(b"protocol", if PROTO < PROTOS.len() { PROTOS[PROTO].0 } else { b"" });
+    put(
+        b"protocol",
+        if PROTO < PROTOS.len() {
+            PROTOS[PROTO].0
+        } else {
+            b""
+        },
+    );
     put(b"host", get(F_HOST));
     put(b"port", get(F_PORT));
     put(b"user", get(F_USER));
@@ -306,7 +317,13 @@ unsafe fn write_request() -> bool {
         return false;
     }
     let mut written = 0u32;
-    let ok = WriteFile(h, buf.as_ptr(), n as u32, &mut written, core::ptr::null_mut());
+    let ok = WriteFile(
+        h,
+        buf.as_ptr(),
+        n as u32,
+        &mut written,
+        core::ptr::null_mut(),
+    );
     CloseHandle(h);
     // Le mot de passe ne reste pas en mémoire de l'interface.
     for b in buf.iter_mut() {
@@ -317,15 +334,30 @@ unsafe fn write_request() -> bool {
 
 unsafe fn submit(action: &core::ffi::CStr) {
     if PROTO >= PROTOS.len() || FLEN[F_HOST] == 0 {
-        crate::desktop::toast(b"Choisissez un type de connexion et l'adresse du serveur.");
+        crate::desktop::toast(tr4(&[
+            b"Choisissez un type de connexion et l'adresse du serveur.",
+            b"Choose a connection type and the server address.",
+            b"Elija un tipo de conexi\xF3n y la direcci\xF3n del servidor.",
+            b"W\xE4hlen Sie einen Verbindungstyp und die Serveradresse.",
+        ]));
         return;
     }
     if !write_request() {
-        crate::desktop::toast(b"Le service des lecteurs r\xE9seau n'est pas disponible.");
+        crate::desktop::toast(tr4(&[
+            b"Le service des lecteurs r\xE9seau n'est pas disponible.",
+            b"The network drive service is not available.",
+            b"El servicio de unidades de red no est\xE1 disponible.",
+            b"Der Netzlaufwerkdienst ist nicht verf\xFCgbar.",
+        ]));
         return;
     }
     if !run(action) {
-        crate::desktop::toast(b"winlux-drives est introuvable sur ce syst\xE8me.");
+        crate::desktop::toast(tr4(&[
+            b"winlux-drives est introuvable sur ce syst\xE8me.",
+            b"winlux-drives was not found on this system.",
+            b"No se encontr\xF3 winlux-drives en este sistema.",
+            b"winlux-drives wurde auf diesem System nicht gefunden.",
+        ]));
         return;
     }
     if action.to_bytes() == b"add" {
@@ -374,8 +406,18 @@ unsafe fn drives() -> &'static [u8] {
 }
 
 const DRIVE_H: i32 = 52;
-const AUTO_LABEL: &[u8] = b"Reconnecter \xE0 l'ouverture de session";
-const REMEMBER_LABEL: &[u8] = b"M\xE9moriser le mot de passe (chiffr\xE9)";
+const AUTO_LABEL: Tr4 = [
+    b"Reconnecter \xE0 l'ouverture de session",
+    b"Reconnect at sign-in",
+    b"Volver a conectar al iniciar sesi\xF3n",
+    b"Bei der Anmeldung wiederherstellen",
+];
+const REMEMBER_LABEL: Tr4 = [
+    b"M\xE9moriser le mot de passe (chiffr\xE9)",
+    b"Remember password (encrypted)",
+    b"Recordar la contrase\xF1a (cifrada)",
+    b"Kennwort speichern (verschl\xFCsselt)",
+];
 
 /// Défilement vertical de la page (molette) et zone réellement visible :
 /// un élément n'est dessiné et cliquable que s'il y tient entièrement.
@@ -402,7 +444,12 @@ fn drive_row(c: &Rect, i: usize) -> Rect {
 fn drive_buttons(r: &Rect) -> (Rect, Rect) {
     let w = 112;
     let remove = rect(r.right - w - 10, r.top + 11, r.right - 10, r.bottom - 11);
-    let toggle = rect(remove.left - w - 8, remove.top, remove.left - 8, remove.bottom);
+    let toggle = rect(
+        remove.left - w - 8,
+        remove.top,
+        remove.left - 8,
+        remove.bottom,
+    );
     (toggle, remove)
 }
 
@@ -469,8 +516,8 @@ unsafe fn letter_rects(c: &Rect) -> (Rect, Rect, Rect) {
 
 unsafe fn check_rect(c: &Rect, i: i32) -> Rect {
     let y = options_top(c);
-    let w0 = 34 + text_width(AUTO_LABEL, 13);
-    let w1 = 34 + text_width(REMEMBER_LABEL, 13);
+    let w0 = 34 + text_width(tr4(&AUTO_LABEL), 13);
+    let w1 = 34 + text_width(tr4(&REMEMBER_LABEL), 13);
     let x = c.left + 160 + if i == 0 { 0 } else { w0 + 20 };
     rect(x, y + 4, x + if i == 0 { w0 } else { w1 }, y + 28)
 }
@@ -575,7 +622,13 @@ unsafe fn button(g: &mut Gfx, r: &Rect, label: &[u8], id: i32, primary: bool, on
 }
 
 fn human_size(mut v: u64, out: &mut [u8; 24]) -> usize {
-    let units: [&[u8]; 5] = [b" o", b" Ko", b" Mo", b" Go", b" To"];
+    let units: [&[u8]; 5] = [
+        tr4(&[b" o", b" B", b" B", b" B"]),
+        tr4(&[b" Ko", b" KB", b" KB", b" KB"]),
+        tr4(&[b" Mo", b" MB", b" MB", b" MB"]),
+        tr4(&[b" Go", b" GB", b" GB", b" GB"]),
+        tr4(&[b" To", b" TB", b" TB", b" TB"]),
+    ];
     let mut u = 0;
     while v >= 10 * 1024 && u < units.len() - 1 {
         v /= 1024;
@@ -606,7 +659,9 @@ fn human_size(mut v: u64, out: &mut [u8; 24]) -> usize {
 fn parse_u64(s: &[u8]) -> u64 {
     s.iter()
         .take_while(|c| c.is_ascii_digit())
-        .fold(0u64, |n, &c| n.saturating_mul(10).saturating_add((c - b'0') as u64))
+        .fold(0u64, |n, &c| {
+            n.saturating_mul(10).saturating_add((c - b'0') as u64)
+        })
 }
 
 unsafe fn draw_drive(g: &mut Gfx, c: &Rect, i: usize, l: u8) {
@@ -625,11 +680,37 @@ unsafe fn draw_drive(g: &mut Gfx, c: &Rect, i: usize, l: u8) {
         a
     };
     let (name, proto, host, state, space) = (parts[0], parts[1], parts[2], parts[8], parts[9]);
-    panel(g.hdc, g.b, r.left - 8, r.top, r.right + 8, r.bottom, 8, p.surface, p.border);
+    panel(
+        g.hdc,
+        g.b,
+        r.left - 8,
+        r.top,
+        r.right + 8,
+        r.bottom,
+        8,
+        p.surface,
+        p.border,
+    );
     glyph(g.hdc, g.b, g.f, Glyph::Drive, r.left + 4, r.top + 13, 30);
     // Petite prise réseau sous l'icône du disque.
-    fill(g.hdc, g.b, r.left + 17, r.top + 41, r.left + 21, r.top + 47, p.text2);
-    fill(g.hdc, g.b, r.left + 9, r.top + 47, r.left + 29, r.top + 49, p.text2);
+    fill(
+        g.hdc,
+        g.b,
+        r.left + 17,
+        r.top + 41,
+        r.left + 21,
+        r.top + 47,
+        p.text2,
+    );
+    fill(
+        g.hdc,
+        g.b,
+        r.left + 9,
+        r.top + 47,
+        r.left + 29,
+        r.top + 49,
+        p.text2,
+    );
     let mut title = [0u8; 96];
     let mut n = 0;
     for &ch in name.iter().take(80).chain(b" (").chain(&[l, b':', b')']) {
@@ -639,13 +720,57 @@ unsafe fn draw_drive(g: &mut Gfx, c: &Rect, i: usize, l: u8) {
     let tx = r.left + 46;
     let (toggle, remove) = drive_buttons(&r);
     let max_w = toggle.left - tx - 10;
-    text_fit(g.hdc, g.f.semibold, 13, p.text, tx, r.top + 9, &title[..n], max_w);
+    text_fit(
+        g.hdc,
+        g.f.semibold,
+        13,
+        p.text,
+        tx,
+        r.top + 9,
+        &title[..n],
+        max_w,
+    );
     let (state_txt, color): (&[u8], u32) = match state {
-        b"ok" => (b"Connect\xE9", rgb(0x2E, 0xA0, 0x43)),
-        b"connecting" => (b"Connexion en cours\x85", p.accent),
-        b"offline" => (b"Hors ligne : reconnexion automatique", rgb(0xD1, 0x34, 0x38)),
-        b"password" => (b"Mot de passe requis", rgb(0xC1, 0x7C, 0x00)),
-        _ => (b"D\xE9connect\xE9", p.text3),
+        b"ok" => (
+            tr4(&[b"Connect\xE9", b"Connected", b"Conectado", b"Verbunden"]),
+            rgb(0x2E, 0xA0, 0x43),
+        ),
+        b"connecting" => (
+            tr4(&[
+                b"Connexion en cours\x85",
+                b"Connecting\x85",
+                b"Conectando\x85",
+                b"Verbindung wird hergestellt\x85",
+            ]),
+            p.accent,
+        ),
+        b"offline" => (
+            tr4(&[
+                b"Hors ligne : reconnexion automatique",
+                b"Offline: reconnecting automatically",
+                b"Sin conexi\xF3n: reconexi\xF3n autom\xE1tica",
+                b"Offline: automatische Wiederverbindung",
+            ]),
+            rgb(0xD1, 0x34, 0x38),
+        ),
+        b"password" => (
+            tr4(&[
+                b"Mot de passe requis",
+                b"Password required",
+                b"Se necesita la contrase\xF1a",
+                b"Kennwort erforderlich",
+            ]),
+            rgb(0xC1, 0x7C, 0x00),
+        ),
+        _ => (
+            tr4(&[
+                b"D\xE9connect\xE9",
+                b"Disconnected",
+                b"Desconectado",
+                b"Getrennt",
+            ]),
+            p.text3,
+        ),
     };
     let mut sub = [0u8; 200];
     let mut m = 0;
@@ -673,21 +798,46 @@ unsafe fn draw_drive(g: &mut Gfx, c: &Rect, i: usize, l: u8) {
         let nt = human_size(parse_u64(&space[slash + 1..]), &mut t);
         push(b"  \xB7  ");
         push(&a[..na]);
-        push(b" libres sur ");
+        push(tr4(&[
+            b" libres sur ",
+            b" free of ",
+            b" libres de ",
+            b" frei von ",
+        ]));
         push(&t[..nt]);
     }
     fill(g.hdc, g.b, tx, r.top + 36, tx + 8, r.top + 44, color);
-    text_fit(g.hdc, g.f.small, 11, p.text2, tx + 14, r.top + 32, &sub[..m], max_w - 14);
+    text_fit(
+        g.hdc,
+        g.f.small,
+        11,
+        p.text2,
+        tx + 14,
+        r.top + 32,
+        &sub[..m],
+        max_w - 14,
+    );
     let connected = state == b"ok" || state == b"connecting";
     button(
         g,
         &toggle,
-        if connected { b"D\xE9connecter" } else { b"Connecter" },
+        if connected {
+            tr4(&[b"D\xE9connecter", b"Disconnect", b"Desconectar", b"Trennen"])
+        } else {
+            tr4(&[b"Connecter", b"Connect", b"Conectar", b"Verbinden"])
+        },
         hit_id(Hit::Toggle(i)),
         false,
         false,
     );
-    button(g, &remove, b"Supprimer", hit_id(Hit::Remove(i)), false, false);
+    button(
+        g,
+        &remove,
+        tr4(&[b"Supprimer", b"Remove", b"Quitar", b"Entfernen"]),
+        hit_id(Hit::Remove(i)),
+        false,
+        false,
+    );
 }
 
 unsafe fn draw_field(g: &mut Gfx, c: &Rect, i: usize) {
@@ -699,16 +849,56 @@ unsafe fn draw_field(g: &mut Gfx, c: &Rect, i: usize) {
     let s3 = PROTO < PROTOS.len() && PROTOS[PROTO].0 == b"s3";
     let smb = PROTO < PROTOS.len() && PROTOS[PROTO].0 == b"smb";
     let label: &[u8] = match i {
-        F_HOST => b"Adresse du serveur",
+        F_HOST => tr4(&[
+            b"Adresse du serveur",
+            b"Server address",
+            b"Direcci\xF3n del servidor",
+            b"Serveradresse",
+        ]),
         F_PORT => b"Port",
-        F_USER if s3 => b"Cl\xE9 d'acc\xE8s",
-        F_USER => b"Identifiant (vide = anonyme)",
-        F_PASS if s3 => b"Cl\xE9 secr\xE8te",
-        F_PASS => b"Mot de passe",
-        F_PATH if s3 => b"Bucket et dossier (bucket/dossier)",
-        F_PATH if smb => b"Partage et dossier (Partage/dossier)",
-        F_PATH => b"Dossier distant (facultatif)",
-        _ => b"Nom affich\xE9 dans Ce PC",
+        F_USER if s3 => tr4(&[
+            b"Cl\xE9 d'acc\xE8s",
+            b"Access key",
+            b"Clave de acceso",
+            b"Zugriffsschl\xFCssel",
+        ]),
+        F_USER => tr4(&[
+            b"Identifiant (vide = anonyme)",
+            b"User name (empty = anonymous)",
+            b"Usuario (vac\xEDo = an\xF3nimo)",
+            b"Benutzername (leer = anonym)",
+        ]),
+        F_PASS if s3 => tr4(&[
+            b"Cl\xE9 secr\xE8te",
+            b"Secret key",
+            b"Clave secreta",
+            b"Geheimer Schl\xFCssel",
+        ]),
+        F_PASS => tr4(&[b"Mot de passe", b"Password", b"Contrase\xF1a", b"Kennwort"]),
+        F_PATH if s3 => tr4(&[
+            b"Bucket et dossier (bucket/dossier)",
+            b"Bucket and folder (bucket/folder)",
+            b"Bucket y carpeta (bucket/carpeta)",
+            b"Bucket und Ordner (Bucket/Ordner)",
+        ]),
+        F_PATH if smb => tr4(&[
+            b"Partage et dossier (Partage/dossier)",
+            b"Share and folder (Share/folder)",
+            b"Recurso compartido y carpeta (Recurso/carpeta)",
+            b"Freigabe und Ordner (Freigabe/Ordner)",
+        ]),
+        F_PATH => tr4(&[
+            b"Dossier distant (facultatif)",
+            b"Remote folder (optional)",
+            b"Carpeta remota (opcional)",
+            b"Remoter Ordner (optional)",
+        ]),
+        _ => tr4(&[
+            b"Nom affich\xE9 dans Ce PC",
+            b"Name shown in This PC",
+            b"Nombre que se muestra en Este equipo",
+            b"In \x84Dieser PC\x93 angezeigter Name",
+        ]),
     };
     text(g.hdc, g.f.small, p.text2, r.left, r.top - 19, label);
     let focused = FOCUS == i;
@@ -730,7 +920,15 @@ unsafe fn draw_field(g: &mut Gfx, c: &Rect, i: usize) {
         },
     );
     if focused {
-        fill(g.hdc, g.b, r.left + 4, r.bottom - 2, r.right - 4, r.bottom, p.accent);
+        fill(
+            g.hdc,
+            g.b,
+            r.left + 4,
+            r.bottom - 2,
+            r.right - 4,
+            r.bottom,
+            p.accent,
+        );
     }
     let mut shown = [0u8; FIELD_CAP + 1];
     let mut n = FLEN[i];
@@ -752,14 +950,26 @@ unsafe fn draw_field(g: &mut Gfx, c: &Rect, i: usize) {
     }
     if FLEN[i] == 0 && !focused {
         let hint: &[u8] = match i {
-            F_HOST => b"ex. 192.168.1.20 ou nas.local",
-            F_PATH if smb => b"Documents",
+            F_HOST => tr4(&[
+                b"ex. 192.168.1.20 ou nas.local",
+                b"e.g. 192.168.1.20 or nas.local",
+                b"p. ej. 192.168.1.20 o nas.local",
+                b"z. B. 192.168.1.20 oder nas.local",
+            ]),
+            F_PATH if smb => tr4(&[b"Documents", b"Documents", b"Documentos", b"Dokumente"]),
             F_PATH => b"/",
             _ => b"",
         };
         text(g.hdc, g.f.body, p.text3, r.left + 10, r.top + 8, hint);
     } else {
-        text(g.hdc, g.f.body, p.text, r.left + 10, r.top + 8, &shown[start..n]);
+        text(
+            g.hdc,
+            g.f.body,
+            p.text,
+            r.left + 10,
+            r.top + 8,
+            &shown[start..n],
+        );
     }
 }
 
@@ -780,7 +990,14 @@ unsafe fn checkbox(g: &mut Gfx, r: &Rect, on: bool, label: &[u8], id: i32) {
         if on || HOVER == id { p.accent } else { p.text3 },
     );
     if on {
-        text(g.hdc, g.f.small, p.on_accent, r.left + 5, r.top + 4, b"\xD7");
+        text(
+            g.hdc,
+            g.f.small,
+            p.on_accent,
+            r.left + 5,
+            r.top + 4,
+            b"\xD7",
+        );
     }
     text(g.hdc, g.f.body, p.text, r.left + 28, r.top + 3, label);
 }
@@ -798,20 +1015,35 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
             p.text2,
             c.left,
             c.top + 44,
-            b"Ajoutez un serveur distant : il appara\xEEt dans Ce PC comme un disque, avec sa lettre.",
+            tr4(&[b"Ajoutez un serveur distant : il appara\xEEt dans Ce PC comme un disque, avec sa lettre.", b"Add a remote server: it appears in This PC as a drive, with its own letter.", b"Agregue un servidor remoto: aparecer\xE1 en Este equipo como una unidad, con su letra.", b"F\xFCgen Sie einen Remoteserver hinzu: Er erscheint in \x84Dieser PC\x93 als Laufwerk mit eigenem Buchstaben."]),
         );
     }
     let list = drives();
     if list.is_empty() && shown(&drive_row(c, 0)) {
         let r = drive_row(c, 0);
-        panel(g.hdc, g.b, r.left - 8, r.top, r.right + 8, r.bottom, 8, p.surface, p.border);
+        panel(
+            g.hdc,
+            g.b,
+            r.left - 8,
+            r.top,
+            r.right + 8,
+            r.bottom,
+            8,
+            p.surface,
+            p.border,
+        );
         text(
             g.hdc,
             g.f.body,
             p.text3,
             r.left + 6,
             r.top + 20,
-            b"Aucun lecteur r\xE9seau pour l'instant.",
+            tr4(&[
+                b"Aucun lecteur r\xE9seau pour l'instant.",
+                b"No network drives yet.",
+                b"Todav\xEDa no hay unidades de red.",
+                b"Noch keine Netzlaufwerke.",
+            ]),
         );
     }
     for (i, &l) in list.iter().enumerate() {
@@ -827,9 +1059,19 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
             c.left,
             top,
             if EDITING != 0 {
-                b"Modifier le lecteur r\xE9seau"
+                tr4(&[
+                    b"Modifier le lecteur r\xE9seau",
+                    b"Edit network drive",
+                    b"Modificar la unidad de red",
+                    b"Netzlaufwerk bearbeiten",
+                ])
             } else {
-                b"Connecter un lecteur r\xE9seau"
+                tr4(&[
+                    b"Connecter un lecteur r\xE9seau",
+                    b"Map network drive",
+                    b"Conectar a unidad de red",
+                    b"Netzlaufwerk verbinden",
+                ])
             },
         );
     }
@@ -859,9 +1101,19 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
             c.left,
             top + 34,
             if STATUS_LEN == 0 {
-                b"Recherche des types de connexion disponibles\x85".as_slice()
+                tr4(&[
+                    b"Recherche des types de connexion disponibles\x85",
+                    b"Looking for available connection types\x85",
+                    b"Buscando los tipos de conexi\xF3n disponibles\x85",
+                    b"Verf\xFCgbare Verbindungstypen werden gesucht\x85",
+                ])
             } else {
-                b"Aucun outil de montage r\xE9seau n'est install\xE9 sur ce syst\xE8me.".as_slice()
+                tr4(&[
+                    b"Aucun outil de montage r\xE9seau n'est install\xE9 sur ce syst\xE8me.",
+                    b"No network mount tool is installed on this system.",
+                    b"No hay ninguna herramienta de montaje de red instalada en este sistema.",
+                    b"Auf diesem System ist kein Netzwerk-Einh\xE4ngewerkzeug installiert.",
+                ])
             },
         );
     }
@@ -874,13 +1126,30 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
         if shown(&r) {
             let mut line = [0u8; 300];
             let mut n = 0;
-            for &ch in b"Non propos\xE9s ici : ".iter().chain(missing) {
+            for &ch in tr4(&[
+                b"Non propos\xE9s ici : ",
+                b"Not offered here: ",
+                b"No disponibles aqu\xED: ",
+                b"Hier nicht angeboten: ",
+            ])
+            .iter()
+            .chain(missing)
+            {
                 if n < line.len() {
                     line[n] = ch;
                     n += 1;
                 }
             }
-            text_fit(g.hdc, g.f.small, 11, p.text3, r.left, r.top, &line[..n], r.right - r.left);
+            text_fit(
+                g.hdc,
+                g.f.small,
+                11,
+                p.text3,
+                r.left,
+                r.top,
+                &line[..n],
+                r.right - r.left,
+            );
         }
     }
     if slot == 0 {
@@ -891,9 +1160,18 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
     }
     let (prev, mid, next) = letter_rects(c);
     if shown(&rect(prev.left, prev.top - 20, next.right, next.bottom)) {
-        text(g.hdc, g.f.small, p.text2, prev.left, prev.top - 19, b"Lettre");
+        text(
+            g.hdc,
+            g.f.small,
+            p.text2,
+            prev.left,
+            prev.top - 19,
+            tr4(&[b"Lettre", b"Letter", b"Letra", b"Buchstabe"]),
+        );
         button(g, &prev, b"<", hit_id(Hit::LetterPrev), false, false);
-        panel(g.hdc, g.b, mid.left, mid.top, mid.right, mid.bottom, 5, p.window, p.border);
+        panel(
+            g.hdc, g.b, mid.left, mid.top, mid.right, mid.bottom, 5, p.window, p.border,
+        );
         text_centered(
             g.hdc,
             g.f.semibold,
@@ -909,20 +1187,25 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
         g,
         &check_rect(c, 0),
         AUTO,
-        AUTO_LABEL,
+        tr4(&AUTO_LABEL),
         hit_id(Hit::Auto),
     );
     checkbox(
         g,
         &check_rect(c, 1),
         REMEMBER,
-        REMEMBER_LABEL,
+        tr4(&REMEMBER_LABEL),
         hit_id(Hit::Remember),
     );
     button(
         g,
         &action_rect(c, 0),
-        b"Tester la connexion",
+        tr4(&[
+            b"Tester la connexion",
+            b"Test connection",
+            b"Probar la conexi\xF3n",
+            b"Verbindung testen",
+        ]),
         hit_id(Hit::Test),
         false,
         false,
@@ -931,9 +1214,19 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
         g,
         &action_rect(c, 1),
         if EDITING != 0 {
-            b"Enregistrer et reconnecter"
+            tr4(&[
+                b"Enregistrer et reconnecter",
+                b"Save and reconnect",
+                b"Guardar y volver a conectar",
+                b"Speichern und neu verbinden",
+            ])
         } else {
-            b"Enregistrer et connecter"
+            tr4(&[
+                b"Enregistrer et connecter",
+                b"Save and connect",
+                b"Guardar y conectar",
+                b"Speichern und verbinden",
+            ])
         },
         hit_id(Hit::Save),
         true,
@@ -942,7 +1235,12 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
     button(
         g,
         &action_rect(c, 2),
-        b"Effacer le formulaire",
+        tr4(&[
+            b"Effacer le formulaire",
+            b"Clear form",
+            b"Borrar el formulario",
+            b"Formular leeren",
+        ]),
         hit_id(Hit::Clear),
         false,
         false,
@@ -952,7 +1250,19 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
         return;
     }
     if PENDING {
-        text(g.hdc, g.f.body, p.accent, c.left, msg_y, b"Connexion au serveur en cours\x85");
+        text(
+            g.hdc,
+            g.f.body,
+            p.accent,
+            c.left,
+            msg_y,
+            tr4(&[
+                b"Connexion au serveur en cours\x85",
+                b"Connecting to the server\x85",
+                b"Conectando con el servidor\x85",
+                b"Verbindung zum Server wird hergestellt\x85",
+            ]),
+        );
     } else {
         let msg = field(status(), b"message");
         if !msg.is_empty() {
@@ -961,7 +1271,11 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
                 g.hdc,
                 g.f.body,
                 13,
-                if ok { rgb(0x2E, 0xA0, 0x43) } else { rgb(0xD1, 0x34, 0x38) },
+                if ok {
+                    rgb(0x2E, 0xA0, 0x43)
+                } else {
+                    rgb(0xD1, 0x34, 0x38)
+                },
                 c.left,
                 msg_y,
                 msg,
@@ -1001,7 +1315,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, real: &Rect) -> bool {
             let mut l = letter();
             loop {
                 l = if h == Hit::LetterNext {
-                    if l >= b'Y' { b'D' } else { l + 1 }
+                    if l >= b'Y' {
+                        b'D'
+                    } else {
+                        l + 1
+                    }
                 } else if l <= b'D' {
                     b'Y'
                 } else {
@@ -1041,7 +1359,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, real: &Rect) -> bool {
             if let Ok(s) = core::ffi::CStr::from_bytes_until_nul(&args) {
                 run(s);
             }
-            if !connected && field(status(), &key).windows(10).any(|w| w == b"|password|") {
+            if !connected
+                && field(status(), &key)
+                    .windows(10)
+                    .any(|w| w == b"|password|")
+            {
                 edit(l);
             }
         }
