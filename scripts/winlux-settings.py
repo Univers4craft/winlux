@@ -29,6 +29,12 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    'Echec de la mise à jour : ': ('Update failed: ', 'Error en la actualización: ', 'Update fehlgeschlagen: '),
+    'aucun détail dans le journal': ('no details in the log', 'ningún detalle en el registro', 'keine Details im Protokoll'),
+    "Echec de l'operation. Le journal indique la cause.": ('The operation failed. The log shows the cause.', 'La operación ha fallado. El registro indica la causa.', 'Der Vorgang ist fehlgeschlagen. Die Ursache steht im Protokoll.'),
+    'Operation en cours...': ('Operation in progress...', 'Operación en curso...', 'Vorgang läuft...'),
+    'Operation terminee.': ('Operation complete.', 'Operación terminada.', 'Vorgang abgeschlossen.'),
+    'Une operation est deja en cours. Consultez le journal.': ('An operation is already in progress. See the log.', 'Ya hay una operación en curso. Consulte el registro.', 'Es läuft bereits ein Vorgang. Siehe Protokoll.'),
     'Version installée : ': ('Installed version: ', 'Versión instalada: ', 'Installierte Version: '),
     'Version disponible : ': ('Available version: ', 'Versión disponible: ', 'Verfügbare Version: '),
     'Action en attente : ': ('Pending action: ', 'Acción pendiente: ', 'Ausstehende Aktion: '),
@@ -269,7 +275,7 @@ def gpu_summary():
 # Rapport de winlux-update (toujours écrit en français) : traduit à l'affichage.
 UPDATE_PREFIXES = ("Version installée : ", "Version disponible : ", "Action en attente : ", "Portée : ",
                    "Composants : ", "Taille à télécharger : ", "Taille décompressée : ",
-                   "Action après installation : ")
+                   "Action après installation : ", "Echec de la mise à jour : ")
 UPDATE_SUFFIXES = (" octets", " Kio (hors sauvegarde et marge)")
 
 
@@ -457,7 +463,7 @@ class Settings(Gtk.Window):
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
         if self.state.get_text() != text: self.state.set_text(text)
-        if self.process is None: self.notice.set_text(read("/run/winlux/action.txt").strip())
+        if self.process is None: self.notice.set_text(localize_update_text(read("/run/winlux/action.txt").strip()))
         progress = dict(line.split("=", 1) for line in read("/run/winlux/update-progress").splitlines() if "=" in line)
         try: percent = int(progress.get("percent", "-1"))
         except ValueError: percent = -1
