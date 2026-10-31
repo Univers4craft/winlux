@@ -26,7 +26,8 @@ def owned_paths(root):
 def winlux_path(relative):
     if relative == "usr/share/winlux/kernel-version": return False
     return (relative.startswith(("usr/bin/winlux", "usr/share/winlux/", "opt/winlux/",
-                                "usr/share/themes/Winlux/", "usr/share/xfce4/helpers/winlux"))
+                                "usr/share/themes/Winlux/", "usr/share/icons/Winlux/",
+                                "usr/share/xfce4/helpers/winlux"))
             or relative.startswith("usr/share/applications/winlux")
             or relative == "usr/share/mime/packages/winlux.xml"
             or relative == "usr/share/dbus-1/services/org.freedesktop.Notifications.service"
