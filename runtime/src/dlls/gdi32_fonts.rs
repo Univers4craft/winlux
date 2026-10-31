@@ -221,8 +221,10 @@ fn name_string(table: &[u8], name_id: u16) -> Option<String> {
         let (rank, text) = match (platform, encoding) {
             (3, 1 | 10) | (0, _) => {
                 let units: Vec<u16> = raw
-                    .chunks_exact(2)
-                    .map(|c| u16::from_be_bytes([c[0], c[1]]))
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
+                    .map(|c| u16::from_be_bytes(*c))
                     .collect();
                 let rank = if platform == 3 && lang == 0x0409 {
                     0
