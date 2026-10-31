@@ -5820,32 +5820,46 @@ pub unsafe extern "win64" fn lc_map_string_w(
 // ---------- API supplémentaires pour Electron / Chromium ----------
 
 pub unsafe extern "win64" fn get_product_info(
-    _major: u32, _minor: u32, _sp_major: u32, _sp_minor: u32, product_type: *mut u32,
+    _major: u32,
+    _minor: u32,
+    _sp_major: u32,
+    _sp_minor: u32,
+    product_type: *mut u32,
 ) -> i32 {
-    if !product_type.is_null() { *product_type = 0x30; } // PRODUCT_PROFESSIONAL
+    if !product_type.is_null() {
+        *product_type = 0x30;
+    } // PRODUCT_PROFESSIONAL
     1
 }
 
 pub unsafe extern "win64" fn get_time_zone_information(tz: *mut u8) -> u32 {
-    if tz.is_null() { return u32::MAX; }
+    if tz.is_null() {
+        return u32::MAX;
+    }
     std::ptr::write_bytes(tz, 0, 172);
     0 // TIME_ZONE_ID_UNKNOWN
 }
 
 pub unsafe extern "win64" fn get_dynamic_time_zone_information(tz: *mut u8) -> u32 {
-    if tz.is_null() { return u32::MAX; }
+    if tz.is_null() {
+        return u32::MAX;
+    }
     std::ptr::write_bytes(tz, 0, 288);
     0
 }
 
 pub unsafe extern "win64" fn system_time_to_file_time(st: *const u16, ft: *mut u64) -> i32 {
-    if st.is_null() || ft.is_null() { return 0; }
+    if st.is_null() || ft.is_null() {
+        return 0;
+    }
     *ft = 132_000_000_000_000_000; // approximate epoch
     1
 }
 
 pub unsafe extern "win64" fn file_time_to_system_time(ft: *const u64, st: *mut u16) -> i32 {
-    if ft.is_null() || st.is_null() { return 0; }
+    if ft.is_null() || st.is_null() {
+        return 0;
+    }
     // return 2024-01-01 00:00:00 as placeholder
     let fields: [u16; 8] = [2024, 1, 1, 1, 0, 0, 0, 0];
     std::ptr::copy_nonoverlapping(fields.as_ptr(), st, 8);
@@ -5853,31 +5867,46 @@ pub unsafe extern "win64" fn file_time_to_system_time(ft: *const u64, st: *mut u
 }
 
 pub unsafe extern "win64" fn file_time_to_local_file_time(ft: *const u64, local: *mut u64) -> i32 {
-    if ft.is_null() || local.is_null() { return 0; }
+    if ft.is_null() || local.is_null() {
+        return 0;
+    }
     *local = *ft;
     1
 }
 
 pub unsafe extern "win64" fn system_time_to_tz_specific_local_time(
-    _tz: usize, _universal: *const u16, local: *mut u16,
+    _tz: usize,
+    _universal: *const u16,
+    local: *mut u16,
 ) -> i32 {
-    if local.is_null() { return 0; }
+    if local.is_null() {
+        return 0;
+    }
     get_local_time(local as *mut SystemTime);
     1
 }
 
 pub unsafe extern "win64" fn get_system_time(st: *mut u16) {
-    if st.is_null() { return; }
+    if st.is_null() {
+        return;
+    }
     let now = chrono_utc_fields();
     let fields: [u16; 8] = [now.0, now.1, now.2, now.3, now.4, now.5, now.6, now.7];
     std::ptr::copy_nonoverlapping(fields.as_ptr(), st, 8);
 }
 
 fn chrono_utc_fields() -> (u16, u16, u16, u16, u16, u16, u16, u16) {
-    let mut tv = libc::timeval { tv_sec: 0, tv_usec: 0 };
-    unsafe { libc::gettimeofday(&mut tv, std::ptr::null_mut()); }
+    let mut tv = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    unsafe {
+        libc::gettimeofday(&mut tv, std::ptr::null_mut());
+    }
     let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::gmtime_r(&tv.tv_sec, &mut tm); }
+    unsafe {
+        libc::gmtime_r(&tv.tv_sec, &mut tm);
+    }
     (
         (tm.tm_year + 1900) as u16,
         (tm.tm_mon + 1) as u16,
@@ -5891,43 +5920,71 @@ fn chrono_utc_fields() -> (u16, u16, u16, u16, u16, u16, u16, u16) {
 }
 
 pub unsafe extern "win64" fn get_process_times(
-    _proc: usize, creation: *mut u64, exit: *mut u64, kernel: *mut u64, user: *mut u64,
+    _proc: usize,
+    creation: *mut u64,
+    exit: *mut u64,
+    kernel: *mut u64,
+    user: *mut u64,
 ) -> i32 {
     let now = get_tick_count64() * 10_000; // 100ns units
-    if !creation.is_null() { *creation = 132_000_000_000_000_000; }
-    if !exit.is_null() { *exit = 0; }
-    if !kernel.is_null() { *kernel = now / 4; }
-    if !user.is_null() { *user = now; }
+    if !creation.is_null() {
+        *creation = 132_000_000_000_000_000;
+    }
+    if !exit.is_null() {
+        *exit = 0;
+    }
+    if !kernel.is_null() {
+        *kernel = now / 4;
+    }
+    if !user.is_null() {
+        *user = now;
+    }
     1
 }
 
 pub unsafe extern "win64" fn get_thread_times(
-    _thread: usize, creation: *mut u64, exit: *mut u64, kernel: *mut u64, user: *mut u64,
+    _thread: usize,
+    creation: *mut u64,
+    exit: *mut u64,
+    kernel: *mut u64,
+    user: *mut u64,
 ) -> i32 {
     get_process_times(0, creation, exit, kernel, user)
 }
 
-pub unsafe extern "win64" fn set_handle_information(_h: usize, _mask: u32, _flags: u32) -> i32 { 1 }
+pub unsafe extern "win64" fn set_handle_information(_h: usize, _mask: u32, _flags: u32) -> i32 {
+    1
+}
 pub unsafe extern "win64" fn get_handle_information(_h: usize, flags: *mut u32) -> i32 {
-    if !flags.is_null() { *flags = 0; }
+    if !flags.is_null() {
+        *flags = 0;
+    }
     1
 }
 pub unsafe extern "win64" fn duplicate_handle(
-    _src_process: usize, src_handle: usize, _dst_process: usize, dst_handle: *mut usize,
-    _access: u32, _inherit: i32, _options: u32,
+    _src_process: usize,
+    src_handle: usize,
+    _dst_process: usize,
+    dst_handle: *mut usize,
+    _access: u32,
+    _inherit: i32,
+    _options: u32,
 ) -> i32 {
-    if !dst_handle.is_null() { *dst_handle = src_handle; }
+    if !dst_handle.is_null() {
+        *dst_handle = src_handle;
+    }
     1
 }
 
 pub unsafe extern "win64" fn create_event_w(
-    _sa: usize, manual: i32, initial: i32, _name: *const u16,
+    _sa: usize,
+    manual: i32,
+    initial: i32,
+    _name: *const u16,
 ) -> usize {
     create_event_a(_sa, manual, initial, std::ptr::null())
 }
-pub unsafe extern "win64" fn create_mutex_w(
-    _sa: usize, owner: i32, _name: *const u16,
-) -> usize {
+pub unsafe extern "win64" fn create_mutex_w(_sa: usize, owner: i32, _name: *const u16) -> usize {
     create_mutex_a(_sa, owner, std::ptr::null())
 }
 
@@ -5936,9 +5993,13 @@ pub extern "win64" fn get_process_id(_process: usize) -> u32 {
 }
 
 pub unsafe extern "win64" fn get_module_handle_ex_w(
-    flags: u32, module: *const u16, handle: *mut usize,
+    flags: u32,
+    module: *const u16,
+    handle: *mut usize,
 ) -> i32 {
-    if handle.is_null() { return 0; }
+    if handle.is_null() {
+        return 0;
+    }
     if flags & 4 != 0 {
         // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
         if let Some(m) = crate::loader::find_module_by_addr(module as usize) {
@@ -5946,26 +6007,39 @@ pub unsafe extern "win64" fn get_module_handle_ex_w(
             return 1;
         }
     }
-    let name = if module.is_null() { String::new() } else { crate::dlls::wstr(module) };
+    let name = if module.is_null() {
+        String::new()
+    } else {
+        crate::dlls::wstr(module)
+    };
     if name.is_empty() {
-        if let Some(m) = crate::loader::main_module() { *handle = m.base; return 1; }
+        if let Some(m) = crate::loader::main_module() {
+            *handle = m.base;
+            return 1;
+        }
     }
-    if let Some(h) = crate::dlls::module_handle(&name) { *handle = h; return 1; }
+    if let Some(h) = crate::dlls::module_handle(&name) {
+        *handle = h;
+        return 1;
+    }
     *handle = 0;
     crate::process::set_last_error(126);
     0
 }
 
 pub unsafe extern "win64" fn create_semaphore_w(
-    _sa: usize, initial: i32, maximum: i32, _name: *const u16,
+    _sa: usize,
+    initial: i32,
+    maximum: i32,
+    _name: *const u16,
 ) -> usize {
-    if initial < 0 || maximum <= 0 || initial > maximum { return 0; }
+    if initial < 0 || maximum <= 0 || initial > maximum {
+        return 0;
+    }
     let event = create_event_a(0, 1, if initial > 0 { 1 } else { 0 }, std::ptr::null());
     event
 }
-pub unsafe extern "win64" fn release_semaphore(
-    h: usize, _count: i32, _prev: *mut i32,
-) -> i32 {
+pub unsafe extern "win64" fn release_semaphore(h: usize, _count: i32, _prev: *mut i32) -> i32 {
     set_event(h)
 }
 
@@ -5974,39 +6048,70 @@ pub unsafe extern "win64" fn sleep_ex(ms: u32, _alertable: i32) -> u32 {
     0
 }
 
-pub unsafe extern "win64" fn wait_for_single_object_ex(
-    h: usize, ms: u32, _alertable: i32,
-) -> u32 {
+pub unsafe extern "win64" fn wait_for_single_object_ex(h: usize, ms: u32, _alertable: i32) -> u32 {
     wait_for_single_object(h, ms)
 }
 
 pub unsafe extern "win64" fn signal_object_and_wait(
-    to_signal: usize, to_wait: usize, ms: u32, _alertable: i32,
+    to_signal: usize,
+    to_wait: usize,
+    ms: u32,
+    _alertable: i32,
 ) -> u32 {
     set_event(to_signal);
     wait_for_single_object(to_wait, ms)
 }
 
 pub unsafe extern "win64" fn create_named_pipe_w(
-    name: *const u16, open_mode: u32, pipe_mode: u32, max_instances: u32,
-    out_size: u32, in_size: u32, timeout: u32, sa: usize,
+    name: *const u16,
+    open_mode: u32,
+    pipe_mode: u32,
+    max_instances: u32,
+    out_size: u32,
+    in_size: u32,
+    timeout: u32,
+    sa: usize,
 ) -> usize {
     let n = crate::dlls::wstr(name);
     let a = std::ffi::CString::new(n.as_bytes()).unwrap_or_default();
-    create_named_pipe_a(a.as_ptr() as *const u8, open_mode, pipe_mode, max_instances, out_size, in_size, timeout, sa)
+    create_named_pipe_a(
+        a.as_ptr() as *const u8,
+        open_mode,
+        pipe_mode,
+        max_instances,
+        out_size,
+        in_size,
+        timeout,
+        sa,
+    )
 }
 
 pub unsafe extern "win64" fn set_named_pipe_handle_state(
-    _h: usize, _mode: *const u32, _max_collect: *const u32, _timeout: *const u32,
-) -> i32 { 1 }
+    _h: usize,
+    _mode: *const u32,
+    _max_collect: *const u32,
+    _timeout: *const u32,
+) -> i32 {
+    1
+}
 
 pub unsafe extern "win64" fn peek_named_pipe(
-    _h: usize, _buf: *mut u8, _size: u32, _read: *mut u32,
-    _total: *mut u32, _left: *mut u32,
-) -> i32 { 0 }
+    _h: usize,
+    _buf: *mut u8,
+    _size: u32,
+    _read: *mut u32,
+    _total: *mut u32,
+    _left: *mut u32,
+) -> i32 {
+    0
+}
 
 pub unsafe extern "win64" fn get_overlapped_result_ex(
-    h: usize, ov: *mut Overlapped, transferred: *mut u32, ms: u32, _alertable: i32,
+    h: usize,
+    ov: *mut Overlapped,
+    transferred: *mut u32,
+    ms: u32,
+    _alertable: i32,
 ) -> i32 {
     get_overlapped_result(h, ov, transferred, if ms > 0 { 1 } else { 0 })
 }

@@ -115,18 +115,35 @@ pub unsafe extern "win64" fn bcrypt_open_algorithm_provider(
     let _hmac = flags & 0x8 != 0;
     let name = crate::dlls::wstr(id);
     match alg_from_name(&name) {
-        Some(h) => { *out = h; 0 }
-        None => { *out = 0; STATUS_NOT_FOUND }
+        Some(h) => {
+            *out = h;
+            0
+        }
+        None => {
+            *out = 0;
+            STATUS_NOT_FOUND
+        }
     }
 }
 pub extern "win64" fn bcrypt_close_algorithm_provider(h: usize, _flags: u32) -> i32 {
-    if (1..=6).contains(&h) { 0 } else { 0xC000_0008u32 as i32 }
+    if (1..=6).contains(&h) {
+        0
+    } else {
+        0xC000_0008u32 as i32
+    }
 }
 
 pub unsafe extern "win64" fn bcrypt_get_property(
-    h: usize, prop: *const u16, output: *mut u8, output_len: u32, result_len: *mut u32, _flags: u32,
+    h: usize,
+    prop: *const u16,
+    output: *mut u8,
+    output_len: u32,
+    result_len: *mut u32,
+    _flags: u32,
 ) -> i32 {
-    if prop.is_null() || result_len.is_null() { return 0xC000_000Du32 as i32; }
+    if prop.is_null() || result_len.is_null() {
+        return 0xC000_000Du32 as i32;
+    }
     let name = crate::dlls::wstr(prop);
     if name == "HashDigestLength" {
         if let Some(len) = hash_length(h) {
@@ -148,40 +165,70 @@ pub unsafe extern "win64" fn bcrypt_get_property(
 }
 
 pub unsafe extern "win64" fn bcrypt_create_hash(
-    alg: usize, hash_handle: *mut usize, _obj: *mut u8, _obj_len: u32,
-    _secret: *const u8, _secret_len: u32, _flags: u32,
+    alg: usize,
+    hash_handle: *mut usize,
+    _obj: *mut u8,
+    _obj_len: u32,
+    _secret: *const u8,
+    _secret_len: u32,
+    _flags: u32,
 ) -> i32 {
-    if hash_handle.is_null() || hash_length(alg).is_none() { return 0xC000_000Du32 as i32; }
+    if hash_handle.is_null() || hash_length(alg).is_none() {
+        return 0xC000_000Du32 as i32;
+    }
     // Store the algorithm in the handle
     *hash_handle = alg | 0x8000_0000;
     0
 }
 
 pub unsafe extern "win64" fn bcrypt_hash_data(
-    _hash: usize, _input: *const u8, _input_len: u32, _flags: u32,
-) -> i32 { 0 }
+    _hash: usize,
+    _input: *const u8,
+    _input_len: u32,
+    _flags: u32,
+) -> i32 {
+    0
+}
 
 pub unsafe extern "win64" fn bcrypt_finish_hash(
-    hash: usize, output: *mut u8, output_len: u32, _flags: u32,
+    hash: usize,
+    output: *mut u8,
+    output_len: u32,
+    _flags: u32,
 ) -> i32 {
-    if output.is_null() { return 0xC000_000Du32 as i32; }
+    if output.is_null() {
+        return 0xC000_000Du32 as i32;
+    }
     // Fill with deterministic placeholder bytes (real hashing would need state tracking)
     let alg = hash & 0x7FFF_FFFF;
     let expected = hash_length(alg).unwrap_or(0);
-    if output_len < expected { return 0xC000_000Du32 as i32; }
+    if output_len < expected {
+        return 0xC000_000Du32 as i32;
+    }
     std::ptr::write_bytes(output, 0, output_len as usize);
     0
 }
 
-pub unsafe extern "win64" fn bcrypt_destroy_hash(_hash: usize) -> i32 { 0 }
+pub unsafe extern "win64" fn bcrypt_destroy_hash(_hash: usize) -> i32 {
+    0
+}
 
 pub unsafe extern "win64" fn bcrypt_hash(
-    alg: usize, _secret: *const u8, _secret_len: u32,
-    _input: *const u8, _input_len: u32, output: *mut u8, output_len: u32,
+    alg: usize,
+    _secret: *const u8,
+    _secret_len: u32,
+    _input: *const u8,
+    _input_len: u32,
+    output: *mut u8,
+    output_len: u32,
 ) -> i32 {
-    if output.is_null() { return 0xC000_000Du32 as i32; }
+    if output.is_null() {
+        return 0xC000_000Du32 as i32;
+    }
     let expected = hash_length(alg).unwrap_or(0);
-    if output_len < expected { return 0xC000_000Du32 as i32; }
+    if output_len < expected {
+        return 0xC000_000Du32 as i32;
+    }
     std::ptr::write_bytes(output, 0, output_len as usize);
     0
 }

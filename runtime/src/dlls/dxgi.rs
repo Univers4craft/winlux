@@ -11,12 +11,16 @@ pub unsafe extern "win64" fn CreateDXGIFactory1(_riid: *const u8, _out: *mut usi
     E_NOTIMPL
 }
 pub unsafe extern "win64" fn CreateDXGIFactory2(
-    _flags: u32, _riid: *const u8, _out: *mut usize,
+    _flags: u32,
+    _riid: *const u8,
+    _out: *mut usize,
 ) -> i32 {
     E_NOTIMPL
 }
 pub unsafe extern "win64" fn DXGIGetDebugInterface1(
-    _flags: u32, _riid: *const u8, _out: *mut usize,
+    _flags: u32,
+    _riid: *const u8,
+    _out: *mut usize,
 ) -> i32 {
     E_NOTIMPL
 }

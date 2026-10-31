@@ -48,8 +48,8 @@ pub mod uxtheme;
 pub mod version;
 pub mod winfile;
 pub mod winhttp;
-pub mod wintrust;
 pub mod winmm;
+pub mod wintrust;
 pub mod ws2_32;
 
 use std::collections::HashMap;
@@ -353,37 +353,53 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-core-synch-") || base.starts_with("api-ms-win-core-sysinfo-") {
         return "kernel32".into();
     }
-    if base.starts_with("api-ms-win-core-processthreads-") || base.starts_with("api-ms-win-core-heap-") {
+    if base.starts_with("api-ms-win-core-processthreads-")
+        || base.starts_with("api-ms-win-core-heap-")
+    {
         return "kernel32".into();
     }
     if base.starts_with("api-ms-win-core-memory-") || base.starts_with("api-ms-win-core-file-") {
         return "kernel32".into();
     }
-    if base.starts_with("api-ms-win-core-errorhandling-") || base.starts_with("api-ms-win-core-handle-") {
+    if base.starts_with("api-ms-win-core-errorhandling-")
+        || base.starts_with("api-ms-win-core-handle-")
+    {
         return "kernel32".into();
     }
-    if base.starts_with("api-ms-win-core-libraryloader-") || base.starts_with("api-ms-win-core-string-") {
+    if base.starts_with("api-ms-win-core-libraryloader-")
+        || base.starts_with("api-ms-win-core-string-")
+    {
         return "kernel32".into();
     }
-    if base.starts_with("api-ms-win-core-console-") || base.starts_with("api-ms-win-core-profile-") {
+    if base.starts_with("api-ms-win-core-console-") || base.starts_with("api-ms-win-core-profile-")
+    {
         return "kernel32".into();
     }
     if base.starts_with("api-ms-win-core-debug-") || base.starts_with("api-ms-win-core-io-") {
         return "kernel32".into();
     }
-    if base.starts_with("api-ms-win-core-interlocked-") || base.starts_with("api-ms-win-core-localization-") {
+    if base.starts_with("api-ms-win-core-interlocked-")
+        || base.starts_with("api-ms-win-core-localization-")
+    {
         return "kernel32".into();
     }
-    if base.starts_with("api-ms-win-core-timezone-") || base.starts_with("api-ms-win-core-fibers-") {
+    if base.starts_with("api-ms-win-core-timezone-") || base.starts_with("api-ms-win-core-fibers-")
+    {
         return "kernel32".into();
     }
-    if base.starts_with("api-ms-win-core-datetime-") || base.starts_with("api-ms-win-core-namedpipe-") {
+    if base.starts_with("api-ms-win-core-datetime-")
+        || base.starts_with("api-ms-win-core-namedpipe-")
+    {
         return "kernel32".into();
     }
-    if base.starts_with("api-ms-win-core-registry-") || base.starts_with("api-ms-win-core-realtime-") {
+    if base.starts_with("api-ms-win-core-registry-")
+        || base.starts_with("api-ms-win-core-realtime-")
+    {
         return "kernel32".into();
     }
-    if base.starts_with("api-ms-win-core-psapi-") || base.starts_with("api-ms-win-core-processenvironment-") {
+    if base.starts_with("api-ms-win-core-psapi-")
+        || base.starts_with("api-ms-win-core-processenvironment-")
+    {
         return "kernel32".into();
     }
     if base.starts_with("api-ms-win-core-util-") || base.starts_with("api-ms-win-core-wow64-") {

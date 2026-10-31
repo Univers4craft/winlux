@@ -6,7 +6,9 @@
 const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
 
 pub unsafe extern "win64" fn DWriteCreateFactory(
-    _type: u32, _iid: *const u8, _factory: *mut usize,
+    _type: u32,
+    _iid: *const u8,
+    _factory: *mut usize,
 ) -> i32 {
     E_NOTIMPL
 }
