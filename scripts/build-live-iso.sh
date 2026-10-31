@@ -92,6 +92,8 @@ cp "$root/scripts/winlux-bluetooth.sh" "$stage/usr/bin/winlux-bluetooth"
 chmod 755 "$stage/usr/bin/winlux-bluetooth"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
+cp "$root/scripts/winlux-prime-run.sh" "$stage/usr/bin/winlux-prime-run"
+chmod 755 "$stage/usr/bin/winlux-prime-run"
 mkdir -p "$stage/usr/share/winlux"
 # Store de logiciels et gestionnaire de polices du shell.
 cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"

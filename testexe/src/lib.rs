@@ -771,6 +771,8 @@ extern "system" {
     pub fn WinluxImageSupported(path: *const u16) -> i32;
     pub fn WinluxImageFormats(buf: *mut u8, cap: u32) -> u32;
     pub fn WinluxImageThumbnail(path: *const u16, size: u32, out: *mut u8) -> i32;
+    /// Rapport GPU `clé=valeur` du runtime Winlux ; renvoie la longueur complète.
+    pub fn WinluxQueryGpu(buf: *mut u8, len: u32) -> u32;
     // Archives, images disque et lecteurs dynamiques (exports privés Winlux).
     pub fn WinluxMountList(buf: *mut u16, cap: u32) -> i32;
     pub fn WinluxArchiveSupport(path: *const u16) -> u32;
