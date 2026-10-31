@@ -41,6 +41,18 @@ cat > "$work/bin/winlux-network" <<'MOCK'
 #!/bin/sh
 printf 'network %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"
 MOCK
+cat > "$work/bin/apt-get" <<'MOCK'
+#!/bin/sh
+case "$*" in
+  '-s -q upgrade') echo 'Inst libfoo1 [1.0-1] (1.0-2 Ubuntu:26.04/resolute-updates [amd64])' ;;
+  *) printf 'apt-get %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+esac
+MOCK
+cat > "$work/bin/id" <<'MOCK'
+#!/bin/sh
+echo 0
+MOCK
+printf '#!/bin/sh\nexec sh "%s/scripts/winlux-sysupdate.sh" "$@"\n' "$project" > "$work/bin/winlux-sysupdate"
 chmod 755 "$work/bin/"*
 control() { sh "$project/scripts/winlux-control.sh" "$@"; }
 control status
@@ -95,6 +107,31 @@ control update-check
 grep -q '^desktop v1 -> v2$' "$work/root/run/winlux/updates.txt"
 control update-apply
 grep -q '^Update complete$' "$work/root/run/winlux/update.log"
+grep -qx 'welcome_done=0' "$work/root/run/winlux/control.txt"
+control welcome-done
+grep -qx 'welcome_done=1' "$work/root/run/winlux/control.txt"
+grep -qx 'privacy_telemetry=off' "$work/root/run/winlux/control.txt"
+grep -qx 'privacy_location=deny' "$work/root/run/winlux/control.txt"
+grep -qx 'privacy_location_history=off' "$work/root/run/winlux/control.txt"
+control privacy-microphone-deny
+grep -qx 'MICROPHONE=deny' "$work/root/etc/winlux/privacy.conf"
+grep -qx 'privacy_microphone=deny' "$work/root/run/winlux/control.txt"
+grep -qx 'sysupdate_mode=manual' "$work/root/run/winlux/control.txt"
+control sysupdate-mode-scheduled
+grep -qx 'sysupdate_mode=scheduled' "$work/root/run/winlux/control.txt"
+grep -qx 'update --auto disable' "$work/commands"
+control sysupdate-hour-up
+grep -qx 'sysupdate_hour=4' "$work/root/run/winlux/control.txt"
+control sysupdate-day-next
+grep -qx 'sysupdate_day=mon' "$work/root/run/winlux/control.txt"
+control sysupdate-mode-auto
+grep -qx 'update --auto enable' "$work/commands"
+control sysupdate-check
+grep -qx 'sysupdate_count=1' "$work/root/run/winlux/control.txt"
+grep -qx 'libfoo1 1.0-1 -> 1.0-2' "$work/root/run/winlux/sysupdates.txt"
+control sysupdate-apply
+grep -q '^apt-get -q -y .* upgrade$' "$work/commands"
+grep -qx 'sysupdate_count=0' "$work/root/run/winlux/control.txt"
 touch "$work/root/etc/winlux/live-session"
 if WINLUX_TEST_BUSY=1 control poweroff; then echo 'ERROR: shutdown allowed during update' >&2; exit 1; fi
 if WINLUX_TEST_BUSY=1 control reboot; then echo 'ERROR: reboot allowed during update' >&2; exit 1; fi
@@ -131,4 +168,4 @@ if test -x "$runtime"; then
 else
     echo 'runtime absent : commandes d alimentation non verifiees' >&2
 fi
-echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, host protection'
+echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, system updates, privacy, welcome, host protection'
