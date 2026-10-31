@@ -10,6 +10,10 @@ boot = module["boot_summary"]({"boot_known": "1", "boot_total_ms": "8420", "boot
                                "boot_slowest": "drivers", "boot_slowest_ms": "3150"})
 assert module["seconds"]("8420") in boot and module["seconds"]("3150") in boot, boot
 assert module["boot_summary"]({"boot_known": "0"}) != boot
+# Mode jeu : une action impossible sur ce matériel n'est pas annoncée.
+game = module["game_summary"]({"game_mode": "auto", "game_active": "1", "game_name": "jeu.exe", "cap_game_governor": "0"})
+assert "jeu.exe" in game and module["_t"]("processeur en mode performances (sur secteur)") not in game, game
+assert module["game_summary"]({}) == ""
 window = module["Settings"]()
 failures = []
 
