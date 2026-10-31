@@ -16,12 +16,15 @@ Usage :
   winlux-report                      formulaire « Signaler un problème »
   winlux-report --crash [--since T]  dernier plantage (rien si aucun après T)
   winlux-report --crash-at N         N-ième plantage du journal (Observateur)
+  winlux-report --system             arrêt anormal de la session précédente
+                                     (une seule proposition par arrêt)
   winlux-report --open-saved         ouvre le dossier des rapports enregistrés
   winlux-report --component NOM      problème d'un composant Winlux
   winlux-report --print [--crash]    affiche le rapport (sans interface)
   winlux-report --status             réglages, format clé=valeur
   winlux-report --set CLÉ=VALEUR     offer=on|off redact=on|off mode=auto|browser|file
 """
+import calendar
 import functools
 import hashlib
 import json
@@ -99,6 +102,33 @@ T = {
   "c_div": "Division par zéro dans le programme.",
   "c_unknown": "Cause non déterminée automatiquement ; les détails techniques ci-dessous aideront à l'analyse.",
   "c_manual": "Signalement manuel.",
+  "h_steps": "Étapes avant le problème",
+  "h_checks": "Vérifications automatiques",
+  "h_system": "Messages du système avant l'arrêt",
+  "s_start": "Lancement de {exe}",
+  "s_warn": "Avertissement de Winlux : {msg}",
+  "s_error": "Erreur notée par Winlux : {msg}",
+  "s_crash": "{exe} s'arrête : {exception} dans {module}",
+  "s_sys": "Système : {msg}",
+  "s_ran": "Le programme a fonctionné {duration} avant de s'arrêter.",
+  "s_none": "Winlux n'a rien noté avant l'arrêt.",
+  "s_more": "… et {count} autres messages semblables.",
+  "k_disk_ok": "Espace disque suffisant : {free} libres sur {mount}.",
+  "k_disk_low": "Disque presque plein : {free} libres sur {mount}. Libérez de la place, un programme peut planter faute d'espace.",
+  "k_mem_ok": "Mémoire disponible : {free} sur {total}.",
+  "k_mem_low": "Mémoire presque pleine : {free} libres sur {total}. Fermez des applications avant de réessayer.",
+  "k_oom": "Le système a manqué de mémoire et a dû fermer un programme ({victim}).",
+  "k_gpu": "La carte graphique a eu un problème au même moment : {msg}",
+  "k_repeat": "Ce programme a déjà planté {count} fois avec la même erreur.",
+  "k_first": "C'est le premier plantage de ce programme avec cette erreur.",
+  "k_missing": "Fonctions Windows manquantes notées dans le journal : {funcs}.",
+  "k_soft_gl": "Pas d'accélération graphique (rendu logiciel) : les jeux et applications 3D peuvent planter ou être très lents.",
+  "k_prev": "La session précédente s'est arrêtée brutalement ({reason}).",
+  "system_crashed": "Winlux s'est arrêté de façon inattendue lors de la dernière session.",
+  "c_system": "Le noyau Linux ou un pilote a rencontré une erreur grave. Les derniers messages enregistrés avant l'arrêt sont joints au rapport.",
+  "r_panic": "erreur grave du noyau Linux",
+  "r_critical": "erreur critique enregistrée par le système",
+  "nothing_system": "Aucun arrêt anormal du système à signaler.",
  },
  "en": {
   "window": "Report a problem", "crashed": "\"{exe}\" stopped working.",
@@ -147,6 +177,33 @@ T = {
   "c_div": "Division by zero in the program.",
   "c_unknown": "The cause could not be determined automatically; the technical details below will help.",
   "c_manual": "Manual report.",
+  "h_steps": "Steps before the problem",
+  "h_checks": "Automatic checks",
+  "h_system": "System messages before the stop",
+  "s_start": "{exe} started",
+  "s_warn": "Winlux warning: {msg}",
+  "s_error": "Error logged by Winlux: {msg}",
+  "s_crash": "{exe} stops: {exception} in {module}",
+  "s_sys": "System: {msg}",
+  "s_ran": "The program ran for {duration} before stopping.",
+  "s_none": "Winlux logged nothing before the stop.",
+  "s_more": "… and {count} more similar messages.",
+  "k_disk_ok": "Enough disk space: {free} free on {mount}.",
+  "k_disk_low": "Disk almost full: {free} free on {mount}. Free some space, a program can crash when the disk is full.",
+  "k_mem_ok": "Available memory: {free} of {total}.",
+  "k_mem_low": "Memory almost full: {free} free of {total}. Close some applications before trying again.",
+  "k_oom": "The system ran out of memory and had to close a program ({victim}).",
+  "k_gpu": "The graphics card had a problem at the same time: {msg}",
+  "k_repeat": "This program already crashed {count} times with the same error.",
+  "k_first": "This is the first crash of this program with this error.",
+  "k_missing": "Missing Windows functions noted in the log: {funcs}.",
+  "k_soft_gl": "No graphics acceleration (software rendering): games and 3D applications may crash or be very slow.",
+  "k_prev": "The previous session stopped abruptly ({reason}).",
+  "system_crashed": "Winlux stopped unexpectedly during the last session.",
+  "c_system": "The Linux kernel or a driver ran into a serious error. The last messages recorded before the stop are attached to the report.",
+  "r_panic": "serious Linux kernel error",
+  "r_critical": "critical error recorded by the system",
+  "nothing_system": "No abnormal system stop to report.",
  },
  "es": {
   "window": "Informar de un problema", "crashed": "«{exe}» ha dejado de funcionar.",
@@ -195,6 +252,33 @@ T = {
   "c_div": "División por cero en el programa.",
   "c_unknown": "No se pudo determinar la causa automáticamente; los detalles técnicos de abajo ayudarán.",
   "c_manual": "Informe manual.",
+  "h_steps": "Pasos antes del problema",
+  "h_checks": "Comprobaciones automáticas",
+  "h_system": "Mensajes del sistema antes de la parada",
+  "s_start": "Inicio de {exe}",
+  "s_warn": "Advertencia de Winlux: {msg}",
+  "s_error": "Error registrado por Winlux: {msg}",
+  "s_crash": "{exe} se detiene: {exception} en {module}",
+  "s_sys": "Sistema: {msg}",
+  "s_ran": "El programa funcionó {duration} antes de detenerse.",
+  "s_none": "Winlux no registró nada antes de la parada.",
+  "s_more": "… y {count} mensajes parecidos más.",
+  "k_disk_ok": "Espacio en disco suficiente: {free} libres en {mount}.",
+  "k_disk_low": "Disco casi lleno: {free} libres en {mount}. Libere espacio, un programa puede fallar si el disco está lleno.",
+  "k_mem_ok": "Memoria disponible: {free} de {total}.",
+  "k_mem_low": "Memoria casi llena: {free} libres de {total}. Cierre algunas aplicaciones antes de volver a intentarlo.",
+  "k_oom": "El sistema se quedó sin memoria y tuvo que cerrar un programa ({victim}).",
+  "k_gpu": "La tarjeta gráfica tuvo un problema al mismo tiempo: {msg}",
+  "k_repeat": "Este programa ya falló {count} veces con el mismo error.",
+  "k_first": "Es el primer fallo de este programa con este error.",
+  "k_missing": "Funciones de Windows ausentes anotadas en el registro: {funcs}.",
+  "k_soft_gl": "Sin aceleración gráfica (renderizado por software): los juegos y aplicaciones 3D pueden fallar o ir muy lentos.",
+  "k_prev": "La sesión anterior se detuvo bruscamente ({reason}).",
+  "system_crashed": "Winlux se detuvo de forma inesperada durante la última sesión.",
+  "c_system": "El kernel Linux o un controlador sufrió un error grave. Los últimos mensajes registrados antes de la parada se adjuntan al informe.",
+  "r_panic": "error grave del kernel Linux",
+  "r_critical": "error crítico registrado por el sistema",
+  "nothing_system": "No hay ninguna parada anómala del sistema que informar.",
  },
  "de": {
   "window": "Problem melden", "crashed": "„{exe}“ funktioniert nicht mehr.",
@@ -243,6 +327,33 @@ T = {
   "c_div": "Division durch null im Programm.",
   "c_unknown": "Die Ursache ließ sich nicht automatisch bestimmen; die technischen Details unten helfen bei der Analyse.",
   "c_manual": "Manuelle Meldung.",
+  "h_steps": "Schritte vor dem Problem",
+  "h_checks": "Automatische Prüfungen",
+  "h_system": "Systemmeldungen vor dem Halt",
+  "s_start": "{exe} gestartet",
+  "s_warn": "Winlux-Warnung: {msg}",
+  "s_error": "Von Winlux protokollierter Fehler: {msg}",
+  "s_crash": "{exe} hält an: {exception} in {module}",
+  "s_sys": "System: {msg}",
+  "s_ran": "Das Programm lief {duration}, bevor es anhielt.",
+  "s_none": "Winlux hat vor dem Halt nichts protokolliert.",
+  "s_more": "… und {count} weitere ähnliche Meldungen.",
+  "k_disk_ok": "Genügend Speicherplatz: {free} frei auf {mount}.",
+  "k_disk_low": "Datenträger fast voll: {free} frei auf {mount}. Schaffen Sie Platz, ein Programm kann bei vollem Datenträger abstürzen.",
+  "k_mem_ok": "Verfügbarer Arbeitsspeicher: {free} von {total}.",
+  "k_mem_low": "Arbeitsspeicher fast voll: {free} frei von {total}. Schließen Sie einige Anwendungen, bevor Sie es erneut versuchen.",
+  "k_oom": "Dem System ging der Arbeitsspeicher aus und es musste ein Programm schließen ({victim}).",
+  "k_gpu": "Die Grafikkarte hatte zur selben Zeit ein Problem: {msg}",
+  "k_repeat": "Dieses Programm ist bereits {count}-mal mit demselben Fehler abgestürzt.",
+  "k_first": "Dies ist der erste Absturz dieses Programms mit diesem Fehler.",
+  "k_missing": "Im Protokoll vermerkte fehlende Windows-Funktionen: {funcs}.",
+  "k_soft_gl": "Keine Grafikbeschleunigung (Software-Rendering): Spiele und 3D-Anwendungen können abstürzen oder sehr langsam sein.",
+  "k_prev": "Die vorherige Sitzung wurde abrupt beendet ({reason}).",
+  "system_crashed": "Winlux wurde in der letzten Sitzung unerwartet beendet.",
+  "c_system": "Der Linux-Kernel oder ein Treiber hatte einen schweren Fehler. Die letzten vor dem Halt aufgezeichneten Meldungen sind dem Bericht beigefügt.",
+  "r_panic": "schwerer Linux-Kernelfehler",
+  "r_critical": "vom System aufgezeichneter kritischer Fehler",
+  "nothing_system": "Kein ungewöhnlicher Systemhalt zu melden.",
  },
 }
 
@@ -459,6 +570,241 @@ def signature(crash):
     key = "|".join([crash.get("exe", "").lower(), crash.get("exception", ""), module]
                    + [d for d in crash.get("details", []) if d.startswith("fonction=")][:1])
     return "wlx-" + hashlib.sha256(key.encode()).hexdigest()[:12]
+
+
+# ── Diagnostic : étapes avant le problème et vérifications ───────────────
+
+JOURNAL_LINE = re.compile(r"^(\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d)(?:\.\d+)?Z? \[(\w+)\] (?:(\S+)\[(\d+)\] )?([\w.:-]+): (.*)$")
+SYSTEM_PATTERNS = (
+    ("oom", re.compile(r"out of memory|oom-kill|killed process", re.I)),
+    ("gpu", re.compile(r"gpu hang|ring \w+ timeout|gpu reset|amdgpu.*(?:timeout|fault)|nvrm: xid|i915.*(?:hang|reset)|nouveau.*fault", re.I)),
+    ("segv", re.compile(r"segfault at|general protection fault", re.I)),
+    ("usb", re.compile(r"usb \S+: usb disconnect", re.I)),
+)
+
+
+def utc_seconds(text):
+    """« 2026-10-31T17:06:44 » (UTC) → secondes depuis 1970."""
+    try:
+        return calendar.timegm(time.strptime(text[:19], "%Y-%m-%dT%H:%M:%S"))
+    except ValueError:
+        return 0
+
+
+def winlux_lines(limit=2 * 1024 * 1024):
+    """Lignes du journal du runtime (la fin s'il est très long)."""
+    try:
+        with open(JOURNAL / "winlux.log", "rb") as stream:
+            stream.seek(0, os.SEEK_END)
+            size = stream.tell()
+            stream.seek(max(0, size - limit))
+            return stream.read().decode("utf-8", "replace").splitlines()
+    except OSError:
+        return []
+
+
+def program_events(crash, lines):
+    """(horodatage, niveau, cible, message) du programme qui a planté, d'après
+    l'origine « nom.exe[pid] » des lignes du journal."""
+    pid = str((crash or {}).get("pid", ""))
+    events = []
+    for line in lines:
+        m = JOURNAL_LINE.match(line)
+        if m and m.group(4) == pid:
+            events.append((utc_seconds(m.group(1)), m.group(2), m.group(5), m.group(6)))
+    return events
+
+
+def system_events(start, end):
+    """Messages du noyau intéressants entre deux instants : manque de mémoire,
+    carte graphique bloquée, autres plantages, périphérique débranché."""
+    found = []
+    text = run(["journalctl", "-k", "--since", f"@{int(start)}", "--until", f"@{int(end)}",
+                "-o", "short-unix", "-q", "--no-pager"], timeout=5)
+    for line in text.splitlines():
+        stamp, _, rest = line.partition(" ")
+        try:
+            ts = float(stamp)
+        except ValueError:
+            continue
+        message = rest.split(": ", 1)[-1]
+        for kind, pattern in SYSTEM_PATTERNS:
+            if pattern.search(message):
+                found.append((int(ts), kind, message.strip()))
+                break
+    return found[-12:]
+
+
+def duration(seconds, language=None):
+    seconds = max(0, int(seconds))
+    h, rest = divmod(seconds, 3600)
+    m, s = divmod(rest, 60)
+    if h:
+        return f"{h} h {m:02d} min"
+    if m:
+        return f"{m} min {s:02d} s"
+    return f"{s} s"
+
+
+def steps(crash, lines, sys_events, language=None):
+    """Chronologie lisible : lancement, avertissements et erreurs du programme,
+    événements du système, puis l'arrêt."""
+    if not crash:
+        return []
+    events = program_events(crash, lines)
+    crash_ts = int(crash.get("ts", "0") or 0)
+    exe = crash.get("exe", "?")
+    out = []
+    start = None
+    for ts, level, target, message in events:
+        if target == "session" and message.startswith("démarrage"):
+            start = ts
+            out.append((ts, tr("s_start", language, exe=exe)))
+    seen = {}
+    for ts, level, target, message in events:
+        if level not in ("warn", "error") or target == "session":
+            continue
+        key = (level, target, re.sub(r"0x[0-9a-f]+|\d+", "#", message))
+        seen[key] = seen.get(key, 0) + 1
+        if seen[key] == 1:
+            msg = f"{target}: {message}"[:200]
+            out.append((ts, tr("s_error" if level == "error" else "s_warn", language, msg=msg)))
+    for ts, kind, message in sys_events:
+        out.append((ts, tr("s_sys", language, msg=message[:200])))
+    out.sort(key=lambda item: item[0])
+    repeated = sum(n - 1 for n in seen.values())
+    if len(out) > 14:
+        repeated += len(out) - 14
+        head = [step for step in out if step[1] == tr("s_start", language, exe=exe)][:1]
+        out = head + [step for step in out if step not in head][-13:]
+    if repeated:
+        out.append((None, tr("s_more", language, count=repeated)))
+    module = crash.get("module", "?").split("+")[0]
+    out.append((crash_ts, tr("s_crash", language, exe=exe, exception=crash.get("exception", "?"), module=module)))
+    if start and crash_ts >= start:
+        out.append((None, tr("s_ran", language, duration=duration(crash_ts - start, language))))
+    elif len(out) == 1:
+        out.insert(0, (None, tr("s_none", language)))
+    return out
+
+
+def human_size(value, language=None):
+    """Taille lisible, unités et virgule de la langue (« 28,4 Go », « 28.4 GB »)."""
+    language = language or lang()
+    units = ("o", "Ko", "Mo", "Go", "To") if language == "fr" else ("B", "KB", "MB", "GB", "TB")
+    for unit in units:
+        if value < 1024 or unit == units[-1]:
+            if unit == units[0]:
+                return f"{int(value)} {unit}"
+            text = f"{value:.1f}".removesuffix(".0")
+            return f"{text.replace('.', ',') if language != 'en' else text} {unit}"
+        value /= 1024
+    return str(value)
+
+
+def checks(crash, lines, sys_events, renderer="", language=None):
+    """(ok, texte) : ce que Winlux a vérifié sur la machine au moment du
+    rapport, avec un conseil quand quelque chose cloche."""
+    out = []
+    mounts = [Path("/")]
+    home = Path.home()
+    try:
+        if home.exists() and os.stat(home).st_dev != os.stat("/").st_dev:
+            mounts.append(home)
+    except OSError:
+        pass
+    for mount in mounts:
+        try:
+            usage = shutil.disk_usage(mount)
+        except OSError:
+            continue
+        low = usage.free < 2 * 1024 ** 3 or usage.free < usage.total * 0.05
+        out.append((not low, tr("k_disk_low" if low else "k_disk_ok", language,
+                                free=human_size(usage.free, language), mount=str(mount).replace(str(home), "~"))))
+    mem = {}
+    try:
+        for line in Path("/proc/meminfo").read_text().splitlines():
+            key, _, rest = line.partition(":")
+            mem[key] = int(rest.split()[0]) * 1024
+    except (OSError, ValueError, IndexError):
+        pass
+    if mem.get("MemTotal"):
+        free, total = mem.get("MemAvailable", 0), mem["MemTotal"]
+        low = free < total * 0.08
+        out.append((not low, tr("k_mem_low" if low else "k_mem_ok", language,
+                                free=human_size(free, language), total=human_size(total, language))))
+    for ts, kind, message in sys_events:
+        if kind == "oom":
+            victim = re.search(r"\(([^)]+)\)", message)
+            out.append((False, tr("k_oom", language, victim=victim.group(1) if victim else "?")))
+            break
+    for ts, kind, message in sys_events:
+        if kind == "gpu":
+            out.append((False, tr("k_gpu", language, msg=message[:160])))
+            break
+    if crash:
+        sig = signature(crash)
+        count = sum(1 for c in crashes() if signature(c) == sig)
+        if count > 1:
+            out.append((False, tr("k_repeat", language, count=count)))
+        else:
+            out.append((True, tr("k_first", language)))
+        funcs = missing_functions(lines[-200:], crash)
+        if funcs:
+            out.append((False, tr("k_missing", language, funcs=", ".join(funcs))))
+        module = crash.get("module", "").lower()
+        graphics = any(k in module for k in ("d3d", "dxgi", "opengl", "vulkan", "ddraw"))
+        if graphics and any(k in renderer.lower() for k in ("llvmpipe", "softpipe", "software")):
+            out.append((False, tr("k_soft_gl", language)))
+    return out
+
+
+PSTORE = Path(os.environ.get("WINLUX_PSTORE", "/sys/fs/pstore"))
+
+
+def previous_boot_problem():
+    """Arrêt anormal de la session précédente : traces d'erreur grave du noyau
+    gardées par pstore, sinon messages critiques du démarrage précédent."""
+    lines, reason = [], ""
+    try:
+        dumps = sorted(p for p in PSTORE.iterdir() if p.is_file())
+    except OSError:
+        dumps = []
+    for dump in dumps:
+        if "dmesg" in dump.name or dump.name.startswith(("efi-", "console")):
+            try:
+                lines += dump.read_text(errors="replace").splitlines()
+            except OSError:
+                pass
+    if lines:
+        reason = "panic"
+    else:
+        text = run(["journalctl", "-b", "-1", "-p", "0..2", "-o", "short-iso", "-q", "--no-pager", "-n", "40"],
+                   timeout=5)
+        lines = [l for l in text.splitlines() if l.strip()]
+        if lines:
+            reason = "critical"
+    if not lines:
+        return None
+    lines = [l for l in lines if l.strip()][-40:]
+    key = hashlib.sha256("\n".join(lines).encode(errors="replace")).hexdigest()[:16]
+    return {"reason": reason, "lines": lines, "key": key}
+
+
+def mark_system_offered(problem):
+    """Une seule proposition par arrêt anormal, même au démarrage suivant."""
+    marker = STATE / "system-crash-offered"
+    try:
+        if marker.read_text().strip() == problem["key"]:
+            return False
+    except OSError:
+        pass
+    try:
+        STATE.mkdir(parents=True, exist_ok=True)
+        marker.write_text(problem["key"] + "\n")
+    except OSError:
+        pass
+    return True
 
 
 # ── Machine ──────────────────────────────────────────────────────────────
@@ -711,19 +1057,36 @@ def redact(text, keep_names=(), home=None, values=None, keep_strings=()):
 # ── Construction du rapport ──────────────────────────────────────────────
 
 class Report:
-    def __init__(self, crash=None, component=None, language=None):
+    def __init__(self, crash=None, component=None, language=None, system=None):
         self.language = language or lang()
         self.crash = crash
         self.component = component
+        self.system = system
         self.journal = journal_tail()
         self.machine, flags = machine_info()
-        self.cause = probable_cause(crash, self.journal, self.language, flags)
+        self.cause = (tr("c_system", self.language) if system
+                      else probable_cause(crash, self.journal, self.language, flags))
+        lines = winlux_lines()
+        sys_events = []
+        if crash:
+            crash_ts = int(crash.get("ts", "0") or 0)
+            events = program_events(crash, lines)
+            start = min([e[0] for e in events] + [crash_ts - 600])
+            sys_events = system_events(start - 5, crash_ts + 5)
+        renderer = dict(self.machine).get("OpenGL", "")
+        self.steps = steps(crash, lines, sys_events, self.language)
+        self.checks = checks(crash, lines, sys_events, renderer, self.language)
+        if system:
+            reason = tr("r_panic" if system["reason"] == "panic" else "r_critical", self.language)
+            self.checks.insert(0, (False, tr("k_prev", self.language, reason=reason)))
         self.signature = signature(crash)
         path = (crash or {}).get("path", "")
         self.exe_name = (crash or {}).get("exe", "") or component or ""
         self.exe = pe_version(path) if path.lower().endswith((".exe", ".dll", ".com", ".scr")) else {}
 
     def kind(self):
+        if self.system:
+            return "system"
         if not self.crash:
             return "manual"
         exc = self.crash.get("exception", "")
@@ -734,6 +1097,8 @@ class Report:
         return "crash"
 
     def headline(self):
+        if self.system:
+            return tr("system_crashed", self.language)
         if self.component:
             return tr("component_failed", self.language, exe=self.component)
         if self.crash:
@@ -750,6 +1115,10 @@ class Report:
             title = f"[Fonction manquante] {exe} : {funcs[0]}"
         elif kind == "internal":
             title = f"[Erreur interne] {self.component or 'winlux'} : {(c.get('details') or [c.get('exception', '?')])[0][:80]}"
+        elif kind == "system":
+            first = next((l for l in self.system["lines"] if re.search(r"panic|bug|error|fault|oops", l, re.I)),
+                         self.system["lines"][0])
+            title = "[Arrêt du système] " + re.sub(r"^\S+ \S+ ", "", first.strip())[:90]
         elif kind == "crash":
             title = f"[Plantage] {exe} : {c.get('exception', '?')} dans {c.get('module', '?').split('+')[0]}"
         else:
@@ -762,7 +1131,9 @@ class Report:
         kind = self.kind()
         labels = ["bug", "signalement-utilisateur"]
         labels.append({"crash": "plantage", "missing": "fonction-manquante",
-                       "internal": "plantage", "manual": "à-trier"}[kind])
+                       "internal": "plantage", "manual": "à-trier", "system": "plantage"}[kind])
+        if kind == "system":
+            labels.append("runtime")
         if kind in ("crash", "missing"):
             labels.append("compatibilité-windows")
         if kind == "internal" or self.component:
@@ -792,6 +1163,22 @@ class Report:
             out.append(f"### {tr('h_comment', L)}")
         out += [f"### {tr('h_desc', L)}", "", description.strip() or tr("no_desc", L), ""]
         out += [f"### {tr('h_cause', L)}", "", self.cause, ""]
+        if self.steps:
+            out += [f"### {tr('h_steps', L)}", ""]
+            number = 0
+            for ts, text in self.steps:
+                if ts is None:
+                    out.append(f"_{text}_")
+                else:
+                    number += 1
+                    out.append(f"{number}. {time.strftime('%H:%M:%S', time.localtime(ts))} — {text}")
+            out.append("")
+        if self.checks:
+            out += [f"### {tr('h_checks', L)}", ""]
+            out += [f"- {'✅' if ok else '⚠️'} {text}" for ok, text in self.checks] + [""]
+        if self.system:
+            out += [f"<details><summary>{tr('h_system', L)}</summary>", "", "```"]
+            out += [l[:300].replace("```", "'''") for l in self.system["lines"]] + ["```", "", "</details>", ""]
         if self.crash:
             out += [f"### {tr('h_tech', L)}", "", "| | |", "|---|---|"] + self.technical() + [""]
             if self.signature:
@@ -939,7 +1326,7 @@ def gui(report, conf):
 
     L = report.language
     win = Gtk.Window(title=f"{tr('window', L)} — Winlux")
-    win.set_icon_name("dialog-warning" if report.crash else "help-browser")
+    win.set_icon_name("dialog-warning" if report.crash or report.system else "help-browser")
     display = Gdk.Display.get_default()
     monitor = display.get_primary_monitor() or display.get_monitor(0) if display else None
     area = monitor.get_workarea() if monitor else None
@@ -953,6 +1340,7 @@ def gui(report, conf):
       window { background: #1f2230; color: #eceef6; }
       textview, textview text, entry { background: #161924; color: #eceef6; }
       #cause { background: #2a2f42; border-radius: 6px; padding: 10px; }
+      #diag { padding: 6px 10px; }
       #headline { font-size: 15pt; font-weight: bold; }
       button { padding: 8px 14px; }
       button.suggested-action { background: #4a6cf7; color: white; }
@@ -964,10 +1352,22 @@ def gui(report, conf):
     headline = Gtk.Label(label=report.headline(), xalign=0, wrap=True)
     headline.set_name("headline")
     box.pack_start(headline, False, False, 0)
-    if report.crash:
+    if report.crash or report.system:
         cause = Gtk.Label(label=f"{tr('cause', L)}{' :' if L == 'fr' else ':'} {report.cause}", xalign=0, wrap=True)
         cause.set_name("cause")
         box.pack_start(cause, False, False, 0)
+    if report.checks or report.steps:
+        diag = Gtk.Expander(label=tr("h_checks", L) + " · " + tr("h_steps", L))
+        lines = [("✔ " if ok else "⚠ ") + text for ok, text in report.checks]
+        if report.steps:
+            lines += ["", tr("h_steps", L)]
+            lines += [(time.strftime("%H:%M:%S", time.localtime(ts)) + "  " if ts else "") + text
+                      for ts, text in report.steps]
+        diag_label = Gtk.Label(label="\n".join(lines), xalign=0, wrap=True, selectable=True)
+        diag_label.set_name("diag")
+        diag.add(diag_label)
+        diag.set_expanded(any(not ok for ok, _ in report.checks))
+        box.pack_start(diag, False, False, 0)
 
     box.pack_start(Gtk.Label(label=tr("summary", L), xalign=0), False, False, 0)
     summary = Gtk.Entry()
@@ -1209,7 +1609,19 @@ def main(argv):
         return 0 if open_url(str(directory)) else 1
     conf = config()
     crash = None
-    if "--crash-at" in args:
+    system = None
+    if "--system" in args:
+        system = previous_boot_problem()
+        if not system:
+            if "--print" in args:
+                print(tr("nothing_system"))
+            return 3
+        if "--print" not in args and "--force" not in args:
+            if conf["OFFER"] == "off":
+                return 4
+            if not mark_system_offered(system):
+                return 0
+    elif "--crash-at" in args:
         entries = crashes()
         index = int(option("--crash-at", "-1") or -1)
         crash = entries[index] if 0 <= index < len(entries) else None
@@ -1226,7 +1638,7 @@ def main(argv):
                 return 4
             if not mark_offered(crash):
                 return 0
-    report = Report(crash, option("--component"))
+    report = Report(crash, option("--component"), system=system)
     if "--print" in args:
         redacted = conf["REDACT"] == "on" and "--no-redact" not in args
         print(report.title())

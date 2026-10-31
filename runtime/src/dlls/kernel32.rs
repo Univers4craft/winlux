@@ -5086,6 +5086,7 @@ pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
 }
 pub fn flush_and_exit(code: i32) -> ! {
     let _ = std::io::Write::flush(&mut std::io::stdout());
+    crate::log::journal_event("session", &format!("fin du programme (code {code})"));
     std::process::exit(code)
 }
 
