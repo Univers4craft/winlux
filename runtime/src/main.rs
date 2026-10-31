@@ -10,6 +10,7 @@ mod pe;
 mod printf;
 mod process;
 mod profiles;
+pub mod quality;
 mod thunks;
 
 use std::path::PathBuf;
