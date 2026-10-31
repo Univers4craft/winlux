@@ -362,7 +362,12 @@ pub unsafe fn open_new() {
     let idx = ST.tab_count;
     ST.tabs[idx] = Doc::new();
     ST.counter += 1;
-    let prefix = b"Sans titre ";
+    let prefix = tr4(&[
+        b"Sans titre ",
+        b"Untitled ",
+        b"Sin t\xEDtulo ",
+        b"Unbenannt ",
+    ]);
     let mut n = 0;
     while n < prefix.len() && n < MAX_NAME {
         ST.tabs[idx].name[n] = prefix[n];
@@ -449,7 +454,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     // === Menu bar ===
     let my = r.top;
     fill(g.hdc, g.b, r.left, my, r.right, my + MENU_H, p.surface);
-    let menus: [&[u8]; 4] = [b"Fichier", b"\xC9\x64ition", b"Affichage", b"Aide"];
+    let menus: [&[u8]; 4] = [
+        tr4(&[b"Fichier", b"File", b"Archivo", b"Datei"]),
+        b"\xC9\x64ition",
+        tr4(&[b"Affichage", b"View", b"Ver", b"Ansicht"]),
+        tr4(&[b"Aide", b"Help", b"Ayuda", b"Hilfe"]),
+    ];
     let mut mx = r.left + 8;
     for item in &menus {
         text(g.hdc, g.f.small, p.text2, mx, my + 6, *item);
@@ -480,7 +490,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             p.text2,
             r.left + 8,
             find_y + 9,
-            b"Chercher:",
+            tr4(&[b"Chercher:", b"Find:", b"Buscar:", b"Suchen:"]),
         );
         text(
             g.hdc,
@@ -529,7 +539,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 4,
                 p.surface,
             );
-            text(g.hdc, g.f.small, p.text2, r.left + 8, ry + 9, b"Remplacer:");
+            text(
+                g.hdc,
+                g.f.small,
+                p.text2,
+                r.left + 8,
+                ry + 9,
+                tr4(&[b"Remplacer:", b"Replace:", b"Reemplazar:", b"Ersetzen:"]),
+            );
             text(
                 g.hdc,
                 mono(),
@@ -554,7 +571,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 4,
                 p.surface,
             );
-            text(g.hdc, g.f.small, p.text2, bx + 6, ry + 9, b"Rempl.");
+            text(
+                g.hdc,
+                g.f.small,
+                p.text2,
+                bx + 6,
+                ry + 9,
+                tr4(&[b"Rempl.", b"Repl.", b"Reempl.", b"Ersetz."]),
+            );
             // "Tout remplacer" button
             round_rect(
                 g.hdc,
@@ -566,7 +590,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 4,
                 p.surface,
             );
-            text(g.hdc, g.f.small, p.text2, bx + 84, ry + 9, b"Tout");
+            text(
+                g.hdc,
+                g.f.small,
+                p.text2,
+                bx + 84,
+                ry + 9,
+                tr4(&[b"Tout", b"All", b"Todo", b"Alle"]),
+            );
         }
 
         find_y + fh
@@ -1233,7 +1264,12 @@ fn format_status(buf: &mut [u8; 80], line: usize, col: usize, lang: Lang) -> usi
         n += 1;
     }
     let lang_name: &[u8] = match lang {
-        Lang::Plain => b"Texte brut",
+        Lang::Plain => tr4(&[
+            b"Texte brut",
+            b"Plain text",
+            b"Texto sin formato",
+            b"Nur-Text",
+        ]),
         Lang::Rust => b"Rust",
         Lang::C => b"C/C++",
         Lang::Python => b"Python",
@@ -1410,7 +1446,12 @@ unsafe fn close_tab(idx: usize) {
     if ST.tab_count <= 1 {
         // Don't close last tab, just clear it
         ST.tabs[0] = Doc::new();
-        let name = b"Sans titre 1";
+        let name = tr4(&[
+            b"Sans titre 1",
+            b"Untitled 1",
+            b"Sin t\xEDtulo 1",
+            b"Unbenannt 1",
+        ]);
         for i in 0..name.len() {
             ST.tabs[0].name[i] = name[i];
         }

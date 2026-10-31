@@ -24,13 +24,18 @@ const CAT_APP: usize = 2;
 const CAT_SECURITY: usize = 3;
 const CAT_WINLUX: usize = 4;
 const CAT_CRASH: usize = 5;
-const CAT_NAMES: [&[u8]; 6] = [
-    b"Tous",
-    b"Syst\xE8me",
-    b"Applications",
-    b"S\xE9curit\xE9",
-    b"Winlux",
-    b"Crash",
+const CAT_NAMES: [Tr4; 6] = [
+    [b"Tous", b"All", b"Todos", b"Alle"],
+    [b"Syst\xE8me", b"System", b"Sistema", b"System"],
+    [
+        b"Applications",
+        b"Applications",
+        b"Aplicaciones",
+        b"Anwendungen",
+    ],
+    [b"S\xE9curit\xE9", b"Security", b"Seguridad", b"Sicherheit"],
+    [b"Winlux", b"Winlux", b"Winlux", b"Winlux"],
+    [b"Crash", b"Crash", b"Bloqueos", b"Abst\xFCrze"],
 ];
 
 #[derive(Clone, Copy)]
@@ -66,10 +71,10 @@ static mut LAST_REFRESH: u32 = 0;
 
 fn level_name(l: u8) -> &'static [u8] {
     match l {
-        0 => b"Erreur",
-        1 => b"Avertis.",
+        0 => tr4(&[b"Erreur", b"Error", b"Error", b"Fehler"]),
+        1 => tr4(&[b"Avertis.", b"Warning", b"Advert.", b"Warnung"]),
         2 => b"Info",
-        3 => b"D\xE9boguer",
+        3 => tr4(&[b"D\xE9boguer", b"Debug", b"Depurar", b"Debuggen"]),
         4 => b"Trace",
         5 => b"Crash",
         _ => b"?",
@@ -244,7 +249,12 @@ unsafe fn parse_crash(data: &[u8]) {
             e.msg[plen..plen + vlen].copy_from_slice(&val[..vlen]);
             e.msg_len = plen + vlen;
         } else {
-            let default = b"Crash syst\xE8me";
+            let default = tr4(&[
+                b"Crash syst\xE8me",
+                b"System crash",
+                b"Bloqueo del sistema",
+                b"Systemabsturz",
+            ]);
             let dlen = default.len().min(MAX_MSG);
             e.msg[..dlen].copy_from_slice(&default[..dlen]);
             e.msg_len = dlen;
@@ -329,7 +339,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.text,
         r.left + 12,
         r.top + 10,
-        b"Cat\xE9gories",
+        tr4(&[
+            b"Cat\xE9gories",
+            b"Categories",
+            b"Categor\xEDas",
+            b"Kategorien",
+        ]),
     );
 
     for i in 0..CAT_NAMES.len() {
@@ -353,7 +368,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         if SELECTED_CAT == i {
             fill(g.hdc, g.b, r.left + 4, y + 4, r.left + 8, y + 20, p.accent);
         }
-        text(g.hdc, g.f.body, p.text, r.left + 16, y + 5, CAT_NAMES[i]);
+        text(
+            g.hdc,
+            g.f.body,
+            p.text,
+            r.left + 16,
+            y + 5,
+            tr4(&CAT_NAMES[i]),
+        );
 
         // Compteur
         let mut cnt = 0u32;
@@ -390,8 +412,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     );
 
     let btn_names: [&[u8]; 3] = [
-        b"Actualiser",
-        b"Effacer",
+        tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
+        tr4(&[b"Effacer", b"Clear", b"Borrar", b"Leeren"]),
         crate::locale::tr(crate::locale::S_REPORT_BUTTON),
     ];
     for (i, name) in btn_names.iter().enumerate() {
@@ -421,7 +443,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     );
 
     let col_x = [cx + 8, cx + 68, cx + 140, cx + 220];
-    let col_names: [&[u8]; 4] = [b"Niveau", b"Heure", b"Source", b"Message"];
+    let col_names: [&[u8]; 4] = [
+        tr4(&[b"Niveau", b"Level", b"Nivel", b"Ebene"]),
+        tr4(&[b"Heure", b"Time", b"Hora", b"Uhrzeit"]),
+        b"Source",
+        b"Message",
+    ];
     for (i, name) in col_names.iter().enumerate() {
         text(g.hdc, g.f.small, p.text2, col_x[i], ty + 5, name);
     }
@@ -524,7 +551,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.text,
         cx + 8,
         list_bottom + 6,
-        b"D\xE9tails",
+        tr4(&[b"D\xE9tails", b"Details", b"Detalles", b"Details"]),
     );
 
     if SELECTED_ROW >= 0 {
@@ -532,12 +559,33 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         if let Some(ei) = visible_index(entry_vis) {
             let e = &ENTRIES[ei];
             let dy = list_bottom + 24;
-            text(g.hdc, g.f.small, p.text3, cx + 8, dy, b"Niveau:");
+            text(
+                g.hdc,
+                g.f.small,
+                p.text3,
+                cx + 8,
+                dy,
+                tr4(&[b"Niveau:", b"Level:", b"Nivel:", b"Ebene:"]),
+            );
             text(g.hdc, g.f.small, p.text, cx + 60, dy, level_name(e.level));
-            text(g.hdc, g.f.small, p.text3, cx + 140, dy, b"Heure:");
+            text(
+                g.hdc,
+                g.f.small,
+                p.text3,
+                cx + 140,
+                dy,
+                tr4(&[b"Heure:", b"Time:", b"Hora:", b"Uhrzeit:"]),
+            );
             text(g.hdc, g.f.small, p.text, cx + 186, dy, &e.time);
             if e.source_len > 0 {
-                text(g.hdc, g.f.small, p.text3, cx + 260, dy, b"Source:");
+                text(
+                    g.hdc,
+                    g.f.small,
+                    p.text3,
+                    cx + 260,
+                    dy,
+                    tr4(&[b"Source:", b"Source:", b"Origen:", b"Quelle:"]),
+                );
                 text(
                     g.hdc,
                     g.f.small,

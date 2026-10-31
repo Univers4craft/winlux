@@ -70,7 +70,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let p = pal();
     fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, p.window);
 
-    let tabs: [&[u8]; 4] = [b"Calculatrice", b"Chronometre", b"Minuteur", b"Reveil"];
+    let tabs: [&[u8]; 4] = [
+        tr4(&[b"Calculatrice", b"Calculator", b"Calculadora", b"Rechner"]),
+        tr4(&[b"Chronometre", b"Stopwatch", b"Cron\xF3metro", b"Stoppuhr"]),
+        tr4(&[b"Minuteur", b"Timer", b"Temporizador", b"Timer"]),
+        tr4(&[b"Reveil", b"Alarm", b"Alarma", b"Wecker"]),
+    ];
     let tab_w = (r.right - r.left) / 4;
     for i in 0..4 {
         let tab_x = r.left + (i as i32) * tab_w;
@@ -225,9 +230,17 @@ unsafe fn draw_stopwatch(g: &mut Gfx, f: &Frame) {
     let by = y + 100;
 
     let btn_labels: [&[u8]; 3] = if STOPWATCH_RUNNING {
-        [b"Pause", b"Tour", b"Reset"]
+        [
+            tr4(&[b"Pause", b"Pause", b"Pausa", b"Pause"]),
+            tr4(&[b"Tour", b"Lap", b"Vuelta", b"Runde"]),
+            tr4(&[b"Reset", b"Reset", b"Reiniciar", b"Reset"]),
+        ]
     } else {
-        [b"Demarrer", b"Tour", b"Reset"]
+        [
+            tr4(&[b"Demarrer", b"Start", b"Iniciar", b"Start"]),
+            tr4(&[b"Tour", b"Lap", b"Vuelta", b"Runde"]),
+            tr4(&[b"Reset", b"Reset", b"Reiniciar", b"Reset"]),
+        ]
     };
 
     for i in 0..3 {
@@ -246,7 +259,14 @@ unsafe fn draw_stopwatch(g: &mut Gfx, f: &Frame) {
 
     if STOPWATCH_LAP_COUNT > 0 {
         let lap_y = by + 60;
-        text(g.hdc, g.f.small, p.text2, r.left + 16, lap_y, b"Tours :");
+        text(
+            g.hdc,
+            g.f.small,
+            p.text2,
+            r.left + 16,
+            lap_y,
+            tr4(&[b"Tours :", b"Laps:", b"Vueltas:", b"Runden:"]),
+        );
         for i in 0..STOPWATCH_LAP_COUNT.min(5) {
             text(
                 g.hdc,
@@ -363,7 +383,11 @@ unsafe fn draw_timer(g: &mut Gfx, f: &Frame) {
         b"-60s",
     );
 
-    let start_btn: &[u8] = if TIMER_RUNNING { b"Pause" } else { b"Demarrer" };
+    let start_btn: &[u8] = if TIMER_RUNNING {
+        tr4(&[b"Pause", b"Pause", b"Pausa", b"Pause"])
+    } else {
+        tr4(&[b"Demarrer", b"Start", b"Iniciar", b"Start"])
+    };
     round_rect(
         g.hdc,
         g.b,
@@ -401,7 +425,7 @@ unsafe fn draw_timer(g: &mut Gfx, f: &Frame) {
         p.text,
         r.left + 16 + 158,
         ctrl_y + 62,
-        b"Reset",
+        tr4(&[b"Reset", b"Reset", b"Reiniciar", b"Reset"]),
     );
 }
 
@@ -434,12 +458,12 @@ unsafe fn draw_alarm(g: &mut Gfx, f: &Frame) {
 
     let status: &[u8] = if ALARM_ENABLED {
         if ALARM_TRIGGERED {
-            b"ALARME !"
+            tr4(&[b"ALARME !", b"ALARM!", b"\xA1ALARMA!", b"ALARM!"])
         } else {
-            b"Active"
+            tr4(&[b"Active", b"On", b"Activada", b"Ein"])
         }
     } else {
-        b"Desactive"
+        tr4(&[b"Desactive", b"Off", b"Desactivada", b"Aus"])
     };
     text_centered(
         g.hdc,
@@ -515,9 +539,9 @@ unsafe fn draw_alarm(g: &mut Gfx, f: &Frame) {
     );
 
     let toggle_label: &[u8] = if ALARM_ENABLED {
-        b"Desactiver"
+        tr4(&[b"Desactiver", b"Turn off", b"Desactivar", b"Ausschalten"])
     } else {
-        b"Activer"
+        tr4(&[b"Activer", b"Turn on", b"Activar", b"Einschalten"])
     };
     let toggle_color = if ALARM_ENABLED {
         rgb(0xFF, 0x45, 0x3A)

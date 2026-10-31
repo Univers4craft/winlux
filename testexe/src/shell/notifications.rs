@@ -41,39 +41,54 @@ static mut QA_BATTERY_SAVER: bool = false;
 static mut QA_FOCUS_ASSIST: bool = false;
 
 struct QuickAction {
-    label: &'static [u8],
+    label: Tr4,
     state: unsafe fn() -> bool,
     toggle: unsafe fn(),
 }
 
 const QUICK_ACTIONS: [QuickAction; 6] = [
     QuickAction {
-        label: b"Wi-Fi",
+        label: [b"Wi-Fi", b"Wi-Fi", b"Wi-Fi", b"Wi-Fi"],
         state: || unsafe { QA_WIFI },
         toggle: || unsafe { QA_WIFI = !QA_WIFI },
     },
     QuickAction {
-        label: b"Bluetooth",
+        label: [b"Bluetooth", b"Bluetooth", b"Bluetooth", b"Bluetooth"],
         state: || unsafe { QA_BLUETOOTH },
         toggle: || unsafe { QA_BLUETOOTH = !QA_BLUETOOTH },
     },
     QuickAction {
-        label: b"Mode avion",
+        label: [
+            b"Mode avion",
+            b"Airplane mode",
+            b"Modo avi\xF3n",
+            b"Flugmodus",
+        ],
         state: || unsafe { QA_AIRPLANE },
         toggle: || unsafe { QA_AIRPLANE = !QA_AIRPLANE },
     },
     QuickAction {
-        label: b"Veilleuse",
+        label: [b"Veilleuse", b"Night light", b"Luz nocturna", b"Nachtmodus"],
         state: || unsafe { QA_NIGHT_LIGHT },
         toggle: || unsafe { QA_NIGHT_LIGHT = !QA_NIGHT_LIGHT },
     },
     QuickAction {
-        label: b"\xC9co. batterie",
+        label: [
+            b"\xC9co. batterie",
+            b"Battery saver",
+            b"Ahorro bater\xEDa",
+            b"Energiesparen",
+        ],
         state: || unsafe { QA_BATTERY_SAVER },
         toggle: || unsafe { QA_BATTERY_SAVER = !QA_BATTERY_SAVER },
     },
     QuickAction {
-        label: b"Ne pas d\xE9ranger",
+        label: [
+            b"Ne pas d\xE9ranger",
+            b"Do not disturb",
+            b"No molestar",
+            b"Nicht st\xF6ren",
+        ],
         state: || unsafe { QA_FOCUS_ASSIST },
         toggle: || unsafe { QA_FOCUS_ASSIST = !QA_FOCUS_ASSIST },
     },
@@ -279,18 +294,18 @@ fn day_of_week(y: i32, m: i32, d: i32) -> i32 {
 
 fn month_name(m: i32) -> &'static [u8] {
     match m {
-        1 => b"Janvier",
-        2 => b"F\xE9vrier",
-        3 => b"Mars",
-        4 => b"Avril",
-        5 => b"Mai",
-        6 => b"Juin",
-        7 => b"Juillet",
-        8 => b"Ao\xFBt",
-        9 => b"Septembre",
-        10 => b"Octobre",
-        11 => b"Novembre",
-        12 => b"D\xE9cembre",
+        1 => tr4(&[b"Janvier", b"January", b"Enero", b"Januar"]),
+        2 => tr4(&[b"F\xE9vrier", b"February", b"Febrero", b"Februar"]),
+        3 => tr4(&[b"Mars", b"March", b"Marzo", b"M\xE4rz"]),
+        4 => tr4(&[b"Avril", b"April", b"Abril", b"April"]),
+        5 => tr4(&[b"Mai", b"May", b"Mayo", b"Mai"]),
+        6 => tr4(&[b"Juin", b"June", b"Junio", b"Juni"]),
+        7 => tr4(&[b"Juillet", b"July", b"Julio", b"Juli"]),
+        8 => tr4(&[b"Ao\xFBt", b"August", b"Agosto", b"August"]),
+        9 => tr4(&[b"Septembre", b"September", b"Septiembre", b"September"]),
+        10 => tr4(&[b"Octobre", b"October", b"Octubre", b"Oktober"]),
+        11 => tr4(&[b"Novembre", b"November", b"Noviembre", b"November"]),
+        12 => tr4(&[b"D\xE9cembre", b"December", b"Diciembre", b"Dezember"]),
         _ => b"?",
     }
 }
@@ -321,7 +336,7 @@ unsafe fn draw_quick_actions(hdc: Handle, b: &mut Brushes, f: &Fonts, pl: &Panel
             tc,
             (r.left + r.right) / 2,
             r.top + 13,
-            qa.label,
+            tr4(&qa.label),
         );
     }
 }
@@ -435,7 +450,15 @@ unsafe fn draw_calendar(hdc: Handle, b: &mut Brushes, f: &Fonts, pl: &PanelLayou
     );
 
     // Day-of-week headers.
-    let dow_labels: [&[u8]; 7] = [b"Lu", b"Ma", b"Me", b"Je", b"Ve", b"Sa", b"Di"];
+    let dow_labels: [&[u8]; 7] = [
+        tr4(&[b"Lu", b"Mo", b"Lu", b"Mo"]),
+        tr4(&[b"Ma", b"Tu", b"Ma", b"Di"]),
+        tr4(&[b"Me", b"We", b"Mi", b"Mi"]),
+        tr4(&[b"Je", b"Th", b"Ju", b"Do"]),
+        tr4(&[b"Ve", b"Fr", b"Vi", b"Fr"]),
+        tr4(&[b"Sa", b"Sa", b"S\xE1", b"Sa"]),
+        tr4(&[b"Di", b"Su", b"Do", b"So"]),
+    ];
     let grid_w = 7 * CAL_CELL;
     let gx = pl.x + (pl.w - grid_w) / 2;
     let gy = cy + 26;
@@ -522,7 +545,12 @@ unsafe fn draw_notifications(hdc: Handle, b: &mut Brushes, f: &Fonts, pl: &Panel
             rgb(0xC5, 0xC5, 0xC5),
             clr_x + 8,
             y0 + 1,
-            b"Tout effacer",
+            tr4(&[
+                b"Tout effacer",
+                b"Clear all",
+                b"Borrar todo",
+                b"Alle l\xF6schen",
+            ]),
         );
     }
 
@@ -544,7 +572,12 @@ unsafe fn draw_notifications(hdc: Handle, b: &mut Brushes, f: &Fonts, pl: &Panel
             rgb(0x9A, 0xA3, 0xAE),
             pl.x + pl.w / 2,
             y0 + 48,
-            b"Aucune notification",
+            tr4(&[
+                b"Aucune notification",
+                b"No notifications",
+                b"No hay notificaciones",
+                b"Keine Benachrichtigungen",
+            ]),
         );
         return;
     }
@@ -632,8 +665,14 @@ unsafe fn draw_notifications(hdc: Handle, b: &mut Brushes, f: &Fonts, pl: &Panel
         let mut ts = [0u8; 16];
         let tl;
         if ago < 60 {
-            ts[..11].copy_from_slice(b"\xC0 l'instant");
-            tl = 11;
+            let now = tr4(&[
+                b"\xC0 l'instant",
+                b"Just now",
+                b"Ahora mismo",
+                b"Gerade eben",
+            ]);
+            ts[..now.len()].copy_from_slice(now);
+            tl = now.len();
         } else if ago < 3600 {
             let mins = ago / 60;
             if mins < 10 {
