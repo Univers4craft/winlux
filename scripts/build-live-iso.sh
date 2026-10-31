@@ -650,6 +650,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     /bin/busybox grep -Ei 'libinput|input device|mouse|keyboard|error|cursor|config' /tmp/Xorg.0.log 2>/dev/null || true
     if ! /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; then
         /bin/busybox cat /tmp/Xorg.0.log /tmp/xorg-console.log >&2
+        /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
         /bin/sh
     fi
     export DISPLAY=:0 XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
@@ -660,8 +661,18 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     if test -d /usr/lib/locale/fr_FR.utf8; then export LANG=fr_FR.UTF-8; else export LANG=C.UTF-8; fi
     if ! /usr/bin/winlux-native-session >/run/winlux/native-session.log 2>&1; then
         /bin/busybox cat /run/winlux/native-session.log >&2
+        # Une version tout juste installée qui n'ouvre pas le bureau est
+        # remplacée par la précédente, puis la machine redémarre.
+        /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
         /bin/sh
     fi
+    # Bureau ouvert et stable pendant une minute : la mise à jour est validée.
+    (
+        /bin/busybox sleep 60
+        if /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; then
+            /usr/bin/winlux-update --confirm-boot >>/run/winlux/boot-update.log 2>&1 || true
+        fi
+    ) &
     # Bureau à distance : relancé au démarrage s'il était activé.
     DISPLAY=:0 /usr/bin/winlux-remote-config ensure >/dev/null 2>&1 || true
     # Tâches planifiées « à l'ouverture de session ».

@@ -121,6 +121,10 @@ done
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
 /usr/bin/winlux-session-startup >/run/winlux/startup-apps.log 2>&1
+# Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
+if command -v winlux-store >/dev/null 2>&1; then
+    winlux-store starter --resume >/run/winlux/starter.log 2>&1 &
+fi
 if test ! -f "$HOME/.config/winlux/welcome-complete" && test "${WINLUX_NO_WELCOME:-0}" != 1 && ! grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     /usr/bin/winlux-welcome >/run/winlux/welcome.log 2>&1 &
 fi

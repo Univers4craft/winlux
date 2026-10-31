@@ -347,7 +347,8 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, build: &[u8], fallback_version: &[u8])
         b"Winlux",
     );
     let mut line = Line::new();
-    line.push(b"Version ").push(ascii_or_dash(version));
+    line.push(b"Version ")
+        .push(ascii_or_dash(version.strip_prefix(b"v").unwrap_or(version)));
     let name = codename(version);
     if !name.is_empty() {
         line.push(b"  \xAB ").push(name).push(b" \xBB");

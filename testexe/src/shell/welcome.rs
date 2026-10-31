@@ -1,6 +1,10 @@
 //! Bienvenue : visite guidée du bureau au premier login (Démarrer, Explorer,
-//! Paramètres, Terminal, raccourcis, confidentialité, thème).
-//! Rouvrable à tout moment depuis le menu Démarrer.
+//! lancer un .exe, Paramètres, Terminal, raccourcis, confidentialité,
+//! logiciels courants en un clic, thème).
+//! Rouvrable à tout moment depuis le menu Démarrer. Fermée en cours de route,
+//! elle reprend à la même étape au login suivant ; les installations lancées
+//! depuis l'étape « Vos premiers logiciels » continuent sans elle et
+//! reprennent elles aussi après une fermeture de session.
 
 use crate::gfx::*;
 use crate::wm::{Frame, Gfx, Mouse};
@@ -17,7 +21,17 @@ struct Step {
 
 const NONE: Tr4 = [b"", b"", b"", b""];
 
-const STEPS: [Step; 8] = [
+const S_START: usize = 1;
+const S_EXPLORER: usize = 2;
+const S_EXE: usize = 3;
+const S_SETTINGS: usize = 4;
+const S_TERMINAL: usize = 5;
+const S_SHORTCUTS: usize = 6;
+const S_PRIVACY: usize = 7;
+const S_APPS: usize = 8;
+const S_STYLE: usize = 9;
+
+const STEPS: [Step; 10] = [
     Step {
         title: [b"Bienvenue dans Winlux", b"Welcome to Winlux", b"Bienvenido a Winlux", b"Willkommen bei Winlux"],
         text: [b"Winlux est un syst\xE8me Linux qui lance vos programmes Windows d'un double-clic, sans machine virtuelle cach\xE9e. Cette visite de deux minutes pr\xE9sente l'essentiel.", b"Winlux is a Linux system that runs your Windows programs with a double-click, without a hidden virtual machine. This two-minute tour shows you the essentials.", b"Winlux es un sistema Linux que abre sus programas de Windows con un doble clic, sin m\xE1quina virtual oculta. Este recorrido de dos minutos le muestra lo esencial.", b"Winlux ist ein Linux-System, das Ihre Windows-Programme per Doppelklick startet, ohne versteckte virtuelle Maschine. Diese zweimin\xFCtige Tour zeigt das Wichtigste."],
@@ -47,6 +61,16 @@ const STEPS: [Step; 8] = [
             [b"Corbeille pour r\xE9cup\xE9rer un fichier supprim\xE9.", b"Recycle Bin to recover a deleted file.", b"Papelera para recuperar un archivo eliminado.", b"Papierkorb zum Wiederherstellen gel\xF6schter Dateien."],
         ],
         action: [b"Ouvrir l'Explorateur", b"Open Explorer", b"Abrir el Explorador", b"Explorer \xF6ffnen"],
+    },
+    Step {
+        title: [b"Lancer un programme Windows", b"Run a Windows program", b"Abrir un programa de Windows", b"Ein Windows-Programm starten"],
+        text: [b"Double-cliquez sur un fichier .exe, dans l'Explorateur ou sur le bureau : il s'ouvre comme sous Windows. Il n'y a rien \xE0 installer ni \xE0 configurer avant.", b"Double-click an .exe file, in Explorer or on the desktop: it opens just like on Windows. There is nothing to install or set up first.", b"Haga doble clic en un archivo .exe, en el Explorador o en el escritorio: se abre igual que en Windows. No hay nada que instalar ni configurar antes.", b"Doppelklicken Sie auf eine .exe-Datei, im Explorer oder auf dem Desktop: Sie \xF6ffnet sich wie unter Windows. Vorher muss nichts installiert oder eingerichtet werden."],
+        tips: [
+            [b"Un installateur (setup.exe, .msi) ajoute son raccourci au menu D\xE9marrer.", b"An installer (setup.exe, .msi) adds its shortcut to the Start menu.", b"Un instalador (setup.exe, .msi) a\xF1ade su acceso directo al men\xFA Inicio.", b"Ein Installationsprogramm (setup.exe, .msi) legt seine Verkn\xFCpfung im Startmen\xFC an."],
+            [b"Votre dossier personnel est le lecteur C:, tout le syst\xE8me le lecteur Z:.", b"Your home folder is drive C:, the whole system is drive Z:.", b"Su carpeta personal es la unidad C:, todo el sistema la unidad Z:.", b"Ihr pers\xF6nlicher Ordner ist Laufwerk C:, das ganze System Laufwerk Z:."],
+            [b"Clic droit sur un .exe : ses r\xE9glages de compatibilit\xE9.", b"Right-click an .exe: its compatibility settings.", b"Clic derecho en un .exe: sus ajustes de compatibilidad.", b"Rechtsklick auf eine .exe: ihre Kompatibilit\xE4tseinstellungen."],
+        ],
+        action: [b"Ouvrir T\xE9l\xE9chargements", b"Open Downloads", b"Abrir Descargas", b"Downloads \xF6ffnen"],
     },
     Step {
         title: [b"Les Param\xE8tres", b"Settings", b"La Configuraci\xF3n", b"Die Einstellungen"],
@@ -85,6 +109,12 @@ const STEPS: [Step; 8] = [
         action: [b"Ouvrir Confidentialit\xE9", b"Open Privacy", b"Abrir Privacidad", b"Datenschutz \xF6ffnen"],
     },
     Step {
+        title: [b"Vos premiers logiciels", b"Your first apps", b"Sus primeras aplicaciones", b"Ihre ersten Programme"],
+        text: [b"Cochez les logiciels \xE0 installer. Tous sont gratuits et sans compte ; l'installation continue m\xEAme si vous fermez cette fen\xEAtre.", b"Tick the apps to install. All are free and need no account; installation continues even if you close this window.", b"Marque las aplicaciones que desea instalar. Todas son gratuitas y sin cuenta; la instalaci\xF3n contin\xFAa aunque cierre esta ventana.", b"W\xE4hlen Sie die Programme aus. Alle sind kostenlos und ohne Konto; die Installation l\xE4uft weiter, auch wenn Sie dieses Fenster schlie\xDFen."],
+        tips: [NONE, NONE, NONE],
+        action: NONE,
+    },
+    Step {
         title: [b"Choisissez votre style", b"Choose your style", b"Elija su estilo", b"W\xE4hlen Sie Ihren Stil"],
         text: [b"Clair ou sombre ? Barre centr\xE9e ou \xE0 gauche ? Votre choix s'applique tout de suite et reste modifiable dans Param\xE8tres > Apparence.", b"Light or dark? Centered or left taskbar? Your choice applies right away and can be changed in Settings > Appearance.", b"\xBFClaro u oscuro? \xBFBarra centrada o a la izquierda? Su elecci\xF3n se aplica al momento y se puede cambiar en Configuraci\xF3n > Apariencia.", b"Hell oder dunkel? Leiste zentriert oder links? Ihre Wahl gilt sofort und l\xE4sst sich unter Einstellungen > Darstellung \xE4ndern."],
         tips: [NONE, NONE, NONE],
@@ -105,11 +135,62 @@ const SHORTCUTS: [(Tr4, Tr4); 10] = [
     ([b"Ctrl + Maj + \xC9chap", b"Ctrl + Shift + Esc", b"Ctrl + May\xFAs + Esc", b"Strg + Umschalt + Esc"], [b"Gestionnaire des t\xE2ches", b"Task Manager", b"Administrador de tareas", b"Task-Manager"]),
 ];
 
+/// Logiciels courants proposés à l'étape « Vos premiers logiciels ». Le
+/// service `winlux-store starter` choisit la source (apt, Flathub, catalogue
+/// Windows) et n'annonce que ceux installables sur la machine. Aucun produit
+/// Microsoft dans cette liste.
+struct Starter {
+    id: &'static [u8],
+    name: &'static [u8],
+    what: Tr4,
+    preselected: bool,
+}
+
+const STARTER: [Starter; 10] = [
+    Starter { id: b"firefox", name: b"Firefox", what: [b"Navigateur web", b"Web browser", b"Navegador web", b"Webbrowser"], preselected: true },
+    Starter { id: b"libreoffice", name: b"LibreOffice", what: [b"Textes, tableurs, pr\xE9sentations", b"Documents and spreadsheets", b"Textos, hojas de c\xE1lculo", b"Texte, Tabellen, Folien"], preselected: true },
+    Starter { id: b"vlc", name: b"VLC", what: [b"Vid\xE9os et musique", b"Videos and music", b"V\xEDdeos y m\xFAsica", b"Videos und Musik"], preselected: true },
+    Starter { id: b"thunderbird", name: b"Thunderbird", what: [b"Courrier \xE9lectronique", b"Email", b"Correo electr\xF3nico", b"E-Mail"], preselected: false },
+    Starter { id: b"gimp", name: b"GIMP", what: [b"Retouche photo", b"Photo editing", b"Edici\xF3n de fotos", b"Bildbearbeitung"], preselected: false },
+    Starter { id: b"7zip", name: b"7-Zip", what: [b"Archives zip, 7z, rar", b"Zip, 7z, rar archives", b"Archivos zip, 7z, rar", b"Zip-, 7z-, RAR-Archive"], preselected: false },
+    Starter { id: b"keepassxc", name: b"KeePassXC", what: [b"Mots de passe", b"Password manager", b"Gestor de contrase\xF1as", b"Passwortmanager"], preselected: false },
+    Starter { id: b"geany", name: b"Geany", what: [b"\xC9diteur de code", b"Code editor", b"Editor de c\xF3digo", b"Code-Editor"], preselected: false },
+    Starter { id: b"obs", name: b"OBS Studio", what: [b"Enregistrer l'\xE9cran", b"Screen recording", b"Grabar la pantalla", b"Bildschirmaufnahme"], preselected: false },
+    Starter { id: b"notepadpp", name: b"Notepad++", what: [b"\xC9diteur de texte (Windows)", b"Text editor (Windows)", b"Editor de texto (Windows)", b"Texteditor (Windows)"], preselected: false },
+];
+const APP_MAX: usize = STARTER.len();
+
+/// État d'un logiciel lu dans Z:\run\winlux\starter.txt : 0 non proposé,
+/// b'i' installé, b'a' disponible, b'w' en attente, b'r' en cours, b'f' échec.
+#[derive(Clone, Copy)]
+struct Row {
+    state: u8,
+    pct: u8,
+    icon: [u8; 256],
+    icon_len: usize,
+}
+const NO_ROW: Row = Row {
+    state: 0,
+    pct: 0,
+    icon: [0; 256],
+    icon_len: 0,
+};
+
 static mut STEP: usize = 0;
 static mut HOVER: i32 = -1;
 static mut CHECKED: bool = false;
 static mut ANIM: u32 = 0;
 const ANIM_MS: i32 = 220;
+static mut ROWS: [Row; APP_MAX] = [NO_ROW; APP_MAX];
+/// starter.txt lu au moins une fois (sinon : recherche en cours).
+static mut LOADED: bool = false;
+static mut BUSY: bool = false;
+/// Cases cochées (bit i = STARTER[i]) ; préremplies une fois la liste connue.
+static mut SEL: u16 = 0;
+static mut SEL_INIT: bool = false;
+/// Liste demandée au service pour cette ouverture de Bienvenue.
+static mut LISTED: bool = false;
+static mut POLL: u32 = 0;
 
 const BTN_NEXT: i32 = 0;
 const BTN_BACK: i32 = 1;
@@ -119,7 +200,10 @@ const BTN_DARK: i32 = 4;
 const BTN_LIGHT: i32 = 5;
 const BTN_CENTER: i32 = 6;
 const BTN_LEFT: i32 = 7;
+const BTN_INSTALL: i32 = 8;
+const BTN_STORE: i32 = 9;
 const BTN_DOT: i32 = 10;
+const BTN_APP: i32 = 30;
 
 /// Ouvre la visite une seule fois, au premier login d'une session Winlux.
 pub unsafe fn maybe_show() -> bool {
@@ -127,20 +211,124 @@ pub unsafe fn maybe_show() -> bool {
         return false;
     }
     CHECKED = true;
-    if crate::settings::status_value(b"welcome_done") == b"1" {
+    // Installations de logiciels interrompues par la fin de la session
+    // précédente : elles reprennent d'elles-mêmes (sans effet si rien n'attend).
+    crate::store::spawn(c"winlux-store", b"starter --resume");
+    if done() {
         return false;
     }
-    // Marquée vue dès l'ouverture : fermer la fenêtre suffit à ne plus la revoir.
-    crate::settings::control(c"welcome-done");
     open();
     true
 }
 
+unsafe fn done() -> bool {
+    crate::settings::status_value(b"welcome_done") == b"1"
+}
+
+/// Ouvre la visite : à l'étape où elle avait été fermée tant qu'elle n'a pas
+/// été terminée, sinon depuis le début.
 pub unsafe fn open() {
-    STEP = 0;
+    // Appli native lancée seule : l'état du service n'est pas encore lu.
+    if !crate::settings::service_available() {
+        crate::settings::system_tick();
+    }
+    let saved = crate::settings::number(crate::settings::status_value(b"welcome_step")) as usize;
+    STEP = if !done() && saved < STEPS.len() { saved } else { 0 };
     HOVER = -1;
+    LISTED = false;
     ANIM = GetTickCount();
     crate::wm::open(crate::wm::APP_WELCOME);
+    if STEP == S_APPS {
+        request_list();
+    }
+}
+
+/// Demande au service la liste des logiciels proposés (une fois par ouverture).
+unsafe fn request_list() {
+    if !LISTED {
+        LISTED = true;
+        POLL = 0;
+        crate::store::spawn(c"winlux-store", b"starter --list");
+    }
+}
+
+/// Relit Z:\run\winlux\starter.txt ; vrai si l'affichage change.
+unsafe fn load_rows() -> bool {
+    let mut buf = [0u8; 4096];
+    let n = crate::store::read_file(c"Z:\\run\\winlux\\starter.txt", &mut buf);
+    if n == 0 {
+        return false;
+    }
+    let n = crate::store::utf8_to_cp1252(&mut buf, n);
+    let before = (ROWS.map(|r| (r.state, r.pct)), BUSY, LOADED);
+    let mut rows = [NO_ROW; APP_MAX];
+    BUSY = false;
+    for line in buf[..n].split(|&c| c == b'\n') {
+        if line == b"busy=1" {
+            BUSY = true;
+        }
+        let Some(rest) = line.strip_prefix(b"app=") else { continue };
+        let mut parts = rest.split(|&c| c == b'|');
+        let (Some(id), Some(state)) = (parts.next(), parts.next()) else { continue };
+        let Some(i) = STARTER.iter().position(|s| s.id == id) else { continue };
+        let pct = crate::settings::number(parts.next().unwrap_or(b"0")).min(100);
+        let icon = parts.next().unwrap_or(b"");
+        let r = &mut rows[i];
+        r.state = match state.first() {
+            Some(&c) if b"iawrf".contains(&c) => c,
+            _ => 0,
+        };
+        r.pct = pct as u8;
+        r.icon_len = icon.len().min(255);
+        r.icon[..r.icon_len].copy_from_slice(&icon[..r.icon_len]);
+    }
+    ROWS = rows;
+    LOADED = true;
+    if !SEL_INIT {
+        SEL_INIT = true;
+        for (i, s) in STARTER.iter().enumerate() {
+            if s.preselected && ROWS[i].state == b'a' {
+                SEL |= 1 << i;
+            }
+        }
+    }
+    // Une case ne reste cochée que sur un logiciel encore à installer.
+    for (i, r) in ROWS.iter().enumerate() {
+        if !matches!(r.state, b'a' | b'f') {
+            SEL &= !(1 << i);
+        }
+    }
+    before != (ROWS.map(|r| (r.state, r.pct)), BUSY, LOADED)
+}
+
+/// Position (dans la grille) du logiciel `i`, ou None s'il n'est pas proposé.
+unsafe fn slot(i: usize) -> Option<i32> {
+    (ROWS[i].state != 0).then(|| ROWS[..i].iter().filter(|r| r.state != 0).count() as i32)
+}
+unsafe fn shown_count() -> i32 {
+    ROWS.iter().filter(|r| r.state != 0).count() as i32
+}
+const APP_ROW_H: i32 = 46;
+fn apps_top(f: &Frame) -> i32 {
+    tips_top(f) - 8
+}
+/// Lignes de la grille qui tiennent au-dessus du bouton Installer.
+fn apps_rows_fit(f: &Frame) -> i32 {
+    ((footer_y(f) - 52 - apps_top(f)) / APP_ROW_H).max(1)
+}
+unsafe fn app_rect(f: &Frame, i: usize) -> Option<Rect> {
+    let k = slot(i)?;
+    if k / 2 >= apps_rows_fit(f) {
+        return None;
+    }
+    let x = body_left(f);
+    let col = (f.client.right - 32 - x) / 2;
+    let l = x + (k % 2) * col;
+    let t = apps_top(f) + (k / 2) * APP_ROW_H;
+    Some(rect(l, t, l + col - 8, t + APP_ROW_H - 6))
+}
+unsafe fn selected_count() -> u32 {
+    SEL.count_ones()
 }
 
 fn panel_rect(f: &Frame) -> Rect {
@@ -177,6 +365,16 @@ fn button_rect(f: &Frame, id: i32) -> Rect {
             let l = x + (id - BTN_CENTER) * 170;
             rect(l, t, l + 156, t + 34)
         }
+        BTN_INSTALL | BTN_STORE => {
+            let rows = unsafe { (shown_count() + 1) / 2 }.clamp(1, apps_rows_fit(f));
+            let t = apps_top(f) + rows * APP_ROW_H + 4;
+            if id == BTN_INSTALL {
+                rect(x, t, x + 210, t + 34)
+            } else {
+                rect(x + 222, t, (x + 222 + 230).min(c.right - 24), t + 34)
+            }
+        }
+        _ if id >= BTN_APP => unsafe { app_rect(f, (id - BTN_APP) as usize).unwrap_or(rect(0, 0, 0, 0)) },
         _ => {
             let i = id - BTN_DOT;
             let n = STEPS.len() as i32;
@@ -197,21 +395,28 @@ fn visible(id: i32) -> bool {
         BTN_BACK => s > 0,
         BTN_SKIP => s + 1 < STEPS.len(),
         BTN_ACTION => !STEPS[s].action[0].is_empty(),
-        BTN_DARK | BTN_LIGHT | BTN_CENTER | BTN_LEFT => s + 1 == STEPS.len(),
+        BTN_DARK | BTN_LIGHT | BTN_CENTER | BTN_LEFT => s == S_STYLE,
+        BTN_INSTALL | BTN_STORE => s == S_APPS,
         _ => true,
     }
 }
 
 fn hit(f: &Frame, x: i32, y: i32) -> i32 {
-    let mut ids = [BTN_NEXT, BTN_BACK, BTN_SKIP, BTN_ACTION, BTN_DARK, BTN_LIGHT, BTN_CENTER, BTN_LEFT, 0];
+    let ids = [BTN_NEXT, BTN_BACK, BTN_SKIP, BTN_ACTION, BTN_DARK, BTN_LIGHT, BTN_CENTER, BTN_LEFT, BTN_INSTALL, BTN_STORE];
     for i in 0..STEPS.len() as i32 {
-        ids[8] = BTN_DOT + i;
-        let r = button_rect(f, ids[8]);
+        let r = button_rect(f, BTN_DOT + i);
         if inside(&rect(r.left - 3, r.top - 3, r.right + 3, r.bottom + 3), x, y) {
-            return ids[8];
+            return BTN_DOT + i;
         }
     }
-    for &id in &ids[..8] {
+    if unsafe { STEP } == S_APPS {
+        for i in 0..APP_MAX {
+            if unsafe { app_rect(f, i) }.is_some_and(|r| inside(&r, x, y)) {
+                return BTN_APP + i as i32;
+            }
+        }
+    }
+    for &id in &ids {
         if visible(id) && inside(&button_rect(f, id), x, y) {
             return id;
         }
@@ -319,7 +524,7 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
             let b = rect((s.left + s.right) / 2 - 37, s.bottom - 15, (s.left + s.right) / 2 - 27, s.bottom - 1);
             ring(g.hdc, g.b, b.left - 6, b.top - 6, b.right + 6, b.bottom + 4, 2, p.accent, blend(p.accent, p.surface, 30));
         }
-        2 | 3 => {
+        S_EXPLORER | S_SETTINGS => {
             let s = mini_screen(g, &r);
             let win = rect(s.left + 16, s.top + 12, s.right - 16, s.bottom - 24);
             panel(g.hdc, g.b, win.left, win.top, win.right, win.bottom, 6, p.surface, p.border);
@@ -330,7 +535,7 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
                 let y = win.top + 20 + i * 14;
                 fill(g.hdc, g.b, win.left + 6, y, nav - 6, y + 6, if i == 1 { p.accent } else { p.text3 });
             }
-            if STEP == 2 {
+            if STEP == S_EXPLORER {
                 for i in 0..6 {
                     let x = nav + 10 + (i % 3) * ((win.right - nav - 16) / 3);
                     let y = win.top + 20 + (i / 3) * 28;
@@ -346,7 +551,29 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
                 }
             }
         }
-        4 => {
+        S_EXE => {
+            // Un setup.exe sur le bureau, le pointeur dessus, et la fenêtre du
+            // programme qui s'ouvre.
+            let s = mini_screen(g, &r);
+            let ix = s.left + 22;
+            let iy = s.top + 18;
+            ring(g.hdc, g.b, ix - 8, iy - 8, ix + 44, iy + 44, 2, p.accent, blend(p.accent, p.surface, 22));
+            glyph(g.hdc, g.b, g.f, Glyph::Exe, ix + 2, iy + 2, 32);
+            text_centered(g.hdc, g.f.small, 11, p.text, ix + 18, iy + 48, b"setup.exe");
+            // Pointeur de souris.
+            let (mx, my) = (ix + 30, iy + 26);
+            for k in 0..12 {
+                fill(g.hdc, g.b, mx, my + k, mx + k * 2 / 3 + 1, my + k + 1, p.text);
+            }
+            let win = rect(s.left + (s.right - s.left) / 2 - 6, s.top + 22, s.right - 14, s.bottom - 26);
+            panel(g.hdc, g.b, win.left, win.top, win.right, win.bottom, 6, p.surface, p.accent);
+            fill(g.hdc, g.b, win.left + 1, win.top + 1, win.right - 1, win.top + 13, p.surface2);
+            round_rect(g.hdc, g.b, win.left + 10, win.top + 22, win.right - 10, win.top + 32, 3, p.text3);
+            round_rect(g.hdc, g.b, win.left + 10, win.top + 38, win.left + (win.right - win.left) * 2 / 3, win.top + 48, 3, p.text3);
+            round_rect(g.hdc, g.b, win.right - 56, win.bottom - 22, win.right - 10, win.bottom - 8, 4, p.accent);
+            text_centered(g.hdc, g.f.semibold, 13, p.text2, cx, r.bottom + 14, tr4(&[b"Double-clic et c'est parti", b"Double-click and go", b"Doble clic y listo", b"Doppelklick und los"]));
+        }
+        S_TERMINAL => {
             panel(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, rgb(0x0C, 0x0C, 0x0C), p.border);
             fill(g.hdc, g.b, r.left + 1, r.top + 1, r.right - 1, r.top + 22, rgb(0x20, 0x20, 0x20));
             text(g.hdc, g.f.small, rgb(0xCC, 0xCC, 0xCC), r.left + 10, r.top + 5, b"Terminal");
@@ -356,7 +583,7 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
                 text(g.hdc, g.f.small, c, r.left + 12, r.top + 32 + i as i32 * 18, l);
             }
         }
-        5 => {
+        S_SHORTCUTS => {
             let key = |g: &mut Gfx, x: i32, y: i32, w: i32, label: &[u8]| {
                 let p = pal();
                 panel(g.hdc, g.b, x, y + 4, x + w, y + 48, 7, p.border, p.border);
@@ -369,7 +596,7 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
             key(g, cx + 26, y, 54, b"E");
             glyph(g.hdc, g.b, g.f, Glyph::Folder, cx + 96, y + 8, 26);
         }
-        6 => {
+        S_PRIVACY => {
             let s = h * 2 / 3;
             let l = cx - s / 2;
             let top = r.top + 10;
@@ -379,6 +606,20 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
             ellipse(g.hdc, g.b, cx - 8, top + s * 2 / 3 - 6, cx + 8, top + s * 2 / 3 + 10, p.on_accent);
             fill(g.hdc, g.b, cx - 3, top + s * 2 / 3 + 6, cx + 3, top + s * 2 / 3 + 22, p.on_accent);
             text_centered(g.hdc, g.f.semibold, 13, p.text, cx, top + s + 28, tr4(&[b"Aucune t\xE9l\xE9m\xE9trie", b"No telemetry", b"Sin telemetr\xEDa", b"Keine Telemetrie"]));
+        }
+        S_APPS => {
+            // Une étagère d'applications et la flèche de téléchargement.
+            let tile = (w - 4 * 12) / 3;
+            for i in 0..6 {
+                let l = r.left + 12 + (i % 3) * (tile + 12);
+                let t = r.top + (i / 3) * (tile + 12);
+                panel(g.hdc, g.b, l, t, l + tile, t + tile, 10, p.surface, p.border);
+                let inner = tile / 2;
+                round_rect(g.hdc, g.b, l + (tile - inner) / 2, t + (tile - inner) / 2, l + (tile + inner) / 2, t + (tile + inner) / 2, inner / 4, if i == 1 { p.accent } else { blend(p.accent, p.surface, 35 + i * 8) });
+            }
+            let by = r.top + 2 * (tile + 12) + 4;
+            ellipse(g.hdc, g.b, cx - 20, by, cx + 20, by + 40, p.accent);
+            glyph(g.hdc, g.b, g.f, Glyph::Download, cx - 11, by + 9, 22);
         }
         _ => {
             for (i, dark) in [true, false].iter().enumerate() {
@@ -398,6 +639,118 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
     }
 }
 
+/// « ÉTAPE n SUR m » dans la langue de l'interface.
+fn step_label(step: usize) -> crate::store::Buf<32> {
+    let (a, b): (&[u8], &[u8]) = match ui_lang() {
+        1 => (b"STEP ", b" OF "),
+        2 => (b"PASO ", b" DE "),
+        3 => (b"SCHRITT ", b" VON "),
+        _ => (b"\xC9TAPE ", b" SUR "),
+    };
+    let mut out = crate::store::Buf::<32>::new();
+    out.push(a).num(step as u64 + 1).push(b).num(STEPS.len() as u64);
+    out
+}
+
+const GREEN: u32 = rgb(0x10, 0x89, 0x3E);
+
+/// Coche blanche (ou couleur `c`) centrée verticalement sur `mid`.
+unsafe fn tick_mark(g: &mut Gfx, x: i32, mid: i32, c: u32) {
+    line(g.hdc, g.b, x + 4, mid, x + 8, mid + 4, 2, c);
+    line(g.hdc, g.b, x + 8, mid + 4, x + 14, mid - 4, 2, c);
+}
+
+unsafe fn draw_apps(g: &mut Gfx, f: &Frame) {
+    let p = pal();
+    let x = body_left(f);
+    let width = f.client.right - 32 - x;
+    if !LOADED || shown_count() == 0 {
+        let msg = if !LOADED {
+            tr4(&[b"Recherche des logiciels disponibles...", b"Looking for available apps...", b"Buscando aplicaciones disponibles...", b"Verf\xFCgbare Programme werden gesucht..."])
+        } else {
+            tr4(&[b"Aucun logiciel disponible pour l'instant : v\xE9rifiez la connexion r\xE9seau.", b"No apps available right now: check the network connection.", b"No hay aplicaciones disponibles por ahora: compruebe la conexi\xF3n de red.", b"Derzeit keine Programme verf\xFCgbar: \xDCberpr\xFCfen Sie die Netzwerkverbindung."])
+        };
+        text_fit(g.hdc, g.f.body, 13, p.text2, x, apps_top(f) + 8, msg, width);
+    }
+    for (i, s) in STARTER.iter().enumerate() {
+        let Some(r) = app_rect(f, i) else { continue };
+        let row = &ROWS[i];
+        let on = SEL & (1 << i) != 0;
+        let pickable = matches!(row.state, b'a' | b'f');
+        let hot = HOVER == BTN_APP + i as i32 && pickable;
+        let fill_c = if on {
+            p.selected
+        } else if hot {
+            p.hover
+        } else {
+            p.surface2
+        };
+        panel(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, fill_c, if on { p.accent } else { p.border });
+        let mid = (r.top + r.bottom) / 2;
+        // Case à cocher, coche verte si déjà installé, anneau si en cours.
+        let bx = r.left + 10;
+        if row.state == b'i' {
+            ellipse(g.hdc, g.b, bx, mid - 9, bx + 18, mid + 9, GREEN);
+            tick_mark(g, bx, mid, rgb(0xFF, 0xFF, 0xFF));
+        } else if pickable {
+            panel(g.hdc, g.b, bx, mid - 9, bx + 18, mid + 9, 4, if on { p.accent } else { p.window }, if on || hot { p.accent } else { p.text3 });
+            if on {
+                tick_mark(g, bx, mid, p.on_accent);
+            }
+        } else {
+            ring(g.hdc, g.b, bx, mid - 9, bx + 18, mid + 9, 3, p.accent, fill_c);
+        }
+        crate::store::app_icon(g, &row.icon[..row.icon_len], s.name, bx + 28, mid - 14, 28, fill_c);
+        let tx = bx + 66;
+        let tw = r.right - tx - 8;
+        text_fit(g.hdc, g.f.semibold, 13, p.text, tx, r.top + 4, s.name, tw);
+        let mut status = crate::store::Buf::<64>::new();
+        let (detail, color): (&[u8], u32) = match row.state {
+            b'i' => (tr4(&[b"Install\xE9", b"Installed", b"Instalado", b"Installiert"]), GREEN),
+            b'w' => (tr4(&[b"En attente", b"Waiting", b"En espera", b"Wartet"]), p.text2),
+            b'r' => {
+                status
+                    .push(tr4(&[b"Installation... ", b"Installing... ", b"Instalando... ", b"Installation... "]))
+                    .num(row.pct as u64)
+                    .push(b" %");
+                (status.get(), p.accent)
+            }
+            b'f' => (tr4(&[b"\xC9chec, cochez pour r\xE9essayer", b"Failed, tick to retry", b"Error, marque para reintentar", b"Fehler, zum Wiederholen ausw\xE4hlen"]), rgb(0xC4, 0x2B, 0x1C)),
+            _ => (tr4(&s.what), p.text2),
+        };
+        text_fit(g.hdc, g.f.small, 11, color, tx, r.top + 22, detail, tw);
+        if row.state == b'r' {
+            let w = r.right - r.left - 16;
+            fill(g.hdc, g.b, r.left + 8, r.bottom - 4, r.right - 8, r.bottom - 2, p.border);
+            fill(g.hdc, g.b, r.left + 8, r.bottom - 4, r.left + 8 + w * row.pct as i32 / 100, r.bottom - 2, p.accent);
+        }
+    }
+    if LOADED && shown_count() > 0 {
+        let n = selected_count();
+        let mut label = crate::store::Buf::<64>::new();
+        label.push(tr4(&[b"Installer", b"Install", b"Instalar", b"Installieren"]));
+        if n > 0 {
+            label.push(b" (").num(n as u64).push(b")");
+        }
+        let r = button_rect(f, BTN_INSTALL);
+        if n > 0 {
+            pill(g, &r, label.get(), true, HOVER == BTN_INSTALL, false);
+        } else {
+            panel(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, p.surface2, p.border);
+            text_centered(g.hdc, g.f.semibold, 13, p.text3, (r.left + r.right) / 2, (r.top + r.bottom) / 2 - 8, label.get());
+        }
+    }
+    let r = button_rect(f, BTN_STORE);
+    if HOVER == BTN_STORE {
+        round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, p.hover);
+    }
+    text_fit(g.hdc, g.f.body, 13, p.accent, r.left + 10, r.top + 9, tr4(&[b"Plus de logiciels dans le Store", b"More apps in the Store", b"M\xE1s aplicaciones en la Tienda", b"Mehr Programme im Store"]), r.right - r.left - 14);
+    let y = r.bottom + 10;
+    if BUSY && y + 16 < footer_y(f) {
+        text_fit(g.hdc, g.f.small, 11, p.text2, x, y, tr4(&[b"Vous pouvez continuer la visite ou fermer cette fen\xEAtre : l'installation se poursuit.", b"You can continue the tour or close this window: installation keeps going.", b"Puede continuar el recorrido o cerrar esta ventana: la instalaci\xF3n sigue.", b"Sie k\xF6nnen die Tour fortsetzen oder das Fenster schlie\xDFen: Die Installation l\xE4uft weiter."]), width);
+    }
+}
+
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let p = pal();
     let c = f.client;
@@ -407,22 +760,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let x = body_left(f);
     let w = c.right - x - 32;
     // « ÉTAPE n SUR m » : positions des deux chiffres selon la langue.
-    let (model, a, b): (&[u8], usize, usize) = match ui_lang() {
-        1 => (b"STEP 0 OF 0", 5, 10),
-        2 => (b"PASO 0 DE 0", 5, 10),
-        3 => (b"SCHRITT 0 VON 0", 8, 14),
-        _ => (b"\xC9TAPE 0 SUR 0", 6, 12),
-    };
-    let mut label = [0u8; 16];
-    label[..model.len()].copy_from_slice(model);
-    label[a] = b'1' + STEP as u8;
-    label[b] = b'0' + STEPS.len() as u8;
-    text(g.hdc, g.f.small, p.accent, x, c.top + 36, &label[..model.len()]);
+    let label = step_label(STEP);
+    text(g.hdc, g.f.small, p.accent, x, c.top + 36, label.get());
     text(g.hdc, g.f.display, p.text, x, c.top + 56, tr4(&step.title));
     paragraph(g, g.f.body, 13, p.text2, x, c.top + 108, w, tr4(&step.text));
     let top = tips_top(f);
     match STEP {
-        5 => {
+        S_SHORTCUTS => {
             let col = (w / 2).max(140);
             for (i, (keys, what)) in SHORTCUTS.iter().enumerate() {
                 let y = top - 24 + (i as i32 / 2) * 44;
@@ -434,7 +778,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 text_fit(g.hdc, g.f.small, 11, p.text2, l, y + 18, tr4(what), col - 12);
             }
         }
-        7 => {
+        S_APPS => draw_apps(g, f),
+        S_STYLE => {
             let dark = crate::settings::status_value(b"theme") != b"light";
             let left = crate::desktop::ALIGN_LEFT;
             for (id, label, sel) in [(BTN_DARK, tr4(&[b"Sombre", b"Dark", b"Oscuro", b"Dunkel"]), dark), (BTN_LIGHT, tr4(&[b"Clair", b"Light", b"Claro", b"Hell"]), !dark)] {
@@ -492,11 +837,42 @@ unsafe fn go(step: usize) {
     if step != STEP && step < STEPS.len() {
         STEP = step;
         ANIM = GetTickCount();
+        // Étape retenue : fermée ici, la visite reprendra ici.
+        let mut action = crate::store::Buf::<24>::new();
+        action.push(b"welcome-step-").num(step as u64);
+        let mut z = [0u8; 24];
+        crate::settings::control_quiet(core::ffi::CStr::from_ptr(action.cstr(&mut z)));
+        if step == S_APPS {
+            request_list();
+        }
     }
 }
 
+/// Fin de la visite (Commencer ou Passer) : elle ne se rouvrira plus seule.
 unsafe fn finish() {
+    crate::settings::control_quiet(c"welcome-done");
     crate::wm::close(crate::wm::APP_WELCOME);
+}
+
+/// Lance l'installation des logiciels cochés (file d'attente du Store).
+unsafe fn install_selected() {
+    let mut args = crate::store::Buf::<256>::new();
+    args.push(b"starter");
+    for (i, s) in STARTER.iter().enumerate() {
+        if SEL & (1 << i) != 0 {
+            args.push(b" ").push(s.id);
+        }
+    }
+    if SEL != 0 && crate::store::spawn(c"winlux-store", args.get()) {
+        for (i, r) in ROWS.iter_mut().enumerate() {
+            if SEL & (1 << i) != 0 {
+                r.state = b'w';
+            }
+        }
+        SEL = 0;
+        BUSY = true;
+        POLL = GetTickCount().max(1);
+    }
 }
 
 unsafe fn activate(id: i32) -> bool {
@@ -506,13 +882,22 @@ unsafe fn activate(id: i32) -> bool {
         BTN_BACK if STEP > 0 => go(STEP - 1),
         BTN_SKIP => finish(),
         BTN_ACTION => match STEP {
-            1 => crate::desktop::open_start_menu(),
-            2 => crate::explorer::open_home(),
-            3 => crate::settings::open_page(0),
-            4 => crate::wm::open(crate::wm::APP_TERMINAL),
-            6 => crate::settings::open_page(crate::settings::PAGE_PRIVACY),
+            S_START => crate::desktop::open_start_menu(),
+            S_EXPLORER => crate::explorer::open_home(),
+            S_EXE => crate::explorer::open_downloads(),
+            S_SETTINGS => crate::settings::open_page(0),
+            S_TERMINAL => crate::wm::open(crate::wm::APP_TERMINAL),
+            S_PRIVACY => crate::settings::open_page(crate::settings::PAGE_PRIVACY),
             _ => {}
         },
+        BTN_INSTALL => install_selected(),
+        BTN_STORE => crate::store::open(),
+        _ if id >= BTN_APP => {
+            let i = (id - BTN_APP) as usize;
+            if i < APP_MAX && matches!(ROWS[i].state, b'a' | b'f') {
+                SEL ^= 1 << i;
+            }
+        }
         BTN_DARK | BTN_LIGHT => {
             let dark = id == BTN_DARK;
             set_theme(dark);
@@ -556,8 +941,18 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     }
 }
 
+/// Suit l'avancement des installations tant que l'étape est affichée.
 pub unsafe fn tick(_f: &Frame) -> bool {
-    false
+    if STEP != S_APPS {
+        return false;
+    }
+    let now = GetTickCount();
+    let period = if LOADED && !BUSY { 3000 } else { 700 };
+    if POLL != 0 && now.wrapping_sub(POLL) < period {
+        return false;
+    }
+    POLL = now.max(1);
+    load_rows()
 }
 
 /// Vrai pendant l'animation d'entrée d'une étape (la boucle doit repeindre).
@@ -580,9 +975,32 @@ pub unsafe fn regression_checks() {
     check!(STEP == 1 && visible(BTN_ACTION), "Bienvenue : l'etape Demarrer propose de l'essayer");
     let dot = button_rect(&f, BTN_DOT + 5);
     check!(hit(&f, dot.left + 4, dot.top + 4) == BTN_DOT + 5, "Bienvenue : les points de progression menent a une etape");
-    go(STEPS.len() - 1);
+    STEP = S_STYLE;
     check!(visible(BTN_DARK) && !visible(BTN_SKIP), "Bienvenue : la derniere etape propose le theme clair ou sombre");
     let r = button_rect(&f, BTN_LEFT);
     check!(r.bottom < footer_y(&f), "Bienvenue : les choix de la barre ne chevauchent pas le pied de page");
+    check!(ui_lang() != 0 || step_label(9).get() == b"\xC9TAPE 10 SUR 10", "Bienvenue : numero d'etape a deux chiffres");
+    // Logiciels courants : grille de dix, sans chevauchement du pied de page.
+    STEP = S_APPS;
+    let saved_rows = ROWS;
+    let saved_sel = SEL;
+    for r in ROWS.iter_mut() {
+        r.state = b'a';
+    }
+    ROWS[2].state = b'i';
+    SEL = 0;
+    let last = app_rect(&f, APP_MAX - 1);
+    check!(last.is_some_and(|r| r.bottom < button_rect(&f, BTN_INSTALL).top), "Bienvenue : la grille des logiciels tient au-dessus du bouton Installer");
+    check!(button_rect(&f, BTN_INSTALL).bottom < footer_y(&f), "Bienvenue : le bouton Installer ne chevauche pas le pied de page");
+    let first = app_rect(&f, 0).unwrap_or(rect(0, 0, 0, 0));
+    check!(hit(&f, first.left + 30, first.top + 10) == BTN_APP, "Bienvenue : un logiciel se coche d'un clic");
+    activate(BTN_APP);
+    check!(SEL == 1, "Bienvenue : la case se coche");
+    activate(BTN_APP + 2);
+    check!(SEL == 1, "Bienvenue : un logiciel deja installe ne se coche pas");
+    ROWS[1].state = 0;
+    check!(app_rect(&f, 1).is_none() && slot(2) == Some(1), "Bienvenue : un logiciel non installable est masque");
+    ROWS = saved_rows;
+    SEL = saved_sel;
     STEP = saved;
 }
