@@ -8,7 +8,7 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGE_COUNT: usize = 15;
+const PAGE_COUNT: usize = 17;
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
         tr(S_SYSTEM_LINUX),
@@ -26,6 +26,8 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_ACCESSIBILITY),
         tr(S_VISUAL_EFFECTS),
         tr(S_LOCALIZATION),
+        tr(S_FILE_MANAGER),
+        tr(S_ADVANCED_SOUND),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -67,10 +69,7 @@ static mut POINTER_SIZE: u32 = 1;
 static mut HIGH_CONTRAST: bool = false;
 static mut LOCALE_KB_SCROLL: usize = 0;
 static mut LOCALE_TZ_SCROLL: usize = 0;
-static mut ENABLE_BLUR: bool = true; // Effet de flou activé
-static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
-static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
-static mut AUTO_THEME: bool = false; // Thème automatique
+use crate::gfx::{AUTO_THEME, ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS};
 
 fn exe_profile_path(out: &mut [u16; 2060]) {
     unsafe {
@@ -328,10 +327,11 @@ pub unsafe fn system_tick() -> bool {
             _ => {}
         }
         match value(b"theme") {
-            b"light" => DARK = false,
-            b"dark" => DARK = true,
+            b"light" => crate::gfx::set_theme(false),
+            b"dark" => crate::gfx::set_theme(true),
             _ => {}
         }
+        crate::gfx::check_auto_theme();
     }
     changed
 }
@@ -443,6 +443,13 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
             let tz = TZ_IDS.get((id as usize).wrapping_sub(30));
             tz.map_or(false, |t| value(b"timezone") == *t)
         }
+        (15, 0) => unsafe { crate::explorer::current_view() == 1 },
+        (15, 1) => unsafe { crate::explorer::current_view() == 5 },
+        (15, 2) => unsafe { crate::explorer::current_view() == 6 },
+        (15, 3) => unsafe { crate::explorer::show_hidden() },
+        (15, 4) => unsafe { !crate::explorer::show_hidden() },
+        (15, 6) => unsafe { crate::explorer::show_ext() },
+        (15, 7) => unsafe { !crate::explorer::show_ext() },
         _ => false,
     };
     let primary = PAGE == 7 && id == 1 || PAGE == 8 && id == 2;
@@ -1121,7 +1128,20 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(
                 g,
                 &c,
-                214,
+                164,
+                b"Th\xE8me automatique",
+                if unsafe { AUTO_THEME } {
+                    b"Jour clair / nuit sombre (8h\x9620h)"
+                } else {
+                    b"D\xE9sactiv\xE9"
+                },
+            );
+            button(g, &c, 2, 0, b"Activer", 5);
+            button(g, &c, 2, 1, b"D\xE9sactiver", 6);
+            row(
+                g,
+                &c,
+                254,
                 b"Stockage",
                 if value(b"persistent") == b"1" {
                     b"Les pr\xE9f\xE9rences sont conserv\xE9es sur le disque."
@@ -1132,15 +1152,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(
                 g,
                 &c,
-                260,
+                300,
                 b"Ic\xF4nes du bureau",
                 b"Ajoutez seulement les ic\xF4nes que vous voulez afficher.",
             );
-            button(g, &c, 4, 0, b"Afficher Corbeille", 12);
-            button(g, &c, 4, 1, b"Afficher Explorateur", 13);
-            button(g, &c, 5, 0, b"Afficher Ce PC", 14);
-            button(g, &c, 5, 1, b"Afficher Documents", 15);
-            button(g, &c, 6, 0, b"R\xE9glages de l'\xE9cran", 18);
+            button(g, &c, 5, 0, b"Afficher Corbeille", 12);
+            button(g, &c, 5, 1, b"Afficher Explorateur", 13);
+            button(g, &c, 6, 0, b"Afficher Ce PC", 14);
+            button(g, &c, 6, 1, b"Afficher Documents", 15);
+            button(g, &c, 7, 0, b"R\xE9glages de l'\xE9cran", 18);
         }
         8 => {
             row(
@@ -1360,6 +1380,82 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 }
             }
         }
+        15 => {
+            row(
+                g,
+                &c,
+                44,
+                b"Gestionnaire de fichiers",
+                b"Pr\xE9f\xE9rences de l'explorateur de fichiers Winlux.",
+            );
+            row(
+                g,
+                &c,
+                104,
+                b"Affichage par d\xE9faut",
+                match unsafe { crate::explorer::current_view() } {
+                    0 => b"Tr\xE8s grandes ic\xF4nes",
+                    1 => b"Grandes ic\xF4nes",
+                    2 => b"Ic\xF4nes moyennes",
+                    3 => b"Petites ic\xF4nes",
+                    4 => b"Liste",
+                    5 => b"D\xE9tails",
+                    _ => b"Mosa\xEFques",
+                },
+            );
+            button(g, &c, 0, 0, b"Grandes ic\xF4nes", 0);
+            button(g, &c, 0, 1, b"D\xE9tails", 1);
+            button(g, &c, 0, 2, b"Mosa\xEFques", 2);
+            row(
+                g,
+                &c,
+                230,
+                b"\xC9l\xE9ments masqu\xE9s",
+                if unsafe { crate::explorer::show_hidden() } {
+                    b"Visibles"
+                } else {
+                    b"Masqu\xE9s"
+                },
+            );
+            button(g, &c, 2, 0, b"Afficher", 3);
+            button(g, &c, 2, 1, b"Masquer", 4);
+            row(
+                g,
+                &c,
+                356,
+                b"Extensions de noms de fichiers",
+                if unsafe { crate::explorer::show_ext() } {
+                    b"Affich\xE9es"
+                } else {
+                    b"Masqu\xE9es"
+                },
+            );
+            button(g, &c, 4, 0, b"Afficher", 6);
+            button(g, &c, 4, 1, b"Masquer", 7);
+        }
+        16 => {
+            row(g, &c, 44, b"P\xE9riph\xE9rique de sortie", value(b"audio_output"));
+            button(g, &c, 0, 0, b"Haut-parleurs", 0);
+            button(g, &c, 0, 1, b"Casque / HDMI", 1);
+            button(g, &c, 0, 2, b"Actualiser", 2);
+            row(g, &c, 170, b"P\xE9riph\xE9rique d'entr\xE9e", value(b"audio_input"));
+            button(g, &c, 1, 0, b"Micro int\xE9gr\xE9", 3);
+            button(g, &c, 1, 1, b"Micro externe", 4);
+            row(g, &c, 280, b"Volume principal", value(b"audio"));
+            button(g, &c, 3, 0, b"Volume -", 6);
+            button(g, &c, 3, 1, b"Muet / r\xE9tablir", 7);
+            button(g, &c, 3, 2, b"Volume +", 8);
+            row(g, &c, 370, b"Volume par application",
+                b"Chaque fen\xEAtre ouverte a son propre niveau de volume.");
+            let mut ay = 430i32;
+            for app in 0..crate::wm::APP_COUNT {
+                if !crate::wm::is_open(app) || ay + 50 > c.bottom - c.top {
+                    continue;
+                }
+                row(g, &c, ay, crate::wm::title_of(app), b"100 %");
+                ay += 60;
+            }
+        }
         _ => {}
     }
     let notice = if PAGE == 10 {
@@ -1522,8 +1618,23 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (4, 4) => Some(c"tap-off"),
         (6, 0) => Some(c"align-left"),
         (6, 1) => Some(c"align-center"),
-        (6, 3) => Some(c"theme-dark"),
-        (6, 4) => Some(c"theme-light"),
+        (6, 3) => {
+            unsafe { crate::gfx::set_theme(true) };
+            Some(c"theme-dark")
+        }
+        (6, 4) => {
+            unsafe { crate::gfx::set_theme(false) };
+            Some(c"theme-light")
+        }
+        (6, 5) => {
+            unsafe { AUTO_THEME = true };
+            unsafe { crate::gfx::check_auto_theme() };
+            Some(c"auto-theme-on")
+        }
+        (6, 6) => {
+            unsafe { AUTO_THEME = false };
+            Some(c"auto-theme-off")
+        }
         (6, 18) => {
             open_page(8);
             return true;
@@ -1649,6 +1760,15 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         } else {
             c"restart-session"
         }),
+        // Son avancé (page 16)
+        (16, 0) => Some(c"audio-output-speakers"),
+        (16, 1) => Some(c"audio-output-headphones"),
+        (16, 2) => Some(c"status"),
+        (16, 3) => Some(c"audio-input-builtin"),
+        (16, 4) => Some(c"audio-input-external"),
+        (16, 6) => Some(c"volume-down"),
+        (16, 7) => Some(c"volume-mute"),
+        (16, 8) => Some(c"volume-up"),
         (14, 0..=3) => {
             unsafe { CURRENT_LANG = match hit(f, x, y) {
                 0 => Lang::Fr,
@@ -1691,6 +1811,34 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                     control(cstr);
                 }
             }
+            return true;
+        }
+        (15, 0) => {
+            crate::explorer::set_view(1);
+            return true;
+        }
+        (15, 1) => {
+            crate::explorer::set_view(5);
+            return true;
+        }
+        (15, 2) => {
+            crate::explorer::set_view(6);
+            return true;
+        }
+        (15, 3) => {
+            crate::explorer::set_show_hidden(true);
+            return true;
+        }
+        (15, 4) => {
+            crate::explorer::set_show_hidden(false);
+            return true;
+        }
+        (15, 6) => {
+            crate::explorer::set_show_ext(true);
+            return true;
+        }
+        (15, 7) => {
+            crate::explorer::set_show_ext(false);
             return true;
         }
         _ => None,

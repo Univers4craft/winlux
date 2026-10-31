@@ -13,8 +13,8 @@ apt_base=${WINLUX_APT_BASE:-"$root/build/apt-base/root.tar"}
 if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
     test -s "$apt_base" || { echo "Base APT native absente : préparez-la avec scripts/prepare-apt-base.py (--kernel et --kernel-release)." >&2; exit 1; }
     native_codename=$(. /etc/os-release; printf '%s\n' "${UBUNTU_CODENAME:-${VERSION_CODENAME:-}}")
-    test "$native_codename" = noble && test "$(dpkg --print-architecture)" = amd64 || {
-        echo 'La construction APT native nécessite un hôte Ubuntu Noble amd64 (ou dérivé compatible).' >&2
+    test "$native_codename" = resolute && test "$(dpkg --print-architecture)" = amd64 || {
+        echo 'La construction APT native nécessite un hôte Ubuntu Resolute amd64 (ou dérivé compatible).' >&2
         exit 1
     }
 fi
@@ -79,6 +79,8 @@ cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
 cp "$root/scripts/winlux-update-progress.py" "$stage/usr/bin/winlux-update-progress"
 chmod 755 "$stage/usr/bin/winlux-update-progress"
 cp "$root/scripts/winlux-control.sh" "$stage/usr/bin/winlux-control"
+cp "$root/scripts/winlux-journal.sh" "$stage/usr/bin/winlux-journal"
+cp "$root/scripts/winlux-restore.sh" "$stage/usr/bin/winlux-restore"
 cp "$root/scripts/winlux-network.sh" "$stage/usr/bin/winlux-network"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
@@ -88,11 +90,24 @@ cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
 cp "$root/scripts/winlux-browsers.sh" "$stage/usr/bin/winlux-browsers"
 chmod 755 "$stage/usr/bin/winlux-browsers"
 cp "$root/integration/winlux-open" "$stage/usr/bin/winlux-open"
-chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script"
+chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-journal" "$stage/usr/bin/winlux-restore" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script"
+
+# Installateur et outils associés
+cp "$root/scripts/winlux-installer.py" "$stage/usr/bin/winlux-installer"
+cp "$root/scripts/winlux-hw-detect.sh" "$stage/usr/bin/winlux-hw-detect"
+cp "$root/scripts/winlux-first-boot.sh" "$stage/usr/bin/winlux-first-boot"
+cp "$root/scripts/install.sh" "$stage/opt/winlux/scripts/install.sh"
+cp "$root/scripts/install-safety.sh" "$stage/opt/winlux/scripts/install-safety.sh"
+chmod 755 "$stage/usr/bin/winlux-installer" "$stage/usr/bin/winlux-hw-detect" "$stage/usr/bin/winlux-first-boot" "$stage/opt/winlux/scripts/install.sh"
+cp "$root/integration/winlux-installer.desktop" "$stage/usr/share/applications/winlux-installer.desktop"
+mkdir -p "$stage/root/Bureau"
+cp "$root/integration/winlux-installer.desktop" "$stage/root/Bureau/winlux-installer.desktop"
 mkdir -p "$stage/usr/share/winlux"
 printf '%s\n' "${WINLUX_BUILD_VERSION:-$(cat "$root/VERSION")}" >"$stage/usr/share/winlux/version"
 sh "$root/scripts/build-info.sh" "$(cat "$stage/usr/share/winlux/version")" system >"$stage/usr/share/winlux/BUILD-INFO"
 printf 'system\n' >"$stage/usr/share/winlux/update-scope"
+mkdir -p "$stage/usr/share/winlux/avatars"
+cp "$root"/assets/avatars/avatar-*.svg "$stage/usr/share/winlux/avatars/"
 
 # Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
 wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
@@ -242,6 +257,9 @@ cat >"$stage/etc/winlux/preferences.conf" <<'PREFS'
 TASKBAR_ALIGN=left
 THEME=dark
 PREFS
+cat >"$stage/etc/winlux/users.conf" <<'USERS'
+root:root:winlux
+USERS
 cp -L "$kernel" "$stage/boot/vmlinuz"
 printf '%s\n' "$kernel_release" >"$stage/usr/share/winlux/kernel-version"
 # A visible, usable terminal is mandatory for desktop and console applications.
@@ -451,6 +469,8 @@ echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
 # explicitly so the graphical power button really shuts down the guest.
+# Démarrer les services systemd activés par les paquets APT.
+if test -x /usr/bin/systemctl; then /usr/bin/systemctl --boot-start; fi
 if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
 if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     result=0
@@ -555,7 +575,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     ) &
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
         keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
-        case "$keyboard_layout" in fr|us) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
+        case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
         tapping=$(/bin/busybox sed -n 's/^TAP_TO_CLICK=//p' /etc/winlux/input.conf 2>/dev/null)
         case "$tapping" in 0|1)
             for device in $(DISPLAY=:0 /usr/bin/xinput --list --id-only 2>/dev/null); do
@@ -691,6 +711,9 @@ menuentry "Winlux Desktop" {
     else
         winlux_live
     fi
+}
+menuentry "Installer Winlux sur le disque" --hotkey=i {
+    winlux_live
 }
 menuentry "Winlux persistent network diagnostic" --hotkey=s {
     search --no-floppy --label WINLUX_ROOT --set=winlux_root

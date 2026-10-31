@@ -228,7 +228,11 @@ pub const S_SWITCH_WINDOWS: usize = 151;
 pub const S_RUN: usize = 152;
 pub const S_OPEN_COLON: usize = 153;
 
-const STRING_COUNT: usize = 154;
+// Pages Parametres ajoutees
+pub const S_FILE_MANAGER: usize = 154;
+pub const S_ADVANCED_SOUND: usize = 155;
+
+const STRING_COUNT: usize = 156;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -408,6 +412,9 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Basculer entre les fen\xEAtres",
     b"Ex\xE9cuter",
     b"Ouvrir :",
+    // 154-155 : Pages Parametres ajoutees
+    b"Gestionnaire de fichiers",
+    b"Son avanc\xE9",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -586,6 +593,9 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Switch windows",
     b"Run",
     b"Open:",
+    // 154-155 : Pages Parametres ajoutees
+    b"File manager",
+    b"Advanced sound",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -764,6 +774,9 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Cambiar entre ventanas",
     b"Ejecutar",
     b"Abrir:",
+    // 154-155 : Pages Parametres ajoutees
+    b"Administrador de archivos",
+    b"Sonido avanzado",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -942,6 +955,9 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Zwischen Fenstern wechseln",
     b"Ausf\xFChren",
     b"\xD6ffnen:",
+    // 154-155 : Pages Parametres ajoutees
+    b"Dateimanager",
+    b"Erweiterter Sound",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {

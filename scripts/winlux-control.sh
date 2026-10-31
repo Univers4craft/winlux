@@ -117,6 +117,58 @@ perform() {
         browser-default-edge|browser-default-chrome|browser-default-firefox) winlux-browsers --default "${action#browser-default-}" ;;
         browser-launch-edge|browser-launch-chrome|browser-launch-firefox) winlux-browsers --launch "${action#browser-launch-}" >"$run/browser.log" 2>&1 & ;;
         network-renew) winlux-network restart ;;
+        network-scan)
+            # Write available networks to a file the desktop shell can read.
+            out="$run/networks.txt"
+            if command -v nmcli >/dev/null 2>&1 && nmcli -t -f RUNNING general 2>/dev/null | grep -qx running; then
+                nmcli -t -f SSID,SIGNAL,SECURITY,IN-USE device wifi list --rescan yes 2>/dev/null | head -n 20 > "$out.tmp.$$" || true
+            elif command -v iwlist >/dev/null 2>&1; then
+                iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')
+                test -n "$iface" || iface=$(ls /sys/class/net/ 2>/dev/null | grep -v '^lo$' | head -n 1)
+                iwlist "$iface" scan 2>/dev/null | awk '
+                    /Cell / { if (ssid!="") print ssid ":" signal ":" enc ":" use; ssid=""; signal="0"; enc=""; use="" }
+                    /ESSID:/ { gsub(/.*ESSID:"|"$/,""); ssid=$0 }
+                    /Signal level=/ { gsub(/.*Signal level=/,""); gsub(/ .*/,""); signal=int(($0+100)*2); if(signal>100) signal=100 }
+                    /Encryption key:on/ { enc="WPA" }
+                    END { if (ssid!="") print ssid ":" signal ":" enc ":" use }
+                ' | head -n 20 > "$out.tmp.$$" || true
+            else
+                printf '' > "$out.tmp.$$"
+            fi
+            # Active connection info
+            {
+                iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')
+                if test -n "$iface"; then
+                    addr=$(ip -4 -o addr show dev "$iface" 2>/dev/null | awk 'NR==1{print $4}')
+                    is_wifi=0; test ! -d "/sys/class/net/$iface/wireless" || is_wifi=1
+                    ssid=""
+                    if test "$is_wifi" = 1 && command -v nmcli >/dev/null 2>&1; then
+                        ssid=$(nmcli -t -f GENERAL.CONNECTION device show "$iface" 2>/dev/null | sed 's/^GENERAL.CONNECTION://')
+                    fi
+                    printf 'connected=1\niface=%s\naddr=%s\nwifi=%s\nssid=%s\n' "$iface" "$addr" "$is_wifi" "$ssid"
+                else
+                    printf 'connected=0\niface=\naddr=\nwifi=0\nssid=\n'
+                fi
+            } >> "$out.tmp.$$"
+            mv "$out.tmp.$$" "$out" ;;
+        network-connect)
+            ssid=${2:-}
+            test -n "$ssid" || { echo 'SSID manquant' >&2; return 1; }
+            password=${3:-}
+            if command -v nmcli >/dev/null 2>&1; then
+                if test -n "$password"; then
+                    nmcli device wifi connect "$ssid" password "$password" || return
+                else
+                    nmcli device wifi connect "$ssid" || return
+                fi
+            else
+                echo 'NetworkManager requis pour la connexion Wi-Fi' >&2; return 1
+            fi ;;
+        network-disconnect)
+            if command -v nmcli >/dev/null 2>&1; then
+                iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1{print $5}')
+                test -n "$iface" && nmcli device disconnect "$iface" || true
+            fi ;;
         volume-up|volume-down|volume-mute)
             if have wpctl; then
                 case "$action" in volume-up) wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;; volume-down) wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;; *) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;; esac
@@ -128,11 +180,11 @@ perform() {
             have setxkbmap || { echo 'setxkbmap indisponible' >&2; return 1; }
             setxkbmap -layout "$layout" || return
             save "$config/input.conf" XKB_LAYOUT "$layout" ;;
-        lang-fr|lang-en|lang-es|lang-de)
-            lang=${action#lang-}
+        lang-fr|lang-en|lang-es|lang-de|locale-fr|locale-en|locale-es|locale-de)
+            lang=${action#*-}
             save "$config/locale.conf" LANG "$lang" ;;
-        tz-*)
-            tz=${action#tz-}
+        tz-*|timezone-*)
+            tz=${action#tz-}; tz=${tz#timezone-}
             case "$tz" in *[!A-Za-z0-9/_+-]*) echo "Fuseau invalide : $tz" >&2; return 1 ;; esac
             test -f "/usr/share/zoneinfo/$tz" || { echo "Fuseau inconnu : $tz" >&2; return 1; }
             if have timedatectl; then
@@ -212,16 +264,22 @@ perform() {
         update-auto-off) winlux-update --auto disable ;;
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
-            # Demande consommee par l'init superviseur. Ne touche pas aux
-            # sessions de l'hote qui pourraient aussi executer ce script.
             test -f "$root/etc/winlux/live-session" || { echo 'Redemarrage de session reserve a Winlux Live' >&2; return 1; }
+            /usr/bin/winlux-shutdown-screen restart-session >/dev/null 2>&1 || true
             printf 'restart-session\n' > "$run/session-action" ;;
         poweroff|reboot)
             test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
+            /usr/bin/winlux-shutdown-screen "$action" >/dev/null 2>&1 || true
             /usr/bin/winlux-close-session || return
             sync || return
             "$action" ;;
+        journal-status|journal-list|journal-errors|journal-crashes|journal-clear|journal-rotate)
+            winlux-journal "${action#journal-}" "$2" ;;
+        journal-export) winlux-journal export "$2" ;;
+        restore-create) winlux-restore create "$2" ;;
+        restore-list|restore-status) winlux-restore "${action#restore-}" ;;
+        restore-restore|restore-delete) winlux-restore "${action#restore-}" "$2" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
     esac
 }

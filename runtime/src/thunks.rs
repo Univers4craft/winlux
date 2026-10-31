@@ -16,17 +16,17 @@ struct StubPool {
 }
 
 static POOL: Mutex<StubPool> = Mutex::new(StubPool { cur: 0, end: 0 });
-static LOGGED: Mutex<Vec<String>> = Mutex::new(Vec::new());
+static LOGGED: Mutex<Option<std::collections::HashSet<String>>> = Mutex::new(None);
 
 /// Écrit une ligne dans le journal des fonctions manquantes (une seule fois par fonction).
 pub fn log_missing(label: &str, called: bool) {
     let key = format!("{label}{}", if called { "!" } else { "" });
     {
         let mut l = LOGGED.lock().unwrap();
-        if l.contains(&key) {
+        let set = l.get_or_insert_with(std::collections::HashSet::new);
+        if !set.insert(key) {
             return;
         }
-        l.push(key);
     }
     let exe = crate::loader::main_module()
         .map(|m| m.name)

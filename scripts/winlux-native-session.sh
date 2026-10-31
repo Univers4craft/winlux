@@ -75,11 +75,19 @@ wait_bus_name session org.xfce.FileManager "$!" /run/winlux/file-manager.log
         exit 1
     }
 /usr/bin/winlux-trust-shortcuts
-for bluetooth in /usr/lib/bluetooth/bluetoothd /usr/libexec/bluetooth/bluetoothd; do
-    if test -x "$bluetooth"; then "$bluetooth" -n >/run/winlux/bluetooth.log 2>&1 & break; fi
-done
+has_bluetooth=false
+if test -d /sys/class/bluetooth && ls /sys/class/bluetooth/ >/dev/null 2>&1 && test -n "$(ls -A /sys/class/bluetooth/ 2>/dev/null)"; then
+    has_bluetooth=true
+fi
+if "$has_bluetooth"; then
+    for bluetooth in /usr/lib/bluetooth/bluetoothd /usr/libexec/bluetooth/bluetoothd; do
+        if test -x "$bluetooth"; then "$bluetooth" -n >/run/winlux/bluetooth.log 2>&1 & break; fi
+    done
+fi
 /usr/bin/xfsettingsd --daemon >/run/winlux/xfsettings.log 2>&1
-/usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
+if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
+    /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
+fi
 /usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
 /usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)

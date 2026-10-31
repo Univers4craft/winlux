@@ -330,6 +330,28 @@ pub unsafe fn LoadCursorA(_instance: Handle, _id: usize) -> Handle {
 }
 
 #[repr(C)]
+pub struct WaveFormatEx {
+    pub format_tag: u16,
+    pub channels: u16,
+    pub samples_per_sec: u32,
+    pub avg_bytes_per_sec: u32,
+    pub block_align: u16,
+    pub bits_per_sample: u16,
+    pub cb_size: u16,
+}
+
+#[repr(C)]
+pub struct WaveHdr {
+    pub data: *mut u8,
+    pub buffer_length: u32,
+    pub bytes_recorded: u32,
+    pub flags: u32,
+    pub loops: u32,
+    pub next: *mut WaveHdr,
+    pub reserved: usize,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct BitmapInfoHeader {
     pub size: u32,
@@ -399,6 +421,15 @@ pub const SWP_NOSIZE: u32 = 0x0001;
 pub const SWP_NOMOVE: u32 = 0x0002;
 pub const SW_SHOW: i32 = 5;
 pub const SW_SHOWNORMAL: i32 = 1;
+
+pub const IDC_ARROW: usize = 32512;
+pub const IDC_IBEAM: usize = 32513;
+pub const IDC_SIZENWSE: usize = 32642;
+pub const IDC_SIZENESW: usize = 32643;
+pub const IDC_SIZEWE: usize = 32644;
+pub const IDC_SIZENS: usize = 32645;
+pub const IDC_SIZEALL: usize = 32646;
+pub const IDC_HAND: usize = 32649;
 
 pub const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
 
@@ -647,6 +678,12 @@ extern "system" {
         r: *mut c_void,
     ) -> i32;
     pub fn Sleep(ms: u32);
+    pub fn WinluxCreatePty(cols: u32, rows: u32) -> usize;
+    pub fn WinluxReadPty(handle: usize, buf: *mut u8, len: u32, read: *mut u32) -> i32;
+    pub fn WinluxWritePty(handle: usize, buf: *const u8, len: u32, written: *mut u32) -> i32;
+    pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
+    pub fn WinluxPtyAlive(handle: usize) -> i32;
+    pub fn WinluxClosePty(handle: usize) -> i32;
 }
 
 #[link(name = "shell32", kind = "raw-dylib")]
@@ -809,8 +846,13 @@ extern "C" {
     pub fn FrameRect(hdc: Handle, rect: *const Rect, brush: Handle) -> i32;
     pub fn InvalidateRect(hwnd: Handle, rect: *const Rect, erase: i32) -> i32;
     pub fn GetSystemMetrics(index: i32) -> i32;
+    pub fn GetDoubleClickTime() -> u32;
     pub fn GetSysColor(index: i32) -> u32;
     pub fn GetSysColorBrush(index: i32) -> Handle;
+    pub fn SetCursor(cursor: Handle) -> Handle;
+    pub fn LoadCursorW(instance: Handle, name: usize) -> Handle;
+    pub fn SetTimer(hwnd: Handle, id: usize, elapse: u32, func: usize) -> usize;
+    pub fn KillTimer(hwnd: Handle, id: usize) -> i32;
 }
 
 #[link(name = "gdi32", kind = "raw-dylib")]
@@ -920,6 +962,21 @@ extern "C" {
         brush: Handle,
     ) -> i32;
     pub fn Ellipse(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32) -> i32;
+    pub fn RoundRect(
+        hdc: Handle,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        width: i32,
+        height: i32,
+    ) -> i32;
+    pub fn SetPixelV(hdc: Handle, x: i32, y: i32, color: u32) -> i32;
+    pub fn OpenClipboard(owner: Handle) -> i32;
+    pub fn CloseClipboard() -> i32;
+    pub fn EmptyClipboard() -> i32;
+    pub fn SetClipboardData(format: u32, mem: usize) -> usize;
+    pub fn GetClipboardData(format: u32) -> usize;
 }
 
 #[link(name = "msvcrt", kind = "raw-dylib")]
@@ -996,6 +1053,27 @@ extern "C" {
     pub fn sscanf(buf: *const c_char, fmt: *const c_char, ...) -> i32;
     pub fn fscanf(f: *mut c_void, fmt: *const c_char, ...) -> i32;
     pub fn remove(path: *const c_char) -> i32;
+}
+
+#[link(name = "winmm", kind = "raw-dylib")]
+extern "system" {
+    pub fn PlaySoundA(name: *const c_char, module: Handle, flags: u32) -> i32;
+    pub fn waveInGetNumDevs() -> u32;
+    pub fn waveInOpen(
+        phwi: *mut Handle,
+        device: u32,
+        pwfx: *const WaveFormatEx,
+        callback: usize,
+        instance: usize,
+        flags: u32,
+    ) -> u32;
+    pub fn waveInPrepareHeader(hwi: Handle, pwh: *mut WaveHdr, cbwh: u32) -> u32;
+    pub fn waveInUnprepareHeader(hwi: Handle, pwh: *mut WaveHdr, cbwh: u32) -> u32;
+    pub fn waveInAddBuffer(hwi: Handle, pwh: *mut WaveHdr, cbwh: u32) -> u32;
+    pub fn waveInStart(hwi: Handle) -> u32;
+    pub fn waveInStop(hwi: Handle) -> u32;
+    pub fn waveInReset(hwi: Handle) -> u32;
+    pub fn waveInClose(hwi: Handle) -> u32;
 }
 
 /// Requis par le compilateur dès qu'un programme Windows manipule des flottants.

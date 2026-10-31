@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
 
-pub static mut PROCESS_HEAP: usize = 0;
+static PROCESS_HEAP: AtomicUsize = AtomicUsize::new(0);
 struct VmRegion {
     size: usize,
     committed: Vec<bool>,
@@ -241,12 +241,14 @@ struct CriticalSection {
     spin_count: usize,
 }
 
+pub fn process_heap() -> usize {
+    PROCESS_HEAP.load(Ordering::Relaxed)
+}
+
 pub fn init() {
-    unsafe {
-        if PROCESS_HEAP == 0 {
-            PROCESS_HEAP = 1;
-        }
-    }
+    PROCESS_HEAP
+        .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+        .ok();
     let _ = ALLOCS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let _ = HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new()));
     let _ = HANDLES.get_or_init(|| Mutex::new(HashMap::new()));
@@ -270,6 +272,13 @@ pub extern "win64" fn get_std_handle(which: u32) -> usize {
 
 fn next_handle() -> usize {
     NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
+}
+
+pub(crate) fn insert_file(f: File) -> usize {
+    let h = next_handle();
+    lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
+        .insert(h, FileHandle::File(Arc::new(Mutex::new(f))));
+    h
 }
 fn post_iocp(port: &CompletionPort, packet: CompletionPacket) {
     lock(&port.state).queue.push_back(packet);
@@ -360,9 +369,7 @@ unsafe fn bytes_mut<'a>(p: *mut u8, len: usize) -> Option<&'a mut [u8]> {
         Some(std::slice::from_raw_parts_mut(p, len))
     }
 }
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 fn sync_gate() -> std::sync::MutexGuard<'static, ()> {
     lock(SYNC_GATE.get_or_init(|| Mutex::new(())))
 }
@@ -2179,7 +2186,7 @@ pub extern "win64" fn set_last_error(code: u32) {
     crate::process::set_last_error(code)
 }
 pub extern "win64" fn get_process_heap() -> usize {
-    unsafe { PROCESS_HEAP }
+    process_heap()
 }
 pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -> *mut c_void {
     let p = libc::malloc(size.max(1));
@@ -5817,9 +5824,307 @@ pub unsafe extern "win64" fn lc_map_string_w(
     copy as i32
 }
 
+// ---------- API supplémentaires pour Electron / Chromium ----------
+
+pub unsafe extern "win64" fn get_product_info(
+    _major: u32,
+    _minor: u32,
+    _sp_major: u32,
+    _sp_minor: u32,
+    product_type: *mut u32,
+) -> i32 {
+    if !product_type.is_null() {
+        *product_type = 0x30;
+    } // PRODUCT_PROFESSIONAL
+    1
+}
+
+pub unsafe extern "win64" fn get_time_zone_information(tz: *mut u8) -> u32 {
+    if tz.is_null() {
+        return u32::MAX;
+    }
+    std::ptr::write_bytes(tz, 0, 172);
+    0 // TIME_ZONE_ID_UNKNOWN
+}
+
+pub unsafe extern "win64" fn get_dynamic_time_zone_information(tz: *mut u8) -> u32 {
+    if tz.is_null() {
+        return u32::MAX;
+    }
+    std::ptr::write_bytes(tz, 0, 288);
+    0
+}
+
+pub unsafe extern "win64" fn system_time_to_file_time(st: *const u16, ft: *mut u64) -> i32 {
+    if st.is_null() || ft.is_null() {
+        return 0;
+    }
+    *ft = 132_000_000_000_000_000; // approximate epoch
+    1
+}
+
+pub unsafe extern "win64" fn file_time_to_system_time(ft: *const u64, st: *mut u16) -> i32 {
+    if ft.is_null() || st.is_null() {
+        return 0;
+    }
+    // return 2024-01-01 00:00:00 as placeholder
+    let fields: [u16; 8] = [2024, 1, 1, 1, 0, 0, 0, 0];
+    std::ptr::copy_nonoverlapping(fields.as_ptr(), st, 8);
+    1
+}
+
+pub unsafe extern "win64" fn file_time_to_local_file_time(ft: *const u64, local: *mut u64) -> i32 {
+    if ft.is_null() || local.is_null() {
+        return 0;
+    }
+    *local = *ft;
+    1
+}
+
+pub unsafe extern "win64" fn system_time_to_tz_specific_local_time(
+    _tz: usize,
+    _universal: *const u16,
+    local: *mut u16,
+) -> i32 {
+    if local.is_null() {
+        return 0;
+    }
+    get_local_time(local as *mut SystemTime);
+    1
+}
+
+pub unsafe extern "win64" fn get_system_time(st: *mut u16) {
+    if st.is_null() {
+        return;
+    }
+    let now = chrono_utc_fields();
+    let fields: [u16; 8] = [now.0, now.1, now.2, now.3, now.4, now.5, now.6, now.7];
+    std::ptr::copy_nonoverlapping(fields.as_ptr(), st, 8);
+}
+
+fn chrono_utc_fields() -> (u16, u16, u16, u16, u16, u16, u16, u16) {
+    let mut tv = libc::timeval {
+        tv_sec: 0,
+        tv_usec: 0,
+    };
+    unsafe {
+        libc::gettimeofday(&mut tv, std::ptr::null_mut());
+    }
+    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
+    unsafe {
+        libc::gmtime_r(&tv.tv_sec, &mut tm);
+    }
+    (
+        (tm.tm_year + 1900) as u16,
+        (tm.tm_mon + 1) as u16,
+        tm.tm_wday as u16,
+        tm.tm_mday as u16,
+        tm.tm_hour as u16,
+        tm.tm_min as u16,
+        tm.tm_sec as u16,
+        (tv.tv_usec / 1000) as u16,
+    )
+}
+
+pub unsafe extern "win64" fn get_process_times(
+    _proc: usize,
+    creation: *mut u64,
+    exit: *mut u64,
+    kernel: *mut u64,
+    user: *mut u64,
+) -> i32 {
+    let now = get_tick_count64() * 10_000; // 100ns units
+    if !creation.is_null() {
+        *creation = 132_000_000_000_000_000;
+    }
+    if !exit.is_null() {
+        *exit = 0;
+    }
+    if !kernel.is_null() {
+        *kernel = now / 4;
+    }
+    if !user.is_null() {
+        *user = now;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn get_thread_times(
+    _thread: usize,
+    creation: *mut u64,
+    exit: *mut u64,
+    kernel: *mut u64,
+    user: *mut u64,
+) -> i32 {
+    get_process_times(0, creation, exit, kernel, user)
+}
+
+pub unsafe extern "win64" fn set_handle_information(_h: usize, _mask: u32, _flags: u32) -> i32 {
+    1
+}
+pub unsafe extern "win64" fn get_handle_information(_h: usize, flags: *mut u32) -> i32 {
+    if !flags.is_null() {
+        *flags = 0;
+    }
+    1
+}
+pub unsafe extern "win64" fn duplicate_handle(
+    _src_process: usize,
+    src_handle: usize,
+    _dst_process: usize,
+    dst_handle: *mut usize,
+    _access: u32,
+    _inherit: i32,
+    _options: u32,
+) -> i32 {
+    if !dst_handle.is_null() {
+        *dst_handle = src_handle;
+    }
+    1
+}
+
+pub unsafe extern "win64" fn create_event_w(
+    _sa: usize,
+    manual: i32,
+    initial: i32,
+    _name: *const u16,
+) -> usize {
+    create_event_a(_sa, manual, initial, std::ptr::null())
+}
+pub unsafe extern "win64" fn create_mutex_w(_sa: usize, owner: i32, _name: *const u16) -> usize {
+    create_mutex_a(_sa, owner, std::ptr::null())
+}
+
+pub extern "win64" fn get_process_id(_process: usize) -> u32 {
+    unsafe { libc::getpid() as u32 }
+}
+
+pub unsafe extern "win64" fn get_module_handle_ex_w(
+    flags: u32,
+    module: *const u16,
+    handle: *mut usize,
+) -> i32 {
+    if handle.is_null() {
+        return 0;
+    }
+    if flags & 4 != 0 {
+        // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
+        if let Some(m) = crate::loader::find_module_by_addr(module as usize) {
+            *handle = m.base;
+            return 1;
+        }
+    }
+    let name = if module.is_null() {
+        String::new()
+    } else {
+        crate::dlls::wstr(module)
+    };
+    if name.is_empty() {
+        if let Some(m) = crate::loader::main_module() {
+            *handle = m.base;
+            return 1;
+        }
+    }
+    if let Some(h) = crate::dlls::module_handle(&name) {
+        *handle = h;
+        return 1;
+    }
+    *handle = 0;
+    crate::process::set_last_error(126);
+    0
+}
+
+pub unsafe extern "win64" fn create_semaphore_w(
+    _sa: usize,
+    initial: i32,
+    maximum: i32,
+    _name: *const u16,
+) -> usize {
+    if initial < 0 || maximum <= 0 || initial > maximum {
+        return 0;
+    }
+    create_event_a(0, 1, if initial > 0 { 1 } else { 0 }, std::ptr::null())
+}
+pub unsafe extern "win64" fn release_semaphore(h: usize, _count: i32, _prev: *mut i32) -> i32 {
+    set_event(h)
+}
+
+pub unsafe extern "win64" fn sleep_ex(ms: u32, _alertable: i32) -> u32 {
+    sleep(ms);
+    0
+}
+
+pub unsafe extern "win64" fn wait_for_single_object_ex(h: usize, ms: u32, _alertable: i32) -> u32 {
+    wait_for_single_object(h, ms)
+}
+
+pub unsafe extern "win64" fn signal_object_and_wait(
+    to_signal: usize,
+    to_wait: usize,
+    ms: u32,
+    _alertable: i32,
+) -> u32 {
+    set_event(to_signal);
+    wait_for_single_object(to_wait, ms)
+}
+
+pub unsafe extern "win64" fn create_named_pipe_w(
+    name: *const u16,
+    open_mode: u32,
+    pipe_mode: u32,
+    max_instances: u32,
+    out_size: u32,
+    in_size: u32,
+    timeout: u32,
+    sa: usize,
+) -> usize {
+    let n = crate::dlls::wstr(name);
+    let a = std::ffi::CString::new(n.as_bytes()).unwrap_or_default();
+    create_named_pipe_a(
+        a.as_ptr() as *const u8,
+        open_mode,
+        pipe_mode,
+        max_instances,
+        out_size,
+        in_size,
+        timeout,
+        sa,
+    )
+}
+
+pub unsafe extern "win64" fn set_named_pipe_handle_state(
+    _h: usize,
+    _mode: *const u32,
+    _max_collect: *const u32,
+    _timeout: *const u32,
+) -> i32 {
+    1
+}
+
+pub unsafe extern "win64" fn peek_named_pipe(
+    _h: usize,
+    _buf: *mut u8,
+    _size: u32,
+    _read: *mut u32,
+    _total: *mut u32,
+    _left: *mut u32,
+) -> i32 {
+    0
+}
+
+pub unsafe extern "win64" fn get_overlapped_result_ex(
+    h: usize,
+    ov: *mut Overlapped,
+    transferred: *mut u32,
+    ms: u32,
+    _alertable: i32,
+) -> i32 {
+    get_overlapped_result(h, ov, transferred, if ms > 0 { 1 } else { 0 })
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
-     "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
+     "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"GetOverlappedResultEx"=>fn get_overlapped_result_ex,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
      "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
      "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
      "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"GetCurrentThreadId"=>fn get_current_thread_id,
@@ -5860,7 +6165,20 @@ pub fn exports() -> crate::dlls::Exports {
      "GetStringTypeW"=>fn get_string_type_w,
      "LCMapStringW"=>fn lc_map_string_w,
      "OpenEventA"=>fn open_event_a,"OpenMutexA"=>fn open_mutex_a,
-     "LoadLibraryExA"=>fn load_library_ex_a,"LoadLibraryExW"=>fn load_library_ex_w
+     "LoadLibraryExA"=>fn load_library_ex_a,"LoadLibraryExW"=>fn load_library_ex_w,
+     // --- API Electron / Chromium ---
+     "GetProductInfo"=>fn get_product_info,
+     "GetTimeZoneInformation"=>fn get_time_zone_information,"GetDynamicTimeZoneInformation"=>fn get_dynamic_time_zone_information,
+     "SystemTimeToFileTime"=>fn system_time_to_file_time,"FileTimeToSystemTime"=>fn file_time_to_system_time,
+     "FileTimeToLocalFileTime"=>fn file_time_to_local_file_time,"SystemTimeToTzSpecificLocalTime"=>fn system_time_to_tz_specific_local_time,
+     "GetSystemTime"=>fn get_system_time,
+     "GetProcessTimes"=>fn get_process_times,"GetThreadTimes"=>fn get_thread_times,
+     "SetHandleInformation"=>fn set_handle_information,"GetHandleInformation"=>fn get_handle_information,"DuplicateHandle"=>fn duplicate_handle,
+     "CreateEventW"=>fn create_event_w,"CreateMutexW"=>fn create_mutex_w,
+     "GetProcessId"=>fn get_process_id,"GetModuleHandleExW"=>fn get_module_handle_ex_w,
+     "CreateSemaphoreW"=>fn create_semaphore_w,"ReleaseSemaphore"=>fn release_semaphore,
+     "SleepEx"=>fn sleep_ex,"WaitForSingleObjectEx"=>fn wait_for_single_object_ex,"SignalObjectAndWait"=>fn signal_object_and_wait,
+     "CreateNamedPipeW"=>fn create_named_pipe_w,"SetNamedPipeHandleState"=>fn set_named_pipe_handle_state,"PeekNamedPipe"=>fn peek_named_pipe
      }
 }
 

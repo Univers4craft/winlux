@@ -10,14 +10,25 @@ pub mod crt;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
+pub mod crypt32;
+pub mod d3d11;
+pub mod d3d_shader;
+pub mod dbghelp;
+pub mod dwmapi;
+pub mod dwrite;
+pub mod dxgi;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
+pub mod gl_bindings;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod iphlpapi;
 pub mod kernel32;
 pub mod kernel32_misc;
+pub mod libgcc;
+pub mod libstdcpp;
 pub mod mfplat;
 pub mod mmap;
 pub mod mscoree;
@@ -25,17 +36,25 @@ pub mod msvcrt;
 pub mod ntdll;
 pub mod ole32;
 pub mod oleaut32;
+pub mod powrprof;
+pub mod propsys;
 pub mod quartz;
 pub mod resource;
 pub mod rpcrt4;
+pub mod sechost;
+pub mod setupapi;
 pub mod shell32;
 pub mod shlwapi;
 pub mod user32;
 pub mod user32_ext;
+pub mod userenv;
+pub mod uxtheme;
 pub mod version;
 pub mod winfile;
 pub mod winhttp;
+pub mod winlux_pty;
 pub mod winmm;
+pub mod wintrust;
 pub mod ws2_32;
 
 use std::collections::HashMap;
@@ -97,6 +116,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_misc::exports());
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
+                    e.extend(winlux_pty::exports());
                     e
                 },
                 handle: fake_module(),
@@ -224,6 +244,86 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: mfplat::exports(),
                 handle: fake_module(),
             },
+            Builtin {
+                name: "crypt32",
+                exports: crypt32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dxgi",
+                exports: dxgi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d11",
+                exports: d3d11::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dbghelp",
+                exports: dbghelp::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "powrprof",
+                exports: powrprof::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "setupapi",
+                exports: setupapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "wintrust",
+                exports: wintrust::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "iphlpapi",
+                exports: iphlpapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "userenv",
+                exports: userenv::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dwrite",
+                exports: dwrite::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "uxtheme",
+                exports: uxtheme::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dwmapi",
+                exports: dwmapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "propsys",
+                exports: propsys::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "sechost",
+                exports: sechost::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "libgcc_s_seh-1",
+                exports: libgcc::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "libstdc++-6",
+                exports: libstdcpp::exports(),
+                handle: fake_module(),
+            },
         ]
     })
 }
@@ -259,6 +359,67 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("api-ms-win-eventing-provider-l1-") {
         return "advapi32".into();
+    }
+    if base.starts_with("api-ms-win-core-winrt-") {
+        return "ole32".into();
+    }
+    if base.starts_with("api-ms-win-core-path-l1-") {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-synch-") || base.starts_with("api-ms-win-core-sysinfo-") {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-processthreads-")
+        || base.starts_with("api-ms-win-core-heap-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-memory-") || base.starts_with("api-ms-win-core-file-") {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-errorhandling-")
+        || base.starts_with("api-ms-win-core-handle-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-libraryloader-")
+        || base.starts_with("api-ms-win-core-string-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-console-") || base.starts_with("api-ms-win-core-profile-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-debug-") || base.starts_with("api-ms-win-core-io-") {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-interlocked-")
+        || base.starts_with("api-ms-win-core-localization-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-timezone-") || base.starts_with("api-ms-win-core-fibers-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-datetime-")
+        || base.starts_with("api-ms-win-core-namedpipe-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-registry-")
+        || base.starts_with("api-ms-win-core-realtime-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-psapi-")
+        || base.starts_with("api-ms-win-core-processenvironment-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-util-") || base.starts_with("api-ms-win-core-wow64-") {
+        return "kernel32".into();
     }
     if base.starts_with("msvcr") && base != "msvcrt" {
         return "msvcrt".into();
@@ -309,6 +470,10 @@ pub fn builtin_by_handle(h: usize) -> Option<&'static str> {
 
 // ---------- Utilitaires partagés par les DLL ----------
 
+pub(crate) fn lock<T>(m: &std::sync::Mutex<T>) -> std::sync::MutexGuard<'_, T> {
+    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 pub unsafe fn cstr(p: *const u8) -> String {
     if p.is_null() {
         return String::new();
@@ -317,14 +482,15 @@ pub unsafe fn cstr(p: *const u8) -> String {
     decode_ansi(std::slice::from_raw_parts(p, n))
 }
 
+const CP1252: [u16; 32] = [
+    0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039,
+    0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
+    0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
+];
+
 /// Codepage ANSI par défaut de Winlux (Windows-1252), convertie vers UTF-8
 /// pour l'interface Linux. Les API Unicode `W` évitent cette conversion.
 pub fn decode_ansi(bytes: &[u8]) -> String {
-    const CP1252: [u16; 32] = [
-        0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160,
-        0x2039, 0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022,
-        0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
-    ];
     bytes
         .iter()
         .map(|&b| {
@@ -345,12 +511,6 @@ pub fn encode_ansi(text: &str) -> Vec<u8> {
             if n <= 0x7f || (0xa0..=0xff).contains(&n) {
                 return n as u8;
             }
-            const CP1252: [u16; 32] = [
-                0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030,
-                0x0160, 0x2039, 0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c,
-                0x201d, 0x2022, 0x2013, 0x2014, 0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d,
-                0x017e, 0x0178,
-            ];
             CP1252
                 .iter()
                 .position(|&x| x as u32 == n)

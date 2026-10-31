@@ -70,11 +70,7 @@ fn handles() -> &'static Mutex<HashMap<usize, Handle>> {
     static HANDLES: OnceLock<Mutex<HashMap<usize, Handle>>> = OnceLock::new();
     HANDLES.get_or_init(|| Mutex::new(HashMap::new()))
 }
-fn lock<T>(value: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    value
-        .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 fn fail<T: Default>(code: u32) -> T {
     crate::process::set_last_error(code);
     T::default()

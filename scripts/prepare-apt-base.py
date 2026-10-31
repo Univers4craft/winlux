@@ -12,8 +12,8 @@ import shutil
 import subprocess
 import tarfile
 
-BASE = "ubuntu-base-24.04.5-base-amd64.tar.gz"
-BASE_SHA256 = "e77b6f10c2590cef872b33ee9f635a0e3fd1f57fb074c0e52b5c7f56147a0c86"
+BASE = "ubuntu-base-26.04.1-base-amd64.tar.gz"
+BASE_SHA256 = "a496a960472ce474a59590b8987d3a1135d3cbef1991f3b1abe8cacfea8bf85a"
 PROJECT = Path(__file__).resolve().parent.parent
 PACKAGES = runpy.run_path(str(PROJECT / "scripts/prepare-desktop-packages.py"))["PACKAGES"]
 PACKAGES += ["apt", "dpkg", "bash", "coreutils", "findutils", "grep", "sed", "tar",
@@ -48,7 +48,7 @@ def main():
     base = work / BASE
     if not base.exists():
         run("curl", "-fL", "--retry", "2", "--connect-timeout", "20", "--max-time", "600",
-            "https://cdimage.ubuntu.com/ubuntu-base/releases/24.04/release/" + BASE,
+            "https://cdimage.ubuntu.com/ubuntu-base/releases/26.04/release/" + BASE,
             "-o", str(base))
     if hashlib.sha256(base.read_bytes()).hexdigest() != BASE_SHA256:
         raise RuntimeError("Ubuntu Base checksum mismatch")
@@ -84,9 +84,9 @@ def main():
     # Signed Ubuntu indexes authenticate packages; no trusted=yes or disabled checks.
     for entry in (root / "etc/apt/sources.list.d").glob("*"): entry.unlink()
     (root / "etc/apt/sources.list").write_text(
-        "deb http://archive.ubuntu.com/ubuntu noble main universe multiverse restricted\n"
-        "deb http://archive.ubuntu.com/ubuntu noble-updates main universe multiverse restricted\n"
-        "deb http://security.ubuntu.com/ubuntu noble-security main universe multiverse restricted\n")
+        "deb http://archive.ubuntu.com/ubuntu resolute main universe multiverse restricted\n"
+        "deb http://archive.ubuntu.com/ubuntu resolute-updates main universe multiverse restricted\n"
+        "deb http://security.ubuntu.com/ubuntu resolute-security main universe multiverse restricted\n")
     (boot / "dhcp").write_text("#!/winlux-bootstrap/busybox sh\n"
         "B=/winlux-bootstrap/busybox\n"
         'case "$1" in bound|renew) $B ifconfig "$interface" "$ip" netmask "$subnet"; '
@@ -100,7 +100,7 @@ def main():
           "dpkg --audit > /winlux-bootstrap/audit\ntest ! -s /winlux-bootstrap/audit\n"
           "apt-get check\nhello\napt-get purge -y hello\napt-get clean\n"
           "rm -rf /var/lib/apt/lists/*\nmkdir -p /usr/share/winlux\n"
-          "echo ubuntu-noble > /usr/share/winlux/apt-base\n"
+          "echo ubuntu-resolute > /usr/share/winlux/apt-base\n"
           "tar --numeric-owner --exclude=./proc --exclude=./sys --exclude=./dev "
           "--exclude=./run --exclude=./tmp --exclude=./winlux-bootstrap "
           "-C / -cpf /winlux-bootstrap/root.tar .\n")

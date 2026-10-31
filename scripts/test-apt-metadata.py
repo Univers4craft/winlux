@@ -7,12 +7,12 @@ import tempfile
 directory = Path(__file__).resolve().parent
 updater = runpy.run_path(str(directory / "winlux-update-apt.py"), run_name="apt_metadata_test")
 builder = runpy.run_path(str(directory / "stage-apt-root.py"), run_name="apt_payload_test")
-valid = ("format=3\nbackend=apt\nbase=ubuntu-noble\nversion=v0.3.0\n"
+valid = ("format=3\nbackend=apt\nbase=ubuntu-resolute\nversion=v0.3.0\n"
          "asset=winlux-desktop-v0.3.0.deb\nsha256=" + "a" * 64 + "\n"
          "download_bytes=123\nunpacked_kib=456\n")
 assert updater["manifest"](valid)["version"] == "v0.3.0"
 for invalid in [valid + "format=3\n", valid.replace("format=3", "format=2"),
-                valid.replace("ubuntu-noble", "other-base"), valid.replace("asset=winlux", "asset=../winlux"),
+                valid.replace("ubuntu-resolute", "other-base"), valid.replace("asset=winlux", "asset=../winlux"),
                 valid.replace("download_bytes=123", "download_bytes=-1"), valid.replace("a"*64, "not-a-hash")]:
     try: updater["manifest"](invalid)
     except ValueError: pass
