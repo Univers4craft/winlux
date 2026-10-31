@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod clr;
 mod crash;
 mod dlls;
 mod loader;
@@ -42,20 +43,10 @@ fn main() {
         }
     };
     profiles::apply(&exe);
-    if let Some(target) = managed::detect(&exe, &source) {
-        log_info!(
-            "managed",
-            "{} détectée, utilisation du pont natif",
-            managed::description(&target)
-        );
-        match managed::run(&target, &rest) {
-            Ok(status) => std::process::exit(status.code().unwrap_or(1)),
-            Err(error) => {
-                log_error!("managed", "{error}");
-                log_error!("managed", "les interfaces WPF/WinForms restent limitées tant que leurs API Windows ne sont pas complètes");
-                std::process::exit(1);
-            }
-        }
+    if managed::has_clr_header(&source) {
+        log_info!("managed", "assembly .NET détectée, exécution via le CLR Winlux intégré");
+        let code = clr::execute_assembly(&source);
+        std::process::exit(code);
     }
     let image = match loader::load(&exe, true) {
         Ok(m) => m,
