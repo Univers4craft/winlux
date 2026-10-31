@@ -83,9 +83,10 @@ static mut TOAST_START: u32 = 0;
 const TOAST_MS: i32 = 4500;
 /// Panneau de notifications (centre d'action simplifié).
 static mut NOTIF_PANEL: bool = false;
-static mut NOTIF_HISTORY: [[u8; 120]; 8] = [[0; 120]; 8];
-static mut NOTIF_LENS: [usize; 8] = [0; 8];
+static mut NOTIF_HISTORY: [[u8; 120]; 32] = [[0; 120]; 32];
+static mut NOTIF_LENS: [usize; 32] = [0; 32];
 static mut NOTIF_COUNT: usize = 0;
+static mut NOTIF_SCROLL: i32 = 0;
 /// Atténuation du fond (0 = noir, 1000 = normal) pendant le fondu.
 static mut FADE: i32 = 1000;
 
@@ -1829,15 +1830,19 @@ unsafe fn draw_notif_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) 
     let x = l.w - w - 12;
     let header_h = 44;
     let row_h = 56;
-    let rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
+    let total_rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
+    let max_visible: usize = 8;
+    let visible_rows = total_rows.min(max_visible);
     let empty_h = 60;
     let h = header_h
-        + if rows == 0 {
+        + if total_rows == 0 {
             empty_h
         } else {
-            rows as i32 * row_h
+            visible_rows as i32 * row_h
         }
         + 8;
+    let max_scroll = ((total_rows as i32 - max_visible as i32) * row_h).max(0);
+    NOTIF_SCROLL = NOTIF_SCROLL.clamp(0, max_scroll);
     let y = l.bar_top - 12 - h;
     panel(
         hdc,
@@ -1888,7 +1893,7 @@ unsafe fn draw_notif_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) 
         y + header_h,
         rgb(0x3A, 0x3F, 0x4A),
     );
-    if rows == 0 {
+    if total_rows == 0 {
         text_centered(
             hdc,
             f.body,
@@ -1899,14 +1904,15 @@ unsafe fn draw_notif_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) 
             b"Aucune notification",
         );
     } else {
-        for i in 0..rows {
-            let idx = if NOTIF_COUNT <= NOTIF_HISTORY.len() {
-                i
-            } else {
-                i
-            };
-            let ry = y + header_h + (rows - 1 - i) as i32 * row_h;
-            if i > 0 {
+        let body_top = y + header_h;
+        let body_bottom = y + h - 8;
+        for i in 0..total_rows {
+            let ry = body_top + (total_rows as i32 - 1 - i as i32) * row_h - NOTIF_SCROLL;
+            if ry + row_h <= body_top || ry >= body_bottom {
+                continue;
+            }
+            let idx = i;
+            if ry > body_top {
                 fill(
                     hdc,
                     b,
@@ -2327,6 +2333,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         let tray = l.w - 12 - 92 - 96;
         if x >= tray - 28 && x < tray {
             NOTIF_PANEL = !NOTIF_PANEL;
+            NOTIF_SCROLL = 0;
         } else if x >= tray && x < tray + 24 {
             crate::settings::open_page(2);
         } else if x >= tray + 24 && x < tray + 88 {
@@ -2341,7 +2348,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         let pw = 380;
         let px = l.w - pw - 12;
         let rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
-        let ph = 44 + if rows == 0 { 60 } else { rows as i32 * 56 } + 8;
+        let ph = 44 + if rows == 0 { 60 } else { rows.min(8) as i32 * 56 } + 8;
         let py = l.bar_top - 12 - ph;
         if x >= px && x < px + pw && y >= py && y < py + ph {
             if NOTIF_COUNT > 0
@@ -2549,6 +2556,25 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
     }
     if !BOOT_DONE {
         return;
+    }
+    if let Mouse::Wheel(delta) = ev {
+        if NOTIF_PANEL {
+            let l = layout();
+            let pw = 380;
+            let px = l.w - pw - 12;
+            let total_rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
+            let max_visible: usize = 8;
+            let row_h: i32 = 56;
+            let ph = 44 + if total_rows == 0 { 60 } else { total_rows.min(max_visible) as i32 * row_h } + 8;
+            let py = l.bar_top - 12 - ph;
+            if x >= px && x < px + pw && y >= py && y < py + ph {
+                NOTIF_SCROLL -= delta / 120 * row_h;
+                let max_scroll = ((total_rows as i32 - max_visible as i32) * row_h).max(0);
+                NOTIF_SCROLL = NOTIF_SCROLL.clamp(0, max_scroll);
+                repaint(hwnd);
+                return;
+            }
+        }
     }
     if matches!(ev, Mouse::RightDown) {
         let l = layout();

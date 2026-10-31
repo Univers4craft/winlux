@@ -372,8 +372,17 @@ unsafe fn draw_char(g: &mut Gfx, c: u8, x: i32, y: i32) {
     }
 }
 
-pub unsafe fn mouse(_ev: Mouse, _x: i32, _y: i32, _f: &Frame) -> bool {
-    true
+pub unsafe fn mouse(ev: Mouse, _x: i32, _y: i32, f: &Frame) -> bool {
+    match ev {
+        Mouse::Wheel(delta) => {
+            let visible_lines = (f.client.bottom - f.client.top - 52 - 24) / FONT_H;
+            DOC.scroll_y -= delta / 120 * FONT_H * 3;
+            let max_scroll = ((DOC.line_count as i32 - visible_lines + 1) * FONT_H).max(0);
+            DOC.scroll_y = DOC.scroll_y.clamp(0, max_scroll);
+            true
+        }
+        _ => true,
+    }
 }
 
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
