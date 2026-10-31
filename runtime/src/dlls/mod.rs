@@ -10,12 +10,19 @@ pub mod crt;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
+pub mod crypt32;
+pub mod d3d11;
+pub mod dbghelp;
+pub mod dwmapi;
+pub mod dwrite;
+pub mod dxgi;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod iphlpapi;
 pub mod kernel32;
 pub mod kernel32_misc;
 pub mod mfplat;
@@ -25,18 +32,25 @@ pub mod msvcrt;
 pub mod ntdll;
 pub mod ole32;
 pub mod oleaut32;
+pub mod powrprof;
+pub mod propsys;
 pub mod quartz;
 pub mod resource;
 pub mod rpcrt4;
+pub mod sechost;
+pub mod setupapi;
 pub mod shell32;
 pub mod shlwapi;
 pub mod user32;
 pub mod user32_ext;
+pub mod userenv;
+pub mod uxtheme;
 pub mod version;
 pub mod winfile;
 pub mod winhttp;
 pub mod winlux_pty;
 pub mod winmm;
+pub mod wintrust;
 pub mod ws2_32;
 
 use std::collections::HashMap;
@@ -226,6 +240,76 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: mfplat::exports(),
                 handle: fake_module(),
             },
+            Builtin {
+                name: "crypt32",
+                exports: crypt32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dxgi",
+                exports: dxgi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d11",
+                exports: d3d11::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dbghelp",
+                exports: dbghelp::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "powrprof",
+                exports: powrprof::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "setupapi",
+                exports: setupapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "wintrust",
+                exports: wintrust::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "iphlpapi",
+                exports: iphlpapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "userenv",
+                exports: userenv::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dwrite",
+                exports: dwrite::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "uxtheme",
+                exports: uxtheme::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dwmapi",
+                exports: dwmapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "propsys",
+                exports: propsys::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "sechost",
+                exports: sechost::exports(),
+                handle: fake_module(),
+            },
         ]
     })
 }
@@ -261,6 +345,67 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("api-ms-win-eventing-provider-l1-") {
         return "advapi32".into();
+    }
+    if base.starts_with("api-ms-win-core-winrt-") {
+        return "ole32".into();
+    }
+    if base.starts_with("api-ms-win-core-path-l1-") {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-synch-") || base.starts_with("api-ms-win-core-sysinfo-") {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-processthreads-")
+        || base.starts_with("api-ms-win-core-heap-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-memory-") || base.starts_with("api-ms-win-core-file-") {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-errorhandling-")
+        || base.starts_with("api-ms-win-core-handle-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-libraryloader-")
+        || base.starts_with("api-ms-win-core-string-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-console-") || base.starts_with("api-ms-win-core-profile-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-debug-") || base.starts_with("api-ms-win-core-io-") {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-interlocked-")
+        || base.starts_with("api-ms-win-core-localization-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-timezone-") || base.starts_with("api-ms-win-core-fibers-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-datetime-")
+        || base.starts_with("api-ms-win-core-namedpipe-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-registry-")
+        || base.starts_with("api-ms-win-core-realtime-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-psapi-")
+        || base.starts_with("api-ms-win-core-processenvironment-")
+    {
+        return "kernel32".into();
+    }
+    if base.starts_with("api-ms-win-core-util-") || base.starts_with("api-ms-win-core-wow64-") {
+        return "kernel32".into();
     }
     if base.starts_with("msvcr") && base != "msvcrt" {
         return "msvcrt".into();
