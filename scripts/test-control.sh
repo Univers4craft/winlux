@@ -188,6 +188,7 @@ case "$1" in
   --cpu-profile) test "$2" != balanced || { echo 'profil balanced indisponible' >&2; exit 1; }; printf 'cpu-profile %s %s\n' "$2" "$3" >> "$WINLUX_CONTROL_TEST_LOG" ;;
   --fan-daemon) printf 'fan-daemon %s\n' "$2" >> "$WINLUX_CONTROL_TEST_LOG" ;;
   --boot-time) printf 'boot_known=1\nboot_total_ms=8420\n' ;;
+  --gamemode) printf 'game_mode=auto\ngame_active=0\n' ;;
 esac
 MOCK
 chmod 755 "$work/bin/winlux"
@@ -196,6 +197,11 @@ grep -qx 'cap_governor=1' "$work/root/run/winlux/cpu.txt"
 grep -qx 'hybrid_policy=auto' "$work/root/run/winlux/cpu.txt"
 grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
 grep -qx 'boot_total_ms=8420' "$work/root/run/winlux/cpu.txt"
+grep -qx 'game_active=0' "$work/root/run/winlux/cpu.txt"
+control game-mode-off
+grep -qx 'GAME_MODE=off' "$work/root/etc/winlux/cpu.conf"
+control game-mode-auto
+grep -qx 'GAME_MODE=auto' "$work/root/etc/winlux/cpu.conf"
 control cpu-profile-performance
 grep -qx "cpu-profile performance $work/root" "$work/commands"
 grep -qx 'CPU_PROFILE=performance' "$work/root/etc/winlux/cpu.conf"

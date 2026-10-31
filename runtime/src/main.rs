@@ -10,6 +10,7 @@ mod crash;
 mod diskimage;
 mod dlls;
 mod firewall;
+mod gamemode;
 mod gpu;
 mod imaging;
 mod launch;
@@ -65,6 +66,10 @@ fn main() {
     if exe == "--boot-time" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(boottime::cli(&rest));
+    }
+    if exe == "--gamemode" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(gamemode::cli(&rest));
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());
@@ -170,7 +175,13 @@ fn main() {
         image.pe.stack_reserve,
         image.pe.stack_commit
     );
-    cpu::apply_launch(&cpu_settings, &image.import_names());
+    let imports = image.import_names();
+    cpu::apply_launch(&cpu_settings, &imports);
+    if cpu::is_heavy(&imports) {
+        // Jeu ou application 3D : le mode jeu lui donne la priorité.
+        let name = exe.file_name().map(|n| n.to_string_lossy().into_owned());
+        gamemode::register_current(name.as_deref().unwrap_or("jeu"));
+    }
     dlls::kernel32::init();
     process::init_process(&image, &launch::windows_args(&rest));
     process::run(image);
