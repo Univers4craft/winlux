@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **221**
-- À faire ou en cours : **40**
-- Total : **261**
-- Progression : **84.7%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158, presse-papiers Windows ↔ Linux #161)
+- Réalisé : **222**
+- À faire ou en cours : **43**
+- Total : **265**
+- Progression : **83.8%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158, presse-papiers Windows ↔ Linux #161, gestionnaire des tâches #178)
 
 ## À FAIRE (par priorité)
 
@@ -87,6 +87,9 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [ ] Faire tourner Paint.NET 5.1 sur le runtime .NET qu'il embarque : étape 1 livrée (#133), restent coreclr (exceptions MSVC, SEH x64), WIC, Direct2D/DirectWrite et WPF (#138, `docs/PAINTNET.md`).
 - [ ] Traduire toutes les applications en FR/EN/ES/DE : lots #120, #130, #131, #134 et #135 livrés, reste les applis encore en une seule langue (#139).
 - [ ] Traduire réellement l'installateur : choisir English ne traduit aujourd'hui que la barre des étapes (#140).
+- [ ] Observateur d'événements complet : journaux système, applications et .exe, filtres, niveaux, recherche, export (#178).
+- [ ] Informations système détaillées (carte mère, processeur, mémoire, disques, GPU, réseau, pilotes, version) avec export (#178).
+- [ ] Outil de diagnostic : rapport lisible après un plantage, enregistré ou envoyé par `winlux-report` (#178).
 - [ ] Glisser-déposer entre applis Windows et Linux (XDND ↔ `WM_DROPFILES`/`IDropTarget`, `DoDragDrop` vers Thunar), suite du pont presse-papiers (#159).
 - [ ] Démarrage sous 10 secondes et mode jeu : temps de démarrage mesuré et affiché livré, mode jeu livré, reste la réduction des étapes les plus longues (mesure en VM KVM) (#153).
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
@@ -95,6 +98,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] Gestionnaire des tâches complet façon Windows 11 : processus groupés avec .exe reconnus, tri, recherche, fin de tâche et priorité réelles (`OpenProcess`/`TerminateProcess`/`SetPriorityClass` sur tout processus), graphiques processeur/mémoire/disques/réseau/GPU, historique des applications, démarrage XDG activable, utilisateurs, détails, services (masqués sans systemd), vitesse d'actualisation ; ouvert par Ctrl+Maj+Échap (#178).
 - [x] Mode jeu : un `.exe` Direct3D/OpenGL/Vulkan/XInput déclenche `winlux --gamemode daemon` (gouverneur performances sur secteur, priorité du jeu, sauvegardes et mises à jour en pause et en basse priorité, swappiness et compactage mémoire, veille bloquée), tout est restauré à la fermeture ; réglage dans Paramètres > Processeur, actions affichées selon le matériel (#153, `docs/PERFORMANCES.md`).
 - [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).
 
