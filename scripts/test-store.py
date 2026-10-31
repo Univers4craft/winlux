@@ -235,6 +235,11 @@ esac
     st("install-file", str(home / "a.msi"), code=3)
     check("msiexec" in (run / "store-progress.txt").read_text(), "message msiexec")
     st("install", "apt:inconnu", code=2)
+    check("Logiciel inconnu" in (run / "store-progress.txt").read_text(), "message en français")
+    for code, text in (("en", "Unknown software"), ("es", "Software desconocido"), ("de", "Unbekannte Software")):
+        subprocess.run([sys.executable, "-I", "-B", str(store), "install", "apt:inconnu"],
+                       env={**env, "WINLUX_LANG": code}, capture_output=True, text=True)
+        check(text in (run / "store-progress.txt").read_text(), f"message traduit ({code})")
     (run / "store.lock").mkdir()
     st("install", "apt:gimp", code=1)
     (run / "store.lock").rmdir()

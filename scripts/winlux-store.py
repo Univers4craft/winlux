@@ -46,7 +46,77 @@ STATE = DATA / "winlux/store-state.json"
 CONFIG_DIRS = [Path(ROOT + "/etc/winlux/store-sources.d"),
                Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "winlux/store-sources.d"]
 CATALOG = Path(os.environ.get("WINLUX_STORE_CATALOG", ROOT + "/usr/share/winlux/store-catalog.txt"))
-LANG = "en" if os.environ.get("WINLUX_LANG", os.environ.get("LANG", "fr")).startswith("en") else "fr"
+def interface_lang():
+    """Langue de l'interface : WINLUX_LANG, sinon /etc/winlux/locale.conf
+    (Paramètres > Langue), sinon LANG ; fr, en, es ou de."""
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            for line in Path(ROOT + "/etc/winlux/locale.conf").read_text().splitlines():
+                if line.startswith("LANG="):
+                    code = line[5:].strip()
+        except OSError:
+            pass
+    code = (code or os.environ.get("LANG", "fr"))[:2].lower()
+    return code if code in ("fr", "en", "es", "de") else "fr"
+
+
+LANG = interface_lang()
+
+# Messages relus et affichés par le Store (store-progress.txt).
+T = {
+    "fr": {"busy": "Une installation est déjà en cours.", "preparing": "Préparation...",
+           "all_software": "Tous les logiciels", "unknown": "Logiciel inconnu : {target}",
+           "installed": "{name} est installé.", "removed": "{name} est désinstallé.",
+           "updated": "{name} est à jour.", "all_updated": "{name} sont à jour.",
+           "failed": "Échec ({code}) : voir {log}", "not_found": "Fichier introuvable : {path}",
+           "admin": "Droits administrateur requis pour installer des logiciels.",
+           "msi": "Les paquets .msi demandent msiexec, pas encore fourni par le runtime Winlux.",
+           "sha": "Empreinte SHA-256 invalide : installateur refusé.",
+           "latest": "Recherche de la dernière version...", "download": "Téléchargement de {name}...",
+           "runtime": "Installation de {name} avec le runtime Winlux...",
+           "installed_version": "installé"},
+    "en": {"busy": "An installation is already running.", "preparing": "Preparing...",
+           "all_software": "All software", "unknown": "Unknown software: {target}",
+           "installed": "{name} is installed.", "removed": "{name} is uninstalled.",
+           "updated": "{name} is up to date.", "all_updated": "{name} is up to date.",
+           "failed": "Failed ({code}): see {log}", "not_found": "File not found: {path}",
+           "admin": "Administrator rights are required to install software.",
+           "msi": ".msi packages need msiexec, not yet provided by the Winlux runtime.",
+           "sha": "Invalid SHA-256 fingerprint: installer rejected.",
+           "latest": "Looking for the latest version...", "download": "Downloading {name}...",
+           "runtime": "Installing {name} with the Winlux runtime...",
+           "installed_version": "installed"},
+    "es": {"busy": "Ya hay una instalación en curso.", "preparing": "Preparando...",
+           "all_software": "Todo el software", "unknown": "Software desconocido: {target}",
+           "installed": "{name} está instalado.", "removed": "{name} está desinstalado.",
+           "updated": "{name} está actualizado.", "all_updated": "{name} está actualizado.",
+           "failed": "Error ({code}): consulte {log}", "not_found": "Archivo no encontrado: {path}",
+           "admin": "Se necesitan derechos de administrador para instalar software.",
+           "msi": "Los paquetes .msi necesitan msiexec, que el runtime de Winlux aún no incluye.",
+           "sha": "Huella SHA-256 no válida: instalador rechazado.",
+           "latest": "Buscando la última versión...", "download": "Descargando {name}...",
+           "runtime": "Instalando {name} con el runtime de Winlux...",
+           "installed_version": "instalado"},
+    "de": {"busy": "Es läuft bereits eine Installation.", "preparing": "Vorbereitung...",
+           "all_software": "Alle Programme", "unknown": "Unbekannte Software: {target}",
+           "installed": "{name} ist installiert.", "removed": "{name} ist deinstalliert.",
+           "updated": "{name} ist auf dem neuesten Stand.",
+           "all_updated": "{name} sind auf dem neuesten Stand.",
+           "failed": "Fehlgeschlagen ({code}): siehe {log}", "not_found": "Datei nicht gefunden: {path}",
+           "admin": "Zum Installieren von Software sind Administratorrechte erforderlich.",
+           "msi": ".msi-Pakete benötigen msiexec, das die Winlux-Laufzeit noch nicht bereitstellt.",
+           "sha": "Ungültiger SHA-256-Fingerabdruck: Installationsprogramm abgelehnt.",
+           "latest": "Neueste Version wird gesucht...", "download": "{name} wird heruntergeladen...",
+           "runtime": "{name} wird mit der Winlux-Laufzeit installiert...",
+           "installed_version": "installiert"},
+}
+
+
+def tr(key, **values):
+    text = T[LANG].get(key) or T["fr"][key]
+    return text.format(**values) if values else text
+
 OFFLINE = os.environ.get("WINLUX_STORE_OFFLINE") == "1"
 REMOTE_TTL = 6 * 3600
 MAX_INDEX = 2500
@@ -745,7 +815,7 @@ class Flatpak(Source):
         for line in out.splitlines():
             p = line.split("\t")
             if p and p[0]:
-                res[p[0]] = p[1] if len(p) > 1 and p[1] else "installé"
+                res[p[0]] = p[1] if len(p) > 1 and p[1] else tr("installed_version")
         return res
 
     def updates(self):
@@ -972,7 +1042,7 @@ class AppImage(Source):
         app = next((a for a in self.apps() if a.ref == ref), None)
         if app is None:
             return 2
-        progress(5, "Recherche de la dernière version...")
+        progress(5, tr("latest"))
         tag, url = self.latest(app.github)
         if not url:
             return 3
@@ -1106,10 +1176,10 @@ class Windows(Source):
         app = next((a for a in self.apps() if a.ref == ref), None)
         if app is None:
             return 2
-        progress(5, f"Téléchargement de {app.name}...")
+        progress(5, tr("download", name=app.name))
         data = fetch(app.installer["url"], 600, 4 << 30)
         if not data or hashlib.sha256(data).hexdigest().lower() != app.installer["sha256"].lower():
-            progress(0, "Empreinte SHA-256 invalide : installateur refusé.")
+            progress(0, tr("sha"))
             return 5
         ext = ".msi" if app.installer.get("type") == "msi" or app.installer["url"].lower().endswith(".msi") else ".exe"
         path = CACHE / "installers" / f"{ref.replace('/', '_')}{ext}"
@@ -1146,7 +1216,7 @@ class Windows(Source):
 
 def install_windows_file(path, progress, args=()):
     """Lance un installateur .exe ou .msi avec le runtime Winlux."""
-    progress(15, f"Installation de {path.name} avec le runtime Winlux...")
+    progress(15, tr("runtime", name=path.name))
     if path.suffix.lower() == ".msi":
         drive_c = Path(os.environ.get("WINLUX_DRIVE_C", HOME))
         msiexec = drive_c / "windows/system32/msiexec.exe"
@@ -1345,9 +1415,7 @@ class Progress:
                      f"op={self.op}\ntarget={field(self.target)}\nstate={state}\n"
                      f"percent={max(0, min(100, int(percent)))}\nmessage={field(message, 200)}\n")
 
-MESSAGES = {126: "Droits administrateur requis pour installer des logiciels.",
-            3: "Les paquets .msi demandent msiexec, pas encore fourni par le runtime Winlux.",
-            5: "Empreinte SHA-256 invalide : installateur refusé."}
+MESSAGES = {126: "admin", 3: "msi", 5: "sha"}
 
 def operate(action, target):
     progress = Progress(action, target)
@@ -1355,32 +1423,34 @@ def operate(action, target):
     try:
         lock.mkdir(parents=True)
     except FileExistsError:
-        progress(0, "Une installation est déjà en cours.", "error")
+        progress(0, tr("busy"), "error")
         return 1
     try:
-        progress(0, "Préparation...")
+        progress(0, tr("preparing"))
         if action == "install-file":
             code = install_file(target, progress)
             name = os.path.basename(target.replace("\\", "/"))
         elif action == "update-all":
-            code, name = 0, "Tous les logiciels"
+            code, name = 0, tr("all_software")
             for s in SOURCES:
                 if s.available():
                     code = s.update_all(progress) or code
         else:
             src, app = find(target)
             if app is None:
-                progress(0, f"Logiciel inconnu : {target}", "error")
+                progress(0, tr("unknown", target=target), "error")
                 return 2
             name = app.name
             fn = {"install": src.install, "remove": src.remove}.get(action)
             code = fn(app.ref, progress) if fn else src.update([app.ref], progress)
-        done = {"install": "est installé.", "remove": "est désinstallé.", "update": "est à jour.",
-                "update-all": "sont à jour.", "install-file": "est installé."}.get(action, "")
+        done = {"install": "installed", "remove": "removed", "update": "updated",
+                "update-all": "all_updated", "install-file": "installed"}.get(action)
         if code == 0:
-            progress(100, f"{name} {done}", "done")
+            progress(100, tr(done, name=name) if done else name, "done")
+        elif code in MESSAGES:
+            progress(0, tr(MESSAGES[code]), "error")
         else:
-            progress(0, MESSAGES.get(code, f"Échec ({code}) : voir {RUN / 'store.log'}"), "error")
+            progress(0, tr("failed", code=code, log=RUN / "store.log"), "error")
         return code
     finally:
         lock.rmdir()
@@ -1400,7 +1470,7 @@ def linux_path(path):
 def install_file(target, progress):
     path = linux_path(target)
     if not path.is_file():
-        progress(0, f"Fichier introuvable : {path}", "error")
+        progress(0, tr("not_found", path=path), "error")
         return 2
     ext = path.suffix.lower()
     if ext in (".exe", ".msi"):
