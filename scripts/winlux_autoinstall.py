@@ -22,9 +22,13 @@ TOP_KEYS = {"version", "unattended", "language", "keyboard", "timezone", "licens
 PARTITION_KEYS = {"disk", "mode"}
 ACCOUNT_KEYS = {"hostname", "username", "fullname", "password", "password_hash", "autologin"}
 
-# Pages de l'installateur : le type d'installation se choisit sur la page des disques.
+# Pages de l'installateur, dans l'ordre (identique à STEP_KEYS de winlux-installer.py).
+# Le type d'installation se choisit sur la page des disques.
+STEP_KEYS = ["language", "keyboard", "license", "network", "disk", "import", "encryption",
+             "benchmark", "profile", "account", "migration", "summary", "progress", "done"]
 (STEP_LANGUAGE, STEP_KEYBOARD, STEP_LICENSE, STEP_NETWORK, STEP_DISK, STEP_IMPORT,
- STEP_ENCRYPTION, STEP_ACCOUNT, STEP_SUMMARY) = range(9)
+ STEP_ENCRYPTION, STEP_BENCHMARK, STEP_PROFILE, STEP_ACCOUNT, STEP_MIGRATION,
+ STEP_SUMMARY) = range(12)
 
 
 class AnswerFileError(ValueError):
@@ -237,8 +241,10 @@ def validate(data):
         absent = [label for step, label in missing.items() if step not in steps]
         if absent:
             raise AnswerFileError("unattended : réglage(s) manquant(s) : " + ", ".join(absent))
-        # Sans clic : pas de réseau à configurer, pas d'import Windows, pas de chiffrement.
-        steps.update({STEP_NETWORK, STEP_IMPORT, STEP_ENCRYPTION, STEP_SUMMARY})
+        # Sans clic : pas de réseau à configurer, pas d'import Windows, pas de chiffrement,
+        # pas de benchmark (profil par défaut) ni de transfert depuis un autre PC.
+        steps.update({STEP_NETWORK, STEP_IMPORT, STEP_ENCRYPTION, STEP_BENCHMARK, STEP_PROFILE,
+                      STEP_MIGRATION, STEP_SUMMARY})
     return settings, steps
 
 

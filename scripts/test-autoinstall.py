@@ -35,10 +35,16 @@ settings, steps = auto.validate(parsed)
 check("exemple : analyseur YAML intégré", parsed["account"]["username"] == "winlux" and parsed["packages"] == ["vlc", "gimp"])
 check("exemple : étapes sautées", steps == {auto.STEP_LANGUAGE, auto.STEP_KEYBOARD, auto.STEP_LICENSE,
                                              auto.STEP_DISK, auto.STEP_ACCOUNT})
-check("numéros de pages de l'installateur", (auto.STEP_DISK, auto.STEP_ACCOUNT, auto.STEP_SUMMARY) == (4, 7, 8))
+check("numéros de pages de l'installateur", (auto.STEP_DISK, auto.STEP_ACCOUNT, auto.STEP_SUMMARY) == (4, 9, 11))
 unattended = dict(parsed, unattended=True)
-check("unattended : réseau, import, chiffrement et résumé sautés",
-      {3, 5, 6, 8} <= auto.validate(unattended)[1])
+check("unattended : réseau, import, chiffrement, benchmark, profil, migration et résumé sautés",
+      {auto.STEP_NETWORK, auto.STEP_IMPORT, auto.STEP_ENCRYPTION, auto.STEP_BENCHMARK, auto.STEP_PROFILE,
+       auto.STEP_MIGRATION, auto.STEP_SUMMARY} <= auto.validate(unattended)[1])
+check("pages : ordre identique à STEP_KEYS",
+      [auto.STEP_KEYS.index(k) for k in ("network", "disk", "import", "encryption", "benchmark", "profile",
+                                         "account", "migration", "summary")]
+      == [auto.STEP_NETWORK, auto.STEP_DISK, auto.STEP_IMPORT, auto.STEP_ENCRYPTION, auto.STEP_BENCHMARK,
+          auto.STEP_PROFILE, auto.STEP_ACCOUNT, auto.STEP_MIGRATION, auto.STEP_SUMMARY])
 check("exemple : réglages", settings["timezone"] == "Europe/Paris" and settings["disk_request"] == "auto")
 try:
     import yaml
