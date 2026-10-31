@@ -1403,8 +1403,9 @@ fn render_thumb(key: &ThumbKey) -> Option<Vec<u8>> {
         let src = (y * w * 4) as usize;
         let dst = (((y + oy) * key.w + ox) * 4) as usize;
         out[dst..dst + (w * 4) as usize].copy_from_slice(&raw[src..src + (w * 4) as usize]);
-        for px in out[dst..dst + (w * 4) as usize].chunks_exact_mut(4) {
-            px[3] = 255;
+        // Alpha opaque pour chaque pixel de l'image (octet 3 de chaque BGRA).
+        for alpha in out[dst + 3..dst + (w * 4) as usize].iter_mut().step_by(4) {
+            *alpha = 255;
         }
     }
     Some(out)
