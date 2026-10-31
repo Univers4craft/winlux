@@ -3425,8 +3425,8 @@ pub unsafe fn drop_files_to(dest: &[u8], do_copy: bool) {
         }
         let mut wsrc_b = [0u16; PATH_LEN + NAME_LEN + 2];
         let mut wdst_b = [0u16; PATH_LEN + NAME_LEN + 2];
-        let moved = !do_copy
-            && MoveFileW(wstr(&mut wsrc_b, &src[..sn]), wstr(&mut wdst_b, &dst[..n])) != 0;
+        let moved =
+            !do_copy && MoveFileW(wstr(&mut wsrc_b, &src[..sn]), wstr(&mut wdst_b, &dst[..n])) != 0;
         let ok = moved || copy_tree(&src[..sn], &dst[..n]);
         if !ok {
             failed += 1;
@@ -3484,8 +3484,8 @@ pub unsafe fn paste_to(dest: &[u8]) {
         }
         let mut wsrc_b = [0u16; PATH_LEN + NAME_LEN + 2];
         let mut wdst_b = [0u16; PATH_LEN + NAME_LEN + 2];
-        let moved = CLIP_CUT
-            && MoveFileW(wstr(&mut wsrc_b, src.get()), wstr(&mut wdst_b, &dst[..n])) != 0;
+        let moved =
+            CLIP_CUT && MoveFileW(wstr(&mut wsrc_b, src.get()), wstr(&mut wdst_b, &dst[..n])) != 0;
         let ok = moved || copy_tree(src.get(), &dst[..n]);
         if !ok {
             failed += 1;

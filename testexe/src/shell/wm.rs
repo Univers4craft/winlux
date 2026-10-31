@@ -1518,7 +1518,14 @@ pub unsafe fn draw(g: &mut Gfx) {
                 9,
                 p.accent,
             );
-            text(g.hdc, g.f.small, rgb(0xFF, 0xFF, 0xFF), mx + 40, my + 2, &buf[..i]);
+            text(
+                g.hdc,
+                g.f.small,
+                rgb(0xFF, 0xFF, 0xFF),
+                mx + 40,
+                my + 2,
+                &buf[..i],
+            );
         }
     }
 }
