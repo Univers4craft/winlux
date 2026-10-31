@@ -103,6 +103,8 @@ case "$speed" in
     50) /usr/bin/winlux-control mouse-normal || true ;;
     75) /usr/bin/winlux-control mouse-fast || true ;;
 esac
+# Profil processeur et courbe de ventilateurs choisis dans les Parametres.
+if test -s /etc/winlux/cpu.conf; then /usr/bin/winlux-control cpu-restore || true; fi
 for query in /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders /usr/bin/gdk-pixbuf-query-loaders; do
     if test -x "$query"; then "$query" --update-cache; break; fi
 done

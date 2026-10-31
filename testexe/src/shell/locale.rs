@@ -233,9 +233,10 @@ pub const S_FILE_MANAGER: usize = 154;
 pub const S_ADVANCED_SOUND: usize = 155;
 pub const S_SYSTEM_UPDATES: usize = 156;
 pub const S_PRIVACY: usize = 157;
-pub const S_NETWORK_DRIVES: usize = 158;
+pub const S_PROCESSOR: usize = 158;
+pub const S_NETWORK_DRIVES: usize = 159;
 
-const STRING_COUNT: usize = 159;
+const STRING_COUNT: usize = 160;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -420,6 +421,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Son avanc\xE9",
     b"Mises \xE0 jour syst\xE8me",
     b"Confidentialit\xE9",
+    b"Processeur",
     b"Lecteurs r\xE9seau",
 ];
 
@@ -604,6 +606,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Advanced sound",
     b"System updates",
     b"Privacy",
+    b"Processor",
     b"Network drives",
 ];
 
@@ -788,6 +791,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Sonido avanzado",
     b"Actualizaciones del sistema",
     b"Privacidad",
+    b"Procesador",
     b"Unidades de red",
 ];
 
@@ -972,6 +976,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Erweiterter Sound",
     b"Systemupdates",
     b"Datenschutz",
+    b"Prozessor",
     b"Netzlaufwerke",
 ];
 

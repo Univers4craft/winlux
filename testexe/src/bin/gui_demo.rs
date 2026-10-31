@@ -36,6 +36,8 @@ mod notifications;
 mod restore;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/settings_cpu.rs"]
+mod settings_cpu;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
 #[path = "../shell/terminal.rs"]
