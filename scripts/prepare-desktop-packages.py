@@ -15,7 +15,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "python3-gi", "gir1.2-gtk-3.0", "network-manager", "network-manager-gnome",
             "bluez", "blueman", "brightnessctl", "flatpak", "gvfs", "gvfs-backends",
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
-            "xfce4-settings", "policykit-1-gnome", "wpasupplicant"]
+            "xfce4-settings", "policykit-1-gnome", "wpasupplicant",
+            "pciutils", "usbutils", "linux-firmware", "mesa-vulkan-drivers",
+            "libgl1-mesa-glx", "irqbalance"]
 
 def main():
     work = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/desktop-components").resolve()

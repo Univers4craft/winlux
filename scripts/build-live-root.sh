@@ -9,7 +9,7 @@ linkage=$(LC_ALL=C ldd /usr/bin/busybox 2>&1 || true)
 case "$linkage" in *'not a dynamic executable'*|*'statically linked'*) ;;
     *) echo 'busybox-static requis pour le petit initramfs' >&2; exit 1 ;;
 esac
-for applet in sh mount umount mdev insmod awk seq findfs switch_root cat mkdir chmod sleep; do
+for applet in sh mount umount mdev insmod awk seq findfs switch_root cat mkdir chmod sleep chroot sha256sum; do
     /usr/bin/busybox --list | grep -Fxq "$applet" || { echo "applet de démarrage absente : $applet" >&2; exit 1; }
 done
 work=$(mktemp -d "$project/build/live-boot.XXXXXX")
@@ -27,7 +27,7 @@ for driver in loop isofs squashfs overlay ext4; do
         exit 1
     }
 done
-for driver in virtio_pci virtio_blk virtio_scsi sr_mod sd_mod ata_piix ahci nvme usb_storage uas xhci_pci ehci_pci uhci_hcd hid usbhid hid_generic loop isofs squashfs overlay vfat ext4; do
+for driver in virtio_pci virtio_blk virtio_scsi sr_mod sd_mod ata_piix ahci nvme usb_storage uas xhci_pci xhci_hcd ehci_pci ehci_hcd uhci_hcd hid usbhid hid_generic mmc_core sdhci sdhci_pci loop isofs squashfs overlay vfat ext4; do
     modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
         test "$directive" = insmod || continue
         relative=${module#/}
