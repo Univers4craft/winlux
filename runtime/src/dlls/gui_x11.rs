@@ -1571,7 +1571,10 @@ impl X11Backend {
         for cmd in cmds {
             if !matches!(
                 cmd,
-                DrawCmd::Text { .. } | DrawCmd::Ellipse { .. } | DrawCmd::Line { .. }
+                DrawCmd::Text { .. }
+                    | DrawCmd::Ellipse { .. }
+                    | DrawCmd::Line { .. }
+                    | DrawCmd::RoundRect { .. }
             ) {
                 self.before_x11();
             }
@@ -1665,6 +1668,31 @@ impl X11Backend {
                     ) {
                         self.before_x11();
                         self.paint_line(w, x1, y1, x2, y2, *color);
+                    }
+                }
+                DrawCmd::RoundRect {
+                    rect,
+                    color,
+                    rx,
+                    ry,
+                } => {
+                    let rect = self.scaled_rect(rect);
+                    let rx = self.scaled(*rx);
+                    let ry = self.scaled(*ry);
+                    if !self.smooth_shape(
+                        w,
+                        *color,
+                        Shape::RoundRect {
+                            x: rect.left as f64,
+                            y: rect.top as f64,
+                            width: rect.width() as f64,
+                            height: rect.height() as f64,
+                            rx: rx as f64,
+                            ry: ry as f64,
+                        },
+                    ) {
+                        self.before_x11();
+                        self.paint_fill(w, &rect, *color);
                     }
                 }
             }

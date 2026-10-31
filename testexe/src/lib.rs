@@ -962,6 +962,16 @@ extern "C" {
         brush: Handle,
     ) -> i32;
     pub fn Ellipse(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32) -> i32;
+    pub fn RoundRect(
+        hdc: Handle,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        width: i32,
+        height: i32,
+    ) -> i32;
+    pub fn SetPixelV(hdc: Handle, x: i32, y: i32, color: u32) -> i32;
     pub fn OpenClipboard(owner: Handle) -> i32;
     pub fn CloseClipboard() -> i32;
     pub fn EmptyClipboard() -> i32;

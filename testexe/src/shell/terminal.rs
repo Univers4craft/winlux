@@ -530,12 +530,7 @@ impl Screen {
                             resp[len] = b'R';
                             len += 1;
                             let mut written = 0u32;
-                            WinluxWritePty(
-                                tab.pty,
-                                resp.as_ptr(),
-                                len as u32,
-                                &mut written,
-                            );
+                            WinluxWritePty(tab.pty, resp.as_ptr(), len as u32, &mut written);
                         }
                     }
                 }
@@ -547,12 +542,7 @@ impl Screen {
                         if tab.active && tab.pty != 0 {
                             let resp = b"\x1b[?1;2c";
                             let mut written = 0u32;
-                            WinluxWritePty(
-                                tab.pty,
-                                resp.as_ptr(),
-                                resp.len() as u32,
-                                &mut written,
-                            );
+                            WinluxWritePty(tab.pty, resp.as_ptr(), resp.len() as u32, &mut written);
                         }
                     }
                 }
@@ -628,7 +618,9 @@ impl Screen {
                     }
                     let i = self.nparam - 1;
                     if i < 16 {
-                        self.params[i] = self.params[i].saturating_mul(10).saturating_add((b - b'0') as u16);
+                        self.params[i] = self.params[i]
+                            .saturating_mul(10)
+                            .saturating_add((b - b'0') as u16);
                     }
                 } else if b == b';' {
                     if self.nparam < 16 {
@@ -669,7 +661,10 @@ impl Screen {
     }
 
     fn handle_osc(&mut self) {
-        if self.osc_len >= 2 && (self.osc_buf[0] == b'0' || self.osc_buf[0] == b'2') && self.osc_buf[1] == b';' {
+        if self.osc_len >= 2
+            && (self.osc_buf[0] == b'0' || self.osc_buf[0] == b'2')
+            && self.osc_buf[1] == b';'
+        {
             let len = (self.osc_len - 2).min(63);
             self.title[..len].copy_from_slice(&self.osc_buf[2..2 + len]);
             self.title_len = len;
@@ -894,8 +889,7 @@ pub unsafe fn poll() -> bool {
         let mut total_read = 0u32;
         loop {
             let mut n = 0u32;
-            if WinluxReadPty(TABS[i].pty, buf.as_mut_ptr(), buf.len() as u32, &mut n) == 0
-                || n == 0
+            if WinluxReadPty(TABS[i].pty, buf.as_mut_ptr(), buf.len() as u32, &mut n) == 0 || n == 0
             {
                 break;
             }
@@ -940,7 +934,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     }
 
     if TAB_COUNT == 0 {
-        fill(g.hdc, g.b, cl.left, cl.top, cl.right, cl.bottom, term_color(0));
+        fill(
+            g.hdc,
+            g.b,
+            cl.left,
+            cl.top,
+            cl.right,
+            cl.bottom,
+            term_color(0),
+        );
         return;
     }
 
@@ -994,7 +996,10 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 } else {
                     (term_color(nfg), term_color(nbg))
                 };
-                if ndf != draw_fg || ndb != draw_bg || (nc.attr & ATTR_BOLD) != (cell.attr & ATTR_BOLD) {
+                if ndf != draw_fg
+                    || ndb != draw_bg
+                    || (nc.attr & ATTR_BOLD) != (cell.attr & ATTR_BOLD)
+                {
                     break;
                 }
                 run_len += 1;
@@ -1055,7 +1060,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let cx = cl.left + (scr.cx as i32) * CELL_W;
         let cy = cl.top + (scr.cy as i32) * CELL_H;
         if cx < cl.right && cy < cl.bottom {
-            fill(g.hdc, g.b, cx, cy, cx + CELL_W, cy + CELL_H, rgb(204, 204, 204));
+            fill(
+                g.hdc,
+                g.b,
+                cx,
+                cy,
+                cx + CELL_W,
+                cy + CELL_H,
+                rgb(204, 204, 204),
+            );
             if scr.cy < MAX_ROWS && scr.cx < MAX_COLS {
                 let under = scr.cells[scr.cy][scr.cx].ch;
                 if under > b' ' {
@@ -1095,11 +1108,7 @@ unsafe fn draw_tabs(g: &mut Gfx, f: &Frame) {
         } else {
             p.surface
         };
-        let fg = if sel {
-            rgb(204, 204, 204)
-        } else {
-            p.text
-        };
+        let fg = if sel { rgb(204, 204, 204) } else { p.text };
 
         let tw = TAB_W.min(tl.right - x - 40);
         if tw < 40 {
@@ -1136,7 +1145,13 @@ unsafe fn draw_tabs(g: &mut Gfx, f: &Frame) {
                 if sel { rgb(60, 60, 60) } else { p.pressed },
             );
         }
-        draw_close_icon(g, close_x, close_y, TAB_CLOSE, if sel { rgb(180, 180, 180) } else { p.text2 });
+        draw_close_icon(
+            g,
+            close_x,
+            close_y,
+            TAB_CLOSE,
+            if sel { rgb(180, 180, 180) } else { p.text2 },
+        );
 
         x += tw + TAB_GAP;
         idx += 1;
@@ -1145,9 +1160,24 @@ unsafe fn draw_tabs(g: &mut Gfx, f: &Frame) {
     if TAB_COUNT < MAX_TABS {
         let plus_w = 28;
         let plus_bg = if HOVER_NEW { p.hover } else { p.surface };
-        fill(g.hdc, g.b, x, tab_y + 6, x + plus_w, tab_y + tab_h - 2, plus_bg);
+        fill(
+            g.hdc,
+            g.b,
+            x,
+            tab_y + 6,
+            x + plus_w,
+            tab_y + tab_h - 2,
+            plus_bg,
+        );
         let plus_fg = p.text2;
-        text(g.hdc, g.f.icon, plus_fg, x + 7, tab_y + (tab_h - 14) / 2, b"+");
+        text(
+            g.hdc,
+            g.f.icon,
+            plus_fg,
+            x + 7,
+            tab_y + (tab_h - 14) / 2,
+            b"+",
+        );
     }
 }
 
@@ -1511,4 +1541,3 @@ unsafe fn paste_clipboard() {
     }
     CloseClipboard();
 }
-

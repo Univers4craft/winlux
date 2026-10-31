@@ -906,12 +906,24 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             return;
         }
         Anim::Minimize if t < MINIMIZE_MS => {
-            let e = ease_out(t, MINIMIZE_MS);
-            (lerp_rect(&w.rect, &TASKBAR_SLOT[app], e), false, 1000 - e)
+            let e = ease_in_out(t, MINIMIZE_MS);
+            let slot = &TASKBAR_SLOT[app];
+            let r = &w.rect;
+            let hw = (r.right - r.left) * (1000 - e) / 1000 + (slot.right - slot.left) * e / 1000;
+            let cx = lerp((r.left + r.right) / 2, (slot.left + slot.right) / 2, e);
+            let top = lerp(r.top, slot.top, e * e / 1000);
+            let bottom = lerp(r.bottom, slot.bottom, e);
+            (rect(cx - hw / 2, top, cx + hw / 2, bottom), false, 1000 - e)
         }
         Anim::Restore if t < MINIMIZE_MS => {
-            let e = ease_out(t, MINIMIZE_MS);
-            (lerp_rect(&TASKBAR_SLOT[app], &w.rect, e), false, e)
+            let e = ease_in_out(t, MINIMIZE_MS);
+            let slot = &TASKBAR_SLOT[app];
+            let r = &w.rect;
+            let hw = (slot.right - slot.left) * (1000 - e) / 1000 + (r.right - r.left) * e / 1000;
+            let cx = lerp((slot.left + slot.right) / 2, (r.left + r.right) / 2, e);
+            let bottom = lerp(slot.bottom, r.bottom, e);
+            let top = lerp(slot.top, r.top, e * e / 1000);
+            (rect(cx - hw / 2, top, cx + hw / 2, bottom), false, e)
         }
         _ => {
             if w.anim != Anim::None {
