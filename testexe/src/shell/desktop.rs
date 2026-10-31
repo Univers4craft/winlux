@@ -2941,6 +2941,13 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
     if START_OPEN || CONTEXT_APP.is_some() {
         return;
     }
+    if let Mouse::Wheel(delta) = ev {
+        let l = layout();
+        if notifications::on_wheel(l.w, l.bar_top, x, y, delta) {
+            repaint(hwnd);
+            return;
+        }
+    }
     let mut rp = false;
     wm::on_other(ev, x, y, &mut rp);
     if rp {
