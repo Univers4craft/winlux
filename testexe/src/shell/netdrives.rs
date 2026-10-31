@@ -865,6 +865,24 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
             },
         );
     }
+    let missing = field(status(), b"missing");
+    if !missing.is_empty() {
+        // Sous le titre du formulaire (ou sous le message « aucun outil »).
+        let y = if slot == 0 { top + 56 } else { top + 2 };
+        let x = if slot == 0 { c.left } else { c.left + 250 };
+        let r = rect(x, y, c.right, y + 16);
+        if shown(&r) {
+            let mut line = [0u8; 300];
+            let mut n = 0;
+            for &ch in b"Non propos\xE9s ici : ".iter().chain(missing) {
+                if n < line.len() {
+                    line[n] = ch;
+                    n += 1;
+                }
+            }
+            text_fit(g.hdc, g.f.small, 11, p.text3, r.left, r.top, &line[..n], r.right - r.left);
+        }
+    }
     if slot == 0 {
         return;
     }
