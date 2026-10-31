@@ -191,6 +191,7 @@ _TR = {
     'Code : {code}\n\n{detail}': ('Code: {code}\n\n{detail}', 'Código: {code}\n\n{detail}', 'Code: {code}\n\n{detail}'),
     'Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}': ('Step: {stage} (code {code})\n\nLast lines of the log:\n{detail}', 'Etapa: {stage} (código {code})\n\nÚltimas líneas del registro:\n{detail}', 'Schritt: {stage} (Code {code})\n\nLetzte Zeilen des Protokolls:\n{detail}'),
     '{done}/{total} fichiers': ('{done}/{total} files', '{done}/{total} archivos', '{done}/{total} Dateien'),
+    'Applications par défaut': ('Default apps', 'Aplicaciones predeterminadas', 'Standard-Apps'),
 }
 
 
@@ -390,7 +391,7 @@ class Settings(Gtk.Window):
             shortcut.connect("clicked", lambda *_: subprocess.Popen(["winlux-system-tools", tool]))
             self.body.pack_start(shortcut, False, False, 0)
         if self.page == 1:
-            defaults = Gtk.Button(label="Applications par défaut")
+            defaults = Gtk.Button(label=_t("Applications par défaut"))
             defaults.connect("clicked", lambda *_: subprocess.Popen(["winlux-default-apps"]))
             self.body.pack_start(defaults, False, False, 0)
         if self.page == 8:
