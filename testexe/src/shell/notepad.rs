@@ -19,10 +19,10 @@ const CHAR_H: i32 = 15;
 
 // Syntax highlighting colors (editor-specific, not theme chrome)
 const TEXT_KEYWORD: u32 = 0x00C586C0; // purple-pink
-const TEXT_TYPE: u32 = 0x004EC9B0;    // teal
-const TEXT_STRING: u32 = 0x006AC3CE;  // light teal (escaped repr)
+const TEXT_TYPE: u32 = 0x004EC9B0; // teal
+const TEXT_STRING: u32 = 0x006AC3CE; // light teal (escaped repr)
 const TEXT_COMMENT: u32 = 0x006A9955; // green
-const TEXT_NUMBER: u32 = 0x00B5CEA8;  // light green
+const TEXT_NUMBER: u32 = 0x00B5CEA8; // light green
 const TEXT_PREPROC: u32 = 0x009CDCFE; // light blue
 
 static mut HOVER_TAB: i32 = -1;
@@ -32,7 +32,18 @@ static mut MONO_FONT: Handle = core::ptr::null_mut();
 unsafe fn mono() -> Handle {
     if MONO_FONT.is_null() {
         MONO_FONT = CreateFontA(
-            CHAR_H, 0, 0, 0, 400, 0, 0, 0, 1, 0, 0, 0,
+            CHAR_H,
+            0,
+            0,
+            0,
+            400,
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
             1, // FIXED_PITCH
             c"DejaVu Sans Mono".as_ptr(),
         );
@@ -160,7 +171,11 @@ fn col_of(d: &Doc, pos: usize) -> usize {
 fn line_end(d: &Doc, l: usize) -> usize {
     if l + 1 < d.line_count {
         let e = d.lines[l + 1];
-        if e > 0 && d.text[e - 1] == b'\n' { e - 1 } else { e }
+        if e > 0 && d.text[e - 1] == b'\n' {
+            e - 1
+        } else {
+            e
+        }
     } else {
         d.len
     }
@@ -179,7 +194,9 @@ fn has_sel(d: &Doc) -> bool {
 }
 
 fn delete_sel(d: &mut Doc) {
-    if !has_sel(d) { return; }
+    if !has_sel(d) {
+        return;
+    }
     let (a, b) = sel_range(d);
     let gap = b - a;
     let mut i = a;
@@ -196,7 +213,9 @@ fn delete_sel(d: &mut Doc) {
 
 fn insert_char(d: &mut Doc, c: u8) {
     delete_sel(d);
-    if d.len >= MAX_TEXT - 1 { return; }
+    if d.len >= MAX_TEXT - 1 {
+        return;
+    }
     let mut i = d.len;
     while i > d.cursor {
         d.text[i] = d.text[i - 1];
@@ -211,24 +230,37 @@ fn insert_char(d: &mut Doc, c: u8) {
 }
 
 fn detect_lang(name: &[u8], len: usize) -> Lang {
-    if len < 2 { return Lang::Plain; }
+    if len < 2 {
+        return Lang::Plain;
+    }
     let mut dot = len;
     let mut i = len;
     while i > 0 {
         i -= 1;
-        if name[i] == b'.' { dot = i; break; }
+        if name[i] == b'.' {
+            dot = i;
+            break;
+        }
     }
-    if dot >= len { return Lang::Plain; }
+    if dot >= len {
+        return Lang::Plain;
+    }
     let ext = &name[dot + 1..len];
-    if ext == b"rs" { return Lang::Rust; }
+    if ext == b"rs" {
+        return Lang::Rust;
+    }
     if ext == b"c" || ext == b"h" || ext == b"cpp" || ext == b"hpp" || ext == b"cc" {
         return Lang::C;
     }
-    if ext == b"py" { return Lang::Python; }
+    if ext == b"py" {
+        return Lang::Python;
+    }
     if ext == b"js" || ext == b"ts" || ext == b"jsx" || ext == b"tsx" || ext == b"json" {
         return Lang::Js;
     }
-    if ext == b"sh" || ext == b"bash" { return Lang::Shell; }
+    if ext == b"sh" || ext == b"bash" {
+        return Lang::Shell;
+    }
     Lang::Plain
 }
 
@@ -243,21 +275,28 @@ pub unsafe fn load_into_active(data: &[u8], name: &[u8]) {
     d.modified = false;
     let mut i = 0;
     while i < data.len() && d.len < MAX_TEXT - 1 {
-        if data[i] == b'\r' { i += 1; continue; }
+        if data[i] == b'\r' {
+            i += 1;
+            continue;
+        }
         d.text[d.len] = data[i];
         d.len += 1;
         i += 1;
     }
     d.cursor = d.len;
     let n = name.len().min(MAX_NAME);
-    for j in 0..n { d.name[j] = name[j]; }
+    for j in 0..n {
+        d.name[j] = name[j];
+    }
     d.name_len = n;
     d.lang = detect_lang(&d.name, d.name_len);
     rebuild_lines(d);
 }
 
 pub unsafe fn open_new() {
-    if ST.tab_count >= MAX_TABS { return; }
+    if ST.tab_count >= MAX_TABS {
+        return;
+    }
     let idx = ST.tab_count;
     ST.tabs[idx] = Doc::new();
     ST.counter += 1;
@@ -332,7 +371,16 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     }
     // "+" button
     if ST.tab_count < MAX_TABS {
-        round_rect(g.hdc, g.b, tx + 2, tr.top + 6, tx + 22, tr.bottom - 6, 4, p.surface2);
+        round_rect(
+            g.hdc,
+            g.b,
+            tx + 2,
+            tr.top + 6,
+            tx + 22,
+            tr.bottom - 6,
+            4,
+            p.surface2,
+        );
         text(g.hdc, g.f.small, p.text3, tx + 7, tr.top + 8, b"+");
     }
 
@@ -354,36 +402,108 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         // Find field
         let field_x = r.left + 80;
         let field_w = (r.right - r.left - 160).min(400).max(120);
-        round_rect(g.hdc, g.b, field_x, find_y + 4, field_x + field_w, find_y + FIND_H - 4, 4, p.surface);
-        text(g.hdc, g.f.small, p.text2, r.left + 8, find_y + 9, b"Chercher:");
-        text(g.hdc, mono(), p.text, field_x + 4, find_y + 8, &ST.find_buf[..ST.find_len]);
+        round_rect(
+            g.hdc,
+            g.b,
+            field_x,
+            find_y + 4,
+            field_x + field_w,
+            find_y + FIND_H - 4,
+            4,
+            p.surface,
+        );
+        text(
+            g.hdc,
+            g.f.small,
+            p.text2,
+            r.left + 8,
+            find_y + 9,
+            b"Chercher:",
+        );
+        text(
+            g.hdc,
+            mono(),
+            p.text,
+            field_x + 4,
+            find_y + 8,
+            &ST.find_buf[..ST.find_len],
+        );
         // Cursor in find field
         if ST.find_focused {
             let fcx = field_x + 4 + text_width(&ST.find_buf[..ST.find_len], CHAR_H);
-            fill(g.hdc, g.b, fcx, find_y + 7, fcx + 1, find_y + FIND_H - 7, p.text);
+            fill(
+                g.hdc,
+                g.b,
+                fcx,
+                find_y + 7,
+                fcx + 1,
+                find_y + FIND_H - 7,
+                p.text,
+            );
         }
         // Match count
         let mut mbuf = [0u8; 32];
         let mc = format_usize(ST.find_matches, &mut mbuf);
-        text(g.hdc, g.f.small, p.text3, field_x + field_w + 8, find_y + 9, &mbuf[..mc]);
+        text(
+            g.hdc,
+            g.f.small,
+            p.text3,
+            field_x + field_w + 8,
+            find_y + 9,
+            &mbuf[..mc],
+        );
         // Close button
         text(g.hdc, g.f.small, p.text3, r.right - 24, find_y + 9, b"x");
 
         if ST.replace_open {
             let ry = find_y + FIND_H;
-            round_rect(g.hdc, g.b, field_x, ry + 4, field_x + field_w, ry + FIND_H - 4, 4, p.surface);
+            round_rect(
+                g.hdc,
+                g.b,
+                field_x,
+                ry + 4,
+                field_x + field_w,
+                ry + FIND_H - 4,
+                4,
+                p.surface,
+            );
             text(g.hdc, g.f.small, p.text2, r.left + 8, ry + 9, b"Remplacer:");
-            text(g.hdc, mono(), p.text, field_x + 4, ry + 8, &ST.replace_buf[..ST.replace_len]);
+            text(
+                g.hdc,
+                mono(),
+                p.text,
+                field_x + 4,
+                ry + 8,
+                &ST.replace_buf[..ST.replace_len],
+            );
             if !ST.find_focused {
                 let rcx = field_x + 4 + text_width(&ST.replace_buf[..ST.replace_len], CHAR_H);
                 fill(g.hdc, g.b, rcx, ry + 7, rcx + 1, ry + FIND_H - 7, p.text);
             }
             // "Remplacer" button
             let bx = field_x + field_w + 8;
-            round_rect(g.hdc, g.b, bx, ry + 4, bx + 72, ry + FIND_H - 4, 4, p.surface);
+            round_rect(
+                g.hdc,
+                g.b,
+                bx,
+                ry + 4,
+                bx + 72,
+                ry + FIND_H - 4,
+                4,
+                p.surface,
+            );
             text(g.hdc, g.f.small, p.text2, bx + 6, ry + 9, b"Rempl.");
             // "Tout remplacer" button
-            round_rect(g.hdc, g.b, bx + 78, ry + 4, bx + 150, ry + FIND_H - 4, 4, p.surface);
+            round_rect(
+                g.hdc,
+                g.b,
+                bx + 78,
+                ry + 4,
+                bx + 150,
+                ry + FIND_H - 4,
+                4,
+                p.surface,
+            );
             text(g.hdc, g.f.small, p.text2, bx + 84, ry + 9, b"Tout");
         }
 
@@ -393,11 +513,36 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     };
 
     // === Editor background ===
-    fill(g.hdc, g.b, r.left, ey, r.right, r.bottom - STATUS_H, p.window);
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        ey,
+        r.right,
+        r.bottom - STATUS_H,
+        p.window,
+    );
 
     // === Line number gutter ===
-    fill(g.hdc, g.b, r.left, ey, r.left + GUTTER_W, r.bottom - STATUS_H, p.surface);
-    line(g.hdc, g.b, r.left + GUTTER_W, ey, r.left + GUTTER_W, r.bottom - STATUS_H, 1, p.border);
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        ey,
+        r.left + GUTTER_W,
+        r.bottom - STATUS_H,
+        p.surface,
+    );
+    line(
+        g.hdc,
+        g.b,
+        r.left + GUTTER_W,
+        ey,
+        r.left + GUTTER_W,
+        r.bottom - STATUS_H,
+        1,
+        p.border,
+    );
 
     let editor_x = r.left + GUTTER_W + 4;
     let editor_y = ey;
@@ -422,15 +567,34 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let mut nbuf = [0u8; 32];
         let nc = format_usize(li + 1, &mut nbuf);
         let nw = text_width(&nbuf[..nc], CHAR_H);
-        text(g.hdc, mono(), p.text3, r.left + GUTTER_W - 4 - nw, y, &nbuf[..nc]);
+        text(
+            g.hdc,
+            mono(),
+            p.text3,
+            r.left + GUTTER_W - 4 - nw,
+            y,
+            &nbuf[..nc],
+        );
 
         let ls = d.lines[li];
         let le = line_end(d, li);
 
         // Selection highlight for this line
         if sel_a != sel_b {
-            let line_sa = if sel_a < ls { 0 } else if sel_a > le { le - ls } else { sel_a - ls };
-            let line_sb = if sel_b < ls { 0 } else if sel_b > le { le - ls } else { sel_b - ls };
+            let line_sa = if sel_a < ls {
+                0
+            } else if sel_a > le {
+                le - ls
+            } else {
+                sel_a - ls
+            };
+            let line_sb = if sel_b < ls {
+                0
+            } else if sel_b > le {
+                le - ls
+            } else {
+                sel_b - ls
+            };
             if line_sa < line_sb {
                 let sx = editor_x + (line_sa as i32) * cw - d.scroll_x;
                 let ex = editor_x + (line_sb as i32) * cw - d.scroll_x;
@@ -469,14 +633,36 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     }
 
     // === Status bar ===
-    fill(g.hdc, g.b, r.left, r.bottom - STATUS_H, r.right, r.bottom, p.accent);
+    fill(
+        g.hdc,
+        g.b,
+        r.left,
+        r.bottom - STATUS_H,
+        r.right,
+        r.bottom,
+        p.accent,
+    );
     let cl = line_of(d, d.cursor) + 1;
     let cc = col_of(d, d.cursor) + 1;
     let mut sbuf = [0u8; 80];
     let sn = format_status(&mut sbuf, cl, cc, d.lang);
-    text(g.hdc, g.f.small, p.on_accent, r.right - 280, r.bottom - STATUS_H + 5, &sbuf[..sn]);
+    text(
+        g.hdc,
+        g.f.small,
+        p.on_accent,
+        r.right - 280,
+        r.bottom - STATUS_H + 5,
+        &sbuf[..sn],
+    );
     // Left side: tab name
-    text(g.hdc, g.f.small, p.on_accent, r.left + 8, r.bottom - STATUS_H + 5, &d.name[..d.name_len]);
+    text(
+        g.hdc,
+        g.f.small,
+        p.on_accent,
+        r.left + 8,
+        r.bottom - STATUS_H + 5,
+        &d.name[..d.name_len],
+    );
 }
 
 unsafe fn draw_line_highlighted(g: &mut Gfx, d: &Doc, start: usize, end: usize, x0: i32, y: i32) {
@@ -507,7 +693,9 @@ unsafe fn draw_line_highlighted(g: &mut Gfx, d: &Doc, start: usize, end: usize, 
 
 fn token_color(d: &Doc, pos: usize, line_end: usize, lang: Lang) -> (u32, usize) {
     let text_default = unsafe { pal().text };
-    if lang == Lang::Plain { return (text_default, 1); }
+    if lang == Lang::Plain {
+        return (text_default, 1);
+    }
 
     let c = d.text[pos];
 
@@ -540,7 +728,9 @@ fn token_color(d: &Doc, pos: usize, line_end: usize, lang: Lang) -> (u32, usize)
     // Numbers
     if c >= b'0' && c <= b'9' {
         let mut i = pos + 1;
-        while i < line_end && (d.text[i].is_ascii_alphanumeric() || d.text[i] == b'.' || d.text[i] == b'_') {
+        while i < line_end
+            && (d.text[i].is_ascii_alphanumeric() || d.text[i] == b'.' || d.text[i] == b'_')
+        {
             i += 1;
         }
         return (TEXT_NUMBER, i - pos);
@@ -569,21 +759,76 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
     let text_default = unsafe { pal().text };
     match lang {
         Lang::Rust => {
-            if matches!(w,
-                b"fn" | b"let" | b"mut" | b"if" | b"else" | b"match" | b"for" |
-                b"while" | b"loop" | b"return" | b"break" | b"continue" | b"pub" |
-                b"use" | b"mod" | b"struct" | b"enum" | b"impl" | b"trait" |
-                b"const" | b"static" | b"unsafe" | b"where" | b"as" | b"in" |
-                b"ref" | b"self" | b"Self" | b"super" | b"crate" | b"type" |
-                b"async" | b"await" | b"move" | b"dyn" | b"extern"
+            if matches!(
+                w,
+                b"fn"
+                    | b"let"
+                    | b"mut"
+                    | b"if"
+                    | b"else"
+                    | b"match"
+                    | b"for"
+                    | b"while"
+                    | b"loop"
+                    | b"return"
+                    | b"break"
+                    | b"continue"
+                    | b"pub"
+                    | b"use"
+                    | b"mod"
+                    | b"struct"
+                    | b"enum"
+                    | b"impl"
+                    | b"trait"
+                    | b"const"
+                    | b"static"
+                    | b"unsafe"
+                    | b"where"
+                    | b"as"
+                    | b"in"
+                    | b"ref"
+                    | b"self"
+                    | b"Self"
+                    | b"super"
+                    | b"crate"
+                    | b"type"
+                    | b"async"
+                    | b"await"
+                    | b"move"
+                    | b"dyn"
+                    | b"extern"
             ) {
                 TEXT_KEYWORD
-            } else if matches!(w,
-                b"u8" | b"u16" | b"u32" | b"u64" | b"u128" | b"usize" |
-                b"i8" | b"i16" | b"i32" | b"i64" | b"i128" | b"isize" |
-                b"f32" | b"f64" | b"bool" | b"char" | b"str" |
-                b"String" | b"Vec" | b"Option" | b"Result" | b"Box" |
-                b"true" | b"false" | b"None" | b"Some" | b"Ok" | b"Err"
+            } else if matches!(
+                w,
+                b"u8"
+                    | b"u16"
+                    | b"u32"
+                    | b"u64"
+                    | b"u128"
+                    | b"usize"
+                    | b"i8"
+                    | b"i16"
+                    | b"i32"
+                    | b"i64"
+                    | b"i128"
+                    | b"isize"
+                    | b"f32"
+                    | b"f64"
+                    | b"bool"
+                    | b"char"
+                    | b"str"
+                    | b"String"
+                    | b"Vec"
+                    | b"Option"
+                    | b"Result"
+                    | b"Box"
+                    | b"true"
+                    | b"false"
+                    | b"None"
+                    | b"Some"
+                    | b"Ok"
+                    | b"Err"
             ) {
                 TEXT_TYPE
             } else {
@@ -591,21 +836,63 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
             }
         }
         Lang::C => {
-            if matches!(w,
-                b"if" | b"else" | b"for" | b"while" | b"do" | b"switch" |
-                b"case" | b"break" | b"continue" | b"return" | b"goto" |
-                b"typedef" | b"struct" | b"union" | b"enum" | b"extern" |
-                b"static" | b"const" | b"volatile" | b"register" | b"sizeof" |
-                b"inline" | b"restrict" | b"define" | b"include" | b"ifdef" |
-                b"ifndef" | b"endif" | b"pragma"
+            if matches!(
+                w,
+                b"if"
+                    | b"else"
+                    | b"for"
+                    | b"while"
+                    | b"do"
+                    | b"switch"
+                    | b"case"
+                    | b"break"
+                    | b"continue"
+                    | b"return"
+                    | b"goto"
+                    | b"typedef"
+                    | b"struct"
+                    | b"union"
+                    | b"enum"
+                    | b"extern"
+                    | b"static"
+                    | b"const"
+                    | b"volatile"
+                    | b"register"
+                    | b"sizeof"
+                    | b"inline"
+                    | b"restrict"
+                    | b"define"
+                    | b"include"
+                    | b"ifdef"
+                    | b"ifndef"
+                    | b"endif"
+                    | b"pragma"
             ) {
                 TEXT_KEYWORD
-            } else if matches!(w,
-                b"int" | b"char" | b"short" | b"long" | b"float" | b"double" |
-                b"void" | b"unsigned" | b"signed" | b"size_t" | b"bool" |
-                b"uint8_t" | b"uint16_t" | b"uint32_t" | b"uint64_t" |
-                b"int8_t" | b"int16_t" | b"int32_t" | b"int64_t" |
-                b"NULL" | b"true" | b"false"
+            } else if matches!(
+                w,
+                b"int"
+                    | b"char"
+                    | b"short"
+                    | b"long"
+                    | b"float"
+                    | b"double"
+                    | b"void"
+                    | b"unsigned"
+                    | b"signed"
+                    | b"size_t"
+                    | b"bool"
+                    | b"uint8_t"
+                    | b"uint16_t"
+                    | b"uint32_t"
+                    | b"uint64_t"
+                    | b"int8_t"
+                    | b"int16_t"
+                    | b"int32_t"
+                    | b"int64_t"
+                    | b"NULL"
+                    | b"true"
+                    | b"false"
             ) {
                 TEXT_TYPE
             } else {
@@ -613,19 +900,58 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
             }
         }
         Lang::Python => {
-            if matches!(w,
-                b"def" | b"class" | b"if" | b"elif" | b"else" | b"for" |
-                b"while" | b"return" | b"break" | b"continue" | b"pass" |
-                b"import" | b"from" | b"as" | b"with" | b"try" | b"except" |
-                b"finally" | b"raise" | b"yield" | b"lambda" | b"global" |
-                b"nonlocal" | b"assert" | b"del" | b"in" | b"not" | b"and" |
-                b"or" | b"is" | b"async" | b"await"
+            if matches!(
+                w,
+                b"def"
+                    | b"class"
+                    | b"if"
+                    | b"elif"
+                    | b"else"
+                    | b"for"
+                    | b"while"
+                    | b"return"
+                    | b"break"
+                    | b"continue"
+                    | b"pass"
+                    | b"import"
+                    | b"from"
+                    | b"as"
+                    | b"with"
+                    | b"try"
+                    | b"except"
+                    | b"finally"
+                    | b"raise"
+                    | b"yield"
+                    | b"lambda"
+                    | b"global"
+                    | b"nonlocal"
+                    | b"assert"
+                    | b"del"
+                    | b"in"
+                    | b"not"
+                    | b"and"
+                    | b"or"
+                    | b"is"
+                    | b"async"
+                    | b"await"
             ) {
                 TEXT_KEYWORD
-            } else if matches!(w,
-                b"True" | b"False" | b"None" | b"int" | b"float" | b"str" |
-                b"bool" | b"list" | b"dict" | b"tuple" | b"set" | b"type" |
-                b"self" | b"cls"
+            } else if matches!(
+                w,
+                b"True"
+                    | b"False"
+                    | b"None"
+                    | b"int"
+                    | b"float"
+                    | b"str"
+                    | b"bool"
+                    | b"list"
+                    | b"dict"
+                    | b"tuple"
+                    | b"set"
+                    | b"type"
+                    | b"self"
+                    | b"cls"
             ) {
                 TEXT_TYPE
             } else {
@@ -633,18 +959,55 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
             }
         }
         Lang::Js => {
-            if matches!(w,
-                b"function" | b"var" | b"let" | b"const" | b"if" | b"else" |
-                b"for" | b"while" | b"do" | b"switch" | b"case" | b"break" |
-                b"continue" | b"return" | b"throw" | b"try" | b"catch" |
-                b"finally" | b"new" | b"delete" | b"typeof" | b"instanceof" |
-                b"in" | b"of" | b"class" | b"extends" | b"import" | b"export" |
-                b"default" | b"async" | b"await" | b"yield" | b"from"
+            if matches!(
+                w,
+                b"function"
+                    | b"var"
+                    | b"let"
+                    | b"const"
+                    | b"if"
+                    | b"else"
+                    | b"for"
+                    | b"while"
+                    | b"do"
+                    | b"switch"
+                    | b"case"
+                    | b"break"
+                    | b"continue"
+                    | b"return"
+                    | b"throw"
+                    | b"try"
+                    | b"catch"
+                    | b"finally"
+                    | b"new"
+                    | b"delete"
+                    | b"typeof"
+                    | b"instanceof"
+                    | b"in"
+                    | b"of"
+                    | b"class"
+                    | b"extends"
+                    | b"import"
+                    | b"export"
+                    | b"default"
+                    | b"async"
+                    | b"await"
+                    | b"yield"
+                    | b"from"
             ) {
                 TEXT_KEYWORD
-            } else if matches!(w,
-                b"true" | b"false" | b"null" | b"undefined" | b"NaN" |
-                b"this" | b"super" | b"console" | b"window" | b"document"
+            } else if matches!(
+                w,
+                b"true"
+                    | b"false"
+                    | b"null"
+                    | b"undefined"
+                    | b"NaN"
+                    | b"this"
+                    | b"super"
+                    | b"console"
+                    | b"window"
+                    | b"document"
             ) {
                 TEXT_TYPE
             } else {
@@ -652,11 +1015,30 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
             }
         }
         Lang::Shell => {
-            if matches!(w,
-                b"if" | b"then" | b"else" | b"elif" | b"fi" | b"for" |
-                b"while" | b"do" | b"done" | b"case" | b"esac" | b"in" |
-                b"function" | b"return" | b"exit" | b"export" | b"local" |
-                b"readonly" | b"declare" | b"set" | b"unset" | b"source"
+            if matches!(
+                w,
+                b"if"
+                    | b"then"
+                    | b"else"
+                    | b"elif"
+                    | b"fi"
+                    | b"for"
+                    | b"while"
+                    | b"do"
+                    | b"done"
+                    | b"case"
+                    | b"esac"
+                    | b"in"
+                    | b"function"
+                    | b"return"
+                    | b"exit"
+                    | b"export"
+                    | b"local"
+                    | b"readonly"
+                    | b"declare"
+                    | b"set"
+                    | b"unset"
+                    | b"source"
             ) {
                 TEXT_KEYWORD
             } else {
@@ -667,8 +1049,18 @@ fn classify_word(w: &[u8], lang: Lang) -> u32 {
     }
 }
 
-unsafe fn highlight_find_matches(g: &mut Gfx, d: &Doc, ls: usize, le: usize, x0: i32, y: i32, cw: i32) {
-    if ST.find_len == 0 { return; }
+unsafe fn highlight_find_matches(
+    g: &mut Gfx,
+    d: &Doc,
+    ls: usize,
+    le: usize,
+    x0: i32,
+    y: i32,
+    cw: i32,
+) {
+    if ST.find_len == 0 {
+        return;
+    }
     let p = pal();
     let mut i = ls;
     while i + ST.find_len <= le {
@@ -692,7 +1084,9 @@ unsafe fn highlight_find_matches(g: &mut Gfx, d: &Doc, ls: usize, le: usize, x0:
 
 fn count_matches(d: &Doc) -> usize {
     unsafe {
-        if ST.find_len == 0 { return 0; }
+        if ST.find_len == 0 {
+            return 0;
+        }
         let mut count = 0;
         let mut i = 0;
         while i + ST.find_len <= d.len {
@@ -708,10 +1102,14 @@ fn count_matches(d: &Doc) -> usize {
 }
 
 fn bytes_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() { return false; }
+    if a.len() != b.len() {
+        return false;
+    }
     let mut i = 0;
     while i < a.len() {
-        if a[i] != b[i] { return false; }
+        if a[i] != b[i] {
+            return false;
+        }
         i += 1;
     }
     true
@@ -739,16 +1137,31 @@ fn format_usize(v: usize, buf: &mut [u8; 32]) -> usize {
 fn format_status(buf: &mut [u8; 80], line: usize, col: usize, lang: Lang) -> usize {
     let mut n = 0;
     let prefix = b"Ln ";
-    for &b in prefix { buf[n] = b; n += 1; }
+    for &b in prefix {
+        buf[n] = b;
+        n += 1;
+    }
     let mut tmp = [0u8; 32];
     let c = format_usize(line, &mut tmp);
-    for i in 0..c { buf[n] = tmp[i]; n += 1; }
+    for i in 0..c {
+        buf[n] = tmp[i];
+        n += 1;
+    }
     let sep = b", Col ";
-    for &b in sep { buf[n] = b; n += 1; }
+    for &b in sep {
+        buf[n] = b;
+        n += 1;
+    }
     let c = format_usize(col, &mut tmp);
-    for i in 0..c { buf[n] = tmp[i]; n += 1; }
+    for i in 0..c {
+        buf[n] = tmp[i];
+        n += 1;
+    }
     let sp = b"   UTF-8   ";
-    for &b in sp { buf[n] = b; n += 1; }
+    for &b in sp {
+        buf[n] = b;
+        n += 1;
+    }
     let lang_name: &[u8] = match lang {
         Lang::Plain => b"Texte brut",
         Lang::Rust => b"Rust",
@@ -758,7 +1171,10 @@ fn format_status(buf: &mut [u8; 80], line: usize, col: usize, lang: Lang) -> usi
         Lang::Shell => b"Shell",
     };
     for &b in lang_name.iter() {
-        if n < 80 { buf[n] = b; n += 1; }
+        if n < 80 {
+            buf[n] = b;
+            n += 1;
+        }
     }
     n
 }
@@ -773,7 +1189,9 @@ fn ensure_cursor_visible(d: &mut Doc, editor_h: i32) {
     if cy >= d.scroll_y + (visible - 1) * CHAR_H {
         d.scroll_y = cy - (visible - 2) * CHAR_H;
     }
-    if d.scroll_y < 0 { d.scroll_y = 0; }
+    if d.scroll_y < 0 {
+        d.scroll_y = 0;
+    }
 }
 
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
@@ -797,7 +1215,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 tx += tw + 2;
             }
         }
-        if HOVER_TAB != old { return true; }
+        if HOVER_TAB != old {
+            return true;
+        }
     }
 
     // === Tab bar clicks ===
@@ -903,8 +1323,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             let d = doc();
             d.scroll_y -= delta * CHAR_H * 3;
             let max_scroll = ((d.line_count as i32) * CHAR_H).saturating_sub(CHAR_H);
-            if d.scroll_y > max_scroll { d.scroll_y = max_scroll; }
-            if d.scroll_y < 0 { d.scroll_y = 0; }
+            if d.scroll_y > max_scroll {
+                d.scroll_y = max_scroll;
+            }
+            if d.scroll_y < 0 {
+                d.scroll_y = 0;
+            }
             return true;
         }
         _ => {}
@@ -917,7 +1341,9 @@ unsafe fn close_tab(idx: usize) {
         // Don't close last tab, just clear it
         ST.tabs[0] = Doc::new();
         let name = b"Sans titre 1";
-        for i in 0..name.len() { ST.tabs[0].name[i] = name[i]; }
+        for i in 0..name.len() {
+            ST.tabs[0].name[i] = name[i];
+        }
         ST.tabs[0].name_len = name.len();
         ST.active = 0;
         return;
@@ -948,14 +1374,20 @@ unsafe fn close_tab(idx: usize) {
 }
 
 unsafe fn find_next() {
-    if ST.find_len == 0 { return; }
+    if ST.find_len == 0 {
+        return;
+    }
     let d = doc();
     let start = d.cursor;
     let mut i = start;
     loop {
         i += 1;
-        if i + ST.find_len > d.len { i = 0; }
-        if i == start { return; }
+        if i + ST.find_len > d.len {
+            i = 0;
+        }
+        if i == start {
+            return;
+        }
         if bytes_eq(&d.text[i..i + ST.find_len], &ST.find_buf[..ST.find_len]) {
             d.cursor = i;
             d.anchor = i + ST.find_len;
@@ -966,25 +1398,35 @@ unsafe fn find_next() {
 }
 
 unsafe fn find_prev() {
-    if ST.find_len == 0 { return; }
+    if ST.find_len == 0 {
+        return;
+    }
     let d = doc();
     let start = if d.cursor > 0 { d.cursor - 1 } else { d.len };
     let mut i = start;
     loop {
-        if i + ST.find_len <= d.len && bytes_eq(&d.text[i..i + ST.find_len], &ST.find_buf[..ST.find_len]) {
+        if i + ST.find_len <= d.len
+            && bytes_eq(&d.text[i..i + ST.find_len], &ST.find_buf[..ST.find_len])
+        {
             d.cursor = i;
             d.anchor = i + ST.find_len;
             ensure_cursor_visible(d, 400);
             return;
         }
-        if i == 0 { i = d.len; }
+        if i == 0 {
+            i = d.len;
+        }
         i -= 1;
-        if i == start { return; }
+        if i == start {
+            return;
+        }
     }
 }
 
 unsafe fn replace_next() {
-    if ST.find_len == 0 { return; }
+    if ST.find_len == 0 {
+        return;
+    }
     let d = doc();
     // If current selection matches find text, replace it
     let (a, b) = sel_range(d);
@@ -995,7 +1437,9 @@ unsafe fn replace_next() {
         delete_sel(d);
         // Insert replacement
         for j in 0..ST.replace_len {
-            if d.len >= MAX_TEXT - 1 { break; }
+            if d.len >= MAX_TEXT - 1 {
+                break;
+            }
             let mut k = d.len;
             while k > d.cursor {
                 d.text[k] = d.text[k - 1];
@@ -1013,7 +1457,9 @@ unsafe fn replace_next() {
 }
 
 unsafe fn replace_all() {
-    if ST.find_len == 0 { return; }
+    if ST.find_len == 0 {
+        return;
+    }
     let d = doc();
     let mut i = 0;
     let mut changed = false;
@@ -1029,7 +1475,9 @@ unsafe fn replace_all() {
             d.len -= gap;
             // Insert replacement
             for j in 0..ST.replace_len {
-                if d.len >= MAX_TEXT - 1 { break; }
+                if d.len >= MAX_TEXT - 1 {
+                    break;
+                }
                 let mut k = d.len;
                 while k > i + j {
                     d.text[k] = d.text[k - 1];
@@ -1069,7 +1517,11 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         }
         // Enter in find field = find next
         if (ch == 13 || vk == 0x0D) && ST.find_focused {
-            if shift { find_prev(); } else { find_next(); }
+            if shift {
+                find_prev();
+            } else {
+                find_next();
+            }
             return true;
         }
         // Enter in replace field = replace next
@@ -1098,34 +1550,40 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     // Ctrl shortcuts
     if ctrl {
         match vk {
-            0x46 => { // Ctrl+F
+            0x46 => {
+                // Ctrl+F
                 ST.find_open = true;
                 ST.replace_open = false;
                 ST.find_focused = true;
                 return true;
             }
-            0x48 => { // Ctrl+H
+            0x48 => {
+                // Ctrl+H
                 ST.find_open = true;
                 ST.replace_open = true;
                 ST.find_focused = true;
                 return true;
             }
-            0x4E => { // Ctrl+N
+            0x4E => {
+                // Ctrl+N
                 open_new();
                 wm::open(wm::APP_NOTEPAD);
                 return true;
             }
-            0x57 => { // Ctrl+W
+            0x57 => {
+                // Ctrl+W
                 close_tab(ST.active);
                 return true;
             }
-            0x41 => { // Ctrl+A
+            0x41 => {
+                // Ctrl+A
                 let d = doc();
                 d.anchor = 0;
                 d.cursor = d.len;
                 return true;
             }
-            0x47 => { // Ctrl+G - go to line (toggle)
+            0x47 => {
+                // Ctrl+G - go to line (toggle)
                 // Find next match (F3-like)
                 find_next();
                 return true;
@@ -1136,7 +1594,11 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
 
     // F3 = find next, Shift+F3 = find prev
     if vk == 0x72 {
-        if shift { find_prev(); } else { find_next(); }
+        if shift {
+            find_prev();
+        } else {
+            find_next();
+        }
         return true;
     }
 
@@ -1205,19 +1667,30 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     }
 
     // Arrow keys with shift for selection
-    if vk == 0x25 { // Left
-        if d.cursor > 0 { d.cursor -= 1; }
-        if !shift { d.anchor = d.cursor; }
+    if vk == 0x25 {
+        // Left
+        if d.cursor > 0 {
+            d.cursor -= 1;
+        }
+        if !shift {
+            d.anchor = d.cursor;
+        }
         ensure_cursor_visible(d, 400);
         return true;
     }
-    if vk == 0x27 { // Right
-        if d.cursor < d.len { d.cursor += 1; }
-        if !shift { d.anchor = d.cursor; }
+    if vk == 0x27 {
+        // Right
+        if d.cursor < d.len {
+            d.cursor += 1;
+        }
+        if !shift {
+            d.anchor = d.cursor;
+        }
         ensure_cursor_visible(d, 400);
         return true;
     }
-    if vk == 0x26 { // Up
+    if vk == 0x26 {
+        // Up
         let l = line_of(d, d.cursor);
         if l > 0 {
             let c = col_of(d, d.cursor);
@@ -1225,11 +1698,14 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             let prev_len = line_end(d, l - 1) - prev_start;
             d.cursor = prev_start + c.min(prev_len);
         }
-        if !shift { d.anchor = d.cursor; }
+        if !shift {
+            d.anchor = d.cursor;
+        }
         ensure_cursor_visible(d, 400);
         return true;
     }
-    if vk == 0x28 { // Down
+    if vk == 0x28 {
+        // Down
         let l = line_of(d, d.cursor);
         if l + 1 < d.line_count {
             let c = col_of(d, d.cursor);
@@ -1237,7 +1713,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             let next_len = line_end(d, l + 1) - next_start;
             d.cursor = next_start + c.min(next_len);
         }
-        if !shift { d.anchor = d.cursor; }
+        if !shift {
+            d.anchor = d.cursor;
+        }
         ensure_cursor_visible(d, 400);
         return true;
     }
@@ -1246,7 +1724,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     if vk == 0x24 {
         let l = line_of(d, d.cursor);
         d.cursor = d.lines[l];
-        if !shift { d.anchor = d.cursor; }
+        if !shift {
+            d.anchor = d.cursor;
+        }
         ensure_cursor_visible(d, 400);
         return true;
     }
@@ -1254,13 +1734,16 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     if vk == 0x23 {
         let l = line_of(d, d.cursor);
         d.cursor = line_end(d, l);
-        if !shift { d.anchor = d.cursor; }
+        if !shift {
+            d.anchor = d.cursor;
+        }
         ensure_cursor_visible(d, 400);
         return true;
     }
 
     // Page Up / Page Down
-    if vk == 0x21 { // Page Up
+    if vk == 0x21 {
+        // Page Up
         let lines = 20;
         let l = line_of(d, d.cursor);
         let c = col_of(d, d.cursor);
@@ -1268,11 +1751,14 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         let new_start = d.lines[new_l];
         let new_len = line_end(d, new_l) - new_start;
         d.cursor = new_start + c.min(new_len);
-        if !shift { d.anchor = d.cursor; }
+        if !shift {
+            d.anchor = d.cursor;
+        }
         d.scroll_y = (d.scroll_y - lines as i32 * CHAR_H).max(0);
         return true;
     }
-    if vk == 0x22 { // Page Down
+    if vk == 0x22 {
+        // Page Down
         let lines = 20;
         let l = line_of(d, d.cursor);
         let c = col_of(d, d.cursor);
@@ -1280,10 +1766,14 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         let new_start = d.lines[new_l];
         let new_len = line_end(d, new_l) - new_start;
         d.cursor = new_start + c.min(new_len);
-        if !shift { d.anchor = d.cursor; }
+        if !shift {
+            d.anchor = d.cursor;
+        }
         d.scroll_y += lines as i32 * CHAR_H;
         let max_scroll = ((d.line_count as i32) * CHAR_H).saturating_sub(CHAR_H);
-        if d.scroll_y > max_scroll { d.scroll_y = max_scroll; }
+        if d.scroll_y > max_scroll {
+            d.scroll_y = max_scroll;
+        }
         return true;
     }
 

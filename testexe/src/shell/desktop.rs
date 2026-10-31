@@ -55,7 +55,7 @@ static mut SEARCH_OVERLAY: bool = false;
 static mut SEARCH_BUF: [u8; 64] = [0; 64];
 static mut SEARCH_BUF_LEN: usize = 0;
 static mut SEARCH_HOVER: i32 = -1;
-use crate::gfx::{ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS, AUTO_THEME};
+use crate::gfx::{AUTO_THEME, ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS};
 static mut RECENTER_ANIM: u32 = 0;
 static mut RECENTER_FROM: i32 = 0;
 static mut RECENTER_TARGET: i32 = 0;
@@ -141,8 +141,7 @@ fn fuzzy_score(name: &[u8], query: &[u8]) -> i32 {
         return 0;
     }
     if contains_ci(name, query) {
-        if name.len() >= query.len()
-            && (0..query.len()).all(|k| lower(name[k]) == lower(query[k]))
+        if name.len() >= query.len() && (0..query.len()).all(|k| lower(name[k]) == lower(query[k]))
         {
             return 3; // prefix match
         }
@@ -985,7 +984,16 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     let r = CONTEXT_RECT;
     let p = pal();
     round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 8, p.border);
-    round_rect(hdc, b, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, 7, p.surface);
+    round_rect(
+        hdc,
+        b,
+        r.left + 1,
+        r.top + 1,
+        r.right - 1,
+        r.bottom - 1,
+        7,
+        p.surface,
+    );
     if app == usize::MAX {
         let labels: [&[u8]; 5] = [
             b"Ouvrir l'Explorateur",
@@ -999,7 +1007,14 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
             if row == CONTEXT_HOVER {
                 round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
             }
-            text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
+            text(
+                hdc,
+                f.body,
+                p.text,
+                r.left + 12,
+                y + 8,
+                labels[row as usize],
+            );
         }
         return;
     }
@@ -1020,7 +1035,14 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
             if row == CONTEXT_HOVER {
                 round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
             }
-            text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
+            text(
+                hdc,
+                f.body,
+                p.text,
+                r.left + 12,
+                y + 8,
+                labels[row as usize],
+            );
         }
         return;
     }
@@ -1046,7 +1068,14 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         if row == CONTEXT_HOVER {
             round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
         }
-        text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
+        text(
+            hdc,
+            f.body,
+            p.text,
+            r.left + 12,
+            y + 8,
+            labels[row as usize],
+        );
     }
 }
 
@@ -1193,7 +1222,11 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         let total = wm::desktop_count();
         for d in 0..total {
             let dx = ind_x + d as i32 * 14;
-            let c = if d == cur { ACCENT } else { rgb(0x5A, 0x5E, 0x68) };
+            let c = if d == cur {
+                ACCENT
+            } else {
+                rgb(0x5A, 0x5E, 0x68)
+            };
             round_rect(hdc, b, dx, ind_y + 14, dx + 10, ind_y + 20, 2, c);
         }
     }
@@ -1538,7 +1571,16 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     } else {
         rgb(0x31, 0x35, 0x3F)
     };
-    round_rect(hdc, b, inner_l, search_y, inner_r, search_y + 36, 18, search_bg);
+    round_rect(
+        hdc,
+        b,
+        inner_l,
+        search_y,
+        inner_r,
+        search_y + 36,
+        18,
+        search_bg,
+    );
     glyph(hdc, b, f, Glyph::Search, inner_l + 10, search_y + 8, 18);
     if unsafe { START_SEARCH_LEN > 0 } {
         text(
@@ -1915,7 +1957,16 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         for (i, (label, id)) in items.iter().enumerate() {
             let iy = my + 4 + i as i32 * 36;
             if HOVER_START_ITEM == *id {
-                round_rect(hdc, b, mx + 4, iy, mx + pw - 4, iy + 34, 4, rgb(0x3D, 0x3D, 0x47));
+                round_rect(
+                    hdc,
+                    b,
+                    mx + 4,
+                    iy,
+                    mx + pw - 4,
+                    iy + 34,
+                    4,
+                    rgb(0x3D, 0x3D, 0x47),
+                );
             }
             text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), mx + 14, iy + 9, label);
         }
@@ -2037,21 +2088,52 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let oy = (l.bar_top - h) / 2;
     // Fond semi-transparent.
     fill(hdc, b, 0, 0, l.w, l.bar_top, rgb(0x0A, 0x0A, 0x0A));
-    panel(hdc, b, ox, oy, ox + w, oy + h, 12, rgb(0x1E, 0x21, 0x28), rgb(0x3A, 0x3F, 0x4A));
+    panel(
+        hdc,
+        b,
+        ox,
+        oy,
+        ox + w,
+        oy + h,
+        12,
+        rgb(0x1E, 0x21, 0x28),
+        rgb(0x3A, 0x3F, 0x4A),
+    );
     let pad = 24;
     let il = ox + pad;
     let ir = ox + w - pad;
     // Titre.
     glyph(hdc, b, f, Glyph::Search, il, oy + 20, 24);
-    text(hdc, f.large, rgb(0xF2, 0xF2, 0xF2), il + 32, oy + 18, b"Recherche");
+    text(
+        hdc,
+        f.large,
+        rgb(0xF2, 0xF2, 0xF2),
+        il + 32,
+        oy + 18,
+        b"Recherche",
+    );
     // Champ de saisie.
     let fy = oy + 60;
     round_rect(hdc, b, il, fy, ir, fy + 40, 20, rgb(0x31, 0x35, 0x3F));
     glyph(hdc, b, f, Glyph::Search, il + 12, fy + 10, 18);
     if SEARCH_BUF_LEN > 0 {
-        text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), il + 36, fy + 10, &SEARCH_BUF[..SEARCH_BUF_LEN]);
+        text(
+            hdc,
+            f.body,
+            rgb(0xE6, 0xE6, 0xE6),
+            il + 36,
+            fy + 10,
+            &SEARCH_BUF[..SEARCH_BUF_LEN],
+        );
     } else {
-        text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 36, fy + 10, b"Tapez pour rechercher...");
+        text(
+            hdc,
+            f.body,
+            rgb(0x88, 0x88, 0x88),
+            il + 36,
+            fy + 10,
+            b"Tapez pour rechercher...",
+        );
     }
     // Résultats.
     let ry = fy + 52;
@@ -2064,7 +2146,14 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         }; 16];
         let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
         if count == 0 {
-            text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 4, ry + 8, b"Aucun r\xE9sultat");
+            text(
+                hdc,
+                f.body,
+                rgb(0x88, 0x88, 0x88),
+                il + 4,
+                ry + 8,
+                b"Aucun r\xE9sultat",
+            );
         }
         for i in 0..count {
             let iy = ry + (i as i32) * 44;
@@ -2075,10 +2164,24 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 round_rect(hdc, b, il, iy, ir, iy + 40, 5, rgb(0x31, 0x35, 0x3F));
             }
             glyph(hdc, b, f, results[i].glyph, il + 8, iy + 8, 24);
-            text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), il + 40, iy + 10, results[i].name);
+            text(
+                hdc,
+                f.body,
+                rgb(0xE6, 0xE6, 0xE6),
+                il + 40,
+                iy + 10,
+                results[i].name,
+            );
         }
     } else {
-        text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 4, ry + 8, b"Recherchez des applications et des fichiers");
+        text(
+            hdc,
+            f.body,
+            rgb(0x88, 0x88, 0x88),
+            il + 4,
+            ry + 8,
+            b"Recherchez des applications et des fichiers",
+        );
     }
 }
 
@@ -2612,8 +2715,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                     glyph: Glyph::Search,
                     score: 0,
                 }; 16];
-                let count =
-                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
                 for i in 0..count {
                     let iy = ry + (i as i32) * 44;
                     if iy + 40 >= oy + h - 16 {
@@ -2691,10 +2793,8 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                         glyph: Glyph::Search,
                         score: 0,
                     }; 16];
-                    let count = collect_results(
-                        unsafe { &START_SEARCH[..START_SEARCH_LEN] },
-                        &mut results,
-                    );
+                    let count =
+                        collect_results(unsafe { &START_SEARCH[..START_SEARCH_LEN] }, &mut results);
                     if idx < count {
                         set_start(false);
                         launch(results[idx].launch);
@@ -2786,8 +2886,7 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
                 glyph: Glyph::Search,
                 score: 0,
             }; 16];
-            let count =
-                collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+            let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
             for i in 0..count {
                 let iy = ry + (i as i32) * 44;
                 if iy + 40 >= oy + h - 16 {
@@ -3112,12 +3211,16 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             if vk == 0x25 {
                 let cur = wm::current_desktop();
                 if cur > 0 {
-                    unsafe { wm::switch_desktop(cur - 1); }
+                    unsafe {
+                        wm::switch_desktop(cur - 1);
+                    }
                 }
             } else if vk == 0x27 {
                 let cur = wm::current_desktop();
                 if cur + 1 < wm::desktop_count() {
-                    unsafe { wm::switch_desktop(cur + 1); }
+                    unsafe {
+                        wm::switch_desktop(cur + 1);
+                    }
                 }
             }
             repaint(hwnd);
@@ -3136,7 +3239,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
-            unsafe { wm::add_desktop(); }
+            unsafe {
+                wm::add_desktop();
+            }
             repaint(hwnd);
             return;
         }
@@ -3148,7 +3253,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             let cur = wm::current_desktop();
-            unsafe { wm::remove_desktop(cur); }
+            unsafe {
+                wm::remove_desktop(cur);
+            }
             repaint(hwnd);
             return;
         }
@@ -3251,8 +3358,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
                     glyph: Glyph::Search,
                     score: 0,
                 }; 16];
-                let count =
-                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
                 let idx = SEARCH_HOVER as usize;
                 if idx < count {
                     SEARCH_OVERLAY = false;
@@ -3267,8 +3373,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
                     glyph: Glyph::Search,
                     score: 0,
                 }; 16];
-                let count =
-                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
                 if count > 0 {
                     SEARCH_OVERLAY = false;
                     launch(results[0].launch);
@@ -3286,8 +3391,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
                 glyph: Glyph::Search,
                 score: 0,
             }; 16];
-            let count =
-                collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results) as i32;
+            let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results) as i32;
             if count > 0 {
                 SEARCH_HOVER = (SEARCH_HOVER + 1).min(count - 1);
             }
@@ -3331,8 +3435,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
                     glyph: Glyph::Search,
                     score: 0,
                 }; 16];
-                let count =
-                    collect_results(&START_SEARCH[..START_SEARCH_LEN], &mut results);
+                let count = collect_results(&START_SEARCH[..START_SEARCH_LEN], &mut results);
                 if count > 0 {
                     START_SEARCH_LEN = 0;
                     START_SEARCH_ACTIVE = false;

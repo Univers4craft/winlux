@@ -83,7 +83,13 @@ unsafe fn read_file_buf(path: *const i8, buf: &mut [u8]) -> usize {
         return 0;
     }
     let mut read = 0u32;
-    ReadFile(f, buf.as_mut_ptr(), buf.len() as u32, &mut read, core::ptr::null_mut());
+    ReadFile(
+        f,
+        buf.as_mut_ptr(),
+        buf.len() as u32,
+        &mut read,
+        core::ptr::null_mut(),
+    );
     CloseHandle(f);
     read as usize
 }
@@ -103,7 +109,7 @@ unsafe fn read_disk_info() {
     // Fallback : valeurs de démo
     if DISK_TOTAL_KB == 0 {
         DISK_TOTAL_KB = 64 * 1024 * 1024; // 64 Go
-        DISK_USED_KB = 28 * 1024 * 1024;  // 28 Go utilisés
+        DISK_USED_KB = 28 * 1024 * 1024; // 28 Go utilisés
         DISK_FREE_KB = DISK_TOTAL_KB - DISK_USED_KB;
     }
 }
@@ -305,14 +311,35 @@ unsafe fn draw_initial(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     draw_disk_icon(g, icon_x, icon_y, 48);
 
     // Titre
-    text_centered(g.hdc, g.f.title, 15, p.text, x + w / 2, y + h / 4 + 36,
-        b"Nettoyage de disque");
+    text_centered(
+        g.hdc,
+        g.f.title,
+        15,
+        p.text,
+        x + w / 2,
+        y + h / 4 + 36,
+        b"Nettoyage de disque",
+    );
 
     // Description
-    text_centered(g.hdc, g.f.body, 13, p.text2, x + w / 2, y + h / 4 + 60,
-        b"Analysez et lib\xE9rez de l'espace disque");
-    text_centered(g.hdc, g.f.body, 13, p.text2, x + w / 2, y + h / 4 + 78,
-        b"en supprimant les fichiers inutiles.");
+    text_centered(
+        g.hdc,
+        g.f.body,
+        13,
+        p.text2,
+        x + w / 2,
+        y + h / 4 + 60,
+        b"Analysez et lib\xE9rez de l'espace disque",
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        13,
+        p.text2,
+        x + w / 2,
+        y + h / 4 + 78,
+        b"en supprimant les fichiers inutiles.",
+    );
 
     // Info disque
     let mut buf = [0u8; 32];
@@ -322,8 +349,15 @@ unsafe fn draw_initial(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         let prefix = b"Espace libre : ";
         line[..prefix.len()].copy_from_slice(prefix);
         line[prefix.len()..prefix.len() + n].copy_from_slice(&buf[..n]);
-        text_centered(g.hdc, g.f.small, 11, p.text3, x + w / 2, y + h / 4 + 108,
-            &line[..prefix.len() + n]);
+        text_centered(
+            g.hdc,
+            g.f.small,
+            11,
+            p.text3,
+            x + w / 2,
+            y + h / 4 + 108,
+            &line[..prefix.len() + n],
+        );
     }
 
     // Bouton Analyser
@@ -331,28 +365,73 @@ unsafe fn draw_initial(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let btn_h = 36;
     let btn_x = x + w / 2 - btn_w / 2;
     let btn_y = y + h / 2 + 20;
-    let btn_bg = if HOVER_SCAN { p.accent } else { mix(p.accent, p.surface, 2, 10) };
+    let btn_bg = if HOVER_SCAN {
+        p.accent
+    } else {
+        mix(p.accent, p.surface, 2, 10)
+    };
     let btn_fg = if HOVER_SCAN { p.on_accent } else { p.text };
-    round_rect(g.hdc, g.b, btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, 4, btn_bg);
-    text_centered(g.hdc, g.f.semibold, 13, btn_fg, x + w / 2, btn_y + 10,
-        b"Analyser le disque");
+    round_rect(
+        g.hdc,
+        g.b,
+        btn_x,
+        btn_y,
+        btn_x + btn_w,
+        btn_y + btn_h,
+        4,
+        btn_bg,
+    );
+    text_centered(
+        g.hdc,
+        g.f.semibold,
+        13,
+        btn_fg,
+        x + w / 2,
+        btn_y + 10,
+        b"Analyser le disque",
+    );
 }
 
 unsafe fn draw_scanning(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let p = pal();
 
-    text_centered(g.hdc, g.f.title, 15, p.text, x + w / 2, y + h / 3 - 10,
-        b"Analyse en cours...");
+    text_centered(
+        g.hdc,
+        g.f.title,
+        15,
+        p.text,
+        x + w / 2,
+        y + h / 3 - 10,
+        b"Analyse en cours...",
+    );
 
     // Barre de progression
     let bar_w = w * 2 / 3;
     let bar_h = 6;
     let bar_x = x + (w - bar_w) / 2;
     let bar_y = y + h / 3 + 20;
-    round_rect(g.hdc, g.b, bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, 3, p.surface2);
+    round_rect(
+        g.hdc,
+        g.b,
+        bar_x,
+        bar_y,
+        bar_x + bar_w,
+        bar_y + bar_h,
+        3,
+        p.surface2,
+    );
     let fill_w = (bar_w as u64 * SCAN_PROGRESS as u64 / 100) as i32;
     if fill_w > 0 {
-        round_rect(g.hdc, g.b, bar_x, bar_y, bar_x + fill_w, bar_y + bar_h, 3, p.accent);
+        round_rect(
+            g.hdc,
+            g.b,
+            bar_x,
+            bar_y,
+            bar_x + fill_w,
+            bar_y + bar_h,
+            3,
+            p.accent,
+        );
     }
 
     // Pourcentage
@@ -360,13 +439,28 @@ unsafe fn draw_scanning(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let n = fmt_u32(&mut buf, SCAN_PROGRESS);
     buf[n] = b' ';
     buf[n + 1] = b'%';
-    text_centered(g.hdc, g.f.body, 13, p.text2, x + w / 2, bar_y + 16, &buf[..n + 2]);
+    text_centered(
+        g.hdc,
+        g.f.body,
+        13,
+        p.text2,
+        x + w / 2,
+        bar_y + 16,
+        &buf[..n + 2],
+    );
 
     // Catégorie en cours d'analyse
     let cat_idx = (SCAN_PROGRESS as usize * CAT_COUNT / 100).min(CAT_COUNT.saturating_sub(1));
     if cat_idx < CAT_COUNT {
-        text_centered(g.hdc, g.f.small, 11, p.text3, x + w / 2, bar_y + 38,
-            &CATS[cat_idx].name[..CATS[cat_idx].name_len]);
+        text_centered(
+            g.hdc,
+            g.f.small,
+            11,
+            p.text3,
+            x + w / 2,
+            bar_y + 38,
+            &CATS[cat_idx].name[..CATS[cat_idx].name_len],
+        );
     }
 }
 
@@ -376,12 +470,27 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     // En-tête avec disque et espace
     let header_h = 80;
     fill(g.hdc, g.b, x, y, x + w, y + header_h, p.surface);
-    fill(g.hdc, g.b, x, y + header_h, x + w, y + header_h + 1, p.border);
+    fill(
+        g.hdc,
+        g.b,
+        x,
+        y + header_h,
+        x + w,
+        y + header_h + 1,
+        p.border,
+    );
 
     // Icône disque dans l'en-tête
     draw_disk_icon(g, x + 16, y + 16, 32);
 
-    text(g.hdc, g.f.title, p.text, x + 60, y + 12, b"Nettoyage de disque");
+    text(
+        g.hdc,
+        g.f.title,
+        p.text,
+        x + 60,
+        y + 12,
+        b"Nettoyage de disque",
+    );
 
     // Espace à libérer
     let total = total_selected_kb();
@@ -391,14 +500,30 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let prefix = b"Espace \xE0 lib\xE9rer : ";
     line_buf[..prefix.len()].copy_from_slice(prefix);
     line_buf[prefix.len()..prefix.len() + n].copy_from_slice(&buf[..n]);
-    text(g.hdc, g.f.body, p.accent, x + 60, y + 34, &line_buf[..prefix.len() + n]);
+    text(
+        g.hdc,
+        g.f.body,
+        p.accent,
+        x + 60,
+        y + 34,
+        &line_buf[..prefix.len() + n],
+    );
 
     // Barre d'espace disque
     let bar_x = x + 60;
     let bar_w = w - 80;
     let bar_y = y + 58;
     let bar_h = 10;
-    round_rect(g.hdc, g.b, bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, 4, p.surface2);
+    round_rect(
+        g.hdc,
+        g.b,
+        bar_x,
+        bar_y,
+        bar_x + bar_w,
+        bar_y + bar_h,
+        4,
+        p.surface2,
+    );
     if DISK_TOTAL_KB > 0 {
         let used_w = ((bar_w as u64 * DISK_USED_KB) / DISK_TOTAL_KB) as i32;
         let color = if DISK_USED_KB * 100 / DISK_TOTAL_KB > 90 {
@@ -409,7 +534,16 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
             p.accent
         };
         if used_w > 0 {
-            round_rect(g.hdc, g.b, bar_x, bar_y, bar_x + used_w, bar_y + bar_h, 4, color);
+            round_rect(
+                g.hdc,
+                g.b,
+                bar_x,
+                bar_y,
+                bar_x + used_w,
+                bar_y + bar_h,
+                4,
+                color,
+            );
         }
     }
 
@@ -421,7 +555,15 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let _desc_w = w - list_w;
 
     // Séparateur vertical
-    fill(g.hdc, g.b, desc_x, content_y, desc_x + 1, content_y + content_h, p.border);
+    fill(
+        g.hdc,
+        g.b,
+        desc_x,
+        content_y,
+        desc_x + 1,
+        content_y + content_h,
+        p.border,
+    );
 
     // Liste des catégories
     let row_h = 36;
@@ -444,40 +586,117 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         let cb_x = x + 12;
         let cb_y = ry + 10;
         let cb_s = 16;
-        round_rect(g.hdc, g.b, cb_x, cb_y, cb_x + cb_s, cb_y + cb_s, 3, p.border);
+        round_rect(
+            g.hdc,
+            g.b,
+            cb_x,
+            cb_y,
+            cb_x + cb_s,
+            cb_y + cb_s,
+            3,
+            p.border,
+        );
         if CATS[i].checked {
-            round_rect(g.hdc, g.b, cb_x + 1, cb_y + 1, cb_x + cb_s - 1, cb_y + cb_s - 1, 2, p.accent);
+            round_rect(
+                g.hdc,
+                g.b,
+                cb_x + 1,
+                cb_y + 1,
+                cb_x + cb_s - 1,
+                cb_y + cb_s - 1,
+                2,
+                p.accent,
+            );
             // Coche
             let t = 2.max(cb_s / 8);
-            line(g.hdc, g.b, cb_x + 3, cb_y + cb_s / 2, cb_x + cb_s / 2 - 1, cb_y + cb_s - 4, t, p.on_accent);
-            line(g.hdc, g.b, cb_x + cb_s / 2 - 1, cb_y + cb_s - 4, cb_x + cb_s - 3, cb_y + 3, t, p.on_accent);
+            line(
+                g.hdc,
+                g.b,
+                cb_x + 3,
+                cb_y + cb_s / 2,
+                cb_x + cb_s / 2 - 1,
+                cb_y + cb_s - 4,
+                t,
+                p.on_accent,
+            );
+            line(
+                g.hdc,
+                g.b,
+                cb_x + cb_s / 2 - 1,
+                cb_y + cb_s - 4,
+                cb_x + cb_s - 3,
+                cb_y + 3,
+                t,
+                p.on_accent,
+            );
         }
 
         // Nom
-        text(g.hdc, g.f.body, p.text, cb_x + cb_s + 8, ry + 10,
-            &CATS[i].name[..CATS[i].name_len]);
+        text(
+            g.hdc,
+            g.f.body,
+            p.text,
+            cb_x + cb_s + 8,
+            ry + 10,
+            &CATS[i].name[..CATS[i].name_len],
+        );
 
         // Taille à droite
         let mut size_buf = [0u8; 16];
         let sn = fmt_size(&mut size_buf, CATS[i].size_kb);
         let tw = text_width(&size_buf[..sn], 11);
-        text(g.hdc, g.f.small, p.text2, desc_x - tw - 12, ry + 12, &size_buf[..sn]);
+        text(
+            g.hdc,
+            g.f.small,
+            p.text2,
+            desc_x - tw - 12,
+            ry + 12,
+            &size_buf[..sn],
+        );
     }
 
     // Panneau description à droite
-    fill(g.hdc, g.b, desc_x + 1, content_y, x + w, content_y + content_h, p.mica);
+    fill(
+        g.hdc,
+        g.b,
+        desc_x + 1,
+        content_y,
+        x + w,
+        content_y + content_h,
+        p.mica,
+    );
 
     if SELECTED_CAT >= 0 && (SELECTED_CAT as usize) < CAT_COUNT {
         let cat = &CATS[SELECTED_CAT as usize];
-        text(g.hdc, g.f.semibold, p.text, desc_x + 16, content_y + 12,
-            &cat.name[..cat.name_len]);
+        text(
+            g.hdc,
+            g.f.semibold,
+            p.text,
+            desc_x + 16,
+            content_y + 12,
+            &cat.name[..cat.name_len],
+        );
 
         // Séparateur
-        fill(g.hdc, g.b, desc_x + 16, content_y + 34, x + w - 16, content_y + 35, p.border);
+        fill(
+            g.hdc,
+            g.b,
+            desc_x + 16,
+            content_y + 34,
+            x + w - 16,
+            content_y + 35,
+            p.border,
+        );
 
         // Description
-        text(g.hdc, g.f.body, p.text2, desc_x + 16, content_y + 44,
-            &cat.desc[..cat.desc_len]);
+        text(
+            g.hdc,
+            g.f.body,
+            p.text2,
+            desc_x + 16,
+            content_y + 44,
+            &cat.desc[..cat.desc_len],
+        );
 
         // Taille
         let mut size_buf = [0u8; 32];
@@ -486,8 +705,14 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         let prefix2 = b"Taille : ";
         line2[..prefix2.len()].copy_from_slice(prefix2);
         line2[prefix2.len()..prefix2.len() + sn].copy_from_slice(&size_buf[..sn]);
-        text(g.hdc, g.f.body, p.text, desc_x + 16, content_y + 80,
-            &line2[..prefix2.len() + sn]);
+        text(
+            g.hdc,
+            g.f.body,
+            p.text,
+            desc_x + 16,
+            content_y + 80,
+            &line2[..prefix2.len() + sn],
+        );
     }
 
     // Boutons en bas
@@ -500,37 +725,97 @@ unsafe fn draw_ready(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let clean_h = 32;
     let clean_x = x + w - clean_w - 16;
     let clean_y = btn_y + 6;
-    let clean_bg = if HOVER_CLEAN { p.accent } else { mix(p.accent, p.surface, 2, 10) };
+    let clean_bg = if HOVER_CLEAN {
+        p.accent
+    } else {
+        mix(p.accent, p.surface, 2, 10)
+    };
     let clean_fg = if HOVER_CLEAN { p.on_accent } else { p.text };
-    round_rect(g.hdc, g.b, clean_x, clean_y, clean_x + clean_w, clean_y + clean_h, 4, clean_bg);
-    text_centered(g.hdc, g.f.semibold, 13, clean_fg, clean_x + clean_w / 2, clean_y + 8,
-        b"Nettoyer");
+    round_rect(
+        g.hdc,
+        g.b,
+        clean_x,
+        clean_y,
+        clean_x + clean_w,
+        clean_y + clean_h,
+        4,
+        clean_bg,
+    );
+    text_centered(
+        g.hdc,
+        g.f.semibold,
+        13,
+        clean_fg,
+        clean_x + clean_w / 2,
+        clean_y + 8,
+        b"Nettoyer",
+    );
 
     // Bouton Annuler
     let cancel_w = 100;
     let cancel_x = clean_x - cancel_w - 12;
     let cancel_bg = if HOVER_CLOSE { p.surface2 } else { p.surface };
-    round_rect(g.hdc, g.b, cancel_x, clean_y, cancel_x + cancel_w, clean_y + clean_h, 4, cancel_bg);
-    text_centered(g.hdc, g.f.body, 13, p.text, cancel_x + cancel_w / 2, clean_y + 8,
-        b"Fermer");
+    round_rect(
+        g.hdc,
+        g.b,
+        cancel_x,
+        clean_y,
+        cancel_x + cancel_w,
+        clean_y + clean_h,
+        4,
+        cancel_bg,
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        13,
+        p.text,
+        cancel_x + cancel_w / 2,
+        clean_y + 8,
+        b"Fermer",
+    );
 }
 
 unsafe fn draw_cleaning(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let p = pal();
 
-    text_centered(g.hdc, g.f.title, 15, p.text, x + w / 2, y + h / 3 - 10,
-        b"Nettoyage en cours...");
+    text_centered(
+        g.hdc,
+        g.f.title,
+        15,
+        p.text,
+        x + w / 2,
+        y + h / 3 - 10,
+        b"Nettoyage en cours...",
+    );
 
     // Barre de progression
     let bar_w = w * 2 / 3;
     let bar_h = 8;
     let bar_x = x + (w - bar_w) / 2;
     let bar_y = y + h / 3 + 24;
-    round_rect(g.hdc, g.b, bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, 4, p.surface2);
+    round_rect(
+        g.hdc,
+        g.b,
+        bar_x,
+        bar_y,
+        bar_x + bar_w,
+        bar_y + bar_h,
+        4,
+        p.surface2,
+    );
     let fill_w = (bar_w as u64 * CLEAN_PROGRESS as u64 / 100) as i32;
     if fill_w > 0 {
-        round_rect(g.hdc, g.b, bar_x, bar_y, bar_x + fill_w, bar_y + bar_h, 4,
-            rgb(0x60, 0xCD, 0x89));
+        round_rect(
+            g.hdc,
+            g.b,
+            bar_x,
+            bar_y,
+            bar_x + fill_w,
+            bar_y + bar_h,
+            4,
+            rgb(0x60, 0xCD, 0x89),
+        );
     }
 
     // Pourcentage
@@ -538,12 +823,21 @@ unsafe fn draw_cleaning(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let n = fmt_u32(&mut buf, CLEAN_PROGRESS);
     buf[n] = b' ';
     buf[n + 1] = b'%';
-    text_centered(g.hdc, g.f.body, 13, p.text2, x + w / 2, bar_y + 18, &buf[..n + 2]);
+    text_centered(
+        g.hdc,
+        g.f.body,
+        13,
+        p.text2,
+        x + w / 2,
+        bar_y + 18,
+        &buf[..n + 2],
+    );
 
     // Catégorie en cours
     let checked_count = (0..CAT_COUNT).filter(|&i| CATS[i].checked).count();
     if checked_count > 0 {
-        let idx = (CLEAN_PROGRESS as usize * checked_count / 100).min(checked_count.saturating_sub(1));
+        let idx =
+            (CLEAN_PROGRESS as usize * checked_count / 100).min(checked_count.saturating_sub(1));
         let mut checked_idx = 0;
         for i in 0..CAT_COUNT {
             if CATS[i].checked {
@@ -553,8 +847,15 @@ unsafe fn draw_cleaning(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
                     line[..prefix.len()].copy_from_slice(prefix);
                     let nlen = CATS[i].name_len.min(80 - prefix.len());
                     line[prefix.len()..prefix.len() + nlen].copy_from_slice(&CATS[i].name[..nlen]);
-                    text_centered(g.hdc, g.f.small, 11, p.text3, x + w / 2, bar_y + 42,
-                        &line[..prefix.len() + nlen]);
+                    text_centered(
+                        g.hdc,
+                        g.f.small,
+                        11,
+                        p.text3,
+                        x + w / 2,
+                        bar_y + 42,
+                        &line[..prefix.len() + nlen],
+                    );
                     break;
                 }
                 checked_idx += 1;
@@ -572,11 +873,36 @@ unsafe fn draw_done(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let green = rgb(0x60, 0xCD, 0x89);
     ellipse(g.hdc, g.b, icon_x, icon_y, icon_x + 40, icon_y + 40, green);
     let t = 3;
-    line(g.hdc, g.b, icon_x + 10, icon_y + 20, icon_x + 17, icon_y + 28, t, p.on_accent);
-    line(g.hdc, g.b, icon_x + 17, icon_y + 28, icon_x + 30, icon_y + 13, t, p.on_accent);
+    line(
+        g.hdc,
+        g.b,
+        icon_x + 10,
+        icon_y + 20,
+        icon_x + 17,
+        icon_y + 28,
+        t,
+        p.on_accent,
+    );
+    line(
+        g.hdc,
+        g.b,
+        icon_x + 17,
+        icon_y + 28,
+        icon_x + 30,
+        icon_y + 13,
+        t,
+        p.on_accent,
+    );
 
-    text_centered(g.hdc, g.f.title, 15, p.text, x + w / 2, y + h / 4 + 44,
-        b"Nettoyage termin\xE9");
+    text_centered(
+        g.hdc,
+        g.f.title,
+        15,
+        p.text,
+        x + w / 2,
+        y + h / 4 + 44,
+        b"Nettoyage termin\xE9",
+    );
 
     // Espace libéré
     let mut buf = [0u8; 32];
@@ -585,8 +911,15 @@ unsafe fn draw_done(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let prefix = b"Espace lib\xE9r\xE9 : ";
     line2[..prefix.len()].copy_from_slice(prefix);
     line2[prefix.len()..prefix.len() + n].copy_from_slice(&buf[..n]);
-    text_centered(g.hdc, g.f.body, 13, green, x + w / 2, y + h / 4 + 70,
-        &line2[..prefix.len() + n]);
+    text_centered(
+        g.hdc,
+        g.f.body,
+        13,
+        green,
+        x + w / 2,
+        y + h / 4 + 70,
+        &line2[..prefix.len() + n],
+    );
 
     // Nouvel espace libre
     let new_free = DISK_FREE_KB + TOTAL_FREED as u64;
@@ -595,8 +928,15 @@ unsafe fn draw_done(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let prefix2 = b"Espace libre : ";
     line3[..prefix2.len()].copy_from_slice(prefix2);
     line3[prefix2.len()..prefix2.len() + n2].copy_from_slice(&buf[..n2]);
-    text_centered(g.hdc, g.f.small, 11, p.text2, x + w / 2, y + h / 4 + 94,
-        &line3[..prefix2.len() + n2]);
+    text_centered(
+        g.hdc,
+        g.f.small,
+        11,
+        p.text2,
+        x + w / 2,
+        y + h / 4 + 94,
+        &line3[..prefix2.len() + n2],
+    );
 
     // Bouton Fermer
     let btn_w = 120;
@@ -605,29 +945,85 @@ unsafe fn draw_done(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let btn_y = y + h / 2 + 30;
     let btn_bg = if HOVER_CLOSE { p.accent } else { p.surface2 };
     let btn_fg = if HOVER_CLOSE { p.on_accent } else { p.text };
-    round_rect(g.hdc, g.b, btn_x, btn_y, btn_x + btn_w, btn_y + btn_h, 4, btn_bg);
-    text_centered(g.hdc, g.f.semibold, 13, btn_fg, x + w / 2, btn_y + 10,
-        b"Fermer");
+    round_rect(
+        g.hdc,
+        g.b,
+        btn_x,
+        btn_y,
+        btn_x + btn_w,
+        btn_y + btn_h,
+        4,
+        btn_bg,
+    );
+    text_centered(
+        g.hdc,
+        g.f.semibold,
+        13,
+        btn_fg,
+        x + w / 2,
+        btn_y + 10,
+        b"Fermer",
+    );
 }
 
 unsafe fn draw_disk_icon(g: &mut Gfx, x: i32, y: i32, s: i32) {
     let p = pal();
     // Disque dur stylisé
-    round_rect(g.hdc, g.b, x, y + s / 6, x + s, y + s * 5 / 6, 4, rgb(0x6B, 0x73, 0x80));
-    fill(g.hdc, g.b, x + 2, y + s / 6 + 2, x + s - 2, y + s / 2, rgb(0x9A, 0xA3, 0xAE));
+    round_rect(
+        g.hdc,
+        g.b,
+        x,
+        y + s / 6,
+        x + s,
+        y + s * 5 / 6,
+        4,
+        rgb(0x6B, 0x73, 0x80),
+    );
+    fill(
+        g.hdc,
+        g.b,
+        x + 2,
+        y + s / 6 + 2,
+        x + s - 2,
+        y + s / 2,
+        rgb(0x9A, 0xA3, 0xAE),
+    );
     // LED verte
-    fill(g.hdc, g.b, x + s * 3 / 4, y + s * 2 / 3 - 1, x + s * 7 / 8, y + s * 2 / 3 + 2,
-        rgb(0x60, 0xCD, 0x89));
+    fill(
+        g.hdc,
+        g.b,
+        x + s * 3 / 4,
+        y + s * 2 / 3 - 1,
+        x + s * 7 / 8,
+        y + s * 2 / 3 + 2,
+        rgb(0x60, 0xCD, 0x89),
+    );
     // Barre de capacité
     let bar_x = x + s / 6;
     let bar_w = s * 2 / 3;
     let bar_y = y + s * 3 / 4;
     let bar_h = 3.max(s / 16);
-    fill(g.hdc, g.b, bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, rgb(0x3A, 0x3F, 0x48));
+    fill(
+        g.hdc,
+        g.b,
+        bar_x,
+        bar_y,
+        bar_x + bar_w,
+        bar_y + bar_h,
+        rgb(0x3A, 0x3F, 0x48),
+    );
     if DISK_TOTAL_KB > 0 {
         let used_w = ((bar_w as u64 * DISK_USED_KB) / DISK_TOTAL_KB) as i32;
         if used_w > 0 {
-            fill(g.hdc, g.b, bar_x, bar_y, bar_x + used_w, bar_y + bar_h, p.accent);
+            fill(
+                g.hdc,
+                g.b,
+                bar_x,
+                bar_y,
+                bar_x + used_w,
+                bar_y + bar_h,
+                p.accent,
+            );
         }
     }
 }
@@ -668,7 +1064,11 @@ pub unsafe fn mouse(ev: Mouse, mx: i32, my: i32, f: &Frame) -> bool {
                     let row_h = 36;
 
                     // Hover catégories
-                    if mx >= r.left && mx < r.left + list_w && my >= content_y && my < content_y + content_h {
+                    if mx >= r.left
+                        && mx < r.left + list_w
+                        && my >= content_y
+                        && my < content_y + content_h
+                    {
                         let idx = (my - content_y) / row_h;
                         if (idx as usize) < CAT_COUNT {
                             HOVER_CAT = idx;
@@ -684,7 +1084,11 @@ pub unsafe fn mouse(ev: Mouse, mx: i32, my: i32, f: &Frame) -> bool {
                     }
                     let cancel_w = 100;
                     let cancel_x = clean_x - cancel_w - 12;
-                    if mx >= cancel_x && mx < cancel_x + cancel_w && my >= btn_y2 && my < btn_y2 + 32 {
+                    if mx >= cancel_x
+                        && mx < cancel_x + cancel_w
+                        && my >= btn_y2
+                        && my < btn_y2 + 32
+                    {
                         HOVER_CLOSE = true;
                     }
                 }
@@ -741,8 +1145,10 @@ pub unsafe fn mouse(ev: Mouse, mx: i32, my: i32, f: &Frame) -> bool {
         _ => {}
     }
 
-    HOVER_SCAN != old_scan || HOVER_CLEAN != old_clean
-        || HOVER_CLOSE != old_close || HOVER_CAT != old_cat
+    HOVER_SCAN != old_scan
+        || HOVER_CLEAN != old_clean
+        || HOVER_CLOSE != old_close
+        || HOVER_CAT != old_cat
 }
 
 pub unsafe fn key(_vk: u32, _ch: u16) -> bool {

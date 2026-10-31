@@ -86,7 +86,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let tab_text = if active { p.text } else { p.text2 };
         text(g.hdc, g.f.body, tab_text, tab_x + 8, r.top + 8, tabs[i]);
         if active {
-            fill(g.hdc, g.b, tab_x + 4, r.top + 29, tab_x + tab_w - 4, r.top + 32, p.accent);
+            fill(
+                g.hdc,
+                g.b,
+                tab_x + 4,
+                r.top + 29,
+                tab_x + tab_w - 4,
+                r.top + 32,
+                p.accent,
+            );
         }
     }
 
@@ -104,10 +112,22 @@ unsafe fn draw_calculator(g: &mut Gfx, f: &Frame) {
     let p = pal();
     let y = r.top + 40;
 
-    round_rect(g.hdc, g.b, r.left + 16, y, r.right - 16, y + 60, 4, mix(p.window, rgb(0, 0, 0), 3, 10));
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16,
+        y,
+        r.right - 16,
+        y + 60,
+        4,
+        mix(p.window, rgb(0, 0, 0), 3, 10),
+    );
     text(
-        g.hdc, g.f.title, p.text,
-        r.right - 24, y + 8,
+        g.hdc,
+        g.f.title,
+        p.text,
+        r.right - 24,
+        y + 8,
         &CALC_DISPLAY[..CALC_DISPLAY_LEN],
     );
 
@@ -134,7 +154,11 @@ unsafe fn draw_calculator(g: &mut Gfx, f: &Frame) {
             let hovered = HOVER_BTN_ROW == row as i32 && HOVER_BTN_COL == col as i32;
             let (btn_color, txt_color) = match buttons[row][col] {
                 b"=" => {
-                    let c = if hovered { mix(p.accent, p.text, 2, 10) } else { p.accent };
+                    let c = if hovered {
+                        mix(p.accent, p.text, 2, 10)
+                    } else {
+                        p.accent
+                    };
                     (c, p.on_accent)
                 }
                 b"C" | b"\xB1" | b"%" => {
@@ -152,7 +176,14 @@ unsafe fn draw_calculator(g: &mut Gfx, f: &Frame) {
             };
 
             round_rect(g.hdc, g.b, bx, by, bx + btn_w - 4, by + btn_h, 4, btn_color);
-            text(g.hdc, g.f.body, txt_color, bx + 8, by + 16, buttons[row][col]);
+            text(
+                g.hdc,
+                g.f.body,
+                txt_color,
+                bx + 8,
+                by + 16,
+                buttons[row][col],
+            );
         }
     }
 }
@@ -170,8 +201,25 @@ unsafe fn draw_stopwatch(g: &mut Gfx, f: &Frame) {
     };
     let time_str = format_time(elapsed / 1000);
 
-    round_rect(g.hdc, g.b, r.left + 16, y, r.right - 16, y + 80, 4, mix(p.window, rgb(0, 0, 0), 3, 10));
-    text_centered(g.hdc, g.f.title, 32, p.text, (r.left + r.right) / 2, y + 24, &time_str);
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16,
+        y,
+        r.right - 16,
+        y + 80,
+        4,
+        mix(p.window, rgb(0, 0, 0), 3, 10),
+    );
+    text_centered(
+        g.hdc,
+        g.f.title,
+        32,
+        p.text,
+        (r.left + r.right) / 2,
+        y + 24,
+        &time_str,
+    );
 
     let btn_w = 100;
     let by = y + 100;
@@ -185,14 +233,29 @@ unsafe fn draw_stopwatch(g: &mut Gfx, f: &Frame) {
     for i in 0..3 {
         let bx = r.left + 16 + (i as i32) * (btn_w + 8);
         round_rect(g.hdc, g.b, bx, by, bx + btn_w, by + 40, 4, p.accent);
-        text_centered(g.hdc, g.f.body, 11, p.on_accent, bx + btn_w / 2, by + 12, btn_labels[i]);
+        text_centered(
+            g.hdc,
+            g.f.body,
+            11,
+            p.on_accent,
+            bx + btn_w / 2,
+            by + 12,
+            btn_labels[i],
+        );
     }
 
     if STOPWATCH_LAP_COUNT > 0 {
         let lap_y = by + 60;
         text(g.hdc, g.f.small, p.text2, r.left + 16, lap_y, b"Tours :");
         for i in 0..STOPWATCH_LAP_COUNT.min(5) {
-            text(g.hdc, g.f.small, p.text2, r.left + 16, lap_y + 20 + (i as i32) * 20, &STOPWATCH_LAPS[i]);
+            text(
+                g.hdc,
+                g.f.small,
+                p.text2,
+                r.left + 16,
+                lap_y + 20 + (i as i32) * 20,
+                &STOPWATCH_LAPS[i],
+            );
         }
     }
 }
@@ -217,27 +280,129 @@ unsafe fn draw_timer(g: &mut Gfx, f: &Frame) {
 
     let time_str = format_time(remaining);
 
-    round_rect(g.hdc, g.b, r.left + 16, y, r.right - 16, y + 80, 4, mix(p.window, rgb(0, 0, 0), 3, 10));
-    text_centered(g.hdc, g.f.title, 32, p.text, (r.left + r.right) / 2, y + 24, &time_str);
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16,
+        y,
+        r.right - 16,
+        y + 80,
+        4,
+        mix(p.window, rgb(0, 0, 0), 3, 10),
+    );
+    text_centered(
+        g.hdc,
+        g.f.title,
+        32,
+        p.text,
+        (r.left + r.right) / 2,
+        y + 24,
+        &time_str,
+    );
 
     let btn_w = 60;
     let ctrl_y = y + 100;
 
-    round_rect(g.hdc, g.b, r.left + 16, ctrl_y, r.left + 16 + btn_w, ctrl_y + 40, 4, p.surface);
-    text_centered(g.hdc, g.f.body, 11, p.text, r.left + 16 + btn_w / 2, ctrl_y + 12, &format_time(TIMER_SECONDS));
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16,
+        ctrl_y,
+        r.left + 16 + btn_w,
+        ctrl_y + 40,
+        4,
+        p.surface,
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        p.text,
+        r.left + 16 + btn_w / 2,
+        ctrl_y + 12,
+        &format_time(TIMER_SECONDS),
+    );
 
-    round_rect(g.hdc, g.b, r.left + 16 + btn_w + 8, ctrl_y, r.left + 16 + btn_w * 2 + 4, ctrl_y + 40, 4, p.accent);
-    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + btn_w + 8 + btn_w / 2, ctrl_y + 12, b"+60s");
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16 + btn_w + 8,
+        ctrl_y,
+        r.left + 16 + btn_w * 2 + 4,
+        ctrl_y + 40,
+        4,
+        p.accent,
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        p.on_accent,
+        r.left + 16 + btn_w + 8 + btn_w / 2,
+        ctrl_y + 12,
+        b"+60s",
+    );
 
-    round_rect(g.hdc, g.b, r.left + 16 + btn_w * 2 + 12, ctrl_y, r.left + 16 + btn_w * 3 + 8, ctrl_y + 40, 4, p.accent);
-    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + btn_w * 2 + 12 + btn_w / 2, ctrl_y + 12, b"-60s");
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16 + btn_w * 2 + 12,
+        ctrl_y,
+        r.left + 16 + btn_w * 3 + 8,
+        ctrl_y + 40,
+        4,
+        p.accent,
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        p.on_accent,
+        r.left + 16 + btn_w * 2 + 12 + btn_w / 2,
+        ctrl_y + 12,
+        b"-60s",
+    );
 
     let start_btn: &[u8] = if TIMER_RUNNING { b"Pause" } else { b"Demarrer" };
-    round_rect(g.hdc, g.b, r.left + 16, ctrl_y + 50, r.left + 16 + 100, ctrl_y + 90, 4, p.accent);
-    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + 50, ctrl_y + 62, start_btn);
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16,
+        ctrl_y + 50,
+        r.left + 16 + 100,
+        ctrl_y + 90,
+        4,
+        p.accent,
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        p.on_accent,
+        r.left + 16 + 50,
+        ctrl_y + 62,
+        start_btn,
+    );
 
-    round_rect(g.hdc, g.b, r.left + 16 + 108, ctrl_y + 50, r.left + 16 + 208, ctrl_y + 90, 4, p.surface2);
-    text_centered(g.hdc, g.f.body, 11, p.text, r.left + 16 + 158, ctrl_y + 62, b"Reset");
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16 + 108,
+        ctrl_y + 50,
+        r.left + 16 + 208,
+        ctrl_y + 90,
+        4,
+        p.surface2,
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        p.text,
+        r.left + 16 + 158,
+        ctrl_y + 62,
+        b"Reset",
+    );
 }
 
 unsafe fn draw_alarm(g: &mut Gfx, f: &Frame) {
@@ -247,33 +412,142 @@ unsafe fn draw_alarm(g: &mut Gfx, f: &Frame) {
 
     let alarm_str = format_time(ALARM_HOURS * 3600 + ALARM_MINUTES * 60);
 
-    round_rect(g.hdc, g.b, r.left + 16, y, r.right - 16, y + 80, 4, mix(p.window, rgb(0, 0, 0), 3, 10));
-    text_centered(g.hdc, g.f.title, 32, p.text, (r.left + r.right) / 2, y + 24, &alarm_str);
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16,
+        y,
+        r.right - 16,
+        y + 80,
+        4,
+        mix(p.window, rgb(0, 0, 0), 3, 10),
+    );
+    text_centered(
+        g.hdc,
+        g.f.title,
+        32,
+        p.text,
+        (r.left + r.right) / 2,
+        y + 24,
+        &alarm_str,
+    );
 
     let status: &[u8] = if ALARM_ENABLED {
-        if ALARM_TRIGGERED { b"ALARME !" } else { b"Active" }
+        if ALARM_TRIGGERED {
+            b"ALARME !"
+        } else {
+            b"Active"
+        }
     } else {
         b"Desactive"
     };
-    text_centered(g.hdc, g.f.body, 11, p.text2, (r.left + r.right) / 2, y + 60, status);
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        p.text2,
+        (r.left + r.right) / 2,
+        y + 60,
+        status,
+    );
 
     let btn_w = 100;
     let ctrl_y = y + 100;
 
-    round_rect(g.hdc, g.b, r.left + 16, ctrl_y, r.left + 16 + btn_w, ctrl_y + 40, 4, p.accent);
-    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + btn_w / 2, ctrl_y + 12, b"+1h");
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16,
+        ctrl_y,
+        r.left + 16 + btn_w,
+        ctrl_y + 40,
+        4,
+        p.accent,
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        p.on_accent,
+        r.left + 16 + btn_w / 2,
+        ctrl_y + 12,
+        b"+1h",
+    );
 
-    round_rect(g.hdc, g.b, r.left + 16 + btn_w + 8, ctrl_y, r.left + 16 + btn_w * 2 + 8, ctrl_y + 40, 4, p.accent);
-    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + btn_w + 8 + btn_w / 2, ctrl_y + 12, b"+1m");
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16 + btn_w + 8,
+        ctrl_y,
+        r.left + 16 + btn_w * 2 + 8,
+        ctrl_y + 40,
+        4,
+        p.accent,
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        p.on_accent,
+        r.left + 16 + btn_w + 8 + btn_w / 2,
+        ctrl_y + 12,
+        b"+1m",
+    );
 
-    round_rect(g.hdc, g.b, r.left + 16 + btn_w * 2 + 16, ctrl_y, r.left + 16 + btn_w * 3 + 16, ctrl_y + 40, 4, p.accent);
-    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + btn_w * 2 + 16 + btn_w / 2, ctrl_y + 12, b"-1m");
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16 + btn_w * 2 + 16,
+        ctrl_y,
+        r.left + 16 + btn_w * 3 + 16,
+        ctrl_y + 40,
+        4,
+        p.accent,
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        p.on_accent,
+        r.left + 16 + btn_w * 2 + 16 + btn_w / 2,
+        ctrl_y + 12,
+        b"-1m",
+    );
 
-    let toggle_label: &[u8] = if ALARM_ENABLED { b"Desactiver" } else { b"Activer" };
-    let toggle_color = if ALARM_ENABLED { rgb(0xFF, 0x45, 0x3A) } else { p.accent };
-    round_rect(g.hdc, g.b, r.left + 16, ctrl_y + 50, r.left + 16 + 150, ctrl_y + 90, 4, toggle_color);
-    let toggle_text = if ALARM_ENABLED { rgb(0xFF, 0xFF, 0xFF) } else { p.on_accent };
-    text_centered(g.hdc, g.f.body, 11, toggle_text, r.left + 16 + 75, ctrl_y + 62, toggle_label);
+    let toggle_label: &[u8] = if ALARM_ENABLED {
+        b"Desactiver"
+    } else {
+        b"Activer"
+    };
+    let toggle_color = if ALARM_ENABLED {
+        rgb(0xFF, 0x45, 0x3A)
+    } else {
+        p.accent
+    };
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left + 16,
+        ctrl_y + 50,
+        r.left + 16 + 150,
+        ctrl_y + 90,
+        4,
+        toggle_color,
+    );
+    let toggle_text = if ALARM_ENABLED {
+        rgb(0xFF, 0xFF, 0xFF)
+    } else {
+        p.on_accent
+    };
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        toggle_text,
+        r.left + 16 + 75,
+        ctrl_y + 62,
+        toggle_label,
+    );
 }
 
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
@@ -289,7 +563,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         if y < r.top + 32 {
             let tab_w = (r.right - r.left) / 4;
             let t = ((x - r.left) / tab_w) as i32;
-            if t >= 0 && t < 4 { HOVER_TAB = t; }
+            if t >= 0 && t < 4 {
+                HOVER_TAB = t;
+            }
         } else if MODE == 0 {
             let y_start = r.top + 40 + 70;
             let btn_w = (r.right - r.left - 32) / 4;
@@ -507,6 +783,100 @@ unsafe fn set_display(value: f64) {
         CALC_DISPLAY[0] = b'-';
         CALC_DISPLAY_LEN += 1;
     }
+}
+
+pub unsafe fn key(vk: u32, ch: u16) -> bool {
+    if MODE != 0 {
+        return false;
+    }
+    if ch >= b'0' as u16 && ch <= b'9' as u16 {
+        calc_key(&[ch as u8]);
+        return true;
+    }
+    match ch as u8 {
+        b'+' => {
+            calc_key(b"+");
+            return true;
+        }
+        b'-' => {
+            calc_key(b"-");
+            return true;
+        }
+        b'*' => {
+            calc_key(b"*");
+            return true;
+        }
+        b'/' => {
+            calc_key(b"/");
+            return true;
+        }
+        b'.' | b',' => {
+            calc_key(b".");
+            return true;
+        }
+        b'=' | 13 => {
+            calc_key(b"=");
+            return true;
+        }
+        b'%' => {
+            calc_key(b"%");
+            return true;
+        }
+        8 => {
+            // Backspace
+            if CALC_DISPLAY_LEN > 0 {
+                CALC_DISPLAY_LEN -= 1;
+                CALC_DISPLAY[CALC_DISPLAY_LEN] = 0;
+            }
+            return true;
+        }
+        27 => {
+            calc_key(b"C");
+            return true;
+        } // Escape
+        _ => {}
+    }
+    // Numpad: VK_NUMPAD0..VK_NUMPAD9 = 0x60..0x69
+    if vk >= 0x60 && vk <= 0x69 {
+        calc_key(&[(vk - 0x60) as u8 + b'0']);
+        return true;
+    }
+    match vk {
+        0x6A => {
+            calc_key(b"*");
+            true
+        } // VK_MULTIPLY
+        0x6B => {
+            calc_key(b"+");
+            true
+        } // VK_ADD
+        0x6D => {
+            calc_key(b"-");
+            true
+        } // VK_SUBTRACT
+        0x6E => {
+            calc_key(b".");
+            true
+        } // VK_DECIMAL
+        0x6F => {
+            calc_key(b"/");
+            true
+        } // VK_DIVIDE
+        0x0D => {
+            calc_key(b"=");
+            true
+        } // VK_RETURN
+        0x2E => {
+            // VK_DELETE → C
+            calc_key(b"C");
+            true
+        }
+        _ => false,
+    }
+}
+
+pub unsafe fn tick(_f: &Frame) -> bool {
+    false
 }
 
 unsafe fn stopwatch_mouse(ev: Mouse, _x: i32, _y: i32, f: &Frame) -> bool {

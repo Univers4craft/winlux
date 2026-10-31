@@ -153,7 +153,9 @@ pub unsafe fn set_open(open: bool) {
 
 pub unsafe fn toggle() {
     let opening = !(OPEN && !CLOSING);
-    if opening { NOTIF_SCROLL = 0; }
+    if opening {
+        NOTIF_SCROLL = 0;
+    }
     set_open(opening);
 }
 
@@ -397,7 +399,15 @@ unsafe fn draw_calendar(hdc: Handle, b: &mut Brushes, f: &Fonts, pl: &PanelLayou
         b"<",
     );
 
-    text_centered(hdc, f.semibold, 13, rgb(0xF2, 0xF2, 0xF2), cx, cy + 2, hdr_slice);
+    text_centered(
+        hdc,
+        f.semibold,
+        13,
+        rgb(0xF2, 0xF2, 0xF2),
+        cx,
+        cy + 2,
+        hdr_slice,
+    );
 
     // Arrow right.
     let arrow_r_bg = if HOVER_CAL_NAV == 1 {
@@ -477,15 +487,7 @@ unsafe fn draw_calendar(hdc: Handle, b: &mut Brushes, f: &Fonts, pl: &PanelLayou
         } else {
             rgb(0xE6, 0xE6, 0xE6)
         };
-        text_centered(
-            hdc,
-            f.small,
-            11,
-            tc,
-            dx + CAL_CELL / 2,
-            dy,
-            &buf[..len],
-        );
+        text_centered(hdc, f.small, 11, tc, dx + CAL_CELL / 2, dy, &buf[..len]);
     }
 }
 
