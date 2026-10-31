@@ -1655,6 +1655,10 @@ pub trait GuiBackend: Send {
     fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> {
         None
     }
+    /// Lit une zone de l'écran entier (racine), fenêtres des autres programmes comprises.
+    fn capture_screen(&mut self, _rect: Rect) -> Option<BitmapSnapshot> {
+        None
+    }
     /// Joue la liste de commandes GDI d'une fenêtre (thème + contenu). Le
     /// backend X11 conserve la liste pour la rejouer à chaque Expose; headless
     /// ignore le rendu.
@@ -1917,6 +1921,13 @@ pub fn insert_window(hwnd: usize, w: Window) {
 /// Expose le backend pour les wrappers (user32/gdi32).
 pub fn with_backend_public<F: FnOnce(&mut dyn GuiBackend)>(f: F) {
     with_backend(f);
+}
+
+/// Capture d'une zone de l'écran (unités logiques), `None` sans affichage réel.
+pub fn capture_screen(rect: Rect) -> Option<BitmapSnapshot> {
+    let mut captured = None;
+    with_backend(|backend| captured = backend.capture_screen(rect));
+    captured
 }
 
 pub fn capture_window(hwnd: usize, rect: Rect) -> Option<BitmapSnapshot> {

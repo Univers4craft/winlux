@@ -703,6 +703,40 @@ extern "system" {
     pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
     pub fn WinluxPtyAlive(handle: usize) -> i32;
     pub fn WinluxClosePty(handle: usize) -> i32;
+    pub fn WinluxCaptureScreen(x: i32, y: i32, w: i32, h: i32, bits: *mut u8, stride: i32) -> i32;
+    pub fn WinluxDrawStroke(
+        bits: *mut u8,
+        w: i32,
+        h: i32,
+        stride: i32,
+        points: *const i32,
+        count: i32,
+        color: u32,
+        pen: i32,
+        mode: u32,
+    ) -> i32;
+    pub fn WinluxDrawText(
+        bits: *mut u8,
+        w: i32,
+        h: i32,
+        stride: i32,
+        x: i32,
+        y: i32,
+        text: *const c_char,
+        size: i32,
+        color: u32,
+    ) -> i32;
+    pub fn WinluxSavePng(path: *const c_char, bits: *const u8, w: i32, h: i32, stride: i32) -> i32;
+    pub fn WinluxRecordStart(
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        flags: u32,
+        path: *const c_char,
+    ) -> i32;
+    pub fn WinluxRecordStop() -> i32;
+    pub fn WinluxRecordState(elapsed_ms: *mut u32) -> i32;
     /// Rapport GPU `clé=valeur` du runtime Winlux ; renvoie la longueur complète.
     pub fn WinluxQueryGpu(buf: *mut u8, len: u32) -> u32;
     // Archives, images disque et lecteurs dynamiques (exports privés Winlux).
@@ -866,6 +900,13 @@ extern "system" {
 
 #[link(name = "user32", kind = "raw-dylib")]
 extern "C" {
+    pub fn OpenClipboard(owner: Handle) -> i32;
+    pub fn CloseClipboard() -> i32;
+    pub fn EmptyClipboard() -> i32;
+    pub fn SetClipboardData(format: u32, mem: usize) -> usize;
+    pub fn GetClipboardData(format: u32) -> usize;
+    pub fn IsClipboardFormatAvailable(format: u32) -> i32;
+    pub fn GetClipboardSequenceNumber() -> u32;
     pub fn RegisterClassExA(wc: *const WndClassExA) -> u16;
     pub fn CreateWindowExA(
         ex_style: u32,
@@ -1080,11 +1121,6 @@ extern "C" {
         height: i32,
     ) -> i32;
     pub fn SetPixelV(hdc: Handle, x: i32, y: i32, color: u32) -> i32;
-    pub fn OpenClipboard(owner: Handle) -> i32;
-    pub fn CloseClipboard() -> i32;
-    pub fn EmptyClipboard() -> i32;
-    pub fn SetClipboardData(format: u32, mem: usize) -> usize;
-    pub fn GetClipboardData(format: u32) -> usize;
 }
 
 // Spooler d'impression (`winspool.drv`) : API Win32 et extensions Winlux

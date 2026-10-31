@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **194**
+- Réalisé : **197**
 - À faire ou en cours : **44**
-- Total : **238**
-- Progression : **81.5%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104 et #111, issues #10 à #98)
+- Total : **241**
+- Progression : **81.7%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109 et #111, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -90,7 +90,7 @@
 - [ ] Matériel : impression winspool.drv + CUPS (#77), audio des .exe DirectSound/WASAPI/XAudio2 (#78), alimentation et batterie (#80), gestion CPU avancée (#90), gestion GPU et monitoring (#91).
 - [ ] Graphisme 3D : Direct3D 9 et 12 avec backend Vulkan (#92).
 - [ ] Applications du shell : store de logiciels (#81), gestionnaire de polices (#82), planificateur de tâches (#83), pare-feu (#84), capture et enregistrement d'écran (#86), sauvegarde (#87), bureau à distance (#89).
-- [ ] Bureau : historique du presse-papiers Win+V (#85), multi-utilisateur complet (#88).
+- [ ] Bureau : multi-utilisateur complet (#88).
 - [ ] Installateur : mode récupération, Secure Boot et installation silencieuse (#95), benchmark et profils d'utilisation (#96), personnalisation visuelle (#97).
 
 ## DÉJÀ FAIT
@@ -319,6 +319,9 @@
 - [x] Étendre winlux-control.sh avec les actions lang-*/tz-* et 8 dispositions clavier.
 - [x] Ajouter le choix de langue et clavier à l'installateur (install.sh).
 - [x] Lire locale.conf au démarrage de session (xsession-winlux, export WINLUX_LANG).
+- [x] Presse-papiers Win32 réel partagé entre tous les programmes (fichier de session, `GetClipboardSequenceNumber`, CF_TEXT/CF_UNICODETEXT synthétisés, CF_DIB, CF_HDROP, formats enregistrés stables) et historique Win+V du bureau : texte, images et fichiers, recherche, épingles persistantes, « Tout effacer », limite 10/25/50/100, recoller d'un clic dans la fenêtre active. Ctrl+C/X/V du Bloc-notes et copie de fichiers de l'Explorateur passent par le presse-papiers système.
+- [x] Outil Capture (Win+Maj+S, Impr. écran, menu Démarrer) : écran figé et assombri, modes rectangle, fenêtre, plein écran et forme libre, copie automatique dans le presse-papiers, éditeur rapide (rognage, stylo, surligneur, flèche, texte, couleurs, tailles, annuler, copier, PNG dans Images\Captures d'écran). Extensions runtime `WinluxCaptureScreen`, `WinluxDrawStroke`, `WinluxDrawText`, `WinluxSavePng`.
+- [x] Enregistrement vidéo de l'écran (Win+Maj+R ou bouton caméra de l'outil Capture) : zone ou plein écran, micro et son système (PulseAudio/PipeWire), MP4 (H.264/AAC) ou WebM (VP9/Opus) via le ffmpeg du système, indicateur rouge avec minuteur et bouton stop dans la barre des tâches, fichier dans Vidéos\Enregistrements d'écran. L'ISO embarque ffmpeg s'il est présent sur la machine de construction.
 
 
 ---
