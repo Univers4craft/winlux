@@ -1,9 +1,11 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 mod admin;
+mod archive;
 mod clr;
 mod cpu;
 mod crash;
+mod diskimage;
 mod dlls;
 mod firewall;
 mod loader;

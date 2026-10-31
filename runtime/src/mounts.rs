@@ -242,6 +242,8 @@ pub fn drive_type(letter: char) -> Option<u32> {
 /// zéro. Renvoie le nombre de lecteurs (ou la taille requise en caractères,
 /// négative, si `cap` est insuffisant).
 pub unsafe extern "win64" fn winlux_mount_list(buf: *mut u16, cap: u32) -> i32 {
+    // Images démontées hors de Winlux (redémarrage, umount manuel) : oubliées.
+    crate::diskimage::prune_stale();
     let all = list();
     let mut text = String::new();
     for m in &all {
@@ -270,6 +272,10 @@ pub fn exports() -> crate::dlls::Exports {
         "WinluxMountList" => fn winlux_mount_list,
     }
 }
+
+/// Sérialise les tests qui changent les variables d'environnement d'état.
+#[cfg(test)]
+pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -302,6 +308,7 @@ mod tests {
 
     #[test]
     fn registry_add_remove() {
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("winlux-mounts-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("WINLUX_STATE_DIR", &dir);

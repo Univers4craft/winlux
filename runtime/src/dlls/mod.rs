@@ -123,6 +123,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_pty::exports());
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
+                    e.extend(crate::archive::ffi::exports());
                     e
                 },
                 handle: fake_module(),

@@ -684,6 +684,19 @@ extern "system" {
     pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
     pub fn WinluxPtyAlive(handle: usize) -> i32;
     pub fn WinluxClosePty(handle: usize) -> i32;
+    // Archives, images disque et lecteurs dynamiques (exports privés Winlux).
+    pub fn WinluxMountList(buf: *mut u16, cap: u32) -> i32;
+    pub fn WinluxArchiveSupport(path: *const u16) -> u32;
+    pub fn WinluxArchiveFormats() -> u32;
+    pub fn WinluxArchiveOpen(path: *const u16, password: *const u16) -> u32;
+    pub fn WinluxArchiveExtract(path: *const u16, dest: *const u16, password: *const u16) -> u32;
+    pub fn WinluxArchiveCreate(out: *const u16, sources: *const u16, password: *const u16) -> u32;
+    pub fn WinluxArchiveCommit(path: *const u16) -> u32;
+    pub fn WinluxImageMount(path: *const u16) -> u32;
+    pub fn WinluxImageEject(letter: u32) -> u32;
+    pub fn WinluxJobPoll(job: u32, progress: *mut u32, msg: *mut u16, cap: u32) -> u32;
+    pub fn WinluxJobCancel(job: u32);
+    pub fn WinluxJobClose(job: u32);
     // Moteur multimédia (runtime/src/dlls/winlux_media.rs).
     pub fn WinluxMediaProbe(path: *const u16, out: *mut u8, cap: u32) -> i32;
     pub fn WinluxMediaFormats(out: *mut u8, cap: u32) -> i32;
