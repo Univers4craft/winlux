@@ -35,6 +35,47 @@ Accent de marque : `#7C4DFF`. Fond de nuit : `#070A1F`.
 - Son de démarrage « Prisme » (défaut), synthétisé comme les autres sons.
 - L'ancien fond `Fond ecran.png` reste proposé sous le nom « Winlux classique ».
 
+## Écran de démarrage du noyau
+
+`winlux --boot-splash` (`runtime/src/bootsplash.rs`) dessine le même écran
+que le bureau (halo violet, logo, cercle de points) directement dans le
+framebuffer `/dev/fb0`, dès que l'init a monté `/dev`. Il gère les écrans
+16, 24 et 32 bits, se redessine si la résolution change (pilote graphique
+chargé en cours de route) et s'arrête au signal `SIGTERM`, à la création de
+`/run/winlux/splash.stop` ou après 90 s. Xorg démarre ensuite avec
+`-background none`, si bien que l'image reste affichée jusqu'au bureau.
+
+Image de test sans écran : `winlux --boot-splash --ppm splash.ppm 1920 1080 500`.
+
+## Sons système
+
+Dix sons maison dans `assets/sounds/`, installés dans
+`/usr/share/winlux/sounds/` (`WINLUX_SOUNDS_DIR` pour les tests) :
+`notification`, `information`, `question`, `avertissement`, `erreur`,
+`defaut`, `appareil-branche`, `appareil-retire`, `connexion`, `deconnexion`.
+
+- Programmes Windows : `MessageBeep` et `PlaySound(..., SND_ALIAS)` jouent le
+  son Winlux correspondant (`SystemAsterisk` → information, `SystemHand` →
+  erreur, `DeviceConnect` → appareil-branche, etc. ; table dans
+  `runtime/src/dlls/winmm.rs`).
+- Notifications du bureau : `winlux-notifications` joue `notification`, ou le
+  `sound-name` demandé s'il existe, sauf indice `suppress-sound`.
+- Clé USB ou disque branché / retiré : `appareil-branche` / `appareil-retire`.
+
+Régénération : `python3 scripts/render-sounds.py` (NumPy, synthèse cloche +
+nappe, 22 050 Hz mono 16 bits).
+
+## Icônes
+
+Thème d'icônes freedesktop « Winlux » (`integration/native/icons/Winlux`,
+installé dans `/usr/share/icons/Winlux`), choisi par défaut dans GTK et
+xsettings sans écraser un choix existant. 34 icônes : tuiles d'applications
+(dégradé + pictogramme blanc), dossiers ambrés avec emblème, disques,
+corbeille, logo Prisme pour `start-here`, et une fenêtre marquée du logo pour
+les `.exe` / `.msi`. Tout le reste vient d'Adwaita (`Inherits`).
+
+Régénération : `python3 scripts/render-icons.py`.
+
 ## Régénérer les images
 
 ```sh
@@ -47,7 +88,7 @@ impose la même modification dans `shell/brand.rs`.
 
 ## Licences
 
-- Logo, fonds, sons, thème : créations Winlux, sous la licence du dépôt (GPL v3).
+- Logo, fonds, sons, icônes, thème : créations Winlux, sous la licence du dépôt (GPL v3).
 - Texte rendu dans les PNG : police Inter (SIL Open Font License 1.1), ou
   DejaVu Sans à défaut. Les images ne contiennent que des pixels, aucune police.
 - Menu GRUB : `unicode.pf2` de GRUB (GNU Unifont, GPL v2+ avec exception
