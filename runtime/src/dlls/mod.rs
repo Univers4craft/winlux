@@ -16,6 +16,9 @@ pub mod crt_scan;
 pub mod crt_stdio;
 pub mod crypt32;
 pub mod d3d11;
+pub mod d3d12;
+pub mod d3d9;
+pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod dbghelp;
 pub mod dinput8;
@@ -23,12 +26,15 @@ pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
 pub mod dxgi;
+pub mod dxva2;
 pub mod evdev;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gl_bindings;
+pub mod gl_legacy;
+pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
@@ -56,13 +62,17 @@ pub mod sechost;
 pub mod setupapi;
 pub mod shell32;
 pub mod shlwapi;
+pub mod spirv;
 pub mod taskschd;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
 pub mod uxtheme;
 pub mod v4l2;
+pub mod va_bindings;
 pub mod version;
+pub mod vk_backend;
+pub mod vk_bindings;
 pub mod winfile;
 pub mod winhttp;
 pub mod winlux_capture;
@@ -139,6 +149,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_pty::exports());
                     e.extend(winlux_capture::exports());
                     e.extend(powrprof::kernel32_exports());
+                    e.extend(gpu_caps::exports());
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
                     e.extend(crate::archive::ffi::exports());
@@ -330,6 +341,21 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "d3d11",
                 exports: d3d11::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d12",
+                exports: d3d12::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dxva2",
+                exports: dxva2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d9",
+                exports: d3d9::exports(),
                 handle: fake_module(),
             },
             Builtin {

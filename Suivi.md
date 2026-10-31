@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **193**
+- Réalisé : **194**
 - À faire ou en cours : **44**
-- Total : **237**
-- Progression : **81.4%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109 et #126, issues #10 à #98)
+- Total : **238**
+- Progression : **81.5%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126 et #127, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -88,7 +88,7 @@
 ### Chantiers démarrés (issue ouverte, PR à venir)
 
 - [ ] Matériel : impression winspool.drv + CUPS (#77), audio des .exe DirectSound/WASAPI/XAudio2 (#78), alimentation et batterie (#80), gestion CPU avancée (#90), gestion GPU et monitoring (#91).
-- [ ] Graphisme 3D : Direct3D 9 et 12 avec backend Vulkan (#92).
+- [ ] Graphisme 3D, reste (#92) : traduction des shaders DXBC/DXIL (les tracés D3D12 utilisent des shaders de passage), profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation (MFTEnum ne liste encore aucun décodeur), codecs DXVA2 autres que H.264, validation sur vrai GPU avec VA-API.
 - [ ] Applications du shell : store de logiciels (#81), gestionnaire de polices (#82), planificateur de tâches (#83), pare-feu (#84), capture et enregistrement d'écran (#86), sauvegarde (#87), bureau à distance (#89).
 - [ ] Bureau : multi-utilisateur complet (#88).
 - [ ] Installateur : mode récupération, Secure Boot et installation silencieuse (#95), benchmark et profils d'utilisation (#96), personnalisation visuelle (#97).
@@ -127,6 +127,7 @@
 - [x] Correction du ghosting des fenêtres lors du déplacement (#68).
 - [x] Écran bleu (BSOD), journalisation centralisée, observateur d'événements et points de restauration (#69).
 - [x] Traduction Direct3D 11 vers OpenGL (#70).
+- [x] Direct3D 9 (périphérique, surfaces, textures, VB/IB, shaders SM1.x à 3.0 traduits en GLSL, états fixes), Direct3D 12 (files, listes, tas de descripteurs, PSO, signatures racine, barrières, swapchain DXGI) avec backend Vulkan choisi selon le matériel puis repli OpenGL et processeur, DXVA2 H.264 par VA-API (NVDEC via nvidia-vaapi-driver), section « Jeux et applications Windows (Direct3D) » de la page Paramètres « Graphismes », masquée quand le matériel ne permet aucun choix (#92). Suite PE `d3d_suite`.
 - [x] DLL libgcc_s_seh-1 / libstdc++-6 et NtCreateFile/NtOpenFile réels (#71).
 - [x] Premier démarrage (OOBE) : thème, choix des apps, compte local avec avatar (#74).
 - [x] Compatibilité systemd (shim `systemctl`, hook APT) et passage à Ubuntu 26.04 LTS (#38).

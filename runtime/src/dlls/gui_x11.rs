@@ -2876,6 +2876,10 @@ impl gui::GuiBackend for X11Backend {
         }
     }
 
+    fn native_window(&mut self, hwnd: usize) -> Option<u64> {
+        self.windows.get(&hwnd).map(|w| w.window as u64)
+    }
+
     fn screen_size(&mut self) -> Option<(i32, i32)> {
         // La géométrie de la racine est relue à chaque appel : après un
         // changement de mode RandR, la valeur du setup initial est périmée.
