@@ -272,7 +272,11 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let image = GetModuleHandleA(core::ptr::null());
         let mut image_info: MemoryBasicInformation = core::mem::zeroed();
         check!(
-            VirtualQuery(image as _, &mut image_info, core::mem::size_of::<MemoryBasicInformation>()) != 0
+            VirtualQuery(
+                image as _,
+                &mut image_info,
+                core::mem::size_of::<MemoryBasicInformation>()
+            ) != 0
                 && image_info.allocation_base == image as _
                 && image_info.kind == 0x1000000
                 && image_info.state == 0x1000,

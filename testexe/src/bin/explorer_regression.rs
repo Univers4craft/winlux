@@ -10,10 +10,18 @@ mod desktop;
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/notifications.rs"]
+mod notifications;
 #[path = "../shell/notepad.rs"]
 mod notepad;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/diskcleaner.rs"]
+mod diskcleaner;
+#[path = "../shell/taskmgr.rs"]
+mod taskmgr;
+#[path = "../shell/utilities.rs"]
+mod utilities;
 #[path = "../shell/wm.rs"]
 mod wm;
 

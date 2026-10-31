@@ -283,6 +283,52 @@ pub struct PaintStruct {
     pub reserved: [u8; 32],
 }
 
+pub type MSG = Msg;
+pub type PAINTSTRUCT = PaintStruct;
+
+#[repr(C)]
+#[allow(non_snake_case)]
+pub struct WNDCLASSA {
+    pub style: u32,
+    pub lpfnWndProc: Option<unsafe extern "system" fn(Handle, u32, usize, isize) -> isize>,
+    pub cbClsExtra: i32,
+    pub cbWndExtra: i32,
+    pub hInstance: Handle,
+    pub hIcon: Handle,
+    pub hCursor: Handle,
+    pub hbrBackground: usize,
+    pub lpszMenuName: *const c_char,
+    pub lpszClassName: *const c_char,
+}
+
+#[allow(non_snake_case)]
+pub unsafe fn RegisterClassA(wc: *const WNDCLASSA) -> u16 {
+    let wc = &*wc;
+    let ex = WndClassExA {
+        size: core::mem::size_of::<WndClassExA>() as u32,
+        style: wc.style,
+        wnd_proc: match wc.lpfnWndProc {
+            Some(f) => f as *const () as usize,
+            None => 0,
+        },
+        cls_extra: wc.cbClsExtra,
+        wnd_extra: wc.cbWndExtra,
+        instance: wc.hInstance,
+        icon: wc.hIcon,
+        cursor: wc.hCursor,
+        background: wc.hbrBackground as *mut c_void,
+        menu_name: wc.lpszMenuName,
+        class_name: wc.lpszClassName,
+        icon_sm: core::ptr::null_mut(),
+    };
+    RegisterClassExA(&ex)
+}
+
+#[allow(non_snake_case)]
+pub unsafe fn LoadCursorA(_instance: Handle, _id: usize) -> Handle {
+    core::ptr::null_mut()
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct BitmapInfoHeader {
