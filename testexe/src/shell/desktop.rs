@@ -11,6 +11,7 @@
 mod utilities;
 use crate::explorer;
 use crate::gfx::*;
+use crate::notifications;
 use crate::wm::{self, Gfx, Mouse};
 use winlux_testexe::*;
 
@@ -81,11 +82,7 @@ static mut TOAST: [u8; 120] = [0; 120];
 static mut TOAST_LEN: usize = 0;
 static mut TOAST_START: u32 = 0;
 const TOAST_MS: i32 = 4500;
-/// Panneau de notifications (centre d'action simplifié).
-static mut NOTIF_PANEL: bool = false;
-static mut NOTIF_HISTORY: [[u8; 120]; 8] = [[0; 120]; 8];
-static mut NOTIF_LENS: [usize; 8] = [0; 8];
-static mut NOTIF_COUNT: usize = 0;
+/// Le panneau de notifications est dans `notifications.rs`.
 /// Atténuation du fond (0 = noir, 1000 = normal) pendant le fondu.
 static mut FADE: i32 = 1000;
 
@@ -635,7 +632,7 @@ fn context_rows(app: usize) -> i32 {
 }
 unsafe fn open_context(app: usize, desktop: Option<usize>, x: i32, y: i32) {
     set_start(false);
-    NOTIF_PANEL = false;
+    notifications::set_open(false);
     DRAGGED_ICON = -1;
     CONTEXT_APP = Some(app);
     CONTEXT_DESKTOP = desktop;
@@ -648,7 +645,7 @@ unsafe fn open_context(app: usize, desktop: Option<usize>, x: i32, y: i32) {
 }
 unsafe fn open_context_desktop(x: i32, y: i32) {
     set_start(false);
-    NOTIF_PANEL = false;
+    notifications::set_open(false);
     DRAGGED_ICON = -1;
     CONTEXT_APP = Some(usize::MAX);
     CONTEXT_DESKTOP = None;
@@ -1727,20 +1724,7 @@ pub unsafe fn toast(msg: &[u8]) {
     TOAST[..n].copy_from_slice(&msg[..n]);
     TOAST_LEN = n;
     TOAST_START = now();
-    // Historique pour le panneau de notifications.
-    if NOTIF_COUNT < NOTIF_HISTORY.len() {
-        NOTIF_HISTORY[NOTIF_COUNT][..n].copy_from_slice(&msg[..n]);
-        NOTIF_LENS[NOTIF_COUNT] = n;
-        NOTIF_COUNT += 1;
-    } else {
-        for i in 1..NOTIF_HISTORY.len() {
-            NOTIF_HISTORY[i - 1] = NOTIF_HISTORY[i];
-            NOTIF_LENS[i - 1] = NOTIF_LENS[i];
-        }
-        let last = NOTIF_HISTORY.len() - 1;
-        NOTIF_HISTORY[last][..n].copy_from_slice(&msg[..n]);
-        NOTIF_LENS[last] = n;
-    }
+    notifications::push_simple(msg);
 }
 
 unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
@@ -1819,127 +1803,7 @@ unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     }
 }
 
-// ---------- Panneau de notifications ----------
-
-unsafe fn draw_notif_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
-    if !NOTIF_PANEL {
-        return;
-    }
-    let w = 380;
-    let x = l.w - w - 12;
-    let header_h = 44;
-    let row_h = 56;
-    let rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
-    let empty_h = 60;
-    let h = header_h
-        + if rows == 0 {
-            empty_h
-        } else {
-            rows as i32 * row_h
-        }
-        + 8;
-    let y = l.bar_top - 12 - h;
-    panel(
-        hdc,
-        b,
-        x,
-        y,
-        x + w,
-        y + h,
-        8,
-        rgb(0x24, 0x27, 0x2F),
-        rgb(0x3A, 0x3F, 0x4A),
-    );
-    text(
-        hdc,
-        f.semibold,
-        rgb(0xF2, 0xF2, 0xF2),
-        x + 16,
-        y + 14,
-        b"Notifications",
-    );
-    if NOTIF_COUNT > 0 {
-        let clr = rect(x + w - 120, y + 8, x + w - 16, y + 36);
-        round_rect(
-            hdc,
-            b,
-            clr.left,
-            clr.top,
-            clr.right,
-            clr.bottom,
-            4,
-            rgb(0x31, 0x35, 0x3F),
-        );
-        text(
-            hdc,
-            f.small,
-            rgb(0xC5, 0xC5, 0xC5),
-            clr.left + 10,
-            clr.top + 7,
-            b"Tout effacer",
-        );
-    }
-    fill(
-        hdc,
-        b,
-        x + 1,
-        y + header_h - 1,
-        x + w - 1,
-        y + header_h,
-        rgb(0x3A, 0x3F, 0x4A),
-    );
-    if rows == 0 {
-        text_centered(
-            hdc,
-            f.body,
-            13,
-            rgb(0x9A, 0xA3, 0xAE),
-            x + w / 2,
-            y + header_h + 20,
-            b"Aucune notification",
-        );
-    } else {
-        for i in 0..rows {
-            let idx = if NOTIF_COUNT <= NOTIF_HISTORY.len() {
-                i
-            } else {
-                i
-            };
-            let ry = y + header_h + (rows - 1 - i) as i32 * row_h;
-            if i > 0 {
-                fill(
-                    hdc,
-                    b,
-                    x + 16,
-                    ry - 1,
-                    x + w - 16,
-                    ry,
-                    rgb(0x34, 0x38, 0x42),
-                );
-            }
-            glyph(hdc, b, f, Glyph::Start, x + 16, ry + 10, 14);
-            text(
-                hdc,
-                f.caption,
-                rgb(0xC5, 0xC5, 0xC5),
-                x + 38,
-                ry + 8,
-                b"Winlux",
-            );
-            let msg = &NOTIF_HISTORY[idx][..NOTIF_LENS[idx]];
-            text_fit(
-                hdc,
-                f.body,
-                13,
-                rgb(0xF2, 0xF2, 0xF2),
-                x + 16,
-                ry + 28,
-                msg,
-                w - 32,
-            );
-        }
-    }
-}
+// Le panneau de notifications complet est dessiné par `notifications::draw`.
 
 // ---------- Icônes du bureau ----------
 
@@ -2168,7 +2032,7 @@ pub unsafe fn draw(hdc: Handle) {
             wm::draw(&mut g);
         }
         start_menu(hdc, &mut b, &f, &l);
-        draw_notif_panel(hdc, &mut b, &f, &l);
+        notifications::draw(hdc, &mut b, &f, l.w, l.bar_top);
         draw_toast(hdc, &mut b, &f, &l);
         let bar_dy = if FADE < 1000 {
             (1000 - ease_out(intro, INTRO_MS)) * TASKBAR_HEIGHT / 1000
@@ -2234,6 +2098,7 @@ pub unsafe fn frame(hwnd: Handle) {
     }
     let animating = !BOOT_DONE
         || wm::animating()
+        || notifications::animating()
         || since(INTRO_START) < INTRO_MS + 40
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)
         || START_CLOSING
@@ -2326,40 +2191,26 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         }
         let tray = l.w - 12 - 92 - 96;
         if x >= tray - 28 && x < tray {
-            NOTIF_PANEL = !NOTIF_PANEL;
+            // Chevron or tray icon area -> open notification center.
+            notifications::toggle();
         } else if x >= tray && x < tray + 24 {
             crate::settings::open_page(2);
         } else if x >= tray + 24 && x < tray + 88 {
             crate::settings::open_page(3);
+        } else if x >= l.w - 12 - 92 {
+            // Click on clock/date area -> open notification center.
+            notifications::toggle();
         } else {
             return;
         }
         repaint(hwnd);
         return;
     }
-    if NOTIF_PANEL && y < l.bar_top {
-        let pw = 380;
-        let px = l.w - pw - 12;
-        let rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
-        let ph = 44 + if rows == 0 { 60 } else { rows as i32 * 56 } + 8;
-        let py = l.bar_top - 12 - ph;
-        if x >= px && x < px + pw && y >= py && y < py + ph {
-            if NOTIF_COUNT > 0
-                && x >= px + pw - 120
-                && x < px + pw - 16
-                && y >= py + 8
-                && y < py + 36
-            {
-                NOTIF_COUNT = 0;
-                for i in 0..NOTIF_LENS.len() {
-                    NOTIF_LENS[i] = 0;
-                }
-            }
-        } else {
-            NOTIF_PANEL = false;
+    if notifications::is_open() && y < l.bar_top {
+        if notifications::on_click(l.w, l.bar_top, x, y) {
+            repaint(hwnd);
+            return;
         }
-        repaint(hwnd);
-        return;
     }
     if START_OPEN && !START_CLOSING {
         if inside(&l.start, x, y) {
@@ -2484,6 +2335,11 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
     if hs != HOVER_START_ITEM {
         HOVER_START_ITEM = hs;
         rp = true;
+    }
+    if notifications::is_open() {
+        if notifications::on_mouse_move(l.w, l.bar_top, x, y) {
+            rp = true;
+        }
     }
     if DRAGGED_ICON >= 0 {
         let i = DRAGGED_ICON as usize;
@@ -2660,6 +2516,11 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         }
         if START_OPEN {
             set_start(false);
+            repaint(hwnd);
+            return;
+        }
+        if notifications::is_open() {
+            notifications::set_open(false);
             repaint(hwnd);
             return;
         }
