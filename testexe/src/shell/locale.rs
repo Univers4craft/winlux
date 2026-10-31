@@ -237,8 +237,9 @@ pub const S_PROCESSOR: usize = 158;
 pub const S_NETWORK_DRIVES: usize = 159;
 pub const S_PERSONALIZATION: usize = 160;
 pub const S_BLUETOOTH_DEVICES: usize = 161;
+pub const S_POWER_BATTERY: usize = 162;
 
-const STRING_COUNT: usize = 162;
+const STRING_COUNT: usize = 163;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -247,7 +248,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
-    b"Son et batterie",
+    b"Son",
     b"Clavier et pav\xE9 tactile",
     b"Souris",
     b"Apparence",
@@ -427,6 +428,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Lecteurs r\xE9seau",
     b"Personnalisation",
     b"Bluetooth et appareils",
+    b"Alimentation et batterie",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -434,7 +436,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Linux System",
     b"Windows Applications",
     b"Network",
-    b"Sound and Battery",
+    b"Sound",
     b"Keyboard and Touchpad",
     b"Mouse",
     b"Appearance",
@@ -614,6 +616,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Network drives",
     b"Personalization",
     b"Bluetooth & devices",
+    b"Power and battery",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -621,7 +624,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Sistema Linux",
     b"Aplicaciones Windows",
     b"Red",
-    b"Sonido y bater\xEDa",
+    b"Sonido",
     b"Teclado y panel t\xE1ctil",
     b"Rat\xF3n",
     b"Apariencia",
@@ -801,6 +804,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Unidades de red",
     b"Personalizaci\xF3n",
     b"Bluetooth y dispositivos",
+    b"Energ\xEDa y bater\xEDa",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -808,7 +812,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Linux-System",
     b"Windows-Anwendungen",
     b"Netzwerk",
-    b"Ton und Akku",
+    b"Ton",
     b"Tastatur und Touchpad",
     b"Maus",
     b"Darstellung",
@@ -988,6 +992,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Netzlaufwerke",
     b"Personalisierung",
     b"Bluetooth und Ger\xE4te",
+    b"Energie und Akku",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {
