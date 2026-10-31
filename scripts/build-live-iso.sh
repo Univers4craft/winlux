@@ -171,7 +171,7 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -239,6 +239,15 @@ copy_shared_libraries /usr/bin/Xvfb
 copy_shared_libraries /usr/bin/xkbcomp
 copy_shared_libraries /usr/bin/xrandr
 copy_shared_libraries /usr/bin/curl
+# Enregistrement d'écran (Win+Maj+R) : encodeur ffmpeg du système, facultatif.
+ffmpeg_bin=${WINLUX_FFMPEG:-$(command -v ffmpeg || true)}
+if test -n "$ffmpeg_bin" && test -x "$ffmpeg_bin"; then
+    cp "$ffmpeg_bin" "$stage/usr/bin/ffmpeg"
+    chmod 755 "$stage/usr/bin/ffmpeg"
+    copy_shared_libraries "$ffmpeg_bin"
+else
+    echo "ffmpeg absent : l'enregistrement vidéo de l'écran sera indisponible dans l'ISO" >&2
+fi
 copy_shared_libraries /usr/bin/install
 copy_shared_libraries /usr/bin/udevadm
 copy_shared_libraries /bin/bash

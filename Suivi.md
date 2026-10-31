@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **190**
+- Réalisé : **194**
 - À faire ou en cours : **44**
-- Total : **234**
-- Progression : **81.2%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104 et graphisme 3D #92, issues #10 à #98)
+- Total : **238**
+- Progression : **81.5%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126 et #127, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -90,7 +90,7 @@
 - [ ] Matériel : impression winspool.drv + CUPS (#77), audio des .exe DirectSound/WASAPI/XAudio2 (#78), alimentation et batterie (#80), gestion CPU avancée (#90), gestion GPU et monitoring (#91).
 - [ ] Graphisme 3D, reste (#92) : traduction des shaders DXBC/DXIL (les tracés D3D12 utilisent des shaders de passage), profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation (MFTEnum ne liste encore aucun décodeur), codecs DXVA2 autres que H.264, validation sur vrai GPU avec VA-API.
 - [ ] Applications du shell : store de logiciels (#81), gestionnaire de polices (#82), planificateur de tâches (#83), pare-feu (#84), capture et enregistrement d'écran (#86), sauvegarde (#87), bureau à distance (#89).
-- [ ] Bureau : historique du presse-papiers Win+V (#85), multi-utilisateur complet (#88).
+- [ ] Bureau : multi-utilisateur complet (#88).
 - [ ] Installateur : mode récupération, Secure Boot et installation silencieuse (#95), benchmark et profils d'utilisation (#96), personnalisation visuelle (#97).
 
 ## DÉJÀ FAIT
@@ -235,6 +235,7 @@
 - [x] Documenter explicitement les limites : 64 bits uniquement, absence de noyau Windows et compatibilité API partielle.
 
 - [x] Lecteur multimédia natif (`mediaplayer.exe`, `audioplayer.exe` en alias) : vidéo et audio, barre de progression avec aperçu au survol, volume, vitesse 0,25× à 3×, plein écran, sous-titres SRT/ASS/VTT externes et pistes intégrées (texte et PGS/VobSub), pistes audio, chapitres, liste de lecture du dossier, reprise à la dernière position, thème clair/sombre, FR/EN/DE/ES. L'Explorer ouvre l'audio/vidéo dedans ; MIME par défaut dans l'ISO.
+- [x] Visionneuse d'images native (`imageviewer.exe`) et décodeurs maison en Rust (`runtime/src/imaging`, aucune bibliothèque externe) : PNG/APNG, JPEG (progressif, CMYK), GIF animé, BMP, TIFF multipage, ICO/CUR/ICNS, WebP (avec et sans perte, animé), QOI, PSD/PSB et XCF (calques), SVG/SVGZ vectoriel net à tout zoom, AI/EPS (aperçu intégré), TGA, PCX, PNM/PAM/PFM, DDS (BC1-BC5), EXR, HDR, SGI, Sun, XBM/XPM, WBMP et RAW (CR2, CR3, NEF, ARW, DNG, ORF, RW2, RAF, PEF, SRW… via l'aperçu intégré). Zoom molette/ajusté/100 %, panoramique, rotation, miroir, pages/calques/images, dossier précédent/suivant, diaporama, panneau EXIF/IPTC/XMP, comparaison avant/après RAW (exposition, niveaux auto), aperçu 3D tournant (STL, OBJ, PLY, OFF, glTF/GLB, FBX binaire), impression via la boîte « Imprimer » quand elle est présente. Miniatures dans l'Explorateur (images, modèles 3D, vidéos/audio) avec cache disque. Garde-fou : HEIC/HEIF, AVIF, JPEG XL, JPEG 2000 et PDF ne sont pas encore décodés, donc jamais annoncés ni envoyés à la visionneuse. `winlux --image-info FICHIER` pour diagnostiquer.
 - [x] Moteur multimédia du runtime (`winlux_media.rs`, exports `WinluxMedia*`) : FFmpeg système en processus isolé, conteneurs MP4/MKV/WebM/AVI/MOV/FLV/WMV/MPEG/TS/M2TS/OGV/3GP…, codecs H.264/HEVC/AV1/VP8/VP9/MPEG-2/MPEG-4/VC-1/Theora/ProRes/DNxHD et AAC/MP3/Opus/Vorbis/FLAC/ALAC/PCM/AC-3/E-AC-3/DTS/WMA/APE ; un format n'est annoncé que si son décodeur existe ; VA-API/NVDEC avec repli logiciel puis sans son ; vignettes vidéo et pochettes avec cache disque. Voir `docs/MEDIA.md`.
 - [x] Corriger `SetTimer` : la version bouchon de `user32_ext` remplaçait la vraie et `GetMessage` ne livrait jamais `WM_TIMER` (aucune animation ni rafraîchissement périodique des applications autonomes).
 
@@ -315,6 +316,9 @@
 - [x] Étendre winlux-control.sh avec les actions lang-*/tz-* et 8 dispositions clavier.
 - [x] Ajouter le choix de langue et clavier à l'installateur (install.sh).
 - [x] Lire locale.conf au démarrage de session (xsession-winlux, export WINLUX_LANG).
+- [x] Presse-papiers Win32 réel partagé entre tous les programmes (fichier de session, `GetClipboardSequenceNumber`, CF_TEXT/CF_UNICODETEXT synthétisés, CF_DIB, CF_HDROP, formats enregistrés stables) et historique Win+V du bureau : texte, images et fichiers, recherche, épingles persistantes, « Tout effacer », limite 10/25/50/100, recoller d'un clic dans la fenêtre active. Ctrl+C/X/V du Bloc-notes et copie de fichiers de l'Explorateur passent par le presse-papiers système.
+- [x] Outil Capture (Win+Maj+S, Impr. écran, menu Démarrer) : écran figé et assombri, modes rectangle, fenêtre, plein écran et forme libre, copie automatique dans le presse-papiers, éditeur rapide (rognage, stylo, surligneur, flèche, texte, couleurs, tailles, annuler, copier, PNG dans Images\Captures d'écran). Extensions runtime `WinluxCaptureScreen`, `WinluxDrawStroke`, `WinluxDrawText`, `WinluxSavePng`.
+- [x] Enregistrement vidéo de l'écran (Win+Maj+R ou bouton caméra de l'outil Capture) : zone ou plein écran, micro et son système (PulseAudio/PipeWire), MP4 (H.264/AAC) ou WebM (VP9/Opus) via le ffmpeg du système, indicateur rouge avec minuteur et bouton stop dans la barre des tâches, fichier dans Vidéos\Enregistrements d'écran. L'ISO embarque ffmpeg s'il est présent sur la machine de construction.
 
 
 ---
