@@ -71,7 +71,7 @@ Les cases cochées sont limitées au périmètre indiqué ; une case partielle r
   L'init de l'ISO lance encore le shell en root ; `xsession-winlux` seul ne valide pas cette exigence.
 - [ ] Autorisation ciblée pour les opérations sensibles.
 - [ ] Verrouillage de session et changement d'utilisateur.
-- [ ] Pare-feu configurable.
+- [x] Pare-feu configurable.
 - [ ] Signature cryptographique des mises à jour.
 - [ ] Système A/B conservant un système démarrable si la nouvelle version échoue.
 - [ ] Mode de récupération accessible au démarrage.

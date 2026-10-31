@@ -12,6 +12,7 @@ export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/winlu
 
 value() { if test -r "$1"; then sed -n "s/^$2=//p" "$1" | head -n 1; fi; }
 pref() { value "$config/preferences.conf" "$1"; }
+cpu_pref() { value "$config/cpu.conf" "$1"; }
 input() { value "$config/input.conf" "$1"; }
 privacy() { v=$(value "$config/privacy.conf" "$1"); printf '%s\n' "${v:-$2}"; }
 save() {
@@ -107,12 +108,29 @@ status() {
         if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi
     } > "$run/control.txt.tmp.$$"
     mv "$run/control.txt.tmp.$$" "$run/control.txt"
+    cpu_status
     # --list lit seulement le manifeste deja en cache, sans acces reseau.
     if have winlux-update; then
         if winlux-update --list > "$run/updates.txt.tmp.$$" 2>/dev/null; then
             mv "$run/updates.txt.tmp.$$" "$run/updates.txt"
         else rm -f "$run/updates.txt.tmp.$$"; fi
     fi
+}
+# Capacites processeur detectees par le runtime : chaque section des
+# Parametres n'apparait que si son cap_*=1 (garde-fous materiels).
+cpu_status() {
+    have winlux || { rm -f "$run/cpu.txt"; return 0; }
+    if winlux --cpu-report "${root:-/}" > "$run/cpu.txt.tmp.$$" 2>/dev/null; then
+        hybrid=$(cpu_pref HYBRID_POLICY) fan=$(cpu_pref FAN_CURVE)
+        printf 'hybrid_policy=%s\nfan_curve=%s\n' "${hybrid:-auto}" "${fan:-auto}" >> "$run/cpu.txt.tmp.$$"
+        mv "$run/cpu.txt.tmp.$$" "$run/cpu.txt"
+    else rm -f "$run/cpu.txt.tmp.$$"; fi
+}
+fan_daemon() {
+    pid=$(cat "$run/fan-daemon.pid" 2>/dev/null || true)
+    case "$pid" in ''|*[!0-9]*) ;; *) if kill -0 "$pid" 2>/dev/null; then return 0; fi ;; esac
+    winlux --fan-daemon "${root:-/}" >> "$run/fan.log" 2>&1 &
+    printf '%s\n' "$!" > "$run/fan-daemon.pid"
 }
 apply_tap() {
     have xinput || { echo 'xinput indisponible : reglage du pave tactile impossible' >&2; return 1; }
@@ -266,6 +284,21 @@ perform() {
             printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=Documents' 'Icon=folder-documents' "URL=file://$HOME/Documents" > "$HOME/Bureau/winlux-documents.desktop"
             trust_desktop "$HOME/Bureau/winlux-documents.desktop" ;;
         theme-dark|theme-light) save "$config/preferences.conf" THEME "${action#theme-}" ;;
+        cpu-profile-performance|cpu-profile-balanced|cpu-profile-powersave)
+            have winlux || { echo 'Runtime winlux introuvable' >&2; return 1; }
+            winlux --cpu-profile "${action#cpu-profile-}" "${root:-/}" || return
+            save "$config/cpu.conf" CPU_PROFILE "${action#cpu-profile-}" ;;
+        cpu-hybrid-auto|cpu-hybrid-heavy|cpu-hybrid-performance|cpu-hybrid-efficiency)
+            save "$config/cpu.conf" HYBRID_POLICY "${action#cpu-hybrid-}" ;;
+        cpu-fan-auto|cpu-fan-quiet|cpu-fan-balanced|cpu-fan-performance)
+            have winlux || { echo 'Runtime winlux introuvable' >&2; return 1; }
+            save "$config/cpu.conf" FAN_CURVE "${action#cpu-fan-}" || return
+            # Le demon rend lui-meme la main au firmware en mode auto.
+            test "$action" = cpu-fan-auto || fan_daemon ;;
+        cpu-restore)
+            profile=$(cpu_pref CPU_PROFILE)
+            case "$profile" in performance|balanced|powersave) winlux --cpu-profile "$profile" "${root:-/}" || true ;; esac
+            case "$(cpu_pref FAN_CURVE)" in quiet|balanced|performance) fan_daemon ;; esac ;;
         display-follow|display-fixed) winlux-display "${action#display-}" ;;
         display-mode-*) mode=${action#display-mode-}; case "$mode" in *[!0-9x]*|'') return 1 ;; esac; winlux-display mode "$mode" ;;
         display-scale-auto) winlux-display scale auto ;;
