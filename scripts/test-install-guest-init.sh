@@ -7,8 +7,13 @@ busybox mount -t proc proc /proc
 busybox grep -qw 'winlux.install-test=1' /proc/cmdline || exit 2
 busybox mount -t sysfs sysfs /sys
 busybox mount -t devtmpfs devtmpfs /dev
-# The installer verifies/extracts the complete native payload in this fixture.
-busybox mount -t tmpfs -o size=50% tmpfs /tmp
+# The installer verifies/extracts the complete native payload in this fixture:
+# on the fixture disk when it is the root, in RAM for a ramfs root.
+if busybox grep -qw 'rootfstype=ramfs' /proc/cmdline; then
+    busybox mount -t tmpfs -o size=50% tmpfs /tmp
+else
+    mkdir -p /tmp && chmod 1777 /tmp
+fi
 mkdir -p /dev/pts
 busybox mount -t devpts devpts /dev/pts
 echo WINLUX_INSTALL_TEST_BEGIN
