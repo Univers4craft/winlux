@@ -122,6 +122,7 @@ status() {
         done
         gpu_count=$(cat "$root/run/winlux/hw/gpu-count" 2>/dev/null || echo 0)
         printf 'gpu_count=%s\n' "$gpu_count"
+        printf 'virtual_machine=%s\n' "$(cat "$root/run/winlux/hw/virtual-machine" 2>/dev/null || true)"
         test "$(cat "$root/run/winlux/hw/has-nvidia" 2>/dev/null)" = 1 && printf 'gpu_nvidia=%s\n' "$(cat "$root/run/winlux/hw/nvidia-driver" 2>/dev/null || echo nouveau)"
         test "$(cat "$root/run/winlux/hw/has-amd" 2>/dev/null)" = 1 && printf 'gpu_amd=%s\n' "$(cat "$root/run/winlux/hw/amd-driver" 2>/dev/null || echo amdgpu)"
         test "$(cat "$root/run/winlux/hw/has-intel" 2>/dev/null)" = 1 && printf 'gpu_intel=i915\n'

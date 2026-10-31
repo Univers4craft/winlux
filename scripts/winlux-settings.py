@@ -141,6 +141,8 @@ _TR = {
     'Mettre en veille': ('Sleep', 'Suspender', 'Energie sparen'),
     'Veille prolongée': ('Hibernate', 'Hibernar', 'Ruhezustand'),
     'Suivre la taille de la VM': ('Follow the VM size', 'Seguir el tamaño de la VM', 'VM-Größe folgen'),
+    'Définition recommandée': ('Recommended resolution', 'Resolución recomendada', 'Empfohlene Auflösung'),
+    'Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).': ('Virtual machine detected ({name}): display adapted to the VM (software cursor).', 'Máquina virtual detectada ({name}): pantalla adaptada a la VM (cursor por software).', 'Virtuelle Maschine erkannt ({name}): Anzeige an die VM angepasst (Software-Cursor).'),
     'Définition fixe': ('Fixed resolution', 'Resolución fija', 'Feste Auflösung'),
     'Échelle −': ('Scale −', 'Escala −', 'Skalierung −'),
     'Automatique': ('Automatic', 'Automática', 'Automatisch'),
@@ -214,6 +216,13 @@ PAGES = [_t("Système"), _t("Applications"), _t("Réseau"), _t("Son"), _t("Clavi
          _t("Confidentialité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
          _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes")]
 GRAPHICS_PAGE = 24
+# Nom de l'hyperviseur écrit par winlux-hardware ; vide sur un vrai PC.
+try:
+    with open("/run/winlux/hw/virtual-machine", encoding="utf-8") as _vm: VIRTUAL_MACHINE = _vm.read().strip()
+except OSError:
+    VIRTUAL_MACHINE = ""
+_VM_NAMES = {"qemu": "QEMU/KVM", "virtualbox": "VirtualBox", "vmware": "VMware", "hyperv": "Hyper-V",
+             "xen": "Xen", "parallels": "Parallels"}
 FIELDS = {
     0: [(_t("Version"), "version"), (_t("Noyau"), "kernel")],
     2: [(_t("Connexion"), "network")], 3: [(_t("Volume"), "audio")],
@@ -244,7 +253,7 @@ ACTIONS = {
          (_t("Veille (batterie)"), "power-sleep-dc"), (_t("Capot"), "power-lid"), (_t("Bouton d'alimentation"), "power-button"),
          (_t("Luminosité −"), "power-brightness-down"), (_t("Luminosité +"), "power-brightness-up"),
          (_t("Mettre en veille"), "power-suspend"), (_t("Veille prolongée"), "power-hibernate")],
-    8: [(_t("Suivre la taille de la VM"), "display-follow"), (_t("Définition fixe"), "display-fixed"),
+    8: [(_t("Suivre la taille de la VM") if VIRTUAL_MACHINE else _t("Définition recommandée"), "display-follow"), (_t("Définition fixe"), "display-fixed"),
         (_t("Échelle −"), "display-scale-down"), (_t("Automatique"), "display-scale-auto"), (_t("Échelle +"), "display-scale-up")],
 }
 
@@ -480,6 +489,9 @@ class Settings(Gtk.Window):
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
+        if self.page in (8, GRAPHICS_PAGE) and VIRTUAL_MACHINE:
+            name = _VM_NAMES.get(VIRTUAL_MACHINE, "VM")
+            text = _t("Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).").format(name=name) + "\n" + text
         if self.state.get_text() != text: self.state.set_text(text)
         if self.process is None: self.notice.set_text(localize_update_text(read("/run/winlux/action.txt").strip()))
         progress = dict(line.split("=", 1) for line in read("/run/winlux/update-progress").splitlines() if "=" in line)
