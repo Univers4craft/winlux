@@ -129,6 +129,12 @@ jobs:
           stage=$(mktemp -d)
           sh scripts/copy-audio-libraries.sh "$stage"
 
+      - name: Valider le moteur vidéo/audio (FFmpeg réel)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ffmpeg
+          cargo test -p winlux media_bout_en_bout -- --ignored
+
       - name: Aucune erreur de compilation
         run: cargo check -p winlux --all-targets
 

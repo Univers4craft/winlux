@@ -519,10 +519,16 @@ fn kind_of(name: &[u8], dir: bool) -> Kind {
     ]) {
         Kind::Image
     } else if any(&[
-        b"mp3", b"flac", b"ogg", b"wav", b"m4a", b"aac", b"opus", b"wma",
+        b"mp3", b"flac", b"ogg", b"oga", b"wav", b"wave", b"m4a", b"m4b", b"aac", b"opus", b"wma",
+        b"alac", b"ape", b"ac3", b"eac3", b"dts", b"thd", b"mka", b"wv", b"aif", b"aiff", b"aifc",
+        b"caf", b"amr", b"au", b"mp2", b"mpc", b"tta",
     ]) {
         Kind::Audio
-    } else if any(&[b"mp4", b"mkv", b"avi", b"mov", b"webm", b"wmv", b"m4v"]) {
+    } else if any(&[
+        b"mp4", b"m4v", b"mkv", b"webm", b"avi", b"mov", b"qt", b"flv", b"f4v", b"wmv", b"asf",
+        b"mpeg", b"mpg", b"mpe", b"m1v", b"m2v", b"vob", b"ts", b"m2ts", b"mts", b"m2t", b"ogv",
+        b"3gp", b"3g2", b"mxf", b"divx", b"rm", b"rmvb", b"dv", b"y4m",
+    ]) {
         Kind::Video
     } else if any(&[
         b"zip", b"7z", b"rar", b"tar", b"gz", b"xz", b"bz2", b"zst", b"deb", b"rpm", b"iso", b"cab",
@@ -1090,6 +1096,10 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         wm::open(wm::APP_NOTEPAD);
         return;
     }
+    // Audio et vidéo : lecteur multimédia intégré (repli : association Linux).
+    if matches!(p.entries[index].kind, Kind::Audio | Kind::Video) && open_media(&path[..n]) {
+        return;
+    }
     let mut wpath = [0u16; PATH_LEN + NAME_LEN + 2];
     wstr(&mut wpath, &path[..n]);
     let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
@@ -1104,6 +1114,33 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
     if (r as isize) <= 32 {
         notify(b"Aucune application ne sait ouvrir ce fichier.");
     }
+}
+
+/// Ouvre un fichier audio/vidéo dans le lecteur multimédia de Winlux.
+unsafe fn open_media(path: &[u8]) -> bool {
+    let mut params = [0u16; PATH_LEN + NAME_LEN + 4];
+    if path.len() + 3 > params.len() || !valid_path(path) {
+        return false;
+    }
+    params[0] = b'"' as u16;
+    for (i, &c) in path.iter().enumerate() {
+        params[i + 1] = c as u16;
+    }
+    params[path.len() + 1] = b'"' as u16;
+    let mut program = [0u16; 24];
+    for (i, &c) in b"winlux-mediaplayer".iter().enumerate() {
+        program[i] = c as u16;
+    }
+    let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    let r = ShellExecuteW(
+        core::ptr::null_mut(),
+        wopen.as_ptr(),
+        program.as_ptr(),
+        params.as_ptr(),
+        core::ptr::null(),
+        1,
+    );
+    (r as isize) > 32
 }
 
 unsafe fn notify(msg: &[u8]) {

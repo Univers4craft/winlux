@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **124**
+- Réalisé : **127**
 - À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Total : **153**
+- Progression : **83.0%**
 
 ## À FAIRE (par priorité)
 
@@ -38,7 +38,7 @@
 - [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
 - [ ] Intégrer un véritable runtime CLR Windows et les couches WPF/WinForms; le pont Linux `dotnet`/Mono ne suffit pas pour `paint.net`.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
-- [ ] Ajouter les autres formats audio compressés et les codecs vidéo ; Media Foundation/DirectShow ne constituent pas encore une chaîne de lecture complète.
+- [ ] Brancher Media Foundation/DirectShow des `.exe` sur le moteur multimédia du runtime (`winlux_media.rs`) : le lecteur du shell lit déjà tous les formats, mais `mfplat`/`quartz` restent des bouchons pour les programmes Windows.
 - [ ] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (elles restent mappées jusqu’à la fin du processus).
 - [ ] Faire tourner des programmes C++ MinGW (exceptions : `RtlUnwindEx`, `RtlVirtualUnwind`, `RtlLookupFunctionEntry`) et des exécutables MSVC/clang-cl réels.
 
@@ -157,6 +157,10 @@
 - [x] Décoder MP3 et AAC ADTS mono/stéréo dans PlaySound, tester limites mémoire, concurrence et sortie ALSA null ; inclure les bibliothèques dans l'ISO.
 - [x] Exécuter de vrais programmes C compilés par MinGW-w64 : démarrage de la CRT msvcrt (`__getmainargs`, `_initterm`, constructeurs globaux, `atexit`/`_onexit`, `_iob`/`__iob_func`), `_errno`, verrous `_lock`, environnement, temps (`time`, `localtime`, `strftime`, `clock`), `rand` Microsoft, E/S bas niveau `_open`/`_read`/`_write`, signaux, `_beginthreadex`; compléments kernel32 (console, pages de code, `GetEnvironmentStrings`, `FormatMessage`, `lstr*`, `RaiseException`…). Vérifié par `testc/mingw_suite.c` (40 contrôles) en CI.
 - [x] Documenter explicitement les limites : 64 bits uniquement, absence de noyau Windows et compatibilité API partielle.
+
+- [x] Lecteur multimédia natif (`mediaplayer.exe`, `audioplayer.exe` en alias) : vidéo et audio, barre de progression avec aperçu au survol, volume, vitesse 0,25× à 3×, plein écran, sous-titres SRT/ASS/VTT externes et pistes intégrées (texte et PGS/VobSub), pistes audio, chapitres, liste de lecture du dossier, reprise à la dernière position, thème clair/sombre, FR/EN/DE/ES. L'Explorer ouvre l'audio/vidéo dedans ; MIME par défaut dans l'ISO.
+- [x] Moteur multimédia du runtime (`winlux_media.rs`, exports `WinluxMedia*`) : FFmpeg système en processus isolé, conteneurs MP4/MKV/WebM/AVI/MOV/FLV/WMV/MPEG/TS/M2TS/OGV/3GP…, codecs H.264/HEVC/AV1/VP8/VP9/MPEG-2/MPEG-4/VC-1/Theora/ProRes/DNxHD et AAC/MP3/Opus/Vorbis/FLAC/ALAC/PCM/AC-3/E-AC-3/DTS/WMA/APE ; un format n'est annoncé que si son décodeur existe ; VA-API/NVDEC avec repli logiciel puis sans son ; vignettes vidéo et pochettes avec cache disque. Voir `docs/MEDIA.md`.
+- [x] Corriger `SetTimer` : la version bouchon de `user32_ext` remplaçait la vraie et `GetMessage` ne livrait jamais `WM_TIMER` (aucune animation ni rafraîchissement périodique des applications autonomes).
 
 ### Priorité 3 — Double-clic et intégration Linux
 

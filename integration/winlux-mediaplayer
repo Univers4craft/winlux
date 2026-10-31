@@ -1,0 +1,17 @@
+#!/bin/sh
+# Ouvre des fichiers audio/vidéo dans le lecteur multimédia de Winlux.
+#
+# Utilisé par l'Explorateur, le menu Démarrer et l'association MIME
+# (winlux-mediaplayer.desktop). Le décodage passe par le moteur multimédia
+# du runtime (ffmpeg/ffprobe du système, voir docs/MEDIA.md).
+set -u
+
+winlux=${WINLUX_RUNTIME:-winlux}
+exe=${WINLUX_MEDIAPLAYER_EXE:-/opt/winlux/apps/mediaplayer.exe}
+
+if ! test -f "$exe"; then
+    echo "winlux-mediaplayer : lecteur absent ($exe)" >&2
+    exit 1
+fi
+# Un seul fichier : le lecteur construit la liste de lecture à partir de son dossier.
+exec "$winlux" "$exe" "$@"

@@ -321,7 +321,7 @@ fn init_apps() {
             (b"Visionneuse", b"imageviewer.exe", 1),
             (b"Post-it", b"postit.exe", 1),
             (b"Lecteur PDF", b"pdfviewer.exe", 1),
-            (b"Lecteur audio", b"audioplayer.exe", 5),
+            (b"Lecteur multim\xE9dia", b"winlux-mediaplayer", 5),
             (b"Infos syst\xE8me", b"sysinfo.exe", 8),
             (b"Utilitaires", b"utilities-terminal", 2),
             (b"Archives", b"file-roller", 1),
