@@ -277,21 +277,17 @@ fn safe_arrays() -> &'static Mutex<HashMap<usize, Box<SafeArrayInner>>> {
 
 fn element_size_for_vt(vt: u16) -> u32 {
     match vt {
-        VT_UI1 => 1,                // VT_UI1
-        VT_I2 | VT_BOOL => 2,       // VT_I2, VT_BOOL
-        VT_I4 | 4 => 4,             // VT_I4, VT_R4
-        5 | 7 => 8,                  // VT_R8, VT_DATE
-        VT_BSTR | 9 | 13 => 8,      // VT_BSTR, VT_DISPATCH, VT_UNKNOWN (pointers)
-        12 => 16,                    // VT_VARIANT
+        VT_UI1 => 1,           // VT_UI1
+        VT_I2 | VT_BOOL => 2,  // VT_I2, VT_BOOL
+        VT_I4 | 4 => 4,        // VT_I4, VT_R4
+        5 | 7 => 8,            // VT_R8, VT_DATE
+        VT_BSTR | 9 | 13 => 8, // VT_BSTR, VT_DISPATCH, VT_UNKNOWN (pointers)
+        12 => 16,              // VT_VARIANT
         _ => 16,
     }
 }
 
-pub unsafe extern "win64" fn safe_array_create(
-    vt: u16,
-    dims: u32,
-    bounds_ptr: usize,
-) -> usize {
+pub unsafe extern "win64" fn safe_array_create(vt: u16, dims: u32, bounds_ptr: usize) -> usize {
     if dims == 0 || bounds_ptr == 0 {
         return 0;
     }
@@ -316,11 +312,7 @@ pub unsafe extern "win64" fn safe_array_create(
     key
 }
 
-pub unsafe extern "win64" fn safe_array_create_vector(
-    vt: u16,
-    lower: i32,
-    count: u32,
-) -> usize {
+pub unsafe extern "win64" fn safe_array_create_vector(vt: u16, lower: i32, count: u32) -> usize {
     let bound = SafeArrayBound {
         elements: count,
         lower_bound: lower,
@@ -359,10 +351,7 @@ pub extern "win64" fn safe_array_destroy(sa: usize) -> i32 {
     }
 }
 
-pub unsafe extern "win64" fn safe_array_access_data(
-    sa: usize,
-    data: *mut *mut c_void,
-) -> i32 {
+pub unsafe extern "win64" fn safe_array_access_data(sa: usize, data: *mut *mut c_void) -> i32 {
     if sa == 0 || data.is_null() {
         return E_INVALIDARG;
     }
@@ -395,11 +384,7 @@ pub extern "win64" fn safe_array_get_dim(sa: usize) -> u32 {
     map.get(&sa).map(|i| i.dims as u32).unwrap_or(0)
 }
 
-pub unsafe extern "win64" fn safe_array_get_l_bound(
-    sa: usize,
-    dim: u32,
-    bound: *mut i32,
-) -> i32 {
+pub unsafe extern "win64" fn safe_array_get_l_bound(sa: usize, dim: u32, bound: *mut i32) -> i32 {
     if sa == 0 || bound.is_null() || dim == 0 {
         return E_INVALIDARG;
     }
@@ -415,11 +400,7 @@ pub unsafe extern "win64" fn safe_array_get_l_bound(
     0
 }
 
-pub unsafe extern "win64" fn safe_array_get_u_bound(
-    sa: usize,
-    dim: u32,
-    bound: *mut i32,
-) -> i32 {
+pub unsafe extern "win64" fn safe_array_get_u_bound(sa: usize, dim: u32, bound: *mut i32) -> i32 {
     if sa == 0 || bound.is_null() || dim == 0 {
         return E_INVALIDARG;
     }
@@ -480,7 +461,11 @@ pub unsafe extern "win64" fn safe_array_put_element(
     if offset + elem_size > inner.data.len() {
         return DISP_E_BADINDEX;
     }
-    std::ptr::copy_nonoverlapping(val as *const u8, inner.data.as_mut_ptr().add(offset), elem_size);
+    std::ptr::copy_nonoverlapping(
+        val as *const u8,
+        inner.data.as_mut_ptr().add(offset),
+        elem_size,
+    );
     0
 }
 

@@ -909,10 +909,7 @@ pub unsafe extern "win64" fn co_create_free_threaded_marshaler(
 
 // ---------- ProgIDFromCLSID / CLSIDFromProgID ----------
 
-pub unsafe extern "win64" fn prog_id_from_clsid(
-    clsid: *const Guid,
-    prog_id: *mut *mut u16,
-) -> i32 {
+pub unsafe extern "win64" fn prog_id_from_clsid(clsid: *const Guid, prog_id: *mut *mut u16) -> i32 {
     if prog_id.is_null() {
         return E_POINTER;
     }
@@ -938,10 +935,7 @@ pub unsafe extern "win64" fn prog_id_from_clsid(
     S_OK
 }
 
-pub unsafe extern "win64" fn clsid_from_prog_id(
-    prog_id: *const u16,
-    clsid: *mut Guid,
-) -> i32 {
+pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut Guid) -> i32 {
     if clsid.is_null() {
         return E_POINTER;
     }
@@ -991,11 +985,7 @@ const IID_IMALLOC: Guid = Guid {
     data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
 };
 
-unsafe extern "win64" fn malloc_qi(
-    this: usize,
-    iid: *const Guid,
-    out: *mut *mut c_void,
-) -> i32 {
+unsafe extern "win64" fn malloc_qi(this: usize, iid: *const Guid, out: *mut *mut c_void) -> i32 {
     if out.is_null() {
         return E_POINTER;
     }

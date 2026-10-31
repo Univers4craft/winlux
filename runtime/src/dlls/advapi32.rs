@@ -55,7 +55,9 @@ impl Default for RegistryData {
                 p.push_str(component);
                 keys.entry(p.clone()).or_insert_with(RegistryKey::default);
             }
-            let key = keys.entry(path.to_string()).or_insert_with(RegistryKey::default);
+            let key = keys
+                .entry(path.to_string())
+                .or_insert_with(RegistryKey::default);
             for (name, value) in values {
                 key.values.insert(name.to_lowercase(), value);
             }
@@ -868,12 +870,7 @@ pub unsafe extern "win64" fn reg_query_info_key_a(
         let num_sub_keys = children.len() as u32;
         let max_sub = children.iter().map(|c| c.len() as u32).max().unwrap_or(0);
         let num_values = key.values.len() as u32;
-        let max_val_name = key
-            .values
-            .keys()
-            .map(|n| n.len() as u32)
-            .max()
-            .unwrap_or(0);
+        let max_val_name = key.values.keys().map(|n| n.len() as u32).max().unwrap_or(0);
         let max_val_data = key
             .values
             .values()
