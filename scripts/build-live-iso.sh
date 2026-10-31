@@ -119,8 +119,8 @@ mkdir -p "$stage/usr/share/winlux/autoinstall"
 cp "$root/integration/autoinstall/"*.yaml "$stage/usr/share/winlux/autoinstall/"
 chmod 755 "$stage/usr/bin/winlux-installer" "$stage/usr/bin/winlux-hw-detect" "$stage/usr/bin/winlux-first-boot" "$stage/opt/winlux/scripts/install.sh"
 mkdir -p "$stage/usr/lib/winlux/python"
-for tool in benchmark profiles migrate; do
-    cp "$root/scripts/winlux_$tool.py" "$stage/usr/lib/winlux/python/winlux_$tool.py"
+for module in partitioner partition_ui screen benchmark profiles migrate; do
+    cp "$root/scripts/winlux_$module.py" "$stage/usr/lib/winlux/python/winlux_$module.py"
 done
 for tool in benchmark:benchmark profile:profiles migrate:migrate; do
     printf '#!/bin/sh\nexec /usr/bin/python3 /usr/lib/winlux/python/winlux_%s.py "$@"\n' "${tool#*:}" >"$stage/usr/bin/winlux-${tool%%:*}"
@@ -223,6 +223,7 @@ zstd -q -d -c "$hid_generic_module" >"$stage/lib/modules/$kernel_release/hid-gen
 chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/xrandr" "$stage/usr/bin/Xorg"
 copy_shared_libraries "$root/target/release/winlux"
 sh "$root/scripts/copy-audio-libraries.sh" "$stage"
+sh "$root/scripts/stage-media.sh" "$stage" "$root"
 copy_shared_libraries /usr/bin/Xvfb
 copy_shared_libraries /usr/bin/xkbcomp
 copy_shared_libraries /usr/bin/xrandr
@@ -255,6 +256,7 @@ for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmo
         case "$module" in *.zst) zstd -q -d -c "$module" >"$destination" ;; *) cp "$module" "$destination" ;; esac
     done
 done
+sh "$root/scripts/stage-storage-tools.sh" "$stage" "$kernel_release"
 depmod -b "$stage" "$kernel_release" 2>/dev/null
 for metadata in modules.builtin modules.builtin.modinfo; do
     if test -f "/lib/modules/$kernel_release/$metadata"; then cp "/lib/modules/$kernel_release/$metadata" "$stage/lib/modules/$kernel_release/$metadata"; fi
@@ -459,6 +461,12 @@ for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 s
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
+# Partitions supplémentaires choisies à l'installation (/home, swap…).
+if test -s /etc/fstab; then
+    if test -x /usr/bin/mount; then /usr/bin/mount -a 2>/dev/null || true
+    else /bin/busybox mount -a 2>/dev/null || true; fi
+    /sbin/swapon -a 2>/dev/null || /bin/busybox swapon -a 2>/dev/null || true
+fi
 /usr/bin/winlux-hardware >/dev/null 2>&1 || true
 /usr/bin/winlux-firmware >/dev/null 2>&1 || true
 # Profil d'utilisation choisi à l'installation (sysctl, gouverneur CPU, E/S, GPU).

@@ -1,0 +1,20 @@
+[Desktop Entry]
+Type=Application
+Name=Lecteur multimédia
+Name[en]=Media Player
+Name[de]=Medienwiedergabe
+Name[es]=Reproductor multimedia
+GenericName=Lecteur vidéo et audio
+GenericName[en]=Video and audio player
+GenericName[de]=Video- und Audioplayer
+GenericName[es]=Reproductor de vídeo y audio
+Comment=Lire des vidéos et de la musique
+Comment[en]=Play videos and music
+Comment[de]=Videos und Musik wiedergeben
+Comment[es]=Reproducir vídeos y música
+Exec=/usr/bin/winlux-mediaplayer %f
+Icon=multimedia-video-player
+Terminal=false
+StartupNotify=true
+Categories=AudioVideo;Player;Video;Audio;
+MimeType=video/mp4;video/x-m4v;video/x-matroska;video/webm;video/x-msvideo;video/avi;video/quicktime;video/x-flv;video/x-ms-wmv;video/x-ms-asf;video/mpeg;video/mp2t;video/vnd.dlna.mpeg-tts;video/ogg;video/3gpp;video/3gpp2;video/mxf;video/x-ogm+ogg;video/vnd.rn-realvideo;video/dv;audio/mpeg;audio/mp4;audio/x-m4a;audio/aac;audio/flac;audio/x-flac;audio/ogg;audio/x-vorbis+ogg;audio/opus;audio/x-opus+ogg;audio/wav;audio/x-wav;audio/x-ms-wma;audio/x-ape;audio/ac3;audio/eac3;audio/vnd.dts;audio/x-matroska;audio/x-wavpack;audio/x-aiff;audio/x-caf;audio/amr;audio/basic;audio/x-musepack;audio/x-tta;

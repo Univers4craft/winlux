@@ -8,7 +8,7 @@ testdir=${WINLUX_TESTDIR:-$root/target/x86_64-pc-windows-msvc/release}
 test -x "$runtime" || { echo "runtime absent : $runtime" >&2; exit 1; }
 # Binaires GUI autonomes – ne peuvent pas tourner en CI headless,
 # mais doivent être mentionnés ici pour satisfaire le contrôle d'hygiène :
-# audioplayer calc imageviewer pdfviewer postit screenshot sysinfo taskmgr
+# audioplayer calc imageviewer mediaplayer pdfviewer postit screenshot sysinfo taskmgr
 
 # Faux sysfs pour power_api : batterie à 75 %, 30 Wh restants à 10 W.
 power_root="${TMPDIR:-/tmp}/winlux-power-test.$$"
