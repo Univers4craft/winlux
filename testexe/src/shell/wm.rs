@@ -26,7 +26,8 @@ pub const APP_NOTEPAD: usize = 2;
 pub const APP_TASKMGR: usize = 3;
 pub const APP_UTILITIES: usize = 4;
 pub const APP_CLEANUP: usize = 5;
-pub const APP_COUNT: usize = 6;
+pub const APP_DISKMGR: usize = 6;
+pub const APP_COUNT: usize = 7;
 
 // Native session: each built-in application owns a separate X11/Win32 window.
 // The Linux window manager handles its frame, stacking and taskbar lifecycle.
@@ -436,6 +437,7 @@ pub fn title_of(app: usize) -> &'static [u8] {
         APP_TASKMGR => b"Gestionnaire des t\xE2ches",
         APP_UTILITIES => b"Utilitaires",
         APP_CLEANUP => b"Nettoyage de disque",
+        APP_DISKMGR => b"Gestion des disques",
         _ => b"Param\xE8tres",
     }
 }
@@ -447,6 +449,7 @@ fn glyph_of(app: usize) -> Glyph {
         APP_TASKMGR => Glyph::Computer,
         APP_UTILITIES => Glyph::Tools,
         APP_CLEANUP => Glyph::Drive,
+        APP_DISKMGR => Glyph::Drive,
         _ => Glyph::Settings,
     }
 }
@@ -458,6 +461,7 @@ fn custom_title(app: usize) -> bool {
         APP_TASKMGR => crate::taskmgr::CUSTOM_TITLE,
         APP_UTILITIES => utilities::CUSTOM_TITLE,
         APP_CLEANUP => crate::diskcleaner::CUSTOM_TITLE,
+        APP_DISKMGR => crate::diskmgr::CUSTOM_TITLE,
         _ => crate::settings::CUSTOM_TITLE,
     }
 }
@@ -470,6 +474,7 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
         APP_TASKMGR => crate::taskmgr::draw(g, f),
         APP_UTILITIES => utilities::draw(g, f),
         APP_CLEANUP => crate::diskcleaner::draw(g, f),
+        APP_DISKMGR => crate::diskmgr::draw(g, f),
         _ => crate::settings::draw(g, f),
     }
 }
@@ -481,6 +486,7 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         APP_TASKMGR => crate::taskmgr::mouse(ev, x, y, f),
         APP_UTILITIES => utilities::mouse(ev, x, y, f),
         APP_CLEANUP => crate::diskcleaner::mouse(ev, x, y, f),
+        APP_DISKMGR => crate::diskmgr::mouse(ev, x, y, f),
         _ => crate::settings::mouse(ev, x, y, f),
     }
 }
@@ -492,6 +498,7 @@ unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
         APP_TASKMGR => crate::taskmgr::key(vk, ch),
         APP_UTILITIES => utilities::key(vk, ch),
         APP_CLEANUP => crate::diskcleaner::key(vk, ch),
+        APP_DISKMGR => crate::diskmgr::key(vk, ch),
         _ => crate::settings::key(vk, ch),
     }
 }
@@ -503,6 +510,7 @@ unsafe fn app_tick(app: usize, f: &Frame) -> bool {
         APP_TASKMGR => crate::taskmgr::tick(f),
         APP_UTILITIES => utilities::tick(f),
         APP_CLEANUP => crate::diskcleaner::tick(f),
+        APP_DISKMGR => crate::diskmgr::tick(f),
         _ => crate::settings::tick(f),
     }
 }
@@ -608,6 +616,7 @@ fn default_rect(app: usize) -> Rect {
         APP_EXPLORER => (1100, 680),
         APP_NOTEPAD => (1000, 680),
         APP_TASKMGR => (1000, 650),
+        APP_DISKMGR => (1000, 650),
         _ => (1040, 700),
     };
     let (w, h) = (w.min(ww - 40).max(480), h.min(wh - 40).max(320));
