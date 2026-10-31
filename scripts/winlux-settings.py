@@ -7,45 +7,232 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib
 
-PAGES = ["Système", "Applications", "Réseau", "Son", "Clavier",
-         "Souris", "Personnalisation", "Mises à jour", "Écran", "À propos",
-         "Programmes Windows", "Navigateurs", "Accessibilité", "Effets visuels",
-         "Localisation", "Gestionnaire de fichiers", "Son avancé", "Mises à jour système",
-         "Confidentialité", "Processeur", "Lecteurs réseau", "Personnalisation du bureau",
-         "Bluetooth et appareils", "Alimentation et batterie", "Graphismes"]
+
+# ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
+
+def _interface_lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="):
+                        code = line[5:].strip()
+        except OSError:
+            pass
+    code = (code or os.environ.get("LANG", "fr"))[:2].lower()
+    return code if code in ("fr", "en", "es", "de") else "fr"
+
+
+_LANG = _interface_lang()
+_COL = {"en": 0, "es": 1, "de": 2}
+
+# Texte français -> (anglais, espagnol, allemand).
+_TR = {
+    'Version installée : ': ('Installed version: ', 'Versión instalada: ', 'Installierte Version: '),
+    'Version disponible : ': ('Available version: ', 'Versión disponible: ', 'Verfügbare Version: '),
+    'Action en attente : ': ('Pending action: ', 'Acción pendiente: ', 'Ausstehende Aktion: '),
+    'Portée : ': ('Scope: ', 'Alcance: ', 'Umfang: '),
+    'Composants : ': ('Components: ', 'Componentes: ', 'Komponenten: '),
+    'Taille à télécharger : ': ('Download size: ', 'Tamaño de descarga: ', 'Downloadgröße: '),
+    'Taille décompressée : ': ('Unpacked size: ', 'Tamaño descomprimido: ', 'Entpackte Größe: '),
+    'Action après installation : ': ('After installation: ', 'Tras la instalación: ', 'Nach der Installation: '),
+    ' octets': (' bytes', ' bytes', ' Bytes'),
+    ' Kio (hors sauvegarde et marge)': (' KiB (excluding backup and margin)', ' KiB (sin copia de seguridad ni margen)', ' KiB (ohne Sicherung und Reserve)'),
+    'Winlux est à jour.': ('Winlux is up to date.', 'Winlux está actualizado.', 'Winlux ist auf dem neuesten Stand.'),
+    'Aucune vérification disponible. Lancez une recherche de mises à jour (--check).': ('No check available yet. Search for updates (--check).', 'Todavía no hay ninguna comprobación. Busque actualizaciones (--check).', 'Noch keine Prüfung verfügbar. Suchen Sie nach Updates (--check).'),
+    'Aucune vérification disponible. Lancez Rechercher.': ('No check available yet. Click Check.', 'Todavía no hay ninguna comprobación. Haga clic en Buscar.', 'Noch keine Prüfung verfügbar. Klicken Sie auf Suchen.'),
+    'redémarrage du système': ('system restart', 'reinicio del sistema', 'Systemneustart'),
+    'redémarrage de la session graphique': ('graphical session restart', 'reinicio de la sesión gráfica', 'Neustart der grafischen Sitzung'),
+    'redémarrage conseillé': ('restart recommended', 'se recomienda reiniciar', 'Neustart empfohlen'),
+    'bureau et runtime Winlux (APT)': ('Winlux desktop and runtime (APT)', 'escritorio y runtime de Winlux (APT)', 'Winlux-Desktop und -Runtime (APT)'),
+    'Mio': ('MiB', 'MiB', 'MiB'),
+    'Système': ('System', 'Sistema', 'System'),
+    'Applications': ('Apps', 'Aplicaciones', 'Apps'),
+    'Réseau': ('Network', 'Red', 'Netzwerk'),
+    'Son': ('Sound', 'Sonido', 'Sound'),
+    'Clavier': ('Keyboard', 'Teclado', 'Tastatur'),
+    'Souris': ('Mouse', 'Mouse', 'Maus'),
+    'Personnalisation': ('Personalization', 'Personalización', 'Personalisierung'),
+    'Mises à jour': ('Updates', 'Actualizaciones', 'Updates'),
+    'Écran': ('Display', 'Pantalla', 'Bildschirm'),
+    'À propos': ('About', 'Acerca de', 'Info'),
+    'Programmes Windows': ('Windows programs', 'Programas de Windows', 'Windows-Programme'),
+    'Navigateurs': ('Browsers', 'Navegadores', 'Browser'),
+    'Accessibilité': ('Accessibility', 'Accesibilidad', 'Barrierefreiheit'),
+    'Effets visuels': ('Visual effects', 'Efectos visuales', 'Visuelle Effekte'),
+    'Localisation': ('Language & region', 'Idioma y región', 'Sprache und Region'),
+    'Gestionnaire de fichiers': ('File manager', 'Administrador de archivos', 'Dateimanager'),
+    'Son avancé': ('Advanced sound', 'Sonido avanzado', 'Erweiterter Sound'),
+    'Mises à jour système': ('System updates', 'Actualizaciones del sistema', 'Systemupdates'),
+    'Confidentialité': ('Privacy', 'Privacidad', 'Datenschutz'),
+    'Processeur': ('Processor', 'Procesador', 'Prozessor'),
+    'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
+    'Personnalisation du bureau': ('Desktop personalization', 'Personalización del escritorio', 'Desktop-Personalisierung'),
+    'Bluetooth et appareils': ('Bluetooth & devices', 'Bluetooth y dispositivos', 'Bluetooth und Geräte'),
+    'Alimentation et batterie': ('Power & battery', 'Energía y batería', 'Energie und Akku'),
+    'Graphismes': ('Graphics', 'Gráficos', 'Grafik'),
+    'Version': ('Version', 'Versión', 'Version'),
+    'Noyau': ('Kernel', 'Kernel', 'Kernel'),
+    'Connexion': ('Connection', 'Conexión', 'Verbindung'),
+    'Volume': ('Volume', 'Volumen', 'Lautstärke'),
+    'Batterie': ('Battery', 'Batería', 'Akku'),
+    'Mode': ('Mode', 'Modo', 'Modus'),
+    'Écran éteint après': ('Turn off screen after', 'Apagar pantalla tras', 'Bildschirm aus nach'),
+    'Veille après': ('Sleep after', 'Suspender tras', 'Energiesparmodus nach'),
+    'Capot': ('Lid', 'Tapa', 'Deckel'),
+    "Bouton d'alimentation": ('Power button', 'Botón de encendido', 'Netzschalter'),
+    'Luminosité (%)': ('Brightness (%)', 'Brillo (%)', 'Helligkeit (%)'),
+    'Disposition': ('Layout', 'Distribución', 'Layout'),
+    'Toucher-clic': ('Tap to click', 'Tocar para hacer clic', 'Tippen zum Klicken'),
+    'Vitesse': ('Speed', 'Velocidad', 'Geschwindigkeit'),
+    'Alignement': ('Alignment', 'Alineación', 'Ausrichtung'),
+    'Définition': ('Resolution', 'Resolución', 'Auflösung'),
+    'Échelle': ('Scale', 'Escala', 'Skalierung'),
+    'Navigateur par défaut': ('Default browser', 'Navegador predeterminado', 'Standardbrowser'),
+    'Relancer le bureau': ('Restart the desktop', 'Reiniciar el escritorio', 'Desktop neu starten'),
+    'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
+    'Éteindre': ('Shut down', 'Apagar', 'Herunterfahren'),
+    'Signaler un problème': ('Report a problem', 'Informar de un problema', 'Problem melden'),
+    'Renouveler la connexion': ('Renew the connection', 'Renovar la conexión', 'Verbindung erneuern'),
+    'Volume −': ('Volume −', 'Volumen −', 'Lautstärke −'),
+    'Muet / rétablir': ('Mute / unmute', 'Silenciar / restablecer', 'Stumm / Ton an'),
+    'Volume +': ('Volume +', 'Volumen +', 'Lautstärke +'),
+    'Français AZERTY': ('French AZERTY', 'Francés AZERTY', 'Französisch AZERTY'),
+    'Anglais QWERTY': ('English QWERTY', 'Inglés QWERTY', 'Englisch QWERTY'),
+    'Activer toucher-clic': ('Turn on tap to click', 'Activar tocar para hacer clic', 'Tippen zum Klicken aktivieren'),
+    'Désactiver toucher-clic': ('Turn off tap to click', 'Desactivar tocar para hacer clic', 'Tippen zum Klicken deaktivieren'),
+    'Lente': ('Slow', 'Lenta', 'Langsam'),
+    'Normale': ('Normal', 'Normal', 'Normal'),
+    'Rapide': ('Fast', 'Rápida', 'Schnell'),
+    'À gauche': ('Left', 'A la izquierda', 'Links'),
+    'Centrer': ('Center', 'Centrar', 'Zentriert'),
+    'Ajouter Corbeille': ('Add Recycle Bin', 'Agregar Papelera de reciclaje', 'Papierkorb hinzufügen'),
+    'Ajouter Explorateur': ('Add File Explorer', 'Agregar Explorador', 'Explorer hinzufügen'),
+    'Ajouter Ce PC': ('Add This PC', 'Agregar Este equipo', 'Dieser PC hinzufügen'),
+    'Ajouter Documents': ('Add Documents', 'Agregar Documentos', 'Dokumente hinzufügen'),
+    'Rechercher': ('Check', 'Buscar', 'Suchen'),
+    'Installer': ('Install', 'Instalar', 'Installieren'),
+    'Restaurer': ('Restore', 'Restaurar', 'Wiederherstellen'),
+    'Mises à jour auto : activer': ('Automatic updates: turn on', 'Actualizaciones automáticas: activar', 'Automatische Updates: aktivieren'),
+    'Désactiver': ('Turn off', 'Desactivar', 'Deaktivieren'),
+    'Performances maximales': ('Best performance', 'Máximo rendimiento', 'Höchstleistung'),
+    'Équilibré': ('Balanced', 'Equilibrado', 'Ausbalanciert'),
+    "Économie d'énergie": ('Power saver', 'Ahorro de energía', 'Energiesparmodus'),
+    'Écran (secteur)': ('Screen (plugged in)', 'Pantalla (enchufado)', 'Bildschirm (Netzbetrieb)'),
+    'Écran (batterie)': ('Screen (on battery)', 'Pantalla (batería)', 'Bildschirm (Akku)'),
+    'Veille (secteur)': ('Sleep (plugged in)', 'Suspensión (enchufado)', 'Energiesparmodus (Netzbetrieb)'),
+    'Veille (batterie)': ('Sleep (on battery)', 'Suspensión (batería)', 'Energiesparmodus (Akku)'),
+    'Luminosité −': ('Brightness −', 'Brillo −', 'Helligkeit −'),
+    'Luminosité +': ('Brightness +', 'Brillo +', 'Helligkeit +'),
+    'Mettre en veille': ('Sleep', 'Suspender', 'Energie sparen'),
+    'Veille prolongée': ('Hibernate', 'Hibernar', 'Ruhezustand'),
+    'Suivre la taille de la VM': ('Follow the VM size', 'Seguir el tamaño de la VM', 'VM-Größe folgen'),
+    'Définition fixe': ('Fixed resolution', 'Resolución fija', 'Feste Auflösung'),
+    'Échelle −': ('Scale −', 'Escala −', 'Skalierung −'),
+    'Automatique': ('Automatic', 'Automática', 'Automatisch'),
+    'Échelle +': ('Scale +', 'Escala +', 'Skalierung +'),
+    'Informations graphiques indisponibles (runtime Winlux introuvable).': ('Graphics information unavailable (Winlux runtime not found).', 'Información gráfica no disponible (no se encuentra el runtime de Winlux).', 'Grafikinformationen nicht verfügbar (Winlux-Runtime nicht gefunden).'),
+    'Aucune carte graphique détectée (machine virtuelle ou affichage de secours).': ('No graphics card found (virtual machine or fallback display).', 'No se detectó ninguna tarjeta gráfica (máquina virtual o pantalla de emergencia).', 'Keine Grafikkarte erkannt (virtuelle Maschine oder Notfallanzeige).'),
+    "GPU intégré (économie d'énergie)": ('Integrated GPU (power saving)', 'GPU integrada (ahorro de energía)', 'Integrierte GPU (Energiesparen)'),
+    'GPU dédié (hautes performances)': ('Dedicated GPU (high performance)', 'GPU dedicada (alto rendimiento)', 'Dedizierte GPU (Hochleistung)'),
+    'Carte graphique': ('Graphics card', 'Tarjeta gráfica', 'Grafikkarte'),
+    "\nGPU par application : clic droit sur un .exe > Réglages de l'exécutable.": ('\nGPU per app: right-click an .exe > Executable settings.', '\nGPU por aplicación: clic derecho en un .exe > Configuración del ejecutable.', '\nGPU pro App: Rechtsklick auf eine .exe > Einstellungen der ausführbaren Datei.'),
+    'Paramètres Winlux': ('Winlux Settings', 'Configuración de Winlux', 'Winlux-Einstellungen'),
+    'WINLUX · PARAMÈTRES': ('WINLUX · SETTINGS', 'WINLUX · CONFIGURACIÓN', 'WINLUX · EINSTELLUNGEN'),
+    'Rechercher un réglage': ('Find a setting', 'Buscar una configuración', 'Einstellung suchen'),
+    'Vos préférences et l’état réel de votre ordinateur.': ('Your preferences and the real state of your computer.', 'Sus preferencias y el estado real de su equipo.', 'Ihre Einstellungen und der tatsächliche Zustand Ihres Computers.'),
+    'Chargement…': ('Loading…', 'Cargando…', 'Wird geladen…'),
+    'Installer, désinstaller et gérer le démarrage': ('Install, uninstall and manage startup', 'Instalar, desinstalar y administrar el inicio', 'Installieren, deinstallieren und Autostart verwalten'),
+    'Wi-Fi et Bluetooth': ('Wi-Fi and Bluetooth', 'Wi-Fi y Bluetooth', 'WLAN und Bluetooth'),
+    'Réglages rapides': ('Quick settings', 'Configuración rápida', 'Schnelleinstellungen'),
+    'Thèmes, accent, fond et barre des tâches': ('Themes, accent, background and taskbar', 'Temas, color de énfasis, fondo y barra de tareas', 'Designs, Akzentfarbe, Hintergrund und Taskleiste'),
+    'Appliquer la définition': ('Apply resolution', 'Aplicar resolución', 'Auflösung übernehmen'),
+    'Ouvrir les réglages détaillés de cette catégorie :': ('Open the detailed settings for this category:', 'Abrir la configuración detallada de esta categoría:', 'Detaillierte Einstellungen dieser Kategorie öffnen:'),
+    'Réglages avancés': ('Advanced settings', 'Configuración avanzada', 'Erweiterte Einstellungen'),
+    'La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.': ('Preparing updates uses the disk. Keep the VM running during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga la VM encendida durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie die VM während der Installation eingeschaltet.'),
+    'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
+    'Redémarrer après installation': ('Restart after installation', 'Reiniciar tras la instalación', 'Nach der Installation neu starten'),
+    'Confirmer cette opération ?': ('Confirm this operation?', '¿Confirmar esta operación?', 'Diesen Vorgang bestätigen?'),
+    'Enregistrez vos documents avant de continuer.': ('Save your documents before continuing.', 'Guarde sus documentos antes de continuar.', 'Speichern Sie Ihre Dokumente, bevor Sie fortfahren.'),
+    'Impossible de lancer l’opération': ('Unable to start the operation', 'No se puede iniciar la operación', 'Der Vorgang kann nicht gestartet werden'),
+    'Opération en cours…': ('Operation in progress…', 'Operación en curso…', 'Vorgang läuft…'),
+    'Aucun détail n’a été écrit dans le journal.': ('No details were written to the log.', 'No se escribió ningún detalle en el registro.', 'Es wurden keine Details ins Protokoll geschrieben.'),
+    'L’opération a échoué': ('The operation failed', 'La operación ha fallado', 'Der Vorgang ist fehlgeschlagen'),
+    'Indisponible': ('Unavailable', 'No disponible', 'Nicht verfügbar'),
+    'Installation': ('Installing', 'Instalación', 'Installation'),
+    'Sauvegarde': ('Backup', 'Copia de seguridad', 'Sicherung'),
+    'Recherche et préparation': ('Checking and preparing', 'Búsqueda y preparación', 'Suche und Vorbereitung'),
+    'Téléchargement': ('Downloading', 'Descarga', 'Download'),
+    'Vérification': ('Verifying', 'Verificación', 'Überprüfung'),
+    'Décompression': ('Unpacking', 'Descompresión', 'Entpacken'),
+    'Finalisation': ('Finishing', 'Finalización', 'Abschluss'),
+    'Restauration': ('Restore', 'Restauración', 'Wiederherstellung'),
+    'Recherche': ('Check', 'Búsqueda', 'Suche'),
+    'Mise à jour': ('Update', 'Actualización', 'Update'),
+    'La mise à jour a échoué': ('The update failed', 'La actualización ha fallado', 'Das Update ist fehlgeschlagen'),
+    'Installer {name}': ('Install {name}', 'Instalar {name}', '{name} installieren'),
+    'Par défaut : {name}': ('Default: {name}', 'Predeterminado: {name}', 'Standard: {name}'),
+    'Ouvrir {name}': ('Open {name}', 'Abrir {name}', '{name} öffnen'),
+    '{label} : {value}': ('{label}: {value}', '{label}: {value}', '{label}: {value}'),
+    'Pilote {driver}': ('Driver {driver}', 'Controlador {driver}', 'Treiber {driver}'),
+    'inconnu': ('unknown', 'desconocido', 'unbekannt'),
+    'Charge {load} %': ('Load {load}%', 'Carga {load} %', 'Last {load} %'),
+    'VRAM {used} / {total} Mo': ('VRAM {used} / {total} MB', 'VRAM {used} / {total} MB', 'VRAM {used} / {total} MB'),
+    'Fréquence {freq} MHz': ('Clock {freq} MHz', 'Frecuencia {freq} MHz', 'Takt {freq} MHz'),
+    'Encodeur {value} %': ('Encoder {value}%', 'Codificador {value} %', 'Encoder {value} %'),
+    'Décodeur {value} %': ('Decoder {value}%', 'Decodificador {value} %', 'Decoder {value} %'),
+    'Code : {code}\n\n{detail}': ('Code: {code}\n\n{detail}', 'Código: {code}\n\n{detail}', 'Code: {code}\n\n{detail}'),
+    'Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}': ('Step: {stage} (code {code})\n\nLast lines of the log:\n{detail}', 'Etapa: {stage} (código {code})\n\nÚltimas líneas del registro:\n{detail}', 'Schritt: {stage} (Code {code})\n\nLetzte Zeilen des Protokolls:\n{detail}'),
+    '{done}/{total} fichiers': ('{done}/{total} files', '{done}/{total} archivos', '{done}/{total} Dateien'),
+}
+
+
+def _t(text):
+    """Texte dans la langue de l'interface (le français sert de clé)."""
+    row = _TR.get(text)
+    return row[_COL[_LANG]] if row and _LANG in _COL else text
+
+
+PAGES = [_t("Système"), _t("Applications"), _t("Réseau"), _t("Son"), _t("Clavier"),
+         _t("Souris"), _t("Personnalisation"), _t("Mises à jour"), _t("Écran"), _t("À propos"),
+         _t("Programmes Windows"), _t("Navigateurs"), _t("Accessibilité"), _t("Effets visuels"),
+         _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son avancé"), _t("Mises à jour système"),
+         _t("Confidentialité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
+         _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes")]
 GRAPHICS_PAGE = 24
 FIELDS = {
-    0: [("Version", "version"), ("Noyau", "kernel")],
-    2: [("Connexion", "network")], 3: [("Volume", "audio")],
-    23: [("Batterie", "battery"), ("Mode", "power_profile"), ("Écran éteint après", "power_screen_now"),
-         ("Veille après", "power_sleep_now"), ("Capot", "power_lid"), ("Bouton d'alimentation", "power_button"),
-         ("Luminosité (%)", "power_brightness")],
-    4: [("Disposition", "layout"), ("Toucher-clic", "tap")],
-    5: [("Vitesse", "mouse_speed")], 6: [("Alignement", "align")],
-    8: [("Définition", "display_current"), ("Échelle", "display_scale")],
-    9: [("Version", "version"), ("Noyau", "kernel")],
-    11: [("Navigateur par défaut", "browser_default")],
+    0: [(_t("Version"), "version"), (_t("Noyau"), "kernel")],
+    2: [(_t("Connexion"), "network")], 3: [(_t("Volume"), "audio")],
+    23: [(_t("Batterie"), "battery"), (_t("Mode"), "power_profile"), (_t("Écran éteint après"), "power_screen_now"),
+         (_t("Veille après"), "power_sleep_now"), (_t("Capot"), "power_lid"), (_t("Bouton d'alimentation"), "power_button"),
+         (_t("Luminosité (%)"), "power_brightness")],
+    4: [(_t("Disposition"), "layout"), (_t("Toucher-clic"), "tap")],
+    5: [(_t("Vitesse"), "mouse_speed")], 6: [(_t("Alignement"), "align")],
+    8: [(_t("Définition"), "display_current"), (_t("Échelle"), "display_scale")],
+    9: [(_t("Version"), "version"), (_t("Noyau"), "kernel")],
+    11: [(_t("Navigateur par défaut"), "browser_default")],
 }
 ACTIONS = {
-    0: [("Relancer le bureau", "restart-session"), ("Redémarrer", "reboot"), ("Éteindre", "poweroff"),
-        ("Signaler un problème", "report-open")],
-    2: [("Renouveler la connexion", "network-renew")],
-    3: [("Volume −", "volume-down"), ("Muet / rétablir", "volume-mute"), ("Volume +", "volume-up")],
-    4: [("Français AZERTY", "keyboard-fr"), ("Anglais QWERTY", "keyboard-us"), ("Activer toucher-clic", "tap-on"), ("Désactiver toucher-clic", "tap-off")],
-    5: [("Lente", "mouse-slow"), ("Normale", "mouse-normal"), ("Rapide", "mouse-fast")],
-    6: [("À gauche", "align-left"), ("Centrer", "align-center"),
-        ("Ajouter Corbeille", "desktop-icon-recycle"), ("Ajouter Explorateur", "desktop-icon-explorer"),
-        ("Ajouter Ce PC", "desktop-icon-computer"), ("Ajouter Documents", "desktop-icon-documents")],
-    7: [("Rechercher", "update-check"), ("Installer", "update-apply"), ("Restaurer", "update-rollback"),
-        ("Mises à jour auto : activer", "update-auto-on"), ("Désactiver", "update-auto-off")],
-    23: [("Performances maximales", "power-profile-performance"), ("Équilibré", "power-profile-balanced"),
-         ("Économie d'énergie", "power-profile-saver"), ("Écran (secteur)", "power-screen-ac"),
-         ("Écran (batterie)", "power-screen-dc"), ("Veille (secteur)", "power-sleep-ac"),
-         ("Veille (batterie)", "power-sleep-dc"), ("Capot", "power-lid"), ("Bouton d'alimentation", "power-button"),
-         ("Luminosité −", "power-brightness-down"), ("Luminosité +", "power-brightness-up"),
-         ("Mettre en veille", "power-suspend"), ("Veille prolongée", "power-hibernate")],
-    8: [("Suivre la taille de la VM", "display-follow"), ("Définition fixe", "display-fixed"),
-        ("Échelle −", "display-scale-down"), ("Automatique", "display-scale-auto"), ("Échelle +", "display-scale-up")],
+    0: [(_t("Relancer le bureau"), "restart-session"), (_t("Redémarrer"), "reboot"), (_t("Éteindre"), "poweroff"),
+        (_t("Signaler un problème"), "report-open")],
+    2: [(_t("Renouveler la connexion"), "network-renew")],
+    3: [(_t("Volume −"), "volume-down"), (_t("Muet / rétablir"), "volume-mute"), (_t("Volume +"), "volume-up")],
+    4: [(_t("Français AZERTY"), "keyboard-fr"), (_t("Anglais QWERTY"), "keyboard-us"), (_t("Activer toucher-clic"), "tap-on"), (_t("Désactiver toucher-clic"), "tap-off")],
+    5: [(_t("Lente"), "mouse-slow"), (_t("Normale"), "mouse-normal"), (_t("Rapide"), "mouse-fast")],
+    6: [(_t("À gauche"), "align-left"), (_t("Centrer"), "align-center"),
+        (_t("Ajouter Corbeille"), "desktop-icon-recycle"), (_t("Ajouter Explorateur"), "desktop-icon-explorer"),
+        (_t("Ajouter Ce PC"), "desktop-icon-computer"), (_t("Ajouter Documents"), "desktop-icon-documents")],
+    7: [(_t("Rechercher"), "update-check"), (_t("Installer"), "update-apply"), (_t("Restaurer"), "update-rollback"),
+        (_t("Mises à jour auto : activer"), "update-auto-on"), (_t("Désactiver"), "update-auto-off")],
+    23: [(_t("Performances maximales"), "power-profile-performance"), (_t("Équilibré"), "power-profile-balanced"),
+         (_t("Économie d'énergie"), "power-profile-saver"), (_t("Écran (secteur)"), "power-screen-ac"),
+         (_t("Écran (batterie)"), "power-screen-dc"), (_t("Veille (secteur)"), "power-sleep-ac"),
+         (_t("Veille (batterie)"), "power-sleep-dc"), (_t("Capot"), "power-lid"), (_t("Bouton d'alimentation"), "power-button"),
+         (_t("Luminosité −"), "power-brightness-down"), (_t("Luminosité +"), "power-brightness-up"),
+         (_t("Mettre en veille"), "power-suspend"), (_t("Veille prolongée"), "power-hibernate")],
+    8: [(_t("Suivre la taille de la VM"), "display-follow"), (_t("Définition fixe"), "display-fixed"),
+        (_t("Échelle −"), "display-scale-down"), (_t("Automatique"), "display-scale-auto"), (_t("Échelle +"), "display-scale-up")],
 }
 
 def gpu_summary():
@@ -53,30 +240,53 @@ def gpu_summary():
     try:
         out = subprocess.run(["winlux", "--gpu-status"], capture_output=True, text=True, timeout=3).stdout
     except (OSError, subprocess.SubprocessError):
-        return "Informations graphiques indisponibles (runtime Winlux introuvable)."
+        return _t("Informations graphiques indisponibles (runtime Winlux introuvable).")
     report = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
     try: count = min(8, int(report.get("gpu_count", "0")))
     except ValueError: count = 0
     if not count:
-        return "Aucune carte graphique détectée (machine virtuelle ou affichage de secours)."
-    roles = {"integrated": "GPU intégré (économie d'énergie)", "dedicated": "GPU dédié (hautes performances)"}
+        return _t("Aucune carte graphique détectée (machine virtuelle ou affichage de secours).")
+    roles = {"integrated": _t("GPU intégré (économie d'énergie)"), "dedicated": _t("GPU dédié (hautes performances)")}
     lines = []
     for i in range(count):
         get = lambda key: report.get(f"gpu{i}_{key}")
-        lines.append(get("name") or "Carte graphique")
+        lines.append(get("name") or _t("Carte graphique"))
         kind = [roles[get("role")]] if get("role") in roles else []
-        lines.append("   " + " · ".join(kind + [f"Pilote {get('driver') or 'inconnu'}"]))
+        lines.append("   " + " · ".join(kind + [_t("Pilote {driver}").format(driver=get("driver") or _t("inconnu"))]))
         metrics = []
-        if get("load"): metrics.append(f"Charge {get('load')} %")
-        if get("vram_used_mb") and get("vram_total_mb"): metrics.append(f"VRAM {get('vram_used_mb')} / {get('vram_total_mb')} Mo")
+        if get("load"): metrics.append(_t("Charge {load} %").format(load=get("load")))
+        if get("vram_used_mb") and get("vram_total_mb"): metrics.append(_t("VRAM {used} / {total} Mo").format(used=get("vram_used_mb"), total=get("vram_total_mb")))
         if get("temp_c"): metrics.append(f"{get('temp_c')} °C")
-        if get("freq_mhz"): metrics.append(f"Fréquence {get('freq_mhz')} MHz")
+        if get("freq_mhz"): metrics.append(_t("Fréquence {freq} MHz").format(freq=get("freq_mhz")))
         if get("power_w"): metrics.append(f"{get('power_w')} W")
-        if get("encoder"): metrics.append(f"Encodeur {get('encoder')} %")
-        if get("decoder"): metrics.append(f"Décodeur {get('decoder')} %")
+        if get("encoder"): metrics.append(_t("Encodeur {value} %").format(value=get("encoder")))
+        if get("decoder"): metrics.append(_t("Décodeur {value} %").format(value=get("decoder")))
         if metrics: lines.append("   " + " · ".join(metrics))
     if report.get("gpu_hybrid") == "1":
-        lines.append("\nGPU par application : clic droit sur un .exe > Réglages de l'exécutable.")
+        lines.append(_t("\nGPU par application : clic droit sur un .exe > Réglages de l'exécutable."))
+    return "\n".join(lines)
+
+# Rapport de winlux-update (toujours écrit en français) : traduit à l'affichage.
+UPDATE_PREFIXES = ("Version installée : ", "Version disponible : ", "Action en attente : ", "Portée : ",
+                   "Composants : ", "Taille à télécharger : ", "Taille décompressée : ",
+                   "Action après installation : ")
+UPDATE_SUFFIXES = (" octets", " Kio (hors sauvegarde et marge)")
+
+
+def localize_update_text(text):
+    lines = []
+    for line in text.split("\n"):
+        for prefix in UPDATE_PREFIXES:
+            if line.startswith(prefix):
+                value = line[len(prefix):]
+                for suffix in UPDATE_SUFFIXES:
+                    if value.endswith(suffix):
+                        value = value[:-len(suffix)] + _t(suffix)
+                line = _t(prefix) + _t(value)
+                break
+        else:
+            line = _t(line)
+        lines.append(line)
     return "\n".join(lines)
 
 def read(name):
@@ -85,7 +295,7 @@ def read(name):
 
 class Settings(Gtk.Window):
     def __init__(self):
-        super().__init__(title="Parametres Winlux")
+        super().__init__(title=_t("Paramètres Winlux"))
         self.set_icon_name("preferences-system")
         self.set_default_size(1020, 740)
         self.set_size_request(720, 500)
@@ -121,8 +331,8 @@ class Settings(Gtk.Window):
         side.set_name("sidebar")
         side.set_size_request(240, -1)
         outer.pack_start(side, False, False, 0)
-        side.pack_start(Gtk.Label(label="WINLUX · PARAMÈTRES", xalign=0), False, False, 0)
-        search = Gtk.SearchEntry(placeholder_text="Rechercher un réglage")
+        side.pack_start(Gtk.Label(label=_t("WINLUX · PARAMÈTRES"), xalign=0), False, False, 0)
+        search = Gtk.SearchEntry(placeholder_text=_t("Rechercher un réglage"))
         side.pack_start(search, False, False, 0)
         nav_scroll = Gtk.ScrolledWindow()
         side.pack_start(nav_scroll, True, True, 0)
@@ -152,12 +362,12 @@ class Settings(Gtk.Window):
         self.page = row.get_index()
         for child in self.body.get_children(): child.destroy()
         self.label(PAGES[self.page], "heading")
-        self.label("Vos préférences et l’état réel de votre ordinateur.", "subtitle")
-        self.state = self.label("Chargement…", "card")
+        self.label(_t("Vos préférences et l’état réel de votre ordinateur."), "subtitle")
+        self.state = self.label(_t("Chargement…"), "card")
         actions = list(ACTIONS.get(self.page, []))
         if self.page == 11:
-            actions = [(f"{verb} {name}", f"browser-{action}-{name}") for name in ("edge", "chrome", "firefox")
-                       for verb, action in (("Installer", "install"), ("Par défaut :", "default"), ("Ouvrir", "launch"))]
+            actions = [(_t(verb).format(name=name), f"browser-{action}-{name}") for name in ("edge", "chrome", "firefox")
+                       for verb, action in (("Installer {name}", "install"), ("Par défaut : {name}", "default"), ("Ouvrir {name}", "launch"))]
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
                            row_spacing=8, column_spacing=8)
         self.body.pack_start(flow, False, False, 0)
@@ -170,7 +380,7 @@ class Settings(Gtk.Window):
         self.buttons = flow
         if self.page in (1, 2, 3, 6):
             tool = {1:"apps", 2:"quick", 3:"quick", 6:"appearance"}[self.page]
-            shortcut = Gtk.Button(label={1:"Installer, désinstaller et gérer le démarrage",2:"Wi-Fi et Bluetooth",3:"Réglages rapides",6:"Thèmes, accent, fond et barre des tâches"}[self.page])
+            shortcut = Gtk.Button(label={1:_t("Installer, désinstaller et gérer le démarrage"),2:_t("Wi-Fi et Bluetooth"),3:_t("Réglages rapides"),6:_t("Thèmes, accent, fond et barre des tâches")}[self.page])
             shortcut.connect("clicked", lambda *_: subprocess.Popen(["winlux-system-tools", tool]))
             self.body.pack_start(shortcut, False, False, 0)
         if self.page == 8:
@@ -180,12 +390,12 @@ class Settings(Gtk.Window):
                 if mode: self.modes.append_text(mode)
             self.modes.set_active(0)
             self.body.pack_start(self.modes, False, False, 0)
-            button = Gtk.Button(label="Appliquer la définition")
+            button = Gtk.Button(label=_t("Appliquer la définition"))
             button.connect("clicked", lambda *_: self.execute("display-mode-" + self.modes.get_active_text()) if self.modes.get_active_text() else None)
             self.body.pack_start(button, False, False, 0)
         if self.page in (1, 10, 12, 13, GRAPHICS_PAGE):
-            self.label("Ouvrir les réglages détaillés de cette catégorie :")
-            button = Gtk.Button(label="Réglages avancés")
+            self.label(_t("Ouvrir les réglages détaillés de cette catégorie :"))
+            button = Gtk.Button(label=_t("Réglages avancés"))
             legacy_page = self.page
             button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
             self.body.pack_start(button, False, False, 0)
@@ -194,11 +404,11 @@ class Settings(Gtk.Window):
         self.body.pack_start(self.progress, False, False, 0)
         self.details = self.label("")
         if self.page == 7:
-            self.label("La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.", "subtitle")
-            recovery = Gtk.Button(label="Secours et restauration")
+            self.label(_t("La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation."), "subtitle")
+            recovery = Gtk.Button(label=_t("Secours et restauration"))
             recovery.connect("clicked", lambda *_: subprocess.Popen(["winlux-system-tools", "recovery"]))
             self.body.pack_start(recovery, False, False, 0)
-            restart = Gtk.Button(label="Redémarrer après installation")
+            restart = Gtk.Button(label=_t("Redémarrer après installation"))
             restart.connect("clicked", lambda *_: self.execute("reboot"))
             self.body.pack_start(restart, False, False, 0)
         self.poll()
@@ -211,17 +421,17 @@ class Settings(Gtk.Window):
         if self.process is not None or self.busy: return
         if action in ("reboot", "poweroff", "restart-session", "update-rollback"):
             dialog = Gtk.MessageDialog(transient_for=self, modal=True, buttons=Gtk.ButtonsType.OK_CANCEL,
-                                       text="Confirmer cette opération ?", secondary_text="Enregistrez vos documents avant de continuer.")
+                                       text=_t("Confirmer cette opération ?"), secondary_text=_t("Enregistrez vos documents avant de continuer."))
             answer = dialog.run()
             dialog.destroy()
             if answer != Gtk.ResponseType.OK: return
         try:
             self.process = subprocess.Popen(["winlux-control", action], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as error:
-            self.show_error("Impossible de lancer l’opération", str(error))
+            self.show_error(_t("Impossible de lancer l’opération"), str(error))
             return
         self.active_action = action
-        self.notice.set_text("Opération en cours…")
+        self.notice.set_text(_t("Opération en cours…"))
         self.buttons.set_sensitive(False)
 
     def poll(self):
@@ -235,14 +445,15 @@ class Settings(Gtk.Window):
             if result and action in ("update-check", "update-apply", "update-rollback"):
                 self.show_update_error(action, result)
             elif result:
-                detail = read("/run/winlux/action.log").strip()[-3000:] or "Aucun détail n’a été écrit dans le journal."
-                self.show_error("L’opération a échoué", f"Code : {result}\n\n{detail}")
+                detail = read("/run/winlux/action.log").strip()[-3000:] or _t("Aucun détail n’a été écrit dans le journal.")
+                self.show_error(_t("L’opération a échoué"), _t("Code : {code}\n\n{detail}").format(code=result, detail=detail))
         self.buttons.set_sensitive(self.process is None and not self.busy)
         fields = FIELDS.get(self.page, [])
-        text = "\n".join(f"{label} : {status.get(key) or 'Indisponible'}" for label, key in fields)
+        text = "\n".join(_t("{label} : {value}").format(label=label, value=status.get(key) or _t("Indisponible")) for label, key in fields)
         if self.page == 7: text = read("/run/winlux/updates.txt")
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
+        if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
         if self.state.get_text() != text: self.state.set_text(text)
@@ -258,13 +469,14 @@ class Settings(Gtk.Window):
         if progress.get("unit") == "bytes":
             try:
                 done, total = int(progress.get("done", "0")), int(progress.get("total", "0"))
-                amount = f"{done / 1048576:.1f} Mio" + (f" / {total / 1048576:.1f} Mio" if total else "")
+                mib = _t("Mio")
+                amount = f"{done / 1048576:.1f} {mib}" + (f" / {total / 1048576:.1f} {mib}" if total else "")
                 item = f"{item} · {amount}" + (f" · {percent} %" if percent >= 0 else "")
             except ValueError: pass
         elif progress.get("phase") in ("backing-up", "installing"):
             try:
                 done, total = int(progress.get("done", "0")), int(progress.get("total", "0"))
-                if total: item = f"{progress.get('phase') == 'installing' and 'Installation' or 'Sauvegarde'} · {done}/{total} fichiers · {done * 100 // total} %\n{item}"
+                if total: item = f"{progress.get('phase') == 'installing' and _t('Installation') or _t('Sauvegarde')} · {_t('{done}/{total} fichiers').format(done=done, total=total)} · {done * 100 // total} %\n{item}"
             except ValueError: pass
         self.progress.set_text(item)
         self.progress.set_visible(self.page == 7)
@@ -274,15 +486,15 @@ class Settings(Gtk.Window):
         return True
 
     def show_update_error(self, action, result):
-        stages = {"checking": "Recherche et préparation", "downloading": "Téléchargement", "verifying": "Vérification",
-                  "extracting": "Décompression", "backing-up": "Sauvegarde",
-                  "installing": "Installation", "finalizing": "Finalisation", "restoring": "Restauration"}
+        stages = {"checking": _t("Recherche et préparation"), "downloading": _t("Téléchargement"), "verifying": _t("Vérification"),
+                  "extracting": _t("Décompression"), "backing-up": _t("Sauvegarde"),
+                  "installing": _t("Installation"), "finalizing": _t("Finalisation"), "restoring": _t("Restauration")}
         phase = read("/run/winlux/update-error-phase").strip()
-        stage = stages.get(phase, phase or {"update-check": "Recherche", "update-apply": "Mise à jour",
-                                           "update-rollback": "Restauration"}[action])
+        stage = stages.get(phase, phase or {"update-check": _t("Recherche"), "update-apply": _t("Mise à jour"),
+                                           "update-rollback": _t("Restauration")}[action])
         log = read("/run/winlux/update.log").strip()
-        detail = log[-3000:] if log else "Aucun détail n’a été écrit dans le journal."
-        self.show_error("La mise à jour a échoué", f"Étape : {stage} (code {result})\n\nDernières lignes du journal :\n{detail}")
+        detail = log[-3000:] if log else _t("Aucun détail n’a été écrit dans le journal.")
+        self.show_error(_t("La mise à jour a échoué"), _t("Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}").format(stage=stage, code=result, detail=detail))
 
     def show_error(self, title, detail):
         dialog = Gtk.MessageDialog(transient_for=self, modal=False, message_type=Gtk.MessageType.ERROR,
