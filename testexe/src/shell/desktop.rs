@@ -3513,7 +3513,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             }
             // Mixer button -> open advanced sound settings
             if y >= btn_y + 4 && y < btn_y + 34 && x >= pr.left + w / 2 + 4 && x < pr.right - 16 {
-                crate::settings::open_page(14);
+                crate::settings::open_page(16);
                 VOL_PANEL = false;
             }
         } else {

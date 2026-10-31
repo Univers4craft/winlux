@@ -850,6 +850,235 @@ pub unsafe extern "win64" fn co_create_instance(
     result
 }
 
+// ---------- CoGetClassObject ----------
+
+pub unsafe extern "win64" fn co_get_class_object(
+    rclsid: *const Guid,
+    ctx: u32,
+    _reserved: *mut c_void,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    if rclsid.is_null() || riid.is_null() {
+        return E_INVALIDARG;
+    }
+    let guid = *rclsid;
+    let iid = *riid;
+    let factories = CLASS_FACTORIES
+        .get_or_init(|| Mutex::new(Vec::new()))
+        .lock()
+        .unwrap();
+    let Some(entry) = factories
+        .iter()
+        .find(|entry| entry.clsid == guid && (entry.context & ctx) != 0)
+    else {
+        return REGDB_E_CLASSNOTREG;
+    };
+    let entry = Arc::clone(entry);
+    drop(factories);
+    let punk = entry.punk;
+    let vtable = *(punk as *const *const usize);
+    let qi: unsafe extern "win64" fn(usize, *const Guid, *mut *mut c_void) -> i32 =
+        std::mem::transmute(*vtable);
+    let result = qi(punk, &iid, out);
+    drop(entry);
+    result
+}
+
+const REGDB_E_CLASSNOTREG: i32 = 0x8004_0154u32 as i32;
+
+// ---------- CoCreateFreeThreadedMarshaler ----------
+
+pub unsafe extern "win64" fn co_create_free_threaded_marshaler(
+    _outer: usize,
+    ppunk: *mut *mut c_void,
+) -> i32 {
+    if !ppunk.is_null() {
+        *ppunk = std::ptr::null_mut();
+    }
+    S_OK
+}
+
+// ---------- ProgIDFromCLSID / CLSIDFromProgID ----------
+
+pub unsafe extern "win64" fn prog_id_from_clsid(clsid: *const Guid, prog_id: *mut *mut u16) -> i32 {
+    if prog_id.is_null() {
+        return E_POINTER;
+    }
+    *prog_id = std::ptr::null_mut();
+    if clsid.is_null() {
+        return E_INVALIDARG;
+    }
+    let guid_str = guid_text(&*clsid);
+    let reg_path = format!("hkcr\\clsid\\{}\\progid", guid_str.to_lowercase());
+    let value = match crate::dlls::advapi32::read_registry_value_internal(&reg_path, "") {
+        Some(v) => v,
+        None => return REGDB_E_CLASSNOTREG,
+    };
+    let text = String::from_utf8_lossy(&value);
+    let text = text.trim_end_matches('\0');
+    let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
+    let mem = co_task_mem_alloc(wide.len() * 2) as *mut u16;
+    if mem.is_null() {
+        return E_OUTOFMEMORY;
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr(), mem, wide.len());
+    *prog_id = mem;
+    S_OK
+}
+
+pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut Guid) -> i32 {
+    if clsid.is_null() {
+        return E_POINTER;
+    }
+    *clsid = Guid::default();
+    if prog_id.is_null() {
+        return CO_E_CLASSSTRING;
+    }
+    let name = match read_wide_string(prog_id) {
+        Some(s) => s,
+        None => return CO_E_CLASSSTRING,
+    };
+    let reg_path = format!("hkcr\\{}\\clsid", name.to_lowercase());
+    let value = match crate::dlls::advapi32::read_registry_value_internal(&reg_path, "") {
+        Some(v) => v,
+        None => return CO_E_CLASSSTRING,
+    };
+    let text = String::from_utf8_lossy(&value);
+    let text = text.trim_end_matches('\0');
+    match parse_guid(text) {
+        Some(g) => {
+            *clsid = g;
+            S_OK
+        }
+        None => CO_E_CLASSSTRING,
+    }
+}
+
+// ---------- CoGetMalloc (IMalloc singleton) ----------
+
+#[repr(C)]
+struct IMallocVTable {
+    query_interface: unsafe extern "win64" fn(usize, *const Guid, *mut *mut c_void) -> i32,
+    add_ref: unsafe extern "win64" fn(usize) -> u32,
+    release: unsafe extern "win64" fn(usize) -> u32,
+    alloc: unsafe extern "win64" fn(usize, usize) -> *mut c_void,
+    realloc: unsafe extern "win64" fn(usize, *mut c_void, usize) -> *mut c_void,
+    free: unsafe extern "win64" fn(usize, *mut c_void),
+    get_size: unsafe extern "win64" fn(usize, *mut c_void) -> usize,
+    did_alloc: unsafe extern "win64" fn(usize, *mut c_void) -> i32,
+    heap_minimize: unsafe extern "win64" fn(usize),
+}
+
+const IID_IMALLOC: Guid = Guid {
+    data1: 0x0000_0002,
+    data2: 0,
+    data3: 0,
+    data4: [0xc0, 0, 0, 0, 0, 0, 0, 0x46],
+};
+
+unsafe extern "win64" fn malloc_qi(this: usize, iid: *const Guid, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::null_mut();
+    let iid = std::ptr::read_unaligned(iid);
+    if iid == IID_IUNKNOWN || iid == IID_IMALLOC {
+        *out = this as *mut c_void;
+        S_OK
+    } else {
+        E_NOINTERFACE
+    }
+}
+unsafe extern "win64" fn malloc_addref(_: usize) -> u32 {
+    2
+}
+unsafe extern "win64" fn malloc_release(_: usize) -> u32 {
+    1
+}
+unsafe extern "win64" fn malloc_alloc(_: usize, size: usize) -> *mut c_void {
+    co_task_mem_alloc(size)
+}
+unsafe extern "win64" fn malloc_realloc(_: usize, p: *mut c_void, size: usize) -> *mut c_void {
+    co_task_mem_realloc(p, size)
+}
+unsafe extern "win64" fn malloc_free(_: usize, p: *mut c_void) {
+    co_task_mem_free(p)
+}
+unsafe extern "win64" fn malloc_get_size(_: usize, _p: *mut c_void) -> usize {
+    usize::MAX
+}
+unsafe extern "win64" fn malloc_did_alloc(_: usize, _p: *mut c_void) -> i32 {
+    -1
+}
+unsafe extern "win64" fn malloc_heap_minimize(_: usize) {}
+
+static MALLOC_VTABLE: IMallocVTable = IMallocVTable {
+    query_interface: malloc_qi,
+    add_ref: malloc_addref,
+    release: malloc_release,
+    alloc: malloc_alloc,
+    realloc: malloc_realloc,
+    free: malloc_free,
+    get_size: malloc_get_size,
+    did_alloc: malloc_did_alloc,
+    heap_minimize: malloc_heap_minimize,
+};
+
+static MALLOC_INSTANCE: &IMallocVTable = &MALLOC_VTABLE;
+
+pub unsafe extern "win64" fn co_get_malloc(_context: u32, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    *out = std::ptr::addr_of!(MALLOC_INSTANCE) as *mut c_void;
+    S_OK
+}
+
+// ---------- OLE Clipboard stubs ----------
+
+pub extern "win64" fn ole_set_clipboard(_data_object: usize) -> i32 {
+    S_OK
+}
+pub unsafe extern "win64" fn ole_get_clipboard(out: *mut *mut c_void) -> i32 {
+    if !out.is_null() {
+        *out = std::ptr::null_mut();
+    }
+    S_OK
+}
+pub extern "win64" fn ole_flush_clipboard() -> i32 {
+    S_OK
+}
+
+// ---------- Drag & Drop stubs ----------
+
+const DRAGDROP_S_DROP: i32 = 0x0004_0100;
+
+pub extern "win64" fn register_drag_drop(_hwnd: usize, _drop_target: usize) -> i32 {
+    S_OK
+}
+pub extern "win64" fn revoke_drag_drop(_hwnd: usize) -> i32 {
+    S_OK
+}
+pub extern "win64" fn do_drag_drop(
+    _data_object: usize,
+    _drop_source: usize,
+    _ok_effects: u32,
+    _effect: *mut u32,
+) -> i32 {
+    DRAGDROP_S_DROP
+}
+
+// ---------- PropVariantClear ----------
+
+pub unsafe extern "win64" fn prop_variant_clear(v: *mut c_void) -> i32 {
+    crate::dlls::oleaut32::variant_clear(v)
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "CoInitialize"=>fn co_initialize,"CoInitializeEx"=>fn co_initialize_ex,"CoUninitialize"=>fn co_uninitialize,
@@ -859,7 +1088,14 @@ pub fn exports() -> crate::dlls::Exports {
         "StringFromGUID2"=>fn string_from_guid2,"StringFromCLSID"=>fn string_from_clsid,"StringFromIID"=>fn string_from_clsid,
         "CreateStreamOnHGlobal"=>fn create_stream_on_hglobal,"GetHGlobalFromStream"=>fn get_hglobal_from_stream,
         "CoCreateInstance"=>fn co_create_instance,
-        "CoRegisterClassObject"=>fn co_register_class_object,"CoRevokeClassObject"=>fn co_revoke_class_object
+        "CoRegisterClassObject"=>fn co_register_class_object,"CoRevokeClassObject"=>fn co_revoke_class_object,
+        "CoGetClassObject"=>fn co_get_class_object,
+        "CoCreateFreeThreadedMarshaler"=>fn co_create_free_threaded_marshaler,
+        "ProgIDFromCLSID"=>fn prog_id_from_clsid,"CLSIDFromProgID"=>fn clsid_from_prog_id,
+        "CoGetMalloc"=>fn co_get_malloc,
+        "OleSetClipboard"=>fn ole_set_clipboard,"OleGetClipboard"=>fn ole_get_clipboard,"OleFlushClipboard"=>fn ole_flush_clipboard,
+        "RegisterDragDrop"=>fn register_drag_drop,"RevokeDragDrop"=>fn revoke_drag_drop,"DoDragDrop"=>fn do_drag_drop,
+        "PropVariantClear"=>fn prop_variant_clear
     }
 }
 
