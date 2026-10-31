@@ -2562,6 +2562,21 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     text_centered(hdc, f.small, 11, rgb(0xC5, 0xC5, 0xC5), (rb.left + rb.right) / 2, rb.top + 7, b"Actualiser");
 }
 
+// ---------- Glisser-déposer et collage sur le bureau ----------
+
+pub unsafe fn handle_file_drop(do_copy: bool) {
+    let desktop = explorer::desktop_folder_path();
+    if desktop.len == 0 {
+        return;
+    }
+    explorer::drop_files_to(desktop.get(), do_copy);
+    toast(if do_copy {
+        b"Fichier(s) copi\xE9(s) sur le Bureau."
+    } else {
+        b"Fichier(s) d\xE9plac\xE9(s) sur le Bureau."
+    });
+}
+
 // ---------- Icônes du bureau ----------
 
 const DESKTOP_ICONS: [(&[u8], Glyph); 5] = [
@@ -3950,6 +3965,18 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             repaint(hwnd);
         }
         return;
+    }
+    if ch == 0 && vk == 0x56 {
+        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        if ctrl {
+            let desktop = explorer::desktop_folder_path();
+            if desktop.len > 0 {
+                explorer::paste_to(desktop.get());
+                toast(b"Fichier(s) coll\xE9(s) sur le Bureau.");
+            }
+            repaint(hwnd);
+            return;
+        }
     }
     if wm::on_key(vk, ch) {
         repaint(hwnd);

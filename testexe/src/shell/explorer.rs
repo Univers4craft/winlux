@@ -260,6 +260,8 @@ static mut HOVER: i32 = -1;
 static mut HOVER_ZONE: u32 = 0;
 static mut LASSO: Option<(i32, i32, i32, i32)> = None;
 static mut SCROLL_DRAG: Option<(i32, i32)> = None;
+static mut FILE_DRAG_START: Option<(i32, i32)> = None;
+static mut FILE_DRAG_ACTIVE: bool = false;
 static mut MESSAGE: Field = EMPTY_FIELD;
 static mut MESSAGE_UNTIL: u32 = 0;
 
@@ -3365,6 +3367,155 @@ unsafe fn paste() {
     }
 }
 
+// ---------- Drag & drop de fichiers ----------
+
+pub unsafe fn file_drag_active() -> bool {
+    FILE_DRAG_ACTIVE
+}
+
+pub unsafe fn cancel_file_drag() {
+    FILE_DRAG_START = None;
+    FILE_DRAG_ACTIVE = false;
+}
+
+pub unsafe fn drop_files_to(dest: &[u8], do_copy: bool) {
+    let p = pane();
+    if p.loc.is(HOME) || p.loc.is(PC) {
+        cancel_file_drag();
+        return;
+    }
+    let mut failed = 0u32;
+    for v in 0..p.nview {
+        let i = p.view[v] as usize;
+        if !is_sel(p, i) {
+            continue;
+        }
+        let mut src = [0u8; PATH_LEN + NAME_LEN + 2];
+        let sn = item_path(p, i, &mut src);
+        if sn == 0 {
+            failed += 1;
+            continue;
+        }
+        if !safe_destination(&src[..sn], dest) {
+            failed += 1;
+            continue;
+        }
+        let name = p.entries[i].name();
+        let (base, ext) = match name.iter().rposition(|&c| c == b'.') {
+            Some(k) if k > 0 => (&name[..k], &name[k..]),
+            _ => (name, &b""[..]),
+        };
+        let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
+        let mut direct = [0u8; PATH_LEN + NAME_LEN + 2];
+        let dn = join(&mut direct, dest, name);
+        if dn == 0 {
+            failed += 1;
+            continue;
+        }
+        let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
+        let n = if GetFileAttributesW(wstr(&mut wd, &direct[..dn])) == u32::MAX {
+            dst[..dn + 1].copy_from_slice(&direct[..dn + 1]);
+            dn
+        } else {
+            unique_name(dest, base, ext, &mut dst)
+        };
+        if n == 0 {
+            failed += 1;
+            continue;
+        }
+        let mut wsrc_b = [0u16; PATH_LEN + NAME_LEN + 2];
+        let mut wdst_b = [0u16; PATH_LEN + NAME_LEN + 2];
+        let moved = !do_copy
+            && MoveFileW(wstr(&mut wsrc_b, &src[..sn]), wstr(&mut wdst_b, &dst[..n])) != 0;
+        let ok = moved || copy_tree(&src[..sn], &dst[..n]);
+        if !ok {
+            failed += 1;
+        }
+    }
+    if failed > 0 {
+        notify(if do_copy {
+            b"Certains fichiers n'ont pas pu \xEAtre copi\xE9s."
+        } else {
+            b"Certains fichiers n'ont pas pu \xEAtre d\xE9plac\xE9s."
+        });
+    }
+    reload(p);
+    let t = tab();
+    if t.dual {
+        let other = &mut t.panes[1 - t.focus];
+        reload(other);
+    }
+    cancel_file_drag();
+}
+
+pub unsafe fn paste_to(dest: &[u8]) {
+    if NCLIP == 0 {
+        return;
+    }
+    let mut failed = 0u32;
+    for k in 0..NCLIP {
+        let src = CLIP[k];
+        if !safe_destination(src.get(), dest) {
+            failed += 1;
+            continue;
+        }
+        let name = last_component(src.get());
+        let (base, ext) = match name.iter().rposition(|&c| c == b'.') {
+            Some(i) if i > 0 => (&name[..i], &name[i..]),
+            _ => (name, &b""[..]),
+        };
+        let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
+        let mut direct = [0u8; PATH_LEN + NAME_LEN + 2];
+        let dn = join(&mut direct, dest, name);
+        if dn == 0 {
+            failed += 1;
+            continue;
+        }
+        let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
+        let n = if GetFileAttributesW(wstr(&mut wd, &direct[..dn])) == u32::MAX {
+            dst[..dn + 1].copy_from_slice(&direct[..dn + 1]);
+            dn
+        } else {
+            unique_name(dest, base, ext, &mut dst)
+        };
+        if n == 0 {
+            failed += 1;
+            continue;
+        }
+        let mut wsrc_b = [0u16; PATH_LEN + NAME_LEN + 2];
+        let mut wdst_b = [0u16; PATH_LEN + NAME_LEN + 2];
+        let moved = CLIP_CUT
+            && MoveFileW(wstr(&mut wsrc_b, src.get()), wstr(&mut wdst_b, &dst[..n])) != 0;
+        let ok = moved || copy_tree(src.get(), &dst[..n]);
+        if !ok {
+            failed += 1;
+        }
+    }
+    if CLIP_CUT {
+        NCLIP = 0;
+    }
+    if failed > 0 {
+        notify(b"Collage refus\xE9 ou incomplet.");
+    }
+}
+
+pub fn desktop_folder_path() -> Path {
+    place_path(0)
+}
+
+pub unsafe fn drag_glyph() -> Glyph {
+    let p = pane();
+    if let Some(i) = first_sel(p) {
+        glyph_of(p.entries[i].kind)
+    } else {
+        Glyph::File
+    }
+}
+
+pub unsafe fn drag_count() -> usize {
+    sel_count(pane())
+}
+
 /// Envoie la sélection dans la Corbeille (format freedesktop.org, partagé
 /// avec les gestionnaires de fichiers Linux).
 unsafe fn delete_selection() {
@@ -3804,6 +3955,17 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 }
                 return true;
             }
+            if let Some((sx, sy)) = FILE_DRAG_START {
+                let dx = (x - sx).abs();
+                let dy = (y - sy).abs();
+                if dx > 5 || dy > 5 {
+                    FILE_DRAG_ACTIVE = true;
+                    FILE_DRAG_START = None;
+                }
+            }
+            if FILE_DRAG_ACTIVE {
+                return true;
+            }
             update_hover(&geo, x, y)
                 || inside(&f.title, x, y)
                 || inside(&geo.toolbar, x, y)
@@ -3813,9 +3975,28 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 || MENU != Menu::None
         }
         Mouse::Up => {
+            let was_file_drag = FILE_DRAG_ACTIVE;
             let was = LASSO.is_some() || SCROLL_DRAG.is_some();
             LASSO = None;
             SCROLL_DRAG = None;
+            FILE_DRAG_START = None;
+            if was_file_drag {
+                let t = tab();
+                if t.dual {
+                    let geo = geo(f);
+                    let other = 1 - t.focus;
+                    let r = geo.panes[other];
+                    if inside(&r, x, y) {
+                        let dest_loc = t.panes[other].loc;
+                        if !dest_loc.is(HOME) && !dest_loc.is(PC) {
+                            let do_copy = ctrl();
+                            drop_files_to(dest_loc.get(), do_copy);
+                        }
+                    }
+                }
+                cancel_file_drag();
+                return true;
+            }
             was
         }
         Mouse::Wheel(delta) => {
@@ -4048,6 +4229,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
                             set_sel(pn, idx, true);
                             pn.anchor = idx;
                         }
+                        FILE_DRAG_START = Some((x, y));
                     }
                 }
             }
