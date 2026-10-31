@@ -18,7 +18,7 @@ mkdir "$guest"
 cp -a "$stage/." "$guest/"
 mkdir -p "$guest/opt/winlux-test/scripts" "$guest/usr/lib/grub" "$guest/usr/share"
 cp "$iso" "$guest/opt/winlux-test/source.iso"
-cp "$root/scripts/install.sh" "$root/scripts/install-safety.sh" "$guest/opt/winlux-test/scripts/"
+cp "$root/scripts/install.sh" "$root/scripts/install-safety.sh" "$root/scripts/winlux-grub-theme.sh" "$root/scripts/winlux-secureboot.sh" "$guest/opt/winlux-test/scripts/"
 cp "$root/scripts/test-install-guest-init.sh" "$guest/install-init"
 chmod +x "$guest/install-init"
 copy_binary() {
