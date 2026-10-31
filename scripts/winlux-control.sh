@@ -173,7 +173,7 @@ perform() {
             elif have amixer; then
                 case "$action" in volume-up) amixer set Master 5%+ ;; volume-down) amixer set Master 5%- ;; *) amixer set Master toggle ;; esac
             else echo 'Aucun mixeur audio installe.' >&2; return 1; fi ;;
-        keyboard-fr|keyboard-us)
+        keyboard-fr|keyboard-us|keyboard-de)
             layout=${action#keyboard-}
             have setxkbmap || { echo 'setxkbmap indisponible' >&2; return 1; }
             setxkbmap -layout "$layout" || return

@@ -63,7 +63,7 @@ const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
 static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
 static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
-static mut LOCALE_LANG: usize = 0; // 0=fr, 1=en
+static mut LOCALE_LANG: usize = 0; // 0=fr, 1=en, 2=de
 static mut LOCALE_TZ: usize = 0; // index dans TIMEZONES
 const TIMEZONES: [(&[u8], &[u8]); 8] = [
     (b"Europe/Paris", b"UTC+1 / UTC+2 (\xE9t\xE9)"),
@@ -442,8 +442,10 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (11, 7) => value(b"browser_default") == b"firefox",
         (14, 0) => { let v = value(b"locale_lang"); v.is_empty() || v == b"fr" },
         (14, 1) => value(b"locale_lang") == b"en",
+        (14, 2) => value(b"locale_lang") == b"de",
         (14, 3) => value(b"layout") == b"fr",
         (14, 4) => value(b"layout") == b"us",
+        (14, 5) => value(b"layout") == b"de",
         (14, id @ 6..=13) => LOCALE_TZ == (id - 6) as usize,
         (15, 0) => unsafe { crate::explorer::current_view() == 1 },
         (15, 1) => unsafe { crate::explorer::current_view() == 5 },
@@ -1349,11 +1351,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 b"Langue du syst\xE8me",
                 match value(b"locale_lang") {
                     b"en" => b"English",
+                    b"de" => b"Deutsch",
                     _ => b"Fran\xE7ais",
                 },
             );
             button(g, &c, 0, 0, b"Fran\xE7ais", 0);
             button(g, &c, 0, 1, b"English", 1);
+            button(g, &c, 0, 2, b"Deutsch", 2);
             row(
                 g,
                 &c,
@@ -1363,6 +1367,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             button(g, &c, 2, 0, b"AZERTY fran\xE7ais", 3);
             button(g, &c, 2, 1, b"QWERTY US", 4);
+            button(g, &c, 2, 2, b"QWERTZ DE", 5);
             let tz = value(b"timezone");
             row(
                 g,
@@ -1797,8 +1802,13 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             LOCALE_LANG = 1;
             Some(c"locale-en")
         }
+        (14, 2) => {
+            LOCALE_LANG = 2;
+            Some(c"locale-de")
+        }
         (14, 3) => Some(c"keyboard-fr"),
         (14, 4) => Some(c"keyboard-us"),
+        (14, 5) => Some(c"keyboard-de"),
         (14, id @ 6..=13) => {
             LOCALE_TZ = (id - 6) as usize;
             return true;
