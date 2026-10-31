@@ -53,9 +53,7 @@ thread_local! {static LAST_WSA_ERROR:std::cell::Cell<i32>=const{std::cell::Cell:
 fn sockets() -> &'static Mutex<HashSet<usize>> {
     SOCKETS.get_or_init(|| Mutex::new(HashSet::new()))
 }
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 fn set_error(e: i32) {
     LAST_WSA_ERROR.with(|x| x.set(e));
 }

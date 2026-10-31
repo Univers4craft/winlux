@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::process::{Child, Command};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Mutex, MutexGuard, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 const ERROR_SUCCESS: i32 = 0;
 const ERROR_ACCESS_DENIED: i32 = 5;
@@ -43,9 +43,7 @@ enum ScmHandle {
 static SERVICES: OnceLock<Mutex<HashMap<String, ServiceRecord>>> = OnceLock::new();
 static HANDLES: OnceLock<Mutex<HashMap<usize, ScmHandle>>> = OnceLock::new();
 static NEXT: AtomicUsize = AtomicUsize::new(0x5000_0000);
-fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 fn services() -> &'static Mutex<HashMap<String, ServiceRecord>> {
     SERVICES.get_or_init(|| Mutex::new(HashMap::new()))
 }

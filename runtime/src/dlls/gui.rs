@@ -300,9 +300,7 @@ impl Window {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 
 fn classes() -> &'static Mutex<HashMap<String, ClassInfo>> {
     static C: OnceLock<Mutex<HashMap<String, ClassInfo>>> = OnceLock::new();

@@ -7,10 +7,9 @@
 //! résolution change (fenêtre de VM redimensionnée), le bureau se réadapte.
 //! Les textes sont en Windows-1252 car ils passent par `TextOutA`.
 
-#[path = "utilities.rs"]
-mod utilities;
 use crate::explorer;
 use crate::gfx::*;
+use crate::notifications;
 use crate::wm::{self, Gfx, Mouse};
 use winlux_testexe::*;
 
@@ -21,6 +20,8 @@ const START_OPEN_MS: i32 = 230;
 const START_CLOSE_MS: i32 = 140;
 const SPLASH_MIN_MS: u32 = 2600;
 const INTRO_MS: i32 = 520;
+const RECENTER_MS: i32 = 200;
+const TRAY_RESERVED: i32 = 236;
 
 pub static mut SCREEN_W: i32 = 1280;
 pub static mut SCREEN_H: i32 = 720;
@@ -36,7 +37,7 @@ static mut HOVER_BUTTON: i32 = -1;
 static mut HOVER_START_ITEM: i32 = -1;
 static mut ICON_X: [i32; 5] = [12, 12, 12, 108, 108];
 static mut ICON_Y: [i32; 5] = [12, 108, 204, 12, 108];
-static mut PINNED_APPS: u8 = 15; // Explorer, Paramètres, Bloc-notes, Utilitaires
+static mut PINNED_APPS: u8 = 15; // Explorer, Paramètres, Éditeur, Utilitaires
 static mut DESKTOP_SHORTCUTS: u8 = 0;
 static mut SHOW_SYSTEM_ICONS: bool = false; // Icônes système (PC, Documents, Corbeille) désactivées par défaut
 static mut START_SHOW_ALL_APPS: bool = false; // Afficher toutes les applications au lieu des épinglées
@@ -47,10 +48,17 @@ static mut SHORTCUTS: [(&'static [u8], &'static [u8], i32, i32); 16] = [(b"", b"
 static mut SHORTCUTS_COUNT: usize = 0;
 static mut START_SEARCH: [u8; 64] = [0; 64]; // Texte de recherche
 static mut START_SEARCH_LEN: usize = 0;
-static mut ENABLE_BLUR: bool = true; // Effet de flou activé
-static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
-static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
-static mut AUTO_THEME: bool = false; // Thème automatique
+static mut POWER_MENU: bool = false;
+static mut START_SEARCH_ACTIVE: bool = false;
+static mut SEARCH_OVERLAY: bool = false;
+static mut SEARCH_BUF: [u8; 64] = [0; 64];
+static mut SEARCH_BUF_LEN: usize = 0;
+static mut SEARCH_HOVER: i32 = -1;
+use crate::gfx::{ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS, AUTO_THEME};
+static mut RECENTER_ANIM: u32 = 0;
+static mut RECENTER_FROM: i32 = 0;
+static mut RECENTER_TARGET: i32 = 0;
+static mut PREV_TASKBAR_COUNT: i32 = 0;
 static mut CONTEXT_APP: Option<usize> = None;
 static mut CONTEXT_DESKTOP: Option<usize> = None;
 static mut CONTEXT_RECT: Rect = Rect {
@@ -81,11 +89,7 @@ static mut TOAST: [u8; 120] = [0; 120];
 static mut TOAST_LEN: usize = 0;
 static mut TOAST_START: u32 = 0;
 const TOAST_MS: i32 = 4500;
-/// Panneau de notifications (centre d'action simplifié).
-static mut NOTIF_PANEL: bool = false;
-static mut NOTIF_HISTORY: [[u8; 120]; 8] = [[0; 120]; 8];
-static mut NOTIF_LENS: [usize; 8] = [0; 8];
-static mut NOTIF_COUNT: usize = 0;
+/// Le panneau de notifications est dans `notifications.rs`.
 /// Atténuation du fond (0 = noir, 1000 = normal) pendant le fondu.
 static mut FADE: i32 = 1000;
 
@@ -96,15 +100,173 @@ fn since(t: u32) -> i32 {
     now().wrapping_sub(t).min(1_000_000) as i32
 }
 
+fn lower(c: u8) -> u8 {
+    match c {
+        b'A'..=b'Z' => c + 32,
+        0xC0..=0xDE if c != 0xD7 => c + 32,
+        _ => c,
+    }
+}
+
+fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.len() > hay.len() {
+        return false;
+    }
+    (0..=hay.len() - needle.len())
+        .any(|i| (0..needle.len()).all(|k| lower(hay[i + k]) == lower(needle[k])))
+}
+
+fn fuzzy_match(name: &[u8], query: &[u8]) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    if contains_ci(name, query) {
+        return true;
+    }
+    let mut qi = 0;
+    for &c in name {
+        if qi < query.len() && lower(c) == lower(query[qi]) {
+            qi += 1;
+        }
+    }
+    qi == query.len()
+}
+
+fn fuzzy_score(name: &[u8], query: &[u8]) -> i32 {
+    if query.is_empty() {
+        return 0;
+    }
+    if contains_ci(name, query) {
+        if name.len() >= query.len()
+            && (0..query.len()).all(|k| lower(name[k]) == lower(query[k]))
+        {
+            return 3; // prefix match
+        }
+        return 2; // substring match
+    }
+    1 // fuzzy only
+}
+
+#[derive(Clone, Copy)]
+struct SearchResult {
+    name: &'static [u8],
+    launch: Launch,
+    glyph: Glyph,
+    score: i32,
+}
+
+fn collect_results(query: &[u8], out: &mut [SearchResult; 16]) -> usize {
+    let mut count = 0usize;
+    for app in &PINNED {
+        if count >= 16 {
+            break;
+        }
+        if fuzzy_match(app.name, query) {
+            let s = fuzzy_score(app.name, query);
+            let mut dup = false;
+            for j in 0..count {
+                if out[j].name.as_ptr() == app.name.as_ptr() {
+                    dup = true;
+                    break;
+                }
+            }
+            if !dup {
+                out[count] = SearchResult {
+                    name: app.name,
+                    launch: app.launch,
+                    glyph: app.glyph,
+                    score: s,
+                };
+                count += 1;
+            }
+        }
+    }
+    for &(title, _, g, launch) in &RECOMMENDED {
+        if count >= 16 {
+            break;
+        }
+        if fuzzy_match(title, query) {
+            let s = fuzzy_score(title, query);
+            let mut dup = false;
+            for j in 0..count {
+                if out[j].name.as_ptr() == title.as_ptr() {
+                    dup = true;
+                    break;
+                }
+            }
+            if !dup {
+                out[count] = SearchResult {
+                    name: title,
+                    launch,
+                    glyph: g,
+                    score: s,
+                };
+                count += 1;
+            }
+        }
+    }
+    unsafe {
+        for i in 0..ALL_APPS_COUNT {
+            if count >= 16 {
+                break;
+            }
+            let (name, exec, _cat) = ALL_APPS[i];
+            if fuzzy_match(name, query) {
+                let s = fuzzy_score(name, query);
+                let mut dup = false;
+                for j in 0..count {
+                    if out[j].name.as_ptr() == name.as_ptr() {
+                        dup = true;
+                        break;
+                    }
+                }
+                if !dup {
+                    out[count] = SearchResult {
+                        name,
+                        launch: Launch::Exec(exec),
+                        glyph: Glyph::Exe,
+                        score: s,
+                    };
+                    count += 1;
+                }
+            }
+        }
+    }
+    // Sort by score descending (simple insertion sort).
+    for i in 1..count {
+        let mut j = i;
+        while j > 0 && out[j].score > out[j - 1].score {
+            let tmp = SearchResult {
+                name: out[j].name,
+                launch: out[j].launch,
+                glyph: out[j].glyph,
+                score: out[j].score,
+            };
+            out[j] = SearchResult {
+                name: out[j - 1].name,
+                launch: out[j - 1].launch,
+                glyph: out[j - 1].glyph,
+                score: out[j - 1].score,
+            };
+            out[j - 1] = tmp;
+            j -= 1;
+        }
+    }
+    count
+}
+
 fn init_apps() {
     unsafe {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 29] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 30] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
-            (b"Bloc-notes", b"mousepad", 1),
+            (b"\xC9\x64iteur", b"mousepad", 1),
             (b"Calculatrice", b"calc.exe", 1),
             (b"Capture d'\xE9cran", b"screenshot.exe", 1),
             (b"Visionneuse", b"imageviewer.exe", 1),
@@ -131,6 +293,7 @@ fn init_apps() {
             (b"Disques", b"gnome-disks", 9),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
             (b"Gestionnaire des t\xE2ches", b"taskmgr", 9),
+            (b"Nettoyage de disque", b"diskcleaner", 9),
         ];
         for (name, exec, cat) in apps.iter() {
             if ALL_APPS_COUNT < 64 {
@@ -156,17 +319,44 @@ fn layout() -> Layout {
     let bar_top = h - TASKBAR_HEIGHT;
     let count = taskbar_count();
     let buttons_w = count * BUTTON + (count - 1) * BUTTON_GAP;
+    let available = w - TRAY_RESERVED;
     let buttons_x = if unsafe { ALIGN_LEFT } {
         12
     } else {
-        (w - buttons_w) / 2
+        unsafe {
+            let target = (available - buttons_w) / 2;
+            if PREV_TASKBAR_COUNT == 0 {
+                PREV_TASKBAR_COUNT = count;
+                RECENTER_TARGET = target;
+                RECENTER_FROM = target;
+            } else if count != PREV_TASKBAR_COUNT {
+                RECENTER_FROM = if RECENTER_ANIM != 0 {
+                    let prev_t = ease_out(since(RECENTER_ANIM), RECENTER_MS);
+                    RECENTER_FROM + (RECENTER_TARGET - RECENTER_FROM) * prev_t / 1000
+                } else {
+                    RECENTER_TARGET
+                };
+                RECENTER_TARGET = target;
+                RECENTER_ANIM = now();
+                PREV_TASKBAR_COUNT = count;
+            }
+            if RECENTER_ANIM != 0 && ENABLE_SMOOTH_ANIM {
+                let t = ease_out(since(RECENTER_ANIM), RECENTER_MS);
+                if t >= 1000 {
+                    RECENTER_ANIM = 0;
+                }
+                RECENTER_FROM + (RECENTER_TARGET - RECENTER_FROM) * t / 1000
+            } else {
+                target
+            }
+        }
     };
     let sw = 640.min(w - 24);
     let sh = 600.min(bar_top - 24);
     let sx = if unsafe { ALIGN_LEFT } {
         12
     } else {
-        (w - sw) / 2
+        (available - sw) / 2
     };
     let st = bar_top - 12 - sh;
     Layout {
@@ -282,8 +472,12 @@ unsafe fn set_start(open: bool) {
     if open {
         START_OPEN = true;
         START_CLOSING = false;
+        SEARCH_OVERLAY = false;
     } else if START_OPEN {
         START_CLOSING = true;
+        POWER_MENU = false;
+        START_SEARCH_LEN = 0;
+        START_SEARCH_ACTIVE = false;
     }
 }
 
@@ -635,7 +829,7 @@ fn context_rows(app: usize) -> i32 {
 }
 unsafe fn open_context(app: usize, desktop: Option<usize>, x: i32, y: i32) {
     set_start(false);
-    NOTIF_PANEL = false;
+    notifications::set_open(false);
     DRAGGED_ICON = -1;
     CONTEXT_APP = Some(app);
     CONTEXT_DESKTOP = desktop;
@@ -648,7 +842,7 @@ unsafe fn open_context(app: usize, desktop: Option<usize>, x: i32, y: i32) {
 }
 unsafe fn open_context_desktop(x: i32, y: i32) {
     set_start(false);
-    NOTIF_PANEL = false;
+    notifications::set_open(false);
     DRAGGED_ICON = -1;
     CONTEXT_APP = Some(usize::MAX);
     CONTEXT_DESKTOP = None;
@@ -788,37 +982,22 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     };
     let r = CONTEXT_RECT;
     let p = pal();
-    fill(hdc, b, r.left, r.top, r.right, r.bottom, p.border);
-    fill(
-        hdc,
-        b,
-        r.left + 1,
-        r.top + 1,
-        r.right - 1,
-        r.bottom - 1,
-        p.surface,
-    );
+    round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 8, p.border);
+    round_rect(hdc, b, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, 7, p.surface);
     if app == usize::MAX {
         let labels: [&[u8]; 5] = [
             b"Ouvrir l'Explorateur",
             b"Ouvrir le terminal",
             b"Ouvrir les Param\xE8tres",
-            b"Ouvrir le Bloc-notes",
+            b"Ouvrir l'\xC9\x64iteur",
             b"Ouvrir les Utilitaires",
         ];
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
             if row == CONTEXT_HOVER {
-                fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+                round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
             }
-            text(
-                hdc,
-                f.body,
-                p.text,
-                r.left + 12,
-                y + 8,
-                labels[row as usize],
-            );
+            text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
         }
         return;
     }
@@ -837,16 +1016,9 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
             if row == CONTEXT_HOVER {
-                fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+                round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
             }
-            text(
-                hdc,
-                f.body,
-                p.text,
-                r.left + 12,
-                y + 8,
-                labels[row as usize],
-            );
+            text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
         }
         return;
     }
@@ -870,16 +1042,9 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     for row in 0..context_rows(app) {
         let y = r.top + 4 + row * 34;
         if row == CONTEXT_HOVER {
-            fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+            round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
         }
-        text(
-            hdc,
-            f.body,
-            p.text,
-            r.left + 12,
-            y + 8,
-            labels[row as usize],
-        );
+        text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
     }
 }
 
@@ -961,8 +1126,9 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         let app = taskbar_app(i);
         let g = match app {
             Some(wm::APP_EXPLORER) => Glyph::Folder,
-            Some(wm::APP_NOTEPAD) => Glyph::File,
+            Some(wm::APP_NOTEPAD) => Glyph::Code,
             Some(wm::APP_UTILITIES) => Glyph::Tools,
+            Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1016,6 +1182,19 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         }
     }
 
+    // Indicateur de bureau virtuel (entre les boutons d'apps et la zone de notification)
+    if wm::desktop_count() > 1 {
+        let count = taskbar_count();
+        let ind_x = l.buttons_x + count * (BUTTON + BUTTON_GAP) + 8;
+        let ind_y = top + 8;
+        let cur = wm::current_desktop();
+        let total = wm::desktop_count();
+        for d in 0..total {
+            let dx = ind_x + d as i32 * 14;
+            let c = if d == cur { ACCENT } else { rgb(0x5A, 0x5E, 0x68) };
+            round_rect(hdc, b, dx, ind_y + 14, dx + 10, ind_y + 20, 2, c);
+        }
+    }
     // Zone de notification : chevron, réseau, volume, batterie, horloge.
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
@@ -1123,8 +1302,8 @@ const PINNED: [App; 8] = [
         launch: Launch::Settings,
     },
     App {
-        name: b"Bloc-notes",
-        glyph: Glyph::File,
+        name: b"\xC9\x64iteur",
+        glyph: Glyph::Code,
         launch: Launch::Notepad,
     },
     App {
@@ -1263,6 +1442,10 @@ unsafe fn launch(what: Launch) {
                 wm::open(wm::APP_TASKMGR);
                 return;
             }
+            if cmd == b"diskcleaner" {
+                wm::open(wm::APP_CLEANUP);
+                return;
+            }
             let mut wcmd = [0u16; 256];
             for (i, &b) in cmd.iter().enumerate() {
                 if i < 255 {
@@ -1331,22 +1514,19 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, title);
     // Barre de recherche
     let search_y = y + 40;
-    round_rect(
-        hdc,
-        b,
-        inner_l,
-        search_y,
-        inner_r,
-        search_y + 36,
-        18,
-        rgb(0x31, 0x35, 0x3F),
-    );
+    let search_bg = if unsafe { START_SEARCH_ACTIVE } {
+        rgb(0x3A, 0x3F, 0x4A)
+    } else {
+        rgb(0x31, 0x35, 0x3F)
+    };
+    round_rect(hdc, b, inner_l, search_y, inner_r, search_y + 36, 18, search_bg);
+    glyph(hdc, b, f, Glyph::Search, inner_l + 10, search_y + 8, 18);
     if unsafe { START_SEARCH_LEN > 0 } {
         text(
             hdc,
             f.body,
             rgb(0xE6, 0xE6, 0xE6),
-            inner_l + 8,
+            inner_l + 34,
             search_y + 8,
             unsafe { &START_SEARCH[..START_SEARCH_LEN] },
         );
@@ -1355,179 +1535,90 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             hdc,
             f.body,
             rgb(0x88, 0x88, 0x88),
-            inner_l + 8,
+            inner_l + 34,
             search_y + 8,
             b"Rechercher...",
         );
     }
-    let all: &[u8] = unsafe {
-        if START_SHOW_ALL_APPS {
-            b"\xC9pingl\xE9"
-        } else {
-            b"Toutes mes applications"
-        }
-    };
-    let all_w = text_width(all, 11) + 20;
-    text(
-        hdc,
-        f.small,
-        rgb(0xE6, 0xE6, 0xE6),
-        inner_r - all_w + 10,
-        y + 2,
-        all,
-    );
-    for (i, app) in PINNED
-        .iter()
-        .take((PIN_COLS * pin_rows(s)) as usize)
-        .enumerate()
-    {
-        let c = pinned_cell(s, i as i32);
-        if HOVER_START_ITEM == i as i32 {
-            round_rect(
-                hdc,
-                b,
-                c.left,
-                c.top,
-                c.right,
-                c.bottom,
-                5,
-                rgb(0x31, 0x35, 0x3F),
-            );
-        }
-        let cx = (c.left + c.right) / 2;
-        glyph(hdc, b, f, app.glyph, cx - 16, c.top + 10, 32);
-        text_centered(
-            hdc,
-            f.small,
-            11,
-            rgb(0xE6, 0xE6, 0xE6),
-            cx,
-            c.top + 52,
-            app.name,
-        );
-    }
-
-    // Recommandé / Catégories.
-    let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
-    if START_SHOW_ALL_APPS {
-        // Afficher les catégories
+    if unsafe { START_SEARCH_LEN } > 0 {
+        // Mode recherche : afficher les résultats.
+        let results_y = search_y + 48;
         text(
             hdc,
             f.title,
             rgb(0xF2, 0xF2, 0xF2),
             inner_l + 4,
-            ry,
-            b"Cat\xE9gories",
+            results_y,
+            b"R\xE9sultats",
         );
-        let categories: [&[u8]; 12] = [
-            b"Toutes",
-            b"Accessoires",
-            b"Bureau",
-            b"Graphisme",
-            b"Internet",
-            b"Son et vid\xE9o",
-            b"Web",
-            b"Programmation",
-            b"Pr\xE9f\xE9rences",
-            b"Administration",
-            b"Favoris",
-            b"R\xE9cents",
-        ];
-        for (i, cat) in categories.iter().enumerate() {
-            let c = category_cell(s, i as i32);
-            if START_CATEGORY == i as i32 {
+        let mut results = [SearchResult {
+            name: b"",
+            launch: Launch::Explorer,
+            glyph: Glyph::Search,
+            score: 0,
+        }; 16];
+        let count = collect_results(unsafe { &START_SEARCH[..START_SEARCH_LEN] }, &mut results);
+        if count == 0 {
+            text(
+                hdc,
+                f.body,
+                rgb(0x88, 0x88, 0x88),
+                inner_l + 4,
+                results_y + 36,
+                b"Aucun r\xE9sultat",
+            );
+        }
+        for i in 0..count {
+            let iy = results_y + 36 + (i as i32) * 44;
+            if iy + 40 >= s.bottom - 72 {
+                break;
+            }
+            if HOVER_START_ITEM == 600 + i as i32 {
                 round_rect(
                     hdc,
                     b,
-                    c.left,
-                    c.top,
-                    c.right,
-                    c.bottom,
+                    inner_l,
+                    iy,
+                    inner_r,
+                    iy + 40,
                     5,
-                    rgb(0x58, 0x65, 0xF2),
+                    rgb(0x31, 0x35, 0x3F),
                 );
             }
-            text_centered(
-                hdc,
-                f.small,
-                11,
-                if START_CATEGORY == i as i32 {
-                    rgb(0xFF, 0xFF, 0xFF)
-                } else {
-                    rgb(0xE6, 0xE6, 0xE6)
-                },
-                (c.left + c.right) / 2,
-                c.top + 10,
-                cat,
-            );
-        }
-        // Afficher les applications de la catégorie sélectionnée
-        let apps_y = ry + 120;
-        text(
-            hdc,
-            f.title,
-            rgb(0xF2, 0xF2, 0xF2),
-            inner_l + 4,
-            apps_y,
-            b"Applications",
-        );
-        let mut displayed = 0;
-        for i in 0..unsafe { ALL_APPS_COUNT } {
-            let (name, _exec, cat) = unsafe { ALL_APPS[i] };
-            let matches_search = unsafe {
-                START_SEARCH_LEN == 0
-                    || name.len() >= START_SEARCH_LEN && name.windows(START_SEARCH_LEN).any(|w| {
-                        w.iter()
-                            .zip(START_SEARCH[..START_SEARCH_LEN].iter())
-                            .all(|(&a, &b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
-                    })
-            };
-            if (START_CATEGORY == 0 || cat == START_CATEGORY) && matches_search {
-                let app_y = apps_y + 40 + (displayed as i32) * 44;
-                if app_y + 40 < s.bottom - 72 {
-                    text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), inner_l + 4, app_y, name);
-                    displayed += 1;
-                }
-            }
-        }
-        // Afficher les raccourcis
-        if unsafe { SHORTCUTS_COUNT } > 0 {
-            let shortcuts_y = apps_y + 40 + (displayed as i32) * 44 + 20;
+            glyph(hdc, b, f, results[i].glyph, inner_l + 8, iy + 8, 24);
             text(
                 hdc,
-                f.title,
-                rgb(0xF2, 0xF2, 0xF2),
-                inner_l + 4,
-                shortcuts_y,
-                b"Raccourcis",
+                f.body,
+                rgb(0xE6, 0xE6, 0xE6),
+                inner_l + 40,
+                iy + 10,
+                results[i].name,
             );
-            for i in 0..unsafe { SHORTCUTS_COUNT } {
-                let (name, _exec, _x, _y) = unsafe { SHORTCUTS[i] };
-                let shortcut_y = shortcuts_y + 40 + (i as i32) * 44;
-                if shortcut_y + 40 < s.bottom - 72 {
-                    text(
-                        hdc,
-                        f.body,
-                        rgb(0xE6, 0xE6, 0xE6),
-                        inner_l + 4,
-                        shortcut_y,
-                        name,
-                    );
-                }
-            }
         }
-    } else if ry + 150 < s.bottom - 72 {
+    } else {
+        let all: &[u8] = unsafe {
+            if START_SHOW_ALL_APPS {
+                b"\xC9pingl\xE9"
+            } else {
+                b"Toutes mes applications"
+            }
+        };
+        let all_w = text_width(all, 11) + 20;
         text(
             hdc,
-            f.title,
-            rgb(0xF2, 0xF2, 0xF2),
-            inner_l + 4,
-            ry,
-            b"Recommand\xE9",
+            f.small,
+            rgb(0xE6, 0xE6, 0xE6),
+            inner_r - all_w + 10,
+            y + 2,
+            all,
         );
-        for (i, (title, sub, g, _)) in RECOMMENDED.iter().enumerate() {
-            let c = recommended_cell(s, i as i32);
-            if HOVER_START_ITEM == 100 + i as i32 {
+        for (i, app) in PINNED
+            .iter()
+            .take((PIN_COLS * pin_rows(s)) as usize)
+            .enumerate()
+        {
+            let c = pinned_cell(s, i as i32);
+            if HOVER_START_ITEM == i as i32 {
                 round_rect(
                     hdc,
                     b,
@@ -1539,23 +1630,158 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     rgb(0x31, 0x35, 0x3F),
                 );
             }
-            glyph(hdc, b, f, *g, c.left + 8, c.top + 10, 28);
-            text(
-                hdc,
-                f.body,
-                rgb(0xF2, 0xF2, 0xF2),
-                c.left + 48,
-                c.top + 8,
-                title,
-            );
-            text(
+            let cx = (c.left + c.right) / 2;
+            glyph(hdc, b, f, app.glyph, cx - 16, c.top + 10, 32);
+            text_centered(
                 hdc,
                 f.small,
-                rgb(0x9A, 0xA3, 0xAE),
-                c.left + 48,
-                c.top + 26,
-                sub,
+                11,
+                rgb(0xE6, 0xE6, 0xE6),
+                cx,
+                c.top + 52,
+                app.name,
             );
+        }
+
+        // Recommandé / Catégories.
+        let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
+        if START_SHOW_ALL_APPS {
+            text(
+                hdc,
+                f.title,
+                rgb(0xF2, 0xF2, 0xF2),
+                inner_l + 4,
+                ry,
+                b"Cat\xE9gories",
+            );
+            let categories: [&[u8]; 12] = [
+                b"Toutes",
+                b"Accessoires",
+                b"Bureau",
+                b"Graphisme",
+                b"Internet",
+                b"Son et vid\xE9o",
+                b"Web",
+                b"Programmation",
+                b"Pr\xE9f\xE9rences",
+                b"Administration",
+                b"Favoris",
+                b"R\xE9cents",
+            ];
+            for (i, cat) in categories.iter().enumerate() {
+                let c = category_cell(s, i as i32);
+                if START_CATEGORY == i as i32 {
+                    round_rect(
+                        hdc,
+                        b,
+                        c.left,
+                        c.top,
+                        c.right,
+                        c.bottom,
+                        5,
+                        rgb(0x58, 0x65, 0xF2),
+                    );
+                }
+                text_centered(
+                    hdc,
+                    f.small,
+                    11,
+                    if START_CATEGORY == i as i32 {
+                        rgb(0xFF, 0xFF, 0xFF)
+                    } else {
+                        rgb(0xE6, 0xE6, 0xE6)
+                    },
+                    (c.left + c.right) / 2,
+                    c.top + 10,
+                    cat,
+                );
+            }
+            let apps_y = ry + 120;
+            text(
+                hdc,
+                f.title,
+                rgb(0xF2, 0xF2, 0xF2),
+                inner_l + 4,
+                apps_y,
+                b"Applications",
+            );
+            let mut displayed = 0;
+            for i in 0..unsafe { ALL_APPS_COUNT } {
+                let (name, _exec, cat) = unsafe { ALL_APPS[i] };
+                if START_CATEGORY == 0 || cat == START_CATEGORY {
+                    let app_y = apps_y + 40 + (displayed as i32) * 44;
+                    if app_y + 40 < s.bottom - 72 {
+                        text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), inner_l + 4, app_y, name);
+                        displayed += 1;
+                    }
+                }
+            }
+            if unsafe { SHORTCUTS_COUNT } > 0 {
+                let shortcuts_y = apps_y + 40 + (displayed as i32) * 44 + 20;
+                text(
+                    hdc,
+                    f.title,
+                    rgb(0xF2, 0xF2, 0xF2),
+                    inner_l + 4,
+                    shortcuts_y,
+                    b"Raccourcis",
+                );
+                for i in 0..unsafe { SHORTCUTS_COUNT } {
+                    let (name, _exec, _x, _y) = unsafe { SHORTCUTS[i] };
+                    let shortcut_y = shortcuts_y + 40 + (i as i32) * 44;
+                    if shortcut_y + 40 < s.bottom - 72 {
+                        text(
+                            hdc,
+                            f.body,
+                            rgb(0xE6, 0xE6, 0xE6),
+                            inner_l + 4,
+                            shortcut_y,
+                            name,
+                        );
+                    }
+                }
+            }
+        } else if ry + 150 < s.bottom - 72 {
+            text(
+                hdc,
+                f.title,
+                rgb(0xF2, 0xF2, 0xF2),
+                inner_l + 4,
+                ry,
+                b"Recommand\xE9",
+            );
+            for (i, (title, sub, g, _)) in RECOMMENDED.iter().enumerate() {
+                let c = recommended_cell(s, i as i32);
+                if HOVER_START_ITEM == 100 + i as i32 {
+                    round_rect(
+                        hdc,
+                        b,
+                        c.left,
+                        c.top,
+                        c.right,
+                        c.bottom,
+                        5,
+                        rgb(0x31, 0x35, 0x3F),
+                    );
+                }
+                glyph(hdc, b, f, *g, c.left + 8, c.top + 10, 28);
+                text(
+                    hdc,
+                    f.body,
+                    rgb(0xF2, 0xF2, 0xF2),
+                    c.left + 48,
+                    c.top + 8,
+                    title,
+                );
+                text(
+                    hdc,
+                    f.small,
+                    rgb(0x9A, 0xA3, 0xAE),
+                    c.left + 48,
+                    c.top + 26,
+                    sub,
+                );
+            }
         }
     }
 
@@ -1656,14 +1882,73 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         py + 12,
         rgb(0xE6, 0xE6, 0xE6),
     );
+    if POWER_MENU {
+        let pw = 160;
+        let ph = 3 * 36 + 8;
+        let mx = px + 24 - pw;
+        let my = py - ph - 8;
+        round_rect(hdc, b, mx, my, mx + pw, my + ph, 8, rgb(0x2D, 0x2D, 0x2D));
+        let items: [(&[u8], i32); 3] = [
+            (b"Arr\xEAter", 210),
+            (b"Red\xE9marrer", 211),
+            (b"Red\xE9marrer la session", 212),
+        ];
+        for (i, (label, id)) in items.iter().enumerate() {
+            let iy = my + 4 + i as i32 * 36;
+            if HOVER_START_ITEM == *id {
+                round_rect(hdc, b, mx + 4, iy, mx + pw - 4, iy + 34, 4, rgb(0x3D, 0x3D, 0x47));
+            }
+            text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), mx + 14, iy + 9, label);
+        }
+    }
 }
 
 /// Élément du menu Démarrer sous le pointeur : 0..11 épinglés, 100..103
-/// recommandés, 200 bascule d'alignement, 201 alimentation, 300 toutes mes applications,
+/// recommandés, 200 bascule d'alignement, 201 alimentation, 210 arrêter,
+/// 211 redémarrer, 212 redémarrer la session, 300 toutes mes applications,
 /// 301..312 catégories, 400..463 applications, -1 rien.
 fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     let s = &l.start;
+    if unsafe { POWER_MENU } {
+        let pr = power_rect(s);
+        let pw = 160;
+        let ph = 3 * 36 + 8;
+        let mx = pr.right - pw;
+        let my = pr.top - ph - 4;
+        if x >= mx && x < mx + pw && y >= my && y < my + ph {
+            let row = (y - my - 4) / 36;
+            return match row {
+                0 => 210,
+                1 => 211,
+                2 => 212,
+                _ => -1,
+            };
+        }
+    }
     let y0 = s.top + 82;
+    let inner_l = s.left + 28;
+    let inner_r = s.right - 28;
+    // Search results mode.
+    if unsafe { START_SEARCH_LEN } > 0 {
+        let search_y = y0 + 40;
+        let results_y = search_y + 48 + 36;
+        for i in 0..16i32 {
+            let iy = results_y + i * 44;
+            if iy + 40 >= s.bottom - 72 {
+                break;
+            }
+            if y >= iy && y < iy + 40 && x >= inner_l && x < inner_r {
+                return 600 + i;
+            }
+        }
+        if inside(&align_toggle_rect(s), x, y) {
+            return 200;
+        }
+        if inside(&power_rect(s), x, y) {
+            return 201;
+        }
+        return -1;
+    }
     let all_w = unsafe {
         text_width(
             if START_SHOW_ALL_APPS {
@@ -1674,7 +1959,6 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
             11,
         ) + 20
     };
-    let inner_r = s.right - 28;
     if x >= inner_r - all_w + 10 && x < inner_r + 10 && y >= y0 + 2 && y < y0 + 20 {
         return 300;
     }
@@ -1721,6 +2005,64 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     -1
 }
 
+// ---------- Overlay de recherche (Win+S) ----------
+
+unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if !SEARCH_OVERLAY {
+        return;
+    }
+    let w = 520.min(l.w - 40);
+    let h = 440.min(l.bar_top - 40);
+    let cx = l.w / 2;
+    let ox = cx - w / 2;
+    let oy = (l.bar_top - h) / 2;
+    // Fond semi-transparent.
+    fill(hdc, b, 0, 0, l.w, l.bar_top, rgb(0x0A, 0x0A, 0x0A));
+    panel(hdc, b, ox, oy, ox + w, oy + h, 12, rgb(0x1E, 0x21, 0x28), rgb(0x3A, 0x3F, 0x4A));
+    let pad = 24;
+    let il = ox + pad;
+    let ir = ox + w - pad;
+    // Titre.
+    glyph(hdc, b, f, Glyph::Search, il, oy + 20, 24);
+    text(hdc, f.large, rgb(0xF2, 0xF2, 0xF2), il + 32, oy + 18, b"Recherche");
+    // Champ de saisie.
+    let fy = oy + 60;
+    round_rect(hdc, b, il, fy, ir, fy + 40, 20, rgb(0x31, 0x35, 0x3F));
+    glyph(hdc, b, f, Glyph::Search, il + 12, fy + 10, 18);
+    if SEARCH_BUF_LEN > 0 {
+        text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), il + 36, fy + 10, &SEARCH_BUF[..SEARCH_BUF_LEN]);
+    } else {
+        text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 36, fy + 10, b"Tapez pour rechercher...");
+    }
+    // Résultats.
+    let ry = fy + 52;
+    if SEARCH_BUF_LEN > 0 {
+        let mut results = [SearchResult {
+            name: b"",
+            launch: Launch::Explorer,
+            glyph: Glyph::Search,
+            score: 0,
+        }; 16];
+        let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+        if count == 0 {
+            text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 4, ry + 8, b"Aucun r\xE9sultat");
+        }
+        for i in 0..count {
+            let iy = ry + (i as i32) * 44;
+            if iy + 40 >= oy + h - 16 {
+                break;
+            }
+            if SEARCH_HOVER == i as i32 {
+                round_rect(hdc, b, il, iy, ir, iy + 40, 5, rgb(0x31, 0x35, 0x3F));
+            }
+            glyph(hdc, b, f, results[i].glyph, il + 8, iy + 8, 24);
+            text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), il + 40, iy + 10, results[i].name);
+        }
+    } else {
+        text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 4, ry + 8, b"Recherchez des applications et des fichiers");
+    }
+}
+
 // ---------- Notifications ----------
 
 pub unsafe fn toast(msg: &[u8]) {
@@ -1728,20 +2070,7 @@ pub unsafe fn toast(msg: &[u8]) {
     TOAST[..n].copy_from_slice(&msg[..n]);
     TOAST_LEN = n;
     TOAST_START = now();
-    // Historique pour le panneau de notifications.
-    if NOTIF_COUNT < NOTIF_HISTORY.len() {
-        NOTIF_HISTORY[NOTIF_COUNT][..n].copy_from_slice(&msg[..n]);
-        NOTIF_LENS[NOTIF_COUNT] = n;
-        NOTIF_COUNT += 1;
-    } else {
-        for i in 1..NOTIF_HISTORY.len() {
-            NOTIF_HISTORY[i - 1] = NOTIF_HISTORY[i];
-            NOTIF_LENS[i - 1] = NOTIF_LENS[i];
-        }
-        let last = NOTIF_HISTORY.len() - 1;
-        NOTIF_HISTORY[last][..n].copy_from_slice(&msg[..n]);
-        NOTIF_LENS[last] = n;
-    }
+    notifications::push_simple(msg);
 }
 
 unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
@@ -1820,127 +2149,7 @@ unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     }
 }
 
-// ---------- Panneau de notifications ----------
-
-unsafe fn draw_notif_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
-    if !NOTIF_PANEL {
-        return;
-    }
-    let w = 380;
-    let x = l.w - w - 12;
-    let header_h = 44;
-    let row_h = 56;
-    let rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
-    let empty_h = 60;
-    let h = header_h
-        + if rows == 0 {
-            empty_h
-        } else {
-            rows as i32 * row_h
-        }
-        + 8;
-    let y = l.bar_top - 12 - h;
-    panel(
-        hdc,
-        b,
-        x,
-        y,
-        x + w,
-        y + h,
-        8,
-        rgb(0x24, 0x27, 0x2F),
-        rgb(0x3A, 0x3F, 0x4A),
-    );
-    text(
-        hdc,
-        f.semibold,
-        rgb(0xF2, 0xF2, 0xF2),
-        x + 16,
-        y + 14,
-        b"Notifications",
-    );
-    if NOTIF_COUNT > 0 {
-        let clr = rect(x + w - 120, y + 8, x + w - 16, y + 36);
-        round_rect(
-            hdc,
-            b,
-            clr.left,
-            clr.top,
-            clr.right,
-            clr.bottom,
-            4,
-            rgb(0x31, 0x35, 0x3F),
-        );
-        text(
-            hdc,
-            f.small,
-            rgb(0xC5, 0xC5, 0xC5),
-            clr.left + 10,
-            clr.top + 7,
-            b"Tout effacer",
-        );
-    }
-    fill(
-        hdc,
-        b,
-        x + 1,
-        y + header_h - 1,
-        x + w - 1,
-        y + header_h,
-        rgb(0x3A, 0x3F, 0x4A),
-    );
-    if rows == 0 {
-        text_centered(
-            hdc,
-            f.body,
-            13,
-            rgb(0x9A, 0xA3, 0xAE),
-            x + w / 2,
-            y + header_h + 20,
-            b"Aucune notification",
-        );
-    } else {
-        for i in 0..rows {
-            let idx = if NOTIF_COUNT <= NOTIF_HISTORY.len() {
-                i
-            } else {
-                i
-            };
-            let ry = y + header_h + (rows - 1 - i) as i32 * row_h;
-            if i > 0 {
-                fill(
-                    hdc,
-                    b,
-                    x + 16,
-                    ry - 1,
-                    x + w - 16,
-                    ry,
-                    rgb(0x34, 0x38, 0x42),
-                );
-            }
-            glyph(hdc, b, f, Glyph::Start, x + 16, ry + 10, 14);
-            text(
-                hdc,
-                f.caption,
-                rgb(0xC5, 0xC5, 0xC5),
-                x + 38,
-                ry + 8,
-                b"Winlux",
-            );
-            let msg = &NOTIF_HISTORY[idx][..NOTIF_LENS[idx]];
-            text_fit(
-                hdc,
-                f.body,
-                13,
-                rgb(0xF2, 0xF2, 0xF2),
-                x + 16,
-                ry + 28,
-                msg,
-                w - 32,
-            );
-        }
-    }
-}
+// Le panneau de notifications complet est dessiné par `notifications::draw`.
 
 // ---------- Icônes du bureau ----------
 
@@ -2169,7 +2378,8 @@ pub unsafe fn draw(hdc: Handle) {
             wm::draw(&mut g);
         }
         start_menu(hdc, &mut b, &f, &l);
-        draw_notif_panel(hdc, &mut b, &f, &l);
+        search_overlay(hdc, &mut b, &f, &l);
+        notifications::draw(hdc, &mut b, &f, l.w, l.bar_top);
         draw_toast(hdc, &mut b, &f, &l);
         let bar_dy = if FADE < 1000 {
             (1000 - ease_out(intro, INTRO_MS)) * TASKBAR_HEIGHT / 1000
@@ -2235,9 +2445,12 @@ pub unsafe fn frame(hwnd: Handle) {
     }
     let animating = !BOOT_DONE
         || wm::animating()
+        || crate::gfx::theme_animating()
+        || notifications::animating()
         || since(INTRO_START) < INTRO_MS + 40
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)
         || START_CLOSING
+        || (RECENTER_ANIM != 0 && since(RECENTER_ANIM) < RECENTER_MS + 40)
         || (TOAST_LEN > 0 && (since(TOAST_START) < 300 || since(TOAST_START) > TOAST_MS - 260));
     if animating && since(LAST_FRAME) >= 15 {
         LAST_FRAME = now();
@@ -2305,6 +2518,8 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
     if y >= l.bar_top {
         for i in 0..taskbar_count() {
             if inside(&button_rect(&l, i), x, y) {
+                wm::close_snap_layout();
+                wm::TASK_VIEW = false;
                 if i == 0 {
                     set_start(!(START_OPEN && !START_CLOSING));
                 } else {
@@ -2327,37 +2542,62 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         }
         let tray = l.w - 12 - 92 - 96;
         if x >= tray - 28 && x < tray {
-            NOTIF_PANEL = !NOTIF_PANEL;
+            // Chevron or tray icon area -> open notification center.
+            notifications::toggle();
         } else if x >= tray && x < tray + 24 {
             crate::settings::open_page(2);
         } else if x >= tray + 24 && x < tray + 88 {
             crate::settings::open_page(3);
+        } else if x >= l.w - 12 - 92 {
+            // Click on clock/date area -> open notification center.
+            notifications::toggle();
         } else {
             return;
         }
         repaint(hwnd);
         return;
     }
-    if NOTIF_PANEL && y < l.bar_top {
-        let pw = 380;
-        let px = l.w - pw - 12;
-        let rows = NOTIF_COUNT.min(NOTIF_HISTORY.len());
-        let ph = 44 + if rows == 0 { 60 } else { rows as i32 * 56 } + 8;
-        let py = l.bar_top - 12 - ph;
-        if x >= px && x < px + pw && y >= py && y < py + ph {
-            if NOTIF_COUNT > 0
-                && x >= px + pw - 120
-                && x < px + pw - 16
-                && y >= py + 8
-                && y < py + 36
-            {
-                NOTIF_COUNT = 0;
-                for i in 0..NOTIF_LENS.len() {
-                    NOTIF_LENS[i] = 0;
+    if notifications::is_open() && y < l.bar_top {
+        if notifications::on_click(l.w, l.bar_top, x, y) {
+            repaint(hwnd);
+            return;
+        }
+    }
+    if SEARCH_OVERLAY {
+        let w = 520.min(l.w - 40);
+        let h = 440.min(l.bar_top - 40);
+        let ox = (l.w - w) / 2;
+        let oy = (l.bar_top - h) / 2;
+        if x >= ox && x < ox + w && y >= oy && y < oy + h {
+            let pad = 24;
+            let il = ox + pad;
+            let ir = ox + w - pad;
+            let fy = oy + 60;
+            let ry = fy + 52;
+            if SEARCH_BUF_LEN > 0 {
+                let mut results = [SearchResult {
+                    name: b"",
+                    launch: Launch::Explorer,
+                    glyph: Glyph::Search,
+                    score: 0,
+                }; 16];
+                let count =
+                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                for i in 0..count {
+                    let iy = ry + (i as i32) * 44;
+                    if iy + 40 >= oy + h - 16 {
+                        break;
+                    }
+                    if y >= iy && y < iy + 40 && x >= il && x < ir {
+                        SEARCH_OVERLAY = false;
+                        launch(results[i].launch);
+                        repaint(hwnd);
+                        return;
+                    }
                 }
             }
         } else {
-            NOTIF_PANEL = false;
+            SEARCH_OVERLAY = false;
         }
         repaint(hwnd);
         return;
@@ -2373,7 +2613,22 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                     });
                 }
                 201 => {
+                    POWER_MENU = !POWER_MENU;
+                }
+                210 => {
+                    POWER_MENU = false;
+                    set_start(false);
                     crate::settings::control(c"poweroff");
+                }
+                211 => {
+                    POWER_MENU = false;
+                    set_start(false);
+                    crate::settings::control(c"reboot");
+                }
+                212 => {
+                    POWER_MENU = false;
+                    set_start(false);
+                    crate::settings::control(c"restart-session");
                 }
                 300 => {
                     START_SHOW_ALL_APPS = !START_SHOW_ALL_APPS;
@@ -2395,6 +2650,23 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                     if shortcut_idx < unsafe { SHORTCUTS_COUNT } {
                         let exec = unsafe { SHORTCUTS[shortcut_idx].1 };
                         launch(Launch::Exec(exec));
+                    }
+                }
+                i @ 600..=615 => {
+                    let idx = (i - 600) as usize;
+                    let mut results = [SearchResult {
+                        name: b"",
+                        launch: Launch::Explorer,
+                        glyph: Glyph::Search,
+                        score: 0,
+                    }; 16];
+                    let count = collect_results(
+                        unsafe { &START_SEARCH[..START_SEARCH_LEN] },
+                        &mut results,
+                    );
+                    if idx < count {
+                        set_start(false);
+                        launch(results[idx].launch);
                     }
                 }
                 i @ 0..=5 => {
@@ -2465,6 +2737,43 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         }
         return;
     }
+    if SEARCH_OVERLAY {
+        let w = 520.min(l.w - 40);
+        let h = 440.min(l.bar_top - 40);
+        let ox = (l.w - w) / 2;
+        let oy = (l.bar_top - h) / 2;
+        let pad = 24;
+        let il = ox + pad;
+        let ir = ox + w - pad;
+        let fy = oy + 60;
+        let ry = fy + 52;
+        let mut hover = -1i32;
+        if SEARCH_BUF_LEN > 0 && x >= il && x < ir {
+            let mut results = [SearchResult {
+                name: b"",
+                launch: Launch::Explorer,
+                glyph: Glyph::Search,
+                score: 0,
+            }; 16];
+            let count =
+                collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+            for i in 0..count {
+                let iy = ry + (i as i32) * 44;
+                if iy + 40 >= oy + h - 16 {
+                    break;
+                }
+                if y >= iy && y < iy + 40 {
+                    hover = i as i32;
+                    break;
+                }
+            }
+        }
+        if hover != SEARCH_HOVER {
+            SEARCH_HOVER = hover;
+            repaint(hwnd);
+        }
+        return;
+    }
     let mut rp = false;
     let hb = if y >= l.bar_top {
         (0..taskbar_count())
@@ -2485,6 +2794,11 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
     if hs != HOVER_START_ITEM {
         HOVER_START_ITEM = hs;
         rp = true;
+    }
+    if notifications::is_open() {
+        if notifications::on_mouse_move(l.w, l.bar_top, x, y) {
+            rp = true;
+        }
     }
     if DRAGGED_ICON >= 0 {
         let i = DRAGGED_ICON as usize;
@@ -2627,6 +2941,13 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
     if START_OPEN || CONTEXT_APP.is_some() {
         return;
     }
+    if let Mouse::Wheel(delta) = ev {
+        let l = layout();
+        if notifications::on_wheel(l.w, l.bar_top, x, y, delta) {
+            repaint(hwnd);
+            return;
+        }
+    }
     let mut rp = false;
     wm::on_other(ev, x, y, &mut rp);
     if rp {
@@ -2664,6 +2985,11 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             repaint(hwnd);
             return;
         }
+        if notifications::is_open() {
+            notifications::set_open(false);
+            repaint(hwnd);
+            return;
+        }
         if CONTEXT_APP.is_some() {
             CONTEXT_APP = None;
             repaint(hwnd);
@@ -2680,13 +3006,23 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             return;
         }
     }
-    // Win+Shift+S (Screenshot)
+    // Win+Shift+S (Screenshot) / Win+S (Recherche)
     if ch == 0 && vk == 0x53 {
         let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
             || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
         if win && shift {
             launch(Launch::Exec(b"screenshot.exe"));
+            return;
+        }
+        if win {
+            SEARCH_OVERLAY = !SEARCH_OVERLAY;
+            if SEARCH_OVERLAY {
+                SEARCH_BUF_LEN = 0;
+                SEARCH_HOVER = -1;
+                set_start(false);
+            }
+            repaint(hwnd);
             return;
         }
     }
@@ -2719,6 +3055,69 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         if win {
             explorer::open_pc();
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Win+Tab (Vue des tâches)
+    if ch == 0 && vk == 0x09 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        if win {
+            unsafe {
+                wm::TASK_VIEW = !wm::TASK_VIEW;
+            }
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Win+flèches (snap layouts)
+    if ch == 0 && (vk == 0x25 || vk == 0x26 || vk == 0x27 || vk == 0x28) {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        if win && ctrl {
+            // Win+Ctrl+Left/Right : changer de bureau
+            if vk == 0x25 {
+                let cur = wm::current_desktop();
+                if cur > 0 {
+                    unsafe { wm::switch_desktop(cur - 1); }
+                }
+            } else if vk == 0x27 {
+                let cur = wm::current_desktop();
+                if cur + 1 < wm::desktop_count() {
+                    unsafe { wm::switch_desktop(cur + 1); }
+                }
+            }
+            repaint(hwnd);
+            return;
+        }
+        if win {
+            if unsafe { wm::snap_arrow(vk) } {
+                repaint(hwnd);
+                return;
+            }
+        }
+    }
+    // Win+Ctrl+D (nouveau bureau)
+    if ch == 0 && vk == 0x44 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        if win && ctrl {
+            unsafe { wm::add_desktop(); }
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Win+Ctrl+F4 (fermer le bureau courant)
+    if ch == 0 && vk == 0x73 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        if win && ctrl {
+            let cur = wm::current_desktop();
+            unsafe { wm::remove_desktop(cur); }
             repaint(hwnd);
             return;
         }
@@ -2792,13 +3191,134 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     if ch == 0 && (vk == 0x5B || vk == 0x5C) {
+        if SEARCH_OVERLAY {
+            SEARCH_OVERLAY = false;
+            repaint(hwnd);
+            return;
+        }
         set_start(!(START_OPEN && !START_CLOSING));
         repaint(hwnd);
         return;
     }
+    if SEARCH_OVERLAY {
+        if ch == 27 || vk == 0x1B {
+            SEARCH_OVERLAY = false;
+            repaint(hwnd);
+            return;
+        }
+        if ch == 8 {
+            if SEARCH_BUF_LEN > 0 {
+                SEARCH_BUF_LEN -= 1;
+            }
+            SEARCH_HOVER = -1;
+            repaint(hwnd);
+            return;
+        }
+        if ch == 13 || vk == 0x0D {
+            if SEARCH_HOVER >= 0 {
+                let mut results = [SearchResult {
+                    name: b"",
+                    launch: Launch::Explorer,
+                    glyph: Glyph::Search,
+                    score: 0,
+                }; 16];
+                let count =
+                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                let idx = SEARCH_HOVER as usize;
+                if idx < count {
+                    SEARCH_OVERLAY = false;
+                    launch(results[idx].launch);
+                    repaint(hwnd);
+                    return;
+                }
+            } else if SEARCH_BUF_LEN > 0 {
+                let mut results = [SearchResult {
+                    name: b"",
+                    launch: Launch::Explorer,
+                    glyph: Glyph::Search,
+                    score: 0,
+                }; 16];
+                let count =
+                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                if count > 0 {
+                    SEARCH_OVERLAY = false;
+                    launch(results[0].launch);
+                    repaint(hwnd);
+                    return;
+                }
+            }
+            return;
+        }
+        if vk == 0x28 {
+            // Down
+            let mut results = [SearchResult {
+                name: b"",
+                launch: Launch::Explorer,
+                glyph: Glyph::Search,
+                score: 0,
+            }; 16];
+            let count =
+                collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results) as i32;
+            if count > 0 {
+                SEARCH_HOVER = (SEARCH_HOVER + 1).min(count - 1);
+            }
+            repaint(hwnd);
+            return;
+        }
+        if vk == 0x26 {
+            // Up
+            SEARCH_HOVER = (SEARCH_HOVER - 1).max(-1);
+            repaint(hwnd);
+            return;
+        }
+        if ch >= 0x20 && ch < 0x100 && SEARCH_BUF_LEN < 63 {
+            SEARCH_BUF[SEARCH_BUF_LEN] = ch as u8;
+            SEARCH_BUF_LEN += 1;
+            SEARCH_HOVER = -1;
+            repaint(hwnd);
+        }
+        return;
+    }
     if START_OPEN && !START_CLOSING {
         if ch == 27 || vk == 0x1B {
+            START_SEARCH_LEN = 0;
+            START_SEARCH_ACTIVE = false;
             set_start(false);
+            repaint(hwnd);
+            return;
+        }
+        if ch == 8 {
+            if START_SEARCH_LEN > 0 {
+                START_SEARCH_LEN -= 1;
+            }
+            repaint(hwnd);
+            return;
+        }
+        if ch == 13 || vk == 0x0D {
+            if START_SEARCH_LEN > 0 {
+                let mut results = [SearchResult {
+                    name: b"",
+                    launch: Launch::Explorer,
+                    glyph: Glyph::Search,
+                    score: 0,
+                }; 16];
+                let count =
+                    collect_results(&START_SEARCH[..START_SEARCH_LEN], &mut results);
+                if count > 0 {
+                    START_SEARCH_LEN = 0;
+                    START_SEARCH_ACTIVE = false;
+                    set_start(false);
+                    launch(results[0].launch);
+                    repaint(hwnd);
+                    return;
+                }
+            }
+            return;
+        }
+        if ch >= 0x20 && ch < 0x100 && START_SEARCH_LEN < 63 {
+            START_SEARCH[START_SEARCH_LEN] = ch as u8;
+            START_SEARCH_LEN += 1;
+            START_SEARCH_ACTIVE = true;
             repaint(hwnd);
         }
         return;

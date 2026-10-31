@@ -195,7 +195,7 @@ pub fn init_process(exe: &Module, args: &[String]) {
     unsafe {
         *((peb + PEB_IMAGE_BASE) as *mut usize) = exe.base;
         *((peb + PEB_PROCESS_PARAMETERS) as *mut usize) = params;
-        *((peb + PEB_PROCESS_HEAP) as *mut usize) = crate::dlls::kernel32::PROCESS_HEAP;
+        *((peb + PEB_PROCESS_HEAP) as *mut usize) = crate::dlls::kernel32::process_heap();
         *((peb + PEB_BEING_DEBUGGED) as *mut u8) = 0;
         // OSMajorVersion / OSMinorVersion / OSBuildNumber : Windows 10 (10.0.19045).
         *((peb + 0x118) as *mut u32) = 10;

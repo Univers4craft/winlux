@@ -60,10 +60,7 @@ const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
 static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
 static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
-static mut ENABLE_BLUR: bool = true; // Effet de flou activé
-static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
-static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
-static mut AUTO_THEME: bool = false; // Thème automatique
+use crate::gfx::{ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS, AUTO_THEME};
 
 fn exe_profile_path(out: &mut [u16; 2060]) {
     unsafe {
@@ -321,10 +318,11 @@ pub unsafe fn system_tick() -> bool {
             _ => {}
         }
         match value(b"theme") {
-            b"light" => DARK = false,
-            b"dark" => DARK = true,
+            b"light" => crate::gfx::set_theme(false),
+            b"dark" => crate::gfx::set_theme(true),
             _ => {}
         }
+        crate::gfx::check_auto_theme();
     }
     changed
 }
@@ -1104,7 +1102,20 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(
                 g,
                 &c,
-                214,
+                164,
+                b"Th\xE8me automatique",
+                if unsafe { AUTO_THEME } {
+                    b"Jour clair / nuit sombre (8h\x9620h)"
+                } else {
+                    b"D\xE9sactiv\xE9"
+                },
+            );
+            button(g, &c, 2, 0, b"Activer", 5);
+            button(g, &c, 2, 1, b"D\xE9sactiver", 6);
+            row(
+                g,
+                &c,
+                254,
                 b"Stockage",
                 if value(b"persistent") == b"1" {
                     b"Les pr\xE9f\xE9rences sont conserv\xE9es sur le disque."
@@ -1115,15 +1126,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(
                 g,
                 &c,
-                260,
+                300,
                 b"Ic\xF4nes du bureau",
                 b"Ajoutez seulement les ic\xF4nes que vous voulez afficher.",
             );
-            button(g, &c, 4, 0, b"Afficher Corbeille", 12);
-            button(g, &c, 4, 1, b"Afficher Explorateur", 13);
-            button(g, &c, 5, 0, b"Afficher Ce PC", 14);
-            button(g, &c, 5, 1, b"Afficher Documents", 15);
-            button(g, &c, 6, 0, b"R\xE9glages de l'\xE9cran", 18);
+            button(g, &c, 5, 0, b"Afficher Corbeille", 12);
+            button(g, &c, 5, 1, b"Afficher Explorateur", 13);
+            button(g, &c, 6, 0, b"Afficher Ce PC", 14);
+            button(g, &c, 6, 1, b"Afficher Documents", 15);
+            button(g, &c, 7, 0, b"R\xE9glages de l'\xE9cran", 18);
         }
         8 => {
             row(
@@ -1465,8 +1476,23 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (4, 4) => Some(c"tap-off"),
         (6, 0) => Some(c"align-left"),
         (6, 1) => Some(c"align-center"),
-        (6, 3) => Some(c"theme-dark"),
-        (6, 4) => Some(c"theme-light"),
+        (6, 3) => {
+            unsafe { crate::gfx::set_theme(true) };
+            Some(c"theme-dark")
+        }
+        (6, 4) => {
+            unsafe { crate::gfx::set_theme(false) };
+            Some(c"theme-light")
+        }
+        (6, 5) => {
+            unsafe { AUTO_THEME = true };
+            unsafe { crate::gfx::check_auto_theme() };
+            Some(c"auto-theme-on")
+        }
+        (6, 6) => {
+            unsafe { AUTO_THEME = false };
+            Some(c"auto-theme-off")
+        }
         (6, 18) => {
             open_page(8);
             return true;

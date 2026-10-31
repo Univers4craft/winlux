@@ -330,6 +330,28 @@ pub unsafe fn LoadCursorA(_instance: Handle, _id: usize) -> Handle {
 }
 
 #[repr(C)]
+pub struct WaveFormatEx {
+    pub format_tag: u16,
+    pub channels: u16,
+    pub samples_per_sec: u32,
+    pub avg_bytes_per_sec: u32,
+    pub block_align: u16,
+    pub bits_per_sample: u16,
+    pub cb_size: u16,
+}
+
+#[repr(C)]
+pub struct WaveHdr {
+    pub data: *mut u8,
+    pub buffer_length: u32,
+    pub bytes_recorded: u32,
+    pub flags: u32,
+    pub loops: u32,
+    pub next: *mut WaveHdr,
+    pub reserved: usize,
+}
+
+#[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct BitmapInfoHeader {
     pub size: u32,
@@ -822,6 +844,8 @@ extern "C" {
     pub fn GetSysColorBrush(index: i32) -> Handle;
     pub fn SetCursor(cursor: Handle) -> Handle;
     pub fn LoadCursorW(instance: Handle, name: usize) -> Handle;
+    pub fn SetTimer(hwnd: Handle, id: usize, elapse: u32, func: usize) -> usize;
+    pub fn KillTimer(hwnd: Handle, id: usize) -> i32;
 }
 
 #[link(name = "gdi32", kind = "raw-dylib")]
@@ -1007,6 +1031,27 @@ extern "C" {
     pub fn sscanf(buf: *const c_char, fmt: *const c_char, ...) -> i32;
     pub fn fscanf(f: *mut c_void, fmt: *const c_char, ...) -> i32;
     pub fn remove(path: *const c_char) -> i32;
+}
+
+#[link(name = "winmm", kind = "raw-dylib")]
+extern "system" {
+    pub fn PlaySoundA(name: *const c_char, module: Handle, flags: u32) -> i32;
+    pub fn waveInGetNumDevs() -> u32;
+    pub fn waveInOpen(
+        phwi: *mut Handle,
+        device: u32,
+        pwfx: *const WaveFormatEx,
+        callback: usize,
+        instance: usize,
+        flags: u32,
+    ) -> u32;
+    pub fn waveInPrepareHeader(hwi: Handle, pwh: *mut WaveHdr, cbwh: u32) -> u32;
+    pub fn waveInUnprepareHeader(hwi: Handle, pwh: *mut WaveHdr, cbwh: u32) -> u32;
+    pub fn waveInAddBuffer(hwi: Handle, pwh: *mut WaveHdr, cbwh: u32) -> u32;
+    pub fn waveInStart(hwi: Handle) -> u32;
+    pub fn waveInStop(hwi: Handle) -> u32;
+    pub fn waveInReset(hwi: Handle) -> u32;
+    pub fn waveInClose(hwi: Handle) -> u32;
 }
 
 /// Requis par le compilateur dès qu'un programme Windows manipule des flottants.

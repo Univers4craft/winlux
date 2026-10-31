@@ -158,6 +158,8 @@ struct Pane {
     sel: [u64; MAX_ENTRIES / 64],
     anchor: usize,
     scroll: i32,
+    scroll_target: i32,
+    scroll_x: i32,
     search: Field,
     /// Résultats d'une recherche dans les sous-dossiers (noms = chemins relatifs).
     deep: bool,
@@ -178,6 +180,8 @@ const EMPTY_PANE: Pane = Pane {
     sel: [0; MAX_ENTRIES / 64],
     anchor: 0,
     scroll: 0,
+    scroll_target: 0,
+    scroll_x: 0,
     search: EMPTY_FIELD,
     deep: false,
     truncated: false,
@@ -937,6 +941,8 @@ unsafe fn navigate_pane(p: &mut Pane, target: &[u8], record: bool) {
     p.loc.set(target);
     p.search.len = 0;
     p.scroll = 0;
+    p.scroll_target = 0;
+    p.scroll_x = 0;
     reload(p);
 }
 
@@ -1027,8 +1033,21 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         }
         return;
     }
-    // Open .txt in integrated Notepad
-    if ends_ci(&path[..n], b".txt") {
+    // Open text files in integrated editor
+    if ends_ci(&path[..n], b".txt")
+        || ends_ci(&path[..n], b".rs")
+        || ends_ci(&path[..n], b".c")
+        || ends_ci(&path[..n], b".h")
+        || ends_ci(&path[..n], b".py")
+        || ends_ci(&path[..n], b".js")
+        || ends_ci(&path[..n], b".sh")
+        || ends_ci(&path[..n], b".toml")
+        || ends_ci(&path[..n], b".json")
+        || ends_ci(&path[..n], b".md")
+        || ends_ci(&path[..n], b".cfg")
+        || ends_ci(&path[..n], b".conf")
+        || ends_ci(&path[..n], b".log")
+    {
         crate::notepad::open_new();
         use winlux_testexe::*;
         let mut wide = [0u16; PATH_LEN + NAME_LEN + 2];
@@ -1043,36 +1062,21 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
             core::ptr::null_mut(),
         );
         if !h.is_null() && (h as isize) != -1 {
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 32768];
             let mut got = 0u32;
-            ReadFile(h, buf.as_mut_ptr(), 4096, &mut got, core::ptr::null_mut());
+            ReadFile(h, buf.as_mut_ptr(), buf.len() as u32, &mut got, core::ptr::null_mut());
             CloseHandle(h);
-            // write to notepad doc
+            // Extract filename from path
+            let mut fname_start = 0;
+            let mut k = 0;
+            while k < n {
+                if path[k] == b'\\' || path[k] == b'/' {
+                    fname_start = k + 1;
+                }
+                k += 1;
+            }
             unsafe {
-                let doc = &mut crate::notepad::DOC;
-                let mut i = 0;
-                while (i as u32) < got && doc.len < 8191 {
-                    if buf[i as usize] == b'\r' {
-                        i += 1;
-                        continue;
-                    }
-                    doc.text[doc.len] = buf[i as usize];
-                    doc.len += 1;
-                    i += 1;
-                }
-                doc.cursor = doc.len;
-                doc.modified = false;
-                // rebuild
-                doc.lines[0] = 0;
-                doc.line_count = 1;
-                let mut j = 0;
-                while j < doc.len && doc.line_count < 512 {
-                    if doc.text[j] == b'\n' {
-                        doc.lines[doc.line_count] = j + 1;
-                        doc.line_count += 1;
-                    }
-                    j += 1;
-                }
+                crate::notepad::load_into_active(&buf[..got as usize], &path[fname_start..n]);
             }
         }
         wm::open(wm::APP_NOTEPAD);
@@ -1304,6 +1308,7 @@ unsafe fn clamp_scroll(p: &mut Pane, r: &Rect) {
     let c = cells(r);
     let max = (content_height(p, &c) - (r.bottom - r.top)).max(0);
     p.scroll = p.scroll.clamp(0, max);
+    p.scroll_target = p.scroll_target.clamp(0, max);
 }
 
 unsafe fn item_rect(r: &Rect, c: &Cells, v: usize, scroll: i32) -> Rect {
@@ -2047,8 +2052,9 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
     }
 
     if VIEW == View::Details {
+        let sx_off = pn.scroll_x;
         let hr = rect(
-            r.left + 8,
+            r.left + 8 - sx_off,
             r.top + 4,
             r.right - SCROLL_W - 8,
             r.top + 4 + c.header,
@@ -2112,7 +2118,11 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
     for v in start..end {
         let idx = pn.view[v] as usize;
         let e = pn.entries[idx];
-        let ir = item_rect(r, &c, v, pn.scroll);
+        let mut ir = item_rect(r, &c, v, pn.scroll);
+        if VIEW == View::Details {
+            ir.left -= pn.scroll_x;
+            ir.right -= pn.scroll_x;
+        }
         if ir.bottom < r.top + c.header || ir.top > r.bottom {
             continue;
         }
@@ -2638,16 +2648,6 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
     }
     let p = pal();
     let r = menu_box(geo, f);
-    round_rect(
-        g.hdc,
-        g.b,
-        r.left - 1,
-        r.top + 1,
-        r.right + 1,
-        r.bottom + 4,
-        9,
-        p.shadow,
-    );
     round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.border);
     round_rect(
         g.hdc,
@@ -3807,6 +3807,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 let track_h = view_h - 8;
                 let th = ((view_h * track_h) / total.max(1)).max(30);
                 pn.scroll = ((y - grab - r.top - 4) * (total - view_h)) / (track_h - th).max(1);
+                pn.scroll_target = pn.scroll;
                 clamp_scroll(pn, &r);
                 return true;
             }
@@ -3845,9 +3846,23 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 let r = pane_rect_inner(&geo, which);
                 if inside(&r, x, y) {
                     let pn = &mut t.panes[which];
-                    let step = cells(&r).ch.max(40);
-                    pn.scroll -= delta / 120 * step;
-                    clamp_scroll(pn, &r);
+                    if shift() {
+                        pn.scroll_x -= delta / 120 * 60;
+                        let content_w = if VIEW == View::Details {
+                            let (_, _, _, _, sx) = detail_cols(&r);
+                            sx + 120 - r.left
+                        } else {
+                            r.right - r.left
+                        };
+                        let max_x = (content_w - (r.right - r.left - SCROLL_W)).max(0);
+                        pn.scroll_x = pn.scroll_x.clamp(0, max_x);
+                    } else {
+                        let step = cells(&r).ch.max(40);
+                        pn.scroll_target -= delta / 120 * step;
+                        let c = cells(&r);
+                        let max = (content_height(pn, &c) - (r.bottom - r.top)).max(0);
+                        pn.scroll_target = pn.scroll_target.clamp(0, max);
+                    }
                     update_hover(&geo, x, y);
                     return true;
                 }
@@ -3984,7 +3999,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
                 if y >= ty && y < ty + th {
                     SCROLL_DRAG = Some((0, y - ty));
                 } else {
-                    pn.scroll += if y < ty { -view_h } else { view_h };
+                    pn.scroll_target += if y < ty { -view_h } else { view_h };
                     clamp_scroll(pn, &r);
                 }
                 return true;
@@ -4308,6 +4323,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                 }
                 rebuild_view(p);
                 p.scroll = 0;
+                p.scroll_target = 0;
             }
             return true;
         }
@@ -4401,8 +4417,24 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
 }
 
 pub unsafe fn tick(_f: &Frame) -> bool {
-    // Curseur clignotant dans un champ, message temporaire de la barre d'état.
-    FOCUS != Focus::List
+    let mut animating = false;
+    for i in 0..NTABS {
+        for which in 0..2 {
+            let pn = &mut TABS[i].panes[which];
+            if pn.scroll != pn.scroll_target {
+                let diff = pn.scroll_target - pn.scroll;
+                let step = diff / 4;
+                if step == 0 {
+                    pn.scroll = pn.scroll_target;
+                } else {
+                    pn.scroll += step;
+                }
+                animating = true;
+            }
+        }
+    }
+    animating
+        || FOCUS != Focus::List
         || MESSAGE_UNTIL != 0 && {
             let alive = (MESSAGE_UNTIL.wrapping_sub(GetTickCount()) as i32) > -1000;
             if !alive {
