@@ -1,6 +1,8 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod archive;
 mod crash;
+mod diskimage;
 mod dlls;
 mod loader;
 pub mod log;

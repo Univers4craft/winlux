@@ -79,6 +79,10 @@ pub fn to_linux(w: &str) -> PathBuf {
     if joined.exists() {
         return joined;
     }
+    // Chemin à l'intérieur d'une archive ouverte (navigation façon dossier).
+    if let Some(v) = crate::archive::resolve(&joined) {
+        return v;
+    }
     fix_case(&joined).unwrap_or(joined)
 }
 

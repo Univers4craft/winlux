@@ -118,6 +118,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
                     e.extend(crate::mounts::exports());
+                    e.extend(crate::archive::ffi::exports());
                     e
                 },
                 handle: fake_module(),
