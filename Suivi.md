@@ -4,9 +4,9 @@
 
 ## Statistiques
 
-- Réalisé : **225**
+- Réalisé : **226**
 - À faire ou en cours : **42**
-- Total : **267**
+- Total : **268**
 - Progression : **84.3%**
 - Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169)
 
@@ -100,6 +100,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] Démarrage : GRUB ne fait plus attendre 10 s « Press any key » en live (recherche de l'installation avant le menu) et le menu attend 2 s au lieu de 5. Mesure KVM : 53,0 s → 40,3 s avec #155, 9,4 s après le noyau (#153, `docs/PERFORMANCES.md`).
 - [x] Applis Windows intégrées au bureau (#152) : associations de fichiers lues dans le registre (HKCU/HKLM\Software\Classes et HKCR, ProgID, OpenWithProgids, OpenWithList, SupportedTypes, UserChoice) → lanceurs cachés `winlux-assoc-*.desktop` (double-clic, « Ouvrir avec » de Thunar et xdg-open, document passé en chemin Windows), type MIME créé pour les extensions inconnues, programme par défaut seulement si l'utilisateur n'a rien choisi ; raccourcis .lnk du Bureau ouvrables (cible, arguments, dossier de travail) ; icônes des .exe/.lnk par thumbnailer tumbler ; fenêtre « Applications par défaut » (Paramètres > Applications) en FR/EN/ES/DE. Zone de notification : `Shell_NotifyIconA/W` (NIM_ADD/MODIFY/DELETE/SETVERSION, infobulle, état caché, bulles par notify-send, clics transmis au `uCallbackMessage` en format classique ou version 4) via l'assistant GTK `winlux-notify-icon`, et zone « systray » ajoutée au panneau (y compris aux panneaux déjà configurés).
 - [x] Mode jeu : un `.exe` Direct3D/OpenGL/Vulkan/XInput déclenche `winlux --gamemode daemon` (gouverneur performances sur secteur, priorité du jeu, sauvegardes et mises à jour en pause et en basse priorité, swappiness et compactage mémoire, veille bloquée), tout est restauré à la fermeture ; réglage dans Paramètres > Processeur, actions affichées selon le matériel (#153, `docs/PERFORMANCES.md`).
 - [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).
