@@ -93,9 +93,14 @@ Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir l
   TSV; il ne reproduit ni les vues 32/64 bits ni les règles ACL du registre Windows.
 - Les DLL intégrées utilisent des fonctions Linux natives et ne dépendent pas
   de Wine ni de bibliothèques Windows existantes.
-- Les PE managés 32/64 bits (et l'apphost d'un .NET moderne, via son `.dll`
-  compagnon) sont exécutés par le CLR intégré (`runtime/src/clr`), sans runtime
-  .NET extérieur : interpréteur CIL, ramasse-miettes, exceptions .NET, appels
+- Une appli .NET autonome, qui livre son propre `coreclr.dll` à côté de son
+  apphost (Paint.NET par exemple), est lancée par son apphost natif. Celui-ci
+  charge ce runtime embarqué comme sous Windows, sans rien télécharger. Le
+  lanceur atteint aujourd'hui `coreclr.dll`, mais l'initialisation de coreclr
+  n'aboutit pas encore : voir [Paint.NET sur Winlux](docs/PAINTNET.md).
+- Les autres PE managés 32/64 bits (et l'apphost d'un .NET moderne sans runtime
+  embarqué, via son `.dll` compagnon) sont exécutés par le CLR intégré
+  (`runtime/src/clr`), sans runtime .NET extérieur : interpréteur CIL, ramasse-miettes, exceptions .NET, appels
   virtuels, BCL minimale (Console, Math, String, Environment, File, Path…) et
   P/Invoke vers les DLL intégrées. Limites actuelles : pas de WinForms/WPF, pas
   de génériques de la BCL (`List<T>`, `Dictionary`…), pas de délégués ni de
@@ -259,6 +264,8 @@ référence :
    et publier pour chacune les fonctions validées, les régressions et les
    limites connues. `paint.net` peut servir de cible de référence, sans être
    considéré comme compatible avant que ses scénarios réels passent ces tests.
+   L'état mesuré et l'ordre des travaux sont tenus dans
+   [Paint.NET sur Winlux](docs/PAINTNET.md).
 
 La stratégie d'implémentation du CLR et des couches de bureau reste à choisir
 sur la base des applications prioritaires et de prototypes mesurables. Le

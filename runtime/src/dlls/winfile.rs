@@ -233,6 +233,24 @@ pub unsafe extern "win64" fn find_first_file_a(
     }
     first_common(&crate::dlls::cstr(path), data as *mut c_void, false)
 }
+/// FindFirstFileExW : les niveaux d'information (standard ou « basique ») et
+/// le filtre « répertoires seulement » (simple indication sous Windows) se
+/// ramènent à FindFirstFileW.
+pub unsafe extern "win64" fn find_first_file_ex_w(
+    path: *const u16,
+    info_level: u32,
+    data: *mut Win32FindDataW,
+    _search_op: u32,
+    _filter: *mut c_void,
+    _flags: u32,
+) -> usize {
+    if info_level > 1 {
+        error(ERROR_INVALID_PARAMETER);
+        return usize::MAX;
+    }
+    find_first_file_w(path, data)
+}
+
 pub unsafe extern "win64" fn find_first_file_w(
     path: *const u16,
     data: *mut Win32FindDataW,
@@ -299,6 +317,7 @@ pub extern "win64" fn find_close(handle: usize) -> i32 {
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "FindFirstFileA"=>fn find_first_file_a,"FindFirstFileW"=>fn find_first_file_w,
+        "FindFirstFileExW"=>fn find_first_file_ex_w,
         "FindNextFileA"=>fn find_next_file_a,"FindNextFileW"=>fn find_next_file_w,"FindClose"=>fn find_close
     }
 }

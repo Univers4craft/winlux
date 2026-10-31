@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **202**
+- Réalisé : **203**
 - À faire ou en cours : **44**
-- Total : **246**
-- Progression : **82.1%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126, #127, #111 et #119, issues #10 à #98)
+- Total : **247**
+- Progression : **82.2%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126, #127, #111, #119 et #133, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -46,7 +46,7 @@
 - [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
 - [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
-- [ ] Intégrer un véritable runtime CLR Windows et les couches WPF/WinForms; le pont Linux `dotnet`/Mono ne suffit pas pour `paint.net`.
+- [ ] Faire tourner Paint.NET : runtime embarqué par l'appli (coreclr), puis WIC, Direct2D/DirectWrite et WPF. Étapes et blocages mesurés dans `docs/PAINTNET.md`.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
 - [ ] Brancher Media Foundation/DirectShow des `.exe` sur le moteur multimédia du runtime (`winlux_media.rs`) : le lecteur du shell lit déjà tous les formats, mais `mfplat`/`quartz` restent des bouchons pour les programmes Windows.
 - [ ] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (elles restent mappées jusqu’à la fin du processus).
@@ -96,6 +96,8 @@
 ## DÉJÀ FAIT
 
 ### Livré par pull requests (fin octobre 2026)
+
+- [x] Lanceur .NET autonome : un apphost qui embarque `coreclr.dll` (Paint.NET 5.1.12) traverse hostfxr et hostpolicy jusqu'au chargement de coreclr ; CRT universelle `__stdio_common_*`, chaînes `*_s`, ordinaux oleaut32, `ungetc` (`docs/PAINTNET.md`).
 
 - [x] Gestionnaire de tâches style Windows 11 (#39).
 - [x] Enregistreur vocal natif avec capture ALSA (#40).

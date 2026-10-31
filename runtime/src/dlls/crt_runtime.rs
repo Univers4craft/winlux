@@ -1546,6 +1546,62 @@ pub unsafe extern "win64" fn beginthread(start: usize, stack: u32, arg: usize) -
     }
 }
 
+static NEW_MODE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+/// `_set_new_mode` : choisit si `malloc` appelle le gestionnaire `new` en cas
+/// d'échec. Winlux mémorise le mode et renvoie le précédent, comme l'UCRT.
+pub extern "win64" fn set_new_mode(mode: i32) -> i32 {
+    if !(0..=1).contains(&mode) {
+        *unsafe { &mut *errno() } = 22;
+        return -1;
+    }
+    NEW_MODE.swap(mode, std::sync::atomic::Ordering::SeqCst)
+}
+pub extern "win64" fn query_new_mode() -> i32 {
+    NEW_MODE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Saute le nom du programme et les blancs qui le suivent, selon les règles
+/// de la CRT pour `WinMain` : un nom entre guillemets va jusqu'au guillemet
+/// fermant, sinon jusqu'au premier espace ou tabulation.
+fn winmain_args_offset<T: Copy + Into<u32>>(line: &[T]) -> usize {
+    let c = |i: usize| line.get(i).map(|&v| v.into()).unwrap_or(0);
+    let mut i = 0;
+    let mut quoted = false;
+    while c(i) != 0 {
+        let ch = c(i);
+        if ch == u32::from(b'"') {
+            quoted = !quoted;
+        } else if !quoted && (ch == u32::from(b' ') || ch == u32::from(b'\t')) {
+            break;
+        }
+        i += 1;
+    }
+    while c(i) == u32::from(b' ') || c(i) == u32::from(b'\t') {
+        i += 1;
+    }
+    i
+}
+
+/// `_get_wide_winmain_command_line` : la ligne de commande sans le nom du
+/// programme, telle que la reçoit `wWinMain`.
+pub unsafe extern "win64" fn get_wide_winmain_command_line() -> *const u16 {
+    let line = crate::dlls::kernel32::get_command_line_w() as *const u16;
+    if line.is_null() {
+        static EMPTY: [u16; 1] = [0];
+        return EMPTY.as_ptr();
+    }
+    let len = crate::printf::wide_len(line);
+    line.add(winmain_args_offset(std::slice::from_raw_parts(line, len)))
+}
+pub unsafe extern "win64" fn get_narrow_winmain_command_line() -> *const u8 {
+    let line = crate::dlls::kernel32::get_command_line_a() as *const u8;
+    if line.is_null() {
+        return c"".as_ptr().cast();
+    }
+    let len = crate::printf::narrow_len(line);
+    line.add(winmain_args_offset(std::slice::from_raw_parts(line, len)))
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "__getmainargs" => fn getmainargs, "__wgetmainargs" => fn wgetmainargs,
@@ -1598,6 +1654,9 @@ pub fn exports() -> crate::dlls::Exports {
         "_unlink" => fn unlink, "_mkdir" => fn mkdir, "_rmdir" => fn rmdir, "_chdir" => fn chdir, "_getcwd" => fn getcwd,
         "_get_osfhandle" => fn get_osfhandle, "_getpid" => fn getpid,
         "_beginthreadex" => fn beginthreadex, "_beginthread" => fn beginthread,
+        "_set_new_mode" => fn set_new_mode, "_query_new_mode" => fn query_new_mode,
+        "_get_wide_winmain_command_line" => fn get_wide_winmain_command_line,
+        "_get_narrow_winmain_command_line" => fn get_narrow_winmain_command_line,
     }
 }
 
@@ -1614,6 +1673,26 @@ mod tests {
     }
     extern "win64" fn echec() -> i32 {
         7
+    }
+
+    #[test]
+    fn ligne_de_commande_winmain_sans_le_programme() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(
+            winmain_args_offset(&w("\"C:\\Program Files\\p.exe\"  /a b")),
+            26
+        );
+        assert_eq!(winmain_args_offset(b"p.exe\t-x".as_slice()), 6);
+        assert_eq!(winmain_args_offset(b"p.exe".as_slice()), 5);
+        assert_eq!(winmain_args_offset(b"".as_slice()), 0);
+    }
+
+    #[test]
+    fn mode_new_memorise_et_valide() {
+        let old = set_new_mode(1);
+        assert_eq!(query_new_mode(), 1);
+        assert_eq!(set_new_mode(5), -1);
+        assert_eq!(set_new_mode(old), 1);
     }
 
     #[test]

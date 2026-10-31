@@ -15,6 +15,7 @@ pub mod crt;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
+pub mod crt_ucrt;
 pub mod crypt32;
 pub mod d3d11;
 pub mod d3d12;
@@ -132,6 +133,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crt_stdio::exports());
             e.extend(crt_scan::exports());
             e.extend(crt_runtime::exports());
+            e.extend(crt_ucrt::exports());
             e
         };
         let mut ucrt = crt.clone();
@@ -140,6 +142,7 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(crt_stdio::exports());
         ucrt.extend(crt_scan::exports());
         ucrt.extend(crt_runtime::exports());
+        ucrt.extend(crt_ucrt::exports());
         vec![
             Builtin {
                 name: "kernel32",
