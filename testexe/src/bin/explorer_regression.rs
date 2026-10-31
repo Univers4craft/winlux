@@ -22,6 +22,8 @@ mod gfx;
 mod locale;
 #[path = "../shell/login.rs"]
 mod login;
+#[path = "../shell/netdrives.rs"]
+mod netdrives;
 #[path = "../shell/notepad.rs"]
 mod notepad;
 #[path = "../shell/notifications.rs"]

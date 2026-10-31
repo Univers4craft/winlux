@@ -11,11 +11,13 @@ pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
 pub const PAGE_PRIVACY: usize = 18;
 pub const PAGE_CPU: usize = 19;
-pub const PAGE_PERSONALIZE: usize = 20;
-const PAGE_COUNT: usize = 21;
+/// Page « Lecteurs réseau » (FTP, SFTP, SMB… montés comme un disque).
+pub const PAGE_NETDRIVES: usize = 20;
+pub const PAGE_PERSONALIZE: usize = 21;
+const PAGE_COUNT: usize = 22;
 /// Ordre d'affichage du menu : la personnalisation suit l'apparence.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 4, 5, 6, 20, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19,
+    0, 1, 2, 3, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -39,6 +41,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_SYSTEM_UPDATES),
         tr(S_PRIVACY),
         tr(S_PROCESSOR),
+        tr(S_NETWORK_DRIVES),
         tr(S_PERSONALIZATION),
     ]
 }
@@ -335,6 +338,9 @@ pub unsafe fn system_tick() -> bool {
         open_page(11);
         changed = true;
     }
+    changed |= crate::netdrives::poll(
+        PAGE == PAGE_NETDRIVES && crate::wm::is_open(crate::wm::APP_SETTINGS),
+    );
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
     changed |= read(
         if PAGE == 7 {
@@ -1610,7 +1616,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         PAGE_SYSUPDATE => draw_sysupdate(g, &c),
         PAGE_PRIVACY => draw_privacy(g, &c),
         PAGE_CPU => crate::settings_cpu::draw(g, &c),
+        PAGE_NETDRIVES => crate::netdrives::draw(g, &c),
         _ => {}
+    }
+    if PAGE == PAGE_NETDRIVES {
+        return;
     }
     let notice = if PAGE == 10 {
         EXE_NOTICE
@@ -1651,6 +1661,9 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     -1
 }
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
+    if PAGE == PAGE_NETDRIVES && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        return crate::netdrives::mouse(ev, x, y, &content(f));
+    }
     if let Mouse::Wheel(delta) = ev {
         if PAGE == PAGE_CPU {
             return crate::settings_cpu::scroll(if delta < 0 { 3 } else { -3 });
@@ -1695,6 +1708,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if PAGE == PAGE_CPU {
         return crate::settings_cpu::click(&content(f), x, y);
+    }
+    if PAGE == PAGE_NETDRIVES {
+        return crate::netdrives::mouse(ev, x, y, &content(f));
     }
     if PAGE == 7 {
         let c = content(f);
@@ -2060,6 +2076,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     false
 }
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
+    if PAGE == PAGE_NETDRIVES && crate::netdrives::key(vk, ch) {
+        return true;
+    }
     if PAGE == 7 && restart_required() {
         if !updating() && ch == 13 {
             control(c"reboot");
