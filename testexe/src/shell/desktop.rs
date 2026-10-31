@@ -11,6 +11,7 @@
 mod utilities;
 use crate::explorer;
 use crate::gfx::*;
+use crate::locale::*;
 use crate::wm::{self, Gfx, Mouse};
 use winlux_testexe::*;
 
@@ -102,10 +103,10 @@ fn init_apps() {
             return;
         }
         let apps: [(&'static [u8], &'static [u8], i32); 29] = [
-            (b"Terminal", b"xterm", 1),
-            (b"Explorateur de fichiers", b"nemo", 1),
-            (b"Bloc-notes", b"mousepad", 1),
-            (b"Calculatrice", b"calc.exe", 1),
+            (tr(S_TERMINAL), b"xterm", 1),
+            (tr(S_FILE_EXPLORER), b"nemo", 1),
+            (tr(S_NOTEPAD), b"mousepad", 1),
+            (tr(S_CALCULATOR), b"calc.exe", 1),
             (b"Capture d'\xE9cran", b"screenshot.exe", 1),
             (b"Visionneuse", b"imageviewer.exe", 1),
             (b"Post-it", b"postit.exe", 1),
@@ -126,11 +127,11 @@ fn init_apps() {
             (b"VS Code", b"code", 7),
             (b"Vim", b"vim", 7),
             (b"Geany", b"geany", 7),
-            (b"Param\xE8tres", b"cinnamon-settings", 8),
+            (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
             (b"Gestionnaire de paquets", b"mintinstall", 9),
             (b"Disques", b"gnome-disks", 9),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
-            (b"Gestionnaire des t\xE2ches", b"taskmgr", 9),
+            (tr(S_TASK_MANAGER), b"taskmgr", 9),
         ];
         for (name, exec, cat) in apps.iter() {
             if ALL_APPS_COUNT < 64 {
@@ -1111,74 +1112,78 @@ struct App {
     glyph: Glyph,
     launch: Launch,
 }
-const PINNED: [App; 8] = [
-    App {
-        name: b"Explorer",
-        glyph: Glyph::Folder,
-        launch: Launch::Explorer,
-    },
-    App {
-        name: b"Param\xE8tres",
-        glyph: Glyph::Settings,
-        launch: Launch::Settings,
-    },
-    App {
-        name: b"Bloc-notes",
-        glyph: Glyph::File,
-        launch: Launch::Notepad,
-    },
-    App {
-        name: b"Utilitaires",
-        glyph: Glyph::Tools,
-        launch: Launch::Settings,
-    },
-    App {
-        name: b"Mises \xE0 jour",
-        glyph: Glyph::Store,
-        launch: Launch::Updates,
-    },
-    App {
-        name: b"Documents",
-        glyph: Glyph::Folder,
-        launch: Launch::Documents,
-    },
-    App {
-        name: b"Ce PC",
-        glyph: Glyph::Computer,
-        launch: Launch::Pc,
-    },
-    App {
-        name: b"Programmes .exe",
-        glyph: Glyph::Exe,
-        launch: Launch::Programs,
-    },
-];
-const RECOMMENDED: [(&[u8], &[u8], Glyph, Launch); 4] = [
-    (
-        b"Terminal",
-        b"Ouvrir un terminal Linux",
-        Glyph::Terminal,
-        Launch::Terminal,
-    ),
-    (
-        b"Navigateur",
-        b"Ouvrir le navigateur web",
-        Glyph::Store,
-        Launch::Browser,
-    ),
-    (
-        b"Documents",
-        b"Dossier personnel Linux",
-        Glyph::Folder,
-        Launch::Documents,
-    ),
-    (
-        b"Param\xE8tres Linux et Windows",
-        b"Clavier, r\xE9seau et alimentation",
-        Glyph::Settings,
-        Launch::Settings,
-    ),
-];
+fn pinned_apps() -> [App; 8] {
+    [
+        App {
+            name: tr(S_FILE_EXPLORER),
+            glyph: Glyph::Folder,
+            launch: Launch::Explorer,
+        },
+        App {
+            name: tr(S_SETTINGS_APP),
+            glyph: Glyph::Settings,
+            launch: Launch::Settings,
+        },
+        App {
+            name: tr(S_NOTEPAD),
+            glyph: Glyph::File,
+            launch: Launch::Notepad,
+        },
+        App {
+            name: b"Utilitaires",
+            glyph: Glyph::Tools,
+            launch: Launch::Settings,
+        },
+        App {
+            name: b"Mises \xE0 jour",
+            glyph: Glyph::Store,
+            launch: Launch::Updates,
+        },
+        App {
+            name: tr(S_DOCUMENTS),
+            glyph: Glyph::Folder,
+            launch: Launch::Documents,
+        },
+        App {
+            name: tr(S_THIS_PC),
+            glyph: Glyph::Computer,
+            launch: Launch::Pc,
+        },
+        App {
+            name: b"Programmes .exe",
+            glyph: Glyph::Exe,
+            launch: Launch::Programs,
+        },
+    ]
+}
+fn recommended_apps() -> [(&'static [u8], &'static [u8], Glyph, Launch); 4] {
+    [
+        (
+            tr(S_TERMINAL),
+            b"Ouvrir un terminal Linux",
+            Glyph::Terminal,
+            Launch::Terminal,
+        ),
+        (
+            b"Navigateur",
+            b"Ouvrir le navigateur web",
+            Glyph::Store,
+            Launch::Browser,
+        ),
+        (
+            tr(S_DOCUMENTS),
+            b"Dossier personnel Linux",
+            Glyph::Folder,
+            Launch::Documents,
+        ),
+        (
+            tr(S_SETTINGS_APP),
+            b"Clavier, r\xE9seau et alimentation",
+            Glyph::Settings,
+            Launch::Settings,
+        ),
+    ]
+}
 
 /// Lance une application depuis la barre des tâches ou le menu Démarrer.
 unsafe fn launch(what: Launch) {
@@ -1323,9 +1328,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let y = s.top + 82;
     let title: &[u8] = unsafe {
         if START_SHOW_ALL_APPS {
-            b"Toutes mes applications"
+            tr(S_ALL_APPS)
         } else {
-            b"\xC9pingl\xE9"
+            tr(S_PINNED)
         }
     };
     text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, title);
@@ -1357,14 +1362,14 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0x88, 0x88, 0x88),
             inner_l + 8,
             search_y + 8,
-            b"Rechercher...",
+            tr(S_SEARCH_PLACEHOLDER),
         );
     }
     let all: &[u8] = unsafe {
         if START_SHOW_ALL_APPS {
-            b"\xC9pingl\xE9"
+            tr(S_PINNED)
         } else {
-            b"Toutes mes applications"
+            tr(S_ALL_APPS)
         }
     };
     let all_w = text_width(all, 11) + 20;
@@ -1376,7 +1381,8 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         y + 2,
         all,
     );
-    for (i, app) in PINNED
+    let pinned = pinned_apps();
+    for (i, app) in pinned
         .iter()
         .take((PIN_COLS * pin_rows(s)) as usize)
         .enumerate()
@@ -1522,9 +1528,10 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0xF2, 0xF2, 0xF2),
             inner_l + 4,
             ry,
-            b"Recommand\xE9",
+            tr(S_RECOMMENDED),
         );
-        for (i, (title, sub, g, _)) in RECOMMENDED.iter().enumerate() {
+        let recommended = recommended_apps();
+        for (i, (title, sub, g, _)) in recommended.iter().enumerate() {
             let c = recommended_cell(s, i as i32);
             if HOVER_START_ITEM == 100 + i as i32 {
                 round_rect(
@@ -1620,9 +1627,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         },
     );
     let label: &[u8] = if ALIGN_LEFT {
-        b"Barre : \xE0 gauche"
+        tr(S_ALIGN_LEFT)
     } else {
-        b"Barre : centr\xE9e"
+        tr(S_CENTER)
     };
     text_centered(
         hdc,
@@ -1666,9 +1673,9 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     let all_w = unsafe {
         text_width(
             if START_SHOW_ALL_APPS {
-                b"\xC9pingl\xE9"
+                tr(S_PINNED)
             } else {
-                b"Toutes mes applications"
+                tr(S_ALL_APPS)
             },
             11,
         ) + 20
@@ -1697,7 +1704,8 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
             }
         }
     } else {
-        for i in 0..PINNED.len() as i32 {
+        let pinned = pinned_apps();
+        for i in 0..pinned.len() as i32 {
             if inside(&pinned_cell(s, i), x, y) {
                 return i;
             }
@@ -1943,16 +1951,19 @@ unsafe fn draw_notif_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) 
 
 // ---------- Icônes du bureau ----------
 
-const DESKTOP_ICONS: [(&[u8], Glyph); 5] = [
-    (b"Ce PC", Glyph::Computer),
-    (b"Documents", Glyph::Folder),
-    (b"Corbeille", Glyph::Trash),
-    (b"Explorer", Glyph::Folder),
-    (b"Param\xE8tres", Glyph::Settings),
-];
+fn desktop_icon_list() -> [(&'static [u8], Glyph); 5] {
+    [
+        (tr(S_THIS_PC), Glyph::Computer),
+        (tr(S_DOCUMENTS), Glyph::Folder),
+        (tr(S_TRASH), Glyph::Trash),
+        (tr(S_FILE_EXPLORER), Glyph::Folder),
+        (tr(S_SETTINGS_APP), Glyph::Settings),
+    ]
+}
 
 unsafe fn desktop_icons(hdc: Handle, b: &mut Brushes, f: &Fonts) {
-    for (i, (name, g)) in DESKTOP_ICONS.iter().enumerate() {
+    let icons = desktop_icon_list();
+    for (i, (name, g)) in icons.iter().enumerate() {
         if !icon_visible(i) {
             continue;
         }
@@ -2140,7 +2151,7 @@ pub unsafe fn draw(hdc: Handle) {
             rgb(0x60, 0x60, 0x60),
             12,
             SCREEN_H - 28,
-            b"\xC9cran de veille",
+            tr(S_SLEEP),
         );
         f.release();
         b.release();
@@ -2258,7 +2269,7 @@ pub unsafe fn tick(hwnd: Handle) {
         wm::WORK = rect(0, 0, w, h - TASKBAR_HEIGHT);
         wm::on_resize();
         CONTEXT_APP = None;
-        for i in 0..DESKTOP_ICONS.len() {
+        for i in 0..5 {
             ICON_X[i] = ICON_X[i].min(w - 80);
             ICON_Y[i] = ICON_Y[i].min(h - TASKBAR_HEIGHT - 90);
         }
@@ -2398,11 +2409,11 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 }
                 i @ 0..=5 => {
                     set_start(false);
-                    launch(PINNED[i as usize].launch);
+                    launch(pinned_apps()[i as usize].launch);
                 }
                 i @ 100..=103 => {
                     set_start(false);
-                    launch(RECOMMENDED[(i - 100) as usize].3);
+                    launch(recommended_apps()[(i - 100) as usize].3);
                 }
                 _ => return,
             }
@@ -2420,7 +2431,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         }
         return;
     }
-    for i in (0..DESKTOP_ICONS.len()).rev() {
+    for i in (0..5).rev() {
         if !icon_visible(i) {
             continue;
         }
@@ -2596,7 +2607,7 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
                 }
                 return;
             }
-            for i in (0..DESKTOP_ICONS.len()).rev() {
+            for i in (0..5).rev() {
                 if icon_visible(i)
                     && inside(
                         &rect(ICON_X[i], ICON_Y[i], ICON_X[i] + 76, ICON_Y[i] + 84),

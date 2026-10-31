@@ -16,6 +16,7 @@
 //! - `tick(frame) -> bool` est appelé deux fois par seconde.
 
 use crate::gfx::*;
+use crate::locale::*;
 use crate::notepad;
 use crate::utilities;
 use winlux_testexe::*;
@@ -279,12 +280,12 @@ pub static mut MOUSE_Y: i32 = -1;
 
 pub fn title_of(app: usize) -> &'static [u8] {
     match app {
-        APP_EXPLORER => b"Explorer",
-        APP_SETTINGS => b"Param\xE8tres",
-        APP_NOTEPAD => b"Bloc-notes",
-        APP_TASKMGR => b"Gestionnaire des t\xE2ches",
-        APP_UTILITIES => b"Utilitaires",
-        _ => b"Param\xE8tres",
+        APP_EXPLORER => tr(S_FILE_EXPLORER),
+        APP_SETTINGS => tr(S_SETTINGS_APP),
+        APP_NOTEPAD => tr(S_NOTEPAD),
+        APP_TASKMGR => tr(S_TASK_MANAGER),
+        APP_UTILITIES => tr(S_UTILITIES),
+        _ => tr(S_SETTINGS_APP),
     }
 }
 fn glyph_of(app: usize) -> Glyph {
@@ -827,7 +828,7 @@ pub unsafe fn draw(g: &mut Gfx) {
             p.text,
             cx + 16,
             cy + 12,
-            b"Basculer entre les fen\xEAtres",
+            tr(S_SWITCH_WINDOWS),
         );
         let mut list = [usize::MAX; APP_COUNT];
         let mut count = 0;
@@ -894,8 +895,8 @@ pub unsafe fn draw(g: &mut Gfx) {
             7,
             p.surface,
         );
-        text(g.hdc, g.f.caption, p.text, cx + 16, cy + 12, b"Ex\xE9cuter");
-        text(g.hdc, g.f.small, p.text3, cx + 16, cy + 42, b"Ouvrir :");
+        text(g.hdc, g.f.caption, p.text, cx + 16, cy + 12, tr(S_RUN));
+        text(g.hdc, g.f.small, p.text3, cx + 16, cy + 42, tr(S_OPEN_COLON));
         fill(
             g.hdc,
             g.b,

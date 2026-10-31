@@ -14,6 +14,8 @@ mod desktop;
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/locale.rs"]
+mod locale;
 #[path = "../shell/notepad.rs"]
 mod notepad;
 #[path = "../shell/settings.rs"]
@@ -820,6 +822,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let desktop =
             GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0;
         DESKTOP = desktop;
+        locale::load_lang();
         wm::native_init();
         if desktop {
             let mut align = [0i8; 8];

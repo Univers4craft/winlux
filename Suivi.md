@@ -4,15 +4,21 @@
 
 ## Statistiques
 
-- Réalisé : **124**
+- Réalisé : **130**
 - À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Total : **156**
+- Progression : **83.3%**
 
 ## À FAIRE (par priorité)
 
 ### Priorité IMMÉDIATE (★★★★★)
 
+- [x] **Localisation multilingue** : Module i18n (locale.rs) avec 150 chaînes en FR/EN/ES/DE. Page Localisation dans Paramètres (langue, clavier, fuseau horaire).
+- [x] **Interface multilingue** : Remplacement des chaînes françaises par `tr()` dans desktop.rs, explorer.rs, wm.rs, settings.rs.
+- [x] **Actions contrôle localisation** : winlux-control.sh gère lang-*/keyboard-*/tz-*, 8 dispositions clavier, locale.conf.
+- [x] **Installateur multilingue** : Choix de la langue et du clavier lors de l'installation sur disque vierge.
+- [x] **Session multilingue** : xsession-winlux lit locale.conf et exporte WINLUX_LANG au démarrage.
+- [x] **Gestion fuseau horaire** : timedatectl/ln -sf dans winlux-control.sh, 12 fuseaux courants dans l'interface.
 - [ ] **Corbeille fonctionnelle** : Permettre "Supprimer" -> corbeille, restaurer, vider. Très attendu.
 - [ ] **Copie avec progression + pause/annuler** : UX visuelle (barre de progression + vitesse, ETA) dans l'Explorateur.
 - [ ] **Centre de réglages rapides plus complet** : Étendre (réseau/volume/éclairage/batterie). Sur VM sans Wi-Fi, afficher clairement "Ethernet virtuel" au lieu de "Wi-Fi indisponible".
@@ -210,6 +216,12 @@
 - [x] Ajouter les barrières de tests Live/disque installé au workflow de release ; son exécution complète sur les runners GitHub reste à valider.
 - [x] Ajouter le fichier NOTICES au dépôt et copier les notices audio disponibles dans les ISO.
 - [x] Publier ISO, sommes, paquet, manifeste et notes dans les préversions système existantes (notamment preview.4).
+- [x] Ajouter un système d'internationalisation (locale.rs) avec tables de chaînes FR/EN/ES/DE (150 entrées).
+- [x] Ajouter une page Localisation dans les Paramètres (choix langue, 8 claviers, 12 fuseaux horaires).
+- [x] Remplacer les chaînes françaises codées en dur par des appels `tr()` dans le bureau, l'explorateur et le gestionnaire de fenêtres.
+- [x] Étendre winlux-control.sh avec les actions lang-*/tz-* et 8 dispositions clavier.
+- [x] Ajouter le choix de langue et clavier à l'installateur (install.sh).
+- [x] Lire locale.conf au démarrage de session (xsession-winlux, export WINLUX_LANG).
 
 
 ---

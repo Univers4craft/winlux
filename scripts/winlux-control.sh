@@ -40,6 +40,8 @@ status() {
         printf 'mouse_speed=%s\n' "$(input MOUSE_SPEED | sed 's/^$/50/')"
         printf 'align=%s\n' "$(pref TASKBAR_ALIGN)"
         printf 'theme=%s\n' "$(pref THEME)"
+        printf 'lang=%s\n' "$(value "$config/locale.conf" LANG | sed 's/^$/fr/')"
+        printf 'timezone=%s\n' "$(cat /etc/timezone 2>/dev/null || printf 'Europe/Paris')"
         printf 'network='; if have ip; then
             iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1 { print $5 }')
             if test -n "$iface"; then
@@ -121,11 +123,25 @@ perform() {
             elif have amixer; then
                 case "$action" in volume-up) amixer set Master 5%+ ;; volume-down) amixer set Master 5%- ;; *) amixer set Master toggle ;; esac
             else echo 'Aucun mixeur audio installe.' >&2; return 1; fi ;;
-        keyboard-fr|keyboard-us)
+        keyboard-fr|keyboard-us|keyboard-de|keyboard-es|keyboard-gb|keyboard-it|keyboard-pt|keyboard-be)
             layout=${action#keyboard-}
             have setxkbmap || { echo 'setxkbmap indisponible' >&2; return 1; }
             setxkbmap -layout "$layout" || return
             save "$config/input.conf" XKB_LAYOUT "$layout" ;;
+        lang-fr|lang-en|lang-es|lang-de)
+            lang=${action#lang-}
+            save "$config/locale.conf" LANG "$lang" ;;
+        tz-*)
+            tz=${action#tz-}
+            case "$tz" in *[!A-Za-z0-9/_+-]*) echo "Fuseau invalide : $tz" >&2; return 1 ;; esac
+            test -f "/usr/share/zoneinfo/$tz" || { echo "Fuseau inconnu : $tz" >&2; return 1; }
+            if have timedatectl; then
+                timedatectl set-timezone "$tz" || return
+            else
+                ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime || return
+                printf '%s\n' "$tz" > /etc/timezone || return
+            fi
+            save "$config/locale.conf" TIMEZONE "$tz" ;;
         tap-on|tap-off)
             tap=0; test "$action" != tap-on || tap=1
             apply_tap "$tap" || return
