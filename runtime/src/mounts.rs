@@ -5,7 +5,8 @@
 //!
 //! `lettre  type  point_de_montage  libellé  ro  source  périphérique  backend  [état]`
 //!
-//! - `type` : `image` (image disque montée), `network` (FTP, SFTP, SMB…) ;
+//! - `type` : `image` (image disque montée), `network` (FTP, SFTP, SMB…),
+//!   `disk` (clé USB, disque NTFS… monté par `winlux --volumes`) ;
 //! - `ro` : `1` si le lecteur est en lecture seule ;
 //! - `état` (optionnel) : `ok`, `offline` ou `connecting`. Un lecteur hors
 //!   ligne est résolu vers un chemin inexistant pour échouer vite.
@@ -228,10 +229,12 @@ pub fn drive_mask() -> u32 {
         .fold(0, |acc, m| acc | 1 << (m.letter as u32 - 'A' as u32))
 }
 
-/// Valeur `GetDriveType` : 2 amovible (image), 4 réseau, `None` sinon.
+/// Valeur `GetDriveType` : 2 amovible, 3 fixe, 4 réseau, 5 CD, `None` sinon.
 pub fn drive_type(letter: char) -> Option<u32> {
     get(letter).map(|m| match m.kind.as_str() {
         "network" => 4,
+        // Disque branché : fixe (3) s'il est interne, amovible sinon.
+        "disk" if m.backend.split(':').nth(1) == Some("fixed") => 3,
         "image" if m.source.to_ascii_lowercase().ends_with(".iso") => 5,
         _ => 2,
     })
