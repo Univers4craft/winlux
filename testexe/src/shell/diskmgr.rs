@@ -11,7 +11,11 @@ pub const CUSTOM_TITLE: bool = false;
 // Navigation
 const NAV_W: i32 = 200;
 static mut TAB: usize = 0;
-const TAB_NAMES: [&[u8]; 3] = [b"Volumes", b"Disques", b"SMART"];
+const TAB_NAMES: [Tr4; 3] = [
+    [b"Volumes", b"Volumes", b"Vol\xFAmenes", b"Volumes"],
+    [b"Disques", b"Disks", b"Discos", b"Datentr\xE4ger"],
+    [b"SMART", b"SMART", b"SMART", b"SMART"],
+];
 static mut NAV_HOVER: i32 = -1;
 
 // Scroll et sélection
@@ -445,7 +449,7 @@ fn format_size(buf: &mut [u8], mb: u32) -> usize {
         pos += 1;
         buf[pos] = b'0' + frac.min(9) as u8;
         pos += 1;
-        for &c in b" Go" {
+        for &c in tr4(&[b" Go", b" GB", b" GB", b" GB"]) {
             buf[pos] = c;
             pos += 1;
         }
@@ -460,7 +464,7 @@ fn format_size(buf: &mut [u8], mb: u32) -> usize {
         }
         buf[pos] = b'0' + (mb % 10) as u8;
         pos += 1;
-        for &c in b" Mo" {
+        for &c in tr4(&[b" Mo", b" MB", b" MB", b" MB"]) {
             buf[pos] = c;
             pos += 1;
         }
@@ -535,7 +539,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.text,
         c.left + 48,
         c.top + 20,
-        b"Gestion des disques",
+        tr4(&[
+            b"Gestion des disques",
+            b"Disk Management",
+            b"Administraci\xF3n de discos",
+            b"Datentr\xE4gerverwaltung",
+        ]),
     );
 
     // Onglets
@@ -578,7 +587,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             if active { p.text } else { p.text2 },
             c.left + 20,
             ty + 8,
-            TAB_NAMES[i],
+            tr4(&TAB_NAMES[i]),
         );
     }
 
@@ -595,16 +604,42 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
 
 unsafe fn draw_volumes(g: &mut Gfx, x: i32, top: i32, w: i32, h: i32) {
     let p = pal();
-    text(g.hdc, g.f.large, p.text, x + 24, top + 16, b"Volumes");
+    text(
+        g.hdc,
+        g.f.large,
+        p.text,
+        x + 24,
+        top + 16,
+        tr4(&[b"Volumes", b"Volumes", b"Vol\xFAmenes", b"Volumes"]),
+    );
 
     // En-tête colonnes
     let col_y = top + 52;
     let cols: [(i32, &[u8]); 5] = [
-        (x + 24, b"Nom"),
-        (x + 120, b"Point de montage"),
-        (x + 300, b"Syst\xE8me"),
-        (x + 400, b"Taille"),
-        (x + 500, b"Utilis\xE9"),
+        (x + 24, tr4(&[b"Nom", b"Name", b"Nombre", b"Name"])),
+        (
+            x + 120,
+            tr4(&[
+                b"Point de montage",
+                b"Mount point",
+                b"Punto de montaje",
+                b"Einh\xE4ngepunkt",
+            ]),
+        ),
+        (
+            x + 300,
+            tr4(&[
+                b"Syst\xE8me",
+                b"File system",
+                b"Sistema de archivos",
+                b"Dateisystem",
+            ]),
+        ),
+        (
+            x + 400,
+            tr4(&[b"Taille", b"Size", b"Tama\xF1o", b"Gr\xF6\xDFe"]),
+        ),
+        (x + 500, tr4(&[b"Utilis\xE9", b"Used", b"Usado", b"Belegt"])),
     ];
     for (cx, label) in cols {
         text(g.hdc, g.f.small, p.text3, cx, col_y, label);
@@ -682,7 +717,19 @@ unsafe fn draw_volumes(g: &mut Gfx, x: i32, top: i32, w: i32, h: i32) {
                 &part.mount[..part.mount_len],
             );
         } else {
-            text(g.hdc, g.f.body, p.text3, x + 120, ry + 6, b"(non mont\xE9)");
+            text(
+                g.hdc,
+                g.f.body,
+                p.text3,
+                x + 120,
+                ry + 6,
+                tr4(&[
+                    b"(non mont\xE9)",
+                    b"(not mounted)",
+                    b"(no montado)",
+                    b"(nicht eingeh\xE4ngt)",
+                ]),
+            );
         }
 
         // Système de fichiers
@@ -777,7 +824,7 @@ unsafe fn draw_volumes(g: &mut Gfx, x: i32, top: i32, w: i32, h: i32) {
         p.text,
         mount_r.left + 16,
         mount_r.top + 8,
-        b"Monter",
+        tr4(&[b"Monter", b"Mount", b"Montar", b"Einh\xE4ngen"]),
     );
 
     round_rect(
@@ -796,7 +843,7 @@ unsafe fn draw_volumes(g: &mut Gfx, x: i32, top: i32, w: i32, h: i32) {
         p.text,
         unmount_r.left + 16,
         unmount_r.top + 8,
-        b"D\xE9monter",
+        tr4(&[b"D\xE9monter", b"Unmount", b"Desmontar", b"Aush\xE4ngen"]),
     );
 }
 
@@ -808,7 +855,12 @@ unsafe fn draw_disks(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
         p.text,
         x + 24,
         top + 16,
-        b"Disques physiques",
+        tr4(&[
+            b"Disques physiques",
+            b"Physical disks",
+            b"Discos f\xEDsicos",
+            b"Physische Datentr\xE4ger",
+        ]),
     );
 
     let mut row = 0;
@@ -933,7 +985,12 @@ unsafe fn draw_disks(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
             p.text3,
             x + 24,
             top + 56,
-            b"Aucun disque d\xE9tect\xE9",
+            tr4(&[
+                b"Aucun disque d\xE9tect\xE9",
+                b"No disk detected",
+                b"No se detect\xF3 ning\xFAn disco",
+                b"Kein Datentr\xE4ger erkannt",
+            ]),
         );
     }
 }
@@ -946,7 +1003,12 @@ unsafe fn draw_smart(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
         p.text,
         x + 24,
         top + 16,
-        b"Informations SMART",
+        tr4(&[
+            b"Informations SMART",
+            b"SMART information",
+            b"Informaci\xF3n SMART",
+            b"SMART-Informationen",
+        ]),
     );
 
     // Disque sélectionné
@@ -987,7 +1049,14 @@ unsafe fn draw_smart(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
         } else {
             rgb(0xFF, 0x60, 0x50)
         };
-        text(g.hdc, g.f.body, p.text3, x + 24, top + 68, b"Sant\xE9 : ");
+        text(
+            g.hdc,
+            g.f.body,
+            p.text3,
+            x + 24,
+            top + 68,
+            tr4(&[b"Sant\xE9 : ", b"Health: ", b"Estado: ", b"Zustand: "]),
+        );
         text(
             g.hdc,
             g.f.semibold,
@@ -1001,11 +1070,46 @@ unsafe fn draw_smart(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
     // En-tête colonnes SMART
     let col_y = top + 96;
     text(g.hdc, g.f.small, p.text3, x + 24, col_y, b"ID");
-    text(g.hdc, g.f.small, p.text3, x + 60, col_y, b"Attribut");
-    text(g.hdc, g.f.small, p.text3, x + 240, col_y, b"Valeur");
-    text(g.hdc, g.f.small, p.text3, x + 310, col_y, b"Pire");
-    text(g.hdc, g.f.small, p.text3, x + 370, col_y, b"Seuil");
-    text(g.hdc, g.f.small, p.text3, x + 430, col_y, b"Brut");
+    text(
+        g.hdc,
+        g.f.small,
+        p.text3,
+        x + 60,
+        col_y,
+        tr4(&[b"Attribut", b"Attribute", b"Atributo", b"Attribut"]),
+    );
+    text(
+        g.hdc,
+        g.f.small,
+        p.text3,
+        x + 240,
+        col_y,
+        tr4(&[b"Valeur", b"Value", b"Valor", b"Wert"]),
+    );
+    text(
+        g.hdc,
+        g.f.small,
+        p.text3,
+        x + 310,
+        col_y,
+        tr4(&[b"Pire", b"Worst", b"Peor", b"Schlechtester"]),
+    );
+    text(
+        g.hdc,
+        g.f.small,
+        p.text3,
+        x + 370,
+        col_y,
+        tr4(&[b"Seuil", b"Threshold", b"Umbral", b"Schwellenwert"]),
+    );
+    text(
+        g.hdc,
+        g.f.small,
+        p.text3,
+        x + 430,
+        col_y,
+        tr4(&[b"Brut", b"Raw", b"Sin procesar", b"Rohwert"]),
+    );
     fill(
         g.hdc,
         g.b,
@@ -1063,7 +1167,12 @@ unsafe fn draw_smart(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
             p.text3,
             x + 24,
             col_y + 24,
-            b"Aucune donn\xE9e SMART disponible",
+            tr4(&[
+                b"Aucune donn\xE9e SMART disponible",
+                b"No SMART data available",
+                b"No hay datos SMART disponibles",
+                b"Keine SMART-Daten verf\xFCgbar",
+            ]),
         );
     }
 }
