@@ -45,7 +45,9 @@ pub mod ipp;
 pub mod kernel32;
 pub mod kernel32_cpu;
 pub mod kernel32_ext;
+pub mod kernel32_fs;
 pub mod kernel32_misc;
+pub mod knownfolders;
 pub mod libgcc;
 pub mod libstdcpp;
 pub mod mfcapture;
@@ -152,6 +154,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = kernel32::exports();
                     e.extend(winfile::exports());
                     e.extend(kernel32_misc::exports());
+                    e.extend(kernel32_fs::exports());
                     e.extend(kernel32_cpu::exports());
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
@@ -176,6 +179,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = ntdll::exports();
                     e.extend(seh::exports());
                     e.extend(kernel32_ext::ntdll_exports());
+                    e.extend(kernel32_fs::ntdll_exports());
                     e
                 },
                 handle: fake_module(),
@@ -206,6 +210,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = advapi32::exports();
                     e.extend(advapi32_services::exports());
                     e.extend(kernel32_ext::advapi32_exports());
+                    e.extend(kernel32_fs::advapi32_exports());
                     e.extend(eventing::exports());
                     e
                 },
@@ -243,7 +248,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "shell32",
-                exports: shell32::exports(),
+                exports: {
+                    let mut e = shell32::exports();
+                    e.extend(knownfolders::shell32_exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -403,7 +412,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "userenv",
-                exports: userenv::exports(),
+                exports: {
+                    let mut e = userenv::exports();
+                    e.extend(knownfolders::userenv_exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
