@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **226**
+- Réalisé : **227**
 - À faire ou en cours : **42**
-- Total : **268**
-- Progression : **84.3%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, WIC maison pour Paint.NET)
+- Total : **269**
+- Progression : **84.4%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, WIC maison et Direct2D logiciel pour Paint.NET)
 
 ## À FAIRE (par priorité)
 
@@ -105,6 +105,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).
 
 - [x] Captures d'écran automatiques et mode machine virtuelle (#156) : `scripts/capture-ui.py` photographie sous Xvfb les 25 pages des Paramètres, le menu Démarrer, les popups, les outils système, Bienvenue et les applis maison PE (bureau, Explorateur, Store, Polices, Planificateur, Pare-feu) ; `scripts/compare-captures.py` les compare à la dernière version verte de master (job CI « Captures d'écran », artefacts `captures-ui` et `captures-ui-diff`, alerte au-delà de 2 % de pixels changés). `winlux-hardware` détecte l'hyperviseur (`/run/winlux/hw/virtual-machine`) et ne compte plus les cartes émulées comme GPU : curseur logiciel conservé, économiseur en GL logiciel, « Suivre la taille de la VM » seulement en VM.
+- [x] Direct2D 1.0 logiciel maison (`d2d1.rs`, `d2d_raster.rs`) : géométries, chemins, pinceaux unis, bitmaps, cible de rendu sur bitmap WIC, rendu anticrénelé, transformations et découpe ; `ID2D1DeviceContext`, dégradés et DirectWrite à venir (`docs/PAINTNET.md`).
 - [x] WIC maison (`windowscodecs.rs`) : fabrique, décodeurs sur les décodeurs d'images de Winlux, bitmaps verrouillables, conversion de formats, mise à l'échelle, découpe, rotation, `IWICStream` ; encodeurs à venir (`docs/PAINTNET.md`).
 - [x] coreclr embarqué démarré : répartition SEH x64 (`seh.rs` : RtlVirtualUnwind, RtlUnwindEx, RtlRestoreContext, VEH, tables de fonctions dynamiques), exceptions C++ MSVC de coreclr, tas du GC, thread du finaliseur, System.Private.CoreLib puis `paintdotnet.dll` chargées et code managé exécuté (images relogées sur 64 Kio, VirtualQuery des piles, VerifyVersionInfo, InitializeContext2, locales nommées) (`docs/PAINTNET.md`).
 - [x] Issues fermées le 31/10/2026 car livrées sur master : impression (#77 par #111), audio des .exe (#78 par #115), manettes, webcam, micro et Bluetooth (#79 par #114), alimentation et batterie (#80 par #107), Store et polices (#81, #82 par #123 et #129), planificateur et pare-feu (#83, #84 par #112), presse-papiers Win+V et capture d'écran (#85, #86 par #109), sauvegarde, multi-utilisateur et bureau à distance (#87, #88, #89 par #119), CPU (#90 par #103), GPU (#91 par #104), Direct3D 9/12 (#92 par #127), installateur (#93 par #75, #116 et #118 ; #94 par #76 ; #95 par #100 ; #96 par #101 ; #97 par #105 ; #98 par #102).

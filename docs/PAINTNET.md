@@ -157,7 +157,23 @@ un test de relance depuis un rappel de consolidation.
    métadonnées. Comme Paint.NET s'arrête avant d'appeler WIC, cette partie
    n'est vérifiée que par les tests unitaires pour l'instant.
 4. **Direct2D et DirectWrite** : Paint.NET peint le canevas et les contrôles
-   en Direct2D, sur Direct3D 11 ou sur le rendu logiciel WARP.
+   en Direct2D, sur Direct3D 11 ou sur le rendu logiciel WARP. Depuis la
+   PR 4, Winlux fournit un Direct2D 1.0 logiciel maison
+   (`runtime/src/dlls/d2d1.rs`, sur le rasteriseur `d2d_raster.rs`) :
+   fabrique, géométries rectangle, rectangle arrondi, ellipse et chemin
+   (lignes, Bézier cubiques et quadratiques, arcs, règles pair-impair et
+   non nulle, test de contenance et boîte englobante), pinceaux unis avec
+   opacité, bitmaps (copie depuis la mémoire ou un bitmap WIC), cible de
+   rendu sur bitmap WIC (`CreateWicBitmapRenderTarget`) avec effacement,
+   remplissage et contour anticrénelés, `DrawBitmap` (plus proche voisin ou
+   bilinéaire), transformations, découpe alignée sur les axes, et les
+   fonctions `D2D1MakeRotateMatrix`, `D2D1MakeSkewMatrix`,
+   `D2D1InvertMatrix`. Manquent encore : `ID2D1Factory1` et le contexte de
+   périphérique (`ID2D1DeviceContext`, effets), les dégradés, les pinceaux
+   bitmap, les styles de trait, les calques, les cibles HWND et DXGI, et
+   tout DirectWrite (le texte n'est pas encore dessiné). Comme pour WIC, ce
+   n'est vérifié que par les tests unitaires tant que Paint.NET s'arrête
+   avant.
 5. **WPF** : `wpfgfx_cor3.dll` (composition MIL, rendu Direct3D 9 ou
    logiciel), `PresentationNative_cor3.dll` et `DirectWriteForwarder.dll`
    (mixte, via `ijwhost.dll`).
@@ -172,7 +188,7 @@ un test de relance depuis un rappel de consolidation.
    imports de clrjit, jusqu'à un « Hello world » .NET 9 autonome.
 3. BCL : imports directs de CoreLib et globalisation.
 4. WIC : décodeurs branchés sur les décodeurs maison *(PR 3)*, encodeurs ensuite.
-5. Direct2D et DirectWrite.
+5. Direct2D 1.0 logiciel *(PR 4)*, puis `ID2D1DeviceContext` et DirectWrite.
 6. WPF (`wpfgfx`) et la fenêtre principale de Paint.NET.
 
 Chaque étape se valide sur un petit programme .NET autonome de référence

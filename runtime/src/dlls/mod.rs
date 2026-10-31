@@ -17,6 +17,8 @@ pub mod crt_scan;
 pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
+pub mod d2d1;
+pub mod d2d_raster;
 pub mod d3d11;
 pub mod d3d12;
 pub mod d3d9;
@@ -411,6 +413,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "windowscodecs",
                 exports: windowscodecs::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d2d1",
+                exports: d2d1::exports(),
                 handle: fake_module(),
             },
             Builtin {
