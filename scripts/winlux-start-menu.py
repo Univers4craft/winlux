@@ -62,6 +62,7 @@ _TR = {
     'Impossible d’ouvrir l’application': ("Couldn't open the app", 'No se puede abrir la aplicación', 'Die App konnte nicht geöffnet werden'),
     'Résultats': ('Results', 'Resultados', 'Ergebnisse'),
     'Toutes les applications': ('All apps', 'Todas las aplicaciones', 'Alle Apps'),
+    '‹  Retour': ('‹  Back', '‹  Volver', '‹  Zurück'),
     'Paramètres · ': ('Settings · ', 'Configuración · ', 'Einstellungen · '),
     'Fichier · ': ('File · ', 'Archivo · ', 'Datei · '),
     '30 premiers fichiers affichés. Précisez la recherche.': ('First 30 files shown. Refine your search.', 'Se muestran los 30 primeros archivos. Precise la búsqueda.', 'Die ersten 30 Dateien werden angezeigt. Verfeinern Sie die Suche.'),
@@ -278,7 +279,7 @@ class Start(Gtk.Application):
         query = self.search.get_text().strip().casefold()
         listing = self.all_apps or bool(query)
         self.heading.set_text(_t("Résultats") if query else _t("Toutes les applications") if listing else _t("Épinglé"))
-        self.toggle.set_label("‹  Retour" if listing else _t("Toutes les applications  ›"))
+        self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
         self.results = sorted((app for app in self.apps.values() if query in app.get_display_name().casefold()), key=lambda app: app.get_display_name().casefold())
         if listing:
             if query:
