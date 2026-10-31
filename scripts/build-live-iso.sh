@@ -106,6 +106,8 @@ mkdir -p "$stage/usr/share/winlux"
 printf '%s\n' "${WINLUX_BUILD_VERSION:-$(cat "$root/VERSION")}" >"$stage/usr/share/winlux/version"
 sh "$root/scripts/build-info.sh" "$(cat "$stage/usr/share/winlux/version")" system >"$stage/usr/share/winlux/BUILD-INFO"
 printf 'system\n' >"$stage/usr/share/winlux/update-scope"
+mkdir -p "$stage/usr/share/winlux/avatars"
+cp "$root"/assets/avatars/avatar-*.svg "$stage/usr/share/winlux/avatars/"
 
 # Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
 wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
