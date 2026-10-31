@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **124**
+- Réalisé : **128**
 - À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Total : **154**
+- Progression : **83.1%**
 
 ## À FAIRE (par priorité)
 
@@ -178,6 +178,10 @@
 - [x] Ajouter un test automatisé dans QEMU avec vérification des marqueurs de résultat.
 - [x] Sélectionner l'entrée de diagnostic dans `scripts/test-live-iso-qemu.sh` et vérifier BIOS/UEFI sans modifier l'ISO livrée.
 - [x] Documenter la RAM, le nombre de CPU et les options nécessaires à la VM.
+- [x] Mode récupération « Winlux Recovery » : réparer GRUB (BIOS, UEFI, Secure Boot), restaurer le point précédent, terminal de secours, fsck (`docs/RECOVERY.md`).
+- [x] Vérification d'intégrité du média au démarrage : manifeste `winlux.sha256` par fichier, entrée GRUB dédiée.
+- [x] Installation silencieuse : fichier de réponse YAML/JSON, pages préconfigurées sautées, compte local uniquement (`docs/AUTOINSTALL.md`, `scripts/test-autoinstall.py`).
+- [x] Secure Boot : shim signé, GRUB signé, MokManager, clé MOK et signature du noyau, ISO hybride `WINLUX_SECUREBOOT=1` validée sous OVMF (`docs/SECURE-BOOT.md`, `scripts/test-secureboot-qemu.sh`).
 
 ### Priorité 5 — Thème Windows 11
 
