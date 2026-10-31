@@ -130,10 +130,42 @@ déjà traité. Si notre substitution des cadres de trampoline
 (`FrameKind::Consolidate` dans `seh.rs`) fait reprendre le parcours trop
 bas, le même `catch` reprend l'exception à chaque fois, et la pile déborde.
 
-Prochaine étape, avec nos propres outils : journaliser dans `seh.rs`
-chaque cadre parcouru par `dispatch` (RIP, cadre d'établissement,
-gestionnaire, disposition) et chaque entrée de `FRAMES`. Il faut aussi
-un test de relance depuis un rappel de consolidation.
+### Mesures du 31/10/2026 au soir
+
+`seh.rs` sait maintenant tout journaliser : `WINLUX_SEH_TRACE=1` écrit une
+ligne par cadre parcouru (recherche ou déroulement, cadre d'établissement,
+gestionnaire, disposition), par consolidation (rappel, cadre cible) et par
+trampoline traversé. La trace des levées donne aussi RSP.
+
+Ce que montrent ces journaux sur Paint.NET :
+
+- À chaque tour, RSP descend d'environ 23 Kio : la pile n'est jamais
+  rendue, d'où le « Stack overflow. » final.
+- Le tour se répète à l'identique : le bloc `catch` du cadre parent
+  s'exécute, il relance (`throw;`), le bloc de capture de la relance lève à
+  nouveau l'exception d'origine, le trampoline de consolidation ramène le
+  parcours dans le cadre parent, et le gestionnaire de ce cadre reprend la
+  même exception dans le même `catch`.
+- Le parcours des cadres par Winlux suit bien le modèle de Windows : après
+  le trampoline de consolidation, on reprend dans le cadre cible, avec le
+  même cadre d'établissement que lors de la première capture.
+
+Contre-épreuve : un petit `.exe` MSVC compilé avec clang et lld-link
+(`throw;` dans un `catch`, rattrapé par l'appelant) passe avec Winlux quand
+il utilise `__CxxFrameHandler3` : le `catch` s'exécute une seule fois et la
+relance atteint bien l'appelant. coreclr, lui, utilise `__CxxFrameHandler4`
+(lié statiquement), qui ne se protège pas de la même façon contre une
+nouvelle capture dans le cadre parent. Il attend donc quelque chose du
+système (contexte de répartition, drapeaux de l'enregistrement, état du
+cadre) que Winlux ne fournit pas encore.
+
+Suite : écrire notre propre `__CxxFrameHandler3`/`__CxxFrameHandler4` et
+`_CxxThrowException` dans le `vcruntime140` intégré, à partir du format
+public des tables d'exceptions. C'est de toute façon nécessaire : ces
+fonctions manquent aujourd'hui, et tout programme C++ compilé en `/MD` qui
+lève une exception s'arrête dessus. Cela dira aussi précisément ce que FH4
+attend du système lors d'une relance, ce qu'il faudra ensuite fournir dans
+`seh.rs`.
 
 ## Ce qui casse, dans l'ordre où on le rencontre
 
