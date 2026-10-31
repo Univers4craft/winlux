@@ -15,6 +15,10 @@ const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
 const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
 const STATUS_TIMEOUT: i32 = 0x0000_0102u32 as i32;
 const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023u32 as i32;
+const STATUS_ACCESS_DENIED: i32 = 0xC000_0022u32 as i32;
+const STATUS_OBJECT_NAME_NOT_FOUND: i32 = 0xC000_0034u32 as i32;
+const STATUS_OBJECT_NAME_COLLISION: i32 = 0xC000_0035u32 as i32;
+const STATUS_UNSUCCESSFUL: i32 = 0xC000_0001u32 as i32;
 
 use super::lock;
 
@@ -1233,33 +1237,121 @@ pub unsafe extern "win64" fn nt_query_value_key(
     }
 }
 
-/// `NtCreateFile` : stub, non implémenté.
+/// Extract a Windows path from OBJECT_ATTRIBUTES (offset 0x10 → UNICODE_STRING).
+unsafe fn oa_path(attrs: *const c_void) -> Option<String> {
+    if attrs.is_null() {
+        return None;
+    }
+    let obj_name_ptr = *((attrs as *const u8).add(0x10) as *const *const u8);
+    if obj_name_ptr.is_null() {
+        return None;
+    }
+    let len = ustr_len(obj_name_ptr) as usize / 2;
+    let buf = ustr_buf_w(obj_name_ptr);
+    if buf.is_null() || len == 0 {
+        return None;
+    }
+    let wchars = std::slice::from_raw_parts(buf, len);
+    let s = String::from_utf16_lossy(wchars);
+    let s = s.strip_prefix("\\??\\").unwrap_or(&s);
+    let s = s.strip_prefix("\\DosDevices\\").unwrap_or(s);
+    let s = s.strip_prefix("\\\\?\\").unwrap_or(s);
+    Some(s.to_string())
+}
+
+/// Map NT disposition to Rust OpenOptions.
+unsafe fn apply_disposition(o: &mut std::fs::OpenOptions, disp: u32) {
+    match disp {
+        0 => {
+            o.create(true).truncate(true);
+        }
+        1 => {}
+        2 => {
+            o.create_new(true);
+        }
+        3 => {
+            o.create(true);
+        }
+        4 => {
+            o.truncate(true);
+        }
+        5 => {
+            o.create(true).truncate(true);
+        }
+        _ => {}
+    }
+}
+
+/// `NtCreateFile` : ouvre ou crée un fichier via un chemin NT.
 pub unsafe extern "win64" fn nt_create_file(
-    _handle: *mut usize,
-    _access: u32,
-    _attrs: *const c_void,
-    _io: *mut c_void,
+    handle: *mut usize,
+    access: u32,
+    attrs: *const c_void,
+    io: *mut c_void,
     _alloc: *const c_void,
     _file_attrs: u32,
     _share: u32,
-    _disposition: u32,
+    disposition: u32,
     _options: u32,
     _ea: *const c_void,
     _ea_len: u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if handle.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let Some(win_path) = oa_path(attrs) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let linux_path = crate::paths::to_linux(&win_path);
+    let want_read = access & 0x8000_0000 != 0 || access & 1 != 0 || access & 0x0008_0000 != 0;
+    let want_write = access & 0x4000_0000 != 0 || access & 2 != 0 || access & 0x0004_0000 != 0;
+    let mut o = std::fs::OpenOptions::new();
+    o.read(want_read || !want_write).write(want_write);
+    apply_disposition(&mut o, disposition);
+    match o.open(&linux_path) {
+        Ok(f) => {
+            let h = super::kernel32::insert_file(f);
+            *handle = h;
+            if !io.is_null() {
+                (io as *mut u64).write(0);
+                (io as *mut u64).add(1).write(disposition as u64);
+            }
+            STATUS_SUCCESS
+        }
+        Err(e) => {
+            use std::io::ErrorKind;
+            match e.kind() {
+                ErrorKind::NotFound => STATUS_OBJECT_NAME_NOT_FOUND,
+                ErrorKind::AlreadyExists => STATUS_OBJECT_NAME_COLLISION,
+                ErrorKind::PermissionDenied => STATUS_ACCESS_DENIED,
+                _ => STATUS_UNSUCCESSFUL,
+            }
+        }
+    }
 }
 
-/// `NtOpenFile` : stub, non implémenté.
+/// `NtOpenFile` : ouvre un fichier existant via un chemin NT.
 pub unsafe extern "win64" fn nt_open_file(
-    _handle: *mut usize,
-    _access: u32,
-    _attrs: *const c_void,
-    _io: *mut c_void,
+    handle: *mut usize,
+    access: u32,
+    attrs: *const c_void,
+    io: *mut c_void,
     _share: u32,
     _options: u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    nt_create_file(
+        handle,
+        access,
+        attrs,
+        io,
+        std::ptr::null(),
+        0,
+        0,
+        1, // FILE_OPEN
+        _options,
+        std::ptr::null(),
+        0,
+    )
 }
 
 /// `NtQueryInformationProcess` : stub minimal.
@@ -1579,26 +1671,40 @@ pub unsafe extern "win64" fn nt_protect_virtual_memory(
     STATUS_SUCCESS
 }
 
-/// `NtReadVirtualMemory` : stub.
+/// `NtReadVirtualMemory` : copie de la mémoire du processus courant.
 pub unsafe extern "win64" fn nt_read_virtual_memory(
     _process: usize,
-    _base: *const c_void,
-    _buffer: *mut c_void,
-    _size: usize,
-    _bytes_read: *mut usize,
+    base: *const c_void,
+    buffer: *mut c_void,
+    size: usize,
+    bytes_read: *mut usize,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if base.is_null() || buffer.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(base as *const u8, buffer as *mut u8, size);
+    if !bytes_read.is_null() {
+        *bytes_read = size;
+    }
+    STATUS_SUCCESS
 }
 
-/// `NtWriteVirtualMemory` : stub.
+/// `NtWriteVirtualMemory` : écriture dans la mémoire du processus courant.
 pub unsafe extern "win64" fn nt_write_virtual_memory(
     _process: usize,
-    _base: *mut c_void,
-    _buffer: *const c_void,
-    _size: usize,
-    _bytes_written: *mut usize,
+    base: *mut c_void,
+    buffer: *const c_void,
+    size: usize,
+    bytes_written: *mut usize,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    if base.is_null() || buffer.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(buffer as *const u8, base as *mut u8, size);
+    if !bytes_written.is_null() {
+        *bytes_written = size;
+    }
+    STATUS_SUCCESS
 }
 
 /// `NtCreateSection` : stub.
@@ -1657,17 +1763,42 @@ pub unsafe extern "win64" fn nt_terminate_process(_handle: usize, code: u32) -> 
     crate::dlls::kernel32::flush_and_exit(code as i32)
 }
 
-/// `NtDuplicateObject` : stub.
+/// `NtDuplicateObject` : duplique un handle dans le même processus.
 pub unsafe extern "win64" fn nt_duplicate_object(
     _src_process: usize,
-    _src_handle: usize,
+    src_handle: usize,
     _tgt_process: usize,
-    _tgt_handle: *mut usize,
+    tgt_handle: *mut usize,
     _access: u32,
     _attrs: u32,
-    _options: u32,
+    options: u32,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    const DUPLICATE_CLOSE_SOURCE: u32 = 0x01;
+    if tgt_handle.is_null() && options & DUPLICATE_CLOSE_SOURCE == 0 {
+        return STATUS_INVALID_PARAMETER;
+    }
+    if let Some(obj) = super::kernel32::lookup_sync(src_handle) {
+        if !tgt_handle.is_null() {
+            let new_h = super::kernel32::add_sync(obj, None);
+            *tgt_handle = new_h;
+        }
+        if options & DUPLICATE_CLOSE_SOURCE != 0 {
+            super::kernel32::close_handle(src_handle);
+        }
+        return STATUS_SUCCESS;
+    }
+    let dup_result = super::kernel32::duplicate_handle_impl(src_handle);
+    if let Some(new_h) = dup_result {
+        if !tgt_handle.is_null() {
+            *tgt_handle = new_h;
+        }
+        if options & DUPLICATE_CLOSE_SOURCE != 0 {
+            super::kernel32::close_handle(src_handle);
+        }
+        STATUS_SUCCESS
+    } else {
+        STATUS_INVALID_HANDLE
+    }
 }
 
 /// `NtCreateEvent` : stub.
@@ -1743,12 +1874,26 @@ pub unsafe extern "win64" fn nt_flush_buffers_file(_handle: usize, _io: *mut c_v
     STATUS_SUCCESS
 }
 
-/// `NtQueryAttributesFile` : stub.
+/// `NtQueryAttributesFile` : récupère les attributs basiques d'un fichier.
 pub unsafe extern "win64" fn nt_query_attributes_file(
-    _attrs: *const c_void,
-    _info: *mut c_void,
+    attrs: *const c_void,
+    info: *mut c_void,
 ) -> i32 {
-    STATUS_NOT_IMPLEMENTED
+    let Some(win_path) = oa_path(attrs) else {
+        return STATUS_INVALID_PARAMETER;
+    };
+    let linux_path = crate::paths::to_linux(&win_path);
+    let meta = match std::fs::metadata(&linux_path) {
+        Ok(m) => m,
+        Err(_) => return STATUS_OBJECT_NAME_NOT_FOUND,
+    };
+    if !info.is_null() {
+        let buf = info as *mut u8;
+        std::ptr::write_bytes(buf, 0, 40);
+        let file_attrs: u32 = if meta.is_dir() { 0x10 } else { 0x80 };
+        std::ptr::write_unaligned(buf.add(32) as *mut u32, file_attrs);
+    }
+    STATUS_SUCCESS
 }
 
 /// `NtRaiseHardError` : affiche un message d'erreur fatal.
