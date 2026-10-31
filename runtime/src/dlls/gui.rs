@@ -1793,6 +1793,9 @@ pub fn request_paint(hwnd: usize) {
         let mut map = lock(windows());
         match map.get_mut(&hwnd) {
             Some(w) => {
+                if w.needs_paint {
+                    return;
+                }
                 w.needs_paint = true;
                 Some(w.owner)
             }
