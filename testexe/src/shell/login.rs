@@ -385,27 +385,27 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
 
     // Date sous l'heure.
     let jours: [&[u8]; 7] = [
-        b"dimanche",
-        b"lundi",
-        b"mardi",
-        b"mercredi",
-        b"jeudi",
-        b"vendredi",
-        b"samedi",
+        tr4(&[b"dimanche", b"Sunday", b"domingo", b"Sonntag"]),
+        tr4(&[b"lundi", b"Monday", b"lunes", b"Montag"]),
+        tr4(&[b"mardi", b"Tuesday", b"martes", b"Dienstag"]),
+        tr4(&[b"mercredi", b"Wednesday", b"mi\xE9rcoles", b"Mittwoch"]),
+        tr4(&[b"jeudi", b"Thursday", b"jueves", b"Donnerstag"]),
+        tr4(&[b"vendredi", b"Friday", b"viernes", b"Freitag"]),
+        tr4(&[b"samedi", b"Saturday", b"s\xE1bado", b"Samstag"]),
     ];
     let mois: [&[u8]; 12] = [
-        b"janvier",
-        b"f\xE9vrier",
-        b"mars",
-        b"avril",
-        b"mai",
-        b"juin",
-        b"juillet",
-        b"ao\xFBt",
-        b"septembre",
-        b"octobre",
-        b"novembre",
-        b"d\xE9cembre",
+        tr4(&[b"janvier", b"January", b"enero", b"Januar"]),
+        tr4(&[b"f\xE9vrier", b"February", b"febrero", b"Februar"]),
+        tr4(&[b"mars", b"March", b"marzo", b"M\xE4rz"]),
+        tr4(&[b"avril", b"April", b"abril", b"April"]),
+        tr4(&[b"mai", b"May", b"mayo", b"Mai"]),
+        tr4(&[b"juin", b"June", b"junio", b"Juni"]),
+        tr4(&[b"juillet", b"July", b"julio", b"Juli"]),
+        tr4(&[b"ao\xFBt", b"August", b"agosto", b"August"]),
+        tr4(&[b"septembre", b"September", b"septiembre", b"September"]),
+        tr4(&[b"octobre", b"October", b"octubre", b"Oktober"]),
+        tr4(&[b"novembre", b"November", b"noviembre", b"November"]),
+        tr4(&[b"d\xE9cembre", b"December", b"diciembre", b"Dezember"]),
     ];
     let dow = (st.day_of_week as usize) % 7;
     let mon = ((st.month as usize).wrapping_sub(1)) % 12;
@@ -414,16 +414,20 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
     let jour_nom = jours[dow];
     date_buf[pos..pos + jour_nom.len()].copy_from_slice(jour_nom);
     pos += jour_nom.len();
-    date_buf[pos] = b' ';
-    pos += 1;
+    // « lundi 3 mars », « Monday, 3 March », « lunes, 3 de marzo », « Montag, 3. März ».
+    let lang = ui_lang();
+    let sep: &[u8] = if lang == 0 { b" " } else { b", " };
+    date_buf[pos..pos + sep.len()].copy_from_slice(sep);
+    pos += sep.len();
     if st.day >= 10 {
         date_buf[pos] = b'0' + (st.day / 10) as u8;
         pos += 1;
     }
     date_buf[pos] = b'0' + (st.day % 10) as u8;
     pos += 1;
-    date_buf[pos] = b' ';
-    pos += 1;
+    let sep = [&b" "[..], b" ", b" de ", b". "][lang];
+    date_buf[pos..pos + sep.len()].copy_from_slice(sep);
+    pos += sep.len();
     let mois_nom = mois[mon];
     date_buf[pos..pos + mois_nom.len()].copy_from_slice(mois_nom);
     pos += mois_nom.len();
@@ -473,13 +477,23 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
             err_color,
             w / 2,
             center_y + 140,
-            b"Mot de passe incorrect",
+            tr4(&[
+                b"Mot de passe incorrect",
+                b"Incorrect password",
+                b"Contrase\xF1a incorrecta",
+                b"Falsches Kennwort",
+            ]),
         );
     }
 
     // Bouton "Autres utilisateurs" en bas à gauche (si >1 user).
     if USER_COUNT > 1 {
-        let label = b"Autres utilisateurs";
+        let label = tr4(&[
+            b"Autres utilisateurs",
+            b"Other users",
+            b"Otros usuarios",
+            b"Andere Benutzer",
+        ]);
         text(
             hdc,
             f.small,
@@ -609,7 +623,7 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
                 mix(0, rgb(0x80, 0x90, 0xA0), alpha, 1000),
                 fx + 12,
                 fy + 11,
-                b"Mot de passe",
+                tr4(&[b"Mot de passe", b"Password", b"Contrase\xF1a", b"Kennwort"]),
             );
         }
 
@@ -688,7 +702,12 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
             mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
             w / 2,
             by + 10,
-            b"Se connecter",
+            tr4(&[
+                b"Se connecter",
+                b"Sign in",
+                b"Iniciar sesi\xF3n",
+                b"Anmelden",
+            ]),
         );
     }
 }
@@ -767,9 +786,14 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
 
         // Rôle.
         let role = if user.is_root {
-            b"Administrateur" as &[u8]
+            tr4(&[
+                b"Administrateur",
+                b"Administrator",
+                b"Administrador",
+                b"Administrator",
+            ]) as &[u8]
         } else {
-            b"Utilisateur"
+            tr4(&[b"Utilisateur", b"User", b"Usuario", b"Benutzer"])
         };
         text_centered(
             hdc,
@@ -849,7 +873,7 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
                 mix(0, rgb(0x80, 0x90, 0xA0), alpha, 1000),
                 fx + 12,
                 fy + 11,
-                b"Mot de passe",
+                tr4(&[b"Mot de passe", b"Password", b"Contrase\xF1a", b"Kennwort"]),
             );
         }
 
@@ -914,7 +938,12 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
             mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
             w / 2,
             by + 10,
-            b"Se connecter",
+            tr4(&[
+                b"Se connecter",
+                b"Sign in",
+                b"Iniciar sesi\xF3n",
+                b"Anmelden",
+            ]),
         );
     }
 }
@@ -1304,7 +1333,12 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0xFF, 0xFF, 0xFF),
         w / 2,
         dy + 20,
-        b"Contr\xF4le de compte utilisateur",
+        tr4(&[
+            b"Contr\xF4le de compte utilisateur",
+            b"User Account Control",
+            b"Control de cuentas de usuario",
+            b"Benutzerkontensteuerung",
+        ]),
     );
 
     // Icône bouclier (triangle simplifié).
@@ -1329,7 +1363,12 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0xE6, 0xE6, 0xE6),
         sx + 40,
         sy + 2,
-        b"Voulez-vous autoriser cette application",
+        tr4(&[
+            b"Voulez-vous autoriser cette application",
+            b"Do you want to allow this app",
+            b"\xBFQuiere permitir que esta aplicaci\xF3n",
+            b"M\xF6chten Sie zulassen, dass diese App",
+        ]),
     );
     text(
         hdc,
@@ -1337,7 +1376,12 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0xE6, 0xE6, 0xE6),
         sx + 40,
         sy + 18,
-        b"\xE0 apporter des modifications ?",
+        tr4(&[
+            b"\xE0 apporter des modifications ?",
+            b"to make changes?",
+            b"haga cambios?",
+            b"\xC4nderungen vornimmt?",
+        ]),
     );
 
     // Nom de l'application.
@@ -1357,7 +1401,12 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0x99, 0x99, 0x99),
         dx + 30,
         dy + 130,
-        b"Mot de passe administrateur (root) :",
+        tr4(&[
+            b"Mot de passe administrateur (root) :",
+            b"Administrator (root) password:",
+            b"Contrase\xF1a de administrador (root):",
+            b"Administratorkennwort (root):",
+        ]),
     );
     let fx = dx + 30;
     let fy = dy + 148;
@@ -1406,7 +1455,7 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
             rgb(0x60, 0x70, 0x80),
             fx + 8,
             fy + 9,
-            b"Mot de passe",
+            tr4(&[b"Mot de passe", b"Password", b"Contrase\xF1a", b"Kennwort"]),
         );
     }
 
@@ -1418,7 +1467,12 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
             rgb(0xFF, 0x66, 0x66),
             dx + 30,
             dy + 186,
-            b"Mot de passe incorrect",
+            tr4(&[
+                b"Mot de passe incorrect",
+                b"Incorrect password",
+                b"Contrase\xF1a incorrecta",
+                b"Falsches Kennwort",
+            ]),
         );
     }
 
@@ -1444,7 +1498,7 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0xFF, 0xFF, 0xFF),
         dx + dw - btn_w - 16 - btn_w / 2 - 4,
         btn_y + 7,
-        b"Oui",
+        tr4(&[b"Oui", b"Yes", b"S\xED", b"Ja"]),
     );
     // Non
     round_rect(
@@ -1464,7 +1518,7 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0xE6, 0xE6, 0xE6),
         dx + dw - 8 - btn_w / 2,
         btn_y + 7,
-        b"Non",
+        tr4(&[b"Non", b"No", b"No", b"Nein"]),
     );
 
     f.release();
