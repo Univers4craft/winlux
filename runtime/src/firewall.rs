@@ -922,6 +922,7 @@ pub fn daemon() -> ! {
             let _ = apply(&cfg, &new_apps);
         }
         assign_cgroups(&cfg);
+        write_ports();
         if cfg.notify && cfg.enabled[cfg.profile] && !prompt_file().exists() {
             let known = load_known();
             if let Some(prog) = new_listeners(&cfg, &new_apps, &known).into_iter().next() {
@@ -933,8 +934,21 @@ pub fn daemon() -> ! {
     }
 }
 
+/// Page « Ports ouverts » : tous les ports en écoute, y compris ceux
+/// réservés à la machine, avec le nom de l'appli (Windows ou Linux).
+fn write_ports() {
+    let text: String = crate::netports::open_ports()
+        .iter()
+        .map(|p| crate::netports::port_line(p) + "\n")
+        .collect();
+    let path = admin::path(RUN_DIR).join("ports.txt");
+    if admin::read_text(&path).as_deref() != Some(text.as_str()) {
+        let _ = admin::write_text(&path, &text);
+    }
+}
+
 fn usage() -> i32 {
-    eprintln!("usage : winlux --firewall daemon | apply | status | listening | answer allow|block | clear-log");
+    eprintln!("usage : winlux --firewall daemon | apply | status | listening | ports | answer allow|block | clear-log");
     2
 }
 
@@ -958,6 +972,12 @@ pub fn cli(args: &[String]) -> i32 {
             match ruleset(&cfg, &listening_programs(), cgroups_available()) {
                 Some(r) => print!("{r}"),
                 None => println!("pare-feu désactivé pour ce profil"),
+            }
+            0
+        }
+        "ports" => {
+            for p in crate::netports::open_ports() {
+                println!("{}", crate::netports::port_line(&p));
             }
             0
         }
