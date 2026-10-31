@@ -1016,6 +1016,19 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         }
     }
 
+    // Indicateur de bureau virtuel (entre les boutons d'apps et la zone de notification)
+    if wm::desktop_count() > 1 {
+        let count = taskbar_count();
+        let ind_x = l.buttons_x + count * (BUTTON + BUTTON_GAP) + 8;
+        let ind_y = top + 8;
+        let cur = wm::current_desktop();
+        let total = wm::desktop_count();
+        for d in 0..total {
+            let dx = ind_x + d as i32 * 14;
+            let c = if d == cur { ACCENT } else { rgb(0x5A, 0x5E, 0x68) };
+            round_rect(hdc, b, dx, ind_y + 14, dx + 10, ind_y + 20, 2, c);
+        }
+    }
     // Zone de notification : chevron, réseau, volume, batterie, horloge.
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
@@ -2340,6 +2353,8 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
     if y >= l.bar_top {
         for i in 0..taskbar_count() {
             if inside(&button_rect(&l, i), x, y) {
+                wm::close_snap_layout();
+                wm::TASK_VIEW = false;
                 if i == 0 {
                     set_start(!(START_OPEN && !START_CLOSING));
                 } else {
@@ -2769,6 +2784,69 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         if win {
             explorer::open_pc();
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Win+Tab (Vue des tâches)
+    if ch == 0 && vk == 0x09 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        if win {
+            unsafe {
+                wm::TASK_VIEW = !wm::TASK_VIEW;
+            }
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Win+flèches (snap layouts)
+    if ch == 0 && (vk == 0x25 || vk == 0x26 || vk == 0x27 || vk == 0x28) {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        if win && ctrl {
+            // Win+Ctrl+Left/Right : changer de bureau
+            if vk == 0x25 {
+                let cur = wm::current_desktop();
+                if cur > 0 {
+                    unsafe { wm::switch_desktop(cur - 1); }
+                }
+            } else if vk == 0x27 {
+                let cur = wm::current_desktop();
+                if cur + 1 < wm::desktop_count() {
+                    unsafe { wm::switch_desktop(cur + 1); }
+                }
+            }
+            repaint(hwnd);
+            return;
+        }
+        if win {
+            if unsafe { wm::snap_arrow(vk) } {
+                repaint(hwnd);
+                return;
+            }
+        }
+    }
+    // Win+Ctrl+D (nouveau bureau)
+    if ch == 0 && vk == 0x44 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        if win && ctrl {
+            unsafe { wm::add_desktop(); }
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Win+Ctrl+F4 (fermer le bureau courant)
+    if ch == 0 && vk == 0x73 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        if win && ctrl {
+            let cur = wm::current_desktop();
+            unsafe { wm::remove_desktop(cur); }
             repaint(hwnd);
             return;
         }
