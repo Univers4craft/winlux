@@ -275,6 +275,8 @@ static mut MESSAGE_UNTIL: u32 = 0;
 static mut CLIP: [Path; CLIP_MAX] = [EMPTY_PATH; CLIP_MAX];
 static mut NCLIP: usize = 0;
 static mut CLIP_CUT: bool = false;
+/// Numéro du presse-papiers système correspondant à `CLIP`.
+static mut CLIP_SEQ: u32 = 0;
 
 const HOME: &[u8] = b"::home";
 const PC: &[u8] = b"::pc";
@@ -3248,6 +3250,13 @@ unsafe fn copy_selection(cut: bool) {
         NCLIP += 1;
     }
     if NCLIP > 0 {
+        // Publie aussi la sélection (CF_HDROP) : historique Win+V et autres programmes.
+        let mut list: [&[u8]; CLIP_MAX] = [b""; CLIP_MAX];
+        for (k, slot) in list.iter_mut().enumerate().take(NCLIP) {
+            *slot = CLIP[k].get();
+        }
+        crate::cliphist::set_files(&list[..NCLIP]);
+        CLIP_SEQ = GetClipboardSequenceNumber();
         notify(if cut {
             b"\xC9l\xE9ments coup\xE9s : collez-les dans un autre dossier."
         } else {
@@ -3564,6 +3573,25 @@ unsafe fn copy_tree(from: &[u8], to: &[u8]) -> bool {
         notify(b"Copie interrompue : une copie partielle reste dans le dossier cible.");
     }
     false
+}
+
+/// Charge les fichiers du presse-papiers système (copiés ailleurs ou recollés
+/// depuis l'historique Win+V) puis les colle dans le dossier courant.
+pub unsafe fn paste_from_clipboard() {
+    let mut buf = [0u8; 8192];
+    let n = crate::cliphist::get_files(&mut buf);
+    if n == 0 {
+        return;
+    }
+    NCLIP = 0;
+    CLIP_CUT = false;
+    for path in buf[..n].split(|&c| c == b'\n') {
+        if NCLIP < CLIP_MAX && !path.is_empty() && CLIP[NCLIP].set(path) {
+            NCLIP += 1;
+        }
+    }
+    CLIP_SEQ = GetClipboardSequenceNumber();
+    paste();
 }
 
 unsafe fn paste() {
@@ -5892,7 +5920,13 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         }
         0x43 if c => copy_selection(false),
         0x58 if c => copy_selection(true),
-        0x56 if c => paste(),
+        0x56 if c => {
+            if GetClipboardSequenceNumber() != CLIP_SEQ && IsClipboardFormatAvailable(15) != 0 {
+                paste_from_clipboard();
+            } else {
+                paste();
+            }
+        }
         0x4E if c && shift() => new_item(true),
         _ => return false,
     }

@@ -289,6 +289,11 @@ unsafe fn read(path: &core::ffi::CStr, target: &mut Buffer) -> bool {
     *target = next;
     changed
 }
+/// Vrai si l'interface est en anglais (Paramètres > Langue).
+pub unsafe fn english() -> bool {
+    CURRENT_LANG == Lang::En
+}
+
 unsafe fn value(key: &[u8]) -> &'static [u8] {
     field(STATUS.get(), key)
 }

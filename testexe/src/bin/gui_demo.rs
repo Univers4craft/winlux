@@ -8,6 +8,8 @@
 
 use winlux_testexe::*;
 
+#[path = "../shell/cliphist.rs"]
+mod cliphist;
 #[path = "../shell/a11y.rs"]
 mod a11y;
 #[path = "../shell/admin_ui.rs"]
@@ -50,6 +52,8 @@ mod personalize;
 mod restore;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/snip.rs"]
+mod snip;
 #[path = "../shell/store.rs"]
 mod store;
 #[path = "../shell/settings_cpu.rs"]

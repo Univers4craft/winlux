@@ -239,6 +239,15 @@ copy_shared_libraries /usr/bin/Xvfb
 copy_shared_libraries /usr/bin/xkbcomp
 copy_shared_libraries /usr/bin/xrandr
 copy_shared_libraries /usr/bin/curl
+# Enregistrement d'écran (Win+Maj+R) : encodeur ffmpeg du système, facultatif.
+ffmpeg_bin=${WINLUX_FFMPEG:-$(command -v ffmpeg || true)}
+if test -n "$ffmpeg_bin" && test -x "$ffmpeg_bin"; then
+    cp "$ffmpeg_bin" "$stage/usr/bin/ffmpeg"
+    chmod 755 "$stage/usr/bin/ffmpeg"
+    copy_shared_libraries "$ffmpeg_bin"
+else
+    echo "ffmpeg absent : l'enregistrement vidéo de l'écran sera indisponible dans l'ISO" >&2
+fi
 copy_shared_libraries /usr/bin/install
 copy_shared_libraries /usr/bin/udevadm
 copy_shared_libraries /bin/bash
