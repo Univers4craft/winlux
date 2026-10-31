@@ -1,0 +1,52 @@
+# Catalogue du Store Winlux : une application par ligne.
+# id|catégorie|nom|paquet apt|éditeur|description
+# Catégories : navigateurs, bureautique, multimedia, developpement, jeux, utilitaires
+featured=vlc,gimp,writer,supertuxkart,keepassxc,obs,inkscape,git
+epiphany|navigateurs|GNOME Web|epiphany-browser|GNOME|Navigateur web simple et rapide, intégré au bureau.
+falkon|navigateurs|Falkon|falkon|KDE|Navigateur léger basé sur QtWebEngine, avec bloqueur de publicités.
+konqueror|navigateurs|Konqueror|konqueror|KDE|Navigateur web et gestionnaire de fichiers polyvalent.
+lynx|navigateurs|Lynx|lynx|Lynx|Navigateur en mode texte pour le terminal.
+writer|bureautique|LibreOffice Writer|libreoffice-writer|The Document Foundation|Traitement de texte compatible avec les fichiers Word (.docx).
+calc|bureautique|LibreOffice Calc|libreoffice-calc|The Document Foundation|Tableur compatible avec les classeurs Excel (.xlsx).
+impress|bureautique|LibreOffice Impress|libreoffice-impress|The Document Foundation|Présentations compatibles avec PowerPoint (.pptx).
+abiword|bureautique|AbiWord|abiword|AbiSource|Traitement de texte léger et rapide.
+gnumeric|bureautique|Gnumeric|gnumeric|GNOME|Tableur léger, précis pour les calculs.
+okular|bureautique|Okular|okular|KDE|Lecteur de documents PDF, EPUB et images avec annotations.
+xournalpp|bureautique|Xournal++|xournalpp|Xournal++|Prise de notes manuscrites et annotation de PDF.
+vlc|multimedia|VLC|vlc|VideoLAN|Lecteur multimédia qui lit presque tous les formats audio et vidéo.
+mpv|multimedia|mpv|mpv|mpv|Lecteur vidéo minimaliste et performant.
+audacity|multimedia|Audacity|audacity|Audacity Team|Enregistrement et montage audio.
+gimp|multimedia|GIMP|gimp|GIMP Team|Retouche photo et création graphique avancée.
+inkscape|multimedia|Inkscape|inkscape|Inkscape Project|Dessin vectoriel (SVG), logos et illustrations.
+krita|multimedia|Krita|krita|KDE|Peinture numérique et illustration.
+obs|multimedia|OBS Studio|obs-studio|OBS Project|Enregistrement d'écran et diffusion en direct.
+kdenlive|multimedia|Kdenlive|kdenlive|KDE|Montage vidéo non linéaire.
+rhythmbox|multimedia|Rhythmbox|rhythmbox|GNOME|Bibliothèque musicale et radio en ligne.
+git|developpement|Git|git|Git|Gestion de versions distribuée.
+geany|developpement|Geany|geany|Geany|Éditeur de code léger avec coloration et compilation.
+kate|developpement|Kate|kate|KDE|Éditeur de texte avancé pour développeurs.
+build|developpement|Outils de compilation|build-essential|Ubuntu|Compilateurs GCC/G++, make et bibliothèques de base.
+mingw|developpement|MinGW-w64|gcc-mingw-w64-x86-64|MinGW-w64|Compilateur C/C++ pour créer des .exe Windows.
+cmake|developpement|CMake|cmake|Kitware|Générateur de projets de compilation multiplateforme.
+python|developpement|Python 3|python3-full|Python Software Foundation|Langage Python complet avec venv et pip.
+nodejs|developpement|Node.js|nodejs|OpenJS Foundation|Environnement JavaScript côté serveur.
+jdk|developpement|Java (OpenJDK)|default-jdk|OpenJDK|Kit de développement Java.
+sqlite|developpement|DB Browser for SQLite|sqlitebrowser|sqlitebrowser|Création et édition de bases SQLite.
+meld|developpement|Meld|meld|GNOME|Comparaison et fusion de fichiers et dossiers.
+supertuxkart|jeux|SuperTuxKart|supertuxkart|SuperTuxKart Team|Course de karts en 3D.
+0ad|jeux|0 A.D.|0ad|Wildfire Games|Stratégie en temps réel historique.
+aisleriot|jeux|Solitaire AisleRiot|aisleriot|GNOME|Plus de 80 jeux de patience.
+mines|jeux|Démineur|gnome-mines|GNOME|Le classique du déminage.
+sudoku|jeux|Sudoku|gnome-sudoku|GNOME|Grilles de sudoku de tous niveaux.
+minetest|jeux|Minetest|minetest|Minetest Team|Jeu de construction en monde ouvert de blocs.
+supertux|jeux|SuperTux|supertux|SuperTux Team|Jeu de plateforme en 2D.
+frozenbubble|jeux|Frozen Bubble|frozen-bubble|Frozen Bubble|Tirez des bulles et alignez les couleurs.
+htop|utilitaires|htop|htop|htop|Moniteur de processus interactif.
+gparted|utilitaires|GParted|gparted|GNOME|Éditeur de partitions.
+7zip|utilitaires|7-Zip|7zip|Igor Pavlov|Archives 7z, zip, rar et beaucoup d'autres formats.
+keepassxc|utilitaires|KeePassXC|keepassxc|KeePassXC Team|Gestionnaire de mots de passe hors ligne.
+filezilla|utilitaires|FileZilla|filezilla|FileZilla Project|Client FTP, FTPS et SFTP.
+qbittorrent|utilitaires|qBittorrent|qbittorrent|qBittorrent Project|Client BitTorrent léger.
+bleachbit|utilitaires|BleachBit|bleachbit|BleachBit|Libère de l'espace disque et efface les traces.
+disks|utilitaires|Disques|gnome-disk-utility|GNOME|Gestion des disques, images ISO et tests SMART.
+flameshot|utilitaires|Flameshot|flameshot|Flameshot|Captures d'écran annotées.

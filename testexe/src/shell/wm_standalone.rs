@@ -27,6 +27,8 @@ pub struct Frame {
 
 impl Frame {
     pub unsafe fn new(hwnd: Handle) -> Self {
+        // Contraste élevé, animations et curseur de texte suivent les réglages.
+        crate::gfx::a11y_poll();
         let mut r: Rect = core::mem::zeroed();
         GetClientRect(hwnd, &mut r);
         Frame {

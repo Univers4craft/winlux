@@ -30,6 +30,8 @@ PACKAGES += ["xfonts-base", "libarchive-tools", "squashfs-tools", "libfaad2", "l
 PACKAGES += ["parted", "dosfstools", "e2fsprogs", "cryptsetup-bin", "ntfs-3g", "kbd",
              "console-setup", "grub2-common", "grub-pc-bin", "grub-efi-amd64-bin", "efibootmgr",
              "xorriso", "openssl", "python3-gi-cairo"]
+# Decoding engine of the media player (winlux_media runs ffmpeg/ffprobe from PATH).
+PACKAGES += ["ffmpeg"]
 DESKTOP_REQUIRED = ["apt", "dpkg", "bash", "busybox-static", "curl", "ca-certificates",
     "python3", "python3-gi", "gir1.2-gtk-3.0", "openbox", "xfdesktop4", "xfce4-panel",
     "xfce4-genmon-plugin", "xfconf", "xfce4-settings", "dbus-x11", "wmctrl", "xdotool",
@@ -38,7 +40,7 @@ DESKTOP_REQUIRED = ["apt", "dpkg", "bash", "busybox-static", "curl", "ca-certifi
     "network-manager", "network-manager-gnome", "udisks2", "gvfs", "libfaad2", "libmpg123-0",
     "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
     "libqt6core6t64", "libqt6gui6t64", "libqt6widgets6t64", "libasound2t64", "alsa-utils",
-    "libx11-6", "libxft2", "libcairo2", "polkitd", "rsync", "openssh-client", "winlux-kernel"]
+    "libx11-6", "libxft2", "libcairo2", "polkitd", "rsync", "openssh-client", "espeak-ng", "ffmpeg", "winlux-kernel"]
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)

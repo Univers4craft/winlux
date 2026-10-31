@@ -707,6 +707,8 @@ pub enum DrawCmd {
         source: Rect,
         destination: Rect,
         stretch: bool,
+        /// Interpolation bilinéaire (mode HALFTONE) au lieu du plus proche voisin.
+        smooth: bool,
         rop: RasterOp,
     },
     /// Copie depuis une bitmap mémoire (pixels stockés en COLORREF).
@@ -797,6 +799,8 @@ pub struct DcState {
     pub pen: usize,
     pub font: usize,
     pub bitmap: usize,
+    /// Mode de `SetStretchBltMode` (4 = HALFTONE : agrandissement lissé).
+    pub stretch_mode: i32,
 }
 
 /// Objet GDI créé par l'invité (`CreateSolidBrush`, `CreatePen`).
@@ -886,6 +890,7 @@ pub fn create_dc(hwnd: usize) -> usize {
             pen: 8,   // BLACK_PEN stock
             font: 14, // SYSTEM_FONT stock
             bitmap: 0,
+            stretch_mode: 1, // BLACKONWHITE, valeur Windows par défaut
         },
     );
     hdc
@@ -945,6 +950,24 @@ pub fn set_dc_bk_mode(hdc: usize, mode: u32) -> u32 {
         },
         0,
     )
+}
+
+/// Change le mode d'agrandissement du DC et renvoie l'ancien (0 si invalide).
+pub fn set_dc_stretch_mode(hdc: usize, mode: i32) -> i32 {
+    with_dc(
+        hdc,
+        |d| {
+            let old = d.stretch_mode;
+            d.stretch_mode = mode;
+            old
+        },
+        0,
+    )
+}
+
+/// Mode d'agrandissement courant (`GetStretchBltMode`).
+pub fn dc_stretch_mode(hdc: usize) -> i32 {
+    with_dc(hdc, |d| d.stretch_mode, 0)
 }
 
 /// Couleur de texte courante d'un DC (utilisée par `TextOutA`).
@@ -1036,6 +1059,9 @@ pub fn create_solid_brush(color: u32) -> usize {
 pub fn system_color_brush(index: usize, color: u32) -> usize {
     let mut cache = lock(system_brushes());
     if let Some(&handle) = cache.get(&index) {
+        // Le thème de contraste peut changer pendant l'exécution : le pinceau
+        // système garde son handle mais suit la couleur courante.
+        lock(objects()).insert(handle, GdiObject::SystemBrush(color));
         return handle;
     }
     let handle = next_handle(0x0021_0000);
@@ -2712,4 +2738,106 @@ mod tests {
         // Sans DC, les réglages sont sans effet et renvoient la valeur neutre.
         assert_eq!(set_dc_bk_mode(0x00DE_AD00, 1), 0);
     }
+}
+
+// ---------- État brut clavier/souris pour DirectInput ----------
+// DirectInput lit des touches physiques (codes de balayage) et des
+// déplacements relatifs, indépendamment de la disposition du clavier.
+
+struct RawInput {
+    /// Touches enfoncées, indexées par code DIK (jeu 1, 0x80 = étendu).
+    keys: [bool; 256],
+    mouse_last: Option<(i32, i32)>,
+    dx: i32,
+    dy: i32,
+    wheel: i32,
+    /// Boutons DirectInput : 0 gauche, 1 droit, 2 milieu, 3-4 latéraux.
+    buttons: [bool; 8],
+}
+
+fn raw_input() -> &'static Mutex<RawInput> {
+    static R: OnceLock<Mutex<RawInput>> = OnceLock::new();
+    R.get_or_init(|| {
+        Mutex::new(RawInput {
+            keys: [false; 256],
+            mouse_last: None,
+            dx: 0,
+            dy: 0,
+            wheel: 0,
+            buttons: [false; 8],
+        })
+    })
+}
+
+/// Code evdev (keycode X11 − 8) vers code DIK DirectInput.
+pub fn evdev_to_dik(code: u32) -> Option<u8> {
+    Some(match code {
+        1..=88 => code as u8,
+        96 => 0x9C,  // pavé Entrée
+        97 => 0x9D,  // Ctrl droit
+        98 => 0xB5,  // pavé /
+        99 => 0xB7,  // Impr écran
+        100 => 0xB8, // Alt Gr
+        102 => 0xC7, // Début
+        103 => 0xC8, // Haut
+        104 => 0xC9, // Page préc.
+        105 => 0xCB, // Gauche
+        106 => 0xCD, // Droite
+        107 => 0xCF, // Fin
+        108 => 0xD0, // Bas
+        109 => 0xD1, // Page suiv.
+        110 => 0xD2, // Inser
+        111 => 0xD3, // Suppr
+        119 => 0xC5, // Pause
+        125 => 0xDB, // Windows gauche
+        126 => 0xDC, // Windows droite
+        127 => 0xDD, // Menu contextuel
+        _ => return None,
+    })
+}
+
+/// Appelé par le serveur graphique à chaque touche (keycode X11).
+pub fn raw_key(x11_keycode: u8, down: bool) {
+    if let Some(dik) = evdev_to_dik((x11_keycode as u32).saturating_sub(8)) {
+        lock(raw_input()).keys[dik as usize] = down;
+    }
+}
+
+pub fn raw_keys() -> [bool; 256] {
+    lock(raw_input()).keys
+}
+
+/// Position écran du pointeur : accumule le déplacement relatif.
+pub fn raw_mouse_motion(x: i32, y: i32) {
+    let mut r = lock(raw_input());
+    if let Some((lx, ly)) = r.mouse_last {
+        r.dx += x - lx;
+        r.dy += y - ly;
+    }
+    r.mouse_last = Some((x, y));
+}
+
+/// Bouton X11 (1 gauche, 2 milieu, 3 droit, 4/5 molette, 8/9 latéraux).
+pub fn raw_mouse_button(detail: u8, down: bool) {
+    let mut r = lock(raw_input());
+    match detail {
+        4 if down => r.wheel += 120,
+        5 if down => r.wheel -= 120,
+        1 => r.buttons[0] = down,
+        3 => r.buttons[1] = down,
+        2 => r.buttons[2] = down,
+        8 => r.buttons[3] = down,
+        9 => r.buttons[4] = down,
+        _ => {}
+    }
+}
+
+/// Déplacement (dx, dy, molette) depuis le dernier appel, et boutons.
+pub fn take_raw_mouse() -> (i32, i32, i32, [bool; 8]) {
+    let mut r = lock(raw_input());
+    let out = (r.dx, r.dy, r.wheel, r.buttons);
+    r.dx = 0;
+    r.dy = 0;
+    r.wheel = 0;
+    out
 }
