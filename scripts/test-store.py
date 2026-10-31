@@ -315,4 +315,29 @@ esac
     (run / "store.lock").mkdir()
     st("install", "apt:gimp", code=1)
     (run / "store.lock").rmdir()
+
+    # Logiciels courants de l'appli Bienvenue : liste, file d'attente, reprise.
+    def starter_state():
+        rows = [l[4:].split("|") for l in (run / "starter.txt").read_text().splitlines() if l.startswith("app=")]
+        return {r[0]: r for r in rows}
+    st("starter", "--list")
+    rows = starter_state()
+    check(rows["vlc"][1] == "i" and rows["firefox"][1] == "a" and rows["firefox"][4] == "Ubuntu", "liste Bienvenue")
+    check("notepadpp" not in rows, "logiciel sans source utilisable masqué")
+    st("starter", "firefox", "7zip", "inconnu")
+    text = log.read_text()
+    check("install --no-install-recommends -- firefox" in text and "-- 7zip" in text, "installation groupée")
+    check(not (home / ".local/share/winlux/starter-queue.txt").exists(), "file d'attente vidée")
+    check("busy=0" in (run / "starter.txt").read_text() and starter_state()["firefox"][1] != "f", "état final")
+    (home / ".local/share/winlux/starter-queue.txt").write_text("geany\n")
+    st("starter", "--resume")
+    check("-- geany" in log.read_text(), "reprise après fermeture")
+    failing = w / "failbin"
+    failing.mkdir()
+    mock(failing, "apt-get", "exit 100\n")
+    subprocess.run([sys.executable, "-I", "-B", str(store), "starter", "keepassxc"],
+                   env={**env, "PATH": f"{failing}:{env['PATH']}"}, capture_output=True, text=True)
+    check(starter_state()["keepassxc"][1] == "f", "échec signalé")
+    st("starter", "keepassxc")
+    check(starter_state()["keepassxc"][1] == "a", "nouvel essai après échec")
     print("Store : OK")

@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **218**
-- À faire ou en cours : **38**
-- Total : **256**
-- Progression : **85.2%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140)
+- Réalisé : **219**
+- À faire ou en cours : **39**
+- Total : **258**
+- Progression : **84.9%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158)
 
 ## À FAIRE (par priorité)
 
@@ -28,6 +28,8 @@
 ### État actuel
 
 - [x] Lecteurs réseau : FTP, FTPS, SFTP, WebDAV(S), SMB, NFS et S3 montés comme un disque avec lettre (`winlux-drives`, page Paramètres « Lecteurs réseau »), mots de passe chiffrés ChaCha20-Poly1305, reconnexion automatique et état hors ligne publiés dans le registre commun `mounts.tsv`. Seuls les protocoles dont l'outil de montage est présent sont proposés. Reste : modules noyau cifs/nfs dans l'ISO live (SMB passe par rclone en attendant, NFS masqué).
+- [x] Écran de verrouillage de la session native au style Windows 11 (`winlux-lock`) : Windows+L, Démarrer > Verrouiller, inactivité, mot de passe au réveil, réglages dans Paramètres > Confidentialité et sécurité (#158).
+- [ ] Permissions des applications Windows : demande claire (dossiers personnels, webcam, micro, écran, réseau), choix mémorisé et révocable dans Paramètres (#158).
 - [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
@@ -94,6 +96,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 - [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).
 
+- [x] Captures d'écran automatiques et mode machine virtuelle (#156) : `scripts/capture-ui.py` photographie sous Xvfb les 25 pages des Paramètres, le menu Démarrer, les popups, les outils système, Bienvenue et les applis maison PE (bureau, Explorateur, Store, Polices, Planificateur, Pare-feu) ; `scripts/compare-captures.py` les compare à la dernière version verte de master (job CI « Captures d'écran », artefacts `captures-ui` et `captures-ui-diff`, alerte au-delà de 2 % de pixels changés). `winlux-hardware` détecte l'hyperviseur (`/run/winlux/hw/virtual-machine`) et ne compte plus les cartes émulées comme GPU : curseur logiciel conservé, économiseur en GL logiciel, « Suivre la taille de la VM » seulement en VM.
 - [x] coreclr embarqué démarré : répartition SEH x64 (`seh.rs` : RtlVirtualUnwind, RtlUnwindEx, RtlRestoreContext, VEH, tables de fonctions dynamiques), exceptions C++ MSVC de coreclr, tas du GC, thread du finaliseur, System.Private.CoreLib puis `paintdotnet.dll` chargées et code managé exécuté (images relogées sur 64 Kio, VirtualQuery des piles, VerifyVersionInfo, InitializeContext2, locales nommées) (`docs/PAINTNET.md`).
 - [x] Issues fermées le 31/10/2026 car livrées sur master : impression (#77 par #111), audio des .exe (#78 par #115), manettes, webcam, micro et Bluetooth (#79 par #114), alimentation et batterie (#80 par #107), Store et polices (#81, #82 par #123 et #129), planificateur et pare-feu (#83, #84 par #112), presse-papiers Win+V et capture d'écran (#85, #86 par #109), sauvegarde, multi-utilisateur et bureau à distance (#87, #88, #89 par #119), CPU (#90 par #103), GPU (#91 par #104), Direct3D 9/12 (#92 par #127), installateur (#93 par #75, #116 et #118 ; #94 par #76 ; #95 par #100 ; #96 par #101 ; #97 par #105 ; #98 par #102).
 - [x] Aussi mergés : signalement de bugs vers GitHub (#121), visionneuse d'images (#126), noms de paquets Ubuntu 26.04 (#128), base APT vérifiée dans QEMU (#132), CLR maison (#73), SEH/TLS/services (#63), localisation (#72), détection du matériel (#61).
@@ -296,6 +299,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
 - [x] Fenêtre « Bienvenue » au premier login (`welcome.rs`) : visite guidée en 8 étapes (Démarrer, Explorer, Paramètres, Terminal, raccourcis, confidentialité, choix du thème clair/sombre et de l’alignement), rouvrable depuis Démarrer (#98).
+- [x] Premier démarrage guidé (#162) : Bienvenue passe à 10 étapes avec « Lancer un programme Windows » (.exe, .msi, lecteurs C:/Z:) et « Vos premiers logiciels » (10 logiciels courants installés en un clic via le Store, sans produit Microsoft, logiciels sans source masqués). File d'attente persistante (`winlux-store starter`) qui continue fenêtre fermée et reprend au login suivant ; la visite reprend à l'étape où on l'a fermée.
 - [x] Paramètres > Mises à jour système : mode automatique, manuel ou planifié (jour/heure) pour APT (`winlux-sysupdate`) et Winlux, liste des paquets, journal et notification quand des mises à jour sont disponibles (#98).
 - [x] Manettes : `xinput1_4` (état, vibration, capacités, touches) et `dinput8`/DirectInput 7 (clavier, souris, manettes, joysticks, volants) sur evdev (#79).
 - [x] Webcam : Media Foundation (MFEnumDeviceSources, source et lecteur synchrone/asynchrone, RGB32/NV12/YUY2/MJPG) sur V4L2, en respectant l'autorisation caméra (#79).
