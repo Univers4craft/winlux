@@ -52,6 +52,25 @@ retire tout cela et laisse le registre dans son état d'origine. Une
 réinstallation remplace les fichiers et retire ceux qui ne font plus partie
 de l'application.
 
+## Fenêtre « Applications installées »
+
+Menu Démarrer → *Applications installées* (ou `appwiz.cpl`) liste tous les
+programmes Windows inscrits dans le registre : paquets `.msi`, installateurs
+NSIS et Inno Setup, et programmes qui s'inscrivent eux-mêmes (clés
+`Uninstall` de HKLM, HKLM\WOW6432Node et HKCU). Pour chacun : nom, éditeur,
+version, type d'installateur, taille et date d'installation, avec recherche
+et tri par nom, taille ou date. *Désinstaller* (puis *Confirmer*) choisit le
+bon outil : msiexec intégré pour un `.msi`, journal d'installation pour ce
+que Winlux a installé, sinon le désinstalleur de l'application lancé par
+Winlux. La fenêtre est traduite en français, anglais, espagnol et allemand.
+
+Le travail est fait par le runtime, utilisable aussi en ligne de commande :
+
+```sh
+winlux --setup --programs                  # une ligne app=… par application
+winlux --setup --remove "HKLM\Software\Microsoft\Windows\CurrentVersion\Uninstall\WinMerge_is1"
+```
+
 ## Installateurs testés
 
 | Application | Format | Résultat |

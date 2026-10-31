@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **222**
-- À faire ou en cours : **41**
+- Réalisé : **223**
+- À faire ou en cours : **40**
 - Total : **263**
-- Progression : **84.4%**
+- Progression : **84.8%**
 - Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158, presse-papiers Windows ↔ Linux #161, installateurs NSIS/Inno #179)
 
 ## À FAIRE (par priorité)
@@ -314,7 +314,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Store unique Linux + Windows (`store.rs`, `winlux-store`) : apt + AppStream, Flatpak, Snap, AppImage et catalogues Windows interchangeables (`store-sources.d`, SHA-256 obligatoire), vignettes et captures, fiche détaillée, mises à jour unifiées ; voir `docs/STORE.md`. Catalogue Windows par défaut : dépôt communautaire Scoop Extras (applications 64 bits avec empreinte, sans script PowerShell).
 - [x] msiexec intégré au runtime (`runtime/src/msi`, sans composant tiers) : fichier composé OLE, tables et pool de chaînes, cabinets MSZIP et LZX, propriétés, conditions, fonctionnalités et composants, fichiers, registre, raccourcis .lnk, « Programmes installés », désinstallation `/x`, installation administrative `/a` ; double-clic sur un .msi ; voir `docs/MSIEXEC.md`. Reste : actions personnalisées DLL/EXE, services, variables d'environnement, interface graphique d'installation.
 - [x] Installateurs .exe NSIS 3 et Inno Setup 1.x–7.x interprétés par le runtime (`runtime/src/setup`, LZMA/LZMA2/BCJ maison) : fichiers, composants et tâches, raccourcis, .ini, registre, clé Uninstall, désinstalleur, double-clic ; testés Notepad++, WinMerge, ShareX, Audacity ; voir `docs/SETUP-EXE.md` (#179). Reste : plugins NSIS et programmes lancés par l'installateur.
-- [ ] Fenêtre « Applications installées » : liste des clés Uninstall (msi, NSIS, Inno) et désinstallation en un clic, traduite FR/EN/ES/DE (#179).
+- [x] Fenêtre « Applications installées » (`programs.rs`, `appwiz.cpl`) : toutes les clés Uninstall (msi, NSIS, Inno, autres), recherche, tri par nom/taille/date, désinstallation en un clic avec le bon outil, traduite FR/EN/ES/DE (#179).
 - [x] Gestionnaire de polices (`fonts.rs`, `winlux-fonts`) et polices pour les .exe : `EnumFontFamilies(Ex)`, `EnumFonts`, `AddFontResource(Ex)`, `RemoveFontResource(Ex)`, `WinluxDrawImageA`.
 
 ### Priorité 6 — Qualité et livraison
