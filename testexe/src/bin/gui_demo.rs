@@ -24,6 +24,8 @@ mod explorer;
 mod gfx;
 #[path = "../shell/login.rs"]
 mod login;
+#[path = "../shell/netdrives.rs"]
+mod netdrives;
 #[path = "../shell/notepad.rs"]
 mod notepad;
 #[path = "../shell/notifications.rs"]

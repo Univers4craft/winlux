@@ -7,7 +7,9 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 17] = [
+/// Page « Lecteurs réseau » (FTP, SFTP, SMB… montés comme un disque).
+pub const PAGE_NETDRIVES: usize = 17;
+const PAGES: [&[u8]; 18] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -25,6 +27,7 @@ const PAGES: [&[u8]; 17] = [
     b"Localisation",
     b"Gestionnaire de fichiers",
     b"Son avanc\xE9",
+    b"Lecteurs r\xE9seau",
 ];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
@@ -288,6 +291,7 @@ pub unsafe fn system_tick() -> bool {
         open_page(11);
         changed = true;
     }
+    changed |= crate::netdrives::poll(PAGE == PAGE_NETDRIVES && crate::wm::is_open(crate::wm::APP_SETTINGS));
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
     changed |= read(
         if PAGE == 7 {
@@ -1481,7 +1485,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 ay += 60;
             }
         }
+        PAGE_NETDRIVES => crate::netdrives::draw(g, &c),
         _ => {}
+    }
+    if PAGE == PAGE_NETDRIVES {
+        return;
     }
     let notice = if PAGE == 10 {
         EXE_NOTICE
@@ -1522,6 +1530,9 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     -1
 }
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
+    if PAGE == PAGE_NETDRIVES && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        return crate::netdrives::mouse(ev, x, y, &content(f));
+    }
     if let Mouse::Wheel(delta) = ev {
         if delta < 0 {
             SCROLL = SCROLL.saturating_add(3);
@@ -1548,6 +1559,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             system_tick();
             return true;
         }
+    }
+    if PAGE == PAGE_NETDRIVES {
+        return crate::netdrives::mouse(ev, x, y, &content(f));
     }
     if PAGE == 7 {
         let c = content(f);
@@ -1863,6 +1877,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     false
 }
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
+    if PAGE == PAGE_NETDRIVES && crate::netdrives::key(vk, ch) {
+        return true;
+    }
     if PAGE == 7 && restart_required() {
         if !updating() && ch == 13 {
             control(c"reboot");

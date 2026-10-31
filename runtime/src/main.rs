@@ -6,6 +6,7 @@ mod loader;
 pub mod log;
 mod managed;
 mod mounts;
+mod netdrive;
 mod paths;
 mod pe;
 mod printf;
@@ -18,11 +19,25 @@ use std::path::PathBuf;
 
 fn main() {
     let mut args = std::env::args_os();
-    let _program = args.next();
+    let program = args.next();
+    // `winlux-drives …` (lien vers winlux) ou `winlux --drives …` : lecteurs réseau.
+    let invoked_as = program
+        .as_deref()
+        .map(std::path::Path::new)
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == "winlux-drives");
+    if invoked_as {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(netdrive::main(&rest));
+    }
     let Some(exe) = args.next() else {
         eprintln!("winlux: usage: winlux PROGRAM.exe [arguments...]");
         std::process::exit(2);
     };
+    if exe == "--drives" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(netdrive::main(&rest));
+    }
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
