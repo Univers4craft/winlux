@@ -21,6 +21,11 @@ def windows():
     try: rows = run("wmctrl", "-lG").splitlines()
     except subprocess.CalledProcessError as error:
         if "client list" in error.output.lower(): return result
+        # A window closed between the client list and its property reads
+        # (e.g. right after wmctrl -ic): list again.
+        if "BadWindow" in error.output:
+            time.sleep(0.1)
+            return windows()
         if not error.output.strip():
             # wmctrl returns 1 for a zero-length client list after the last
             # app closes. Require the WM to remain alive before accepting it.
