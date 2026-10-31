@@ -20,7 +20,8 @@ PACKAGES += ["apt", "dpkg", "bash", "coreutils", "findutils", "grep", "sed", "ta
              "gzip", "xz-utils", "ca-certificates", "ubuntu-keyring", "curl", "sudo",
              "busybox-static", "xserver-xorg-core", "xserver-xorg-input-libinput",
              "xvfb", "xterm", "x11-xkb-utils", "xinput", "fonts-dejavu-core",
-             "ncurses-base", "udev", "kmod", "util-linux", "dbus", "hello"]
+             "ncurses-base", "udev", "kmod", "util-linux", "dbus", "hello",
+             "nftables"]
 PACKAGES += ["rsync", "openssh-client"]
 PACKAGES += ["xfonts-base", "libarchive-tools", "squashfs-tools", "libfaad2", "libmpg123-0",
              "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
