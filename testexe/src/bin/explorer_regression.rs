@@ -18,6 +18,8 @@ mod eventviewer;
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/locale.rs"]
+mod locale;
 #[path = "../shell/login.rs"]
 mod login;
 #[path = "../shell/notepad.rs"]

@@ -16,6 +16,7 @@
 //! - `tick(frame) -> bool` est appelé deux fois par seconde.
 
 use crate::gfx::*;
+use crate::locale::*;
 use crate::notepad;
 use crate::utilities;
 use winlux_testexe::*;
@@ -513,17 +514,17 @@ fn on_current_desktop(app: usize) -> bool {
 
 pub fn title_of(app: usize) -> &'static [u8] {
     match app {
-        APP_EXPLORER => b"Explorer",
-        APP_SETTINGS => b"Param\xE8tres",
-        APP_NOTEPAD => b"\xC9\x64iteur",
-        APP_TASKMGR => b"Gestionnaire des t\xE2ches",
-        APP_UTILITIES => b"Utilitaires",
+        APP_EXPLORER => tr(S_FILE_EXPLORER),
+        APP_SETTINGS => tr(S_SETTINGS_APP),
+        APP_NOTEPAD => tr(S_NOTEPAD),
+        APP_TASKMGR => tr(S_TASK_MANAGER),
+        APP_UTILITIES => tr(S_UTILITIES),
         APP_CLEANUP => b"Nettoyage de disque",
         APP_TERMINAL => b"Terminal",
         APP_DISKMGR => b"Gestion des disques",
         APP_EVENTVIEWER => b"Observateur d'\xE9v\xE9nements",
         APP_RESTORE => b"Restauration syst\xE8me",
-        _ => b"Param\xE8tres",
+        _ => tr(S_SETTINGS_APP),
     }
 }
 pub fn glyph_of(app: usize) -> Glyph {
@@ -1449,7 +1450,7 @@ pub unsafe fn draw(g: &mut Gfx) {
             p.text,
             cx + 16,
             cy + 12,
-            b"Basculer entre les fen\xEAtres",
+            tr(S_SWITCH_WINDOWS),
         );
         let mut list = [usize::MAX; APP_COUNT];
         let mut count = 0;
@@ -1508,8 +1509,8 @@ pub unsafe fn draw(g: &mut Gfx) {
             7,
             p.surface,
         );
-        text(g.hdc, g.f.caption, p.text, cx + 16, cy + 12, b"Ex\xE9cuter");
-        text(g.hdc, g.f.small, p.text3, cx + 16, cy + 42, b"Ouvrir :");
+        text(g.hdc, g.f.caption, p.text, cx + 16, cy + 12, tr(S_RUN));
+        text(g.hdc, g.f.small, p.text3, cx + 16, cy + 42, tr(S_OPEN_COLON));
         fill(
             g.hdc,
             g.b,
