@@ -5,9 +5,9 @@
 ## Statistiques
 
 - Réalisé : **189**
-- À faire ou en cours : **43**
-- Total : **232**
-- Progression : **81.5%**
+- À faire ou en cours : **44**
+- Total : **233**
+- Progression : **81.1%**
 - Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107 et #104, issues #10 à #98)
 
 ## À FAIRE (par priorité)
@@ -83,6 +83,7 @@
 - [ ] Runtime CLR .NET intégré (#73, lié à #22).
 - [ ] Installateur : partitionnement guidé, chiffrement LUKS et compte local (#75, lié à #93).
 - [ ] Installateur : connexion Wi-Fi/proxy et import des données Windows (#76, lié à #94).
+- [ ] Signaler un problème vers GitHub : boîte après plantage, Paramètres et Observateur, rapport masqué et modifiable, déduplication, relais sans compte (`docs/SIGNALEMENT-BUGS.md`).
 
 ### Chantiers démarrés (issue ouverte, PR à venir)
 

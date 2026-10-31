@@ -185,6 +185,10 @@ unsafe fn write_dec_fd(fd: i32, mut n: u64) {
 
 extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
+        // Journal centralisé + écran bleu + signalement d'abord : ce chemin
+        // ne relit la mémoire que par sondage sûr, contrairement au dump
+        // détaillé ci-dessous.
+        crate::crash::report(sig, info, ctx);
         let uc = ctx as *mut libc::ucontext_t;
         let rip = (*uc).uc_mcontext.gregs[libc::REG_RIP as usize] as u64;
         let rsp = (*uc).uc_mcontext.gregs[libc::REG_RSP as usize] as u64;
