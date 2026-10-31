@@ -218,7 +218,7 @@ fn match_set(c: u8, set: &[u8]) -> bool {
 }
 
 /// Moteur commun : renvoie le nombre de champs affectés.
-unsafe fn scan(bytes: &[u8], fmt: &[u8], va: &mut crate::thunks::VaList) -> i32 {
+pub(crate) unsafe fn scan(bytes: &[u8], fmt: &[u8], va: &mut crate::thunks::VaList) -> i32 {
     let mut inp = Scan {
         data: bytes,
         pos: 0,

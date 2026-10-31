@@ -24,6 +24,8 @@ struct Stream {
     file: Mutex<Option<File>>,
     eof: AtomicBool,
     err: AtomicBool,
+    /// Octets remis par `ungetc`, relus avant le fichier (dernier en tête).
+    pushback: Mutex<Vec<u8>>,
 }
 
 fn registry() -> &'static Mutex<HashMap<usize, Arc<Stream>>> {
@@ -52,6 +54,7 @@ fn register(kind: Kind, file: Option<File>) -> *mut c_void {
         file: Mutex::new(file),
         eof: AtomicBool::new(false),
         err: AtomicBool::new(false),
+        pushback: Mutex::new(Vec::new()),
     });
     registry()
         .lock()
@@ -92,6 +95,7 @@ fn std_stream(index: usize) -> *mut c_void {
                     file: Mutex::new(None),
                     eof: AtomicBool::new(false),
                     err: AtomicBool::new(false),
+                    pushback: Mutex::new(Vec::new()),
                 }),
             );
         }
@@ -149,6 +153,19 @@ unsafe fn cstr_bytes(p: *const u8) -> Vec<u8> {
 fn read_into(s: &Stream, buf: &mut [u8]) -> usize {
     if buf.is_empty() {
         return 0;
+    }
+    {
+        let mut back = s
+            .pushback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !back.is_empty() {
+            let n = back.len().min(buf.len());
+            for b in buf.iter_mut().take(n) {
+                *b = back.pop().unwrap_or(0);
+            }
+            return n;
+        }
     }
     let n = match s.kind {
         Kind::Disk => {
@@ -447,6 +464,17 @@ pub unsafe extern "win64" fn fseek(p: *mut c_void, offset: i64, origin: i32) -> 
         2 => SeekFrom::End(offset),
         _ => return -1,
     };
+    let pending = std::mem::take(
+        &mut *s
+            .pushback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+    .len() as i64;
+    let from = match from {
+        SeekFrom::Current(o) => SeekFrom::Current(o - pending),
+        other => other,
+    };
     let mut g = s
         .file
         .lock()
@@ -474,10 +502,34 @@ pub unsafe extern "win64" fn ftell(p: *mut c_void) -> i64 {
         .file
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let pending = s
+        .pushback
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .len() as i64;
     match g.as_mut() {
-        Some(f) => f.stream_position().map(|n| n as i64).unwrap_or(-1),
+        Some(f) => f
+            .stream_position()
+            .map(|n| n as i64 - pending)
+            .unwrap_or(-1),
         None => -1,
     }
+}
+
+/// ungetc : remet un caractère en tête du flux et efface l'indicateur EOF.
+pub unsafe extern "win64" fn ungetc(c: i32, p: *mut c_void) -> i32 {
+    if c == -1 {
+        return -1;
+    }
+    let Some(s) = lookup(p) else {
+        return -1;
+    };
+    s.pushback
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(c as u8);
+    s.eof.store(false, Ordering::Release);
+    (c as u8) as i32
 }
 
 pub unsafe extern "win64" fn rewind(p: *mut c_void) {
@@ -591,6 +643,18 @@ pub unsafe extern "win64" fn rename_file(old: *const u8, new: *const u8) -> i32 
 
 // ---------- Sortie formatée sur un flux ----------
 
+/// Écrit des octets déjà formatés sur un `FILE*` ; renvoie leur nombre ou -1.
+pub unsafe fn write_bytes(p: *mut c_void, b: &[u8]) -> i32 {
+    match lookup(p) {
+        Some(s) if write_from(&s, b) == b.len() => b.len() as i32,
+        Some(s) => {
+            s.err.store(true, Ordering::Release);
+            -1
+        }
+        None => -1,
+    }
+}
+
 unsafe fn format_narrow(fmt: *const u8, va: &mut crate::thunks::VaList) -> Vec<u8> {
     crate::printf::format(
         std::slice::from_raw_parts(fmt, crate::printf::narrow_len(fmt)),
@@ -659,7 +723,7 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "fopen" => fn fopen, "_wfopen" => fn wfopen, "fopen_s" => fn fopen_s, "fclose" => fn fclose,
         "fread" => fn fread, "fwrite" => fn fwrite, "fgets" => fn fgets, "fputs" => fn fputs,
-        "fgetc" => fn fgetc, "fputc" => fn fputc, "getc" => fn fgetc, "putc" => fn fputc,
+        "fgetc" => fn fgetc, "fputc" => fn fputc, "ungetc" => fn ungetc, "getc" => fn fgetc, "putc" => fn fputc,
         "fseek" => fn fseek, "ftell" => fn ftell, "rewind" => fn rewind, "fgetpos" => fn fgetpos, "fsetpos" => fn fsetpos,
         "_fseeki64" => fn fseek, "_ftelli64" => fn ftell,
         "feof" => fn feof, "ferror" => fn ferror, "clearerr" => fn clearerr,
@@ -714,6 +778,29 @@ mod tests {
             assert_eq!(fclose(f), 0);
             assert_eq!(std::fs::read(&base).unwrap(), payload);
             assert_eq!(remove_file(path.as_ptr()), 0);
+        }
+    }
+
+    #[test]
+    fn ungetc_remet_le_caractere_avant_le_fichier() {
+        unsafe {
+            let base =
+                std::env::temp_dir().join(format!("winlux-crt-ungetc-{}.txt", std::process::id()));
+            std::fs::write(&base, b"{\"a\":1}").unwrap();
+            let path = format!("{}\0", base.display());
+            let f = fopen(path.as_ptr(), b"r\0".as_ptr());
+            assert_eq!(fgetc(f), b'{' as i32);
+            assert_eq!(ungetc(b'{' as i32, f), b'{' as i32);
+            assert_eq!(ftell(f), 0);
+            let mut buf = [0u8; 3];
+            assert_eq!(fread(buf.as_mut_ptr(), 1, 3, f), 3);
+            assert_eq!(&buf, b"{\"a");
+            assert_eq!(ungetc(b'x' as i32, f), b'x' as i32);
+            assert_eq!(fseek(f, 0, 1), 0);
+            assert_eq!(fgetc(f), b'a' as i32);
+            assert_eq!(ungetc(-1, f), -1);
+            assert_eq!(fclose(f), 0);
+            std::fs::remove_file(&base).unwrap();
         }
     }
 

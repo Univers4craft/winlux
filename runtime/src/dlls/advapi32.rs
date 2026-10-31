@@ -1017,6 +1017,55 @@ pub unsafe extern "win64" fn reg_query_value_ex_w(
     };
     reg_query_value_ex_a(handle, n.as_ptr() as *const u8, res, kind, data, size)
 }
+/// RegGetValueW : ouvre éventuellement une sous-clé, lit la valeur et
+/// vérifie que son type fait partie des types acceptés (RRF_RT_*).
+pub unsafe extern "win64" fn reg_get_value_w(
+    root: usize,
+    sub: *const u16,
+    name: *const u16,
+    flags: u32,
+    kind: *mut u32,
+    data: *mut u8,
+    size: *mut u32,
+) -> i32 {
+    const ERROR_UNSUPPORTED_TYPE: i32 = 1630;
+    if flags & 0xFFFF == 0 || (!data.is_null() && size.is_null()) {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let mut key = root;
+    let opened = !sub.is_null() && *sub != 0;
+    if opened {
+        let r = reg_open_key_ex_w(root, sub, 0, 0x2_0019, &mut key);
+        if r != ERROR_SUCCESS {
+            return r;
+        }
+    }
+    let mut actual = 0u32;
+    let mut probe = 0u32;
+    let size_ptr = if size.is_null() {
+        &mut probe as *mut u32
+    } else {
+        size
+    };
+    let mut r = reg_query_value_ex_w(key, name, std::ptr::null_mut(), &mut actual, data, size_ptr);
+    if r == ERROR_SUCCESS || r == ERROR_MORE_DATA {
+        let bit = match actual {
+            0..=6 => 1u32 << actual,
+            11 => 0x40, // REG_QWORD
+            _ => 0,
+        };
+        if flags & 0xFFFF & bit == 0 {
+            r = ERROR_UNSUPPORTED_TYPE;
+        } else if !kind.is_null() {
+            *kind = actual;
+        }
+    }
+    if opened {
+        reg_close_key(key);
+    }
+    r
+}
+
 pub unsafe extern "win64" fn reg_delete_value_w(handle: usize, name: *const u16) -> i32 {
     let n = match wide_to_cstr(name) {
         Ok(n) => n,
@@ -1094,7 +1143,7 @@ pub fn exports() -> crate::dlls::Exports {
      "RegOpenKeyExA"=>fn reg_open_key_ex_a,"RegCreateKeyExA"=>fn reg_create_key_ex_a,"RegCloseKey"=>fn reg_close_key,
      "RegSetValueExA"=>fn reg_set_value_ex_a,"RegQueryValueExA"=>fn reg_query_value_ex_a,"RegDeleteValueA"=>fn reg_delete_value_a,
      "RegOpenKeyExW"=>fn reg_open_key_ex_w,"RegCreateKeyExW"=>fn reg_create_key_ex_w,"RegSetValueExW"=>fn reg_set_value_ex_w,
-     "RegQueryValueExW"=>fn reg_query_value_ex_w,"RegDeleteValueW"=>fn reg_delete_value_w,"RegDeleteKeyA"=>fn reg_delete_key_a,"RegFlushKey"=>fn reg_flush_key,
+     "RegQueryValueExW"=>fn reg_query_value_ex_w,"RegGetValueW"=>fn reg_get_value_w,"RegDeleteValueW"=>fn reg_delete_value_w,"RegDeleteKeyA"=>fn reg_delete_key_a,"RegFlushKey"=>fn reg_flush_key,
      "RegEnumKeyExA"=>fn reg_enum_key_ex_a,"RegEnumKeyExW"=>fn reg_enum_key_ex_w,
      "RegEnumValueA"=>fn reg_enum_value_a,"RegEnumValueW"=>fn reg_enum_value_w,
      "RegQueryInfoKeyA"=>fn reg_query_info_key_a,"RegQueryInfoKeyW"=>fn reg_query_info_key_w,

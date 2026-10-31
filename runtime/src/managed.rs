@@ -65,13 +65,22 @@ pub fn has_clr_header(bytes: &[u8]) -> bool {
     matches!((rd32(bytes, entry), rd32(bytes, entry + 4)), (Some(rva), Some(size)) if rva != 0 && size != 0)
 }
 
+/// Une appli .NET « autonome » livre son propre runtime (`coreclr.dll`) à
+/// côté de son apphost. Winlux exécute alors l'apphost natif, qui charge ce
+/// runtime comme sous Windows ; rien n'est téléchargé en dehors de l'appli.
+/// Le CLR intégré reste utilisé pour les applis qui n'embarquent rien.
+pub fn bundles_own_runtime(exe: &Path) -> bool {
+    exe.parent()
+        .is_some_and(|dir| dir.join("coreclr.dll").is_file() && dir.join("hostfxr.dll").is_file())
+}
+
 /// Image .NET à exécuter pour `exe` : le fichier lui-même s'il porte un
 /// en-tête CLR, sinon l'assembly compagnon d'un apphost.
 pub fn managed_image(exe: &Path, bytes: &[u8]) -> Option<Vec<u8>> {
     if has_clr_header(bytes) {
         return Some(bytes.to_vec());
     }
-    if !exe.with_extension("runtimeconfig.json").is_file() {
+    if !exe.with_extension("runtimeconfig.json").is_file() || bundles_own_runtime(exe) {
         return None;
     }
     let assembly = std::fs::read(exe.with_extension("dll")).ok()?;
@@ -122,6 +131,21 @@ mod tests {
         std::fs::write(dir.join("app.runtimeconfig.json"), "{}").unwrap();
         assert!(managed_image(&exe, b"MZ natif").is_some());
         assert!(managed_image(&exe, &managed_pe(PE32PLUS_MAGIC)).is_some());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn une_appli_autonome_garde_son_runtime_embarque() {
+        let dir = std::env::temp_dir().join(format!("winlux-autonome-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let exe = dir.join("app.exe");
+        std::fs::write(dir.join("app.dll"), managed_pe(PE32_MAGIC)).unwrap();
+        std::fs::write(dir.join("app.runtimeconfig.json"), "{}").unwrap();
+        std::fs::write(dir.join("coreclr.dll"), b"MZ").unwrap();
+        assert!(!bundles_own_runtime(&exe));
+        std::fs::write(dir.join("hostfxr.dll"), b"MZ").unwrap();
+        assert!(bundles_own_runtime(&exe));
+        assert!(managed_image(&exe, b"MZ natif").is_none());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

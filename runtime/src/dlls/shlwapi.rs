@@ -277,6 +277,39 @@ pub unsafe extern "win64" fn path_remove_filespec_a(path: *mut u8) -> i32 {
     }
 }
 
+/// PathRemoveFileSpecW : retire le dernier composant et son séparateur, en
+/// gardant la racine (`C:\\`, `\\`). Renvoie 0 si rien n'a été retiré.
+pub unsafe extern "win64" fn path_remove_filespec_w(path: *mut u16) -> i32 {
+    if path.is_null() {
+        return 0;
+    }
+    let n = crate::printf::wide_len(path);
+    let s = std::slice::from_raw_parts(path, n);
+    let sep = |c: u16| c == b'\\' as u16 || c == b'/' as u16;
+    let keep = match s.iter().rposition(|&c| sep(c)) {
+        None => 0,
+        Some(0) => 1,
+        Some(2) if s[1] == b':' as u16 => 3,
+        Some(pos) => pos,
+    };
+    if keep >= n {
+        return 0;
+    }
+    *path.add(keep) = 0;
+    1
+}
+
+/// PathRemoveExtensionW
+pub unsafe extern "win64" fn path_remove_extension_w(path: *mut u16) {
+    if path.is_null() {
+        return;
+    }
+    let ext = path_find_extension_w(path);
+    if ext != path.add(crate::printf::wide_len(path)) {
+        *(ext as *mut u16) = 0;
+    }
+}
+
 /// StrCmpIW (comparaison insensible à la casse)
 pub unsafe extern "win64" fn str_cmp_iw(s1: *const u16, s2: *const u16) -> i32 {
     if s1.is_null() || s2.is_null() {
@@ -341,9 +374,42 @@ pub fn exports() -> crate::dlls::Exports {
         "PathIsRelativeW" => fn path_is_relative_w,
         "PathAppendA" => fn path_append_a,
         "PathRemoveFileSpecA" => fn path_remove_filespec_a,
+        "PathRemoveFileSpecW" => fn path_remove_filespec_w,
+        "PathRemoveExtensionW" => fn path_remove_extension_w,
         "StrCmpIW" => fn str_cmp_iw,
         "StrCmpNIW" => fn str_cmp_niw,
         "StrStrIW" => fn str_str_iw,
         "SHCreateStreamOnFileA" => fn sh_create_stream_on_file_a,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn remove_filespec(p: &str) -> (i32, String) {
+        let mut buf: Vec<u16> = p.encode_utf16().chain([0]).collect();
+        let r = unsafe { path_remove_filespec_w(buf.as_mut_ptr()) };
+        (r, unsafe { crate::dlls::wstr(buf.as_ptr()) })
+    }
+
+    #[test]
+    fn path_remove_filespec_w_garde_la_racine() {
+        assert_eq!(
+            remove_filespec("C:\\Apps\\paint.net\\paintdotnet.exe"),
+            (1, "C:\\Apps\\paint.net".into())
+        );
+        assert_eq!(remove_filespec("C:\\paintdotnet.exe"), (1, "C:\\".into()));
+        assert_eq!(remove_filespec("C:\\"), (0, "C:\\".into()));
+        assert_eq!(remove_filespec("\\fichier"), (1, "\\".into()));
+        assert_eq!(remove_filespec("fichier"), (1, String::new()));
+        assert_eq!(remove_filespec(""), (0, String::new()));
+    }
+
+    #[test]
+    fn path_remove_extension_w_retire_le_suffixe() {
+        let mut buf: Vec<u16> = "C:\\a.b\\app.exe".encode_utf16().chain([0]).collect();
+        unsafe { path_remove_extension_w(buf.as_mut_ptr()) };
+        assert_eq!(unsafe { crate::dlls::wstr(buf.as_ptr()) }, "C:\\a.b\\app");
     }
 }

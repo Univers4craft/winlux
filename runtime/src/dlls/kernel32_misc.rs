@@ -602,6 +602,83 @@ pub extern "win64" fn get_user_default_ui_language() -> u16 {
     0x040C
 }
 
+/// Winlux n'exécute pas d'applications empaquetées (MSIX/AppX) : les API de
+/// paquet répondent `APPMODEL_ERROR_NO_PACKAGE`, ce que les programmes
+/// classiques reçoivent aussi sous Windows.
+const APPMODEL_ERROR_NO_PACKAGE: u32 = 15700;
+pub unsafe extern "win64" fn get_current_package_id(len: *mut u32, _buf: *mut u8) -> u32 {
+    if len.is_null() {
+        return 87; // ERROR_INVALID_PARAMETER
+    }
+    APPMODEL_ERROR_NO_PACKAGE
+}
+pub unsafe extern "win64" fn get_current_package_name(len: *mut u32, _buf: *mut u16) -> u32 {
+    get_current_package_id(len, std::ptr::null_mut())
+}
+pub unsafe extern "win64" fn get_current_package_path(len: *mut u32, _buf: *mut u16) -> u32 {
+    get_current_package_id(len, std::ptr::null_mut())
+}
+
+/// IsWow64Process : Winlux exécute les programmes 64 bits nativement, sans
+/// couche WOW64.
+pub unsafe extern "win64" fn is_wow64_process(_process: usize, wow64: *mut i32) -> i32 {
+    if wow64.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    *wow64 = 0;
+    1
+}
+
+/// LCMapStringEx : variante de LCMapStringW nommant la locale par son nom.
+#[allow(clippy::too_many_arguments)]
+pub unsafe extern "win64" fn lc_map_string_ex(
+    _locale: *const u16,
+    flags: u32,
+    src: *const u16,
+    src_count: i32,
+    dst: *mut u16,
+    dst_count: i32,
+    _version: *mut c_void,
+    _reserved: *mut c_void,
+    _sort: isize,
+) -> i32 {
+    crate::dlls::kernel32::lc_map_string_w(0x0400, flags, src, src_count, dst, dst_count)
+}
+
+/// GetFinalPathNameByHandleW : chemin Windows du fichier ouvert, au format
+/// `\\?\C:\…` par défaut ou sans préfixe avec VOLUME_NAME_NONE (4).
+pub unsafe extern "win64" fn get_final_path_name_by_handle_w(
+    handle: usize,
+    buf: *mut u16,
+    len: u32,
+    flags: u32,
+) -> u32 {
+    let fd = crate::dlls::kernel32::handle_to_fd(handle);
+    let target = if fd < 0 {
+        None
+    } else {
+        std::fs::read_link(format!("/proc/self/fd/{fd}")).ok()
+    };
+    let Some(target) = target else {
+        crate::process::set_last_error(6); // ERROR_INVALID_HANDLE
+        return 0;
+    };
+    let win = crate::paths::to_windows(&target);
+    let text = if flags & 4 != 0 {
+        win.get(2..).unwrap_or(&win).to_string()
+    } else {
+        format!("\\\\?\\{win}")
+    };
+    let wide: Vec<u16> = text.encode_utf16().collect();
+    if buf.is_null() || (len as usize) <= wide.len() {
+        return wide.len() as u32 + 1;
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr(), buf, wide.len());
+    *buf.add(wide.len()) = 0;
+    wide.len() as u32
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "GetErrorMode" => fn get_error_mode, "SetErrorMode" => fn set_error_mode,
@@ -630,6 +707,13 @@ pub fn exports() -> crate::dlls::Exports {
         "FormatMessageA" => fn format_message_a, "FormatMessageW" => fn format_message_w, "LocalFree" => fn local_free,
         "GetUserDefaultLCID" => fn get_user_default_lcid, "GetThreadLocale" => fn get_thread_locale,
         "GetUserDefaultLangID" => fn get_user_default_lang_id, "GetUserDefaultUILanguage" => fn get_user_default_ui_language,
+        "GetCurrentPackageId" => fn get_current_package_id,
+        "GetCurrentPackageFullName" => fn get_current_package_name,
+        "GetCurrentPackageFamilyName" => fn get_current_package_name,
+        "GetCurrentApplicationUserModelId" => fn get_current_package_name,
+        "GetCurrentPackagePath" => fn get_current_package_path,
+        "IsWow64Process" => fn is_wow64_process, "LCMapStringEx" => fn lc_map_string_ex,
+        "GetFinalPathNameByHandleW" => fn get_final_path_name_by_handle_w,
     }
 }
 
@@ -685,6 +769,51 @@ mod tests {
             }
             assert!(found);
             assert_eq!(free_environment_strings_w(p), 1);
+        }
+    }
+
+    #[test]
+    fn chemin_final_d_un_handle_et_wow64() {
+        let dir = std::env::temp_dir().join(format!("winlux-final-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("hostfxr.dll");
+        std::fs::write(&file, b"MZ").unwrap();
+        let win = crate::paths::to_windows(&file);
+        let w: Vec<u16> = win.encode_utf16().chain([0]).collect();
+        unsafe {
+            let h = crate::dlls::kernel32::create_file_w(w.as_ptr(), 0x8000_0000, 1, 0, 3, 0x80, 0);
+            assert_ne!(h, usize::MAX);
+            let need = get_final_path_name_by_handle_w(h, std::ptr::null_mut(), 0, 0);
+            let mut buf = vec![0u16; need as usize];
+            let n = get_final_path_name_by_handle_w(h, buf.as_mut_ptr(), need, 0);
+            assert_eq!(n + 1, need);
+            let got = crate::dlls::wstr(buf.as_ptr());
+            assert!(got.starts_with("\\\\?\\"), "{got}");
+            assert!(got.ends_with("hostfxr.dll"), "{got}");
+            crate::dlls::kernel32::close_handle(h);
+            let mut wow = 7;
+            assert_eq!(is_wow64_process(0, &mut wow), 1);
+            assert_eq!(wow, 0);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn pas_de_paquet_msix() {
+        let mut len = 0u32;
+        unsafe {
+            assert_eq!(
+                get_current_package_id(&mut len, std::ptr::null_mut()),
+                15700
+            );
+            assert_eq!(
+                get_current_package_id(std::ptr::null_mut(), std::ptr::null_mut()),
+                87
+            );
+            assert_eq!(
+                get_current_package_name(&mut len, std::ptr::null_mut()),
+                15700
+            );
         }
     }
 
