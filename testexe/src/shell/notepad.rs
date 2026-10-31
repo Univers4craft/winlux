@@ -456,7 +456,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     fill(g.hdc, g.b, r.left, my, r.right, my + MENU_H, p.surface);
     let menus: [&[u8]; 4] = [
         tr4(&[b"Fichier", b"File", b"Archivo", b"Datei"]),
-        b"\xC9\x64ition",
+        tr4(&[b"\xC9dition", b"Edit", b"Edici\xF3n", b"Bearbeiten"]),
         tr4(&[b"Affichage", b"View", b"Ver", b"Ansicht"]),
         tr4(&[b"Aide", b"Help", b"Ayuda", b"Hilfe"]),
     ];

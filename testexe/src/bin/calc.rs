@@ -31,7 +31,14 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let hwnd = CreateWindowExA(
             0,
             c"WinluxCalc".as_ptr(),
-            c"Calculatrice Winlux".as_ptr(),
+            tr4(&[
+                b"Calculatrice Winlux\0",
+                b"Winlux Calculator\0",
+                b"Calculadora de Winlux\0",
+                b"Winlux-Rechner\0",
+            ])
+            .as_ptr()
+            .cast(),
             0x00CF0000,
             100,
             100,
