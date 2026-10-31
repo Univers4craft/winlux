@@ -3670,7 +3670,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         } else if x >= tray + 52 && x < tray + 88 {
             BATTERY_HOVER = false;
             VOL_PANEL = false;
-            crate::settings::open_page(crate::settings::POWER_PAGE);
+            crate::settings::open_page(crate::settings::PAGE_POWER);
         } else if x >= l.w - 12 - 92 {
             notifications::toggle();
             NET_PANEL = false;
