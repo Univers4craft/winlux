@@ -15,7 +15,7 @@ mkfs.ext4 -q -F -L WINLUX_TEST -d "$stage" "$disk"
 echo "Diagnostic navigateurs ($accel), journal : $log"
 result=0
 timeout -k 5s "${WINLUX_BROWSER_TEST_TIMEOUT:-600}" qemu-system-x86_64 \
-    -m "${WINLUX_QEMU_MEMORY:-4096}" -smp 2 -accel "$accel" \
+    -m "${WINLUX_QEMU_MEMORY:-4096}" -smp 2 -accel "$accel" -cpu max \
     -display none -monitor none -serial stdio -no-reboot -nic none \
     -kernel "$stage/boot/vmlinuz" \
     -append 'root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0 panic=1 loglevel=3 winlux.browser-smoke=1' \

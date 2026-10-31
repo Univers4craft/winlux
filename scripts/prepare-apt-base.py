@@ -136,10 +136,12 @@ def main():
     run("truncate", "-s", "12G", str(disk))
     run("fakeroot", "mkfs.ext4", "-q", "-F", "-d", str(root), str(disk))
     accel = "kvm" if os.access("/dev/kvm", os.R_OK | os.W_OK) else "tcg"
+    # Host binaries copied into the VM (BusyBox) may use AVX: QEMU's default
+    # qemu64 CPU model lacks it and the guest init dies on an invalid opcode.
     log = work / "bootstrap.log"
     with log.open("w") as output:
         run("timeout", "-k", "5", "2400", "qemu-system-x86_64", "-m", "3072", "-smp", "2",
-            "-accel", accel, "-display", "none", "-monitor", "none", "-serial", "stdio",
+            "-accel", accel, "-cpu", "max", "-display", "none", "-monitor", "none", "-serial", "stdio",
             "-no-reboot", "-kernel", str(args.kernel.resolve()),
             "-append", "root=/dev/vda rw rootfstype=ext4 init=/winlux-bootstrap/init console=ttyS0 panic=1",
             "-drive", f"file={disk},if=virtio,format=raw", "-nic", "user,model=e1000",

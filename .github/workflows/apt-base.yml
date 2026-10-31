@@ -41,6 +41,12 @@ jobs:
           fi
           ls -l /dev/kvm || true
 
+      - name: Architecture des paquets du runner
+        run: |
+          dpkg --print-architecture
+          apt-cache policy busybox-static | head -4
+          grep -rhi 'variant\|amd64v3' /etc/apt/apt.conf.d /etc/apt/sources.list.d 2>/dev/null || true
+
       - name: Préparer la base APT
         run: |
           kernel=$(find /boot -maxdepth 1 -name 'vmlinuz-*-generic' | sort -V | tail -1)
