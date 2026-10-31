@@ -57,6 +57,8 @@ debugfs -R "rdump /var/lib/winlux/session-logs $work" "$disk" >/dev/null 2>&1 ||
 show_failure() {
     # The session diagnostic block first, then the end of the serial log.
     sed -n '/^winlux-native-session: /,/^WINLUX_NATIVE_EXIT=/p' "$log" | head -300
+    # Guest test output (markers, traceback) without the session trace.
+    sed -n '/WINLUX_NATIVE_APT_RESULT=/,/^WINLUX_NATIVE_EXIT=/p' "$log" | grep -v '^+ ' | grep -v 'dbind-WARNING' | tail -120
     tail -60 "$log"
 }
 grep -q 'WINLUX_NATIVE_WINDOW_SNAPPING=0' "$log" || { show_failure "$log"; exit 1; }
