@@ -3557,6 +3557,22 @@ unsafe fn create_process_common(
         // msiexec.exe est intégré au runtime : `winlux msiexec.exe …`.
         host_path = std::path::PathBuf::from("msiexec.exe");
     }
+    if !host_path.exists()
+        && (crate::registry::cli::is_reg(&host_path)
+            || crate::registry::cli::is_regedit(&host_path))
+    {
+        // reg.exe et regedit.exe sont intégrés au runtime eux aussi.
+        let name = host_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let name = if name.ends_with(".exe") {
+            name
+        } else {
+            format!("{name}.exe")
+        };
+        host_path = std::path::PathBuf::from(name);
+    }
     let is_pe = host_path
         .extension()
         .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("exe"))

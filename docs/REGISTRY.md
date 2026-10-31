@@ -1,19 +1,75 @@
 # Registre Windows et configuration Linux
 
-Winlux possède déjà un registre Windows persistant, implémenté dans
+Winlux possède un registre Windows persistant, écrit de zéro, partagé par
+toutes les applications .exe du profil, par `reg.exe`, `regedit.exe`,
+msiexec et l'éditeur du registre. Le magasin est dans
+`runtime/src/registry/` ; les API Win32 (`Reg*`) sont dans
 `runtime/src/dlls/advapi32.rs`. Les données sont enregistrées dans
 `~/.local/share/winlux/registry.tsv` (ou le répertoire de données Winlux du
 profil). `WINLUX_REGISTRY_PATH` permet aux tests de choisir un fichier isolé.
-Ce n'est pas un format de ruche Windows natif ni un éditeur Regedit complet.
+Ce n'est pas un format de ruche Windows natif.
 
-## Stockage commun aux API Windows
+## Format du fichier (WINLUX-REGISTRY-2)
 
-Les API `RegCreateKeyEx`, `RegOpenKeyEx`, `RegSetValueEx`, `RegQueryValueEx`,
-suppression et fermeture utilisent ce stockage. Les valeurs conservent leur
-type et leurs octets ; les noms sont insensibles à la casse. Les modifications
-sont persistées avec verrouillage et remplacement du fichier.
+Une ligne d'en-tête `WINLUX-REGISTRY-2`, puis des lignes séparées par des
+tabulations :
 
-Les appels bas niveau suivants réutilisent maintenant ce même backend :
+- `K <chemin hex> <horodatage>` : une clé ; l'horodatage est un FILETIME.
+- `V <chemin hex> <nom hex> <type> <données hex>` : une valeur.
+
+Les chemins et les noms sont en UTF-8, avec leur casse d'origine ; ils se
+comparent sans tenir compte de la casse (un lecteur externe doit les passer en
+minuscules). Les chaînes (types 1, 2 et 7) sont toujours en UTF-16LE, comme
+sous Windows : les API « A » les convertissent en Windows-1252. Un fichier de
+l'ancien format `WINLUX-REGISTRY-1` est relu et converti à la première
+écriture (chaînes ANSI/UTF-8 passées en UTF-16, clés `hkcr\…` déplacées).
+
+Racines stockées : `hkcu`, `hklm`, `hku`, `hkcc`. **HKEY_CLASSES_ROOT n'est
+pas stocké** : c'est la vue fusionnée de `hkcu\Software\Classes`
+(prioritaire) et de `hklm\Software\Classes`. Une clé créée sous HKCR va
+dans HKLM, sauf si elle existe déjà dans HKCU.
+
+Chaque écriture relit le fichier sous `flock`, applique la modification et
+remplace le fichier de façon atomique ; deux applis qui écrivent en même temps
+ne s'écrasent pas. Les lectures gardent une copie en mémoire tant que le
+fichier n'a pas changé (inode, date, taille). Une copie
+`registry.tsv.bak` est faite avant chaque lancement d'appli.
+
+## Fichiers .reg, reg.exe et regedit.exe
+
+- Les fichiers `.reg` « Windows Registry Editor Version 5.00 » (UTF-16 ou
+  UTF-8) et `REGEDIT4` (ANSI) sont lus : clés, `[-clé]`, `@=`, chaînes,
+  `dword:`, `hex:`, `hex(n):`, `"valeur"=-`, lignes continuées par `\`.
+  L'export écrit la version 5.00 en UTF-16 avec BOM, comme regedit.
+- `regedit /s fichier.reg` importe sans question ; `regedit /e fichier.reg
+  [clé]` exporte ; `regedit` seul ouvre l'éditeur graphique (un fichier passé
+  sans `/s` y est proposé à l'import avec confirmation).
+- `reg query|add|delete|import|export` reprend les options courantes de
+  Windows (`/v`, `/ve`, `/va`, `/t`, `/d`, `/s`, `/se`, `/f`).
+
+Ces deux commandes sont intégrées au runtime comme msiexec : un installateur
+qui lance `reg.exe` ou `regedit.exe` n'a besoin d'aucun fichier externe.
+
+## API Win32
+
+Ouverture/création (`RegOpenKey[Ex]`, `RegCreateKey[Ex]`,
+`RegOpenCurrentUser`, `RegOpenUserClassesRoot`), valeurs
+(`RegSetValue[Ex]`, `RegSetKeyValue`, `RegQueryValue[Ex]`, `RegGetValue` avec
+filtre de type et développement de REG_EXPAND_SZ, `RegDeleteValue`,
+`RegDeleteKeyValue`), clés (`RegDeleteKey[Ex]`, `RegDeleteTree`,
+`RegCopyTree`, `RegRenameKey`), énumération (`RegEnumKey[Ex]`,
+`RegEnumValue`, `RegQueryInfoKey` avec la date de modification),
+`RegNotifyChangeKeyValue` (synchrone ou avec événement) et
+`RegLoadMUIStringW` (chaînes simples). Les versions A et W existent ; les
+contrats API-set et KernelBase y sont reliés.
+
+`RegLoadMUIStringW` ne résout pas encore les références `@fichier.dll,-id`.
+Les ACL, la redirection WOW64 (`/reg:32`), les clés volatiles et les ruches
+`RegLoadKey`/`RegSaveKey` ne sont pas gérées.
+
+## Accès NT (ntdll)
+
+Les appels bas niveau suivants réutilisent le même magasin :
 
 - `RtlFormatCurrentUserKeyPath` alloue un chemin Unicode, libérable par
   `RtlFreeUnicodeString`.
