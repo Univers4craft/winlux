@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **177**
+- Réalisé : **182**
 - À faire ou en cours : **39**
-- Total : **216**
-- Progression : **81.9%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100 et #103, issues #10 à #98)
+- Total : **221**
+- Progression : **82.4%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112 et #114, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -27,6 +27,7 @@
 
 ### État actuel
 
+- [x] Lecteurs réseau : FTP, FTPS, SFTP, WebDAV(S), SMB, NFS et S3 montés comme un disque avec lettre (`winlux-drives`, page Paramètres « Lecteurs réseau »), mots de passe chiffrés ChaCha20-Poly1305, reconnexion automatique et état hors ligne publiés dans le registre commun `mounts.tsv`. Seuls les protocoles dont l'outil de montage est présent sont proposés. Reste : modules noyau cifs/nfs dans l'ISO live (SMB passe par rclone en attendant, NFS masqué).
 - [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
@@ -178,6 +179,7 @@
 - [x] Ajouter des DLL intégrées courantes : `user32`, `advapi32`, `ole32`, `bcrypt`, `version` et `shell32`.
 - [x] Ajouter la fondation COM/OLE native : appartements par thread, GUID, allocateur COM, mémoire globale et `IStream` partageable sur `HGLOBAL`, avec tests unitaires et PE.
 - [x] Enregistrer/révoquer des fabriques COM multi-usages et créer leurs objets dans le processus, avec cookies stables et appels réentrants testés.
+- [x] Planificateur de tâches 2.0 pour les `.exe` : `CoCreateInstance(CLSID_TaskScheduler)` → `ITaskService`, dossiers, `RegisterTaskDefinition`/`RegisterTask` (XML), déclencheurs temps/quotidien/hebdomadaire/démarrage/session/enregistrement, `IExecAction`, réglages et tâches en cours (voir `docs/PLANIFICATEUR_PAREFEU.md`).
 - [x] Ajouter un diagnostic explicite pour les exécutables gérés dépendant de `mscoree.dll`.
 - [x] Affinité, priorités, topologie et NUMA pour les `.exe` : `Set/GetProcessAffinityMask`, `SetThreadAffinityMask` (y compris threads suspendus), `Get/SetThreadGroupAffinity`, `Set/GetPriorityClass`, `Set/GetThreadPriority` (sans priorité irréversible pour un utilisateur normal), `GetLogicalProcessorInformation(Ex)` avec classe d'efficacité P/E-cores, `GetNuma*` ; tests unitaires (`kernel32_cpu.rs`).
 - [x] Détecter les en-têtes CLR PE32/PE32+ et les apphosts modernes, puis relayer les assemblies vers `dotnet` ou Mono lorsqu'un runtime Linux compatible est installé.
@@ -245,10 +247,13 @@
 - [x] Mode récupération « Winlux Recovery » : réparer GRUB (BIOS, UEFI, Secure Boot), restaurer le point précédent, terminal de secours, fsck (`docs/RECOVERY.md`).
 - [x] Vérification d'intégrité du média au démarrage : manifeste `winlux.sha256` par fichier, entrée GRUB dédiée.
 - [x] Installation silencieuse : fichier de réponse YAML/JSON, pages préconfigurées sautées, compte local uniquement (`docs/AUTOINSTALL.md`, `scripts/test-autoinstall.py`).
+- [x] Installateur : benchmark matériel (note 1,0 à 9,9), profils d'utilisation (Gaming, Bureautique, Développement, Serveur) et migration réseau depuis un autre PC (#101, `scripts/test-installer-oobe.py`).
 - [x] Secure Boot : shim signé, GRUB signé, MokManager, clé MOK et signature du noyau, ISO hybride `WINLUX_SECUREBOOT=1` validée sous OVMF (`docs/SECURE-BOOT.md`, `scripts/test-secureboot-qemu.sh`).
 
 ### Priorité 5 — Thème Windows 11
 
+- [x] Planificateur de tâches maison (service `winlux --tasks daemon`, sans systemd ni cron) : déclencheurs horaires, intervalle, démarrage, ouverture de session et événements système (réseau, secteur/batterie, USB), conditions secteur/réseau, historique, application graphique Windows 11 FR/EN.
+- [x] Pare-feu maison sur nftables (`winlux --firewall daemon`) : profils domaine/privé/public, règles entrantes/sortantes par port, protocole et application, journal des connexions bloquées, alerte à la première écoute d'une application, application graphique Windows 11 FR/EN.
 - [x] Paramètres > Processeur : fréquences par cœur en direct, mode d'alimentation (gouverneur/EPP), placement P-cores/E-cores, températures, bridage thermique, ventilateurs et courbes, NUMA, puis priorité/cœurs/affinité/nœud par programme. Garde-fous : `runtime/src/cpu.rs` détecte le matériel (`/sys`, `/proc/cpuinfo`, CPUID) et une section n'apparaît que si la capacité existe (testé sur faux arbres `/sys` : VM, CPU classique, hybride Intel, NUMA, capteurs absurdes).
 - [x] VM : pointeur flèche visible (curseur logiciel Xorg `SWcursor`, flèche dessinée à l’échelle de l’interface).
 - [x] VM : la résolution suit la taille de la fenêtre QEMU (nouveau mode préféré appliqué par `xrandr`, bureau relu via `GetSystemMetrics` et réagencé); vérifié en passant de 1920×1080 à 1280×800 dans QEMU.
@@ -270,6 +275,7 @@
 - [x] Micro : waveIn complet (formats PCM/flottant, callbacks fonction/événement/fenêtre, capacités, position) (#79).
 - [x] Paramètres > Bluetooth et appareils (BlueZ : activer, rechercher, appairer, connecter, oublier) et indicateur dans la barre des tâches (#79).
 - [x] Paramètres > Confidentialité : télémétrie et historique de localisation désactivés par défaut, autorisations micro/caméra/localisation des .exe (micro refusé appliqué par `winmm`) (#98).
+- [x] Personnalisation (Paramètres > Personnalisation et assistant de premier démarrage) : galerie de 13 fonds d'écran calculés (catégories Nature/Abstrait/Sombre/Clair, aperçu), palette d'accentuation Windows 11 (48 couleurs ou automatique, option sur Démarrer/barre et barres de titre), barre des tâches en bas/haut/gauche/droite en trois tailles, choix des icônes du bureau, cinq sons de démarrage synthétisés avec écoute. Préférences dans `~/.local/share/winlux/personnalisation.conf` ; `WINLUX_OOBE=1` relance l'assistant, `WINLUX_NO_OOBE=1` le saute.
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
 
 ### Priorité 6 — Qualité et livraison

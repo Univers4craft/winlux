@@ -234,9 +234,11 @@ pub const S_ADVANCED_SOUND: usize = 155;
 pub const S_SYSTEM_UPDATES: usize = 156;
 pub const S_PRIVACY: usize = 157;
 pub const S_PROCESSOR: usize = 158;
-pub const S_BLUETOOTH_DEVICES: usize = 159;
+pub const S_NETWORK_DRIVES: usize = 159;
+pub const S_PERSONALIZATION: usize = 160;
+pub const S_BLUETOOTH_DEVICES: usize = 161;
 
-const STRING_COUNT: usize = 160;
+const STRING_COUNT: usize = 162;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -422,6 +424,8 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Mises \xE0 jour syst\xE8me",
     b"Confidentialit\xE9",
     b"Processeur",
+    b"Lecteurs r\xE9seau",
+    b"Personnalisation",
     b"Bluetooth et appareils",
 ];
 
@@ -607,6 +611,8 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"System updates",
     b"Privacy",
     b"Processor",
+    b"Network drives",
+    b"Personalization",
     b"Bluetooth & devices",
 ];
 
@@ -792,6 +798,8 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Actualizaciones del sistema",
     b"Privacidad",
     b"Procesador",
+    b"Unidades de red",
+    b"Personalizaci\xF3n",
     b"Bluetooth y dispositivos",
 ];
 
@@ -977,6 +985,8 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Systemupdates",
     b"Datenschutz",
     b"Prozessor",
+    b"Netzlaufwerke",
+    b"Personalisierung",
     b"Bluetooth und Ger\xE4te",
 ];
 
