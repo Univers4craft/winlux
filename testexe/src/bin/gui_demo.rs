@@ -30,6 +30,8 @@ mod explorer;
 mod filehistory;
 #[path = "../shell/fonts.rs"]
 mod fonts;
+#[path = "../shell/programs.rs"]
+mod programs;
 #[path = "../shell/thumbs.rs"]
 mod thumbs;
 #[path = "../shell/firewall.rs"]
@@ -52,6 +54,8 @@ mod notifications;
 mod personalize;
 #[path = "../shell/restore.rs"]
 mod restore;
+#[path = "../shell/regedit.rs"]
+mod regedit;
 #[path = "../shell/settings.rs"]
 mod settings;
 #[path = "../shell/sharing.rs"]
@@ -70,6 +74,8 @@ mod taskschd;
 mod terminal;
 #[path = "../shell/utilities.rs"]
 mod utilities;
+#[path = "../shell/volumes.rs"]
+mod volumes;
 #[path = "../shell/weather.rs"]
 mod weather;
 #[path = "../shell/welcome.rs"]

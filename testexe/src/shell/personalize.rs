@@ -11,7 +11,8 @@ use winlux_testexe::*;
 
 // ---------- Préférences ----------
 
-pub static mut WALLPAPER: usize = 0;
+/// Fond par défaut : « Winlux Nuit », celui de l'identité visuelle.
+pub static mut WALLPAPER: usize = 13;
 /// -1 : couleur choisie automatiquement d'après le fond d'écran.
 pub static mut ACCENT_INDEX: i32 = -1;
 /// Accent sur Démarrer et la barre des tâches.
@@ -20,7 +21,8 @@ pub static mut ACCENT_SURFACES: bool = false;
 pub static mut BAR_SIZE: u8 = 1;
 /// 0 bas, 1 haut, 2 gauche, 3 droite.
 pub static mut BAR_POS: u8 = 0;
-pub static mut SOUND: usize = 1;
+/// Son par défaut : « Prisme », la signature sonore de Winlux.
+pub static mut SOUND: usize = 6;
 
 static mut OOBE_ACTIVE: bool = false;
 static mut OOBE_STEP: usize = 0;
@@ -159,9 +161,9 @@ pub struct Wallpaper {
     pub category: usize,
     pub accent: u32,
 }
-pub const WALLPAPERS: [Wallpaper; 13] = [
+pub const WALLPAPERS: [Wallpaper; 15] = [
     Wallpaper {
-        name: b"Winlux",
+        name: b"Winlux classique",
         slug: b"winlux",
         category: 2,
         accent: hex(0x0078D4),
@@ -237,6 +239,19 @@ pub const WALLPAPERS: [Wallpaper; 13] = [
         slug: b"dunes",
         category: 4,
         accent: hex(0xCA5010),
+    },
+    // Fonds de l'identité Winlux (logo « Prisme », voir assets/brand).
+    Wallpaper {
+        name: b"Winlux Nuit",
+        slug: b"winlux-nuit",
+        category: 3,
+        accent: brand::ACCENT,
+    },
+    Wallpaper {
+        name: b"Winlux Aube",
+        slug: b"winlux-aube",
+        category: 4,
+        accent: brand::ACCENT,
     },
 ];
 
@@ -695,8 +710,79 @@ fn shade(id: usize, x: i32, y: i32, w: i32, h: i32) -> u32 {
             }
             c
         }
+        13 => prisme(x, y, w, h, false),
+        14 => prisme(x, y, w, h, true),
         _ => bloom(&BLOOM, x, y, w, h),
     }
+}
+
+/// Fonds « Winlux Nuit » et « Winlux Aube » : halo derrière le logo Prisme et
+/// rubans de lumière violet/cyan. Même dessin que `scripts/render-brand.py`.
+fn prisme(x: i32, y: i32, w: i32, h: i32, light: bool) -> u32 {
+    let (w, h) = (w.max(1), h.max(1));
+    let u = x * 1000 / w;
+    let v = y * 1000 / h;
+    let mut c = if light {
+        lerp(hex(0xF4F1FF), hex(0xD9ECFF), (v * 7 + u * 3) / 10)
+    } else {
+        let c = lerp(hex(0x070A1F), hex(0x14103A), v);
+        lerp(c, hex(0x0B244A), (u - 300).max(0) * 8 / 10)
+    };
+    // Halo : distance au centre en millièmes de la largeur.
+    let r = isqrt(((u - 500) as i64).pow(2) + ((v - 470) as i64 * h as i64 / w as i64).pow(2)) as i32;
+    let halo = (1000 - r * 1000 / 420).max(0);
+    let halo = halo * halo / 1000;
+    c = lerp(
+        c,
+        if light { hex(0xC9B8FF) } else { hex(0x8E6BFF) },
+        halo * if light { 50 } else { 55 } / 100,
+    );
+    // Rubans : (phase en dixièmes de degré, amplitude, demi-épaisseur, couleur, gain).
+    let fade = ((u - 500).abs() * 22 / 10).clamp(150, 1000);
+    for (k, (phase, amp, width, col, gain)) in [
+        (0, 100, 30, hex(0x7C4DFF), 550),
+        (974, 80, 18, hex(0x22B8F0), 600),
+        (1776, 120, 45, hex(0xB69CFF), 300),
+        (2521, 60, 12, hex(0x7DE8FF), 700),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let center = 620
+            + amp * sin1k(u * 3240 / 1000 + phase) / 1000
+            + 50 * sin1k(u * 4011 / 1000 + k as i32 * 573) / 1000;
+        // Cloche (1 - x²/4)² proche d'une gaussienne de même largeur.
+        let d = (v - center).abs() * 1000 / width;
+        if d >= 2000 {
+            continue;
+        }
+        let q = 1000 - d * d / 4000;
+        let band = q * q / 1000;
+        let k = band * gain / 1000 * 55 / 100 * fade / 1000;
+        c = if light { lerp(c, col, k) } else { add(c, col, k) };
+    }
+    // Logo au centre : facettes et bord lissé (couverture estimée).
+    let s = h * 20 / 100;
+    let (lx, ly) = (w / 2 - s / 2, h * 44 / 100 - s / 2);
+    if s > 4 && x >= lx - 1 && x <= lx + s && y >= ly - 1 && y <= ly + s {
+        let lu = ((x - lx) * 2 + 1) * 1000 / (2 * s);
+        let lv = ((y - ly) * 2 + 1) * 1000 / (2 * s);
+        let inside = 500 - (lu - 500).abs() - (lv - 500).abs();
+        // Distance au bord en 1/1000 de pixel (×1,41 pour l'axe diagonal).
+        let cover = (inside * s * 141 / 100 + 500).clamp(0, 1000);
+        if cover > 0 {
+            let edge = 420 + (500 - 420) * (lu - 500).abs() / 500;
+            let top = lv < edge;
+            let (c0, c1) = match (lu < 500, top) {
+                (true, true) => (hex(0xB69CFF), hex(0x7C4DFF)),
+                (true, false) => (hex(0x7C4DFF), hex(0x4B23C8)),
+                (false, true) => (hex(0x7DE8FF), hex(0x22B8F0)),
+                (false, false) => (hex(0x22B8F0), hex(0x125CD6)),
+            };
+            c = lerp(c, lerp(c0, c1, lv), cover);
+        }
+    }
+    c
 }
 
 /// Image calculée en mémoire (DIB 32 bits), conservée tant que rien ne change.
@@ -719,7 +805,7 @@ const NO_CANVAS: Canvas = Canvas {
 };
 static mut FULL: Canvas = NO_CANVAS;
 static mut PREVIEW: Canvas = NO_CANVAS;
-static mut THUMBS: [Canvas; 13] = [NO_CANVAS; 13];
+static mut THUMBS: [Canvas; WALLPAPERS.len()] = [NO_CANVAS; WALLPAPERS.len()];
 
 unsafe fn canvas(c: &mut Canvas, hdc: Handle, w: i32, h: i32, id: usize) -> bool {
     if w <= 0 || h <= 0 {
@@ -909,12 +995,12 @@ pub unsafe fn paint_desktop(hdc: Handle, w: i32, h: i32) {
 
 // ---------- Sons de démarrage ----------
 
-pub const SOUNDS: [(&[u8], &[u8], &[u8]); 6] = [
+pub const SOUNDS: [(&[u8], &[u8], &[u8]); 7] = [
     (b"Aucun", b"none", b"D\xE9marrage silencieux."),
     (
         b"Aurore",
         b"aurore",
-        b"Arp\xE8ge chaleureux, inspir\xE9 de Windows 11.",
+        b"Arp\xE8ge chaleureux et lumineux.",
     ),
     (
         b"Cristal",
@@ -927,6 +1013,11 @@ pub const SOUNDS: [(&[u8], &[u8], &[u8]); 6] = [
         b"Pulsation",
         b"pulsation",
         b"Signal num\xE9rique bref et moderne.",
+    ),
+    (
+        b"Prisme",
+        b"prisme",
+        b"Signature Winlux : un accord qui s'\xE9claire, du grave vers l'aigu.",
     ),
 ];
 
@@ -1048,6 +1139,17 @@ unsafe fn synth(id: usize) -> usize {
             }
             n(380, 1_760_000, 650, 300, Voice::Sine);
             n(380, 880_000, 650, 160, Voice::Sine);
+        }
+        6 => {
+            // Prisme : nappe grave (violet), puis quinte et neuvième en
+            // cloches qui montent vers l'aigu (cyan), avec un éclat final.
+            n(0, 130_810, 2200, 230, Voice::Pad);
+            n(60, 196_000, 2000, 170, Voice::Pad);
+            for (k, f) in [523_250, 783_990, 1_174_660, 1_567_980].iter().enumerate() {
+                n(140 + k as u32 * 120, *f, 1500 - k as u32 * 120, 300, Voice::Bell);
+            }
+            n(620, 2_349_320, 1100, 140, Voice::Bell);
+            n(620, 587_330, 1300, 200, Voice::Sine);
         }
         _ => return 0,
     }
@@ -2533,21 +2635,7 @@ pub unsafe fn draw_oobe(g: &mut Gfx, desk: &Rect) {
             p.border,
         );
         let (lx, ly) = (c.left + 28, c.top + 32);
-        for (k, col) in [hex(0xF25022), hex(0x7FBA00), hex(0x00A4EF), hex(0xFFB900)]
-            .iter()
-            .enumerate()
-        {
-            let (dx, dy) = ((k % 2) as i32 * 13, (k / 2) as i32 * 13);
-            fill(
-                g.hdc,
-                g.b,
-                lx + dx,
-                ly + dy,
-                lx + dx + 11,
-                ly + dy + 11,
-                *col,
-            );
-        }
+        brand::logo(g.hdc, g.b, lx, ly - 1, 26, 1000, Some(p.mica));
         text(g.hdc, g.f.title, p.text, lx + 36, ly + 4, b"Winlux");
         for (i, name) in STEPS.iter().enumerate() {
             let y = c.top + 104 + i as i32 * 44;
@@ -3005,11 +3093,21 @@ const PERSO_LABELS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
     ),
     (b"Aurore", b"Dawn", b"Aurora", b"Morgenrot"),
     (
-        b"Arp\xE8ge chaleureux, inspir\xE9 de Windows 11.",
-        b"Warm arpeggio, inspired by Windows 11.",
-        b"Arpegio c\xE1lido, inspirado en Windows 11.",
-        b"Warmes Arpeggio, inspiriert von Windows 11.",
+        b"Arp\xE8ge chaleureux et lumineux.",
+        b"Warm, bright arpeggio.",
+        b"Arpegio c\xE1lido y luminoso.",
+        b"Warmes, helles Arpeggio.",
     ),
+    (b"Prisme", b"Prism", b"Prisma", b"Prisma"),
+    (
+        b"Signature Winlux : un accord qui s'\xE9claire, du grave vers l'aigu.",
+        b"The Winlux signature: a chord that brightens from low to high.",
+        b"La firma de Winlux: un acorde que se ilumina de grave a agudo.",
+        b"Die Winlux-Signatur: ein Akkord, der sich von tief nach hoch aufhellt.",
+    ),
+    (b"Winlux classique", b"Winlux classic", b"Winlux cl\xE1sico", b"Winlux klassisch"),
+    (b"Winlux Nuit", b"Winlux Night", b"Winlux Noche", b"Winlux Nacht"),
+    (b"Winlux Aube", b"Winlux Dawn", b"Winlux Amanecer", b"Winlux Morgengrauen"),
     (b"Cristal", b"Crystal", b"Cristal", b"Kristall"),
     (
         b"Clochettes claires et l\xE9g\xE8res.",

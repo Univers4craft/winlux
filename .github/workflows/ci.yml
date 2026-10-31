@@ -129,6 +129,9 @@ jobs:
       - name: Vérifier l'écran de verrouillage (mot de passe, inactivité, réveil)
         run: python3 -B scripts/test-lock.py
 
+      - name: Vérifier les autorisations des applications Windows
+        run: python3 -B scripts/test-permission.py
+
       - name: Vérifier les grandes images X11 en 1080p
         run: |
           sudo apt-get update -q
