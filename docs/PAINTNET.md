@@ -107,6 +107,34 @@ Ajouté par la PR 2 (démarrage de coreclr) :
 - Diagnostic : `WINLUX_APITRACE=1` journalise chaque appel d'API intégrée
   avec son appelant, et `WINLUX_LOG=trace` chaque exception levée.
 
+## La boucle d'exceptions après `paintdotnet.dll` (état au 31/10/2026)
+
+Ce que montrent les journaux de Winlux (`WINLUX_LOG=trace`,
+`WINLUX_APITRACE=1`) :
+
+- coreclr charge `System.Private.CoreLib.dll` puis `paintdotnet.dll`
+  (relogées, alignées sur 64 Kio). Le code managé s'exécute.
+- Ensuite, la même exception C++ MSVC (0xE06D7363) revient une dizaine de
+  fois. À chaque tour, il y a une levée avec objet, une relance `throw;`
+  (arguments nuls) et une nouvelle levée de l'exception d'origine.
+- La boucle se termine par « Stack overflow. », suivi d'une exception
+  managée non gérée (0xE0434352, HRESULT 0x8007007E).
+- Le test MinGW `cpp_exceptions` (lancer, relancer, try imbriqués) passe
+  avec le SEH de Winlux. Le modèle de GCC n'exécute toutefois pas les blocs
+  `catch` comme MSVC.
+
+Hypothèse à vérifier : sous MSVC, un bloc `catch` s'exécute pendant le
+rappel de consolidation de `RtlUnwindEx` (`RtlRestoreContext`). Une relance
+`throw;` faite dans ce rappel doit être déroulée au-delà du cadre du `try`
+déjà traité. Si notre substitution des cadres de trampoline
+(`FrameKind::Consolidate` dans `seh.rs`) fait reprendre le parcours trop
+bas, le même `catch` reprend l'exception à chaque fois, et la pile déborde.
+
+Prochaine étape, avec nos propres outils : journaliser dans `seh.rs`
+chaque cadre parcouru par `dispatch` (RIP, cadre d'établissement,
+gestionnaire, disposition) et chaque entrée de `FRAMES`. Il faut aussi
+un test de relance depuis un rappel de consolidation.
+
 ## Ce qui casse, dans l'ordre où on le rencontre
 
 1. **coreclr, après le chargement de `paintdotnet.dll`** : une exception C++
