@@ -1,0 +1,58 @@
+name: Base APT native
+
+# Builds the configured Ubuntu base exactly as the Release workflow does,
+# without publishing anything, whenever its recipe changes. A broken base
+# otherwise only shows up after a release tag has been pushed.
+on:
+  pull_request:
+    paths:
+      - scripts/prepare-apt-base.py
+      - scripts/prepare-desktop-packages.py
+      - .github/workflows/apt-base.yml
+      - .github/workflows/release.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: apt-base-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  apt-base:
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Installer les outils
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q qemu-system-x86 linux-image-generic busybox-static \
+            zstd fakeroot e2fsprogs kmod curl dpkg-dev
+
+      - name: Autoriser KVM
+        run: |
+          if test -e /dev/kvm; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+          fi
+          ls -l /dev/kvm || true
+
+      - name: Préparer la base APT
+        run: |
+          kernel=$(find /boot -maxdepth 1 -name 'vmlinuz-*-generic' | sort -V | tail -1)
+          test -n "$kernel"
+          release=$(basename "$kernel" | sed 's/^vmlinuz-//')
+          sudo install -m 644 "$kernel" "$RUNNER_TEMP/winlux-kernel"
+          python3 scripts/prepare-apt-base.py --kernel "$RUNNER_TEMP/winlux-kernel" --kernel-release "$release"
+          test -s build/apt-base/root.tar
+
+      - name: Conserver le journal
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apt-base-log
+          path: build/apt-base/bootstrap.log
