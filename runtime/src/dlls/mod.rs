@@ -44,6 +44,7 @@ pub mod iphlpapi;
 pub mod ipp;
 pub mod kernel32;
 pub mod kernel32_cpu;
+pub mod kernel32_ext;
 pub mod kernel32_misc;
 pub mod libgcc;
 pub mod libstdcpp;
@@ -63,6 +64,7 @@ pub mod quartz;
 pub mod resource;
 pub mod rpcrt4;
 pub mod sechost;
+pub mod seh;
 pub mod setupapi;
 pub mod shell32;
 pub mod shlwapi;
@@ -162,13 +164,20 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(crate::archive::ffi::exports());
                     e.extend(crate::imaging::api::exports());
                     e.extend(winlux_gpu::exports());
+                    e.extend(seh::kernel32_exports());
+                    e.extend(kernel32_ext::kernel32_exports());
                     e
                 },
                 handle: fake_module(),
             },
             Builtin {
                 name: "ntdll",
-                exports: ntdll::exports(),
+                exports: {
+                    let mut e = ntdll::exports();
+                    e.extend(seh::exports());
+                    e.extend(kernel32_ext::ntdll_exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -196,6 +205,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = advapi32::exports();
                     e.extend(advapi32_services::exports());
+                    e.extend(kernel32_ext::advapi32_exports());
                     e.extend(eventing::exports());
                     e
                 },

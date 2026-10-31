@@ -9,98 +9,100 @@ use winlux_testexe::*;
 pub const CUSTOM_TITLE: bool = false;
 
 struct Step {
-    title: &'static [u8],
-    text: &'static [u8],
-    tips: [&'static [u8]; 3],
-    action: &'static [u8],
+    title: Tr4,
+    text: Tr4,
+    tips: [Tr4; 3],
+    action: Tr4,
 }
+
+const NONE: Tr4 = [b"", b"", b"", b""];
 
 const STEPS: [Step; 8] = [
     Step {
-        title: b"Bienvenue dans Winlux",
-        text: b"Winlux est un syst\xE8me Linux qui lance vos programmes Windows d'un double-clic, sans machine virtuelle cach\xE9e. Cette visite de deux minutes pr\xE9sente l'essentiel.",
+        title: [b"Bienvenue dans Winlux", b"Welcome to Winlux", b"Bienvenido a Winlux", b"Willkommen bei Winlux"],
+        text: [b"Winlux est un syst\xE8me Linux qui lance vos programmes Windows d'un double-clic, sans machine virtuelle cach\xE9e. Cette visite de deux minutes pr\xE9sente l'essentiel.", b"Winlux is a Linux system that runs your Windows programs with a double-click, without a hidden virtual machine. This two-minute tour shows you the essentials.", b"Winlux es un sistema Linux que abre sus programas de Windows con un doble clic, sin m\xE1quina virtual oculta. Este recorrido de dos minutos le muestra lo esencial.", b"Winlux ist ein Linux-System, das Ihre Windows-Programme per Doppelklick startet, ohne versteckte virtuelle Maschine. Diese zweimin\xFCtige Tour zeigt das Wichtigste."],
         tips: [
-            b"Les fichiers .exe s'ouvrent comme sous Windows.",
-            b"Vos fichiers Linux sont accessibles depuis tous les programmes.",
-            b"Tout reste modifiable plus tard dans Param\xE8tres.",
+            [b"Les fichiers .exe s'ouvrent comme sous Windows.", b".exe files open just like on Windows.", b"Los archivos .exe se abren igual que en Windows.", b".exe-Dateien \xF6ffnen sich wie unter Windows."],
+            [b"Vos fichiers Linux sont accessibles depuis tous les programmes.", b"Your Linux files are available to every program.", b"Sus archivos de Linux est\xE1n disponibles en todos los programas.", b"Ihre Linux-Dateien sind in allen Programmen verf\xFCgbar."],
+            [b"Tout reste modifiable plus tard dans Param\xE8tres.", b"Everything can be changed later in Settings.", b"Todo se puede cambiar m\xE1s tarde en Configuraci\xF3n.", b"Alles l\xE4sst sich sp\xE4ter in den Einstellungen \xE4ndern."],
         ],
-        action: b"",
+        action: NONE,
     },
     Step {
-        title: b"Le menu D\xE9marrer",
-        text: b"Cliquez sur le logo de la barre des t\xE2ches ou appuyez sur la touche Windows. Tapez directement pour rechercher une application ou un fichier.",
+        title: [b"Le menu D\xE9marrer", b"The Start menu", b"El men\xFA Inicio", b"Das Startmen\xFC"],
+        text: [b"Cliquez sur le logo de la barre des t\xE2ches ou appuyez sur la touche Windows. Tapez directement pour rechercher une application ou un fichier.", b"Click the logo on the taskbar or press the Windows key. Just start typing to search for an app or a file.", b"Haga clic en el logotipo de la barra de tareas o pulse la tecla Windows. Escriba directamente para buscar una aplicaci\xF3n o un archivo.", b"Klicken Sie auf das Logo in der Taskleiste oder dr\xFCcken Sie die Windows-Taste. Tippen Sie einfach los, um eine App oder Datei zu suchen."],
         tips: [
-            b"Applications \xE9pingl\xE9es en haut, toutes les applications \xE0 c\xF4t\xE9.",
-            b"Le bouton d'alimentation verrouille, red\xE9marre ou arr\xEAte.",
-            b"Param\xE8tres > Apparence centre la barre ou l'aligne \xE0 gauche.",
+            [b"Applications \xE9pingl\xE9es en haut, toutes les applications \xE0 c\xF4t\xE9.", b"Pinned apps at the top, all apps next to them.", b"Aplicaciones ancladas arriba, todas las aplicaciones al lado.", b"Angeheftete Apps oben, alle Apps daneben."],
+            [b"Le bouton d'alimentation verrouille, red\xE9marre ou arr\xEAte.", b"The power button locks, restarts or shuts down.", b"El bot\xF3n de inicio/apagado bloquea, reinicia o apaga.", b"Die Ein/Aus-Taste sperrt, startet neu oder f\xE4hrt herunter."],
+            [b"Param\xE8tres > Apparence centre la barre ou l'aligne \xE0 gauche.", b"Settings > Appearance centers the taskbar or aligns it to the left.", b"Configuraci\xF3n > Apariencia centra la barra o la alinea a la izquierda.", b"Einstellungen > Darstellung zentriert die Leiste oder richtet sie links aus."],
         ],
-        action: b"Ouvrir le menu D\xE9marrer",
+        action: [b"Ouvrir le menu D\xE9marrer", b"Open the Start menu", b"Abrir el men\xFA Inicio", b"Startmen\xFC \xF6ffnen"],
     },
     Step {
-        title: b"L'Explorateur de fichiers",
-        text: b"Explorer parcourt vos dossiers Linux et vos disques. Double-cliquez sur un .exe pour le lancer, sur un document pour l'ouvrir.",
+        title: [b"L'Explorateur de fichiers", b"File Explorer", b"El Explorador de archivos", b"Der Datei-Explorer"],
+        text: [b"Explorer parcourt vos dossiers Linux et vos disques. Double-cliquez sur un .exe pour le lancer, sur un document pour l'ouvrir.", b"Explorer browses your Linux folders and drives. Double-click an .exe to run it, or a document to open it.", b"El Explorador recorre sus carpetas de Linux y sus discos. Haga doble clic en un .exe para ejecutarlo o en un documento para abrirlo.", b"Der Explorer durchsucht Ihre Linux-Ordner und Laufwerke. Doppelklicken Sie auf eine .exe, um sie zu starten, oder auf ein Dokument, um es zu \xF6ffnen."],
         tips: [
-            b"Onglets et double volet pour copier d'un dossier \xE0 l'autre.",
-            b"Clic droit : renommer, compresser, r\xE9glages d'un .exe.",
-            b"Corbeille pour r\xE9cup\xE9rer un fichier supprim\xE9.",
+            [b"Onglets et double volet pour copier d'un dossier \xE0 l'autre.", b"Tabs and dual pane to copy between folders.", b"Pesta\xF1as y doble panel para copiar de una carpeta a otra.", b"Registerkarten und Doppelansicht zum Kopieren zwischen Ordnern."],
+            [b"Clic droit : renommer, compresser, r\xE9glages d'un .exe.", b"Right-click: rename, compress, .exe settings.", b"Clic derecho: cambiar nombre, comprimir, ajustes de un .exe.", b"Rechtsklick: umbenennen, komprimieren, Einstellungen einer .exe."],
+            [b"Corbeille pour r\xE9cup\xE9rer un fichier supprim\xE9.", b"Recycle Bin to recover a deleted file.", b"Papelera para recuperar un archivo eliminado.", b"Papierkorb zum Wiederherstellen gel\xF6schter Dateien."],
         ],
-        action: b"Ouvrir l'Explorateur",
+        action: [b"Ouvrir l'Explorateur", b"Open Explorer", b"Abrir el Explorador", b"Explorer \xF6ffnen"],
     },
     Step {
-        title: b"Les Param\xE8tres",
-        text: b"R\xE9seau, son, clavier, \xE9cran, apparence, mises \xE0 jour et confidentialit\xE9 sont r\xE9unis au m\xEAme endroit. Chaque r\xE9glage agit sur le vrai syst\xE8me Linux.",
+        title: [b"Les Param\xE8tres", b"Settings", b"La Configuraci\xF3n", b"Die Einstellungen"],
+        text: [b"R\xE9seau, son, clavier, \xE9cran, apparence, mises \xE0 jour et confidentialit\xE9 sont r\xE9unis au m\xEAme endroit. Chaque r\xE9glage agit sur le vrai syst\xE8me Linux.", b"Network, sound, keyboard, display, appearance, updates and privacy are all in one place. Every setting acts on the real Linux system.", b"Red, sonido, teclado, pantalla, apariencia, actualizaciones y privacidad est\xE1n en un mismo lugar. Cada ajuste act\xFAa sobre el sistema Linux real.", b"Netzwerk, Sound, Tastatur, Bildschirm, Darstellung, Updates und Datenschutz an einem Ort. Jede Einstellung wirkt auf das echte Linux-System."],
         tips: [
-            b"Th\xE8me clair ou sombre, automatique selon l'heure.",
-            b"D\xE9finition de l'\xE9cran et \xE9chelle du texte.",
-            b"Navigateur par d\xE9faut : Edge, Chrome ou Firefox.",
+            [b"Th\xE8me clair ou sombre, automatique selon l'heure.", b"Light or dark theme, automatic by time of day.", b"Tema claro u oscuro, autom\xE1tico seg\xFAn la hora.", b"Helles oder dunkles Design, automatisch nach Tageszeit."],
+            [b"D\xE9finition de l'\xE9cran et \xE9chelle du texte.", b"Screen resolution and text scaling.", b"Resoluci\xF3n de pantalla y escala del texto.", b"Bildschirmaufl\xF6sung und Textskalierung."],
+            [b"Navigateur par d\xE9faut : Edge, Chrome ou Firefox.", b"Default browser: Edge, Chrome or Firefox.", b"Navegador predeterminado: Edge, Chrome o Firefox.", b"Standardbrowser: Edge, Chrome oder Firefox."],
         ],
-        action: b"Ouvrir les Param\xE8tres",
+        action: [b"Ouvrir les Param\xE8tres", b"Open Settings", b"Abrir Configuraci\xF3n", b"Einstellungen \xF6ffnen"],
     },
     Step {
-        title: b"Le Terminal",
-        text: b"Le Terminal donne acc\xE8s \xE0 la ligne de commande Linux, pour les utilisateurs avanc\xE9s. Il n'est jamais n\xE9cessaire pour utiliser Winlux au quotidien.",
+        title: [b"Le Terminal", b"The Terminal", b"El Terminal", b"Das Terminal"],
+        text: [b"Le Terminal donne acc\xE8s \xE0 la ligne de commande Linux, pour les utilisateurs avanc\xE9s. Il n'est jamais n\xE9cessaire pour utiliser Winlux au quotidien.", b"The Terminal gives advanced users access to the Linux command line. You never need it for everyday use of Winlux.", b"El Terminal da acceso a la l\xEDnea de comandos de Linux para usuarios avanzados. Nunca es necesario para usar Winlux a diario.", b"Das Terminal bietet erfahrenen Benutzern Zugriff auf die Linux-Befehlszeile. F\xFCr die t\xE4gliche Nutzung von Winlux wird es nie ben\xF6tigt."],
         tips: [
-            b"Les commandes Linux habituelles : ls, cd, apt...",
-            b"Clic droit copie la s\xE9lection ; Ctrl+V ou clic droit colle.",
-            b"Fermez-le comme n'importe quelle fen\xEAtre.",
+            [b"Les commandes Linux habituelles : ls, cd, apt...", b"The usual Linux commands: ls, cd, apt...", b"Los comandos habituales de Linux: ls, cd, apt...", b"Die \xFCblichen Linux-Befehle: ls, cd, apt..."],
+            [b"Clic droit copie la s\xE9lection ; Ctrl+V ou clic droit colle.", b"Right-click copies the selection; Ctrl+V or right-click pastes.", b"Clic derecho copia la selecci\xF3n; Ctrl+V o clic derecho pega.", b"Rechtsklick kopiert die Auswahl; Strg+V oder Rechtsklick f\xFCgt ein."],
+            [b"Fermez-le comme n'importe quelle fen\xEAtre.", b"Close it like any other window.", b"Ci\xE9rrelo como cualquier otra ventana.", b"Schlie\xDFen Sie es wie jedes andere Fenster."],
         ],
-        action: b"Ouvrir le Terminal",
+        action: [b"Ouvrir le Terminal", b"Open the Terminal", b"Abrir el Terminal", b"Terminal \xF6ffnen"],
     },
     Step {
-        title: b"Raccourcis clavier",
-        text: b"Les raccourcis de Windows 11 fonctionnent dans Winlux :",
-        tips: [b"", b"", b""],
-        action: b"",
+        title: [b"Raccourcis clavier", b"Keyboard shortcuts", b"M\xE9todos abreviados de teclado", b"Tastenkombinationen"],
+        text: [b"Les raccourcis de Windows 11 fonctionnent dans Winlux :", b"Windows 11 shortcuts work in Winlux:", b"Los atajos de Windows 11 funcionan en Winlux:", b"Die Tastenkombinationen von Windows 11 funktionieren in Winlux:"],
+        tips: [NONE, NONE, NONE],
+        action: NONE,
     },
     Step {
-        title: b"Votre vie priv\xE9e",
-        text: b"Winlux ne collecte aucune donn\xE9e d'utilisation : la t\xE9l\xE9m\xE9trie et l'historique de localisation sont d\xE9sactiv\xE9s par d\xE9faut. Vous d\xE9cidez de tout.",
+        title: [b"Votre vie priv\xE9e", b"Your privacy", b"Su privacidad", b"Ihre Privatsph\xE4re"],
+        text: [b"Winlux ne collecte aucune donn\xE9e d'utilisation : la t\xE9l\xE9m\xE9trie et l'historique de localisation sont d\xE9sactiv\xE9s par d\xE9faut. Vous d\xE9cidez de tout.", b"Winlux collects no usage data: telemetry and location history are off by default. You decide everything.", b"Winlux no recopila ning\xFAn dato de uso: la telemetr\xEDa y el historial de ubicaciones est\xE1n desactivados de forma predeterminada. Usted decide todo.", b"Winlux sammelt keine Nutzungsdaten: Telemetrie und Standortverlauf sind standardm\xE4\xDFig deaktiviert. Sie entscheiden \xFCber alles."],
         tips: [
-            b"Autorisez ou bloquez le micro, la cam\xE9ra et la localisation.",
-            b"Mises \xE0 jour : automatiques, manuelles ou planifi\xE9es.",
-            b"Param\xE8tres > Confidentialit\xE9 pour tout v\xE9rifier.",
+            [b"Autorisez ou bloquez le micro, la cam\xE9ra et la localisation.", b"Allow or block the microphone, camera and location.", b"Permita o bloquee el micr\xF3fono, la c\xE1mara y la ubicaci\xF3n.", b"Mikrofon, Kamera und Standort zulassen oder blockieren."],
+            [b"Mises \xE0 jour : automatiques, manuelles ou planifi\xE9es.", b"Updates: automatic, manual or scheduled.", b"Actualizaciones: autom\xE1ticas, manuales o programadas.", b"Updates: automatisch, manuell oder geplant."],
+            [b"Param\xE8tres > Confidentialit\xE9 pour tout v\xE9rifier.", b"Settings > Privacy to check everything.", b"Configuraci\xF3n > Privacidad para revisarlo todo.", b"Einstellungen > Datenschutz, um alles zu pr\xFCfen."],
         ],
-        action: b"Ouvrir Confidentialit\xE9",
+        action: [b"Ouvrir Confidentialit\xE9", b"Open Privacy", b"Abrir Privacidad", b"Datenschutz \xF6ffnen"],
     },
     Step {
-        title: b"Choisissez votre style",
-        text: b"Clair ou sombre ? Barre centr\xE9e ou \xE0 gauche ? Votre choix s'applique tout de suite et reste modifiable dans Param\xE8tres > Apparence.",
-        tips: [b"", b"", b""],
-        action: b"",
+        title: [b"Choisissez votre style", b"Choose your style", b"Elija su estilo", b"W\xE4hlen Sie Ihren Stil"],
+        text: [b"Clair ou sombre ? Barre centr\xE9e ou \xE0 gauche ? Votre choix s'applique tout de suite et reste modifiable dans Param\xE8tres > Apparence.", b"Light or dark? Centered or left taskbar? Your choice applies right away and can be changed in Settings > Appearance.", b"\xBFClaro u oscuro? \xBFBarra centrada o a la izquierda? Su elecci\xF3n se aplica al momento y se puede cambiar en Configuraci\xF3n > Apariencia.", b"Hell oder dunkel? Leiste zentriert oder links? Ihre Wahl gilt sofort und l\xE4sst sich unter Einstellungen > Darstellung \xE4ndern."],
+        tips: [NONE, NONE, NONE],
+        action: NONE,
     },
 ];
 
-const SHORTCUTS: [(&[u8], &[u8]); 10] = [
-    (b"Windows", b"Menu D\xE9marrer"),
-    (b"Windows + E", b"Explorateur de fichiers"),
-    (b"Windows + I", b"Param\xE8tres"),
-    (b"Windows + S", b"Recherche"),
-    (b"Windows + D", b"Afficher le bureau"),
-    (b"Windows + L", b"Verrouiller la session"),
-    (b"Windows + Tab", b"Vue des t\xE2ches"),
-    (b"Windows + fl\xE8ches", b"Ancrer une fen\xEAtre"),
-    (b"Alt + Tab", b"Passer d'une fen\xEAtre \xE0 l'autre"),
-    (b"Ctrl + Maj + \xC9chap", b"Gestionnaire des t\xE2ches"),
+const SHORTCUTS: [(Tr4, Tr4); 10] = [
+    ([b"Windows", b"Windows", b"Windows", b"Windows"], [b"Menu D\xE9marrer", b"Start menu", b"Men\xFA Inicio", b"Startmen\xFC"]),
+    ([b"Windows + E", b"Windows + E", b"Windows + E", b"Windows + E"], [b"Explorateur de fichiers", b"File Explorer", b"Explorador de archivos", b"Datei-Explorer"]),
+    ([b"Windows + I", b"Windows + I", b"Windows + I", b"Windows + I"], [b"Param\xE8tres", b"Settings", b"Configuraci\xF3n", b"Einstellungen"]),
+    ([b"Windows + S", b"Windows + S", b"Windows + S", b"Windows + S"], [b"Recherche", b"Search", b"B\xFAsqueda", b"Suche"]),
+    ([b"Windows + D", b"Windows + D", b"Windows + D", b"Windows + D"], [b"Afficher le bureau", b"Show desktop", b"Mostrar el escritorio", b"Desktop anzeigen"]),
+    ([b"Windows + L", b"Windows + L", b"Windows + L", b"Windows + L"], [b"Verrouiller la session", b"Lock the session", b"Bloquear la sesi\xF3n", b"Sitzung sperren"]),
+    ([b"Windows + Tab", b"Windows + Tab", b"Windows + Tab", b"Windows + Tab"], [b"Vue des t\xE2ches", b"Task view", b"Vista de tareas", b"Aktive Anwendungen"]),
+    ([b"Windows + fl\xE8ches", b"Windows + arrows", b"Windows + flechas", b"Windows + Pfeiltasten"], [b"Ancrer une fen\xEAtre", b"Snap a window", b"Acoplar una ventana", b"Fenster andocken"]),
+    ([b"Alt + Tab", b"Alt + Tab", b"Alt + Tab", b"Alt + Tab"], [b"Passer d'une fen\xEAtre \xE0 l'autre", b"Switch between windows", b"Cambiar de ventana", b"Zwischen Fenstern wechseln"]),
+    ([b"Ctrl + Maj + \xC9chap", b"Ctrl + Shift + Esc", b"Ctrl + May\xFAs + Esc", b"Strg + Umschalt + Esc"], [b"Gestionnaire des t\xE2ches", b"Task Manager", b"Administrador de tareas", b"Task-Manager"]),
 ];
 
 static mut STEP: usize = 0;
@@ -194,7 +196,7 @@ fn visible(id: i32) -> bool {
     match id {
         BTN_BACK => s > 0,
         BTN_SKIP => s + 1 < STEPS.len(),
-        BTN_ACTION => !STEPS[s].action.is_empty(),
+        BTN_ACTION => !STEPS[s].action[0].is_empty(),
         BTN_DARK | BTN_LIGHT | BTN_CENTER | BTN_LEFT => s + 1 == STEPS.len(),
         _ => true,
     }
@@ -301,7 +303,7 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
             let s = w / 3;
             glyph(g.hdc, g.b, g.f, Glyph::Start, cx - s / 2, r.top + 10, s);
             text_centered(g.hdc, g.f.display, 28, p.text, cx, r.top + s + 30, b"Winlux");
-            text_centered(g.hdc, g.f.body, 13, p.text2, cx, r.top + s + 70, b"Linux + programmes Windows");
+            text_centered(g.hdc, g.f.body, 13, p.text2, cx, r.top + s + 70, tr4(&[b"Linux + programmes Windows", b"Linux + Windows programs", b"Linux + programas de Windows", b"Linux + Windows-Programme"]));
         }
         1 => {
             let s = mini_screen(g, &r);
@@ -348,7 +350,7 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
             panel(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, rgb(0x0C, 0x0C, 0x0C), p.border);
             fill(g.hdc, g.b, r.left + 1, r.top + 1, r.right - 1, r.top + 22, rgb(0x20, 0x20, 0x20));
             text(g.hdc, g.f.small, rgb(0xCC, 0xCC, 0xCC), r.left + 10, r.top + 5, b"Terminal");
-            let lines: [&[u8]; 4] = [b"$ ls ~/T\xE9l\xE9chargements", b"setup.exe  photos  notes.txt", b"$ winlux setup.exe", b"$ _"];
+            let lines: [&[u8]; 4] = [tr4(&[b"$ ls ~/T\xE9l\xE9chargements", b"$ ls ~/Downloads", b"$ ls ~/Descargas", b"$ ls ~/Downloads"]), b"setup.exe  photos  notes.txt", b"$ winlux setup.exe", b"$ _"];
             for (i, l) in lines.iter().enumerate() {
                 let c = if l.starts_with(b"$") { rgb(0x6C, 0xD1, 0x7A) } else { rgb(0xD0, 0xD0, 0xD0) };
                 text(g.hdc, g.f.small, c, r.left + 12, r.top + 32 + i as i32 * 18, l);
@@ -376,7 +378,7 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
             round_rect(g.hdc, g.b, l, top + s / 3, l + s, top + s + 10, 10, p.accent);
             ellipse(g.hdc, g.b, cx - 8, top + s * 2 / 3 - 6, cx + 8, top + s * 2 / 3 + 10, p.on_accent);
             fill(g.hdc, g.b, cx - 3, top + s * 2 / 3 + 6, cx + 3, top + s * 2 / 3 + 22, p.on_accent);
-            text_centered(g.hdc, g.f.semibold, 13, p.text, cx, top + s + 28, b"Aucune t\xE9l\xE9m\xE9trie");
+            text_centered(g.hdc, g.f.semibold, 13, p.text, cx, top + s + 28, tr4(&[b"Aucune t\xE9l\xE9m\xE9trie", b"No telemetry", b"Sin telemetr\xEDa", b"Keine Telemetrie"]));
         }
         _ => {
             for (i, dark) in [true, false].iter().enumerate() {
@@ -404,12 +406,20 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let step = &STEPS[STEP];
     let x = body_left(f);
     let w = c.right - x - 32;
-    let mut label = *b"\xC9TAPE 0 SUR 0";
-    label[6] = b'1' + STEP as u8;
-    label[12] = b'0' + STEPS.len() as u8;
-    text(g.hdc, g.f.small, p.accent, x, c.top + 36, &label);
-    text(g.hdc, g.f.display, p.text, x, c.top + 56, step.title);
-    paragraph(g, g.f.body, 13, p.text2, x, c.top + 108, w, step.text);
+    // « ÉTAPE n SUR m » : positions des deux chiffres selon la langue.
+    let (model, a, b): (&[u8], usize, usize) = match ui_lang() {
+        1 => (b"STEP 0 OF 0", 5, 10),
+        2 => (b"PASO 0 DE 0", 5, 10),
+        3 => (b"SCHRITT 0 VON 0", 8, 14),
+        _ => (b"\xC9TAPE 0 SUR 0", 6, 12),
+    };
+    let mut label = [0u8; 16];
+    label[..model.len()].copy_from_slice(model);
+    label[a] = b'1' + STEP as u8;
+    label[b] = b'0' + STEPS.len() as u8;
+    text(g.hdc, g.f.small, p.accent, x, c.top + 36, &label[..model.len()]);
+    text(g.hdc, g.f.display, p.text, x, c.top + 56, tr4(&step.title));
+    paragraph(g, g.f.body, 13, p.text2, x, c.top + 108, w, tr4(&step.text));
     let top = tips_top(f);
     match STEP {
         5 => {
@@ -420,14 +430,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 if y + 36 > footer_y(f) {
                     break;
                 }
-                text_fit(g.hdc, g.f.semibold, 13, p.text, l, y, keys, col - 12);
-                text_fit(g.hdc, g.f.small, 11, p.text2, l, y + 18, what, col - 12);
+                text_fit(g.hdc, g.f.semibold, 13, p.text, l, y, tr4(keys), col - 12);
+                text_fit(g.hdc, g.f.small, 11, p.text2, l, y + 18, tr4(what), col - 12);
             }
         }
         7 => {
             let dark = crate::settings::status_value(b"theme") != b"light";
             let left = crate::desktop::ALIGN_LEFT;
-            for (id, label, sel) in [(BTN_DARK, b"Sombre".as_slice(), dark), (BTN_LIGHT, b"Clair", !dark)] {
+            for (id, label, sel) in [(BTN_DARK, tr4(&[b"Sombre", b"Dark", b"Oscuro", b"Dunkel"]), dark), (BTN_LIGHT, tr4(&[b"Clair", b"Light", b"Claro", b"Hell"]), !dark)] {
                 let r = button_rect(f, id);
                 let (bg, fg) = if id == BTN_DARK {
                     (rgb(0x20, 0x20, 0x20), rgb(0xF0, 0xF0, 0xF0))
@@ -439,18 +449,18 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 round_rect(g.hdc, g.b, r.left + 14, r.top + 14, r.right - 14, r.bottom - 40, 4, blend(fg, bg, 12));
                 text(g.hdc, g.f.semibold, fg, r.left + 14, r.bottom - 28, label);
             }
-            text(g.hdc, g.f.semibold, p.text, x, top + 124, b"Barre des t\xE2ches");
-            pill(g, &button_rect(f, BTN_CENTER), b"Centr\xE9e", false, HOVER == BTN_CENTER, !left);
-            pill(g, &button_rect(f, BTN_LEFT), b"\xC0 gauche", false, HOVER == BTN_LEFT, left);
+            text(g.hdc, g.f.semibold, p.text, x, top + 124, tr4(&[b"Barre des t\xE2ches", b"Taskbar", b"Barra de tareas", b"Taskleiste"]));
+            pill(g, &button_rect(f, BTN_CENTER), tr4(&[b"Centr\xE9e", b"Centered", b"Centrada", b"Zentriert"]), false, HOVER == BTN_CENTER, !left);
+            pill(g, &button_rect(f, BTN_LEFT), tr4(&[b"\xC0 gauche", b"Left", b"A la izquierda", b"Links"]), false, HOVER == BTN_LEFT, left);
         }
         _ => {
             for (i, tip) in step.tips.iter().enumerate() {
                 let y = top + i as i32 * 30;
                 ellipse(g.hdc, g.b, x, y + 4, x + 8, y + 12, p.accent);
-                text_fit(g.hdc, g.f.body, 13, p.text, x + 20, y, tip, w - 20);
+                text_fit(g.hdc, g.f.body, 13, p.text, x + 20, y, tr4(tip), w - 20);
             }
             if visible(BTN_ACTION) {
-                pill(g, &button_rect(f, BTN_ACTION), step.action, false, HOVER == BTN_ACTION, false);
+                pill(g, &button_rect(f, BTN_ACTION), tr4(&step.action), false, HOVER == BTN_ACTION, false);
             }
         }
     }
@@ -469,13 +479,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         if HOVER == BTN_SKIP {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, p.hover);
         }
-        text(g.hdc, g.f.body, p.text2, r.left + 12, r.top + 9, b"Passer la visite");
+        text(g.hdc, g.f.body, p.text2, r.left + 12, r.top + 9, tr4(&[b"Passer la visite", b"Skip the tour", b"Omitir el recorrido", b"Tour \xFCberspringen"]));
     }
     if visible(BTN_BACK) {
-        pill(g, &button_rect(f, BTN_BACK), b"Pr\xE9c\xE9dent", false, HOVER == BTN_BACK, false);
+        pill(g, &button_rect(f, BTN_BACK), tr4(&[b"Pr\xE9c\xE9dent", b"Back", b"Anterior", b"Zur\xFCck"]), false, HOVER == BTN_BACK, false);
     }
     let last = STEP + 1 == STEPS.len();
-    pill(g, &button_rect(f, BTN_NEXT), if last { b"Commencer".as_slice() } else { b"Suivant" }, true, HOVER == BTN_NEXT, false);
+    pill(g, &button_rect(f, BTN_NEXT), if last { tr4(&[b"Commencer", b"Get started", b"Empezar", b"Los geht's"]) } else { tr4(&[b"Suivant", b"Next", b"Siguiente", b"Weiter"]) }, true, HOVER == BTN_NEXT, false);
 }
 
 unsafe fn go(step: usize) {

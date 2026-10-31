@@ -442,9 +442,9 @@ fn last_component(path: &[u8]) -> &[u8] {
             }
         }
         return if path.first() == Some(&b'Z') {
-            b"Syst\xE8me Linux (Z:)"
+            tr4(&[b"Syst\xE8me Linux (Z:)", b"Linux system (Z:)", b"Sistema Linux (Z:)", b"Linux-System (Z:)"])
         } else {
-            b"Dossier personnel (C:)"
+            tr4(&[b"Dossier personnel (C:)", b"Home folder (C:)", b"Carpeta personal (C:)", b"Pers\xF6nlicher Ordner (C:)"])
         };
     }
     match path.iter().rposition(|&c| c == b'\\') {
@@ -615,8 +615,8 @@ fn glyph_of(k: Kind) -> Glyph {
 /// Nom du type pour la colonne « Type ».
 fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
     let fixed: &[u8] = match e.kind {
-        Kind::Folder => b"Dossier de fichiers",
-        Kind::Drive | Kind::LinuxDrive => b"Disque local",
+        Kind::Folder => tr4(&[b"Dossier de fichiers", b"File folder", b"Carpeta de archivos", b"Dateiordner"]),
+        Kind::Drive | Kind::LinuxDrive => tr4(&[b"Disque local", b"Local disk", b"Disco local", b"Lokaler Datentr\xE4ger"]),
         Kind::Removable => t4([
             b"Image disque mont\xE9e",
             b"Mounted disc image",
@@ -629,8 +629,8 @@ fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
             b"Unidad de red",
             b"Netzlaufwerk",
         ]),
-        Kind::Exe if ends_ci(e.name(), b".exe") => b"Application Windows",
-        Kind::Exe => b"Programme",
+        Kind::Exe if ends_ci(e.name(), b".exe") => tr4(&[b"Application Windows", b"Windows application", b"Aplicaci\xF3n de Windows", b"Windows-Anwendung"]),
+        Kind::Exe => tr4(&[b"Programme", b"Program", b"Programa", b"Programm"]),
         _ => b"",
     };
     if !fixed.is_empty() {
@@ -639,17 +639,18 @@ fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
     }
     let ext = extension(e.name());
     if ext.is_empty() {
-        out[..7].copy_from_slice(b"Fichier");
-        return &out[..7];
+        let file = tr4(&[b"Fichier", b"File", b"Archivo", b"Datei"]);
+        out[..file.len()].copy_from_slice(file);
+        return &out[..file.len()];
     }
     let prefix: &[u8] = match e.kind {
-        Kind::Image => b"Image ",
-        Kind::Audio => b"Audio ",
-        Kind::Video => b"Vid\xE9o ",
-        Kind::Archive => b"Archive ",
+        Kind::Image => tr4(&[b"Image ", b"Image ", b"Imagen ", b"Bild "]),
+        Kind::Audio => tr4(&[b"Audio ", b"Audio ", b"Audio ", b"Audio "]),
+        Kind::Video => tr4(&[b"Vid\xE9o ", b"Video ", b"V\xEDdeo ", b"Video "]),
+        Kind::Archive => tr4(&[b"Archive ", b"Archive ", b"Archivo comprimido ", b"Archiv "]),
         Kind::DiskImage => t4([b"Image disque ", b"Disc image ", b"Imagen ", b"Disk-Image "]),
-        Kind::Pdf => b"Document ",
-        _ => b"Fichier ",
+        Kind::Pdf => tr4(&[b"Document ", b"Document ", b"Documento ", b"Dokument "]),
+        _ => tr4(&[b"Fichier ", b"File ", b"Archivo ", b"Datei "]),
     };
     let mut n = prefix.len();
     out[..n].copy_from_slice(prefix);
@@ -919,7 +920,7 @@ unsafe fn reload(p: &mut Pane) {
     } else if loc.is(PC) {
         add_entry(
             p,
-            b"Dossier personnel (C:)",
+            tr4(&[b"Dossier personnel (C:)", b"Home folder (C:)", b"Carpeta personal (C:)", b"Pers\xF6nlicher Ordner (C:)"]),
             true,
             false,
             0,
@@ -928,7 +929,7 @@ unsafe fn reload(p: &mut Pane) {
         );
         add_entry(
             p,
-            b"Syst\xE8me Linux (Z:)",
+            tr4(&[b"Syst\xE8me Linux (Z:)", b"Linux system (Z:)", b"Sistema Linux (Z:)", b"Linux-System (Z:)"]),
             true,
             false,
             0,
@@ -1002,7 +1003,7 @@ fn max_scroll_hint(_p: &Pane) -> i32 {
 
 unsafe fn navigate_pane(p: &mut Pane, target: &[u8], record: bool) {
     if !valid_path(target) || target.is_empty() {
-        notify(b"Chemin trop long : aucun nom n'a \xE9t\xE9 tronqu\xE9.");
+        notify(tr4(&[b"Chemin trop long : aucun nom n'a \xE9t\xE9 tronqu\xE9.", b"Path too long: no name was truncated.", b"Ruta demasiado larga: no se ha truncado ning\xFAn nombre.", b"Pfad zu lang: Kein Name wurde gek\xFCrzt."]));
         return;
     }
     if record && !p.loc.get().is_empty() && !p.loc.is(target) {
@@ -1105,7 +1106,7 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
     let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
     let n = item_path(p, index, &mut path);
     if n == 0 {
-        notify(b"Chemin trop long pour cette version d'Explorer.");
+        notify(tr4(&[b"Chemin trop long pour cette version d'Explorer.", b"Path too long for this version of Explorer.", b"Ruta demasiado larga para esta versi\xF3n del Explorador.", b"Pfad zu lang f\xFCr diese Version des Explorers."]));
         return;
     }
     if p.entries[index].kind == Kind::Network {
@@ -1201,7 +1202,7 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         1,
     );
     if (r as isize) <= 32 {
-        notify(b"Aucune application ne sait ouvrir ce fichier.");
+        notify(tr4(&[b"Aucune application ne sait ouvrir ce fichier.", b"No app can open this file.", b"Ninguna aplicaci\xF3n puede abrir este archivo.", b"Keine App kann diese Datei \xF6ffnen."]));
     }
 }
 
@@ -1244,7 +1245,7 @@ unsafe fn notify(msg: &[u8]) {
 
 unsafe fn open_tab(path: &[u8]) {
     if NTABS == MAX_TABS {
-        notify(b"Nombre maximal d'onglets atteint.");
+        notify(tr4(&[b"Nombre maximal d'onglets atteint.", b"Maximum number of tabs reached.", b"Se alcanz\xF3 el n\xFAmero m\xE1ximo de pesta\xF1as.", b"Maximale Anzahl an Registerkarten erreicht."]));
         return;
     }
     let t = &mut TABS[NTABS];
@@ -1731,18 +1732,18 @@ enum Cmd {
     Nav,
     Terminal,
 }
-const COMMANDS: [(Cmd, Glyph, &[u8], i32); 11] = [
-    (Cmd::New, Glyph::Plus, b"Nouveau", 112),
-    (Cmd::Cut, Glyph::Cut, b"", 38),
-    (Cmd::Copy, Glyph::Copy, b"", 38),
-    (Cmd::Paste, Glyph::Paste, b"", 38),
-    (Cmd::Rename, Glyph::Rename, b"", 38),
-    (Cmd::Delete, Glyph::Delete, b"", 38),
-    (Cmd::Sort, Glyph::Sort, b"Trier", 84),
-    (Cmd::View, Glyph::View, b"Afficher", 104),
-    (Cmd::Dual, Glyph::Split, b"Double volet", 130),
-    (Cmd::Nav, Glyph::Details, b"Volet", 76),
-    (Cmd::Terminal, Glyph::Terminal, b"Terminal", 102),
+const COMMANDS: [(Cmd, Glyph, Tr4, i32); 11] = [
+    (Cmd::New, Glyph::Plus, [b"Nouveau", b"New", b"Nuevo", b"Neu"], 112),
+    (Cmd::Cut, Glyph::Cut, [b"", b"", b"", b""], 38),
+    (Cmd::Copy, Glyph::Copy, [b"", b"", b"", b""], 38),
+    (Cmd::Paste, Glyph::Paste, [b"", b"", b"", b""], 38),
+    (Cmd::Rename, Glyph::Rename, [b"", b"", b"", b""], 38),
+    (Cmd::Delete, Glyph::Delete, [b"", b"", b"", b""], 38),
+    (Cmd::Sort, Glyph::Sort, [b"Trier", b"Sort", b"Ordenar", b"Sortieren"], 84),
+    (Cmd::View, Glyph::View, [b"Afficher", b"View", b"Ver", b"Anzeigen"], 104),
+    (Cmd::Dual, Glyph::Split, [b"Double volet", b"Dual pane", b"Doble panel", b"Doppelansicht"], 130),
+    (Cmd::Nav, Glyph::Details, [b"Volet", b"Pane", b"Panel", b"Bereich"], 76),
+    (Cmd::Terminal, Glyph::Terminal, [b"Terminal", b"Terminal", b"Terminal", b"Terminal"], 102),
 ];
 
 fn command_rects(g: &Geo) -> [Rect; 11] {
@@ -1867,7 +1868,7 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     set_glyph_bg(None);
     if pn.search.len == 0 {
         let mut label = [0u8; 80];
-        let pre = b"Rechercher dans ";
+        let pre = tr4(&[b"Rechercher dans ", b"Search ", b"Buscar en ", b"Suchen in "]);
         label[..pre.len()].copy_from_slice(pre);
         let name = last_component(pn.loc.get());
         let n = name.len().min(60);
@@ -1912,6 +1913,7 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     let has_sel = sel_count(pn) > 0 && !pn.loc.is(HOME) && !pn.loc.is(PC);
     let rects = command_rects(geo);
     for (i, (cmd, gl, label, _)) in COMMANDS.iter().enumerate() {
+        let label = tr4(label);
         let r = rects[i];
         if r.right > geo.command.right - 8 {
             break;
@@ -2071,8 +2073,8 @@ unsafe fn nav_items(out: &mut [(&'static [u8], Glyph, Path, i32); NAV_MAX]) -> u
         push(place_label(i), PLACES[i].glyph, pp.get(), 0);
     }
     push(tr(S_THIS_PC), Glyph::Computer, PC, 0);
-    push(b"Dossier personnel (C:)", Glyph::Drive, b"C:\\", 1);
-    push(b"Syst\xE8me Linux (Z:)", Glyph::LinuxDrive, b"Z:\\", 1);
+    push(tr4(&[b"Dossier personnel (C:)", b"Home folder (C:)", b"Carpeta personal (C:)", b"Pers\xF6nlicher Ordner (C:)"]), Glyph::Drive, b"C:\\", 1);
+    push(tr4(&[b"Syst\xE8me Linux (Z:)", b"Linux system (Z:)", b"Sistema Linux (Z:)", b"Linux-System (Z:)"]), Glyph::LinuxDrive, b"Z:\\", 1);
     for i in 0..NDRIVES {
         let d = DRIVES[i];
         let gl = if d.network {
@@ -2232,11 +2234,11 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
 
     if pn.nview == 0 {
         let msg: &[u8] = if pn.missing {
-            b"Ce dossier est introuvable."
+            tr4(&[b"Ce dossier est introuvable.", b"This folder can't be found.", b"No se encuentra esta carpeta.", b"Dieser Ordner wurde nicht gefunden."])
         } else if pn.search.len > 0 {
-            b"Aucun \xE9l\xE9ment ne correspond \xE0 votre recherche."
+            tr4(&[b"Aucun \xE9l\xE9ment ne correspond \xE0 votre recherche.", b"No items match your search.", b"Ning\xFAn elemento coincide con la b\xFAsqueda.", b"Keine Elemente entsprechen Ihrer Suche."])
         } else {
-            b"Ce dossier est vide."
+            tr4(&[b"Ce dossier est vide.", b"This folder is empty.", b"Esta carpeta est\xE1 vac\xEDa.", b"Dieser Ordner ist leer."])
         };
         text_centered(
             g.hdc,
@@ -2611,7 +2613,7 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
         }
     }
     if pn.truncated {
-        let l3 = b"  (limite atteinte ou noms non repr\xE9sentables masqu\xE9s)";
+        let l3 = tr4(&[b"  (limite atteinte ou noms non repr\xE9sentables masqu\xE9s)", b"  (limit reached or unrepresentable names hidden)", b"  (l\xEDmite alcanzado o nombres no representables ocultos)", b"  (Grenze erreicht oder nicht darstellbare Namen ausgeblendet)"]);
         buf[n..n + l3.len()].copy_from_slice(l3);
         n += l3.len();
     }
@@ -2691,36 +2693,36 @@ enum Item {
 fn item_label(i: Item) -> &'static [u8] {
     match i {
         Item::Sep => b"",
-        Item::View(View::XLarge) => b"Tr\xE8s grandes ic\xF4nes",
-        Item::View(View::Large) => b"Grandes ic\xF4nes",
-        Item::View(View::Medium) => b"Ic\xF4nes moyennes",
-        Item::View(View::Small) => b"Petites ic\xF4nes",
-        Item::View(View::List) => b"Liste",
-        Item::View(View::Details) => b"D\xE9tails",
-        Item::View(View::Tiles) => b"Mosa\xEFques",
-        Item::Compact => b"Mode compact",
-        Item::Hidden => b"\xC9l\xE9ments masqu\xE9s",
-        Item::Ext => b"Extensions de noms de fichiers",
-        Item::Nav => b"Volet de navigation",
+        Item::View(View::XLarge) => tr4(&[b"Tr\xE8s grandes ic\xF4nes", b"Extra large icons", b"Iconos muy grandes", b"Extra gro\xDFe Symbole"]),
+        Item::View(View::Large) => tr4(&[b"Grandes ic\xF4nes", b"Large icons", b"Iconos grandes", b"Gro\xDFe Symbole"]),
+        Item::View(View::Medium) => tr4(&[b"Ic\xF4nes moyennes", b"Medium icons", b"Iconos medianos", b"Mittelgro\xDFe Symbole"]),
+        Item::View(View::Small) => tr4(&[b"Petites ic\xF4nes", b"Small icons", b"Iconos peque\xF1os", b"Kleine Symbole"]),
+        Item::View(View::List) => tr4(&[b"Liste", b"List", b"Lista", b"Liste"]),
+        Item::View(View::Details) => tr4(&[b"D\xE9tails", b"Details", b"Detalles", b"Details"]),
+        Item::View(View::Tiles) => tr4(&[b"Mosa\xEFques", b"Tiles", b"Mosaicos", b"Kacheln"]),
+        Item::Compact => tr4(&[b"Mode compact", b"Compact view", b"Vista compacta", b"Kompakte Ansicht"]),
+        Item::Hidden => tr4(&[b"\xC9l\xE9ments masqu\xE9s", b"Hidden items", b"Elementos ocultos", b"Ausgeblendete Elemente"]),
+        Item::Ext => tr4(&[b"Extensions de noms de fichiers", b"File name extensions", b"Extensiones de nombre de archivo", b"Dateinamenerweiterungen"]),
+        Item::Nav => tr4(&[b"Volet de navigation", b"Navigation pane", b"Panel de navegaci\xF3n", b"Navigationsbereich"]),
         Item::Sort(SortKey::Name) => tr(S_NAME),
         Item::Sort(SortKey::Date) => tr(S_DATE),
         Item::Sort(SortKey::Kind) => tr(S_TYPE),
         Item::Sort(SortKey::Size) => tr(S_SIZE),
-        Item::Asc => b"Croissant",
-        Item::Desc => b"D\xE9croissant",
-        Item::NewFolder => b"Dossier",
-        Item::NewText => b"Document texte",
+        Item::Asc => tr4(&[b"Croissant", b"Ascending", b"Ascendente", b"Aufsteigend"]),
+        Item::Desc => tr4(&[b"D\xE9croissant", b"Descending", b"Descendente", b"Absteigend"]),
+        Item::NewFolder => tr4(&[b"Dossier", b"Folder", b"Carpeta", b"Ordner"]),
+        Item::NewText => tr4(&[b"Document texte", b"Text document", b"Documento de texto", b"Textdokument"]),
         Item::Open => tr(S_OPEN),
-        Item::OpenTab => b"Ouvrir dans un nouvel onglet",
-        Item::ExeSettings => b"R\xE9glages de l'ex\xE9cutable",
+        Item::OpenTab => tr4(&[b"Ouvrir dans un nouvel onglet", b"Open in new tab", b"Abrir en una pesta\xF1a nueva", b"In neuer Registerkarte \xF6ffnen"]),
+        Item::ExeSettings => tr4(&[b"R\xE9glages de l'ex\xE9cutable", b"Executable settings", b"Ajustes del ejecutable", b"Einstellungen der ausf\xFChrbaren Datei"]),
         Item::Cut => tr(S_CUT),
         Item::Copy => tr(S_COPY),
         Item::Paste => tr(S_PASTE),
         Item::Rename => tr(S_RENAME),
         Item::Delete => tr(S_DELETE),
-        Item::Refresh => b"Actualiser",
-        Item::Terminal => b"Ouvrir dans le terminal",
-        Item::CopyPath => b"Copier le chemin d'acc\xE8s",
+        Item::Refresh => tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
+        Item::Terminal => tr4(&[b"Ouvrir dans le terminal", b"Open in terminal", b"Abrir en el terminal", b"Im Terminal \xF6ffnen"]),
+        Item::CopyPath => tr4(&[b"Copier le chemin d'acc\xE8s", b"Copy as path", b"Copiar como ruta de acceso", b"Als Pfad kopieren"]),
         Item::ExtractAll => t4([
             b"Extraire tout...",
             b"Extract all...",
@@ -3134,7 +3136,7 @@ unsafe fn new_item(folder: bool) {
     let n = if folder {
         unique_name(p.loc.get(), tr(S_NEW_FOLDER), b"", &mut path)
     } else {
-        unique_name(p.loc.get(), b"Nouveau document texte", b".txt", &mut path)
+        unique_name(p.loc.get(), tr4(&[b"Nouveau document texte", b"New text document", b"Nuevo documento de texto", b"Neues Textdokument"]), b".txt", &mut path)
     };
     if n == 0 {
         return;
@@ -3161,7 +3163,7 @@ unsafe fn new_item(folder: bool) {
         }
     };
     if !ok {
-        notify(b"Impossible de cr\xE9er l'\xE9l\xE9ment ici (droits insuffisants ?).");
+        notify(tr4(&[b"Impossible de cr\xE9er l'\xE9l\xE9ment ici (droits insuffisants ?).", b"Can't create the item here (insufficient rights?).", b"No se puede crear el elemento aqu\xED (\xBFpermisos insuficientes?).", b"Element kann hier nicht erstellt werden (fehlende Rechte?)."]));
         return;
     }
     reload(p);
@@ -3210,7 +3212,7 @@ unsafe fn commit_rename() {
     let mut to = [0u8; PATH_LEN + NAME_LEN + 2];
     if join(&mut from, p.loc.get(), old_name) == 0 || join(&mut to, p.loc.get(), RENAME.get()) == 0
     {
-        notify(b"Chemin trop long : renommage annul\xE9.");
+        notify(tr4(&[b"Chemin trop long : renommage annul\xE9.", b"Path too long: rename cancelled.", b"Ruta demasiado larga: cambio de nombre cancelado.", b"Pfad zu lang: Umbenennen abgebrochen."]));
         return;
     }
     let mut wfrom = [0u16; PATH_LEN + NAME_LEN + 2];
@@ -3224,7 +3226,7 @@ unsafe fn commit_rename() {
         &to[..to.iter().position(|&c| c == 0).unwrap_or(to.len())],
     );
     if MoveFileW(wfrom.as_ptr(), wto.as_ptr()) == 0 {
-        notify(b"Renommage impossible.");
+        notify(tr4(&[b"Renommage impossible.", b"Can't rename.", b"No se puede cambiar el nombre.", b"Umbenennen nicht m\xF6glich."]));
         return;
     }
     let new_name = RENAME;
@@ -3244,7 +3246,7 @@ unsafe fn copy_selection(cut: bool) {
         let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
         let n = item_path(p, i, &mut path);
         if n == 0 || !CLIP[NCLIP].set(&path[..n]) {
-            notify(b"Chemin trop long : \xE9l\xE9ment ignor\xE9.");
+            notify(tr4(&[b"Chemin trop long : \xE9l\xE9ment ignor\xE9.", b"Path too long: item skipped.", b"Ruta demasiado larga: elemento omitido.", b"Pfad zu lang: Element \xFCbersprungen."]));
             continue;
         }
         NCLIP += 1;
@@ -3258,9 +3260,9 @@ unsafe fn copy_selection(cut: bool) {
         crate::cliphist::set_files(&list[..NCLIP]);
         CLIP_SEQ = GetClipboardSequenceNumber();
         notify(if cut {
-            b"\xC9l\xE9ments coup\xE9s : collez-les dans un autre dossier."
+            tr4(&[b"\xC9l\xE9ments coup\xE9s : collez-les dans un autre dossier.", b"Items cut: paste them into another folder.", b"Elementos cortados: p\xE9guelos en otra carpeta.", b"Elemente ausgeschnitten: F\xFCgen Sie sie in einen anderen Ordner ein."])
         } else {
-            b"\xC9l\xE9ments copi\xE9s."
+            tr4(&[b"\xC9l\xE9ments copi\xE9s.", b"Items copied.", b"Elementos copiados.", b"Elemente kopiert."])
         });
     }
 }
@@ -3490,7 +3492,7 @@ unsafe fn copy_file_new(from: &[u8], to: &[u8]) -> bool {
     if !ok {
         let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
         if DeleteFileW(wstr(&mut wd, to)) == 0 {
-            notify(b"Copie interrompue : le fichier cible partiel reste accessible.");
+            notify(tr4(&[b"Copie interrompue : le fichier cible partiel reste accessible.", b"Copy interrupted: the partial target file is still available.", b"Copia interrumpida: el archivo de destino parcial sigue disponible.", b"Kopieren unterbrochen: Die unvollst\xE4ndige Zieldatei bleibt verf\xFCgbar."]));
         }
     }
     ok
@@ -3570,7 +3572,7 @@ unsafe fn copy_tree(from: &[u8], to: &[u8]) -> bool {
         return true;
     }
     if created && !rollback_copy(to, 0) {
-        notify(b"Copie interrompue : une copie partielle reste dans le dossier cible.");
+        notify(tr4(&[b"Copie interrompue : une copie partielle reste dans le dossier cible.", b"Copy interrupted: a partial copy remains in the target folder.", b"Copia interrumpida: queda una copia parcial en la carpeta de destino.", b"Kopieren unterbrochen: Eine Teilkopie bleibt im Zielordner."]));
     }
     false
 }
@@ -3677,9 +3679,9 @@ unsafe fn paste() {
     }
     reload(p);
     if failed > 0 {
-        notify(b"Collage refus\xE9 ou incomplet : chemin trop long, cycle ou droits. Sources conserv\xE9es.");
+        notify(tr4(&[b"Collage refus\xE9 ou incomplet : chemin trop long, cycle ou droits. Sources conserv\xE9es.", b"Paste refused or incomplete: path too long, loop or rights. Sources kept.", b"Pegado rechazado o incompleto: ruta demasiado larga, ciclo o permisos. Se conservan los originales.", b"Einf\xFCgen abgelehnt oder unvollst\xE4ndig: Pfad zu lang, Schleife oder Rechte. Quellen bleiben erhalten."]));
     } else if sources_kept > 0 {
-        notify(b"Copie termin\xE9e. D\xE9placement indisponible : sources conserv\xE9es.");
+        notify(tr4(&[b"Copie termin\xE9e. D\xE9placement indisponible : sources conserv\xE9es.", b"Copy finished. Move unavailable: sources kept.", b"Copia terminada. No se puede mover: se conservan los originales.", b"Kopieren abgeschlossen. Verschieben nicht m\xF6glich: Quellen bleiben erhalten."]));
     }
     // L'autre volet affiche peut-être le dossier source ou cible.
     let t = tab();
@@ -3756,9 +3758,9 @@ pub unsafe fn drop_files_to(dest: &[u8], do_copy: bool) {
     }
     if failed > 0 {
         notify(if do_copy {
-            b"Certains fichiers n'ont pas pu \xEAtre copi\xE9s."
+            tr4(&[b"Certains fichiers n'ont pas pu \xEAtre copi\xE9s.", b"Some files couldn't be copied.", b"Algunos archivos no se pudieron copiar.", b"Einige Dateien konnten nicht kopiert werden."])
         } else {
-            b"Certains fichiers n'ont pas pu \xEAtre d\xE9plac\xE9s."
+            tr4(&[b"Certains fichiers n'ont pas pu \xEAtre d\xE9plac\xE9s.", b"Some files couldn't be moved.", b"Algunos archivos no se pudieron mover.", b"Einige Dateien konnten nicht verschoben werden."])
         });
     }
     reload(p);
@@ -3817,7 +3819,7 @@ pub unsafe fn paste_to(dest: &[u8]) {
         NCLIP = 0;
     }
     if failed > 0 {
-        notify(b"Collage refus\xE9 ou incomplet.");
+        notify(tr4(&[b"Collage refus\xE9 ou incomplet.", b"Paste refused or incomplete.", b"Pegado rechazado o incompleto.", b"Einf\xFCgen abgelehnt oder unvollst\xE4ndig."]));
     }
 }
 
@@ -3984,7 +3986,7 @@ unsafe fn delete_selection() {
                 let mut wd2 = [0u16; PATH_LEN + NAME_LEN + 2];
                 let mut ws2 = [0u16; PATH_LEN + NAME_LEN + 2];
                 if MoveFileW(wstr(&mut wd2, &dst[..dn]), wstr(&mut ws2, &src[..sn])) == 0 {
-                    notify(b"Corbeille incompl\xE8te : l'\xE9l\xE9ment reste accessible dans la Corbeille.");
+                    notify(tr4(&[b"Corbeille incompl\xE8te : l'\xE9l\xE9ment reste accessible dans la Corbeille.", b"Recycle Bin incomplete: the item is still available in the Recycle Bin.", b"Papelera incompleta: el elemento sigue disponible en la Papelera.", b"Papierkorb unvollst\xE4ndig: Das Element bleibt im Papierkorb verf\xFCgbar."]));
                 }
                 failed += 1;
             }
@@ -3992,16 +3994,16 @@ unsafe fn delete_selection() {
             let mut wd3 = [0u16; PATH_LEN + NAME_LEN + 2];
             let mut ws3 = [0u16; PATH_LEN + NAME_LEN + 2];
             if MoveFileW(wstr(&mut wd3, &dst[..dn]), wstr(&mut ws3, &src[..sn])) == 0 {
-                notify(b"Corbeille incompl\xE8te : l'\xE9l\xE9ment reste accessible dans la Corbeille.");
+                notify(tr4(&[b"Corbeille incompl\xE8te : l'\xE9l\xE9ment reste accessible dans la Corbeille.", b"Recycle Bin incomplete: the item is still available in the Recycle Bin.", b"Papelera incompleta: el elemento sigue disponible en la Papelera.", b"Papierkorb unvollst\xE4ndig: Das Element bleibt im Papierkorb verf\xFCgbar."]));
             }
             failed += 1;
         }
     }
     reload(p);
     if failed > 0 {
-        notify(b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre supprim\xE9s.");
+        notify(tr4(&[b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre supprim\xE9s.", b"Some items couldn't be deleted.", b"Algunos elementos no se pudieron eliminar.", b"Einige Elemente konnten nicht gel\xF6scht werden."]));
     } else if !in_trash {
-        notify(b"\xC9l\xE9ments d\xE9plac\xE9s dans la Corbeille.");
+        notify(tr4(&[b"\xC9l\xE9ments d\xE9plac\xE9s dans la Corbeille.", b"Items moved to the Recycle Bin.", b"Elementos movidos a la Papelera.", b"Elemente in den Papierkorb verschoben."]));
     }
 }
 
@@ -4125,7 +4127,7 @@ unsafe fn run_item(it: Item, geo: &Geo) {
                 let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
                 let n = item_path(p, i, &mut b);
                 ADDRESS.set(&b[..n]);
-                notify(b"Chemin affich\xE9 dans la barre d'adresse.");
+                notify(tr4(&[b"Chemin affich\xE9 dans la barre d'adresse.", b"Path shown in the address bar.", b"Ruta mostrada en la barra de direcciones.", b"Pfad in der Adressleiste angezeigt."]));
                 FOCUS = Focus::Address;
             }
         }
@@ -4614,7 +4616,7 @@ unsafe fn compress_selection(ext: &[u8], password: Option<&[u8]>) {
     let mut out = [0u8; PATH_LEN + NAME_LEN + 2];
     let on = join(&mut out, p.loc.get(), &name[..bl + 1 + ext.len()]);
     if on == 0 {
-        notify(b"Chemin trop long pour cette version d'Explorer.");
+        notify(tr4(&[b"Chemin trop long pour cette version d'Explorer.", b"Path too long for this version of Explorer.", b"Ruta demasiado larga para esta versi\xF3n del Explorador.", b"Pfad zu lang f\xFCr diese Version des Explorers."]));
         return;
     }
     let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
@@ -5092,7 +5094,7 @@ unsafe fn password_key(vk: u32, ch: u16) -> bool {
         8 => PASSWORD.pop(),
         c if c >= 32 => match ansi_char(c) {
             Some(a) => PASSWORD.push(a),
-            None => notify(b"Caract\xE8re non pris en charge."),
+            None => notify(tr4(&[b"Caract\xE8re non pris en charge.", b"Unsupported character.", b"Car\xE1cter no admitido.", b"Nicht unterst\xFCtztes Zeichen."])),
         },
         _ => {
             let _ = vk;
@@ -5674,7 +5676,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             }
         }
         if ch >= 32 && ansi_char(ch).is_none() {
-            notify(b"Ce caract\xE8re n'est pas encore repr\xE9sentable dans les chemins ANSI d'Explorer.");
+            notify(tr4(&[b"Ce caract\xE8re n'est pas encore repr\xE9sentable dans les chemins ANSI d'Explorer.", b"This character can't be represented in Explorer's ANSI paths yet.", b"Este car\xE1cter a\xFAn no se puede representar en las rutas ANSI del Explorador.", b"Dieses Zeichen ist in den ANSI-Pfaden des Explorers noch nicht darstellbar."]));
             return true;
         }
         if FOCUS == Focus::Rename && RENAME_FRESH && ch != 0 && ch != 13 && ch != 27 {
@@ -5757,7 +5759,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                                 let mut t = EMPTY_PATH;
                                 if s.first() == Some(&b'/') {
                                     if s.len() + 2 >= PATH_LEN {
-                                        notify(b"Chemin trop long : adresse conserv\xE9e sans modification.");
+                                        notify(tr4(&[b"Chemin trop long : adresse conserv\xE9e sans modification.", b"Path too long: address kept unchanged.", b"Ruta demasiado larga: direcci\xF3n conservada sin cambios.", b"Pfad zu lang: Adresse unver\xE4ndert beibehalten."]));
                                         return true;
                                     }
                                     let mut b2 = [0u8; PATH_LEN];
@@ -5789,7 +5791,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                                         1,
                                     );
                                     if (r as isize) <= 32 {
-                                        notify(b"Winlux ne trouve pas cet emplacement.");
+                                        notify(tr4(&[b"Winlux ne trouve pas cet emplacement.", b"Winlux can't find this location.", b"Winlux no encuentra esta ubicaci\xF3n.", b"Winlux findet diesen Speicherort nicht."]));
                                     } else {
                                         FOCUS = Focus::List;
                                     }
@@ -5809,7 +5811,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                                 read_dir(p, loc.get(), b"", filter.get(), 3);
                                 p.deep = true;
                                 rebuild_view(p);
-                                notify(b"Recherche termin\xE9e dans les sous-dossiers.");
+                                notify(tr4(&[b"Recherche termin\xE9e dans les sous-dossiers.", b"Search finished in subfolders.", b"B\xFAsqueda terminada en las subcarpetas.", b"Suche in Unterordnern abgeschlossen."]));
                             }
                         }
                         Focus::List => {}

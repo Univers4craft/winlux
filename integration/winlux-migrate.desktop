@@ -1,7 +1,13 @@
 [Desktop Entry]
 Type=Application
 Name=Transfert de PC
+Name[en]=PC transfer
+Name[de]=PC-Übertragung
+Name[es]=Transferencia de PC
 Comment=Récupérer fichiers et paramètres depuis un autre PC du réseau
+Comment[en]=Bring files and settings over from another PC on the network
+Comment[de]=Dateien und Einstellungen von einem anderen PC im Netzwerk übernehmen
+Comment[es]=Recuperar archivos y configuración desde otro PC de la red
 Exec=/usr/bin/winlux-migrate
 Icon=network-workgroup
 Terminal=false

@@ -214,6 +214,26 @@ unsafe fn map_at(hint: usize, size: usize, fixed: bool) -> Option<usize> {
     Some(p as usize)
 }
 
+/// Granularité d'allocation de Windows : une image relogée y est toujours
+/// placée sur 64 Kio, et coreclr refuse un en-tête dont l'ImageBase ne
+/// l'est pas (PEDecoder::CheckNTHeaders).
+const ALLOCATION_GRANULARITY: usize = 0x10000;
+
+/// Réserve `size` octets à une adresse alignée sur la granularité
+/// d'allocation de Windows, en rendant au noyau les marges inutilisées.
+unsafe fn map_aligned(size: usize) -> Option<usize> {
+    let raw = map_at(0, size + ALLOCATION_GRANULARITY, false)?;
+    let base = round_up(raw, ALLOCATION_GRANULARITY);
+    if base > raw {
+        libc::munmap(raw as *mut _, base - raw);
+    }
+    let tail = raw + size + ALLOCATION_GRANULARITY - (base + size);
+    if tail > 0 {
+        libc::munmap((base + size) as *mut _, tail);
+    }
+    Some(base)
+}
+
 /// Charge un module et toutes ses dépendances. Renvoie l'index dans MODULES.
 pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
     if let Some(existing) = find_module_by_path(path) {
@@ -241,7 +261,7 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
                     pe.image_base
                 ))
             }
-            None => map_at(0, size, false).ok_or("mémoire insuffisante pour l'image")?,
+            None => map_aligned(size).ok_or("mémoire insuffisante pour l'image")?,
         }
     };
     trace!(
@@ -381,7 +401,10 @@ fn resolve_one(dll: &str, want: &Want, importer: &Module) -> Result<usize, Strin
             Want::Ordinal(o) => dlls::lookup(&ndll, &format!("#{o}")),
         };
         return Ok(match found {
-            Some(a) => a,
+            Some(a) => match want {
+                Want::Name(n) => thunks::api_trace(dll, n, a),
+                Want::Ordinal(o) => thunks::api_trace(dll, &format!("#{o}"), a),
+            },
             None => {
                 let label = match want {
                     Want::Name(n) => n.clone(),

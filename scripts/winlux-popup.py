@@ -10,6 +10,57 @@ import gi
 gi.require_version("Gtk","3.0")
 gi.require_version("Gdk","3.0")
 from gi.repository import Gtk,Gdk,Gio,GLib
+import os
+
+
+# ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
+
+def _interface_lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="):
+                        code = line[5:].strip()
+        except OSError:
+            pass
+    code = (code or os.environ.get("LANG", "fr"))[:2].lower()
+    return code if code in ("fr", "en", "es", "de") else "fr"
+
+
+_LANG = _interface_lang()
+_COL = {"en": 0, "es": 1, "de": 2}
+
+# Texte français -> (anglais, espagnol, allemand).
+_TR = {
+    'Application': ('Application', 'Aplicación', 'Anwendung'),
+    'Volume Winlux': ('Winlux volume', 'Volumen de Winlux', 'Winlux-Lautstärke'),
+    'Alimentation Winlux': ('Winlux power', 'Energía de Winlux', 'Winlux-Energie'),
+    'Volume de sortie': ('Output volume', 'Volumen de salida', 'Ausgabelautstärke'),
+    'Volume de sortie, en pourcentage': ('Output volume, as a percentage', 'Volumen de salida, en porcentaje', 'Ausgabelautstärke in Prozent'),
+    'Muet / rétablir': ('Mute / unmute', 'Silenciar / restablecer', 'Stumm / Ton an'),
+    'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
+    'Éteindre': ('Shut down', 'Apagar', 'Herunterfahren'),
+    'Paramètres du son': ('Sound settings', 'Configuración de sonido', 'Soundeinstellungen'),
+    'Options d’alimentation': ('Power options', 'Opciones de energía', 'Energieoptionen'),
+    'Éteindre l’ordinateur ?': ('Shut down the computer?', '¿Apagar el equipo?', 'Computer herunterfahren?'),
+    'Redémarrer l’ordinateur ?': ('Restart the computer?', '¿Reiniciar el equipo?', 'Computer neu starten?'),
+    'Enregistrez vos documents avant de continuer.': ('Save your documents before continuing.', 'Guarde sus documentos antes de continuar.', 'Speichern Sie Ihre Dokumente, bevor Sie fortfahren.'),
+    'Applications': ('Apps', 'Aplicaciones', 'Apps'),
+    'Sortie audio indisponible': ('Audio output unavailable', 'Salida de audio no disponible', 'Audioausgabe nicht verfügbar'),
+    'Son coupé': ('Sound muted', 'Sonido silenciado', 'Ton aus'),
+    'État de batterie indisponible': ('Battery status unavailable', 'Estado de la batería no disponible', 'Akkustatus nicht verfügbar'),
+    'Alimentation secteur': ('Plugged in', 'Conectado a la corriente', 'Netzbetrieb'),
+    'Aucune batterie exposée par cet ordinateur': ('This computer reports no battery', 'Este equipo no informa de ninguna batería', 'Dieser Computer meldet keinen Akku'),
+}
+
+
+def _t(text):
+    """Texte dans la langue de l'interface (le français sert de clé)."""
+    row = _TR.get(text)
+    return row[_COL[_LANG]] if row and _LANG in _COL else text
+
 
 def audio():
     try:
@@ -33,7 +84,7 @@ def app_streams():
         streams=[]
         for entry in json.loads(result.stdout or "[]") if result.returncode==0 else []:
             props=entry.get("properties",{})
-            name=props.get("application.name") or props.get("application.process.binary") or props.get("media.name") or "Application"
+            name=props.get("application.name") or props.get("application.process.binary") or props.get("media.name") or _t("Application")
             levels=[int(str(c.get("value_percent","0")).rstrip("%")) for c in entry.get("volume",{}).values()]
             streams.append((int(entry["index"]),name,min(150,max(levels or [0])),bool(entry.get("mute"))))
         return streams
@@ -75,7 +126,7 @@ class Popup(Gtk.Application):
         GLib.idle_add(self.activate_seat)
 
     def build(self):
-        self.window=Gtk.ApplicationWindow(application=self,title="Volume Winlux" if self.kind=="volume" else "Alimentation Winlux")
+        self.window=Gtk.ApplicationWindow(application=self,title=_t("Volume Winlux") if self.kind=="volume" else _t("Alimentation Winlux"))
         self.window.set_name("winlux-popup")
         css=Gtk.CssProvider()
         css.load_from_data(b"#winlux-popup { background: #242238; color: #f7f5ff; border: 1px solid #6b5f92; border-radius: 8px; } #winlux-popup button { padding: 8px; border-radius: 5px; } #winlux-popup scale trough { min-height: 5px; } #winlux-popup scale highlight { background: #b19af9; }")
@@ -91,11 +142,11 @@ class Popup(Gtk.Application):
         self.label=Gtk.Label(xalign=0,wrap=True);box.pack_start(self.label,False,False,0)
         if self.kind=="volume":
             self.slider=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,0,100,1)
-            self.slider.set_draw_value(True);self.slider.set_tooltip_text("Volume de sortie")
-            self.slider.get_accessible().set_name("Volume de sortie, en pourcentage")
+            self.slider.set_draw_value(True);self.slider.set_tooltip_text(_t("Volume de sortie"))
+            self.slider.get_accessible().set_name(_t("Volume de sortie, en pourcentage"))
             box.pack_start(self.slider,False,False,0)
             self.slider.connect("value-changed",self.change_volume)
-            self.mute=Gtk.Button(label="Muet / rétablir")
+            self.mute=Gtk.Button(label=_t("Muet / rétablir"))
             self.mute.connect("clicked",lambda *_:self.command(["winlux-control","volume-mute"]))
             box.pack_start(self.mute,False,False,0)
             # Mixeur par application : un curseur par flux en cours de lecture.
@@ -103,11 +154,11 @@ class Popup(Gtk.Application):
             self.apps_key=None;self.app_sliders={}
             box.pack_start(self.apps,False,False,0)
         else:
-            for title,action in [("Redémarrer", "reboot"), ("Éteindre", "poweroff")]:
+            for title,action in [(_t("Redémarrer"), "reboot"), (_t("Éteindre"), "poweroff")]:
                 button=Gtk.Button(label=title)
                 button.connect("clicked",lambda _,value=action:self.power_action(value))
                 box.pack_start(button,False,False,0)
-        button=Gtk.Button(label="Paramètres du son" if self.kind=="volume" else "Options d’alimentation")
+        button=Gtk.Button(label=_t("Paramètres du son") if self.kind=="volume" else _t("Options d’alimentation"))
         button.connect("clicked",lambda *_:self.settings());box.pack_start(button,False,False,0)
         GLib.timeout_add_seconds(1,self.refresh)
 
@@ -117,8 +168,8 @@ class Popup(Gtk.Application):
     def power_action(self,action):
         self.hide()
         dialog=Gtk.MessageDialog(transient_for=self.window,modal=True,
-            buttons=Gtk.ButtonsType.OK_CANCEL,text="Éteindre l’ordinateur ?" if action=="poweroff" else "Redémarrer l’ordinateur ?",
-            secondary_text="Enregistrez vos documents avant de continuer.")
+            buttons=Gtk.ButtonsType.OK_CANCEL,text=_t("Éteindre l’ordinateur ?") if action=="poweroff" else _t("Redémarrer l’ordinateur ?"),
+            secondary_text=_t("Enregistrez vos documents avant de continuer."))
         answer=dialog.run();dialog.destroy()
         if answer==Gtk.ResponseType.OK:self.command(["winlux-control",action])
 
@@ -147,7 +198,7 @@ class Popup(Gtk.Application):
         if key!=self.apps_key:
             self.apps_key=key;self.app_sliders={}
             for child in self.apps.get_children():self.apps.remove(child)
-            if streams:self.apps.pack_start(Gtk.Label(label="Applications",xalign=0),False,False,0)
+            if streams:self.apps.pack_start(Gtk.Label(label=_t("Applications"),xalign=0),False,False,0)
             for index,name,_,_ in streams:
                 row=Gtk.Box(spacing=8)
                 label=Gtk.Label(label=name,xalign=0);label.set_width_chars(14);label.set_ellipsize(3)
@@ -168,7 +219,7 @@ class Popup(Gtk.Application):
         if not self.window or not self.window.get_visible():return True
         if self.kind=="volume":
             self.backend,value,muted=audio()
-            self.label.set_text("Sortie audio indisponible" if not self.backend else "Son coupé" if muted else f"Volume · {value} %")
+            self.label.set_text(_t("Sortie audio indisponible") if not self.backend else _t("Son coupé") if muted else f"Volume · {value} %")
             self.slider.set_sensitive(bool(self.backend));self.mute.set_sensitive(bool(self.backend))
             if not self.timer and not (self.child and self.child.poll() is None) and not self.slider.get_state_flags() & Gtk.StateFlags.ACTIVE:
                 self.updating=True;self.slider.set_value(value);self.updating=False
@@ -177,8 +228,8 @@ class Popup(Gtk.Application):
             batteries=list(Path("/sys/class/power_supply").glob("BAT*/capacity"))
             if batteries:
                 try:self.label.set_text(f"Batterie · {int(batteries[0].read_text())} %\n"+(batteries[0].parent/"status").read_text().strip())
-                except (OSError,ValueError):self.label.set_text("État de batterie indisponible")
-            else:self.label.set_text("Alimentation secteur\nAucune batterie exposée par cet ordinateur")
+                except (OSError,ValueError):self.label.set_text(_t("État de batterie indisponible"))
+            else:self.label.set_text(_t("Alimentation secteur") + "\n" + _t("Aucune batterie exposée par cet ordinateur"))
         return True
 
 if __name__=="__main__":

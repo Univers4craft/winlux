@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **203**
-- À faire ou en cours : **44**
-- Total : **247**
-- Progression : **82.2%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126, #127, #111, #119 et #133, issues #10 à #98)
+- Réalisé : **217**
+- À faire ou en cours : **37**
+- Total : **254**
+- Progression : **85.4%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140)
 
 ## À FAIRE (par priorité)
 
@@ -46,7 +46,7 @@
 - [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
 - [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
-- [ ] Faire tourner Paint.NET : runtime embarqué par l'appli (coreclr), puis WIC, Direct2D/DirectWrite et WPF. Étapes et blocages mesurés dans `docs/PAINTNET.md`.
+- [ ] Faire tourner Paint.NET (#138) : runtime embarqué par l'appli (coreclr), puis WIC, Direct2D/DirectWrite et WPF. Étapes et blocages mesurés dans `docs/PAINTNET.md`.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
 - [ ] Brancher Media Foundation/DirectShow des `.exe` sur le moteur multimédia du runtime (`winlux_media.rs`) : le lecteur du shell lit déjà tous les formats, mais `mfplat`/`quartz` restent des bouchons pour les programmes Windows.
 - [ ] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (elles restent mappées jusqu’à la fin du processus).
@@ -77,26 +77,23 @@
 
 ### Pull requests ouvertes
 
-- [ ] Détection et configuration automatique du matériel (#61).
-- [ ] SEH, TLS statique, services Windows et compléments ntdll (#63, lié à #17, #21, #25).
-- [ ] Localisation multilingue FR/EN/ES/DE (#72).
-- [ ] Runtime CLR .NET intégré (#73, lié à #22).
-- [ ] Installateur : partitionnement guidé, chiffrement LUKS et compte local (#75, lié à #93).
-- [ ] Installateur : connexion Wi-Fi/proxy et import des données Windows (#76, lié à #94).
-- [ ] Signaler un problème vers GitHub : boîte après plantage, Paramètres et Observateur, rapport masqué et modifiable, déduplication, relais sans compte (`docs/SIGNALEMENT-BUGS.md`).
+Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
-### Chantiers démarrés (issue ouverte, PR à venir)
+### Chantiers actifs (issue ouverte)
 
-- [ ] Matériel : impression winspool.drv + CUPS (#77), audio des .exe DirectSound/WASAPI/XAudio2 (#78), alimentation et batterie (#80), gestion CPU avancée (#90), gestion GPU et monitoring (#91).
-- [ ] Graphisme 3D, reste (#92) : traduction des shaders DXBC/DXIL (les tracés D3D12 utilisent des shaders de passage), profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation (MFTEnum ne liste encore aucun décodeur), codecs DXVA2 autres que H.264, validation sur vrai GPU avec VA-API.
-- [ ] Applications du shell : store de logiciels (#81), gestionnaire de polices (#82), planificateur de tâches (#83), pare-feu (#84), capture et enregistrement d'écran (#86), sauvegarde (#87), bureau à distance (#89).
-- [ ] Bureau : multi-utilisateur complet (#88).
-- [ ] Installateur : mode récupération, Secure Boot et installation silencieuse (#95), benchmark et profils d'utilisation (#96), personnalisation visuelle (#97).
+- [ ] Release v0.2.9 taguée et en construction ; v0.2.7 et v0.2.8 ont échoué (paquets Qt 6 renommés, puis base APT dans QEMU), corrigés par #128 et #132 (#32).
+- [ ] Faire tourner Paint.NET 5.1 sur le runtime .NET qu'il embarque : étape 1 livrée (#133), restent coreclr (exceptions MSVC, SEH x64), WIC, Direct2D/DirectWrite et WPF (#138, `docs/PAINTNET.md`).
+- [ ] Traduire toutes les applications en FR/EN/ES/DE : lots #120, #130, #131, #134 et #135 livrés, reste les applis encore en une seule langue (#139).
+- [ ] Traduire réellement l'installateur : choisir English ne traduit aujourd'hui que la barre des étapes (#140).
+- [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
 ## DÉJÀ FAIT
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] coreclr embarqué démarré : répartition SEH x64 (`seh.rs` : RtlVirtualUnwind, RtlUnwindEx, RtlRestoreContext, VEH, tables de fonctions dynamiques), exceptions C++ MSVC de coreclr, tas du GC, thread du finaliseur, System.Private.CoreLib puis `paintdotnet.dll` chargées et code managé exécuté (images relogées sur 64 Kio, VirtualQuery des piles, VerifyVersionInfo, InitializeContext2, locales nommées) (`docs/PAINTNET.md`).
+- [x] Issues fermées le 31/10/2026 car livrées sur master : impression (#77 par #111), audio des .exe (#78 par #115), manettes, webcam, micro et Bluetooth (#79 par #114), alimentation et batterie (#80 par #107), Store et polices (#81, #82 par #123 et #129), planificateur et pare-feu (#83, #84 par #112), presse-papiers Win+V et capture d'écran (#85, #86 par #109), sauvegarde, multi-utilisateur et bureau à distance (#87, #88, #89 par #119), CPU (#90 par #103), GPU (#91 par #104), Direct3D 9/12 (#92 par #127), installateur (#93 par #75, #116 et #118 ; #94 par #76 ; #95 par #100 ; #96 par #101 ; #97 par #105 ; #98 par #102).
+- [x] Aussi mergés : signalement de bugs vers GitHub (#121), visionneuse d'images (#126), noms de paquets Ubuntu 26.04 (#128), base APT vérifiée dans QEMU (#132), CLR maison (#73), SEH/TLS/services (#63), localisation (#72), détection du matériel (#61).
 - [x] Lanceur .NET autonome : un apphost qui embarque `coreclr.dll` (Paint.NET 5.1.12) traverse hostfxr et hostpolicy jusqu'au chargement de coreclr ; CRT universelle `__stdio_common_*`, chaînes `*_s`, ordinaux oleaut32, `ungetc` (`docs/PAINTNET.md`).
 
 - [x] Gestionnaire de tâches style Windows 11 (#39).
@@ -149,6 +146,7 @@
 - [x] Ajouter DHCP, route, DNS et renouvellement réseau, avec tests isolés.
 - [x] Paramètres Linux/Windows, télémétrie réelle et commandes système avec journaux.
 - [x] Centre graphique de mise à jour, paquets système complets, jeton pour dépôt privé, automatique, restauration et demande de redémarrage.
+- [x] Mise à jour en place protégée (#150) : point de restauration automatique avant l'installation, vérification de chaque fichier installé, version « à l'essai » validée quand le bureau tient une minute, retour automatique à la version précédente si le bureau ne s'ouvre pas (ou au 3e démarrage bloqué), version écartée jamais réinstallée automatiquement. Reste : compteur GRUB si `/init` est cassé, signature Ed25519.
 - [x] Ajouter un installateur autonome BIOS/UEFI qui ne nécessite plus l'ISO comme chargeur initial.
 - [x] Passer Explorer entièrement aux chemins Unicode Win32 W.
 - [x] Charger un exécutable PE32+ x86-64.

@@ -95,9 +95,10 @@ Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir l
   de Wine ni de bibliothèques Windows existantes.
 - Une appli .NET autonome, qui livre son propre `coreclr.dll` à côté de son
   apphost (Paint.NET par exemple), est lancée par son apphost natif. Celui-ci
-  charge ce runtime embarqué comme sous Windows, sans rien télécharger. Le
-  lanceur atteint aujourd'hui `coreclr.dll`, mais l'initialisation de coreclr
-  n'aboutit pas encore : voir [Paint.NET sur Winlux](docs/PAINTNET.md).
+  charge ce runtime embarqué comme sous Windows, sans rien télécharger.
+  coreclr démarre, charge la bibliothèque de base et exécute du code managé,
+  mais Paint.NET ne s'ouvre pas encore : voir
+  [Paint.NET sur Winlux](docs/PAINTNET.md).
 - Les autres PE managés 32/64 bits (et l'apphost d'un .NET moderne sans runtime
   embarqué, via son `.dll` compagnon) sont exécutés par le CLR intégré
   (`runtime/src/clr`), sans runtime .NET extérieur : interpréteur CIL, ramasse-miettes, exceptions .NET, appels

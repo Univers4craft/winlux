@@ -237,7 +237,14 @@ pub unsafe fn draw(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, h: i32) {
         hdc,
         left,
         y,
-        c"Votre Winlux a rencontr\xE9 un probl\xE8me et doit red\xE9marrer.".as_ptr(),
+        tr4(&[
+            b"Votre Winlux a rencontr\xE9 un probl\xE8me et doit red\xE9marrer.\0",
+            b"Your Winlux ran into a problem and needs to restart.\0",
+            b"Winlux ha tenido un problema y debe reiniciarse.\0",
+            b"Winlux ist auf ein Problem gesto\xDFen und muss neu gestartet werden.\0",
+        ])
+        .as_ptr()
+        .cast(),
         -1,
     );
     y += 30;
@@ -246,8 +253,7 @@ pub unsafe fn draw(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, h: i32) {
         hdc,
         left,
         y,
-        c"Nous collectons des informations sur l'erreur, puis nous red\xE9marrerons pour vous."
-            .as_ptr(),
+        tr4(&[b"Nous collectons des informations sur l'erreur, puis nous red\xE9marrerons pour vous.\0", b"We're collecting some error info, and then we'll restart for you.\0", b"Estamos recopilando informaci\xF3n sobre el error y, despu\xE9s, reiniciaremos el equipo.\0", b"Es werden Fehlerinformationen gesammelt, danach wird automatisch neu gestartet.\0"]).as_ptr().cast(),
         -1,
     );
     y += 30;
@@ -327,7 +333,14 @@ pub unsafe fn draw(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, h: i32) {
         hdc,
         info_x,
         qr_y,
-        c"Pour plus d'informations, recherchez en ligne :".as_ptr(),
+        tr4(&[
+            b"Pour plus d'informations, recherchez en ligne :\0",
+            b"For more information, search online for:\0",
+            b"Para obtener m\xE1s informaci\xF3n, busque en l\xEDnea:\0",
+            b"Weitere Informationen finden Sie online unter:\0",
+        ])
+        .as_ptr()
+        .cast(),
         -1,
     );
 
@@ -342,11 +355,29 @@ pub unsafe fn draw(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, h: i32) {
     // Informations techniques
     SelectObject(hdc, small_font);
     y2 += 10;
-    TextOutA(hdc, info_x, y2, c"Informations techniques :".as_ptr(), -1);
+    TextOutA(
+        hdc,
+        info_x,
+        y2,
+        tr4(&[
+            b"Informations techniques :\0",
+            b"Technical information:\0",
+            b"Informaci\xF3n t\xE9cnica:\0",
+            b"Technische Informationen:\0",
+        ])
+        .as_ptr()
+        .cast(),
+        -1,
+    );
     y2 += 18;
     if EXCEPTION_LEN > 0 {
         let mut line = [0u8; 80];
-        let prefix = b"Exception : ";
+        let prefix = tr4(&[
+            b"Exception : ",
+            b"Exception: ",
+            b"Excepci\xF3n: ",
+            b"Ausnahme: ",
+        ]);
         line[..prefix.len()].copy_from_slice(prefix);
         let n = EXCEPTION_LEN.min(line.len() - prefix.len());
         line[prefix.len()..prefix.len() + n].copy_from_slice(&EXCEPTION[..n]);
@@ -361,7 +392,7 @@ pub unsafe fn draw(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, h: i32) {
     }
     if ERROR_CODE_LEN > 0 {
         let mut line = [0u8; 40];
-        let prefix = b"Code : ";
+        let prefix = tr4(&[b"Code : ", b"Code: ", b"C\xF3digo: ", b"Code: "]);
         line[..prefix.len()].copy_from_slice(prefix);
         let n = ERROR_CODE_LEN.min(line.len() - prefix.len());
         line[prefix.len()..prefix.len() + n].copy_from_slice(&ERROR_CODE[..n]);
@@ -376,7 +407,7 @@ pub unsafe fn draw(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, h: i32) {
     }
     if FAULT_ADDR_LEN > 0 {
         let mut line = [0u8; 40];
-        let prefix = b"Adresse : ";
+        let prefix = tr4(&[b"Adresse : ", b"Address: ", b"Direcci\xF3n: ", b"Adresse: "]);
         line[..prefix.len()].copy_from_slice(prefix);
         let n = FAULT_ADDR_LEN.min(line.len() - prefix.len());
         line[prefix.len()..prefix.len() + n].copy_from_slice(&FAULT_ADDR[..n]);
@@ -391,7 +422,7 @@ pub unsafe fn draw(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, h: i32) {
     }
     if EXE_NAME_LEN > 0 {
         let mut line = [0u8; 160];
-        let prefix = b"Module : ";
+        let prefix = tr4(&[b"Module : ", b"Module: ", b"M\xF3dulo: ", b"Modul: "]);
         line[..prefix.len()].copy_from_slice(prefix);
         let n = EXE_NAME_LEN.min(line.len() - prefix.len());
         line[prefix.len()..prefix.len() + n].copy_from_slice(&EXE_NAME[..n]);

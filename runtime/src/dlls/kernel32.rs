@@ -1951,11 +1951,15 @@ pub unsafe extern "win64" fn get_proc_address(module: usize, name: *const u8) ->
             return 0;
         }
         let symbol = crate::dlls::cstr(name);
-        return crate::dlls::lookup(dll, &symbol).unwrap_or_else(|| {
-            crate::trace!("GetProcAddress: {dll}!{symbol} non disponible");
-            crate::process::set_last_error(127);
-            0
-        });
+        return match crate::dlls::lookup(dll, &symbol) {
+            Some(a) => crate::thunks::api_trace(dll, &symbol, a),
+            None => {
+                crate::trace!("GetProcAddress: {dll}!{symbol} non disponible");
+                crate::thunks::api_trace_missing(dll, &symbol);
+                crate::process::set_last_error(127);
+                0
+            }
+        };
     }
     let Some(m) = crate::loader::find_module_by_addr(module).filter(|m| m.base == module) else {
         crate::process::set_last_error(6);
@@ -2686,6 +2690,76 @@ pub unsafe extern "win64" fn virtual_protect(
     r.protection[first..first + count].fill(prot);
     1
 }
+/// Région Linux (hors VirtualAlloc) qui contient `address` : la pile du
+/// thread courant, décrite comme une pile Windows (AllocationBase au bas de
+/// la réservation, ce que lit coreclr pour borner sa pile), ou une
+/// projection de `/proc/self/maps` (image, tas, piles des autres threads).
+fn linux_region(address: usize) -> Option<MemoryBasicInformation> {
+    const PAGE: usize = 4096;
+    const MEM_COMMIT: u32 = 0x1000;
+    const MEM_PRIVATE: u32 = 0x20000;
+    const MEM_MAPPED: u32 = 0x40000;
+    let page = address & !(PAGE - 1);
+    let teb = crate::process::teb();
+    if teb != 0 {
+        let (base, limit) = unsafe {
+            (
+                *((teb + crate::process::TEB_STACK_BASE) as *const usize),
+                *((teb + crate::process::TEB_STACK_LIMIT) as *const usize),
+            )
+        };
+        if limit < base && address >= limit && address < base {
+            return Some(MemoryBasicInformation {
+                base_address: page as *mut c_void,
+                allocation_base: limit as *mut c_void,
+                allocation_protect: 4,
+                partition_id: 0,
+                region_size: base - page,
+                state: MEM_COMMIT,
+                protect: 4,
+                kind: MEM_PRIVATE,
+            });
+        }
+    }
+    let text = std::fs::read_to_string("/proc/self/maps").ok()?;
+    for line in text.lines() {
+        let mut parts = line.split_whitespace();
+        let (range, perms) = (parts.next()?, parts.next()?);
+        let (lo, hi) = range.split_once('-')?;
+        let (lo, hi) = (
+            usize::from_str_radix(lo, 16).ok()?,
+            usize::from_str_radix(hi, 16).ok()?,
+        );
+        if address < lo || address >= hi {
+            continue;
+        }
+        let p = perms.as_bytes();
+        let (r, w, x) = (p[0] == b'r', p[1] == b'w', p[2] == b'x');
+        let protect = match (r, w, x) {
+            (false, false, false) => 1,
+            (true, false, false) => 2,
+            (true, true, false) | (false, true, false) => 4,
+            (_, false, true) => 0x20,
+            (_, true, true) => 0x40,
+        };
+        let inode = parts.nth(2).unwrap_or("0");
+        return Some(MemoryBasicInformation {
+            base_address: page as *mut c_void,
+            allocation_base: lo as *mut c_void,
+            allocation_protect: protect,
+            partition_id: 0,
+            region_size: hi - page,
+            state: MEM_COMMIT,
+            protect,
+            kind: if inode == "0" {
+                MEM_PRIVATE
+            } else {
+                MEM_MAPPED
+            },
+        });
+    }
+    None
+}
 pub unsafe extern "win64" fn virtual_query(
     addr: *const c_void,
     info: *mut MemoryBasicInformation,
@@ -2738,6 +2812,8 @@ pub unsafe extern "win64" fn virtual_query(
             protect,
             kind: r.kind,
         }
+    } else if let Some(r) = linux_region(address) {
+        r
     } else {
         let next = maps
             .keys()
@@ -3160,7 +3236,9 @@ pub unsafe extern "win64" fn create_thread(
     id: *mut u32,
 ) -> usize {
     static NEXT_THREAD: AtomicU32 = AtomicU32::new(1);
-    if start == 0 || flags & !4 != 0 {
+    // CREATE_SUSPENDED (4) et STACK_SIZE_PARAM_IS_A_RESERVATION (0x10000) :
+    // la pile d'un thread Linux est de toute façon réservée, pas engagée.
+    if start == 0 || flags & !0x10004 != 0 {
         crate::process::set_last_error(if start == 0 { 87 } else { 50 });
         return 0;
     }
@@ -6059,16 +6137,36 @@ pub unsafe extern "win64" fn duplicate_handle(
     1
 }
 
+/// Nom large d'objet de synchronisation converti pour les variantes A
+/// (None pour un objet anonyme).
+unsafe fn sync_name_w(name: *const u16) -> Option<std::ffi::CString> {
+    if name.is_null() {
+        None
+    } else {
+        std::ffi::CString::new(crate::dlls::wstr(name)).ok()
+    }
+}
 pub unsafe extern "win64" fn create_event_w(
     _sa: usize,
     manual: i32,
     initial: i32,
-    _name: *const u16,
+    name: *const u16,
 ) -> usize {
-    create_event_a(_sa, manual, initial, std::ptr::null())
+    let n = sync_name_w(name);
+    create_event_a(
+        _sa,
+        manual,
+        initial,
+        n.as_ref().map_or(std::ptr::null(), |c| c.as_ptr().cast()),
+    )
 }
-pub unsafe extern "win64" fn create_mutex_w(_sa: usize, owner: i32, _name: *const u16) -> usize {
-    create_mutex_a(_sa, owner, std::ptr::null())
+pub unsafe extern "win64" fn create_mutex_w(_sa: usize, owner: i32, name: *const u16) -> usize {
+    let n = sync_name_w(name);
+    create_mutex_a(
+        _sa,
+        owner,
+        n.as_ref().map_or(std::ptr::null(), |c| c.as_ptr().cast()),
+    )
 }
 
 pub extern "win64" fn get_process_id(_process: usize) -> u32 {

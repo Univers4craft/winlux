@@ -89,7 +89,12 @@ unsafe fn refresh() {
     let mut fd: Win32FindDataA = core::mem::zeroed();
     let search = FindFirstFileA(c"Z:\\var\\lib\\winlux\\restore\\rp-*".as_ptr(), &mut fd);
     if search.is_null() || search == -1isize as Handle {
-        set_status(b"Aucun point de restauration");
+        set_status(tr4(&[
+            b"Aucun point de restauration",
+            b"No restore point",
+            b"Ning\xFAn punto de restauraci\xF3n",
+            b"Kein Wiederherstellungspunkt",
+        ]));
         return;
     }
     loop {
@@ -157,7 +162,7 @@ unsafe fn refresh() {
 
     let mut msg = [0u8; 80];
     let count_s = fmt_dec(POINT_COUNT as u32);
-    let pre = b"Points : ";
+    let pre = tr4(&[b"Points : ", b"Points: ", b"Puntos: ", b"Punkte: "]);
     msg[..pre.len()].copy_from_slice(pre);
     let off = pre.len();
     msg[off..off + count_s.1].copy_from_slice(&count_s.0[..count_s.1]);
@@ -235,7 +240,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.text,
         cl.left + 16,
         cl.top + 12,
-        b"Restauration syst\xE8me",
+        tr4(&[
+            b"Restauration syst\xE8me",
+            b"System Restore",
+            b"Restaurar sistema",
+            b"Systemwiederherstellung",
+        ]),
     );
 
     SelectObject(g.hdc, g.f.small);
@@ -246,12 +256,26 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.text2,
         cl.left + 16,
         cl.top + 36,
-        b"Cr\xE9ez et restaurez des points de sauvegarde de la configuration.",
+        tr4(&[
+            b"Cr\xE9ez et restaurez des points de sauvegarde de la configuration.",
+            b"Create and restore configuration backup points.",
+            b"Cree y restaure puntos de copia de seguridad de la configuraci\xF3n.",
+            b"Sicherungspunkte der Konfiguration erstellen und wiederherstellen.",
+        ]),
     );
 
     // Buttons row
     let btn_y = cl.top + HEADER_H;
-    let btns: [&[u8]; 3] = [b"Cr\xE9er un point", b"Restaurer", b"Supprimer"];
+    let btns: [&[u8]; 3] = [
+        tr4(&[
+            b"Cr\xE9er un point",
+            b"Create a point",
+            b"Crear un punto",
+            b"Punkt erstellen",
+        ]),
+        tr4(&[b"Restaurer", b"Restore", b"Restaurar", b"Wiederherstellen"]),
+        tr4(&[b"Supprimer", b"Delete", b"Eliminar", b"L\xF6schen"]),
+    ];
     for (i, label) in btns.iter().enumerate() {
         let bx = cl.left + 16 + (BTN_W + BTN_GAP) * i as i32;
         let hover = HOVER_BTN == i as i32;
@@ -342,7 +366,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             p.text3,
             cl.left + 16,
             list_y + 16,
-            b"Aucun point de restauration disponible.",
+            tr4(&[
+                b"Aucun point de restauration disponible.",
+                b"No restore point available.",
+                b"No hay ning\xFAn punto de restauraci\xF3n disponible.",
+                b"Kein Wiederherstellungspunkt verf\xFCgbar.",
+            ]),
         );
     }
 
@@ -380,19 +409,49 @@ unsafe fn draw_dialog(g: &mut Gfx, cl: &Rect) {
     FrameRect(g.hdc, &br, border_brush);
 
     let msg: &[u8] = match DIALOG {
-        1 => b"Restaurer ce point de sauvegarde ?",
-        2 => b"Supprimer ce point de sauvegarde ?",
-        3 => b"Op\xE9ration en cours...",
-        4 => b"Op\xE9ration termin\xE9e.",
+        1 => tr4(&[
+            b"Restaurer ce point de sauvegarde ?",
+            b"Restore this backup point?",
+            b"\xBFRestaurar este punto de copia de seguridad?",
+            b"Diesen Sicherungspunkt wiederherstellen?",
+        ]),
+        2 => tr4(&[
+            b"Supprimer ce point de sauvegarde ?",
+            b"Delete this backup point?",
+            b"\xBFEliminar este punto de copia de seguridad?",
+            b"Diesen Sicherungspunkt l\xF6schen?",
+        ]),
+        3 => tr4(&[
+            b"Op\xE9ration en cours...",
+            b"Operation in progress...",
+            b"Operaci\xF3n en curso...",
+            b"Vorgang l\xE4uft...",
+        ]),
+        4 => tr4(&[
+            b"Op\xE9ration termin\xE9e.",
+            b"Operation complete.",
+            b"Operaci\xF3n terminada.",
+            b"Vorgang abgeschlossen.",
+        ]),
         _ => b"",
     };
     text(g.hdc, g.f.semibold, p.text, dx + 24, dy + 24, msg);
 
     if DIALOG == 1 || DIALOG == 2 {
         let sub: &[u8] = if DIALOG == 1 {
-            b"La configuration sera restaur\xE9e \xE0 l'\xE9tat sauvegard\xE9."
+            tr4(&[
+                b"La configuration sera restaur\xE9e \xE0 l'\xE9tat sauvegard\xE9.",
+                b"The configuration will be restored to the saved state.",
+                b"La configuraci\xF3n se restaurar\xE1 al estado guardado.",
+                b"Die Konfiguration wird auf den gespeicherten Stand zur\xFCckgesetzt.",
+            ])
         } else {
-            b"Cette action est irr\xE9versible."
+            tr4(&[
+                b"Cette action est irr\xE9versible.",
+                b"This action can't be undone.",
+                b"Esta acci\xF3n es irreversible.",
+                b"Diese Aktion kann nicht r\xFCckg\xE4ngig gemacht werden.",
+            ])
         };
         text(g.hdc, g.f.body, p.text2, dx + 24, dy + 52, sub);
 
@@ -414,8 +473,22 @@ unsafe fn draw_dialog(g: &mut Gfx, cl: &Rect) {
         let ab = rect(dx + 160, by, dx + 280, by + BTN_H);
         FrameRect(g.hdc, &cb, border_brush);
         FrameRect(g.hdc, &ab, border_brush);
-        text(g.hdc, g.f.body, p.accent, dx + 44, by + 8, b"Confirmer");
-        text(g.hdc, g.f.body, p.text, dx + 190, by + 8, b"Annuler");
+        text(
+            g.hdc,
+            g.f.body,
+            p.accent,
+            dx + 44,
+            by + 8,
+            tr4(&[b"Confirmer", b"Confirm", b"Confirmar", b"Best\xE4tigen"]),
+        );
+        text(
+            g.hdc,
+            g.f.body,
+            p.text,
+            dx + 190,
+            by + 8,
+            tr4(&[b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"]),
+        );
     } else if DIALOG == 4 {
         let by = dy + dh - 48;
         let ok_bg = if DIALOG_HOVER == 0 {
@@ -480,7 +553,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             if HOVER_BTN == 0 {
                 // Create restore point
                 if run_restore_cmd(c"create".as_ptr()) {
-                    set_status(b"Point de restauration en cours de cr\xE9ation...");
+                    set_status(tr4(&[
+                        b"Point de restauration en cours de cr\xE9ation...",
+                        b"Creating restore point...",
+                        b"Creando el punto de restauraci\xF3n...",
+                        b"Wiederherstellungspunkt wird erstellt...",
+                    ]));
                     LAST_REFRESH = 0;
                 }
                 changed = true;
@@ -546,7 +624,12 @@ unsafe fn dialog_mouse(ev: Mouse, x: i32, y: i32, cl: Rect) -> bool {
                 cmd[prefix.len() + id.len()] = 0;
                 run_restore_cmd(cmd.as_ptr().cast());
                 DIALOG = 3;
-                set_status(b"Restauration en cours...");
+                set_status(tr4(&[
+                    b"Restauration en cours...",
+                    b"Restoring...",
+                    b"Restaurando...",
+                    b"Wird wiederhergestellt...",
+                ]));
             }
             changed = true;
         } else if DIALOG == 2 && DIALOG_HOVER == 0 {
@@ -563,7 +646,12 @@ unsafe fn dialog_mouse(ev: Mouse, x: i32, y: i32, cl: Rect) -> bool {
                 SELECTED = -1;
                 LAST_REFRESH = 0;
                 DIALOG = 0;
-                set_status(b"Point supprim\xE9.");
+                set_status(tr4(&[
+                    b"Point supprim\xE9.",
+                    b"Point deleted.",
+                    b"Punto eliminado.",
+                    b"Punkt gel\xF6scht.",
+                ]));
             }
             changed = true;
         } else if DIALOG_HOVER == 1 {
@@ -627,7 +715,12 @@ pub unsafe fn tick(_f: &Frame) -> bool {
     refresh();
     if DIALOG == 3 {
         DIALOG = 4;
-        set_status(b"Restauration termin\xE9e.");
+        set_status(tr4(&[
+            b"Restauration termin\xE9e.",
+            b"Restore complete.",
+            b"Restauraci\xF3n terminada.",
+            b"Wiederherstellung abgeschlossen.",
+        ]));
         return true;
     }
     POINT_COUNT != old_count

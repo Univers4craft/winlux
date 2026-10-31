@@ -97,11 +97,23 @@ fn since(t: u32) -> i32 {
     now().wrapping_sub(t).min(1_000_000) as i32
 }
 
+/// Libellé localisé (aussi utilisé par snip.rs) : français et anglais
+/// donnés à l'appel, espagnol et allemand lus dans `CLIP_TRANSLATIONS`
+/// (l'anglais sert si une entrée manque).
 pub fn tr(fr: &'static [u8], en: &'static [u8]) -> &'static [u8] {
-    if unsafe { crate::settings::english() } {
-        en
-    } else {
-        fr
+    match unsafe { crate::locale::CURRENT_LANG } {
+        crate::locale::Lang::Fr => fr,
+        crate::locale::Lang::En => en,
+        lang => CLIP_TRANSLATIONS
+            .iter()
+            .find(|r| r.0 == fr && r.1 == en)
+            .map_or(en, |r| {
+                if lang == crate::locale::Lang::Es {
+                    r.2
+                } else {
+                    r.3
+                }
+            }),
     }
 }
 
@@ -1612,3 +1624,263 @@ pub unsafe fn regression_checks() {
         "Historique : desepingler puis effacer vide la liste"
     );
 }
+
+// ---------- Traductions espagnoles et allemandes ----------
+
+/// `(français, anglais, espagnol, allemand)`, retrouvées par le couple
+/// français/anglais passé à `tr` (presse-papiers et Outil Capture).
+const CLIP_TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    (b"image capture", b"image picture", b"imagen", b"Bild"),
+    (
+        b"\xC0 l'instant",
+        b"Just now",
+        b"Ahora mismo",
+        b"Gerade eben",
+    ),
+    (b"Il y a ", b"", b"Hace ", b"Vor "),
+    (b" min", b" min ago", b" min", b" Min."),
+    (b" h", b" h ago", b" h", b" Std."),
+    (
+        b"Tout effacer",
+        b"Clear all",
+        b"Borrar todo",
+        b"Alle l\xF6schen",
+    ),
+    (
+        b"Presse-papiers",
+        b"Clipboard",
+        b"Portapapeles",
+        b"Zwischenablage",
+    ),
+    (
+        b"Rechercher dans l'historique",
+        b"Search history",
+        b"Buscar en el historial",
+        b"Verlauf durchsuchen",
+    ),
+    (
+        b"Vous n'avez encore rien copi\xE9",
+        b"You haven't copied anything yet",
+        b"A\xFAn no ha copiado nada",
+        b"Sie haben noch nichts kopiert",
+    ),
+    (
+        b"Copiez du texte, une image ou des fichiers : ils appara\xEEtront ici.",
+        b"Copy text, an image or files and they will show up here.",
+        b"Copie texto, una imagen o archivos: aparecer\xE1n aqu\xED.",
+        b"Kopieren Sie Text, ein Bild oder Dateien: Sie erscheinen hier.",
+    ),
+    (
+        b"Aucun r\xE9sultat",
+        b"No results",
+        b"No hay resultados",
+        b"Keine Ergebnisse",
+    ),
+    (
+        b"Essayez un autre mot.",
+        b"Try another word.",
+        b"Pruebe con otra palabra.",
+        b"Versuchen Sie ein anderes Wort.",
+    ),
+    (b" autre(s)", b" more", b" m\xE1s", b" weitere"),
+    (b"Texte", b"Text", b"Texto", b"Text"),
+    (b"Fichiers", b"Files", b"Archivos", b"Dateien"),
+    (b"Limite : ", b"Limit: ", b"L\xEDmite: ", b"Grenze: "),
+    (
+        b" \xE9l\xE9ments  \x95  changer",
+        b" items  \x95  change",
+        b" elementos  \x95  cambiar",
+        b" Elemente  \x95  \xE4ndern",
+    ),
+    (
+        b"Capture impossible : m\xE9moire insuffisante.",
+        b"Capture failed: out of memory.",
+        b"Captura imposible: memoria insuficiente.",
+        b"Aufnahme fehlgeschlagen: zu wenig Arbeitsspeicher.",
+    ),
+    (b"Fen\xEAtre", b"Window", b"Ventana", b"Fenster"),
+    (
+        b"Plein \xE9cran",
+        b"Full screen",
+        b"Pantalla completa",
+        b"Vollbild",
+    ),
+    (b"Forme libre", b"Freeform", b"Forma libre", b"Freihand"),
+    (
+        b"Enregistrer une vid\xE9o",
+        b"Record video",
+        b"Grabar v\xEDdeo",
+        b"Video aufnehmen",
+    ),
+    (
+        b"Fermer (\xC9chap)",
+        b"Close (Esc)",
+        b"Cerrar (Esc)",
+        b"Schlie\xDFen (Esc)",
+    ),
+    (
+        b"Choisissez la zone \xE0 enregistrer",
+        b"Choose the area to record",
+        b"Elija la zona que desea grabar",
+        b"W\xE4hlen Sie den aufzunehmenden Bereich",
+    ),
+    (
+        b"Faites glisser pour capturer une zone",
+        b"Drag to capture an area",
+        b"Arrastre para capturar una zona",
+        b"Ziehen Sie, um einen Bereich aufzunehmen",
+    ),
+    (
+        b"Cliquez sur une fen\xEAtre",
+        b"Click a window",
+        b"Haga clic en una ventana",
+        b"Klicken Sie auf ein Fenster",
+    ),
+    (
+        b"Cliquez pour capturer l'\xE9cran",
+        b"Click to capture the screen",
+        b"Haga clic para capturar la pantalla",
+        b"Klicken Sie, um den Bildschirm aufzunehmen",
+    ),
+    (
+        b"Dessinez le contour \xE0 capturer",
+        b"Draw the shape to capture",
+        b"Dibuje el contorno que desea capturar",
+        b"Zeichnen Sie den aufzunehmenden Umriss",
+    ),
+    (b"Micro : oui", b"Mic: on", b"Micro: s\xED", b"Mikro: ein"),
+    (b"Micro : non", b"Mic: off", b"Micro: no", b"Mikro: aus"),
+    (
+        b"Son syst\xE8me : oui",
+        b"System audio: on",
+        b"Sonido del sistema: s\xED",
+        b"Systemsound: ein",
+    ),
+    (
+        b"Son syst\xE8me : non",
+        b"System audio: off",
+        b"Sonido del sistema: no",
+        b"Systemsound: aus",
+    ),
+    (b"D\xE9marrer", b"Start", b"Iniciar", b"Starten"),
+    (b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"),
+    (
+        b"Enregistrement impossible : ffmpeg est introuvable sur ce syst\xE8me.",
+        b"Cannot record: ffmpeg was not found on this system.",
+        b"No se puede grabar: no se encontr\xF3 ffmpeg en este sistema.",
+        b"Aufnahme nicht m\xF6glich: ffmpeg wurde auf diesem System nicht gefunden.",
+    ),
+    (
+        b"Enregistrement impossible : aucun affichage X11.",
+        b"Cannot record: no X11 display.",
+        b"No se puede grabar: no hay pantalla X11.",
+        b"Aufnahme nicht m\xF6glich: keine X11-Anzeige.",
+    ),
+    (
+        b"Outil Capture",
+        b"Snipping Tool",
+        b"Recortes",
+        b"Snipping Tool",
+    ),
+    (
+        b"Vid\xE9o enregistr\xE9e : ",
+        b"Video saved: ",
+        b"V\xEDdeo guardado: ",
+        b"Video gespeichert: ",
+    ),
+    (
+        b"Enregistrement interrompu, fichier peut-\xEAtre incomplet : ",
+        b"Recording interrupted, file may be incomplete: ",
+        b"Grabaci\xF3n interrumpida, puede que el archivo est\xE9 incompleto: ",
+        b"Aufnahme unterbrochen, Datei m\xF6glicherweise unvollst\xE4ndig: ",
+    ),
+    (
+        b"Vid\xE9o enregistr\xE9e dans Vid\xE9os",
+        b"Video saved to Videos",
+        b"V\xEDdeo guardado en V\xEDdeos",
+        b"Video in Videos gespeichert",
+    ),
+    (
+        b"Enregistrement interrompu",
+        b"Recording interrupted",
+        b"Grabaci\xF3n interrumpida",
+        b"Aufnahme unterbrochen",
+    ),
+    (
+        b"L'enregistrement s'est arr\xEAt\xE9 (voir screen-recorder.log).",
+        b"Recording stopped unexpectedly (see screen-recorder.log).",
+        b"La grabaci\xF3n se detuvo (consulte screen-recorder.log).",
+        b"Die Aufnahme wurde beendet (siehe screen-recorder.log).",
+    ),
+    (
+        b"Capture copi\xE9e dans le presse-papiers. Annotez-la ou enregistrez-la.",
+        b"Snip copied to the clipboard. Annotate or save it.",
+        b"Recorte copiado en el portapapeles. An\xF3telo o gu\xE1rdelo.",
+        b"Ausschnitt in die Zwischenablage kopiert. Beschriften oder speichern Sie ihn.",
+    ),
+    (
+        b"Capture enregistr\xE9e : ",
+        b"Snip saved: ",
+        b"Recorte guardado: ",
+        b"Ausschnitt gespeichert: ",
+    ),
+    (
+        b"\xC9chec de l'enregistrement : ",
+        b"Could not save: ",
+        b"No se pudo guardar: ",
+        b"Speichern fehlgeschlagen: ",
+    ),
+    (b"Rogner", b"Crop", b"Recortar", b"Zuschneiden"),
+    (b"Stylo", b"Pen", b"Bol\xEDgrafo", b"Stift"),
+    (b"Surligneur", b"Highlighter", b"Resaltador", b"Textmarker"),
+    (b"Fl\xE8che", b"Arrow", b"Flecha", b"Pfeil"),
+    (b"Fin", b"Thin", b"Fino", b"D\xFCnn"),
+    (b"Moyen", b"Medium", b"Medio", b"Mittel"),
+    (b"\xC9pais", b"Thick", b"Grueso", b"Dick"),
+    (
+        b"Annuler (Ctrl+Z)",
+        b"Undo (Ctrl+Z)",
+        b"Deshacer (Ctrl+Z)",
+        b"R\xFCckg\xE4ngig (Strg+Z)",
+    ),
+    (
+        b"Copier (Ctrl+C)",
+        b"Copy (Ctrl+C)",
+        b"Copiar (Ctrl+C)",
+        b"Kopieren (Strg+C)",
+    ),
+    (
+        b"Enregistrer (Ctrl+S)",
+        b"Save (Ctrl+S)",
+        b"Guardar (Ctrl+S)",
+        b"Speichern (Strg+S)",
+    ),
+    (b"Fermer", b"Close", b"Cerrar", b"Schlie\xDFen"),
+    (b"Couleur", b"Color", b"Color", b"Farbe"),
+    (b"Enregistrer", b"Save", b"Guardar", b"Speichern"),
+    (b"Copier", b"Copy", b"Copiar", b"Kopieren"),
+    (
+        b"Faites glisser pour rogner l'image",
+        b"Drag to crop the image",
+        b"Arrastre para recortar la imagen",
+        b"Ziehen Sie, um das Bild zuzuschneiden",
+    ),
+    (
+        b"Cliquez puis tapez, Entr\xE9e pour valider",
+        b"Click then type, Enter to apply",
+        b"Haga clic y escriba, Intro para confirmar",
+        b"Klicken und tippen, Eingabe zum Best\xE4tigen",
+    ),
+    (
+        b"Dessinez sur la capture. Ctrl+Z annule, \xC9chap ferme.",
+        b"Draw on the snip. Ctrl+Z undoes, Esc closes.",
+        b"Dibuje sobre el recorte. Ctrl+Z deshace, Esc cierra.",
+        b"Zeichnen Sie auf den Ausschnitt. Strg+Z macht r\xFCckg\xE4ngig, Esc schlie\xDFt.",
+    ),
+    (
+        b"Capture copi\xE9e dans le presse-papiers",
+        b"Snip copied to the clipboard",
+        b"Recorte copiado en el portapapeles",
+        b"Ausschnitt in die Zwischenablage kopiert",
+    ),
+];
