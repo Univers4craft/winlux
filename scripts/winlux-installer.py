@@ -10,10 +10,12 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
 import cairo
+import gzip
 import json
 import math
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -217,6 +219,37 @@ window.installer-window {
     padding: 16px;
     margin-top: 8px;
 }
+/* Keep the dark look whatever GTK theme the live session ships. */
+.installer-content label, .installer-content radiobutton label, .installer-content checkbutton label {
+    color: @fg_primary;
+}
+.installer-content .card-detail, .installer-content .page-subtitle, .installer-content .progress-text,
+.installer-content .hw-info {
+    color: @fg_secondary;
+}
+.installer-content .warning-text, .installer-content .disk-warn {
+    color: @danger;
+}
+radiobutton:disabled label, checkbutton:disabled label {
+    color: alpha(@fg_secondary, 0.5);
+}
+button.btn-primary, button.btn-secondary, button.btn-danger {
+    background-image: none;
+    box-shadow: none;
+    text-shadow: none;
+}
+button.btn-primary label, button.btn-secondary label, button.btn-danger label {
+    color: @fg_primary;
+}
+scale value {
+    color: @fg_primary;
+}
+entry.input-field, combobox button {
+    background-image: none;
+    background-color: @bg_surface;
+    color: @fg_primary;
+}
+
 """
 
 LANGUAGES = [
@@ -253,8 +286,10 @@ PART_COLORS = {
     "fat16": (0.3, 0.75, 0.35, 1.0),
     "swap": (0.55, 0.35, 0.75, 1.0),
     "linux-swap": (0.55, 0.35, 0.75, 1.0),
-    "crypto_LUKS": (0.75, 0.2, 0.2, 1.0),
+    "crypto_luks": (0.75, 0.2, 0.2, 1.0),
     "free": (0.35, 0.35, 0.45, 1.0),
+    "winlux": (0.0, 0.62, 0.95, 1.0),
+    "bios": (0.45, 0.45, 0.55, 1.0),
 }
 
 TRANSLATIONS = {
@@ -818,6 +853,144 @@ TRANSLATIONS = {
     },
 }
 
+EXTRA_TRANSLATIONS = {
+    "fr_FR": {
+        "encrypt_ascii": "Utilisez uniquement des lettres sans accent, des chiffres et des symboles du clavier : l'écran de déverrouillage au démarrage ne gère pas les accents.",
+        "part_type_manual_desc": "Choisissez une partition existante pour Winlux : elle sera formatée, les autres partitions sont conservées.",
+        "part_layout_after": "Après l'installation :",
+        "part_manual_root": "Partition qui accueillera Winlux :",
+        "part_manual_none": "Aucune partition utilisable sur ce disque (8 Go minimum, non montée).",
+        "part_manual_need_esp": "Ce disque n'a pas de partition système EFI : le mode manuel en UEFI en exige une.",
+        "part_manual_erase": "ATTENTION : {partition} sera formatée et son contenu effacé.",
+        "part_dualboot_need_uefi": "Le dual-boot nécessite un démarrage UEFI et un disque GPT avec une partition système EFI.",
+        "part_dualboot_bitlocker": "BitLocker est actif sur {partition} : désactivez-le depuis Windows avant d'installer Winlux.",
+        "part_dualboot_no_room": "Pas assez d'espace libre dans Windows (20 Go minimum pour Winlux, 10 Go laissés à Windows).",
+        "part_dualboot_tools": "ntfsresize est absent de cette image : le dual-boot est indisponible.",
+        "part_windows_keep": "Windows conservera {size}.",
+        "encrypt_boot_note": "Une petite partition /boot de 1 Go reste non chiffrée : elle contient seulement le noyau et l'écran de déverrouillage.",
+        "encrypt_unsupported": "Cette image Winlux ne contient pas cryptsetup : le chiffrement n'est pas disponible.",
+        "encrypt_manual": "Le chiffrement est disponible avec « disque entier » ou « dual-boot », pas en partitionnement manuel.",
+        "encrypt_keyboard": "Au démarrage, la phrase secrète sera saisie avec le clavier {layout}.",
+        "encrypt_keyboard_us": "Attention : au démarrage, la phrase secrète devra être saisie avec un clavier QWERTY (US).",
+        "error_luks_initramfs": "L'initramfs de cette image ne sait pas déverrouiller un disque chiffré (cryptsetup absent).",
+        "error_ntfs_check": "Windows n'a pas été arrêté complètement (démarrage rapide ou veille prolongée) ou son disque doit être vérifié. Désactivez le démarrage rapide, lancez « chkdsk », arrêtez Windows puis relancez l'installation.",
+        "progress_resize": "Redimensionnement de Windows (peut prendre plusieurs minutes)...",
+    },
+    "en_US": {
+        "encrypt_ascii": 'Use only unaccented letters, digits and keyboard symbols: the unlock screen at startup does not support accented characters.',
+        "part_type_manual_desc": "Pick an existing partition for Winlux: it will be formatted, other partitions are kept.",
+        "part_layout_after": "After installation:",
+        "part_manual_root": "Partition that will hold Winlux:",
+        "part_manual_none": "No usable partition on this disk (8 GB minimum, not mounted).",
+        "part_manual_need_esp": "This disk has no EFI system partition: manual mode on UEFI requires one.",
+        "part_manual_erase": "WARNING: {partition} will be formatted and its content erased.",
+        "part_dualboot_need_uefi": "Dual-boot requires UEFI boot and a GPT disk with an EFI system partition.",
+        "part_dualboot_bitlocker": "BitLocker is active on {partition}: turn it off from Windows before installing Winlux.",
+        "part_dualboot_no_room": "Not enough free space in Windows (20 GB minimum for Winlux, 10 GB left to Windows).",
+        "part_dualboot_tools": "ntfsresize is missing from this image: dual-boot is unavailable.",
+        "part_windows_keep": "Windows will keep {size}.",
+        "encrypt_boot_note": "A small 1 GB /boot partition stays unencrypted: it only holds the kernel and the unlock screen.",
+        "encrypt_unsupported": "This Winlux image does not include cryptsetup: encryption is not available.",
+        "encrypt_manual": "Encryption is available with \"entire disk\" or \"dual-boot\", not with manual partitioning.",
+        "encrypt_keyboard": "At startup, the passphrase will be typed with the {layout} keyboard.",
+        "encrypt_keyboard_us": "Warning: at startup, the passphrase must be typed on a QWERTY (US) keyboard.",
+        "error_luks_initramfs": "This image's initramfs cannot unlock an encrypted disk (cryptsetup missing).",
+        "error_ntfs_check": "Windows was not fully shut down (fast startup or hibernation) or its disk needs checking. Turn off fast startup, run \"chkdsk\", shut Windows down and run the installation again.",
+        "progress_resize": "Resizing Windows (may take several minutes)...",
+    },
+    "de_DE": {
+        "encrypt_ascii": 'Verwenden Sie nur Buchstaben ohne Akzente/Umlaute, Ziffern und Tastatursymbole: Der Entsperrbildschirm beim Start unterstützt keine Sonderzeichen.',
+        "part_type_manual_desc": "Wählen Sie eine vorhandene Partition für Winlux: Sie wird formatiert, andere Partitionen bleiben erhalten.",
+        "part_layout_after": "Nach der Installation:",
+        "part_manual_root": "Partition für Winlux:",
+        "part_manual_none": "Keine nutzbare Partition auf dieser Festplatte (mindestens 8 GB, nicht eingehängt).",
+        "part_manual_need_esp": "Diese Festplatte hat keine EFI-Systempartition: Der manuelle Modus unter UEFI benötigt eine.",
+        "part_manual_erase": "ACHTUNG: {partition} wird formatiert und ihr Inhalt gelöscht.",
+        "part_dualboot_need_uefi": "Dual-Boot erfordert UEFI-Start und eine GPT-Festplatte mit EFI-Systempartition.",
+        "part_dualboot_bitlocker": "BitLocker ist auf {partition} aktiv: Deaktivieren Sie es in Windows, bevor Sie Winlux installieren.",
+        "part_dualboot_no_room": "Nicht genug freier Speicher in Windows (mindestens 20 GB für Winlux, 10 GB bleiben für Windows).",
+        "part_dualboot_tools": "ntfsresize fehlt in diesem Image: Dual-Boot ist nicht verfügbar.",
+        "part_windows_keep": "Windows behält {size}.",
+        "encrypt_boot_note": "Eine kleine /boot-Partition (1 GB) bleibt unverschlüsselt: Sie enthält nur den Kernel und den Entsperrbildschirm.",
+        "encrypt_unsupported": "Dieses Winlux-Image enthält kein cryptsetup: Verschlüsselung ist nicht verfügbar.",
+        "encrypt_manual": "Verschlüsselung ist mit „Gesamte Festplatte“ oder „Dual-Boot“ verfügbar, nicht bei manueller Partitionierung.",
+        "encrypt_keyboard": "Beim Start wird die Passphrase mit der Tastatur {layout} eingegeben.",
+        "encrypt_keyboard_us": "Achtung: Beim Start muss die Passphrase auf einer QWERTY-Tastatur (US) eingegeben werden.",
+        "error_luks_initramfs": "Das Initramfs dieses Images kann keine verschlüsselte Festplatte entsperren (cryptsetup fehlt).",
+        "error_ntfs_check": "Windows wurde nicht vollständig heruntergefahren (Schnellstart oder Ruhezustand) oder die Festplatte muss geprüft werden. Deaktivieren Sie den Schnellstart, führen Sie „chkdsk“ aus, fahren Sie Windows herunter und starten Sie die Installation erneut.",
+        "progress_resize": "Windows wird verkleinert (kann einige Minuten dauern)...",
+    },
+    "es_ES": {
+        "encrypt_ascii": 'Use solo letras sin acentos, dígitos y símbolos del teclado: la pantalla de desbloqueo al arrancar no admite acentos.',
+        "part_type_manual_desc": "Elija una partición existente para Winlux: se formateará, las demás particiones se conservan.",
+        "part_layout_after": "Después de la instalación:",
+        "part_manual_root": "Partición que alojará Winlux:",
+        "part_manual_none": "No hay ninguna partición utilizable en este disco (mínimo 8 GB, sin montar).",
+        "part_manual_need_esp": "Este disco no tiene partición de sistema EFI: el modo manual en UEFI necesita una.",
+        "part_manual_erase": "ATENCIÓN: {partition} se formateará y se borrará su contenido.",
+        "part_dualboot_need_uefi": "El arranque dual requiere arranque UEFI y un disco GPT con partición de sistema EFI.",
+        "part_dualboot_bitlocker": "BitLocker está activo en {partition}: desactívelo desde Windows antes de instalar Winlux.",
+        "part_dualboot_no_room": "No hay suficiente espacio libre en Windows (mínimo 20 GB para Winlux, 10 GB para Windows).",
+        "part_dualboot_tools": "ntfsresize no está en esta imagen: el arranque dual no está disponible.",
+        "part_windows_keep": "Windows conservará {size}.",
+        "encrypt_boot_note": "Una pequeña partición /boot de 1 GB queda sin cifrar: solo contiene el núcleo y la pantalla de desbloqueo.",
+        "encrypt_unsupported": "Esta imagen de Winlux no incluye cryptsetup: el cifrado no está disponible.",
+        "encrypt_manual": "El cifrado está disponible con «disco completo» o «arranque dual», no con particionado manual.",
+        "encrypt_keyboard": "Al arrancar, la frase de contraseña se escribirá con el teclado {layout}.",
+        "encrypt_keyboard_us": "Atención: al arrancar, la frase de contraseña deberá escribirse con un teclado QWERTY (EE. UU.).",
+        "error_luks_initramfs": "El initramfs de esta imagen no puede desbloquear un disco cifrado (falta cryptsetup).",
+        "error_ntfs_check": "Windows no se apagó por completo (inicio rápido o hibernación) o su disco necesita una comprobación. Desactive el inicio rápido, ejecute «chkdsk», apague Windows y vuelva a iniciar la instalación.",
+        "progress_resize": "Redimensionando Windows (puede tardar varios minutos)...",
+    },
+    "it_IT": {
+        "encrypt_ascii": "Usa solo lettere non accentate, cifre e simboli della tastiera: la schermata di sblocco all'avvio non supporta gli accenti.",
+        "part_type_manual_desc": "Scegli una partizione esistente per Winlux: verrà formattata, le altre partizioni vengono mantenute.",
+        "part_layout_after": "Dopo l'installazione:",
+        "part_manual_root": "Partizione che ospiterà Winlux:",
+        "part_manual_none": "Nessuna partizione utilizzabile su questo disco (minimo 8 GB, non montata).",
+        "part_manual_need_esp": "Questo disco non ha una partizione di sistema EFI: la modalità manuale in UEFI ne richiede una.",
+        "part_manual_erase": "ATTENZIONE: {partition} verrà formattata e il suo contenuto cancellato.",
+        "part_dualboot_need_uefi": "Il dual-boot richiede l'avvio UEFI e un disco GPT con partizione di sistema EFI.",
+        "part_dualboot_bitlocker": "BitLocker è attivo su {partition}: disattivalo da Windows prima di installare Winlux.",
+        "part_dualboot_no_room": "Spazio libero insufficiente in Windows (minimo 20 GB per Winlux, 10 GB lasciati a Windows).",
+        "part_dualboot_tools": "ntfsresize non è presente in questa immagine: il dual-boot non è disponibile.",
+        "part_windows_keep": "Windows manterrà {size}.",
+        "encrypt_boot_note": "Una piccola partizione /boot da 1 GB resta non cifrata: contiene solo il kernel e la schermata di sblocco.",
+        "encrypt_unsupported": "Questa immagine di Winlux non include cryptsetup: la cifratura non è disponibile.",
+        "encrypt_manual": "La cifratura è disponibile con «disco intero» o «dual-boot», non con il partizionamento manuale.",
+        "encrypt_keyboard": "All'avvio, la passphrase verrà digitata con la tastiera {layout}.",
+        "encrypt_keyboard_us": "Attenzione: all'avvio, la passphrase dovrà essere digitata con una tastiera QWERTY (US).",
+        "error_luks_initramfs": "L'initramfs di questa immagine non può sbloccare un disco cifrato (cryptsetup assente).",
+        "error_ntfs_check": "Windows non è stato arrestato completamente (avvio rapido o ibernazione) oppure il disco deve essere controllato. Disattiva l'avvio rapido, esegui «chkdsk», arresta Windows e riavvia l'installazione.",
+        "progress_resize": "Ridimensionamento di Windows (potrebbe richiedere diversi minuti)...",
+    },
+    "pt_BR": {
+        "encrypt_ascii": 'Use apenas letras sem acento, dígitos e símbolos do teclado: a tela de desbloqueio na inicialização não aceita acentos.',
+        "part_type_manual_desc": "Escolha uma partição existente para o Winlux: ela será formatada, as outras partições são mantidas.",
+        "part_layout_after": "Após a instalação:",
+        "part_manual_root": "Partição que receberá o Winlux:",
+        "part_manual_none": "Nenhuma partição utilizável neste disco (mínimo de 8 GB, não montada).",
+        "part_manual_need_esp": "Este disco não tem partição de sistema EFI: o modo manual em UEFI exige uma.",
+        "part_manual_erase": "ATENÇÃO: {partition} será formatada e seu conteúdo apagado.",
+        "part_dualboot_need_uefi": "O dual-boot requer inicialização UEFI e um disco GPT com partição de sistema EFI.",
+        "part_dualboot_bitlocker": "O BitLocker está ativo em {partition}: desative-o no Windows antes de instalar o Winlux.",
+        "part_dualboot_no_room": "Espaço livre insuficiente no Windows (mínimo de 20 GB para o Winlux, 10 GB deixados ao Windows).",
+        "part_dualboot_tools": "O ntfsresize não está nesta imagem: o dual-boot não está disponível.",
+        "part_windows_keep": "O Windows manterá {size}.",
+        "encrypt_boot_note": "Uma pequena partição /boot de 1 GB fica sem criptografia: ela contém apenas o kernel e a tela de desbloqueio.",
+        "encrypt_unsupported": "Esta imagem do Winlux não inclui o cryptsetup: a criptografia não está disponível.",
+        "encrypt_manual": "A criptografia está disponível com \"disco inteiro\" ou \"dual-boot\", não com particionamento manual.",
+        "encrypt_keyboard": "Na inicialização, a frase secreta será digitada com o teclado {layout}.",
+        "encrypt_keyboard_us": "Atenção: na inicialização, a frase secreta deverá ser digitada em um teclado QWERTY (EUA).",
+        "error_luks_initramfs": "O initramfs desta imagem não consegue desbloquear um disco criptografado (cryptsetup ausente).",
+        "error_ntfs_check": "O Windows não foi desligado completamente (inicialização rápida ou hibernação) ou o disco precisa ser verificado. Desative a inicialização rápida, execute \"chkdsk\", desligue o Windows e reinicie a instalação.",
+        "progress_resize": "Redimensionando o Windows (pode levar vários minutos)...",
+    },
+}
+for _lang, _extra in EXTRA_TRANSLATIONS.items():
+    TRANSLATIONS[_lang].update(_extra)
+
+
 def tr(key, **kwargs):
     """Translate a key using the current language."""
     lang = getattr(tr, '_lang', 'fr_FR')
@@ -914,58 +1087,251 @@ def detect_disks():
     return disks
 
 
+MIB = 1024 * 1024
+GIB = 1024 * MIB
+ESP_PARTTYPE = "c12a7328-f81f-11d2-ba4b-00a0c93ec93b"
+BIOS_PARTTYPE = "21686148-6f6e-6974-6576-6e6f74656564"
+BOOT_PART_MIB = 1024
+MIN_WINLUX_MIB = 20 * 1024
+WINDOWS_MARGIN = 10 * GIB
+MANUAL_MIN_SIZE = 8 * GIB
+LUKS_NAME = "winlux_crypt"
+
+
 def detect_partitions(device):
-    """Detect existing partitions on a device using lsblk."""
+    """Partitions of a disk, ordered by position on the disk."""
     parts = []
     try:
         out = subprocess.check_output(
-            ["lsblk", "-bnJo", "NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT,TYPE,PARTUUID",
-             device],
+            ["lsblk", "-bnJo", "NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT,TYPE,PARTTYPE,START", device],
             text=True, timeout=10
         )
         data = json.loads(out)
         for bd in data.get("blockdevices", []):
-            children = bd.get("children", [])
-            if not children:
-                continue
-            for child in children:
-                if child.get("type") not in ("part", "partition"):
+            for child in bd.get("children", []) or []:
+                if child.get("type") != "part":
                     continue
-                parts.append({
+                number = 0
+                try:
+                    with open(f"/sys/class/block/{child['name']}/partition") as f:
+                        number = int(f.read())
+                except (OSError, ValueError):
+                    pass
+                part = {
                     "name": child.get("name", ""),
                     "path": f"/dev/{child['name']}",
-                    "size": child.get("size", 0) or 0,
+                    "number": number,
+                    "start": int(child.get("start") or 0) * 512,
+                    "size": int(child.get("size") or 0),
                     "fstype": (child.get("fstype") or "").strip(),
                     "label": (child.get("label") or "").strip(),
                     "mountpoint": (child.get("mountpoint") or "").strip(),
-                })
+                    "parttype": (child.get("parttype") or "").strip().lower(),
+                }
+                if not part["parttype"] or not part["fstype"]:
+                    # lsblk takes these from the udev database; probe directly when it is absent.
+                    probe = blkid_probe(part["path"])
+                    part["fstype"] = part["fstype"] or probe.get("TYPE", "")
+                    part["label"] = part["label"] or probe.get("LABEL", "")
+                    part["parttype"] = part["parttype"] or probe.get("PART_ENTRY_TYPE", "").lower()
+                parts.append(part)
     except Exception:
         pass
+    parts.sort(key=lambda p: p["start"])
     return parts
 
 
+def blkid_probe(path):
+    try:
+        out = subprocess.run(["blkid", "-p", "-o", "export", path],
+                             capture_output=True, text=True, timeout=10).stdout
+    except Exception:
+        return {}
+    return dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+
+
+def ntfs_min_size(path):
+    """Smallest size ntfsresize accepts for this NTFS volume, or None."""
+    try:
+        out = subprocess.run(["ntfsresize", "--info", "--force", path],
+                             capture_output=True, text=True, timeout=120).stdout
+    except Exception:
+        return None
+    match = re.search(r"resize at (\d+) bytes", out)
+    return int(match.group(1)) if match else None
+
+
 def detect_existing_os(partitions):
-    """Check if Windows is installed on any NTFS partition.
-    Returns a list of dicts: {partition, os_name, size}"""
+    """Windows candidates on a disk: the largest NTFS volume first."""
     found = []
     for p in partitions:
-        if p["fstype"].lower() == "ntfs":
-            label = p["label"].lower()
-            if "windows" in label or "system" in label or "os" in label:
-                found.append({
-                    "partition": p["path"],
-                    "os_name": "Windows",
-                    "size": p["size"],
-                    "label": p["label"],
-                })
-            elif p["size"] > 30 * 1024**3:
-                found.append({
-                    "partition": p["path"],
-                    "os_name": "Windows (probable)",
-                    "size": p["size"],
-                    "label": p["label"] or "NTFS",
-                })
+        fstype = p["fstype"].lower()
+        if fstype == "bitlocker":
+            found.append({"partition": p["path"], "number": p["number"], "os_name": "Windows",
+                          "size": p["size"], "label": p["label"], "bitlocker": True,
+                          "min_size": None})
+        elif fstype == "ntfs" and p["size"] > 30 * GIB:
+            found.append({"partition": p["path"], "number": p["number"], "os_name": "Windows",
+                          "size": p["size"], "label": p["label"] or "NTFS", "bitlocker": False,
+                          "min_size": ntfs_min_size(p["path"]) if shutil.which("ntfsresize") else None})
+    found.sort(key=lambda o: o["size"], reverse=True)
     return found
+
+
+def find_esp(partitions):
+    for p in partitions:
+        if p["parttype"] == ESP_PARTTYPE:
+            return p
+    return None
+
+
+def disk_partitions_sysfs(device):
+    """{number: {path, start, size}} as the kernel currently sees the disk."""
+    disk = os.path.basename(os.path.realpath(device))
+    base = f"/sys/block/{disk}"
+    result = {}
+    for entry in os.listdir(base):
+        pfile = os.path.join(base, entry, "partition")
+        if not os.path.exists(pfile):
+            continue
+        with open(pfile) as f:
+            number = int(f.read())
+        with open(os.path.join(base, entry, "start")) as f:
+            start = int(f.read()) * 512
+        with open(os.path.join(base, entry, "size")) as f:
+            size = int(f.read()) * 512
+        result[number] = {"path": f"/dev/{entry}", "start": start, "size": size}
+    return result
+
+
+def disk_size_bytes(device):
+    disk = os.path.basename(os.path.realpath(device))
+    with open(f"/sys/block/{disk}/size") as f:
+        return int(f.read()) * 512
+
+
+def partition_path(device, number):
+    return f"{device}p{number}" if device[-1].isdigit() else f"{device}{number}"
+
+
+def wait_for_block(path, timeout=20):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if os.path.exists(path):
+            return path
+        time.sleep(0.3)
+    raise RuntimeError(f"Partition introuvable : {path}")
+
+
+def reread_partitions(device):
+    subprocess.run(["partprobe", device], check=True, timeout=30)
+    if shutil.which("udevadm"):
+        subprocess.run(["udevadm", "settle"], timeout=30)
+
+
+def blkid_value(path, tag):
+    return subprocess.check_output(["blkid", "-s", tag, "-o", "value", path],
+                                   text=True, timeout=10).strip()
+
+
+def iter_cpio_names(path):
+    """Names stored in a (possibly concatenated) gzip newc cpio archive."""
+    with gzip.open(path, "rb") as f:
+        data = f.read()
+    offset = 0
+    while offset + 110 <= len(data):
+        if data[offset:offset + 6] not in (b"070701", b"070702"):
+            # Concatenated archives are padded with zeros between members.
+            offset += 4
+            continue
+        header = data[offset:offset + 110]
+        filesize = int(header[54:62], 16)
+        namesize = int(header[94:102], 16)
+        name = data[offset + 110:offset + 110 + namesize - 1].decode("utf-8", "replace")
+        if name == "TRAILER!!!":
+            offset += 110 + namesize
+            offset = (offset + 3) & ~3
+            continue
+        yield name
+        offset = (offset + 110 + namesize + 3) & ~3
+        offset = (offset + filesize + 3) & ~3
+
+
+def initramfs_supports_luks(path):
+    try:
+        return any(name.lstrip("./") == "bin/cryptsetup" for name in iter_cpio_names(path))
+    except Exception:
+        return False
+
+
+def cpio_newc(entries):
+    """Build an uncompressed newc archive from (name, mode, data) entries."""
+    out = bytearray()
+    for ino, (name, mode, data) in enumerate(entries + [("TRAILER!!!", 0, b"")], start=1):
+        encoded = name.encode() + b"\0"
+        fields = [ino, mode, 0, 0, 1, 0, len(data), 0, 0, 0, 0, len(encoded), 0]
+        out += b"070701" + "".join(f"{v:08x}" for v in fields).encode() + encoded
+        out += b"\0" * (-len(out) % 4)
+        out += data
+        out += b"\0" * (-len(out) % 4)
+    return bytes(out)
+
+
+def keymap_tools_available():
+    return bool(shutil.which("ckbcomp") and shutil.which("loadkeys"))
+
+
+def console_keymap(layout):
+    """Binary console keymap (busybox loadkmap format) for an XKB layout, or None."""
+    if not keymap_tools_available():
+        return None
+    try:
+        # 8-bit charmap: busybox loadkmap has no Unicode support.
+        source = subprocess.run(["ckbcomp", "-charmap", "ISO-8859-15", layout],
+                                capture_output=True, timeout=30, check=True).stdout
+        out = subprocess.run(["loadkeys", "-b"], input=source, capture_output=True, timeout=30)
+    except Exception:
+        return None
+    return out.stdout if out.returncode == 0 and out.stdout.startswith(b"bkeymap") else None
+
+
+def passphrase_is_ascii(passphrase):
+    return all(" " <= c <= "~" for c in passphrase)
+
+
+def planned_layout(disk_size, partitions, install_type, luks, dualboot=None, manual_root=None):
+    """Segments drawn for the disk after installation."""
+    if install_type == "full":
+        segments = [
+            {"start": MIB, "size": 2 * MIB, "fstype": "bios", "label": "BIOS"},
+            {"start": 3 * MIB, "size": 512 * MIB, "fstype": "vfat", "label": "EFI"},
+        ]
+        start = 515 * MIB
+        if luks:
+            segments.append({"start": start, "size": BOOT_PART_MIB * MIB, "fstype": "ext4", "label": "/boot"})
+            start += BOOT_PART_MIB * MIB
+        segments.append({"start": start, "size": max(0, disk_size - start - MIB),
+                         "fstype": "crypto_LUKS" if luks else "winlux", "label": "Winlux"})
+        return segments
+    segments = []
+    for p in partitions:
+        seg = dict(p)
+        if install_type == "dualboot" and dualboot and p["path"] == dualboot["partition"]:
+            seg["size"] = dualboot["new_size"]
+            seg["label"] = p["label"] or "Windows"
+            segments.append(seg)
+            start = (p["start"] + dualboot["new_size"] + MIB - 1) // MIB * MIB
+            if luks:
+                segments.append({"start": start, "size": BOOT_PART_MIB * MIB, "fstype": "ext4", "label": "/boot"})
+                start += BOOT_PART_MIB * MIB
+            segments.append({"start": start, "size": dualboot["alloc"] - (BOOT_PART_MIB * MIB if luks else 0),
+                             "fstype": "crypto_LUKS" if luks else "winlux", "label": "Winlux"})
+            continue
+        if install_type == "manual" and p["path"] == manual_root:
+            seg["fstype"] = "winlux"
+            seg["label"] = "Winlux"
+        segments.append(seg)
+    return segments
 
 
 def detect_hardware_summary():
@@ -1028,108 +1394,91 @@ def passphrase_strength(passphrase):
 
 
 class PartitionBar(Gtk.DrawingArea):
-    """Custom widget drawing a graphical partition bar."""
+    """Disk drawn as a bar: each partition at its real position, gaps as free space."""
 
     def __init__(self):
         super().__init__()
-        self.partitions = []
+        self.segments = []
         self.disk_size = 0
-        self.set_size_request(-1, 80)
+        self.set_size_request(-1, 70)
         self.connect("draw", self.on_draw)
 
-    def set_data(self, disk_size, partitions):
+    def set_data(self, disk_size, segments):
         self.disk_size = disk_size
-        self.partitions = partitions
+        self.segments = sorted(segments, key=lambda s: s.get("start", 0))
         self.queue_draw()
 
-    def on_draw(self, widget, cr):
-        alloc = widget.get_allocation()
-        w = alloc.width
-        h = alloc.height
-        bar_y = 8
-        bar_h = 36
-        label_y = bar_y + bar_h + 4
+    def _entries(self):
+        entries = []
+        cursor = 0
+        for seg in self.segments:
+            start = seg.get("start", cursor)
+            if start - cursor > 64 * MIB:
+                entries.append({"start": cursor, "size": start - cursor, "fstype": "free",
+                                "label": tr("part_free_space")})
+            entries.append(seg)
+            cursor = max(cursor, start + seg["size"])
+        if self.disk_size - cursor > 64 * MIB:
+            entries.append({"start": cursor, "size": self.disk_size - cursor, "fstype": "free",
+                            "label": tr("part_free_space")})
+        return entries
 
+    def on_draw(self, widget, cr):
+        w = widget.get_allocated_width()
+        bar_y = 4
+        bar_h = 36
+        label_y = bar_y + bar_h + 14
+        cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
         cr.set_source_rgba(0.18, 0.18, 0.27, 1.0)
         self._rounded_rect(cr, 0, bar_y, w, bar_h, 6)
         cr.fill()
-
         if self.disk_size <= 0:
             cr.set_source_rgba(0.7, 0.7, 0.8, 0.7)
-            cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             cr.set_font_size(11)
-            ext = cr.text_extents(tr("part_no_disk"))
+            text = tr("part_no_disk")
+            ext = cr.text_extents(text)
             cr.move_to((w - ext.width) / 2, bar_y + bar_h / 2 + ext.height / 2)
-            cr.show_text(tr("part_no_disk"))
+            cr.show_text(text)
             return
-
-        used = sum(p.get("size", 0) for p in self.partitions)
-        free = max(0, self.disk_size - used)
-        entries = list(self.partitions)
-        if free > 0:
-            entries.append({"name": "free", "size": free, "fstype": "free",
-                            "label": tr("part_free_space")})
-
-        x = 1.0
-        usable_w = w - 2.0
         cr.save()
         self._rounded_rect(cr, 0, bar_y, w, bar_h, 6)
         cr.clip()
-
-        cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
-        cr.set_font_size(10)
-
-        for i, part in enumerate(entries):
-            frac = part["size"] / self.disk_size if self.disk_size else 0
-            pw = max(usable_w * frac, 2)
-            if i == len(entries) - 1:
-                pw = w - 1.0 - x
-
-            fstype = part.get("fstype", "").lower()
-            color = PART_COLORS.get(fstype, (0.35, 0.35, 0.45, 1.0))
+        # Tiny partitions (BIOS boot, MSR) still get a visible sliver.
+        for part in self._entries():
+            x = w * part["start"] / self.disk_size
+            pw = max(w * part["size"] / self.disk_size, 3)
+            color = PART_COLORS.get(part.get("fstype", "").lower(), (0.35, 0.35, 0.45, 1.0))
             cr.set_source_rgba(*color)
             cr.rectangle(x, bar_y, pw, bar_h)
             cr.fill()
-
-            if pw > 3:
-                cr.set_source_rgba(0.0, 0.0, 0.0, 0.25)
-                cr.move_to(x + pw, bar_y)
-                cr.line_to(x + pw, bar_y + bar_h)
-                cr.set_line_width(1)
-                cr.stroke()
-
+            cr.set_source_rgba(0.0, 0.0, 0.0, 0.35)
+            cr.set_line_width(1)
+            cr.move_to(x + pw, bar_y)
+            cr.line_to(x + pw, bar_y + bar_h)
+            cr.stroke()
             label = part.get("label") or part.get("name", "")
             size_str = human_size(part["size"])
-            display = f"{label} ({size_str})" if label else size_str
-            if pw > 60:
-                cr.set_source_rgba(1, 1, 1, 0.95)
-                ext = cr.text_extents(display)
-                tx = x + (pw - ext.width) / 2
-                ty = bar_y + bar_h / 2 + ext.height / 2
-                if ext.width < pw - 8:
-                    cr.move_to(tx, ty)
-                    cr.show_text(display)
-                else:
-                    short = size_str
-                    ext2 = cr.text_extents(short)
-                    if ext2.width < pw - 8:
-                        cr.move_to(x + (pw - ext2.width) / 2, ty)
-                        cr.show_text(short)
-
-            cr.set_source_rgba(1, 1, 1, 0.7)
-            cr.set_font_size(9)
-            if pw > 40:
-                fs_label = part.get("fstype", "") or ""
-                ext3 = cr.text_extents(fs_label)
-                if ext3.width < pw - 4:
-                    cr.move_to(x + (pw - ext3.width) / 2, label_y + 12)
-                    cr.show_text(fs_label)
             cr.set_font_size(10)
-
-            x += pw
-
+            for text in (f"{label} ({size_str})" if label else size_str, size_str):
+                ext = cr.text_extents(text)
+                if ext.width < pw - 8:
+                    cr.set_source_rgba(1, 1, 1, 0.95)
+                    cr.move_to(x + (pw - ext.width) / 2, bar_y + bar_h / 2 + ext.height / 2)
+                    cr.show_text(text)
+                    break
+            fs_label = {"winlux": "ext4", "crypto_luks": "LUKS", "free": ""}.get(
+                part.get("fstype", "").lower(), part.get("fstype", ""))
+            cr.set_font_size(9)
+            ext = cr.text_extents(fs_label)
+            if fs_label and ext.width < pw - 4:
+                cr.restore()
+                cr.set_source_rgba(1, 1, 1, 0.7)
+                cr.move_to(x + (pw - ext.width) / 2, label_y)
+                cr.show_text(fs_label)
+                cr.save()
+                self._rounded_rect(cr, 0, bar_y, w, bar_h, 6)
+                cr.clip()
         cr.restore()
-
         cr.set_source_rgba(0.47, 0.47, 0.6, 0.6)
         cr.set_line_width(1)
         self._rounded_rect(cr, 0.5, bar_y + 0.5, w - 1, bar_h - 1, 6)
@@ -1157,6 +1506,7 @@ class InstallerApp(Gtk.Application):
             "disk": None,
             "luks_enabled": False,
             "luks_passphrase": "",
+            "manual_root": None,
             "hostname": "winlux-desktop",
             "username": "",
             "fullname": "",
@@ -1168,6 +1518,11 @@ class InstallerApp(Gtk.Application):
         self.disk_partitions = {}
         self.detected_os = {}
         self.dualboot_alloc_mb = 0
+        self.dualboot_target = None
+        self.manual_candidates = []
+        self.luks_supported = False
+        self.detect_done = False
+        self.built_lang = "fr_FR"
         self.install_thread = None
         self.install_cancelled = False
 
@@ -1236,7 +1591,26 @@ class InstallerApp(Gtk.Application):
             parts = detect_partitions(disk["path"])
             self.disk_partitions[disk["path"]] = parts
             self.detected_os[disk["path"]] = detect_existing_os(parts)
+        self.luks_supported = self.detect_luks_support()
+        self.detect_done = True
         GLib.idle_add(self.refresh_partition_page)
+
+    def detect_luks_support(self):
+        """The image must ship cryptsetup here and in the initramfs it installs."""
+        if not shutil.which("cryptsetup"):
+            return False
+        live = "/run/winlux/live/media/boot/winlux-initramfs.cpio.gz"
+        if os.path.isfile(live):
+            return initramfs_supports_luks(live)
+        iso = os.environ.get("WINLUX_ISO") or os.path.join(ROOT_DIR, "build", "winlux-live-test.iso")
+        if not os.path.isfile(iso):
+            return False
+        with tempfile.TemporaryDirectory() as tmp:
+            out = f"{tmp}/initramfs.gz"
+            result = subprocess.run(["xorriso", "-osirrox", "on", "-indev", iso,
+                                     "-extract", "/boot/winlux-initramfs.cpio.gz", out],
+                                    capture_output=True, timeout=60)
+            return result.returncode == 0 and initramfs_supports_luks(out)
 
     def update_step(self):
         for i, lbl in enumerate(self.step_labels):
@@ -1270,12 +1644,16 @@ class InstallerApp(Gtk.Application):
         if self.current_step == 2:
             ok = self.config["license_accepted"]
         elif self.current_step == 3:
-            ok = self.config["disk"] is not None
+            itype = self.config["install_type"]
+            ok = self.config["disk"] is not None and (
+                itype == "full"
+                or (itype == "dualboot" and self.dualboot_target is not None)
+                or (itype == "manual" and self.manual_ready()))
         elif self.current_step == 4:
             if self.config["luks_enabled"]:
                 pp = self.config["luks_passphrase"]
                 pp_confirm = self.luks_confirm_entry.get_text() if hasattr(self, 'luks_confirm_entry') else ""
-                ok = len(pp) >= 8 and pp == pp_confirm
+                ok = len(pp) >= 8 and pp == pp_confirm and passphrase_is_ascii(pp)
             else:
                 ok = True
         elif self.current_step == 5:
@@ -1295,6 +1673,8 @@ class InstallerApp(Gtk.Application):
         elif self.current_step < len(STEPS) - 1:
             if self.current_step == 0:
                 self.update_ui_language()
+            if self.current_step == 3:
+                self.refresh_encryption_page()
             if self.current_step == 5:
                 self.refresh_summary()
             self.current_step += 1
@@ -1338,15 +1718,39 @@ class InstallerApp(Gtk.Application):
         for i, lbl in enumerate(self.step_labels):
             if i < len(steps):
                 lbl.set_text(f"  {i + 1}. {steps[i]}")
+        if self.built_lang != self.config["language"]:
+            self.rebuild_pages()
+
+    def rebuild_pages(self):
+        """Pages read their strings when built, so rebuild them in the chosen language."""
+        for i in range(1, 9):
+            child = self.pages.get_child_by_name(f"page_{i}")
+            if child:
+                child.destroy()
+        self.config.update({"license_accepted": False, "install_type": "full", "manual_root": None,
+                            "luks_enabled": False, "luks_passphrase": "", "hostname": "winlux-desktop",
+                            "username": "", "fullname": "", "password": "", "autologin": True})
+        self.build_keyboard_page()
+        self.build_license_page()
+        self.build_partition_page()
+        self.build_encryption_page()
+        self.build_account_page()
+        self.build_summary_page()
+        self.build_progress_page()
+        self.build_done_page()
+        self.pages.show_all()
+        self.built_lang = self.config["language"]
+        if self.detect_done:
+            self.refresh_partition_page()
 
     # ── Page 1 : Clavier ─────────────────────────────────────────
 
     def build_keyboard_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        title = Gtk.Label(label="Choisissez la disposition du clavier", xalign=0)
+        title = Gtk.Label(label=tr("choose_keyboard"), xalign=0)
         title.get_style_context().add_class("page-title")
         box.pack_start(title, False, False, 0)
-        sub = Gtk.Label(label="Sélectionnez le type de clavier que vous utilisez.", xalign=0)
+        sub = Gtk.Label(label=tr("keyboard_subtitle"), xalign=0)
         sub.get_style_context().add_class("page-subtitle")
         sub.set_line_wrap(True)
         box.pack_start(sub, False, False, 0)
@@ -1361,14 +1765,14 @@ class InstallerApp(Gtk.Application):
             rb.set_margin_start(8)
             if self.kb_group is None:
                 self.kb_group = rb
-            if layout == "fr":
+            if layout == self.config["keyboard"]:
                 rb.set_active(True)
             rb.connect("toggled", self.on_kb_toggle, layout)
             row.pack_start(rb, True, True, 0)
             kb_box.pack_start(row, False, False, 0)
         scroll.add(kb_box)
         box.pack_start(scroll, True, True, 0)
-        test_label = Gtk.Label(label="Testez votre clavier ici :", xalign=0)
+        test_label = Gtk.Label(label=tr("keyboard_test"), xalign=0)
         test_label.get_style_context().add_class("input-label")
         test_label.set_margin_top(12)
         box.pack_start(test_label, False, False, 0)
@@ -1386,10 +1790,10 @@ class InstallerApp(Gtk.Application):
 
     def build_license_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        title = Gtk.Label(label="Contrat de licence", xalign=0)
+        title = Gtk.Label(label=tr("license_title"), xalign=0)
         title.get_style_context().add_class("page-title")
         box.pack_start(title, False, False, 0)
-        sub = Gtk.Label(label="Veuillez lire et accepter les termes de la licence.", xalign=0)
+        sub = Gtk.Label(label=tr("license_subtitle"), xalign=0)
         sub.get_style_context().add_class("page-subtitle")
         box.pack_start(sub, False, False, 0)
         scroll = Gtk.ScrolledWindow()
@@ -1403,7 +1807,7 @@ class InstallerApp(Gtk.Application):
         text_view.get_style_context().add_class("license-text")
         scroll.add(text_view)
         box.pack_start(scroll, True, True, 0)
-        accept = Gtk.CheckButton(label="J'accepte les termes de la licence GPL v3")
+        accept = Gtk.CheckButton(label=tr("license_accept"))
         accept.connect("toggled", self.on_license_toggle)
         accept.set_margin_top(12)
         box.pack_start(accept, False, False, 0)
@@ -1431,7 +1835,6 @@ class InstallerApp(Gtk.Application):
         disk_label = Gtk.Label(label=tr("part_select_disk"), xalign=0)
         disk_label.get_style_context().add_class("section-label")
         box.pack_start(disk_label, False, False, 0)
-
         self.part_disk_list = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         box.pack_start(self.part_disk_list, False, False, 0)
 
@@ -1439,13 +1842,17 @@ class InstallerApp(Gtk.Application):
         layout_label.get_style_context().add_class("section-label")
         layout_label.set_margin_top(8)
         box.pack_start(layout_label, False, False, 0)
-
         self.partition_bar = PartitionBar()
         box.pack_start(self.partition_bar, False, False, 0)
+        after_label = Gtk.Label(label=tr("part_layout_after"), xalign=0)
+        after_label.get_style_context().add_class("section-label")
+        box.pack_start(after_label, False, False, 0)
+        self.partition_bar_after = PartitionBar()
+        box.pack_start(self.partition_bar_after, False, False, 0)
 
         self.part_erase_warn = Gtk.Label(label="", xalign=0)
         self.part_erase_warn.get_style_context().add_class("disk-warn")
-        self.part_erase_warn.set_margin_top(4)
+        self.part_erase_warn.set_line_wrap(True)
         box.pack_start(self.part_erase_warn, False, False, 0)
 
         type_label = Gtk.Label(label=tr("summary_type") + " :", xalign=0)
@@ -1453,31 +1860,27 @@ class InstallerApp(Gtk.Application):
         type_label.set_margin_top(8)
         box.pack_start(type_label, False, False, 0)
 
-        full_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        full_card.get_style_context().add_class("card")
-        self.type_full_rb = Gtk.RadioButton.new_with_label(None, tr("part_type_full"))
-        self.type_full_rb.connect("toggled", self.on_type_toggle, "full")
-        full_card.pack_start(self.type_full_rb, False, False, 0)
-        full_desc = Gtk.Label(label=tr("part_type_full_desc"), xalign=0)
-        full_desc.get_style_context().add_class("card-detail")
-        full_desc.set_line_wrap(True)
-        full_desc.set_margin_start(24)
-        full_card.pack_start(full_desc, False, False, 0)
-        box.pack_start(full_card, False, False, 0)
+        def card(radio, desc_key):
+            frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            frame.get_style_context().add_class("card")
+            frame.pack_start(radio, False, False, 0)
+            desc = Gtk.Label(label=tr(desc_key), xalign=0)
+            desc.get_style_context().add_class("card-detail")
+            desc.set_line_wrap(True)
+            desc.set_margin_start(24)
+            frame.pack_start(desc, False, False, 0)
+            box.pack_start(frame, False, False, 0)
+            return frame
 
-        dualboot_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        dualboot_card.get_style_context().add_class("card")
+        self.type_full_rb = Gtk.RadioButton.new_with_label(None, tr("part_type_full"))
+        card(self.type_full_rb, "part_type_full_desc")
+
         self.type_dualboot_rb = Gtk.RadioButton.new_with_label_from_widget(
             self.type_full_rb, tr("part_type_dualboot"))
-        self.type_dualboot_rb.connect("toggled", self.on_type_toggle, "dualboot")
-        dualboot_card.pack_start(self.type_dualboot_rb, False, False, 0)
-        dualboot_desc = Gtk.Label(label=tr("part_type_dualboot_desc"), xalign=0)
-        dualboot_desc.get_style_context().add_class("card-detail")
-        dualboot_desc.set_line_wrap(True)
-        dualboot_desc.set_margin_start(24)
-        dualboot_card.pack_start(dualboot_desc, False, False, 0)
+        dualboot_card = card(self.type_dualboot_rb, "part_type_dualboot_desc")
         self.dualboot_info = Gtk.Label(label="", xalign=0)
         self.dualboot_info.get_style_context().add_class("info-text")
+        self.dualboot_info.set_line_wrap(True)
         self.dualboot_info.set_margin_start(24)
         dualboot_card.pack_start(self.dualboot_info, False, False, 0)
         self.dualboot_slider_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -1487,29 +1890,40 @@ class InstallerApp(Gtk.Application):
         slider_label.get_style_context().add_class("card-detail")
         self.dualboot_slider_box.pack_start(slider_label, False, False, 0)
         self.dualboot_scale = Gtk.Scale.new_with_range(
-            Gtk.Orientation.HORIZONTAL, 20000, 100000, 1000)
+            Gtk.Orientation.HORIZONTAL, MIN_WINLUX_MIB, MIN_WINLUX_MIB + 1024, 1024)
         self.dualboot_scale.set_draw_value(True)
         self.dualboot_scale.set_value_pos(Gtk.PositionType.RIGHT)
         self.dualboot_scale.connect("format-value", self._format_scale_mb)
         self.dualboot_scale.connect("value-changed", self._on_dualboot_scale)
         self.dualboot_slider_box.pack_start(self.dualboot_scale, False, False, 0)
+        self.dualboot_keep_label = Gtk.Label(label="", xalign=0)
+        self.dualboot_keep_label.get_style_context().add_class("card-detail")
+        self.dualboot_slider_box.pack_start(self.dualboot_keep_label, False, False, 0)
         self.dualboot_slider_box.set_no_show_all(True)
         dualboot_card.pack_start(self.dualboot_slider_box, False, False, 0)
-        box.pack_start(dualboot_card, False, False, 0)
 
-        manual_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
-        manual_card.get_style_context().add_class("card")
         self.type_manual_rb = Gtk.RadioButton.new_with_label_from_widget(
             self.type_full_rb, tr("part_type_manual"))
+        manual_card = card(self.type_manual_rb, "part_type_manual_desc")
+        self.manual_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+        self.manual_box.set_margin_start(24)
+        self.manual_box.set_margin_top(8)
+        manual_label = Gtk.Label(label=tr("part_manual_root"), xalign=0)
+        manual_label.get_style_context().add_class("card-detail")
+        self.manual_box.pack_start(manual_label, False, False, 0)
+        self.manual_combo = Gtk.ComboBoxText()
+        self.manual_combo.connect("changed", self.on_manual_root_changed)
+        self.manual_box.pack_start(self.manual_combo, False, False, 0)
+        self.manual_info = Gtk.Label(label="", xalign=0)
+        self.manual_info.get_style_context().add_class("warning-text")
+        self.manual_info.set_line_wrap(True)
+        self.manual_box.pack_start(self.manual_info, False, False, 0)
+        self.manual_box.set_no_show_all(True)
+        manual_card.pack_start(self.manual_box, False, False, 0)
+
+        self.type_full_rb.connect("toggled", self.on_type_toggle, "full")
+        self.type_dualboot_rb.connect("toggled", self.on_type_toggle, "dualboot")
         self.type_manual_rb.connect("toggled", self.on_type_toggle, "manual")
-        manual_card.pack_start(self.type_manual_rb, False, False, 0)
-        manual_desc = Gtk.Label(label=tr("part_type_manual_desc"), xalign=0)
-        manual_desc.get_style_context().add_class("card-detail")
-        manual_desc.set_line_wrap(True)
-        manual_desc.set_margin_start(24)
-        manual_card.pack_start(manual_desc, False, False, 0)
-        self.type_manual_rb.set_sensitive(False)
-        box.pack_start(manual_card, False, False, 0)
 
         hw_frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         hw_frame.set_margin_top(12)
@@ -1526,10 +1940,11 @@ class InstallerApp(Gtk.Application):
         self.pages.add_named(scroll, "page_3")
 
     def _format_scale_mb(self, scale, value):
-        return human_size(value * 1024 * 1024)
+        return human_size(value * MIB)
 
     def _on_dualboot_scale(self, scale):
         self.dualboot_alloc_mb = int(scale.get_value())
+        self.refresh_layout_preview()
 
     def refresh_partition_page(self):
         for child in self.part_disk_list.get_children():
@@ -1538,80 +1953,153 @@ class InstallerApp(Gtk.Application):
             lbl = Gtk.Label(label=tr("part_no_disk"))
             lbl.get_style_context().add_class("card-detail")
             self.part_disk_list.pack_start(lbl, False, False, 0)
-
-        self.disk_group = None
+        group = None
+        chosen = (self.config.get("disk") or {}).get("path")
         for disk in self.disks:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
             row.get_style_context().add_class("card")
-            rb = Gtk.RadioButton.new_with_label_from_widget(
-                self.disk_group,
-                f"{disk['path']}  —  {disk['model']}"
-            )
-            if self.disk_group is None:
-                self.disk_group = rb
-            rb.connect("toggled", self.on_disk_toggle, disk)
+            rb = Gtk.RadioButton.new_with_label_from_widget(group, f"{disk['path']}  —  {disk['model']}")
+            group = group or rb
             row.pack_start(rb, True, True, 0)
             details = Gtk.Label(label=f"{disk['type']}  ·  {human_size(disk['size'])}")
             details.get_style_context().add_class("card-detail")
             row.pack_end(details, False, False, 8)
             self.part_disk_list.pack_start(row, False, False, 0)
-
+            if disk["path"] == chosen:
+                rb.set_active(True)
+            rb.connect("toggled", self.on_disk_toggle, disk)
         lines = []
         if self.hw_info:
             lines.append(f"CPU : {self.hw_info.get('cpu', '?')}")
             lines.append(f"RAM : {self.hw_info.get('ram', '?')}")
             gpus = self.hw_info.get("gpu", [])
-            if gpus:
-                for i, g in enumerate(gpus):
-                    lines.append(f"GPU {i}: {g}")
-            else:
-                lines.append("GPU : non détecté")
+            for i, g in enumerate(gpus):
+                lines.append(f"GPU {i}: {g}")
+            if not gpus:
+                lines.append("GPU : ?")
             mode = "UEFI" if self.hw_info.get("uefi") else "Legacy BIOS"
             sb = " + Secure Boot" if self.hw_info.get("secureboot") else ""
-            lines.append(f"Démarrage : {mode}{sb}")
+            lines.append(f"{tr('summary_boot')} : {mode}{sb}")
         self.hw_label.set_text("\n".join(lines) if lines else tr("hw_detecting"))
         self.part_disk_list.show_all()
+        if self.disks:
+            self.select_disk(next((d for d in self.disks if d["path"] == chosen), self.disks[0]))
         self.validate_step()
 
     def on_disk_toggle(self, btn, disk):
         if btn.get_active():
-            self.config["disk"] = disk
-            parts = self.disk_partitions.get(disk["path"], [])
-            self.partition_bar.set_data(disk["size"], parts)
-            os_list = self.detected_os.get(disk["path"], [])
-            if os_list:
-                names = ", ".join(o["os_name"] for o in os_list)
-                self.dualboot_info.set_text(
-                    tr("part_windows_found", partition=os_list[0]["partition"]))
-                self.type_dualboot_rb.set_sensitive(True)
-                max_mb = int(disk["size"] / (1024 * 1024)) - 2048
-                min_mb = 20000
-                if max_mb > min_mb:
-                    self.dualboot_scale.set_range(min_mb, max_mb)
-                    self.dualboot_scale.set_value(max_mb // 2)
+            self.select_disk(disk)
+
+    def select_disk(self, disk):
+        self.config["disk"] = disk
+        parts = self.disk_partitions.get(disk["path"], [])
+        self.partition_bar.set_data(disk["size"], parts)
+        self.dualboot_target = None
+        reason = None
+        os_list = self.detected_os.get(disk["path"], [])
+        win = os_list[0] if os_list else None
+        if not win:
+            reason = tr("part_dualboot_no_os")
+        elif not self.hw_info.get("uefi") or not find_esp(parts):
+            reason = tr("part_dualboot_need_uefi")
+        elif win["bitlocker"]:
+            reason = tr("part_dualboot_bitlocker", partition=win["partition"])
+        elif not shutil.which("ntfsresize"):
+            reason = tr("part_dualboot_tools")
+        else:
+            boot_mib = BOOT_PART_MIB if self.config["luks_enabled"] else 0
+            free = win["size"] - (win["min_size"] or win["size"]) - WINDOWS_MARGIN
+            max_mib = free // MIB
+            if win["min_size"] is None or max_mib < MIN_WINLUX_MIB + boot_mib:
+                reason = tr("part_dualboot_no_room")
             else:
-                self.dualboot_info.set_text(tr("part_dualboot_no_os"))
-                self.type_dualboot_rb.set_sensitive(False)
-                if self.config["install_type"] == "dualboot":
-                    self.type_full_rb.set_active(True)
-                    self.config["install_type"] = "full"
-            if self.config["install_type"] == "full":
-                self.part_erase_warn.set_text(tr("part_erase_warn"))
-            self.validate_step()
+                self.dualboot_target = win
+                low = MIN_WINLUX_MIB + boot_mib
+                previous = self.dualboot_alloc_mb
+                self.dualboot_scale.set_range(low, max_mib)
+                self.dualboot_scale.set_value(previous if low <= previous <= max_mib else max(low, max_mib // 2))
+                self.dualboot_info.set_text(tr("part_windows_found", partition=win["partition"]))
+        if reason:
+            self.dualboot_info.set_text(reason)
+        self.type_dualboot_rb.set_sensitive(self.dualboot_target is not None)
+        if self.dualboot_target is None and self.config["install_type"] == "dualboot":
+            self.type_full_rb.set_active(True)
+
+        self.manual_combo.remove_all()
+        self.manual_candidates = [p for p in parts
+                                  if p["parttype"] not in (ESP_PARTTYPE, BIOS_PARTTYPE)
+                                  and p["size"] >= MANUAL_MIN_SIZE and not p["mountpoint"]]
+        for p in self.manual_candidates:
+            desc = " · ".join(x for x in (p["fstype"] or "?", p["label"], human_size(p["size"])) if x)
+            self.manual_combo.append(p["path"], f"{p['path']}  ({desc})")
+        self.config["manual_root"] = None
+        if self.manual_candidates:
+            self.manual_combo.set_active(0)
+        if not self.manual_candidates:
+            self.manual_info.set_text(tr("part_manual_none"))
+        elif self.hw_info.get("uefi") and not find_esp(parts):
+            self.manual_info.set_text(tr("part_manual_need_esp"))
+        self.refresh_layout_preview()
+        self.validate_step()
+
+    def on_manual_root_changed(self, combo):
+        self.config["manual_root"] = combo.get_active_id()
+        root = next((p for p in getattr(self, "manual_candidates", [])
+                     if p["path"] == self.config["manual_root"]), None)
+        if root:
+            self.manual_info.set_text(tr("part_manual_erase", partition=root["path"]))
+        self.refresh_layout_preview()
+        self.validate_step()
+
+    def manual_ready(self):
+        disk = self.config.get("disk")
+        if not disk or not self.config.get("manual_root"):
+            return False
+        return not self.hw_info.get("uefi") or find_esp(self.disk_partitions.get(disk["path"], [])) is not None
+
+    def refresh_layout_preview(self):
+        disk = self.config.get("disk")
+        if not disk:
+            return
+        itype = self.config["install_type"]
+        dualboot = None
+        if itype == "dualboot" and self.dualboot_target:
+            alloc = self.dualboot_alloc_mb * MIB
+            new_size = (self.dualboot_target["size"] - alloc) // MIB * MIB
+            dualboot = {"partition": self.dualboot_target["partition"], "new_size": new_size, "alloc": alloc}
+            self.dualboot_keep_label.set_text(tr("part_windows_keep", size=human_size(new_size)))
+        segments = planned_layout(disk["size"], self.disk_partitions.get(disk["path"], []), itype,
+                                  self.config["luks_enabled"], dualboot, self.config.get("manual_root"))
+        self.partition_bar_after.set_data(disk["size"], segments)
+        if itype == "full":
+            self.part_erase_warn.set_text(tr("part_erase_warn"))
+        elif itype == "manual" and self.config.get("manual_root"):
+            self.part_erase_warn.set_text(tr("part_manual_erase", partition=self.config["manual_root"]))
+        else:
+            self.part_erase_warn.set_text("")
+
+    @staticmethod
+    def _reveal(box, visible):
+        # show_all() skips widgets marked no_show_all, which keeps them hidden on page build.
+        if visible:
+            box.set_no_show_all(False)
+            box.show_all()
+        else:
+            box.hide()
+            box.set_no_show_all(True)
 
     def on_type_toggle(self, btn, install_type):
-        if btn.get_active():
-            self.config["install_type"] = install_type
-            if install_type == "full":
-                self.part_erase_warn.set_text(tr("part_erase_warn"))
-                self.dualboot_slider_box.set_visible(False)
-            elif install_type == "dualboot":
-                self.part_erase_warn.set_text("")
-                self.dualboot_slider_box.set_visible(True)
-                self.dualboot_slider_box.show_all()
-            elif install_type == "manual":
-                self.part_erase_warn.set_text("")
-                self.dualboot_slider_box.set_visible(False)
+        if not btn.get_active():
+            return
+        self.config["install_type"] = install_type
+        self._reveal(self.dualboot_slider_box, install_type == "dualboot")
+        if install_type == "dualboot":
+            self.dualboot_alloc_mb = int(self.dualboot_scale.get_value())
+        self._reveal(self.manual_box, install_type == "manual")
+        if install_type == "manual" and self.config["luks_enabled"]:
+            self.luks_check.set_active(False)
+        self.refresh_layout_preview()
+        self.validate_step()
 
     # ── Page 4 : Chiffrement ─────────────────────────────────────
 
@@ -1633,10 +2121,22 @@ class InstallerApp(Gtk.Application):
         info_box.pack_start(info_text, False, False, 0)
         box.pack_start(info_box, False, False, 0)
 
+        boot_note = Gtk.Label(label=tr("encrypt_boot_note"), xalign=0)
+        boot_note.get_style_context().add_class("info-text")
+        boot_note.set_line_wrap(True)
+        info_box.pack_start(boot_note, False, False, 0)
+
         self.luks_check = Gtk.CheckButton(label=tr("encrypt_enable"))
         self.luks_check.set_margin_top(16)
         self.luks_check.connect("toggled", self.on_luks_toggle)
         box.pack_start(self.luks_check, False, False, 0)
+        self.luks_unavailable = Gtk.Label(label="", xalign=0)
+        self.luks_unavailable.get_style_context().add_class("warning-text")
+        self.luks_unavailable.set_line_wrap(True)
+        box.pack_start(self.luks_unavailable, False, False, 0)
+        self.luks_keyboard_note = Gtk.Label(label="", xalign=0)
+        self.luks_keyboard_note.get_style_context().add_class("info-text")
+        self.luks_keyboard_note.set_line_wrap(True)
 
         self.luks_fields_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.luks_fields_box.set_margin_top(12)
@@ -1669,6 +2169,7 @@ class InstallerApp(Gtk.Application):
         self.luks_error_label = Gtk.Label(label="", xalign=0)
         self.luks_error_label.get_style_context().add_class("warning-text")
         self.luks_fields_box.pack_start(self.luks_error_label, False, False, 0)
+        self.luks_fields_box.pack_start(self.luks_keyboard_note, False, False, 0)
 
         self.luks_fields_box.set_sensitive(False)
         box.pack_start(self.luks_fields_box, False, False, 0)
@@ -1681,6 +2182,23 @@ class InstallerApp(Gtk.Application):
 
         self.pages.add_named(box, "page_4")
 
+    def refresh_encryption_page(self):
+        if self.config["install_type"] == "manual":
+            reason = tr("encrypt_manual")
+        elif not self.luks_supported:
+            reason = tr("encrypt_unsupported")
+        else:
+            reason = ""
+        if reason and self.luks_check.get_active():
+            self.luks_check.set_active(False)
+        self.luks_check.set_sensitive(not reason)
+        self.luks_unavailable.set_text(reason)
+        layout = dict(KEYBOARDS).get(self.config["keyboard"], self.config["keyboard"])
+        if keymap_tools_available():
+            self.luks_keyboard_note.set_text(tr("encrypt_keyboard", layout=layout))
+        else:
+            self.luks_keyboard_note.set_text(tr("encrypt_keyboard_us"))
+
     def on_luks_toggle(self, btn):
         enabled = btn.get_active()
         self.config["luks_enabled"] = enabled
@@ -1691,6 +2209,12 @@ class InstallerApp(Gtk.Application):
             self.luks_confirm_entry.set_text("")
             self.luks_error_label.set_text("")
             self.luks_strength_label.set_text("")
+        disk = self.config.get("disk")
+        if disk and self.config["install_type"] == "dualboot":
+            # The unencrypted /boot partition comes out of the space given to Winlux.
+            self.select_disk(disk)
+            self.type_dualboot_rb.set_active(self.dualboot_target is not None)
+        self.refresh_layout_preview()
         self.validate_step()
 
     def on_luks_pp_changed(self, entry):
@@ -1714,7 +2238,9 @@ class InstallerApp(Gtk.Application):
         else:
             self.luks_strength_label.set_text("")
 
-        if pp_confirm and pp != pp_confirm:
+        if not passphrase_is_ascii(pp):
+            self.luks_error_label.set_text(tr("encrypt_ascii"))
+        elif pp_confirm and pp != pp_confirm:
             self.luks_error_label.set_text(tr("encrypt_mismatch"))
         else:
             self.luks_error_label.set_text("")
@@ -1734,11 +2260,11 @@ class InstallerApp(Gtk.Application):
         grid = Gtk.Grid(column_spacing=16, row_spacing=12)
         grid.set_margin_top(8)
         fields = [
-            ("Nom de l'ordinateur :", "hostname", "winlux-desktop", False),
-            ("Nom complet :", "fullname", "Utilisateur Winlux", False),
-            ("Nom d'utilisateur :", "username", "winlux", False),
-            ("Mot de passe :", "password", "", True),
-            ("Confirmer le mot de passe :", "password_confirm", "", True),
+            (tr("field_hostname"), "hostname", "winlux-desktop", False),
+            (tr("field_fullname"), "fullname", "Winlux", False),
+            (tr("field_username"), "username", "winlux", False),
+            (tr("field_password"), "password", "", True),
+            (tr("field_password_confirm"), "password_confirm", "", True),
         ]
         self.account_entries = {}
         for i, (label_text, key, placeholder, is_password) in enumerate(fields):
@@ -1752,9 +2278,9 @@ class InstallerApp(Gtk.Application):
             if is_password:
                 entry.set_visibility(False)
                 entry.set_input_purpose(Gtk.InputPurpose.PASSWORD)
-            entry.connect("changed", self.on_account_changed, key)
             if key == "hostname":
-                entry.set_text("winlux-desktop")
+                entry.set_text(self.config["hostname"])
+            entry.connect("changed", self.on_account_changed, key)
             grid.attach(entry, 1, i, 1, 1)
             self.account_entries[key] = entry
         box.pack_start(grid, False, False, 0)
@@ -1809,6 +2335,16 @@ class InstallerApp(Gtk.Application):
         self.summary_box.pack_start(self.summary_warn, False, False, 0)
         self.pages.add_named(self.summary_box, "page_6")
 
+    def summary_partition_lines(self):
+        itype = self.config["install_type"]
+        if itype == "dualboot" and self.dualboot_target:
+            keep = (self.dualboot_target["size"] - self.dualboot_alloc_mb * MIB) // MIB * MIB
+            return [f"  {tr('part_windows_keep', size=human_size(keep))}",
+                    f"  Winlux : {human_size(self.dualboot_alloc_mb * MIB)}"]
+        if itype == "manual" and self.config.get("manual_root"):
+            return [f"  {tr('part_manual_erase', partition=self.config['manual_root'])}"]
+        return []
+
     def refresh_summary(self):
         disk = self.config.get("disk") or {}
         lang = dict((l, n) for l, n, _ in LANGUAGES).get(self.config["language"], self.config["language"])
@@ -1821,6 +2357,7 @@ class InstallerApp(Gtk.Application):
             f"{tr('summary_keyboard')} : {self.config['keyboard']}",
             f"{tr('summary_type')} : {type_labels.get(itype, itype)}",
             f"{tr('summary_disk')} : {disk.get('path', '?')}  ({disk.get('model', '?')}, {human_size(disk.get('size'))})",
+            *self.summary_partition_lines(),
             f"{tr('summary_encryption')} : {tr('summary_yes') if self.config['luks_enabled'] else tr('summary_no')}",
             f"{tr('summary_hostname')} : {self.config['hostname']}",
             f"{tr('summary_user')} : {self.config['fullname']} ({self.config['username']})",
@@ -1941,450 +2478,330 @@ class InstallerApp(Gtk.Application):
         device = disk["path"]
         iso_path = os.environ.get("WINLUX_ISO", "")
         if not iso_path:
-            candidates = [
-                os.path.join(ROOT_DIR, "build", "winlux-live-test.iso"),
-                "/run/winlux/live/media",
-            ]
-            for c in candidates:
-                if os.path.exists(c):
-                    iso_path = c
-                    break
-        if not iso_path or not os.path.exists(iso_path):
-            live_squashfs = "/run/winlux/live/lower"
-            if os.path.isdir(live_squashfs):
-                self.install_from_live(device, live_squashfs)
-                return
+            candidate = os.path.join(ROOT_DIR, "build", "winlux-live-test.iso")
+            if os.path.isfile(candidate):
+                iso_path = candidate
+        live_root = "/run/winlux/live/lower"
+        if not (iso_path and os.path.isfile(iso_path)) and not os.path.isdir(live_root):
             self.install_error("ISO source introuvable. Définissez WINLUX_ISO ou démarrez depuis le Live USB.")
             return
-        self.install_from_iso(device, iso_path)
-
-    def install_from_iso(self, device, iso_path):
-        self.set_progress(0.02, tr("progress_check_disk", device=device))
-        try:
-            result = subprocess.run(
-                ["sh", INSTALL_SH, device, "--iso", iso_path, "--check-only"],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.returncode != 0:
-                self.install_error(f"Vérification échouée :\n{result.stderr.strip()}")
-                return
-        except Exception as e:
-            self.install_error(f"Erreur de vérification : {e}")
-            return
-        self.set_progress(0.05, tr("progress_partitioning"))
-        try:
-            self.run_partitioning(device)
-        except Exception as e:
-            self.install_error(f"Erreur de partitionnement : {e}")
-            return
-        self.set_progress(0.10, tr("progress_formatting"))
-        try:
-            esp, root_part = self.format_partitions(device)
-        except Exception as e:
-            self.install_error(f"Erreur de formatage : {e}")
-            return
-        self.set_progress(0.15, tr("progress_extracting"))
         work = f"/tmp/winlux-gui-install.{os.getpid()}"
-        os.makedirs(f"{work}/target", exist_ok=True)
-        os.makedirs(f"{work}/source", exist_ok=True)
+        target = f"{work}/target"
+        os.makedirs(target, exist_ok=True)
+        self._mounts = []
+        self._luks_open = False
         try:
-            subprocess.run(["mount", root_part, f"{work}/target"], check=True, timeout=30)
-        except Exception as e:
-            self.install_error(f"Montage échoué : {e}")
+            if iso_path and os.path.isfile(iso_path):
+                self.set_progress(0.02, tr("progress_check_disk", device=device))
+                if self.config["install_type"] == "full":
+                    result = subprocess.run(
+                        ["sh", INSTALL_SH, device, "--iso", iso_path, "--check-only"],
+                        capture_output=True, text=True, timeout=600
+                    )
+                    if result.returncode != 0:
+                        raise RuntimeError(f"Vérification échouée :\n{result.stderr.strip()}")
+                self.extract_boot_files(iso_path, work)
+            else:
+                self.copy_live_boot_files(work)
+            if self.config["luks_enabled"] and not initramfs_supports_luks(f"{work}/initramfs.gz"):
+                raise RuntimeError(tr("error_luks_initramfs"))
+            self.set_progress(0.05, tr("progress_partitioning"))
+            layout = self.prepare_disk(device)
+            self.set_progress(0.12, tr("progress_formatting"))
+            self.format_layout(layout)
+            self.mount_target(layout, target)
+            if iso_path and os.path.isfile(iso_path):
+                split_root = self.copy_from_iso(iso_path, work)
+            else:
+                self.set_progress(0.20, tr("progress_copying"))
+                subprocess.run(["cp", "-a", f"{live_root}/.", f"{target}/"], check=True, timeout=1800)
+                split_root = True
+            self.set_progress(0.70, tr("progress_kernel"))
+            os.makedirs(f"{target}/boot", exist_ok=True)
+            shutil.copyfile(f"{work}/vmlinuz", f"{target}/boot/vmlinuz")
+            shutil.copyfile(f"{work}/initramfs.gz", f"{target}/boot/winlux-initramfs.cpio.gz")
+            if self.config["luks_enabled"]:
+                self.add_boot_keymap(f"{target}/boot/winlux-initramfs.cpio.gz")
+            self.set_progress(0.75, tr("progress_grub"))
+            self.install_grub(device, layout, target, split_root)
+            self.set_progress(0.85, tr("progress_account"))
+            self.configure_user(target)
+            self.set_progress(0.90, tr("progress_firstboot"))
+            self.configure_first_boot(target)
+            self.set_progress(0.95, tr("progress_sync"))
+            subprocess.run(["sync"], timeout=60)
+        except subprocess.CalledProcessError as e:
+            self.release_target()
+            self.install_error(f"{tr('error_title')} : {' '.join(map(str, e.cmd[:2]))} ({e.returncode})")
             return
-        try:
-            self.extract_and_copy(iso_path, work, device, esp, root_part)
         except Exception as e:
-            self.install_error(f"Erreur d'installation : {e}")
-            subprocess.run(["umount", f"{work}/target"], timeout=10)
+            self.release_target()
+            self.install_error(str(e))
             return
-        subprocess.run(["umount", f"{work}/target"], timeout=10)
-        self.cleanup_luks()
+        self.release_target()
         self.post_install()
 
-    def install_from_live(self, device, live_root):
-        self.set_progress(0.05, tr("progress_partitioning"))
-        try:
-            self.run_partitioning(device)
-        except Exception as e:
-            self.install_error(f"Erreur de partitionnement : {e}")
-            return
-        self.set_progress(0.10, tr("progress_formatting"))
-        try:
-            esp, root_part = self.format_partitions(device)
-        except Exception as e:
-            self.install_error(f"Erreur de formatage : {e}")
-            return
-        self.set_progress(0.15, "Montage de la partition cible...")
-        work = f"/tmp/winlux-gui-install.{os.getpid()}"
-        os.makedirs(f"{work}/target", exist_ok=True)
-        try:
-            subprocess.run(["mount", root_part, f"{work}/target"], check=True, timeout=30)
-        except Exception as e:
-            self.install_error(f"Montage échoué : {e}")
-            return
-        self.set_progress(0.20, tr("progress_copying"))
-        try:
-            subprocess.run(
-                ["cp", "-a", f"{live_root}/.", f"{work}/target/"],
-                check=True, timeout=1800
-            )
-        except Exception as e:
-            self.install_error(f"Copie échouée : {e}")
-            subprocess.run(["umount", f"{work}/target"], timeout=10)
-            return
-        self.set_progress(0.70, tr("progress_kernel"))
-        boot_dir = f"{work}/target/boot"
-        os.makedirs(boot_dir, exist_ok=True)
-        for src in ["/run/winlux/live/media/boot/vmlinuz"]:
-            if os.path.exists(src):
-                subprocess.run(["cp", src, f"{boot_dir}/vmlinuz"], timeout=30)
-                break
-        for src in ["/run/winlux/live/media/boot/winlux-initramfs.cpio.gz"]:
-            if os.path.exists(src):
-                subprocess.run(["cp", src, f"{boot_dir}/winlux-initramfs.cpio.gz"], timeout=30)
-                break
-        self.set_progress(0.75, tr("progress_grub"))
-        try:
-            self.install_grub(device, esp, root_part, work)
-        except Exception as e:
-            self.install_error(f"Erreur GRUB : {e}")
-            subprocess.run(["umount", f"{work}/target"], timeout=10)
-            return
-        self.set_progress(0.85, tr("progress_account"))
-        try:
-            self.configure_user(f"{work}/target")
-        except Exception as e:
-            self.install_error(f"Erreur configuration utilisateur : {e}")
-        self.set_progress(0.90, tr("progress_firstboot"))
-        try:
-            self.configure_first_boot(f"{work}/target")
-        except Exception as e:
-            self.set_progress(0.90, f"Avertissement premier démarrage : {e}")
-        self.set_progress(0.95, tr("progress_sync"))
-        subprocess.run(["sync"], timeout=30)
-        subprocess.run(["umount", f"{work}/target"], timeout=30)
-        self.cleanup_luks()
-        self.post_install()
+    def extract_boot_files(self, iso_path, work):
+        for inside, outside in (("/boot/vmlinuz", "vmlinuz"),
+                                ("/boot/winlux-initramfs.cpio.gz", "initramfs.gz")):
+            subprocess.run(["xorriso", "-osirrox", "on", "-indev", iso_path,
+                            "-extract", inside, f"{work}/{outside}"],
+                           check=True, capture_output=True, timeout=60)
 
-    def run_partitioning(self, device):
-        if self.config["install_type"] == "dualboot":
-            self.run_dualboot_partitioning(device)
-            return
-        cmds = [
-            ["parted", "-s", device, "--", "mklabel", "gpt"],
-            ["parted", "-s", device, "--", "mkpart", "BIOS", "1MiB", "3MiB", "set", "1", "bios_grub", "on"],
-            ["parted", "-s", device, "--", "mkpart", "ESP", "fat32", "3MiB", "515MiB", "set", "2", "esp", "on"],
-            ["parted", "-s", device, "--", "mkpart", "WINLUX_ROOT", "ext4", "515MiB", "100%"],
-            ["partprobe", device],
-        ]
-        for cmd in cmds:
-            subprocess.run(cmd, check=True, timeout=30)
-        time.sleep(1)
+    def copy_live_boot_files(self, work):
+        media = "/run/winlux/live/media/boot"
+        for inside, outside in (("vmlinuz", "vmlinuz"), ("winlux-initramfs.cpio.gz", "initramfs.gz")):
+            if not os.path.isfile(f"{media}/{inside}"):
+                raise RuntimeError(f"Fichier de démarrage absent du média : {inside}")
+            shutil.copyfile(f"{media}/{inside}", f"{work}/{outside}")
 
-    def run_dualboot_partitioning(self, device):
-        alloc_mb = self.dualboot_alloc_mb
-        if alloc_mb < 20000:
-            alloc_mb = 20000
-        os_list = self.detected_os.get(device, [])
-        if not os_list:
-            raise RuntimeError("Pas de système existant trouvé pour dual-boot")
-        target_part = os_list[0]["partition"]
-        try:
-            subprocess.run(
-                ["ntfsresize", "--force", "--no-action",
-                 "--size", f"{int((os_list[0]['size'] / (1024*1024)) - alloc_mb)}M",
-                 target_part],
-                check=True, capture_output=True, timeout=60
-            )
-        except Exception:
-            pass
-        new_size_mb = int(os_list[0]["size"] / (1024 * 1024)) - alloc_mb
-        if new_size_mb < 10000:
-            raise RuntimeError("Pas assez d'espace pour redimensionner la partition existante")
-        subprocess.run(
-            ["ntfsresize", "--force",
-             "--size", f"{new_size_mb}M", target_part],
-            check=True, timeout=600
-        )
-        part_num = re.search(r'(\d+)$', target_part)
-        if not part_num:
-            raise RuntimeError("Impossible de déterminer le numéro de partition")
-        pnum = part_num.group(1)
-        subprocess.run(
-            ["parted", "-s", device, "--", "resizepart", pnum, f"{new_size_mb}MiB"],
-            check=True, timeout=30
-        )
-        end_pos = f"{new_size_mb}MiB"
-        esp_end = f"{new_size_mb + 512}MiB"
-        cmds = [
-            ["parted", "-s", device, "--", "mkpart", "ESP", "fat32",
-             end_pos, esp_end, "set", str(int(pnum)+1), "esp", "on"],
-            ["parted", "-s", device, "--", "mkpart", "WINLUX_ROOT", "ext4",
-             esp_end, "100%"],
-            ["partprobe", device],
-        ]
-        for cmd in cmds:
-            subprocess.run(cmd, check=True, timeout=30)
-        time.sleep(1)
-
-    def format_partitions(self, device):
-        esp = None
-        root_part = None
-        if self.config["install_type"] == "dualboot":
-            os_list = self.detected_os.get(device, [])
-            if os_list:
-                part_num = re.search(r'(\d+)$', os_list[0]["partition"])
-                if part_num:
-                    pnum = int(part_num.group(1))
-                    esp_num = pnum + 1
-                    root_num = pnum + 2
-                    for suffix in [str(esp_num), f"p{esp_num}"]:
-                        candidate = f"{device}{suffix}"
-                        if os.path.exists(candidate):
-                            esp = candidate
-                            break
-                    for suffix in [str(root_num), f"p{root_num}"]:
-                        candidate = f"{device}{suffix}"
-                        if os.path.exists(candidate):
-                            root_part = candidate
-                            break
-        else:
-            for attempt in range(20):
-                for suffix in ["2", "p2"]:
-                    candidate = f"{device}{suffix}"
-                    if os.path.exists(candidate):
-                        esp = candidate
-                        break
-                for suffix in ["3", "p3"]:
-                    candidate = f"{device}{suffix}"
-                    if os.path.exists(candidate):
-                        root_part = candidate
-                        break
-                if esp and root_part:
-                    break
-                time.sleep(0.5)
-
-        if not esp or not root_part:
-            raise RuntimeError("Partitions introuvables après partitionnement")
-
-        subprocess.run(["mkfs.fat", "-F32", esp], check=True, timeout=30)
-
-        if self.config["luks_enabled"]:
-            self.set_progress(0.12, tr("progress_luks_setup"))
-            raw_part = root_part
-            passphrase = self.config["luks_passphrase"]
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.key', delete=False) as kf:
-                kf.write(passphrase)
-                keyfile = kf.name
-            try:
-                subprocess.run(
-                    ["cryptsetup", "luksFormat", "--batch-mode",
-                     "--type", "luks2",
-                     "--key-file", keyfile,
-                     raw_part],
-                    check=True, timeout=120
-                )
-                subprocess.run(
-                    ["cryptsetup", "luksOpen",
-                     "--key-file", keyfile,
-                     raw_part, "winlux_crypt"],
-                    check=True, timeout=30
-                )
-            finally:
-                os.unlink(keyfile)
-            root_part = "/dev/mapper/winlux_crypt"
-            self._luks_raw_part = raw_part
-
-        subprocess.run(["mkfs.ext4", "-F", "-L", "WINLUX_ROOT", root_part],
-                       check=True, timeout=120)
-        return esp, root_part
-
-    def cleanup_luks(self):
-        if self.config["luks_enabled"]:
-            try:
-                subprocess.run(["cryptsetup", "luksClose", "winlux_crypt"],
-                               timeout=30)
-            except Exception:
-                pass
-
-    def extract_and_copy(self, iso_path, work, device, esp, root_part):
-        self.set_progress(0.20, "Extraction du noyau depuis l'ISO...")
-        subprocess.run(
-            ["xorriso", "-osirrox", "on", "-indev", iso_path,
-             "-extract", "/boot/vmlinuz", f"{work}/vmlinuz"],
-            check=True, capture_output=True, timeout=60
-        )
-        subprocess.run(
-            ["xorriso", "-osirrox", "on", "-indev", iso_path,
-             "-extract", "/boot/winlux-initramfs.cpio.gz", f"{work}/initramfs.gz"],
-            check=True, capture_output=True, timeout=60
-        )
-        self.set_progress(0.25, "Extraction du système de fichiers...")
-        root_extent_out = subprocess.run(
+    def copy_from_iso(self, iso_path, work):
+        """Copy the system root out of the ISO; True when the ISO uses a separate squashfs root."""
+        self.set_progress(0.25, tr("progress_extracting"))
+        report = subprocess.run(
             ["xorriso", "-indev", iso_path,
              "-find", "/boot/winlux-rootfs.squashfs", "-exec", "report_lba", "--"],
             capture_output=True, text=True, timeout=30
         )
-        split_root = False
-        root_extent = ""
-        for line in root_extent_out.stdout.splitlines():
+        extent = ""
+        for line in report.stdout.splitlines():
             if line.startswith("File data lba:"):
-                parts = line.split(",")
-                if len(parts) >= 2:
-                    root_extent = parts[1].strip()
-                    break
-        if root_extent and root_extent.isdigit():
-            self.set_progress(0.30, "Décompression du squashfs...")
-            subprocess.run(
-                ["unsquashfs", "-no-progress", "-processors", "2",
-                 "-offset", str(int(root_extent) * 2048),
-                 "-d", f"{work}/source", iso_path],
-                check=True, timeout=600
-            )
-            split_root = True
+                fields = line.split(",")
+                if len(fields) >= 2:
+                    extent = fields[1].strip()
+                break
+        target = f"{work}/target"
+        if extent.isdigit():
+            # unsquashfs writes straight into the mounted target, no copy in /tmp.
+            subprocess.run(["unsquashfs", "-no-progress", "-processors", "2", "-force",
+                            "-offset", str(int(extent) * 2048), "-d", target, iso_path],
+                           check=True, timeout=1800)
+            return True
+        subprocess.run(["bsdtar", "-xf", f"{work}/initramfs.gz", "-C", target, "--no-same-owner"],
+                       check=True, timeout=600)
+        return False
+
+    # ── Partitionnement ─────────────────────────────────────────
+
+    def prepare_disk(self, device):
+        """Create or pick the partitions; returns the layout used by later steps."""
+        install_type = self.config["install_type"]
+        luks = self.config["luks_enabled"]
+        if install_type == "full":
+            return self.partition_full_disk(device, luks)
+        if install_type == "dualboot":
+            return self.partition_dualboot(device, luks)
+        root = self.config.get("manual_root")
+        if not root:
+            raise RuntimeError("Aucune partition choisie pour Winlux.")
+        esp = find_esp(self.disk_partitions.get(device, []))
+        return {"esp": esp["path"] if esp else None, "format_esp": False, "boot": None,
+                "root": root, "bios": not self.hw_info.get("uefi"), "own_esp": False}
+
+    def partition_full_disk(self, device, luks):
+        subprocess.run(["wipefs", "-a", device], check=True, timeout=60)
+        cmds = [
+            ["parted", "-s", device, "--", "mklabel", "gpt"],
+            ["parted", "-s", device, "--", "mkpart", "BIOS", "1MiB", "3MiB", "set", "1", "bios_grub", "on"],
+            ["parted", "-s", device, "--", "mkpart", "ESP", "fat32", "3MiB", "515MiB", "set", "2", "esp", "on"],
+        ]
+        if luks:
+            cmds.append(["parted", "-s", device, "--", "mkpart", "WINLUX_BOOT", "ext4",
+                         "515MiB", f"{515 + BOOT_PART_MIB}MiB"])
+            cmds.append(["parted", "-s", device, "--", "mkpart", "WINLUX_ROOT",
+                         f"{515 + BOOT_PART_MIB}MiB", "100%"])
         else:
-            self.set_progress(0.30, "Extraction du cpio...")
-            subprocess.run(
-                ["bsdtar", "-xf", f"{work}/initramfs.gz", "-C", f"{work}/source", "--no-same-owner"],
-                check=True, timeout=300
-            )
-        self.set_progress(0.50, tr("progress_copying"))
-        subprocess.run(
-            ["cp", "-a", f"{work}/source/.", f"{work}/target/"],
-            check=True, timeout=1800
-        )
-        os.makedirs(f"{work}/target/boot/grub", exist_ok=True)
-        os.makedirs(f"{work}/target/boot/efi", exist_ok=True)
-        subprocess.run(
-            ["cp", f"{work}/vmlinuz", f"{work}/target/boot/vmlinuz"],
-            check=True, timeout=30
-        )
-        subprocess.run(
-            ["cp", f"{work}/initramfs.gz", f"{work}/target/boot/winlux-initramfs.cpio.gz"],
-            check=True, timeout=30
-        )
-        self.set_progress(0.70, tr("progress_grub"))
-        self.install_grub(device, esp, root_part, work, split_root=split_root)
-        self.set_progress(0.85, tr("progress_account"))
-        self.configure_user(f"{work}/target")
-        self.set_progress(0.90, tr("progress_firstboot"))
-        self.configure_first_boot(f"{work}/target")
-        self.set_progress(0.95, tr("progress_sync"))
-        subprocess.run(["sync"], timeout=30)
-        subprocess.run(["umount", f"{work}/target/boot/efi"], timeout=10)
-        subprocess.run(["umount", f"{work}/target"], timeout=10)
+            cmds.append(["parted", "-s", device, "--", "mkpart", "WINLUX_ROOT", "ext4", "515MiB", "100%"])
+        for cmd in cmds:
+            subprocess.run(cmd, check=True, timeout=30)
+        reread_partitions(device)
+        esp = wait_for_block(partition_path(device, 2))
+        if luks:
+            boot = wait_for_block(partition_path(device, 3))
+            root = wait_for_block(partition_path(device, 4))
+        else:
+            boot = None
+            root = wait_for_block(partition_path(device, 3))
+        return {"esp": esp, "format_esp": True, "boot": boot, "root": root,
+                "bios": True, "own_esp": True}
 
-    def install_grub(self, device, esp, root_part, work, split_root=True):
-        actual_root = root_part
-        if self.config["luks_enabled"] and hasattr(self, '_luks_raw_part'):
-            actual_root = self._luks_raw_part
+    def partition_dualboot(self, device, luks):
+        win = self.dualboot_target
+        esp = find_esp(self.disk_partitions.get(device, []))
+        if not win or not esp:
+            raise RuntimeError(tr("part_dualboot_need_uefi"))
+        alloc = self.dualboot_alloc_mb * MIB
+        parts = disk_partitions_sysfs(device)
+        current = parts[win["number"]]
+        new_size = (current["size"] - alloc) // MIB * MIB
+        if win["min_size"] is None or new_size < win["min_size"] + WINDOWS_MARGIN:
+            raise RuntimeError(tr("part_dualboot_no_room"))
+        self.set_progress(0.06, tr("progress_resize"))
+        check = subprocess.run(["ntfsresize", "--no-action", "--size", str(new_size), win["partition"]],
+                               capture_output=True, text=True, timeout=600)
+        if check.returncode != 0:
+            raise RuntimeError(tr("error_ntfs_check") + "\n\n" + (check.stdout + check.stderr).strip()[-600:])
+        # A single --force only skips the confirmation prompt; the dry run above
+        # already refused dirty or hibernated volumes.
+        subprocess.run(["ntfsresize", "--force", "--size", str(new_size), win["partition"]],
+                       check=True, capture_output=True, timeout=7200)
+        subprocess.run(["sfdisk", "--no-reread", "--no-tell-kernel", "-N", str(win["number"]), device],
+                       input=f",{new_size // 512}\n", text=True, check=True, capture_output=True, timeout=60)
+        reread_partitions(device)
+        before = set(disk_partitions_sysfs(device))
+        start = (current["start"] + new_size + MIB - 1) // MIB * MIB
+        following = [p["start"] for p in parts.values() if p["start"] > current["start"]]
+        region_end = min(following) if following else disk_size_bytes(device) - MIB
+        if region_end - start < MIN_WINLUX_MIB * MIB:
+            raise RuntimeError(tr("part_dualboot_no_room"))
+        boot = None
+        if luks:
+            boot_end = start + BOOT_PART_MIB * MIB
+            subprocess.run(["parted", "-s", device, "--", "unit", "B", "mkpart", "WINLUX_BOOT", "ext4",
+                            f"{start}B", f"{boot_end - 1}B"], check=True, timeout=30)
+            start = boot_end
+        subprocess.run(["parted", "-s", device, "--", "unit", "B", "mkpart", "WINLUX_ROOT", "ext4",
+                        f"{start}B", f"{region_end - 1}B"], check=True, timeout=30)
+        reread_partitions(device)
+        created = sorted(set(disk_partitions_sysfs(device)) - before,
+                         key=lambda n: disk_partitions_sysfs(device)[n]["start"])
+        if len(created) != (2 if luks else 1):
+            raise RuntimeError("Partitions Winlux introuvables après le redimensionnement.")
+        paths = [wait_for_block(partition_path(device, n)) for n in created]
+        if luks:
+            boot = paths[0]
+        return {"esp": esp["path"], "format_esp": False, "boot": boot, "root": paths[-1],
+                "bios": False, "own_esp": False}
 
-        partuuid = subprocess.check_output(
-            ["blkid", "-s", "PARTUUID", "-o", "value", actual_root],
-            text=True, timeout=10
-        ).strip()
-        fsuuid = subprocess.check_output(
-            ["blkid", "-s", "UUID", "-o", "value", actual_root],
-            text=True, timeout=10
-        ).strip()
-
+    def format_layout(self, layout):
+        if layout["format_esp"]:
+            subprocess.run(["mkfs.fat", "-F32", "-n", "EFI", layout["esp"]], check=True, timeout=60)
+        if layout["boot"]:
+            subprocess.run(["mkfs.ext4", "-F", "-L", "WINLUX_BOOT", layout["boot"]], check=True, timeout=120)
+        layout["root_fs"] = layout["root"]
         if self.config["luks_enabled"]:
-            luks_uuid = fsuuid
-            root_fs_uuid = subprocess.check_output(
-                ["blkid", "-s", "UUID", "-o", "value", root_part],
-                text=True, timeout=10
-            ).strip()
-            root_arg = f"UUID={root_fs_uuid}"
-            crypto_arg = f"cryptdevice=UUID={luks_uuid}:winlux_crypt"
-            kernel_extra = f" {crypto_arg}"
+            self.set_progress(0.14, tr("progress_luks_setup"))
+            fd, keyfile = tempfile.mkstemp(prefix="winlux-luks.", dir="/run" if os.access("/run", os.W_OK) else None)
+            try:
+                os.write(fd, self.config["luks_passphrase"].encode())
+                os.close(fd)
+                # Bounded Argon2 memory so the early-boot unlock also works on small-RAM machines.
+                subprocess.run(["cryptsetup", "luksFormat", "--batch-mode", "--type", "luks2",
+                                "--pbkdf", "argon2id", "--pbkdf-memory", "524288",
+                                "--label", "WINLUX_CRYPT", "--key-file", keyfile, layout["root"]],
+                               check=True, timeout=300)
+                subprocess.run(["cryptsetup", "open", "--key-file", keyfile, layout["root"], LUKS_NAME],
+                               check=True, timeout=120)
+            finally:
+                os.unlink(keyfile)
+            self._luks_open = True
+            layout["root_fs"] = f"/dev/mapper/{LUKS_NAME}"
+        subprocess.run(["mkfs.ext4", "-F", "-L", "WINLUX_ROOT", layout["root_fs"]], check=True, timeout=600)
+
+    def mount_target(self, layout, target):
+        subprocess.run(["mount", layout["root_fs"], target], check=True, timeout=30)
+        self._mounts.append(target)
+        if layout["boot"]:
+            os.makedirs(f"{target}/boot", exist_ok=True)
+            subprocess.run(["mount", layout["boot"], f"{target}/boot"], check=True, timeout=30)
+            self._mounts.append(f"{target}/boot")
+            # GRUB and winlux-update both address files as /boot/... on this partition.
+            os.symlink(".", f"{target}/boot/boot")
+
+    def release_target(self):
+        for mountpoint in reversed(getattr(self, "_mounts", [])):
+            subprocess.run(["umount", mountpoint], timeout=60)
+        self._mounts = []
+        if getattr(self, "_luks_open", False):
+            subprocess.run(["cryptsetup", "close", LUKS_NAME], timeout=60)
+            self._luks_open = False
+
+    def add_boot_keymap(self, initramfs):
+        """Append the chosen keyboard layout so the passphrase prompt matches the keyboard."""
+        kmap = console_keymap(self.config["keyboard"])
+        if kmap is None:
+            self.set_progress(0.72, tr("encrypt_keyboard_us"))
+            return
+        archive = cpio_newc([("etc", 0o040755, b""), ("etc/boot.kmap", 0o100644, kmap)])
+        with open(initramfs, "ab") as f:
+            f.write(gzip.compress(archive))
+
+    # ── GRUB ────────────────────────────────────────────────────
+
+    def install_grub(self, device, layout, target, split_root):
+        luks = self.config["luks_enabled"]
+        root_fs = layout["root_fs"]
+        if luks:
+            if not split_root:
+                raise RuntimeError(tr("error_luks_initramfs"))
+            luks_uuid = blkid_value(layout["root"], "UUID")
+            boot_uuid = blkid_value(layout["boot"], "UUID")
+            search_uuid = boot_uuid
+            root_arg = f"/dev/mapper/{LUKS_NAME}"
+            extra = f" winlux.luks=UUID={luks_uuid} winlux.boot=UUID={boot_uuid}"
         else:
-            root_arg = f"UUID={fsuuid}" if split_root else f"PARTUUID={partuuid}"
-            kernel_extra = ""
-            root_fs_uuid = fsuuid
-
+            search_uuid = blkid_value(root_fs, "UUID")
+            root_arg = f"UUID={search_uuid}" if split_root else f"PARTUUID={blkid_value(root_fs, 'PARTUUID')}"
+            extra = ""
         initrd = "initrd /boot/winlux-initramfs.cpio.gz" if split_root else ""
-        search_uuid = root_fs_uuid if not self.config["luks_enabled"] else root_fs_uuid
-
+        efi_dir = f"{target}/boot/efi"
+        windows_entry = ""
+        if layout["esp"]:
+            os.makedirs(efi_dir, exist_ok=True)
+            subprocess.run(["mount", "-t", "vfat", "-o", "iocharset=ascii", layout["esp"], efi_dir],
+                           check=True, timeout=30)
+            self._mounts.append(efi_dir)
+            if os.path.isfile(f"{efi_dir}/EFI/Microsoft/Boot/bootmgfw.efi"):
+                esp_uuid = blkid_value(layout["esp"], "UUID")
+                windows_entry = f"""menuentry "Windows" --hotkey=w {{
+    insmod part_gpt
+    insmod fat
+    insmod chain
+    search --no-floppy --fs-uuid {esp_uuid} --set=root
+    chainloader /EFI/Microsoft/Boot/bootmgfw.efi
+}}
+"""
         grub_cfg = f"""set default=0
 set timeout=8
 serial --unit=0 --speed=115200
 terminal_input console serial
 terminal_output console serial
-"""
-        if self.config["luks_enabled"]:
-            grub_cfg += """insmod cryptodisk
-insmod luks2
-insmod gcry_rijndael
-insmod gcry_sha256
-"""
-
-        grub_cfg += f"""menuentry "Winlux Desktop" {{
+menuentry "Winlux Desktop" {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 winlux.interactive=1{kernel_extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 winlux.interactive=1{extra}
     {initrd}
 }}
-menuentry "Winlux diagnostic" --hotkey=d {{
+{windows_entry}menuentry "Winlux diagnostic" --hotkey=d {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{kernel_extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=ttyS0,115200n8{extra}
     {initrd}
 }}
 menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{kernel_extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 console=tty1 console=ttyS0,115200n8 winlux.recovery=1{extra}
     initrd /boot/winlux-initramfs.cpio.gz
 }}
 """
-        grub_path = f"{work}/target/boot/grub/grub.cfg"
+        grub_path = f"{target}/boot/grub/grub.cfg"
         os.makedirs(os.path.dirname(grub_path), exist_ok=True)
         with open(grub_path, "w") as f:
             f.write(grub_cfg)
         subprocess.run(["grub-script-check", grub_path], check=True, timeout=10)
-        subprocess.run(
-            ["grub-install", "--target=i386-pc",
-             f"--boot-directory={work}/target/boot", "--recheck", device],
-            check=True, timeout=60
-        )
-        efi_dir = f"{work}/target/boot/efi"
-        os.makedirs(efi_dir, exist_ok=True)
-        subprocess.run(["mount", "-t", "vfat", "-o", "iocharset=ascii", esp, efi_dir],
-                       check=True, timeout=10)
-        subprocess.run(
-            ["grub-install", "--target=x86_64-efi",
-             f"--efi-directory={efi_dir}",
-             f"--boot-directory={work}/target/boot",
-             "--removable", "--no-nvram", "--recheck"],
-            check=True, timeout=60
-        )
-        subprocess.run(["umount", efi_dir], timeout=10)
-
-        if self.config["luks_enabled"]:
-            grub_default = f"{work}/target/etc/default/grub"
-            os.makedirs(os.path.dirname(grub_default), exist_ok=True)
-            with open(grub_default, "w") as f:
-                f.write('GRUB_ENABLE_CRYPTODISK=y\n')
-                f.write(f'GRUB_CMDLINE_LINUX="cryptdevice=UUID={luks_uuid}:winlux_crypt"\n')
-            crypttab = f"{work}/target/etc/crypttab"
-            os.makedirs(os.path.dirname(crypttab), exist_ok=True)
-            with open(crypttab, "w") as f:
-                f.write(f"winlux_crypt UUID={luks_uuid} none luks\n")
-            hook_dir = f"{work}/target/etc/initramfs-tools/hooks"
-            os.makedirs(hook_dir, exist_ok=True)
-            hook_script = f"{hook_dir}/winlux-cryptsetup"
-            with open(hook_script, "w") as f:
-                f.write("#!/bin/sh\n")
-                f.write("set -e\n")
-                f.write("PREREQ=\"\"\n")
-                f.write("prereqs() { echo \"$PREREQ\"; }\n")
-                f.write("case \"$1\" in prereqs) prereqs; exit 0;; esac\n")
-                f.write(". /usr/share/initramfs-tools/hook-functions\n")
-                f.write("copy_exec /sbin/cryptsetup /sbin\n")
-                f.write("copy_exec /sbin/dmsetup /sbin\n")
-                f.write("manual_add_modules dm_crypt aes sha256\n")
-            os.chmod(hook_script, 0o755)
-
+        if layout["bios"]:
+            subprocess.run(["grub-install", "--target=i386-pc",
+                            f"--boot-directory={target}/boot", "--recheck", device],
+                           check=True, timeout=120)
+        if layout["esp"]:
+            if layout["own_esp"]:
+                efi_args = ["--removable", "--no-nvram"]
+            else:
+                # Shared with Windows: own directory and firmware entry, never EFI/BOOT.
+                efi_args = ["--bootloader-id=winlux"]
+            subprocess.run(["grub-install", "--target=x86_64-efi", f"--efi-directory={efi_dir}",
+                            f"--boot-directory={target}/boot", "--recheck", *efi_args],
+                           check=True, timeout=120)
         if split_root:
-            with open(f"{work}/target/boot/winlux-split-root", "w") as f:
+            with open(f"{target}/boot/winlux-split-root", "w") as f:
                 f.write("1\n")
 
     def configure_user(self, root_path):
