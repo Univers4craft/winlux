@@ -8,6 +8,7 @@ mod cab;
 mod cfb;
 mod cond;
 mod db;
+pub mod extra;
 mod install;
 pub use install::{civil, shortcut_bytes};
 mod lzx;

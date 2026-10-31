@@ -150,6 +150,8 @@ fn main() {
             std::process::exit(code);
         }
     }
+    // Variables d'environnement Windows écrites par les installateurs.
+    msi::extra::apply_registry_environment();
     let source = match std::fs::read(&exe) {
         Ok(bytes) => bytes,
         Err(error) => {
