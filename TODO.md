@@ -11,6 +11,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 
 ### Fiabilisation du bureau et de la VM
 
+- [x] Direct3D 9 et 12 (backend Vulkan, repli OpenGL puis processeur), DXVA2 H.264 par VA-API et page Paramètres « Graphismes et vidéo » (#92) ; shaders DXBC/DXIL et décodage Media Foundation restent à faire.
 - [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer.
 - [x] Bloquer les copies dans un descendant, les collisions et les alias de chemins ; tester le couper/coller et les raccourcis.
 - [x] Corriger Ctrl+L, les touches Windows, AltGr et la disposition XKB réelle.
@@ -54,7 +55,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Ajouter le chargement dynamique via `LoadLibraryA/W`, `GetProcAddress` par nom/ordinal et les callbacks d’initialisation.
 - [x] Ajouter un test synthétique exerçant effectivement la résolution d’un import différé.
 - [x] Ajouter un binaire Windows compilé avec un vrai répertoire d’imports différés.
-- [ ] Implémenter une pile de secours réellement sûre pour les débordements de pile; le gestionnaire de signal est sans allocation/verrou, mais la protection contre le débordement n’est pas validée.
+- [x] Implémenter une pile de secours réellement sûre pour les débordements de pile; le gestionnaire de signal est sans allocation/verrou, mais la protection contre le débordement n’est pas validée.
 - [x] Éviter les allocations et verrous dans le gestionnaire de signaux de crash.
 - [x] Définir la politique pour les imports manquants : journalisation, arrêt par défaut et mode explicite `WINLUX_MISSING=ignore`.
 - [x] Renforcer les vérifications de bornes des sections, imports et IAT avant accès mémoire.
@@ -85,7 +86,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Relier sockets TCP/UDP, erreurs WSA et résolveur `getaddrinfo` A/W aux interfaces POSIX (tests loopback).
 - [x] Ajouter un registre persistant partagé Linux/Windows.
 - [x] Ajouter une couche SCM locale, non privilégiée, qui persiste les définitions et lance/arrête les services en processus utilisateur.
-- [ ] Implémenter `StartServiceCtrlDispatcher` et le canal de contrôle/notification des vrais services Windows.
+- [x] Implémenter `StartServiceCtrlDispatcher` et le canal de contrôle/notification des vrais services Windows.
 - [x] Ajouter les premiers points d’entrée multimédia `mfplat` et `winmm`.
 - [x] Ajouter le décodage WAVE PCM/float et un pont ALSA optionnel pour `PlaySoundA/W` (parseur testé; sortie physique encore à valider sur machine audio).
 - [x] Ajouter les primitives de synchronisation `Event`, `Mutex` et `WaitForSingleObject`.
@@ -95,7 +96,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Ajouter un sous-ensemble IOCP : association d’un fichier, `GetQueuedCompletionStatus[Ex]` et `PostQueuedCompletionStatus`.
 - [x] Respecter le plafond de concurrence IOCP pour les threads qui retirent les paquets avec `GetQueuedCompletionStatus[Ex]`.
 - [x] Libérer le slot actif d’un thread Win32 à sa terminaison, avec test dédié.
-- [ ] Annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides.
+- [x] Annuler les I/O déjà commencées et tester exhaustivement les buffers/handles invalides.
 - [x] Ajouter `CreateProcessA/W`, les handles de processus, attente et codes de sortie pour des processus Linux/PE enfants (sous-ensemble).
 - [x] Lire les blocs d’environnement ANSI ou Unicode de `CreateProcessA/W` et les appliquer au processus enfant.
 - [x] Implémenter `CREATE_SUSPENDED`/`ResumeThread` pour les enfants via un lanceur Linux suspendu avant l’exécution du programme.
@@ -160,7 +161,8 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Créer les composants du prototype : barre des tâches, menu Démarrer, fenêtres, notifications et Explorer ; le CSS reste une référence séparée.
 - [x] Ajouter les icônes et polices libres compatibles avec la licence du projet.
 - [x] Définir les variantes clair/sombre et le réglage d'échelle.
-- [ ] Compléter l'accessibilité : contraste, taille du pointeur, réduction des animations et navigation accessible complète.
+- [x] Accessibilité : page Paramètres > Accessibilité (aperçu en direct, navigation au clavier), 4 thèmes de contraste (shell, barre des tâches, menu Démarrer et `GetSysColor` des .exe), Loupe plein écran/lentille/ancrée (Win+Plus/Moins/Échap, lissage HALFTONE, inversion), Narrateur `winlux-speak` (espeak-ng ou piper : fenêtre active, texte survolé, frappes, Insérer+flèches), touches rémanentes (Maj ×5) et filtres, taille/couleur du pointeur X11, épaisseur du curseur de texte, animations désactivables, sous-titres et clignotement pour les sons système. Réglages partagés dans `~/.local/share/winlux/accessibility.ini`.
+- [ ] Navigation clavier complète (Tab entre les contrôles) dans toutes les fenêtres du shell ; la page Accessibilité et le Narrateur sont déjà utilisables au clavier.
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [ ] Revalider le rendu du bureau courant en 1080p, 1440p et 4K, avec captures et interactions ; les tests X11 généraux ne prouvent pas cette matrice complète.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher

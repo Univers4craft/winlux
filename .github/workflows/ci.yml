@@ -114,6 +114,15 @@ jobs:
       - name: Vérifier le catalogue natif Linux et Windows
         run: python3 -B scripts/test-native-catalogue.py
 
+      - name: Vérifier benchmark, profils et migration de l'installateur
+        run: python3 -B scripts/test-installer-oobe.py
+
+      - name: Vérifier les fichiers de réponse d'installation silencieuse
+        run: python3 -B scripts/test-autoinstall.py
+
+      - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
+        run: python3 -B scripts/test-installer-partitioning.py
+
       - name: Vérifier les grandes images X11 en 1080p
         run: |
           sudo apt-get update -q
@@ -129,6 +138,12 @@ jobs:
           stage=$(mktemp -d)
           sh scripts/copy-audio-libraries.sh "$stage"
 
+      - name: Valider le moteur vidéo/audio (FFmpeg réel)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ffmpeg
+          cargo test -p winlux media_bout_en_bout -- --ignored
+
       - name: Aucune erreur de compilation
         run: cargo check -p winlux --all-targets
 
@@ -142,7 +157,10 @@ jobs:
           sh scripts/test-install-safety.sh
           sh scripts/test-network.sh
           sh scripts/test-control.sh
+          sh scripts/test-fonts.sh
+          python3 -B scripts/test-store.py
           sh scripts/test-display.sh
+          sh scripts/test-speak.sh
 
   # 3. Compile les .exe Windows puis les exécute sous Winlux.
   runtime-tests:
@@ -186,7 +204,7 @@ jobs:
         run: sh scripts/test-integration.sh
 
       - name: Installer MinGW-w64
-        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
 
       - name: Compiler et exécuter les tests C MinGW
         run: |

@@ -2,10 +2,13 @@
 //! avec la convention d'appel Windows. Le chargeur relie directement les
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
+pub mod a11y;
 pub mod advapi32;
 pub mod advapi32_services;
+pub mod audio_com;
 pub mod bcrypt;
 pub mod comctl32;
+pub mod comobj;
 pub mod crt;
 pub mod crt_runtime;
 pub mod crt_scan;
@@ -17,13 +20,17 @@ pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod dbghelp;
+pub mod dinput8;
+pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
 pub mod dxgi;
 pub mod dxva2;
+pub mod evdev;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
+pub mod gdi32_fonts;
 pub mod gl_bindings;
 pub mod gl_legacy;
 pub mod gpu_caps;
@@ -32,11 +39,14 @@ mod gui_cairo;
 pub mod gui_x11;
 pub mod iphlpapi;
 pub mod kernel32;
+pub mod kernel32_cpu;
 pub mod kernel32_misc;
 pub mod libgcc;
 pub mod libstdcpp;
+pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
+pub mod mmdevapi;
 pub mod mscoree;
 pub mod msvcrt;
 pub mod ntdll;
@@ -52,20 +62,26 @@ pub mod setupapi;
 pub mod shell32;
 pub mod shlwapi;
 pub mod spirv;
+pub mod taskschd;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
 pub mod uxtheme;
+pub mod v4l2;
 pub mod va_bindings;
 pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
 pub mod winfile;
 pub mod winhttp;
+pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
+pub mod winmm_waveout;
 pub mod wintrust;
 pub mod ws2_32;
+pub mod xaudio2;
+pub mod xinput;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -124,10 +140,14 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = kernel32::exports();
                     e.extend(winfile::exports());
                     e.extend(kernel32_misc::exports());
+                    e.extend(kernel32_cpu::exports());
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
                     e.extend(gpu_caps::exports());
+                    e.extend(winlux_media::exports());
+                    e.extend(crate::mounts::exports());
+                    e.extend(crate::archive::ffi::exports());
                     e
                 },
                 handle: fake_module(),
@@ -216,6 +236,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    e.extend(gdi32_fonts::exports());
                     e
                 },
                 handle: fake_module(),
@@ -227,7 +248,46 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "winmm",
-                exports: winmm::exports(),
+                exports: {
+                    let mut e = winmm::exports();
+                    e.extend(winmm_waveout::exports());
+                    e
+                },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dsound",
+                exports: dsound::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "mmdevapi",
+                exports: mmdevapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "audioses",
+                exports: mmdevapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "avrt",
+                exports: mmdevapi::avrt_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "xaudio2_9",
+                exports: xaudio2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "xaudio2_8",
+                exports: xaudio2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "xaudio2_7",
+                exports: xaudio2::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -252,6 +312,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "mfreadwrite",
+                exports: mfplat::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "mf",
                 exports: mfplat::exports(),
                 handle: fake_module(),
             },
@@ -338,6 +403,21 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "sechost",
                 exports: sechost::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "xinput1_4",
+                exports: xinput::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dinput8",
+                exports: dinput8::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dinput",
+                exports: dinput8::legacy_exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -454,11 +534,22 @@ pub fn normalize(dll: &str) -> String {
     if base == "comctl32" || base == "iertutil" {
         return "comctl32".into();
     }
+    // XAudio2 redistribuable (NuGet) et anciennes versions 2.x par COM.
+    if base == "xaudio2_9redist" {
+        return "xaudio2_9".into();
+    }
+    if base.starts_with("xaudio2_") && base != "xaudio2_8" && base != "xaudio2_9" {
+        return "xaudio2_7".into();
+    }
     if base == "shlwapi" {
         return "shlwapi".into();
     }
     if base == "oleaut32" {
         return "oleaut32".into();
+    }
+    // Toutes les versions d'XInput partagent la même implémentation.
+    if base.starts_with("xinput1_") || base == "xinput9_1_0" {
+        return "xinput1_4".into();
     }
     base.to_string()
 }

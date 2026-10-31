@@ -14,6 +14,8 @@ die() { log "ERREUR : $*" >&2; exit 1; }
 
 test "$(id -u)" -eq 0 || die 'droits root requis'
 
+TOTAL_STEPS=10
+
 # --- Détection de l'environnement d'affichage ---
 HAS_DISPLAY=0
 if test -n "${DISPLAY:-}" || test -n "${WAYLAND_DISPLAY:-}"; then HAS_DISPLAY=1; fi
@@ -24,6 +26,63 @@ if command -v dialog >/dev/null 2>&1; then TUI=dialog
 elif command -v whiptail >/dev/null 2>&1; then TUI=whiptail
 fi
 
+# --- Adaptation à l'écran ---
+# Police de console plus grande sur les écrans haute résolution (sinon le texte
+# est minuscule en 4K), puis boîtes de dialogue dimensionnées selon le terminal.
+adapt_console_font() {
+    test -t 1 || return 0
+    command -v setfont >/dev/null 2>&1 || return 0
+    size=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null) || return 0
+    height=${size#*,}
+    case "$height" in ''|*[!0-9]*) return 0 ;; esac
+    if test "$height" -ge 2000; then font=ter-v32n
+    elif test "$height" -ge 1400; then font=ter-v24n
+    elif test "$height" -ge 1000; then font=ter-v18n
+    else return 0
+    fi
+    for dir in /usr/share/consolefonts /usr/share/kbd/consolefonts /lib/kbd/consolefonts; do
+        for f in "$dir/$font.psf.gz" "$dir/$font.psf" "$dir/$font.psfu.gz"; do
+            if test -r "$f"; then setfont "$f" 2>/dev/null || true; return 0; fi
+        done
+    done
+}
+adapt_console_font
+
+TERM_LINES=24
+TERM_COLS=80
+term_size() {
+    set -- $(stty size 2>/dev/null || echo "24 80")
+    case "${1:-}${2:-}" in ''|*[!0-9]*) return 0 ;; esac
+    test "$1" -gt 0 && TERM_LINES=$1
+    test "$2" -gt 0 && TERM_COLS=$2
+    return 0
+}
+# Hauteur demandée, bornée à la hauteur du terminal.
+dlg_h() {
+    term_size
+    h=$1
+    test "$h" -gt $((TERM_LINES - 2)) && h=$((TERM_LINES - 2))
+    test "$h" -lt 6 && h=6
+    echo "$h"
+}
+# Largeur : 3/4 du terminal (au moins la largeur demandée, au plus 100 colonnes).
+dlg_w() {
+    term_size
+    w=$((TERM_COLS * 3 / 4))
+    test "$w" -lt "$1" && w=$1
+    test "$w" -gt 100 && w=100
+    test "$w" -gt $((TERM_COLS - 4)) && w=$((TERM_COLS - 4))
+    test "$w" -lt 20 && w=20
+    echo "$w"
+}
+# Nombre de lignes de liste visibles dans une boîte de hauteur $1.
+dlg_list() {
+    n=$(( $1 - 7 ))
+    test "$n" -gt "$2" && n=$2
+    test "$n" -lt 1 && n=1
+    echo "$n"
+}
+
 # --- Fonctions d'entrée utilisateur ---
 # Sélection dans une liste (retourne le tag choisi dans $REPLY)
 menu() {
@@ -31,7 +90,8 @@ menu() {
     # $@ = tag1 label1 tag2 label2 ...
     count=$(( $# / 2 ))
     if test "$TUI" != none; then
-        REPLY=$("$TUI" --title "$title" --menu "" 20 60 "$count" "$@" 3>&1 1>&2 2>&3) || REPLY=
+        h=$(dlg_h $((count + 8)))
+        REPLY=$("$TUI" --title "$title" --menu "" "$h" "$(dlg_w 60)" "$(dlg_list "$h" "$count")" "$@" 3>&1 1>&2 2>&3) || REPLY=
     else
         echo
         echo "=== $title ==="
@@ -62,9 +122,9 @@ yesno() {
     title=$1; default=${2:-oui}
     if test "$TUI" != none; then
         if test "$default" = non; then
-            "$TUI" --title "$title" --defaultno --yesno "$title" 8 60 && return 0 || return 1
+            "$TUI" --title "$title" --defaultno --yesno "$title" "$(dlg_h 8)" "$(dlg_w 60)" && return 0 || return 1
         else
-            "$TUI" --title "$title" --yesno "$title" 8 60 && return 0 || return 1
+            "$TUI" --title "$title" --yesno "$title" "$(dlg_h 8)" "$(dlg_w 60)" && return 0 || return 1
         fi
     else
         if test "$default" = oui; then hint="[O/n]"; else hint="[o/N]"; fi
@@ -82,7 +142,7 @@ yesno() {
 input() {
     title=$1; default=${2:-}
     if test "$TUI" != none; then
-        REPLY=$("$TUI" --title "$title" --inputbox "" 10 60 "$default" 3>&1 1>&2 2>&3) || REPLY=$default
+        REPLY=$("$TUI" --title "$title" --inputbox "" "$(dlg_h 10)" "$(dlg_w 60)" "$default" 3>&1 1>&2 2>&3) || REPLY=$default
     else
         printf '%s [%s] : ' "$title" "$default"
         read -r REPLY || REPLY=
@@ -94,7 +154,7 @@ input() {
 password() {
     title=$1
     if test "$TUI" != none; then
-        REPLY=$("$TUI" --title "$title" --passwordbox "" 10 60 3>&1 1>&2 2>&3) || REPLY=
+        REPLY=$("$TUI" --title "$title" --passwordbox "" "$(dlg_h 10)" "$(dlg_w 60)" 3>&1 1>&2 2>&3) || REPLY=
     else
         printf '%s : ' "$title"
         stty -echo 2>/dev/null || true
@@ -104,10 +164,58 @@ password() {
     fi
 }
 
+# Sélection multiple (checklist) — retourne les tags cochés séparés par espaces dans $REPLY
+checklist() {
+    title=$1; shift
+    # $@ = tag1 label1 status1 tag2 label2 status2 ...
+    count=$(( $# / 3 ))
+    if test "$TUI" != none; then
+        h=$(dlg_h $((count + 8)))
+        REPLY=$("$TUI" --title "$title" --checklist "" "$h" "$(dlg_w 70)" "$(dlg_list "$h" "$count")" "$@" 3>&1 1>&2 2>&3) || REPLY=
+    else
+        echo
+        echo "=== $title ==="
+        echo "(Entrez les numéros séparés par des espaces, ou Entrée pour les choix par défaut)"
+        i=1
+        defaults=
+        while test $# -ge 3; do
+            mark=" "
+            if test "$3" = on; then mark="*"; defaults="$defaults $1"; fi
+            printf '  %d) [%s] %s (%s)\n' "$i" "$mark" "$2" "$1"
+            i=$((i + 1))
+            shift 3
+        done
+        printf 'Sélection : '
+        read -r sel || sel=
+        if test -z "$sel"; then
+            REPLY=$defaults
+            return
+        fi
+        # reparse args
+        set -- $CHECKLIST_ARGS
+        result=
+        for num in $sel; do
+            case "$num" in *[!0-9]*) continue ;; esac
+            j=1
+            idx=1
+            while test $j -le $# ; do
+                eval "tag=\${$j}"
+                if test "$idx" = "$num"; then
+                    result="$result $tag"
+                    break
+                fi
+                j=$((j + 3))
+                idx=$((idx + 1))
+            done
+        done
+        REPLY=$result
+    fi
+}
+
 # ============================================================
 #  Étape 1 : Langue
 # ============================================================
-log 'Étape 1/7 : Langue'
+log "Étape 1/$TOTAL_STEPS : Langue"
 MENU_ARGS='fr_FR Français en_US English de_DE Deutsch es_ES Español it_IT Italiano pt_BR Português'
 menu "Choisissez votre langue" $MENU_ARGS
 LANG_CHOICE=${REPLY:-fr_FR}
@@ -125,7 +233,7 @@ esac
 # ============================================================
 #  Étape 2 : Clavier
 # ============================================================
-log 'Étape 2/7 : Clavier'
+log "Étape 2/$TOTAL_STEPS : Clavier"
 case "$LANG_CHOICE" in
     fr_FR) kb_default=fr ;;
     en_US) kb_default=us ;;
@@ -143,7 +251,7 @@ KB_LAYOUT=${REPLY:-$kb_default}
 # ============================================================
 #  Étape 3 : Fuseau horaire
 # ============================================================
-log 'Étape 3/7 : Fuseau horaire'
+log "Étape 3/$TOTAL_STEPS : Fuseau horaire"
 # Auto-détection basée sur la langue
 case "$LANG_CHOICE" in
     fr_FR) tz_default=Europe/Paris ;;
@@ -166,7 +274,7 @@ fi
 # ============================================================
 #  Étape 4 : Nom de la machine
 # ============================================================
-log 'Étape 4/7 : Nom de la machine'
+log "Étape 4/$TOTAL_STEPS : Nom de la machine"
 input "Nom de la machine" "winlux-desktop"
 HOSTNAME_CHOICE=${REPLY:-winlux-desktop}
 # Nettoyage : uniquement alphanumérique et tirets
@@ -174,9 +282,41 @@ HOSTNAME_CHOICE=$(printf '%s' "$HOSTNAME_CHOICE" | tr -cd 'a-zA-Z0-9-' | head -c
 test -n "$HOSTNAME_CHOICE" || HOSTNAME_CHOICE=winlux-desktop
 
 # ============================================================
-#  Étape 5 : Compte utilisateur
+#  Étape 5 : Thème (clair / sombre)
 # ============================================================
-log 'Étape 5/7 : Compte utilisateur'
+log "Étape 5/$TOTAL_STEPS : Thème"
+MENU_ARGS='dark Sombre_(recommandé) light Clair'
+menu "Choisissez votre thème" $MENU_ARGS
+THEME_CHOICE=${REPLY:-dark}
+
+if test "$TUI" != none; then
+    if test "$THEME_CHOICE" = dark; then
+        preview="Thème sombre sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond sombre #181b24  █  │\n  │  █  Texte clair #ecedf5  █  │\n  │  █  Accent    #8178b7    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
+    else
+        preview="Thème clair sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond clair  #f3f5fa  █  │\n  │  █  Texte foncé #202430  █  │\n  │  █  Accent    #8178b7    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
+    fi
+    "$TUI" --title "Aperçu du thème" --msgbox "$preview" "$(dlg_h 14)" "$(dlg_w 40)" 2>/dev/null || true
+else
+    if test "$THEME_CHOICE" = dark; then
+        echo "  -> Thème sombre : fond #181b24, texte #ecedf5, accent #8178b7"
+    else
+        echo "  -> Thème clair : fond #f3f5fa, texte #202430, accent #8178b7"
+    fi
+fi
+
+# ============================================================
+#  Étape 6 : Sélection des applications
+# ============================================================
+log "Étape 6/$TOTAL_STEPS : Applications"
+
+CHECKLIST_ARGS='firefox Navigateur_Firefox on libreoffice Suite_bureautique_LibreOffice on vlc Lecteur_multimédia_VLC on gimp Éditeur_images_GIMP off git Outils_développeur_(git,build-essential) off geany Éditeur_de_code_Geany off audacity Éditeur_audio_Audacity off obs-studio Capture_vidéo_OBS_Studio off'
+checklist "Applications à pré-installer" $CHECKLIST_ARGS
+APPS_SELECTED=${REPLY:-firefox libreoffice vlc}
+
+# ============================================================
+#  Étape 7 : Compte utilisateur local
+# ============================================================
+log "Étape 7/$TOTAL_STEPS : Compte utilisateur local"
 input "Nom d'utilisateur (login)" "utilisateur"
 USERNAME=${REPLY:-utilisateur}
 USERNAME=$(printf '%s' "$USERNAME" | tr -cd 'a-z0-9_-' | head -c 32)
@@ -197,10 +337,49 @@ while :; do
 done
 USER_PASSWORD=$PASS1
 
+# --- Choix de l'avatar ---
+AVATAR_DIR=
+for d in \
+    "${root:+$root/assets/avatars}" \
+    /opt/winlux/assets/avatars \
+    /usr/share/winlux/avatars; do
+    test -n "$d" && test -d "$d" && { AVATAR_DIR=$d; break; }
+done
+
+USER_AVATAR=
+if test -n "$AVATAR_DIR"; then
+    avatar_count=$(ls "$AVATAR_DIR"/avatar-*.svg 2>/dev/null | wc -l)
+    if test "$avatar_count" -gt 0; then
+        MENU_ARGS=
+        for f in "$AVATAR_DIR"/avatar-*.svg; do
+            base=$(basename "$f" .svg)
+            num=${base#avatar-}
+            case "$num" in
+                01) label="Personne_(défaut)" ;;
+                02) label="Chat" ;;
+                03) label="Chien" ;;
+                04) label="Robot" ;;
+                05) label="Astronaute" ;;
+                06) label="Nature" ;;
+                07) label="Musique" ;;
+                08) label="Jeu_vidéo" ;;
+                *)  label="Avatar_$num" ;;
+            esac
+            MENU_ARGS="$MENU_ARGS $base $label"
+        done
+        MENU_ARGS="$MENU_ARGS aucun Sans_avatar"
+        menu "Choisissez un avatar (optionnel)" $MENU_ARGS
+        case "$REPLY" in
+            aucun|"") USER_AVATAR= ;;
+            *) USER_AVATAR="$AVATAR_DIR/$REPLY.svg" ;;
+        esac
+    fi
+fi
+
 # ============================================================
-#  Étape 6 : Mot de passe root
+#  Étape 8 : Mot de passe root
 # ============================================================
-log 'Étape 6/7 : Mot de passe root'
+log "Étape 8/$TOTAL_STEPS : Mot de passe root"
 DISABLE_ROOT=1
 if yesno "Désactiver le compte root ? (recommandé, sudo sera utilisé)" oui; then
     DISABLE_ROOT=1
@@ -218,12 +397,34 @@ else
 fi
 
 # ============================================================
-#  Étape 7 : Connexion automatique
+#  Étape 9 : Connexion automatique
 # ============================================================
-log 'Étape 7/7 : Connexion automatique'
+log "Étape 9/$TOTAL_STEPS : Connexion automatique"
 AUTO_LOGIN=0
 if yesno "Activer la connexion automatique pour $USERNAME ?" oui; then
     AUTO_LOGIN=1
+fi
+
+# ============================================================
+#  Étape 10 : Récapitulatif
+# ============================================================
+log "Étape 10/$TOTAL_STEPS : Récapitulatif"
+summary="Langue : $LANG_CHOICE\nClavier : $KB_LAYOUT\nFuseau : $TIMEZONE\nMachine : $HOSTNAME_CHOICE\nThème : $THEME_CHOICE\nUtilisateur : $USERNAME ($FULLNAME)\nConnexion auto : $(test $AUTO_LOGIN = 1 && echo Oui || echo Non)\nApps : $APPS_SELECTED"
+if test -n "$USER_AVATAR"; then
+    summary="$summary\nAvatar : $(basename "$USER_AVATAR")"
+fi
+
+if test "$TUI" != none; then
+    "$TUI" --title "Récapitulatif de la configuration" --msgbox "$summary" "$(dlg_h 18)" "$(dlg_w 60)" 2>/dev/null || true
+else
+    echo
+    echo "=== Récapitulatif ==="
+    printf '%b\n' "$summary"
+fi
+
+if ! yesno "Appliquer cette configuration ?" oui; then
+    log "Configuration annulée par l'utilisateur."
+    exit 1
 fi
 
 # ============================================================
@@ -282,7 +483,6 @@ printf '%s\n' "$TIMEZONE" >/etc/timezone 2>/dev/null || true
 log "Hostname : $HOSTNAME_CHOICE"
 printf '%s\n' "$HOSTNAME_CHOICE" >/etc/hostname
 if test -f /etc/hosts; then
-    # Remplacer l'ancienne entrée localhost si présente
     if grep -q '127.0.1.1' /etc/hosts; then
         sed -i "s/^127\.0\.1\.1.*/127.0.1.1\t$HOSTNAME_CHOICE/" /etc/hosts
     else
@@ -297,10 +497,14 @@ EOF
 fi
 hostname "$HOSTNAME_CHOICE" 2>/dev/null || true
 
+# --- Thème ---
+log "Thème : $THEME_CHOICE"
+mkdir -p /etc/winlux
+printf '%s\n' "$THEME_CHOICE" >/etc/winlux/theme
+
 # --- Compte utilisateur ---
 log "Création du compte : $USERNAME"
 GROUPS="sudo,audio,video,plugdev,input"
-# Ajouter les groupes s'ils existent
 for grp in netdev bluetooth lpadmin scanner; do
     if getent group "$grp" >/dev/null 2>&1; then
         GROUPS="$GROUPS,$grp"
@@ -319,7 +523,29 @@ for dir in Bureau Documents Images Musique Téléchargements Vidéos; do
     su -c "mkdir -p \"\$HOME/$dir\"" "$USERNAME" 2>/dev/null || true
 done
 
-# Sudoers sans mot de passe pour le groupe sudo (optionnel mais pratique)
+# Thème : lu par winlux-personalize à l'ouverture de session
+user_home=$(getent passwd "$USERNAME" | cut -d: -f6)
+if test -n "$user_home"; then
+    mkdir -p "$user_home/.config/winlux"
+    printf '{"theme":"%s","accent":"#8178b7"}\n' "$THEME_CHOICE" >"$user_home/.config/winlux/appearance.json"
+    chown -R "$USERNAME:" "$user_home/.config" 2>/dev/null || true
+fi
+
+# Avatar
+if test -n "$USER_AVATAR" && test -f "$USER_AVATAR"; then
+    user_home=$(getent passwd "$USERNAME" | cut -d: -f6)
+    if test -n "$user_home"; then
+        avatar_dest="$user_home/.face"
+        cp "$USER_AVATAR" "$avatar_dest" 2>/dev/null || true
+        chown "$USERNAME:" "$avatar_dest" 2>/dev/null || true
+
+        mkdir -p "$user_home/.config/winlux"
+        printf '%s\n' "$USER_AVATAR" >"$user_home/.config/winlux/avatar"
+        chown -R "$USERNAME:" "$user_home/.config/winlux" 2>/dev/null || true
+    fi
+fi
+
+# Sudoers
 if test -d /etc/sudoers.d; then
     printf '%s ALL=(ALL:ALL) ALL\n' "$USERNAME" >/etc/sudoers.d/winlux-user
     chmod 440 /etc/sudoers.d/winlux-user
@@ -365,6 +591,67 @@ EOF
     printf '%s\n' "$USERNAME" >/etc/winlux/autologin-user
 fi
 
+# --- Installation des applications sélectionnées ---
+log "Installation des applications : $APPS_SELECTED"
+if command -v apt-get >/dev/null 2>&1 && test -n "$APPS_SELECTED"; then
+    apt-get update -qq 2>/dev/null || true
+    for app in $APPS_SELECTED; do
+        case "$app" in
+            firefox)
+                log "Installation de Firefox..."
+                apt-get install -y --no-install-recommends firefox 2>/dev/null || \
+                apt-get install -y --no-install-recommends firefox-esr 2>/dev/null || \
+                log "Échec de l'installation de Firefox"
+                ;;
+            libreoffice)
+                log "Installation de LibreOffice..."
+                apt-get install -y --no-install-recommends \
+                    libreoffice-writer libreoffice-calc libreoffice-impress \
+                    libreoffice-l10n-fr 2>/dev/null || \
+                log "Échec de l'installation de LibreOffice"
+                ;;
+            vlc)
+                log "Installation de VLC..."
+                apt-get install -y --no-install-recommends vlc 2>/dev/null || \
+                log "Échec de l'installation de VLC"
+                ;;
+            gimp)
+                log "Installation de GIMP..."
+                apt-get install -y --no-install-recommends gimp 2>/dev/null || \
+                log "Échec de l'installation de GIMP"
+                ;;
+            git)
+                log "Installation des outils développeur..."
+                apt-get install -y --no-install-recommends \
+                    git build-essential python3 2>/dev/null || \
+                log "Échec de l'installation des outils développeur"
+                ;;
+            geany)
+                log "Installation de Geany..."
+                apt-get install -y --no-install-recommends geany 2>/dev/null || \
+                log "Échec de l'installation de Geany"
+                ;;
+            audacity)
+                log "Installation d'Audacity..."
+                apt-get install -y --no-install-recommends audacity 2>/dev/null || \
+                log "Échec de l'installation d'Audacity"
+                ;;
+            obs-studio)
+                log "Installation d'OBS Studio..."
+                apt-get install -y --no-install-recommends obs-studio 2>/dev/null || \
+                log "Échec de l'installation d'OBS Studio"
+                ;;
+            *)
+                log "Application inconnue : $app, ignorée"
+                ;;
+        esac
+    done
+fi
+
+# Sauvegarder la liste des apps sélectionnées
+mkdir -p /etc/winlux
+printf '%s\n' $APPS_SELECTED >/etc/winlux/selected-apps
+
 # --- Détection et configuration GPU ---
 log 'Détection du matériel graphique...'
 hw_detect=
@@ -390,7 +677,6 @@ if command -v apt-get >/dev/null 2>&1; then
 
     if printf '%s' "$gpu_vendors" | grep -qi nvidia; then
         log 'GPU NVIDIA détecté — installation des pilotes...'
-        apt-get update -qq 2>/dev/null || true
         apt-get install -y --no-install-recommends \
             nvidia-driver nvidia-utils 2>/dev/null || \
         apt-get install -y --no-install-recommends \
@@ -413,6 +699,25 @@ if command -v apt-get >/dev/null 2>&1; then
             mesa-vulkan-drivers intel-media-va-driver 2>/dev/null || \
         log 'Installation des pilotes Intel échouée'
     fi
+fi
+
+# --- Profil d'utilisation et applications recommandées ---
+if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
+    /usr/bin/winlux-profile --apply-boot >/dev/null 2>&1 || true
+    log "Profil d'utilisation appliqué."
+fi
+if test -s /etc/winlux/recommended-apps.txt && command -v apt-get >/dev/null 2>&1; then
+    apps=$(tr '\n' ' ' </etc/winlux/recommended-apps.txt)
+    if yesno "Installer les applications recommandées pour votre profil ($apps) ?" oui; then
+        log 'Installation des applications recommandées...'
+        apt-get update -qq 2>/dev/null || true
+        # Paquet par paquet : un nom absent du dépôt ne doit pas bloquer les autres.
+        for app in $apps; do
+            apt-get install -y --no-install-recommends "$app" >/dev/null 2>&1 \
+                && log "  $app installé" || log "  $app indisponible, ignoré"
+        done
+    fi
+    rm -f /etc/winlux/recommended-apps.txt
 fi
 
 # ============================================================

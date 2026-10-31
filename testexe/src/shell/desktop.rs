@@ -9,13 +9,13 @@
 
 use crate::explorer;
 use crate::gfx::*;
+use crate::locale::*;
 use crate::notifications;
+use crate::personalize::{self, bar_button, bar_thickness, tint};
 use crate::weather;
 use crate::wm::{self, Gfx, Mouse};
 use winlux_testexe::*;
 
-pub const TASKBAR_HEIGHT: i32 = 48;
-const BUTTON: i32 = 44;
 const BUTTON_GAP: i32 = 4;
 const START_OPEN_MS: i32 = 230;
 const START_CLOSE_MS: i32 = 140;
@@ -23,6 +23,7 @@ const SPLASH_MIN_MS: u32 = 2600;
 const INTRO_MS: i32 = 520;
 const RECENTER_MS: i32 = 200;
 const TRAY_RESERVED: i32 = 236;
+const TRAY_RESERVED_V: i32 = 190;
 
 pub static mut SCREEN_W: i32 = 1280;
 pub static mut SCREEN_H: i32 = 720;
@@ -32,15 +33,27 @@ pub static mut VOLUME_LEVEL: u32 = 0;
 pub static mut BATTERY_LEVEL: u32 = 0;
 pub static mut BATTERY_PRESENT: u32 = 0;
 pub static mut NETWORK_CONNECTED: u32 = 0;
+/// Indicateur Bluetooth : 0 éteint ou absent, 1 activé, 2 appareil connecté.
+pub static mut BLUETOOTH_STATE: u32 = 0;
+/// Largeur ajoutée à gauche de la zone de notification par l'icône Bluetooth.
+unsafe fn bluetooth_width() -> i32 {
+    if BLUETOOTH_STATE != 0 {
+        24
+    } else {
+        0
+    }
+}
 static mut START_ANIM: u32 = 0;
 static mut START_CLOSING: bool = false;
 static mut HOVER_BUTTON: i32 = -1;
 static mut HOVER_START_ITEM: i32 = -1;
-static mut ICON_X: [i32; 5] = [12, 12, 12, 108, 108];
-static mut ICON_Y: [i32; 5] = [12, 108, 204, 12, 108];
+static mut ICON_X: [i32; DESKTOP_ICON_COUNT] = [12, 12, 12, 108, 108, 108, 204];
+static mut ICON_Y: [i32; DESKTOP_ICON_COUNT] = [12, 108, 204, 12, 108, 204, 12];
+static mut LAST_DESK: Rect = rect(0, 0, 0, 0);
 static mut PINNED_APPS: u8 = 79; // Explorer, Paramètres, Éditeur, Utilitaires + Terminal (bit 6)
 static mut DESKTOP_SHORTCUTS: u8 = 0;
-static mut SHOW_SYSTEM_ICONS: bool = false; // Icônes système (PC, Documents, Corbeille) désactivées par défaut
+/// Icônes système affichées (bits : Ce PC, Documents, Corbeille, -, -, Dossier personnel, Téléchargements).
+static mut SYSTEM_ICONS: u8 = 0;
 static mut START_SHOW_ALL_APPS: bool = false; // Afficher toutes les applications au lieu des épinglées
 static mut START_CATEGORY: i32 = 0; // Catégorie sélectionnée (0 = toutes)
 static mut ALL_APPS: [(&'static [u8], &'static [u8], i32); 64] = [(b"", b"", 0); 64]; // (nom, exec, catégorie)
@@ -94,6 +107,9 @@ const TOAST_MS: i32 = 4500;
 static mut NET_PANEL: bool = false;
 static mut NET_HOVER: i32 = -1;
 static mut NET_SCAN_REQUESTED: bool = false;
+static mut VOL_PANEL: bool = false;
+static mut VOL_HOVER: i32 = -1;
+static mut VOL_SLIDER_DRAG: bool = false;
 /// Données réseau lues depuis Z:\run\winlux\networks.txt.
 /// Chaque entrée : SSID, signal (0-100), sécurité, en cours d'utilisation.
 static mut NET_ENTRIES: [NetEntry; 16] = [NetEntry::EMPTY; 16];
@@ -206,7 +222,7 @@ struct SearchResult {
 
 fn collect_results(query: &[u8], out: &mut [SearchResult; 16]) -> usize {
     let mut count = 0usize;
-    for app in &PINNED {
+    for app in &pinned_apps() {
         if count >= 16 {
             break;
         }
@@ -230,7 +246,7 @@ fn collect_results(query: &[u8], out: &mut [SearchResult; 16]) -> usize {
             }
         }
     }
-    for &(title, _, g, launch) in &RECOMMENDED {
+    for &(title, _, g, launch) in &recommended_apps() {
         if count >= 16 {
             break;
         }
@@ -309,16 +325,17 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 30] = [
-            (b"Terminal", b"xterm", 1),
-            (b"Explorateur de fichiers", b"nemo", 1),
-            (b"\xC9\x64iteur", b"mousepad", 1),
-            (b"Calculatrice", b"calc.exe", 1),
+        let apps: [(&'static [u8], &'static [u8], i32); 36] = [
+            (b"Bienvenue dans Winlux", b"welcome", 9),
+            (tr(S_TERMINAL), b"xterm", 1),
+            (tr(S_FILE_EXPLORER), b"nemo", 1),
+            (tr(S_NOTEPAD), b"mousepad", 1),
+            (tr(S_CALCULATOR), b"calc.exe", 1),
             (b"Capture d'\xE9cran", b"screenshot.exe", 1),
             (b"Visionneuse", b"imageviewer.exe", 1),
             (b"Post-it", b"postit.exe", 1),
             (b"Lecteur PDF", b"pdfviewer.exe", 1),
-            (b"Lecteur audio", b"audioplayer.exe", 5),
+            (b"Lecteur multim\xE9dia", b"winlux-mediaplayer", 5),
             (b"Infos syst\xE8me", b"sysinfo.exe", 8),
             (b"Utilitaires", b"utilities-terminal", 2),
             (b"Archives", b"file-roller", 1),
@@ -334,12 +351,25 @@ fn init_apps() {
             (b"VS Code", b"code", 7),
             (b"Vim", b"vim", 7),
             (b"Geany", b"geany", 7),
-            (b"Param\xE8tres", b"cinnamon-settings", 8),
-            (b"Gestionnaire de paquets", b"mintinstall", 9),
+            (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
+            (b"Store", b"store", 9),
+            (b"Polices", b"fonts", 8),
             (b"Gestion des disques", b"diskmgr", 9),
+            (
+                crate::admin_ui::t(b"Planificateur de t\xE2ches", b"Task Scheduler"),
+                b"taskschd",
+                9,
+            ),
+            (
+                crate::admin_ui::t(b"Pare-feu Winlux", b"Winlux Firewall"),
+                b"firewall",
+                9,
+            ),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
-            (b"Gestionnaire des t\xE2ches", b"taskmgr", 9),
+            (tr(S_TASK_MANAGER), b"taskmgr", 9),
             (b"Nettoyage de disque", b"diskcleaner", 9),
+            (b"Observateur d'\xE9v\xE9nements", b"eventviewer", 9),
+            (b"Restauration syst\xE8me", b"restore", 9),
         ];
         for (name, exec, cat) in apps.iter() {
             if ALL_APPS_COUNT < 64 {
@@ -352,22 +382,47 @@ fn init_apps() {
 
 // ---------- Géométrie partagée par le dessin et les clics ----------
 
+#[derive(Clone, Copy)]
 struct Layout {
     w: i32,
     h: i32,
+    /// Bas de la zone utile (panneaux ancrés en bas à droite).
     bar_top: i32,
+    /// Droite de la zone utile.
+    right: i32,
+    bar: Rect,
+    desk: Rect,
+    vertical: bool,
+    /// Début des boutons le long de la barre.
     buttons_x: i32,
     start: Rect,
 }
 
 fn layout() -> Layout {
     let (w, h) = unsafe { (SCREEN_W.max(640), SCREEN_H.max(400)) };
-    let bar_top = h - TASKBAR_HEIGHT;
+    let t = bar_thickness();
+    let pos = unsafe { personalize::BAR_POS };
+    let (bar, desk) = match pos {
+        1 => (rect(0, 0, w, t), rect(0, t, w, h)),
+        2 => (rect(0, 0, t, h), rect(t, 0, w, h)),
+        3 => (rect(w - t, 0, w, h), rect(0, 0, w - t, h)),
+        _ => (rect(0, h - t, w, h), rect(0, 0, w, h - t)),
+    };
+    let vertical = pos >= 2;
     let count = taskbar_count();
-    let buttons_w = count * BUTTON + (count - 1) * BUTTON_GAP;
-    let available = w - TRAY_RESERVED;
+    let button = bar_button();
+    let buttons_w = count * button + (count - 1) * BUTTON_GAP;
+    let available = if vertical {
+        h - TRAY_RESERVED_V
+    } else {
+        w - TRAY_RESERVED
+    };
     let buttons_x = if unsafe { ALIGN_LEFT } {
-        12
+        if vertical {
+            8
+        } else {
+            12
+        }
     } else {
         unsafe {
             let target = (available - buttons_w) / 2;
@@ -397,18 +452,45 @@ fn layout() -> Layout {
             }
         }
     };
-    let sw = 640.min(w - 24);
-    let sh = 600.min(bar_top - 24);
-    let sx = if unsafe { ALIGN_LEFT } {
-        12
-    } else {
-        (available - sw) / 2
+    let (dw, dh) = (desk.right - desk.left, desk.bottom - desk.top);
+    let sw = 640.min(dw - 24);
+    let sh = 600.min(dh - 24);
+    let (sx, st) = match pos {
+        2 | 3 => {
+            let sx = if pos == 2 {
+                desk.left + 12
+            } else {
+                desk.right - 12 - sw
+            };
+            let st = if unsafe { ALIGN_LEFT } {
+                desk.top + 12
+            } else {
+                desk.top + (dh - sh) / 2
+            };
+            (sx, st)
+        }
+        _ => {
+            let sx = if unsafe { ALIGN_LEFT } {
+                12
+            } else {
+                (available - sw) / 2
+            };
+            let st = if pos == 1 {
+                desk.top + 12
+            } else {
+                desk.bottom - 12 - sh
+            };
+            (sx, st)
+        }
     };
-    let st = bar_top - 12 - sh;
     Layout {
         w,
         h,
-        bar_top,
+        bar_top: desk.bottom,
+        right: desk.right,
+        bar,
+        desk,
+        vertical,
         buttons_x,
         start: Rect {
             left: sx,
@@ -420,12 +502,86 @@ fn layout() -> Layout {
 }
 
 fn button_rect(l: &Layout, index: i32) -> Rect {
-    let x = l.buttons_x + index * (BUTTON + BUTTON_GAP);
-    Rect {
-        left: x,
-        top: l.bar_top + 2,
-        right: x + BUTTON,
-        bottom: l.bar_top + 2 + BUTTON,
+    let button = bar_button();
+    let main = l.buttons_x + index * (button + BUTTON_GAP);
+    let cross = (bar_thickness() - button) / 2;
+    if l.vertical {
+        rect(
+            l.bar.left + cross,
+            l.bar.top + main,
+            l.bar.left + cross + button,
+            l.bar.top + main + button,
+        )
+    } else {
+        rect(
+            l.bar.left + main,
+            l.bar.top + cross,
+            l.bar.left + main + button,
+            l.bar.top + cross + button,
+        )
+    }
+}
+
+/// Zones de la zone de notification (mêmes rectangles pour dessin et clics).
+struct Tray {
+    weather: Rect,
+    /// Icône Bluetooth (vide si l'adaptateur est absent ou éteint).
+    bluetooth: Rect,
+    chevron: Rect,
+    net: Rect,
+    volume: Rect,
+    battery: Rect,
+    clock: Rect,
+}
+fn tray(l: &Layout) -> Tray {
+    let b = l.bar;
+    let bw = unsafe { bluetooth_width() };
+    if l.vertical {
+        let row = |bottom: i32, h: i32| rect(b.left + 2, bottom - h, b.right - 2, bottom);
+        let clock = row(b.bottom - 6, 44);
+        let battery = row(clock.top - 4, 28);
+        let volume = row(battery.top, 28);
+        let net = row(volume.top, 28);
+        let chevron = row(net.top, 28);
+        Tray {
+            weather: rect(0, 0, 0, 0),
+            bluetooth: row(chevron.top, bw),
+            chevron,
+            net,
+            volume,
+            battery,
+            clock,
+        }
+    } else {
+        let right = b.right - 12;
+        let tray = right - 92 - 96;
+        let weather_x = tray - 24 - bw - weather::TRAY_WIDTH - 8;
+        Tray {
+            weather: rect(
+                weather_x - 4,
+                b.top,
+                weather_x + weather::TRAY_WIDTH,
+                b.bottom,
+            ),
+            bluetooth: rect(tray - 28 - bw, b.top, tray - 28, b.bottom),
+            chevron: rect(tray - 28, b.top, tray, b.bottom),
+            net: rect(tray, b.top, tray + 24, b.bottom),
+            volume: rect(tray + 24, b.top, tray + 52, b.bottom),
+            battery: rect(tray + 52, b.top, tray + 88, b.bottom),
+            clock: rect(right - 92, b.top, b.right, b.bottom),
+        }
+    }
+}
+fn in_bar(l: &Layout, x: i32, y: i32) -> bool {
+    inside(&l.bar, x, y)
+}
+/// Point d'ancrage d'un menu ouvert depuis la barre.
+fn bar_anchor(l: &Layout, x: i32, y: i32) -> (i32, i32) {
+    match unsafe { personalize::BAR_POS } {
+        1 => (x, l.bar.bottom),
+        2 => (l.bar.right, y),
+        3 => (l.bar.left - 278, y),
+        _ => (x, l.bar.top),
     }
 }
 
@@ -510,12 +666,18 @@ unsafe fn start_offset() -> i32 {
     }
 }
 
+pub unsafe fn open_start_menu() {
+    set_start(true);
+}
+
 unsafe fn set_start(open: bool) {
     if open == (START_OPEN && !START_CLOSING) {
         return;
     }
     NET_PANEL = false;
     NET_HOVER = -1;
+    VOL_PANEL = false;
+    VOL_HOVER = -1;
     START_ANIM = now();
     if open {
         START_OPEN = true;
@@ -546,182 +708,13 @@ fn fc(c: u32) -> u32 {
     }
 }
 
-static mut WP_DC: Handle = core::ptr::null_mut();
-static mut WP_W: i32 = 0;
-static mut WP_H: i32 = 0;
-static mut WP_TRIED: bool = false;
-
-unsafe fn load_wallpaper(hdc: Handle) {
-    if WP_TRIED {
-        return;
-    }
-    WP_TRIED = true;
-    let path = c"Z:\\usr\\share\\winlux\\wallpaper.bmp";
-    let mut selected = [0i8; 1024];
-    let length = GetEnvironmentVariableA(
-        c"WINLUX_WALLPAPER".as_ptr(),
-        selected.as_mut_ptr(),
-        selected.len() as u32,
-    );
-    let path = if length > 0 && length < selected.len() as u32 {
-        selected.as_ptr()
-    } else {
-        path.as_ptr()
-    };
-    let f = CreateFileA(
-        path,
-        0x8000_0000,
-        1,
-        core::ptr::null_mut(),
-        3,
-        0,
-        core::ptr::null_mut(),
-    );
-    if f.is_null() || f == -1isize as Handle {
-        return;
-    }
-    let fsize = GetFileSize(f, core::ptr::null_mut());
-    if fsize < 54 + 12 {
-        CloseHandle(f);
-        return;
-    }
-    let mut hdr = [0u8; 54];
-    let mut read = 0u32;
-    ReadFile(f, hdr.as_mut_ptr(), 54, &mut read, core::ptr::null_mut());
-    if read != 54 || hdr[0] != b'B' || hdr[1] != b'M' {
-        CloseHandle(f);
-        return;
-    }
-    let off = u32::from_le_bytes([hdr[10], hdr[11], hdr[12], hdr[13]]);
-    let w = i32::from_le_bytes([hdr[18], hdr[19], hdr[20], hdr[21]]);
-    let h = i32::from_le_bytes([hdr[22], hdr[23], hdr[24], hdr[25]]);
-    let bpp = u16::from_le_bytes([hdr[28], hdr[29]]);
-    if w <= 0 || h == 0 || (bpp != 24 && bpp != 32) {
-        CloseHandle(f);
-        return;
-    }
-    let abs_h = if h < 0 { -h } else { h };
-    let stride = ((w as u32 * bpp as u32 / 8 + 3) & !3) as usize;
-    let pixel_bytes = stride * abs_h as usize;
-    let info = BitmapInfoHeader {
-        size: 40,
-        width: w,
-        height: abs_h,
-        planes: 1,
-        bit_count: bpp,
-        compression: 0,
-        ..Default::default()
-    };
-    let mut bits: *mut core::ffi::c_void = core::ptr::null_mut();
-    let mem_dc = CreateCompatibleDC(hdc);
-    let dib = CreateDIBSection(mem_dc, &info, 0, &mut bits, core::ptr::null_mut(), 0);
-    if dib.is_null() || bits.is_null() {
-        DeleteDC(mem_dc);
-        CloseHandle(f);
-        return;
-    }
-    SelectObject(mem_dc, dib);
-    SetFilePointer(f, off as i32, core::ptr::null_mut(), 0);
-    let dst = bits as *mut u8;
-    let mut total = 0usize;
-    while total < pixel_bytes {
-        let chunk = (pixel_bytes - total).min(65536) as u32;
-        let mut got = 0u32;
-        ReadFile(f, dst.add(total), chunk, &mut got, core::ptr::null_mut());
-        if got == 0 {
-            break;
-        }
-        total += got as usize;
-    }
-    CloseHandle(f);
-    if total < pixel_bytes {
-        DeleteObject(dib);
-        DeleteDC(mem_dc);
-        return;
-    }
-    WP_DC = mem_dc;
-    WP_W = w;
-    WP_H = abs_h;
-}
-
-unsafe fn wallpaper_bloom(hdc: Handle, b: &mut Brushes, l: &Layout) {
-    let top = rgb(0x06, 0x12, 0x33);
-    let bottom = rgb(0x0C, 0x2E, 0x6E);
-    let bands = 48;
-    for i in 0..bands {
-        let y0 = l.h * i / bands;
-        let y1 = l.h * (i + 1) / bands;
-        fill(hdc, b, 0, y0, l.w, y1, fc(mix(top, bottom, i, bands - 1)));
-    }
-    let r = l.h.min(l.w * 3 / 4) * 9 / 25;
-    let (cx, base) = (l.w / 2, l.h * 3 / 5 + r / 3);
-    let petals: [(i32, i32, i32, u32, u32); 5] = [
-        (
-            -r * 6 / 5,
-            r * 2 / 5,
-            r * 6 / 5,
-            rgb(0x0E, 0x34, 0x82),
-            rgb(0x30, 0x6C, 0xD0),
-        ),
-        (
-            r * 6 / 5,
-            r * 2 / 5,
-            r * 6 / 5,
-            rgb(0x0E, 0x34, 0x82),
-            rgb(0x30, 0x6C, 0xD0),
-        ),
-        (
-            -r * 3 / 5,
-            r * 9 / 20,
-            r * 8 / 5,
-            rgb(0x15, 0x48, 0xA8),
-            rgb(0x4E, 0x96, 0xF0),
-        ),
-        (
-            r * 3 / 5,
-            r * 9 / 20,
-            r * 8 / 5,
-            rgb(0x15, 0x48, 0xA8),
-            rgb(0x4E, 0x96, 0xF0),
-        ),
-        (
-            0,
-            r / 2,
-            r * 2,
-            rgb(0x1E, 0x60, 0xD0),
-            rgb(0xB4, 0xD8, 0xFF),
-        ),
-    ];
-    let steps = if wm::animating() || START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS {
-        14
-    } else {
-        28
-    };
-    for (dx, rx, ry, outer, inner) in petals {
-        for k in 0..steps {
-            let sx = rx * (steps - k) / steps;
-            let sy = ry * (steps - k) / steps;
-            let px = cx + dx;
-            ellipse(
-                hdc,
-                b,
-                px - sx,
-                base - sy,
-                px + sx,
-                base,
-                fc(mix(outer, inner, k, steps - 1)),
-            );
-        }
-    }
-}
-
 unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
-    load_wallpaper(hdc);
-    if !WP_DC.is_null() && FADE >= 1000 {
-        StretchBlt(hdc, 0, 0, l.w, l.h, WP_DC, 0, 0, WP_W, WP_H, 0x00CC_0020);
-    } else {
-        wallpaper_bloom(hdc, b, l);
+    // Thème de contraste : arrière-plan uni, comme sous Windows.
+    if let Some(c) = crate::gfx::contrast_colors(crate::gfx::A11Y.contrast) {
+        fill(hdc, b, 0, 0, l.w, l.h, c.background);
+        return;
     }
+    personalize::paint_desktop(hdc, l.w, l.h);
 }
 
 // ---------- Barre des tâches ----------
@@ -778,11 +771,62 @@ fn taskbar_count() -> i32 {
 }
 fn icon_visible(i: usize) -> bool {
     unsafe {
-        // Les 3 premières icônes sont système (PC, Documents, Corbeille)
-        if i < 3 {
-            SHOW_SYSTEM_ICONS
-        } else {
+        // Explorer et Paramètres sont des raccourcis d'applications, les
+        // autres des icônes système.
+        if i == 3 || i == 4 {
             DESKTOP_SHORTCUTS & app_bit(i - 3) != 0
+        } else {
+            SYSTEM_ICONS & (1 << i) != 0
+        }
+    }
+}
+pub fn desktop_icon_visible(i: usize) -> bool {
+    i < DESKTOP_ICON_COUNT && icon_visible(i)
+}
+pub fn desktop_icon_info(i: usize) -> (&'static [u8], Glyph) {
+    desktop_icon_list()[i.min(DESKTOP_ICON_COUNT - 1)]
+}
+pub unsafe fn toggle_desktop_icon(i: usize) {
+    let shown = icon_visible(i);
+    match i {
+        3 | 4 => DESKTOP_SHORTCUTS ^= app_bit(i - 3),
+        _ if i < DESKTOP_ICON_COUNT => SYSTEM_ICONS ^= 1 << i,
+        _ => return,
+    }
+    if !shown {
+        place_icon(i);
+        save_icon_positions();
+    }
+    save_shell_state();
+}
+/// Au démarrage, les icônes visibles se rangent sans trou, colonne par colonne.
+unsafe fn arrange_icons() {
+    let rows = ((SCREEN_H.max(400) - bar_thickness() - 12) / 96).max(1);
+    let mut cell = 0;
+    for i in [0, 1, 2, 5, 6, 3, 4] {
+        if icon_visible(i) {
+            ICON_X[i] = 12 + cell / rows * 96;
+            ICON_Y[i] = 12 + cell % rows * 96;
+            cell += 1;
+        }
+    }
+}
+/// Une icône qui apparaît prend la première case libre, colonne par colonne.
+unsafe fn place_icon(i: usize) {
+    let d = layout().desk;
+    let rows = ((d.bottom - d.top - 12) / 96).max(1);
+    let cols = ((d.right - d.left - 12) / 96).max(1);
+    for cell in 0..rows * cols {
+        let (x, y) = (
+            d.left + 12 + cell / rows * 96,
+            d.top + 12 + cell % rows * 96,
+        );
+        if !(0..DESKTOP_ICON_COUNT)
+            .any(|j| j != i && icon_visible(j) && ICON_X[j] == x && ICON_Y[j] == y)
+        {
+            ICON_X[i] = x;
+            ICON_Y[i] = y;
+            return;
         }
     }
 }
@@ -793,6 +837,8 @@ unsafe fn open_desktop_icon(i: usize) {
         2 => explorer::open_trash(),
         3 => launch(Launch::Explorer),
         4 => launch(Launch::Settings),
+        5 => explorer::open_home(),
+        6 => explorer::open_downloads(),
         _ => {}
     }
 }
@@ -819,14 +865,7 @@ unsafe fn save_shell_state() {
         toast(b"Impossible d'enregistrer les raccourcis");
         return;
     }
-    let data = [
-        b'W',
-        b'T',
-        2,
-        PINNED_APPS,
-        DESKTOP_SHORTCUTS,
-        if SHOW_SYSTEM_ICONS { 1 } else { 0 },
-    ];
+    let data = [b'W', b'T', 3, PINNED_APPS, DESKTOP_SHORTCUTS, SYSTEM_ICONS];
     let mut written = 0;
     let ok = WriteFile(
         h,
@@ -860,22 +899,90 @@ unsafe fn load_shell_state() {
     if read == 6 && data[..3] == [b'W', b'T', 2] && data[3] <= 3 && data[4] <= 3 {
         PINNED_APPS = data[3];
         DESKTOP_SHORTCUTS = data[4];
-        SHOW_SYSTEM_ICONS = data[5] != 0;
+        SYSTEM_ICONS = if data[5] != 0 { 0b111 } else { 0 };
+    } else if read == 6 && data[..3] == [b'W', b'T', 3] {
+        PINNED_APPS = data[3];
+        DESKTOP_SHORTCUTS = data[4] & 3;
+        SYSTEM_ICONS = data[5] & 0b110_0111;
     }
 }
 
-pub unsafe fn show_system_icons() -> bool {
-    SHOW_SYSTEM_ICONS
+const ICONS_BYTES: usize = DESKTOP_ICON_COUNT * 8;
+const ICONS_PATH: &core::ffi::CStr = c"C:\\.local\\share\\winlux\\desktop-icons.dat";
+
+unsafe fn save_icon_positions() {
+    let file = CreateFileA(
+        ICONS_PATH.as_ptr(),
+        0x4000_0000, // GENERIC_WRITE
+        0,
+        core::ptr::null_mut(),
+        2, // CREATE_ALWAYS
+        0,
+        core::ptr::null_mut(),
+    );
+    if file.is_null() || file as isize == -1 {
+        return;
+    }
+    // x et y (i32) par icône ; les anciens fichiers n'en ont que 5.
+    let mut buf = [0u8; ICONS_BYTES];
+    for i in 0..DESKTOP_ICON_COUNT {
+        let off = i * 8;
+        buf[off..off + 4].copy_from_slice(&ICON_X[i].to_le_bytes());
+        buf[off + 4..off + 8].copy_from_slice(&ICON_Y[i].to_le_bytes());
+    }
+    let mut written = 0u32;
+    WriteFile(
+        file,
+        buf.as_ptr(),
+        ICONS_BYTES as u32,
+        &mut written,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(file);
 }
 
-pub unsafe fn set_show_system_icons(show: bool) {
-    SHOW_SYSTEM_ICONS = show;
-    save_shell_state();
+unsafe fn load_icon_positions() {
+    let file = CreateFileA(
+        ICONS_PATH.as_ptr(),
+        0x8000_0000, // GENERIC_READ
+        1,           // FILE_SHARE_READ
+        core::ptr::null_mut(),
+        3, // OPEN_EXISTING
+        0,
+        core::ptr::null_mut(),
+    );
+    if file.is_null() || file as isize == -1 {
+        return;
+    }
+    let mut buf = [0u8; ICONS_BYTES];
+    let mut nread = 0u32;
+    ReadFile(
+        file,
+        buf.as_mut_ptr(),
+        ICONS_BYTES as u32,
+        &mut nread,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(file);
+    let count = nread as usize / 8;
+    if count < 5 {
+        return;
+    }
+    // Positions enregistrées en absolu ; le premier affichage (reflow_desk)
+    // rajoute le décalage de la zone utile.
+    let desk = layout().desk;
+    for i in 0..count.min(DESKTOP_ICON_COUNT) {
+        let off = i * 8;
+        ICON_X[i] =
+            -desk.left + i32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+        ICON_Y[i] = -desk.top
+            + i32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
+    }
 }
 
 fn context_rows(app: usize) -> i32 {
     if app == usize::MAX {
-        5
+        6
     } else if unsafe { CONTEXT_DESKTOP.is_none() } {
         4
     } else if wm::is_open(app) {
@@ -893,8 +1000,9 @@ unsafe fn open_context(app: usize, desktop: Option<usize>, x: i32, y: i32) {
     CONTEXT_HOVER = -1;
     let w = 278.min(SCREEN_W);
     let h = context_rows(app) * 34 + 8;
-    let left = x.clamp(0, (SCREEN_W - w).max(0));
-    let top = y.clamp(0, (SCREEN_H - TASKBAR_HEIGHT - h).max(0));
+    let d = layout().desk;
+    let left = x.clamp(d.left, (d.right - w).max(d.left));
+    let top = y.clamp(d.top, (d.bottom - h).max(d.top));
     CONTEXT_RECT = rect(left, top, left + w, top + h);
 }
 unsafe fn open_context_desktop(x: i32, y: i32) {
@@ -906,8 +1014,9 @@ unsafe fn open_context_desktop(x: i32, y: i32) {
     CONTEXT_HOVER = -1;
     let w = 278.min(SCREEN_W);
     let h = context_rows(usize::MAX) * 34 + 8;
-    let left = x.clamp(0, (SCREEN_W - w).max(0));
-    let top = y.clamp(0, (SCREEN_H - TASKBAR_HEIGHT - h).max(0));
+    let d = layout().desk;
+    let left = x.clamp(d.left, (d.right - w).max(d.left));
+    let top = y.clamp(d.top, (d.bottom - h).max(d.top));
     CONTEXT_RECT = rect(left, top, left + w, top + h);
 }
 unsafe fn context_row(x: i32, y: i32) -> i32 {
@@ -941,6 +1050,7 @@ unsafe fn context_action(app: usize, desktop: Option<usize>, row: i32, persist: 
             4 => {
                 wm::open(wm::APP_UTILITIES);
             }
+            5 => personalize::open_settings(0),
             _ => {}
         }
         return;
@@ -1027,12 +1137,13 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         p.surface,
     );
     if app == usize::MAX {
-        let labels: [&[u8]; 5] = [
+        let labels: [&[u8]; 6] = [
             b"Ouvrir l'Explorateur",
             b"Ouvrir le terminal",
             b"Ouvrir les Param\xE8tres",
             b"Ouvrir l'\xC9\x64iteur",
             b"Ouvrir les Utilitaires",
+            b"Personnaliser",
         ];
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
@@ -1133,6 +1244,32 @@ unsafe fn draw_ethernet(hdc: Handle, b: &mut Brushes, x: i32, y: i32, on: bool) 
     fill(hdc, b, x + 2, y + 4, x + 13, y + 6, c);
     fill(hdc, b, x + 2, y + 4, x + 4, y + 8, c);
     fill(hdc, b, x + 11, y + 4, x + 13, y + 8, c);
+}
+/// Rune Bluetooth (ᛒ) en 10x15 px ; point d'accent si un appareil est connecté.
+unsafe fn draw_bluetooth(hdc: Handle, b: &mut Brushes, x: i32, y: i32, connected: bool) {
+    let c = rgb(0xF2, 0xF2, 0xF2);
+    fill(hdc, b, x + 4, y, x + 6, y + 15, c);
+    for k in 0..4 {
+        // Chevron supérieur et inférieur, puis diagonales croisées.
+        fill(hdc, b, x + 5 + k, y + k, x + 7 + k, y + k + 1, c);
+        fill(hdc, b, x + 8 - k, y + 4 + k, x + 10 - k, y + 5 + k, c);
+        fill(hdc, b, x + 5 + k, y + 14 - k, x + 7 + k, y + 15 - k, c);
+        fill(hdc, b, x + 8 - k, y + 10 - k, x + 10 - k, y + 11 - k, c);
+        fill(hdc, b, x + 1 + k, y + 4 + k, x + 3 + k, y + 5 + k, c);
+        fill(hdc, b, x + 1 + k, y + 11 - k, x + 3 + k, y + 12 - k, c);
+    }
+    if connected {
+        round_rect(
+            hdc,
+            b,
+            x + 11,
+            y + 11,
+            x + 15,
+            y + 15,
+            2,
+            crate::gfx::pal().accent,
+        );
+    }
 }
 unsafe fn draw_volume(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32) {
     let c = rgb(0xF2, 0xF2, 0xF2);
@@ -1271,17 +1408,44 @@ unsafe fn net_read_scan() {
     }
 }
 
-unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) {
+unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32) {
     if wm::native_session() {
         return;
     }
-    let top = l.bar_top + dy;
-    fill(hdc, b, 0, top, l.w, l.h, rgb(0x1C, 0x1F, 0x26));
-    fill(hdc, b, 0, top, l.w, top + 1, rgb(0x34, 0x38, 0x42));
+    // Animation d'entrée : la barre glisse depuis le bord de l'écran.
+    let (ox, oy) = match personalize::BAR_POS {
+        1 => (0, -dy),
+        2 => (-dy, 0),
+        3 => (dy, 0),
+        _ => (0, dy),
+    };
+    let shifted = |r: Rect| rect(r.left + ox, r.top + oy, r.right + ox, r.bottom + oy);
+    let mut l = *l0;
+    l.bar = shifted(l0.bar);
+    let l = &l;
+    let bar = l.bar;
+    let bg = personalize::bar_bg();
+    fill(hdc, b, bar.left, bar.top, bar.right, bar.bottom, bg);
+    let edge = personalize::bar_line();
+    match personalize::BAR_POS {
+        1 => fill(
+            hdc,
+            b,
+            bar.left,
+            bar.bottom - 1,
+            bar.right,
+            bar.bottom,
+            edge,
+        ),
+        2 => fill(hdc, b, bar.right - 1, bar.top, bar.right, bar.bottom, edge),
+        3 => fill(hdc, b, bar.left, bar.top, bar.left + 1, bar.bottom, edge),
+        _ => fill(hdc, b, bar.left, bar.top, bar.right, bar.top + 1, edge),
+    }
+    set_glyph_bg(Some(bg));
+    let gs = personalize::bar_glyph();
+    let button = bar_button();
     for i in 0..taskbar_count() {
-        let mut r = button_rect(l, i);
-        r.top += dy;
-        r.bottom += dy;
+        let r = button_rect(l, i);
         let app = taskbar_app(i);
         let g = match app {
             Some(wm::APP_EXPLORER) => Glyph::Folder,
@@ -1290,6 +1454,13 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(wm::APP_DISKMGR) => Glyph::Drive,
+            Some(wm::APP_STORE) => Glyph::Store,
+            Some(wm::APP_FONTS) => Glyph::Text,
+            Some(wm::APP_TASKSCHD) => Glyph::Clock,
+            Some(wm::APP_FIREWALL) => Glyph::Shield,
+            Some(wm::APP_EVENTVIEWER) => Glyph::Details,
+            Some(wm::APP_RESTORE) => Glyph::Refresh,
+            Some(wm::APP_WELCOME) => Glyph::Star,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1298,66 +1469,70 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         }
         let running = app.map_or(false, wm::is_open);
         let focused = app.map_or(false, wm::is_active) || (i == 0 && START_OPEN && !START_CLOSING);
-        if focused {
-            round_rect(
-                hdc,
-                b,
-                r.left,
-                r.top,
-                r.right,
-                r.bottom,
-                5,
-                rgb(0x2E, 0x33, 0x3D),
-            );
+        let back = if focused {
+            personalize::bar_focus()
         } else if HOVER_BUTTON == i as i32 {
-            round_rect(
-                hdc,
-                b,
-                r.left,
-                r.top,
-                r.right,
-                r.bottom,
-                5,
-                rgb(0x29, 0x2D, 0x36),
-            );
+            personalize::bar_hover()
+        } else {
+            bg
+        };
+        if back != bg {
+            round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 5, back);
         }
-        glyph(hdc, b, f, g, r.left + 10, r.top + 10, 24);
+        set_glyph_bg(Some(back));
+        glyph(
+            hdc,
+            b,
+            f,
+            g,
+            r.left + (button - gs) / 2,
+            r.top + (button - gs) / 2,
+            gs,
+        );
         if running {
             // Indicateur d'application ouverte, comme sous Windows 11.
-            let cx = (r.left + r.right) / 2;
             let half = if focused { 8 } else { 3 };
-            round_rect(
-                hdc,
-                b,
-                cx - half,
-                r.bottom - 3,
-                cx + half,
-                r.bottom,
-                1,
-                if focused {
-                    ACCENT
+            let c = if focused {
+                ACCENT
+            } else {
+                rgb(0x9A, 0xA3, 0xAE)
+            };
+            if l.vertical {
+                let cy = (r.top + r.bottom) / 2;
+                let x = if personalize::BAR_POS == 2 {
+                    r.left
                 } else {
-                    rgb(0x9A, 0xA3, 0xAE)
-                },
-            );
+                    r.right - 3
+                };
+                round_rect(hdc, b, x, cy - half, x + 3, cy + half, 1, c);
+            } else {
+                let cx = (r.left + r.right) / 2;
+                round_rect(hdc, b, cx - half, r.bottom - 3, cx + half, r.bottom, 1, c);
+            }
         }
     }
+    set_glyph_bg(None);
 
     // Indicateur de bureau virtuel (entre les boutons d'apps et la zone de notification)
     if wm::desktop_count() > 1 {
-        let count = taskbar_count();
-        let ind_x = l.buttons_x + count * (BUTTON + BUTTON_GAP) + 8;
-        let ind_y = top + 8;
+        let last = button_rect(l, taskbar_count() - 1);
         let cur = wm::current_desktop();
         let total = wm::desktop_count();
         for d in 0..total {
-            let dx = ind_x + d as i32 * 14;
             let c = if d == cur {
                 ACCENT
             } else {
                 rgb(0x5A, 0x5E, 0x68)
             };
-            round_rect(hdc, b, dx, ind_y + 14, dx + 10, ind_y + 20, 2, c);
+            if l.vertical {
+                let y = last.bottom + 10 + d as i32 * 14;
+                let cx = (bar.left + bar.right) / 2;
+                round_rect(hdc, b, cx - 3, y, cx + 3, y + 10, 2, c);
+            } else {
+                let dx = last.right + 12 + d as i32 * 14;
+                let cy = (bar.top + bar.bottom) / 2;
+                round_rect(hdc, b, dx, cy - 3, dx + 10, cy + 3, 2, c);
+            }
         }
     }
     // Zone de notification : chevron, réseau, volume, batterie, horloge.
@@ -1382,73 +1557,122 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         b'0' + (year / 10 % 10) as u8,
         b'0' + (year % 10) as u8,
     ];
-    let right = l.w - 12;
-    text(
-        hdc,
-        f.body,
-        rgb(0xF2, 0xF2, 0xF2),
-        right - text_width(&clock, 13),
-        top + 8,
-        &clock,
-    );
-    text(
-        hdc,
-        f.body,
-        rgb(0xF2, 0xF2, 0xF2),
-        right - text_width(&date, 13),
-        top + 26,
-        &date,
-    );
-    let tray = right - 92 - 96;
-    round_rect(
-        hdc,
-        b,
-        tray - 4,
-        top + 6,
-        tray + 88,
-        top + 42,
-        5,
-        rgb(0x24, 0x28, 0x31),
-    );
-    if NET_IS_WIFI {
-        draw_wifi(hdc, b, tray + 6, top + 17, NETWORK_CONNECTED != 0);
+    let t = tray(l);
+    let fg = rgb(0xF2, 0xF2, 0xF2);
+    let dim = rgb(0xC8, 0xCD, 0xD4);
+    let tray_bg = personalize::bar_tray();
+    let mid = |r: &Rect| (r.top + r.bottom) / 2;
+    if l.vertical {
+        let cx = (bar.left + bar.right) / 2;
+        text_centered(hdc, f.body, 13, fg, cx, t.clock.top + 4, &clock);
+        text_centered(hdc, f.small, 11, dim, cx, t.clock.top + 23, &date[..5]);
+        round_rect(
+            hdc,
+            b,
+            t.chevron.left + 2,
+            t.net.top,
+            t.chevron.right - 2,
+            t.battery.bottom,
+            5,
+            tray_bg,
+        );
+        text_centered(hdc, f.semibold, 13, dim, cx, t.chevron.top + 7, b"^");
+        if BLUETOOTH_STATE != 0 {
+            draw_bluetooth(hdc, b, cx - 7, t.bluetooth.top + 6, BLUETOOTH_STATE == 2);
+        }
+        if NET_IS_WIFI {
+            draw_wifi(hdc, b, cx - 9, t.net.top + 6, NETWORK_CONNECTED != 0);
+        } else {
+            draw_ethernet(hdc, b, cx - 9, t.net.top + 6, NETWORK_CONNECTED != 0);
+        }
+        draw_volume(hdc, b, cx - 9, t.volume.top + 6, VOLUME_LEVEL);
+        if BATTERY_PRESENT != 0 {
+            draw_battery(hdc, b, cx - 9, t.battery.top + 8, BATTERY_LEVEL);
+        } else {
+            text_centered(hdc, f.small, 11, dim, cx, t.battery.top + 8, b"CA");
+        }
     } else {
-        draw_ethernet(hdc, b, tray + 6, top + 17, NETWORK_CONNECTED != 0);
-    }
-    draw_volume(hdc, b, tray + 30, top + 17, VOLUME_LEVEL);
-    if BATTERY_PRESENT != 0 {
-        draw_battery(hdc, b, tray + 58, top + 17, BATTERY_LEVEL);
-    } else {
+        let right = bar.right - 12;
         text(
             hdc,
-            f.small,
-            rgb(0xC8, 0xCD, 0xD4),
-            tray + 60,
-            top + 17,
-            b"CA",
+            f.body,
+            fg,
+            right - text_width(&clock, 13),
+            mid(&bar) - 16,
+            &clock,
         );
+        text(
+            hdc,
+            f.body,
+            fg,
+            right - text_width(&date, 13),
+            mid(&bar) + 2,
+            &date,
+        );
+        round_rect(
+            hdc,
+            b,
+            t.net.left - 4,
+            mid(&bar) - 18,
+            t.battery.right,
+            mid(&bar) + 18,
+            5,
+            tray_bg,
+        );
+        if NET_IS_WIFI {
+            draw_wifi(
+                hdc,
+                b,
+                t.net.left + 6,
+                mid(&bar) - 7,
+                NETWORK_CONNECTED != 0,
+            );
+        } else {
+            draw_ethernet(
+                hdc,
+                b,
+                t.net.left + 6,
+                mid(&bar) - 7,
+                NETWORK_CONNECTED != 0,
+            );
+        }
+        draw_volume(hdc, b, t.volume.left + 6, mid(&bar) - 7, VOLUME_LEVEL);
+        if BATTERY_PRESENT != 0 {
+            draw_battery(hdc, b, t.battery.left + 6, mid(&bar) - 7, BATTERY_LEVEL);
+        } else {
+            text(hdc, f.small, dim, t.battery.left + 8, mid(&bar) - 7, b"CA");
+        }
+        text(
+            hdc,
+            f.semibold,
+            dim,
+            t.chevron.left + 4,
+            mid(&bar) - 10,
+            b"^",
+        );
+        if BLUETOOTH_STATE != 0 {
+            draw_bluetooth(
+                hdc,
+                b,
+                t.bluetooth.left + 5,
+                mid(&bar) - 8,
+                BLUETOOTH_STATE == 2,
+            );
+        }
+        // Widget météo à gauche du chevron (et de l'icône Bluetooth)
+        let weather_x = t.weather.left + 4;
+        round_rect(
+            hdc,
+            b,
+            weather_x - 4,
+            mid(&bar) - 18,
+            weather_x + weather::TRAY_WIDTH,
+            mid(&bar) + 18,
+            5,
+            tray_bg,
+        );
+        weather::draw_tray(hdc, b, f, weather_x, mid(&bar) - 10);
     }
-    text(
-        hdc,
-        f.semibold,
-        rgb(0xC8, 0xCD, 0xD4),
-        tray - 24,
-        top + 14,
-        b"^",
-    );
-    // Widget météo à gauche du chevron
-    let weather_x = tray - 24 - weather::TRAY_WIDTH - 8;
-    round_rect(
-        hdc,
-        b,
-        weather_x - 4,
-        top + 6,
-        weather_x + weather::TRAY_WIDTH,
-        top + 42,
-        5,
-        rgb(0x24, 0x28, 0x31),
-    );
-    weather::draw_tray(hdc, b, f, weather_x, top + 14);
 }
 
 // ---------- Menu Démarrer ----------
@@ -1472,74 +1696,78 @@ struct App {
     glyph: Glyph,
     launch: Launch,
 }
-const PINNED: [App; 8] = [
-    App {
-        name: b"Explorer",
-        glyph: Glyph::Folder,
-        launch: Launch::Explorer,
-    },
-    App {
-        name: b"Param\xE8tres",
-        glyph: Glyph::Settings,
-        launch: Launch::Settings,
-    },
-    App {
-        name: b"\xC9\x64iteur",
-        glyph: Glyph::Code,
-        launch: Launch::Notepad,
-    },
-    App {
-        name: b"Utilitaires",
-        glyph: Glyph::Tools,
-        launch: Launch::Settings,
-    },
-    App {
-        name: b"Mises \xE0 jour",
-        glyph: Glyph::Store,
-        launch: Launch::Updates,
-    },
-    App {
-        name: b"Documents",
-        glyph: Glyph::Folder,
-        launch: Launch::Documents,
-    },
-    App {
-        name: b"Ce PC",
-        glyph: Glyph::Computer,
-        launch: Launch::Pc,
-    },
-    App {
-        name: b"Programmes .exe",
-        glyph: Glyph::Exe,
-        launch: Launch::Programs,
-    },
-];
-const RECOMMENDED: [(&[u8], &[u8], Glyph, Launch); 4] = [
-    (
-        b"Terminal",
-        b"Ouvrir un terminal Linux",
-        Glyph::Terminal,
-        Launch::Terminal,
-    ),
-    (
-        b"Navigateur",
-        b"Ouvrir le navigateur web",
-        Glyph::Store,
-        Launch::Browser,
-    ),
-    (
-        b"Documents",
-        b"Dossier personnel Linux",
-        Glyph::Folder,
-        Launch::Documents,
-    ),
-    (
-        b"Param\xE8tres Linux et Windows",
-        b"Clavier, r\xE9seau et alimentation",
-        Glyph::Settings,
-        Launch::Settings,
-    ),
-];
+fn pinned_apps() -> [App; 8] {
+    [
+        App {
+            name: tr(S_FILE_EXPLORER),
+            glyph: Glyph::Folder,
+            launch: Launch::Explorer,
+        },
+        App {
+            name: tr(S_SETTINGS_APP),
+            glyph: Glyph::Settings,
+            launch: Launch::Settings,
+        },
+        App {
+            name: tr(S_NOTEPAD),
+            glyph: Glyph::Code,
+            launch: Launch::Notepad,
+        },
+        App {
+            name: b"Store",
+            glyph: Glyph::Store,
+            launch: Launch::Exec(b"store"),
+        },
+        App {
+            name: b"Mises \xE0 jour",
+            glyph: Glyph::Store,
+            launch: Launch::Updates,
+        },
+        App {
+            name: tr(S_DOCUMENTS),
+            glyph: Glyph::Folder,
+            launch: Launch::Documents,
+        },
+        App {
+            name: tr(S_THIS_PC),
+            glyph: Glyph::Computer,
+            launch: Launch::Pc,
+        },
+        App {
+            name: b"Programmes .exe",
+            glyph: Glyph::Exe,
+            launch: Launch::Programs,
+        },
+    ]
+}
+fn recommended_apps() -> [(&'static [u8], &'static [u8], Glyph, Launch); 4] {
+    [
+        (
+            tr(S_TERMINAL),
+            b"Ouvrir un terminal Linux",
+            Glyph::Terminal,
+            Launch::Terminal,
+        ),
+        (
+            b"Navigateur",
+            b"Ouvrir le navigateur web",
+            Glyph::Store,
+            Launch::Browser,
+        ),
+        (
+            tr(S_DOCUMENTS),
+            b"Dossier personnel Linux",
+            Glyph::Folder,
+            Launch::Documents,
+        ),
+        (
+            tr(S_SETTINGS_APP),
+            b"Clavier, r\xE9seau et alimentation",
+            Glyph::Settings,
+            Launch::Settings,
+        ),
+    ]
+}
 
 /// Lance une application depuis la barre des tâches ou le menu Démarrer.
 unsafe fn launch(what: Launch) {
@@ -1608,6 +1836,45 @@ unsafe fn launch(what: Launch) {
                 wm::open(wm::APP_DISKMGR);
                 return;
             }
+            if cmd == b"store" {
+                crate::store::open();
+                return;
+            }
+            if cmd == b"fonts" {
+                crate::fonts::open();
+                return;
+            }
+            if cmd == b"taskschd" || cmd == b"taskschd.msc" {
+                wm::open(wm::APP_TASKSCHD);
+                return;
+            }
+            if cmd == b"firewall" || cmd == b"wf.msc" || cmd == b"firewall.cpl" {
+                wm::open(wm::APP_FIREWALL);
+                return;
+            }
+            if cmd == b"eventviewer" {
+                wm::open(wm::APP_EVENTVIEWER);
+                return;
+            }
+            if cmd == b"restore" {
+                wm::open(wm::APP_RESTORE);
+                return;
+            }
+            if cmd == b"welcome" {
+                if wm::native_session() {
+                    ShellExecuteA(
+                        core::ptr::null_mut(),
+                        c"open".as_ptr(),
+                        c"winlux-welcome".as_ptr(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        1,
+                    );
+                } else {
+                    crate::welcome::open();
+                }
+                return;
+            }
             let mut wcmd = [0u16; 256];
             for (i, &b) in cmd.iter().enumerate() {
                 if i < 255 {
@@ -1633,13 +1900,19 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         return;
     }
     let s0 = l.start;
-    let s = &Rect {
-        left: s0.left,
-        top: s0.top + dy,
-        right: s0.right,
-        bottom: s0.bottom + dy,
+    let (ox, oy) = match personalize::BAR_POS {
+        1 => (0, -dy),
+        2 => (-dy, 0),
+        3 => (dy, 0),
+        _ => (0, dy),
     };
-    let surface = rgb(0x24, 0x27, 0x2F);
+    let s = &Rect {
+        left: s0.left + ox,
+        top: s0.top + oy,
+        right: s0.right + ox,
+        bottom: s0.bottom + oy,
+    };
+    let surface = tint(rgb(0x24, 0x27, 0x2F));
     panel(
         hdc,
         b,
@@ -1649,7 +1922,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         s.bottom,
         8,
         surface,
-        rgb(0x3A, 0x3F, 0x4A),
+        tint(rgb(0x3A, 0x3F, 0x4A)),
     );
     let pad = 28;
     let inner_l = s.left + pad;
@@ -1668,18 +1941,18 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let y = s.top + 82;
     let title: &[u8] = unsafe {
         if START_SHOW_ALL_APPS {
-            b"Toutes mes applications"
+            tr(S_ALL_APPS)
         } else {
-            b"\xC9pingl\xE9"
+            tr(S_PINNED)
         }
     };
     text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, title);
     // Barre de recherche
     let search_y = y + 40;
     let search_bg = if unsafe { START_SEARCH_ACTIVE } {
-        rgb(0x3A, 0x3F, 0x4A)
+        tint(rgb(0x3A, 0x3F, 0x4A))
     } else {
-        rgb(0x31, 0x35, 0x3F)
+        tint(rgb(0x31, 0x35, 0x3F))
     };
     round_rect(
         hdc,
@@ -1708,7 +1981,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0x88, 0x88, 0x88),
             inner_l + 34,
             search_y + 8,
-            b"Rechercher...",
+            tr(S_SEARCH_PLACEHOLDER),
         );
     }
     if unsafe { START_SEARCH_LEN } > 0 {
@@ -1753,7 +2026,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     inner_r,
                     iy + 40,
                     5,
-                    rgb(0x31, 0x35, 0x3F),
+                    tint(rgb(0x31, 0x35, 0x3F)),
                 );
             }
             glyph(hdc, b, f, results[i].glyph, inner_l + 8, iy + 8, 24);
@@ -1769,9 +2042,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     } else {
         let all: &[u8] = unsafe {
             if START_SHOW_ALL_APPS {
-                b"\xC9pingl\xE9"
+                tr(S_PINNED)
             } else {
-                b"Toutes mes applications"
+                tr(S_ALL_APPS)
             }
         };
         let all_w = text_width(all, 11) + 20;
@@ -1783,7 +2056,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             y + 2,
             all,
         );
-        for (i, app) in PINNED
+        for (i, app) in pinned_apps()
             .iter()
             .take((PIN_COLS * pin_rows(s)) as usize)
             .enumerate()
@@ -1798,7 +2071,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     c.right,
                     c.bottom,
                     5,
-                    rgb(0x31, 0x35, 0x3F),
+                    tint(rgb(0x31, 0x35, 0x3F)),
                 );
             }
             let cx = (c.left + c.right) / 2;
@@ -1919,9 +2192,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 rgb(0xF2, 0xF2, 0xF2),
                 inner_l + 4,
                 ry,
-                b"Recommand\xE9",
+                tr(S_RECOMMENDED),
             );
-            for (i, (title, sub, g, _)) in RECOMMENDED.iter().enumerate() {
+            for (i, (title, sub, g, _)) in recommended_apps().iter().enumerate() {
                 let c = recommended_cell(s, i as i32);
                 if HOVER_START_ITEM == 100 + i as i32 {
                     round_rect(
@@ -1932,7 +2205,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                         c.right,
                         c.bottom,
                         5,
-                        rgb(0x31, 0x35, 0x3F),
+                        tint(rgb(0x31, 0x35, 0x3F)),
                     );
                 }
                 glyph(hdc, b, f, *g, c.left + 8, c.top + 10, 28);
@@ -1964,7 +2237,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         s.bottom - 64,
         s.right - 1,
         s.bottom - 1,
-        rgb(0x1F, 0x22, 0x29),
+        tint(rgb(0x1F, 0x22, 0x29)),
     );
     fill(
         hdc,
@@ -1973,7 +2246,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         s.bottom - 64,
         s.right - 1,
         s.bottom - 63,
-        rgb(0x34, 0x38, 0x42),
+        tint(rgb(0x34, 0x38, 0x42)),
     );
     let ay = s.bottom - 48;
     ellipse(
@@ -2012,15 +2285,15 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         t.bottom,
         4,
         if HOVER_START_ITEM == 200 {
-            rgb(0x3A, 0x3F, 0x4A)
+            tint(rgb(0x3A, 0x3F, 0x4A))
         } else {
-            rgb(0x31, 0x35, 0x3F)
+            tint(rgb(0x31, 0x35, 0x3F))
         },
     );
     let label: &[u8] = if ALIGN_LEFT {
-        b"Barre : \xE0 gauche"
+        tr(S_ALIGN_LEFT)
     } else {
-        b"Barre : centr\xE9e"
+        tr(S_CENTER)
     };
     text_centered(
         hdc,
@@ -2034,9 +2307,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     // Bouton d'alimentation.
     let (px, py) = (inner_r - 30, ay + 4);
     let pbg = if HOVER_START_ITEM == 201 {
-        rgb(0x31, 0x35, 0x3F)
+        tint(rgb(0x31, 0x35, 0x3F))
     } else {
-        rgb(0x1F, 0x22, 0x29)
+        tint(rgb(0x1F, 0x22, 0x29))
     };
     if HOVER_START_ITEM == 201 {
         round_rect(hdc, b, px - 8, py - 6, px + 32, py + 30, 4, pbg);
@@ -2069,7 +2342,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             mx + menu_w,
             my + menu_h,
             8,
-            rgb(0x2C, 0x2C, 0x2C),
+            tint(rgb(0x2C, 0x2C, 0x2C)),
             rgb(0x50, 0x50, 0x50),
         );
         let items: [&[u8]; 3] = [b"Arr\xEAter", b"Red\xE9marrer", b"Verrouiller"];
@@ -2086,7 +2359,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     mx + menu_w - 4,
                     iy + item_h,
                     4,
-                    rgb(0x40, 0x44, 0x4C),
+                    tint(rgb(0x40, 0x44, 0x4C)),
                 );
             }
             text(
@@ -2150,9 +2423,9 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     let all_w = unsafe {
         text_width(
             if START_SHOW_ALL_APPS {
-                b"\xC9pingl\xE9"
+                tr(S_PINNED)
             } else {
-                b"Toutes mes applications"
+                tr(S_ALL_APPS)
             },
             11,
         ) + 20
@@ -2180,7 +2453,8 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
             }
         }
     } else {
-        for i in 0..PINNED.len() as i32 {
+        let pinned = pinned_apps();
+        for i in 0..pinned.len() as i32 {
             if inside(&pinned_cell(s, i), x, y) {
                 return i;
             }
@@ -2335,6 +2609,8 @@ pub unsafe fn toast(msg: &[u8]) {
     TOAST_LEN = n;
     TOAST_START = now();
     notifications::push_simple(msg);
+    crate::a11y::sound_event(crate::a11y::Sound::Notification, msg);
+    crate::a11y::announce(msg);
 }
 
 unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
@@ -2358,7 +2634,7 @@ unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         0
     };
     let w = 364;
-    let x = l.w - w - 12 + slide;
+    let x = l.right - w - 12 + slide;
     let y = l.bar_top - 112 + drop;
     panel(
         hdc,
@@ -2452,7 +2728,7 @@ unsafe fn net_panel_rect(l: &Layout) -> Rect {
     let status_h = 52;
     let btn_h = 40;
     let h = NET_HEADER_H + status_h + rows * NET_ROW_H + btn_h + 16;
-    let x = l.w - NET_PANEL_W - 12 - 96;
+    let x = l.right - NET_PANEL_W - 12 - 96;
     let y = l.bar_top - 12 - h;
     rect(x, y, x + NET_PANEL_W, y + h)
 }
@@ -2752,6 +3028,274 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     );
 }
 
+// ---------- Panneau volume (flyout mélangeur) ----------
+
+const VOL_PANEL_W: i32 = 320;
+
+unsafe fn vol_panel_rect(l: &Layout) -> Rect {
+    let h = 280;
+    let t = tray(l);
+    let x = t
+        .volume
+        .left
+        .clamp(l.desk.left + 12, l.right - VOL_PANEL_W - 12);
+    let y = l.bar_top - 12 - h;
+    rect(x, y, x + VOL_PANEL_W, y + h)
+}
+
+unsafe fn draw_vol_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if !VOL_PANEL {
+        return;
+    }
+    let r = vol_panel_rect(l);
+    let x = r.left;
+    let y = r.top;
+    let w = r.right - r.left;
+    let h = r.bottom - r.top;
+    panel(
+        hdc,
+        b,
+        x,
+        y,
+        x + w,
+        y + h,
+        8,
+        rgb(0x24, 0x27, 0x2F),
+        rgb(0x3A, 0x3F, 0x4A),
+    );
+
+    // Icône haut-parleur et titre
+    draw_volume(hdc, b, x + 16, y + 16, VOLUME_LEVEL);
+    text(
+        hdc,
+        f.semibold,
+        rgb(0xF2, 0xF2, 0xF2),
+        x + 48,
+        y + 18,
+        b"Volume",
+    );
+
+    // Niveau affiché
+    let mut pct = [0u8; 4];
+    let v = VOLUME_LEVEL.min(100);
+    let plen = if v >= 100 {
+        pct[0] = b'1';
+        pct[1] = b'0';
+        pct[2] = b'0';
+        pct[3] = b'%';
+        4
+    } else if v >= 10 {
+        pct[0] = b'0' + (v / 10) as u8;
+        pct[1] = b'0' + (v % 10) as u8;
+        pct[2] = b'%';
+        3
+    } else {
+        pct[0] = b'0' + v as u8;
+        pct[1] = b'%';
+        2
+    };
+    text(
+        hdc,
+        f.body,
+        rgb(0x9A, 0xA3, 0xAE),
+        x + w - 50,
+        y + 18,
+        &pct[..plen],
+    );
+
+    // Barre de volume (slider)
+    let bar_x = x + 16;
+    let bar_y = y + 56;
+    let bar_w = w - 32;
+    round_rect(
+        hdc,
+        b,
+        bar_x,
+        bar_y + 4,
+        bar_x + bar_w,
+        bar_y + 12,
+        4,
+        rgb(0x3A, 0x3F, 0x4A),
+    );
+    let fill_w = bar_w * v as i32 / 100;
+    if fill_w > 0 {
+        round_rect(
+            hdc,
+            b,
+            bar_x,
+            bar_y + 4,
+            bar_x + fill_w,
+            bar_y + 12,
+            4,
+            pal().accent,
+        );
+    }
+    // Curseur
+    let knob_x = bar_x + fill_w;
+    ellipse(
+        hdc,
+        b,
+        knob_x - 7,
+        bar_y,
+        knob_x + 7,
+        bar_y + 16,
+        rgb(0xF2, 0xF2, 0xF2),
+    );
+
+    // Séparateur
+    let sep_y = bar_y + 32;
+    fill(
+        hdc,
+        b,
+        x + 1,
+        sep_y,
+        x + w - 1,
+        sep_y + 1,
+        rgb(0x3A, 0x3F, 0x4A),
+    );
+
+    // Applications (simulé à partir des fenêtres ouvertes)
+    text(
+        hdc,
+        f.small,
+        rgb(0x9A, 0xA3, 0xAE),
+        x + 16,
+        sep_y + 10,
+        b"Applications",
+    );
+    let mut ay = sep_y + 30;
+    let mut drawn = 0;
+    for app in 0..wm::APP_COUNT {
+        if !wm::is_open(app) || drawn >= 4 {
+            continue;
+        }
+        let name = wm::title_of(app);
+        let hover = VOL_HOVER == 200 + app as i32;
+        if hover {
+            round_rect(
+                hdc,
+                b,
+                x + 8,
+                ay - 2,
+                x + w - 8,
+                ay + 26,
+                4,
+                rgb(0x2E, 0x33, 0x3D),
+            );
+        }
+        glyph(hdc, b, f, wm::glyph_of(app), x + 16, ay + 2, 16);
+        text_fit(
+            hdc,
+            f.body,
+            13,
+            rgb(0xF2, 0xF2, 0xF2),
+            x + 40,
+            ay + 4,
+            name,
+            w / 2 - 30,
+        );
+        // Mini barre de volume par app (100% par défaut)
+        let app_bar_x = x + w / 2 + 20;
+        let app_bar_w = w / 2 - 50;
+        round_rect(
+            hdc,
+            b,
+            app_bar_x,
+            ay + 8,
+            app_bar_x + app_bar_w,
+            ay + 14,
+            3,
+            rgb(0x3A, 0x3F, 0x4A),
+        );
+        round_rect(
+            hdc,
+            b,
+            app_bar_x,
+            ay + 8,
+            app_bar_x + app_bar_w,
+            ay + 14,
+            3,
+            pal().accent,
+        );
+        ay += 32;
+        drawn += 1;
+    }
+    if drawn == 0 {
+        text(
+            hdc,
+            f.small,
+            rgb(0x9A, 0xA3, 0xAE),
+            x + 16,
+            ay + 4,
+            b"Aucune application ouverte",
+        );
+    }
+
+    // Boutons en bas : Muet + Mélangeur
+    let btn_y = r.bottom - 44;
+    fill(
+        hdc,
+        b,
+        x + 1,
+        btn_y - 1,
+        x + w - 1,
+        btn_y,
+        rgb(0x3A, 0x3F, 0x4A),
+    );
+    let mute_r = rect(x + 16, btn_y + 4, x + w / 2 - 4, btn_y + 34);
+    round_rect(
+        hdc,
+        b,
+        mute_r.left,
+        mute_r.top,
+        mute_r.right,
+        mute_r.bottom,
+        4,
+        if VOL_HOVER == 300 {
+            rgb(0x3A, 0x3F, 0x4A)
+        } else {
+            rgb(0x31, 0x35, 0x3F)
+        },
+    );
+    text_centered(
+        hdc,
+        f.small,
+        11,
+        rgb(0xC5, 0xC5, 0xC5),
+        (mute_r.left + mute_r.right) / 2,
+        mute_r.top + 7,
+        if VOLUME_LEVEL == 0 {
+            b"R\xE9tablir"
+        } else {
+            b"Muet"
+        },
+    );
+    let mix_r = rect(x + w / 2 + 4, btn_y + 4, x + w - 16, btn_y + 34);
+    round_rect(
+        hdc,
+        b,
+        mix_r.left,
+        mix_r.top,
+        mix_r.right,
+        mix_r.bottom,
+        4,
+        if VOL_HOVER == 301 {
+            rgb(0x3A, 0x3F, 0x4A)
+        } else {
+            rgb(0x31, 0x35, 0x3F)
+        },
+    );
+    text_centered(
+        hdc,
+        f.small,
+        11,
+        rgb(0xC5, 0xC5, 0xC5),
+        (mix_r.left + mix_r.right) / 2,
+        mix_r.top + 7,
+        b"M\xE9langeur",
+    );
+}
+
 // ---------- Glisser-déposer et collage sur le bureau ----------
 
 pub unsafe fn handle_file_drop(do_copy: bool) {
@@ -2769,16 +3313,22 @@ pub unsafe fn handle_file_drop(do_copy: bool) {
 
 // ---------- Icônes du bureau ----------
 
-const DESKTOP_ICONS: [(&[u8], Glyph); 5] = [
-    (b"Ce PC", Glyph::Computer),
-    (b"Documents", Glyph::Folder),
-    (b"Corbeille", Glyph::Trash),
-    (b"Explorer", Glyph::Folder),
-    (b"Param\xE8tres", Glyph::Settings),
-];
+pub const DESKTOP_ICON_COUNT: usize = 7;
+fn desktop_icon_list() -> [(&'static [u8], Glyph); DESKTOP_ICON_COUNT] {
+    [
+        (tr(S_THIS_PC), Glyph::Computer),
+        (tr(S_DOCUMENTS), Glyph::Folder),
+        (tr(S_TRASH), Glyph::Trash),
+        (tr(S_FILE_EXPLORER), Glyph::Folder),
+        (tr(S_SETTINGS_APP), Glyph::Settings),
+        (tr(S_HOME), Glyph::Home),
+        (tr(S_DOWNLOADS), Glyph::Download),
+    ]
+}
 
 unsafe fn desktop_icons(hdc: Handle, b: &mut Brushes, f: &Fonts) {
-    for (i, (name, g)) in DESKTOP_ICONS.iter().enumerate() {
+    let icons = desktop_icon_list();
+    for (i, (name, g)) in icons.iter().enumerate() {
         if !icon_visible(i) {
             continue;
         }
@@ -2904,12 +3454,18 @@ pub unsafe fn init(
     NETWORK_CONNECTED = network;
     ALIGN_LEFT = align_left;
     crate::settings::system_tick();
+    personalize::load();
+    crate::a11y::init();
     load_shell_state();
     init_apps();
     crate::login::init();
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
-    wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
+    arrange_icons();
+    // Les positions par défaut des icônes partent du coin de l'écran :
+    // le premier affichage les recale dans la zone utile.
+    wm::WORK = layout().desk;
+    load_icon_positions();
     BOOT_START = now();
     let mut v = [0i8; 4];
     if GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0 {
@@ -2922,6 +3478,24 @@ pub unsafe fn init(
     }
 }
 
+fn rects_equal(a: &Rect, b: &Rect) -> bool {
+    a.left == b.left && a.top == b.top && a.right == b.right && a.bottom == b.bottom
+}
+/// La zone utile a changé (barre déplacée ou redimensionnée, résolution) :
+/// fenêtres et icônes suivent.
+unsafe fn reflow_desk(l: &Layout) {
+    let (dx, dy) = (l.desk.left - LAST_DESK.left, l.desk.top - LAST_DESK.top);
+    LAST_DESK = l.desk;
+    wm::WORK = l.desk;
+    wm::on_resize();
+    for i in 0..DESKTOP_ICON_COUNT {
+        ICON_X[i] =
+            (ICON_X[i] + dx).clamp(l.desk.left + 12, (l.desk.right - 80).max(l.desk.left + 12));
+        ICON_Y[i] =
+            (ICON_Y[i] + dy).clamp(l.desk.top + 12, (l.desk.bottom - 90).max(l.desk.top + 12));
+    }
+}
+
 pub unsafe fn splash_active() -> bool {
     !BOOT_DONE
 }
@@ -2931,6 +3505,7 @@ pub unsafe fn draw(hdc: Handle) {
     let mut b = Brushes::new();
     let f = Fonts::new();
     SetBkMode(hdc, 1);
+    crate::a11y::begin_frame();
     if SCREENSAVER {
         fill(hdc, &mut b, 0, 0, SCREEN_W, SCREEN_H, rgb(0x00, 0x00, 0x00));
         for i in 0..12 {
@@ -2971,7 +3546,7 @@ pub unsafe fn draw(hdc: Handle) {
             rgb(0x60, 0x60, 0x60),
             12,
             SCREEN_H - 28,
-            b"\xC9cran de veille",
+            tr(S_SLEEP),
         );
         f.release();
         b.release();
@@ -2991,6 +3566,10 @@ pub unsafe fn draw(hdc: Handle) {
         } else {
             ease_out(intro, INTRO_MS)
         };
+        if !rects_equal(&LAST_DESK, &l.desk) {
+            reflow_desk(&l);
+        }
+        personalize::on_session_start();
         wallpaper(hdc, &mut b, &l);
         if FADE > 600 {
             desktop_icons(hdc, &mut b, &f);
@@ -3003,11 +3582,13 @@ pub unsafe fn draw(hdc: Handle) {
             };
             wm::draw(&mut g);
         }
+        crate::gfx::CHROME_MAP = crate::gfx::A11Y.contrast != 0;
         start_menu(hdc, &mut b, &f, &l);
         search_overlay(hdc, &mut b, &f, &l);
-        notifications::draw(hdc, &mut b, &f, l.w, l.bar_top);
+        notifications::draw(hdc, &mut b, &f, l.right, l.bar_top);
         draw_net_panel(hdc, &mut b, &f, &l);
-        weather::draw_panel(hdc, &mut b, &f, l.bar_top, l.w);
+        draw_vol_panel(hdc, &mut b, &f, &l);
+        weather::draw_panel(hdc, &mut b, &f, l.bar_top, l.right);
         draw_toast(hdc, &mut b, &f, &l);
         // Overlay de fermeture.
         if SHUTDOWN_ACTION > 0 {
@@ -3070,16 +3651,28 @@ pub unsafe fn draw(hdc: Handle) {
             }
         }
         let bar_dy = if FADE < 1000 {
-            (1000 - ease_out(intro, INTRO_MS)) * TASKBAR_HEIGHT / 1000
+            (1000 - ease_out(intro, INTRO_MS)) * bar_thickness() / 1000
         } else {
             0
         };
         taskbar(hdc, &mut b, &f, &l, bar_dy);
+        if personalize::oobe_active() && SHUTDOWN_ACTION == 0 {
+            personalize::draw_oobe(
+                &mut Gfx {
+                    hdc,
+                    b: &mut b,
+                    f: &f,
+                },
+                &l.desk,
+            );
+        }
         draw_context(hdc, &mut b, &f);
+        crate::gfx::CHROME_MAP = false;
         if crate::login::uac_visible() {
             crate::login::draw_uac(hdc, l.w, l.h);
         }
     }
+    crate::a11y::draw_overlay(hdc, &mut b, &f, l.w, l.h, l.bar_top);
     f.release();
     b.release();
 }
@@ -3146,10 +3739,13 @@ pub unsafe fn frame(hwnd: Handle) {
         }
         return;
     }
+    crate::a11y::frame(hwnd);
     let animating = !BOOT_DONE
+        || crate::a11y::animating()
         || wm::animating()
         || crate::gfx::theme_animating()
         || notifications::animating()
+        || crate::welcome::animating()
         || since(INTRO_START) < INTRO_MS + 40
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)
         || START_CLOSING
@@ -3176,23 +3772,25 @@ pub unsafe fn tick(hwnd: Handle) {
     if w != SCREEN_W || h != SCREEN_H {
         SCREEN_W = w;
         SCREEN_H = h;
-        wm::WORK = rect(0, 0, w, h - TASKBAR_HEIGHT);
-        wm::on_resize();
         CONTEXT_APP = None;
-        for i in 0..DESKTOP_ICONS.len() {
-            ICON_X[i] = ICON_X[i].min(w - 80);
-            ICON_Y[i] = ICON_Y[i].min(h - TASKBAR_HEIGHT - 90);
-        }
+        reflow_desk(&layout());
         MoveWindow(hwnd, 0, 0, w, h, 1);
         InvalidateRect(hwnd, core::ptr::null(), 0);
         return;
     }
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
-    let system = crate::settings::system_tick();
+    let system =
+        crate::settings::system_tick() | crate::firewall::system_tick() | crate::a11y::tick();
     let weather_changed = weather::poll();
+    let welcome = BOOT_DONE
+        && crate::login::logged_in()
+        && since(INTRO_START) > INTRO_MS
+        // La visite guidée attend la fin de l'assistant de personnalisation.
+        && !personalize::oobe_active()
+        && crate::welcome::maybe_show();
     let apps = BOOT_DONE && wm::tick();
-    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system || weather_changed {
+    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system || weather_changed || welcome {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
@@ -3222,6 +3820,12 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         return;
     }
     let l = layout();
+    if personalize::oobe_active() {
+        if personalize::oobe_click(&l.desk, x, y) {
+            repaint(hwnd);
+        }
+        return;
+    }
     if let Some(app) = CONTEXT_APP {
         let row = context_row(x, y);
         let desktop = CONTEXT_DESKTOP;
@@ -3232,7 +3836,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         repaint(hwnd);
         return;
     }
-    if y >= l.bar_top {
+    if in_bar(&l, x, y) {
         for i in 0..taskbar_count() {
             if inside(&button_rect(&l, i), x, y) {
                 wm::close_snap_layout();
@@ -3257,42 +3861,56 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 return;
             }
         }
-        let tray = l.w - 12 - 92 - 96;
-        let weather_x = tray - 24 - weather::TRAY_WIDTH - 8;
-        if x >= weather_x - 4 && x < weather_x + weather::TRAY_WIDTH {
+        let t = tray(&l);
+        if inside(&t.weather, x, y) {
             weather::toggle();
             notifications::set_open(false);
             NET_PANEL = false;
-        } else if x >= tray - 28 && x < tray {
+            VOL_PANEL = false;
+        } else if BLUETOOTH_STATE != 0 && inside(&t.bluetooth, x, y) {
+            notifications::set_open(false);
+            NET_PANEL = false;
+            VOL_PANEL = false;
+            crate::settings::open_page(crate::settings::BLUETOOTH_PAGE);
+        } else if inside(&t.chevron, x, y) {
             notifications::toggle();
             weather::PANEL_OPEN = false;
             NET_PANEL = false;
-        } else if x >= tray && x < tray + 24 {
+            VOL_PANEL = false;
+        } else if inside(&t.net, x, y) {
             NET_PANEL = !NET_PANEL;
+            VOL_PANEL = false;
             notifications::set_open(false);
             if NET_PANEL && !NET_SCAN_REQUESTED {
                 NET_SCAN_REQUESTED = true;
                 crate::settings::control(c"network-scan");
             }
-        } else if x >= tray + 24 && x < tray + 88 {
+        } else if inside(&t.volume, x, y) {
+            VOL_PANEL = !VOL_PANEL;
+            VOL_HOVER = -1;
+            NET_PANEL = false;
+            notifications::set_open(false);
+        } else if inside(&t.battery, x, y) {
             crate::settings::open_page(3);
-        } else if x >= l.w - 12 - 92 {
+            VOL_PANEL = false;
+        } else if inside(&t.clock, x, y) {
             notifications::toggle();
             NET_PANEL = false;
+            VOL_PANEL = false;
         } else {
             return;
         }
         repaint(hwnd);
         return;
     }
-    if weather::PANEL_OPEN && y < l.bar_top {
-        if weather::mouse_panel(x, y, l.bar_top, l.w) {
+    if weather::PANEL_OPEN && !in_bar(&l, x, y) {
+        if weather::mouse_panel(x, y, l.bar_top, l.right) {
             repaint(hwnd);
         }
         return;
     }
-    if notifications::is_open() && y < l.bar_top {
-        if notifications::on_click(l.w, l.bar_top, x, y) {
+    if notifications::is_open() && !in_bar(&l, x, y) {
+        if notifications::on_click(l.right, l.bar_top, x, y) {
             repaint(hwnd);
             return;
         }
@@ -3335,7 +3953,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         repaint(hwnd);
         return;
     }
-    if NET_PANEL && y < l.bar_top {
+    if NET_PANEL && !in_bar(&l, x, y) {
         let pr = net_panel_rect(&l);
         if inside(&pr, x, y) {
             let rows = NET_COUNT.min(NET_ENTRIES.len());
@@ -3371,6 +3989,41 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         } else {
             NET_PANEL = false;
             NET_HOVER = -1;
+        }
+        repaint(hwnd);
+        return;
+    }
+    if VOL_PANEL && !in_bar(&l, x, y) {
+        let pr = vol_panel_rect(&l);
+        if inside(&pr, x, y) {
+            let w = pr.right - pr.left;
+            let btn_y = pr.bottom - 44;
+            // Slider click: adjust volume
+            let bar_x = pr.left + 16;
+            let bar_w = w - 32;
+            let bar_y = pr.top + 56;
+            if y >= bar_y && y < bar_y + 20 && x >= bar_x && x < bar_x + bar_w {
+                let v = ((x - bar_x) * 100 / bar_w).max(0).min(100) as u32;
+                VOLUME_LEVEL = v;
+                if v <= 5 {
+                    crate::settings::control(c"volume-mute");
+                } else {
+                    // Set volume via repeated up/down to approximate
+                    crate::settings::control(c"volume-set");
+                }
+            }
+            // Mute button
+            if y >= btn_y + 4 && y < btn_y + 34 && x >= pr.left + 16 && x < pr.left + w / 2 - 4 {
+                crate::settings::control(c"volume-mute");
+            }
+            // Mixer button -> open advanced sound settings
+            if y >= btn_y + 4 && y < btn_y + 34 && x >= pr.left + w / 2 + 4 && x < pr.right - 16 {
+                crate::settings::open_page(16);
+                VOL_PANEL = false;
+            }
+        } else {
+            VOL_PANEL = false;
+            VOL_HOVER = -1;
         }
         repaint(hwnd);
         return;
@@ -3451,11 +4104,11 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 }
                 i @ 0..=5 => {
                     set_start(false);
-                    launch(PINNED[i as usize].launch);
+                    launch(pinned_apps()[i as usize].launch);
                 }
                 i @ 100..=103 => {
                     set_start(false);
-                    launch(RECOMMENDED[(i - 100) as usize].3);
+                    launch(recommended_apps()[(i - 100) as usize].3);
                 }
                 _ => return,
             }
@@ -3473,7 +4126,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         }
         return;
     }
-    for i in (0..DESKTOP_ICONS.len()).rev() {
+    for i in (0..DESKTOP_ICON_COUNT).rev() {
         if !icon_visible(i) {
             continue;
         }
@@ -3505,10 +4158,19 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         return;
     }
     LAST_INPUT = now();
+    if crate::a11y::on_mouse_move(x, y) {
+        repaint(hwnd);
+    }
     if !BOOT_DONE {
         return;
     }
     let l = layout();
+    if personalize::oobe_active() {
+        if personalize::oobe_move(&l.desk, x, y) {
+            repaint(hwnd);
+        }
+        return;
+    }
     if CONTEXT_APP.is_some() {
         let row = context_row(x, y);
         if row != CONTEXT_HOVER {
@@ -3554,7 +4216,7 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         return;
     }
     let mut rp = false;
-    let hb = if y >= l.bar_top {
+    let hb = if in_bar(&l, x, y) {
         (0..taskbar_count())
             .find(|&i| inside(&button_rect(&l, i), x, y))
             .unwrap_or(-1)
@@ -3582,7 +4244,7 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         }
     }
     if notifications::is_open() {
-        if notifications::on_mouse_move(l.w, l.bar_top, x, y) {
+        if notifications::on_mouse_move(l.right, l.bar_top, x, y) {
             rp = true;
         }
     }
@@ -3621,15 +4283,54 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
             rp = true;
         }
     }
+    // Volume panel hover
+    if VOL_PANEL {
+        let pr = vol_panel_rect(&l);
+        let vh = if inside(&pr, x, y) {
+            let w = pr.right - pr.left;
+            let btn_y = pr.bottom - 44;
+            if y >= btn_y + 4 && y < btn_y + 34 {
+                if x < pr.left + w / 2 - 4 {
+                    300
+                } else if x >= pr.left + w / 2 + 4 {
+                    301
+                } else {
+                    -1
+                }
+            } else {
+                let sep_y = pr.top + 88;
+                let mut ay = sep_y + 30;
+                let mut found = -1i32;
+                for app in 0..wm::APP_COUNT {
+                    if !wm::is_open(app) {
+                        continue;
+                    }
+                    if y >= ay - 2 && y < ay + 26 {
+                        found = 200 + app as i32;
+                        break;
+                    }
+                    ay += 32;
+                }
+                found
+            }
+        } else {
+            -1
+        };
+        if vh != VOL_HOVER {
+            VOL_HOVER = vh;
+            rp = true;
+        }
+    }
     if DRAGGED_ICON >= 0 {
         let i = DRAGGED_ICON as usize;
         // Grille de 96 px, comme l'alignement automatique de Windows.
-        let gx = ((x - 38).max(0) + 48) / 96 * 96 + 12;
-        let gy = ((y - 42).max(0) + 48) / 96 * 96 + 12;
-        let mut nx = gx.min(l.w - 80);
-        let mut ny = gy.min(l.bar_top - 90);
+        let d = l.desk;
+        let gx = ((x - 38 - d.left).max(0) + 48) / 96 * 96 + 12 + d.left;
+        let gy = ((y - 42 - d.top).max(0) + 48) / 96 * 96 + 12 + d.top;
+        let mut nx = gx.min(d.right - 80);
+        let mut ny = gy.min(d.bottom - 90);
         let occupied = |cx: i32, cy: i32, skip: usize| -> bool {
-            for j in 0..5usize {
+            for j in 0..DESKTOP_ICON_COUNT {
                 if j != skip && ICON_X[j] == cx && ICON_Y[j] == cy {
                     return true;
                 }
@@ -3640,12 +4341,12 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
             let mut best_d = i32::MAX;
             let mut bx = ICON_X[i];
             let mut by = ICON_Y[i];
-            let cols = (l.w - 12) / 96;
-            let rows = (l.bar_top - 12) / 96;
+            let cols = (d.right - d.left - 12) / 96;
+            let rows = (d.bottom - d.top - 12) / 96;
             for row in 0..rows {
                 for col in 0..cols {
-                    let cx = col * 96 + 12;
-                    let cy = row * 96 + 12;
+                    let cx = d.left + col * 96 + 12;
+                    let cy = d.top + row * 96 + 12;
                     if !occupied(cx, cy, i) {
                         let d = (cx - nx).abs() + (cy - ny).abs();
                         if d < best_d {
@@ -3686,6 +4387,7 @@ pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
     let mut rp = false;
     if DRAGGED_ICON >= 0 {
         DRAGGED_ICON = -1;
+        save_icon_positions();
         rp = true;
     }
     wm::on_button_up(x, y, &mut rp);
@@ -3717,13 +4419,17 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
     if !BOOT_DONE {
         return;
     }
+    if personalize::oobe_active() {
+        return;
+    }
     if matches!(ev, Mouse::RightDown) {
         let l = layout();
-        if y >= l.bar_top {
+        if in_bar(&l, x, y) {
             for slot in 1..taskbar_count() {
                 if inside(&button_rect(&l, slot), x, y) {
                     if let Some(app) = taskbar_app(slot) {
-                        open_context(app, None, x, l.bar_top);
+                        let (ax, ay) = bar_anchor(&l, x, y);
+                        open_context(app, None, ax, ay);
                         repaint(hwnd);
                         return;
                     }
@@ -3736,11 +4442,12 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
                 repaint(hwnd);
                 return;
             }
-        } else if y >= l.bar_top {
+        } else if in_bar(&l, x, y) {
             for slot in 1..taskbar_count() {
                 if inside(&button_rect(&l, slot), x, y) {
                     if let Some(app) = taskbar_app(slot) {
-                        open_context(app, None, x, l.bar_top);
+                        let (ax, ay) = bar_anchor(&l, x, y);
+                        open_context(app, None, ax, ay);
                         repaint(hwnd);
                         return;
                     }
@@ -3763,7 +4470,7 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
                 }
                 return;
             }
-            for i in (0..DESKTOP_ICONS.len()).rev() {
+            for i in (0..DESKTOP_ICON_COUNT).rev() {
                 if icon_visible(i)
                     && inside(
                         &rect(ICON_X[i], ICON_Y[i], ICON_X[i] + 76, ICON_Y[i] + 84),
@@ -3795,7 +4502,7 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
     }
     if let Mouse::Wheel(delta) = ev {
         let l = layout();
-        if notifications::on_wheel(l.w, l.bar_top, x, y, delta) {
+        if notifications::on_wheel(l.right, l.bar_top, x, y, delta) {
             repaint(hwnd);
             return;
         }
@@ -3804,6 +4511,32 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
     wm::on_other(ev, x, y, &mut rp);
     if rp {
         repaint(hwnd);
+    }
+}
+
+static mut WIN_ALONE: bool = false;
+
+/// Relâchement d'une touche : la touche Windows seule ouvre Démarrer.
+pub unsafe fn on_key_up(hwnd: Handle, vk: u32) {
+    if (vk == 0x5B || vk == 0x5C) && WIN_ALONE {
+        WIN_ALONE = false;
+        if !BOOT_DONE || !crate::login::logged_in() {
+            return;
+        }
+        if SEARCH_OVERLAY {
+            SEARCH_OVERLAY = false;
+        } else {
+            set_start(!(START_OPEN && !START_CLOSING));
+        }
+        repaint(hwnd);
+    }
+}
+
+/// Une touche a servi à un raccourci traité ailleurs (accessibilité :
+/// Win+U, Win+Plus…) : la touche Windows relâchée n'ouvre pas Démarrer.
+pub unsafe fn key_used_elsewhere(vk: u32) {
+    if vk != 0x5B && vk != 0x5C {
+        WIN_ALONE = false;
     }
 }
 
@@ -3826,6 +4559,15 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     LAST_INPUT = now();
+    if personalize::oobe_active() && BOOT_DONE {
+        if personalize::oobe_key(vk) {
+            repaint(hwnd);
+        }
+        return;
+    }
+    if ch == 0 && vk != 0x5B && vk != 0x5C {
+        WIN_ALONE = false;
+    }
     // F2 rename
     if ch == 0 && vk == 0x71 {
         if SELECTED_ICON >= 0 {
@@ -3859,8 +4601,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Ctrl+Shift+Escape (Gestionnaire des tâches)
     if ch == 0 && vk == 0x1B {
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
-        let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
+        let shift = ((crate::gfx::key_state(0x10) as u16) & 0x8000) != 0;
         if ctrl && shift {
             wm::open(wm::APP_TASKMGR);
             repaint(hwnd);
@@ -3869,9 +4611,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Shift+S (Screenshot) / Win+S (Recherche)
     if ch == 0 && vk == 0x53 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let shift = ((crate::gfx::key_state(0x10) as u16) & 0x8000) != 0;
         if win && shift {
             launch(Launch::Exec(b"screenshot.exe"));
             return;
@@ -3889,8 +4631,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+I (Paramètres)
     if ch == 0 && vk == 0x49 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             wm::open(wm::APP_SETTINGS);
             repaint(hwnd);
@@ -3899,8 +4641,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+L (Verrouiller)
     if ch == 0 && vk == 0x4C {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             crate::login::lock_screen();
             repaint(hwnd);
@@ -3909,8 +4651,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+E (Explorateur de fichiers)
     if ch == 0 && vk == 0x45 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             launch(Launch::Explorer);
             return;
@@ -3918,8 +4660,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+R
     if ch == 0 && vk == 0x52 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             wm::SHOW_RUN = true;
             unsafe {
@@ -3932,8 +4674,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+E
     if ch == 0 && vk == 0x45 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             explorer::open_pc();
             repaint(hwnd);
@@ -3942,8 +4684,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Tab (Vue des tâches)
     if ch == 0 && vk == 0x09 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             unsafe {
                 wm::TASK_VIEW = !wm::TASK_VIEW;
@@ -3954,9 +4696,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+flèches (snap layouts)
     if ch == 0 && (vk == 0x25 || vk == 0x26 || vk == 0x27 || vk == 0x28) {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             // Win+Ctrl+Left/Right : changer de bureau
             if vk == 0x25 {
@@ -3986,9 +4728,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Ctrl+D (nouveau bureau)
     if ch == 0 && vk == 0x44 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             unsafe {
                 wm::add_desktop();
@@ -3999,9 +4741,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Ctrl+F4 (fermer le bureau courant)
     if ch == 0 && vk == 0x73 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             let cur = wm::current_desktop();
             unsafe {
@@ -4013,8 +4755,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+D
     if ch == 0 && vk == 0x44 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             for app in 0..wm::APP_COUNT {
                 if wm::is_open(app) && !wm::is_visible(app) { /* already minimized */ }
@@ -4045,7 +4787,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Alt+F4
     if ch == 0 && vk == 0x73 {
-        let alt = ((GetKeyState(0x12) as u16) & 0x8000) != 0;
+        let alt = ((crate::gfx::key_state(0x12) as u16) & 0x8000) != 0;
         if alt {
             for app in 0..wm::APP_COUNT {
                 if wm::is_open(app) && wm::is_active(app) {
@@ -4078,13 +4820,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     if ch == 0 && (vk == 0x5B || vk == 0x5C) {
-        if SEARCH_OVERLAY {
-            SEARCH_OVERLAY = false;
-            repaint(hwnd);
-            return;
-        }
-        set_start(!(START_OPEN && !START_CLOSING));
-        repaint(hwnd);
+        // Comme Windows : Démarrer s'ouvre au relâchement de la touche, si
+        // elle n'a pas servi à un raccourci (Win+E, Win+Plus…).
+        WIN_ALONE = true;
         return;
     }
     if SEARCH_OVERLAY {
@@ -4207,7 +4945,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     if ch == 0 && vk == 0x56 {
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if ctrl {
             let desktop = explorer::desktop_folder_path();
             if !desktop.get().is_empty() {
@@ -4275,7 +5013,7 @@ pub unsafe fn regression_checks() {
         "Le vrai clic droit ouvre le menu de la bonne application"
     );
     check!(
-        CONTEXT_RECT.bottom <= SCREEN_H - TASKBAR_HEIGHT,
+        CONTEXT_RECT.bottom <= layout().desk.bottom,
         "Le menu reste entierement au-dessus de la barre des taches"
     );
     on_key(hwnd, 0x1B, 0);

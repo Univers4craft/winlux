@@ -474,15 +474,112 @@ fn alsa_capture() -> Result<AlsaCapture, ()> {
 struct WaveHdrPtr(*mut u8);
 unsafe impl Send for WaveHdrPtr {}
 
+/// Format de capture demandé par le programme.
+#[derive(Clone, Copy, Debug, PartialEq)]
 struct RecordConfig {
     channels: u16,
     rate: u32,
+    /// 8 (U8), 16 (S16_LE) ou 32 (flottant IEEE).
+    bits: u16,
+}
+
+impl RecordConfig {
+    fn alsa_format(&self) -> c_int {
+        match self.bits {
+            8 => 1,   // SND_PCM_FORMAT_U8
+            32 => 14, // SND_PCM_FORMAT_FLOAT_LE
+            _ => 2,   // SND_PCM_FORMAT_S16_LE
+        }
+    }
+    fn block_align(&self) -> usize {
+        self.channels as usize * (self.bits as usize / 8)
+    }
+}
+
+/// Lit un WAVEFORMATEX (PCM, flottant ou WAVE_FORMAT_EXTENSIBLE).
+unsafe fn parse_wave_format(pwfx: *const u8) -> Option<RecordConfig> {
+    let tag = (pwfx as *const u16).read_unaligned();
+    let channels = (pwfx.add(2) as *const u16).read_unaligned();
+    let rate = (pwfx.add(4) as *const u32).read_unaligned();
+    let bits = (pwfx.add(14) as *const u16).read_unaligned();
+    let float = match tag {
+        1 => false,
+        3 => true,
+        0xFFFE => {
+            // Sous-format : GUID dont le premier mot vaut 1 (PCM) ou 3 (float).
+            let extra = (pwfx.add(16) as *const u16).read_unaligned();
+            if extra < 22 {
+                return None;
+            }
+            match (pwfx.add(24) as *const u32).read_unaligned() {
+                1 => false,
+                3 => true,
+                _ => return None,
+            }
+        }
+        _ => return None,
+    };
+    let ok_bits = if float {
+        bits == 32
+    } else {
+        bits == 8 || bits == 16
+    };
+    if !(1..=2).contains(&channels) || !(4000..=192_000).contains(&rate) || !ok_bits {
+        return None;
+    }
+    Some(RecordConfig {
+        channels,
+        rate,
+        bits,
+    })
+}
+
+// Mécanismes de notification de waveInOpen (fdwOpen & CALLBACK_TYPEMASK).
+const CALLBACK_TYPEMASK: u32 = 0x0007_0000;
+const CALLBACK_WINDOW: u32 = 0x0001_0000;
+const CALLBACK_FUNCTION: u32 = 0x0003_0000;
+const CALLBACK_EVENT: u32 = 0x0005_0000;
+const WAVE_FORMAT_QUERY: u32 = 0x0001;
+const WIM_OPEN: u32 = 0x3BE;
+const WIM_CLOSE: u32 = 0x3BF;
+const WIM_DATA: u32 = 0x3C0;
+
+/// Destinataire des messages WIM_* du programme.
+#[derive(Clone, Copy)]
+struct Notify {
+    kind: u32,
+    target: usize,
+    instance: usize,
+    handle: usize,
+}
+
+impl Notify {
+    /// Envoie un message ; `param1` est le WAVEHDR pour WIM_DATA.
+    unsafe fn send(&self, msg: u32, param1: usize) {
+        match self.kind {
+            CALLBACK_FUNCTION if self.target != 0 => {
+                let f: unsafe extern "win64" fn(usize, u32, usize, usize, usize) =
+                    std::mem::transmute(self.target);
+                f(self.handle, msg, self.instance, param1, 0);
+            }
+            CALLBACK_EVENT if self.target != 0 => {
+                crate::dlls::kernel32::set_event(self.target);
+            }
+            CALLBACK_WINDOW if self.target != 0 => {
+                crate::dlls::user32::post_message_a(self.target, msg, self.handle, param1 as isize);
+            }
+            _ => {}
+        }
+    }
 }
 
 struct RecordState {
     config: RecordConfig,
+    notify: Notify,
     buffers: std::sync::Arc<Mutex<Vec<WaveHdrPtr>>>,
     cancel: std::sync::Arc<AtomicBool>,
+    /// Octets capturés depuis waveInOpen (waveInGetPosition).
+    captured: std::sync::Arc<std::sync::atomic::AtomicU64>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 
@@ -491,8 +588,12 @@ fn record_lock() -> &'static Mutex<Option<RecordState>> {
     RECORD.get_or_init(|| Mutex::new(None))
 }
 
+/// HWAVEIN rendu au programme (un seul périphérique de capture ouvert).
+const HWAVEIN: usize = 0x5749_4E00;
+
 const WHDR_DONE: u32 = 0x01;
 const WHDR_PREPARED: u32 = 0x02;
+const WHDR_INQUEUE: u32 = 0x10;
 
 unsafe fn wavehdr_data_ptr(pwh: *mut u8) -> *mut u8 {
     *(pwh as *const *mut u8)
@@ -504,15 +605,26 @@ unsafe fn wavehdr_bytes_recorded(pwh: *mut u8) -> *mut u32 {
     pwh.add(12) as *mut u32
 }
 unsafe fn wavehdr_flags(pwh: *mut u8) -> *mut u32 {
-    pwh.add(16) as *mut u32
+    pwh.add(24) as *mut u32
+}
+
+/// Marque un tampon terminé et prévient le programme.
+unsafe fn finish_buffer(pwh: *mut u8, notify: &Notify) {
+    *wavehdr_flags(pwh) = (*wavehdr_flags(pwh) & !WHDR_INQUEUE) | WHDR_DONE;
+    notify.send(WIM_DATA, pwh as usize);
 }
 
 fn capture_thread(
-    config_channels: u16,
-    config_rate: u32,
+    config: RecordConfig,
+    notify: Notify,
     buffers: std::sync::Arc<Mutex<Vec<WaveHdrPtr>>>,
     cancel: std::sync::Arc<AtomicBool>,
+    captured: std::sync::Arc<std::sync::atomic::AtomicU64>,
 ) {
+    if notify.kind == CALLBACK_FUNCTION {
+        // La fonction de rappel est du code Windows : il lui faut un TEB.
+        crate::process::init_thread();
+    }
     let Ok(a) = alsa_capture() else { return };
     let default = CString::new("default").unwrap();
     let mut pcm = std::ptr::null_mut();
@@ -520,8 +632,10 @@ fn capture_thread(
     if unsafe { (a.open)(&mut pcm, default.as_ptr(), 1, 0) } < 0 {
         return;
     }
-    // S16_LE=2, RW_INTERLEAVED=3
-    if unsafe { (a.set_params)(pcm, 2, 3, config_channels as u32, config_rate, 1, 500_000) } < 0 {
+    // RW_INTERLEAVED=3, rééchantillonnage autorisé, 0,5 s de latence max.
+    let fmt = config.alsa_format();
+    let ch = config.channels as u32;
+    if unsafe { (a.set_params)(pcm, fmt, 3, ch, config.rate, 1, 500_000) } < 0 {
         unsafe {
             (a.close)(pcm);
         }
@@ -534,17 +648,16 @@ fn capture_thread(
         return;
     }
 
-    let bytes_per_frame = config_channels as usize * 2; // 16-bit
-    let mut local_buf = vec![0i16; 1024 * config_channels as usize];
+    let bytes_per_frame = config.block_align();
+    let frames = (config.rate as usize / 50).max(64); // 20 ms
+    let mut local_buf = vec![0u8; frames * bytes_per_frame];
 
     while !cancel.load(Ordering::Relaxed) {
-        let frames = local_buf.len() / config_channels as usize;
         let rc = unsafe { (a.readi)(pcm, local_buf.as_mut_ptr() as *mut c_void, frames) };
         if rc > 0 {
             let captured_bytes = rc as usize * bytes_per_frame;
-            let src = unsafe {
-                std::slice::from_raw_parts(local_buf.as_ptr() as *const u8, captured_bytes)
-            };
+            captured.fetch_add(captured_bytes as u64, Ordering::Relaxed);
+            let src = &local_buf[..captured_bytes];
             let mut src_off = 0usize;
             while src_off < captured_bytes {
                 let mut list = lock(&buffers);
@@ -552,7 +665,7 @@ fn capture_thread(
                     break;
                 }
                 let pwh = list[0].0;
-                unsafe {
+                let full = unsafe {
                     let buf_ptr = wavehdr_data_ptr(pwh);
                     let buf_len = wavehdr_buffer_length(pwh) as usize;
                     let recorded = *wavehdr_bytes_recorded(pwh) as usize;
@@ -567,10 +680,12 @@ fn capture_thread(
                         *wavehdr_bytes_recorded(pwh) = (recorded + copy) as u32;
                         src_off += copy;
                     }
-                    if *wavehdr_bytes_recorded(pwh) as usize >= buf_len {
-                        *wavehdr_flags(pwh) |= WHDR_DONE;
-                        list.remove(0);
-                    }
+                    *wavehdr_bytes_recorded(pwh) as usize >= buf_len
+                };
+                if full {
+                    list.remove(0);
+                    drop(list);
+                    unsafe { finish_buffer(pwh, &notify) };
                 }
             }
         } else if rc == -11 {
@@ -587,51 +702,134 @@ fn capture_thread(
     }
 }
 
+/// Paramètres > Confidentialité : le micro peut être refusé aux programmes .exe.
+fn microphone_allowed() -> bool {
+    std::fs::read_to_string("/etc/winlux/privacy.conf").map_or(true, |conf| {
+        !conf.lines().any(|l| l.trim() == "MICROPHONE=deny")
+    })
+}
+
+fn microphone_available() -> bool {
+    microphone_allowed() && alsa_capture().is_ok()
+}
+
 pub unsafe extern "win64" fn wave_in_get_num_devs() -> u32 {
-    if alsa_capture().is_ok() {
-        1
-    } else {
-        0
+    u32::from(microphone_available())
+}
+
+const MMSYSERR_BADDEVICEID: u32 = 2;
+const MMSYSERR_ALLOCATED: u32 = 4;
+const MMSYSERR_INVALHANDLE: u32 = 5;
+const MMSYSERR_NODRIVER: u32 = 6;
+const MMSYSERR_NOTSUPPORTED: u32 = 8;
+const MMSYSERR_INVALFLAG: u32 = 10;
+const MMSYSERR_INVALPARAM: u32 = 11;
+const WAVERR_BADFORMAT: u32 = 32;
+const WAVERR_STILLPLAYING: u32 = 33;
+const WAVERR_UNPREPARED: u32 = 34;
+
+fn valid_device(id: usize) -> bool {
+    id == 0 || id as u32 == u32::MAX || id == usize::MAX
+}
+
+/// waveInGetDevCaps{A,W} : WAVEINCAPS (48 octets en A, 80 en W).
+unsafe fn dev_caps(device: usize, out: *mut u8, size: u32, wide: bool) -> u32 {
+    if out.is_null() {
+        return MMSYSERR_INVALPARAM;
     }
+    if !valid_device(device) {
+        return MMSYSERR_BADDEVICEID;
+    }
+    if !microphone_available() {
+        return MMSYSERR_NODRIVER;
+    }
+    let full = if wide { 80 } else { 48 };
+    let mut caps = vec![0u8; full];
+    caps[0..2].copy_from_slice(&1u16.to_le_bytes()); // MM_MICROSOFT
+    caps[2..4].copy_from_slice(&0x65u16.to_le_bytes()); // MM_PCM_WAVEIN générique
+    caps[4..8].copy_from_slice(&0x0100u32.to_le_bytes());
+    let name = "Microphone (Winlux)";
+    let (name_len, tail) = if wide { (64, 72) } else { (32, 40) };
+    super::comobj::write_fixed_str(
+        caps[8..8 + name_len].as_mut_ptr(),
+        name_len / if wide { 2 } else { 1 },
+        name,
+        wide,
+    );
+    caps[tail..tail + 4].copy_from_slice(&0x000F_FFFFu32.to_le_bytes()); // WAVE_FORMAT_* 11 à 96 kHz
+    caps[tail + 4..tail + 6].copy_from_slice(&2u16.to_le_bytes());
+    let n = (size as usize).min(full);
+    std::ptr::copy_nonoverlapping(caps.as_ptr(), out, n);
+    0
+}
+
+pub unsafe extern "win64" fn wave_in_get_dev_caps_a(device: usize, out: *mut u8, size: u32) -> u32 {
+    dev_caps(device, out, size, false)
+}
+pub unsafe extern "win64" fn wave_in_get_dev_caps_w(device: usize, out: *mut u8, size: u32) -> u32 {
+    dev_caps(device, out, size, true)
 }
 
 pub unsafe extern "win64" fn wave_in_open(
     phwi: *mut *mut c_void,
     device_id: u32,
     pwfx: *const u8,
-    _callback: usize,
-    _instance: usize,
-    _flags: u32,
+    callback: usize,
+    instance: usize,
+    flags: u32,
 ) -> u32 {
-    if device_id != 0 && device_id != u32::MAX {
-        return 2; // MMSYSERR_BADDEVICEID
+    if !valid_device(device_id as usize) {
+        return MMSYSERR_BADDEVICEID;
+    }
+    if !microphone_allowed() {
+        return MMSYSERR_NODRIVER;
     }
     if pwfx.is_null() {
-        return 11; // WAVERR_BADFORMAT
+        return MMSYSERR_INVALPARAM;
     }
-    let channels = *(pwfx.add(2) as *const u16);
-    let sample_rate = *(pwfx.add(4) as *const u32);
-    let bits_per_sample = *(pwfx.add(14) as *const u16);
-    if !(channels == 1 || channels == 2) || sample_rate == 0 || bits_per_sample != 16 {
-        return 11;
+    let Some(config) = parse_wave_format(pwfx) else {
+        return WAVERR_BADFORMAT;
+    };
+    if flags & WAVE_FORMAT_QUERY != 0 {
+        return 0;
     }
-    let mut state = lock(record_lock());
-    if state.is_some() {
-        return 4; // MMSYSERR_ALLOCATED
+    let kind = flags & CALLBACK_TYPEMASK;
+    if !matches!(
+        kind,
+        0 | CALLBACK_WINDOW | 0x0002_0000 | CALLBACK_FUNCTION | CALLBACK_EVENT
+    ) {
+        return MMSYSERR_INVALFLAG;
     }
-    *state = Some(RecordState {
-        config: RecordConfig {
-            channels,
-            rate: sample_rate,
-        },
-        buffers: std::sync::Arc::new(Mutex::new(Vec::new())),
-        cancel: std::sync::Arc::new(AtomicBool::new(false)),
-        thread: None,
-    });
+    let notify = Notify {
+        kind,
+        target: callback,
+        instance,
+        handle: HWAVEIN,
+    };
+    {
+        let mut state = lock(record_lock());
+        if state.is_some() {
+            return MMSYSERR_ALLOCATED;
+        }
+        *state = Some(RecordState {
+            config,
+            notify,
+            buffers: std::sync::Arc::new(Mutex::new(Vec::new())),
+            cancel: std::sync::Arc::new(AtomicBool::new(false)),
+            captured: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            thread: None,
+        });
+    }
     if !phwi.is_null() {
-        *phwi = std::ptr::dangling_mut::<c_void>();
+        *phwi = HWAVEIN as *mut c_void;
     }
+    notify.send(WIM_OPEN, 0);
     0
+}
+
+fn check_handle(hwi: *mut c_void) -> bool {
+    // Anciennes versions : poignée factice non nulle acceptée aussi.
+    !hwi.is_null() && lock(record_lock()).is_some()
 }
 
 pub unsafe extern "win64" fn wave_in_prepare_header(
@@ -640,8 +838,8 @@ pub unsafe extern "win64" fn wave_in_prepare_header(
     _cbwh: u32,
 ) -> u32 {
     if pwh.is_null() {
-        return 6;
-    } // MMSYSERR_NODRIVER
+        return MMSYSERR_INVALPARAM;
+    }
     *wavehdr_flags(pwh) |= WHDR_PREPARED;
     0
 }
@@ -652,93 +850,256 @@ pub unsafe extern "win64" fn wave_in_unprepare_header(
     _cbwh: u32,
 ) -> u32 {
     if pwh.is_null() {
-        return 6;
+        return MMSYSERR_INVALPARAM;
+    }
+    if *wavehdr_flags(pwh) & WHDR_INQUEUE != 0 {
+        return WAVERR_STILLPLAYING;
     }
     *wavehdr_flags(pwh) &= !WHDR_PREPARED;
     0
 }
 
-pub unsafe extern "win64" fn wave_in_add_buffer(
-    _hwi: *mut c_void,
-    pwh: *mut u8,
-    _cbwh: u32,
-) -> u32 {
+pub unsafe extern "win64" fn wave_in_add_buffer(hwi: *mut c_void, pwh: *mut u8, _cbwh: u32) -> u32 {
     if pwh.is_null() {
-        return 6;
+        return MMSYSERR_INVALPARAM;
+    }
+    if !check_handle(hwi) {
+        return MMSYSERR_INVALHANDLE;
+    }
+    if *wavehdr_flags(pwh) & WHDR_PREPARED == 0 {
+        return WAVERR_UNPREPARED;
     }
     *wavehdr_bytes_recorded(pwh) = 0;
-    *wavehdr_flags(pwh) &= !WHDR_DONE;
+    *wavehdr_flags(pwh) = (*wavehdr_flags(pwh) & !WHDR_DONE) | WHDR_INQUEUE;
     let state = lock(record_lock());
-    if let Some(ref s) = *state {
-        lock(&s.buffers).push(WaveHdrPtr(pwh));
-        0
-    } else {
-        6
+    match *state {
+        Some(ref s) => {
+            lock(&s.buffers).push(WaveHdrPtr(pwh));
+            0
+        }
+        None => MMSYSERR_INVALHANDLE,
     }
 }
 
-pub unsafe extern "win64" fn wave_in_start(_hwi: *mut c_void) -> u32 {
-    let mut state = lock(record_lock());
-    if let Some(ref mut s) = *state {
-        if s.thread.is_some() {
-            return 0; // already recording
-        }
-        s.cancel.store(false, Ordering::Relaxed);
-        let channels = s.config.channels;
-        let rate = s.config.rate;
-        let bufs = s.buffers.clone();
-        let cancel = s.cancel.clone();
-        match std::thread::Builder::new()
-            .name("winlux-wave-capture".into())
-            .spawn(move || capture_thread(channels, rate, bufs, cancel))
-        {
-            Ok(handle) => {
-                s.thread = Some(handle);
-                0
-            }
-            Err(_) => 8, // MMSYSERR_NOMEM
-        }
-    } else {
-        6
+pub unsafe extern "win64" fn wave_in_start(hwi: *mut c_void) -> u32 {
+    if hwi.is_null() {
+        return MMSYSERR_INVALHANDLE;
     }
+    let mut state = lock(record_lock());
+    let Some(ref mut s) = *state else {
+        return MMSYSERR_INVALHANDLE;
+    };
+    if s.thread.is_some() {
+        return 0; // déjà en cours
+    }
+    s.cancel.store(false, Ordering::Relaxed);
+    let (config, notify) = (s.config, s.notify);
+    let (bufs, cancel, captured) = (s.buffers.clone(), s.cancel.clone(), s.captured.clone());
+    match std::thread::Builder::new()
+        .name("winlux-wave-capture".into())
+        .spawn(move || capture_thread(config, notify, bufs, cancel, captured))
+    {
+        Ok(handle) => {
+            s.thread = Some(handle);
+            0
+        }
+        Err(_) => 7, // MMSYSERR_NOMEM
+    }
+}
+
+/// Arrête la capture ; `flush` rend aussi les tampons en attente (Reset).
+unsafe fn stop(flush: bool) -> u32 {
+    let (thread, notify, pending) = {
+        let mut state = lock(record_lock());
+        let Some(ref mut s) = *state else {
+            return MMSYSERR_INVALHANDLE;
+        };
+        s.cancel.store(true, Ordering::Relaxed);
+        (s.thread.take(), s.notify, s.buffers.clone())
+    };
+    // Le fil peut être en train d'appeler le programme : ne pas tenir le verrou.
+    if let Some(t) = thread {
+        let _ = t.join();
+    }
+    let mut bufs = lock(&pending);
+    // Stop : seul le tampon partiellement rempli est rendu ; Reset : tous.
+    let n = if flush {
+        bufs.len()
+    } else {
+        usize::from(
+            bufs.first()
+                .is_some_and(|b| *wavehdr_bytes_recorded(b.0) > 0),
+        )
+    };
+    let done: Vec<WaveHdrPtr> = bufs.drain(..n).collect();
+    drop(bufs);
+    for b in done {
+        finish_buffer(b.0, &notify);
+    }
+    0
 }
 
 pub unsafe extern "win64" fn wave_in_stop(_hwi: *mut c_void) -> u32 {
-    let mut state = lock(record_lock());
-    if let Some(ref mut s) = *state {
-        s.cancel.store(true, Ordering::Relaxed);
-        if let Some(t) = s.thread.take() {
-            let _ = t.join();
-        }
-        // mark remaining buffers as done
-        let mut bufs = lock(&s.buffers);
-        for b in bufs.drain(..) {
-            *wavehdr_flags(b.0) |= WHDR_DONE;
-        }
-        0
-    } else {
-        6
-    }
+    stop(false)
 }
 
 pub unsafe extern "win64" fn wave_in_reset(_hwi: *mut c_void) -> u32 {
-    wave_in_stop(_hwi)
+    let r = stop(true);
+    if let Some(ref s) = *lock(record_lock()) {
+        s.captured.store(0, Ordering::Relaxed);
+    }
+    r
 }
 
-pub unsafe extern "win64" fn wave_in_close(_hwi: *mut c_void) -> u32 {
-    wave_in_stop(_hwi);
-    let mut state = lock(record_lock());
-    *state = None;
+pub unsafe extern "win64" fn wave_in_close(hwi: *mut c_void) -> u32 {
+    if lock(record_lock()).is_none() {
+        return MMSYSERR_INVALHANDLE;
+    }
+    wave_in_reset(hwi);
+    let notify = lock(record_lock()).take().map(|s| s.notify);
+    if let Some(n) = notify {
+        n.send(WIM_CLOSE, 0);
+    }
+    0
+}
+
+/// waveInGetPosition : MMTIME en octets, échantillons ou millisecondes.
+pub unsafe extern "win64" fn wave_in_get_position(
+    _hwi: *mut c_void,
+    mmt: *mut u32,
+    size: u32,
+) -> u32 {
+    if mmt.is_null() || size < 8 {
+        return MMSYSERR_INVALPARAM;
+    }
+    let state = lock(record_lock());
+    let Some(ref s) = *state else {
+        return MMSYSERR_INVALHANDLE;
+    };
+    let bytes = s.captured.load(Ordering::Relaxed);
+    let frames = bytes / s.config.block_align().max(1) as u64;
+    match *mmt {
+        1 => *mmt.add(1) = (frames * 1000 / s.config.rate.max(1) as u64) as u32, // TIME_MS
+        2 => *mmt.add(1) = frames as u32,                                        // TIME_SAMPLES
+        _ => {
+            *mmt = 4; // TIME_BYTES
+            *mmt.add(1) = bytes as u32;
+        }
+    }
+    0
+}
+
+pub unsafe extern "win64" fn wave_in_get_id(hwi: *mut c_void, id: *mut u32) -> u32 {
+    if id.is_null() {
+        return MMSYSERR_INVALPARAM;
+    }
+    if !check_handle(hwi) {
+        return MMSYSERR_INVALHANDLE;
+    }
+    *id = 0;
+    0
+}
+
+pub extern "win64" fn wave_in_message(_hwi: usize, _msg: u32, _p1: usize, _p2: usize) -> u32 {
+    MMSYSERR_NOTSUPPORTED
+}
+
+fn wave_in_error_text(err: u32) -> &'static str {
+    match err {
+        0 => "Aucune erreur.",
+        MMSYSERR_BADDEVICEID => "Identifiant de p\u{e9}riph\u{e9}rique audio non valide.",
+        MMSYSERR_ALLOCATED => "Le micro est d\u{e9}j\u{e0} utilis\u{e9} par un programme.",
+        MMSYSERR_INVALHANDLE => "Poign\u{e9}e de p\u{e9}riph\u{e9}rique non valide.",
+        MMSYSERR_NODRIVER => "Aucun micro disponible ou acc\u{e8}s refus\u{e9} (Param\u{e8}tres > Confidentialit\u{e9}).",
+        WAVERR_BADFORMAT => "Format audio non pris en charge par le micro.",
+        WAVERR_STILLPLAYING => "Le tampon est encore en cours d'utilisation.",
+        WAVERR_UNPREPARED => "Le tampon n'a pas \u{e9}t\u{e9} pr\u{e9}par\u{e9}.",
+        _ => "Erreur audio inconnue.",
+    }
+}
+
+pub unsafe extern "win64" fn wave_in_get_error_text_a(err: u32, buf: *mut u8, cch: u32) -> u32 {
+    if buf.is_null() || cch == 0 {
+        return MMSYSERR_INVALPARAM;
+    }
+    super::comobj::write_fixed_str(buf, cch as usize, wave_in_error_text(err), false);
+    0
+}
+
+pub unsafe extern "win64" fn wave_in_get_error_text_w(err: u32, buf: *mut u16, cch: u32) -> u32 {
+    if buf.is_null() || cch == 0 {
+        return MMSYSERR_INVALPARAM;
+    }
+    super::comobj::write_fixed_str(buf as *mut u8, cch as usize, wave_in_error_text(err), true);
     0
 }
 
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {"PlaySoundA"=>fn play_sound_a,"PlaySoundW"=>fn play_sound_w,"mciSendStringA"=>fn mci_send_string_a,"timeGetTime"=>fn time_get_time,"waveInGetNumDevs"=>fn wave_in_get_num_devs,"waveInOpen"=>fn wave_in_open,"waveInPrepareHeader"=>fn wave_in_prepare_header,"waveInUnprepareHeader"=>fn wave_in_unprepare_header,"waveInAddBuffer"=>fn wave_in_add_buffer,"waveInStart"=>fn wave_in_start,"waveInStop"=>fn wave_in_stop,"waveInReset"=>fn wave_in_reset,"waveInClose"=>fn wave_in_close}
+    crate::exports! {"PlaySoundA"=>fn play_sound_a,"PlaySoundW"=>fn play_sound_w,"mciSendStringA"=>fn mci_send_string_a,"timeGetTime"=>fn time_get_time,"waveInGetNumDevs"=>fn wave_in_get_num_devs,"waveInOpen"=>fn wave_in_open,"waveInPrepareHeader"=>fn wave_in_prepare_header,"waveInUnprepareHeader"=>fn wave_in_unprepare_header,"waveInAddBuffer"=>fn wave_in_add_buffer,"waveInStart"=>fn wave_in_start,"waveInStop"=>fn wave_in_stop,"waveInReset"=>fn wave_in_reset,"waveInClose"=>fn wave_in_close,"waveInGetDevCapsA"=>fn wave_in_get_dev_caps_a,"waveInGetDevCapsW"=>fn wave_in_get_dev_caps_w,"waveInGetPosition"=>fn wave_in_get_position,"waveInGetID"=>fn wave_in_get_id,"waveInMessage"=>fn wave_in_message,"waveInGetErrorTextA"=>fn wave_in_get_error_text_a,"waveInGetErrorTextW"=>fn wave_in_get_error_text_w}
 }
 
 #[cfg(test)]
 mod tests {
-    use super::decode_wave;
+    use super::*;
+
+    fn wave_format(tag: u16, channels: u16, rate: u32, bits: u16) -> [u8; 18] {
+        let mut f = [0u8; 18];
+        f[0..2].copy_from_slice(&tag.to_le_bytes());
+        f[2..4].copy_from_slice(&channels.to_le_bytes());
+        f[4..8].copy_from_slice(&rate.to_le_bytes());
+        let align = channels * bits / 8;
+        f[8..12].copy_from_slice(&(rate * align as u32).to_le_bytes());
+        f[12..14].copy_from_slice(&align.to_le_bytes());
+        f[14..16].copy_from_slice(&bits.to_le_bytes());
+        f
+    }
+
+    #[test]
+    fn formats_de_capture_du_micro() {
+        unsafe {
+            let pcm = parse_wave_format(wave_format(1, 1, 44100, 16).as_ptr()).unwrap();
+            assert_eq!((pcm.alsa_format(), pcm.block_align()), (2, 2));
+            let u8s = parse_wave_format(wave_format(1, 2, 8000, 8).as_ptr()).unwrap();
+            assert_eq!((u8s.alsa_format(), u8s.block_align()), (1, 2));
+            let f = parse_wave_format(wave_format(3, 2, 48000, 32).as_ptr()).unwrap();
+            assert_eq!((f.alsa_format(), f.block_align()), (14, 8));
+            assert!(parse_wave_format(wave_format(1, 6, 48000, 16).as_ptr()).is_none());
+            assert!(parse_wave_format(wave_format(3, 2, 48000, 16).as_ptr()).is_none());
+            assert!(parse_wave_format(wave_format(2, 2, 48000, 16).as_ptr()).is_none());
+        }
+    }
+
+    #[test]
+    fn interrogation_de_format_sans_ouvrir_le_micro() {
+        unsafe {
+            let fmt = wave_format(1, 1, 16000, 16);
+            if microphone_allowed() {
+                let mut h = std::ptr::null_mut();
+                assert_eq!(
+                    wave_in_open(&mut h, u32::MAX, fmt.as_ptr(), 0, 0, WAVE_FORMAT_QUERY),
+                    0
+                );
+                assert!(h.is_null(), "WAVE_FORMAT_QUERY n'ouvre rien");
+                let bad = wave_format(1, 1, 16000, 24);
+                assert_eq!(
+                    wave_in_open(&mut h, 0, bad.as_ptr(), 0, 0, 0),
+                    WAVERR_BADFORMAT
+                );
+            }
+            let mut mmt = [4u32, 0, 0];
+            assert_eq!(
+                wave_in_get_position(std::ptr::null_mut(), mmt.as_mut_ptr(), 12),
+                MMSYSERR_INVALHANDLE
+            );
+            let mut text = [0u16; 64];
+            assert_eq!(
+                wave_in_get_error_text_w(WAVERR_BADFORMAT, text.as_mut_ptr(), 64),
+                0
+            );
+            assert_eq!(text[0], 'F' as u16);
+        }
+    }
+
     #[test]
     fn decode_wave_pcm_mono_16bits_and_rejette_un_fichier_tronque() {
         let mut w=Vec::from(&b"RIFF\x28\0\0\0WAVEfmt \x10\0\0\0\x01\0\x01\0\x44\xac\0\0\x88\x58\x01\0\x02\0\x10\0data\x04\0\0\0\x00\x80\xff\x7f"[..]);
