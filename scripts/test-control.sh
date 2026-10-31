@@ -125,6 +125,12 @@ grep -q '^Update complete$' "$work/root/run/winlux/update.log"
 grep -qx 'welcome_done=0' "$work/root/run/winlux/control.txt"
 control welcome-done
 grep -qx 'welcome_done=1' "$work/root/run/winlux/control.txt"
+grep -qx 'welcome_step=0' "$work/root/run/winlux/control.txt"
+control welcome-step-8
+grep -qx 'welcome_step=8' "$work/root/run/winlux/control.txt"
+control welcome-reset
+grep -qx 'welcome_step=0' "$work/root/run/winlux/control.txt"
+grep -qx 'welcome_done=0' "$work/root/run/winlux/control.txt"
 grep -qx 'privacy_telemetry=off' "$work/root/run/winlux/control.txt"
 grep -qx 'privacy_location=deny' "$work/root/run/winlux/control.txt"
 grep -qx 'privacy_location_history=off' "$work/root/run/winlux/control.txt"

@@ -53,6 +53,13 @@ _TR = {
     'redémarrage conseillé': ('restart recommended', 'se recomienda reiniciar', 'Neustart empfohlen'),
     'bureau et runtime Winlux (APT)': ('Winlux desktop and runtime (APT)', 'escritorio y runtime de Winlux (APT)', 'Winlux-Desktop und -Runtime (APT)'),
     'Mio': ('MiB', 'MiB', 'MiB'),
+    'Installation automatique suspendue : ': ('Automatic installation paused: ', 'Instalación automática suspendida: ', 'Automatische Installation ausgesetzt: '),
+    'Version écartée (le bureau n’a pas démarré) : ': ('Version set aside (the desktop did not start): ', 'Versión descartada (el escritorio no se inició): ', 'Version zurückgestellt (Desktop startete nicht): '),
+    'Version restaurée automatiquement : ': ('Version restored automatically: ', 'Versión restaurada automáticamente: ', 'Automatisch wiederhergestellte Version: '),
+    'Validation au prochain démarrage du bureau : ': ('Confirmed at the next desktop start: ', 'Se confirmará en el próximo inicio del escritorio: ', 'Wird beim nächsten Desktopstart bestätigt: '),
+    'Point de restauration avant mise à jour : ': ('Restore point before update: ', 'Punto de restauración antes de actualizar: ', 'Wiederherstellungspunkt vor dem Update: '),
+    'Version précédente conservée : ': ('Previous version kept: ', 'Versión anterior conservada: ', 'Vorherige Version aufbewahrt: '),
+    'Point de restauration': ('Restore point', 'Punto de restauración', 'Wiederherstellungspunkt'),
     'Système': ('System', 'Sistema', 'System'),
     'Applications': ('Apps', 'Aplicaciones', 'Apps'),
     'Réseau': ('Network', 'Red', 'Netzwerk'),
@@ -134,6 +141,8 @@ _TR = {
     'Mettre en veille': ('Sleep', 'Suspender', 'Energie sparen'),
     'Veille prolongée': ('Hibernate', 'Hibernar', 'Ruhezustand'),
     'Suivre la taille de la VM': ('Follow the VM size', 'Seguir el tamaño de la VM', 'VM-Größe folgen'),
+    'Définition recommandée': ('Recommended resolution', 'Resolución recomendada', 'Empfohlene Auflösung'),
+    'Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).': ('Virtual machine detected ({name}): display adapted to the VM (software cursor).', 'Máquina virtual detectada ({name}): pantalla adaptada a la VM (cursor por software).', 'Virtuelle Maschine erkannt ({name}): Anzeige an die VM angepasst (Software-Cursor).'),
     'Définition fixe': ('Fixed resolution', 'Resolución fija', 'Feste Auflösung'),
     'Échelle −': ('Scale −', 'Escala −', 'Skalierung −'),
     'Automatique': ('Automatic', 'Automática', 'Automatisch'),
@@ -216,6 +225,13 @@ GRAPHICS_PAGE = 24
 # Pages 25 à 28 : leur interface complète est celle des Paramètres du bureau.
 LEGACY_PAGES = (25, 26, 27, 28)
 SHARING_PAGE = 28
+# Nom de l'hyperviseur écrit par winlux-hardware ; vide sur un vrai PC.
+try:
+    with open("/run/winlux/hw/virtual-machine", encoding="utf-8") as _vm: VIRTUAL_MACHINE = _vm.read().strip()
+except OSError:
+    VIRTUAL_MACHINE = ""
+_VM_NAMES = {"qemu": "QEMU/KVM", "virtualbox": "VirtualBox", "vmware": "VMware", "hyperv": "Hyper-V",
+             "xen": "Xen", "parallels": "Parallels"}
 FIELDS = {
     0: [(_t("Version"), "version"), (_t("Noyau"), "kernel")],
     2: [(_t("Connexion"), "network")], 3: [(_t("Volume"), "audio")],
@@ -246,7 +262,7 @@ ACTIONS = {
          (_t("Veille (batterie)"), "power-sleep-dc"), (_t("Capot"), "power-lid"), (_t("Bouton d'alimentation"), "power-button"),
          (_t("Luminosité −"), "power-brightness-down"), (_t("Luminosité +"), "power-brightness-up"),
          (_t("Mettre en veille"), "power-suspend"), (_t("Veille prolongée"), "power-hibernate")],
-    8: [(_t("Suivre la taille de la VM"), "display-follow"), (_t("Définition fixe"), "display-fixed"),
+    8: [(_t("Suivre la taille de la VM") if VIRTUAL_MACHINE else _t("Définition recommandée"), "display-follow"), (_t("Définition fixe"), "display-fixed"),
         (_t("Échelle −"), "display-scale-down"), (_t("Automatique"), "display-scale-auto"), (_t("Échelle +"), "display-scale-up")],
 }
 
@@ -284,7 +300,11 @@ def gpu_summary():
 # Rapport de winlux-update (toujours écrit en français) : traduit à l'affichage.
 UPDATE_PREFIXES = ("Version installée : ", "Version disponible : ", "Action en attente : ", "Portée : ",
                    "Composants : ", "Taille à télécharger : ", "Taille décompressée : ",
-                   "Action après installation : ", "Echec de la mise à jour : ")
+                   "Action après installation : ", "Echec de la mise à jour : ",
+                   "Installation automatique suspendue : ", "Version écartée (le bureau n’a pas démarré) : ",
+                   "Version restaurée automatiquement : ", "Validation au prochain démarrage du bureau : ",
+                   "Point de restauration avant mise à jour : ", "Version précédente conservée : ")
+PREVIOUS_PACKAGE = "/var/cache/winlux/previous.deb"
 UPDATE_SUFFIXES = (" octets", " Kio (hors sauvegarde et marge)")
 
 
@@ -387,11 +407,13 @@ class Settings(Gtk.Window):
                            row_spacing=8, column_spacing=8)
         self.body.pack_start(flow, False, False, 0)
         self.install_button = None
+        self.rollback_button = None
         for title, action in actions:
             button = Gtk.Button(label=title)
             button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
             if action == "update-apply": self.install_button = button
+            if action == "update-rollback": self.rollback_button = button
         self.buttons = flow
         if self.page in (1, 2, 3, 6):
             tool = {1:"apps", 2:"quick", 3:"quick", 6:"appearance"}[self.page]
@@ -432,6 +454,8 @@ class Settings(Gtk.Window):
         self.progress.set_visible(self.page == 7)
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
+        if self.rollback_button is not None:
+            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
 
     def execute(self, action):
         if self.process is not None or self.busy: return
@@ -469,9 +493,15 @@ class Settings(Gtk.Window):
         if self.page == 7: text = read("/run/winlux/updates.txt")
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
+        if self.rollback_button is not None:
+            # Rien à restaurer tant qu'aucune version précédente n'est conservée.
+            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
+        if self.page in (8, GRAPHICS_PAGE) and VIRTUAL_MACHINE:
+            name = _VM_NAMES.get(VIRTUAL_MACHINE, "VM")
+            text = _t("Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).").format(name=name) + "\n" + text
         if self.state.get_text() != text: self.state.set_text(text)
         if self.process is None: self.notice.set_text(localize_update_text(read("/run/winlux/action.txt").strip()))
         progress = dict(line.split("=", 1) for line in read("/run/winlux/update-progress").splitlines() if "=" in line)
@@ -504,6 +534,7 @@ class Settings(Gtk.Window):
     def show_update_error(self, action, result):
         stages = {"checking": _t("Recherche et préparation"), "downloading": _t("Téléchargement"), "verifying": _t("Vérification"),
                   "extracting": _t("Décompression"), "backing-up": _t("Sauvegarde"),
+                  "restore-point": _t("Point de restauration"),
                   "installing": _t("Installation"), "finalizing": _t("Finalisation"), "restoring": _t("Restauration")}
         phase = read("/run/winlux/update-error-phase").strip()
         stage = stages.get(phase, phase or {"update-check": _t("Recherche"), "update-apply": _t("Mise à jour"),
