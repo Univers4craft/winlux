@@ -7,7 +7,8 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 16] = [
+pub const PAGE_PERSONALIZE: usize = 16;
+const PAGES: [&[u8]; 17] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -24,7 +25,10 @@ const PAGES: [&[u8]; 16] = [
     b"Effets visuels",
     b"Localisation",
     b"Gestionnaire de fichiers",
+    b"Personnalisation",
 ];
+/// Ordre d'affichage dans la navigation (Personnalisation après Apparence).
+const NAV_ORDER: [usize; 17] = [0, 1, 2, 3, 4, 5, 6, 16, 7, 8, 9, 10, 11, 12, 13, 14, 15];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
 struct Buffer {
@@ -339,6 +343,13 @@ pub unsafe fn system_tick() -> bool {
         crate::gfx::check_auto_theme();
     }
     changed
+}
+/// Relaie un réglage au service système quand il existe, sans message sinon
+/// (la personnalisation est déjà enregistrée côté bureau).
+pub unsafe fn control_quiet(action: &core::ffi::CStr) {
+    if available() {
+        control(action);
+    }
 }
 pub unsafe fn control(action: &core::ffi::CStr) -> bool {
     if updating()
@@ -688,8 +699,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         f.client.top + 20,
         b"Param\xE8tres",
     );
-    for (i, name) in PAGES.iter().enumerate() {
-        let r = nav_rect(f, i);
+    for (pos, &i) in NAV_ORDER.iter().enumerate() {
+        let name = PAGES[i];
+        let r = nav_rect(f, pos);
         if i == PAGE {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.selected);
             fill(
@@ -727,6 +739,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.accent,
     );
     match PAGE {
+        PAGE_PERSONALIZE => crate::personalize::draw_settings(g, &c),
         5 => {
             let speed_str = unsafe {
                 if MOUSE_SPEED == 25 {
@@ -1153,13 +1166,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 g,
                 &c,
                 300,
-                b"Ic\xF4nes du bureau",
-                b"Ajoutez seulement les ic\xF4nes que vous voulez afficher.",
+                b"Fond d'\xE9\x63ran, couleurs, barre des t\xE2\x63hes, ic\xF4nes et sons",
+                b"Galerie et aper\xE7u dans la page Personnalisation.",
             );
-            button(g, &c, 5, 0, b"Afficher Corbeille", 12);
-            button(g, &c, 5, 1, b"Afficher Explorateur", 13);
-            button(g, &c, 6, 0, b"Afficher Ce PC", 14);
-            button(g, &c, 6, 1, b"Afficher Documents", 15);
+            button(g, &c, 5, 0, b"Personnaliser", 12);
+            button(g, &c, 5, 1, b"Assistant de bienvenue", 13);
             button(g, &c, 7, 0, b"R\xE9glages de l'\xE9cran", 18);
         }
         8 => {
@@ -1501,6 +1512,15 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }
         return true;
     }
+    if PAGE == PAGE_PERSONALIZE && matches!(ev, Mouse::Move | Mouse::Down | Mouse::DoubleClick) {
+        let c = content(f);
+        if ev == Mouse::Move {
+            return crate::personalize::settings_move(&c, x, y);
+        }
+        if inside(&c, x, y) {
+            return crate::personalize::settings_click(&c, x, y);
+        }
+    }
     if ev == Mouse::Move {
         let h = hit(f, x, y);
         let changed = h != HOVER;
@@ -1510,8 +1530,8 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if ev != Mouse::Down && ev != Mouse::DoubleClick {
         return false;
     }
-    for i in 0..PAGES.len() {
-        if inside(&nav_rect(f, i), x, y) {
+    for (pos, &i) in NAV_ORDER.iter().enumerate() {
+        if inside(&nav_rect(f, pos), x, y) {
             PAGE = i;
             SCROLL = 0;
             HOVER = -1;
@@ -1545,10 +1565,14 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             unsafe { MOUSE_SPEED = 75 };
             Some(c"mouse-fast")
         }
-        (6, 12) => Some(c"desktop-icon-recycle"),
-        (6, 13) => Some(c"desktop-icon-explorer"),
-        (6, 14) => Some(c"desktop-icon-computer"),
-        (6, 15) => Some(c"desktop-icon-documents"),
+        (6, 12) => {
+            crate::personalize::open_settings(0);
+            return true;
+        }
+        (6, 13) => {
+            crate::personalize::start_oobe();
+            return true;
+        }
         (11, id) if (0..=8).contains(&id) => Some(
             [
                 c"browser-install-edge",

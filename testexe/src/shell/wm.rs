@@ -945,6 +945,12 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
     let active = ACTIVE == app;
     let bg = p.mica;
     let fade = |c: u32| -> u32 { mix(bg, c, opacity, 1000) };
+    let accented = active && ACCENT_TITLES;
+    let title_bg = if accented {
+        mix(p.mica, p.accent, 22, 100)
+    } else {
+        p.mica
+    };
     // Liseré fin et fond « Mica » (pas d'ombre lourde).
     round_rect(
         g.hdc,
@@ -954,7 +960,9 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         shown.right,
         shown.bottom,
         radius,
-        fade(if active {
+        fade(if accented {
+            p.accent
+        } else if active {
             mix(p.border, p.accent, 2, 10)
         } else {
             p.border
@@ -968,7 +976,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         shown.right - 1,
         shown.bottom - 1,
         radius,
-        fade(p.mica),
+        fade(title_bg),
     );
     if !content || shown.right - shown.left < 200 || shown.bottom - shown.top < 120 {
         glyph(
@@ -1005,6 +1013,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         );
     }
     if !custom_title(app) {
+        set_glyph_bg(Some(title_bg));
         glyph(
             g.hdc,
             g.b,
@@ -1014,6 +1023,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             fr.title.top + 11,
             16,
         );
+        set_glyph_bg(None);
         text(
             g.hdc,
             g.f.caption,
@@ -1069,7 +1079,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
                 p.hover
             }
         } else {
-            p.mica
+            title_bg
         };
         set_glyph_bg(Some(bg));
         glyph(

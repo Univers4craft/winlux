@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **124**
+- Réalisé : **125**
 - À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Total : **151**
+- Progression : **82.8%**
 
 ## À FAIRE (par priorité)
 
@@ -194,6 +194,7 @@
 - [x] Définir les variantes clair/sombre et le réglage d'échelle.
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
+- [x] Personnalisation (Paramètres > Personnalisation et assistant de premier démarrage) : galerie de 13 fonds d'écran calculés (catégories Nature/Abstrait/Sombre/Clair, aperçu), palette d'accentuation Windows 11 (48 couleurs ou automatique, option sur Démarrer/barre et barres de titre), barre des tâches en bas/haut/gauche/droite en trois tailles, choix des icônes du bureau, cinq sons de démarrage synthétisés avec écoute. Préférences dans `~/.local/share/winlux/personnalisation.conf` ; `WINLUX_OOBE=1` relance l'assistant, `WINLUX_NO_OOBE=1` le saute.
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
 
 ### Priorité 6 — Qualité et livraison

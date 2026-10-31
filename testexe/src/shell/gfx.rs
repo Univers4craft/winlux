@@ -275,6 +275,11 @@ pub fn mix(a: u32, c: u32, t: i32, n: i32) -> u32 {
 pub static mut DARK: bool = true;
 /// Couleur d'accentuation (COLORREF), bleu Windows par défaut.
 pub static mut ACCENT: u32 = rgb(0x4C, 0xC2, 0xFF);
+/// Couleur d'accentuation choisie (teinte « de base » de la palette Windows).
+pub static mut ACCENT_BASE: u32 = DEFAULT_ACCENT;
+pub const DEFAULT_ACCENT: u32 = rgb(0x00, 0x78, 0xD4);
+/// Accent sur la barre de titre et la bordure de la fenêtre active.
+pub static mut ACCENT_TITLES: bool = false;
 /// Mode contraste élevé (accessibilité).
 pub static mut HIGH_CONTRAST: bool = false;
 /// Réglages visuels partagés (source unique).
@@ -346,7 +351,11 @@ fn raw_pal(dark: bool) -> Palette {
             shadow: rgb(0x08, 0x0C, 0x18),
         }
     } else {
-        let accent = mix(accent, rgb(0, 0x3E, 0x92), 6, 10);
+        let accent = if unsafe { ACCENT_BASE } == DEFAULT_ACCENT {
+            mix(accent, rgb(0, 0x3E, 0x92), 6, 10)
+        } else {
+            mix(unsafe { ACCENT_BASE }, 0, 1, 10)
+        };
         Palette {
             window: rgb(0xF9, 0xF9, 0xF9),
             mica: rgb(0xEE, 0xF1, 0xF8),
@@ -400,6 +409,17 @@ pub fn pal() -> Palette {
         let prev = raw_pal(PREV_DARK);
         mix_pal(&prev, &target, e, 1000)
     }
+}
+
+/// Applique une couleur d'accentuation : la variante claire sert au thème
+/// sombre (texte noir dessus), la teinte de base au thème clair.
+pub unsafe fn set_accent(base: u32) {
+    ACCENT_BASE = base;
+    ACCENT = if base == DEFAULT_ACCENT {
+        rgb(0x4C, 0xC2, 0xFF)
+    } else {
+        mix(base, rgb(0xFF, 0xFF, 0xFF), 4, 10)
+    };
 }
 
 /// Vrai si une transition de thème est en cours (la boucle doit repeindre).

@@ -24,6 +24,8 @@ mod login;
 mod notepad;
 #[path = "../shell/notifications.rs"]
 mod notifications;
+#[path = "../shell/personalize.rs"]
+mod personalize;
 #[path = "../shell/settings.rs"]
 mod settings;
 #[path = "../shell/taskmgr.rs"]

@@ -20,6 +20,8 @@ mod login;
 mod notepad;
 #[path = "../shell/notifications.rs"]
 mod notifications;
+#[path = "../shell/personalize.rs"]
+mod personalize;
 #[path = "../shell/settings.rs"]
 mod settings;
 #[path = "../shell/taskmgr.rs"]
@@ -39,6 +41,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         explorer::regression_checks();
         desktop::regression_checks();
         settings::regression_checks();
+        personalize::regression_checks();
     }
     finish()
 }
