@@ -25,7 +25,7 @@ PACKAGES += ["apt", "dpkg", "bash", "coreutils", "findutils", "grep", "sed", "ta
 PACKAGES += ["rsync", "openssh-client"]
 PACKAGES += ["xfonts-base", "libarchive-tools", "squashfs-tools", "libfaad2", "libmpg123-0",
              "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
-             "libqt6core6t64", "libqt6gui6t64", "libqt6widgets6t64"]
+             "libqt6core6t64", "libqt6gui6", "libqt6widgets6"]
 # Tools the graphical installer runs from the live session.
 PACKAGES += ["parted", "dosfstools", "e2fsprogs", "cryptsetup-bin", "ntfs-3g", "kbd",
              "console-setup", "grub2-common", "grub-pc-bin", "grub-efi-amd64-bin", "efibootmgr",
@@ -39,7 +39,7 @@ DESKTOP_REQUIRED = ["apt", "dpkg", "bash", "busybox-static", "curl", "ca-certifi
     "xserver-xorg-input-libinput", "xterm", "fonts-dejavu-core", "util-linux", "thunar",
     "network-manager", "network-manager-gnome", "udisks2", "gvfs", "libfaad2", "libmpg123-0",
     "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
-    "libqt6core6t64", "libqt6gui6t64", "libqt6widgets6t64", "libasound2t64", "alsa-utils",
+    "libqt6core6t64", "libqt6gui6", "libqt6widgets6", "libasound2t64", "alsa-utils",
     "libx11-6", "libxft2", "libcairo2", "polkitd", "rsync", "openssh-client", "espeak-ng", "ffmpeg", "winlux-kernel"]
 
 def run(*args, **kwargs):
