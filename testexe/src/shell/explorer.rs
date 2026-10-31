@@ -1200,6 +1200,41 @@ pub unsafe fn open_trash() {
     open_at(TRASH);
 }
 
+pub unsafe fn current_view() -> u8 {
+    match VIEW {
+        View::XLarge => 0,
+        View::Large => 1,
+        View::Medium => 2,
+        View::Small => 3,
+        View::List => 4,
+        View::Details => 5,
+        View::Tiles => 6,
+    }
+}
+pub unsafe fn set_view(v: u8) {
+    VIEW = match v {
+        0 => View::XLarge,
+        1 => View::Large,
+        2 => View::Medium,
+        3 => View::Small,
+        4 => View::List,
+        5 => View::Details,
+        _ => View::Tiles,
+    };
+}
+pub unsafe fn show_hidden() -> bool {
+    SHOW_HIDDEN
+}
+pub unsafe fn set_show_hidden(v: bool) {
+    SHOW_HIDDEN = v;
+}
+pub unsafe fn show_ext() -> bool {
+    SHOW_EXT
+}
+pub unsafe fn set_show_ext(v: bool) {
+    SHOW_EXT = v;
+}
+
 // ---------- Sélection ----------
 
 fn is_sel(p: &Pane, i: usize) -> bool {
