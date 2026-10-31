@@ -2,7 +2,13 @@
 Type=Application
 Name=Winlux
 GenericName=Programme Windows
+GenericName[en]=Windows program
+GenericName[de]=Windows-Programm
+GenericName[es]=Programa de Windows
 Comment=Exécuter un programme Windows avec Winlux
+Comment[en]=Run a Windows program with Winlux
+Comment[de]=Ein Windows-Programm mit Winlux ausführen
+Comment[es]=Ejecutar un programa de Windows con Winlux
 Exec=/usr/bin/winlux-open %f
 Icon=application-x-ms-dos-executable
 Terminal=false
