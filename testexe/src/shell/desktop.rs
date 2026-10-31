@@ -764,6 +764,7 @@ pub unsafe fn toggle_desktop_icon(i: usize) {
     }
     if !shown {
         place_icon(i);
+        save_icon_positions();
     }
     save_shell_state();
 }
@@ -872,6 +873,79 @@ unsafe fn load_shell_state() {
         PINNED_APPS = data[3];
         DESKTOP_SHORTCUTS = data[4] & 3;
         SYSTEM_ICONS = data[5] & 0b110_0111;
+    }
+}
+
+const ICONS_BYTES: usize = DESKTOP_ICON_COUNT * 8;
+const ICONS_PATH: &core::ffi::CStr = c"C:\\.local\\share\\winlux\\desktop-icons.dat";
+
+unsafe fn save_icon_positions() {
+    let file = CreateFileA(
+        ICONS_PATH.as_ptr(),
+        0x4000_0000, // GENERIC_WRITE
+        0,
+        core::ptr::null_mut(),
+        2, // CREATE_ALWAYS
+        0,
+        core::ptr::null_mut(),
+    );
+    if file.is_null() || file as isize == -1 {
+        return;
+    }
+    // x et y (i32) par icône ; les anciens fichiers n'en ont que 5.
+    let mut buf = [0u8; ICONS_BYTES];
+    for i in 0..DESKTOP_ICON_COUNT {
+        let off = i * 8;
+        buf[off..off + 4].copy_from_slice(&ICON_X[i].to_le_bytes());
+        buf[off + 4..off + 8].copy_from_slice(&ICON_Y[i].to_le_bytes());
+    }
+    let mut written = 0u32;
+    WriteFile(
+        file,
+        buf.as_ptr(),
+        ICONS_BYTES as u32,
+        &mut written,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(file);
+}
+
+unsafe fn load_icon_positions() {
+    let file = CreateFileA(
+        ICONS_PATH.as_ptr(),
+        0x8000_0000, // GENERIC_READ
+        1,           // FILE_SHARE_READ
+        core::ptr::null_mut(),
+        3, // OPEN_EXISTING
+        0,
+        core::ptr::null_mut(),
+    );
+    if file.is_null() || file as isize == -1 {
+        return;
+    }
+    let mut buf = [0u8; ICONS_BYTES];
+    let mut nread = 0u32;
+    ReadFile(
+        file,
+        buf.as_mut_ptr(),
+        ICONS_BYTES as u32,
+        &mut nread,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(file);
+    let count = nread as usize / 8;
+    if count < 5 {
+        return;
+    }
+    // Positions enregistrées en absolu ; le premier affichage (reflow_desk)
+    // rajoute le décalage de la zone utile.
+    let desk = layout().desk;
+    for i in 0..count.min(DESKTOP_ICON_COUNT) {
+        let off = i * 8;
+        ICON_X[i] =
+            -desk.left + i32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+        ICON_Y[i] = -desk.top
+            + i32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
     }
 }
 
@@ -3299,6 +3373,7 @@ pub unsafe fn init(
     // Les positions par défaut des icônes partent du coin de l'écran :
     // le premier affichage les recale dans la zone utile.
     wm::WORK = layout().desk;
+    load_icon_positions();
     BOOT_START = now();
     let mut v = [0i8; 4];
     if GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0 {
@@ -4205,6 +4280,7 @@ pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
     let mut rp = false;
     if DRAGGED_ICON >= 0 {
         DRAGGED_ICON = -1;
+        save_icon_positions();
         rp = true;
     }
     wm::on_button_up(x, y, &mut rp);
