@@ -4,6 +4,8 @@
 #![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
+#[path = "../shell/admin_ui.rs"]
+mod admin_ui;
 #[path = "../shell/bsod.rs"]
 mod bsod;
 #[path = "../shell/desktop.rs"]
@@ -16,6 +18,8 @@ mod diskmgr;
 mod eventviewer;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/firewall.rs"]
+mod firewall;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/locale.rs"]
@@ -38,6 +42,8 @@ mod settings;
 mod settings_cpu;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
+#[path = "../shell/taskschd.rs"]
+mod taskschd;
 #[path = "../shell/terminal.rs"]
 mod terminal;
 #[path = "../shell/utilities.rs"]

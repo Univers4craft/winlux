@@ -315,7 +315,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 33] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 35] = [
             (b"Bienvenue dans Winlux", b"welcome", 9),
             (tr(S_TERMINAL), b"xterm", 1),
             (tr(S_FILE_EXPLORER), b"nemo", 1),
@@ -344,6 +344,8 @@ fn init_apps() {
             (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
             (b"Gestionnaire de paquets", b"mintinstall", 9),
             (b"Gestion des disques", b"diskmgr", 9),
+            (b"Planificateur de t\xE2ches", b"taskschd", 9),
+            (b"Pare-feu Winlux", b"firewall", 9),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
             (tr(S_TASK_MANAGER), b"taskmgr", 9),
             (b"Nettoyage de disque", b"diskcleaner", 9),
@@ -1397,6 +1399,8 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(wm::APP_DISKMGR) => Glyph::Drive,
+            Some(wm::APP_TASKSCHD) => Glyph::Clock,
+            Some(wm::APP_FIREWALL) => Glyph::Shield,
             Some(wm::APP_EVENTVIEWER) => Glyph::Details,
             Some(wm::APP_RESTORE) => Glyph::Refresh,
             Some(wm::APP_WELCOME) => Glyph::Star,
@@ -1761,6 +1765,14 @@ unsafe fn launch(what: Launch) {
             }
             if cmd == b"diskmgr" {
                 wm::open(wm::APP_DISKMGR);
+                return;
+            }
+            if cmd == b"taskschd" || cmd == b"taskschd.msc" {
+                wm::open(wm::APP_TASKSCHD);
+                return;
+            }
+            if cmd == b"firewall" || cmd == b"wf.msc" || cmd == b"firewall.cpl" {
+                wm::open(wm::APP_FIREWALL);
                 return;
             }
             if cmd == b"eventviewer" {
@@ -3682,7 +3694,7 @@ pub unsafe fn tick(hwnd: Handle) {
     }
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
-    let system = crate::settings::system_tick();
+    let system = crate::settings::system_tick() | crate::firewall::system_tick();
     let weather_changed = weather::poll();
     let welcome = BOOT_DONE
         && crate::login::logged_in()
