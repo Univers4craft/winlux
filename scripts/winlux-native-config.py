@@ -91,6 +91,29 @@ for path in (source / "config").rglob("*"):
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.exists() or (reset_panel and path.name == "xfce4-panel.xml"):
             shutil.copyfile(path, target)
+# Zone de notification des programmes Windows (Shell_NotifyIcon) : ajoutée une
+# fois aux panneaux déjà configurés, juste avant les icônes réseau/son/batterie.
+panel_config = home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
+if panel_config.is_file():
+    try:
+        tree = ET.parse(panel_config)
+        root = tree.getroot()
+        plugins = next((item for item in root if item.get("name") == "plugins"), None)
+        panel = next((item for top in root if top.get("name") == "panels" for item in top if item.get("name") == "panel-1"), None)
+        ids = next((item for item in panel if item.get("name") == "plugin-ids"), None) if panel is not None else None
+        if plugins is not None and ids is not None and not any(item.get("value") == "systray" for item in plugins):
+            used = [int(item.get("name")[7:]) for item in plugins if (item.get("name") or "").startswith("plugin-") and item.get("name")[7:].isdigit()]
+            number = max(used + [0]) + 1
+            tray = ET.SubElement(plugins, "property", {"name": f"plugin-{number}", "type": "string", "value": "systray"})
+            ET.SubElement(tray, "property", {"name": "square-icons", "type": "bool", "value": "true"})
+            ET.SubElement(tray, "property", {"name": "icon-size", "type": "uint", "value": "16"})
+            genmon = {item.get("name")[7:] for item in plugins if item.get("value") == "genmon"}
+            values = list(ids)
+            position = next((index for index, item in enumerate(values) if item.get("value") in genmon), len(values) - 1 if values else 0)
+            ids.insert(position, ET.Element("value", {"type": "int", "value": str(number)}))
+            tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
+    except (ET.ParseError, OSError, ValueError, TypeError):
+        pass
 # Migrer uniquement le raccourci livré par Winlux, sans toucher aux raccourcis
 # personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox.
 openbox_config = home / ".config/openbox/rc.xml"
