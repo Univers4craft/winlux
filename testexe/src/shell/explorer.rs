@@ -87,7 +87,7 @@ impl Entry {
 }
 
 #[derive(Clone, Copy)]
-struct Path {
+pub struct Path {
     buf: [u8; PATH_LEN],
     len: u16,
 }
@@ -96,7 +96,7 @@ const EMPTY_PATH: Path = Path {
     len: 0,
 };
 impl Path {
-    fn get(&self) -> &[u8] {
+    pub fn get(&self) -> &[u8] {
         &self.buf[..self.len as usize]
     }
     fn set(&mut self, s: &[u8]) -> bool {
@@ -3983,7 +3983,6 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             if was_file_drag {
                 let t = tab();
                 if t.dual {
-                    let geo = geo(f);
                     let other = 1 - t.focus;
                     let r = geo.panes[other];
                     if inside(&r, x, y) {

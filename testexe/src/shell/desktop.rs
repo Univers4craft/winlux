@@ -2566,7 +2566,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
 
 pub unsafe fn handle_file_drop(do_copy: bool) {
     let desktop = explorer::desktop_folder_path();
-    if desktop.len == 0 {
+    if desktop.get().is_empty() {
         return;
     }
     explorer::drop_files_to(desktop.get(), do_copy);
@@ -3970,7 +3970,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
         if ctrl {
             let desktop = explorer::desktop_folder_path();
-            if desktop.len > 0 {
+            if !desktop.get().is_empty() {
                 explorer::paste_to(desktop.get());
                 toast(b"Fichier(s) coll\xE9(s) sur le Bureau.");
             }
