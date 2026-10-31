@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **219**
-- À faire ou en cours : **38**
-- Total : **257**
-- Progression : **85.2%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140)
+- Réalisé : **220**
+- À faire ou en cours : **39**
+- Total : **259**
+- Progression : **84.9%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158)
 
 ## À FAIRE (par priorité)
 
@@ -28,6 +28,8 @@
 ### État actuel
 
 - [x] Lecteurs réseau : FTP, FTPS, SFTP, WebDAV(S), SMB, NFS et S3 montés comme un disque avec lettre (`winlux-drives`, page Paramètres « Lecteurs réseau »), mots de passe chiffrés ChaCha20-Poly1305, reconnexion automatique et état hors ligne publiés dans le registre commun `mounts.tsv`. Seuls les protocoles dont l'outil de montage est présent sont proposés. Reste : modules noyau cifs/nfs dans l'ISO live (SMB passe par rclone en attendant, NFS masqué).
+- [x] Écran de verrouillage de la session native au style Windows 11 (`winlux-lock`) : Windows+L, Démarrer > Verrouiller, inactivité, mot de passe au réveil, réglages dans Paramètres > Confidentialité et sécurité (#158).
+- [ ] Permissions des applications Windows : demande claire (dossiers personnels, webcam, micro, écran, réseau), choix mémorisé et révocable dans Paramètres (#158).
 - [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
@@ -255,6 +257,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 - [x] Installer le runtime et le lanceur dans un chemin stable (`/usr/bin` par défaut, préfixe et `DESTDIR` configurables), avec association MIME par défaut dans `/etc/xdg/mimeapps.list`; validé dans une racine temporaire par `scripts/test-integration.sh`.
 - [x] Ajouter une procédure de désinstallation propre du binfmt, du MIME et du fichier `.desktop` (`integration/uninstall.sh`, restaure les associations précédentes).
+- [x] Lancement croisé Linux ↔ Windows (#164, `runtime/src/launch.rs`) : un `.exe` lance une appli Linux avec arguments, environnement, dossier courant, code de retour et tubes (`CreatePipe`, `STARTF_USESTDHANDLES`, `PeekNamedPipe`, fin de tube `ERROR_BROKEN_PIPE`, vrai `DuplicateHandle`), recherche du programme comme Windows puis dans le `PATH` Linux, chemins `C:\…` des arguments convertis en chemins Linux, lanceurs `.desktop`, protocoles (`mailto:` → client mail, `steam:`/`magnet:`… → `xdg-open`, `file:///`), `ShellExecuteEx` avec handle de processus. Dans l'autre sens, les chemins Linux donnés à un `.exe` deviennent `C:\…`/`Z:\…` (`WINLUX_KEEP_LINUX_PATHS=1` pour garder les chemins bruts).
 - [x] Gérer les chemins contenant des espaces ou des URI `file://`, les fichiers illisibles et les volumes montés `noexec` (le lanceur lit le fichier au lieu de l’exécuter; le dossier du programme devient le répertoire courant).
 - [x] Définir le comportement du terminal : `winlux --inspect` lit le sous-système PE, `winlux-open` ouvre un terminal (Konsole, GNOME Terminal, XFCE, xterm ou `WINLUX_TERMINAL`) qui reste ouvert pour les programmes console et lance directement les programmes graphiques.
 - [x] Ajouter une détection du fichier `.exe` et des messages d’erreur graphiques (kdialog, zenity, notify-send, xmessage) ou textuels adaptés.

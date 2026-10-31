@@ -145,6 +145,11 @@ else
     LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
 fi
 echo $! > /run/winlux/screensaver.pid
+# Verrouillage après inactivité et au retour de veille (Paramètres > Confidentialité et sécurité).
+if ! { test -f /run/winlux/lock-daemon.pid && kill -0 "$(cat /run/winlux/lock-daemon.pid)" 2>/dev/null; }; then
+    /usr/bin/winlux-lock daemon >/run/winlux/lock.log 2>&1 &
+    echo $! > /run/winlux/lock-daemon.pid
+fi
 (
     while :; do
         /usr/bin/winlux-applications refresh >/run/winlux/applications.log 2>&1 || true

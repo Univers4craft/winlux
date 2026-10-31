@@ -26,7 +26,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # Voix du Narrateur (Parametres > Accessibilite).
             "espeak-ng",
             # Impression : CUPS (pont IPP de winspool), filtres PDF et IPP-over-USB.
-            "cups", "cups-filters", "ipp-usb"]
+            "cups", "cups-filters", "ipp-usb",
+            # Écran de verrouillage (winlux-lock) : crypt() des mots de passe, inactivité X11.
+            "libcrypt1", "libxss1", "python3-gi-cairo"]
 
 def main():
     work = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/desktop-components").resolve()

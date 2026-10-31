@@ -37,4 +37,12 @@ for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite 
         exit 1
     }
 done
+# Lancement croisé dans l'autre sens : un script Linux lit la sortie d'un .exe.
+printf '\n== sortie d un .exe lue par un script Linux ==\n'
+captured=$("$runtime" "$testdir/hello.exe" | head -n 1)
+test "$captured" = "Bonjour depuis un .exe Windows, execute par Winlux !" || {
+    echo "sortie de hello.exe non récupérée : $captured" >&2
+    exit 1
+}
+echo "OK"
 echo "Tous les tests runtime passent."
