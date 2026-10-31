@@ -30,6 +30,7 @@ static mut HOVER_QUICK: i32 = -1;
 static mut HOVER_NOTIF_DISMISS: i32 = -1;
 static mut HOVER_CAL_NAV: i32 = -1; // 0 = prev, 1 = next
 static mut CAL_MONTH_OFFSET: i32 = 0;
+static mut NOTIF_SCROLL: i32 = 0;
 
 // Quick actions toggle state.
 static mut QA_WIFI: bool = true;
@@ -151,7 +152,11 @@ pub unsafe fn set_open(open: bool) {
 }
 
 pub unsafe fn toggle() {
-    set_open(!(OPEN && !CLOSING));
+    let opening = !(OPEN && !CLOSING);
+    if opening {
+        NOTIF_SCROLL = 0;
+    }
+    set_open(opening);
 }
 
 pub fn is_open() -> bool {
@@ -545,15 +550,16 @@ unsafe fn draw_notifications(hdc: Handle, b: &mut Brushes, f: &Fonts, pl: &Panel
     }
 
     let max_visible = ((pl.y + pl.h - y0 - 30) / 64).max(1) as usize;
-    let start = if count > max_visible {
-        count - max_visible
-    } else {
-        0
-    };
-    for (vi, i) in (start..count).enumerate() {
-        let ny = y0 + 30 + vi as i32 * 64;
-        if ny + 60 > pl.y + pl.h {
-            break;
+    let max_scroll = ((count as i32 - max_visible as i32) * 64).max(0);
+    NOTIF_SCROLL = NOTIF_SCROLL.clamp(0, max_scroll);
+    let skip = (NOTIF_SCROLL / 64) as usize;
+    let y_off = NOTIF_SCROLL % 64;
+    let draw_count = (max_visible + 1).min(count - skip);
+    for vi in 0..draw_count {
+        let i = skip + vi;
+        let ny = y0 + 30 + vi as i32 * 64 - y_off;
+        if ny + 60 > pl.y + pl.h || ny < y0 + 22 {
+            continue;
         }
         let n = &NOTIFS[i];
 
@@ -738,28 +744,32 @@ pub unsafe fn on_click(screen_w: i32, bar_top: i32, x: i32, y: i32) -> bool {
         let clr_x = pl.x + pl.w - 100;
         if x >= clr_x && x < clr_x + 88 && y >= pl.notif_y - 2 && y < pl.notif_y + 18 {
             NOTIF_COUNT = 0;
+            NOTIF_SCROLL = 0;
             return true;
         }
     }
 
     // Dismiss individual notification.
     let max_visible = ((pl.h - (pl.notif_y - pl.y) - 30) / 64).max(1) as usize;
-    let start = if NOTIF_COUNT > max_visible {
-        NOTIF_COUNT - max_visible
-    } else {
-        0
-    };
-    for (vi, i) in (start..NOTIF_COUNT).enumerate() {
-        let ny = pl.notif_y + 30 + vi as i32 * 64;
+    let skip = (NOTIF_SCROLL / 64) as usize;
+    let y_off = NOTIF_SCROLL % 64;
+    let draw_count = (max_visible + 1).min(NOTIF_COUNT.saturating_sub(skip));
+    for vi in 0..draw_count {
+        let i = skip + vi;
+        let ny = pl.notif_y + 30 + vi as i32 * 64 - y_off;
+        if ny < pl.notif_y + 22 || ny + 60 > pl.y + pl.h {
+            continue;
+        }
         let dismiss_x = pl.x + pl.w - 36;
         if x >= dismiss_x && x < dismiss_x + 20 && y >= ny + 4 && y < ny + 20 {
-            // Remove notification at index i.
             for j in i..NOTIF_COUNT.saturating_sub(1) {
                 NOTIFS[j] = NOTIFS[j + 1];
             }
             if NOTIF_COUNT > 0 {
                 NOTIF_COUNT -= 1;
             }
+            let max_scroll = ((NOTIF_COUNT as i32 - max_visible as i32) * 64).max(0);
+            NOTIF_SCROLL = NOTIF_SCROLL.clamp(0, max_scroll);
             return true;
         }
     }
@@ -802,14 +812,15 @@ pub unsafe fn on_mouse_move(screen_w: i32, bar_top: i32, x: i32, y: i32) -> bool
 
     // Notification dismiss hover.
     let max_visible = ((pl.h - (pl.notif_y - pl.y) - 30) / 64).max(1) as usize;
-    let start = if NOTIF_COUNT > max_visible {
-        NOTIF_COUNT - max_visible
-    } else {
-        0
-    };
+    let skip = (NOTIF_SCROLL / 64) as usize;
+    let y_off = NOTIF_SCROLL % 64;
+    let draw_count = (max_visible + 1).min(NOTIF_COUNT.saturating_sub(skip));
     let mut hnd: i32 = -1;
-    for (vi, _) in (start..NOTIF_COUNT).enumerate() {
-        let ny = pl.notif_y + 30 + vi as i32 * 64;
+    for vi in 0..draw_count {
+        let ny = pl.notif_y + 30 + vi as i32 * 64 - y_off;
+        if ny < pl.notif_y + 22 || ny + 60 > pl.y + pl.h {
+            continue;
+        }
         let dismiss_x = pl.x + pl.w - 36;
         if x >= dismiss_x && x < dismiss_x + 20 && y >= ny + 4 && y < ny + 20 {
             hnd = vi as i32;
@@ -822,6 +833,24 @@ pub unsafe fn on_mouse_move(screen_w: i32, bar_top: i32, x: i32, y: i32) -> bool
     }
 
     changed
+}
+
+pub unsafe fn on_wheel(screen_w: i32, bar_top: i32, x: i32, y: i32, delta: i32) -> bool {
+    if !OPEN {
+        return false;
+    }
+    let pl = panel_layout(screen_w, bar_top);
+    if x < pl.x || x >= pl.x + pl.w || y < pl.y || y >= pl.y + pl.h {
+        return false;
+    }
+    if y < pl.notif_y + 22 {
+        return true;
+    }
+    let max_visible = ((pl.h - (pl.notif_y - pl.y) - 30) / 64).max(1) as usize;
+    let max_scroll = ((NOTIF_COUNT as i32 - max_visible as i32) * 64).max(0);
+    NOTIF_SCROLL -= delta / 120 * 64;
+    NOTIF_SCROLL = NOTIF_SCROLL.clamp(0, max_scroll);
+    true
 }
 
 pub unsafe fn notification_count() -> usize {

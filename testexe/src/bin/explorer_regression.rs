@@ -8,6 +8,8 @@ use winlux_testexe::*;
 mod desktop;
 #[path = "../shell/diskcleaner.rs"]
 mod diskcleaner;
+#[path = "../shell/diskmgr.rs"]
+mod diskmgr;
 #[path = "../shell/explorer.rs"]
 mod explorer;
 #[path = "../shell/gfx.rs"]
@@ -24,6 +26,8 @@ mod settings;
 mod taskmgr;
 #[path = "../shell/utilities.rs"]
 mod utilities;
+#[path = "../shell/weather.rs"]
+mod weather;
 #[path = "../shell/wm.rs"]
 mod wm;
 

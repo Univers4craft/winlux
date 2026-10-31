@@ -7,7 +7,7 @@ use std::sync::atomic::{AtomicI32, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::thread::ThreadId;
 
-pub static mut PROCESS_HEAP: usize = 0;
+static PROCESS_HEAP: AtomicUsize = AtomicUsize::new(0);
 struct VmRegion {
     size: usize,
     committed: Vec<bool>,
@@ -241,12 +241,14 @@ struct CriticalSection {
     spin_count: usize,
 }
 
+pub fn process_heap() -> usize {
+    PROCESS_HEAP.load(Ordering::Relaxed)
+}
+
 pub fn init() {
-    unsafe {
-        if PROCESS_HEAP == 0 {
-            PROCESS_HEAP = 1;
-        }
-    }
+    PROCESS_HEAP
+        .compare_exchange(0, 1, Ordering::Relaxed, Ordering::Relaxed)
+        .ok();
     let _ = ALLOCS.get_or_init(|| Mutex::new(std::collections::HashMap::new()));
     let _ = HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new()));
     let _ = HANDLES.get_or_init(|| Mutex::new(HashMap::new()));
@@ -360,9 +362,7 @@ unsafe fn bytes_mut<'a>(p: *mut u8, len: usize) -> Option<&'a mut [u8]> {
         Some(std::slice::from_raw_parts_mut(p, len))
     }
 }
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 fn sync_gate() -> std::sync::MutexGuard<'static, ()> {
     lock(SYNC_GATE.get_or_init(|| Mutex::new(())))
 }
@@ -2179,7 +2179,7 @@ pub extern "win64" fn set_last_error(code: u32) {
     crate::process::set_last_error(code)
 }
 pub extern "win64" fn get_process_heap() -> usize {
-    unsafe { PROCESS_HEAP }
+    process_heap()
 }
 pub unsafe extern "win64" fn heap_alloc(_heap: usize, flags: u32, size: usize) -> *mut c_void {
     let p = libc::malloc(size.max(1));

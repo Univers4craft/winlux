@@ -10,6 +10,7 @@
 use crate::explorer;
 use crate::gfx::*;
 use crate::notifications;
+use crate::weather;
 use crate::wm::{self, Gfx, Mouse};
 use winlux_testexe::*;
 
@@ -295,7 +296,7 @@ fn init_apps() {
             (b"Geany", b"geany", 7),
             (b"Param\xE8tres", b"cinnamon-settings", 8),
             (b"Gestionnaire de paquets", b"mintinstall", 9),
-            (b"Disques", b"gnome-disks", 9),
+            (b"Gestion des disques", b"diskmgr", 9),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
             (b"Gestionnaire des t\xE2ches", b"taskmgr", 9),
             (b"Nettoyage de disque", b"diskcleaner", 9),
@@ -478,6 +479,7 @@ unsafe fn set_start(open: bool) {
         START_OPEN = true;
         START_CLOSING = false;
         SEARCH_OVERLAY = false;
+        weather::PANEL_OPEN = false;
     } else if START_OPEN {
         START_CLOSING = true;
         POWER_MENU = false;
@@ -991,14 +993,15 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     };
     let r = CONTEXT_RECT;
     let p = pal();
-    fill(hdc, b, r.left, r.top, r.right, r.bottom, p.border);
-    fill(
+    round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 8, p.border);
+    round_rect(
         hdc,
         b,
         r.left + 1,
         r.top + 1,
         r.right - 1,
         r.bottom - 1,
+        7,
         p.surface,
     );
     if app == usize::MAX {
@@ -1012,7 +1015,7 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
             if row == CONTEXT_HOVER {
-                fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+                round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
             }
             text(
                 hdc,
@@ -1040,7 +1043,7 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
             if row == CONTEXT_HOVER {
-                fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+                round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
             }
             text(
                 hdc,
@@ -1073,7 +1076,7 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     for row in 0..context_rows(app) {
         let y = r.top + 4 + row * 34;
         if row == CONTEXT_HOVER {
-            fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+            round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
         }
         text(
             hdc,
@@ -1309,6 +1312,19 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         top + 14,
         b"^",
     );
+    // Widget météo à gauche du chevron
+    let weather_x = tray - 24 - weather::TRAY_WIDTH - 8;
+    round_rect(
+        hdc,
+        b,
+        weather_x - 4,
+        top + 6,
+        weather_x + weather::TRAY_WIDTH,
+        top + 42,
+        5,
+        rgb(0x24, 0x28, 0x31),
+    );
+    weather::draw_tray(hdc, b, f, weather_x, top + 14);
 }
 
 // ---------- Menu Démarrer ----------
@@ -1479,13 +1495,17 @@ unsafe fn launch(what: Launch) {
             );
         }
         Launch::Exec(cmd) => {
-            // Gestionnaire des tâches intégré dans le WM
+            // Applications intégrées dans le WM
             if cmd == b"taskmgr" {
                 wm::open(wm::APP_TASKMGR);
                 return;
             }
             if cmd == b"diskcleaner" {
                 wm::open(wm::APP_CLEANUP);
+                return;
+            }
+            if cmd == b"diskmgr" {
+                wm::open(wm::APP_DISKMGR);
                 return;
             }
             let mut wcmd = [0u16; 256];
@@ -2534,6 +2554,7 @@ pub unsafe fn draw(hdc: Handle) {
         start_menu(hdc, &mut b, &f, &l);
         search_overlay(hdc, &mut b, &f, &l);
         notifications::draw(hdc, &mut b, &f, l.w, l.bar_top);
+        weather::draw_panel(hdc, &mut b, &f, l.bar_top, l.w);
         draw_toast(hdc, &mut b, &f, &l);
         // Overlay de fermeture.
         if SHUTDOWN_ACTION > 0 {
@@ -2713,8 +2734,9 @@ pub unsafe fn tick(hwnd: Handle) {
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
     let system = crate::settings::system_tick();
+    let weather_changed = weather::poll();
     let apps = BOOT_DONE && wm::tick();
-    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system {
+    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system || weather_changed {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
@@ -2780,9 +2802,13 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             }
         }
         let tray = l.w - 12 - 92 - 96;
-        if x >= tray - 28 && x < tray {
-            // Chevron or tray icon area -> open notification center.
+        let weather_x = tray - 24 - weather::TRAY_WIDTH - 8;
+        if x >= weather_x - 4 && x < weather_x + weather::TRAY_WIDTH {
+            weather::toggle();
+            notifications::set_open(false);
+        } else if x >= tray - 28 && x < tray {
             notifications::toggle();
+            weather::PANEL_OPEN = false;
         } else if x >= tray && x < tray + 24 {
             crate::settings::open_page(2);
         } else if x >= tray + 24 && x < tray + 88 {
@@ -2794,6 +2820,12 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             return;
         }
         repaint(hwnd);
+        return;
+    }
+    if weather::PANEL_OPEN && y < l.bar_top {
+        if weather::mouse_panel(x, y, l.bar_top, l.w) {
+            repaint(hwnd);
+        }
         return;
     }
     if notifications::is_open() && y < l.bar_top {
@@ -3192,6 +3224,13 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
     if START_OPEN || CONTEXT_APP.is_some() {
         return;
     }
+    if let Mouse::Wheel(delta) = ev {
+        let l = layout();
+        if notifications::on_wheel(l.w, l.bar_top, x, y, delta) {
+            repaint(hwnd);
+            return;
+        }
+    }
     let mut rp = false;
     wm::on_other(ev, x, y, &mut rp);
     if rp {
@@ -3403,11 +3442,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             }
             // toggle - minimize all visible windows or restore
             let mut any_visible = false;
-            unsafe {
-                for app in 0..wm::APP_COUNT {
-                    if wm::is_open(app) && !wm::is_minimized(app) {
-                        any_visible = true;
-                    }
+            for app in 0..wm::APP_COUNT {
+                if wm::is_open(app) && !wm::is_minimized(app) {
+                    any_visible = true;
                 }
             }
             if any_visible {
