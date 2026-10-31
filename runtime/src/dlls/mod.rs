@@ -6,6 +6,7 @@ pub mod advapi32;
 pub mod advapi32_services;
 pub mod bcrypt;
 pub mod comctl32;
+pub mod comobj;
 pub mod crt;
 pub mod crt_runtime;
 pub mod crt_scan;
@@ -14,9 +15,11 @@ pub mod crypt32;
 pub mod d3d11;
 pub mod d3d_shader;
 pub mod dbghelp;
+pub mod dinput8;
 pub mod dwmapi;
 pub mod dwrite;
 pub mod dxgi;
+pub mod evdev;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
@@ -57,6 +60,7 @@ pub mod winlux_pty;
 pub mod winmm;
 pub mod wintrust;
 pub mod ws2_32;
+pub mod xinput;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -317,6 +321,21 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "xinput1_4",
+                exports: xinput::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dinput8",
+                exports: dinput8::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dinput",
+                exports: dinput8::legacy_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "libgcc_s_seh-1",
                 exports: libgcc::exports(),
                 handle: fake_module(),
@@ -435,6 +454,10 @@ pub fn normalize(dll: &str) -> String {
     }
     if base == "oleaut32" {
         return "oleaut32".into();
+    }
+    // Toutes les versions d'XInput partagent la même implémentation.
+    if base.starts_with("xinput1_") || base == "xinput9_1_0" {
+        return "xinput1_4".into();
     }
     base.to_string()
 }
