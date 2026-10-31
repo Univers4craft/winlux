@@ -201,6 +201,13 @@ assert any("Bonjour" in entry.read_text() for entry in Path("/root/.local/share/
 html = Path("/tmp/winlux-native-browser.html")
 html.write_text("<!doctype html><title>Winlux browser window test</title><h1>Winlux</h1>")
 html.chmod(0o644)
+# Since #155 the init installs Edge in the background. Make sure it is
+# really installed before launching it, and show why if it is not.
+if "browser_edge=installed" not in run("winlux-browsers", "--status"):
+    setup_log = Path("/run/winlux/browser-setup.log")
+    print("Edge absent au lancement ; journal d'installation :\n" +
+          (setup_log.read_text(errors="replace") if setup_log.exists() else "(aucun)"), flush=True)
+    print(run("winlux-browsers", "--install", "edge", timeout=600), flush=True)
 subprocess.Popen(["winlux-browsers", "--launch", "edge", "--disable-gpu", html.as_uri()], stdout=log, stderr=log)
 browser = wait_title("Winlux browser window test", 90)
 assert "_NET_WM_STATE_FULLSCREEN" not in run("xprop", "-id", browser, "_NET_WM_STATE")
