@@ -678,6 +678,15 @@ pub(crate) fn report(caps: &GpuCaps, prefs: &Prefs) -> String {
                 .filter(|d| d.usable(v.has_xlib_surface))
                 .count();
             kv("vulkan_usable", &usable.to_string());
+            // GPU matériels utilisables, « index:nom » séparés par « ; » : seuls
+            // ceux-là sont proposés dans les Paramètres (llvmpipe exclu).
+            let hw: Vec<String> = v
+                .devices
+                .iter()
+                .filter(|d| d.usable(v.has_xlib_surface) && d.is_hardware())
+                .map(|d| format!("{}:{}", d.index, d.name.replace([';', ':'], " ")))
+                .collect();
+            kv("vulkan_hw", &hw.join(";"));
         }
         None => kv("vulkan", "0"),
     }
@@ -692,6 +701,13 @@ pub(crate) fn report(caps: &GpuCaps, prefs: &Prefs) -> String {
             BackendPref::Vulkan => "vulkan",
             BackendPref::OpenGl => "opengl",
         },
+    );
+    kv(
+        "vulkan_device_pref",
+        &prefs
+            .vulkan_device
+            .map(|i| i.to_string())
+            .unwrap_or_else(|| "auto".into()),
     );
     kv("backend_d3d12", select_backend(caps, prefs).label());
     kv(
@@ -732,6 +748,17 @@ pub(crate) fn report(caps: &GpuCaps, prefs: &Prefs) -> String {
         .map(|c| c.label())
         .collect();
     kv("video_hw_codecs", &hw.join(", "));
+    // Codecs décodables en matériel quel que soit le réglage : permet aux
+    // Paramètres d'afficher le choix même quand « logiciel » est forcé.
+    let forced = Prefs {
+        video: VideoPref::Hardware,
+        ..*prefs
+    };
+    let possible: Vec<&str> = hardware_codecs(caps, &forced)
+        .iter()
+        .map(|c| c.label())
+        .collect();
+    kv("video_hw_available", &possible.join(", "));
     kv(
         "video_active",
         if hw.is_empty() { "software" } else { "vaapi" },

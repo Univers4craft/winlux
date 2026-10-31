@@ -7,7 +7,7 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 16] = [
+const PAGES: [&[u8]; 17] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -24,7 +24,9 @@ const PAGES: [&[u8]; 16] = [
     b"Effets visuels",
     b"Localisation",
     b"Gestionnaire de fichiers",
+    b"Graphismes et vid\xE9o",
 ];
+const PAGE_GRAPHICS: usize = 16;
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
 struct Buffer {
@@ -46,6 +48,11 @@ static mut LOG: Buffer = EMPTY;
 static mut UPDATES: Buffer = EMPTY;
 static mut PROGRESS: Buffer = EMPTY;
 static mut BUILD_INFO: Buffer = EMPTY;
+/// Rapport `clé=valeur` du runtime (pilotes et préférences graphiques).
+static mut GFX: Buffer = EMPTY;
+static mut GFX_LOADED: bool = false;
+static mut GFX_NOTICE: [u8; 256] = [0; 256];
+static mut GFX_NOTICE_LEN: usize = 0;
 static mut SELECTED_MODE: usize = 0;
 static mut LAST_ANIMATION: u32 = 0;
 static mut PAGE: usize = 0;
@@ -246,6 +253,282 @@ fn field<'a>(data: &'a [u8], key: &[u8]) -> &'a [u8] {
     }
     b""
 }
+// ── Graphismes et vidéo ─────────────────────────────────────────────────
+// Les réglages ne s'affichent que si le matériel les rend utiles : sans GPU
+// Vulkan matériel, pas de choix de moteur ; sans décodage matériel, pas de
+// choix de décodage. Hors Winlux (fonctions absentes), la page le dit.
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GfxSection {
+    Backend,
+    Gpu,
+    Video,
+    Vsync,
+}
+
+unsafe fn gfx_proc(name: &core::ffi::CStr) -> *const core::ffi::c_void {
+    let k = LoadLibraryA(c"kernel32.dll".as_ptr());
+    if k.is_null() {
+        return core::ptr::null();
+    }
+    GetProcAddress(k, name.as_ptr())
+}
+
+unsafe fn gfx_refresh() {
+    GFX_LOADED = true;
+    GFX.len = 0;
+    let p = gfx_proc(c"WinluxGraphicsInfo");
+    if p.is_null() {
+        return;
+    }
+    let f: unsafe extern "win64" fn(*mut u8, u32) -> u32 = core::mem::transmute(p);
+    let n = f(GFX.bytes.as_mut_ptr(), CAPACITY as u32);
+    GFX.len = (n as usize).min(CAPACITY - 1);
+}
+
+unsafe fn gfx(key: &[u8]) -> &'static [u8] {
+    let data: &'static Buffer = &*core::ptr::addr_of!(GFX);
+    field(data.get(), key)
+}
+
+unsafe fn gfx_set(key: &core::ffi::CStr, value: &[u8]) -> bool {
+    let p = gfx_proc(c"WinluxSetGraphicsOption");
+    if p.is_null() || value.len() > 30 {
+        return false;
+    }
+    let mut v = [0u8; 32];
+    v[..value.len()].copy_from_slice(value);
+    let f: unsafe extern "win64" fn(*const core::ffi::c_char, *const core::ffi::c_char) -> i32 =
+        core::mem::transmute(p);
+    let ok = f(key.as_ptr(), v.as_ptr().cast()) != 0;
+    gfx_refresh();
+    ok
+}
+
+/// GPU Vulkan matériels : (index, nom).
+unsafe fn gfx_gpus(out: &mut [(&'static [u8], &'static [u8]); 8]) -> usize {
+    let mut n = 0;
+    for item in gfx(b"vulkan_hw").split(|&c| c == b';') {
+        let Some(colon) = item.iter().position(|&c| c == b':') else {
+            continue;
+        };
+        if n < out.len() {
+            out[n] = (&item[..colon], &item[colon + 1..]);
+            n += 1;
+        }
+    }
+    n
+}
+
+unsafe fn gfx_sections(out: &mut [GfxSection; 4]) -> usize {
+    let mut gpus = [(&b""[..], &b""[..]); 8];
+    let hw = gfx_gpus(&mut gpus);
+    let mut n = 0;
+    let mut push = |s: GfxSection| {
+        out[n] = s;
+        n += 1;
+    };
+    if hw >= 1 && gfx(b"opengl") == b"1" {
+        push(GfxSection::Backend);
+    }
+    if hw >= 2 {
+        push(GfxSection::Gpu);
+    }
+    if !gfx(b"video_hw_available").is_empty() {
+        push(GfxSection::Video);
+    }
+    if hw >= 1 {
+        push(GfxSection::Vsync);
+    }
+    n
+}
+
+fn join<'a>(out: &'a mut [u8], parts: &[&[u8]]) -> &'a [u8] {
+    let mut n = 0;
+    for p in parts {
+        let take = p.len().min(out.len() - n);
+        out[n..n + take].copy_from_slice(&p[..take]);
+        n += take;
+    }
+    &out[..n]
+}
+
+fn pref_label(v: &[u8]) -> &'static [u8] {
+    match v {
+        b"vulkan" => b"Vulkan",
+        b"opengl" => b"OpenGL",
+        b"hardware" => b"Mat\xE9riel",
+        b"software" => b"Logiciel",
+        _ => b"Automatique",
+    }
+}
+
+unsafe fn gfx_notice() -> &'static [u8] {
+    let buf: &'static mut [u8; 256] = &mut *core::ptr::addr_of_mut!(GFX_NOTICE);
+    if GFX.len == 0 {
+        GFX_NOTICE_LEN = join(buf, &[b"Informations graphiques indisponibles hors de Winlux."]).len();
+        return &buf[..GFX_NOTICE_LEN];
+    }
+    let vk = gfx(b"vulkan") == b"1";
+    let va = gfx(b"vaapi") == b"1";
+    let mut gpus = [(&b""[..], &b""[..]); 8];
+    let hw = gfx_gpus(&mut gpus);
+    let len = join(
+        buf,
+        &[
+            b"D\xE9tect\xE9 : OpenGL ",
+            if gfx(b"opengl") == b"1" { b"oui" } else { b"non" },
+            b" \xB7 Vulkan ",
+            if vk { gfx(b"vulkan_version") } else { b"absent" },
+            if vk && hw == 0 { b" (logiciel seulement)" } else { b"" },
+            b" \xB7 VA-API ",
+            if va { gfx(b"vaapi_vendor") } else { b"absent" },
+        ],
+    )
+    .len();
+    GFX_NOTICE_LEN = len;
+    &buf[..len]
+}
+
+unsafe fn draw_graphics(g: &mut Gfx, c: &Rect) {
+    if !GFX_LOADED {
+        gfx_refresh();
+    }
+    if GFX.len == 0 {
+        row(
+            g,
+            c,
+            44,
+            b"Graphismes et vid\xE9o",
+            b"Ces r\xE9glages n\xE9cessitent le runtime Winlux.",
+        );
+        return;
+    }
+    let mut sections = [GfxSection::Backend; 4];
+    let n = gfx_sections(&mut sections);
+    if n == 0 {
+        row(
+            g,
+            c,
+            44,
+            b"Rendu et d\xE9codage vid\xE9o",
+            b"Un seul mode convient \xE0 ce mat\xE9riel : Winlux l'utilise automatiquement.",
+        );
+        return;
+    }
+    let mut gpus = [(&b""[..], &b""[..]); 8];
+    let hw = gfx_gpus(&mut gpus);
+    for (k, s) in sections[..n].iter().enumerate() {
+        let y = 44 + 132 * k as i32;
+        let r = 3 * k as i32;
+        let id = 9 * k as i32;
+        let mut tmp = [0u8; 192];
+        match s {
+            GfxSection::Backend => {
+                let v = join(
+                    &mut tmp,
+                    &[
+                        pref_label(gfx(b"backend_pref")),
+                        b" \x97 Direct3D 12 utilise ",
+                        pref_label(gfx(b"backend_d3d12")),
+                        b" (Direct3D 9 et 11 : OpenGL)",
+                    ],
+                );
+                row(g, c, y, b"Moteur de rendu", v);
+                button(g, c, r, 0, b"Automatique", id);
+                button(g, c, r, 1, b"Vulkan", id + 1);
+                button(g, c, r, 2, b"OpenGL", id + 2);
+            }
+            GfxSection::Gpu => {
+                let sel = gfx(b"vulkan_selected");
+                let name = gpus[..hw].iter().find(|g| g.0 == sel).map(|g| g.1).unwrap_or(b"");
+                let auto = gfx(b"vulkan_device_pref") == b"auto";
+                let v = join(&mut tmp, &[name, if auto { b" (automatique)" } else { b"" }]);
+                row(g, c, y, b"Carte graphique (Vulkan)", v);
+                button(g, c, r, 0, b"Automatique", id);
+                button(g, c, r, 1, b"Pr\xE9c\xE9dente", id + 1);
+                button(g, c, r, 2, b"Suivante", id + 2);
+            }
+            GfxSection::Video => {
+                let active = gfx(b"video_active") == b"vaapi";
+                let v = join(
+                    &mut tmp,
+                    &[
+                        pref_label(gfx(b"video_pref")),
+                        b" \x97 ",
+                        if active { b"mat\xE9riel : " } else { b"logiciel (mat\xE9riel possible : " },
+                        if active { gfx(b"video_hw_codecs") } else { gfx(b"video_hw_available") },
+                        if active { b"" } else { b")" },
+                    ],
+                );
+                row(g, c, y, b"D\xE9codage vid\xE9o", v);
+                button(g, c, r, 0, b"Automatique", id);
+                button(g, c, r, 1, b"Mat\xE9riel", id + 1);
+                button(g, c, r, 2, b"Logiciel", id + 2);
+            }
+            GfxSection::Vsync => {
+                let on = gfx(b"vsync") == b"1";
+                row(
+                    g,
+                    c,
+                    y,
+                    b"Synchronisation verticale",
+                    if on {
+                        b"Activ\xE9e \x97 pas de d\xE9chirure d'image"
+                    } else {
+                        b"D\xE9sactiv\xE9e \x97 latence minimale"
+                    },
+                );
+                button(g, c, r, 0, b"Activer", id);
+                button(g, c, r, 1, b"D\xE9sactiver", id + 1);
+            }
+        }
+    }
+}
+
+/// Clic sur un bouton de la page ; `true` si l'affichage doit changer.
+unsafe fn click_graphics(id: i32) -> bool {
+    if !(0..36).contains(&id) || id % 9 > 2 {
+        return false;
+    }
+    let mut sections = [GfxSection::Backend; 4];
+    let n = gfx_sections(&mut sections);
+    let (k, col) = ((id / 9) as usize, id % 9);
+    if k >= n {
+        return false;
+    }
+    match (sections[k], col) {
+        (GfxSection::Backend, _) => {
+            gfx_set(c"backend", [&b"auto"[..], b"vulkan", b"opengl"][col as usize]);
+        }
+        (GfxSection::Gpu, 0) => {
+            gfx_set(c"vulkan_device", b"auto");
+        }
+        (GfxSection::Gpu, _) => {
+            let mut gpus = [(&b""[..], &b""[..]); 8];
+            let hw = gfx_gpus(&mut gpus);
+            let sel = gfx(b"vulkan_selected");
+            let cur = gpus[..hw].iter().position(|g| g.0 == sel).unwrap_or(0);
+            let next = if col == 1 { (cur + hw - 1) % hw } else { (cur + 1) % hw };
+            let mut idx = [0u8; 8];
+            let len = gpus[next].0.len().min(8);
+            idx[..len].copy_from_slice(&gpus[next].0[..len]);
+            gfx_set(c"vulkan_device", &idx[..len]);
+        }
+        (GfxSection::Video, _) => {
+            gfx_set(c"video_decode", [&b"auto"[..], b"hardware", b"software"][col as usize]);
+        }
+        (GfxSection::Vsync, 0) => {
+            gfx_set(c"vsync", b"1");
+        }
+        (GfxSection::Vsync, 1) => {
+            gfx_set(c"vsync", b"0");
+        }
+        _ => return false,
+    }
+    true
+}
+
 unsafe fn available() -> bool {
     value(b"control_available") == b"1"
 }
@@ -1452,10 +1735,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 4, 0, b"Afficher", 6);
             button(g, &c, 4, 1, b"Masquer", 7);
         }
+        PAGE_GRAPHICS => draw_graphics(g, &c),
         _ => {}
     }
     let notice = if PAGE == 10 {
         EXE_NOTICE
+    } else if PAGE == PAGE_GRAPHICS {
+        gfx_notice()
     } else if !available() {
         b"Service Winlux indisponible : les actions n\xE9cessitent Winlux.".as_slice()
     } else {
@@ -1484,7 +1770,7 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
             -1
         };
     }
-    for i in 0..24 {
+    for i in 0..36 {
         let r = button_rect(&c, i / 3, i % 3);
         if r.bottom <= c.bottom - 24 && inside(&r, x, y) {
             return i;
@@ -1512,6 +1798,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     for i in 0..PAGES.len() {
         if inside(&nav_rect(f, i), x, y) {
+            if i == PAGE_GRAPHICS {
+                GFX_LOADED = false;
+            }
             PAGE = i;
             SCROLL = 0;
             HOVER = -1;
@@ -1531,6 +1820,10 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             }
             return true;
         }
+    }
+    if PAGE == PAGE_GRAPHICS {
+        let id = hit(f, x, y);
+        return click_graphics(id);
     }
     let action = match (PAGE, hit(f, x, y)) {
         (5, 0) => {

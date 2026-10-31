@@ -233,7 +233,7 @@ fn supports(kind: &Kind, d1: u32) -> bool {
         || match kind {
             Kind::Manager(_) => d1 == 0xa0ca_de0f,
             // IDirectXVideoAccelerationService / DecoderService.
-            Kind::Service(_) => d1 == 0xfc51_a54f || d1 == 0xfc51_a550,
+            Kind::Service(_) => d1 == 0xfc51_a54f || d1 == 0xfc51_a551,
             Kind::Decoder(_) => d1 == 0xf2b0_810a,
         }
 }
@@ -1195,7 +1195,7 @@ unsafe extern "win64" fn dec_service(this: *mut Obj, out: *mut *mut c_void) -> i
     };
     let dev = d.device;
     drop(d);
-    DXVA2CreateVideoService(dev, &guid(0xfc51_a550, 0, 0, [0; 8]), out)
+    DXVA2CreateVideoService(dev, &guid(0xfc51_a551, 0, 0, [0; 8]), out)
 }
 
 unsafe extern "win64" fn dec_params(
@@ -1357,7 +1357,7 @@ pub unsafe extern "win64" fn DXVA2CreateVideoService(
     if !d3d9::is_device(device) {
         return E_INVALIDARG;
     }
-    if iid.is_null() || !matches!((*iid).data1, 0xfc51_a54f | 0xfc51_a550) {
+    if iid.is_null() || !matches!((*iid).data1, 0xfc51_a54f | 0xfc51_a551) {
         // Le service de traitement vidéo (fc51a551/2) n'est pas fourni.
         return E_NOINTERFACE;
     }
@@ -1534,7 +1534,7 @@ mod tests {
             assert_eq!(mgr_open(mgr, &mut h), S_OK);
             let mut svc: *mut c_void = std::ptr::null_mut();
             assert_eq!(
-                mgr_service(mgr, h, &guid(0xfc51_a550, 0, 0, [0; 8]), &mut svc),
+                mgr_service(mgr, h, &guid(0xfc51_a551, 0, 0, [0; 8]), &mut svc),
                 S_OK
             );
             let svc = svc as *mut Obj;
@@ -1600,7 +1600,7 @@ mod tests {
             assert_eq!(
                 DXVA2CreateVideoService(
                     fake.as_ptr() as *mut c_void,
-                    &guid(0xfc51_a550, 0, 0, [0; 8]),
+                    &guid(0xfc51_a551, 0, 0, [0; 8]),
                     &mut bad
                 ),
                 E_INVALIDARG
