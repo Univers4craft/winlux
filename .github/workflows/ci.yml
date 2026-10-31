@@ -131,6 +131,8 @@ jobs:
 
       - name: Vérifier les autorisations des applications Windows
         run: python3 -B scripts/test-permission.py
+      - name: Vérifier la fenêtre UAC (comptes administrateurs, mot de passe, langues)
+        run: python3 -B scripts/test-uac.py
 
       - name: Vérifier les grandes images X11 en 1080p
         run: |

@@ -34,6 +34,7 @@ mod registry;
 mod setup;
 mod tasks;
 mod thunks;
+mod uac;
 mod volumes;
 
 use std::path::PathBuf;
@@ -199,6 +200,7 @@ fn main() {
         image.pe.stack_reserve,
         image.pe.stack_commit
     );
+    uac::check_launch(image.base, &exe);
     let imports = image.import_names();
     cpu::apply_launch(&cpu_settings, &imports);
     if cpu::is_heavy(&imports) {
