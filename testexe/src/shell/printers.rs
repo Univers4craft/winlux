@@ -256,10 +256,20 @@ extern "system" fn discover_thread(_: *mut c_void) -> u32 {
         if found == 0 {
             load_status();
             if MESSAGE_LEN == 0 {
-                set_message(b"Aucune nouvelle imprimante d\xE9tect\xE9e (USB ou r\xE9seau).");
+                set_message(tr4(&[
+                    b"Aucune nouvelle imprimante d\xE9tect\xE9e (USB ou r\xE9seau).",
+                    b"No new printer detected (USB or network).",
+                    b"No se detect\xF3 ninguna impresora nueva (USB o red).",
+                    b"Kein neuer Drucker erkannt (USB oder Netzwerk).",
+                ]));
             }
         } else {
-            set_message(b"Imprimantes d\xE9tect\xE9es : choisissez celle \xE0 ajouter.");
+            set_message(tr4(&[
+                b"Imprimantes d\xE9tect\xE9es : choisissez celle \xE0 ajouter.",
+                b"Printers found: choose the one to add.",
+                b"Impresoras detectadas: elija la que desea agregar.",
+                b"Gefundene Drucker: W\xE4hlen Sie den hinzuzuf\xFCgenden aus.",
+            ]));
         }
         core::ptr::write_volatile(core::ptr::addr_of_mut!(SEARCHED), true);
         core::ptr::write_volatile(core::ptr::addr_of_mut!(SEARCHING), false);
@@ -273,7 +283,12 @@ unsafe fn start_search() {
     }
     SEARCHING = true;
     DEVICE_COUNT = 0;
-    set_message(b"Recherche des imprimantes USB et r\xE9seau...");
+    set_message(tr4(&[
+        b"Recherche des imprimantes USB et r\xE9seau...",
+        b"Looking for USB and network printers...",
+        b"Buscando impresoras USB y de red...",
+        b"USB- und Netzwerkdrucker werden gesucht...",
+    ]));
     let h = CreateThread(
         core::ptr::null_mut(),
         0,
@@ -284,7 +299,12 @@ unsafe fn start_search() {
     );
     if h.is_null() {
         SEARCHING = false;
-        set_message(b"Recherche impossible.");
+        set_message(tr4(&[
+            b"Recherche impossible.",
+            b"Search failed.",
+            b"No se pudo buscar.",
+            b"Suche fehlgeschlagen.",
+        ]));
     } else {
         CloseHandle(h);
     }
@@ -303,9 +323,19 @@ unsafe fn activate(id: i32) -> bool {
     match id {
         SET_DEFAULT if SELECTED < COUNT => {
             if SetDefaultPrinterW(PRINTERS[SELECTED].name.as_ptr()) != 0 {
-                set_message(b"Imprimante par d\xE9faut modifi\xE9e.");
+                set_message(tr4(&[
+                    b"Imprimante par d\xE9faut modifi\xE9e.",
+                    b"Default printer changed.",
+                    b"Impresora predeterminada cambiada.",
+                    b"Standarddrucker ge\xE4ndert.",
+                ]));
             } else {
-                set_message(b"Impossible de changer l'imprimante par d\xE9faut.");
+                set_message(tr4(&[
+                    b"Impossible de changer l'imprimante par d\xE9faut.",
+                    b"Couldn't change the default printer.",
+                    b"No se pudo cambiar la impresora predeterminada.",
+                    b"Standarddrucker konnte nicht ge\xE4ndert werden.",
+                ]));
             }
             refresh();
         }
@@ -323,7 +353,12 @@ unsafe fn activate(id: i32) -> bool {
             MESSAGE_LEN = 0;
             if !h.is_null() {
                 if DeletePrinter(h) != 0 {
-                    set_message(b"Imprimante supprim\xE9e.");
+                    set_message(tr4(&[
+                        b"Imprimante supprim\xE9e.",
+                        b"Printer removed.",
+                        b"Impresora quitada.",
+                        b"Drucker entfernt.",
+                    ]));
                 } else {
                     load_status();
                 }
@@ -337,7 +372,12 @@ unsafe fn activate(id: i32) -> bool {
             add(core::ptr::null(), ADDRESS.as_ptr());
             ADDRESS_LEN = 0;
         }
-        ADD_ADDRESS => set_message(b"Saisissez l'adresse IP ou l'URI de l'imprimante."),
+        ADD_ADDRESS => set_message(tr4(&[
+            b"Saisissez l'adresse IP ou l'URI de l'imprimante.",
+            b"Enter the printer's IP address or URI.",
+            b"Escriba la direcci\xF3n IP o el URI de la impresora.",
+            b"Geben Sie die IP-Adresse oder URI des Druckers ein.",
+        ])),
         id if (PRINTER_BASE..PRINTER_BASE + MAX_PRINTERS as i32).contains(&id) => {
             SELECTED = (id - PRINTER_BASE) as usize;
             refresh_jobs();
@@ -347,9 +387,19 @@ unsafe fn activate(id: i32) -> bool {
             let h = open_selected();
             if !h.is_null() {
                 if SetJobW(h, j.id, 0, core::ptr::null(), 3) != 0 {
-                    set_message(b"Impression annul\xE9e.");
+                    set_message(tr4(&[
+                        b"Impression annul\xE9e.",
+                        b"Print job cancelled.",
+                        b"Impresi\xF3n cancelada.",
+                        b"Druckauftrag abgebrochen.",
+                    ]));
                 } else {
-                    set_message(b"Le document n'a pas pu \xEAtre annul\xE9.");
+                    set_message(tr4(&[
+                        b"Le document n'a pas pu \xEAtre annul\xE9.",
+                        b"The document couldn't be cancelled.",
+                        b"No se pudo cancelar el documento.",
+                        b"Das Dokument konnte nicht abgebrochen werden.",
+                    ]));
                 }
                 ClosePrinter(h);
             }
@@ -448,22 +498,37 @@ unsafe fn button(g: &mut Gfx, r: Rect, label: &[u8], id: i32, primary: bool, ena
 
 fn status_text(status: u32) -> &'static [u8] {
     if status & 0x80 != 0 {
-        b"Hors connexion"
+        tr4(&[
+            b"Hors connexion",
+            b"Offline",
+            b"Sin conexi\xF3n",
+            b"Offline",
+        ])
     } else if status & 0x1 != 0 {
-        b"En pause"
+        tr4(&[b"En pause", b"Paused", b"En pausa", b"Angehalten"])
     } else if status & 0x400 != 0 {
-        b"Impression en cours"
+        tr4(&[
+            b"Impression en cours",
+            b"Printing",
+            b"Imprimiendo",
+            b"Druckt",
+        ])
     } else {
-        b"Pr\xEAte"
+        tr4(&[b"Pr\xEAte", b"Ready", b"Lista", b"Bereit"])
     }
 }
 
 fn job_status(status: u32) -> &'static [u8] {
     match status {
-        0x10 => b"Impression",
-        0x1 => b"En pause",
-        0x4 => b"Annulation",
-        _ => b"En attente",
+        0x10 => tr4(&[b"Impression", b"Printing", b"Imprimiendo", b"Druckt"]),
+        0x1 => tr4(&[b"En pause", b"Paused", b"En pausa", b"Angehalten"]),
+        0x4 => tr4(&[
+            b"Annulation",
+            b"Cancelling",
+            b"Cancelando",
+            b"Wird abgebrochen",
+        ]),
+        _ => tr4(&[b"En attente", b"Waiting", b"En espera", b"Wartend"]),
     }
 }
 
@@ -503,7 +568,12 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
             p.text,
             c.left,
             y,
-            b"Imprimantes install\xE9es",
+            tr4(&[
+                b"Imprimantes install\xE9es",
+                b"Installed printers",
+                b"Impresoras instaladas",
+                b"Installierte Drucker",
+            ]),
         );
     }
     y += 26;
@@ -610,7 +680,7 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
                     p.on_accent,
                     (b.left + b.right) / 2,
                     b.top + 4,
-                    b"Par d\xE9faut",
+                    tr4(&[b"Par d\xE9faut", b"Default", b"Predeterminada", b"Standard"]),
                 );
             } else if pr.jobs > 0 {
                 let mut s = [0u8; 24];
@@ -658,7 +728,12 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
         button(
             g,
             rect(c.left, y, c.left + w, y + 32),
-            b"D\xE9finir par d\xE9faut",
+            tr4(&[
+                b"D\xE9finir par d\xE9faut",
+                b"Set as default",
+                b"Establecer como predeterminada",
+                b"Als Standard festlegen",
+            ]),
             SET_DEFAULT,
             false,
             has && !PRINTERS[SELECTED].default,
@@ -666,7 +741,12 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
         button(
             g,
             rect(c.left + w + 8, y, c.left + 2 * w + 8, y + 32),
-            b"Imprimer une page de test",
+            tr4(&[
+                b"Imprimer une page de test",
+                b"Print a test page",
+                b"Imprimir una p\xE1gina de prueba",
+                b"Testseite drucken",
+            ]),
             TEST_PAGE,
             false,
             has,
@@ -674,7 +754,7 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
         button(
             g,
             rect(c.left + 2 * (w + 8), y, c.left + 3 * w + 16, y + 32),
-            b"Supprimer",
+            tr4(&[b"Supprimer", b"Delete", b"Eliminar", b"L\xF6schen"]),
             REMOVE,
             false,
             removable,
@@ -683,7 +763,19 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
     y += 48;
     // File d'attente.
     if visible(y, 18) {
-        text(g.hdc, g.f.semibold, p.text, c.left, y, b"File d'attente");
+        text(
+            g.hdc,
+            g.f.semibold,
+            p.text,
+            c.left,
+            y,
+            tr4(&[
+                b"File d'attente",
+                b"Print queue",
+                b"Cola de impresi\xF3n",
+                b"Druckwarteschlange",
+            ]),
+        );
     }
     y += 26;
     if JOB_COUNT == 0 {
@@ -694,7 +786,12 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
                 p.text2,
                 c.left,
                 y,
-                b"Aucun document en attente.",
+                tr4(&[
+                    b"Aucun document en attente.",
+                    b"No documents waiting.",
+                    b"No hay documentos en espera.",
+                    b"Keine wartenden Dokumente.",
+                ]),
             );
         }
         y += 28;
@@ -723,7 +820,7 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
             button(
                 g,
                 rect(c.right - 96, y, c.right, y + 30),
-                b"Annuler",
+                tr4(&[b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"]),
                 JOB_BASE + j as i32,
                 false,
                 true,
@@ -740,7 +837,12 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
             p.text,
             c.left,
             y,
-            b"Ajouter une imprimante",
+            tr4(&[
+                b"Ajouter une imprimante",
+                b"Add a printer",
+                b"Agregar una impresora",
+                b"Drucker hinzuf\xFCgen",
+            ]),
         );
     }
     y += 26;
@@ -787,7 +889,12 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
                 p.text3,
                 field.left + 10,
                 field.top + 8,
-                b"Adresse IP ou URI (ex. 192.168.1.20)",
+                tr4(&[
+                    b"Adresse IP ou URI (ex. 192.168.1.20)",
+                    b"IP address or URI (e.g. 192.168.1.20)",
+                    b"Direcci\xF3n IP o URI (p. ej. 192.168.1.20)",
+                    b"IP-Adresse oder URI (z. B. 192.168.1.20)",
+                ]),
                 field.right - field.left - 20,
             );
         } else {
@@ -821,7 +928,7 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
         button(
             g,
             rect(c.right - 282, y, c.right - 196, y + 32),
-            b"Ajouter",
+            tr4(&[b"Ajouter", b"Add", b"Agregar", b"Hinzuf\xFCgen"]),
             ADD_ADDRESS,
             true,
             ADDRESS_LEN > 0,
@@ -830,9 +937,19 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
             g,
             rect(c.right - 188, y, c.right, y + 32),
             if SEARCHING {
-                b"Recherche...".as_slice()
+                tr4(&[
+                    b"Recherche...",
+                    b"Searching...",
+                    b"Buscando...",
+                    b"Suche l\xE4uft...",
+                ])
             } else {
-                b"Rechercher (USB, r\xE9seau)".as_slice()
+                tr4(&[
+                    b"Rechercher (USB, r\xE9seau)",
+                    b"Search (USB, network)",
+                    b"Buscar (USB, red)",
+                    b"Suchen (USB, Netzwerk)",
+                ])
             },
             SEARCH,
             false,
@@ -853,7 +970,7 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
                     if d.usb {
                         b"USB".as_slice()
                     } else {
-                        b"R\xE9seau".as_slice()
+                        tr4(&[b"R\xE9seau", b"Network", b"Red", b"Netzwerk"])
                     },
                 );
                 clipped(
@@ -869,7 +986,7 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
                 button(
                     g,
                     rect(c.right - 96, y, c.right, y + 30),
-                    b"Ajouter",
+                    tr4(&[b"Ajouter", b"Add", b"Agregar", b"Hinzuf\xFCgen"]),
                     DEVICE_BASE + k as i32,
                     true,
                     true,
@@ -884,7 +1001,12 @@ pub unsafe fn draw(g: &mut Gfx, c: &Rect, scroll: usize) {
             p.text2,
             c.left,
             y,
-            b"Recherche des imprimantes USB et r\xE9seau...",
+            tr4(&[
+                b"Recherche des imprimantes USB et r\xE9seau...",
+                b"Looking for USB and network printers...",
+                b"Buscando impresoras USB y de red...",
+                b"USB- und Netzwerkdrucker werden gesucht...",
+            ]),
         );
     }
 }

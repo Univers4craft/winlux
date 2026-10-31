@@ -2391,7 +2391,14 @@ pub unsafe fn run(class_name: &core::ffi::CStr) -> ! {
     let hwnd = CreateWindowExA(
         0,
         class_name.as_ptr(),
-        c"Lecteur multim\xE9dia".as_ptr(),
+        tr4(&[
+            b"Lecteur multim\xE9dia\0",
+            b"Media Player\0",
+            b"Reproductor multimedia\0",
+            b"Medienwiedergabe\0",
+        ])
+        .as_ptr()
+        .cast(),
         0x00CF_0000,
         80,
         60,
