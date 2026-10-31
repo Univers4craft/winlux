@@ -309,7 +309,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 30] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 31] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
             (b"\xC9\x64iteur", b"mousepad", 1),
@@ -335,7 +335,8 @@ fn init_apps() {
             (b"Vim", b"vim", 7),
             (b"Geany", b"geany", 7),
             (b"Param\xE8tres", b"cinnamon-settings", 8),
-            (b"Gestionnaire de paquets", b"mintinstall", 9),
+            (b"Store", b"store", 9),
+            (b"Polices", b"fonts", 8),
             (b"Gestion des disques", b"diskmgr", 9),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
             (b"Gestionnaire des t\xE2ches", b"taskmgr", 9),
@@ -1290,6 +1291,8 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(wm::APP_DISKMGR) => Glyph::Drive,
+            Some(wm::APP_STORE) => Glyph::Store,
+            Some(wm::APP_FONTS) => Glyph::Text,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1489,9 +1492,9 @@ const PINNED: [App; 8] = [
         launch: Launch::Notepad,
     },
     App {
-        name: b"Utilitaires",
-        glyph: Glyph::Tools,
-        launch: Launch::Settings,
+        name: b"Store",
+        glyph: Glyph::Store,
+        launch: Launch::Exec(b"store"),
     },
     App {
         name: b"Mises \xE0 jour",
@@ -1606,6 +1609,14 @@ unsafe fn launch(what: Launch) {
             }
             if cmd == b"diskmgr" {
                 wm::open(wm::APP_DISKMGR);
+                return;
+            }
+            if cmd == b"store" {
+                crate::store::open();
+                return;
+            }
+            if cmd == b"fonts" {
+                crate::fonts::open();
                 return;
             }
             let mut wcmd = [0u16; 256];

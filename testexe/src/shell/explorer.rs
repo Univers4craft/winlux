@@ -3547,6 +3547,25 @@ pub unsafe fn drag_glyph() -> Glyph {
     }
 }
 
+/// Chemins des éléments sélectionnés (glisser-déposer vers une application).
+pub unsafe fn for_each_selected(f: &mut dyn FnMut(&[u8])) {
+    let p = pane();
+    if p.loc.is(HOME) || p.loc.is(PC) {
+        return;
+    }
+    for v in 0..p.nview {
+        let i = p.view[v] as usize;
+        if !is_sel(p, i) {
+            continue;
+        }
+        let mut src = [0u8; PATH_LEN + NAME_LEN + 2];
+        let n = item_path(p, i, &mut src);
+        if n > 0 {
+            f(&src[..n]);
+        }
+    }
+}
+
 pub unsafe fn drag_count() -> usize {
     sel_count(pane())
 }

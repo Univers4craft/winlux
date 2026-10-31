@@ -16,6 +16,8 @@ mod diskcleaner;
 mod diskmgr;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/fonts.rs"]
+mod fonts;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/login.rs"]
@@ -26,6 +28,8 @@ mod notepad;
 mod notifications;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/store.rs"]
+mod store;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
 #[path = "../shell/terminal.rs"]

@@ -74,7 +74,7 @@ def atomic_write(path, text):
 
 def field(value, limit=400):
     """Valeur sûre pour une ligne « clé=a|b|c » relue par le shell."""
-    value = re.sub(r"\s+", " ", str(value or "")).replace("|", "/").strip()
+    value = re.sub(r"\s+", " ", "" if value is None else str(value)).replace("|", "/").strip()
     return value[:limit]
 
 def is_root():
@@ -166,7 +166,7 @@ def category_of(cats):
                        (("office", "wordprocessor", "spreadsheet", "presentation", "productivity"), "bureautique"),
                        (("audiovideo", "audio", "video", "graphics", "photography", "music", "player",
                          "photo-and-video", "music-and-audio", "art-and-design"), "multimedia"),
-                       (("network", "email", "chat"), "navigateurs")):
+                       ):
         if cats & set(keys):
             return name
     return "utilitaires"
@@ -202,6 +202,7 @@ class App:
         self.state = kw.get("state", "a")       # a disponible, i installé, u mise à jour
         self.featured = kw.get("featured", False)
         self.appstream_id = kw.get("appstream_id", "")
+        self.rank = kw.get("rank", 3)  # 0 sélection, 1 choisi par Winlux, 3 autre
 
     @property
     def key(self):
@@ -302,13 +303,50 @@ def dep11_components():
                 found.setdefault(doc["Package"], doc)
     return found
 
+def dep11_icon_archives(force=False):
+    """Icônes AppStream des dépôts apt (icons-64x64.tar.gz du miroir, comme
+    les télécharge appstream) quand le système ne les a pas extraites."""
+    import tarfile
+    import io
+    for base in dep11_dirs():
+        for path in sorted((base / "yaml").glob("*_dists_*_dep11_Components-*.yml*")):
+            m = re.match(r"^(.+)_dists_(.+)_([^_]+)_dep11_Components-", path.name)
+            if not m:
+                continue
+            try:
+                head = gzip.open(path, "rt", errors="replace").read(4096) if path.suffix == ".gz" else path.read_text()[:4096]
+            except (OSError, EOFError):
+                continue
+            origin = re.search(r"^Origin:\s*(\S+)", head, re.M)
+            if not origin:
+                continue
+            dest = CACHE / "dep11-icons" / origin.group(1) / "64x64"
+            if dest.is_dir() and not force:
+                continue
+            url = f"http://{m.group(1).replace('_', '/')}/dists/{m.group(2)}/{m.group(3)}/dep11/icons-64x64.tar.gz"
+            data = fetch(url, 60, 256 << 20)
+            if not data:
+                continue
+            dest.mkdir(parents=True, exist_ok=True)
+            try:
+                with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+                    for member in tar:
+                        name = os.path.basename(member.name)
+                        if member.isfile() and name.endswith(".png") and not name.startswith("."):
+                            src = tar.extractfile(member)
+                            if src:
+                                (dest / name).write_bytes(src.read())
+            except (tarfile.TarError, OSError, EOFError):
+                pass
+
 def dep11_icon(doc):
     icon = doc.get("Icon") or {}
     for cached in sorted(icon.get("cached") or [], key=lambda c: -int(c.get("width", 0) or 0)):
         size = f"{cached.get('width')}x{cached.get('height')}"
-        path = doc["_base"] / "icons" / doc["_origin"] / size / cached.get("name", "")
-        if path.is_file():
-            return str(path)
+        for path in (doc["_base"] / "icons" / doc["_origin"] / size / cached.get("name", ""),
+                     CACHE / "dep11-icons" / doc["_origin"] / size / cached.get("name", "")):
+            if path.is_file():
+                return str(path)
     for remote in icon.get("remote") or []:
         url = remote.get("url", "")
         return url if url.startswith("http") else doc["_media"].rstrip("/") + "/" + url
@@ -438,6 +476,7 @@ class Source:
 
 class Apt(Source):
     name, label = "apt", "Ubuntu"
+    local_only = False
 
     def available(self):
         return have("apt-get") and have("dpkg-query")
@@ -503,6 +542,8 @@ class Apt(Source):
     def apps(self, force=False):
         if force:
             self.refresh_lists()
+        if not OFFLINE and not self.local_only:
+            dep11_icon_archives(force)
         curated, comps = self.curated(), dep11_components()
         installed, upgradable = self.installed(), self.upgradable()
         cands = self.candidates([p for p in curated if p not in comps])
@@ -514,7 +555,7 @@ class Apt(Source):
                 continue  # absent des dépôts configurés
             name = cur["name"] if cur else localized(doc.get("Name")) or pkg
             ver = installed.get(pkg, ("", 0))[0]
-            app = App("apt", pkg, name,
+            app = App("apt", pkg, name, rank=0 if cur and cur["featured"] else (1 if cur else 3),
                       summary=(cur["desc"] if cur else "") or (localized(doc.get("Summary")) if doc else ""),
                       category=cur["cat"] if cur else category_of(doc.get("Categories") or []),
                       publisher=(cur["pub"] if cur else "") or localized((doc or {}).get("DeveloperName")),
@@ -1107,6 +1148,7 @@ def merge(apps):
         main = group[0]
         main.alternatives = [a.key for a in group[1:]]
         main.featured = any(a.featured for a in group)
+        main.rank = min(a.rank for a in group)
         if not main.icon:
             main.icon = next((a.icon for a in group if a.icon), "")
         unique.append(main)
@@ -1119,6 +1161,7 @@ def badge(app):
 
 def collect(force=False, only_local=False):
     sources = [s for s in SOURCES if (not only_local or s.name in ("apt", "flatpak")) and s.available()]
+    SOURCE_BY_NAME["apt"].local_only = only_local
     apps = []
     for s in sources:
         try:
@@ -1163,7 +1206,8 @@ def write_index(sources, apps, refreshing, download=False):
              f"updated={int(time.time())}",
              f"updates={sum(1 for a in apps if a.state == 'u')}",
              f"system_updates={getattr(apt, 'system_updates', 0)}"]
-    for a in sorted(apps, key=lambda a: (not a.featured, a.name.lower())):
+    for a in sorted(apps, key=lambda a: (0 if a.featured else a.rank, a.state == "a" and not local_icon(a, False),
+                                         a.name.lower())):
         lines.append("app=" + "|".join(field(v, 160) for v in (
             a.key, a.category, a.name, a.summary, a.publisher, a.state, a.version, a.available,
             a.size_kb, local_icon(a, False), badge(a), int(a.featured), ",".join(a.alternatives))))

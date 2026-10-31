@@ -63,6 +63,10 @@ static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
 static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
 static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
 static mut LOCALE_LANG: usize = 0; // 0=fr, 1=en
+/// Vrai si la langue de la session est l'anglais.
+pub unsafe fn english() -> bool {
+    LOCALE_LANG == 1
+}
 static mut LOCALE_TZ: usize = 0; // index dans TIMEZONES
 const TIMEZONES: [(&[u8], &[u8]); 8] = [
     (b"Europe/Paris", b"UTC+1 / UTC+2 (\xE9t\xE9)"),

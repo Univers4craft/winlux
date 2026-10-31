@@ -544,6 +544,24 @@ static RESIZE_CACHE: Mutex<Option<ResizeCache>> = Mutex::new(None);
 mod scaling_tests {
     use super::*;
     #[test]
+    fn image_ajustee_sans_deformation() {
+        // Image 4×2 rouge opaque dans une boîte 8×8 : bandes de fond en haut
+        // et en bas, image centrée sur 8×4.
+        let red = [[255u8, 0, 0, 255]; 8];
+        let out = fit_rgba(4, 2, &red, 8, 8, 0x00FF_FFFF);
+        assert_eq!(out.len(), 64);
+        assert_eq!(out[0], 0x00FF_FFFF);
+        assert_eq!(out[2 * 8 + 4], 0x0000_00FF);
+        assert_eq!(out[5 * 8 + 7], 0x0000_00FF);
+        assert_eq!(out[7 * 8], 0x00FF_FFFF);
+        // Transparence composée sur le fond.
+        let clear = [[0u8, 0, 0, 0]; 1];
+        assert_eq!(
+            fit_rgba(1, 1, &clear, 2, 2, 0x0012_3456),
+            vec![0x0012_3456; 4]
+        );
+    }
+    #[test]
     fn agrandissement_lisse_et_bitmap_4k() {
         let image = gui::BitmapSnapshot {
             width: 2,
