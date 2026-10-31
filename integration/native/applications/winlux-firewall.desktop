@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Pare-feu Winlux
+Name[en]=Winlux Firewall
+Comment=Règles entrantes et sortantes, profils réseau et connexions bloquées
+Comment[en]=Inbound and outbound rules, network profiles and blocked connections
+Exec=/usr/bin/winlux-shell-app firewall
+Icon=security-high
+StartupWMClass=winlux-firewall
+Terminal=false
+Categories=System;Settings;Security;

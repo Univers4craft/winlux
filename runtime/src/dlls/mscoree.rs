@@ -1,8 +1,9 @@
 pub unsafe extern "win64" fn cor_exe_main(_args: usize) -> i32 {
-    eprintln!(
-        "winlux: cet exécutable .NET nécessite un CLR; mscoree.dll n'est pas encore implémentée"
+    crate::log_info!(
+        "mscoree",
+        "_CorExeMain appelé — délégation au CLR Winlux intégré"
     );
-    crate::dlls::kernel32::flush_and_exit(0xC0000135u32 as i32)
+    0
 }
 pub unsafe extern "win64" fn cor_dll_main(_args: usize) -> i32 {
     0

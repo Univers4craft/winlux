@@ -254,7 +254,9 @@ pub unsafe extern "win64" fn winlux_draw_stroke(
     }
     let raw = std::slice::from_raw_parts(points, count as usize * 2);
     let pts: Vec<(f32, f32)> = raw
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|p| (p[0] as f32 + 0.5, p[1] as f32 + 0.5))
         .collect();
     stroke(&mut canvas, &pts, color, pen as f32, mode);
@@ -397,7 +399,7 @@ fn write_png(target: &Path, canvas: &Canvas) -> std::io::Result<()> {
     let mut rgb = Vec::with_capacity(canvas.width * canvas.height * 3);
     for row in 0..canvas.height {
         let line = &canvas.bytes[row * canvas.stride..row * canvas.stride + canvas.width * 4];
-        for px in line.chunks_exact(4) {
+        for px in line.as_chunks::<4>().0 {
             rgb.extend_from_slice(&[px[2], px[1], px[0]]);
         }
     }

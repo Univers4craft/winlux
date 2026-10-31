@@ -9,13 +9,13 @@ linkage=$(LC_ALL=C ldd /usr/bin/busybox 2>&1 || true)
 case "$linkage" in *'not a dynamic executable'*|*'statically linked'*) ;;
     *) echo 'busybox-static requis pour le petit initramfs' >&2; exit 1 ;;
 esac
-for applet in sh mount umount mdev insmod awk seq findfs switch_root cat mkdir chmod sleep; do
+for applet in sh mount umount mdev insmod awk seq findfs switch_root cat mkdir chmod sleep chroot sha256sum; do
     /usr/bin/busybox --list | grep -Fxq "$applet" || { echo "applet de démarrage absente : $applet" >&2; exit 1; }
 done
 work=$(mktemp -d "$project/build/live-boot.XXXXXX")
 trap 'rm -rf "$work"' EXIT HUP INT TERM
 tiny="$work/root"
-mkdir -p "$tiny/bin" "$tiny/dev" "$tiny/proc" "$tiny/sys" "$tiny/media" "$tiny/lower" "$tiny/cow" "$tiny/newroot" "$iso_root/boot"
+mkdir -p "$tiny/bin" "$tiny/dev" "$tiny/etc" "$tiny/proc" "$tiny/run" "$tiny/sys" "$tiny/media" "$tiny/lower" "$tiny/cow" "$tiny/newroot" "$iso_root/boot"
 cp /usr/bin/busybox "$tiny/bin/busybox"
 ln -s busybox "$tiny/bin/sh"
 cp "$project/scripts/winlux-live-init.sh" "$tiny/init"
@@ -27,7 +27,27 @@ for driver in loop isofs squashfs overlay ext4; do
         exit 1
     }
 done
-for driver in virtio_pci virtio_blk virtio_scsi sr_mod sd_mod ata_piix ahci nvme usb_storage uas xhci_pci ehci_pci uhci_hcd hid usbhid hid_generic loop isofs squashfs overlay vfat ext4; do
+crypt_drivers=
+cryptsetup=$(command -v cryptsetup 2>/dev/null || true)
+if test -n "$cryptsetup"; then
+    # Installed systems with an encrypted root unlock it from this initramfs.
+    cp -L "$cryptsetup" "$tiny/bin/cryptsetup"
+    chmod 755 "$tiny/bin/cryptsetup"
+    LC_ALL=C ldd "$cryptsetup" | awk '$2 == "=>" && $3 ~ /^\// { print $3 } $1 ~ /^\// { print $1 }' | sort -u |
+    while IFS= read -r lib; do
+        mkdir -p "$tiny$(dirname -- "$lib")"
+        cp -L "$lib" "$tiny$lib"
+    done
+    # glibc dlopens libgcc_s when the Argon2 threads exit; ldd does not list it.
+    libgcc=$(ldconfig -p | awk '/libgcc_s\.so\.1 .*x86-64/ { print $NF; exit }')
+    test -n "$libgcc" || { echo 'libgcc_s.so.1 introuvable (requis par cryptsetup)' >&2; exit 1; }
+    mkdir -p "$tiny$(dirname -- "$libgcc")"
+    cp -L "$libgcc" "$tiny$libgcc"
+    crypt_drivers='dm_mod dm_crypt xts cbc aesni_intel aes_generic sha256_generic'
+else
+    echo 'cryptsetup absent : les installations chiffrées (LUKS) ne seront pas proposées' >&2
+fi
+for driver in virtio_pci virtio_blk virtio_scsi sr_mod sd_mod ata_piix ahci nvme usb_storage uas xhci_pci xhci_hcd ehci_pci ehci_hcd uhci_hcd hid usbhid hid_generic mmc_core sdhci sdhci_pci loop isofs squashfs overlay vfat ext4 $crypt_drivers; do
     modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
         test "$directive" = insmod || continue
         relative=${module#/}
