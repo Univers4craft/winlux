@@ -38,6 +38,8 @@ mod netdrives;
 mod notepad;
 #[path = "../shell/notifications.rs"]
 mod notifications;
+#[path = "../shell/personalize.rs"]
+mod personalize;
 #[path = "../shell/restore.rs"]
 mod restore;
 #[path = "../shell/settings.rs"]

@@ -49,6 +49,16 @@ pub fn to_windows(p: &Path) -> String {
 
 /// Chemin Windows (absolu ou relatif) → chemin Linux.
 pub fn to_linux(w: &str) -> PathBuf {
+    to_linux_inner(w, true)
+}
+
+/// Comme `to_linux`, sans traverser les archives ouvertes : le chemin reste
+/// `.../photos.zip/dossier` (sert à retrouver l'archive elle-même).
+pub fn to_linux_raw(w: &str) -> PathBuf {
+    to_linux_inner(w, false)
+}
+
+fn to_linux_inner(w: &str, archives: bool) -> PathBuf {
     let mut w = w.trim_end_matches('\0');
     for pre in ["\\\\?\\", "\\??\\", "\\\\.\\"] {
         if let Some(r) = w.strip_prefix(pre) {
@@ -78,6 +88,12 @@ pub fn to_linux(w: &str) -> PathBuf {
     };
     if joined.exists() {
         return joined;
+    }
+    // Chemin à l'intérieur d'une archive ouverte (navigation façon dossier).
+    if archives {
+        if let Some(v) = crate::archive::resolve(&joined) {
+            return v;
+        }
     }
     fix_case(&joined).unwrap_or(joined)
 }
