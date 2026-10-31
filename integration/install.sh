@@ -13,7 +13,7 @@ bin="$destdir$prefix/bin"
 share="$destdir$prefix/share"
 etc="$destdir/etc"
 version=${WINLUX_VERSION:-$(git -C "$root" describe --tags --always 2>/dev/null || printf 'development')}
-mime_types="application/x-ms-dos-executable application/x-msdownload application/vnd.microsoft.portable-executable application/x-dosexec"
+mime_types="application/x-ms-dos-executable application/x-msdownload application/vnd.microsoft.portable-executable application/x-dosexec application/x-msi"
 web_types="x-scheme-handler/http x-scheme-handler/https text/html application/xhtml+xml"
 
 test -x "$root/target/release/winlux" || {

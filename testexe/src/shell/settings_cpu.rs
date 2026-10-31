@@ -54,14 +54,25 @@ const ID_EXPLORER: i32 = 182;
 const ID_RESET: i32 = 183;
 const ID_CHIP: i32 = 1000;
 
-fn en() -> bool {
-    unsafe { crate::settings::status_value(b"locale_lang") == b"en" }
+/// Langue de l'interface : 0 français, 1 anglais, 2 espagnol, 3 allemand.
+fn lang() -> usize {
+    match unsafe { crate::settings::status_value(b"locale_lang") } {
+        b"en" => 1,
+        b"es" => 2,
+        b"de" => 3,
+        _ => 0,
+    }
 }
+/// Libellé localisé : français et anglais donnés à l'appel, espagnol et
+/// allemand lus dans `CPU_TRANSLATIONS` (l'anglais sert si une entrée manque).
 fn t(fr: &'static [u8], en_text: &'static [u8]) -> &'static [u8] {
-    if en() {
-        en_text
-    } else {
-        fr
+    match lang() {
+        0 => fr,
+        1 => en_text,
+        col => CPU_TRANSLATIONS
+            .iter()
+            .find(|r| r.0 == fr && r.1 == en_text)
+            .map_or(en_text, |r| if col == 2 { r.2 } else { r.3 }),
     }
 }
 
@@ -474,11 +485,7 @@ impl Walk<'_, '_> {
                     b" \x95 E"
                 });
             }
-            let live = if i < 64 {
-                unsafe { LIVE_MHZ[i] }
-            } else {
-                mhz
-            };
+            let live = if i < 64 { unsafe { LIVE_MHZ[i] } } else { mhz };
             let live = if live == 0 { mhz } else { live };
             unsafe {
                 round_rect(
@@ -582,7 +589,10 @@ fn profile_label(key: &[u8]) -> &'static [u8] {
 unsafe fn walk(w: &mut Walk) {
     if !available() {
         w.row(
-            t(b"Informations processeur indisponibles", b"Processor information unavailable"),
+            t(
+                b"Informations processeur indisponibles",
+                b"Processor information unavailable",
+            ),
             t(
                 b"Le service Winlux n'a pas encore publi\xE9 l'\xE9tat du processeur.",
                 b"The Winlux service has not published the processor state yet.",
@@ -692,7 +702,10 @@ unsafe fn walk(w: &mut Walk) {
     let throttle = cap(b"cap_throttle");
     let fans = cap(b"cap_fans");
     if thermal || throttle || fans {
-        w.header(t(b"Temp\xE9ratures et ventilation", b"Temperatures and cooling"));
+        w.header(t(
+            b"Temp\xE9ratures et ventilation",
+            b"Temperatures and cooling",
+        ));
     }
     if thermal {
         let mut l = Line::new();
@@ -703,7 +716,10 @@ unsafe fn walk(w: &mut Walk) {
                 .num(crit)
                 .push(b" \xB0C)");
         }
-        w.row(t(b"Temp\xE9rature du processeur", b"Processor temperature"), l.get());
+        w.row(
+            t(b"Temp\xE9rature du processeur", b"Processor temperature"),
+            l.get(),
+        );
     }
     if throttle {
         let count = num(info(b"throttle"));
@@ -834,11 +850,7 @@ unsafe fn program_section(w: &mut Walk) {
             continue;
         }
         let selected = EXE_PRIORITY as usize == i + 1 || EXE_PRIORITY == 0 && i == 1;
-        opts[k] = (
-            if en() { en_label } else { fr },
-            ID_PRIORITY + i as i32,
-            selected,
-        );
+        opts[k] = (t(fr, en_label), ID_PRIORITY + i as i32, selected);
         k += 1;
     }
     w.options(&opts[..k]);
@@ -1217,10 +1229,369 @@ pub unsafe fn regression_checks() {
     );
     load_program(b"cpu_priority=high\ncpu_cores=efficiency\ncpu_affinity=0-1\nnuma_node=1\n");
     check!(
-        EXE_PRIORITY == 3 && EXE_CORES == 2 && exe_cpu_selected(1) && !exe_cpu_selected(2) && EXE_NUMA == 1,
+        EXE_PRIORITY == 3
+            && EXE_CORES == 2
+            && exe_cpu_selected(1)
+            && !exe_cpu_selected(2)
+            && EXE_NUMA == 1,
         "Processeur : le profil du programme est relu"
     );
     reset_program();
     INFO = saved;
     INFO_LEN = saved_len;
 }
+
+// ---------- Traductions espagnoles et allemandes ----------
+
+/// `(français, anglais, espagnol, allemand)`, retrouvées par le couple
+/// français/anglais passé à `t`.
+const CPU_TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    (
+        b"Autoris\xE9",
+        b"Allowed",
+        b"Permitido",
+        b"Erlaubt",
+    ),
+    (
+        b"Exclu",
+        b"Excluded",
+        b"Excluido",
+        b"Ausgeschlossen",
+    ),
+    (
+        b"Performances maximales",
+        b"Best performance",
+        b"M\xE1ximo rendimiento",
+        b"H\xF6chstleistung",
+    ),
+    (
+        b"\xC9quilibr\xE9",
+        b"Balanced",
+        b"Equilibrado",
+        b"Ausbalanciert",
+    ),
+    (
+        b"\xC9conomie d'\xE9nergie",
+        b"Power saver",
+        b"Ahorro de energ\xEDa",
+        b"Energiesparmodus",
+    ),
+    (
+        b"Personnalis\xE9",
+        b"Custom",
+        b"Personalizado",
+        b"Benutzerdefiniert",
+    ),
+    (
+        b"Informations processeur indisponibles",
+        b"Processor information unavailable",
+        b"Informaci\xF3n del procesador no disponible",
+        b"Prozessorinformationen nicht verf\xFCgbar",
+    ),
+    (
+        b"Le service Winlux n'a pas encore publi\xE9 l'\xE9tat du processeur.",
+        b"The Winlux service has not published the processor state yet.",
+        b"El servicio de Winlux a\xFAn no ha publicado el estado del procesador.",
+        b"Der Winlux-Dienst hat den Prozessorstatus noch nicht ver\xF6ffentlicht.",
+    ),
+    (
+        b" processeurs logiques",
+        b" logical processors",
+        b" procesadores l\xF3gicos",
+        b" logische Prozessoren",
+    ),
+    (
+        b" processeurs physiques",
+        b" sockets",
+        b" procesadores f\xEDsicos",
+        b" physische Prozessoren",
+    ),
+    (
+        b"Processeur",
+        b"Processor",
+        b"Procesador",
+        b"Prozessor",
+    ),
+    (
+        b"Fr\xE9quences en temps r\xE9el",
+        b"Live frequencies",
+        b"Frecuencias en tiempo real",
+        b"Frequenzen in Echtzeit",
+    ),
+    (
+        b"Fr\xE9quence maximale : ",
+        b"Maximum frequency: ",
+        b"Frecuencia m\xE1xima: ",
+        b"Maximale Frequenz: ",
+    ),
+    (
+        b"Mode d'alimentation",
+        b"Power mode",
+        b"Modo de energ\xEDa",
+        b"Energiemodus",
+    ),
+    (
+        b"Performances : vitesse maximale. \xC9conomie : moins de chaleur et de bruit.",
+        b"Performance: top speed. Power saver: less heat and noise.",
+        b"Rendimiento: velocidad m\xE1xima. Ahorro: menos calor y ruido.",
+        b"Leistung: h\xF6chste Geschwindigkeit. Energiesparen: weniger W\xE4rme und L\xE4rm.",
+    ),
+    (
+        b"C\x9Curs performants (P) et c\x9Curs \xE9conomes (E)",
+        b"Performance (P) and efficient (E) cores",
+        b"N\xFAcleos de rendimiento (P) y eficientes (E)",
+        b"Leistungskerne (P) und Effizienzkerne (E)",
+    ),
+    (
+        b"P-cores : ",
+        b"P-cores: ",
+        b"N\xFAcleos P: ",
+        b"P-Kerne: ",
+    ),
+    (
+        b"   E-cores : ",
+        b"   E-cores: ",
+        b"   N\xFAcleos E: ",
+        b"   E-Kerne: ",
+    ),
+    (
+        b"Placement des programmes Windows",
+        b"Placement of Windows programs",
+        b"Ubicaci\xF3n de los programas de Windows",
+        b"Zuordnung der Windows-Programme",
+    ),
+    (
+        b"Automatique (recommand\xE9)",
+        b"Automatic (recommended)",
+        b"Autom\xE1tico (recomendado)",
+        b"Automatisch (empfohlen)",
+    ),
+    (
+        b"Jeux et 3D sur P-cores",
+        b"Games and 3D on P-cores",
+        b"Juegos y 3D en n\xFAcleos P",
+        b"Spiele und 3D auf P-Kernen",
+    ),
+    (
+        b"Tout sur P-cores",
+        b"Everything on P-cores",
+        b"Todo en n\xFAcleos P",
+        b"Alles auf P-Kernen",
+    ),
+    (
+        b"Tout sur E-cores",
+        b"Everything on E-cores",
+        b"Todo en n\xFAcleos E",
+        b"Alles auf E-Kernen",
+    ),
+    (
+        b"S'applique aux programmes lanc\xE9s ensuite.",
+        b"Applies to programs started afterwards.",
+        b"Se aplica a los programas que se inicien despu\xE9s.",
+        b"Gilt f\xFCr danach gestartete Programme.",
+    ),
+    (
+        b"Temp\xE9ratures et ventilation",
+        b"Temperatures and cooling",
+        b"Temperaturas y ventilaci\xF3n",
+        b"Temperaturen und K\xFChlung",
+    ),
+    (
+        b"  (limite ",
+        b"  (limit ",
+        b"  (l\xEDmite ",
+        b"  (Grenze ",
+    ),
+    (
+        b"Temp\xE9rature du processeur",
+        b"Processor temperature",
+        b"Temperatura del procesador",
+        b"Prozessortemperatur",
+    ),
+    (
+        b"Ralentissement en cours : le processeur chauffe.",
+        b"Throttling now: the processor is hot.",
+        b"Ralentizaci\xF3n en curso: el procesador se est\xE1 calentando.",
+        b"Drosselung aktiv: Der Prozessor ist hei\xDF.",
+    ),
+    (
+        b"Aucun ralentissement d\xE9tect\xE9.",
+        b"No throttling detected.",
+        b"No se detect\xF3 ninguna ralentizaci\xF3n.",
+        b"Keine Drosselung erkannt.",
+    ),
+    (
+        b" ralentissements thermiques depuis le d\xE9marrage.",
+        b" thermal throttling events since boot.",
+        b" ralentizaciones t\xE9rmicas desde el arranque.",
+        b" thermische Drosselungen seit dem Start.",
+    ),
+    (
+        b"Bridage thermique",
+        b"Thermal throttling",
+        b"Limitaci\xF3n t\xE9rmica",
+        b"Thermische Drosselung",
+    ),
+    (
+        b" tr/min",
+        b" RPM",
+        b" RPM",
+        b" U/min",
+    ),
+    (
+        b"Courbe des ventilateurs (100 % automatique au-del\xE0 de 85 \xB0C) :",
+        b"Fan curve (always 100% above 85 \xB0C):",
+        b"Curva de los ventiladores (100 % autom\xE1tico por encima de 85 \xB0C):",
+        b"L\xFCfterkurve (\xFCber 85 \xB0C immer 100 %):",
+    ),
+    (
+        b"Automatique",
+        b"Automatic",
+        b"Autom\xE1tico",
+        b"Automatisch",
+    ),
+    (
+        b"Silencieux",
+        b"Quiet",
+        b"Silencioso",
+        b"Leise",
+    ),
+    (
+        b"Refroidissement max.",
+        b"Max cooling",
+        b"Refrigeraci\xF3n m\xE1x.",
+        b"Max. K\xFChlung",
+    ),
+    (
+        b"M\xE9moire NUMA (plusieurs processeurs physiques)",
+        b"NUMA memory (multiple sockets)",
+        b"Memoria NUMA (varios procesadores f\xEDsicos)",
+        b"NUMA-Speicher (mehrere physische Prozessoren)",
+    ),
+    (
+        b"N\x9Cud ",
+        b"Node ",
+        b"Nodo ",
+        b"Knoten ",
+    ),
+    (
+        b"Processeurs ",
+        b"Processors ",
+        b"Procesadores ",
+        b"Prozessoren ",
+    ),
+    (
+        b"Priorit\xE9 et processeurs par programme",
+        b"Priority and processors per program",
+        b"Prioridad y procesadores por programa",
+        b"Priorit\xE4t und Prozessoren pro Programm",
+    ),
+    (
+        b"Choisir un programme",
+        b"Choose a program",
+        b"Elegir un programa",
+        b"Programm ausw\xE4hlen",
+    ),
+    (
+        b"Clic droit sur un .exe dans l'Explorateur, puis R\xE9glages de l'ex\xE9cutable.",
+        b"Right-click an .exe in Explorer, then Executable settings.",
+        b"Haga clic derecho en un .exe en el Explorador y luego en Ajustes del ejecutable.",
+        b"Klicken Sie im Explorer mit der rechten Maustaste auf eine .exe und dann auf Einstellungen der ausf\xFChrbaren Datei.",
+    ),
+    (
+        b"Ouvrir l'Explorateur",
+        b"Open Explorer",
+        b"Abrir el Explorador",
+        b"Explorer \xF6ffnen",
+    ),
+    (
+        b"R\xE9glages appliqu\xE9s au prochain lancement de ce programme.",
+        b"Settings apply the next time this program starts.",
+        b"Los ajustes se aplicar\xE1n la pr\xF3xima vez que se inicie este programa.",
+        b"Die Einstellungen gelten beim n\xE4chsten Start dieses Programms.",
+    ),
+    (
+        b"Priorit\xE9 :",
+        b"Priority:",
+        b"Prioridad:",
+        b"Priorit\xE4t:",
+    ),
+    (
+        b"Type de c\x9Curs :",
+        b"Core type:",
+        b"Tipo de n\xFAcleos:",
+        b"Kerntyp:",
+    ),
+    (
+        b"P-cores (rapides)",
+        b"P-cores (fast)",
+        b"N\xFAcleos P (r\xE1pidos)",
+        b"P-Kerne (schnell)",
+    ),
+    (
+        b"E-cores (\xE9conomes)",
+        b"E-cores (efficient)",
+        b"N\xFAcleos E (eficientes)",
+        b"E-Kerne (effizient)",
+    ),
+    (
+        b"N\x9Cud NUMA :",
+        b"NUMA node:",
+        b"Nodo NUMA:",
+        b"NUMA-Knoten:",
+    ),
+    (
+        b"Processeurs autoris\xE9s (cliquez pour inclure ou exclure) :",
+        b"Allowed processors (click to include or exclude):",
+        b"Procesadores permitidos (haga clic para incluir o excluir):",
+        b"Erlaubte Prozessoren (zum Ein- oder Ausschlie\xDFen klicken):",
+    ),
+    (
+        b"Tous les processeurs",
+        b"All processors",
+        b"Todos los procesadores",
+        b"Alle Prozessoren",
+    ),
+    (
+        b"Enregistrer",
+        b"Save",
+        b"Guardar",
+        b"Speichern",
+    ),
+    (
+        b"Lancer le programme",
+        b"Start program",
+        b"Iniciar el programa",
+        b"Programm starten",
+    ),
+    (
+        b"Valeurs par d\xE9faut",
+        b"Defaults",
+        b"Valores predeterminados",
+        b"Standardwerte",
+    ),
+    (
+        b"Basse",
+        b"Low",
+        b"Baja",
+        b"Niedrig",
+    ),
+    (
+        b"Normale",
+        b"Normal",
+        b"Normal",
+        b"Normal",
+    ),
+    (
+        b"Haute",
+        b"High",
+        b"Alta",
+        b"Hoch",
+    ),
+    (
+        b"Temps r\xE9el",
+        b"Realtime",
+        b"Tiempo real",
+        b"Echtzeit",
+    ),
+];

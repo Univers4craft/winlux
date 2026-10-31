@@ -5,7 +5,7 @@
 //! accepte le réglage sur cette machine (rapport `WinluxQueryGpu`). Aucune
 //! section grisée : ce qui ne marche pas n'est pas affiché.
 
-use super::{content, control, value, SCROLL};
+use super::{content, control, field, value, Buffer, CAPACITY, EMPTY, SCROLL};
 use crate::gfx::*;
 use crate::gpuinfo::{self as gpu, Line};
 use crate::wm::{Frame, Gfx};
@@ -24,6 +24,10 @@ const OVL_POS: u32 = 6;
 const OVL_AUTO: u32 = 7;
 const OVL_METRIC: u32 = 8;
 const OPEN_EXPLORER: u32 = 9;
+const RT_BACKEND: u32 = 10;
+const RT_DEVICE: u32 = 11;
+const RT_VIDEO: u32 = 12;
+const RT_VSYNC: u32 = 13;
 
 pub static mut HOVER: u32 = 0;
 
@@ -146,6 +150,8 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
         }
     }
 
+    runtime_items(&mut visit);
+
     if gpu::hybrid() {
         visit(Item::Header(
             b"Pr\xE9f\xE9rences graphiques par application",
@@ -233,6 +239,240 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
         b"Cliquer pour afficher ou masquer",
         &metrics[..if gpu_load { 4 } else { 3 }],
     ));
+}
+
+// ── Moteur 3D et décodage vidéo des .exe ───────────────────────────────
+// Rapport `WinluxGraphicsInfo` du runtime (Direct3D 9/11/12, Vulkan, OpenGL,
+// VA-API). Chaque ligne n'apparaît que si le matériel offre un vrai choix :
+// sans GPU Vulkan matériel, pas de choix de moteur ; sans décodage matériel,
+// pas de choix de décodage. Hors Winlux (fonctions absentes), rien ne s'affiche.
+
+static mut RUNTIME: Buffer = EMPTY;
+/// Remis à `false` à l'ouverture de la page pour relire le rapport.
+pub static mut RUNTIME_LOADED: bool = false;
+static mut RUNTIME_NOTICE: Line = Line::new();
+
+unsafe fn runtime_proc(name: &core::ffi::CStr) -> *const core::ffi::c_void {
+    let k = LoadLibraryA(c"kernel32.dll".as_ptr());
+    if k.is_null() {
+        return core::ptr::null();
+    }
+    GetProcAddress(k, name.as_ptr())
+}
+
+unsafe fn runtime_refresh() {
+    RUNTIME_LOADED = true;
+    RUNTIME.len = 0;
+    let p = runtime_proc(c"WinluxGraphicsInfo");
+    if p.is_null() {
+        return;
+    }
+    let f: unsafe extern "win64" fn(*mut u8, u32) -> u32 = core::mem::transmute(p);
+    let n = f(RUNTIME.bytes.as_mut_ptr(), CAPACITY as u32);
+    RUNTIME.len = (n as usize).min(CAPACITY - 1);
+}
+
+unsafe fn rt(key: &[u8]) -> &'static [u8] {
+    if !RUNTIME_LOADED {
+        runtime_refresh();
+    }
+    let data: &'static Buffer = &*core::ptr::addr_of!(RUNTIME);
+    field(data.get(), key)
+}
+
+unsafe fn rt_set(key: &core::ffi::CStr, value: &[u8]) {
+    let p = runtime_proc(c"WinluxSetGraphicsOption");
+    if p.is_null() || value.len() > 30 {
+        return;
+    }
+    let mut v = [0u8; 32];
+    v[..value.len()].copy_from_slice(value);
+    let f: unsafe extern "win64" fn(*const core::ffi::c_char, *const core::ffi::c_char) -> i32 =
+        core::mem::transmute(p);
+    f(key.as_ptr(), v.as_ptr().cast());
+    runtime_refresh();
+}
+
+/// GPU Vulkan matériels : (index Vulkan, nom).
+unsafe fn rt_gpus(out: &mut [(&'static [u8], &'static [u8]); 8]) -> usize {
+    let mut n = 0;
+    for item in rt(b"vulkan_hw").split(|&c| c == b';') {
+        let Some(colon) = item.iter().position(|&c| c == b':') else {
+            continue;
+        };
+        if n < out.len() {
+            out[n] = (&item[..colon], &item[colon + 1..]);
+            n += 1;
+        }
+    }
+    n
+}
+
+fn pref_label(v: &[u8]) -> &'static [u8] {
+    match v {
+        b"vulkan" => b"Vulkan",
+        b"opengl" => b"OpenGL",
+        b"hardware" => b"Mat\xE9riel",
+        b"software" => b"Logiciel",
+        _ => b"Automatique",
+    }
+}
+
+unsafe fn runtime_items(visit: &mut impl FnMut(Item)) {
+    if rt(b"opengl").is_empty() {
+        return;
+    }
+    let mut gpus = [(&b""[..], &b""[..]); 8];
+    let hw = rt_gpus(&mut gpus);
+    let backend = hw >= 1 && rt(b"opengl") == b"1";
+    let device = hw >= 2;
+    let video = !rt(b"video_hw_available").is_empty();
+    if !(backend || device || video || hw >= 1) {
+        return;
+    }
+    visit(Item::Header(b"Jeux et applications Windows (Direct3D)"));
+    if backend {
+        let pref = rt(b"backend_pref");
+        let mut v = Line::new();
+        v.push(b"Direct3D 12 utilise ")
+            .push(pref_label(rt(b"backend_d3d12")))
+            .push(b", Direct3D 9 et 11 : OpenGL");
+        let buttons = [
+            btn(
+                b"Auto",
+                act(RT_BACKEND, 0, 0),
+                pref == b"auto" || pref.is_empty(),
+            ),
+            btn(b"Vulkan", act(RT_BACKEND, 0, 1), pref == b"vulkan"),
+            btn(b"OpenGL", act(RT_BACKEND, 0, 2), pref == b"opengl"),
+        ];
+        visit(Item::Row(b"Moteur de rendu", v.get(), &buttons));
+    }
+    if device {
+        let sel = rt(b"vulkan_selected");
+        let auto = rt(b"vulkan_device_pref") == b"auto";
+        let mut v = Line::new();
+        v.push(
+            gpus[..hw]
+                .iter()
+                .find(|g| g.0 == sel)
+                .map(|g| g.1)
+                .unwrap_or(b""),
+        );
+        if auto {
+            v.push(b" (automatique)");
+        }
+        let buttons = [
+            btn(b"Auto", act(RT_DEVICE, 0, 0), auto),
+            btn(b"Pr\xE9c\xE9dente", act(RT_DEVICE, 0, 1), false),
+            btn(b"Suivante", act(RT_DEVICE, 0, 2), false),
+        ];
+        visit(Item::Row(b"Carte graphique Vulkan", v.get(), &buttons));
+    }
+    if video {
+        let pref = rt(b"video_pref");
+        let active = rt(b"video_active") == b"vaapi";
+        let mut v = Line::new();
+        if active {
+            v.push(b"Mat\xE9riel : ").push(rt(b"video_hw_codecs"));
+        } else {
+            v.push(b"Logiciel (mat\xE9riel possible : ")
+                .push(rt(b"video_hw_available"))
+                .push(b")");
+        }
+        let buttons = [
+            btn(
+                b"Auto",
+                act(RT_VIDEO, 0, 0),
+                pref == b"auto" || pref.is_empty(),
+            ),
+            btn(b"Mat\xE9riel", act(RT_VIDEO, 0, 1), pref == b"hardware"),
+            btn(b"Logiciel", act(RT_VIDEO, 0, 2), pref == b"software"),
+        ];
+        visit(Item::Row(
+            b"D\xE9codage vid\xE9o (DXVA2)",
+            v.get(),
+            &buttons,
+        ));
+    }
+    if hw >= 1 {
+        let on = rt(b"vsync") == b"1";
+        visit(Item::Row(
+            b"Synchronisation verticale",
+            if on {
+                b"Activ\xE9e : pas de d\xE9chirure d'image"
+            } else {
+                b"D\xE9sactiv\xE9e : latence minimale"
+            },
+            &[
+                btn(b"Activer", act(RT_VSYNC, 0, 1), on),
+                btn(b"D\xE9sactiver", act(RT_VSYNC, 0, 0), !on),
+            ],
+        ));
+    }
+}
+
+unsafe fn runtime_click(kind: u32, arg: u32) {
+    match kind {
+        RT_BACKEND => rt_set(
+            c"backend",
+            [b"auto".as_slice(), b"vulkan", b"opengl"][arg as usize % 3],
+        ),
+        RT_DEVICE if arg == 0 => rt_set(c"vulkan_device", b"auto"),
+        RT_DEVICE => {
+            let mut gpus = [(&b""[..], &b""[..]); 8];
+            let hw = rt_gpus(&mut gpus);
+            if hw == 0 {
+                return;
+            }
+            let sel = rt(b"vulkan_selected");
+            let cur = gpus[..hw].iter().position(|g| g.0 == sel).unwrap_or(0);
+            let next = if arg == 1 {
+                (cur + hw - 1) % hw
+            } else {
+                (cur + 1) % hw
+            };
+            // Copie : le rapport est relu (et réécrit) par rt_set.
+            let mut idx = [0u8; 8];
+            let len = gpus[next].0.len().min(8);
+            idx[..len].copy_from_slice(&gpus[next].0[..len]);
+            rt_set(c"vulkan_device", &idx[..len]);
+        }
+        RT_VIDEO => rt_set(
+            c"video_decode",
+            [b"auto".as_slice(), b"hardware", b"software"][arg as usize % 3],
+        ),
+        RT_VSYNC => rt_set(c"vsync", if arg == 1 { b"1" } else { b"0" }),
+        _ => {}
+    }
+}
+
+/// Ligne d'état en bas de page : ce que le runtime a détecté.
+pub unsafe fn runtime_notice() -> &'static [u8] {
+    let l: &'static mut Line = &mut *core::ptr::addr_of_mut!(RUNTIME_NOTICE);
+    l.len = 0;
+    if rt(b"opengl").is_empty() {
+        return l.get();
+    }
+    let vk = rt(b"vulkan") == b"1";
+    let mut gpus = [(&b""[..], &b""[..]); 8];
+    let hw = rt_gpus(&mut gpus);
+    l.push(b"D\xE9tect\xE9 : OpenGL ")
+        .push(if rt(b"opengl") == b"1" {
+            b"oui"
+        } else {
+            b"non"
+        })
+        .push(b" \xB7 Vulkan ")
+        .push(if vk { rt(b"vulkan_version") } else { b"absent" })
+        .push(if vk && hw == 0 { b" (logiciel)" } else { b"" })
+        .push(b" \xB7 VA-API ")
+        .push(if rt(b"vaapi") == b"1" {
+            rt(b"vaapi_vendor")
+        } else {
+            b"absent"
+        });
+    l.get()
 }
 
 fn button_width(c: &Rect, n: usize) -> i32 {
@@ -539,6 +779,7 @@ pub unsafe fn click(f: &Frame, x: i32, y: i32) -> bool {
                 .run();
         }
         OPEN_EXPLORER => crate::explorer::open_home(),
+        RT_BACKEND..=RT_VSYNC => runtime_click(kind, arg),
         _ => {}
     }
     true

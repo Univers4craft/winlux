@@ -3382,6 +3382,10 @@ unsafe fn create_process_common(
             host_path = p;
         }
     }
+    if !host_path.exists() && crate::msi::is_msiexec(&host_path) {
+        // msiexec.exe est intégré au runtime : `winlux msiexec.exe …`.
+        host_path = std::path::PathBuf::from("msiexec.exe");
+    }
     let is_pe = host_path
         .extension()
         .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("exe"));

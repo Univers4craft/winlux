@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **193**
+- Réalisé : **203**
 - À faire ou en cours : **44**
-- Total : **237**
-- Progression : **81.4%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104 et #109, issues #10 à #98)
+- Total : **247**
+- Progression : **82.2%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126, #127, #111, #119 et #133, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -88,7 +88,7 @@
 ### Chantiers démarrés (issue ouverte, PR à venir)
 
 - [ ] Matériel : impression winspool.drv + CUPS (#77), audio des .exe DirectSound/WASAPI/XAudio2 (#78), alimentation et batterie (#80), gestion CPU avancée (#90), gestion GPU et monitoring (#91).
-- [ ] Graphisme 3D : Direct3D 9 et 12 avec backend Vulkan (#92).
+- [ ] Graphisme 3D, reste (#92) : traduction des shaders DXBC/DXIL (les tracés D3D12 utilisent des shaders de passage), profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation (MFTEnum ne liste encore aucun décodeur), codecs DXVA2 autres que H.264, validation sur vrai GPU avec VA-API.
 - [ ] Applications du shell : store de logiciels (#81), gestionnaire de polices (#82), planificateur de tâches (#83), pare-feu (#84), capture et enregistrement d'écran (#86), sauvegarde (#87), bureau à distance (#89).
 - [ ] Bureau : multi-utilisateur complet (#88).
 - [ ] Installateur : mode récupération, Secure Boot et installation silencieuse (#95), benchmark et profils d'utilisation (#96), personnalisation visuelle (#97).
@@ -129,6 +129,7 @@
 - [x] Correction du ghosting des fenêtres lors du déplacement (#68).
 - [x] Écran bleu (BSOD), journalisation centralisée, observateur d'événements et points de restauration (#69).
 - [x] Traduction Direct3D 11 vers OpenGL (#70).
+- [x] Direct3D 9 (périphérique, surfaces, textures, VB/IB, shaders SM1.x à 3.0 traduits en GLSL, états fixes), Direct3D 12 (files, listes, tas de descripteurs, PSO, signatures racine, barrières, swapchain DXGI) avec backend Vulkan choisi selon le matériel puis repli OpenGL et processeur, DXVA2 H.264 par VA-API (NVDEC via nvidia-vaapi-driver), section « Jeux et applications Windows (Direct3D) » de la page Paramètres « Graphismes », masquée quand le matériel ne permet aucun choix (#92). Suite PE `d3d_suite`.
 - [x] DLL libgcc_s_seh-1 / libstdc++-6 et NtCreateFile/NtOpenFile réels (#71).
 - [x] Premier démarrage (OOBE) : thème, choix des apps, compte local avec avatar (#74).
 - [x] Compatibilité systemd (shim `systemctl`, hook APT) et passage à Ubuntu 26.04 LTS (#38).
@@ -161,6 +162,9 @@
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
+- [x] Historique des fichiers maison : dossiers, destination (disque externe ou partage SMB/NFS), fréquence, rétention, instantanés incrémentaux par liens physiques, restauration des versions et lien vers les points de restauration système (`winlux-backup`, `scripts/test-backup.sh`).
+- [x] Multi-utilisateur : verrouillage, changement rapide d'utilisateur sans fermer la session, sessions simultanées sur un Xorg/VT par compte (`winlux-sessions`, `scripts/test-sessions.sh`).
+- [x] Bureau à distance maison : serveur RFB `winlux-remote` (capture X11, clavier/souris XTEST, curseur), authentification par compte Winlux chiffrée RSA-AES (TigerVNC/RealVNC), page « Bureau à distance » des Paramètres (`scripts/test-remote.sh`).
 
 ### Priorité 1 — Fiabiliser le runtime
 
@@ -234,8 +238,14 @@
 - [x] Décoder MP3 et AAC ADTS mono/stéréo dans PlaySound, tester limites mémoire, concurrence et sortie ALSA null ; inclure les bibliothèques dans l'ISO.
 - [x] Exécuter de vrais programmes C compilés par MinGW-w64 : démarrage de la CRT msvcrt (`__getmainargs`, `_initterm`, constructeurs globaux, `atexit`/`_onexit`, `_iob`/`__iob_func`), `_errno`, verrous `_lock`, environnement, temps (`time`, `localtime`, `strftime`, `clock`), `rand` Microsoft, E/S bas niveau `_open`/`_read`/`_write`, signaux, `_beginthreadex`; compléments kernel32 (console, pages de code, `GetEnvironmentStrings`, `FormatMessage`, `lstr*`, `RaiseException`…). Vérifié par `testc/mingw_suite.c` (40 contrôles) en CI.
 - [x] Documenter explicitement les limites : 64 bits uniquement, absence de noyau Windows et compatibilité API partielle.
+- [x] Impression : `winspool.drv` maison (OpenPrinter, StartDocPrinter/WritePrinter/EndDocPrinter, EnumPrinters 1/2/4/5/6/8/9, GetPrinter, SetPrinter, Get/SetDefaultPrinter, AddPrinter, DeletePrinter, EnumJobs, GetJob, SetJob, DeviceCapabilities, DocumentProperties) avec imprimante virtuelle « Imprimer en PDF (Winlux) ».
+- [x] Impression : pont CUPS par protocole IPP écrit de zéro (socket Unix ou TCP, PeerCred) : découverte des files, imprimante par défaut, envoi des travaux, file d'attente, annulation, ajout IPP Everywhere ou pilote CUPS, détection USB/réseau. Validé contre un vrai `cupsd` (`WINLUX_TEST_CUPS=1 cargo test -p winlux cups_reel -- --ignored`).
+- [x] Impression : DC imprimante GDI (`CreateDC`/`CreateIC`, `StartDoc`, `StartPage`, `EndPage`, `EndDoc`, `AbortDoc`, `SetAbortProc`, `ResetDC`, `Escape`, `GetDeviceCaps`) rendu en PDF (texte en polices standard, formes, images RunLength). Test PE `print_suite`.
+- [x] Impression : boîtes `PrintDlg`, `PrintDlgEx`, `PageSetupDlg` natives au thème Windows 11 (aperçu, imprimante, copies, orientation, pages, papier, couleur, qualité, recto verso) ; `WINLUX_PRINTDLG=accept` sans affichage.
+- [x] Impression : page Paramètres › Imprimantes et scanners (liste, imprimante par défaut, page de test, suppression, file d'attente avec annulation, recherche USB/réseau, ajout par adresse) ; CUPS ajouté aux paquets du bureau de l'ISO.
 
 - [x] Lecteur multimédia natif (`mediaplayer.exe`, `audioplayer.exe` en alias) : vidéo et audio, barre de progression avec aperçu au survol, volume, vitesse 0,25× à 3×, plein écran, sous-titres SRT/ASS/VTT externes et pistes intégrées (texte et PGS/VobSub), pistes audio, chapitres, liste de lecture du dossier, reprise à la dernière position, thème clair/sombre, FR/EN/DE/ES. L'Explorer ouvre l'audio/vidéo dedans ; MIME par défaut dans l'ISO.
+- [x] Visionneuse d'images native (`imageviewer.exe`) et décodeurs maison en Rust (`runtime/src/imaging`, aucune bibliothèque externe) : PNG/APNG, JPEG (progressif, CMYK), GIF animé, BMP, TIFF multipage, ICO/CUR/ICNS, WebP (avec et sans perte, animé), QOI, PSD/PSB et XCF (calques), SVG/SVGZ vectoriel net à tout zoom, AI/EPS (aperçu intégré), TGA, PCX, PNM/PAM/PFM, DDS (BC1-BC5), EXR, HDR, SGI, Sun, XBM/XPM, WBMP et RAW (CR2, CR3, NEF, ARW, DNG, ORF, RW2, RAF, PEF, SRW… via l'aperçu intégré). Zoom molette/ajusté/100 %, panoramique, rotation, miroir, pages/calques/images, dossier précédent/suivant, diaporama, panneau EXIF/IPTC/XMP, comparaison avant/après RAW (exposition, niveaux auto), aperçu 3D tournant (STL, OBJ, PLY, OFF, glTF/GLB, FBX binaire), impression via la boîte « Imprimer » quand elle est présente. Miniatures dans l'Explorateur (images, modèles 3D, vidéos/audio) avec cache disque. Garde-fou : HEIC/HEIF, AVIF, JPEG XL, JPEG 2000 et PDF ne sont pas encore décodés, donc jamais annoncés ni envoyés à la visionneuse. `winlux --image-info FICHIER` pour diagnostiquer.
 - [x] Moteur multimédia du runtime (`winlux_media.rs`, exports `WinluxMedia*`) : FFmpeg système en processus isolé, conteneurs MP4/MKV/WebM/AVI/MOV/FLV/WMV/MPEG/TS/M2TS/OGV/3GP…, codecs H.264/HEVC/AV1/VP8/VP9/MPEG-2/MPEG-4/VC-1/Theora/ProRes/DNxHD et AAC/MP3/Opus/Vorbis/FLAC/ALAC/PCM/AC-3/E-AC-3/DTS/WMA/APE ; un format n'est annoncé que si son décodeur existe ; VA-API/NVDEC avec repli logiciel puis sans son ; vignettes vidéo et pochettes avec cache disque. Voir `docs/MEDIA.md`.
 - [x] Corriger `SetTimer` : la version bouchon de `user32_ext` remplaçait la vraie et `GetMessage` ne livrait jamais `WM_TIMER` (aucune animation ni rafraîchissement périodique des applications autonomes).
 
@@ -293,7 +303,8 @@
 - [x] Paramètres > Confidentialité : télémétrie et historique de localisation désactivés par défaut, autorisations micro/caméra/localisation des .exe (micro refusé appliqué par `winmm`) (#98).
 - [x] Personnalisation (Paramètres > Personnalisation et assistant de premier démarrage) : galerie de 13 fonds d'écran calculés (catégories Nature/Abstrait/Sombre/Clair, aperçu), palette d'accentuation Windows 11 (48 couleurs ou automatique, option sur Démarrer/barre et barres de titre), barre des tâches en bas/haut/gauche/droite en trois tailles, choix des icônes du bureau, cinq sons de démarrage synthétisés avec écoute. Préférences dans `~/.local/share/winlux/personnalisation.conf` ; `WINLUX_OOBE=1` relance l'assistant, `WINLUX_NO_OOBE=1` le saute.
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
-- [x] Store unique Linux + Windows (`store.rs`, `winlux-store`) : apt + AppStream, Flatpak, Snap, AppImage et catalogues Windows interchangeables (`store-sources.d`, SHA-256 obligatoire), vignettes et captures, fiche détaillée, mises à jour unifiées ; voir `docs/STORE.md`. Reste : msiexec dans le runtime, choix d'un catalogue Windows par défaut.
+- [x] Store unique Linux + Windows (`store.rs`, `winlux-store`) : apt + AppStream, Flatpak, Snap, AppImage et catalogues Windows interchangeables (`store-sources.d`, SHA-256 obligatoire), vignettes et captures, fiche détaillée, mises à jour unifiées ; voir `docs/STORE.md`. Catalogue Windows par défaut : dépôt communautaire Scoop Extras (applications 64 bits avec empreinte, sans script PowerShell).
+- [x] msiexec intégré au runtime (`runtime/src/msi`, sans composant tiers) : fichier composé OLE, tables et pool de chaînes, cabinets MSZIP et LZX, propriétés, conditions, fonctionnalités et composants, fichiers, registre, raccourcis .lnk, « Programmes installés », désinstallation `/x`, installation administrative `/a` ; double-clic sur un .msi ; voir `docs/MSIEXEC.md`. Reste : actions personnalisées DLL/EXE, services, variables d'environnement, interface graphique d'installation.
 - [x] Gestionnaire de polices (`fonts.rs`, `winlux-fonts`) et polices pour les .exe : `EnumFontFamilies(Ex)`, `EnumFonts`, `AddFontResource(Ex)`, `RemoveFontResource(Ex)`, `WinluxDrawImageA`.
 
 ### Priorité 6 — Qualité et livraison

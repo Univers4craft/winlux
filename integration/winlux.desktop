@@ -7,6 +7,6 @@ Exec=/usr/bin/winlux-open %f
 Icon=application-x-ms-dos-executable
 Terminal=false
 NoDisplay=true
-MimeType=application/x-ms-dos-executable;application/x-msdownload;application/vnd.microsoft.portable-executable;application/x-dosexec;
+MimeType=application/x-ms-dos-executable;application/x-msdownload;application/vnd.microsoft.portable-executable;application/x-dosexec;application/x-msi;application/x-ms-installer;
 StartupNotify=true
 Categories=System;

@@ -9,6 +9,7 @@ pub mod audio_com;
 pub mod bcrypt;
 pub mod clipboard;
 pub mod comctl32;
+pub mod comdlg32;
 pub mod comobj;
 pub mod crt;
 pub mod crt_runtime;
@@ -17,6 +18,9 @@ pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
 pub mod d3d11;
+pub mod d3d12;
+pub mod d3d9;
+pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod dbghelp;
 pub mod dinput8;
@@ -24,16 +28,20 @@ pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
 pub mod dxgi;
+pub mod dxva2;
 pub mod evdev;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
 pub mod gl_bindings;
+pub mod gl_legacy;
+pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
 pub mod iphlpapi;
+pub mod ipp;
 pub mod kernel32;
 pub mod kernel32_cpu;
 pub mod kernel32_misc;
@@ -49,6 +57,7 @@ pub mod ntdll;
 pub mod ole32;
 pub mod oleaut32;
 pub mod powrprof;
+pub mod print_pdf;
 pub mod propsys;
 pub mod quartz;
 pub mod resource;
@@ -57,13 +66,17 @@ pub mod sechost;
 pub mod setupapi;
 pub mod shell32;
 pub mod shlwapi;
+pub mod spirv;
 pub mod taskschd;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
 pub mod uxtheme;
 pub mod v4l2;
+pub mod va_bindings;
 pub mod version;
+pub mod vk_backend;
+pub mod vk_bindings;
 pub mod winfile;
 pub mod winhttp;
 pub mod winlux_capture;
@@ -72,6 +85,7 @@ pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
 pub mod winmm_waveout;
+pub mod winspool;
 pub mod wintrust;
 pub mod ws2_32;
 pub mod xaudio2;
@@ -142,9 +156,11 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_pty::exports());
                     e.extend(winlux_capture::exports());
                     e.extend(powrprof::kernel32_exports());
+                    e.extend(gpu_caps::exports());
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
                     e.extend(crate::archive::ffi::exports());
+                    e.extend(crate::imaging::api::exports());
                     e.extend(winlux_gpu::exports());
                     e
                 },
@@ -236,6 +252,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
                     e.extend(gdi32_fonts::exports());
+                    e.extend(winspool::gdi_exports());
                     e
                 },
                 handle: fake_module(),
@@ -335,6 +352,21 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "d3d12",
+                exports: d3d12::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dxva2",
+                exports: dxva2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d9",
+                exports: d3d9::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "dbghelp",
                 exports: dbghelp::exports(),
                 handle: fake_module(),
@@ -402,6 +434,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "dinput",
                 exports: dinput8::legacy_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winspool",
+                exports: winspool::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "comdlg32",
+                exports: comdlg32::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -528,6 +570,13 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("xaudio2_") && base != "xaudio2_8" && base != "xaudio2_9" {
         return "xaudio2_7".into();
+    }
+    // winspool.drv (et son API-set) : le spooler Winlux.
+    if base == "winspool.drv"
+        || base == "winspool"
+        || base.starts_with("ext-ms-win-printer-winspool-")
+    {
+        return "winspool".into();
     }
     if base == "shlwapi" {
         return "shlwapi".into();

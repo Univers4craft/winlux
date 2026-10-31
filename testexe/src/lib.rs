@@ -446,6 +446,46 @@ pub const IDC_HAND: usize = 32649;
 
 pub const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
 
+/// Informations d'une image ouverte par `WinluxImageOpen`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WinluxImageInfoC {
+    pub width: u32,
+    pub height: u32,
+    pub pages: u32,
+    /// 1 animée, 2 calques, 4 RAW, 8 aperçu intégré, 16 HDR, 32 vectoriel, 64 modèle 3D.
+    pub flags: u32,
+    pub delay_ms: u32,
+    pub meta_count: u32,
+    pub format: [u8; 32],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WinluxPageInfoC {
+    pub width: u32,
+    pub height: u32,
+    pub delay_ms: u32,
+    pub kind: u32,
+    pub name: [u8; 64],
+}
+
+/// Vue demandée à `WinluxImageRender` (centre en coordonnées image).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WinluxViewC {
+    pub zoom: f32,
+    pub cx: f32,
+    pub cy: f32,
+    pub rot: u32,
+    pub mirror: u32,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub exposure: f32,
+    pub auto_levels: u32,
+    pub split: f32,
+}
+
 #[link(name = "kernel32", kind = "raw-dylib")]
 extern "system" {
     pub fn GetStdHandle(which: u32) -> Handle;
@@ -703,6 +743,34 @@ extern "system" {
     pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
     pub fn WinluxPtyAlive(handle: usize) -> i32;
     pub fn WinluxClosePty(handle: usize) -> i32;
+    // Images (décodeurs maison du runtime, voir runtime/src/imaging/api.rs).
+    pub fn WinluxImageOpen(path: *const u16) -> usize;
+    pub fn WinluxImageLastError(buf: *mut u8, cap: u32) -> i32;
+    pub fn WinluxImageInfo(h: usize, out: *mut WinluxImageInfoC) -> i32;
+    pub fn WinluxImagePage(h: usize, page: u32, out: *mut WinluxPageInfoC) -> i32;
+    pub fn WinluxImageRender(
+        h: usize,
+        page: u32,
+        view: *const WinluxViewC,
+        out: *mut u8,
+        w: u32,
+        hh: u32,
+        stride: u32,
+        bg: u32,
+        flags: u32,
+    ) -> i32;
+    pub fn WinluxImageMeta(
+        h: usize,
+        i: u32,
+        key: *mut u8,
+        kcap: u32,
+        val: *mut u8,
+        vcap: u32,
+    ) -> i32;
+    pub fn WinluxImageClose(h: usize) -> i32;
+    pub fn WinluxImageSupported(path: *const u16) -> i32;
+    pub fn WinluxImageFormats(buf: *mut u8, cap: u32) -> u32;
+    pub fn WinluxImageThumbnail(path: *const u16, size: u32, out: *mut u8) -> i32;
     pub fn WinluxCaptureScreen(x: i32, y: i32, w: i32, h: i32, bits: *mut u8, stride: i32) -> i32;
     pub fn WinluxDrawStroke(
         bits: *mut u8,
@@ -941,6 +1009,9 @@ extern "C" {
     pub fn GetFocus() -> Handle;
     pub fn SetFocus(hwnd: Handle) -> Handle;
     pub fn GetKeyState(vk: i32) -> i16;
+    pub fn SetCapture(hwnd: Handle) -> Handle;
+    pub fn ScreenToClient(hwnd: Handle, p: *mut Point) -> i32;
+    pub fn ReleaseCapture() -> i32;
     pub fn GetAsyncKeyState(vk: i32) -> i16;
     pub fn GetKeyboardState(state: *mut u8) -> i32;
     pub fn GetClientRect(hwnd: Handle, out: *mut Rect) -> i32;
@@ -987,6 +1058,20 @@ extern "C" {
     pub fn MoveToEx(dc: Handle, x: i32, y: i32, previous: *mut Point) -> i32;
     pub fn LineTo(dc: Handle, x: i32, y: i32) -> i32;
     pub fn CreateCompatibleDC(dc: Handle) -> Handle;
+    pub fn SetDIBitsToDevice(
+        dc: Handle,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        src_x: i32,
+        src_y: i32,
+        start: u32,
+        lines: u32,
+        bits: *const c_void,
+        info: *const BitmapInfoHeader,
+        usage: u32,
+    ) -> i32;
     pub fn CreateCompatibleBitmap(dc: Handle, width: i32, height: i32) -> Handle;
     pub fn CreateDIBSection(
         dc: Handle,
@@ -997,6 +1082,7 @@ extern "C" {
         offset: u32,
     ) -> Handle;
     pub fn DeleteDC(dc: Handle) -> i32;
+    pub fn GetDeviceCaps(dc: Handle, index: i32) -> i32;
     pub fn StretchDIBits(
         dc: Handle,
         xd: i32,
@@ -1121,6 +1207,92 @@ extern "C" {
         height: i32,
     ) -> i32;
     pub fn SetPixelV(hdc: Handle, x: i32, y: i32, color: u32) -> i32;
+}
+
+// Spooler d'impression (`winspool.drv`) : API Win32 et extensions Winlux
+// utilisées par la page « Imprimantes et scanners » des Paramètres.
+#[link(name = "winspool.drv", kind = "raw-dylib", modifiers = "+verbatim")]
+extern "system" {
+    pub fn EnumPrintersW(
+        flags: u32,
+        name: *const u16,
+        level: u32,
+        buf: *mut u8,
+        cb: u32,
+        needed: *mut u32,
+        returned: *mut u32,
+    ) -> i32;
+    pub fn GetDefaultPrinterW(buf: *mut u16, size: *mut u32) -> i32;
+    pub fn SetDefaultPrinterW(name: *const u16) -> i32;
+    pub fn OpenPrinterW(name: *const u16, printer: *mut Handle, defaults: *const c_void) -> i32;
+    pub fn ClosePrinter(printer: Handle) -> i32;
+    pub fn StartDocPrinterW(printer: Handle, level: u32, info: *const c_void) -> u32;
+    pub fn StartPagePrinter(printer: Handle) -> i32;
+    pub fn WritePrinter(printer: Handle, buf: *const u8, len: u32, written: *mut u32) -> i32;
+    pub fn EndPagePrinter(printer: Handle) -> i32;
+    pub fn EndDocPrinter(printer: Handle) -> i32;
+    pub fn DeletePrinter(printer: Handle) -> i32;
+    pub fn SetPrinterW(printer: Handle, level: u32, info: *const u8, command: u32) -> i32;
+    pub fn EnumJobsW(
+        printer: Handle,
+        first: u32,
+        count: u32,
+        level: u32,
+        buf: *mut u8,
+        cb: u32,
+        needed: *mut u32,
+        returned: *mut u32,
+    ) -> i32;
+    pub fn SetJobW(printer: Handle, job: u32, level: u32, info: *const u8, command: u32) -> i32;
+    pub fn DeviceCapabilitiesW(
+        device: *const u16,
+        port: *const u16,
+        capability: u16,
+        output: *mut u8,
+        devmode: *const u8,
+    ) -> i32;
+    pub fn DocumentPropertiesW(
+        hwnd: Handle,
+        printer: Handle,
+        device: *const u16,
+        output: *mut u8,
+        input: *const u8,
+        mode: u32,
+    ) -> i32;
+    pub fn WinluxDiscoverPrintersW(buf: *mut u16, cap: u32) -> u32;
+    pub fn WinluxAddPrinterW(name: *const u16, uri: *const u16) -> i32;
+    pub fn WinluxPrintStatusW(buf: *mut u16, cap: u32) -> u32;
+    pub fn WinluxPrintTestPageW(name: *const u16) -> i32;
+}
+
+/// `DOCINFOW` (gdi32 `StartDocW`).
+#[repr(C)]
+pub struct DocInfoW {
+    pub size: i32,
+    pub doc_name: *const u16,
+    pub output: *const u16,
+    pub datatype: *const u16,
+    pub flags: u32,
+}
+
+#[link(name = "gdi32", kind = "raw-dylib")]
+extern "system" {
+    pub fn CreateDCW(
+        driver: *const u16,
+        device: *const u16,
+        output: *const u16,
+        devmode: *const u8,
+    ) -> Handle;
+    pub fn StartDocW(dc: Handle, info: *const DocInfoW) -> i32;
+    pub fn StartPage(dc: Handle) -> i32;
+    pub fn EndPage(dc: Handle) -> i32;
+    pub fn EndDoc(dc: Handle) -> i32;
+}
+
+#[link(name = "comdlg32", kind = "raw-dylib")]
+extern "system" {
+    pub fn PrintDlgW(pd: *mut u8) -> i32;
+    pub fn CommDlgExtendedError() -> u32;
 }
 
 #[link(name = "powrprof", kind = "raw-dylib")]
@@ -1363,4 +1535,74 @@ pub extern "C" fn __CxxFrameHandler3() -> i32 {
 fn panic(_: &core::panic::PanicInfo) -> ! {
     out(b"panic\n");
     unsafe { ExitProcess(101) }
+}
+
+// ---------- Langue de l'interface ----------
+
+/// Texte traduit : français, anglais, espagnol, allemand (Windows-1252).
+pub type Tr4 = [&'static [u8]; 4];
+
+static UI_LANG: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(u8::MAX);
+static UI_LANG_TICK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+fn lang_index(code: &[u8]) -> Option<u8> {
+    match code.get(..2) {
+        Some(b"fr") | Some(b"FR") => Some(0),
+        Some(b"en") | Some(b"EN") => Some(1),
+        Some(b"es") | Some(b"ES") => Some(2),
+        Some(b"de") | Some(b"DE") => Some(3),
+        _ => None,
+    }
+}
+
+/// Langue de l'interface (0 fr, 1 en, 2 es, 3 de), pour les applications
+/// autonomes comme pour celles du bureau : `LANG=` de /etc/winlux/locale.conf
+/// (Paramètres > Langue), sinon la variable `LANG`, sinon le français.
+/// Relue au plus toutes les deux secondes pour suivre un changement.
+pub fn ui_lang() -> usize {
+    use core::sync::atomic::Ordering::Relaxed;
+    let now = unsafe { GetTickCount() };
+    let cached = UI_LANG.load(Relaxed);
+    if cached != u8::MAX && now.wrapping_sub(UI_LANG_TICK.load(Relaxed)) < 2000 {
+        return cached as usize;
+    }
+    let mut found = None;
+    unsafe {
+        let h = CreateFileA(
+            c"Z:\\etc\\winlux\\locale.conf".as_ptr(),
+            0x8000_0000,
+            1,
+            core::ptr::null_mut(),
+            3,
+            0,
+            core::ptr::null_mut(),
+        );
+        if !h.is_null() && h as isize != -1 {
+            let mut buf = [0u8; 256];
+            let mut read = 0u32;
+            ReadFile(h, buf.as_mut_ptr(), 256, &mut read, core::ptr::null_mut());
+            CloseHandle(h);
+            for line in buf[..(read as usize).min(256)].split(|&c| c == b'\n') {
+                if let Some(v) = line.strip_prefix(b"LANG=") {
+                    found = lang_index(v);
+                }
+            }
+        }
+        if found.is_none() {
+            let mut v = [0u8; 16];
+            let n = GetEnvironmentVariableA(c"LANG".as_ptr(), v.as_mut_ptr().cast(), 16);
+            if (2..16).contains(&n) {
+                found = lang_index(&v[..2]);
+            }
+        }
+    }
+    let lang = found.unwrap_or(0);
+    UI_LANG.store(lang, Relaxed);
+    UI_LANG_TICK.store(now, Relaxed);
+    lang as usize
+}
+
+/// Texte dans la langue de l'interface.
+pub fn tr4(s: &Tr4) -> &'static [u8] {
+    s[ui_lang()]
 }

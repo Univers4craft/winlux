@@ -22,8 +22,12 @@ mod diskmgr;
 mod eventviewer;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/filehistory.rs"]
+mod filehistory;
 #[path = "../shell/fonts.rs"]
 mod fonts;
+#[path = "../shell/thumbs.rs"]
+mod thumbs;
 #[path = "../shell/firewall.rs"]
 mod firewall;
 #[path = "../shell/gpuinfo.rs"]
@@ -75,6 +79,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         settings::regression_checks();
         cliphist::regression_checks();
         snip::regression_checks();
+        filehistory::regression_checks();
         personalize::regression_checks();
         welcome::regression_checks();
         a11y::regression_checks();

@@ -10,14 +10,14 @@ pub const CUSTOM_TITLE: bool = false;
 
 // Onglet actif : 0..6
 static mut TAB: usize = 0;
-const TAB_NAMES: [&[u8]; 7] = [
-    b"Processus",
-    b"Performance",
-    b"Historique",
-    b"D\xE9marrage",
-    b"Utilisateurs",
-    b"D\xE9tails",
-    b"Services",
+const TAB_NAMES: [Tr4; 7] = [
+    [b"Processus", b"Processes", b"Procesos", b"Prozesse"],
+    [b"Performance", b"Performance", b"Rendimiento", b"Leistung"],
+    [b"Historique", b"App history", b"Historial", b"Verlauf"],
+    [b"D\xE9marrage", b"Startup apps", b"Inicio", b"Autostart"],
+    [b"Utilisateurs", b"Users", b"Usuarios", b"Benutzer"],
+    [b"D\xE9tails", b"Details", b"Detalles", b"Details"],
+    [b"Services", b"Services", b"Servicios", b"Dienste"],
 ];
 
 // Barre de navigation (icônes à gauche, style Windows 11 Task Manager)
@@ -499,7 +499,7 @@ fn fmt_mem(out: &mut [u8], kb: u32) -> usize {
             pos += 1;
             out[pos] = b'G';
             pos += 1;
-            out[pos] = b'o';
+            out[pos] = if ui_lang() == 0 { b'o' } else { b'B' };
             pos += 1;
         }
         pos
@@ -511,7 +511,7 @@ fn fmt_mem(out: &mut [u8], kb: u32) -> usize {
             pos += 1;
             out[pos] = b'M';
             pos += 1;
-            out[pos] = b'o';
+            out[pos] = if ui_lang() == 0 { b'o' } else { b'B' };
             pos += 1;
         }
         pos
@@ -522,7 +522,7 @@ fn fmt_mem(out: &mut [u8], kb: u32) -> usize {
             pos += 1;
             out[pos] = b'K';
             pos += 1;
-            out[pos] = b'o';
+            out[pos] = if ui_lang() == 0 { b'o' } else { b'B' };
             pos += 1;
         }
         pos
@@ -689,7 +689,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 label_color,
                 r.left + 42,
                 iy + 14,
-                TAB_NAMES[i],
+                tr4(&TAB_NAMES[i]),
             );
         }
     }
@@ -717,7 +717,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
 unsafe fn draw_processes(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let p = pal();
     // En-tête
-    text(g.hdc, g.f.title, p.text, x + 16, y + 12, b"Processus");
+    text(
+        g.hdc,
+        g.f.title,
+        p.text,
+        x + 16,
+        y + 12,
+        tr4(&[b"Processus", b"Processes", b"Procesos", b"Prozesse"]),
+    );
 
     // Barre de recherche
     let search_y = y + 38;
@@ -737,7 +744,12 @@ unsafe fn draw_processes(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text3,
         x + 28,
         search_y + 8,
-        b"Rechercher un processus...",
+        tr4(&[
+            b"Rechercher un processus...",
+            b"Search for a process...",
+            b"Buscar un proceso...",
+            b"Prozess suchen...",
+        ]),
     );
 
     // Colonnes
@@ -751,12 +763,21 @@ unsafe fn draw_processes(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let col_net_w = w - col_name_w - col_cpu_w - col_mem_w - col_disk_w;
 
     let cols: [(&[u8], i32); 5] = [
-        (b"Nom", x + 16),
-        (b"Processeur", x + col_name_w),
-        (b"M\xE9moire", x + col_name_w + col_cpu_w),
-        (b"Disque", x + col_name_w + col_cpu_w + col_mem_w),
+        (tr4(&[b"Nom", b"Name", b"Nombre", b"Name"]), x + 16),
         (
-            b"R\xE9seau",
+            tr4(&[b"Processeur", b"CPU", b"CPU", b"CPU"]),
+            x + col_name_w,
+        ),
+        (
+            tr4(&[b"M\xE9moire", b"Memory", b"Memoria", b"Arbeitsspeicher"]),
+            x + col_name_w + col_cpu_w,
+        ),
+        (
+            tr4(&[b"Disque", b"Disk", b"Disco", b"Datentr\xE4ger"]),
+            x + col_name_w + col_cpu_w + col_mem_w,
+        ),
+        (
+            tr4(&[b"R\xE9seau", b"Network", b"Red", b"Netzwerk"]),
             x + col_name_w + col_cpu_w + col_mem_w + col_disk_w,
         ),
     ];
@@ -871,7 +892,7 @@ unsafe fn draw_processes(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
             p.text3,
             x + col_name_w + col_cpu_w + col_mem_w,
             ry + 6,
-            b"0 Mo/s",
+            tr4(&[b"0 Mo/s", b"0 MB/s", b"0 MB/s", b"0 MB/s"]),
         );
 
         // Réseau (placeholder)
@@ -881,7 +902,7 @@ unsafe fn draw_processes(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
             p.text3,
             x + col_name_w + col_cpu_w + col_mem_w + col_disk_w,
             ry + 6,
-            b"0 Mbps",
+            tr4(&[b"0 Mbps", b"0 Mbps", b"0 Mbps", b"0 Mbit/s"]),
         );
     }
 
@@ -897,7 +918,12 @@ unsafe fn draw_processes(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         btn_fg,
         btn_x + 16,
         btn_y + 8,
-        b"Fin de t\xE2che",
+        tr4(&[
+            b"Fin de t\xE2che",
+            b"End task",
+            b"Finalizar tarea",
+            b"Task beenden",
+        ]),
     );
 
     // Compteur de processus
@@ -905,7 +931,7 @@ unsafe fn draw_processes(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let mut pos = 0;
     let n = fmt_u32(&mut count_buf, PROC_COUNT as u32);
     pos += n;
-    let suffix = b" processus";
+    let suffix = tr4(&[b" processus", b" processes", b" procesos", b" Prozesse"]);
     count_buf[pos..pos + suffix.len()].copy_from_slice(suffix);
     pos += suffix.len();
     text(
@@ -927,7 +953,12 @@ unsafe fn draw_performance(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let panel_w = 180.min(w / 3);
     fill(g.hdc, g.b, x, y, x + panel_w, y + h, p.surface);
 
-    let perf_items: [&[u8]; 4] = [b"CPU", b"M\xE9moire", b"Disque", b"R\xE9seau"];
+    let perf_items: [&[u8]; 4] = [
+        b"CPU",
+        tr4(&[b"M\xE9moire", b"Memory", b"Memoria", b"Arbeitsspeicher"]),
+        tr4(&[b"Disque", b"Disk", b"Disco", b"Datentr\xE4ger"]),
+        tr4(&[b"R\xE9seau", b"Network", b"Red", b"Netzwerk"]),
+    ];
     let perf_values: [u32; 4] = [
         CPU_TOTAL,
         if MEM_TOTAL_KB > 0 {
@@ -1138,7 +1169,12 @@ unsafe fn draw_perf_graph(
         p.text3,
         x + 16,
         gy + gh + 4,
-        b"60 secondes",
+        tr4(&[
+            b"60 secondes",
+            b"60 seconds",
+            b"60 segundos",
+            b"60 Sekunden",
+        ]),
     );
 
     // Détails sous le graphique
@@ -1161,14 +1197,54 @@ unsafe fn draw_perf_cpu(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let n_cores = fmt_u32(&mut buf_cores, CPU_COUNT);
 
     let details: [(&[u8], &[u8]); 5] = [
-        (b"Vitesse de base", b"2.40 GHz"),
-        (b"Coeurs", &buf_cores[..n_cores]),
-        (b"Processeurs logiques", &buf_cores[..n_cores]),
-        (b"Processus", &buf_procs[..n_procs]),
-        (b"Dur\xE9e de fonctionnement", &buf_uptime[..n_uptime]),
+        (
+            tr4(&[
+                b"Vitesse de base",
+                b"Base speed",
+                b"Velocidad base",
+                b"Basisgeschwindigkeit",
+            ]),
+            b"2.40 GHz",
+        ),
+        (
+            tr4(&[b"Coeurs", b"Cores", b"N\xFAcleos", b"Kerne"]),
+            &buf_cores[..n_cores],
+        ),
+        (
+            tr4(&[
+                b"Processeurs logiques",
+                b"Logical processors",
+                b"Procesadores l\xF3gicos",
+                b"Logische Prozessoren",
+            ]),
+            &buf_cores[..n_cores],
+        ),
+        (
+            tr4(&[b"Processus", b"Processes", b"Procesos", b"Prozesse"]),
+            &buf_procs[..n_procs],
+        ),
+        (
+            tr4(&[
+                b"Dur\xE9e de fonctionnement",
+                b"Up time",
+                b"Tiempo activo",
+                b"Betriebszeit",
+            ]),
+            &buf_uptime[..n_uptime],
+        ),
     ];
 
-    draw_perf_graph(g, x, y, w, h, b"Processeur", &CPU_HIST, CPU_TOTAL, &details);
+    draw_perf_graph(
+        g,
+        x,
+        y,
+        w,
+        h,
+        tr4(&[b"Processeur", b"CPU", b"CPU", b"CPU"]),
+        &CPU_HIST,
+        CPU_TOTAL,
+        &details,
+    );
 }
 
 unsafe fn draw_perf_gpu(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32, slot: usize) {
@@ -1185,46 +1261,102 @@ unsafe fn draw_perf_gpu(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32, slot: usize
         }
     };
     if let Some(v) = gpu::num(i, b"load") {
-        add(b"Utilisation", &mut |l| {
-            l.num(v).push(b" %");
-        });
+        add(
+            tr4(&[b"Utilisation", b"Utilization", b"Uso", b"Auslastung"]),
+            &mut |l| {
+                l.num(v).push(b" %");
+            },
+        );
     }
     if let (Some(u), Some(t)) = (gpu::num(i, b"vram_used_mb"), gpu::num(i, b"vram_total_mb")) {
-        add(b"M\xE9moire GPU d\xE9di\xE9e", &mut |l| {
-            l.num(u).push(b" / ").num(t).push(b" Mo");
-        });
+        add(
+            tr4(&[
+                b"M\xE9moire GPU d\xE9di\xE9e",
+                b"Dedicated GPU memory",
+                b"Memoria de GPU dedicada",
+                b"Dedizierter GPU-Speicher",
+            ]),
+            &mut |l| {
+                l.num(u).push(b" / ").num(t).push(b" Mo");
+            },
+        );
     }
     if let Some(v) = gpu::num(i, b"temp_c") {
-        add(b"Temp\xE9rature", &mut |l| {
-            l.num(v).push(b" \xB0C");
-        });
+        add(
+            tr4(&[
+                b"Temp\xE9rature",
+                b"Temperature",
+                b"Temperatura",
+                b"Temperatur",
+            ]),
+            &mut |l| {
+                l.num(v).push(b" \xB0C");
+            },
+        );
     }
     if let Some(v) = gpu::num(i, b"freq_mhz") {
-        add(b"Fr\xE9quence", &mut |l| {
-            l.num(v).push(b" MHz");
-            if let Some(m) = gpu::num(i, b"freq_max_mhz") {
-                l.push(b" (max. ").num(m).push(b" MHz)");
-            }
-        });
+        add(
+            tr4(&[b"Fr\xE9quence", b"Frequency", b"Frecuencia", b"Frequenz"]),
+            &mut |l| {
+                l.num(v).push(b" MHz");
+                if let Some(m) = gpu::num(i, b"freq_max_mhz") {
+                    l.push(tr4(&[b" (max. ", b" (max. ", b" (m\xE1x. ", b" (max. "]))
+                        .num(m)
+                        .push(b" MHz)");
+                }
+            },
+        );
     }
     if let Some(v) = gpu::num(i, b"power_w") {
-        add(b"Consommation", &mut |l| {
-            l.num(v).push(b" W");
-        });
+        add(
+            tr4(&[
+                b"Consommation",
+                b"Power usage",
+                b"Consumo",
+                b"Leistungsaufnahme",
+            ]),
+            &mut |l| {
+                l.num(v).push(b" W");
+            },
+        );
     }
     if let Some(v) = gpu::num(i, b"encoder") {
-        add(b"Encodeur vid\xE9o", &mut |l| {
-            l.num(v).push(b" %");
-        });
+        add(
+            tr4(&[
+                b"Encodeur vid\xE9o",
+                b"Video encode",
+                b"Codificador de v\xEDdeo",
+                b"Video-Encoder",
+            ]),
+            &mut |l| {
+                l.num(v).push(b" %");
+            },
+        );
     }
     if let Some(v) = gpu::num(i, b"decoder") {
-        add(b"D\xE9codeur vid\xE9o", &mut |l| {
-            l.num(v).push(b" %");
-        });
+        add(
+            tr4(&[
+                b"D\xE9codeur vid\xE9o",
+                b"Video decode",
+                b"Decodificador de v\xEDdeo",
+                b"Video-Decoder",
+            ]),
+            &mut |l| {
+                l.num(v).push(b" %");
+            },
+        );
     }
-    add(b"Pilote", &mut |l| {
-        l.push(gpu::get(i, b"driver").unwrap_or(b"inconnu"));
-    });
+    add(
+        tr4(&[b"Pilote", b"Driver", b"Controlador", b"Treiber"]),
+        &mut |l| {
+            l.push(gpu::get(i, b"driver").unwrap_or(tr4(&[
+                b"inconnu",
+                b"unknown",
+                b"desconocido",
+                b"unbekannt",
+            ])));
+        },
+    );
     let mut details: [(&[u8], &[u8]); 8] = [(b"", b""); 8];
     for k in 0..n {
         details[k] = (labels[k], lines[k].get());
@@ -1250,28 +1382,94 @@ unsafe fn draw_perf_mem(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let n_avail = fmt_mem(&mut buf_avail, avail);
 
     let details: [(&[u8], &[u8]); 3] = [
-        (b"Utilis\xE9e", &buf_used[..n_used]),
-        (b"Disponible", &buf_avail[..n_avail]),
+        (
+            tr4(&[b"Utilis\xE9e", b"In use", b"En uso", b"In Verwendung"]),
+            &buf_used[..n_used],
+        ),
+        (
+            tr4(&[b"Disponible", b"Available", b"Disponible", b"Verf\xFCgbar"]),
+            &buf_avail[..n_avail],
+        ),
         (b"Total", &buf_total[..n_total]),
     ];
 
-    draw_perf_graph(g, x, y, w, h, b"M\xE9moire", &MEM_HIST, mem_pct, &details);
+    draw_perf_graph(
+        g,
+        x,
+        y,
+        w,
+        h,
+        tr4(&[b"M\xE9moire", b"Memory", b"Memoria", b"Arbeitsspeicher"]),
+        &MEM_HIST,
+        mem_pct,
+        &details,
+    );
 }
 
 unsafe fn draw_perf_disk(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let details: [(&[u8], &[u8]); 3] = [
-        (b"Temps actif", b"2 %"),
-        (b"Vitesse lecture", b"0 Mo/s"),
-        (b"Vitesse \xE9criture", b"0.1 Mo/s"),
+        (
+            tr4(&[
+                b"Temps actif",
+                b"Active time",
+                b"Tiempo activo",
+                b"Aktive Zeit",
+            ]),
+            b"2 %",
+        ),
+        (
+            tr4(&[
+                b"Vitesse lecture",
+                b"Read speed",
+                b"Velocidad de lectura",
+                b"Lesegeschwindigkeit",
+            ]),
+            tr4(&[b"0 Mo/s", b"0 MB/s", b"0 MB/s", b"0 MB/s"]),
+        ),
+        (
+            tr4(&[
+                b"Vitesse \xE9criture",
+                b"Write speed",
+                b"Velocidad de escritura",
+                b"Schreibgeschwindigkeit",
+            ]),
+            tr4(&[b"0.1 Mo/s", b"0.1 MB/s", b"0.1 MB/s", b"0.1 MB/s"]),
+        ),
     ];
-    draw_perf_graph(g, x, y, w, h, b"Disque 0 (SSD)", &DISK_HIST, 20, &details);
+    draw_perf_graph(
+        g,
+        x,
+        y,
+        w,
+        h,
+        tr4(&[
+            b"Disque 0 (SSD)",
+            b"Disk 0 (SSD)",
+            b"Disco 0 (SSD)",
+            b"Datentr\xE4ger 0 (SSD)",
+        ]),
+        &DISK_HIST,
+        20,
+        &details,
+    );
 }
 
 unsafe fn draw_perf_net(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let details: [(&[u8], &[u8]); 3] = [
-        (b"Envoi", b"0 Kbps"),
-        (b"R\xE9ception", b"12 Kbps"),
-        (b"Adresse IPv4", b"192.168.1.42"),
+        (tr4(&[b"Envoi", b"Send", b"Enviar", b"Senden"]), b"0 Kbps"),
+        (
+            tr4(&[b"R\xE9ception", b"Receive", b"Recibir", b"Empfangen"]),
+            b"12 Kbps",
+        ),
+        (
+            tr4(&[
+                b"Adresse IPv4",
+                b"IPv4 address",
+                b"Direcci\xF3n IPv4",
+                b"IPv4-Adresse",
+            ]),
+            b"192.168.1.42",
+        ),
     ];
     draw_perf_graph(g, x, y, w, h, b"Ethernet", &NET_HIST, 10, &details);
 }
@@ -1286,19 +1484,36 @@ unsafe fn draw_history(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         p.text,
         x + 16,
         y + 12,
-        b"Historique des applications",
+        tr4(&[
+            b"Historique des applications",
+            b"App history",
+            b"Historial de aplicaciones",
+            b"App-Verlauf",
+        ]),
     );
 
     let header_y = y + 48;
     fill(g.hdc, g.b, x, header_y, x + w, header_y + 28, p.surface);
-    text(g.hdc, g.f.small, p.text2, x + 16, header_y + 7, b"Nom");
+    text(
+        g.hdc,
+        g.f.small,
+        p.text2,
+        x + 16,
+        header_y + 7,
+        tr4(&[b"Nom", b"Name", b"Nombre", b"Name"]),
+    );
     text(
         g.hdc,
         g.f.small,
         p.text2,
         x + w / 2,
         header_y + 7,
-        b"Temps processeur",
+        tr4(&[
+            b"Temps processeur",
+            b"CPU time",
+            b"Tiempo de CPU",
+            b"CPU-Zeit",
+        ]),
     );
     text(
         g.hdc,
@@ -1306,15 +1521,45 @@ unsafe fn draw_history(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         p.text2,
         x + w * 3 / 4,
         header_y + 7,
-        b"R\xE9seau",
+        tr4(&[b"R\xE9seau", b"Network", b"Red", b"Netzwerk"]),
     );
 
     let apps: [(&[u8], &[u8], &[u8]); 5] = [
-        (b"Bureau Winlux", b"0:12:34", b"0 Mo"),
-        (b"Explorer", b"0:02:10", b"0 Mo"),
-        (b"Terminal", b"0:00:45", b"12 Mo"),
-        (b"Bloc-notes", b"0:00:08", b"0 Mo"),
-        (b"Param\xE8tres", b"0:00:02", b"0 Mo"),
+        (
+            tr4(&[
+                b"Bureau Winlux",
+                b"Winlux desktop",
+                b"Escritorio de Winlux",
+                b"Winlux-Desktop",
+            ]),
+            b"0:12:34",
+            tr4(&[b"0 Mo", b"0 MB", b"0 MB", b"0 MB"]),
+        ),
+        (
+            b"Explorer",
+            b"0:02:10",
+            tr4(&[b"0 Mo", b"0 MB", b"0 MB", b"0 MB"]),
+        ),
+        (
+            b"Terminal",
+            b"0:00:45",
+            tr4(&[b"12 Mo", b"12 MB", b"12 MB", b"12 MB"]),
+        ),
+        (
+            tr4(&[b"Bloc-notes", b"Notepad", b"Bloc de notas", b"Editor"]),
+            b"0:00:08",
+            tr4(&[b"0 Mo", b"0 MB", b"0 MB", b"0 MB"]),
+        ),
+        (
+            tr4(&[
+                b"Param\xE8tres",
+                b"Settings",
+                b"Configuraci\xF3n",
+                b"Einstellungen",
+            ]),
+            b"0:00:02",
+            tr4(&[b"0 Mo", b"0 MB", b"0 MB", b"0 MB"]),
+        ),
     ];
 
     for (i, &(name, cpu_time, net)) in apps.iter().enumerate() {
@@ -1346,19 +1591,31 @@ unsafe fn draw_startup(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         p.text,
         x + 16,
         y + 12,
-        b"Applications de d\xE9marrage",
+        tr4(&[
+            b"Applications de d\xE9marrage",
+            b"Startup apps",
+            b"Aplicaciones de arranque",
+            b"Autostart-Apps",
+        ]),
     );
 
     let header_y = y + 48;
     fill(g.hdc, g.b, x, header_y, x + w, header_y + 28, p.surface);
-    text(g.hdc, g.f.small, p.text2, x + 16, header_y + 7, b"Nom");
+    text(
+        g.hdc,
+        g.f.small,
+        p.text2,
+        x + 16,
+        header_y + 7,
+        tr4(&[b"Nom", b"Name", b"Nombre", b"Name"]),
+    );
     text(
         g.hdc,
         g.f.small,
         p.text2,
         x + w / 2,
         header_y + 7,
-        b"\xC9tat",
+        tr4(&[b"\xC9tat", b"Status", b"Estado", b"Status"]),
     );
     text(
         g.hdc,
@@ -1366,14 +1623,40 @@ unsafe fn draw_startup(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         p.text2,
         x + w * 3 / 4,
         header_y + 7,
-        b"Impact",
+        tr4(&[b"Impact", b"Impact", b"Impacto", b"Auswirkung"]),
     );
 
     let items: [(&[u8], &[u8], &[u8]); 4] = [
-        (b"Bureau Winlux", b"Activ\xE9", b"\xC9lev\xE9"),
-        (b"NetworkManager", b"Activ\xE9", b"Faible"),
-        (b"PulseAudio", b"Activ\xE9", b"Faible"),
-        (b"Bluetooth", b"D\xE9sactiv\xE9", b"Aucun"),
+        (
+            tr4(&[
+                b"Bureau Winlux",
+                b"Winlux desktop",
+                b"Escritorio de Winlux",
+                b"Winlux-Desktop",
+            ]),
+            tr4(&[b"Activ\xE9", b"Enabled", b"Habilitado", b"Aktiviert"]),
+            tr4(&[b"\xC9lev\xE9", b"High", b"Alto", b"Hoch"]),
+        ),
+        (
+            b"NetworkManager",
+            tr4(&[b"Activ\xE9", b"Enabled", b"Habilitado", b"Aktiviert"]),
+            tr4(&[b"Faible", b"Low", b"Bajo", b"Niedrig"]),
+        ),
+        (
+            b"PulseAudio",
+            tr4(&[b"Activ\xE9", b"Enabled", b"Habilitado", b"Aktiviert"]),
+            tr4(&[b"Faible", b"Low", b"Bajo", b"Niedrig"]),
+        ),
+        (
+            b"Bluetooth",
+            tr4(&[
+                b"D\xE9sactiv\xE9",
+                b"Disabled",
+                b"Deshabilitado",
+                b"Deaktiviert",
+            ]),
+            tr4(&[b"Aucun", b"None", b"Ninguno", b"Keine"]),
+        ),
     ];
 
     for (i, &(name, state, impact)) in items.iter().enumerate() {
@@ -1390,13 +1673,14 @@ unsafe fn draw_startup(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
             );
         }
         text(g.hdc, g.f.body, p.text, x + 16, ry + 6, name);
-        let state_color = if state == b"Activ\xE9" {
+        let state_color = if state == tr4(&[b"Activ\xE9", b"Enabled", b"Habilitado", b"Aktiviert"])
+        {
             rgb(0x60, 0xCD, 0x89)
         } else {
             p.text3
         };
         text(g.hdc, g.f.body, state_color, x + w / 2, ry + 6, state);
-        let impact_color = if impact == b"\xC9lev\xE9" {
+        let impact_color = if impact == tr4(&[b"\xC9lev\xE9", b"High", b"Alto", b"Hoch"]) {
             rgb(0xFF, 0x80, 0x40)
         } else {
             p.text2
@@ -1409,7 +1693,14 @@ unsafe fn draw_startup(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
 
 unsafe fn draw_users(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
     let p = pal();
-    text(g.hdc, g.f.title, p.text, x + 16, y + 12, b"Utilisateurs");
+    text(
+        g.hdc,
+        g.f.title,
+        p.text,
+        x + 16,
+        y + 12,
+        tr4(&[b"Utilisateurs", b"Users", b"Usuarios", b"Benutzer"]),
+    );
 
     let header_y = y + 48;
     fill(g.hdc, g.b, x, header_y, x + w, header_y + 28, p.surface);
@@ -1419,7 +1710,7 @@ unsafe fn draw_users(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         p.text2,
         x + 16,
         header_y + 7,
-        b"Utilisateur",
+        tr4(&[b"Utilisateur", b"User", b"Usuario", b"Benutzer"]),
     );
     text(
         g.hdc,
@@ -1427,7 +1718,7 @@ unsafe fn draw_users(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         p.text2,
         x + w / 3,
         header_y + 7,
-        b"\xC9tat",
+        tr4(&[b"\xC9tat", b"Status", b"Estado", b"Status"]),
     );
     text(
         g.hdc,
@@ -1435,7 +1726,7 @@ unsafe fn draw_users(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         p.text2,
         x + w / 2,
         header_y + 7,
-        b"Processeur",
+        tr4(&[b"Processeur", b"CPU", b"CPU", b"CPU"]),
     );
     text(
         g.hdc,
@@ -1443,13 +1734,20 @@ unsafe fn draw_users(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         p.text2,
         x + w * 3 / 4,
         header_y + 7,
-        b"M\xE9moire",
+        tr4(&[b"M\xE9moire", b"Memory", b"Memoria", b"Arbeitsspeicher"]),
     );
 
     let ry = header_y + 28;
     fill(g.hdc, g.b, x, ry, x + w, ry + 28, p.selected);
     text(g.hdc, g.f.body, p.text, x + 16, ry + 6, b"winlux");
-    text(g.hdc, g.f.body, p.text2, x + w / 3, ry + 6, b"Actif");
+    text(
+        g.hdc,
+        g.f.body,
+        p.text2,
+        x + w / 3,
+        ry + 6,
+        tr4(&[b"Actif", b"Active", b"Activo", b"Aktiv"]),
+    );
 
     let mut buf = [0u8; 16];
     let n = fmt_percent(&mut buf, CPU_TOTAL);
@@ -1462,7 +1760,14 @@ unsafe fn draw_users(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
 
 unsafe fn draw_details(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     let p = pal();
-    text(g.hdc, g.f.title, p.text, x + 16, y + 12, b"D\xE9tails");
+    text(
+        g.hdc,
+        g.f.title,
+        p.text,
+        x + 16,
+        y + 12,
+        tr4(&[b"D\xE9tails", b"Details", b"Detalles", b"Details"]),
+    );
 
     let header_y = y + 42;
     fill(g.hdc, g.b, x, header_y, x + w, header_y + 28, p.surface);
@@ -1479,7 +1784,7 @@ unsafe fn draw_details(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text2,
         x + col_pid_w,
         header_y + 7,
-        b"Nom",
+        tr4(&[b"Nom", b"Name", b"Nombre", b"Name"]),
     );
     text(
         g.hdc,
@@ -1487,7 +1792,7 @@ unsafe fn draw_details(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text2,
         x + col_pid_w + col_name_w,
         header_y + 7,
-        b"\xC9tat",
+        tr4(&[b"\xC9tat", b"Status", b"Estado", b"Status"]),
     );
     text(
         g.hdc,
@@ -1495,7 +1800,7 @@ unsafe fn draw_details(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text2,
         x + col_pid_w + col_name_w + col_status_w,
         header_y + 7,
-        b"Processeur",
+        tr4(&[b"Processeur", b"CPU", b"CPU", b"CPU"]),
     );
     text(
         g.hdc,
@@ -1503,7 +1808,7 @@ unsafe fn draw_details(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         p.text2,
         x + col_pid_w + col_name_w + col_status_w + col_cpu_w,
         header_y + 7,
-        b"M\xE9moire",
+        tr4(&[b"M\xE9moire", b"Memory", b"Memoria", b"Arbeitsspeicher"]),
     );
 
     let list_y = header_y + 28;
@@ -1545,12 +1850,17 @@ unsafe fn draw_details(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         );
 
         let status_str = match proc.status {
-            b'R' => b"En cours" as &[u8],
-            b'S' => b"Suspendu",
-            b'D' => b"Attente",
+            b'R' => tr4(&[
+                b"En cours",
+                b"Running",
+                b"En ejecuci\xF3n",
+                b"Wird ausgef\xFChrt",
+            ]) as &[u8],
+            b'S' => tr4(&[b"Suspendu", b"Suspended", b"Suspendido", b"Angehalten"]),
+            b'D' => tr4(&[b"Attente", b"Waiting", b"En espera", b"Wartend"]),
             b'Z' => b"Zombie",
-            b'T' => b"Arr\xEAt\xE9",
-            _ => b"Inconnu",
+            b'T' => tr4(&[b"Arr\xEAt\xE9", b"Stopped", b"Detenido", b"Beendet"]),
+            _ => tr4(&[b"Inconnu", b"Unknown", b"Desconocido", b"Unbekannt"]),
         };
         text(
             g.hdc,
@@ -1587,11 +1897,25 @@ unsafe fn draw_details(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
 
 unsafe fn draw_services(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
     let p = pal();
-    text(g.hdc, g.f.title, p.text, x + 16, y + 12, b"Services");
+    text(
+        g.hdc,
+        g.f.title,
+        p.text,
+        x + 16,
+        y + 12,
+        tr4(&[b"Services", b"Services", b"Servicios", b"Dienste"]),
+    );
 
     let header_y = y + 48;
     fill(g.hdc, g.b, x, header_y, x + w, header_y + 28, p.surface);
-    text(g.hdc, g.f.small, p.text2, x + 16, header_y + 7, b"Nom");
+    text(
+        g.hdc,
+        g.f.small,
+        p.text2,
+        x + 16,
+        header_y + 7,
+        tr4(&[b"Nom", b"Name", b"Nombre", b"Name"]),
+    );
     text(g.hdc, g.f.small, p.text2, x + w / 3, header_y + 7, b"PID");
     text(
         g.hdc,
@@ -1599,7 +1923,12 @@ unsafe fn draw_services(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         p.text2,
         x + w / 2,
         header_y + 7,
-        b"Description",
+        tr4(&[
+            b"Description",
+            b"Description",
+            b"Descripci\xF3n",
+            b"Beschreibung",
+        ]),
     );
     text(
         g.hdc,
@@ -1607,16 +1936,106 @@ unsafe fn draw_services(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         p.text2,
         x + w * 5 / 6,
         header_y + 7,
-        b"\xC9tat",
+        tr4(&[b"\xC9tat", b"Status", b"Estado", b"Status"]),
     );
 
     let services: [(&[u8], &[u8], &[u8], &[u8]); 6] = [
-        (b"systemd", b"1", b"Gestionnaire de services", b"En cours"),
-        (b"NetworkManager", b"500", b"Gestion r\xE9seau", b"En cours"),
-        (b"pulseaudio", b"600", b"Serveur audio", b"En cours"),
-        (b"dbus-daemon", b"310", b"Bus de messages", b"En cours"),
-        (b"udisksd", b"700", b"Gestionnaire de disques", b"En cours"),
-        (b"thermald", b"950", b"Gestion thermique", b"En cours"),
+        (
+            b"systemd",
+            b"1",
+            tr4(&[
+                b"Gestionnaire de services",
+                b"Service manager",
+                b"Administrador de servicios",
+                b"Dienstverwaltung",
+            ]),
+            tr4(&[
+                b"En cours",
+                b"Running",
+                b"En ejecuci\xF3n",
+                b"Wird ausgef\xFChrt",
+            ]),
+        ),
+        (
+            b"NetworkManager",
+            b"500",
+            tr4(&[
+                b"Gestion r\xE9seau",
+                b"Network management",
+                b"Administraci\xF3n de red",
+                b"Netzwerkverwaltung",
+            ]),
+            tr4(&[
+                b"En cours",
+                b"Running",
+                b"En ejecuci\xF3n",
+                b"Wird ausgef\xFChrt",
+            ]),
+        ),
+        (
+            b"pulseaudio",
+            b"600",
+            tr4(&[
+                b"Serveur audio",
+                b"Audio server",
+                b"Servidor de audio",
+                b"Audioserver",
+            ]),
+            tr4(&[
+                b"En cours",
+                b"Running",
+                b"En ejecuci\xF3n",
+                b"Wird ausgef\xFChrt",
+            ]),
+        ),
+        (
+            b"dbus-daemon",
+            b"310",
+            tr4(&[
+                b"Bus de messages",
+                b"Message bus",
+                b"Bus de mensajes",
+                b"Nachrichtenbus",
+            ]),
+            tr4(&[
+                b"En cours",
+                b"Running",
+                b"En ejecuci\xF3n",
+                b"Wird ausgef\xFChrt",
+            ]),
+        ),
+        (
+            b"udisksd",
+            b"700",
+            tr4(&[
+                b"Gestionnaire de disques",
+                b"Disk manager",
+                b"Administrador de discos",
+                b"Datentr\xE4gerverwaltung",
+            ]),
+            tr4(&[
+                b"En cours",
+                b"Running",
+                b"En ejecuci\xF3n",
+                b"Wird ausgef\xFChrt",
+            ]),
+        ),
+        (
+            b"thermald",
+            b"950",
+            tr4(&[
+                b"Gestion thermique",
+                b"Thermal management",
+                b"Gesti\xF3n t\xE9rmica",
+                b"Temperaturverwaltung",
+            ]),
+            tr4(&[
+                b"En cours",
+                b"Running",
+                b"En ejecuci\xF3n",
+                b"Wird ausgef\xFChrt",
+            ]),
+        ),
     ];
 
     for (i, &(name, pid, desc, state)) in services.iter().enumerate() {
@@ -1635,7 +2054,13 @@ unsafe fn draw_services(g: &mut Gfx, x: i32, y: i32, w: i32, _h: i32) {
         text(g.hdc, g.f.body, p.text, x + 16, ry + 6, name);
         text(g.hdc, g.f.body, p.text2, x + w / 3, ry + 6, pid);
         text(g.hdc, g.f.body, p.text2, x + w / 2, ry + 6, desc);
-        let state_color = if state == b"En cours" {
+        let state_color = if state
+            == tr4(&[
+                b"En cours",
+                b"Running",
+                b"En ejecuci\xF3n",
+                b"Wird ausgef\xFChrt",
+            ]) {
             rgb(0x60, 0xCD, 0x89)
         } else {
             p.text3

@@ -1,0 +1,7 @@
+{
+  "id": "scoop-extras",
+  "name": "Scoop Extras",
+  "format": "scoop",
+  "url": "https://github.com/ScoopInstaller/Extras/archive/refs/heads/master.tar.gz",
+  "about": "Dépôt communautaire libre (domaine public), sans compte. Seules les applications 64 bits avec empreinte et sans script PowerShell sont proposées. Mettre \"enabled\": false pour le masquer."
+}

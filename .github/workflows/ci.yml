@@ -165,6 +165,12 @@ jobs:
           sh scripts/test-display.sh
           sh scripts/test-speak.sh
 
+      - name: Valider sauvegarde, sessions et bureau à distance
+        run: |
+          sh scripts/test-backup.sh
+          sh scripts/test-sessions.sh
+          sh scripts/test-remote.sh
+
   # 3. Compile les .exe Windows puis les exécute sous Winlux.
   runtime-tests:
     name: Tests runtime (PE)

@@ -94,11 +94,19 @@ cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
 cp "$root/scripts/winlux-prime-run.sh" "$stage/usr/bin/winlux-prime-run"
 chmod 755 "$stage/usr/bin/winlux-prime-run"
+# Historique des fichiers, sessions multi-utilisateur, bureau à distance
+cp "$root/scripts/winlux-backup.sh" "$stage/usr/bin/winlux-backup"
+cp "$root/scripts/winlux-sessions.sh" "$stage/usr/bin/winlux-sessions"
+cp "$root/scripts/winlux-remote-config.sh" "$stage/usr/bin/winlux-remote-config"
+cp "$root/target/release/winlux-remote" "$stage/usr/bin/winlux-remote"
+chmod 755 "$stage/usr/bin/winlux-backup" "$stage/usr/bin/winlux-sessions" "$stage/usr/bin/winlux-remote-config" "$stage/usr/bin/winlux-remote"
 mkdir -p "$stage/usr/share/winlux"
 # Store de logiciels et gestionnaire de polices du shell.
 cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
 cp "$root/scripts/winlux-fonts.sh" "$stage/usr/bin/winlux-fonts"
 cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.txt"
+mkdir -p "$stage/etc/winlux/store-sources.d"
+cp "$root/integration/store-sources.d/"*.json "$stage/etc/winlux/store-sources.d/"
 chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts"
 cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
 cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
@@ -171,7 +179,7 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -233,6 +241,7 @@ zstd -q -d -c "$usbhid_module" >"$stage/lib/modules/$kernel_release/usbhid.ko"
 zstd -q -d -c "$hid_generic_module" >"$stage/lib/modules/$kernel_release/hid-generic.ko"
 chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/xrandr" "$stage/usr/bin/Xorg"
 copy_shared_libraries "$root/target/release/winlux"
+copy_shared_libraries "$root/target/release/winlux-remote"
 sh "$root/scripts/copy-audio-libraries.sh" "$stage"
 sh "$root/scripts/stage-media.sh" "$stage" "$root"
 copy_shared_libraries /usr/bin/Xvfb
@@ -618,6 +627,13 @@ fi
         /bin/busybox sleep 1800
     done
 ) &
+(
+    # Historique des fichiers : chaque utilisateur selon sa fréquence.
+    while :; do
+        /usr/bin/winlux-backup auto-run >>/run/winlux/backup-auto.log 2>&1 || true
+        /bin/busybox sleep 60
+    done
+) &
 
 if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     echo "Winlux desktop preview: starting Xorg"
@@ -640,6 +656,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /bin/busybox cat /run/winlux/native-session.log >&2
         /bin/sh
     fi
+    # Bureau à distance : relancé au démarrage s'il était activé.
+    DISPLAY=:0 /usr/bin/winlux-remote-config ensure >/dev/null 2>&1 || true
     # Tâches planifiées « à l'ouverture de session ».
     /usr/bin/winlux --tasks fire logon >>/run/winlux/tasks.log 2>&1 &
     (

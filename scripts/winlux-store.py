@@ -22,6 +22,7 @@ leurs verrous : apt update / apt upgrade en terminal restent inchangés.
 import gzip
 import hashlib
 import html
+import io
 import http.client
 import json
 import os
@@ -29,13 +30,16 @@ from pathlib import Path
 import re
 import shutil
 import socket
+import struct
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
+import zipfile
 
 ROOT = os.environ.get("WINLUX_CONTROL_ROOT", "")
 RUN = Path(ROOT + "/run/winlux")
@@ -46,7 +50,85 @@ STATE = DATA / "winlux/store-state.json"
 CONFIG_DIRS = [Path(ROOT + "/etc/winlux/store-sources.d"),
                Path(os.environ.get("XDG_CONFIG_HOME", HOME / ".config")) / "winlux/store-sources.d"]
 CATALOG = Path(os.environ.get("WINLUX_STORE_CATALOG", ROOT + "/usr/share/winlux/store-catalog.txt"))
-LANG = "en" if os.environ.get("WINLUX_LANG", os.environ.get("LANG", "fr")).startswith("en") else "fr"
+def interface_lang():
+    """Langue de l'interface : WINLUX_LANG, sinon /etc/winlux/locale.conf
+    (Paramètres > Langue), sinon LANG ; fr, en, es ou de."""
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            for line in Path(ROOT + "/etc/winlux/locale.conf").read_text().splitlines():
+                if line.startswith("LANG="):
+                    code = line[5:].strip()
+        except OSError:
+            pass
+    code = (code or os.environ.get("LANG", "fr"))[:2].lower()
+    return code if code in ("fr", "en", "es", "de") else "fr"
+
+
+LANG = interface_lang()
+
+# Messages relus et affichés par le Store (store-progress.txt).
+T = {
+    "fr": {"busy": "Une installation est déjà en cours.", "preparing": "Préparation...",
+           "all_software": "Tous les logiciels", "unknown": "Logiciel inconnu : {target}",
+           "installed": "{name} est installé.", "removed": "{name} est désinstallé.",
+           "updated": "{name} est à jour.", "all_updated": "{name} sont à jour.",
+           "failed": "Échec ({code}) : voir {log}", "not_found": "Fichier introuvable : {path}",
+           "installing": "Installation de {name}...", "install_failed": "Installation impossible : {error}",
+           "offline": "Téléchargement impossible : vérifiez la connexion réseau.",
+           "win32": "Programme Windows 32 bits : pas encore pris en charge par le runtime Winlux.",
+           "admin": "Droits administrateur requis pour installer des logiciels.",
+           "sha": "Empreinte SHA-256 invalide : installateur refusé.",
+           "latest": "Recherche de la dernière version...", "download": "Téléchargement de {name}...",
+           "runtime": "Installation de {name} avec le runtime Winlux...",
+           "installed_version": "installé"},
+    "en": {"busy": "An installation is already running.", "preparing": "Preparing...",
+           "all_software": "All software", "unknown": "Unknown software: {target}",
+           "installed": "{name} is installed.", "removed": "{name} is uninstalled.",
+           "updated": "{name} is up to date.", "all_updated": "{name} is up to date.",
+           "failed": "Failed ({code}): see {log}", "not_found": "File not found: {path}",
+           "installing": "Installing {name}...", "install_failed": "Installation failed: {error}",
+           "offline": "Download failed: check the network connection.",
+           "win32": "32-bit Windows program: not supported by the Winlux runtime yet.",
+           "admin": "Administrator rights are required to install software.",
+           "sha": "Invalid SHA-256 fingerprint: installer rejected.",
+           "latest": "Looking for the latest version...", "download": "Downloading {name}...",
+           "runtime": "Installing {name} with the Winlux runtime...",
+           "installed_version": "installed"},
+    "es": {"busy": "Ya hay una instalación en curso.", "preparing": "Preparando...",
+           "all_software": "Todo el software", "unknown": "Software desconocido: {target}",
+           "installed": "{name} está instalado.", "removed": "{name} está desinstalado.",
+           "updated": "{name} está actualizado.", "all_updated": "{name} está actualizado.",
+           "failed": "Error ({code}): consulte {log}", "not_found": "Archivo no encontrado: {path}",
+           "installing": "Instalando {name}...", "install_failed": "No se pudo instalar: {error}",
+           "offline": "No se pudo descargar: compruebe la conexión de red.",
+           "win32": "Programa de Windows de 32 bits: el runtime de Winlux aún no lo admite.",
+           "admin": "Se necesitan derechos de administrador para instalar software.",
+           "sha": "Huella SHA-256 no válida: instalador rechazado.",
+           "latest": "Buscando la última versión...", "download": "Descargando {name}...",
+           "runtime": "Instalando {name} con el runtime de Winlux...",
+           "installed_version": "instalado"},
+    "de": {"busy": "Es läuft bereits eine Installation.", "preparing": "Vorbereitung...",
+           "all_software": "Alle Programme", "unknown": "Unbekannte Software: {target}",
+           "installed": "{name} ist installiert.", "removed": "{name} ist deinstalliert.",
+           "updated": "{name} ist auf dem neuesten Stand.",
+           "all_updated": "{name} sind auf dem neuesten Stand.",
+           "failed": "Fehlgeschlagen ({code}): siehe {log}", "not_found": "Datei nicht gefunden: {path}",
+           "installing": "{name} wird installiert...", "install_failed": "Installation fehlgeschlagen: {error}",
+           "offline": "Download fehlgeschlagen: Überprüfen Sie die Netzwerkverbindung.",
+           "win32": "32-Bit-Windows-Programm: von der Winlux-Laufzeit noch nicht unterstützt.",
+           "admin": "Zum Installieren von Software sind Administratorrechte erforderlich.",
+           "sha": "Ungültiger SHA-256-Fingerabdruck: Installationsprogramm abgelehnt.",
+           "latest": "Neueste Version wird gesucht...", "download": "{name} wird heruntergeladen...",
+           "runtime": "{name} wird mit der Winlux-Laufzeit installiert...",
+           "installed_version": "installiert"},
+}
+
+
+def tr(key, **values):
+    text = T[LANG].get(key) or T["fr"][key]
+    return text.format(**values) if values else text
+
 OFFLINE = os.environ.get("WINLUX_STORE_OFFLINE") == "1"
 REMOTE_TTL = 6 * 3600
 MAX_INDEX = 2500
@@ -745,7 +827,7 @@ class Flatpak(Source):
         for line in out.splitlines():
             p = line.split("\t")
             if p and p[0]:
-                res[p[0]] = p[1] if len(p) > 1 and p[1] else "installé"
+                res[p[0]] = p[1] if len(p) > 1 and p[1] else tr("installed_version")
         return res
 
     def updates(self):
@@ -972,7 +1054,7 @@ class AppImage(Source):
         app = next((a for a in self.apps() if a.ref == ref), None)
         if app is None:
             return 2
-        progress(5, "Recherche de la dernière version...")
+        progress(5, tr("latest"))
         tag, url = self.latest(app.github)
         if not url:
             return 3
@@ -1019,8 +1101,10 @@ class WindowsCatalog:
     Chaque fichier JSON de store-sources.d déclare une source :
       {"id": "winlux", "name": "Catalogue Winlux", "format": "winlux",
        "url": "https://.../catalog.json"}   (ou "file": "/chemin/catalog.json")
-    Le format « winlux » est décrit dans docs/STORE.md. D'autres formats
-    s'ajoutent en enregistrant un adaptateur dans FORMATS, sans toucher au Store.
+    Formats livrés : « winlux » (docs/STORE.md) et « scoop » (archive .tar.gz
+    d'un dépôt de manifestes Scoop). D'autres formats s'ajoutent en
+    enregistrant un adaptateur dans FORMATS (octets -> fiches au format
+    winlux), sans toucher au reste du Store.
     """
     FORMATS = {}
 
@@ -1036,31 +1120,182 @@ class WindowsCatalog:
             except OSError:
                 return None
         if self.conf.get("url"):
-            return cached_fetch(self.conf["url"], f"windows-{self.id}.json", force=force)
+            return cached_fetch(self.conf["url"], f"windows-{self.id}.data", force=force)
         return None
 
     def entries(self, force=False):
-        data = self.raw(force)
         adapter = self.FORMATS.get(self.conf.get("format", "winlux"))
-        if not data or adapter is None:
+        if adapter is None:
             return []
+        data = self.raw(force)
+        if not data:
+            return []
+        # Les fiches converties sont gardées tant que le catalogue ne change pas.
+        digest = hashlib.sha256(data).hexdigest()[:16]
+        memo = CACHE / "remote" / f"windows-{self.id}.entries.json"
+        cached = load_json(memo, None)
+        if isinstance(cached, dict) and cached.get("digest") == digest:
+            return cached.get("apps", [])
         try:
-            return adapter(json.loads(data))
-        except (ValueError, TypeError, AttributeError):
+            apps = [a for a in adapter(data) if valid_windows_entry(a)]
+        except (ValueError, TypeError, AttributeError, KeyError, OSError, EOFError, tarfile.TarError):
             return []
+        memo.parent.mkdir(parents=True, exist_ok=True)
+        atomic_write(memo, json.dumps({"digest": digest, "apps": apps}, ensure_ascii=False))
+        return apps
 
 
-def winlux_format(doc):
+INSTALLER_TYPES = ("exe", "msi", "zip", "portable")
+
+def valid_windows_entry(a):
+    """Une fiche sans empreinte SHA-256 (ou SHA-512) n'est jamais installée."""
+    inst = a.get("installer") if isinstance(a, dict) else None
+    if not (isinstance(inst, dict) and a.get("id") and a.get("name") and inst.get("url")):
+        return False
+    if inst.get("type", "exe") not in INSTALLER_TYPES:
+        return False
+    return bool(re.fullmatch(r"[0-9a-fA-F]{64}", inst.get("sha256", ""))
+                or re.fullmatch(r"[0-9a-fA-F]{128}", inst.get("sha512", "")))
+
+def winlux_format(data):
     """Format Winlux : {"apps": [{id, name, version, installer: {url, sha256}}...]}."""
-    out = []
-    for a in doc.get("apps", []):
-        inst = a.get("installer") or {}
-        if not (a.get("id") and a.get("name") and inst.get("url") and re.fullmatch(r"[0-9a-fA-F]{64}", inst.get("sha256", ""))):
-            continue  # une fiche sans empreinte SHA-256 n'est jamais installée
-        out.append(a)
-    return out
+    return json.loads(data).get("apps", [])
 
 WindowsCatalog.FORMATS["winlux"] = winlux_format
+
+WORDS = ((("browser", "navigateur", "web browser"), "navigateurs"),
+         (("game", "emulator", "jeu ", "chess", "minecraft"), "jeux"),
+         (("editor for code", "code editor", "ide", "developer", "programming", "git ", "git client",
+           "compiler", "debugger", "database", "sql", "api ", "json", "regex", "hex editor"), "developpement"),
+         (("office", "pdf", "document", "spreadsheet", "note", "markdown", "ebook", "e-book",
+           "text editor", "writer", "calendar", "mail", "email"), "bureautique"),
+         (("video", "audio", "music", "image", "photo", "media", "player", "paint", "drawing",
+           "graphic", "3d", "screenshot", "recorder", "podcast", "stream"), "multimedia"))
+
+def category_from_text(text):
+    text = f" {text.lower()} "
+    for words, cat in WORDS:
+        if any(w in text for w in words):
+            return cat
+    return "utilitaires"
+
+def scoop_format(data):
+    """Dépôt Scoop (archive .tar.gz de manifestes JSON), applications
+    graphiques 64 bits seulement : un fichier .zip, .msi ou .exe portable
+    avec empreinte, et sans script PowerShell d'installation."""
+    out = []
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:*") as tar:
+        for count, member in enumerate(tar):
+            if count > 20000:
+                break
+            if not (member.isfile() and member.name.endswith(".json") and "/bucket/" in member.name
+                    and member.size < 512 * 1024):
+                continue
+            try:
+                m = json.loads(tar.extractfile(member).read().decode("utf-8-sig"))
+            except (ValueError, UnicodeError, AttributeError):
+                continue
+            entry = scoop_entry(Path(member.name).stem, m)
+            if entry:
+                out.append(entry)
+    return out
+
+def scoop_entry(app_id, m):
+    if not isinstance(m, dict):
+        return None
+    arch = (m.get("architecture") or {}).get("64bit")
+    if not isinstance(arch, dict):
+        return None  # le runtime Winlux n'exécute que des programmes 64 bits
+
+    def get(key):
+        return arch.get(key, m.get(key))
+
+    if any(get(k) for k in ("installer", "pre_install", "depends", "uninstaller")):
+        return None  # scripts PowerShell non exécutés
+    url, digest, shortcuts = get("url"), get("hash"), get("shortcuts")
+    if isinstance(url, list):
+        if len(url) != 1:
+            return None
+        url, digest = url[0], digest[0] if isinstance(digest, list) else digest
+    if not (isinstance(url, str) and isinstance(digest, str) and isinstance(shortcuts, list) and shortcuts):
+        return None
+    kind, algo = digest.split(":", 1) if ":" in digest else ("sha256", digest)
+    if kind not in ("sha256", "sha512"):
+        return None
+    name_part = url.split("#/")[-1].split("?")[0]
+    ext = name_part.rsplit(".", 1)[-1].lower() if "." in name_part.rsplit("/", 1)[-1] else ""
+    if get("innosetup"):
+        return None  # installateurs Inno Setup 32 bits
+    itype = {"zip": "zip", "msi": "msi", "exe": "portable"}.get(ext)
+    if not itype:
+        return None
+    first = shortcuts[0] if isinstance(shortcuts[0], list) else []
+    name = first[1] if len(first) > 1 and isinstance(first[1], str) else app_id
+    license_ = m.get("license")
+    if isinstance(license_, dict):
+        license_ = license_.get("identifier", "")
+    desc = str(m.get("description", ""))
+    homepage = str(m.get("homepage", ""))
+    parsed = urllib.parse.urlparse(homepage)
+    publisher = parsed.hostname or ""
+    if publisher in ("github.com", "gitlab.com", "codeberg.org", "sourceforge.net"):
+        parts = [p for p in parsed.path.split("/") if p]
+        publisher = parts[1] if publisher == "sourceforge.net" and len(parts) > 1 else (parts[0] if parts else publisher)
+    return {
+        "id": app_id, "name": name, "version": str(m.get("version", "")),
+        "summary": desc[:160], "description": [desc] if desc else [],
+        "category": category_from_text(f"{name} {desc}"),
+        "publisher": publisher.removeprefix("www."), "license": str(license_ or ""),
+        "homepage": homepage,
+        "releases": [{"version": str(m.get("version", ""))}],
+        "installer": {
+            "url": url.split("#")[0], kind: algo.lower(), "type": itype,
+            "file": Path(name_part).name or f"{app_id}.{ext}",
+            "extract_dir": str(get("extract_dir") or ""),
+            "shortcuts": [s[:3] for s in shortcuts if isinstance(s, list) and len(s) >= 2
+                          and all(isinstance(x, str) for x in s[:3])][:8],
+        },
+    }
+
+WindowsCatalog.FORMATS["scoop"] = scoop_format
+
+
+def pe_is_64bit(path):
+    """Vrai pour un exécutable PE32+ x86-64 (le seul que le runtime exécute)."""
+    try:
+        with open(path, "rb") as f:
+            head = f.read(4096)
+        off = int.from_bytes(head[0x3C:0x40], "little")
+        return head[:2] == b"MZ" and head[off:off + 4] == b"PE\0\0" and head[off + 4:off + 6] == b"\x64\x86"
+    except (OSError, ValueError):
+        return False
+
+def write_shortcut(path, target, args="", workdir=""):
+    """Raccourci .lnk minimal (lu par l'Explorateur et winlux-applications)."""
+    flags = 0x08 | 0x80 | (0x10 if workdir else 0) | (0x20 if args else 0)
+    head = struct.pack("<I16sIIQQQIiIHHII", 0x4C,
+                       bytes.fromhex("0114020000000000C000000000000046"),
+                       flags, 0x20, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0)
+    body = b""
+    for s in (target, workdir, args):
+        if s:
+            raw = s.encode("utf-16-le")
+            body += struct.pack("<H", len(raw) // 2) + raw
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(head + body)
+
+def windows_path(path):
+    drive_c = Path(os.environ.get("WINLUX_DRIVE_C", HOME))
+    try:
+        return "C:\\" + str(path.relative_to(drive_c)).replace("/", "\\")
+    except ValueError:
+        return "Z:" + str(path).replace("/", "\\")
+
+DRIVE_C = Path(os.environ.get("WINLUX_DRIVE_C", HOME))
+START_MENU = DRIVE_C / "AppData/Roaming/Microsoft/Windows/Start Menu/Programs"
+
+def safe_name(name):
+    return re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(". ") or "Application"
 
 
 class Windows(Source):
@@ -1106,19 +1341,35 @@ class Windows(Source):
         app = next((a for a in self.apps() if a.ref == ref), None)
         if app is None:
             return 2
-        progress(5, f"Téléchargement de {app.name}...")
-        data = fetch(app.installer["url"], 600, 4 << 30)
-        if not data or hashlib.sha256(data).hexdigest().lower() != app.installer["sha256"].lower():
-            progress(0, "Empreinte SHA-256 invalide : installateur refusé.")
-            return 5
-        ext = ".msi" if app.installer.get("type") == "msi" or app.installer["url"].lower().endswith(".msi") else ".exe"
+        inst = app.installer
+        progress(5, tr("download", name=app.name))
+        data = fetch(inst["url"], 600, 4 << 30)
+        if inst.get("sha512"):
+            ok = data is not None and hashlib.sha512(data).hexdigest() == inst["sha512"].lower()
+        else:
+            ok = data is not None and hashlib.sha256(data).hexdigest() == inst.get("sha256", "").lower()
+        if not ok:
+            progress(0, tr("sha"))
+            return 5 if data is not None else 7
+        kind = inst.get("type", "exe")
+        ext = {"msi": ".msi", "zip": ".zip"}.get(kind, ".exe")
+        if kind == "exe" and inst["url"].lower().endswith(".msi"):
+            kind, ext = "msi", ".msi"
         path = CACHE / "installers" / f"{ref.replace('/', '_')}{ext}"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(data)
-        code = install_windows_file(path, progress, [str(x) for x in app.installer.get("args", [])])
+        state = load_json(STATE, {})
+        old = state.get("windows", {}).get(ref)
+        if old and old.get("files"):
+            remove_files(old)  # mise à jour d'une application portable
+        entry = {"version": app.available, "name": app.name}
+        if kind in ("zip", "portable"):
+            code = install_portable(app, path, kind, entry, progress)
+        else:
+            code = install_windows_file(path, progress, [str(x) for x in inst.get("args", [])], entry)
         if code == 0:
             state = load_json(STATE, {})
-            state.setdefault("windows", {})[ref] = {"version": app.available, "name": app.name}
+            state.setdefault("windows", {})[ref] = entry
             save_state(state)
         return code
 
@@ -1127,13 +1378,22 @@ class Windows(Source):
         entry = state.get("windows", {}).get(ref)
         if entry is None:
             return 2
-        uninstaller = entry.get("uninstaller")
-        if uninstaller and Path(uninstaller).is_file():
-            code = run(["winlux", uninstaller], 1800)[0]
-            if code != 0:
+        if entry.get("msi"):
+            code = run(["winlux", "--msiexec", "/x", entry["msi"], "/qn"], 1800)[0]
+            if code not in (0, 1605 & 0xFF):
                 return code
+        elif entry.get("files"):
+            remove_files(entry)
+        else:
+            uninstaller = entry.get("uninstaller")
+            if uninstaller and Path(uninstaller).is_file():
+                code = run(["winlux", uninstaller], 1800)[0]
+                if code != 0:
+                    return code
         state["windows"].pop(ref, None)
         save_state(state)
+        if have("winlux-applications"):
+            run(["winlux-applications", "refresh"], 120)
         return 0
 
     def update(self, refs, progress):
@@ -1144,15 +1404,73 @@ class Windows(Source):
         return self.update(apps, progress) if apps else 0
 
 
-def install_windows_file(path, progress, args=()):
-    """Lance un installateur .exe ou .msi avec le runtime Winlux."""
-    progress(15, f"Installation de {path.name} avec le runtime Winlux...")
-    if path.suffix.lower() == ".msi":
-        drive_c = Path(os.environ.get("WINLUX_DRIVE_C", HOME))
-        msiexec = drive_c / "windows/system32/msiexec.exe"
-        if not msiexec.is_file():
-            return 3
-        cmd = ["winlux", str(msiexec), "/i", str(path), *args]
+def remove_files(entry):
+    for f in entry.get("shortcuts", []):
+        try:
+            Path(f).unlink()
+        except OSError:
+            pass
+    target = entry.get("files")
+    if target and Path(target).is_dir() and DRIVE_C in Path(target).parents:
+        shutil.rmtree(target, ignore_errors=True)
+
+def install_portable(app, path, kind, entry, progress):
+    """Application portable (.zip ou .exe) : C:\\Program Files\\<nom> et
+    raccourcis du menu Démarrer, sans exécuter d'installateur."""
+    inst = app.installer
+    dest = DRIVE_C / "Program Files" / safe_name(app.name)
+    tmp = dest.with_name(dest.name + ".winlux-tmp")
+    shutil.rmtree(tmp, ignore_errors=True)
+    tmp.mkdir(parents=True)
+    progress(40, tr("installing", name=app.name))
+    try:
+        if kind == "zip":
+            with zipfile.ZipFile(path) as z:
+                total = 0
+                for info in z.infolist():
+                    total += info.file_size
+                    target = (tmp / info.filename).resolve()
+                    if total > 8 << 30 or tmp.resolve() not in target.parents and target != tmp.resolve():
+                        raise ValueError("archive refusée")
+                z.extractall(tmp)
+            sub = inst.get("extract_dir", "").strip("/\\")
+            root = tmp / sub.replace("\\", "/") if sub else tmp
+            if not root.is_dir():
+                raise ValueError("dossier extract_dir absent")
+        else:
+            root = tmp
+            shutil.copy2(path, tmp / safe_name(inst.get("file") or f"{app.ref.split('/')[-1]}.exe"))
+        shortcuts = inst.get("shortcuts") or []
+        exes = [root / s[0].replace("\\", "/") for s in shortcuts]
+        if exes and not any(pe_is_64bit(e) for e in exes):
+            progress(0, tr("win32"))
+            return 8
+        shutil.rmtree(dest, ignore_errors=True)
+        root.rename(dest)
+    except (OSError, ValueError, zipfile.BadZipFile) as e:
+        progress(0, tr("install_failed", error=e))
+        return 1
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    links = []
+    for s in inst.get("shortcuts") or []:
+        exe = dest / s[0].replace("\\", "/")
+        if not exe.is_file():
+            continue
+        link = START_MENU / f"{safe_name(s[1])}.lnk"
+        write_shortcut(link, windows_path(exe), s[2] if len(s) > 2 else "", windows_path(exe.parent))
+        links.append(str(link))
+    entry.update({"files": str(dest), "shortcuts": links})
+    if have("winlux-applications"):
+        run(["winlux-applications", "refresh"], 120)
+    return 0
+
+def install_windows_file(path, progress, args=(), entry=None):
+    """Lance un installateur .exe, ou le msiexec intégré au runtime pour un .msi."""
+    progress(15, tr("runtime", name=path.name))
+    msi = path.suffix.lower() == ".msi"
+    if msi:
+        cmd = ["winlux", "--msiexec", "/i", str(path), "/qn", *args]
     else:
         cmd = ["winlux", str(path), *args]
     with open(RUN / "store.log", "ab") as log:
@@ -1161,6 +1479,11 @@ def install_windows_file(path, progress, args=()):
                                   stdin=subprocess.DEVNULL).returncode
         except OSError:
             code = 127
+    if code == 0 and msi and entry is not None:
+        info = run(["winlux", "--msiexec", "--info", str(path)], 60)
+        product = info[1].split("\t")[0].strip() if info[0] == 0 and info[1] else ""
+        if product.startswith("{"):
+            entry["msi"] = product
     if have("winlux-applications"):
         run(["winlux-applications", "refresh"], 120)
     return code
@@ -1345,9 +1668,7 @@ class Progress:
                      f"op={self.op}\ntarget={field(self.target)}\nstate={state}\n"
                      f"percent={max(0, min(100, int(percent)))}\nmessage={field(message, 200)}\n")
 
-MESSAGES = {126: "Droits administrateur requis pour installer des logiciels.",
-            3: "Les paquets .msi demandent msiexec, pas encore fourni par le runtime Winlux.",
-            5: "Empreinte SHA-256 invalide : installateur refusé."}
+MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha"}
 
 def operate(action, target):
     progress = Progress(action, target)
@@ -1355,32 +1676,34 @@ def operate(action, target):
     try:
         lock.mkdir(parents=True)
     except FileExistsError:
-        progress(0, "Une installation est déjà en cours.", "error")
+        progress(0, tr("busy"), "error")
         return 1
     try:
-        progress(0, "Préparation...")
+        progress(0, tr("preparing"))
         if action == "install-file":
             code = install_file(target, progress)
             name = os.path.basename(target.replace("\\", "/"))
         elif action == "update-all":
-            code, name = 0, "Tous les logiciels"
+            code, name = 0, tr("all_software")
             for s in SOURCES:
                 if s.available():
                     code = s.update_all(progress) or code
         else:
             src, app = find(target)
             if app is None:
-                progress(0, f"Logiciel inconnu : {target}", "error")
+                progress(0, tr("unknown", target=target), "error")
                 return 2
             name = app.name
             fn = {"install": src.install, "remove": src.remove}.get(action)
             code = fn(app.ref, progress) if fn else src.update([app.ref], progress)
-        done = {"install": "est installé.", "remove": "est désinstallé.", "update": "est à jour.",
-                "update-all": "sont à jour.", "install-file": "est installé."}.get(action, "")
+        done = {"install": "installed", "remove": "removed", "update": "updated",
+                "update-all": "all_updated", "install-file": "installed"}.get(action)
         if code == 0:
-            progress(100, f"{name} {done}", "done")
+            progress(100, tr(done, name=name) if done else name, "done")
+        elif code in MESSAGES:
+            progress(0, tr(MESSAGES[code]), "error")
         else:
-            progress(0, MESSAGES.get(code, f"Échec ({code}) : voir {RUN / 'store.log'}"), "error")
+            progress(0, tr("failed", code=code, log=RUN / "store.log"), "error")
         return code
     finally:
         lock.rmdir()
@@ -1400,7 +1723,7 @@ def linux_path(path):
 def install_file(target, progress):
     path = linux_path(target)
     if not path.is_file():
-        progress(0, f"Fichier introuvable : {path}", "error")
+        progress(0, tr("not_found", path=path), "error")
         return 2
     ext = path.suffix.lower()
     if ext in (".exe", ".msi"):

@@ -19,6 +19,56 @@ home=${HOME:-/root}
 user_dir=${XDG_DATA_HOME:-$home/.local/share}/fonts
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# Langue de l'interface (Paramètres > Langue) : fr, en, es ou de.
+lang=${WINLUX_LANG:-}
+if test -z "$lang" && test -r "$root/etc/winlux/locale.conf"; then
+    lang=$(sed -n 's/^LANG=//p' "$root/etc/winlux/locale.conf" | head -n 1)
+fi
+lang=$(printf '%s' "${lang:-${LANG:-fr}}" | cut -c1-2 | tr 'A-Z' 'a-z')
+case "$lang" in fr|en|es|de) ;; *) lang=fr ;; esac
+
+# msg clé [valeur] : message traduit, relu et affiché par l'application Polices.
+msg() {
+    case "$lang:$1" in
+        fr:not_found) printf 'Fichier introuvable : %s' "$2" ;;
+        en:not_found) printf 'File not found: %s' "$2" ;;
+        es:not_found) printf 'Archivo no encontrado: %s' "$2" ;;
+        de:not_found) printf 'Datei nicht gefunden: %s' "$2" ;;
+        fr:invalid) printf "%s n'est pas une police TrueType ou OpenType." "$2" ;;
+        en:invalid) printf '%s is not a TrueType or OpenType font.' "$2" ;;
+        es:invalid) printf '%s no es una fuente TrueType u OpenType.' "$2" ;;
+        de:invalid) printf '%s ist keine TrueType- oder OpenType-Schriftart.' "$2" ;;
+        fr:already) printf '%s est déjà installée.' "$2" ;;
+        en:already) printf '%s is already installed.' "$2" ;;
+        es:already) printf '%s ya está instalada.' "$2" ;;
+        de:already) printf '%s ist bereits installiert.' "$2" ;;
+        fr:installed) printf '%s est installée.' "$2" ;;
+        en:installed) printf '%s is installed.' "$2" ;;
+        es:installed) printf '%s está instalada.' "$2" ;;
+        de:installed) printf '%s ist installiert.' "$2" ;;
+        fr:protected) printf 'Les polices système sont protégées : seules vos polices peuvent être désinstallées.' ;;
+        en:protected) printf 'System fonts are protected: only your own fonts can be uninstalled.' ;;
+        es:protected) printf 'Las fuentes del sistema están protegidas: solo se pueden desinstalar sus fuentes.' ;;
+        de:protected) printf 'Systemschriftarten sind geschützt: Nur Ihre eigenen Schriftarten können deinstalliert werden.' ;;
+        fr:refused) printf 'Chemin refusé.' ;;
+        en:refused) printf 'Path refused.' ;;
+        es:refused) printf 'Ruta rechazada.' ;;
+        de:refused) printf 'Pfad abgelehnt.' ;;
+        fr:font_missing) printf 'Police introuvable : %s' "$2" ;;
+        en:font_missing) printf 'Font not found: %s' "$2" ;;
+        es:font_missing) printf 'Fuente no encontrada: %s' "$2" ;;
+        de:font_missing) printf 'Schriftart nicht gefunden: %s' "$2" ;;
+        fr:removed) printf '%s est désinstallée.' "$2" ;;
+        en:removed) printf '%s is uninstalled.' "$2" ;;
+        es:removed) printf '%s está desinstalada.' "$2" ;;
+        de:removed) printf '%s ist deinstalliert.' "$2" ;;
+        fr:unknown) printf 'Action inconnue : %s' "$2" ;;
+        en:unknown) printf 'Unknown action: %s' "$2" ;;
+        es:unknown) printf 'Acción desconocida: %s' "$2" ;;
+        de:unknown) printf 'Unbekannte Aktion: %s' "$2" ;;
+    esac
+}
+
 result() {
     tmp="$run/fonts-action.txt.$$"
     printf 'state=%s\nmessage=%s\n' "$1" "$2" > "$tmp"
@@ -85,31 +135,31 @@ case "$action" in
     list) list ;;
     install)
         file=$(linux_path "${2:-}")
-        if ! test -f "$file"; then result error "Fichier introuvable : $file"; exit 2; fi
-        if ! valid_font "$file"; then result error "$(basename "$file") n'est pas une police TrueType ou OpenType."; exit 2; fi
+        if ! test -f "$file"; then result error "$(msg not_found "$file")"; exit 2; fi
+        if ! valid_font "$file"; then result error "$(msg invalid "$(basename "$file")")"; exit 2; fi
         mkdir -p "$user_dir"
         dest="$user_dir/$(basename "$file")"
         if test -e "$dest" && cmp -s "$file" "$dest"; then
-            result done "$(basename "$file") est déjà installée."
+            result done "$(msg already "$(basename "$file")")"
         else
             cp "$file" "$dest.tmp.$$"
             chmod 644 "$dest.tmp.$$"
             mv "$dest.tmp.$$" "$dest"
             refresh_cache
-            result done "$(basename "$file") est installée."
+            result done "$(msg installed "$(basename "$file")")"
         fi
         list ;;
     remove)
         file=$(linux_path "${2:-}")
         if ! is_user_font "$file"; then
-            result error 'Les polices système sont protégées : seules vos polices peuvent être désinstallées.'
+            result error "$(msg protected)"
             exit 2
         fi
-        case "$file" in *..*) result error 'Chemin refusé.'; exit 2 ;; esac
-        if ! test -f "$file"; then result error "Police introuvable : $file"; exit 2; fi
+        case "$file" in *..*) result error "$(msg refused)"; exit 2 ;; esac
+        if ! test -f "$file"; then result error "$(msg font_missing "$file")"; exit 2; fi
         rm -f "$file"
         refresh_cache
-        result done "$(basename "$file") est désinstallée."
+        result done "$(msg removed "$(basename "$file")")"
         list ;;
-    *) result error "Action inconnue : $action"; exit 2 ;;
+    *) result error "$(msg unknown "$action")"; exit 2 ;;
 esac

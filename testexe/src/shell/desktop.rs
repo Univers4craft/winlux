@@ -153,6 +153,8 @@ impl NetEntry {
 static mut FADE: i32 = 1000;
 /// Sous-menu d'alimentation ouvert (Arrêter, Redémarrer, Verrouiller).
 static mut POWER_MENU: bool = false;
+/// Menu du compte (Verrouiller, Se déconnecter, autres comptes).
+static mut USER_MENU: bool = false;
 static mut POWER_HOVER: i32 = -1;
 /// Confirmation de déconnexion/arrêt en cours.
 static mut SHUTDOWN_FADE: i32 = 0;
@@ -335,7 +337,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 36] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 37] = [
             (b"Bienvenue dans Winlux", b"welcome", 9),
             (tr(S_TERMINAL), b"xterm", 1),
             (tr(S_FILE_EXPLORER), b"nemo", 1),
@@ -380,6 +382,7 @@ fn init_apps() {
             (b"Nettoyage de disque", b"diskcleaner", 9),
             (b"Observateur d'\xE9v\xE9nements", b"eventviewer", 9),
             (b"Restauration syst\xE8me", b"restore", 9),
+            (b"Historique des fichiers", b"filehistory", 9),
         ];
         for (name, exec, cat) in apps.iter() {
             if ALL_APPS_COUNT < 64 {
@@ -604,6 +607,51 @@ fn align_toggle_rect(s: &Rect) -> Rect {
         bottom: s.bottom - 16,
     }
 }
+/// Avatar et nom du compte en bas du menu Démarrer.
+fn user_rect(s: &Rect) -> Rect {
+    Rect {
+        left: s.left + 28,
+        top: s.bottom - 52,
+        right: s.right - 240,
+        bottom: s.bottom - 12,
+    }
+}
+const USER_ITEM_H: i32 = 36;
+/// Menu du compte : 2 actions puis les autres comptes (au plus 6).
+fn user_menu_rect(s: &Rect) -> Rect {
+    let others = (crate::login::user_count().saturating_sub(1)).min(6) as i32;
+    let h = USER_ITEM_H * (2 + others) + 8 + if others > 0 { 9 } else { 0 };
+    let u = user_rect(s);
+    rect(u.left, u.top - h - 4, u.left + 250, u.top - 4)
+}
+/// Élément du menu du compte : 220 verrouiller, 221 se déconnecter,
+/// 230 + i passer au compte i.
+fn user_menu_item(s: &Rect, x: i32, y: i32) -> i32 {
+    let m = user_menu_rect(s);
+    if !inside(&m, x, y) {
+        return -1;
+    }
+    let row = (y - m.top - 4) / USER_ITEM_H;
+    if row < 2 {
+        return 220 + row;
+    }
+    let y2 = y - m.top - 4 - 2 * USER_ITEM_H - 9;
+    if y2 < 0 {
+        return -1;
+    }
+    let mut k = y2 / USER_ITEM_H;
+    let owner = crate::login::owner();
+    for i in 0..crate::login::user_count() {
+        if i == owner || (owner == usize::MAX && i == 0) {
+            continue;
+        }
+        if k == 0 {
+            return 230 + i as i32;
+        }
+        k -= 1;
+    }
+    -1
+}
 fn power_rect(s: &Rect) -> Rect {
     Rect {
         left: s.right - 62,
@@ -701,6 +749,7 @@ unsafe fn set_start(open: bool) {
         START_SEARCH_ACTIVE = false;
     }
     if !open {
+        USER_MENU = false;
         POWER_MENU = false;
         POWER_HOVER = -1;
     }
@@ -1643,6 +1692,7 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             Some(wm::APP_FIREWALL) => Glyph::Shield,
             Some(wm::APP_EVENTVIEWER) => Glyph::Details,
             Some(wm::APP_RESTORE) => Glyph::Refresh,
+            Some(wm::APP_FILEHISTORY) => Glyph::Archive,
             Some(wm::APP_WELCOME) => Glyph::Star,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
@@ -2070,6 +2120,10 @@ unsafe fn launch(what: Launch) {
                 wm::open(wm::APP_RESTORE);
                 return;
             }
+            if cmd == b"filehistory" {
+                wm::open(wm::APP_FILEHISTORY);
+                return;
+            }
             if cmd == b"welcome" {
                 if wm::native_session() {
                     ShellExecuteA(
@@ -2468,6 +2522,13 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         ay + 32,
         rgb(0x5B, 0x6B, 0xD8),
     );
+    let me = crate::login::current_user_name();
+    let initial = [me.first().map_or(b'?', |c| c.to_ascii_uppercase())];
+    if HOVER_START_ITEM == 202 || USER_MENU {
+        let u = user_rect(s);
+        round_rect(hdc, b, u.left, u.top, u.right, u.bottom, 4, rgb(0x31, 0x35, 0x3F));
+        ellipse(hdc, b, inner_l + 6, ay, inner_l + 38, ay + 32, rgb(0x5B, 0x6B, 0xD8));
+    }
     text_centered(
         hdc,
         f.semibold,
@@ -2475,7 +2536,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         rgb(0xFF, 0xFF, 0xFF),
         inner_l + 22,
         ay + 8,
-        b"D",
+        &initial,
     );
     text(
         hdc,
@@ -2483,7 +2544,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         rgb(0xF2, 0xF2, 0xF2),
         inner_l + 50,
         ay + 8,
-        b"Damien",
+        me,
     );
     let t = align_toggle_rect(s);
     round_rect(
@@ -2536,6 +2597,63 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         py + 12,
         rgb(0xE6, 0xE6, 0xE6),
     );
+    // Menu du compte : verrouiller, se déconnecter, changer d'utilisateur.
+    if USER_MENU {
+        let m = user_menu_rect(s);
+        panel(
+            hdc,
+            b,
+            m.left,
+            m.top,
+            m.right,
+            m.bottom,
+            8,
+            rgb(0x2C, 0x2C, 0x2C),
+            rgb(0x50, 0x50, 0x50),
+        );
+        let actions: [&[u8]; 2] = [b"Verrouiller", b"Se d\xE9connecter"];
+        for (i, label) in actions.iter().enumerate() {
+            let iy = m.top + 4 + i as i32 * USER_ITEM_H;
+            if HOVER_START_ITEM == 220 + i as i32 {
+                round_rect(hdc, b, m.left + 4, iy, m.right - 4, iy + USER_ITEM_H, 4, rgb(0x40, 0x44, 0x4C));
+            }
+            text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), m.left + 16, iy + 10, label);
+        }
+        let mut iy = m.top + 4 + 2 * USER_ITEM_H;
+        let owner = crate::login::owner();
+        if crate::login::user_count() > 1 {
+            fill(hdc, b, m.left + 10, iy + 4, m.right - 10, iy + 5, rgb(0x50, 0x50, 0x50));
+            iy += 9;
+        }
+        let mut shown = 0;
+        for i in 0..crate::login::user_count() {
+            if i == owner || (owner == usize::MAX && i == 0) || shown >= 6 {
+                continue;
+            }
+            shown += 1;
+            if HOVER_START_ITEM == 230 + i as i32 {
+                round_rect(hdc, b, m.left + 4, iy, m.right - 4, iy + USER_ITEM_H, 4, rgb(0x40, 0x44, 0x4C));
+            }
+            let name = crate::login::user_name(i);
+            let initial = [name.first().map_or(b'?', |c| c.to_ascii_uppercase())];
+            ellipse(hdc, b, m.left + 12, iy + 6, m.left + 36, iy + 30, rgb(0x00, 0x78, 0xD4));
+            text_centered(hdc, f.small, 11, rgb(0xFF, 0xFF, 0xFF), m.left + 24, iy + 11, &initial);
+            text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), m.left + 46, iy + 4, name);
+            text(
+                hdc,
+                f.small,
+                rgb(0xA8, 0xA8, 0xA8),
+                m.left + 46,
+                iy + 20,
+                if crate::login::has_session(i) {
+                    b"Connect\xE9 \x95 changer d'utilisateur"
+                } else {
+                    b"Changer d'utilisateur"
+                },
+            );
+            iy += USER_ITEM_H;
+        }
+    }
     // Sous-menu d'alimentation.
     if POWER_MENU {
         let pr = power_rect(&l.start);
@@ -2587,9 +2705,16 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
 /// Élément du menu Démarrer sous le pointeur : 0..11 épinglés, 100..103
 /// recommandés, 200 bascule d'alignement, 201 alimentation, 210 arrêter,
 /// 211 redémarrer, 212 redémarrer la session, 300 toutes mes applications,
-/// 301..312 catégories, 400..463 applications, -1 rien.
+/// 301..312 catégories, 400..463 applications, 202 compte, 220 verrouiller,
+/// 221 se déconnecter, 230..237 changer d'utilisateur, -1 rien.
 fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     let s = &l.start;
+    if unsafe { USER_MENU } {
+        let item = user_menu_item(s, x, y);
+        if item >= 0 || inside(&user_menu_rect(s), x, y) {
+            return item;
+        }
+    }
     if unsafe { POWER_MENU } {
         let pr = power_rect(s);
         let pw = 160;
@@ -2683,6 +2808,9 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     }
     if inside(&power_rect(s), x, y) {
         return 201;
+    }
+    if inside(&user_rect(s), x, y) {
+        return 202;
     }
     if unsafe { POWER_MENU } {
         let pr = power_rect(s);
@@ -4317,6 +4445,26 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 201 => {
                     POWER_MENU = !POWER_MENU;
                     POWER_HOVER = -1;
+                    USER_MENU = false;
+                }
+                202 => {
+                    USER_MENU = !USER_MENU;
+                    POWER_MENU = false;
+                }
+                220 => {
+                    set_start(false);
+                    crate::login::lock_screen();
+                }
+                221 => {
+                    set_start(false);
+                    for app in 0..wm::APP_COUNT {
+                        wm::close(app);
+                    }
+                    crate::login::sign_out();
+                }
+                i @ 230..=237 => {
+                    set_start(false);
+                    crate::login::switch_user((i - 230) as usize);
                 }
                 // Sous-menu alimentation.
                 210 => {

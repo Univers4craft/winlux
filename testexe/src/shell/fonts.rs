@@ -195,9 +195,14 @@ unsafe fn scan_files() {
     for dir in [
         &b"C:\\T\xE9l\xE9chargements\\"[..],
         b"C:\\Downloads\\",
+        b"C:\\Descargas\\",
         b"C:\\Documents\\",
+        b"C:\\Documentos\\",
+        b"C:\\Dokumente\\",
         b"C:\\Bureau\\",
         b"C:\\Desktop\\",
+        b"C:\\Escritorio\\",
+        b"C:\\Schreibtisch\\",
     ] {
         let mut pat = [0u8; 64];
         pat[..dir.len()].copy_from_slice(dir);

@@ -22,7 +22,7 @@ printf '30000000\n' > "$battery/energy_now"
 printf '40000000\n' > "$battery/energy_full"
 printf '10000000\n' > "$battery/power_now"
 
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression voicerecorder power_api audio_suite; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression voicerecorder power_api audio_suite d3d_suite print_suite; do
     exe="$testdir/$name.exe"
     test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
     printf '\n== %s ==\n' "$name"

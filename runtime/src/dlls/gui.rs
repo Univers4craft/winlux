@@ -1379,6 +1379,10 @@ pub fn object_pen_width(handle: usize) -> u16 {
 /// Ajoute une commande de dessin à la file d'attente de peinture de la fenêtre
 /// cible du DC. Renvoie faux si le DC ou la fenêtre n'existe plus.
 pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
+    // DC imprimante : la commande part dans la page en cours (PDF).
+    let Some(cmd) = crate::dlls::winspool::capture(hdc, cmd) else {
+        return true;
+    };
     let (target, bitmap) = match lock(dcs()).get(&hdc) {
         Some(d) => (d.hwnd, d.bitmap),
         None => return false,
@@ -1670,6 +1674,10 @@ pub trait GuiBackend: Send {
     fn screen_size(&mut self) -> Option<(i32, i32)> {
         None
     }
+    /// Identifiant de la fenêtre native (X11) d'un HWND, pour Vulkan/GLX.
+    fn native_window(&mut self, _hwnd: usize) -> Option<u64> {
+        None
+    }
     /// Largeur et hauteur logiques d'un texte dans une police GDI.
     fn measure_text(&mut self, _font: &FontSpec, _text: &str) -> Option<(i32, i32)> {
         None
@@ -1727,6 +1735,14 @@ pub fn measure_text(font: &FontSpec, text: &str) -> (i32, i32) {
         };
         (text.chars().count() as i32 * h * 55 / 100, h)
     })
+}
+
+/// Fenêtre X11 réelle d'un HWND (`None` en headless ou HWND inconnu).
+/// Direct3D en a besoin pour créer un contexte GLX ou une surface Vulkan.
+pub fn native_window(hwnd: usize) -> Option<u64> {
+    let mut id = None;
+    with_backend(|b| id = b.native_window(hwnd));
+    id
 }
 
 pub fn screen_size() -> (i32, i32) {

@@ -547,6 +547,12 @@ fn kind_of(name: &[u8], dir: bool) -> Kind {
         Kind::Exe
     } else if any(&[
         b"png", b"jpg", b"jpeg", b"gif", b"bmp", b"webp", b"svg", b"ico", b"tif", b"tiff", b"heic",
+        b"heif", b"avif", b"jxl", b"apng", b"jpe", b"jfif", b"dib", b"cur", b"qoi", b"svgz", b"psd",
+        b"psb", b"xcf", b"ai", b"eps", b"tga", b"pcx", b"pbm", b"pgm", b"ppm", b"pnm", b"pam",
+        b"pfm", b"dds", b"exr", b"hdr", b"icns", b"sgi", b"ras", b"xbm", b"xpm", b"wbmp", b"jp2",
+        b"cr2", b"cr3", b"crw", b"nef", b"nrw", b"arw", b"srf", b"sr2", b"dng", b"orf", b"rw2",
+        b"raf", b"pef", b"srw", b"x3f", b"3fr", b"iiq", b"kdc", b"dcr", b"mrw", b"erf", b"rwl",
+        b"mef",
     ]) {
         Kind::Image
     } else if any(&[
@@ -2172,6 +2178,21 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
     }
 }
 
+/// Vignette du fichier (images, vidéos, audio) à la place de l'icône dans
+/// les affichages en icônes et en mosaïques ; `false` garde l'icône.
+unsafe fn draw_thumbnail(g: &mut Gfx, pn: &Pane, idx: usize, x: i32, y: i32, s: i32, bg: u32) -> bool {
+    let e = &pn.entries[idx];
+    let src = match e.kind {
+        _ if e.dir => return false,
+        Kind::Image | Kind::File => crate::thumbs::Source::Image,
+        Kind::Audio | Kind::Video => crate::thumbs::Source::Media,
+        _ => return false,
+    };
+    let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
+    let n = item_path(pn, idx, &mut path);
+    n != 0 && crate::thumbs::draw_thumb(g.hdc, &path[..n], src, x, y, s, bg)
+}
+
 unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
     let p = pal();
     let t = tab();
@@ -2326,16 +2347,11 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
         match VIEW {
             View::XLarge | View::Large | View::Medium => {
                 let s = c.icon;
-                glyph(
-                    g.hdc,
-                    g.b,
-                    g.f,
-                    glyph_of(e.kind),
-                    (ir.left + ir.right - s) / 2,
-                    ir.top + 8,
-                    s,
-                );
-                format_badge(g, &e, (ir.left + ir.right - s) / 2, ir.top + 8, s);
+                let gx = (ir.left + ir.right - s) / 2;
+                if !draw_thumbnail(g, pn, idx, gx, ir.top + 8, s, bg) {
+                    glyph(g.hdc, g.b, g.f, glyph_of(e.kind), gx, ir.top + 8, s);
+                    format_badge(g, &e, gx, ir.top + 8, s);
+                }
                 let ty = ir.top + 14 + s;
                 if renaming {
                     draw_rename(g, rect(ir.left + 4, ty - 3, ir.right - 4, ty + 19));
@@ -2377,16 +2393,11 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                 }
             }
             View::Tiles => {
-                glyph(
-                    g.hdc,
-                    g.b,
-                    g.f,
-                    glyph_of(e.kind),
-                    ir.left + 10,
-                    ir.top + (c.ch - c.icon) / 2,
-                    c.icon,
-                );
-                format_badge(g, &e, ir.left + 10, ir.top + (c.ch - c.icon) / 2, c.icon);
+                let gy = ir.top + (c.ch - c.icon) / 2;
+                if !draw_thumbnail(g, pn, idx, ir.left + 10, gy, c.icon, bg) {
+                    glyph(g.hdc, g.b, g.f, glyph_of(e.kind), ir.left + 10, gy, c.icon);
+                    format_badge(g, &e, ir.left + 10, gy, c.icon);
+                }
                 let tx = ir.left + 20 + c.icon;
                 let ty = ir.top + c.ch / 2 - 18;
                 if renaming {
@@ -5923,7 +5934,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
 }
 
 pub unsafe fn tick(_f: &Frame) -> bool {
-    let mut animating = poll_job() || PASSWORD_OPEN;
+    let mut animating = poll_job() || PASSWORD_OPEN || crate::thumbs::pending();
     for i in 0..NTABS {
         for which in 0..2 {
             let pn = &mut TABS[i].panes[which];
