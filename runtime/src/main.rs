@@ -26,6 +26,7 @@ mod printf;
 mod process;
 mod profiles;
 pub mod quality;
+mod setup;
 mod tasks;
 mod thunks;
 
@@ -110,6 +111,16 @@ fn main() {
     // msiexec.exe est fourni par Winlux lui-même (module msi).
     if exe.as_os_str() == "--msiexec" || (msi::is_msiexec(&exe) && !is_real_pe(&exe)) {
         std::process::exit(msi::cli(&rest));
+    }
+    // Installateurs NSIS / Inno Setup et leurs désinstalleurs : pris en
+    // charge par Winlux lui-même (module setup), sans exécuter leur code.
+    if exe.as_os_str() == "--setup" {
+        std::process::exit(setup::cli(&rest));
+    }
+    if std::env::var_os("WINLUX_SETUP_NATIVE").is_none() {
+        if let Some(code) = setup::launch(&exe, &rest) {
+            std::process::exit(code);
+        }
     }
     let source = match std::fs::read(&exe) {
         Ok(bytes) => bytes,

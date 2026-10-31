@@ -1210,6 +1210,12 @@ pub fn apply_registry_edits(edits: &[RegEdit]) -> bool {
 }
 
 /// Vrai si la clé existe et n'a ni valeur ni sous-clé.
+/// Vrai si la clé existe (outils internes : installateurs).
+pub fn registry_key_exists(key: &str) -> bool {
+    let key = key.to_lowercase();
+    read_registry(|r| Ok(r.keys.contains_key(&key))).unwrap_or(false)
+}
+
 pub fn registry_key_is_empty(key: &str) -> bool {
     let key = key.to_lowercase();
     let prefix = format!("{key}\\");
