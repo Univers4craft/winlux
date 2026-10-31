@@ -130,6 +130,31 @@ pub(crate) struct DxgiSwapChainDesc {
 
 // ────────────────────── GL context ──────────────────────
 
+/// Garde-fou : par défaut Xlib termine le processus sur une erreur X
+/// (visuel incompatible, fenêtre détruite…). On la journalise à la place,
+/// et l'appel GLX concerné échoue proprement.
+pub(crate) fn install_x_error_guard() {
+    static ONCE: std::sync::Once = std::sync::Once::new();
+    ONCE.call_once(|| unsafe {
+        unsafe extern "C" fn on_error(_d: *mut c_void, ev: *mut u8) -> libc::c_int {
+            // XErrorEvent : type, display*, resourceid, serial, error_code (u8)…
+            let code = if ev.is_null() { 0 } else { *ev.add(32) };
+            log_warn!("dxgi", "erreur X11 ignorée (code {})", code);
+            0
+        }
+        let lib = libc::dlopen(c"libX11.so.6".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
+        if lib.is_null() {
+            return;
+        }
+        let f = libc::dlsym(lib, c"XSetErrorHandler".as_ptr());
+        if !f.is_null() {
+            type Handler = unsafe extern "C" fn(*mut c_void, *mut u8) -> libc::c_int;
+            let set: unsafe extern "C" fn(Option<Handler>) -> *mut c_void = std::mem::transmute(f);
+            set(Some(on_error));
+        }
+    });
+}
+
 pub(crate) struct GlContext {
     pub display: *mut c_void,
     pub context: *mut c_void,
@@ -161,7 +186,10 @@ impl GlContext {
 
             let screen = (glx.XDefaultScreen)(display);
 
-            let attribs: [libc::c_int; 13] = [
+            install_x_error_guard();
+            // Pas de canal alpha : le visuel doit correspondre à celui (24 bits)
+            // des fenêtres Winlux, sinon glXMakeCurrent échoue (BadMatch).
+            let attribs: [libc::c_int; 11] = [
                 gl::GLX_RGBA,
                 gl::GLX_DEPTH_SIZE,
                 24,
@@ -171,8 +199,6 @@ impl GlContext {
                 gl::GLX_GREEN_SIZE,
                 8,
                 gl::GLX_BLUE_SIZE,
-                8,
-                gl::GLX_ALPHA_SIZE,
                 8,
                 0, // None
             ];
@@ -191,8 +217,10 @@ impl GlContext {
                 return None;
             }
 
+            // Un HWND Winlux n'est pas un identifiant X : on demande la vraie
+            // fenêtre au backend graphique (repli : valeur brute, puis racine).
             let drawable = if hwnd != 0 {
-                hwnd as u64
+                crate::dlls::gui::native_window(hwnd).unwrap_or(hwnd as u64)
             } else {
                 (glx.XDefaultRootWindow)(display) as u64
             };

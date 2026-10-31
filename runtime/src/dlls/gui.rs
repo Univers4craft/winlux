@@ -1640,6 +1640,10 @@ pub trait GuiBackend: Send {
     fn screen_size(&mut self) -> Option<(i32, i32)> {
         None
     }
+    /// Identifiant de la fenêtre native (X11) d'un HWND, pour Vulkan/GLX.
+    fn native_window(&mut self, _hwnd: usize) -> Option<u64> {
+        None
+    }
     /// Largeur et hauteur logiques d'un texte dans une police GDI.
     fn measure_text(&mut self, _font: &FontSpec, _text: &str) -> Option<(i32, i32)> {
         None
@@ -1697,6 +1701,14 @@ pub fn measure_text(font: &FontSpec, text: &str) -> (i32, i32) {
         };
         (text.chars().count() as i32 * h * 55 / 100, h)
     })
+}
+
+/// Fenêtre X11 réelle d'un HWND (`None` en headless ou HWND inconnu).
+/// Direct3D en a besoin pour créer un contexte GLX ou une surface Vulkan.
+pub fn native_window(hwnd: usize) -> Option<u64> {
+    let mut id = None;
+    with_backend(|b| id = b.native_window(hwnd));
+    id
 }
 
 pub fn screen_size() -> (i32, i32) {
