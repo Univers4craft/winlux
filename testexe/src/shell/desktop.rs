@@ -342,8 +342,16 @@ fn init_apps() {
             (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
             (b"Gestionnaire de paquets", b"mintinstall", 9),
             (b"Gestion des disques", b"diskmgr", 9),
-            (b"Planificateur de t\xE2ches", b"taskschd", 9),
-            (b"Pare-feu Winlux", b"firewall", 9),
+            (
+                crate::admin_ui::t(b"Planificateur de t\xE2ches", b"Task Scheduler"),
+                b"taskschd",
+                9,
+            ),
+            (
+                crate::admin_ui::t(b"Pare-feu Winlux", b"Winlux Firewall"),
+                b"firewall",
+                9,
+            ),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
             (tr(S_TASK_MANAGER), b"taskmgr", 9),
             (b"Nettoyage de disque", b"diskcleaner", 9),
