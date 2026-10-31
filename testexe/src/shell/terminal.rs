@@ -1512,11 +1512,3 @@ unsafe fn paste_clipboard() {
     CloseClipboard();
 }
 
-// Clipboard FFI (from user32 — declared here to avoid modifying lib.rs too much)
-extern "system" {
-    fn OpenClipboard(owner: Handle) -> i32;
-    fn CloseClipboard() -> i32;
-    fn EmptyClipboard() -> i32;
-    fn SetClipboardData(format: u32, mem: usize) -> usize;
-    fn GetClipboardData(format: u32) -> usize;
-}
