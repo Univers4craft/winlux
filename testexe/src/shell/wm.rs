@@ -542,17 +542,42 @@ pub fn title_of(app: usize) -> &'static [u8] {
         APP_NOTEPAD => tr(S_NOTEPAD),
         APP_TASKMGR => tr(S_TASK_MANAGER),
         APP_UTILITIES => tr(S_UTILITIES),
-        APP_CLEANUP => b"Nettoyage de disque",
+        APP_CLEANUP => tr4(&[
+            b"Nettoyage de disque",
+            b"Disk Cleanup",
+            b"Liberador de espacio en disco",
+            b"Datentr\xE4gerbereinigung",
+        ]),
         APP_TERMINAL => b"Terminal",
-        APP_DISKMGR => b"Gestion des disques",
+        APP_DISKMGR => tr4(&[
+            b"Gestion des disques",
+            b"Disk Management",
+            b"Administraci\xF3n de discos",
+            b"Datentr\xE4gerverwaltung",
+        ]),
         APP_STORE => b"Store",
-        APP_FONTS => b"Polices",
+        APP_FONTS => tr4(&[b"Polices", b"Fonts", b"Fuentes", b"Schriftarten"]),
         APP_TASKSCHD => crate::admin_ui::t(b"Planificateur de t\xE2ches", b"Task Scheduler"),
         APP_FIREWALL => crate::admin_ui::t(b"Pare-feu Winlux", b"Winlux Firewall"),
-        APP_EVENTVIEWER => b"Observateur d'\xE9v\xE9nements",
-        APP_RESTORE => b"Restauration syst\xE8me",
-        APP_FILEHISTORY => b"Historique des fichiers",
-        APP_WELCOME => b"Bienvenue",
+        APP_EVENTVIEWER => tr4(&[
+            b"Observateur d'\xE9v\xE9nements",
+            b"Event Viewer",
+            b"Visor de eventos",
+            b"Ereignisanzeige",
+        ]),
+        APP_RESTORE => tr4(&[
+            b"Restauration syst\xE8me",
+            b"System Restore",
+            b"Restaurar sistema",
+            b"Systemwiederherstellung",
+        ]),
+        APP_FILEHISTORY => tr4(&[
+            b"Historique des fichiers",
+            b"File History",
+            b"Historial de archivos",
+            b"Dateiversionsverlauf",
+        ]),
+        APP_WELCOME => tr4(&[b"Bienvenue", b"Welcome", b"Bienvenido", b"Willkommen"]),
         _ => tr(S_SETTINGS_APP),
     }
 }
@@ -1213,7 +1238,12 @@ unsafe fn draw_snap_layout(g: &mut Gfx) {
         p.text,
         r.left + 14,
         r.top + 56,
-        b"Dispositions d'ancrage",
+        tr4(&[
+            b"Dispositions d'ancrage",
+            b"Snap layouts",
+            b"Dise\xF1os de acoplamiento",
+            b"Andocklayouts",
+        ]),
     );
     for layout in 0..3i32 {
         let t = snap_layout_thumb(&r, layout);
@@ -1290,7 +1320,12 @@ unsafe fn draw_task_view(g: &mut Gfx) {
         p.text,
         wk.left + 40,
         wk.top + 20,
-        b"Vue des t\xE2ches",
+        tr4(&[
+            b"Vue des t\xE2ches",
+            b"Task view",
+            b"Vista de tareas",
+            b"Aktive Anwendungen",
+        ]),
     );
     // Miniatures des fenêtres du bureau courant
     let mut visible = [usize::MAX; APP_COUNT];
@@ -1359,7 +1394,12 @@ unsafe fn draw_task_view(g: &mut Gfx) {
             p.text3,
             (wk.left + wk.right) / 2,
             area_y + area_h / 2,
-            b"Aucune fen\xEAtre sur ce bureau",
+            tr4(&[
+                b"Aucune fen\xEAtre sur ce bureau",
+                b"No windows on this desktop",
+                b"No hay ventanas en este escritorio",
+                b"Keine Fenster auf diesem Desktop",
+            ]),
         );
     }
     // Barre des bureaux en bas
@@ -1376,7 +1416,7 @@ unsafe fn draw_task_view(g: &mut Gfx) {
         p.text,
         (wk.left + wk.right) / 2,
         desk_bar_y - 20,
-        b"Bureaux",
+        tr4(&[b"Bureaux", b"Desktops", b"Escritorios", b"Desktops"]),
     );
     for d in 0..DESKTOP_COUNT {
         let x = desk_start + d as i32 * (desk_w + 12);

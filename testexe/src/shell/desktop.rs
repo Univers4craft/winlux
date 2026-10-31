@@ -338,20 +338,20 @@ fn init_apps() {
             return;
         }
         let apps: [(&'static [u8], &'static [u8], i32); 37] = [
-            (b"Bienvenue dans Winlux", b"welcome", 9),
+            (tr4(&[b"Bienvenue dans Winlux", b"Welcome to Winlux", b"Bienvenido a Winlux", b"Willkommen bei Winlux"]), b"welcome", 9),
             (tr(S_TERMINAL), b"xterm", 1),
             (tr(S_FILE_EXPLORER), b"nemo", 1),
             (tr(S_NOTEPAD), b"mousepad", 1),
             (tr(S_CALCULATOR), b"calc.exe", 1),
-            (b"Capture d'\xE9cran", b"screenshot.exe", 1),
-            (b"Visionneuse", b"imageviewer.exe", 1),
-            (b"Post-it", b"postit.exe", 1),
-            (b"Lecteur PDF", b"pdfviewer.exe", 1),
-            (b"Lecteur multim\xE9dia", b"winlux-mediaplayer", 5),
-            (b"Infos syst\xE8me", b"sysinfo.exe", 8),
-            (b"Utilitaires", b"utilities-terminal", 2),
-            (b"Archives", b"file-roller", 1),
-            (b"Visionneuse Linux", b"xviewer", 3),
+            (tr4(&[b"Capture d'\xE9cran", b"Screenshot", b"Captura de pantalla", b"Bildschirmfoto"]), b"screenshot.exe", 1),
+            (tr4(&[b"Visionneuse", b"Photos", b"Visor", b"Fotoanzeige"]), b"imageviewer.exe", 1),
+            (tr4(&[b"Post-it", b"Sticky Notes", b"Notas r\xE1pidas", b"Kurznotizen"]), b"postit.exe", 1),
+            (tr4(&[b"Lecteur PDF", b"PDF Reader", b"Lector de PDF", b"PDF-Reader"]), b"pdfviewer.exe", 1),
+            (tr4(&[b"Lecteur multim\xE9dia", b"Media Player", b"Reproductor multimedia", b"Medienwiedergabe"]), b"winlux-mediaplayer", 5),
+            (tr4(&[b"Infos syst\xE8me", b"System info", b"Informaci\xF3n del sistema", b"Systeminfo"]), b"sysinfo.exe", 8),
+            (tr4(&[b"Utilitaires", b"Utilities", b"Utilidades", b"Dienstprogramme"]), b"utilities-terminal", 2),
+            (tr4(&[b"Archives", b"Archives", b"Archivos comprimidos", b"Archive"]), b"file-roller", 1),
+            (tr4(&[b"Visionneuse Linux", b"Linux image viewer", b"Visor de Linux", b"Linux-Bildanzeige"]), b"xviewer", 3),
             (b"GIMP", b"gimp", 3),
             (b"Inkscape", b"inkscape", 3),
             (b"Firefox", b"firefox", 4),
@@ -365,8 +365,8 @@ fn init_apps() {
             (b"Geany", b"geany", 7),
             (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
             (b"Store", b"store", 9),
-            (b"Polices", b"fonts", 8),
-            (b"Gestion des disques", b"diskmgr", 9),
+            (tr4(&[b"Polices", b"Fonts", b"Fuentes", b"Schriftarten"]), b"fonts", 8),
+            (tr4(&[b"Gestion des disques", b"Disk Management", b"Administraci\xF3n de discos", b"Datentr\xE4gerverwaltung"]), b"diskmgr", 9),
             (
                 crate::admin_ui::t(b"Planificateur de t\xE2ches", b"Task Scheduler"),
                 b"taskschd",
@@ -377,12 +377,12 @@ fn init_apps() {
                 b"firewall",
                 9,
             ),
-            (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
+            (tr4(&[b"Moniteur syst\xE8me", b"System Monitor", b"Monitor del sistema", b"Systemmonitor"]), b"gnome-system-monitor", 9),
             (tr(S_TASK_MANAGER), b"taskmgr", 9),
-            (b"Nettoyage de disque", b"diskcleaner", 9),
-            (b"Observateur d'\xE9v\xE9nements", b"eventviewer", 9),
-            (b"Restauration syst\xE8me", b"restore", 9),
-            (b"Historique des fichiers", b"filehistory", 9),
+            (tr4(&[b"Nettoyage de disque", b"Disk Cleanup", b"Liberador de espacio en disco", b"Datentr\xE4gerbereinigung"]), b"diskcleaner", 9),
+            (tr4(&[b"Observateur d'\xE9v\xE9nements", b"Event Viewer", b"Visor de eventos", b"Ereignisanzeige"]), b"eventviewer", 9),
+            (tr4(&[b"Restauration syst\xE8me", b"System Restore", b"Restaurar sistema", b"Systemwiederherstellung"]), b"restore", 9),
+            (tr4(&[b"Historique des fichiers", b"File History", b"Historial de archivos", b"Dateiversionsverlauf"]), b"filehistory", 9),
         ];
         for (name, exec, cat) in apps.iter() {
             if ALL_APPS_COUNT < 64 {
@@ -921,7 +921,7 @@ unsafe fn save_shell_state() {
         core::ptr::null_mut(),
     );
     if h.is_null() || h as isize == -1 {
-        toast(b"Impossible d'enregistrer les raccourcis");
+        toast(tr4(&[b"Impossible d'enregistrer les raccourcis", b"Couldn't save the shortcuts", b"No se pudieron guardar los accesos directos", b"Verkn\xFCpfungen konnten nicht gespeichert werden"]));
         return;
     }
     let data = [b'W', b'T', 3, PINNED_APPS, DESKTOP_SHORTCUTS, SYSTEM_ICONS];
@@ -935,7 +935,7 @@ unsafe fn save_shell_state() {
     );
     CloseHandle(h);
     if ok == 0 || written != data.len() as u32 {
-        toast(b"Enregistrement incomplet des raccourcis");
+        toast(tr4(&[b"Enregistrement incomplet des raccourcis", b"Shortcuts were only partly saved", b"Los accesos directos se guardaron de forma incompleta", b"Verkn\xFCpfungen wurden unvollst\xE4ndig gespeichert"]));
     }
 }
 unsafe fn load_shell_state() {
@@ -1197,12 +1197,12 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     );
     if app == usize::MAX {
         let labels: [&[u8]; 6] = [
-            b"Ouvrir l'Explorateur",
-            b"Ouvrir le terminal",
-            b"Ouvrir les Param\xE8tres",
-            b"Ouvrir l'\xC9\x64iteur",
-            b"Ouvrir les Utilitaires",
-            b"Personnaliser",
+            tr4(&[b"Ouvrir l'Explorateur", b"Open Explorer", b"Abrir el Explorador", b"Explorer \xF6ffnen"]),
+            tr4(&[b"Ouvrir le terminal", b"Open terminal", b"Abrir el terminal", b"Terminal \xF6ffnen"]),
+            tr4(&[b"Ouvrir les Param\xE8tres", b"Open Settings", b"Abrir Configuraci\xF3n", b"Einstellungen \xF6ffnen"]),
+            tr4(&[b"Ouvrir l'\xC9diteur", b"Open Editor", b"Abrir el Editor", b"Editor \xF6ffnen"]),
+            tr4(&[b"Ouvrir les Utilitaires", b"Open Utilities", b"Abrir Utilidades", b"Dienstprogramme \xF6ffnen"]),
+            tr4(&[b"Personnaliser", b"Personalize", b"Personalizar", b"Anpassen"]),
         ];
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
@@ -1222,15 +1222,15 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     }
     if unsafe { CONTEXT_DESKTOP.is_none() } {
         let pin: &[u8] = if PINNED_APPS & app_bit(app) != 0 {
-            b"D\xE9s\xE9pingler de la barre des t\xE2ches"
+            tr4(&[b"D\xE9s\xE9pingler de la barre des t\xE2ches", b"Unpin from taskbar", b"Desanclar de la barra de tareas", b"Von Taskleiste l\xF6sen"])
         } else {
-            b"\xC9pingler \xE0 la barre des t\xE2ches"
+            tr4(&[b"\xC9pingler \xE0 la barre des t\xE2ches", b"Pin to taskbar", b"Anclar a la barra de tareas", b"An Taskleiste anheften"])
         };
         let labels: [&[u8]; 4] = [
-            b"Ouvrir / Restaurer",
+            tr4(&[b"Ouvrir / Restaurer", b"Open / Restore", b"Abrir / Restaurar", b"\xD6ffnen / Wiederherstellen"]),
             pin,
-            b"Agrandir / Restaurer",
-            b"Fermer",
+            tr4(&[b"Agrandir / Restaurer", b"Maximize / Restore", b"Maximizar / Restaurar", b"Maximieren / Wiederherstellen"]),
+            tr4(&[b"Fermer", b"Close", b"Cerrar", b"Schlie\xDFen"]),
         ];
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
@@ -1249,21 +1249,21 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         return;
     }
     let pin: &[u8] = if PINNED_APPS & app_bit(app) != 0 {
-        b"Retirer de la barre des t\xE2ches"
+        tr4(&[b"Retirer de la barre des t\xE2ches", b"Remove from taskbar", b"Quitar de la barra de tareas", b"Aus Taskleiste entfernen"])
     } else {
-        b"\xC9pingler \xE0 la barre des t\xE2ches"
+        tr4(&[b"\xC9pingler \xE0 la barre des t\xE2ches", b"Pin to taskbar", b"Anclar a la barra de tareas", b"An Taskleiste anheften"])
     };
     let shortcut: &[u8] = if DESKTOP_SHORTCUTS & app_bit(app) != 0 {
-        b"Retirer le raccourci du bureau"
+        tr4(&[b"Retirer le raccourci du bureau", b"Remove desktop shortcut", b"Quitar el acceso directo del escritorio", b"Desktopverkn\xFCpfung entfernen"])
     } else {
-        b"Cr\xE9er un raccourci sur le bureau"
+        tr4(&[b"Cr\xE9er un raccourci sur le bureau", b"Create desktop shortcut", b"Crear acceso directo en el escritorio", b"Desktopverkn\xFCpfung erstellen"])
     };
     let labels: [&[u8]; 5] = [
-        b"Ouvrir / afficher",
+        tr4(&[b"Ouvrir / afficher", b"Open / show", b"Abrir / mostrar", b"\xD6ffnen / anzeigen"]),
         pin,
         shortcut,
-        b"R\xE9duire la fen\xEAtre",
-        b"Fermer la fen\xEAtre",
+        tr4(&[b"R\xE9duire la fen\xEAtre", b"Minimize window", b"Minimizar la ventana", b"Fenster minimieren"]),
+        tr4(&[b"Fermer la fen\xEAtre", b"Close window", b"Cerrar la ventana", b"Fenster schlie\xDFen"]),
     ];
     for row in 0..context_rows(app) {
         let y = r.top + 4 + row * 34;
@@ -1428,10 +1428,10 @@ pub unsafe fn power_tick() -> bool {
     if BATTERY_PRESENT != 0 && !BATTERY_AC {
         if BATTERY_LEVEL <= 10 && LOW_WARNED > 10 {
             LOW_WARNED = 10;
-            toast(b"Batterie critique : branchez votre PC, il va bient\xF4t se mettre en veille.");
+            toast(tr4(&[b"Batterie critique : branchez votre PC, il va bient\xF4t se mettre en veille.", b"Battery critical: plug in your PC, it will go to sleep soon.", b"Bater\xEDa cr\xEDtica: conecte el PC, pronto entrar\xE1 en suspensi\xF3n.", b"Akku kritisch: Schlie\xDFen Sie den PC an, er wechselt bald in den Energiesparmodus."]));
         } else if BATTERY_LEVEL <= 20 && LOW_WARNED > 20 {
             LOW_WARNED = 20;
-            toast(b"Batterie faible : 20 % restants. Branchez votre PC.");
+            toast(tr4(&[b"Batterie faible : 20 % restants. Branchez votre PC.", b"Battery low: 20% left. Plug in your PC.", b"Bater\xEDa baja: queda un 20 %. Conecte el PC.", b"Akku schwach: 20 % verbleibend. Schlie\xDFen Sie den PC an."]));
         }
     } else if BATTERY_AC {
         LOW_WARNED = 101;
@@ -1480,10 +1480,10 @@ unsafe fn draw_battery_tip(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) 
     let mut line2 = [0u8; 64];
     let mut n2 = 0;
     if BATTERY_PRESENT == 0 {
-        push(&mut line1, &mut n1, b"Alimentation secteur");
-        push(&mut line2, &mut n2, b"Aucune batterie d\xE9tect\xE9e");
+        push(&mut line1, &mut n1, tr4(&[b"Alimentation secteur", b"Plugged in", b"Conectado a la corriente", b"Netzbetrieb"]));
+        push(&mut line2, &mut n2, tr4(&[b"Aucune batterie d\xE9tect\xE9e", b"No battery detected", b"No se detect\xF3 ninguna bater\xEDa", b"Kein Akku erkannt"]));
     } else {
-        push(&mut line1, &mut n1, b"Batterie : ");
+        push(&mut line1, &mut n1, tr4(&[b"Batterie : ", b"Battery: ", b"Bater\xEDa: ", b"Akku: "]));
         push_num(&mut line1, &mut n1, BATTERY_LEVEL);
         if BATTERY_AC {
             push(&mut line1, &mut n1, b" % disponible (branch\xE9)");
@@ -1491,18 +1491,18 @@ unsafe fn draw_battery_tip(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) 
                 &mut line2,
                 &mut n2,
                 if BATTERY_CHARGING {
-                    b"En charge" as &[u8]
+                    tr4(&[b"En charge", b"Charging", b"Cargando", b"Wird geladen"]) as &[u8]
                 } else if BATTERY_LEVEL >= 99 {
-                    b"Charg\xE9e"
+                    tr4(&[b"Charg\xE9e", b"Fully charged", b"Cargada", b"Vollst\xE4ndig geladen"])
                 } else {
-                    b"Branch\xE9e, pas en charge"
+                    tr4(&[b"Branch\xE9e, pas en charge", b"Plugged in, not charging", b"Conectada, sin cargar", b"Angeschlossen, wird nicht geladen"])
                 },
             );
         } else {
             push(&mut line1, &mut n1, b" % restants");
             if BATTERY_SECS != u32::MAX {
                 let (h, m) = (BATTERY_SECS / 3600, BATTERY_SECS / 60 % 60);
-                push(&mut line2, &mut n2, b"Environ ");
+                push(&mut line2, &mut n2, tr4(&[b"Environ ", b"About ", b"Aproximadamente ", b"Etwa "]));
                 if h > 0 {
                     push_num(&mut line2, &mut n2, h);
                     push(&mut line2, &mut n2, if m < 10 { b" h 0" } else { b" h " });
@@ -1510,14 +1510,14 @@ unsafe fn draw_battery_tip(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) 
                 push_num(&mut line2, &mut n2, m);
                 push(&mut line2, &mut n2, b" min d'autonomie");
             } else {
-                push(&mut line2, &mut n2, b"Estimation de l'autonomie en cours");
+                push(&mut line2, &mut n2, tr4(&[b"Estimation de l'autonomie en cours", b"Estimating time remaining", b"Calculando la autonom\xEDa", b"Restlaufzeit wird berechnet"]));
             }
         }
     }
     let mode: &[u8] = if BATTERY_SAVER {
-        b"Mode : \xC9conomie d'\xE9nergie"
+        tr4(&[b"Mode : \xC9conomie d'\xE9nergie", b"Mode: Power saver", b"Modo: Ahorro de energ\xEDa", b"Modus: Energiesparen"])
     } else {
-        b"Cliquez pour les options d'alimentation"
+        tr4(&[b"Cliquez pour les options d'alimentation", b"Click for power options", b"Haga clic para ver las opciones de energ\xEDa", b"Klicken f\xFCr Energieoptionen"])
     };
     let w = text_width(&line1[..n1], 13)
         .max(text_width(&line2[..n2], 13))
@@ -1975,7 +1975,7 @@ fn pinned_apps() -> [App; 8] {
             launch: Launch::Exec(b"store"),
         },
         App {
-            name: b"Mises \xE0 jour",
+            name: tr4(&[b"Mises \xE0 jour", b"Updates", b"Actualizaciones", b"Updates"]),
             glyph: Glyph::Store,
             launch: Launch::Updates,
         },
@@ -1990,7 +1990,7 @@ fn pinned_apps() -> [App; 8] {
             launch: Launch::Pc,
         },
         App {
-            name: b"Programmes .exe",
+            name: tr4(&[b"Programmes .exe", b".exe programs", b"Programas .exe", b".exe-Programme"]),
             glyph: Glyph::Exe,
             launch: Launch::Programs,
         },
@@ -2005,8 +2005,8 @@ fn recommended_apps() -> [(&'static [u8], &'static [u8], Glyph, Launch); 4] {
             Launch::Terminal,
         ),
         (
-            b"Navigateur",
-            b"Ouvrir le navigateur web",
+            tr4(&[b"Navigateur", b"Browser", b"Navegador", b"Browser"]),
+            tr4(&[b"Ouvrir le navigateur web", b"Open the web browser", b"Abrir el navegador web", b"Webbrowser \xF6ffnen"]),
             Glyph::Store,
             Launch::Browser,
         ),
@@ -2257,7 +2257,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0xF2, 0xF2, 0xF2),
             inner_l + 4,
             results_y,
-            b"R\xE9sultats",
+            tr4(&[b"R\xE9sultats", b"Results", b"Resultados", b"Ergebnisse"]),
         );
         let mut results = [SearchResult {
             name: b"",
@@ -2273,7 +2273,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 rgb(0x88, 0x88, 0x88),
                 inner_l + 4,
                 results_y + 36,
-                b"Aucun r\xE9sultat",
+                tr4(&[b"Aucun r\xE9sultat", b"No results", b"No hay resultados", b"Keine Ergebnisse"]),
             );
         }
         for i in 0..count {
@@ -2360,21 +2360,21 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 rgb(0xF2, 0xF2, 0xF2),
                 inner_l + 4,
                 ry,
-                b"Cat\xE9gories",
+                tr4(&[b"Cat\xE9gories", b"Categories", b"Categor\xEDas", b"Kategorien"]),
             );
             let categories: [&[u8]; 12] = [
-                b"Toutes",
-                b"Accessoires",
-                b"Bureau",
-                b"Graphisme",
-                b"Internet",
-                b"Son et vid\xE9o",
-                b"Web",
-                b"Programmation",
-                b"Pr\xE9f\xE9rences",
-                b"Administration",
-                b"Favoris",
-                b"R\xE9cents",
+                tr4(&[b"Toutes", b"All", b"Todas", b"Alle"]),
+                tr4(&[b"Accessoires", b"Accessories", b"Accesorios", b"Zubeh\xF6r"]),
+                tr4(&[b"Bureau", b"Office", b"Oficina", b"B\xFCro"]),
+                tr4(&[b"Graphisme", b"Graphics", b"Gr\xE1ficos", b"Grafik"]),
+                tr4(&[b"Internet", b"Internet", b"Internet", b"Internet"]),
+                tr4(&[b"Son et vid\xE9o", b"Sound & video", b"Sonido y v\xEDdeo", b"Audio und Video"]),
+                tr4(&[b"Web", b"Web", b"Web", b"Web"]),
+                tr4(&[b"Programmation", b"Programming", b"Programaci\xF3n", b"Programmierung"]),
+                tr4(&[b"Pr\xE9f\xE9rences", b"Preferences", b"Preferencias", b"Einstellungen"]),
+                tr4(&[b"Administration", b"Administration", b"Administraci\xF3n", b"Verwaltung"]),
+                tr4(&[b"Favoris", b"Favorites", b"Favoritos", b"Favoriten"]),
+                tr4(&[b"R\xE9cents", b"Recent", b"Recientes", b"Zuletzt verwendet"]),
             ];
             for (i, cat) in categories.iter().enumerate() {
                 let c = category_cell(s, i as i32);
@@ -2411,7 +2411,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 rgb(0xF2, 0xF2, 0xF2),
                 inner_l + 4,
                 apps_y,
-                b"Applications",
+                tr4(&[b"Applications", b"Apps", b"Aplicaciones", b"Apps"]),
             );
             let mut displayed = 0;
             for i in 0..unsafe { ALL_APPS_COUNT } {
@@ -2432,7 +2432,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     rgb(0xF2, 0xF2, 0xF2),
                     inner_l + 4,
                     shortcuts_y,
-                    b"Raccourcis",
+                    tr4(&[b"Raccourcis", b"Shortcuts", b"Accesos directos", b"Verkn\xFCpfungen"]),
                 );
                 for i in 0..unsafe { SHORTCUTS_COUNT } {
                     let (name, _exec, _x, _y) = unsafe { SHORTCUTS[i] };
@@ -2673,7 +2673,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             tint(rgb(0x2C, 0x2C, 0x2C)),
             rgb(0x50, 0x50, 0x50),
         );
-        let items: [&[u8]; 3] = [b"Arr\xEAter", b"Red\xE9marrer", b"Verrouiller"];
+        let items: [&[u8]; 3] = [tr4(&[b"Arr\xEAter", b"Shut down", b"Apagar", b"Herunterfahren"]), tr4(&[b"Red\xE9marrer", b"Restart", b"Reiniciar", b"Neu starten"]), tr4(&[b"Verrouiller", b"Lock", b"Bloquear", b"Sperren"])];
         let icons: [&[u8]; 3] = [b"\xA4", b"\xA5", b"\xA3"];
         for i in 0..3i32 {
             let iy = my + 4 + i * item_h;
@@ -2864,7 +2864,7 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         rgb(0xF2, 0xF2, 0xF2),
         il + 32,
         oy + 18,
-        b"Recherche",
+        tr4(&[b"Recherche", b"Search", b"B\xFAsqueda", b"Suche"]),
     );
     // Champ de saisie.
     let fy = oy + 60;
@@ -2886,7 +2886,7 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0x88, 0x88, 0x88),
             il + 36,
             fy + 10,
-            b"Tapez pour rechercher...",
+            tr4(&[b"Tapez pour rechercher...", b"Type to search...", b"Escriba para buscar...", b"Zum Suchen tippen..."]),
         );
     }
     // Résultats.
@@ -2906,7 +2906,7 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 rgb(0x88, 0x88, 0x88),
                 il + 4,
                 ry + 8,
-                b"Aucun r\xE9sultat",
+                tr4(&[b"Aucun r\xE9sultat", b"No results", b"No hay resultados", b"Keine Ergebnisse"]),
             );
         }
         for i in 0..count {
@@ -2934,7 +2934,7 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0x88, 0x88, 0x88),
             il + 4,
             ry + 8,
-            b"Recherchez des applications et des fichiers",
+            tr4(&[b"Recherchez des applications et des fichiers", b"Search for apps and files", b"Busque aplicaciones y archivos", b"Nach Apps und Dateien suchen"]),
         );
     }
 }
@@ -3051,7 +3051,7 @@ unsafe fn net_connect(idx: usize) {
         core::ptr::null(),
         0,
     );
-    toast(b"Connexion en cours...");
+    toast(tr4(&[b"Connexion en cours...", b"Connecting...", b"Conectando...", b"Verbindung wird hergestellt..."]));
     NET_SCAN_REQUESTED = false;
 }
 
@@ -3118,7 +3118,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         } else if NET_IFACE_LEN > 0 {
             &NET_IFACE[..NET_IFACE_LEN]
         } else {
-            b"Connect\xE9"
+            tr4(&[b"Connect\xE9", b"Connected", b"Conectado", b"Verbunden"])
         };
         ellipse(
             hdc,
@@ -3163,7 +3163,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0x9A, 0xA3, 0xAE),
             x + 36,
             sy + 14,
-            b"Non connect\xE9",
+            tr4(&[b"Non connect\xE9", b"Not connected", b"No conectado", b"Nicht verbunden"]),
         );
     }
 
@@ -3178,7 +3178,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0x9A, 0xA3, 0xAE),
             x + w / 2,
             list_y + 14,
-            b"Aucun r\xE9seau d\xE9tect\xE9",
+            tr4(&[b"Aucun r\xE9seau d\xE9tect\xE9", b"No network detected", b"No se detect\xF3 ninguna red", b"Kein Netzwerk erkannt"]),
         );
     } else {
         for i in 0..rows {
@@ -3266,7 +3266,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     rgb(0x60, 0xCD, 0xFF),
                     x + 44,
                     ry + 28,
-                    b"Connect\xE9",
+                    tr4(&[b"Connect\xE9", b"Connected", b"Conectado", b"Verbunden"]),
                 );
             } else if e.secured {
                 text(
@@ -3275,7 +3275,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     rgb(0x9A, 0xA3, 0xAE),
                     x + 44,
                     ry + 28,
-                    b"S\xE9curis\xE9",
+                    tr4(&[b"S\xE9curis\xE9", b"Secured", b"Protegida", b"Gesichert"]),
                 );
             } else {
                 text(
@@ -3284,7 +3284,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     rgb(0x9A, 0xA3, 0xAE),
                     x + 44,
                     ry + 28,
-                    b"Ouvert",
+                    tr4(&[b"Ouvert", b"Open", b"Abierta", b"Offen"]),
                 );
             }
         }
@@ -3326,7 +3326,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0xC5, 0xC5, 0xC5),
             (br.left + br.right) / 2,
             br.top + 7,
-            b"D\xE9connecter",
+            tr4(&[b"D\xE9connecter", b"Disconnect", b"Desconectar", b"Trennen"]),
         );
     }
     // Refresh button
@@ -3362,7 +3362,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         rgb(0xC5, 0xC5, 0xC5),
         (rb.left + rb.right) / 2,
         rb.top + 7,
-        b"Actualiser",
+        tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
     );
 }
 
@@ -3499,7 +3499,7 @@ unsafe fn draw_vol_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         rgb(0x9A, 0xA3, 0xAE),
         x + 16,
         sep_y + 10,
-        b"Applications",
+        tr4(&[b"Applications", b"Apps", b"Aplicaciones", b"Apps"]),
     );
     let mut ay = sep_y + 30;
     let mut drawn = 0;
@@ -3565,7 +3565,7 @@ unsafe fn draw_vol_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0x9A, 0xA3, 0xAE),
             x + 16,
             ay + 4,
-            b"Aucune application ouverte",
+            tr4(&[b"Aucune application ouverte", b"No open apps", b"No hay aplicaciones abiertas", b"Keine ge\xF6ffneten Apps"]),
         );
     }
 
@@ -3603,9 +3603,9 @@ unsafe fn draw_vol_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         (mute_r.left + mute_r.right) / 2,
         mute_r.top + 7,
         if VOLUME_LEVEL == 0 {
-            b"R\xE9tablir"
+            tr4(&[b"R\xE9tablir", b"Unmute", b"Reactivar", b"Ton ein"])
         } else {
-            b"Muet"
+            tr4(&[b"Muet", b"Mute", b"Silenciar", b"Stumm"])
         },
     );
     let mix_r = rect(x + w / 2 + 4, btn_y + 4, x + w - 16, btn_y + 34);
@@ -3630,7 +3630,7 @@ unsafe fn draw_vol_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         rgb(0xC5, 0xC5, 0xC5),
         (mix_r.left + mix_r.right) / 2,
         mix_r.top + 7,
-        b"M\xE9langeur",
+        tr4(&[b"M\xE9langeur", b"Mixer", b"Mezclador", b"Mixer"]),
     );
 }
 
@@ -3643,9 +3643,9 @@ pub unsafe fn handle_file_drop(do_copy: bool) {
     }
     explorer::drop_files_to(desktop.get(), do_copy);
     toast(if do_copy {
-        b"Fichier(s) copi\xE9(s) sur le Bureau."
+        tr4(&[b"Fichier(s) copi\xE9(s) sur le Bureau.", b"File(s) copied to the Desktop.", b"Archivo(s) copiado(s) en el Escritorio.", b"Datei(en) auf den Desktop kopiert."])
     } else {
-        b"Fichier(s) d\xE9plac\xE9(s) sur le Bureau."
+        tr4(&[b"Fichier(s) d\xE9plac\xE9(s) sur le Bureau.", b"File(s) moved to the Desktop.", b"Archivo(s) movido(s) al Escritorio.", b"Datei(en) auf den Desktop verschoben."])
     });
 }
 
@@ -3749,10 +3749,10 @@ unsafe fn boot_splash(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         }
     }
     let label: &[u8] = match BOOT_STEP {
-        0 | 1 => b"Chargement des polices",
-        2 => b"Pr\xE9paration de l'Explorer",
-        3 => b"Pr\xE9paration du bureau",
-        _ => b"Bienvenue",
+        0 | 1 => tr4(&[b"Chargement des polices", b"Loading fonts", b"Cargando fuentes", b"Schriftarten werden geladen"]),
+        2 => tr4(&[b"Pr\xE9paration de l'Explorer", b"Preparing Explorer", b"Preparando el Explorador", b"Explorer wird vorbereitet"]),
+        3 => tr4(&[b"Pr\xE9paration du bureau", b"Preparing the desktop", b"Preparando el escritorio", b"Desktop wird vorbereitet"]),
+        _ => tr4(&[b"Bienvenue", b"Welcome", b"Bienvenido", b"Willkommen"]),
     };
     if t > 700 {
         text_centered(
@@ -3943,8 +3943,8 @@ pub unsafe fn draw(hdc: Handle) {
                 fill(hdc, &mut b, 0, 0, l.w, l.h, rgb(0, 0, 0));
             }
             let label: &[u8] = match SHUTDOWN_ACTION {
-                1 => b"Arr\xEAt en cours...",
-                2 => b"Red\xE9marrage en cours...",
+                1 => tr4(&[b"Arr\xEAt en cours...", b"Shutting down...", b"Apagando...", b"Wird heruntergefahren..."]),
+                2 => tr4(&[b"Red\xE9marrage en cours...", b"Restarting...", b"Reiniciando...", b"Wird neu gestartet..."]),
                 _ => b"",
             };
             if !label.is_empty() {
@@ -5421,7 +5421,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             let desktop = explorer::desktop_folder_path();
             if !desktop.get().is_empty() {
                 explorer::paste_to(desktop.get());
-                toast(b"Fichier(s) coll\xE9(s) sur le Bureau.");
+                toast(tr4(&[b"Fichier(s) coll\xE9(s) sur le Bureau.", b"File(s) pasted on the Desktop.", b"Archivo(s) pegado(s) en el Escritorio.", b"Datei(en) auf dem Desktop eingef\xFCgt."]));
             }
             repaint(hwnd);
             return;
