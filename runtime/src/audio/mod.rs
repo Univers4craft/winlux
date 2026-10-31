@@ -331,7 +331,7 @@ pub fn self_test() -> i32 {
     impl Source for Tone {
         fn mix(&self, out: &mut [f32]) -> bool {
             let start = self.n.fetch_add((out.len() / 2) as u64, Ordering::Relaxed);
-            for (i, fr) in out.chunks_exact_mut(2).enumerate() {
+            for (i, fr) in out.as_chunks_mut::<2>().0.iter_mut().enumerate() {
                 let t = (start + i as u64) as f32 / RATE as f32;
                 let v = (t * 440.0 * std::f32::consts::TAU).sin() * 0.2;
                 fr[0] += v;
@@ -423,14 +423,14 @@ impl CaptureConverter {
         let frames_in = input.len() / 2;
         let max_out = frames_in * rate / RATE as usize + 2;
         let mut tmp = vec![0.0f32; max_out * 2];
-        let mut it = input.chunks_exact(2);
+        let mut it = input.as_chunks::<2>().0.iter();
         let mut pull = || it.next().map(|c| [c[0], c[1]]);
         let n = self
             .rs
             .mix_into(RATE as f64 / rate as f64, &mut tmp, [1.0, 1.0], &mut pull);
         let block = self.format.block as usize;
         let mut bytes = vec![0u8; n * block];
-        for (i, fr) in tmp[..n * 2].chunks_exact(2).enumerate() {
+        for (i, fr) in tmp[..n * 2].as_chunks::<2>().0.iter().enumerate() {
             self.format
                 .write_stereo(&mut bytes[i * block..(i + 1) * block], [fr[0], fr[1]]);
         }

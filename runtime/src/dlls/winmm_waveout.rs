@@ -224,12 +224,11 @@ unsafe fn fill_caps(caps: *mut u8, size: u32, wide: bool) -> u32 {
     buf[0..2].copy_from_slice(&1u16.to_le_bytes()); // MM_MICROSOFT
     buf[2..4].copy_from_slice(&2u16.to_le_bytes()); // MM_WAVE_MAPPER
     buf[4..8].copy_from_slice(&0x0a00u32.to_le_bytes());
-    let name_end;
-    if wide {
+    let name_end = if wide {
         for (i, c) in DEVICE_NAME.encode_utf16().take(31).enumerate() {
             buf[8 + 2 * i..10 + 2 * i].copy_from_slice(&c.to_le_bytes());
         }
-        name_end = 8 + 64;
+        8 + 64
     } else {
         for (i, c) in super::encode_ansi(DEVICE_NAME)
             .into_iter()
@@ -238,8 +237,8 @@ unsafe fn fill_caps(caps: *mut u8, size: u32, wide: bool) -> u32 {
         {
             buf[8 + i] = c;
         }
-        name_end = 8 + 32;
-    }
+        8 + 32
+    };
     buf[name_end..name_end + 4].copy_from_slice(&0x000f_ffffu32.to_le_bytes());
     buf[name_end + 4..name_end + 6].copy_from_slice(&2u16.to_le_bytes());
     // WAVECAPS_PLAYBACKRATE | VOLUME | LRVOLUME | SAMPLEACCURATE.

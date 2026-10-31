@@ -173,7 +173,7 @@ impl Filter {
         }
         let f = self.frequency;
         let q = self.one_over_q;
-        for fr in buf.chunks_exact_mut(2) {
+        for fr in buf.as_chunks_mut::<2>().0.iter_mut() {
             for (c, x) in fr.iter_mut().enumerate() {
                 let input = *x;
                 *x = match self.kind {
@@ -262,7 +262,7 @@ impl Reverb {
     pub fn process(&mut self, buf: &mut [f32]) {
         let wet = self.wet_dry / 100.0;
         let dry = 1.0 - wet;
-        for fr in buf.chunks_exact_mut(2) {
+        for fr in buf.as_chunks_mut::<2>().0.iter_mut() {
             for (c, x) in fr.iter_mut().enumerate() {
                 let input = *x * 0.25;
                 let mut acc = 0.0;

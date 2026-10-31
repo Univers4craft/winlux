@@ -151,7 +151,7 @@ impl Effect {
             FxState::Meter { peak, rms } => {
                 let mut sum = [0.0f32; 2];
                 *peak = [0.0; 2];
-                for fr in buf.chunks_exact(2) {
+                for fr in buf.as_chunks::<2>().0.iter() {
                     for c in 0..2 {
                         peak[c] = peak[c].max(fr[c].abs());
                         sum[c] += fr[c] * fr[c];
@@ -342,7 +342,12 @@ impl XaShared {
                 None => default_matrix(dest.channels),
             };
             let mut out = vec![0.0f32; buf.len()];
-            for (o, i) in out.chunks_exact_mut(2).zip(buf.chunks_exact(2)) {
+            for (o, i) in out
+                .as_chunks_mut::<2>()
+                .0
+                .iter_mut()
+                .zip(buf.as_chunks::<2>().0.iter())
+            {
                 o[0] = i[0] * m.ll + i[1] * m.rl;
                 o[1] = i[0] * m.lr + i[1] * m.rr;
             }
@@ -405,7 +410,7 @@ impl XaShared {
                     v.filter.process(&mut tmp);
                 }
                 let gn = v.gains();
-                for fr in tmp.chunks_exact_mut(2) {
+                for fr in tmp.as_chunks_mut::<2>().0.iter_mut() {
                     fr[0] *= gn[0];
                     fr[1] *= gn[1];
                 }
@@ -441,7 +446,7 @@ impl XaShared {
                 v.filter.process(&mut buf);
             }
             let gn = v.gains();
-            for fr in buf.chunks_exact_mut(2) {
+            for fr in buf.as_chunks_mut::<2>().0.iter_mut() {
                 fr[0] *= gn[0];
                 fr[1] *= gn[1];
             }
@@ -462,7 +467,7 @@ impl XaShared {
         if let Some(m) = g.voices.get_mut(&master) {
             let gn = m.gains();
             let mut buf = std::mem::take(&mut m.mix);
-            for fr in buf.chunks_exact_mut(2) {
+            for fr in buf.as_chunks_mut::<2>().0.iter_mut() {
                 fr[0] *= gn[0];
                 fr[1] *= gn[1];
             }
