@@ -1,7 +1,9 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod admin;
 mod crash;
 mod dlls;
+mod firewall;
 mod loader;
 pub mod log;
 mod managed;
@@ -10,6 +12,7 @@ mod pe;
 mod printf;
 mod process;
 mod profiles;
+mod tasks;
 mod thunks;
 
 use std::path::PathBuf;
@@ -24,6 +27,14 @@ fn main() {
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
+    }
+    if exe == "--tasks" || exe == "--firewall" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(if exe == "--tasks" {
+            tasks::cli(&rest)
+        } else {
+            firewall::cli(&rest)
+        });
     }
     if exe == "--inspect" {
         let Some(path) = args.next() else {

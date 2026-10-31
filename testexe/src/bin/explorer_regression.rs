@@ -4,6 +4,8 @@
 #![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
+#[path = "../shell/admin_ui.rs"]
+mod admin_ui;
 #[path = "../shell/desktop.rs"]
 mod desktop;
 #[path = "../shell/diskcleaner.rs"]
@@ -12,6 +14,8 @@ mod diskcleaner;
 mod diskmgr;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/firewall.rs"]
+mod firewall;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/login.rs"]
@@ -24,6 +28,8 @@ mod notifications;
 mod settings;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
+#[path = "../shell/taskschd.rs"]
+mod taskschd;
 #[path = "../shell/terminal.rs"]
 mod terminal;
 #[path = "../shell/utilities.rs"]

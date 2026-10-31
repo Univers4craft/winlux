@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **124**
+- Réalisé : **127**
 - À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Total : **153**
+- Progression : **83.0%**
 
 ## À FAIRE (par priorité)
 
@@ -115,6 +115,7 @@
 - [x] Ajouter des DLL intégrées courantes : `user32`, `advapi32`, `ole32`, `bcrypt`, `version` et `shell32`.
 - [x] Ajouter la fondation COM/OLE native : appartements par thread, GUID, allocateur COM, mémoire globale et `IStream` partageable sur `HGLOBAL`, avec tests unitaires et PE.
 - [x] Enregistrer/révoquer des fabriques COM multi-usages et créer leurs objets dans le processus, avec cookies stables et appels réentrants testés.
+- [x] Planificateur de tâches 2.0 pour les `.exe` : `CoCreateInstance(CLSID_TaskScheduler)` → `ITaskService`, dossiers, `RegisterTaskDefinition`/`RegisterTask` (XML), déclencheurs temps/quotidien/hebdomadaire/démarrage/session/enregistrement, `IExecAction`, réglages et tâches en cours (voir `docs/PLANIFICATEUR_PAREFEU.md`).
 - [x] Ajouter un diagnostic explicite pour les exécutables gérés dépendant de `mscoree.dll`.
 - [x] Détecter les en-têtes CLR PE32/PE32+ et les apphosts modernes, puis relayer les assemblies vers `dotnet` ou Mono lorsqu'un runtime Linux compatible est installé.
 - [x] Relier les API de base fichiers/répertoires Windows au système de fichiers Linux.
@@ -181,6 +182,8 @@
 
 ### Priorité 5 — Thème Windows 11
 
+- [x] Planificateur de tâches maison (service `winlux --tasks daemon`, sans systemd ni cron) : déclencheurs horaires, intervalle, démarrage, ouverture de session et événements système (réseau, secteur/batterie, USB), conditions secteur/réseau, historique, application graphique Windows 11 FR/EN.
+- [x] Pare-feu maison sur nftables (`winlux --firewall daemon`) : profils domaine/privé/public, règles entrantes/sortantes par port, protocole et application, journal des connexions bloquées, alerte à la première écoute d'une application, application graphique Windows 11 FR/EN.
 - [x] VM : pointeur flèche visible (curseur logiciel Xorg `SWcursor`, flèche dessinée à l’échelle de l’interface).
 - [x] VM : la résolution suit la taille de la fenêtre QEMU (nouveau mode préféré appliqué par `xrandr`, bureau relu via `GetSystemMetrics` et réagencé); vérifié en passant de 1920×1080 à 1280×800 dans QEMU.
 - [x] Refaire l’interface du bureau façon Windows 11 : fond « fleur », barre des tâches sombre centrée ou à gauche (`WINLUX_TASKBAR_ALIGN=left` ou bouton du menu), menu Démarrer flottant (recherche, épinglés, recommandés, utilisateur, alimentation), zone de notification et icônes vectorielles.

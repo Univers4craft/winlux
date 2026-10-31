@@ -468,6 +468,10 @@ echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 # Démarrer les services systemd activés par les paquets APT.
 if test -x /usr/bin/systemctl; then /usr/bin/systemctl --boot-start; fi
 if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
+# Services maison : pare-feu (nftables, journal des blocages, alertes) et
+# planificateur de tâches (déclencheurs horaires, démarrage, événements).
+/usr/bin/winlux --firewall daemon >>/run/winlux/firewall.log 2>&1 &
+/usr/bin/winlux --tasks daemon >>/run/winlux/tasks.log 2>&1 &
 if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     result=0
     /usr/bin/python3 /opt/winlux/scripts/test-native-session-guest.py || result=$?
@@ -550,6 +554,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /bin/busybox cat /run/winlux/native-session.log >&2
         /bin/sh
     fi
+    # Tâches planifiées « à l'ouverture de session ».
+    /usr/bin/winlux --tasks fire logon >>/run/winlux/tasks.log 2>&1 &
     (
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
             DISPLAY=:0 /usr/bin/winlux-control status 2>/dev/null || true
