@@ -7,8 +7,6 @@
 //! résolution change (fenêtre de VM redimensionnée), le bureau se réadapte.
 //! Les textes sont en Windows-1252 car ils passent par `TextOutA`.
 
-#[path = "utilities.rs"]
-mod utilities;
 use crate::explorer;
 use crate::gfx::*;
 use crate::wm::{self, Gfx, Mouse};
@@ -47,6 +45,7 @@ static mut SHORTCUTS: [(&'static [u8], &'static [u8], i32, i32); 16] = [(b"", b"
 static mut SHORTCUTS_COUNT: usize = 0;
 static mut START_SEARCH: [u8; 64] = [0; 64]; // Texte de recherche
 static mut START_SEARCH_LEN: usize = 0;
+static mut POWER_MENU: bool = false;
 static mut ENABLE_BLUR: bool = true; // Effet de flou activé
 static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
 static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
@@ -284,6 +283,7 @@ unsafe fn set_start(open: bool) {
         START_CLOSING = false;
     } else if START_OPEN {
         START_CLOSING = true;
+        POWER_MENU = false;
     }
 }
 
@@ -1655,13 +1655,49 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         py + 12,
         rgb(0xE6, 0xE6, 0xE6),
     );
+    if POWER_MENU {
+        let pw = 160;
+        let ph = 3 * 36 + 8;
+        let mx = px + 24 - pw;
+        let my = py - ph - 8;
+        round_rect(hdc, b, mx, my, mx + pw, my + ph, 8, rgb(0x2D, 0x2D, 0x2D));
+        let items: [(&[u8], i32); 3] = [
+            (b"Arr\xEAter", 210),
+            (b"Red\xE9marrer", 211),
+            (b"Red\xE9marrer la session", 212),
+        ];
+        for (i, (label, id)) in items.iter().enumerate() {
+            let iy = my + 4 + i as i32 * 36;
+            if HOVER_START_ITEM == *id {
+                round_rect(hdc, b, mx + 4, iy, mx + pw - 4, iy + 34, 4, rgb(0x3D, 0x3D, 0x47));
+            }
+            text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), mx + 14, iy + 9, label);
+        }
+    }
 }
 
 /// Élément du menu Démarrer sous le pointeur : 0..11 épinglés, 100..103
-/// recommandés, 200 bascule d'alignement, 201 alimentation, 300 toutes mes applications,
+/// recommandés, 200 bascule d'alignement, 201 alimentation, 210 arrêter,
+/// 211 redémarrer, 212 redémarrer la session, 300 toutes mes applications,
 /// 301..312 catégories, 400..463 applications, -1 rien.
 fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     let s = &l.start;
+    if unsafe { POWER_MENU } {
+        let pr = power_rect(s);
+        let pw = 160;
+        let ph = 3 * 36 + 8;
+        let mx = pr.right - pw;
+        let my = pr.top - ph - 4;
+        if x >= mx && x < mx + pw && y >= my && y < my + ph {
+            let row = (y - my - 4) / 36;
+            return match row {
+                0 => 210,
+                1 => 211,
+                2 => 212,
+                _ => -1,
+            };
+        }
+    }
     let y0 = s.top + 82;
     let all_w = unsafe {
         text_width(
@@ -2372,7 +2408,22 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                     });
                 }
                 201 => {
+                    POWER_MENU = !POWER_MENU;
+                }
+                210 => {
+                    POWER_MENU = false;
+                    set_start(false);
                     crate::settings::control(c"poweroff");
+                }
+                211 => {
+                    POWER_MENU = false;
+                    set_start(false);
+                    crate::settings::control(c"reboot");
+                }
+                212 => {
+                    POWER_MENU = false;
+                    set_start(false);
+                    crate::settings::control(c"restart-session");
                 }
                 300 => {
                     START_SHOW_ALL_APPS = !START_SHOW_ALL_APPS;
