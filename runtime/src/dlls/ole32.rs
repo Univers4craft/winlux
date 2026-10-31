@@ -842,6 +842,10 @@ pub unsafe extern "win64" fn co_create_instance(
         if let Some(hr) = crate::dlls::taskschd::create_builtin(&guid, &iid, out) {
             return hr;
         }
+        // Classes audio intégrées (MMDeviceEnumerator, DirectSound, XAudio2 2.7).
+        if let Some(hr) = super::audio_com::create_builtin(&guid, riid, out) {
+            return hr;
+        }
         return 0x8004_0154u32 as i32; // REGDB_E_CLASSNOTREG
     };
     let entry = Arc::clone(entry);
@@ -881,6 +885,10 @@ pub unsafe extern "win64" fn co_get_class_object(
         .iter()
         .find(|entry| entry.clsid == guid && (entry.context & ctx) != 0)
     else {
+        drop(factories);
+        if let Some(hr) = super::audio_com::class_object(&guid, riid, out) {
+            return hr;
+        }
         return REGDB_E_CLASSNOTREG;
     };
     let entry = Arc::clone(entry);

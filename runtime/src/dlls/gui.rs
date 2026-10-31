@@ -2296,9 +2296,55 @@ pub fn set_timer(hwnd: usize, id: usize, interval: u32, callback: usize) -> usiz
         id: real_id,
         interval_ms: interval,
         callback,
-        next_fire: 0,
+        next_fire: crate::dlls::kernel32::get_tick_count64() + interval.max(10) as u64,
     });
     real_id
+}
+
+/// Prochain WM_TIMER échu correspondant au filtre (`overdue_only` : seulement
+/// un minuteur en retard d'au moins une période, pour qu'un flot continu
+/// d'entrées ne l'affame pas). Le minuteur est réarmé à la période suivante.
+pub fn due_timer(hwnd: usize, min: u32, max: u32, overdue_only: bool) -> Option<Msg> {
+    const WM_TIMER: u32 = 0x0113;
+    if !(min == 0 && max == 0) && !(min..=max).contains(&WM_TIMER) {
+        return None;
+    }
+    let now = crate::dlls::kernel32::get_tick_count64();
+    let mut t = lock(timers());
+    let e = t.iter_mut().find(|e| {
+        let interval = e.interval_ms.max(10) as u64;
+        let limit = if overdue_only {
+            e.next_fire.saturating_add(interval)
+        } else {
+            e.next_fire
+        };
+        (hwnd == 0 || e.hwnd == hwnd) && now >= limit
+    })?;
+    let interval = e.interval_ms.max(10) as u64;
+    e.next_fire = if e.next_fire == 0 || now >= e.next_fire + 4 * interval {
+        now + interval
+    } else {
+        e.next_fire + interval
+    };
+    Some(Msg {
+        hwnd: e.hwnd,
+        message: WM_TIMER,
+        wparam: e.id,
+        lparam: e.callback as isize,
+        time: now as u32,
+        pt: Point::default(),
+        l_private: 0,
+    })
+}
+
+/// Millisecondes avant le prochain minuteur (pour borner l'attente).
+pub fn next_timer_ms(hwnd: usize) -> Option<u32> {
+    let now = crate::dlls::kernel32::get_tick_count64();
+    lock(timers())
+        .iter()
+        .filter(|e| hwnd == 0 || e.hwnd == hwnd)
+        .map(|e| e.next_fire.saturating_sub(now).min(u32::MAX as u64) as u32)
+        .min()
 }
 
 pub fn kill_timer(hwnd: usize, id: usize) -> bool {
@@ -2677,4 +2723,106 @@ mod tests {
         // Sans DC, les réglages sont sans effet et renvoient la valeur neutre.
         assert_eq!(set_dc_bk_mode(0x00DE_AD00, 1), 0);
     }
+}
+
+// ---------- État brut clavier/souris pour DirectInput ----------
+// DirectInput lit des touches physiques (codes de balayage) et des
+// déplacements relatifs, indépendamment de la disposition du clavier.
+
+struct RawInput {
+    /// Touches enfoncées, indexées par code DIK (jeu 1, 0x80 = étendu).
+    keys: [bool; 256],
+    mouse_last: Option<(i32, i32)>,
+    dx: i32,
+    dy: i32,
+    wheel: i32,
+    /// Boutons DirectInput : 0 gauche, 1 droit, 2 milieu, 3-4 latéraux.
+    buttons: [bool; 8],
+}
+
+fn raw_input() -> &'static Mutex<RawInput> {
+    static R: OnceLock<Mutex<RawInput>> = OnceLock::new();
+    R.get_or_init(|| {
+        Mutex::new(RawInput {
+            keys: [false; 256],
+            mouse_last: None,
+            dx: 0,
+            dy: 0,
+            wheel: 0,
+            buttons: [false; 8],
+        })
+    })
+}
+
+/// Code evdev (keycode X11 − 8) vers code DIK DirectInput.
+pub fn evdev_to_dik(code: u32) -> Option<u8> {
+    Some(match code {
+        1..=88 => code as u8,
+        96 => 0x9C,  // pavé Entrée
+        97 => 0x9D,  // Ctrl droit
+        98 => 0xB5,  // pavé /
+        99 => 0xB7,  // Impr écran
+        100 => 0xB8, // Alt Gr
+        102 => 0xC7, // Début
+        103 => 0xC8, // Haut
+        104 => 0xC9, // Page préc.
+        105 => 0xCB, // Gauche
+        106 => 0xCD, // Droite
+        107 => 0xCF, // Fin
+        108 => 0xD0, // Bas
+        109 => 0xD1, // Page suiv.
+        110 => 0xD2, // Inser
+        111 => 0xD3, // Suppr
+        119 => 0xC5, // Pause
+        125 => 0xDB, // Windows gauche
+        126 => 0xDC, // Windows droite
+        127 => 0xDD, // Menu contextuel
+        _ => return None,
+    })
+}
+
+/// Appelé par le serveur graphique à chaque touche (keycode X11).
+pub fn raw_key(x11_keycode: u8, down: bool) {
+    if let Some(dik) = evdev_to_dik((x11_keycode as u32).saturating_sub(8)) {
+        lock(raw_input()).keys[dik as usize] = down;
+    }
+}
+
+pub fn raw_keys() -> [bool; 256] {
+    lock(raw_input()).keys
+}
+
+/// Position écran du pointeur : accumule le déplacement relatif.
+pub fn raw_mouse_motion(x: i32, y: i32) {
+    let mut r = lock(raw_input());
+    if let Some((lx, ly)) = r.mouse_last {
+        r.dx += x - lx;
+        r.dy += y - ly;
+    }
+    r.mouse_last = Some((x, y));
+}
+
+/// Bouton X11 (1 gauche, 2 milieu, 3 droit, 4/5 molette, 8/9 latéraux).
+pub fn raw_mouse_button(detail: u8, down: bool) {
+    let mut r = lock(raw_input());
+    match detail {
+        4 if down => r.wheel += 120,
+        5 if down => r.wheel -= 120,
+        1 => r.buttons[0] = down,
+        3 => r.buttons[1] = down,
+        2 => r.buttons[2] = down,
+        8 => r.buttons[3] = down,
+        9 => r.buttons[4] = down,
+        _ => {}
+    }
+}
+
+/// Déplacement (dx, dy, molette) depuis le dernier appel, et boutons.
+pub fn take_raw_mouse() -> (i32, i32, i32, [bool; 8]) {
+    let mut r = lock(raw_input());
+    let out = (r.dx, r.dy, r.wheel, r.buttons);
+    r.dx = 0;
+    r.dy = 0;
+    r.wheel = 0;
+    out
 }

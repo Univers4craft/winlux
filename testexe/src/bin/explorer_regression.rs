@@ -34,6 +34,8 @@ mod netdrives;
 mod notepad;
 #[path = "../shell/notifications.rs"]
 mod notifications;
+#[path = "../shell/personalize.rs"]
+mod personalize;
 #[path = "../shell/restore.rs"]
 mod restore;
 #[path = "../shell/settings.rs"]
@@ -65,6 +67,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         settings::regression_checks();
         cliphist::regression_checks();
         snip::regression_checks();
+        personalize::regression_checks();
         welcome::regression_checks();
     }
     finish()

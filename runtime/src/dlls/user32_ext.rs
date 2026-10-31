@@ -140,56 +140,9 @@ pub extern "win64" fn copy_icon(_icon: usize) -> usize {
 }
 
 // ── Timers ──────────────────────────────────────────────────────────
-
-static TIMER_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
-static TIMERS: Mutex<Option<HashMap<(usize, usize), TimerInfo>>> = Mutex::new(None);
-
-struct TimerInfo {
-    _interval_ms: u32,
-    _callback: usize,
-    #[allow(dead_code)]
-    next_fire: u64,
-}
-
-pub unsafe extern "win64" fn set_timer(
-    hwnd: usize,
-    id: usize,
-    elapse: u32,
-    callback: usize,
-) -> usize {
-    let real_id = if hwnd == 0 && id == 0 {
-        TIMER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    } else {
-        id
-    };
-    let now = crate::dlls::kernel32::get_tick_count64();
-    let mut g = TIMERS.lock().unwrap();
-    if g.is_none() {
-        *g = Some(HashMap::new());
-    }
-    g.as_mut().unwrap().insert(
-        (hwnd, real_id),
-        TimerInfo {
-            _interval_ms: elapse.max(10),
-            _callback: callback,
-            next_fire: now + elapse as u64,
-        },
-    );
-    // Déclencher WM_TIMER via le message loop est un TODO ; pour l'instant
-    // le timer est enregistré mais ne fire pas activement.
-    real_id
-}
-
-pub unsafe extern "win64" fn kill_timer(hwnd: usize, id: usize) -> i32 {
-    let mut g = TIMERS.lock().unwrap();
-    match g.as_mut().and_then(|m| m.remove(&(hwnd, id))) {
-        Some(_) => 1,
-        None => {
-            crate::process::set_last_error(1402);
-            0
-        }
-    }
-}
+// SetTimer/KillTimer sont fournis par user32.rs (gui::set_timer), qui
+// déclenche réellement WM_TIMER. Une ancienne version bouchon de ce fichier
+// les remplaçait et empêchait tous les minuteurs des applications de sonner.
 
 // ── Menus ───────────────────────────────────────────────────────────
 
@@ -921,7 +874,6 @@ pub fn exports() -> crate::dlls::Exports {
         "LoadIconA"=>fn load_icon_a, "LoadIconW"=>fn load_icon_w,
         "LoadImageA"=>fn load_image_a, "LoadImageW"=>fn load_image_w,
         "DestroyIcon"=>fn destroy_icon, "DestroyCursor"=>fn destroy_cursor, "CopyIcon"=>fn copy_icon,
-        "SetTimer"=>fn set_timer, "KillTimer"=>fn kill_timer,
         "CreateMenu"=>fn create_menu, "CreatePopupMenu"=>fn create_popup_menu, "DestroyMenu"=>fn destroy_menu,
         "GetMenu"=>fn get_menu, "SetMenu"=>fn set_menu, "DrawMenuBar"=>fn draw_menu_bar,
         "AppendMenuA"=>fn append_menu_a, "AppendMenuW"=>fn append_menu_w,

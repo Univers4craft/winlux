@@ -313,6 +313,11 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
     loop {
         gui::pump_backend();
         let q = gui::current_queue();
+        // Un minuteur très en retard passe avant les entrées (anti-famine).
+        if let Some(m) = gui::due_timer(hwnd, min, max, true) {
+            write_msg(out, &m);
+            return 1;
+        }
         // WM_QUIT (posted par PostQuitMessage) termine la boucle (renvoie 0).
         if let Some(m) = gui::take_message(&q, hwnd, min, max) {
             if m.message == gui::WM_QUIT {
@@ -324,8 +329,17 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
         }
         // File vide : en headless on rend la main (fin de boucle); avec un
         // backend réel on attend les prochains événements hôte, comme Win32.
-        if !gui::wait_backend(50) {
+        let wait = gui::next_timer_ms(hwnd).map_or(50, |ms| ms.min(50));
+        if !gui::wait_backend(wait) {
             return 0;
+        }
+        // WM_TIMER est le message le moins prioritaire, comme sous Windows :
+        // seulement quand la file est vide.
+        if gui::peek_message(&q, hwnd, min, max).is_none() {
+            if let Some(m) = gui::due_timer(hwnd, min, max, false) {
+                write_msg(out, &m);
+                return 1;
+            }
         }
     }
 }
