@@ -851,7 +851,6 @@ extern "C" {
     pub fn GetSysColor(index: i32) -> u32;
     pub fn GetSysColorBrush(index: i32) -> Handle;
     pub fn LoadCursorA(instance: Handle, name: isize) -> Handle;
-    pub fn RegisterClassA(wc: *const WndClassA) -> u16;
     pub fn SetTimer(hwnd: Handle, id: usize, elapse: u32, func: usize) -> usize;
     pub fn KillTimer(hwnd: Handle, id: usize) -> i32;
 }
