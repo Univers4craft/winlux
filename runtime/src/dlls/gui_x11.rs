@@ -800,6 +800,83 @@ impl X11Backend {
         Some(cursor)
     }
 
+    /// Lit un drawable X11 (fenêtre, pixmap ou racine) en pixels COLORREF.
+    fn read_drawable(
+        &self,
+        drawable: u32,
+        area: x11rb::protocol::xproto::Rectangle,
+    ) -> Option<BitmapSnapshot> {
+        let setup = self.conn.setup();
+        let screen = &setup.roots[self.screen];
+        let depth = screen.root_depth;
+        let masks = screen
+            .allowed_depths
+            .iter()
+            .flat_map(|d| d.visuals.iter())
+            .find(|v| v.visual_id == screen.root_visual)
+            .map(|v| (v.red_mask, v.green_mask, v.blue_mask))?;
+        let format = setup.pixmap_formats.iter().find(|f| f.depth == depth)?;
+        let bits_per_pixel = format.bits_per_pixel as usize;
+        let pad = format.scanline_pad as usize;
+        if bits_per_pixel == 0
+            || bits_per_pixel > 32
+            || !bits_per_pixel.is_multiple_of(8)
+            || pad < 8
+            || !pad.is_multiple_of(8)
+        {
+            return None;
+        }
+        let bytes_per_pixel = bits_per_pixel / 8;
+        let stride = (area.width as usize * bits_per_pixel).div_ceil(pad) * (pad / 8);
+        let image_len = stride.checked_mul(area.height as usize)?;
+        if image_len > 256 * 1024 * 1024 {
+            return None;
+        }
+        let image = self
+            .conn
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                drawable,
+                area.x,
+                area.y,
+                area.width,
+                area.height,
+                u32::MAX,
+            )
+            .ok()?
+            .reply()
+            .ok()?
+            .data;
+        if image.len() < image_len {
+            return None;
+        }
+        let mut pixels = vec![0; area.width as usize * area.height as usize];
+        for y in 0..area.height as usize {
+            for x in 0..area.width as usize {
+                let start = y * stride + x * bytes_per_pixel;
+                let mut pixel = 0u32;
+                match setup.image_byte_order {
+                    x11rb::protocol::xproto::ImageOrder::LSB_FIRST => {
+                        for i in 0..bytes_per_pixel {
+                            pixel |= (image[start + i] as u32) << (8 * i);
+                        }
+                    }
+                    _ => {
+                        for i in 0..bytes_per_pixel {
+                            pixel = (pixel << 8) | image[start + i] as u32;
+                        }
+                    }
+                }
+                pixels[y * area.width as usize + x] = pixel_to_colorref(pixel, masks);
+            }
+        }
+        Some(BitmapSnapshot {
+            width: area.width as usize,
+            height: area.height as usize,
+            pixels,
+        })
+    }
+
     fn scaled(&self, value: i32) -> i32 {
         (value as f32 * self.scale).round() as i32
     }
@@ -2205,6 +2282,7 @@ fn keysym_to_vk(sym: u32) -> Option<usize> {
         0xFF57 => 0x23,                                    // VK_END
         0xFF55 => 0x21,                                    // VK_PRIOR
         0xFF56 => 0x22,                                    // VK_NEXT
+        0xFF61 => 0x2C,                                    // VK_SNAPSHOT (Impr. écran)
         0xFF63 => 0x2D,                                    // VK_INSERT
         0xFFBE..=0xFFC9 => 0x70 + (sym - 0xFFBE) as usize, // VK_F1..VK_F12
         0xFFE1 | 0xFFE2 => 0x10,                           // VK_SHIFT
@@ -3118,73 +3196,48 @@ impl gui::GuiBackend for X11Backend {
         }
         self.before_x11();
         let area = Self::to_x_rect(&window, &rect)?;
-        let setup = self.conn.setup();
-        let screen = &setup.roots[self.screen];
-        let depth = screen.root_depth;
-        let masks = screen
-            .allowed_depths
-            .iter()
-            .flat_map(|d| d.visuals.iter())
-            .find(|v| v.visual_id == screen.root_visual)
-            .map(|v| (v.red_mask, v.green_mask, v.blue_mask))?;
-        let format = setup.pixmap_formats.iter().find(|f| f.depth == depth)?;
-        let bits_per_pixel = format.bits_per_pixel as usize;
-        let pad = format.scanline_pad as usize;
-        if bits_per_pixel == 0
-            || bits_per_pixel > 32
-            || !bits_per_pixel.is_multiple_of(8)
-            || pad < 8
-            || !pad.is_multiple_of(8)
-        {
+        self.read_drawable(window.window, area)
+    }
+
+    fn capture_screen(&mut self, rect: Rect) -> Option<BitmapSnapshot> {
+        // La racine d'un Xorg sans compositeur contient l'image réellement
+        // affichée : bureau Winlux et fenêtres des autres programmes.
+        self.before_x11();
+        let _ = self.conn.flush();
+        let root = self.conn.setup().roots[self.screen].root;
+        let geometry = self.conn.get_geometry(root).ok()?.reply().ok()?;
+        let physical = self.scaled_rect(&rect);
+        let x0 = physical.left.clamp(0, geometry.width as i32);
+        let y0 = physical.top.clamp(0, geometry.height as i32);
+        let x1 = physical.right.clamp(0, geometry.width as i32);
+        let y1 = physical.bottom.clamp(0, geometry.height as i32);
+        if x1 <= x0 || y1 <= y0 {
             return None;
         }
-        let bytes_per_pixel = bits_per_pixel / 8;
-        let stride = (area.width as usize * bits_per_pixel).div_ceil(pad) * (pad / 8);
-        let image_len = stride.checked_mul(area.height as usize)?;
-        if image_len > 256 * 1024 * 1024 {
-            return None;
+        let area = x11rb::protocol::xproto::Rectangle {
+            x: x0 as i16,
+            y: y0 as i16,
+            width: (x1 - x0) as u16,
+            height: (y1 - y0) as u16,
+        };
+        let snapshot = self.read_drawable(root, area)?;
+        let width = rect.width().max(1) as usize;
+        let height = rect.height().max(1) as usize;
+        if snapshot.width == width && snapshot.height == height {
+            return Some(snapshot);
         }
-        let image = self
-            .conn
-            .get_image(
-                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
-                window.window,
-                area.x,
-                area.y,
-                area.width,
-                area.height,
-                u32::MAX,
-            )
-            .ok()?
-            .reply()
-            .ok()?
-            .data;
-        if image.len() < image_len {
-            return None;
-        }
-        let mut pixels = vec![0; area.width as usize * area.height as usize];
-        for y in 0..area.height as usize {
-            for x in 0..area.width as usize {
-                let start = y * stride + x * bytes_per_pixel;
-                let mut pixel = 0u32;
-                match setup.image_byte_order {
-                    x11rb::protocol::xproto::ImageOrder::LSB_FIRST => {
-                        for i in 0..bytes_per_pixel {
-                            pixel |= (image[start + i] as u32) << (8 * i);
-                        }
-                    }
-                    _ => {
-                        for i in 0..bytes_per_pixel {
-                            pixel = (pixel << 8) | image[start + i] as u32;
-                        }
-                    }
-                }
-                pixels[y * area.width as usize + x] = pixel_to_colorref(pixel, masks);
+        // Mise à l'échelle HiDPI : on revient en unités logiques Win32.
+        let mut pixels = vec![0; width.checked_mul(height)?];
+        for y in 0..height {
+            let sy = (y * snapshot.height / height).min(snapshot.height - 1);
+            for x in 0..width {
+                let sx = (x * snapshot.width / width).min(snapshot.width - 1);
+                pixels[y * width + x] = snapshot.pixels[sy * snapshot.width + sx];
             }
         }
         Some(BitmapSnapshot {
-            width: area.width as usize,
-            height: area.height as usize,
+            width,
+            height,
             pixels,
         })
     }

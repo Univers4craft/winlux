@@ -4,6 +4,8 @@
 #![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
+#[path = "../shell/cliphist.rs"]
+mod cliphist;
 #[path = "../shell/a11y.rs"]
 mod a11y;
 #[path = "../shell/admin_ui.rs"]
@@ -44,6 +46,8 @@ mod personalize;
 mod restore;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/snip.rs"]
+mod snip;
 #[path = "../shell/store.rs"]
 mod store;
 #[path = "../shell/settings_cpu.rs"]
@@ -69,6 +73,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
         explorer::regression_checks();
         desktop::regression_checks();
         settings::regression_checks();
+        cliphist::regression_checks();
+        snip::regression_checks();
         personalize::regression_checks();
         welcome::regression_checks();
         a11y::regression_checks();
