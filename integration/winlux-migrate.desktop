@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=Transfert de PC
+Comment=Récupérer fichiers et paramètres depuis un autre PC du réseau
+Exec=/usr/bin/winlux-migrate
+Icon=network-workgroup
+Terminal=false
+Categories=System;Utility;
