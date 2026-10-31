@@ -31,6 +31,10 @@ static mut ALARM_MINUTES: u32 = 0;
 static mut ALARM_ENABLED: bool = false;
 static mut ALARM_TRIGGERED: bool = false;
 
+static mut HOVER_TAB: i32 = -1;
+static mut HOVER_BTN_ROW: i32 = -1;
+static mut HOVER_BTN_COL: i32 = -1;
+
 fn format_time(total_seconds: u32) -> [u8; 16] {
     let hours = total_seconds / 3600;
     let minutes = (total_seconds % 3600) / 60;
@@ -63,34 +67,27 @@ fn format_time(total_seconds: u32) -> [u8; 16] {
 
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let r = f.client;
-    fill(
-        g.hdc,
-        g.b,
-        r.left,
-        r.top,
-        r.right,
-        r.bottom,
-        rgb(0x1E, 0x1E, 0x1E),
-    );
+    let p = pal();
+    fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, p.window);
 
     let tabs: [&[u8]; 4] = [b"Calculatrice", b"Chronometre", b"Minuteur", b"Reveil"];
     let tab_w = (r.right - r.left) / 4;
     for i in 0..4 {
         let tab_x = r.left + (i as i32) * tab_w;
-        let tab_bg = if (i as u32) == MODE {
-            rgb(0x2D, 0x2D, 0x30)
+        let active = (i as u32) == MODE;
+        let tab_bg = if active {
+            p.surface
+        } else if (i as i32) == HOVER_TAB {
+            p.hover
         } else {
-            rgb(0x25, 0x25, 0x26)
+            p.window
         };
         fill(g.hdc, g.b, tab_x, r.top, tab_x + tab_w, r.top + 32, tab_bg);
-        text(
-            g.hdc,
-            g.f.body,
-            rgb(0xCC, 0xCC, 0xCC),
-            tab_x + 8,
-            r.top + 8,
-            tabs[i],
-        );
+        let tab_text = if active { p.text } else { p.text2 };
+        text(g.hdc, g.f.body, tab_text, tab_x + 8, r.top + 8, tabs[i]);
+        if active {
+            fill(g.hdc, g.b, tab_x + 4, r.top + 29, tab_x + tab_w - 4, r.top + 32, p.accent);
+        }
     }
 
     match MODE {
@@ -104,23 +101,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
 
 unsafe fn draw_calculator(g: &mut Gfx, f: &Frame) {
     let r = f.client;
+    let p = pal();
     let y = r.top + 40;
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16,
-        y,
-        r.right - 16,
-        y + 60,
-        rgb(0x00, 0x00, 0x00),
-    );
+    round_rect(g.hdc, g.b, r.left + 16, y, r.right - 16, y + 60, 4, mix(p.window, rgb(0, 0, 0), 3, 10));
     text(
-        g.hdc,
-        g.f.title,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.right - 24,
-        y + 8,
+        g.hdc, g.f.title, p.text,
+        r.right - 24, y + 8,
         &CALC_DISPLAY[..CALC_DISPLAY_LEN],
     );
 
@@ -144,28 +131,35 @@ unsafe fn draw_calculator(g: &mut Gfx, f: &Frame) {
                 continue;
             }
 
-            let btn_color = match buttons[row][col] {
-                b"=" => rgb(0x0A, 0x84, 0xFF),
-                b"C" | b"\xB1" | b"%" => rgb(0x3E, 0x3E, 0x42),
-                b"/" | b"*" | b"-" | b"+" => rgb(0x5A, 0x5A, 0x5C),
-                _ => rgb(0x3C, 0x3C, 0x3C),
+            let hovered = HOVER_BTN_ROW == row as i32 && HOVER_BTN_COL == col as i32;
+            let (btn_color, txt_color) = match buttons[row][col] {
+                b"=" => {
+                    let c = if hovered { mix(p.accent, p.text, 2, 10) } else { p.accent };
+                    (c, p.on_accent)
+                }
+                b"C" | b"\xB1" | b"%" => {
+                    let c = if hovered { p.hover } else { p.surface2 };
+                    (c, p.text)
+                }
+                b"/" | b"*" | b"-" | b"+" => {
+                    let c = if hovered { p.hover } else { p.border };
+                    (c, p.text)
+                }
+                _ => {
+                    let c = if hovered { p.hover } else { p.surface };
+                    (c, p.text)
+                }
             };
 
-            fill(g.hdc, g.b, bx, by, bx + btn_w - 4, by + btn_h, btn_color);
-            text(
-                g.hdc,
-                g.f.body,
-                rgb(0xFF, 0xFF, 0xFF),
-                bx + 8,
-                by + 16,
-                buttons[row][col],
-            );
+            round_rect(g.hdc, g.b, bx, by, bx + btn_w - 4, by + btn_h, 4, btn_color);
+            text(g.hdc, g.f.body, txt_color, bx + 8, by + 16, buttons[row][col]);
         }
     }
 }
 
 unsafe fn draw_stopwatch(g: &mut Gfx, f: &Frame) {
     let r = f.client;
+    let p = pal();
     let y = r.top + 40;
 
     let now = GetTickCount();
@@ -176,24 +170,8 @@ unsafe fn draw_stopwatch(g: &mut Gfx, f: &Frame) {
     };
     let time_str = format_time(elapsed / 1000);
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16,
-        y,
-        r.right - 16,
-        y + 80,
-        rgb(0x00, 0x00, 0x00),
-    );
-    text_centered(
-        g.hdc,
-        g.f.title,
-        32,
-        rgb(0xFF, 0xFF, 0xFF),
-        (r.left + r.right) / 2,
-        y + 24,
-        &time_str,
-    );
+    round_rect(g.hdc, g.b, r.left + 16, y, r.right - 16, y + 80, 4, mix(p.window, rgb(0, 0, 0), 3, 10));
+    text_centered(g.hdc, g.f.title, 32, p.text, (r.left + r.right) / 2, y + 24, &time_str);
 
     let btn_w = 100;
     let by = y + 100;
@@ -206,51 +184,22 @@ unsafe fn draw_stopwatch(g: &mut Gfx, f: &Frame) {
 
     for i in 0..3 {
         let bx = r.left + 16 + (i as i32) * (btn_w + 8);
-        fill(
-            g.hdc,
-            g.b,
-            bx,
-            by,
-            bx + btn_w,
-            by + 40,
-            rgb(0x0A, 0x84, 0xFF),
-        );
-        text_centered(
-            g.hdc,
-            g.f.body,
-            11,
-            rgb(0xFF, 0xFF, 0xFF),
-            bx + btn_w / 2,
-            by + 12,
-            btn_labels[i],
-        );
+        round_rect(g.hdc, g.b, bx, by, bx + btn_w, by + 40, 4, p.accent);
+        text_centered(g.hdc, g.f.body, 11, p.on_accent, bx + btn_w / 2, by + 12, btn_labels[i]);
     }
 
     if STOPWATCH_LAP_COUNT > 0 {
         let lap_y = by + 60;
-        text(
-            g.hdc,
-            g.f.small,
-            rgb(0xCC, 0xCC, 0xCC),
-            r.left + 16,
-            lap_y,
-            b"Tours :",
-        );
+        text(g.hdc, g.f.small, p.text2, r.left + 16, lap_y, b"Tours :");
         for i in 0..STOPWATCH_LAP_COUNT.min(5) {
-            text(
-                g.hdc,
-                g.f.small,
-                rgb(0xCC, 0xCC, 0xCC),
-                r.left + 16,
-                lap_y + 20 + (i as i32) * 20,
-                &STOPWATCH_LAPS[i],
-            );
+            text(g.hdc, g.f.small, p.text2, r.left + 16, lap_y + 20 + (i as i32) * 20, &STOPWATCH_LAPS[i]);
         }
     }
 }
 
 unsafe fn draw_timer(g: &mut Gfx, f: &Frame) {
     let r = f.client;
+    let p = pal();
     let y = r.top + 40;
 
     let remaining = if TIMER_RUNNING {
@@ -268,263 +217,96 @@ unsafe fn draw_timer(g: &mut Gfx, f: &Frame) {
 
     let time_str = format_time(remaining);
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16,
-        y,
-        r.right - 16,
-        y + 80,
-        rgb(0x00, 0x00, 0x00),
-    );
-    text_centered(
-        g.hdc,
-        g.f.title,
-        32,
-        rgb(0xFF, 0xFF, 0xFF),
-        (r.left + r.right) / 2,
-        y + 24,
-        &time_str,
-    );
+    round_rect(g.hdc, g.b, r.left + 16, y, r.right - 16, y + 80, 4, mix(p.window, rgb(0, 0, 0), 3, 10));
+    text_centered(g.hdc, g.f.title, 32, p.text, (r.left + r.right) / 2, y + 24, &time_str);
 
     let btn_w = 60;
     let ctrl_y = y + 100;
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16,
-        ctrl_y,
-        r.left + 16 + btn_w,
-        ctrl_y + 40,
-        rgb(0x3C, 0x3C, 0x3C),
-    );
-    text_centered(
-        g.hdc,
-        g.f.body,
-        11,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.left + 16 + btn_w / 2,
-        ctrl_y + 12,
-        &format_time(TIMER_SECONDS),
-    );
+    round_rect(g.hdc, g.b, r.left + 16, ctrl_y, r.left + 16 + btn_w, ctrl_y + 40, 4, p.surface);
+    text_centered(g.hdc, g.f.body, 11, p.text, r.left + 16 + btn_w / 2, ctrl_y + 12, &format_time(TIMER_SECONDS));
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16 + btn_w + 8,
-        ctrl_y,
-        r.left + 16 + btn_w * 2 + 4,
-        ctrl_y + 40,
-        rgb(0x0A, 0x84, 0xFF),
-    );
-    text_centered(
-        g.hdc,
-        g.f.body,
-        11,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.left + 16 + btn_w + 8 + btn_w / 2,
-        ctrl_y + 12,
-        b"+60s",
-    );
+    round_rect(g.hdc, g.b, r.left + 16 + btn_w + 8, ctrl_y, r.left + 16 + btn_w * 2 + 4, ctrl_y + 40, 4, p.accent);
+    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + btn_w + 8 + btn_w / 2, ctrl_y + 12, b"+60s");
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16 + btn_w * 2 + 12,
-        ctrl_y,
-        r.left + 16 + btn_w * 3 + 8,
-        ctrl_y + 40,
-        rgb(0x0A, 0x84, 0xFF),
-    );
-    text_centered(
-        g.hdc,
-        g.f.body,
-        11,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.left + 16 + btn_w * 2 + 12 + btn_w / 2,
-        ctrl_y + 12,
-        b"-60s",
-    );
+    round_rect(g.hdc, g.b, r.left + 16 + btn_w * 2 + 12, ctrl_y, r.left + 16 + btn_w * 3 + 8, ctrl_y + 40, 4, p.accent);
+    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + btn_w * 2 + 12 + btn_w / 2, ctrl_y + 12, b"-60s");
 
     let start_btn: &[u8] = if TIMER_RUNNING { b"Pause" } else { b"Demarrer" };
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16,
-        ctrl_y + 50,
-        r.left + 16 + 100,
-        ctrl_y + 90,
-        rgb(0x0A, 0x84, 0xFF),
-    );
-    text_centered(
-        g.hdc,
-        g.f.body,
-        11,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.left + 16 + 50,
-        ctrl_y + 62,
-        start_btn,
-    );
+    round_rect(g.hdc, g.b, r.left + 16, ctrl_y + 50, r.left + 16 + 100, ctrl_y + 90, 4, p.accent);
+    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + 50, ctrl_y + 62, start_btn);
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16 + 108,
-        ctrl_y + 50,
-        r.left + 16 + 208,
-        ctrl_y + 90,
-        rgb(0x5A, 0x5A, 0x5C),
-    );
-    text_centered(
-        g.hdc,
-        g.f.body,
-        11,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.left + 16 + 158,
-        ctrl_y + 62,
-        b"Reset",
-    );
+    round_rect(g.hdc, g.b, r.left + 16 + 108, ctrl_y + 50, r.left + 16 + 208, ctrl_y + 90, 4, p.surface2);
+    text_centered(g.hdc, g.f.body, 11, p.text, r.left + 16 + 158, ctrl_y + 62, b"Reset");
 }
 
 unsafe fn draw_alarm(g: &mut Gfx, f: &Frame) {
     let r = f.client;
+    let p = pal();
     let y = r.top + 40;
 
     let alarm_str = format_time(ALARM_HOURS * 3600 + ALARM_MINUTES * 60);
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16,
-        y,
-        r.right - 16,
-        y + 80,
-        rgb(0x00, 0x00, 0x00),
-    );
-    text_centered(
-        g.hdc,
-        g.f.title,
-        32,
-        rgb(0xFF, 0xFF, 0xFF),
-        (r.left + r.right) / 2,
-        y + 24,
-        &alarm_str,
-    );
+    round_rect(g.hdc, g.b, r.left + 16, y, r.right - 16, y + 80, 4, mix(p.window, rgb(0, 0, 0), 3, 10));
+    text_centered(g.hdc, g.f.title, 32, p.text, (r.left + r.right) / 2, y + 24, &alarm_str);
 
     let status: &[u8] = if ALARM_ENABLED {
-        if ALARM_TRIGGERED {
-            b"ALARME !"
-        } else {
-            b"Active"
-        }
+        if ALARM_TRIGGERED { b"ALARME !" } else { b"Active" }
     } else {
         b"Desactive"
     };
-    text_centered(
-        g.hdc,
-        g.f.body,
-        11,
-        rgb(0xCC, 0xCC, 0xCC),
-        (r.left + r.right) / 2,
-        y + 60,
-        status,
-    );
+    text_centered(g.hdc, g.f.body, 11, p.text2, (r.left + r.right) / 2, y + 60, status);
 
     let btn_w = 100;
     let ctrl_y = y + 100;
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16,
-        ctrl_y,
-        r.left + 16 + btn_w,
-        ctrl_y + 40,
-        rgb(0x0A, 0x84, 0xFF),
-    );
-    text_centered(
-        g.hdc,
-        g.f.body,
-        11,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.left + 16 + btn_w / 2,
-        ctrl_y + 12,
-        b"+1h",
-    );
+    round_rect(g.hdc, g.b, r.left + 16, ctrl_y, r.left + 16 + btn_w, ctrl_y + 40, 4, p.accent);
+    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + btn_w / 2, ctrl_y + 12, b"+1h");
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16 + btn_w + 8,
-        ctrl_y,
-        r.left + 16 + btn_w * 2 + 8,
-        ctrl_y + 40,
-        rgb(0x0A, 0x84, 0xFF),
-    );
-    text_centered(
-        g.hdc,
-        g.f.body,
-        11,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.left + 16 + btn_w + 8 + btn_w / 2,
-        ctrl_y + 12,
-        b"+1m",
-    );
+    round_rect(g.hdc, g.b, r.left + 16 + btn_w + 8, ctrl_y, r.left + 16 + btn_w * 2 + 8, ctrl_y + 40, 4, p.accent);
+    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + btn_w + 8 + btn_w / 2, ctrl_y + 12, b"+1m");
 
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16 + btn_w * 2 + 16,
-        ctrl_y,
-        r.left + 16 + btn_w * 3 + 16,
-        ctrl_y + 40,
-        rgb(0x0A, 0x84, 0xFF),
-    );
-    text_centered(
-        g.hdc,
-        g.f.body,
-        11,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.left + 16 + btn_w * 2 + 16 + btn_w / 2,
-        ctrl_y + 12,
-        b"-1m",
-    );
+    round_rect(g.hdc, g.b, r.left + 16 + btn_w * 2 + 16, ctrl_y, r.left + 16 + btn_w * 3 + 16, ctrl_y + 40, 4, p.accent);
+    text_centered(g.hdc, g.f.body, 11, p.on_accent, r.left + 16 + btn_w * 2 + 16 + btn_w / 2, ctrl_y + 12, b"-1m");
 
-    let toggle_label: &[u8] = if ALARM_ENABLED {
-        b"Desactiver"
-    } else {
-        b"Activer"
-    };
-    let toggle_color = if ALARM_ENABLED {
-        rgb(0xFF, 0x45, 0x3A)
-    } else {
-        rgb(0x0A, 0x84, 0xFF)
-    };
-    fill(
-        g.hdc,
-        g.b,
-        r.left + 16,
-        ctrl_y + 50,
-        r.left + 16 + 150,
-        ctrl_y + 90,
-        toggle_color,
-    );
-    text_centered(
-        g.hdc,
-        g.f.body,
-        11,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.left + 16 + 75,
-        ctrl_y + 62,
-        toggle_label,
-    );
+    let toggle_label: &[u8] = if ALARM_ENABLED { b"Desactiver" } else { b"Activer" };
+    let toggle_color = if ALARM_ENABLED { rgb(0xFF, 0x45, 0x3A) } else { p.accent };
+    round_rect(g.hdc, g.b, r.left + 16, ctrl_y + 50, r.left + 16 + 150, ctrl_y + 90, 4, toggle_color);
+    let toggle_text = if ALARM_ENABLED { rgb(0xFF, 0xFF, 0xFF) } else { p.on_accent };
+    text_centered(g.hdc, g.f.body, 11, toggle_text, r.left + 16 + 75, ctrl_y + 62, toggle_label);
 }
 
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     let r = f.client;
-    let y_tabs = r.top + 32;
 
+    if ev == Mouse::Move {
+        let old_tab = HOVER_TAB;
+        let old_row = HOVER_BTN_ROW;
+        let old_col = HOVER_BTN_COL;
+        HOVER_TAB = -1;
+        HOVER_BTN_ROW = -1;
+        HOVER_BTN_COL = -1;
+        if y < r.top + 32 {
+            let tab_w = (r.right - r.left) / 4;
+            let t = ((x - r.left) / tab_w) as i32;
+            if t >= 0 && t < 4 { HOVER_TAB = t; }
+        } else if MODE == 0 {
+            let y_start = r.top + 40 + 70;
+            let btn_w = (r.right - r.left - 32) / 4;
+            let btn_h = 50;
+            if y >= y_start && y < y_start + 5 * (btn_h + 4) {
+                let row = (y - y_start) / (btn_h + 4);
+                let col = (x - r.left - 16) / btn_w;
+                if row >= 0 && row < 5 && col >= 0 && col < 4 {
+                    HOVER_BTN_ROW = row;
+                    HOVER_BTN_COL = col;
+                }
+            }
+        }
+        return HOVER_TAB != old_tab || HOVER_BTN_ROW != old_row || HOVER_BTN_COL != old_col;
+    }
+
+    let y_tabs = r.top + 32;
     if y < y_tabs {
         let tab_w = (r.right - r.left) / 4;
         let clicked_tab = ((x - r.left) / tab_w) as u32;

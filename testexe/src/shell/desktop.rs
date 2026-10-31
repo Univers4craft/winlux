@@ -982,16 +982,8 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     };
     let r = CONTEXT_RECT;
     let p = pal();
-    fill(hdc, b, r.left, r.top, r.right, r.bottom, p.border);
-    fill(
-        hdc,
-        b,
-        r.left + 1,
-        r.top + 1,
-        r.right - 1,
-        r.bottom - 1,
-        p.surface,
-    );
+    round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 8, p.border);
+    round_rect(hdc, b, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, 7, p.surface);
     if app == usize::MAX {
         let labels: [&[u8]; 5] = [
             b"Ouvrir l'Explorateur",
@@ -1003,16 +995,9 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
             if row == CONTEXT_HOVER {
-                fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+                round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
             }
-            text(
-                hdc,
-                f.body,
-                p.text,
-                r.left + 12,
-                y + 8,
-                labels[row as usize],
-            );
+            text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
         }
         return;
     }
@@ -1031,16 +1016,9 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         for row in 0..context_rows(app) {
             let y = r.top + 4 + row * 34;
             if row == CONTEXT_HOVER {
-                fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+                round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
             }
-            text(
-                hdc,
-                f.body,
-                p.text,
-                r.left + 12,
-                y + 8,
-                labels[row as usize],
-            );
+            text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
         }
         return;
     }
@@ -1064,16 +1042,9 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     for row in 0..context_rows(app) {
         let y = r.top + 4 + row * 34;
         if row == CONTEXT_HOVER {
-            fill(hdc, b, r.left + 3, y, r.right - 3, y + 34, p.hover);
+            round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
         }
-        text(
-            hdc,
-            f.body,
-            p.text,
-            r.left + 12,
-            y + 8,
-            labels[row as usize],
-        );
+        text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
     }
 }
 
