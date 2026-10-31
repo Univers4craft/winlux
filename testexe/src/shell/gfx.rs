@@ -5,6 +5,11 @@
 
 use winlux_testexe::*;
 
+/// Logo et identité visuelle Winlux.
+#[path = "brand.rs"]
+#[allow(dead_code)]
+pub mod brand;
+
 pub const fn rgb(r: u32, g: u32, b: u32) -> u32 {
     r | (g << 8) | (b << 16)
 }
@@ -815,20 +820,8 @@ pub enum Glyph {
 pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y: i32, s: i32) {
     match g {
         Glyph::Start => {
-            let gap = (s / 12).max(1);
-            let c = (s - gap) / 2;
-            fill(hdc, b, x, y, x + c, y + c, rgb(0x2B, 0xA4, 0xF2));
-            fill(hdc, b, x + c + gap, y, x + s, y + c, rgb(0x45, 0xB8, 0xFF));
-            fill(hdc, b, x, y + c + gap, x + c, y + s, rgb(0x16, 0x84, 0xE0));
-            fill(
-                hdc,
-                b,
-                x + c + gap,
-                y + c + gap,
-                x + s,
-                y + s,
-                rgb(0x2B, 0xA4, 0xF2),
-            );
+            // Logo Winlux « Prisme » (bouton Démarrer, menus, lecteur système).
+            brand::logo(hdc, b, x, y, s, 1000, None);
         }
         Glyph::Search => {
             let r = s * 2 / 3;

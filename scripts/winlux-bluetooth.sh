@@ -31,11 +31,22 @@ kind_of() {
     esac
 }
 
+# Sans adaptateur ou sans bluetoothd, bluetoothctl attend le démon sans fin
+# (« Waiting to connect to bluetoothd... ») : ne l'interroger qu'avec un
+# adaptateur présent, et toujours sous délai.
+adapter_present() {
+    test -d "$root/sys/class/bluetooth" && test -n "$(ls -A "$root/sys/class/bluetooth" 2>/dev/null)"
+}
+query() {
+    if have timeout; then timeout -k 2 "${WINLUX_BLUETOOTH_QUERY_SECONDS:-5}" "$ctl" "$@" </dev/null
+    else "$ctl" "$@" </dev/null; fi
+}
+
 status() {
     out="$run/bluetooth.txt"
     tmp="$out.tmp.$$"
     {
-        if ! have "$ctl" || ! show=$("$ctl" show 2>/dev/null) || ! printf '%s\n' "$show" | grep -q '^Controller '; then
+        if ! have "$ctl" || ! adapter_present || ! show=$(query show 2>/dev/null) || ! printf '%s\n' "$show" | grep -q '^Controller '; then
             printf 'present=0\npowered=0\ndiscovering=0\nconnected=0\n'
         else
             printf 'present=1\n'
@@ -44,9 +55,9 @@ status() {
             discovering=0; printf '%s\n' "$show" | grep -q 'Discovering: yes' && discovering=1
             printf 'powered=%s\ndiscovering=%s\n' "$powered" "$discovering"
             connected=0
-            for mac in $("$ctl" devices 2>/dev/null | awk '$1 == "Device" { print $2 }' | head -n 12); do
+            for mac in $(query devices 2>/dev/null | awk '$1 == "Device" { print $2 }' | head -n 12); do
                 valid_mac "$mac" || continue
-                info=$("$ctl" info "$mac" 2>/dev/null) || continue
+                info=$(query info "$mac" 2>/dev/null) || continue
                 name=$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*Name: //p' | head -n 1 | clean)
                 test -n "$name" || name=$mac
                 icon=$(printf '%s\n' "$info" | sed -n 's/^[[:space:]]*Icon: //p' | head -n 1)

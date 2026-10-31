@@ -67,6 +67,29 @@ contrats API-set et KernelBase y sont reliés.
 Les ACL, la redirection WOW64 (`/reg:32`), les clés volatiles et les ruches
 `RegLoadKey`/`RegSaveKey` ne sont pas gérées.
 
+## Fonctions shlwapi
+
+`runtime/src/dlls/shlwapi_reg.rs` ajoute les raccourcis de shlwapi, en
+versions A et W, sur le même registre :
+
+- valeurs : `SHGetValue`, `SHSetValue`, `SHDeleteValue`, `SHQueryValueEx`,
+  `SHRegGetValue` (filtres SRRF), `SHRegGetPath`, `SHRegSetPath`. Comme sous
+  Windows, une REG_EXPAND_SZ est développée et rendue en REG_SZ ;
+- clés : `SHDeleteKey` (toute l'arborescence), `SHDeleteEmptyKey` (refuse une
+  clé qui a encore des sous-clés ou des valeurs), `SHCopyKey`,
+  `SHEnumKeyEx`, `SHEnumValue`, `SHQueryInfoKey`, `SHRegDuplicateHKey` ;
+- réglages « utilisateur puis machine » : `SHRegGetUSValue`,
+  `SHRegSetUSValue`, `SHRegGetBoolUSValue` (« yes », « true », 1…) et les
+  clés `HUSKEY` (`SHRegOpenUSKey`, `SHRegCreateUSKey`, `SHRegQueryUSValue`,
+  `SHRegWriteUSValue`, `SHRegDeleteUSValue`, `SHRegEnumUSKey`,
+  `SHRegEnumUSValue`, `SHRegQueryInfoUSKey`, `SHRegCloseUSKey`) : HKCU est lu
+  d'abord, puis HKLM ;
+- `SHOpenRegStream2` et `SHOpenRegStream` : un `IStream` sur une valeur
+  binaire, réécrite dans le registre au `Commit` ou au dernier `Release` ;
+- associations de fichiers : `AssocQueryString` (commande, programme, nom du
+  type, nom de l'appli, icône, type MIME, extension shell, ProgID) et
+  `AssocQueryKey`, lus dans la vue fusionnée HKCR.
+
 ## Accès NT (ntdll)
 
 Les appels bas niveau suivants réutilisent le même magasin :
@@ -101,9 +124,29 @@ Linux en clés de registre : les paramètres système Winlux utilisent notamment
 `/etc/winlux/input.conf`, `preferences.conf` et `display.conf`, et le bureau
 natif utilise aussi Xfconf et les fichiers de configuration du profil.
 
-Un éditeur graphique unifié et la synchronisation explicite de certains
-paramètres Windows/Linux restent à développer. Il ne faut pas annoncer ces
-fonctions comme disponibles sur la seule base du stockage `registry.tsv`.
+## Éditeur du Registre
+
+L'appli « Éditeur du Registre » (menu Démarrer, commande `regedit`, ou
+`winlux --regedit`) reprend l'éditeur de Windows 11 :
+
+- arborescence Ordinateur → HKEY_CLASSES_ROOT, HKEY_CURRENT_USER,
+  HKEY_LOCAL_MACHINE, HKEY_USERS, HKEY_CURRENT_CONFIG et barre d'adresse ;
+- liste des valeurs (nom, type, données) avec « (par défaut) » ;
+- menu Nouveau : clé, chaîne, valeur binaire, DWORD 32 bits, QWORD 64 bits,
+  chaîne multiple, chaîne extensible ;
+- modification (DWORD/QWORD en hexadécimal ou décimal), renommage (F2),
+  suppression (Suppr) avec confirmation ;
+- recherche dans les clés, les valeurs et les données (Ctrl+F, F3 pour la
+  suivante) ;
+- import et export .reg d'une branche ou de tout le registre.
+
+Un double-clic sur un fichier .reg ouvre l'éditeur, qui demande confirmation
+avant d'ajouter les informations au Registre (`regedit /s` importe sans
+demander, comme sous Windows). Les textes de l'appli sont traduits en
+français, anglais, espagnol et allemand.
+
+La synchronisation explicite de certains paramètres Windows/Linux reste à
+développer.
 
 ## Vérifications
 

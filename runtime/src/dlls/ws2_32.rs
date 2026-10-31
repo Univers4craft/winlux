@@ -368,6 +368,12 @@ pub extern "win64" fn closesocket(s: usize) -> i32 {
         0
     }
 }
+/// Réseau : bloqué seulement si l'utilisateur l'a refusé à cette application
+/// (Paramètres > Confidentialité et sécurité) ; la boucle locale reste libre.
+unsafe fn network_allowed(name: *const u8, len: i32) -> bool {
+    crate::permissions::sockaddr_is_local(name, len)
+        || crate::permissions::allowed(crate::permissions::Capability::Network)
+}
 pub unsafe extern "win64" fn connect(s: usize, name: *const u8, len: i32) -> i32 {
     if !valid_socket(s) {
         set_error(10038);
@@ -375,6 +381,10 @@ pub unsafe extern "win64" fn connect(s: usize, name: *const u8, len: i32) -> i32
     }
     if name.is_null() || len < 0 {
         set_error(10014);
+        return SOCKET_ERROR;
+    }
+    if !network_allowed(name, len) {
+        set_error(10013); // WSAEACCES : bloqué dans Paramètres
         return SOCKET_ERROR;
     }
     let rc = libc::connect(
@@ -502,6 +512,10 @@ pub unsafe extern "win64" fn send_to(
     }
     if !valid_socket(s) {
         set_error(10038);
+        return SOCKET_ERROR;
+    }
+    if !network_allowed(name, len) {
+        set_error(10013);
         return SOCKET_ERROR;
     }
     let r = libc::sendto(

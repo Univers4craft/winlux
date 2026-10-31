@@ -2797,10 +2797,17 @@ class InstallerApp(Gtk.Application):
         self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.sidebar.get_style_context().add_class("installer-sidebar")
         self.sidebar.set_size_request(int(210 * UI_SCALE), -1)
+        brand = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=int(10 * UI_SCALE))
+        brand.set_margin_bottom(24)
+        # Logo Winlux « Prisme » (assets/brand), à la taille de l'écran.
+        logo_size = 32 if UI_SCALE < 1.5 else 64
+        logo_path = f"/usr/share/winlux/brand/winlux-logo-{logo_size}.png"
+        if os.path.exists(logo_path):
+            brand.pack_start(Gtk.Image.new_from_file(logo_path), False, False, 0)
         logo = Gtk.Label(label="Winlux")
         logo.get_style_context().add_class("page-title")
-        logo.set_margin_bottom(24)
-        self.sidebar.pack_start(logo, False, False, 0)
+        brand.pack_start(logo, False, False, 0)
+        self.sidebar.pack_start(brand, False, False, 0)
         self.step_labels = []
         for i, name in enumerate(STEPS):
             lbl = Gtk.Label(label=f"  {i + 1}. {name}", xalign=0)

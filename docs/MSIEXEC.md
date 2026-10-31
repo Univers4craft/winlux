@@ -27,6 +27,10 @@ s'en sert pour les catalogues Windows, et un programme Windows qui lance
 | Sélection | fonctionnalités par `INSTALLLEVEL`, table `Condition`, `ADDLOCAL`, `REMOVE`, conditions de composant |
 | Actions | `File`, `DuplicateFile`, `CreateFolder`, `Registry` (chaînes, entiers, binaire, multi-chaînes, expand), `Shortcut` (y compris annoncés, en `.lnk`), inscription dans *Programmes installés* (`HKLM\…\Uninstall\{code}`) |
 | Mises à jour | même `ProductCode` ou même `UpgradeCode` : l'ancienne version est retirée avant l'installation |
+| Recherche | `AppSearch` par `RegLocator` (dossier, fichier ou valeur brute, vue 64 bits), `IniLocator`, `DrLocator` (profondeur limitée) |
+| Environnement | table `Environment` : `HKCU\Environment` ou, avec `*`, celui du système ; création, `+` si absente, `!` retrait, ajout en tête ou en queue (`[~];valeur`). Les `.exe` lancés par Winlux reçoivent ces variables (sauf `PATH`) |
+| Fichiers .ini | table `IniFile` : ajout, création si absente, ajout à une liste ; dans le dossier indiqué ou `C:\windows\` |
+| Suppressions | `RemoveFile` (motifs `*`/`?`, dossiers vides, à l'installation et/ou à la désinstallation), `RemoveRegistry` |
 | Désinstallation | journal par produit dans `~/.local/share/winlux/msi/` : fichiers, dossiers créés, valeurs et clés de registre |
 
 Dossiers standard : `C:\` est le dossier personnel ; `ProgramFiles64Folder`
@@ -41,7 +45,6 @@ les codes de sortie à 8 bits (1605 devient 69).
 ## Pas encore pris en charge
 
 Actions personnalisées DLL, EXE ou script (journalisées puis ignorées),
-services Windows, variables d'environnement, fichiers `.ini`, recherche
-`AppSearch`, interface graphique d'installation (`/qf`), réparation `/f`
+services Windows, recherche `CompLocator`, interface graphique d'installation (`/qf`), réparation `/f`
 (traitée comme une réinstallation), transformations `.mst` et correctifs `.msp`,
 compression Quantum.

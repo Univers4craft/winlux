@@ -419,6 +419,13 @@ pub struct Manifest {
     pub dirs: Vec<PathBuf>,
     pub values: Vec<(String, String)>,
     pub keys: Vec<String>,
+    /// Entrées .ini ajoutées à un fichier existant : (fichier, section, clé,
+    /// valeur, mode de retrait pour `extra::ini_edit`).
+    pub inis: Vec<(PathBuf, String, String, String, i32)>,
+    /// Valeurs de registre modifiées : ancienne valeur à remettre.
+    pub restores: Vec<(String, String, Option<(u32, Vec<u8>)>)>,
+    /// Fichiers ou dossiers à supprimer à la désinstallation (RemoveFile).
+    pub later: Vec<(String, u8)>,
 }
 
 pub fn manifest_dir() -> PathBuf {
@@ -458,6 +465,28 @@ impl Manifest {
         for k in &self.keys {
             text.push_str(&format!("key\t{}\n", clean(k)));
         }
+        for (f, sec, k, v, mode) in &self.inis {
+            text.push_str(&format!(
+                "ini\t{}\t{}\t{}\t{}\t{mode}\n",
+                clean(&f.to_string_lossy()),
+                clean(sec),
+                clean(k),
+                clean(v)
+            ));
+        }
+        for (k, n, prev) in &self.restores {
+            let old = match prev {
+                Some((kind, bytes)) => format!(
+                    "{kind}\t{}",
+                    bytes.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                ),
+                None => "-\t".into(),
+            };
+            text.push_str(&format!("restore\t{}\t{}\t{old}\n", clean(k), clean(n)));
+        }
+        for (t, kind) in &self.later {
+            text.push_str(&format!("later\t{}\t{kind}\n", clean(t)));
+        }
         let path = manifest_path(&self.product);
         std::fs::create_dir_all(manifest_dir())?;
         let tmp = path.with_extension("tmp");
@@ -482,6 +511,23 @@ impl Manifest {
                 ["dir", v] => m.dirs.push(PathBuf::from(v)),
                 ["value", k, n] => m.values.push((k.to_string(), n.to_string())),
                 ["key", k] => m.keys.push(k.to_string()),
+                ["ini", f, sec, k, v, mode] => m.inis.push((
+                    PathBuf::from(f),
+                    sec.to_string(),
+                    k.to_string(),
+                    v.to_string(),
+                    mode.parse().unwrap_or(4),
+                )),
+                ["restore", k, n, kind, hex] => {
+                    let prev = kind.parse::<u32>().ok().map(|kind| {
+                        let bytes = (0..hex.len() / 2)
+                            .filter_map(|i| u8::from_str_radix(&hex[i * 2..i * 2 + 2], 16).ok())
+                            .collect();
+                        (kind, bytes)
+                    });
+                    m.restores.push((k.to_string(), n.to_string(), prev));
+                }
+                ["later", t, kind] => m.later.push((t.to_string(), kind.parse().unwrap_or(0))),
                 _ => {}
             }
         }
@@ -559,7 +605,7 @@ fn registry_value(raw: &str) -> (u32, Vec<u8>) {
     (1, utf16z(raw))
 }
 
-fn hive(root: i32, all_users: bool) -> &'static str {
+pub(crate) fn hive(root: i32, all_users: bool) -> &'static str {
     match root {
         0 => "hkcr",
         1 => "hkcu",
@@ -647,6 +693,9 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
     let upgrade = ctx.get("UpgradeCode");
     log.log(&format!("Installation de {name} {version}"));
     if !opts.admin {
+        // Ce qui est déjà sur la machine (ancienne version, dossier choisi).
+        let all_users = ctx.get("ALLUSERS") == "1" || ctx.get("ALLUSERS") == "2";
+        super::extra::app_search(db, &mut ctx, all_users, log);
         // Réinstallation ou mise à niveau : on retire d'abord l'ancienne version.
         for m in Manifest::all() {
             let same = m.product.eq_ignore_ascii_case(&code);
@@ -948,15 +997,17 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
         std::fs::write(&file, bytes).map_err(|e| format!("{} : {e}", file.display()))?;
         manifest.files.push(file);
     }
-    for (table, what) in [
-        ("ServiceInstall", "services Windows"),
-        ("Environment", "variables d'environnement"),
-        ("IniFile", "fichiers .ini"),
-    ] {
-        let n = db.rows(table).count();
-        if n > 0 {
-            log.log(&format!("{n} entrée(s) de {what} ignorée(s)"));
-        }
+    super::extra::remove_registry(db, &ctx, &comps, all_users, &mut edits);
+    super::extra::environment(db, &ctx, &comps, &mut edits, &mut manifest);
+    super::extra::remove_files(db, &ctx, &comps, &mut manifest);
+    let mut ini_dirs = Vec::new();
+    super::extra::ini_files(db, &ctx, &comps, &mut manifest, &mut ini_dirs);
+    manifest.dirs.extend(ini_dirs);
+    let services = db.rows("ServiceInstall").count();
+    if services > 0 {
+        log.log(&format!(
+            "{services} entrée(s) de services Windows ignorée(s)"
+        ));
     }
     // Inscription dans « Programmes installés ».
     if !code.is_empty() {
@@ -1035,7 +1086,7 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
 }
 
 /// Date civile (année, mois, jour) d'un nombre de jours depuis 1970.
-fn civil(days: i64) -> (i64, i64, i64) {
+pub fn civil(days: i64) -> (i64, i64, i64) {
     let z = days + 719468;
     let era = z.div_euclid(146097);
     let doe = z - era * 146097;
@@ -1065,6 +1116,7 @@ fn remove_manifest(m: &Manifest, log: &mut Logger) {
             name: n.clone(),
         })
         .collect();
+    edits.extend(super::extra::undo(m));
     edits.push(RegEdit::DeleteTree(uninstall_key(&m.product)));
     apply_registry_edits(&edits);
     let mut keys = m.keys.clone();

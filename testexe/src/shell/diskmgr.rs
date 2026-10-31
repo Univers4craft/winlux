@@ -39,6 +39,9 @@ struct Partition {
     major: u32,
     minor: u32,
     is_disk: bool,
+    /// Volume NTFS que Windows n'a pas fermé proprement (lecture seule) :
+    /// le bouton Réparer n'apparaît que pour lui.
+    repairable: bool,
 }
 
 const EMPTY_PART: Partition = Partition {
@@ -53,6 +56,7 @@ const EMPTY_PART: Partition = Partition {
     major: 0,
     minor: 0,
     is_disk: false,
+    repairable: false,
 };
 
 static mut PARTS: [Partition; MAX_PARTS] = [EMPTY_PART; MAX_PARTS];
@@ -89,6 +93,7 @@ static mut SMART_HEALTH_LEN: usize = 0;
 
 // Boutons
 static mut MOUNT_HOVER: bool = false;
+static mut REPAIR_HOVER: bool = false;
 static mut UNMOUNT_HOVER: bool = false;
 
 // ---------- Lecture des données ----------
@@ -148,6 +153,25 @@ unsafe fn refresh() {
     if n3 > 0 {
         parse_disk_usage(&BUF[..n3]);
     }
+
+    // Volumes montés par `winlux --volumes` : `E:  libellé  /dev/X  pilote  ro  raison`.
+    let n4 = read_file(c"Z:\\run\\winlux\\volumes\\list.txt".as_ptr(), &mut BUF);
+    for line in BUF[..n4].split(|&c| c == b'\n') {
+        let mut cols = line.split(|&c| c == b'\t');
+        let dev = cols.nth(2).unwrap_or(b"");
+        let dirty = cols.nth(2) == Some(b"dirty");
+        for j in 0..PART_COUNT {
+            let pname = &PARTS[j].name[..PARTS[j].name_len];
+            if dev.len() > 5 && &dev[5..] == pname {
+                PARTS[j].repairable = dirty;
+            }
+        }
+    }
+}
+
+/// Bouton Réparer : seulement pour un volume NTFS laissé « sale » par Windows.
+unsafe fn repair_shown() -> bool {
+    selected_partition().is_some_and(|i| PARTS[i].repairable)
 }
 
 unsafe fn parse_partitions(data: &[u8]) {
@@ -803,10 +827,31 @@ unsafe fn draw_volumes(g: &mut Gfx, x: i32, top: i32, w: i32, h: i32) {
         row += 1;
     }
 
-    // Boutons Monter/Démonter
+    // Boutons Réparer/Monter/Démonter
     let btn_y = top + h - 52;
     let mount_r = rect(x + w - 280, btn_y, x + w - 156, btn_y + 32);
     let unmount_r = rect(x + w - 148, btn_y, x + w - 24, btn_y + 32);
+    if repair_shown() {
+        let repair_r = rect(x + w - 412, btn_y, x + w - 288, btn_y + 32);
+        round_rect(
+            g.hdc,
+            g.b,
+            repair_r.left,
+            repair_r.top,
+            repair_r.right,
+            repair_r.bottom,
+            4,
+            if REPAIR_HOVER { p.hover } else { p.surface2 },
+        );
+        text(
+            g.hdc,
+            g.f.body,
+            p.text,
+            repair_r.left + 16,
+            repair_r.top + 8,
+            tr4(&[b"R\xE9parer", b"Repair", b"Reparar", b"Reparieren"]),
+        );
+    }
 
     round_rect(
         g.hdc,
@@ -1241,6 +1286,16 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                     btn_y + 32,
                 );
 
+                let repair_r = rect(
+                    content_x + content_w - 412,
+                    btn_y,
+                    content_x + content_w - 288,
+                    btn_y + 32,
+                );
+                if repair_shown() && inside(&repair_r, x, y) {
+                    do_action(b"repair /dev/");
+                    return true;
+                }
                 if inside(&mount_r, x, y) {
                     do_mount();
                     return true;
@@ -1323,11 +1378,19 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                     content_x + content_w - 24,
                     btn_y + 32,
                 );
+                let repair_r = rect(
+                    content_x + content_w - 412,
+                    btn_y,
+                    content_x + content_w - 288,
+                    btn_y + 32,
+                );
                 let old_m = MOUNT_HOVER;
                 let old_u = UNMOUNT_HOVER;
+                let old_r = REPAIR_HOVER;
                 MOUNT_HOVER = inside(&mount_r, x, y);
                 UNMOUNT_HOVER = inside(&unmount_r, x, y);
-                changed |= MOUNT_HOVER != old_m || UNMOUNT_HOVER != old_u;
+                REPAIR_HOVER = repair_shown() && inside(&repair_r, x, y);
+                changed |= MOUNT_HOVER != old_m || UNMOUNT_HOVER != old_u || REPAIR_HOVER != old_r;
             }
 
             changed
@@ -1434,6 +1497,20 @@ unsafe fn do_unmount() {
         cmd[pos] = b'\n';
         pos += 1;
         write_action(&cmd[..pos]);
+    }
+}
+
+/// `verbe /dev/<partition sélectionnée>` pour le service des volumes.
+unsafe fn do_action(prefix: &[u8]) {
+    if let Some(idx) = selected_partition() {
+        let part = &PARTS[idx];
+        let mut cmd = [0u8; 128];
+        let mut pos = prefix.len();
+        cmd[..pos].copy_from_slice(prefix);
+        cmd[pos..pos + part.name_len].copy_from_slice(&part.name[..part.name_len]);
+        pos += part.name_len;
+        cmd[pos] = b'\n';
+        write_action(&cmd[..pos + 1]);
     }
 }
 
