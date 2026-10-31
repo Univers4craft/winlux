@@ -91,6 +91,8 @@ if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
     /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
 fi
 /usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
+# Presse-papiers commun : copier dans un .exe, coller dans une appli Linux, et inversement.
+if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux/clipboard-bridge.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
 # Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.

@@ -167,6 +167,10 @@ cpu_status() {
     if winlux --cpu-report "${root:-/}" > "$run/cpu.txt.tmp.$$" 2>/dev/null; then
         hybrid=$(cpu_pref HYBRID_POLICY) fan=$(cpu_pref FAN_CURVE)
         printf 'hybrid_policy=%s\nfan_curve=%s\n' "${hybrid:-auto}" "${fan:-auto}" >> "$run/cpu.txt.tmp.$$"
+        # Temps du dernier démarrage (repères notés par l'init).
+        winlux --boot-time "${root:-/}" >> "$run/cpu.txt.tmp.$$" 2>/dev/null || true
+        # Mode jeu : réglage, capacités réelles et partie en cours.
+        winlux --gamemode status "${root:-/}" >> "$run/cpu.txt.tmp.$$" 2>/dev/null || true
         mv "$run/cpu.txt.tmp.$$" "$run/cpu.txt"
     else rm -f "$run/cpu.txt.tmp.$$"; fi
 }
@@ -356,6 +360,8 @@ perform() {
             have winlux || { echo 'Runtime winlux introuvable' >&2; return 1; }
             winlux --cpu-profile "${action#cpu-profile-}" "${root:-/}" || return
             save "$config/cpu.conf" CPU_PROFILE "${action#cpu-profile-}" ;;
+        game-mode-auto|game-mode-off)
+            save "$config/cpu.conf" GAME_MODE "${action#game-mode-}" ;;
         cpu-hybrid-auto|cpu-hybrid-heavy|cpu-hybrid-performance|cpu-hybrid-efficiency)
             save "$config/cpu.conf" HYBRID_POLICY "${action#cpu-hybrid-}" ;;
         cpu-fan-auto|cpu-fan-quiet|cpu-fan-balanced|cpu-fan-performance)
