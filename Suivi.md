@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **183**
-- À faire ou en cours : **40**
-- Total : **223**
+- Réalisé : **192**
+- À faire ou en cours : **42**
+- Total : **234**
 - Progression : **82.1%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #111 et #112, issues #10 à #98)
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106 et #111, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -46,7 +46,7 @@
 - [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
 - [ ] Intégrer un véritable runtime CLR Windows et les couches WPF/WinForms; le pont Linux `dotnet`/Mono ne suffit pas pour `paint.net`.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
-- [ ] Ajouter les autres formats audio compressés et les codecs vidéo ; Media Foundation/DirectShow ne constituent pas encore une chaîne de lecture complète.
+- [ ] Brancher Media Foundation/DirectShow des `.exe` sur le moteur multimédia du runtime (`winlux_media.rs`) : le lecteur du shell lit déjà tous les formats, mais `mfplat`/`quartz` restent des bouchons pour les programmes Windows.
 - [ ] Implémenter le vrai déchargement/référencement de DLL dans `FreeLibrary` (elles restent mappées jusqu’à la fin du processus).
 - [ ] Faire tourner des programmes C++ MinGW (exceptions : `RtlUnwindEx`, `RtlVirtualUnwind`, `RtlLookupFunctionEntry`) et des exécutables MSVC/clang-cl réels.
 
@@ -58,7 +58,7 @@
 
 ### Priorité 5 — Thème Windows 11
 
-- [ ] Compléter l'accessibilité : contraste, taille du pointeur, réduction des animations et navigation accessible complète.
+- [ ] Navigation clavier complète (Tab entre les contrôles) dans toutes les fenêtres du shell ; la page Accessibilité et le Narrateur sont déjà utilisables au clavier.
 - [ ] Revalider le rendu du bureau courant en 1080p, 1440p et 4K, avec captures et interactions ; les tests X11 généraux ne prouvent pas cette matrice complète.
 - [ ] Démarrer avec un bureau vide ; rendre les icônes système facultatives et
 - [ ] Ajouter la création explicite de raccourcis d'applications, leur
@@ -84,10 +84,10 @@
 
 ### Chantiers démarrés (issue ouverte, PR à venir)
 
-- [ ] Matériel : impression winspool.drv + CUPS (#77), audio des .exe DirectSound/WASAPI/XAudio2 (#78), manettes/webcam/micro/Bluetooth (#79), alimentation et batterie (#80), gestion CPU avancée (#90), gestion GPU et monitoring (#91).
+- [ ] Matériel : impression winspool.drv + CUPS (#77), audio des .exe DirectSound/WASAPI/XAudio2 (#78), alimentation et batterie (#80), gestion CPU avancée (#90), gestion GPU et monitoring (#91).
 - [ ] Graphisme 3D : Direct3D 9 et 12 avec backend Vulkan (#92).
 - [ ] Applications du shell : store de logiciels (#81), gestionnaire de polices (#82), planificateur de tâches (#83), pare-feu (#84), capture et enregistrement d'écran (#86), sauvegarde (#87), bureau à distance (#89).
-- [ ] Bureau : historique du presse-papiers Win+V (#85), multi-utilisateur complet (#88), accessibilité loupe/lecteur d'écran/contraste (#28).
+- [ ] Bureau : historique du presse-papiers Win+V (#85), multi-utilisateur complet (#88).
 - [ ] Installateur : mode récupération, Secure Boot et installation silencieuse (#95), benchmark et profils d'utilisation (#96), personnalisation visuelle (#97).
 
 ## DÉJÀ FAIT
@@ -203,6 +203,9 @@
 - [x] Ajouter une couche SCM locale, non privilégiée, qui persiste les définitions et lance/arrête les services en processus utilisateur.
 - [x] Ajouter les premiers points d’entrée multimédia `mfplat` et `winmm`.
 - [x] Ajouter le décodage WAVE PCM/float et un pont ALSA optionnel pour `PlaySoundA/W` (parseur testé; sortie physique encore à valider sur machine audio).
+- [x] Audio des .exe : moteur de mixage maison (48 kHz, 10 ms) avec sortie PipeWire native, PulseAudio, ALSA ou nulle choisie à l'exécution ; waveOut, DirectSound (+ 3D simple et capture), WASAPI (rendu, capture, loopback, partagé/exclusif) et XAudio2 2.7–2.9 ; un flux par .exe dans le mixeur système et curseurs par application dans la fenêtre Volume (voir `docs/AUDIO.md`).
+- [ ] Audio : décodeurs ADPCM/xWMA/XMA pour XAudio2, effets XAPO tiers et xapofx, Doppler et cônes DirectSound 3D, X3DAudio.
+- [ ] Ajouter PipeWire (pipewire-pulse, wireplumber) à l'ISO pour le mixeur par application ; l'image ne contient aujourd'hui qu'ALSA.
 - [x] Ajouter les primitives de synchronisation `Event`, `Mutex` et `WaitForSingleObject`.
 - [x] Ajouter `VirtualQuery`, `WaitForMultipleObjects` wait-any/wait-all et les sections critiques récursives.
 - [x] Ajouter `ReadFile`/`WriteFile` overlapped avec offsets, `ERROR_IO_PENDING`, signal d’événement et `GetOverlappedResult`.
@@ -228,6 +231,10 @@
 - [x] Impression : DC imprimante GDI (`CreateDC`/`CreateIC`, `StartDoc`, `StartPage`, `EndPage`, `EndDoc`, `AbortDoc`, `SetAbortProc`, `ResetDC`, `Escape`, `GetDeviceCaps`) rendu en PDF (texte en polices standard, formes, images RunLength). Test PE `print_suite`.
 - [x] Impression : boîtes `PrintDlg`, `PrintDlgEx`, `PageSetupDlg` natives au thème Windows 11 (aperçu, imprimante, copies, orientation, pages, papier, couleur, qualité, recto verso) ; `WINLUX_PRINTDLG=accept` sans affichage.
 - [x] Impression : page Paramètres › Imprimantes et scanners (liste, imprimante par défaut, page de test, suppression, file d'attente avec annulation, recherche USB/réseau, ajout par adresse) ; CUPS ajouté aux paquets du bureau de l'ISO.
+
+- [x] Lecteur multimédia natif (`mediaplayer.exe`, `audioplayer.exe` en alias) : vidéo et audio, barre de progression avec aperçu au survol, volume, vitesse 0,25× à 3×, plein écran, sous-titres SRT/ASS/VTT externes et pistes intégrées (texte et PGS/VobSub), pistes audio, chapitres, liste de lecture du dossier, reprise à la dernière position, thème clair/sombre, FR/EN/DE/ES. L'Explorer ouvre l'audio/vidéo dedans ; MIME par défaut dans l'ISO.
+- [x] Moteur multimédia du runtime (`winlux_media.rs`, exports `WinluxMedia*`) : FFmpeg système en processus isolé, conteneurs MP4/MKV/WebM/AVI/MOV/FLV/WMV/MPEG/TS/M2TS/OGV/3GP…, codecs H.264/HEVC/AV1/VP8/VP9/MPEG-2/MPEG-4/VC-1/Theora/ProRes/DNxHD et AAC/MP3/Opus/Vorbis/FLAC/ALAC/PCM/AC-3/E-AC-3/DTS/WMA/APE ; un format n'est annoncé que si son décodeur existe ; VA-API/NVDEC avec repli logiciel puis sans son ; vignettes vidéo et pochettes avec cache disque. Voir `docs/MEDIA.md`.
+- [x] Corriger `SetTimer` : la version bouchon de `user32_ext` remplaçait la vraie et `GetMessage` ne livrait jamais `WM_TIMER` (aucune animation ni rafraîchissement périodique des applications autonomes).
 
 ### Priorité 3 — Double-clic et intégration Linux
 
@@ -257,6 +264,7 @@
 
 ### Priorité 5 — Thème Windows 11
 
+- [x] Accessibilité : page Paramètres > Accessibilité (aperçu en direct, navigation au clavier), 4 thèmes de contraste (shell, barre des tâches, menu Démarrer et `GetSysColor` des .exe), Loupe plein écran/lentille/ancrée (Win+Plus/Moins/Échap, lissage HALFTONE, inversion), Narrateur `winlux-speak` (espeak-ng ou piper : fenêtre active, texte survolé, frappes, Insérer+flèches), touches rémanentes (Maj ×5) et filtres, taille/couleur du pointeur X11, épaisseur du curseur de texte, animations désactivables, sous-titres et clignotement pour les sons système. Réglages partagés dans `~/.local/share/winlux/accessibility.ini`.
 - [x] Planificateur de tâches maison (service `winlux --tasks daemon`, sans systemd ni cron) : déclencheurs horaires, intervalle, démarrage, ouverture de session et événements système (réseau, secteur/batterie, USB), conditions secteur/réseau, historique, application graphique Windows 11 FR/EN.
 - [x] Pare-feu maison sur nftables (`winlux --firewall daemon`) : profils domaine/privé/public, règles entrantes/sortantes par port, protocole et application, journal des connexions bloquées, alerte à la première écoute d'une application, application graphique Windows 11 FR/EN.
 - [x] Paramètres > Processeur : fréquences par cœur en direct, mode d'alimentation (gouverneur/EPP), placement P-cores/E-cores, températures, bridage thermique, ventilateurs et courbes, NUMA, puis priorité/cœurs/affinité/nœud par programme. Garde-fous : `runtime/src/cpu.rs` détecte le matériel (`/sys`, `/proc/cpuinfo`, CPUID) et une section n'apparaît que si la capacité existe (testé sur faux arbres `/sys` : VM, CPU classique, hybride Intel, NUMA, capteurs absurdes).
@@ -275,9 +283,15 @@
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
 - [x] Fenêtre « Bienvenue » au premier login (`welcome.rs`) : visite guidée en 8 étapes (Démarrer, Explorer, Paramètres, Terminal, raccourcis, confidentialité, choix du thème clair/sombre et de l’alignement), rouvrable depuis Démarrer (#98).
 - [x] Paramètres > Mises à jour système : mode automatique, manuel ou planifié (jour/heure) pour APT (`winlux-sysupdate`) et Winlux, liste des paquets, journal et notification quand des mises à jour sont disponibles (#98).
+- [x] Manettes : `xinput1_4` (état, vibration, capacités, touches) et `dinput8`/DirectInput 7 (clavier, souris, manettes, joysticks, volants) sur evdev (#79).
+- [x] Webcam : Media Foundation (MFEnumDeviceSources, source et lecteur synchrone/asynchrone, RGB32/NV12/YUY2/MJPG) sur V4L2, en respectant l'autorisation caméra (#79).
+- [x] Micro : waveIn complet (formats PCM/flottant, callbacks fonction/événement/fenêtre, capacités, position) (#79).
+- [x] Paramètres > Bluetooth et appareils (BlueZ : activer, rechercher, appairer, connecter, oublier) et indicateur dans la barre des tâches (#79).
 - [x] Paramètres > Confidentialité : télémétrie et historique de localisation désactivés par défaut, autorisations micro/caméra/localisation des .exe (micro refusé appliqué par `winmm`) (#98).
 - [x] Personnalisation (Paramètres > Personnalisation et assistant de premier démarrage) : galerie de 13 fonds d'écran calculés (catégories Nature/Abstrait/Sombre/Clair, aperçu), palette d'accentuation Windows 11 (48 couleurs ou automatique, option sur Démarrer/barre et barres de titre), barre des tâches en bas/haut/gauche/droite en trois tailles, choix des icônes du bureau, cinq sons de démarrage synthétisés avec écoute. Préférences dans `~/.local/share/winlux/personnalisation.conf` ; `WINLUX_OOBE=1` relance l'assistant, `WINLUX_NO_OOBE=1` le saute.
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
+- [x] Store unique Linux + Windows (`store.rs`, `winlux-store`) : apt + AppStream, Flatpak, Snap, AppImage et catalogues Windows interchangeables (`store-sources.d`, SHA-256 obligatoire), vignettes et captures, fiche détaillée, mises à jour unifiées ; voir `docs/STORE.md`. Reste : msiexec dans le runtime, choix d'un catalogue Windows par défaut.
+- [x] Gestionnaire de polices (`fonts.rs`, `winlux-fonts`) et polices pour les .exe : `EnumFontFamilies(Ex)`, `EnumFonts`, `AddFontResource(Ex)`, `RemoveFontResource(Ex)`, `WinluxDrawImageA`.
 
 ### Priorité 6 — Qualité et livraison
 

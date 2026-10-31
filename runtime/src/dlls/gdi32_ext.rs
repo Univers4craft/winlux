@@ -582,13 +582,6 @@ pub extern "win64" fn offset_viewport_org_ex(_hdc: usize, _x: i32, _y: i32, _old
 
 // ── Stretch mode ───────────────────────────────────────────────────
 
-pub extern "win64" fn set_stretch_blt_mode(_hdc: usize, _mode: i32) -> i32 {
-    1
-}
-pub extern "win64" fn get_stretch_blt_mode(_hdc: usize) -> i32 {
-    3
-} // COLORONCOLOR
-
 // ── ROP2 ───────────────────────────────────────────────────────────
 
 pub extern "win64" fn set_rop2(_hdc: usize, _mode: i32) -> i32 {
@@ -1044,28 +1037,6 @@ pub unsafe extern "win64" fn create_font_indirect_w(
     })
 }
 
-// ── EnumFontFamilies (stub — renvoie 1, pas d'appel du callback) ──
-
-pub unsafe extern "win64" fn enum_font_families_ex_a(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _proc: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    1
-}
-
-pub unsafe extern "win64" fn enum_font_families_ex_w(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _proc: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    1
-}
-
 // ── GetCharWidth / ABC (stub) ──────────────────────────────────────
 
 pub unsafe extern "win64" fn get_char_width_32a(
@@ -1314,8 +1285,6 @@ pub fn exports() -> crate::dlls::Exports {
         "SetViewportOrgEx" => fn set_viewport_org_ex,
         "SetWindowOrgEx" => fn set_window_org_ex,
         "OffsetViewportOrgEx" => fn offset_viewport_org_ex,
-        "SetStretchBltMode" => fn set_stretch_blt_mode,
-        "GetStretchBltMode" => fn get_stretch_blt_mode,
         "SetROP2" => fn set_rop2,
         "GetROP2" => fn get_rop2,
         "RealizePalette" => fn realize_palette,
@@ -1325,8 +1294,6 @@ pub fn exports() -> crate::dlls::Exports {
         "StretchDIBits" => fn stretch_di_bits,
         "CreateFontIndirectA" => fn create_font_indirect_a,
         "CreateFontIndirectW" => fn create_font_indirect_w,
-        "EnumFontFamiliesExA" => fn enum_font_families_ex_a,
-        "EnumFontFamiliesExW" => fn enum_font_families_ex_w,
         "GetCharWidth32A" => fn get_char_width_32a,
         "GetCharWidth32W" => fn get_char_width_32w,
         "GetCharWidthA" => fn get_char_width_32a,

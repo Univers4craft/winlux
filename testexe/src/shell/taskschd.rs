@@ -8,6 +8,7 @@
 
 use crate::admin_ui::*;
 use crate::gfx::*;
+use crate::locale::Lang;
 use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
@@ -85,11 +86,17 @@ fn day_short(d: usize) -> &'static [u8] {
         b"dim.", b"lun.", b"mar.", b"mer.", b"jeu.", b"ven.", b"sam.",
     ];
     const EN: [&[u8]; 7] = [b"Sun", b"Mon", b"Tue", b"Wed", b"Thu", b"Fri", b"Sat"];
-    if unsafe { english() } {
-        EN[d % 7]
-    } else {
-        FR[d % 7]
-    }
+    const ES: [&[u8]; 7] = [
+        b"dom.", b"lun.", b"mar.", b"mi\xE9.", b"jue.", b"vie.", b"s\xE1b.",
+    ];
+    const DE: [&[u8]; 7] = [b"So", b"Mo", b"Di", b"Mi", b"Do", b"Fr", b"Sa"];
+    let days = match unsafe { lang() } {
+        Lang::Fr => FR,
+        Lang::En => EN,
+        Lang::Es => ES,
+        Lang::De => DE,
+    };
+    days[d % 7]
 }
 
 // ---------- Données ----------
@@ -262,10 +269,15 @@ fn describe(line: &[u8], out: &mut Field<128>) {
         b"once" => {
             out.push(t(b"Le ", b"On "));
             if a.len() == 10 && !unsafe { english() } {
+                let sep: &[u8] = if unsafe { lang() } == Lang::De {
+                    b"."
+                } else {
+                    b"/"
+                };
                 out.push(&a[8..10]);
-                out.push(b"/");
+                out.push(sep);
                 out.push(&a[5..7]);
-                out.push(b"/");
+                out.push(sep);
                 out.push(&a[..4]);
             } else {
                 out.push(a);
@@ -802,23 +814,20 @@ unsafe fn draw_library(g: &mut Gfx, h: &mut Hits, a: &Rect) {
         (ID_DELETE, t(b"Supprimer", b"Delete"), false, has),
         (ID_REFRESH, t(b"Actualiser", b"Refresh"), false, true),
     ];
+    // Les libellés allemands ou espagnols sont plus longs : la barre passe
+    // à la ligne plutôt que de masquer des commandes.
     let mut bx = x;
+    let mut by = a.top + 60;
     for (id, label, primary, on) in buttons {
         let w = button_w(label);
-        if bx + w > a.right - 16 {
-            break;
+        if bx > x && bx + w > a.right - 16 {
+            bx = x;
+            by += 40;
         }
-        button(
-            g,
-            h,
-            rect(bx, a.top + 60, bx + w, a.top + 92),
-            id,
-            label,
-            primary,
-            on,
-        );
+        button(g, h, rect(bx, by, bx + w, by + 32), id, label, primary, on);
         bx += w + 8;
     }
+    let extra = by - (a.top + 60);
     let width = a.right - x - 16;
     let cols: [(&[u8], i32); 6] = [
         (t(b"Nom", b"Name"), width * 20 / 100),
@@ -834,7 +843,7 @@ unsafe fn draw_library(g: &mut Gfx, h: &mut Hits, a: &Rect) {
         ),
         (t(b"R\xE9sultat", b"Last run result"), width * 14 / 100),
     ];
-    let mut y = header(g, x, a.top + 108, a.right - 16, &cols);
+    let mut y = header(g, x, a.top + 108 + extra, a.right - 16, &cols);
     let details_h = if has { 132 } else { 0 };
     let list_bottom = a.bottom - details_h - 36;
     if COUNT == 0 {

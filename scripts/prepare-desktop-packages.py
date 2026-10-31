@@ -20,6 +20,8 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "libgl1-mesa-glx", "irqbalance",
             # Lecteurs réseau montés comme disques (winlux-drives).
             "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",
+            # Voix du Narrateur (Parametres > Accessibilite).
+            "espeak-ng",
             # Impression : CUPS (pont IPP de winspool), filtres PDF et IPP-over-USB.
             "cups", "cups-filters", "ipp-usb"]
 

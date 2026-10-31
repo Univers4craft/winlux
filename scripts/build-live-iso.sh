@@ -81,14 +81,23 @@ cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
 cp "$root/scripts/winlux-update-progress.py" "$stage/usr/bin/winlux-update-progress"
 chmod 755 "$stage/usr/bin/winlux-update-progress"
 cp "$root/scripts/winlux-control.sh" "$stage/usr/bin/winlux-control"
+cp "$root/scripts/winlux-speak.sh" "$stage/usr/bin/winlux-speak"
+chmod 755 "$stage/usr/bin/winlux-speak"
 cp "$root/scripts/winlux-journal.sh" "$stage/usr/bin/winlux-journal"
 cp "$root/scripts/winlux-restore.sh" "$stage/usr/bin/winlux-restore"
 cp "$root/scripts/winlux-sysupdate.sh" "$stage/usr/bin/winlux-sysupdate"
 chmod 755 "$stage/usr/bin/winlux-sysupdate"
 cp "$root/scripts/winlux-network.sh" "$stage/usr/bin/winlux-network"
+cp "$root/scripts/winlux-bluetooth.sh" "$stage/usr/bin/winlux-bluetooth"
+chmod 755 "$stage/usr/bin/winlux-bluetooth"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
 mkdir -p "$stage/usr/share/winlux"
+# Store de logiciels et gestionnaire de polices du shell.
+cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
+cp "$root/scripts/winlux-fonts.sh" "$stage/usr/bin/winlux-fonts"
+cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.txt"
+chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts"
 cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
 cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
 cp "$root/scripts/winlux-browsers.sh" "$stage/usr/bin/winlux-browsers"
@@ -119,8 +128,8 @@ mkdir -p "$stage/usr/share/winlux/autoinstall"
 cp "$root/integration/autoinstall/"*.yaml "$stage/usr/share/winlux/autoinstall/"
 chmod 755 "$stage/usr/bin/winlux-installer" "$stage/usr/bin/winlux-hw-detect" "$stage/usr/bin/winlux-first-boot" "$stage/opt/winlux/scripts/install.sh"
 mkdir -p "$stage/usr/lib/winlux/python"
-for tool in benchmark profiles migrate; do
-    cp "$root/scripts/winlux_$tool.py" "$stage/usr/lib/winlux/python/winlux_$tool.py"
+for module in partitioner partition_ui screen benchmark profiles migrate; do
+    cp "$root/scripts/winlux_$module.py" "$stage/usr/lib/winlux/python/winlux_$module.py"
 done
 for tool in benchmark:benchmark profile:profiles migrate:migrate; do
     printf '#!/bin/sh\nexec /usr/bin/python3 /usr/lib/winlux/python/winlux_%s.py "$@"\n' "${tool#*:}" >"$stage/usr/bin/winlux-${tool%%:*}"
@@ -198,7 +207,7 @@ ln -s busybox "$stage/bin/true"
 ln -s ../../bin/busybox "$stage/usr/bin/dirname"
 ln -s ../../bin/busybox "$stage/usr/bin/mktemp"
 ln -s ../../bin/busybox "$stage/usr/bin/timeout"
-for applet in awk cat chmod chown cmp cp cut date env find grep head id ip ipcalc kill killall ln ls mkdir modprobe mount mountpoint mv od printf ps pwd readlink reboot poweroff rm rmdir sed sha256sum sleep sort stat sync tar tee touch tr truncate umount uname wc xargs; do
+for applet in awk basename cat chmod chown cmp cp cut date env find grep head id ip ipcalc kill killall ln ls mkdir modprobe mount mountpoint mv od printf ps pwd readlink reboot poweroff rm rmdir sed sha256sum sleep sort stat sync tar tee touch tr truncate umount uname wc xargs; do
     ln -s ../../bin/busybox "$stage/usr/bin/$applet"
 done
 ln -s ../bin/busybox "$stage/sbin/modprobe"
@@ -223,6 +232,7 @@ zstd -q -d -c "$hid_generic_module" >"$stage/lib/modules/$kernel_release/hid-gen
 chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/xrandr" "$stage/usr/bin/Xorg"
 copy_shared_libraries "$root/target/release/winlux"
 sh "$root/scripts/copy-audio-libraries.sh" "$stage"
+sh "$root/scripts/stage-media.sh" "$stage" "$root"
 copy_shared_libraries /usr/bin/Xvfb
 copy_shared_libraries /usr/bin/xkbcomp
 copy_shared_libraries /usr/bin/xrandr
@@ -231,7 +241,7 @@ copy_shared_libraries /usr/bin/install
 copy_shared_libraries /usr/bin/udevadm
 copy_shared_libraries /bin/bash
 copy_shared_libraries "$xorg"
-for utility in setxkbmap xinput amixer; do
+for utility in setxkbmap xinput amixer fc-list fc-cache; do
     if command -v "$utility" >/dev/null 2>&1; then
         cp "$(command -v "$utility")" "$stage/usr/bin/$utility"
         copy_shared_libraries "$(command -v "$utility")"
@@ -255,6 +265,7 @@ for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmo
         case "$module" in *.zst) zstd -q -d -c "$module" >"$destination" ;; *) cp "$module" "$destination" ;; esac
     done
 done
+sh "$root/scripts/stage-storage-tools.sh" "$stage" "$kernel_release"
 depmod -b "$stage" "$kernel_release" 2>/dev/null
 for metadata in modules.builtin modules.builtin.modinfo; do
     if test -f "/lib/modules/$kernel_release/$metadata"; then cp "/lib/modules/$kernel_release/$metadata" "$stage/lib/modules/$kernel_release/$metadata"; fi
@@ -459,6 +470,12 @@ for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 s
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
+# Partitions supplémentaires choisies à l'installation (/home, swap…).
+if test -s /etc/fstab; then
+    if test -x /usr/bin/mount; then /usr/bin/mount -a 2>/dev/null || true
+    else /bin/busybox mount -a 2>/dev/null || true; fi
+    /sbin/swapon -a 2>/dev/null || /bin/busybox swapon -a 2>/dev/null || true
+fi
 /usr/bin/winlux-hardware >/dev/null 2>&1 || true
 /usr/bin/winlux-firmware >/dev/null 2>&1 || true
 # Profil d'utilisation choisi à l'installation (sysctl, gouverneur CPU, E/S, GPU).
