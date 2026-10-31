@@ -22,4 +22,7 @@ if command -v "$cxx" >/dev/null 2>&1; then
         "$cxx" -O2 -Wall -Werror -static -o "$out/$name.exe" "$src"
     done
 fi
+# Exceptions au format MSVC (__CxxFrameHandler3, __try) : clang en mode
+# MSVC et lld-link, s'ils sont installés.
+sh "$root/testc/msvc/build.sh" "$out"
 echo "Tests MinGW construits dans $out"

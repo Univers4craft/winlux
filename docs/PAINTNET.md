@@ -159,13 +159,19 @@ nouvelle capture dans le cadre parent. Il attend donc quelque chose du
 système (contexte de répartition, drapeaux de l'enregistrement, état du
 cadre) que Winlux ne fournit pas encore.
 
-Suite : écrire notre propre `__CxxFrameHandler3`/`__CxxFrameHandler4` et
-`_CxxThrowException` dans le `vcruntime140` intégré, à partir du format
-public des tables d'exceptions. C'est de toute façon nécessaire : ces
-fonctions manquent aujourd'hui, et tout programme C++ compilé en `/MD` qui
-lève une exception s'arrête dessus. Cela dira aussi précisément ce que FH4
-attend du système lors d'une relance, ce qu'il faudra ensuite fournir dans
-`seh.rs`.
+Fait ensuite (`runtime/src/dlls/cxx_eh.rs`) : notre propre
+`_CxxThrowException`, `__CxxFrameHandler3`, `__C_specific_handler`
+(`__try/__except`, `__try/__finally`) et `__current_exception(_context)`
+dans le `vcruntime140` intégré, écrits d'après le format public des tables
+d'exceptions. Les programmes C++ compilés en `/MD` peuvent donc lever et
+capturer des exceptions. `testc/msvc/eh_msvc.cpp` (clang en mode MSVC,
+lld-link) les vérifie en CI : destructeurs, choix du type, capture par
+référence et par copie, `catch(...)`, relance, lancer depuis un `catch`,
+`try` imbriqué dans un `catch`, filtres `__except` et blocs `__finally`.
+
+Reste `__CxxFrameHandler4` (format compressé de VS 2019 et plus récent,
+celui de coreclr) : l'écrire dira précisément ce que FH4 attend du système
+lors d'une relance, ce qu'il faudra ensuite fournir dans `seh.rs`.
 
 ## Ce qui casse, dans l'ordre où on le rencontre
 

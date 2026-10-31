@@ -687,18 +687,6 @@ pub extern "win64" fn pctype_func() -> *const u16 {
 
 // ---------- Gestion des exceptions C ----------
 
-/// Gestionnaire de langage des blocs `__try/__except`. Winlux ne distribue
-/// pas encore d'exceptions structurées vers le programme : il n'est donc
-/// appelé que par un futur dispatcher, et laisse chercher plus loin.
-pub extern "win64" fn c_specific_handler(
-    _rec: usize,
-    _frame: usize,
-    _ctx: usize,
-    _disp: usize,
-) -> i32 {
-    1
-}
-
 // ---------- Environnement ----------
 
 fn getenv_cache() -> &'static Mutex<HashMap<String, Box<[u8]>>> {
@@ -1633,7 +1621,6 @@ pub fn exports() -> crate::dlls::Exports {
         "_configthreadlocale" => fn configthreadlocale, "_create_locale" => fn create_locale,
         "_free_locale" => fn free_locale, "_get_current_locale" => fn get_current_locale,
         "__pctype_func" => fn pctype_func,
-        "__C_specific_handler" => fn c_specific_handler,
         "getenv" => fn getenv, "_wgetenv" => fn wgetenv, "_putenv" => fn putenv, "_wputenv" => fn wputenv, "_putenv_s" => fn putenv_s,
         "time" => fn time64, "_time64" => fn time64, "_time32" => fn time32,
         "localtime" => fn localtime64, "_localtime64" => fn localtime64, "_localtime32" => fn localtime32,

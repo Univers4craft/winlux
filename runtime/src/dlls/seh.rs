@@ -1332,6 +1332,63 @@ unsafe fn unwind_ex(
     rtl_restore_context(context.ptr(), rec)
 }
 
+/// Déroule jusqu'à `target_frame` / `target_ip` à partir du CONTEXT
+/// `start` (celui de l'exception) : utilisé par les gestionnaires de
+/// langage écrits dans Winlux, dont les cadres Rust ne sont pas déroulables.
+pub unsafe fn unwind_from(
+    target_frame: u64,
+    target_ip: u64,
+    rec: *mut ExceptionRecord,
+    retval: u64,
+    start: *const u8,
+) -> ! {
+    let mut c = Context::zeroed();
+    std::ptr::copy_nonoverlapping(start, c.ptr(), CONTEXT_SIZE);
+    unwind_ex(
+        target_frame,
+        target_ip,
+        rec,
+        retval,
+        &c,
+        std::ptr::null_mut(),
+    )
+}
+
+/// CONTEXT cible de la consolidation en cours (cadre dont le `catch` s'exécute).
+pub fn consolidate_target() -> Option<Context> {
+    FRAMES.with(|f| {
+        f.borrow()
+            .iter()
+            .rev()
+            .find(|e| e.kind == FrameKind::Consolidate)
+            .map(|e| e.resume)
+    })
+}
+
+/// Appelle le code invité `func(arg, arg)` (funclet de `catch`) de sorte
+/// qu'un déroulement qui le traverse reprenne dans le cadre `target`.
+pub unsafe fn call_funclet(func: usize, arg: u64, target: Context) -> u64 {
+    let index = push_frame(FrameKind::Consolidate, target);
+    let mut slot = 0u64;
+    let r = call_consolidate(
+        func,
+        arg as *mut ExceptionRecord,
+        frame_slot_ptr(index, &mut slot),
+    );
+    pop_frames_from(index);
+    r
+}
+
+/// Base du module invité contenant `addr`.
+pub fn module_base(addr: usize) -> Option<usize> {
+    crate::loader::MODULES
+        .try_lock()
+        .ok()?
+        .iter()
+        .find(|m| m.contains(addr))
+        .map(|m| m.base)
+}
+
 unsafe extern "win64" fn rtl_unwind_ex_impl(
     target_frame: u64,
     target_ip: u64,
