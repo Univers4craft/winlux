@@ -12,6 +12,7 @@ pub mod crt_scan;
 pub mod crt_stdio;
 pub mod crypt32;
 pub mod d3d11;
+pub mod d3d_shader;
 pub mod dbghelp;
 pub mod dwmapi;
 pub mod dwrite;
@@ -19,12 +20,15 @@ pub mod dxgi;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
+pub mod gl_bindings;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
 pub mod iphlpapi;
 pub mod kernel32;
 pub mod kernel32_misc;
+pub mod libgcc;
+pub mod libstdcpp;
 pub mod mfplat;
 pub mod mmap;
 pub mod mscoree;
@@ -308,6 +312,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "sechost",
                 exports: sechost::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "libgcc_s_seh-1",
+                exports: libgcc::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "libstdc++-6",
+                exports: libstdcpp::exports(),
                 handle: fake_module(),
             },
         ]

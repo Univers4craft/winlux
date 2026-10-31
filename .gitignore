@@ -3,3 +3,4 @@ target/
 *.iso
 *.qcow2
 .claude/
+__pycache__/

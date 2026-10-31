@@ -3,26 +3,33 @@
 #![deny(unreachable_patterns)]
 
 use crate::gfx::*;
+use crate::locale::*;
 use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 14] = [
-    b"Syst\xE8me Linux",
-    b"Applications Windows",
-    b"R\xE9seau",
-    b"Son et batterie",
-    b"Clavier et pav\xE9 tactile",
-    b"Souris",
-    b"Apparence",
-    b"Mises \xE0 jour",
-    b"\xC9cran et d\xE9finition",
-    b"\xC0 propos",
-    b"Ex\xE9cutable",
-    b"Navigateurs",
-    b"Accessibilit\xE9",
-    b"Effets visuels",
-];
+const PAGE_COUNT: usize = 17;
+fn pages() -> [&'static [u8]; PAGE_COUNT] {
+    [
+        tr(S_SYSTEM_LINUX),
+        tr(S_APPS_WINDOWS),
+        tr(S_NETWORK),
+        tr(S_SOUND_BATTERY),
+        tr(S_KEYBOARD_TOUCHPAD),
+        tr(S_MOUSE),
+        tr(S_APPEARANCE),
+        tr(S_UPDATES),
+        tr(S_DISPLAY),
+        tr(S_ABOUT),
+        tr(S_EXECUTABLE),
+        tr(S_BROWSERS),
+        tr(S_ACCESSIBILITY),
+        tr(S_VISUAL_EFFECTS),
+        tr(S_LOCALIZATION),
+        tr(S_FILE_MANAGER),
+        tr(S_ADVANCED_SOUND),
+    ]
+}
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
 struct Buffer {
@@ -57,9 +64,11 @@ static mut EXE_SCALE: usize = 0;
 static mut EXE_TRACE: bool = false;
 static mut EXE_NOTICE: &[u8] = b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.";
 const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
-static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
-static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
-static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
+static mut MOUSE_SPEED: u32 = 50;
+static mut POINTER_SIZE: u32 = 1;
+static mut HIGH_CONTRAST: bool = false;
+static mut LOCALE_KB_SCROLL: usize = 0;
+static mut LOCALE_TZ_SCROLL: usize = 0;
 use crate::gfx::{AUTO_THEME, ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS};
 
 fn exe_profile_path(out: &mut [u16; 2060]) {
@@ -361,7 +370,7 @@ pub unsafe fn open_page(page: usize) {
     if crate::wm::native_settings(page) {
         return;
     }
-    PAGE = page.min(PAGES.len() - 1);
+    PAGE = page.min(PAGE_COUNT - 1);
     SCROLL = 0;
     LAST_POLL = 0;
     crate::wm::open(crate::wm::APP_SETTINGS);
@@ -382,7 +391,7 @@ fn content(f: &Frame) -> Rect {
 }
 fn nav_rect(f: &Frame, i: usize) -> Rect {
     let c = content(f);
-    let step = ((f.client.bottom - f.client.top - 75) / PAGES.len() as i32).clamp(26, 42);
+    let step = ((f.client.bottom - f.client.top - 75) / PAGE_COUNT as i32).clamp(26, 42);
     rect(
         f.client.left + 10,
         f.client.top + 64 + i as i32 * step,
@@ -425,6 +434,22 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (11, 1) => value(b"browser_default") == b"edge",
         (11, 4) => value(b"browser_default") == b"chrome",
         (11, 7) => value(b"browser_default") == b"firefox",
+        (14, 0..=3) => (unsafe { CURRENT_LANG } as usize) == id as usize,
+        (14, 10..=17) => {
+            let code = KEYBOARD_CODES.get((id as usize).wrapping_sub(10));
+            code.map_or(false, |c| value(b"layout") == *c)
+        }
+        (14, 30..=41) => {
+            let tz = TZ_IDS.get((id as usize).wrapping_sub(30));
+            tz.map_or(false, |t| value(b"timezone") == *t)
+        }
+        (15, 0) => unsafe { crate::explorer::current_view() == 1 },
+        (15, 1) => unsafe { crate::explorer::current_view() == 5 },
+        (15, 2) => unsafe { crate::explorer::current_view() == 6 },
+        (15, 3) => unsafe { crate::explorer::show_hidden() },
+        (15, 4) => unsafe { !crate::explorer::show_hidden() },
+        (15, 6) => unsafe { crate::explorer::show_ext() },
+        (15, 7) => unsafe { !crate::explorer::show_ext() },
         _ => false,
     };
     let primary = PAGE == 7 && id == 1 || PAGE == 8 && id == 2;
@@ -662,7 +687,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         f.client.top + 20,
         b"Param\xE8tres",
     );
-    for (i, name) in PAGES.iter().enumerate() {
+    let page_names = pages();
+    for (i, name) in page_names.iter().enumerate() {
         let r = nav_rect(f, i);
         if i == PAGE {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.selected);
@@ -688,9 +714,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.text3,
         c.left,
         c.top - 22,
-        b"WINLUX  /  PR\xC9F\xC9RENCES DE L'ORDINATEUR",
+        tr(S_SETTINGS_SUBTITLE),
     );
-    text(g.hdc, g.f.large, p.text, c.left, c.top, PAGES[PAGE]);
+    text(g.hdc, g.f.large, p.text, c.left, c.top, page_names[PAGE]);
     fill(
         g.hdc,
         g.b,
@@ -1314,6 +1340,122 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             text(g.hdc, g.f.small, p.text3, c.left, c.bottom - 30, b"Molette / Haut-Bas : d\xE9filer ; Page suivante/pr\xE9c\xE9dente : lecture rapide.");
         }
+        14 => {
+            row(g, &c, 44, tr(S_LANGUAGE), tr(S_LANGUAGE_DESC));
+            let cur_lang = unsafe { CURRENT_LANG } as usize;
+            for i in 0..LANG_COUNT {
+                button(g, &c, i as i32 / 3, i as i32 % 3, LANG_NAMES[i], i as i32);
+            }
+            row(g, &c, 164, tr(S_KEYBOARD_LAYOUT), tr(S_KEYBOARD_LAYOUT_DESC));
+            let kb_start = unsafe { LOCALE_KB_SCROLL };
+            let kb_vis = 6usize.min(KEYBOARD_COUNT);
+            for i in 0..kb_vis {
+                let idx = kb_start + i;
+                if idx < KEYBOARD_COUNT {
+                    button(
+                        g,
+                        &c,
+                        2 + i as i32 / 3,
+                        i as i32 % 3,
+                        KEYBOARD_NAMES[idx],
+                        (10 + idx) as i32,
+                    );
+                }
+            }
+            row(g, &c, 344, tr(S_TIMEZONE), tr(S_TIMEZONE_DESC));
+            row(g, &c, 404, tr(S_CURRENT_TIMEZONE), value(b"timezone"));
+            let tz_start = unsafe { LOCALE_TZ_SCROLL };
+            let tz_vis = 6usize.min(TZ_COUNT);
+            for i in 0..tz_vis {
+                let idx = tz_start + i;
+                if idx < TZ_COUNT {
+                    button(
+                        g,
+                        &c,
+                        7 + i as i32 / 3,
+                        i as i32 % 3,
+                        tr(TZ_STRINGS[idx]),
+                        (30 + idx) as i32,
+                    );
+                }
+            }
+        }
+        15 => {
+            row(
+                g,
+                &c,
+                44,
+                b"Gestionnaire de fichiers",
+                b"Pr\xE9f\xE9rences de l'explorateur de fichiers Winlux.",
+            );
+            row(
+                g,
+                &c,
+                104,
+                b"Affichage par d\xE9faut",
+                match unsafe { crate::explorer::current_view() } {
+                    0 => b"Tr\xE8s grandes ic\xF4nes",
+                    1 => b"Grandes ic\xF4nes",
+                    2 => b"Ic\xF4nes moyennes",
+                    3 => b"Petites ic\xF4nes",
+                    4 => b"Liste",
+                    5 => b"D\xE9tails",
+                    _ => b"Mosa\xEFques",
+                },
+            );
+            button(g, &c, 0, 0, b"Grandes ic\xF4nes", 0);
+            button(g, &c, 0, 1, b"D\xE9tails", 1);
+            button(g, &c, 0, 2, b"Mosa\xEFques", 2);
+            row(
+                g,
+                &c,
+                230,
+                b"\xC9l\xE9ments masqu\xE9s",
+                if unsafe { crate::explorer::show_hidden() } {
+                    b"Visibles"
+                } else {
+                    b"Masqu\xE9s"
+                },
+            );
+            button(g, &c, 2, 0, b"Afficher", 3);
+            button(g, &c, 2, 1, b"Masquer", 4);
+            row(
+                g,
+                &c,
+                356,
+                b"Extensions de noms de fichiers",
+                if unsafe { crate::explorer::show_ext() } {
+                    b"Affich\xE9es"
+                } else {
+                    b"Masqu\xE9es"
+                },
+            );
+            button(g, &c, 4, 0, b"Afficher", 6);
+            button(g, &c, 4, 1, b"Masquer", 7);
+        }
+        16 => {
+            row(g, &c, 44, b"P\xE9riph\xE9rique de sortie", value(b"audio_output"));
+            button(g, &c, 0, 0, b"Haut-parleurs", 0);
+            button(g, &c, 0, 1, b"Casque / HDMI", 1);
+            button(g, &c, 0, 2, b"Actualiser", 2);
+            row(g, &c, 170, b"P\xE9riph\xE9rique d'entr\xE9e", value(b"audio_input"));
+            button(g, &c, 1, 0, b"Micro int\xE9gr\xE9", 3);
+            button(g, &c, 1, 1, b"Micro externe", 4);
+            row(g, &c, 280, b"Volume principal", value(b"audio"));
+            button(g, &c, 3, 0, b"Volume -", 6);
+            button(g, &c, 3, 1, b"Muet / r\xE9tablir", 7);
+            button(g, &c, 3, 2, b"Volume +", 8);
+            row(g, &c, 370, b"Volume par application",
+                b"Chaque fen\xEAtre ouverte a son propre niveau de volume.");
+            let mut ay = 430i32;
+            for app in 0..crate::wm::APP_COUNT {
+                if !crate::wm::is_open(app) || ay + 50 > c.bottom - c.top {
+                    continue;
+                }
+                row(g, &c, ay, crate::wm::title_of(app), b"100 %");
+                ay += 60;
+            }
+        }
         _ => {}
     }
     let notice = if PAGE == 10 {
@@ -1372,7 +1514,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if ev != Mouse::Down && ev != Mouse::DoubleClick {
         return false;
     }
-    for i in 0..PAGES.len() {
+    for i in 0..PAGE_COUNT {
         if inside(&nav_rect(f, i), x, y) {
             PAGE = i;
             SCROLL = 0;
@@ -1618,6 +1760,87 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         } else {
             c"restart-session"
         }),
+        // Son avancé (page 16)
+        (16, 0) => Some(c"audio-output-speakers"),
+        (16, 1) => Some(c"audio-output-headphones"),
+        (16, 2) => Some(c"status"),
+        (16, 3) => Some(c"audio-input-builtin"),
+        (16, 4) => Some(c"audio-input-external"),
+        (16, 6) => Some(c"volume-down"),
+        (16, 7) => Some(c"volume-mute"),
+        (16, 8) => Some(c"volume-up"),
+        (14, 0..=3) => {
+            unsafe { CURRENT_LANG = match hit(f, x, y) {
+                0 => Lang::Fr,
+                1 => Lang::En,
+                2 => Lang::Es,
+                3 => Lang::De,
+                _ => CURRENT_LANG,
+            }};
+            let code = LANG_CODES[unsafe { CURRENT_LANG } as usize];
+            let mut cmd = [0u8; 16];
+            cmd[..5].copy_from_slice(b"lang-");
+            cmd[5..5 + code.len()].copy_from_slice(code);
+            if let Ok(cstr) = core::ffi::CStr::from_bytes_until_nul(&cmd) {
+                control(cstr);
+            }
+            return true;
+        }
+        (14, id @ 10..=17) => {
+            let idx = (id as usize).wrapping_sub(10);
+            if idx < KEYBOARD_COUNT {
+                let code = KEYBOARD_CODES[idx];
+                let mut cmd = [0u8; 16];
+                cmd[..9].copy_from_slice(b"keyboard-");
+                cmd[9..9 + code.len()].copy_from_slice(code);
+                if let Ok(cstr) = core::ffi::CStr::from_bytes_until_nul(&cmd) {
+                    control(cstr);
+                }
+            }
+            return true;
+        }
+        (14, id @ 30..=41) => {
+            let idx = (id as usize).wrapping_sub(30);
+            if idx < TZ_COUNT {
+                let tz = TZ_IDS[idx];
+                let mut cmd = [0u8; 48];
+                cmd[..3].copy_from_slice(b"tz-");
+                let n = tz.len().min(cmd.len() - 4);
+                cmd[3..3 + n].copy_from_slice(&tz[..n]);
+                if let Ok(cstr) = core::ffi::CStr::from_bytes_until_nul(&cmd) {
+                    control(cstr);
+                }
+            }
+            return true;
+        }
+        (15, 0) => {
+            crate::explorer::set_view(1);
+            return true;
+        }
+        (15, 1) => {
+            crate::explorer::set_view(5);
+            return true;
+        }
+        (15, 2) => {
+            crate::explorer::set_view(6);
+            return true;
+        }
+        (15, 3) => {
+            crate::explorer::set_show_hidden(true);
+            return true;
+        }
+        (15, 4) => {
+            crate::explorer::set_show_hidden(false);
+            return true;
+        }
+        (15, 6) => {
+            crate::explorer::set_show_ext(true);
+            return true;
+        }
+        (15, 7) => {
+            crate::explorer::set_show_ext(false);
+            return true;
+        }
         _ => None,
     };
     if let Some(a) = action {

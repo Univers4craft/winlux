@@ -28,7 +28,7 @@ def manifest(text):
         key, separator, value = line.partition("=")
         if not separator or key in fields: raise ValueError("Manifeste incorrect")
         fields[key] = value
-    if fields.get("format") != "3" or fields.get("backend") != "apt" or fields.get("base") != "ubuntu-noble":
+    if fields.get("format") != "3" or fields.get("backend") != "apt" or fields.get("base") != "ubuntu-resolute":
         raise ValueError("Cette mise à jour ne correspond pas à la base APT de Winlux")
     for key in ("version", "asset"):
         if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", fields.get(key, "")):

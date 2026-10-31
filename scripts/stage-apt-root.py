@@ -31,6 +31,7 @@ def winlux_path(relative):
             or relative == "usr/share/mime/packages/winlux.xml"
             or relative == "usr/share/dbus-1/services/org.freedesktop.Notifications.service"
             or relative == "usr/lib/NetworkManager/conf.d/90-winlux.conf"
+            or relative == "usr/bin/systemctl"
             or relative == "usr/libexec/xscreensaver/xscreensaver-gfx"
             or relative.startswith("usr/share/icons/") and Path(relative).name.lower().startswith("winlux"))
 
@@ -93,7 +94,8 @@ def build(stage, base, output):
         # APT installation/removal regenerates the existing XDG application catalogue.
         hooks = package / "etc/apt/apt.conf.d"; hooks.mkdir(parents=True)
         (hooks / "90winlux-desktop").write_text(
-            'DPkg::Post-Invoke { "if test -x /usr/bin/winlux-applications; then /usr/bin/winlux-applications refresh; fi"; };\n')
+            'DPkg::Post-Invoke { "if test -x /usr/bin/winlux-applications; then /usr/bin/winlux-applications refresh; fi"; };\n'
+            'DPkg::Post-Invoke { "if test -x /usr/share/winlux/apt-service-hook; then /usr/share/winlux/apt-service-hook; fi"; };\n')
         metadata = package / "DEBIAN"; metadata.mkdir()
         installed_kib = (sum(path.lstat().st_size for path in package.rglob("*") if path.is_file() and not path.is_symlink()) + 1023) // 1024
         (metadata / "control").write_text(
