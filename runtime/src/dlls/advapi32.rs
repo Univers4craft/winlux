@@ -15,6 +15,7 @@ const ERROR_INVALID_HANDLE: i32 = 6;
 const ERROR_INVALID_DATA: i32 = 13;
 const ERROR_INVALID_PARAMETER: i32 = 87;
 const ERROR_MORE_DATA: i32 = 234;
+const ERROR_NO_MORE_ITEMS: i32 = 259;
 const REG_CREATED_NEW_KEY: u32 = 1;
 const REG_OPENED_EXISTING_KEY: u32 = 2;
 
@@ -32,12 +33,60 @@ struct RegistryData {
     keys: HashMap<String, RegistryKey>,
 }
 
+fn reg_sz(s: &str) -> RegistryValue {
+    let mut bytes = s.as_bytes().to_vec();
+    bytes.push(0);
+    RegistryValue { kind: 1, bytes }
+}
+
 impl Default for RegistryData {
     fn default() -> Self {
         let mut keys = HashMap::new();
         for hive in ["hkcr", "hkcu", "hklm", "hku", "hkcc"] {
             keys.insert(hive.to_string(), RegistryKey::default());
         }
+
+        let mut insert_key = |path: &str, values: Vec<(&str, RegistryValue)>| {
+            let mut p = String::new();
+            for component in path.split('\\') {
+                if !p.is_empty() {
+                    p.push('\\');
+                }
+                p.push_str(component);
+                keys.entry(p.clone()).or_insert_with(RegistryKey::default);
+            }
+            let key = keys.entry(path.to_string()).or_insert_with(RegistryKey::default);
+            for (name, value) in values {
+                key.values.insert(name.to_lowercase(), value);
+            }
+        };
+
+        insert_key(
+            "hklm\\software\\microsoft\\windows nt\\currentversion",
+            vec![
+                ("productname", reg_sz("Winlux")),
+                ("currentversion", reg_sz("10.0")),
+                ("currentbuildnumber", reg_sz("19045")),
+                ("installationtype", reg_sz("Client")),
+            ],
+        );
+        insert_key(
+            "hklm\\software\\microsoft\\windows\\currentversion",
+            vec![
+                ("programfilesdir", reg_sz("C:\\Program Files")),
+                ("commonfilesdir", reg_sz("C:\\Program Files\\Common Files")),
+            ],
+        );
+        insert_key(
+            "hkcu\\software\\microsoft\\windows\\currentversion\\explorer\\shell folders",
+            vec![],
+        );
+        insert_key(
+            "hklm\\system\\currentcontrolset\\control\\session manager\\environment",
+            vec![("processor_architecture", reg_sz("AMD64"))],
+        );
+        insert_key("hkcr\\.exe", vec![("", reg_sz("exefile"))]);
+
         Self { keys }
     }
 }
@@ -582,6 +631,322 @@ pub unsafe extern "win64" fn reg_flush_key(handle: usize) -> i32 {
     .map_or_else(|e| e, |_| ERROR_SUCCESS)
 }
 
+// ── RegEnumKeyEx ───────────────────────────────────────────────────
+
+fn direct_children(registry: &RegistryData, parent: &str) -> Vec<String> {
+    let prefix = format!("{parent}\\");
+    let mut children = Vec::new();
+    for key_path in registry.keys.keys() {
+        if let Some(rest) = key_path.strip_prefix(&prefix) {
+            if !rest.is_empty() && !rest.contains('\\') {
+                children.push(rest.to_string());
+            }
+        }
+    }
+    children.sort();
+    children
+}
+
+pub unsafe extern "win64" fn reg_enum_key_ex_a(
+    handle: usize,
+    index: u32,
+    name: *mut u8,
+    name_size: *mut u32,
+    _reserved: *mut u32,
+    class: *mut u8,
+    class_size: *mut u32,
+    _last_write: *mut u64,
+) -> i32 {
+    if name.is_null() || name_size.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let path = match resolve_existing_handle(handle) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let child_name = match read_registry(|r| {
+        if !r.keys.contains_key(&path) {
+            return Err(ERROR_INVALID_HANDLE);
+        }
+        let children = direct_children(r, &path);
+        children
+            .into_iter()
+            .nth(index as usize)
+            .ok_or(ERROR_NO_MORE_ITEMS)
+    }) {
+        Ok(n) => n,
+        Err(e) => return e,
+    };
+    let capacity = *name_size as usize;
+    if capacity <= child_name.len() {
+        *name_size = child_name.len() as u32 + 1;
+        return ERROR_MORE_DATA;
+    }
+    std::ptr::copy_nonoverlapping(child_name.as_ptr(), name, child_name.len());
+    *name.add(child_name.len()) = 0;
+    *name_size = child_name.len() as u32;
+    if !class.is_null() && !class_size.is_null() {
+        *class = 0;
+        *class_size = 0;
+    }
+    if !_last_write.is_null() {
+        *_last_write = 0;
+    }
+    ERROR_SUCCESS
+}
+
+pub unsafe extern "win64" fn reg_enum_key_ex_w(
+    handle: usize,
+    index: u32,
+    name: *mut u16,
+    name_size: *mut u32,
+    reserved: *mut u32,
+    class: *mut u16,
+    class_size: *mut u32,
+    last_write: *mut u64,
+) -> i32 {
+    if name.is_null() || name_size.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let cap = *name_size as usize;
+    let mut buf = vec![0u8; cap.saturating_add(1)];
+    let mut buf_size = buf.len() as u32;
+    let mut class_buf = [0u8; 256];
+    let mut class_buf_size = 256u32;
+    let result = reg_enum_key_ex_a(
+        handle,
+        index,
+        buf.as_mut_ptr(),
+        &mut buf_size,
+        reserved,
+        class_buf.as_mut_ptr(),
+        &mut class_buf_size,
+        last_write,
+    );
+    if result != ERROR_SUCCESS {
+        return result;
+    }
+    let s = crate::dlls::cstr(buf.as_ptr());
+    let wide: Vec<u16> = s.encode_utf16().collect();
+    if cap <= wide.len() {
+        *name_size = wide.len() as u32 + 1;
+        return ERROR_MORE_DATA;
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr(), name, wide.len());
+    *name.add(wide.len()) = 0;
+    *name_size = wide.len() as u32;
+    if !class.is_null() && !class_size.is_null() {
+        *class = 0;
+        *class_size = 0;
+    }
+    ERROR_SUCCESS
+}
+
+// ── RegEnumValue ───────────────────────────────────────────────────
+
+pub unsafe extern "win64" fn reg_enum_value_a(
+    handle: usize,
+    index: u32,
+    name: *mut u8,
+    name_size: *mut u32,
+    _reserved: *mut u32,
+    kind: *mut u32,
+    data: *mut u8,
+    data_size: *mut u32,
+) -> i32 {
+    if name.is_null() || name_size.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let path = match resolve_existing_handle(handle) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    let (val_name, value) = match read_registry(|r| {
+        let key = r.keys.get(&path).ok_or(ERROR_INVALID_HANDLE)?;
+        let mut names: Vec<_> = key.values.keys().cloned().collect();
+        names.sort();
+        let n = names
+            .into_iter()
+            .nth(index as usize)
+            .ok_or(ERROR_NO_MORE_ITEMS)?;
+        let v = key.values.get(&n).cloned().ok_or(ERROR_NO_MORE_ITEMS)?;
+        Ok((n, v))
+    }) {
+        Ok(pair) => pair,
+        Err(e) => return e,
+    };
+    let capacity = *name_size as usize;
+    if capacity <= val_name.len() {
+        *name_size = val_name.len() as u32 + 1;
+        return ERROR_MORE_DATA;
+    }
+    std::ptr::copy_nonoverlapping(val_name.as_ptr(), name, val_name.len());
+    *name.add(val_name.len()) = 0;
+    *name_size = val_name.len() as u32;
+    if !kind.is_null() {
+        *kind = value.kind;
+    }
+    if !data_size.is_null() {
+        let data_cap = *data_size as usize;
+        *data_size = value.bytes.len() as u32;
+        if !data.is_null() {
+            if data_cap < value.bytes.len() {
+                return ERROR_MORE_DATA;
+            }
+            if !value.bytes.is_empty() {
+                std::ptr::copy_nonoverlapping(value.bytes.as_ptr(), data, value.bytes.len());
+            }
+        }
+    }
+    ERROR_SUCCESS
+}
+
+pub unsafe extern "win64" fn reg_enum_value_w(
+    handle: usize,
+    index: u32,
+    name: *mut u16,
+    name_size: *mut u32,
+    reserved: *mut u32,
+    kind: *mut u32,
+    data: *mut u8,
+    data_size: *mut u32,
+) -> i32 {
+    if name.is_null() || name_size.is_null() {
+        return ERROR_INVALID_PARAMETER;
+    }
+    let cap = *name_size as usize;
+    let mut buf = vec![0u8; cap.saturating_mul(2).saturating_add(1)];
+    let mut buf_size = buf.len() as u32;
+    let result = reg_enum_value_a(
+        handle,
+        index,
+        buf.as_mut_ptr(),
+        &mut buf_size,
+        reserved,
+        kind,
+        data,
+        data_size,
+    );
+    if result != ERROR_SUCCESS {
+        return result;
+    }
+    let s = crate::dlls::cstr(buf.as_ptr());
+    let wide: Vec<u16> = s.encode_utf16().collect();
+    if cap <= wide.len() {
+        *name_size = wide.len() as u32 + 1;
+        return ERROR_MORE_DATA;
+    }
+    std::ptr::copy_nonoverlapping(wide.as_ptr(), name, wide.len());
+    *name.add(wide.len()) = 0;
+    *name_size = wide.len() as u32;
+    ERROR_SUCCESS
+}
+
+// ── RegQueryInfoKey ────────────────────────────────────────────────
+
+pub unsafe extern "win64" fn reg_query_info_key_a(
+    handle: usize,
+    class: *mut u8,
+    class_size: *mut u32,
+    _reserved: *mut u32,
+    sub_keys: *mut u32,
+    max_sub_key_len: *mut u32,
+    max_class_len: *mut u32,
+    values: *mut u32,
+    max_value_name_len: *mut u32,
+    max_value_len: *mut u32,
+    _security: *mut u32,
+    _last_write: *mut u64,
+) -> i32 {
+    let path = match resolve_existing_handle(handle) {
+        Ok(p) => p,
+        Err(e) => return e,
+    };
+    match read_registry(|r| {
+        let key = r.keys.get(&path).ok_or(ERROR_INVALID_HANDLE)?;
+        let children = direct_children(r, &path);
+        let num_sub_keys = children.len() as u32;
+        let max_sub = children.iter().map(|c| c.len() as u32).max().unwrap_or(0);
+        let num_values = key.values.len() as u32;
+        let max_val_name = key
+            .values
+            .keys()
+            .map(|n| n.len() as u32)
+            .max()
+            .unwrap_or(0);
+        let max_val_data = key
+            .values
+            .values()
+            .map(|v| v.bytes.len() as u32)
+            .max()
+            .unwrap_or(0);
+        if !class.is_null() && !class_size.is_null() {
+            *class = 0;
+            *class_size = 0;
+        } else if !class_size.is_null() {
+            *class_size = 0;
+        }
+        if !sub_keys.is_null() {
+            *sub_keys = num_sub_keys;
+        }
+        if !max_sub_key_len.is_null() {
+            *max_sub_key_len = max_sub;
+        }
+        if !max_class_len.is_null() {
+            *max_class_len = 0;
+        }
+        if !values.is_null() {
+            *values = num_values;
+        }
+        if !max_value_name_len.is_null() {
+            *max_value_name_len = max_val_name;
+        }
+        if !max_value_len.is_null() {
+            *max_value_len = max_val_data;
+        }
+        if !_security.is_null() {
+            *_security = 0;
+        }
+        if !_last_write.is_null() {
+            *_last_write = 0;
+        }
+        Ok(())
+    }) {
+        Ok(()) => ERROR_SUCCESS,
+        Err(e) => e,
+    }
+}
+
+pub unsafe extern "win64" fn reg_query_info_key_w(
+    handle: usize,
+    class: *mut u16,
+    class_size: *mut u32,
+    reserved: *mut u32,
+    sub_keys: *mut u32,
+    max_sub_key_len: *mut u32,
+    max_class_len: *mut u32,
+    values: *mut u32,
+    max_value_name_len: *mut u32,
+    max_value_len: *mut u32,
+    security: *mut u32,
+    last_write: *mut u64,
+) -> i32 {
+    reg_query_info_key_a(
+        handle,
+        class.cast(),
+        class_size,
+        reserved,
+        sub_keys,
+        max_sub_key_len,
+        max_class_len,
+        values,
+        max_value_name_len,
+        max_value_len,
+        security,
+        last_write,
+    )
+}
+
 unsafe fn wide_to_cstr(p: *const u16) -> Result<CString, i32> {
     if p.is_null() {
         return Ok(CString::new(Vec::<u8>::new()).unwrap());
@@ -719,12 +1084,25 @@ pub unsafe extern "win64" fn event_log_stub(_args: *const c_void) -> i32 {
     1
 }
 
+pub fn read_registry_value_internal(key_path: &str, value_name: &str) -> Option<Vec<u8>> {
+    let name = value_name.to_lowercase();
+    read_registry(|r| {
+        let key = r.keys.get(key_path).ok_or(ERROR_FILE_NOT_FOUND)?;
+        let val = key.values.get(&name).ok_or(ERROR_FILE_NOT_FOUND)?;
+        Ok(val.bytes.clone())
+    })
+    .ok()
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
      "RegOpenKeyExA"=>fn reg_open_key_ex_a,"RegCreateKeyExA"=>fn reg_create_key_ex_a,"RegCloseKey"=>fn reg_close_key,
      "RegSetValueExA"=>fn reg_set_value_ex_a,"RegQueryValueExA"=>fn reg_query_value_ex_a,"RegDeleteValueA"=>fn reg_delete_value_a,
      "RegOpenKeyExW"=>fn reg_open_key_ex_w,"RegCreateKeyExW"=>fn reg_create_key_ex_w,"RegSetValueExW"=>fn reg_set_value_ex_w,
      "RegQueryValueExW"=>fn reg_query_value_ex_w,"RegDeleteValueW"=>fn reg_delete_value_w,"RegDeleteKeyA"=>fn reg_delete_key_a,"RegFlushKey"=>fn reg_flush_key,
+     "RegEnumKeyExA"=>fn reg_enum_key_ex_a,"RegEnumKeyExW"=>fn reg_enum_key_ex_w,
+     "RegEnumValueA"=>fn reg_enum_value_a,"RegEnumValueW"=>fn reg_enum_value_w,
+     "RegQueryInfoKeyA"=>fn reg_query_info_key_a,"RegQueryInfoKeyW"=>fn reg_query_info_key_w,
      "GetUserNameA"=>fn get_user_name_a,"CryptAcquireContextA"=>fn crypt_acquire_context_a,"CryptReleaseContext"=>fn crypt_release_context,"CryptGenRandom"=>fn crypt_gen_random,
      "OpenEventLogA"=>fn event_log_stub,"RegisterEventSourceA"=>fn event_log_stub
     }
