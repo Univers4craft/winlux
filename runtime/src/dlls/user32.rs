@@ -171,6 +171,7 @@ unsafe fn create_window_common(
             parent,
             owner: std::thread::current().id(),
             needs_paint: visible,
+            paint_queued: false,
             style,
             ex_style,
             pending: Vec::new(),
