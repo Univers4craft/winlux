@@ -76,7 +76,7 @@ fn level_name(l: u8) -> &'static [u8] {
         2 => b"Info",
         3 => tr4(&[b"D\xE9boguer", b"Debug", b"Depurar", b"Debuggen"]),
         4 => b"Trace",
-        5 => b"Crash",
+        5 => tr4(&[b"Crash", b"Crash", b"Bloqueo", b"Absturz"]),
         _ => b"?",
     }
 }
@@ -412,7 +412,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     );
 
     let btn_names: [&[u8]; 3] = [
-        tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
+        tr4(&[
+            tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
+            b"Refresh",
+            b"Actualizar",
+            b"Aktualisieren",
+        ]),
         tr4(&[b"Effacer", b"Clear", b"Borrar", b"Leeren"]),
         crate::locale::tr(crate::locale::S_REPORT_BUTTON),
     ];
@@ -446,8 +451,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let col_names: [&[u8]; 4] = [
         tr4(&[b"Niveau", b"Level", b"Nivel", b"Ebene"]),
         tr4(&[b"Heure", b"Time", b"Hora", b"Uhrzeit"]),
-        b"Source",
-        b"Message",
+        tr4(&[b"Source", b"Source", b"Origen", b"Quelle"]),
+        tr4(&[b"Message", b"Message", b"Mensaje", b"Meldung"]),
     ];
     for (i, name) in col_names.iter().enumerate() {
         text(g.hdc, g.f.small, p.text2, col_x[i], ty + 5, name);

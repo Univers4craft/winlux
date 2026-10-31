@@ -1486,7 +1486,7 @@ unsafe fn draw_battery_tip(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) 
         push(&mut line1, &mut n1, tr4(&[b"Batterie : ", b"Battery: ", b"Bater\xEDa: ", b"Akku: "]));
         push_num(&mut line1, &mut n1, BATTERY_LEVEL);
         if BATTERY_AC {
-            push(&mut line1, &mut n1, b" % disponible (branch\xE9)");
+            push(&mut line1, &mut n1, tr4(&[b" % disponible (branch\xE9)", b" % available (plugged in)", b" % disponible (conectado)", b" % verf\xFCgbar (angeschlossen)"]));
             push(
                 &mut line2,
                 &mut n2,
@@ -2000,7 +2000,7 @@ fn recommended_apps() -> [(&'static [u8], &'static [u8], Glyph, Launch); 4] {
     [
         (
             tr(S_TERMINAL),
-            b"Ouvrir un terminal Linux",
+            tr4(&[b"Ouvrir un terminal Linux", b"Open a Linux terminal", b"Abrir un terminal de Linux", b"Linux-Terminal \xF6ffnen"]),
             Glyph::Terminal,
             Launch::Terminal,
         ),
@@ -2012,13 +2012,13 @@ fn recommended_apps() -> [(&'static [u8], &'static [u8], Glyph, Launch); 4] {
         ),
         (
             tr(S_DOCUMENTS),
-            b"Dossier personnel Linux",
+            tr4(&[b"Dossier personnel Linux", b"Linux home folder", b"Carpeta personal de Linux", b"Pers\xF6nlicher Linux-Ordner"]),
             Glyph::Folder,
             Launch::Documents,
         ),
         (
             tr(S_SETTINGS_APP),
-            b"Clavier, r\xE9seau et alimentation",
+            tr4(&[b"Clavier, r\xE9seau et alimentation", b"Keyboard, network and power", b"Teclado, red y energ\xEDa", b"Tastatur, Netzwerk und Energie"]),
             Glyph::Settings,
             Launch::Settings,
         ),
@@ -3362,7 +3362,7 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         rgb(0xC5, 0xC5, 0xC5),
         (rb.left + rb.right) / 2,
         rb.top + 7,
-        tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
+        tr4(&[tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]), b"Refresh", b"Actualizar", b"Aktualisieren"]),
     );
 }
 
