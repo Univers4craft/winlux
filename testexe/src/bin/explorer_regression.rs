@@ -4,6 +4,8 @@
 #![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
+#[path = "../shell/a11y.rs"]
+mod a11y;
 #[path = "../shell/admin_ui.rs"]
 mod admin_ui;
 #[path = "../shell/bsod.rs"]
@@ -63,6 +65,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         settings::regression_checks();
         personalize::regression_checks();
         welcome::regression_checks();
+        a11y::regression_checks();
     }
     finish()
 }
