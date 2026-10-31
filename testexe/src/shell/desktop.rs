@@ -3700,46 +3700,33 @@ unsafe fn desktop_icons(hdc: Handle, b: &mut Brushes, f: &Fonts) {
 
 // ---------- Écran de démarrage ----------
 
-/// Logo et cercle de points qui tournent, comme au démarrage de Windows 11 ;
-/// en dessous, l'étape de chargement en cours.
+/// Logo Winlux « Prisme » sur un halo violet, puis cercle de points qui
+/// tournent ; en dessous, l'étape de chargement en cours. Même logo que le
+/// menu GRUB (assets/brand) pour un démarrage d'un seul tenant.
 unsafe fn boot_splash(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     fill(hdc, b, 0, 0, l.w, l.h, rgb(0, 0, 0));
     let t = since(BOOT_START);
-    // Le logo apparaît en fondu pendant 400 ms.
+    // Le logo apparaît en fondu pendant 400 ms, le halo un peu après.
     let a = ease_out(t, 400);
-    let size = 96;
+    let size = (l.h / 9).clamp(72, 160);
     let (lx, ly) = (l.w / 2 - size / 2, l.h / 2 - size - 30);
-    let gap = 4;
-    let c = (size - gap) / 2;
-    let blue = |k: u32| mix(0, k, a, 1000);
-    fill(hdc, b, lx, ly, lx + c, ly + c, blue(rgb(0x2B, 0xA4, 0xF2)));
-    fill(
-        hdc,
-        b,
-        lx + c + gap,
-        ly,
-        lx + size,
-        ly + c,
-        blue(rgb(0x45, 0xB8, 0xFF)),
-    );
-    fill(
-        hdc,
-        b,
-        lx,
-        ly + c + gap,
-        lx + c,
-        ly + size,
-        blue(rgb(0x16, 0x84, 0xE0)),
-    );
-    fill(
-        hdc,
-        b,
-        lx + c + gap,
-        ly + c + gap,
-        lx + size,
-        ly + size,
-        blue(rgb(0x2B, 0xA4, 0xF2)),
-    );
+    let glow = ease_out(t - 150, 700);
+    if glow > 0 {
+        let (gx, gy) = (l.w / 2, ly + size / 2);
+        // Anneaux concentriques serrés : un dégradé sans marches visibles.
+        for k in (1..=28).rev() {
+            let r = size * (20 + k * 5) / 40;
+            let fall = (29 - k) * 1000 / 28;
+            let c = mix(0, rgb(0x2E, 0x1C, 0x70), glow * fall / 1000 * fall / 1000, 1000);
+            ellipse(hdc, b, gx - r, gy - r * 3 / 4, gx + r, gy + r * 3 / 4, c);
+        }
+    }
+    let under = if glow > 0 {
+        mix(0, rgb(0x2E, 0x1C, 0x70), glow, 1000)
+    } else {
+        0
+    };
+    brand::logo(hdc, b, lx, ly, size, a, Some(under));
     // Cercle de chargement : cinq points qui accélèrent puis ralentissent.
     if t > 500 {
         let (cx, cy, radius) = (l.w / 2, l.h / 2 + 70, 22);
@@ -4152,6 +4139,7 @@ pub unsafe fn tick(hwnd: Handle) {
     let system = crate::settings::system_tick()
         | power_tick()
         | crate::firewall::system_tick()
+        | crate::volumes::system_tick()
         | crate::a11y::tick();
     let weather_changed = weather::poll();
     let welcome = BOOT_DONE

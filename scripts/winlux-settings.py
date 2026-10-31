@@ -216,6 +216,7 @@ _TR = {
     'Code : {code}\n\n{detail}': ('Code: {code}\n\n{detail}', 'Código: {code}\n\n{detail}', 'Code: {code}\n\n{detail}'),
     'Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}': ('Step: {stage} (code {code})\n\nLast lines of the log:\n{detail}', 'Etapa: {stage} (código {code})\n\nÚltimas líneas del registro:\n{detail}', 'Schritt: {stage} (Code {code})\n\nLetzte Zeilen des Protokolls:\n{detail}'),
     '{done}/{total} fichiers': ('{done}/{total} files', '{done}/{total} archivos', '{done}/{total} Dateien'),
+    'Applications par défaut': ('Default apps', 'Aplicaciones predeterminadas', 'Standard-Apps'),
     # Page Processeur : temps de démarrage.
     'Temps de démarrage': ('Startup time', 'Tiempo de arranque', 'Startzeit'),
     'Dernier démarrage : {value}': ('Last startup: {value}', 'Último arranque: {value}', 'Letzter Start: {value}'),
@@ -539,6 +540,10 @@ class Settings(Gtk.Window):
             shortcut = Gtk.Button(label={1:_t("Installer, désinstaller et gérer le démarrage"),2:_t("Wi-Fi et Bluetooth"),3:_t("Réglages rapides"),6:_t("Thèmes, accent, fond et barre des tâches")}[self.page])
             shortcut.connect("clicked", lambda *_: subprocess.Popen(["winlux-system-tools", tool]))
             self.body.pack_start(shortcut, False, False, 0)
+        if self.page == 1:
+            defaults = Gtk.Button(label=_t("Applications par défaut"))
+            defaults.connect("clicked", lambda *_: subprocess.Popen(["winlux-default-apps"]))
+            self.body.pack_start(defaults, False, False, 0)
         if self.page == 8:
             self.modes = Gtk.ComboBoxText()
             status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
