@@ -6,6 +6,40 @@ import subprocess
 import sys
 import time
 
+
+# ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
+
+def _interface_lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="):
+                        code = line[5:].strip()
+        except OSError:
+            pass
+    code = (code or os.environ.get("LANG", "fr"))[:2].lower()
+    return code if code in ("fr", "en", "es", "de") else "fr"
+
+
+_LANG = _interface_lang()
+_COL = {"en": 0, "es": 1, "de": 2}
+
+# Texte français -> (anglais, espagnol, allemand).
+_TR = {
+    'Redémarrage en cours...': ('Restarting...', 'Reiniciando...', 'Neustart läuft...'),
+    'Redémarrage de la session...': ('Restarting the session...', 'Reiniciando la sesión...', 'Sitzung wird neu gestartet...'),
+    'Fermeture en cours...': ('Signing out...', 'Cerrando sesión...', 'Abmeldung läuft...'),
+}
+
+
+def _t(text):
+    """Texte dans la langue de l'interface (le français sert de clé)."""
+    row = _TR.get(text)
+    return row[_COL[_LANG]] if row and _LANG in _COL else text
+
+
 DISPLAY = os.environ.get("DISPLAY", ":0")
 
 def have(cmd):
@@ -33,11 +67,11 @@ def screen_size():
 def main():
     action = sys.argv[1] if len(sys.argv) > 1 else "poweroff"
     if action == "reboot":
-        message = "Redémarrage en cours..."
+        message = _t("Redémarrage en cours...")
     elif action == "restart-session":
-        message = "Redémarrage de la session..."
+        message = _t("Redémarrage de la session...")
     else:
-        message = "Fermeture en cours..."
+        message = _t("Fermeture en cours...")
 
     if not have("python3"):
         return

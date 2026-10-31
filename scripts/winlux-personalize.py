@@ -8,6 +8,48 @@ import shutil
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
+import os
+
+
+# ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
+
+def _interface_lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="):
+                        code = line[5:].strip()
+        except OSError:
+            pass
+    code = (code or os.environ.get("LANG", "fr"))[:2].lower()
+    return code if code in ("fr", "en", "es", "de") else "fr"
+
+
+_LANG = _interface_lang()
+_COL = {"en": 0, "es": 1, "de": 2}
+
+# Texte français -> (anglais, espagnol, allemand).
+_TR = {
+    'Thème inconnu': ('Unknown theme', 'Tema desconocido', 'Unbekanntes Design'),
+    'Couleur invalide': ('Invalid color', 'Color no válido', 'Ungültige Farbe'),
+    'Image invalide': ('Invalid image', 'Imagen no válida', 'Ungültiges Bild'),
+    'Format d’image non reconnu': ('Image format not recognized', 'Formato de imagen no reconocido', 'Bildformat nicht erkannt'),
+    'Taille invalide': ('Invalid size', 'Tamaño no válido', 'Ungültige Größe'),
+    'Réglage inconnu': ('Unknown setting', 'Ajuste desconocido', 'Unbekannte Einstellung'),
+    'Image trop volumineuse': ('Image too large', 'Imagen demasiado grande', 'Bild zu groß'),
+    'Le service de fond d’écran n’est pas initialisé': ('The wallpaper service is not initialized', 'El servicio de fondo de pantalla no está inicializado', 'Der Hintergrunddienst ist nicht initialisiert'),
+    'Préférence appliquée. Rouvrez les applications pour actualiser leur thème.': ('Preference applied. Reopen your apps to refresh their theme.', 'Preferencia aplicada. Vuelva a abrir las aplicaciones para actualizar su tema.', 'Einstellung übernommen. Öffnen Sie die Apps erneut, um ihr Design zu aktualisieren.'),
+    'usage : winlux-personalize theme|accent|wallpaper|panel-size VALEUR': ('usage: winlux-personalize theme|accent|wallpaper|panel-size VALUE', 'uso: winlux-personalize theme|accent|wallpaper|panel-size VALOR', 'Verwendung: winlux-personalize theme|accent|wallpaper|panel-size WERT'),
+}
+
+
+def _t(text):
+    """Texte dans la langue de l'interface (le français sert de clé)."""
+    row = _TR.get(text)
+    return row[_COL[_LANG]] if row and _LANG in _COL else text
+
 
 HOME=Path.home()
 PREF=HOME/".config/winlux/appearance.json"
@@ -15,16 +57,16 @@ PREF=HOME/".config/winlux/appearance.json"
 def apply(kind,value):
     try: state=json.loads(PREF.read_text())
     except (OSError,ValueError): state={"theme":"dark","accent":"#8178b7"}
-    if kind=="theme" and value not in ("dark","light"): raise ValueError("Thème inconnu")
-    if kind=="accent" and not re.fullmatch(r"#[0-9a-fA-F]{6}",value): raise ValueError("Couleur invalide")
+    if kind=="theme" and value not in ("dark","light"): raise ValueError(_t("Thème inconnu"))
+    if kind=="accent" and not re.fullmatch(r"#[0-9a-fA-F]{6}",value): raise ValueError(_t("Couleur invalide"))
     if kind in ("wallpaper", "start-icon") and not (kind == "start-icon" and value == "default"):
         path=Path(value).resolve(strict=True)
-        if not path.is_file(): raise ValueError("Image invalide")
+        if not path.is_file(): raise ValueError(_t("Image invalide"))
         from gi.repository import GdkPixbuf
-        if not GdkPixbuf.Pixbuf.get_file_info(str(path)): raise ValueError("Format d’image non reconnu")
+        if not GdkPixbuf.Pixbuf.get_file_info(str(path)): raise ValueError(_t("Format d’image non reconnu"))
         value=str(path)
-    if kind=="panel-size" and value not in ("32","40","48","56","64"): raise ValueError("Taille invalide")
-    if kind not in ("theme","accent","wallpaper","panel-size","start-icon"): raise ValueError("Réglage inconnu")
+    if kind=="panel-size" and value not in ("32","40","48","56","64"): raise ValueError(_t("Taille invalide"))
+    if kind not in ("theme","accent","wallpaper","panel-size","start-icon"): raise ValueError(_t("Réglage inconnu"))
     def query(channel,prop,value,typ):
         args=["xfconf-query","-c",channel,"-p",prop]
         exists=subprocess.run(args,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL).returncode==0
@@ -35,7 +77,7 @@ def apply(kind,value):
         icon="/usr/share/winlux/native/start.svg"
         if value != "default":
             image=Path(value)
-            if image.stat().st_size > 20 * 1024 * 1024: raise ValueError("Image trop volumineuse")
+            if image.stat().st_size > 20 * 1024 * 1024: raise ValueError(_t("Image trop volumineuse"))
             suffix=image.suffix.lower() if re.fullmatch(r"\.[a-z0-9]{1,8}", image.suffix.lower()) else ".img"
             icon=str(folder/("icon"+suffix))
             if image != Path(icon): shutil.copyfile(image,icon)
@@ -46,7 +88,7 @@ def apply(kind,value):
     elif kind=="wallpaper":
         props=subprocess.check_output(["xfconf-query","-c","xfce4-desktop","-l"],text=True).splitlines()
         targets=[p for p in props if p.endswith("/last-image")]
-        if not targets: raise ValueError("Le service de fond d’écran n’est pas initialisé")
+        if not targets: raise ValueError(_t("Le service de fond d’écran n’est pas initialisé"))
         for prop in targets: query("xfce4-desktop",prop,value,"string")
     elif kind=="panel-size": query("xfce4-panel","/panels/panel-1/size",value,"uint")
     state[kind]=value
@@ -89,11 +131,11 @@ def apply(kind,value):
             if name is not None:
                 name.text="Winlux-user";tree.write(rc,encoding="utf-8",xml_declaration=True)
                 subprocess.run(["openbox","--reconfigure"],check=True)
-    print("Préférence appliquée. Rouvrez les applications pour actualiser leur thème.")
+    print(_t("Préférence appliquée. Rouvrez les applications pour actualiser leur thème."))
 
 if __name__=="__main__":
     try:
-        if len(sys.argv)!=3: raise ValueError("usage : winlux-personalize theme|accent|wallpaper|panel-size VALEUR")
+        if len(sys.argv)!=3: raise ValueError(_t("usage : winlux-personalize theme|accent|wallpaper|panel-size VALEUR"))
         if sys.argv[1] == "reset" and sys.argv[2] == "default":
             for kind, value in (("theme", "dark"), ("accent", "#8178b7"), ("panel-size", "40"),
                                 ("start-icon", "default"), ("wallpaper", "/usr/share/winlux/wallpaper.bmp")):

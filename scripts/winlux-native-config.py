@@ -8,6 +8,38 @@ import grp
 import sys
 import xml.etree.ElementTree as ET
 
+
+# ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
+
+def _interface_lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="):
+                        code = line[5:].strip()
+        except OSError:
+            pass
+    code = (code or os.environ.get("LANG", "fr"))[:2].lower()
+    return code if code in ("fr", "en", "es", "de") else "fr"
+
+
+_LANG = _interface_lang()
+_COL = {"en": 0, "es": 1, "de": 2}
+
+# Texte français -> (anglais, espagnol, allemand).
+_TR = {
+    'Configuration Openbox personnalisée illisible : migration des raccourcis ignorée.': ('Custom Openbox configuration unreadable: shortcut migration skipped.', 'Configuración personalizada de Openbox ilegible: se omite la migración de los atajos.', 'Benutzerdefinierte Openbox-Konfiguration nicht lesbar: Übernahme der Tastenkürzel übersprungen.'),
+}
+
+
+def _t(text):
+    """Texte dans la langue de l'interface (le français sert de clé)."""
+    row = _TR.get(text)
+    return row[_COL[_LANG]] if row and _LANG in _COL else text
+
+
 if os.geteuid() == 0:
     try:
         pwd.getpwnam("messagebus")
@@ -95,7 +127,7 @@ if openbox_config.is_file():
             tree.write(temporary, encoding="utf-8", xml_declaration=True)
             temporary.replace(openbox_config)
     except ET.ParseError:
-        print("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée.", file=sys.stderr)
+        print(_t("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée."), file=sys.stderr)
 if not (home / ".xscreensaver").exists(): shutil.copyfile(source / "xscreensaver", home / ".xscreensaver")
 user_dirs = home / ".config/user-dirs.dirs"
 if not user_dirs.exists():
