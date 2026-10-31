@@ -334,7 +334,12 @@ const SNAP_THUMB_GAP: i32 = 6;
 fn snap_overlay_rect(app_rect: &Rect) -> Rect {
     let cx = app_rect.right - 2 * CAPTION_W - CAPTION_W / 2;
     let top = app_rect.top + TITLE_H + 2;
-    rect(cx - SNAP_OVERLAY_W / 2, top, cx + SNAP_OVERLAY_W / 2, top + SNAP_OVERLAY_H)
+    rect(
+        cx - SNAP_OVERLAY_W / 2,
+        top,
+        cx + SNAP_OVERLAY_W / 2,
+        top + SNAP_OVERLAY_H,
+    )
 }
 
 fn snap_layout_thumb(overlay: &Rect, layout: i32) -> Rect {
@@ -430,7 +435,9 @@ pub fn current_desktop() -> usize {
 }
 
 pub unsafe fn switch_desktop(idx: usize) {
-    if idx >= DESKTOP_COUNT { return; }
+    if idx >= DESKTOP_COUNT {
+        return;
+    }
     CURRENT_DESKTOP = idx;
     refresh_active();
 }
@@ -442,7 +449,9 @@ pub unsafe fn add_desktop() {
 }
 
 pub unsafe fn remove_desktop(idx: usize) {
-    if DESKTOP_COUNT <= 1 || idx >= DESKTOP_COUNT { return; }
+    if DESKTOP_COUNT <= 1 || idx >= DESKTOP_COUNT {
+        return;
+    }
     for app in 0..APP_COUNT {
         if WIN_DESKTOP[app] == idx {
             WIN_DESKTOP[app] = if idx > 0 { idx - 1 } else { 0 };
@@ -828,11 +837,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         }
         Anim::Minimize if t < MINIMIZE_MS => {
             let e = ease_out(t, MINIMIZE_MS);
-            (
-                lerp_rect(&w.rect, &TASKBAR_SLOT[app], e),
-                false,
-                1000 - e,
-            )
+            (lerp_rect(&w.rect, &TASKBAR_SLOT[app], e), false, 1000 - e)
         }
         Anim::Restore if t < MINIMIZE_MS => {
             let e = ease_out(t, MINIMIZE_MS);
@@ -998,19 +1003,40 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
 unsafe fn draw_snap_layout(g: &mut Gfx) {
     let p = pal();
     let r = snap_overlay_rect(&WINS[SNAP_LAYOUT_APP].rect);
-    panel(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.surface, p.border);
-    text(g.hdc, g.f.small, p.text, r.left + 14, r.top + 56, b"Dispositions d'ancrage");
+    panel(
+        g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.surface, p.border,
+    );
+    text(
+        g.hdc,
+        g.f.small,
+        p.text,
+        r.left + 14,
+        r.top + 56,
+        b"Dispositions d'ancrage",
+    );
     for layout in 0..3i32 {
         let t = snap_layout_thumb(&r, layout);
         let selected = SNAP_LAYOUT_HOVER == layout;
-        let bg = if selected { mix(p.hover, p.accent, 3, 10) } else { p.surface2 };
+        let bg = if selected {
+            mix(p.hover, p.accent, 3, 10)
+        } else {
+            p.surface2
+        };
         round_rect(g.hdc, g.b, t.left, t.top, t.right, t.bottom, 4, bg);
         let (_zones, _count) = snap_zone_rects(layout);
-        let zone_count = match layout { 0 => 2, 1 => 3, _ => 4 };
+        let zone_count = match layout {
+            0 => 2,
+            1 => 3,
+            _ => 4,
+        };
         for z in 0..zone_count {
             let zr = snap_thumb_zone_rect(&t, layout, z);
             let highlighted = selected && SNAP_LAYOUT_ZONE == z;
-            let c = if highlighted { p.accent } else { mix(p.border, p.accent, 2, 10) };
+            let c = if highlighted {
+                p.accent
+            } else {
+                mix(p.border, p.accent, 2, 10)
+            };
             round_rect(g.hdc, g.b, zr.left, zr.top, zr.right, zr.bottom, 2, c);
         }
     }
@@ -1020,14 +1046,24 @@ unsafe fn draw_snap_layout(g: &mut Gfx) {
         if (SNAP_LAYOUT_ZONE as usize) < count {
             let zr = zones[SNAP_LAYOUT_ZONE as usize];
             round_rect(
-                g.hdc, g.b,
-                zr.left + 4, zr.top + 4, zr.right - 4, zr.bottom - 4,
-                8, mix(p.accent, p.mica, 5, 10),
+                g.hdc,
+                g.b,
+                zr.left + 4,
+                zr.top + 4,
+                zr.right - 4,
+                zr.bottom - 4,
+                8,
+                mix(p.accent, p.mica, 5, 10),
             );
             round_rect(
-                g.hdc, g.b,
-                zr.left + 6, zr.top + 6, zr.right - 6, zr.bottom - 6,
-                7, mix(p.accent, p.mica, 7, 10),
+                g.hdc,
+                g.b,
+                zr.left + 6,
+                zr.top + 6,
+                zr.right - 6,
+                zr.bottom - 6,
+                7,
+                mix(p.accent, p.mica, 7, 10),
             );
         }
     }
@@ -1037,9 +1073,24 @@ unsafe fn draw_task_view(g: &mut Gfx) {
     let p = pal();
     let wk = WORK;
     // Fond semi-transparent
-    fill(g.hdc, g.b, wk.left, wk.top, wk.right, wk.bottom, mix(0, p.mica, 8, 10));
+    fill(
+        g.hdc,
+        g.b,
+        wk.left,
+        wk.top,
+        wk.right,
+        wk.bottom,
+        mix(0, p.mica, 8, 10),
+    );
     // Titre
-    text(g.hdc, g.f.large, p.text, wk.left + 40, wk.top + 20, b"Vue des t\xE2ches");
+    text(
+        g.hdc,
+        g.f.large,
+        p.text,
+        wk.left + 40,
+        wk.top + 20,
+        b"Vue des t\xE2ches",
+    );
     // Miniatures des fenêtres du bureau courant
     let mut visible = [usize::MAX; APP_COUNT];
     let mut vis_count = 0;
@@ -1060,14 +1111,40 @@ unsafe fn draw_task_view(g: &mut Gfx) {
         let x = start_x + i as i32 * (thumb_w + 12);
         let y = area_y + (area_h - thumb_h) / 2;
         let hover = TASK_VIEW_HOVER == i as i32;
-        let bg = if hover { mix(p.surface2, p.accent, 3, 10) } else { p.surface };
+        let bg = if hover {
+            mix(p.surface2, p.accent, 3, 10)
+        } else {
+            p.surface
+        };
         round_rect(g.hdc, g.b, x, y, x + thumb_w, y + thumb_h, 8, p.border);
-        round_rect(g.hdc, g.b, x + 1, y + 1, x + thumb_w - 1, y + thumb_h - 1, 7, bg);
+        round_rect(
+            g.hdc,
+            g.b,
+            x + 1,
+            y + 1,
+            x + thumb_w - 1,
+            y + thumb_h - 1,
+            7,
+            bg,
+        );
         let cx = x + thumb_w / 2;
-        glyph(g.hdc, g.b, g.f, glyph_of(app), cx - 16, y + thumb_h / 2 - 24, 32);
+        glyph(
+            g.hdc,
+            g.b,
+            g.f,
+            glyph_of(app),
+            cx - 16,
+            y + thumb_h / 2 - 24,
+            32,
+        );
         text_centered(
-            g.hdc, g.f.small, 11, p.text,
-            cx, y + thumb_h / 2 + 16, title_of(app),
+            g.hdc,
+            g.f.small,
+            11,
+            p.text,
+            cx,
+            y + thumb_h / 2 + 16,
+            title_of(app),
         );
         if hover {
             round_rect(g.hdc, g.b, x, y, x + thumb_w, y + 3, 2, p.accent);
@@ -1075,8 +1152,12 @@ unsafe fn draw_task_view(g: &mut Gfx) {
     }
     if vis_count == 0 {
         text_centered(
-            g.hdc, g.f.body, 13, p.text3,
-            (wk.left + wk.right) / 2, area_y + area_h / 2,
+            g.hdc,
+            g.f.body,
+            13,
+            p.text3,
+            (wk.left + wk.right) / 2,
+            area_y + area_h / 2,
             b"Aucune fen\xEAtre sur ce bureau",
         );
     }
@@ -1088,35 +1169,77 @@ unsafe fn draw_task_view(g: &mut Gfx) {
     let total_desk = DESKTOP_COUNT as i32 * (desk_w + 12) + desk_w / 2;
     let desk_start = (wk.left + wk.right - total_desk) / 2;
     text_centered(
-        g.hdc, g.f.caption, 12, p.text,
-        (wk.left + wk.right) / 2, desk_bar_y - 20, b"Bureaux",
+        g.hdc,
+        g.f.caption,
+        12,
+        p.text,
+        (wk.left + wk.right) / 2,
+        desk_bar_y - 20,
+        b"Bureaux",
     );
     for d in 0..DESKTOP_COUNT {
         let x = desk_start + d as i32 * (desk_w + 12);
         let y = desk_bar_y;
         let selected = d == CURRENT_DESKTOP;
         let hover = TASK_VIEW_DESK_HOVER == d as i32;
-        let bg = if selected { mix(p.surface, p.accent, 4, 10) } else if hover { p.surface2 } else { p.surface };
+        let bg = if selected {
+            mix(p.surface, p.accent, 4, 10)
+        } else if hover {
+            p.surface2
+        } else {
+            p.surface
+        };
         let border_c = if selected { p.accent } else { p.border };
         round_rect(g.hdc, g.b, x, y, x + desk_w, y + desk_h, 6, border_c);
-        round_rect(g.hdc, g.b, x + 1, y + 1, x + desk_w - 1, y + desk_h - 1, 5, bg);
-        let mut label = [b'B', b'u', b'r', b'e', b'a', b'u', b' ', b'0' + (d + 1) as u8 % 10];
-        if d + 1 >= 10 { label[7] = b'?'; }
+        round_rect(
+            g.hdc,
+            g.b,
+            x + 1,
+            y + 1,
+            x + desk_w - 1,
+            y + desk_h - 1,
+            5,
+            bg,
+        );
+        let mut label = [
+            b'B',
+            b'u',
+            b'r',
+            b'e',
+            b'a',
+            b'u',
+            b' ',
+            b'0' + (d + 1) as u8 % 10,
+        ];
+        if d + 1 >= 10 {
+            label[7] = b'?';
+        }
         text_centered(
-            g.hdc, g.f.small, 11,
+            g.hdc,
+            g.f.small,
+            11,
             if selected { p.accent } else { p.text },
-            x + desk_w / 2, y + desk_h / 2 - 6, &label,
+            x + desk_w / 2,
+            y + desk_h / 2 - 6,
+            &label,
         );
         // Nombre de fenêtres sur ce bureau
         let mut wcount = 0u8;
         for app in 0..APP_COUNT {
-            if WINS[app].open && WIN_DESKTOP[app] == d { wcount += 1; }
+            if WINS[app].open && WIN_DESKTOP[app] == d {
+                wcount += 1;
+            }
         }
         if wcount > 0 {
             let dot_label = [b'0' + wcount % 10];
             text_centered(
-                g.hdc, g.f.caption, 12, p.text3,
-                x + desk_w / 2, y + desk_h / 2 + 10, &dot_label,
+                g.hdc,
+                g.f.caption,
+                12,
+                p.text3,
+                x + desk_w / 2,
+                y + desk_h / 2 + 10,
+                &dot_label,
             );
         }
     }
@@ -1127,10 +1250,24 @@ unsafe fn draw_task_view(g: &mut Gfx) {
         let hover = TASK_VIEW_DESK_HOVER == DESKTOP_COUNT as i32;
         let bg = if hover { p.surface2 } else { p.surface };
         round_rect(g.hdc, g.b, x, y, x + desk_w / 2, y + desk_h, 6, p.border);
-        round_rect(g.hdc, g.b, x + 1, y + 1, x + desk_w / 2 - 1, y + desk_h - 1, 5, bg);
+        round_rect(
+            g.hdc,
+            g.b,
+            x + 1,
+            y + 1,
+            x + desk_w / 2 - 1,
+            y + desk_h - 1,
+            5,
+            bg,
+        );
         text_centered(
-            g.hdc, g.f.large, 22, p.text,
-            x + desk_w / 4, y + desk_h / 2 - 11, b"+",
+            g.hdc,
+            g.f.large,
+            22,
+            p.text,
+            x + desk_w / 4,
+            y + desk_h / 2 - 11,
+            b"+",
         );
     }
 }
@@ -1388,8 +1525,10 @@ pub unsafe fn on_button_down(x: i32, y: i32, repaint: &mut bool) -> bool {
                     let target = zones[SNAP_LAYOUT_ZONE as usize];
                     let w = &mut WINS[app];
                     w.restore = w.rect;
-                    w.maximized = target.left == WORK.left && target.right == WORK.right
-                        && target.top == WORK.top && target.bottom == WORK.bottom;
+                    w.maximized = target.left == WORK.left
+                        && target.right == WORK.right
+                        && target.top == WORK.top
+                        && target.bottom == WORK.bottom;
                     w.rect = target;
                     w.anim = Anim::Open;
                     w.anim_start = now().wrapping_sub(OPEN_MS as u32 / 2);
@@ -1439,7 +1578,11 @@ pub unsafe fn on_button_down(x: i32, y: i32, repaint: &mut bool) -> bool {
         let ds = (wk.left + wk.right - total_desk) / 2;
         for d in 0..=DESKTOP_COUNT {
             let dx = ds + d as i32 * (desk_w + 12);
-            let dw = if d == DESKTOP_COUNT { desk_w / 2 } else { desk_w };
+            let dw = if d == DESKTOP_COUNT {
+                desk_w / 2
+            } else {
+                desk_w
+            };
             if x >= dx && x < dx + dw && y >= desk_bar_y && y < desk_bar_y + desk_h {
                 if d == DESKTOP_COUNT {
                     add_desktop();
@@ -1613,7 +1756,11 @@ pub unsafe fn on_mouse_move(x: i32, y: i32, repaint: &mut bool) -> bool {
                         let t = snap_layout_thumb(&overlay, layout);
                         if inside(&t, x, y) {
                             found_layout = layout;
-                            let zone_count = match layout { 0 => 2, 1 => 3, _ => 4 };
+                            let zone_count = match layout {
+                                0 => 2,
+                                1 => 3,
+                                _ => 4,
+                            };
                             for z in 0..zone_count {
                                 let zr = snap_thumb_zone_rect(&t, layout, z);
                                 if inside(&zr, x, y) {
@@ -1662,7 +1809,10 @@ pub unsafe fn on_mouse_move(x: i32, y: i32, repaint: &mut bool) -> bool {
                         new_hover = i as i32;
                     }
                 }
-                if new_hover != TASK_VIEW_HOVER { TASK_VIEW_HOVER = new_hover; *repaint = true; }
+                if new_hover != TASK_VIEW_HOVER {
+                    TASK_VIEW_HOVER = new_hover;
+                    *repaint = true;
+                }
                 // Desktop bar hover
                 let desk_bar_y = wk.bottom - 120;
                 let desk_w = 120i32;
@@ -1672,12 +1822,19 @@ pub unsafe fn on_mouse_move(x: i32, y: i32, repaint: &mut bool) -> bool {
                 let mut new_dh = -1i32;
                 for d in 0..=DESKTOP_COUNT {
                     let dx = ds + d as i32 * (desk_w + 12);
-                    let dw = if d == DESKTOP_COUNT { desk_w / 2 } else { desk_w };
+                    let dw = if d == DESKTOP_COUNT {
+                        desk_w / 2
+                    } else {
+                        desk_w
+                    };
                     if x >= dx && x < dx + dw && y >= desk_bar_y && y < desk_bar_y + desk_h {
                         new_dh = d as i32;
                     }
                 }
-                if new_dh != TASK_VIEW_DESK_HOVER { TASK_VIEW_DESK_HOVER = new_dh; *repaint = true; }
+                if new_dh != TASK_VIEW_DESK_HOVER {
+                    TASK_VIEW_DESK_HOVER = new_dh;
+                    *repaint = true;
+                }
                 return true;
             }
             let mut hover = -1;
@@ -1786,13 +1943,16 @@ pub unsafe fn on_other(ev: Mouse, x: i32, y: i32, repaint: &mut bool) -> bool {
 
 /// Ancrage Win+flèches : gauche, droite, haut (maximiser), bas (restaurer).
 pub unsafe fn snap_arrow(vk: u32) -> bool {
-    if ACTIVE == usize::MAX { return false; }
+    if ACTIVE == usize::MAX {
+        return false;
+    }
     let app = ACTIVE;
     let wk = WORK;
     let mid_x = (wk.left + wk.right) / 2;
     let w = &mut WINS[app];
     match vk {
-        0x25 => { // Left
+        0x25 => {
+            // Left
             w.restore = w.rect;
             w.maximized = false;
             w.rect = rect(wk.left, wk.top, mid_x, wk.bottom);
@@ -1800,7 +1960,8 @@ pub unsafe fn snap_arrow(vk: u32) -> bool {
             w.anim_start = now().wrapping_sub(OPEN_MS as u32 / 2);
             true
         }
-        0x27 => { // Right
+        0x27 => {
+            // Right
             w.restore = w.rect;
             w.maximized = false;
             w.rect = rect(mid_x, wk.top, wk.right, wk.bottom);
@@ -1808,7 +1969,8 @@ pub unsafe fn snap_arrow(vk: u32) -> bool {
             w.anim_start = now().wrapping_sub(OPEN_MS as u32 / 2);
             true
         }
-        0x26 => { // Up = maximize
+        0x26 => {
+            // Up = maximize
             if !w.maximized {
                 w.restore = w.rect;
                 w.maximized = true;
@@ -1818,7 +1980,8 @@ pub unsafe fn snap_arrow(vk: u32) -> bool {
             }
             true
         }
-        0x28 => { // Down = restore or minimize
+        0x28 => {
+            // Down = restore or minimize
             if w.maximized {
                 w.maximized = false;
                 w.rect = w.restore;

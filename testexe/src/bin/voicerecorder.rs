@@ -129,11 +129,21 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wparam: usize, lparam:
 }
 
 unsafe fn make_frame(hwnd: Handle) -> wm::Frame {
-    let mut r = Rect { left: 0, top: 0, right: 420, bottom: 320 };
+    let mut r = Rect {
+        left: 0,
+        top: 0,
+        right: 420,
+        bottom: 320,
+    };
     GetClientRect(hwnd, &mut r);
     wm::Frame {
         outer: r,
-        title: Rect { left: 0, top: 0, right: r.right, bottom: 0 },
+        title: Rect {
+            left: 0,
+            top: 0,
+            right: r.right,
+            bottom: 0,
+        },
         client: r,
     }
 }

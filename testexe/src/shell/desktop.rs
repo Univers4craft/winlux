@@ -49,13 +49,12 @@ static mut SHORTCUTS: [(&'static [u8], &'static [u8], i32, i32); 16] = [(b"", b"
 static mut SHORTCUTS_COUNT: usize = 0;
 static mut START_SEARCH: [u8; 64] = [0; 64]; // Texte de recherche
 static mut START_SEARCH_LEN: usize = 0;
-static mut POWER_MENU: bool = false;
 static mut START_SEARCH_ACTIVE: bool = false;
 static mut SEARCH_OVERLAY: bool = false;
 static mut SEARCH_BUF: [u8; 64] = [0; 64];
 static mut SEARCH_BUF_LEN: usize = 0;
 static mut SEARCH_HOVER: i32 = -1;
-use crate::gfx::{ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS, AUTO_THEME};
+use crate::gfx::{AUTO_THEME, ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS};
 static mut RECENTER_ANIM: u32 = 0;
 static mut RECENTER_FROM: i32 = 0;
 static mut RECENTER_TARGET: i32 = 0;
@@ -126,6 +125,13 @@ impl NetEntry {
 }
 /// Atténuation du fond (0 = noir, 1000 = normal) pendant le fondu.
 static mut FADE: i32 = 1000;
+/// Sous-menu d'alimentation ouvert (Arrêter, Redémarrer, Verrouiller).
+static mut POWER_MENU: bool = false;
+static mut POWER_HOVER: i32 = -1;
+/// Confirmation de déconnexion/arrêt en cours.
+static mut SHUTDOWN_FADE: i32 = 0;
+static mut SHUTDOWN_START: u32 = 0;
+static mut SHUTDOWN_ACTION: u8 = 0; // 1=poweroff, 2=reboot, 3=lock
 
 fn now() -> u32 {
     unsafe { GetTickCount() }
@@ -179,8 +185,7 @@ fn fuzzy_score(name: &[u8], query: &[u8]) -> i32 {
         return 0;
     }
     if contains_ci(name, query) {
-        if name.len() >= query.len()
-            && (0..query.len()).all(|k| lower(name[k]) == lower(query[k]))
+        if name.len() >= query.len() && (0..query.len()).all(|k| lower(name[k]) == lower(query[k]))
         {
             return 3; // prefix match
         }
@@ -520,6 +525,10 @@ unsafe fn set_start(open: bool) {
         POWER_MENU = false;
         START_SEARCH_LEN = 0;
         START_SEARCH_ACTIVE = false;
+    }
+    if !open {
+        POWER_MENU = false;
+        POWER_HOVER = -1;
     }
 }
 
@@ -1025,7 +1034,16 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
     let r = CONTEXT_RECT;
     let p = pal();
     round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 8, p.border);
-    round_rect(hdc, b, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, 7, p.surface);
+    round_rect(
+        hdc,
+        b,
+        r.left + 1,
+        r.top + 1,
+        r.right - 1,
+        r.bottom - 1,
+        7,
+        p.surface,
+    );
     if app == usize::MAX {
         let labels: [&[u8]; 5] = [
             b"Ouvrir l'Explorateur",
@@ -1039,7 +1057,14 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
             if row == CONTEXT_HOVER {
                 round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
             }
-            text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
+            text(
+                hdc,
+                f.body,
+                p.text,
+                r.left + 12,
+                y + 8,
+                labels[row as usize],
+            );
         }
         return;
     }
@@ -1060,7 +1085,14 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
             if row == CONTEXT_HOVER {
                 round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
             }
-            text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
+            text(
+                hdc,
+                f.body,
+                p.text,
+                r.left + 12,
+                y + 8,
+                labels[row as usize],
+            );
         }
         return;
     }
@@ -1086,7 +1118,14 @@ unsafe fn draw_context(hdc: Handle, b: &mut Brushes, f: &Fonts) {
         if row == CONTEXT_HOVER {
             round_rect(hdc, b, r.left + 4, y, r.right - 4, y + 34, 4, p.hover);
         }
-        text(hdc, f.body, p.text, r.left + 12, y + 8, labels[row as usize]);
+        text(
+            hdc,
+            f.body,
+            p.text,
+            r.left + 12,
+            y + 8,
+            labels[row as usize],
+        );
     }
 }
 
@@ -1319,7 +1358,11 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         let total = wm::desktop_count();
         for d in 0..total {
             let dx = ind_x + d as i32 * 14;
-            let c = if d == cur { ACCENT } else { rgb(0x5A, 0x5E, 0x68) };
+            let c = if d == cur {
+                ACCENT
+            } else {
+                rgb(0x5A, 0x5E, 0x68)
+            };
             round_rect(hdc, b, dx, ind_y + 14, dx + 10, ind_y + 20, 2, c);
         }
     }
@@ -1668,7 +1711,16 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     } else {
         rgb(0x31, 0x35, 0x3F)
     };
-    round_rect(hdc, b, inner_l, search_y, inner_r, search_y + 36, 18, search_bg);
+    round_rect(
+        hdc,
+        b,
+        inner_l,
+        search_y,
+        inner_r,
+        search_y + 36,
+        18,
+        search_bg,
+    );
     glyph(hdc, b, f, Glyph::Search, inner_l + 10, search_y + 8, 18);
     if unsafe { START_SEARCH_LEN > 0 } {
         text(
@@ -2031,23 +2083,50 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         py + 12,
         rgb(0xE6, 0xE6, 0xE6),
     );
+    // Sous-menu d'alimentation.
     if POWER_MENU {
-        let pw = 160;
-        let ph = 3 * 36 + 8;
-        let mx = px + 24 - pw;
-        let my = py - ph - 8;
-        round_rect(hdc, b, mx, my, mx + pw, my + ph, 8, rgb(0x2D, 0x2D, 0x2D));
-        let items: [(&[u8], i32); 3] = [
-            (b"Arr\xEAter", 210),
-            (b"Red\xE9marrer", 211),
-            (b"Red\xE9marrer la session", 212),
-        ];
-        for (i, (label, id)) in items.iter().enumerate() {
-            let iy = my + 4 + i as i32 * 36;
-            if HOVER_START_ITEM == *id {
-                round_rect(hdc, b, mx + 4, iy, mx + pw - 4, iy + 34, 4, rgb(0x3D, 0x3D, 0x47));
+        let pr = power_rect(&l.start);
+        let menu_w = 180;
+        let item_h = 36;
+        let menu_h = item_h * 3 + 8;
+        let mx = pr.right - menu_w;
+        let my = pr.top - menu_h - 4;
+        panel(
+            hdc,
+            b,
+            mx,
+            my,
+            mx + menu_w,
+            my + menu_h,
+            8,
+            rgb(0x2C, 0x2C, 0x2C),
+            rgb(0x50, 0x50, 0x50),
+        );
+        let items: [&[u8]; 3] = [b"Arr\xEAter", b"Red\xE9marrer", b"Verrouiller"];
+        let icons: [&[u8]; 3] = [b"\xA4", b"\xA5", b"\xA3"];
+        for i in 0..3i32 {
+            let iy = my + 4 + i * item_h;
+            let hover = POWER_HOVER == i;
+            if hover {
+                round_rect(
+                    hdc,
+                    b,
+                    mx + 4,
+                    iy,
+                    mx + menu_w - 4,
+                    iy + item_h,
+                    4,
+                    rgb(0x40, 0x44, 0x4C),
+                );
             }
-            text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), mx + 14, iy + 9, label);
+            text(
+                hdc,
+                f.body,
+                rgb(0xE6, 0xE6, 0xE6),
+                mx + 40,
+                iy + 10,
+                items[i as usize],
+            );
         }
     }
 }
@@ -2151,6 +2230,20 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     if inside(&power_rect(s), x, y) {
         return 201;
     }
+    if unsafe { POWER_MENU } {
+        let pr = power_rect(s);
+        let menu_w = 180;
+        let item_h = 36;
+        let menu_h = item_h * 3 + 8;
+        let mx = pr.right - menu_w;
+        let my = pr.top - menu_h - 4;
+        for i in 0..3 {
+            let iy = my + 4 + i * item_h;
+            if x >= mx && x < mx + menu_w && y >= iy && y < iy + item_h {
+                return 210 + i;
+            }
+        }
+    }
     -1
 }
 
@@ -2167,21 +2260,52 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let oy = (l.bar_top - h) / 2;
     // Fond semi-transparent.
     fill(hdc, b, 0, 0, l.w, l.bar_top, rgb(0x0A, 0x0A, 0x0A));
-    panel(hdc, b, ox, oy, ox + w, oy + h, 12, rgb(0x1E, 0x21, 0x28), rgb(0x3A, 0x3F, 0x4A));
+    panel(
+        hdc,
+        b,
+        ox,
+        oy,
+        ox + w,
+        oy + h,
+        12,
+        rgb(0x1E, 0x21, 0x28),
+        rgb(0x3A, 0x3F, 0x4A),
+    );
     let pad = 24;
     let il = ox + pad;
     let ir = ox + w - pad;
     // Titre.
     glyph(hdc, b, f, Glyph::Search, il, oy + 20, 24);
-    text(hdc, f.large, rgb(0xF2, 0xF2, 0xF2), il + 32, oy + 18, b"Recherche");
+    text(
+        hdc,
+        f.large,
+        rgb(0xF2, 0xF2, 0xF2),
+        il + 32,
+        oy + 18,
+        b"Recherche",
+    );
     // Champ de saisie.
     let fy = oy + 60;
     round_rect(hdc, b, il, fy, ir, fy + 40, 20, rgb(0x31, 0x35, 0x3F));
     glyph(hdc, b, f, Glyph::Search, il + 12, fy + 10, 18);
     if SEARCH_BUF_LEN > 0 {
-        text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), il + 36, fy + 10, &SEARCH_BUF[..SEARCH_BUF_LEN]);
+        text(
+            hdc,
+            f.body,
+            rgb(0xE6, 0xE6, 0xE6),
+            il + 36,
+            fy + 10,
+            &SEARCH_BUF[..SEARCH_BUF_LEN],
+        );
     } else {
-        text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 36, fy + 10, b"Tapez pour rechercher...");
+        text(
+            hdc,
+            f.body,
+            rgb(0x88, 0x88, 0x88),
+            il + 36,
+            fy + 10,
+            b"Tapez pour rechercher...",
+        );
     }
     // Résultats.
     let ry = fy + 52;
@@ -2194,7 +2318,14 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         }; 16];
         let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
         if count == 0 {
-            text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 4, ry + 8, b"Aucun r\xE9sultat");
+            text(
+                hdc,
+                f.body,
+                rgb(0x88, 0x88, 0x88),
+                il + 4,
+                ry + 8,
+                b"Aucun r\xE9sultat",
+            );
         }
         for i in 0..count {
             let iy = ry + (i as i32) * 44;
@@ -2205,10 +2336,24 @@ unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 round_rect(hdc, b, il, iy, ir, iy + 40, 5, rgb(0x31, 0x35, 0x3F));
             }
             glyph(hdc, b, f, results[i].glyph, il + 8, iy + 8, 24);
-            text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), il + 40, iy + 10, results[i].name);
+            text(
+                hdc,
+                f.body,
+                rgb(0xE6, 0xE6, 0xE6),
+                il + 40,
+                iy + 10,
+                results[i].name,
+            );
         }
     } else {
-        text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 4, ry + 8, b"Recherchez des applications et des fichiers");
+        text(
+            hdc,
+            f.body,
+            rgb(0x88, 0x88, 0x88),
+            il + 4,
+            ry + 8,
+            b"Recherchez des applications et des fichiers",
+        );
     }
 }
 
@@ -2598,6 +2743,7 @@ pub unsafe fn init(
     crate::settings::system_tick();
     load_shell_state();
     init_apps();
+    crate::login::init();
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
     wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
@@ -2606,6 +2752,10 @@ pub unsafe fn init(
     if GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0 {
         BOOT_DONE = true;
         BOOT_STEP = 4;
+    }
+    let mut v2 = [0i8; 4];
+    if GetEnvironmentVariableA(c"WINLUX_NO_LOGIN".as_ptr(), v2.as_mut_ptr(), 4) > 0 {
+        crate::login::skip_login();
     }
 }
 
@@ -2666,6 +2816,11 @@ pub unsafe fn draw(hdc: Handle) {
     }
     if !BOOT_DONE {
         boot_splash(hdc, &mut b, &f, &l);
+    } else if !crate::login::logged_in() {
+        f.release();
+        b.release();
+        crate::login::draw(hdc, l.w, l.h);
+        return;
     } else {
         let intro = since(INTRO_START);
         FADE = if INTRO_START == 0 || intro >= INTRO_MS {
@@ -2691,6 +2846,66 @@ pub unsafe fn draw(hdc: Handle) {
         draw_net_panel(hdc, &mut b, &f, &l);
         weather::draw_panel(hdc, &mut b, &f, l.bar_top, l.w);
         draw_toast(hdc, &mut b, &f, &l);
+        // Overlay de fermeture.
+        if SHUTDOWN_ACTION > 0 {
+            let t = since(SHUTDOWN_START);
+            SHUTDOWN_FADE = ease_out(t, 800).min(1000);
+            let alpha = SHUTDOWN_FADE;
+            // Fond sombre progressif.
+            if alpha > 0 {
+                fill(hdc, &mut b, 0, 0, l.w, l.h, rgb(0, 0, 0));
+            }
+            let label: &[u8] = match SHUTDOWN_ACTION {
+                1 => b"Arr\xEAt en cours...",
+                2 => b"Red\xE9marrage en cours...",
+                _ => b"",
+            };
+            if !label.is_empty() {
+                text_centered(
+                    hdc,
+                    f.large,
+                    22,
+                    mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
+                    l.w / 2,
+                    l.h / 2 - 30,
+                    label,
+                );
+                // Cercle de chargement.
+                let cx = l.w / 2;
+                let cy = l.h / 2 + 20;
+                let dots = 5;
+                let radius = 16;
+                for k in 0..dots {
+                    let angle = (t / 3 + k * 70) % 360;
+                    let (sin_a, cos_a) = crate::login::approx_sincos(angle as i32);
+                    let dx = cx + (sin_a * radius) / 1000;
+                    let dy = cy - (cos_a * radius) / 1000;
+                    let dot_alpha = (1000 - k as i32 * 200).max(200);
+                    ellipse(
+                        hdc,
+                        &mut b,
+                        dx - 3,
+                        dy - 3,
+                        dx + 3,
+                        dy + 3,
+                        mix(0, rgb(0xFF, 0xFF, 0xFF), dot_alpha * alpha / 1000, 1000),
+                    );
+                }
+            }
+            if alpha >= 980 && SHUTDOWN_ACTION > 0 {
+                let action = SHUTDOWN_ACTION;
+                SHUTDOWN_ACTION = 0;
+                match action {
+                    1 => {
+                        crate::settings::control(c"poweroff");
+                    }
+                    2 => {
+                        crate::settings::control(c"reboot");
+                    }
+                    _ => {}
+                }
+            }
+        }
         let bar_dy = if FADE < 1000 {
             (1000 - ease_out(intro, INTRO_MS)) * TASKBAR_HEIGHT / 1000
         } else {
@@ -2698,6 +2913,9 @@ pub unsafe fn draw(hdc: Handle) {
         };
         taskbar(hdc, &mut b, &f, &l, bar_dy);
         draw_context(hdc, &mut b, &f);
+        if crate::login::uac_visible() {
+            crate::login::draw_uac(hdc, l.w, l.h);
+        }
     }
     f.release();
     b.release();
@@ -2748,10 +2966,22 @@ pub unsafe fn frame(hwnd: Handle) {
             3 if since(BOOT_START) > 1600 => BOOT_STEP = 4,
             4 if since(BOOT_START) as u32 >= SPLASH_MIN_MS => {
                 BOOT_DONE = true;
-                INTRO_START = now();
+                if crate::login::logged_in() {
+                    INTRO_START = now();
+                }
             }
             _ => {}
         }
+    }
+    if BOOT_DONE && !crate::login::logged_in() {
+        if crate::login::animating() && since(LAST_FRAME) >= 15 {
+            LAST_FRAME = now();
+            InvalidateRect(hwnd, core::ptr::null(), 0);
+        }
+        if crate::login::logged_in() {
+            INTRO_START = now();
+        }
+        return;
     }
     let animating = !BOOT_DONE
         || wm::animating()
@@ -2761,7 +2991,8 @@ pub unsafe fn frame(hwnd: Handle) {
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)
         || START_CLOSING
         || (RECENTER_ANIM != 0 && since(RECENTER_ANIM) < RECENTER_MS + 40)
-        || (TOAST_LEN > 0 && (since(TOAST_START) < 300 || since(TOAST_START) > TOAST_MS - 260));
+        || (TOAST_LEN > 0 && (since(TOAST_START) < 300 || since(TOAST_START) > TOAST_MS - 260))
+        || SHUTDOWN_ACTION > 0;
     if animating && since(LAST_FRAME) >= 15 {
         LAST_FRAME = now();
         InvalidateRect(hwnd, core::ptr::null(), 0);
@@ -2805,6 +3036,15 @@ unsafe fn repaint(hwnd: Handle) {
 }
 
 pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
+    if crate::login::uac_visible() {
+        crate::login::uac_on_click(x, y, SCREEN_W, SCREEN_H);
+        repaint(hwnd);
+        return;
+    }
+    if !crate::login::logged_in() && BOOT_DONE {
+        crate::login::on_click(hwnd, x, y, SCREEN_W, SCREEN_H);
+        return;
+    }
     if SCREENSAVER {
         SCREENSAVER = false;
         LAST_INPUT = now();
@@ -2909,8 +3149,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                     glyph: Glyph::Search,
                     score: 0,
                 }; 16];
-                let count =
-                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
                 for i in 0..count {
                     let iy = ry + (i as i32) * 44;
                     if iy + 40 >= oy + h - 16 {
@@ -2979,21 +3218,30 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 }
                 201 => {
                     POWER_MENU = !POWER_MENU;
+                    POWER_HOVER = -1;
                 }
+                // Sous-menu alimentation.
                 210 => {
-                    POWER_MENU = false;
+                    // Arrêter
                     set_start(false);
-                    crate::settings::control(c"poweroff");
+                    POWER_MENU = false;
+                    SHUTDOWN_ACTION = 1;
+                    SHUTDOWN_START = now();
+                    SHUTDOWN_FADE = 0;
                 }
                 211 => {
-                    POWER_MENU = false;
+                    // Redémarrer
                     set_start(false);
-                    crate::settings::control(c"reboot");
+                    POWER_MENU = false;
+                    SHUTDOWN_ACTION = 2;
+                    SHUTDOWN_START = now();
+                    SHUTDOWN_FADE = 0;
                 }
                 212 => {
-                    POWER_MENU = false;
+                    // Verrouiller
                     set_start(false);
-                    crate::settings::control(c"restart-session");
+                    POWER_MENU = false;
+                    crate::login::lock_screen();
                 }
                 300 => {
                     START_SHOW_ALL_APPS = !START_SHOW_ALL_APPS;
@@ -3025,10 +3273,8 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                         glyph: Glyph::Search,
                         score: 0,
                     }; 16];
-                    let count = collect_results(
-                        unsafe { &START_SEARCH[..START_SEARCH_LEN] },
-                        &mut results,
-                    );
+                    let count =
+                        collect_results(unsafe { &START_SEARCH[..START_SEARCH_LEN] }, &mut results);
                     if idx < count {
                         set_start(false);
                         launch(results[idx].launch);
@@ -3120,8 +3366,7 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
                 glyph: Glyph::Search,
                 score: 0,
             }; 16];
-            let count =
-                collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+            let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
             for i in 0..count {
                 let iy = ry + (i as i32) * 44;
                 if iy + 40 >= oy + h - 16 {
@@ -3151,7 +3396,7 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         HOVER_BUTTON = hb;
         rp = true;
     }
-    let hs = if START_OPEN && inside(&l.start, x, y) {
+    let hs = if START_OPEN {
         start_item_at(&l, x, y)
     } else {
         -1
@@ -3159,6 +3404,13 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
     if hs != HOVER_START_ITEM {
         HOVER_START_ITEM = hs;
         rp = true;
+    }
+    if POWER_MENU {
+        let ph = if hs >= 210 && hs <= 212 { hs - 210 } else { -1 };
+        if ph != POWER_HOVER {
+            POWER_HOVER = ph;
+            rp = true;
+        }
     }
     if notifications::is_open() {
         if notifications::on_mouse_move(l.w, l.bar_top, x, y) {
@@ -3352,6 +3604,15 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
 /// Clavier : touche Windows pour le menu Démarrer, Échap pour le fermer,
 /// le reste va à la fenêtre active.
 pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
+    if crate::login::uac_visible() {
+        crate::login::uac_on_key(vk, ch);
+        repaint(hwnd);
+        return;
+    }
+    if !crate::login::logged_in() && BOOT_DONE {
+        crate::login::on_key(hwnd, vk, ch);
+        return;
+    }
     if SCREENSAVER {
         SCREENSAVER = false;
         LAST_INPUT = now();
@@ -3420,6 +3681,16 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             return;
         }
     }
+    // Win+L (Verrouiller)
+    if ch == 0 && vk == 0x4C {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        if win {
+            crate::login::lock_screen();
+            repaint(hwnd);
+            return;
+        }
+    }
     // Win+E (Explorateur de fichiers)
     if ch == 0 && vk == 0x45 {
         let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
@@ -3475,12 +3746,16 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             if vk == 0x25 {
                 let cur = wm::current_desktop();
                 if cur > 0 {
-                    unsafe { wm::switch_desktop(cur - 1); }
+                    unsafe {
+                        wm::switch_desktop(cur - 1);
+                    }
                 }
             } else if vk == 0x27 {
                 let cur = wm::current_desktop();
                 if cur + 1 < wm::desktop_count() {
-                    unsafe { wm::switch_desktop(cur + 1); }
+                    unsafe {
+                        wm::switch_desktop(cur + 1);
+                    }
                 }
             }
             repaint(hwnd);
@@ -3499,7 +3774,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
-            unsafe { wm::add_desktop(); }
+            unsafe {
+                wm::add_desktop();
+            }
             repaint(hwnd);
             return;
         }
@@ -3511,7 +3788,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             let cur = wm::current_desktop();
-            unsafe { wm::remove_desktop(cur); }
+            unsafe {
+                wm::remove_desktop(cur);
+            }
             repaint(hwnd);
             return;
         }
@@ -3614,8 +3893,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
                     glyph: Glyph::Search,
                     score: 0,
                 }; 16];
-                let count =
-                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
                 let idx = SEARCH_HOVER as usize;
                 if idx < count {
                     SEARCH_OVERLAY = false;
@@ -3630,8 +3908,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
                     glyph: Glyph::Search,
                     score: 0,
                 }; 16];
-                let count =
-                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
                 if count > 0 {
                     SEARCH_OVERLAY = false;
                     launch(results[0].launch);
@@ -3649,8 +3926,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
                 glyph: Glyph::Search,
                 score: 0,
             }; 16];
-            let count =
-                collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results) as i32;
+            let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results) as i32;
             if count > 0 {
                 SEARCH_HOVER = (SEARCH_HOVER + 1).min(count - 1);
             }
@@ -3694,8 +3970,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
                     glyph: Glyph::Search,
                     score: 0,
                 }; 16];
-                let count =
-                    collect_results(&START_SEARCH[..START_SEARCH_LEN], &mut results);
+                let count = collect_results(&START_SEARCH[..START_SEARCH_LEN], &mut results);
                 if count > 0 {
                     START_SEARCH_LEN = 0;
                     START_SEARCH_ACTIVE = false;
@@ -3731,6 +4006,7 @@ pub unsafe fn regression_checks() {
         SCREEN_H,
     );
     BOOT_DONE = true;
+    crate::login::skip_login();
     SCREEN_W = 1920;
     SCREEN_H = 1080;
     PINNED_APPS = 1 << wm::APP_EXPLORER | 1 << wm::APP_SETTINGS; // 2 apps

@@ -60,7 +60,7 @@ const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
 static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
 static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
-use crate::gfx::{ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS, AUTO_THEME};
+use crate::gfx::{AUTO_THEME, ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS};
 
 fn exe_profile_path(out: &mut [u16; 2060]) {
     unsafe {

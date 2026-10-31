@@ -242,6 +242,9 @@ cat >"$stage/etc/winlux/preferences.conf" <<'PREFS'
 TASKBAR_ALIGN=left
 THEME=dark
 PREFS
+cat >"$stage/etc/winlux/users.conf" <<'USERS'
+root:root:winlux
+USERS
 cp -L "$kernel" "$stage/boot/vmlinuz"
 printf '%s\n' "$kernel_release" >"$stage/usr/share/winlux/kernel-version"
 # A visible, usable terminal is mandatory for desktop and console applications.

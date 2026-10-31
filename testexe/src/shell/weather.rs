@@ -125,7 +125,11 @@ unsafe fn parse_number(s: &[u8]) -> i32 {
             val = val * 10 + (c - b'0') as i32;
         }
     }
-    if negative { -val } else { val }
+    if negative {
+        -val
+    } else {
+        val
+    }
 }
 
 fn trim(s: &[u8]) -> &[u8] {
@@ -146,19 +150,25 @@ unsafe fn parse_condition(s: &[u8]) -> WeatherCondition {
         WeatherCondition::Storm
     } else if contains(s, b"snow") || contains(s, b"neige") || contains(s, b"sleet") {
         WeatherCondition::Snow
-    } else if contains(s, b"rain") || contains(s, b"pluie") || contains(s, b"drizzle")
+    } else if contains(s, b"rain")
+        || contains(s, b"pluie")
+        || contains(s, b"drizzle")
         || contains(s, b"shower")
     {
         WeatherCondition::Rain
     } else if contains(s, b"fog") || contains(s, b"mist") || contains(s, b"brouillard") {
         WeatherCondition::Fog
-    } else if contains(s, b"cloud") || contains(s, b"overcast") || contains(s, b"nuag")
+    } else if contains(s, b"cloud")
+        || contains(s, b"overcast")
+        || contains(s, b"nuag")
         || contains(s, b"couvert")
     {
         WeatherCondition::Cloudy
     } else if contains(s, b"partly") || contains(s, b"partiel") {
         WeatherCondition::PartlyCloudy
-    } else if contains(s, b"sun") || contains(s, b"clear") || contains(s, b"soleil")
+    } else if contains(s, b"sun")
+        || contains(s, b"clear")
+        || contains(s, b"soleil")
         || contains(s, b"d\xe9gag")
     {
         WeatherCondition::Sunny
@@ -277,7 +287,14 @@ pub unsafe fn poll() -> bool {
 pub unsafe fn draw_tray(hdc: Handle, b: &mut Brushes, f: &Fonts, x: i32, y: i32) {
     if !DATA_AVAILABLE {
         // Pas de données : afficher un tiret
-        text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), x + 8, y + 2, b"--\xB0C");
+        text(
+            hdc,
+            f.small,
+            rgb(0x9A, 0xA3, 0xAE),
+            x + 8,
+            y + 2,
+            b"--\xB0C",
+        );
         return;
     }
     // Icône météo (16x16)
@@ -285,7 +302,14 @@ pub unsafe fn draw_tray(hdc: Handle, b: &mut Brushes, f: &Fonts, x: i32, y: i32)
     // Température
     let mut temp_str = [0u8; 8];
     let tlen = format_temp(&mut temp_str, TEMP);
-    text(hdc, f.small, rgb(0xF2, 0xF2, 0xF2), x + 22, y + 2, &temp_str[..tlen]);
+    text(
+        hdc,
+        f.small,
+        rgb(0xF2, 0xF2, 0xF2),
+        x + 22,
+        y + 2,
+        &temp_str[..tlen],
+    );
 }
 
 unsafe fn draw_weather_icon(
@@ -302,7 +326,15 @@ unsafe fn draw_weather_icon(
             let cx = x + s / 2;
             let cy = y + s / 2;
             let r = s / 3;
-            ellipse(hdc, b, cx - r, cy - r, cx + r, cy + r, rgb(0xFF, 0xC8, 0x00));
+            ellipse(
+                hdc,
+                b,
+                cx - r,
+                cy - r,
+                cx + r,
+                cy + r,
+                rgb(0xFF, 0xC8, 0x00),
+            );
             let ray = rgb(0xFF, 0xD5, 0x40);
             let rl = s / 6;
             // Rayons cardinaux
@@ -316,17 +348,54 @@ unsafe fn draw_weather_icon(
             let cx = x + s * 3 / 8;
             let cy = y + s * 3 / 8;
             let r = s / 4;
-            ellipse(hdc, b, cx - r, cy - r, cx + r, cy + r, rgb(0xFF, 0xC8, 0x00));
-            draw_cloud(hdc, b, x + s / 4, y + s / 3, s * 2 / 3, rgb(0xCC, 0xD0, 0xD8));
+            ellipse(
+                hdc,
+                b,
+                cx - r,
+                cy - r,
+                cx + r,
+                cy + r,
+                rgb(0xFF, 0xC8, 0x00),
+            );
+            draw_cloud(
+                hdc,
+                b,
+                x + s / 4,
+                y + s / 3,
+                s * 2 / 3,
+                rgb(0xCC, 0xD0, 0xD8),
+            );
         }
         WeatherCondition::Cloudy => {
-            draw_cloud(hdc, b, x + s / 8, y + s / 4, s * 3 / 4, rgb(0x9A, 0xA3, 0xAE));
+            draw_cloud(
+                hdc,
+                b,
+                x + s / 8,
+                y + s / 4,
+                s * 3 / 4,
+                rgb(0x9A, 0xA3, 0xAE),
+            );
         }
         WeatherCondition::Rain => {
-            draw_cloud(hdc, b, x + s / 8, y + s / 8, s * 3 / 4, rgb(0x70, 0x78, 0x88));
+            draw_cloud(
+                hdc,
+                b,
+                x + s / 8,
+                y + s / 8,
+                s * 3 / 4,
+                rgb(0x70, 0x78, 0x88),
+            );
             // Gouttes
             let drop = rgb(0x60, 0xA0, 0xF0);
-            fill(hdc, b, x + s / 4, y + s * 3 / 4, x + s / 4 + 2, y + s - 1, drop);
+            fill(
+                hdc,
+                b,
+                x + s / 4,
+                y + s * 3 / 4,
+                x + s / 4 + 2,
+                y + s - 1,
+                drop,
+            );
             fill(
                 hdc,
                 b,
@@ -347,19 +416,81 @@ unsafe fn draw_weather_icon(
             );
         }
         WeatherCondition::Snow => {
-            draw_cloud(hdc, b, x + s / 8, y + s / 8, s * 3 / 4, rgb(0x90, 0x98, 0xA8));
+            draw_cloud(
+                hdc,
+                b,
+                x + s / 8,
+                y + s / 8,
+                s * 3 / 4,
+                rgb(0x90, 0x98, 0xA8),
+            );
             let flake = rgb(0xE0, 0xE8, 0xF0);
-            fill(hdc, b, x + s / 4, y + s * 3 / 4, x + s / 4 + 2, y + s * 3 / 4 + 2, flake);
-            fill(hdc, b, x + s / 2, y + s * 4 / 5, x + s / 2 + 2, y + s * 4 / 5 + 2, flake);
-            fill(hdc, b, x + s * 3 / 4 - 2, y + s * 3 / 4, x + s * 3 / 4, y + s * 3 / 4 + 2, flake);
+            fill(
+                hdc,
+                b,
+                x + s / 4,
+                y + s * 3 / 4,
+                x + s / 4 + 2,
+                y + s * 3 / 4 + 2,
+                flake,
+            );
+            fill(
+                hdc,
+                b,
+                x + s / 2,
+                y + s * 4 / 5,
+                x + s / 2 + 2,
+                y + s * 4 / 5 + 2,
+                flake,
+            );
+            fill(
+                hdc,
+                b,
+                x + s * 3 / 4 - 2,
+                y + s * 3 / 4,
+                x + s * 3 / 4,
+                y + s * 3 / 4 + 2,
+                flake,
+            );
         }
         WeatherCondition::Storm => {
-            draw_cloud(hdc, b, x + s / 8, y + s / 8, s * 3 / 4, rgb(0x50, 0x58, 0x68));
+            draw_cloud(
+                hdc,
+                b,
+                x + s / 8,
+                y + s / 8,
+                s * 3 / 4,
+                rgb(0x50, 0x58, 0x68),
+            );
             // Éclair
             let bolt = rgb(0xFF, 0xD5, 0x40);
-            fill(hdc, b, x + s / 2 - 1, y + s / 2, x + s / 2 + 2, y + s * 3 / 4, bolt);
-            fill(hdc, b, x + s / 2 - 3, y + s * 3 / 4 - 1, x + s / 2 + 1, y + s * 3 / 4 + 1, bolt);
-            fill(hdc, b, x + s / 2 - 2, y + s * 3 / 4, x + s / 2 + 1, y + s - 2, bolt);
+            fill(
+                hdc,
+                b,
+                x + s / 2 - 1,
+                y + s / 2,
+                x + s / 2 + 2,
+                y + s * 3 / 4,
+                bolt,
+            );
+            fill(
+                hdc,
+                b,
+                x + s / 2 - 3,
+                y + s * 3 / 4 - 1,
+                x + s / 2 + 1,
+                y + s * 3 / 4 + 1,
+                bolt,
+            );
+            fill(
+                hdc,
+                b,
+                x + s / 2 - 2,
+                y + s * 3 / 4,
+                x + s / 2 + 1,
+                y + s - 2,
+                bolt,
+            );
         }
         WeatherCondition::Fog => {
             let fog = rgb(0x9A, 0xA3, 0xAE);
@@ -369,7 +500,14 @@ unsafe fn draw_weather_icon(
             }
         }
         WeatherCondition::Unknown => {
-            draw_cloud(hdc, b, x + s / 8, y + s / 4, s * 3 / 4, rgb(0x60, 0x68, 0x78));
+            draw_cloud(
+                hdc,
+                b,
+                x + s / 8,
+                y + s / 4,
+                s * 3 / 4,
+                rgb(0x60, 0x68, 0x78),
+            );
         }
     }
 }
@@ -378,7 +516,15 @@ unsafe fn draw_cloud(hdc: Handle, b: &mut Brushes, x: i32, y: i32, w: i32, color
     let h = w * 2 / 3;
     round_rect(hdc, b, x, y + h / 3, x + w, y + h, 4, color);
     ellipse(hdc, b, x + w / 6, y, x + w / 2, y + h * 2 / 3, color);
-    ellipse(hdc, b, x + w / 3, y - h / 6, x + w * 3 / 4, y + h / 2, color);
+    ellipse(
+        hdc,
+        b,
+        x + w / 3,
+        y - h / 6,
+        x + w * 3 / 4,
+        y + h / 2,
+        color,
+    );
 }
 
 fn format_temp(buf: &mut [u8], temp: i32) -> usize {

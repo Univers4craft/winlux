@@ -87,10 +87,24 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
 }
 
 unsafe fn draw_idle(g: &mut Gfx, r: &Rect, cx: i32) {
-    text_centered(g.hdc, g.f.title, 15, TXT, cx, r.top + 24,
-                  b"Enregistreur vocal");
-    text_centered(g.hdc, g.f.body, 11, TXT2, cx, r.top + 52,
-                  b"Appuyez pour enregistrer");
+    text_centered(
+        g.hdc,
+        g.f.title,
+        15,
+        TXT,
+        cx,
+        r.top + 24,
+        b"Enregistreur vocal",
+    );
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        TXT2,
+        cx,
+        r.top + 52,
+        b"Appuyez pour enregistrer",
+    );
 
     // Bouton rond rouge (approximation rectangulaire)
     let btn_size = 64;
@@ -109,10 +123,25 @@ unsafe fn draw_recording(g: &mut Gfx, r: &Rect, cx: i32) {
     // Indicateur rouge clignotant
     let blink = (GetTickCount() / 500) & 1;
     let dot_color = if blink == 0 { RED } else { RED_DARK };
-    fill(g.hdc, g.b, cx - 6, r.top + 20, cx + 6, r.top + 32, dot_color);
+    fill(
+        g.hdc,
+        g.b,
+        cx - 6,
+        r.top + 20,
+        cx + 6,
+        r.top + 32,
+        dot_color,
+    );
 
-    text_centered(g.hdc, g.f.body, 11, TXT2, cx, r.top + 38,
-                  b"Enregistrement en cours...");
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        TXT2,
+        cx,
+        r.top + 38,
+        b"Enregistrement en cours...",
+    );
 
     // Timer MM:SS
     let elapsed = GetTickCount().wrapping_sub(RECORD_START) / 1000;
@@ -132,15 +161,38 @@ unsafe fn draw_recording(g: &mut Gfx, r: &Rect, cx: i32) {
 
     // Barre de niveau (simplifiee)
     let bar_y = by + btn_size + 16;
-    fill(g.hdc, g.b, r.left + 32, bar_y, r.right - 32, bar_y + 4, GRAY);
+    fill(
+        g.hdc,
+        g.b,
+        r.left + 32,
+        bar_y,
+        r.right - 32,
+        bar_y + 4,
+        GRAY,
+    );
     let level = ((GetTickCount() / 50) % 100) as i32;
     let w = (r.right - r.left - 64) * level / 100;
-    fill(g.hdc, g.b, r.left + 32, bar_y, r.left + 32 + w, bar_y + 4, GREEN);
+    fill(
+        g.hdc,
+        g.b,
+        r.left + 32,
+        bar_y,
+        r.left + 32 + w,
+        bar_y + 4,
+        GREEN,
+    );
 }
 
 unsafe fn draw_stopped(g: &mut Gfx, r: &Rect, cx: i32) {
-    text_centered(g.hdc, g.f.title, 15, TXT, cx, r.top + 20,
-                  b"Enregistrement termin\xE9");
+    text_centered(
+        g.hdc,
+        g.f.title,
+        15,
+        TXT,
+        cx,
+        r.top + 20,
+        b"Enregistrement termin\xE9",
+    );
 
     let timer = format_mmss(DURATION_S);
     text_centered(g.hdc, g.f.large, 20, TXT2, cx, r.top + 48, &timer);
@@ -154,24 +206,52 @@ unsafe fn draw_stopped(g: &mut Gfx, r: &Rect, cx: i32) {
     let by = r.top + 100;
 
     fill(g.hdc, g.b, bx, by, bx + btn_w, by + btn_h, BLUE);
-    text_centered(g.hdc, g.f.body, 11, WHITE, bx + btn_w / 2, by + 10,
-                  b"Ecouter");
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        WHITE,
+        bx + btn_w / 2,
+        by + 10,
+        b"Ecouter",
+    );
 
     // Bouton Sauvegarder (vert)
     let bx2 = bx + btn_w + gap;
     fill(g.hdc, g.b, bx2, by, bx2 + btn_w, by + btn_h, GREEN);
-    text_centered(g.hdc, g.f.body, 11, WHITE, bx2 + btn_w / 2, by + 10,
-                  b"Sauvegarder");
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        WHITE,
+        bx2 + btn_w / 2,
+        by + 10,
+        b"Sauvegarder",
+    );
 
     // Bouton Nouveau (gris)
     let bx3 = bx2 + btn_w + gap;
     fill(g.hdc, g.b, bx3, by, bx3 + btn_w, by + btn_h, GRAY);
-    text_centered(g.hdc, g.f.body, 11, WHITE, bx3 + btn_w / 2, by + 10,
-                  b"Nouveau");
+    text_centered(
+        g.hdc,
+        g.f.body,
+        11,
+        WHITE,
+        bx3 + btn_w / 2,
+        by + 10,
+        b"Nouveau",
+    );
 
     if SAVE_PATH_LEN > 0 {
-        text_centered(g.hdc, g.f.small, 9, GREEN, cx, by + btn_h + 16,
-                      b"Fichier sauvegard\xE9 !");
+        text_centered(
+            g.hdc,
+            g.f.small,
+            9,
+            GREEN,
+            cx,
+            by + btn_h + 16,
+            b"Fichier sauvegard\xE9 !",
+        );
     }
 }
 
@@ -310,7 +390,11 @@ unsafe fn collect_buffers() {
     if HDR1.flags & WHDR_DONE != 0 {
         let n = (HDR1.bytes_recorded as usize).min(MAX_RECORD - RECORDED_LEN);
         if n > 0 {
-            core::ptr::copy_nonoverlapping(BUF1.as_ptr(), RECORDED.as_mut_ptr().add(RECORDED_LEN), n);
+            core::ptr::copy_nonoverlapping(
+                BUF1.as_ptr(),
+                RECORDED.as_mut_ptr().add(RECORDED_LEN),
+                n,
+            );
             RECORDED_LEN += n;
         }
         HDR1.bytes_recorded = 0;
@@ -321,7 +405,11 @@ unsafe fn collect_buffers() {
     if HDR2.flags & WHDR_DONE != 0 {
         let n = (HDR2.bytes_recorded as usize).min(MAX_RECORD - RECORDED_LEN);
         if n > 0 {
-            core::ptr::copy_nonoverlapping(BUF2.as_ptr(), RECORDED.as_mut_ptr().add(RECORDED_LEN), n);
+            core::ptr::copy_nonoverlapping(
+                BUF2.as_ptr(),
+                RECORDED.as_mut_ptr().add(RECORDED_LEN),
+                n,
+            );
             RECORDED_LEN += n;
         }
         HDR2.bytes_recorded = 0;
@@ -400,7 +488,7 @@ unsafe fn save_recording() {
         0x4000_0000, // GENERIC_WRITE
         0,
         core::ptr::null_mut(),
-        2, // CREATE_ALWAYS
+        2,    // CREATE_ALWAYS
         0x80, // FILE_ATTRIBUTE_NORMAL
         core::ptr::null_mut(),
     );

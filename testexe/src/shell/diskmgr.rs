@@ -179,7 +179,8 @@ unsafe fn parse_partitions(data: &[u8]) {
 
             // Un disque entier (pas de numéro à la fin, ou minor == 0)
             p.is_disk = p.minor == 0
-                || (p.name_len > 0 && !(p.name[p.name_len - 1] >= b'0' && p.name[p.name_len - 1] <= b'9'));
+                || (p.name_len > 0
+                    && !(p.name[p.name_len - 1] >= b'0' && p.name[p.name_len - 1] <= b'9'));
             // Filtre : ignorer les périphériques loop et ram
             if !starts_with(&p.name[..p.name_len], b"loop")
                 && !starts_with(&p.name[..p.name_len], b"ram")
@@ -515,15 +516,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     fill(g.hdc, g.b, c.left, c.top, c.right, c.bottom, p.window);
 
     // Barre de navigation latérale
-    fill(
-        g.hdc,
-        g.b,
-        c.left,
-        c.top,
-        c.left + NAV_W,
-        c.bottom,
-        p.mica,
-    );
+    fill(g.hdc, g.b, c.left, c.top, c.left + NAV_W, c.bottom, p.mica);
     fill(
         g.hdc,
         g.b,
@@ -602,14 +595,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
 
 unsafe fn draw_volumes(g: &mut Gfx, x: i32, top: i32, w: i32, h: i32) {
     let p = pal();
-    text(
-        g.hdc,
-        g.f.large,
-        p.text,
-        x + 24,
-        top + 16,
-        b"Volumes",
-    );
+    text(g.hdc, g.f.large, p.text, x + 24, top + 16, b"Volumes");
 
     // En-tête colonnes
     let col_y = top + 52;
@@ -623,7 +609,15 @@ unsafe fn draw_volumes(g: &mut Gfx, x: i32, top: i32, w: i32, h: i32) {
     for (cx, label) in cols {
         text(g.hdc, g.f.small, p.text3, cx, col_y, label);
     }
-    fill(g.hdc, g.b, x + 16, col_y + 18, x + w - 16, col_y + 19, p.border);
+    fill(
+        g.hdc,
+        g.b,
+        x + 16,
+        col_y + 18,
+        x + w - 16,
+        col_y + 19,
+        p.border,
+    );
 
     // Liste des partitions (pas les disques entiers)
     let mut row = 0;
@@ -860,7 +854,15 @@ unsafe fn draw_disks(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
         let bar_w = w - 56;
         let bar_y = cy + 64;
         let bar_h = 32;
-        fill(g.hdc, g.b, bar_x, bar_y, bar_x + bar_w, bar_y + bar_h, p.surface2);
+        fill(
+            g.hdc,
+            g.b,
+            bar_x,
+            bar_y,
+            bar_x + bar_w,
+            bar_y + bar_h,
+            p.surface2,
+        );
 
         if disk.size_mb > 0 {
             let colors = [
@@ -952,12 +954,14 @@ unsafe fn draw_smart(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
         // Charger le premier disque
         for i in 0..PART_COUNT {
             if PARTS[i].is_disk {
-                load_smart(&{
-                    let mut tmp = [0u8; 16];
-                    let n = PARTS[i].name_len;
-                    tmp[..n].copy_from_slice(&PARTS[i].name[..n]);
-                    tmp
-                }[..PARTS[i].name_len]);
+                load_smart(
+                    &{
+                        let mut tmp = [0u8; 16];
+                        let n = PARTS[i].name_len;
+                        tmp[..n].copy_from_slice(&PARTS[i].name[..n]);
+                        tmp
+                    }[..PARTS[i].name_len],
+                );
                 break;
             }
         }
@@ -983,14 +987,7 @@ unsafe fn draw_smart(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
         } else {
             rgb(0xFF, 0x60, 0x50)
         };
-        text(
-            g.hdc,
-            g.f.body,
-            p.text3,
-            x + 24,
-            top + 68,
-            b"Sant\xE9 : ",
-        );
+        text(g.hdc, g.f.body, p.text3, x + 24, top + 68, b"Sant\xE9 : ");
         text(
             g.hdc,
             g.f.semibold,
@@ -1009,7 +1006,15 @@ unsafe fn draw_smart(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
     text(g.hdc, g.f.small, p.text3, x + 310, col_y, b"Pire");
     text(g.hdc, g.f.small, p.text3, x + 370, col_y, b"Seuil");
     text(g.hdc, g.f.small, p.text3, x + 430, col_y, b"Brut");
-    fill(g.hdc, g.b, x + 16, col_y + 18, x + w - 16, col_y + 19, p.border);
+    fill(
+        g.hdc,
+        g.b,
+        x + 16,
+        col_y + 18,
+        x + w - 16,
+        col_y + 19,
+        p.border,
+    );
 
     for i in 0..SMART_COUNT {
         let a = &SMART_ATTRS[i];
@@ -1030,14 +1035,7 @@ unsafe fn draw_smart(g: &mut Gfx, x: i32, top: i32, w: i32, _h: i32) {
         text(g.hdc, g.f.body, p.text2, x + 30, ry, &id_buf[..il]);
 
         // Nom
-        text(
-            g.hdc,
-            g.f.body,
-            p.text,
-            x + 60,
-            ry,
-            &a.name[..a.name_len],
-        );
+        text(g.hdc, g.f.body, p.text, x + 60, ry, &a.name[..a.name_len]);
 
         // Valeur
         let mut vbuf = [0u8; 8];
@@ -1108,7 +1106,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                         continue;
                     }
                     let ry = col_y + 24 + row * row_h - SCROLL_Y;
-                    if y >= ry && y < ry + row_h - 4 && x >= content_x + 12 && x < content_x + content_w - 12 {
+                    if y >= ry
+                        && y < ry + row_h - 4
+                        && x >= content_x + 12
+                        && x < content_x + content_w - 12
+                    {
                         SELECTED_ROW = row;
                         return true;
                     }
@@ -1117,8 +1119,18 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
 
                 // Boutons
                 let btn_y = c.top + (c.bottom - c.top) - 52;
-                let mount_r = rect(content_x + content_w - 280, btn_y, content_x + content_w - 156, btn_y + 32);
-                let unmount_r = rect(content_x + content_w - 148, btn_y, content_x + content_w - 24, btn_y + 32);
+                let mount_r = rect(
+                    content_x + content_w - 280,
+                    btn_y,
+                    content_x + content_w - 156,
+                    btn_y + 32,
+                );
+                let unmount_r = rect(
+                    content_x + content_w - 148,
+                    btn_y,
+                    content_x + content_w - 24,
+                    btn_y + 32,
+                );
 
                 if inside(&mount_r, x, y) {
                     do_mount();
@@ -1177,7 +1189,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                         continue;
                     }
                     let ry = col_y + 24 + row * row_h - SCROLL_Y;
-                    if y >= ry && y < ry + row_h - 4 && x >= content_x + 12 && x < content_x + content_w - 12 {
+                    if y >= ry
+                        && y < ry + row_h - 4
+                        && x >= content_x + 12
+                        && x < content_x + content_w - 12
+                    {
                         HOVER_ROW = row;
                     }
                     row += 1;
@@ -1186,8 +1202,18 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
 
                 // Boutons
                 let btn_y = c.top + (c.bottom - c.top) - 52;
-                let mount_r = rect(content_x + content_w - 280, btn_y, content_x + content_w - 156, btn_y + 32);
-                let unmount_r = rect(content_x + content_w - 148, btn_y, content_x + content_w - 24, btn_y + 32);
+                let mount_r = rect(
+                    content_x + content_w - 280,
+                    btn_y,
+                    content_x + content_w - 156,
+                    btn_y + 32,
+                );
+                let unmount_r = rect(
+                    content_x + content_w - 148,
+                    btn_y,
+                    content_x + content_w - 24,
+                    btn_y + 32,
+                );
                 let old_m = MOUNT_HOVER;
                 let old_u = UNMOUNT_HOVER;
                 MOUNT_HOVER = inside(&mount_r, x, y);

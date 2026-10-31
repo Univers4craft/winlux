@@ -6,26 +6,28 @@
 use winlux_testexe::*;
 #[path = "../shell/desktop.rs"]
 mod desktop;
+#[path = "../shell/diskcleaner.rs"]
+mod diskcleaner;
+#[path = "../shell/diskmgr.rs"]
+mod diskmgr;
 #[path = "../shell/explorer.rs"]
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
-#[path = "../shell/notifications.rs"]
-mod notifications;
+#[path = "../shell/login.rs"]
+mod login;
 #[path = "../shell/notepad.rs"]
 mod notepad;
+#[path = "../shell/notifications.rs"]
+mod notifications;
 #[path = "../shell/settings.rs"]
 mod settings;
-#[path = "../shell/diskcleaner.rs"]
-mod diskcleaner;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
 #[path = "../shell/utilities.rs"]
 mod utilities;
 #[path = "../shell/weather.rs"]
 mod weather;
-#[path = "../shell/diskmgr.rs"]
-mod diskmgr;
 #[path = "../shell/wm.rs"]
 mod wm;
 
