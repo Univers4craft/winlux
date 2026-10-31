@@ -130,6 +130,24 @@ if [ ! -r "$exe" ]; then
     exit 1
 fi
 
+# Paquet Windows Installer : le msiexec intégré au runtime l'installe.
+case "$exe" in
+    *.msi|*.MSI|*.Msi)
+        cd "$(dirname -- "$exe")" 2>/dev/null || true
+        mkdir -p "$state" 2>/dev/null || log=/dev/null
+        "$winlux" --msiexec /i "$exe" /qb "$@" >"$log" 2>&1
+        status=$?
+        if [ "$status" -eq 0 ]; then
+            command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
+            show_message "« $(basename -- "$exe") » est installé." info
+        else
+            show_error "Installation de « $(basename -- "$exe") » impossible (code $status).
+$(tail -n 5 "$log" 2>/dev/null)"
+        fi
+        exit "$status"
+        ;;
+esac
+
 reason=$("$winlux" --inspect "$exe" 2>&1 >/dev/null)
 kind=$("$winlux" --inspect "$exe" 2>/dev/null)
 if [ -z "$kind" ]; then

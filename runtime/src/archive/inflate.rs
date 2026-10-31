@@ -209,6 +209,16 @@ impl<R: BufRead> Inflater<R> {
         }
     }
 
+    /// Décompresseur dont la fenêtre contient déjà `history` : les blocs MSZIP
+    /// des cabinets (.cab) peuvent référencer la sortie du bloc précédent.
+    pub fn with_history(inner: R, history: &[u8]) -> Self {
+        let mut me = Self::new(inner);
+        let keep = history.len().min(WINDOW);
+        me.out.extend_from_slice(&history[history.len() - keep..]);
+        me.pos = me.out.len();
+        me
+    }
+
     /// Récupère le lecteur de bits (pour lire la fin d'un membre gzip).
     pub fn into_bits(self) -> BitReader<R> {
         self.br
