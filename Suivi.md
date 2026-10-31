@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **124**
-- À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Réalisé : **125**
+- À faire : **27**
+- Total : **152**
+- Progression : **82.2%**
 
 ## À FAIRE (par priorité)
 
@@ -24,6 +24,8 @@
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
 ### Priorité 1 — Fiabiliser le runtime
+
+- [ ] Valider la veille, la veille prolongée (`winlux --power hibernate-setup`) et le capot sur un vrai portable installé ; en VM seule la veille ACPI S3 est testable.
 
 - [ ] Continuer à remplacer les implémentations partielles de `kernel32`, `msvcrt` et `ntdll`; ces modules ne constituent pas des DLL Windows complètes.
 - [ ] Implémenter une pile de secours réellement sûre pour les débordements de pile; le gestionnaire de signal est sans allocation/verrou, mais la protection contre le débordement n’est pas validée.
@@ -67,6 +69,8 @@
 
 
 ### État actuel
+
+- [x] Gestion de l'alimentation en Rust (`runtime/src/power/`) : batterie lue dans `/sys/class/power_supply` (pourcentage, charge/décharge, autonomie, santé), modes Performances maximales / Équilibré / Économie d'énergie (gouverneur cpufreq, EPP, turbo, luminosité, autosuspend USB, ASPM, SATA), veille et veille prolongée par `/sys/power` avec reprise propre, démon lancé par l'init maison (inactivité écran/veille, capot, bouton, batterie critique), icône batterie avec charge et infobulle, alertes 20 %/10 %, page Paramètres « Alimentation et batterie », API `GetSystemPowerStatus`, `SetThreadExecutionState`, `PowerCreateRequest/SetRequest/ClearRequest`, `PowerGetActiveScheme/SetActiveScheme`, `PowerReadFriendlyName`, `SetSuspendState`, `GetPwrCapabilities` (test PE `power_api`).
 
 - [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer.
 - [x] Bloquer les copies dans un descendant, les collisions et les alias de chemins ; tester le couper/coller et les raccourcis.
