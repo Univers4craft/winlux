@@ -6036,8 +6036,7 @@ pub unsafe extern "win64" fn create_semaphore_w(
     if initial < 0 || maximum <= 0 || initial > maximum {
         return 0;
     }
-    let event = create_event_a(0, 1, if initial > 0 { 1 } else { 0 }, std::ptr::null());
-    event
+    create_event_a(0, 1, if initial > 0 { 1 } else { 0 }, std::ptr::null())
 }
 pub unsafe extern "win64" fn release_semaphore(h: usize, _count: i32, _prev: *mut i32) -> i32 {
     set_event(h)
