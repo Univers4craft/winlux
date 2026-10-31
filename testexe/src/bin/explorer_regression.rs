@@ -18,6 +18,8 @@ mod diskmgr;
 mod eventviewer;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/thumbs.rs"]
+mod thumbs;
 #[path = "../shell/firewall.rs"]
 mod firewall;
 #[path = "../shell/gfx.rs"]

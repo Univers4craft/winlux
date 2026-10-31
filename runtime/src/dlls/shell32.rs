@@ -456,6 +456,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn decoded_images_open_in_the_winlux_viewer_and_others_do_not() {
+        let dir = std::env::temp_dir().join(format!("winlux-viewer-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let viewer = dir.join("imageviewer.exe");
+        std::fs::write(&viewer, b"MZ").unwrap();
+        let photo = dir.join("photo.JPG");
+        let heic = dir.join("photo.heic");
+        std::fs::write(&photo, b"x").unwrap();
+        std::fs::write(&heic, b"x").unwrap();
+        std::env::set_var("WINLUX_IMAGE_VIEWER", &viewer);
+        let (program, args) = resolve(photo.to_str().unwrap(), "").unwrap();
+        assert_eq!(program, std::env::current_exe().unwrap());
+        assert_eq!(args[0], viewer.to_string_lossy());
+        assert!(args[1].ends_with("photo.JPG"), "{args:?}");
+        // HEIC n'a pas de décodeur : jamais envoyé à la visionneuse.
+        if let Ok((_, args)) = resolve(heic.to_str().unwrap(), "") {
+            assert!(!args.iter().any(|a| a.ends_with("imageviewer.exe")));
+        }
+        std::env::remove_var("WINLUX_IMAGE_VIEWER");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn argv_preserves_empty_unicode_and_escaped_arguments_and_localfree_ownership() {
         let _teb = crate::process::test_teb();
         let expected = [
