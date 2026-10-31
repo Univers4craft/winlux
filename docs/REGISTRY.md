@@ -67,6 +67,29 @@ contrats API-set et KernelBase y sont reliés.
 Les ACL, la redirection WOW64 (`/reg:32`), les clés volatiles et les ruches
 `RegLoadKey`/`RegSaveKey` ne sont pas gérées.
 
+## Fonctions shlwapi
+
+`runtime/src/dlls/shlwapi_reg.rs` ajoute les raccourcis de shlwapi, en
+versions A et W, sur le même registre :
+
+- valeurs : `SHGetValue`, `SHSetValue`, `SHDeleteValue`, `SHQueryValueEx`,
+  `SHRegGetValue` (filtres SRRF), `SHRegGetPath`, `SHRegSetPath`. Comme sous
+  Windows, une REG_EXPAND_SZ est développée et rendue en REG_SZ ;
+- clés : `SHDeleteKey` (toute l'arborescence), `SHDeleteEmptyKey` (refuse une
+  clé qui a encore des sous-clés ou des valeurs), `SHCopyKey`,
+  `SHEnumKeyEx`, `SHEnumValue`, `SHQueryInfoKey`, `SHRegDuplicateHKey` ;
+- réglages « utilisateur puis machine » : `SHRegGetUSValue`,
+  `SHRegSetUSValue`, `SHRegGetBoolUSValue` (« yes », « true », 1…) et les
+  clés `HUSKEY` (`SHRegOpenUSKey`, `SHRegCreateUSKey`, `SHRegQueryUSValue`,
+  `SHRegWriteUSValue`, `SHRegDeleteUSValue`, `SHRegEnumUSKey`,
+  `SHRegEnumUSValue`, `SHRegQueryInfoUSKey`, `SHRegCloseUSKey`) : HKCU est lu
+  d'abord, puis HKLM ;
+- `SHOpenRegStream2` et `SHOpenRegStream` : un `IStream` sur une valeur
+  binaire, réécrite dans le registre au `Commit` ou au dernier `Release` ;
+- associations de fichiers : `AssocQueryString` (commande, programme, nom du
+  type, nom de l'appli, icône, type MIME, extension shell, ProgID) et
+  `AssocQueryKey`, lus dans la vue fusionnée HKCR.
+
 ## Accès NT (ntdll)
 
 Les appels bas niveau suivants réutilisent le même magasin :
