@@ -1379,6 +1379,10 @@ pub fn object_pen_width(handle: usize) -> u16 {
 /// Ajoute une commande de dessin à la file d'attente de peinture de la fenêtre
 /// cible du DC. Renvoie faux si le DC ou la fenêtre n'existe plus.
 pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
+    // DC imprimante : la commande part dans la page en cours (PDF).
+    let Some(cmd) = crate::dlls::winspool::capture(hdc, cmd) else {
+        return true;
+    };
     let (target, bitmap) = match lock(dcs()).get(&hdc) {
         Some(d) => (d.hwnd, d.bitmap),
         None => return false,
@@ -1651,6 +1655,10 @@ pub trait GuiBackend: Send {
     fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> {
         None
     }
+    /// Lit une zone de l'écran entier (racine), fenêtres des autres programmes comprises.
+    fn capture_screen(&mut self, _rect: Rect) -> Option<BitmapSnapshot> {
+        None
+    }
     /// Joue la liste de commandes GDI d'une fenêtre (thème + contenu). Le
     /// backend X11 conserve la liste pour la rejouer à chaque Expose; headless
     /// ignore le rendu.
@@ -1664,6 +1672,10 @@ pub trait GuiBackend: Send {
     /// Taille actuelle de l'écran en unités logiques Win32. Elle suit les
     /// changements de résolution (RandR) pour SM_CXSCREEN/SM_CYSCREEN.
     fn screen_size(&mut self) -> Option<(i32, i32)> {
+        None
+    }
+    /// Identifiant de la fenêtre native (X11) d'un HWND, pour Vulkan/GLX.
+    fn native_window(&mut self, _hwnd: usize) -> Option<u64> {
         None
     }
     /// Largeur et hauteur logiques d'un texte dans une police GDI.
@@ -1723,6 +1735,14 @@ pub fn measure_text(font: &FontSpec, text: &str) -> (i32, i32) {
         };
         (text.chars().count() as i32 * h * 55 / 100, h)
     })
+}
+
+/// Fenêtre X11 réelle d'un HWND (`None` en headless ou HWND inconnu).
+/// Direct3D en a besoin pour créer un contexte GLX ou une surface Vulkan.
+pub fn native_window(hwnd: usize) -> Option<u64> {
+    let mut id = None;
+    with_backend(|b| id = b.native_window(hwnd));
+    id
 }
 
 pub fn screen_size() -> (i32, i32) {
@@ -1913,6 +1933,13 @@ pub fn insert_window(hwnd: usize, w: Window) {
 /// Expose le backend pour les wrappers (user32/gdi32).
 pub fn with_backend_public<F: FnOnce(&mut dyn GuiBackend)>(f: F) {
     with_backend(f);
+}
+
+/// Capture d'une zone de l'écran (unités logiques), `None` sans affichage réel.
+pub fn capture_screen(rect: Rect) -> Option<BitmapSnapshot> {
+    let mut captured = None;
+    with_backend(|backend| captured = backend.capture_screen(rect));
+    captured
 }
 
 pub fn capture_window(hwnd: usize, rect: Rect) -> Option<BitmapSnapshot> {

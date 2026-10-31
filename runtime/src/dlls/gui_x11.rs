@@ -530,6 +530,8 @@ pub struct X11Backend {
     x11_cursors: HashMap<usize, u32>,
     /// Dernier handle de curseur Win32 appliqué à la fenêtre X11.
     current_cursor: usize,
+    /// Overlay de performances (Paramètres > Graphismes).
+    overlay: crate::overlay::Overlay,
     /// Taille et couleur du pointeur (réglages d'accessibilité appliqués).
     pointer_style: (u8, u8),
 }
@@ -582,6 +584,7 @@ impl X11Backend {
             keymap: HashMap::new(),
             keyboard: unsafe { XkbKeyboard::connect() },
             back: HashMap::new(),
+            overlay: crate::overlay::Overlay::new(),
             x11_dirty: Cell::new(false),
             xft_dirty: Cell::new(false),
             x11_cursors: HashMap::new(),
@@ -797,6 +800,83 @@ impl X11Backend {
         Some(cursor)
     }
 
+    /// Lit un drawable X11 (fenêtre, pixmap ou racine) en pixels COLORREF.
+    fn read_drawable(
+        &self,
+        drawable: u32,
+        area: x11rb::protocol::xproto::Rectangle,
+    ) -> Option<BitmapSnapshot> {
+        let setup = self.conn.setup();
+        let screen = &setup.roots[self.screen];
+        let depth = screen.root_depth;
+        let masks = screen
+            .allowed_depths
+            .iter()
+            .flat_map(|d| d.visuals.iter())
+            .find(|v| v.visual_id == screen.root_visual)
+            .map(|v| (v.red_mask, v.green_mask, v.blue_mask))?;
+        let format = setup.pixmap_formats.iter().find(|f| f.depth == depth)?;
+        let bits_per_pixel = format.bits_per_pixel as usize;
+        let pad = format.scanline_pad as usize;
+        if bits_per_pixel == 0
+            || bits_per_pixel > 32
+            || !bits_per_pixel.is_multiple_of(8)
+            || pad < 8
+            || !pad.is_multiple_of(8)
+        {
+            return None;
+        }
+        let bytes_per_pixel = bits_per_pixel / 8;
+        let stride = (area.width as usize * bits_per_pixel).div_ceil(pad) * (pad / 8);
+        let image_len = stride.checked_mul(area.height as usize)?;
+        if image_len > 256 * 1024 * 1024 {
+            return None;
+        }
+        let image = self
+            .conn
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                drawable,
+                area.x,
+                area.y,
+                area.width,
+                area.height,
+                u32::MAX,
+            )
+            .ok()?
+            .reply()
+            .ok()?
+            .data;
+        if image.len() < image_len {
+            return None;
+        }
+        let mut pixels = vec![0; area.width as usize * area.height as usize];
+        for y in 0..area.height as usize {
+            for x in 0..area.width as usize {
+                let start = y * stride + x * bytes_per_pixel;
+                let mut pixel = 0u32;
+                match setup.image_byte_order {
+                    x11rb::protocol::xproto::ImageOrder::LSB_FIRST => {
+                        for i in 0..bytes_per_pixel {
+                            pixel |= (image[start + i] as u32) << (8 * i);
+                        }
+                    }
+                    _ => {
+                        for i in 0..bytes_per_pixel {
+                            pixel = (pixel << 8) | image[start + i] as u32;
+                        }
+                    }
+                }
+                pixels[y * area.width as usize + x] = pixel_to_colorref(pixel, masks);
+            }
+        }
+        Some(BitmapSnapshot {
+            width: area.width as usize,
+            height: area.height as usize,
+            pixels,
+        })
+    }
+
     fn scaled(&self, value: i32) -> i32 {
         (value as f32 * self.scale).round() as i32
     }
@@ -887,6 +967,62 @@ impl X11Backend {
             .ok()?;
         self.back.insert(hwnd, (pixmap, w.width, w.height));
         Some(pixmap)
+    }
+
+    /// Pose l'overlay de performances dans un coin de la fenêtre.
+    fn paint_overlay(&mut self, w: &XWin, hwnd: usize) {
+        let lines = self.overlay.lines(hwnd);
+        if lines.is_empty() {
+            return;
+        }
+        let line_h = self.scaled(16).max(12);
+        let pad = self.scaled(8).max(4);
+        let spec = FontSpec {
+            height: self.scaled(13).max(10),
+            weight: 600,
+            face: "Consolas".into(),
+            ..FontSpec::default()
+        };
+        let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
+        let box_w = longest * spec.height * 66 / 100 + pad * 2;
+        let box_h = lines.len() as i32 * line_h + pad * 2;
+        let (ww, wh) = (w.width as i32, w.height as i32);
+        let margin = self.scaled(10);
+        let (left, top) = match self.overlay.position() {
+            crate::overlay::Position::TopLeft => (margin, margin),
+            crate::overlay::Position::TopRight => (ww - box_w - margin, margin),
+            crate::overlay::Position::BottomLeft => (margin, wh - box_h - margin),
+            crate::overlay::Position::BottomRight => (ww - box_w - margin, wh - box_h - margin),
+        };
+        let (left, top) = (left.max(0), top.max(0));
+        self.before_x11();
+        let border = Rect {
+            left,
+            top,
+            right: left + box_w,
+            bottom: top + box_h,
+        };
+        self.paint_fill(w, &border, 0x0060_5040);
+        let inner = Rect {
+            left: left + 1,
+            top: top + 1,
+            right: left + box_w - 1,
+            bottom: top + box_h - 1,
+        };
+        self.paint_fill(w, &inner, 0x0020_1A16);
+        for (i, line) in lines.iter().enumerate() {
+            let color = if i == 0 { 0x0080_FF9A } else { 0x00F0_F0F0 };
+            self.paint_text(
+                w,
+                left + pad,
+                top + pad + i as i32 * line_h,
+                line,
+                color,
+                None,
+                &spec,
+            );
+        }
+        self.before_x11();
     }
 
     /// Recopie une zone du tampon arrière vers la fenêtre.
@@ -1793,6 +1929,7 @@ impl X11Backend {
                 }
             }
             Event::ButtonPress(e) => {
+                crate::power::note_activity();
                 gui::raw_mouse_button(e.detail, true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
@@ -1839,6 +1976,7 @@ impl X11Backend {
                 })
             }
             Event::MotionNotify(e) => {
+                crate::power::note_activity();
                 gui::raw_mouse_motion(e.root_x as i32, e.root_y as i32);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
@@ -1870,6 +2008,7 @@ impl X11Backend {
                 })
             }
             Event::KeyPress(e) => {
+                crate::power::note_activity();
                 gui::raw_key(e.detail, true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
@@ -1901,6 +2040,14 @@ impl X11Backend {
                         })
                     })
                     .unwrap_or(e.detail as usize);
+                let alt = e.state.contains(x11rb::protocol::xproto::KeyButMask::MOD1);
+                if self.overlay.hotkey(vk, ctrl, shift, alt) {
+                    // Raccourci de l'overlay : consommé, jamais transmis au jeu.
+                    if let Some(cmds) = self.content.get(&hwnd).cloned() {
+                        gui::GuiBackend::draw(self, hwnd, &cmds);
+                    }
+                    return None;
+                }
                 let extended = vk_is_extended(vk);
                 let lparam = key_lparam(e.detail, false, extended);
                 gui::update_async_key_state(vk, true);
@@ -2135,6 +2282,7 @@ fn keysym_to_vk(sym: u32) -> Option<usize> {
         0xFF57 => 0x23,                                    // VK_END
         0xFF55 => 0x21,                                    // VK_PRIOR
         0xFF56 => 0x22,                                    // VK_NEXT
+        0xFF61 => 0x2C,                                    // VK_SNAPSHOT (Impr. écran)
         0xFF63 => 0x2D,                                    // VK_INSERT
         0xFFBE..=0xFFC9 => 0x70 + (sym - 0xFFBE) as usize, // VK_F1..VK_F12
         0xFFE1 | 0xFFE2 => 0x10,                           // VK_SHIFT
@@ -2728,6 +2876,10 @@ impl gui::GuiBackend for X11Backend {
         }
     }
 
+    fn native_window(&mut self, hwnd: usize) -> Option<u64> {
+        self.windows.get(&hwnd).map(|w| w.window as u64)
+    }
+
     fn screen_size(&mut self) -> Option<(i32, i32)> {
         // La géométrie de la racine est relue à chaque appel : après un
         // changement de mode RandR, la valeur du setup initial est périmée.
@@ -2912,10 +3064,14 @@ impl gui::GuiBackend for X11Backend {
             };
             self.paint_theme(&target);
             self.paint_cmds(&target, cmds);
+            self.overlay.frame(hwnd);
+            self.paint_overlay(&target, hwnd);
             self.present(&w, pixmap, 0, 0, w.width, w.height);
         } else {
             self.paint_theme(&w);
             self.paint_cmds(&w, cmds);
+            self.overlay.frame(hwnd);
+            self.paint_overlay(&w, hwnd);
             self.before_x11();
             let _ = self.conn.flush();
         }
@@ -2923,6 +3079,7 @@ impl gui::GuiBackend for X11Backend {
 
     fn destroy_window(&mut self, hwnd: usize) {
         self.content.remove(&hwnd);
+        self.overlay.forget(hwnd);
         if let Some((pixmap, _, _)) = self.back.remove(&hwnd) {
             let _ = self.conn.free_pixmap(pixmap);
         }
@@ -3043,73 +3200,48 @@ impl gui::GuiBackend for X11Backend {
         }
         self.before_x11();
         let area = Self::to_x_rect(&window, &rect)?;
-        let setup = self.conn.setup();
-        let screen = &setup.roots[self.screen];
-        let depth = screen.root_depth;
-        let masks = screen
-            .allowed_depths
-            .iter()
-            .flat_map(|d| d.visuals.iter())
-            .find(|v| v.visual_id == screen.root_visual)
-            .map(|v| (v.red_mask, v.green_mask, v.blue_mask))?;
-        let format = setup.pixmap_formats.iter().find(|f| f.depth == depth)?;
-        let bits_per_pixel = format.bits_per_pixel as usize;
-        let pad = format.scanline_pad as usize;
-        if bits_per_pixel == 0
-            || bits_per_pixel > 32
-            || !bits_per_pixel.is_multiple_of(8)
-            || pad < 8
-            || !pad.is_multiple_of(8)
-        {
+        self.read_drawable(window.window, area)
+    }
+
+    fn capture_screen(&mut self, rect: Rect) -> Option<BitmapSnapshot> {
+        // La racine d'un Xorg sans compositeur contient l'image réellement
+        // affichée : bureau Winlux et fenêtres des autres programmes.
+        self.before_x11();
+        let _ = self.conn.flush();
+        let root = self.conn.setup().roots[self.screen].root;
+        let geometry = self.conn.get_geometry(root).ok()?.reply().ok()?;
+        let physical = self.scaled_rect(&rect);
+        let x0 = physical.left.clamp(0, geometry.width as i32);
+        let y0 = physical.top.clamp(0, geometry.height as i32);
+        let x1 = physical.right.clamp(0, geometry.width as i32);
+        let y1 = physical.bottom.clamp(0, geometry.height as i32);
+        if x1 <= x0 || y1 <= y0 {
             return None;
         }
-        let bytes_per_pixel = bits_per_pixel / 8;
-        let stride = (area.width as usize * bits_per_pixel).div_ceil(pad) * (pad / 8);
-        let image_len = stride.checked_mul(area.height as usize)?;
-        if image_len > 256 * 1024 * 1024 {
-            return None;
+        let area = x11rb::protocol::xproto::Rectangle {
+            x: x0 as i16,
+            y: y0 as i16,
+            width: (x1 - x0) as u16,
+            height: (y1 - y0) as u16,
+        };
+        let snapshot = self.read_drawable(root, area)?;
+        let width = rect.width().max(1) as usize;
+        let height = rect.height().max(1) as usize;
+        if snapshot.width == width && snapshot.height == height {
+            return Some(snapshot);
         }
-        let image = self
-            .conn
-            .get_image(
-                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
-                window.window,
-                area.x,
-                area.y,
-                area.width,
-                area.height,
-                u32::MAX,
-            )
-            .ok()?
-            .reply()
-            .ok()?
-            .data;
-        if image.len() < image_len {
-            return None;
-        }
-        let mut pixels = vec![0; area.width as usize * area.height as usize];
-        for y in 0..area.height as usize {
-            for x in 0..area.width as usize {
-                let start = y * stride + x * bytes_per_pixel;
-                let mut pixel = 0u32;
-                match setup.image_byte_order {
-                    x11rb::protocol::xproto::ImageOrder::LSB_FIRST => {
-                        for i in 0..bytes_per_pixel {
-                            pixel |= (image[start + i] as u32) << (8 * i);
-                        }
-                    }
-                    _ => {
-                        for i in 0..bytes_per_pixel {
-                            pixel = (pixel << 8) | image[start + i] as u32;
-                        }
-                    }
-                }
-                pixels[y * area.width as usize + x] = pixel_to_colorref(pixel, masks);
+        // Mise à l'échelle HiDPI : on revient en unités logiques Win32.
+        let mut pixels = vec![0; width.checked_mul(height)?];
+        for y in 0..height {
+            let sy = (y * snapshot.height / height).min(snapshot.height - 1);
+            for x in 0..width {
+                let sx = (x * snapshot.width / width).min(snapshot.width - 1);
+                pixels[y * width + x] = snapshot.pixels[sy * snapshot.width + sx];
             }
         }
         Some(BitmapSnapshot {
-            width: area.width as usize,
-            height: area.height as usize,
+            width,
+            height,
             pixels,
         })
     }

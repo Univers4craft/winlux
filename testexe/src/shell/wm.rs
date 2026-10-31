@@ -712,6 +712,24 @@ pub fn frame_of(r: &Rect) -> Frame {
     }
 }
 
+/// Application au premier plan, s'il y en a une.
+pub fn active_app() -> Option<usize> {
+    let a = unsafe { ACTIVE };
+    (a < APP_COUNT).then_some(a)
+}
+
+/// Rectangles des fenêtres visibles, du premier plan vers le fond.
+pub unsafe fn visible_windows(out: &mut [Rect; APP_COUNT]) -> usize {
+    let mut n = 0;
+    for &a in Z.iter().rev() {
+        if WINS[a].open && !WINS[a].minimized && on_current_desktop(a) {
+            out[n] = WINS[a].rect;
+            n += 1;
+        }
+    }
+    n
+}
+
 /// Fenêtre active et son cadre (lu par le Narrateur).
 pub fn active_window() -> Option<(usize, Rect)> {
     unsafe { (ACTIVE != usize::MAX).then(|| (ACTIVE, WINS[ACTIVE].rect)) }

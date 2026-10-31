@@ -66,6 +66,7 @@ extern "win64" fn missing_called(info: *const Missing) -> u64 {
             .unwrap_or_default()
     );
     eprintln!("winlux: (WINLUX_MISSING=ignore permet de continuer en renvoyant 0, à vos risques)");
+    crate::crash::record_failure("ENTRYPOINT_NOT_FOUND", &format!("fonction={label}"));
     crate::dlls::kernel32::flush_and_exit(0xC000_0139u32 as i32)
 }
 

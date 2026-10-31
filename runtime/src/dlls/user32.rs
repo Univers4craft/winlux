@@ -1715,58 +1715,6 @@ pub unsafe extern "win64" fn send_dlg_item_message_w(
 }
 
 // =====================================================================
-// Clipboard stubs
-// =====================================================================
-
-pub extern "win64" fn open_clipboard(_hwnd: usize) -> i32 {
-    1
-}
-
-pub extern "win64" fn close_clipboard() -> i32 {
-    1
-}
-
-pub extern "win64" fn empty_clipboard() -> i32 {
-    1
-}
-
-pub extern "win64" fn set_clipboard_data(_format: u32, _data: usize) -> usize {
-    0
-}
-
-pub extern "win64" fn get_clipboard_data(_format: u32) -> usize {
-    0
-}
-
-pub extern "win64" fn is_clipboard_format_available(_format: u32) -> i32 {
-    0
-}
-
-pub extern "win64" fn count_clipboard_formats() -> i32 {
-    0
-}
-
-pub extern "win64" fn enum_clipboard_formats(_format: u32) -> u32 {
-    0
-}
-
-pub extern "win64" fn register_clipboard_format_a(_name: *const u8) -> u32 {
-    0xC000 // Premier ID utilisateur
-}
-
-pub extern "win64" fn register_clipboard_format_w(_name: *const u16) -> u32 {
-    0xC000
-}
-
-pub extern "win64" fn get_clipboard_format_name_a(_format: u32, _buf: *mut u8, _max: i32) -> i32 {
-    0
-}
-
-pub extern "win64" fn get_clipboard_format_name_w(_format: u32, _buf: *mut u16, _max: i32) -> i32 {
-    0
-}
-
-// =====================================================================
 // Drawing helpers
 // =====================================================================
 
@@ -2605,17 +2553,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GetDlgCtrlID"=>fn get_dlg_ctrl_id,
         "IsDialogMessageA"=>fn is_dialog_message_a, "IsDialogMessageW"=>fn is_dialog_message_w,
         "SendDlgItemMessageA"=>fn send_dlg_item_message_a, "SendDlgItemMessageW"=>fn send_dlg_item_message_w,
-        // --- Clipboard ---
-        "OpenClipboard"=>fn open_clipboard, "CloseClipboard"=>fn close_clipboard,
-        "EmptyClipboard"=>fn empty_clipboard,
-        "SetClipboardData"=>fn set_clipboard_data, "GetClipboardData"=>fn get_clipboard_data,
-        "IsClipboardFormatAvailable"=>fn is_clipboard_format_available,
-        "CountClipboardFormats"=>fn count_clipboard_formats,
-        "EnumClipboardFormats"=>fn enum_clipboard_formats,
-        "RegisterClipboardFormatA"=>fn register_clipboard_format_a,
-        "RegisterClipboardFormatW"=>fn register_clipboard_format_w,
-        "GetClipboardFormatNameA"=>fn get_clipboard_format_name_a,
-        "GetClipboardFormatNameW"=>fn get_clipboard_format_name_w,
         // --- System ---
         "GetSystemMetrics"=>fn get_system_metrics,
         "GetSysColor"=>fn get_sys_color, "GetSysColorBrush"=>fn get_sys_color_brush,

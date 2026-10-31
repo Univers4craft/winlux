@@ -7,7 +7,7 @@ trap 'rm -rf "$work"' EXIT HUP INT TERM
 mkdir -p "$work/bin" "$work/root" "$work/home"
 export WINLUX_CONTROL_ROOT="$work/root"
 export HOME="$work/home" XDG_DATA_HOME="$work/home/.local/share"
-export LOG="$work/commands"
+export LOG="$work/commands" WINLUX_LANG=fr
 export PATH="$work/bin:$PATH"
 run="$work/root/run/winlux"
 fail() { echo "ÉCHEC : $*" >&2; exit 1; }
@@ -44,6 +44,10 @@ if grep -q 'pcf' "$run/fonts.txt"; then fail 'police bitmap listée'; fi
 if fonts install "$work/faux.ttf" 2>/dev/null; then fail 'fausse police acceptée'; fi
 if fonts remove /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf 2>/dev/null; then fail 'police système supprimée'; fi
 grep -q 'protégées' "$run/fonts-action.txt" || fail 'message police système'
+WINLUX_LANG=de fonts remove /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf 2>/dev/null || true
+grep -q 'geschützt' "$run/fonts-action.txt" || fail 'message en allemand'
+WINLUX_LANG=es fonts remove /usr/share/fonts/truetype/dejavu/DejaVuSans.ttf 2>/dev/null || true
+grep -q 'protegidas' "$run/fonts-action.txt" || fail 'message en espagnol'
 fonts remove "$XDG_DATA_HOME/fonts/police.ttf"
 test ! -e "$XDG_DATA_HOME/fonts/police.ttf" || fail 'police non supprimée'
 if grep -q 'Ma Police' "$run/fonts.txt"; then fail 'liste non rafraîchie'; fi

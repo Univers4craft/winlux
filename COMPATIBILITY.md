@@ -21,6 +21,12 @@ Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir l
   sont bridées.
 - Des DLL courantes sont intégrées : `user32`, `gdi32`, `advapi32`, `ole32`,
   `bcrypt`, `version`, `shell32`, `ws2_32`, `mfplat` et `winmm`.
+- L'impression passe par `winspool.drv` et `comdlg32` maison : les DC
+  imprimante GDI sont rendus en PDF et envoyés à CUPS par IPP (sans libcups),
+  ou enregistrés par l'imprimante virtuelle « Imprimer en PDF (Winlux) ».
+  Limites : pas de pilotes d'imprimante Windows ni de XPS, pas de
+  `PrintDlg` à crochets (`PD_ENABLEPRINTHOOK`), polices PDF standard
+  (Helvetica, Times, Courier) au lieu des polices TrueType de l'application.
 - Les contrats API-set COM, registre, RTL, sécurité, eventing et downlevel
   sont redirigés vers les backends correspondants. Cela ne complète pas leurs
   fonctions manquantes. `rpcrt4` fournit uniquement `UuidCreate` (UUID v4),

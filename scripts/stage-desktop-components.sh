@@ -25,7 +25,7 @@ for directory in dbus-1 xdg gtk-3.0 fonts NetworkManager bluetooth udisks2 polki
 done
 mkdir -p "$stage/usr/lib/NetworkManager/conf.d"
 cp "$project/integration/native/network/90-winlux.conf" "$stage/usr/lib/NetworkManager/conf.d/90-winlux.conf"
-for name in winlux-system-tools winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-update-apt winlux-update-progress winlux-close-session winlux-shutdown-screen winlux-trust-shortcuts winlux-welcome; do
+for name in winlux-system-tools winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-update-apt winlux-update-progress winlux-close-session winlux-shutdown-screen winlux-trust-shortcuts winlux-welcome winlux-report; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done

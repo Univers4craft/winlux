@@ -17,18 +17,22 @@ pub const CUSTOM_TITLE: bool = false;
 
 // ---------- Outils partagés (aussi utilisés par fonts.rs) ----------
 
-/// Vrai si l'interface n'est pas en français (l'anglais sert aussi pour
-/// l'espagnol et l'allemand).
-pub fn en() -> bool {
-    unsafe { crate::admin_ui::english() }
+/// Langue de l'interface : 0 français, 1 anglais, 2 espagnol, 3 allemand.
+pub fn lang() -> usize {
+    unsafe { crate::admin_ui::lang() as usize }
 }
-/// Libellé localisé (octets Windows-1252).
+/// Libellé localisé (octets Windows-1252). Les appels donnent le français
+/// et l'anglais ; l'espagnol et l'allemand viennent de `STORE_TRANSLATIONS`
+/// (l'anglais sert si une entrée manque).
 pub fn t(fr: &'static [u8], english: &'static [u8]) -> &'static [u8] {
-    if en() {
-        english
-    } else {
-        fr
+    let col = lang();
+    if col < 2 {
+        return if col == 0 { fr } else { english };
     }
+    STORE_TRANSLATIONS
+        .iter()
+        .find(|r| r.0 == fr && r.1 == english)
+        .map_or(english, |r| if col == 2 { r.2 } else { r.3 })
 }
 
 /// Lit un fichier entier dans `buf` ; renvoie le nombre d'octets lus.
@@ -584,26 +588,57 @@ static mut FILES: [[u8; 96]; 24] = [[0; 96]; 24];
 static mut FILE_LENS: [usize; 24] = [0; 24];
 static mut FILE_COUNT: usize = 0;
 
-const CATS: [(&[u8], &[u8], &[u8], Glyph); 6] = [
-    (b"navigateurs", b"Navigateurs", b"Browsers", Glyph::Browser),
-    (b"bureautique", b"Bureautique", b"Productivity", Glyph::Text),
-    (b"multimedia", b"Multim\xE9dia", b"Multimedia", Glyph::Video),
+/// Catégories : clé du catalogue, libellés (fr, en, es, de), icône.
+const CATS: [(&[u8], [&[u8]; 4], Glyph); 6] = [
+    (
+        b"navigateurs",
+        [b"Navigateurs", b"Browsers", b"Navegadores", b"Browser"],
+        Glyph::Browser,
+    ),
+    (
+        b"bureautique",
+        [b"Bureautique", b"Productivity", b"Ofim\xE1tica", b"B\xFCro"],
+        Glyph::Text,
+    ),
+    (
+        b"multimedia",
+        [
+            b"Multim\xE9dia",
+            b"Multimedia",
+            b"Multimedia",
+            b"Multimedia",
+        ],
+        Glyph::Video,
+    ),
     (
         b"developpement",
-        b"D\xE9veloppement",
-        b"Development",
+        [
+            b"D\xE9veloppement",
+            b"Development",
+            b"Desarrollo",
+            b"Entwicklung",
+        ],
         Glyph::Code,
     ),
-    (b"jeux", b"Jeux", b"Games", Glyph::Star),
-    (b"utilitaires", b"Utilitaires", b"Utilities", Glyph::Tools),
+    (
+        b"jeux",
+        [b"Jeux", b"Games", b"Juegos", b"Spiele"],
+        Glyph::Star,
+    ),
+    (
+        b"utilitaires",
+        [
+            b"Utilitaires",
+            b"Utilities",
+            b"Utilidades",
+            b"Dienstprogramme",
+        ],
+        Glyph::Tools,
+    ),
 ];
 
 fn cat_label(i: usize) -> &'static [u8] {
-    if en() {
-        CATS[i].2
-    } else {
-        CATS[i].1
-    }
+    CATS[i].1[lang()]
 }
 unsafe fn cat_of(i: usize) -> usize {
     let c = app_field(i, F_CAT);
@@ -721,7 +756,11 @@ unsafe fn find_key(key: &[u8]) -> Option<usize> {
 /// Installateurs trouvés dans Téléchargements (.exe, .msi, .deb, .AppImage).
 unsafe fn scan_downloads() {
     FILE_COUNT = 0;
-    for dir in [&b"C:\\T\xE9l\xE9chargements\\"[..], &b"C:\\Downloads\\"[..]] {
+    for dir in [
+        &b"C:\\T\xE9l\xE9chargements\\"[..],
+        b"C:\\Downloads\\",
+        b"C:\\Descargas\\",
+    ] {
         let mut pat = [0u8; 64];
         pat[..dir.len()].copy_from_slice(dir);
         pat[dir.len()] = b'*';
@@ -935,7 +974,7 @@ unsafe fn draw_nav(g: &mut Gfx, f: &Frame) {
         let (label, gl): (&[u8], Glyph) = match i {
             0 => (t(b"Accueil", b"Home"), Glyph::Home),
             7 => (t(b"Biblioth\xE8que", b"Library"), Glyph::Grid),
-            k => (cat_label(k as usize - 1), CATS[k as usize - 1].3),
+            k => (cat_label(k as usize - 1), CATS[k as usize - 1].2),
         };
         let r = rect(c.left + 8, y, c.left + nav_w(f) - 8, y + 36);
         let active = match VIEW {
@@ -2144,3 +2183,400 @@ pub unsafe fn tick(_f: &Frame) -> bool {
     }
     repaint
 }
+
+// ---------- Traductions espagnoles et allemandes ----------
+
+/// `(français, anglais, espagnol, allemand)`, retrouvées par le couple
+/// français/anglais passé à `t` (aussi pour fonts.rs).
+const STORE_TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    (
+        b"Une installation est d\xE9j\xE0 en cours.",
+        b"An installation is already running.",
+        b"Ya hay una instalaci\xF3n en curso.",
+        b"Es l\xE4uft bereits eine Installation.",
+    ),
+    (
+        b"Pr\xE9paration...",
+        b"Preparing...",
+        b"Preparando...",
+        b"Vorbereitung...",
+    ),
+    (
+        b"Le service du Store n'est pas disponible.",
+        b"The Store service is not available.",
+        b"El servicio de la Store no est\xE1 disponible.",
+        b"Der Store-Dienst ist nicht verf\xFCgbar.",
+    ),
+    (
+        b"Rechercher des applications et des jeux",
+        b"Search apps and games",
+        b"Buscar aplicaciones y juegos",
+        b"Apps und Spiele suchen",
+    ),
+    (
+        b"Chargement de la biblioth\xE8que...",
+        b"Loading the library...",
+        b"Cargando la biblioteca...",
+        b"Bibliothek wird geladen...",
+    ),
+    (
+        b"Accueil",
+        b"Home",
+        b"Inicio",
+        b"Startseite",
+    ),
+    (
+        b"Biblioth\xE8que",
+        b"Library",
+        b"Biblioteca",
+        b"Bibliothek",
+    ),
+    (
+        b"Actualisation...",
+        b"Refreshing...",
+        b"Actualizando...",
+        b"Wird aktualisiert...",
+    ),
+    (
+        b"Actualiser",
+        b"Refresh",
+        b"Actualizar",
+        b"Aktualisieren",
+    ),
+    (
+        b"Sources : ",
+        b"Sources: ",
+        b"Fuentes: ",
+        b"Quellen: ",
+    ),
+    (
+        b"Install\xE9",
+        b"Installed",
+        b"Instalado",
+        b"Installiert",
+    ),
+    (
+        b"Mise \xE0 jour",
+        b"Update",
+        b"Actualizaci\xF3n",
+        b"Update",
+    ),
+    (
+        b"Obtenir",
+        b"Get",
+        b"Obtener",
+        b"Holen",
+    ),
+    (
+        b"S\xC9LECTION WINLUX",
+        b"WINLUX PICKS",
+        b"SELECCI\xD3N WINLUX",
+        b"WINLUX-AUSWAHL",
+    ),
+    (
+        b"Voir",
+        b"View",
+        b"Ver",
+        b"Ansehen",
+    ),
+    (
+        b"Mettre \xE0 jour",
+        b"Update",
+        b"Actualizar",
+        b"Aktualisieren",
+    ),
+    (
+        b"Tout afficher",
+        b"See all",
+        b"Ver todo",
+        b"Alle anzeigen",
+    ),
+    (
+        b"Aucun logiciel dans cette cat\xE9gorie pour l'instant.",
+        b"No software in this category yet.",
+        b"Todav\xEDa no hay software en esta categor\xEDa.",
+        b"In dieser Kategorie gibt es noch keine Software.",
+    ),
+    (
+        b"R\xE9sultats pour \xAB ",
+        b"Results for \"",
+        b"Resultados de \xAB ",
+        b"Ergebnisse f\xFCr \x84",
+    ),
+    (
+        b" \xBB",
+        b"\"",
+        b" \xBB",
+        b"\x93",
+    ),
+    (
+        b"Aucun r\xE9sultat.",
+        b"No results.",
+        b"No hay resultados.",
+        b"Keine Ergebnisse.",
+    ),
+    (
+        b"D\xE9sinstaller",
+        b"Uninstall",
+        b"Desinstalar",
+        b"Deinstallieren",
+    ),
+    (
+        b"Mises \xE0 jour",
+        b"Updates",
+        b"Actualizaciones",
+        b"Updates",
+    ),
+    (
+        b"Tout mettre \xE0 jour",
+        b"Update all",
+        b"Actualizar todo",
+        b"Alle aktualisieren",
+    ),
+    (
+        b" mise(s) \xE0 jour du syst\xE8me Linux (apt) incluse(s) dans \xAB Tout mettre \xE0 jour \xBB.",
+        b" Linux system update(s) (apt) included in \"Update all\".",
+        b" actualizaci\xF3n(es) del sistema Linux (apt) incluida(s) en \xABActualizar todo\xBB.",
+        b" Linux-Systemupdate(s) (apt) in \x84Alle aktualisieren\x93 enthalten.",
+    ),
+    (
+        b"Tout est \xE0 jour.",
+        b"Everything is up to date.",
+        b"Todo est\xE1 actualizado.",
+        b"Alles ist auf dem neuesten Stand.",
+    ),
+    (
+        b"Install\xE9s",
+        b"Installed",
+        b"Instalados",
+        b"Installiert",
+    ),
+    (
+        b"Programmes Windows",
+        b"Windows programs",
+        b"Programas de Windows",
+        b"Windows-Programme",
+    ),
+    (
+        b"Aucun programme Windows install\xE9 pour l'instant.",
+        b"No Windows program installed yet.",
+        b"Todav\xEDa no hay ning\xFAn programa de Windows instalado.",
+        b"Noch kein Windows-Programm installiert.",
+    ),
+    (
+        b"Installer depuis un fichier",
+        b"Install from a file",
+        b"Instalar desde un archivo",
+        b"Aus einer Datei installieren",
+    ),
+    (
+        b"Installateurs .exe/.msi (runtime Winlux), .deb, .AppImage du dossier T\xE9l\xE9chargements, ou glissez un fichier ici depuis l'Explorateur.",
+        b"Installers (.exe/.msi via the Winlux runtime, .deb, .AppImage) from Downloads, or drop a file here from Explorer.",
+        b"Instaladores .exe/.msi (runtime de Winlux), .deb y .AppImage de la carpeta Descargas, o arrastre un archivo aqu\xED desde el Explorador.",
+        b"Installationsprogramme .exe/.msi (Winlux-Laufzeit), .deb und .AppImage aus dem Ordner Downloads, oder ziehen Sie eine Datei aus dem Explorer hierher.",
+    ),
+    (
+        b"Installer",
+        b"Install",
+        b"Instalar",
+        b"Installieren",
+    ),
+    (
+        b"Source : ",
+        b"Source: ",
+        b"Fuente: ",
+        b"Quelle: ",
+    ),
+    (
+        b"Confirmer la d\xE9sinstallation",
+        b"Confirm uninstall",
+        b"Confirmar la desinstalaci\xF3n",
+        b"Deinstallation best\xE4tigen",
+    ),
+    (
+        b"Site web",
+        b"Website",
+        b"Sitio web",
+        b"Website",
+    ),
+    (
+        b"Chargement de la fiche...",
+        b"Loading details...",
+        b"Cargando la ficha...",
+        b"Details werden geladen...",
+    ),
+    (
+        b"Captures d'\xE9cran",
+        b"Screenshots",
+        b"Capturas de pantalla",
+        b"Screenshots",
+    ),
+    (
+        b"Informations",
+        b"Information",
+        b"Informaci\xF3n",
+        b"Informationen",
+    ),
+    (
+        b" Mo",
+        b" MB",
+        b" MB",
+        b" MB",
+    ),
+    (
+        b" Ko",
+        b" KB",
+        b" KB",
+        b" KB",
+    ),
+    (
+        b"Version install\xE9e",
+        b"Installed version",
+        b"Versi\xF3n instalada",
+        b"Installierte Version",
+    ),
+    (
+        b"Derni\xE8re version",
+        b"Latest version",
+        b"\xDAltima versi\xF3n",
+        b"Neueste Version",
+    ),
+    (
+        b"Taille",
+        b"Size",
+        b"Tama\xF1o",
+        b"Gr\xF6\xDFe",
+    ),
+    (
+        b"\xC9diteur",
+        b"Publisher",
+        b"Editor",
+        b"Herausgeber",
+    ),
+    (
+        b"Licence",
+        b"License",
+        b"Licencia",
+        b"Lizenz",
+    ),
+    (
+        b"Source",
+        b"Source",
+        b"Fuente",
+        b"Quelle",
+    ),
+    (
+        b"Nouveaut\xE9s",
+        b"What's new",
+        b"Novedades",
+        b"Neuigkeiten",
+    ),
+    (
+        b"Portez ce vieux whisky au juge blond qui fume. 0123456789",
+        b"The quick brown fox jumps over the lazy dog. 0123456789",
+        b"El veloz murci\xE9lago hind\xFA com\xEDa feliz cardillo y kiwi. 0123456789",
+        b"Victor jagt zw\xF6lf Boxk\xE4mpfer quer \xFCber den gro\xDFen Sylter Deich. 0123456789",
+    ),
+    (
+        b"Le service des polices n'est pas disponible.",
+        b"The font service is not available.",
+        b"El servicio de fuentes no est\xE1 disponible.",
+        b"Der Schriftartendienst ist nicht verf\xFCgbar.",
+    ),
+    (
+        b"D\xE9posez un fichier de police .ttf, .otf ou .ttc.",
+        b"Drop a .ttf, .otf or .ttc font file.",
+        b"Suelte un archivo de fuente .ttf, .otf o .ttc.",
+        b"Legen Sie eine Schriftdatei .ttf, .otf oder .ttc ab.",
+    ),
+    (
+        b"Polices",
+        b"Fonts",
+        b"Fuentes",
+        b"Schriftarten",
+    ),
+    (
+        b" familles",
+        b" families",
+        b" familias",
+        b" Familien",
+    ),
+    (
+        b"Rechercher une police",
+        b"Search fonts",
+        b"Buscar una fuente",
+        b"Schriftart suchen",
+    ),
+    (
+        b"Installer une police",
+        b"Install a font",
+        b"Instalar una fuente",
+        b"Schriftart installieren",
+    ),
+    (
+        b"Vous",
+        b"You",
+        b"Usted",
+        b"Sie",
+    ),
+    (
+        b"Chargement des polices...",
+        b"Loading fonts...",
+        b"Cargando fuentes...",
+        b"Schriftarten werden geladen...",
+    ),
+    (
+        b"Install\xE9e pour vous",
+        b"Installed for you",
+        b"Instalada para usted",
+        b"F\xFCr Sie installiert",
+    ),
+    (
+        b"Police syst\xE8me",
+        b"System font",
+        b"Fuente del sistema",
+        b"Systemschriftart",
+    ),
+    (
+        b"Tapez un texte d'exemple",
+        b"Type sample text",
+        b"Escriba un texto de ejemplo",
+        b"Beispieltext eingeben",
+    ),
+    (
+        b"Disponible aussi pour les programmes .exe (EnumFontFamilies, CreateFont).",
+        b"Also available to .exe programs (EnumFontFamilies, CreateFont).",
+        b"Tambi\xE9n disponible para los programas .exe (EnumFontFamilies, CreateFont).",
+        b"Auch f\xFCr .exe-Programme verf\xFCgbar (EnumFontFamilies, CreateFont).",
+    ),
+    (
+        b"Aucune police trouv\xE9e. Installez un fichier .ttf ou .otf, ou glissez-le ici depuis l'Explorateur.",
+        b"No fonts found. Install a .ttf or .otf file, or drop it here from Explorer.",
+        b"No se encontr\xF3 ninguna fuente. Instale un archivo .ttf u .otf, o arr\xE1strelo aqu\xED desde el Explorador.",
+        b"Keine Schriftarten gefunden. Installieren Sie eine .ttf- oder .otf-Datei oder ziehen Sie sie aus dem Explorer hierher.",
+    ),
+    (
+        b"Polices trouv\xE9es dans T\xE9l\xE9chargements, Documents et Bureau. Vous pouvez aussi glisser un fichier depuis l'Explorateur sur cette fen\xEAtre.",
+        b"Fonts found in Downloads, Documents and Desktop. You can also drop a file from Explorer onto this window.",
+        b"Fuentes encontradas en Descargas, Documentos y Escritorio. Tambi\xE9n puede arrastrar un archivo desde el Explorador a esta ventana.",
+        b"Schriftarten aus Downloads, Dokumente und Schreibtisch. Sie k\xF6nnen auch eine Datei aus dem Explorer auf dieses Fenster ziehen.",
+    ),
+    (
+        b"Aucun fichier de police trouv\xE9.",
+        b"No font file found.",
+        b"No se encontr\xF3 ning\xFAn archivo de fuente.",
+        b"Keine Schriftdatei gefunden.",
+    ),
+    (
+        b"Fermer",
+        b"Close",
+        b"Cerrar",
+        b"Schlie\xDFen",
+    ),
+    (
+        b"Description",
+        b"Description",
+        b"Descripci\xF3n",
+        b"Beschreibung",
+    ),
+];

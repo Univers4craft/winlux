@@ -9,13 +9,18 @@ mod crash;
 mod diskimage;
 mod dlls;
 mod firewall;
+mod gpu;
+mod imaging;
 mod loader;
 pub mod log;
 mod managed;
 mod mounts;
+mod msi;
 mod netdrive;
+mod overlay;
 mod paths;
 mod pe;
+mod power;
 mod printf;
 mod process;
 mod profiles;
@@ -49,6 +54,10 @@ fn main() {
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
+    }
+    if exe == "--power" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(power::cli::main(&rest));
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());
@@ -85,8 +94,22 @@ fn main() {
         };
         std::process::exit(inspect(&PathBuf::from(path)));
     }
+    if exe == "--image-info" {
+        let Some(path) = args.next() else {
+            eprintln!("winlux: usage: winlux --image-info IMAGE");
+            std::process::exit(2);
+        };
+        std::process::exit(imaging::cli_info(&PathBuf::from(path)));
+    }
+    if let Some(code) = gpu_command(&exe, &mut args) {
+        std::process::exit(code);
+    }
     let exe = PathBuf::from(exe);
     let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+    // msiexec.exe est fourni par Winlux lui-même (module msi).
+    if exe.as_os_str() == "--msiexec" || (msi::is_msiexec(&exe) && !is_real_pe(&exe)) {
+        std::process::exit(msi::cli(&rest));
+    }
     let source = match std::fs::read(&exe) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -97,6 +120,9 @@ fn main() {
     backup_registry();
     if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
         crash::set_exe_name(name);
+    }
+    if let Ok(full) = std::fs::canonicalize(&exe) {
+        crash::set_exe_path(&full.to_string_lossy());
     }
     let cpu_settings = profiles::apply(&exe);
     if let Some(assembly) = managed::managed_image(&exe, &source) {
@@ -134,6 +160,58 @@ fn main() {
     dlls::kernel32::init();
     process::init_process(&image, &rest);
     process::run(image);
+}
+
+/// Commandes GPU pour `winlux-control` et `winlux-prime-run` :
+/// `--gpu-status`, `--gpu-env auto|integrated|dedicated`,
+/// `--gpu-set CARTE RÉGLAGE VALEUR`.
+fn gpu_command(flag: &std::ffi::OsStr, args: &mut std::env::ArgsOs) -> Option<i32> {
+    let root = gpu::system_root();
+    match flag.to_str()? {
+        "--gpu-status" => {
+            print!("{}", gpu::report(&gpu::probe(&root)));
+            Some(0)
+        }
+        "--gpu-env" => {
+            let wanted = args.next().map(|a| a.to_string_lossy().into_owned());
+            let Some(pref) = wanted.as_deref().and_then(gpu::Preference::parse) else {
+                eprintln!("winlux: usage: winlux --gpu-env auto|integrated|dedicated");
+                return Some(2);
+            };
+            for (key, value) in gpu::prime_env(&gpu::probe(&root), pref) {
+                println!("{key}={value}");
+            }
+            Some(0)
+        }
+        "--gpu-set" => {
+            let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+            let [card, setting, value] = rest.as_slice() else {
+                eprintln!("winlux: usage: winlux --gpu-set CARTE RÉGLAGE VALEUR");
+                return Some(2);
+            };
+            match gpu::apply(&root, card, setting, value) {
+                Ok(message) => {
+                    println!("{message}");
+                    Some(0)
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    Some(1)
+                }
+            }
+        }
+        _ => None,
+    }
+}
+
+/// Vrai si le fichier existe et commence par la signature MZ d'un PE.
+fn is_real_pe(path: &std::path::Path) -> bool {
+    use std::io::Read;
+    let mut magic = [0u8; 2];
+    std::fs::File::open(path)
+        .and_then(|mut f| f.read_exact(&mut magic))
+        .is_ok()
+        && magic == *b"MZ"
 }
 
 fn backup_registry() {

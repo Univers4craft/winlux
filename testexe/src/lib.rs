@@ -24,6 +24,18 @@ pub struct SystemInfo {
     pub processor_revision: u16,
 }
 
+/// `SYSTEM_POWER_STATUS` (GetSystemPowerStatus).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SystemPowerStatus {
+    pub ac_line_status: u8,
+    pub battery_flag: u8,
+    pub battery_life_percent: u8,
+    pub system_status_flag: u8,
+    pub battery_life_time: u32,
+    pub battery_full_life_time: u32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct SystemTime {
@@ -434,6 +446,46 @@ pub const IDC_HAND: usize = 32649;
 
 pub const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
 
+/// Informations d'une image ouverte par `WinluxImageOpen`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WinluxImageInfoC {
+    pub width: u32,
+    pub height: u32,
+    pub pages: u32,
+    /// 1 animée, 2 calques, 4 RAW, 8 aperçu intégré, 16 HDR, 32 vectoriel, 64 modèle 3D.
+    pub flags: u32,
+    pub delay_ms: u32,
+    pub meta_count: u32,
+    pub format: [u8; 32],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WinluxPageInfoC {
+    pub width: u32,
+    pub height: u32,
+    pub delay_ms: u32,
+    pub kind: u32,
+    pub name: [u8; 64],
+}
+
+/// Vue demandée à `WinluxImageRender` (centre en coordonnées image).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WinluxViewC {
+    pub zoom: f32,
+    pub cx: f32,
+    pub cy: f32,
+    pub rot: u32,
+    pub mirror: u32,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub exposure: f32,
+    pub auto_levels: u32,
+    pub split: f32,
+}
+
 #[link(name = "kernel32", kind = "raw-dylib")]
 extern "system" {
     pub fn GetStdHandle(which: u32) -> Handle;
@@ -633,6 +685,12 @@ extern "system" {
         len: usize,
     ) -> usize;
     pub fn GetTickCount() -> u32;
+    pub fn GetSystemPowerStatus(out: *mut SystemPowerStatus) -> i32;
+    pub fn SetThreadExecutionState(flags: u32) -> u32;
+    pub fn PowerCreateRequest(reason: *const c_void) -> Handle;
+    pub fn PowerSetRequest(request: Handle, kind: u32) -> i32;
+    pub fn PowerClearRequest(request: Handle, kind: u32) -> i32;
+    pub fn LocalFree(p: *mut c_void) -> *mut c_void;
     pub fn QueryPerformanceCounter(out: *mut i64) -> i32;
     pub fn QueryPerformanceFrequency(out: *mut i64) -> i32;
     pub fn GetCurrentProcessId() -> u32;
@@ -685,6 +743,70 @@ extern "system" {
     pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
     pub fn WinluxPtyAlive(handle: usize) -> i32;
     pub fn WinluxClosePty(handle: usize) -> i32;
+    // Images (décodeurs maison du runtime, voir runtime/src/imaging/api.rs).
+    pub fn WinluxImageOpen(path: *const u16) -> usize;
+    pub fn WinluxImageLastError(buf: *mut u8, cap: u32) -> i32;
+    pub fn WinluxImageInfo(h: usize, out: *mut WinluxImageInfoC) -> i32;
+    pub fn WinluxImagePage(h: usize, page: u32, out: *mut WinluxPageInfoC) -> i32;
+    pub fn WinluxImageRender(
+        h: usize,
+        page: u32,
+        view: *const WinluxViewC,
+        out: *mut u8,
+        w: u32,
+        hh: u32,
+        stride: u32,
+        bg: u32,
+        flags: u32,
+    ) -> i32;
+    pub fn WinluxImageMeta(
+        h: usize,
+        i: u32,
+        key: *mut u8,
+        kcap: u32,
+        val: *mut u8,
+        vcap: u32,
+    ) -> i32;
+    pub fn WinluxImageClose(h: usize) -> i32;
+    pub fn WinluxImageSupported(path: *const u16) -> i32;
+    pub fn WinluxImageFormats(buf: *mut u8, cap: u32) -> u32;
+    pub fn WinluxImageThumbnail(path: *const u16, size: u32, out: *mut u8) -> i32;
+    pub fn WinluxCaptureScreen(x: i32, y: i32, w: i32, h: i32, bits: *mut u8, stride: i32) -> i32;
+    pub fn WinluxDrawStroke(
+        bits: *mut u8,
+        w: i32,
+        h: i32,
+        stride: i32,
+        points: *const i32,
+        count: i32,
+        color: u32,
+        pen: i32,
+        mode: u32,
+    ) -> i32;
+    pub fn WinluxDrawText(
+        bits: *mut u8,
+        w: i32,
+        h: i32,
+        stride: i32,
+        x: i32,
+        y: i32,
+        text: *const c_char,
+        size: i32,
+        color: u32,
+    ) -> i32;
+    pub fn WinluxSavePng(path: *const c_char, bits: *const u8, w: i32, h: i32, stride: i32) -> i32;
+    pub fn WinluxRecordStart(
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        flags: u32,
+        path: *const c_char,
+    ) -> i32;
+    pub fn WinluxRecordStop() -> i32;
+    pub fn WinluxRecordState(elapsed_ms: *mut u32) -> i32;
+    /// Rapport GPU `clé=valeur` du runtime Winlux ; renvoie la longueur complète.
+    pub fn WinluxQueryGpu(buf: *mut u8, len: u32) -> u32;
     // Archives, images disque et lecteurs dynamiques (exports privés Winlux).
     pub fn WinluxMountList(buf: *mut u16, cap: u32) -> i32;
     pub fn WinluxArchiveSupport(path: *const u16) -> u32;
@@ -846,6 +968,13 @@ extern "system" {
 
 #[link(name = "user32", kind = "raw-dylib")]
 extern "C" {
+    pub fn OpenClipboard(owner: Handle) -> i32;
+    pub fn CloseClipboard() -> i32;
+    pub fn EmptyClipboard() -> i32;
+    pub fn SetClipboardData(format: u32, mem: usize) -> usize;
+    pub fn GetClipboardData(format: u32) -> usize;
+    pub fn IsClipboardFormatAvailable(format: u32) -> i32;
+    pub fn GetClipboardSequenceNumber() -> u32;
     pub fn RegisterClassExA(wc: *const WndClassExA) -> u16;
     pub fn CreateWindowExA(
         ex_style: u32,
@@ -880,6 +1009,9 @@ extern "C" {
     pub fn GetFocus() -> Handle;
     pub fn SetFocus(hwnd: Handle) -> Handle;
     pub fn GetKeyState(vk: i32) -> i16;
+    pub fn SetCapture(hwnd: Handle) -> Handle;
+    pub fn ScreenToClient(hwnd: Handle, p: *mut Point) -> i32;
+    pub fn ReleaseCapture() -> i32;
     pub fn GetAsyncKeyState(vk: i32) -> i16;
     pub fn GetKeyboardState(state: *mut u8) -> i32;
     pub fn GetClientRect(hwnd: Handle, out: *mut Rect) -> i32;
@@ -926,6 +1058,20 @@ extern "C" {
     pub fn MoveToEx(dc: Handle, x: i32, y: i32, previous: *mut Point) -> i32;
     pub fn LineTo(dc: Handle, x: i32, y: i32) -> i32;
     pub fn CreateCompatibleDC(dc: Handle) -> Handle;
+    pub fn SetDIBitsToDevice(
+        dc: Handle,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        src_x: i32,
+        src_y: i32,
+        start: u32,
+        lines: u32,
+        bits: *const c_void,
+        info: *const BitmapInfoHeader,
+        usage: u32,
+    ) -> i32;
     pub fn CreateCompatibleBitmap(dc: Handle, width: i32, height: i32) -> Handle;
     pub fn CreateDIBSection(
         dc: Handle,
@@ -936,6 +1082,7 @@ extern "C" {
         offset: u32,
     ) -> Handle;
     pub fn DeleteDC(dc: Handle) -> i32;
+    pub fn GetDeviceCaps(dc: Handle, index: i32) -> i32;
     pub fn StretchDIBits(
         dc: Handle,
         xd: i32,
@@ -1060,11 +1207,106 @@ extern "C" {
         height: i32,
     ) -> i32;
     pub fn SetPixelV(hdc: Handle, x: i32, y: i32, color: u32) -> i32;
-    pub fn OpenClipboard(owner: Handle) -> i32;
-    pub fn CloseClipboard() -> i32;
-    pub fn EmptyClipboard() -> i32;
-    pub fn SetClipboardData(format: u32, mem: usize) -> usize;
-    pub fn GetClipboardData(format: u32) -> usize;
+}
+
+// Spooler d'impression (`winspool.drv`) : API Win32 et extensions Winlux
+// utilisées par la page « Imprimantes et scanners » des Paramètres.
+#[link(name = "winspool.drv", kind = "raw-dylib", modifiers = "+verbatim")]
+extern "system" {
+    pub fn EnumPrintersW(
+        flags: u32,
+        name: *const u16,
+        level: u32,
+        buf: *mut u8,
+        cb: u32,
+        needed: *mut u32,
+        returned: *mut u32,
+    ) -> i32;
+    pub fn GetDefaultPrinterW(buf: *mut u16, size: *mut u32) -> i32;
+    pub fn SetDefaultPrinterW(name: *const u16) -> i32;
+    pub fn OpenPrinterW(name: *const u16, printer: *mut Handle, defaults: *const c_void) -> i32;
+    pub fn ClosePrinter(printer: Handle) -> i32;
+    pub fn StartDocPrinterW(printer: Handle, level: u32, info: *const c_void) -> u32;
+    pub fn StartPagePrinter(printer: Handle) -> i32;
+    pub fn WritePrinter(printer: Handle, buf: *const u8, len: u32, written: *mut u32) -> i32;
+    pub fn EndPagePrinter(printer: Handle) -> i32;
+    pub fn EndDocPrinter(printer: Handle) -> i32;
+    pub fn DeletePrinter(printer: Handle) -> i32;
+    pub fn SetPrinterW(printer: Handle, level: u32, info: *const u8, command: u32) -> i32;
+    pub fn EnumJobsW(
+        printer: Handle,
+        first: u32,
+        count: u32,
+        level: u32,
+        buf: *mut u8,
+        cb: u32,
+        needed: *mut u32,
+        returned: *mut u32,
+    ) -> i32;
+    pub fn SetJobW(printer: Handle, job: u32, level: u32, info: *const u8, command: u32) -> i32;
+    pub fn DeviceCapabilitiesW(
+        device: *const u16,
+        port: *const u16,
+        capability: u16,
+        output: *mut u8,
+        devmode: *const u8,
+    ) -> i32;
+    pub fn DocumentPropertiesW(
+        hwnd: Handle,
+        printer: Handle,
+        device: *const u16,
+        output: *mut u8,
+        input: *const u8,
+        mode: u32,
+    ) -> i32;
+    pub fn WinluxDiscoverPrintersW(buf: *mut u16, cap: u32) -> u32;
+    pub fn WinluxAddPrinterW(name: *const u16, uri: *const u16) -> i32;
+    pub fn WinluxPrintStatusW(buf: *mut u16, cap: u32) -> u32;
+    pub fn WinluxPrintTestPageW(name: *const u16) -> i32;
+}
+
+/// `DOCINFOW` (gdi32 `StartDocW`).
+#[repr(C)]
+pub struct DocInfoW {
+    pub size: i32,
+    pub doc_name: *const u16,
+    pub output: *const u16,
+    pub datatype: *const u16,
+    pub flags: u32,
+}
+
+#[link(name = "gdi32", kind = "raw-dylib")]
+extern "system" {
+    pub fn CreateDCW(
+        driver: *const u16,
+        device: *const u16,
+        output: *const u16,
+        devmode: *const u8,
+    ) -> Handle;
+    pub fn StartDocW(dc: Handle, info: *const DocInfoW) -> i32;
+    pub fn StartPage(dc: Handle) -> i32;
+    pub fn EndPage(dc: Handle) -> i32;
+    pub fn EndDoc(dc: Handle) -> i32;
+}
+
+#[link(name = "comdlg32", kind = "raw-dylib")]
+extern "system" {
+    pub fn PrintDlgW(pd: *mut u8) -> i32;
+    pub fn CommDlgExtendedError() -> u32;
+}
+
+#[link(name = "powrprof", kind = "raw-dylib")]
+extern "system" {
+    pub fn PowerGetActiveScheme(key: Handle, guid: *mut *mut [u8; 16]) -> u32;
+    pub fn PowerSetActiveScheme(key: Handle, guid: *const [u8; 16]) -> u32;
+    pub fn PowerReadFriendlyName(
+        key: Handle,
+        scheme: *const [u8; 16],
+        sub: *const c_void,
+        setting: *const c_void,
+        buffer: *mut u16,
+        size: *mut u32,
+    ) -> u32;
 }
 
 #[link(name = "msvcrt", kind = "raw-dylib")]

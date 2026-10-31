@@ -8,6 +8,8 @@
 
 use winlux_testexe::*;
 
+#[path = "../shell/cliphist.rs"]
+mod cliphist;
 #[path = "../shell/a11y.rs"]
 mod a11y;
 #[path = "../shell/admin_ui.rs"]
@@ -28,8 +30,12 @@ mod explorer;
 mod filehistory;
 #[path = "../shell/fonts.rs"]
 mod fonts;
+#[path = "../shell/thumbs.rs"]
+mod thumbs;
 #[path = "../shell/firewall.rs"]
 mod firewall;
+#[path = "../shell/gpuinfo.rs"]
+mod gpuinfo;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/locale.rs"]
@@ -48,6 +54,8 @@ mod personalize;
 mod restore;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/snip.rs"]
+mod snip;
 #[path = "../shell/store.rs"]
 mod store;
 #[path = "../shell/settings_cpu.rs"]

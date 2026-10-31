@@ -92,6 +92,8 @@ cp "$root/scripts/winlux-bluetooth.sh" "$stage/usr/bin/winlux-bluetooth"
 chmod 755 "$stage/usr/bin/winlux-bluetooth"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
+cp "$root/scripts/winlux-prime-run.sh" "$stage/usr/bin/winlux-prime-run"
+chmod 755 "$stage/usr/bin/winlux-prime-run"
 # Historique des fichiers, sessions multi-utilisateur, bureau à distance
 cp "$root/scripts/winlux-backup.sh" "$stage/usr/bin/winlux-backup"
 cp "$root/scripts/winlux-sessions.sh" "$stage/usr/bin/winlux-sessions"
@@ -103,6 +105,8 @@ mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
 cp "$root/scripts/winlux-fonts.sh" "$stage/usr/bin/winlux-fonts"
 cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.txt"
+mkdir -p "$stage/etc/winlux/store-sources.d"
+cp "$root/integration/store-sources.d/"*.json "$stage/etc/winlux/store-sources.d/"
 chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts"
 cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
 cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
@@ -175,7 +179,7 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -244,6 +248,15 @@ copy_shared_libraries /usr/bin/Xvfb
 copy_shared_libraries /usr/bin/xkbcomp
 copy_shared_libraries /usr/bin/xrandr
 copy_shared_libraries /usr/bin/curl
+# Enregistrement d'écran (Win+Maj+R) : encodeur ffmpeg du système, facultatif.
+ffmpeg_bin=${WINLUX_FFMPEG:-$(command -v ffmpeg || true)}
+if test -n "$ffmpeg_bin" && test -x "$ffmpeg_bin"; then
+    cp "$ffmpeg_bin" "$stage/usr/bin/ffmpeg"
+    chmod 755 "$stage/usr/bin/ffmpeg"
+    copy_shared_libraries "$ffmpeg_bin"
+else
+    echo "ffmpeg absent : l'enregistrement vidéo de l'écran sera indisponible dans l'ISO" >&2
+fi
 copy_shared_libraries /usr/bin/install
 copy_shared_libraries /usr/bin/udevadm
 copy_shared_libraries /bin/bash
@@ -506,6 +519,9 @@ fi
 /bin/busybox ip link set lo up
 /bin/busybox mkdir -p /run/winlux /etc/winlux
 /bin/busybox touch /etc/winlux/live-session
+# Alimentation : profil, luminosite, veille sur inactivite, capot, bouton
+# d'alimentation et batterie critique. Remplace logind/upower, sans systemd.
+/usr/bin/winlux --power daemon >/run/winlux/power-daemon.log 2>&1 &
 if ! /bin/busybox grep -q '^winlux-web:' /etc/passwd; then
     browser_uid=1001
     while /bin/busybox awk -F: -v n="$browser_uid" '$3 == n { found=1 } END { exit !found }' /etc/passwd /etc/group; do

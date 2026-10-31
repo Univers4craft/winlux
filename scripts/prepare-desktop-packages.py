@@ -17,11 +17,13 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
             "xfce4-settings", "policykit-1-gnome", "wpasupplicant",
             "pciutils", "usbutils", "linux-firmware", "mesa-vulkan-drivers",
-            "libgl1-mesa-glx", "irqbalance",
+            "libgl1", "libglx-mesa0", "irqbalance",
             # Lecteurs réseau montés comme disques (winlux-drives).
             "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",
             # Voix du Narrateur (Parametres > Accessibilite).
-            "espeak-ng"]
+            "espeak-ng",
+            # Impression : CUPS (pont IPP de winspool), filtres PDF et IPP-over-USB.
+            "cups", "cups-filters", "ipp-usb"]
 
 def main():
     work = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/desktop-components").resolve()
