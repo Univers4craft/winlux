@@ -14,6 +14,8 @@ mod desktop;
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/notifications.rs"]
+mod notifications;
 #[path = "../shell/notepad.rs"]
 mod notepad;
 #[path = "../shell/settings.rs"]
