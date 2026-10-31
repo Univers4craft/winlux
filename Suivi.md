@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **219**
-- À faire ou en cours : **39**
-- Total : **258**
-- Progression : **84.9%**
+- Réalisé : **220**
+- À faire ou en cours : **40**
+- Total : **260**
+- Progression : **84.6%**
 - Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158, presse-papiers Windows ↔ Linux #161)
 
 ## À FAIRE (par priorité)
@@ -88,11 +88,14 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [ ] Traduire toutes les applications en FR/EN/ES/DE : lots #120, #130, #131, #134 et #135 livrés, reste les applis encore en une seule langue (#139).
 - [ ] Traduire réellement l'installateur : choisir English ne traduit aujourd'hui que la barre des étapes (#140).
 - [ ] Glisser-déposer entre applis Windows et Linux (XDND ↔ `WM_DROPFILES`/`IDropTarget`, `DoDragDrop` vers Thunar), suite du pont presse-papiers (#159).
+- [ ] Démarrage sous 10 secondes et mode jeu : temps de démarrage mesuré et affiché livré, restent la réduction des étapes les plus longues (mesure en VM KVM) et le mode jeu (#153).
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
 ## DÉJÀ FAIT
 
 ### Livré par pull requests (fin octobre 2026)
+
+- [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).
 
 - [x] Captures d'écran automatiques et mode machine virtuelle (#156) : `scripts/capture-ui.py` photographie sous Xvfb les 25 pages des Paramètres, le menu Démarrer, les popups, les outils système, Bienvenue et les applis maison PE (bureau, Explorateur, Store, Polices, Planificateur, Pare-feu) ; `scripts/compare-captures.py` les compare à la dernière version verte de master (job CI « Captures d'écran », artefacts `captures-ui` et `captures-ui-diff`, alerte au-delà de 2 % de pixels changés). `winlux-hardware` détecte l'hyperviseur (`/run/winlux/hw/virtual-machine`) et ne compte plus les cartes émulées comme GPU : curseur logiciel conservé, économiseur en GL logiciel, « Suivre la taille de la VM » seulement en VM.
 - [x] coreclr embarqué démarré : répartition SEH x64 (`seh.rs` : RtlVirtualUnwind, RtlUnwindEx, RtlRestoreContext, VEH, tables de fonctions dynamiques), exceptions C++ MSVC de coreclr, tas du GC, thread du finaliseur, System.Private.CoreLib puis `paintdotnet.dll` chargées et code managé exécuté (images relogées sur 64 Kio, VirtualQuery des piles, VerifyVersionInfo, InitializeContext2, locales nommées) (`docs/PAINTNET.md`).
@@ -255,6 +258,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 - [x] Installer le runtime et le lanceur dans un chemin stable (`/usr/bin` par défaut, préfixe et `DESTDIR` configurables), avec association MIME par défaut dans `/etc/xdg/mimeapps.list`; validé dans une racine temporaire par `scripts/test-integration.sh`.
 - [x] Ajouter une procédure de désinstallation propre du binfmt, du MIME et du fichier `.desktop` (`integration/uninstall.sh`, restaure les associations précédentes).
+- [x] Lancement croisé Linux ↔ Windows (#164, `runtime/src/launch.rs`) : un `.exe` lance une appli Linux avec arguments, environnement, dossier courant, code de retour et tubes (`CreatePipe`, `STARTF_USESTDHANDLES`, `PeekNamedPipe`, fin de tube `ERROR_BROKEN_PIPE`, vrai `DuplicateHandle`), recherche du programme comme Windows puis dans le `PATH` Linux, chemins `C:\…` des arguments convertis en chemins Linux, lanceurs `.desktop`, protocoles (`mailto:` → client mail, `steam:`/`magnet:`… → `xdg-open`, `file:///`), `ShellExecuteEx` avec handle de processus. Dans l'autre sens, les chemins Linux donnés à un `.exe` deviennent `C:\…`/`Z:\…` (`WINLUX_KEEP_LINUX_PATHS=1` pour garder les chemins bruts).
 - [x] Gérer les chemins contenant des espaces ou des URI `file://`, les fichiers illisibles et les volumes montés `noexec` (le lanceur lit le fichier au lieu de l’exécuter; le dossier du programme devient le répertoire courant).
 - [x] Définir le comportement du terminal : `winlux --inspect` lit le sous-système PE, `winlux-open` ouvre un terminal (Konsole, GNOME Terminal, XFCE, xterm ou `WINLUX_TERMINAL`) qui reste ouvert pour les programmes console et lance directement les programmes graphiques.
 - [x] Ajouter une détection du fichier `.exe` et des messages d’erreur graphiques (kdialog, zenity, notify-send, xmessage) ou textuels adaptés.

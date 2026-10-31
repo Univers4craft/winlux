@@ -3,6 +3,7 @@
 mod admin;
 mod archive;
 mod audio;
+mod boottime;
 mod clipbridge;
 mod clr;
 mod cpu;
@@ -12,6 +13,7 @@ mod dlls;
 mod firewall;
 mod gpu;
 mod imaging;
+mod launch;
 mod loader;
 pub mod log;
 mod managed;
@@ -59,6 +61,10 @@ fn main() {
     if exe == "--power" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(power::cli::main(&rest));
+    }
+    if exe == "--boot-time" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(boottime::cli(&rest));
     }
     if exe == "--clipboard-bridge" {
         std::process::exit(clipbridge::run());
@@ -162,7 +168,7 @@ fn main() {
     );
     cpu::apply_launch(&cpu_settings, &image.import_names());
     dlls::kernel32::init();
-    process::init_process(&image, &rest);
+    process::init_process(&image, &launch::windows_args(&rest));
     process::run(image);
 }
 
