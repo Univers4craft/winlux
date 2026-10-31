@@ -270,6 +270,12 @@ perform() {
             /usr/bin/winlux-close-session || return
             sync || return
             "$action" ;;
+        journal-status|journal-list|journal-errors|journal-crashes|journal-clear|journal-rotate)
+            winlux-journal "${action#journal-}" "$2" ;;
+        journal-export) winlux-journal export "$2" ;;
+        restore-create) winlux-restore create "$2" ;;
+        restore-list|restore-status) winlux-restore "${action#restore-}" ;;
+        restore-restore|restore-delete) winlux-restore "${action#restore-}" "$2" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
     esac
 }

@@ -309,7 +309,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 30] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 32] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
             (b"\xC9\x64iteur", b"mousepad", 1),
@@ -340,6 +340,8 @@ fn init_apps() {
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
             (b"Gestionnaire des t\xE2ches", b"taskmgr", 9),
             (b"Nettoyage de disque", b"diskcleaner", 9),
+            (b"Observateur d'\xE9v\xE9nements", b"eventviewer", 9),
+            (b"Restauration syst\xE8me", b"restore", 9),
         ];
         for (name, exec, cat) in apps.iter() {
             if ALL_APPS_COUNT < 64 {
@@ -1290,6 +1292,8 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(wm::APP_DISKMGR) => Glyph::Drive,
+            Some(wm::APP_EVENTVIEWER) => Glyph::Details,
+            Some(wm::APP_RESTORE) => Glyph::Refresh,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1606,6 +1610,14 @@ unsafe fn launch(what: Launch) {
             }
             if cmd == b"diskmgr" {
                 wm::open(wm::APP_DISKMGR);
+                return;
+            }
+            if cmd == b"eventviewer" {
+                wm::open(wm::APP_EVENTVIEWER);
+                return;
+            }
+            if cmd == b"restore" {
+                wm::open(wm::APP_RESTORE);
                 return;
             }
             let mut wcmd = [0u16; 256];
