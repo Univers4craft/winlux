@@ -620,6 +620,7 @@ unsafe fn walk(w: &mut Walk) {
         },
         summary.get(),
     );
+    boot_section(w);
 
     if cap(b"cap_freq") {
         w.header(t(b"Fr\xE9quences en temps r\xE9el", b"Live frequencies"));
@@ -797,6 +798,57 @@ unsafe fn walk(w: &mut Walk) {
     }
 
     program_section(w);
+}
+
+/// Durée en secondes avec une décimale (« 8,4 s », « 8.4 s » en anglais).
+fn push_seconds(l: &mut Line, ms: u32) {
+    let tenths = (ms + 50) / 100;
+    l.num(tenths / 10)
+        .push(if lang() == 1 { b"." } else { b"," })
+        .num(tenths % 10)
+        .push(b" s");
+}
+
+fn boot_step_label(key: &[u8]) -> &'static [u8] {
+    match key {
+        b"init" => t(b"Noyau et micrologiciel", b"Kernel and firmware"),
+        b"recovery" => t(b"V\xE9rification du syst\xE8me", b"System check"),
+        b"drivers" => t(b"Pilotes", b"Drivers"),
+        b"hardware" => t(b"D\xE9tection du mat\xE9riel", b"Hardware detection"),
+        b"services" => t(b"Services", b"Services"),
+        b"xorg" => t(b"Affichage", b"Display"),
+        b"session" => t(b"Session", b"Session"),
+        b"desktop" => t(b"Bureau", b"Desktop"),
+        _ => b"?",
+    }
+}
+
+/// Temps du dernier démarrage, mesuré par l'init (`winlux --boot-time`).
+/// Absent tant qu'aucun démarrage complet n'a été mesuré.
+unsafe fn boot_section(w: &mut Walk) {
+    if info(b"boot_known") != b"1" {
+        return;
+    }
+    w.header(t(b"Temps de d\xE9marrage", b"Startup time"));
+    let mut l = Line::new();
+    push_seconds(&mut l, num(info(b"boot_total_ms")));
+    if !info(b"boot_previous_ms").is_empty() {
+        l.push(t(b"  (pr\xE9c\xE9dent ", b"  (previous "));
+        push_seconds(&mut l, num(info(b"boot_previous_ms")));
+        l.push(b")");
+    }
+    w.row(t(b"Dernier d\xE9marrage", b"Last startup"), l.get());
+    let slowest = info(b"boot_slowest");
+    if !slowest.is_empty() {
+        let mut l = Line::new();
+        l.push(boot_step_label(slowest)).push(t(b" : ", b": "));
+        push_seconds(&mut l, num(info(b"boot_slowest_ms")));
+        w.row(t(b"\xC9tape la plus longue", b"Longest step"), l.get());
+    }
+    w.note(t(
+        b"Mesur\xE9 de l'allumage jusqu'au lancement du bureau.",
+        b"Measured from power-on to the desktop starting.",
+    ));
 }
 
 unsafe fn program_section(w: &mut Walk) {
@@ -1236,6 +1288,12 @@ pub unsafe fn regression_checks() {
             && EXE_NUMA == 1,
         "Processeur : le profil du programme est relu"
     );
+    let mut l = Line::new();
+    push_seconds(&mut l, 8_460);
+    check!(
+        l.get() == b"8,5 s" || l.get() == b"8.5 s",
+        "Processeur : temps de demarrage arrondi au dixieme"
+    );
     reset_program();
     INFO = saved;
     INFO_LEN = saved_len;
@@ -1246,6 +1304,25 @@ pub unsafe fn regression_checks() {
 /// `(français, anglais, espagnol, allemand)`, retrouvées par le couple
 /// français/anglais passé à `t`.
 const CPU_TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    // Temps de démarrage.
+    (b"Noyau et micrologiciel", b"Kernel and firmware", b"N\xFAcleo y firmware", b"Kernel und Firmware"),
+    (b"V\xE9rification du syst\xE8me", b"System check", b"Comprobaci\xF3n del sistema", b"Systempr\xFCfung"),
+    (b"Pilotes", b"Drivers", b"Controladores", b"Treiber"),
+    (b"D\xE9tection du mat\xE9riel", b"Hardware detection", b"Detecci\xF3n del hardware", b"Hardwareerkennung"),
+    (b"Services", b"Services", b"Servicios", b"Dienste"),
+    (b"Affichage", b"Display", b"Pantalla", b"Anzeige"),
+    (b"Session", b"Session", b"Sesi\xF3n", b"Sitzung"),
+    (b"Bureau", b"Desktop", b"Escritorio", b"Desktop"),
+    (b"Temps de d\xE9marrage", b"Startup time", b"Tiempo de arranque", b"Startzeit"),
+    (b"  (pr\xE9c\xE9dent ", b"  (previous ", b"  (anterior ", b"  (vorher "),
+    (b"Dernier d\xE9marrage", b"Last startup", b"\xDAltimo arranque", b"Letzter Start"),
+    (b"\xC9tape la plus longue", b"Longest step", b"Paso m\xE1s largo", b"L\xE4ngster Schritt"),
+    (
+        b"Mesur\xE9 de l'allumage jusqu'au lancement du bureau.",
+        b"Measured from power-on to the desktop starting.",
+        b"Medido desde el encendido hasta el inicio del escritorio.",
+        b"Gemessen vom Einschalten bis zum Start des Desktops.",
+    ),
     (
         b"Autoris\xE9",
         b"Allowed",
