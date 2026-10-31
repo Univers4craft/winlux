@@ -66,6 +66,8 @@ pub unsafe fn native_init() {
         APP_FIREWALL
     } else if n == 7 && mode[..7] == b"taskmgr".map(|c| c as i8) {
         APP_TASKMGR
+    } else if n == 7 && mode[0] == b'w' as i8 {
+        APP_WELCOME
     } else {
         usize::MAX
     };
@@ -86,6 +88,8 @@ pub unsafe fn native_init() {
         crate::store::open();
     } else if NATIVE_APP == APP_FONTS {
         crate::fonts::open();
+    } else if NATIVE_APP == APP_WELCOME {
+        crate::welcome::open();
     } else if NATIVE_APP == APP_SETTINGS {
         let mut page = [0i8; 8];
         let n = GetEnvironmentVariableA(c"WINLUX_SETTINGS_PAGE".as_ptr(), page.as_mut_ptr(), 8);
@@ -107,6 +111,7 @@ pub unsafe fn native_launch(app: usize) {
         APP_TASKSCHD => c"taskschd",
         APP_FIREWALL => c"firewall",
         APP_TASKMGR => c"taskmgr",
+        APP_WELCOME => c"welcome",
         _ => c"editor",
     };
     ShellExecuteA(

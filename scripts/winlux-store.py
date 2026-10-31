@@ -14,6 +14,9 @@ Commandes (écrites par le shell via ShellExecute, résultats dans $run) :
   details <clé>       fiche complète d'un logiciel -> store-detail.txt
   install|remove|update <clé>, update-all, install-file <fichier>
                       avancement                   -> store-progress.txt
+  starter --list | --resume | <id>...
+                      logiciels courants de l'appli Bienvenue, installés
+                      l'un après l'autre avec reprise -> starter.txt
 Une clé est « source:référence », par exemple apt:vlc ou flatpak:org.gimp.GIMP.
 
 Le Store n'utilise que les outils standards (apt-get, flatpak, snap) avec
@@ -1660,18 +1663,21 @@ def details(key):
     return 0
 
 class Progress:
-    def __init__(self, op, target):
-        self.op, self.target = op, target
+    def __init__(self, op, target, hook=None):
+        self.op, self.target, self.hook = op, target, hook
 
     def __call__(self, percent, message, state="running"):
+        percent = max(0, min(100, int(percent)))
         atomic_write(RUN / "store-progress.txt",
                      f"op={self.op}\ntarget={field(self.target)}\nstate={state}\n"
-                     f"percent={max(0, min(100, int(percent)))}\nmessage={field(message, 200)}\n")
+                     f"percent={percent}\nmessage={field(message, 200)}\n")
+        if self.hook:
+            self.hook(percent)
 
 MESSAGES = {126: "admin", 7: "offline", 8: "win32", 5: "sha"}
 
-def operate(action, target):
-    progress = Progress(action, target)
+def operate(action, target, hook=None, reindex=True, known=""):
+    progress = Progress(action, target, hook)
     lock = RUN / "store.lock"
     try:
         lock.mkdir(parents=True)
@@ -1690,6 +1696,11 @@ def operate(action, target):
                     code = s.update_all(progress) or code
         else:
             src, app = find(target)
+            if app is None and known and action == "install":
+                # Paquet hors de l'index (logiciels courants de Bienvenue) : la
+                # source l'installe directement d'après sa référence.
+                src = SOURCE_BY_NAME.get(target.partition(":")[0])
+                app = App(src.name, target.partition(":")[2], known) if src else None
             if app is None:
                 progress(0, tr("unknown", target=target), "error")
                 return 2
@@ -1708,8 +1719,9 @@ def operate(action, target):
     finally:
         lock.rmdir()
         try:
-            sources, apps = collect(False)
-            write_index(sources, apps, False)
+            if reindex:
+                sources, apps = collect(False)
+                write_index(sources, apps, False)
         except Exception:
             pass
 
@@ -1740,6 +1752,209 @@ def install_file(target, progress):
         return SOURCE_BY_NAME["flatpak"].flatpak(["install", "--from", str(path)], progress)
     return 6
 
+# ---------------------------------------------------------------------------
+# Logiciels courants (appli Bienvenue) : installation groupée avec reprise
+# ---------------------------------------------------------------------------
+
+# Identifiant Bienvenue -> clés candidates, dans l'ordre de préférence. Un
+# logiciel sans aucune clé utilisable sur la machine n'est pas proposé.
+# Aucun produit Microsoft ici (règle Winlux).
+STARTER = [
+    ("firefox", ["apt:firefox", "flatpak:org.mozilla.firefox", "apt:firefox-esr"]),
+    ("libreoffice", ["apt:libreoffice", "flatpak:org.libreoffice.LibreOffice"]),
+    ("vlc", ["apt:vlc", "flatpak:org.videolan.VLC"]),
+    ("thunderbird", ["apt:thunderbird", "flatpak:org.mozilla.Thunderbird"]),
+    ("gimp", ["apt:gimp", "flatpak:org.gimp.GIMP"]),
+    ("7zip", ["apt:7zip", "apt:p7zip-full"]),
+    ("keepassxc", ["apt:keepassxc", "flatpak:org.keepassxc.KeePassXC"]),
+    ("geany", ["apt:geany", "flatpak:org.geany.Geany"]),
+    ("obs", ["apt:obs-studio", "flatpak:com.obsproject.Studio"]),
+    ("notepadpp", ["windows:scoop-extras/notepadplusplus"]),
+]
+STARTER_IDS = [ident for ident, _ in STARTER]
+STARTER_NAMES = {"firefox": "Firefox", "libreoffice": "LibreOffice", "vlc": "VLC", "thunderbird": "Thunderbird",
+                 "gimp": "GIMP", "7zip": "7-Zip", "keepassxc": "KeePassXC", "geany": "Geany",
+                 "obs": "OBS Studio", "notepadpp": "Notepad++"}
+STARTER_QUEUE = DATA / "winlux/starter-queue.txt"
+
+
+def starter_resolve():
+    """Clé retenue et état (i installé, a disponible) de chaque logiciel."""
+    apt, fp, win = SOURCE_BY_NAME["apt"], SOURCE_BY_NAME["flatpak"], SOURCE_BY_NAME["windows"]
+    apt_ok = apt.available()
+    apt_inst = apt.installed() if apt_ok else {}
+    pkgs = [k[4:] for _, keys in STARTER for k in keys if k.startswith("apt:")]
+    cands = apt.candidates([p for p in pkgs if p not in apt_inst]) if apt_ok else {}
+    fp_ok = have("flatpak") and fp.available()
+    fp_inst = fp.installed() if fp_ok else {}
+    remotes = fp.remotes() if fp_ok else []
+    win_state = load_json(STATE, {}).get("windows", {})
+    win_refs = None
+
+    def installed(key):
+        source, _, ref = key.partition(":")
+        return (source == "apt" and ref in apt_inst or source == "flatpak" and ref in fp_inst
+                or source == "windows" and bool((win_state.get(ref) or {}).get("version")))
+
+    def available(key):
+        nonlocal win_refs
+        source, _, ref = key.partition(":")
+        if source == "apt":
+            # Paquet de transition vers Snap (firefox d'Ubuntu) : inutile sans snapd.
+            cand = cands.get(ref, "")
+            return bool(cand) and ("snap" not in cand or have("snap"))
+        if source == "flatpak" and fp_ok:
+            return any(run(["flatpak", "remote-info", "--cached", remote, ref], 20)[0] == 0
+                       for remote in remotes)
+        if source == "windows":
+            if win_refs is None:
+                try:
+                    win_refs = {a.ref for a in win.apps()} if win.available() else set()
+                except Exception:
+                    win_refs = set()
+            return ref in win_refs
+        return False
+
+    icons = {}
+    for entry in load_json(CACHE / "index.json", []):
+        icon = entry.get("icon", "")
+        if icon.startswith("/") and icon.lower().endswith(".png") and os.path.exists(icon):
+            icons[f"{entry.get('source')}:{entry.get('ref')}"] = icon
+    result = {}
+    for ident, keys in STARTER:
+        key = next((k for k in keys if installed(k)), None)
+        state = "i"
+        if key is None:
+            key, state = next((k for k in keys if available(k)), None), "a"
+        if key:
+            result[ident] = (key, state, icons.get(key, ""))
+    return result
+
+
+def starter_queue():
+    try:
+        return [l.strip() for l in STARTER_QUEUE.read_text().splitlines() if l.strip() in STARTER_IDS]
+    except OSError:
+        return []
+
+
+def starter_save_queue(queue):
+    if queue:
+        atomic_write(STARTER_QUEUE, "\n".join(queue) + "\n")
+    elif STARTER_QUEUE.exists():
+        STARTER_QUEUE.unlink()
+
+
+def starter_failed():
+    try:
+        return set((RUN / "starter-failed.txt").read_text().split())
+    except OSError:
+        return set()
+
+
+def starter_worker_alive():
+    try:
+        pid = int((RUN / "starter.lock" / "pid").read_text())
+        return pid == os.getpid() or os.path.exists(f"/proc/{pid}")
+    except (OSError, ValueError):
+        return False
+
+
+def starter_write(resolved, current="", percent=0):
+    """État relu par l'appli Bienvenue (Z:\\run\\winlux\\starter.txt) :
+    app=<id>|<i installé, a disponible, w en attente, r en cours, f échec>|<%>|<icône>|<source>."""
+    queue, failed = starter_queue(), starter_failed()
+    lines = [f"busy={int(bool(current) or bool(queue) and starter_worker_alive())}"]
+    for ident in STARTER_IDS:
+        if ident not in resolved:
+            continue
+        key, state, icon = resolved[ident]
+        pct = 100 if state == "i" else 0
+        if state != "i":
+            if ident == current:
+                state, pct = "r", percent
+            elif ident in queue:
+                state = "w"
+            elif ident in failed:
+                state = "f"
+        source = SOURCE_BY_NAME[key.split(":", 1)[0]].label
+        lines.append(f"app={ident}|{state}|{pct}|{field(icon, 250)}|{source}")
+    atomic_write(RUN / "starter.txt", "\n".join(lines) + "\n")
+
+
+def starter_run():
+    """Installe la file d'attente une application à la fois. La file vit dans
+    le dossier de l'utilisateur : fermée ou interrompue (fin de session), elle
+    reprend à la session suivante (« starter --resume »)."""
+    lock = RUN / "starter.lock"
+    while True:
+        try:
+            lock.mkdir(parents=True)
+        except FileExistsError:
+            if starter_worker_alive():
+                return 0  # un autre processus traite déjà la file
+            shutil.rmtree(lock, ignore_errors=True)
+            continue
+        (lock / "pid").write_text(str(os.getpid()))
+        installed_any = False
+        try:
+            resolved = starter_resolve()
+            starter_write(resolved)
+            while True:
+                queue = starter_queue()
+                if not queue:
+                    break
+                ident = queue[0]
+                entry = resolved.get(ident)
+                if entry and entry[1] != "i":
+                    # Le Store installe déjà autre chose : on attend son tour.
+                    waited = 0
+                    while (RUN / "store.lock").exists() and waited < 3600:
+                        time.sleep(3)
+                        waited += 3
+                    starter_write(resolved, ident, 0)
+                    code = operate("install", entry[0], hook=lambda pct, i=ident: starter_write(resolved, i, pct),
+                                   reindex=False, known=STARTER_NAMES.get(ident, ident))
+                    failed = starter_failed()
+                    if code == 0:
+                        failed.discard(ident)
+                        installed_any = True
+                    else:
+                        failed.add(ident)
+                    atomic_write(RUN / "starter-failed.txt", " ".join(sorted(failed)) + "\n")
+                starter_save_queue([i for i in starter_queue() if i != ident])
+                resolved = starter_resolve()
+                starter_write(resolved)
+        finally:
+            shutil.rmtree(lock, ignore_errors=True)
+        # Une demande arrivée pendant la libération du verrou est reprise.
+        if not starter_queue():
+            break
+    starter_write(starter_resolve())
+    if installed_any:
+        try:
+            sources, apps = collect(False)
+            write_index(sources, apps, False)
+        except Exception:
+            pass
+    return 0
+
+
+def starter(args):
+    if args == ["--list"]:
+        if not starter_worker_alive():
+            starter_write(starter_resolve())
+        return 0
+    if args != ["--resume"]:
+        queue = starter_queue()
+        queue += [i for i in args if i in STARTER_IDS and i not in queue]
+        starter_save_queue(queue)
+        failed = starter_failed() - set(args)
+        atomic_write(RUN / "starter-failed.txt", " ".join(sorted(failed)) + "\n")
+    if not starter_queue():
+        return 0
+    return starter_run()
+
 def main(argv):
     RUN.mkdir(parents=True, exist_ok=True)
     action = argv[1] if len(argv) > 1 else "refresh"
@@ -1748,6 +1963,8 @@ def main(argv):
         return refresh("--force" in argv)
     if action == "details":
         return details(target)
+    if action == "starter":
+        return starter(argv[2:])
     if action == "sources":
         for s in SOURCES:
             print(f"{s.name}\t{int(s.available())}")

@@ -772,6 +772,69 @@ pub extern "C" fn mainCRTStartup() -> ! {
             CloseHandle(env_child.thread);
             CloseHandle(env_child.process);
         }
+        // Lancement croisé : un .exe lit la sortie d'une commande Linux par un
+        // tube, et un chemin Windows devient un chemin Linux pour elle.
+        let mut pipe_r: Handle = null_mut();
+        let mut pipe_w: Handle = null_mut();
+        let piped = CreatePipe(&mut pipe_r, &mut pipe_w, null_mut(), 0) != 0;
+        let mut piped_startup: StartupInfoA = core::mem::zeroed();
+        piped_startup.cb = core::mem::size_of::<StartupInfoA>() as u32;
+        piped_startup.flags = 0x100;
+        piped_startup.std_output = pipe_w;
+        piped_startup.std_error = pipe_w;
+        let mut piped_child: ProcessInformation = core::mem::zeroed();
+        let piped_launched = piped
+            && CreateProcessA(
+                null_mut(),
+                c"sh -c \"echo linux:$1\" x Z:\\etc".as_ptr(),
+                null_mut(),
+                null_mut(),
+                1,
+                0x0800_0000,
+                null_mut(),
+                null_mut(),
+                &piped_startup,
+                &mut piped_child,
+            ) != 0;
+        if piped {
+            CloseHandle(pipe_w);
+        }
+        let mut captured = [0u8; 64];
+        let mut captured_len = 0usize;
+        let mut ended_with_broken_pipe = false;
+        if piped_launched {
+            loop {
+                let mut got = 0u32;
+                let room = (captured.len() - captured_len) as u32;
+                if room == 0 {
+                    break;
+                }
+                if ReadFile(
+                    pipe_r,
+                    captured.as_mut_ptr().add(captured_len),
+                    room,
+                    &mut got,
+                    null_mut(),
+                ) == 0
+                {
+                    ended_with_broken_pipe = GetLastError() == 109;
+                    break;
+                }
+                captured_len += got as usize;
+            }
+            WaitForSingleObject(piped_child.process, 5_000);
+            CloseHandle(piped_child.thread);
+            CloseHandle(piped_child.process);
+        }
+        if piped {
+            CloseHandle(pipe_r);
+        }
+        check!(
+            piped_launched
+                && ended_with_broken_pipe
+                && &captured[..captured_len] == b"linux:/etc\n",
+            "CreatePipe + STARTF_USESTDHANDLES : sortie d'une commande Linux lue par le .exe"
+        );
         let app_w = [
             b'/' as u16,
             b'b' as u16,
