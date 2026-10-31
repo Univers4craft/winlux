@@ -1,0 +1,32 @@
+# Fichier de réponse Winlux (installation silencieuse) — voir docs/AUTOINSTALL.md
+# Copiez-le à la racine de la clé USB sous le nom winlux-autoinstall.yaml,
+# ou construisez l'ISO avec WINLUX_AUTOINSTALL=/chemin/vers/ce-fichier.yaml.
+version: 1
+
+# true : l'installation démarre seule, sans aucun clic. Exige langue, licence,
+# disque et compte. false : seules les pages renseignées ici sont sautées.
+unattended: false
+reboot: true
+
+language: fr_FR
+keyboard: fr
+timezone: Europe/Paris
+license_accepted: true
+
+partitioning:
+  mode: full        # disque entier effacé (seul mode disponible)
+  disk: auto        # « auto » = l'unique disque éligible, sinon /dev/sda, /dev/nvme0n1...
+
+# Compte local uniquement : aucun compte en ligne, aucune connexion à un service.
+account:
+  hostname: poste-01
+  fullname: Utilisateur Winlux
+  username: winlux
+  # Empreinte générée avec : openssl passwd -6   (préférable à un mot de passe en clair)
+  password_hash: "$6$exemple$ChangezMoiAvecOpensslPasswd6"
+  autologin: false
+
+# Installés au premier démarrage, dès que le réseau est disponible.
+packages:
+  - vlc
+  - gimp
