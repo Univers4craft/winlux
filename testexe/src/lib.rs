@@ -979,6 +979,93 @@ extern "C" {
     pub fn GetClipboardData(format: u32) -> usize;
 }
 
+// Spooler d'impression (`winspool.drv`) : API Win32 et extensions Winlux
+// utilisées par la page « Imprimantes et scanners » des Paramètres.
+#[link(name = "winspool.drv", kind = "raw-dylib", modifiers = "+verbatim")]
+extern "system" {
+    pub fn EnumPrintersW(
+        flags: u32,
+        name: *const u16,
+        level: u32,
+        buf: *mut u8,
+        cb: u32,
+        needed: *mut u32,
+        returned: *mut u32,
+    ) -> i32;
+    pub fn GetDefaultPrinterW(buf: *mut u16, size: *mut u32) -> i32;
+    pub fn SetDefaultPrinterW(name: *const u16) -> i32;
+    pub fn OpenPrinterW(name: *const u16, printer: *mut Handle, defaults: *const c_void) -> i32;
+    pub fn ClosePrinter(printer: Handle) -> i32;
+    pub fn StartDocPrinterW(printer: Handle, level: u32, info: *const c_void) -> u32;
+    pub fn StartPagePrinter(printer: Handle) -> i32;
+    pub fn WritePrinter(printer: Handle, buf: *const u8, len: u32, written: *mut u32) -> i32;
+    pub fn EndPagePrinter(printer: Handle) -> i32;
+    pub fn EndDocPrinter(printer: Handle) -> i32;
+    pub fn DeletePrinter(printer: Handle) -> i32;
+    pub fn SetPrinterW(printer: Handle, level: u32, info: *const u8, command: u32) -> i32;
+    pub fn EnumJobsW(
+        printer: Handle,
+        first: u32,
+        count: u32,
+        level: u32,
+        buf: *mut u8,
+        cb: u32,
+        needed: *mut u32,
+        returned: *mut u32,
+    ) -> i32;
+    pub fn SetJobW(printer: Handle, job: u32, level: u32, info: *const u8, command: u32) -> i32;
+    pub fn DeviceCapabilitiesW(
+        device: *const u16,
+        port: *const u16,
+        capability: u16,
+        output: *mut u8,
+        devmode: *const u8,
+    ) -> i32;
+    pub fn DocumentPropertiesW(
+        hwnd: Handle,
+        printer: Handle,
+        device: *const u16,
+        output: *mut u8,
+        input: *const u8,
+        mode: u32,
+    ) -> i32;
+    pub fn WinluxDiscoverPrintersW(buf: *mut u16, cap: u32) -> u32;
+    pub fn WinluxAddPrinterW(name: *const u16, uri: *const u16) -> i32;
+    pub fn WinluxPrintStatusW(buf: *mut u16, cap: u32) -> u32;
+    pub fn WinluxPrintTestPageW(name: *const u16) -> i32;
+}
+
+/// `DOCINFOW` (gdi32 `StartDocW`).
+#[repr(C)]
+pub struct DocInfoW {
+    pub size: i32,
+    pub doc_name: *const u16,
+    pub output: *const u16,
+    pub datatype: *const u16,
+    pub flags: u32,
+}
+
+#[link(name = "gdi32", kind = "raw-dylib")]
+extern "system" {
+    pub fn CreateDCW(
+        driver: *const u16,
+        device: *const u16,
+        output: *const u16,
+        devmode: *const u8,
+    ) -> Handle;
+    pub fn StartDocW(dc: Handle, info: *const DocInfoW) -> i32;
+    pub fn StartPage(dc: Handle) -> i32;
+    pub fn EndPage(dc: Handle) -> i32;
+    pub fn EndDoc(dc: Handle) -> i32;
+    pub fn GetDeviceCaps(dc: Handle, index: i32) -> i32;
+}
+
+#[link(name = "comdlg32", kind = "raw-dylib")]
+extern "system" {
+    pub fn PrintDlgW(pd: *mut u8) -> i32;
+    pub fn CommDlgExtendedError() -> u32;
+}
+
 #[link(name = "msvcrt", kind = "raw-dylib")]
 extern "C" {
     pub fn printf(fmt: *const c_char, ...) -> i32;

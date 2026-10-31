@@ -25,6 +25,7 @@ pub const OP_CUPS_DELETE_PRINTER: u16 = 0x4004;
 pub const OP_CUPS_ACCEPT_JOBS: u16 = 0x4008;
 pub const OP_CUPS_SET_DEFAULT: u16 = 0x400A;
 pub const OP_CUPS_GET_DEVICES: u16 = 0x400B;
+pub const OP_CUPS_GET_PPDS: u16 = 0x400C;
 
 // ---------- Étiquettes de groupe et de valeur ----------
 
@@ -900,12 +901,13 @@ impl Client {
         self.printer_op(OP_CUPS_SET_DEFAULT, printer)
     }
 
-    /// Crée (ou modifie) une file pilotée sans pilote (« everywhere », IPP
-    /// Everywhere/AirPrint) vers `device_uri`, puis l'active.
+    /// Crée (ou modifie) une file vers `device_uri` avec le pilote `ppd`
+    /// (`everywhere` = IPP Everywhere/AirPrint sans pilote), puis l'active.
     pub fn add_printer(
         &self,
         printer: &str,
         device_uri: &str,
+        ppd: &str,
         info: &str,
         location: &str,
     ) -> Result<(), IppError> {
@@ -916,7 +918,7 @@ impl Client {
             uri(&self.printer_uri(printer)),
         );
         m.add(TAG_OPERATION, "requesting-user-name", name(&user_name()));
-        m.add(TAG_OPERATION, "ppd-name", name("everywhere"));
+        m.add(TAG_OPERATION, "ppd-name", name(ppd));
         m.add(TAG_PRINTER, "device-uri", uri(device_uri));
         m.add(TAG_PRINTER, "printer-info", text_value(info));
         m.add(TAG_PRINTER, "printer-location", text_value(location));
@@ -933,6 +935,33 @@ impl Client {
         Ok(())
     }
 
+    /// Pilote CUPS le mieux adapté à un modèle (`CUPS-Get-PPDs`), à partir de
+    /// l'identifiant IEEE 1284 et/ou du nom « fabricant modèle ».
+    pub fn find_driver(
+        &self,
+        make_model: &str,
+        device_id: &str,
+    ) -> Result<Option<String>, IppError> {
+        let mut m = self.request(OP_CUPS_GET_PPDS);
+        m.add(TAG_OPERATION, "limit", Value::Integer(1));
+        if !device_id.is_empty() {
+            m.add(TAG_OPERATION, "ppd-device-id", text_value(device_id));
+        }
+        if !make_model.is_empty() {
+            m.add(TAG_OPERATION, "ppd-make-and-model", text_value(make_model));
+        }
+        m.add_values(
+            TAG_OPERATION,
+            "requested-attributes",
+            vec![keyword("ppd-name"), keyword("ppd-make-and-model")],
+        );
+        let reply = self.send("/", &m)?;
+        let found = reply
+            .groups(TAG_PRINTER)
+            .find_map(|g| g.str("ppd-name").map(str::to_string));
+        Ok(found)
+    }
+
     /// Périphériques détectés par CUPS (USB, réseau via DNS-SD…).
     pub fn devices(&self, timeout_s: i32) -> Result<Vec<Device>, IppError> {
         let mut m = self.request(OP_CUPS_GET_DEVICES);
@@ -945,6 +974,7 @@ impl Client {
             .filter_map(|g| {
                 let uri = g.str("device-uri")?.to_string();
                 Some(Device {
+                    device_id: g.str("device-id").unwrap_or_default().to_string(),
                     class: g.str("device-class").unwrap_or_default().to_string(),
                     info: g.str("device-info").unwrap_or_default().to_string(),
                     make_model: g
@@ -963,6 +993,8 @@ impl Client {
 /// Imprimante détectée mais pas encore installée.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Device {
+    /// Identifiant IEEE 1284 (`MFG:…;MDL:…;`), pour choisir le pilote.
+    pub device_id: String,
     pub class: String,
     pub info: String,
     pub make_model: String,
@@ -974,6 +1006,14 @@ impl Device {
     pub fn is_usb(&self) -> bool {
         self.uri.starts_with("usb:") || self.uri.starts_with("parallel:")
     }
+}
+
+/// Vrai pour une adresse IPP (pilotée sans pilote par « everywhere »).
+pub fn is_ipp_uri(uri: &str) -> bool {
+    let lower = uri.to_ascii_lowercase();
+    lower.starts_with("ipp://")
+        || lower.starts_with("ipps://")
+        || (lower.starts_with("dnssd://") && lower.contains("._ipp"))
 }
 
 /// Options de travail traduites depuis le DEVMODE Windows.

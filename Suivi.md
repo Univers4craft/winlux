@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **124**
+- Réalisé : **129**
 - À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Total : **155**
+- Progression : **83.2%**
 
 ## À FAIRE (par priorité)
 
@@ -157,6 +157,11 @@
 - [x] Décoder MP3 et AAC ADTS mono/stéréo dans PlaySound, tester limites mémoire, concurrence et sortie ALSA null ; inclure les bibliothèques dans l'ISO.
 - [x] Exécuter de vrais programmes C compilés par MinGW-w64 : démarrage de la CRT msvcrt (`__getmainargs`, `_initterm`, constructeurs globaux, `atexit`/`_onexit`, `_iob`/`__iob_func`), `_errno`, verrous `_lock`, environnement, temps (`time`, `localtime`, `strftime`, `clock`), `rand` Microsoft, E/S bas niveau `_open`/`_read`/`_write`, signaux, `_beginthreadex`; compléments kernel32 (console, pages de code, `GetEnvironmentStrings`, `FormatMessage`, `lstr*`, `RaiseException`…). Vérifié par `testc/mingw_suite.c` (40 contrôles) en CI.
 - [x] Documenter explicitement les limites : 64 bits uniquement, absence de noyau Windows et compatibilité API partielle.
+- [x] Impression : `winspool.drv` maison (OpenPrinter, StartDocPrinter/WritePrinter/EndDocPrinter, EnumPrinters 1/2/4/5/6/8/9, GetPrinter, SetPrinter, Get/SetDefaultPrinter, AddPrinter, DeletePrinter, EnumJobs, GetJob, SetJob, DeviceCapabilities, DocumentProperties) avec imprimante virtuelle « Imprimer en PDF (Winlux) ».
+- [x] Impression : pont CUPS par protocole IPP écrit de zéro (socket Unix ou TCP, PeerCred) : découverte des files, imprimante par défaut, envoi des travaux, file d'attente, annulation, ajout IPP Everywhere ou pilote CUPS, détection USB/réseau. Validé contre un vrai `cupsd` (`WINLUX_TEST_CUPS=1 cargo test -p winlux cups_reel -- --ignored`).
+- [x] Impression : DC imprimante GDI (`CreateDC`/`CreateIC`, `StartDoc`, `StartPage`, `EndPage`, `EndDoc`, `AbortDoc`, `SetAbortProc`, `ResetDC`, `Escape`, `GetDeviceCaps`) rendu en PDF (texte en polices standard, formes, images RunLength). Test PE `print_suite`.
+- [x] Impression : boîtes `PrintDlg`, `PrintDlgEx`, `PageSetupDlg` natives au thème Windows 11 (aperçu, imprimante, copies, orientation, pages, papier, couleur, qualité, recto verso) ; `WINLUX_PRINTDLG=accept` sans affichage.
+- [x] Impression : page Paramètres › Imprimantes et scanners (liste, imprimante par défaut, page de test, suppression, file d'attente avec annulation, recherche USB/réseau, ajout par adresse) ; CUPS ajouté aux paquets du bureau de l'ISO.
 
 ### Priorité 3 — Double-clic et intégration Linux
 

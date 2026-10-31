@@ -588,6 +588,28 @@ pub fn set_default(name: &str) -> bool {
     ok
 }
 
+/// Périphériques vus à la dernière détection (pour retrouver leur pilote).
+static DISCOVERED: Mutex<Vec<ipp::Device>> = Mutex::new(Vec::new());
+
+/// Pilote à utiliser pour `uri` : IPP Everywhere pour les imprimantes IPP,
+/// sinon le pilote CUPS correspondant au modèle détecté (ou PostScript générique).
+fn driver_for(c: &Client, uri: &str) -> Result<String, String> {
+    if ipp::is_ipp_uri(uri) {
+        return Ok("everywhere".into());
+    }
+    let known = lock(&DISCOVERED).iter().find(|d| d.uri == uri).cloned();
+    if let Some(d) = known {
+        if let Ok(Some(ppd)) = c.find_driver(&d.make_model, &d.device_id) {
+            return Ok(ppd);
+        }
+    }
+    match c.find_driver("Generic PostScript Printer", "") {
+        Ok(Some(ppd)) => Ok(ppd),
+        Ok(None) => Err("aucun pilote CUPS ne convient à cette imprimante".into()),
+        Err(e) => Err(e.to_string()),
+    }
+}
+
 /// Ajoute une file CUPS vers `uri` (réseau `ipp://…`, USB `usb://…`).
 pub fn add_printer(name: &str, uri: &str, info: &str, location: &str) -> Result<(), String> {
     let name: String = name
@@ -607,7 +629,8 @@ pub fn add_printer(name: &str, uri: &str, info: &str, location: &str) -> Result<
         return Err("adresse d'imprimante invalide".into());
     }
     let c = client().ok_or("CUPS est désactivé")?;
-    let result = c.add_printer(&name, uri, info, location);
+    let ppd = driver_for(&c, uri)?;
+    let result = c.add_printer(&name, uri, &ppd, info, location);
     invalidate_cache();
     result.map_err(|e| e.to_string())
 }
@@ -626,13 +649,14 @@ pub fn delete_printer(name: &str) -> Result<(), String> {
 pub fn discover() -> Result<Vec<ipp::Device>, String> {
     let c = client().ok_or("CUPS est désactivé")?;
     let installed: Vec<String> = printers().into_iter().map(|p| p.port).collect();
-    c.devices(5)
-        .map(|d| {
-            d.into_iter()
-                .filter(|dev| !installed.contains(&dev.uri))
-                .collect()
-        })
-        .map_err(|e| e.to_string())
+    let found: Vec<ipp::Device> = c
+        .devices(5)
+        .map_err(|e| e.to_string())?
+        .into_iter()
+        .filter(|dev| !installed.contains(&dev.uri))
+        .collect();
+    *lock(&DISCOVERED) = found.clone();
+    Ok(found)
 }
 
 /// Travail en file d'attente.
@@ -2967,6 +2991,62 @@ mod tests {
         assert_eq!(op.str("job-name"), Some("Brut"));
         let attrs = job.groups(TAG_JOB).next().unwrap();
         assert_eq!(attrs.str("media"), Some("na_letter_8.5x11in"));
+        set_cups_server(None);
+    }
+
+    /// Intégration avec un vrai `cupsd` local (`WINLUX_TEST_CUPS=1`, administrateur
+    /// d'impression) : ajout, défaut, impression GDI, file d'attente, annulation.
+    #[test]
+    #[ignore]
+    fn cups_reel() {
+        if std::env::var_os("WINLUX_TEST_CUPS").is_none() {
+            return;
+        }
+        let _g = lock(&TEST_LOCK);
+        set_cups_server(Some(ipp::Server::detect()));
+        let sink = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let uri = format!("socket://127.0.0.1:{}", sink.local_addr().unwrap().port());
+        let name = "Winlux_Test";
+        add_printer(name, &uri, "Imprimante de test", "Labo").unwrap();
+        let p = find_printer(name).expect("file CUPS créée");
+        assert_eq!(p.kind, Kind::Cups);
+        assert_eq!(p.port, uri);
+        assert!(set_default(name));
+        assert_eq!(default_printer().unwrap().name, name);
+        // Imprimante en pause : le travail reste visible dans la file.
+        let c = client().unwrap();
+        c.pause_printer(name).unwrap();
+        let hdc =
+            unsafe { create_printer_dc(None, Some(name.into()), std::ptr::null(), true, false) }
+                .unwrap();
+        assert!(start_doc(hdc, "Essai CUPS".into(), None) > 0);
+        start_page(hdc);
+        gui::record(
+            hdc,
+            DrawCmd::FillRect {
+                rect: gui::Rect {
+                    left: 0,
+                    top: 0,
+                    right: 600,
+                    bottom: 300,
+                },
+                color: 0x00C0_6700,
+            },
+        );
+        end_page(hdc);
+        assert!(end_doc(hdc) > 0, "{}", last_message());
+        delete_printer_dc(hdc);
+        gui::free_dc(hdc);
+        let queued = jobs(name);
+        assert_eq!(queued.len(), 1, "{queued:?}");
+        assert_eq!(queued[0].document, "Essai CUPS");
+        assert!(cancel_job(name, queued[0].id));
+        assert!(jobs(name).is_empty());
+        delete_printer(name).unwrap();
+        assert!(find_printer(name).is_none());
+        // Détection USB/réseau : la requête aboutit, même sans périphérique.
+        assert!(discover().is_ok(), "{}", last_message());
+        let _ = std::fs::remove_file(config_path().unwrap());
         set_cups_server(None);
     }
 

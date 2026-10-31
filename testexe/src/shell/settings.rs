@@ -6,8 +6,11 @@ use crate::gfx::*;
 use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
+#[path = "printers.rs"]
+mod printers;
+
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 16] = [
+const PAGES: [&[u8]; 17] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -24,6 +27,7 @@ const PAGES: [&[u8]; 16] = [
     b"Effets visuels",
     b"Localisation",
     b"Gestionnaire de fichiers",
+    b"Imprimantes et scanners",
 ];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
@@ -1452,10 +1456,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 4, 0, b"Afficher", 6);
             button(g, &c, 4, 1, b"Masquer", 7);
         }
+        16 => printers::draw(g, &c, SCROLL),
         _ => {}
     }
     let notice = if PAGE == 10 {
         EXE_NOTICE
+    } else if PAGE == 16 {
+        printers::notice()
     } else if !available() {
         b"Service Winlux indisponible : les actions n\xE9cessitent Winlux.".as_slice()
     } else {
@@ -1501,6 +1508,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }
         return true;
     }
+    if ev == Mouse::Move && PAGE == 16 {
+        return printers::mouse(ev, x, y);
+    }
     if ev == Mouse::Move {
         let h = hit(f, x, y);
         let changed = h != HOVER;
@@ -1519,6 +1529,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             system_tick();
             return true;
         }
+    }
+    if PAGE == 16 {
+        return printers::mouse(ev, x, y);
     }
     if PAGE == 7 {
         let c = content(f);
@@ -1820,6 +1833,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     false
 }
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
+    if PAGE == 16 && printers::key(vk, ch) {
+        return true;
+    }
     if PAGE == 7 && restart_required() {
         if !updating() && ch == 13 {
             control(c"reboot");
@@ -1933,7 +1949,10 @@ unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
     journal(g, c, 366, LOG.get());
 }
 pub unsafe fn tick(_f: &Frame) -> bool {
-    let changed = system_tick();
+    let mut changed = system_tick();
+    if PAGE == 16 {
+        changed |= printers::tick();
+    }
     if updating() && GetTickCount().wrapping_sub(LAST_ANIMATION) > 90 {
         LAST_ANIMATION = GetTickCount();
         return true;
@@ -1977,6 +1996,7 @@ pub unsafe fn regression_checks() {
         !restart_required(),
         "Sans redemarrage requis les actions normales sont conservees"
     );
+    printers::regression_checks();
     (STATUS, PAGE) = saved;
 }
 

@@ -260,7 +260,8 @@ fn inside(r: &Rect, x: i32, y: i32) -> bool {
 
 fn font(size: i32, weight: i32) -> FontSpec {
     FontSpec {
-        height: -size,
+        // Hauteur positive (cellule), comme les polices du shell Winlux.
+        height: size,
         weight,
         face: "DejaVu Sans".into(),
         ..FontSpec::default()
