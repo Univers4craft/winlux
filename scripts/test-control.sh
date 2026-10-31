@@ -103,4 +103,31 @@ rm "$work/root/etc/winlux/live-session"
 if control reboot; then echo 'ERROR: refused-host-reboot failed' >&2; exit 1; fi
 grep -q 'Arret reserve a Winlux Live' "$work/root/run/winlux/action.log"
 if control 'keyboard-fr;reboot'; then echo 'ERROR: invalid-action failed' >&2; exit 1; fi
-echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, host protection'
+cat > "$work/bin/winlux" <<'MOCK'
+#!/bin/sh
+case "$1" in
+  --cpu-report) printf 'cpu_count=4\ncap_governor=1\nprofiles=performance,powersave\ncap_hybrid=0\n' ;;
+  --cpu-profile) test "$2" != balanced || { echo 'profil balanced indisponible' >&2; exit 1; }; printf 'cpu-profile %s %s\n' "$2" "$3" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+  --fan-daemon) printf 'fan-daemon %s\n' "$2" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+esac
+MOCK
+chmod 755 "$work/bin/winlux"
+control status
+grep -qx 'cap_governor=1' "$work/root/run/winlux/cpu.txt"
+grep -qx 'hybrid_policy=auto' "$work/root/run/winlux/cpu.txt"
+grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
+control cpu-profile-performance
+grep -qx "cpu-profile performance $work/root" "$work/commands"
+grep -qx 'CPU_PROFILE=performance' "$work/root/etc/winlux/cpu.conf"
+if control cpu-profile-balanced; then echo 'ERROR: unavailable CPU profile accepted' >&2; exit 1; fi
+grep -qx 'CPU_PROFILE=performance' "$work/root/etc/winlux/cpu.conf"
+control cpu-hybrid-heavy
+grep -qx 'hybrid_policy=heavy' "$work/root/run/winlux/cpu.txt"
+if control 'cpu-hybrid-turbo'; then echo 'ERROR: invalid hybrid policy accepted' >&2; exit 1; fi
+control cpu-fan-quiet
+grep -qx 'FAN_CURVE=quiet' "$work/root/etc/winlux/cpu.conf"
+for attempt in 1 2 3 4 5 6 7 8 9 10; do grep -q '^fan-daemon ' "$work/commands" && break; sleep 0.1; done
+grep -qx "fan-daemon $work/root" "$work/commands"
+control cpu-fan-auto
+grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
+echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, host protection, CPU'

@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod cpu;
 mod crash;
 mod dlls;
 mod loader;
@@ -25,6 +26,23 @@ fn main() {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
     }
+    let root_arg = |a: Option<std::ffi::OsString>| a.map(PathBuf::from);
+    if exe == "--cpu-report" {
+        std::process::exit(cpu::report_command(root_arg(args.next()).as_deref()));
+    }
+    if exe == "--cpu-profile" {
+        let profile = args.next().unwrap_or_default();
+        std::process::exit(cpu::profile_command(
+            &profile.to_string_lossy(),
+            root_arg(args.next()).as_deref(),
+        ));
+    }
+    if exe == "--fan-daemon" {
+        let sys = root_arg(args.next())
+            .map(cpu::Sys::at)
+            .unwrap_or_else(cpu::Sys::host);
+        std::process::exit(cpu::fan_daemon(&sys));
+    }
     if exe == "--inspect" {
         let Some(path) = args.next() else {
             eprintln!("winlux: usage: winlux --inspect PROGRAM.exe");
@@ -42,13 +60,14 @@ fn main() {
         }
     };
     backup_registry();
-    profiles::apply(&exe);
+    let cpu_settings = profiles::apply(&exe);
     if let Some(target) = managed::detect(&exe, &source) {
         log_info!(
             "managed",
             "{} détectée, utilisation du pont natif",
             managed::description(&target)
         );
+        cpu::apply_launch(&cpu_settings, &[]);
         match managed::run(&target, &rest) {
             Ok(status) => std::process::exit(status.code().unwrap_or(1)),
             Err(error) => {
@@ -80,6 +99,7 @@ fn main() {
         image.pe.stack_reserve,
         image.pe.stack_commit
     );
+    cpu::apply_launch(&cpu_settings, &image.import_names());
     dlls::kernel32::init();
     process::init_process(&image, &rest);
     process::run(image);

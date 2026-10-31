@@ -93,9 +93,46 @@ struct ThreadState {
     exit_code: u32,
     suspend_count: usize,
 }
-struct ThreadObject {
+pub(crate) struct ThreadObject {
     state: Mutex<ThreadState>,
     changed: Condvar,
+    /// Identifiant Linux du thread (0 tant qu'il n'a pas démarré).
+    pub(crate) os_tid: AtomicI32,
+    /// Affinité ou priorité demandée avant le démarrage (thread suspendu).
+    pub(crate) pending_cpus: Mutex<Option<Vec<usize>>>,
+    pub(crate) priority: AtomicI32,
+}
+
+/// Cible Linux d'un handle de thread Win32.
+pub(crate) enum ThreadTarget {
+    Running(i32),
+    NotStarted(Arc<ThreadObject>),
+}
+
+pub(crate) fn thread_target(h: usize) -> Option<ThreadTarget> {
+    if h == get_current_thread() {
+        return Some(ThreadTarget::Running(unsafe {
+            libc::syscall(libc::SYS_gettid) as i32
+        }));
+    }
+    match lookup_sync(h)? {
+        SyncHandle::Thread(t) => match t.os_tid.load(Ordering::Acquire) {
+            0 => Some(ThreadTarget::NotStarted(t)),
+            tid => Some(ThreadTarget::Running(tid)),
+        },
+        _ => None,
+    }
+}
+
+/// PID Linux d'un handle de processus (le processus courant ou un enfant).
+pub(crate) fn process_os_pid(h: usize) -> Option<i32> {
+    if h == get_current_process() {
+        return Some(std::process::id() as i32);
+    }
+    match lookup_sync(h)? {
+        SyncHandle::Process(p) => lock(&p.state).child.as_ref().map(|c| c.id() as i32),
+        _ => None,
+    }
 }
 struct ProcessState {
     child: Option<Child>,
@@ -3115,6 +3152,9 @@ pub unsafe extern "win64" fn create_thread(
             suspend_count: usize::from(flags & 4 != 0),
         }),
         changed: Condvar::new(),
+        os_tid: AtomicI32::new(0),
+        pending_cpus: Mutex::new(None),
+        priority: AtomicI32::new(0),
     });
     let handle = add_sync(SyncHandle::Thread(state.clone()), None);
     let f: extern "win64" fn(usize) -> u32 = std::mem::transmute(start);
@@ -3132,6 +3172,17 @@ pub unsafe extern "win64" fn create_thread(
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
             drop(s);
+            let os_tid = libc::syscall(libc::SYS_gettid) as i32;
+            {
+                // Même verrou que SetThreadAffinityMask/SetThreadPriority :
+                // une demande faite pendant le démarrage n'est jamais perdue.
+                let mut pending = lock(&state.pending_cpus);
+                if let Some(cpus) = pending.take() {
+                    crate::cpu::set_affinity(os_tid, &cpus);
+                }
+                super::kernel32_cpu::thread_started(os_tid, state.priority.load(Ordering::Relaxed));
+                state.os_tid.store(os_tid, Ordering::Release);
+            }
             crate::process::thread_attach_current();
             let code = f(param);
             crate::process::thread_detach_current();
