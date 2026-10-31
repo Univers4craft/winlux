@@ -2,16 +2,21 @@
 
 use super::gc;
 use super::il::Value;
+use super::metadata::ElementType;
 use super::types::{self, TYPE_STRING};
 
+/// Appelle une méthode de la BCL intégrée. `params` donne les types déclarés
+/// des arguments (hors `this`) pour afficher booléens et caractères comme .NET.
+/// `None` signifie que la méthode n'existe pas dans la BCL Winlux.
 pub fn dispatch_internal_call(
     namespace: &str,
     class: &str,
     method: &str,
     args: &[Value],
+    params: &[ElementType],
 ) -> Option<Value> {
     match (namespace, class, method) {
-        ("System", "Console", m) => console_dispatch(m, args),
+        ("System", "Console", m) => console_dispatch(m, args, params),
         ("System", "Environment", m) => environment_dispatch(m, args),
         ("System", "Math", m) => math_dispatch(m, args),
         ("System", "String", m) => string_dispatch(m, args),
@@ -37,61 +42,125 @@ pub fn dispatch_internal_call(
     }
 }
 
+/// Chaîne managée : longueur (u64) suivie des unités UTF-16.
 pub fn alloc_managed_string(s: &str) -> Value {
     let utf16: Vec<u16> = s.encode_utf16().collect();
-    let data_size = 4 + utf16.len() * 2;
-    let ptr = gc::with_gc(|gc| gc.alloc(TYPE_STRING, data_size));
+    let ptr = gc::with_gc(|gc| gc.alloc(TYPE_STRING, 8 + utf16.len() * 2));
     unsafe {
-        *(ptr as *mut u32) = utf16.len() as u32;
-        let buf = ptr.add(4) as *mut u16;
-        for (i, &ch) in utf16.iter().enumerate() {
-            *buf.add(i) = ch;
-        }
+        *(ptr as *mut u64) = utf16.len() as u64;
+        std::ptr::copy_nonoverlapping(utf16.as_ptr(), ptr.add(8) as *mut u16, utf16.len());
     }
     Value::Ref(ptr)
 }
 
 pub fn read_managed_string(ptr: *mut u8) -> String {
     if ptr.is_null() {
-        return String::from("null");
+        return String::new();
     }
     unsafe {
-        let len = *(ptr as *const u32) as usize;
-        let buf = ptr.add(4) as *const u16;
-        let slice = std::slice::from_raw_parts(buf, len);
+        let len = *(ptr as *const u64) as usize;
+        let slice = std::slice::from_raw_parts(ptr.add(8) as *const u16, len);
         String::from_utf16_lossy(slice)
     }
 }
 
-fn value_to_string(v: &Value) -> String {
+pub fn alloc_string_array(items: &[String]) -> Value {
+    let arr = gc::with_gc(|gc| gc.alloc_array(types::TYPE_ARRAY, 8, items.len()));
+    for (i, s) in items.iter().enumerate() {
+        let r = alloc_managed_string(s).as_ref();
+        unsafe { *(arr.add(8 + i * 8) as *mut *mut u8) = r };
+    }
+    Value::Ref(arr)
+}
+
+/// Lit la valeur d'un objet boxé selon son type.
+pub fn unbox(ptr: *mut u8, type_id: types::TypeId) -> Value {
+    unsafe {
+        match type_id {
+            types::TYPE_INT64 | types::TYPE_UINT64 | types::TYPE_INTPTR => {
+                Value::I64(*(ptr as *const i64))
+            }
+            types::TYPE_FLOAT => Value::F32(*(ptr as *const f32)),
+            types::TYPE_DOUBLE => Value::F64(*(ptr as *const f64)),
+            _ => Value::I32(*(ptr as *const i32)),
+        }
+    }
+}
+
+fn to_string_typed(v: &Value, et: Option<&ElementType>) -> String {
+    match (v, et) {
+        (Value::I32(n), Some(ElementType::Boolean)) => {
+            if *n != 0 { "True" } else { "False" }.to_string()
+        }
+        (Value::I32(n), Some(ElementType::Char)) => {
+            char::from_u32(*n as u32).unwrap_or('\u{fffd}').to_string()
+        }
+        (Value::I32(n), Some(ElementType::U4)) => (*n as u32).to_string(),
+        (Value::I64(n), Some(ElementType::U8)) => (*n as u64).to_string(),
+        _ => value_to_string(v),
+    }
+}
+
+pub fn value_to_string(v: &Value) -> String {
     match v {
         Value::I32(n) => n.to_string(),
         Value::I64(n) => n.to_string(),
         Value::F32(f) => f.to_string(),
         Value::F64(f) => f.to_string(),
-        Value::Null => "null".to_string(),
-        Value::Ref(ptr) => read_managed_string(*ptr),
+        Value::Null => String::new(),
+        Value::Ref(ptr) => match gc::type_of(*ptr) {
+            Some(TYPE_STRING) => read_managed_string(*ptr),
+            Some(types::TYPE_BOOLEAN) => to_string_typed(
+                &Value::I32(unsafe { *(*ptr as *const i32) }),
+                Some(&ElementType::Boolean),
+            ),
+            Some(types::TYPE_CHAR) => to_string_typed(
+                &Value::I32(unsafe { *(*ptr as *const i32) }),
+                Some(&ElementType::Char),
+            ),
+            Some(id) if is_boxed_primitive(id) => value_to_string(&unbox(*ptr, id)),
+            Some(id) => types::with_types(|reg| {
+                reg.get(id)
+                    .map(|t| t.full_name())
+                    .unwrap_or_else(|| "System.Object".into())
+            }),
+            None => String::new(),
+        },
+    }
+}
+
+fn is_boxed_primitive(id: types::TypeId) -> bool {
+    (types::TYPE_INT32..=types::TYPE_INTPTR).contains(&id)
+}
+
+/// Remplace `{0}`, `{1}`… comme `String.Format` (sans spécificateurs de format).
+fn format_composite(fmt: &str, args: &[Value]) -> String {
+    let mut out = fmt.to_string();
+    for (i, a) in args.iter().enumerate() {
+        out = out.replace(&format!("{{{i}}}"), &value_to_string(a));
+    }
+    out
+}
+
+/// Texte écrit par Console.Write/WriteLine pour une surcharge donnée.
+fn console_text(args: &[Value], params: &[ElementType]) -> String {
+    match args {
+        [] => String::new(),
+        [single] => to_string_typed(single, params.first()),
+        [fmt, rest @ ..] => format_composite(&value_to_string(fmt), rest),
     }
 }
 
 // ── System.Console ──
 
-fn console_dispatch(method: &str, args: &[Value]) -> Option<Value> {
+fn console_dispatch(method: &str, args: &[Value], params: &[ElementType]) -> Option<Value> {
     match method {
         "WriteLine" => {
-            if args.is_empty() {
-                println!();
-            } else {
-                let text = value_to_string(args.last().unwrap());
-                println!("{}", text);
-            }
+            println!("{}", console_text(args, params));
             Some(Value::I32(0))
         }
         "Write" => {
-            if !args.is_empty() {
-                let text = value_to_string(args.last().unwrap());
-                print!("{}", text);
-            }
+            print!("{}", console_text(args, params));
             Some(Value::I32(0))
         }
         "ReadLine" => {
@@ -124,7 +193,7 @@ fn environment_dispatch(method: &str, args: &[Value]) -> Option<Value> {
                 Some(Value::I32(c)) => *c,
                 _ => 0,
             };
-            std::process::exit(code);
+            crate::dlls::kernel32::flush_and_exit(code)
         }
         "get_ExitCode" => Some(Value::I32(0)),
         "set_ExitCode" => Some(Value::I32(0)),
@@ -421,13 +490,8 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
             if args.is_empty() {
                 return Some(alloc_managed_string(""));
             }
-            let fmt = value_to_string(&args[0]);
-            let mut result = fmt;
-            for (i, a) in args.iter().skip(1).enumerate() {
-                let placeholder = format!("{{{}}}", i);
-                result = result.replace(&placeholder, &value_to_string(a));
-            }
-            Some(alloc_managed_string(&result))
+            let text = format_composite(&value_to_string(&args[0]), &args[1..]);
+            Some(alloc_managed_string(&text))
         }
         "get_Chars" => {
             if args.len() >= 2 {
@@ -457,22 +521,7 @@ fn string_dispatch(method: &str, args: &[Value]) -> Option<Value> {
 
 fn object_dispatch(method: &str, args: &[Value]) -> Option<Value> {
     match method {
-        "ToString" => match args.first() {
-            Some(Value::Ref(p)) if !p.is_null() => {
-                let type_id = unsafe {
-                    let hdr =
-                        (*p).sub(std::mem::size_of::<gc::ObjHeader>()) as *const gc::ObjHeader;
-                    (*hdr).type_id
-                };
-                let name = types::with_types(|reg| {
-                    reg.get(type_id)
-                        .map(|t| t.full_name())
-                        .unwrap_or_else(|| "System.Object".into())
-                });
-                Some(alloc_managed_string(&name))
-            }
-            _ => Some(alloc_managed_string("System.Object")),
-        },
+        "ToString" => Some(alloc_managed_string(&value_to_string(args.first()?))),
         "GetType" => Some(Value::Null),
         "Equals" => {
             if args.len() >= 2 {
@@ -543,15 +592,11 @@ fn array_dispatch(method: &str, args: &[Value]) -> Option<Value> {
 
 fn gc_dispatch(method: &str, _args: &[Value]) -> Option<Value> {
     match method {
-        "Collect" => {
-            gc::with_gc(|gc| gc.collect());
-            Some(Value::I32(0))
-        }
         "SuppressFinalize" | "ReRegisterForFinalize" | "WaitForPendingFinalizers" => {
             Some(Value::I32(0))
         }
         "GetTotalMemory" => {
-            let (_, total) = gc::with_gc(|gc| gc.stats());
+            let total = gc::with_gc(|gc| gc.total_allocated());
             Some(Value::I64(total as i64))
         }
         _ => Some(Value::I32(0)),

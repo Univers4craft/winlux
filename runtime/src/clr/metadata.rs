@@ -3,6 +3,9 @@
 //! Lit les heaps (#Strings, #US, #Blob, #GUID) et les tables de métadonnées
 //! depuis un assembly .NET chargé en mémoire.
 
+// Décrit le format ECMA-335 complet ; l'interpréteur n'en lit encore qu'une partie.
+#![allow(dead_code)]
+
 use super::tables::*;
 
 const BSJB_SIGNATURE: u32 = 0x424A5342;
@@ -1014,6 +1017,12 @@ pub struct MethodSig {
     pub generic_param_count: u32,
     pub ret_type: ElementType,
     pub param_types: Vec<ElementType>,
+}
+
+impl MethodSig {
+    pub fn has_this(&self) -> bool {
+        self.calling_convention & 0x20 != 0
+    }
 }
 
 pub fn decode_method_sig(blob: &[u8]) -> MethodSig {

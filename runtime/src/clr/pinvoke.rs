@@ -1,378 +1,188 @@
-//! Pont P/Invoke : appels managés vers les DLL natives Win32 du runtime Winlux.
+//! Pont P/Invoke : un `[DllImport]` managé est résolu dans la table d'exports
+//! des DLL intégrées de Winlux (`dlls::lookup`) puis appelé avec la convention
+//! Win64, exactement comme le ferait un programme natif.
 
-use super::bcl::{alloc_managed_string, read_managed_string};
+use super::bcl;
 use super::il::Value;
+use super::metadata::ElementType;
 
-pub fn dispatch_pinvoke(module: &str, name: &str, args: &[Value]) -> Option<Value> {
-    let module_lower = module.to_lowercase();
-    let module_base = module_lower
-        .trim_end_matches(".dll")
-        .trim_end_matches(".DLL");
+pub struct Import<'a> {
+    pub module: &'a str,
+    pub name: &'a str,
+    /// CharSet.Unicode / Auto : chaînes en UTF-16 et suffixe « W ».
+    pub unicode: bool,
+}
 
-    match module_base {
-        "kernel32" => kernel32_dispatch(name, args),
-        "user32" => user32_dispatch(name, args),
-        "advapi32" => advapi32_dispatch(name, args),
-        "msvcrt" | "ucrtbase" => crt_dispatch(name, args),
-        "gdi32" => gdi32_dispatch(name, args),
-        "shell32" => shell32_dispatch(name, args),
-        "ole32" => ole32_dispatch(name, args),
-        "ntdll" => ntdll_dispatch(name, args),
-        _ => {
-            crate::log_warn!(
-                "clr-pinvoke",
-                "module P/Invoke inconnu: {} (fonction {})",
-                module,
-                name
-            );
-            try_generic_dll_call(module_base, name, args)
-        }
+/// Appelle la fonction native. L'erreur nomme l'exception .NET à lever.
+pub fn call(
+    import: &Import,
+    args: &[Value],
+    params: &[ElementType],
+    ret: &ElementType,
+) -> Result<Value, (&'static str, String)> {
+    let dll = crate::dlls::normalize(import.module);
+    if !crate::dlls::is_builtin(&dll) {
+        return Err((
+            "DllNotFoundException",
+            format!("Unable to load DLL '{}'", import.module),
+        ));
     }
-}
+    let suffixed = format!("{}{}", import.name, if import.unicode { 'W' } else { 'A' });
+    let Some(addr) =
+        crate::dlls::lookup(&dll, import.name).or_else(|| crate::dlls::lookup(&dll, &suffixed))
+    else {
+        return Err((
+            "EntryPointNotFoundException",
+            format!(
+                "Unable to find an entry point named '{}' in DLL '{}'",
+                import.name, import.module
+            ),
+        ));
+    };
 
-fn try_generic_dll_call(module: &str, name: &str, args: &[Value]) -> Option<Value> {
-    crate::log_debug!(
-        "clr-pinvoke",
-        "tentative d'appel générique: {}.{}",
-        module,
-        name
-    );
-    Some(Value::I32(0))
-}
-
-// ── kernel32.dll ──
-
-fn kernel32_dispatch(name: &str, args: &[Value]) -> Option<Value> {
-    match name {
-        "GetLastError" => Some(Value::I32(0)),
-        "SetLastError" => Some(Value::I32(0)),
-        "GetCurrentProcess" => Some(Value::I64(-1)),
-        "GetCurrentProcessId" => Some(Value::I32(std::process::id() as i32)),
-        "GetCurrentThread" => Some(Value::I64(-2)),
-        "GetCurrentThreadId" => Some(Value::I32(0)),
-        "CloseHandle" => Some(Value::I32(1)),
-
-        "GetStdHandle" => {
-            let which = match args.last() {
-                Some(Value::I32(v)) => *v,
-                _ => -11,
-            };
-            Some(Value::I64(which as i64))
+    // Les tampons des chaînes marshalées doivent vivre jusqu'au retour.
+    let mut buffers: Vec<Vec<u8>> = Vec::new();
+    let mut raw = Vec::with_capacity(args.len());
+    for (i, arg) in args.iter().enumerate() {
+        let param = params.get(i);
+        if matches!(param, Some(ElementType::R4 | ElementType::R8)) {
+            return Err((
+                "NotSupportedException",
+                format!("{} : paramètre flottant non pris en charge", import.name),
+            ));
         }
-
-        "WriteFile" | "WriteConsoleA" | "WriteConsoleW" => {
-            if let Some(Value::Ref(buf)) = args.get(1) {
-                if !buf.is_null() {
-                    let len = match args.get(2) {
-                        Some(Value::I32(n)) => *n as usize,
-                        _ => 0,
-                    };
-                    if len > 0 {
-                        let slice = unsafe { std::slice::from_raw_parts(*buf, len) };
-                        let s = String::from_utf8_lossy(slice);
-                        print!("{}", s);
-                    }
-                }
+        let word = match (arg, param) {
+            (Value::Ref(p), Some(ElementType::String)) => {
+                let text = bcl::read_managed_string(*p);
+                let buf = if import.unicode {
+                    text.encode_utf16()
+                        .chain([0])
+                        .flat_map(u16::to_le_bytes)
+                        .collect()
+                } else {
+                    text.bytes().chain([0]).collect()
+                };
+                buffers.push(buf);
+                buffers.last().unwrap().as_ptr() as usize
             }
-            Some(Value::I32(1))
-        }
+            // Tableau de valeurs blittables : on passe l'adresse du premier élément.
+            (Value::Ref(p), Some(ElementType::SzArray(_))) if !p.is_null() => *p as usize + 8,
+            (Value::Null, _) => 0,
+            (v, _) => v.as_i64() as usize,
+        };
+        raw.push(word);
+    }
 
-        "ReadFile" | "ReadConsoleA" => Some(Value::I32(0)),
+    crate::trace!("P/Invoke {}!{} {:x?}", dll, import.name, raw);
+    let r = unsafe { invoke(addr, &raw) }.ok_or((
+        "NotSupportedException",
+        format!("{} : trop d'arguments ({})", import.name, raw.len()),
+    ))?;
 
-        "CreateFileA" | "CreateFileW" => Some(Value::I64(-1)),
-
-        "GetModuleHandleA" | "GetModuleHandleW" => Some(Value::I64(0x400000)),
-        "GetModuleFileNameA" | "GetModuleFileNameW" => Some(Value::I32(0)),
-        "GetProcAddress" => Some(Value::I64(0)),
-        "LoadLibraryA" | "LoadLibraryW" | "LoadLibraryExA" | "LoadLibraryExW" => {
-            let lib_name = match args.last() {
-                Some(Value::Ref(p)) if !p.is_null() => unsafe {
-                    let c = std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char);
-                    c.to_string_lossy().to_string()
-                },
-                _ => String::new(),
-            };
-            crate::log_debug!("clr-pinvoke", "LoadLibrary: {}", lib_name);
-            Some(Value::I64(0x10000))
-        }
-        "FreeLibrary" => Some(Value::I32(1)),
-
-        "GetTickCount" => {
-            let ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i32;
-            Some(Value::I32(ms))
-        }
-        "GetTickCount64" => {
-            let ms = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_millis() as i64;
-            Some(Value::I64(ms))
-        }
-        "QueryPerformanceCounter" => {
-            if let Some(Value::Ref(p)) = args.last() {
-                if !p.is_null() {
-                    let ns = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap_or_default()
-                        .as_nanos() as u64;
-                    unsafe {
-                        *(*p as *mut u64) = ns;
-                    }
-                }
-            }
-            Some(Value::I32(1))
-        }
-        "QueryPerformanceFrequency" => {
-            if let Some(Value::Ref(p)) = args.last() {
-                if !p.is_null() {
-                    unsafe {
-                        *(*p as *mut u64) = 1_000_000_000;
-                    }
-                }
-            }
-            Some(Value::I32(1))
-        }
-        "Sleep" => {
-            let ms = match args.last() {
-                Some(Value::I32(v)) => *v as u64,
-                _ => 0,
-            };
-            std::thread::sleep(std::time::Duration::from_millis(ms));
-            Some(Value::I32(0))
-        }
-
-        "GetSystemInfo" | "GetNativeSystemInfo" => Some(Value::I32(0)),
-        "GetVersionExA" | "GetVersionExW" => Some(Value::I32(1)),
-
-        "VirtualAlloc" => {
-            let size = match args.get(1) {
-                Some(Value::I32(s)) => *s as usize,
-                Some(Value::I64(s)) => *s as usize,
-                _ => 4096,
-            };
-            let layout = std::alloc::Layout::from_size_align(size.max(1), 4096).unwrap();
-            let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-            Some(Value::Ref(ptr))
-        }
-        "VirtualFree" => Some(Value::I32(1)),
-        "VirtualProtect" => Some(Value::I32(1)),
-
-        "HeapAlloc" | "LocalAlloc" | "GlobalAlloc" => {
-            let size = match args.last() {
-                Some(Value::I32(s)) => *s as usize,
-                Some(Value::I64(s)) => *s as usize,
-                _ => 0,
-            };
-            if size > 0 {
-                let layout = std::alloc::Layout::from_size_align(size, 8).unwrap();
-                let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-                Some(Value::Ref(ptr))
+    Ok(match ret {
+        ElementType::Void => Value::Null,
+        ElementType::I8
+        | ElementType::U8
+        | ElementType::IntPtr
+        | ElementType::UIntPtr
+        | ElementType::Ptr(_) => Value::I64(r as i64),
+        ElementType::String if r != 0 => {
+            let text = if import.unicode {
+                let p = r as *const u16;
+                let len = (0..).take_while(|&i| unsafe { *p.add(i) } != 0).count();
+                String::from_utf16_lossy(unsafe { std::slice::from_raw_parts(p, len) })
             } else {
-                Some(Value::Ref(std::ptr::null_mut()))
-            }
-        }
-        "HeapFree" | "LocalFree" | "GlobalFree" => Some(Value::I32(1)),
-
-        "GetEnvironmentVariableA" | "GetEnvironmentVariableW" => Some(Value::I32(0)),
-        "SetEnvironmentVariableA" | "SetEnvironmentVariableW" => Some(Value::I32(1)),
-        "GetCommandLineA" | "GetCommandLineW" => Some(Value::Ref(std::ptr::null_mut())),
-
-        "ExitProcess" => {
-            let code = match args.last() {
-                Some(Value::I32(c)) => *c,
-                _ => 0,
+                unsafe { std::ffi::CStr::from_ptr(r as *const std::ffi::c_char) }
+                    .to_string_lossy()
+                    .into_owned()
             };
-            std::process::exit(code);
+            bcl::alloc_managed_string(&text)
         }
-
-        "InitializeCriticalSection"
-        | "InitializeCriticalSectionAndSpinCount"
-        | "EnterCriticalSection"
-        | "LeaveCriticalSection"
-        | "DeleteCriticalSection"
-        | "TryEnterCriticalSection" => Some(Value::I32(1)),
-
-        "CreateMutexA" | "CreateMutexW" | "CreateEventA" | "CreateEventW" => {
-            Some(Value::I64(0x1000))
-        }
-        "SetEvent" | "ResetEvent" | "ReleaseMutex" => Some(Value::I32(1)),
-        "WaitForSingleObject" => Some(Value::I32(0)),
-        "WaitForMultipleObjects" => Some(Value::I32(0)),
-
-        "GetSystemDirectoryA"
-        | "GetSystemDirectoryW"
-        | "GetWindowsDirectoryA"
-        | "GetWindowsDirectoryW" => Some(Value::I32(0)),
-        "GetTempPathA" | "GetTempPathW" => Some(Value::I32(0)),
-
-        "OutputDebugStringA" | "OutputDebugStringW" => Some(Value::I32(0)),
-        "IsDebuggerPresent" => Some(Value::I32(0)),
-
-        "MultiByteToWideChar" => Some(Value::I32(0)),
-        "WideCharToMultiByte" => Some(Value::I32(0)),
-
-        "GetACP" => Some(Value::I32(65001)),
-        "IsProcessorFeaturePresent" => Some(Value::I32(0)),
-        "FlsAlloc" | "TlsAlloc" => Some(Value::I32(0)),
-        "FlsSetValue" | "TlsSetValue" | "FlsFree" | "TlsFree" => Some(Value::I32(1)),
-        "FlsGetValue" | "TlsGetValue" => Some(Value::I64(0)),
-
-        _ => {
-            crate::log_debug!("clr-pinvoke", "kernel32.{} non implémenté", name);
-            Some(Value::I32(0))
-        }
-    }
+        ElementType::String => Value::Null,
+        _ => Value::I32(r as i32),
+    })
 }
 
-// ── user32.dll ──
-
-fn user32_dispatch(name: &str, args: &[Value]) -> Option<Value> {
-    match name {
-        "MessageBoxA" | "MessageBoxW" => {
-            let text = match args.get(1) {
-                Some(Value::Ref(p)) if !p.is_null() => {
-                    if name.ends_with('W') {
-                        read_managed_string(*p)
-                    } else {
-                        unsafe {
-                            std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char)
-                                .to_string_lossy()
-                                .to_string()
-                        }
-                    }
-                }
-                _ => String::new(),
-            };
-            crate::log_info!("clr-pinvoke", "MessageBox: {}", text);
-            println!("[MessageBox] {}", text);
-            Some(Value::I32(1))
+unsafe fn invoke(addr: usize, a: &[usize]) -> Option<usize> {
+    type F0 = extern "win64" fn() -> usize;
+    type F1 = extern "win64" fn(usize) -> usize;
+    type F2 = extern "win64" fn(usize, usize) -> usize;
+    type F3 = extern "win64" fn(usize, usize, usize) -> usize;
+    type F4 = extern "win64" fn(usize, usize, usize, usize) -> usize;
+    type F5 = extern "win64" fn(usize, usize, usize, usize, usize) -> usize;
+    type F6 = extern "win64" fn(usize, usize, usize, usize, usize, usize) -> usize;
+    type F7 = extern "win64" fn(usize, usize, usize, usize, usize, usize, usize) -> usize;
+    type F8 = extern "win64" fn(usize, usize, usize, usize, usize, usize, usize, usize) -> usize;
+    type F9 =
+        extern "win64" fn(usize, usize, usize, usize, usize, usize, usize, usize, usize) -> usize;
+    type F10 = extern "win64" fn(
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+    ) -> usize;
+    type F11 = extern "win64" fn(
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+    ) -> usize;
+    type F12 = extern "win64" fn(
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+        usize,
+    ) -> usize;
+    let p = addr as *const ();
+    Some(match *a {
+        [] => std::mem::transmute::<*const (), F0>(p)(),
+        [a0] => std::mem::transmute::<*const (), F1>(p)(a0),
+        [a0, a1] => std::mem::transmute::<*const (), F2>(p)(a0, a1),
+        [a0, a1, a2] => std::mem::transmute::<*const (), F3>(p)(a0, a1, a2),
+        [a0, a1, a2, a3] => std::mem::transmute::<*const (), F4>(p)(a0, a1, a2, a3),
+        [a0, a1, a2, a3, a4] => std::mem::transmute::<*const (), F5>(p)(a0, a1, a2, a3, a4),
+        [a0, a1, a2, a3, a4, a5] => std::mem::transmute::<*const (), F6>(p)(a0, a1, a2, a3, a4, a5),
+        [a0, a1, a2, a3, a4, a5, a6] => {
+            std::mem::transmute::<*const (), F7>(p)(a0, a1, a2, a3, a4, a5, a6)
         }
-        "GetDesktopWindow" => Some(Value::I64(0)),
-        "GetForegroundWindow" => Some(Value::I64(0)),
-        "ShowWindow" => Some(Value::I32(1)),
-        "UpdateWindow" => Some(Value::I32(1)),
-        "PostQuitMessage" => Some(Value::I32(0)),
-        "DestroyWindow" => Some(Value::I32(1)),
-        "SetWindowTextA" | "SetWindowTextW" => Some(Value::I32(1)),
-        "GetSystemMetrics" => Some(Value::I32(0)),
-        "GetDC" | "ReleaseDC" => Some(Value::I64(0)),
-        _ => {
-            crate::log_debug!("clr-pinvoke", "user32.{} non implémenté", name);
-            Some(Value::I32(0))
+        [a0, a1, a2, a3, a4, a5, a6, a7] => {
+            std::mem::transmute::<*const (), F8>(p)(a0, a1, a2, a3, a4, a5, a6, a7)
         }
-    }
-}
-
-// ── advapi32.dll ──
-
-fn advapi32_dispatch(name: &str, _args: &[Value]) -> Option<Value> {
-    match name {
-        "RegOpenKeyExA" | "RegOpenKeyExW" => Some(Value::I32(2)),
-        "RegCloseKey" => Some(Value::I32(0)),
-        "RegQueryValueExA" | "RegQueryValueExW" => Some(Value::I32(2)),
-        "RegSetValueExA" | "RegSetValueExW" => Some(Value::I32(0)),
-        "GetUserNameA" | "GetUserNameW" => Some(Value::I32(1)),
-        _ => {
-            crate::log_debug!("clr-pinvoke", "advapi32.{} non implémenté", name);
-            Some(Value::I32(0))
+        [a0, a1, a2, a3, a4, a5, a6, a7, a8] => {
+            std::mem::transmute::<*const (), F9>(p)(a0, a1, a2, a3, a4, a5, a6, a7, a8)
         }
-    }
-}
-
-// ── msvcrt / ucrtbase ──
-
-fn crt_dispatch(name: &str, args: &[Value]) -> Option<Value> {
-    match name {
-        "printf" | "puts" => {
-            if let Some(Value::Ref(p)) = args.first() {
-                if !p.is_null() {
-                    let s = unsafe {
-                        std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char).to_string_lossy()
-                    };
-                    print!("{}", s);
-                    if name == "puts" {
-                        println!();
-                    }
-                }
-            }
-            Some(Value::I32(0))
+        [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9] => {
+            std::mem::transmute::<*const (), F10>(p)(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9)
         }
-        "malloc" => {
-            let size = match args.last() {
-                Some(Value::I32(s)) => *s as usize,
-                Some(Value::I64(s)) => *s as usize,
-                _ => 0,
-            };
-            if size > 0 {
-                let layout = std::alloc::Layout::from_size_align(size, 8).unwrap();
-                let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
-                Some(Value::Ref(ptr))
-            } else {
-                Some(Value::Ref(std::ptr::null_mut()))
-            }
+        [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10] => {
+            std::mem::transmute::<*const (), F11>(p)(a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10)
         }
-        "free" | "calloc" | "realloc" => Some(Value::I32(0)),
-        "memcpy" | "memmove" => args.first().cloned().or(Some(Value::I32(0))),
-        "memset" => args.first().cloned().or(Some(Value::I32(0))),
-        "strlen" => match args.first() {
-            Some(Value::Ref(p)) if !p.is_null() => {
-                let s = unsafe { std::ffi::CStr::from_ptr(*p as *const std::ffi::c_char) };
-                Some(Value::I32(s.to_bytes().len() as i32))
-            }
-            _ => Some(Value::I32(0)),
-        },
-        "strcmp" | "stricmp" | "_stricmp" => Some(Value::I32(0)),
-        "atoi" | "atol" => Some(Value::I32(0)),
-        "exit" | "_exit" => {
-            let code = match args.last() {
-                Some(Value::I32(c)) => *c,
-                _ => 0,
-            };
-            std::process::exit(code);
+        [a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11] => {
+            std::mem::transmute::<*const (), F12>(p)(
+                a0, a1, a2, a3, a4, a5, a6, a7, a8, a9, a10, a11,
+            )
         }
-        "getenv" => Some(Value::Ref(std::ptr::null_mut())),
-        "_errno" | "__errno_location" => Some(Value::Ref(std::ptr::null_mut())),
-        _ => {
-            crate::log_debug!("clr-pinvoke", "crt.{} non implémenté", name);
-            Some(Value::I32(0))
-        }
-    }
-}
-
-// ── gdi32.dll ──
-
-fn gdi32_dispatch(name: &str, _args: &[Value]) -> Option<Value> {
-    crate::log_debug!("clr-pinvoke", "gdi32.{} non implémenté", name);
-    Some(Value::I32(0))
-}
-
-// ── shell32.dll ──
-
-fn shell32_dispatch(name: &str, _args: &[Value]) -> Option<Value> {
-    crate::log_debug!("clr-pinvoke", "shell32.{} non implémenté", name);
-    Some(Value::I32(0))
-}
-
-// ── ole32.dll ──
-
-fn ole32_dispatch(name: &str, _args: &[Value]) -> Option<Value> {
-    match name {
-        "CoInitialize" | "CoInitializeEx" => Some(Value::I32(0)),
-        "CoUninitialize" => Some(Value::I32(0)),
-        "CoCreateInstance" => Some(Value::I32(0x80004002_u32 as i32)),
-        _ => {
-            crate::log_debug!("clr-pinvoke", "ole32.{} non implémenté", name);
-            Some(Value::I32(0))
-        }
-    }
-}
-
-// ── ntdll.dll ──
-
-fn ntdll_dispatch(name: &str, _args: &[Value]) -> Option<Value> {
-    crate::log_debug!("clr-pinvoke", "ntdll.{} non implémenté", name);
-    Some(Value::I32(0))
+        _ => return None,
+    })
 }

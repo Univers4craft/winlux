@@ -1,12 +1,20 @@
 //! Interpréteur CIL (Common Intermediate Language).
 //!
 //! Machine à pile qui exécute le bytecode .NET instruction par instruction.
+//! Chaque appel managé crée un `CallFrame` et s'exécute dans son propre
+//! `run_loop`, qui rend la main à l'appelant au `ret` de la méthode.
 
+use super::bcl;
+use super::exceptions::{self, ClrException, Handler};
 use super::gc;
-use super::metadata::{self, Assembly, ElementType, MethodBody};
+use super::metadata::{self, Assembly, ElementType};
 use super::opcodes::{self, OpCode};
-use super::tables::{TableId, Token};
-use super::types::{self, TypeId, TypeRegistry};
+use super::pinvoke;
+use super::tables::{CodedIndex, TableId, Token};
+use super::types;
+
+/// Profondeur d'appel maximale avant StackOverflowException.
+const MAX_DEPTH: usize = 4000;
 
 #[derive(Debug, Clone, Copy)]
 pub enum Value {
@@ -54,7 +62,6 @@ impl Value {
     pub fn as_ref(self) -> *mut u8 {
         match self {
             Value::Ref(p) => p,
-            Value::Null => std::ptr::null_mut(),
             Value::I64(v) => v as *mut u8,
             Value::I32(v) => v as isize as *mut u8,
             _ => std::ptr::null_mut(),
@@ -91,37 +98,93 @@ impl Value {
     }
 }
 
+/// Lit un emplacement de 8 octets (champ d'objet ou statique) selon son type.
+fn load_slot(ptr: *const u8, et: &ElementType) -> Value {
+    unsafe {
+        match et {
+            ElementType::R4 => Value::F32(*(ptr as *const f32)),
+            ElementType::R8 => Value::F64(*(ptr as *const f64)),
+            ElementType::I8 | ElementType::U8 | ElementType::IntPtr | ElementType::UIntPtr => {
+                Value::I64(*(ptr as *const i64))
+            }
+            ElementType::Boolean
+            | ElementType::Char
+            | ElementType::I1
+            | ElementType::U1
+            | ElementType::I2
+            | ElementType::U2
+            | ElementType::I4
+            | ElementType::U4 => Value::I32(*(ptr as *const i32)),
+            _ => match *(ptr as *const *mut u8) {
+                p if p.is_null() => Value::Null,
+                p => Value::Ref(p),
+            },
+        }
+    }
+}
+
+fn store_slot(ptr: *mut u8, val: Value) {
+    unsafe {
+        match val {
+            Value::F32(v) => *(ptr as *mut f32) = v,
+            Value::F64(v) => *(ptr as *mut f64) = v,
+            Value::Ref(p) => *(ptr as *mut *mut u8) = p,
+            Value::Null => *(ptr as *mut u64) = 0,
+            v => *(ptr as *mut i64) = v.as_i64(),
+        }
+    }
+}
+
+fn check_index(arr: *mut u8, idx: usize) -> Result<(), ClrException> {
+    if arr.is_null() {
+        return Err(ClrException::null_reference());
+    }
+    if idx >= unsafe { *(arr as *const u64) } as usize {
+        return Err(ClrException::index_out_of_range());
+    }
+    Ok(())
+}
+
 struct CallFrame {
-    method_token: u32,
     ip: usize,
     code: Vec<u8>,
     locals: Vec<Value>,
     args: Vec<Value>,
     eval_stack: Vec<Value>,
     exception_clauses: Vec<metadata::ExceptionClause>,
+    /// Exception à relancer à la fin du finally en cours.
+    pending: Option<ClrException>,
+    /// Destination d'un `leave` en attente de la fin d'un finally.
+    leave_target: Option<usize>,
+    /// Exception traitée par le catch en cours (pour `rethrow`).
+    caught: Option<ClrException>,
 }
 
 pub struct Interpreter {
     frames: Vec<CallFrame>,
     pub assembly: Assembly,
-    pub exit_code: i32,
 }
 
 pub enum ExecResult {
     Return(Value),
-    Exit(i32),
-    Exception(String),
-    PInvoke {
-        module: String,
-        name: String,
-        args: Vec<Value>,
-    },
-    InternalCall {
+    Exception(ClrException),
+}
+
+/// Méthode désignée par un jeton d'appel.
+enum Target {
+    Managed(u32),
+    External {
         namespace: String,
         class: String,
-        method: String,
-        args: Vec<Value>,
+        name: String,
     },
+}
+
+enum StepResult {
+    Continue,
+    Branch(usize),
+    Return(Value),
+    Throw(ClrException),
 }
 
 impl Interpreter {
@@ -129,188 +192,425 @@ impl Interpreter {
         Interpreter {
             frames: Vec::new(),
             assembly,
-            exit_code: 0,
         }
     }
 
     pub fn execute_method(&mut self, method_row: u32, args: Vec<Value>) -> ExecResult {
         let md = self.assembly.get_method_def(method_row);
-        let name = self.assembly.get_string(md.name).to_string();
+        let sig = metadata::decode_method_sig(self.assembly.get_blob(md.signature));
 
         if md.is_pinvoke() {
             let token = Token::new(TableId::MethodDef, method_row);
-            if let Some(imp) = self.assembly.find_impl_map(token) {
-                let mod_row = self.assembly.get_module_ref(imp.import_scope);
-                let module = self.assembly.get_string(mod_row.name).to_string();
-                let import_name = self.assembly.get_string(imp.import_name).to_string();
-                return ExecResult::PInvoke {
-                    module,
-                    name: import_name,
-                    args,
-                };
-            }
-        }
-
-        if md.rva == 0 {
-            let type_row = self.find_declaring_type(method_row);
-            let td = self.assembly.get_type_def(type_row);
-            let ns = self.assembly.get_string(td.namespace).to_string();
-            let cls = self.assembly.get_string(td.name).to_string();
-            return ExecResult::InternalCall {
-                namespace: ns,
-                class: cls,
-                method: name,
-                args,
+            let Some(imp) = self.assembly.find_impl_map(token) else {
+                return ExecResult::Exception(ClrException::new(
+                    "System",
+                    "EntryPointNotFoundException",
+                    "P/Invoke sans ImplMap",
+                ));
+            };
+            let module = self
+                .assembly
+                .get_string(self.assembly.get_module_ref(imp.import_scope).name);
+            let import = pinvoke::Import {
+                module,
+                name: self.assembly.get_string(imp.import_name),
+                unicode: imp.mapping_flags & 0x0004 != 0,
+            };
+            return match pinvoke::call(&import, &args, &sig.param_types, &sig.ret_type) {
+                Ok(v) => ExecResult::Return(v),
+                Err((kind, msg)) => ExecResult::Exception(ClrException::new("System", kind, &msg)),
             };
         }
 
-        let body = match self.assembly.method_body(md.rva) {
-            Some(b) => b,
-            None => {
-                return ExecResult::Exception(format!(
-                    "corps de méthode introuvable pour {name} (RVA {:#x})",
-                    md.rva
-                ))
-            }
+        if md.rva == 0 {
+            let td = self
+                .assembly
+                .get_type_def(self.find_declaring_type(method_row));
+            let namespace = self.assembly.get_string(td.namespace).to_string();
+            let class = self.assembly.get_string(td.name).to_string();
+            let name = self.assembly.get_string(md.name).to_string();
+            return match self.call_native(&namespace, &class, &name, args, &sig.param_types) {
+                Ok(v) => ExecResult::Return(v),
+                Err(e) => ExecResult::Exception(e),
+            };
+        }
+
+        if self.frames.len() >= MAX_DEPTH {
+            return ExecResult::Exception(ClrException::stack_overflow());
+        }
+        let Some(body) = self.assembly.method_body(md.rva) else {
+            return ExecResult::Exception(ClrException::new(
+                "System",
+                "BadImageFormatException",
+                &format!("corps de méthode illisible (RVA {:#x})", md.rva),
+            ));
         };
-
-        let sig_blob = self.assembly.get_blob(md.signature);
-        let _sig = metadata::decode_method_sig(sig_blob);
-
         let locals = if body.local_var_sig_token != 0 {
-            let sig_row = (body.local_var_sig_token & 0x00FFFFFF) as u32;
-            let sig = self.assembly.get_standalone_sig(sig_row);
-            let blob = self.assembly.get_blob(sig.signature);
-            let local_types = metadata::decode_locals_sig(blob);
-            local_types.iter().map(|t| Value::default_for(t)).collect()
+            let sig = self
+                .assembly
+                .get_standalone_sig(body.local_var_sig_token & 0x00FF_FFFF);
+            metadata::decode_locals_sig(self.assembly.get_blob(sig.signature))
+                .iter()
+                .map(Value::default_for)
+                .collect()
         } else {
             Vec::new()
         };
 
-        let frame = CallFrame {
-            method_token: Token::new(TableId::MethodDef, method_row).0,
+        self.frames.push(CallFrame {
             ip: 0,
-            code: body.code.clone(),
+            code: body.code,
             locals,
             args,
             eval_stack: Vec::with_capacity(body.max_stack as usize),
-            exception_clauses: body.exception_clauses.clone(),
-        };
-        self.frames.push(frame);
+            exception_clauses: body.exception_clauses,
+            pending: None,
+            leave_target: None,
+            caught: None,
+        });
         self.run_loop()
     }
 
-    pub fn execute_token(&mut self, token: u32, args: Vec<Value>) -> ExecResult {
-        let table = (token >> 24) as u8;
-        let row = token & 0x00FFFFFF;
-        match table {
-            0x06 => self.execute_method(row, args),
-            0x0A => {
+    /// Appelle la méthode désignée par `token`. Avec `virtual_call`, la
+    /// redéfinition du type réel de `this` est choisie.
+    fn invoke(
+        &mut self,
+        token: u32,
+        args: Vec<Value>,
+        virtual_call: bool,
+    ) -> Result<Value, ClrException> {
+        let mut target = self.resolve_method(token);
+        if virtual_call {
+            if let Some(Value::Ref(this)) = args.first() {
+                if let Some(type_id) = gc::type_of(*this) {
+                    let (name, argc) = self.method_name_and_arity(token);
+                    let row = types::with_types(|reg| reg.find_override(type_id, &name, argc));
+                    if let Some(row) = row {
+                        target = Target::Managed(Token(row).rid());
+                    }
+                }
+            } else if matches!(args.first(), Some(Value::Null)) {
+                return Err(ClrException::null_reference());
+            }
+        }
+        match target {
+            Target::Managed(row) => match self.execute_method(row, args) {
+                ExecResult::Return(v) => Ok(v),
+                ExecResult::Exception(e) => Err(e),
+            },
+            Target::External {
+                namespace,
+                class,
+                name,
+            } => {
+                let params = self.get_method_sig(token).param_types;
+                self.call_native(&namespace, &class, &name, args, &params)
+            }
+        }
+    }
+
+    fn resolve_method(&self, token: u32) -> Target {
+        let row = Token(token).rid();
+        match Token(token).table() {
+            t if t == TableId::MethodDef as u8 => Target::Managed(row),
+            t if t == TableId::MethodSpec as u8 => {
+                let spec = self.assembly.get_method_spec(row);
+                let (table, inner) = CodedIndex::MethodDefOrRef.decode(spec.method);
+                let table = table.map_or(0, |t| t as u32);
+                self.resolve_method((table << 24) | inner)
+            }
+            t if t == TableId::MemberRef as u8 => {
                 let mr = self.assembly.get_member_ref(row);
                 let name = self.assembly.get_string(mr.name).to_string();
-                let (parent_table, parent_row) =
-                    super::tables::CodedIndex::MemberRefParent.decode(mr.class);
-                let (ns, cls) = match parent_table {
+                let (parent, prow) = CodedIndex::MemberRefParent.decode(mr.class);
+                let (namespace, class) = match parent {
                     Some(TableId::TypeRef) => {
-                        let tr = self.assembly.get_type_ref(parent_row);
-                        (
-                            self.assembly.get_string(tr.namespace).to_string(),
-                            self.assembly.get_string(tr.name).to_string(),
-                        )
+                        let tr = self.assembly.get_type_ref(prow);
+                        (tr.namespace, tr.name)
                     }
                     Some(TableId::TypeDef) => {
-                        let td = self.assembly.get_type_def(parent_row);
-                        (
-                            self.assembly.get_string(td.namespace).to_string(),
-                            self.assembly.get_string(td.name).to_string(),
-                        )
+                        let found = self.assembly.type_methods(prow).find(|&m| {
+                            self.assembly
+                                .get_string(self.assembly.get_method_def(m).name)
+                                == name
+                        });
+                        if let Some(m) = found {
+                            return Target::Managed(m);
+                        }
+                        let td = self.assembly.get_type_def(prow);
+                        (td.namespace, td.name)
                     }
-                    _ => (String::new(), String::new()),
+                    Some(TableId::TypeSpec) => {
+                        let (ns, cls) = self.type_spec_name(prow);
+                        return Target::External {
+                            namespace: ns,
+                            class: cls,
+                            name,
+                        };
+                    }
+                    _ => (0, 0),
                 };
-                ExecResult::InternalCall {
-                    namespace: ns,
-                    class: cls,
-                    method: name,
-                    args,
+                Target::External {
+                    namespace: self.assembly.get_string(namespace).to_string(),
+                    class: self.assembly.get_string(class).to_string(),
+                    name,
                 }
             }
-            _ => ExecResult::Exception(format!("token non supporté : {token:#x}")),
+            _ => Target::External {
+                namespace: String::new(),
+                class: String::new(),
+                name: format!("jeton {token:#010x}"),
+            },
+        }
+    }
+
+    /// Nom du type générique d'une instanciation (`List`1` pour `List<int>`).
+    fn type_spec_name(&self, row: u32) -> (String, String) {
+        let blob = self
+            .assembly
+            .get_blob(self.assembly.get_type_spec(row).signature);
+        let mut off = 0;
+        let coded = match metadata::decode_type(blob, &mut off) {
+            ElementType::GenericInst(inner, _) => match *inner {
+                ElementType::Class(c) | ElementType::ValueType(c) => c,
+                _ => 0,
+            },
+            ElementType::Class(c) | ElementType::ValueType(c) => c,
+            _ => 0,
+        };
+        let (table, r) = CodedIndex::TypeDefOrRef.decode(coded);
+        let (ns, name) = match table {
+            Some(TableId::TypeRef) => {
+                let tr = self.assembly.get_type_ref(r);
+                (tr.namespace, tr.name)
+            }
+            Some(TableId::TypeDef) => {
+                let td = self.assembly.get_type_def(r);
+                (td.namespace, td.name)
+            }
+            _ => (0, 0),
+        };
+        (
+            self.assembly.get_string(ns).to_string(),
+            self.assembly.get_string(name).to_string(),
+        )
+    }
+
+    fn method_name_and_arity(&self, token: u32) -> (String, usize) {
+        let row = Token(token).rid();
+        let name = match Token(token).table() {
+            t if t == TableId::MethodDef as u8 => self.assembly.get_method_def(row).name,
+            t if t == TableId::MemberRef as u8 => self.assembly.get_member_ref(row).name,
+            _ => 0,
+        };
+        (
+            self.assembly.get_string(name).to_string(),
+            self.get_method_sig(token).param_types.len(),
+        )
+    }
+
+    /// Méthode implémentée par le runtime (BCL intégrée).
+    fn call_native(
+        &mut self,
+        namespace: &str,
+        class: &str,
+        name: &str,
+        args: Vec<Value>,
+        params: &[ElementType],
+    ) -> Result<Value, ClrException> {
+        match (namespace, class, name) {
+            (_, _, ".ctor") => {
+                // Constructeurs de la BCL (Object, Exception…) : seul le message
+                // éventuel d'une exception est conservé.
+                if let (Some(Value::Ref(this)), Some(Value::Ref(msg))) = (args.first(), args.get(1))
+                {
+                    if gc::type_of(*msg) == Some(types::TYPE_STRING) && gc::type_of(*this).is_some()
+                    {
+                        unsafe {
+                            *(this.add(exceptions::MESSAGE_SLOT) as *mut *mut u8) = *msg;
+                        }
+                    }
+                }
+                return Ok(Value::Null);
+            }
+            (_, c, "get_Message") if c.ends_with("Exception") => {
+                let this = args.first().map_or(std::ptr::null_mut(), |v| v.as_ref());
+                if this.is_null() {
+                    return Err(ClrException::null_reference());
+                }
+                let msg = ClrException { obj_ptr: this }.message();
+                return Ok(bcl::alloc_managed_string(&msg));
+            }
+            ("System", "GC", "Collect") => {
+                self.collect_garbage();
+                return Ok(Value::Null);
+            }
+            _ => {}
+        }
+        let mut args = args;
+        let first_param = args.len() - params.len().min(args.len());
+        for (i, param) in params.iter().enumerate() {
+            if matches!(param, ElementType::Object) {
+                args[first_param + i] = self.managed_to_string(args[first_param + i])?;
+            }
+        }
+        bcl::dispatch_internal_call(namespace, class, name, &args, params).ok_or_else(|| {
+            ClrException::new(
+                "System",
+                "MissingMethodException",
+                &format!("Method not found: {namespace}.{class}::{name}"),
+            )
+        })
+    }
+
+    /// Remplace un objet par le résultat de sa redéfinition managée de
+    /// `ToString()`, pour que la BCL native l'affiche comme .NET.
+    fn managed_to_string(&mut self, v: Value) -> Result<Value, ClrException> {
+        let Value::Ref(p) = v else { return Ok(v) };
+        let Some(type_id) = gc::type_of(p) else {
+            return Ok(v);
+        };
+        match types::with_types(|reg| reg.find_override(type_id, "ToString", 0)) {
+            Some(token) => match self.execute_method(Token(token).rid(), vec![v]) {
+                ExecResult::Return(s) => Ok(s),
+                ExecResult::Exception(e) => Err(e),
+            },
+            None => Ok(v),
         }
     }
 
     fn find_declaring_type(&self, method_row: u32) -> u32 {
-        let count = self.assembly.row_count(TableId::TypeDef);
-        for i in 1..=count {
-            let range = self.assembly.type_methods(i);
-            if method_row >= range.start && method_row < range.end {
-                return i;
-            }
-        }
-        0
+        (1..=self.assembly.row_count(TableId::TypeDef))
+            .find(|&i| self.assembly.type_methods(i).contains(&method_row))
+            .unwrap_or(0)
     }
 
+    /// Exécute la méthode au sommet de la pile d'appels jusqu'à son retour.
     fn run_loop(&mut self) -> ExecResult {
         loop {
-            let depth = self.frames.len();
-            if depth == 0 {
-                return ExecResult::Return(Value::I32(self.exit_code));
+            if gc::with_gc(|gc| gc.should_collect()) {
+                self.collect_garbage();
             }
-            let frame = &self.frames[depth - 1];
+            let frame = self.frames.last().unwrap();
             if frame.ip >= frame.code.len() {
-                let ret = self
-                    .frames
-                    .pop()
-                    .unwrap()
-                    .eval_stack
-                    .pop()
-                    .unwrap_or(Value::Null);
-                if self.frames.is_empty() {
-                    return ExecResult::Return(ret);
-                }
-                self.frames.last_mut().unwrap().eval_stack.push(ret);
-                continue;
+                let ret = self.frames.pop().unwrap().eval_stack.pop();
+                return ExecResult::Return(ret.unwrap_or(Value::Null));
             }
-
-            let instr =
-                match opcodes::decode(&self.frames[depth - 1].code, self.frames[depth - 1].ip) {
-                    Some(i) => i,
-                    None => {
-                        return ExecResult::Exception(format!(
-                            "opcode invalide à IP={}",
-                            self.frames[depth - 1].ip
-                        ))
-                    }
-                };
+            let Some(instr) = opcodes::decode(&frame.code, frame.ip) else {
+                let ip = frame.ip;
+                self.frames.pop();
+                return ExecResult::Exception(ClrException::new(
+                    "System",
+                    "InvalidProgramException",
+                    &format!("opcode invalide à IL_{ip:04x}"),
+                ));
+            };
             let next_ip = instr.offset + instr.size;
 
             match self.step(instr.op, instr.offset, next_ip) {
                 StepResult::Continue => {
-                    let d = self.frames.len();
-                    if d > 0 && self.frames[d - 1].ip == instr.offset {
-                        self.frames[d - 1].ip = next_ip;
+                    let f = self.frames.last_mut().unwrap();
+                    if f.ip == instr.offset {
+                        f.ip = next_ip;
                     }
                 }
-                StepResult::Branch(target) => {
-                    self.frames.last_mut().unwrap().ip = target;
-                }
-                StepResult::Call(result) => match result {
-                    ExecResult::Return(v) => {
-                        self.frames.last_mut().unwrap().eval_stack.push(v);
-                        self.frames.last_mut().unwrap().ip = next_ip;
-                    }
-                    other => return other,
-                },
+                StepResult::Branch(target) => self.frames.last_mut().unwrap().ip = target,
                 StepResult::Return(v) => {
                     self.frames.pop();
-                    if self.frames.is_empty() {
-                        return ExecResult::Return(v);
-                    }
-                    self.frames.last_mut().unwrap().eval_stack.push(v);
+                    return ExecResult::Return(v);
                 }
-                StepResult::Err(msg) => return ExecResult::Exception(msg),
-                StepResult::Delegate(result) => return result,
+                StepResult::Throw(exc) => {
+                    if let Some(unhandled) = self.raise(exc, instr.offset) {
+                        self.frames.pop();
+                        return ExecResult::Exception(unhandled);
+                    }
+                }
             }
         }
+    }
+
+    /// Cherche un gestionnaire dans la méthode courante ; renvoie l'exception
+    /// si elle doit remonter à l'appelant.
+    fn raise(&mut self, exc: ClrException, ip: usize) -> Option<ClrException> {
+        let clauses = std::mem::take(&mut self.frames.last_mut().unwrap().exception_clauses);
+        let handler = exceptions::find_handler(&clauses, ip, |class| self.catches(class, &exc));
+        let f = self.frames.last_mut().unwrap();
+        f.exception_clauses = clauses;
+        f.eval_stack.clear();
+        match handler {
+            Some(Handler::Catch(h)) => {
+                f.eval_stack.push(Value::Ref(exc.obj_ptr));
+                f.caught = Some(exc);
+                f.ip = h;
+                None
+            }
+            Some(Handler::Finally(h)) => {
+                f.pending = Some(exc);
+                f.leave_target = None;
+                f.ip = h;
+                None
+            }
+            None => Some(exc),
+        }
+    }
+
+    fn catches(&self, class_token: u32, exc: &ClrException) -> bool {
+        let Some(thrown) = gc::type_of(exc.obj_ptr) else {
+            return true;
+        };
+        match self.resolve_type_token(class_token) {
+            Some(target) => types::with_types(|reg| reg.is_subclass_of(thrown, target)),
+            None => true,
+        }
+    }
+
+    /// Type désigné par un jeton TypeDef / TypeRef (les types de la BCL sont
+    /// créés à la demande).
+    fn resolve_type_token(&self, token: u32) -> Option<types::TypeId> {
+        let row = Token(token).rid();
+        let (ns, name) = match Token(token).table() {
+            t if t == TableId::TypeDef as u8 => {
+                let td = self.assembly.get_type_def(row);
+                (td.namespace, td.name)
+            }
+            t if t == TableId::TypeRef as u8 => {
+                let tr = self.assembly.get_type_ref(row);
+                (tr.namespace, tr.name)
+            }
+            _ => return None,
+        };
+        let ns = self.assembly.get_string(ns);
+        let name = self.assembly.get_string(name);
+        Some(types::with_types(|reg| reg.ensure_external(ns, name)))
+    }
+
+    fn is_interface_token(&self, token: u32) -> bool {
+        Token(token).table() == TableId::TypeDef as u8
+            && self
+                .assembly
+                .get_type_def(Token(token).rid())
+                .is_interface()
+    }
+
+    /// Collecte en prenant pour racines tout ce que voient les méthodes en
+    /// cours et les champs statiques.
+    fn collect_garbage(&mut self) {
+        let mut roots = Vec::new();
+        for f in &self.frames {
+            let values = f.locals.iter().chain(&f.args).chain(&f.eval_stack);
+            roots.extend(values.map(|v| v.as_i64() as usize));
+            let held = f.pending.iter().chain(&f.caught);
+            roots.extend(held.map(|e| e.obj_ptr as usize));
+        }
+        types::with_types(|reg| {
+            for data in reg.static_data.values() {
+                roots.extend(
+                    data.chunks_exact(8)
+                        .map(|c| usize::from_le_bytes(c.try_into().unwrap())),
+                );
+            }
+        });
+        gc::with_gc(|gc| gc.collect(&roots));
     }
 
     fn step(&mut self, op: OpCode, offset: usize, next_ip: usize) -> StepResult {
@@ -333,7 +633,7 @@ impl Interpreter {
 
             // --- Chargement d'arguments ---
             OpCode::Ldarg_0 => {
-                push!(f.args.get(0).copied().unwrap_or(Value::Null));
+                push!(f.args.first().copied().unwrap_or(Value::Null));
                 StepResult::Continue
             }
             OpCode::Ldarg_1 => {
@@ -370,7 +670,7 @@ impl Interpreter {
 
             // --- Variables locales ---
             OpCode::Ldloc_0 => {
-                push!(f.locals.get(0).copied().unwrap_or(Value::Null));
+                push!(f.locals.first().copied().unwrap_or(Value::Null));
                 StepResult::Continue
             }
             OpCode::Ldloc_1 => {
@@ -527,7 +827,7 @@ impl Interpreter {
                 let b = pop!();
                 let a = pop!();
                 if matches!(b, Value::I32(0) | Value::I64(0)) {
-                    return StepResult::Err("System.DivideByZeroException".into());
+                    return StepResult::Throw(ClrException::divide_by_zero());
                 }
                 push!(arith_div(a, b));
                 StepResult::Continue
@@ -543,6 +843,9 @@ impl Interpreter {
             OpCode::Rem => {
                 let b = pop!();
                 let a = pop!();
+                if matches!(b, Value::I32(0) | Value::I64(0)) {
+                    return StepResult::Throw(ClrException::divide_by_zero());
+                }
                 push!(arith_rem(a, b));
                 StepResult::Continue
             }
@@ -918,18 +1221,7 @@ impl Interpreter {
                 let token = opcodes::read_u32(code, offset + 1);
                 let us_idx = token & 0x00FFFFFF;
                 let s = self.assembly.get_user_string(us_idx);
-                let ptr = gc::with_gc(|gc| {
-                    let bytes = s.encode_utf16().collect::<Vec<u16>>();
-                    let data_size = 8 + bytes.len() * 2;
-                    let p = gc.alloc(types::TYPE_STRING, data_size);
-                    unsafe {
-                        *(p as *mut u64) = bytes.len() as u64;
-                        let dest = p.add(8) as *mut u16;
-                        std::ptr::copy_nonoverlapping(bytes.as_ptr(), dest, bytes.len());
-                    }
-                    p
-                });
-                f.eval_stack.push(Value::Ref(ptr));
+                f.eval_stack.push(bcl::alloc_managed_string(&s));
                 StepResult::Continue
             }
 
@@ -938,50 +1230,43 @@ impl Interpreter {
                 let token = opcodes::read_u32(code, offset + 1);
                 f.ip = next_ip;
                 let sig = self.get_method_sig(token);
-                let argc = sig.param_types.len()
-                    + if sig.calling_convention & 0x20 != 0 {
-                        1
-                    } else {
-                        0
-                    };
-                let has_this = sig.calling_convention & 0x20 != 0;
                 let f = self.frames.last_mut().unwrap();
-                let mut args = Vec::with_capacity(argc);
-                for _ in 0..sig.param_types.len() {
-                    args.push(f.eval_stack.pop().unwrap_or(Value::Null));
+                let split = f
+                    .eval_stack
+                    .len()
+                    .saturating_sub(sig.param_types.len() + sig.has_this() as usize);
+                let args = f.eval_stack.split_off(split);
+                match self.invoke(token, args, op == OpCode::Callvirt) {
+                    Ok(v) => {
+                        if !matches!(sig.ret_type, ElementType::Void) {
+                            self.frames.last_mut().unwrap().eval_stack.push(v);
+                        }
+                        StepResult::Continue
+                    }
+                    Err(e) => StepResult::Throw(e),
                 }
-                args.reverse();
-                if has_this {
-                    let this = f.eval_stack.pop().unwrap_or(Value::Null);
-                    args.insert(0, this);
-                }
-                let result = self.execute_token(token, args);
-                return StepResult::Call(result);
             }
 
             OpCode::Newobj => {
                 let token = opcodes::read_u32(code, offset + 1);
                 f.ip = next_ip;
                 let sig = self.get_method_sig(token);
+                let (type_id, size) = self.constructed_type(token);
                 let f = self.frames.last_mut().unwrap();
-                let mut args = Vec::new();
-                for _ in 0..sig.param_types.len() {
-                    args.push(f.eval_stack.pop().unwrap_or(Value::Null));
-                }
-                args.reverse();
-                let obj_ptr = gc::with_gc(|gc| gc.alloc(types::TYPE_OBJECT, 64));
-                args.insert(0, Value::Ref(obj_ptr));
-                let result = self.execute_token(token, args);
-                match result {
-                    ExecResult::Return(_) | ExecResult::InternalCall { .. } => {
+                let split = f.eval_stack.len().saturating_sub(sig.param_types.len());
+                let mut args = f.eval_stack.split_off(split);
+                let obj = gc::with_gc(|gc| gc.alloc(type_id, size));
+                args.insert(0, Value::Ref(obj));
+                match self.invoke(token, args, false) {
+                    Ok(_) => {
                         self.frames
                             .last_mut()
                             .unwrap()
                             .eval_stack
-                            .push(Value::Ref(obj_ptr));
-                        return StepResult::Call(ExecResult::Return(Value::Ref(obj_ptr)));
+                            .push(Value::Ref(obj));
+                        StepResult::Continue
                     }
-                    other => return StepResult::Delegate(other),
+                    Err(e) => StepResult::Throw(e),
                 }
             }
 
@@ -991,15 +1276,18 @@ impl Interpreter {
             }
 
             // --- Champs ---
-            OpCode::Ldfld => {
+            OpCode::Ldfld | OpCode::Ldflda => {
                 let token = opcodes::read_u32(code, offset + 1);
                 let obj = pop!().as_ref();
-                drop(f);
-                let field_offset = self.resolve_field_offset(token);
-                let val = if !obj.is_null() {
-                    unsafe { Value::I64(*(obj.add(field_offset) as *const i64)) }
+                if obj.is_null() {
+                    return StepResult::Throw(ClrException::null_reference());
+                }
+                let (slot, et) = self.instance_field(token);
+                let ptr = unsafe { obj.add(slot) };
+                let val = if op == OpCode::Ldflda {
+                    Value::Ref(ptr)
                 } else {
-                    Value::Null
+                    load_slot(ptr, &et)
                 };
                 self.frames.last_mut().unwrap().eval_stack.push(val);
                 StepResult::Continue
@@ -1008,27 +1296,29 @@ impl Interpreter {
                 let token = opcodes::read_u32(code, offset + 1);
                 let val = pop!();
                 let obj = pop!().as_ref();
-                drop(f);
-                let field_offset = self.resolve_field_offset(token);
-                if !obj.is_null() {
-                    unsafe {
-                        *(obj.add(field_offset) as *mut i64) = val.as_i64();
-                    }
+                if obj.is_null() {
+                    return StepResult::Throw(ClrException::null_reference());
                 }
+                let (slot, _) = self.instance_field(token);
+                store_slot(unsafe { obj.add(slot) }, val);
                 StepResult::Continue
             }
-            OpCode::Ldsfld => {
+            OpCode::Ldsfld | OpCode::Ldsflda => {
                 let token = opcodes::read_u32(code, offset + 1);
-                drop(f);
-                let val = self.load_static_field(token);
+                let (ptr, et) = self.static_field(token);
+                let val = if op == OpCode::Ldsflda {
+                    Value::Ref(ptr)
+                } else {
+                    load_slot(ptr, &et)
+                };
                 self.frames.last_mut().unwrap().eval_stack.push(val);
                 StepResult::Continue
             }
             OpCode::Stsfld => {
                 let token = opcodes::read_u32(code, offset + 1);
                 let val = pop!();
-                drop(f);
-                self.store_static_field(token, val);
+                let (ptr, _) = self.static_field(token);
+                store_slot(ptr, val);
                 StepResult::Continue
             }
 
@@ -1053,6 +1343,9 @@ impl Interpreter {
             OpCode::Ldelem_I4 | OpCode::Ldelem_U4 => {
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
+                if let Err(e) = check_index(arr, idx) {
+                    return StepResult::Throw(e);
+                }
                 let val = if !arr.is_null() {
                     unsafe { *(arr.add(8 + idx * 4) as *const i32) }
                 } else {
@@ -1064,6 +1357,9 @@ impl Interpreter {
             OpCode::Ldelem_I8 => {
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
+                if let Err(e) = check_index(arr, idx) {
+                    return StepResult::Throw(e);
+                }
                 let val = if !arr.is_null() {
                     unsafe { *(arr.add(8 + idx * 8) as *const i64) }
                 } else {
@@ -1075,6 +1371,9 @@ impl Interpreter {
             OpCode::Ldelem_Ref => {
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
+                if let Err(e) = check_index(arr, idx) {
+                    return StepResult::Throw(e);
+                }
                 let val = if !arr.is_null() {
                     unsafe { Value::Ref(*(arr.add(8 + idx * 8) as *const *mut u8)) }
                 } else {
@@ -1086,6 +1385,9 @@ impl Interpreter {
             OpCode::Ldelem_I1 | OpCode::Ldelem_U1 => {
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
+                if let Err(e) = check_index(arr, idx) {
+                    return StepResult::Throw(e);
+                }
                 let val = if !arr.is_null() {
                     unsafe { *arr.add(8 + idx) as i32 }
                 } else {
@@ -1097,6 +1399,9 @@ impl Interpreter {
             OpCode::Ldelem_I2 | OpCode::Ldelem_U2 => {
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
+                if let Err(e) = check_index(arr, idx) {
+                    return StepResult::Throw(e);
+                }
                 let val = if !arr.is_null() {
                     unsafe { *(arr.add(8 + idx * 2) as *const i16) as i32 }
                 } else {
@@ -1109,6 +1414,9 @@ impl Interpreter {
                 let val = pop!().as_i32();
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
+                if let Err(e) = check_index(arr, idx) {
+                    return StepResult::Throw(e);
+                }
                 if !arr.is_null() {
                     unsafe {
                         *(arr.add(8 + idx * 4) as *mut i32) = val;
@@ -1120,6 +1428,9 @@ impl Interpreter {
                 let val = pop!().as_i64();
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
+                if let Err(e) = check_index(arr, idx) {
+                    return StepResult::Throw(e);
+                }
                 if !arr.is_null() {
                     unsafe {
                         *(arr.add(8 + idx * 8) as *mut i64) = val;
@@ -1131,6 +1442,9 @@ impl Interpreter {
                 let val = pop!().as_ref();
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
+                if let Err(e) = check_index(arr, idx) {
+                    return StepResult::Throw(e);
+                }
                 if !arr.is_null() {
                     unsafe {
                         *(arr.add(8 + idx * 8) as *mut *mut u8) = val;
@@ -1142,6 +1456,9 @@ impl Interpreter {
                 let val = pop!().as_i32() as u8;
                 let idx = pop!().as_i32() as usize;
                 let arr = pop!().as_ref();
+                if let Err(e) = check_index(arr, idx) {
+                    return StepResult::Throw(e);
+                }
                 if !arr.is_null() {
                     unsafe {
                         *arr.add(8 + idx) = val;
@@ -1227,40 +1544,69 @@ impl Interpreter {
 
             // --- Objets ---
             OpCode::Castclass | OpCode::Isinst => {
-                let _token = opcodes::read_u32(code, offset + 1);
-                // Simplifié : pas de vérification de type
+                let token = opcodes::read_u32(code, offset + 1);
+                let obj = pop!();
+                let fits = match obj {
+                    Value::Ref(p) => self.is_instance(p, token),
+                    _ => true,
+                };
+                let f = self.frames.last_mut().unwrap();
+                if fits {
+                    f.eval_stack.push(obj);
+                } else if op == OpCode::Isinst {
+                    f.eval_stack.push(Value::Null);
+                } else {
+                    return StepResult::Throw(ClrException::new(
+                        "System",
+                        "InvalidCastException",
+                        "Specified cast is not valid.",
+                    ));
+                }
                 StepResult::Continue
             }
             OpCode::Box => {
-                let _token = opcodes::read_u32(code, offset + 1);
+                let token = opcodes::read_u32(code, offset + 1);
                 let val = pop!();
-                let ptr = gc::with_gc(|gc| {
-                    let p = gc.alloc(types::TYPE_OBJECT, 16);
-                    unsafe {
-                        *(p as *mut i64) = val.as_i64();
-                    }
-                    p
-                });
-                push!(Value::Ref(ptr));
+                // Les structures sont déjà représentées par une référence.
+                let boxed = if let Value::Ref(_) = val {
+                    val
+                } else {
+                    let type_id = self.resolve_type_token(token).unwrap_or(types::TYPE_OBJECT);
+                    let p = gc::with_gc(|gc| gc.alloc(type_id, 8));
+                    store_slot(p, val);
+                    Value::Ref(p)
+                };
+                self.frames.last_mut().unwrap().eval_stack.push(boxed);
                 StepResult::Continue
             }
             OpCode::Unbox | OpCode::Unbox_Any => {
-                let _token = opcodes::read_u32(code, offset + 1);
                 let obj = pop!().as_ref();
-                let val = if !obj.is_null() {
-                    unsafe { Value::I64(*(obj as *const i64)) }
-                } else {
-                    Value::I32(0)
+                let val = match gc::type_of(obj) {
+                    None => return StepResult::Throw(ClrException::null_reference()),
+                    Some(id) if (types::TYPE_INT32..=types::TYPE_INTPTR).contains(&id) => {
+                        if op == OpCode::Unbox {
+                            Value::Ref(obj)
+                        } else {
+                            bcl::unbox(obj, id)
+                        }
+                    }
+                    Some(_) => Value::Ref(obj),
                 };
-                push!(val);
+                self.frames.last_mut().unwrap().eval_stack.push(val);
                 StepResult::Continue
             }
 
             // --- Exceptions ---
-            OpCode::Throw => {
-                let _exc = pop!();
-                StepResult::Err("exception .NET lancée".into())
-            }
+            OpCode::Throw => match pop!() {
+                Value::Ref(p) if gc::type_of(p).is_some() => {
+                    StepResult::Throw(ClrException { obj_ptr: p })
+                }
+                _ => StepResult::Throw(ClrException::null_reference()),
+            },
+            OpCode::Rethrow => match f.caught {
+                Some(exc) => StepResult::Throw(exc),
+                None => StepResult::Throw(ClrException::null_reference()),
+            },
             OpCode::Leave | OpCode::Leave_S => {
                 let target = if op == OpCode::Leave_S {
                     (next_ip as i64 + opcodes::read_i8(code, offset + 1) as i64) as usize
@@ -1268,9 +1614,32 @@ impl Interpreter {
                     (next_ip as i64 + opcodes::read_i32(code, offset + 1) as i64) as usize
                 };
                 f.eval_stack.clear();
-                StepResult::Branch(target)
+                f.caught = None;
+                match exceptions::find_leave_target(&f.exception_clauses, offset, target) {
+                    Some(handler) => {
+                        f.leave_target = Some(target);
+                        StepResult::Branch(handler)
+                    }
+                    None => StepResult::Branch(target),
+                }
             }
-            OpCode::Endfinally => StepResult::Continue,
+            OpCode::Endfinally => {
+                if let Some(exc) = f.pending.take() {
+                    return StepResult::Throw(exc);
+                }
+                match f.leave_target.take() {
+                    Some(target) => {
+                        match exceptions::find_leave_target(&f.exception_clauses, offset, target) {
+                            Some(handler) => {
+                                f.leave_target = Some(target);
+                                StepResult::Branch(handler)
+                            }
+                            None => StepResult::Branch(target),
+                        }
+                    }
+                    None => StepResult::Continue,
+                }
+            }
 
             // --- Tokens ---
             OpCode::Ldtoken => {
@@ -1367,114 +1736,104 @@ impl Interpreter {
     }
 
     fn get_method_sig(&self, token: u32) -> metadata::MethodSig {
-        let table = (token >> 24) as u8;
-        let row = token & 0x00FFFFFF;
-        let sig_blob_idx = match table {
-            0x06 => self.assembly.get_method_def(row).signature,
-            0x0A => self.assembly.get_member_ref(row).signature,
+        let row = Token(token).rid();
+        let blob = match Token(token).table() {
+            t if t == TableId::MethodDef as u8 => self.assembly.get_method_def(row).signature,
+            t if t == TableId::MemberRef as u8 => self.assembly.get_member_ref(row).signature,
+            t if t == TableId::MethodSpec as u8 => {
+                let spec = self.assembly.get_method_spec(row);
+                let (table, inner) = CodedIndex::MethodDefOrRef.decode(spec.method);
+                return self.get_method_sig((table.map_or(0, |t| t as u32) << 24) | inner);
+            }
             _ => 0,
         };
-        let blob = self.assembly.get_blob(sig_blob_idx);
-        metadata::decode_method_sig(blob)
+        metadata::decode_method_sig(self.assembly.get_blob(blob))
     }
 
-    fn resolve_field_offset(&self, token: u32) -> usize {
-        let table = (token >> 24) as u8;
-        let row = token & 0x00FFFFFF;
-        match table {
-            0x04 => (row as usize).saturating_sub(1) * 8,
-            0x0A => {
-                let mr = self.assembly.get_member_ref(row);
-                let name = self.assembly.get_string(mr.name);
-                types::with_types(|reg| {
-                    let (parent_table, parent_row) =
-                        super::tables::CodedIndex::MemberRefParent.decode(mr.class);
-                    let (ns, cls) = match parent_table {
-                        Some(TableId::TypeRef) => {
-                            let tr = self.assembly.get_type_ref(parent_row);
-                            (
-                                self.assembly.get_string(tr.namespace).to_string(),
-                                self.assembly.get_string(tr.name).to_string(),
-                            )
-                        }
-                        _ => (String::new(), String::new()),
-                    };
-                    if let Some(tid) = reg.find_by_name(&ns, &cls) {
-                        if let Some(ti) = reg.get(tid) {
-                            if let Some((_, fi)) = ti.find_field(name) {
-                                return fi.offset;
-                            }
-                        }
-                    }
-                    0
-                })
+    /// Type et taille de l'objet que construit le constructeur `token`.
+    fn constructed_type(&self, token: u32) -> (types::TypeId, usize) {
+        let (ns, name) = match self.resolve_method(token) {
+            Target::Managed(row) => {
+                let td = self.assembly.get_type_def(self.find_declaring_type(row));
+                (
+                    self.assembly.get_string(td.namespace).to_string(),
+                    self.assembly.get_string(td.name).to_string(),
+                )
             }
-            _ => 0,
+            Target::External {
+                namespace, class, ..
+            } => (namespace, class),
+        };
+        types::with_types(|reg| {
+            let id = reg.ensure_external(&ns, &name);
+            let size = reg
+                .get(id)
+                .map_or(types::EXTERNAL_OBJECT_SIZE, |t| t.instance_size);
+            (id, size.max(16))
+        })
+    }
+
+    fn is_instance(&self, obj: *mut u8, token: u32) -> bool {
+        let Some(actual) = gc::type_of(obj) else {
+            return true;
+        };
+        // Les interfaces implémentées ne sont pas suivies : on accepte.
+        if self.is_interface_token(token) {
+            return true;
+        }
+        match self.resolve_type_token(token) {
+            Some(target) => types::with_types(|reg| {
+                let known_class = reg.get(target).is_some_and(|t| !t.methods.is_empty())
+                    || reg.is_subclass_of(target, types::TYPE_EXCEPTION)
+                    || target < types::TYPE_EXCEPTION;
+                !known_class || reg.is_subclass_of(actual, target)
+            }),
+            None => true,
         }
     }
 
-    fn load_static_field(&self, token: u32) -> Value {
-        let table = (token >> 24) as u8;
-        let row = token & 0x00FFFFFF;
-        match table {
-            0x04 => {
-                let offset = (row as usize).saturating_sub(1) * 8;
-                types::with_types(|reg| {
-                    let type_row = self.find_field_owner(row);
-                    let td = self.assembly.get_type_def(type_row);
-                    let ns = self.assembly.get_string(td.namespace);
-                    let name = self.assembly.get_string(td.name);
-                    if let Some(tid) = reg.find_by_name(ns, name) {
-                        let ptr = reg.static_field_ptr(tid, offset);
-                        unsafe { Value::I64(*(ptr as *const i64)) }
-                    } else {
-                        Value::I32(0)
-                    }
-                })
-            }
-            _ => Value::I32(0),
-        }
+    fn field_type(&self, field_row: u32) -> ElementType {
+        let blob = self
+            .assembly
+            .get_blob(self.assembly.get_field(field_row).signature);
+        let mut off = 1;
+        metadata::decode_type(blob, &mut off)
     }
 
-    fn store_static_field(&self, token: u32, val: Value) {
-        let table = (token >> 24) as u8;
-        let row = token & 0x00FFFFFF;
-        if table == 0x04 {
-            let offset = (row as usize).saturating_sub(1) * 8;
+    fn owner_type_id(&self, field_row: u32) -> Option<types::TypeId> {
+        let owner = (1..=self.assembly.row_count(TableId::TypeDef))
+            .find(|&i| self.assembly.type_fields(i).contains(&field_row))?;
+        let td = self.assembly.get_type_def(owner);
+        let ns = self.assembly.get_string(td.namespace);
+        let name = self.assembly.get_string(td.name);
+        types::with_types(|reg| reg.find_by_name(ns, name))
+    }
+
+    /// Décalage et type d'un champ d'instance. Les champs des types de la BCL
+    /// (MemberRef) ne sont pas modélisés : on utilise l'emplacement réservé.
+    fn instance_field(&self, token: u32) -> (usize, ElementType) {
+        let row = Token(token).rid();
+        if Token(token).table() != TableId::Field as u8 {
+            return (exceptions::MESSAGE_SLOT, ElementType::Object);
+        }
+        let offset = self.owner_type_id(row).and_then(|id| {
             types::with_types(|reg| {
-                let type_row = self.find_field_owner(row);
-                let td = self.assembly.get_type_def(type_row);
-                let ns = self.assembly.get_string(td.namespace);
-                let name = self.assembly.get_string(td.name);
-                if let Some(tid) = reg.find_by_name(ns, name) {
-                    let ptr = reg.static_field_ptr(tid, offset);
-                    unsafe {
-                        *(ptr as *mut i64) = val.as_i64();
-                    }
-                }
-            });
-        }
+                reg.get(id)?
+                    .fields
+                    .iter()
+                    .find(|f| f.metadata_row == row)
+                    .map(|f| f.offset)
+            })
+        });
+        (offset.unwrap_or(0), self.field_type(row))
     }
 
-    fn find_field_owner(&self, field_row: u32) -> u32 {
-        let count = self.assembly.row_count(TableId::TypeDef);
-        for i in 1..=count {
-            let range = self.assembly.type_fields(i);
-            if field_row >= range.start && field_row < range.end {
-                return i;
-            }
-        }
-        0
+    fn static_field(&self, token: u32) -> (*mut u8, ElementType) {
+        let row = Token(token).rid();
+        let owner = self.owner_type_id(row).unwrap_or(0);
+        let ptr = types::with_types(|reg| reg.static_field_ptr(owner, row as usize * 8));
+        (ptr, self.field_type(row))
     }
-}
-
-enum StepResult {
-    Continue,
-    Branch(usize),
-    Call(ExecResult),
-    Return(Value),
-    Err(String),
-    Delegate(ExecResult),
 }
 
 fn branch_cond_s(cond: bool, code: &[u8], offset: usize, next_ip: usize) -> StepResult {

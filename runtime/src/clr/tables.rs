@@ -1,5 +1,8 @@
 //! Définitions des tables de métadonnées CLI (ECMA-335 §II.22).
 
+// Décrit le format ECMA-335 complet ; l'interpréteur n'en lit encore qu'une partie.
+#![allow(dead_code)]
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(u8)]
 pub enum TableId {

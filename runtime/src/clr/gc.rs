@@ -1,10 +1,16 @@
-//! Ramasse-miettes simple (mark-and-sweep) pour les objets managés .NET.
+//! Ramasse-miettes mark-and-sweep pour les objets managés .NET.
+//!
+//! Les racines sont fournies par l'interpréteur au moment de la collecte
+//! (piles d'évaluation, variables locales, arguments, champs statiques) ;
+//! le contenu des objets est parcouru de façon conservatrice.
 
 use std::alloc::{alloc_zeroed, dealloc, Layout};
+use std::collections::HashSet;
 use std::sync::Mutex;
 
 const OBJ_ALIGN: usize = 8;
 const MARK_BIT: u32 = 1;
+const HEADER: usize = std::mem::size_of::<ObjHeader>();
 
 #[repr(C)]
 pub struct ObjHeader {
@@ -15,105 +21,96 @@ pub struct ObjHeader {
 }
 
 pub struct GcHeap {
-    objects: Vec<*mut ObjHeader>,
-    roots: Vec<*mut u8>,
+    objects: HashSet<usize>,
     total_allocated: usize,
     gc_threshold: usize,
 }
 
-unsafe impl Send for GcHeap {}
-
 impl GcHeap {
-    pub fn new() -> Self {
+    fn new() -> Self {
         GcHeap {
-            objects: Vec::new(),
-            roots: Vec::new(),
+            objects: HashSet::new(),
             total_allocated: 0,
             gc_threshold: 4 * 1024 * 1024,
         }
     }
 
     pub fn alloc(&mut self, type_id: u32, data_size: usize) -> *mut u8 {
-        let total = std::mem::size_of::<ObjHeader>() + align_up(data_size, OBJ_ALIGN);
+        let total = HEADER + align_up(data_size.max(OBJ_ALIGN), OBJ_ALIGN);
         let layout = Layout::from_size_align(total, OBJ_ALIGN).unwrap();
         let ptr = unsafe { alloc_zeroed(layout) };
         if ptr.is_null() {
-            self.collect();
-            let ptr = unsafe { alloc_zeroed(layout) };
-            if ptr.is_null() {
-                panic!("CLR GC: mémoire épuisée");
-            }
-            self.init_obj(ptr, type_id, total);
-            return unsafe { ptr.add(std::mem::size_of::<ObjHeader>()) };
+            std::alloc::handle_alloc_error(layout);
         }
-        self.init_obj(ptr, type_id, total);
-        unsafe { ptr.add(std::mem::size_of::<ObjHeader>()) }
-    }
-
-    fn init_obj(&mut self, ptr: *mut u8, type_id: u32, total: usize) {
         let hdr = ptr as *mut ObjHeader;
         unsafe {
             (*hdr).type_id = type_id;
-            (*hdr).flags = 0;
             (*hdr).size = total as u32;
         }
-        self.objects.push(hdr);
+        self.objects.insert(ptr as usize);
         self.total_allocated += total;
+        unsafe { ptr.add(HEADER) }
     }
 
     pub fn alloc_array(&mut self, type_id: u32, elem_size: usize, length: usize) -> *mut u8 {
-        let data_size = 8 + elem_size * length;
-        let ptr = self.alloc(type_id, data_size);
+        let ptr = self.alloc(type_id, 8 + elem_size * length);
         unsafe {
             *(ptr as *mut u64) = length as u64;
         }
         ptr
     }
 
-    pub fn add_root(&mut self, ptr: *mut u8) {
-        self.roots.push(ptr);
-    }
-
-    pub fn remove_root(&mut self, ptr: *mut u8) {
-        self.roots.retain(|&r| r != ptr);
+    pub fn is_object(&self, data_ptr: usize) -> bool {
+        data_ptr >= HEADER && self.objects.contains(&(data_ptr - HEADER))
     }
 
     pub fn should_collect(&self) -> bool {
         self.total_allocated >= self.gc_threshold
     }
 
-    pub fn collect(&mut self) {
-        for obj in &self.objects {
-            unsafe {
-                (**obj).flags &= !MARK_BIT;
+    pub fn collect(&mut self, roots: &[usize]) {
+        let mut work: Vec<usize> = roots
+            .iter()
+            .copied()
+            .filter(|&r| self.is_object(r))
+            .collect();
+        while let Some(data) = work.pop() {
+            let hdr = (data - HEADER) as *mut ObjHeader;
+            let (flags, size) = unsafe { ((*hdr).flags, (*hdr).size as usize) };
+            if flags & MARK_BIT != 0 {
+                continue;
             }
-        }
-
-        for &root in &self.roots {
-            if !root.is_null() {
-                self.mark(root);
+            unsafe { (*hdr).flags |= MARK_BIT };
+            for i in 0..(size - HEADER) / 8 {
+                let slot = unsafe { *((data + i * 8) as *const usize) };
+                if self.is_object(slot) {
+                    work.push(slot);
+                }
             }
         }
 
         let mut freed = 0usize;
         self.objects.retain(|&obj| {
-            let marked = unsafe { (*obj).flags & MARK_BIT != 0 };
-            if !marked {
-                let size = unsafe { (*obj).size } as usize;
-                let layout = Layout::from_size_align(size, OBJ_ALIGN).unwrap();
-                unsafe {
-                    dealloc(obj as *mut u8, layout);
-                }
-                freed += size;
+            let hdr = obj as *mut ObjHeader;
+            if unsafe { (*hdr).flags } & MARK_BIT != 0 {
+                unsafe { (*hdr).flags &= !MARK_BIT };
+                return true;
             }
-            marked
+            let size = unsafe { (*hdr).size } as usize;
+            unsafe {
+                dealloc(
+                    obj as *mut u8,
+                    Layout::from_size_align(size, OBJ_ALIGN).unwrap(),
+                )
+            };
+            freed += size;
+            false
         });
 
         self.total_allocated = self.total_allocated.saturating_sub(freed);
         if self.total_allocated > self.gc_threshold / 2 {
             self.gc_threshold = self.gc_threshold.saturating_mul(2);
         }
-
         crate::log_debug!(
             "clr-gc",
             "collecte : {} octets libérés, {} objets restants",
@@ -122,45 +119,21 @@ impl GcHeap {
         );
     }
 
-    fn mark(&self, data_ptr: *mut u8) {
-        let hdr_ptr = unsafe { data_ptr.sub(std::mem::size_of::<ObjHeader>()) } as *mut ObjHeader;
-        if !self.objects.contains(&hdr_ptr) {
-            return;
-        }
-        let hdr = unsafe { &mut *hdr_ptr };
-        if hdr.flags & MARK_BIT != 0 {
-            return;
-        }
-        hdr.flags |= MARK_BIT;
-        // Scan conservatif des champs de l'objet pour trouver des références
-        let data_size = hdr.size as usize - std::mem::size_of::<ObjHeader>();
-        let num_ptrs = data_size / 8;
-        for i in 0..num_ptrs {
-            let slot = unsafe { *(data_ptr.add(i * 8) as *const usize) };
-            if slot != 0 {
-                let candidate = slot as *mut u8;
-                let candidate_hdr =
-                    unsafe { candidate.sub(std::mem::size_of::<ObjHeader>()) } as *mut ObjHeader;
-                if self.objects.contains(&candidate_hdr) {
-                    self.mark(candidate);
-                }
-            }
-        }
-    }
-
-    pub fn stats(&self) -> (usize, usize) {
-        (self.objects.len(), self.total_allocated)
+    pub fn total_allocated(&self) -> usize {
+        self.total_allocated
     }
 }
 
 impl Drop for GcHeap {
     fn drop(&mut self) {
         for &obj in &self.objects {
-            let size = unsafe { (*obj).size } as usize;
-            let layout = Layout::from_size_align(size, OBJ_ALIGN).unwrap();
+            let size = unsafe { (*(obj as *const ObjHeader)).size } as usize;
             unsafe {
-                dealloc(obj as *mut u8, layout);
-            }
+                dealloc(
+                    obj as *mut u8,
+                    Layout::from_size_align(size, OBJ_ALIGN).unwrap(),
+                )
+            };
         }
     }
 }
@@ -175,6 +148,14 @@ pub fn with_gc<T>(f: impl FnOnce(&mut GcHeap) -> T) -> T {
     let mut lock = GC.lock().unwrap();
     let gc = lock.as_mut().expect("CLR GC non initialisé");
     f(gc)
+}
+
+/// Type d'un objet managé, ou `None` si `ptr` n'est pas un objet du tas.
+pub fn type_of(ptr: *mut u8) -> Option<u32> {
+    if ptr.is_null() || !with_gc(|gc| gc.is_object(ptr as usize)) {
+        return None;
+    }
+    Some(unsafe { (*(ptr.sub(HEADER) as *const ObjHeader)).type_id })
 }
 
 fn align_up(v: usize, a: usize) -> usize {

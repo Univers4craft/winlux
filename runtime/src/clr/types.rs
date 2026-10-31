@@ -3,8 +3,6 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use super::metadata::ElementType;
-
 pub type TypeId = u32;
 
 pub const TYPE_OBJECT: TypeId = 1;
@@ -22,32 +20,24 @@ pub const TYPE_UINT16: TypeId = 12;
 pub const TYPE_UINT32: TypeId = 13;
 pub const TYPE_UINT64: TypeId = 14;
 pub const TYPE_INTPTR: TypeId = 15;
-pub const TYPE_VOID: TypeId = 16;
 pub const TYPE_ARRAY: TypeId = 17;
-pub const TYPE_TYPE: TypeId = 18;
 pub const TYPE_EXCEPTION: TypeId = 19;
-pub const FIRST_USER_TYPE: TypeId = 256;
+pub const TYPE_VALUETYPE: TypeId = 20;
+pub const TYPE_ENUM: TypeId = 21;
+const FIRST_USER_TYPE: TypeId = 256;
+
+/// Taille de l'objet d'un type extérieur à l'assembly (BCL) : assez pour le
+/// message d'une exception et quelques champs internes.
+pub const EXTERNAL_OBJECT_SIZE: usize = 64;
 
 #[derive(Debug, Clone)]
 pub struct TypeInfo {
-    pub id: TypeId,
     pub name: String,
     pub namespace: String,
     pub parent: TypeId,
-    pub flags: u32,
     pub fields: Vec<FieldInfo>,
     pub methods: Vec<MethodInfo>,
-    pub static_fields: Vec<FieldInfo>,
-    pub vtable: Vec<u32>,
-    pub interfaces: Vec<TypeId>,
     pub instance_size: usize,
-    pub is_value_type: bool,
-    pub is_enum: bool,
-    pub is_interface: bool,
-    pub is_abstract: bool,
-    pub generic_params: Vec<String>,
-    pub metadata_row: u32,
-    pub cctor_run: bool,
 }
 
 impl TypeInfo {
@@ -58,27 +48,10 @@ impl TypeInfo {
             format!("{}.{}", self.namespace, self.name)
         }
     }
-
-    pub fn find_method(&self, name: &str) -> Option<&MethodInfo> {
-        self.methods.iter().find(|m| m.name == name)
-    }
-
-    pub fn find_field(&self, name: &str) -> Option<(usize, &FieldInfo)> {
-        self.fields.iter().enumerate().find(|(_, f)| f.name == name)
-    }
-
-    pub fn find_static_field(&self, name: &str) -> Option<(usize, &FieldInfo)> {
-        self.static_fields
-            .iter()
-            .enumerate()
-            .find(|(_, f)| f.name == name)
-    }
 }
 
 #[derive(Debug, Clone)]
 pub struct FieldInfo {
-    pub name: String,
-    pub field_type: ElementType,
     pub offset: usize,
     pub metadata_row: u32,
 }
@@ -87,17 +60,8 @@ pub struct FieldInfo {
 pub struct MethodInfo {
     pub name: String,
     pub token: u32,
-    pub rva: u32,
-    pub flags: u16,
-    pub impl_flags: u16,
-    pub is_static: bool,
     pub is_virtual: bool,
-    pub is_abstract: bool,
-    pub is_pinvoke: bool,
-    pub signature_blob: u32,
     pub param_count: usize,
-    pub vtable_slot: Option<usize>,
-    pub metadata_row: u32,
 }
 
 pub struct TypeRegistry {
@@ -108,78 +72,86 @@ pub struct TypeRegistry {
 }
 
 impl TypeRegistry {
-    pub fn new() -> Self {
+    fn new() -> Self {
         let mut reg = TypeRegistry {
             types: HashMap::new(),
             name_map: HashMap::new(),
             next_id: FIRST_USER_TYPE,
             static_data: HashMap::new(),
         };
-        reg.register_builtins();
+        let builtins = [
+            (TYPE_OBJECT, "Object", 0, 8),
+            (TYPE_STRING, "String", TYPE_OBJECT, 8),
+            (TYPE_VALUETYPE, "ValueType", TYPE_OBJECT, 8),
+            (TYPE_ENUM, "Enum", TYPE_VALUETYPE, 8),
+            (TYPE_INT32, "Int32", TYPE_VALUETYPE, 8),
+            (TYPE_INT64, "Int64", TYPE_VALUETYPE, 8),
+            (TYPE_FLOAT, "Single", TYPE_VALUETYPE, 8),
+            (TYPE_DOUBLE, "Double", TYPE_VALUETYPE, 8),
+            (TYPE_BOOLEAN, "Boolean", TYPE_VALUETYPE, 8),
+            (TYPE_CHAR, "Char", TYPE_VALUETYPE, 8),
+            (TYPE_BYTE, "Byte", TYPE_VALUETYPE, 8),
+            (TYPE_SBYTE, "SByte", TYPE_VALUETYPE, 8),
+            (TYPE_INT16, "Int16", TYPE_VALUETYPE, 8),
+            (TYPE_UINT16, "UInt16", TYPE_VALUETYPE, 8),
+            (TYPE_UINT32, "UInt32", TYPE_VALUETYPE, 8),
+            (TYPE_UINT64, "UInt64", TYPE_VALUETYPE, 8),
+            (TYPE_INTPTR, "IntPtr", TYPE_VALUETYPE, 8),
+            (TYPE_ARRAY, "Array", TYPE_OBJECT, 8),
+            (
+                TYPE_EXCEPTION,
+                "Exception",
+                TYPE_OBJECT,
+                EXTERNAL_OBJECT_SIZE,
+            ),
+        ];
+        for (id, name, parent, size) in builtins {
+            reg.insert(
+                id,
+                TypeInfo {
+                    name: name.into(),
+                    namespace: "System".into(),
+                    parent,
+                    fields: Vec::new(),
+                    methods: Vec::new(),
+                    instance_size: size,
+                },
+            );
+        }
         reg
     }
 
-    fn register_builtins(&mut self) {
-        let builtins = [
-            (TYPE_OBJECT, "Object", "System", 0, false),
-            (TYPE_STRING, "String", "System", TYPE_OBJECT, false),
-            (TYPE_INT32, "Int32", "System", TYPE_OBJECT, true),
-            (TYPE_INT64, "Int64", "System", TYPE_OBJECT, true),
-            (TYPE_FLOAT, "Single", "System", TYPE_OBJECT, true),
-            (TYPE_DOUBLE, "Double", "System", TYPE_OBJECT, true),
-            (TYPE_BOOLEAN, "Boolean", "System", TYPE_OBJECT, true),
-            (TYPE_CHAR, "Char", "System", TYPE_OBJECT, true),
-            (TYPE_BYTE, "Byte", "System", TYPE_OBJECT, true),
-            (TYPE_SBYTE, "SByte", "System", TYPE_OBJECT, true),
-            (TYPE_INT16, "Int16", "System", TYPE_OBJECT, true),
-            (TYPE_UINT16, "UInt16", "System", TYPE_OBJECT, true),
-            (TYPE_UINT32, "UInt32", "System", TYPE_OBJECT, true),
-            (TYPE_UINT64, "UInt64", "System", TYPE_OBJECT, true),
-            (TYPE_INTPTR, "IntPtr", "System", TYPE_OBJECT, true),
-            (TYPE_VOID, "Void", "System", 0, true),
-            (TYPE_ARRAY, "Array", "System", TYPE_OBJECT, false),
-            (TYPE_TYPE, "Type", "System", TYPE_OBJECT, false),
-            (TYPE_EXCEPTION, "Exception", "System", TYPE_OBJECT, false),
-        ];
-        for (id, name, ns, parent, is_vt) in builtins {
-            let ti = TypeInfo {
-                id,
-                name: name.to_string(),
-                namespace: ns.to_string(),
-                parent,
-                flags: 0,
-                fields: Vec::new(),
-                methods: Vec::new(),
-                static_fields: Vec::new(),
-                vtable: Vec::new(),
-                interfaces: Vec::new(),
-                instance_size: if is_vt {
-                    element_size_of_builtin(id)
-                } else {
-                    8
-                },
-                is_value_type: is_vt,
-                is_enum: false,
-                is_interface: false,
-                is_abstract: false,
-                generic_params: Vec::new(),
-                metadata_row: 0,
-                cctor_run: true,
-            };
-            let full = ti.full_name();
-            self.types.insert(id, ti);
-            self.name_map.insert(full, id);
-        }
+    fn insert(&mut self, id: TypeId, info: TypeInfo) {
+        self.name_map.insert(info.full_name(), id);
+        self.types.insert(id, info);
     }
 
-    pub fn register(&mut self, mut info: TypeInfo) -> TypeId {
+    pub fn register(&mut self, info: TypeInfo) -> TypeId {
         let id = self.next_id;
         self.next_id += 1;
-        info.id = id;
-        let full = info.full_name();
-        self.types.insert(id, info);
-        self.name_map.insert(full, id);
+        self.insert(id, info);
         id
+    }
+
+    /// Type d'une autre assembly (BCL), créé à la demande. Les noms en
+    /// « …Exception » dérivent de System.Exception pour que `catch` les filtre.
+    pub fn ensure_external(&mut self, namespace: &str, name: &str) -> TypeId {
+        if let Some(id) = self.find_by_name(namespace, name) {
+            return id;
+        }
+        let parent = if name.ends_with("Exception") {
+            TYPE_EXCEPTION
+        } else {
+            TYPE_OBJECT
+        };
+        self.register(TypeInfo {
+            name: name.into(),
+            namespace: namespace.into(),
+            parent,
+            fields: Vec::new(),
+            methods: Vec::new(),
+            instance_size: EXTERNAL_OBJECT_SIZE,
+        })
     }
 
     pub fn get(&self, id: TypeId) -> Option<&TypeInfo> {
@@ -200,94 +172,39 @@ impl TypeRegistry {
     }
 
     pub fn is_subclass_of(&self, child: TypeId, parent: TypeId) -> bool {
-        if child == parent {
-            return true;
-        }
         let mut current = child;
-        loop {
-            let Some(ti) = self.get(current) else {
-                return false;
-            };
-            if ti.parent == 0 {
-                return false;
-            }
-            if ti.parent == parent {
+        while current != 0 {
+            if current == parent {
                 return true;
+            }
+            current = self.get(current).map_or(0, |t| t.parent);
+        }
+        false
+    }
+
+    /// Redéfinition la plus dérivée d'une méthode virtuelle, recherchée par nom
+    /// et nombre de paramètres en remontant la hiérarchie depuis `type_id`.
+    pub fn find_override(&self, type_id: TypeId, name: &str, param_count: usize) -> Option<u32> {
+        let mut current = type_id;
+        while let Some(ti) = self.get(current) {
+            let found = ti
+                .methods
+                .iter()
+                .find(|m| m.is_virtual && m.name == name && m.param_count == param_count);
+            if let Some(m) = found {
+                return Some(m.token);
             }
             current = ti.parent;
         }
-    }
-
-    pub fn alloc_static_data(&mut self, type_id: TypeId, size: usize) {
-        self.static_data
-            .entry(type_id)
-            .or_insert_with(|| vec![0u8; size]);
+        None
     }
 
     pub fn static_field_ptr(&mut self, type_id: TypeId, offset: usize) -> *mut u8 {
-        let data = self
-            .static_data
-            .entry(type_id)
-            .or_insert_with(|| vec![0u8; 256]);
-        if offset < data.len() {
-            unsafe { data.as_mut_ptr().add(offset) }
-        } else {
+        let data = self.static_data.entry(type_id).or_default();
+        if data.len() < offset + 8 {
             data.resize(offset + 8, 0);
-            unsafe { data.as_mut_ptr().add(offset) }
         }
-    }
-}
-
-pub fn element_size(et: &ElementType) -> usize {
-    match et {
-        ElementType::Boolean | ElementType::I1 | ElementType::U1 => 1,
-        ElementType::Char | ElementType::I2 | ElementType::U2 => 2,
-        ElementType::I4 | ElementType::U4 | ElementType::R4 => 4,
-        ElementType::I8 | ElementType::U8 | ElementType::R8 => 8,
-        ElementType::IntPtr | ElementType::UIntPtr => 8,
-        ElementType::String
-        | ElementType::Object
-        | ElementType::Class(_)
-        | ElementType::SzArray(_)
-        | ElementType::Array(_) => 8,
-        ElementType::ValueType(_) => 8,
-        ElementType::GenericInst(_, _) => 8,
-        ElementType::ByRef(_) | ElementType::Ptr(_) => 8,
-        ElementType::Void => 0,
-        _ => 8,
-    }
-}
-
-fn element_size_of_builtin(id: TypeId) -> usize {
-    match id {
-        TYPE_BOOLEAN | TYPE_BYTE | TYPE_SBYTE => 1,
-        TYPE_CHAR | TYPE_INT16 | TYPE_UINT16 => 2,
-        TYPE_INT32 | TYPE_UINT32 | TYPE_FLOAT => 4,
-        TYPE_INT64 | TYPE_UINT64 | TYPE_DOUBLE => 8,
-        TYPE_INTPTR => 8,
-        _ => 8,
-    }
-}
-
-pub fn element_type_to_type_id(et: &ElementType) -> TypeId {
-    match et {
-        ElementType::Boolean => TYPE_BOOLEAN,
-        ElementType::Char => TYPE_CHAR,
-        ElementType::I1 => TYPE_SBYTE,
-        ElementType::U1 => TYPE_BYTE,
-        ElementType::I2 => TYPE_INT16,
-        ElementType::U2 => TYPE_UINT16,
-        ElementType::I4 => TYPE_INT32,
-        ElementType::U4 => TYPE_UINT32,
-        ElementType::I8 => TYPE_INT64,
-        ElementType::U8 => TYPE_UINT64,
-        ElementType::R4 => TYPE_FLOAT,
-        ElementType::R8 => TYPE_DOUBLE,
-        ElementType::IntPtr => TYPE_INTPTR,
-        ElementType::String => TYPE_STRING,
-        ElementType::Object => TYPE_OBJECT,
-        ElementType::Void => TYPE_VOID,
-        _ => TYPE_OBJECT,
+        unsafe { data.as_mut_ptr().add(offset) }
     }
 }
 

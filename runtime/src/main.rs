@@ -43,13 +43,13 @@ fn main() {
         }
     };
     profiles::apply(&exe);
-    if managed::has_clr_header(&source) {
+    if let Some(assembly) = managed::managed_image(&exe, &source) {
         log_info!(
             "managed",
             "assembly .NET détectée, exécution via le CLR Winlux intégré"
         );
-        let code = clr::execute_assembly(&source);
-        std::process::exit(code);
+        let code = clr::execute_assembly(&assembly);
+        dlls::kernel32::flush_and_exit(code);
     }
     let image = match loader::load(&exe, true) {
         Ok(m) => m,
@@ -89,7 +89,7 @@ fn inspect(exe: &std::path::Path) -> i32 {
             return 1;
         }
     };
-    if managed::detect(exe, &source).is_none() {
+    if managed::managed_image(exe, &source).is_none() {
         match pe::PeImage::parse(&source) {
             Ok(image) if image.is_dll() => {
                 eprintln!(
