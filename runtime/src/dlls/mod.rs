@@ -35,6 +35,7 @@ pub mod user32_ext;
 pub mod version;
 pub mod winfile;
 pub mod winhttp;
+pub mod winlux_pty;
 pub mod winmm;
 pub mod ws2_32;
 
@@ -97,6 +98,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_misc::exports());
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
+                    e.extend(winlux_pty::exports());
                     e
                 },
                 handle: fake_module(),

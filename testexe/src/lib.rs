@@ -647,6 +647,12 @@ extern "system" {
         r: *mut c_void,
     ) -> i32;
     pub fn Sleep(ms: u32);
+    pub fn WinluxCreatePty(cols: u32, rows: u32) -> usize;
+    pub fn WinluxReadPty(handle: usize, buf: *mut u8, len: u32, read: *mut u32) -> i32;
+    pub fn WinluxWritePty(handle: usize, buf: *const u8, len: u32, written: *mut u32) -> i32;
+    pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
+    pub fn WinluxPtyAlive(handle: usize) -> i32;
+    pub fn WinluxClosePty(handle: usize) -> i32;
 }
 
 #[link(name = "shell32", kind = "raw-dylib")]

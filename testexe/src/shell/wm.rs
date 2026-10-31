@@ -25,7 +25,8 @@ pub const APP_SETTINGS: usize = 1;
 pub const APP_NOTEPAD: usize = 2;
 pub const APP_TASKMGR: usize = 3;
 pub const APP_UTILITIES: usize = 4;
-pub const APP_COUNT: usize = 5;
+pub const APP_TERMINAL: usize = 5;
+pub const APP_COUNT: usize = 6;
 
 // Native session: each built-in application owns a separate X11/Win32 window.
 // The Linux window manager handles its frame, stacking and taskbar lifecycle.
@@ -237,7 +238,7 @@ const CLOSED: Win = Win {
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4];
+static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
@@ -284,6 +285,7 @@ pub fn title_of(app: usize) -> &'static [u8] {
         APP_NOTEPAD => b"Bloc-notes",
         APP_TASKMGR => b"Gestionnaire des t\xE2ches",
         APP_UTILITIES => b"Utilitaires",
+        APP_TERMINAL => b"Terminal",
         _ => b"Param\xE8tres",
     }
 }
@@ -294,6 +296,7 @@ fn glyph_of(app: usize) -> Glyph {
         APP_NOTEPAD => Glyph::File,
         APP_TASKMGR => Glyph::Computer,
         APP_UTILITIES => Glyph::Tools,
+        APP_TERMINAL => Glyph::Terminal,
         _ => Glyph::Settings,
     }
 }
@@ -304,6 +307,7 @@ fn custom_title(app: usize) -> bool {
         APP_NOTEPAD => notepad::CUSTOM_TITLE,
         APP_TASKMGR => crate::taskmgr::CUSTOM_TITLE,
         APP_UTILITIES => utilities::CUSTOM_TITLE,
+        APP_TERMINAL => crate::terminal::CUSTOM_TITLE,
         _ => crate::settings::CUSTOM_TITLE,
     }
 }
@@ -315,6 +319,7 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
         APP_NOTEPAD => notepad::draw(g, f),
         APP_TASKMGR => crate::taskmgr::draw(g, f),
         APP_UTILITIES => utilities::draw(g, f),
+        APP_TERMINAL => crate::terminal::draw(g, f),
         _ => crate::settings::draw(g, f),
     }
 }
@@ -325,6 +330,7 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         APP_NOTEPAD => notepad::mouse(ev, x, y, f),
         APP_TASKMGR => crate::taskmgr::mouse(ev, x, y, f),
         APP_UTILITIES => utilities::mouse(ev, x, y, f),
+        APP_TERMINAL => crate::terminal::mouse(ev, x, y, f),
         _ => crate::settings::mouse(ev, x, y, f),
     }
 }
@@ -335,6 +341,7 @@ unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
         APP_NOTEPAD => notepad::key(vk, ch),
         APP_TASKMGR => crate::taskmgr::key(vk, ch),
         APP_UTILITIES => utilities::key(vk, ch),
+        APP_TERMINAL => crate::terminal::key(vk, ch),
         _ => crate::settings::key(vk, ch),
     }
 }
@@ -345,6 +352,7 @@ unsafe fn app_tick(app: usize, f: &Frame) -> bool {
         APP_NOTEPAD => notepad::tick(f),
         APP_TASKMGR => crate::taskmgr::tick(f),
         APP_UTILITIES => utilities::tick(f),
+        APP_TERMINAL => crate::terminal::tick(f),
         _ => crate::settings::tick(f),
     }
 }

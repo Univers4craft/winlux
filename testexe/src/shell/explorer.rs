@@ -3651,36 +3651,8 @@ unsafe fn open_terminal() {
     } else {
         p.loc.get()
     };
-    let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
-    let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-    let wterm: [u16; 15] = [
-        b's' as u16,
-        b'h' as u16,
-        b'e' as u16,
-        b'l' as u16,
-        b'l' as u16,
-        b':' as u16,
-        b't' as u16,
-        b'e' as u16,
-        b'r' as u16,
-        b'm' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'a' as u16,
-        b'l' as u16,
-        0,
-    ];
-    let r = ShellExecuteW(
-        core::ptr::null_mut(),
-        wopen.as_ptr(),
-        wterm.as_ptr(),
-        core::ptr::null(),
-        wstr(&mut wb, dir),
-        1,
-    );
-    if (r as isize) <= 32 {
-        notify(b"Aucun terminal n'est install\xE9.");
-    }
+    crate::terminal::init_at(dir);
+    crate::wm::open(crate::wm::APP_TERMINAL);
 }
 
 unsafe fn run_cmd(cmd: Cmd, geo: &Geo) {
