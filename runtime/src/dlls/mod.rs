@@ -12,6 +12,7 @@ pub mod crt_scan;
 pub mod crt_stdio;
 pub mod crypt32;
 pub mod d3d11;
+pub mod d3d12;
 pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
@@ -267,6 +268,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "d3d11",
                 exports: d3d11::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d12",
+                exports: d3d12::exports(),
                 handle: fake_module(),
             },
             Builtin {

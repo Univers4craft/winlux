@@ -122,13 +122,31 @@ pub(crate) fn format_info(f: u32) -> Option<FormatInfo> {
         D3DFMT_A8R8G8B8 | D3DFMT_X8R8G8B8 => fi(gl::GL_RGBA8, gl::GL_BGRA, gl::GL_UNSIGNED_BYTE, 4),
         D3DFMT_A8B8G8R8 | D3DFMT_X8B8G8R8 => fi(gl::GL_RGBA8, gl::GL_RGBA, gl::GL_UNSIGNED_BYTE, 4),
         D3DFMT_R5G6B5 => fi(gl::GL_RGB, gl::GL_RGB, glc::GL_UNSIGNED_SHORT_5_6_5, 2),
-        D3DFMT_X1R5G5B5 | D3DFMT_A1R5G5B5 => {
-            fi(gl::GL_RGBA, gl::GL_BGRA, glc::GL_UNSIGNED_SHORT_1_5_5_5_REV, 2)
-        }
-        D3DFMT_A4R4G4B4 => fi(gl::GL_RGBA, gl::GL_BGRA, glc::GL_UNSIGNED_SHORT_4_4_4_4_REV, 2),
+        D3DFMT_X1R5G5B5 | D3DFMT_A1R5G5B5 => fi(
+            gl::GL_RGBA,
+            gl::GL_BGRA,
+            glc::GL_UNSIGNED_SHORT_1_5_5_5_REV,
+            2,
+        ),
+        D3DFMT_A4R4G4B4 => fi(
+            gl::GL_RGBA,
+            gl::GL_BGRA,
+            glc::GL_UNSIGNED_SHORT_4_4_4_4_REV,
+            2,
+        ),
         D3DFMT_A8 => fi(glc::GL_ALPHA, glc::GL_ALPHA, gl::GL_UNSIGNED_BYTE, 1),
-        D3DFMT_L8 => fi(glc::GL_LUMINANCE, glc::GL_LUMINANCE, gl::GL_UNSIGNED_BYTE, 1),
-        D3DFMT_A8L8 => fi(glc::GL_LUMINANCE_ALPHA, glc::GL_LUMINANCE_ALPHA, gl::GL_UNSIGNED_BYTE, 2),
+        D3DFMT_L8 => fi(
+            glc::GL_LUMINANCE,
+            glc::GL_LUMINANCE,
+            gl::GL_UNSIGNED_BYTE,
+            1,
+        ),
+        D3DFMT_A8L8 => fi(
+            glc::GL_LUMINANCE_ALPHA,
+            glc::GL_LUMINANCE_ALPHA,
+            gl::GL_UNSIGNED_BYTE,
+            2,
+        ),
         D3DFMT_R16F => fi(gl::GL_R16F, gl::GL_RED, gl::GL_HALF_FLOAT, 2),
         D3DFMT_G16R16F => fi(gl::GL_RG16F, gl::GL_RG, gl::GL_HALF_FLOAT, 4),
         D3DFMT_A16B16G16R16F => fi(gl::GL_RGBA16F, gl::GL_RGBA, gl::GL_HALF_FLOAT, 8),
@@ -138,11 +156,24 @@ pub(crate) fn format_info(f: u32) -> Option<FormatInfo> {
         D3DFMT_DXT1 => bc(glc::GL_COMPRESSED_RGBA_S3TC_DXT1_EXT, 8),
         D3DFMT_DXT2 | D3DFMT_DXT3 => bc(glc::GL_COMPRESSED_RGBA_S3TC_DXT3_EXT, 16),
         D3DFMT_DXT4 | D3DFMT_DXT5 => bc(glc::GL_COMPRESSED_RGBA_S3TC_DXT5_EXT, 16),
-        D3DFMT_D16 | D3DFMT_D16_LOCKABLE => fi(gl::GL_DEPTH_COMPONENT16, gl::GL_DEPTH_COMPONENT, gl::GL_UNSIGNED_SHORT, 2),
-        D3DFMT_D24S8 | D3DFMT_D24X8 | D3DFMT_D32 => {
-            fi(gl::GL_DEPTH24_STENCIL8, gl::GL_DEPTH_STENCIL, gl::GL_UNSIGNED_INT_24_8, 4)
-        }
-        D3DFMT_D32F_LOCKABLE => fi(gl::GL_DEPTH_COMPONENT32F, gl::GL_DEPTH_COMPONENT, gl::GL_FLOAT, 4),
+        D3DFMT_D16 | D3DFMT_D16_LOCKABLE => fi(
+            gl::GL_DEPTH_COMPONENT16,
+            gl::GL_DEPTH_COMPONENT,
+            gl::GL_UNSIGNED_SHORT,
+            2,
+        ),
+        D3DFMT_D24S8 | D3DFMT_D24X8 | D3DFMT_D32 => fi(
+            gl::GL_DEPTH24_STENCIL8,
+            gl::GL_DEPTH_STENCIL,
+            gl::GL_UNSIGNED_INT_24_8,
+            4,
+        ),
+        D3DFMT_D32F_LOCKABLE => fi(
+            gl::GL_DEPTH_COMPONENT32F,
+            gl::GL_DEPTH_COMPONENT,
+            gl::GL_FLOAT,
+            4,
+        ),
         // Formats vidéo (DXVA2) : stockage CPU uniquement.
         D3DFMT_NV12 | D3DFMT_YV12 => fi(0, 0, 0, 1),
         D3DFMT_P010 => fi(0, 0, 0, 2),
@@ -153,7 +184,12 @@ pub(crate) fn format_info(f: u32) -> Option<FormatInfo> {
 fn is_depth(f: u32) -> bool {
     matches!(
         f,
-        D3DFMT_D16 | D3DFMT_D16_LOCKABLE | D3DFMT_D24S8 | D3DFMT_D24X8 | D3DFMT_D32 | D3DFMT_D32F_LOCKABLE
+        D3DFMT_D16
+            | D3DFMT_D16_LOCKABLE
+            | D3DFMT_D24S8
+            | D3DFMT_D24X8
+            | D3DFMT_D32
+            | D3DFMT_D32F_LOCKABLE
     )
 }
 
@@ -495,7 +531,12 @@ unsafe extern "win64" fn d3d_adapter_count(_: *mut Obj) -> u32 {
     1
 }
 
-unsafe extern "win64" fn d3d_adapter_identifier(_: *mut Obj, adapter: u32, _flags: u32, out: *mut u8) -> i32 {
+unsafe extern "win64" fn d3d_adapter_identifier(
+    _: *mut Obj,
+    adapter: u32,
+    _flags: u32,
+    out: *mut u8,
+) -> i32 {
     if adapter != 0 || out.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -509,7 +550,12 @@ unsafe extern "win64" fn d3d_adapter_identifier(_: *mut Obj, adapter: u32, _flag
     let name = caps
         .vulkan
         .as_ref()
-        .and_then(|v| v.devices.iter().find(|d| d.is_hardware()).or(v.devices.first()))
+        .and_then(|v| {
+            v.devices
+                .iter()
+                .find(|d| d.is_hardware())
+                .or(v.devices.first())
+        })
         .map(|d| d.name.clone())
         .unwrap_or_else(|| "Winlux OpenGL".into());
     let vendor = caps
@@ -540,7 +586,13 @@ unsafe extern "win64" fn d3d_mode_count(_: *mut Obj, adapter: u32, format: u32) 
     modes().len() as u32
 }
 
-unsafe extern "win64" fn d3d_enum_modes(_: *mut Obj, adapter: u32, format: u32, i: u32, out: *mut DisplayMode) -> i32 {
+unsafe extern "win64" fn d3d_enum_modes(
+    _: *mut Obj,
+    adapter: u32,
+    format: u32,
+    i: u32,
+    out: *mut DisplayMode,
+) -> i32 {
     if adapter != 0 || out.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -561,18 +613,41 @@ unsafe extern "win64" fn d3d_display_mode(_: *mut Obj, adapter: u32, out: *mut D
     S_OK
 }
 
-unsafe extern "win64" fn d3d_check_type(_: *mut Obj, adapter: u32, _ty: u32, _af: u32, bf: u32, _w: i32) -> i32 {
+unsafe extern "win64" fn d3d_check_type(
+    _: *mut Obj,
+    adapter: u32,
+    _ty: u32,
+    _af: u32,
+    bf: u32,
+    _w: i32,
+) -> i32 {
     if adapter != 0 {
         return D3DERR_INVALIDCALL;
     }
-    if matches!(bf, D3DFMT_UNKNOWN | D3DFMT_X8R8G8B8 | D3DFMT_A8R8G8B8 | D3DFMT_R5G6B5 | D3DFMT_X1R5G5B5 | D3DFMT_A1R5G5B5) {
+    if matches!(
+        bf,
+        D3DFMT_UNKNOWN
+            | D3DFMT_X8R8G8B8
+            | D3DFMT_A8R8G8B8
+            | D3DFMT_R5G6B5
+            | D3DFMT_X1R5G5B5
+            | D3DFMT_A1R5G5B5
+    ) {
         S_OK
     } else {
         D3DERR_NOTAVAILABLE
     }
 }
 
-unsafe extern "win64" fn d3d_check_format(_: *mut Obj, adapter: u32, _ty: u32, _af: u32, usage: u32, rtype: u32, f: u32) -> i32 {
+unsafe extern "win64" fn d3d_check_format(
+    _: *mut Obj,
+    adapter: u32,
+    _ty: u32,
+    _af: u32,
+    usage: u32,
+    rtype: u32,
+    f: u32,
+) -> i32 {
     if adapter != 0 {
         return D3DERR_INVALIDCALL;
     }
@@ -591,7 +666,15 @@ unsafe extern "win64" fn d3d_check_format(_: *mut Obj, adapter: u32, _ty: u32, _
     S_OK
 }
 
-unsafe extern "win64" fn d3d_check_ms(_: *mut Obj, _a: u32, _t: u32, _f: u32, _w: i32, ms: u32, q: *mut u32) -> i32 {
+unsafe extern "win64" fn d3d_check_ms(
+    _: *mut Obj,
+    _a: u32,
+    _t: u32,
+    _f: u32,
+    _w: i32,
+    ms: u32,
+    q: *mut u32,
+) -> i32 {
     if !q.is_null() {
         *q = 1;
     }
@@ -751,7 +834,11 @@ unsafe extern "win64" fn d3d_create_device_ex(
     d3d_create_device(this, adapter, ty, focus, behavior, pp, out)
 }
 
-unsafe extern "win64" fn d3d_mode_count_ex(this: *mut Obj, adapter: u32, _filter: *const c_void) -> u32 {
+unsafe extern "win64" fn d3d_mode_count_ex(
+    this: *mut Obj,
+    adapter: u32,
+    _filter: *const c_void,
+) -> u32 {
     d3d_mode_count(this, adapter, D3DFMT_X8R8G8B8)
 }
 
@@ -1084,8 +1171,17 @@ unsafe fn window_size(hwnd: usize) -> (u32, u32) {
         .unwrap_or((800, 600))
 }
 
-unsafe fn create_device(d3d: *mut Obj, focus: usize, pp: &mut PresentParams, ex: bool) -> Option<*mut Obj> {
-    let window = if pp.device_window != 0 { pp.device_window } else { focus };
+unsafe fn create_device(
+    d3d: *mut Obj,
+    focus: usize,
+    pp: &mut PresentParams,
+    ex: bool,
+) -> Option<*mut Obj> {
+    let window = if pp.device_window != 0 {
+        pp.device_window
+    } else {
+        focus
+    };
     let (ww, wh) = window_size(window);
     if pp.width == 0 {
         pp.width = ww;
@@ -1131,13 +1227,33 @@ unsafe fn create_device(d3d: *mut Obj, focus: usize, pp: &mut PresentParams, ex:
     {
         let mut d = lock(m);
         // Les surfaces implicites ne retiennent pas l'appareil (sinon cycle).
-        let bb = make_surface(&d, std::ptr::null_mut(), pp.width, pp.height, pp.format, D3DUSAGE_RENDERTARGET, D3DPOOL_DEFAULT);
+        let bb = make_surface(
+            &d,
+            std::ptr::null_mut(),
+            pp.width,
+            pp.height,
+            pp.format,
+            D3DUSAGE_RENDERTARGET,
+            D3DPOOL_DEFAULT,
+        );
         d.backbuffer = bb;
         obj_addref(bb);
         d.rts[0] = bb;
         if pp.auto_depth != 0 {
-            let fmt = if format_info(pp.auto_depth_format).is_some() { pp.auto_depth_format } else { D3DFMT_D24S8 };
-            let ds = make_surface(&d, std::ptr::null_mut(), pp.width, pp.height, fmt, D3DUSAGE_DEPTHSTENCIL, D3DPOOL_DEFAULT);
+            let fmt = if format_info(pp.auto_depth_format).is_some() {
+                pp.auto_depth_format
+            } else {
+                D3DFMT_D24S8
+            };
+            let ds = make_surface(
+                &d,
+                std::ptr::null_mut(),
+                pp.width,
+                pp.height,
+                fmt,
+                D3DUSAGE_DEPTHSTENCIL,
+                D3DPOOL_DEFAULT,
+            );
             d.auto_depth = ds;
             obj_addref(ds);
             d.ds = ds;
@@ -1155,7 +1271,11 @@ unsafe fn create_device(d3d: *mut Obj, focus: usize, pp: &mut PresentParams, ex:
         "appareil Direct3D 9 {}x{} créé ({})",
         pp.width,
         pp.height,
-        if lock(m).gl.is_some() { "OpenGL" } else { "sans rendu" }
+        if lock(m).gl.is_some() {
+            "OpenGL"
+        } else {
+            "sans rendu"
+        }
     );
     Some(device)
 }
@@ -1184,7 +1304,15 @@ fn create_gl(window: usize, w: u32, h: u32) -> Option<GlState> {
 }
 
 /// Crée une surface autonome (cible, profondeur, hors écran).
-unsafe fn make_surface(d: &Dev, device: *mut Obj, w: u32, h: u32, format: u32, usage: u32, pool: u32) -> *mut Obj {
+unsafe fn make_surface(
+    d: &Dev,
+    device: *mut Obj,
+    w: u32,
+    h: u32,
+    format: u32,
+    usage: u32,
+    pool: u32,
+) -> *mut Obj {
     let (pitch, size) = level_layout(format, w, h);
     let mut s = SurfaceData {
         width: w,
@@ -1205,11 +1333,26 @@ unsafe fn make_surface(d: &Dev, device: *mut Obj, w: u32, h: u32, format: u32, u
         if usage & D3DUSAGE_DEPTHSTENCIL != 0 || is_depth(format) {
             (g.GenRenderbuffers)(1, &mut s.gl_rb);
             (g.BindRenderbuffer)(gl::GL_RENDERBUFFER, s.gl_rb);
-            (g.RenderbufferStorage)(gl::GL_RENDERBUFFER, gl::GL_DEPTH24_STENCIL8, w as i32, h as i32);
+            (g.RenderbufferStorage)(
+                gl::GL_RENDERBUFFER,
+                gl::GL_DEPTH24_STENCIL8,
+                w as i32,
+                h as i32,
+            );
         } else if usage & D3DUSAGE_RENDERTARGET != 0 && fi.internal != 0 {
             (g.GenTextures)(1, &mut s.gl_tex);
             (g.BindTexture)(gl::GL_TEXTURE_2D, s.gl_tex);
-            (g.TexImage2D)(gl::GL_TEXTURE_2D, 0, fi.internal as i32, w as i32, h as i32, 0, fi.format, fi.ty, std::ptr::null());
+            (g.TexImage2D)(
+                gl::GL_TEXTURE_2D,
+                0,
+                fi.internal as i32,
+                w as i32,
+                h as i32,
+                0,
+                fi.format,
+                fi.ty,
+                std::ptr::null(),
+            );
             (g.TexParameteri)(gl::GL_TEXTURE_2D, gl::GL_TEXTURE_MIN_FILTER, gl::GL_LINEAR);
             (g.TexParameteri)(gl::GL_TEXTURE_2D, gl::GL_TEXTURE_MAG_FILTER, gl::GL_LINEAR);
         }
@@ -1250,7 +1393,9 @@ struct SurfaceDesc {
 fn texel_offset(f: u32, pitch: u32, x: i32, y: i32) -> usize {
     let fi = format_info(f);
     match fi {
-        Some(fi) if fi.block != 0 => (y.max(0) as usize / 4) * pitch as usize + (x.max(0) as usize / 4) * fi.block as usize,
+        Some(fi) if fi.block != 0 => {
+            (y.max(0) as usize / 4) * pitch as usize + (x.max(0) as usize / 4) * fi.block as usize
+        }
         Some(fi) => y.max(0) as usize * pitch as usize + x.max(0) as usize * fi.bpp.max(1) as usize,
         None => y.max(0) as usize * pitch as usize + x.max(0) as usize * 4,
     }
@@ -1275,7 +1420,11 @@ unsafe fn surface_lock_impl(this: *mut Obj, out: *mut LockedRect, rect: *const R
             read_back(&d, &mut s);
         }
     }
-    let (x, y) = if rect.is_null() { (0, 0) } else { ((*rect).left, (*rect).top) };
+    let (x, y) = if rect.is_null() {
+        (0, 0)
+    } else {
+        ((*rect).left, (*rect).top)
+    };
     let off = texel_offset(s.format, s.pitch, x, y).min(s.data.len());
     (*out).pitch = s.pitch as i32;
     (*out).bits = s.data.as_mut_ptr().add(off);
@@ -1283,7 +1432,12 @@ unsafe fn surface_lock_impl(this: *mut Obj, out: *mut LockedRect, rect: *const R
     S_OK
 }
 
-unsafe extern "win64" fn surface_lock(this: *mut Obj, out: *mut LockedRect, rect: *const Rect32, _flags: u32) -> i32 {
+unsafe extern "win64" fn surface_lock(
+    this: *mut Obj,
+    out: *mut LockedRect,
+    rect: *const Rect32,
+    _flags: u32,
+) -> i32 {
     surface_lock_impl(this, out, rect)
 }
 
@@ -1297,13 +1451,25 @@ unsafe extern "win64" fn surface_unlock(this: *mut Obj) -> i32 {
         return tex_unlock(parent, face, level);
     }
     if s.cpu_dirty && s.gl_tex != 0 && !(*this).device.is_null() {
-        if let (Some(dm), Some(g), Some(fi)) = (dev_of((*this).device), gl::gl(), format_info(s.format)) {
+        if let (Some(dm), Some(g), Some(fi)) =
+            (dev_of((*this).device), gl::gl(), format_info(s.format))
+        {
             let d = lock(dm);
             if let Some(gs) = d.gl.as_ref() {
                 gs.make_current();
                 (g.BindTexture)(gl::GL_TEXTURE_2D, s.gl_tex);
                 (g.PixelStorei)(gl::GL_UNPACK_ALIGNMENT, 4);
-                (g.TexSubImage2D)(gl::GL_TEXTURE_2D, 0, 0, 0, s.width as i32, s.height as i32, fi.format, fi.ty, s.data.as_ptr() as *const c_void);
+                (g.TexSubImage2D)(
+                    gl::GL_TEXTURE_2D,
+                    0,
+                    0,
+                    0,
+                    s.width as i32,
+                    s.height as i32,
+                    fi.format,
+                    fi.ty,
+                    s.data.as_ptr() as *const c_void,
+                );
             }
         }
     }
@@ -1321,9 +1487,23 @@ unsafe fn read_back(d: &Dev, s: &mut SurfaceData) {
     }
     gs.make_current();
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, gs.fbo);
-    (g.FramebufferTexture2D)(gl::GL_FRAMEBUFFER, gl::GL_COLOR_ATTACHMENT0, gl::GL_TEXTURE_2D, s.gl_tex, 0);
+    (g.FramebufferTexture2D)(
+        gl::GL_FRAMEBUFFER,
+        gl::GL_COLOR_ATTACHMENT0,
+        gl::GL_TEXTURE_2D,
+        s.gl_tex,
+        0,
+    );
     (g.PixelStorei)(gl::GL_PACK_ALIGNMENT, 4);
-    (g.ReadPixels)(0, 0, s.width as i32, s.height as i32, fi.format, fi.ty, s.data.as_mut_ptr() as *mut c_void);
+    (g.ReadPixels)(
+        0,
+        0,
+        s.width as i32,
+        s.height as i32,
+        fi.format,
+        fi.ty,
+        s.data.as_mut_ptr() as *mut c_void,
+    );
 }
 
 unsafe extern "win64" fn surface_desc(this: *mut Obj, out: *mut SurfaceDesc) -> i32 {
@@ -1347,7 +1527,11 @@ unsafe extern "win64" fn surface_desc(this: *mut Obj, out: *mut SurfaceDesc) -> 
     S_OK
 }
 
-unsafe extern "win64" fn surface_container(this: *mut Obj, iid: *const Guid, out: *mut *mut c_void) -> i32 {
+unsafe extern "win64" fn surface_container(
+    this: *mut Obj,
+    iid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
     let Kind::Surface(m) = &(*this).kind else {
         return D3DERR_INVALIDCALL;
     };
@@ -1403,7 +1587,13 @@ unsafe fn tex_data(this: *mut Obj) -> Option<&'static Mutex<TexData>> {
     }
 }
 
-unsafe fn tex_lock(this: *mut Obj, face: u32, level: u32, out: *mut LockedRect, rect: *const Rect32) -> i32 {
+unsafe fn tex_lock(
+    this: *mut Obj,
+    face: u32,
+    level: u32,
+    out: *mut LockedRect,
+    rect: *const Rect32,
+) -> i32 {
     let Some(m) = tex_data(this) else {
         return D3DERR_INVALIDCALL;
     };
@@ -1417,7 +1607,11 @@ unsafe fn tex_lock(this: *mut Obj, face: u32, level: u32, out: *mut LockedRect, 
     let idx = (face * t.nlevels + level) as usize;
     let fmt = t.format;
     let l = &mut t.levels[idx];
-    let (x, y) = if rect.is_null() { (0, 0) } else { ((*rect).left, (*rect).top) };
+    let (x, y) = if rect.is_null() {
+        (0, 0)
+    } else {
+        ((*rect).left, (*rect).top)
+    };
     let off = texel_offset(fmt, l.pitch, x, y).min(l.data.len());
     (*out).pitch = l.pitch as i32;
     (*out).bits = l.data.as_mut_ptr().add(off);
@@ -1494,25 +1688,51 @@ unsafe fn tex_surface(this: *mut Obj, face: u32, level: u32, out: *mut *mut Obj)
         gpu_dirty: false,
     };
     obj_addref(this);
-    let o = new_obj(surface_vtable(), (*this).device, Kind::Surface(Mutex::new(s)));
+    let o = new_obj(
+        surface_vtable(),
+        (*this).device,
+        Kind::Surface(Mutex::new(s)),
+    );
     t.surfaces.push(((face, level), o));
     *out = o;
     S_OK
 }
 
-unsafe extern "win64" fn tex_get_surface_level(this: *mut Obj, level: u32, out: *mut *mut Obj) -> i32 {
+unsafe extern "win64" fn tex_get_surface_level(
+    this: *mut Obj,
+    level: u32,
+    out: *mut *mut Obj,
+) -> i32 {
     tex_surface(this, 0, level, out)
 }
-unsafe extern "win64" fn tex_lock_rect(this: *mut Obj, level: u32, out: *mut LockedRect, rect: *const Rect32, _f: u32) -> i32 {
+unsafe extern "win64" fn tex_lock_rect(
+    this: *mut Obj,
+    level: u32,
+    out: *mut LockedRect,
+    rect: *const Rect32,
+    _f: u32,
+) -> i32 {
     tex_lock(this, 0, level, out, rect)
 }
 unsafe extern "win64" fn tex_unlock_rect(this: *mut Obj, level: u32) -> i32 {
     tex_unlock(this, 0, level)
 }
-unsafe extern "win64" fn cube_get_surface(this: *mut Obj, face: u32, level: u32, out: *mut *mut Obj) -> i32 {
+unsafe extern "win64" fn cube_get_surface(
+    this: *mut Obj,
+    face: u32,
+    level: u32,
+    out: *mut *mut Obj,
+) -> i32 {
     tex_surface(this, face, level, out)
 }
-unsafe extern "win64" fn cube_lock_rect(this: *mut Obj, face: u32, level: u32, out: *mut LockedRect, rect: *const Rect32, _f: u32) -> i32 {
+unsafe extern "win64" fn cube_lock_rect(
+    this: *mut Obj,
+    face: u32,
+    level: u32,
+    out: *mut LockedRect,
+    rect: *const Rect32,
+    _f: u32,
+) -> i32 {
     tex_lock(this, face, level, out, rect)
 }
 unsafe extern "win64" fn cube_unlock_rect(this: *mut Obj, face: u32, level: u32) -> i32 {
@@ -1557,13 +1777,25 @@ fn texture_vtable(cube: bool) -> &'static [usize] {
             (21, f!(stub_ok)),
         ];
         if cube {
-            e.extend([(18, f!(cube_get_surface)), (19, f!(cube_lock_rect)), (20, f!(cube_unlock_rect))]);
+            e.extend([
+                (18, f!(cube_get_surface)),
+                (19, f!(cube_lock_rect)),
+                (20, f!(cube_unlock_rect)),
+            ]);
         } else {
-            e.extend([(18, f!(tex_get_surface_level)), (19, f!(tex_lock_rect)), (20, f!(tex_unlock_rect))]);
+            e.extend([
+                (18, f!(tex_get_surface_level)),
+                (19, f!(tex_lock_rect)),
+                (20, f!(tex_unlock_rect)),
+            ]);
         }
         build(22, f!(stub_invalid), &e).as_ptr() as usize
     };
-    let p = if cube { *C.get_or_init(|| mk(true)) } else { *V.get_or_init(|| mk(false)) };
+    let p = if cube {
+        *C.get_or_init(|| mk(true))
+    } else {
+        *V.get_or_init(|| mk(false))
+    };
     unsafe { std::slice::from_raw_parts(p as *const usize, 22) }
 }
 
@@ -1576,12 +1808,25 @@ fn mip_count(w: u32, h: u32, levels: u32) -> u32 {
     }
 }
 
-unsafe fn make_texture(device: *mut Obj, w: u32, h: u32, levels: u32, usage: u32, format: u32, pool: u32, faces: u32) -> Option<*mut Obj> {
+unsafe fn make_texture(
+    device: *mut Obj,
+    w: u32,
+    h: u32,
+    levels: u32,
+    usage: u32,
+    format: u32,
+    pool: u32,
+    faces: u32,
+) -> Option<*mut Obj> {
     format_info(format)?;
     if w == 0 || h == 0 || w > 16384 || h > 16384 {
         return None;
     }
-    let n = if usage & D3DUSAGE_AUTOGENMIPMAP != 0 { 1 } else { mip_count(w, h, levels) };
+    let n = if usage & D3DUSAGE_AUTOGENMIPMAP != 0 {
+        1
+    } else {
+        mip_count(w, h, levels)
+    };
     let mut lv = Vec::new();
     for _ in 0..faces {
         for l in 0..n {
@@ -1606,14 +1851,22 @@ unsafe fn make_texture(device: *mut Obj, w: u32, h: u32, levels: u32, usage: u32
         dirty: true,
         surfaces: Vec::new(),
     };
-    let kind = if faces == 6 { Kind::Cube(Mutex::new(t)) } else { Kind::Texture(Mutex::new(t)) };
+    let kind = if faces == 6 {
+        Kind::Cube(Mutex::new(t))
+    } else {
+        Kind::Texture(Mutex::new(t))
+    };
     Some(new_obj(texture_vtable(faces == 6), device, kind))
 }
 
 /// Envoie au GPU une texture modifiée côté CPU ; renvoie (cible GL, id).
 unsafe fn upload_texture(t: &mut TexData, g: &gl::GlFunctions, l: &GlLegacy) -> (u32, u32) {
     let cube = t.faces == 6;
-    let target = if cube { glc::GL_TEXTURE_CUBE_MAP } else { gl::GL_TEXTURE_2D };
+    let target = if cube {
+        glc::GL_TEXTURE_CUBE_MAP
+    } else {
+        gl::GL_TEXTURE_2D
+    };
     let Some(fi) = format_info(t.format) else {
         return (target, 0);
     };
@@ -1628,13 +1881,36 @@ unsafe fn upload_texture(t: &mut TexData, g: &gl::GlFunctions, l: &GlLegacy) -> 
     (g.PixelStorei)(gl::GL_UNPACK_ALIGNMENT, 4);
     (g.TexParameteri)(target, gl::GL_TEXTURE_MAX_LEVEL, t.nlevels as i32 - 1);
     for face in 0..t.faces {
-        let ft = if cube { glc::GL_TEXTURE_CUBE_MAP_POSITIVE_X + face } else { gl::GL_TEXTURE_2D };
+        let ft = if cube {
+            glc::GL_TEXTURE_CUBE_MAP_POSITIVE_X + face
+        } else {
+            gl::GL_TEXTURE_2D
+        };
         for level in 0..t.nlevels {
             let lv = &t.levels[(face * t.nlevels + level) as usize];
             if fi.block != 0 {
-                (l.CompressedTexImage2D)(ft, level as i32, fi.internal, lv.width as i32, lv.height as i32, 0, lv.data.len() as i32, lv.data.as_ptr() as *const c_void);
+                (l.CompressedTexImage2D)(
+                    ft,
+                    level as i32,
+                    fi.internal,
+                    lv.width as i32,
+                    lv.height as i32,
+                    0,
+                    lv.data.len() as i32,
+                    lv.data.as_ptr() as *const c_void,
+                );
             } else {
-                (g.TexImage2D)(ft, level as i32, fi.internal as i32, lv.width as i32, lv.height as i32, 0, fi.format, fi.ty, lv.data.as_ptr() as *const c_void);
+                (g.TexImage2D)(
+                    ft,
+                    level as i32,
+                    fi.internal as i32,
+                    lv.width as i32,
+                    lv.height as i32,
+                    0,
+                    fi.format,
+                    fi.ty,
+                    lv.data.as_ptr() as *const c_void,
+                );
             }
         }
     }
@@ -1655,7 +1931,13 @@ unsafe fn buf_data(this: *mut Obj) -> Option<&'static Mutex<BufData>> {
     }
 }
 
-unsafe extern "win64" fn buf_lock(this: *mut Obj, offset: u32, _size: u32, out: *mut *mut u8, _flags: u32) -> i32 {
+unsafe extern "win64" fn buf_lock(
+    this: *mut Obj,
+    offset: u32,
+    _size: u32,
+    out: *mut *mut u8,
+    _flags: u32,
+) -> i32 {
     let Some(m) = buf_data(this) else {
         return D3DERR_INVALIDCALL;
     };
@@ -1691,14 +1973,22 @@ unsafe extern "win64" fn buf_desc(this: *mut Obj, out: *mut BufferDesc) -> i32 {
     let vb = matches!((*this).kind, Kind::VertexBuffer(_));
     let d = BufferDesc {
         format: if vb { 100 } else { b.fvf_or_format }, // D3DFMT_VERTEXDATA
-        ty: if vb { D3DRTYPE_VERTEXBUFFER } else { D3DRTYPE_INDEXBUFFER },
+        ty: if vb {
+            D3DRTYPE_VERTEXBUFFER
+        } else {
+            D3DRTYPE_INDEXBUFFER
+        },
         usage: b.usage,
         pool: b.pool,
         size: b.data.len() as u32,
         fvf: if vb { b.fvf_or_format } else { 0 },
     };
     // D3DINDEXBUFFER_DESC n'a pas de champ FVF.
-    std::ptr::copy_nonoverlapping(&d as *const BufferDesc as *const u8, out as *mut u8, if vb { 24 } else { 20 });
+    std::ptr::copy_nonoverlapping(
+        &d as *const BufferDesc as *const u8,
+        out as *mut u8,
+        if vb { 24 } else { 20 },
+    );
     S_OK
 }
 
@@ -1766,8 +2056,18 @@ unsafe extern "win64" fn decl_get(this: *mut Obj, out: *mut VertexElement, n: *m
 fn decl_vtable() -> &'static [usize] {
     static V: OnceLock<usize> = OnceLock::new();
     let p = *V.get_or_init(|| {
-        build(5, f!(stub_invalid), &[(0, f!(obj_qi)), (1, f!(obj_addref)), (2, f!(obj_release)), (3, f!(obj_get_device)), (4, f!(decl_get))])
-            .as_ptr() as usize
+        build(
+            5,
+            f!(stub_invalid),
+            &[
+                (0, f!(obj_qi)),
+                (1, f!(obj_addref)),
+                (2, f!(obj_release)),
+                (3, f!(obj_get_device)),
+                (4, f!(decl_get)),
+            ],
+        )
+        .as_ptr() as usize
     });
     unsafe { std::slice::from_raw_parts(p as *const usize, 5) }
 }
@@ -1793,8 +2093,18 @@ unsafe extern "win64" fn shader_get_function(this: *mut Obj, out: *mut u8, size:
 fn shader_vtable() -> &'static [usize] {
     static V: OnceLock<usize> = OnceLock::new();
     let p = *V.get_or_init(|| {
-        build(5, f!(stub_invalid), &[(0, f!(obj_qi)), (1, f!(obj_addref)), (2, f!(obj_release)), (3, f!(obj_get_device)), (4, f!(shader_get_function))])
-            .as_ptr() as usize
+        build(
+            5,
+            f!(stub_invalid),
+            &[
+                (0, f!(obj_qi)),
+                (1, f!(obj_addref)),
+                (2, f!(obj_release)),
+                (3, f!(obj_get_device)),
+                (4, f!(shader_get_function)),
+            ],
+        )
+        .as_ptr() as usize
     });
     unsafe { std::slice::from_raw_parts(p as *const usize, 5) }
 }
@@ -1822,7 +2132,12 @@ unsafe extern "win64" fn query_type(this: *mut Obj) -> u32 {
 unsafe extern "win64" fn query_size_fn(this: *mut Obj) -> u32 {
     query_size(query_type(this)).unwrap_or(0)
 }
-unsafe extern "win64" fn query_get_data(this: *mut Obj, data: *mut u8, size: u32, _flags: u32) -> i32 {
+unsafe extern "win64" fn query_get_data(
+    this: *mut Obj,
+    data: *mut u8,
+    size: u32,
+    _flags: u32,
+) -> i32 {
     // Exécution synchrone : le résultat est toujours prêt.
     let ty = query_type(this);
     if data.is_null() || size == 0 {
@@ -1902,18 +2217,47 @@ unsafe extern "win64" fn sb_apply(this: *mut Obj) -> i32 {
 fn stateblock_vtable() -> &'static [usize] {
     static V: OnceLock<usize> = OnceLock::new();
     let p = *V.get_or_init(|| {
-        build(6, f!(stub_invalid), &[(0, f!(obj_qi)), (1, f!(obj_addref)), (2, f!(obj_release)), (3, f!(obj_get_device)), (4, f!(sb_capture)), (5, f!(sb_apply))])
-            .as_ptr() as usize
+        build(
+            6,
+            f!(stub_invalid),
+            &[
+                (0, f!(obj_qi)),
+                (1, f!(obj_addref)),
+                (2, f!(obj_release)),
+                (3, f!(obj_get_device)),
+                (4, f!(sb_capture)),
+                (5, f!(sb_apply)),
+            ],
+        )
+        .as_ptr() as usize
     });
     unsafe { std::slice::from_raw_parts(p as *const usize, 6) }
 }
 
 // ── Swapchain implicite ────────────────────────────────────────────────────
 
-unsafe extern "win64" fn sc_present(this: *mut Obj, _src: *const Rect32, _dst: *const Rect32, _wnd: usize, _dirty: *const c_void, _flags: u32) -> i32 {
-    dev_present((*this).device, std::ptr::null(), std::ptr::null(), 0, std::ptr::null())
+unsafe extern "win64" fn sc_present(
+    this: *mut Obj,
+    _src: *const Rect32,
+    _dst: *const Rect32,
+    _wnd: usize,
+    _dirty: *const c_void,
+    _flags: u32,
+) -> i32 {
+    dev_present(
+        (*this).device,
+        std::ptr::null(),
+        std::ptr::null(),
+        0,
+        std::ptr::null(),
+    )
 }
-unsafe extern "win64" fn sc_back_buffer(this: *mut Obj, i: u32, ty: u32, out: *mut *mut Obj) -> i32 {
+unsafe extern "win64" fn sc_back_buffer(
+    this: *mut Obj,
+    i: u32,
+    ty: u32,
+    out: *mut *mut Obj,
+) -> i32 {
     dev_get_back_buffer((*this).device, 0, i, ty, out)
 }
 unsafe extern "win64" fn sc_display_mode(_: *mut Obj, out: *mut DisplayMode) -> i32 {
@@ -2002,7 +2346,11 @@ unsafe extern "win64" fn dev_get_d3d(_: *mut Obj, out: *mut *mut Obj) -> i32 {
     if out.is_null() {
         return D3DERR_INVALIDCALL;
     }
-    *out = new_obj(d3d9_vtable(), std::ptr::null_mut(), Kind::D3D9 { ex: false });
+    *out = new_obj(
+        d3d9_vtable(),
+        std::ptr::null_mut(),
+        Kind::D3D9 { ex: false },
+    );
     S_OK
 }
 unsafe extern "win64" fn dev_caps(_: *mut Obj, out: *mut u32) -> i32 {
@@ -2084,14 +2432,34 @@ unsafe extern "win64" fn dev_reset(this: *mut Obj, pp: *mut PresentParams) -> i3
     }
     d.pp = *pp;
     d.s = Settable::new(pp.auto_depth != 0, pp.width, pp.height);
-    let bb = make_surface(&d, std::ptr::null_mut(), pp.width, pp.height, pp.format, D3DUSAGE_RENDERTARGET, D3DPOOL_DEFAULT);
+    let bb = make_surface(
+        &d,
+        std::ptr::null_mut(),
+        pp.width,
+        pp.height,
+        pp.format,
+        D3DUSAGE_RENDERTARGET,
+        D3DPOOL_DEFAULT,
+    );
     d.backbuffer = bb;
     obj_addref(bb);
     d.rts[0] = bb;
     d.auto_depth = std::ptr::null_mut();
     if pp.auto_depth != 0 {
-        let fmt = if format_info(pp.auto_depth_format).is_some() { pp.auto_depth_format } else { D3DFMT_D24S8 };
-        let ds = make_surface(&d, std::ptr::null_mut(), pp.width, pp.height, fmt, D3DUSAGE_DEPTHSTENCIL, D3DPOOL_DEFAULT);
+        let fmt = if format_info(pp.auto_depth_format).is_some() {
+            pp.auto_depth_format
+        } else {
+            D3DFMT_D24S8
+        };
+        let ds = make_surface(
+            &d,
+            std::ptr::null_mut(),
+            pp.width,
+            pp.height,
+            fmt,
+            D3DUSAGE_DEPTHSTENCIL,
+            D3DPOOL_DEFAULT,
+        );
         d.auto_depth = ds;
         obj_addref(ds);
         d.ds = ds;
@@ -2105,7 +2473,13 @@ unsafe extern "win64" fn dev_reset(this: *mut Obj, pp: *mut PresentParams) -> i3
     S_OK
 }
 
-unsafe extern "win64" fn dev_present(this: *mut Obj, _src: *const Rect32, _dst: *const Rect32, _wnd: usize, _dirty: *const c_void) -> i32 {
+unsafe extern "win64" fn dev_present(
+    this: *mut Obj,
+    _src: *const Rect32,
+    _dst: *const Rect32,
+    _wnd: usize,
+    _dirty: *const c_void,
+) -> i32 {
     let mut d = dev!(this);
     d.present_count += 1;
     let Some(gs) = d.gl.as_ref() else {
@@ -2120,22 +2494,52 @@ unsafe extern "win64" fn dev_present(this: *mut Obj, _src: *const Rect32, _dst: 
     let s = lock(m);
     gs.make_current();
     (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, gs.fbo);
-    (g.FramebufferTexture2D)(gl::GL_READ_FRAMEBUFFER, gl::GL_COLOR_ATTACHMENT0, gl::GL_TEXTURE_2D, s.gl_tex, 0);
+    (g.FramebufferTexture2D)(
+        gl::GL_READ_FRAMEBUFFER,
+        gl::GL_COLOR_ATTACHMENT0,
+        gl::GL_TEXTURE_2D,
+        s.gl_tex,
+        0,
+    );
     (g.BindFramebuffer)(gl::GL_DRAW_FRAMEBUFFER, 0);
     (g.Disable)(gl::GL_SCISSOR_TEST);
     let (w, h) = window_size(d.window);
     // Rendu stocké tête en bas (ligne 0 = haut) : on inverse à la copie.
-    (g.BlitFramebuffer)(0, 0, s.width as i32, s.height as i32, 0, h as i32, w as i32, 0, gl::GL_COLOR_BUFFER_BIT, gl::GL_LINEAR as u32);
+    (g.BlitFramebuffer)(
+        0,
+        0,
+        s.width as i32,
+        s.height as i32,
+        0,
+        h as i32,
+        w as i32,
+        0,
+        gl::GL_COLOR_BUFFER_BIT,
+        gl::GL_LINEAR as u32,
+    );
     (glx.SwapBuffers)(gs.ctx.display, gs.ctx.drawable);
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
     S_OK
 }
 
-unsafe extern "win64" fn dev_present_ex(this: *mut Obj, src: *const Rect32, dst: *const Rect32, wnd: usize, dirty: *const c_void, _flags: u32) -> i32 {
+unsafe extern "win64" fn dev_present_ex(
+    this: *mut Obj,
+    src: *const Rect32,
+    dst: *const Rect32,
+    wnd: usize,
+    dirty: *const c_void,
+    _flags: u32,
+) -> i32 {
     dev_present(this, src, dst, wnd, dirty)
 }
 
-unsafe extern "win64" fn dev_get_back_buffer(this: *mut Obj, sc: u32, i: u32, _ty: u32, out: *mut *mut Obj) -> i32 {
+unsafe extern "win64" fn dev_get_back_buffer(
+    this: *mut Obj,
+    sc: u32,
+    i: u32,
+    _ty: u32,
+    out: *mut *mut Obj,
+) -> i32 {
     let d = dev!(this);
     if sc != 0 || i >= d.pp.count || out.is_null() || d.backbuffer.is_null() {
         return D3DERR_INVALIDCALL;
@@ -2189,7 +2593,17 @@ unsafe extern "win64" fn dev_get_gamma(this: *mut Obj, _sc: u32, ramp: *mut u8) 
     }
 }
 
-unsafe extern "win64" fn dev_create_texture(this: *mut Obj, w: u32, h: u32, levels: u32, usage: u32, format: u32, pool: u32, out: *mut *mut Obj, _shared: *mut usize) -> i32 {
+unsafe extern "win64" fn dev_create_texture(
+    this: *mut Obj,
+    w: u32,
+    h: u32,
+    levels: u32,
+    usage: u32,
+    format: u32,
+    pool: u32,
+    out: *mut *mut Obj,
+    _shared: *mut usize,
+) -> i32 {
     if out.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -2202,7 +2616,16 @@ unsafe extern "win64" fn dev_create_texture(this: *mut Obj, w: u32, h: u32, leve
     }
 }
 
-unsafe extern "win64" fn dev_create_cube(this: *mut Obj, edge: u32, levels: u32, usage: u32, format: u32, pool: u32, out: *mut *mut Obj, _shared: *mut usize) -> i32 {
+unsafe extern "win64" fn dev_create_cube(
+    this: *mut Obj,
+    edge: u32,
+    levels: u32,
+    usage: u32,
+    format: u32,
+    pool: u32,
+    out: *mut *mut Obj,
+    _shared: *mut usize,
+) -> i32 {
     if out.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -2215,7 +2638,18 @@ unsafe extern "win64" fn dev_create_cube(this: *mut Obj, edge: u32, levels: u32,
     }
 }
 
-unsafe extern "win64" fn dev_create_volume(this: *mut Obj, w: u32, h: u32, depth: u32, levels: u32, _usage: u32, format: u32, _pool: u32, out: *mut *mut Obj, _shared: *mut usize) -> i32 {
+unsafe extern "win64" fn dev_create_volume(
+    this: *mut Obj,
+    w: u32,
+    h: u32,
+    depth: u32,
+    levels: u32,
+    _usage: u32,
+    format: u32,
+    _pool: u32,
+    out: *mut *mut Obj,
+    _shared: *mut usize,
+) -> i32 {
     if out.is_null() || format_info(format).is_none() || w == 0 || h == 0 || depth == 0 {
         return D3DERR_INVALIDCALL;
     }
@@ -2238,11 +2672,22 @@ unsafe extern "win64" fn dev_create_volume(this: *mut Obj, w: u32, h: u32, depth
             levels: lv,
         })),
     );
-    log_warn!("d3d9", "texture volumique créée en mémoire seule (pas d'échantillonnage 3D)");
+    log_warn!(
+        "d3d9",
+        "texture volumique créée en mémoire seule (pas d'échantillonnage 3D)"
+    );
     S_OK
 }
 
-unsafe extern "win64" fn dev_create_vb(this: *mut Obj, len: u32, usage: u32, fvf: u32, pool: u32, out: *mut *mut Obj, _shared: *mut usize) -> i32 {
+unsafe extern "win64" fn dev_create_vb(
+    this: *mut Obj,
+    len: u32,
+    usage: u32,
+    fvf: u32,
+    pool: u32,
+    out: *mut *mut Obj,
+    _shared: *mut usize,
+) -> i32 {
     if out.is_null() || len == 0 {
         return D3DERR_INVALIDCALL;
     }
@@ -2259,7 +2704,15 @@ unsafe extern "win64" fn dev_create_vb(this: *mut Obj, len: u32, usage: u32, fvf
     S_OK
 }
 
-unsafe extern "win64" fn dev_create_ib(this: *mut Obj, len: u32, usage: u32, format: u32, pool: u32, out: *mut *mut Obj, _shared: *mut usize) -> i32 {
+unsafe extern "win64" fn dev_create_ib(
+    this: *mut Obj,
+    len: u32,
+    usage: u32,
+    format: u32,
+    pool: u32,
+    out: *mut *mut Obj,
+    _shared: *mut usize,
+) -> i32 {
     if out.is_null() || len == 0 || !matches!(format, D3DFMT_INDEX16 | D3DFMT_INDEX32) {
         return D3DERR_INVALIDCALL;
     }
@@ -2276,25 +2729,69 @@ unsafe extern "win64" fn dev_create_ib(this: *mut Obj, len: u32, usage: u32, for
     S_OK
 }
 
-unsafe extern "win64" fn dev_create_rt(this: *mut Obj, w: u32, h: u32, format: u32, _ms: u32, _q: u32, _lockable: i32, out: *mut *mut Obj, _shared: *mut usize) -> i32 {
+unsafe extern "win64" fn dev_create_rt(
+    this: *mut Obj,
+    w: u32,
+    h: u32,
+    format: u32,
+    _ms: u32,
+    _q: u32,
+    _lockable: i32,
+    out: *mut *mut Obj,
+    _shared: *mut usize,
+) -> i32 {
     if out.is_null() || format_info(format).is_none() || w == 0 || h == 0 {
         return D3DERR_INVALIDCALL;
     }
     let d = dev!(this);
-    *out = make_surface(&d, this, w, h, format, D3DUSAGE_RENDERTARGET, D3DPOOL_DEFAULT);
+    *out = make_surface(
+        &d,
+        this,
+        w,
+        h,
+        format,
+        D3DUSAGE_RENDERTARGET,
+        D3DPOOL_DEFAULT,
+    );
     S_OK
 }
 
-unsafe extern "win64" fn dev_create_ds(this: *mut Obj, w: u32, h: u32, format: u32, _ms: u32, _q: u32, _discard: i32, out: *mut *mut Obj, _shared: *mut usize) -> i32 {
+unsafe extern "win64" fn dev_create_ds(
+    this: *mut Obj,
+    w: u32,
+    h: u32,
+    format: u32,
+    _ms: u32,
+    _q: u32,
+    _discard: i32,
+    out: *mut *mut Obj,
+    _shared: *mut usize,
+) -> i32 {
     if out.is_null() || !is_depth(format) || w == 0 || h == 0 {
         return D3DERR_INVALIDCALL;
     }
     let d = dev!(this);
-    *out = make_surface(&d, this, w, h, format, D3DUSAGE_DEPTHSTENCIL, D3DPOOL_DEFAULT);
+    *out = make_surface(
+        &d,
+        this,
+        w,
+        h,
+        format,
+        D3DUSAGE_DEPTHSTENCIL,
+        D3DPOOL_DEFAULT,
+    );
     S_OK
 }
 
-unsafe extern "win64" fn dev_create_offscreen(this: *mut Obj, w: u32, h: u32, format: u32, pool: u32, out: *mut *mut Obj, _shared: *mut usize) -> i32 {
+unsafe extern "win64" fn dev_create_offscreen(
+    this: *mut Obj,
+    w: u32,
+    h: u32,
+    format: u32,
+    pool: u32,
+    out: *mut *mut Obj,
+    _shared: *mut usize,
+) -> i32 {
     if out.is_null() || format_info(format).is_none() || w == 0 || h == 0 {
         return D3DERR_INVALIDCALL;
     }
@@ -2339,7 +2836,13 @@ unsafe fn surface_write(s: *mut Obj, data: &[u8]) {
     sd.cpu_dirty = true;
 }
 
-unsafe extern "win64" fn dev_update_surface(_this: *mut Obj, src: *mut Obj, _sr: *const Rect32, dst: *mut Obj, _dp: *const c_void) -> i32 {
+unsafe extern "win64" fn dev_update_surface(
+    _this: *mut Obj,
+    src: *mut Obj,
+    _sr: *const Rect32,
+    dst: *mut Obj,
+    _dp: *const c_void,
+) -> i32 {
     if src.is_null() || dst.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -2379,7 +2882,14 @@ unsafe extern "win64" fn dev_get_rt_data(this: *mut Obj, rt: *mut Obj, dst: *mut
     dev_update_surface(this, rt, std::ptr::null(), dst, std::ptr::null())
 }
 
-unsafe extern "win64" fn dev_stretch_rect(this: *mut Obj, src: *mut Obj, sr: *const Rect32, dst: *mut Obj, dr: *const Rect32, _filter: u32) -> i32 {
+unsafe extern "win64" fn dev_stretch_rect(
+    this: *mut Obj,
+    src: *mut Obj,
+    sr: *const Rect32,
+    dst: *mut Obj,
+    dr: *const Rect32,
+    _filter: u32,
+) -> i32 {
     if src.is_null() || dst.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -2409,11 +2919,34 @@ unsafe extern "win64" fn dev_stretch_rect(this: *mut Obj, src: *mut Obj, sr: *co
         let mut tmp = 0;
         (g.GenFramebuffers)(1, &mut tmp);
         (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, tmp);
-        (g.FramebufferTexture2D)(gl::GL_READ_FRAMEBUFFER, gl::GL_COLOR_ATTACHMENT0, gl::GL_TEXTURE_2D, st, 0);
+        (g.FramebufferTexture2D)(
+            gl::GL_READ_FRAMEBUFFER,
+            gl::GL_COLOR_ATTACHMENT0,
+            gl::GL_TEXTURE_2D,
+            st,
+            0,
+        );
         (g.BindFramebuffer)(gl::GL_DRAW_FRAMEBUFFER, gs.fbo);
-        (g.FramebufferTexture2D)(gl::GL_DRAW_FRAMEBUFFER, gl::GL_COLOR_ATTACHMENT0, gl::GL_TEXTURE_2D, dt, 0);
+        (g.FramebufferTexture2D)(
+            gl::GL_DRAW_FRAMEBUFFER,
+            gl::GL_COLOR_ATTACHMENT0,
+            gl::GL_TEXTURE_2D,
+            dt,
+            0,
+        );
         (g.Disable)(gl::GL_SCISSOR_TEST);
-        (g.BlitFramebuffer)(a, b, c, e, f, gg, hh, ii, gl::GL_COLOR_BUFFER_BIT, gl::GL_LINEAR as u32);
+        (g.BlitFramebuffer)(
+            a,
+            b,
+            c,
+            e,
+            f,
+            gg,
+            hh,
+            ii,
+            gl::GL_COLOR_BUFFER_BIT,
+            gl::GL_LINEAR as u32,
+        );
         (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
         (g.DeleteFramebuffers)(1, &tmp);
         return S_OK;
@@ -2422,26 +2955,46 @@ unsafe extern "win64" fn dev_stretch_rect(this: *mut Obj, src: *mut Obj, sr: *co
     dev_update_surface(this, src, sr, dst, std::ptr::null())
 }
 
-unsafe extern "win64" fn dev_color_fill(this: *mut Obj, surf: *mut Obj, rect: *const Rect32, color: u32) -> i32 {
+unsafe extern "win64" fn dev_color_fill(
+    this: *mut Obj,
+    surf: *mut Obj,
+    rect: *const Rect32,
+    color: u32,
+) -> i32 {
     if surf.is_null() {
         return D3DERR_INVALIDCALL;
     }
     let Some((w, h, fmt, pitch, mut data)) = surface_bytes(surf) else {
         return D3DERR_INVALIDCALL;
     };
-    let gl_target = if let Kind::Surface(m) = &(*surf).kind { lock(m).gl_tex } else { 0 };
+    let gl_target = if let Kind::Surface(m) = &(*surf).kind {
+        lock(m).gl_tex
+    } else {
+        0
+    };
     if gl_target != 0 {
         // Cible GPU : effacement par Clear sur la surface.
         let d = dev!(this);
         if let (Some(gs), Some(g)) = (d.gl.as_ref(), gl::gl()) {
             gs.make_current();
             (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, gs.fbo);
-            (g.FramebufferTexture2D)(gl::GL_FRAMEBUFFER, gl::GL_COLOR_ATTACHMENT0, gl::GL_TEXTURE_2D, gl_target, 0);
+            (g.FramebufferTexture2D)(
+                gl::GL_FRAMEBUFFER,
+                gl::GL_COLOR_ATTACHMENT0,
+                gl::GL_TEXTURE_2D,
+                gl_target,
+                0,
+            );
             if rect.is_null() {
                 (g.Disable)(gl::GL_SCISSOR_TEST);
             } else {
                 (g.Enable)(gl::GL_SCISSOR_TEST);
-                (g.Scissor)((*rect).left, (*rect).top, (*rect).right - (*rect).left, (*rect).bottom - (*rect).top);
+                (g.Scissor)(
+                    (*rect).left,
+                    (*rect).top,
+                    (*rect).right - (*rect).left,
+                    (*rect).bottom - (*rect).top,
+                );
             }
             let c = argb_to_rgba(color);
             (g.ClearColor)(c[0], c[1], c[2], c[3]);
@@ -2457,7 +3010,11 @@ unsafe extern "win64" fn dev_color_fill(this: *mut Obj, surf: *mut Obj, rect: *c
     if fi.bpp != 4 {
         return D3DERR_INVALIDCALL;
     }
-    let (l, t, r, b) = if rect.is_null() { (0, 0, w as i32, h as i32) } else { ((*rect).left, (*rect).top, (*rect).right, (*rect).bottom) };
+    let (l, t, r, b) = if rect.is_null() {
+        (0, 0, w as i32, h as i32)
+    } else {
+        ((*rect).left, (*rect).top, (*rect).right, (*rect).bottom)
+    };
     for y in t.max(0)..b.min(h as i32) {
         for x in l.max(0)..r.min(w as i32) {
             let o = y as usize * pitch as usize + x as usize * 4;
@@ -2578,8 +3135,18 @@ unsafe fn bind_targets(d: &Dev, g: &gl::GlFunctions) -> Option<(u32, u32)> {
                     if let (Some(tm), Some(l)) = (tex_data(parent), Some(gs.legacy)) {
                         let mut t = lock(tm);
                         let (target, id) = upload_texture(&mut t, g, l);
-                        let ft = if target == glc::GL_TEXTURE_CUBE_MAP { glc::GL_TEXTURE_CUBE_MAP_POSITIVE_X + face } else { gl::GL_TEXTURE_2D };
-                        (g.FramebufferTexture2D)(gl::GL_FRAMEBUFFER, gl::GL_COLOR_ATTACHMENT0 + i as u32, ft, id, level as i32);
+                        let ft = if target == glc::GL_TEXTURE_CUBE_MAP {
+                            glc::GL_TEXTURE_CUBE_MAP_POSITIVE_X + face
+                        } else {
+                            gl::GL_TEXTURE_2D
+                        };
+                        (g.FramebufferTexture2D)(
+                            gl::GL_FRAMEBUFFER,
+                            gl::GL_COLOR_ATTACHMENT0 + i as u32,
+                            ft,
+                            id,
+                            level as i32,
+                        );
                         if i == 0 {
                             size = Some((s.width, s.height));
                         }
@@ -2592,7 +3159,13 @@ unsafe fn bind_targets(d: &Dev, g: &gl::GlFunctions) -> Option<(u32, u32)> {
                 }
             }
         }
-        (g.FramebufferTexture2D)(gl::GL_FRAMEBUFFER, gl::GL_COLOR_ATTACHMENT0 + i as u32, gl::GL_TEXTURE_2D, tex, 0);
+        (g.FramebufferTexture2D)(
+            gl::GL_FRAMEBUFFER,
+            gl::GL_COLOR_ATTACHMENT0 + i as u32,
+            gl::GL_TEXTURE_2D,
+            tex,
+            0,
+        );
     }
     let mut rb = 0;
     if !d.ds.is_null() {
@@ -2600,7 +3173,12 @@ unsafe fn bind_targets(d: &Dev, g: &gl::GlFunctions) -> Option<(u32, u32)> {
             rb = lock(m).gl_rb;
         }
     }
-    (g.FramebufferRenderbuffer)(gl::GL_FRAMEBUFFER, gl::GL_DEPTH_STENCIL_ATTACHMENT, gl::GL_RENDERBUFFER, rb);
+    (g.FramebufferRenderbuffer)(
+        gl::GL_FRAMEBUFFER,
+        gl::GL_DEPTH_STENCIL_ATTACHMENT,
+        gl::GL_RENDERBUFFER,
+        rb,
+    );
     size
 }
 
@@ -2613,7 +3191,15 @@ struct D3dRect {
     y2: i32,
 }
 
-unsafe extern "win64" fn dev_clear(this: *mut Obj, count: u32, rects: *const D3dRect, flags: u32, color: u32, z: f32, stencil: u32) -> i32 {
+unsafe extern "win64" fn dev_clear(
+    this: *mut Obj,
+    count: u32,
+    rects: *const D3dRect,
+    flags: u32,
+    color: u32,
+    z: f32,
+    stencil: u32,
+) -> i32 {
     let d = dev!(this);
     let Some(g) = gl::gl() else { return S_OK };
     let Some(gs) = d.gl.as_ref() else { return S_OK };
@@ -2685,7 +3271,11 @@ pub(crate) fn mat_mul(a: &[f32; 16], b: &[f32; 16]) -> [f32; 16] {
     r
 }
 
-unsafe extern "win64" fn dev_multiply_transform(this: *mut Obj, state: u32, m: *const [f32; 16]) -> i32 {
+unsafe extern "win64" fn dev_multiply_transform(
+    this: *mut Obj,
+    state: u32,
+    m: *const [f32; 16],
+) -> i32 {
     if m.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -2798,12 +3388,20 @@ unsafe extern "win64" fn dev_get_rs(this: *mut Obj, state: u32, out: *mut u32) -
     S_OK
 }
 
-unsafe extern "win64" fn dev_create_stateblock(this: *mut Obj, _ty: u32, out: *mut *mut Obj) -> i32 {
+unsafe extern "win64" fn dev_create_stateblock(
+    this: *mut Obj,
+    _ty: u32,
+    out: *mut *mut Obj,
+) -> i32 {
     if out.is_null() {
         return D3DERR_INVALIDCALL;
     }
     let snap = lock(dev_of(this).expect("appareil")).s.clone();
-    *out = new_obj(stateblock_vtable(), this, Kind::StateBlock(Mutex::new(Some(Box::new(snap)))));
+    *out = new_obj(
+        stateblock_vtable(),
+        this,
+        Kind::StateBlock(Mutex::new(Some(Box::new(snap)))),
+    );
     S_OK
 }
 
@@ -2828,7 +3426,11 @@ unsafe extern "win64" fn dev_end_stateblock(this: *mut Obj, out: *mut *mut Obj) 
         d.recording = false;
         d.s.clone()
     };
-    *out = new_obj(stateblock_vtable(), this, Kind::StateBlock(Mutex::new(Some(Box::new(snap)))));
+    *out = new_obj(
+        stateblock_vtable(),
+        this,
+        Kind::StateBlock(Mutex::new(Some(Box::new(snap)))),
+    );
     S_OK
 }
 
@@ -2933,7 +3535,11 @@ unsafe extern "win64" fn dev_get_sw_vp(_: *mut Obj) -> i32 {
     0
 }
 
-unsafe extern "win64" fn dev_create_decl(this: *mut Obj, elems: *const VertexElement, out: *mut *mut Obj) -> i32 {
+unsafe extern "win64" fn dev_create_decl(
+    this: *mut Obj,
+    elems: *const VertexElement,
+    out: *mut *mut Obj,
+) -> i32 {
     if elems.is_null() || out.is_null() {
         return D3DERR_INVALIDCALL;
     }
@@ -2998,7 +3604,11 @@ unsafe fn create_shader(this: *mut Obj, func: *const u32, out: *mut *mut Obj, pi
         Ok(s) if s.pixel == pixel => Some(s),
         Ok(_) => None,
         Err(e) => {
-            log_warn!("d3d9", "shader non traduit ({}) : repli sur le pipeline fixe", e);
+            log_warn!(
+                "d3d9",
+                "shader non traduit ({}) : repli sur le pipeline fixe",
+                e
+            );
             None
         }
     };
@@ -3007,15 +3617,27 @@ unsafe fn create_shader(this: *mut Obj, func: *const u32, out: *mut *mut Obj, pi
         translated,
         gl_shader: 0,
     });
-    let kind = if pixel { Kind::PixelShader(data) } else { Kind::VertexShader(data) };
+    let kind = if pixel {
+        Kind::PixelShader(data)
+    } else {
+        Kind::VertexShader(data)
+    };
     *out = new_obj(shader_vtable(), this, kind);
     S_OK
 }
 
-unsafe extern "win64" fn dev_create_vs(this: *mut Obj, func: *const u32, out: *mut *mut Obj) -> i32 {
+unsafe extern "win64" fn dev_create_vs(
+    this: *mut Obj,
+    func: *const u32,
+    out: *mut *mut Obj,
+) -> i32 {
     create_shader(this, func, out, false)
 }
-unsafe extern "win64" fn dev_create_ps(this: *mut Obj, func: *const u32, out: *mut *mut Obj) -> i32 {
+unsafe extern "win64" fn dev_create_ps(
+    this: *mut Obj,
+    func: *const u32,
+    out: *mut *mut Obj,
+) -> i32 {
     create_shader(this, func, out, true)
 }
 unsafe extern "win64" fn dev_set_vs(this: *mut Obj, s: *mut Obj) -> i32 {
@@ -3053,7 +3675,12 @@ unsafe extern "win64" fn dev_get_ps(this: *mut Obj, out: *mut *mut Obj) -> i32 {
 
 macro_rules! const_setters {
     ($set:ident, $get:ident, $field:ident, $ty:ty, $width:expr, $max:expr) => {
-        unsafe extern "win64" fn $set(this: *mut Obj, start: u32, data: *const $ty, count: u32) -> i32 {
+        unsafe extern "win64" fn $set(
+            this: *mut Obj,
+            start: u32,
+            data: *const $ty,
+            count: u32,
+        ) -> i32 {
             let mut d = dev!(this);
             if data.is_null() || start as usize + count as usize > $max {
                 return D3DERR_INVALIDCALL;
@@ -3061,12 +3688,18 @@ macro_rules! const_setters {
             let src = std::slice::from_raw_parts(data, count as usize * $width);
             for (i, chunk) in src.chunks($width).enumerate() {
                 let dst = &mut d.s.$field[start as usize + i];
-                let dst: &mut [$ty] = std::slice::from_raw_parts_mut(dst as *mut _ as *mut $ty, $width);
+                let dst: &mut [$ty] =
+                    std::slice::from_raw_parts_mut(dst as *mut _ as *mut $ty, $width);
                 dst.copy_from_slice(chunk);
             }
             S_OK
         }
-        unsafe extern "win64" fn $get(this: *mut Obj, start: u32, data: *mut $ty, count: u32) -> i32 {
+        unsafe extern "win64" fn $get(
+            this: *mut Obj,
+            start: u32,
+            data: *mut $ty,
+            count: u32,
+        ) -> i32 {
             let d = dev!(this);
             if data.is_null() || start as usize + count as usize > $max {
                 return D3DERR_INVALIDCALL;
@@ -3088,7 +3721,13 @@ const_setters!(dev_set_ps_f, dev_get_ps_f, ps_f, f32, 4, 224);
 const_setters!(dev_set_ps_i, dev_get_ps_i, ps_i, i32, 4, 16);
 const_setters!(dev_set_ps_b, dev_get_ps_b, ps_b, i32, 1, 16);
 
-unsafe extern "win64" fn dev_set_stream(this: *mut Obj, n: u32, vb: *mut Obj, offset: u32, stride: u32) -> i32 {
+unsafe extern "win64" fn dev_set_stream(
+    this: *mut Obj,
+    n: u32,
+    vb: *mut Obj,
+    offset: u32,
+    stride: u32,
+) -> i32 {
     let mut d = dev!(this);
     if n >= 16 {
         return D3DERR_INVALIDCALL;
@@ -3100,7 +3739,13 @@ unsafe extern "win64" fn dev_set_stream(this: *mut Obj, n: u32, vb: *mut Obj, of
     S_OK
 }
 
-unsafe extern "win64" fn dev_get_stream(this: *mut Obj, n: u32, out: *mut *mut Obj, offset: *mut u32, stride: *mut u32) -> i32 {
+unsafe extern "win64" fn dev_get_stream(
+    this: *mut Obj,
+    n: u32,
+    out: *mut *mut Obj,
+    offset: *mut u32,
+    stride: *mut u32,
+) -> i32 {
     let d = dev!(this);
     if n >= 16 || out.is_null() {
         return D3DERR_INVALIDCALL;
@@ -3175,19 +3820,59 @@ unsafe extern "win64" fn dev_get_max_latency(_: *mut Obj, out: *mut u32) -> i32 
     }
     S_OK
 }
-unsafe extern "win64" fn dev_create_rt_ex(this: *mut Obj, w: u32, h: u32, format: u32, ms: u32, q: u32, lockable: i32, out: *mut *mut Obj, shared: *mut usize, _usage: u32) -> i32 {
+unsafe extern "win64" fn dev_create_rt_ex(
+    this: *mut Obj,
+    w: u32,
+    h: u32,
+    format: u32,
+    ms: u32,
+    q: u32,
+    lockable: i32,
+    out: *mut *mut Obj,
+    shared: *mut usize,
+    _usage: u32,
+) -> i32 {
     dev_create_rt(this, w, h, format, ms, q, lockable, out, shared)
 }
-unsafe extern "win64" fn dev_create_offscreen_ex(this: *mut Obj, w: u32, h: u32, format: u32, pool: u32, out: *mut *mut Obj, shared: *mut usize, _usage: u32) -> i32 {
+unsafe extern "win64" fn dev_create_offscreen_ex(
+    this: *mut Obj,
+    w: u32,
+    h: u32,
+    format: u32,
+    pool: u32,
+    out: *mut *mut Obj,
+    shared: *mut usize,
+    _usage: u32,
+) -> i32 {
     dev_create_offscreen(this, w, h, format, pool, out, shared)
 }
-unsafe extern "win64" fn dev_create_ds_ex(this: *mut Obj, w: u32, h: u32, format: u32, ms: u32, q: u32, discard: i32, out: *mut *mut Obj, shared: *mut usize, _usage: u32) -> i32 {
+unsafe extern "win64" fn dev_create_ds_ex(
+    this: *mut Obj,
+    w: u32,
+    h: u32,
+    format: u32,
+    ms: u32,
+    q: u32,
+    discard: i32,
+    out: *mut *mut Obj,
+    shared: *mut usize,
+    _usage: u32,
+) -> i32 {
     dev_create_ds(this, w, h, format, ms, q, discard, out, shared)
 }
-unsafe extern "win64" fn dev_reset_ex(this: *mut Obj, pp: *mut PresentParams, _mode: *mut c_void) -> i32 {
+unsafe extern "win64" fn dev_reset_ex(
+    this: *mut Obj,
+    pp: *mut PresentParams,
+    _mode: *mut c_void,
+) -> i32 {
     dev_reset(this, pp)
 }
-unsafe extern "win64" fn dev_display_mode_ex(_: *mut Obj, _sc: u32, out: *mut u8, rot: *mut u32) -> i32 {
+unsafe extern "win64" fn dev_display_mode_ex(
+    _: *mut Obj,
+    _sc: u32,
+    out: *mut u8,
+    rot: *mut u32,
+) -> i32 {
     // D3DDISPLAYMODEEX : Size, Width, Height, RefreshRate, Format, ScanLineOrdering
     if !out.is_null() {
         let m = desktop_mode();
@@ -3228,10 +3913,20 @@ pub(crate) fn fvf_to_decl(fvf: u32) -> (Vec<VertexElement>, u32) {
             let last_is_indices = fvf & 0x1000 != 0 || fvf & 0x8000 != 0;
             let weights = if last_is_indices { betas - 1 } else { betas };
             if weights > 0 {
-                push((weights - 1) as u8, d3d9_shader::USAGE_BLENDWEIGHT, 0, (weights * 4) as u16);
+                push(
+                    (weights - 1) as u8,
+                    d3d9_shader::USAGE_BLENDWEIGHT,
+                    0,
+                    (weights * 4) as u16,
+                );
             }
             if last_is_indices {
-                push(if fvf & 0x8000 != 0 { 4 } else { 5 }, d3d9_shader::USAGE_BLENDINDICES, 0, 4);
+                push(
+                    if fvf & 0x8000 != 0 { 4 } else { 5 },
+                    d3d9_shader::USAGE_BLENDINDICES,
+                    0,
+                    4,
+                );
             }
         }
         _ => {}
@@ -3360,7 +4055,11 @@ unsafe fn apply_render_states(d: &Dev, g: &gl::GlFunctions, l: &GlLegacy) {
             _ => gl::GL_FILL,
         },
     );
-    (l.ShadeModel)(if rs[9] == 1 { glc::GL_FLAT } else { glc::GL_SMOOTH });
+    (l.ShadeModel)(if rs[9] == 1 {
+        glc::GL_FLAT
+    } else {
+        glc::GL_SMOOTH
+    });
     // Rendu retourné : la face avant D3D (horaire) devient antihoraire.
     (g.FrontFace)(gl::GL_CCW);
     match rs[22] {
@@ -3376,7 +4075,12 @@ unsafe fn apply_render_states(d: &Dev, g: &gl::GlFunctions, l: &GlLegacy) {
     }
     on(gl::GL_BLEND, rs[27] != 0);
     if rs[206] != 0 {
-        (g.BlendFuncSeparate)(blend_gl(rs[19]), blend_gl(rs[20]), blend_gl(rs[207]), blend_gl(rs[208]));
+        (g.BlendFuncSeparate)(
+            blend_gl(rs[19]),
+            blend_gl(rs[20]),
+            blend_gl(rs[207]),
+            blend_gl(rs[208]),
+        );
     } else {
         let (s, dd) = match rs[19] {
             12 => (gl::GL_SRC_ALPHA, gl::GL_ONE_MINUS_SRC_ALPHA),
@@ -3395,10 +4099,19 @@ unsafe fn apply_render_states(d: &Dev, g: &gl::GlFunctions, l: &GlLegacy) {
     on(glc::GL_ALPHA_TEST, rs[15] != 0);
     (l.AlphaFunc)(cmp_gl(rs[25]), (rs[24] & 0xff) as f32 / 255.0);
     let cw = rs[168];
-    (g.ColorMask)((cw & 1 != 0) as u8, (cw & 2 != 0) as u8, (cw & 4 != 0) as u8, (cw & 8 != 0) as u8);
+    (g.ColorMask)(
+        (cw & 1 != 0) as u8,
+        (cw & 2 != 0) as u8,
+        (cw & 4 != 0) as u8,
+        (cw & 8 != 0) as u8,
+    );
     on(gl::GL_STENCIL_TEST, rs[52] != 0 && !d.ds.is_null());
     (l.StencilFunc)(cmp_gl(rs[56]), rs[57] as i32, rs[58]);
-    (l.StencilOp)(stencil_op_gl(rs[53]), stencil_op_gl(rs[54]), stencil_op_gl(rs[55]));
+    (l.StencilOp)(
+        stencil_op_gl(rs[53]),
+        stencil_op_gl(rs[54]),
+        stencil_op_gl(rs[55]),
+    );
     (l.StencilMask)(rs[59]);
     // Brouillard (table ou sommet), couleur ARGB.
     let fog = rs[28] != 0;
@@ -3455,14 +4168,23 @@ unsafe fn bind_samplers(d: &Dev, g: &gl::GlFunctions, l: &GlLegacy, fixed: bool)
             _ => gl::GL_LINEAR_MIPMAP_LINEAR,
         };
         (g.TexParameteri)(target, gl::GL_TEXTURE_MIN_FILTER, min);
-        (g.TexParameteri)(target, gl::GL_TEXTURE_MAG_FILTER, if ss[5] == 1 { gl::GL_NEAREST } else { gl::GL_LINEAR });
+        (g.TexParameteri)(
+            target,
+            gl::GL_TEXTURE_MAG_FILTER,
+            if ss[5] == 1 {
+                gl::GL_NEAREST
+            } else {
+                gl::GL_LINEAR
+            },
+        );
         (g.TexParameteri)(target, gl::GL_TEXTURE_WRAP_S, wrap_gl(ss[1]));
         (g.TexParameteri)(target, gl::GL_TEXTURE_WRAP_T, wrap_gl(ss[2]));
         (g.TexParameteri)(target, glc::GL_TEXTURE_WRAP_R, wrap_gl(ss[3]));
         if fixed && slot < 8 {
             let ts = &d.s.tss[slot];
             let colorop = ts[1];
-            let enabled = colorop != 1 && !(colorop == 2 && ts[2] == 0) && !(colorop == 3 && ts[3] == 0);
+            let enabled =
+                colorop != 1 && !(colorop == 2 && ts[2] == 0) && !(colorop == 3 && ts[3] == 0);
             if enabled {
                 (g.Enable)(target);
                 let mode = match colorop {
@@ -3480,7 +4202,13 @@ unsafe fn bind_samplers(d: &Dev, g: &gl::GlFunctions, l: &GlLegacy, fixed: bool)
     (g.ActiveTexture)(gl::GL_TEXTURE0);
 }
 
-unsafe fn apply_fixed_function(d: &Dev, l: &GlLegacy, pretransformed: bool, has_color: bool, has_normal: bool) {
+unsafe fn apply_fixed_function(
+    d: &Dev,
+    l: &GlLegacy,
+    pretransformed: bool,
+    has_color: bool,
+    has_normal: bool,
+) {
     let vp = d.s.viewport;
     (l.MatrixMode)(glc::GL_PROJECTION);
     if pretransformed {
@@ -3496,7 +4224,22 @@ unsafe fn apply_fixed_function(d: &Dev, l: &GlLegacy, pretransformed: bool, has_
     // Profondeur [0,1] → [-1,1], retournement vertical, demi-pixel.
     let (w, h) = (vp.width.max(1) as f32, vp.height.max(1) as f32);
     let fix: [f32; 16] = [
-        1.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 1.0 / w, 1.0 / h, -1.0, 1.0,
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        -1.0,
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        2.0,
+        0.0,
+        1.0 / w,
+        1.0 / h,
+        -1.0,
+        1.0,
     ];
     (l.LoadMatrixf)(fix.as_ptr());
     let proj = d.s.transform(TS_PROJECTION);
@@ -3512,10 +4255,15 @@ unsafe fn apply_fixed_function(d: &Dev, l: &GlLegacy, pretransformed: bool, has_
         (l.LightModelfv)(glc::GL_LIGHT_MODEL_AMBIENT, amb.as_ptr());
         (l.LightModeli)(
             glc::GL_LIGHT_MODEL_COLOR_CONTROL,
-            if d.s.rs[29] != 0 { glc::GL_SEPARATE_SPECULAR_COLOR } else { glc::GL_SINGLE_COLOR } as i32,
+            if d.s.rs[29] != 0 {
+                glc::GL_SEPARATE_SPECULAR_COLOR
+            } else {
+                glc::GL_SINGLE_COLOR
+            } as i32,
         );
         let mut slot = 0u32;
-        let mut lights: Vec<(&u32, &(Light, bool))> = d.s.lights.iter().filter(|(_, v)| v.1).collect();
+        let mut lights: Vec<(&u32, &(Light, bool))> =
+            d.s.lights.iter().filter(|(_, v)| v.1).collect();
         lights.sort_by_key(|(k, _)| **k);
         for (_, (li, _)) in lights.into_iter().take(8) {
             let gl_l = glc::GL_LIGHT0 + slot;
@@ -3537,7 +4285,11 @@ unsafe fn apply_fixed_function(d: &Dev, l: &GlLegacy, pretransformed: bool, has_
                 (l.Lightf)(gl_l, glc::GL_QUADRATIC_ATTENUATION, li.att2);
                 if li.ty == 2 {
                     (l.Lightfv)(gl_l, glc::GL_SPOT_DIRECTION, li.direction.as_ptr());
-                    (l.Lightf)(gl_l, glc::GL_SPOT_CUTOFF, (li.phi.to_degrees() / 2.0).clamp(0.0, 90.0));
+                    (l.Lightf)(
+                        gl_l,
+                        glc::GL_SPOT_CUTOFF,
+                        (li.phi.to_degrees() / 2.0).clamp(0.0, 90.0),
+                    );
                     (l.Lightf)(gl_l, glc::GL_SPOT_EXPONENT, li.falloff.clamp(0.0, 128.0));
                 } else {
                     (l.Lightf)(gl_l, glc::GL_SPOT_CUTOFF, 180.0);
@@ -3550,9 +4302,21 @@ unsafe fn apply_fixed_function(d: &Dev, l: &GlLegacy, pretransformed: bool, has_
         let m = &d.s.material;
         (l.Materialfv)(glc::GL_FRONT_AND_BACK, glc::GL_DIFFUSE, m.diffuse.as_ptr());
         (l.Materialfv)(glc::GL_FRONT_AND_BACK, glc::GL_AMBIENT, m.ambient.as_ptr());
-        (l.Materialfv)(glc::GL_FRONT_AND_BACK, glc::GL_SPECULAR, m.specular.as_ptr());
-        (l.Materialfv)(glc::GL_FRONT_AND_BACK, glc::GL_EMISSION, m.emissive.as_ptr());
-        (l.Materialf)(glc::GL_FRONT_AND_BACK, glc::GL_SHININESS, m.power.clamp(0.0, 128.0));
+        (l.Materialfv)(
+            glc::GL_FRONT_AND_BACK,
+            glc::GL_SPECULAR,
+            m.specular.as_ptr(),
+        );
+        (l.Materialfv)(
+            glc::GL_FRONT_AND_BACK,
+            glc::GL_EMISSION,
+            m.emissive.as_ptr(),
+        );
+        (l.Materialf)(
+            glc::GL_FRONT_AND_BACK,
+            glc::GL_SHININESS,
+            m.power.clamp(0.0, 128.0),
+        );
         if has_color && d.s.rs[141] != 0 && d.s.rs[145] == 1 {
             (l.ColorMaterial)(glc::GL_FRONT_AND_BACK, glc::GL_AMBIENT_AND_DIFFUSE);
             l.Enable_cap(glc::GL_COLOR_MATERIAL);
@@ -3607,12 +4371,17 @@ fn target_size(d: &Dev) -> (u32, u32) {
 unsafe fn program_for(d: &mut Dev, g: &gl::GlFunctions, l: &GlLegacy) -> Option<u32> {
     let vs = d.s.vs;
     let ps = d.s.ps;
-    let vs_ok = !vs.is_null() && matches!(&(*vs).kind, Kind::VertexShader(s) if s.translated.is_some());
-    let ps_ok = !ps.is_null() && matches!(&(*ps).kind, Kind::PixelShader(s) if s.translated.is_some());
+    let vs_ok =
+        !vs.is_null() && matches!(&(*vs).kind, Kind::VertexShader(s) if s.translated.is_some());
+    let ps_ok =
+        !ps.is_null() && matches!(&(*ps).kind, Kind::PixelShader(s) if s.translated.is_some());
     if !vs_ok && !ps_ok {
         return None;
     }
-    let key = (if vs_ok { vs as usize } else { 0 }, if ps_ok { ps as usize } else { 0 });
+    let key = (
+        if vs_ok { vs as usize } else { 0 },
+        if ps_ok { ps as usize } else { 0 },
+    );
     if let Some(&p) = d.programs.get(&key) {
         return (p != 0).then_some(p);
     }
@@ -3635,7 +4404,11 @@ unsafe fn program_for(d: &mut Dev, g: &gl::GlFunctions, l: &GlLegacy) -> Option<
             let mut buf = vec![0u8; 2048];
             let mut n = 0;
             (g.GetShaderInfoLog)(sh, 2048, &mut n, buf.as_mut_ptr() as *mut gl::GLchar);
-            log_warn!("d3d9", "GLSL refusé : {}", String::from_utf8_lossy(&buf[..n.max(0) as usize]));
+            log_warn!(
+                "d3d9",
+                "GLSL refusé : {}",
+                String::from_utf8_lossy(&buf[..n.max(0) as usize])
+            );
             (g.DeleteShader)(sh);
             s.translated = None;
             return 0;
@@ -3652,7 +4425,10 @@ unsafe fn program_for(d: &mut Dev, g: &gl::GlFunctions, l: &GlLegacy) -> Option<
             attached += 1;
             if let Kind::VertexShader(s) = &(*vs).kind {
                 if let Some(t) = &s.translated {
-                    if let Some(p) = t.inputs.iter().find(|i| i.usage == d3d9_shader::USAGE_POSITION || i.usage == d3d9_shader::USAGE_POSITIONT) {
+                    if let Some(p) = t.inputs.iter().find(|i| {
+                        i.usage == d3d9_shader::USAGE_POSITION
+                            || i.usage == d3d9_shader::USAGE_POSITIONT
+                    }) {
                         let n = std::ffi::CString::new(p.name.clone()).unwrap_or_default();
                         (l.BindAttribLocation)(prog, 0, n.as_ptr());
                     }
@@ -3683,7 +4459,8 @@ unsafe fn program_for(d: &mut Dev, g: &gl::GlFunctions, l: &GlLegacy) -> Option<
 }
 
 unsafe fn upload_uniforms(d: &Dev, g: &gl::GlFunctions, l: &GlLegacy, prog: u32) {
-    let loc = |name: &std::ffi::CStr| (g.GetUniformLocation)(prog, name.as_ptr() as *const gl::GLchar);
+    let loc =
+        |name: &std::ffi::CStr| (g.GetUniformLocation)(prog, name.as_ptr() as *const gl::GLchar);
     let v = loc(c"vc");
     if v >= 0 {
         (l.Uniform4fv)(v, 256, d.s.vs_f.as_ptr() as *const f32);
@@ -3711,7 +4488,13 @@ unsafe fn upload_uniforms(d: &Dev, g: &gl::GlFunctions, l: &GlLegacy, prog: u32)
     let vp = d.s.viewport;
     let v = loc(c"wl_pos_fixup");
     if v >= 0 {
-        (g.Uniform4f)(v, 1.0 / vp.width.max(1) as f32, 1.0 / vp.height.max(1) as f32, 0.0, 0.0);
+        (g.Uniform4f)(
+            v,
+            1.0 / vp.width.max(1) as f32,
+            1.0 / vp.height.max(1) as f32,
+            0.0,
+            0.0,
+        );
     }
     for i in 0..16 {
         let name = std::ffi::CString::new(format!("s{i}")).unwrap_or_default();
@@ -3724,7 +4507,13 @@ unsafe fn upload_uniforms(d: &Dev, g: &gl::GlFunctions, l: &GlLegacy, prog: u32)
 }
 
 /// Branche les tableaux de sommets (client) depuis les flux et la déclaration.
-unsafe fn setup_arrays(d: &Dev, l: &GlLegacy, prog: Option<u32>, base_vertex: i32, up: Option<(*const u8, u32)>) -> (bool, bool, bool) {
+unsafe fn setup_arrays(
+    d: &Dev,
+    l: &GlLegacy,
+    prog: Option<u32>,
+    base_vertex: i32,
+    up: Option<(*const u8, u32)>,
+) -> (bool, bool, bool) {
     let (elems, _) = if !d.s.decl.is_null() {
         match &(*d.s.decl).kind {
             Kind::Decl(e) => (e.clone(), 0),
@@ -3733,7 +4522,12 @@ unsafe fn setup_arrays(d: &Dev, l: &GlLegacy, prog: Option<u32>, base_vertex: i3
     } else {
         fvf_to_decl(d.s.fvf)
     };
-    for cap in [glc::GL_VERTEX_ARRAY, glc::GL_NORMAL_ARRAY, glc::GL_COLOR_ARRAY, glc::GL_SECONDARY_COLOR_ARRAY] {
+    for cap in [
+        glc::GL_VERTEX_ARRAY,
+        glc::GL_NORMAL_ARRAY,
+        glc::GL_COLOR_ARRAY,
+        glc::GL_SECONDARY_COLOR_ARRAY,
+    ] {
         (l.DisableClientState)(cap);
     }
     for t in 0..8 {
@@ -3759,8 +4553,11 @@ unsafe fn setup_arrays(d: &Dev, l: &GlLegacy, prog: Option<u32>, base_vertex: i3
                 (p.add(off as usize), stride)
             }
         };
-        let Some((size, ty, norm)) = decl_type_gl(e.ty) else { continue };
-        let ptr = base.offset(e.offset as isize + base_vertex as isize * stride as isize) as *const c_void;
+        let Some((size, ty, norm)) = decl_type_gl(e.ty) else {
+            continue;
+        };
+        let ptr = base.offset(e.offset as isize + base_vertex as isize * stride as isize)
+            as *const c_void;
         let s = stride as i32;
         use d3d9_shader as sh;
         match (e.usage, e.usage_index) {
@@ -3785,7 +4582,12 @@ unsafe fn setup_arrays(d: &Dev, l: &GlLegacy, prog: Option<u32>, base_vertex: i3
             }
             (sh::USAGE_COLOR, 1) => {
                 (l.EnableClientState)(glc::GL_SECONDARY_COLOR_ARRAY);
-                (l.SecondaryColorPointer)(if size == gl::GL_BGRA as i32 { size } else { 3 }, ty, s, ptr);
+                (l.SecondaryColorPointer)(
+                    if size == gl::GL_BGRA as i32 { size } else { 3 },
+                    ty,
+                    s,
+                    ptr,
+                );
             }
             (sh::USAGE_TEXCOORD, i) if i < 8 => {
                 // TEXCOORDINDEX : l'étage t lit le jeu de coordonnées tss[11].
@@ -3796,7 +4598,8 @@ unsafe fn setup_arrays(d: &Dev, l: &GlLegacy, prog: Option<u32>, base_vertex: i3
             _ => {}
         }
         if let Some(prog) = prog {
-            let name = std::ffi::CString::new(d3d9_shader::attr_name(e.usage, e.usage_index)).unwrap_or_default();
+            let name = std::ffi::CString::new(d3d9_shader::attr_name(e.usage, e.usage_index))
+                .unwrap_or_default();
             let loc = (l.GetAttribLocation)(prog, name.as_ptr());
             if loc >= 0 {
                 (l.EnableVertexAttribArray)(loc as u32);
@@ -3822,8 +4625,12 @@ unsafe fn prepare_draw(d: &mut Dev, base_vertex: i32, up: Option<(*const u8, u32
     if let Some(p) = prog {
         upload_uniforms(d, g, l, p);
     }
-    let vs_active = prog.is_some() && !d.s.vs.is_null() && matches!(&(*d.s.vs).kind, Kind::VertexShader(s) if s.gl_shader != 0);
-    let ps_active = prog.is_some() && !d.s.ps.is_null() && matches!(&(*d.s.ps).kind, Kind::PixelShader(s) if s.gl_shader != 0);
+    let vs_active = prog.is_some()
+        && !d.s.vs.is_null()
+        && matches!(&(*d.s.vs).kind, Kind::VertexShader(s) if s.gl_shader != 0);
+    let ps_active = prog.is_some()
+        && !d.s.ps.is_null()
+        && matches!(&(*d.s.ps).kind, Kind::PixelShader(s) if s.gl_shader != 0);
     bind_samplers(d, g, l, !ps_active);
     let (pre, color, normal) = setup_arrays(d, l, prog, base_vertex, up);
     if !vs_active {
@@ -3848,7 +4655,15 @@ unsafe extern "win64" fn dev_draw(this: *mut Obj, ty: u32, start: u32, prims: u3
     S_OK
 }
 
-unsafe extern "win64" fn dev_draw_indexed(this: *mut Obj, ty: u32, base: i32, _min: u32, _num: u32, start: u32, prims: u32) -> i32 {
+unsafe extern "win64" fn dev_draw_indexed(
+    this: *mut Obj,
+    ty: u32,
+    base: i32,
+    _min: u32,
+    _num: u32,
+    start: u32,
+    prims: u32,
+) -> i32 {
     let mut d = dev!(this);
     let Some((mode, count)) = primitive_count(ty, prims) else {
         return D3DERR_INVALIDCALL;
@@ -3873,20 +4688,39 @@ unsafe extern "win64" fn dev_draw_indexed(this: *mut Obj, ty: u32, base: i32, _m
     }
     if prepare_draw(&mut d, base, None).is_some() {
         if let Some(g) = gl::gl() {
-            let ity = if isz == 4 { gl::GL_UNSIGNED_INT } else { gl::GL_UNSIGNED_SHORT };
-            (g.DrawElements)(mode, count, ity, ptr.add(start as usize * isz) as *const c_void);
+            let ity = if isz == 4 {
+                gl::GL_UNSIGNED_INT
+            } else {
+                gl::GL_UNSIGNED_SHORT
+            };
+            (g.DrawElements)(
+                mode,
+                count,
+                ity,
+                ptr.add(start as usize * isz) as *const c_void,
+            );
         }
     }
     S_OK
 }
 
-unsafe extern "win64" fn dev_draw_up(this: *mut Obj, ty: u32, prims: u32, data: *const u8, stride: u32) -> i32 {
+unsafe extern "win64" fn dev_draw_up(
+    this: *mut Obj,
+    ty: u32,
+    prims: u32,
+    data: *const u8,
+    stride: u32,
+) -> i32 {
     let mut d = dev!(this);
     let Some((mode, count)) = primitive_count(ty, prims) else {
         return D3DERR_INVALIDCALL;
     };
     if data.is_null() || prims == 0 {
-        return if data.is_null() { D3DERR_INVALIDCALL } else { S_OK };
+        return if data.is_null() {
+            D3DERR_INVALIDCALL
+        } else {
+            S_OK
+        };
     }
     if prepare_draw(&mut d, 0, Some((data, stride))).is_some() {
         if let Some(g) = gl::gl() {
@@ -3898,7 +4732,17 @@ unsafe extern "win64" fn dev_draw_up(this: *mut Obj, ty: u32, prims: u32, data: 
     S_OK
 }
 
-unsafe extern "win64" fn dev_draw_indexed_up(this: *mut Obj, ty: u32, _min: u32, _num: u32, prims: u32, idx: *const u8, fmt: u32, data: *const u8, stride: u32) -> i32 {
+unsafe extern "win64" fn dev_draw_indexed_up(
+    this: *mut Obj,
+    ty: u32,
+    _min: u32,
+    _num: u32,
+    prims: u32,
+    idx: *const u8,
+    fmt: u32,
+    data: *const u8,
+    stride: u32,
+) -> i32 {
     let mut d = dev!(this);
     let Some((mode, count)) = primitive_count(ty, prims) else {
         return D3DERR_INVALIDCALL;
@@ -3911,7 +4755,11 @@ unsafe extern "win64" fn dev_draw_indexed_up(this: *mut Obj, ty: u32, _min: u32,
     }
     if prepare_draw(&mut d, 0, Some((data, stride))).is_some() {
         if let Some(g) = gl::gl() {
-            let ity = if fmt == D3DFMT_INDEX32 { gl::GL_UNSIGNED_INT } else { gl::GL_UNSIGNED_SHORT };
+            let ity = if fmt == D3DFMT_INDEX32 {
+                gl::GL_UNSIGNED_INT
+            } else {
+                gl::GL_UNSIGNED_SHORT
+            };
             (g.DrawElements)(mode, count, ity, idx as *const c_void);
         }
     }
@@ -4074,8 +4922,16 @@ fn device_vtable() -> &'static [usize] {
 const D3D_SDK_VERSION_MIN: u32 = 31;
 
 pub unsafe extern "win64" fn Direct3DCreate9(sdk: u32) -> *mut Obj {
-    log_info!("d3d9", "Direct3DCreate9 (SDK {}) → traduction Winlux OpenGL", sdk);
-    new_obj(d3d9_vtable(), std::ptr::null_mut(), Kind::D3D9 { ex: false })
+    log_info!(
+        "d3d9",
+        "Direct3DCreate9 (SDK {}) → traduction Winlux OpenGL",
+        sdk
+    );
+    new_obj(
+        d3d9_vtable(),
+        std::ptr::null_mut(),
+        Kind::D3D9 { ex: false },
+    )
 }
 
 pub unsafe extern "win64" fn Direct3DCreate9Ex(sdk: u32, out: *mut *mut Obj) -> i32 {
@@ -4106,14 +4962,22 @@ pub unsafe extern "win64" fn D3DPERF_GetStatus() -> u32 {
 }
 
 /// Accès interne (DXVA2) : crée une surface vidéo CPU rattachée à un appareil.
-pub(crate) unsafe fn create_video_surface(device: *mut Obj, w: u32, h: u32, format: u32) -> Option<*mut Obj> {
+pub(crate) unsafe fn create_video_surface(
+    device: *mut Obj,
+    w: u32,
+    h: u32,
+    format: u32,
+) -> Option<*mut Obj> {
     let m = dev_of(device)?;
     let d = lock(m);
     Some(make_surface(&d, device, w, h, format, 0, D3DPOOL_DEFAULT))
 }
 
 /// Accès interne (DXVA2) : tampon CPU d'une surface, verrouillé le temps de `f`.
-pub(crate) unsafe fn with_surface_bytes<R>(surface: *mut Obj, f: impl FnOnce(u32, u32, u32, &mut [u8]) -> R) -> Option<R> {
+pub(crate) unsafe fn with_surface_bytes<R>(
+    surface: *mut Obj,
+    f: impl FnOnce(u32, u32, u32, &mut [u8]) -> R,
+) -> Option<R> {
     let Kind::Surface(m) = &(*surface).kind else {
         return None;
     };
@@ -4204,7 +5068,15 @@ mod tests {
     fn appareil_sans_rendu_complet() {
         unsafe {
             let d3d = Direct3DCreate9(32);
-            type CreateDevice = unsafe extern "win64" fn(*mut Obj, u32, u32, usize, u32, *mut PresentParams, *mut *mut Obj) -> i32;
+            type CreateDevice = unsafe extern "win64" fn(
+                *mut Obj,
+                u32,
+                u32,
+                usize,
+                u32,
+                *mut PresentParams,
+                *mut *mut Obj,
+            ) -> i32;
             let mut pp = PresentParams {
                 windowed: 1,
                 swap_effect: 1,
@@ -4219,40 +5091,125 @@ mod tests {
             assert_eq!(pp.width, 800);
 
             // Texture 2D : verrou, écriture, déverrouillage, niveaux.
-            type CreateTex = unsafe extern "win64" fn(*mut Obj, u32, u32, u32, u32, u32, u32, *mut *mut Obj, *mut usize) -> i32;
+            type CreateTex = unsafe extern "win64" fn(
+                *mut Obj,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                u32,
+                *mut *mut Obj,
+                *mut usize,
+            ) -> i32;
             let mut tex = std::ptr::null_mut();
-            assert_eq!(call::<CreateTex>(dev, 23)(dev, 64, 32, 0, 0, D3DFMT_A8R8G8B8, D3DPOOL_MANAGED, &mut tex, std::ptr::null_mut()), S_OK);
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj) -> u32>(tex, 13)(tex), 7);
-            type LockRect = unsafe extern "win64" fn(*mut Obj, u32, *mut LockedRect, *const Rect32, u32) -> i32;
+            assert_eq!(
+                call::<CreateTex>(dev, 23)(
+                    dev,
+                    64,
+                    32,
+                    0,
+                    0,
+                    D3DFMT_A8R8G8B8,
+                    D3DPOOL_MANAGED,
+                    &mut tex,
+                    std::ptr::null_mut()
+                ),
+                S_OK
+            );
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj) -> u32>(tex, 13)(tex),
+                7
+            );
+            type LockRect =
+                unsafe extern "win64" fn(*mut Obj, u32, *mut LockedRect, *const Rect32, u32) -> i32;
             let mut lr = LockedRect {
                 pitch: 0,
                 bits: std::ptr::null_mut(),
             };
-            assert_eq!(call::<LockRect>(tex, 19)(tex, 0, &mut lr, std::ptr::null(), 0), S_OK);
+            assert_eq!(
+                call::<LockRect>(tex, 19)(tex, 0, &mut lr, std::ptr::null(), 0),
+                S_OK
+            );
             assert_eq!(lr.pitch, 256);
             *lr.bits = 0xab;
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, u32) -> i32>(tex, 20)(tex, 0), S_OK);
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj, u32) -> i32>(tex, 20)(tex, 0),
+                S_OK
+            );
             // Surface du niveau 0 : même mémoire.
             let mut surf = std::ptr::null_mut();
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, u32, *mut *mut Obj) -> i32>(tex, 18)(tex, 0, &mut surf), S_OK);
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj, u32, *mut *mut Obj) -> i32>(tex, 18)(
+                    tex, 0, &mut surf
+                ),
+                S_OK
+            );
             let mut lr2 = LockedRect {
                 pitch: 0,
                 bits: std::ptr::null_mut(),
             };
-            type SLock = unsafe extern "win64" fn(*mut Obj, *mut LockedRect, *const Rect32, u32) -> i32;
-            assert_eq!(call::<SLock>(surf, 13)(surf, &mut lr2, std::ptr::null(), 0), S_OK);
+            type SLock =
+                unsafe extern "win64" fn(*mut Obj, *mut LockedRect, *const Rect32, u32) -> i32;
+            assert_eq!(
+                call::<SLock>(surf, 13)(surf, &mut lr2, std::ptr::null(), 0),
+                S_OK
+            );
             assert_eq!(*lr2.bits, 0xab);
 
             // Vertex buffer + FVF + dessin (aucun rendu, aucun crash).
-            type CreateVb = unsafe extern "win64" fn(*mut Obj, u32, u32, u32, u32, *mut *mut Obj, *mut usize) -> i32;
+            type CreateVb = unsafe extern "win64" fn(
+                *mut Obj,
+                u32,
+                u32,
+                u32,
+                u32,
+                *mut *mut Obj,
+                *mut usize,
+            ) -> i32;
             let mut vb = std::ptr::null_mut();
-            assert_eq!(call::<CreateVb>(dev, 26)(dev, 72, 0, 0x42, 0, &mut vb, std::ptr::null_mut()), S_OK);
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, u32, *mut Obj, u32, u32) -> i32>(dev, 100)(dev, 0, vb, 0, 16), S_OK);
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, u32) -> i32>(dev, 89)(dev, 0x42), S_OK);
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj) -> i32>(dev, 41)(dev), S_OK);
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, u32, u32, u32) -> i32>(dev, 81)(dev, 4, 0, 1), S_OK);
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj) -> i32>(dev, 42)(dev), S_OK);
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, *const Rect32, *const Rect32, usize, *const c_void) -> i32>(dev, 17)(dev, std::ptr::null(), std::ptr::null(), 0, std::ptr::null()), S_OK);
+            assert_eq!(
+                call::<CreateVb>(dev, 26)(dev, 72, 0, 0x42, 0, &mut vb, std::ptr::null_mut()),
+                S_OK
+            );
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj, u32, *mut Obj, u32, u32) -> i32>(
+                    dev, 100
+                )(dev, 0, vb, 0, 16),
+                S_OK
+            );
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj, u32) -> i32>(dev, 89)(dev, 0x42),
+                S_OK
+            );
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj) -> i32>(dev, 41)(dev),
+                S_OK
+            );
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj, u32, u32, u32) -> i32>(dev, 81)(
+                    dev, 4, 0, 1
+                ),
+                S_OK
+            );
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj) -> i32>(dev, 42)(dev),
+                S_OK
+            );
+            assert_eq!(
+                call::<
+                    unsafe extern "win64" fn(
+                        *mut Obj,
+                        *const Rect32,
+                        *const Rect32,
+                        usize,
+                        *const c_void,
+                    ) -> i32,
+                >(dev, 17)(
+                    dev, std::ptr::null(), std::ptr::null(), 0, std::ptr::null()
+                ),
+                S_OK
+            );
 
             // États de rendu et state block.
             type SetRs = unsafe extern "win64" fn(*mut Obj, u32, u32) -> i32;
@@ -4262,30 +5219,72 @@ mod tests {
             assert_eq!(v, 1, "LIGHTING vaut TRUE par défaut");
             call::<SetRs>(dev, 57)(dev, 27, 1);
             let mut sb = std::ptr::null_mut();
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, u32, *mut *mut Obj) -> i32>(dev, 59)(dev, 1, &mut sb), S_OK);
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj, u32, *mut *mut Obj) -> i32>(dev, 59)(
+                    dev, 1, &mut sb
+                ),
+                S_OK
+            );
             call::<SetRs>(dev, 57)(dev, 27, 0);
             call::<unsafe extern "win64" fn(*mut Obj) -> i32>(sb, 5)(sb);
             call::<GetRs>(dev, 58)(dev, 27, &mut v);
             assert_eq!(v, 1, "Apply restaure l'état capturé");
 
             // Shader SM2 traduit.
-            let ps: [u32; 5] = [0xffff_0200, 0x0200_0001, 0x800f_0800, 0xa0e4_0000, 0x0000_ffff];
+            let ps: [u32; 5] = [
+                0xffff_0200,
+                0x0200_0001,
+                0x800f_0800,
+                0xa0e4_0000,
+                0x0000_ffff,
+            ];
             let mut pso: *mut Obj = std::ptr::null_mut();
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, *const u32, *mut *mut Obj) -> i32>(dev, 106)(dev, ps.as_ptr(), &mut pso), S_OK);
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj, *const u32, *mut *mut Obj) -> i32>(
+                    dev, 106
+                )(dev, ps.as_ptr(), &mut pso),
+                S_OK
+            );
             assert!(!pso.is_null());
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, *mut Obj) -> i32>(dev, 107)(dev, pso), S_OK);
-            call::<unsafe extern "win64" fn(*mut Obj, *mut Obj) -> i32>(dev, 107)(dev, std::ptr::null_mut());
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj, *mut Obj) -> i32>(dev, 107)(dev, pso),
+                S_OK
+            );
+            call::<unsafe extern "win64" fn(*mut Obj, *mut Obj) -> i32>(dev, 107)(
+                dev,
+                std::ptr::null_mut(),
+            );
             obj_release(pso);
 
             // Requête d'évènement : test de prise en charge sans objet.
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, u32, *mut *mut Obj) -> i32>(dev, 118)(dev, 8, std::ptr::null_mut()), S_OK);
-            assert_eq!(call::<unsafe extern "win64" fn(*mut Obj, u32, *mut *mut Obj) -> i32>(dev, 118)(dev, 99, std::ptr::null_mut()), D3DERR_NOTAVAILABLE);
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj, u32, *mut *mut Obj) -> i32>(dev, 118)(
+                    dev,
+                    8,
+                    std::ptr::null_mut()
+                ),
+                S_OK
+            );
+            assert_eq!(
+                call::<unsafe extern "win64" fn(*mut Obj, u32, *mut *mut Obj) -> i32>(dev, 118)(
+                    dev,
+                    99,
+                    std::ptr::null_mut()
+                ),
+                D3DERR_NOTAVAILABLE
+            );
 
             // Libérations dans l'ordre inverse.
             for o in [sb, vb, surf, tex] {
                 obj_release(o);
             }
-            call::<unsafe extern "win64" fn(*mut Obj, u32, *mut Obj, u32, u32) -> i32>(dev, 100)(dev, 0, std::ptr::null_mut(), 0, 0);
+            call::<unsafe extern "win64" fn(*mut Obj, u32, *mut Obj, u32, u32) -> i32>(dev, 100)(
+                dev,
+                0,
+                std::ptr::null_mut(),
+                0,
+                0,
+            );
             assert_eq!(obj_release(dev), 0);
             obj_release(d3d);
         }
@@ -4295,9 +5294,26 @@ mod tests {
     fn formats_annonces() {
         unsafe {
             let d3d = Direct3DCreate9(32);
-            assert_eq!(d3d_check_format(d3d, 0, 1, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE, D3DFMT_DXT5), S_OK);
-            assert_eq!(d3d_check_format(d3d, 0, 1, D3DFMT_X8R8G8B8, D3DUSAGE_RENDERTARGET, D3DRTYPE_TEXTURE, D3DFMT_DXT1), D3DERR_NOTAVAILABLE);
-            assert_eq!(d3d_check_format(d3d, 0, 1, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE, 9999), D3DERR_NOTAVAILABLE);
+            assert_eq!(
+                d3d_check_format(d3d, 0, 1, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE, D3DFMT_DXT5),
+                S_OK
+            );
+            assert_eq!(
+                d3d_check_format(
+                    d3d,
+                    0,
+                    1,
+                    D3DFMT_X8R8G8B8,
+                    D3DUSAGE_RENDERTARGET,
+                    D3DRTYPE_TEXTURE,
+                    D3DFMT_DXT1
+                ),
+                D3DERR_NOTAVAILABLE
+            );
+            assert_eq!(
+                d3d_check_format(d3d, 0, 1, D3DFMT_X8R8G8B8, 0, D3DRTYPE_TEXTURE, 9999),
+                D3DERR_NOTAVAILABLE
+            );
             let mut caps = [0u32; 76];
             assert_eq!(d3d_caps(d3d, 0, 1, caps.as_mut_ptr()), S_OK);
             assert_eq!(caps[49], 0xfffe_0300);

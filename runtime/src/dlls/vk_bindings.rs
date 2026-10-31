@@ -896,7 +896,10 @@ pub(crate) fn loader() -> Option<&'static VkLoader> {
             crate::log_info!("vulkan", "Vulkan désactivé par WINLUX_NO_VULKAN");
             return None;
         }
-        let mut lib = libc::dlopen(c"libvulkan.so.1".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+        let mut lib = libc::dlopen(
+            c"libvulkan.so.1".as_ptr(),
+            libc::RTLD_NOW | libc::RTLD_LOCAL,
+        );
         if lib.is_null() {
             lib = libc::dlopen(c"libvulkan.so".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
         }
@@ -910,9 +913,7 @@ pub(crate) fn loader() -> Option<&'static VkLoader> {
             return None;
         }
         Some(VkLoader {
-            get_instance_proc_addr: std::mem::transmute::<*mut c_void, PfnGetInstanceProcAddr>(
-                sym,
-            ),
+            get_instance_proc_addr: std::mem::transmute::<*mut c_void, PfnGetInstanceProcAddr>(sym),
         })
     })
     .as_ref()
@@ -1062,7 +1063,10 @@ pub(crate) fn global_fns() -> Option<&'static VkGlobalFns> {
 pub(crate) fn instance_version() -> u32 {
     let Some(l) = loader() else { return 0 };
     unsafe {
-        let p = (l.get_instance_proc_addr)(std::ptr::null_mut(), c"vkEnumerateInstanceVersion".as_ptr());
+        let p = (l.get_instance_proc_addr)(
+            std::ptr::null_mut(),
+            c"vkEnumerateInstanceVersion".as_ptr(),
+        );
         if p.is_null() {
             return VK_API_VERSION_1_0;
         }
@@ -1083,13 +1087,20 @@ pub(crate) fn instance_extensions() -> Vec<String> {
     };
     unsafe {
         let mut n = 0u32;
-        if (g.enumerate_instance_extension_properties)(std::ptr::null(), &mut n, std::ptr::null_mut())
-            != VK_SUCCESS
+        if (g.enumerate_instance_extension_properties)(
+            std::ptr::null(),
+            &mut n,
+            std::ptr::null_mut(),
+        ) != VK_SUCCESS
         {
             return Vec::new();
         }
         let mut props = vec![ZERO_EXTENSION; n as usize];
-        let r = (g.enumerate_instance_extension_properties)(std::ptr::null(), &mut n, props.as_mut_ptr());
+        let r = (g.enumerate_instance_extension_properties)(
+            std::ptr::null(),
+            &mut n,
+            props.as_mut_ptr(),
+        );
         if r != VK_SUCCESS && r != VK_INCOMPLETE {
             return Vec::new();
         }
@@ -1104,13 +1115,22 @@ pub(crate) fn instance_extensions() -> Vec<String> {
 /// `inst` doit avoir été chargée pour l'instance qui possède `pd`.
 pub(crate) unsafe fn device_extensions(inst: &VkInstanceFns, pd: VkPhysicalDevice) -> Vec<String> {
     let mut n = 0u32;
-    if (inst.enumerate_device_extension_properties)(pd, std::ptr::null(), &mut n, std::ptr::null_mut())
-        != VK_SUCCESS
+    if (inst.enumerate_device_extension_properties)(
+        pd,
+        std::ptr::null(),
+        &mut n,
+        std::ptr::null_mut(),
+    ) != VK_SUCCESS
     {
         return Vec::new();
     }
     let mut props = vec![ZERO_EXTENSION; n as usize];
-    let r = (inst.enumerate_device_extension_properties)(pd, std::ptr::null(), &mut n, props.as_mut_ptr());
+    let r = (inst.enumerate_device_extension_properties)(
+        pd,
+        std::ptr::null(),
+        &mut n,
+        props.as_mut_ptr(),
+    );
     if r != VK_SUCCESS && r != VK_INCOMPLETE {
         return Vec::new();
     }

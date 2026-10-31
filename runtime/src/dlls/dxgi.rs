@@ -375,6 +375,22 @@ struct DxgiAdapterVTable {
     get_desc: unsafe extern "win64" fn(*mut DxgiAdapter, *mut DxgiAdapterDesc) -> i32,
     check_interface_support:
         unsafe extern "win64" fn(*mut DxgiAdapter, *const Guid, *mut i64) -> i32,
+    // IDXGIAdapter1..3
+    get_desc1: unsafe extern "win64" fn(*mut DxgiAdapter, *mut DxgiAdapterDesc1) -> i32,
+    get_desc2: unsafe extern "win64" fn(*mut DxgiAdapter, *mut DxgiAdapterDesc1) -> i32,
+    register_protection: unsafe extern "win64" fn() -> i32,
+    unregister_protection: unsafe extern "win64" fn() -> i32,
+    query_video_memory: unsafe extern "win64" fn(*mut DxgiAdapter, u32, u32, *mut [u64; 4]) -> i32,
+    set_video_memory_reservation: unsafe extern "win64" fn() -> i32,
+    register_budget: unsafe extern "win64" fn() -> i32,
+    unregister_budget: unsafe extern "win64" fn() -> i32,
+}
+
+/// DXGI_ADAPTER_DESC1/2 : DESC + Flags (+ champs DESC2 laissés à zéro).
+#[repr(C)]
+pub(crate) struct DxgiAdapterDesc1 {
+    pub desc: DxgiAdapterDesc,
+    pub flags: u32,
 }
 
 #[repr(C)]
@@ -395,7 +411,11 @@ impl DxgiAdapter {
             return E_INVALIDARG;
         }
         let riid = &*riid;
-        if *riid == IID_IUNKNOWN || *riid == IID_IDXGI_ADAPTER {
+        // IDXGIAdapter1 (29038f61), 2 (0aa1ae0a), 3 (645967a4), IDXGIObject.
+        if *riid == IID_IUNKNOWN
+            || *riid == IID_IDXGI_ADAPTER
+            || [0x2903_8f61, 0x0aa1_ae0a, 0x6459_67a4, 0xaec2_2fb8].contains(&riid.data1)
+        {
             (*this).ref_count.fetch_add(1, Ordering::Relaxed);
             *out = this as *mut c_void;
             return S_OK;
@@ -482,6 +502,63 @@ unsafe extern "win64" fn adapter_check_iface(
     S_OK
 }
 
+unsafe extern "win64" fn adapter_get_desc1(
+    this: *mut DxgiAdapter,
+    out: *mut DxgiAdapterDesc1,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    std::ptr::write(
+        out,
+        DxgiAdapterDesc1 {
+            desc: (*this).desc.clone(),
+            flags: 0,
+        },
+    );
+    S_OK
+}
+/// DESC2 ajoute 12 octets (granularités, zéro) : on les efface d'abord.
+unsafe extern "win64" fn adapter_get_desc2(
+    this: *mut DxgiAdapter,
+    out: *mut DxgiAdapterDesc1,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    std::ptr::write_bytes(
+        out as *mut u8,
+        0,
+        std::mem::size_of::<DxgiAdapterDesc1>() + 12,
+    );
+    adapter_get_desc1(this, out)
+}
+unsafe extern "win64" fn adapter_notimpl() -> i32 {
+    E_NOTIMPL
+}
+unsafe extern "win64" fn adapter_ok() -> i32 {
+    S_OK
+}
+/// DXGI_QUERY_VIDEO_MEMORY_INFO : budget, usage, réservable, réservé.
+unsafe extern "win64" fn adapter_query_memory(
+    this: *mut DxgiAdapter,
+    _node: u32,
+    group: u32,
+    out: *mut [u64; 4],
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let d = &(*this).desc;
+    let total = if group == 0 {
+        d.dedicated_video_memory
+    } else {
+        d.shared_system_memory
+    } as u64;
+    *out = [total, 0, total / 2, 0];
+    S_OK
+}
+
 static ADAPTER_VTABLE: DxgiAdapterVTable = DxgiAdapterVTable {
     query_interface: DxgiAdapter::query_interface,
     add_ref: DxgiAdapter::add_ref,
@@ -493,13 +570,41 @@ static ADAPTER_VTABLE: DxgiAdapterVTable = DxgiAdapterVTable {
     enum_outputs: adapter_enum_outputs,
     get_desc: adapter_get_desc,
     check_interface_support: adapter_check_iface,
+    get_desc1: adapter_get_desc1,
+    get_desc2: adapter_get_desc2,
+    register_protection: adapter_notimpl,
+    unregister_protection: adapter_ok,
+    query_video_memory: adapter_query_memory,
+    set_video_memory_reservation: adapter_ok,
+    register_budget: adapter_notimpl,
+    unregister_budget: adapter_ok,
 };
+
+/// Description de l'adaptateur : le vrai GPU quand Vulkan le connaît.
+fn adapter_desc() -> DxgiAdapterDesc {
+    let mut desc = DxgiAdapterDesc::default();
+    let caps = crate::dlls::gpu_caps::caps();
+    let prefs = crate::dlls::gpu_caps::prefs();
+    let dev = crate::dlls::gpu_caps::pick_vulkan_device(caps, &prefs).or_else(|| {
+        caps.vulkan
+            .as_ref()
+            .and_then(|v| v.devices.iter().find(|d| d.is_hardware()).cloned())
+    });
+    if let Some(d) = dev {
+        desc.description = [0; 128];
+        for (i, c) in d.name.encode_utf16().take(127).enumerate() {
+            desc.description[i] = c;
+        }
+        desc.vendor_id = d.vendor_id;
+    }
+    desc
+}
 
 fn create_adapter(factory: *mut DxgiFactory) -> *mut DxgiAdapter {
     Box::into_raw(Box::new(DxgiAdapter {
         vtable: &ADAPTER_VTABLE,
         ref_count: AtomicU32::new(1),
-        desc: DxgiAdapterDesc::default(),
+        desc: adapter_desc(),
         factory,
     }))
 }
@@ -779,6 +884,41 @@ struct DxgiFactoryVTable {
         unsafe extern "win64" fn(*mut DxgiFactory, usize, *mut *mut c_void) -> i32,
     enum_adapters1: unsafe extern "win64" fn(*mut DxgiFactory, u32, *mut *mut c_void) -> i32,
     is_current: unsafe extern "win64" fn(*mut DxgiFactory) -> i32,
+    // IDXGIFactory2
+    is_windowed_stereo: unsafe extern "win64" fn(*mut DxgiFactory) -> i32,
+    create_sc_for_hwnd: unsafe extern "win64" fn(
+        *mut DxgiFactory,
+        *mut c_void,
+        usize,
+        *const crate::dlls::d3d12::SwapDesc1,
+        *const c_void,
+        *mut c_void,
+        *mut *mut c_void,
+    ) -> i32,
+    create_sc_for_core_window: unsafe extern "win64" fn() -> i32,
+    get_shared_luid: unsafe extern "win64" fn(*mut DxgiFactory, usize, *mut u64) -> i32,
+    register_stereo_window: unsafe extern "win64" fn() -> i32,
+    register_stereo_event: unsafe extern "win64" fn() -> i32,
+    unregister_stereo: unsafe extern "win64" fn() -> i32,
+    register_occlusion_window: unsafe extern "win64" fn() -> i32,
+    register_occlusion_event: unsafe extern "win64" fn() -> i32,
+    unregister_occlusion: unsafe extern "win64" fn() -> i32,
+    create_sc_for_composition: unsafe extern "win64" fn() -> i32,
+    // IDXGIFactory3
+    get_creation_flags: unsafe extern "win64" fn(*mut DxgiFactory) -> u32,
+    // IDXGIFactory4
+    enum_adapter_by_luid:
+        unsafe extern "win64" fn(*mut DxgiFactory, u64, *const Guid, *mut *mut c_void) -> i32,
+    enum_warp_adapter:
+        unsafe extern "win64" fn(*mut DxgiFactory, *const Guid, *mut *mut c_void) -> i32,
+    // IDXGIFactory5
+    check_feature_support: unsafe extern "win64" fn(*mut DxgiFactory, u32, *mut u8, u32) -> i32,
+    // IDXGIFactory6
+    enum_adapter_by_pref:
+        unsafe extern "win64" fn(*mut DxgiFactory, u32, u32, *const Guid, *mut *mut c_void) -> i32,
+    // IDXGIFactory7
+    register_adapters_changed: unsafe extern "win64" fn() -> i32,
+    unregister_adapters_changed: unsafe extern "win64" fn() -> i32,
 }
 
 #[repr(C)]
@@ -797,10 +937,20 @@ impl DxgiFactory {
             return E_INVALIDARG;
         }
         let riid = &*riid;
+        // IDXGIFactory3..7 et IDXGIObject reconnus par leur premier mot.
         if *riid == IID_IUNKNOWN
             || *riid == IID_IDXGI_FACTORY
             || *riid == IID_IDXGI_FACTORY1
             || *riid == IID_IDXGI_FACTORY2
+            || [
+                0x2548_3823,
+                0x1bc6_ea02,
+                0x7632_e1f5,
+                0xc1b6_694f,
+                0xa496_6eed,
+                0xaec2_2fb8,
+            ]
+            .contains(&riid.data1)
         {
             (*this).ref_count.fetch_add(1, Ordering::Relaxed);
             *out = this as *mut c_void;
@@ -886,6 +1036,29 @@ unsafe extern "win64" fn fac_create_sc(
     if desc.is_null() || out.is_null() {
         return E_INVALIDARG;
     }
+    if crate::dlls::d3d12::is_queue(device) {
+        let d = &*desc;
+        let d1 = crate::dlls::d3d12::SwapDesc1 {
+            width: d.buffer_desc.width,
+            height: d.buffer_desc.height,
+            format: d.buffer_desc.format,
+            stereo: 0,
+            sample: d.sample_desc,
+            usage: d.buffer_usage,
+            count: d.buffer_count,
+            scaling: 0,
+            effect: d.swap_effect,
+            alpha: 0,
+            flags: d.flags,
+        };
+        return match crate::dlls::d3d12::create_swap_chain(device, d.output_window, &d1) {
+            Ok(p) => {
+                *out = p;
+                S_OK
+            }
+            Err(e) => e,
+        };
+    }
     let sc = create_swap_chain(&*desc, device);
     *out = sc as *mut c_void;
     log_info!(
@@ -912,6 +1085,146 @@ unsafe extern "win64" fn fac_is_current(_: *mut DxgiFactory) -> i32 {
     1
 }
 
+unsafe extern "win64" fn fac_zero(_: *mut DxgiFactory) -> i32 {
+    0
+}
+unsafe extern "win64" fn fac_notimpl() -> i32 {
+    E_NOTIMPL
+}
+unsafe extern "win64" fn fac_ok() -> i32 {
+    S_OK
+}
+
+unsafe extern "win64" fn fac_create_sc_hwnd(
+    this: *mut DxgiFactory,
+    device: *mut c_void,
+    hwnd: usize,
+    desc: *const crate::dlls::d3d12::SwapDesc1,
+    _fs: *const c_void,
+    _output: *mut c_void,
+    out: *mut *mut c_void,
+) -> i32 {
+    if desc.is_null() || out.is_null() || device.is_null() {
+        return E_INVALIDARG;
+    }
+    let d = &*desc;
+    if crate::dlls::d3d12::is_queue(device) {
+        return match crate::dlls::d3d12::create_swap_chain(device, hwnd, d) {
+            Ok(p) => {
+                *out = p;
+                S_OK
+            }
+            Err(e) => e,
+        };
+    }
+    // Direct3D 11 : même chemin que CreateSwapChain.
+    let legacy = DxgiSwapChainDesc {
+        buffer_desc: DxgiModeDesc {
+            width: d.width,
+            height: d.height,
+            refresh_rate_numerator: 60,
+            refresh_rate_denominator: 1,
+            format: d.format,
+            scanline_ordering: 0,
+            scaling: 0,
+        },
+        sample_desc: d.sample,
+        buffer_usage: d.usage,
+        buffer_count: d.count,
+        output_window: hwnd,
+        windowed: 1,
+        swap_effect: d.effect,
+        flags: d.flags,
+    };
+    fac_create_sc(this, device, &legacy, out)
+}
+
+unsafe extern "win64" fn fac_shared_luid(_: *mut DxgiFactory, _h: usize, out: *mut u64) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    *out = DxgiAdapterDesc::default().adapter_luid;
+    S_OK
+}
+
+unsafe extern "win64" fn fac_flags(_: *mut DxgiFactory) -> u32 {
+    0
+}
+
+unsafe extern "win64" fn fac_adapter_qi(
+    this: *mut DxgiFactory,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let a = create_adapter(this);
+    let hr = DxgiAdapter::query_interface(a, riid, out);
+    DxgiAdapter::release(a);
+    hr
+}
+
+unsafe extern "win64" fn fac_by_luid(
+    this: *mut DxgiFactory,
+    _luid: u64,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    fac_adapter_qi(this, riid, out)
+}
+
+/// Pas d'adaptateur WARP séparé : l'adaptateur Winlux sert aussi de repli.
+unsafe extern "win64" fn fac_warp(
+    this: *mut DxgiFactory,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    fac_adapter_qi(this, riid, out)
+}
+
+/// DXGI_FEATURE_PRESENT_ALLOW_TEARING (0) : non, sans risque.
+unsafe extern "win64" fn fac_check_feature(
+    _: *mut DxgiFactory,
+    _f: u32,
+    data: *mut u8,
+    size: u32,
+) -> i32 {
+    if data.is_null() {
+        return E_INVALIDARG;
+    }
+    std::ptr::write_bytes(data, 0, size as usize);
+    S_OK
+}
+
+unsafe extern "win64" fn fac_by_pref(
+    this: *mut DxgiFactory,
+    index: u32,
+    _pref: u32,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    if index > 0 {
+        *out = std::ptr::null_mut();
+        return DXGI_ERROR_NOT_FOUND;
+    }
+    fac_adapter_qi(this, riid, out)
+}
+
+/// Fabrique remise par `IDXGISwapChain::GetParent` (D3D12).
+pub(crate) unsafe fn factory_for(riid: *const Guid, out: *mut *mut c_void) -> i32 {
+    if out.is_null() {
+        return E_INVALIDARG;
+    }
+    let f = create_factory();
+    let hr = DxgiFactory::query_interface(f, riid, out);
+    DxgiFactory::release(f);
+    hr
+}
+
 static FACTORY_VTABLE: DxgiFactoryVTable = DxgiFactoryVTable {
     query_interface: DxgiFactory::query_interface,
     add_ref: DxgiFactory::add_ref,
@@ -927,6 +1240,24 @@ static FACTORY_VTABLE: DxgiFactoryVTable = DxgiFactoryVTable {
     create_software_adapter: fac_create_soft,
     enum_adapters1: fac_enum1,
     is_current: fac_is_current,
+    is_windowed_stereo: fac_zero,
+    create_sc_for_hwnd: fac_create_sc_hwnd,
+    create_sc_for_core_window: fac_notimpl,
+    get_shared_luid: fac_shared_luid,
+    register_stereo_window: fac_notimpl,
+    register_stereo_event: fac_notimpl,
+    unregister_stereo: fac_ok,
+    register_occlusion_window: fac_notimpl,
+    register_occlusion_event: fac_notimpl,
+    unregister_occlusion: fac_ok,
+    create_sc_for_composition: fac_notimpl,
+    get_creation_flags: fac_flags,
+    enum_adapter_by_luid: fac_by_luid,
+    enum_warp_adapter: fac_warp,
+    check_feature_support: fac_check_feature,
+    enum_adapter_by_pref: fac_by_pref,
+    register_adapters_changed: fac_notimpl,
+    unregister_adapters_changed: fac_ok,
 };
 
 fn create_factory() -> *mut DxgiFactory {

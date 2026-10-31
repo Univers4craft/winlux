@@ -156,7 +156,11 @@ impl VkContext {
                 return None;
             };
             let mut qn = 0u32;
-            (inst.get_physical_device_queue_family_properties)(physical, &mut qn, std::ptr::null_mut());
+            (inst.get_physical_device_queue_family_properties)(
+                physical,
+                &mut qn,
+                std::ptr::null_mut(),
+            );
             let mut qf = vec![VkQueueFamilyProperties::default(); qn as usize];
             (inst.get_physical_device_queue_family_properties)(physical, &mut qn, qf.as_mut_ptr());
             let Some(family) = qf
@@ -259,7 +263,12 @@ impl VkContext {
                 pPushConstantRanges: std::ptr::null(),
             };
             let mut pipeline_layout = 0;
-            (dev.create_pipeline_layout)(device, &layout_info, std::ptr::null(), &mut pipeline_layout);
+            (dev.create_pipeline_layout)(
+                device,
+                &layout_info,
+                std::ptr::null(),
+                &mut pipeline_layout,
+            );
             let mut shaders = [0; 4];
             for (i, code) in [
                 spirv::passthrough_vertex(false),
@@ -356,7 +365,9 @@ impl VkContext {
                 pQueueFamilyIndices: std::ptr::null(),
             };
             let mut buffer = 0;
-            if (self.dev.create_buffer)(self.device, &info, std::ptr::null(), &mut buffer) != VK_SUCCESS {
+            if (self.dev.create_buffer)(self.device, &info, std::ptr::null(), &mut buffer)
+                != VK_SUCCESS
+            {
                 return None;
             }
             let mut req = VkMemoryRequirements::default();
@@ -432,7 +443,9 @@ impl VkContext {
                 initialLayout: VK_IMAGE_LAYOUT_UNDEFINED,
             };
             let mut image = 0;
-            if (self.dev.create_image)(self.device, &info, std::ptr::null(), &mut image) != VK_SUCCESS {
+            if (self.dev.create_image)(self.device, &info, std::ptr::null(), &mut image)
+                != VK_SUCCESS
+            {
                 return None;
             }
             let mut req = VkMemoryRequirements::default();
@@ -464,7 +477,15 @@ impl VkContext {
                 depth,
             };
             // Passage unique UNDEFINED → GENERAL.
-            self.submit(|cmd| self.layout_barrier(cmd, image, aspect, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL));
+            self.submit(|cmd| {
+                self.layout_barrier(
+                    cmd,
+                    image,
+                    aspect,
+                    VK_IMAGE_LAYOUT_UNDEFINED,
+                    VK_IMAGE_LAYOUT_GENERAL,
+                )
+            });
             Some(img)
         }
     }
@@ -477,7 +498,14 @@ impl VkContext {
         }
     }
 
-    pub fn layout_barrier(&self, cmd: VkCommandBuffer, image: VkImage, aspect: u32, old: u32, new: u32) {
+    pub fn layout_barrier(
+        &self,
+        cmd: VkCommandBuffer,
+        image: VkImage,
+        aspect: u32,
+        old: u32,
+        new: u32,
+    ) {
         let b = VkImageMemoryBarrier {
             sType: VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER,
             pNext: std::ptr::null(),
@@ -589,7 +617,14 @@ impl VkContext {
         }
     }
 
-    pub fn clear_depth(&self, cmd: VkCommandBuffer, img: &VkImageAlloc, depth: f32, stencil: u32, flags: u32) {
+    pub fn clear_depth(
+        &self,
+        cmd: VkCommandBuffer,
+        img: &VkImageAlloc,
+        depth: f32,
+        stencil: u32,
+        flags: u32,
+    ) {
         let mut aspect = 0;
         if flags & 1 != 0 {
             aspect |= VK_IMAGE_ASPECT_DEPTH_BIT;
@@ -603,11 +638,26 @@ impl VkContext {
         let v = VkClearDepthStencilValue { depth, stencil };
         let r = full_range(aspect);
         unsafe {
-            (self.dev.cmd_clear_depth_stencil_image)(cmd, img.image, VK_IMAGE_LAYOUT_GENERAL, &v, 1, &r);
+            (self.dev.cmd_clear_depth_stencil_image)(
+                cmd,
+                img.image,
+                VK_IMAGE_LAYOUT_GENERAL,
+                &v,
+                1,
+                &r,
+            );
         }
     }
 
-    pub fn copy_buffer(&self, cmd: VkCommandBuffer, src: VkBuffer, so: u64, dst: VkBuffer, d_o: u64, size: u64) {
+    pub fn copy_buffer(
+        &self,
+        cmd: VkCommandBuffer,
+        src: VkBuffer,
+        so: u64,
+        dst: VkBuffer,
+        d_o: u64,
+        size: u64,
+    ) {
         let region = VkBufferCopy {
             srcOffset: so,
             dstOffset: d_o,
@@ -616,7 +666,14 @@ impl VkContext {
         unsafe { (self.dev.cmd_copy_buffer)(cmd, src, dst, 1, &region) }
     }
 
-    pub fn copy_buffer_to_image(&self, cmd: VkCommandBuffer, src: VkBuffer, offset: u64, row_pixels: u32, img: &VkImageAlloc) {
+    pub fn copy_buffer_to_image(
+        &self,
+        cmd: VkCommandBuffer,
+        src: VkBuffer,
+        offset: u64,
+        row_pixels: u32,
+        img: &VkImageAlloc,
+    ) {
         let region = VkBufferImageCopy {
             bufferOffset: offset,
             bufferRowLength: row_pixels,
@@ -634,10 +691,26 @@ impl VkContext {
                 depth: 1,
             },
         };
-        unsafe { (self.dev.cmd_copy_buffer_to_image)(cmd, src, img.image, VK_IMAGE_LAYOUT_GENERAL, 1, &region) }
+        unsafe {
+            (self.dev.cmd_copy_buffer_to_image)(
+                cmd,
+                src,
+                img.image,
+                VK_IMAGE_LAYOUT_GENERAL,
+                1,
+                &region,
+            )
+        }
     }
 
-    pub fn copy_image_to_buffer(&self, cmd: VkCommandBuffer, img: &VkImageAlloc, dst: VkBuffer, offset: u64, row_pixels: u32) {
+    pub fn copy_image_to_buffer(
+        &self,
+        cmd: VkCommandBuffer,
+        img: &VkImageAlloc,
+        dst: VkBuffer,
+        offset: u64,
+        row_pixels: u32,
+    ) {
         let region = VkBufferImageCopy {
             bufferOffset: offset,
             bufferRowLength: row_pixels,
@@ -655,10 +728,30 @@ impl VkContext {
                 depth: 1,
             },
         };
-        unsafe { (self.dev.cmd_copy_image_to_buffer)(cmd, img.image, VK_IMAGE_LAYOUT_GENERAL, dst, 1, &region) }
+        unsafe {
+            (self.dev.cmd_copy_image_to_buffer)(
+                cmd,
+                img.image,
+                VK_IMAGE_LAYOUT_GENERAL,
+                dst,
+                1,
+                &region,
+            )
+        }
     }
 
-    pub fn blit(&self, cmd: VkCommandBuffer, src: VkImage, sw: u32, sh: u32, src_layout: u32, dst: VkImage, dw: u32, dh: u32, dst_layout: u32) {
+    pub fn blit(
+        &self,
+        cmd: VkCommandBuffer,
+        src: VkImage,
+        sw: u32,
+        sh: u32,
+        src_layout: u32,
+        dst: VkImage,
+        dw: u32,
+        dh: u32,
+        dst_layout: u32,
+    ) {
         let layers = VkImageSubresourceLayers {
             aspectMask: VK_IMAGE_ASPECT_COLOR_BIT,
             mipLevel: 0,
@@ -685,7 +778,18 @@ impl VkContext {
                 },
             ],
         };
-        unsafe { (self.dev.cmd_blit_image)(cmd, src, src_layout, dst, dst_layout, 1, &region, VK_FILTER_LINEAR) }
+        unsafe {
+            (self.dev.cmd_blit_image)(
+                cmd,
+                src,
+                src_layout,
+                dst,
+                dst_layout,
+                1,
+                &region,
+                VK_FILTER_LINEAR,
+            )
+        }
     }
 
     /// Pipeline passe-plat (mis en cache) pour une cible et une disposition
@@ -731,12 +835,14 @@ impl VkContext {
                 .attributes
                 .iter()
                 .filter(|a| a.0 == 0 || (with_color && a.0 == 1))
-                .map(|&(location, format, offset)| VkVertexInputAttributeDescription {
-                    location,
-                    binding: 0,
-                    format,
-                    offset,
-                })
+                .map(
+                    |&(location, format, offset)| VkVertexInputAttributeDescription {
+                        location,
+                        binding: 0,
+                        format,
+                        offset,
+                    },
+                )
                 .collect();
             let vi = VkPipelineVertexInputStateCreateInfo {
                 sType: VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
@@ -847,8 +953,14 @@ impl VkContext {
                 basePipelineIndex: -1,
             };
             let mut pipeline = 0;
-            if (self.dev.create_graphics_pipelines)(self.device, 0, 1, &info, std::ptr::null(), &mut pipeline)
-                != VK_SUCCESS
+            if (self.dev.create_graphics_pipelines)(
+                self.device,
+                0,
+                1,
+                &info,
+                std::ptr::null(),
+                &mut pipeline,
+            ) != VK_SUCCESS
             {
                 log_warn!("vulkan", "création du pipeline passe-plat refusée");
                 return None;
@@ -929,7 +1041,12 @@ impl Drop for VkContext {
     fn drop(&mut self) {
         unsafe {
             (self.dev.device_wait_idle)(self.device);
-            for (_, p) in self.pipelines.lock().unwrap_or_else(|e| e.into_inner()).drain(..) {
+            for (_, p) in self
+                .pipelines
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .drain(..)
+            {
                 (self.dev.destroy_pipeline)(self.device, p, std::ptr::null());
             }
             for s in self.shaders {
@@ -968,7 +1085,13 @@ unsafe impl Send for VkPresenter {}
 impl VkPresenter {
     /// Surface Xlib + swapchain sur la fenêtre X `window`. `None` si la
     /// surface n'est pas présentable (l'appelant garde alors OpenGL).
-    pub fn create(ctx: Arc<VkContext>, window: u64, width: u32, height: u32, vsync: bool) -> Option<Self> {
+    pub fn create(
+        ctx: Arc<VkContext>,
+        window: u64,
+        width: u32,
+        height: u32,
+        vsync: bool,
+    ) -> Option<Self> {
         let surf = ctx.surf.as_ref()?;
         ctx.swap.as_ref()?;
         let glx = crate::dlls::gl_bindings::glx()?;
@@ -988,7 +1111,9 @@ impl VkPresenter {
                 window,
             };
             let mut surface = 0;
-            if (surf.create_xlib_surface)(ctx.instance, &info, std::ptr::null(), &mut surface) != VK_SUCCESS {
+            if (surf.create_xlib_surface)(ctx.instance, &info, std::ptr::null(), &mut surface)
+                != VK_SUCCESS
+            {
                 (glx.XCloseDisplay)(display);
                 return None;
             }
@@ -1035,7 +1160,8 @@ impl VkPresenter {
         unsafe {
             (ctx.dev.device_wait_idle)(ctx.device);
             let mut caps = VkSurfaceCapabilitiesKHR::default();
-            if (surf.get_surface_capabilities)(ctx.physical, self.surface, &mut caps) != VK_SUCCESS {
+            if (surf.get_surface_capabilities)(ctx.physical, self.surface, &mut caps) != VK_SUCCESS
+            {
                 return false;
             }
             let mut n = 0u32;
@@ -1046,14 +1172,28 @@ impl VkPresenter {
             let chosen = formats
                 .iter()
                 .find(|f| f.format == VK_FORMAT_B8G8R8A8_UNORM)
-                .or_else(|| formats.iter().find(|f| f.format == VK_FORMAT_R8G8B8A8_UNORM))
+                .or_else(|| {
+                    formats
+                        .iter()
+                        .find(|f| f.format == VK_FORMAT_R8G8B8A8_UNORM)
+                })
                 .or(formats.first())
                 .copied();
             let Some(fmt) = chosen else { return false };
             let mut pn = 0u32;
-            (surf.get_surface_present_modes)(ctx.physical, self.surface, &mut pn, std::ptr::null_mut());
+            (surf.get_surface_present_modes)(
+                ctx.physical,
+                self.surface,
+                &mut pn,
+                std::ptr::null_mut(),
+            );
             let mut modes = vec![0u32; pn as usize];
-            (surf.get_surface_present_modes)(ctx.physical, self.surface, &mut pn, modes.as_mut_ptr());
+            (surf.get_surface_present_modes)(
+                ctx.physical,
+                self.surface,
+                &mut pn,
+                modes.as_mut_ptr(),
+            );
             // FIFO est toujours disponible ; sans synchro verticale on préfère MAILBOX puis IMMEDIATE.
             let mode = if self.vsync {
                 VK_PRESENT_MODE_FIFO_KHR
@@ -1068,8 +1208,14 @@ impl VkPresenter {
                 caps.currentExtent
             } else {
                 VkExtent2D {
-                    width: width.clamp(caps.minImageExtent.width.max(1), caps.maxImageExtent.width.max(1)),
-                    height: height.clamp(caps.minImageExtent.height.max(1), caps.maxImageExtent.height.max(1)),
+                    width: width.clamp(
+                        caps.minImageExtent.width.max(1),
+                        caps.maxImageExtent.width.max(1),
+                    ),
+                    height: height.clamp(
+                        caps.minImageExtent.height.max(1),
+                        caps.maxImageExtent.height.max(1),
+                    ),
                 }
             };
             if extent.width == 0 || extent.height == 0 {
@@ -1134,7 +1280,14 @@ impl VkPresenter {
         }
         unsafe {
             let mut index = 0u32;
-            let r = (swap.acquire_next_image)(ctx.device, self.swapchain, 1_000_000_000, self.acquire, 0, &mut index);
+            let r = (swap.acquire_next_image)(
+                ctx.device,
+                self.swapchain,
+                1_000_000_000,
+                self.acquire,
+                0,
+                &mut index,
+            );
             if r == VK_ERROR_OUT_OF_DATE_KHR {
                 self.rebuild(src.width, src.height);
                 return false;
@@ -1148,9 +1301,31 @@ impl VkPresenter {
             let (dw, dh) = (self.extent.width, self.extent.height);
             let ok = ctx.submit_with(
                 |cmd| {
-                    ctx.layout_barrier(cmd, dst, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-                    ctx.blit(cmd, src.image, src.width, src.height, VK_IMAGE_LAYOUT_GENERAL, dst, dw, dh, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
-                    ctx.layout_barrier(cmd, dst, VK_IMAGE_ASPECT_COLOR_BIT, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR);
+                    ctx.layout_barrier(
+                        cmd,
+                        dst,
+                        VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_UNDEFINED,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    );
+                    ctx.blit(
+                        cmd,
+                        src.image,
+                        src.width,
+                        src.height,
+                        VK_IMAGE_LAYOUT_GENERAL,
+                        dst,
+                        dw,
+                        dh,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                    );
+                    ctx.layout_barrier(
+                        cmd,
+                        dst,
+                        VK_IMAGE_ASPECT_COLOR_BIT,
+                        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+                        VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
+                    );
                 },
                 &[self.acquire],
                 &[self.rendered],
@@ -1225,7 +1400,9 @@ mod tests {
         let Some(ctx) = VkContext::create() else {
             return;
         };
-        let img = ctx.create_image(16, 16, VK_FORMAT_R8G8B8A8_UNORM).expect("image");
+        let img = ctx
+            .create_image(16, 16, VK_FORMAT_R8G8B8A8_UNORM)
+            .expect("image");
         // Triangle couvrant tout l'écran.
         let verts: [f32; 9] = [-1.0, -1.0, 0.0, 3.0, -1.0, 0.0, -1.0, 3.0, 0.0];
         let vb = ctx.create_buffer(36, true).expect("vb");
@@ -1254,7 +1431,16 @@ mod tests {
             maxDepth: 1.0,
         };
         assert!(ctx.submit(|cmd| {
-            ctx.draw(cmd, &img, pipe, VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST, vp, (vb.buffer, 0, 12), None, (3, 1, 0, 0, 0));
+            ctx.draw(
+                cmd,
+                &img,
+                pipe,
+                VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST,
+                vp,
+                (vb.buffer, 0, 12),
+                None,
+                (3, 1, 0, 0, 0),
+            );
             ctx.memory_barrier(cmd);
             ctx.copy_image_to_buffer(cmd, &img, rb.buffer, 0, 16);
         }));

@@ -279,7 +279,9 @@ fn prefs_path() -> Option<std::path::PathBuf> {
     let base = std::env::var_os("XDG_CONFIG_HOME")
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_absolute())
-        .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config")))?;
+        .or_else(|| {
+            std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".config"))
+        })?;
     Some(base.join("winlux").join("graphics.ini"))
 }
 
@@ -361,7 +363,10 @@ fn probe_vulkan() -> Option<VulkanCaps> {
         if (global.create_instance)(&info, std::ptr::null(), &mut instance) != vk::VK_SUCCESS
             || instance.is_null()
         {
-            crate::log_info!("vulkan", "aucun pilote Vulkan utilisable (création d'instance refusée)");
+            crate::log_info!(
+                "vulkan",
+                "aucun pilote Vulkan utilisable (création d'instance refusée)"
+            );
             return None;
         }
         let gipa = loader.get_instance_proc_addr;
@@ -435,7 +440,10 @@ fn probe_nvdec() -> Option<NvdecCaps> {
         if cuda.is_null() {
             return None;
         }
-        let cuvid = libc::dlopen(c"libnvcuvid.so.1".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+        let cuvid = libc::dlopen(
+            c"libnvcuvid.so.1".as_ptr(),
+            libc::RTLD_NOW | libc::RTLD_LOCAL,
+        );
         if cuvid.is_null() {
             return None;
         }
@@ -490,7 +498,10 @@ fn probe_nvdec() -> Option<NvdecCaps> {
                         caps[0..4].copy_from_slice(&cu.to_le_bytes());
                         caps[4..8].copy_from_slice(&1u32.to_le_bytes()); // 4:2:0
                         caps[8..12].copy_from_slice(&depth.to_le_bytes());
-                        if caps_fn(caps.as_mut_ptr()) == 0 && caps[24] != 0 && !codecs.contains(&codec) {
+                        if caps_fn(caps.as_mut_ptr()) == 0
+                            && caps[24] != 0
+                            && !codecs.contains(&codec)
+                        {
                             codecs.push(codec);
                         }
                     }
@@ -520,7 +531,10 @@ fn probe() -> GpuCaps {
             .as_ref()
             .map(|v| format_version(v.instance_version))
             .unwrap_or_else(|| "non".into()),
-        caps.vaapi.as_ref().map(|v| v.vendor.as_str()).unwrap_or("non"),
+        caps.vaapi
+            .as_ref()
+            .map(|v| v.vendor.as_str())
+            .unwrap_or("non"),
         caps.nvdec.is_some()
     );
     caps
@@ -651,11 +665,19 @@ pub(crate) fn report(caps: &GpuCaps, prefs: &Prefs) -> String {
                         d.name,
                         d.type_label(),
                         format_version(d.api_version),
-                        if d.usable(v.has_xlib_surface) { "ok" } else { "insuffisant" }
+                        if d.usable(v.has_xlib_surface) {
+                            "ok"
+                        } else {
+                            "insuffisant"
+                        }
                     ),
                 );
             }
-            let usable = v.devices.iter().filter(|d| d.usable(v.has_xlib_surface)).count();
+            let usable = v
+                .devices
+                .iter()
+                .filter(|d| d.usable(v.has_xlib_surface))
+                .count();
             kv("vulkan_usable", &usable.to_string());
         }
         None => kv("vulkan", "0"),
@@ -664,13 +686,19 @@ pub(crate) fn report(caps: &GpuCaps, prefs: &Prefs) -> String {
     if let Some(d) = &chosen {
         kv("vulkan_selected", &d.index.to_string());
     }
-    kv("backend_pref", match prefs.backend {
-        BackendPref::Auto => "auto",
-        BackendPref::Vulkan => "vulkan",
-        BackendPref::OpenGl => "opengl",
-    });
+    kv(
+        "backend_pref",
+        match prefs.backend {
+            BackendPref::Auto => "auto",
+            BackendPref::Vulkan => "vulkan",
+            BackendPref::OpenGl => "opengl",
+        },
+    );
     kv("backend_d3d12", select_backend(caps, prefs).label());
-    kv("backend_d3d11", if caps.opengl { "opengl" } else { "aucun" });
+    kv(
+        "backend_d3d11",
+        if caps.opengl { "opengl" } else { "aucun" },
+    );
     kv("backend_d3d9", if caps.opengl { "opengl" } else { "aucun" });
     kv("vsync", if prefs.vsync { "1" } else { "0" });
     if let Some(v) = &caps.vaapi {
@@ -692,14 +720,23 @@ pub(crate) fn report(caps: &GpuCaps, prefs: &Prefs) -> String {
     } else {
         kv("nvdec", "0");
     }
-    kv("video_pref", match prefs.video {
-        VideoPref::Auto => "auto",
-        VideoPref::Hardware => "hardware",
-        VideoPref::Software => "software",
-    });
-    let hw: Vec<&str> = hardware_codecs(caps, prefs).iter().map(|c| c.label()).collect();
+    kv(
+        "video_pref",
+        match prefs.video {
+            VideoPref::Auto => "auto",
+            VideoPref::Hardware => "hardware",
+            VideoPref::Software => "software",
+        },
+    );
+    let hw: Vec<&str> = hardware_codecs(caps, prefs)
+        .iter()
+        .map(|c| c.label())
+        .collect();
     kv("video_hw_codecs", &hw.join(", "));
-    kv("video_active", if hw.is_empty() { "software" } else { "vaapi" });
+    kv(
+        "video_active",
+        if hw.is_empty() { "software" } else { "vaapi" },
+    );
     out
 }
 
@@ -733,7 +770,13 @@ pub unsafe extern "win64" fn winlux_set_graphics_option(
         return 0;
     };
     let ok = save_pref(k, v);
-    crate::log_info!("gpu", "réglage {}={} : {}", k, v, if ok { "enregistré" } else { "refusé" });
+    crate::log_info!(
+        "gpu",
+        "réglage {}={} : {}",
+        k,
+        v,
+        if ok { "enregistré" } else { "refusé" }
+    );
     ok as i32
 }
 
@@ -799,20 +842,35 @@ mod tests {
 
     #[test]
     fn vulkan_trop_ancien_refuse() {
-        let caps = caps_with(vec![dev(0, vk::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, vk::VK_API_VERSION_1_2)]);
+        let caps = caps_with(vec![dev(
+            0,
+            vk::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            vk::VK_API_VERSION_1_2,
+        )]);
         assert_eq!(select_backend(&caps, &Prefs::default()), Backend::OpenGl);
     }
 
     #[test]
     fn vulkan_sans_swapchain_refuse() {
-        let mut d = dev(0, vk::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, vk::VK_API_VERSION_1_3);
+        let mut d = dev(
+            0,
+            vk::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            vk::VK_API_VERSION_1_3,
+        );
         d.has_swapchain = false;
-        assert_eq!(select_backend(&caps_with(vec![d]), &Prefs::default()), Backend::OpenGl);
+        assert_eq!(
+            select_backend(&caps_with(vec![d]), &Prefs::default()),
+            Backend::OpenGl
+        );
     }
 
     #[test]
     fn vulkan_logiciel_seulement_si_force() {
-        let caps = caps_with(vec![dev(0, vk::VK_PHYSICAL_DEVICE_TYPE_CPU, vk::VK_API_VERSION_1_3)]);
+        let caps = caps_with(vec![dev(
+            0,
+            vk::VK_PHYSICAL_DEVICE_TYPE_CPU,
+            vk::VK_API_VERSION_1_3,
+        )]);
         assert_eq!(select_backend(&caps, &Prefs::default()), Backend::OpenGl);
         let forced = Prefs {
             backend: BackendPref::Vulkan,
@@ -824,10 +882,21 @@ mod tests {
     #[test]
     fn gpu_dedie_prefere_et_choix_manuel() {
         let caps = caps_with(vec![
-            dev(0, vk::VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU, vk::VK_API_VERSION_1_3),
-            dev(1, vk::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, vk::VK_API_VERSION_1_3),
+            dev(
+                0,
+                vk::VK_PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU,
+                vk::VK_API_VERSION_1_3,
+            ),
+            dev(
+                1,
+                vk::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+                vk::VK_API_VERSION_1_3,
+            ),
         ]);
-        assert_eq!(pick_vulkan_device(&caps, &Prefs::default()).unwrap().index, 1);
+        assert_eq!(
+            pick_vulkan_device(&caps, &Prefs::default()).unwrap().index,
+            1
+        );
         let manual = Prefs {
             vulkan_device: Some(0),
             ..Default::default()
@@ -843,7 +912,11 @@ mod tests {
 
     #[test]
     fn opengl_force_respecte() {
-        let caps = caps_with(vec![dev(0, vk::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU, vk::VK_API_VERSION_1_3)]);
+        let caps = caps_with(vec![dev(
+            0,
+            vk::VK_PHYSICAL_DEVICE_TYPE_DISCRETE_GPU,
+            vk::VK_API_VERSION_1_3,
+        )]);
         let p = Prefs {
             backend: BackendPref::OpenGl,
             ..Default::default()
@@ -866,7 +939,10 @@ mod tests {
     #[test]
     fn video_sans_vaapi_logiciel() {
         let caps = GpuCaps::default();
-        assert_eq!(decode_path(&caps, &Prefs::default(), Codec::H264), DecodePath::Software);
+        assert_eq!(
+            decode_path(&caps, &Prefs::default(), Codec::H264),
+            DecodePath::Software
+        );
         assert!(hardware_codecs(&caps, &Prefs::default()).is_empty());
         let r = report(&caps, &Prefs::default());
         assert!(r.contains("vaapi=0\n"));
@@ -885,8 +961,14 @@ mod tests {
             }),
             ..Default::default()
         };
-        assert_eq!(decode_path(&caps, &Prefs::default(), Codec::H264), DecodePath::Vaapi);
-        assert_eq!(decode_path(&caps, &Prefs::default(), Codec::Av1), DecodePath::Software);
+        assert_eq!(
+            decode_path(&caps, &Prefs::default(), Codec::H264),
+            DecodePath::Vaapi
+        );
+        assert_eq!(
+            decode_path(&caps, &Prefs::default(), Codec::Av1),
+            DecodePath::Software
+        );
         let soft = Prefs {
             video: VideoPref::Software,
             ..Default::default()

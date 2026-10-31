@@ -176,7 +176,9 @@ fn parse_param(tok: u32) -> Param {
 const COMP: [char; 4] = ['x', 'y', 'z', 'w'];
 
 fn swizzle_str(sw: u32) -> String {
-    (0..4).map(|i| COMP[((sw >> (i * 2)) & 3) as usize]).collect()
+    (0..4)
+        .map(|i| COMP[((sw >> (i * 2)) & 3) as usize])
+        .collect()
 }
 
 fn mask_str(mask: u32) -> String {
@@ -249,7 +251,11 @@ impl Ctx {
                     if self.major >= 3 {
                         match self.ps_inputs.iter().find(|i| i.0 == n) {
                             Some(&(_, USAGE_COLOR, idx)) => {
-                                if idx == 0 { "gl_Color".into() } else { "gl_SecondaryColor".into() }
+                                if idx == 0 {
+                                    "gl_Color".into()
+                                } else {
+                                    "gl_SecondaryColor".into()
+                                }
                             }
                             Some(&(_, USAGE_TEXCOORD, idx)) => format!("gl_TexCoord[{idx}]"),
                             Some(&(_, USAGE_FOG, _)) => "vec4(gl_FogFragCoord)".into(),
@@ -397,7 +403,11 @@ impl Ctx {
             self.uses_addr = true;
             let m = mask_str(d.mask);
             let swz: String = m.chars().collect();
-            let rounding = if self.major >= 2 { "floor(v + 0.5)" } else { "floor(v)" };
+            let rounding = if self.major >= 2 {
+                "floor(v + 0.5)"
+            } else {
+                "floor(v)"
+            };
             let e = rounding.replace('v', &format!("vec4({expr})"));
             self.line(&format!("a0.{swz} = ivec4({e}).{swz};"));
             return Ok(());
@@ -458,8 +468,8 @@ fn sm1_param_count(op: u32) -> Option<usize> {
         OP_NOP | OP_RET | OP_ELSE | OP_ENDIF | OP_ENDLOOP | OP_ENDREP | OP_BREAK => 0,
         OP_MOV | OP_RCP | OP_RSQ | OP_EXP | OP_LOG | OP_LIT | OP_FRC | OP_EXPP | OP_LOGP
         | OP_ABS | OP_NRM | OP_SGN | OP_MOVA => 2,
-        OP_ADD | OP_SUB | OP_MUL | OP_DP3 | OP_DP4 | OP_MIN | OP_MAX | OP_SLT | OP_SGE
-        | OP_DST | OP_M4X4 | OP_M4X3 | OP_M3X4 | OP_M3X3 | OP_M3X2 | OP_POW | OP_CRS => 3,
+        OP_ADD | OP_SUB | OP_MUL | OP_DP3 | OP_DP4 | OP_MIN | OP_MAX | OP_SLT | OP_SGE | OP_DST
+        | OP_M4X4 | OP_M4X3 | OP_M3X4 | OP_M3X3 | OP_M3X2 | OP_POW | OP_CRS => 3,
         OP_MAD | OP_LRP | OP_CND | OP_CMP | OP_DP2ADD => 4,
         OP_DCL => 2,
         OP_DEF => 5,
@@ -480,7 +490,9 @@ pub(crate) fn translate(tokens: &[u32]) -> Result<Sm9Shader, String> {
     let major = (version >> 8) & 0xff;
     let minor = version & 0xff;
     if !(1..=3).contains(&major) {
-        return Err(format!("modèle de shader {major}.{minor} non pris en charge"));
+        return Err(format!(
+            "modèle de shader {major}.{minor} non pris en charge"
+        ));
     }
     let mut c = Ctx {
         pixel,
@@ -525,7 +537,8 @@ pub(crate) fn translate(tokens: &[u32]) -> Result<Sm9Shader, String> {
         let len = if major >= 2 {
             ((tok >> 24) & 0xf) as usize
         } else {
-            sm1_param_count(op).ok_or_else(|| format!("instruction ps/vs 1.x {op} non prise en charge"))?
+            sm1_param_count(op)
+                .ok_or_else(|| format!("instruction ps/vs 1.x {op} non prise en charge"))?
         };
         if tok & (1 << 28) != 0 {
             return Err("instructions prédiquées non prises en charge".into());
@@ -569,16 +582,27 @@ pub(crate) fn translate(tokens: &[u32]) -> Result<Sm9Shader, String> {
                         R_CONST4 => 6144,
                         _ => 0,
                     };
-                c.defs.push((base, [
-                    f32::from_bits(args[1]),
-                    f32::from_bits(args[2]),
-                    f32::from_bits(args[3]),
-                    f32::from_bits(args[4]),
-                ]));
+                c.defs.push((
+                    base,
+                    [
+                        f32::from_bits(args[1]),
+                        f32::from_bits(args[2]),
+                        f32::from_bits(args[3]),
+                        f32::from_bits(args[4]),
+                    ],
+                ));
             }
             OP_DEFI if args.len() >= 5 => {
                 let p = parse_param(args[0]);
-                c.defi.push((p.num, [args[1] as i32, args[2] as i32, args[3] as i32, args[4] as i32]));
+                c.defi.push((
+                    p.num,
+                    [
+                        args[1] as i32,
+                        args[2] as i32,
+                        args[3] as i32,
+                        args[4] as i32,
+                    ],
+                ));
             }
             OP_DEFB if args.len() >= 2 => {
                 let p = parse_param(args[0]);
@@ -650,7 +674,7 @@ fn emit(c: &mut Ctx, op: u32, ctrl: u32, args: &[u32]) -> Result<(), String> {
                 Ok(()) // `ret` final du programme principal
             } else {
                 Err("sous-routines (call/label) non prises en charge".into())
-            }
+            };
         }
         OP_SETP | OP_BREAKP => return Err("prédicats non pris en charge".into()),
         _ => {}
@@ -714,7 +738,11 @@ fn emit(c: &mut Ctx, op: u32, ctrl: u32, args: &[u32]) -> Result<(), String> {
         OP_SLT | OP_SGE => {
             need(3)?;
             let (a, b) = (c.src(&p[1])?, c.src(&p[2])?);
-            let f = if op == OP_SLT { "lessThan" } else { "greaterThanEqual" };
+            let f = if op == OP_SLT {
+                "lessThan"
+            } else {
+                "greaterThanEqual"
+            };
             c.assign(&p[0], &format!("vec4({f}(vec4({a}), vec4({b})))"))?;
         }
         OP_LIT => {
@@ -730,7 +758,10 @@ fn emit(c: &mut Ctx, op: u32, ctrl: u32, args: &[u32]) -> Result<(), String> {
         OP_DST => {
             need(3)?;
             let (a, b) = (c.src(&p[1])?, c.src(&p[2])?);
-            c.assign(&p[0], &format!("vec4(1.0, ({a}).y * ({b}).y, ({a}).z, ({b}).w)"))?;
+            c.assign(
+                &p[0],
+                &format!("vec4(1.0, ({a}).y * ({b}).y, ({a}).z, ({b}).w)"),
+            )?;
         }
         OP_LRP => {
             need(4)?;
@@ -793,7 +824,10 @@ fn emit(c: &mut Ctx, op: u32, ctrl: u32, args: &[u32]) -> Result<(), String> {
         OP_NRM => {
             need(2)?;
             let s = c.src(&p[1])?;
-            c.assign(&p[0], &format!("({s}) * inversesqrt(max(dot(({s}).xyz, ({s}).xyz), 1e-30))"))?;
+            c.assign(
+                &p[0],
+                &format!("({s}) * inversesqrt(max(dot(({s}).xyz, ({s}).xyz), 1e-30))"),
+            )?;
         }
         OP_SINCOS => {
             need(2)?;
@@ -803,7 +837,10 @@ fn emit(c: &mut Ctx, op: u32, ctrl: u32, args: &[u32]) -> Result<(), String> {
         OP_CMP => {
             need(4)?;
             let (t, a, b) = (c.src(&p[1])?, c.src(&p[2])?, c.src(&p[3])?);
-            c.assign(&p[0], &format!("mix(vec4({b}), vec4({a}), vec4(greaterThanEqual(vec4({t}), vec4(0.0))))"))?;
+            c.assign(
+                &p[0],
+                &format!("mix(vec4({b}), vec4({a}), vec4(greaterThanEqual(vec4({t}), vec4(0.0))))"),
+            )?;
         }
         OP_CND => {
             need(4)?;
@@ -841,7 +878,9 @@ fn emit(c: &mut Ctx, op: u32, ctrl: u32, args: &[u32]) -> Result<(), String> {
         OP_TEXKILL => {
             need(1)?;
             let n = c.reg_name(&p[0], false)?;
-            c.line(&format!("if (any(lessThan(({n}).xyz, vec3(0.0)))) discard;"));
+            c.line(&format!(
+                "if (any(lessThan(({n}).xyz, vec3(0.0)))) discard;"
+            ));
         }
         OP_TEX | OP_TEXLDD | OP_TEXLDL => {
             if c.major == 1 && c.minor < 4 {
@@ -878,7 +917,9 @@ fn emit(c: &mut Ctx, op: u32, ctrl: u32, args: &[u32]) -> Result<(), String> {
                 SamplerType::Volume => format!("texture3D(s{s}, ({coord}).xyz)"),
                 SamplerType::Tex2D if project => format!("texture2DProj(s{s}, {coord})"),
                 SamplerType::Tex2D if bias => format!("texture2D(s{s}, ({coord}).xy, ({coord}).w)"),
-                SamplerType::Tex2D if lod_vs => format!("texture2DLod(s{s}, ({coord}).xy, ({coord}).w)"),
+                SamplerType::Tex2D if lod_vs => {
+                    format!("texture2DLod(s{s}, ({coord}).xy, ({coord}).w)")
+                }
                 SamplerType::Tex2D => format!("texture2D(s{s}, ({coord}).xy)"),
             };
             c.assign(&p[0], &e)?;
@@ -909,7 +950,9 @@ fn emit(c: &mut Ctx, op: u32, ctrl: u32, args: &[u32]) -> Result<(), String> {
             need(1)?;
             let n = c.reg_name(&p[0], false)?;
             let d = c.loop_depth;
-            c.line(&format!("for (int k{d} = 0; k{d} < int(({n}).x) && k{d} < 255; k{d}++) {{"));
+            c.line(&format!(
+                "for (int k{d} = 0; k{d} < int(({n}).x) && k{d} < 255; k{d}++) {{"
+            ));
             c.loop_depth += 1;
             c.max_loop = c.max_loop.max(c.loop_depth);
             c.indent += 1;
@@ -960,7 +1003,11 @@ fn finish(c: Ctx) -> Sm9Shader {
         );
     }
     for (n, v) in &c.defi {
-        let _ = writeln!(s, "const ivec4 ci{n} = ivec4({}, {}, {}, {});", v[0], v[1], v[2], v[3]);
+        let _ = writeln!(
+            s,
+            "const ivec4 ci{n} = ivec4({}, {}, {}, {});",
+            v[0], v[1], v[2], v[3]
+        );
     }
     let mut inputs = Vec::new();
     if c.pixel {
@@ -975,7 +1022,11 @@ fn finish(c: Ctx) -> Sm9Shader {
     } else {
         let _ = writeln!(s, "uniform vec4 wl_pos_fixup;");
         for (n, ty) in &c.samplers {
-            let t = if *ty == SamplerType::Cube { "samplerCube" } else { "sampler2D" };
+            let t = if *ty == SamplerType::Cube {
+                "samplerCube"
+            } else {
+                "sampler2D"
+            };
             let _ = writeln!(s, "uniform {t} s{n};");
         }
         let mut seen = Vec::new();
@@ -998,7 +1049,11 @@ fn finish(c: Ctx) -> Sm9Shader {
             if c.body.contains(&name) && !seen.contains(&name) {
                 let _ = writeln!(s, "attribute vec4 {name};");
                 inputs.push(VsInput {
-                    usage: if n == 0 { USAGE_POSITION } else { USAGE_TEXCOORD },
+                    usage: if n == 0 {
+                        USAGE_POSITION
+                    } else {
+                        USAGE_TEXCOORD
+                    },
                     index: if n == 0 { 0 } else { (n - 1) as u8 },
                     name,
                 });
@@ -1122,6 +1177,53 @@ pub(crate) unsafe fn token_len(ptr: *const u32, max: usize) -> usize {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dlls::gl_bindings as gl;
+
+    /// Traduit puis, si un affichage X et OpenGL sont disponibles, fait
+    /// compiler le GLSL par le vrai pilote (Mesa en CI locale).
+    fn checked(t: &[u32]) -> Sm9Shader {
+        let s = translate(t).unwrap();
+        thread_local! {
+            static CTX: Option<crate::dlls::dxgi::GlContext> =
+                if std::env::var_os("DISPLAY").is_some() {
+                    crate::dlls::dxgi::GlContext::create_for_window(0)
+                } else {
+                    None
+                };
+        }
+        CTX.with(|c| {
+            let (Some(_), Some(g)) = (c.as_ref(), gl::gl()) else {
+                return;
+            };
+            unsafe {
+                let ty = if s.pixel {
+                    gl::GL_FRAGMENT_SHADER
+                } else {
+                    gl::GL_VERTEX_SHADER
+                };
+                let sh = (g.CreateShader)(ty);
+                let src = std::ffi::CString::new(s.glsl.clone()).unwrap();
+                let p = src.as_ptr();
+                (g.ShaderSource)(sh, 1, &p, std::ptr::null());
+                (g.CompileShader)(sh);
+                let mut ok = 0;
+                (g.GetShaderiv)(sh, gl::GL_COMPILE_STATUS, &mut ok);
+                let mut log = vec![0i8; 2048];
+                let mut n = 0;
+                (g.GetShaderInfoLog)(sh, 2048, &mut n, log.as_mut_ptr());
+                let msg = String::from_utf8_lossy(
+                    &log[..n.max(0) as usize]
+                        .iter()
+                        .map(|&c| c as u8)
+                        .collect::<Vec<_>>(),
+                )
+                .into_owned();
+                (g.DeleteShader)(sh);
+                assert!(ok != 0, "GLSL refusé par le pilote : {msg}\n{}", s.glsl);
+            }
+        });
+        s
+    }
 
     // Aides pour assembler des jetons à la main.
     fn ins(op: u32, len: u32) -> u32 {
@@ -1157,7 +1259,7 @@ mod tests {
             src(R_INPUT, 1),
             0x0000_ffff,
         ];
-        let s = translate(&t).unwrap();
+        let s = checked(&t);
         assert!(!s.pixel);
         assert!(s.glsl.contains("attribute vec4 a_position0;"));
         assert!(s.glsl.contains("dot(a_position0, vc[0])"));
@@ -1200,10 +1302,12 @@ mod tests {
             src(R_TEMP, 0),
             0x0000_ffff,
         ];
-        let s = translate(&t).unwrap();
+        let s = checked(&t);
         assert!(s.pixel);
         assert!(s.glsl.contains("uniform sampler2D s0;"));
-        assert!(s.glsl.contains("const vec4 cd1 = vec4(0.5, 0.5, 0.5, 1.0);"));
+        assert!(s
+            .glsl
+            .contains("const vec4 cd1 = vec4(0.5, 0.5, 0.5, 1.0);"));
         assert!(s.glsl.contains("texture2D(s0, (t0).xy)"));
         assert!(s.glsl.contains("r0 * cd1"));
         assert!(s.glsl.contains("gl_FragData[0] = o_c0;"));
@@ -1223,8 +1327,10 @@ mod tests {
             src(R_INPUT, 0),
             0x0000_ffff,
         ];
-        let s = translate(&t).unwrap();
-        assert!(s.glsl.contains("t0 = vec4(texture2D(s0, gl_TexCoord[0].xy));"));
+        let s = checked(&t);
+        assert!(s
+            .glsl
+            .contains("t0 = vec4(texture2D(s0, gl_TexCoord[0].xy));"));
         assert!(s.glsl.contains("r0 = vec4(t0 * gl_Color);"));
         assert!(s.glsl.contains("gl_FragColor = r0;"));
     }
@@ -1239,8 +1345,10 @@ mod tests {
             src_mod(R_CONST, 0, 0x1b, 1),
             0x0000_ffff,
         ];
-        let s = translate(&t).unwrap();
-        assert!(s.glsl.contains("r0.xy = (clamp(vec4((-pc[0].wzyx)), 0.0, 1.0)).xy;"));
+        let s = checked(&t);
+        assert!(s
+            .glsl
+            .contains("r0.xy = (clamp(vec4((-pc[0].wzyx)), 0.0, 1.0)).xy;"));
     }
 
     #[test]
@@ -1282,7 +1390,7 @@ mod tests {
             src(R_TEMP, 0),
             0x0000_ffff,
         ];
-        let s = translate(&t).unwrap();
+        let s = checked(&t);
         assert!(s.glsl.contains("for (int k0 = 0; k0 < int((vec4(ci0)).x)"));
         assert!(s.glsl.contains("if (vcb[0]) {"));
         assert!(s.glsl.contains("o_pos = o0;"));
@@ -1302,9 +1410,11 @@ mod tests {
             0x8000_0000 | ((R_ADDR_TEXTURE & 7) << 28),
             0x0000_ffff,
         ];
-        let s = translate(&t).unwrap();
+        let s = checked(&t);
         assert!(s.glsl.contains("ivec4 a0 = ivec4(0);"));
-        assert!(s.glsl.contains("a0.x = ivec4(floor(vec4(vc[0].xxxx) + 0.5)).x;"));
+        assert!(s
+            .glsl
+            .contains("a0.x = ivec4(floor(vec4(vc[0].xxxx) + 0.5)).x;"));
         assert!(s.glsl.contains("vc[a0.x + 5]"));
     }
 
@@ -1333,7 +1443,7 @@ mod tests {
             src(R_INPUT, 0),
             0x0000_ffff,
         ];
-        let s = translate(&t).unwrap();
+        let s = checked(&t);
         assert!(s.glsl.contains("o_c0 = vec4(gl_Color);"));
     }
 }

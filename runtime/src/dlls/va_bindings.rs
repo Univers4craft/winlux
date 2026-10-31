@@ -149,7 +149,10 @@ pub(crate) fn lib() -> Option<&'static VaLib> {
             crate::log_info!("vaapi", "libva absente : décodage vidéo logiciel");
             return None;
         }
-        let drm = libc::dlopen(c"libva-drm.so.2".as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL);
+        let drm = libc::dlopen(
+            c"libva-drm.so.2".as_ptr(),
+            libc::RTLD_NOW | libc::RTLD_LOCAL,
+        );
         if drm.is_null() {
             crate::log_info!("vaapi", "libva-drm absente : décodage vidéo logiciel");
             return None;
@@ -204,7 +207,14 @@ impl VaSession {
                 } else {
                     CStr::from_ptr(v).to_string_lossy().into_owned()
                 };
-                crate::log_info!("vaapi", "{} : VA-API {}.{} « {} »", node, major, minor_v, vendor);
+                crate::log_info!(
+                    "vaapi",
+                    "{} : VA-API {}.{} « {} »",
+                    node,
+                    major,
+                    minor_v,
+                    vendor
+                );
                 return Some(VaSession {
                     display,
                     fd,
