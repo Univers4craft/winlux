@@ -64,7 +64,10 @@ T = {
   "regenerate": "Régénérer", "cancel": "Ne pas envoyer", "save": "Enregistrer", "send": "Envoyer le rapport",
   "via_relay": "Envoi via le service de signalement Winlux : aucun compte n'est nécessaire.",
   "via_token": "Envoi direct sur GitHub avec le jeton configuré sur cette machine.",
-  "via_browser": "Le rapport s'ouvrira dans votre navigateur sur GitHub (un compte GitHub est nécessaire pour valider).",
+  "acct_title": "Un compte GitHub est nécessaire pour l'instant",
+  "acct_text": "Le service de signalement sans compte de Winlux n'est pas encore en ligne. Votre rapport va s'ouvrir sur le site GitHub, déjà rempli : il suffit de vous connecter (ou de créer un compte gratuit) puis de cliquer « Submit new issue ». Votre rapport est aussi enregistré sur cet ordinateur ({path}).",
+  "acct_open": "Ouvrir GitHub", "acct_signup": "Créer un compte GitHub", "acct_later": "Enregistrer seulement",
+  "via_browser": "Le service sans compte n'est pas encore en ligne : le rapport s'ouvrira, prérempli, sur le site GitHub, où un compte GitHub gratuit est nécessaire pour l'envoyer.",
   "via_file": "Le rapport sera seulement enregistré sur cet ordinateur.",
   "searching": "Recherche d'un signalement identique…", "sending": "Envoi en cours…",
   "sent": "Merci ! Signalement envoyé : {url}", "commented": "Merci ! Votre rapport a été ajouté au signalement existant : {url}",
@@ -109,7 +112,10 @@ T = {
   "regenerate": "Regenerate", "cancel": "Don't send", "save": "Save", "send": "Send report",
   "via_relay": "Sent through the Winlux reporting service: no account needed.",
   "via_token": "Sent directly to GitHub with the token configured on this machine.",
-  "via_browser": "The report will open in your browser on GitHub (a GitHub account is needed to submit it).",
+  "acct_title": "A GitHub account is needed for now",
+  "acct_text": "Winlux's no-account reporting service is not online yet. Your report will open on the GitHub website, already filled in: just sign in (or create a free account) and click \"Submit new issue\". Your report is also saved on this computer ({path}).",
+  "acct_open": "Open GitHub", "acct_signup": "Create a GitHub account", "acct_later": "Only save",
+  "via_browser": "The no-account service is not online yet: the report will open, prefilled, on the GitHub website, where a free GitHub account is needed to submit it.",
   "via_file": "The report will only be saved on this computer.",
   "searching": "Looking for an identical report…", "sending": "Sending…",
   "sent": "Thank you! Report sent: {url}", "commented": "Thank you! Your report was added to the existing issue: {url}",
@@ -154,7 +160,10 @@ T = {
   "regenerate": "Regenerar", "cancel": "No enviar", "save": "Guardar", "send": "Enviar el informe",
   "via_relay": "Envío mediante el servicio de informes de Winlux: no se necesita ninguna cuenta.",
   "via_token": "Envío directo a GitHub con el token configurado en este equipo.",
-  "via_browser": "El informe se abrirá en su navegador en GitHub (se necesita una cuenta de GitHub para enviarlo).",
+  "acct_title": "Por ahora se necesita una cuenta de GitHub",
+  "acct_text": "El servicio de informes sin cuenta de Winlux todavía no está en línea. Su informe se abrirá en el sitio de GitHub, ya rellenado: solo tiene que iniciar sesión (o crear una cuenta gratuita) y pulsar «Submit new issue». El informe también se guarda en este equipo ({path}).",
+  "acct_open": "Abrir GitHub", "acct_signup": "Crear una cuenta de GitHub", "acct_later": "Solo guardar",
+  "via_browser": "El servicio sin cuenta todavía no está en línea: el informe se abrirá, ya rellenado, en el sitio de GitHub, donde se necesita una cuenta gratuita de GitHub para enviarlo.",
   "via_file": "El informe solo se guardará en este equipo.",
   "searching": "Buscando un informe idéntico…", "sending": "Enviando…",
   "sent": "¡Gracias! Informe enviado: {url}", "commented": "¡Gracias! Su informe se añadió al existente: {url}",
@@ -199,7 +208,10 @@ T = {
   "regenerate": "Neu erstellen", "cancel": "Nicht senden", "save": "Speichern", "send": "Bericht senden",
   "via_relay": "Versand über den Winlux-Meldedienst: kein Konto erforderlich.",
   "via_token": "Direkter Versand an GitHub mit dem auf diesem Rechner eingerichteten Token.",
-  "via_browser": "Der Bericht öffnet sich in Ihrem Browser auf GitHub (zum Absenden ist ein GitHub-Konto nötig).",
+  "acct_title": "Vorerst ist ein GitHub-Konto nötig",
+  "acct_text": "Der kontolose Meldedienst von Winlux ist noch nicht online. Ihr Bericht öffnet sich bereits ausgefüllt auf der GitHub-Website: Melden Sie sich an (oder erstellen Sie ein kostenloses Konto) und klicken Sie auf „Submit new issue“. Der Bericht ist außerdem auf diesem Computer gespeichert ({path}).",
+  "acct_open": "GitHub öffnen", "acct_signup": "GitHub-Konto erstellen", "acct_later": "Nur speichern",
+  "via_browser": "Der kontolose Dienst ist noch nicht online: Der Bericht öffnet sich vorausgefüllt auf der GitHub-Website, wo zum Absenden ein kostenloses GitHub-Konto nötig ist.",
   "via_file": "Der Bericht wird nur auf diesem Computer gespeichert.",
   "searching": "Suche nach einer identischen Meldung…", "sending": "Wird gesendet…",
   "sent": "Danke! Meldung gesendet: {url}", "commented": "Danke! Ihr Bericht wurde der bestehenden Meldung hinzugefügt: {url}",
@@ -1086,8 +1098,35 @@ def gui(report, conf):
                 except (OSError, ValueError, KeyError, urllib.error.URLError) as error:
                     GLib.idle_add(fallback, title, body, labels, issue, path, str(error))
             threading.Thread(target=work, daemon=True).start()
+        elif kind == "browser" and not explain_account(short(path)):
+            finish(tr("saved", L, path=path))
         else:
             fallback(title, body, labels, issue, path, None)
+
+    def short(path):
+        home = str(Path.home())
+        text = str(path)
+        return "~" + text[len(home):] if home != "/" and text.startswith(home) else text
+
+    def explain_account(path):
+        """Tant que le relais n'est pas en ligne, l'envoi passe par le site
+        GitHub : on le dit clairement avant d'ouvrir le navigateur."""
+        dialog = Gtk.MessageDialog(transient_for=win, modal=True, message_type=Gtk.MessageType.INFO,
+                                   text=tr("acct_title", L))
+        notice.set_text("")
+        dialog.format_secondary_text(tr("acct_text", L, path=path))
+        dialog.add_button(tr("acct_later", L), 0)
+        dialog.add_button(tr("acct_signup", L), 2)
+        dialog.add_button(tr("acct_open", L), 1).get_style_context().add_class("suggested-action")
+        dialog.set_default_response(1)
+        while True:
+            answer = dialog.run()
+            if answer == 2:
+                open_url("https://github.com/signup")
+                continue
+            break
+        dialog.destroy()
+        return answer == 1
 
     def fallback(title, body, labels, issue, path, error):
         url, truncated = browser_url(title, body, labels, issue)

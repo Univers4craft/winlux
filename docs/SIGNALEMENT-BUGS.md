@@ -88,21 +88,17 @@ considérées :
    presse-papiers.
 
 Limites : tant que le relais n'est pas déployé, le chemin sans compte n'existe
-pas et Winlux utilise le navigateur (Paramètres l'indique). Le relais est un
+pas et Winlux utilise le navigateur. Paramètres l'indique, et au clic sur
+« Envoyer » une fenêtre explique qu'un compte GitHub gratuit est nécessaire,
+avec trois choix : ouvrir GitHub, créer un compte, ou seulement enregistrer. Le relais est un
 service en ligne à héberger et surveiller ; la limitation de débit freine le
 spam sans l'empêcher totalement. Un mode « Fichier » enregistre seulement le
 rapport, pour l'envoyer autrement.
 
 ## Déployer le relais
 
-1. Créer un jeton « fine-grained » limité au dépôt `Univers4craft/winlux`,
-   permission **Issues : lecture et écriture** uniquement.
-2. Sur le serveur : `WINLUX_RELAY_TOKEN_FILE=/etc/winlux-relay/token
-   python3 winlux-report-relay.py --port 8787`, derrière un proxy HTTPS
-   (Caddy, nginx) qui transmet `X-Forwarded-For`.
-3. Côté Winlux, livrer `/usr/share/winlux/report.conf` contenant
-   `RELAY=https://relais.exemple/` (les réglages de l'utilisateur vont dans
-   `/etc/winlux/report.conf`).
+Voir [RELAIS-SIGNALEMENT.md](RELAIS-SIGNALEMENT.md) : jeton, service systemd, HTTPS et
+branchement de Winlux, en une page.
 
 Réglages reconnus : `OFFER=on|off`, `REDACT=on|off`, `MODE=auto|browser|file`,
 `RELAY=https://…`, et `TOKEN_FILE=…` pour une machine de développement qui
@@ -112,8 +108,7 @@ envoie directement avec son propre jeton.
 
 Les rapports utilisent `bug`, `signalement-utilisateur`, `plantage`,
 `fonction-manquante`, `à-trier`, `compatibilité-windows`, `runtime` et
-`bureau`. Les quatre premières doivent exister dans le dépôt : GitHub ignore
-une étiquette inconnue posée par un compte sans droit d'écriture.
+`bureau` ; elles existent toutes sur le dépôt (créées le 31/10/2026).
 
 ## Tests
 
