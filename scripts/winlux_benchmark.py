@@ -17,6 +17,61 @@ import sys
 import threading
 import time
 
+
+# ── Langue : celle choisie dans l'installateur (WINLUX_LANG), sinon celle du système ──
+
+_COL = {"en": 0, "de": 1, "es": 2, "it": 3, "pt": 4}
+
+# Texte français -> (anglais, allemand, espagnol, italien, portugais).
+_TR = {
+    '{threads} threads · {multi} Mo/s (1 cœur : {single} Mo/s)': ('{threads} threads · {multi} MB/s (1 core: {single} MB/s)', '{threads} Threads · {multi} MB/s (1 Kern: {single} MB/s)', '{threads} hilos · {multi} MB/s (1 núcleo: {single} MB/s)', '{threads} thread · {multi} MB/s (1 core: {single} MB/s)', '{threads} threads · {multi} MB/s (1 núcleo: {single} MB/s)'),
+    '{total} Go · {gbs} Go/s': ('{total} GB · {gbs} GB/s', '{total} GB · {gbs} GB/s', '{total} GB · {gbs} GB/s', '{total} GB · {gbs} GB/s', '{total} GB · {gbs} GB/s'),
+    '{kind} · lecture {mbs} Mo/s': ('{kind} · read {mbs} MB/s', '{kind} · Lesen {mbs} MB/s', '{kind} · lectura {mbs} MB/s', '{kind} · lettura {mbs} MB/s', '{kind} · leitura {mbs} MB/s'),
+    'écriture {mbs} Mo/s': ('write {mbs} MB/s', 'Schreiben {mbs} MB/s', 'escritura {mbs} MB/s', 'scrittura {mbs} MB/s', 'gravação {mbs} MB/s'),
+    'rendu logiciel': ('software rendering', 'Software-Rendering', 'renderizado por software', 'rendering software', 'renderização por software'),
+    'adaptateur virtuel': ('virtual adapter', 'virtueller Adapter', 'adaptador virtual', 'adattatore virtuale', 'adaptador virtual'),
+    'graphique intégré': ('integrated graphics', 'integrierte Grafik', 'gráficos integrados', 'grafica integrata', 'gráficos integrados'),
+    'carte dédiée': ('dedicated card', 'dedizierte Grafikkarte', 'tarjeta dedicada', 'scheda dedicata', 'placa dedicada'),
+    'adaptateur inconnu': ('unknown adapter', 'unbekannter Adapter', 'adaptador desconocido', 'adattatore sconosciuto', 'adaptador desconhecido'),
+    'aucun adaptateur graphique détecté': ('no graphics adapter found', 'kein Grafikadapter erkannt', 'no se detectó ningún adaptador gráfico', 'nessun adattatore grafico rilevato', 'nenhum adaptador gráfico detectado'),
+    ' · {vram} Go VRAM': (' · {vram} GB VRAM', ' · {vram} GB VRAM', ' · {vram} GB VRAM', ' · {vram} GB VRAM', ' · {vram} GB VRAM'),
+    '{name} · {kind}{vram} (estimation)': ('{name} · {kind}{vram} (estimate)', '{name} · {kind}{vram} (Schätzung)', '{name} · {kind}{vram} (estimación)', '{name} · {kind}{vram} (stima)', '{name} · {kind}{vram} (estimativa)'),
+    'Mémoire faible : compression zram activée et effets visuels réduits conseillés.': ('Low memory: zram compression enabled and reduced visual effects recommended.', 'Wenig Arbeitsspeicher: zram-Komprimierung aktiviert, reduzierte visuelle Effekte empfohlen.', 'Poca memoria: compresión zram activada y se recomiendan efectos visuales reducidos.', 'Memoria ridotta: compressione zram attivata, effetti visivi ridotti consigliati.', 'Pouca memória: compressão zram ativada e efeitos visuais reduzidos recomendados.'),
+    'Mémoire abondante : swappiness basse (10) pour garder les applications en RAM.': ('Plenty of memory: low swappiness (10) to keep apps in RAM.', 'Viel Arbeitsspeicher: niedrige swappiness (10), damit Apps im RAM bleiben.', 'Memoria abundante: swappiness baja (10) para mantener las aplicaciones en RAM.', 'Memoria abbondante: swappiness bassa (10) per tenere le app in RAM.', 'Memória abundante: swappiness baixa (10) para manter os aplicativos na RAM.'),
+    "Disque mécanique : ordonnanceur d'E/S BFQ pour garder le bureau réactif.": ('Hard disk: BFQ I/O scheduler to keep the desktop responsive.', 'Festplatte: E/A-Scheduler BFQ, damit der Desktop reaktionsschnell bleibt.', 'Disco mecánico: planificador de E/S BFQ para que el escritorio responda bien.', 'Disco meccanico: scheduler I/O BFQ per mantenere reattivo il desktop.', 'Disco mecânico: escalonador de E/S BFQ para manter a área de trabalho responsiva.'),
+    "SSD NVMe : ordonnanceur d'E/S « none » pour une latence minimale.": ('NVMe SSD: “none” I/O scheduler for minimal latency.', 'NVMe-SSD: E/A-Scheduler „none“ für minimale Latenz.', 'SSD NVMe: planificador de E/S «none» para una latencia mínima.', 'SSD NVMe: scheduler I/O «none» per una latenza minima.', 'SSD NVMe: escalonador de E/S “none” para latência mínima.'),
+    "SSD : ordonnanceur d'E/S « mq-deadline ».": ('SSD: “mq-deadline” I/O scheduler.', 'SSD: E/A-Scheduler „mq-deadline“.', 'SSD: planificador de E/S «mq-deadline».', 'SSD: scheduler I/O «mq-deadline».', 'SSD: escalonador de E/S “mq-deadline”.'),
+    'Disque lent : installation et démarrage plus longs, un SSD est conseillé.': ('Slow disk: installation and startup take longer, an SSD is recommended.', 'Langsamer Datenträger: Installation und Start dauern länger, eine SSD wird empfohlen.', 'Disco lento: la instalación y el arranque tardan más; se recomienda un SSD.', 'Disco lento: installazione e avvio più lunghi, si consiglia un SSD.', 'Disco lento: instalação e inicialização mais demoradas, recomenda-se um SSD.'),
+    'Accélération graphique limitée : réduisez les animations du bureau.': ('Limited graphics acceleration: reduce desktop animations.', 'Eingeschränkte Grafikbeschleunigung: Reduzieren Sie die Desktopanimationen.', 'Aceleración gráfica limitada: reduzca las animaciones del escritorio.', 'Accelerazione grafica limitata: riduci le animazioni del desktop.', 'Aceleração gráfica limitada: reduza as animações da área de trabalho.'),
+    'Processeur {threads} threads : compilation parallèle efficace (make -j{threads}).': ('{threads}-thread processor: efficient parallel builds (make -j{threads}).', 'Prozessor mit {threads} Threads: effizientes paralleles Kompilieren (make -j{threads}).', 'Procesador de {threads} hilos: compilación paralela eficiente (make -j{threads}).', 'Processore a {threads} thread: compilazione parallela efficiente (make -j{threads}).', 'Processador de {threads} threads: compilação paralela eficiente (make -j{threads}).'),
+    'test impossible : {error}': ('test failed: {error}', 'Test nicht möglich: {error}', 'prueba imposible: {error}', 'test non riuscito: {error}', 'teste impossível: {error}'),
+    'Processeur': ('Processor', 'Prozessor', 'Procesador', 'Processore', 'Processador'),
+    'Mémoire': ('Memory', 'Arbeitsspeicher', 'Memoria', 'Memoria', 'Memória'),
+    'Disque': ('Disk', 'Datenträger', 'Disco', 'Disco', 'Disco'),
+    'Graphique': ('Graphics', 'Grafik', 'Gráficos', 'Grafica', 'Gráficos'),
+    'Note globale': ('Overall score', 'Gesamtbewertung', 'Puntuación global', 'Punteggio globale', 'Nota geral'),
+}
+
+
+def _lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="):
+                        code = line[5:].strip()
+        except OSError:
+            pass
+    return (code or "fr")[:2].lower()
+
+
+def _t(text):
+    """Texte dans la langue de l'installateur ou du système (le français sert de clé)."""
+    row = _TR.get(text)
+    col = _COL.get(_lang())
+    return row[col] if row and col is not None else text
+
 MiB = 1024 * 1024
 GiB = 1024 * MiB
 
@@ -82,7 +137,8 @@ def bench_cpu(seconds=1.5):
         "single_mbs": round(single_mbs, 1),
         "multi_mbs": round(multi_mbs, 1),
         "score": score("cpu", multi_mbs),
-        "detail": f"{threads} threads · {fr_number(multi_mbs)} Mo/s (1 cœur : {fr_number(single_mbs)} Mo/s)",
+        "detail": _t("{threads} threads · {multi} Mo/s (1 cœur : {single} Mo/s)").format(
+            threads=threads, multi=fr_number(multi_mbs), single=fr_number(single_mbs)),
     }
 
 
@@ -130,7 +186,7 @@ def bench_ram(seconds=1.0):
         "total_bytes": total,
         "bandwidth_gbs": round(gbs, 2),
         "score": score("ram", gbs),
-        "detail": f"{fr_number(total / GiB, 1)} Go · {fr_number(gbs, 1)} Go/s",
+        "detail": _t("{total} Go · {gbs} Go/s").format(total=fr_number(total / GiB, 1), gbs=fr_number(gbs, 1)),
     }
 
 
@@ -202,7 +258,7 @@ def bench_disk_read(device, seconds=2.0, limit=2 * GiB):
         "rotational": info["rotational"],
         "read_mbs": round(mbs, 1),
         "score": score("disk", mbs),
-        "detail": f"{info['kind']} · lecture {fr_number(mbs)} Mo/s",
+        "detail": _t("{kind} · lecture {mbs} Mo/s").format(kind=info["kind"], mbs=fr_number(mbs)),
     }
 
 
@@ -225,7 +281,7 @@ def bench_disk_write(directory, seconds=2.0, limit=512 * MiB):
         except OSError:
             pass
     mbs = done / MiB / elapsed if elapsed > 0 else 0.0
-    return {"write_mbs": round(mbs, 1), "detail": f"écriture {fr_number(mbs)} Mo/s"}
+    return {"write_mbs": round(mbs, 1), "detail": _t("écriture {mbs} Mo/s").format(mbs=fr_number(mbs))}
 
 
 def _read(path):
@@ -297,12 +353,12 @@ def gpu_tier(gpu, renderer=""):
 def bench_gpu(sysfs="/sys"):
     gpus = detect_gpus(sysfs)
     if not gpus:
-        return {"available": False, "score": 1.0, "detail": "aucun adaptateur graphique détecté", "kind": "aucun"}
+        return {"available": False, "score": 1.0, "detail": _t("aucun adaptateur graphique détecté"), "kind": "aucun"}
     renderer = gpu_renderer()
     rated = [(gpu_tier(g, renderer), g) for g in gpus]
     (value, kind), best = max(rated, key=lambda item: item[0][0])
     name = GPU_VENDOR_NAMES.get(best["vendor"], best["driver"] or best["vendor"] or "?")
-    vram = f" · {fr_number(best['vram_bytes'] / GiB, 0)} Go VRAM" if best["vram_bytes"] else ""
+    vram = _t(" · {vram} Go VRAM").format(vram=fr_number(best["vram_bytes"] / GiB, 0)) if best["vram_bytes"] else ""
     return {
         "available": True,
         "vendor": best["vendor"],
@@ -312,7 +368,7 @@ def bench_gpu(sysfs="/sys"):
         "kind": kind,
         "score": value,
         "estimated": True,
-        "detail": f"{name} · {kind}{vram} (estimation)",
+        "detail": _t("{name} · {kind}{vram} (estimation)").format(name=name, kind=_t(kind), vram=vram),
     }
 
 
@@ -325,21 +381,21 @@ def recommend(results):
     gpu = results.get("gpu", {})
     total = ram.get("total_bytes", 0)
     if total and total < 4 * GiB:
-        tips.append("Mémoire faible : compression zram activée et effets visuels réduits conseillés.")
+        tips.append(_t("Mémoire faible : compression zram activée et effets visuels réduits conseillés."))
     elif total >= 16 * GiB:
-        tips.append("Mémoire abondante : swappiness basse (10) pour garder les applications en RAM.")
+        tips.append(_t("Mémoire abondante : swappiness basse (10) pour garder les applications en RAM."))
     if disk.get("type") == "HDD":
-        tips.append("Disque mécanique : ordonnanceur d'E/S BFQ pour garder le bureau réactif.")
+        tips.append(_t("Disque mécanique : ordonnanceur d'E/S BFQ pour garder le bureau réactif."))
     elif disk.get("type") == "NVMe":
-        tips.append("SSD NVMe : ordonnanceur d'E/S « none » pour une latence minimale.")
+        tips.append(_t("SSD NVMe : ordonnanceur d'E/S « none » pour une latence minimale."))
     elif disk.get("type") == "SSD":
-        tips.append("SSD : ordonnanceur d'E/S « mq-deadline ».")
+        tips.append(_t("SSD : ordonnanceur d'E/S « mq-deadline »."))
     if disk.get("read_mbs") and disk["read_mbs"] < 100:
-        tips.append("Disque lent : installation et démarrage plus longs, un SSD est conseillé.")
+        tips.append(_t("Disque lent : installation et démarrage plus longs, un SSD est conseillé."))
     if gpu.get("score", 1.0) < 3.0:
-        tips.append("Accélération graphique limitée : réduisez les animations du bureau.")
+        tips.append(_t("Accélération graphique limitée : réduisez les animations du bureau."))
     if cpu.get("threads", 1) >= 8:
-        tips.append(f"Processeur {cpu['threads']} threads : compilation parallèle efficace (make -j{cpu['threads']}).")
+        tips.append(_t("Processeur {threads} threads : compilation parallèle efficace (make -j{threads}).").format(threads=cpu["threads"]))
     if gpu.get("score", 0) >= 6.0:
         profile = "gaming"
     elif cpu.get("threads", 1) >= 8 and total >= 16 * GiB:
@@ -361,7 +417,7 @@ def run_all(device=None, quick=False, emit=None, sysfs="/sys"):
         try:
             results[key] = func()
         except Exception as e:  # un composant en échec ne doit pas bloquer l'installation
-            results[key] = {"score": 1.0, "detail": f"test impossible : {e}", "error": str(e)}
+            results[key] = {"score": 1.0, "detail": _t("test impossible : {error}").format(error=e), "error": str(e)}
         if emit:
             emit({"event": "result", "test": key, "result": results[key]})
 
@@ -402,10 +458,10 @@ def main():
 
     summary = run_all(args.device, args.quick, emit)
     if not args.json_lines:
-        labels = {"cpu": "Processeur", "ram": "Mémoire", "disk": "Disque", "gpu": "Graphique"}
+        labels = {"cpu": _t("Processeur"), "ram": _t("Mémoire"), "disk": _t("Disque"), "gpu": _t("Graphique")}
         for key, result in summary["results"].items():
             print(f"{labels[key]:<12} {fr_number(result['score'], 1):>4}  {result['detail']}")
-        print(f"{'Note globale':<12} {fr_number(summary['base_score'], 1):>4}")
+        print(f"{_t('Note globale'):<12} {fr_number(summary['base_score'], 1):>4}")
         for tip in summary["recommendations"]:
             print(f"  • {tip}")
     return 0
