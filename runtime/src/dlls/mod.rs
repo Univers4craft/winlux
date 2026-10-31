@@ -142,6 +142,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
                     e.extend(crate::archive::ffi::exports());
+                    e.extend(crate::imaging::api::exports());
                     e.extend(winlux_gpu::exports());
                     e
                 },

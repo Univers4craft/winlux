@@ -6,6 +6,8 @@
 //! - un exécutable Windows (`.exe`, `.com`) est relancé dans Winlux ;
 //! - `shell:terminal` ouvre un terminal Linux ;
 //! - un nom de programme sans chemin est cherché dans le `PATH` Linux ;
+//! - une image d'un format réellement décodé par Winlux (`imaging`) s'ouvre
+//!   dans la visionneuse maison `imageviewer.exe` ;
 //! - tout autre fichier ou dossier passe par `xdg-open`.
 
 use std::path::{Path, PathBuf};
@@ -202,6 +204,28 @@ fn split_params(params: &str) -> Vec<String> {
     }
 }
 
+/// Visionneuse d'images Winlux : `WINLUX_IMAGE_VIEWER`, à côté du programme
+/// en cours, puis les dossiers d'installation du live ISO.
+fn image_viewer() -> Option<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Some(p) = std::env::var_os("WINLUX_IMAGE_VIEWER") {
+        let p = PathBuf::from(p);
+        if p.is_file() {
+            return Some(p);
+        }
+    }
+    if let Some(dir) =
+        crate::loader::main_module().and_then(|m| m.path.parent().map(Path::to_path_buf))
+    {
+        dirs.push(dir);
+    }
+    dirs.push("/opt/winlux/apps".into());
+    dirs.push("/opt/winlux/tests".into());
+    dirs.into_iter()
+        .map(|d| d.join("imageviewer.exe"))
+        .find(|p| p.is_file())
+}
+
 /// Commande Linux qui réalise `ShellExecute(file, params)`, ou le code
 /// d'erreur Win32 (`SE_ERR_*`) si rien ne convient.
 pub fn resolve(file: &str, params: &str) -> Result<(PathBuf, Vec<String>), isize> {
@@ -258,6 +282,18 @@ pub fn resolve(file: &str, params: &str) -> Result<(PathBuf, Vec<String>), isize
             let mut a = vec![path.to_string_lossy().into_owned()];
             a.extend(args);
             return Ok((me, a));
+        }
+        if path.is_file() && crate::imaging::supported_ext(&ext) {
+            if let Some(viewer) = image_viewer() {
+                let me = std::env::current_exe().map_err(|_| SE_ERR_FNF)?;
+                return Ok((
+                    me,
+                    vec![
+                        viewer.to_string_lossy().into_owned(),
+                        crate::paths::to_windows(&path),
+                    ],
+                ));
+            }
         }
         let opener = which("xdg-open").ok_or(SE_ERR_NOASSOC)?;
         return Ok((opener, vec![path.to_string_lossy().into_owned()]));
@@ -418,6 +454,29 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn decoded_images_open_in_the_winlux_viewer_and_others_do_not() {
+        let dir = std::env::temp_dir().join(format!("winlux-viewer-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let viewer = dir.join("imageviewer.exe");
+        std::fs::write(&viewer, b"MZ").unwrap();
+        let photo = dir.join("photo.JPG");
+        let heic = dir.join("photo.heic");
+        std::fs::write(&photo, b"x").unwrap();
+        std::fs::write(&heic, b"x").unwrap();
+        std::env::set_var("WINLUX_IMAGE_VIEWER", &viewer);
+        let (program, args) = resolve(photo.to_str().unwrap(), "").unwrap();
+        assert_eq!(program, std::env::current_exe().unwrap());
+        assert_eq!(args[0], viewer.to_string_lossy());
+        assert!(args[1].ends_with("photo.JPG"), "{args:?}");
+        // HEIC n'a pas de décodeur : jamais envoyé à la visionneuse.
+        if let Ok((_, args)) = resolve(heic.to_str().unwrap(), "") {
+            assert!(!args.iter().any(|a| a.ends_with("imageviewer.exe")));
+        }
+        std::env::remove_var("WINLUX_IMAGE_VIEWER");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn argv_preserves_empty_unicode_and_escaped_arguments_and_localfree_ownership() {
