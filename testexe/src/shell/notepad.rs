@@ -628,7 +628,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let cy = editor_y + (cl as i32) * CHAR_H - d.scroll_y;
         if cy >= editor_y && cy < r.bottom - STATUS_H {
             let cx = editor_x + cc * cw - d.scroll_x;
-            fill(g.hdc, g.b, cx, cy, cx + 2, cy + CHAR_H, p.text2);
+            fill(
+                g.hdc,
+                g.b,
+                cx,
+                cy,
+                cx + crate::gfx::caret_w(2),
+                cy + CHAR_H,
+                p.text2,
+            );
         }
     }
 
@@ -1303,7 +1311,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         Mouse::Down => {
             if y >= ey && y < r.bottom - STATUS_H && x >= editor_x {
                 let d = doc();
-                let shift = (GetKeyState(0x10) as u16 & 0x8000) != 0;
+                let shift = (crate::gfx::key_state(0x10) as u16 & 0x8000) != 0;
                 let line_idx = ((y - ey + d.scroll_y) / CHAR_H).max(0) as usize;
                 let col_idx = ((x - editor_x + d.scroll_x + cw / 2) / cw).max(0) as usize;
                 let li = line_idx.min(d.line_count.saturating_sub(1));
@@ -1499,8 +1507,8 @@ unsafe fn replace_all() {
 }
 
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
-    let ctrl = (GetKeyState(0x11) as u16 & 0x8000) != 0;
-    let shift = (GetKeyState(0x10) as u16 & 0x8000) != 0;
+    let ctrl = (crate::gfx::key_state(0x11) as u16 & 0x8000) != 0;
+    let shift = (crate::gfx::key_state(0x10) as u16 & 0x8000) != 0;
 
     // Find bar keyboard handling
     if ST.find_open {
