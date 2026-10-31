@@ -93,6 +93,8 @@ fi
 /usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
+# Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.
+if test -x /usr/bin/winlux-share; then /usr/bin/winlux-share ensure >/dev/null 2>&1 || true; fi
 /usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
 case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac

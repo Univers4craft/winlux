@@ -20,6 +20,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "libgl1", "libglx-mesa0", "irqbalance",
             # Lecteurs réseau montés comme disques (winlux-drives).
             "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",
+            # Partage de dossiers vers Windows et Mac (winlux-share) : serveur
+            # SMB standard et annonce WS-Discovery pour le panneau Réseau.
+            "samba", "wsdd",
             # Voix du Narrateur (Parametres > Accessibilite).
             "espeak-ng",
             # Impression : CUPS (pont IPP de winspool), filtres PDF et IPP-over-USB.

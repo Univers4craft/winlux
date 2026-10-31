@@ -286,8 +286,10 @@ pub const S_REMOTE_ADDRESS: usize = 203;
 pub const S_REMOTE_ACCOUNTS: usize = 204;
 pub const S_REMOTE_ACCOUNTS_HINT: usize = 205;
 pub const S_REMOTE_THIS_COMPUTER: usize = 206;
+// Page Partage et transfert (dossiers partagés, transfert des réglages)
+pub const S_SHARING: usize = 207;
 
-const STRING_COUNT: usize = 207;
+const STRING_COUNT: usize = 208;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -523,6 +525,8 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Comptes autoris\xE9s",
     b"Connexion avec le nom et le mot de passe du compte Winlux.",
     b"adresse IP de cet ordinateur",
+    // 207 : Partage et transfert
+    b"Partage et transfert",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -757,6 +761,8 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Allowed accounts",
     b"Sign in with the Winlux account name and password.",
     b"this computer's IP address",
+    // 207 : Partage et transfert
+    b"Sharing and transfer",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -991,6 +997,8 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Cuentas autorizadas",
     b"Inicie sesi\xF3n con el nombre y la contrase\xF1a de la cuenta Winlux.",
     b"direcci\xF3n IP de este equipo",
+    // 207 : Partage et transfert
+    b"Compartir y transferir",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -1225,6 +1233,8 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Zugelassene Konten",
     b"Anmeldung mit Name und Kennwort des Winlux-Kontos.",
     b"IP-Adresse dieses Computers",
+    // 207 : Partage et transfert
+    b"Freigabe und \xDCbertragung",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {

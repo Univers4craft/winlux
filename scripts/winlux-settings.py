@@ -156,6 +156,10 @@ _TR = {
     'Appliquer la définition': ('Apply resolution', 'Aplicar resolución', 'Auflösung übernehmen'),
     'Ouvrir les réglages détaillés de cette catégorie :': ('Open the detailed settings for this category:', 'Abrir la configuración detallada de esta categoría:', 'Detaillierte Einstellungen dieser Kategorie öffnen:'),
     'Réglages avancés': ('Advanced settings', 'Configuración avanzada', 'Erweiterte Einstellungen'),
+    'Imprimantes et scanners': ('Printers and scanners', 'Impresoras y escáneres', 'Drucker und Scanner'),
+    'Bureau à distance': ('Remote Desktop', 'Escritorio remoto', 'Remotedesktop'),
+    'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir', 'Freigabe und Übertragung'),
+    'Dossiers partagés sur le réseau et transfert de vos réglages vers un autre PC Winlux :': ('Folders shared on the network and moving your settings to another Winlux PC:', 'Carpetas compartidas en la red y transferencia de sus ajustes a otro PC con Winlux:', 'Im Netzwerk freigegebene Ordner und Übertragung Ihrer Einstellungen auf einen anderen Winlux-PC:'),
     'La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.': ('Preparing updates uses the disk. Keep the VM running during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga la VM encendida durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie die VM während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
     'Redémarrer après installation': ('Restart after installation', 'Reiniciar tras la instalación', 'Nach der Installation neu starten'),
@@ -205,8 +209,13 @@ PAGES = [_t("Système"), _t("Applications"), _t("Réseau"), _t("Son"), _t("Clavi
          _t("Programmes Windows"), _t("Navigateurs"), _t("Accessibilité"), _t("Effets visuels"),
          _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son avancé"), _t("Mises à jour système"),
          _t("Confidentialité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
-         _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes")]
+         _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes"),
+         _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
+         _t("Partage et transfert")]
 GRAPHICS_PAGE = 24
+# Pages 25 à 28 : leur interface complète est celle des Paramètres du bureau.
+LEGACY_PAGES = (25, 26, 27, 28)
+SHARING_PAGE = 28
 FIELDS = {
     0: [(_t("Version"), "version"), (_t("Noyau"), "kernel")],
     2: [(_t("Connexion"), "network")], 3: [(_t("Volume"), "audio")],
@@ -399,8 +408,9 @@ class Settings(Gtk.Window):
             button = Gtk.Button(label=_t("Appliquer la définition"))
             button.connect("clicked", lambda *_: self.execute("display-mode-" + self.modes.get_active_text()) if self.modes.get_active_text() else None)
             self.body.pack_start(button, False, False, 0)
-        if self.page in (1, 10, 12, 13, GRAPHICS_PAGE):
-            self.label(_t("Ouvrir les réglages détaillés de cette catégorie :"))
+        if self.page in (1, 10, 12, 13, GRAPHICS_PAGE) + LEGACY_PAGES:
+            self.label(_t("Dossiers partagés sur le réseau et transfert de vos réglages vers un autre PC Winlux :")
+                       if self.page == SHARING_PAGE else _t("Ouvrir les réglages détaillés de cette catégorie :"))
             button = Gtk.Button(label=_t("Réglages avancés"))
             legacy_page = self.page
             button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))

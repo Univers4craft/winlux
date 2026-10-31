@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **216**
-- À faire ou en cours : **37**
-- Total : **253**
-- Progression : **85.4%**
+- Réalisé : **218**
+- À faire ou en cours : **38**
+- Total : **256**
+- Progression : **85.2%**
 - Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140)
 
 ## À FAIRE (par priorité)
@@ -85,11 +85,15 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [ ] Faire tourner Paint.NET 5.1 sur le runtime .NET qu'il embarque : étape 1 livrée (#133), restent coreclr (exceptions MSVC, SEH x64), WIC, Direct2D/DirectWrite et WPF (#138, `docs/PAINTNET.md`).
 - [ ] Traduire toutes les applications en FR/EN/ES/DE : lots #120, #130, #131, #134 et #135 livrés, reste les applis encore en une seule langue (#139).
 - [ ] Traduire réellement l'installateur : choisir English ne traduit aujourd'hui que la barre des étapes (#140).
+- [ ] Partage de dossiers : valider dans une VM avec un vrai PC Windows (panneau Réseau via wsdd) et un Mac (Finder) sur le même réseau (#171).
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
 ## DÉJÀ FAIT
 
 ### Livré par pull requests (fin octobre 2026)
+
+- [x] Partage de dossiers vers Windows, Mac et Linux (#171) : `winlux-share` (Samba, outil standard, caché s'il manque), comptes Winlux = comptes SMB, droits Aucun accès / Lecture / Modification par compte et pour les invités, dossiers système refusés, SMB1 coupé, pare-feu ouvert sur les réseaux privés seulement, annonce wsdd/Avahi. Explorateur : clic droit > « Partager ce dossier… ». Paramètres > Partage et transfert (page 28). Tests `scripts/test-share.sh`.
+- [x] Transfert des réglages entre deux PC Winlux par fichier `.wlxprofile`, sans compte en ligne (#171) : `winlux-transfer` (thème, barre des tâches, fond, accessibilité, lecteurs réseau sans mot de passe, applis par défaut, langue, clavier, souris, confidentialité), import en liste blanche, sauvegarde et annulation. Tests `scripts/test-transfer.sh`.
 
 - [x] coreclr embarqué démarré : répartition SEH x64 (`seh.rs` : RtlVirtualUnwind, RtlUnwindEx, RtlRestoreContext, VEH, tables de fonctions dynamiques), exceptions C++ MSVC de coreclr, tas du GC, thread du finaliseur, System.Private.CoreLib puis `paintdotnet.dll` chargées et code managé exécuté (images relogées sur 64 Kio, VirtualQuery des piles, VerifyVersionInfo, InitializeContext2, locales nommées) (`docs/PAINTNET.md`).
 - [x] Issues fermées le 31/10/2026 car livrées sur master : impression (#77 par #111), audio des .exe (#78 par #115), manettes, webcam, micro et Bluetooth (#79 par #114), alimentation et batterie (#80 par #107), Store et polices (#81, #82 par #123 et #129), planificateur et pare-feu (#83, #84 par #112), presse-papiers Win+V et capture d'écran (#85, #86 par #109), sauvegarde, multi-utilisateur et bureau à distance (#87, #88, #89 par #119), CPU (#90 par #103), GPU (#91 par #104), Direct3D 9/12 (#92 par #127), installateur (#93 par #75, #116 et #118 ; #94 par #76 ; #95 par #100 ; #96 par #101 ; #97 par #105 ; #98 par #102).
