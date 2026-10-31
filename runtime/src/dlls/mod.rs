@@ -26,6 +26,7 @@ mod gui_cairo;
 pub mod gui_x11;
 pub mod iphlpapi;
 pub mod kernel32;
+pub mod kernel32_cpu;
 pub mod kernel32_misc;
 pub mod libgcc;
 pub mod libstdcpp;
@@ -114,6 +115,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = kernel32::exports();
                     e.extend(winfile::exports());
                     e.extend(kernel32_misc::exports());
+                    e.extend(kernel32_cpu::exports());
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());

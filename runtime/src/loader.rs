@@ -52,6 +52,40 @@ pub struct Module {
 }
 
 impl Module {
+    /// Noms des DLL importées, lus dans l'image chargée en mémoire.
+    pub fn import_names(&self) -> Vec<String> {
+        let dir = self.pe.dir(1);
+        let mut names = Vec::new();
+        if dir.rva == 0 || dir.size < 20 {
+            return names;
+        }
+        let end = (dir.rva as usize)
+            .saturating_add(dir.size as usize)
+            .min(self.size);
+        let mut desc = dir.rva as usize;
+        while desc + 20 <= end && names.len() < 512 {
+            // SAFETY: le descripteur est dans l'image mappée (borné par `size`).
+            let name_rva =
+                unsafe { ((self.base + desc + 12) as *const u32).read_unaligned() } as usize;
+            if name_rva == 0 || name_rva >= self.size {
+                break;
+            }
+            let mut name = String::new();
+            for i in 0..260 {
+                if name_rva + i >= self.size {
+                    break;
+                }
+                let b = unsafe { *((self.base + name_rva + i) as *const u8) };
+                if b == 0 {
+                    break;
+                }
+                name.push(b as char);
+            }
+            names.push(name);
+            desc += 20;
+        }
+        names
+    }
     pub fn entry(&self) -> Option<usize> {
         (self.pe.entry_rva != 0).then(|| self.base + self.pe.entry_rva as usize)
     }
