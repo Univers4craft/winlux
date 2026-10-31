@@ -26,6 +26,10 @@ mod diskcleaner;
 mod taskmgr;
 #[path = "../shell/utilities.rs"]
 mod utilities;
+#[path = "../shell/weather.rs"]
+mod weather;
+#[path = "../shell/diskmgr.rs"]
+mod diskmgr;
 #[path = "../shell/wm.rs"]
 mod wm;
 
