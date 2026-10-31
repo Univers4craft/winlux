@@ -3187,11 +3187,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             }
             // toggle - minimize all visible windows or restore
             let mut any_visible = false;
-            unsafe {
-                for app in 0..wm::APP_COUNT {
-                    if wm::is_open(app) && !wm::is_minimized(app) {
-                        any_visible = true;
-                    }
+            for app in 0..wm::APP_COUNT {
+                if wm::is_open(app) && !wm::is_minimized(app) {
+                    any_visible = true;
                 }
             }
             if any_visible {
