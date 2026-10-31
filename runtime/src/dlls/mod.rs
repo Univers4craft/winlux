@@ -80,6 +80,7 @@ pub mod va_bindings;
 pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
+pub mod windowscodecs;
 pub mod winfile;
 pub mod winhttp;
 pub mod winlux_capture;
@@ -405,6 +406,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "userenv",
                 exports: userenv::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "windowscodecs",
+                exports: windowscodecs::exports(),
                 handle: fake_module(),
             },
             Builtin {

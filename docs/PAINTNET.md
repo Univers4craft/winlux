@@ -147,7 +147,15 @@ un test de relance depuis un rappel de consolidation.
    kernel32, 34 de `System.Globalization.Native` (ICU) et quelques-unes de
    `ntdll`, `advapi32` et `ole32`.
 3. **WIC** (`windowscodecs`) : tous les bitmaps de Paint.NET passent par
-   WIC.
+   WIC. Depuis la PR 3, Winlux fournit sa propre fabrique WIC
+   (`runtime/src/dlls/windowscodecs.rs`), branchée sur les décodeurs maison :
+   décodage (PNG, JPEG, GIF, BMP, TIFF, WebP, DDS) depuis un fichier, un flux
+   ou un descripteur, bitmaps en mémoire avec `Lock`, conversion entre les
+   formats 8, 24 et 32 bits (BGRA, RGBA, prémultipliés), mise à l'échelle,
+   découpe, rotation et miroir, et `IWICStream`. Manquent encore les
+   encodeurs (enregistrement), les palettes, les profils de couleur et les
+   métadonnées. Comme Paint.NET s'arrête avant d'appeler WIC, cette partie
+   n'est vérifiée que par les tests unitaires pour l'instant.
 4. **Direct2D et DirectWrite** : Paint.NET peint le canevas et les contrôles
    en Direct2D, sur Direct3D 11 ou sur le rendu logiciel WARP.
 5. **WPF** : `wpfgfx_cor3.dll` (composition MIL, rendu Direct3D 9 ou
@@ -163,7 +171,7 @@ un test de relance depuis un rappel de consolidation.
    du code managé)*. Suite : suspension de threads, exceptions matérielles,
    imports de clrjit, jusqu'à un « Hello world » .NET 9 autonome.
 3. BCL : imports directs de CoreLib et globalisation.
-4. WIC : décodeurs et encodeurs branchés sur les décodeurs maison.
+4. WIC : décodeurs branchés sur les décodeurs maison *(PR 3)*, encodeurs ensuite.
 5. Direct2D et DirectWrite.
 6. WPF (`wpfgfx`) et la fenêtre principale de Paint.NET.
 
