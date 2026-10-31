@@ -703,6 +703,8 @@ extern "system" {
     pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
     pub fn WinluxPtyAlive(handle: usize) -> i32;
     pub fn WinluxClosePty(handle: usize) -> i32;
+    /// Rapport GPU `clé=valeur` du runtime Winlux ; renvoie la longueur complète.
+    pub fn WinluxQueryGpu(buf: *mut u8, len: u32) -> u32;
     // Archives, images disque et lecteurs dynamiques (exports privés Winlux).
     pub fn WinluxMountList(buf: *mut u16, cap: u32) -> i32;
     pub fn WinluxArchiveSupport(path: *const u16) -> u32;

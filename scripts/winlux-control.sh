@@ -14,6 +14,9 @@ export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/winlu
 
 value() { if test -r "$1"; then sed -n "s/^$2=//p" "$1" | head -n 1; fi; }
 pref() { value "$config/preferences.conf" "$1"; }
+overlay() { value "$config/overlay.conf" "$1"; }
+# Les jeux lancés par l'utilisateur lisent ce fichier : il reste lisible.
+save_overlay() { save "$config/overlay.conf" "$1" "$2" && chmod 644 "$config/overlay.conf"; }
 cpu_pref() { value "$config/cpu.conf" "$1"; }
 input() { value "$config/input.conf" "$1"; }
 privacy() { v=$(value "$config/privacy.conf" "$1"); printf '%s\n' "${v:-$2}"; }
@@ -108,6 +111,15 @@ status() {
         else
             printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
         fi
+        # Overlay de performances (Paramètres > Graphismes) ; vide = défaut.
+        setting=$(overlay OVERLAY_ENABLED); printf 'overlay_enabled=%s\n' "${setting:-0}"
+        printf 'overlay_hotkey=%s\n' "$(overlay OVERLAY_HOTKEY)"
+        printf 'overlay_position=%s\n' "$(overlay OVERLAY_POSITION)"
+        setting=$(overlay OVERLAY_AUTOSHOW); printf 'overlay_autoshow=%s\n' "${setting:-0}"
+        for metric in fps frametime cpu gpu; do
+            setting=$(overlay "OVERLAY_$(printf '%s' "$metric" | tr 'a-z' 'A-Z')")
+            printf 'overlay_%s=%s\n' "$metric" "${setting:-1}"
+        done
         gpu_count=$(cat "$root/run/winlux/hw/gpu-count" 2>/dev/null || echo 0)
         printf 'gpu_count=%s\n' "$gpu_count"
         test "$(cat "$root/run/winlux/hw/has-nvidia" 2>/dev/null)" = 1 && printf 'gpu_nvidia=%s\n' "$(cat "$root/run/winlux/hw/nvidia-driver" 2>/dev/null || echo nouveau)"
@@ -313,6 +325,27 @@ perform() {
             printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=Documents' 'Icon=folder-documents' "URL=file://$HOME/Documents" > "$HOME/Bureau/winlux-documents.desktop"
             trust_desktop "$HOME/Bureau/winlux-documents.desktop" ;;
         theme-dark|theme-light) save "$config/preferences.conf" THEME "${action#theme-}" ;;
+        gpu-set)
+            # Le runtime revalide contre ce que le pilote expose ; ici on ne
+            # laisse passer que des jetons simples, jamais un chemin.
+            card=${2:-} setting=${3:-} amount=${4:-}
+            case "$card" in card[0-9]|card[0-9][0-9]) ;; *) echo 'Carte graphique invalide' >&2; return 1 ;; esac
+            case "$setting" in power-limit|perf|oc-sclk|oc-reset) ;; *) echo 'Reglage GPU inconnu' >&2; return 1 ;; esac
+            case "$amount" in ''|*[!a-z0-9]*) echo 'Valeur GPU invalide' >&2; return 1 ;; esac
+            have winlux || { echo 'Runtime winlux introuvable' >&2; return 1; }
+            winlux --gpu-set "$card" "$setting" "$amount" ;;
+        overlay-on|overlay-off)
+            on=0; test "$action" != overlay-on || on=1
+            save_overlay OVERLAY_ENABLED "$on" ;;
+        overlay-auto-on|overlay-auto-off)
+            on=0; test "$action" != overlay-auto-on || on=1
+            save_overlay OVERLAY_AUTOSHOW "$on" ;;
+        overlay-key-shift-f12|overlay-key-ctrl-shift-o|overlay-key-alt-f12) save_overlay OVERLAY_HOTKEY "${action#overlay-key-}" ;;
+        overlay-pos-top-left|overlay-pos-top-right|overlay-pos-bottom-left|overlay-pos-bottom-right) save_overlay OVERLAY_POSITION "${action#overlay-pos-}" ;;
+        overlay-fps-on|overlay-fps-off|overlay-frametime-on|overlay-frametime-off|overlay-cpu-on|overlay-cpu-off|overlay-gpu-on|overlay-gpu-off)
+            metric=${action#overlay-}; state=${metric##*-}; metric=${metric%-*}
+            on=0; test "$state" != on || on=1
+            save_overlay "OVERLAY_$(printf '%s' "$metric" | tr 'a-z' 'A-Z')" "$on" ;;
         cpu-profile-performance|cpu-profile-balanced|cpu-profile-powersave)
             have winlux || { echo 'Runtime winlux introuvable' >&2; return 1; }
             winlux --cpu-profile "${action#cpu-profile-}" "${root:-/}" || return

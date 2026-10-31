@@ -8,7 +8,7 @@
 - À faire ou en cours : **43**
 - Total : **232**
 - Progression : **81.5%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107 et graphisme 3D #92, issues #10 à #98)
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104 et graphisme 3D #92, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -126,7 +126,7 @@
 - [x] Correction du ghosting des fenêtres lors du déplacement (#68).
 - [x] Écran bleu (BSOD), journalisation centralisée, observateur d'événements et points de restauration (#69).
 - [x] Traduction Direct3D 11 vers OpenGL (#70).
-- [x] Direct3D 9 (périphérique, surfaces, textures, VB/IB, shaders SM1.x à 3.0 traduits en GLSL, états fixes), Direct3D 12 (files, listes, tas de descripteurs, PSO, signatures racine, barrières, swapchain DXGI) avec backend Vulkan choisi selon le matériel puis repli OpenGL et processeur, DXVA2 H.264 par VA-API (NVDEC via nvidia-vaapi-driver), page Paramètres « Graphismes et vidéo » masquée quand le matériel ne permet aucun choix (#92). Suite PE `d3d_suite`.
+- [x] Direct3D 9 (périphérique, surfaces, textures, VB/IB, shaders SM1.x à 3.0 traduits en GLSL, états fixes), Direct3D 12 (files, listes, tas de descripteurs, PSO, signatures racine, barrières, swapchain DXGI) avec backend Vulkan choisi selon le matériel puis repli OpenGL et processeur, DXVA2 H.264 par VA-API (NVDEC via nvidia-vaapi-driver), section « Jeux et applications Windows (Direct3D) » de la page Paramètres « Graphismes », masquée quand le matériel ne permet aucun choix (#92). Suite PE `d3d_suite`.
 - [x] DLL libgcc_s_seh-1 / libstdc++-6 et NtCreateFile/NtOpenFile réels (#71).
 - [x] Premier démarrage (OOBE) : thème, choix des apps, compte local avec avatar (#74).
 - [x] Compatibilité systemd (shim `systemctl`, hook APT) et passage à Ubuntu 26.04 LTS (#38).
@@ -135,6 +135,7 @@
 
 ### État actuel
 
+- [x] Gestion GPU dans Paramètres > Graphismes : détection des capacités réelles (sysfs amdgpu/i915/xe, NVML), mesures en direct, profil/limite de puissance/overclocking seulement si le pilote les accepte, GPU par application sur machine hybride (`gpu=` du profil .exe, `winlux-prime-run`), onglets GPU du Gestionnaire des tâches et overlay de performances en jeu (raccourci configurable). Tout ce que la machine n'expose pas est masqué.
 - [x] Gestion de l'alimentation en Rust (`runtime/src/power/`) : batterie lue dans `/sys/class/power_supply` (pourcentage, charge/décharge, autonomie, santé), modes Performances maximales / Équilibré / Économie d'énergie (gouverneur cpufreq, EPP, turbo, luminosité, autosuspend USB, ASPM, SATA), veille et veille prolongée par `/sys/power` avec reprise propre, démon lancé par l'init maison (inactivité écran/veille, capot, bouton, batterie critique), icône batterie avec charge et infobulle, alertes 20 %/10 %, page Paramètres « Alimentation et batterie », API `GetSystemPowerStatus`, `SetThreadExecutionState`, `PowerCreateRequest/SetRequest/ClearRequest`, `PowerGetActiveScheme/SetActiveScheme`, `PowerReadFriendlyName`, `SetSuspendState`, `GetPwrCapabilities` (test PE `power_api`).
 
 - [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer.

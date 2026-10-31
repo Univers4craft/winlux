@@ -7,6 +7,9 @@ use crate::locale::*;
 use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
+#[path = "settings_gpu.rs"]
+mod graphics;
+
 pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
 pub const PAGE_PRIVACY: usize = 18;
@@ -18,15 +21,15 @@ pub const PAGE_PERSONALIZE: usize = 21;
 pub const BLUETOOTH_PAGE: usize = 22;
 /// Page « Alimentation et batterie » (icône batterie de la barre des tâches).
 pub const PAGE_POWER: usize = 23;
-/// Page « Graphismes et vidéo » (pilotes 3D, GPU, décodage matériel).
-const PAGE_GRAPHICS: usize = 24;
+/// Graphismes : GPU, mesures, réglages avancés et overlay en jeu.
+pub const PAGE_GRAPHICS: usize = 24;
 const PAGE_COUNT: usize = 25;
 /// Appareils Bluetooth affichés (une ligne de boutons chacun).
 const BT_ROWS: usize = 5;
 /// Ordre d'affichage du menu : la personnalisation suit l'apparence,
 /// l'alimentation suit le son et la batterie.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24,
+    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -54,7 +57,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_PERSONALIZATION),
         tr(S_BLUETOOTH_DEVICES),
         tr(S_POWER_BATTERY),
-        tr(S_GRAPHICS_VIDEO),
+        tr(S_GRAPHICS),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -78,11 +81,6 @@ static mut LOG: Buffer = EMPTY;
 static mut UPDATES: Buffer = EMPTY;
 static mut PROGRESS: Buffer = EMPTY;
 static mut BUILD_INFO: Buffer = EMPTY;
-/// Rapport `clé=valeur` du runtime (pilotes et préférences graphiques).
-static mut GFX: Buffer = EMPTY;
-static mut GFX_LOADED: bool = false;
-static mut GFX_NOTICE: [u8; 256] = [0; 256];
-static mut GFX_NOTICE_LEN: usize = 0;
 static mut SYSUPDATES: Buffer = EMPTY;
 static mut BLUETOOTH: Buffer = EMPTY;
 static mut BT_CMD: [u8; 64] = [0; 64];
@@ -101,6 +99,9 @@ static mut EXE_PATH: [u16; 2048] = [0; 2048];
 static mut EXE_LEN: usize = 0;
 static mut EXE_SCALE: usize = 0;
 static mut EXE_TRACE: bool = false;
+/// GPU préféré du programme : 0 auto, 1 intégré, 2 dédié (machines hybrides).
+static mut EXE_GPU: usize = 0;
+const EXE_GPUS: [&[u8]; 3] = [b"auto", b"integrated", b"dedicated"];
 static mut EXE_NOTICE: &[u8] = b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.";
 const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50;
@@ -126,6 +127,7 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
     EXE_LEN = len;
     EXE_SCALE = 0;
     EXE_TRACE = false;
+    EXE_GPU = 0;
     crate::settings_cpu::reset_program();
     let mut profile = [0u16; 2060];
     exe_profile_path(&mut profile);
@@ -150,6 +152,10 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
             .position(|&v| v == field(data, b"ui_scale"))
             .unwrap_or(0);
         EXE_TRACE = field(data, b"trace") == b"1";
+        EXE_GPU = EXE_GPUS
+            .iter()
+            .position(|&v| v == field(data, b"gpu"))
+            .unwrap_or(0);
     }
     EXE_NOTICE = b"Un double-clic lance le programme, m\xEAme sans r\xE9glages enregistr\xE9s.";
     PAGE = 10;
@@ -168,6 +174,7 @@ unsafe fn save_exe_settings(reset: bool) {
         }
         EXE_SCALE = 0;
         EXE_TRACE = false;
+        EXE_GPU = 0;
         crate::settings_cpu::reset_program();
         EXE_NOTICE = b"Valeurs par d\xE9faut restaur\xE9es.";
         return;
@@ -189,11 +196,20 @@ unsafe fn save_exe_settings(reset: bool) {
     let scale = EXE_SCALES[EXE_SCALE];
     data[..9].copy_from_slice(b"ui_scale=");
     data[9..9 + scale.len()].copy_from_slice(scale);
-    let n = 9 + scale.len();
+    let mut n = 9 + scale.len();
     data[n..n + 7].copy_from_slice(b"\ntrace=");
     data[n + 7] = if EXE_TRACE { b'1' } else { b'0' };
     data[n + 8] = b'\n';
-    let total = n + 9 + crate::settings_cpu::write_program(&mut data[n + 9..]);
+    n += 9;
+    // Le choix du GPU n'est écrit que s'il diffère de l'automatique.
+    if EXE_GPU != 0 {
+        let gpu = EXE_GPUS[EXE_GPU.min(2)];
+        data[n..n + 4].copy_from_slice(b"gpu=");
+        data[n + 4..n + 4 + gpu.len()].copy_from_slice(gpu);
+        data[n + 4 + gpu.len()] = b'\n';
+        n += 5 + gpu.len();
+    }
+    let total = n + crate::settings_cpu::write_program(&mut data[n..]);
     let mut written = 0;
     let ok = WriteFile(
         h,
@@ -310,323 +326,6 @@ pub(crate) fn field<'a>(data: &'a [u8], key: &[u8]) -> &'a [u8] {
     }
     b""
 }
-// ── Graphismes et vidéo ─────────────────────────────────────────────────
-// Les réglages ne s'affichent que si le matériel les rend utiles : sans GPU
-// Vulkan matériel, pas de choix de moteur ; sans décodage matériel, pas de
-// choix de décodage. Hors Winlux (fonctions absentes), la page le dit.
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum GfxSection {
-    Backend,
-    Gpu,
-    Video,
-    Vsync,
-}
-
-unsafe fn gfx_proc(name: &core::ffi::CStr) -> *const core::ffi::c_void {
-    let k = LoadLibraryA(c"kernel32.dll".as_ptr());
-    if k.is_null() {
-        return core::ptr::null();
-    }
-    GetProcAddress(k, name.as_ptr())
-}
-
-unsafe fn gfx_refresh() {
-    GFX_LOADED = true;
-    GFX.len = 0;
-    let p = gfx_proc(c"WinluxGraphicsInfo");
-    if p.is_null() {
-        return;
-    }
-    let f: unsafe extern "win64" fn(*mut u8, u32) -> u32 = core::mem::transmute(p);
-    let n = f(GFX.bytes.as_mut_ptr(), CAPACITY as u32);
-    GFX.len = (n as usize).min(CAPACITY - 1);
-}
-
-unsafe fn gfx(key: &[u8]) -> &'static [u8] {
-    let data: &'static Buffer = &*core::ptr::addr_of!(GFX);
-    field(data.get(), key)
-}
-
-unsafe fn gfx_set(key: &core::ffi::CStr, value: &[u8]) -> bool {
-    let p = gfx_proc(c"WinluxSetGraphicsOption");
-    if p.is_null() || value.len() > 30 {
-        return false;
-    }
-    let mut v = [0u8; 32];
-    v[..value.len()].copy_from_slice(value);
-    let f: unsafe extern "win64" fn(*const core::ffi::c_char, *const core::ffi::c_char) -> i32 =
-        core::mem::transmute(p);
-    let ok = f(key.as_ptr(), v.as_ptr().cast()) != 0;
-    gfx_refresh();
-    ok
-}
-
-/// GPU Vulkan matériels : (index, nom).
-unsafe fn gfx_gpus(out: &mut [(&'static [u8], &'static [u8]); 8]) -> usize {
-    let mut n = 0;
-    for item in gfx(b"vulkan_hw").split(|&c| c == b';') {
-        let Some(colon) = item.iter().position(|&c| c == b':') else {
-            continue;
-        };
-        if n < out.len() {
-            out[n] = (&item[..colon], &item[colon + 1..]);
-            n += 1;
-        }
-    }
-    n
-}
-
-unsafe fn gfx_sections(out: &mut [GfxSection; 4]) -> usize {
-    let mut gpus = [(&b""[..], &b""[..]); 8];
-    let hw = gfx_gpus(&mut gpus);
-    let mut n = 0;
-    let mut push = |s: GfxSection| {
-        out[n] = s;
-        n += 1;
-    };
-    if hw >= 1 && gfx(b"opengl") == b"1" {
-        push(GfxSection::Backend);
-    }
-    if hw >= 2 {
-        push(GfxSection::Gpu);
-    }
-    if !gfx(b"video_hw_available").is_empty() {
-        push(GfxSection::Video);
-    }
-    if hw >= 1 {
-        push(GfxSection::Vsync);
-    }
-    n
-}
-
-fn join<'a>(out: &'a mut [u8], parts: &[&[u8]]) -> &'a [u8] {
-    let mut n = 0;
-    for p in parts {
-        let take = p.len().min(out.len() - n);
-        out[n..n + take].copy_from_slice(&p[..take]);
-        n += take;
-    }
-    &out[..n]
-}
-
-fn pref_label(v: &[u8]) -> &'static [u8] {
-    match v {
-        b"vulkan" => b"Vulkan",
-        b"opengl" => b"OpenGL",
-        b"hardware" => b"Mat\xE9riel",
-        b"software" => b"Logiciel",
-        _ => b"Automatique",
-    }
-}
-
-unsafe fn gfx_notice() -> &'static [u8] {
-    let buf: &'static mut [u8; 256] = &mut *core::ptr::addr_of_mut!(GFX_NOTICE);
-    if GFX.len == 0 {
-        GFX_NOTICE_LEN = join(
-            buf,
-            &[b"Informations graphiques indisponibles hors de Winlux."],
-        )
-        .len();
-        return &buf[..GFX_NOTICE_LEN];
-    }
-    let vk = gfx(b"vulkan") == b"1";
-    let va = gfx(b"vaapi") == b"1";
-    let mut gpus = [(&b""[..], &b""[..]); 8];
-    let hw = gfx_gpus(&mut gpus);
-    let len = join(
-        buf,
-        &[
-            b"D\xE9tect\xE9 : OpenGL ",
-            if gfx(b"opengl") == b"1" {
-                b"oui"
-            } else {
-                b"non"
-            },
-            b" \xB7 Vulkan ",
-            if vk {
-                gfx(b"vulkan_version")
-            } else {
-                b"absent"
-            },
-            if vk && hw == 0 {
-                b" (logiciel seulement)"
-            } else {
-                b""
-            },
-            b" \xB7 VA-API ",
-            if va { gfx(b"vaapi_vendor") } else { b"absent" },
-        ],
-    )
-    .len();
-    GFX_NOTICE_LEN = len;
-    &buf[..len]
-}
-
-unsafe fn draw_graphics(g: &mut Gfx, c: &Rect) {
-    if !GFX_LOADED {
-        gfx_refresh();
-    }
-    if GFX.len == 0 {
-        row(
-            g,
-            c,
-            44,
-            b"Graphismes et vid\xE9o",
-            b"Ces r\xE9glages n\xE9cessitent le runtime Winlux.",
-        );
-        return;
-    }
-    let mut sections = [GfxSection::Backend; 4];
-    let n = gfx_sections(&mut sections);
-    if n == 0 {
-        row(
-            g,
-            c,
-            44,
-            b"Rendu et d\xE9codage vid\xE9o",
-            b"Un seul mode convient \xE0 ce mat\xE9riel : Winlux l'utilise automatiquement.",
-        );
-        return;
-    }
-    let mut gpus = [(&b""[..], &b""[..]); 8];
-    let hw = gfx_gpus(&mut gpus);
-    for (k, s) in sections[..n].iter().enumerate() {
-        let y = 44 + 132 * k as i32;
-        let r = 3 * k as i32;
-        let id = 9 * k as i32;
-        let mut tmp = [0u8; 192];
-        match s {
-            GfxSection::Backend => {
-                let v = join(
-                    &mut tmp,
-                    &[
-                        pref_label(gfx(b"backend_pref")),
-                        b" \x97 Direct3D 12 utilise ",
-                        pref_label(gfx(b"backend_d3d12")),
-                        b" (Direct3D 9 et 11 : OpenGL)",
-                    ],
-                );
-                row(g, c, y, b"Moteur de rendu", v);
-                button(g, c, r, 0, b"Automatique", id);
-                button(g, c, r, 1, b"Vulkan", id + 1);
-                button(g, c, r, 2, b"OpenGL", id + 2);
-            }
-            GfxSection::Gpu => {
-                let sel = gfx(b"vulkan_selected");
-                let name = gpus[..hw]
-                    .iter()
-                    .find(|g| g.0 == sel)
-                    .map(|g| g.1)
-                    .unwrap_or(b"");
-                let auto = gfx(b"vulkan_device_pref") == b"auto";
-                let v = join(
-                    &mut tmp,
-                    &[name, if auto { b" (automatique)" } else { b"" }],
-                );
-                row(g, c, y, b"Carte graphique (Vulkan)", v);
-                button(g, c, r, 0, b"Automatique", id);
-                button(g, c, r, 1, b"Pr\xE9c\xE9dente", id + 1);
-                button(g, c, r, 2, b"Suivante", id + 2);
-            }
-            GfxSection::Video => {
-                let active = gfx(b"video_active") == b"vaapi";
-                let v = join(
-                    &mut tmp,
-                    &[
-                        pref_label(gfx(b"video_pref")),
-                        b" \x97 ",
-                        if active {
-                            b"mat\xE9riel : "
-                        } else {
-                            b"logiciel (mat\xE9riel possible : "
-                        },
-                        if active {
-                            gfx(b"video_hw_codecs")
-                        } else {
-                            gfx(b"video_hw_available")
-                        },
-                        if active { b"" } else { b")" },
-                    ],
-                );
-                row(g, c, y, b"D\xE9codage vid\xE9o", v);
-                button(g, c, r, 0, b"Automatique", id);
-                button(g, c, r, 1, b"Mat\xE9riel", id + 1);
-                button(g, c, r, 2, b"Logiciel", id + 2);
-            }
-            GfxSection::Vsync => {
-                let on = gfx(b"vsync") == b"1";
-                row(
-                    g,
-                    c,
-                    y,
-                    b"Synchronisation verticale",
-                    if on {
-                        b"Activ\xE9e \x97 pas de d\xE9chirure d'image"
-                    } else {
-                        b"D\xE9sactiv\xE9e \x97 latence minimale"
-                    },
-                );
-                button(g, c, r, 0, b"Activer", id);
-                button(g, c, r, 1, b"D\xE9sactiver", id + 1);
-            }
-        }
-    }
-}
-
-/// Clic sur un bouton de la page ; `true` si l'affichage doit changer.
-unsafe fn click_graphics(id: i32) -> bool {
-    if !(0..36).contains(&id) || id % 9 > 2 {
-        return false;
-    }
-    let mut sections = [GfxSection::Backend; 4];
-    let n = gfx_sections(&mut sections);
-    let (k, col) = ((id / 9) as usize, id % 9);
-    if k >= n {
-        return false;
-    }
-    match (sections[k], col) {
-        (GfxSection::Backend, _) => {
-            gfx_set(
-                c"backend",
-                [&b"auto"[..], b"vulkan", b"opengl"][col as usize],
-            );
-        }
-        (GfxSection::Gpu, 0) => {
-            gfx_set(c"vulkan_device", b"auto");
-        }
-        (GfxSection::Gpu, _) => {
-            let mut gpus = [(&b""[..], &b""[..]); 8];
-            let hw = gfx_gpus(&mut gpus);
-            let sel = gfx(b"vulkan_selected");
-            let cur = gpus[..hw].iter().position(|g| g.0 == sel).unwrap_or(0);
-            let next = if col == 1 {
-                (cur + hw - 1) % hw
-            } else {
-                (cur + 1) % hw
-            };
-            let mut idx = [0u8; 8];
-            let len = gpus[next].0.len().min(8);
-            idx[..len].copy_from_slice(&gpus[next].0[..len]);
-            gfx_set(c"vulkan_device", &idx[..len]);
-        }
-        (GfxSection::Video, _) => {
-            gfx_set(
-                c"video_decode",
-                [&b"auto"[..], b"hardware", b"software"][col as usize],
-            );
-        }
-        (GfxSection::Vsync, 0) => {
-            gfx_set(c"vsync", b"1");
-        }
-        (GfxSection::Vsync, 1) => {
-            gfx_set(c"vsync", b"0");
-        }
-        _ => return false,
-    }
-    true
-}
-
 unsafe fn available() -> bool {
     value(b"control_available") == b"1"
 }
@@ -701,6 +400,9 @@ pub unsafe fn system_tick() -> bool {
         1
     };
     changed |= read(c"Z:\\run\\winlux\\update-progress", &mut PROGRESS);
+    if PAGE == PAGE_GRAPHICS {
+        changed |= crate::gpuinfo::refresh(false);
+    }
     if PAGE == 9 {
         changed |= read(c"Z:\\usr\\share\\winlux\\BUILD-INFO", &mut BUILD_INFO);
     }
@@ -965,7 +667,8 @@ fn content(f: &Frame) -> Rect {
 }
 fn nav_rect(f: &Frame, i: usize) -> Rect {
     let c = content(f);
-    let step = ((f.client.bottom - f.client.top - 75) / PAGE_COUNT as i32).clamp(26, 42);
+    // Toutes les pages doivent tenir dans la hauteur de la fenêtre.
+    let step = ((f.client.bottom - f.client.top - 72) / PAGE_COUNT as i32).clamp(20, 42);
     rect(
         f.client.left + 10,
         f.client.top + 64 + i as i32 * step,
@@ -1006,6 +709,7 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (8, 4) => value(b"display_policy") != b"fixed",
         (10, 0..=4) => EXE_SCALE == id as usize,
         (10, 5) => EXE_TRACE,
+        (10, 12..=14) => EXE_GPU == (id - 12) as usize,
         (11, 1) => value(b"browser_default") == b"edge",
         (11, 4) => value(b"browser_default") == b"chrome",
         (11, 7) => value(b"browser_default") == b"firefox",
@@ -1322,6 +1026,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.accent,
     );
     match PAGE {
+        PAGE_GRAPHICS => graphics::draw(g, f),
         PAGE_PERSONALIZE => crate::personalize::draw_settings(g, &c),
         5 => {
             let speed_str = unsafe {
@@ -1506,14 +1211,27 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 }
                 button(g, &c, i as i32 / 3, i as i32 % 3, label, i as i32);
             }
+            // Machines hybrides uniquement : sinon il n'y a rien à choisir.
+            if graphics::exe_choices() {
+                for (i, label) in [
+                    b"GPU : automatique".as_slice(),
+                    b"GPU \xE9conomie",
+                    b"GPU performances",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    button(g, &c, 4, i as i32, label, 12 + i as i32);
+                }
+            }
             row(
                 g,
                 &c,
-                300,
+                350,
                 b"Application des r\xE9glages",
                 b"Enregistrer puis relancer le programme. Aucun profil n'est obligatoire.",
             );
-            row(g, &c, 366, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
+            row(g, &c, 410, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
         }
         9 => {
             let info = BUILD_INFO.get();
@@ -2050,7 +1768,6 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         PAGE_CPU => crate::settings_cpu::draw(g, &c),
         PAGE_NETDRIVES => crate::netdrives::draw(g, &c),
         BLUETOOTH_PAGE => draw_bluetooth(g, &c),
-        PAGE_GRAPHICS => draw_graphics(g, &c),
         _ => {}
     }
     if PAGE == PAGE_NETDRIVES {
@@ -2059,7 +1776,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let notice = if PAGE == 10 {
         EXE_NOTICE
     } else if PAGE == PAGE_GRAPHICS {
-        gfx_notice()
+        graphics::runtime_notice()
     } else if !available() {
         b"Service Winlux indisponible : les actions n\xE9cessitent Winlux.".as_slice()
     } else {
@@ -2173,10 +1890,7 @@ unsafe fn draw_power(g: &mut Gfx, c: &Rect) {
             b"discharging" => {
                 battery.push(b"Sur batterie");
                 if !left.is_empty() {
-                    battery
-                        .push(b", ")
-                        .duration(number(left))
-                        .push(b" restantes");
+                    battery.push(b", ").duration(number(left)).push(b" restantes");
                 }
             }
             b"full" => {
@@ -2206,31 +1920,21 @@ unsafe fn draw_power(g: &mut Gfx, c: &Rect) {
         .push(pvalue(b"power_screen_now"))
         .push(b", veille ")
         .push(pvalue(b"power_sleep_now"));
-    row(
-        g,
-        c,
-        176,
-        b"\xC9cran et mise en veille (cliquer pour changer)",
-        now.get(),
-    );
+    row(g, c, 176, b"\xC9cran et mise en veille (cliquer pour changer)", now.get());
     let mut l = Line::new();
-    l.push(b"\xC9cran secteur : ")
-        .delay(pvalue(b"power_screen_ac"));
+    l.push(b"\xC9cran secteur : ").delay(pvalue(b"power_screen_ac"));
     button(g, c, 3, 0, l.get(), 9);
     let mut l = Line::new();
-    l.push(b"\xC9cran batterie : ")
-        .delay(pvalue(b"power_screen_dc"));
+    l.push(b"\xC9cran batterie : ").delay(pvalue(b"power_screen_dc"));
     button(g, c, 3, 1, l.get(), 10);
     if pvalue(b"power_can_sleep") == b"1" {
         button(g, c, 3, 2, b"Mettre en veille", 11);
     }
     let mut l = Line::new();
-    l.push(b"Veille secteur : ")
-        .delay(pvalue(b"power_sleep_ac"));
+    l.push(b"Veille secteur : ").delay(pvalue(b"power_sleep_ac"));
     button(g, c, 4, 0, l.get(), 12);
     let mut l = Line::new();
-    l.push(b"Veille batterie : ")
-        .delay(pvalue(b"power_sleep_dc"));
+    l.push(b"Veille batterie : ").delay(pvalue(b"power_sleep_dc"));
     button(g, c, 4, 1, l.get(), 13);
 
     let mut l = Line::new();
@@ -2248,19 +1952,12 @@ unsafe fn draw_power(g: &mut Gfx, c: &Rect) {
     } else {
         b" - veille prolong\xE9e \xE0 pr\xE9parer"
     });
-    row(
-        g,
-        c,
-        352,
-        b"Capot, bouton d'alimentation et luminosit\xE9",
-        l.get(),
-    );
+    row(g, c, 352, b"Capot, bouton d'alimentation et luminosit\xE9", l.get());
     let mut l = Line::new();
     l.push(b"Capot : ").push(action_label(pvalue(b"power_lid")));
     button(g, c, 7, 0, l.get(), 21);
     let mut l = Line::new();
-    l.push(b"Bouton : ")
-        .push(action_label(pvalue(b"power_button")));
+    l.push(b"Bouton : ").push(action_label(pvalue(b"power_button")));
     button(g, c, 7, 1, l.get(), 22);
     if pvalue(b"power_can_hibernate") == b"1" {
         button(g, c, 7, 2, b"Veille prolong\xE9e", 23);
@@ -2278,14 +1975,8 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
             -1
         };
     }
-    // Neuf rangées de trois boutons (la page Alimentation va jusqu'à 8),
-    // douze pour la page Graphismes.
-    let count = if unsafe { PAGE == PAGE_GRAPHICS } {
-        36
-    } else {
-        27
-    };
-    for i in 0..count {
+    // Neuf rangées de trois boutons (la page Alimentation va jusqu'à 8).
+    for i in 0..27 {
         let r = button_rect(&c, i / 3, i % 3);
         if r.bottom <= c.bottom - 24 && inside(&r, x, y) {
             return i;
@@ -2311,6 +2002,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }
         return true;
     }
+    if ev == Mouse::Move && PAGE == PAGE_GRAPHICS {
+        let h = graphics::hit(f, x, y);
+        let changed = h != graphics::HOVER;
+        graphics::HOVER = h;
+        return changed;
+    }
     if ev == Mouse::Move && PAGE == PAGE_CPU {
         return crate::settings_cpu::hover(&content(f), x, y);
     }
@@ -2335,7 +2032,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     for (pos, &i) in NAV_ORDER.iter().enumerate() {
         if inside(&nav_rect(f, pos), x, y) {
             if i == PAGE_GRAPHICS {
-                GFX_LOADED = false;
+                graphics::RUNTIME_LOADED = false;
             }
             PAGE = i;
             SCROLL = 0;
@@ -2344,6 +2041,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             system_tick();
             return true;
         }
+    }
+    if PAGE == PAGE_GRAPHICS {
+        return graphics::click(f, x, y);
     }
     if PAGE == 12 {
         return crate::a11y::page_mouse(ev, x, y, &content(f));
@@ -2365,10 +2065,6 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             }
             return true;
         }
-    }
-    if PAGE == PAGE_GRAPHICS {
-        let id = hit(f, x, y);
-        return click_graphics(id);
     }
     let action = match (PAGE, hit(f, x, y)) {
         (5, 0) => {
@@ -2404,6 +2100,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 c"browser-launch-firefox",
             ][id as usize],
         ),
+        (10, id @ 12..=14) if EXE_LEN > 0 && graphics::exe_choices() => {
+            EXE_GPU = (id - 12) as usize;
+            EXE_NOTICE = b"Cliquez sur Enregistrer puis relancez le programme.";
+            return true;
+        }
         (10, 9) if EXE_LEN > 0 && crate::settings_cpu::available() => {
             open_page(PAGE_CPU);
             crate::settings_cpu::focus_program();
@@ -3113,6 +2814,7 @@ pub unsafe fn regression_checks() {
         "Sans redemarrage requis les actions normales sont conservees"
     );
     (STATUS, PAGE) = saved;
+    graphics::regression_checks();
     crate::settings_cpu::regression_checks();
 }
 
@@ -3124,13 +2826,19 @@ pub unsafe fn regression_exe_settings(path: &[u16]) {
     );
     EXE_SCALE = 3;
     EXE_TRACE = true;
+    EXE_GPU = 2;
     save_exe_settings(false);
     EXE_SCALE = 0;
     EXE_TRACE = false;
+    EXE_GPU = 0;
     open_exe_settings(path);
     check!(
         EXE_SCALE == 3 && EXE_TRACE,
         "Les reglages 150 % et diagnostic sont relus pour le bon EXE"
+    );
+    check!(
+        EXE_GPU == 2,
+        "Le GPU hautes performances choisi pour un EXE est relu depuis son profil"
     );
     save_exe_settings(true);
     let mut sidecar = [0u16; 2060];

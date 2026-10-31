@@ -22,7 +22,7 @@
 - [x] Épingler/désépingler Explorer et Paramètres par clic droit dans la barre _(source: INTERFACE.md)_
 - [x] API de chemins W dans Explorer et régression Euro/noms longs ; IME, hors-BMP et couverture Unicode globale restent distincts. _(source: ROADMAP-SSD.md)_
 - [x] Afficher le modèle, la capacité et le numéro de série du disque cible en console (`install.sh`) ; pas d'inventaire graphique de tous les disques. _(source: ROADMAP-SSD.md)_
-- [x] Direct3D 9 et 12 avec backend Vulkan/OpenGL choisi selon le matériel, DXVA2 H.264 par VA-API, page Paramètres « Graphismes et vidéo » (#92). _(source: Suivi.md)_
+- [x] Direct3D 9 et 12 avec backend Vulkan/OpenGL choisi selon le matériel, DXVA2 H.264 par VA-API, réglages dans Paramètres > Graphismes (#92). _(source: Suivi.md)_
 - [x] Backend X11 : cache des commandes et pixmap de double tampon ; cache séparé des fenêtres internes du shell et mesures de fluidité encore à faire. _(source: ROADMAP-SSD.md)_
 - [x] Chargeur autonome indépendant de l'ISO, validé sous QEMU. _(source: ROADMAP-SSD.md)_
 - [x] Confirmation exacte du disque avant effacement ; automatisation réservée aux images loop explicitement vérifiées ou au test en VM isolée. _(source: ROADMAP-SSD.md)_
