@@ -17,7 +17,7 @@ case "${1:-explorer}" in
             exec /usr/bin/python3 /usr/bin/winlux-settings
         fi
         exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
-    store|fonts|programs|taskschd|firewall|welcome|regedit)
+    store|fonts|programs|taskschd|firewall|welcome|regedit|eventviewer)
         export WINLUX_SHELL_APP=$1
         exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
     editor) shift; exec /usr/bin/mousepad "$@" ;;
