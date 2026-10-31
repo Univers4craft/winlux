@@ -11,6 +11,8 @@ pub fn path(exe: &Path) -> PathBuf {
 pub struct Profile {
     pub scale: Option<String>,
     pub trace: Option<bool>,
+    /// Priorité, cœurs, affinité et nœud NUMA choisis dans les Paramètres.
+    pub cpu: crate::cpu::LaunchSettings,
 }
 
 pub fn parse(text: &str) -> Profile {
@@ -22,22 +24,35 @@ pub fn parse(text: &str) -> Profile {
             }
             Some(("trace", "1")) => profile.trace = Some(true),
             Some(("trace", "0")) => profile.trace = Some(false),
+            Some(("cpu_priority", value)) => {
+                profile.cpu.priority = crate::cpu::Priority::parse(value);
+            }
+            Some(("cpu_cores", "performance")) => {
+                profile.cpu.cores = crate::cpu::CoreChoice::Performance;
+            }
+            Some(("cpu_cores", "efficiency")) => {
+                profile.cpu.cores = crate::cpu::CoreChoice::Efficiency;
+            }
+            Some(("cpu_affinity", list)) => profile.cpu.affinity = crate::cpu::parse_cpulist(list),
+            Some(("numa_node", node)) => profile.cpu.numa_node = node.parse().ok(),
             _ => {}
         }
     }
     profile
 }
 
-pub fn apply(exe: &Path) {
+/// Applique le profil et renvoie les réglages processeur à appliquer une
+/// fois l'image chargée (le placement dépend des DLL importées).
+pub fn apply(exe: &Path) -> crate::cpu::LaunchSettings {
     let path = path(exe);
     // Bound parsing even if someone replaces the small settings file.
     let Ok(file) = std::fs::File::open(path) else {
-        return;
+        return Default::default();
     };
     use std::io::Read;
     let mut text = String::new();
     if file.take(4097).read_to_string(&mut text).is_err() || text.len() > 4096 {
-        return;
+        return Default::default();
     }
     let profile = parse(&text);
     if let Some(scale) = profile.scale {
@@ -54,6 +69,7 @@ pub fn apply(exe: &Path) {
             std::env::remove_var("WINLUX_TRACE");
         }
     }
+    profile.cpu
 }
 
 #[cfg(test)]
@@ -66,9 +82,18 @@ mod tests {
             parse("ui_scale=1.5\ntrace=1\n"),
             Profile {
                 scale: Some("1.5".into()),
-                trace: Some(true)
+                trace: Some(true),
+                ..Default::default()
             }
         );
+        let cpu =
+            parse("cpu_priority=high\ncpu_cores=efficiency\ncpu_affinity=0-2,5\nnuma_node=1\n").cpu;
+        assert_eq!(cpu.priority, Some(crate::cpu::Priority::High));
+        assert_eq!(cpu.cores, crate::cpu::CoreChoice::Efficiency);
+        assert_eq!(cpu.affinity, vec![0, 1, 2, 5]);
+        assert_eq!(cpu.numa_node, Some(1));
+        let bad = parse("cpu_priority=turbo\ncpu_affinity=0-99999\nnuma_node=x\n").cpu;
+        assert_eq!(bad, crate::cpu::LaunchSettings::default());
         assert_eq!(
             parse("ui_scale=$(touch /tmp/no)\ntrace=yes\nWINLUX_MISSING=ignore\n"),
             Profile::default()

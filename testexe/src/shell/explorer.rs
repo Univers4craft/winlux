@@ -19,6 +19,7 @@
 //! Explorer est lui-même un programme Windows qui s'exécute dans Winlux.
 
 use crate::gfx::*;
+use crate::locale::*;
 use crate::wm::{self, Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
@@ -57,6 +58,12 @@ enum Kind {
     File,
     Drive,
     LinuxDrive,
+    /// Fichier image disque (iso, vhd, qcow2…), montable comme un lecteur.
+    DiskImage,
+    /// Image disque montée (lecteur dynamique).
+    Removable,
+    /// Lecteur réseau (FTP, SFTP, SMB…).
+    Network,
 }
 
 #[derive(Clone, Copy)]
@@ -416,12 +423,22 @@ fn parent(path: &[u8]) -> Option<&[u8]> {
 
 fn last_component(path: &[u8]) -> &[u8] {
     if path == HOME {
-        return b"Accueil";
+        return tr(S_HOME);
     }
     if path == PC {
-        return b"Ce PC";
+        return tr(S_THIS_PC);
     }
     if path.len() <= 3 {
+        let letter = path.first().copied().unwrap_or(b'C');
+        if letter != b'C' && letter != b'Z' {
+            unsafe {
+                for i in 0..NDRIVES {
+                    if DRIVES[i].letter == letter {
+                        return drive_label(i);
+                    }
+                }
+            }
+        }
         return if path.first() == Some(&b'Z') {
             b"Syst\xE8me Linux (Z:)"
         } else {
@@ -500,6 +517,18 @@ const PLACES: [Place; 6] = [
 ];
 const TRASH: &[u8] = b"C:\\.local\\share\\Trash\\files";
 
+fn place_label(i: usize) -> &'static [u8] {
+    match i {
+        0 => tr(S_DESKTOP_FOLDER),
+        1 => tr(S_DOWNLOADS),
+        2 => tr(S_DOCUMENTS),
+        3 => tr(S_IMAGES),
+        4 => tr(S_MUSIC),
+        5 => tr(S_VIDEOS),
+        _ => PLACES[i].name,
+    }
+}
+
 fn place_path(i: usize) -> Path {
     let mut p = EMPTY_PATH;
     user_folder(&mut p, PLACES[i].fr, PLACES[i].en);
@@ -525,9 +554,14 @@ fn kind_of(name: &[u8], dir: bool) -> Kind {
     } else if any(&[b"mp4", b"mkv", b"avi", b"mov", b"webm", b"wmv", b"m4v"]) {
         Kind::Video
     } else if any(&[
-        b"zip", b"7z", b"rar", b"tar", b"gz", b"xz", b"bz2", b"zst", b"deb", b"rpm", b"iso", b"cab",
+        b"zip", b"7z", b"rar", b"tar", b"gz", b"tgz", b"xz", b"txz", b"bz2", b"tbz2", b"zst",
+        b"tzst", b"deb", b"rpm", b"cab", b"lzh", b"arj",
     ]) {
         Kind::Archive
+    } else if any(&[
+        b"iso", b"img", b"vhd", b"vhdx", b"qcow2", b"qcow", b"vmdk", b"vdi", b"dmg",
+    ]) {
+        Kind::DiskImage
     } else if any(&[
         b"rs", b"c", b"h", b"cpp", b"py", b"js", b"ts", b"html", b"css", b"json", b"toml", b"yml",
         b"yaml", b"xml", b"java", b"go", b"cs", b"ps1",
@@ -558,6 +592,9 @@ fn glyph_of(k: Kind) -> Glyph {
         Kind::File => Glyph::File,
         Kind::Drive => Glyph::Drive,
         Kind::LinuxDrive => Glyph::LinuxDrive,
+        Kind::DiskImage => Glyph::DiskImage,
+        Kind::Removable => Glyph::Removable,
+        Kind::Network => Glyph::NetDrive,
     }
 }
 
@@ -566,6 +603,18 @@ fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
     let fixed: &[u8] = match e.kind {
         Kind::Folder => b"Dossier de fichiers",
         Kind::Drive | Kind::LinuxDrive => b"Disque local",
+        Kind::Removable => t4([
+            b"Image disque mont\xE9e",
+            b"Mounted disc image",
+            b"Imagen de disco montada",
+            b"Eingebundenes Disk-Image",
+        ]),
+        Kind::Network => t4([
+            b"Lecteur r\xE9seau",
+            b"Network drive",
+            b"Unidad de red",
+            b"Netzlaufwerk",
+        ]),
         Kind::Exe if ends_ci(e.name(), b".exe") => b"Application Windows",
         Kind::Exe => b"Programme",
         _ => b"",
@@ -584,6 +633,7 @@ fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
         Kind::Audio => b"Audio ",
         Kind::Video => b"Vid\xE9o ",
         Kind::Archive => b"Archive ",
+        Kind::DiskImage => t4([b"Image disque ", b"Disc image ", b"Imagen ", b"Disk-Image "]),
         Kind::Pdf => b"Document ",
         _ => b"Fichier ",
     };
@@ -843,10 +893,13 @@ unsafe fn reload(p: &mut Pane) {
     p.deep = false;
     p.sel = [0; MAX_ENTRIES / 64];
     let loc = p.loc;
+    if !loc.is(HOME) && !loc.is(PC) {
+        maybe_commit(loc.get());
+    }
     if loc.is(HOME) {
         for i in 0..PLACES.len() {
             let pp = place_path(i);
-            add_entry(p, PLACES[i].name, true, false, 0, 0, Some(Kind::Folder));
+            add_entry(p, place_label(i), true, false, 0, 0, Some(Kind::Folder));
             let _ = pp;
         }
     } else if loc.is(PC) {
@@ -868,6 +921,15 @@ unsafe fn reload(p: &mut Pane) {
             0,
             Some(Kind::LinuxDrive),
         );
+        refresh_drives();
+        for i in 0..NDRIVES {
+            let kind = if DRIVES[i].network {
+                Kind::Network
+            } else {
+                Kind::Removable
+            };
+            add_entry(p, drive_label(i), true, false, 0, 0, Some(kind));
+        }
     } else {
         read_dir(p, loc.get(), b"", b"", 0);
     }
@@ -1008,6 +1070,11 @@ unsafe fn item_path(p: &Pane, index: usize, out: &mut [u8; PATH_LEN + NAME_LEN +
         return pp.len as usize;
     }
     if p.loc.is(PC) {
+        if let (Kind::Removable | Kind::Network, Some(l)) = (e.kind, drive_letter_in(e.name())) {
+            out[..3].copy_from_slice(&[l, b':', b'\\']);
+            out[3] = 0;
+            return 3;
+        }
         let s: &[u8] = if e.kind == Kind::LinuxDrive {
             b"Z:\\"
         } else {
@@ -1025,6 +1092,20 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
     let n = item_path(p, index, &mut path);
     if n == 0 {
         notify(b"Chemin trop long pour cette version d'Explorer.");
+        return;
+    }
+    if p.entries[index].kind == Kind::Network {
+        if let Some(d) = find_drive(path[0]).filter(|d| !d.online) {
+            // Lecteur réseau hors ligne : on demande la reconnexion.
+            let mut args = [0u16; 16];
+            for (i, &c) in b"connect X".iter().enumerate() {
+                args[i] = if c == b'X' { d.letter as u16 } else { c as u16 };
+            }
+            run_drives_tool(&args);
+            return;
+        }
+    }
+    if !p.entries[index].dir && open_storage_item(&path[..n], p.entries[index].kind) {
         return;
     }
     if p.entries[index].dir {
@@ -1195,6 +1276,9 @@ pub unsafe fn open_pc() {
 }
 pub unsafe fn open_documents() {
     open_at(place_path(2).get());
+}
+pub unsafe fn open_downloads() {
+    open_at(place_path(1).get());
 }
 pub unsafe fn open_trash() {
     open_at(TRASH);
@@ -1867,13 +1951,13 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
     let mut segs: [(&[u8], usize); 24] = [(b"", 0); 24];
     let mut n;
     if loc == HOME {
-        segs[0] = (b"Accueil", 0);
+        segs[0] = (tr(S_HOME), 0);
         n = 1;
     } else if loc == PC {
-        segs[0] = (b"Ce PC", 0);
+        segs[0] = (tr(S_THIS_PC), 0);
         n = 1;
     } else {
-        segs[0] = (b"Ce PC", 0);
+        segs[0] = (tr(S_THIS_PC), 0);
         n = 1;
         segs[1] = (last_component(&loc[..3.min(loc.len())]), 3);
         n += 1;
@@ -1926,7 +2010,9 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
 }
 
 /// Entrées du volet de navigation : (libellé, icône, chemin, retrait).
-unsafe fn nav_items(out: &mut [(&'static [u8], Glyph, Path, i32); 12]) -> usize {
+const NAV_MAX: usize = 11 + MAX_DRIVES;
+
+unsafe fn nav_items(out: &mut [(&'static [u8], Glyph, Path, i32); NAV_MAX]) -> usize {
     let mut n = 0;
     let mut push = |label: &'static [u8], gl: Glyph, path: &[u8], indent: i32| {
         let mut p = EMPTY_PATH;
@@ -1934,21 +2020,31 @@ unsafe fn nav_items(out: &mut [(&'static [u8], Glyph, Path, i32); 12]) -> usize 
         out[n] = (label, gl, p, indent);
         n += 1;
     };
-    push(b"Accueil", Glyph::Home, HOME, 0);
+    push(tr(S_HOME), Glyph::Home, HOME, 0);
     for i in 0..PLACES.len() {
         let pp = place_path(i);
-        push(PLACES[i].name, PLACES[i].glyph, pp.get(), 0);
+        push(place_label(i), PLACES[i].glyph, pp.get(), 0);
     }
-    push(b"Ce PC", Glyph::Computer, PC, 0);
+    push(tr(S_THIS_PC), Glyph::Computer, PC, 0);
     push(b"Dossier personnel (C:)", Glyph::Drive, b"C:\\", 1);
     push(b"Syst\xE8me Linux (Z:)", Glyph::LinuxDrive, b"Z:\\", 1);
-    push(b"Corbeille", Glyph::Trash, TRASH, 0);
+    for i in 0..NDRIVES {
+        let d = DRIVES[i];
+        let gl = if d.network {
+            Glyph::NetDrive
+        } else {
+            Glyph::Removable
+        };
+        push(drive_label(i), gl, &[d.letter, b':', b'\\'], 1);
+    }
+    push(tr(S_TRASH), Glyph::Trash, TRASH, 0);
     n
 }
 fn nav_row(geo: &Geo, i: usize) -> Rect {
     // Séparateurs après Accueil et après les dossiers personnels.
+    let trash = 10 + unsafe { NDRIVES };
     let gap =
-        if i >= 1 { 13 } else { 0 } + if i >= 7 { 13 } else { 0 } + if i >= 10 { 13 } else { 0 };
+        if i >= 1 { 13 } else { 0 } + if i >= 7 { 13 } else { 0 } + if i >= trash { 13 } else { 0 };
     let y = geo.nav.top + 10 + i as i32 * 32 + gap;
     rect(geo.nav.left + 6, y, geo.nav.right - 8, y + 30)
 }
@@ -1976,7 +2072,7 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
         geo.nav.bottom,
         p.border,
     );
-    let mut items = [(&b""[..], Glyph::Folder, EMPTY_PATH, 0); 12];
+    let mut items = [(&b""[..], Glyph::Folder, EMPTY_PATH, 0); NAV_MAX];
     let n = nav_items(&mut items);
     let loc = pane().loc;
     for i in 0..n {
@@ -2022,7 +2118,7 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
             label,
             r.right - x - 34,
         );
-        if i == 0 || i == 6 || i == 9 {
+        if i == 0 || i == 6 || i == 9 + NDRIVES {
             let sy = r.bottom + 6;
             fill(
                 g.hdc,
@@ -2104,10 +2200,10 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
         );
         let (nx, _, dx, tx, sx) = detail_cols(&hr);
         let heads: [(&[u8], i32, SortKey); 4] = [
-            (b"Nom", nx - 28, SortKey::Name),
-            (b"Modifi\xE9 le", dx, SortKey::Date),
-            (b"Type", tx, SortKey::Kind),
-            (b"Taille", sx, SortKey::Size),
+            (tr(S_NAME), nx - 28, SortKey::Name),
+            (tr(S_DATE), dx, SortKey::Date),
+            (tr(S_TYPE), tx, SortKey::Kind),
+            (tr(S_SIZE), sx, SortKey::Size),
         ];
         for (label, x, key) in heads {
             text(g.hdc, g.f.caption, p.text2, x, hr.top + 8, label);
@@ -2200,6 +2296,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                     ir.top + 8,
                     s,
                 );
+                format_badge(g, &e, (ir.left + ir.right - s) / 2, ir.top + 8, s);
                 let ty = ir.top + 14 + s;
                 if renaming {
                     draw_rename(g, rect(ir.left + 4, ty - 3, ir.right - 4, ty + 19));
@@ -2250,6 +2347,7 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
                     ir.top + (c.ch - c.icon) / 2,
                     c.icon,
                 );
+                format_badge(g, &e, ir.left + 10, ir.top + (c.ch - c.icon) / 2, c.icon);
                 let tx = ir.left + 20 + c.icon;
                 let ty = ir.top + c.ch / 2 - 18;
                 if renaming {
@@ -2434,11 +2532,9 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
     let pn = pane();
     let mut buf = [0u8; 256];
     let mut n = write_num(&mut buf, 0, pn.nview as u64);
-    let label: &[u8] = if pn.nview > 1 {
-        b" \xE9l\xE9ments"
-    } else {
-        b" \xE9l\xE9ment"
-    };
+    buf[n] = b' ';
+    n += 1;
+    let label = tr(S_ITEMS);
     buf[n..n + label.len()].copy_from_slice(label);
     n += label.len();
     let sc = sel_count(pn);
@@ -2446,11 +2542,9 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
         buf[n..n + 5].copy_from_slice(b"   |  "[..5].as_ref());
         n += 5;
         n = write_num(&mut buf, n, sc as u64);
-        let l2: &[u8] = if sc > 1 {
-            b" \xE9l\xE9ments s\xE9lectionn\xE9s"
-        } else {
-            b" \xE9l\xE9ment s\xE9lectionn\xE9"
-        };
+        buf[n] = b' ';
+        n += 1;
+        let l2 = tr(S_SELECTED);
         buf[n..n + l2.len()].copy_from_slice(l2);
         n += l2.len();
         if sc == 1 {
@@ -2483,6 +2577,7 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
             MESSAGE.get(),
         );
     }
+    draw_job(g, &s);
     // Bascule rapide Détails / Grandes icônes, en bas à droite.
     let d = rect(s.right - 64, s.top + 3, s.right - 38, s.bottom - 3);
     let l = rect(s.right - 34, s.top + 3, s.right - 8, s.bottom - 3);
@@ -2532,6 +2627,15 @@ enum Item {
     Refresh,
     Terminal,
     CopyPath,
+    ExtractAll,
+    ExtractHere,
+    Mount,
+    Eject,
+    CompressZip,
+    Compress7z,
+    CompressTarGz,
+    CompressZipPw,
+    ConnectNet,
 }
 
 fn item_label(i: Item) -> &'static [u8] {
@@ -2548,25 +2652,78 @@ fn item_label(i: Item) -> &'static [u8] {
         Item::Hidden => b"\xC9l\xE9ments masqu\xE9s",
         Item::Ext => b"Extensions de noms de fichiers",
         Item::Nav => b"Volet de navigation",
-        Item::Sort(SortKey::Name) => b"Nom",
-        Item::Sort(SortKey::Date) => b"Date de modification",
-        Item::Sort(SortKey::Kind) => b"Type",
-        Item::Sort(SortKey::Size) => b"Taille",
+        Item::Sort(SortKey::Name) => tr(S_NAME),
+        Item::Sort(SortKey::Date) => tr(S_DATE),
+        Item::Sort(SortKey::Kind) => tr(S_TYPE),
+        Item::Sort(SortKey::Size) => tr(S_SIZE),
         Item::Asc => b"Croissant",
         Item::Desc => b"D\xE9croissant",
         Item::NewFolder => b"Dossier",
         Item::NewText => b"Document texte",
-        Item::Open => b"Ouvrir",
+        Item::Open => tr(S_OPEN),
         Item::OpenTab => b"Ouvrir dans un nouvel onglet",
         Item::ExeSettings => b"R\xE9glages de l'ex\xE9cutable",
-        Item::Cut => b"Couper",
-        Item::Copy => b"Copier",
-        Item::Paste => b"Coller",
-        Item::Rename => b"Renommer",
-        Item::Delete => b"Supprimer",
+        Item::Cut => tr(S_CUT),
+        Item::Copy => tr(S_COPY),
+        Item::Paste => tr(S_PASTE),
+        Item::Rename => tr(S_RENAME),
+        Item::Delete => tr(S_DELETE),
         Item::Refresh => b"Actualiser",
         Item::Terminal => b"Ouvrir dans le terminal",
         Item::CopyPath => b"Copier le chemin d'acc\xE8s",
+        Item::ExtractAll => t4([
+            b"Extraire tout...",
+            b"Extract all...",
+            b"Extraer todo...",
+            b"Alle extrahieren...",
+        ]),
+        Item::ExtractHere => t4([
+            b"Extraire ici",
+            b"Extract here",
+            b"Extraer aqu\xED",
+            b"Hier entpacken",
+        ]),
+        Item::Mount => t4([b"Monter", b"Mount", b"Montar", b"Einbinden"]),
+        Item::Eject => {
+            let network = unsafe {
+                first_sel(pane()).is_some_and(|i| pane().entries[i].kind == Kind::Network)
+            };
+            if network {
+                t4([b"D\xE9connecter", b"Disconnect", b"Desconectar", b"Trennen"])
+            } else {
+                t4([b"\xC9jecter", b"Eject", b"Expulsar", b"Auswerfen"])
+            }
+        }
+        Item::CompressZip => t4([
+            b"Compresser en fichier ZIP",
+            b"Compress to ZIP file",
+            b"Comprimir en archivo ZIP",
+            b"In ZIP-Datei komprimieren",
+        ]),
+        Item::Compress7z => t4([
+            b"Compresser en fichier 7z",
+            b"Compress to 7z file",
+            b"Comprimir en archivo 7z",
+            b"In 7z-Datei komprimieren",
+        ]),
+        Item::CompressTarGz => t4([
+            b"Compresser en fichier TAR.GZ",
+            b"Compress to TAR.GZ file",
+            b"Comprimir en archivo TAR.GZ",
+            b"In TAR.GZ-Datei komprimieren",
+        ]),
+        Item::CompressZipPw => t4([
+            b"Compresser en ZIP avec mot de passe...",
+            b"Compress to ZIP with password...",
+            b"Comprimir en ZIP con contrase\xF1a...",
+            b"In ZIP mit Kennwort komprimieren...",
+        ]),
+        Item::ConnectNet => t4([
+            b"Connecter un lecteur r\xE9seau...",
+            b"Map network drive...",
+            b"Conectar unidad de red...",
+            b"Netzlaufwerk verbinden...",
+        ]),
     }
 }
 
@@ -2586,7 +2743,9 @@ fn item_checked(i: Item) -> bool {
     }
 }
 
-unsafe fn menu_items(out: &mut [Item; 16]) -> usize {
+const MENU_MAX: usize = 28;
+
+unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
     let list: &[Item] = match MENU {
         Menu::View => &[
             Item::View(View::XLarge),
@@ -2616,6 +2775,10 @@ unsafe fn menu_items(out: &mut [Item; 16]) -> usize {
             Item::Open,
             Item::OpenTab,
             Item::ExeSettings,
+            Item::ExtractAll,
+            Item::ExtractHere,
+            Item::Mount,
+            Item::Eject,
             Item::Sep,
             Item::Cut,
             Item::Copy,
@@ -2625,6 +2788,11 @@ unsafe fn menu_items(out: &mut [Item; 16]) -> usize {
             Item::Delete,
             Item::Sep,
             Item::CopyPath,
+            Item::Sep,
+            Item::CompressZip,
+            Item::Compress7z,
+            Item::CompressTarGz,
+            Item::CompressZipPw,
         ],
         Menu::Context { .. } => &[
             Item::View(View::Large),
@@ -2637,19 +2805,55 @@ unsafe fn menu_items(out: &mut [Item; 16]) -> usize {
             Item::Sep,
             Item::Hidden,
             Item::Terminal,
+            Item::ConnectNet,
         ],
         Menu::None => &[],
     };
     let p = pane();
     let executable =
         first_sel(p).is_some_and(|i| !p.entries[i].dir && ends_ci(p.entries[i].name(), b".exe"));
+    let in_pc = p.loc.is(PC);
+    let in_home = p.loc.is(HOME);
+    let first_kind = first_sel(p).map(|i| p.entries[i].kind);
+    let formats = if CREATE_FORMATS == u32::MAX {
+        WinluxArchiveFormats()
+    } else {
+        CREATE_FORMATS
+    };
+    CREATE_FORMATS = formats;
     let mut count = 0;
+    let mut last_sep = true;
     for &item in list {
         if item == Item::ExeSettings && !executable {
             continue;
         }
+        let keep = match item {
+            Item::ExtractAll | Item::ExtractHere => SEL_FLAGS & CAN_READ != 0,
+            Item::Mount => SEL_FLAGS & CAN_MOUNT != 0,
+            Item::Eject => in_pc && matches!(first_kind, Some(Kind::Removable | Kind::Network)),
+            Item::CompressZip | Item::CompressZipPw => !in_pc && !in_home && formats & 1 != 0,
+            Item::Compress7z => !in_pc && !in_home && formats & 2 != 0,
+            Item::CompressTarGz => !in_pc && !in_home && formats & 8 != 0,
+            Item::ConnectNet => in_pc,
+            _ => true,
+        };
+        if !keep {
+            continue;
+        }
+        // Pas de séparateur en double ni en fin de menu.
+        if item == Item::Sep {
+            if last_sep {
+                continue;
+            }
+            last_sep = true;
+        } else {
+            last_sep = false;
+        }
         out[count] = item;
         count += 1;
+    }
+    if count > 0 && out[count - 1] == Item::Sep {
+        count -= 1;
     }
     count
 }
@@ -2674,7 +2878,7 @@ fn menu_row_h(i: Item) -> i32 {
 }
 
 unsafe fn menu_box(geo: &Geo, f: &Frame) -> Rect {
-    let mut items = [Item::Sep; 16];
+    let mut items = [Item::Sep; MENU_MAX];
     let n = menu_items(&mut items);
     let h: i32 = items[..n].iter().map(|&i| menu_row_h(i)).sum::<i32>() + 8;
     let (mut x, mut y) = menu_origin(geo);
@@ -2702,7 +2906,7 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
         7,
         p.surface,
     );
-    let mut items = [Item::Sep; 16];
+    let mut items = [Item::Sep; MENU_MAX];
     let n = menu_items(&mut items);
     let mut y = r.top + 4;
     for &it in items[..n].iter() {
@@ -2770,6 +2974,13 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
             Item::Open => Some(Glyph::Forward),
             Item::OpenTab => Some(Glyph::Plus),
             Item::Nav => Some(Glyph::Split),
+            Item::ExtractAll | Item::ExtractHere => Some(Glyph::Archive),
+            Item::CompressZip | Item::Compress7z | Item::CompressTarGz | Item::CompressZipPw => {
+                Some(Glyph::Archive)
+            }
+            Item::Mount => Some(Glyph::DiskImage),
+            Item::Eject => Some(Glyph::Eject),
+            Item::ConnectNet => Some(Glyph::NetDrive),
             _ => None,
         };
         if let Some(gl) = gl {
@@ -2797,7 +3008,7 @@ unsafe fn menu_hit(geo: &Geo, f: &Frame, x: i32, y: i32) -> Option<Option<Item>>
     if !inside(&r, x, y) {
         return Some(None);
     }
-    let mut items = [Item::Sep; 16];
+    let mut items = [Item::Sep; MENU_MAX];
     let n = menu_items(&mut items);
     let mut top = r.top + 4;
     for &it in items[..n].iter() {
@@ -2871,7 +3082,7 @@ unsafe fn new_item(folder: bool) {
     }
     let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
     let n = if folder {
-        unique_name(p.loc.get(), b"Nouveau dossier", b"", &mut path)
+        unique_name(p.loc.get(), tr(S_NEW_FOLDER), b"", &mut path)
     } else {
         unique_name(p.loc.get(), b"Nouveau document texte", b".txt", &mut path)
     };
@@ -3823,6 +4034,32 @@ unsafe fn run_item(it: Item, geo: &Geo) {
                 FOCUS = Focus::Address;
             }
         }
+        Item::ExtractAll | Item::ExtractHere | Item::Mount => {
+            if let Some(i) = first_sel(p) {
+                let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
+                let n = item_path(p, i, &mut b);
+                if n > 0 {
+                    match it {
+                        Item::Mount => mount_image(&b[..n]),
+                        _ => extract_archive(&b[..n], it == Item::ExtractHere, None),
+                    }
+                }
+            }
+        }
+        Item::Eject => {
+            if let Some(l) = first_sel(p).and_then(|i| drive_letter_in(p.entries[i].name())) {
+                eject_drive(l);
+            }
+        }
+        Item::CompressZip => compress_selection(b"zip", None),
+        Item::Compress7z => compress_selection(b"7z", None),
+        Item::CompressTarGz => compress_selection(b"tar.gz", None),
+        Item::CompressZipPw => {
+            let loc = p.loc;
+            JOB_ARG = loc;
+            ask_password(JobKind::Create, false);
+        }
+        Item::ConnectNet => crate::settings::open_page(crate::settings::PAGE_NETDRIVES),
         Item::Sep => {}
     }
     let _ = geo;
@@ -3873,6 +4110,973 @@ unsafe fn run_cmd(cmd: Cmd, geo: &Geo) {
     let _ = geo;
 }
 
+// ---------- Archives, images disque et lecteurs dynamiques ----------
+//
+// Les archives s'ouvrent comme des dossiers : le runtime les déploie dans un
+// cache puis résout les chemins `...\photos.zip\...` vers ce cache. Après
+// chaque modification (rechargement du dossier), un « commit » reconstruit
+// l'archive. Les images disque reçoivent une lettre de lecteur.
+
+const MAX_DRIVES: usize = 8;
+const LABEL_LEN: usize = 72;
+
+#[derive(Clone, Copy)]
+struct DynDrive {
+    letter: u8,
+    network: bool,
+    online: bool,
+    label: [u8; LABEL_LEN],
+    len: usize,
+}
+const EMPTY_DRIVE: DynDrive = DynDrive {
+    letter: 0,
+    network: false,
+    online: true,
+    label: [0; LABEL_LEN],
+    len: 0,
+};
+static mut DRIVES: [DynDrive; MAX_DRIVES] = [EMPTY_DRIVE; MAX_DRIVES];
+static mut NDRIVES: usize = 0;
+
+/// Langue de l'interface (0 fr, 1 en, 2 es, 3 de), réglée dans les Paramètres.
+fn lang() -> usize {
+    unsafe { crate::locale::CURRENT_LANG as usize }
+}
+
+/// Chaîne localisée : français, anglais, espagnol, allemand (Windows-1252).
+fn t4(s: [&'static [u8]; 4]) -> &'static [u8] {
+    s[lang()]
+}
+
+fn ansi_from_wide(w: &[u16], out: &mut [u8]) -> usize {
+    let mut n = 0;
+    for &c in w {
+        if c == 0 || n == out.len() {
+            break;
+        }
+        out[n] = if c < 256 { c as u8 } else { b'?' };
+        n += 1;
+    }
+    n
+}
+
+unsafe fn refresh_drives() {
+    let mut buf = [0u16; 4096];
+    NDRIVES = 0;
+    let n = WinluxMountList(buf.as_mut_ptr(), buf.len() as u32);
+    if n <= 0 {
+        return;
+    }
+    let len = buf.iter().position(|&c| c == 0).unwrap_or(buf.len());
+    for line in buf[..len].split(|&c| c == b'\n' as u16) {
+        if NDRIVES == MAX_DRIVES {
+            break;
+        }
+        let mut cols = line.split(|&c| c == b'\t' as u16);
+        let (Some(l), Some(kind), Some(label), Some(_ro), Some(state)) = (
+            cols.next(),
+            cols.next(),
+            cols.next(),
+            cols.next(),
+            cols.next(),
+        ) else {
+            continue;
+        };
+        let Some(&letter) = l.first() else {
+            continue;
+        };
+        let d = &mut DRIVES[NDRIVES];
+        d.letter = letter as u8;
+        d.network = kind.iter().map(|&c| c as u8).eq(b"network".iter().copied());
+        d.online = state.is_empty() || state.iter().map(|&c| c as u8).eq(b"ok".iter().copied());
+        let mut n = ansi_from_wide(label, &mut d.label[..LABEL_LEN - 20]);
+        if n == 0 {
+            let def = if d.network {
+                t4([
+                    b"Lecteur r\xE9seau",
+                    b"Network drive",
+                    b"Unidad de red",
+                    b"Netzlaufwerk",
+                ])
+            } else {
+                t4([
+                    b"Image disque",
+                    b"Disc image",
+                    b"Imagen de disco",
+                    b"Disk-Image",
+                ])
+            };
+            d.label[..def.len()].copy_from_slice(def);
+            n = def.len();
+        }
+        for &c in b" (" {
+            d.label[n] = c;
+            n += 1;
+        }
+        d.label[n] = d.letter;
+        d.label[n + 1] = b':';
+        d.label[n + 2] = b')';
+        n += 3;
+        if !d.online {
+            let off = t4([
+                b" (hors ligne)",
+                b" (offline)",
+                b" (sin conexi\xF3n)",
+                b" (offline)",
+            ]);
+            d.label[n..n + off.len()].copy_from_slice(off);
+            n += off.len();
+        }
+        d.len = n;
+        NDRIVES += 1;
+    }
+}
+
+unsafe fn drive_label(i: usize) -> &'static [u8] {
+    let d = &*core::ptr::addr_of!(DRIVES[i]);
+    &d.label[..d.len]
+}
+
+/// Lettre d'un lecteur dynamique d'après son libellé « Nom (E:) ».
+fn drive_letter_in(name: &[u8]) -> Option<u8> {
+    name.windows(4)
+        .rev()
+        .find(|w| w[0] == b'(' && w[1].is_ascii_uppercase() && w[2] == b':' && w[3] == b')')
+        .map(|w| w[1])
+}
+
+unsafe fn find_drive(letter: u8) -> Option<DynDrive> {
+    (0..NDRIVES).map(|i| DRIVES[i]).find(|d| d.letter == letter)
+}
+
+/// Le chemin traverse-t-il une archive (pour le commit après modification) ?
+fn path_in_archive(path: &[u8]) -> bool {
+    path.split(|&c| c == b'\\')
+        .skip(1)
+        .any(|c| kind_of(c, false) == Kind::Archive)
+}
+
+const CAN_READ: u32 = 1;
+const CAN_WRITE: u32 = 2;
+const CAN_MOUNT: u32 = 4;
+const IS_OPEN: u32 = 16;
+
+unsafe fn support_of(path: &[u8]) -> u32 {
+    let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+    let p = wstr(&mut w, path);
+    if p.is_null() {
+        return 0;
+    }
+    WinluxArchiveSupport(p)
+}
+
+#[derive(Clone, Copy, PartialEq)]
+enum JobKind {
+    Open,
+    ExtractAll,
+    ExtractHere,
+    Create,
+    Commit,
+    Mount,
+    Eject,
+}
+
+static mut JOB: u32 = 0;
+static mut JOB_KIND: JobKind = JobKind::Open;
+static mut JOB_PROGRESS: u32 = 0;
+static mut JOB_START: u32 = 0;
+/// Archive, image ou destination concernée par la tâche en cours.
+static mut JOB_ARG: Path = EMPTY_PATH;
+static mut JOB_DEST: Path = EMPTY_PATH;
+static mut JOB_WITH_PASSWORD: bool = false;
+static mut COMMIT_PENDING: Path = EMPTY_PATH;
+/// Possibilités (WinluxArchiveSupport) de l'élément sous le menu contextuel.
+static mut SEL_FLAGS: u32 = 0;
+/// Formats de création disponibles (WinluxArchiveFormats).
+static mut CREATE_FORMATS: u32 = u32::MAX;
+
+/// Boîte de saisie du mot de passe.
+static mut PASSWORD_OPEN: bool = false;
+static mut PASSWORD: Field = EMPTY_FIELD;
+static mut PASSWORD_ERROR: bool = false;
+/// Action à relancer avec le mot de passe saisi.
+static mut PASSWORD_FOR: JobKind = JobKind::Open;
+
+unsafe fn start_job(kind: JobKind, id: u32, arg: &[u8]) {
+    if id == 0 {
+        notify(t4([
+            b"Op\xE9ration impossible sur cet \xE9l\xE9ment.",
+            b"This item cannot be processed.",
+            b"No se puede procesar este elemento.",
+            b"Dieses Element kann nicht verarbeitet werden.",
+        ]));
+        return;
+    }
+    JOB = id;
+    JOB_KIND = kind;
+    JOB_PROGRESS = 0;
+    JOB_START = GetTickCount();
+    JOB_ARG.set(arg);
+}
+
+fn busy_message() -> &'static [u8] {
+    t4([
+        b"Une op\xE9ration est d\xE9j\xE0 en cours.",
+        b"Another operation is in progress.",
+        b"Ya hay una operaci\xF3n en curso.",
+        b"Es l\xE4uft bereits ein Vorgang.",
+    ])
+}
+
+/// Ouvre une archive (déploiement en arrière-plan), puis y entre.
+unsafe fn open_archive(path: &[u8], password: Option<&[u8]>) {
+    if JOB != 0 {
+        notify(busy_message());
+        return;
+    }
+    let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+    let mut pw = [0u16; PATH_LEN + NAME_LEN + 2];
+    let pp = match password {
+        Some(s) => {
+            for (i, &c) in s.iter().enumerate() {
+                pw[i] = c as u16;
+            }
+            pw.as_ptr()
+        }
+        None => core::ptr::null(),
+    };
+    JOB_WITH_PASSWORD = password.is_some();
+    start_job(
+        JobKind::Open,
+        WinluxArchiveOpen(wstr(&mut w, path), pp),
+        path,
+    );
+}
+
+unsafe fn extract_archive(path: &[u8], here: bool, password: Option<&[u8]>) {
+    if JOB != 0 {
+        notify(busy_message());
+        return;
+    }
+    let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+    let mut d = [0u16; PATH_LEN + NAME_LEN + 2];
+    let mut pw = [0u16; PATH_LEN + NAME_LEN + 2];
+    let dest = if here {
+        match parent(path) {
+            Some(dir) => wstr(&mut d, dir),
+            None => core::ptr::null(),
+        }
+    } else {
+        core::ptr::null()
+    };
+    let pp = match password {
+        Some(s) => {
+            for (i, &c) in s.iter().enumerate() {
+                pw[i] = c as u16;
+            }
+            pw.as_ptr()
+        }
+        None => core::ptr::null(),
+    };
+    JOB_WITH_PASSWORD = password.is_some();
+    let kind = if here {
+        JobKind::ExtractHere
+    } else {
+        JobKind::ExtractAll
+    };
+    start_job(
+        kind,
+        WinluxArchiveExtract(wstr(&mut w, path), dest, pp),
+        path,
+    );
+}
+
+unsafe fn mount_image(path: &[u8]) {
+    if JOB != 0 {
+        notify(busy_message());
+        return;
+    }
+    let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+    start_job(JobKind::Mount, WinluxImageMount(wstr(&mut w, path)), path);
+}
+
+unsafe fn eject_drive(letter: u8) {
+    if let Some(d) = find_drive(letter) {
+        if d.network {
+            // Lecteurs réseau : gérés par l'outil winlux-drives.
+            let mut args = [0u16; 16];
+            for (i, &c) in b"disconnect X".iter().enumerate() {
+                args[i] = if c == b'X' { letter as u16 } else { c as u16 };
+            }
+            run_drives_tool(&args);
+            refresh_drives();
+            for t in TABS[..NTABS].iter_mut() {
+                for pn in t.panes.iter_mut() {
+                    if pn.loc.is(PC) {
+                        reload(pn);
+                    }
+                }
+            }
+            return;
+        }
+    }
+    if JOB != 0 {
+        notify(busy_message());
+        return;
+    }
+    start_job(
+        JobKind::Eject,
+        WinluxImageEject(letter as u32),
+        &[letter, b':', b'\\'],
+    );
+}
+
+unsafe fn run_drives_tool(args: &[u16]) {
+    let open: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    let mut prog = [0u16; 16];
+    for (i, &c) in b"winlux-drives".iter().enumerate() {
+        prog[i] = c as u16;
+    }
+    let r = ShellExecuteW(
+        core::ptr::null_mut(),
+        open.as_ptr(),
+        prog.as_ptr(),
+        args.as_ptr(),
+        core::ptr::null(),
+        0,
+    );
+    if (r as isize) <= 32 {
+        notify(t4([
+            b"Gestionnaire de lecteurs r\xE9seau indisponible.",
+            b"Network drive manager unavailable.",
+            b"Gestor de unidades de red no disponible.",
+            b"Netzlaufwerk-Verwaltung nicht verf\xFCgbar.",
+        ]));
+    }
+}
+
+/// Compresse la sélection : `ext` = « zip », « 7z », « tar.gz »…
+unsafe fn compress_selection(ext: &[u8], password: Option<&[u8]>) {
+    if JOB != 0 {
+        notify(busy_message());
+        return;
+    }
+    let p = pane();
+    if p.loc.is(HOME) || p.loc.is(PC) {
+        return;
+    }
+    let mut sources = [0u16; 8192];
+    let mut at = 0;
+    let mut count = 0;
+    let mut first = [0u8; NAME_LEN];
+    let mut first_len = 0;
+    for v in 0..p.nview {
+        let i = p.view[v] as usize;
+        if !is_sel(p, i) {
+            continue;
+        }
+        let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
+        let n = item_path(p, i, &mut path);
+        if n == 0 || at + n + 2 >= sources.len() {
+            continue;
+        }
+        for &c in &path[..n] {
+            sources[at] = c as u16;
+            at += 1;
+        }
+        sources[at] = 0;
+        at += 1;
+        if count == 0 {
+            let name = p.entries[i].name();
+            // Nom de l'archive : celui de l'élément, sans son extension.
+            let stem = if p.entries[i].dir {
+                name
+            } else {
+                match name.iter().rposition(|&c| c == b'.') {
+                    Some(k) if k > 0 => &name[..k],
+                    _ => name,
+                }
+            };
+            first_len = stem.len().min(NAME_LEN - 16);
+            first[..first_len].copy_from_slice(&stem[..first_len]);
+        }
+        count += 1;
+    }
+    if count == 0 {
+        return;
+    }
+    sources[at] = 0;
+    let base: &[u8] = if count == 1 {
+        &first[..first_len]
+    } else {
+        last_component(p.loc.get())
+    };
+    let mut name = [0u8; NAME_LEN];
+    let bl = base.len().min(NAME_LEN - 16);
+    name[..bl].copy_from_slice(&base[..bl]);
+    name[bl] = b'.';
+    name[bl + 1..bl + 1 + ext.len()].copy_from_slice(ext);
+    let mut out = [0u8; PATH_LEN + NAME_LEN + 2];
+    let on = join(&mut out, p.loc.get(), &name[..bl + 1 + ext.len()]);
+    if on == 0 {
+        notify(b"Chemin trop long pour cette version d'Explorer.");
+        return;
+    }
+    let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+    let mut pw = [0u16; PATH_LEN + NAME_LEN + 2];
+    let pp = match password {
+        Some(s) => {
+            for (i, &c) in s.iter().enumerate() {
+                pw[i] = c as u16;
+            }
+            pw.as_ptr()
+        }
+        None => core::ptr::null(),
+    };
+    let loc = p.loc;
+    JOB_DEST = loc;
+    start_job(
+        JobKind::Create,
+        WinluxArchiveCreate(wstr(&mut w, &out[..on]), sources.as_ptr(), pp),
+        &out[..on],
+    );
+}
+
+/// Après une modification dans une archive ouverte : on la reconstruit.
+unsafe fn maybe_commit(loc: &[u8]) {
+    if !path_in_archive(loc) {
+        return;
+    }
+    if JOB != 0 {
+        COMMIT_PENDING.set(loc);
+        return;
+    }
+    let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+    let id = WinluxArchiveCommit(wstr(&mut w, loc));
+    if id != 0 {
+        start_job(JobKind::Commit, id, loc);
+    }
+}
+
+fn job_label(kind: JobKind) -> &'static [u8] {
+    match kind {
+        JobKind::Open => t4([
+            b"Ouverture de l'archive...",
+            b"Opening archive...",
+            b"Abriendo el archivo...",
+            b"Archiv wird ge\xF6ffnet...",
+        ]),
+        JobKind::ExtractAll | JobKind::ExtractHere => t4([
+            b"Extraction...",
+            b"Extracting...",
+            b"Extrayendo...",
+            b"Entpacken...",
+        ]),
+        JobKind::Create => t4([
+            b"Compression...",
+            b"Compressing...",
+            b"Comprimiendo...",
+            b"Komprimieren...",
+        ]),
+        JobKind::Commit => t4([
+            b"Enregistrement de l'archive...",
+            b"Saving archive...",
+            b"Guardando el archivo...",
+            b"Archiv wird gespeichert...",
+        ]),
+        JobKind::Mount => t4([
+            b"Montage de l'image...",
+            b"Mounting image...",
+            b"Montando la imagen...",
+            b"Image wird eingebunden...",
+        ]),
+        JobKind::Eject => t4([
+            b"\xC9jection...",
+            b"Ejecting...",
+            b"Expulsando...",
+            b"Auswerfen...",
+        ]),
+    }
+}
+
+unsafe fn reload_all() {
+    refresh_drives();
+    for t in TABS[..NTABS].iter_mut() {
+        for pn in t.panes.iter_mut() {
+            if !pn.loc.get().is_empty() {
+                reload(pn);
+            }
+        }
+    }
+}
+
+unsafe fn notify_with(prefix: &[u8], msg: &[u8]) {
+    let mut b = [0u8; 200];
+    let n = prefix.len().min(120);
+    b[..n].copy_from_slice(&prefix[..n]);
+    let m = msg.len().min(b.len() - n);
+    b[n..n + m].copy_from_slice(&msg[..m]);
+    notify(&b[..n + m]);
+}
+
+unsafe fn ask_password(kind: JobKind, wrong: bool) {
+    PASSWORD_OPEN = true;
+    PASSWORD_ERROR = wrong;
+    PASSWORD_FOR = kind;
+    PASSWORD.len = 0;
+    MENU = Menu::None;
+}
+
+/// Fin d'une tâche de fond : on enchaîne l'action visible pour l'utilisateur.
+unsafe fn finish_job(status: u32, msg: &[u8]) {
+    let kind = JOB_KIND;
+    let arg = JOB_ARG;
+    JOB = 0;
+    match status {
+        1 => match kind {
+            JobKind::Open => navigate(arg.get()),
+            JobKind::ExtractAll => {
+                reload_all();
+                navigate(msg);
+            }
+            JobKind::ExtractHere => {
+                reload_all();
+                notify(t4([
+                    b"Extraction termin\xE9e.",
+                    b"Extraction complete.",
+                    b"Extracci\xF3n completada.",
+                    b"Entpacken abgeschlossen.",
+                ]));
+            }
+            JobKind::Create => {
+                reload_all();
+                let created = last_component(msg);
+                let mut nb = [0u8; NAME_LEN];
+                let nl = created.len().min(NAME_LEN);
+                nb[..nl].copy_from_slice(&created[..nl]);
+                let p = pane();
+                p.sel = [0; MAX_ENTRIES / 64];
+                let _ = select_named(p, &nb[..nl]);
+                notify_with(
+                    t4([
+                        b"Archive cr\xE9\xE9e : ",
+                        b"Archive created: ",
+                        b"Archivo creado: ",
+                        b"Archiv erstellt: ",
+                    ]),
+                    &nb[..nl],
+                );
+            }
+            JobKind::Commit => {}
+            JobKind::Mount => {
+                refresh_drives();
+                if msg.len() >= 2 && msg[1] == b':' {
+                    navigate(&[msg[0], b':', b'\\']);
+                    notify_with(
+                        t4([
+                            b"Image mont\xE9e sur ",
+                            b"Image mounted as ",
+                            b"Imagen montada en ",
+                            b"Image eingebunden als ",
+                        ]),
+                        msg,
+                    );
+                }
+            }
+            JobKind::Eject => {
+                refresh_drives();
+                let letter = arg.get().first().copied().unwrap_or(0);
+                for t in TABS[..NTABS].iter_mut() {
+                    for pn in t.panes.iter_mut() {
+                        if pn.loc.get().first() == Some(&letter)
+                            && pn.loc.get().get(1) == Some(&b':')
+                        {
+                            navigate_pane(pn, PC, false);
+                        }
+                    }
+                }
+                reload_all();
+                notify(t4([
+                    b"Image \xE9ject\xE9e : vous pouvez la d\xE9placer ou la supprimer.",
+                    b"Image ejected: it is now safe to move or delete it.",
+                    b"Imagen expulsada: ya puede moverla o eliminarla.",
+                    b"Image ausgeworfen: sie kann jetzt verschoben werden.",
+                ]));
+            }
+        },
+        3 | 4
+            if matches!(
+                kind,
+                JobKind::Open | JobKind::ExtractAll | JobKind::ExtractHere
+            ) =>
+        {
+            // On garde l'archive visée pour relancer avec le mot de passe.
+            JOB_ARG = arg;
+            ask_password(kind, status == 4 || JOB_WITH_PASSWORD);
+        }
+        5 => {
+            reload_all();
+            notify(t4([
+                b"Archive en lecture seule : la modification n'a pas \xE9t\xE9 enregistr\xE9e.",
+                b"Read-only archive: the change was not saved.",
+                b"Archivo de solo lectura: el cambio no se guard\xF3.",
+                b"Schreibgesch\xFCtztes Archiv: \xC4nderung nicht gespeichert.",
+            ]));
+        }
+        6 => notify_with(
+            t4([
+                b"Non pris en charge : ",
+                b"Not supported: ",
+                b"No compatible: ",
+                b"Nicht unterst\xFCtzt: ",
+            ]),
+            msg,
+        ),
+        7 => notify(t4([
+            b"Op\xE9ration annul\xE9e.",
+            b"Operation cancelled.",
+            b"Operaci\xF3n cancelada.",
+            b"Vorgang abgebrochen.",
+        ])),
+        _ => notify_with(
+            t4([b"\xC9chec : ", b"Failed: ", b"Error: ", b"Fehler: "]),
+            msg,
+        ),
+    }
+    if JOB == 0 && !COMMIT_PENDING.get().is_empty() {
+        let pending = COMMIT_PENDING;
+        COMMIT_PENDING.len = 0;
+        maybe_commit(pending.get());
+    }
+}
+
+/// Suivi de la tâche en cours ; renvoie vrai tant qu'il faut redessiner.
+unsafe fn poll_job() -> bool {
+    if JOB == 0 {
+        return false;
+    }
+    let mut prog = 0u32;
+    let mut msg = [0u16; 512];
+    let st = WinluxJobPoll(JOB, &mut prog, msg.as_mut_ptr(), msg.len() as u32);
+    JOB_PROGRESS = prog;
+    if st == 0 {
+        return true;
+    }
+    WinluxJobClose(JOB);
+    let mut m = [0u8; 512];
+    let n = ansi_from_wide(&msg, &mut m);
+    finish_job(st, &m[..n]);
+    true
+}
+
+unsafe fn cancel_job() {
+    if JOB != 0 {
+        WinluxJobCancel(JOB);
+    }
+}
+
+/// Barre de progression dans la barre d'état (après 300 ms d'activité).
+unsafe fn draw_job(g: &mut Gfx, s: &Rect) {
+    if JOB == 0 || GetTickCount().wrapping_sub(JOB_START) < 300 {
+        return;
+    }
+    let p = pal();
+    let label = job_label(JOB_KIND);
+    let right = s.right - 76;
+    let bar = rect(right - 160, s.top + 11, right, s.top + 17);
+    let lw = text_width(label, 11);
+    text(
+        g.hdc,
+        g.f.small,
+        p.text2,
+        bar.left - lw - 10,
+        s.top + 8,
+        label,
+    );
+    round_rect(
+        g.hdc, g.b, bar.left, bar.top, bar.right, bar.bottom, 3, p.border,
+    );
+    let w = (bar.right - bar.left) * JOB_PROGRESS.min(1000) as i32 / 1000;
+    if w > 0 {
+        round_rect(
+            g.hdc,
+            g.b,
+            bar.left,
+            bar.top,
+            bar.left + w.max(6),
+            bar.bottom,
+            3,
+            p.accent,
+        );
+    }
+}
+
+fn password_box(f: &Frame) -> Rect {
+    let (w, h) = (420, 196);
+    let cx = (f.client.left + f.client.right) / 2;
+    let cy = (f.client.top + f.client.bottom) / 2;
+    rect(cx - w / 2, cy - h / 2, cx + w / 2, cy + h / 2)
+}
+
+fn password_buttons(r: &Rect) -> (Rect, Rect) {
+    let ok = rect(r.right - 216, r.bottom - 48, r.right - 116, r.bottom - 16);
+    let cancel = rect(r.right - 108, r.bottom - 48, r.right - 16, r.bottom - 16);
+    (ok, cancel)
+}
+
+unsafe fn draw_password(g: &mut Gfx, f: &Frame) {
+    if !PASSWORD_OPEN {
+        return;
+    }
+    let p = pal();
+    let r = password_box(f);
+    round_rect(
+        g.hdc,
+        g.b,
+        r.left - 1,
+        r.top - 1,
+        r.right + 1,
+        r.bottom + 1,
+        9,
+        p.border,
+    );
+    round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.surface);
+    text(
+        g.hdc,
+        g.f.semibold,
+        p.text,
+        r.left + 20,
+        r.top + 18,
+        t4([
+            b"Archive prot\xE9g\xE9e par mot de passe",
+            b"Password-protected archive",
+            b"Archivo protegido con contrase\xF1a",
+            b"Kennwortgesch\xFCtztes Archiv",
+        ]),
+    );
+    text_fit(
+        g.hdc,
+        g.f.small,
+        11,
+        p.text2,
+        r.left + 20,
+        r.top + 44,
+        last_component(JOB_ARG.get()),
+        r.right - r.left - 40,
+    );
+    let field = rect(r.left + 20, r.top + 70, r.right - 20, r.top + 102);
+    round_rect(
+        g.hdc,
+        g.b,
+        field.left,
+        field.top,
+        field.right,
+        field.bottom,
+        4,
+        p.accent,
+    );
+    round_rect(
+        g.hdc,
+        g.b,
+        field.left + 1,
+        field.top + 1,
+        field.right - 1,
+        field.bottom - 2,
+        4,
+        p.window,
+    );
+    let mut dots = [b'*'; 64];
+    let n = PASSWORD.len.min(dots.len());
+    let caret_x = field.left + 10 + text_width(&dots[..n], 12);
+    dots[n] = b' ';
+    text(
+        g.hdc,
+        g.f.caption,
+        p.text,
+        field.left + 10,
+        field.top + 8,
+        &dots[..n],
+    );
+    if GetTickCount() / 500 % 2 == 0 {
+        fill(
+            g.hdc,
+            g.b,
+            caret_x,
+            field.top + 7,
+            caret_x + 1,
+            field.bottom - 8,
+            p.text,
+        );
+    }
+    if PASSWORD_ERROR {
+        text(
+            g.hdc,
+            g.f.small,
+            rgb(0xD1, 0x34, 0x38),
+            r.left + 20,
+            r.top + 110,
+            t4([
+                b"Mot de passe incorrect, r\xE9essayez.",
+                b"Wrong password, try again.",
+                b"Contrase\xF1a incorrecta, int\xE9ntelo de nuevo.",
+                b"Falsches Kennwort, bitte erneut versuchen.",
+            ]),
+        );
+    }
+    let (ok, cancel) = password_buttons(&r);
+    round_rect(
+        g.hdc, g.b, ok.left, ok.top, ok.right, ok.bottom, 4, p.accent,
+    );
+    let okl: &[u8] = b"OK";
+    text(
+        g.hdc,
+        g.f.caption,
+        rgb(0xFF, 0xFF, 0xFF),
+        (ok.left + ok.right - text_width(okl, 12)) / 2,
+        ok.top + 8,
+        okl,
+    );
+    let bg = if hovered(&cancel) { p.hover } else { p.window };
+    round_rect(
+        g.hdc,
+        g.b,
+        cancel.left,
+        cancel.top,
+        cancel.right,
+        cancel.bottom,
+        4,
+        p.border,
+    );
+    round_rect(
+        g.hdc,
+        g.b,
+        cancel.left + 1,
+        cancel.top + 1,
+        cancel.right - 1,
+        cancel.bottom - 1,
+        4,
+        bg,
+    );
+    let cl = t4([b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"]);
+    text(
+        g.hdc,
+        g.f.caption,
+        p.text,
+        (cancel.left + cancel.right - text_width(cl, 12)) / 2,
+        cancel.top + 8,
+        cl,
+    );
+}
+
+unsafe fn password_submit() {
+    PASSWORD_OPEN = false;
+    let arg = JOB_ARG;
+    let pw = PASSWORD;
+    match PASSWORD_FOR {
+        JobKind::Open => open_archive(arg.get(), Some(pw.get())),
+        JobKind::ExtractAll => extract_archive(arg.get(), false, Some(pw.get())),
+        JobKind::ExtractHere => extract_archive(arg.get(), true, Some(pw.get())),
+        JobKind::Create => compress_selection(b"zip", Some(pw.get())),
+        _ => {}
+    }
+    PASSWORD.buf.fill(0);
+    PASSWORD.len = 0;
+}
+
+unsafe fn password_cancel() {
+    PASSWORD_OPEN = false;
+    PASSWORD.buf.fill(0);
+    PASSWORD.len = 0;
+}
+
+/// Clavier pendant la saisie du mot de passe (boîte modale).
+unsafe fn password_key(vk: u32, ch: u16) -> bool {
+    match ch {
+        13 => password_submit(),
+        27 => password_cancel(),
+        8 => PASSWORD.pop(),
+        c if c >= 32 => match ansi_char(c) {
+            Some(a) => PASSWORD.push(a),
+            None => notify(b"Caract\xE8re non pris en charge."),
+        },
+        _ => {
+            let _ = vk;
+        }
+    }
+    true
+}
+
+unsafe fn password_mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
+    if ev != Mouse::Down {
+        return true;
+    }
+    let r = password_box(f);
+    let (ok, cancel) = password_buttons(&r);
+    if inside(&ok, x, y) {
+        password_submit();
+    } else if inside(&cancel, x, y) {
+        password_cancel();
+    }
+    true
+}
+
+/// Pastille de format (ZIP, 7Z, ISO, VHDX…) sur les grandes icônes.
+unsafe fn format_badge(g: &mut Gfx, e: &Entry, x: i32, y: i32, s: i32) {
+    if s < 40 || e.dir || !matches!(e.kind, Kind::Archive | Kind::DiskImage) {
+        return;
+    }
+    let ext = extension(e.name());
+    if ext.is_empty() || ext.len() > 5 {
+        return;
+    }
+    let mut up = [0u8; 5];
+    for (i, &c) in ext.iter().enumerate() {
+        up[i] = c.to_ascii_uppercase();
+    }
+    let label = &up[..ext.len()];
+    let color = match label {
+        b"ZIP" => rgb(0xE0, 0x9E, 0x2A),
+        b"7Z" => rgb(0x2E, 0x7D, 0x32),
+        b"RAR" => rgb(0x8E, 0x24, 0xAA),
+        b"ISO" | b"IMG" | b"DMG" => rgb(0x45, 0x5A, 0x64),
+        b"VHD" | b"VHDX" | b"VMDK" | b"VDI" | b"QCOW2" | b"QCOW" => rgb(0x15, 0x65, 0xC0),
+        _ => rgb(0x6D, 0x4C, 0x41),
+    };
+    let w = text_width(label, 11) + 8;
+    let bx = x + s - w;
+    let by = y + s - 18;
+    round_rect(g.hdc, g.b, bx, by, bx + w, by + 16, 3, color);
+    text(
+        g.hdc,
+        g.f.small,
+        rgb(0xFF, 0xFF, 0xFF),
+        bx + 4,
+        by + 1,
+        label,
+    );
+}
+
+/// Double-clic sur un fichier : archive → on entre dedans ; image → montage.
+/// Renvoie vrai si l'élément a été pris en charge.
+unsafe fn open_storage_item(path: &[u8], kind: Kind) -> bool {
+    if !matches!(kind, Kind::Archive | Kind::DiskImage) {
+        return false;
+    }
+    let flags = support_of(path);
+    if flags & IS_OPEN != 0 {
+        navigate(path);
+        true
+    } else if flags & CAN_READ != 0 {
+        open_archive(path, None);
+        true
+    } else if flags & CAN_MOUNT != 0 {
+        mount_image(path);
+        true
+    } else {
+        false
+    }
+}
+
 // ---------- Entrées ----------
 
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
@@ -3898,6 +5102,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     }
     draw_status(g, &geo);
     draw_menu(g, &geo, f);
+    draw_password(g, f);
 }
 
 unsafe fn pane_rect_inner(geo: &Geo, which: usize) -> Rect {
@@ -3927,6 +5132,9 @@ unsafe fn update_hover(geo: &Geo, x: i32, y: i32) -> bool {
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if NTABS == 0 {
         return false;
+    }
+    if PASSWORD_OPEN {
+        return password_mouse(ev, x, y, f);
     }
     let geo = geo(f);
     // Menu ouvert : il capte le clic.
@@ -4117,9 +5325,9 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
     if inside(&address_rect(geo), x, y) {
         let loc = pane().loc;
         if loc.is(HOME) {
-            ADDRESS.set(b"Accueil");
+            ADDRESS.set(tr(S_HOME));
         } else if loc.is(PC) {
-            ADDRESS.set(b"Ce PC");
+            ADDRESS.set(tr(S_THIS_PC));
         } else {
             ADDRESS.set(loc.get());
         }
@@ -4144,7 +5352,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
     MENU = Menu::None;
     // Volet de navigation.
     if inside(&geo.nav, x, y) {
-        let mut items = [(&b""[..], Glyph::Folder, EMPTY_PATH, 0); 12];
+        let mut items = [(&b""[..], Glyph::Folder, EMPTY_PATH, 0); NAV_MAX];
         let n = nav_items(&mut items);
         for i in 0..n {
             if inside(&nav_row(geo, i), x, y) {
@@ -4238,6 +5446,13 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
                             set_sel(pn, idx, true);
                             pn.anchor = idx;
                         }
+                        SEL_FLAGS = 0;
+                        let e = pn.entries[idx];
+                        if !e.dir && matches!(e.kind, Kind::Archive | Kind::DiskImage) {
+                            let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
+                            let n = item_path(pn, idx, &mut b);
+                            SEL_FLAGS = support_of(&b[..n]);
+                        }
                         MENU = Menu::Context {
                             x,
                             y,
@@ -4307,9 +5522,9 @@ fn ansi_char(ch: u16) -> Option<u8> {
 unsafe fn focus_address() {
     let loc = pane().loc;
     ADDRESS.set(if loc.is(HOME) {
-        b"Accueil"
+        tr(S_HOME)
     } else if loc.is(PC) {
-        b"Ce PC"
+        tr(S_THIS_PC)
     } else {
         loc.get()
     });
@@ -4337,6 +5552,13 @@ unsafe fn window_shortcut(vk: u32, control: bool) -> bool {
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
     if NTABS == 0 {
         return false;
+    }
+    if PASSWORD_OPEN {
+        return password_key(vk, ch);
+    }
+    if ch == 27 && JOB != 0 && FOCUS == Focus::List && MENU == Menu::None {
+        cancel_job();
+        return true;
     }
     // Les raccourcis de fenêtre fonctionnent aussi lorsqu'un champ est actif.
     if ch == 0 && window_shortcut(vk, ctrl()) {
@@ -4418,9 +5640,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                         Focus::Address => {
                             let a = ADDRESS;
                             let s = a.get();
-                            if cmp_ci(s, b"Accueil").is_eq() {
+                            if cmp_ci(s, tr(S_HOME)).is_eq() {
                                 navigate(HOME);
-                            } else if cmp_ci(s, b"Ce PC").is_eq() {
+                            } else if cmp_ci(s, tr(S_THIS_PC)).is_eq() {
                                 navigate(PC);
                             } else if s.starts_with(b"http") || s.starts_with(b"www.") {
                                 let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
@@ -4611,7 +5833,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
 }
 
 pub unsafe fn tick(_f: &Frame) -> bool {
-    let mut animating = false;
+    let mut animating = poll_job() || PASSWORD_OPEN;
     for i in 0..NTABS {
         for which in 0..2 {
             let pn = &mut TABS[i].panes[which];
@@ -4840,7 +6062,7 @@ pub unsafe fn regression_checks() {
         y: 0,
         on_item: true,
     };
-    let mut items = [Item::Sep; 16];
+    let mut items = [Item::Sep; MENU_MAX];
     let count = menu_items(&mut items);
     check!(
         items[..count].contains(&Item::ExeSettings)
@@ -4855,8 +6077,120 @@ pub unsafe fn regression_checks() {
         "Un dossier nomme .EXE ne propose pas de profil executable"
     );
     MENU = Menu::None;
+    archive_regression(root);
     check!(
         rollback_copy(root, 0),
         "Explorer nettoie ses seuls fichiers de regression"
+    );
+}
+
+#[doc(hidden)]
+unsafe fn wait_job(job: u32) -> u32 {
+    if job == 0 {
+        return u32::MAX;
+    }
+    for _ in 0..3000 {
+        let mut pr = 0u32;
+        let st = WinluxJobPoll(job, &mut pr, core::ptr::null_mut(), 0);
+        if st != 0 {
+            WinluxJobClose(job);
+            return st;
+        }
+        Sleep(10);
+    }
+    u32::MAX
+}
+
+/// Archives : création, ouverture comme un dossier, ajout d'un fichier,
+/// reconstruction puis extraction de contrôle.
+#[doc(hidden)]
+unsafe fn archive_regression(root: &[u8]) {
+    check!(
+        drive_letter_in(b"Ubuntu (E:)") == Some(b'E')
+            && drive_letter_in(b"Serveur (Y:) (hors ligne)") == Some(b'Y')
+            && drive_letter_in(b"Dossier (1)").is_none(),
+        "Explorer retrouve la lettre d'un lecteur dynamique"
+    );
+    check!(
+        path_in_archive(b"C:\\a\\b.zip\\c")
+            && path_in_archive(b"C:\\a\\b.tar.gz")
+            && !path_in_archive(b"C:\\a\\zip"),
+        "Explorer reconnait un chemin a l'interieur d'une archive"
+    );
+    check!(
+        kind_of(b"w.VHDX", false) == Kind::DiskImage
+            && kind_of(b"u.iso", false) == Kind::DiskImage
+            && kind_of(b"a.tgz", false) == Kind::Archive,
+        "Explorer distingue archives et images disque"
+    );
+    let mut src = [0u8; PATH_LEN + NAME_LEN + 2];
+    let sn = join(&mut src, root, b"source");
+    let mut zip = [0u8; PATH_LEN + NAME_LEN + 2];
+    let zn = join(&mut zip, root, b"paquet.zip");
+    let mut wz = [0u16; PATH_LEN + NAME_LEN + 2];
+    let mut sources = [0u16; PATH_LEN + NAME_LEN + 4];
+    for (i, &c) in src[..sn].iter().enumerate() {
+        sources[i] = c as u16;
+    }
+    let st = wait_job(WinluxArchiveCreate(
+        wstr(&mut wz, &zip[..zn]),
+        sources.as_ptr(),
+        core::ptr::null(),
+    ));
+    check!(
+        st == 1 && support_of(&zip[..zn]) & (CAN_READ | CAN_WRITE) == CAN_READ | CAN_WRITE,
+        "Explorer compresse un dossier en ZIP"
+    );
+    let st = wait_job(WinluxArchiveOpen(
+        wstr(&mut wz, &zip[..zn]),
+        core::ptr::null(),
+    ));
+    let mut inner = [0u8; PATH_LEN + NAME_LEN + 2];
+    let inn = join(&mut inner, &zip[..zn], b"source");
+    check!(
+        st == 1 && exists_dir(&inner[..inn]) && support_of(&zip[..zn]) & IS_OPEN != 0,
+        "Explorer ouvre une archive ZIP comme un dossier"
+    );
+    let mut added = [0u8; PATH_LEN + NAME_LEN + 2];
+    let an = join(&mut added, &inner[..inn], b"ajout.txt");
+    let h = CreateFileW(
+        wstr(&mut wz, &added[..an]),
+        0x4000_0000,
+        0,
+        core::ptr::null_mut(),
+        1,
+        0x80,
+        core::ptr::null_mut(),
+    );
+    let mut written = 0u32;
+    let ok = !h.is_null() && h as isize != -1 && {
+        WriteFile(
+            h,
+            b"winlux".as_ptr(),
+            6,
+            &mut written,
+            core::ptr::null_mut(),
+        );
+        CloseHandle(h);
+        true
+    };
+    let st = wait_job(WinluxArchiveCommit(wstr(&mut wz, &inner[..inn])));
+    check!(ok, "Explorer ajoute un fichier dans une archive ouverte");
+    check!(st == 1, "Explorer enregistre l'archive modifiee");
+    let mut verif = [0u8; PATH_LEN + NAME_LEN + 2];
+    let vn = join(&mut verif, root, b"verif");
+    let mut wv = [0u16; PATH_LEN + NAME_LEN + 2];
+    let st = wait_job(WinluxArchiveExtract(
+        wstr(&mut wz, &zip[..zn]),
+        wstr(&mut wv, &verif[..vn]),
+        core::ptr::null(),
+    ));
+    let mut sub = [0u8; PATH_LEN + NAME_LEN + 2];
+    let subn = join(&mut sub, &verif[..vn], b"source");
+    let mut out = [0u8; PATH_LEN + NAME_LEN + 2];
+    let on = join(&mut out, &sub[..subn], b"ajout.txt");
+    check!(
+        st == 1 && GetFileAttributesW(wstr(&mut wv, &out[..on])) != u32::MAX,
+        "Explorer extrait l'archive modifiee"
     );
 }

@@ -16,6 +16,7 @@
 //! - `tick(frame) -> bool` est appelé deux fois par seconde.
 
 use crate::gfx::*;
+use crate::locale::*;
 use crate::notepad;
 use crate::utilities;
 use winlux_testexe::*;
@@ -30,7 +31,10 @@ pub const APP_TERMINAL: usize = 6;
 pub const APP_DISKMGR: usize = 7;
 pub const APP_EVENTVIEWER: usize = 8;
 pub const APP_RESTORE: usize = 9;
-pub const APP_COUNT: usize = 10;
+pub const APP_WELCOME: usize = 10;
+pub const APP_TASKSCHD: usize = 11;
+pub const APP_FIREWALL: usize = 12;
+pub const APP_COUNT: usize = 13;
 
 // Native session: each built-in application owns a separate X11/Win32 window.
 // The Linux window manager handles its frame, stacking and taskbar lifecycle.
@@ -48,6 +52,10 @@ pub unsafe fn native_init() {
         APP_EXPLORER
     } else if n == 8 && mode[0] == b's' as i8 {
         APP_SETTINGS
+    } else if n == 8 && mode[0] == b't' as i8 {
+        APP_TASKSCHD
+    } else if n == 8 && mode[0] == b'f' as i8 {
+        APP_FIREWALL
     } else {
         usize::MAX
     };
@@ -80,6 +88,8 @@ pub unsafe fn native_launch(app: usize) {
     let args = match app {
         APP_EXPLORER => c"explorer",
         APP_SETTINGS => c"settings",
+        APP_TASKSCHD => c"taskschd",
+        APP_FIREWALL => c"firewall",
         _ => c"editor",
     };
     ShellExecuteA(
@@ -274,7 +284,7 @@ const CLOSED: Win = Win {
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
@@ -513,17 +523,20 @@ fn on_current_desktop(app: usize) -> bool {
 
 pub fn title_of(app: usize) -> &'static [u8] {
     match app {
-        APP_EXPLORER => b"Explorer",
-        APP_SETTINGS => b"Param\xE8tres",
-        APP_NOTEPAD => b"\xC9\x64iteur",
-        APP_TASKMGR => b"Gestionnaire des t\xE2ches",
-        APP_UTILITIES => b"Utilitaires",
+        APP_EXPLORER => tr(S_FILE_EXPLORER),
+        APP_SETTINGS => tr(S_SETTINGS_APP),
+        APP_NOTEPAD => tr(S_NOTEPAD),
+        APP_TASKMGR => tr(S_TASK_MANAGER),
+        APP_UTILITIES => tr(S_UTILITIES),
         APP_CLEANUP => b"Nettoyage de disque",
         APP_TERMINAL => b"Terminal",
         APP_DISKMGR => b"Gestion des disques",
+        APP_TASKSCHD => crate::admin_ui::t(b"Planificateur de t\xE2ches", b"Task Scheduler"),
+        APP_FIREWALL => crate::admin_ui::t(b"Pare-feu Winlux", b"Winlux Firewall"),
         APP_EVENTVIEWER => b"Observateur d'\xE9v\xE9nements",
         APP_RESTORE => b"Restauration syst\xE8me",
-        _ => b"Param\xE8tres",
+        APP_WELCOME => b"Bienvenue",
+        _ => tr(S_SETTINGS_APP),
     }
 }
 pub fn glyph_of(app: usize) -> Glyph {
@@ -536,8 +549,11 @@ pub fn glyph_of(app: usize) -> Glyph {
         APP_CLEANUP => Glyph::Drive,
         APP_TERMINAL => Glyph::Terminal,
         APP_DISKMGR => Glyph::Drive,
+        APP_TASKSCHD => Glyph::Clock,
+        APP_FIREWALL => Glyph::Shield,
         APP_EVENTVIEWER => Glyph::Details,
         APP_RESTORE => Glyph::Refresh,
+        APP_WELCOME => Glyph::Star,
         _ => Glyph::Settings,
     }
 }
@@ -551,8 +567,11 @@ fn custom_title(app: usize) -> bool {
         APP_CLEANUP => crate::diskcleaner::CUSTOM_TITLE,
         APP_TERMINAL => crate::terminal::CUSTOM_TITLE,
         APP_DISKMGR => crate::diskmgr::CUSTOM_TITLE,
+        APP_TASKSCHD => crate::taskschd::CUSTOM_TITLE,
+        APP_FIREWALL => crate::firewall::CUSTOM_TITLE,
         APP_EVENTVIEWER => crate::eventviewer::CUSTOM_TITLE,
         APP_RESTORE => crate::restore::CUSTOM_TITLE,
+        APP_WELCOME => crate::welcome::CUSTOM_TITLE,
         _ => crate::settings::CUSTOM_TITLE,
     }
 }
@@ -567,8 +586,11 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
         APP_CLEANUP => crate::diskcleaner::draw(g, f),
         APP_TERMINAL => crate::terminal::draw(g, f),
         APP_DISKMGR => crate::diskmgr::draw(g, f),
+        APP_TASKSCHD => crate::taskschd::draw(g, f),
+        APP_FIREWALL => crate::firewall::draw(g, f),
         APP_EVENTVIEWER => crate::eventviewer::draw(g, f),
         APP_RESTORE => crate::restore::draw(g, f),
+        APP_WELCOME => crate::welcome::draw(g, f),
         _ => crate::settings::draw(g, f),
     }
 }
@@ -582,8 +604,11 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         APP_CLEANUP => crate::diskcleaner::mouse(ev, x, y, f),
         APP_TERMINAL => crate::terminal::mouse(ev, x, y, f),
         APP_DISKMGR => crate::diskmgr::mouse(ev, x, y, f),
+        APP_TASKSCHD => crate::taskschd::mouse(ev, x, y, f),
+        APP_FIREWALL => crate::firewall::mouse(ev, x, y, f),
         APP_EVENTVIEWER => crate::eventviewer::mouse(ev, x, y, f),
         APP_RESTORE => crate::restore::mouse(ev, x, y, f),
+        APP_WELCOME => crate::welcome::mouse(ev, x, y, f),
         _ => crate::settings::mouse(ev, x, y, f),
     }
 }
@@ -597,8 +622,11 @@ unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
         APP_CLEANUP => crate::diskcleaner::key(vk, ch),
         APP_TERMINAL => crate::terminal::key(vk, ch),
         APP_DISKMGR => crate::diskmgr::key(vk, ch),
+        APP_TASKSCHD => crate::taskschd::key(vk, ch),
+        APP_FIREWALL => crate::firewall::key(vk, ch),
         APP_EVENTVIEWER => crate::eventviewer::key(vk, ch),
         APP_RESTORE => crate::restore::key(vk, ch),
+        APP_WELCOME => crate::welcome::key(vk, ch),
         _ => crate::settings::key(vk, ch),
     }
 }
@@ -612,8 +640,11 @@ unsafe fn app_tick(app: usize, f: &Frame) -> bool {
         APP_CLEANUP => crate::diskcleaner::tick(f),
         APP_TERMINAL => crate::terminal::tick(f),
         APP_DISKMGR => crate::diskmgr::tick(f),
+        APP_TASKSCHD => crate::taskschd::tick(f),
+        APP_FIREWALL => crate::firewall::tick(f),
         APP_EVENTVIEWER => crate::eventviewer::tick(f),
         APP_RESTORE => crate::restore::tick(f),
+        APP_WELCOME => crate::welcome::tick(f),
         _ => crate::settings::tick(f),
     }
 }
@@ -726,10 +757,17 @@ fn default_rect(app: usize) -> Rect {
         APP_NOTEPAD => (1000, 680),
         APP_TASKMGR => (1000, 650),
         APP_DISKMGR => (1000, 650),
+        APP_TASKSCHD => (1120, 700),
+        APP_FIREWALL => (1060, 680),
+        APP_WELCOME => (920, 600),
         _ => (1040, 700),
     };
     let (w, h) = (w.min(ww - 40).max(480), h.min(wh - 40).max(320));
-    let offset = app as i32 * 36;
+    let offset = if app == APP_WELCOME {
+        18
+    } else {
+        app as i32 * 36
+    };
     let x = wk.left + (ww - w) / 2 + offset - 18;
     let y = wk.top + (wh - h) / 2 + offset - 18;
     rect(
@@ -961,6 +999,12 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
     let active = ACTIVE == app;
     let bg = p.mica;
     let fade = |c: u32| -> u32 { mix(bg, c, opacity, 1000) };
+    let accented = active && ACCENT_TITLES;
+    let title_bg = if accented {
+        mix(p.mica, p.accent, 22, 100)
+    } else {
+        p.mica
+    };
     // Liseré fin et fond « Mica » (pas d'ombre lourde).
     round_rect(
         g.hdc,
@@ -970,7 +1014,9 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         shown.right,
         shown.bottom,
         radius,
-        fade(if active {
+        fade(if accented {
+            p.accent
+        } else if active {
             mix(p.border, p.accent, 2, 10)
         } else {
             p.border
@@ -984,7 +1030,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         shown.right - 1,
         shown.bottom - 1,
         radius,
-        fade(p.mica),
+        fade(title_bg),
     );
     if !content || shown.right - shown.left < 200 || shown.bottom - shown.top < 120 {
         glyph(
@@ -1021,6 +1067,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         );
     }
     if !custom_title(app) {
+        set_glyph_bg(Some(title_bg));
         glyph(
             g.hdc,
             g.b,
@@ -1030,6 +1077,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             fr.title.top + 11,
             16,
         );
+        set_glyph_bg(None);
         text(
             g.hdc,
             g.f.caption,
@@ -1085,7 +1133,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
                 p.hover
             }
         } else {
-            p.mica
+            title_bg
         };
         set_glyph_bg(Some(bg));
         glyph(
@@ -1449,7 +1497,7 @@ pub unsafe fn draw(g: &mut Gfx) {
             p.text,
             cx + 16,
             cy + 12,
-            b"Basculer entre les fen\xEAtres",
+            tr(S_SWITCH_WINDOWS),
         );
         let mut list = [usize::MAX; APP_COUNT];
         let mut count = 0;
@@ -1508,8 +1556,15 @@ pub unsafe fn draw(g: &mut Gfx) {
             7,
             p.surface,
         );
-        text(g.hdc, g.f.caption, p.text, cx + 16, cy + 12, b"Ex\xE9cuter");
-        text(g.hdc, g.f.small, p.text3, cx + 16, cy + 42, b"Ouvrir :");
+        text(g.hdc, g.f.caption, p.text, cx + 16, cy + 12, tr(S_RUN));
+        text(
+            g.hdc,
+            g.f.small,
+            p.text3,
+            cx + 16,
+            cy + 42,
+            tr(S_OPEN_COLON),
+        );
         fill(
             g.hdc,
             g.b,
