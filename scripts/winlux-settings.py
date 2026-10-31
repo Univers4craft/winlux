@@ -173,6 +173,10 @@ class Settings(Gtk.Window):
             shortcut = Gtk.Button(label={1:"Installer, désinstaller et gérer le démarrage",2:"Wi-Fi et Bluetooth",3:"Réglages rapides",6:"Thèmes, accent, fond et barre des tâches"}[self.page])
             shortcut.connect("clicked", lambda *_: subprocess.Popen(["winlux-system-tools", tool]))
             self.body.pack_start(shortcut, False, False, 0)
+        if self.page == 1:
+            defaults = Gtk.Button(label="Applications par défaut")
+            defaults.connect("clicked", lambda *_: subprocess.Popen(["winlux-default-apps"]))
+            self.body.pack_start(defaults, False, False, 0)
         if self.page == 8:
             self.modes = Gtk.ComboBoxText()
             status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
