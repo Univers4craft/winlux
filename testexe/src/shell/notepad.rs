@@ -34,6 +34,7 @@ pub static mut DOC: Doc = Doc {
 pub const CUSTOM_TITLE: bool = false;
 static mut EDITOR: bool = false;
 static mut FOCUSED: bool = true;
+static mut HOVER_TOOL: i32 = -1;
 
 fn rebuild_lines() {
     unsafe {
@@ -80,127 +81,57 @@ pub unsafe fn open_new() {
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     let r = f.client;
     let p = pal();
-    fill(
-        g.hdc,
-        g.b,
-        r.left,
-        r.top,
-        r.right,
-        r.bottom,
-        rgb(0x1E, 0x1E, 0x1E),
-    );
+    fill(g.hdc, g.b, r.left, r.top, r.right, r.bottom, p.window);
 
     // Menu bar
-    fill(
-        g.hdc,
-        g.b,
-        r.left,
-        r.top,
-        r.right,
-        r.top + 24,
-        rgb(0x2D, 0x2D, 0x30),
-    );
+    fill(g.hdc, g.b, r.left, r.top, r.right, r.top + 24, p.surface);
     let items: [&[u8]; 4] = [b"Fichier", b"Edition", b"Affichage", b"Aide"];
     let mut x = r.left + 8;
     for (i, item) in items.iter().enumerate() {
         if i == 0 {
-            fill(
-                g.hdc,
-                g.b,
-                x - 4,
-                r.top + 2,
-                x + text_width(*item, 11) + 4,
-                r.top + 22,
-                rgb(0x3E, 0x3E, 0x42),
+            round_rect(
+                g.hdc, g.b,
+                x - 4, r.top + 2,
+                x + text_width(*item, 11) + 4, r.top + 22,
+                4, p.hover,
             );
         }
-        text(g.hdc, g.f.small, rgb(0xCC, 0xCC, 0xCC), x, r.top + 5, *item);
+        text(g.hdc, g.f.small, p.text2, x, r.top + 5, *item);
         x += text_width(*item, 11) + 16;
     }
 
     // Toolbar
-    fill(
-        g.hdc,
-        g.b,
-        r.left,
-        r.top + 24,
-        r.right,
-        r.top + 52,
-        rgb(0x2D, 0x2D, 0x30),
-    );
+    fill(g.hdc, g.b, r.left, r.top + 24, r.right, r.top + 52, p.surface);
     let tools: [&[u8]; 10] = [
-        b"Nouveau",
-        b"Ouvrir",
-        b"Enregistrer",
-        b"|",
-        b"Couper",
-        b"Copier",
-        b"Coller",
-        b"|",
-        b"Annuler",
-        b"Refaire",
+        b"Nouveau", b"Ouvrir", b"Enregistrer", b"|",
+        b"Couper", b"Copier", b"Coller", b"|",
+        b"Annuler", b"Refaire",
     ];
     let mut x = r.left + 8;
+    let mut tool_idx: i32 = 0;
     for tool in &tools {
         if *tool == b"|" {
-            line(
-                g.hdc,
-                g.b,
-                x + 2,
-                r.top + 30,
-                x + 2,
-                r.top + 46,
-                1,
-                rgb(0x5A, 0x5A, 0x5A),
-            );
+            line(g.hdc, g.b, x + 2, r.top + 30, x + 2, r.top + 46, 1, p.border);
             x += 8;
         } else {
-            round_rect(
-                g.hdc,
-                g.b,
-                x,
-                r.top + 28,
-                x + text_width(*tool, 10) + 16,
-                r.top + 48,
-                3,
-                rgb(0x3C, 0x3C, 0x3C),
-            );
-            text(
-                g.hdc,
-                g.f.small,
-                rgb(0xD4, 0xD4, 0xD4),
-                x + 8,
-                r.top + 33,
-                *tool,
-            );
-            x += text_width(*tool, 10) + 24;
+            let bw = text_width(*tool, 10) + 16;
+            let bg = if HOVER_TOOL == tool_idx { p.hover } else { p.surface2 };
+            round_rect(g.hdc, g.b, x, r.top + 28, x + bw, r.top + 48, 4, bg);
+            text(g.hdc, g.f.small, p.text, x + 8, r.top + 33, *tool);
+            x += bw + 8;
+            tool_idx += 1;
         }
     }
 
     // Editor area
     let ey = r.top + 52;
     let ex = r.left + 48;
-    fill(
-        g.hdc,
-        g.b,
-        r.left,
-        ey,
-        ex,
-        r.bottom - 24,
-        rgb(0x1E, 0x1E, 0x1E),
-    );
+    fill(g.hdc, g.b, r.left, ey, ex, r.bottom - 24, p.window);
     for i in 0..((r.bottom - 24 - ey) / 16 + 2).max(0) as i32 {
         let num = ((i - DOC.scroll_y / 16) as usize).wrapping_add(1);
         if num <= DOC.line_count {
             let s = format_num(num);
-            text(
-                g.hdc,
-                g.f.small,
-                rgb(0x85, 0x85, 0x85),
-                ex - 40,
-                ey + i * 16 + 2,
-                &s,
-            );
+            text(g.hdc, g.f.small, p.text3, ex - 40, ey + i * 16 + 2, &s);
         }
     }
 
@@ -223,12 +154,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 s[j] = DOC.text[start + j];
             }
             s[n] = 0;
-            // Simple ASCII text rendering
             let mut tx = ex;
             for j in 0..n {
                 let c = DOC.text[start + j];
                 if c >= 0x20 && c < 0x7F {
-                    draw_char(g, c, tx, y + 2);
+                    draw_char(g, &p, c, tx, y + 2);
                     tx += 8;
                 } else if c == b'\t' {
                     tx += 32;
@@ -248,28 +178,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let cc = col_of(DOC.cursor);
         let cy = ey + cl * 16 - DOC.scroll_y;
         if cy >= ey && cy < r.bottom - 24 {
-            fill(
-                g.hdc,
-                g.b,
-                ex + cc * 8,
-                cy + 2,
-                ex + cc * 8 + 2,
-                cy + 18,
-                rgb(0xAE, 0xAF, 0xAD),
-            );
+            fill(g.hdc, g.b, ex + cc * 8, cy + 2, ex + cc * 8 + 2, cy + 18, p.text2);
         }
     }
 
     // Status bar
-    fill(
-        g.hdc,
-        g.b,
-        r.left,
-        r.bottom - 24,
-        r.right,
-        r.bottom,
-        rgb(0x00, 0x7A, 0xCC),
-    );
+    fill(g.hdc, g.b, r.left, r.bottom - 24, r.right, r.bottom, p.accent);
     let cl = line_of(DOC.cursor) + 1;
     let cc = col_of(DOC.cursor) + 1;
     let mut status = [0u8; 64];
@@ -294,14 +208,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     status[30] = b'-';
     status[31] = b'8';
     status[32] = 0;
-    text(
-        g.hdc,
-        g.f.small,
-        rgb(0xFF, 0xFF, 0xFF),
-        r.right - 200,
-        r.bottom - 19,
-        &status,
-    );
+    text(g.hdc, g.f.small, p.on_accent, r.right - 200, r.bottom - 19, &status);
 }
 
 fn format_num(n: usize) -> [u8; 6] {
@@ -356,23 +263,48 @@ fn write_num(buf: &mut [u8; 64], start: usize, mut v: u32) {
     }
 }
 
-unsafe fn draw_char(g: &mut Gfx, c: u8, x: i32, y: i32) {
-    // Simple 8x16 bitmap-like rendering
-    let p = match c {
+unsafe fn draw_char(g: &mut Gfx, pal: &Palette, c: u8, x: i32, y: i32) {
+    let color = match c {
         b' ' => return,
-        b'W' => rgb(0x9C, 0xDC, 0xFF),
-        b'S' => rgb(0x9C, 0xDC, 0xFF),
-        b'c' | b'r' | b't' | b'f' | b'c' => rgb(0x9C, 0xDC, 0xFF),
-        _ => rgb(0xD4, 0xD4, 0xD4),
+        b'W' | b'S' => pal.accent,
+        b'c' | b'r' | b't' | b'f' => pal.accent,
+        _ => pal.text,
     };
-    // Very simple placeholder - just draw small rects for common chars
     match c {
-        b'{' | b'}' | b'[' | b']' | b'(' | b')' => fill(g.hdc, g.b, x + 2, y, x + 6, y + 1, p),
-        _ => fill(g.hdc, g.b, x, y + 6, x + 6, y + 7, p),
+        b'{' | b'}' | b'[' | b']' | b'(' | b')' => fill(g.hdc, g.b, x + 2, y, x + 6, y + 1, color),
+        _ => fill(g.hdc, g.b, x, y + 6, x + 6, y + 7, color),
     }
 }
 
-pub unsafe fn mouse(_ev: Mouse, _x: i32, _y: i32, _f: &Frame) -> bool {
+pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
+    let r = f.client;
+    if ev == Mouse::Move {
+        let old = HOVER_TOOL;
+        HOVER_TOOL = -1;
+        if y >= r.top + 28 && y <= r.top + 48 {
+            let tools: [&[u8]; 10] = [
+                b"Nouveau", b"Ouvrir", b"Enregistrer", b"|",
+                b"Couper", b"Copier", b"Coller", b"|",
+                b"Annuler", b"Refaire",
+            ];
+            let mut tx = r.left + 8;
+            let mut idx: i32 = 0;
+            for tool in &tools {
+                if *tool == b"|" {
+                    tx += 8;
+                } else {
+                    let bw = text_width(*tool, 10) + 16;
+                    if x >= tx && x < tx + bw {
+                        HOVER_TOOL = idx;
+                        break;
+                    }
+                    tx += bw + 8;
+                    idx += 1;
+                }
+            }
+        }
+        return HOVER_TOOL != old;
+    }
     true
 }
 

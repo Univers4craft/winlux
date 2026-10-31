@@ -2638,16 +2638,6 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
     }
     let p = pal();
     let r = menu_box(geo, f);
-    round_rect(
-        g.hdc,
-        g.b,
-        r.left - 1,
-        r.top + 1,
-        r.right + 1,
-        r.bottom + 4,
-        9,
-        p.shadow,
-    );
     round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.border);
     round_rect(
         g.hdc,
