@@ -57,6 +57,7 @@ pub mod uxtheme;
 pub mod version;
 pub mod winfile;
 pub mod winhttp;
+pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
 pub mod winspool;
@@ -124,7 +125,9 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
+                    e.extend(crate::archive::ffi::exports());
                     e
                 },
                 handle: fake_module(),
