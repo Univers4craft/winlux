@@ -75,11 +75,21 @@ wait_bus_name session org.xfce.FileManager "$!" /run/winlux/file-manager.log
         exit 1
     }
 /usr/bin/winlux-trust-shortcuts
-for bluetooth in /usr/lib/bluetooth/bluetoothd /usr/libexec/bluetooth/bluetoothd; do
-    if test -x "$bluetooth"; then "$bluetooth" -n >/run/winlux/bluetooth.log 2>&1 & break; fi
-done
+has_bluetooth=false
+if test "$(cat /run/winlux/hw/has-bluetooth 2>/dev/null)" = 1; then
+    has_bluetooth=true
+elif test -d /sys/class/bluetooth && test -n "$(ls -A /sys/class/bluetooth/ 2>/dev/null)"; then
+    has_bluetooth=true
+fi
+if "$has_bluetooth"; then
+    for bluetooth in /usr/lib/bluetooth/bluetoothd /usr/libexec/bluetooth/bluetoothd; do
+        if test -x "$bluetooth"; then "$bluetooth" -n >/run/winlux/bluetooth.log 2>&1 & break; fi
+    done
+fi
 /usr/bin/xfsettingsd --daemon >/run/winlux/xfsettings.log 2>&1
-/usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
+if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
+    /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
+fi
 /usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
 /usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
@@ -118,7 +128,12 @@ for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); d
         /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5
     fi
 done
-LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
+gpu_count=$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)
+if test "$gpu_count" -gt 0; then
+    /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
+else
+    LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
+fi
 echo $! > /run/winlux/screensaver.pid
 (
     while :; do
