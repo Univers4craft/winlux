@@ -102,6 +102,19 @@ cp "$root/scripts/winlux-hw-detect.sh" "$stage/usr/bin/winlux-hw-detect"
 cp "$root/scripts/winlux-first-boot.sh" "$stage/usr/bin/winlux-first-boot"
 cp "$root/scripts/install.sh" "$stage/opt/winlux/scripts/install.sh"
 cp "$root/scripts/install-safety.sh" "$stage/opt/winlux/scripts/install-safety.sh"
+mkdir -p "$stage/usr/share/winlux"
+cp "$root/scripts/winlux-recovery.sh" "$stage/usr/share/winlux/winlux-recovery.sh"
+cp "$root/scripts/winlux_autoinstall.py" "$stage/usr/share/winlux/winlux_autoinstall.py"
+cp "$root/scripts/winlux-secureboot.sh" "$stage/usr/bin/winlux-secureboot"
+chmod 755 "$stage/usr/share/winlux/winlux-recovery.sh" "$stage/usr/bin/winlux-secureboot"
+# The installer copies the signed boot chain to the target ESP from these paths.
+if test "${WINLUX_SECUREBOOT:-0}" = 1; then
+    mkdir -p "$stage/usr/lib/shim" "$stage/usr/lib/grub/x86_64-efi-signed"
+    cp /usr/lib/shim/shimx64.efi.signed /usr/lib/shim/mmx64.efi "$stage/usr/lib/shim/"
+    cp /usr/lib/grub/x86_64-efi-signed/*.efi.signed "$stage/usr/lib/grub/x86_64-efi-signed/"
+fi
+mkdir -p "$stage/usr/share/winlux/autoinstall"
+cp "$root/integration/autoinstall/"*.yaml "$stage/usr/share/winlux/autoinstall/"
 chmod 755 "$stage/usr/bin/winlux-installer" "$stage/usr/bin/winlux-hw-detect" "$stage/usr/bin/winlux-first-boot" "$stage/opt/winlux/scripts/install.sh"
 cp "$root/integration/winlux-installer.desktop" "$stage/usr/share/applications/winlux-installer.desktop"
 mkdir -p "$stage/root/Bureau"
@@ -483,6 +496,20 @@ echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 # Démarrer les services systemd activés par les paquets APT.
 if test -x /usr/bin/systemctl; then /usr/bin/systemctl --boot-start; fi
 if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
+# Paquets demandés par un fichier de réponse : installés une fois, dès que le réseau répond.
+if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
+    /bin/busybox mkdir -p /var/log
+    (
+        for attempt in $(/bin/busybox seq 1 60); do
+            /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+            /bin/busybox sleep 5
+        done
+        packages=$(/bin/busybox grep -E '^[a-z0-9][a-z0-9+.-]+$' /etc/winlux/first-boot-packages | /bin/busybox tr '\n' ' ')
+        if /usr/bin/apt-get update && DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y $packages; then
+            /bin/busybox mv /etc/winlux/first-boot-packages /etc/winlux/first-boot-packages.done
+        fi
+    ) >>/var/log/winlux-first-boot-packages.log 2>&1 &
+fi
 if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     result=0
     /usr/bin/python3 /opt/winlux/scripts/test-native-session-guest.py || result=$?
@@ -693,8 +720,8 @@ cp -L "$kernel" "$iso_root/boot/vmlinuz"
 sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
-set timeout=2
-set timeout_style=hidden
+set timeout=5
+set timeout_style=menu
 if serial --unit=0 --speed=115200; then
     terminal_input serial console
     terminal_output serial console
@@ -727,6 +754,25 @@ menuentry "Winlux Desktop" {
 menuentry "Installer Winlux sur le disque" --hotkey=i {
     winlux_live
 }
+menuentry "Winlux Recovery (secours)" --hotkey=r {
+    if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then
+        if test -f "($winlux_root)/boot/winlux-split-root"; then
+            linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1
+            initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
+        else
+            linux /boot/vmlinuz root=LABEL=WINLUX_ROOT rw rootfstype=ext4 console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1
+            initrd /boot/winlux-initramfs.cpio.gz
+        fi
+    else
+        echo "Aucune installation Winlux (WINLUX_ROOT) trouvée sur les disques."
+        echo "Le mode récupération répare un système installé."
+        sleep 6
+    fi
+}
+menuentry "Vérifier l'intégrité du média puis démarrer" --hotkey=v {
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=3 vt.global_cursor_default=0 winlux.check-iso=1 winlux.interactive=1
+    initrd /boot/winlux-initramfs.cpio.gz
+}
 menuentry "Winlux persistent network diagnostic" --hotkey=s {
     search --no-floppy --label WINLUX_ROOT --set=winlux_root
     if test -f "($winlux_root)/boot/winlux-split-root"; then
@@ -739,8 +785,27 @@ menuentry "Winlux persistent network diagnostic" --hotkey=s {
 GRUB
 grub-script-check "$iso_root/boot/grub/grub.cfg"
 
+# Answer file for unattended installs, if supplied: the installer finds it at the medium root.
+if test -n "${WINLUX_AUTOINSTALL:-}"; then
+    case "$WINLUX_AUTOINSTALL" in *.json) answer=winlux-autoinstall.json ;; *) answer=winlux-autoinstall.yaml ;; esac
+    cp "$WINLUX_AUTOINSTALL" "$iso_root/$answer"
+fi
+
+secureboot=${WINLUX_SECUREBOOT:-0}
+if test "$secureboot" = 1; then
+    sh "$root/scripts/winlux-secureboot.sh" prepare-iso "$iso_root" "Winlux $(cat "$stage/usr/share/winlux/version")"
+fi
+
+# Per-file manifest checked at boot by the "Vérifier l'intégrité" entry.
+(cd "$iso_root" && find . -type f ! -name winlux.sha256 ! -path './boot/grub/efi.img' -print | sed 's|^\./||' | LC_ALL=C sort | xargs -d '\n' sha256sum) >"$work/winlux.sha256"
+mv "$work/winlux.sha256" "$iso_root/winlux.sha256"
+
 mkdir -p "$(dirname -- "$out")"
-grub-mkrescue -o "$out" "$iso_root"
+if test "$secureboot" = 1; then
+    sh "$root/scripts/winlux-secureboot.sh" make-iso "$iso_root" "$out"
+else
+    grub-mkrescue -o "$out" "$iso_root"
+fi
 sha256sum "$out" >"$out.sha256"
 echo "ISO live créée : $out"
 echo "Somme SHA-256 : $out.sha256"

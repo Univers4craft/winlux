@@ -65,7 +65,7 @@ struct CompletionPortState {
     queue: VecDeque<CompletionPacket>,
     active: HashSet<ThreadId>,
 }
-struct CompletionPort {
+pub(crate) struct CompletionPort {
     state: Mutex<CompletionPortState>,
     changed: Condvar,
     max_concurrency: usize,
@@ -75,7 +75,7 @@ static IOCP_ASSOCIATIONS: OnceLock<Mutex<HashMap<usize, (Arc<CompletionPort>, us
 static NEXT_HANDLE: AtomicUsize = AtomicUsize::new(0x1_0000);
 static TEMP_FILE_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 
-struct EventObject {
+pub(crate) struct EventObject {
     manual_reset: bool,
     signaled: Mutex<bool>,
     changed: Condvar,
@@ -84,7 +84,7 @@ struct MutexState {
     owner: Option<ThreadId>,
     recursion: usize,
 }
-struct MutexObject {
+pub(crate) struct MutexObject {
     state: Mutex<MutexState>,
     changed: Condvar,
 }
@@ -93,7 +93,7 @@ struct ThreadState {
     exit_code: u32,
     suspend_count: usize,
 }
-struct ThreadObject {
+pub(crate) struct ThreadObject {
     state: Mutex<ThreadState>,
     changed: Condvar,
 }
@@ -102,12 +102,12 @@ struct ProcessState {
     exit_code: u32,
     suspended: bool,
 }
-struct ProcessObject {
+pub(crate) struct ProcessObject {
     state: Mutex<ProcessState>,
     changed: Condvar,
 }
 #[derive(Clone)]
-enum SyncHandle {
+pub(crate) enum SyncHandle {
     Event(Arc<EventObject>),
     Mutex(Arc<MutexObject>),
     Thread(Arc<ThreadObject>),
@@ -273,12 +273,31 @@ pub extern "win64" fn get_std_handle(which: u32) -> usize {
 fn next_handle() -> usize {
     NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
 }
-
-pub(crate) fn insert_file(f: File) -> usize {
+pub(crate) fn insert_file(file: File) -> usize {
     let h = next_handle();
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
-        .insert(h, FileHandle::File(Arc::new(Mutex::new(f))));
+        .insert(h, FileHandle::File(Arc::new(Mutex::new(file))));
     h
+}
+pub(crate) fn duplicate_handle_impl(handle: usize) -> Option<usize> {
+    use std::os::unix::io::AsRawFd;
+    let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())));
+    let fh = handles.get(&handle)?;
+    let FileHandle::File(arc) = fh;
+    let fd = {
+        let f = lock(arc);
+        f.as_raw_fd()
+    };
+    let new_fd = unsafe { libc::dup(fd) };
+    if new_fd < 0 {
+        return None;
+    }
+    drop(handles);
+    let new_file = unsafe { std::os::unix::io::FromRawFd::from_raw_fd(new_fd) };
+    let new_h = next_handle();
+    lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
+        .insert(new_h, FileHandle::File(Arc::new(Mutex::new(new_file))));
+    Some(new_h)
 }
 fn post_iocp(port: &CompletionPort, packet: CompletionPacket) {
     lock(&port.state).queue.push_back(packet);
@@ -2747,7 +2766,7 @@ fn same_sync(a: &SyncHandle, b: &SyncHandle) -> bool {
         _ => false,
     }
 }
-fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
+pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
     let obj = if let Some(name) = name {
         let key = name.to_lowercase();
         let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
@@ -2775,7 +2794,7 @@ fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, obj);
     h
 }
-fn lookup_sync(h: usize) -> Option<SyncHandle> {
+pub(crate) fn lookup_sync(h: usize) -> Option<SyncHandle> {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new())))
         .get(&h)
         .cloned()
