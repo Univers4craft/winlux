@@ -99,6 +99,11 @@ cp "$root/scripts/winlux-remote-config.sh" "$stage/usr/bin/winlux-remote-config"
 cp "$root/target/release/winlux-remote" "$stage/usr/bin/winlux-remote"
 chmod 755 "$stage/usr/bin/winlux-backup" "$stage/usr/bin/winlux-sessions" "$stage/usr/bin/winlux-remote-config" "$stage/usr/bin/winlux-remote"
 mkdir -p "$stage/usr/share/winlux"
+# Store de logiciels et gestionnaire de polices du shell.
+cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
+cp "$root/scripts/winlux-fonts.sh" "$stage/usr/bin/winlux-fonts"
+cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.txt"
+chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts"
 cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
 cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
 cp "$root/scripts/winlux-browsers.sh" "$stage/usr/bin/winlux-browsers"
@@ -208,7 +213,7 @@ ln -s busybox "$stage/bin/true"
 ln -s ../../bin/busybox "$stage/usr/bin/dirname"
 ln -s ../../bin/busybox "$stage/usr/bin/mktemp"
 ln -s ../../bin/busybox "$stage/usr/bin/timeout"
-for applet in awk cat chmod chown cmp cp cut date env find grep head id ip ipcalc kill killall ln ls mkdir modprobe mount mountpoint mv od printf ps pwd readlink reboot poweroff rm rmdir sed sha256sum sleep sort stat sync tar tee touch tr truncate umount uname wc xargs; do
+for applet in awk basename cat chmod chown cmp cp cut date env find grep head id ip ipcalc kill killall ln ls mkdir modprobe mount mountpoint mv od printf ps pwd readlink reboot poweroff rm rmdir sed sha256sum sleep sort stat sync tar tee touch tr truncate umount uname wc xargs; do
     ln -s ../../bin/busybox "$stage/usr/bin/$applet"
 done
 ln -s ../bin/busybox "$stage/sbin/modprobe"
@@ -243,7 +248,7 @@ copy_shared_libraries /usr/bin/install
 copy_shared_libraries /usr/bin/udevadm
 copy_shared_libraries /bin/bash
 copy_shared_libraries "$xorg"
-for utility in setxkbmap xinput amixer; do
+for utility in setxkbmap xinput amixer fc-list fc-cache; do
     if command -v "$utility" >/dev/null 2>&1; then
         cp "$(command -v "$utility")" "$stage/usr/bin/$utility"
         copy_shared_libraries "$(command -v "$utility")"
