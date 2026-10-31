@@ -101,6 +101,10 @@ cp "$root/scripts/winlux-first-boot.sh" "$stage/usr/bin/winlux-first-boot"
 cp "$root/scripts/install.sh" "$stage/opt/winlux/scripts/install.sh"
 cp "$root/scripts/install-safety.sh" "$stage/opt/winlux/scripts/install-safety.sh"
 chmod 755 "$stage/usr/bin/winlux-installer" "$stage/usr/bin/winlux-hw-detect" "$stage/usr/bin/winlux-first-boot" "$stage/opt/winlux/scripts/install.sh"
+mkdir -p "$stage/usr/lib/winlux/python"
+for module in partitioner partition_ui screen; do
+    cp "$root/scripts/winlux_$module.py" "$stage/usr/lib/winlux/python/winlux_$module.py"
+done
 cp "$root/integration/winlux-installer.desktop" "$stage/usr/share/applications/winlux-installer.desktop"
 mkdir -p "$stage/root/Bureau"
 cp "$root/integration/winlux-installer.desktop" "$stage/root/Bureau/winlux-installer.desktop"
@@ -433,6 +437,12 @@ for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 s
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
+# Partitions supplémentaires choisies à l'installation (/home, swap…).
+if test -s /etc/fstab; then
+    if test -x /usr/bin/mount; then /usr/bin/mount -a 2>/dev/null || true
+    else /bin/busybox mount -a 2>/dev/null || true; fi
+    /sbin/swapon -a 2>/dev/null || /bin/busybox swapon -a 2>/dev/null || true
+fi
 /usr/bin/winlux-hardware >/dev/null 2>&1 || true
 /usr/bin/winlux-firmware >/dev/null 2>&1 || true
 echo "Winlux input devices detected:"

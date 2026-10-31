@@ -27,6 +27,15 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 HW_DETECT = os.path.join(SCRIPT_DIR, "winlux-hw-detect.sh")
 INSTALL_SH = os.path.join(SCRIPT_DIR, "install.sh")
+for _path in (SCRIPT_DIR, "/usr/lib/winlux/python"):
+    if os.path.isfile(os.path.join(_path, "winlux_partitioner.py")):
+        sys.path.insert(0, _path)
+        break
+import winlux_partitioner  # noqa: E402
+import winlux_partition_ui  # noqa: E402
+import winlux_screen  # noqa: E402
+
+UI_SCALE = 1.0
 
 CSS = b"""
 @define-color bg_primary #0078D4;
@@ -1199,6 +1208,9 @@ def tr(key, **kwargs):
 
 tr._lang = "fr_FR"
 
+for _lang, _table in winlux_partitioner.TRANSLATIONS.items():
+    TRANSLATIONS.setdefault(_lang, {}).update(_table)
+
 LICENSE_TEXT = """\
 LICENCE PUBLIQUE GÉNÉRALE GNU
 Version 3, 29 juin 2007
@@ -1406,7 +1418,7 @@ class PartitionBar(Gtk.DrawingArea):
         super().__init__()
         self.partitions = []
         self.disk_size = 0
-        self.set_size_request(-1, 80)
+        self.set_size_request(-1, int(80 * UI_SCALE))
         self.connect("draw", self.on_draw)
 
     def set_data(self, disk_size, partitions):
@@ -1416,8 +1428,9 @@ class PartitionBar(Gtk.DrawingArea):
 
     def on_draw(self, widget, cr):
         alloc = widget.get_allocation()
-        w = alloc.width
-        h = alloc.height
+        cr.scale(UI_SCALE, UI_SCALE)
+        w = alloc.width / UI_SCALE
+        h = alloc.height / UI_SCALE
         bar_y = 8
         bar_h = 36
         label_y = bar_y + bar_h + 4
@@ -1840,23 +1853,76 @@ class InstallerApp(Gtk.Application):
         self.install_thread = None
         self.install_cancelled = False
 
+    def apply_display_scale(self):
+        """Échelle de l'interface selon la résolution et la densité réelles de l'écran."""
+        global UI_SCALE
+        geom, gdk_factor, width_mm, height_mm = winlux_screen.monitor_info(
+            Gdk, getattr(self, "win", None))
+        scale = winlux_screen.compute_scale(
+            geom.width * gdk_factor, geom.height * gdk_factor, width_mm, height_mm,
+            override=winlux_screen.scale_override())
+        # GDK applique déjà son facteur entier (GDK_SCALE) : on ne fait que le complément.
+        UI_SCALE = max(0.5, scale / gdk_factor)
+        css = winlux_screen.scale_css(CSS + winlux_partition_ui.CSS, UI_SCALE)
+        if not hasattr(self, "css_provider"):
+            self.css_provider = Gtk.CssProvider()
+            Gtk.StyleContext.add_provider_for_screen(
+                Gdk.Screen.get_default(), self.css_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.css_provider.load_from_data(css)
+        return geom
+
+    def fit_window_to_screen(self, *_args):
+        old_scale = UI_SCALE
+        geom = self.apply_display_scale()
+        if os.environ.get("WINLUX_INSTALLER_WINDOWED") == "1":
+            self.win.resize(min(geom.width, int(1100 * UI_SCALE)),
+                            min(geom.height, int(720 * UI_SCALE)))
+            return
+        # Sans gestionnaire de fenêtres (Xorg nu du live), fullscreen() est ignoré :
+        # on positionne aussi la fenêtre explicitement sur tout le moniteur.
+        self.win.move(geom.x, geom.y)
+        self.win.resize(geom.width, geom.height)
+        self.win.fullscreen()
+        if abs(old_scale - UI_SCALE) > 0.01 and hasattr(self, "partition_bar"):
+            self.partition_bar.set_size_request(-1, int(80 * UI_SCALE))
+            self.manual_editor.bar.set_size_request(-1, int(80 * UI_SCALE))
+
+    def on_key_press(self, _win, event):
+        if event.keyval == Gdk.KEY_F11:
+            state = self.win.get_window().get_state() if self.win.get_window() else 0
+            if state & Gdk.WindowState.FULLSCREEN:
+                self.win.unfullscreen()
+            else:
+                self.win.fullscreen()
+            return True
+        return False
+
+    def make_pages_scrollable(self):
+        """Toutes les pages défilent : Suivant/Retour restent visibles même sur un petit écran."""
+        for child in list(self.pages.get_children()):
+            if isinstance(child, Gtk.ScrolledWindow):
+                child.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+                continue
+            name = self.pages.child_get_property(child, "name")
+            self.pages.remove(child)
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroll.add(child)
+            self.pages.add_named(scroll, name)
+
     def do_activate(self):
-        provider = Gtk.CssProvider()
-        provider.load_from_data(CSS)
-        Gtk.StyleContext.add_provider_for_screen(
-            Gdk.Screen.get_default(), provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
+        self.apply_display_scale()
         self.win = Gtk.ApplicationWindow(application=self, title="Installer Winlux")
         self.win.get_style_context().add_class("installer-window")
-        self.win.set_default_size(960, 640)
         self.win.set_position(Gtk.WindowPosition.CENTER)
         self.win.set_resizable(True)
+        self.win.connect("key-press-event", self.on_key_press)
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self.win.add(self.main_box)
         self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.sidebar.get_style_context().add_class("installer-sidebar")
-        self.sidebar.set_size_request(210, -1)
+        self.sidebar.set_size_request(int(210 * UI_SCALE), -1)
         logo = Gtk.Label(label="Winlux")
         logo.get_style_context().add_class("page-title")
         logo.set_margin_bottom(24)
@@ -1867,7 +1933,10 @@ class InstallerApp(Gtk.Application):
             lbl.get_style_context().add_class("sidebar-step")
             self.step_labels.append(lbl)
             self.sidebar.pack_start(lbl, False, False, 0)
-        self.main_box.pack_start(self.sidebar, False, False, 0)
+        sidebar_scroll = Gtk.ScrolledWindow()
+        sidebar_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sidebar_scroll.add(self.sidebar)
+        self.main_box.pack_start(sidebar_scroll, False, False, 0)
         self.content_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.content_area.get_style_context().add_class("installer-content")
         self.main_box.pack_start(self.content_area, True, True, 0)
@@ -1896,7 +1965,12 @@ class InstallerApp(Gtk.Application):
         self.build_summary_page()
         self.build_progress_page()
         self.build_done_page()
+        self.make_pages_scrollable()
         self.update_step()
+        self.fit_window_to_screen()
+        screen = Gdk.Screen.get_default()
+        screen.connect("size-changed", self.fit_window_to_screen)
+        screen.connect("monitors-changed", self.fit_window_to_screen)
         self.win.show_all()
         threading.Thread(target=self.bg_detect, daemon=True).start()
 
@@ -1947,6 +2021,8 @@ class InstallerApp(Gtk.Application):
             self.proxy_error.set_text("" if ok else tr("network_proxy_invalid"))
         elif self.current_step == 4:
             ok = self.config["disk"] is not None
+            if ok and self.config["install_type"] == "manual":
+                ok = self.manual_editor.is_valid()
         elif self.current_step == 5:
             fits = self.import_fits()
             ok = self.win_detect_state == "done" and fits
@@ -1971,6 +2047,9 @@ class InstallerApp(Gtk.Application):
 
     def on_next(self, _btn):
         if self.current_step == 8:
+            if self.config["install_type"] == "manual" and not winlux_partition_ui.confirm_apply(
+                    self.win, self.manual_editor.plan, tr, UI_SCALE):
+                return
             self.start_installation()
         elif self.current_step < len(STEPS) - 1:
             if self.current_step == 0:
@@ -2407,7 +2486,13 @@ class InstallerApp(Gtk.Application):
         manual_desc.set_line_wrap(True)
         manual_desc.set_margin_start(24)
         manual_card.pack_start(manual_desc, False, False, 0)
-        self.type_manual_rb.set_sensitive(False)
+        self.manual_editor = winlux_partition_ui.ManualPartitionEditor(
+            tr, PartitionBar(), self.validate_step, scale=UI_SCALE)
+        self.manual_editor.set_margin_top(8)
+        self.manual_revealer = Gtk.Revealer()
+        self.manual_revealer.add(self.manual_editor)
+        self.manual_revealer.set_reveal_child(False)
+        manual_card.pack_start(self.manual_revealer, False, False, 0)
         box.pack_start(manual_card, False, False, 0)
 
         hw_frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
@@ -2496,9 +2581,15 @@ class InstallerApp(Gtk.Application):
                     self.config["install_type"] = "full"
             if self.config["install_type"] == "full":
                 self.part_erase_warn.set_text(tr("part_erase_warn"))
+            if self.config["install_type"] == "manual":
+                self.manual_editor.set_disk(disk)
             self.validate_step()
 
     def on_type_toggle(self, btn, install_type):
+        if install_type == "manual":
+            self.manual_revealer.set_reveal_child(btn.get_active())
+            if btn.get_active():
+                self.manual_editor.set_disk(self.config["disk"])
         if btn.get_active():
             self.config["install_type"] = install_type
             if install_type == "full":
@@ -2511,6 +2602,7 @@ class InstallerApp(Gtk.Application):
             elif install_type == "manual":
                 self.part_erase_warn.set_text("")
                 self.dualboot_slider_box.set_visible(False)
+            self.validate_step()
 
     # ── Page 5 : Import Windows ──────────────────────────────────
 
@@ -2904,6 +2996,10 @@ class InstallerApp(Gtk.Application):
             lines.append(f"{tr('summary_import')} ({self.import_src_current['user']}) : {', '.join(items)}")
         else:
             lines.append(f"{tr('summary_import')} : {tr('summary_import_none')}")
+        if itype == "manual":
+            lines.append("")
+            lines.append(tr("pm_ops_title"))
+            lines += ["  " + op for op in self.manual_editor.operations_text()]
         if self.hw_info:
             lines.append("")
             lines.append(f"CPU : {self.hw_info.get('cpu', '?')}")
@@ -3077,13 +3173,16 @@ class InstallerApp(Gtk.Application):
         os.makedirs(f"{work}/source", exist_ok=True)
         try:
             subprocess.run(["mount", root_part, f"{work}/target"], check=True, timeout=30)
+            self.mount_extra_partitions(f"{work}/target")
         except Exception as e:
+            self.unmount_extra_partitions(f"{work}/target")
             self.install_error(f"Montage échoué : {e}")
             return
         try:
             self.extract_and_copy(iso_path, work, device, esp, root_part)
         except Exception as e:
             self.install_error(f"Erreur d'installation : {e}")
+            self.unmount_extra_partitions(f"{work}/target")
             subprocess.run(["umount", f"{work}/target"], timeout=10)
             return
         subprocess.run(["umount", f"{work}/target"], timeout=10)
@@ -3108,7 +3207,9 @@ class InstallerApp(Gtk.Application):
         os.makedirs(f"{work}/target", exist_ok=True)
         try:
             subprocess.run(["mount", root_part, f"{work}/target"], check=True, timeout=30)
+            self.mount_extra_partitions(f"{work}/target")
         except Exception as e:
+            self.unmount_extra_partitions(f"{work}/target")
             self.install_error(f"Montage échoué : {e}")
             return
         self.set_progress(0.20, tr("progress_copying"))
@@ -3119,6 +3220,7 @@ class InstallerApp(Gtk.Application):
             )
         except Exception as e:
             self.install_error(f"Copie échouée : {e}")
+            self.unmount_extra_partitions(f"{work}/target")
             subprocess.run(["umount", f"{work}/target"], timeout=10)
             return
         self.set_progress(0.70, tr("progress_kernel"))
@@ -3137,6 +3239,7 @@ class InstallerApp(Gtk.Application):
             self.install_grub(device, esp, root_part, work)
         except Exception as e:
             self.install_error(f"Erreur GRUB : {e}")
+            self.unmount_extra_partitions(f"{work}/target")
             subprocess.run(["umount", f"{work}/target"], timeout=10)
             return
         self.set_progress(0.85, tr("progress_account"))
@@ -3152,6 +3255,7 @@ class InstallerApp(Gtk.Application):
             self.set_progress(0.90, f"Avertissement premier démarrage : {e}")
         self.set_progress(0.95, tr("progress_sync"))
         subprocess.run(["sync"], timeout=30)
+        self.unmount_extra_partitions(f"{work}/target", write_fstab=True)
         subprocess.run(["umount", f"{work}/target"], timeout=30)
         self.cleanup_luks()
         self.post_install()
@@ -3159,6 +3263,16 @@ class InstallerApp(Gtk.Application):
     def run_partitioning(self, device):
         if self.config["install_type"] == "dualboot":
             self.run_dualboot_partitioning(device)
+            return
+        if self.config["install_type"] == "manual":
+            plan = self.manual_editor.plan
+            if plan is None or plan.device != device or plan.validate():
+                raise RuntimeError("Plan de partitionnement manuel invalide")
+            self.set_progress(0.06, tr("progress_manual_apply"))
+            winlux_partitioner.run_steps(
+                plan.build_steps(), log=lambda cmd: self.set_progress(0.07, cmd))
+            if not winlux_partitioner.wait_for_partitions(plan):
+                raise RuntimeError("Partitions introuvables après partitionnement")
             return
         cmds = [
             ["parted", "-s", device, "--", "mklabel", "gpt"],
@@ -3220,7 +3334,16 @@ class InstallerApp(Gtk.Application):
     def format_partitions(self, device):
         esp = None
         root_part = None
-        if self.config["install_type"] == "dualboot":
+        manual = self.config["install_type"] == "manual"
+        if manual:
+            plan = self.manual_editor.plan
+            root = plan.root()
+            for argv, stdin in plan.format_steps(skip=(root,)):
+                self.set_progress(0.11, " ".join(argv))
+                subprocess.run(argv, input=stdin, text=True, check=True, timeout=600)
+            esp = plan.path_of(plan.esp())
+            root_part = plan.path_of(root)
+        elif self.config["install_type"] == "dualboot":
             os_list = self.detected_os.get(device, [])
             if os_list:
                 part_num = re.search(r'(\d+)$', os_list[0]["partition"])
@@ -3257,7 +3380,8 @@ class InstallerApp(Gtk.Application):
         if not esp or not root_part:
             raise RuntimeError("Partitions introuvables après partitionnement")
 
-        subprocess.run(["mkfs.fat", "-F32", esp], check=True, timeout=30)
+        if not manual:
+            subprocess.run(["mkfs.fat", "-F32", esp], check=True, timeout=30)
 
         if self.config["luks_enabled"]:
             self.set_progress(0.12, tr("progress_luks_setup"))
@@ -3288,6 +3412,31 @@ class InstallerApp(Gtk.Application):
         subprocess.run(["mkfs.ext4", "-F", "-L", "WINLUX_ROOT", root_part],
                        check=True, timeout=120)
         return esp, root_part
+
+    def mount_extra_partitions(self, target):
+        """Monte /home, /var… du plan manuel sous la cible avant la copie du système."""
+        self.extra_mounts = []
+        if self.config["install_type"] != "manual":
+            return
+        plan = self.manual_editor.plan
+        for part in plan.mounts():
+            path = plan.path_of(part)
+            dest = target + part.mountpoint
+            self.set_progress(0.16, tr("progress_manual_mount", path=path, mount=part.mountpoint))
+            os.makedirs(dest, exist_ok=True)
+            subprocess.run(["mount", path, dest], check=True, timeout=30)
+            self.extra_mounts.append(dest)
+
+    def unmount_extra_partitions(self, target, write_fstab=False):
+        if write_fstab and self.config["install_type"] == "manual":
+            plan = self.manual_editor.plan
+            os.makedirs(f"{target}/etc", exist_ok=True)
+            with open(f"{target}/etc/fstab", "w") as f:
+                f.write(plan.fstab(winlux_partitioner.blkid_uuid,
+                                   root_luks=self.config["luks_enabled"]))
+        for dest in reversed(getattr(self, "extra_mounts", [])):
+            subprocess.run(["umount", dest], timeout=30)
+        self.extra_mounts = []
 
     def cleanup_luks(self):
         if self.config["luks_enabled"]:
@@ -3363,6 +3512,7 @@ class InstallerApp(Gtk.Application):
         self.set_progress(0.95, tr("progress_sync"))
         subprocess.run(["sync"], timeout=30)
         subprocess.run(["umount", f"{work}/target/boot/efi"], timeout=10)
+        self.unmount_extra_partitions(f"{work}/target", write_fstab=True)
         subprocess.run(["umount", f"{work}/target"], timeout=10)
 
     def install_grub(self, device, esp, root_part, work, split_root=True):

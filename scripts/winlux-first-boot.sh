@@ -26,6 +26,63 @@ if command -v dialog >/dev/null 2>&1; then TUI=dialog
 elif command -v whiptail >/dev/null 2>&1; then TUI=whiptail
 fi
 
+# --- Adaptation à l'écran ---
+# Police de console plus grande sur les écrans haute résolution (sinon le texte
+# est minuscule en 4K), puis boîtes de dialogue dimensionnées selon le terminal.
+adapt_console_font() {
+    test -t 1 || return 0
+    command -v setfont >/dev/null 2>&1 || return 0
+    size=$(cat /sys/class/graphics/fb0/virtual_size 2>/dev/null) || return 0
+    height=${size#*,}
+    case "$height" in ''|*[!0-9]*) return 0 ;; esac
+    if test "$height" -ge 2000; then font=ter-v32n
+    elif test "$height" -ge 1400; then font=ter-v24n
+    elif test "$height" -ge 1000; then font=ter-v18n
+    else return 0
+    fi
+    for dir in /usr/share/consolefonts /usr/share/kbd/consolefonts /lib/kbd/consolefonts; do
+        for f in "$dir/$font.psf.gz" "$dir/$font.psf" "$dir/$font.psfu.gz"; do
+            if test -r "$f"; then setfont "$f" 2>/dev/null || true; return 0; fi
+        done
+    done
+}
+adapt_console_font
+
+TERM_LINES=24
+TERM_COLS=80
+term_size() {
+    set -- $(stty size 2>/dev/null || echo "24 80")
+    case "${1:-}${2:-}" in ''|*[!0-9]*) return 0 ;; esac
+    test "$1" -gt 0 && TERM_LINES=$1
+    test "$2" -gt 0 && TERM_COLS=$2
+    return 0
+}
+# Hauteur demandée, bornée à la hauteur du terminal.
+dlg_h() {
+    term_size
+    h=$1
+    test "$h" -gt $((TERM_LINES - 2)) && h=$((TERM_LINES - 2))
+    test "$h" -lt 6 && h=6
+    echo "$h"
+}
+# Largeur : 3/4 du terminal (au moins la largeur demandée, au plus 100 colonnes).
+dlg_w() {
+    term_size
+    w=$((TERM_COLS * 3 / 4))
+    test "$w" -lt "$1" && w=$1
+    test "$w" -gt 100 && w=100
+    test "$w" -gt $((TERM_COLS - 4)) && w=$((TERM_COLS - 4))
+    test "$w" -lt 20 && w=20
+    echo "$w"
+}
+# Nombre de lignes de liste visibles dans une boîte de hauteur $1.
+dlg_list() {
+    n=$(( $1 - 7 ))
+    test "$n" -gt "$2" && n=$2
+    test "$n" -lt 1 && n=1
+    echo "$n"
+}
+
 # --- Fonctions d'entrée utilisateur ---
 # Sélection dans une liste (retourne le tag choisi dans $REPLY)
 menu() {
@@ -33,7 +90,8 @@ menu() {
     # $@ = tag1 label1 tag2 label2 ...
     count=$(( $# / 2 ))
     if test "$TUI" != none; then
-        REPLY=$("$TUI" --title "$title" --menu "" 20 60 "$count" "$@" 3>&1 1>&2 2>&3) || REPLY=
+        h=$(dlg_h $((count + 8)))
+        REPLY=$("$TUI" --title "$title" --menu "" "$h" "$(dlg_w 60)" "$(dlg_list "$h" "$count")" "$@" 3>&1 1>&2 2>&3) || REPLY=
     else
         echo
         echo "=== $title ==="
@@ -64,9 +122,9 @@ yesno() {
     title=$1; default=${2:-oui}
     if test "$TUI" != none; then
         if test "$default" = non; then
-            "$TUI" --title "$title" --defaultno --yesno "$title" 8 60 && return 0 || return 1
+            "$TUI" --title "$title" --defaultno --yesno "$title" "$(dlg_h 8)" "$(dlg_w 60)" && return 0 || return 1
         else
-            "$TUI" --title "$title" --yesno "$title" 8 60 && return 0 || return 1
+            "$TUI" --title "$title" --yesno "$title" "$(dlg_h 8)" "$(dlg_w 60)" && return 0 || return 1
         fi
     else
         if test "$default" = oui; then hint="[O/n]"; else hint="[o/N]"; fi
@@ -84,7 +142,7 @@ yesno() {
 input() {
     title=$1; default=${2:-}
     if test "$TUI" != none; then
-        REPLY=$("$TUI" --title "$title" --inputbox "" 10 60 "$default" 3>&1 1>&2 2>&3) || REPLY=$default
+        REPLY=$("$TUI" --title "$title" --inputbox "" "$(dlg_h 10)" "$(dlg_w 60)" "$default" 3>&1 1>&2 2>&3) || REPLY=$default
     else
         printf '%s [%s] : ' "$title" "$default"
         read -r REPLY || REPLY=
@@ -96,7 +154,7 @@ input() {
 password() {
     title=$1
     if test "$TUI" != none; then
-        REPLY=$("$TUI" --title "$title" --passwordbox "" 10 60 3>&1 1>&2 2>&3) || REPLY=
+        REPLY=$("$TUI" --title "$title" --passwordbox "" "$(dlg_h 10)" "$(dlg_w 60)" 3>&1 1>&2 2>&3) || REPLY=
     else
         printf '%s : ' "$title"
         stty -echo 2>/dev/null || true
@@ -112,7 +170,8 @@ checklist() {
     # $@ = tag1 label1 status1 tag2 label2 status2 ...
     count=$(( $# / 3 ))
     if test "$TUI" != none; then
-        REPLY=$("$TUI" --title "$title" --checklist "" 20 70 "$count" "$@" 3>&1 1>&2 2>&3) || REPLY=
+        h=$(dlg_h $((count + 8)))
+        REPLY=$("$TUI" --title "$title" --checklist "" "$h" "$(dlg_w 70)" "$(dlg_list "$h" "$count")" "$@" 3>&1 1>&2 2>&3) || REPLY=
     else
         echo
         echo "=== $title ==="
@@ -236,7 +295,7 @@ if test "$TUI" != none; then
     else
         preview="Thème clair sélectionné.\n\n  ┌─────────────────────────────┐\n  │  ████████████████████████   │\n  │  █  Fond clair  #f3f5fa  █  │\n  │  █  Texte foncé #202430  █  │\n  │  █  Accent    #8178b7    █  │\n  │  ████████████████████████   │\n  └─────────────────────────────┘"
     fi
-    "$TUI" --title "Aperçu du thème" --msgbox "$preview" 14 40 2>/dev/null || true
+    "$TUI" --title "Aperçu du thème" --msgbox "$preview" "$(dlg_h 14)" "$(dlg_w 40)" 2>/dev/null || true
 else
     if test "$THEME_CHOICE" = dark; then
         echo "  -> Thème sombre : fond #181b24, texte #ecedf5, accent #8178b7"
@@ -356,7 +415,7 @@ if test -n "$USER_AVATAR"; then
 fi
 
 if test "$TUI" != none; then
-    "$TUI" --title "Récapitulatif de la configuration" --msgbox "$summary" 18 60 2>/dev/null || true
+    "$TUI" --title "Récapitulatif de la configuration" --msgbox "$summary" "$(dlg_h 18)" "$(dlg_w 60)" 2>/dev/null || true
 else
     echo
     echo "=== Récapitulatif ==="
