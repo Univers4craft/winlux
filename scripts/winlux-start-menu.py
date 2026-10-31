@@ -45,6 +45,7 @@ _TR = {
     'Écran résolution': ('Display resolution', 'Pantalla resolución', 'Bildschirm Auflösung'),
     'À propos version': ('About version', 'Acerca de versión', 'Info Version'),
     'Navigateurs': ('Browsers', 'Navegadores', 'Browser'),
+    'Partage de dossiers et transfert des réglages': ('Folder sharing and settings transfer', 'Compartir carpetas y transferir ajustes', 'Ordnerfreigabe und Übertragung der Einstellungen'),
     'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
     'Bureautique': ('Office', 'Oficina', 'Büro'),
     'Graphisme': ('Graphics', 'Gráficos', 'Grafik'),
@@ -90,7 +91,8 @@ DEFAULTS = ["winlux-explorer.desktop", "winlux-browser-edge.desktop", "org.xfce.
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
 SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 2),
             (_t("Son"), 3), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 5), (_t("Personnalisation fond écran thème"), 6),
-            (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11)]
+            (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11),
+            (_t("Partage de dossiers et transfert des réglages"), 28)]
 
 def category(app):
     """Use installed desktop metadata, including generated Windows launchers."""

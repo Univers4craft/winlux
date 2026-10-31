@@ -175,6 +175,8 @@ jobs:
           sh scripts/test-backup.sh
           sh scripts/test-sessions.sh
           sh scripts/test-remote.sh
+          sh scripts/test-share.sh
+          sh scripts/test-transfer.sh
 
   # 3. Compile les .exe Windows puis les exécute sous Winlux.
   runtime-tests:
