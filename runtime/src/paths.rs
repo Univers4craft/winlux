@@ -426,13 +426,22 @@ fn join_comps(base: &mut Vec<String>, rel: &[String]) {
 
 /// Chemin Windows (absolu ou relatif) → chemin Linux.
 pub fn to_linux(w: &str) -> PathBuf {
-    to_linux_inner(w, true)
+    guard(to_linux_inner(w, true))
+}
+
+/// Dossiers personnels : l'application doit en avoir reçu l'autorisation.
+fn guard(p: PathBuf) -> PathBuf {
+    if crate::permissions::path_allowed(&p) {
+        p
+    } else {
+        crate::permissions::denied_path(&p)
+    }
 }
 
 /// Comme `to_linux`, sans traverser les archives ouvertes : le chemin reste
 /// `.../photos.zip/dossier` (sert à retrouver l'archive elle-même).
 pub fn to_linux_raw(w: &str) -> PathBuf {
-    to_linux_inner(w, false)
+    guard(to_linux_inner(w, false))
 }
 
 /// Racine Linux d'une lettre de lecteur.

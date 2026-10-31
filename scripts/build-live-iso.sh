@@ -122,6 +122,7 @@ cp "$root/scripts/winlux-installer.py" "$stage/usr/bin/winlux-installer"
 cp "$root/scripts/winlux-hw-detect.sh" "$stage/usr/bin/winlux-hw-detect"
 cp "$root/scripts/winlux-first-boot.sh" "$stage/usr/bin/winlux-first-boot"
 cp "$root/scripts/install.sh" "$stage/opt/winlux/scripts/install.sh"
+cp "$root/scripts/winlux-grub-theme.sh" "$stage/opt/winlux/scripts/winlux-grub-theme.sh"
 cp "$root/scripts/install-safety.sh" "$stage/opt/winlux/scripts/install-safety.sh"
 mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-recovery.sh" "$stage/usr/share/winlux/winlux-recovery.sh"
@@ -155,6 +156,11 @@ sh "$root/scripts/build-info.sh" "$(cat "$stage/usr/share/winlux/version")" syst
 printf 'system\n' >"$stage/usr/share/winlux/update-scope"
 mkdir -p "$stage/usr/share/winlux/avatars"
 cp "$root"/assets/avatars/avatar-*.svg "$stage/usr/share/winlux/avatars/"
+# Identité visuelle : logo, fonds Winlux et thème GRUB repris par l'installateur.
+mkdir -p "$stage/usr/share/winlux/brand" "$stage/usr/share/winlux/wallpapers"
+cp "$root"/assets/brand/winlux-logo*.svg "$root"/assets/brand/winlux-logo-*.png "$stage/usr/share/winlux/brand/"
+cp "$root"/assets/wallpapers/winlux-prisme-*.png "$stage/usr/share/winlux/wallpapers/"
+sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$stage/usr/share/winlux/grub-theme"
 
 # Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
 wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
@@ -179,7 +185,7 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite print_suite; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -277,7 +283,10 @@ if test -d /usr/share/alsa; then
 fi
 # Keep normal module names and dependency metadata so udev/modprobe can bind
 # network, audio and common input devices instead of relying on host drivers.
-for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1; do
+# Display drivers of the usual VM adapters (QEMU std VGA, QXL, VMware and
+# VirtualBox VMSVGA): without a DRM device the modesetting driver of Xorg has
+# nothing to drive and the desktop never appears (virtio-gpu is loaded apart).
+for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1 bochs qxl vmwgfx; do
     modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
         test "$directive" = insmod || continue
         destination="$stage${module%.zst}"
@@ -450,6 +459,14 @@ umask 077
 /bin/busybox awk '$2 == "/run" {mounted=1} END {exit !mounted}' /proc/mounts || /bin/busybox mount -t tmpfs -o mode=0755 tmpfs /run
 /bin/busybox mount -t tmpfs -o mode=1777 tmpfs /tmp 2>/dev/null || true
 /bin/busybox mkdir -p /run/winlux
+# Temps de démarrage : chaque étape note l'instant écoulé depuis l'allumage du
+# noyau (Paramètres > Processeur, `winlux --boot-time`).
+boot_mark() {
+    read -r boot_uptime boot_idle </proc/uptime 2>/dev/null || return 0
+    echo "$1 $boot_uptime" >>/run/winlux/boot-times
+}
+/bin/busybox rm -f /run/winlux/boot-times /run/winlux/boot-recorded
+boot_mark init
 safe_power() {
     if /usr/bin/winlux-update --busy; then
         echo 'Installation en cours : arrêt/redémarrage différé. Réessayez après la fin.'
@@ -477,6 +494,7 @@ while ! /usr/bin/winlux-update --boot >/run/winlux/boot-update.log 2>&1; do
     fi
     /bin/sh
 done
+boot_mark recovery
 /usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio_dma_buf.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-gpu.ko 2>/dev/null || true
@@ -486,10 +504,11 @@ done
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid-generic.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/serio-raw.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/psmouse.ko 2>/dev/null || true
-for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
+for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio bochs qxl vmwgfx; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
+boot_mark drivers
 # Partitions supplémentaires choisies à l'installation (/home, swap…).
 if test -s /etc/fstab; then
     if test -x /usr/bin/mount; then /usr/bin/mount -a 2>/dev/null || true
@@ -502,6 +521,7 @@ fi
 if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
     /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
 fi
+boot_mark hardware
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
@@ -538,8 +558,15 @@ fi
 /bin/busybox chmod 755 /home
 /bin/busybox chown winlux-web:winlux-web /home/winlux-web
 /bin/busybox chmod 700 /home/winlux-web
+# Installation hors ligne d'Edge (copie, vérification, extraction) : en
+# arrière-plan et en basse priorité, elle ne retarde plus le bureau.
+browser_setup_pid=
 if test -f /usr/share/winlux/browsers/edge.deb; then
-    /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 || true
+    # The static BusyBox of the image has no nice applet: use coreutils.
+    nice=
+    if test -x /usr/bin/nice; then nice='/usr/bin/nice -n 10'; fi
+    $nice /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 &
+    browser_setup_pid=$!
 fi
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
@@ -551,7 +578,12 @@ if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
 # Services maison : pare-feu (nftables, journal des blocages, alertes) et
 # planificateur de tâches (déclencheurs horaires, démarrage, événements).
 /usr/bin/winlux --firewall daemon >>/run/winlux/firewall.log 2>&1 &
+# Disques branchés (clé USB, NTFS d'un Windows) : montage avec une lettre.
+/usr/bin/winlux --volumes daemon >>/run/winlux/volumes.log 2>&1 &
 /usr/bin/winlux --tasks daemon >>/run/winlux/tasks.log 2>&1 &
+# Mode jeu : processeur et mémoire pour le jeu tant qu'il tourne.
+/usr/bin/winlux --gamemode daemon >>/run/winlux/gamemode.log 2>&1 &
+boot_mark services
 # Paquets demandés par un fichier de réponse : installés une fois, dès que le réseau répond.
 if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
     /bin/busybox mkdir -p /var/log
@@ -565,6 +597,10 @@ if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
             /bin/busybox mv /etc/winlux/first-boot-packages /etc/winlux/first-boot-packages.done
         fi
     ) >>/var/log/winlux-first-boot-packages.log 2>&1 &
+fi
+if test -n "$browser_setup_pid" && /bin/busybox grep -qwE 'winlux\.(native|browser)-smoke=1' /proc/cmdline; then
+    # Les tests de navigateurs ont besoin d'Edge déjà installé.
+    wait "$browser_setup_pid" 2>/dev/null || true
 fi
 if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     result=0
@@ -622,6 +658,8 @@ if /bin/busybox grep -qw 'winlux.smoke=1' /proc/cmdline; then
 fi
 (
     while :; do
+        # Pas de mise à jour automatique pendant une partie (mode jeu).
+        while test -e /run/winlux/gamemode.active; do /bin/busybox sleep 30; done
         /usr/bin/winlux-update --auto-run >>/run/winlux/auto-update.log 2>&1 || true
         /usr/bin/winlux-sysupdate --tick >>/run/winlux/sysupdate-auto.log 2>&1 || true
         /bin/busybox sleep 1800
@@ -630,6 +668,7 @@ fi
 (
     # Historique des fichiers : chaque utilisateur selon sa fréquence.
     while :; do
+        while test -e /run/winlux/gamemode.active; do /bin/busybox sleep 30; done
         /usr/bin/winlux-backup auto-run >>/run/winlux/backup-auto.log 2>&1 || true
         /bin/busybox sleep 60
     done
@@ -639,7 +678,16 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     echo "Winlux desktop preview: starting Xorg"
     /usr/bin/Xorg :0 -noreset -nolisten tcp -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
     xorg_pid=$!
-    /bin/busybox sleep 3
+    # Attendre que Xorg réponde (au plus 10 s) au lieu d'une pause fixe de 3 s.
+    for attempt in $(/bin/busybox seq 1 100); do
+        if test -S /tmp/.X11-unix/X0; then
+            ! test -x /usr/bin/xrandr && break
+            DISPLAY=:0 /usr/bin/xrandr --query >/dev/null 2>&1 && break
+        fi
+        /bin/busybox kill -0 "$xorg_pid" 2>/dev/null || break
+        /bin/busybox sleep 0.1
+    done
+    boot_mark xorg
     echo "Winlux Xorg input probe:"
     /bin/busybox grep -Ei 'libinput|input device|mouse|keyboard|error|cursor|config' /tmp/Xorg.0.log 2>/dev/null || true
     if ! /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; then
@@ -660,6 +708,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
         /bin/sh
     fi
+    boot_mark session
     # Bureau ouvert et stable pendant une minute : la mise à jour est validée.
     (
         /bin/busybox sleep 60
@@ -725,6 +774,11 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /usr/bin/xfdesktop --disable-wm-check >/run/winlux/desktop.log 2>&1 &
         desktop_pid=$!
         echo "WINLUX_DESKTOP_READY pid=$desktop_pid"
+        if ! test -e /run/winlux/boot-recorded; then
+            boot_mark desktop
+            /usr/bin/winlux --boot-time record 2>/dev/null || true
+            echo "WINLUX_BOOT_PHASES=$(/usr/bin/winlux --boot-time | /bin/busybox sed -n 's/^boot_phases=//p')"
+        fi
         while /bin/busybox kill -0 "$desktop_pid" 2>/dev/null; do
             request=$(/bin/busybox cat /run/winlux/session-action 2>/dev/null)
             update=$(/bin/busybox cat /run/winlux/update-action 2>/dev/null)
@@ -796,13 +850,26 @@ fi
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"
 sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"
+# Thème GRUB Winlux (logo Prisme) ; repli texte si la police manque.
+sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$iso_root/boot/grub/themes/winlux"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
 set timeout=5
 set timeout_style=menu
+set winlux_term=console
+if loadfont /boot/grub/themes/winlux/unicode.pf2; then
+    insmod all_video
+    insmod gfxterm
+    insmod png
+    set gfxmode=auto
+    if terminal_output gfxterm; then
+        set theme=/boot/grub/themes/winlux/theme.txt
+        set winlux_term=gfxterm
+    fi
+fi
 if serial --unit=0 --speed=115200; then
     terminal_input serial console
-    terminal_output serial console
+    terminal_output serial $winlux_term
 fi
 menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
     linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4

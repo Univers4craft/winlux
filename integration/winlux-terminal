@@ -12,6 +12,7 @@ if test "${1:-}" = --cwd; then
     shift 2
 fi
 if test "$#" = 0; then set -- -e /bin/bash -i; fi
-exec "$terminal" -title 'Terminal Winlux' -tn xterm-256color -fa 'DejaVu Sans Mono' -fs 11 \
+# Ubuntu's bashrc renames xterm windows (user@host: dir); keep the app name.
+exec "$terminal" -title 'Terminal Winlux' -xrm 'XTerm*allowTitleOps: false' -tn xterm-256color -fa 'DejaVu Sans Mono' -fs 11 \
     -u8 -bg '#171325' -fg '#eeeaf8' -cr '#ba9cff' \
     -sb -rightbar -sl 5000 -geometry 100x28 "$@"

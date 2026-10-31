@@ -29,6 +29,20 @@ mkdir -p "$paths_home/.config" "$paths_home/Mes documents"
 printf 'XDG_DOCUMENTS_DIR="$HOME/Mes documents"\n' > "$paths_home/.config/user-dirs.dirs"
 printf 'linux' > "$paths_home/Mes documents/réunion 10:30.txt"
 
+
+# Assistant de zone de notification factice : à la première icône, il répond
+# par un clic droit (relâchement) en (5, 6), comme le ferait le panneau.
+notify_helper="$power_root/notify-icon-helper"
+cat >"$notify_helper" <<'HELPER'
+#!/bin/sh
+IFS= read -r line || exit 0
+key=$(printf '%s\n' "$line" | cut -f2)
+sleep 1  # Après NIM_SETVERSION, comme un vrai clic.
+printf '%s\trup\t5\t6\n' "$key"
+cat >/dev/null
+HELPER
+chmod 755 "$notify_helper"
+
 for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths crt_suite gui_suite gui_demo explorer_regression voicerecorder power_api audio_suite d3d_suite print_suite; do
     exe="$testdir/$name.exe"
     test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
@@ -40,7 +54,8 @@ for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths c
         WINLUX_HOME="$paths_home" WINLUX_DRIVE_C="$paths_home" XDG_CONFIG_HOME="$paths_home/.config" \
             WINLUX_GUI=headless "$runtime" "$exe"
     else
-        WINLUX_AUDIO=null WINLUX_TEST=salut WINLUX_GUI=headless WINLUX_POWER_ROOT="$power_root" "$runtime" "$exe"
+        WINLUX_AUDIO=null WINLUX_TEST=salut WINLUX_GUI=headless WINLUX_POWER_ROOT="$power_root" \
+            WINLUX_NOTIFY_ICON_HELPER="$notify_helper" "$runtime" "$exe"
     fi
     actual=$?
     if [ "$name" = winpaths ] && [ "$actual" -eq 0 ]; then

@@ -187,6 +187,8 @@ case "$1" in
   --cpu-report) printf 'cpu_count=4\ncap_governor=1\nprofiles=performance,powersave\ncap_hybrid=0\n' ;;
   --cpu-profile) test "$2" != balanced || { echo 'profil balanced indisponible' >&2; exit 1; }; printf 'cpu-profile %s %s\n' "$2" "$3" >> "$WINLUX_CONTROL_TEST_LOG" ;;
   --fan-daemon) printf 'fan-daemon %s\n' "$2" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+  --boot-time) printf 'boot_known=1\nboot_total_ms=8420\n' ;;
+  --gamemode) printf 'game_mode=auto\ngame_active=0\n' ;;
 esac
 MOCK
 chmod 755 "$work/bin/winlux"
@@ -194,6 +196,12 @@ control status
 grep -qx 'cap_governor=1' "$work/root/run/winlux/cpu.txt"
 grep -qx 'hybrid_policy=auto' "$work/root/run/winlux/cpu.txt"
 grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
+grep -qx 'boot_total_ms=8420' "$work/root/run/winlux/cpu.txt"
+grep -qx 'game_active=0' "$work/root/run/winlux/cpu.txt"
+control game-mode-off
+grep -qx 'GAME_MODE=off' "$work/root/etc/winlux/cpu.conf"
+control game-mode-auto
+grep -qx 'GAME_MODE=auto' "$work/root/etc/winlux/cpu.conf"
 control cpu-profile-performance
 grep -qx "cpu-profile performance $work/root" "$work/commands"
 grep -qx 'CPU_PROFILE=performance' "$work/root/etc/winlux/cpu.conf"
@@ -208,6 +216,23 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do grep -q '^fan-daemon ' "$work/commands" 
 grep -qx "fan-daemon $work/root" "$work/commands"
 control cpu-fan-auto
 grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
+# Sans adaptateur, l'état ne doit jamais interroger bluetoothctl, qui
+# attendrait bluetoothd sans fin (blocage du démarrage de session).
+: > "$work/commands"
+sh "$project/scripts/winlux-bluetooth.sh" status
+grep -qx 'present=0' "$work/root/run/winlux/bluetooth.txt"
+if grep -q '^bluetoothctl' "$work/commands"; then echo 'ERROR: bluetoothctl queried without adapter' >&2; exit 1; fi
+mkdir -p "$work/root/sys/class/bluetooth/hci0"
+# Un bluetoothctl qui ne répond pas est abandonné après le délai.
+mkdir -p "$work/hang"
+printf '#!/bin/sh
+exec sleep 60
+' > "$work/hang/bluetoothctl"
+chmod 755 "$work/hang/bluetoothctl"
+started=$(date +%s)
+PATH="$work/hang:$PATH" WINLUX_BLUETOOTH_QUERY_SECONDS=1 sh "$project/scripts/winlux-bluetooth.sh" status
+test $(( $(date +%s) - started )) -lt 10
+grep -qx 'present=0' "$work/root/run/winlux/bluetooth.txt"
 control bluetooth-on
 grep -qx 'bluetooth_present=1' "$work/root/run/winlux/control.txt"
 grep -qx 'bluetooth_powered=1' "$work/root/run/winlux/control.txt"

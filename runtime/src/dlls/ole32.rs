@@ -928,12 +928,11 @@ pub unsafe extern "win64" fn prog_id_from_clsid(clsid: *const Guid, prog_id: *mu
     }
     let guid_str = guid_text(&*clsid);
     let reg_path = format!("hkcr\\clsid\\{}\\progid", guid_str.to_lowercase());
-    let value = match crate::dlls::advapi32::read_registry_value_internal(&reg_path, "") {
+    let text = match crate::registry::get_string(&reg_path, "") {
         Some(v) => v,
         None => return REGDB_E_CLASSNOTREG,
     };
-    let text = String::from_utf8_lossy(&value);
-    let text = text.trim_end_matches('\0');
+    let text = text.as_str();
     let wide: Vec<u16> = text.encode_utf16().chain(std::iter::once(0)).collect();
     let mem = co_task_mem_alloc(wide.len() * 2) as *mut u16;
     if mem.is_null() {
@@ -957,12 +956,11 @@ pub unsafe extern "win64" fn clsid_from_prog_id(prog_id: *const u16, clsid: *mut
         None => return CO_E_CLASSSTRING,
     };
     let reg_path = format!("hkcr\\{}\\clsid", name.to_lowercase());
-    let value = match crate::dlls::advapi32::read_registry_value_internal(&reg_path, "") {
+    let text = match crate::registry::get_string(&reg_path, "") {
         Some(v) => v,
         None => return CO_E_CLASSSTRING,
     };
-    let text = String::from_utf8_lossy(&value);
-    let text = text.trim_end_matches('\0');
+    let text = text.as_str();
     match parse_guid(text) {
         Some(g) => {
             *clsid = g;

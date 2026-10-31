@@ -95,6 +95,18 @@ _TR = {
     'oui': ('yes', 'sí', 'ja'),
     'non': ('no', 'no', 'nein'),
     'Ce compte n’a pas de mot de passe : l’écran se déverrouille d’un clic et ne se verrouille jamais tout seul.': ("This account has no password: the screen unlocks with a click and never locks by itself.", 'Esta cuenta no tiene contraseña: la pantalla se desbloquea con un clic y nunca se bloquea sola.', 'Dieses Konto hat kein Kennwort: Der Bildschirm wird per Klick entsperrt und sperrt sich nie von selbst.'),
+    # Confidentialité et sécurité : autorisations des applications Windows.
+    'Autorisations des applications Windows': ('Windows app permissions', 'Permisos de las aplicaciones de Windows', 'Berechtigungen von Windows-Apps'),
+    'Chaque application demande la première fois. Votre choix est retenu ; changez-le ici à tout moment.': ('Each app asks the first time. Your choice is remembered; change it here at any time.', 'Cada aplicación pregunta la primera vez. Su elección se recuerda; cámbiela aquí cuando quiera.', 'Jede App fragt beim ersten Mal. Ihre Wahl wird gespeichert; Sie können sie hier jederzeit ändern.'),
+    'Caméra pour toutes les applications': ('Camera for all apps', 'Cámara para todas las aplicaciones', 'Kamera für alle Apps'),
+    'Micro pour toutes les applications': ('Microphone for all apps', 'Micrófono para todas las aplicaciones', 'Mikrofon für alle Apps'),
+    'Aucune application Windows n’a encore demandé d’autorisation.': ('No Windows app has asked for permission yet.', 'Ninguna aplicación de Windows ha pedido permiso todavía.', 'Noch keine Windows-App hat eine Berechtigung angefordert.'),
+    'Fichiers personnels': ('Personal files', 'Archivos personales', 'Persönliche Dateien'),
+    'Caméra': ('Camera', 'Cámara', 'Kamera'),
+    'Micro': ('Microphone', 'Micrófono', 'Mikrofon'),
+    'Capture de l’écran': ('Screen capture', 'Captura de pantalla', 'Bildschirmaufnahme'),
+    'Réseau et Internet': ('Network & Internet', 'Red e Internet', 'Netzwerk und Internet'),
+    'Tout redemander': ('Ask again for everything', 'Volver a preguntar todo', 'Alles erneut fragen'),
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
     'Personnalisation du bureau': ('Desktop personalization', 'Personalización del escritorio', 'Desktop-Personalisierung'),
@@ -216,6 +228,36 @@ _TR = {
     'Code : {code}\n\n{detail}': ('Code: {code}\n\n{detail}', 'Código: {code}\n\n{detail}', 'Code: {code}\n\n{detail}'),
     'Étape : {stage} (code {code})\n\nDernières lignes du journal :\n{detail}': ('Step: {stage} (code {code})\n\nLast lines of the log:\n{detail}', 'Etapa: {stage} (código {code})\n\nÚltimas líneas del registro:\n{detail}', 'Schritt: {stage} (Code {code})\n\nLetzte Zeilen des Protokolls:\n{detail}'),
     '{done}/{total} fichiers': ('{done}/{total} files', '{done}/{total} archivos', '{done}/{total} Dateien'),
+    'Applications par défaut': ('Default apps', 'Aplicaciones predeterminadas', 'Standard-Apps'),
+    # Page Processeur : temps de démarrage.
+    'Temps de démarrage': ('Startup time', 'Tiempo de arranque', 'Startzeit'),
+    'Dernier démarrage : {value}': ('Last startup: {value}', 'Último arranque: {value}', 'Letzter Start: {value}'),
+    'précédent {value}': ('previous {value}', 'anterior {value}', 'vorher {value}'),
+    'meilleur {value}': ('best {value}', 'mejor {value}', 'bester {value}'),
+    'Étape la plus longue : {name} ({value})': ('Longest step: {name} ({value})', 'Paso más largo: {name} ({value})', 'Längster Schritt: {name} ({value})'),
+    'Mesuré de l’allumage jusqu’au lancement du bureau.': ('Measured from power-on to the desktop starting.', 'Medido desde el encendido hasta el inicio del escritorio.', 'Gemessen vom Einschalten bis zum Start des Desktops.'),
+    'Temps de démarrage pas encore mesuré.': ('Startup time not measured yet.', 'Tiempo de arranque aún no medido.', 'Startzeit noch nicht gemessen.'),
+    'Noyau et micrologiciel': ('Kernel and firmware', 'Núcleo y firmware', 'Kernel und Firmware'),
+    'Vérification du système': ('System check', 'Comprobación del sistema', 'Systemprüfung'),
+    'Pilotes': ('Drivers', 'Controladores', 'Treiber'),
+    'Détection du matériel': ('Hardware detection', 'Detección del hardware', 'Hardwareerkennung'),
+    'Services': ('Services', 'Servicios', 'Dienste'),
+    'Affichage': ('Display', 'Pantalla', 'Anzeige'),
+    'Session': ('Session', 'Sesión', 'Sitzung'),
+    'Bureau': ('Desktop', 'Escritorio', 'Desktop'),
+    # Page Processeur : mode jeu.
+    'Mode jeu': ('Game mode', 'Modo juego', 'Spielmodus'),
+    'Mode jeu automatique': ('Automatic game mode', 'Modo juego automático', 'Automatischer Spielmodus'),
+    'Désactiver le mode jeu': ('Turn off game mode', 'Desactivar el modo juego', 'Spielmodus ausschalten'),
+    'Automatique : s’active quand un jeu ou une application 3D tourne.': ('Automatic: turns on while a game or 3D app is running.', 'Automático: se activa cuando se ejecuta un juego o una aplicación 3D.', 'Automatisch: aktiv, solange ein Spiel oder eine 3D-App läuft.'),
+    'Désactivé.': ('Off.', 'Desactivado.', 'Aus.'),
+    'Actif pour {name}.': ('Active for {name}.', 'Activo para {name}.', 'Aktiv für {name}.'),
+    'Pendant une partie : {list}.': ('During a game: {list}.', 'Durante una partida: {list}.', 'Während eines Spiels: {list}.'),
+    'processeur en mode performances (sur secteur)': ('processor in performance mode (plugged in)', 'procesador en modo rendimiento (con corriente)', 'Prozessor im Leistungsmodus (am Netz)'),
+    'priorité du jeu relevée': ('game priority raised', 'prioridad del juego elevada', 'Spielpriorität erhöht'),
+    'sauvegardes et mises à jour en pause': ('backups and updates paused', 'copias de seguridad y actualizaciones en pausa', 'Sicherungen und Updates pausiert'),
+    'mémoire libérée pour le jeu': ('memory freed for the game', 'memoria liberada para el juego', 'Speicher für das Spiel freigegeben'),
+    'veille bloquée': ('sleep blocked', 'suspensión bloqueada', 'Ruhezustand blockiert'),
 }
 
 
@@ -232,6 +274,7 @@ PAGES = [_t("Système"), _t("Applications"), _t("Réseau"), _t("Son"), _t("Clavi
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
          _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes")]
 GRAPHICS_PAGE = 24
+CPU_PAGE = 19
 PRIVACY_PAGE = 18
 LOCK_DELAYS = (0, 60, 180, 300, 600, 900, 1800, 3600)
 
@@ -241,6 +284,30 @@ def lock_delay_text(seconds):
     if seconds == 60: return _t("1 minute")
     if seconds == 3600: return _t("1 heure")
     return _t("{n} minutes").format(n=seconds // 60)
+
+
+PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network")
+PERMISSION_NAMES = {"files": "Fichiers personnels", "camera": "Caméra", "microphone": "Micro",
+                    "screen": "Capture de l’écran", "network": "Réseau et Internet"}
+
+
+def permission_tool():
+    import shutil, sys
+    if shutil.which("winlux-permission"): return ["winlux-permission"]
+    return [sys.executable, str(Path(__file__).with_name("winlux-permission.py"))]
+
+
+def permission_apps():
+    """{programme: {capacité: allow|deny}} d’après winlux-permission list."""
+    try:
+        out = subprocess.run(permission_tool() + ["list"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    apps = {}
+    for line in out.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[0] in PERMISSION_NAMES: apps.setdefault(parts[2], {})[parts[0]] = parts[1]
+    return dict(sorted(apps.items(), key=lambda item: Path(item[0]).name.casefold()))
 
 
 def privacy_summary(status):
@@ -289,6 +356,7 @@ ACTIONS = {
          (_t("Veille (batterie)"), "power-sleep-dc"), (_t("Capot"), "power-lid"), (_t("Bouton d'alimentation"), "power-button"),
          (_t("Luminosité −"), "power-brightness-down"), (_t("Luminosité +"), "power-brightness-up"),
          (_t("Mettre en veille"), "power-suspend"), (_t("Veille prolongée"), "power-hibernate")],
+    19: [(_t("Mode jeu automatique"), "game-mode-auto"), (_t("Désactiver le mode jeu"), "game-mode-off")],
     8: [(_t("Suivre la taille de la VM") if VIRTUAL_MACHINE else _t("Définition recommandée"), "display-follow"), (_t("Définition fixe"), "display-fixed"),
         (_t("Échelle −"), "display-scale-down"), (_t("Automatique"), "display-scale-auto"), (_t("Échelle +"), "display-scale-up")],
 }
@@ -323,6 +391,67 @@ def gpu_summary():
     if report.get("gpu_hybrid") == "1":
         lines.append(_t("\nGPU par application : clic droit sur un .exe > Réglages de l'exécutable."))
     return "\n".join(lines)
+
+BOOT_STEPS = {"init": "Noyau et micrologiciel", "recovery": "Vérification du système", "drivers": "Pilotes",
+              "hardware": "Détection du matériel", "services": "Services", "xorg": "Affichage",
+              "session": "Session", "desktop": "Bureau"}
+
+
+def seconds(ms):
+    """Durée lisible en secondes, virgule décimale sauf en anglais."""
+    try: text = f"{int(ms) / 1000:.1f} s"
+    except ValueError: return "?"
+    return text if _LANG == "en" else text.replace(".", ",")
+
+
+def boot_summary(report):
+    """Temps du dernier démarrage, mesuré par l'init (winlux --boot-time)."""
+    if report.get("boot_known") != "1" or not report.get("boot_total_ms"):
+        return _t("Temps de démarrage pas encore mesuré.")
+    total = _t("Dernier démarrage : {value}").format(value=seconds(report["boot_total_ms"]))
+    extra = []
+    if report.get("boot_previous_ms"): extra.append(_t("précédent {value}").format(value=seconds(report["boot_previous_ms"])))
+    if report.get("boot_best_ms") and report.get("boot_count", "1") != "1":
+        extra.append(_t("meilleur {value}").format(value=seconds(report["boot_best_ms"])))
+    lines = [total + (f" ({', '.join(extra)})" if extra else "")]
+    steps = []
+    for item in report.get("boot_phases", "").split(","):
+        name, _, ms = item.partition(":")
+        if name and ms: steps.append(f"{_t(BOOT_STEPS.get(name, name))} {seconds(ms)}")
+    if report.get("boot_slowest") and report.get("boot_slowest_ms"):
+        lines.append(_t("Étape la plus longue : {name} ({value})").format(
+            name=_t(BOOT_STEPS.get(report["boot_slowest"], report["boot_slowest"])), value=seconds(report["boot_slowest_ms"])))
+    if steps: lines.append(" · ".join(steps))
+    lines.append(_t("Mesuré de l’allumage jusqu’au lancement du bureau."))
+    return "\n".join(lines)
+
+
+def game_summary(report):
+    """Mode jeu : réglage, partie en cours et actions que ce matériel permet."""
+    if not report.get("game_mode"):
+        return ""
+    lines = [_t("Mode jeu")]
+    if report["game_mode"] == "off":
+        lines.append(_t("Désactivé."))
+    else:
+        lines.append(_t("Automatique : s’active quand un jeu ou une application 3D tourne."))
+        if report.get("game_active") == "1":
+            lines.append(_t("Actif pour {name}.").format(name=report.get("game_name") or "?"))
+    actions = []
+    if report.get("cap_game_governor") == "1": actions.append(_t("processeur en mode performances (sur secteur)"))
+    if report.get("cap_game_priority") == "1": actions.append(_t("priorité du jeu relevée"))
+    actions.append(_t("sauvegardes et mises à jour en pause"))
+    if report.get("cap_game_memory") == "1": actions.append(_t("mémoire libérée pour le jeu"))
+    actions.append(_t("veille bloquée"))
+    lines.append(_t("Pendant une partie : {list}.").format(list=", ".join(actions)))
+    return "\n".join(lines)
+
+
+def cpu_summary():
+    report = dict(line.split("=", 1) for line in read("/run/winlux/cpu.txt").splitlines() if "=" in line)
+    parts = [_t("Temps de démarrage") + "\n" + boot_summary(report), game_summary(report)]
+    return "\n\n".join(part for part in parts if part)
+
 
 # Rapport de winlux-update (toujours écrit en français) : traduit à l'affichage.
 UPDATE_PREFIXES = ("Version installée : ", "Version disponible : ", "Action en attente : ", "Portée : ",
@@ -447,6 +576,10 @@ class Settings(Gtk.Window):
             shortcut = Gtk.Button(label={1:_t("Installer, désinstaller et gérer le démarrage"),2:_t("Wi-Fi et Bluetooth"),3:_t("Réglages rapides"),6:_t("Thèmes, accent, fond et barre des tâches")}[self.page])
             shortcut.connect("clicked", lambda *_: subprocess.Popen(["winlux-system-tools", tool]))
             self.body.pack_start(shortcut, False, False, 0)
+        if self.page == 1:
+            defaults = Gtk.Button(label=_t("Applications par défaut"))
+            defaults.connect("clicked", lambda *_: subprocess.Popen(["winlux-default-apps"]))
+            self.body.pack_start(defaults, False, False, 0)
         if self.page == 8:
             self.modes = Gtk.ComboBoxText()
             status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
@@ -457,13 +590,15 @@ class Settings(Gtk.Window):
             button = Gtk.Button(label=_t("Appliquer la définition"))
             button.connect("clicked", lambda *_: self.execute("display-mode-" + self.modes.get_active_text()) if self.modes.get_active_text() else None)
             self.body.pack_start(button, False, False, 0)
-        if self.page in (1, 10, 12, 13, GRAPHICS_PAGE):
+        if self.page in (1, 10, 12, 13, CPU_PAGE, GRAPHICS_PAGE):
             self.label(_t("Ouvrir les réglages détaillés de cette catégorie :"))
             button = Gtk.Button(label=_t("Réglages avancés"))
             legacy_page = self.page
             button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
             self.body.pack_start(button, False, False, 0)
-        if self.page == PRIVACY_PAGE: self.privacy_controls()
+        if self.page == PRIVACY_PAGE:
+            self.privacy_controls()
+            self.permission_controls()
         self.notice = self.label("")
         self.progress = Gtk.ProgressBar(show_text=True)
         self.body.pack_start(self.progress, False, False, 0)
@@ -508,6 +643,55 @@ class Settings(Gtk.Window):
         lock.connect("clicked", lambda *_: self.execute("lock-now"))
         self.body.pack_start(lock, False, False, 0)
 
+    def permission_controls(self):
+        """Autorisations des .exe : interrupteurs globaux, puis une carte par application."""
+        status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+        self.label(_t("Autorisations des applications Windows"), "subtitle")
+        self.label(_t("Chaque application demande la première fois. Votre choix est retenu ; changez-le ici à tout moment."))
+        for key, action, title in (("privacy_camera", "privacy-camera", _t("Caméra pour toutes les applications")),
+                                   ("privacy_microphone", "privacy-microphone", _t("Micro pour toutes les applications"))):
+            row = Gtk.Box(spacing=12)
+            row.pack_start(Gtk.Label(label=title, xalign=0), True, True, 0)
+            switch = Gtk.Switch(active=status.get(key, "allow") != "deny", valign=Gtk.Align.CENTER)
+            switch.connect("notify::active", lambda widget, _, base=action: self.execute(base + ("-allow" if widget.get_active() else "-deny")))
+            row.pack_start(switch, False, False, 0)
+            self.body.pack_start(row, False, False, 0)
+        apps = permission_apps()
+        if not apps:
+            self.label(_t("Aucune application Windows n’a encore demandé d’autorisation."), "subtitle")
+        for exe, caps in apps.items():
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            card.get_style_context().add_class("card")
+            head = Gtk.Box(spacing=12)
+            names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            names.pack_start(Gtk.Label(label=Path(exe).name, xalign=0), False, False, 0)
+            where = Gtk.Label(label=exe, xalign=0, ellipsize=3)
+            where.get_style_context().add_class("subtitle")
+            names.pack_start(where, False, False, 0)
+            head.pack_start(names, True, True, 0)
+            again = Gtk.Button(label=_t("Tout redemander"), valign=Gtk.Align.CENTER)
+            again.connect("clicked", lambda *_, path=exe: self.change_permission(["forget", path], refresh=True))
+            head.pack_start(again, False, False, 0)
+            card.pack_start(head, False, False, 0)
+            for cap in PERMISSION_ORDER:
+                if cap not in caps: continue
+                row = Gtk.Box(spacing=12)
+                row.pack_start(Gtk.Label(label=_t(PERMISSION_NAMES[cap]), xalign=0), True, True, 0)
+                switch = Gtk.Switch(active=caps[cap] == "allow", valign=Gtk.Align.CENTER)
+                switch.connect("notify::active", lambda widget, _, c=cap, path=exe:
+                               self.change_permission(["set", c, "allow" if widget.get_active() else "deny", path]))
+                row.pack_start(switch, False, False, 0)
+                card.pack_start(row, False, False, 0)
+            self.body.pack_start(card, False, False, 0)
+
+    def change_permission(self, args, refresh=False):
+        try:
+            subprocess.run(permission_tool() + args, check=True, timeout=5,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        except (OSError, subprocess.SubprocessError) as error:
+            self.show_error(_t("L’opération a échoué"), str(error))
+        if refresh: self.select(self.nav, self.nav.get_selected_row())
+
     def execute(self, action):
         if self.process is not None or self.busy: return
         if action in ("reboot", "poweroff", "restart-session", "update-rollback"):
@@ -550,6 +734,7 @@ class Settings(Gtk.Window):
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
+        if self.page == CPU_PAGE: text = cpu_summary()
         if self.page == PRIVACY_PAGE: text = privacy_summary(status)
         if self.page in (8, GRAPHICS_PAGE) and VIRTUAL_MACHINE:
             name = _VM_NAMES.get(VIRTUAL_MACHINE, "VM")
