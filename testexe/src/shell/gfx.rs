@@ -618,6 +618,8 @@ pub enum Glyph {
     Details,
     Tiles,
     Tools,
+    Wifi,
+    Ethernet,
 }
 
 pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y: i32, s: i32) {
@@ -2032,6 +2034,36 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                 y + s * 3 / 4,
                 c,
             );
+        }
+        Glyph::Wifi => {
+            let c = pal().text;
+            let cx = x + s / 2;
+            let cy = y + s * 3 / 4;
+            let t = (s / 10).max(1);
+            ellipse(hdc, b, cx - t, cy - t, cx + t, cy + t, c);
+            for k in 1..4i32 {
+                let r = s / 5 * k;
+                let arc_t = t;
+                for a in 0..16i32 {
+                    let deg = 225 + a * 90 / 15;
+                    let x0 = cx + (r as i32 * cos_milli(deg)) / 1000;
+                    let y0 = cy - (r as i32 * sin_milli(deg)) / 1000;
+                    let x1 = cx + ((r + arc_t) as i32 * cos_milli(deg)) / 1000;
+                    let y1 = cy - ((r + arc_t) as i32 * sin_milli(deg)) / 1000;
+                    fill(hdc, b, x0.min(x1), y0.min(y1), x0.max(x1) + 1, y0.max(y1) + 1, c);
+                }
+            }
+        }
+        Glyph::Ethernet => {
+            let c = pal().text;
+            let t = (s / 8).max(1);
+            let cx = x + s / 2;
+            fill(hdc, b, cx - t, y + s / 6, cx + t, y + s * 5 / 6, c);
+            fill(hdc, b, x + s / 5, y + s / 3, x + s * 4 / 5, y + s / 3 + t, c);
+            for &dx in &[s / 5, s * 4 / 5 - t] {
+                fill(hdc, b, x + dx, y + s / 3, x + dx + t, y + s / 2, c);
+                fill(hdc, b, x + dx - t, y + s / 2, x + dx + 2 * t, y + s / 2 + t * 2, c);
+            }
         }
     }
 }
