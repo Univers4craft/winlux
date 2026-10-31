@@ -1,9 +1,12 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 mod admin;
+mod archive;
+mod audio;
 mod clr;
 mod cpu;
 mod crash;
+mod diskimage;
 mod dlls;
 mod firewall;
 mod gpu;
@@ -48,6 +51,9 @@ fn main() {
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
+    }
+    if exe == "--audio-test" {
+        std::process::exit(audio::self_test());
     }
     if exe == "--tasks" || exe == "--firewall" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();

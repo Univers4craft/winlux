@@ -53,6 +53,21 @@ cat > "$work/bin/id" <<'MOCK'
 echo 0
 MOCK
 printf '#!/bin/sh\nexec sh "%s/scripts/winlux-sysupdate.sh" "$@"\n' "$project" > "$work/bin/winlux-sysupdate"
+cat > "$work/bin/bluetoothctl" <<'MOCK'
+#!/bin/sh
+state="$WINLUX_CONTROL_ROOT/bt-powered"
+case "$*" in
+  show) printf 'Controller 00:11:22:33:44:55 (public)\n\tAlias: winlux-vm\n\tPowered: %s\n\tDiscovering: no\n' "$(cat "$state" 2>/dev/null || echo no)" ;;
+  devices) printf 'Device AA:BB:CC:DD:EE:01 Casque|Test\nDevice AA:BB:CC:DD:EE:02 Souris\n' ;;
+  'info AA:BB:CC:DD:EE:01') printf '\tName: Casque|Test\n\tIcon: audio-headset\n\tPaired: yes\n\tConnected: yes\n' ;;
+  'info AA:BB:CC:DD:EE:02') printf '\tName: Souris\n\tIcon: input-mouse\n\tPaired: no\n\tConnected: no\n' ;;
+  'power on') echo yes > "$state" ;;
+  'power off') echo no > "$state" ;;
+  *) printf 'bluetoothctl %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+esac
+MOCK
+printf '#!/bin/sh\nexec sh "%s/scripts/winlux-bluetooth.sh" "$@"\n' "$project" > "$work/bin/winlux-bluetooth"
+printf 'H: Handlers=event5 js0\n' >> "$work/root/proc/bus/input/devices"
 chmod 755 "$work/bin/"*
 control() { sh "$project/scripts/winlux-control.sh" "$@"; }
 control status
@@ -167,6 +182,21 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do grep -q '^fan-daemon ' "$work/commands" 
 grep -qx "fan-daemon $work/root" "$work/commands"
 control cpu-fan-auto
 grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
+control bluetooth-on
+grep -qx 'bluetooth_present=1' "$work/root/run/winlux/control.txt"
+grep -qx 'bluetooth_powered=1' "$work/root/run/winlux/control.txt"
+grep -qx 'bluetooth_connected=1' "$work/root/run/winlux/control.txt"
+grep -qx 'gamepads=1' "$work/root/run/winlux/control.txt"
+grep -qx 'device=AA:BB:CC:DD:EE:01|CasqueTest|audio|1|1' "$work/root/run/winlux/bluetooth.txt"
+grep -qx 'device=AA:BB:CC:DD:EE:02|Souris|souris|0|0' "$work/root/run/winlux/bluetooth.txt"
+control bluetooth-pair AA:BB:CC:DD:EE:02
+grep -q 'pair AA:BB:CC:DD:EE:02' "$work/commands"
+grep -qx 'bluetoothctl trust AA:BB:CC:DD:EE:02' "$work/commands"
+control bluetooth-disconnect AA:BB:CC:DD:EE:01
+grep -qx 'bluetoothctl disconnect AA:BB:CC:DD:EE:01' "$work/commands"
+if control bluetooth-remove 'AA;reboot'; then echo 'ERROR: invalid Bluetooth address accepted' >&2; exit 1; fi
+control bluetooth-off
+grep -qx 'bluetooth_powered=0' "$work/root/run/winlux/control.txt"
 # GPU : seuls des jetons simples atteignent le runtime, qui revalide.
 cat > "$work/bin/winlux" <<'MOCK'
 #!/bin/sh
@@ -212,4 +242,4 @@ MOCK
 test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_03_00_0
 test "$(sh "$project/scripts/winlux-prime-run.sh" --integrated sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_00_02_0
 test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$PATH"')" = "$PATH"
-echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, system updates, privacy, welcome, host protection, CPU, GPU, overlay, prime-run'
+echo 'OK: control telemetry, Bluetooth, keyboard, touchpad, preferences, actions, update journal, system updates, privacy, welcome, host protection, CPU, GPU, overlay, prime-run'

@@ -3,8 +3,11 @@
 Deux outils d'administration maison, sans systemd, cron, Wine ni pare-feu tiers.
 Les services font partie du runtime (`winlux --tasks …`, `winlux --firewall …`)
 et sont lancés par l'init de l'ISO. Les applications graphiques sont dans le
-shell Win32 (`testexe/src/shell/taskschd.rs` et `firewall.rs`), en français ou en
-anglais selon Paramètres > Langue (ou `LANG`), en thème clair ou sombre.
+shell Win32 (`testexe/src/shell/taskschd.rs` et `firewall.rs`), en français, anglais,
+espagnol ou allemand selon Paramètres > Langue (ou `LANG`), en thème clair ou
+sombre. Les appels `t(fr, en)` donnent le français et l'anglais ; l'espagnol et
+l'allemand sont dans la table `TRANSLATIONS` de `admin_ui.rs` (tout nouveau
+texte doit y être ajouté, sinon il s'affiche en anglais).
 
 Ouverture : menu Démarrer (« Planificateur de tâches », « Pare-feu Winlux »),
 ou les commandes `taskschd`, `taskschd.msc`, `firewall`, `wf.msc`. Dans la

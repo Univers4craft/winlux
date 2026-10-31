@@ -1,6 +1,7 @@
 #!/usr/bin/python3
 """Compact, single-instance volume and power popups for the taskbar."""
 from pathlib import Path
+import json
 import re
 import shutil
 import subprocess
@@ -22,6 +23,21 @@ def audio():
             if result.returncode==0 and found:return "amixer",int(found[-1]),"[off]" in result.stdout
     except (OSError,ValueError,subprocess.TimeoutExpired):pass
     return None,0,False
+
+def app_streams():
+    """Flux audio par application (programmes .exe compris : Winlux nomme
+    chaque flux d'après son exécutable). Vide sans serveur PipeWire/Pulse."""
+    if not shutil.which("pactl"):return []
+    try:
+        result=subprocess.run(["pactl","-f","json","list","sink-inputs"],capture_output=True,text=True,timeout=2)
+        streams=[]
+        for entry in json.loads(result.stdout or "[]") if result.returncode==0 else []:
+            props=entry.get("properties",{})
+            name=props.get("application.name") or props.get("application.process.binary") or props.get("media.name") or "Application"
+            levels=[int(str(c.get("value_percent","0")).rstrip("%")) for c in entry.get("volume",{}).values()]
+            streams.append((int(entry["index"]),name,min(150,max(levels or [0])),bool(entry.get("mute"))))
+        return streams
+    except (OSError,ValueError,KeyError,TypeError,subprocess.TimeoutExpired):return []
 
 class Popup(Gtk.Application):
     def __init__(self,kind):
@@ -82,6 +98,10 @@ class Popup(Gtk.Application):
             self.mute=Gtk.Button(label="Muet / rétablir")
             self.mute.connect("clicked",lambda *_:self.command(["winlux-control","volume-mute"]))
             box.pack_start(self.mute,False,False,0)
+            # Mixeur par application : un curseur par flux en cours de lecture.
+            self.apps=Gtk.Box(orientation=Gtk.Orientation.VERTICAL,spacing=6)
+            self.apps_key=None;self.app_sliders={}
+            box.pack_start(self.apps,False,False,0)
         else:
             for title,action in [("Redémarrer", "reboot"), ("Éteindre", "poweroff")]:
                 button=Gtk.Button(label=title)
@@ -121,6 +141,29 @@ class Popup(Gtk.Application):
         elif self.backend=="amixer":self.command(["amixer","set","Master",f"{value}%"])
         return False
 
+    def refresh_apps(self):
+        streams=app_streams()
+        key=tuple((index,name) for index,name,_,_ in streams)
+        if key!=self.apps_key:
+            self.apps_key=key;self.app_sliders={}
+            for child in self.apps.get_children():self.apps.remove(child)
+            if streams:self.apps.pack_start(Gtk.Label(label="Applications",xalign=0),False,False,0)
+            for index,name,_,_ in streams:
+                row=Gtk.Box(spacing=8)
+                label=Gtk.Label(label=name,xalign=0);label.set_width_chars(14);label.set_ellipsize(3)
+                scale=Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL,0,100,1)
+                scale.set_draw_value(False);scale.set_hexpand(True)
+                scale.get_accessible().set_name(f"Volume de {name}")
+                scale.connect("value-changed",lambda s,i=index:None if getattr(self,"updating",False) else subprocess.Popen(
+                    ["pactl","set-sink-input-volume",str(i),f"{round(s.get_value())}%"],stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL))
+                row.pack_start(label,False,False,0);row.pack_start(scale,True,True,0)
+                self.apps.pack_start(row,False,False,0);self.app_sliders[index]=scale
+            self.apps.show_all()
+        for index,_,value,muted in streams:
+            scale=self.app_sliders.get(index)
+            if scale and not scale.get_state_flags() & Gtk.StateFlags.ACTIVE:
+                self.updating=True;scale.set_value(0 if muted else min(100,value));self.updating=False
+
     def refresh(self):
         if not self.window or not self.window.get_visible():return True
         if self.kind=="volume":
@@ -129,6 +172,7 @@ class Popup(Gtk.Application):
             self.slider.set_sensitive(bool(self.backend));self.mute.set_sensitive(bool(self.backend))
             if not self.timer and not (self.child and self.child.poll() is None) and not self.slider.get_state_flags() & Gtk.StateFlags.ACTIVE:
                 self.updating=True;self.slider.set_value(value);self.updating=False
+            self.refresh_apps()
         else:
             batteries=list(Path("/sys/class/power_supply").glob("BAT*/capacity"))
             if batteries:
