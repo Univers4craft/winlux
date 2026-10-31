@@ -389,7 +389,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.border,
     );
 
-    let btn_names: [&[u8]; 2] = [b"Actualiser", b"Effacer"];
+    let btn_names: [&[u8]; 3] = [
+        b"Actualiser",
+        b"Effacer",
+        crate::locale::tr(crate::locale::S_REPORT_BUTTON),
+    ];
     for (i, name) in btn_names.iter().enumerate() {
         let bx = cx + 8 + i as i32 * 100;
         let by = r.top + 6;
@@ -595,7 +599,7 @@ pub unsafe fn mouse(ev: Mouse, mx: i32, my: i32, f: &Frame) -> bool {
     let cx = r.left + SIDEBAR_W + 1;
     let old_btn = HOVER_BTN;
     HOVER_BTN = -1;
-    for i in 0..2 {
+    for i in 0..3 {
         let bx = cx + 8 + i * 100;
         let by = r.top + 6;
         if mx >= bx && mx < bx + 90 && my >= by && my < by + 24 {
@@ -642,6 +646,8 @@ pub unsafe fn mouse(ev: Mouse, mx: i32, my: i32, f: &Frame) -> bool {
                 ENTRY_COUNT = 0;
                 SELECTED_ROW = -1;
                 dirty = true;
+            } else if HOVER_BTN == 2 {
+                report_selected();
             }
             if HOVER_ROW >= 0 {
                 SELECTED_ROW = HOVER_ROW;
@@ -663,6 +669,36 @@ pub unsafe fn mouse(ev: Mouse, mx: i32, my: i32, f: &Frame) -> bool {
     }
 
     dirty
+}
+
+/// « Signaler » : le plantage sélectionné (repéré par son rang dans
+/// crash.log), sinon un signalement libre.
+unsafe fn report_selected() {
+    let mut args = [0u8; 40];
+    let mut n = 0;
+    if let Some(idx) = (SELECTED_ROW >= 0)
+        .then(|| visible_index(SELECTED_ROW as usize))
+        .flatten()
+        .filter(|&i| ENTRIES[i].cat == CAT_CRASH)
+    {
+        let rank = (0..idx).filter(|&j| ENTRIES[j].cat == CAT_CRASH).count() as u32;
+        let prefix = b"--crash-at ";
+        args[..prefix.len()].copy_from_slice(prefix);
+        n = prefix.len();
+        let mut digits = [0u8; 8];
+        let len = fmt_u32(rank, &mut digits);
+        args[n..n + len].copy_from_slice(&digits[..len]);
+        n += len;
+    }
+    args[n] = 0;
+    ShellExecuteA(
+        core::ptr::null_mut(),
+        c"open".as_ptr(),
+        c"winlux-report".as_ptr(),
+        args.as_ptr().cast(),
+        core::ptr::null(),
+        1,
+    );
 }
 
 pub unsafe fn key(vk: u32, _ch: u16) -> bool {

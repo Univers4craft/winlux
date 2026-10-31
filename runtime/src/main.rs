@@ -108,6 +108,9 @@ fn main() {
     if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
         crash::set_exe_name(name);
     }
+    if let Ok(full) = std::fs::canonicalize(&exe) {
+        crash::set_exe_path(&full.to_string_lossy());
+    }
     let cpu_settings = profiles::apply(&exe);
     if let Some(assembly) = managed::managed_image(&exe, &source) {
         log_info!(
