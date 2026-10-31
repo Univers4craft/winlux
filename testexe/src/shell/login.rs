@@ -18,6 +18,15 @@ static mut SHOW_PASSWORD: bool = false;
 static mut CURSOR_BLINK: u32 = 0;
 
 const MAX_USERS: usize = 8;
+/// Compte propriétaire de cette session (son bureau est derrière l'écran de
+/// verrouillage). usize::MAX : personne n'est encore connecté sur cet écran.
+static mut OWNER: usize = usize::MAX;
+/// Session ouverte par « Changer d'utilisateur » depuis un autre bureau.
+static mut SPAWNED_SESSION: bool = false;
+static mut SESSIONS: [u8; 1024] = [0; 1024];
+static mut SESSIONS_LEN: usize = 0;
+static mut SESSIONS_POLL: u32 = 0;
+static mut SWITCH_NOTICE: u32 = 0;
 static mut USERS: [User; MAX_USERS] = [User::empty(); MAX_USERS];
 static mut USER_COUNT: usize = 0;
 
@@ -105,6 +114,122 @@ pub unsafe fn init() {
         USERS[0] = u;
         USER_COUNT = 1;
     }
+    // Bureau créé par winlux-sessions pour un compte déjà authentifié sur
+    // l'écran de verrouillage d'une autre session.
+    let mut env = [0u8; 40];
+    let n = GetEnvironmentVariableA(
+        c"WINLUX_SESSION_USER".as_ptr(),
+        env.as_mut_ptr().cast(),
+        env.len() as u32,
+    ) as usize;
+    if n > 0 && n < env.len() {
+        if let Some(i) = find_user(&env[..n]) {
+            SELECTED_USER = i;
+            OWNER = i;
+            SPAWNED_SESSION = true;
+            LOGGED_IN = true;
+        }
+    }
+}
+
+fn find_user(name: &[u8]) -> Option<usize> {
+    unsafe { (0..USER_COUNT).find(|&i| &USERS[i].name[..USERS[i].name_len] == name) }
+}
+
+/// Appelle `winlux-control session-<verbe> <compte>`.
+unsafe fn session_control(verb: &[u8], user: usize) {
+    if user >= USER_COUNT {
+        return;
+    }
+    let mut cmd = [0u8; 64];
+    let mut n = 0;
+    for part in [b"session-".as_slice(), verb, b" ", &USERS[user].name[..USERS[user].name_len]] {
+        cmd[n..n + part.len()].copy_from_slice(part);
+        n += part.len();
+    }
+    if let Ok(c) = core::ffi::CStr::from_bytes_until_nul(&cmd[..n + 1]) {
+        crate::settings::control(c);
+    }
+    SESSIONS_POLL = 0;
+}
+
+pub fn user_count() -> usize {
+    unsafe { USER_COUNT }
+}
+pub fn user_name(i: usize) -> &'static [u8] {
+    unsafe {
+        if i < USER_COUNT {
+            &USERS[i].name[..USERS[i].name_len]
+        } else {
+            b""
+        }
+    }
+}
+pub fn owner() -> usize {
+    unsafe { OWNER }
+}
+
+/// Le compte a-t-il une session ouverte (sur cet écran ou un autre) ?
+pub unsafe fn has_session(i: usize) -> bool {
+    if i == OWNER {
+        return true;
+    }
+    let now = GetTickCount();
+    if SESSIONS_POLL == 0 || now.wrapping_sub(SESSIONS_POLL) > 2000 {
+        SESSIONS_POLL = now.max(1);
+        let h = CreateFileA(
+            c"Z:\\run\\winlux\\sessions.txt".as_ptr(),
+            0x8000_0000,
+            7,
+            core::ptr::null_mut(),
+            3,
+            0,
+            core::ptr::null_mut(),
+        );
+        SESSIONS_LEN = 0;
+        if !h.is_null() && h as isize != -1 {
+            let mut read = 0u32;
+            ReadFile(
+                h,
+                SESSIONS.as_mut_ptr(),
+                SESSIONS.len() as u32,
+                &mut read,
+                core::ptr::null_mut(),
+            );
+            CloseHandle(h);
+            SESSIONS_LEN = (read as usize).min(SESSIONS.len());
+        }
+    }
+    let name = user_name(i);
+    SESSIONS[..SESSIONS_LEN]
+        .split(|&c| c == b'\n')
+        .filter_map(|l| l.strip_prefix(b"session="))
+        .any(|l| l.split(|&c| c == b'|').next() == Some(name))
+}
+
+/// « Changer d'utilisateur » : verrouille ce bureau et propose le compte
+/// choisi ; son mot de passe ouvre ou rejoint sa propre session.
+pub unsafe fn switch_user(i: usize) {
+    lock_screen();
+    if i < USER_COUNT {
+        SELECTED_USER = i;
+    }
+}
+
+/// « Se déconnecter » : ferme la session de ce compte. Un bureau secondaire
+/// s'arrête ; le bureau principal revient à l'écran de connexion.
+pub unsafe fn sign_out() {
+    if OWNER == usize::MAX {
+        lock_screen();
+        return;
+    }
+    if SPAWNED_SESSION {
+        session_control(b"logoff", OWNER);
+        return;
+    }
+    session_control(b"unregister", OWNER);
+    OWNER = usize::MAX;
+    lock_screen();
 }
 
 pub unsafe fn logged_in() -> bool {
@@ -123,6 +248,9 @@ pub unsafe fn skip_login() {
 }
 
 pub unsafe fn current_user_name() -> &'static [u8] {
+    if OWNER < USER_COUNT {
+        return &USERS[OWNER].name[..USERS[OWNER].name_len];
+    }
     if SELECTED_USER < USER_COUNT {
         &USERS[SELECTED_USER].name[..USERS[SELECTED_USER].name_len]
     } else {
@@ -131,6 +259,9 @@ pub unsafe fn current_user_name() -> &'static [u8] {
 }
 
 pub unsafe fn current_user_is_root() -> bool {
+    if OWNER < USER_COUNT {
+        return USERS[OWNER].is_root;
+    }
     if SELECTED_USER < USER_COUNT {
         USERS[SELECTED_USER].is_root
     } else {
@@ -316,6 +447,17 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
         draw_user_grid(hdc, &mut b, &f, w, center_y, fade_alpha);
     }
 
+    if SWITCH_NOTICE != 0 && since(SWITCH_NOTICE) < 4000 {
+        text_centered(
+            hdc,
+            f.small,
+            11,
+            mix(0, rgb(0xCC, 0xE4, 0xFF), fade_alpha, 1000),
+            w / 2,
+            h - 90,
+            b"Ouverture de l'autre session : votre bureau reste verrouill\xE9 et intact.",
+        );
+    }
     // Message d'erreur.
     if PASSWORD_ERROR && since(ERROR_TIME) < 3000 {
         let alpha = if since(ERROR_TIME) > 2500 {
@@ -638,6 +780,22 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
             ay + avatar_size + 28,
             role,
         );
+        // Session déjà ouverte : basculer ne fermera pas son travail.
+        if has_session(i) {
+            text_centered(
+                hdc,
+                f.caption,
+                12,
+                mix(0, rgb(0x7F, 0xE0, 0x9A), alpha, 1000),
+                cx,
+                ay + avatar_size + 44,
+                if i == OWNER {
+                    b"Session verrouill\xE9e"
+                } else {
+                    b"Connect\xE9"
+                },
+            );
+        }
     }
 
     // Champ mot de passe sous la grille si l'utilisateur sélectionné en a un.
@@ -875,6 +1033,19 @@ pub fn approx_sincos(deg: i32) -> (i32, i32) {
 unsafe fn try_login() {
     if check_password() {
         PASSWORD_ERROR = false;
+        if OWNER != usize::MAX && OWNER != SELECTED_USER {
+            // Un autre compte se connecte depuis l'écran verrouillé : sa
+            // session s'ouvre à côté, celle-ci reste intacte et verrouillée.
+            session_control(b"switch", SELECTED_USER);
+            SELECTED_USER = OWNER;
+            PASSWORD_LEN = 0;
+            SWITCH_NOTICE = now().max(1);
+            return;
+        }
+        if OWNER == usize::MAX {
+            OWNER = SELECTED_USER;
+            session_control(b"register", OWNER);
+        }
         LOGIN_FADE_START = now();
     } else {
         PASSWORD_ERROR = true;
@@ -1012,7 +1183,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
 
 /// Animation de l'écran de connexion.
 pub unsafe fn animating() -> bool {
-    LOGIN_FADE_START > 0 || (PASSWORD_ERROR && since(ERROR_TIME) < 3000)
+    LOGIN_FADE_START > 0
+        || (PASSWORD_ERROR && since(ERROR_TIME) < 3000)
+        || (SWITCH_NOTICE != 0 && since(SWITCH_NOTICE) < 4100)
 }
 
 // --- Popup d'élévation de privilèges (style UAC) ---
