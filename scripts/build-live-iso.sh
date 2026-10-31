@@ -456,6 +456,14 @@ umask 077
 /bin/busybox awk '$2 == "/run" {mounted=1} END {exit !mounted}' /proc/mounts || /bin/busybox mount -t tmpfs -o mode=0755 tmpfs /run
 /bin/busybox mount -t tmpfs -o mode=1777 tmpfs /tmp 2>/dev/null || true
 /bin/busybox mkdir -p /run/winlux
+# Temps de démarrage : chaque étape note l'instant écoulé depuis l'allumage du
+# noyau (Paramètres > Processeur, `winlux --boot-time`).
+boot_mark() {
+    read -r boot_uptime boot_idle </proc/uptime 2>/dev/null || return 0
+    echo "$1 $boot_uptime" >>/run/winlux/boot-times
+}
+/bin/busybox rm -f /run/winlux/boot-times /run/winlux/boot-recorded
+boot_mark init
 safe_power() {
     if /usr/bin/winlux-update --busy; then
         echo 'Installation en cours : arrêt/redémarrage différé. Réessayez après la fin.'
@@ -483,6 +491,7 @@ while ! /usr/bin/winlux-update --boot >/run/winlux/boot-update.log 2>&1; do
     fi
     /bin/sh
 done
+boot_mark recovery
 /usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio_dma_buf.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-gpu.ko 2>/dev/null || true
@@ -496,6 +505,7 @@ for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 s
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
+boot_mark drivers
 # Partitions supplémentaires choisies à l'installation (/home, swap…).
 if test -s /etc/fstab; then
     if test -x /usr/bin/mount; then /usr/bin/mount -a 2>/dev/null || true
@@ -508,6 +518,7 @@ fi
 if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
     /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
 fi
+boot_mark hardware
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
@@ -544,8 +555,12 @@ fi
 /bin/busybox chmod 755 /home
 /bin/busybox chown winlux-web:winlux-web /home/winlux-web
 /bin/busybox chmod 700 /home/winlux-web
+# Installation hors ligne d'Edge (copie, vérification, extraction) : en
+# arrière-plan et en basse priorité, elle ne retarde plus le bureau.
+browser_setup_pid=
 if test -f /usr/share/winlux/browsers/edge.deb; then
-    /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 || true
+    /bin/busybox nice -n 10 /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 &
+    browser_setup_pid=$!
 fi
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
@@ -558,6 +573,7 @@ if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
 # planificateur de tâches (déclencheurs horaires, démarrage, événements).
 /usr/bin/winlux --firewall daemon >>/run/winlux/firewall.log 2>&1 &
 /usr/bin/winlux --tasks daemon >>/run/winlux/tasks.log 2>&1 &
+boot_mark services
 # Paquets demandés par un fichier de réponse : installés une fois, dès que le réseau répond.
 if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
     /bin/busybox mkdir -p /var/log
@@ -571,6 +587,10 @@ if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
             /bin/busybox mv /etc/winlux/first-boot-packages /etc/winlux/first-boot-packages.done
         fi
     ) >>/var/log/winlux-first-boot-packages.log 2>&1 &
+fi
+if test -n "$browser_setup_pid" && /bin/busybox grep -qwE 'winlux\.(native|browser)-smoke=1' /proc/cmdline; then
+    # Les tests de navigateurs ont besoin d'Edge déjà installé.
+    wait "$browser_setup_pid" 2>/dev/null || true
 fi
 if /bin/busybox grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     result=0
@@ -645,7 +665,16 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     echo "Winlux desktop preview: starting Xorg"
     /usr/bin/Xorg :0 -noreset -nolisten tcp -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
     xorg_pid=$!
-    /bin/busybox sleep 3
+    # Attendre que Xorg réponde (au plus 10 s) au lieu d'une pause fixe de 3 s.
+    for attempt in $(/bin/busybox seq 1 100); do
+        if test -S /tmp/.X11-unix/X0; then
+            ! test -x /usr/bin/xrandr && break
+            DISPLAY=:0 /usr/bin/xrandr --query >/dev/null 2>&1 && break
+        fi
+        /bin/busybox kill -0 "$xorg_pid" 2>/dev/null || break
+        /bin/busybox sleep 0.1
+    done
+    boot_mark xorg
     echo "Winlux Xorg input probe:"
     /bin/busybox grep -Ei 'libinput|input device|mouse|keyboard|error|cursor|config' /tmp/Xorg.0.log 2>/dev/null || true
     if ! /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; then
@@ -666,6 +695,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
         /bin/sh
     fi
+    boot_mark session
     # Bureau ouvert et stable pendant une minute : la mise à jour est validée.
     (
         /bin/busybox sleep 60
@@ -731,6 +761,11 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /usr/bin/xfdesktop --disable-wm-check >/run/winlux/desktop.log 2>&1 &
         desktop_pid=$!
         echo "WINLUX_DESKTOP_READY pid=$desktop_pid"
+        if ! test -e /run/winlux/boot-recorded; then
+            boot_mark desktop
+            /usr/bin/winlux --boot-time record 2>/dev/null || true
+            echo "WINLUX_BOOT_PHASES=$(/usr/bin/winlux --boot-time | /bin/busybox sed -n 's/^boot_phases=//p')"
+        fi
         while /bin/busybox kill -0 "$desktop_pid" 2>/dev/null; do
             request=$(/bin/busybox cat /run/winlux/session-action 2>/dev/null)
             update=$(/bin/busybox cat /run/winlux/update-action 2>/dev/null)
