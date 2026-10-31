@@ -130,12 +130,18 @@ pub(crate) fn process_os_pid(h: usize) -> Option<i32> {
         return Some(std::process::id() as i32);
     }
     match lookup_sync(h)? {
-        SyncHandle::Process(p) => lock(&p.state).child.as_ref().map(|c| c.id() as i32),
+        SyncHandle::Process(p) => {
+            let s = lock(&p.state);
+            s.child.as_ref().map(|c| c.id() as i32).or(s.foreign)
+        }
         _ => None,
     }
 }
 struct ProcessState {
     child: Option<Child>,
+    /// Processus ouvert par `OpenProcess` sans en être le parent (Gestionnaire
+    /// des tâches, outils de diagnostic) : seul son PID Linux est connu.
+    foreign: Option<i32>,
     exit_code: u32,
     suspended: bool,
 }
@@ -3050,6 +3056,14 @@ fn wait_thread(t: &ThreadObject, timeout: u32) -> u32 {
 }
 fn poll_process(p: &ProcessObject) -> bool {
     let mut s = lock(&p.state);
+    if let Some(pid) = s.foreign {
+        if !os_process_alive(pid) {
+            s.foreign = None;
+            s.exit_code = 0;
+            p.changed.notify_all();
+        }
+        return s.foreign.is_none();
+    }
     if let Some(child) = s.child.as_mut() {
         match child.try_wait() {
             Ok(Some(status)) => {
@@ -3542,6 +3556,7 @@ unsafe fn create_process_common(
     let object = Arc::new(ProcessObject {
         state: Mutex::new(ProcessState {
             child: Some(child),
+            foreign: None,
             exit_code: 259,
             suspended,
         }),
@@ -3681,15 +3696,39 @@ pub unsafe extern "win64" fn create_process_w(
     )
 }
 pub unsafe extern "win64" fn open_process(_access: u32, _inherit: i32, pid: u32) -> usize {
-    if pid == 0 {
+    if pid == 0 || pid > i32::MAX as u32 {
         crate::process::set_last_error(87);
         return 0;
     }
     if pid == libc::getpid() as u32 {
         return get_current_process();
     }
-    crate::process::set_last_error(5);
-    0
+    // Les PID Windows sont les PID Linux : tout processus vivant s'ouvre, les
+    // droits réels sont vérifiés par le noyau au moment d'agir (kill, nice).
+    if !os_process_alive(pid as i32) {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let object = Arc::new(ProcessObject {
+        state: Mutex::new(ProcessState {
+            child: None,
+            foreign: Some(pid as i32),
+            exit_code: 259,
+            suspended: false,
+        }),
+        changed: Condvar::new(),
+    });
+    add_sync(SyncHandle::Process(object), None)
+}
+/// Vrai tant que le processus existe (zombie compris : il n'est pas réclamé).
+fn os_process_alive(pid: i32) -> bool {
+    if pid <= 0 {
+        return false;
+    }
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
 }
 pub unsafe extern "win64" fn get_exit_code_process(handle: usize, code: *mut u32) -> i32 {
     if code.is_null() {
@@ -3710,6 +3749,16 @@ pub unsafe extern "win64" fn terminate_process(handle: usize, code: u32) -> i32 
         return 0;
     };
     let mut s = lock(&p.state);
+    if let Some(pid) = s.foreign {
+        // TerminateProcess est immédiat sous Windows : SIGKILL.
+        if libc::kill(pid, libc::SIGKILL) != 0 {
+            let gone = std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH);
+            crate::process::set_last_error(if gone { 87 } else { 5 });
+            return 0;
+        }
+        s.exit_code = code;
+        return 1;
+    }
     let Some(child) = s.child.as_mut() else {
         crate::process::set_last_error(5);
         return 0;
@@ -6169,8 +6218,8 @@ pub unsafe extern "win64" fn create_mutex_w(_sa: usize, owner: i32, name: *const
     )
 }
 
-pub extern "win64" fn get_process_id(_process: usize) -> u32 {
-    unsafe { libc::getpid() as u32 }
+pub extern "win64" fn get_process_id(process: usize) -> u32 {
+    process_os_pid(process).map_or(0, |pid| pid as u32)
 }
 
 pub unsafe extern "win64" fn get_module_handle_ex_w(
@@ -6358,6 +6407,36 @@ pub fn exports() -> crate::dlls::Exports {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn open_process_ouvre_un_processus_etranger_et_le_termine() {
+        let mut child = std::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("sleep");
+        let pid = child.id();
+        unsafe {
+            let h = super::open_process(0x1, 0, pid);
+            assert_ne!(h, 0);
+            assert_eq!(super::get_process_id(h), pid);
+            assert_eq!(super::super::kernel32_cpu::set_priority_class(h, 0x4000), 1);
+            let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
+            let nice: i32 = stat
+                .rsplit(')')
+                .next()
+                .unwrap()
+                .split_whitespace()
+                .nth(16)
+                .unwrap()
+                .parse()
+                .unwrap();
+            assert_eq!(nice, 10);
+            assert_eq!(super::terminate_process(h, 1), 1);
+            assert!(child.wait().is_ok());
+            assert_eq!(super::open_process(0x1, 0, pid), 0);
+            super::close_handle(h);
+        }
+    }
+
     use super::*;
     use std::ffi::CString;
 
