@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **216**
-- À faire ou en cours : **37**
-- Total : **253**
-- Progression : **85.4%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140)
+- Réalisé : **217**
+- À faire ou en cours : **38**
+- Total : **255**
+- Progression : **85.1%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158)
 
 ## À FAIRE (par priorité)
 
