@@ -12,7 +12,7 @@ pub enum Level {
 }
 
 impl Level {
-    fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             Level::Error => "error",
             Level::Warn => "warn",
@@ -32,22 +32,39 @@ enum Format {
 struct Config {
     level: Level,
     format: Format,
+    journal: bool,
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
 static LOG_FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+static JOURNAL_FILE: OnceLock<Mutex<Option<std::fs::File>>> = OnceLock::new();
 
 const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
+
+fn journal_file() -> &'static Mutex<Option<std::fs::File>> {
+    JOURNAL_FILE.get_or_init(|| {
+        let dir = "/run/winlux/journal";
+        let _ = std::fs::create_dir_all(dir);
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(format!("{dir}/winlux.log"));
+        Mutex::new(file.ok())
+    })
+}
 
 fn config() -> &'static Config {
     CONFIG.get_or_init(|| {
         let raw = std::env::var("WINLUX_LOG").unwrap_or_default();
         let raw = raw.trim();
 
+        let journal = std::env::var_os("WINLUX_JOURNAL").is_none_or(|v| v != "0");
+
         if std::env::args_os().any(|a| a == "--verbose") || raw.eq_ignore_ascii_case("debug") {
             return Config {
                 level: Level::Debug,
                 format: Format::Text,
+                journal,
             };
         }
 
@@ -55,6 +72,7 @@ fn config() -> &'static Config {
             return Config {
                 level: Level::Trace,
                 format: Format::Text,
+                journal,
             };
         }
 
@@ -62,6 +80,7 @@ fn config() -> &'static Config {
             return Config {
                 level: Level::Debug,
                 format: Format::Json,
+                journal,
             };
         }
 
@@ -85,7 +104,11 @@ fn config() -> &'static Config {
             Format::Text
         };
 
-        Config { level, format }
+        Config {
+            level,
+            format,
+            journal,
+        }
     })
 }
 
@@ -130,18 +153,15 @@ fn timestamp() -> String {
         .unwrap_or_default();
     let secs = d.as_secs();
     let millis = d.subsec_millis();
-    // UTC timestamp : secondes depuis l'epoch, converti en ISO 8601 simplifié
     let s = secs % 60;
     let m = (secs / 60) % 60;
     let h = (secs / 3600) % 24;
     let days = secs / 86400;
-    // Calcul simplifié de la date à partir du nombre de jours depuis 1970
     let (y, mo, day) = days_to_ymd(days);
     format!("{y:04}-{mo:02}-{day:02}T{h:02}:{m:02}:{s:02}.{millis:03}Z")
 }
 
 fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
-    // Algorithme de conversion jours-depuis-epoch vers Y/M/D
     let mut y = 1970;
     loop {
         let year_days = if is_leap(y) { 366 } else { 365 };
@@ -181,26 +201,46 @@ fn is_leap(y: u64) -> bool {
     (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
+fn write_to_journal(level: Level, target: &str, message: &str) {
+    if let Ok(mut guard) = journal_file().lock() {
+        if let Some(ref mut f) = *guard {
+            let _ = writeln!(
+                f,
+                "{} [{}] {}: {}",
+                timestamp(),
+                level.as_str(),
+                target,
+                message
+            );
+        }
+    }
+}
+
 pub fn emit(level: Level, target: &str, message: &std::fmt::Arguments<'_>) {
     if !enabled(level) {
         return;
     }
     let cfg = config();
+    let msg_str = message.to_string();
+
+    if cfg.journal {
+        write_to_journal(level, target, &msg_str);
+    }
+
     let stderr = std::io::stderr();
     let mut w = stderr.lock();
     match cfg.format {
         Format::Text => {
-            let _ = writeln!(w, "winlux[{}/{}]: {}", level.as_str(), target, message);
+            let _ = writeln!(w, "winlux[{}/{}]: {}", level.as_str(), target, msg_str);
         }
         Format::Json => {
-            let msg = message.to_string();
             let _ = write!(
                 w,
                 "{{\"level\":\"{}\",\"target\":\"{}\",\"msg\":",
                 level.as_str(),
                 target
             );
-            write_json_string(&mut w, &msg);
+            write_json_string(&mut w, &msg_str);
             let _ = writeln!(w, "}}");
         }
     }

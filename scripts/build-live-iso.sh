@@ -79,6 +79,8 @@ cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
 cp "$root/scripts/winlux-update-progress.py" "$stage/usr/bin/winlux-update-progress"
 chmod 755 "$stage/usr/bin/winlux-update-progress"
 cp "$root/scripts/winlux-control.sh" "$stage/usr/bin/winlux-control"
+cp "$root/scripts/winlux-journal.sh" "$stage/usr/bin/winlux-journal"
+cp "$root/scripts/winlux-restore.sh" "$stage/usr/bin/winlux-restore"
 cp "$root/scripts/winlux-sysupdate.sh" "$stage/usr/bin/winlux-sysupdate"
 chmod 755 "$stage/usr/bin/winlux-sysupdate"
 cp "$root/scripts/winlux-network.sh" "$stage/usr/bin/winlux-network"
@@ -90,7 +92,9 @@ cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
 cp "$root/scripts/winlux-browsers.sh" "$stage/usr/bin/winlux-browsers"
 chmod 755 "$stage/usr/bin/winlux-browsers"
 cp "$root/integration/winlux-open" "$stage/usr/bin/winlux-open"
-chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script"
+cp "$root/scripts/winlux-hardware.sh" "$stage/usr/bin/winlux-hardware"
+cp "$root/scripts/winlux-firmware.sh" "$stage/usr/bin/winlux-firmware"
+chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-journal" "$stage/usr/bin/winlux-restore" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script" "$stage/usr/bin/winlux-hardware" "$stage/usr/bin/winlux-firmware"
 
 # Installateur et outils associés
 cp "$root/scripts/winlux-installer.py" "$stage/usr/bin/winlux-installer"
@@ -106,6 +110,8 @@ mkdir -p "$stage/usr/share/winlux"
 printf '%s\n' "${WINLUX_BUILD_VERSION:-$(cat "$root/VERSION")}" >"$stage/usr/share/winlux/version"
 sh "$root/scripts/build-info.sh" "$(cat "$stage/usr/share/winlux/version")" system >"$stage/usr/share/winlux/BUILD-INFO"
 printf 'system\n' >"$stage/usr/share/winlux/update-scope"
+mkdir -p "$stage/usr/share/winlux/avatars"
+cp "$root"/assets/avatars/avatar-*.svg "$stage/usr/share/winlux/avatars/"
 
 # Fond d'écran : conversion PNG → BMP 24-bit non compressé pour le shell.
 wallpaper_src="$root/assets/wallpapers/Fond ecran.png"
@@ -313,6 +319,8 @@ fi
 # Curseur logiciel : il est dessiné dans l'image de l'écran, donc toujours
 # visible dans une VM, alors que le curseur matériel virtio-gpu dépend de
 # l'affichage de l'hôte (QEMU GTK, SPICE, VNC…).
+# Curseur logiciel : configuration de base pour VM. Sur matériel réel,
+# winlux-hardware remplace ce fichier par une configuration GPU appropriée.
 cat >"$stage/usr/share/X11/xorg.conf.d/20-winlux-display.conf" <<'XCONF'
 Section "Device"
     Identifier "Winlux display"
@@ -423,10 +431,12 @@ done
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid-generic.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/serio-raw.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/psmouse.ko 2>/dev/null || true
-for driver in virtio_net e1000 e1000e snd_hda_intel snd_intel8x0; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
+for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
+/usr/bin/winlux-hardware >/dev/null 2>&1 || true
+/usr/bin/winlux-firmware >/dev/null 2>&1 || true
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true
@@ -574,7 +584,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     ) &
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
         keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
-        case "$keyboard_layout" in fr|us) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
+        case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
         tapping=$(/bin/busybox sed -n 's/^TAP_TO_CLICK=//p' /etc/winlux/input.conf 2>/dev/null)
         case "$tapping" in 0|1)
             for device in $(DISPLAY=:0 /usr/bin/xinput --list --id-only 2>/dev/null); do
