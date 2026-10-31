@@ -120,6 +120,9 @@ jobs:
       - name: Vérifier les fichiers de réponse d'installation silencieuse
         run: python3 -B scripts/test-autoinstall.py
 
+      - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
+        run: python3 -B scripts/test-installer-partitioning.py
+
       - name: Vérifier les grandes images X11 en 1080p
         run: |
           sudo apt-get update -q
@@ -134,6 +137,12 @@ jobs:
           ALSA_CONFIG_PATH="$PWD/runtime/tests/audio/alsa-null.conf" cargo test -p winlux audio_codecs -- --ignored
           stage=$(mktemp -d)
           sh scripts/copy-audio-libraries.sh "$stage"
+
+      - name: Valider le moteur vidéo/audio (FFmpeg réel)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ffmpeg
+          cargo test -p winlux media_bout_en_bout -- --ignored
 
       - name: Aucune erreur de compilation
         run: cargo check -p winlux --all-targets

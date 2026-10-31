@@ -235,8 +235,9 @@ pub const S_SYSTEM_UPDATES: usize = 156;
 pub const S_PRIVACY: usize = 157;
 pub const S_PROCESSOR: usize = 158;
 pub const S_NETWORK_DRIVES: usize = 159;
+pub const S_PERSONALIZATION: usize = 160;
 
-const STRING_COUNT: usize = 160;
+const STRING_COUNT: usize = 161;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -423,6 +424,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Confidentialit\xE9",
     b"Processeur",
     b"Lecteurs r\xE9seau",
+    b"Personnalisation",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -608,6 +610,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Privacy",
     b"Processor",
     b"Network drives",
+    b"Personalization",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -793,6 +796,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Privacidad",
     b"Procesador",
     b"Unidades de red",
+    b"Personalizaci\xF3n",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -978,6 +982,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Datenschutz",
     b"Prozessor",
     b"Netzlaufwerke",
+    b"Personalisierung",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {
