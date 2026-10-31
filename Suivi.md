@@ -4,9 +4,9 @@
 
 ## Statistiques
 
-- Réalisé : **216**
+- Réalisé : **217**
 - À faire ou en cours : **37**
-- Total : **253**
+- Total : **254**
 - Progression : **85.4%**
 - Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140)
 
@@ -292,6 +292,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
 - [x] Fenêtre « Bienvenue » au premier login (`welcome.rs`) : visite guidée en 8 étapes (Démarrer, Explorer, Paramètres, Terminal, raccourcis, confidentialité, choix du thème clair/sombre et de l’alignement), rouvrable depuis Démarrer (#98).
+- [x] Premier démarrage guidé (#162) : Bienvenue passe à 10 étapes avec « Lancer un programme Windows » (.exe, .msi, lecteurs C:/Z:) et « Vos premiers logiciels » (10 logiciels courants installés en un clic via le Store, sans produit Microsoft, logiciels sans source masqués). File d'attente persistante (`winlux-store starter`) qui continue fenêtre fermée et reprend au login suivant ; la visite reprend à l'étape où on l'a fermée.
 - [x] Paramètres > Mises à jour système : mode automatique, manuel ou planifié (jour/heure) pour APT (`winlux-sysupdate`) et Winlux, liste des paquets, journal et notification quand des mises à jour sont disponibles (#98).
 - [x] Manettes : `xinput1_4` (état, vibration, capacités, touches) et `dinput8`/DirectInput 7 (clavier, souris, manettes, joysticks, volants) sur evdev (#79).
 - [x] Webcam : Media Foundation (MFEnumDeviceSources, source et lecteur synchrone/asynchrone, RGB32/NV12/YUY2/MJPG) sur V4L2, en respectant l'autorisation caméra (#79).
