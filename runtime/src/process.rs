@@ -460,6 +460,7 @@ pub fn thread_detach_current() {
 fn start(exe: Module) -> u32 {
     init_thread();
     crate::crash::install();
+    crate::quality::init();
     let mods = loader::MODULES.lock().unwrap().clone();
     // Les dépendances ont été chargées après le .exe : on initialise en ordre inverse.
     for m in mods.iter().skip(1).rev() {

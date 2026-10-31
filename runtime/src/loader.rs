@@ -71,6 +71,25 @@ impl Module {
 /// Modules PE réels chargés (l'exécutable est toujours le premier).
 pub static MODULES: Mutex<Vec<Module>> = Mutex::new(Vec::new());
 
+pub struct ModuleInfo {
+    pub name: String,
+    pub base: usize,
+    pub size: usize,
+}
+
+pub fn list_modules() -> Vec<ModuleInfo> {
+    MODULES
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .iter()
+        .map(|m| ModuleInfo {
+            name: m.name.clone(),
+            base: m.base,
+            size: m.size,
+        })
+        .collect()
+}
+
 pub fn find_module_by_addr(addr: usize) -> Option<Module> {
     MODULES
         .lock()

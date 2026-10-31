@@ -48,6 +48,10 @@ cp -a "$project/integration/native/applications/." "$stage/usr/share/application
 cp --remove-destination "$components/usr/libexec/xscreensaver/xscreensaver-gfx" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx.real"
 cp --remove-destination "$project/scripts/winlux-saver-gfx.py" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx"
 chmod 755 "$stage/usr/libexec/xscreensaver/xscreensaver-gfx" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx.real"
+cp --remove-destination "$project/scripts/winlux-systemctl.sh" "$stage/usr/bin/systemctl"
+chmod 755 "$stage/usr/bin/systemctl"
+cp --remove-destination "$project/scripts/winlux-apt-service-hook.sh" "$stage/usr/share/winlux/apt-service-hook"
+chmod 755 "$stage/usr/share/winlux/apt-service-hook"
 for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu'; do
     source=${pair%:*}; destination=${pair#*:}
     cp --remove-destination "$project/scripts/$source" "$stage/usr/bin/$destination"
