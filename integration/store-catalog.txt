@@ -1,6 +1,7 @@
 # Catalogue du Store Winlux : une application par ligne.
 # id|catégorie|nom|paquet apt|éditeur|description
 # Catégories : navigateurs, bureautique, multimedia, developpement, jeux, utilitaires
+featured=vlc,gimp,writer,supertuxkart,keepassxc,obs,inkscape,git
 epiphany|navigateurs|GNOME Web|epiphany-browser|GNOME|Navigateur web simple et rapide, intégré au bureau.
 falkon|navigateurs|Falkon|falkon|KDE|Navigateur léger basé sur QtWebEngine, avec bloqueur de publicités.
 konqueror|navigateurs|Konqueror|konqueror|KDE|Navigateur web et gestionnaire de fichiers polyvalent.

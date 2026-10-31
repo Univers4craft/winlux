@@ -142,7 +142,8 @@ jobs:
           sh scripts/test-install-safety.sh
           sh scripts/test-network.sh
           sh scripts/test-control.sh
-          sh scripts/test-store.sh
+          sh scripts/test-fonts.sh
+          python3 -B scripts/test-store.py
           sh scripts/test-display.sh
 
   # 3. Compile les .exe Windows puis les exécute sous Winlux.

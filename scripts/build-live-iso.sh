@@ -84,7 +84,7 @@ cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
 mkdir -p "$stage/usr/share/winlux"
 # Store de logiciels et gestionnaire de polices du shell.
-cp "$root/scripts/winlux-store.sh" "$stage/usr/bin/winlux-store"
+cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
 cp "$root/scripts/winlux-fonts.sh" "$stage/usr/bin/winlux-fonts"
 cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.txt"
 chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts"
