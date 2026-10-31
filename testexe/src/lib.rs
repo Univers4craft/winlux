@@ -633,6 +633,20 @@ extern "system" {
         file_part: *mut *mut u16,
     ) -> u32;
     pub fn ExitProcess(code: u32) -> !;
+    pub fn CreatePipe(
+        read: *mut Handle,
+        write: *mut Handle,
+        attributes: *mut c_void,
+        size: u32,
+    ) -> i32;
+    pub fn PeekNamedPipe(
+        h: Handle,
+        buf: *mut u8,
+        size: u32,
+        read: *mut u32,
+        total: *mut u32,
+        left: *mut u32,
+    ) -> i32;
     pub fn CreateProcessA(
         application: *const c_char,
         command_line: *const c_char,
