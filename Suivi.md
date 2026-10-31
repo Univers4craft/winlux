@@ -4,9 +4,9 @@
 
 ## Statistiques
 
-- Réalisé : **216**
+- Réalisé : **217**
 - À faire ou en cours : **37**
-- Total : **253**
+- Total : **254**
 - Progression : **85.4%**
 - Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140)
 
@@ -146,6 +146,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Ajouter DHCP, route, DNS et renouvellement réseau, avec tests isolés.
 - [x] Paramètres Linux/Windows, télémétrie réelle et commandes système avec journaux.
 - [x] Centre graphique de mise à jour, paquets système complets, jeton pour dépôt privé, automatique, restauration et demande de redémarrage.
+- [x] Mise à jour en place protégée (#150) : point de restauration automatique avant l'installation, vérification de chaque fichier installé, version « à l'essai » validée quand le bureau tient une minute, retour automatique à la version précédente si le bureau ne s'ouvre pas (ou au 3e démarrage bloqué), version écartée jamais réinstallée automatiquement. Reste : compteur GRUB si `/init` est cassé, signature Ed25519.
 - [x] Ajouter un installateur autonome BIOS/UEFI qui ne nécessite plus l'ISO comme chargeur initial.
 - [x] Passer Explorer entièrement aux chemins Unicode Win32 W.
 - [x] Charger un exécutable PE32+ x86-64.
