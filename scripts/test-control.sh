@@ -197,6 +197,34 @@ grep -qx 'bluetoothctl disconnect AA:BB:CC:DD:EE:01' "$work/commands"
 if control bluetooth-remove 'AA;reboot'; then echo 'ERROR: invalid Bluetooth address accepted' >&2; exit 1; fi
 control bluetooth-off
 grep -qx 'bluetooth_powered=0' "$work/root/run/winlux/control.txt"
+# Alimentation : les boutons des Parametres pilotent le runtime reel.
+runtime="$project/target/release/winlux"
+test -x "$runtime" || runtime="$project/target/debug/winlux"
+if test -x "$runtime"; then
+    ln -sf "$runtime" "$work/bin/winlux"
+    printf 'Battery\n' > "$work/root/sys/class/power_supply/BAT0/type"
+    mkdir -p "$work/root/sys/class/backlight/acpi_video0"
+    printf '255\n' > "$work/root/sys/class/backlight/acpi_video0/max_brightness"
+    printf '255\n' > "$work/root/sys/class/backlight/acpi_video0/brightness"
+    control power-profile-saver
+    grep -qx 'PROFILE=saver' "$work/root/etc/winlux/power.conf"
+    grep -qx 'power_profile=saver' "$work/root/run/winlux/control.txt"
+    grep -qx 'power_percent=84' "$work/root/run/winlux/control.txt"
+    grep -qx 'power_state=charging' "$work/root/run/winlux/power.txt"
+    control power-lid
+    grep -qx 'LID=hibernate' "$work/root/etc/winlux/power.conf"
+    control power-screen-dc
+    grep -qx 'SCREEN_DC=600' "$work/root/etc/winlux/power.conf"
+    control power-brightness-down
+    grep -qx 'BRIGHTNESS=70' "$work/root/etc/winlux/power.conf"
+    # 70 % reduits a 49 % par le mode economie : 125/255.
+    grep -qx '125' "$work/root/sys/class/backlight/acpi_video0/brightness"
+    if control power-hibernate; then echo 'veille prolongee acceptee sans zone de reprise' >&2; exit 1; fi
+    grep -q 'Veille prolong' "$work/root/run/winlux/action.log"
+    rm "$work/bin/winlux"
+else
+    echo 'runtime absent : commandes d alimentation non verifiees' >&2
+fi
 # GPU : seuls des jetons simples atteignent le runtime, qui revalide.
 cat > "$work/bin/winlux" <<'MOCK'
 #!/bin/sh
@@ -242,4 +270,4 @@ MOCK
 test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_03_00_0
 test "$(sh "$project/scripts/winlux-prime-run.sh" --integrated sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_00_02_0
 test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$PATH"')" = "$PATH"
-echo 'OK: control telemetry, Bluetooth, keyboard, touchpad, preferences, actions, update journal, system updates, privacy, welcome, host protection, CPU, GPU, overlay, prime-run'
+echo 'OK: control telemetry, Bluetooth, keyboard, touchpad, preferences, actions, update journal, system updates, privacy, welcome, host protection, CPU, power, GPU, overlay, prime-run'

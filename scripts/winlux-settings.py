@@ -7,13 +7,19 @@ import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, GLib
 
-PAGES = ["Système", "Applications", "Réseau", "Son et alimentation", "Clavier",
+PAGES = ["Système", "Applications", "Réseau", "Son", "Clavier",
          "Souris", "Personnalisation", "Mises à jour", "Écran", "À propos",
-         "Programmes Windows", "Navigateurs", "Accessibilité", "Effets visuels", "Graphismes"]
-GRAPHICS_PAGE = 14
+         "Programmes Windows", "Navigateurs", "Accessibilité", "Effets visuels",
+         "Localisation", "Gestionnaire de fichiers", "Son avancé", "Mises à jour système",
+         "Confidentialité", "Processeur", "Lecteurs réseau", "Personnalisation du bureau",
+         "Bluetooth et appareils", "Alimentation et batterie", "Graphismes"]
+GRAPHICS_PAGE = 24
 FIELDS = {
     0: [("Version", "version"), ("Noyau", "kernel")],
-    2: [("Connexion", "network")], 3: [("Volume", "audio"), ("Alimentation", "battery")],
+    2: [("Connexion", "network")], 3: [("Volume", "audio")],
+    23: [("Batterie", "battery"), ("Mode", "power_profile"), ("Écran éteint après", "power_screen_now"),
+         ("Veille après", "power_sleep_now"), ("Capot", "power_lid"), ("Bouton d'alimentation", "power_button"),
+         ("Luminosité (%)", "power_brightness")],
     4: [("Disposition", "layout"), ("Toucher-clic", "tap")],
     5: [("Vitesse", "mouse_speed")], 6: [("Alignement", "align")],
     8: [("Définition", "display_current"), ("Échelle", "display_scale")],
@@ -31,6 +37,12 @@ ACTIONS = {
         ("Ajouter Ce PC", "desktop-icon-computer"), ("Ajouter Documents", "desktop-icon-documents")],
     7: [("Rechercher", "update-check"), ("Installer", "update-apply"), ("Restaurer", "update-rollback"),
         ("Mises à jour auto : activer", "update-auto-on"), ("Désactiver", "update-auto-off")],
+    23: [("Performances maximales", "power-profile-performance"), ("Équilibré", "power-profile-balanced"),
+         ("Économie d'énergie", "power-profile-saver"), ("Écran (secteur)", "power-screen-ac"),
+         ("Écran (batterie)", "power-screen-dc"), ("Veille (secteur)", "power-sleep-ac"),
+         ("Veille (batterie)", "power-sleep-dc"), ("Capot", "power-lid"), ("Bouton d'alimentation", "power-button"),
+         ("Luminosité −", "power-brightness-down"), ("Luminosité +", "power-brightness-up"),
+         ("Mettre en veille", "power-suspend"), ("Veille prolongée", "power-hibernate")],
     8: [("Suivre la taille de la VM", "display-follow"), ("Définition fixe", "display-fixed"),
         ("Échelle −", "display-scale-down"), ("Automatique", "display-scale-auto"), ("Échelle +", "display-scale-up")],
 }
@@ -77,10 +89,7 @@ class Settings(Gtk.Window):
         self.set_default_size(1020, 740)
         self.set_size_request(720, 500)
         self.connect("destroy", Gtk.main_quit)
-        try: requested = int(os.environ.get("WINLUX_SETTINGS_PAGE", "0"))
-        except ValueError: requested = 0
-        # Le bureau numérote « Graphismes » 23 ; ici elle suit « Effets visuels ».
-        self.page = GRAPHICS_PAGE if requested == 23 else min(13, max(0, requested))
+        self.page = min(len(PAGES) - 1, max(0, int(os.environ.get("WINLUX_SETTINGS_PAGE", "0"))))
         self.process = None
         self.active_action = None
         css = Gtk.CssProvider()
@@ -176,7 +185,7 @@ class Settings(Gtk.Window):
         if self.page in (1, 10, 12, 13, GRAPHICS_PAGE):
             self.label("Ouvrir les réglages détaillés de cette catégorie :")
             button = Gtk.Button(label="Réglages avancés")
-            legacy_page = 23 if self.page == GRAPHICS_PAGE else self.page
+            legacy_page = self.page
             button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
             self.body.pack_start(button, False, False, 0)
         self.notice = self.label("")

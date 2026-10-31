@@ -162,6 +162,28 @@ fn kernel_filesystems() -> Vec<String> {
     out
 }
 
+/// Pourquoi un protocole n'est pas proposé et quoi installer (texte court
+/// affiché dans les Paramètres). `None` si le protocole est utilisable.
+pub fn missing_hint(sys: &System, p: Protocol) -> Option<String> {
+    if sys.backend_for(p).is_some() {
+        return None;
+    }
+    if !sys.fuse && p != Protocol::Nfs {
+        return Some("FUSE indisponible (paquet fuse3, /dev/fuse)".into());
+    }
+    let hint = match p {
+        Protocol::Ftp | Protocol::Ftps => "installer rclone",
+        Protocol::Sftp => "installer sshfs ou rclone",
+        Protocol::WebDav | Protocol::WebDavs => "installer rclone",
+        Protocol::Smb => "installer rclone, ou cifs-utils avec le module noyau cifs",
+        Protocol::Nfs if !sys.has("mount.nfs") => "installer nfs-common",
+        Protocol::Nfs if !sys.root => "droits administrateur requis",
+        Protocol::Nfs => "module noyau nfs absent",
+        Protocol::S3 => "installer rclone",
+    };
+    Some(hint.into())
+}
+
 fn is_executable(p: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     std::fs::metadata(p)
@@ -615,6 +637,20 @@ mod tests {
             ..sys
         };
         assert_eq!(sys.backend_for(Protocol::Smb), Some(Backend::Cifs));
+        let sys = System { fuse: true, ..sys };
+        assert!(missing_hint(&sys, Protocol::Smb).is_none());
+        assert_eq!(
+            missing_hint(&sys, Protocol::Nfs).as_deref(),
+            Some("installer nfs-common")
+        );
+        assert_eq!(
+            missing_hint(&sys, Protocol::Ftp).as_deref(),
+            Some("installer rclone")
+        );
+        let sys = System { fuse: false, ..sys };
+        assert!(missing_hint(&sys, Protocol::Sftp)
+            .unwrap()
+            .contains("fuse3"));
     }
 
     #[test]
