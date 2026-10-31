@@ -530,6 +530,8 @@ pub struct X11Backend {
     x11_cursors: HashMap<usize, u32>,
     /// Dernier handle de curseur Win32 appliqué à la fenêtre X11.
     current_cursor: usize,
+    /// Overlay de performances (Paramètres > Graphismes).
+    overlay: crate::overlay::Overlay,
 }
 
 impl X11Backend {
@@ -580,6 +582,7 @@ impl X11Backend {
             keymap: HashMap::new(),
             keyboard: unsafe { XkbKeyboard::connect() },
             back: HashMap::new(),
+            overlay: crate::overlay::Overlay::new(),
             x11_dirty: Cell::new(false),
             xft_dirty: Cell::new(false),
             x11_cursors: HashMap::new(),
@@ -863,6 +866,62 @@ impl X11Backend {
             .ok()?;
         self.back.insert(hwnd, (pixmap, w.width, w.height));
         Some(pixmap)
+    }
+
+    /// Pose l'overlay de performances dans un coin de la fenêtre.
+    fn paint_overlay(&mut self, w: &XWin, hwnd: usize) {
+        let lines = self.overlay.lines(hwnd);
+        if lines.is_empty() {
+            return;
+        }
+        let line_h = self.scaled(16).max(12);
+        let pad = self.scaled(8).max(4);
+        let spec = FontSpec {
+            height: self.scaled(13).max(10),
+            weight: 600,
+            face: "Consolas".into(),
+            ..FontSpec::default()
+        };
+        let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
+        let box_w = longest * spec.height * 66 / 100 + pad * 2;
+        let box_h = lines.len() as i32 * line_h + pad * 2;
+        let (ww, wh) = (w.width as i32, w.height as i32);
+        let margin = self.scaled(10);
+        let (left, top) = match self.overlay.position() {
+            crate::overlay::Position::TopLeft => (margin, margin),
+            crate::overlay::Position::TopRight => (ww - box_w - margin, margin),
+            crate::overlay::Position::BottomLeft => (margin, wh - box_h - margin),
+            crate::overlay::Position::BottomRight => (ww - box_w - margin, wh - box_h - margin),
+        };
+        let (left, top) = (left.max(0), top.max(0));
+        self.before_x11();
+        let border = Rect {
+            left,
+            top,
+            right: left + box_w,
+            bottom: top + box_h,
+        };
+        self.paint_fill(w, &border, 0x0060_5040);
+        let inner = Rect {
+            left: left + 1,
+            top: top + 1,
+            right: left + box_w - 1,
+            bottom: top + box_h - 1,
+        };
+        self.paint_fill(w, &inner, 0x0020_1A16);
+        for (i, line) in lines.iter().enumerate() {
+            let color = if i == 0 { 0x0080_FF9A } else { 0x00F0_F0F0 };
+            self.paint_text(
+                w,
+                left + pad,
+                top + pad + i as i32 * line_h,
+                line,
+                color,
+                None,
+                &spec,
+            );
+        }
+        self.before_x11();
     }
 
     /// Recopie une zone du tampon arrière vers la fenêtre.
@@ -1849,6 +1908,14 @@ impl X11Backend {
                         })
                     })
                     .unwrap_or(e.detail as usize);
+                let alt = e.state.contains(x11rb::protocol::xproto::KeyButMask::MOD1);
+                if self.overlay.hotkey(vk, ctrl, shift, alt) {
+                    // Raccourci de l'overlay : consommé, jamais transmis au jeu.
+                    if let Some(cmds) = self.content.get(&hwnd).cloned() {
+                        gui::GuiBackend::draw(self, hwnd, &cmds);
+                    }
+                    return None;
+                }
                 let extended = vk_is_extended(vk);
                 let lparam = key_lparam(e.detail, false, extended);
                 gui::update_async_key_state(vk, true);
@@ -2783,10 +2850,14 @@ impl gui::GuiBackend for X11Backend {
             };
             self.paint_theme(&target);
             self.paint_cmds(&target, cmds);
+            self.overlay.frame(hwnd);
+            self.paint_overlay(&target, hwnd);
             self.present(&w, pixmap, 0, 0, w.width, w.height);
         } else {
             self.paint_theme(&w);
             self.paint_cmds(&w, cmds);
+            self.overlay.frame(hwnd);
+            self.paint_overlay(&w, hwnd);
             self.before_x11();
             let _ = self.conn.flush();
         }
@@ -2794,6 +2865,7 @@ impl gui::GuiBackend for X11Backend {
 
     fn destroy_window(&mut self, hwnd: usize) {
         self.content.remove(&hwnd);
+        self.overlay.forget(hwnd);
         if let Some((pixmap, _, _)) = self.back.remove(&hwnd) {
             let _ = self.conn.free_pixmap(pixmap);
         }

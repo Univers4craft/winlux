@@ -16,6 +16,8 @@ mod diskcleaner;
 mod diskmgr;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/gpuinfo.rs"]
+mod gpuinfo;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/login.rs"]

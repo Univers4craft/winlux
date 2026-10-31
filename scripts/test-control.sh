@@ -103,4 +103,49 @@ rm "$work/root/etc/winlux/live-session"
 if control reboot; then echo 'ERROR: refused-host-reboot failed' >&2; exit 1; fi
 grep -q 'Arret reserve a Winlux Live' "$work/root/run/winlux/action.log"
 if control 'keyboard-fr;reboot'; then echo 'ERROR: invalid-action failed' >&2; exit 1; fi
-echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, host protection'
+# GPU : seuls des jetons simples atteignent le runtime, qui revalide.
+cat > "$work/bin/winlux" <<'MOCK'
+#!/bin/sh
+printf 'winlux %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"
+MOCK
+chmod 755 "$work/bin/winlux"
+control gpu-set card1 power-limit 200
+grep -qx 'winlux --gpu-set card1 power-limit 200' "$work/commands"
+control gpu-set card0 perf auto
+grep -qx 'winlux --gpu-set card0 perf auto' "$work/commands"
+if control gpu-set ../card0 perf auto; then echo 'ERROR: gpu card path accepted' >&2; exit 1; fi
+if control gpu-set card0 fan 100; then echo 'ERROR: unknown gpu setting accepted' >&2; exit 1; fi
+if control gpu-set card0 perf 'high;reboot'; then echo 'ERROR: gpu value injection accepted' >&2; exit 1; fi
+test "$(grep -c '^winlux --gpu-set' "$work/commands")" = 2
+# Overlay : désactivé par défaut, réglages persistés et relus par le statut.
+grep -qx 'overlay_enabled=0' "$work/root/run/winlux/control.txt"
+grep -qx 'overlay_fps=1' "$work/root/run/winlux/control.txt"
+control overlay-on
+control overlay-key-alt-f12
+control overlay-pos-bottom-right
+control overlay-cpu-off
+control overlay-auto-on
+grep -qx 'OVERLAY_ENABLED=1' "$work/root/etc/winlux/overlay.conf"
+grep -qx 'OVERLAY_HOTKEY=alt-f12' "$work/root/etc/winlux/overlay.conf"
+grep -qx 'OVERLAY_POSITION=bottom-right' "$work/root/etc/winlux/overlay.conf"
+grep -qx 'OVERLAY_CPU=0' "$work/root/etc/winlux/overlay.conf"
+grep -qx 'OVERLAY_AUTOSHOW=1' "$work/root/etc/winlux/overlay.conf"
+test "$(stat -c %a "$work/root/etc/winlux/overlay.conf")" = 644
+grep -qx 'overlay_enabled=1' "$work/root/run/winlux/control.txt"
+grep -qx 'overlay_cpu=0' "$work/root/run/winlux/control.txt"
+grep -qx 'overlay_hotkey=alt-f12' "$work/root/run/winlux/control.txt"
+control overlay-off
+grep -qx 'OVERLAY_ENABLED=0' "$work/root/etc/winlux/overlay.conf"
+if control overlay-key-f13; then echo 'ERROR: unknown overlay hotkey accepted' >&2; exit 1; fi
+# winlux-prime-run : exporte uniquement des variables sûres, puis exécute.
+cat > "$work/bin/winlux" <<'MOCK'
+#!/bin/sh
+case "$*" in
+  '--gpu-env dedicated') printf 'DRI_PRIME=pci-0000_03_00_0\nBAD LINE=1\nPATH=$(id)\n' ;;
+  '--gpu-env integrated') printf 'DRI_PRIME=pci-0000_00_02_0\n' ;;
+esac
+MOCK
+test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_03_00_0
+test "$(sh "$project/scripts/winlux-prime-run.sh" --integrated sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_00_02_0
+test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$PATH"')" = "$PATH"
+echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, host protection, GPU, overlay, prime-run'

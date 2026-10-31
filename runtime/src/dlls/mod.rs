@@ -50,6 +50,7 @@ pub mod uxtheme;
 pub mod version;
 pub mod winfile;
 pub mod winhttp;
+pub mod winlux_gpu;
 pub mod winlux_pty;
 pub mod winmm;
 pub mod wintrust;
@@ -115,6 +116,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(winlux_gpu::exports());
                     e
                 },
                 handle: fake_module(),

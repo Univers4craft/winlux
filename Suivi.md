@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **124**
+- Réalisé : **125**
 - À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Total : **151**
+- Progression : **82.8%**
 
 ## À FAIRE (par priorité)
 
@@ -68,6 +68,7 @@
 
 ### État actuel
 
+- [x] Gestion GPU dans Paramètres > Graphismes : détection des capacités réelles (sysfs amdgpu/i915/xe, NVML), mesures en direct, profil/limite de puissance/overclocking seulement si le pilote les accepte, GPU par application sur machine hybride (`gpu=` du profil .exe, `winlux-prime-run`), onglets GPU du Gestionnaire des tâches et overlay de performances en jeu (raccourci configurable). Tout ce que la machine n'expose pas est masqué.
 - [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer.
 - [x] Bloquer les copies dans un descendant, les collisions et les alias de chemins ; tester le couper/coller et les raccourcis.
 - [x] Corriger Ctrl+L, les touches Windows, AltGr et la disposition XKB réelle.
