@@ -5,6 +5,8 @@ set -eu
 umask 077
 root=${WINLUX_CONTROL_ROOT:-}
 run="$root/run/winlux"
+# Le module d'alimentation du runtime suit la meme racine (tests).
+if test -n "$root"; then export WINLUX_POWER_ROOT="$root"; fi
 config="$root/etc/winlux"
 mkdir -p "$run" "$config"
 export DISPLAY=${DISPLAY:-:0}
@@ -12,6 +14,9 @@ export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/winlu
 
 value() { if test -r "$1"; then sed -n "s/^$2=//p" "$1" | head -n 1; fi; }
 pref() { value "$config/preferences.conf" "$1"; }
+overlay() { value "$config/overlay.conf" "$1"; }
+# Les jeux lancés par l'utilisateur lisent ce fichier : il reste lisible.
+save_overlay() { save "$config/overlay.conf" "$1" "$2" && chmod 644 "$config/overlay.conf"; }
 cpu_pref() { value "$config/cpu.conf" "$1"; }
 input() { value "$config/input.conf" "$1"; }
 privacy() { v=$(value "$config/privacy.conf" "$1"); printf '%s\n' "${v:-$2}"; }
@@ -71,6 +76,8 @@ status() {
         done
         if test "$present" = 0; then printf 'battery=Alimentation CA - aucune batterie exposee\n'; fi
         printf 'battery_present=%s\n' "$present"
+        # Etat detaille, modes et delais : module d'alimentation du runtime.
+        if have winlux; then winlux --power status 2>/dev/null || true; fi
         devices=0
         if test -r "$root/proc/bus/input/devices"; then devices=$(awk '/^N: Name=/ { n++ } END { print n+0 }' "$root/proc/bus/input/devices"); fi
         printf 'input_devices=%s\n' "$devices"
@@ -104,6 +111,15 @@ status() {
         else
             printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
         fi
+        # Overlay de performances (Paramètres > Graphismes) ; vide = défaut.
+        setting=$(overlay OVERLAY_ENABLED); printf 'overlay_enabled=%s\n' "${setting:-0}"
+        printf 'overlay_hotkey=%s\n' "$(overlay OVERLAY_HOTKEY)"
+        printf 'overlay_position=%s\n' "$(overlay OVERLAY_POSITION)"
+        setting=$(overlay OVERLAY_AUTOSHOW); printf 'overlay_autoshow=%s\n' "${setting:-0}"
+        for metric in fps frametime cpu gpu; do
+            setting=$(overlay "OVERLAY_$(printf '%s' "$metric" | tr 'a-z' 'A-Z')")
+            printf 'overlay_%s=%s\n' "$metric" "${setting:-1}"
+        done
         gpu_count=$(cat "$root/run/winlux/hw/gpu-count" 2>/dev/null || echo 0)
         printf 'gpu_count=%s\n' "$gpu_count"
         test "$(cat "$root/run/winlux/hw/has-nvidia" 2>/dev/null)" = 1 && printf 'gpu_nvidia=%s\n' "$(cat "$root/run/winlux/hw/nvidia-driver" 2>/dev/null || echo nouveau)"
@@ -123,6 +139,8 @@ status() {
         printf 'privacy_camera=%s\n' "$(privacy CAMERA allow)"
         printf 'privacy_location=%s\n' "$(privacy LOCATION deny)"
         printf 'privacy_location_history=%s\n' "$(privacy LOCATION_HISTORY off)"
+        # Signaler un probleme : reglages lus par winlux-report (rien n'est envoye seul).
+        if have winlux-report; then WINLUX_REPORT_CONF="$config/report.conf" winlux-report --status 2>/dev/null || true; fi
         if have winlux-sysupdate; then winlux-sysupdate status 2>/dev/null || true; fi
         printf 'control_available=1\n'
         if have winlux-browsers; then winlux-browsers --status 2>/dev/null || true; fi
@@ -309,6 +327,27 @@ perform() {
             printf '%s\n' '[Desktop Entry]' 'Type=Link' 'Name=Documents' 'Icon=folder-documents' "URL=file://$HOME/Documents" > "$HOME/Bureau/winlux-documents.desktop"
             trust_desktop "$HOME/Bureau/winlux-documents.desktop" ;;
         theme-dark|theme-light) save "$config/preferences.conf" THEME "${action#theme-}" ;;
+        gpu-set)
+            # Le runtime revalide contre ce que le pilote expose ; ici on ne
+            # laisse passer que des jetons simples, jamais un chemin.
+            card=${2:-} setting=${3:-} amount=${4:-}
+            case "$card" in card[0-9]|card[0-9][0-9]) ;; *) echo 'Carte graphique invalide' >&2; return 1 ;; esac
+            case "$setting" in power-limit|perf|oc-sclk|oc-reset) ;; *) echo 'Reglage GPU inconnu' >&2; return 1 ;; esac
+            case "$amount" in ''|*[!a-z0-9]*) echo 'Valeur GPU invalide' >&2; return 1 ;; esac
+            have winlux || { echo 'Runtime winlux introuvable' >&2; return 1; }
+            winlux --gpu-set "$card" "$setting" "$amount" ;;
+        overlay-on|overlay-off)
+            on=0; test "$action" != overlay-on || on=1
+            save_overlay OVERLAY_ENABLED "$on" ;;
+        overlay-auto-on|overlay-auto-off)
+            on=0; test "$action" != overlay-auto-on || on=1
+            save_overlay OVERLAY_AUTOSHOW "$on" ;;
+        overlay-key-shift-f12|overlay-key-ctrl-shift-o|overlay-key-alt-f12) save_overlay OVERLAY_HOTKEY "${action#overlay-key-}" ;;
+        overlay-pos-top-left|overlay-pos-top-right|overlay-pos-bottom-left|overlay-pos-bottom-right) save_overlay OVERLAY_POSITION "${action#overlay-pos-}" ;;
+        overlay-fps-on|overlay-fps-off|overlay-frametime-on|overlay-frametime-off|overlay-cpu-on|overlay-cpu-off|overlay-gpu-on|overlay-gpu-off)
+            metric=${action#overlay-}; state=${metric##*-}; metric=${metric%-*}
+            on=0; test "$state" != on || on=1
+            save_overlay "OVERLAY_$(printf '%s' "$metric" | tr 'a-z' 'A-Z')" "$on" ;;
         cpu-profile-performance|cpu-profile-balanced|cpu-profile-powersave)
             have winlux || { echo 'Runtime winlux introuvable' >&2; return 1; }
             winlux --cpu-profile "${action#cpu-profile-}" "${root:-/}" || return
@@ -358,11 +397,26 @@ perform() {
         privacy-location-allow|privacy-location-deny) save "$config/privacy.conf" LOCATION "${action#privacy-location-}" && chmod 644 "$config/privacy.conf" ;;
         privacy-history-on|privacy-history-off) save "$config/privacy.conf" LOCATION_HISTORY "${action#privacy-history-}" && chmod 644 "$config/privacy.conf" ;;
         update-auto-off) winlux-update --auto disable ;;
+        report-offer-on|report-offer-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "offer=${action#report-offer-}" ;;
+        report-redact-on|report-redact-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "redact=${action#report-redact-}" ;;
+        report-mode-auto|report-mode-browser|report-mode-file) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "mode=${action#report-mode-}" ;;
+        report-open) (setsid winlux-report >/dev/null 2>&1 &) ;;
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
             test -f "$root/etc/winlux/live-session" || { echo 'Redemarrage de session reserve a Winlux Live' >&2; return 1; }
             /usr/bin/winlux-shutdown-screen restart-session >/dev/null 2>&1 || true
             printf 'restart-session\n' > "$run/session-action" ;;
+        power-profile-performance|power-profile-balanced|power-profile-saver)
+            winlux --power profile "${action#power-profile-}" ;;
+        power-screen-ac|power-screen-dc|power-sleep-ac|power-sleep-dc)
+            winlux --power set "${action#power-}" next ;;
+        power-lid) winlux --power set lid next ;;
+        power-button) winlux --power set button next ;;
+        power-brightness-up) winlux --power set brightness + ;;
+        power-brightness-down) winlux --power set brightness - ;;
+        power-suspend) winlux --power suspend ;;
+        power-hibernate) winlux --power hibernate ;;
+        power-hibernate-setup) winlux --power hibernate-setup ;;
         poweroff|reboot)
             test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
             if winlux-update --busy 2>/dev/null || winlux-sysupdate --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi

@@ -67,6 +67,7 @@ pub mod v4l2;
 pub mod version;
 pub mod winfile;
 pub mod winhttp;
+pub mod winlux_gpu;
 pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
@@ -138,9 +139,11 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(powrprof::kernel32_exports());
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
                     e.extend(crate::archive::ffi::exports());
+                    e.extend(winlux_gpu::exports());
                     e
                 },
                 handle: fake_module(),
@@ -440,6 +443,10 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("api-ms-win-core-rtlsupport-l1-") {
         return "ntdll".into();
+    }
+    // Contrats d'alimentation (PowerGetActiveScheme, PowerSetActiveScheme...).
+    if base.starts_with("api-ms-win-power-") {
+        return "powrprof".into();
     }
     if base.starts_with("api-ms-win-core-")
         || base.starts_with("api-ms-win-downlevel-kernel32-l2-")

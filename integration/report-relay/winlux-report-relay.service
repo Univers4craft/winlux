@@ -1,0 +1,20 @@
+# Relais de signalement Winlux (voir docs/RELAIS-SIGNALEMENT.md).
+[Unit]
+Description=Relais de signalement Winlux vers GitHub
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=/usr/bin/python3 /opt/winlux-relay/winlux-report-relay.py --port 8787
+Environment=WINLUX_RELAY_HOST=127.0.0.1
+DynamicUser=yes
+LoadCredential=token:/etc/winlux-relay/token
+Environment=WINLUX_RELAY_TOKEN_FILE=%d/token
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

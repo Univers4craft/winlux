@@ -24,6 +24,18 @@ pub struct SystemInfo {
     pub processor_revision: u16,
 }
 
+/// `SYSTEM_POWER_STATUS` (GetSystemPowerStatus).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SystemPowerStatus {
+    pub ac_line_status: u8,
+    pub battery_flag: u8,
+    pub battery_life_percent: u8,
+    pub system_status_flag: u8,
+    pub battery_life_time: u32,
+    pub battery_full_life_time: u32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct SystemTime {
@@ -633,6 +645,12 @@ extern "system" {
         len: usize,
     ) -> usize;
     pub fn GetTickCount() -> u32;
+    pub fn GetSystemPowerStatus(out: *mut SystemPowerStatus) -> i32;
+    pub fn SetThreadExecutionState(flags: u32) -> u32;
+    pub fn PowerCreateRequest(reason: *const c_void) -> Handle;
+    pub fn PowerSetRequest(request: Handle, kind: u32) -> i32;
+    pub fn PowerClearRequest(request: Handle, kind: u32) -> i32;
+    pub fn LocalFree(p: *mut c_void) -> *mut c_void;
     pub fn QueryPerformanceCounter(out: *mut i64) -> i32;
     pub fn QueryPerformanceFrequency(out: *mut i64) -> i32;
     pub fn GetCurrentProcessId() -> u32;
@@ -685,6 +703,8 @@ extern "system" {
     pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
     pub fn WinluxPtyAlive(handle: usize) -> i32;
     pub fn WinluxClosePty(handle: usize) -> i32;
+    /// Rapport GPU `clé=valeur` du runtime Winlux ; renvoie la longueur complète.
+    pub fn WinluxQueryGpu(buf: *mut u8, len: u32) -> u32;
     // Archives, images disque et lecteurs dynamiques (exports privés Winlux).
     pub fn WinluxMountList(buf: *mut u16, cap: u32) -> i32;
     pub fn WinluxArchiveSupport(path: *const u16) -> u32;
@@ -1152,6 +1172,20 @@ extern "system" {
 extern "system" {
     pub fn PrintDlgW(pd: *mut u8) -> i32;
     pub fn CommDlgExtendedError() -> u32;
+}
+
+#[link(name = "powrprof", kind = "raw-dylib")]
+extern "system" {
+    pub fn PowerGetActiveScheme(key: Handle, guid: *mut *mut [u8; 16]) -> u32;
+    pub fn PowerSetActiveScheme(key: Handle, guid: *const [u8; 16]) -> u32;
+    pub fn PowerReadFriendlyName(
+        key: Handle,
+        scheme: *const [u8; 16],
+        sub: *const c_void,
+        setting: *const c_void,
+        buffer: *mut u16,
+        size: *mut u32,
+    ) -> u32;
 }
 
 #[link(name = "msvcrt", kind = "raw-dylib")]

@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **192**
-- À faire ou en cours : **42**
-- Total : **234**
-- Progression : **82.1%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106 et #111, issues #10 à #98)
+- Réalisé : **194**
+- À faire ou en cours : **44**
+- Total : **238**
+- Progression : **81.5%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104 et #111, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -32,6 +32,8 @@
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
 ### Priorité 1 — Fiabiliser le runtime
+
+- [ ] Valider la veille, la veille prolongée (`winlux --power hibernate-setup`) et le capot sur un vrai portable installé ; en VM seule la veille ACPI S3 est testable.
 
 - [ ] Continuer à remplacer les implémentations partielles de `kernel32`, `msvcrt` et `ntdll`; ces modules ne constituent pas des DLL Windows complètes.
 - [ ] Implémenter une pile de secours réellement sûre pour les débordements de pile; le gestionnaire de signal est sans allocation/verrou, mais la protection contre le débordement n’est pas validée.
@@ -81,6 +83,7 @@
 - [ ] Runtime CLR .NET intégré (#73, lié à #22).
 - [ ] Installateur : partitionnement guidé, chiffrement LUKS et compte local (#75, lié à #93).
 - [ ] Installateur : connexion Wi-Fi/proxy et import des données Windows (#76, lié à #94).
+- [ ] Signaler un problème vers GitHub : boîte après plantage, Paramètres et Observateur, rapport masqué et modifiable, déduplication, relais sans compte (`docs/SIGNALEMENT-BUGS.md`).
 
 ### Chantiers démarrés (issue ouverte, PR à venir)
 
@@ -131,6 +134,9 @@
 
 
 ### État actuel
+
+- [x] Gestion GPU dans Paramètres > Graphismes : détection des capacités réelles (sysfs amdgpu/i915/xe, NVML), mesures en direct, profil/limite de puissance/overclocking seulement si le pilote les accepte, GPU par application sur machine hybride (`gpu=` du profil .exe, `winlux-prime-run`), onglets GPU du Gestionnaire des tâches et overlay de performances en jeu (raccourci configurable). Tout ce que la machine n'expose pas est masqué.
+- [x] Gestion de l'alimentation en Rust (`runtime/src/power/`) : batterie lue dans `/sys/class/power_supply` (pourcentage, charge/décharge, autonomie, santé), modes Performances maximales / Équilibré / Économie d'énergie (gouverneur cpufreq, EPP, turbo, luminosité, autosuspend USB, ASPM, SATA), veille et veille prolongée par `/sys/power` avec reprise propre, démon lancé par l'init maison (inactivité écran/veille, capot, bouton, batterie critique), icône batterie avec charge et infobulle, alertes 20 %/10 %, page Paramètres « Alimentation et batterie », API `GetSystemPowerStatus`, `SetThreadExecutionState`, `PowerCreateRequest/SetRequest/ClearRequest`, `PowerGetActiveScheme/SetActiveScheme`, `PowerReadFriendlyName`, `SetSuspendState`, `GetPwrCapabilities` (test PE `power_api`).
 
 - [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer.
 - [x] Bloquer les copies dans un descendant, les collisions et les alias de chemins ; tester le couper/coller et les raccourcis.

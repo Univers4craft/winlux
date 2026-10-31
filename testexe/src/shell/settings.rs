@@ -9,6 +9,8 @@ use winlux_testexe::*;
 
 #[path = "printers.rs"]
 mod printers;
+#[path = "settings_gpu.rs"]
+mod graphics;
 
 pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
@@ -19,14 +21,20 @@ pub const PAGE_NETDRIVES: usize = 20;
 pub const PAGE_PERSONALIZE: usize = 21;
 /// Page « Bluetooth et appareils » (ouverte depuis la barre des tâches).
 pub const BLUETOOTH_PAGE: usize = 22;
+/// Page « Alimentation et batterie » (icône batterie de la barre des tâches).
+pub const PAGE_POWER: usize = 23;
+/// Graphismes : GPU, mesures, réglages avancés et overlay en jeu.
+pub const PAGE_GRAPHICS: usize = 24;
+pub const PAGE_REPORT: usize = 25;
 /// Page « Imprimantes et scanners » (winspool + CUPS).
-pub const PAGE_PRINTERS: usize = 23;
-const PAGE_COUNT: usize = 24;
+pub const PAGE_PRINTERS: usize = 26;
+const PAGE_COUNT: usize = 27;
 /// Appareils Bluetooth affichés (une ligne de boutons chacun).
 const BT_ROWS: usize = 5;
-/// Ordre d'affichage du menu : la personnalisation suit l'apparence.
+/// Ordre d'affichage du menu : la personnalisation suit l'apparence,
+/// l'alimentation suit le son et la batterie.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 23, 17, 18, 19, 20, 22,
+    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22, 25, 26,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -53,6 +61,9 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_NETWORK_DRIVES),
         tr(S_PERSONALIZATION),
         tr(S_BLUETOOTH_DEVICES),
+        tr(S_POWER_BATTERY),
+        tr(S_GRAPHICS),
+        tr(S_REPORT_PAGE),
         tr(S_PRINTERS),
     ]
 }
@@ -80,6 +91,8 @@ static mut BUILD_INFO: Buffer = EMPTY;
 static mut SYSUPDATES: Buffer = EMPTY;
 static mut BLUETOOTH: Buffer = EMPTY;
 static mut BT_CMD: [u8; 64] = [0; 64];
+/// `/run/winlux/power.txt`, écrit par `winlux --power` (démon et commandes).
+static mut POWER: Buffer = EMPTY;
 /// Nombre de mises à jour système déjà signalé (u32::MAX : pas encore lu).
 static mut NOTIFIED_UPDATES: u32 = u32::MAX;
 static mut SELECTED_MODE: usize = 0;
@@ -93,6 +106,9 @@ static mut EXE_PATH: [u16; 2048] = [0; 2048];
 static mut EXE_LEN: usize = 0;
 static mut EXE_SCALE: usize = 0;
 static mut EXE_TRACE: bool = false;
+/// GPU préféré du programme : 0 auto, 1 intégré, 2 dédié (machines hybrides).
+static mut EXE_GPU: usize = 0;
+const EXE_GPUS: [&[u8]; 3] = [b"auto", b"integrated", b"dedicated"];
 static mut EXE_NOTICE: &[u8] = b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.";
 const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50;
@@ -118,6 +134,7 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
     EXE_LEN = len;
     EXE_SCALE = 0;
     EXE_TRACE = false;
+    EXE_GPU = 0;
     crate::settings_cpu::reset_program();
     let mut profile = [0u16; 2060];
     exe_profile_path(&mut profile);
@@ -142,6 +159,10 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
             .position(|&v| v == field(data, b"ui_scale"))
             .unwrap_or(0);
         EXE_TRACE = field(data, b"trace") == b"1";
+        EXE_GPU = EXE_GPUS
+            .iter()
+            .position(|&v| v == field(data, b"gpu"))
+            .unwrap_or(0);
     }
     EXE_NOTICE = b"Un double-clic lance le programme, m\xEAme sans r\xE9glages enregistr\xE9s.";
     PAGE = 10;
@@ -160,6 +181,7 @@ unsafe fn save_exe_settings(reset: bool) {
         }
         EXE_SCALE = 0;
         EXE_TRACE = false;
+        EXE_GPU = 0;
         crate::settings_cpu::reset_program();
         EXE_NOTICE = b"Valeurs par d\xE9faut restaur\xE9es.";
         return;
@@ -181,11 +203,20 @@ unsafe fn save_exe_settings(reset: bool) {
     let scale = EXE_SCALES[EXE_SCALE];
     data[..9].copy_from_slice(b"ui_scale=");
     data[9..9 + scale.len()].copy_from_slice(scale);
-    let n = 9 + scale.len();
+    let mut n = 9 + scale.len();
     data[n..n + 7].copy_from_slice(b"\ntrace=");
     data[n + 7] = if EXE_TRACE { b'1' } else { b'0' };
     data[n + 8] = b'\n';
-    let total = n + 9 + crate::settings_cpu::write_program(&mut data[n + 9..]);
+    n += 9;
+    // Le choix du GPU n'est écrit que s'il diffère de l'automatique.
+    if EXE_GPU != 0 {
+        let gpu = EXE_GPUS[EXE_GPU.min(2)];
+        data[n..n + 4].copy_from_slice(b"gpu=");
+        data[n + 4..n + 4 + gpu.len()].copy_from_slice(gpu);
+        data[n + 4 + gpu.len()] = b'\n';
+        n += 5 + gpu.len();
+    }
+    let total = n + crate::settings_cpu::write_program(&mut data[n..]);
     let mut written = 0;
     let ok = WriteFile(
         h,
@@ -265,6 +296,9 @@ unsafe fn read(path: &core::ffi::CStr, target: &mut Buffer) -> bool {
 }
 unsafe fn value(key: &[u8]) -> &'static [u8] {
     field(STATUS.get(), key)
+}
+unsafe fn pvalue(key: &[u8]) -> &'static [u8] {
+    field(POWER.get(), key)
 }
 pub(crate) unsafe fn exe_path() -> &'static [u16] {
     &EXE_PATH[..EXE_LEN]
@@ -373,19 +407,23 @@ pub unsafe fn system_tick() -> bool {
         1
     };
     changed |= read(c"Z:\\run\\winlux\\update-progress", &mut PROGRESS);
+    if PAGE == PAGE_GRAPHICS {
+        changed |= crate::gpuinfo::refresh(false);
+    }
     if PAGE == 9 {
         changed |= read(c"Z:\\usr\\share\\winlux\\BUILD-INFO", &mut BUILD_INFO);
     }
     if PAGE == PAGE_SYSUPDATE {
         changed |= read(c"Z:\\run\\winlux\\sysupdates.txt", &mut SYSUPDATES);
     }
+    if PAGE == PAGE_POWER {
+        changed |= read(c"Z:\\run\\winlux\\power.txt", &mut POWER);
+    }
     if available() {
         notify_updates();
     }
     if available() {
         crate::desktop::NETWORK_CONNECTED = number(value(b"network_connected"));
-        crate::desktop::BATTERY_PRESENT = number(value(b"battery_present"));
-        crate::desktop::BATTERY_LEVEL = number(value(b"battery_level")).min(100);
         let audio = value(b"audio");
         if audio.starts_with(b"Volume: ") {
             let muted = audio.windows(5).any(|w| w == b"MUTED");
@@ -636,7 +674,8 @@ fn content(f: &Frame) -> Rect {
 }
 fn nav_rect(f: &Frame, i: usize) -> Rect {
     let c = content(f);
-    let step = ((f.client.bottom - f.client.top - 75) / PAGE_COUNT as i32).clamp(26, 42);
+    // Toutes les pages doivent tenir dans la hauteur de la fenêtre.
+    let step = ((f.client.bottom - f.client.top - 72) / PAGE_COUNT as i32).clamp(20, 42);
     rect(
         f.client.left + 10,
         f.client.top + 64 + i as i32 * step,
@@ -677,6 +716,7 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (8, 4) => value(b"display_policy") != b"fixed",
         (10, 0..=4) => EXE_SCALE == id as usize,
         (10, 5) => EXE_TRACE,
+        (10, 12..=14) => EXE_GPU == (id - 12) as usize,
         (11, 1) => value(b"browser_default") == b"edge",
         (11, 4) => value(b"browser_default") == b"chrome",
         (11, 7) => value(b"browser_default") == b"firefox",
@@ -699,6 +739,9 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (PAGE_SYSUPDATE, 0) => value(b"sysupdate_mode") == b"auto",
         (PAGE_SYSUPDATE, 1) => !matches!(value(b"sysupdate_mode"), b"auto" | b"scheduled"),
         (PAGE_SYSUPDATE, 2) => value(b"sysupdate_mode") == b"scheduled",
+        (PAGE_POWER, 0) => pvalue(b"power_profile") == b"performance",
+        (PAGE_POWER, 1) => pvalue(b"power_profile") == b"balanced",
+        (PAGE_POWER, 2) => pvalue(b"power_profile") == b"saver",
         (PAGE_PRIVACY, 0) => value(b"privacy_telemetry") != b"on",
         (PAGE_PRIVACY, 1) => value(b"privacy_telemetry") == b"on",
         (PAGE_PRIVACY, 9) => value(b"privacy_microphone") != b"deny",
@@ -710,6 +753,13 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (BLUETOOTH_PAGE, 1) => {
             field(BLUETOOTH.get(), b"present") == b"1" && field(BLUETOOTH.get(), b"powered") != b"1"
         }
+        (PAGE_REPORT, 9) => value(b"report_offer") != b"off",
+        (PAGE_REPORT, 10) => value(b"report_offer") == b"off",
+        (PAGE_REPORT, 18) => value(b"report_redact") != b"off",
+        (PAGE_REPORT, 19) => value(b"report_redact") == b"off",
+        (PAGE_REPORT, 27) => !matches!(value(b"report_mode"), b"browser" | b"file"),
+        (PAGE_REPORT, 28) => value(b"report_mode") == b"browser",
+        (PAGE_REPORT, 29) => value(b"report_mode") == b"file",
         _ => false,
     };
     let primary = PAGE == 7 && id == 1
@@ -990,6 +1040,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.accent,
     );
     match PAGE {
+        PAGE_GRAPHICS => graphics::draw(g, f),
         PAGE_PERSONALIZE => crate::personalize::draw_settings(g, &c),
         5 => {
             let speed_str = unsafe {
@@ -1174,14 +1225,27 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 }
                 button(g, &c, i as i32 / 3, i as i32 % 3, label, i as i32);
             }
+            // Machines hybrides uniquement : sinon il n'y a rien à choisir.
+            if graphics::exe_choices() {
+                for (i, label) in [
+                    b"GPU : automatique".as_slice(),
+                    b"GPU \xE9conomie",
+                    b"GPU performances",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    button(g, &c, 4, i as i32, label, 12 + i as i32);
+                }
+            }
             row(
                 g,
                 &c,
-                300,
+                350,
                 b"Application des r\xE9glages",
                 b"Enregistrer puis relancer le programme. Aucun profil n'est obligatoire.",
             );
-            row(g, &c, 366, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
+            row(g, &c, 410, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
         }
         9 => {
             let info = BUILD_INFO.get();
@@ -1311,6 +1375,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             journal(g, &c, 236, LOG.get());
         }
+        PAGE_POWER => draw_power(g, &c),
         3 => {
             row(g, &c, 44, b"Sortie audio / volume", value(b"audio"));
             button(g, &c, 0, 0, b"Volume -", 0);
@@ -1320,10 +1385,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 g,
                 &c,
                 170,
-                b"Batterie expos\xE9e par le syst\xE8me",
-                value(b"battery"),
+                b"Batterie et alimentation",
+                b"Modes d'alimentation, veille et luminosit\xE9 : page Alimentation.",
             );
-            journal(g, &c, 236, LOG.get());
+            button(g, &c, 3, 0, b"Options d'alimentation", 9);
+            journal(g, &c, 280, LOG.get());
         }
         4 => {
             row(g, &c, 44, b"Disposition actuelle", value(b"layout"));
@@ -1716,6 +1782,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         PAGE_CPU => crate::settings_cpu::draw(g, &c),
         PAGE_NETDRIVES => crate::netdrives::draw(g, &c),
         BLUETOOTH_PAGE => draw_bluetooth(g, &c),
+        PAGE_REPORT => draw_report(g, &c),
         PAGE_PRINTERS => printers::draw(g, &c, SCROLL),
         _ => {}
     }
@@ -1745,6 +1812,176 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     );
 }
 
+/// Petit tampon de texte Latin-1 pour composer les libellés dynamiques.
+struct Line {
+    bytes: [u8; 96],
+    len: usize,
+}
+impl Line {
+    fn new() -> Self {
+        Self {
+            bytes: [0; 96],
+            len: 0,
+        }
+    }
+    fn push(&mut self, s: &[u8]) -> &mut Self {
+        for &c in s {
+            if self.len < self.bytes.len() {
+                self.bytes[self.len] = c;
+                self.len += 1;
+            }
+        }
+        self
+    }
+    fn num(&mut self, v: u32) -> &mut Self {
+        let mut digits = [0u8; 10];
+        let mut i = digits.len();
+        let mut v = v;
+        loop {
+            i -= 1;
+            digits[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+            if v == 0 {
+                break;
+            }
+        }
+        self.push(&digits[i..])
+    }
+    fn duration(&mut self, secs: u32) -> &mut Self {
+        let m = secs / 60 % 60;
+        if secs >= 3600 {
+            self.num(secs / 3600).push(b" h ");
+            if m < 10 {
+                self.push(b"0");
+            }
+        }
+        self.num(m).push(b" min")
+    }
+    /// Délai de la configuration : « 10 min », « 2 h » ou « Jamais ».
+    fn delay(&mut self, raw: &[u8]) -> &mut Self {
+        if raw.is_empty() {
+            return self.push(b"?");
+        }
+        match number(raw) {
+            0 => self.push(b"Jamais"),
+            s if s >= 3600 => self.num(s / 3600).push(b" h"),
+            s => self.num(s / 60).push(b" min"),
+        }
+    }
+    fn get(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
+fn action_label(key: &[u8]) -> &'static [u8] {
+    match key {
+        b"nothing" => b"Ne rien faire",
+        b"sleep" => b"Veille",
+        b"hibernate" => b"Veille prolong\xE9e",
+        b"shutdown" => b"Arr\xEAter",
+        b"display-off" => b"\xC9teindre l'\xE9cran",
+        _ => b"?",
+    }
+}
+
+/// Page « Alimentation et batterie » : état, modes, délais, capot/bouton,
+/// luminosité. Les valeurs viennent de `/run/winlux/power.txt`.
+unsafe fn draw_power(g: &mut Gfx, c: &Rect) {
+    let mut battery = Line::new();
+    if pvalue(b"power_battery").is_empty() {
+        battery.push(b"Service d'alimentation Winlux non d\xE9marr\xE9");
+    } else if pvalue(b"power_battery") == b"0" {
+        battery.push(b"Alimentation secteur - aucune batterie d\xE9tect\xE9e");
+    } else {
+        battery.num(number(pvalue(b"power_percent"))).push(b" % - ");
+        let left = pvalue(b"power_seconds_left");
+        let full = pvalue(b"power_seconds_to_full");
+        match pvalue(b"power_state") {
+            b"charging" => {
+                battery.push(b"En charge");
+                if !full.is_empty() {
+                    battery.push(b", pleine dans ").duration(number(full));
+                }
+            }
+            b"discharging" => {
+                battery.push(b"Sur batterie");
+                if !left.is_empty() {
+                    battery.push(b", ").duration(number(left)).push(b" restantes");
+                }
+            }
+            b"full" => {
+                battery.push(b"Charg\xE9e");
+            }
+            b"not-charging" => {
+                battery.push(b"Branch\xE9e, pas en charge");
+            }
+            _ => {
+                battery.push(b"\xC9tat inconnu");
+            }
+        }
+        if !pvalue(b"power_health").is_empty() {
+            battery
+                .push(b" - sant\xE9 ")
+                .num(number(pvalue(b"power_health")))
+                .push(b" %");
+        }
+    }
+    row(g, c, 44, b"Batterie et mode d'alimentation", battery.get());
+    button(g, c, 0, 0, b"Performances maximales", 0);
+    button(g, c, 0, 1, b"\xC9quilibr\xE9", 1);
+    button(g, c, 0, 2, b"\xC9conomie d'\xE9nergie", 2);
+
+    let mut now = Line::new();
+    now.push(b"Appliqu\xE9 maintenant : \xE9cran ")
+        .push(pvalue(b"power_screen_now"))
+        .push(b", veille ")
+        .push(pvalue(b"power_sleep_now"));
+    row(g, c, 176, b"\xC9cran et mise en veille (cliquer pour changer)", now.get());
+    let mut l = Line::new();
+    l.push(b"\xC9cran secteur : ").delay(pvalue(b"power_screen_ac"));
+    button(g, c, 3, 0, l.get(), 9);
+    let mut l = Line::new();
+    l.push(b"\xC9cran batterie : ").delay(pvalue(b"power_screen_dc"));
+    button(g, c, 3, 1, l.get(), 10);
+    if pvalue(b"power_can_sleep") == b"1" {
+        button(g, c, 3, 2, b"Mettre en veille", 11);
+    }
+    let mut l = Line::new();
+    l.push(b"Veille secteur : ").delay(pvalue(b"power_sleep_ac"));
+    button(g, c, 4, 0, l.get(), 12);
+    let mut l = Line::new();
+    l.push(b"Veille batterie : ").delay(pvalue(b"power_sleep_dc"));
+    button(g, c, 4, 1, l.get(), 13);
+
+    let mut l = Line::new();
+    l.push(b"Luminosit\xE9 ");
+    if pvalue(b"power_brightness").is_empty() {
+        l.push(b"non r\xE9glable ici (VM ou \xE9cran externe)");
+    } else {
+        l.num(number(pvalue(b"power_brightness"))).push(b" %");
+        if pvalue(b"power_profile") == b"saver" {
+            l.push(b" (mode \xE9conomie)");
+        }
+    }
+    l.push(if pvalue(b"power_can_hibernate") == b"1" {
+        b" - veille prolong\xE9e pr\xEAte" as &[u8]
+    } else {
+        b" - veille prolong\xE9e \xE0 pr\xE9parer"
+    });
+    row(g, c, 352, b"Capot, bouton d'alimentation et luminosit\xE9", l.get());
+    let mut l = Line::new();
+    l.push(b"Capot : ").push(action_label(pvalue(b"power_lid")));
+    button(g, c, 7, 0, l.get(), 21);
+    let mut l = Line::new();
+    l.push(b"Bouton : ").push(action_label(pvalue(b"power_button")));
+    button(g, c, 7, 1, l.get(), 22);
+    if pvalue(b"power_can_hibernate") == b"1" {
+        button(g, c, 7, 2, b"Veille prolong\xE9e", 23);
+    }
+    button(g, c, 8, 0, b"Luminosit\xE9 -", 24);
+    button(g, c, 8, 1, b"Luminosit\xE9 +", 25);
+}
+
 fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     let c = content(f);
     if unsafe { PAGE == 7 && restart_required() } {
@@ -1754,7 +1991,8 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
             -1
         };
     }
-    for i in 0..24 {
+    // Dix rangées de trois boutons (Signaler un problème va jusqu'à 9).
+    for i in 0..30 {
         let r = button_rect(&c, i / 3, i % 3);
         if r.bottom <= c.bottom - 24 && inside(&r, x, y) {
             return i;
@@ -1782,6 +2020,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if ev == Mouse::Move && PAGE == PAGE_PRINTERS {
         return printers::mouse(ev, x, y);
+    }
+    if ev == Mouse::Move && PAGE == PAGE_GRAPHICS {
+        let h = graphics::hit(f, x, y);
+        let changed = h != graphics::HOVER;
+        graphics::HOVER = h;
+        return changed;
     }
     if ev == Mouse::Move && PAGE == PAGE_CPU {
         return crate::settings_cpu::hover(&content(f), x, y);
@@ -1816,6 +2060,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if PAGE == PAGE_PRINTERS {
         return printers::mouse(ev, x, y);
+    }
+    if PAGE == PAGE_GRAPHICS {
+        return graphics::click(f, x, y);
     }
     if PAGE == 12 {
         return crate::a11y::page_mouse(ev, x, y, &content(f));
@@ -1872,6 +2119,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 c"browser-launch-firefox",
             ][id as usize],
         ),
+        (10, id @ 12..=14) if EXE_LEN > 0 && graphics::exe_choices() => {
+            EXE_GPU = (id - 12) as usize;
+            EXE_NOTICE = b"Cliquez sur Enregistrer puis relancez le programme.";
+            return true;
+        }
         (10, 9) if EXE_LEN > 0 && crate::settings_cpu::available() => {
             open_page(PAGE_CPU);
             crate::settings_cpu::focus_program();
@@ -1908,6 +2160,23 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (3, 0) => Some(c"volume-down"),
         (3, 1) => Some(c"volume-mute"),
         (3, 2) => Some(c"volume-up"),
+        (3, 9) => {
+            open_page(PAGE_POWER);
+            return true;
+        }
+        (PAGE_POWER, 0) => Some(c"power-profile-performance"),
+        (PAGE_POWER, 1) => Some(c"power-profile-balanced"),
+        (PAGE_POWER, 2) => Some(c"power-profile-saver"),
+        (PAGE_POWER, 9) => Some(c"power-screen-ac"),
+        (PAGE_POWER, 10) => Some(c"power-screen-dc"),
+        (PAGE_POWER, 11) if pvalue(b"power_can_sleep") == b"1" => Some(c"power-suspend"),
+        (PAGE_POWER, 12) => Some(c"power-sleep-ac"),
+        (PAGE_POWER, 13) => Some(c"power-sleep-dc"),
+        (PAGE_POWER, 21) => Some(c"power-lid"),
+        (PAGE_POWER, 22) => Some(c"power-button"),
+        (PAGE_POWER, 23) if pvalue(b"power_can_hibernate") == b"1" => Some(c"power-hibernate"),
+        (PAGE_POWER, 24) => Some(c"power-brightness-down"),
+        (PAGE_POWER, 25) => Some(c"power-brightness-up"),
         (4, 0) => Some(c"keyboard-fr"),
         (4, 1) => Some(c"keyboard-us"),
         (4, 3) => Some(c"tap-on"),
@@ -2158,6 +2427,21 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         } else {
             c"privacy-location-allow"
         }),
+        (PAGE_REPORT, id @ 0..=2) => {
+            report(match id {
+                0 => c"",
+                1 => c"--crash --force",
+                _ => c"--open-saved",
+            });
+            return true;
+        }
+        (PAGE_REPORT, 9) => Some(c"report-offer-on"),
+        (PAGE_REPORT, 10) => Some(c"report-offer-off"),
+        (PAGE_REPORT, 18) => Some(c"report-redact-on"),
+        (PAGE_REPORT, 19) => Some(c"report-redact-off"),
+        (PAGE_REPORT, 27) => Some(c"report-mode-auto"),
+        (PAGE_REPORT, 28) => Some(c"report-mode-browser"),
+        (PAGE_REPORT, 29) => Some(c"report-mode-file"),
         (PAGE_PRIVACY, 18) => Some(c"privacy-history-off"),
         (PAGE_PRIVACY, 19) => Some(c"privacy-history-on"),
         (BLUETOOTH_PAGE, 0) => Some(c"bluetooth-on"),
@@ -2447,6 +2731,48 @@ unsafe fn draw_privacy(g: &mut Gfx, c: &Rect) {
         b"Un micro refus\xE9 est bloqu\xE9 par le runtime ; cam\xE9ra et localisation ne sont pas encore expos\xE9es aux .exe.",
     );
 }
+/// Lance « Signaler un problème » (winlux-report) : le rapport s'affiche en
+/// entier, modifiable, avant tout envoi.
+pub unsafe fn report(args: &core::ffi::CStr) {
+    if ShellExecuteA(
+        core::ptr::null_mut(),
+        c"open".as_ptr(),
+        c"winlux-report".as_ptr(),
+        args.as_ptr(),
+        core::ptr::null(),
+        1,
+    ) as isize
+        <= 32
+    {
+        crate::desktop::toast(tr(S_INFO_UNAVAILABLE));
+    }
+}
+unsafe fn draw_report(g: &mut Gfx, c: &Rect) {
+    row(g, c, 44, tr(S_REPORT_PAGE), tr(S_REPORT_DESC));
+    button(g, c, 0, 0, tr(S_REPORT_NEW), 0);
+    button(g, c, 0, 1, tr(S_REPORT_LAST), 1);
+    button(g, c, 0, 2, tr(S_REPORT_SAVED), 2);
+    let offer = value(b"report_offer") != b"off";
+    let offer_desc = if offer { S_REPORT_OFFER_ON_DESC } else { S_REPORT_OFFER_OFF_DESC };
+    row(g, c, 166, tr(S_REPORT_OFFER), tr(offer_desc));
+    button(g, c, 3, 0, tr(S_REPORT_PROPOSE), 9);
+    button(g, c, 3, 1, tr(S_REPORT_SILENT), 10);
+    let mask = value(b"report_redact") != b"off";
+    let mask_desc = if mask { S_REPORT_MASK_DESC } else { S_REPORT_NOMASK_DESC };
+    row(g, c, 300, tr(S_REPORT_PRIVATE), tr(mask_desc));
+    button(g, c, 6, 0, tr(S_REPORT_MASK), 18);
+    button(g, c, 6, 1, tr(S_REPORT_NOMASK), 19);
+    let mode = match (value(b"report_mode"), value(b"report_transport")) {
+        (b"browser", _) => S_REPORT_MODE_BROWSER,
+        (b"file", _) => S_REPORT_MODE_FILE,
+        (_, b"browser") => S_REPORT_MODE_AUTO_BROWSER,
+        _ => S_REPORT_MODE_RELAY,
+    };
+    row(g, c, 430, tr(S_REPORT_MODE), tr(mode));
+    button(g, c, 9, 0, tr(S_REPORT_AUTO), 27);
+    button(g, c, 9, 1, tr(S_REPORT_BROWSER), 28);
+    button(g, c, 9, 2, tr(S_REPORT_FILE), 29);
+}
 unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
     let p = pal();
     row(
@@ -2571,6 +2897,7 @@ pub unsafe fn regression_checks() {
     );
     printers::regression_checks();
     (STATUS, PAGE) = saved;
+    graphics::regression_checks();
     crate::settings_cpu::regression_checks();
 }
 
@@ -2582,13 +2909,19 @@ pub unsafe fn regression_exe_settings(path: &[u16]) {
     );
     EXE_SCALE = 3;
     EXE_TRACE = true;
+    EXE_GPU = 2;
     save_exe_settings(false);
     EXE_SCALE = 0;
     EXE_TRACE = false;
+    EXE_GPU = 0;
     open_exe_settings(path);
     check!(
         EXE_SCALE == 3 && EXE_TRACE,
         "Les reglages 150 % et diagnostic sont relus pour le bon EXE"
+    );
+    check!(
+        EXE_GPU == 2,
+        "Le GPU hautes performances choisi pour un EXE est relu depuis son profil"
     );
     save_exe_settings(true);
     let mut sidecar = [0u16; 2060];

@@ -11,6 +11,8 @@ pub fn path(exe: &Path) -> PathBuf {
 pub struct Profile {
     pub scale: Option<String>,
     pub trace: Option<bool>,
+    /// GPU préféré sur les machines hybrides (`auto`, `integrated`, `dedicated`).
+    pub gpu: Option<crate::gpu::Preference>,
     /// Priorité, cœurs, affinité et nœud NUMA choisis dans les Paramètres.
     pub cpu: crate::cpu::LaunchSettings,
 }
@@ -24,6 +26,7 @@ pub fn parse(text: &str) -> Profile {
             }
             Some(("trace", "1")) => profile.trace = Some(true),
             Some(("trace", "0")) => profile.trace = Some(false),
+            Some(("gpu", value)) => profile.gpu = crate::gpu::Preference::parse(value),
             Some(("cpu_priority", value)) => {
                 profile.cpu.priority = crate::cpu::Priority::parse(value);
             }
@@ -69,6 +72,14 @@ pub fn apply(exe: &Path) -> crate::cpu::LaunchSettings {
             std::env::remove_var("WINLUX_TRACE");
         }
     }
+    if let Some(pref) = profile.gpu {
+        // Sur une machine qui n'est pas hybride, la liste est vide : le
+        // réglage reste sans effet au lieu d'échouer.
+        let gpus = crate::gpu::probe(&crate::gpu::system_root());
+        for (key, value) in crate::gpu::prime_env(&gpus, pref) {
+            std::env::set_var(key, value);
+        }
+    }
     profile.cpu
 }
 
@@ -94,6 +105,11 @@ mod tests {
         assert_eq!(cpu.numa_node, Some(1));
         let bad = parse("cpu_priority=turbo\ncpu_affinity=0-99999\nnuma_node=x\n").cpu;
         assert_eq!(bad, crate::cpu::LaunchSettings::default());
+        assert_eq!(
+            parse("gpu=dedicated\n").gpu,
+            Some(crate::gpu::Preference::Performance)
+        );
+        assert_eq!(parse("gpu=$(id)\n").gpu, None);
         assert_eq!(
             parse("ui_scale=$(touch /tmp/no)\ntrace=yes\nWINLUX_MISSING=ignore\n"),
             Profile::default()

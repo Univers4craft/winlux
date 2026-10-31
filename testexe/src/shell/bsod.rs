@@ -23,12 +23,32 @@ static mut START_TIME: u32 = 0;
 static mut LAST_CHECK: u32 = 0;
 const BSOD_DURATION_MS: u32 = 15000;
 
+/// Propose de signaler le dernier plantage (boîte de dialogue winlux-report,
+/// qui ne propose rien si l'utilisateur l'a désactivé dans Paramètres).
+unsafe fn offer_report() {
+    ShellExecuteA(
+        core::ptr::null_mut(),
+        c"open".as_ptr(),
+        c"winlux-report".as_ptr(),
+        c"--crash".as_ptr(),
+        core::ptr::null(),
+        0,
+    );
+}
+
 pub unsafe fn check_crash() {
     let now = GetTickCount();
     if ACTIVE || now.wrapping_sub(LAST_CHECK) < 2000 {
         return;
     }
     LAST_CHECK = now;
+    // Échec sans faute mémoire (fonction Windows absente, erreur interne) :
+    // pas d'écran bleu, seulement la proposition de signalement.
+    let offer = c"Z:\\run\\winlux\\crash-offer".as_ptr();
+    if GetFileAttributesA(offer) != u32::MAX {
+        DeleteFileA(offer);
+        offer_report();
+    }
     let path = c"Z:\\run\\winlux\\crash-bsod".as_ptr();
     let handle = CreateFileA(
         path,
@@ -99,13 +119,16 @@ pub unsafe fn tick() -> bool {
     let elapsed = GetTickCount().wrapping_sub(START_TIME);
     PROGRESS = ((elapsed * 100) / BSOD_DURATION_MS).min(100) as u32;
     if elapsed >= BSOD_DURATION_MS {
-        ACTIVE = false;
+        dismiss();
     }
     true
 }
 
 pub unsafe fn dismiss() {
-    ACTIVE = false;
+    if ACTIVE {
+        ACTIVE = false;
+        offer_report();
+    }
 }
 
 pub unsafe fn draw(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, h: i32) {

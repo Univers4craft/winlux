@@ -10,14 +10,26 @@ test -x "$runtime" || { echo "runtime absent : $runtime" >&2; exit 1; }
 # mais doivent être mentionnés ici pour satisfaire le contrôle d'hygiène :
 # audioplayer calc imageviewer mediaplayer pdfviewer postit screenshot sysinfo taskmgr
 
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression voicerecorder audio_suite print_suite; do
+# Faux sysfs pour power_api : batterie à 75 %, 30 Wh restants à 10 W.
+power_root="${TMPDIR:-/tmp}/winlux-power-test.$$"
+battery="$power_root/sys/class/power_supply/BAT0"
+mkdir -p "$battery" "$power_root/run/winlux" "$power_root/etc/winlux"
+trap 'rm -rf "$power_root"' EXIT
+printf 'Battery\n' > "$battery/type"
+printf 'Discharging\n' > "$battery/status"
+printf '75\n' > "$battery/capacity"
+printf '30000000\n' > "$battery/energy_now"
+printf '40000000\n' > "$battery/energy_full"
+printf '10000000\n' > "$battery/power_now"
+
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression voicerecorder power_api audio_suite print_suite; do
     exe="$testdir/$name.exe"
     test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
     printf '\n== %s ==\n' "$name"
     if [ "$name" = exitcode ]; then expected=42; else expected=0; fi
     set +e
     # Sortie audio nulle cadencée : pas de carte son sur les runners CI.
-    WINLUX_AUDIO=null WINLUX_TEST=salut WINLUX_GUI=headless "$runtime" "$exe"
+    WINLUX_AUDIO=null WINLUX_TEST=salut WINLUX_GUI=headless WINLUX_POWER_ROOT="$power_root" "$runtime" "$exe"
     actual=$?
     set -e
     test "$actual" -eq "$expected" || {

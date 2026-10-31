@@ -92,6 +92,8 @@ cp "$root/scripts/winlux-bluetooth.sh" "$stage/usr/bin/winlux-bluetooth"
 chmod 755 "$stage/usr/bin/winlux-bluetooth"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
+cp "$root/scripts/winlux-prime-run.sh" "$stage/usr/bin/winlux-prime-run"
+chmod 755 "$stage/usr/bin/winlux-prime-run"
 mkdir -p "$stage/usr/share/winlux"
 # Store de logiciels et gestionnaire de polices du shell.
 cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
@@ -499,6 +501,9 @@ fi
 /bin/busybox ip link set lo up
 /bin/busybox mkdir -p /run/winlux /etc/winlux
 /bin/busybox touch /etc/winlux/live-session
+# Alimentation : profil, luminosite, veille sur inactivite, capot, bouton
+# d'alimentation et batterie critique. Remplace logind/upower, sans systemd.
+/usr/bin/winlux --power daemon >/run/winlux/power-daemon.log 2>&1 &
 if ! /bin/busybox grep -q '^winlux-web:' /etc/passwd; then
     browser_uid=1001
     while /bin/busybox awk -F: -v n="$browser_uid" '$3 == n { found=1 } END { exit !found }' /etc/passwd /etc/group; do

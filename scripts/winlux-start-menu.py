@@ -15,7 +15,7 @@ STATE = Path.home() / ".config/winlux/start.json"
 DEFAULTS = ["winlux-explorer.desktop", "winlux-browser-edge.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
 SETTINGS = [("Système et alimentation", 0), ("Applications et démarrage", 1), ("Réseau Wi-Fi", 2),
-            ("Son et batterie", 3), ("Clavier", 4), ("Souris", 5), ("Personnalisation fond écran thème", 6),
+            ("Son", 3), ("Alimentation batterie veille", 23), ("Clavier", 4), ("Souris", 5), ("Personnalisation fond écran thème", 6),
             ("Mises à jour", 7), ("Écran résolution", 8), ("À propos version", 9), ("Navigateurs", 11)]
 
 def category(app):
