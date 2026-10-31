@@ -1246,6 +1246,9 @@ pub unsafe fn open_pc() {
 pub unsafe fn open_documents() {
     open_at(place_path(2).get());
 }
+pub unsafe fn open_downloads() {
+    open_at(place_path(1).get());
+}
 pub unsafe fn open_trash() {
     open_at(TRASH);
 }
