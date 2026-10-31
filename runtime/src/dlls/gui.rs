@@ -289,6 +289,8 @@ pub struct Window {
     pub style: u32,
     #[allow(dead_code)]
     pub ex_style: u32,
+    /// Un `WM_PAINT` est déjà en file d'attente (coalescence).
+    pub paint_queued: bool,
     /// Commandes GDI accumulées depuis le dernier `EndPaint`.
     pub pending: Vec<DrawCmd>,
 }
@@ -1793,10 +1795,11 @@ pub fn request_paint(hwnd: usize) {
         let mut map = lock(windows());
         match map.get_mut(&hwnd) {
             Some(w) => {
-                if w.needs_paint {
+                if w.paint_queued {
                     return;
                 }
                 w.needs_paint = true;
+                w.paint_queued = true;
                 Some(w.owner)
             }
             None => None,
@@ -1988,6 +1991,7 @@ pub fn begin_paint(hwnd: usize) -> Option<(usize, Rect)> {
         let mut map = lock(windows());
         let w = map.get_mut(&hwnd)?;
         w.needs_paint = false;
+        w.paint_queued = false;
         w.client_rect()
     };
     Some((create_dc(hwnd), rect))
@@ -2492,6 +2496,7 @@ mod tests {
                 parent: 0,
                 owner: std::thread::current().id(),
                 needs_paint: false,
+                paint_queued: false,
                 style: 0,
                 ex_style: 0,
                 pending: Vec::new(),
