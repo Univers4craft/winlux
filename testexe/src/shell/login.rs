@@ -495,7 +495,7 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
                 b,
                 cursor_x,
                 fy + 8,
-                cursor_x + 1,
+                cursor_x + crate::gfx::caret_w(1),
                 fy + field_h - 8,
                 mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
             );
@@ -707,7 +707,7 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
                 b,
                 cursor_x,
                 fy + 8,
-                cursor_x + 1,
+                cursor_x + crate::gfx::caret_w(1),
                 fy + field_h - 8,
                 mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
             );
