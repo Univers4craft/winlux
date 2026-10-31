@@ -545,6 +545,24 @@ static RESIZE_CACHE: Mutex<Option<ResizeCache>> = Mutex::new(None);
 mod scaling_tests {
     use super::*;
     #[test]
+    fn image_ajustee_sans_deformation() {
+        // Image 4×2 rouge opaque dans une boîte 8×8 : bandes de fond en haut
+        // et en bas, image centrée sur 8×4.
+        let red = [[255u8, 0, 0, 255]; 8];
+        let out = fit_rgba(4, 2, &red, 8, 8, 0x00FF_FFFF);
+        assert_eq!(out.len(), 64);
+        assert_eq!(out[0], 0x00FF_FFFF);
+        assert_eq!(out[2 * 8 + 4], 0x0000_00FF);
+        assert_eq!(out[5 * 8 + 7], 0x0000_00FF);
+        assert_eq!(out[7 * 8], 0x00FF_FFFF);
+        // Transparence composée sur le fond.
+        let clear = [[0u8, 0, 0, 0]; 1];
+        assert_eq!(
+            fit_rgba(1, 1, &clear, 2, 2, 0x0012_3456),
+            vec![0x0012_3456; 4]
+        );
+    }
+    #[test]
     fn agrandissement_lisse_et_bitmap_4k() {
         let image = gui::BitmapSnapshot {
             width: 2,
@@ -937,17 +955,33 @@ fn icon_pixels(request: &str, size: usize, background: u32) -> Option<Vec<u32>> 
         return Some(pixels);
     }
     let (width, height, source) = decode_png(&resolve_icon_path(request)?)?;
-    let scale = (size as f32 / width as f32).min(size as f32 / height as f32);
-    let fitted_width = ((width as f32 * scale).round() as usize).clamp(1, size);
-    let fitted_height = ((height as f32 * scale).round() as usize).clamp(1, size);
-    let offset_x = (size - fitted_width) / 2;
-    let offset_y = (size - fitted_height) / 2;
+    let output = fit_rgba(width, height, &source, size, size, background);
+    cache.lock().ok()?.insert(key, output.clone());
+    Some(output)
+}
+
+/// Redimensionne (filtrage bilinéaire) une image RGBA pour qu'elle tienne,
+/// proportions gardées et centrée, dans une boîte `box_w` × `box_h` ; la
+/// transparence est composée sur `background` (COLORREF).
+fn fit_rgba(
+    width: usize,
+    height: usize,
+    source: &[[u8; 4]],
+    box_w: usize,
+    box_h: usize,
+    background: u32,
+) -> Vec<u32> {
+    let scale = (box_w as f32 / width as f32).min(box_h as f32 / height as f32);
+    let fitted_width = ((width as f32 * scale).round() as usize).clamp(1, box_w);
+    let fitted_height = ((height as f32 * scale).round() as usize).clamp(1, box_h);
+    let offset_x = (box_w - fitted_width) / 2;
+    let offset_y = (box_h - fitted_height) / 2;
     let bg = [
         (background & 0xff) as u8,
         ((background >> 8) & 0xff) as u8,
         ((background >> 16) & 0xff) as u8,
     ];
-    let mut output = vec![background; size * size];
+    let mut output = vec![background; box_w * box_h];
     for y in 0..fitted_height {
         let sy = ((y as f32 + 0.5) * height as f32 / fitted_height as f32 - 0.5)
             .clamp(0.0, height.saturating_sub(1) as f32);
@@ -971,12 +1005,76 @@ fn icon_pixels(request: &str, size: usize, background: u32) -> Option<Vec<u32>> 
             let channel = |index: usize| {
                 (sample(index) * alpha + bg[index] as f32 * (1.0 - alpha)).round() as u32
             };
-            output[(offset_y + y) * size + offset_x + x] =
+            output[(offset_y + y) * box_w + offset_x + x] =
                 channel(0) | (channel(1) << 8) | (channel(2) << 16);
         }
     }
-    cache.lock().ok()?.insert(key, output.clone());
+    output
+}
+
+type ImageCache = Vec<((String, usize, usize, u32), Vec<u32>)>;
+static IMAGE_CACHE: OnceLock<Mutex<ImageCache>> = OnceLock::new();
+
+/// Pixels d'une image PNG (chemin Linux ou Windows) ajustée à la boîte ;
+/// les 48 dernières images servies restent en cache.
+fn image_pixels(path: &str, w: usize, h: usize, background: u32) -> Option<Vec<u32>> {
+    let key = (path.to_string(), w, h, background);
+    let cache = IMAGE_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Some((_, pixels)) = crate::dlls::lock(cache).iter().find(|(k, _)| *k == key) {
+        return Some(pixels.clone());
+    }
+    let file = if path.starts_with('/') {
+        PathBuf::from(path)
+    } else {
+        crate::paths::to_linux(path)
+    };
+    let (width, height, source) = decode_png(&file)?;
+    let output = fit_rgba(width, height, &source, w, h, background);
+    let mut cache = crate::dlls::lock(cache);
+    if cache.len() >= 48 {
+        cache.remove(0);
+    }
+    cache.push((key, output.clone()));
     Some(output)
+}
+
+/// Extension Winlux : dessine une image PNG (vignette, capture d'écran)
+/// ajustée dans le rectangle `x, y, w, h`, sans déformation.
+pub unsafe extern "win64" fn winlux_draw_image_a(
+    hdc: usize,
+    path: *const u8,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    background: u32,
+) -> i32 {
+    if path.is_null()
+        || gui::dc_window(hdc).is_none()
+        || !(1..=2048).contains(&w)
+        || !(1..=2048).contains(&h)
+    {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let path = crate::dlls::cstr(path);
+    let Some(pixels) = image_pixels(&path, w as usize, h as usize, background) else {
+        return 0;
+    };
+    let rect = Rect {
+        left: x,
+        top: y,
+        right: x + w,
+        bottom: y + h,
+    };
+    gui::record(
+        hdc,
+        DrawCmd::Bitmap {
+            rect,
+            pixels,
+            rop: gui::RasterOp::Copy,
+        },
+    ) as i32
 }
 
 /// Extension Winlux : charge l'icône PNG réelle déclarée par un fichier
@@ -1823,49 +1921,6 @@ pub unsafe extern "win64" fn get_text_metrics_w(hdc: usize, tm: *mut c_void) -> 
 }
 
 // =====================================================================
-// EnumFontFamiliesEx
-// =====================================================================
-
-pub unsafe extern "win64" fn enum_font_families_ex_a(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _callback: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    // Stub : ne rapporte aucune police
-    1
-}
-
-pub unsafe extern "win64" fn enum_font_families_ex_w(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _callback: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    1
-}
-
-pub unsafe extern "win64" fn enum_fonts_a(
-    _hdc: usize,
-    _name: *const u8,
-    _callback: usize,
-    _lparam: isize,
-) -> i32 {
-    1
-}
-
-pub unsafe extern "win64" fn enum_fonts_w(
-    _hdc: usize,
-    _name: *const u16,
-    _callback: usize,
-    _lparam: isize,
-) -> i32 {
-    1
-}
-
-// =====================================================================
 // GetTextFaceA/W
 // =====================================================================
 
@@ -2215,9 +2270,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GetCharWidth32A"=>fn get_char_width_32a, "GetCharWidth32W"=>fn get_char_width_32w,
         "GetCharABCWidthsA"=>fn get_char_abc_widths_a, "GetCharABCWidthsW"=>fn get_char_abc_widths_w,
         // --- Font enum ---
-        "EnumFontFamiliesExA"=>fn enum_font_families_ex_a,
-        "EnumFontFamiliesExW"=>fn enum_font_families_ex_w,
-        "EnumFontsA"=>fn enum_fonts_a, "EnumFontsW"=>fn enum_fonts_w,
         // --- Raster ops ---
         "PatBlt"=>fn pat_blt,
         "BitBlt"=>fn bit_blt, "StretchBlt"=>fn stretch_blt,
@@ -2272,6 +2324,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GdiFlush"=>fn gdi_flush,
         "GdiSetBatchLimit"=>fn gdi_set_batch_limit, "GdiGetBatchLimit"=>fn gdi_get_batch_limit,
         // --- Custom ---
-        "WinluxDrawIconA"=>fn winlux_draw_icon_a,
+        "WinluxDrawIconA"=>fn winlux_draw_icon_a, "WinluxDrawImageA"=>fn winlux_draw_image_a,
     }
 }

@@ -34,7 +34,9 @@ pub const APP_RESTORE: usize = 9;
 pub const APP_WELCOME: usize = 10;
 pub const APP_TASKSCHD: usize = 11;
 pub const APP_FIREWALL: usize = 12;
-pub const APP_COUNT: usize = 13;
+pub const APP_STORE: usize = 13;
+pub const APP_FONTS: usize = 14;
+pub const APP_COUNT: usize = 15;
 
 // Native session: each built-in application owns a separate X11/Win32 window.
 // The Linux window manager handles its frame, stacking and taskbar lifecycle.
@@ -53,6 +55,10 @@ pub unsafe fn native_init() {
         APP_EXPLORER
     } else if n == 8 && mode[0] == b's' as i8 {
         APP_SETTINGS
+    } else if n == 5 && mode[0] == b's' as i8 {
+        APP_STORE
+    } else if n == 5 && mode[0] == b'f' as i8 {
+        APP_FONTS
     } else if n == 8 && mode[0] == b't' as i8 {
         APP_TASKSCHD
     } else if n == 8 && mode[0] == b'f' as i8 {
@@ -73,6 +79,10 @@ pub unsafe fn native_init() {
             crate::explorer::preload();
             open(APP_EXPLORER);
         }
+    } else if NATIVE_APP == APP_STORE {
+        crate::store::open();
+    } else if NATIVE_APP == APP_FONTS {
+        crate::fonts::open();
     } else if NATIVE_APP == APP_SETTINGS {
         let mut page = [0i8; 8];
         let n = GetEnvironmentVariableA(c"WINLUX_SETTINGS_PAGE".as_ptr(), page.as_mut_ptr(), 8);
@@ -89,6 +99,8 @@ pub unsafe fn native_launch(app: usize) {
     let args = match app {
         APP_EXPLORER => c"explorer",
         APP_SETTINGS => c"settings",
+        APP_STORE => c"store",
+        APP_FONTS => c"fonts",
         APP_TASKSCHD => c"taskschd",
         APP_FIREWALL => c"firewall",
         _ => c"editor",
@@ -285,7 +297,7 @@ const CLOSED: Win = Win {
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12];
+static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
@@ -532,6 +544,8 @@ pub fn title_of(app: usize) -> &'static [u8] {
         APP_CLEANUP => b"Nettoyage de disque",
         APP_TERMINAL => b"Terminal",
         APP_DISKMGR => b"Gestion des disques",
+        APP_STORE => b"Store",
+        APP_FONTS => b"Polices",
         APP_TASKSCHD => crate::admin_ui::t(b"Planificateur de t\xE2ches", b"Task Scheduler"),
         APP_FIREWALL => crate::admin_ui::t(b"Pare-feu Winlux", b"Winlux Firewall"),
         APP_EVENTVIEWER => b"Observateur d'\xE9v\xE9nements",
@@ -550,6 +564,8 @@ pub fn glyph_of(app: usize) -> Glyph {
         APP_CLEANUP => Glyph::Drive,
         APP_TERMINAL => Glyph::Terminal,
         APP_DISKMGR => Glyph::Drive,
+        APP_STORE => Glyph::Store,
+        APP_FONTS => Glyph::Text,
         APP_TASKSCHD => Glyph::Clock,
         APP_FIREWALL => Glyph::Shield,
         APP_EVENTVIEWER => Glyph::Details,
@@ -568,6 +584,8 @@ fn custom_title(app: usize) -> bool {
         APP_CLEANUP => crate::diskcleaner::CUSTOM_TITLE,
         APP_TERMINAL => crate::terminal::CUSTOM_TITLE,
         APP_DISKMGR => crate::diskmgr::CUSTOM_TITLE,
+        APP_STORE => crate::store::CUSTOM_TITLE,
+        APP_FONTS => crate::fonts::CUSTOM_TITLE,
         APP_TASKSCHD => crate::taskschd::CUSTOM_TITLE,
         APP_FIREWALL => crate::firewall::CUSTOM_TITLE,
         APP_EVENTVIEWER => crate::eventviewer::CUSTOM_TITLE,
@@ -587,6 +605,8 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
         APP_CLEANUP => crate::diskcleaner::draw(g, f),
         APP_TERMINAL => crate::terminal::draw(g, f),
         APP_DISKMGR => crate::diskmgr::draw(g, f),
+        APP_STORE => crate::store::draw(g, f),
+        APP_FONTS => crate::fonts::draw(g, f),
         APP_TASKSCHD => crate::taskschd::draw(g, f),
         APP_FIREWALL => crate::firewall::draw(g, f),
         APP_EVENTVIEWER => crate::eventviewer::draw(g, f),
@@ -605,6 +625,8 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         APP_CLEANUP => crate::diskcleaner::mouse(ev, x, y, f),
         APP_TERMINAL => crate::terminal::mouse(ev, x, y, f),
         APP_DISKMGR => crate::diskmgr::mouse(ev, x, y, f),
+        APP_STORE => crate::store::mouse(ev, x, y, f),
+        APP_FONTS => crate::fonts::mouse(ev, x, y, f),
         APP_TASKSCHD => crate::taskschd::mouse(ev, x, y, f),
         APP_FIREWALL => crate::firewall::mouse(ev, x, y, f),
         APP_EVENTVIEWER => crate::eventviewer::mouse(ev, x, y, f),
@@ -623,6 +645,8 @@ unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
         APP_CLEANUP => crate::diskcleaner::key(vk, ch),
         APP_TERMINAL => crate::terminal::key(vk, ch),
         APP_DISKMGR => crate::diskmgr::key(vk, ch),
+        APP_STORE => crate::store::key(vk, ch),
+        APP_FONTS => crate::fonts::key(vk, ch),
         APP_TASKSCHD => crate::taskschd::key(vk, ch),
         APP_FIREWALL => crate::firewall::key(vk, ch),
         APP_EVENTVIEWER => crate::eventviewer::key(vk, ch),
@@ -641,6 +665,8 @@ unsafe fn app_tick(app: usize, f: &Frame) -> bool {
         APP_CLEANUP => crate::diskcleaner::tick(f),
         APP_TERMINAL => crate::terminal::tick(f),
         APP_DISKMGR => crate::diskmgr::tick(f),
+        APP_STORE => crate::store::tick(f),
+        APP_FONTS => crate::fonts::tick(f),
         APP_TASKSCHD => crate::taskschd::tick(f),
         APP_FIREWALL => crate::firewall::tick(f),
         APP_EVENTVIEWER => crate::eventviewer::tick(f),
@@ -762,6 +788,8 @@ fn default_rect(app: usize) -> Rect {
         APP_NOTEPAD => (1000, 680),
         APP_TASKMGR => (1000, 650),
         APP_DISKMGR => (1000, 650),
+        APP_STORE => (1180, 760),
+        APP_FONTS => (1000, 680),
         APP_TASKSCHD => (1120, 700),
         APP_FIREWALL => (1060, 680),
         APP_WELCOME => (920, 600),
@@ -2122,8 +2150,18 @@ pub unsafe fn on_button_up(x: i32, y: i32, repaint: &mut bool) -> bool {
     if CAPTURE == APP_EXPLORER && crate::explorer::file_drag_active() {
         CAPTURE = usize::MAX;
         let fr = frame_of(&WINS[APP_EXPLORER].rect);
+        let target = top_at(x, y);
         if inside(&fr.client, x, y) || (custom_title(APP_EXPLORER) && inside(&fr.title, x, y)) {
             app_mouse(APP_EXPLORER, Mouse::Up, x, y, &fr);
+        } else if target == Some(APP_FONTS) || target == Some(APP_STORE) {
+            crate::explorer::for_each_selected(&mut |path| {
+                if target == Some(APP_FONTS) {
+                    crate::fonts::install_dropped(path);
+                } else {
+                    crate::store::install_dropped(path);
+                }
+            });
+            crate::explorer::cancel_file_drag();
         } else {
             let do_copy = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
             crate::desktop::handle_file_drop(do_copy);

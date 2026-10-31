@@ -335,7 +335,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 35] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 36] = [
             (b"Bienvenue dans Winlux", b"welcome", 9),
             (tr(S_TERMINAL), b"xterm", 1),
             (tr(S_FILE_EXPLORER), b"nemo", 1),
@@ -362,7 +362,8 @@ fn init_apps() {
             (b"Vim", b"vim", 7),
             (b"Geany", b"geany", 7),
             (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
-            (b"Gestionnaire de paquets", b"mintinstall", 9),
+            (b"Store", b"store", 9),
+            (b"Polices", b"fonts", 8),
             (b"Gestion des disques", b"diskmgr", 9),
             (
                 crate::admin_ui::t(b"Planificateur de t\xE2ches", b"Task Scheduler"),
@@ -1636,6 +1637,8 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(wm::APP_DISKMGR) => Glyph::Drive,
+            Some(wm::APP_STORE) => Glyph::Store,
+            Some(wm::APP_FONTS) => Glyph::Text,
             Some(wm::APP_TASKSCHD) => Glyph::Clock,
             Some(wm::APP_FIREWALL) => Glyph::Shield,
             Some(wm::APP_EVENTVIEWER) => Glyph::Details,
@@ -1908,9 +1911,9 @@ fn pinned_apps() -> [App; 8] {
             launch: Launch::Notepad,
         },
         App {
-            name: b"Utilitaires",
-            glyph: Glyph::Tools,
-            launch: Launch::Settings,
+            name: b"Store",
+            glyph: Glyph::Store,
+            launch: Launch::Exec(b"store"),
         },
         App {
             name: b"Mises \xE0 jour",
@@ -2028,6 +2031,14 @@ unsafe fn launch(what: Launch) {
             }
             if cmd == b"diskmgr" {
                 wm::open(wm::APP_DISKMGR);
+                return;
+            }
+            if cmd == b"store" {
+                crate::store::open();
+                return;
+            }
+            if cmd == b"fonts" {
+                crate::fonts::open();
                 return;
             }
             if cmd == b"taskschd" || cmd == b"taskschd.msc" {
