@@ -848,7 +848,7 @@ sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"
 sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$iso_root/boot/grub/themes/winlux"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
-set timeout=5
+set timeout=2
 set timeout_style=menu
 set winlux_term=console
 if loadfont /boot/grub/themes/winlux/unicode.pf2; then
@@ -865,6 +865,11 @@ if serial --unit=0 --speed=115200; then
     terminal_input serial console
     terminal_output serial $winlux_term
 fi
+# Installation Winlux sur un disque : cherchée une fois, avant le menu. Une
+# recherche ratée à l'intérieur d'une entrée fait attendre GRUB 10 s sur
+# « Press any key to continue » à chaque démarrage live.
+set winlux_root=
+search --no-floppy --label WINLUX_ROOT --set=winlux_root
 menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
     linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4
     initrd /boot/winlux-initramfs.cpio.gz
@@ -874,7 +879,7 @@ function winlux_live {
     initrd /boot/winlux-initramfs.cpio.gz
 }
 menuentry "Winlux Desktop" {
-    if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then
+    if test -n "$winlux_root"; then
         if test -f "($winlux_root)/boot/vmlinuz"; then
             # Load the updated kernel and persistent root from the disk.
             if test -f "($winlux_root)/boot/winlux-split-root"; then
