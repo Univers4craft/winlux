@@ -4146,6 +4146,7 @@ pub unsafe fn tick(hwnd: Handle) {
     let system = crate::settings::system_tick()
         | power_tick()
         | crate::firewall::system_tick()
+        | crate::volumes::system_tick()
         | crate::a11y::tick();
     let weather_changed = weather::poll();
     let welcome = BOOT_DONE

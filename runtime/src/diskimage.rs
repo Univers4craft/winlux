@@ -408,6 +408,10 @@ fn split_backend(b: &str) -> (&str, &str) {
 pub fn eject(letter: char) -> Res<String> {
     let m = mounts::get(letter)
         .ok_or_else(|| ArcError::Io(std::io::Error::other("lecteur inconnu")))?;
+    // Disques branchés (clé USB, NTFS…) : même bouton Éjecter.
+    if m.kind == "disk" {
+        return crate::volumes::eject(letter).map_err(|e| ArcError::Io(std::io::Error::other(e)));
+    }
     if m.kind != "image" {
         return Err(ArcError::Unsupported(
             "ce lecteur n'est pas une image".into(),

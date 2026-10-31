@@ -551,6 +551,8 @@ if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
 # Services maison : pare-feu (nftables, journal des blocages, alertes) et
 # planificateur de tâches (déclencheurs horaires, démarrage, événements).
 /usr/bin/winlux --firewall daemon >>/run/winlux/firewall.log 2>&1 &
+# Disques branchés (clé USB, NTFS d'un Windows) : montage avec une lettre.
+/usr/bin/winlux --volumes daemon >>/run/winlux/volumes.log 2>&1 &
 /usr/bin/winlux --tasks daemon >>/run/winlux/tasks.log 2>&1 &
 # Paquets demandés par un fichier de réponse : installés une fois, dès que le réseau répond.
 if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
