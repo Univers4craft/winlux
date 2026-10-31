@@ -33,6 +33,16 @@ pub static mut VOLUME_LEVEL: u32 = 0;
 pub static mut BATTERY_LEVEL: u32 = 0;
 pub static mut BATTERY_PRESENT: u32 = 0;
 pub static mut NETWORK_CONNECTED: u32 = 0;
+/// Indicateur Bluetooth : 0 éteint ou absent, 1 activé, 2 appareil connecté.
+pub static mut BLUETOOTH_STATE: u32 = 0;
+/// Largeur ajoutée à gauche de la zone de notification par l'icône Bluetooth.
+unsafe fn bluetooth_width() -> i32 {
+    if BLUETOOTH_STATE != 0 {
+        24
+    } else {
+        0
+    }
+}
 static mut START_ANIM: u32 = 0;
 static mut START_CLOSING: bool = false;
 static mut HOVER_BUTTON: i32 = -1;
@@ -514,6 +524,8 @@ fn button_rect(l: &Layout, index: i32) -> Rect {
 /// Zones de la zone de notification (mêmes rectangles pour dessin et clics).
 struct Tray {
     weather: Rect,
+    /// Icône Bluetooth (vide si l'adaptateur est absent ou éteint).
+    bluetooth: Rect,
     chevron: Rect,
     net: Rect,
     volume: Rect,
@@ -522,6 +534,7 @@ struct Tray {
 }
 fn tray(l: &Layout) -> Tray {
     let b = l.bar;
+    let bw = unsafe { bluetooth_width() };
     if l.vertical {
         let row = |bottom: i32, h: i32| rect(b.left + 2, bottom - h, b.right - 2, bottom);
         let clock = row(b.bottom - 6, 44);
@@ -531,6 +544,7 @@ fn tray(l: &Layout) -> Tray {
         let chevron = row(net.top, 28);
         Tray {
             weather: rect(0, 0, 0, 0),
+            bluetooth: row(chevron.top, bw),
             chevron,
             net,
             volume,
@@ -540,7 +554,7 @@ fn tray(l: &Layout) -> Tray {
     } else {
         let right = b.right - 12;
         let tray = right - 92 - 96;
-        let weather_x = tray - 24 - weather::TRAY_WIDTH - 8;
+        let weather_x = tray - 24 - bw - weather::TRAY_WIDTH - 8;
         Tray {
             weather: rect(
                 weather_x - 4,
@@ -548,6 +562,7 @@ fn tray(l: &Layout) -> Tray {
                 weather_x + weather::TRAY_WIDTH,
                 b.bottom,
             ),
+            bluetooth: rect(tray - 28 - bw, b.top, tray - 28, b.bottom),
             chevron: rect(tray - 28, b.top, tray, b.bottom),
             net: rect(tray, b.top, tray + 24, b.bottom),
             volume: rect(tray + 24, b.top, tray + 52, b.bottom),
@@ -1224,6 +1239,32 @@ unsafe fn draw_ethernet(hdc: Handle, b: &mut Brushes, x: i32, y: i32, on: bool) 
     fill(hdc, b, x + 2, y + 4, x + 4, y + 8, c);
     fill(hdc, b, x + 11, y + 4, x + 13, y + 8, c);
 }
+/// Rune Bluetooth (ᛒ) en 10x15 px ; point d'accent si un appareil est connecté.
+unsafe fn draw_bluetooth(hdc: Handle, b: &mut Brushes, x: i32, y: i32, connected: bool) {
+    let c = rgb(0xF2, 0xF2, 0xF2);
+    fill(hdc, b, x + 4, y, x + 6, y + 15, c);
+    for k in 0..4 {
+        // Chevron supérieur et inférieur, puis diagonales croisées.
+        fill(hdc, b, x + 5 + k, y + k, x + 7 + k, y + k + 1, c);
+        fill(hdc, b, x + 8 - k, y + 4 + k, x + 10 - k, y + 5 + k, c);
+        fill(hdc, b, x + 5 + k, y + 14 - k, x + 7 + k, y + 15 - k, c);
+        fill(hdc, b, x + 8 - k, y + 10 - k, x + 10 - k, y + 11 - k, c);
+        fill(hdc, b, x + 1 + k, y + 4 + k, x + 3 + k, y + 5 + k, c);
+        fill(hdc, b, x + 1 + k, y + 11 - k, x + 3 + k, y + 12 - k, c);
+    }
+    if connected {
+        round_rect(
+            hdc,
+            b,
+            x + 11,
+            y + 11,
+            x + 15,
+            y + 15,
+            2,
+            crate::gfx::pal().accent,
+        );
+    }
+}
 unsafe fn draw_volume(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32) {
     let c = rgb(0xF2, 0xF2, 0xF2);
     fill(hdc, b, x, y + 5, x + 4, y + 10, c);
@@ -1528,6 +1569,9 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             tray_bg,
         );
         text_centered(hdc, f.semibold, 13, dim, cx, t.chevron.top + 7, b"^");
+        if BLUETOOTH_STATE != 0 {
+            draw_bluetooth(hdc, b, cx - 7, t.bluetooth.top + 6, BLUETOOTH_STATE == 2);
+        }
         if NET_IS_WIFI {
             draw_wifi(hdc, b, cx - 9, t.net.top + 6, NETWORK_CONNECTED != 0);
         } else {
@@ -1598,7 +1642,16 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             mid(&bar) - 10,
             b"^",
         );
-        // Widget météo à gauche du chevron
+        if BLUETOOTH_STATE != 0 {
+            draw_bluetooth(
+                hdc,
+                b,
+                t.bluetooth.left + 5,
+                mid(&bar) - 8,
+                BLUETOOTH_STATE == 2,
+            );
+        }
+        // Widget météo à gauche du chevron (et de l'icône Bluetooth)
         let weather_x = t.weather.left + 4;
         round_rect(
             hdc,
@@ -3788,6 +3841,11 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             notifications::set_open(false);
             NET_PANEL = false;
             VOL_PANEL = false;
+        } else if BLUETOOTH_STATE != 0 && inside(&t.bluetooth, x, y) {
+            notifications::set_open(false);
+            NET_PANEL = false;
+            VOL_PANEL = false;
+            crate::settings::open_page(crate::settings::BLUETOOTH_PAGE);
         } else if inside(&t.chevron, x, y) {
             notifications::toggle();
             weather::PANEL_OPEN = false;
