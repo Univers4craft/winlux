@@ -1593,7 +1593,7 @@ unsafe fn draw_remote(g: &mut Gfx, c: &Rect) {
             &mut addr,
         )
     };
-    row(g, c, 214, b"Adresse \xE0 saisir dans TigerVNC ou RealVNC (chiffrement RSA-AES)", &addr[..n]);
+    row(g, c, 214, b"Adresse \xE0 saisir dans TigerVNC (chiffrement RSA-AES)", &addr[..n]);
     button(g, c, 4, 0, b"Port -", 12);
     button(g, c, 4, 1, b"Port 5900", 13);
     button(g, c, 4, 2, b"Port +", 14);
