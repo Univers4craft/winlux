@@ -238,7 +238,27 @@ pub const S_NETWORK_DRIVES: usize = 159;
 pub const S_PERSONALIZATION: usize = 160;
 pub const S_BLUETOOTH_DEVICES: usize = 161;
 
-const STRING_COUNT: usize = 162;
+// Page Bureau à distance
+pub const S_REMOTE_DESKTOP: usize = 162;
+pub const S_REMOTE_OFF: usize = 163;
+pub const S_REMOTE_NOT_RUNNING: usize = 164;
+pub const S_REMOTE_IDLE: usize = 165;
+pub const S_REMOTE_CONNECTED: usize = 166;
+pub const S_REMOTE_FROM: usize = 167;
+pub const S_REMOTE_ENABLE: usize = 168;
+pub const S_REMOTE_DISABLE: usize = 169;
+pub const S_REMOTE_REFRESH: usize = 170;
+pub const S_REMOTE_FULL_CONTROL: usize = 171;
+pub const S_REMOTE_VIEW_ONLY: usize = 172;
+pub const S_REMOTE_LEGACY: usize = 173;
+pub const S_REMOTE_LEGACY_PASSWORD: usize = 174;
+pub const S_REMOTE_FINGERPRINT: usize = 175;
+pub const S_REMOTE_ADDRESS: usize = 176;
+pub const S_REMOTE_ACCOUNTS: usize = 177;
+pub const S_REMOTE_ACCOUNTS_HINT: usize = 178;
+pub const S_REMOTE_THIS_COMPUTER: usize = 179;
+
+const STRING_COUNT: usize = 180;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -427,6 +447,25 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Lecteurs r\xE9seau",
     b"Personnalisation",
     b"Bluetooth et appareils",
+    // 162-179 : Bureau à distance
+    b"Bureau \xE0 distance",
+    b"D\xE9sactiv\xE9 : personne ne peut prendre le contr\xF4le de cet ordinateur.",
+    b"Activ\xE9, mais le serveur ne r\xE9pond pas : consultez le journal.",
+    b"Activ\xE9 \x95 aucune connexion en cours",
+    b"Activ\xE9 \x95 connexion(s) : ",
+    b" depuis ",
+    b"Activer",
+    b"D\xE9sactiver",
+    b"Actualiser",
+    b"Contr\xF4le complet",
+    b"Affichage seul",
+    b"Ancien mot de passe VNC",
+    b" \x95 mot de passe VNC non chiffr\xE9 : ",
+    b" \x95 empreinte ",
+    b"Adresse \xE0 saisir dans TigerVNC (chiffrement RSA-AES)",
+    b"Comptes autoris\xE9s",
+    b"Connexion avec le nom et le mot de passe du compte Winlux.",
+    b"adresse IP de cet ordinateur",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -614,6 +653,25 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Network drives",
     b"Personalization",
     b"Bluetooth & devices",
+    // 162-179 : Bureau à distance
+    b"Remote Desktop",
+    b"Off: nobody can take control of this computer.",
+    b"On, but the server is not responding: check the log.",
+    b"On \x95 no active connection",
+    b"On \x95 connection(s): ",
+    b" from ",
+    b"Turn on",
+    b"Turn off",
+    b"Refresh",
+    b"Full control",
+    b"View only",
+    b"Legacy VNC password",
+    b" \x95 unencrypted VNC password: ",
+    b" \x95 fingerprint ",
+    b"Address to enter in TigerVNC (RSA-AES encryption)",
+    b"Allowed accounts",
+    b"Sign in with the Winlux account name and password.",
+    b"this computer's IP address",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -801,6 +859,25 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Unidades de red",
     b"Personalizaci\xF3n",
     b"Bluetooth y dispositivos",
+    // 162-179 : Bureau à distance
+    b"Escritorio remoto",
+    b"Desactivado: nadie puede tomar el control de este equipo.",
+    b"Activado, pero el servidor no responde: consulte el registro.",
+    b"Activado \x95 ninguna conexi\xF3n activa",
+    b"Activado \x95 conexi\xF3n(es): ",
+    b" desde ",
+    b"Activar",
+    b"Desactivar",
+    b"Actualizar",
+    b"Control total",
+    b"Solo ver",
+    b"Contrase\xF1a VNC antigua",
+    b" \x95 contrase\xF1a VNC sin cifrar: ",
+    b" \x95 huella ",
+    b"Direcci\xF3n para TigerVNC (cifrado RSA-AES)",
+    b"Cuentas autorizadas",
+    b"Inicie sesi\xF3n con el nombre y la contrase\xF1a de la cuenta Winlux.",
+    b"direcci\xF3n IP de este equipo",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -988,6 +1065,25 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Netzlaufwerke",
     b"Personalisierung",
     b"Bluetooth und Ger\xE4te",
+    // 162-179 : Bureau à distance
+    b"Remotedesktop",
+    b"Aus: Niemand kann diesen Computer fernsteuern.",
+    b"Ein, aber der Server antwortet nicht: Protokoll pr\xFCfen.",
+    b"Ein \x95 keine aktive Verbindung",
+    b"Ein \x95 Verbindung(en): ",
+    b" von ",
+    b"Einschalten",
+    b"Ausschalten",
+    b"Aktualisieren",
+    b"Vollzugriff",
+    b"Nur anzeigen",
+    b"Altes VNC-Kennwort",
+    b" \x95 unverschl\xFCsseltes VNC-Kennwort: ",
+    b" \x95 Fingerabdruck ",
+    b"Adresse f\xFCr TigerVNC (RSA-AES-Verschl\xFCsselung)",
+    b"Zugelassene Konten",
+    b"Anmeldung mit Name und Kennwort des Winlux-Kontos.",
+    b"IP-Adresse dieses Computers",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {

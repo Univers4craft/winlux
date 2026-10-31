@@ -50,7 +50,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_NETWORK_DRIVES),
         tr(S_PERSONALIZATION),
         tr(S_BLUETOOTH_DEVICES),
-        b"Bureau \xE0 distance",
+        tr(S_REMOTE_DESKTOP),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -1776,14 +1776,18 @@ fn join(parts: &[&[u8]], out: &mut [u8]) -> usize {
     n
 }
 unsafe fn draw_remote(g: &mut Gfx, c: &Rect) {
+    let address = match remote(b"address") {
+        b"" => tr(S_REMOTE_THIS_COMPUTER),
+        a => a,
+    };
     let mut state = [0u8; 200];
     let clients = remote(b"clients");
     let n = if remote(b"enabled") != b"1" {
-        join(&[b"D\xE9sactiv\xE9 : personne ne peut prendre le contr\xF4le de cet ordinateur."], &mut state)
+        join(&[tr(S_REMOTE_OFF)], &mut state)
     } else if remote(b"running") != b"1" {
-        join(&[b"Activ\xE9, mais le serveur ne r\xE9pond pas : consultez le journal."], &mut state)
+        join(&[tr(S_REMOTE_NOT_RUNNING)], &mut state)
     } else if clients.is_empty() || clients == b"0" {
-        join(&[b"Activ\xE9 \x95 aucune connexion en cours"], &mut state)
+        join(&[tr(S_REMOTE_IDLE)], &mut state)
     } else {
         let who = REMOTE
             .get()
@@ -1794,38 +1798,38 @@ unsafe fn draw_remote(g: &mut Gfx, c: &Rect) {
         let mut parts = who.split(|&v| v == b'|');
         let (user, ip) = (parts.next().unwrap_or(b""), parts.next().unwrap_or(b""));
         join(
-            &[b"Activ\xE9 \x95 connexion(s) : ", clients, b" (", user, b" depuis ", ip, b")"],
+            &[tr(S_REMOTE_CONNECTED), clients, b" (", user, tr(S_REMOTE_FROM), ip, b")"],
             &mut state,
         )
     };
-    row(g, c, 44, b"Bureau \xE0 distance", &state[..n]);
-    button(g, c, 0, 0, b"Activer", 0);
-    button(g, c, 0, 1, b"D\xE9sactiver", 1);
-    button(g, c, 0, 2, b"Actualiser", 2);
-    button(g, c, 1, 0, b"Contr\xF4le complet", 3);
-    button(g, c, 1, 1, b"Affichage seul", 4);
-    button(g, c, 1, 2, b"Ancien mot de passe VNC", 5);
+    row(g, c, 44, tr(S_REMOTE_DESKTOP), &state[..n]);
+    button(g, c, 0, 0, tr(S_REMOTE_ENABLE), 0);
+    button(g, c, 0, 1, tr(S_REMOTE_DISABLE), 1);
+    button(g, c, 0, 2, tr(S_REMOTE_REFRESH), 2);
+    button(g, c, 1, 0, tr(S_REMOTE_FULL_CONTROL), 3);
+    button(g, c, 1, 1, tr(S_REMOTE_VIEW_ONLY), 4);
+    button(g, c, 1, 2, tr(S_REMOTE_LEGACY), 5);
     let mut addr = [0u8; 200];
     let n = if remote(b"legacy") == b"1" {
         join(
             &[
-                remote(b"address"),
+                address,
                 b":",
                 remote(b"port"),
-                b" \x95 mot de passe VNC non chiffr\xE9 : ",
+                tr(S_REMOTE_LEGACY_PASSWORD),
                 remote(b"legacy_password"),
             ],
             &mut addr,
         )
     } else if remote(b"fingerprint").is_empty() {
-        join(&[remote(b"address"), b":", remote(b"port")], &mut addr)
+        join(&[address, b":", remote(b"port")], &mut addr)
     } else {
         join(
-            &[remote(b"address"), b":", remote(b"port"), b" \x95 empreinte ", remote(b"fingerprint")],
+            &[address, b":", remote(b"port"), tr(S_REMOTE_FINGERPRINT), remote(b"fingerprint")],
             &mut addr,
         )
     };
-    row(g, c, 214, b"Adresse \xE0 saisir dans TigerVNC (chiffrement RSA-AES)", &addr[..n]);
+    row(g, c, 214, tr(S_REMOTE_ADDRESS), &addr[..n]);
     button(g, c, 4, 0, b"Port -", 12);
     button(g, c, 4, 1, b"Port 5900", 13);
     button(g, c, 4, 2, b"Port +", 14);
@@ -1833,8 +1837,8 @@ unsafe fn draw_remote(g: &mut Gfx, c: &Rect) {
         g,
         c,
         346,
-        b"Comptes autoris\xE9s",
-        b"Connexion avec le nom et le mot de passe du compte Winlux.",
+        tr(S_REMOTE_ACCOUNTS),
+        tr(S_REMOTE_ACCOUNTS_HINT),
     );
     for i in 0..6 {
         if let Some((name, _)) = remote_account(i) {

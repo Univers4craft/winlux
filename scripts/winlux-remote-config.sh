@@ -88,7 +88,7 @@ status() {
         if command -v ip >/dev/null 2>&1; then
             addr=$(ip -4 -o addr show scope global 2>/dev/null | awk 'NR == 1 { split($4, a, "/"); print a[1] }')
         fi
-        printf 'address=%s\n' "${addr:-adresse IP de cet ordinateur}"
+        printf 'address=%s\n' "$addr"
     } > "$out.tmp.$$"
     mv "$out.tmp.$$" "$out"
 }
