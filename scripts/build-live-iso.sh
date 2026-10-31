@@ -75,6 +75,8 @@ cargo build --release -p winlux
 bash scripts/build-tests.sh
 
 cp "$root/target/release/winlux" "$stage/usr/bin/winlux"
+# Lecteurs réseau (FTP, SFTP, SMB, NFS, WebDAV, S3) : même binaire.
+ln -sf winlux "$stage/usr/bin/winlux-drives"
 cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
 cp "$root/scripts/winlux-update-progress.py" "$stage/usr/bin/winlux-update-progress"
 chmod 755 "$stage/usr/bin/winlux-update-progress"

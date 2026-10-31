@@ -1842,14 +1842,15 @@ pub unsafe extern "win64" fn get_drive_type_a(root: *const u8) -> u32 {
         crate::process::set_last_error(87);
         return 1;
     }
-    3
+    crate::mounts::drive_type((*root as char).to_ascii_uppercase()).unwrap_or(3)
 }
 pub unsafe extern "win64" fn get_drive_type_w(root: *const u16) -> u32 {
     if root.is_null() {
         crate::process::set_last_error(87);
         return 1;
     }
-    3
+    let c = char::from_u32(*root as u32).unwrap_or('C');
+    crate::mounts::drive_type(c.to_ascii_uppercase()).unwrap_or(3)
 }
 
 fn move_file_ex_impl(src: &str, dst: &str, flags: u32) -> i32 {
@@ -5382,8 +5383,9 @@ fn format_local_time() -> String {
 
 // --- GetLogicalDrives, GetComputerName, GetUserName ---
 pub extern "win64" fn get_logical_drives() -> u32 {
-    0x04 | 0x0200_0000
-} // C: and Z:
+    // C:, Z: et les lecteurs dynamiques (images montées, lecteurs réseau).
+    0x04 | 0x0200_0000 | crate::mounts::drive_mask()
+}
 
 pub unsafe extern "win64" fn get_computer_name_a(buf: *mut u8, size: *mut u32) -> i32 {
     if buf.is_null() || size.is_null() {
