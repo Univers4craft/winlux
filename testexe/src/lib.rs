@@ -883,6 +883,7 @@ pub struct MediaState {
 
 #[link(name = "shell32", kind = "raw-dylib")]
 extern "system" {
+    pub fn Shell_NotifyIconW(message: u32, data: *const u8) -> i32;
     pub fn ShellExecuteA(
         hwnd: Handle,
         verb: *const c_char,
