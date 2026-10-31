@@ -553,7 +553,10 @@ fi
 # arrière-plan et en basse priorité, elle ne retarde plus le bureau.
 browser_setup_pid=
 if test -f /usr/share/winlux/browsers/edge.deb; then
-    /bin/busybox nice -n 10 /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 &
+    # The static BusyBox of the image has no nice applet: use coreutils.
+    nice=
+    if test -x /usr/bin/nice; then nice='/usr/bin/nice -n 10'; fi
+    $nice /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 &
     browser_setup_pid=$!
 fi
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
