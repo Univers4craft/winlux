@@ -611,7 +611,12 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
     // Les API « A/W » d'api-ms-win-core peuvent aussi vivre dans ntdll (Rtl*).
     r.or_else(|| {
         if normalized == "kernel32" {
-            lookup("ntdll", func)
+            // KernelBase exporte aussi les Reg* (api-ms-win-core-registry).
+            lookup("ntdll", func).or_else(|| {
+                func.starts_with("Reg")
+                    .then(|| lookup("advapi32", func))
+                    .flatten()
+            })
         } else {
             None
         }
