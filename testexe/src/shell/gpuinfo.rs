@@ -168,11 +168,17 @@ pub unsafe fn summary(i: usize, out: &mut Line) {
     };
     if let Some(v) = num(i, b"load") {
         next(out);
-        out.push(b"Charge ").num(v).push(b" %");
+        out.push(tr4(&[b"Charge ", b"Load ", b"Carga ", b"Last "]))
+            .num(v)
+            .push(b" %");
     }
     if let (Some(u), Some(t)) = (num(i, b"vram_used_mb"), num(i, b"vram_total_mb")) {
         next(out);
-        out.push(b"VRAM ").num(u).push(b" / ").num(t).push(b" Mo");
+        out.push(b"VRAM ")
+            .num(u)
+            .push(b" / ")
+            .num(t)
+            .push(tr4(&[b" Mo", b" MB", b" MB", b" MB"]));
     }
     if let Some(v) = num(i, b"temp_c") {
         next(out);
@@ -180,7 +186,14 @@ pub unsafe fn summary(i: usize, out: &mut Line) {
     }
     if let Some(v) = num(i, b"freq_mhz") {
         next(out);
-        out.push(b"Fr\xE9quence ").num(v).push(b" MHz");
+        out.push(tr4(&[
+            b"Fr\xE9quence ",
+            b"Frequency ",
+            b"Frecuencia ",
+            b"Frequenz ",
+        ]))
+        .num(v)
+        .push(b" MHz");
     }
     if let Some(v) = num(i, b"power_w") {
         next(out);
@@ -188,19 +201,43 @@ pub unsafe fn summary(i: usize, out: &mut Line) {
     }
     if let Some(v) = num(i, b"encoder") {
         next(out);
-        out.push(b"Encodeur ").num(v).push(b" %");
+        out.push(tr4(&[
+            b"Encodeur ",
+            b"Encoder ",
+            b"Codificador ",
+            b"Encoder ",
+        ]))
+        .num(v)
+        .push(b" %");
     }
     if let Some(v) = num(i, b"decoder") {
         next(out);
-        out.push(b"D\xE9codeur ").num(v).push(b" %");
+        out.push(tr4(&[
+            b"D\xE9codeur ",
+            b"Decoder ",
+            b"Decodificador ",
+            b"Decoder ",
+        ]))
+        .num(v)
+        .push(b" %");
     }
 }
 
 /// Libellé du rôle, uniquement sur une machine hybride.
 pub fn role_label(role: &[u8]) -> Option<&'static [u8]> {
     match role {
-        b"integrated" => Some(b"GPU int\xE9gr\xE9 (\xE9conomie d'\xE9nergie)"),
-        b"dedicated" => Some(b"GPU d\xE9di\xE9 (hautes performances)"),
+        b"integrated" => Some(tr4(&[
+            b"GPU int\xE9gr\xE9 (\xE9conomie d'\xE9nergie)",
+            b"Integrated GPU (power saving)",
+            b"GPU integrada (ahorro de energ\xEDa)",
+            b"Integrierte GPU (Energiesparen)",
+        ])),
+        b"dedicated" => Some(tr4(&[
+            b"GPU d\xE9di\xE9 (hautes performances)",
+            b"Dedicated GPU (high performance)",
+            b"GPU dedicada (alto rendimiento)",
+            b"Dedizierte GPU (H\xF6chstleistung)",
+        ])),
         _ => None,
     }
 }

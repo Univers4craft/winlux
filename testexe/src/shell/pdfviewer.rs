@@ -33,7 +33,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             rgb(0xCC, 0xCC, 0xCC),
             (r.left + r.right) / 2,
             r.top + 40,
-            b"Lecteur PDF",
+            tr4(&[
+                b"Lecteur PDF",
+                b"PDF Reader",
+                b"Lector de PDF",
+                b"PDF-Reader",
+            ]),
         );
         text_centered(
             g.hdc,
@@ -42,7 +47,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             rgb(0x88, 0x88, 0x88),
             (r.left + r.right) / 2,
             r.top + 80,
-            b"Glissez un fichier PDF ici",
+            tr4(&[
+                b"Glissez un fichier PDF ici",
+                b"Drop a PDF file here",
+                b"Arrastre un archivo PDF aqu\xED",
+                b"PDF-Datei hierher ziehen",
+            ]),
         );
         text_centered(
             g.hdc,
@@ -51,7 +61,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             rgb(0x88, 0x88, 0x88),
             (r.left + r.right) / 2,
             r.top + 100,
-            b"Support basique",
+            tr4(&[
+                b"Support basique",
+                b"Basic support",
+                b"Compatibilidad b\xE1sica",
+                b"Grundlegende Unterst\xFCtzung",
+            ]),
         );
         return;
     }
@@ -127,7 +142,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             rgb(0xFF, 0xFF, 0xFF),
             btn_x + btn_w / 2,
             toolbar_y + 22,
-            b"Prec.",
+            tr4(&[b"Prec.", b"Prev.", b"Ant.", b"Zur\xFCck"]),
         );
     }
 
@@ -148,7 +163,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             rgb(0xFF, 0xFF, 0xFF),
             btn_x + btn_w + 8 + btn_w / 2,
             toolbar_y + 22,
-            b"Suivant",
+            tr4(&[b"Suivant", b"Next", b"Siguiente", b"Weiter"]),
         );
     }
 
@@ -255,8 +270,9 @@ fn format_page() -> [u8; 32] {
     unsafe {
         let mut result = [0u8; 32];
         let mut pos = 0;
-        result[pos..pos + 5].copy_from_slice(b"Page ");
-        pos += 5;
+        let label = tr4(&[b"Page ", b"Page ", b"P\xE1gina ", b"Seite "]);
+        result[pos..pos + label.len()].copy_from_slice(label);
+        pos += label.len();
         let p = CURRENT_PAGE;
         if p >= 10 {
             result[pos] = b'0' + ((p / 10) as u8);

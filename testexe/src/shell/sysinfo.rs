@@ -24,24 +24,49 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         rgb(0xCC, 0xCC, 0xCC),
         r.left + 16,
         r.top + 16,
-        b"Informations systeme",
+        tr4(&[
+            b"Informations systeme",
+            b"System information",
+            b"Informaci\xF3n del sistema",
+            b"Systeminformationen",
+        ]),
     );
 
     let y = r.top + 50;
     let labels: [&[u8]; 6] = [
         b"Version Winlux",
-        b"Version runtime",
+        tr4(&[
+            b"Version runtime",
+            b"Runtime version",
+            b"Versi\xF3n del runtime",
+            b"Laufzeitversion",
+        ]),
         b"CPU",
         b"RAM",
-        b"Resolution",
-        b"Demarre depuis",
+        tr4(&[
+            b"Resolution",
+            b"Resolution",
+            b"Resoluci\xF3n",
+            b"Aufl\xF6sung",
+        ]),
+        tr4(&[
+            b"Demarre depuis",
+            b"Up since",
+            b"Iniciado desde",
+            b"L\xE4uft seit",
+        ]),
     ];
 
     let values: [&[u8]; 6] = [
         b"v0.2.3",
         b"0.1.0",
-        b"x86_64 (4 coeurs)",
-        b"4096 Mo",
+        tr4(&[
+            b"x86_64 (4 coeurs)",
+            b"x86_64 (4 cores)",
+            b"x86_64 (4 n\xFAcleos)",
+            b"x86_64 (4 Kerne)",
+        ]),
+        tr4(&[b"4096 Mo", b"4096 MB", b"4096 MB", b"4096 MB"]),
         b"1920x1080",
         b"--",
     ];

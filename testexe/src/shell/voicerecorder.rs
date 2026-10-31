@@ -96,7 +96,12 @@ unsafe fn draw_idle(g: &mut Gfx, r: &Rect, cx: i32) {
         TXT,
         cx,
         r.top + 24,
-        b"Enregistreur vocal",
+        tr4(&[
+            b"Enregistreur vocal",
+            b"Voice Recorder",
+            b"Grabadora de voz",
+            b"Sprachrekorder",
+        ]),
     );
     text_centered(
         g.hdc,
@@ -105,7 +110,12 @@ unsafe fn draw_idle(g: &mut Gfx, r: &Rect, cx: i32) {
         TXT2,
         cx,
         r.top + 52,
-        b"Appuyez pour enregistrer",
+        tr4(&[
+            b"Appuyez pour enregistrer",
+            b"Press to record",
+            b"Pulse para grabar",
+            b"Zum Aufnehmen dr\xFCcken",
+        ]),
     );
 
     // Bouton rond rouge (approximation rectangulaire)
@@ -142,7 +152,12 @@ unsafe fn draw_recording(g: &mut Gfx, r: &Rect, cx: i32) {
         TXT2,
         cx,
         r.top + 38,
-        b"Enregistrement en cours...",
+        tr4(&[
+            b"Enregistrement en cours...",
+            b"Recording...",
+            b"Grabando...",
+            b"Aufnahme l\xE4uft...",
+        ]),
     );
 
     // Timer MM:SS
@@ -193,7 +208,12 @@ unsafe fn draw_stopped(g: &mut Gfx, r: &Rect, cx: i32) {
         TXT,
         cx,
         r.top + 20,
-        b"Enregistrement termin\xE9",
+        tr4(&[
+            b"Enregistrement termin\xE9",
+            b"Recording finished",
+            b"Grabaci\xF3n terminada",
+            b"Aufnahme beendet",
+        ]),
     );
 
     let timer = format_mmss(DURATION_S);
@@ -215,7 +235,7 @@ unsafe fn draw_stopped(g: &mut Gfx, r: &Rect, cx: i32) {
         WHITE,
         bx + btn_w / 2,
         by + 10,
-        b"Ecouter",
+        tr4(&[b"Ecouter", b"Play", b"Escuchar", b"Anh\xF6ren"]),
     );
 
     // Bouton Sauvegarder (vert)
@@ -228,7 +248,7 @@ unsafe fn draw_stopped(g: &mut Gfx, r: &Rect, cx: i32) {
         WHITE,
         bx2 + btn_w / 2,
         by + 10,
-        b"Sauvegarder",
+        tr4(&[b"Sauvegarder", b"Save", b"Guardar", b"Speichern"]),
     );
 
     // Bouton Nouveau (gris)
@@ -241,7 +261,7 @@ unsafe fn draw_stopped(g: &mut Gfx, r: &Rect, cx: i32) {
         WHITE,
         bx3 + btn_w / 2,
         by + 10,
-        b"Nouveau",
+        tr4(&[b"Nouveau", b"New", b"Nuevo", b"Neu"]),
     );
 
     if SAVE_PATH_LEN > 0 {
@@ -252,7 +272,12 @@ unsafe fn draw_stopped(g: &mut Gfx, r: &Rect, cx: i32) {
             GREEN,
             cx,
             by + btn_h + 16,
-            b"Fichier sauvegard\xE9 !",
+            tr4(&[
+                b"Fichier sauvegard\xE9 !",
+                b"File saved!",
+                b"\xA1Archivo guardado!",
+                b"Datei gespeichert!",
+            ]),
         );
     }
 }
