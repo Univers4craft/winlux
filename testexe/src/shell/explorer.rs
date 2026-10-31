@@ -4056,8 +4056,7 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             JOB_ARG = loc;
             ask_password(JobKind::Create, false);
         }
-        // TODO lecteurs réseau : ouvrir directement la page dédiée des Paramètres.
-        Item::ConnectNet => wm::open(wm::APP_SETTINGS),
+        Item::ConnectNet => crate::settings::open_page(crate::settings::PAGE_NETDRIVES),
         Item::Sep => {}
     }
     let _ = geo;
