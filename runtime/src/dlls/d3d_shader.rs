@@ -440,8 +440,8 @@ fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {
         return None;
     }
     let mut depth = 1u32;
-    for i in (open_pos + 1)..bytes.len() {
-        match bytes[i] {
+    for (i, &b) in bytes.iter().enumerate().skip(open_pos + 1) {
+        match b {
             b'(' => depth += 1,
             b')' => {
                 depth -= 1;

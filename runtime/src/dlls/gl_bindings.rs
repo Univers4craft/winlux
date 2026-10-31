@@ -214,23 +214,7 @@ pub(crate) type GLXFBConfig = *mut c_void;
 pub(crate) type XDisplay = c_void;
 pub(crate) type XVisualInfo = c_void;
 
-// ── Macro pour charger un symbole ───────────────────────────────────────────
-
-macro_rules! load_sym {
-    ($lib:expr, $name:literal) => {{
-        let ptr = libc::dlsym($lib, concat!($name, "\0").as_ptr().cast());
-        if ptr.is_null() {
-            crate::log_debug!("gl", "symbole manquant : {}", $name);
-        }
-        ptr
-    }};
-}
-
-macro_rules! load_fn {
-    ($lib:expr, $name:literal, $ty:ty) => {
-        std::mem::transmute::<*mut c_void, $ty>(load_sym!($lib, $name))
-    };
-}
+// (macros de chargement définies localement dans load_gl / load_glx)
 
 // ── Fonctions GL ────────────────────────────────────────────────────────────
 
@@ -436,6 +420,7 @@ unsafe fn noop_ret0() -> GLuint {
     0
 }
 
+#[allow(clippy::manual_c_str_literals, clippy::missing_transmute_annotations)]
 unsafe fn load_gl(lib: *mut c_void) -> GlFunctions {
     // Stub par défaut : ne fait rien / renvoie 0. Utilisé si un symbole manque
     // (évite un crash sur un driver minimal).
@@ -750,6 +735,7 @@ unsafe fn load_gl(lib: *mut c_void) -> GlFunctions {
     }
 }
 
+#[allow(clippy::manual_c_str_literals, clippy::missing_transmute_annotations)]
 unsafe fn load_glx(lib: *mut c_void) -> GlxFunctions {
     let nv = noop_void as *mut c_void;
     let n0 = noop_ret0 as *mut c_void;
@@ -826,10 +812,7 @@ unsafe fn load_glx(lib: *mut c_void) -> GlxFunctions {
 
 pub(crate) fn gl() -> Option<&'static GlFunctions> {
     GL.get_or_init(|| unsafe {
-        let lib = libc::dlopen(
-            b"libGL.so.1\0".as_ptr().cast(),
-            libc::RTLD_LAZY | libc::RTLD_LOCAL,
-        );
+        let lib = libc::dlopen(c"libGL.so.1".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
         if lib.is_null() {
             crate::log_error!("gl", "impossible de charger libGL.so.1");
             return None;
@@ -843,10 +826,7 @@ pub(crate) fn gl() -> Option<&'static GlFunctions> {
 pub(crate) fn glx() -> Option<&'static GlxFunctions> {
     GLX.get_or_init(|| unsafe {
         // GLX lives inside libGL.so.1 too
-        let lib = libc::dlopen(
-            b"libGL.so.1\0".as_ptr().cast(),
-            libc::RTLD_LAZY | libc::RTLD_LOCAL,
-        );
+        let lib = libc::dlopen(c"libGL.so.1".as_ptr(), libc::RTLD_LAZY | libc::RTLD_LOCAL);
         if lib.is_null() {
             crate::log_error!("gl", "impossible de charger libGL.so.1 pour GLX");
             return None;

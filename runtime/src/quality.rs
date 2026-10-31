@@ -135,7 +135,7 @@ unsafe fn walk_stack(initial_rbp: u64, initial_rip: u64) -> Vec<CrashFrame> {
     });
     let mut rbp = initial_rbp;
     for _ in 0..63 {
-        if rbp == 0 || rbp % 8 != 0 {
+        if rbp == 0 || !rbp.is_multiple_of(8) {
             break;
         }
         let next_rbp = *(rbp as *const u64);
