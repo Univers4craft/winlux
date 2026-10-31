@@ -605,8 +605,10 @@ impl Interpreter {
         types::with_types(|reg| {
             for data in reg.static_data.values() {
                 roots.extend(
-                    data.chunks_exact(8)
-                        .map(|c| usize::from_le_bytes(c.try_into().unwrap())),
+                    data.as_chunks::<8>()
+                        .0
+                        .iter()
+                        .map(|c| usize::from_le_bytes(*c)),
                 );
             }
         });

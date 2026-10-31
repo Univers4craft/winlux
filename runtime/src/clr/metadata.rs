@@ -424,8 +424,10 @@ impl Assembly {
             .get(str_start..str_start + byte_count)
             .unwrap_or(&[]);
         let u16s: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         String::from_utf16_lossy(&u16s)
     }
