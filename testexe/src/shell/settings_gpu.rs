@@ -69,41 +69,92 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
     let count = gpu::count();
     if count == 0 {
         visit(Item::Row(
-            b"Aucune carte graphique d\xE9tect\xE9e",
-            b"Le pilote n'expose aucun GPU PCI (machine virtuelle ou affichage de secours).",
+            tr4(&[b"Aucune carte graphique d\xE9tect\xE9e", b"No graphics card detected", b"No se detect\xF3 ninguna tarjeta gr\xE1fica", b"Keine Grafikkarte erkannt"]),
+            tr4(&[b"Le pilote n'expose aucun GPU PCI (machine virtuelle ou affichage de secours).", b"The driver exposes no PCI GPU (virtual machine or fallback display).", b"El controlador no expone ninguna GPU PCI (m\xE1quina virtual o pantalla de reserva).", b"Der Treiber stellt keine PCI-GPU bereit (virtuelle Maschine oder Notanzeige)."]),
             &[],
         ));
     }
     for i in 0..count {
-        let name = gpu::get(i, b"name").unwrap_or(b"Carte graphique");
+        let name = gpu::get(i, b"name").unwrap_or(tr4(&[
+            b"Carte graphique",
+            b"Graphics card",
+            b"Tarjeta gr\xE1fica",
+            b"Grafikkarte",
+        ]));
         visit(Item::Header(name));
         let mut kind = Line::new();
         if let Some(role) = gpu::get(i, b"role").and_then(gpu::role_label) {
             kind.push(role).push(b"   \xB7   ");
         }
-        kind.push(b"Pilote ")
+        kind.push(tr4(&[b"Pilote ", b"Driver ", b"Controlador ", b"Treiber "]))
             .push(gpu::get(i, b"driver").unwrap_or(b"inconnu"));
-        visit(Item::Row(b"Type", kind.get(), &[]));
+        visit(Item::Row(
+            tr4(&[b"Type", b"Type", b"Tipo", b"Typ"]),
+            kind.get(),
+            &[],
+        ));
 
         if gpu::has_metrics(i) {
             let mut live = Line::new();
             gpu::summary(i, &mut live);
-            visit(Item::Row(b"Mesures en direct", live.get(), &[]));
+            visit(Item::Row(
+                tr4(&[
+                    b"Mesures en direct",
+                    b"Live readings",
+                    b"Mediciones en directo",
+                    b"Live-Messwerte",
+                ]),
+                live.get(),
+                &[],
+            ));
         }
 
         if let Some(level) = gpu::get(i, b"perf_level") {
             let label: &[u8] = match level {
-                b"auto" => b"Automatique (recommand\xE9)",
-                b"low" => b"\xC9conomie d'\xE9nergie",
-                b"high" => b"Performances maximales",
-                _ => b"R\xE9glage personnalis\xE9 par un autre outil",
+                b"auto" => tr4(&[
+                    b"Automatique (recommand\xE9)",
+                    b"Automatic (recommended)",
+                    b"Autom\xE1tico (recomendado)",
+                    b"Automatisch (empfohlen)",
+                ]),
+                b"low" => tr4(&[
+                    b"\xC9conomie d'\xE9nergie",
+                    b"Power saving",
+                    b"Ahorro de energ\xEDa",
+                    b"Energiesparen",
+                ]),
+                b"high" => tr4(&[
+                    b"Performances maximales",
+                    b"Maximum performance",
+                    b"M\xE1ximo rendimiento",
+                    b"H\xF6chstleistung",
+                ]),
+                _ => tr4(&[
+                    b"R\xE9glage personnalis\xE9 par un autre outil",
+                    b"Custom setting from another tool",
+                    b"Ajuste personalizado por otra herramienta",
+                    b"Von einem anderen Werkzeug angepasst",
+                ]),
             };
             let buttons = [
                 btn(b"Auto", act(PERF, i, 0), level == b"auto"),
-                btn(b"\xC9conomie", act(PERF, i, 1), level == b"low"),
+                btn(
+                    tr4(&[b"\xC9conomie", b"Saving", b"Ahorro", b"Sparen"]),
+                    act(PERF, i, 1),
+                    level == b"low",
+                ),
                 btn(b"Maximum", act(PERF, i, 2), level == b"high"),
             ];
-            visit(Item::Row(b"Profil de performances", label, &buttons));
+            visit(Item::Row(
+                tr4(&[
+                    b"Profil de performances",
+                    b"Performance profile",
+                    b"Perfil de rendimiento",
+                    b"Leistungsprofil",
+                ]),
+                label,
+                &buttons,
+            ));
         }
 
         if let (Some(cur), Some(min), Some(max)) = (
@@ -113,7 +164,12 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
         ) {
             let mut v = Line::new();
             v.num(cur)
-                .push(b" W   (plage ")
+                .push(tr4(&[
+                    b" W   (plage ",
+                    b" W   (range ",
+                    b" W   (rango ",
+                    b" W   (Bereich ",
+                ]))
                 .num(min)
                 .push(b" - ")
                 .num(max)
@@ -122,10 +178,23 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
             let all = [
                 btn(b"- 10 W", act(POWER, i, 0), false),
                 btn(b"+ 10 W", act(POWER, i, 1), false),
-                btn(b"Par d\xE9faut", act(POWER, i, 2), false),
+                btn(
+                    tr4(&[b"Par d\xE9faut", b"Default", b"Predeterminado", b"Standard"]),
+                    act(POWER, i, 2),
+                    false,
+                ),
             ];
             let n = if has_default { 3 } else { 2 };
-            visit(Item::Row(b"Limite de puissance", v.get(), &all[..n]));
+            visit(Item::Row(
+                tr4(&[
+                    b"Limite de puissance",
+                    b"Power limit",
+                    b"L\xEDmite de potencia",
+                    b"Leistungsgrenze",
+                ]),
+                v.get(),
+                &all[..n],
+            ));
         }
 
         if let (Some(cur), Some(min), Some(max)) = (
@@ -134,47 +203,105 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
             gpu::num(i, b"oc_sclk_max_mhz"),
         ) {
             let mut v = Line::new();
-            v.push(b"C\x9Cur max. ")
-                .num(cur)
-                .push(b" MHz (")
-                .num(min)
-                .push(b"-")
-                .num(max)
-                .push(b"). Trop haut = instabilit\xE9.");
+            v.push(tr4(&[
+                b"C\x9Cur max. ",
+                b"Max core ",
+                b"N\xFAcleo m\xE1x. ",
+                b"Max. Kern ",
+            ]))
+            .num(cur)
+            .push(b" MHz (")
+            .num(min)
+            .push(b"-")
+            .num(max)
+            .push(tr4(&[
+                b"). Trop haut = instabilit\xE9.",
+                b"). Too high = instability.",
+                b"). Demasiado alto = inestabilidad.",
+                b"). Zu hoch = Instabilit\xE4t.",
+            ]));
             let buttons = [
                 btn(b"- 25 MHz", act(CLOCK, i, 0), false),
                 btn(b"+ 25 MHz", act(CLOCK, i, 1), false),
-                btn(b"R\xE9tablir", act(CLOCK, i, 2), false),
+                btn(
+                    tr4(&[b"R\xE9tablir", b"Reset", b"Restablecer", b"Zur\xFCcksetzen"]),
+                    act(CLOCK, i, 2),
+                    false,
+                ),
             ];
-            visit(Item::Row(b"Overclocking (avanc\xE9)", v.get(), &buttons));
+            visit(Item::Row(
+                tr4(&[
+                    b"Overclocking (avanc\xE9)",
+                    b"Overclocking (advanced)",
+                    b"Overclocking (avanzado)",
+                    b"\xDCbertakten (erweitert)",
+                ]),
+                v.get(),
+                &buttons,
+            ));
         }
     }
 
     runtime_items(&mut visit);
 
     if gpu::hybrid() {
-        visit(Item::Header(
+        visit(Item::Header(tr4(&[
             b"Pr\xE9f\xE9rences graphiques par application",
-        ));
+            b"Graphics preferences per app",
+            b"Preferencias de gr\xE1ficos por aplicaci\xF3n",
+            b"Grafikeinstellungen pro App",
+        ])));
         visit(Item::Row(
-            b"Choisir le GPU d'un programme",
-            b"Clic droit sur le .exe > R\xE9glages de l'ex\xE9cutable > GPU.",
-            &[btn(b"Explorateur", act(OPEN_EXPLORER, 0, 0), false)],
+            tr4(&[
+                b"Choisir le GPU d'un programme",
+                b"Choose a program's GPU",
+                b"Elegir la GPU de un programa",
+                b"GPU eines Programms w\xE4hlen",
+            ]),
+            tr4(&[
+                b"Clic droit sur le .exe > R\xE9glages de l'ex\xE9cutable > GPU.",
+                b"Right-click the .exe > Executable settings > GPU.",
+                b"Clic derecho en el .exe > Ajustes del ejecutable > GPU.",
+                b"Rechtsklick auf die .exe > Einstellungen der ausf\xFChrbaren Datei > GPU.",
+            ]),
+            &[btn(
+                tr4(&[b"Explorateur", b"Explorer", b"Explorador", b"Explorer"]),
+                act(OPEN_EXPLORER, 0, 0),
+                false,
+            )],
         ));
     }
 
-    visit(Item::Header(b"Overlay de performances en jeu"));
+    visit(Item::Header(tr4(&[
+        b"Overlay de performances en jeu",
+        b"In-game performance overlay",
+        b"Superposici\xF3n de rendimiento en juego",
+        b"Leistungs-Overlay im Spiel",
+    ])));
     let enabled = flag(b"overlay_enabled", false);
     visit(Item::Row(
         b"Overlay",
         if enabled {
-            b"Activ\xE9 : le raccourci l'affiche ou le masque dans le jeu."
+            tr4(&[
+                b"Activ\xE9 : le raccourci l'affiche ou le masque dans le jeu.",
+                b"On: the shortcut shows or hides it in the game.",
+                b"Activada: el atajo la muestra u oculta en el juego.",
+                b"Ein: Die Tastenkombination blendet es im Spiel ein oder aus.",
+            ])
         } else {
-            b"D\xE9sactiv\xE9"
+            tr4(&[b"D\xE9sactiv\xE9", b"Off", b"Desactivada", b"Aus"])
         },
         &[
-            btn(b"Activer", act(OVL_ENABLE, 0, 1), enabled),
-            btn(b"D\xE9sactiver", act(OVL_ENABLE, 0, 0), !enabled),
+            btn(
+                tr4(&[b"Activer", b"Turn on", b"Activar", b"Einschalten"]),
+                act(OVL_ENABLE, 0, 1),
+                enabled,
+            ),
+            btn(
+                tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Ausschalten"]),
+                act(OVL_ENABLE, 0, 0),
+                !enabled,
+            ),
         ],
     ));
     if !enabled {
@@ -182,52 +309,131 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
     }
     let key = value(b"overlay_hotkey");
     visit(Item::Row(
-        b"Raccourci clavier",
-        b"Affiche ou masque l'overlay",
+        tr4(&[
+            b"Raccourci clavier",
+            b"Keyboard shortcut",
+            b"M\xE9todo abreviado de teclado",
+            b"Tastenkombination",
+        ]),
+        tr4(&[
+            b"Affiche ou masque l'overlay",
+            b"Shows or hides the overlay",
+            b"Muestra u oculta la superposici\xF3n",
+            b"Blendet das Overlay ein oder aus",
+        ]),
         &[
             btn(
-                b"Maj+F12",
+                tr4(&[b"Maj+F12", b"Shift+F12", b"May\xFAs+F12", b"Umschalt+F12"]),
                 act(OVL_KEY, 0, 0),
                 key.is_empty() || key == b"shift-f12",
             ),
-            btn(b"Ctrl+Maj+O", act(OVL_KEY, 0, 1), key == b"ctrl-shift-o"),
+            btn(
+                tr4(&[
+                    b"Ctrl+Maj+O",
+                    b"Ctrl+Shift+O",
+                    b"Ctrl+May\xFAs+O",
+                    b"Strg+Umschalt+O",
+                ]),
+                act(OVL_KEY, 0, 1),
+                key == b"ctrl-shift-o",
+            ),
             btn(b"Alt+F12", act(OVL_KEY, 0, 2), key == b"alt-f12"),
         ],
     ));
     let pos = value(b"overlay_position");
     visit(Item::Row(
         b"Position",
-        b"Coin de la fen\xEAtre du jeu",
+        tr4(&[
+            b"Coin de la fen\xEAtre du jeu",
+            b"Corner of the game window",
+            b"Esquina de la ventana del juego",
+            b"Ecke des Spielfensters",
+        ]),
         &[
             btn(
-                b"Haut gauche",
+                tr4(&[
+                    b"Haut gauche",
+                    b"Top left",
+                    b"Arriba a la izquierda",
+                    b"Oben links",
+                ]),
                 act(OVL_POS, 0, 0),
                 pos.is_empty() || pos == b"top-left",
             ),
-            btn(b"Haut droite", act(OVL_POS, 0, 1), pos == b"top-right"),
-            btn(b"Bas gauche", act(OVL_POS, 0, 2), pos == b"bottom-left"),
-            btn(b"Bas droite", act(OVL_POS, 0, 3), pos == b"bottom-right"),
+            btn(
+                tr4(&[
+                    b"Haut droite",
+                    b"Top right",
+                    b"Arriba a la derecha",
+                    b"Oben rechts",
+                ]),
+                act(OVL_POS, 0, 1),
+                pos == b"top-right",
+            ),
+            btn(
+                tr4(&[
+                    b"Bas gauche",
+                    b"Bottom left",
+                    b"Abajo a la izquierda",
+                    b"Unten links",
+                ]),
+                act(OVL_POS, 0, 2),
+                pos == b"bottom-left",
+            ),
+            btn(
+                tr4(&[
+                    b"Bas droite",
+                    b"Bottom right",
+                    b"Abajo a la derecha",
+                    b"Unten rechts",
+                ]),
+                act(OVL_POS, 0, 3),
+                pos == b"bottom-right",
+            ),
         ],
     ));
     let auto = flag(b"overlay_autoshow", false);
     visit(Item::Row(
-        b"Afficher au lancement",
-        b"Sans attendre le raccourci",
+        tr4(&[
+            b"Afficher au lancement",
+            b"Show at launch",
+            b"Mostrar al iniciar",
+            b"Beim Start anzeigen",
+        ]),
+        tr4(&[
+            b"Sans attendre le raccourci",
+            b"Without waiting for the shortcut",
+            b"Sin esperar al atajo",
+            b"Ohne auf die Tastenkombination zu warten",
+        ]),
         &[
-            btn(b"Oui", act(OVL_AUTO, 0, 1), auto),
-            btn(b"Non", act(OVL_AUTO, 0, 0), !auto),
+            btn(
+                tr4(&[b"Oui", b"Yes", b"S\xED", b"Ja"]),
+                act(OVL_AUTO, 0, 1),
+                auto,
+            ),
+            btn(
+                tr4(&[b"Non", b"No", b"No", b"Nein"]),
+                act(OVL_AUTO, 0, 0),
+                !auto,
+            ),
         ],
     ));
     // La charge GPU n'est proposée que si au moins un GPU la fournit.
     let gpu_load = (0..count).any(|i| gpu::get(i, b"load").is_some());
     let metrics = [
         btn(
-            b"Images/s",
+            tr4(&[b"Images/s", b"Frames/s", b"Fotogramas/s", b"Bilder/s"]),
             act(OVL_METRIC, 0, 0),
             flag(b"overlay_fps", true),
         ),
         btn(
-            b"Temps d'image",
+            tr4(&[
+                b"Temps d'image",
+                b"Frame time",
+                b"Tiempo de fotograma",
+                b"Bildzeit",
+            ]),
             act(OVL_METRIC, 0, 1),
             flag(b"overlay_frametime", true),
         ),
@@ -235,8 +441,18 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
         btn(b"GPU", act(OVL_METRIC, 0, 3), flag(b"overlay_gpu", true)),
     ];
     visit(Item::Row(
-        b"Mesures affich\xE9es",
-        b"Cliquer pour afficher ou masquer",
+        tr4(&[
+            b"Mesures affich\xE9es",
+            b"Shown readings",
+            b"Mediciones mostradas",
+            b"Angezeigte Messwerte",
+        ]),
+        tr4(&[
+            b"Cliquer pour afficher ou masquer",
+            b"Click to show or hide",
+            b"Haga clic para mostrar u ocultar",
+            b"Zum Ein- oder Ausblenden klicken",
+        ]),
         &metrics[..if gpu_load { 4 } else { 3 }],
     ));
 }
@@ -312,9 +528,14 @@ fn pref_label(v: &[u8]) -> &'static [u8] {
     match v {
         b"vulkan" => b"Vulkan",
         b"opengl" => b"OpenGL",
-        b"hardware" => b"Mat\xE9riel",
-        b"software" => b"Logiciel",
-        _ => b"Automatique",
+        b"hardware" => tr4(&[b"Mat\xE9riel", b"Hardware", b"Hardware", b"Hardware"]),
+        b"software" => tr4(&[b"Logiciel", b"Software", b"Software", b"Software"]),
+        _ => tr4(&[
+            b"Automatique",
+            b"Automatic",
+            b"Autom\xE1tico",
+            b"Automatisch",
+        ]),
     }
 }
 
@@ -330,13 +551,28 @@ unsafe fn runtime_items(visit: &mut impl FnMut(Item)) {
     if !(backend || device || video || hw >= 1) {
         return;
     }
-    visit(Item::Header(b"Jeux et applications Windows (Direct3D)"));
+    visit(Item::Header(tr4(&[
+        b"Jeux et applications Windows (Direct3D)",
+        b"Windows games and apps (Direct3D)",
+        b"Juegos y aplicaciones de Windows (Direct3D)",
+        b"Windows-Spiele und -Apps (Direct3D)",
+    ])));
     if backend {
         let pref = rt(b"backend_pref");
         let mut v = Line::new();
-        v.push(b"Direct3D 12 utilise ")
-            .push(pref_label(rt(b"backend_d3d12")))
-            .push(b", Direct3D 9 et 11 : OpenGL");
+        v.push(tr4(&[
+            b"Direct3D 12 utilise ",
+            b"Direct3D 12 uses ",
+            b"Direct3D 12 usa ",
+            b"Direct3D 12 verwendet ",
+        ]))
+        .push(pref_label(rt(b"backend_d3d12")))
+        .push(tr4(&[
+            b", Direct3D 9 et 11 : OpenGL",
+            b", Direct3D 9 and 11: OpenGL",
+            b", Direct3D 9 y 11: OpenGL",
+            b", Direct3D 9 und 11: OpenGL",
+        ]));
         let buttons = [
             btn(
                 b"Auto",
@@ -346,7 +582,16 @@ unsafe fn runtime_items(visit: &mut impl FnMut(Item)) {
             btn(b"Vulkan", act(RT_BACKEND, 0, 1), pref == b"vulkan"),
             btn(b"OpenGL", act(RT_BACKEND, 0, 2), pref == b"opengl"),
         ];
-        visit(Item::Row(b"Moteur de rendu", v.get(), &buttons));
+        visit(Item::Row(
+            tr4(&[
+                b"Moteur de rendu",
+                b"Renderer",
+                b"Motor de renderizado",
+                b"Renderer",
+            ]),
+            v.get(),
+            &buttons,
+        ));
     }
     if device {
         let sel = rt(b"vulkan_selected");
@@ -360,25 +605,58 @@ unsafe fn runtime_items(visit: &mut impl FnMut(Item)) {
                 .unwrap_or(b""),
         );
         if auto {
-            v.push(b" (automatique)");
+            v.push(tr4(&[
+                b" (automatique)",
+                b" (automatic)",
+                b" (autom\xE1tico)",
+                b" (automatisch)",
+            ]));
         }
         let buttons = [
             btn(b"Auto", act(RT_DEVICE, 0, 0), auto),
-            btn(b"Pr\xE9c\xE9dente", act(RT_DEVICE, 0, 1), false),
-            btn(b"Suivante", act(RT_DEVICE, 0, 2), false),
+            btn(
+                tr4(&[b"Pr\xE9c\xE9dente", b"Previous", b"Anterior", b"Vorherige"]),
+                act(RT_DEVICE, 0, 1),
+                false,
+            ),
+            btn(
+                tr4(&[b"Suivante", b"Next", b"Siguiente", b"N\xE4chste"]),
+                act(RT_DEVICE, 0, 2),
+                false,
+            ),
         ];
-        visit(Item::Row(b"Carte graphique Vulkan", v.get(), &buttons));
+        visit(Item::Row(
+            tr4(&[
+                b"Carte graphique Vulkan",
+                b"Vulkan graphics card",
+                b"Tarjeta gr\xE1fica Vulkan",
+                b"Vulkan-Grafikkarte",
+            ]),
+            v.get(),
+            &buttons,
+        ));
     }
     if video {
         let pref = rt(b"video_pref");
         let active = rt(b"video_active") == b"vaapi";
         let mut v = Line::new();
         if active {
-            v.push(b"Mat\xE9riel : ").push(rt(b"video_hw_codecs"));
+            v.push(tr4(&[
+                b"Mat\xE9riel : ",
+                b"Hardware: ",
+                b"Hardware: ",
+                b"Hardware: ",
+            ]))
+            .push(rt(b"video_hw_codecs"));
         } else {
-            v.push(b"Logiciel (mat\xE9riel possible : ")
-                .push(rt(b"video_hw_available"))
-                .push(b")");
+            v.push(tr4(&[
+                b"Logiciel (mat\xE9riel possible : ",
+                b"Software (hardware available: ",
+                b"Software (hardware posible: ",
+                b"Software (Hardware m\xF6glich: ",
+            ]))
+            .push(rt(b"video_hw_available"))
+            .push(b")");
         }
         let buttons = [
             btn(
@@ -386,11 +664,24 @@ unsafe fn runtime_items(visit: &mut impl FnMut(Item)) {
                 act(RT_VIDEO, 0, 0),
                 pref == b"auto" || pref.is_empty(),
             ),
-            btn(b"Mat\xE9riel", act(RT_VIDEO, 0, 1), pref == b"hardware"),
-            btn(b"Logiciel", act(RT_VIDEO, 0, 2), pref == b"software"),
+            btn(
+                tr4(&[b"Mat\xE9riel", b"Hardware", b"Hardware", b"Hardware"]),
+                act(RT_VIDEO, 0, 1),
+                pref == b"hardware",
+            ),
+            btn(
+                tr4(&[b"Logiciel", b"Software", b"Software", b"Software"]),
+                act(RT_VIDEO, 0, 2),
+                pref == b"software",
+            ),
         ];
         visit(Item::Row(
-            b"D\xE9codage vid\xE9o (DXVA2)",
+            tr4(&[
+                b"D\xE9codage vid\xE9o (DXVA2)",
+                b"Video decoding (DXVA2)",
+                b"Decodificaci\xF3n de v\xEDdeo (DXVA2)",
+                b"Videodecodierung (DXVA2)",
+            ]),
             v.get(),
             &buttons,
         ));
@@ -398,15 +689,38 @@ unsafe fn runtime_items(visit: &mut impl FnMut(Item)) {
     if hw >= 1 {
         let on = rt(b"vsync") == b"1";
         visit(Item::Row(
-            b"Synchronisation verticale",
+            tr4(&[
+                b"Synchronisation verticale",
+                b"Vertical sync",
+                b"Sincronizaci\xF3n vertical",
+                b"Vertikale Synchronisierung",
+            ]),
             if on {
-                b"Activ\xE9e : pas de d\xE9chirure d'image"
+                tr4(&[
+                    b"Activ\xE9e : pas de d\xE9chirure d'image",
+                    b"On: no screen tearing",
+                    b"Activada: sin cortes de imagen",
+                    b"Ein: kein Bildrei\xDFen",
+                ])
             } else {
-                b"D\xE9sactiv\xE9e : latence minimale"
+                tr4(&[
+                    b"D\xE9sactiv\xE9e : latence minimale",
+                    b"Off: lowest latency",
+                    b"Desactivada: latencia m\xEDnima",
+                    b"Aus: geringste Latenz",
+                ])
             },
             &[
-                btn(b"Activer", act(RT_VSYNC, 0, 1), on),
-                btn(b"D\xE9sactiver", act(RT_VSYNC, 0, 0), !on),
+                btn(
+                    tr4(&[b"Activer", b"Turn on", b"Activar", b"Einschalten"]),
+                    act(RT_VSYNC, 0, 1),
+                    on,
+                ),
+                btn(
+                    tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Ausschalten"]),
+                    act(RT_VSYNC, 0, 0),
+                    !on,
+                ),
             ],
         ));
     }
@@ -457,21 +771,35 @@ pub unsafe fn runtime_notice() -> &'static [u8] {
     let vk = rt(b"vulkan") == b"1";
     let mut gpus = [(&b""[..], &b""[..]); 8];
     let hw = rt_gpus(&mut gpus);
-    l.push(b"D\xE9tect\xE9 : OpenGL ")
-        .push(if rt(b"opengl") == b"1" {
-            b"oui"
-        } else {
-            b"non"
-        })
-        .push(b" \xB7 Vulkan ")
-        .push(if vk { rt(b"vulkan_version") } else { b"absent" })
-        .push(if vk && hw == 0 { b" (logiciel)" } else { b"" })
-        .push(b" \xB7 VA-API ")
-        .push(if rt(b"vaapi") == b"1" {
-            rt(b"vaapi_vendor")
-        } else {
-            b"absent"
-        });
+    l.push(tr4(&[
+        b"D\xE9tect\xE9 : OpenGL ",
+        b"Detected: OpenGL ",
+        b"Detectado: OpenGL ",
+        b"Erkannt: OpenGL ",
+    ]))
+    .push(if rt(b"opengl") == b"1" {
+        b"oui"
+    } else {
+        b"non"
+    })
+    .push(b" \xB7 Vulkan ")
+    .push(if vk { rt(b"vulkan_version") } else { b"absent" })
+    .push(if vk && hw == 0 {
+        tr4(&[
+            b" (logiciel)",
+            b" (software)",
+            b" (software)",
+            b" (Software)",
+        ])
+    } else {
+        b""
+    })
+    .push(b" \xB7 VA-API ")
+    .push(if rt(b"vaapi") == b"1" {
+        rt(b"vaapi_vendor")
+    } else {
+        b"absent"
+    });
     l.get()
 }
 
@@ -812,10 +1140,34 @@ unsafe fn seen() -> Seen {
     };
     items(|item| {
         if let Item::Row(label, _, buttons) = item {
-            s.power |= label == b"Limite de puissance";
-            s.clock |= label == b"Overclocking (avanc\xE9)";
-            s.perf |= label == b"Profil de performances";
-            s.live |= label == b"Mesures en direct";
+            s.power |= label
+                == tr4(&[
+                    b"Limite de puissance",
+                    b"Power limit",
+                    b"L\xEDmite de potencia",
+                    b"Leistungsgrenze",
+                ]);
+            s.clock |= label
+                == tr4(&[
+                    b"Overclocking (avanc\xE9)",
+                    b"Overclocking (advanced)",
+                    b"Overclocking (avanzado)",
+                    b"\xDCbertakten (erweitert)",
+                ]);
+            s.perf |= label
+                == tr4(&[
+                    b"Profil de performances",
+                    b"Performance profile",
+                    b"Perfil de rendimiento",
+                    b"Leistungsprofil",
+                ]);
+            s.live |= label
+                == tr4(&[
+                    b"Mesures en direct",
+                    b"Live readings",
+                    b"Mediciones en directo",
+                    b"Live-Messwerte",
+                ]);
             for b in buttons {
                 if s.n < s.actions.len() {
                     s.actions[s.n] = b.action;
