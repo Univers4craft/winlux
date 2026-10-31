@@ -2611,7 +2611,10 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0x2C, 0x2C, 0x2C),
             rgb(0x50, 0x50, 0x50),
         );
-        let actions: [&[u8]; 2] = [b"Verrouiller", b"Se d\xE9connecter"];
+        let actions: [&[u8]; 2] = [
+            tr4(&[b"Verrouiller", b"Lock", b"Bloquear", b"Sperren"]),
+            tr4(&[b"Se d\xE9connecter", b"Sign out", b"Cerrar sesi\xF3n", b"Abmelden"]),
+        ];
         for (i, label) in actions.iter().enumerate() {
             let iy = m.top + 4 + i as i32 * USER_ITEM_H;
             if HOVER_START_ITEM == 220 + i as i32 {
@@ -2646,9 +2649,19 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 m.left + 46,
                 iy + 20,
                 if crate::login::has_session(i) {
-                    b"Connect\xE9 \x95 changer d'utilisateur"
+                    tr4(&[
+                        b"Connect\xE9 \x95 changer d'utilisateur",
+                        b"Signed in \x95 switch user",
+                        b"Conectado \x95 cambiar de usuario",
+                        b"Angemeldet \x95 Benutzer wechseln",
+                    ])
                 } else {
-                    b"Changer d'utilisateur"
+                    tr4(&[
+                        b"Changer d'utilisateur",
+                        b"Switch user",
+                        b"Cambiar de usuario",
+                        b"Benutzer wechseln",
+                    ])
                 },
             );
             iy += USER_ITEM_H;
