@@ -7,7 +7,7 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 16] = [
+const PAGES: [&[u8]; 17] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -24,6 +24,7 @@ const PAGES: [&[u8]; 16] = [
     b"Effets visuels",
     b"Localisation",
     b"Gestionnaire de fichiers",
+    b"Son avanc\xE9",
 ];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
@@ -62,7 +63,7 @@ const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
 static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
 static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
-static mut LOCALE_LANG: usize = 0; // 0=fr, 1=en
+static mut LOCALE_LANG: usize = 0; // 0=fr, 1=en, 2=de
 static mut LOCALE_TZ: usize = 0; // index dans TIMEZONES
 const TIMEZONES: [(&[u8], &[u8]); 8] = [
     (b"Europe/Paris", b"UTC+1 / UTC+2 (\xE9t\xE9)"),
@@ -441,8 +442,10 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (11, 7) => value(b"browser_default") == b"firefox",
         (14, 0) => { let v = value(b"locale_lang"); v.is_empty() || v == b"fr" },
         (14, 1) => value(b"locale_lang") == b"en",
+        (14, 2) => value(b"locale_lang") == b"de",
         (14, 3) => value(b"layout") == b"fr",
         (14, 4) => value(b"layout") == b"us",
+        (14, 5) => value(b"layout") == b"de",
         (14, id @ 6..=13) => LOCALE_TZ == (id - 6) as usize,
         (15, 0) => unsafe { crate::explorer::current_view() == 1 },
         (15, 1) => unsafe { crate::explorer::current_view() == 5 },
@@ -1348,11 +1351,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 b"Langue du syst\xE8me",
                 match value(b"locale_lang") {
                     b"en" => b"English",
+                    b"de" => b"Deutsch",
                     _ => b"Fran\xE7ais",
                 },
             );
             button(g, &c, 0, 0, b"Fran\xE7ais", 0);
             button(g, &c, 0, 1, b"English", 1);
+            button(g, &c, 0, 2, b"Deutsch", 2);
             row(
                 g,
                 &c,
@@ -1362,6 +1367,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             button(g, &c, 2, 0, b"AZERTY fran\xE7ais", 3);
             button(g, &c, 2, 1, b"QWERTY US", 4);
+            button(g, &c, 2, 2, b"QWERTZ DE", 5);
             let tz = value(b"timezone");
             row(
                 g,
@@ -1451,6 +1457,29 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             button(g, &c, 4, 0, b"Afficher", 6);
             button(g, &c, 4, 1, b"Masquer", 7);
+        }
+        16 => {
+            row(g, &c, 44, b"P\xE9riph\xE9rique de sortie", value(b"audio_output"));
+            button(g, &c, 0, 0, b"Haut-parleurs", 0);
+            button(g, &c, 0, 1, b"Casque / HDMI", 1);
+            button(g, &c, 0, 2, b"Actualiser", 2);
+            row(g, &c, 170, b"P\xE9riph\xE9rique d'entr\xE9e", value(b"audio_input"));
+            button(g, &c, 1, 0, b"Micro int\xE9gr\xE9", 3);
+            button(g, &c, 1, 1, b"Micro externe", 4);
+            row(g, &c, 280, b"Volume principal", value(b"audio"));
+            button(g, &c, 3, 0, b"Volume -", 6);
+            button(g, &c, 3, 1, b"Muet / r\xE9tablir", 7);
+            button(g, &c, 3, 2, b"Volume +", 8);
+            row(g, &c, 370, b"Volume par application",
+                b"Chaque fen\xEAtre ouverte a son propre niveau de volume.");
+            let mut ay = 430i32;
+            for app in 0..crate::wm::APP_COUNT {
+                if !crate::wm::is_open(app) || ay + 50 > c.bottom - c.top {
+                    continue;
+                }
+                row(g, &c, ay, crate::wm::title_of(app), b"100 %");
+                ay += 60;
+            }
         }
         _ => {}
     }
@@ -1756,6 +1785,15 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         } else {
             c"restart-session"
         }),
+        // Son avancé (page 16)
+        (16, 0) => Some(c"audio-output-speakers"),
+        (16, 1) => Some(c"audio-output-headphones"),
+        (16, 2) => Some(c"status"),
+        (16, 3) => Some(c"audio-input-builtin"),
+        (16, 4) => Some(c"audio-input-external"),
+        (16, 6) => Some(c"volume-down"),
+        (16, 7) => Some(c"volume-mute"),
+        (16, 8) => Some(c"volume-up"),
         (14, 0) => {
             LOCALE_LANG = 0;
             Some(c"locale-fr")
@@ -1764,8 +1802,13 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             LOCALE_LANG = 1;
             Some(c"locale-en")
         }
+        (14, 2) => {
+            LOCALE_LANG = 2;
+            Some(c"locale-de")
+        }
         (14, 3) => Some(c"keyboard-fr"),
         (14, 4) => Some(c"keyboard-us"),
+        (14, 5) => Some(c"keyboard-de"),
         (14, id @ 6..=13) => {
             LOCALE_TZ = (id - 6) as usize;
             return true;
