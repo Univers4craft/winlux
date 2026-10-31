@@ -9,6 +9,9 @@ WINLUX_HW_LOG=${WINLUX_HW_LOG:-/run/winlux/hardware.log}
 mkdir -p "$(dirname "$WINLUX_HW_LOG")" /run/winlux/hw
 
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '??:??:??')" "$*" >>"$WINLUX_HW_LOG"; }
+# Le winlux-prime-run livré avec Winlux choisit le GPU via le runtime
+# (adresse PCI exacte, NVIDIA ou Mesa) : ne pas le remplacer.
+prime_run_is_runtime() { grep -q -- "--gpu-env" /usr/bin/winlux-prime-run 2>/dev/null; }
 log "Début de la détection matérielle"
 
 # --- Chargement des modules de base ---
@@ -171,8 +174,12 @@ configure_multi_gpu() {
             log "PRIME via nouveau (pas de nvidia_drm)"
         fi
 
-        # Créer le script d'offload GPU pour les applications
+        # Créer le script d'offload GPU pour les applications, sauf si la
+        # version Winlux (qui interroge le runtime) est déjà installée.
         mkdir -p /usr/bin
+        if prime_run_is_runtime; then
+            log "winlux-prime-run du runtime conservé"
+        else
         cat >/usr/bin/winlux-prime-run <<'PRIME'
 #!/bin/sh
 # Lance une application sur le GPU dédié (PRIME offload).
@@ -185,6 +192,7 @@ exec "$@"
 PRIME
         chmod 755 /usr/bin/winlux-prime-run
         log "Script winlux-prime-run créé"
+        fi
     fi
 
     # AMD switchable (Intel + AMD ou AMD + AMD)
@@ -193,6 +201,9 @@ PRIME
         printf 'switchable-amd\n' >/run/winlux/hw/gpu-mode
 
         mkdir -p /usr/bin
+        if prime_run_is_runtime; then
+            log "winlux-prime-run du runtime conservé"
+        else
         cat >/usr/bin/winlux-prime-run <<'PRIME'
 #!/bin/sh
 # Lance une application sur le GPU AMD dédié (DRI_PRIME).
@@ -201,6 +212,7 @@ exec "$@"
 PRIME
         chmod 755 /usr/bin/winlux-prime-run
         log "Script winlux-prime-run créé (DRI_PRIME AMD)"
+        fi
     fi
 
     # Multi-GPU identique (SLI/CrossFire style)

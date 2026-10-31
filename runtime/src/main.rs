@@ -9,11 +9,13 @@ mod crash;
 mod diskimage;
 mod dlls;
 mod firewall;
+mod gpu;
 mod loader;
 pub mod log;
 mod managed;
 mod mounts;
 mod netdrive;
+mod overlay;
 mod paths;
 mod pe;
 mod power;
@@ -90,6 +92,9 @@ fn main() {
         };
         std::process::exit(inspect(&PathBuf::from(path)));
     }
+    if let Some(code) = gpu_command(&exe, &mut args) {
+        std::process::exit(code);
+    }
     let exe = PathBuf::from(exe);
     let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
     let source = match std::fs::read(&exe) {
@@ -142,6 +147,48 @@ fn main() {
     dlls::kernel32::init();
     process::init_process(&image, &rest);
     process::run(image);
+}
+
+/// Commandes GPU pour `winlux-control` et `winlux-prime-run` :
+/// `--gpu-status`, `--gpu-env auto|integrated|dedicated`,
+/// `--gpu-set CARTE RÉGLAGE VALEUR`.
+fn gpu_command(flag: &std::ffi::OsStr, args: &mut std::env::ArgsOs) -> Option<i32> {
+    let root = gpu::system_root();
+    match flag.to_str()? {
+        "--gpu-status" => {
+            print!("{}", gpu::report(&gpu::probe(&root)));
+            Some(0)
+        }
+        "--gpu-env" => {
+            let wanted = args.next().map(|a| a.to_string_lossy().into_owned());
+            let Some(pref) = wanted.as_deref().and_then(gpu::Preference::parse) else {
+                eprintln!("winlux: usage: winlux --gpu-env auto|integrated|dedicated");
+                return Some(2);
+            };
+            for (key, value) in gpu::prime_env(&gpu::probe(&root), pref) {
+                println!("{key}={value}");
+            }
+            Some(0)
+        }
+        "--gpu-set" => {
+            let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+            let [card, setting, value] = rest.as_slice() else {
+                eprintln!("winlux: usage: winlux --gpu-set CARTE RÉGLAGE VALEUR");
+                return Some(2);
+            };
+            match gpu::apply(&root, card, setting, value) {
+                Ok(message) => {
+                    println!("{message}");
+                    Some(0)
+                }
+                Err(error) => {
+                    eprintln!("{error}");
+                    Some(1)
+                }
+            }
+        }
+        _ => None,
+    }
 }
 
 fn backup_registry() {

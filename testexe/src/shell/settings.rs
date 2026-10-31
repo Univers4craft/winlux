@@ -7,6 +7,9 @@ use crate::locale::*;
 use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
+#[path = "settings_gpu.rs"]
+mod graphics;
+
 pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
 pub const PAGE_PRIVACY: usize = 18;
@@ -18,14 +21,16 @@ pub const PAGE_PERSONALIZE: usize = 21;
 pub const BLUETOOTH_PAGE: usize = 22;
 /// Page « Alimentation et batterie » (icône batterie de la barre des tâches).
 pub const PAGE_POWER: usize = 23;
-pub const PAGE_REPORT: usize = 24;
-const PAGE_COUNT: usize = 25;
+/// Graphismes : GPU, mesures, réglages avancés et overlay en jeu.
+pub const PAGE_GRAPHICS: usize = 24;
+pub const PAGE_REPORT: usize = 25;
+const PAGE_COUNT: usize = 26;
 /// Appareils Bluetooth affichés (une ligne de boutons chacun).
 const BT_ROWS: usize = 5;
 /// Ordre d'affichage du menu : la personnalisation suit l'apparence,
 /// l'alimentation suit le son et la batterie.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24,
+    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22, 25,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -53,6 +58,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_PERSONALIZATION),
         tr(S_BLUETOOTH_DEVICES),
         tr(S_POWER_BATTERY),
+        tr(S_GRAPHICS),
         tr(S_REPORT_PAGE),
     ]
 }
@@ -95,6 +101,9 @@ static mut EXE_PATH: [u16; 2048] = [0; 2048];
 static mut EXE_LEN: usize = 0;
 static mut EXE_SCALE: usize = 0;
 static mut EXE_TRACE: bool = false;
+/// GPU préféré du programme : 0 auto, 1 intégré, 2 dédié (machines hybrides).
+static mut EXE_GPU: usize = 0;
+const EXE_GPUS: [&[u8]; 3] = [b"auto", b"integrated", b"dedicated"];
 static mut EXE_NOTICE: &[u8] = b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.";
 const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50;
@@ -120,6 +129,7 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
     EXE_LEN = len;
     EXE_SCALE = 0;
     EXE_TRACE = false;
+    EXE_GPU = 0;
     crate::settings_cpu::reset_program();
     let mut profile = [0u16; 2060];
     exe_profile_path(&mut profile);
@@ -144,6 +154,10 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
             .position(|&v| v == field(data, b"ui_scale"))
             .unwrap_or(0);
         EXE_TRACE = field(data, b"trace") == b"1";
+        EXE_GPU = EXE_GPUS
+            .iter()
+            .position(|&v| v == field(data, b"gpu"))
+            .unwrap_or(0);
     }
     EXE_NOTICE = b"Un double-clic lance le programme, m\xEAme sans r\xE9glages enregistr\xE9s.";
     PAGE = 10;
@@ -162,6 +176,7 @@ unsafe fn save_exe_settings(reset: bool) {
         }
         EXE_SCALE = 0;
         EXE_TRACE = false;
+        EXE_GPU = 0;
         crate::settings_cpu::reset_program();
         EXE_NOTICE = b"Valeurs par d\xE9faut restaur\xE9es.";
         return;
@@ -183,11 +198,20 @@ unsafe fn save_exe_settings(reset: bool) {
     let scale = EXE_SCALES[EXE_SCALE];
     data[..9].copy_from_slice(b"ui_scale=");
     data[9..9 + scale.len()].copy_from_slice(scale);
-    let n = 9 + scale.len();
+    let mut n = 9 + scale.len();
     data[n..n + 7].copy_from_slice(b"\ntrace=");
     data[n + 7] = if EXE_TRACE { b'1' } else { b'0' };
     data[n + 8] = b'\n';
-    let total = n + 9 + crate::settings_cpu::write_program(&mut data[n + 9..]);
+    n += 9;
+    // Le choix du GPU n'est écrit que s'il diffère de l'automatique.
+    if EXE_GPU != 0 {
+        let gpu = EXE_GPUS[EXE_GPU.min(2)];
+        data[n..n + 4].copy_from_slice(b"gpu=");
+        data[n + 4..n + 4 + gpu.len()].copy_from_slice(gpu);
+        data[n + 4 + gpu.len()] = b'\n';
+        n += 5 + gpu.len();
+    }
+    let total = n + crate::settings_cpu::write_program(&mut data[n..]);
     let mut written = 0;
     let ok = WriteFile(
         h,
@@ -378,6 +402,9 @@ pub unsafe fn system_tick() -> bool {
         1
     };
     changed |= read(c"Z:\\run\\winlux\\update-progress", &mut PROGRESS);
+    if PAGE == PAGE_GRAPHICS {
+        changed |= crate::gpuinfo::refresh(false);
+    }
     if PAGE == 9 {
         changed |= read(c"Z:\\usr\\share\\winlux\\BUILD-INFO", &mut BUILD_INFO);
     }
@@ -642,7 +669,8 @@ fn content(f: &Frame) -> Rect {
 }
 fn nav_rect(f: &Frame, i: usize) -> Rect {
     let c = content(f);
-    let step = ((f.client.bottom - f.client.top - 75) / PAGE_COUNT as i32).clamp(22, 42);
+    // Toutes les pages doivent tenir dans la hauteur de la fenêtre.
+    let step = ((f.client.bottom - f.client.top - 72) / PAGE_COUNT as i32).clamp(20, 42);
     rect(
         f.client.left + 10,
         f.client.top + 64 + i as i32 * step,
@@ -683,6 +711,7 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (8, 4) => value(b"display_policy") != b"fixed",
         (10, 0..=4) => EXE_SCALE == id as usize,
         (10, 5) => EXE_TRACE,
+        (10, 12..=14) => EXE_GPU == (id - 12) as usize,
         (11, 1) => value(b"browser_default") == b"edge",
         (11, 4) => value(b"browser_default") == b"chrome",
         (11, 7) => value(b"browser_default") == b"firefox",
@@ -1006,6 +1035,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.accent,
     );
     match PAGE {
+        PAGE_GRAPHICS => graphics::draw(g, f),
         PAGE_PERSONALIZE => crate::personalize::draw_settings(g, &c),
         5 => {
             let speed_str = unsafe {
@@ -1190,14 +1220,27 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 }
                 button(g, &c, i as i32 / 3, i as i32 % 3, label, i as i32);
             }
+            // Machines hybrides uniquement : sinon il n'y a rien à choisir.
+            if graphics::exe_choices() {
+                for (i, label) in [
+                    b"GPU : automatique".as_slice(),
+                    b"GPU \xE9conomie",
+                    b"GPU performances",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    button(g, &c, 4, i as i32, label, 12 + i as i32);
+                }
+            }
             row(
                 g,
                 &c,
-                300,
+                350,
                 b"Application des r\xE9glages",
                 b"Enregistrer puis relancer le programme. Aucun profil n'est obligatoire.",
             );
-            row(g, &c, 366, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
+            row(g, &c, 410, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
         }
         9 => {
             let info = BUILD_INFO.get();
@@ -1967,6 +2010,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }
         return true;
     }
+    if ev == Mouse::Move && PAGE == PAGE_GRAPHICS {
+        let h = graphics::hit(f, x, y);
+        let changed = h != graphics::HOVER;
+        graphics::HOVER = h;
+        return changed;
+    }
     if ev == Mouse::Move && PAGE == PAGE_CPU {
         return crate::settings_cpu::hover(&content(f), x, y);
     }
@@ -1997,6 +2046,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             system_tick();
             return true;
         }
+    }
+    if PAGE == PAGE_GRAPHICS {
+        return graphics::click(f, x, y);
     }
     if PAGE == 12 {
         return crate::a11y::page_mouse(ev, x, y, &content(f));
@@ -2053,6 +2105,11 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 c"browser-launch-firefox",
             ][id as usize],
         ),
+        (10, id @ 12..=14) if EXE_LEN > 0 && graphics::exe_choices() => {
+            EXE_GPU = (id - 12) as usize;
+            EXE_NOTICE = b"Cliquez sur Enregistrer puis relancez le programme.";
+            return true;
+        }
         (10, 9) if EXE_LEN > 0 && crate::settings_cpu::available() => {
             open_page(PAGE_CPU);
             crate::settings_cpu::focus_program();
@@ -2819,6 +2876,7 @@ pub unsafe fn regression_checks() {
         "Sans redemarrage requis les actions normales sont conservees"
     );
     (STATUS, PAGE) = saved;
+    graphics::regression_checks();
     crate::settings_cpu::regression_checks();
 }
 
@@ -2830,13 +2888,19 @@ pub unsafe fn regression_exe_settings(path: &[u16]) {
     );
     EXE_SCALE = 3;
     EXE_TRACE = true;
+    EXE_GPU = 2;
     save_exe_settings(false);
     EXE_SCALE = 0;
     EXE_TRACE = false;
+    EXE_GPU = 0;
     open_exe_settings(path);
     check!(
         EXE_SCALE == 3 && EXE_TRACE,
         "Les reglages 150 % et diagnostic sont relus pour le bon EXE"
+    );
+    check!(
+        EXE_GPU == 2,
+        "Le GPU hautes performances choisi pour un EXE est relu depuis son profil"
     );
     save_exe_settings(true);
     let mut sidecar = [0u16; 2060];

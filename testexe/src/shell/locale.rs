@@ -238,34 +238,35 @@ pub const S_NETWORK_DRIVES: usize = 159;
 pub const S_PERSONALIZATION: usize = 160;
 pub const S_BLUETOOTH_DEVICES: usize = 161;
 pub const S_POWER_BATTERY: usize = 162;
+pub const S_GRAPHICS: usize = 163;
 
 // Signaler un problème
-pub const S_REPORT_PAGE: usize = 163;
-pub const S_REPORT_DESC: usize = 164;
-pub const S_REPORT_NEW: usize = 165;
-pub const S_REPORT_LAST: usize = 166;
-pub const S_REPORT_SAVED: usize = 167;
-pub const S_REPORT_OFFER: usize = 168;
-pub const S_REPORT_OFFER_ON_DESC: usize = 169;
-pub const S_REPORT_OFFER_OFF_DESC: usize = 170;
-pub const S_REPORT_PROPOSE: usize = 171;
-pub const S_REPORT_SILENT: usize = 172;
-pub const S_REPORT_PRIVATE: usize = 173;
-pub const S_REPORT_MASK_DESC: usize = 174;
-pub const S_REPORT_NOMASK_DESC: usize = 175;
-pub const S_REPORT_MASK: usize = 176;
-pub const S_REPORT_NOMASK: usize = 177;
-pub const S_REPORT_MODE: usize = 178;
-pub const S_REPORT_MODE_RELAY: usize = 179;
-pub const S_REPORT_MODE_BROWSER: usize = 180;
-pub const S_REPORT_MODE_FILE: usize = 181;
-pub const S_REPORT_AUTO: usize = 182;
-pub const S_REPORT_BROWSER: usize = 183;
-pub const S_REPORT_FILE: usize = 184;
-pub const S_REPORT_MODE_AUTO_BROWSER: usize = 185;
-pub const S_REPORT_BUTTON: usize = 186;
+pub const S_REPORT_PAGE: usize = 164;
+pub const S_REPORT_DESC: usize = 165;
+pub const S_REPORT_NEW: usize = 166;
+pub const S_REPORT_LAST: usize = 167;
+pub const S_REPORT_SAVED: usize = 168;
+pub const S_REPORT_OFFER: usize = 169;
+pub const S_REPORT_OFFER_ON_DESC: usize = 170;
+pub const S_REPORT_OFFER_OFF_DESC: usize = 171;
+pub const S_REPORT_PROPOSE: usize = 172;
+pub const S_REPORT_SILENT: usize = 173;
+pub const S_REPORT_PRIVATE: usize = 174;
+pub const S_REPORT_MASK_DESC: usize = 175;
+pub const S_REPORT_NOMASK_DESC: usize = 176;
+pub const S_REPORT_MASK: usize = 177;
+pub const S_REPORT_NOMASK: usize = 178;
+pub const S_REPORT_MODE: usize = 179;
+pub const S_REPORT_MODE_RELAY: usize = 180;
+pub const S_REPORT_MODE_BROWSER: usize = 181;
+pub const S_REPORT_MODE_FILE: usize = 182;
+pub const S_REPORT_AUTO: usize = 183;
+pub const S_REPORT_BROWSER: usize = 184;
+pub const S_REPORT_FILE: usize = 185;
+pub const S_REPORT_MODE_AUTO_BROWSER: usize = 186;
+pub const S_REPORT_BUTTON: usize = 187;
 
-const STRING_COUNT: usize = 187;
+const STRING_COUNT: usize = 188;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -455,7 +456,8 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Personnalisation",
     b"Bluetooth et appareils",
     b"Alimentation et batterie",
-    // 163-186 : Signaler un problème
+    b"Graphismes",
+    // 164-187 : Signaler un problème
     b"Signaler un probl\xE8me",
     b"D\xE9crivez un bug : le rapport complet s'affiche, modifiable, avant tout envoi.",
     b"Nouveau signalement",
@@ -668,7 +670,8 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Personalization",
     b"Bluetooth & devices",
     b"Power and battery",
-    // 163-186 : Signaler un problème
+    b"Graphics",
+    // 164-187 : Signaler un problème
     b"Report a problem",
     b"Describe a bug: the full report is shown, editable, before anything is sent.",
     b"New report",
@@ -881,7 +884,8 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Personalizaci\xF3n",
     b"Bluetooth y dispositivos",
     b"Energ\xEDa y bater\xEDa",
-    // 163-186 : Signaler un problème
+    b"Gr\xE1ficos",
+    // 164-187 : Signaler un problème
     b"Informar de un problema",
     b"Describa un error: el informe completo se muestra, editable, antes de enviar nada.",
     b"Nuevo informe",
@@ -1094,7 +1098,8 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Personalisierung",
     b"Bluetooth und Ger\xE4te",
     b"Energie und Akku",
-    // 163-186 : Signaler un problème
+    b"Grafik",
+    // 164-187 : Signaler un problème
     b"Problem melden",
     b"Beschreiben Sie einen Fehler: Der vollst\xE4ndige Bericht wird vor dem Senden bearbeitbar angezeigt.",
     b"Neue Meldung",
