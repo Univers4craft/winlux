@@ -78,6 +78,18 @@ status() {
         else
             printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
         fi
+        gpu_count=$(cat "$root/run/winlux/hw/gpu-count" 2>/dev/null || echo 0)
+        printf 'gpu_count=%s\n' "$gpu_count"
+        test "$(cat "$root/run/winlux/hw/has-nvidia" 2>/dev/null)" = 1 && printf 'gpu_nvidia=%s\n' "$(cat "$root/run/winlux/hw/nvidia-driver" 2>/dev/null || echo nouveau)"
+        test "$(cat "$root/run/winlux/hw/has-amd" 2>/dev/null)" = 1 && printf 'gpu_amd=%s\n' "$(cat "$root/run/winlux/hw/amd-driver" 2>/dev/null || echo amdgpu)"
+        test "$(cat "$root/run/winlux/hw/has-intel" 2>/dev/null)" = 1 && printf 'gpu_intel=i915\n'
+        gpu_mode=$(cat "$root/run/winlux/hw/gpu-mode" 2>/dev/null || true)
+        test -n "$gpu_mode" && printf 'gpu_mode=%s\n' "$gpu_mode"
+        printf 'cpu_sockets=%s\n' "$(cat "$root/run/winlux/hw/cpu-sockets" 2>/dev/null || echo 1)"
+        printf 'cpu_threads=%s\n' "$(cat "$root/run/winlux/hw/cpu-threads" 2>/dev/null || echo 1)"
+        printf 'wifi=%s\n' "$(cat "$root/run/winlux/hw/has-wifi" 2>/dev/null || echo 0)"
+        printf 'touchpad=%s\n' "$(cat "$root/run/winlux/hw/has-touchpad" 2>/dev/null || echo 0)"
+        printf 'webcam=%s\n' "$(cat "$root/run/winlux/hw/has-webcam" 2>/dev/null || echo 0)"
         printf 'control_available=1\n'
         if have winlux-browsers; then winlux-browsers --status 2>/dev/null || true; fi
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
