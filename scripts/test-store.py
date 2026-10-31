@@ -60,6 +60,10 @@ for a in "$@"; do case "$a" in APT::Status-Fd=*) fd=${a#APT::Status-Fd=};; esac;
 eval "echo 'pmstatus:x:60.0:Installation' >&$fd"
 """)
     mock(bindir, "id", "echo 0\n")
+    # Élévation simulée : la CI a un sudo sans mot de passe dont le
+    # secure_path lancerait le vrai apt-get au lieu de la maquette.
+    mock(bindir, "sudo", '[ "$1" = -n ] && shift\nexec "$@"\n')
+    mock(bindir, "pkexec", 'exec "$@"\n')
     sw = root / "var/lib/swcatalog"
     (sw / "yaml").mkdir(parents=True)
     yaml = """---
