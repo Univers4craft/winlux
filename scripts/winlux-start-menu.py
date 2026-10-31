@@ -74,6 +74,7 @@ _TR = {
     'Épingler au menu Démarrer': ('Pin to Start', 'Anclar a Inicio', 'An Start anheften'),
     'Créer un raccourci sur le bureau': ('Create desktop shortcut', 'Crear acceso directo en el escritorio', 'Desktopverknüpfung erstellen'),
     'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
+    'Verrouiller': ('Lock', 'Bloquear', 'Sperren'),
     'Arrêter': ('Shut down', 'Apagar', 'Herunterfahren'),
 }
 
@@ -399,7 +400,11 @@ class Start(Gtk.Application):
         def action(name):
             subprocess.Popen(["/usr/bin/winlux-desktop-action", name])
             self.hide()
-        self.menu(widget, None, [(_t("Redémarrer"), lambda: action("reboot")), (_t("Arrêter"), lambda: action("shutdown"))])
+        def lock():
+            subprocess.Popen(["/usr/bin/winlux-lock", "now"], start_new_session=True)
+            self.hide()
+        self.menu(widget, None, [(_t("Verrouiller"), lock), (_t("Redémarrer"), lambda: action("reboot")),
+                                 (_t("Arrêter"), lambda: action("shutdown"))])
 
 if __name__ == "__main__":
     raise SystemExit(Start().run())
