@@ -385,11 +385,9 @@ unsafe fn destroy(this: *mut Obj) {
                 }
             }
         }
-        Kind::VertexShader(s) | Kind::PixelShader(s) => {
-            if s.gl_shader != 0 {
-                if let Some(gf) = gl::gl() {
-                    (gf.DeleteShader)(s.gl_shader);
-                }
+        Kind::VertexShader(s) | Kind::PixelShader(s) if s.gl_shader != 0 => {
+            if let Some(gf) = gl::gl() {
+                (gf.DeleteShader)(s.gl_shader);
             }
         }
         _ => {}
@@ -4563,7 +4561,7 @@ unsafe fn setup_arrays(
         match (e.usage, e.usage_index) {
             (sh::USAGE_POSITION, 0) => {
                 (l.EnableClientState)(glc::GL_VERTEX_ARRAY);
-                (l.VertexPointer)(if size > 4 { 4 } else { size.min(4).max(2) }, ty, s, ptr);
+                (l.VertexPointer)(size.clamp(2, 4), ty, s, ptr);
             }
             (sh::USAGE_POSITIONT, 0) => {
                 pretransformed = true;
@@ -4984,6 +4982,22 @@ pub(crate) unsafe fn with_surface_bytes<R>(
     let mut s = lock(m);
     let (w, h, p) = (s.width, s.height, s.pitch);
     Some(f(w, h, p, &mut s.data))
+}
+
+/// Appareil sans fenêtre pour les tests d'autres modules (DXVA2).
+#[cfg(test)]
+pub(crate) unsafe fn test_device() -> *mut c_void {
+    let d3d = Direct3DCreate9(32);
+    let mut pp = PresentParams {
+        windowed: 1,
+        swap_effect: 1,
+        ..Default::default()
+    };
+    let mut dev: *mut Obj = std::ptr::null_mut();
+    let hr = d3d_create_device(d3d, 0, 1, 0, 0x40, &mut pp, &mut dev);
+    assert_eq!(hr, S_OK);
+    obj_release(d3d);
+    dev.cast()
 }
 
 pub(crate) unsafe fn is_device(p: *mut c_void) -> bool {

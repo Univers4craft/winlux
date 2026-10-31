@@ -11,6 +11,7 @@
 //! depuis Paramètres > Graphismes et vidéo), surchargées par
 //! `WINLUX_GFX_BACKEND=auto|vulkan|opengl` et
 //! `WINLUX_VIDEO_DECODE=auto|hardware|software`.
+#![allow(dead_code)] // champs exposés au rapport et aux tests
 
 use crate::dlls::va_bindings as va;
 use crate::dlls::vk_bindings as vk;
@@ -370,9 +371,7 @@ fn probe_vulkan() -> Option<VulkanCaps> {
             return None;
         }
         let gipa = loader.get_instance_proc_addr;
-        let Some(fns) = vk::VkInstanceFns::load(instance, &|i, n| gipa(i, n)) else {
-            return None;
-        };
+        let fns = vk::VkInstanceFns::load(instance, &|i, n| gipa(i, n))?;
         let mut n = 0u32;
         (fns.enumerate_physical_devices)(instance, &mut n, std::ptr::null_mut());
         let mut pds = vec![std::ptr::null_mut(); n as usize];

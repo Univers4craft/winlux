@@ -11,6 +11,7 @@
 //! - l'exécution est synchrone : `submit` attend la fin du GPU, ce qui rend
 //!   les fences D3D12 exactes sans thread de surveillance ;
 //! - rendu dynamique Vulkan 1.3 (pas d'objets render pass).
+#![allow(dead_code)] // API complète, une partie sert aux étapes suivantes (profondeur, copies).
 
 use crate::dlls::gpu_caps;
 use crate::dlls::spirv;

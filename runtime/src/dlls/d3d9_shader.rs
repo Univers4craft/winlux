@@ -10,6 +10,7 @@
 //! sous-routines, instructions de texture exotiques de ps_1_x) fait échouer
 //! la traduction avec un message ; l'appareil retombe alors sur le pipeline
 //! fixe au lieu de compiler un shader faux.
+#![allow(dead_code)] // métadonnées de shader gardées pour le débogage
 
 use std::fmt::Write as _;
 
@@ -369,7 +370,7 @@ impl Ctx {
         let name = self.reg_name(p, false)?;
         let sw = swizzle_str(p.swizzle);
         let v = if sw == "xyzw" {
-            format!("{name}")
+            name.to_string()
         } else {
             format!("{name}.{sw}")
         };
@@ -617,7 +618,7 @@ pub(crate) fn translate(tokens: &[u32]) -> Result<Sm9Shader, String> {
         for (op, _, args) in &instrs {
             if *op == OP_TEX && !args.is_empty() {
                 let p = parse_param(args[0]);
-                let n = if minor >= 4 { p.num } else { p.num };
+                let n = p.num;
                 if !c.samplers.iter().any(|s| s.0 == n) {
                     c.samplers.push((n, SamplerType::Tex2D));
                 }
@@ -1073,9 +1074,7 @@ fn finish(c: Ctx) -> Sm9Shader {
     if c.pixel {
         for n in 0..8 {
             if c.uses_texreg & (1 << n) != 0 || c.tex_regs_written & (1 << n) != 0 {
-                if c.major >= 2 {
-                    let _ = writeln!(s, "    vec4 t{n} = gl_TexCoord[{n}];");
-                } else if c.minor >= 4 {
+                if c.major >= 2 || c.minor >= 4 {
                     let _ = writeln!(s, "    vec4 t{n} = gl_TexCoord[{n}];");
                 } else {
                     let _ = writeln!(s, "    vec4 t{n} = vec4(0.0);");

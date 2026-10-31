@@ -447,6 +447,7 @@ enum GpuImage {
 }
 
 impl Res {
+    #[allow(clippy::mut_from_ref)] // mémoire CPU partagée, comme Map en D3D12
     fn bytes(&self) -> &mut [u8] {
         if self.cpu.is_null() {
             return &mut [];
@@ -582,7 +583,9 @@ fn heap_registry() -> &'static Mutex<Vec<(usize, usize)>> {
 fn descriptor_at(handle: usize) -> Option<*mut Descriptor> {
     let r = lock(heap_registry());
     r.iter()
-        .find(|(s, e)| handle >= *s && handle < *e && (handle - s) % DESC_SIZE as usize == 0)
+        .find(|(s, e)| {
+            handle >= *s && handle < *e && (handle - s).is_multiple_of(DESC_SIZE as usize)
+        })
         .map(|_| handle as *mut Descriptor)
 }
 
@@ -3667,7 +3670,7 @@ pub unsafe extern "win64" fn D3D12CreateDevice(
     iid: *const Guid,
     out: *mut *mut c_void,
 ) -> i32 {
-    if min_level < 0x9100 || min_level > MAX_FEATURE_LEVEL {
+    if !(0x9100..=MAX_FEATURE_LEVEL).contains(&min_level) {
         return E_INVALIDARG;
     }
     if out.is_null() {

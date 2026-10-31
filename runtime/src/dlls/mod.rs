@@ -276,6 +276,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "dxva2",
+                exports: dxva2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "d3d9",
                 exports: d3d9::exports(),
                 handle: fake_module(),
