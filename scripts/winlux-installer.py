@@ -39,6 +39,11 @@ for _path in (SCRIPT_DIR, "/usr/lib/winlux/python"):
 import winlux_benchmark  # noqa: E402
 import winlux_migrate  # noqa: E402
 import winlux_profiles  # noqa: E402
+import winlux_partitioner  # noqa: E402
+import winlux_partition_ui  # noqa: E402
+import winlux_screen  # noqa: E402
+
+UI_SCALE = 1.0
 
 CSS = b"""
 @define-color bg_primary #0078D4;
@@ -1502,6 +1507,9 @@ def tr(key, **kwargs):
 
 tr._lang = "fr_FR"
 
+for _lang, _table in winlux_partitioner.TRANSLATIONS.items():
+    TRANSLATIONS.setdefault(_lang, {}).update(_table)
+
 LICENSE_TEXT = """\
 LICENCE PUBLIQUE GÉNÉRALE GNU
 Version 3, 29 juin 2007
@@ -1610,7 +1618,6 @@ BIOS_PARTTYPE = "21686148-6f6e-6974-6576-6e6f74656564"
 BOOT_PART_MIB = 1024
 MIN_WINLUX_MIB = 20 * 1024
 WINDOWS_MARGIN = 10 * GIB
-MANUAL_MIN_SIZE = 8 * GIB
 LUKS_NAME = "winlux_crypt"
 
 
@@ -1815,7 +1822,7 @@ def passphrase_is_ascii(passphrase):
     return all(" " <= c <= "~" for c in passphrase)
 
 
-def planned_layout(disk_size, partitions, install_type, luks, dualboot=None, manual_root=None):
+def planned_layout(disk_size, partitions, install_type, luks, dualboot=None):
     """Segments drawn for the disk after installation."""
     if install_type == "full":
         segments = [
@@ -1843,9 +1850,6 @@ def planned_layout(disk_size, partitions, install_type, luks, dualboot=None, man
             segments.append({"start": start, "size": dualboot["alloc"] - (BOOT_PART_MIB * MIB if luks else 0),
                              "fstype": "crypto_LUKS" if luks else "winlux", "label": "Winlux"})
             continue
-        if install_type == "manual" and p["path"] == manual_root:
-            seg["fstype"] = "winlux"
-            seg["label"] = "Winlux"
         segments.append(seg)
     return segments
 
@@ -1916,7 +1920,7 @@ class PartitionBar(Gtk.DrawingArea):
         super().__init__()
         self.segments = []
         self.disk_size = 0
-        self.set_size_request(-1, 70)
+        self.set_size_request(-1, int(70 * UI_SCALE))
         self.connect("draw", self.on_draw)
 
     def set_data(self, disk_size, segments):
@@ -1940,7 +1944,8 @@ class PartitionBar(Gtk.DrawingArea):
         return entries
 
     def on_draw(self, widget, cr):
-        w = widget.get_allocated_width()
+        cr.scale(UI_SCALE, UI_SCALE)
+        w = widget.get_allocated_width() / UI_SCALE
         bar_y = 4
         bar_h = 36
         label_y = bar_y + bar_h + 14
@@ -2309,7 +2314,6 @@ class InstallerApp(Gtk.Application):
             "disk": None,
             "luks_enabled": False,
             "luks_passphrase": "",
-            "manual_root": None,
             "hostname": "winlux-desktop",
             "username": "",
             "fullname": "",
@@ -2336,7 +2340,6 @@ class InstallerApp(Gtk.Application):
         self.detected_os = {}
         self.dualboot_alloc_mb = 0
         self.dualboot_target = None
-        self.manual_candidates = []
         self.luks_supported = False
         self.detect_done = False
         self.install_thread = None
@@ -2349,23 +2352,76 @@ class InstallerApp(Gtk.Application):
         self.config["profile"] = "office"
         self.config["install_apps"] = True
 
+    def apply_display_scale(self):
+        """Échelle de l'interface selon la résolution et la densité réelles de l'écran."""
+        global UI_SCALE
+        geom, gdk_factor, width_mm, height_mm = winlux_screen.monitor_info(
+            Gdk, getattr(self, "win", None))
+        scale = winlux_screen.compute_scale(
+            geom.width * gdk_factor, geom.height * gdk_factor, width_mm, height_mm,
+            override=winlux_screen.scale_override())
+        # GDK applique déjà son facteur entier (GDK_SCALE) : on ne fait que le complément.
+        UI_SCALE = max(0.5, scale / gdk_factor)
+        css = winlux_screen.scale_css(CSS + winlux_partition_ui.CSS, UI_SCALE)
+        if not hasattr(self, "css_provider"):
+            self.css_provider = Gtk.CssProvider()
+            Gtk.StyleContext.add_provider_for_screen(
+                Gdk.Screen.get_default(), self.css_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.css_provider.load_from_data(css)
+        return geom
+
+    def fit_window_to_screen(self, *_args):
+        old_scale = UI_SCALE
+        geom = self.apply_display_scale()
+        if os.environ.get("WINLUX_INSTALLER_WINDOWED") == "1":
+            self.win.resize(min(geom.width, int(1100 * UI_SCALE)),
+                            min(geom.height, int(720 * UI_SCALE)))
+            return
+        # Sans gestionnaire de fenêtres (Xorg nu du live), fullscreen() est ignoré :
+        # on positionne aussi la fenêtre explicitement sur tout le moniteur.
+        self.win.move(geom.x, geom.y)
+        self.win.resize(geom.width, geom.height)
+        self.win.fullscreen()
+        if abs(old_scale - UI_SCALE) > 0.01 and hasattr(self, "partition_bar"):
+            for bar in (self.partition_bar, self.partition_bar_after, self.manual_editor.bar):
+                bar.set_size_request(-1, int(70 * UI_SCALE))
+
+    def on_key_press(self, _win, event):
+        if event.keyval == Gdk.KEY_F11:
+            state = self.win.get_window().get_state() if self.win.get_window() else 0
+            if state & Gdk.WindowState.FULLSCREEN:
+                self.win.unfullscreen()
+            else:
+                self.win.fullscreen()
+            return True
+        return False
+
+    def make_pages_scrollable(self):
+        """Toutes les pages défilent : Suivant/Retour restent visibles même sur un petit écran."""
+        for child in list(self.pages.get_children()):
+            if isinstance(child, Gtk.ScrolledWindow):
+                child.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+                continue
+            name = self.pages.child_get_property(child, "name")
+            self.pages.remove(child)
+            scroll = Gtk.ScrolledWindow()
+            scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroll.add(child)
+            self.pages.add_named(scroll, name)
+
     def do_activate(self):
-        provider = Gtk.CssProvider()
-        provider.load_from_data(CSS)
-        Gtk.StyleContext.add_provider_for_screen(
-            Gdk.Screen.get_default(), provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-        )
+        self.apply_display_scale()
         self.win = Gtk.ApplicationWindow(application=self, title="Installer Winlux")
         self.win.get_style_context().add_class("installer-window")
-        self.win.set_default_size(960, 640)
         self.win.set_position(Gtk.WindowPosition.CENTER)
         self.win.set_resizable(True)
+        self.win.connect("key-press-event", self.on_key_press)
         self.main_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         self.win.add(self.main_box)
         self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.sidebar.get_style_context().add_class("installer-sidebar")
-        self.sidebar.set_size_request(210, -1)
+        self.sidebar.set_size_request(int(210 * UI_SCALE), -1)
         logo = Gtk.Label(label="Winlux")
         logo.get_style_context().add_class("page-title")
         logo.set_margin_bottom(24)
@@ -2376,7 +2432,10 @@ class InstallerApp(Gtk.Application):
             lbl.get_style_context().add_class("sidebar-step")
             self.step_labels.append(lbl)
             self.sidebar.pack_start(lbl, False, False, 0)
-        self.main_box.pack_start(self.sidebar, False, False, 0)
+        sidebar_scroll = Gtk.ScrolledWindow()
+        sidebar_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        sidebar_scroll.add(self.sidebar)
+        self.main_box.pack_start(sidebar_scroll, False, False, 0)
         self.content_area = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
         self.content_area.get_style_context().add_class("installer-content")
         self.main_box.pack_start(self.content_area, True, True, 0)
@@ -2408,9 +2467,14 @@ class InstallerApp(Gtk.Application):
         self.build_summary_page()
         self.build_progress_page()
         self.build_done_page()
+        self.make_pages_scrollable()
         self.load_answer_file()
         self.current_step = self.next_step(-1, 1)
         self.update_step()
+        self.fit_window_to_screen()
+        screen = Gdk.Screen.get_default()
+        screen.connect("size-changed", self.fit_window_to_screen)
+        screen.connect("monitors-changed", self.fit_window_to_screen)
         self.win.show_all()
         threading.Thread(target=self.bg_detect, daemon=True).start()
 
@@ -2575,6 +2639,9 @@ class InstallerApp(Gtk.Application):
     def on_next(self, _btn):
         key = STEP_KEYS[self.current_step]
         if key == "summary":
+            if self.config["install_type"] == "manual" and not winlux_partition_ui.confirm_apply(
+                    self.win, self.manual_editor.plan, tr, UI_SCALE):
+                return
             self.start_installation()
         elif self.current_step < len(STEPS) - 1:
             if key == "language":
@@ -2953,6 +3020,7 @@ class InstallerApp(Gtk.Application):
         after_label = Gtk.Label(label=tr("part_layout_after"), xalign=0)
         after_label.get_style_context().add_class("section-label")
         box.pack_start(after_label, False, False, 0)
+        self.partition_bar_after_label = after_label
         self.partition_bar_after = PartitionBar()
         box.pack_start(self.partition_bar_after, False, False, 0)
 
@@ -3014,16 +3082,11 @@ class InstallerApp(Gtk.Application):
         self.manual_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.manual_box.set_margin_start(24)
         self.manual_box.set_margin_top(8)
-        manual_label = Gtk.Label(label=tr("part_manual_root"), xalign=0)
-        manual_label.get_style_context().add_class("card-detail")
-        self.manual_box.pack_start(manual_label, False, False, 0)
-        self.manual_combo = Gtk.ComboBoxText()
-        self.manual_combo.connect("changed", self.on_manual_root_changed)
-        self.manual_box.pack_start(self.manual_combo, False, False, 0)
-        self.manual_info = Gtk.Label(label="", xalign=0)
-        self.manual_info.get_style_context().add_class("warning-text")
-        self.manual_info.set_line_wrap(True)
-        self.manual_box.pack_start(self.manual_info, False, False, 0)
+        # Éditeur complet : choisir une partition existante pour /, ou créer, supprimer,
+        # redimensionner et formater. Rien n'est écrit avant la confirmation finale.
+        self.manual_editor = winlux_partition_ui.ManualPartitionEditor(
+            tr, PartitionBar(), self.validate_step, scale=UI_SCALE)
+        self.manual_box.pack_start(self.manual_editor, True, True, 0)
         self.manual_box.set_no_show_all(True)
         manual_card.pack_start(self.manual_box, False, False, 0)
 
@@ -3131,37 +3194,13 @@ class InstallerApp(Gtk.Application):
         if self.dualboot_target is None and self.config["install_type"] == "dualboot":
             self.type_full_rb.set_active(True)
 
-        self.manual_combo.remove_all()
-        self.manual_candidates = [p for p in parts
-                                  if p["parttype"] not in (ESP_PARTTYPE, BIOS_PARTTYPE)
-                                  and p["size"] >= MANUAL_MIN_SIZE and not p["mountpoint"]]
-        for p in self.manual_candidates:
-            desc = " · ".join(x for x in (p["fstype"] or "?", p["label"], human_size(p["size"])) if x)
-            self.manual_combo.append(p["path"], f"{p['path']}  ({desc})")
-        self.config["manual_root"] = None
-        if self.manual_candidates:
-            self.manual_combo.set_active(0)
-        if not self.manual_candidates:
-            self.manual_info.set_text(tr("part_manual_none"))
-        elif self.hw_info.get("uefi") and not find_esp(parts):
-            self.manual_info.set_text(tr("part_manual_need_esp"))
-        self.refresh_layout_preview()
-        self.validate_step()
-
-    def on_manual_root_changed(self, combo):
-        self.config["manual_root"] = combo.get_active_id()
-        root = next((p for p in getattr(self, "manual_candidates", [])
-                     if p["path"] == self.config["manual_root"]), None)
-        if root:
-            self.manual_info.set_text(tr("part_manual_erase", partition=root["path"]))
+        if self.config["install_type"] == "manual":
+            self.manual_editor.set_disk(disk)
         self.refresh_layout_preview()
         self.validate_step()
 
     def manual_ready(self):
-        disk = self.config.get("disk")
-        if not disk or not self.config.get("manual_root"):
-            return False
-        return not self.hw_info.get("uefi") or find_esp(self.disk_partitions.get(disk["path"], [])) is not None
+        return self.config.get("disk") is not None and self.manual_editor.is_valid()
 
     def refresh_layout_preview(self):
         disk = self.config.get("disk")
@@ -3174,13 +3213,14 @@ class InstallerApp(Gtk.Application):
             new_size = (self.dualboot_target["size"] - alloc) // MIB * MIB
             dualboot = {"partition": self.dualboot_target["partition"], "new_size": new_size, "alloc": alloc}
             self.dualboot_keep_label.set_text(tr("part_windows_keep", size=human_size(new_size)))
+        # En mode manuel, l'éditeur dessine lui-même le disque prévu.
+        self.partition_bar_after_label.set_visible(itype != "manual")
+        self.partition_bar_after.set_visible(itype != "manual")
         segments = planned_layout(disk["size"], self.disk_partitions.get(disk["path"], []), itype,
-                                  self.config["luks_enabled"], dualboot, self.config.get("manual_root"))
+                                  self.config["luks_enabled"], dualboot)
         self.partition_bar_after.set_data(disk["size"], segments)
         if itype == "full":
             self.part_erase_warn.set_text(tr("part_erase_warn"))
-        elif itype == "manual" and self.config.get("manual_root"):
-            self.part_erase_warn.set_text(tr("part_manual_erase", partition=self.config["manual_root"]))
         else:
             self.part_erase_warn.set_text("")
 
@@ -3202,6 +3242,8 @@ class InstallerApp(Gtk.Application):
         if install_type == "dualboot":
             self.dualboot_alloc_mb = int(self.dualboot_scale.get_value())
         self._reveal(self.manual_box, install_type == "manual")
+        if install_type == "manual":
+            self.manual_editor.set_disk(self.config["disk"])
         if install_type == "manual" and self.config["luks_enabled"]:
             self.luks_check.set_active(False)
         self.refresh_layout_preview()
@@ -3861,8 +3903,8 @@ class InstallerApp(Gtk.Application):
             keep = (self.dualboot_target["size"] - self.dualboot_alloc_mb * MIB) // MIB * MIB
             return [f"  {tr('part_windows_keep', size=human_size(keep))}",
                     f"  Winlux : {human_size(self.dualboot_alloc_mb * MIB)}"]
-        if itype == "manual" and self.config.get("manual_root"):
-            return [f"  {tr('part_manual_erase', partition=self.config['manual_root'])}"]
+        if itype == "manual":
+            return ["  " + tr("pm_ops_title")] + ["    " + op for op in self.manual_editor.operations_text()]
         return []
 
     def refresh_summary(self):
@@ -4092,6 +4134,7 @@ class InstallerApp(Gtk.Application):
             self.import_windows_data(target)
             self.set_progress(0.90, tr("progress_firstboot"))
             self.configure_first_boot(target)
+            self.write_manual_fstab(layout, target)
             self.run_migration(target)
             self.set_progress(0.95, tr("progress_sync"))
             subprocess.run(["sync"], timeout=60)
@@ -4156,12 +4199,27 @@ class InstallerApp(Gtk.Application):
             return self.partition_full_disk(device, luks)
         if install_type == "dualboot":
             return self.partition_dualboot(device, luks)
-        root = self.config.get("manual_root")
-        if not root:
-            raise RuntimeError("Aucune partition choisie pour Winlux.")
-        esp = find_esp(self.disk_partitions.get(device, []))
-        return {"esp": esp["path"] if esp else None, "format_esp": False, "boot": None,
-                "root": root, "bios": not self.hw_info.get("uefi"), "own_esp": False}
+        return self.partition_manual(device)
+
+    def partition_manual(self, device):
+        """Apply the manual editor's plan; the root is formatted later by format_layout."""
+        plan = self.manual_editor.plan
+        if plan is None or plan.device != device or plan.validate():
+            raise RuntimeError("Plan de partitionnement manuel invalide.")
+        self.set_progress(0.06, tr("progress_manual_apply"))
+        winlux_partitioner.run_steps(plan.build_steps(), log=lambda cmd: self.set_progress(0.07, cmd))
+        if not winlux_partitioner.wait_for_partitions(plan):
+            raise RuntimeError("Partitions introuvables après le partitionnement.")
+        root = plan.root()
+        for argv, stdin in plan.format_steps(skip=(root,)):
+            self.set_progress(0.10, " ".join(argv))
+            subprocess.run(argv, input=stdin, text=True, check=True, timeout=600)
+        esp = plan.esp()
+        esp_path = plan.path_of(esp) if esp else None
+        # Une ESP déjà présente (souvent celle de Windows) n'est jamais traitée comme la nôtre.
+        return {"esp": esp_path, "format_esp": False, "boot": None, "root": plan.path_of(root),
+                "bios": not self.hw_info.get("uefi") or esp_path is None, "own_esp": False,
+                "plan": plan}
 
     def partition_full_disk(self, device, luks):
         subprocess.run(["wipefs", "-a", device], check=True, timeout=60)
@@ -4272,6 +4330,26 @@ class InstallerApp(Gtk.Application):
             self._mounts.append(f"{target}/boot")
             # GRUB and winlux-update both address files as /boot/... on this partition.
             os.symlink(".", f"{target}/boot/boot")
+        plan = layout.get("plan")
+        if plan is not None:
+            # /home, /var… du plan manuel, montés avant la copie du système.
+            for part in plan.mounts():
+                if part.fstype == "swap":
+                    continue
+                path = plan.path_of(part)
+                dest = target + part.mountpoint
+                self.set_progress(0.16, tr("progress_manual_mount", path=path, mount=part.mountpoint))
+                os.makedirs(dest, exist_ok=True)
+                subprocess.run(["mount", path, dest], check=True, timeout=30)
+                self._mounts.append(dest)
+
+    def write_manual_fstab(self, layout, target):
+        plan = layout.get("plan")
+        if plan is None:
+            return
+        os.makedirs(f"{target}/etc", exist_ok=True)
+        with open(f"{target}/etc/fstab", "w") as f:
+            f.write(plan.fstab(winlux_partitioner.blkid_uuid, root_luks=self.config["luks_enabled"]))
 
     def release_target(self):
         for mountpoint in reversed(getattr(self, "_mounts", [])):

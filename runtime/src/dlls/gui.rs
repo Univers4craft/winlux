@@ -2285,9 +2285,55 @@ pub fn set_timer(hwnd: usize, id: usize, interval: u32, callback: usize) -> usiz
         id: real_id,
         interval_ms: interval,
         callback,
-        next_fire: 0,
+        next_fire: crate::dlls::kernel32::get_tick_count64() + interval.max(10) as u64,
     });
     real_id
+}
+
+/// Prochain WM_TIMER échu correspondant au filtre (`overdue_only` : seulement
+/// un minuteur en retard d'au moins une période, pour qu'un flot continu
+/// d'entrées ne l'affame pas). Le minuteur est réarmé à la période suivante.
+pub fn due_timer(hwnd: usize, min: u32, max: u32, overdue_only: bool) -> Option<Msg> {
+    const WM_TIMER: u32 = 0x0113;
+    if !(min == 0 && max == 0) && !(min..=max).contains(&WM_TIMER) {
+        return None;
+    }
+    let now = crate::dlls::kernel32::get_tick_count64();
+    let mut t = lock(timers());
+    let e = t.iter_mut().find(|e| {
+        let interval = e.interval_ms.max(10) as u64;
+        let limit = if overdue_only {
+            e.next_fire.saturating_add(interval)
+        } else {
+            e.next_fire
+        };
+        (hwnd == 0 || e.hwnd == hwnd) && now >= limit
+    })?;
+    let interval = e.interval_ms.max(10) as u64;
+    e.next_fire = if e.next_fire == 0 || now >= e.next_fire + 4 * interval {
+        now + interval
+    } else {
+        e.next_fire + interval
+    };
+    Some(Msg {
+        hwnd: e.hwnd,
+        message: WM_TIMER,
+        wparam: e.id,
+        lparam: e.callback as isize,
+        time: now as u32,
+        pt: Point::default(),
+        l_private: 0,
+    })
+}
+
+/// Millisecondes avant le prochain minuteur (pour borner l'attente).
+pub fn next_timer_ms(hwnd: usize) -> Option<u32> {
+    let now = crate::dlls::kernel32::get_tick_count64();
+    lock(timers())
+        .iter()
+        .filter(|e| hwnd == 0 || e.hwnd == hwnd)
+        .map(|e| e.next_fire.saturating_sub(now).min(u32::MAX as u64) as u32)
+        .min()
 }
 
 pub fn kill_timer(hwnd: usize, id: usize) -> bool {
