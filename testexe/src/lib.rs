@@ -967,6 +967,16 @@ extern "C" {
     pub fn EmptyClipboard() -> i32;
     pub fn SetClipboardData(format: u32, mem: usize) -> usize;
     pub fn GetClipboardData(format: u32) -> usize;
+    pub fn RoundRect(
+        hdc: Handle,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        width: i32,
+        height: i32,
+    ) -> i32;
+    pub fn SetPixelV(hdc: Handle, x: i32, y: i32, color: u32) -> i32;
 }
 
 #[link(name = "msvcrt", kind = "raw-dylib")]

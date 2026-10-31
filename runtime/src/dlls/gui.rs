@@ -722,6 +722,13 @@ pub enum DrawCmd {
         color: u32,
         width: u16,
     },
+    /// Rectangle arrondi inscrit dans le rectangle.
+    RoundRect {
+        rect: Rect,
+        color: u32,
+        rx: i32,
+        ry: i32,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1511,6 +1518,47 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 if e2 <= dx {
                     err += dx;
                     cy += sy;
+                }
+            }
+        }
+        DrawCmd::RoundRect {
+            rect,
+            color,
+            rx,
+            ry,
+        } => {
+            let w = rect.width();
+            let h = rect.height();
+            if w > 0 && h > 0 {
+                let rx = (*rx).min(w / 2).max(0) as f64;
+                let ry = (*ry).min(h / 2).max(0) as f64;
+                for y in rect.top.max(0)..rect.bottom.min(bounds.bottom) {
+                    for x in rect.left.max(0)..rect.right.min(bounds.right) {
+                        let lx = (x - rect.left) as f64;
+                        let ly = (y - rect.top) as f64;
+                        let inside = if lx < rx && ly < ry {
+                            let dx = (rx - lx) / rx;
+                            let dy = (ry - ly) / ry;
+                            dx * dx + dy * dy <= 1.0
+                        } else if lx > w as f64 - rx && ly < ry {
+                            let dx = (lx - (w as f64 - rx)) / rx;
+                            let dy = (ry - ly) / ry;
+                            dx * dx + dy * dy <= 1.0
+                        } else if lx < rx && ly > h as f64 - ry {
+                            let dx = (rx - lx) / rx;
+                            let dy = (ly - (h as f64 - ry)) / ry;
+                            dx * dx + dy * dy <= 1.0
+                        } else if lx > w as f64 - rx && ly > h as f64 - ry {
+                            let dx = (lx - (w as f64 - rx)) / rx;
+                            let dy = (ly - (h as f64 - ry)) / ry;
+                            dx * dx + dy * dy <= 1.0
+                        } else {
+                            true
+                        };
+                        if inside {
+                            put(x, y, *color, RasterOp::Copy);
+                        }
+                    }
                 }
             }
         }

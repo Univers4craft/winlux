@@ -1392,14 +1392,14 @@ pub unsafe extern "win64" fn round_rect(
     top: i32,
     right: i32,
     bottom: i32,
-    _rx: i32,
-    _ry: i32,
+    rx: i32,
+    ry: i32,
 ) -> i32 {
-    // On dessine un rectangle simple (sans arrondi) comme approximation
-    // Utiliser le pen et brush courants du DC
-    let pen = gui::dc_pen(hdc);
     let brush = gui::dc_brush(hdc);
-    rectangle(hdc, left, top, right, bottom, pen, brush)
+    let color = gui::object_color(brush).unwrap_or(0);
+    let rect = Rect { left, top, right, bottom };
+    gui::record(hdc, DrawCmd::RoundRect { rect, color, rx, ry });
+    1
 }
 
 // =====================================================================

@@ -794,21 +794,46 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         return true;
     }
     match ch as u8 {
-        b'+' => { calc_key(b"+"); return true; }
-        b'-' => { calc_key(b"-"); return true; }
-        b'*' => { calc_key(b"*"); return true; }
-        b'/' => { calc_key(b"/"); return true; }
-        b'.' | b',' => { calc_key(b"."); return true; }
-        b'=' | 13 => { calc_key(b"="); return true; }
-        b'%' => { calc_key(b"%"); return true; }
-        8 => { // Backspace
+        b'+' => {
+            calc_key(b"+");
+            return true;
+        }
+        b'-' => {
+            calc_key(b"-");
+            return true;
+        }
+        b'*' => {
+            calc_key(b"*");
+            return true;
+        }
+        b'/' => {
+            calc_key(b"/");
+            return true;
+        }
+        b'.' | b',' => {
+            calc_key(b".");
+            return true;
+        }
+        b'=' | 13 => {
+            calc_key(b"=");
+            return true;
+        }
+        b'%' => {
+            calc_key(b"%");
+            return true;
+        }
+        8 => {
+            // Backspace
             if CALC_DISPLAY_LEN > 0 {
                 CALC_DISPLAY_LEN -= 1;
                 CALC_DISPLAY[CALC_DISPLAY_LEN] = 0;
             }
             return true;
         }
-        27 => { calc_key(b"C"); return true; } // Escape
+        27 => {
+            calc_key(b"C");
+            return true;
+        } // Escape
         _ => {}
     }
     // Numpad: VK_NUMPAD0..VK_NUMPAD9 = 0x60..0x69
@@ -817,14 +842,34 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         return true;
     }
     match vk {
-        0x6A => { calc_key(b"*"); true }   // VK_MULTIPLY
-        0x6B => { calc_key(b"+"); true }   // VK_ADD
-        0x6D => { calc_key(b"-"); true }   // VK_SUBTRACT
-        0x6E => { calc_key(b"."); true }   // VK_DECIMAL
-        0x6F => { calc_key(b"/"); true }   // VK_DIVIDE
-        0x0D => { calc_key(b"="); true }   // VK_RETURN
-        0x2E => {                           // VK_DELETE → C
-            calc_key(b"C"); true
+        0x6A => {
+            calc_key(b"*");
+            true
+        } // VK_MULTIPLY
+        0x6B => {
+            calc_key(b"+");
+            true
+        } // VK_ADD
+        0x6D => {
+            calc_key(b"-");
+            true
+        } // VK_SUBTRACT
+        0x6E => {
+            calc_key(b".");
+            true
+        } // VK_DECIMAL
+        0x6F => {
+            calc_key(b"/");
+            true
+        } // VK_DIVIDE
+        0x0D => {
+            calc_key(b"=");
+            true
+        } // VK_RETURN
+        0x2E => {
+            // VK_DELETE → C
+            calc_key(b"C");
+            true
         }
         _ => false,
     }
