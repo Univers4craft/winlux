@@ -20,11 +20,16 @@ PACKAGES += ["apt", "dpkg", "bash", "coreutils", "findutils", "grep", "sed", "ta
              "gzip", "xz-utils", "ca-certificates", "ubuntu-keyring", "curl", "sudo",
              "busybox-static", "xserver-xorg-core", "xserver-xorg-input-libinput",
              "xvfb", "xterm", "x11-xkb-utils", "xinput", "fonts-dejavu-core",
-             "ncurses-base", "udev", "kmod", "util-linux", "dbus", "hello"]
+             "ncurses-base", "udev", "kmod", "util-linux", "dbus", "hello",
+             "nftables"]
 PACKAGES += ["rsync", "openssh-client"]
 PACKAGES += ["xfonts-base", "libarchive-tools", "squashfs-tools", "libfaad2", "libmpg123-0",
              "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
              "libqt6core6t64", "libqt6gui6t64", "libqt6widgets6t64"]
+# Tools the graphical installer runs from the live session.
+PACKAGES += ["parted", "dosfstools", "e2fsprogs", "cryptsetup-bin", "ntfs-3g", "kbd",
+             "console-setup", "grub2-common", "grub-pc-bin", "grub-efi-amd64-bin", "efibootmgr",
+             "xorriso", "openssl", "python3-gi-cairo"]
 DESKTOP_REQUIRED = ["apt", "dpkg", "bash", "busybox-static", "curl", "ca-certificates",
     "python3", "python3-gi", "gir1.2-gtk-3.0", "openbox", "xfdesktop4", "xfce4-panel",
     "xfce4-genmon-plugin", "xfconf", "xfce4-settings", "dbus-x11", "wmctrl", "xdotool",

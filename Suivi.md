@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **175**
+- Réalisé : **178**
 - À faire ou en cours : **41**
-- Total : **216**
-- Progression : **81.0%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103 et #107, issues #10 à #98)
+- Total : **219**
+- Progression : **81.3%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #107, #110, #112 et #116, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -183,6 +183,7 @@
 - [x] Ajouter des DLL intégrées courantes : `user32`, `advapi32`, `ole32`, `bcrypt`, `version` et `shell32`.
 - [x] Ajouter la fondation COM/OLE native : appartements par thread, GUID, allocateur COM, mémoire globale et `IStream` partageable sur `HGLOBAL`, avec tests unitaires et PE.
 - [x] Enregistrer/révoquer des fabriques COM multi-usages et créer leurs objets dans le processus, avec cookies stables et appels réentrants testés.
+- [x] Planificateur de tâches 2.0 pour les `.exe` : `CoCreateInstance(CLSID_TaskScheduler)` → `ITaskService`, dossiers, `RegisterTaskDefinition`/`RegisterTask` (XML), déclencheurs temps/quotidien/hebdomadaire/démarrage/session/enregistrement, `IExecAction`, réglages et tâches en cours (voir `docs/PLANIFICATEUR_PAREFEU.md`).
 - [x] Ajouter un diagnostic explicite pour les exécutables gérés dépendant de `mscoree.dll`.
 - [x] Affinité, priorités, topologie et NUMA pour les `.exe` : `Set/GetProcessAffinityMask`, `SetThreadAffinityMask` (y compris threads suspendus), `Get/SetThreadGroupAffinity`, `Set/GetPriorityClass`, `Set/GetThreadPriority` (sans priorité irréversible pour un utilisateur normal), `GetLogicalProcessorInformation(Ex)` avec classe d'efficacité P/E-cores, `GetNuma*` ; tests unitaires (`kernel32_cpu.rs`).
 - [x] Détecter les en-têtes CLR PE32/PE32+ et les apphosts modernes, puis relayer les assemblies vers `dotnet` ou Mono lorsqu'un runtime Linux compatible est installé.
@@ -255,6 +256,8 @@
 
 ### Priorité 5 — Thème Windows 11
 
+- [x] Planificateur de tâches maison (service `winlux --tasks daemon`, sans systemd ni cron) : déclencheurs horaires, intervalle, démarrage, ouverture de session et événements système (réseau, secteur/batterie, USB), conditions secteur/réseau, historique, application graphique Windows 11 FR/EN.
+- [x] Pare-feu maison sur nftables (`winlux --firewall daemon`) : profils domaine/privé/public, règles entrantes/sortantes par port, protocole et application, journal des connexions bloquées, alerte à la première écoute d'une application, application graphique Windows 11 FR/EN.
 - [x] Paramètres > Processeur : fréquences par cœur en direct, mode d'alimentation (gouverneur/EPP), placement P-cores/E-cores, températures, bridage thermique, ventilateurs et courbes, NUMA, puis priorité/cœurs/affinité/nœud par programme. Garde-fous : `runtime/src/cpu.rs` détecte le matériel (`/sys`, `/proc/cpuinfo`, CPUID) et une section n'apparaît que si la capacité existe (testé sur faux arbres `/sys` : VM, CPU classique, hybride Intel, NUMA, capteurs absurdes).
 - [x] VM : pointeur flèche visible (curseur logiciel Xorg `SWcursor`, flèche dessinée à l’échelle de l’interface).
 - [x] VM : la résolution suit la taille de la fenêtre QEMU (nouveau mode préféré appliqué par `xrandr`, bureau relu via `GetSystemMetrics` et réagencé); vérifié en passant de 1920×1080 à 1280×800 dans QEMU.

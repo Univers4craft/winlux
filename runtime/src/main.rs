@@ -1,9 +1,11 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod admin;
 mod clr;
 mod cpu;
 mod crash;
 mod dlls;
+mod firewall;
 mod loader;
 pub mod log;
 mod managed;
@@ -16,6 +18,7 @@ mod printf;
 mod process;
 mod profiles;
 pub mod quality;
+mod tasks;
 mod thunks;
 
 use std::path::PathBuf;
@@ -48,6 +51,14 @@ fn main() {
     if exe == "--power" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(power::cli::main(&rest));
+    }
+    if exe == "--tasks" || exe == "--firewall" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(if exe == "--tasks" {
+            tasks::cli(&rest)
+        } else {
+            firewall::cli(&rest)
+        });
     }
     let root_arg = |a: Option<std::ffi::OsString>| a.map(PathBuf::from);
     if exe == "--cpu-report" {
