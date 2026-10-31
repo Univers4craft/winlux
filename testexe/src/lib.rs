@@ -1573,8 +1573,23 @@ fn lang_index(code: &[u8]) -> Option<u8> {
 /// autonomes comme pour celles du bureau : `LANG=` de /etc/winlux/locale.conf
 /// (Paramètres > Langue), sinon la variable `LANG`, sinon le français.
 /// Relue au plus toutes les deux secondes pour suivre un changement.
+/// Langue choisie dans cette session (page Langue des Paramètres) : prioritaire
+/// sur locale.conf, que le service système n'a peut-être pas encore réécrit.
+static UI_LANG_CHOSEN: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(u8::MAX);
+
+/// Fixe la langue de l'interface pour ce processus (0 fr, 1 en, 2 es, 3 de).
+pub fn set_ui_lang(index: usize) {
+    if index < 4 {
+        UI_LANG_CHOSEN.store(index as u8, core::sync::atomic::Ordering::Relaxed);
+    }
+}
+
 pub fn ui_lang() -> usize {
     use core::sync::atomic::Ordering::Relaxed;
+    let chosen = UI_LANG_CHOSEN.load(Relaxed);
+    if chosen != u8::MAX {
+        return chosen as usize;
+    }
     let now = unsafe { GetTickCount() };
     let cached = UI_LANG.load(Relaxed);
     if cached != u8::MAX && now.wrapping_sub(UI_LANG_TICK.load(Relaxed)) < 2000 {

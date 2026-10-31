@@ -332,6 +332,9 @@ case "$mode" in
         case "$pid" in ''|0|*[!0-9]*) exit 1 ;; esac
         kill -0 "$pid" 2>/dev/null; exit $? ;;
     --boot) test "$#" -eq 1 || fail 'arguments inattendus' ;;
+    # Validation du démarrage : gérée seulement par le moteur APT.
+    --confirm-boot) exit 0 ;;
+    --boot-failed) exit 1 ;;
     --list) test "$#" -eq 1 || fail "arguments inattendus"; list_updates; exit 0 ;;
     --auto)
         test "$#" -le 2 || fail "arguments inattendus"

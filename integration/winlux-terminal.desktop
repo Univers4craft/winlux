@@ -1,7 +1,13 @@
 [Desktop Entry]
 Type=Application
 Name=Terminal Winlux
+Name[en]=Winlux Terminal
+Name[de]=Winlux-Terminal
+Name[es]=Terminal de Winlux
 Comment=Exécuter des commandes Linux et des programmes console
+Comment[en]=Run Linux commands and console programs
+Comment[de]=Linux-Befehle und Konsolenprogramme ausführen
+Comment[es]=Ejecutar comandos de Linux y programas de consola
 Exec=/usr/bin/winlux-terminal
 Icon=utilities-terminal
 Terminal=false

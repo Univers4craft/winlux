@@ -2,7 +2,13 @@
 Type=Application
 Name=Microsoft Edge (Winlux)
 GenericName=Navigateur web
+GenericName[en]=Web browser
+GenericName[de]=Webbrowser
+GenericName[es]=Navegador web
 Comment=Ouvre les pages web dans Microsoft Edge, le navigateur par défaut de Winlux
+Comment[en]=Opens web pages in Microsoft Edge, the default Winlux browser
+Comment[de]=Öffnet Webseiten in Microsoft Edge, dem Standardbrowser von Winlux
+Comment[es]=Abre las páginas web en Microsoft Edge, el navegador predeterminado de Winlux
 Exec=/usr/bin/winlux-browser %U
 Icon=microsoft-edge
 Terminal=false
