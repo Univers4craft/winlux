@@ -48,7 +48,52 @@ fn event(root: &Path, what: &str) {
     }
 }
 
+/// Le réglage « demander le mot de passe à la sortie de veille » est-il actif ?
+pub fn lock_on_resume_at(root: &Path) -> bool {
+    fs::read_to_string(root.join("etc/winlux/lock.conf"))
+        .map(|text| !text.lines().any(|l| l.trim() == "LOCK_ON_RESUME=0"))
+        .unwrap_or(true)
+}
+
+/// Affiche l'écran de verrouillage avant la mise en veille, pour que le
+/// bureau ne soit jamais visible au réveil. Attend au plus trois secondes
+/// qu'il ait pris le clavier (`run/winlux/lock/shown`) ; sans `winlux-lock`
+/// installé, ne fait rien.
+fn lock_before_sleep(root: &Path) {
+    let program = root.join("usr/bin/winlux-lock");
+    if !program.is_file() || !lock_on_resume_at(root) {
+        return;
+    }
+    let shown = root.join("run/winlux/lock/shown");
+    if shown.is_file() {
+        return;
+    }
+    let spawned = std::process::Command::new(&program)
+        .arg("now")
+        .env(
+            "DISPLAY",
+            std::env::var("DISPLAY").unwrap_or_else(|_| ":0".into()),
+        )
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn();
+    if let Ok(mut child) = spawned {
+        // L'écran reste affiché après la reprise : il est récolté à part.
+        std::thread::spawn(move || {
+            let _ = child.wait();
+        });
+        for _ in 0..30 {
+            if shown.is_file() {
+                return;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
 fn transition(root: &Path, state: &str) -> Result<(), String> {
+    lock_before_sleep(root);
     event(
         root,
         if state == "disk" {
