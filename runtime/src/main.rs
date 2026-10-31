@@ -4,6 +4,7 @@ mod admin;
 mod archive;
 mod audio;
 mod boottime;
+mod clipbridge;
 mod clr;
 mod cpu;
 mod crash;
@@ -32,6 +33,7 @@ pub mod quality;
 mod registry;
 mod tasks;
 mod thunks;
+mod volumes;
 
 use std::path::PathBuf;
 
@@ -72,8 +74,15 @@ fn main() {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(gamemode::cli(&rest));
     }
+    if exe == "--clipboard-bridge" {
+        std::process::exit(clipbridge::run());
+    }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());
+    }
+    if exe == "--volumes" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(volumes::cli(&rest));
     }
     if exe == "--tasks" || exe == "--firewall" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();

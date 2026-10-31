@@ -79,6 +79,70 @@ with tempfile.TemporaryDirectory() as temporary:
     (catalogue.STATE / "registry.tsv").write_text("\n".join(lines))
     assert catalogue.installed_registry(home) == [(exe, "Programme installé")]
 
+    # File associations declared in the registry (HKLM/HKCU\Software\Classes, legacy hkcr).
+    catalogue.MIMEAPPS = home / ".config/mimeapps.list"
+    def value(key, name, text, kind="1"):
+        return "\t".join(["V", key.encode().hex(), name.encode().hex(), kind, (text + "\0").encode("utf-16-le").hex()])
+    editor = home / "Program Files/Éditeur Winlux/editeur.exe"
+    editor.parent.mkdir(parents=True)
+    editor.write_bytes(fixture())
+    command = '"C:\\Program Files\\Éditeur Winlux\\editeur.exe" /open "%1"'
+    lines += [value("HKLM\\Software\\Classes\\.wxdoc", "", "Winlux.Document"),
+              value("HKLM\\Software\\Classes\\Winlux.Document", "", "Document Winlux"),
+              value("HKLM\\Software\\Classes\\Winlux.Document\\shell\\open\\command", "", command),
+              value("hkcr\\.txt\\OpenWithProgids", "Winlux.Document", ""),
+              value("HKCU\\Software\\Classes\\.rien", "", "Absent.Program")]
+    (catalogue.STATE / "registry.tsv").write_text("WINLUX-REGISTRY-2\n" + "\n".join(lines[1:]))
+    found = catalogue.associations(home)
+    assert sorted(found) == [".txt", ".wxdoc"], found
+    assert found[".wxdoc"]["handlers"] == [(editor, ("/open", None), "winlux.document")] and found[".wxdoc"]["default"] == 0
+    assert found[".txt"]["default"] is None and found[".wxdoc"]["label"] == "Document Winlux"
+    assert catalogue.handler('%ProgramFiles%\\Absent\\app.exe "%1"', home) is None
+    catalogue.refresh()
+    assoc = list(catalogue.APPS.glob("winlux-assoc-*.desktop"))
+    assert len(assoc) == 1, assoc
+    text = assoc[0].read_text()
+    assert "NoDisplay=true" in text and "text/plain;" in text and "application/x-winlux-wxdoc;" in text, text
+    assert '"desktop-open"' in text and '"/open" %f' in text, text
+    assert "Name=editeur" in text
+    package = (catalogue.DATA / "mime/packages/winlux-associations.xml").read_text()
+    assert 'glob pattern="*.wxdoc"' in package and "Document Winlux" in package
+    defaults = catalogue.read_mimeapps()
+    assert catalogue.default_of(defaults, "application/x-winlux-wxdoc") == assoc[0].name
+    assert catalogue.default_of(defaults, "text/plain") is None  # Only listed, never imposed.
+    # The user's later choice is kept on the next refresh.
+    catalogue.promote(defaults, "application/x-winlux-wxdoc", "org.xfce.mousepad.desktop")
+    catalogue.write_mimeapps(defaults)
+    catalogue.refresh()
+    assert catalogue.default_of(catalogue.read_mimeapps(), "application/x-winlux-wxdoc") == "org.xfce.mousepad.desktop"
+    catalogue.promote(defaults, "application/x-winlux-wxdoc", assoc[0].name)
+    catalogue.write_mimeapps(defaults)
+
+    # Desktop .lnk: target, arguments, working folder and icon for winlux-open.
+    shortcut = bytearray(76)
+    struct.pack_into("<I", shortcut, 0, 76)
+    struct.pack_into("<I", shortcut, 20, 16 | 32 | 64 | 128)
+    struct.pack_into("<i", shortcut, 56, 0)
+    struct.pack_into("<I", shortcut, 20, 8 | 16 | 32 | 64 | 128)
+    for item in [str(exe), "C:\\Documents", '-x "a b"', str(exe)]:
+        encoded = item.encode("utf-16-le")
+        shortcut.extend(struct.pack("<H", len(encoded) // 2) + encoded)
+    desktop_link = home / "Bureau/Programme.lnk"
+    desktop_link.parent.mkdir()
+    desktop_link.write_bytes(shortcut)
+    target, arguments, workdir, icon, index = catalogue.lnk_resolve(desktop_link, home)
+    assert (target, arguments, workdir, icon, index) == (exe, ["-x", "a b"], home / "Documents", exe, 0)
+    try:
+        import gi  # noqa: F401
+        gi.require_version("GdkPixbuf", "2.0")
+        from gi.repository import GdkPixbuf
+    except (ImportError, ValueError): GdkPixbuf = None
+    if GdkPixbuf is not None:
+        png = home / "thumbnail.png"
+        catalogue.HOME = home
+        catalogue.thumbnail(desktop_link, png, 128)
+        assert png.read_bytes()[:8] == b"\x89PNG\r\n\x1a\n"
+
     # GLib itself parses the Desktop Entry Exec: no shell expansion is involved.
     if shutil.which("gio"):
         output = home / "arguments.json"
@@ -94,6 +158,10 @@ with tempfile.TemporaryDirectory() as temporary:
             time.sleep(0.1)
         assert json.loads(output.read_text()) == ["desktop", str(exe), "deux mots", "$()`; &"]
     exe.unlink()
+    editor.unlink()
     catalogue.refresh()
     assert not list(catalogue.APPS.glob("winlux-pe-*.desktop"))
-print("OK: PE icon, registered programs, Windows shortcuts, quoting and stale entries")
+    assert not list(catalogue.APPS.glob("winlux-assoc-*.desktop"))
+    # Uninstalled: the previous choice (here the editor picked by the user) applies again.
+    assert catalogue.default_of(catalogue.read_mimeapps(), "application/x-winlux-wxdoc") == "org.xfce.mousepad.desktop"
+print("OK: PE icon, registered programs, Windows shortcuts, file associations, defaults, quoting and stale entries")
