@@ -7,4 +7,8 @@
       <match type="string" offset="0" value="MZ"/>
     </magic>
   </mime-type>
+  <mime-type type="application/x-msi">
+    <comment>Paquet Windows Installer</comment>
+    <glob pattern="*.msi"/>
+  </mime-type>
 </mime-info>

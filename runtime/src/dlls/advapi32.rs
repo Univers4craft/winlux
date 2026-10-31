@@ -1089,6 +1089,88 @@ pub fn read_registry_value_internal(key_path: &str, value_name: &str) -> Option<
     .ok()
 }
 
+/// Modification du registre faite par un outil interne (msiexec).
+pub enum RegEdit {
+    /// Crée la clé et ses parents.
+    Key(String),
+    Set {
+        key: String,
+        name: String,
+        kind: u32,
+        bytes: Vec<u8>,
+    },
+    DeleteValue {
+        key: String,
+        name: String,
+    },
+    /// Supprime la clé et toutes ses sous-clés.
+    DeleteTree(String),
+}
+
+fn ensure_key_path(r: &mut RegistryData, path: &str) {
+    let mut p = String::new();
+    for component in path.split('\\').filter(|c| !c.is_empty()) {
+        if !p.is_empty() {
+            p.push('\\');
+        }
+        p.push_str(component);
+        r.keys.entry(p.clone()).or_default();
+    }
+}
+
+/// Applique une série de modifications en une seule écriture du registre.
+/// Les chemins sont de la forme `hklm\\software\\...` (casse indifférente).
+pub fn apply_registry_edits(edits: &[RegEdit]) -> bool {
+    mutate_registry(|r| {
+        for edit in edits {
+            match edit {
+                RegEdit::Key(key) => ensure_key_path(r, &key.to_lowercase()),
+                RegEdit::Set {
+                    key,
+                    name,
+                    kind,
+                    bytes,
+                } => {
+                    let key = key.to_lowercase();
+                    ensure_key_path(r, &key);
+                    if let Some(k) = r.keys.get_mut(&key) {
+                        k.values.insert(
+                            name.to_lowercase(),
+                            RegistryValue {
+                                kind: *kind,
+                                bytes: bytes.clone(),
+                            },
+                        );
+                    }
+                }
+                RegEdit::DeleteValue { key, name } => {
+                    if let Some(k) = r.keys.get_mut(&key.to_lowercase()) {
+                        k.values.remove(&name.to_lowercase());
+                    }
+                }
+                RegEdit::DeleteTree(key) => {
+                    let key = key.to_lowercase();
+                    let prefix = format!("{key}\\");
+                    r.keys.retain(|k, _| *k != key && !k.starts_with(&prefix));
+                }
+            }
+        }
+        Ok(())
+    })
+    .is_ok()
+}
+
+/// Vrai si la clé existe et n'a ni valeur ni sous-clé.
+pub fn registry_key_is_empty(key: &str) -> bool {
+    let key = key.to_lowercase();
+    let prefix = format!("{key}\\");
+    read_registry(|r| {
+        Ok(r.keys.get(&key).is_some_and(|k| k.values.is_empty())
+            && !r.keys.keys().any(|k| k.starts_with(&prefix)))
+    })
+    .unwrap_or(false)
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
      "RegOpenKeyExA"=>fn reg_open_key_ex_a,"RegCreateKeyExA"=>fn reg_create_key_ex_a,"RegCloseKey"=>fn reg_close_key,
