@@ -446,6 +446,46 @@ pub const IDC_HAND: usize = 32649;
 
 pub const STD_OUTPUT_HANDLE: u32 = -11i32 as u32;
 
+/// Informations d'une image ouverte par `WinluxImageOpen`.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WinluxImageInfoC {
+    pub width: u32,
+    pub height: u32,
+    pub pages: u32,
+    /// 1 animée, 2 calques, 4 RAW, 8 aperçu intégré, 16 HDR, 32 vectoriel, 64 modèle 3D.
+    pub flags: u32,
+    pub delay_ms: u32,
+    pub meta_count: u32,
+    pub format: [u8; 32],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WinluxPageInfoC {
+    pub width: u32,
+    pub height: u32,
+    pub delay_ms: u32,
+    pub kind: u32,
+    pub name: [u8; 64],
+}
+
+/// Vue demandée à `WinluxImageRender` (centre en coordonnées image).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct WinluxViewC {
+    pub zoom: f32,
+    pub cx: f32,
+    pub cy: f32,
+    pub rot: u32,
+    pub mirror: u32,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub exposure: f32,
+    pub auto_levels: u32,
+    pub split: f32,
+}
+
 #[link(name = "kernel32", kind = "raw-dylib")]
 extern "system" {
     pub fn GetStdHandle(which: u32) -> Handle;
@@ -703,6 +743,34 @@ extern "system" {
     pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
     pub fn WinluxPtyAlive(handle: usize) -> i32;
     pub fn WinluxClosePty(handle: usize) -> i32;
+    // Images (décodeurs maison du runtime, voir runtime/src/imaging/api.rs).
+    pub fn WinluxImageOpen(path: *const u16) -> usize;
+    pub fn WinluxImageLastError(buf: *mut u8, cap: u32) -> i32;
+    pub fn WinluxImageInfo(h: usize, out: *mut WinluxImageInfoC) -> i32;
+    pub fn WinluxImagePage(h: usize, page: u32, out: *mut WinluxPageInfoC) -> i32;
+    pub fn WinluxImageRender(
+        h: usize,
+        page: u32,
+        view: *const WinluxViewC,
+        out: *mut u8,
+        w: u32,
+        hh: u32,
+        stride: u32,
+        bg: u32,
+        flags: u32,
+    ) -> i32;
+    pub fn WinluxImageMeta(
+        h: usize,
+        i: u32,
+        key: *mut u8,
+        kcap: u32,
+        val: *mut u8,
+        vcap: u32,
+    ) -> i32;
+    pub fn WinluxImageClose(h: usize) -> i32;
+    pub fn WinluxImageSupported(path: *const u16) -> i32;
+    pub fn WinluxImageFormats(buf: *mut u8, cap: u32) -> u32;
+    pub fn WinluxImageThumbnail(path: *const u16, size: u32, out: *mut u8) -> i32;
     pub fn WinluxCaptureScreen(x: i32, y: i32, w: i32, h: i32, bits: *mut u8, stride: i32) -> i32;
     pub fn WinluxDrawStroke(
         bits: *mut u8,
@@ -941,6 +1009,9 @@ extern "C" {
     pub fn GetFocus() -> Handle;
     pub fn SetFocus(hwnd: Handle) -> Handle;
     pub fn GetKeyState(vk: i32) -> i16;
+    pub fn SetCapture(hwnd: Handle) -> Handle;
+    pub fn ScreenToClient(hwnd: Handle, p: *mut Point) -> i32;
+    pub fn ReleaseCapture() -> i32;
     pub fn GetAsyncKeyState(vk: i32) -> i16;
     pub fn GetKeyboardState(state: *mut u8) -> i32;
     pub fn GetClientRect(hwnd: Handle, out: *mut Rect) -> i32;
@@ -987,6 +1058,20 @@ extern "C" {
     pub fn MoveToEx(dc: Handle, x: i32, y: i32, previous: *mut Point) -> i32;
     pub fn LineTo(dc: Handle, x: i32, y: i32) -> i32;
     pub fn CreateCompatibleDC(dc: Handle) -> Handle;
+    pub fn SetDIBitsToDevice(
+        dc: Handle,
+        x: i32,
+        y: i32,
+        w: u32,
+        h: u32,
+        src_x: i32,
+        src_y: i32,
+        start: u32,
+        lines: u32,
+        bits: *const c_void,
+        info: *const BitmapInfoHeader,
+        usage: u32,
+    ) -> i32;
     pub fn CreateCompatibleBitmap(dc: Handle, width: i32, height: i32) -> Handle;
     pub fn CreateDIBSection(
         dc: Handle,
@@ -997,6 +1082,7 @@ extern "C" {
         offset: u32,
     ) -> Handle;
     pub fn DeleteDC(dc: Handle) -> i32;
+    pub fn GetDeviceCaps(dc: Handle, index: i32) -> i32;
     pub fn StretchDIBits(
         dc: Handle,
         xd: i32,

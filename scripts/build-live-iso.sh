@@ -99,6 +99,8 @@ mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
 cp "$root/scripts/winlux-fonts.sh" "$stage/usr/bin/winlux-fonts"
 cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.txt"
+mkdir -p "$stage/etc/winlux/store-sources.d"
+cp "$root/integration/store-sources.d/"*.json "$stage/etc/winlux/store-sources.d/"
 chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts"
 cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
 cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
@@ -171,7 +173,7 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"

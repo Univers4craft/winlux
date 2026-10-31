@@ -14,7 +14,7 @@ réseau disponible).
 | `flatpak` | AppStream XML des remotes configurées (Flathub…) | `flatpak install/update/uninstall` |
 | `snap` | API locale de snapd (`/run/snapd.socket`) | `snap install/refresh/remove` |
 | `appimage` | flux AppImageHub, dernière version sur GitHub | `~/Applications` + lanceur `.desktop` |
-| `windows` | catalogues interchangeables (voir plus bas) | runtime Winlux (`winlux setup.exe`) |
+| `windows` | catalogues interchangeables, Scoop Extras par défaut (voir plus bas) | runtime Winlux (`winlux setup.exe`, msiexec intégré, applications portables) |
 
 Un même logiciel présent dans plusieurs sources n'apparaît qu'une fois (ID
 AppStream ou nom) : la source installée, sinon apt, sinon Flatpak, Snap,
@@ -41,7 +41,7 @@ Commandes : `refresh [--force]`, `details <clé>`, `install|remove|update <clé>
 
 ### Catalogues Windows interchangeables
 
-Aucune source Windows n'est codée en dur. Chaque fichier JSON de
+Aucune source Windows n'est codée dans le Store. Chaque fichier JSON de
 `/etc/winlux/store-sources.d/` ou `~/.config/winlux/store-sources.d/` déclare
 un catalogue :
 
@@ -51,7 +51,28 @@ un catalogue :
 ```
 
 (`"file": "/chemin/catalog.json"` pour un fichier local, `"enabled": false`
-pour le désactiver.) Le format `winlux` :
+pour le désactiver.)
+
+**Catalogue par défaut : Scoop Extras.** L'ISO livre
+`/etc/winlux/store-sources.d/scoop-extras.json` (format `scoop`), qui lit
+l'archive du dépôt communautaire [ScoopInstaller/Extras](https://github.com/ScoopInstaller/Extras) :
+manifestes libres (domaine public), sans compte ni clé, mis à jour en continu,
+indépendants de Microsoft. Le Store n'en garde que ce que Winlux sait installer
+seul, soit environ 630 applications graphiques :
+
+- architecture 64 bits déclarée (le runtime n'exécute pas encore le 32 bits) ;
+- empreinte SHA-256 ou SHA-512 ;
+- pas de script PowerShell (`installer`, `pre_install`, `uninstaller`) ni de dépendance ;
+- un fichier `.zip` (décompressé dans `C:\Program Files\<nom>`), un `.exe`
+  portable ou un `.msi` (msiexec intégré). Les raccourcis du manifeste vont dans
+  le menu Démarrer ; un programme qui s'avère 32 bits est refusé proprement.
+
+Garde-fous : l'archive est mise en cache (rafraîchie toutes les 6 h) et le
+Store reprend la dernière copie si le dépôt est injoignable ; sans aucune copie
+(premier démarrage hors ligne), la source Windows est simplement masquée. Les
+fiches converties sont mémorisées tant que l'archive ne change pas.
+
+Le format `winlux` :
 
 ```json
 {"apps": [{
@@ -65,11 +86,13 @@ pour le désactiver.) Le format `winlux` :
 }]}
 ```
 
-Une fiche sans empreinte SHA-256 est ignorée, et un installateur dont
-l'empreinte diffère est refusé. Un autre format de catalogue se branche en
-ajoutant un adaptateur à `WindowsCatalog.FORMATS` (fonction qui renvoie des
-fiches au format ci-dessus), sans modifier le reste du Store. Les `.msi`
-demandent `C:\Windows\System32\msiexec.exe`, pas encore fourni par le runtime.
+`type` vaut `exe` (installateur lancé par le runtime), `msi`, `zip` ou
+`portable` ; pour `zip`/`portable`, `extract_dir` et `shortcuts`
+(`[["app.exe", "Nom"]]`) décrivent l'application. Une fiche sans empreinte
+SHA-256 (ou `sha512`) est ignorée, et un installateur dont l'empreinte diffère
+est refusé. Un autre format se branche en ajoutant un adaptateur à
+`WindowsCatalog.FORMATS` (fonction : octets du catalogue → fiches au format
+ci-dessus), sans modifier le reste du Store.
 
 ## Gestionnaire de polices
 
