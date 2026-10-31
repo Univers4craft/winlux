@@ -244,6 +244,19 @@ _TR = {
     'Affichage': ('Display', 'Pantalla', 'Anzeige'),
     'Session': ('Session', 'Sesión', 'Sitzung'),
     'Bureau': ('Desktop', 'Escritorio', 'Desktop'),
+    # Page Processeur : mode jeu.
+    'Mode jeu': ('Game mode', 'Modo juego', 'Spielmodus'),
+    'Mode jeu automatique': ('Automatic game mode', 'Modo juego automático', 'Automatischer Spielmodus'),
+    'Désactiver le mode jeu': ('Turn off game mode', 'Desactivar el modo juego', 'Spielmodus ausschalten'),
+    'Automatique : s’active quand un jeu ou une application 3D tourne.': ('Automatic: turns on while a game or 3D app is running.', 'Automático: se activa cuando se ejecuta un juego o una aplicación 3D.', 'Automatisch: aktiv, solange ein Spiel oder eine 3D-App läuft.'),
+    'Désactivé.': ('Off.', 'Desactivado.', 'Aus.'),
+    'Actif pour {name}.': ('Active for {name}.', 'Activo para {name}.', 'Aktiv für {name}.'),
+    'Pendant une partie : {list}.': ('During a game: {list}.', 'Durante una partida: {list}.', 'Während eines Spiels: {list}.'),
+    'processeur en mode performances (sur secteur)': ('processor in performance mode (plugged in)', 'procesador en modo rendimiento (con corriente)', 'Prozessor im Leistungsmodus (am Netz)'),
+    'priorité du jeu relevée': ('game priority raised', 'prioridad del juego elevada', 'Spielpriorität erhöht'),
+    'sauvegardes et mises à jour en pause': ('backups and updates paused', 'copias de seguridad y actualizaciones en pausa', 'Sicherungen und Updates pausiert'),
+    'mémoire libérée pour le jeu': ('memory freed for the game', 'memoria liberada para el juego', 'Speicher für das Spiel freigegeben'),
+    'veille bloquée': ('sleep blocked', 'suspensión bloqueada', 'Ruhezustand blockiert'),
 }
 
 
@@ -342,6 +355,7 @@ ACTIONS = {
          (_t("Veille (batterie)"), "power-sleep-dc"), (_t("Capot"), "power-lid"), (_t("Bouton d'alimentation"), "power-button"),
          (_t("Luminosité −"), "power-brightness-down"), (_t("Luminosité +"), "power-brightness-up"),
          (_t("Mettre en veille"), "power-suspend"), (_t("Veille prolongée"), "power-hibernate")],
+    19: [(_t("Mode jeu automatique"), "game-mode-auto"), (_t("Désactiver le mode jeu"), "game-mode-off")],
     8: [(_t("Suivre la taille de la VM") if VIRTUAL_MACHINE else _t("Définition recommandée"), "display-follow"), (_t("Définition fixe"), "display-fixed"),
         (_t("Échelle −"), "display-scale-down"), (_t("Automatique"), "display-scale-auto"), (_t("Échelle +"), "display-scale-up")],
 }
@@ -411,9 +425,31 @@ def boot_summary(report):
     return "\n".join(lines)
 
 
+def game_summary(report):
+    """Mode jeu : réglage, partie en cours et actions que ce matériel permet."""
+    if not report.get("game_mode"):
+        return ""
+    lines = [_t("Mode jeu")]
+    if report["game_mode"] == "off":
+        lines.append(_t("Désactivé."))
+    else:
+        lines.append(_t("Automatique : s’active quand un jeu ou une application 3D tourne."))
+        if report.get("game_active") == "1":
+            lines.append(_t("Actif pour {name}.").format(name=report.get("game_name") or "?"))
+    actions = []
+    if report.get("cap_game_governor") == "1": actions.append(_t("processeur en mode performances (sur secteur)"))
+    if report.get("cap_game_priority") == "1": actions.append(_t("priorité du jeu relevée"))
+    actions.append(_t("sauvegardes et mises à jour en pause"))
+    if report.get("cap_game_memory") == "1": actions.append(_t("mémoire libérée pour le jeu"))
+    actions.append(_t("veille bloquée"))
+    lines.append(_t("Pendant une partie : {list}.").format(list=", ".join(actions)))
+    return "\n".join(lines)
+
+
 def cpu_summary():
     report = dict(line.split("=", 1) for line in read("/run/winlux/cpu.txt").splitlines() if "=" in line)
-    return _t("Temps de démarrage") + "\n" + boot_summary(report)
+    parts = [_t("Temps de démarrage") + "\n" + boot_summary(report), game_summary(report)]
+    return "\n\n".join(part for part in parts if part)
 
 
 # Rapport de winlux-update (toujours écrit en français) : traduit à l'affichage.

@@ -52,6 +52,7 @@ const ID_SAVE: i32 = 180;
 const ID_LAUNCH: i32 = 181;
 const ID_EXPLORER: i32 = 182;
 const ID_RESET: i32 = 183;
+const ID_GAME: i32 = 190;
 const ID_CHIP: i32 = 1000;
 
 /// Langue de l'interface : 0 français, 1 anglais, 2 espagnol, 3 allemand.
@@ -621,6 +622,7 @@ unsafe fn walk(w: &mut Walk) {
         summary.get(),
     );
     boot_section(w);
+    game_section(w);
 
     if cap(b"cap_freq") {
         w.header(t(b"Fr\xE9quences en temps r\xE9el", b"Live frequencies"));
@@ -849,6 +851,51 @@ unsafe fn boot_section(w: &mut Walk) {
         b"Mesur\xE9 de l'allumage jusqu'au lancement du bureau.",
         b"Measured from power-on to the desktop starting.",
     ));
+}
+
+/// Mode jeu : réglage et actions que ce matériel permet réellement.
+unsafe fn game_section(w: &mut Walk) {
+    let mode = info(b"game_mode");
+    if mode.is_empty() {
+        return;
+    }
+    w.header(t(b"Mode jeu", b"Game mode"));
+    if info(b"game_active") == b"1" {
+        let mut l = Line::new();
+        l.push(info(b"game_name"));
+        w.row(t(b"Partie en cours", b"Game running"), l.get());
+    }
+    w.options(&[
+        (
+            t(b"Automatique", b"Automatic"),
+            ID_GAME,
+            mode != b"off",
+        ),
+        (t(b"D\xE9sactiv\xE9", b"Off"), ID_GAME + 1, mode == b"off"),
+    ]);
+    w.note(t(
+        b"S'active quand un jeu ou une application 3D tourne :",
+        b"Turns on while a game or 3D app is running:",
+    ));
+    if cap(b"cap_game_governor") {
+        w.note(t(
+            b"- processeur en mode performances (sur secteur)",
+            b"- processor in performance mode (plugged in)",
+        ));
+    }
+    if cap(b"cap_game_priority") {
+        w.note(t(b"- priorit\xE9 du jeu relev\xE9e", b"- game priority raised"));
+    }
+    w.note(t(
+        b"- sauvegardes et mises \xE0 jour en pause",
+        b"- backups and updates paused",
+    ));
+    if cap(b"cap_game_memory") {
+        w.note(t(
+            b"- m\xE9moire lib\xE9r\xE9e pour le jeu",
+            b"- memory freed for the game",
+        ));
+    }
 }
 
 unsafe fn program_section(w: &mut Walk) {
@@ -1182,6 +1229,8 @@ pub unsafe fn click(c: &Rect, x: i32, y: i32) -> bool {
         121 => Some(c"cpu-fan-quiet"),
         122 => Some(c"cpu-fan-balanced"),
         123 => Some(c"cpu-fan-performance"),
+        ID_GAME => Some(c"game-mode-auto"),
+        191 => Some(c"game-mode-off"),
         ID_PRIORITY..=133 => {
             EXE_PRIORITY = (id - ID_PRIORITY) as u8 + 1;
             None
@@ -1294,6 +1343,20 @@ pub unsafe fn regression_checks() {
         l.get() == b"8,5 s" || l.get() == b"8.5 s",
         "Processeur : temps de demarrage arrondi au dixieme"
     );
+    let game = b"cpu_count=1\ncpu_list=0\ngame_mode=off\ncap_game_governor=0\n";
+    INFO[..game.len()].copy_from_slice(game);
+    INFO_LEN = game.len();
+    let mut ids = [false; 2];
+    for y in (80..4000).step_by(6) {
+        for x in (300..1000).step_by(20) {
+            match hit(&c, x, y) {
+                ID_GAME => ids[0] = true,
+                191 => ids[1] = true,
+                _ => {}
+            }
+        }
+    }
+    check!(ids[0] && ids[1], "Processeur : le mode jeu se regle");
     reset_program();
     INFO = saved;
     INFO_LEN = saved_len;
@@ -1304,6 +1367,36 @@ pub unsafe fn regression_checks() {
 /// `(français, anglais, espagnol, allemand)`, retrouvées par le couple
 /// français/anglais passé à `t`.
 const CPU_TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    // Mode jeu.
+    (b"Mode jeu", b"Game mode", b"Modo juego", b"Spielmodus"),
+    (b"Partie en cours", b"Game running", b"Partida en curso", b"Laufendes Spiel"),
+    (b"Automatique", b"Automatic", b"Autom\xE1tico", b"Automatisch"),
+    (b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"),
+    (
+        b"S'active quand un jeu ou une application 3D tourne :",
+        b"Turns on while a game or 3D app is running:",
+        b"Se activa cuando se ejecuta un juego o una aplicaci\xF3n 3D:",
+        b"Aktiv, solange ein Spiel oder eine 3D-App l\xE4uft:",
+    ),
+    (
+        b"- processeur en mode performances (sur secteur)",
+        b"- processor in performance mode (plugged in)",
+        b"- procesador en modo rendimiento (con corriente)",
+        b"- Prozessor im Leistungsmodus (am Netz)",
+    ),
+    (b"- priorit\xE9 du jeu relev\xE9e", b"- game priority raised", b"- prioridad del juego elevada", b"- Spielpriorit\xE4t erh\xF6ht"),
+    (
+        b"- sauvegardes et mises \xE0 jour en pause",
+        b"- backups and updates paused",
+        b"- copias de seguridad y actualizaciones en pausa",
+        b"- Sicherungen und Updates pausiert",
+    ),
+    (
+        b"- m\xE9moire lib\xE9r\xE9e pour le jeu",
+        b"- memory freed for the game",
+        b"- memoria liberada para el juego",
+        b"- Speicher f\xFCr das Spiel freigegeben",
+    ),
     // Temps de démarrage.
     (b"Noyau et micrologiciel", b"Kernel and firmware", b"N\xFAcleo y firmware", b"Kernel und Firmware"),
     (b"V\xE9rification du syst\xE8me", b"System check", b"Comprobaci\xF3n del sistema", b"Systempr\xFCfung"),
