@@ -196,13 +196,13 @@ perform() {
         update-auto-off) winlux-update --auto disable ;;
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
-            # Demande consommee par l'init superviseur. Ne touche pas aux
-            # sessions de l'hote qui pourraient aussi executer ce script.
             test -f "$root/etc/winlux/live-session" || { echo 'Redemarrage de session reserve a Winlux Live' >&2; return 1; }
+            /usr/bin/winlux-shutdown-screen restart-session >/dev/null 2>&1 || true
             printf 'restart-session\n' > "$run/session-action" ;;
         poweroff|reboot)
             test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
+            /usr/bin/winlux-shutdown-screen "$action" >/dev/null 2>&1 || true
             /usr/bin/winlux-close-session || return
             sync || return
             "$action" ;;
