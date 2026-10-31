@@ -27,6 +27,21 @@ const TRAY_RESERVED_V: i32 = 190;
 
 pub static mut SCREEN_W: i32 = 1280;
 pub static mut SCREEN_H: i32 = 720;
+/// Coin de l'écran principal : avec plusieurs écrans, le bureau (barre des
+/// tâches, fenêtres) vit sur le principal, qui n'est pas forcément en 0,0.
+pub static mut SCREEN_X: i32 = 0;
+pub static mut SCREEN_Y: i32 = 0;
+
+/// Coin haut-gauche de l'écran principal (HMONITOR 1 = principal).
+pub unsafe fn primary_origin() -> (i32, i32) {
+    let mut info = [0u8; 40];
+    info[..4].copy_from_slice(&40u32.to_ne_bytes());
+    if GetMonitorInfoA(1usize as Handle, info.as_mut_ptr()) == 0 {
+        return (0, 0);
+    }
+    let at = |o: usize| i32::from_ne_bytes([info[o], info[o + 1], info[o + 2], info[o + 3]]);
+    (at(4), at(8))
+}
 pub static mut START_OPEN: bool = false;
 pub static mut ALIGN_LEFT: bool = false;
 pub static mut VOLUME_LEVEL: u32 = 0;
@@ -3799,6 +3814,7 @@ pub unsafe fn init(
     crate::login::init();
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
+    (SCREEN_X, SCREEN_Y) = primary_origin();
     arrange_icons();
     // Les positions par défaut des icônes partent du coin de l'écran :
     // le premier affichage les recale dans la zone utile.
@@ -4119,12 +4135,15 @@ pub unsafe fn tick(hwnd: Handle) {
         return;
     }
     let (w, h) = (GetSystemMetrics(0).max(640), GetSystemMetrics(1).max(400));
-    if w != SCREEN_W || h != SCREEN_H {
+    let origin = primary_origin();
+    if w != SCREEN_W || h != SCREEN_H || origin != (SCREEN_X, SCREEN_Y) {
         SCREEN_W = w;
         SCREEN_H = h;
+        (SCREEN_X, SCREEN_Y) = origin;
         CONTEXT_APP = None;
         reflow_desk(&layout());
-        MoveWindow(hwnd, 0, 0, w, h, 1);
+        // Écran branché, débranché ou principal changé : le bureau suit.
+        MoveWindow(hwnd, origin.0, origin.1, w, h, 1);
         InvalidateRect(hwnd, core::ptr::null(), 0);
         return;
     }

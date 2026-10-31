@@ -14,6 +14,8 @@ mod graphics;
 /// Page « À propos » (logo, version, caractéristiques de l'appareil).
 #[path = "about.rs"]
 mod about;
+#[path = "settings_display.rs"]
+mod screens;
 
 pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
@@ -102,7 +104,6 @@ static mut BT_CMD: [u8; 64] = [0; 64];
 static mut POWER: Buffer = EMPTY;
 /// Nombre de mises à jour système déjà signalé (u32::MAX : pas encore lu).
 static mut NOTIFIED_UPDATES: u32 = u32::MAX;
-static mut SELECTED_MODE: usize = 0;
 static mut LAST_ANIMATION: u32 = 0;
 static mut PAGE: usize = 0;
 static mut SCROLL: usize = 0;
@@ -727,8 +728,6 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (6, 1) => value(b"align") == b"center",
         (6, 3) => value(b"theme") == b"dark",
         (6, 4) => value(b"theme") == b"light",
-        (8, 3) => value(b"display_policy") == b"fixed",
-        (8, 4) => value(b"display_policy") != b"fixed",
         (10, 0..=4) => EXE_SCALE == id as usize,
         (10, 5) => EXE_TRACE,
         (10, 12..=14) => EXE_GPU == (id - 12) as usize,
@@ -1065,6 +1064,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     );
     match PAGE {
         PAGE_GRAPHICS => graphics::draw(g, f),
+        8 => screens::draw(g, f),
         PAGE_PERSONALIZE => crate::personalize::draw_settings(g, &c),
         5 => {
             let speed_str = unsafe {
@@ -1428,63 +1428,6 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 5, 0, tr4(&[b"Personnaliser", b"Personalize", b"Personalizar", b"Anpassen"]), 12);
             button(g, &c, 5, 1, tr4(&[b"Assistant de bienvenue", b"Welcome assistant", b"Asistente de bienvenida", b"Willkommensassistent"]), 13);
             button(g, &c, 7, 0, tr4(&[b"R\xE9glages de l'\xE9cran", b"Display settings", b"Configuraci\xF3n de pantalla", b"Bildschirmeinstellungen"]), 18);
-        }
-        8 => {
-            row(
-                g,
-                &c,
-                44,
-                tr4(&[b"D\xE9finition actuellement appliqu\xE9e", b"Resolution currently applied", b"Resoluci\xF3n aplicada actualmente", b"Aktuell angewendete Aufl\xF6sung"]),
-                value(b"display_current"),
-            );
-            let modes = value(b"display_modes");
-            let count = modes
-                .split(|&v| v == b',')
-                .filter(|v| !v.is_empty())
-                .count();
-            if count > 0 {
-                SELECTED_MODE = SELECTED_MODE.min(count - 1);
-            }
-            let chosen = modes
-                .split(|&v| v == b',')
-                .nth(SELECTED_MODE)
-                .unwrap_or(tr4(&[b"Indisponible", b"Unavailable", b"No disponible", b"Nicht verf\xFCgbar"]));
-            button(g, &c, 0, 0, tr4(&[b"D\xE9finition pr\xE9c\xE9dente", b"Previous resolution", b"Resoluci\xF3n anterior", b"Vorherige Aufl\xF6sung"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"D\xE9finition suivante", b"Next resolution", b"Resoluci\xF3n siguiente", b"N\xE4chste Aufl\xF6sung"]), 1);
-            button(g, &c, 0, 2, tr4(&[b"Appliquer", b"Apply", b"Aplicar", b"\xDCbernehmen"]), 2);
-            button(g, &c, 1, 0, tr4(&[b"Image fixe", b"Fixed image", b"Imagen fija", b"Festes Bild"]), 3);
-            button(g, &c, 1, 1, tr4(&[b"Suivre la fen\xEAtre VM", b"Follow the VM window", b"Seguir la ventana de la VM", b"VM-Fenster folgen"]), 4);
-            button(g, &c, 1, 2, tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]), 5);
-            row(
-                g,
-                &c,
-                214,
-                tr4(&[b"D\xE9finition s\xE9lectionn\xE9e (modes r\xE9els de l'\xE9cran)", b"Selected resolution (real display modes)", b"Resoluci\xF3n seleccionada (modos reales de la pantalla)", b"Ausgew\xE4hlte Aufl\xF6sung (echte Bildschirmmodi)"]),
-                chosen,
-            );
-            row(
-                g,
-                &c,
-                274,
-                tr4(&[b"\xC9chelle du texte et des contr\xF4les", b"Text and control scale", b"Escala del texto y los controles", b"Skalierung von Text und Steuerelementen"]),
-                match value(b"display_scale") {
-                    b"1" => b"100 %",
-                    b"1.25" => b"125 %",
-                    b"1.5" => b"150 %",
-                    b"2" => b"200 %",
-                    _ => tr4(&[b"Automatique", b"Automatic", b"Autom\xE1tica", b"Automatisch"]),
-                },
-            );
-            button(g, &c, 5, 0, tr4(&[b"\xC9chelle -", b"Scale -", b"Escala -", b"Skalierung -"]), 15);
-            button(g, &c, 5, 1, tr4(&[b"Automatique", b"Automatic", b"Autom\xE1tica", b"Automatisch"]), 16);
-            button(g, &c, 5, 2, tr4(&[b"\xC9chelle +", b"Scale +", b"Escala +", b"Skalierung +"]), 17);
-            row(
-                g,
-                &c,
-                420,
-                tr4(&[b"Application de l'\xE9chelle", b"Applying the scale", b"Aplicaci\xF3n de la escala", b"Anwendung der Skalierung"]),
-                tr4(&[b"Relancez le bureau apr\xE8s modification de l'\xE9chelle.", b"Restart the desktop after changing the scale.", b"Reinicie el escritorio despu\xE9s de cambiar la escala.", b"Starten Sie den Desktop nach einer \xC4nderung der Skalierung neu."]),
-            );
         }
         7 => {
             if updating() {
@@ -2088,6 +2031,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if ev == Mouse::Move && PAGE == PAGE_PRINTERS {
         return printers::mouse(ev, x, y);
     }
+    if ev == Mouse::Move && PAGE == 8 {
+        return screens::hover(f, x, y);
+    }
     if ev == Mouse::Move && PAGE == PAGE_GRAPHICS {
         let h = graphics::hit(f, x, y);
         let changed = h != graphics::HOVER;
@@ -2136,6 +2082,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if PAGE == PAGE_GRAPHICS {
         return graphics::click(f, x, y);
+    }
+    if PAGE == 8 {
+        return screens::click(f, x, y);
     }
     if PAGE == 12 {
         return crate::a11y::page_mouse(ev, x, y, &content(f));
@@ -2277,38 +2226,6 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             open_page(8);
             return true;
         }
-        (8, 0) => {
-            SELECTED_MODE = SELECTED_MODE.saturating_sub(1);
-            return true;
-        }
-        (8, 1) => {
-            let n = value(b"display_modes").split(|&v| v == b',').count();
-            SELECTED_MODE = (SELECTED_MODE + 1).min(n.saturating_sub(1));
-            return true;
-        }
-        (8, 2) => {
-            let chosen = value(b"display_modes")
-                .split(|&v| v == b',')
-                .nth(SELECTED_MODE)
-                .unwrap_or(b"");
-            if chosen.is_empty() || chosen.len() > 24 {
-                return true;
-            }
-            let mut command = [0u8; 64];
-            let prefix = b"display-mode-";
-            command[..prefix.len()].copy_from_slice(prefix);
-            command[prefix.len()..prefix.len() + chosen.len()].copy_from_slice(chosen);
-            if let Ok(cstr) = core::ffi::CStr::from_bytes_until_nul(&command) {
-                control(cstr);
-            }
-            return true;
-        }
-        (8, 3) => Some(c"display-fixed"),
-        (8, 4) => Some(c"display-follow"),
-        (8, 5) => Some(c"status"),
-        (8, 15) => Some(c"display-scale-down"),
-        (8, 16) => Some(c"display-scale-auto"),
-        (8, 17) => Some(c"display-scale-up"),
         (13, 0) => {
             unsafe { ENABLE_BLUR = true };
             Some(c"blur-on")

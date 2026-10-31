@@ -959,7 +959,12 @@ pub extern "C" fn mainCRTStartup() -> ! {
             c"Winlux Control Center"
         };
         let (window_x, window_y, window_width, window_height) = if desktop {
-            (0, 0, desktop::SCREEN_W, desktop::SCREEN_H)
+            (
+                desktop::SCREEN_X,
+                desktop::SCREEN_Y,
+                desktop::SCREEN_W,
+                desktop::SCREEN_H,
+            )
         } else if wm::native_app().is_some() {
             (100, 70, 980, 650)
         } else {

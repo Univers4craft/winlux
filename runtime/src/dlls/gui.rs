@@ -165,6 +165,13 @@ pub struct Rect {
     pub bottom: i32,
 }
 
+/// Un écran physique, en coordonnées logiques de l'écran X.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Monitor {
+    pub rect: Rect,
+    pub primary: bool,
+}
+
 impl Rect {
     pub fn width(&self) -> i32 {
         self.right - self.left
@@ -1674,6 +1681,10 @@ pub trait GuiBackend: Send {
     fn screen_size(&mut self) -> Option<(i32, i32)> {
         None
     }
+    /// Écrans branchés et allumés (vide si le backend ne sait pas).
+    fn monitors(&mut self) -> Vec<Monitor> {
+        Vec::new()
+    }
     /// Identifiant de la fenêtre native (X11) d'un HWND, pour Vulkan/GLX.
     fn native_window(&mut self, _hwnd: usize) -> Option<u64> {
         None
@@ -1743,6 +1754,12 @@ pub fn native_window(hwnd: usize) -> Option<u64> {
     let mut id = None;
     with_backend(|b| id = b.native_window(hwnd));
     id
+}
+
+pub fn monitors() -> Vec<Monitor> {
+    let mut list = Vec::new();
+    with_backend(|b| list = b.monitors());
+    list
 }
 
 pub fn screen_size() -> (i32, i32) {

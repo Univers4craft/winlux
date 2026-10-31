@@ -2891,6 +2891,33 @@ impl gui::GuiBackend for X11Backend {
         ))
     }
 
+    fn monitors(&mut self) -> Vec<crate::dlls::gui::Monitor> {
+        use x11rb::protocol::randr::ConnectionExt as _;
+        let root = self.conn.setup().roots[self.screen].root;
+        let Some(reply) = self
+            .conn
+            .randr_get_monitors(root, true)
+            .ok()
+            .and_then(|c| c.reply().ok())
+        else {
+            return Vec::new();
+        };
+        reply
+            .monitors
+            .iter()
+            .filter(|m| m.width > 0 && m.height > 0)
+            .map(|m| crate::dlls::gui::Monitor {
+                rect: Rect {
+                    left: self.logical(i32::from(m.x)),
+                    top: self.logical(i32::from(m.y)),
+                    right: self.logical(i32::from(m.x) + i32::from(m.width)),
+                    bottom: self.logical(i32::from(m.y) + i32::from(m.height)),
+                },
+                primary: m.primary,
+            })
+            .collect()
+    }
+
     fn create_window(&mut self, hwnd: usize, title: &str, rect: Rect) {
         if self.x11_cursors.is_empty() {
             self.init_cursors();

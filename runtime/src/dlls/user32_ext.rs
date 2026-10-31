@@ -814,33 +814,6 @@ pub extern "win64" fn msg_wait_for_multiple_objects_ex(
 ) -> u32 {
     0
 }
-pub extern "win64" fn monitor_from_point(_x: i32, _y: i32, _flags: u32) -> usize {
-    1
-}
-pub extern "win64" fn monitor_from_rect(_rect: usize, _flags: u32) -> usize {
-    1
-}
-pub extern "win64" fn monitor_from_window(_hwnd: usize, _flags: u32) -> usize {
-    1
-}
-pub unsafe extern "win64" fn get_monitor_info_a(_monitor: usize, info: *mut u8) -> i32 {
-    if info.is_null() {
-        return 0;
-    }
-    // MONITORINFO : cbSize(4), rcMonitor(16), rcWork(16), dwFlags(4) = 40 octets
-    let size = *(info as *const u32);
-    if size < 40 {
-        return 0;
-    }
-    let rect = [0i32, 0, 1920, 1080]; // résolution par défaut
-    std::ptr::copy_nonoverlapping(rect.as_ptr() as *const u8, info.add(4), 16);
-    std::ptr::copy_nonoverlapping(rect.as_ptr() as *const u8, info.add(20), 16);
-    *(info.add(36) as *mut u32) = 1; // MONITORINFOF_PRIMARY
-    1
-}
-pub unsafe extern "win64" fn get_monitor_info_w(monitor: usize, info: *mut u8) -> i32 {
-    get_monitor_info_a(monitor, info)
-}
 pub extern "win64" fn get_window_dc(_hwnd: usize) -> usize {
     crate::dlls::user32::get_dc(_hwnd)
 }
@@ -924,10 +897,11 @@ pub fn exports() -> crate::dlls::Exports {
         "ReplyMessage"=>fn reply_message, "WaitMessage"=>fn wait_message,
         "MsgWaitForMultipleObjects"=>fn msg_wait_for_multiple_objects,
         "MsgWaitForMultipleObjectsEx"=>fn msg_wait_for_multiple_objects_ex,
-        "MonitorFromPoint"=>fn monitor_from_point,
-        "MonitorFromRect"=>fn monitor_from_rect,
-        "MonitorFromWindow"=>fn monitor_from_window,
-        "GetMonitorInfoA"=>fn get_monitor_info_a, "GetMonitorInfoW"=>fn get_monitor_info_w,
+        "MonitorFromPoint"=>fn crate::dlls::monitors::monitor_from_point_packed,
+        "MonitorFromRect"=>fn crate::dlls::monitors::monitor_from_rect,
+        "MonitorFromWindow"=>fn crate::dlls::monitors::monitor_from_window,
+        "GetMonitorInfoA"=>fn crate::dlls::monitors::get_monitor_info_a,
+        "GetMonitorInfoW"=>fn crate::dlls::monitors::get_monitor_info_w,
         "GetWindowDC"=>fn get_window_dc,
     }
 }

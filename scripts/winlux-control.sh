@@ -374,6 +374,9 @@ perform() {
             case "$profile" in performance|balanced|powersave) winlux --cpu-profile "$profile" "${root:-/}" || true ;; esac
             case "$(cpu_pref FAN_CURVE)" in quiet|balanced|performance) fan_daemon ;; esac ;;
         display-follow|display-fixed) winlux-display "${action#display-}" ;;
+        # Écrans multiples : « display-set layout extend », « display-set
+        # scale-step HDMI-1 up »… (arguments revalidés par winlux-display).
+        display-set) shift; winlux-display "$@" ;;
         display-mode-*) mode=${action#display-mode-}; case "$mode" in *[!0-9x]*|'') return 1 ;; esac; winlux-display mode "$mode" ;;
         display-scale-auto) winlux-display scale auto ;;
         display-scale-up|display-scale-down)
