@@ -55,7 +55,7 @@ fn config() -> &'static Config {
         let raw = std::env::var("WINLUX_LOG").unwrap_or_default();
         let raw = raw.trim();
 
-        let journal = std::env::var_os("WINLUX_JOURNAL").map_or(true, |v| v != "0");
+        let journal = std::env::var_os("WINLUX_JOURNAL").is_none_or(|v| v != "0");
 
         if std::env::args_os().any(|a| a == "--verbose") || raw.eq_ignore_ascii_case("debug") {
             return Config {

@@ -8,8 +8,9 @@ static mut CRASH_EXE_LEN: usize = 0;
 
 pub fn set_exe_name(name: &str) {
     unsafe {
-        let n = name.len().min(CRASH_EXE_NAME.len() - 1);
-        CRASH_EXE_NAME[..n].copy_from_slice(&name.as_bytes()[..n]);
+        let buf = &raw mut CRASH_EXE_NAME;
+        let n = name.len().min((*buf).len() - 1);
+        (&mut (*buf))[..n].copy_from_slice(&name.as_bytes()[..n]);
         CRASH_EXE_LEN = n;
     }
 }
