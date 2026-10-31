@@ -838,6 +838,10 @@ pub unsafe extern "win64" fn co_create_instance(
         .find(|entry| entry.clsid == guid && (entry.context & ctx) != 0)
     else {
         drop(factories);
+        // Classes intégrées au runtime (planificateur de tâches…).
+        if let Some(hr) = crate::dlls::taskschd::create_builtin(&guid, &iid, out) {
+            return hr;
+        }
         // Classes audio intégrées (MMDeviceEnumerator, DirectSound, XAudio2 2.7).
         if let Some(hr) = super::audio_com::create_builtin(&guid, riid, out) {
             return hr;

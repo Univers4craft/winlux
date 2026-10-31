@@ -49,6 +49,7 @@ pub mod sechost;
 pub mod setupapi;
 pub mod shell32;
 pub mod shlwapi;
+pub mod taskschd;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
@@ -124,6 +125,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(crate::mounts::exports());
                     e
                 },
                 handle: fake_module(),

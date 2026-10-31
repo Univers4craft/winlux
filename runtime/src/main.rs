@@ -1,36 +1,63 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod admin;
 mod audio;
 mod clr;
 mod cpu;
 mod crash;
 mod dlls;
+mod firewall;
 mod loader;
 pub mod log;
 mod managed;
+mod mounts;
+mod netdrive;
 mod paths;
 mod pe;
 mod printf;
 mod process;
 mod profiles;
 pub mod quality;
+mod tasks;
 mod thunks;
 
 use std::path::PathBuf;
 
 fn main() {
     let mut args = std::env::args_os();
-    let _program = args.next();
+    let program = args.next();
+    // `winlux-drives …` (lien vers winlux) ou `winlux --drives …` : lecteurs réseau.
+    let invoked_as = program
+        .as_deref()
+        .map(std::path::Path::new)
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == "winlux-drives");
+    if invoked_as {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(netdrive::main(&rest));
+    }
     let Some(exe) = args.next() else {
         eprintln!("winlux: usage: winlux PROGRAM.exe [arguments...]");
         std::process::exit(2);
     };
+    if exe == "--drives" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(netdrive::main(&rest));
+    }
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());
+    }
+    if exe == "--tasks" || exe == "--firewall" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(if exe == "--tasks" {
+            tasks::cli(&rest)
+        } else {
+            firewall::cli(&rest)
+        });
     }
     let root_arg = |a: Option<std::ffi::OsString>| a.map(PathBuf::from);
     if exe == "--cpu-report" {
