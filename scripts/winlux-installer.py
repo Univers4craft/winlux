@@ -10,7 +10,6 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
-import cairo
 import gzip
 import html
 import json
@@ -264,37 +263,6 @@ list.wifi-list row:selected .card {
     border: 2px solid @accent;
     background-color: shade(@bg_card, 1.15);
 }
-/* Keep the dark look whatever GTK theme the live session ships. */
-.installer-content label, .installer-content radiobutton label, .installer-content checkbutton label {
-    color: @fg_primary;
-}
-.installer-content .card-detail, .installer-content .page-subtitle, .installer-content .progress-text,
-.installer-content .hw-info {
-    color: @fg_secondary;
-}
-.installer-content .warning-text, .installer-content .disk-warn {
-    color: @danger;
-}
-radiobutton:disabled label, checkbutton:disabled label {
-    color: alpha(@fg_secondary, 0.5);
-}
-button.btn-primary, button.btn-secondary, button.btn-danger {
-    background-image: none;
-    box-shadow: none;
-    text-shadow: none;
-}
-button.btn-primary label, button.btn-secondary label, button.btn-danger label {
-    color: @fg_primary;
-}
-scale value {
-    color: @fg_primary;
-}
-entry.input-field, combobox button {
-    background-image: none;
-    background-color: @bg_surface;
-    color: @fg_primary;
-}
-
 .score-big {
     color: @fg_primary;
     font-size: 44px;
@@ -351,6 +319,34 @@ window.installer-window list row {
 }
 window.installer-window list row:selected {
     background-color: alpha(@accent, 0.35);
+}
+/* Keep the dark look whatever GTK theme the live session ships. */
+.installer-content label, .installer-content radiobutton label, .installer-content checkbutton label {
+    color: @fg_primary;
+}
+.installer-content .card-detail, .installer-content .page-subtitle, .installer-content .progress-text,
+.installer-content .hw-info, .installer-content .tip {
+    color: @fg_secondary;
+}
+.installer-content .warning-text, .installer-content .disk-warn {
+    color: @danger;
+}
+.installer-content .badge {
+    color: @accent_hover;
+}
+radiobutton:disabled label, checkbutton:disabled label {
+    color: alpha(@fg_secondary, 0.5);
+}
+button.btn-primary label, button.btn-secondary label, button.btn-danger label {
+    color: @fg_primary;
+}
+scale value {
+    color: @fg_primary;
+}
+entry.input-field, combobox button {
+    background-image: none;
+    background-color: @bg_surface;
+    color: @fg_primary;
 }
 """
 
@@ -1948,7 +1944,7 @@ class PartitionBar(Gtk.DrawingArea):
         bar_y = 4
         bar_h = 36
         label_y = bar_y + bar_h + 14
-        cr.select_font_face("sans-serif", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+        cr.select_font_face("sans-serif", 0, 0)  # slant/weight NORMAL, sans importer cairo
         cr.set_source_rgba(0.18, 0.18, 0.27, 1.0)
         self._rounded_rect(cr, 0, bar_y, w, bar_h, 6)
         cr.fill()
