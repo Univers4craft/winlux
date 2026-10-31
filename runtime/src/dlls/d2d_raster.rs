@@ -276,6 +276,10 @@ impl Path {
     pub fn line(&mut self, p: Pt) {
         self.last().push(p);
     }
+    /// Ajoute les figures d'un autre chemin.
+    pub fn append(&mut self, o: &Path) {
+        self.figures.extend(o.figures.iter().cloned());
+    }
     pub fn cubic(&mut self, c1: Pt, c2: Pt, e: Pt, scale: f32) {
         let s = self.current();
         let len = (dist(s, c1) + dist(c1, c2) + dist(c2, e)) * scale;

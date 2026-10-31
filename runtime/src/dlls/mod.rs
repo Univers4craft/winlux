@@ -69,6 +69,7 @@ pub mod rpcrt4;
 pub mod sechost;
 pub mod seh;
 pub mod setupapi;
+pub mod sfnt;
 pub mod shell32;
 pub mod shlwapi;
 pub mod shlwapi_reg;

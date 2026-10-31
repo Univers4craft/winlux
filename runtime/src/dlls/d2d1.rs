@@ -106,17 +106,17 @@ const IID_D2D1_GEOMETRY_SINK: Guid = guid(
 );
 
 /// Un point D2D1_POINT_2F passé par valeur arrive dans un registre 64 bits.
-fn point(v: u64) -> Pt {
+pub(super) fn point(v: u64) -> Pt {
     (f32::from_bits(v as u32), f32::from_bits((v >> 32) as u32))
 }
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Default)]
-struct RectF {
-    l: f32,
-    t: f32,
-    r: f32,
-    b: f32,
+pub(super) struct RectF {
+    pub l: f32,
+    pub t: f32,
+    pub r: f32,
+    pub b: f32,
 }
 
 #[repr(C)]
@@ -144,23 +144,23 @@ struct Ellipse {
 }
 
 /// Appelle la méthode n° `slot` de l'objet COM `obj`.
-unsafe fn method<F: Copy>(obj: *mut c_void, slot: usize) -> F {
+pub(super) unsafe fn method<F: Copy>(obj: *mut c_void, slot: usize) -> F {
     let vtbl = *(obj as *const *const usize);
     std::mem::transmute_copy(&*vtbl.add(slot))
 }
 
-unsafe extern "win64" fn add_ref<T>(this: *mut Com<T>) -> u32 {
+pub(super) unsafe extern "win64" fn add_ref<T>(this: *mut Com<T>) -> u32 {
     Com::add_ref(this)
 }
-unsafe extern "win64" fn release<T>(this: *mut Com<T>) -> u32 {
+pub(super) unsafe extern "win64" fn release<T>(this: *mut Com<T>) -> u32 {
     Com::release(this)
 }
-unsafe extern "win64" fn not_implemented() -> i32 {
+pub(super) unsafe extern "win64" fn not_implemented() -> i32 {
     E_NOTIMPL
 }
-unsafe extern "win64" fn nothing() {}
+pub(super) unsafe extern "win64" fn nothing() {}
 
-unsafe fn qi_list<T>(
+pub(super) unsafe fn qi_list<T>(
     this: *mut Com<T>,
     riid: *const Guid,
     out: *mut *mut c_void,
@@ -1035,6 +1035,71 @@ unsafe fn stroke_path(this: *mut TargetObj, path: &Path, brush: *mut c_void, wid
     t.fill(&polys, FillRule::NonZero, &|_, _| c);
 }
 
+// --- Texte (DirectWrite maison) ----------------------------------------------------
+
+unsafe fn fill_text(
+    this: *mut TargetObj,
+    brush: *mut c_void,
+    make: impl FnOnce(&mut Path, f32) -> bool,
+) {
+    let scale = target(this).transform().scale();
+    let mut p = Path::default();
+    if make(&mut p, scale) {
+        fill_path(this, &p, FillRule::NonZero, brush);
+    }
+}
+
+unsafe extern "win64" fn draw_text(
+    this: *mut TargetObj,
+    s: *const u16,
+    len: u32,
+    format: *mut c_void,
+    rect: *const RectF,
+    brush: *mut c_void,
+    options: u32,
+    _measuring: u32,
+) {
+    let Some(r) = rect.as_ref() else { return };
+    if s.is_null() {
+        return;
+    }
+    let text = std::slice::from_raw_parts(s, len as usize);
+    let clip = options & 2 != 0; // D2D1_DRAW_TEXT_OPTIONS_CLIP
+    if clip {
+        push_clip(this, rect, 0);
+    }
+    fill_text(this, brush, |p, scale| {
+        super::dwrite::text_outline(text, format, (r.l, r.t, r.r, r.b), p, scale)
+    });
+    if clip {
+        pop_clip(this);
+    }
+}
+
+unsafe extern "win64" fn draw_text_layout(
+    this: *mut TargetObj,
+    origin: u64,
+    layout: *mut c_void,
+    brush: *mut c_void,
+    _options: u32,
+) {
+    fill_text(this, brush, |p, scale| {
+        super::dwrite::layout_outline(layout, point(origin), p, scale)
+    });
+}
+
+unsafe extern "win64" fn draw_glyph_run(
+    this: *mut TargetObj,
+    origin: u64,
+    run: *const super::dwrite::GlyphRun,
+    brush: *mut c_void,
+    _measuring: u32,
+) {
+    fill_text(this, brush, |p, scale| {
+        super::dwrite::glyph_run_outline(run, point(origin), p, scale)
+    });
+}
+
 unsafe extern "win64" fn draw_line(
     this: *mut TargetObj,
     a: u64,
@@ -1393,9 +1458,9 @@ static TARGET_VT: VTable<57> = VTable([
     nothing as *const (), // FillMesh
     nothing as *const (), // FillOpacityMask
     draw_bitmap as *const (),
-    nothing as *const (), // DrawText (DirectWrite à venir)
-    nothing as *const (), // DrawTextLayout
-    nothing as *const (), // DrawGlyphRun
+    draw_text as *const (),
+    draw_text_layout as *const (),
+    draw_glyph_run as *const (),
     set_transform as *const (),
     get_transform as *const (),
     nothing as *const (),  // SetAntialiasMode
@@ -1773,6 +1838,109 @@ mod tests {
             make_skew_matrix(45.0, 0.0, pt(0.0, 0.0), &mut m);
             let (x, y) = m.apply((0.0, 1.0));
             assert!((x - 1.0).abs() < 1e-5 && y == 1.0, "{x} {y}");
+        }
+    }
+
+    #[test]
+    fn texte_dessine_par_directwrite() {
+        use crate::dlls::dwrite::tests as dw;
+        unsafe {
+            let (f, bmp, rt) = setup();
+            let dwf = dw::factory();
+            let layout = dw::layout(dwf, "A", 100.0);
+            method::<Unary>(rt, 48)(rt);
+            let black = solid(
+                rt,
+                ColorF {
+                    r: 0.0,
+                    g: 0.0,
+                    b: 0.0,
+                    a: 1.0,
+                },
+            );
+            type DrawLayout =
+                unsafe extern "win64" fn(*mut c_void, u64, *mut c_void, *mut c_void, u32);
+            method::<DrawLayout>(rt, 28)(rt, pt(0.0, 0.0), layout, black, 0);
+            type End = unsafe extern "win64" fn(*mut c_void, *mut u64, *mut u64) -> i32;
+            assert_eq!(
+                method::<End>(rt, 49)(rt, std::ptr::null_mut(), std::ptr::null_mut()),
+                S_OK
+            );
+            // « A » est un carré de 1 à 6 en x, de 2 à 8 en y (ligne de base 8).
+            let p = pixels(bmp);
+            assert_eq!(px(&p, 3, 5), [0, 0, 0, 255]);
+            assert_eq!(px(&p, 7, 1), [0, 0, 0, 0]);
+            assert_eq!(px(&p, 0, 5), [0, 0, 0, 0]);
+
+            // Contour d'une suite de glyphes vers une géométrie Direct2D.
+            let mut g = std::ptr::null_mut();
+            type CreatePath = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32;
+            assert_eq!(method::<CreatePath>(f, 10)(f, &mut g), S_OK);
+            let mut sink = std::ptr::null_mut();
+            assert_eq!(method::<CreatePath>(g, 17)(g, &mut sink), S_OK);
+            let mut face = std::ptr::null_mut();
+            {
+                let mut c = std::ptr::null_mut();
+                type Sys = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void, i32) -> i32;
+                assert_eq!(method::<Sys>(dwf, 3)(dwf, &mut c, 0), S_OK);
+                let name = dw::wide("Winlux Test");
+                let (mut idx, mut ex) = (0u32, 0i32);
+                type Find =
+                    unsafe extern "win64" fn(*mut c_void, *const u16, *mut u32, *mut i32) -> i32;
+                method::<Find>(c, 5)(c, name.as_ptr(), &mut idx, &mut ex);
+                let mut fam = std::ptr::null_mut();
+                type Get = unsafe extern "win64" fn(*mut c_void, u32, *mut *mut c_void) -> i32;
+                assert_eq!(method::<Get>(c, 4)(c, idx, &mut fam), S_OK);
+                let mut font = std::ptr::null_mut();
+                assert_eq!(method::<Get>(fam, 5)(fam, 0, &mut font), S_OK);
+                type Mk = unsafe extern "win64" fn(*mut c_void, *mut *mut c_void) -> i32;
+                assert_eq!(method::<Mk>(font, 13)(font, &mut face), S_OK);
+                for o in [font, fam, c] {
+                    release_obj(o);
+                }
+            }
+            type Outline = unsafe extern "win64" fn(
+                *mut c_void,
+                f32,
+                *const u16,
+                *const f32,
+                *const c_void,
+                u32,
+                i32,
+                i32,
+                *mut c_void,
+            ) -> i32;
+            let glyphs = [1u16, 2];
+            assert_eq!(
+                method::<Outline>(face, 14)(
+                    face,
+                    10.0,
+                    glyphs.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    2,
+                    0,
+                    0,
+                    sink
+                ),
+                S_OK
+            );
+            type Close = unsafe extern "win64" fn(*mut c_void) -> i32;
+            assert_eq!(method::<Close>(sink, 9)(sink), S_OK);
+            release_obj(sink);
+            type Contains =
+                unsafe extern "win64" fn(*mut c_void, u64, *const Matrix, f32, *mut i32) -> i32;
+            let mut inside = 0;
+            method::<Contains>(g, 7)(g, pt(3.0, -3.0), std::ptr::null(), 0.25, &mut inside);
+            assert_eq!(inside, 1);
+            method::<Contains>(g, 7)(g, pt(3.0, 3.0), std::ptr::null(), 0.25, &mut inside);
+            assert_eq!(inside, 0);
+            // Le losange du deuxième glyphe commence après l'avance du premier (7).
+            method::<Contains>(g, 7)(g, pt(10.5, -3.0), std::ptr::null(), 0.25, &mut inside);
+            assert_eq!(inside, 1);
+            for o in [g, face, black, layout, dwf, rt, bmp, f] {
+                release_obj(o);
+            }
         }
     }
 }

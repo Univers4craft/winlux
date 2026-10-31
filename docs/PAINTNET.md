@@ -170,9 +170,22 @@ un test de relance depuis un rappel de consolidation.
    fonctions `D2D1MakeRotateMatrix`, `D2D1MakeSkewMatrix`,
    `D2D1InvertMatrix`. Manquent encore : `ID2D1Factory1` et le contexte de
    périphérique (`ID2D1DeviceContext`, effets), les dégradés, les pinceaux
-   bitmap, les styles de trait, les calques, les cibles HWND et DXGI, et
-   tout DirectWrite (le texte n'est pas encore dessiné). Comme pour WIC, ce
-   n'est vérifié que par les tests unitaires tant que Paint.NET s'arrête
+   bitmap, les styles de trait, les calques et les cibles HWND et DXGI.
+   DirectWrite (`runtime/src/dlls/dwrite.rs`) s'appuie sur un lecteur maison
+   des contours TrueType (`sfnt.rs` : `cmap` 4 et 12, glyphes simples et
+   composites, métriques `hhea`, `OS/2`, `post`) et sur le catalogue de
+   polices de `gdi32_fonts` : collection système, familles, polices et faces
+   (indices et métriques de glyphes, `GetGlyphRunOutline`), formats et mise
+   en page du texte (sauts de ligne, coupure aux espaces, tabulations,
+   alignements, interligne, métriques de lignes et de grappes, tests de
+   position, `Draw` vers le `IDWriteTextRenderer` de l'appli), avec polices
+   de secours par caractère et remplacement des polices Windows absentes
+   (Segoe UI, Arial, Times New Roman, Consolas… par Selawik, Noto,
+   Liberation ou DejaVu). Direct2D dessine le texte (`DrawText`,
+   `DrawTextLayout`, `DrawGlyphRun`). Manquent : la mise en forme OpenType
+   (ligatures, crénage, écritures complexes, bidi), les polices CFF, les
+   attributs par plage et `IDWriteFactory1` et suivantes. Comme pour WIC,
+   ce n'est vérifié que par les tests unitaires tant que Paint.NET s'arrête
    avant.
 5. **WPF** : `wpfgfx_cor3.dll` (composition MIL, rendu Direct3D 9 ou
    logiciel), `PresentationNative_cor3.dll` et `DirectWriteForwarder.dll`
@@ -188,7 +201,7 @@ un test de relance depuis un rappel de consolidation.
    imports de clrjit, jusqu'à un « Hello world » .NET 9 autonome.
 3. BCL : imports directs de CoreLib et globalisation.
 4. WIC : décodeurs branchés sur les décodeurs maison *(PR 3)*, encodeurs ensuite.
-5. Direct2D 1.0 logiciel *(PR 4)*, puis `ID2D1DeviceContext` et DirectWrite.
+5. Direct2D 1.0 logiciel et DirectWrite *(PR 4)*, puis `ID2D1DeviceContext`.
 6. WPF (`wpfgfx`) et la fenêtre principale de Paint.NET.
 
 Chaque étape se valide sur un petit programme .NET autonome de référence
