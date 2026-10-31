@@ -213,12 +213,18 @@ connaître les détails internes de Linux ou de Windows.
   avant de proposer un arrêt forcé.
 - [ ] **Presse-papiers cohérent** entre applications Linux et Windows, avec
   formats texte et fichiers définis, et une option pour désactiver l'historique.
+  Fait côté Windows : presse-papiers partagé entre tous les `.exe` (texte,
+  images CF_DIB, fichiers CF_HDROP) et historique Win+V du bureau (recherche,
+  épingles, limite). Reste : synchronisation avec la sélection X11 des
+  applications Linux et l'option de désactivation.
 - [ ] **Glisser-déposer inter-applications** avec indication de l'action
   (copie, déplacement ou ouverture), notamment entre Explorer et les
   applications Linux.
 - [ ] **Outils courants** : capture d'écran, raccourcis clavier configurables,
   espaces de travail ou bureaux virtuels, et accès rapide aux périphériques
   amovibles.
+  Fait : outil Capture (Win+Maj+S, Impr. écran) avec éditeur d'annotations et
+  enregistrement vidéo de l'écran (Win+Maj+R, MP4/WebM via ffmpeg).
 - [ ] **Accessibilité intégrée** : réglage de la taille du texte et du
   contraste, réduction des animations, navigation clavier, focus visible et
   annonces accessibles des états et notifications.

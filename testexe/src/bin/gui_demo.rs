@@ -8,6 +8,8 @@
 
 use winlux_testexe::*;
 
+#[path = "../shell/cliphist.rs"]
+mod cliphist;
 #[path = "../shell/desktop.rs"]
 mod desktop;
 #[path = "../shell/diskcleaner.rs"]
@@ -26,6 +28,8 @@ mod notepad;
 mod notifications;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/snip.rs"]
+mod snip;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
 #[path = "../shell/terminal.rs"]
@@ -775,6 +779,9 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
         WM_KEYUP => {
             GOT_KEYUP += 1;
             THREAD_KEY_UP_CLEAR |= ((GetKeyState(wparam as i32) as u16 & 0x8000) == 0) as u32;
+            if DESKTOP {
+                desktop::on_key_up(hwnd, wparam as u32);
+            }
             0
         }
         WM_LBUTTONDOWN | WM_MOUSEMOVE | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_MBUTTONDOWN

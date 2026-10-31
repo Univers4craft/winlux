@@ -211,6 +211,68 @@ fn delete_sel(d: &mut Doc) {
     rebuild_lines(d);
 }
 
+/// Insère un bloc de texte en une fois (collage).
+fn insert_bytes(d: &mut Doc, bytes: &[u8]) {
+    delete_sel(d);
+    let room = (MAX_TEXT - 1).saturating_sub(d.len);
+    let mut clean = [0u8; 4096];
+    let mut n = 0;
+    for &c in bytes {
+        if n == clean.len() || n == room {
+            break;
+        }
+        if c == b'\r' {
+            continue;
+        }
+        clean[n] = c;
+        n += 1;
+    }
+    if n == 0 {
+        return;
+    }
+    d.text.copy_within(d.cursor..d.len, d.cursor + n);
+    d.text[d.cursor..d.cursor + n].copy_from_slice(&clean[..n]);
+    d.len += n;
+    d.cursor += n;
+    d.anchor = d.cursor;
+    d.modified = true;
+    rebuild_lines(d);
+}
+
+unsafe fn copy_selection(cut: bool) {
+    let d = doc();
+    if !has_sel(d) {
+        return;
+    }
+    let (a, b) = sel_range(d);
+    let mut buf = [0u8; 8192];
+    let mut n = 0;
+    for &c in &d.text[a..b] {
+        // Fins de ligne Windows dans le presse-papiers.
+        if c == b'\n' && n + 2 <= buf.len() {
+            buf[n] = b'\r';
+            buf[n + 1] = b'\n';
+            n += 2;
+        } else if n < buf.len() {
+            buf[n] = c;
+            n += 1;
+        }
+    }
+    crate::cliphist::set_text(&buf[..n]);
+    if cut {
+        delete_sel(d);
+    }
+}
+
+/// Colle le texte du presse-papiers au curseur (Ctrl+V et historique Win+V).
+pub unsafe fn paste_from_clipboard() {
+    let mut buf = [0u8; 4096];
+    let n = crate::cliphist::get_text(&mut buf);
+    if n > 0 {
+        insert_bytes(doc(), &buf[..n]);
+    }
+}
+
 fn insert_char(d: &mut Doc, c: u8) {
     delete_sel(d);
     if d.len >= MAX_TEXT - 1 {
@@ -1580,6 +1642,16 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                 let d = doc();
                 d.anchor = 0;
                 d.cursor = d.len;
+                return true;
+            }
+            0x43 | 0x58 => {
+                // Ctrl+C / Ctrl+X : presse-papiers système (et historique Win+V)
+                copy_selection(vk == 0x58);
+                return true;
+            }
+            0x56 => {
+                // Ctrl+V
+                paste_from_clipboard();
                 return true;
             }
             0x47 => {

@@ -5,6 +5,7 @@
 pub mod advapi32;
 pub mod advapi32_services;
 pub mod bcrypt;
+pub mod clipboard;
 pub mod comctl32;
 pub mod crt;
 pub mod crt_runtime;
@@ -50,6 +51,7 @@ pub mod uxtheme;
 pub mod version;
 pub mod winfile;
 pub mod winhttp;
+pub mod winlux_capture;
 pub mod winlux_pty;
 pub mod winmm;
 pub mod wintrust;
@@ -115,6 +117,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(winlux_capture::exports());
                     e
                 },
                 handle: fake_module(),
@@ -139,6 +142,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = user32::exports();
                     e.extend(user32_ext::exports());
+                    e.extend(clipboard::exports());
                     e
                 },
                 handle: fake_module(),

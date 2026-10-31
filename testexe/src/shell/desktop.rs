@@ -1449,6 +1449,15 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         rgb(0x24, 0x28, 0x31),
     );
     weather::draw_tray(hdc, b, f, weather_x, top + 14);
+    // Enregistrement d'écran en cours : minuteur et bouton stop.
+    crate::snip::draw_rec_indicator(
+        hdc,
+        b,
+        f,
+        weather_x - 12 - crate::snip::REC_W,
+        top,
+        TASKBAR_HEIGHT,
+    );
 }
 
 // ---------- Menu Démarrer ----------
@@ -1593,6 +1602,10 @@ unsafe fn launch(what: Launch) {
                 core::ptr::null(),
                 1,
             );
+        }
+        Launch::Exec(b"screenshot.exe") => {
+            // Outil Capture intégré : ouvert après la fermeture du menu.
+            crate::snip::open_later(false);
         }
         Launch::Exec(cmd) => {
             // Applications intégrées dans le WM
@@ -2984,6 +2997,9 @@ pub unsafe fn draw(hdc: Handle) {
         b.release();
         crate::login::draw(hdc, l.w, l.h);
         return;
+    } else if crate::snip::overlay() {
+        // Écran figé de l'outil Capture : il remplace tout l'affichage.
+        crate::snip::draw(hdc, &mut b, &f);
     } else {
         let intro = since(INTRO_START);
         FADE = if INTRO_START == 0 || intro >= INTRO_MS {
@@ -3006,6 +3022,7 @@ pub unsafe fn draw(hdc: Handle) {
         start_menu(hdc, &mut b, &f, &l);
         search_overlay(hdc, &mut b, &f, &l);
         notifications::draw(hdc, &mut b, &f, l.w, l.bar_top);
+        crate::cliphist::draw(hdc, &mut b, &f, l.w, l.bar_top);
         draw_net_panel(hdc, &mut b, &f, &l);
         weather::draw_panel(hdc, &mut b, &f, l.bar_top, l.w);
         draw_toast(hdc, &mut b, &f, &l);
@@ -3076,6 +3093,8 @@ pub unsafe fn draw(hdc: Handle) {
         };
         taskbar(hdc, &mut b, &f, &l, bar_dy);
         draw_context(hdc, &mut b, &f);
+        // Éditeur de capture, au-dessus de tout le bureau.
+        crate::snip::draw(hdc, &mut b, &f);
         if crate::login::uac_visible() {
             crate::login::draw_uac(hdc, l.w, l.h);
         }
@@ -3146,8 +3165,13 @@ pub unsafe fn frame(hwnd: Handle) {
         }
         return;
     }
+    if crate::snip::frame(hwnd, SCREEN_W, SCREEN_H, layout().bar_top) {
+        InvalidateRect(hwnd, core::ptr::null(), 0);
+    }
     let animating = !BOOT_DONE
         || wm::animating()
+        || crate::cliphist::animating()
+        || crate::snip::animating()
         || crate::gfx::theme_animating()
         || notifications::animating()
         || since(INTRO_START) < INTRO_MS + 40
@@ -3192,9 +3216,43 @@ pub unsafe fn tick(hwnd: Handle) {
     let system = crate::settings::system_tick();
     let weather_changed = weather::poll();
     let apps = BOOT_DONE && wm::tick();
-    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system || weather_changed {
+    let clip = BOOT_DONE && crate::cliphist::poll() && crate::cliphist::is_open();
+    let rec = crate::snip::tick();
+    let text_caret = crate::cliphist::is_open();
+    if (now.minute != LAST_MINUTE && BOOT_DONE)
+        || apps
+        || system
+        || weather_changed
+        || clip
+        || rec
+        || text_caret
+    {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
+}
+
+static mut WIN_ALONE: bool = false;
+
+/// Relâchement d'une touche : la touche Windows seule ouvre Démarrer.
+pub unsafe fn on_key_up(hwnd: Handle, vk: u32) {
+    if (vk == 0x5B || vk == 0x5C) && WIN_ALONE {
+        WIN_ALONE = false;
+        if !BOOT_DONE || !crate::login::logged_in() || crate::snip::active() {
+            return;
+        }
+        if SEARCH_OVERLAY {
+            SEARCH_OVERLAY = false;
+        } else {
+            crate::cliphist::set_open(false);
+            set_start(!(START_OPEN && !START_CLOSING));
+        }
+        repaint(hwnd);
+    }
+}
+
+/// Referme les panneaux flottants avant de figer l'écran pour une capture.
+unsafe fn close_panels_for_snip() {
+    crate::cliphist::set_open(false);
 }
 
 unsafe fn repaint(hwnd: Handle) {
@@ -3221,7 +3279,19 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
     if !BOOT_DONE {
         return;
     }
+    if crate::snip::hit(x, y) {
+        crate::snip::mouse(Mouse::Down, x, y);
+        repaint(hwnd);
+        return;
+    }
     let l = layout();
+    if crate::cliphist::is_open() {
+        let handled = crate::cliphist::on_click(l.w, l.bar_top, x, y);
+        repaint(hwnd);
+        if handled {
+            return;
+        }
+    }
     if let Some(app) = CONTEXT_APP {
         let row = context_row(x, y);
         let desktop = CONTEXT_DESKTOP;
@@ -3259,6 +3329,10 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         }
         let tray = l.w - 12 - 92 - 96;
         let weather_x = tray - 24 - weather::TRAY_WIDTH - 8;
+        if crate::snip::rec_click(x, weather_x - 12 - crate::snip::REC_W) {
+            repaint(hwnd);
+            return;
+        }
         if x >= weather_x - 4 && x < weather_x + weather::TRAY_WIDTH {
             weather::toggle();
             notifications::set_open(false);
@@ -3508,7 +3582,18 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
     if !BOOT_DONE {
         return;
     }
+    if crate::snip::active() {
+        if crate::snip::mouse(Mouse::Move, x, y) {
+            repaint(hwnd);
+        }
+        if crate::snip::overlay() || crate::snip::hit(x, y) {
+            return;
+        }
+    }
     let l = layout();
+    if crate::cliphist::is_open() && crate::cliphist::on_mouse_move(l.w, l.bar_top, x, y) {
+        repaint(hwnd);
+    }
     if CONTEXT_APP.is_some() {
         let row = context_row(x, y);
         if row != CONTEXT_HOVER {
@@ -3680,6 +3765,13 @@ pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
         return;
     }
     LAST_INPUT = now();
+    if crate::snip::active() && crate::snip::mouse(Mouse::Up, x, y) {
+        repaint(hwnd);
+        return;
+    }
+    if crate::snip::overlay() {
+        return;
+    }
     if CONTEXT_APP.is_some() {
         return;
     }
@@ -3715,6 +3807,11 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
         return;
     }
     if !BOOT_DONE {
+        return;
+    }
+    if crate::snip::overlay() {
+        crate::snip::mouse(ev, x, y);
+        repaint(hwnd);
         return;
     }
     if matches!(ev, Mouse::RightDown) {
@@ -3795,6 +3892,10 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
     }
     if let Mouse::Wheel(delta) = ev {
         let l = layout();
+        if crate::cliphist::on_wheel(l.w, l.bar_top, x, y, delta) {
+            repaint(hwnd);
+            return;
+        }
         if notifications::on_wheel(l.w, l.bar_top, x, y, delta) {
             repaint(hwnd);
             return;
@@ -3826,6 +3927,47 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     LAST_INPUT = now();
+    if ch == 0 && vk != 0x5B && vk != 0x5C {
+        WIN_ALONE = false;
+    }
+    let win_down =
+        ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+    let shift_down = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
+    if BOOT_DONE && ch == 0 {
+        // Win+Maj+S / Impr. écran : capture ; Win+Maj+R : enregistrement vidéo.
+        if (vk == 0x53 && win_down && shift_down) || vk == 0x2C {
+            close_panels_for_snip();
+            crate::snip::open(hwnd, SCREEN_W, SCREEN_H, layout().bar_top, false);
+            repaint(hwnd);
+            return;
+        }
+        if vk == 0x52 && win_down && shift_down {
+            close_panels_for_snip();
+            crate::snip::open(hwnd, SCREEN_W, SCREEN_H, layout().bar_top, true);
+            repaint(hwnd);
+            return;
+        }
+        // Win+V : historique du presse-papiers.
+        if vk == 0x56 && win_down {
+            crate::cliphist::toggle();
+            if crate::cliphist::is_open() {
+                set_start(false);
+                notifications::set_open(false);
+                SEARCH_OVERLAY = false;
+            }
+            repaint(hwnd);
+            return;
+        }
+    }
+    if crate::snip::active() && crate::snip::key(vk, ch) {
+        repaint(hwnd);
+        return;
+    }
+    // Les caractères tapés avec Win enfoncée ne vont pas au panneau.
+    if crate::cliphist::is_open() && !win_down && crate::cliphist::on_key(vk, ch) {
+        repaint(hwnd);
+        return;
+    }
     // F2 rename
     if ch == 0 && vk == 0x71 {
         if SELECTED_ICON >= 0 {
@@ -3867,15 +4009,10 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             return;
         }
     }
-    // Win+Shift+S (Screenshot) / Win+S (Recherche)
+    // Win+S (Recherche) ; Win+Maj+S est traité plus haut (outil Capture).
     if ch == 0 && vk == 0x53 {
         let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
             || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
-        if win && shift {
-            launch(Launch::Exec(b"screenshot.exe"));
-            return;
-        }
         if win {
             SEARCH_OVERLAY = !SEARCH_OVERLAY;
             if SEARCH_OVERLAY {
@@ -4078,13 +4215,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     if ch == 0 && (vk == 0x5B || vk == 0x5C) {
-        if SEARCH_OVERLAY {
-            SEARCH_OVERLAY = false;
-            repaint(hwnd);
-            return;
-        }
-        set_start(!(START_OPEN && !START_CLOSING));
-        repaint(hwnd);
+        // Comme Windows : Démarrer s'ouvre au relâchement de la touche, si
+        // elle n'a pas servi à un raccourci (Win+V, Win+Maj+S…).
+        WIN_ALONE = true;
         return;
     }
     if SEARCH_OVERLAY {
