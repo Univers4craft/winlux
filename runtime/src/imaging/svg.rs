@@ -1246,7 +1246,7 @@ impl<'a> Builder<'a> {
             "polyline" | "polygon" => {
                 let v = nums(n.attr("points").unwrap_or(""));
                 let mut s = Vec::new();
-                for (i, c) in v.chunks_exact(2).enumerate() {
+                for (i, c) in v.as_chunks::<2>().0.iter().enumerate() {
                     s.push(if i == 0 {
                         Seg::Move((c[0], c[1]))
                     } else {

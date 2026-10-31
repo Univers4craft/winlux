@@ -1512,9 +1512,7 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
             let q = quant[mb.segment];
             let mut any = false;
             if !skip {
-                let first;
-                let ytype;
-                if !i4 {
+                let (first, ytype) = if !i4 {
                     let mut dc = [0i32; 16];
                     let ctx = nz_top[mx][8] as usize + nz_left[8] as usize;
                     let n = coeffs(part, &pr, 1, ctx, q[1], 0, &mut dc);
@@ -1531,12 +1529,10 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
                             mb.has[i] = true;
                         }
                     }
-                    first = 1;
-                    ytype = 0;
+                    (1, 0)
                 } else {
-                    first = 0;
-                    ytype = 3;
-                }
+                    (0, 3)
+                };
                 for y in 0..4 {
                     for x in 0..4 {
                         let ctx = nz_top[mx][x] as usize + nz_left[y] as usize;

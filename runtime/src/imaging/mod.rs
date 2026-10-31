@@ -930,7 +930,7 @@ impl Loaded {
             let mut hist = [[0u32; 256]; 3];
             let step = ((r.px.len() / 4) / 250_000).max(1);
             let mut n = 0u32;
-            for p in r.px.chunks_exact(4).step_by(step) {
+            for p in r.px.as_chunks::<4>().0.iter().step_by(step) {
                 for c in 0..3 {
                     hist[c][p[c] as usize] += 1;
                 }

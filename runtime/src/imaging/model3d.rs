@@ -66,7 +66,7 @@ fn normalize(mut t: Vec<[f32; 9]>) -> Vec<[f32; 9]> {
     ];
     let mut r = 0f32;
     for tri in &t {
-        for v in tri.chunks_exact(3) {
+        for v in tri.as_chunks::<3>().0.iter() {
             let d = (v[0] - c[0]).powi(2) + (v[1] - c[1]).powi(2) + (v[2] - c[2]).powi(2);
             if d.is_finite() {
                 r = r.max(d);
@@ -117,10 +117,7 @@ fn stl(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
             }
         }
     }
-    Ok(verts
-        .chunks_exact(9)
-        .map(|c| c.try_into().unwrap_or([0.0; 9]))
-        .collect())
+    Ok(verts.as_chunks::<9>().0.to_vec())
 }
 
 fn fan(out: &mut Vec<[f32; 9]>, v: &[[f32; 3]], idx: &[usize]) {
@@ -669,7 +666,9 @@ fn gltf_json(json: &[u8], bin: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
                 continue;
             };
             let tv: Vec<[f32; 3]> = pos
-                .chunks_exact(3)
+                .as_chunks::<3>()
+                .0
+                .iter()
                 .map(|p| {
                     [
                         m[0] * p[0] + m[4] * p[1] + m[8] * p[2] + m[12],
@@ -684,7 +683,7 @@ fn gltf_json(json: &[u8], bin: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
                     .unwrap_or_default(),
                 None => (0..tv.len()).collect(),
             };
-            for t in idx.chunks_exact(3) {
+            for t in idx.as_chunks::<3>().0.iter() {
                 fan(out, &tv, t);
             }
         }
@@ -835,7 +834,9 @@ fn fbx(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
                 *verts = props.into_iter().next().unwrap_or_default();
             } else if name == b"PolygonVertexIndex" {
                 let v: Vec<[f32; 3]> = verts
-                    .chunks_exact(3)
+                    .as_chunks::<3>()
+                    .0
+                    .iter()
                     .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
                     .collect();
                 let mut poly = Vec::new();
