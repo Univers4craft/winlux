@@ -2,15 +2,18 @@
 """Installateur graphique Winlux — style Windows 11.
 
 Lance l'installation de Winlux sur un disque physique depuis le Live USB/DVD.
-Interface GTK3 avec étapes : langue, licence, type, disque, compte, progression.
+Interface GTK3 avec étapes : langue, licence, réseau, type, disque, import Windows,
+compte local, progression.
 """
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib, Pango
+import html
 import json
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -91,6 +94,9 @@ window.installer-window {
     font-size: 12px;
 }
 .btn-primary {
+    background-image: none;
+    text-shadow: none;
+    box-shadow: none;
     background-color: @accent;
     color: @fg_primary;
     border: none;
@@ -105,8 +111,15 @@ window.installer-window {
 }
 .btn-primary:disabled {
     background-color: alpha(@accent, 0.4);
+    color: alpha(@fg_primary, 0.6);
+}
+.btn-secondary:hover {
+    background-color: shade(@bg_surface, 1.2);
 }
 .btn-secondary {
+    background-image: none;
+    text-shadow: none;
+    box-shadow: none;
     background-color: @bg_surface;
     color: @fg_primary;
     border: 1px solid @fg_secondary;
@@ -116,6 +129,9 @@ window.installer-window {
     min-height: 36px;
 }
 .btn-danger {
+    background-image: none;
+    text-shadow: none;
+    box-shadow: none;
     background-color: @danger;
     color: @fg_primary;
     border: none;
@@ -180,6 +196,25 @@ window.installer-window {
     font-size: 12px;
     font-family: monospace;
 }
+.installer-content checkbutton label,
+.installer-content radiobutton label {
+    color: @fg_primary;
+}
+.status-ok {
+    color: #2ecc71;
+}
+list.wifi-list {
+    background-color: transparent;
+}
+list.wifi-list row {
+    background-color: transparent;
+    padding: 0;
+    margin-bottom: 6px;
+}
+list.wifi-list row:selected .card {
+    border: 2px solid @accent;
+    background-color: shade(@bg_card, 1.15);
+}
 """
 
 LANGUAGES = [
@@ -206,8 +241,52 @@ KEYBOARDS = [
 
 TRANSLATIONS = {
     "fr_FR": {
-        "steps": ["Langue", "Clavier", "Licence", "Type d'installation", "Disque cible",
-                  "Compte utilisateur", "Résumé", "Installation", "Terminé"],
+        "steps": ["Langue", "Clavier", "Licence", "Réseau", "Type d'installation", "Disque cible",
+                  "Import Windows", "Compte utilisateur", "Résumé", "Installation", "Terminé"],
+        "network_title": "Connexion réseau",
+        "network_subtitle": "Connectez-vous à Internet pour télécharger les mises à jour pendant l'installation.",
+        "network_scan": "Rechercher les réseaux",
+        "network_scanning": "Recherche en cours...",
+        "network_none": "Aucun réseau Wi-Fi détecté.",
+        "network_connected": "Connecté",
+        "network_connect": "Se connecter",
+        "network_disconnect": "Déconnecter",
+        "network_password": "Mot de passe Wi-Fi :",
+        "network_security": "Sécurité : {security}",
+        "network_signal": "Signal : {signal}%",
+        "network_skip": "Continuer sans réseau",
+        "network_ethernet": "Connexion filaire détectée",
+        "network_proxy_title": "Proxy entreprise (optionnel)",
+        "network_proxy_host": "Serveur proxy :",
+        "network_proxy_port": "Port :",
+        "network_proxy_enable": "Utiliser un proxy",
+        "network_status_connected": "Connecté à {ssid}",
+        "network_status_none": "Non connecté",
+        "import_title": "Importer vos données Windows",
+        "import_subtitle": "Nous avons détecté une installation Windows. Vous pouvez importer certaines données.",
+        "import_none": "Aucune installation Windows détectée sur ce système.",
+        "import_scanning": "Recherche des installations Windows...",
+        "import_wallpaper": "Fond d'écran",
+        "import_bookmarks": "Favoris navigateur ({browser})",
+        "import_documents": "Documents ({count} fichiers, {size})",
+        "import_pictures": "Images ({count} fichiers, {size})",
+        "import_music": "Musique ({count} fichiers, {size})",
+        "import_videos": "Vidéos ({count} fichiers, {size})",
+        "import_desktop": "Fichiers du Bureau ({count} fichiers, {size})",
+        "import_select_all": "Tout sélectionner",
+        "import_select_none": "Tout désélectionner",
+        "import_partition": "Partition Windows : {partition} ({size})",
+        "import_user": "Profil utilisateur : {user}",
+        "progress_import": "Importation des données Windows...",
+        "network_no_nm": "NetworkManager n'est pas disponible : la connexion Wi-Fi est impossible depuis l'installateur.",
+        "network_connecting": "Connexion à {ssid}...",
+        "network_failed": "Échec de la connexion : {error}",
+        "network_proxy_invalid": "Proxy invalide : indiquez un nom d'hôte ou une adresse IP et un port (1-65535).",
+        "network_open": "Ouvert",
+        "import_on_target": "Cette partition Windows se trouve sur le disque qui va être effacé. Seuls le fond d'écran et les favoris peuvent être conservés.",
+        "import_total": "Total à importer : {size}",
+        "import_too_big": "Pas assez de place sur le disque cible pour ces données.",
+        "import_note": "Lecture seule : rien n'est modifié sur la partition Windows. Aucun compte Microsoft n'est utilisé.",
         "choose_language": "Choisissez votre langue",
         "language_subtitle": "Cette langue sera utilisée pendant l'installation et comme langue par défaut du système.",
         "choose_keyboard": "Choisissez la disposition du clavier",
@@ -274,8 +353,52 @@ TRANSLATIONS = {
         "progress_done": "Installation terminée avec succès !",
     },
     "en_US": {
-        "steps": ["Language", "Keyboard", "License", "Installation type", "Target disk",
-                  "User account", "Summary", "Installing", "Done"],
+        "steps": ["Language", "Keyboard", "License", "Network", "Installation type", "Target disk",
+                  "Windows Import", "User account", "Summary", "Installing", "Done"],
+        "network_title": "Network connection",
+        "network_subtitle": "Connect to the Internet to download updates during installation.",
+        "network_scan": "Scan networks",
+        "network_scanning": "Scanning...",
+        "network_none": "No Wi-Fi network detected.",
+        "network_connected": "Connected",
+        "network_connect": "Connect",
+        "network_disconnect": "Disconnect",
+        "network_password": "Wi-Fi password:",
+        "network_security": "Security: {security}",
+        "network_signal": "Signal: {signal}%",
+        "network_skip": "Continue without network",
+        "network_ethernet": "Wired connection detected",
+        "network_proxy_title": "Enterprise proxy (optional)",
+        "network_proxy_host": "Proxy server:",
+        "network_proxy_port": "Port:",
+        "network_proxy_enable": "Use a proxy",
+        "network_status_connected": "Connected to {ssid}",
+        "network_status_none": "Not connected",
+        "import_title": "Import your Windows data",
+        "import_subtitle": "A Windows installation was detected. You can import some of your data.",
+        "import_none": "No Windows installation detected on this system.",
+        "import_scanning": "Scanning for Windows installations...",
+        "import_wallpaper": "Wallpaper",
+        "import_bookmarks": "Browser bookmarks ({browser})",
+        "import_documents": "Documents ({count} files, {size})",
+        "import_pictures": "Pictures ({count} files, {size})",
+        "import_music": "Music ({count} files, {size})",
+        "import_videos": "Videos ({count} files, {size})",
+        "import_desktop": "Desktop files ({count} files, {size})",
+        "import_select_all": "Select all",
+        "import_select_none": "Deselect all",
+        "import_partition": "Windows partition: {partition} ({size})",
+        "import_user": "User profile: {user}",
+        "progress_import": "Importing Windows data...",
+        "network_no_nm": "NetworkManager is not available: Wi-Fi cannot be configured from the installer.",
+        "network_connecting": "Connecting to {ssid}...",
+        "network_failed": "Connection failed: {error}",
+        "network_proxy_invalid": "Invalid proxy: enter a host name or IP address and a port (1-65535).",
+        "network_open": "Open",
+        "import_on_target": "This Windows partition is on the disk that will be erased. Only the wallpaper and bookmarks can be kept.",
+        "import_total": "Total to import: {size}",
+        "import_too_big": "Not enough space on the target disk for this data.",
+        "import_note": "Read-only: nothing is changed on the Windows partition. No Microsoft account is used.",
         "choose_language": "Choose your language",
         "language_subtitle": "This language will be used during installation and as the default system language.",
         "choose_keyboard": "Choose your keyboard layout",
@@ -342,8 +465,8 @@ TRANSLATIONS = {
         "progress_done": "Installation completed successfully!",
     },
     "de_DE": {
-        "steps": ["Sprache", "Tastatur", "Lizenz", "Installationstyp", "Zielfestplatte",
-                  "Benutzerkonto", "Zusammenfassung", "Installation", "Fertig"],
+        "steps": ["Sprache", "Tastatur", "Lizenz", "Netzwerk", "Installationstyp", "Zielfestplatte",
+                  "Windows-Import", "Benutzerkonto", "Zusammenfassung", "Installation", "Fertig"],
         "choose_language": "Wählen Sie Ihre Sprache",
         "language_subtitle": "Diese Sprache wird während der Installation und als Standardsystemsprache verwendet.",
         "choose_keyboard": "Wählen Sie Ihr Tastaturlayout",
@@ -410,8 +533,8 @@ TRANSLATIONS = {
         "progress_done": "Installation erfolgreich abgeschlossen!",
     },
     "es_ES": {
-        "steps": ["Idioma", "Teclado", "Licencia", "Tipo de instalación", "Disco destino",
-                  "Cuenta de usuario", "Resumen", "Instalación", "Terminado"],
+        "steps": ["Idioma", "Teclado", "Licencia", "Red", "Tipo de instalación", "Disco destino",
+                  "Importar Windows", "Cuenta de usuario", "Resumen", "Instalación", "Terminado"],
         "choose_language": "Elija su idioma",
         "language_subtitle": "Este idioma se usará durante la instalación y como idioma predeterminado del sistema.",
         "choose_keyboard": "Elija la disposición del teclado",
@@ -478,8 +601,8 @@ TRANSLATIONS = {
         "progress_done": "¡Instalación completada con éxito!",
     },
     "it_IT": {
-        "steps": ["Lingua", "Tastiera", "Licenza", "Tipo di installazione", "Disco di destinazione",
-                  "Account utente", "Riepilogo", "Installazione", "Completato"],
+        "steps": ["Lingua", "Tastiera", "Licenza", "Rete", "Tipo di installazione", "Disco di destinazione",
+                  "Importa Windows", "Account utente", "Riepilogo", "Installazione", "Completato"],
         "choose_language": "Scegli la tua lingua",
         "language_subtitle": "Questa lingua verrà utilizzata durante l'installazione e come lingua predefinita del sistema.",
         "choose_keyboard": "Scegli il layout della tastiera",
@@ -546,8 +669,8 @@ TRANSLATIONS = {
         "progress_done": "Installazione completata con successo!",
     },
     "pt_BR": {
-        "steps": ["Idioma", "Teclado", "Licença", "Tipo de instalação", "Disco de destino",
-                  "Conta de usuário", "Resumo", "Instalação", "Concluído"],
+        "steps": ["Idioma", "Teclado", "Licença", "Rede", "Tipo de instalação", "Disco de destino",
+                  "Importar Windows", "Conta de usuário", "Resumo", "Instalação", "Concluído"],
         "choose_language": "Escolha seu idioma",
         "language_subtitle": "Este idioma será usado durante a instalação e como idioma padrão do sistema.",
         "choose_keyboard": "Escolha o layout do teclado",
@@ -652,8 +775,10 @@ STEPS = [
     "Langue",
     "Clavier",
     "Licence",
+    "Réseau",
     "Type d'installation",
     "Disque cible",
+    "Import Windows",
     "Compte utilisateur",
     "Résumé",
     "Installation",
@@ -749,6 +874,295 @@ def detect_hardware_summary():
     return info
 
 
+# ── Réseau (NetworkManager) ──────────────────────────────────────
+
+def nmcli_split(line):
+    fields, cur, esc = [], [], False
+    for ch in line:
+        if esc:
+            cur.append(ch)
+            esc = False
+        elif ch == "\\":
+            esc = True
+        elif ch == ":":
+            fields.append("".join(cur))
+            cur = []
+        else:
+            cur.append(ch)
+    fields.append("".join(cur))
+    return fields
+
+
+def nm_available():
+    if not shutil.which("nmcli"):
+        return False
+    try:
+        out = subprocess.run(["nmcli", "-t", "-f", "RUNNING", "general"],
+                             capture_output=True, text=True, timeout=5).stdout
+        return out.strip() == "running"
+    except Exception:
+        return False
+
+
+def network_status():
+    ethernet, ssid = False, ""
+    try:
+        out = subprocess.run(["nmcli", "-t", "-f", "TYPE,STATE,CONNECTION", "device"],
+                             capture_output=True, text=True, timeout=5).stdout
+        for line in out.splitlines():
+            f = nmcli_split(line)
+            if len(f) < 3 or not f[1].startswith("connected"):
+                continue
+            if f[0] == "ethernet":
+                ethernet = True
+            elif f[0] == "wifi":
+                ssid = f[2]
+    except Exception:
+        pass
+    return ethernet, ssid
+
+
+def scan_wifi():
+    networks = {}
+    try:
+        out = subprocess.run(
+            ["nmcli", "-t", "-f", "IN-USE,SSID,SIGNAL,SECURITY", "device", "wifi", "list", "--rescan", "yes"],
+            capture_output=True, text=True, timeout=30).stdout
+    except Exception:
+        return []
+    for line in out.splitlines():
+        f = nmcli_split(line)
+        if len(f) < 4 or not f[1]:
+            continue
+        signal_pct = int(f[2]) if f[2].isdigit() else 0
+        security = f[3].strip() if f[3].strip() not in ("", "--") else ""
+        net = {"ssid": f[1], "signal": signal_pct, "security": security, "in_use": f[0].strip() == "*"}
+        old = networks.get(net["ssid"])
+        if old is None or net["signal"] > old["signal"] or net["in_use"]:
+            net["in_use"] = net["in_use"] or (old or {}).get("in_use", False)
+            networks[net["ssid"]] = net
+    return sorted(networks.values(), key=lambda n: (not n["in_use"], -n["signal"]))
+
+
+def connect_wifi(ssid, password):
+    cmd = ["nmcli", "device", "wifi", "connect", ssid]
+    if password:
+        cmd += ["password", password]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        return r.returncode == 0, (r.stderr or r.stdout).strip()
+    except Exception as e:
+        return False, str(e)
+
+
+def normalize_proxy(host, port):
+    host = re.sub(r"^[a-zA-Z]+://", "", host.strip()).rstrip("/")
+    if not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9.-]{0,252})", host or ""):
+        return None
+    if not port.strip().isdigit() or not 1 <= int(port) <= 65535:
+        return None
+    return host, int(port)
+
+
+# ── Import depuis une partition Windows ──────────────────────────
+
+WIN_IMPORT_MOUNT = "/run/winlux/win-import"
+WIN_IMPORT_STAGE = "/run/winlux/win-import-stage"
+WIN_SKIP_USERS = {"public", "default", "default user", "all users", "defaultapppool",
+                  "wdagutilityaccount", "desktop.ini"}
+WIN_FOLDERS = [
+    ("desktop", "Desktop", "Bureau"),
+    ("documents", "Documents", "Documents"),
+    ("pictures", "Pictures", "Images"),
+    ("music", "Music", "Musique"),
+    ("videos", "Videos", "Vidéos"),
+]
+WIN_JUNK = {"desktop.ini", "thumbs.db"}
+
+
+def find_ci(parent, *names):
+    """Résout un chemin Windows sans tenir compte de la casse."""
+    path = parent
+    for name in names:
+        try:
+            entries = os.listdir(path)
+        except OSError:
+            return None
+        match = next((e for e in entries if e.lower() == name.lower()), None)
+        if match is None:
+            return None
+        path = os.path.join(path, match)
+    return path
+
+
+def mount_ntfs_readonly(device, target):
+    os.makedirs(target, exist_ok=True)
+    for cmd in (["mount", "-t", "ntfs3", "-o", "ro", device, target],
+                ["mount", "-t", "ntfs-3g", "-o", "ro", device, target],
+                ["mount", "-o", "ro", device, target]):
+        try:
+            if subprocess.run(cmd, capture_output=True, timeout=30).returncode == 0:
+                return True
+        except Exception:
+            continue
+    return False
+
+
+def detect_windows_installations():
+    found = []
+    try:
+        out = subprocess.check_output(
+            ["lsblk", "-lbJ", "-o", "NAME,PATH,FSTYPE,SIZE,PKNAME,MOUNTPOINT"], text=True, timeout=10)
+        devices = json.loads(out).get("blockdevices", [])
+    except Exception:
+        return found
+    for dev in devices:
+        if (dev.get("fstype") or "").lower() != "ntfs":
+            continue
+        path = dev.get("path") or f"/dev/{dev['name']}"
+        mount = dev.get("mountpoint")
+        ours = False
+        if not mount:
+            mount = os.path.join(WIN_IMPORT_MOUNT, dev["name"])
+            if not mount_ntfs_readonly(path, mount):
+                continue
+            ours = True
+        users_dir = find_ci(mount, "Users")
+        if not find_ci(mount, "Windows", "System32") or not users_dir:
+            if ours:
+                subprocess.run(["umount", mount], timeout=30)
+            continue
+        users = sorted(u for u in os.listdir(users_dir)
+                       if u.lower() not in WIN_SKIP_USERS and os.path.isdir(os.path.join(users_dir, u)))
+        found.append({
+            "partition": path,
+            "disk": dev.get("pkname") or "",
+            "size": dev.get("size") or 0,
+            "mount": mount,
+            "ours": ours,
+            "users_dir": users_dir,
+            "users": users,
+        })
+    return found
+
+
+def measure_tree(path, max_files=300000, max_seconds=20):
+    count, size, start = 0, 0, time.monotonic()
+    for root, _dirs, files in os.walk(path, followlinks=False):
+        for name in files:
+            if name.lower() in WIN_JUNK:
+                continue
+            try:
+                st = os.lstat(os.path.join(root, name))
+            except OSError:
+                continue
+            count += 1
+            size += st.st_size
+        if count >= max_files or time.monotonic() - start > max_seconds:
+            return count, size, True
+    return count, size, False
+
+
+def scan_windows_profile(users_dir, user):
+    home = os.path.join(users_dir, user)
+    data = {"home": home, "wallpaper": None, "bookmarks": [], "folders": {}}
+    wp = find_ci(home, "AppData", "Roaming", "Microsoft", "Windows", "Themes", "TranscodedWallpaper")
+    if wp and os.path.isfile(wp) and os.path.getsize(wp) > 0:
+        data["wallpaper"] = wp
+    for browser, parts in (("Edge", ("AppData", "Local", "Microsoft", "Edge", "User Data", "Default", "Bookmarks")),
+                           ("Chrome", ("AppData", "Local", "Google", "Chrome", "User Data", "Default", "Bookmarks"))):
+        p = find_ci(home, *parts)
+        if p and os.path.isfile(p):
+            data["bookmarks"].append({"browser": browser, "kind": "chromium", "path": p})
+    profiles = find_ci(home, "AppData", "Roaming", "Mozilla", "Firefox", "Profiles")
+    if profiles:
+        places = [os.path.join(profiles, d, "places.sqlite") for d in os.listdir(profiles)]
+        places = [p for p in places if os.path.isfile(p)]
+        if places:
+            best = max(places, key=os.path.getmtime)
+            data["bookmarks"].append({"browser": "Firefox", "kind": "firefox", "path": best})
+    for key, win_name, _dest in WIN_FOLDERS:
+        p = find_ci(home, win_name)
+        if p and os.path.isdir(p):
+            count, size, partial = measure_tree(p)
+            if count:
+                data["folders"][key] = {"path": p, "count": count, "size": size, "partial": partial}
+    return data
+
+
+def _bookmark_html(tree):
+    lines = ["<!DOCTYPE NETSCAPE-Bookmark-file-1>",
+             '<META HTTP-EQUIV="Content-Type" CONTENT="text/html; charset=UTF-8">',
+             "<TITLE>Bookmarks</TITLE>", "<H1>Bookmarks</H1>", "<DL><p>"]
+
+    def walk(node, depth):
+        pad = "    " * depth
+        if node["url"] is not None:
+            if re.match(r"^(https?|ftp)://", node["url"], re.I):
+                lines.append(f'{pad}<DT><A HREF="{html.escape(node["url"])}">{html.escape(node["title"] or node["url"])}</A>')
+            return
+        lines.append(f"{pad}<DT><H3>{html.escape(node['title'] or 'Dossier')}</H3>")
+        lines.append(f"{pad}<DL><p>")
+        for child in node["children"]:
+            walk(child, depth + 1)
+        lines.append(f"{pad}</DL><p>")
+
+    for node in tree:
+        walk(node, 1)
+    lines.append("</DL><p>")
+    return "\n".join(lines) + "\n"
+
+
+def chromium_bookmarks_tree(path):
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+
+    def conv(n):
+        if n.get("type") == "url":
+            return {"title": n.get("name", ""), "url": n.get("url", ""), "children": []}
+        return {"title": n.get("name", ""), "url": None,
+                "children": [conv(c) for c in n.get("children", [])]}
+
+    roots = data.get("roots", {})
+    return [conv(roots[k]) for k in ("bookmark_bar", "other", "synced") if k in roots and roots[k].get("children")]
+
+
+def firefox_bookmarks_tree(path, workdir):
+    import sqlite3
+    copy = os.path.join(workdir, "places.sqlite")
+    shutil.copyfile(path, copy)
+    if os.path.exists(path + "-wal"):
+        shutil.copyfile(path + "-wal", copy + "-wal")
+    con = sqlite3.connect(copy)
+    try:
+        rows = con.execute(
+            "SELECT b.id, b.parent, b.type, b.title, p.url FROM moz_bookmarks b "
+            "LEFT JOIN moz_places p ON b.fk = p.id ORDER BY b.parent, b.position").fetchall()
+    finally:
+        con.close()
+    nodes = {}
+    for bid, parent, typ, title, url in rows:
+        if typ not in (1, 2):
+            continue
+        nodes[bid] = {"title": title or "", "url": (url or "") if typ == 1 else None,
+                      "children": [], "parent": parent}
+    for bid, node in nodes.items():
+        if node["parent"] in nodes and bid != node["parent"]:
+            nodes[node["parent"]]["children"].append(node)
+    # 1 = racine, 4 = étiquettes (ignorées)
+    return [n for bid, n in nodes.items() if n["parent"] == 1 and bid != 4 and n["children"]]
+
+
+def detect_image_ext(path):
+    with open(path, "rb") as f:
+        head = f.read(8)
+    if head.startswith(b"\x89PNG"):
+        return ".png"
+    if head.startswith(b"BM"):
+        return ".bmp"
+    return ".jpg"
+
+
 class InstallerApp(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Installer")
@@ -764,8 +1178,18 @@ class InstallerApp(Gtk.Application):
             "fullname": "",
             "password": "",
             "autologin": True,
+            "proxy_enabled": False,
+            "proxy_host": "",
+            "proxy_port": "",
+            "import_items": [],
+            "import_win_mount": "",
+            "import_win_user": "",
         }
         self.disks = []
+        self.wifi_networks = []
+        self.wifi_connected_ssid = ""
+        self.win_partitions = []
+        self.win_import_data = {}
         self.hw_info = {}
         self.install_thread = None
         self.install_cancelled = False
@@ -818,8 +1242,10 @@ class InstallerApp(Gtk.Application):
         self.build_language_page()
         self.build_keyboard_page()
         self.build_license_page()
+        self.build_network_page()
         self.build_type_page()
         self.build_disk_page()
+        self.build_import_page()
         self.build_account_page()
         self.build_summary_page()
         self.build_progress_page()
@@ -844,13 +1270,15 @@ class InstallerApp(Gtk.Application):
                 ctx.add_class("done")
         page_name = f"page_{self.current_step}"
         self.pages.set_visible_child_name(page_name)
-        self.btn_back.set_visible(self.current_step > 0 and self.current_step < 7)
-        if self.current_step == 6:
+        if self.current_step == 3 and not self.wifi_scanned:
+            self.on_wifi_scan(None)
+        self.btn_back.set_visible(self.current_step > 0 and self.current_step < 9)
+        if self.current_step == 8:
             self.btn_next.set_label(tr("btn_install"))
             self.btn_next.get_style_context().remove_class("btn-primary")
             self.btn_next.get_style_context().add_class("btn-danger")
             self.btn_next.set_visible(True)
-        elif self.current_step >= 7:
+        elif self.current_step >= 9:
             self.btn_next.set_visible(False)
             self.btn_back.set_visible(False)
         else:
@@ -864,9 +1292,15 @@ class InstallerApp(Gtk.Application):
         ok = True
         if self.current_step == 2:
             ok = self.config["license_accepted"]
-        elif self.current_step == 4:
-            ok = self.config["disk"] is not None
+        elif self.current_step == 3:
+            ok = not self.config["proxy_enabled"] or self.proxy_settings() is not None
+            self.proxy_error.set_text("" if ok else tr("network_proxy_invalid"))
         elif self.current_step == 5:
+            ok = self.config["disk"] is not None
+        elif self.current_step == 6:
+            ok = self.win_detect_state == "done" and self.import_fits()
+            self.import_space.set_text("" if self.import_fits() else tr("import_too_big"))
+        elif self.current_step == 7:
             ok = (len(self.config["username"]) >= 2
                   and len(self.config["password"]) >= 1
                   and re.match(r'^[a-z_][a-z0-9_-]*$', self.config["username"]) is not None)
@@ -878,12 +1312,16 @@ class InstallerApp(Gtk.Application):
             self.update_step()
 
     def on_next(self, _btn):
-        if self.current_step == 6:
+        if self.current_step == 8:
             self.start_installation()
         elif self.current_step < len(STEPS) - 1:
             if self.current_step == 0:
                 self.update_ui_language()
+            if self.current_step == 3:
+                self.apply_live_proxy()
             if self.current_step == 5:
+                self.start_windows_detection()
+            if self.current_step == 7:
                 self.refresh_summary()
             self.current_step += 1
             self.update_step()
@@ -1001,6 +1439,221 @@ class InstallerApp(Gtk.Application):
         self.config["license_accepted"] = btn.get_active()
         self.validate_step()
 
+    # ── Page 3 : Réseau ──────────────────────────────────────────
+
+    def build_network_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        title = Gtk.Label(label=tr("network_title"), xalign=0)
+        title.get_style_context().add_class("page-title")
+        box.pack_start(title, False, False, 0)
+        sub = Gtk.Label(label=tr("network_subtitle"), xalign=0)
+        sub.get_style_context().add_class("page-subtitle")
+        sub.set_line_wrap(True)
+        box.pack_start(sub, False, False, 0)
+        status_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        status_row.get_style_context().add_class("card")
+        self.net_status = Gtk.Label(label=tr("network_status_none"), xalign=0)
+        self.net_status.get_style_context().add_class("card-title")
+        self.net_status.set_ellipsize(Pango.EllipsizeMode.END)
+        status_row.pack_start(self.net_status, True, True, 0)
+        self.btn_scan = Gtk.Button(label=tr("network_scan"))
+        self.btn_scan.get_style_context().add_class("btn-secondary")
+        self.btn_scan.connect("clicked", self.on_wifi_scan)
+        status_row.pack_end(self.btn_scan, False, False, 0)
+        box.pack_start(status_row, False, False, 0)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        scroll.set_min_content_height(150)
+        self.wifi_list = Gtk.ListBox()
+        self.wifi_list.get_style_context().add_class("wifi-list")
+        self.wifi_list.set_selection_mode(Gtk.SelectionMode.SINGLE)
+        self.wifi_list.connect("row-selected", self.on_wifi_selected)
+        scroll.add(self.wifi_list)
+        box.pack_start(scroll, True, True, 0)
+        connect_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        self.wifi_password = Gtk.Entry()
+        self.wifi_password.get_style_context().add_class("input-field")
+        self.wifi_password.set_visibility(False)
+        self.wifi_password.set_input_purpose(Gtk.InputPurpose.PASSWORD)
+        self.wifi_password.set_placeholder_text(tr("network_password"))
+        self.wifi_password.set_hexpand(True)
+        self.wifi_password.set_sensitive(False)
+        self.wifi_password.connect("activate", self.on_wifi_connect)
+        connect_row.pack_start(self.wifi_password, True, True, 0)
+        self.btn_wifi_connect = Gtk.Button(label=tr("network_connect"))
+        self.btn_wifi_connect.get_style_context().add_class("btn-primary")
+        self.btn_wifi_connect.set_sensitive(False)
+        self.btn_wifi_connect.connect("clicked", self.on_wifi_connect)
+        connect_row.pack_end(self.btn_wifi_connect, False, False, 0)
+        box.pack_start(connect_row, False, False, 0)
+        self.net_message = Gtk.Label(label="", xalign=0)
+        self.net_message.get_style_context().add_class("progress-text")
+        self.net_message.set_line_wrap(True)
+        box.pack_start(self.net_message, False, False, 0)
+        proxy_title = Gtk.Label(label=tr("network_proxy_title"), xalign=0)
+        proxy_title.get_style_context().add_class("card-title")
+        proxy_title.set_margin_top(12)
+        box.pack_start(proxy_title, False, False, 0)
+        self.proxy_check = Gtk.CheckButton(label=tr("network_proxy_enable"))
+        self.proxy_check.connect("toggled", self.on_proxy_changed)
+        box.pack_start(self.proxy_check, False, False, 0)
+        proxy_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        host_lbl = Gtk.Label(label=tr("network_proxy_host"))
+        host_lbl.get_style_context().add_class("input-label")
+        proxy_row.pack_start(host_lbl, False, False, 0)
+        self.proxy_host = Gtk.Entry()
+        self.proxy_host.get_style_context().add_class("input-field")
+        self.proxy_host.set_placeholder_text("proxy.entreprise.local")
+        self.proxy_host.set_hexpand(True)
+        self.proxy_host.connect("changed", self.on_proxy_changed)
+        proxy_row.pack_start(self.proxy_host, True, True, 0)
+        port_lbl = Gtk.Label(label=tr("network_proxy_port"))
+        port_lbl.get_style_context().add_class("input-label")
+        proxy_row.pack_start(port_lbl, False, False, 0)
+        self.proxy_port = Gtk.Entry()
+        self.proxy_port.get_style_context().add_class("input-field")
+        self.proxy_port.set_placeholder_text("3128")
+        self.proxy_port.set_width_chars(6)
+        self.proxy_port.set_max_length(5)
+        self.proxy_port.connect("changed", self.on_proxy_changed)
+        proxy_row.pack_start(self.proxy_port, False, False, 0)
+        box.pack_start(proxy_row, False, False, 0)
+        self.proxy_error = Gtk.Label(label="", xalign=0)
+        self.proxy_error.get_style_context().add_class("warning-text")
+        box.pack_start(self.proxy_error, False, False, 0)
+        self.proxy_host.set_sensitive(False)
+        self.proxy_port.set_sensitive(False)
+        self.wifi_scanned = False
+        self.wifi_selected = None
+        self.pages.add_named(box, "page_3")
+
+    def on_wifi_scan(self, _btn):
+        self.wifi_scanned = True
+        self.btn_scan.set_sensitive(False)
+        self.btn_scan.set_label(tr("network_scanning"))
+
+        def work():
+            if not nm_available():
+                GLib.idle_add(self.on_wifi_unavailable)
+                return
+            nets = scan_wifi()
+            status = network_status()
+            GLib.idle_add(self.refresh_wifi_list, nets, status)
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_wifi_unavailable(self):
+        self.btn_scan.set_label(tr("network_scan"))
+        self.btn_scan.set_sensitive(True)
+        self.net_message.set_text(tr("network_no_nm"))
+        return False
+
+    def refresh_wifi_list(self, nets, status):
+        self.btn_scan.set_label(tr("network_scan"))
+        self.btn_scan.set_sensitive(True)
+        ethernet, ssid = status
+        self.wifi_connected_ssid = ssid
+        self.config["network_ethernet"] = ethernet
+        parts = []
+        if ssid:
+            parts.append(tr("network_status_connected", ssid=ssid))
+        if ethernet:
+            parts.append(tr("network_ethernet"))
+        self.net_status.set_text("  ·  ".join(parts) or tr("network_status_none"))
+        ctx = self.net_status.get_style_context()
+        (ctx.add_class if parts else ctx.remove_class)("status-ok")
+        for child in self.wifi_list.get_children():
+            child.destroy()
+        self.wifi_selected = None
+        self.wifi_password.set_sensitive(False)
+        self.btn_wifi_connect.set_sensitive(False)
+        if not nets:
+            row = Gtk.ListBoxRow()
+            row.set_selectable(False)
+            lbl = Gtk.Label(label=tr("network_none"), xalign=0)
+            lbl.get_style_context().add_class("card-detail")
+            row.add(lbl)
+            self.wifi_list.add(row)
+        for net in nets:
+            row = Gtk.ListBoxRow()
+            row.net = net
+            line = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            line.get_style_context().add_class("card")
+            name = Gtk.Label(label=net["ssid"], xalign=0)
+            name.get_style_context().add_class("card-title")
+            name.set_ellipsize(Pango.EllipsizeMode.END)
+            line.pack_start(name, True, True, 0)
+            bars = "▂▄▆█"[:min(4, 1 + net["signal"] // 26)]
+            detail = f"{net['security'] or tr('network_open')}   {bars} {net['signal']} %"
+            if net["in_use"] or net["ssid"] == ssid:
+                detail = f"{tr('network_connected')}  ·  {detail}"
+            d = Gtk.Label(label=detail)
+            d.get_style_context().add_class("card-detail")
+            line.pack_end(d, False, False, 0)
+            row.add(line)
+            self.wifi_list.add(row)
+        self.wifi_list.show_all()
+        return False
+
+    def on_wifi_selected(self, _listbox, row):
+        self.wifi_selected = getattr(row, "net", None) if row else None
+        secured = bool(self.wifi_selected and self.wifi_selected["security"])
+        self.wifi_password.set_sensitive(secured)
+        if not secured:
+            self.wifi_password.set_text("")
+        self.btn_wifi_connect.set_sensitive(self.wifi_selected is not None)
+        if secured:
+            self.wifi_password.grab_focus()
+
+    def on_wifi_connect(self, _widget):
+        net = self.wifi_selected
+        if not net:
+            return
+        password = self.wifi_password.get_text()
+        self.btn_wifi_connect.set_sensitive(False)
+        self.net_message.get_style_context().remove_class("warning-text")
+        self.net_message.set_text(tr("network_connecting", ssid=net["ssid"]))
+
+        def work():
+            ok, err = connect_wifi(net["ssid"], password)
+            GLib.idle_add(self.on_wifi_result, ok, err)
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_wifi_result(self, ok, err):
+        self.btn_wifi_connect.set_sensitive(True)
+        if ok:
+            self.net_message.set_text("")
+            self.wifi_password.set_text("")
+            self.on_wifi_scan(None)
+        else:
+            self.net_message.get_style_context().add_class("warning-text")
+            self.net_message.set_text(tr("network_failed", error=err or "?"))
+        return False
+
+    def on_proxy_changed(self, *_args):
+        enabled = self.proxy_check.get_active()
+        self.proxy_host.set_sensitive(enabled)
+        self.proxy_port.set_sensitive(enabled)
+        self.config["proxy_enabled"] = enabled
+        self.config["proxy_host"] = self.proxy_host.get_text()
+        self.config["proxy_port"] = self.proxy_port.get_text()
+        self.validate_step()
+
+    def proxy_settings(self):
+        if not self.config["proxy_enabled"]:
+            return None
+        return normalize_proxy(self.config["proxy_host"], self.config["proxy_port"])
+
+    def apply_live_proxy(self):
+        proxy = self.proxy_settings()
+        for var in ("http_proxy", "https_proxy", "ftp_proxy"):
+            for name in (var, var.upper()):
+                if proxy:
+                    os.environ[name] = f"http://{proxy[0]}:{proxy[1]}/"
+                else:
+                    os.environ.pop(name, None)
+        if proxy:
+            os.environ["no_proxy"] = os.environ["NO_PROXY"] = "localhost,127.0.0.1,::1"
+
     # ── Page 2 : Type d'installation ─────────────────────────────
 
     def build_type_page(self):
@@ -1042,7 +1695,7 @@ class InstallerApp(Gtk.Application):
         custom_card.pack_start(custom_desc, False, False, 0)
         custom_rb.set_sensitive(False)
         box.pack_start(custom_card, False, False, 0)
-        self.pages.add_named(box, "page_3")
+        self.pages.add_named(box, "page_4")
 
     def on_type_toggle(self, btn, install_type):
         if btn.get_active():
@@ -1075,7 +1728,7 @@ class InstallerApp(Gtk.Application):
         self.hw_label.set_line_wrap(True)
         hw_frame.pack_start(self.hw_label, False, False, 0)
         self.disk_box.pack_end(hw_frame, False, False, 0)
-        self.pages.add_named(self.disk_box, "page_4")
+        self.pages.add_named(self.disk_box, "page_5")
 
     def refresh_disk_page(self):
         for child in self.disk_list_box.get_children():
@@ -1122,6 +1775,155 @@ class InstallerApp(Gtk.Application):
             self.config["disk"] = disk
             self.validate_step()
 
+    # ── Page 6 : Import Windows ──────────────────────────────────
+
+    def build_import_page(self):
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+        title = Gtk.Label(label=tr("import_title"), xalign=0)
+        title.get_style_context().add_class("page-title")
+        box.pack_start(title, False, False, 0)
+        self.import_sub = Gtk.Label(label=tr("import_scanning"), xalign=0)
+        self.import_sub.get_style_context().add_class("page-subtitle")
+        self.import_sub.set_line_wrap(True)
+        box.pack_start(self.import_sub, False, False, 0)
+        self.import_source = Gtk.ComboBoxText()
+        self.import_source.connect("changed", lambda _c: self.refresh_import_page())
+        self.import_source.set_no_show_all(True)
+        box.pack_start(self.import_source, False, False, 0)
+        self.import_warn = Gtk.Label(label="", xalign=0)
+        self.import_warn.get_style_context().add_class("disk-warn")
+        self.import_warn.set_line_wrap(True)
+        box.pack_start(self.import_warn, False, False, 0)
+        scroll = Gtk.ScrolledWindow()
+        scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        self.import_items_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+        scroll.add(self.import_items_box)
+        box.pack_start(scroll, True, True, 0)
+        sel_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+        for key, value in (("import_select_all", True), ("import_select_none", False)):
+            b = Gtk.Button(label=tr(key))
+            b.get_style_context().add_class("btn-secondary")
+            b.connect("clicked", self.on_import_select, value)
+            sel_row.pack_start(b, False, False, 0)
+        self.import_total = Gtk.Label(label="", xalign=1)
+        self.import_total.get_style_context().add_class("progress-text")
+        sel_row.pack_end(self.import_total, False, False, 0)
+        box.pack_start(sel_row, False, False, 0)
+        self.import_space = Gtk.Label(label="", xalign=0)
+        self.import_space.get_style_context().add_class("warning-text")
+        box.pack_start(self.import_space, False, False, 0)
+        note = Gtk.Label(label=tr("import_note"), xalign=0)
+        note.get_style_context().add_class("card-detail")
+        note.set_line_wrap(True)
+        box.pack_start(note, False, False, 0)
+        self.win_detect_state = "idle"
+        self.win_sources = []
+        self.import_checks = {}
+        self.import_src_current = None
+        self.import_on_target = False
+        self.import_total_bytes = 0
+        self.import_plan = None
+        self.pages.add_named(box, "page_6")
+
+    def start_windows_detection(self):
+        if self.win_detect_state == "idle":
+            self.win_detect_state = "running"
+            self.import_sub.set_text(tr("import_scanning"))
+            threading.Thread(target=self.bg_detect_windows, daemon=True).start()
+        else:
+            self.refresh_import_page()
+
+    def bg_detect_windows(self):
+        parts = detect_windows_installations()
+        sources = []
+        for part in parts:
+            for user in part["users"]:
+                sources.append({"part": part, "user": user,
+                                "data": scan_windows_profile(part["users_dir"], user)})
+        GLib.idle_add(self.on_windows_detected, parts, sources)
+
+    def on_windows_detected(self, parts, sources):
+        self.win_partitions = parts
+        self.win_sources = sources
+        self.win_detect_state = "done"
+        self.import_source.remove_all()
+        for s in sources:
+            p = s["part"]
+            self.import_source.append_text(
+                f"{tr('import_user', user=s['user'])}  —  "
+                f"{tr('import_partition', partition=p['partition'], size=human_size(p['size']))}")
+        if sources:
+            self.import_source.set_active(0)
+        self.refresh_import_page()
+        return False
+
+    def refresh_import_page(self):
+        if self.win_detect_state != "done":
+            return
+        for child in self.import_items_box.get_children():
+            child.destroy()
+        self.import_checks = {}
+        if not self.win_sources:
+            self.import_sub.set_text(tr("import_none"))
+            self.import_source.hide()
+            self.import_warn.set_text("")
+            self.import_src_current = None
+            self.on_import_toggled()
+            return
+        self.import_sub.set_text(tr("import_subtitle"))
+        self.import_source.show()
+        src = self.win_sources[max(self.import_source.get_active(), 0)]
+        disk = self.config.get("disk") or {}
+        on_target = bool(disk) and src["part"]["disk"] == disk.get("name")
+        self.import_src_current = src
+        self.import_on_target = on_target
+        self.import_warn.set_text(tr("import_on_target") if on_target else "")
+        data = src["data"]
+        entries = []
+        if data["wallpaper"]:
+            entries.append(("wallpaper", tr("import_wallpaper"), True))
+        for b in data["bookmarks"]:
+            entries.append((f"bookmarks:{b['browser']}", tr("import_bookmarks", browser=b["browser"]), True))
+        for key, _win, _dest in WIN_FOLDERS:
+            f = data["folders"].get(key)
+            if f:
+                count = f"{f['count']}{'+' if f['partial'] else ''}"
+                entries.append((key, tr(f"import_{key}", count=count, size=human_size(f["size"])), not on_target))
+        if not entries:
+            lbl = Gtk.Label(label=tr("import_none"), xalign=0)
+            lbl.get_style_context().add_class("card-detail")
+            self.import_items_box.pack_start(lbl, False, False, 0)
+        for key, label, allowed in entries:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            row.get_style_context().add_class("card")
+            cb = Gtk.CheckButton(label=label)
+            cb.set_active(allowed)
+            cb.set_sensitive(allowed)
+            cb.connect("toggled", lambda _b: self.on_import_toggled())
+            row.pack_start(cb, True, True, 0)
+            self.import_items_box.pack_start(row, False, False, 0)
+            self.import_checks[key] = cb
+        self.import_items_box.show_all()
+        self.on_import_toggled()
+
+    def on_import_select(self, _btn, value):
+        for cb in self.import_checks.values():
+            if cb.get_sensitive():
+                cb.set_active(value)
+
+    def on_import_toggled(self):
+        selected = [k for k, cb in self.import_checks.items() if cb.get_active() and cb.get_sensitive()]
+        self.config["import_items"] = selected
+        folders = self.import_src_current["data"]["folders"] if self.import_src_current else {}
+        self.import_total_bytes = sum(folders[k]["size"] for k in selected if k in folders)
+        self.import_total.set_text(tr("import_total", size=human_size(self.import_total_bytes)) if selected else "")
+        self.validate_step()
+
+    def import_fits(self):
+        disk = self.config.get("disk") or {}
+        # Garde ~12 Go pour le système et les mises à jour.
+        return not disk or self.import_total_bytes <= disk.get("size", 0) - 12 * 1024**3
+
     # ── Page 4 : Compte utilisateur ──────────────────────────────
 
     def build_account_page(self):
@@ -1129,8 +1931,10 @@ class InstallerApp(Gtk.Application):
         title = Gtk.Label(label="Créez votre compte", xalign=0)
         title.get_style_context().add_class("page-title")
         box.pack_start(title, False, False, 0)
-        sub = Gtk.Label(label="Ce compte sera l'administrateur de votre système Winlux.", xalign=0)
+        sub = Gtk.Label(label="Compte local administrateur : il reste sur cet ordinateur, "
+                              "aucun compte en ligne n'est demandé ni créé.", xalign=0)
         sub.get_style_context().add_class("page-subtitle")
+        sub.set_line_wrap(True)
         box.pack_start(sub, False, False, 0)
         grid = Gtk.Grid(column_spacing=16, row_spacing=12)
         grid.set_margin_top(8)
@@ -1153,9 +1957,9 @@ class InstallerApp(Gtk.Application):
             if is_password:
                 entry.set_visibility(False)
                 entry.set_input_purpose(Gtk.InputPurpose.PASSWORD)
-            entry.connect("changed", self.on_account_changed, key)
             if key == "hostname":
                 entry.set_text("winlux-desktop")
+            entry.connect("changed", self.on_account_changed, key)
             grid.attach(entry, 1, i, 1, 1)
             self.account_entries[key] = entry
         box.pack_start(grid, False, False, 0)
@@ -1168,7 +1972,7 @@ class InstallerApp(Gtk.Application):
         autologin.connect("toggled", lambda b: self.config.update({"autologin": b.get_active()}))
         autologin.set_margin_top(8)
         box.pack_start(autologin, False, False, 0)
-        self.pages.add_named(box, "page_5")
+        self.pages.add_named(box, "page_7")
 
     def on_account_changed(self, entry, key):
         if key == "password_confirm":
@@ -1211,7 +2015,7 @@ class InstallerApp(Gtk.Application):
         warn.get_style_context().add_class("disk-warn")
         warn.set_margin_top(12)
         self.summary_box.pack_start(warn, False, False, 0)
-        self.pages.add_named(self.summary_box, "page_6")
+        self.pages.add_named(self.summary_box, "page_8")
 
     def refresh_summary(self):
         disk = self.config.get("disk") or {}
@@ -1225,6 +2029,21 @@ class InstallerApp(Gtk.Application):
             f"Utilisateur : {self.config['fullname']} ({self.config['username']})",
             f"Connexion automatique : {'Oui' if self.config['autologin'] else 'Non'}",
         ]
+        if self.wifi_connected_ssid:
+            net = f"Wi-Fi « {self.wifi_connected_ssid} »"
+        elif self.config.get("network_ethernet"):
+            net = "Filaire"
+        else:
+            net = "Aucun"
+        proxy = self.proxy_settings()
+        lines.append(f"Réseau : {net}" + (f"  (proxy {proxy[0]}:{proxy[1]})" if proxy else ""))
+        names = {"wallpaper": "fond d'écran", "desktop": "Bureau", "documents": "Documents",
+                 "pictures": "Images", "music": "Musique", "videos": "Vidéos"}
+        items = [names.get(k) or "favoris " + k.split(":", 1)[1] for k in self.config["import_items"]]
+        if items and self.import_src_current:
+            lines.append(f"Import Windows ({self.import_src_current['user']}) : {', '.join(items)}")
+        else:
+            lines.append("Import Windows : aucun")
         if self.hw_info:
             lines.append("")
             lines.append(f"CPU : {self.hw_info.get('cpu', '?')}")
@@ -1235,6 +2054,7 @@ class InstallerApp(Gtk.Application):
             mode = "UEFI" if self.hw_info.get("uefi") else "Legacy BIOS"
             lines.append(f"Démarrage : {mode}")
         self.summary_content.set_text("\n".join(lines))
+        self.summary_content.select_region(0, 0)
 
     # ── Page 6 : Progression ─────────────────────────────────────
 
@@ -1265,7 +2085,7 @@ class InstallerApp(Gtk.Application):
         scroll.add(self.progress_log)
         scroll.set_margin_top(16)
         box.pack_start(scroll, True, True, 0)
-        self.pages.add_named(box, "page_7")
+        self.pages.add_named(box, "page_9")
 
     def set_progress(self, fraction, text):
         def do():
@@ -1310,7 +2130,7 @@ class InstallerApp(Gtk.Application):
         close_btn.connect("clicked", lambda _: self.quit())
         btn_box.pack_start(close_btn, False, False, 0)
         box.pack_start(btn_box, False, False, 0)
-        self.pages.add_named(box, "page_8")
+        self.pages.add_named(box, "page_10")
 
     def on_reboot(self, _btn):
         try:
@@ -1323,7 +2143,7 @@ class InstallerApp(Gtk.Application):
     # ── Installation ─────────────────────────────────────────────
 
     def start_installation(self):
-        self.current_step = 7
+        self.current_step = 9
         self.update_step()
         self.install_cancelled = False
         self.install_thread = threading.Thread(target=self.run_installation, daemon=True)
@@ -1335,6 +2155,13 @@ class InstallerApp(Gtk.Application):
             self.install_error("Aucun disque sélectionné.")
             return
         device = disk["path"]
+        try:
+            self.prepare_windows_import(disk)
+        except Exception as e:
+            self.import_plan = None
+            self.set_progress(0.01, f"Import Windows ignoré : {e}")
+        finally:
+            self.unmount_windows(disk["name"])
         iso_path = os.environ.get("WINLUX_ISO", "")
         if not iso_path:
             candidates = [
@@ -1451,6 +2278,7 @@ class InstallerApp(Gtk.Application):
             self.configure_user(f"{work}/target")
         except Exception as e:
             self.install_error(f"Erreur configuration utilisateur : {e}")
+        self.import_windows_data(f"{work}/target")
         self.set_progress(0.90, "Configuration du premier démarrage...")
         try:
             self.configure_first_boot(f"{work}/target")
@@ -1556,6 +2384,7 @@ class InstallerApp(Gtk.Application):
         self.install_grub(device, esp, root_part, work, split_root=split_root)
         self.set_progress(0.85, "Configuration du compte utilisateur...")
         self.configure_user(f"{work}/target")
+        self.import_windows_data(f"{work}/target")
         self.set_progress(0.90, "Configuration du premier démarrage...")
         self.configure_first_boot(f"{work}/target")
         self.set_progress(0.95, "Synchronisation...")
@@ -1738,6 +2567,10 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         }
         with open(f"{etc}/install-config.json", "w") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
+        try:
+            self.configure_network_target(root_path)
+        except Exception as e:
+            self.set_progress(0.91, f"Avertissement réseau : {e}")
         fb_script = os.path.join(SCRIPT_DIR, "winlux-first-boot.sh")
         if os.path.exists(fb_script):
             dest = f"{root_path}/usr/bin/winlux-first-boot"
@@ -1749,19 +2582,167 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             subprocess.run(["cp", hw_script, dest], timeout=10)
             os.chmod(dest, 0o755)
 
+    def configure_network_target(self, root_path):
+        src_dir = "/etc/NetworkManager/system-connections"
+        if os.path.isdir(src_dir):
+            dst_dir = f"{root_path}{src_dir}"
+            os.makedirs(dst_dir, exist_ok=True)
+            os.chmod(dst_dir, 0o700)
+            for name in os.listdir(src_dir):
+                if name.endswith(".nmconnection"):
+                    dst = os.path.join(dst_dir, name)
+                    shutil.copyfile(os.path.join(src_dir, name), dst)
+                    os.chmod(dst, 0o600)
+        proxy = self.proxy_settings()
+        if not proxy:
+            return
+        url = f"http://{proxy[0]}:{proxy[1]}/"
+        env_path = f"{root_path}/etc/environment"
+        keep = []
+        if os.path.exists(env_path):
+            with open(env_path) as f:
+                keep = [l for l in f if not re.match(r"^\s*(https?|ftp|no)_proxy=", l, re.I)]
+        keep += [f'{v}="{url}"\n' for v in ("http_proxy", "https_proxy", "ftp_proxy",
+                                              "HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY")]
+        keep += ['no_proxy="localhost,127.0.0.1,::1"\n', 'NO_PROXY="localhost,127.0.0.1,::1"\n']
+        os.makedirs(os.path.dirname(env_path), exist_ok=True)
+        with open(env_path, "w") as f:
+            f.writelines(keep)
+        apt_dir = f"{root_path}/etc/apt/apt.conf.d"
+        os.makedirs(apt_dir, exist_ok=True)
+        with open(f"{apt_dir}/95winlux-proxy", "w") as f:
+            f.write(f'Acquire::http::Proxy "{url}";\nAcquire::https::Proxy "{url}";\n')
+
+    # ── Import Windows ───────────────────────────────────────────
+
+    def unmount_windows(self, disk_name=None):
+        for part in self.win_partitions:
+            if part["ours"] and (disk_name is None or part["disk"] == disk_name) \
+                    and os.path.ismount(part["mount"]):
+                subprocess.run(["umount", part["mount"]], timeout=30)
+
+    def prepare_windows_import(self, disk):
+        """Copie fond d'écran et favoris en mémoire avant que le disque cible soit effacé."""
+        self.import_plan = None
+        src = self.import_src_current
+        items = list(self.config["import_items"])
+        if not src or not items:
+            return
+        self.set_progress(0.01, tr("progress_import"))
+        on_target = src["part"]["disk"] == disk["name"]
+        data = src["data"]
+        stage = WIN_IMPORT_STAGE
+        shutil.rmtree(stage, ignore_errors=True)
+        os.makedirs(stage, mode=0o700)
+        plan = {"wallpaper": None, "bookmarks": [], "folders": []}
+        if "wallpaper" in items and data["wallpaper"]:
+            dst = os.path.join(stage, "wallpaper" + detect_image_ext(data["wallpaper"]))
+            shutil.copyfile(data["wallpaper"], dst)
+            plan["wallpaper"] = dst
+        for b in data["bookmarks"]:
+            if f"bookmarks:{b['browser']}" not in items:
+                continue
+            try:
+                if b["kind"] == "chromium":
+                    tree = chromium_bookmarks_tree(b["path"])
+                else:
+                    tree = firefox_bookmarks_tree(b["path"], stage)
+                html_path = os.path.join(stage, f"Favoris {b['browser']}.html")
+                with open(html_path, "w", encoding="utf-8") as f:
+                    f.write(_bookmark_html(tree))
+                entry = {"browser": b["browser"], "html": html_path, "json": None}
+                if b["kind"] == "chromium":
+                    entry["json"] = os.path.join(stage, f"{b['browser']}.Bookmarks")
+                    shutil.copyfile(b["path"], entry["json"])
+                plan["bookmarks"].append(entry)
+            except Exception as e:
+                self.set_progress(0.01, f"Favoris {b['browser']} ignorés : {e}")
+        for name in ("places.sqlite", "places.sqlite-wal"):
+            try:
+                os.remove(os.path.join(stage, name))
+            except OSError:
+                pass
+        if not on_target:
+            for key, _win, dest in WIN_FOLDERS:
+                if key in items and key in data["folders"]:
+                    plan["folders"].append((data["folders"][key]["path"], dest))
+        self.import_plan = plan
+
+    def import_windows_data(self, root_path):
+        plan = self.import_plan
+        username = self.config["username"]
+        if not plan or not username:
+            return
+        self.set_progress(0.86, tr("progress_import"))
+        home = f"{root_path}/home/{username}"
+        try:
+            if plan["wallpaper"]:
+                pictures = f"{home}/Images"
+                os.makedirs(pictures, exist_ok=True)
+                name = "Fond d'écran Windows" + os.path.splitext(plan["wallpaper"])[1]
+                shutil.copyfile(plan["wallpaper"], os.path.join(pictures, name))
+                # Le bureau XFCE n'existe qu'une fois la session ouverte : on applique au premier login.
+                script_dir = f"{home}/.local/share/winlux"
+                os.makedirs(script_dir, exist_ok=True)
+                with open(f"{script_dir}/apply-imported-wallpaper.sh", "w") as f:
+                    f.write("#!/bin/sh\nsleep 5\n"
+                            f'winlux-personalize wallpaper "$HOME/Images/{name}" && '
+                            'rm -f "$HOME/.config/autostart/winlux-imported-wallpaper.desktop" "$0"\n')
+                os.makedirs(f"{home}/.config/autostart", exist_ok=True)
+                with open(f"{home}/.config/autostart/winlux-imported-wallpaper.desktop", "w") as f:
+                    f.write("[Desktop Entry]\nType=Application\nName=Fond d'écran importé\n"
+                            f"Exec=/bin/sh /home/{username}/.local/share/winlux/apply-imported-wallpaper.sh\n"
+                            "NoDisplay=true\n")
+            profiles = {"Edge": ".config/microsoft-edge/Default", "Chrome": ".config/google-chrome/Default"}
+            for b in plan["bookmarks"]:
+                fav_dir = f"{home}/Documents/Favoris Windows"
+                os.makedirs(fav_dir, exist_ok=True)
+                shutil.copyfile(b["html"], os.path.join(fav_dir, os.path.basename(b["html"])))
+                if b["json"] and b["browser"] in profiles:
+                    target = f"{home}/{profiles[b['browser']]}/Bookmarks"
+                    if not os.path.exists(target):
+                        os.makedirs(os.path.dirname(target), exist_ok=True)
+                        shutil.copyfile(b["json"], target)
+            for src, dest in plan["folders"]:
+                self.set_progress(0.87, f"Import Windows : {dest}...")
+                dst = f"{home}/{dest}"
+                os.makedirs(dst, exist_ok=True)
+                r = subprocess.run(["cp", "-r", "--preserve=timestamps", f"{src}/.", dst],
+                                   capture_output=True, text=True, timeout=7200)
+                if r.returncode != 0:
+                    self.set_progress(0.87, f"Certains fichiers de {dest} n'ont pas pu être copiés.")
+                for root, _dirs, files in os.walk(dst):
+                    for name in files:
+                        if name.lower() in WIN_JUNK:
+                            try:
+                                os.remove(os.path.join(root, name))
+                            except OSError:
+                                pass
+                subprocess.run(["chmod", "-R", "u+rwX,go-w", dst], timeout=600)
+        except Exception as e:
+            self.set_progress(0.88, f"Avertissement import Windows : {e}")
+        subprocess.run(["chown", "-R", "1000:1000", home], timeout=600)
+
+    def cleanup_windows_import(self):
+        shutil.rmtree(WIN_IMPORT_STAGE, ignore_errors=True)
+        self.unmount_windows()
+
     def post_install(self):
+        self.cleanup_windows_import()
         self.set_progress(1.0, "Installation terminée avec succès !")
         GLib.idle_add(self.show_done)
 
     def show_done(self):
-        self.current_step = 8
+        self.current_step = 10
         self.update_step()
 
     def install_error(self, message):
+        self.cleanup_windows_import()
+
         def do():
             self.done_title.set_text(tr("error_title"))
             self.done_sub.set_text(message)
-            self.current_step = 8
+            self.current_step = 10
             self.update_step()
         GLib.idle_add(do)
 
