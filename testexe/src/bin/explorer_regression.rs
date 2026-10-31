@@ -26,6 +26,8 @@ mod explorer;
 mod filehistory;
 #[path = "../shell/fonts.rs"]
 mod fonts;
+#[path = "../shell/programs.rs"]
+mod programs;
 #[path = "../shell/thumbs.rs"]
 mod thumbs;
 #[path = "../shell/firewall.rs"]
@@ -48,6 +50,8 @@ mod notifications;
 mod personalize;
 #[path = "../shell/restore.rs"]
 mod restore;
+#[path = "../shell/regedit.rs"]
+mod regedit;
 #[path = "../shell/settings.rs"]
 mod settings;
 #[path = "../shell/snip.rs"]

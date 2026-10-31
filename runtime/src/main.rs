@@ -31,6 +31,7 @@ mod process;
 mod profiles;
 pub mod quality;
 mod registry;
+mod setup;
 mod tasks;
 mod thunks;
 mod volumes;
@@ -139,6 +140,18 @@ fn main() {
     if exe.as_os_str() == "--regedit" || (registry::cli::is_regedit(&exe) && !is_real_pe(&exe)) {
         std::process::exit(registry::cli::regedit_main(&rest));
     }
+    // Installateurs NSIS / Inno Setup et leurs désinstalleurs : pris en
+    // charge par Winlux lui-même (module setup), sans exécuter leur code.
+    if exe.as_os_str() == "--setup" {
+        std::process::exit(setup::cli(&rest));
+    }
+    if std::env::var_os("WINLUX_SETUP_NATIVE").is_none() {
+        if let Some(code) = setup::launch(&exe, &rest) {
+            std::process::exit(code);
+        }
+    }
+    // Variables d'environnement Windows écrites par les installateurs.
+    msi::extra::apply_registry_environment();
     let source = match std::fs::read(&exe) {
         Ok(bytes) => bytes,
         Err(error) => {

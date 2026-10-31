@@ -979,6 +979,53 @@ extern "system" {
     pub fn RegDeleteValueA(key: Handle, name: *const c_char) -> i32;
     pub fn RegDeleteKeyA(root: Handle, sub: *const c_char) -> i32;
     pub fn RegCloseKey(key: Handle) -> i32;
+    pub fn RegOpenKeyExA(
+        root: Handle,
+        sub: *const c_char,
+        options: u32,
+        access: u32,
+        result: *mut Handle,
+    ) -> i32;
+    pub fn RegEnumKeyExA(
+        key: Handle,
+        index: u32,
+        name: *mut c_char,
+        name_len: *mut u32,
+        reserved: *mut u32,
+        class: *mut c_char,
+        class_len: *mut u32,
+        last_write: *mut u64,
+    ) -> i32;
+    pub fn RegEnumValueA(
+        key: Handle,
+        index: u32,
+        name: *mut c_char,
+        name_len: *mut u32,
+        reserved: *mut u32,
+        kind: *mut u32,
+        data: *mut u8,
+        data_len: *mut u32,
+    ) -> i32;
+    pub fn RegQueryInfoKeyA(
+        key: Handle,
+        class: *mut c_char,
+        class_len: *mut u32,
+        reserved: *mut u32,
+        sub_keys: *mut u32,
+        max_sub_key_len: *mut u32,
+        max_class_len: *mut u32,
+        values: *mut u32,
+        max_value_name_len: *mut u32,
+        max_value_len: *mut u32,
+        security: *mut u32,
+        last_write: *mut u64,
+    ) -> i32;
+    pub fn RegDeleteTreeA(key: Handle, sub: *const c_char) -> i32;
+    // Fonctions privées du runtime pour l'Éditeur du Registre.
+    pub fn WinluxRegImportA(path: *const c_char) -> i32;
+    pub fn WinluxRegExportA(path: *const c_char, key: *const c_char) -> i32;
+    pub fn WinluxRegRenameValueA(key: Handle, old: *const c_char, new: *const c_char) -> i32;
+    pub fn WinluxRegRenameKeyA(root: Handle, sub: *const c_char, new: *const c_char) -> i32;
 }
 
 #[link(name = "user32", kind = "raw-dylib")]

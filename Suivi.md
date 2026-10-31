@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **226**
+- Réalisé : **228**
 - À faire ou en cours : **43**
-- Total : **269**
-- Progression : **84.0%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, chemins Windows ↔ Linux #175)
+- Total : **271**
+- Progression : **84.1%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, chemins Windows ↔ Linux #175)
 
 ## À FAIRE (par priorité)
 
@@ -226,6 +226,8 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Ajouter la couche de dessin GDI : commandes (`FillRect`, `FrameRect`, `Ellipse`, `Text`, `BitBlt`, `StretchBlt`) accumulées par cycle de peinture puis rejouées par le backend (y compris à chaque `Expose`), pinceaux/plumes/polices (`CreateSolidBrush`, `CreatePen`, `CreateFontA/W`, `SelectObject`, `DeleteObject`, `GetStockObject`, `GetObjectA/W`), `GetSysColor`/`GetSysColorBrush`, `PatBlt` (PATCOPY/BLACKNESS/WHITENESS/PATINVERT/PATAND/PATOR/DSTINVERT), `CreateCompatibleBitmap`/`CreateDIBSection` 32bpp et DC mémoire pour `SRCCOPY`, `SRCPAINT`, `SRCAND`, `SRCINVERT`, `NOTSRCCOPY`, couleurs et mode de fond (`SetTextColor`, `SetBkColor`, `SetBkMode`), `TextOutA`, `Rectangle`, `Ellipse` et `GetDC`/`ReleaseDC`. `gui_demo.exe` vérifie le tracé; rendu et blits contrôlés par capture X11 (`xwd`).
 - [x] Relier sockets TCP/UDP, erreurs WSA et résolveur `getaddrinfo` A/W aux interfaces POSIX (tests loopback).
 - [x] Ajouter un registre persistant partagé Linux/Windows.
+- [x] Registre Windows commun à toutes les applis (chaînes Unicode, HKCR fusionné), `reg.exe`/`regedit.exe` intégrés, import et export de fichiers .reg (#166), et appli « Éditeur du Registre » façon Windows 11 : arborescence, édition des valeurs de tous types, création, renommage, suppression, recherche (F3), import et export, double-clic sur un .reg avec confirmation (voir `docs/REGISTRY.md`).
+- [x] Fonctions registre de shlwapi pour les .exe : SHGetValue/SHSetValue, SHDeleteKey, SHRegGetValue, réglages utilisateur puis machine (SHRegGetUSValue, clés HUSKEY), flux SHOpenRegStream2 et associations de fichiers AssocQueryString/AssocQueryKey (voir `docs/REGISTRY.md`).
 - [x] Ajouter une couche SCM locale, non privilégiée, qui persiste les définitions et lance/arrête les services en processus utilisateur.
 - [x] Ajouter les premiers points d’entrée multimédia `mfplat` et `winmm`.
 - [x] Ajouter le décodage WAVE PCM/float et un pont ALSA optionnel pour `PlaySoundA/W` (parseur testé; sortie physique encore à valider sur machine audio).
@@ -320,7 +322,9 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Personnalisation (Paramètres > Personnalisation et assistant de premier démarrage) : galerie de 13 fonds d'écran calculés (catégories Nature/Abstrait/Sombre/Clair, aperçu), palette d'accentuation Windows 11 (48 couleurs ou automatique, option sur Démarrer/barre et barres de titre), barre des tâches en bas/haut/gauche/droite en trois tailles, choix des icônes du bureau, cinq sons de démarrage synthétisés avec écoute. Préférences dans `~/.local/share/winlux/personnalisation.conf` ; `WINLUX_OOBE=1` relance l'assistant, `WINLUX_NO_OOBE=1` le saute.
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
 - [x] Store unique Linux + Windows (`store.rs`, `winlux-store`) : apt + AppStream, Flatpak, Snap, AppImage et catalogues Windows interchangeables (`store-sources.d`, SHA-256 obligatoire), vignettes et captures, fiche détaillée, mises à jour unifiées ; voir `docs/STORE.md`. Catalogue Windows par défaut : dépôt communautaire Scoop Extras (applications 64 bits avec empreinte, sans script PowerShell).
-- [x] msiexec intégré au runtime (`runtime/src/msi`, sans composant tiers) : fichier composé OLE, tables et pool de chaînes, cabinets MSZIP et LZX, propriétés, conditions, fonctionnalités et composants, fichiers, registre, raccourcis .lnk, « Programmes installés », désinstallation `/x`, installation administrative `/a` ; double-clic sur un .msi ; voir `docs/MSIEXEC.md`. Reste : actions personnalisées DLL/EXE, services, variables d'environnement, interface graphique d'installation.
+- [x] msiexec intégré au runtime (`runtime/src/msi`, sans composant tiers) : fichier composé OLE, tables et pool de chaînes, cabinets MSZIP et LZX, propriétés, conditions, fonctionnalités et composants, fichiers, registre, raccourcis .lnk, « Programmes installés », désinstallation `/x`, installation administrative `/a` ; double-clic sur un .msi ; voir `docs/MSIEXEC.md`. Ajouté ensuite (#179) : AppSearch (registre, .ini, dossiers), fichiers .ini, variables d'environnement (visibles par les .exe), RemoveFile et RemoveRegistry, tout annulé à la désinstallation. Reste : actions personnalisées DLL/EXE, services, interface graphique d'installation.
+- [x] Installateurs .exe NSIS 3 et Inno Setup 1.x–7.x interprétés par le runtime (`runtime/src/setup`, LZMA/LZMA2/BCJ maison) : fichiers, composants et tâches, raccourcis, .ini, registre, clé Uninstall, désinstalleur, double-clic ; testés Notepad++, WinMerge, ShareX, Audacity ; voir `docs/SETUP-EXE.md` (#179). Reste : plugins NSIS et programmes lancés par l'installateur.
+- [x] Fenêtre « Applications installées » (`programs.rs`, `appwiz.cpl`) : toutes les clés Uninstall (msi, NSIS, Inno, autres), recherche, tri par nom/taille/date, désinstallation en un clic avec le bon outil, traduite FR/EN/ES/DE (#179).
 - [x] Gestionnaire de polices (`fonts.rs`, `winlux-fonts`) et polices pour les .exe : `EnumFontFamilies(Ex)`, `EnumFonts`, `AddFontResource(Ex)`, `RemoveFontResource(Ex)`, `WinluxDrawImageA`.
 
 ### Priorité 6 — Qualité et livraison
