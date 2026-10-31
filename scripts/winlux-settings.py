@@ -12,7 +12,8 @@ PAGES = ["Système", "Applications", "Réseau", "Son", "Clavier",
          "Programmes Windows", "Navigateurs", "Accessibilité", "Effets visuels",
          "Localisation", "Gestionnaire de fichiers", "Son avancé", "Mises à jour système",
          "Confidentialité", "Processeur", "Lecteurs réseau", "Personnalisation du bureau",
-         "Bluetooth et appareils", "Alimentation et batterie"]
+         "Bluetooth et appareils", "Alimentation et batterie", "Graphismes"]
+GRAPHICS_PAGE = 24
 FIELDS = {
     0: [("Version", "version"), ("Noyau", "kernel")],
     2: [("Connexion", "network")], 3: [("Volume", "audio")],
@@ -45,6 +46,37 @@ ACTIONS = {
     8: [("Suivre la taille de la VM", "display-follow"), ("Définition fixe", "display-fixed"),
         ("Échelle −", "display-scale-down"), ("Automatique", "display-scale-auto"), ("Échelle +", "display-scale-up")],
 }
+
+def gpu_summary():
+    """Résumé lisible du rapport GPU : seules les mesures exposées par le pilote."""
+    try:
+        out = subprocess.run(["winlux", "--gpu-status"], capture_output=True, text=True, timeout=3).stdout
+    except (OSError, subprocess.SubprocessError):
+        return "Informations graphiques indisponibles (runtime Winlux introuvable)."
+    report = dict(line.split("=", 1) for line in out.splitlines() if "=" in line)
+    try: count = min(8, int(report.get("gpu_count", "0")))
+    except ValueError: count = 0
+    if not count:
+        return "Aucune carte graphique détectée (machine virtuelle ou affichage de secours)."
+    roles = {"integrated": "GPU intégré (économie d'énergie)", "dedicated": "GPU dédié (hautes performances)"}
+    lines = []
+    for i in range(count):
+        get = lambda key: report.get(f"gpu{i}_{key}")
+        lines.append(get("name") or "Carte graphique")
+        kind = [roles[get("role")]] if get("role") in roles else []
+        lines.append("   " + " · ".join(kind + [f"Pilote {get('driver') or 'inconnu'}"]))
+        metrics = []
+        if get("load"): metrics.append(f"Charge {get('load')} %")
+        if get("vram_used_mb") and get("vram_total_mb"): metrics.append(f"VRAM {get('vram_used_mb')} / {get('vram_total_mb')} Mo")
+        if get("temp_c"): metrics.append(f"{get('temp_c')} °C")
+        if get("freq_mhz"): metrics.append(f"Fréquence {get('freq_mhz')} MHz")
+        if get("power_w"): metrics.append(f"{get('power_w')} W")
+        if get("encoder"): metrics.append(f"Encodeur {get('encoder')} %")
+        if get("decoder"): metrics.append(f"Décodeur {get('decoder')} %")
+        if metrics: lines.append("   " + " · ".join(metrics))
+    if report.get("gpu_hybrid") == "1":
+        lines.append("\nGPU par application : clic droit sur un .exe > Réglages de l'exécutable.")
+    return "\n".join(lines)
 
 def read(name):
     try: return Path(name).read_text(errors="replace")
@@ -150,10 +182,11 @@ class Settings(Gtk.Window):
             button = Gtk.Button(label="Appliquer la définition")
             button.connect("clicked", lambda *_: self.execute("display-mode-" + self.modes.get_active_text()) if self.modes.get_active_text() else None)
             self.body.pack_start(button, False, False, 0)
-        if self.page in (1, 10, 12, 13):
+        if self.page in (1, 10, 12, 13, GRAPHICS_PAGE):
             self.label("Ouvrir les réglages détaillés de cette catégorie :")
             button = Gtk.Button(label="Réglages avancés")
-            button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(self.page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
+            legacy_page = self.page
+            button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
             self.body.pack_start(button, False, False, 0)
         self.notice = self.label("")
         self.progress = Gtk.ProgressBar(show_text=True)
@@ -210,6 +243,7 @@ class Settings(Gtk.Window):
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
+        if self.page == GRAPHICS_PAGE: text = gpu_summary()
         if self.state.get_text() != text: self.state.set_text(text)
         if self.process is None: self.notice.set_text(read("/run/winlux/action.txt").strip())
         progress = dict(line.split("=", 1) for line in read("/run/winlux/update-progress").splitlines() if "=" in line)

@@ -238,8 +238,9 @@ pub const S_NETWORK_DRIVES: usize = 159;
 pub const S_PERSONALIZATION: usize = 160;
 pub const S_BLUETOOTH_DEVICES: usize = 161;
 pub const S_POWER_BATTERY: usize = 162;
+pub const S_GRAPHICS: usize = 163;
 
-const STRING_COUNT: usize = 163;
+const STRING_COUNT: usize = 164;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -429,6 +430,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Personnalisation",
     b"Bluetooth et appareils",
     b"Alimentation et batterie",
+    b"Graphismes",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -617,6 +619,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Personalization",
     b"Bluetooth & devices",
     b"Power and battery",
+    b"Graphics",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -805,6 +808,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Personalizaci\xF3n",
     b"Bluetooth y dispositivos",
     b"Energ\xEDa y bater\xEDa",
+    b"Gr\xE1ficos",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -993,6 +997,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Personalisierung",
     b"Bluetooth und Ger\xE4te",
     b"Energie und Akku",
+    b"Grafik",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {

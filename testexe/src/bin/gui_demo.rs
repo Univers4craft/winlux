@@ -30,6 +30,8 @@ mod explorer;
 mod fonts;
 #[path = "../shell/firewall.rs"]
 mod firewall;
+#[path = "../shell/gpuinfo.rs"]
+mod gpuinfo;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/locale.rs"]

@@ -4,6 +4,8 @@
 
 use winlux_testexe::*;
 
+#[path = "../shell/gpuinfo.rs"]
+mod gpuinfo;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/taskmgr.rs"]

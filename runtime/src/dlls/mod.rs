@@ -66,6 +66,7 @@ pub mod version;
 pub mod winfile;
 pub mod winhttp;
 pub mod winlux_capture;
+pub mod winlux_gpu;
 pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
@@ -141,6 +142,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
                     e.extend(crate::archive::ffi::exports());
+                    e.extend(winlux_gpu::exports());
                     e
                 },
                 handle: fake_module(),

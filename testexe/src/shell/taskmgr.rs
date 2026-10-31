@@ -72,6 +72,11 @@ static mut MEM_HIST: [u32; HIST_LEN] = [0; HIST_LEN];
 static mut DISK_HIST: [u32; HIST_LEN] = [0; HIST_LEN];
 static mut NET_HIST: [u32; HIST_LEN] = [0; HIST_LEN];
 static mut HIST_POS: usize = 0;
+// GPU : un onglet par carte qui fournit au moins une mesure (au plus deux).
+const MAX_GPU_TABS: usize = 2;
+static mut GPU_HIST: [[u32; HIST_LEN]; MAX_GPU_TABS] = [[0; HIST_LEN]; MAX_GPU_TABS];
+static mut GPU_TABS: [usize; MAX_GPU_TABS] = [0; MAX_GPU_TABS];
+static mut GPU_TAB_COUNT: usize = 0;
 
 // Totaux
 static mut CPU_TOTAL: u32 = 0;
@@ -216,7 +221,25 @@ unsafe fn refresh_procs() {
     };
     DISK_HIST[HIST_POS] = (t / 1000 % 50) * 10; // placeholder
     NET_HIST[HIST_POS] = (t / 1000 % 30) * 10; // placeholder
+    refresh_gpu_tabs();
     HIST_POS = (HIST_POS + 1) % HIST_LEN;
+}
+
+/// Garde-fou : un GPU sans aucune mesure exposée n'a pas d'onglet.
+unsafe fn refresh_gpu_tabs() {
+    crate::gpuinfo::refresh(false);
+    GPU_TAB_COUNT = 0;
+    for i in 0..crate::gpuinfo::count() {
+        if GPU_TAB_COUNT < MAX_GPU_TABS && crate::gpuinfo::has_metrics(i) {
+            GPU_TABS[GPU_TAB_COUNT] = i;
+            GPU_HIST[GPU_TAB_COUNT][HIST_POS] =
+                crate::gpuinfo::num(i, b"load").unwrap_or(0).min(100) * 10;
+            GPU_TAB_COUNT += 1;
+        }
+    }
+    if PERF_TAB >= 4 + GPU_TAB_COUNT {
+        PERF_TAB = 0;
+    }
 }
 
 fn fmt_path(out: &mut [u8; 64], prefix: &[u8], pid: u32, suffix: &[u8]) -> usize {
@@ -916,7 +939,7 @@ unsafe fn draw_performance(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         0,
     ];
 
-    for i in 0..4 {
+    for i in 0..4 + GPU_TAB_COUNT {
         let iy = y + 8 + i as i32 * 80;
         let is_active = PERF_TAB == i;
         let is_hover = PERF_HOVER == i as i32;
@@ -928,7 +951,10 @@ unsafe fn draw_performance(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
             fill(g.hdc, g.b, x, iy, x + panel_w, iy + 76, p.hover);
         }
 
-        text(g.hdc, g.f.semibold, p.text, x + 12, iy + 6, perf_items[i]);
+        let gpu_label = [b'G', b'P', b'U', b' ', b'0' + i.saturating_sub(4) as u8];
+        let gpu_slot = i.saturating_sub(4).min(MAX_GPU_TABS - 1);
+        let label: &[u8] = if i < 4 { perf_items[i] } else { &gpu_label };
+        text(g.hdc, g.f.semibold, p.text, x + 12, iy + 6, label);
 
         // Mini graphique (sparkline)
         let graph_y = iy + 26;
@@ -948,7 +974,8 @@ unsafe fn draw_performance(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
             0 => &CPU_HIST,
             1 => &MEM_HIST,
             2 => &DISK_HIST,
-            _ => &NET_HIST,
+            3 => &NET_HIST,
+            _ => &GPU_HIST[gpu_slot],
         };
         let accent_line = if is_active {
             p.accent
@@ -957,9 +984,17 @@ unsafe fn draw_performance(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         };
         draw_sparkline(g, x + 12, graph_y, graph_w, graph_h, hist, accent_line);
 
-        // Pourcentage à droite
+        // Pourcentage à droite (un GPU sans mesure de charge n'en affiche pas)
+        let value = if i < 4 {
+            Some(perf_values[i])
+        } else {
+            crate::gpuinfo::num(GPU_TABS[gpu_slot], b"load").map(|v| v.min(100) * 10)
+        };
+        let Some(value) = value else {
+            continue;
+        };
         let mut buf = [0u8; 16];
-        let n = fmt_percent(&mut buf, perf_values[i]);
+        let n = fmt_percent(&mut buf, value);
         text(
             g.hdc,
             g.f.small,
@@ -979,6 +1014,7 @@ unsafe fn draw_performance(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
         1 => draw_perf_mem(g, gx, y, gw, h),
         2 => draw_perf_disk(g, gx, y, gw, h),
         3 => draw_perf_net(g, gx, y, gw, h),
+        t if t - 4 < GPU_TAB_COUNT => draw_perf_gpu(g, gx, y, gw, h, t - 4),
         _ => {}
     }
 }
@@ -1133,6 +1169,69 @@ unsafe fn draw_perf_cpu(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
     ];
 
     draw_perf_graph(g, x, y, w, h, b"Processeur", &CPU_HIST, CPU_TOTAL, &details);
+}
+
+unsafe fn draw_perf_gpu(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32, slot: usize) {
+    use crate::gpuinfo::{self as gpu, Line};
+    let i = GPU_TABS[slot];
+    let mut lines: [Line; 8] = [const { Line::new() }; 8];
+    let mut labels: [&[u8]; 8] = [b""; 8];
+    let mut n = 0;
+    let mut add = |label: &'static [u8], fill: &mut dyn FnMut(&mut Line)| {
+        if n < 8 {
+            labels[n] = label;
+            fill(&mut lines[n]);
+            n += 1;
+        }
+    };
+    if let Some(v) = gpu::num(i, b"load") {
+        add(b"Utilisation", &mut |l| {
+            l.num(v).push(b" %");
+        });
+    }
+    if let (Some(u), Some(t)) = (gpu::num(i, b"vram_used_mb"), gpu::num(i, b"vram_total_mb")) {
+        add(b"M\xE9moire GPU d\xE9di\xE9e", &mut |l| {
+            l.num(u).push(b" / ").num(t).push(b" Mo");
+        });
+    }
+    if let Some(v) = gpu::num(i, b"temp_c") {
+        add(b"Temp\xE9rature", &mut |l| {
+            l.num(v).push(b" \xB0C");
+        });
+    }
+    if let Some(v) = gpu::num(i, b"freq_mhz") {
+        add(b"Fr\xE9quence", &mut |l| {
+            l.num(v).push(b" MHz");
+            if let Some(m) = gpu::num(i, b"freq_max_mhz") {
+                l.push(b" (max. ").num(m).push(b" MHz)");
+            }
+        });
+    }
+    if let Some(v) = gpu::num(i, b"power_w") {
+        add(b"Consommation", &mut |l| {
+            l.num(v).push(b" W");
+        });
+    }
+    if let Some(v) = gpu::num(i, b"encoder") {
+        add(b"Encodeur vid\xE9o", &mut |l| {
+            l.num(v).push(b" %");
+        });
+    }
+    if let Some(v) = gpu::num(i, b"decoder") {
+        add(b"D\xE9codeur vid\xE9o", &mut |l| {
+            l.num(v).push(b" %");
+        });
+    }
+    add(b"Pilote", &mut |l| {
+        l.push(gpu::get(i, b"driver").unwrap_or(b"inconnu"));
+    });
+    let mut details: [(&[u8], &[u8]); 8] = [(b"", b""); 8];
+    for k in 0..n {
+        details[k] = (labels[k], lines[k].get());
+    }
+    let title = gpu::get(i, b"name").unwrap_or(b"GPU");
+    let load = gpu::num(i, b"load").unwrap_or(0).min(100) * 10;
+    draw_perf_graph(g, x, y, w, h, title, &GPU_HIST[slot], load, &details[..n]);
 }
 
 unsafe fn draw_perf_mem(g: &mut Gfx, x: i32, y: i32, w: i32, h: i32) {
@@ -1605,7 +1704,7 @@ pub unsafe fn mouse(ev: Mouse, mx: i32, my: i32, f: &Frame) -> bool {
                         // Sous-onglets Performance
                         let panel_w = 180.min((r.right - cx) / 3);
                         if mx < cx + panel_w {
-                            for i in 0..4 {
+                            for i in 0..4 + GPU_TAB_COUNT {
                                 let iy = r.top + 8 + i as i32 * 80;
                                 if my >= iy && my < iy + 76 {
                                     PERF_HOVER = i as i32;
@@ -1649,7 +1748,7 @@ pub unsafe fn mouse(ev: Mouse, mx: i32, my: i32, f: &Frame) -> bool {
                         }
                     }
                     1 => {
-                        if PERF_HOVER >= 0 && PERF_HOVER < 4 {
+                        if PERF_HOVER >= 0 && PERF_HOVER < (4 + GPU_TAB_COUNT) as i32 {
                             PERF_TAB = PERF_HOVER as usize;
                         }
                     }
