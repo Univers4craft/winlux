@@ -557,6 +557,9 @@ pub unsafe fn WINS_REF(app: usize) -> bool {
 /// Vrai tant qu'une animation est en cours : la boucle principale repeint
 /// alors à ~60 images par seconde.
 pub fn animating() -> bool {
+    if theme_animating() {
+        return true;
+    }
     unsafe {
         if TASK_VIEW || SNAP_LAYOUT_VISIBLE {
             return true;
@@ -752,18 +755,23 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
     let w = WINS[app];
     let p = pal();
     let t = elapsed(w.anim_start);
-    // Rectangle affiché : animé, ou définitif.
-    let (shown, content) = match w.anim {
+    // Rectangle affiché et opacité (0..1000) selon l'animation.
+    let (shown, content, opacity) = match w.anim {
         Anim::Open if t < OPEN_MS => {
             let e = ease_out(t, OPEN_MS);
             (
                 scaled(&w.rect, 940 + e * 60 / 1000, (1000 - e) * 18 / 1000),
                 e > 700,
+                e,
             )
         }
         Anim::Close if t < CLOSE_MS => {
             let e = ease_out(t, CLOSE_MS);
-            (scaled(&w.rect, 1000 - e * 60 / 1000, e * 10 / 1000), false)
+            (
+                scaled(&w.rect, 1000 - e * 60 / 1000, e * 10 / 1000),
+                false,
+                1000 - e,
+            )
         }
         Anim::Close => {
             WINS[app].open = false;
@@ -771,14 +779,18 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             refresh_active();
             return;
         }
-        Anim::Minimize if t < MINIMIZE_MS => (
-            lerp_rect(&w.rect, &TASKBAR_SLOT[app], ease_out(t, MINIMIZE_MS)),
-            false,
-        ),
-        Anim::Restore if t < MINIMIZE_MS => (
-            lerp_rect(&TASKBAR_SLOT[app], &w.rect, ease_out(t, MINIMIZE_MS)),
-            false,
-        ),
+        Anim::Minimize if t < MINIMIZE_MS => {
+            let e = ease_out(t, MINIMIZE_MS);
+            (
+                lerp_rect(&w.rect, &TASKBAR_SLOT[app], e),
+                false,
+                1000 - e,
+            )
+        }
+        Anim::Restore if t < MINIMIZE_MS => {
+            let e = ease_out(t, MINIMIZE_MS);
+            (lerp_rect(&TASKBAR_SLOT[app], &w.rect, e), false, e)
+        }
         _ => {
             if w.anim != Anim::None {
                 WINS[app].anim = Anim::None;
@@ -786,7 +798,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             if w.minimized {
                 return;
             }
-            (w.rect, true)
+            (w.rect, true, 1000)
         }
     };
     if w.minimized && w.anim != Anim::Minimize {
@@ -794,6 +806,8 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
     }
     let radius = if w.maximized { 0 } else { 8 };
     let active = ACTIVE == app;
+    let bg = p.mica;
+    let fade = |c: u32| -> u32 { mix(bg, c, opacity, 1000) };
     // Liseré fin et fond « Mica » (pas d'ombre lourde).
     round_rect(
         g.hdc,
@@ -803,11 +817,11 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         shown.right,
         shown.bottom,
         radius,
-        if active {
+        fade(if active {
             mix(p.border, p.accent, 2, 10)
         } else {
             p.border
-        },
+        }),
     );
     round_rect(
         g.hdc,
@@ -817,7 +831,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         shown.right - 1,
         shown.bottom - 1,
         radius,
-        p.mica,
+        fade(p.mica),
     );
     if !content || shown.right - shown.left < 200 || shown.bottom - shown.top < 120 {
         glyph(
@@ -839,7 +853,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         fr.client.top,
         fr.client.right,
         fr.client.bottom - radius,
-        p.window,
+        fade(p.window),
     );
     if radius > 0 {
         round_rect(
@@ -850,7 +864,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             fr.client.right,
             fr.client.bottom,
             radius - 1,
-            p.window,
+            fade(p.window),
         );
     }
     if !custom_title(app) {
@@ -866,7 +880,7 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
         text(
             g.hdc,
             g.f.caption,
-            if active { p.text } else { p.text3 },
+            fade(if active { p.text } else { p.text3 }),
             fr.title.left + 42,
             fr.title.top + 12,
             title_of(app),
