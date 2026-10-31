@@ -148,9 +148,10 @@ pub unsafe extern "win64" fn winlux_archive_create(
 /// Reconstruit les archives traversées par `path` si leur contenu a changé
 /// (de l'intérieur vers l'extérieur). Renvoie 0 s'il n'y a rien à faire.
 pub unsafe extern "win64" fn winlux_archive_commit(path: *const u16) -> u32 {
-    let Some(p) = linux(path) else {
+    if path.is_null() {
         return 0;
-    };
+    }
+    let p = crate::paths::to_linux_raw(&wstr(path));
     let chain = super::chain(&p);
     if chain.is_empty() {
         return 0;

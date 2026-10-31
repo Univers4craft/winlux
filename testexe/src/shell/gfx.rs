@@ -707,6 +707,14 @@ pub enum Glyph {
     Tools,
     Wifi,
     Ethernet,
+    /// Fichier image disque (iso, vhd, qcow2…) : un disque optique.
+    DiskImage,
+    /// Image disque montée : lecteur amovible avec un disque.
+    Removable,
+    /// Lecteur réseau (FTP, SFTP, SMB…).
+    NetDrive,
+    /// Bouton Éjecter.
+    Eject,
 }
 
 pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y: i32, s: i32) {
@@ -1451,6 +1459,131 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                 );
             }
             fill(hdc, b, x, y + s * 3 / 8, x + s, y + s * 5 / 8, c);
+        }
+        Glyph::DiskImage => {
+            let c = rgb(0xB8, 0xC2, 0xCF);
+            ellipse(hdc, b, x, y, x + s, y + s, rgb(0x8A, 0x96, 0xA6));
+            ellipse(hdc, b, x + 1, y + 1, x + s - 1, y + s - 1, c);
+            // Reflet irisé façon disque optique.
+            ellipse(
+                hdc,
+                b,
+                x + s / 6,
+                y + s / 6,
+                x + s / 2,
+                y + s / 2,
+                rgb(0xD6, 0xE4, 0xF5),
+            );
+            ellipse(
+                hdc,
+                b,
+                x + s * 3 / 8,
+                y + s * 3 / 8,
+                x + s * 5 / 8,
+                y + s * 5 / 8,
+                rgb(0x6B, 0x73, 0x80),
+            );
+            ellipse(
+                hdc,
+                b,
+                x + s * 7 / 16,
+                y + s * 7 / 16,
+                x + s * 9 / 16,
+                y + s * 9 / 16,
+                rgb(0xF4, 0xF6, 0xF9),
+            );
+        }
+        Glyph::Removable | Glyph::NetDrive => {
+            round_rect(
+                hdc,
+                b,
+                x,
+                y + s / 3,
+                x + s,
+                y + s * 5 / 6,
+                3,
+                rgb(0x6B, 0x73, 0x80),
+            );
+            fill(
+                hdc,
+                b,
+                x + 2,
+                y + s / 3 + 2,
+                x + s - 2,
+                y + s / 2,
+                rgb(0x9A, 0xA3, 0xAE),
+            );
+            fill(
+                hdc,
+                b,
+                x + s * 3 / 4,
+                y + s * 2 / 3 - 1,
+                x + s * 7 / 8,
+                y + s * 2 / 3 + 2,
+                rgb(0x5C, 0xE0, 0x7A),
+            );
+            if matches!(g, Glyph::Removable) {
+                glyph(hdc, b, f, Glyph::DiskImage, x + s / 16, y, s * 3 / 8);
+            } else {
+                // Prise réseau : trois postes reliés sous le lecteur.
+                let c = rgb(0x2B, 0x7F, 0xDA);
+                let t = (s / 16).max(1);
+                fill(
+                    hdc,
+                    b,
+                    x + s / 2 - t / 2,
+                    y + s * 5 / 6,
+                    x + s / 2 + t / 2 + 1,
+                    y + s * 11 / 12,
+                    c,
+                );
+                fill(
+                    hdc,
+                    b,
+                    x + s / 6,
+                    y + s * 11 / 12,
+                    x + s * 5 / 6,
+                    y + s * 11 / 12 + t,
+                    c,
+                );
+                for k in [x + s / 6, x + s / 2, x + s * 5 / 6] {
+                    fill(
+                        hdc,
+                        b,
+                        k - s / 16,
+                        y + s * 11 / 12 - t,
+                        k + s / 16 + 1,
+                        y + s,
+                        c,
+                    );
+                }
+                ellipse(hdc, b, x + s / 16, y, x + s * 3 / 8, y + s * 5 / 16, c);
+            }
+        }
+        Glyph::Eject => {
+            let c = rgb(0x5C, 0x66, 0x73);
+            let h = s * 3 / 8;
+            for k in 0..h {
+                let half = (k * s / 2) / h.max(1);
+                fill(
+                    hdc,
+                    b,
+                    x + s / 2 - half,
+                    y + s / 8 + k,
+                    x + s / 2 + half + 1,
+                    y + s / 8 + k + 1,
+                    c,
+                );
+            }
+            fill(
+                hdc,
+                b,
+                x + s / 8,
+                y + s * 5 / 8,
+                x + s * 7 / 8,
+                y + s * 3 / 4,
+                c,
+            );
         }
         Glyph::File
         | Glyph::Image
