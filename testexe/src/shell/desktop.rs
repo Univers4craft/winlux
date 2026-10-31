@@ -47,6 +47,11 @@ static mut SHORTCUTS_COUNT: usize = 0;
 static mut START_SEARCH: [u8; 64] = [0; 64]; // Texte de recherche
 static mut START_SEARCH_LEN: usize = 0;
 static mut POWER_MENU: bool = false;
+static mut START_SEARCH_ACTIVE: bool = false; // Le champ de recherche a le focus
+static mut SEARCH_OVERLAY: bool = false; // Overlay de recherche (Win+S)
+static mut SEARCH_BUF: [u8; 64] = [0; 64];
+static mut SEARCH_BUF_LEN: usize = 0;
+static mut SEARCH_HOVER: i32 = -1; // Résultat survolé dans l'overlay
 static mut ENABLE_BLUR: bool = true; // Effet de flou activé
 static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
 static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
@@ -90,6 +95,164 @@ fn now() -> u32 {
 }
 fn since(t: u32) -> i32 {
     now().wrapping_sub(t).min(1_000_000) as i32
+}
+
+fn lower(c: u8) -> u8 {
+    match c {
+        b'A'..=b'Z' => c + 32,
+        0xC0..=0xDE if c != 0xD7 => c + 32,
+        _ => c,
+    }
+}
+
+fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
+    if needle.is_empty() {
+        return true;
+    }
+    if needle.len() > hay.len() {
+        return false;
+    }
+    (0..=hay.len() - needle.len())
+        .any(|i| (0..needle.len()).all(|k| lower(hay[i + k]) == lower(needle[k])))
+}
+
+fn fuzzy_match(name: &[u8], query: &[u8]) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    if contains_ci(name, query) {
+        return true;
+    }
+    let mut qi = 0;
+    for &c in name {
+        if qi < query.len() && lower(c) == lower(query[qi]) {
+            qi += 1;
+        }
+    }
+    qi == query.len()
+}
+
+fn fuzzy_score(name: &[u8], query: &[u8]) -> i32 {
+    if query.is_empty() {
+        return 0;
+    }
+    if contains_ci(name, query) {
+        if name.len() >= query.len()
+            && (0..query.len()).all(|k| lower(name[k]) == lower(query[k]))
+        {
+            return 3; // prefix match
+        }
+        return 2; // substring match
+    }
+    1 // fuzzy only
+}
+
+#[derive(Clone, Copy)]
+struct SearchResult {
+    name: &'static [u8],
+    launch: Launch,
+    glyph: Glyph,
+    score: i32,
+}
+
+fn collect_results(query: &[u8], out: &mut [SearchResult; 16]) -> usize {
+    let mut count = 0usize;
+    for app in &PINNED {
+        if count >= 16 {
+            break;
+        }
+        if fuzzy_match(app.name, query) {
+            let s = fuzzy_score(app.name, query);
+            let mut dup = false;
+            for j in 0..count {
+                if out[j].name.as_ptr() == app.name.as_ptr() {
+                    dup = true;
+                    break;
+                }
+            }
+            if !dup {
+                out[count] = SearchResult {
+                    name: app.name,
+                    launch: app.launch,
+                    glyph: app.glyph,
+                    score: s,
+                };
+                count += 1;
+            }
+        }
+    }
+    for &(title, _, g, launch) in &RECOMMENDED {
+        if count >= 16 {
+            break;
+        }
+        if fuzzy_match(title, query) {
+            let s = fuzzy_score(title, query);
+            let mut dup = false;
+            for j in 0..count {
+                if out[j].name.as_ptr() == title.as_ptr() {
+                    dup = true;
+                    break;
+                }
+            }
+            if !dup {
+                out[count] = SearchResult {
+                    name: title,
+                    launch,
+                    glyph: g,
+                    score: s,
+                };
+                count += 1;
+            }
+        }
+    }
+    unsafe {
+        for i in 0..ALL_APPS_COUNT {
+            if count >= 16 {
+                break;
+            }
+            let (name, exec, _cat) = ALL_APPS[i];
+            if fuzzy_match(name, query) {
+                let s = fuzzy_score(name, query);
+                let mut dup = false;
+                for j in 0..count {
+                    if out[j].name.as_ptr() == name.as_ptr() {
+                        dup = true;
+                        break;
+                    }
+                }
+                if !dup {
+                    out[count] = SearchResult {
+                        name,
+                        launch: Launch::Exec(exec),
+                        glyph: Glyph::Exe,
+                        score: s,
+                    };
+                    count += 1;
+                }
+            }
+        }
+    }
+    // Sort by score descending (simple insertion sort).
+    for i in 1..count {
+        let mut j = i;
+        while j > 0 && out[j].score > out[j - 1].score {
+            let tmp = SearchResult {
+                name: out[j].name,
+                launch: out[j].launch,
+                glyph: out[j].glyph,
+                score: out[j].score,
+            };
+            out[j] = SearchResult {
+                name: out[j - 1].name,
+                launch: out[j - 1].launch,
+                glyph: out[j - 1].glyph,
+                score: out[j - 1].score,
+            };
+            out[j - 1] = tmp;
+            j -= 1;
+        }
+    }
+    count
 }
 
 fn init_apps() {
@@ -279,9 +442,12 @@ unsafe fn set_start(open: bool) {
     if open {
         START_OPEN = true;
         START_CLOSING = false;
+        SEARCH_OVERLAY = false;
     } else if START_OPEN {
         START_CLOSING = true;
         POWER_MENU = false;
+        START_SEARCH_LEN = 0;
+        START_SEARCH_ACTIVE = false;
     }
 }
 
@@ -1347,22 +1513,19 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, title);
     // Barre de recherche
     let search_y = y + 40;
-    round_rect(
-        hdc,
-        b,
-        inner_l,
-        search_y,
-        inner_r,
-        search_y + 36,
-        18,
-        rgb(0x31, 0x35, 0x3F),
-    );
+    let search_bg = if unsafe { START_SEARCH_ACTIVE } {
+        rgb(0x3A, 0x3F, 0x4A)
+    } else {
+        rgb(0x31, 0x35, 0x3F)
+    };
+    round_rect(hdc, b, inner_l, search_y, inner_r, search_y + 36, 18, search_bg);
+    glyph(hdc, b, f, Glyph::Search, inner_l + 10, search_y + 8, 18);
     if unsafe { START_SEARCH_LEN > 0 } {
         text(
             hdc,
             f.body,
             rgb(0xE6, 0xE6, 0xE6),
-            inner_l + 8,
+            inner_l + 34,
             search_y + 8,
             unsafe { &START_SEARCH[..START_SEARCH_LEN] },
         );
@@ -1371,178 +1534,90 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             hdc,
             f.body,
             rgb(0x88, 0x88, 0x88),
-            inner_l + 8,
+            inner_l + 34,
             search_y + 8,
             b"Rechercher...",
         );
     }
-    let all: &[u8] = unsafe {
-        if START_SHOW_ALL_APPS {
-            b"\xC9pingl\xE9"
-        } else {
-            b"Toutes mes applications"
-        }
-    };
-    let all_w = text_width(all, 11) + 20;
-    text(
-        hdc,
-        f.small,
-        rgb(0xE6, 0xE6, 0xE6),
-        inner_r - all_w + 10,
-        y + 2,
-        all,
-    );
-    for (i, app) in PINNED
-        .iter()
-        .take((PIN_COLS * pin_rows(s)) as usize)
-        .enumerate()
-    {
-        let c = pinned_cell(s, i as i32);
-        if HOVER_START_ITEM == i as i32 {
-            round_rect(
-                hdc,
-                b,
-                c.left,
-                c.top,
-                c.right,
-                c.bottom,
-                5,
-                rgb(0x31, 0x35, 0x3F),
-            );
-        }
-        let cx = (c.left + c.right) / 2;
-        glyph(hdc, b, f, app.glyph, cx - 16, c.top + 10, 32);
-        text_centered(
-            hdc,
-            f.small,
-            11,
-            rgb(0xE6, 0xE6, 0xE6),
-            cx,
-            c.top + 52,
-            app.name,
-        );
-    }
-
-    // Recommandé / Catégories.
-    let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
-    if START_SHOW_ALL_APPS {
-        // Afficher les catégories
+    if unsafe { START_SEARCH_LEN } > 0 {
+        // Mode recherche : afficher les résultats.
+        let results_y = search_y + 48;
         text(
             hdc,
             f.title,
             rgb(0xF2, 0xF2, 0xF2),
             inner_l + 4,
-            ry,
-            b"Cat\xE9gories",
+            results_y,
+            b"R\xE9sultats",
         );
-        let categories: [&[u8]; 12] = [
-            b"Toutes",
-            b"Accessoires",
-            b"Bureau",
-            b"Graphisme",
-            b"Internet",
-            b"Son et vid\xE9o",
-            b"Web",
-            b"Programmation",
-            b"Pr\xE9f\xE9rences",
-            b"Administration",
-            b"Favoris",
-            b"R\xE9cents",
-        ];
-        for (i, cat) in categories.iter().enumerate() {
-            let c = category_cell(s, i as i32);
-            if START_CATEGORY == i as i32 {
+        let mut results = [SearchResult {
+            name: b"",
+            launch: Launch::Explorer,
+            glyph: Glyph::Search,
+            score: 0,
+        }; 16];
+        let count = collect_results(unsafe { &START_SEARCH[..START_SEARCH_LEN] }, &mut results);
+        if count == 0 {
+            text(
+                hdc,
+                f.body,
+                rgb(0x88, 0x88, 0x88),
+                inner_l + 4,
+                results_y + 36,
+                b"Aucun r\xE9sultat",
+            );
+        }
+        for i in 0..count {
+            let iy = results_y + 36 + (i as i32) * 44;
+            if iy + 40 >= s.bottom - 72 {
+                break;
+            }
+            if HOVER_START_ITEM == 600 + i as i32 {
                 round_rect(
                     hdc,
                     b,
-                    c.left,
-                    c.top,
-                    c.right,
-                    c.bottom,
+                    inner_l,
+                    iy,
+                    inner_r,
+                    iy + 40,
                     5,
-                    rgb(0x58, 0x65, 0xF2),
+                    rgb(0x31, 0x35, 0x3F),
                 );
             }
-            text_centered(
-                hdc,
-                f.small,
-                11,
-                if START_CATEGORY == i as i32 {
-                    rgb(0xFF, 0xFF, 0xFF)
-                } else {
-                    rgb(0xE6, 0xE6, 0xE6)
-                },
-                (c.left + c.right) / 2,
-                c.top + 10,
-                cat,
-            );
-        }
-        // Afficher les applications de la catégorie sélectionnée
-        let apps_y = ry + 120;
-        text(
-            hdc,
-            f.title,
-            rgb(0xF2, 0xF2, 0xF2),
-            inner_l + 4,
-            apps_y,
-            b"Applications",
-        );
-        let mut displayed = 0;
-        for i in 0..unsafe { ALL_APPS_COUNT } {
-            let (name, _exec, cat) = unsafe { ALL_APPS[i] };
-            let matches_search = unsafe {
-                START_SEARCH_LEN == 0
-                    || name[..name.len().min(START_SEARCH_LEN)]
-                        .iter()
-                        .zip(START_SEARCH[..START_SEARCH_LEN].iter())
-                        .any(|(&a, &b)| a.to_ascii_lowercase() == b.to_ascii_lowercase())
-            };
-            if (START_CATEGORY == 0 || cat == START_CATEGORY) && matches_search {
-                let app_y = apps_y + 40 + (displayed as i32) * 44;
-                if app_y + 40 < s.bottom - 72 {
-                    text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), inner_l + 4, app_y, name);
-                    displayed += 1;
-                }
-            }
-        }
-        // Afficher les raccourcis
-        if unsafe { SHORTCUTS_COUNT } > 0 {
-            let shortcuts_y = apps_y + 40 + (displayed as i32) * 44 + 20;
+            glyph(hdc, b, f, results[i].glyph, inner_l + 8, iy + 8, 24);
             text(
                 hdc,
-                f.title,
-                rgb(0xF2, 0xF2, 0xF2),
-                inner_l + 4,
-                shortcuts_y,
-                b"Raccourcis",
+                f.body,
+                rgb(0xE6, 0xE6, 0xE6),
+                inner_l + 40,
+                iy + 10,
+                results[i].name,
             );
-            for i in 0..unsafe { SHORTCUTS_COUNT } {
-                let (name, _exec, _x, _y) = unsafe { SHORTCUTS[i] };
-                let shortcut_y = shortcuts_y + 40 + (i as i32) * 44;
-                if shortcut_y + 40 < s.bottom - 72 {
-                    text(
-                        hdc,
-                        f.body,
-                        rgb(0xE6, 0xE6, 0xE6),
-                        inner_l + 4,
-                        shortcut_y,
-                        name,
-                    );
-                }
-            }
         }
-    } else if ry + 150 < s.bottom - 72 {
+    } else {
+        let all: &[u8] = unsafe {
+            if START_SHOW_ALL_APPS {
+                b"\xC9pingl\xE9"
+            } else {
+                b"Toutes mes applications"
+            }
+        };
+        let all_w = text_width(all, 11) + 20;
         text(
             hdc,
-            f.title,
-            rgb(0xF2, 0xF2, 0xF2),
-            inner_l + 4,
-            ry,
-            b"Recommand\xE9",
+            f.small,
+            rgb(0xE6, 0xE6, 0xE6),
+            inner_r - all_w + 10,
+            y + 2,
+            all,
         );
-        for (i, (title, sub, g, _)) in RECOMMENDED.iter().enumerate() {
-            let c = recommended_cell(s, i as i32);
-            if HOVER_START_ITEM == 100 + i as i32 {
+        for (i, app) in PINNED
+            .iter()
+            .take((PIN_COLS * pin_rows(s)) as usize)
+            .enumerate()
+        {
+            let c = pinned_cell(s, i as i32);
+            if HOVER_START_ITEM == i as i32 {
                 round_rect(
                     hdc,
                     b,
@@ -1554,23 +1629,158 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     rgb(0x31, 0x35, 0x3F),
                 );
             }
-            glyph(hdc, b, f, *g, c.left + 8, c.top + 10, 28);
-            text(
-                hdc,
-                f.body,
-                rgb(0xF2, 0xF2, 0xF2),
-                c.left + 48,
-                c.top + 8,
-                title,
-            );
-            text(
+            let cx = (c.left + c.right) / 2;
+            glyph(hdc, b, f, app.glyph, cx - 16, c.top + 10, 32);
+            text_centered(
                 hdc,
                 f.small,
-                rgb(0x9A, 0xA3, 0xAE),
-                c.left + 48,
-                c.top + 26,
-                sub,
+                11,
+                rgb(0xE6, 0xE6, 0xE6),
+                cx,
+                c.top + 52,
+                app.name,
             );
+        }
+
+        // Recommandé / Catégories.
+        let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
+        if START_SHOW_ALL_APPS {
+            text(
+                hdc,
+                f.title,
+                rgb(0xF2, 0xF2, 0xF2),
+                inner_l + 4,
+                ry,
+                b"Cat\xE9gories",
+            );
+            let categories: [&[u8]; 12] = [
+                b"Toutes",
+                b"Accessoires",
+                b"Bureau",
+                b"Graphisme",
+                b"Internet",
+                b"Son et vid\xE9o",
+                b"Web",
+                b"Programmation",
+                b"Pr\xE9f\xE9rences",
+                b"Administration",
+                b"Favoris",
+                b"R\xE9cents",
+            ];
+            for (i, cat) in categories.iter().enumerate() {
+                let c = category_cell(s, i as i32);
+                if START_CATEGORY == i as i32 {
+                    round_rect(
+                        hdc,
+                        b,
+                        c.left,
+                        c.top,
+                        c.right,
+                        c.bottom,
+                        5,
+                        rgb(0x58, 0x65, 0xF2),
+                    );
+                }
+                text_centered(
+                    hdc,
+                    f.small,
+                    11,
+                    if START_CATEGORY == i as i32 {
+                        rgb(0xFF, 0xFF, 0xFF)
+                    } else {
+                        rgb(0xE6, 0xE6, 0xE6)
+                    },
+                    (c.left + c.right) / 2,
+                    c.top + 10,
+                    cat,
+                );
+            }
+            let apps_y = ry + 120;
+            text(
+                hdc,
+                f.title,
+                rgb(0xF2, 0xF2, 0xF2),
+                inner_l + 4,
+                apps_y,
+                b"Applications",
+            );
+            let mut displayed = 0;
+            for i in 0..unsafe { ALL_APPS_COUNT } {
+                let (name, _exec, cat) = unsafe { ALL_APPS[i] };
+                if START_CATEGORY == 0 || cat == START_CATEGORY {
+                    let app_y = apps_y + 40 + (displayed as i32) * 44;
+                    if app_y + 40 < s.bottom - 72 {
+                        text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), inner_l + 4, app_y, name);
+                        displayed += 1;
+                    }
+                }
+            }
+            if unsafe { SHORTCUTS_COUNT } > 0 {
+                let shortcuts_y = apps_y + 40 + (displayed as i32) * 44 + 20;
+                text(
+                    hdc,
+                    f.title,
+                    rgb(0xF2, 0xF2, 0xF2),
+                    inner_l + 4,
+                    shortcuts_y,
+                    b"Raccourcis",
+                );
+                for i in 0..unsafe { SHORTCUTS_COUNT } {
+                    let (name, _exec, _x, _y) = unsafe { SHORTCUTS[i] };
+                    let shortcut_y = shortcuts_y + 40 + (i as i32) * 44;
+                    if shortcut_y + 40 < s.bottom - 72 {
+                        text(
+                            hdc,
+                            f.body,
+                            rgb(0xE6, 0xE6, 0xE6),
+                            inner_l + 4,
+                            shortcut_y,
+                            name,
+                        );
+                    }
+                }
+            }
+        } else if ry + 150 < s.bottom - 72 {
+            text(
+                hdc,
+                f.title,
+                rgb(0xF2, 0xF2, 0xF2),
+                inner_l + 4,
+                ry,
+                b"Recommand\xE9",
+            );
+            for (i, (title, sub, g, _)) in RECOMMENDED.iter().enumerate() {
+                let c = recommended_cell(s, i as i32);
+                if HOVER_START_ITEM == 100 + i as i32 {
+                    round_rect(
+                        hdc,
+                        b,
+                        c.left,
+                        c.top,
+                        c.right,
+                        c.bottom,
+                        5,
+                        rgb(0x31, 0x35, 0x3F),
+                    );
+                }
+                glyph(hdc, b, f, *g, c.left + 8, c.top + 10, 28);
+                text(
+                    hdc,
+                    f.body,
+                    rgb(0xF2, 0xF2, 0xF2),
+                    c.left + 48,
+                    c.top + 8,
+                    title,
+                );
+                text(
+                    hdc,
+                    f.small,
+                    rgb(0x9A, 0xA3, 0xAE),
+                    c.left + 48,
+                    c.top + 26,
+                    sub,
+                );
+            }
         }
     }
 
@@ -1715,6 +1925,29 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
         }
     }
     let y0 = s.top + 82;
+    let inner_l = s.left + 28;
+    let inner_r = s.right - 28;
+    // Search results mode.
+    if unsafe { START_SEARCH_LEN } > 0 {
+        let search_y = y0 + 40;
+        let results_y = search_y + 48 + 36;
+        for i in 0..16i32 {
+            let iy = results_y + i * 44;
+            if iy + 40 >= s.bottom - 72 {
+                break;
+            }
+            if y >= iy && y < iy + 40 && x >= inner_l && x < inner_r {
+                return 600 + i;
+            }
+        }
+        if inside(&align_toggle_rect(s), x, y) {
+            return 200;
+        }
+        if inside(&power_rect(s), x, y) {
+            return 201;
+        }
+        return -1;
+    }
     let all_w = unsafe {
         text_width(
             if START_SHOW_ALL_APPS {
@@ -1725,7 +1958,6 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
             11,
         ) + 20
     };
-    let inner_r = s.right - 28;
     if x >= inner_r - all_w + 10 && x < inner_r + 10 && y >= y0 + 2 && y < y0 + 20 {
         return 300;
     }
@@ -1770,6 +2002,64 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
         return 201;
     }
     -1
+}
+
+// ---------- Overlay de recherche (Win+S) ----------
+
+unsafe fn search_overlay(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if !SEARCH_OVERLAY {
+        return;
+    }
+    let w = 520.min(l.w - 40);
+    let h = 440.min(l.bar_top - 40);
+    let cx = l.w / 2;
+    let ox = cx - w / 2;
+    let oy = (l.bar_top - h) / 2;
+    // Fond semi-transparent.
+    fill(hdc, b, 0, 0, l.w, l.bar_top, rgb(0x0A, 0x0A, 0x0A));
+    panel(hdc, b, ox, oy, ox + w, oy + h, 12, rgb(0x1E, 0x21, 0x28), rgb(0x3A, 0x3F, 0x4A));
+    let pad = 24;
+    let il = ox + pad;
+    let ir = ox + w - pad;
+    // Titre.
+    glyph(hdc, b, f, Glyph::Search, il, oy + 20, 24);
+    text(hdc, f.large, rgb(0xF2, 0xF2, 0xF2), il + 32, oy + 18, b"Recherche");
+    // Champ de saisie.
+    let fy = oy + 60;
+    round_rect(hdc, b, il, fy, ir, fy + 40, 20, rgb(0x31, 0x35, 0x3F));
+    glyph(hdc, b, f, Glyph::Search, il + 12, fy + 10, 18);
+    if SEARCH_BUF_LEN > 0 {
+        text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), il + 36, fy + 10, &SEARCH_BUF[..SEARCH_BUF_LEN]);
+    } else {
+        text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 36, fy + 10, b"Tapez pour rechercher...");
+    }
+    // Résultats.
+    let ry = fy + 52;
+    if SEARCH_BUF_LEN > 0 {
+        let mut results = [SearchResult {
+            name: b"",
+            launch: Launch::Explorer,
+            glyph: Glyph::Search,
+            score: 0,
+        }; 16];
+        let count = collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+        if count == 0 {
+            text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 4, ry + 8, b"Aucun r\xE9sultat");
+        }
+        for i in 0..count {
+            let iy = ry + (i as i32) * 44;
+            if iy + 40 >= oy + h - 16 {
+                break;
+            }
+            if SEARCH_HOVER == i as i32 {
+                round_rect(hdc, b, il, iy, ir, iy + 40, 5, rgb(0x31, 0x35, 0x3F));
+            }
+            glyph(hdc, b, f, results[i].glyph, il + 8, iy + 8, 24);
+            text(hdc, f.body, rgb(0xE6, 0xE6, 0xE6), il + 40, iy + 10, results[i].name);
+        }
+    } else {
+        text(hdc, f.body, rgb(0x88, 0x88, 0x88), il + 4, ry + 8, b"Recherchez des applications et des fichiers");
+    }
 }
 
 // ---------- Notifications ----------
@@ -2087,6 +2377,7 @@ pub unsafe fn draw(hdc: Handle) {
             wm::draw(&mut g);
         }
         start_menu(hdc, &mut b, &f, &l);
+        search_overlay(hdc, &mut b, &f, &l);
         notifications::draw(hdc, &mut b, &f, l.w, l.bar_top);
         draw_toast(hdc, &mut b, &f, &l);
         let bar_dy = if FADE < 1000 {
@@ -2269,6 +2560,45 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             return;
         }
     }
+    if SEARCH_OVERLAY {
+        let w = 520.min(l.w - 40);
+        let h = 440.min(l.bar_top - 40);
+        let ox = (l.w - w) / 2;
+        let oy = (l.bar_top - h) / 2;
+        if x >= ox && x < ox + w && y >= oy && y < oy + h {
+            let pad = 24;
+            let il = ox + pad;
+            let ir = ox + w - pad;
+            let fy = oy + 60;
+            let ry = fy + 52;
+            if SEARCH_BUF_LEN > 0 {
+                let mut results = [SearchResult {
+                    name: b"",
+                    launch: Launch::Explorer,
+                    glyph: Glyph::Search,
+                    score: 0,
+                }; 16];
+                let count =
+                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                for i in 0..count {
+                    let iy = ry + (i as i32) * 44;
+                    if iy + 40 >= oy + h - 16 {
+                        break;
+                    }
+                    if y >= iy && y < iy + 40 && x >= il && x < ir {
+                        SEARCH_OVERLAY = false;
+                        launch(results[i].launch);
+                        repaint(hwnd);
+                        return;
+                    }
+                }
+            }
+        } else {
+            SEARCH_OVERLAY = false;
+        }
+        repaint(hwnd);
+        return;
+    }
     if START_OPEN && !START_CLOSING {
         if inside(&l.start, x, y) {
             match start_item_at(&l, x, y) {
@@ -2317,6 +2647,23 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                     if shortcut_idx < unsafe { SHORTCUTS_COUNT } {
                         let exec = unsafe { SHORTCUTS[shortcut_idx].1 };
                         launch(Launch::Exec(exec));
+                    }
+                }
+                i @ 600..=615 => {
+                    let idx = (i - 600) as usize;
+                    let mut results = [SearchResult {
+                        name: b"",
+                        launch: Launch::Explorer,
+                        glyph: Glyph::Search,
+                        score: 0,
+                    }; 16];
+                    let count = collect_results(
+                        unsafe { &START_SEARCH[..START_SEARCH_LEN] },
+                        &mut results,
+                    );
+                    if idx < count {
+                        set_start(false);
+                        launch(results[idx].launch);
                     }
                 }
                 i @ 0..=5 => {
@@ -2383,6 +2730,43 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         let row = context_row(x, y);
         if row != CONTEXT_HOVER {
             CONTEXT_HOVER = row;
+            repaint(hwnd);
+        }
+        return;
+    }
+    if SEARCH_OVERLAY {
+        let w = 520.min(l.w - 40);
+        let h = 440.min(l.bar_top - 40);
+        let ox = (l.w - w) / 2;
+        let oy = (l.bar_top - h) / 2;
+        let pad = 24;
+        let il = ox + pad;
+        let ir = ox + w - pad;
+        let fy = oy + 60;
+        let ry = fy + 52;
+        let mut hover = -1i32;
+        if SEARCH_BUF_LEN > 0 && x >= il && x < ir {
+            let mut results = [SearchResult {
+                name: b"",
+                launch: Launch::Explorer,
+                glyph: Glyph::Search,
+                score: 0,
+            }; 16];
+            let count =
+                collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+            for i in 0..count {
+                let iy = ry + (i as i32) * 44;
+                if iy + 40 >= oy + h - 16 {
+                    break;
+                }
+                if y >= iy && y < iy + 40 {
+                    hover = i as i32;
+                    break;
+                }
+            }
+        }
+        if hover != SEARCH_HOVER {
+            SEARCH_HOVER = hover;
             repaint(hwnd);
         }
         return;
@@ -2612,13 +2996,23 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             return;
         }
     }
-    // Win+Shift+S (Screenshot)
+    // Win+Shift+S (Screenshot) / Win+S (Recherche)
     if ch == 0 && vk == 0x53 {
         let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
             || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
         let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
         if win && shift {
             launch(Launch::Exec(b"screenshot.exe"));
+            return;
+        }
+        if win {
+            SEARCH_OVERLAY = !SEARCH_OVERLAY;
+            if SEARCH_OVERLAY {
+                SEARCH_BUF_LEN = 0;
+                SEARCH_HOVER = -1;
+                set_start(false);
+            }
+            repaint(hwnd);
             return;
         }
     }
@@ -2787,13 +3181,134 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     if ch == 0 && (vk == 0x5B || vk == 0x5C) {
+        if SEARCH_OVERLAY {
+            SEARCH_OVERLAY = false;
+            repaint(hwnd);
+            return;
+        }
         set_start(!(START_OPEN && !START_CLOSING));
         repaint(hwnd);
         return;
     }
+    if SEARCH_OVERLAY {
+        if ch == 27 || vk == 0x1B {
+            SEARCH_OVERLAY = false;
+            repaint(hwnd);
+            return;
+        }
+        if ch == 8 {
+            if SEARCH_BUF_LEN > 0 {
+                SEARCH_BUF_LEN -= 1;
+            }
+            SEARCH_HOVER = -1;
+            repaint(hwnd);
+            return;
+        }
+        if ch == 13 || vk == 0x0D {
+            if SEARCH_HOVER >= 0 {
+                let mut results = [SearchResult {
+                    name: b"",
+                    launch: Launch::Explorer,
+                    glyph: Glyph::Search,
+                    score: 0,
+                }; 16];
+                let count =
+                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                let idx = SEARCH_HOVER as usize;
+                if idx < count {
+                    SEARCH_OVERLAY = false;
+                    launch(results[idx].launch);
+                    repaint(hwnd);
+                    return;
+                }
+            } else if SEARCH_BUF_LEN > 0 {
+                let mut results = [SearchResult {
+                    name: b"",
+                    launch: Launch::Explorer,
+                    glyph: Glyph::Search,
+                    score: 0,
+                }; 16];
+                let count =
+                    collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results);
+                if count > 0 {
+                    SEARCH_OVERLAY = false;
+                    launch(results[0].launch);
+                    repaint(hwnd);
+                    return;
+                }
+            }
+            return;
+        }
+        if vk == 0x28 {
+            // Down
+            let mut results = [SearchResult {
+                name: b"",
+                launch: Launch::Explorer,
+                glyph: Glyph::Search,
+                score: 0,
+            }; 16];
+            let count =
+                collect_results(&SEARCH_BUF[..SEARCH_BUF_LEN], &mut results) as i32;
+            if count > 0 {
+                SEARCH_HOVER = (SEARCH_HOVER + 1).min(count - 1);
+            }
+            repaint(hwnd);
+            return;
+        }
+        if vk == 0x26 {
+            // Up
+            SEARCH_HOVER = (SEARCH_HOVER - 1).max(-1);
+            repaint(hwnd);
+            return;
+        }
+        if ch >= 0x20 && ch < 0x100 && SEARCH_BUF_LEN < 63 {
+            SEARCH_BUF[SEARCH_BUF_LEN] = ch as u8;
+            SEARCH_BUF_LEN += 1;
+            SEARCH_HOVER = -1;
+            repaint(hwnd);
+        }
+        return;
+    }
     if START_OPEN && !START_CLOSING {
         if ch == 27 || vk == 0x1B {
+            START_SEARCH_LEN = 0;
+            START_SEARCH_ACTIVE = false;
             set_start(false);
+            repaint(hwnd);
+            return;
+        }
+        if ch == 8 {
+            if START_SEARCH_LEN > 0 {
+                START_SEARCH_LEN -= 1;
+            }
+            repaint(hwnd);
+            return;
+        }
+        if ch == 13 || vk == 0x0D {
+            if START_SEARCH_LEN > 0 {
+                let mut results = [SearchResult {
+                    name: b"",
+                    launch: Launch::Explorer,
+                    glyph: Glyph::Search,
+                    score: 0,
+                }; 16];
+                let count =
+                    collect_results(&START_SEARCH[..START_SEARCH_LEN], &mut results);
+                if count > 0 {
+                    START_SEARCH_LEN = 0;
+                    START_SEARCH_ACTIVE = false;
+                    set_start(false);
+                    launch(results[0].launch);
+                    repaint(hwnd);
+                    return;
+                }
+            }
+            return;
+        }
+        if ch >= 0x20 && ch < 0x100 && START_SEARCH_LEN < 63 {
+            START_SEARCH[START_SEARCH_LEN] = ch as u8;
+            START_SEARCH_LEN += 1;
+            START_SEARCH_ACTIVE = true;
             repaint(hwnd);
         }
         return;
