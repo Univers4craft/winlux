@@ -68,7 +68,36 @@ log = Path("/var/lib/winlux/native-programs.log").open("w")
 server = subprocess.Popen(["Xvfb", ":99", "-ac", "-screen", "0", "1920x1080x24", "-nolisten", "tcp"], stdout=log, stderr=log)
 time.sleep(1)
 assert server.poll() is None
-print(run("winlux-native-session", timeout=180), flush=True)
+def start_session(timeout=240):
+    # Trace the session script into its own log and wait for the script
+    # itself, not for EOF on a pipe that background services could inherit.
+    # On a hang, print where it stopped and what is still running.
+    trace = Path("/run/winlux/native-session.log")
+    trace.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    with trace.open("w") as output:
+        session = subprocess.Popen(["sh", "-x", "/usr/bin/winlux-native-session"],
+                                   stdin=subprocess.DEVNULL, stdout=output, stderr=output)
+        try:
+            status = session.wait(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            status = None
+    elapsed = time.monotonic() - started
+    if status == 0:
+        print(f"WINLUX_NATIVE_SESSION_SECONDS={elapsed:.1f}", flush=True)
+        return
+    print(f"winlux-native-session: {'blocked after' if status is None else f'exit {status} after'} {elapsed:.0f}s; trace:", flush=True)
+    print("\n".join(trace.read_text(errors="replace").splitlines()[-80:]), flush=True)
+    try: subprocess.run(["ps", "-eo", "pid,ppid,stat,etime,args"], check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired): subprocess.run(["/bin/busybox", "ps"], check=False)
+    for service_log in sorted(Path("/run/winlux").glob("*.log")):
+        if service_log == trace: continue
+        lines = service_log.read_text(errors="replace").splitlines()[-15:]
+        if lines: print(f"--- {service_log.name}\n" + "\n".join(lines), flush=True)
+    if status is None: session.kill()
+    raise AssertionError("winlux-native-session did not complete")
+
+start_session()
 file_manager = run("gdbus", "introspect", "--session", "--dest", "org.xfce.FileManager",
                    "--object-path", "/org/xfce/FileManager", timeout=60)
 assert "Launch" in file_manager, "Desktop file manager cannot launch files"

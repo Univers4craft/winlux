@@ -54,17 +54,22 @@ debugfs -R "dump /var/lib/winlux/vendor-result.txt $work/vendor-result.txt" "$di
 debugfs -R "dump /var/lib/winlux/vendor-results.json $work/vendor-results.json" "$disk" >/dev/null 2>&1 || true
 debugfs -R "dump /var/lib/winlux/window-latency.json $work/window-latency.json" "$disk" >/dev/null 2>&1 || true
 debugfs -R "rdump /var/lib/winlux/session-logs $work" "$disk" >/dev/null 2>&1 || true
-grep -q 'WINLUX_NATIVE_WINDOW_SNAPPING=0' "$log" || { tail -60 "$log"; exit 1; }
+show_failure() {
+    # The session diagnostic block first, then the end of the serial log.
+    sed -n '/^winlux-native-session: /,/^WINLUX_NATIVE_EXIT=/p' "$log" | head -300
+    tail -60 "$log"
+}
+grep -q 'WINLUX_NATIVE_WINDOW_SNAPPING=0' "$log" || { show_failure "$log"; exit 1; }
 for marker in WINLUX_NATIVE_DESKTOP_FILE_SERVICE=0 WINLUX_NATIVE_HARDWARE_SERVICES=0 WINLUX_NATIVE_SETTINGS_ROUTES=0 WINLUX_NATIVE_WINDOW_CONTROLS=0 WINLUX_NATIVE_EDITOR_SAVE=0 WINLUX_NATIVE_EDGE_WINDOWED=0 WINLUX_NATIVE_TASKBAR_AND_MENU=0 WINLUX_NATIVE_PIPES_ANIMATED=0 WINLUX_NATIVE_CLOSE=0 WINLUX_NATIVE_RESULT=0 WINLUX_NATIVE_EXIT=0; do
     if ! grep -q "$marker" "$log"; then
         echo "Missing $marker; see $work" >&2
-        tail -60 "$log"
+        show_failure "$log"
         exit 1
     fi
 done
-test "$result" = 0 || { tail -60 "$log"; exit 1; }
+test "$result" = 0 || { show_failure "$log"; exit 1; }
 if test -f "$stage/usr/share/winlux/update-backend" && grep -qx apt "$stage/usr/share/winlux/update-backend"; then
-    grep -q 'WINLUX_NATIVE_APT_RESULT=0' "$log" || { tail -60 "$log"; exit 1; }
+    grep -q 'WINLUX_NATIVE_APT_RESULT=0' "$log" || { show_failure "$log"; exit 1; }
 fi
 if test "${WINLUX_KEEP_TEST_DISK:-0}" != 1; then rm "$disk"; fi
 echo "OK: mixed PE/Linux windows, controls, editor, catalogue, panel and animated pipes. Captures: $work"
