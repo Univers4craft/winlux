@@ -1287,7 +1287,6 @@ extern "system" {
     pub fn StartPage(dc: Handle) -> i32;
     pub fn EndPage(dc: Handle) -> i32;
     pub fn EndDoc(dc: Handle) -> i32;
-    pub fn GetDeviceCaps(dc: Handle, index: i32) -> i32;
 }
 
 #[link(name = "comdlg32", kind = "raw-dylib")]
