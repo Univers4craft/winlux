@@ -4,6 +4,8 @@
 #![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
+#[path = "../shell/a11y.rs"]
+mod a11y;
 #[path = "../shell/admin_ui.rs"]
 mod admin_ui;
 #[path = "../shell/bsod.rs"]
@@ -18,6 +20,8 @@ mod diskmgr;
 mod eventviewer;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/fonts.rs"]
+mod fonts;
 #[path = "../shell/firewall.rs"]
 mod firewall;
 #[path = "../shell/gfx.rs"]
@@ -38,6 +42,8 @@ mod personalize;
 mod restore;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/store.rs"]
+mod store;
 #[path = "../shell/settings_cpu.rs"]
 mod settings_cpu;
 #[path = "../shell/taskmgr.rs"]
@@ -63,6 +69,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         settings::regression_checks();
         personalize::regression_checks();
         welcome::regression_checks();
+        a11y::regression_checks();
     }
     finish()
 }
