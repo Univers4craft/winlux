@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod audio;
 mod crash;
 mod dlls;
 mod loader;
@@ -24,6 +25,9 @@ fn main() {
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
+    }
+    if exe == "--audio-test" {
+        std::process::exit(audio::self_test());
     }
     if exe == "--inspect" {
         let Some(path) = args.next() else {

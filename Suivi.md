@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **124**
-- À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Réalisé : **125**
+- À faire : **28**
+- Total : **153**
+- Progression : **81.7%**
 
 ## À FAIRE (par priorité)
 
@@ -137,6 +137,9 @@
 - [x] Ajouter une couche SCM locale, non privilégiée, qui persiste les définitions et lance/arrête les services en processus utilisateur.
 - [x] Ajouter les premiers points d’entrée multimédia `mfplat` et `winmm`.
 - [x] Ajouter le décodage WAVE PCM/float et un pont ALSA optionnel pour `PlaySoundA/W` (parseur testé; sortie physique encore à valider sur machine audio).
+- [x] Audio des .exe : moteur de mixage maison (48 kHz, 10 ms) avec sortie PipeWire native, PulseAudio, ALSA ou nulle choisie à l'exécution ; waveOut, DirectSound (+ 3D simple et capture), WASAPI (rendu, capture, loopback, partagé/exclusif) et XAudio2 2.7–2.9 ; un flux par .exe dans le mixeur système et curseurs par application dans la fenêtre Volume (voir `docs/AUDIO.md`).
+- [ ] Audio : décodeurs ADPCM/xWMA/XMA pour XAudio2, effets XAPO tiers et xapofx, Doppler et cônes DirectSound 3D, X3DAudio.
+- [ ] Ajouter PipeWire (pipewire-pulse, wireplumber) à l'ISO pour le mixeur par application ; l'image ne contient aujourd'hui qu'ALSA.
 - [x] Ajouter les primitives de synchronisation `Event`, `Mutex` et `WaitForSingleObject`.
 - [x] Ajouter `VirtualQuery`, `WaitForMultipleObjects` wait-any/wait-all et les sections critiques récursives.
 - [x] Ajouter `ReadFile`/`WriteFile` overlapped avec offsets, `ERROR_IO_PENDING`, signal d’événement et `GetOverlappedResult`.
