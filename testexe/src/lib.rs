@@ -678,6 +678,12 @@ extern "system" {
         r: *mut c_void,
     ) -> i32;
     pub fn Sleep(ms: u32);
+    pub fn WinluxCreatePty(cols: u32, rows: u32) -> usize;
+    pub fn WinluxReadPty(handle: usize, buf: *mut u8, len: u32, read: *mut u32) -> i32;
+    pub fn WinluxWritePty(handle: usize, buf: *const u8, len: u32, written: *mut u32) -> i32;
+    pub fn WinluxResizePty(handle: usize, cols: u32, rows: u32) -> i32;
+    pub fn WinluxPtyAlive(handle: usize) -> i32;
+    pub fn WinluxClosePty(handle: usize) -> i32;
 }
 
 #[link(name = "shell32", kind = "raw-dylib")]
@@ -955,6 +961,11 @@ extern "C" {
         brush: Handle,
     ) -> i32;
     pub fn Ellipse(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32) -> i32;
+    pub fn OpenClipboard(owner: Handle) -> i32;
+    pub fn CloseClipboard() -> i32;
+    pub fn EmptyClipboard() -> i32;
+    pub fn SetClipboardData(format: u32, mem: usize) -> usize;
+    pub fn GetClipboardData(format: u32) -> usize;
 }
 
 #[link(name = "msvcrt", kind = "raw-dylib")]

@@ -38,7 +38,7 @@ static mut HOVER_BUTTON: i32 = -1;
 static mut HOVER_START_ITEM: i32 = -1;
 static mut ICON_X: [i32; 5] = [12, 12, 12, 108, 108];
 static mut ICON_Y: [i32; 5] = [12, 108, 204, 12, 108];
-static mut PINNED_APPS: u8 = 15; // Explorer, Paramètres, Éditeur, Utilitaires
+static mut PINNED_APPS: u8 = 79; // Explorer, Paramètres, Éditeur, Utilitaires + Terminal (bit 6)
 static mut DESKTOP_SHORTCUTS: u8 = 0;
 static mut SHOW_SYSTEM_ICONS: bool = false; // Icônes système (PC, Documents, Corbeille) désactivées par défaut
 static mut START_SHOW_ALL_APPS: bool = false; // Afficher toutes les applications au lieu des épinglées
@@ -733,6 +733,8 @@ fn app_launch(app: usize) -> Launch {
         Launch::Explorer
     } else if app == wm::APP_NOTEPAD {
         Launch::Notepad
+    } else if app == wm::APP_TERMINAL {
+        Launch::Terminal
     } else if app == wm::APP_UTILITIES {
         Launch::Settings
     } else {
@@ -747,6 +749,7 @@ fn taskbar_app(slot: i32) -> Option<usize> {
     for app in [
         wm::APP_EXPLORER,
         wm::APP_NOTEPAD,
+        wm::APP_TERMINAL,
         wm::APP_UTILITIES,
         wm::APP_SETTINGS,
     ] {
@@ -763,6 +766,7 @@ fn taskbar_count() -> i32 {
     1 + [
         wm::APP_EXPLORER,
         wm::APP_NOTEPAD,
+        wm::APP_TERMINAL,
         wm::APP_UTILITIES,
         wm::APP_SETTINGS,
     ]
@@ -922,32 +926,8 @@ unsafe fn context_action(app: usize, desktop: Option<usize>, row: i32, persist: 
                 wm::open(wm::APP_EXPLORER);
             }
             1 => {
-                static TERM: &[u16] = &[
-                    b's' as u16,
-                    b'h' as u16,
-                    b'e' as u16,
-                    b'l' as u16,
-                    b'l' as u16,
-                    b':' as u16,
-                    b't' as u16,
-                    b'e' as u16,
-                    b'r' as u16,
-                    b'm' as u16,
-                    b'i' as u16,
-                    b'n' as u16,
-                    b'a' as u16,
-                    b'l' as u16,
-                    0,
-                ];
-                static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-                ShellExecuteW(
-                    core::ptr::null_mut(),
-                    OPEN.as_ptr(),
-                    TERM.as_ptr(),
-                    core::ptr::null(),
-                    core::ptr::null(),
-                    1,
-                );
+                crate::terminal::init();
+                wm::open(wm::APP_TERMINAL);
             }
             2 => {
                 wm::open(wm::APP_SETTINGS);
@@ -1294,8 +1274,10 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         let g = match app {
             Some(wm::APP_EXPLORER) => Glyph::Folder,
             Some(wm::APP_NOTEPAD) => Glyph::Code,
+            Some(wm::APP_TERMINAL) => Glyph::Terminal,
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
+            Some(wm::APP_DISKMGR) => Glyph::Drive,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1569,32 +1551,8 @@ unsafe fn launch(what: Launch) {
         }
         Launch::Updates => crate::settings::open_page(6),
         Launch::Terminal => {
-            static TERM: &[u16] = &[
-                b's' as u16,
-                b'h' as u16,
-                b'e' as u16,
-                b'l' as u16,
-                b'l' as u16,
-                b':' as u16,
-                b't' as u16,
-                b'e' as u16,
-                b'r' as u16,
-                b'm' as u16,
-                b'i' as u16,
-                b'n' as u16,
-                b'a' as u16,
-                b'l' as u16,
-                0,
-            ];
-            static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-            ShellExecuteW(
-                core::ptr::null_mut(),
-                OPEN.as_ptr(),
-                TERM.as_ptr(),
-                core::ptr::null(),
-                core::ptr::null(),
-                1,
-            );
+            crate::terminal::init();
+            wm::open(wm::APP_TERMINAL);
         }
         Launch::Browser => {
             static BROWSER: &[u16] = &[
@@ -2995,6 +2953,9 @@ pub unsafe fn frame(hwnd: Handle) {
         || SHUTDOWN_ACTION > 0;
     if animating && since(LAST_FRAME) >= 15 {
         LAST_FRAME = now();
+        InvalidateRect(hwnd, core::ptr::null(), 0);
+    }
+    if crate::terminal::poll() {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }

@@ -30,6 +30,8 @@ mod settings;
 mod taskmgr;
 #[path = "../shell/utilities.rs"]
 mod utilities;
+#[path = "../shell/terminal.rs"]
+mod terminal;
 #[path = "../shell/weather.rs"]
 mod weather;
 #[path = "../shell/wm.rs"]
