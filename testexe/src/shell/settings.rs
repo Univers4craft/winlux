@@ -7,6 +7,8 @@ use crate::locale::*;
 use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
+#[path = "printers.rs"]
+mod printers;
 #[path = "settings_gpu.rs"]
 mod graphics;
 
@@ -24,13 +26,15 @@ pub const PAGE_POWER: usize = 23;
 /// Graphismes : GPU, mesures, réglages avancés et overlay en jeu.
 pub const PAGE_GRAPHICS: usize = 24;
 pub const PAGE_REPORT: usize = 25;
-const PAGE_COUNT: usize = 26;
+/// Page « Imprimantes et scanners » (winspool + CUPS).
+pub const PAGE_PRINTERS: usize = 26;
+const PAGE_COUNT: usize = 27;
 /// Appareils Bluetooth affichés (une ligne de boutons chacun).
 const BT_ROWS: usize = 5;
 /// Ordre d'affichage du menu : la personnalisation suit l'apparence,
 /// l'alimentation suit le son et la batterie.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22, 25,
+    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22, 25, 26,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -60,6 +64,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_POWER_BATTERY),
         tr(S_GRAPHICS),
         tr(S_REPORT_PAGE),
+        tr(S_PRINTERS),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -1783,6 +1788,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         PAGE_NETDRIVES => crate::netdrives::draw(g, &c),
         BLUETOOTH_PAGE => draw_bluetooth(g, &c),
         PAGE_REPORT => draw_report(g, &c),
+        PAGE_PRINTERS => printers::draw(g, &c, SCROLL),
         _ => {}
     }
     if PAGE == PAGE_NETDRIVES {
@@ -1790,6 +1796,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     }
     let notice = if PAGE == 10 {
         EXE_NOTICE
+    } else if PAGE == PAGE_PRINTERS {
+        printers::notice()
     } else if PAGE == PAGE_GRAPHICS {
         graphics::runtime_notice()
     } else if !available() {
@@ -2017,6 +2025,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         }
         return true;
     }
+    if ev == Mouse::Move && PAGE == PAGE_PRINTERS {
+        return printers::mouse(ev, x, y);
+    }
     if ev == Mouse::Move && PAGE == PAGE_GRAPHICS {
         let h = graphics::hit(f, x, y);
         let changed = h != graphics::HOVER;
@@ -2056,6 +2067,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             system_tick();
             return true;
         }
+    }
+    if PAGE == PAGE_PRINTERS {
+        return printers::mouse(ev, x, y);
     }
     if PAGE == PAGE_GRAPHICS {
         return graphics::click(f, x, y);
@@ -2464,6 +2478,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     false
 }
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
+    if PAGE == PAGE_PRINTERS && printers::key(vk, ch) {
+        return true;
+    }
     if PAGE == 12 && ch == 0 && crate::a11y::page_key(vk) {
         return true;
     }
@@ -2841,7 +2858,10 @@ unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
     journal(g, c, 366, LOG.get());
 }
 pub unsafe fn tick(_f: &Frame) -> bool {
-    let changed = system_tick() | crate::settings_cpu::tick(PAGE == PAGE_CPU);
+    let mut changed = system_tick() | crate::settings_cpu::tick(PAGE == PAGE_CPU);
+    if PAGE == PAGE_PRINTERS {
+        changed |= printers::tick();
+    }
     if updating() && GetTickCount().wrapping_sub(LAST_ANIMATION) > 90 {
         LAST_ANIMATION = GetTickCount();
         return true;
@@ -2885,6 +2905,7 @@ pub unsafe fn regression_checks() {
         !restart_required(),
         "Sans redemarrage requis les actions normales sont conservees"
     );
+    printers::regression_checks();
     (STATUS, PAGE) = saved;
     graphics::regression_checks();
     crate::settings_cpu::regression_checks();

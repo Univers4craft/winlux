@@ -21,7 +21,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # Lecteurs réseau montés comme disques (winlux-drives).
             "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",
             # Voix du Narrateur (Parametres > Accessibilite).
-            "espeak-ng"]
+            "espeak-ng",
+            # Impression : CUPS (pont IPP de winspool), filtres PDF et IPP-over-USB.
+            "cups", "cups-filters", "ipp-usb"]
 
 def main():
     work = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/desktop-components").resolve()

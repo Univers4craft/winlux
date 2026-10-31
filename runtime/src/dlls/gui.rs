@@ -1379,6 +1379,10 @@ pub fn object_pen_width(handle: usize) -> u16 {
 /// Ajoute une commande de dessin à la file d'attente de peinture de la fenêtre
 /// cible du DC. Renvoie faux si le DC ou la fenêtre n'existe plus.
 pub fn record(hdc: usize, cmd: DrawCmd) -> bool {
+    // DC imprimante : la commande part dans la page en cours (PDF).
+    let Some(cmd) = crate::dlls::winspool::capture(hdc, cmd) else {
+        return true;
+    };
     let (target, bitmap) = match lock(dcs()).get(&hdc) {
         Some(d) => (d.hwnd, d.bitmap),
         None => return false,

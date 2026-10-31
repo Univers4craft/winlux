@@ -265,8 +265,9 @@ pub const S_REPORT_BROWSER: usize = 184;
 pub const S_REPORT_FILE: usize = 185;
 pub const S_REPORT_MODE_AUTO_BROWSER: usize = 186;
 pub const S_REPORT_BUTTON: usize = 187;
+pub const S_PRINTERS: usize = 188;
 
-const STRING_COUNT: usize = 188;
+const STRING_COUNT: usize = 189;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -482,6 +483,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Fichier",
     b"Automatique : aucun service Winlux configur\xE9, le navigateur sera utilis\xE9.",
     b"Signaler",
+    b"Imprimantes et scanners",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -696,6 +698,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"File",
     b"Automatic: no Winlux service configured, the browser will be used.",
     b"Report",
+    b"Printers & scanners",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -910,6 +913,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Archivo",
     b"Autom\xE1tico: ning\xFAn servicio de Winlux configurado, se usar\xE1 el navegador.",
     b"Informar",
+    b"Impresoras y esc\xE1neres",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -1124,6 +1128,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Datei",
     b"Automatisch: Kein Winlux-Dienst eingerichtet, der Browser wird verwendet.",
     b"Melden",
+    b"Drucker und Scanner",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {
