@@ -5,6 +5,8 @@ set -eu
 umask 077
 root=${WINLUX_CONTROL_ROOT:-}
 run="$root/run/winlux"
+# Le module d'alimentation du runtime suit la meme racine (tests).
+if test -n "$root"; then export WINLUX_POWER_ROOT="$root"; fi
 config="$root/etc/winlux"
 mkdir -p "$run" "$config"
 export DISPLAY=${DISPLAY:-:0}
@@ -71,6 +73,8 @@ status() {
         done
         if test "$present" = 0; then printf 'battery=Alimentation CA - aucune batterie exposee\n'; fi
         printf 'battery_present=%s\n' "$present"
+        # Etat detaille, modes et delais : module d'alimentation du runtime.
+        if have winlux; then winlux --power status 2>/dev/null || true; fi
         devices=0
         if test -r "$root/proc/bus/input/devices"; then devices=$(awk '/^N: Name=/ { n++ } END { print n+0 }' "$root/proc/bus/input/devices"); fi
         printf 'input_devices=%s\n' "$devices"
@@ -369,6 +373,17 @@ perform() {
             test -f "$root/etc/winlux/live-session" || { echo 'Redemarrage de session reserve a Winlux Live' >&2; return 1; }
             /usr/bin/winlux-shutdown-screen restart-session >/dev/null 2>&1 || true
             printf 'restart-session\n' > "$run/session-action" ;;
+        power-profile-performance|power-profile-balanced|power-profile-saver)
+            winlux --power profile "${action#power-profile-}" ;;
+        power-screen-ac|power-screen-dc|power-sleep-ac|power-sleep-dc)
+            winlux --power set "${action#power-}" next ;;
+        power-lid) winlux --power set lid next ;;
+        power-button) winlux --power set button next ;;
+        power-brightness-up) winlux --power set brightness + ;;
+        power-brightness-down) winlux --power set brightness - ;;
+        power-suspend) winlux --power suspend ;;
+        power-hibernate) winlux --power hibernate ;;
+        power-hibernate-setup) winlux --power hibernate-setup ;;
         poweroff|reboot)
             test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
             if winlux-update --busy 2>/dev/null || winlux-sysupdate --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi

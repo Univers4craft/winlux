@@ -2,6 +2,7 @@
 //! avec la convention d'appel Windows. Le chargeur relie directement les
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
+pub mod a11y;
 pub mod advapi32;
 pub mod advapi32_services;
 pub mod audio_com;
@@ -25,6 +26,7 @@ pub mod evdev;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
+pub mod gdi32_fonts;
 pub mod gl_bindings;
 pub mod gui;
 mod gui_cairo;
@@ -132,6 +134,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(powrprof::kernel32_exports());
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
                     e.extend(crate::archive::ffi::exports());
@@ -223,6 +226,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    e.extend(gdi32_fonts::exports());
                     e
                 },
                 handle: fake_module(),
@@ -422,6 +426,10 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("api-ms-win-core-rtlsupport-l1-") {
         return "ntdll".into();
+    }
+    // Contrats d'alimentation (PowerGetActiveScheme, PowerSetActiveScheme...).
+    if base.starts_with("api-ms-win-power-") {
+        return "powrprof".into();
     }
     if base.starts_with("api-ms-win-core-")
         || base.starts_with("api-ms-win-downlevel-kernel32-l2-")

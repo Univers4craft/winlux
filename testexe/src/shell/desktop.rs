@@ -32,6 +32,16 @@ pub static mut ALIGN_LEFT: bool = false;
 pub static mut VOLUME_LEVEL: u32 = 0;
 pub static mut BATTERY_LEVEL: u32 = 0;
 pub static mut BATTERY_PRESENT: u32 = 0;
+/// État d'alimentation lu par GetSystemPowerStatus (module power du runtime).
+pub static mut BATTERY_CHARGING: bool = false;
+pub static mut BATTERY_AC: bool = true;
+/// Autonomie restante en secondes (u32::MAX = inconnue).
+pub static mut BATTERY_SECS: u32 = u32::MAX;
+pub static mut BATTERY_SAVER: bool = false;
+static mut BATTERY_HOVER: bool = false;
+static mut LAST_POWER_POLL: u32 = 0;
+/// Dernier seuil d'alerte batterie signalé (20 puis 10 %).
+static mut LOW_WARNED: u32 = 101;
 pub static mut NETWORK_CONNECTED: u32 = 0;
 /// Indicateur Bluetooth : 0 éteint ou absent, 1 activé, 2 appareil connecté.
 pub static mut BLUETOOTH_STATE: u32 = 0;
@@ -325,7 +335,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 35] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 36] = [
             (b"Bienvenue dans Winlux", b"welcome", 9),
             (tr(S_TERMINAL), b"xterm", 1),
             (tr(S_FILE_EXPLORER), b"nemo", 1),
@@ -352,7 +362,8 @@ fn init_apps() {
             (b"Vim", b"vim", 7),
             (b"Geany", b"geany", 7),
             (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
-            (b"Gestionnaire de paquets", b"mintinstall", 9),
+            (b"Store", b"store", 9),
+            (b"Polices", b"fonts", 8),
             (b"Gestion des disques", b"diskmgr", 9),
             (
                 crate::admin_ui::t(b"Planificateur de t\xE2ches", b"Task Scheduler"),
@@ -707,7 +718,12 @@ fn fc(c: u32) -> u32 {
     }
 }
 
-unsafe fn wallpaper(hdc: Handle, l: &Layout) {
+unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
+    // Thème de contraste : arrière-plan uni, comme sous Windows.
+    if let Some(c) = crate::gfx::contrast_colors(crate::gfx::A11Y.contrast) {
+        fill(hdc, b, 0, 0, l.w, l.h, c.background);
+        return;
+    }
     personalize::paint_desktop(hdc, l.w, l.h);
 }
 
@@ -1298,7 +1314,7 @@ unsafe fn draw_volume(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32) 
         }
     }
 }
-unsafe fn draw_battery(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32) {
+unsafe fn draw_battery(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32, charging: bool) {
     let c = rgb(0xF2, 0xF2, 0xF2);
     round_rect(hdc, b, x, y + 2, x + 22, y + 13, 2, c);
     fill(hdc, b, x + 1, y + 3, x + 21, y + 12, rgb(0x20, 0x22, 0x28));
@@ -1309,9 +1325,182 @@ unsafe fn draw_battery(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32)
         y + 4,
         x + 2 + (18 * level.min(100) as i32) / 100,
         y + 11,
-        if level > 20 { c } else { rgb(0xFF, 0x60, 0x50) },
+        if level > 20 || charging {
+            c
+        } else {
+            rgb(0xFF, 0x60, 0x50)
+        },
     );
     fill(hdc, b, x + 22, y + 5, x + 24, y + 10, c);
+    if charging {
+        // Éclair de charge, détouré sur la jauge.
+        let dark = rgb(0x20, 0x22, 0x28);
+        for (dx, top, bottom) in [(9, 3, 8), (10, 4, 8), (11, 7, 9), (12, 7, 12), (13, 7, 11)] {
+            fill(hdc, b, x + dx - 1, y + top, x + dx + 1, y + bottom + 1, dark);
+        }
+        let bolt = rgb(0x6C, 0xCB, 0x5F);
+        for (dx, top, bottom) in [(9, 4, 7), (10, 5, 7), (11, 7, 8), (12, 8, 11), (13, 8, 10)] {
+            fill(hdc, b, x + dx, y + top, x + dx + 1, y + bottom + 1, bolt);
+        }
+    }
+}
+
+/// Lit l'état d'alimentation comme une application Windows le ferait.
+/// Renvoie vrai si l'icône doit être redessinée.
+pub unsafe fn power_tick() -> bool {
+    let t = now();
+    if LAST_POWER_POLL != 0 && t.wrapping_sub(LAST_POWER_POLL) < 3000 {
+        return false;
+    }
+    LAST_POWER_POLL = t;
+    let mut st = SystemPowerStatus::default();
+    if GetSystemPowerStatus(&mut st) == 0 {
+        return false;
+    }
+    let before = (
+        BATTERY_PRESENT,
+        BATTERY_LEVEL,
+        BATTERY_CHARGING,
+        BATTERY_AC,
+        BATTERY_SECS / 60,
+        BATTERY_SAVER,
+    );
+    BATTERY_PRESENT = u32::from(st.battery_flag & 128 == 0 && st.battery_life_percent <= 100);
+    BATTERY_LEVEL = if BATTERY_PRESENT != 0 {
+        u32::from(st.battery_life_percent)
+    } else {
+        0
+    };
+    BATTERY_CHARGING = st.battery_flag & 8 != 0;
+    BATTERY_AC = st.ac_line_status == 1;
+    BATTERY_SECS = st.battery_life_time;
+    BATTERY_SAVER = st.system_status_flag & 1 != 0;
+    // Alertes façon Windows : batterie faible à 20 %, critique à 10 %.
+    if BATTERY_PRESENT != 0 && !BATTERY_AC {
+        if BATTERY_LEVEL <= 10 && LOW_WARNED > 10 {
+            LOW_WARNED = 10;
+            toast(b"Batterie critique : branchez votre PC, il va bient\xF4t se mettre en veille.");
+        } else if BATTERY_LEVEL <= 20 && LOW_WARNED > 20 {
+            LOW_WARNED = 20;
+            toast(b"Batterie faible : 20 % restants. Branchez votre PC.");
+        }
+    } else if BATTERY_AC {
+        LOW_WARNED = 101;
+    }
+    before
+        != (
+            BATTERY_PRESENT,
+            BATTERY_LEVEL,
+            BATTERY_CHARGING,
+            BATTERY_AC,
+            BATTERY_SECS / 60,
+            BATTERY_SAVER,
+        )
+}
+
+fn push(buf: &mut [u8], n: &mut usize, s: &[u8]) {
+    for &c in s {
+        if *n < buf.len() {
+            buf[*n] = c;
+            *n += 1;
+        }
+    }
+}
+fn push_num(buf: &mut [u8], n: &mut usize, v: u32) {
+    let mut digits = [0u8; 10];
+    let mut i = digits.len();
+    let mut v = v;
+    loop {
+        i -= 1;
+        digits[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    push(buf, n, &digits[i..]);
+}
+
+/// Infobulle détaillée de l'icône batterie (pourcentage, état, autonomie).
+unsafe fn draw_battery_tip(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if !BATTERY_HOVER || START_OPEN || NET_PANEL || notifications::is_open() {
+        return;
+    }
+    let mut line1 = [0u8; 64];
+    let mut n1 = 0;
+    let mut line2 = [0u8; 64];
+    let mut n2 = 0;
+    if BATTERY_PRESENT == 0 {
+        push(&mut line1, &mut n1, b"Alimentation secteur");
+        push(&mut line2, &mut n2, b"Aucune batterie d\xE9tect\xE9e");
+    } else {
+        push(&mut line1, &mut n1, b"Batterie : ");
+        push_num(&mut line1, &mut n1, BATTERY_LEVEL);
+        if BATTERY_AC {
+            push(&mut line1, &mut n1, b" % disponible (branch\xE9)");
+            push(
+                &mut line2,
+                &mut n2,
+                if BATTERY_CHARGING {
+                    b"En charge" as &[u8]
+                } else if BATTERY_LEVEL >= 99 {
+                    b"Charg\xE9e"
+                } else {
+                    b"Branch\xE9e, pas en charge"
+                },
+            );
+        } else {
+            push(&mut line1, &mut n1, b" % restants");
+            if BATTERY_SECS != u32::MAX {
+                let (h, m) = (BATTERY_SECS / 3600, BATTERY_SECS / 60 % 60);
+                push(&mut line2, &mut n2, b"Environ ");
+                if h > 0 {
+                    push_num(&mut line2, &mut n2, h);
+                    push(&mut line2, &mut n2, if m < 10 { b" h 0" } else { b" h " });
+                }
+                push_num(&mut line2, &mut n2, m);
+                push(&mut line2, &mut n2, b" min d'autonomie");
+            } else {
+                push(&mut line2, &mut n2, b"Estimation de l'autonomie en cours");
+            }
+        }
+    }
+    let mode: &[u8] = if BATTERY_SAVER {
+        b"Mode : \xC9conomie d'\xE9nergie"
+    } else {
+        b"Cliquez pour les options d'alimentation"
+    };
+    let w = text_width(&line1[..n1], 13)
+        .max(text_width(&line2[..n2], 13))
+        .max(text_width(mode, 11))
+        + 28;
+    let h = 72;
+    // Infobulle ancrée sur l'icône, du côté du bureau quelle que soit la
+    // position de la barre des tâches.
+    let bat = tray(l).battery;
+    let (cx, cy) = ((bat.left + bat.right) / 2, (bat.top + bat.bottom) / 2);
+    let (x, y) = match personalize::BAR_POS {
+        1 => (cx - w / 2, l.bar.bottom + 8),
+        2 => (l.bar.right + 8, cy - h / 2),
+        3 => (l.bar.left - w - 8, cy - h / 2),
+        _ => (cx - w / 2, l.bar.top - h - 8),
+    };
+    let x = x.clamp(8, (l.w - w - 8).max(8));
+    let y = y.clamp(8, (l.h - h - 8).max(8));
+    panel(
+        hdc,
+        b,
+        x,
+        y,
+        x + w,
+        y + h,
+        6,
+        rgb(0x2B, 0x2B, 0x2B),
+        rgb(0x3D, 0x3D, 0x3D),
+    );
+    text(hdc, f.semibold, rgb(0xF2, 0xF2, 0xF2), x + 14, y + 10, &line1[..n1]);
+    text(hdc, f.body, rgb(0xC5, 0xC5, 0xC5), x + 14, y + 30, &line2[..n2]);
+    text(hdc, f.small, rgb(0x9A, 0x9A, 0x9A), x + 14, y + 51, mode);
 }
 
 unsafe fn two_digits(v: u16) -> [u8; 2] {
@@ -1448,6 +1637,8 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(wm::APP_DISKMGR) => Glyph::Drive,
+            Some(wm::APP_STORE) => Glyph::Store,
+            Some(wm::APP_FONTS) => Glyph::Text,
             Some(wm::APP_TASKSCHD) => Glyph::Clock,
             Some(wm::APP_FIREWALL) => Glyph::Shield,
             Some(wm::APP_EVENTVIEWER) => Glyph::Details,
@@ -1579,7 +1770,14 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
         }
         draw_volume(hdc, b, cx - 9, t.volume.top + 6, VOLUME_LEVEL);
         if BATTERY_PRESENT != 0 {
-            draw_battery(hdc, b, cx - 9, t.battery.top + 8, BATTERY_LEVEL);
+            draw_battery(
+                hdc,
+                b,
+                cx - 9,
+                t.battery.top + 8,
+                BATTERY_LEVEL,
+                BATTERY_CHARGING,
+            );
         } else {
             text_centered(hdc, f.small, 11, dim, cx, t.battery.top + 8, b"CA");
         }
@@ -1630,7 +1828,14 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
         }
         draw_volume(hdc, b, t.volume.left + 6, mid(&bar) - 7, VOLUME_LEVEL);
         if BATTERY_PRESENT != 0 {
-            draw_battery(hdc, b, t.battery.left + 6, mid(&bar) - 7, BATTERY_LEVEL);
+            draw_battery(
+                hdc,
+                b,
+                t.battery.left + 6,
+                mid(&bar) - 7,
+                BATTERY_LEVEL,
+                BATTERY_CHARGING,
+            );
         } else {
             text(hdc, f.small, dim, t.battery.left + 8, mid(&bar) - 7, b"CA");
         }
@@ -1706,9 +1911,9 @@ fn pinned_apps() -> [App; 8] {
             launch: Launch::Notepad,
         },
         App {
-            name: b"Utilitaires",
-            glyph: Glyph::Tools,
-            launch: Launch::Settings,
+            name: b"Store",
+            glyph: Glyph::Store,
+            launch: Launch::Exec(b"store"),
         },
         App {
             name: b"Mises \xE0 jour",
@@ -1826,6 +2031,14 @@ unsafe fn launch(what: Launch) {
             }
             if cmd == b"diskmgr" {
                 wm::open(wm::APP_DISKMGR);
+                return;
+            }
+            if cmd == b"store" {
+                crate::store::open();
+                return;
+            }
+            if cmd == b"fonts" {
+                crate::fonts::open();
                 return;
             }
             if cmd == b"taskschd" || cmd == b"taskschd.msc" {
@@ -2593,6 +2806,8 @@ pub unsafe fn toast(msg: &[u8]) {
     TOAST_LEN = n;
     TOAST_START = now();
     notifications::push_simple(msg);
+    crate::a11y::sound_event(crate::a11y::Sound::Notification, msg);
+    crate::a11y::announce(msg);
 }
 
 unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
@@ -3437,6 +3652,7 @@ pub unsafe fn init(
     ALIGN_LEFT = align_left;
     crate::settings::system_tick();
     personalize::load();
+    crate::a11y::init();
     load_shell_state();
     init_apps();
     crate::login::init();
@@ -3486,6 +3702,7 @@ pub unsafe fn draw(hdc: Handle) {
     let mut b = Brushes::new();
     let f = Fonts::new();
     SetBkMode(hdc, 1);
+    crate::a11y::begin_frame();
     if SCREENSAVER {
         fill(hdc, &mut b, 0, 0, SCREEN_W, SCREEN_H, rgb(0x00, 0x00, 0x00));
         for i in 0..12 {
@@ -3550,7 +3767,7 @@ pub unsafe fn draw(hdc: Handle) {
             reflow_desk(&l);
         }
         personalize::on_session_start();
-        wallpaper(hdc, &l);
+        wallpaper(hdc, &mut b, &l);
         if FADE > 600 {
             desktop_icons(hdc, &mut b, &f);
         }
@@ -3562,6 +3779,7 @@ pub unsafe fn draw(hdc: Handle) {
             };
             wm::draw(&mut g);
         }
+        crate::gfx::CHROME_MAP = crate::gfx::A11Y.contrast != 0;
         start_menu(hdc, &mut b, &f, &l);
         search_overlay(hdc, &mut b, &f, &l);
         notifications::draw(hdc, &mut b, &f, l.right, l.bar_top);
@@ -3569,6 +3787,7 @@ pub unsafe fn draw(hdc: Handle) {
         draw_vol_panel(hdc, &mut b, &f, &l);
         weather::draw_panel(hdc, &mut b, &f, l.bar_top, l.right);
         draw_toast(hdc, &mut b, &f, &l);
+        draw_battery_tip(hdc, &mut b, &f, &l);
         // Overlay de fermeture.
         if SHUTDOWN_ACTION > 0 {
             let t = since(SHUTDOWN_START);
@@ -3646,10 +3865,12 @@ pub unsafe fn draw(hdc: Handle) {
             );
         }
         draw_context(hdc, &mut b, &f);
+        crate::gfx::CHROME_MAP = false;
         if crate::login::uac_visible() {
             crate::login::draw_uac(hdc, l.w, l.h);
         }
     }
+    crate::a11y::draw_overlay(hdc, &mut b, &f, l.w, l.h, l.bar_top);
     f.release();
     b.release();
 }
@@ -3716,7 +3937,9 @@ pub unsafe fn frame(hwnd: Handle) {
         }
         return;
     }
+    crate::a11y::frame(hwnd);
     let animating = !BOOT_DONE
+        || crate::a11y::animating()
         || wm::animating()
         || crate::gfx::theme_animating()
         || notifications::animating()
@@ -3755,7 +3978,10 @@ pub unsafe fn tick(hwnd: Handle) {
     }
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
-    let system = crate::settings::system_tick() | crate::firewall::system_tick();
+    let system = crate::settings::system_tick()
+        | power_tick()
+        | crate::firewall::system_tick()
+        | crate::a11y::tick();
     let weather_changed = weather::poll();
     let welcome = BOOT_DONE
         && crate::login::logged_in()
@@ -3865,8 +4091,9 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             NET_PANEL = false;
             notifications::set_open(false);
         } else if inside(&t.battery, x, y) {
-            crate::settings::open_page(3);
+            BATTERY_HOVER = false;
             VOL_PANEL = false;
+            crate::settings::open_page(crate::settings::PAGE_POWER);
         } else if inside(&t.clock, x, y) {
             notifications::toggle();
             NET_PANEL = false;
@@ -4132,6 +4359,9 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         return;
     }
     LAST_INPUT = now();
+    if crate::a11y::on_mouse_move(x, y) {
+        repaint(hwnd);
+    }
     if !BOOT_DONE {
         return;
     }
@@ -4196,6 +4426,11 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
     };
     if hb != HOVER_BUTTON {
         HOVER_BUTTON = hb;
+        rp = true;
+    }
+    let bh = inside(&tray(&l).battery, x, y);
+    if bh != BATTERY_HOVER {
+        BATTERY_HOVER = bh;
         rp = true;
     }
     let hs = if START_OPEN {
@@ -4485,6 +4720,32 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
     }
 }
 
+static mut WIN_ALONE: bool = false;
+
+/// Relâchement d'une touche : la touche Windows seule ouvre Démarrer.
+pub unsafe fn on_key_up(hwnd: Handle, vk: u32) {
+    if (vk == 0x5B || vk == 0x5C) && WIN_ALONE {
+        WIN_ALONE = false;
+        if !BOOT_DONE || !crate::login::logged_in() {
+            return;
+        }
+        if SEARCH_OVERLAY {
+            SEARCH_OVERLAY = false;
+        } else {
+            set_start(!(START_OPEN && !START_CLOSING));
+        }
+        repaint(hwnd);
+    }
+}
+
+/// Une touche a servi à un raccourci traité ailleurs (accessibilité :
+/// Win+U, Win+Plus…) : la touche Windows relâchée n'ouvre pas Démarrer.
+pub unsafe fn key_used_elsewhere(vk: u32) {
+    if vk != 0x5B && vk != 0x5C {
+        WIN_ALONE = false;
+    }
+}
+
 /// Clavier : touche Windows pour le menu Démarrer, Échap pour le fermer,
 /// le reste va à la fenêtre active.
 pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
@@ -4509,6 +4770,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
             repaint(hwnd);
         }
         return;
+    }
+    if ch == 0 && vk != 0x5B && vk != 0x5C {
+        WIN_ALONE = false;
     }
     // F2 rename
     if ch == 0 && vk == 0x71 {
@@ -4543,8 +4807,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Ctrl+Shift+Escape (Gestionnaire des tâches)
     if ch == 0 && vk == 0x1B {
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
-        let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
+        let shift = ((crate::gfx::key_state(0x10) as u16) & 0x8000) != 0;
         if ctrl && shift {
             wm::open(wm::APP_TASKMGR);
             repaint(hwnd);
@@ -4553,9 +4817,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Shift+S (Screenshot) / Win+S (Recherche)
     if ch == 0 && vk == 0x53 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let shift = ((crate::gfx::key_state(0x10) as u16) & 0x8000) != 0;
         if win && shift {
             launch(Launch::Exec(b"screenshot.exe"));
             return;
@@ -4573,8 +4837,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+I (Paramètres)
     if ch == 0 && vk == 0x49 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             wm::open(wm::APP_SETTINGS);
             repaint(hwnd);
@@ -4583,8 +4847,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+L (Verrouiller)
     if ch == 0 && vk == 0x4C {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             crate::login::lock_screen();
             repaint(hwnd);
@@ -4593,8 +4857,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+E (Explorateur de fichiers)
     if ch == 0 && vk == 0x45 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             launch(Launch::Explorer);
             return;
@@ -4602,8 +4866,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+R
     if ch == 0 && vk == 0x52 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             wm::SHOW_RUN = true;
             unsafe {
@@ -4616,8 +4880,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+E
     if ch == 0 && vk == 0x45 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             explorer::open_pc();
             repaint(hwnd);
@@ -4626,8 +4890,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Tab (Vue des tâches)
     if ch == 0 && vk == 0x09 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             unsafe {
                 wm::TASK_VIEW = !wm::TASK_VIEW;
@@ -4638,9 +4902,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+flèches (snap layouts)
     if ch == 0 && (vk == 0x25 || vk == 0x26 || vk == 0x27 || vk == 0x28) {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             // Win+Ctrl+Left/Right : changer de bureau
             if vk == 0x25 {
@@ -4670,9 +4934,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Ctrl+D (nouveau bureau)
     if ch == 0 && vk == 0x44 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             unsafe {
                 wm::add_desktop();
@@ -4683,9 +4947,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Ctrl+F4 (fermer le bureau courant)
     if ch == 0 && vk == 0x73 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             let cur = wm::current_desktop();
             unsafe {
@@ -4697,8 +4961,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+D
     if ch == 0 && vk == 0x44 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             for app in 0..wm::APP_COUNT {
                 if wm::is_open(app) && !wm::is_visible(app) { /* already minimized */ }
@@ -4729,7 +4993,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Alt+F4
     if ch == 0 && vk == 0x73 {
-        let alt = ((GetKeyState(0x12) as u16) & 0x8000) != 0;
+        let alt = ((crate::gfx::key_state(0x12) as u16) & 0x8000) != 0;
         if alt {
             for app in 0..wm::APP_COUNT {
                 if wm::is_open(app) && wm::is_active(app) {
@@ -4762,13 +5026,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     if ch == 0 && (vk == 0x5B || vk == 0x5C) {
-        if SEARCH_OVERLAY {
-            SEARCH_OVERLAY = false;
-            repaint(hwnd);
-            return;
-        }
-        set_start(!(START_OPEN && !START_CLOSING));
-        repaint(hwnd);
+        // Comme Windows : Démarrer s'ouvre au relâchement de la touche, si
+        // elle n'a pas servi à un raccourci (Win+E, Win+Plus…).
+        WIN_ALONE = true;
         return;
     }
     if SEARCH_OVERLAY {
@@ -4891,7 +5151,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     if ch == 0 && vk == 0x56 {
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if ctrl {
             let desktop = explorer::desktop_folder_path();
             if !desktop.get().is_empty() {

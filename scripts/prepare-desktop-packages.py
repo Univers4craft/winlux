@@ -19,7 +19,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "pciutils", "usbutils", "linux-firmware", "mesa-vulkan-drivers",
             "libgl1-mesa-glx", "irqbalance",
             # Lecteurs réseau montés comme disques (winlux-drives).
-            "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone"]
+            "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",
+            # Voix du Narrateur (Parametres > Accessibilite).
+            "espeak-ng"]
 
 def main():
     work = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/desktop-components").resolve()

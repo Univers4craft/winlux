@@ -16,13 +16,16 @@ pub const PAGE_NETDRIVES: usize = 20;
 pub const PAGE_PERSONALIZE: usize = 21;
 /// Page « Bluetooth et appareils » (ouverte depuis la barre des tâches).
 pub const BLUETOOTH_PAGE: usize = 22;
-pub const PAGE_REPORT: usize = 23;
-const PAGE_COUNT: usize = 24;
+/// Page « Alimentation et batterie » (icône batterie de la barre des tâches).
+pub const PAGE_POWER: usize = 23;
+pub const PAGE_REPORT: usize = 24;
+const PAGE_COUNT: usize = 25;
 /// Appareils Bluetooth affichés (une ligne de boutons chacun).
 const BT_ROWS: usize = 5;
-/// Ordre d'affichage du menu : la personnalisation suit l'apparence.
+/// Ordre d'affichage du menu : la personnalisation suit l'apparence,
+/// l'alimentation suit le son et la batterie.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23,
+    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -49,6 +52,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_NETWORK_DRIVES),
         tr(S_PERSONALIZATION),
         tr(S_BLUETOOTH_DEVICES),
+        tr(S_POWER_BATTERY),
         tr(S_REPORT_PAGE),
     ]
 }
@@ -76,6 +80,8 @@ static mut BUILD_INFO: Buffer = EMPTY;
 static mut SYSUPDATES: Buffer = EMPTY;
 static mut BLUETOOTH: Buffer = EMPTY;
 static mut BT_CMD: [u8; 64] = [0; 64];
+/// `/run/winlux/power.txt`, écrit par `winlux --power` (démon et commandes).
+static mut POWER: Buffer = EMPTY;
 /// Nombre de mises à jour système déjà signalé (u32::MAX : pas encore lu).
 static mut NOTIFIED_UPDATES: u32 = u32::MAX;
 static mut SELECTED_MODE: usize = 0;
@@ -92,8 +98,6 @@ static mut EXE_TRACE: bool = false;
 static mut EXE_NOTICE: &[u8] = b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.";
 const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50;
-static mut POINTER_SIZE: u32 = 1;
-static mut HIGH_CONTRAST: bool = false;
 static mut LOCALE_KB_SCROLL: usize = 0;
 static mut LOCALE_TZ_SCROLL: usize = 0;
 use crate::gfx::{AUTO_THEME, ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS};
@@ -264,6 +268,9 @@ unsafe fn read(path: &core::ffi::CStr, target: &mut Buffer) -> bool {
 unsafe fn value(key: &[u8]) -> &'static [u8] {
     field(STATUS.get(), key)
 }
+unsafe fn pvalue(key: &[u8]) -> &'static [u8] {
+    field(POWER.get(), key)
+}
 pub(crate) unsafe fn exe_path() -> &'static [u16] {
     &EXE_PATH[..EXE_LEN]
 }
@@ -377,13 +384,14 @@ pub unsafe fn system_tick() -> bool {
     if PAGE == PAGE_SYSUPDATE {
         changed |= read(c"Z:\\run\\winlux\\sysupdates.txt", &mut SYSUPDATES);
     }
+    if PAGE == PAGE_POWER {
+        changed |= read(c"Z:\\run\\winlux\\power.txt", &mut POWER);
+    }
     if available() {
         notify_updates();
     }
     if available() {
         crate::desktop::NETWORK_CONNECTED = number(value(b"network_connected"));
-        crate::desktop::BATTERY_PRESENT = number(value(b"battery_present"));
-        crate::desktop::BATTERY_LEVEL = number(value(b"battery_level")).min(100);
         let audio = value(b"audio");
         if audio.starts_with(b"Volume: ") {
             let muted = audio.windows(5).any(|w| w == b"MUTED");
@@ -697,6 +705,9 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (PAGE_SYSUPDATE, 0) => value(b"sysupdate_mode") == b"auto",
         (PAGE_SYSUPDATE, 1) => !matches!(value(b"sysupdate_mode"), b"auto" | b"scheduled"),
         (PAGE_SYSUPDATE, 2) => value(b"sysupdate_mode") == b"scheduled",
+        (PAGE_POWER, 0) => pvalue(b"power_profile") == b"performance",
+        (PAGE_POWER, 1) => pvalue(b"power_profile") == b"balanced",
+        (PAGE_POWER, 2) => pvalue(b"power_profile") == b"saver",
         (PAGE_PRIVACY, 0) => value(b"privacy_telemetry") != b"on",
         (PAGE_PRIVACY, 1) => value(b"privacy_telemetry") == b"on",
         (PAGE_PRIVACY, 9) => value(b"privacy_microphone") != b"deny",
@@ -1011,41 +1022,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 0, 1, b"Normale", 1);
             button(g, &c, 0, 2, b"Rapide", 2);
         }
-        12 => {
-            row(
-                g,
-                &c,
-                44,
-                b"Accessibilit\xE9",
-                b"Options d'accessibilit\xE9.",
-            );
-            let pointer_str = unsafe {
-                if POINTER_SIZE == 1 {
-                    "Normal"
-                } else if POINTER_SIZE == 2 {
-                    "Grand"
-                } else {
-                    "Tres grand"
-                }
-            };
-            row(g, &c, 84, b"Taille du pointeur", pointer_str.as_bytes());
-            button(g, &c, 0, 0, b"Normal", 0);
-            button(g, &c, 0, 1, b"Grand", 1);
-            button(g, &c, 0, 2, b"Tr\xE8s grand", 2);
-            row(
-                g,
-                &c,
-                124,
-                b"Contraste \xE9lev\xE9",
-                if unsafe { HIGH_CONTRAST } {
-                    b"Activ\xE9"
-                } else {
-                    b"D\xE9sactiv\xE9"
-                },
-            );
-            button(g, &c, 1, 0, b"Activer", 3);
-            button(g, &c, 1, 1, b"D\xE9sactiver", 4);
-        }
+        12 => crate::a11y::page_draw(g, &c),
         13 => {
             row(g, &c, 44, b"Effets visuels", b"Options d'effet visuels.");
             row(
@@ -1066,7 +1043,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 &c,
                 124,
                 b"Animations fluides",
-                if unsafe { ENABLE_SMOOTH_ANIM } {
+                if crate::gfx::animations() {
                     b"Activ\xE9es"
                 } else {
                     b"D\xE9sactiv\xE9es"
@@ -1350,6 +1327,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             journal(g, &c, 236, LOG.get());
         }
+        PAGE_POWER => draw_power(g, &c),
         3 => {
             row(g, &c, 44, b"Sortie audio / volume", value(b"audio"));
             button(g, &c, 0, 0, b"Volume -", 0);
@@ -1359,10 +1337,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 g,
                 &c,
                 170,
-                b"Batterie expos\xE9e par le syst\xE8me",
-                value(b"battery"),
+                b"Batterie et alimentation",
+                b"Modes d'alimentation, veille et luminosit\xE9 : page Alimentation.",
             );
-            journal(g, &c, 236, LOG.get());
+            button(g, &c, 3, 0, b"Options d'alimentation", 9);
+            journal(g, &c, 280, LOG.get());
         }
         4 => {
             row(g, &c, 44, b"Disposition actuelle", value(b"layout"));
@@ -1782,6 +1761,176 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     );
 }
 
+/// Petit tampon de texte Latin-1 pour composer les libellés dynamiques.
+struct Line {
+    bytes: [u8; 96],
+    len: usize,
+}
+impl Line {
+    fn new() -> Self {
+        Self {
+            bytes: [0; 96],
+            len: 0,
+        }
+    }
+    fn push(&mut self, s: &[u8]) -> &mut Self {
+        for &c in s {
+            if self.len < self.bytes.len() {
+                self.bytes[self.len] = c;
+                self.len += 1;
+            }
+        }
+        self
+    }
+    fn num(&mut self, v: u32) -> &mut Self {
+        let mut digits = [0u8; 10];
+        let mut i = digits.len();
+        let mut v = v;
+        loop {
+            i -= 1;
+            digits[i] = b'0' + (v % 10) as u8;
+            v /= 10;
+            if v == 0 {
+                break;
+            }
+        }
+        self.push(&digits[i..])
+    }
+    fn duration(&mut self, secs: u32) -> &mut Self {
+        let m = secs / 60 % 60;
+        if secs >= 3600 {
+            self.num(secs / 3600).push(b" h ");
+            if m < 10 {
+                self.push(b"0");
+            }
+        }
+        self.num(m).push(b" min")
+    }
+    /// Délai de la configuration : « 10 min », « 2 h » ou « Jamais ».
+    fn delay(&mut self, raw: &[u8]) -> &mut Self {
+        if raw.is_empty() {
+            return self.push(b"?");
+        }
+        match number(raw) {
+            0 => self.push(b"Jamais"),
+            s if s >= 3600 => self.num(s / 3600).push(b" h"),
+            s => self.num(s / 60).push(b" min"),
+        }
+    }
+    fn get(&self) -> &[u8] {
+        &self.bytes[..self.len]
+    }
+}
+
+fn action_label(key: &[u8]) -> &'static [u8] {
+    match key {
+        b"nothing" => b"Ne rien faire",
+        b"sleep" => b"Veille",
+        b"hibernate" => b"Veille prolong\xE9e",
+        b"shutdown" => b"Arr\xEAter",
+        b"display-off" => b"\xC9teindre l'\xE9cran",
+        _ => b"?",
+    }
+}
+
+/// Page « Alimentation et batterie » : état, modes, délais, capot/bouton,
+/// luminosité. Les valeurs viennent de `/run/winlux/power.txt`.
+unsafe fn draw_power(g: &mut Gfx, c: &Rect) {
+    let mut battery = Line::new();
+    if pvalue(b"power_battery").is_empty() {
+        battery.push(b"Service d'alimentation Winlux non d\xE9marr\xE9");
+    } else if pvalue(b"power_battery") == b"0" {
+        battery.push(b"Alimentation secteur - aucune batterie d\xE9tect\xE9e");
+    } else {
+        battery.num(number(pvalue(b"power_percent"))).push(b" % - ");
+        let left = pvalue(b"power_seconds_left");
+        let full = pvalue(b"power_seconds_to_full");
+        match pvalue(b"power_state") {
+            b"charging" => {
+                battery.push(b"En charge");
+                if !full.is_empty() {
+                    battery.push(b", pleine dans ").duration(number(full));
+                }
+            }
+            b"discharging" => {
+                battery.push(b"Sur batterie");
+                if !left.is_empty() {
+                    battery.push(b", ").duration(number(left)).push(b" restantes");
+                }
+            }
+            b"full" => {
+                battery.push(b"Charg\xE9e");
+            }
+            b"not-charging" => {
+                battery.push(b"Branch\xE9e, pas en charge");
+            }
+            _ => {
+                battery.push(b"\xC9tat inconnu");
+            }
+        }
+        if !pvalue(b"power_health").is_empty() {
+            battery
+                .push(b" - sant\xE9 ")
+                .num(number(pvalue(b"power_health")))
+                .push(b" %");
+        }
+    }
+    row(g, c, 44, b"Batterie et mode d'alimentation", battery.get());
+    button(g, c, 0, 0, b"Performances maximales", 0);
+    button(g, c, 0, 1, b"\xC9quilibr\xE9", 1);
+    button(g, c, 0, 2, b"\xC9conomie d'\xE9nergie", 2);
+
+    let mut now = Line::new();
+    now.push(b"Appliqu\xE9 maintenant : \xE9cran ")
+        .push(pvalue(b"power_screen_now"))
+        .push(b", veille ")
+        .push(pvalue(b"power_sleep_now"));
+    row(g, c, 176, b"\xC9cran et mise en veille (cliquer pour changer)", now.get());
+    let mut l = Line::new();
+    l.push(b"\xC9cran secteur : ").delay(pvalue(b"power_screen_ac"));
+    button(g, c, 3, 0, l.get(), 9);
+    let mut l = Line::new();
+    l.push(b"\xC9cran batterie : ").delay(pvalue(b"power_screen_dc"));
+    button(g, c, 3, 1, l.get(), 10);
+    if pvalue(b"power_can_sleep") == b"1" {
+        button(g, c, 3, 2, b"Mettre en veille", 11);
+    }
+    let mut l = Line::new();
+    l.push(b"Veille secteur : ").delay(pvalue(b"power_sleep_ac"));
+    button(g, c, 4, 0, l.get(), 12);
+    let mut l = Line::new();
+    l.push(b"Veille batterie : ").delay(pvalue(b"power_sleep_dc"));
+    button(g, c, 4, 1, l.get(), 13);
+
+    let mut l = Line::new();
+    l.push(b"Luminosit\xE9 ");
+    if pvalue(b"power_brightness").is_empty() {
+        l.push(b"non r\xE9glable ici (VM ou \xE9cran externe)");
+    } else {
+        l.num(number(pvalue(b"power_brightness"))).push(b" %");
+        if pvalue(b"power_profile") == b"saver" {
+            l.push(b" (mode \xE9conomie)");
+        }
+    }
+    l.push(if pvalue(b"power_can_hibernate") == b"1" {
+        b" - veille prolong\xE9e pr\xEAte" as &[u8]
+    } else {
+        b" - veille prolong\xE9e \xE0 pr\xE9parer"
+    });
+    row(g, c, 352, b"Capot, bouton d'alimentation et luminosit\xE9", l.get());
+    let mut l = Line::new();
+    l.push(b"Capot : ").push(action_label(pvalue(b"power_lid")));
+    button(g, c, 7, 0, l.get(), 21);
+    let mut l = Line::new();
+    l.push(b"Bouton : ").push(action_label(pvalue(b"power_button")));
+    button(g, c, 7, 1, l.get(), 22);
+    if pvalue(b"power_can_hibernate") == b"1" {
+        button(g, c, 7, 2, b"Veille prolong\xE9e", 23);
+    }
+    button(g, c, 8, 0, b"Luminosit\xE9 -", 24);
+    button(g, c, 8, 1, b"Luminosit\xE9 +", 25);
+}
+
 fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     let c = content(f);
     if unsafe { PAGE == 7 && restart_required() } {
@@ -1791,6 +1940,7 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
             -1
         };
     }
+    // Dix rangées de trois boutons (Signaler un problème va jusqu'à 9).
     for i in 0..30 {
         let r = button_rect(&c, i / 3, i % 3);
         if r.bottom <= c.bottom - 24 && inside(&r, x, y) {
@@ -1800,6 +1950,9 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     -1
 }
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
+    if PAGE == 12 && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        return crate::a11y::page_mouse(ev, x, y, &content(f));
+    }
     if PAGE == PAGE_NETDRIVES && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
         return crate::netdrives::mouse(ev, x, y, &content(f));
     }
@@ -1844,6 +1997,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             system_tick();
             return true;
         }
+    }
+    if PAGE == 12 {
+        return crate::a11y::page_mouse(ev, x, y, &content(f));
     }
     if PAGE == PAGE_CPU {
         return crate::settings_cpu::click(&content(f), x, y);
@@ -1933,6 +2089,23 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (3, 0) => Some(c"volume-down"),
         (3, 1) => Some(c"volume-mute"),
         (3, 2) => Some(c"volume-up"),
+        (3, 9) => {
+            open_page(PAGE_POWER);
+            return true;
+        }
+        (PAGE_POWER, 0) => Some(c"power-profile-performance"),
+        (PAGE_POWER, 1) => Some(c"power-profile-balanced"),
+        (PAGE_POWER, 2) => Some(c"power-profile-saver"),
+        (PAGE_POWER, 9) => Some(c"power-screen-ac"),
+        (PAGE_POWER, 10) => Some(c"power-screen-dc"),
+        (PAGE_POWER, 11) if pvalue(b"power_can_sleep") == b"1" => Some(c"power-suspend"),
+        (PAGE_POWER, 12) => Some(c"power-sleep-ac"),
+        (PAGE_POWER, 13) => Some(c"power-sleep-dc"),
+        (PAGE_POWER, 21) => Some(c"power-lid"),
+        (PAGE_POWER, 22) => Some(c"power-button"),
+        (PAGE_POWER, 23) if pvalue(b"power_can_hibernate") == b"1" => Some(c"power-hibernate"),
+        (PAGE_POWER, 24) => Some(c"power-brightness-down"),
+        (PAGE_POWER, 25) => Some(c"power-brightness-up"),
         (4, 0) => Some(c"keyboard-fr"),
         (4, 1) => Some(c"keyboard-us"),
         (4, 3) => Some(c"tap-on"),
@@ -1992,26 +2165,6 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (8, 15) => Some(c"display-scale-down"),
         (8, 16) => Some(c"display-scale-auto"),
         (8, 17) => Some(c"display-scale-up"),
-        (12, 0) => {
-            unsafe { POINTER_SIZE = 1 };
-            Some(c"pointer-normal")
-        }
-        (12, 1) => {
-            unsafe { POINTER_SIZE = 2 };
-            Some(c"pointer-large")
-        }
-        (12, 2) => {
-            unsafe { POINTER_SIZE = 3 };
-            Some(c"pointer-xlarge")
-        }
-        (12, 3) => {
-            unsafe { HIGH_CONTRAST = true };
-            Some(c"contrast-on")
-        }
-        (12, 4) => {
-            unsafe { HIGH_CONTRAST = false };
-            Some(c"contrast-off")
-        }
         (13, 0) => {
             unsafe { ENABLE_BLUR = true };
             Some(c"blur-on")
@@ -2020,13 +2173,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             unsafe { ENABLE_BLUR = false };
             Some(c"blur-off")
         }
-        (13, 3) => {
-            unsafe { ENABLE_SMOOTH_ANIM = true };
-            Some(c"smooth-on")
-        }
-        (13, 4) => {
-            unsafe { ENABLE_SMOOTH_ANIM = false };
-            Some(c"smooth-off")
+        (13, id @ (3 | 4)) => {
+            // Même réglage que Accessibilité > Effets d'animation.
+            crate::gfx::A11Y.animations = id == 3;
+            ENABLE_SMOOTH_ANIM = id == 3;
+            crate::gfx::a11y_save();
+            return true;
         }
         (13, 6) => {
             unsafe { ENABLE_THUMBNAILS = true };
@@ -2245,6 +2397,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     false
 }
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
+    if PAGE == 12 && ch == 0 && crate::a11y::page_key(vk) {
+        return true;
+    }
     if PAGE == PAGE_NETDRIVES && crate::netdrives::key(vk, ch) {
         return true;
     }

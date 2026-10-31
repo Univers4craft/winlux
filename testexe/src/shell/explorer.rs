@@ -1377,10 +1377,10 @@ fn first_sel(p: &Pane) -> Option<usize> {
         .map(|v| p.view[v] as usize)
 }
 fn ctrl() -> bool {
-    unsafe { GetKeyState(0x11) as u16 & 0x8000 != 0 }
+    unsafe { crate::gfx::key_state(0x11) as u16 & 0x8000 != 0 }
 }
 fn shift() -> bool {
-    unsafe { GetKeyState(0x10) as u16 & 0x8000 != 0 }
+    unsafe { crate::gfx::key_state(0x10) as u16 & 0x8000 != 0 }
 }
 
 // ---------- Géométrie ----------
@@ -1826,7 +1826,7 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
         );
         let cx = a.left + 12 + text_width(ADDRESS.get(), 13).min(a.right - a.left - 30);
         if GetTickCount() / 530 % 2 == 0 {
-            fill(g.hdc, g.b, cx, a.top + 7, cx + 1, a.bottom - 7, p.text);
+            fill(g.hdc, g.b, cx, a.top + 7, cx + crate::gfx::caret_w(1), a.bottom - 7, p.text);
         }
     } else {
         draw_breadcrumb(g, &a, pn.loc.get());
@@ -1888,7 +1888,7 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     }
     if active && GetTickCount() / 530 % 2 == 0 {
         let cx = s.left + 12 + text_width(pn.search.get(), 13).min(s.right - s.left - 52);
-        fill(g.hdc, g.b, cx, s.top + 7, cx + 1, s.bottom - 7, p.text);
+        fill(g.hdc, g.b, cx, s.top + 7, cx + crate::gfx::caret_w(1), s.bottom - 7, p.text);
     }
 
     // Barre de commandes.
@@ -2557,7 +2557,7 @@ unsafe fn draw_rename(g: &mut Gfx, r: Rect) {
     );
     let cx = r.left + 5 + text_width(RENAME.get(), 12).min(r.right - r.left - 12);
     if GetTickCount() / 530 % 2 == 0 {
-        fill(g.hdc, g.b, cx, r.top + 3, cx + 1, r.bottom - 3, p.text);
+        fill(g.hdc, g.b, cx, r.top + 3, cx + crate::gfx::caret_w(1), r.bottom - 3, p.text);
     }
 }
 
@@ -3792,6 +3792,25 @@ pub unsafe fn drag_glyph() -> Glyph {
         glyph_of(p.entries[i].kind)
     } else {
         Glyph::File
+    }
+}
+
+/// Chemins des éléments sélectionnés (glisser-déposer vers une application).
+pub unsafe fn for_each_selected(f: &mut dyn FnMut(&[u8])) {
+    let p = pane();
+    if p.loc.is(HOME) || p.loc.is(PC) {
+        return;
+    }
+    for v in 0..p.nview {
+        let i = p.view[v] as usize;
+        if !is_sel(p, i) {
+            continue;
+        }
+        let mut src = [0u8; PATH_LEN + NAME_LEN + 2];
+        let n = item_path(p, i, &mut src);
+        if n > 0 {
+            f(&src[..n]);
+        }
     }
 }
 

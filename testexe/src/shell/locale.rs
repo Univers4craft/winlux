@@ -237,34 +237,35 @@ pub const S_PROCESSOR: usize = 158;
 pub const S_NETWORK_DRIVES: usize = 159;
 pub const S_PERSONALIZATION: usize = 160;
 pub const S_BLUETOOTH_DEVICES: usize = 161;
+pub const S_POWER_BATTERY: usize = 162;
 
 // Signaler un problème
-pub const S_REPORT_PAGE: usize = 162;
-pub const S_REPORT_DESC: usize = 163;
-pub const S_REPORT_NEW: usize = 164;
-pub const S_REPORT_LAST: usize = 165;
-pub const S_REPORT_SAVED: usize = 166;
-pub const S_REPORT_OFFER: usize = 167;
-pub const S_REPORT_OFFER_ON_DESC: usize = 168;
-pub const S_REPORT_OFFER_OFF_DESC: usize = 169;
-pub const S_REPORT_PROPOSE: usize = 170;
-pub const S_REPORT_SILENT: usize = 171;
-pub const S_REPORT_PRIVATE: usize = 172;
-pub const S_REPORT_MASK_DESC: usize = 173;
-pub const S_REPORT_NOMASK_DESC: usize = 174;
-pub const S_REPORT_MASK: usize = 175;
-pub const S_REPORT_NOMASK: usize = 176;
-pub const S_REPORT_MODE: usize = 177;
-pub const S_REPORT_MODE_RELAY: usize = 178;
-pub const S_REPORT_MODE_BROWSER: usize = 179;
-pub const S_REPORT_MODE_FILE: usize = 180;
-pub const S_REPORT_AUTO: usize = 181;
-pub const S_REPORT_BROWSER: usize = 182;
-pub const S_REPORT_FILE: usize = 183;
-pub const S_REPORT_MODE_AUTO_BROWSER: usize = 184;
-pub const S_REPORT_BUTTON: usize = 185;
+pub const S_REPORT_PAGE: usize = 163;
+pub const S_REPORT_DESC: usize = 164;
+pub const S_REPORT_NEW: usize = 165;
+pub const S_REPORT_LAST: usize = 166;
+pub const S_REPORT_SAVED: usize = 167;
+pub const S_REPORT_OFFER: usize = 168;
+pub const S_REPORT_OFFER_ON_DESC: usize = 169;
+pub const S_REPORT_OFFER_OFF_DESC: usize = 170;
+pub const S_REPORT_PROPOSE: usize = 171;
+pub const S_REPORT_SILENT: usize = 172;
+pub const S_REPORT_PRIVATE: usize = 173;
+pub const S_REPORT_MASK_DESC: usize = 174;
+pub const S_REPORT_NOMASK_DESC: usize = 175;
+pub const S_REPORT_MASK: usize = 176;
+pub const S_REPORT_NOMASK: usize = 177;
+pub const S_REPORT_MODE: usize = 178;
+pub const S_REPORT_MODE_RELAY: usize = 179;
+pub const S_REPORT_MODE_BROWSER: usize = 180;
+pub const S_REPORT_MODE_FILE: usize = 181;
+pub const S_REPORT_AUTO: usize = 182;
+pub const S_REPORT_BROWSER: usize = 183;
+pub const S_REPORT_FILE: usize = 184;
+pub const S_REPORT_MODE_AUTO_BROWSER: usize = 185;
+pub const S_REPORT_BUTTON: usize = 186;
 
-const STRING_COUNT: usize = 186;
+const STRING_COUNT: usize = 187;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -273,7 +274,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
-    b"Son et batterie",
+    b"Son",
     b"Clavier et pav\xE9 tactile",
     b"Souris",
     b"Apparence",
@@ -453,7 +454,8 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Lecteurs r\xE9seau",
     b"Personnalisation",
     b"Bluetooth et appareils",
-    // 162-185 : Signaler un problème
+    b"Alimentation et batterie",
+    // 163-186 : Signaler un problème
     b"Signaler un probl\xE8me",
     b"D\xE9crivez un bug : le rapport complet s'affiche, modifiable, avant tout envoi.",
     b"Nouveau signalement",
@@ -485,7 +487,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Linux System",
     b"Windows Applications",
     b"Network",
-    b"Sound and Battery",
+    b"Sound",
     b"Keyboard and Touchpad",
     b"Mouse",
     b"Appearance",
@@ -665,7 +667,8 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Network drives",
     b"Personalization",
     b"Bluetooth & devices",
-    // 162-185 : Signaler un problème
+    b"Power and battery",
+    // 163-186 : Signaler un problème
     b"Report a problem",
     b"Describe a bug: the full report is shown, editable, before anything is sent.",
     b"New report",
@@ -697,7 +700,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Sistema Linux",
     b"Aplicaciones Windows",
     b"Red",
-    b"Sonido y bater\xEDa",
+    b"Sonido",
     b"Teclado y panel t\xE1ctil",
     b"Rat\xF3n",
     b"Apariencia",
@@ -877,7 +880,8 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Unidades de red",
     b"Personalizaci\xF3n",
     b"Bluetooth y dispositivos",
-    // 162-185 : Signaler un problème
+    b"Energ\xEDa y bater\xEDa",
+    // 163-186 : Signaler un problème
     b"Informar de un problema",
     b"Describa un error: el informe completo se muestra, editable, antes de enviar nada.",
     b"Nuevo informe",
@@ -909,7 +913,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Linux-System",
     b"Windows-Anwendungen",
     b"Netzwerk",
-    b"Ton und Akku",
+    b"Ton",
     b"Tastatur und Touchpad",
     b"Maus",
     b"Darstellung",
@@ -1089,7 +1093,8 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Netzlaufwerke",
     b"Personalisierung",
     b"Bluetooth und Ger\xE4te",
-    // 162-185 : Signaler un problème
+    b"Energie und Akku",
+    // 163-186 : Signaler un problème
     b"Problem melden",
     b"Beschreiben Sie einen Fehler: Der vollst\xE4ndige Bericht wird vor dem Senden bearbeitbar angezeigt.",
     b"Neue Meldung",

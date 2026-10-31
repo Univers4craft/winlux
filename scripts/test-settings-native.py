@@ -40,4 +40,4 @@ GLib.idle_add(check)
 Gtk.main()
 if failures:
     raise failures[0]
-print("OK: 14 native settings pages, progress visibility, no system actions")
+print(f"OK: {len(module['PAGES'])} native settings pages, progress visibility, no system actions")
