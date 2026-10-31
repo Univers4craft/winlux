@@ -88,6 +88,14 @@ L'outil `winlux-update` :
 - [x] Retour arrière manuel (`winlux-update --rollback`)
 - [x] Mise à jour automatique (boucle de vérification, pas de redémarrage forcé)
 - [x] Verrouillage des opérations concurrentes
+- [x] Point de restauration `winlux-restore` avant chaque installation APT (3 derniers gardés)
+- [x] Vérification `dpkg --verify` des fichiers installés, réparation puis retour arrière
+- [x] Validation du démarrage (base APT) : `/var/lib/winlux/update-trial` est écrit après
+      l'installation ; l'init appelle `winlux-update --confirm-boot` quand le bureau tient
+      60 s, `--boot-failed` si Xorg ou la session ne démarrent pas (retour immédiat), et
+      `--boot` revient à `previous.deb` hors ligne (`dpkg --install`) au 3e démarrage
+      interactif sans validation. La version quittée est notée dans `update-blocked` :
+      `--auto-run` ne la réinstalle pas, `--apply` manuel reste possible.
 
 Audit du 25 octobre 2026 : `scripts/test-updater.sh` couvre les transactions et
 retours arrière. Aucune case A/B ou signature n'est cochée : le schéma ci-dessus

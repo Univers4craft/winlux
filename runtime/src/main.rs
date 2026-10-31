@@ -11,6 +11,7 @@ mod dlls;
 mod firewall;
 mod gpu;
 mod imaging;
+mod launch;
 mod loader;
 pub mod log;
 mod managed;
@@ -163,7 +164,7 @@ fn main() {
     );
     cpu::apply_launch(&cpu_settings, &image.import_names());
     dlls::kernel32::init();
-    process::init_process(&image, &rest);
+    process::init_process(&image, &launch::windows_args(&rest));
     process::run(image);
 }
 
