@@ -499,6 +499,9 @@ fi
 /bin/busybox ip link set lo up
 /bin/busybox mkdir -p /run/winlux /etc/winlux
 /bin/busybox touch /etc/winlux/live-session
+# Alimentation : profil, luminosite, veille sur inactivite, capot, bouton
+# d'alimentation et batterie critique. Remplace logind/upower, sans systemd.
+/usr/bin/winlux --power daemon >/run/winlux/power-daemon.log 2>&1 &
 if ! /bin/busybox grep -q '^winlux-web:' /etc/passwd; then
     browser_uid=1001
     while /bin/busybox awk -F: -v n="$browser_uid" '$3 == n { found=1 } END { exit !found }' /etc/passwd /etc/group; do

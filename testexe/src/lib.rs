@@ -24,6 +24,18 @@ pub struct SystemInfo {
     pub processor_revision: u16,
 }
 
+/// `SYSTEM_POWER_STATUS` (GetSystemPowerStatus).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct SystemPowerStatus {
+    pub ac_line_status: u8,
+    pub battery_flag: u8,
+    pub battery_life_percent: u8,
+    pub system_status_flag: u8,
+    pub battery_life_time: u32,
+    pub battery_full_life_time: u32,
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 pub struct SystemTime {
@@ -633,6 +645,12 @@ extern "system" {
         len: usize,
     ) -> usize;
     pub fn GetTickCount() -> u32;
+    pub fn GetSystemPowerStatus(out: *mut SystemPowerStatus) -> i32;
+    pub fn SetThreadExecutionState(flags: u32) -> u32;
+    pub fn PowerCreateRequest(reason: *const c_void) -> Handle;
+    pub fn PowerSetRequest(request: Handle, kind: u32) -> i32;
+    pub fn PowerClearRequest(request: Handle, kind: u32) -> i32;
+    pub fn LocalFree(p: *mut c_void) -> *mut c_void;
     pub fn QueryPerformanceCounter(out: *mut i64) -> i32;
     pub fn QueryPerformanceFrequency(out: *mut i64) -> i32;
     pub fn GetCurrentProcessId() -> u32;
@@ -1065,6 +1083,20 @@ extern "C" {
     pub fn EmptyClipboard() -> i32;
     pub fn SetClipboardData(format: u32, mem: usize) -> usize;
     pub fn GetClipboardData(format: u32) -> usize;
+}
+
+#[link(name = "powrprof", kind = "raw-dylib")]
+extern "system" {
+    pub fn PowerGetActiveScheme(key: Handle, guid: *mut *mut [u8; 16]) -> u32;
+    pub fn PowerSetActiveScheme(key: Handle, guid: *const [u8; 16]) -> u32;
+    pub fn PowerReadFriendlyName(
+        key: Handle,
+        scheme: *const [u8; 16],
+        sub: *const c_void,
+        setting: *const c_void,
+        buffer: *mut u16,
+        size: *mut u32,
+    ) -> u32;
 }
 
 #[link(name = "msvcrt", kind = "raw-dylib")]

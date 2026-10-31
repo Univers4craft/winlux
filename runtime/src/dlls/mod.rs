@@ -144,6 +144,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(powrprof::kernel32_exports());
                     e.extend(gpu_caps::exports());
                     e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
@@ -451,6 +452,10 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("api-ms-win-core-rtlsupport-l1-") {
         return "ntdll".into();
+    }
+    // Contrats d'alimentation (PowerGetActiveScheme, PowerSetActiveScheme...).
+    if base.starts_with("api-ms-win-power-") {
+        return "powrprof".into();
     }
     if base.starts_with("api-ms-win-core-")
         || base.starts_with("api-ms-win-downlevel-kernel32-l2-")
