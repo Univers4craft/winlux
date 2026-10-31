@@ -17,7 +17,9 @@ if command -v "$cxx" >/dev/null 2>&1; then
     for src in "$root"/testc/*.cpp; do
         test -f "$src" || continue
         name=$(basename "$src" .cpp)
-        "$cxx" -O2 -Wall -Werror -o "$out/$name.exe" "$src"
+        # Statique : libstdc++ et libgcc (personnalité SEH de GCC) dans
+        # l'exe, comme une appli livrée avec sa propre CRT C++.
+        "$cxx" -O2 -Wall -Werror -static -o "$out/$name.exe" "$src"
     done
 fi
 echo "Tests MinGW construits dans $out"
