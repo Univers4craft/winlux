@@ -22,6 +22,8 @@ mod eventviewer;
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/locale.rs"]
+mod locale;
 #[path = "../shell/login.rs"]
 mod login;
 #[path = "../shell/netdrives.rs"]
@@ -42,6 +44,8 @@ mod terminal;
 mod utilities;
 #[path = "../shell/weather.rs"]
 mod weather;
+#[path = "../shell/welcome.rs"]
+mod welcome;
 #[path = "../shell/wm.rs"]
 mod wm;
 
@@ -864,6 +868,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let desktop =
             GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0;
         DESKTOP = desktop;
+        locale::load_lang();
         wm::native_init();
         if desktop {
             let mut align = [0i8; 8];

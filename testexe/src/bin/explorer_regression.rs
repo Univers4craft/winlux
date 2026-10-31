@@ -18,6 +18,8 @@ mod eventviewer;
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/locale.rs"]
+mod locale;
 #[path = "../shell/login.rs"]
 mod login;
 #[path = "../shell/netdrives.rs"]
@@ -38,6 +40,8 @@ mod terminal;
 mod utilities;
 #[path = "../shell/weather.rs"]
 mod weather;
+#[path = "../shell/welcome.rs"]
+mod welcome;
 #[path = "../shell/wm.rs"]
 mod wm;
 
@@ -47,6 +51,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         explorer::regression_checks();
         desktop::regression_checks();
         settings::regression_checks();
+        welcome::regression_checks();
     }
     finish()
 }
