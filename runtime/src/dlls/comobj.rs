@@ -21,9 +21,7 @@ pub const S_FALSE: i32 = 1;
 pub const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
 pub const E_NOINTERFACE: i32 = 0x8000_4002u32 as i32;
 pub const E_POINTER: i32 = 0x8000_4003u32 as i32;
-pub const E_FAIL: i32 = 0x8000_4005u32 as i32;
 pub const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
-pub const E_OUTOFMEMORY: i32 = 0x8007_000Eu32 as i32;
 
 /// Lit un GUID passé par pointeur (`REFGUID`) ; `None` si nul.
 ///

@@ -33,6 +33,7 @@ pub mod kernel32_cpu;
 pub mod kernel32_misc;
 pub mod libgcc;
 pub mod libstdcpp;
+pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
 pub mod mscoree;
@@ -53,6 +54,7 @@ pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
 pub mod uxtheme;
+pub mod v4l2;
 pub mod version;
 pub mod winfile;
 pub mod winhttp;
@@ -247,6 +249,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "mfreadwrite",
+                exports: mfplat::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "mf",
                 exports: mfplat::exports(),
                 handle: fake_module(),
             },

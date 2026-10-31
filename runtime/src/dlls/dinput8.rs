@@ -301,6 +301,15 @@ pub fn pov_angle(x: i32, y: i32) -> u32 {
     }
 }
 
+/// Octet d'état d'un bouton DirectInput.
+fn down(pressed: bool) -> u32 {
+    if pressed {
+        0x80
+    } else {
+        0
+    }
+}
+
 /// Valeur d'un axe absolu selon la plage, la zone morte et la saturation.
 fn scale_axis(n: f32, p: &AxisProps) -> i32 {
     let dz = p.deadzone.min(10000) as f32 / 10000.0;
@@ -626,22 +635,16 @@ impl DevState {
             let (dx, dy, dz, b) = crate::dlls::gui::take_raw_mouse();
             mouse_delta = [dx, dy, dz];
             mouse_buttons = b;
-            for i in 0..3 {
-                self.mouse_acc[i] += mouse_delta[i];
-                self.mouse_abs[i] += mouse_delta[i];
+            for (i, d) in mouse_delta.iter().enumerate() {
+                self.mouse_acc[i] += d;
+                self.mouse_abs[i] += d;
             }
         }
         let mut out = Vec::with_capacity(self.objs.len());
         for (i, o) in self.objs.iter().enumerate() {
             let v = match (o.src, &snap) {
                 (Src::Axis(a), Some(s)) => scale_axis(s.abs[a].signed(), &self.props[i]) as u32,
-                (Src::Button(c), Some(s)) => {
-                    if s.key(c) {
-                        0x80
-                    } else {
-                        0
-                    }
-                }
+                (Src::Button(c), Some(s)) => down(s.key(c)),
                 (Src::Hat(h), Some(s)) => pov_angle(
                     s.abs[evdev::ABS_HAT0X + h * 2].value,
                     s.abs[evdev::ABS_HAT0X + h * 2 + 1].value,
@@ -652,13 +655,7 @@ impl DevState {
                     let y = s.key(evdev::BTN_DPAD_DOWN) as i32 - s.key(evdev::BTN_DPAD_UP) as i32;
                     pov_angle(x, y)
                 }
-                (Src::Key(k), _) => {
-                    if keys[k as usize] {
-                        0x80
-                    } else {
-                        0
-                    }
-                }
+                (Src::Key(k), _) => down(keys[k as usize]),
                 (Src::MouseAxis(a), _) => {
                     if self.relative_mouse {
                         mouse_delta[a as usize] as u32
@@ -666,13 +663,7 @@ impl DevState {
                         self.mouse_abs[a as usize] as u32
                     }
                 }
-                (Src::MouseButton(b), _) => {
-                    if mouse_buttons[b as usize] {
-                        0x80
-                    } else {
-                        0
-                    }
-                }
+                (Src::MouseButton(b), _) => down(mouse_buttons[b as usize]),
                 _ => 0,
             };
             out.push(v);
