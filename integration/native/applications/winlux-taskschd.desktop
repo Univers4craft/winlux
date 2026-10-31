@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Planificateur de tâches
+Name[en]=Task Scheduler
+Comment=Lancer des programmes à heure fixe, au démarrage ou sur un événement
+Comment[en]=Run programs on a schedule, at startup or on an event
+Exec=/usr/bin/winlux-shell-app taskschd
+Icon=x-office-calendar
+StartupWMClass=winlux-taskschd
+Terminal=false
+Categories=System;Settings;
