@@ -106,9 +106,18 @@ def fetch(url, timeout=15, limit=64 << 20):
         return None
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "Winlux-Store/1.0"})
+        deadline = time.monotonic() + timeout * 4
+        chunks, size = [], 0
         with urllib.request.urlopen(req, timeout=timeout) as r:
-            data = r.read(limit + 1)
-        return data if len(data) <= limit else None
+            while size <= limit:
+                if time.monotonic() > deadline:
+                    return None  # serveur trop lent : on réessaiera plus tard
+                chunk = r.read(1 << 16)
+                if not chunk:
+                    break
+                chunks.append(chunk)
+                size += len(chunk)
+        return b"".join(chunks) if size <= limit else None
     except Exception:
         return None
 
@@ -214,6 +223,11 @@ class App:
 
 def _scalar(text):
     text = text.strip()
+    if text == "{}":
+        return {}
+    if text.startswith("[") and text.endswith("]"):
+        inner = text[1:-1].strip()
+        return [_scalar(x) for x in inner.split(",")] if inner else []
     if len(text) >= 2 and text[0] == text[-1] and text[0] in "'\"":
         text = text[1:-1]
         return text.replace("''", "'") if text and text[0] != '"' else text
@@ -324,10 +338,14 @@ def dep11_icon_archives(force=False):
             if dest.is_dir() and not force:
                 continue
             url = f"http://{m.group(1).replace('_', '/')}/dists/{m.group(2)}/{m.group(3)}/dep11/icons-64x64.tar.gz"
-            data = fetch(url, 60, 256 << 20)
+            data = fetch(url, 30, 256 << 20)
             if not data:
                 continue
-            dest.mkdir(parents=True, exist_ok=True)
+            # Extraction dans un dossier temporaire puis renommage : un
+            # rafraîchissement interrompu ne laisse jamais un dossier partiel.
+            tmp = dest.with_name(f".64x64.{os.getpid()}")
+            shutil.rmtree(tmp, ignore_errors=True)
+            tmp.mkdir(parents=True)
             try:
                 with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
                     for member in tar:
@@ -335,9 +353,11 @@ def dep11_icon_archives(force=False):
                         if member.isfile() and name.endswith(".png") and not name.startswith("."):
                             src = tar.extractfile(member)
                             if src:
-                                (dest / name).write_bytes(src.read())
+                                (tmp / name).write_bytes(src.read())
+                shutil.rmtree(dest, ignore_errors=True)
+                os.replace(tmp, dest)
             except (tarfile.TarError, OSError, EOFError):
-                pass
+                shutil.rmtree(tmp, ignore_errors=True)
 
 def dep11_icon(doc):
     icon = doc.get("Icon") or {}
@@ -372,6 +392,35 @@ def dep11_releases(doc):
                 if str(r.get("unix-timestamp", "")).isdigit() else ""
             out.append((r["version"], date, " ".join(html_text(localized(r.get("description"))))))
     return out[:8]
+
+def dep11_index():
+    """Fiches AppStream apt compactes (langue de la session), mises en cache
+    pour que l'ouverture d'une fiche reste instantanée."""
+    path = CACHE / f"dep11-{LANG}.json"
+    sources = [p for base in dep11_dirs() for p in (base / "yaml").glob("*.yml*")]
+    stamp = max([p.stat().st_mtime for p in sources] + [0])
+    icons = CACHE / "dep11-icons"
+    if icons.is_dir():
+        stamp = max([stamp] + [d.stat().st_mtime for d in icons.iterdir()])
+    if path.exists() and path.stat().st_mtime >= stamp:
+        cached = load_json(path, None)
+        if isinstance(cached, dict):
+            return cached
+    out = {}
+    for pkg, doc in dep11_components().items():
+        out[pkg] = {
+            "Name": localized(doc.get("Name")), "Summary": localized(doc.get("Summary")),
+            "Categories": doc.get("Categories") or [], "DeveloperName": localized(doc.get("DeveloperName")),
+            "ID": str(doc.get("ID", "")), "ProjectLicense": doc.get("ProjectLicense", ""),
+            "homepage": (doc.get("Url") or {}).get("homepage", "") if isinstance(doc.get("Url"), dict) else "",
+            "icon": dep11_icon(doc), "description": html_text(localized(doc.get("Description"))),
+            "screenshots": dep11_screens(doc), "releases": dep11_releases(doc),
+        }
+    try:
+        atomic_write(path, json.dumps(out))
+    except OSError:
+        pass
+    return out
 
 def xml_text(el, tag):
     """Texte localisé d'un élément AppStream XML (xml:lang)."""
@@ -544,26 +593,25 @@ class Apt(Source):
             self.refresh_lists()
         if not OFFLINE and not self.local_only:
             dep11_icon_archives(force)
-        curated, comps = self.curated(), dep11_components()
+        curated, comps = self.curated(), dep11_index()
         installed, upgradable = self.installed(), self.upgradable()
         cands = self.candidates([p for p in curated if p not in comps])
         self.system_updates = len(upgradable)
         out = []
         for pkg in sorted(set(curated) | set(comps)):
-            doc, cur = comps.get(pkg), curated.get(pkg)
-            if doc is None and pkg not in cands and pkg not in installed:
+            doc, cur = comps.get(pkg) or {}, curated.get(pkg)
+            if not doc and pkg not in cands and pkg not in installed:
                 continue  # absent des dépôts configurés
-            name = cur["name"] if cur else localized(doc.get("Name")) or pkg
             ver = installed.get(pkg, ("", 0))[0]
-            app = App("apt", pkg, name, rank=0 if cur and cur["featured"] else (1 if cur else 3),
-                      summary=(cur["desc"] if cur else "") or (localized(doc.get("Summary")) if doc else ""),
-                      category=cur["cat"] if cur else category_of(doc.get("Categories") or []),
-                      publisher=(cur["pub"] if cur else "") or localized((doc or {}).get("DeveloperName")),
-                      icon=dep11_icon(doc) if doc else "",
-                      featured=bool(cur and cur["featured"]),
+            app = App("apt", pkg, (cur["name"] if cur else doc.get("Name")) or pkg,
+                      rank=0 if cur and cur["featured"] else (1 if cur else 3),
+                      summary=(cur["desc"] if cur else "") or doc.get("Summary", ""),
+                      category=cur["cat"] if cur else category_of(doc.get("Categories", [])),
+                      publisher=(cur["pub"] if cur else "") or doc.get("DeveloperName", ""),
+                      icon=doc.get("icon", ""), featured=bool(cur and cur["featured"]),
                       version=ver, available=upgradable.get(pkg, cands.get(pkg, ver)),
                       state="u" if pkg in upgradable else ("i" if ver else "a"),
-                      appstream_id=str((doc or {}).get("ID", "")).removesuffix(".desktop").lower())
+                      appstream_id=doc.get("ID", "").removesuffix(".desktop").lower())
             out.append(app)
         return out
 
@@ -581,13 +629,13 @@ class Apt(Source):
                 info[k] = v.strip()
                 if k == "Description":
                     in_desc = True
-        doc = dep11_components().get(app.ref) or {}
+        doc = dep11_index().get(app.ref) or {}
         if doc:
-            app.description = html_text(localized(doc.get("Description"))) or app.description
-            app.screenshots = dep11_screens(doc)
-            app.releases = dep11_releases(doc)
-            app.license = doc.get("ProjectLicense", "")
-            app.homepage = (doc.get("Url") or {}).get("homepage", "")
+            app.description = doc["description"] or app.description
+            app.screenshots = doc["screenshots"]
+            app.releases = [tuple(r) for r in doc["releases"]]
+            app.license = doc["ProjectLicense"]
+            app.homepage = doc["homepage"]
         if not app.description:
             paras = " ".join(desc).split("  ")
             app.description = [p.strip() for p in re.split(r"\s{2,}|\n", "\n".join(desc)) if p.strip()] or paras
@@ -600,14 +648,16 @@ class Apt(Source):
             app.license = self.copyright(app.ref)
         if not app.releases:
             app.releases = self.changelog(app.ref)
-        if not app.screenshots:
-            data = fetch(f"https://screenshots.debian.net/json/package/{urllib.parse.quote(app.ref)}", 10)
-            try:
-                shots = json.loads(data or b"{}").get("screenshots", [])
-                app.screenshots = [s.get("large_image_url") or s.get("small_image_url") for s in shots][:5]
-            except ValueError:
-                pass
         return app
+
+    def more_screenshots(self, app):
+        """Captures de screenshots.debian.net pour les paquets sans AppStream."""
+        data = fetch(f"https://screenshots.debian.net/json/package/{urllib.parse.quote(app.ref)}", 8)
+        try:
+            shots = json.loads(data or b"{}").get("screenshots", [])
+            return [s.get("large_image_url") or s.get("small_image_url") for s in shots][:5]
+        except (ValueError, AttributeError):
+            return []
 
     def copyright(self, pkg):
         try:
@@ -1244,9 +1294,18 @@ def refresh(force=False):
 # ---------------------------------------------------------------------------
 
 def find(key):
+    """Logiciel d'après sa clé : depuis l'index en cache (rapide), sinon en
+    interrogeant la source."""
     source, _, ref = key.partition(":")
     src = SOURCE_BY_NAME.get(source)
-    if src is None or not ref or not src.available():
+    if src is None or not ref:
+        return None, None
+    for entry in load_json(CACHE / "index.json", []):
+        if entry.get("source") == source and entry.get("ref") == ref:
+            app = App(source, ref, entry.get("name", ref))
+            app.__dict__.update(entry)
+            return src, app
+    if not src.available():
         return None, None
     return src, next((a for a in src.apps() if a.ref == ref), None)
 
@@ -1266,13 +1325,15 @@ def details(key):
              f"icon={local_icon(app, True)}"]
     for p in app.description[:14]:
         lines.append(f"desc={field(p, 700)}")
-    shots = [m for m in (media(u, "shots") for u in app.screenshots[:5]) if m]
-    lines += [f"shot={s}" for s in shots]
     lines += [f"release={field(v, 40)}|{field(d, 20)}|{field(t, 300)}" for v, d, t in app.releases[:6]]
     for alt in alts:
         s = SOURCE_BY_NAME.get(alt.split(":", 1)[0])
         lines.append(f"alt={field(alt)}|{s.label if s else alt}")
-    atomic_write(RUN / "store-detail.txt", "\n".join(lines) + "\n")
+    # Fiche affichée tout de suite ; les captures (réseau) suivent.
+    atomic_write(RUN / "store-detail.txt", "\n".join(lines + ["partial=1"]) + "\n")
+    urls = app.screenshots or (src.more_screenshots(app) if hasattr(src, "more_screenshots") else [])
+    shots = [m for m in (media(u, "shots") for u in urls[:5]) if m]
+    atomic_write(RUN / "store-detail.txt", "\n".join(lines + [f"shot={s}" for s in shots]) + "\n")
     return 0
 
 class Progress:

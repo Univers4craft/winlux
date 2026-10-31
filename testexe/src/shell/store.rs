@@ -304,7 +304,8 @@ pub unsafe fn app_icon(g: &mut Gfx, path: &[u8], name: &[u8], x: i32, y: i32, si
 /// Bouton plein (accent) ou discret ; renvoie son rectangle.
 pub unsafe fn button(g: &mut Gfx, x: i32, y: i32, label: &[u8], primary: bool, hot: bool) -> Rect {
     let p = pal();
-    let w = text_width(label, 13) + 28;
+    // Libellé en demi-gras : un peu plus large que la mesure normale.
+    let w = text_width(label, 13) * 108 / 100 + 28;
     let r = rect(x, y, x + w, y + 32);
     let (bg, fg) = if primary {
         (
@@ -446,6 +447,7 @@ const DETAIL_CAP: usize = 64 * 1024;
 static mut DETAIL: [u8; DETAIL_CAP] = [0; DETAIL_CAP];
 static mut DETAIL_LEN: usize = 0;
 static mut DETAIL_READY: bool = false;
+static mut DETAIL_PARTIAL: bool = false;
 
 unsafe fn detail_lines(prefix: &[u8], mut f: impl FnMut(&'static [u8])) {
     let all: &'static [u8] = &DETAIL[..DETAIL_LEN];
@@ -471,6 +473,8 @@ unsafe fn load_detail() {
     DETAIL_LEN = len;
     let key = detail_value(b"key=");
     DETAIL_READY = len > 0 && key == SELECTED_KEY.get();
+    // Fiche partielle : les captures arrivent ensuite, on continue à relire.
+    DETAIL_PARTIAL = DETAIL_READY && detail_value(b"partial=") == b"1";
     if DETAIL_READY {
         SHOT_COUNT = 0;
         detail_lines(b"shot=", |_| SHOT_COUNT += 1);
@@ -1732,8 +1736,11 @@ unsafe fn draw_detail(g: &mut Gfx, body: &Rect) {
             body,
         );
         y += 36;
-        let w = (body.right - body.left).min(760);
-        let h = w * 9 / 16;
+        // 16:9, limité pour tenir dans la fenêtre avec l'en-tête.
+        let full = ((body.right - body.left).min(760) * 9 / 16).min(360);
+        let room = body.bottom - (y + SCROLL) - 24;
+        let h = if room >= 180 { full.min(room) } else { full };
+        let w = h * 16 / 9;
         let r = rect(body.left, y, body.left + w, y + h);
         if r.top >= body.top && r.bottom <= body.bottom {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.surface2);
@@ -2124,9 +2131,10 @@ pub unsafe fn tick(_f: &Frame) -> bool {
         poll_progress();
         repaint = true;
     }
-    if VIEW == View::Detail && !DETAIL_READY {
+    if VIEW == View::Detail && (!DETAIL_READY || DETAIL_PARTIAL) {
+        let was = (DETAIL_READY, DETAIL_PARTIAL);
         load_detail();
-        repaint |= DETAIL_READY;
+        repaint |= (DETAIL_READY, DETAIL_PARTIAL) != was;
     }
     if VIEW == View::Home && SEARCH.n == 0 && now.wrapping_sub(HERO_TICK) > 7000 {
         HERO = (HERO + 1) % 12;

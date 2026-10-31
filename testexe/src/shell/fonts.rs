@@ -137,6 +137,9 @@ unsafe fn load() {
     SELECTED = (0..FAMILY_COUNT)
         .find(|&f| part(FAMILIES[f].0 as usize, 0) == previous.get())
         .unwrap_or(SELECTED.min(FAMILY_COUNT.saturating_sub(1)));
+    if previous.n == 0 {
+        STYLE = regular_style(SELECTED);
+    }
     PREVIEW_FOR = (usize::MAX, usize::MAX);
 }
 
@@ -245,6 +248,20 @@ fn style_attrs(style: &[u8]) -> (i32, u32) {
         400
     };
     (weight, italic as u32)
+}
+
+/// Style affiché par défaut : le style normal de la famille s'il existe.
+unsafe fn regular_style(fam: usize) -> usize {
+    if fam >= FAMILY_COUNT {
+        return 0;
+    }
+    let (first, count) = FAMILIES[fam];
+    (0..count as usize)
+        .min_by_key(|&k| {
+            let (w, it) = style_attrs(part(first as usize + k, 1));
+            (it as i32) * 1000 + (w - 400).abs()
+        })
+        .unwrap_or(0)
 }
 
 unsafe fn release_preview() {
@@ -708,7 +725,7 @@ unsafe fn act(a: Action) -> bool {
         Action::None => return PICKER,
         Action::Family(k) => {
             SELECTED = k as usize;
-            STYLE = 0;
+            STYLE = regular_style(SELECTED);
             CONFIRM = false;
         }
         Action::Style(k) => STYLE = k as usize,
@@ -838,7 +855,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         if let Some(k) = (0..FAMILY_COUNT).find(|&k| visible(k)) {
             if !visible(SELECTED) {
                 SELECTED = k;
-                STYLE = 0;
+                STYLE = regular_style(k);
             }
         }
         return true;
@@ -852,7 +869,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             }
             if visible(k as usize) {
                 SELECTED = k as usize;
-                STYLE = 0;
+                STYLE = regular_style(SELECTED);
                 return true;
             }
         }

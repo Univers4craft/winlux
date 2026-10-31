@@ -195,6 +195,8 @@
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
+- [x] Store unique Linux + Windows (`store.rs`, `winlux-store`) : apt + AppStream, Flatpak, Snap, AppImage et catalogues Windows interchangeables (`store-sources.d`, SHA-256 obligatoire), vignettes et captures, fiche détaillée, mises à jour unifiées ; voir `docs/STORE.md`. Reste : msiexec dans le runtime, choix d'un catalogue Windows par défaut.
+- [x] Gestionnaire de polices (`fonts.rs`, `winlux-fonts`) et polices pour les .exe : `EnumFontFamilies(Ex)`, `EnumFonts`, `AddFontResource(Ex)`, `RemoveFontResource(Ex)`, `WinluxDrawImageA`.
 
 ### Priorité 6 — Qualité et livraison
 
