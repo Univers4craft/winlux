@@ -797,7 +797,10 @@ mod tests {
         extra.push(1);
         extra.extend_from_slice(&c.value().to_le_bytes());
         extra.extend_from_slice(utf8);
-        assert_eq!(unicode_path_extra(&extra, raw).as_deref(), Some("Ελληνικά.txt"));
+        assert_eq!(
+            unicode_path_extra(&extra, raw).as_deref(),
+            Some("Ελληνικά.txt")
+        );
         assert_eq!(unicode_path_extra(&extra, b"autre"), None);
     }
 

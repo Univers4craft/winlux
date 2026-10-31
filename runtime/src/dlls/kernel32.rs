@@ -5275,8 +5275,6 @@ fn get_hostname_string() -> String {
     }
 }
 
-
-
 // --- GetLogicalDrives, GetComputerName, GetUserName ---
 pub extern "win64" fn get_logical_drives() -> u32 {
     // C:, Z: et les lecteurs dynamiques (images montées, lecteurs réseau).
@@ -5316,9 +5314,7 @@ pub unsafe extern "win64" fn get_computer_name_w(buf: *mut u16, size: *mut u32) 
 
 // --- GetLocaleInfoA/W ---
 
-
 // --- GetDateFormatA/W, GetTimeFormatA/W (basic) ---
-
 
 // --- GetNumberOfProcessors ---
 pub extern "win64" fn get_active_processor_count(_group: u16) -> u32 {
@@ -5731,12 +5727,6 @@ pub unsafe extern "win64" fn get_product_info(
     } // PRODUCT_PROFESSIONAL
     1
 }
-
-
-
-
-
-
 
 pub unsafe extern "win64" fn get_system_time(st: *mut u16) {
     if st.is_null() {
