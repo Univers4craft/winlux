@@ -79,6 +79,22 @@ _TR = {
     'Son avancé': ('Advanced sound', 'Sonido avanzado', 'Erweiterter Sound'),
     'Mises à jour système': ('System updates', 'Actualizaciones del sistema', 'Systemupdates'),
     'Confidentialité': ('Privacy', 'Privacidad', 'Datenschutz'),
+    # Confidentialité et sécurité : verrouillage de l'écran.
+    'Confidentialité et sécurité': ('Privacy & security', 'Privacidad y seguridad', 'Datenschutz und Sicherheit'),
+    "Verrouillage de l’écran": ('Lock screen', 'Pantalla de bloqueo', 'Sperrbildschirm'),
+    'Verrouiller automatiquement après': ('Lock automatically after', 'Bloquear automáticamente después de', 'Automatisch sperren nach'),
+    'Jamais': ('Never', 'Nunca', 'Nie'),
+    '1 minute': ('1 minute', '1 minuto', '1 Minute'),
+    '{n} minutes': ('{n} minutes', '{n} minutos', '{n} Minuten'),
+    '1 heure': ('1 hour', '1 hora', '1 Stunde'),
+    'Demander le mot de passe à la sortie de veille': ('Ask for the password when waking from sleep', 'Pedir la contraseña al salir de la suspensión', 'Beim Aufwachen aus dem Energiesparmodus nach dem Kennwort fragen'),
+    'Verrouiller maintenant (Windows+L)': ('Lock now (Windows+L)', 'Bloquear ahora (Windows+L)', 'Jetzt sperren (Windows+L)'),
+    'Compte protégé : {account}': ('Protected account: {account}', 'Cuenta protegida: {account}', 'Geschütztes Konto: {account}'),
+    'Verrouillage automatique : {delay}': ('Automatic lock: {delay}', 'Bloqueo automático: {delay}', 'Automatische Sperre: {delay}'),
+    'Mot de passe au réveil : {state}': ('Password on wake: {state}', 'Contraseña al despertar: {state}', 'Kennwort beim Aufwachen: {state}'),
+    'oui': ('yes', 'sí', 'ja'),
+    'non': ('no', 'no', 'nein'),
+    'Ce compte n’a pas de mot de passe : l’écran se déverrouille d’un clic et ne se verrouille jamais tout seul.': ("This account has no password: the screen unlocks with a click and never locks by itself.", 'Esta cuenta no tiene contraseña: la pantalla se desbloquea con un clic y nunca se bloquea sola.', 'Dieses Konto hat kein Kennwort: Der Bildschirm wird per Klick entsperrt und sperrt sich nie von selbst.'),
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
     'Personnalisation du bureau': ('Desktop personalization', 'Personalización del escritorio', 'Desktop-Personalisierung'),
@@ -213,9 +229,29 @@ PAGES = [_t("Système"), _t("Applications"), _t("Réseau"), _t("Son"), _t("Clavi
          _t("Souris"), _t("Personnalisation"), _t("Mises à jour"), _t("Écran"), _t("À propos"),
          _t("Programmes Windows"), _t("Navigateurs"), _t("Accessibilité"), _t("Effets visuels"),
          _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son avancé"), _t("Mises à jour système"),
-         _t("Confidentialité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
+         _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
          _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes")]
 GRAPHICS_PAGE = 24
+PRIVACY_PAGE = 18
+LOCK_DELAYS = (0, 60, 180, 300, 600, 900, 1800, 3600)
+
+
+def lock_delay_text(seconds):
+    if seconds <= 0: return _t("Jamais")
+    if seconds == 60: return _t("1 minute")
+    if seconds == 3600: return _t("1 heure")
+    return _t("{n} minutes").format(n=seconds // 60)
+
+
+def privacy_summary(status):
+    try: delay = int(status.get("lock_after", "300"))
+    except ValueError: delay = 300
+    lines = [_t("Compte protégé : {account}").format(account=status.get("lock_account") or "root"),
+             _t("Verrouillage automatique : {delay}").format(delay=lock_delay_text(delay)),
+             _t("Mot de passe au réveil : {state}").format(state=_t("oui") if status.get("lock_on_resume", "1") != "0" else _t("non"))]
+    if status.get("lock_password") == "0":
+        lines.append(_t("Ce compte n’a pas de mot de passe : l’écran se déverrouille d’un clic et ne se verrouille jamais tout seul."))
+    return "\n".join(lines)
 # Nom de l'hyperviseur écrit par winlux-hardware ; vide sur un vrai PC.
 try:
     with open("/run/winlux/hw/virtual-machine", encoding="utf-8") as _vm: VIRTUAL_MACHINE = _vm.read().strip()
@@ -427,6 +463,7 @@ class Settings(Gtk.Window):
             legacy_page = self.page
             button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
             self.body.pack_start(button, False, False, 0)
+        if self.page == PRIVACY_PAGE: self.privacy_controls()
         self.notice = self.label("")
         self.progress = Gtk.ProgressBar(show_text=True)
         self.body.pack_start(self.progress, False, False, 0)
@@ -446,6 +483,30 @@ class Settings(Gtk.Window):
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
         if self.rollback_button is not None:
             self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
+
+    def privacy_controls(self):
+        """Verrouillage de l’écran : délai d’inactivité, réveil, verrouiller tout de suite."""
+        status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+        self.label(_t("Verrouillage de l’écran"), "subtitle")
+        row = Gtk.Box(spacing=12)
+        row.pack_start(Gtk.Label(label=_t("Verrouiller automatiquement après"), xalign=0), True, True, 0)
+        delays = Gtk.ComboBoxText()
+        for seconds in LOCK_DELAYS: delays.append(str(seconds), lock_delay_text(seconds))
+        try: current = int(status.get("lock_after", "300"))
+        except ValueError: current = 300
+        delays.set_active_id(str(current if current in LOCK_DELAYS else 300))
+        delays.connect("changed", lambda combo: self.execute("lock-after-" + combo.get_active_id()))
+        row.pack_start(delays, False, False, 0)
+        self.body.pack_start(row, False, False, 0)
+        row = Gtk.Box(spacing=12)
+        row.pack_start(Gtk.Label(label=_t("Demander le mot de passe à la sortie de veille"), xalign=0), True, True, 0)
+        resume = Gtk.Switch(active=status.get("lock_on_resume", "1") != "0", valign=Gtk.Align.CENTER)
+        resume.connect("notify::active", lambda switch, _: self.execute("lock-resume-on" if switch.get_active() else "lock-resume-off"))
+        row.pack_start(resume, False, False, 0)
+        self.body.pack_start(row, False, False, 0)
+        lock = Gtk.Button(label=_t("Verrouiller maintenant (Windows+L)"), halign=Gtk.Align.START)
+        lock.connect("clicked", lambda *_: self.execute("lock-now"))
+        self.body.pack_start(lock, False, False, 0)
 
     def execute(self, action):
         if self.process is not None or self.busy: return
@@ -489,6 +550,7 @@ class Settings(Gtk.Window):
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
+        if self.page == PRIVACY_PAGE: text = privacy_summary(status)
         if self.page in (8, GRAPHICS_PAGE) and VIRTUAL_MACHINE:
             name = _VM_NAMES.get(VIRTUAL_MACHINE, "VM")
             text = _t("Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).").format(name=name) + "\n" + text
