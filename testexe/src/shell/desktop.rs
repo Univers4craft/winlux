@@ -90,6 +90,39 @@ static mut TOAST_LEN: usize = 0;
 static mut TOAST_START: u32 = 0;
 const TOAST_MS: i32 = 4500;
 /// Le panneau de notifications est dans `notifications.rs`.
+/// Panneau réseau (flyout Wi-Fi/Ethernet, façon Windows 11).
+static mut NET_PANEL: bool = false;
+static mut NET_HOVER: i32 = -1;
+static mut NET_SCAN_REQUESTED: bool = false;
+/// Données réseau lues depuis Z:\run\winlux\networks.txt.
+/// Chaque entrée : SSID, signal (0-100), sécurité, en cours d'utilisation.
+static mut NET_ENTRIES: [NetEntry; 16] = [NetEntry::EMPTY; 16];
+static mut NET_COUNT: usize = 0;
+static mut NET_IFACE: [u8; 32] = [0; 32];
+static mut NET_IFACE_LEN: usize = 0;
+static mut NET_ADDR: [u8; 32] = [0; 32];
+static mut NET_ADDR_LEN: usize = 0;
+static mut NET_IS_WIFI: bool = false;
+static mut NET_SSID: [u8; 64] = [0; 64];
+static mut NET_SSID_LEN: usize = 0;
+
+#[derive(Clone, Copy)]
+struct NetEntry {
+    ssid: [u8; 48],
+    ssid_len: usize,
+    signal: u32,
+    secured: bool,
+    in_use: bool,
+}
+impl NetEntry {
+    const EMPTY: Self = Self {
+        ssid: [0; 48],
+        ssid_len: 0,
+        signal: 0,
+        secured: false,
+        in_use: false,
+    };
+}
 /// Atténuation du fond (0 = noir, 1000 = normal) pendant le fondu.
 static mut FADE: i32 = 1000;
 
@@ -98,6 +131,11 @@ fn now() -> u32 {
 }
 fn since(t: u32) -> i32 {
     now().wrapping_sub(t).min(1_000_000) as i32
+}
+fn parse_u32(s: &[u8]) -> u32 {
+    s.iter()
+        .take_while(|c| c.is_ascii_digit())
+        .fold(0u32, |n, &c| n.saturating_mul(10).saturating_add((c - b'0') as u32))
 }
 
 fn lower(c: u8) -> u8 {
@@ -468,6 +506,8 @@ unsafe fn set_start(open: bool) {
     if open == (START_OPEN && !START_CLOSING) {
         return;
     }
+    NET_PANEL = false;
+    NET_HOVER = -1;
     START_ANIM = now();
     if open {
         START_OPEN = true;
@@ -1059,6 +1099,14 @@ unsafe fn draw_wifi(hdc: Handle, b: &mut Brushes, x: i32, y: i32, on: bool) {
         fill(hdc, b, x + k * 4, y + 14 - hgt, x + k * 4 + 3, y + 14, c);
     }
 }
+unsafe fn draw_ethernet(hdc: Handle, b: &mut Brushes, x: i32, y: i32, on: bool) {
+    let c = if on { rgb(0xF2, 0xF2, 0xF2) } else { rgb(0x7A, 0x80, 0x8A) };
+    // Small Ethernet plug icon: vertical bar + horizontal bar + two prongs
+    fill(hdc, b, x + 6, y, x + 9, y + 12, c);
+    fill(hdc, b, x + 2, y + 4, x + 13, y + 6, c);
+    fill(hdc, b, x + 2, y + 4, x + 4, y + 8, c);
+    fill(hdc, b, x + 11, y + 4, x + 13, y + 8, c);
+}
 unsafe fn draw_volume(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32) {
     let c = rgb(0xF2, 0xF2, 0xF2);
     fill(hdc, b, x, y + 5, x + 4, y + 10, c);
@@ -1110,6 +1158,84 @@ unsafe fn draw_battery(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32)
 
 unsafe fn two_digits(v: u16) -> [u8; 2] {
     [b'0' + (v / 10 % 10) as u8, b'0' + (v % 10) as u8]
+}
+
+/// Lecture du fichier networks.txt écrit par `winlux-control network-scan`.
+/// Format : lignes nmcli « SSID:SIGNAL:SECURITY:*\n » puis meta « key=value ».
+unsafe fn net_read_scan() {
+    static mut BUF: [u8; 2048] = [0; 2048];
+    let path = c"Z:\\run\\winlux\\networks.txt";
+    let h = CreateFileA(
+        path.as_ptr(),
+        0x8000_0000,
+        1,
+        core::ptr::null_mut(),
+        3,
+        0,
+        core::ptr::null_mut(),
+    );
+    if h as isize <= 0 {
+        return;
+    }
+    let mut read_bytes = 0u32;
+    ReadFile(h, BUF.as_mut_ptr(), BUF.len() as u32 - 1, &mut read_bytes, core::ptr::null_mut());
+    CloseHandle(h);
+    let len = read_bytes as usize;
+    BUF[len] = 0;
+    NET_COUNT = 0;
+    NET_IFACE_LEN = 0;
+    NET_ADDR_LEN = 0;
+    NET_IS_WIFI = false;
+    NET_SSID_LEN = 0;
+    for raw_line in BUF[..len].split(|&c| c == b'\n') {
+        let line = if raw_line.last() == Some(&b'\r') {
+            &raw_line[..raw_line.len() - 1]
+        } else {
+            raw_line
+        };
+        if line.is_empty() {
+            continue;
+        }
+        if line.starts_with(b"connected=") {
+            // meta field, not a network entry
+        } else if line.starts_with(b"iface=") {
+            let v = &line[6..];
+            let n = v.len().min(NET_IFACE.len());
+            NET_IFACE[..n].copy_from_slice(&v[..n]);
+            NET_IFACE_LEN = n;
+        } else if line.starts_with(b"addr=") {
+            let v = &line[5..];
+            let n = v.len().min(NET_ADDR.len());
+            NET_ADDR[..n].copy_from_slice(&v[..n]);
+            NET_ADDR_LEN = n;
+        } else if line.starts_with(b"wifi=") {
+            NET_IS_WIFI = line == b"wifi=1";
+        } else if line.starts_with(b"ssid=") {
+            let v = &line[5..];
+            let n = v.len().min(NET_SSID.len());
+            NET_SSID[..n].copy_from_slice(&v[..n]);
+            NET_SSID_LEN = n;
+        } else if NET_COUNT < NET_ENTRIES.len() {
+            // nmcli format: SSID:SIGNAL:SECURITY:IN-USE
+            let mut parts = line.splitn(4, |&c| c == b':');
+            let ssid = parts.next().unwrap_or(b"");
+            let sig_s = parts.next().unwrap_or(b"");
+            let sec = parts.next().unwrap_or(b"");
+            let inuse = parts.next().unwrap_or(b"");
+            if ssid.is_empty() {
+                continue;
+            }
+            let mut e = NetEntry::EMPTY;
+            let n = ssid.len().min(e.ssid.len());
+            e.ssid[..n].copy_from_slice(&ssid[..n]);
+            e.ssid_len = n;
+            e.signal = parse_u32(sig_s);
+            e.secured = !sec.is_empty() && sec != b"" && sec != b"--";
+            e.in_use = inuse == b"*";
+            NET_ENTRIES[NET_COUNT] = e;
+            NET_COUNT += 1;
+        }
+    }
 }
 
 unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) {
@@ -1245,7 +1371,11 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
         5,
         rgb(0x24, 0x28, 0x31),
     );
-    draw_wifi(hdc, b, tray + 6, top + 17, NETWORK_CONNECTED != 0);
+    if NET_IS_WIFI {
+        draw_wifi(hdc, b, tray + 6, top + 17, NETWORK_CONNECTED != 0);
+    } else {
+        draw_ethernet(hdc, b, tray + 6, top + 17, NETWORK_CONNECTED != 0);
+    }
     draw_volume(hdc, b, tray + 30, top + 17, VOLUME_LEVEL);
     if BATTERY_PRESENT != 0 {
         draw_battery(hdc, b, tray + 58, top + 17, BATTERY_LEVEL);
@@ -2151,6 +2281,165 @@ unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
 
 // Le panneau de notifications complet est dessiné par `notifications::draw`.
 
+unsafe fn net_connect(idx: usize) {
+    if idx >= NET_COUNT {
+        return;
+    }
+    let e = &NET_ENTRIES[idx];
+    let ssid = &e.ssid[..e.ssid_len];
+    static mut CMD: [u8; 128] = [0; 128];
+    let prefix = b"network-connect ";
+    let mut len = prefix.len();
+    CMD[..len].copy_from_slice(prefix);
+    let slen = ssid.len().min(CMD.len() - len - 1);
+    CMD[len..len + slen].copy_from_slice(&ssid[..slen]);
+    len += slen;
+    CMD[len] = 0;
+    ShellExecuteA(
+        core::ptr::null_mut(),
+        c"open".as_ptr(),
+        c"winlux-control".as_ptr(),
+        CMD.as_ptr() as *const core::ffi::c_char,
+        core::ptr::null(),
+        0,
+    );
+    toast(b"Connexion en cours...");
+    NET_SCAN_REQUESTED = false;
+}
+
+// ---------- Panneau réseau ----------
+
+const NET_PANEL_W: i32 = 360;
+const NET_ROW_H: i32 = 48;
+const NET_HEADER_H: i32 = 56;
+
+unsafe fn net_panel_rect(l: &Layout) -> Rect {
+    let rows = NET_COUNT.min(NET_ENTRIES.len()) as i32;
+    let status_h = 52;
+    let btn_h = 40;
+    let h = NET_HEADER_H + status_h + rows * NET_ROW_H + btn_h + 16;
+    let x = l.w - NET_PANEL_W - 12 - 96;
+    let y = l.bar_top - 12 - h;
+    rect(x, y, x + NET_PANEL_W, y + h)
+}
+
+unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if !NET_PANEL {
+        return;
+    }
+    net_read_scan();
+    let r = net_panel_rect(l);
+    let x = r.left;
+    let y = r.top;
+    let w = r.right - r.left;
+    let h = r.bottom - r.top;
+    panel(hdc, b, x, y, x + w, y + h, 8, rgb(0x24, 0x27, 0x2F), rgb(0x3A, 0x3F, 0x4A));
+
+    // Header
+    let icon_g = if NET_IS_WIFI { Glyph::Wifi } else { Glyph::Ethernet };
+    glyph(hdc, b, f, icon_g, x + 16, y + 14, 24);
+    text(
+        hdc,
+        f.semibold,
+        rgb(0xF2, 0xF2, 0xF2),
+        x + 48,
+        y + 18,
+        if NET_IS_WIFI { b"Wi-Fi" } else { b"Ethernet" },
+    );
+
+    // Connection status area
+    let sy = y + NET_HEADER_H;
+    fill(hdc, b, x + 1, sy - 1, x + w - 1, sy, rgb(0x3A, 0x3F, 0x4A));
+    if NETWORK_CONNECTED != 0 {
+        let connected_label = if NET_IS_WIFI && NET_SSID_LEN > 0 {
+            &NET_SSID[..NET_SSID_LEN]
+        } else if NET_IFACE_LEN > 0 {
+            &NET_IFACE[..NET_IFACE_LEN]
+        } else {
+            b"Connect\xE9"
+        };
+        ellipse(hdc, b, x + 20, sy + 12, x + 28, sy + 20, rgb(0x4C, 0xC2, 0x6A));
+        text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), x + 36, sy + 10, connected_label);
+        if NET_ADDR_LEN > 0 {
+            text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), x + 36, sy + 30, &NET_ADDR[..NET_ADDR_LEN]);
+        }
+    } else {
+        ellipse(hdc, b, x + 20, sy + 16, x + 28, sy + 24, rgb(0x7A, 0x80, 0x8A));
+        text(hdc, f.body, rgb(0x9A, 0xA3, 0xAE), x + 36, sy + 14, b"Non connect\xE9");
+    }
+
+    // Network list
+    let list_y = sy + 52;
+    let rows = NET_COUNT.min(NET_ENTRIES.len());
+    if rows == 0 {
+        text_centered(
+            hdc, f.body, 13, rgb(0x9A, 0xA3, 0xAE),
+            x + w / 2, list_y + 14,
+            b"Aucun r\xE9seau d\xE9tect\xE9",
+        );
+    } else {
+        for i in 0..rows {
+            let ry = list_y + i as i32 * NET_ROW_H;
+            if i > 0 {
+                fill(hdc, b, x + 16, ry - 1, x + w - 16, ry, rgb(0x34, 0x38, 0x42));
+            }
+            let e = &NET_ENTRIES[i];
+            let hover = NET_HOVER == i as i32;
+            if hover {
+                round_rect(hdc, b, x + 8, ry + 2, x + w - 8, ry + NET_ROW_H - 2, 4, rgb(0x2E, 0x33, 0x3D));
+            }
+            // Signal bars
+            let bars = if e.signal >= 75 { 4 } else if e.signal >= 50 { 3 } else if e.signal >= 25 { 2 } else { 1 };
+            let sx = x + 20;
+            let bar_y = ry + 14;
+            let bar_c = if e.in_use { rgb(0x60, 0xCD, 0xFF) } else { rgb(0xC8, 0xCD, 0xD4) };
+            for k in 0..4i32 {
+                let hgt = 3 + k * 3;
+                let c = if k < bars { bar_c } else { rgb(0x44, 0x48, 0x52) };
+                fill(hdc, b, sx + k * 4, bar_y + 14 - hgt, sx + k * 4 + 3, bar_y + 14, c);
+            }
+            // SSID
+            let name = &e.ssid[..e.ssid_len];
+            text_fit(
+                hdc, f.body, 13,
+                if e.in_use { rgb(0x60, 0xCD, 0xFF) } else { rgb(0xF2, 0xF2, 0xF2) },
+                x + 44, ry + 8, name, w - 80,
+            );
+            // Security / connected indicator
+            if e.in_use {
+                text(hdc, f.small, rgb(0x60, 0xCD, 0xFF), x + 44, ry + 28, b"Connect\xE9");
+            } else if e.secured {
+                text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), x + 44, ry + 28, b"S\xE9curis\xE9");
+            } else {
+                text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), x + 44, ry + 28, b"Ouvert");
+            }
+        }
+    }
+
+    // Bottom buttons
+    let btn_y = list_y + rows as i32 * NET_ROW_H + 4;
+    fill(hdc, b, x + 1, btn_y - 1, x + w - 1, btn_y, rgb(0x3A, 0x3F, 0x4A));
+    // Disconnect button (if connected)
+    if NETWORK_CONNECTED != 0 {
+        let br = rect(x + 16, btn_y + 4, x + w / 2 - 4, btn_y + 34);
+        let hover_disc = NET_HOVER == 100;
+        round_rect(hdc, b, br.left, br.top, br.right, br.bottom, 4,
+            if hover_disc { rgb(0x3A, 0x3F, 0x4A) } else { rgb(0x31, 0x35, 0x3F) });
+        text_centered(hdc, f.small, 11, rgb(0xC5, 0xC5, 0xC5), (br.left + br.right) / 2, br.top + 7, b"D\xE9connecter");
+    }
+    // Refresh button
+    let rb = rect(
+        if NETWORK_CONNECTED != 0 { x + w / 2 + 4 } else { x + 16 },
+        btn_y + 4,
+        x + w - 16,
+        btn_y + 34,
+    );
+    let hover_ref = NET_HOVER == 101;
+    round_rect(hdc, b, rb.left, rb.top, rb.right, rb.bottom, 4,
+        if hover_ref { rgb(0x3A, 0x3F, 0x4A) } else { rgb(0x31, 0x35, 0x3F) });
+    text_centered(hdc, f.small, 11, rgb(0xC5, 0xC5, 0xC5), (rb.left + rb.right) / 2, rb.top + 7, b"Actualiser");
+}
+
 // ---------- Icônes du bureau ----------
 
 const DESKTOP_ICONS: [(&[u8], Glyph); 5] = [
@@ -2380,6 +2669,7 @@ pub unsafe fn draw(hdc: Handle) {
         start_menu(hdc, &mut b, &f, &l);
         search_overlay(hdc, &mut b, &f, &l);
         notifications::draw(hdc, &mut b, &f, l.w, l.bar_top);
+        draw_net_panel(hdc, &mut b, &f, &l);
         draw_toast(hdc, &mut b, &f, &l);
         let bar_dy = if FADE < 1000 {
             (1000 - ease_out(intro, INTRO_MS)) * TASKBAR_HEIGHT / 1000
@@ -2542,15 +2832,20 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         }
         let tray = l.w - 12 - 92 - 96;
         if x >= tray - 28 && x < tray {
-            // Chevron or tray icon area -> open notification center.
             notifications::toggle();
+            NET_PANEL = false;
         } else if x >= tray && x < tray + 24 {
-            crate::settings::open_page(2);
+            NET_PANEL = !NET_PANEL;
+            notifications::set_open(false);
+            if NET_PANEL && !NET_SCAN_REQUESTED {
+                NET_SCAN_REQUESTED = true;
+                crate::settings::control(c"network-scan");
+            }
         } else if x >= tray + 24 && x < tray + 88 {
             crate::settings::open_page(3);
         } else if x >= l.w - 12 - 92 {
-            // Click on clock/date area -> open notification center.
             notifications::toggle();
+            NET_PANEL = false;
         } else {
             return;
         }
@@ -2598,6 +2893,43 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             }
         } else {
             SEARCH_OVERLAY = false;
+        }
+        repaint(hwnd);
+        return;
+    }
+    if NET_PANEL && y < l.bar_top {
+        let pr = net_panel_rect(&l);
+        if inside(&pr, x, y) {
+            let rows = NET_COUNT.min(NET_ENTRIES.len());
+            let list_y = pr.top + NET_HEADER_H + 52;
+            let btn_y = list_y + rows as i32 * NET_ROW_H + 4;
+            // Disconnect button
+            if NETWORK_CONNECTED != 0 && y >= btn_y + 4 && y < btn_y + 34
+                && x >= pr.left + 16 && x < pr.left + (pr.right - pr.left) / 2 - 4
+            {
+                crate::settings::control(c"network-disconnect");
+                NET_SCAN_REQUESTED = false;
+            }
+            // Refresh button
+            let rb_left = if NETWORK_CONNECTED != 0 {
+                pr.left + (pr.right - pr.left) / 2 + 4
+            } else {
+                pr.left + 16
+            };
+            if y >= btn_y + 4 && y < btn_y + 34 && x >= rb_left && x < pr.right - 16 {
+                NET_SCAN_REQUESTED = true;
+                crate::settings::control(c"network-scan");
+            }
+            // Network row click -> connect
+            if y >= list_y && y < list_y + rows as i32 * NET_ROW_H {
+                let idx = ((y - list_y) / NET_ROW_H) as usize;
+                if idx < rows && !NET_ENTRIES[idx].in_use {
+                    net_connect(idx);
+                }
+            }
+        } else {
+            NET_PANEL = false;
+            NET_HOVER = -1;
         }
         repaint(hwnd);
         return;
@@ -2797,6 +3129,35 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
     }
     if notifications::is_open() {
         if notifications::on_mouse_move(l.w, l.bar_top, x, y) {
+            rp = true;
+        }
+    }
+    // Network panel hover
+    if NET_PANEL {
+        let pr = net_panel_rect(&l);
+        let nh = if inside(&pr, x, y) {
+            let rows = NET_COUNT.min(NET_ENTRIES.len());
+            let list_y = pr.top + NET_HEADER_H + 52;
+            let btn_y = list_y + rows as i32 * NET_ROW_H + 4;
+            if y >= list_y && y < list_y + rows as i32 * NET_ROW_H {
+                ((y - list_y) / NET_ROW_H) as i32
+            } else if y >= btn_y + 4 && y < btn_y + 34 {
+                let w = pr.right - pr.left;
+                if NETWORK_CONNECTED != 0 && x < pr.left + w / 2 - 4 {
+                    100 // disconnect
+                } else if x >= (if NETWORK_CONNECTED != 0 { pr.left + w / 2 + 4 } else { pr.left + 16 }) {
+                    101 // refresh
+                } else {
+                    -1
+                }
+            } else {
+                -1
+            }
+        } else {
+            -1
+        };
+        if nh != NET_HOVER {
+            NET_HOVER = nh;
             rp = true;
         }
     }
