@@ -60,9 +60,7 @@ struct Search {
 static SEARCHES: OnceLock<Mutex<HashMap<usize, Search>>> = OnceLock::new();
 static NEXT_SEARCH: AtomicUsize = AtomicUsize::new(0x6000_0000);
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 fn searches() -> &'static Mutex<HashMap<usize, Search>> {
     SEARCHES.get_or_init(|| Mutex::new(HashMap::new()))
 }

@@ -1,0 +1,19 @@
+[Desktop Entry]
+Type=Application
+Name=Installer Winlux
+Name[en]=Install Winlux
+Name[de]=Winlux installieren
+Name[es]=Instalar Winlux
+Name[it]=Installa Winlux
+Name[pt_BR]=Instalar Winlux
+Comment=Installer Winlux sur le disque dur
+Comment[en]=Install Winlux to hard drive
+Comment[de]=Winlux auf Festplatte installieren
+Comment[es]=Instalar Winlux en el disco duro
+Comment[it]=Installa Winlux sul disco rigido
+Comment[pt_BR]=Instalar Winlux no disco rígido
+Exec=pkexec /usr/bin/winlux-installer
+Icon=system-software-install
+Terminal=false
+Categories=System;
+StartupNotify=true

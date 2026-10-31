@@ -7,7 +7,7 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 14] = [
+const PAGES: [&[u8]; 16] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -22,6 +22,8 @@ const PAGES: [&[u8]; 14] = [
     b"Navigateurs",
     b"Accessibilit\xE9",
     b"Effets visuels",
+    b"Localisation",
+    b"Gestionnaire de fichiers",
 ];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
@@ -60,10 +62,19 @@ const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
 static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
 static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
-static mut ENABLE_BLUR: bool = true; // Effet de flou activé
-static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
-static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
-static mut AUTO_THEME: bool = false; // Thème automatique
+static mut LOCALE_LANG: usize = 0; // 0=fr, 1=en
+static mut LOCALE_TZ: usize = 0; // index dans TIMEZONES
+const TIMEZONES: [(&[u8], &[u8]); 8] = [
+    (b"Europe/Paris", b"UTC+1 / UTC+2 (\xE9t\xE9)"),
+    (b"Europe/London", b"UTC+0 / UTC+1 (\xE9t\xE9)"),
+    (b"America/New_York", b"UTC-5 / UTC-4 (\xE9t\xE9)"),
+    (b"America/Los_Angeles", b"UTC-8 / UTC-7 (\xE9t\xE9)"),
+    (b"Asia/Tokyo", b"UTC+9"),
+    (b"Asia/Shanghai", b"UTC+8"),
+    (b"Australia/Sydney", b"UTC+10 / UTC+11 (\xE9t\xE9)"),
+    (b"UTC", b"UTC+0"),
+];
+use crate::gfx::{AUTO_THEME, ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS};
 
 fn exe_profile_path(out: &mut [u16; 2060]) {
     unsafe {
@@ -321,10 +332,11 @@ pub unsafe fn system_tick() -> bool {
             _ => {}
         }
         match value(b"theme") {
-            b"light" => DARK = false,
-            b"dark" => DARK = true,
+            b"light" => crate::gfx::set_theme(false),
+            b"dark" => crate::gfx::set_theme(true),
             _ => {}
         }
+        crate::gfx::check_auto_theme();
     }
     changed
 }
@@ -427,9 +439,21 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (11, 1) => value(b"browser_default") == b"edge",
         (11, 4) => value(b"browser_default") == b"chrome",
         (11, 7) => value(b"browser_default") == b"firefox",
+        (14, 0) => { let v = value(b"locale_lang"); v.is_empty() || v == b"fr" },
+        (14, 1) => value(b"locale_lang") == b"en",
+        (14, 3) => value(b"layout") == b"fr",
+        (14, 4) => value(b"layout") == b"us",
+        (14, id @ 6..=13) => LOCALE_TZ == (id - 6) as usize,
+        (15, 0) => unsafe { crate::explorer::current_view() == 1 },
+        (15, 1) => unsafe { crate::explorer::current_view() == 5 },
+        (15, 2) => unsafe { crate::explorer::current_view() == 6 },
+        (15, 3) => unsafe { crate::explorer::show_hidden() },
+        (15, 4) => unsafe { !crate::explorer::show_hidden() },
+        (15, 6) => unsafe { crate::explorer::show_ext() },
+        (15, 7) => unsafe { !crate::explorer::show_ext() },
         _ => false,
     };
-    let primary = PAGE == 7 && id == 1 || PAGE == 8 && id == 2;
+    let primary = PAGE == 7 && id == 1 || PAGE == 8 && id == 2 || PAGE == 14 && id == 14;
     round_rect(
         g.hdc,
         g.b,
@@ -1104,7 +1128,20 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(
                 g,
                 &c,
-                214,
+                164,
+                b"Th\xE8me automatique",
+                if unsafe { AUTO_THEME } {
+                    b"Jour clair / nuit sombre (8h\x9620h)"
+                } else {
+                    b"D\xE9sactiv\xE9"
+                },
+            );
+            button(g, &c, 2, 0, b"Activer", 5);
+            button(g, &c, 2, 1, b"D\xE9sactiver", 6);
+            row(
+                g,
+                &c,
+                254,
                 b"Stockage",
                 if value(b"persistent") == b"1" {
                     b"Les pr\xE9f\xE9rences sont conserv\xE9es sur le disque."
@@ -1115,15 +1152,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(
                 g,
                 &c,
-                260,
+                300,
                 b"Ic\xF4nes du bureau",
                 b"Ajoutez seulement les ic\xF4nes que vous voulez afficher.",
             );
-            button(g, &c, 4, 0, b"Afficher Corbeille", 12);
-            button(g, &c, 4, 1, b"Afficher Explorateur", 13);
-            button(g, &c, 5, 0, b"Afficher Ce PC", 14);
-            button(g, &c, 5, 1, b"Afficher Documents", 15);
-            button(g, &c, 6, 0, b"R\xE9glages de l'\xE9cran", 18);
+            button(g, &c, 5, 0, b"Afficher Corbeille", 12);
+            button(g, &c, 5, 1, b"Afficher Explorateur", 13);
+            button(g, &c, 6, 0, b"Afficher Ce PC", 14);
+            button(g, &c, 6, 1, b"Afficher Documents", 15);
+            button(g, &c, 7, 0, b"R\xE9glages de l'\xE9cran", 18);
         }
         8 => {
             row(
@@ -1303,6 +1340,118 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             text(g.hdc, g.f.small, p.text3, c.left, c.bottom - 30, b"Molette / Haut-Bas : d\xE9filer ; Page suivante/pr\xE9c\xE9dente : lecture rapide.");
         }
+        14 => {
+            row(
+                g,
+                &c,
+                44,
+                b"Langue du syst\xE8me",
+                match value(b"locale_lang") {
+                    b"en" => b"English",
+                    _ => b"Fran\xE7ais",
+                },
+            );
+            button(g, &c, 0, 0, b"Fran\xE7ais", 0);
+            button(g, &c, 0, 1, b"English", 1);
+            row(
+                g,
+                &c,
+                170,
+                b"Disposition du clavier",
+                value(b"layout"),
+            );
+            button(g, &c, 2, 0, b"AZERTY fran\xE7ais", 3);
+            button(g, &c, 2, 1, b"QWERTY US", 4);
+            let tz = value(b"timezone");
+            row(
+                g,
+                &c,
+                296,
+                b"Fuseau horaire",
+                if tz.is_empty() {
+                    TIMEZONES[LOCALE_TZ].0
+                } else {
+                    tz
+                },
+            );
+            text(
+                g.hdc,
+                g.f.small,
+                p.text2,
+                c.left,
+                c.top + 340,
+                if tz.is_empty() {
+                    TIMEZONES[LOCALE_TZ].1
+                } else {
+                    TIMEZONES.iter()
+                        .find(|(name, _)| *name == tz)
+                        .map(|(_, desc)| *desc)
+                        .unwrap_or(b"")
+                },
+            );
+            button(g, &c, 5, 0, b"Europe/Paris", 6);
+            button(g, &c, 5, 1, b"Europe/London", 7);
+            button(g, &c, 5, 2, b"Am\xE9rique/New York", 8);
+            button(g, &c, 6, 0, b"Am\xE9rique/Los Angeles", 9);
+            button(g, &c, 6, 1, b"Asie/Tokyo", 10);
+            button(g, &c, 6, 2, b"Asie/Shanghai", 11);
+            button(g, &c, 7, 0, b"Australie/Sydney", 12);
+            button(g, &c, 7, 1, b"UTC", 13);
+            button(g, &c, 7, 2, b"Appliquer", 14);
+        }
+        15 => {
+            row(
+                g,
+                &c,
+                44,
+                b"Gestionnaire de fichiers",
+                b"Pr\xE9f\xE9rences de l'explorateur de fichiers Winlux.",
+            );
+            row(
+                g,
+                &c,
+                104,
+                b"Affichage par d\xE9faut",
+                match unsafe { crate::explorer::current_view() } {
+                    0 => b"Tr\xE8s grandes ic\xF4nes",
+                    1 => b"Grandes ic\xF4nes",
+                    2 => b"Ic\xF4nes moyennes",
+                    3 => b"Petites ic\xF4nes",
+                    4 => b"Liste",
+                    5 => b"D\xE9tails",
+                    _ => b"Mosa\xEFques",
+                },
+            );
+            button(g, &c, 0, 0, b"Grandes ic\xF4nes", 0);
+            button(g, &c, 0, 1, b"D\xE9tails", 1);
+            button(g, &c, 0, 2, b"Mosa\xEFques", 2);
+            row(
+                g,
+                &c,
+                230,
+                b"\xC9l\xE9ments masqu\xE9s",
+                if unsafe { crate::explorer::show_hidden() } {
+                    b"Visibles"
+                } else {
+                    b"Masqu\xE9s"
+                },
+            );
+            button(g, &c, 2, 0, b"Afficher", 3);
+            button(g, &c, 2, 1, b"Masquer", 4);
+            row(
+                g,
+                &c,
+                356,
+                b"Extensions de noms de fichiers",
+                if unsafe { crate::explorer::show_ext() } {
+                    b"Affich\xE9es"
+                } else {
+                    b"Masqu\xE9es"
+                },
+            );
+            button(g, &c, 4, 0, b"Afficher", 6);
+            button(g, &c, 4, 1, b"Masquer", 7);
+        }
         _ => {}
     }
     let notice = if PAGE == 10 {
@@ -1465,8 +1614,23 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (4, 4) => Some(c"tap-off"),
         (6, 0) => Some(c"align-left"),
         (6, 1) => Some(c"align-center"),
-        (6, 3) => Some(c"theme-dark"),
-        (6, 4) => Some(c"theme-light"),
+        (6, 3) => {
+            unsafe { crate::gfx::set_theme(true) };
+            Some(c"theme-dark")
+        }
+        (6, 4) => {
+            unsafe { crate::gfx::set_theme(false) };
+            Some(c"theme-light")
+        }
+        (6, 5) => {
+            unsafe { AUTO_THEME = true };
+            unsafe { crate::gfx::check_auto_theme() };
+            Some(c"auto-theme-on")
+        }
+        (6, 6) => {
+            unsafe { AUTO_THEME = false };
+            Some(c"auto-theme-off")
+        }
         (6, 18) => {
             open_page(8);
             return true;
@@ -1592,6 +1756,61 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         } else {
             c"restart-session"
         }),
+        (14, 0) => {
+            LOCALE_LANG = 0;
+            Some(c"locale-fr")
+        }
+        (14, 1) => {
+            LOCALE_LANG = 1;
+            Some(c"locale-en")
+        }
+        (14, 3) => Some(c"keyboard-fr"),
+        (14, 4) => Some(c"keyboard-us"),
+        (14, id @ 6..=13) => {
+            LOCALE_TZ = (id - 6) as usize;
+            return true;
+        }
+        (14, 14) => {
+            let tz = TIMEZONES[LOCALE_TZ].0;
+            let mut command = [0u8; 64];
+            let prefix = b"timezone-";
+            command[..prefix.len()].copy_from_slice(prefix);
+            let n = tz.len().min(54);
+            command[prefix.len()..prefix.len() + n].copy_from_slice(&tz[..n]);
+            command[prefix.len() + n] = 0;
+            if let Ok(cstr) = core::ffi::CStr::from_bytes_until_nul(&command) {
+                control(cstr);
+            }
+            return true;
+        }
+        (15, 0) => {
+            crate::explorer::set_view(1);
+            return true;
+        }
+        (15, 1) => {
+            crate::explorer::set_view(5);
+            return true;
+        }
+        (15, 2) => {
+            crate::explorer::set_view(6);
+            return true;
+        }
+        (15, 3) => {
+            crate::explorer::set_show_hidden(true);
+            return true;
+        }
+        (15, 4) => {
+            crate::explorer::set_show_hidden(false);
+            return true;
+        }
+        (15, 6) => {
+            crate::explorer::set_show_ext(true);
+            return true;
+        }
+        (15, 7) => {
+            crate::explorer::set_show_ext(false);
+            return true;
+        }
         _ => None,
     };
     if let Some(a) = action {

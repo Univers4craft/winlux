@@ -87,7 +87,7 @@ impl Entry {
 }
 
 #[derive(Clone, Copy)]
-struct Path {
+pub struct Path {
     buf: [u8; PATH_LEN],
     len: u16,
 }
@@ -96,7 +96,7 @@ const EMPTY_PATH: Path = Path {
     len: 0,
 };
 impl Path {
-    fn get(&self) -> &[u8] {
+    pub fn get(&self) -> &[u8] {
         &self.buf[..self.len as usize]
     }
     fn set(&mut self, s: &[u8]) -> bool {
@@ -158,6 +158,8 @@ struct Pane {
     sel: [u64; MAX_ENTRIES / 64],
     anchor: usize,
     scroll: i32,
+    scroll_target: i32,
+    scroll_x: i32,
     search: Field,
     /// Résultats d'une recherche dans les sous-dossiers (noms = chemins relatifs).
     deep: bool,
@@ -178,6 +180,8 @@ const EMPTY_PANE: Pane = Pane {
     sel: [0; MAX_ENTRIES / 64],
     anchor: 0,
     scroll: 0,
+    scroll_target: 0,
+    scroll_x: 0,
     search: EMPTY_FIELD,
     deep: false,
     truncated: false,
@@ -256,6 +260,8 @@ static mut HOVER: i32 = -1;
 static mut HOVER_ZONE: u32 = 0;
 static mut LASSO: Option<(i32, i32, i32, i32)> = None;
 static mut SCROLL_DRAG: Option<(i32, i32)> = None;
+static mut FILE_DRAG_START: Option<(i32, i32)> = None;
+static mut FILE_DRAG_ACTIVE: bool = false;
 static mut MESSAGE: Field = EMPTY_FIELD;
 static mut MESSAGE_UNTIL: u32 = 0;
 
@@ -937,6 +943,8 @@ unsafe fn navigate_pane(p: &mut Pane, target: &[u8], record: bool) {
     p.loc.set(target);
     p.search.len = 0;
     p.scroll = 0;
+    p.scroll_target = 0;
+    p.scroll_x = 0;
     reload(p);
 }
 
@@ -1027,8 +1035,21 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         }
         return;
     }
-    // Open .txt in integrated Notepad
-    if ends_ci(&path[..n], b".txt") {
+    // Open text files in integrated editor
+    if ends_ci(&path[..n], b".txt")
+        || ends_ci(&path[..n], b".rs")
+        || ends_ci(&path[..n], b".c")
+        || ends_ci(&path[..n], b".h")
+        || ends_ci(&path[..n], b".py")
+        || ends_ci(&path[..n], b".js")
+        || ends_ci(&path[..n], b".sh")
+        || ends_ci(&path[..n], b".toml")
+        || ends_ci(&path[..n], b".json")
+        || ends_ci(&path[..n], b".md")
+        || ends_ci(&path[..n], b".cfg")
+        || ends_ci(&path[..n], b".conf")
+        || ends_ci(&path[..n], b".log")
+    {
         crate::notepad::open_new();
         use winlux_testexe::*;
         let mut wide = [0u16; PATH_LEN + NAME_LEN + 2];
@@ -1043,36 +1064,27 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
             core::ptr::null_mut(),
         );
         if !h.is_null() && (h as isize) != -1 {
-            let mut buf = [0u8; 4096];
+            let mut buf = [0u8; 32768];
             let mut got = 0u32;
-            ReadFile(h, buf.as_mut_ptr(), 4096, &mut got, core::ptr::null_mut());
+            ReadFile(
+                h,
+                buf.as_mut_ptr(),
+                buf.len() as u32,
+                &mut got,
+                core::ptr::null_mut(),
+            );
             CloseHandle(h);
-            // write to notepad doc
+            // Extract filename from path
+            let mut fname_start = 0;
+            let mut k = 0;
+            while k < n {
+                if path[k] == b'\\' || path[k] == b'/' {
+                    fname_start = k + 1;
+                }
+                k += 1;
+            }
             unsafe {
-                let doc = &mut crate::notepad::DOC;
-                let mut i = 0;
-                while (i as u32) < got && doc.len < 8191 {
-                    if buf[i as usize] == b'\r' {
-                        i += 1;
-                        continue;
-                    }
-                    doc.text[doc.len] = buf[i as usize];
-                    doc.len += 1;
-                    i += 1;
-                }
-                doc.cursor = doc.len;
-                doc.modified = false;
-                // rebuild
-                doc.lines[0] = 0;
-                doc.line_count = 1;
-                let mut j = 0;
-                while j < doc.len && doc.line_count < 512 {
-                    if doc.text[j] == b'\n' {
-                        doc.lines[doc.line_count] = j + 1;
-                        doc.line_count += 1;
-                    }
-                    j += 1;
-                }
+                crate::notepad::load_into_active(&buf[..got as usize], &path[fname_start..n]);
             }
         }
         wm::open(wm::APP_NOTEPAD);
@@ -1186,6 +1198,41 @@ pub unsafe fn open_documents() {
 }
 pub unsafe fn open_trash() {
     open_at(TRASH);
+}
+
+pub unsafe fn current_view() -> u8 {
+    match VIEW {
+        View::XLarge => 0,
+        View::Large => 1,
+        View::Medium => 2,
+        View::Small => 3,
+        View::List => 4,
+        View::Details => 5,
+        View::Tiles => 6,
+    }
+}
+pub unsafe fn set_view(v: u8) {
+    VIEW = match v {
+        0 => View::XLarge,
+        1 => View::Large,
+        2 => View::Medium,
+        3 => View::Small,
+        4 => View::List,
+        5 => View::Details,
+        _ => View::Tiles,
+    };
+}
+pub unsafe fn show_hidden() -> bool {
+    SHOW_HIDDEN
+}
+pub unsafe fn set_show_hidden(v: bool) {
+    SHOW_HIDDEN = v;
+}
+pub unsafe fn show_ext() -> bool {
+    SHOW_EXT
+}
+pub unsafe fn set_show_ext(v: bool) {
+    SHOW_EXT = v;
 }
 
 // ---------- Sélection ----------
@@ -1304,6 +1351,7 @@ unsafe fn clamp_scroll(p: &mut Pane, r: &Rect) {
     let c = cells(r);
     let max = (content_height(p, &c) - (r.bottom - r.top)).max(0);
     p.scroll = p.scroll.clamp(0, max);
+    p.scroll_target = p.scroll_target.clamp(0, max);
 }
 
 unsafe fn item_rect(r: &Rect, c: &Cells, v: usize, scroll: i32) -> Rect {
@@ -2047,8 +2095,9 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
     }
 
     if VIEW == View::Details {
+        let sx_off = pn.scroll_x;
         let hr = rect(
-            r.left + 8,
+            r.left + 8 - sx_off,
             r.top + 4,
             r.right - SCROLL_W - 8,
             r.top + 4 + c.header,
@@ -2112,7 +2161,11 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
     for v in start..end {
         let idx = pn.view[v] as usize;
         let e = pn.entries[idx];
-        let ir = item_rect(r, &c, v, pn.scroll);
+        let mut ir = item_rect(r, &c, v, pn.scroll);
+        if VIEW == View::Details {
+            ir.left -= pn.scroll_x;
+            ir.right -= pn.scroll_x;
+        }
         if ir.bottom < r.top + c.header || ir.top > r.bottom {
             continue;
         }
@@ -2638,16 +2691,6 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
     }
     let p = pal();
     let r = menu_box(geo, f);
-    round_rect(
-        g.hdc,
-        g.b,
-        r.left - 1,
-        r.top + 1,
-        r.right + 1,
-        r.bottom + 4,
-        9,
-        p.shadow,
-    );
     round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, p.border);
     round_rect(
         g.hdc,
@@ -3359,6 +3402,155 @@ unsafe fn paste() {
     }
 }
 
+// ---------- Drag & drop de fichiers ----------
+
+pub unsafe fn file_drag_active() -> bool {
+    FILE_DRAG_ACTIVE
+}
+
+pub unsafe fn cancel_file_drag() {
+    FILE_DRAG_START = None;
+    FILE_DRAG_ACTIVE = false;
+}
+
+pub unsafe fn drop_files_to(dest: &[u8], do_copy: bool) {
+    let p = pane();
+    if p.loc.is(HOME) || p.loc.is(PC) {
+        cancel_file_drag();
+        return;
+    }
+    let mut failed = 0u32;
+    for v in 0..p.nview {
+        let i = p.view[v] as usize;
+        if !is_sel(p, i) {
+            continue;
+        }
+        let mut src = [0u8; PATH_LEN + NAME_LEN + 2];
+        let sn = item_path(p, i, &mut src);
+        if sn == 0 {
+            failed += 1;
+            continue;
+        }
+        if !safe_destination(&src[..sn], dest) {
+            failed += 1;
+            continue;
+        }
+        let name = p.entries[i].name();
+        let (base, ext) = match name.iter().rposition(|&c| c == b'.') {
+            Some(k) if k > 0 => (&name[..k], &name[k..]),
+            _ => (name, &b""[..]),
+        };
+        let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
+        let mut direct = [0u8; PATH_LEN + NAME_LEN + 2];
+        let dn = join(&mut direct, dest, name);
+        if dn == 0 {
+            failed += 1;
+            continue;
+        }
+        let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
+        let n = if GetFileAttributesW(wstr(&mut wd, &direct[..dn])) == u32::MAX {
+            dst[..dn + 1].copy_from_slice(&direct[..dn + 1]);
+            dn
+        } else {
+            unique_name(dest, base, ext, &mut dst)
+        };
+        if n == 0 {
+            failed += 1;
+            continue;
+        }
+        let mut wsrc_b = [0u16; PATH_LEN + NAME_LEN + 2];
+        let mut wdst_b = [0u16; PATH_LEN + NAME_LEN + 2];
+        let moved =
+            !do_copy && MoveFileW(wstr(&mut wsrc_b, &src[..sn]), wstr(&mut wdst_b, &dst[..n])) != 0;
+        let ok = moved || copy_tree(&src[..sn], &dst[..n]);
+        if !ok {
+            failed += 1;
+        }
+    }
+    if failed > 0 {
+        notify(if do_copy {
+            b"Certains fichiers n'ont pas pu \xEAtre copi\xE9s."
+        } else {
+            b"Certains fichiers n'ont pas pu \xEAtre d\xE9plac\xE9s."
+        });
+    }
+    reload(p);
+    let t = tab();
+    if t.dual {
+        let other = &mut t.panes[1 - t.focus];
+        reload(other);
+    }
+    cancel_file_drag();
+}
+
+pub unsafe fn paste_to(dest: &[u8]) {
+    if NCLIP == 0 {
+        return;
+    }
+    let mut failed = 0u32;
+    for k in 0..NCLIP {
+        let src = CLIP[k];
+        if !safe_destination(src.get(), dest) {
+            failed += 1;
+            continue;
+        }
+        let name = last_component(src.get());
+        let (base, ext) = match name.iter().rposition(|&c| c == b'.') {
+            Some(i) if i > 0 => (&name[..i], &name[i..]),
+            _ => (name, &b""[..]),
+        };
+        let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
+        let mut direct = [0u8; PATH_LEN + NAME_LEN + 2];
+        let dn = join(&mut direct, dest, name);
+        if dn == 0 {
+            failed += 1;
+            continue;
+        }
+        let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
+        let n = if GetFileAttributesW(wstr(&mut wd, &direct[..dn])) == u32::MAX {
+            dst[..dn + 1].copy_from_slice(&direct[..dn + 1]);
+            dn
+        } else {
+            unique_name(dest, base, ext, &mut dst)
+        };
+        if n == 0 {
+            failed += 1;
+            continue;
+        }
+        let mut wsrc_b = [0u16; PATH_LEN + NAME_LEN + 2];
+        let mut wdst_b = [0u16; PATH_LEN + NAME_LEN + 2];
+        let moved =
+            CLIP_CUT && MoveFileW(wstr(&mut wsrc_b, src.get()), wstr(&mut wdst_b, &dst[..n])) != 0;
+        let ok = moved || copy_tree(src.get(), &dst[..n]);
+        if !ok {
+            failed += 1;
+        }
+    }
+    if CLIP_CUT {
+        NCLIP = 0;
+    }
+    if failed > 0 {
+        notify(b"Collage refus\xE9 ou incomplet.");
+    }
+}
+
+pub fn desktop_folder_path() -> Path {
+    place_path(0)
+}
+
+pub unsafe fn drag_glyph() -> Glyph {
+    let p = pane();
+    if let Some(i) = first_sel(p) {
+        glyph_of(p.entries[i].kind)
+    } else {
+        Glyph::File
+    }
+}
+
+pub unsafe fn drag_count() -> usize {
+    sel_count(pane())
+}
+
 /// Envoie la sélection dans la Corbeille (format freedesktop.org, partagé
 /// avec les gestionnaires de fichiers Linux).
 unsafe fn delete_selection() {
@@ -3651,36 +3843,8 @@ unsafe fn open_terminal() {
     } else {
         p.loc.get()
     };
-    let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];
-    let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-    let wterm: [u16; 15] = [
-        b's' as u16,
-        b'h' as u16,
-        b'e' as u16,
-        b'l' as u16,
-        b'l' as u16,
-        b':' as u16,
-        b't' as u16,
-        b'e' as u16,
-        b'r' as u16,
-        b'm' as u16,
-        b'i' as u16,
-        b'n' as u16,
-        b'a' as u16,
-        b'l' as u16,
-        0,
-    ];
-    let r = ShellExecuteW(
-        core::ptr::null_mut(),
-        wopen.as_ptr(),
-        wterm.as_ptr(),
-        core::ptr::null(),
-        wstr(&mut wb, dir),
-        1,
-    );
-    if (r as isize) <= 32 {
-        notify(b"Aucun terminal n'est install\xE9.");
-    }
+    crate::terminal::init_at(dir);
+    crate::wm::open(crate::wm::APP_TERMINAL);
 }
 
 unsafe fn run_cmd(cmd: Cmd, geo: &Geo) {
@@ -3807,6 +3971,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 let track_h = view_h - 8;
                 let th = ((view_h * track_h) / total.max(1)).max(30);
                 pn.scroll = ((y - grab - r.top - 4) * (total - view_h)) / (track_h - th).max(1);
+                pn.scroll_target = pn.scroll;
                 clamp_scroll(pn, &r);
                 return true;
             }
@@ -3825,6 +3990,17 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 }
                 return true;
             }
+            if let Some((sx, sy)) = FILE_DRAG_START {
+                let dx = (x - sx).abs();
+                let dy = (y - sy).abs();
+                if dx > 5 || dy > 5 {
+                    FILE_DRAG_ACTIVE = true;
+                    FILE_DRAG_START = None;
+                }
+            }
+            if FILE_DRAG_ACTIVE {
+                return true;
+            }
             update_hover(&geo, x, y)
                 || inside(&f.title, x, y)
                 || inside(&geo.toolbar, x, y)
@@ -3834,9 +4010,27 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 || MENU != Menu::None
         }
         Mouse::Up => {
+            let was_file_drag = FILE_DRAG_ACTIVE;
             let was = LASSO.is_some() || SCROLL_DRAG.is_some();
             LASSO = None;
             SCROLL_DRAG = None;
+            FILE_DRAG_START = None;
+            if was_file_drag {
+                let t = tab();
+                if t.dual {
+                    let other = 1 - t.focus;
+                    let r = geo.panes[other];
+                    if inside(&r, x, y) {
+                        let dest_loc = t.panes[other].loc;
+                        if !dest_loc.is(HOME) && !dest_loc.is(PC) {
+                            let do_copy = ctrl();
+                            drop_files_to(dest_loc.get(), do_copy);
+                        }
+                    }
+                }
+                cancel_file_drag();
+                return true;
+            }
             was
         }
         Mouse::Wheel(delta) => {
@@ -3845,9 +4039,23 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 let r = pane_rect_inner(&geo, which);
                 if inside(&r, x, y) {
                     let pn = &mut t.panes[which];
-                    let step = cells(&r).ch.max(40);
-                    pn.scroll -= delta / 120 * step;
-                    clamp_scroll(pn, &r);
+                    if shift() {
+                        pn.scroll_x -= delta / 120 * 60;
+                        let content_w = if VIEW == View::Details {
+                            let (_, _, _, _, sx) = detail_cols(&r);
+                            sx + 120 - r.left
+                        } else {
+                            r.right - r.left
+                        };
+                        let max_x = (content_w - (r.right - r.left - SCROLL_W)).max(0);
+                        pn.scroll_x = pn.scroll_x.clamp(0, max_x);
+                    } else {
+                        let step = cells(&r).ch.max(40);
+                        pn.scroll_target -= delta / 120 * step;
+                        let c = cells(&r);
+                        let max = (content_height(pn, &c) - (r.bottom - r.top)).max(0);
+                        pn.scroll_target = pn.scroll_target.clamp(0, max);
+                    }
                     update_hover(&geo, x, y);
                     return true;
                 }
@@ -3984,7 +4192,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
                 if y >= ty && y < ty + th {
                     SCROLL_DRAG = Some((0, y - ty));
                 } else {
-                    pn.scroll += if y < ty { -view_h } else { view_h };
+                    pn.scroll_target += if y < ty { -view_h } else { view_h };
                     clamp_scroll(pn, &r);
                 }
                 return true;
@@ -4055,6 +4263,7 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
                             set_sel(pn, idx, true);
                             pn.anchor = idx;
                         }
+                        FILE_DRAG_START = Some((x, y));
                     }
                 }
             }
@@ -4308,6 +4517,7 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                 }
                 rebuild_view(p);
                 p.scroll = 0;
+                p.scroll_target = 0;
             }
             return true;
         }
@@ -4401,8 +4611,24 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
 }
 
 pub unsafe fn tick(_f: &Frame) -> bool {
-    // Curseur clignotant dans un champ, message temporaire de la barre d'état.
-    FOCUS != Focus::List
+    let mut animating = false;
+    for i in 0..NTABS {
+        for which in 0..2 {
+            let pn = &mut TABS[i].panes[which];
+            if pn.scroll != pn.scroll_target {
+                let diff = pn.scroll_target - pn.scroll;
+                let step = diff / 4;
+                if step == 0 {
+                    pn.scroll = pn.scroll_target;
+                } else {
+                    pn.scroll += step;
+                }
+                animating = true;
+            }
+        }
+    }
+    animating
+        || FOCUS != Focus::List
         || MESSAGE_UNTIL != 0 && {
             let alive = (MESSAGE_UNTIL.wrapping_sub(GetTickCount()) as i32) > -1000;
             if !alive {

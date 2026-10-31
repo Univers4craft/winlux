@@ -289,6 +289,8 @@ pub struct Window {
     pub style: u32,
     #[allow(dead_code)]
     pub ex_style: u32,
+    /// Un `WM_PAINT` est déjà en file d'attente (coalescence).
+    pub paint_queued: bool,
     /// Commandes GDI accumulées depuis le dernier `EndPaint`.
     pub pending: Vec<DrawCmd>,
 }
@@ -300,9 +302,7 @@ impl Window {
     }
 }
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
-}
+use super::lock;
 
 fn classes() -> &'static Mutex<HashMap<String, ClassInfo>> {
     static C: OnceLock<Mutex<HashMap<String, ClassInfo>>> = OnceLock::new();
@@ -723,6 +723,13 @@ pub enum DrawCmd {
         y2: i32,
         color: u32,
         width: u16,
+    },
+    /// Rectangle arrondi inscrit dans le rectangle.
+    RoundRect {
+        rect: Rect,
+        color: u32,
+        rx: i32,
+        ry: i32,
     },
 }
 
@@ -1516,6 +1523,47 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
                 }
             }
         }
+        DrawCmd::RoundRect {
+            rect,
+            color,
+            rx,
+            ry,
+        } => {
+            let w = rect.width();
+            let h = rect.height();
+            if w > 0 && h > 0 {
+                let rx = (*rx).min(w / 2).max(0) as f64;
+                let ry = (*ry).min(h / 2).max(0) as f64;
+                for y in rect.top.max(0)..rect.bottom.min(bounds.bottom) {
+                    for x in rect.left.max(0)..rect.right.min(bounds.right) {
+                        let lx = (x - rect.left) as f64;
+                        let ly = (y - rect.top) as f64;
+                        let inside = if lx < rx && ly < ry {
+                            let dx = (rx - lx) / rx;
+                            let dy = (ry - ly) / ry;
+                            dx * dx + dy * dy <= 1.0
+                        } else if lx > w as f64 - rx && ly < ry {
+                            let dx = (lx - (w as f64 - rx)) / rx;
+                            let dy = (ry - ly) / ry;
+                            dx * dx + dy * dy <= 1.0
+                        } else if lx < rx && ly > h as f64 - ry {
+                            let dx = (rx - lx) / rx;
+                            let dy = (ly - (h as f64 - ry)) / ry;
+                            dx * dx + dy * dy <= 1.0
+                        } else if lx > w as f64 - rx && ly > h as f64 - ry {
+                            let dx = (lx - (w as f64 - rx)) / rx;
+                            let dy = (ly - (h as f64 - ry)) / ry;
+                            dx * dx + dy * dy <= 1.0
+                        } else {
+                            true
+                        };
+                        if inside {
+                            put(x, y, *color, RasterOp::Copy);
+                        }
+                    }
+                }
+            }
+        }
         DrawCmd::Text { .. } | DrawCmd::Blit { .. } => {}
     }
     true
@@ -1747,7 +1795,11 @@ pub fn request_paint(hwnd: usize) {
         let mut map = lock(windows());
         match map.get_mut(&hwnd) {
             Some(w) => {
+                if w.paint_queued {
+                    return;
+                }
                 w.needs_paint = true;
+                w.paint_queued = true;
                 Some(w.owner)
             }
             None => None,
@@ -1939,6 +1991,7 @@ pub fn begin_paint(hwnd: usize) -> Option<(usize, Rect)> {
         let mut map = lock(windows());
         let w = map.get_mut(&hwnd)?;
         w.needs_paint = false;
+        w.paint_queued = false;
         w.client_rect()
     };
     Some((create_dc(hwnd), rect))
@@ -2246,12 +2299,23 @@ pub fn kill_timer(hwnd: usize, id: usize) -> bool {
 
 // ---------- Curseur ----------
 
-static CURSOR_HANDLE: AtomicUsize = AtomicUsize::new(0x0001_0000);
+pub static CURSOR_HANDLE: AtomicUsize = AtomicUsize::new(0x0001_0001);
 static SHOW_CURSOR_COUNT: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
 
-pub fn load_cursor(_instance: usize, _name: usize) -> usize {
-    // Renvoie un handle de curseur factice
-    0x0001_0000
+pub fn load_cursor(_instance: usize, name: usize) -> usize {
+    match name {
+        32512 => 0x0001_0001, // IDC_ARROW
+        32513 => 0x0001_0002, // IDC_IBEAM
+        32514 => 0x0001_0003, // IDC_WAIT
+        32515 => 0x0001_0004, // IDC_CROSS
+        32642 => 0x0001_0005, // IDC_SIZENWSE
+        32643 => 0x0001_0006, // IDC_SIZENESW
+        32644 => 0x0001_0007, // IDC_SIZEWE
+        32645 => 0x0001_0008, // IDC_SIZENS
+        32646 => 0x0001_0009, // IDC_SIZEALL
+        32649 => 0x0001_000A, // IDC_HAND
+        _ => 0x0001_0001,
+    }
 }
 
 pub fn set_cursor(cursor: usize) -> usize {
@@ -2432,6 +2496,7 @@ mod tests {
                 parent: 0,
                 owner: std::thread::current().id(),
                 needs_paint: false,
+                paint_queued: false,
                 style: 0,
                 ex_style: 0,
                 pending: Vec::new(),

@@ -1,5 +1,5 @@
 use std::io::Write;
-use std::sync::OnceLock;
+use std::sync::{Mutex, OnceLock};
 
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(u8)]
@@ -35,6 +35,9 @@ struct Config {
 }
 
 static CONFIG: OnceLock<Config> = OnceLock::new();
+static LOG_FILE: OnceLock<Option<Mutex<std::fs::File>>> = OnceLock::new();
+
+const MAX_LOG_SIZE: u64 = 10 * 1024 * 1024;
 
 fn config() -> &'static Config {
     CONFIG.get_or_init(|| {
@@ -86,12 +89,96 @@ fn config() -> &'static Config {
     })
 }
 
+fn log_file() -> &'static Option<Mutex<std::fs::File>> {
+    LOG_FILE.get_or_init(|| {
+        let raw = std::env::var("WINLUX_LOG_FILE").ok()?;
+        let path = if raw.eq_ignore_ascii_case("auto") || raw == "1" {
+            crate::paths::data_dir()?.join("winlux.log")
+        } else {
+            std::path::PathBuf::from(raw)
+        };
+        if let Some(parent) = path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        // Rotation : si le fichier dépasse 10 Mo, on le renomme en .old
+        if let Ok(meta) = std::fs::metadata(&path) {
+            if meta.len() > MAX_LOG_SIZE {
+                let old = path.with_extension("log.old");
+                let _ = std::fs::rename(&path, old);
+            }
+        }
+        let file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .ok()?;
+        Some(Mutex::new(file))
+    })
+}
+
 fn fmt_is_json(s: &str) -> bool {
     s.eq_ignore_ascii_case("json")
 }
 
 pub fn enabled(level: Level) -> bool {
     level <= config().level
+}
+
+fn timestamp() -> String {
+    let d = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = d.as_secs();
+    let millis = d.subsec_millis();
+    // UTC timestamp : secondes depuis l'epoch, converti en ISO 8601 simplifié
+    let s = secs % 60;
+    let m = (secs / 60) % 60;
+    let h = (secs / 3600) % 24;
+    let days = secs / 86400;
+    // Calcul simplifié de la date à partir du nombre de jours depuis 1970
+    let (y, mo, day) = days_to_ymd(days);
+    format!("{y:04}-{mo:02}-{day:02}T{h:02}:{m:02}:{s:02}.{millis:03}Z")
+}
+
+fn days_to_ymd(mut days: u64) -> (u64, u64, u64) {
+    // Algorithme de conversion jours-depuis-epoch vers Y/M/D
+    let mut y = 1970;
+    loop {
+        let year_days = if is_leap(y) { 366 } else { 365 };
+        if days < year_days {
+            break;
+        }
+        days -= year_days;
+        y += 1;
+    }
+    let leap = is_leap(y);
+    let month_days = [
+        31,
+        if leap { 29 } else { 28 },
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    let mut mo = 0;
+    for &md in &month_days {
+        if days < md {
+            break;
+        }
+        days -= md;
+        mo += 1;
+    }
+    (y, mo + 1, days + 1)
+}
+
+fn is_leap(y: u64) -> bool {
+    (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
 pub fn emit(level: Level, target: &str, message: &std::fmt::Arguments<'_>) {
@@ -115,6 +202,15 @@ pub fn emit(level: Level, target: &str, message: &std::fmt::Arguments<'_>) {
             );
             write_json_string(&mut w, &msg);
             let _ = writeln!(w, "}}");
+        }
+    }
+    drop(w);
+
+    // Écriture dans le fichier de log si configuré
+    if let Some(file_mutex) = log_file() {
+        if let Ok(mut f) = file_mutex.lock() {
+            let ts = timestamp();
+            let _ = writeln!(f, "{} [{}] {}: {}", ts, level.as_str(), target, message);
         }
     }
 }
