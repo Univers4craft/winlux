@@ -98,6 +98,8 @@ status() {
         printf 'privacy_camera=%s\n' "$(privacy CAMERA allow)"
         printf 'privacy_location=%s\n' "$(privacy LOCATION deny)"
         printf 'privacy_location_history=%s\n' "$(privacy LOCATION_HISTORY off)"
+        # Signaler un probleme : reglages lus par winlux-report (rien n'est envoye seul).
+        if have winlux-report; then WINLUX_REPORT_CONF="$config/report.conf" winlux-report --status 2>/dev/null || true; fi
         if have winlux-sysupdate; then winlux-sysupdate status 2>/dev/null || true; fi
         printf 'control_available=1\n'
         if have winlux-browsers; then winlux-browsers --status 2>/dev/null || true; fi
@@ -298,6 +300,10 @@ perform() {
         privacy-location-allow|privacy-location-deny) save "$config/privacy.conf" LOCATION "${action#privacy-location-}" && chmod 644 "$config/privacy.conf" ;;
         privacy-history-on|privacy-history-off) save "$config/privacy.conf" LOCATION_HISTORY "${action#privacy-history-}" && chmod 644 "$config/privacy.conf" ;;
         update-auto-off) winlux-update --auto disable ;;
+        report-offer-on|report-offer-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "offer=${action#report-offer-}" ;;
+        report-redact-on|report-redact-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "redact=${action#report-redact-}" ;;
+        report-mode-auto|report-mode-browser|report-mode-file) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "mode=${action#report-mode-}" ;;
+        report-open) (setsid winlux-report >/dev/null 2>&1 &) ;;
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
             test -f "$root/etc/winlux/live-session" || { echo 'Redemarrage de session reserve a Winlux Live' >&2; return 1; }

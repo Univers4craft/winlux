@@ -163,9 +163,21 @@ cd "$(dirname -- "$exe")" 2>/dev/null || true
 if [ "$kind" = console ]; then
     exec "$winlux" "$exe" "$@"
 fi
+started=$(date +%s)
 "$winlux" "$exe" "$@" 2>"$log"
 status=$?
 if [ "$status" -ne 0 ]; then
+    # Un plantage enregistré depuis le lancement : la boîte « Signaler un
+    # problème » explique la cause et propose l'envoi (jamais automatique).
+    # Depuis le bureau Winlux, c'est le bureau qui la propose après l'écran bleu.
+    if [ "${WINLUX_DESKTOP_LAUNCH:-0}" != 1 ] && [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] \
+        && command -v winlux-report >/dev/null 2>&1; then
+        winlux-report --crash --since "$started"
+        case $? in 0) exit "$status" ;; esac
+    fi
+    [ "${WINLUX_DESKTOP_LAUNCH:-0}" = 1 ] && [ -e /run/winlux/journal/crash.log ] \
+        && [ "$(sed -n 's/^\[CRASH\] ts=\([0-9]*\).*/\1/p' /run/winlux/journal/crash.log | tail -n 1)" -ge "$started" ] 2>/dev/null \
+        && exit "$status"
     detail=$(tail -n 5 "$log" 2>/dev/null)
     show_error "« $(basename -- "$exe") » s’est arrêté (code $status).
 $detail"

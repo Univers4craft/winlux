@@ -234,7 +234,33 @@ pub const S_ADVANCED_SOUND: usize = 155;
 pub const S_SYSTEM_UPDATES: usize = 156;
 pub const S_PRIVACY: usize = 157;
 
-const STRING_COUNT: usize = 158;
+// Signaler un problème
+pub const S_REPORT_PAGE: usize = 158;
+pub const S_REPORT_DESC: usize = 159;
+pub const S_REPORT_NEW: usize = 160;
+pub const S_REPORT_LAST: usize = 161;
+pub const S_REPORT_SAVED: usize = 162;
+pub const S_REPORT_OFFER: usize = 163;
+pub const S_REPORT_OFFER_ON_DESC: usize = 164;
+pub const S_REPORT_OFFER_OFF_DESC: usize = 165;
+pub const S_REPORT_PROPOSE: usize = 166;
+pub const S_REPORT_SILENT: usize = 167;
+pub const S_REPORT_PRIVATE: usize = 168;
+pub const S_REPORT_MASK_DESC: usize = 169;
+pub const S_REPORT_NOMASK_DESC: usize = 170;
+pub const S_REPORT_MASK: usize = 171;
+pub const S_REPORT_NOMASK: usize = 172;
+pub const S_REPORT_MODE: usize = 173;
+pub const S_REPORT_MODE_RELAY: usize = 174;
+pub const S_REPORT_MODE_BROWSER: usize = 175;
+pub const S_REPORT_MODE_FILE: usize = 176;
+pub const S_REPORT_AUTO: usize = 177;
+pub const S_REPORT_BROWSER: usize = 178;
+pub const S_REPORT_FILE: usize = 179;
+pub const S_REPORT_MODE_AUTO_BROWSER: usize = 180;
+pub const S_REPORT_BUTTON: usize = 181;
+
+const STRING_COUNT: usize = 182;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -419,6 +445,31 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Son avanc\xE9",
     b"Mises \xE0 jour syst\xE8me",
     b"Confidentialit\xE9",
+    // 158-181 : Signaler un problème
+    b"Signaler un probl\xE8me",
+    b"D\xE9crivez un bug : le rapport complet s'affiche, modifiable, avant tout envoi.",
+    b"Nouveau signalement",
+    b"Dernier plantage",
+    b"Rapports enregistr\xE9s",
+    b"Apr\xE8s un plantage",
+    b"Winlux propose de signaler le probl\xE8me. Rien n'est envoy\xE9 sans votre accord.",
+    b"Winlux ne propose rien apr\xE8s un plantage (le journal le conserve).",
+    b"Proposer",
+    b"Ne rien proposer",
+    b"Donn\xE9es personnelles dans les rapports",
+    b"Masqu\xE9es par d\xE9faut : chemins, noms de fichiers, identifiants, Wi-Fi, num\xE9ros de s\xE9rie.",
+    b"Non masqu\xE9es par d\xE9faut : relisez le rapport avant l'envoi.",
+    b"Masquer",
+    b"Ne pas masquer",
+    b"Mode d'envoi",
+    b"Automatique : service de signalement Winlux, sans compte.",
+    b"Navigateur : formulaire GitHub pr\xE9rempli (compte GitHub requis).",
+    b"Fichier : le rapport est seulement enregistr\xE9 sur cet ordinateur.",
+    b"Automatique",
+    b"Navigateur",
+    b"Fichier",
+    b"Automatique : aucun service Winlux configur\xE9, le navigateur sera utilis\xE9.",
+    b"Signaler",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -602,6 +653,31 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Advanced sound",
     b"System updates",
     b"Privacy",
+    // 158-181 : Signaler un problème
+    b"Report a problem",
+    b"Describe a bug: the full report is shown, editable, before anything is sent.",
+    b"New report",
+    b"Last crash",
+    b"Saved reports",
+    b"After a crash",
+    b"Winlux offers to report the problem. Nothing is sent without your consent.",
+    b"Winlux offers nothing after a crash (the log keeps it).",
+    b"Offer",
+    b"Offer nothing",
+    b"Personal data in reports",
+    b"Hidden by default: paths, file names, identifiers, Wi-Fi, serial numbers.",
+    b"Not hidden by default: review the report before sending.",
+    b"Hide",
+    b"Don't hide",
+    b"Sending mode",
+    b"Automatic: Winlux reporting service, no account.",
+    b"Browser: prefilled GitHub form (GitHub account required).",
+    b"File: the report is only saved on this computer.",
+    b"Automatic",
+    b"Browser",
+    b"File",
+    b"Automatic: no Winlux service configured, the browser will be used.",
+    b"Report",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -785,6 +861,31 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Sonido avanzado",
     b"Actualizaciones del sistema",
     b"Privacidad",
+    // 158-181 : Signaler un problème
+    b"Informar de un problema",
+    b"Describa un error: el informe completo se muestra, editable, antes de enviar nada.",
+    b"Nuevo informe",
+    b"\xDAltimo fallo",
+    b"Informes guardados",
+    b"Tras un fallo",
+    b"Winlux propone informar del problema. No se env\xEDa nada sin su permiso.",
+    b"Winlux no propone nada tras un fallo (el registro lo conserva).",
+    b"Proponer",
+    b"No proponer",
+    b"Datos personales en los informes",
+    b"Ocultos por defecto: rutas, nombres de archivo, identificadores, Wi-Fi, n\xFAmeros de serie.",
+    b"No ocultos por defecto: revise el informe antes de enviarlo.",
+    b"Ocultar",
+    b"No ocultar",
+    b"Modo de env\xEDo",
+    b"Autom\xE1tico: servicio de informes de Winlux, sin cuenta.",
+    b"Navegador: formulario de GitHub rellenado (requiere cuenta de GitHub).",
+    b"Archivo: el informe solo se guarda en este equipo.",
+    b"Autom\xE1tico",
+    b"Navegador",
+    b"Archivo",
+    b"Autom\xE1tico: ning\xFAn servicio de Winlux configurado, se usar\xE1 el navegador.",
+    b"Informar",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -968,6 +1069,31 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Erweiterter Sound",
     b"Systemupdates",
     b"Datenschutz",
+    // 158-181 : Signaler un problème
+    b"Problem melden",
+    b"Beschreiben Sie einen Fehler: Der vollst\xE4ndige Bericht wird vor dem Senden bearbeitbar angezeigt.",
+    b"Neue Meldung",
+    b"Letzter Absturz",
+    b"Gespeicherte Berichte",
+    b"Nach einem Absturz",
+    b"Winlux bietet an, das Problem zu melden. Ohne Ihre Zustimmung wird nichts gesendet.",
+    b"Winlux bietet nach einem Absturz nichts an (das Protokoll beh\xE4lt ihn).",
+    b"Anbieten",
+    b"Nichts anbieten",
+    b"Pers\xF6nliche Daten in Berichten",
+    b"Standardm\xE4\xDFig ausgeblendet: Pfade, Dateinamen, Kennungen, WLAN, Seriennummern.",
+    b"Standardm\xE4\xDFig nicht ausgeblendet: Pr\xFCfen Sie den Bericht vor dem Senden.",
+    b"Ausblenden",
+    b"Nicht ausblenden",
+    b"Versandart",
+    b"Automatisch: Winlux-Meldedienst, ohne Konto.",
+    b"Browser: vorausgef\xFClltes GitHub-Formular (GitHub-Konto n\xF6tig).",
+    b"Datei: Der Bericht wird nur auf diesem Computer gespeichert.",
+    b"Automatisch",
+    b"Browser",
+    b"Datei",
+    b"Automatisch: Kein Winlux-Dienst eingerichtet, der Browser wird verwendet.",
+    b"Melden",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {

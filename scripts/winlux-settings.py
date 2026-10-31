@@ -20,7 +20,8 @@ FIELDS = {
     11: [("Navigateur par défaut", "browser_default")],
 }
 ACTIONS = {
-    0: [("Relancer le bureau", "restart-session"), ("Redémarrer", "reboot"), ("Éteindre", "poweroff")],
+    0: [("Relancer le bureau", "restart-session"), ("Redémarrer", "reboot"), ("Éteindre", "poweroff"),
+        ("Signaler un problème", "report-open")],
     2: [("Renouveler la connexion", "network-renew")],
     3: [("Volume −", "volume-down"), ("Muet / rétablir", "volume-mute"), ("Volume +", "volume-up")],
     4: [("Français AZERTY", "keyboard-fr"), ("Anglais QWERTY", "keyboard-us"), ("Activer toucher-clic", "tap-on"), ("Désactiver toucher-clic", "tap-off")],

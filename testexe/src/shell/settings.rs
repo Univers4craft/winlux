@@ -10,7 +10,8 @@ use winlux_testexe::*;
 pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
 pub const PAGE_PRIVACY: usize = 18;
-const PAGE_COUNT: usize = 19;
+pub const PAGE_REPORT: usize = 19;
+const PAGE_COUNT: usize = 20;
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
         tr(S_SYSTEM_LINUX),
@@ -32,6 +33,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_ADVANCED_SOUND),
         tr(S_SYSTEM_UPDATES),
         tr(S_PRIVACY),
+        tr(S_REPORT_PAGE),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -528,6 +530,13 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (PAGE_PRIVACY, 11) => value(b"privacy_location") == b"allow",
         (PAGE_PRIVACY, 18) => value(b"privacy_location_history") != b"on",
         (PAGE_PRIVACY, 19) => value(b"privacy_location_history") == b"on",
+        (PAGE_REPORT, 9) => value(b"report_offer") != b"off",
+        (PAGE_REPORT, 10) => value(b"report_offer") == b"off",
+        (PAGE_REPORT, 18) => value(b"report_redact") != b"off",
+        (PAGE_REPORT, 19) => value(b"report_redact") == b"off",
+        (PAGE_REPORT, 27) => !matches!(value(b"report_mode"), b"browser" | b"file"),
+        (PAGE_REPORT, 28) => value(b"report_mode") == b"browser",
+        (PAGE_REPORT, 29) => value(b"report_mode") == b"file",
         _ => false,
     };
     let primary = PAGE == 7 && id == 1
@@ -1538,6 +1547,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         }
         PAGE_SYSUPDATE => draw_sysupdate(g, &c),
         PAGE_PRIVACY => draw_privacy(g, &c),
+        PAGE_REPORT => draw_report(g, &c),
         _ => {}
     }
     let notice = if PAGE == 10 {
@@ -1570,7 +1580,7 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
             -1
         };
     }
-    for i in 0..24 {
+    for i in 0..30 {
         let r = button_rect(&c, i / 3, i % 3);
         if r.bottom <= c.bottom - 24 && inside(&r, x, y) {
             return i;
@@ -1963,6 +1973,21 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         } else {
             c"privacy-location-allow"
         }),
+        (PAGE_REPORT, id @ 0..=2) => {
+            report(match id {
+                0 => c"",
+                1 => c"--crash --force",
+                _ => c"--open-saved",
+            });
+            return true;
+        }
+        (PAGE_REPORT, 9) => Some(c"report-offer-on"),
+        (PAGE_REPORT, 10) => Some(c"report-offer-off"),
+        (PAGE_REPORT, 18) => Some(c"report-redact-on"),
+        (PAGE_REPORT, 19) => Some(c"report-redact-off"),
+        (PAGE_REPORT, 27) => Some(c"report-mode-auto"),
+        (PAGE_REPORT, 28) => Some(c"report-mode-browser"),
+        (PAGE_REPORT, 29) => Some(c"report-mode-file"),
         (PAGE_PRIVACY, 18) => Some(c"privacy-history-off"),
         (PAGE_PRIVACY, 19) => Some(c"privacy-history-on"),
         _ => None,
@@ -2148,6 +2173,48 @@ unsafe fn draw_privacy(g: &mut Gfx, c: &Rect) {
         b"Vos donn\xE9es restent chez vous",
         b"Un micro refus\xE9 est bloqu\xE9 par le runtime ; cam\xE9ra et localisation ne sont pas encore expos\xE9es aux .exe.",
     );
+}
+/// Lance « Signaler un problème » (winlux-report) : le rapport s'affiche en
+/// entier, modifiable, avant tout envoi.
+pub unsafe fn report(args: &core::ffi::CStr) {
+    if ShellExecuteA(
+        core::ptr::null_mut(),
+        c"open".as_ptr(),
+        c"winlux-report".as_ptr(),
+        args.as_ptr(),
+        core::ptr::null(),
+        1,
+    ) as isize
+        <= 32
+    {
+        crate::desktop::toast(tr(S_INFO_UNAVAILABLE));
+    }
+}
+unsafe fn draw_report(g: &mut Gfx, c: &Rect) {
+    row(g, c, 44, tr(S_REPORT_PAGE), tr(S_REPORT_DESC));
+    button(g, c, 0, 0, tr(S_REPORT_NEW), 0);
+    button(g, c, 0, 1, tr(S_REPORT_LAST), 1);
+    button(g, c, 0, 2, tr(S_REPORT_SAVED), 2);
+    let offer = value(b"report_offer") != b"off";
+    let offer_desc = if offer { S_REPORT_OFFER_ON_DESC } else { S_REPORT_OFFER_OFF_DESC };
+    row(g, c, 166, tr(S_REPORT_OFFER), tr(offer_desc));
+    button(g, c, 3, 0, tr(S_REPORT_PROPOSE), 9);
+    button(g, c, 3, 1, tr(S_REPORT_SILENT), 10);
+    let mask = value(b"report_redact") != b"off";
+    let mask_desc = if mask { S_REPORT_MASK_DESC } else { S_REPORT_NOMASK_DESC };
+    row(g, c, 300, tr(S_REPORT_PRIVATE), tr(mask_desc));
+    button(g, c, 6, 0, tr(S_REPORT_MASK), 18);
+    button(g, c, 6, 1, tr(S_REPORT_NOMASK), 19);
+    let mode = match (value(b"report_mode"), value(b"report_transport")) {
+        (b"browser", _) => S_REPORT_MODE_BROWSER,
+        (b"file", _) => S_REPORT_MODE_FILE,
+        (_, b"browser") => S_REPORT_MODE_AUTO_BROWSER,
+        _ => S_REPORT_MODE_RELAY,
+    };
+    row(g, c, 430, tr(S_REPORT_MODE), tr(mode));
+    button(g, c, 9, 0, tr(S_REPORT_AUTO), 27);
+    button(g, c, 9, 1, tr(S_REPORT_BROWSER), 28);
+    button(g, c, 9, 2, tr(S_REPORT_FILE), 29);
 }
 unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
     let p = pal();
