@@ -3,12 +3,14 @@
 mod admin;
 mod archive;
 mod audio;
+mod boottime;
 mod clr;
 mod cpu;
 mod crash;
 mod diskimage;
 mod dlls;
 mod firewall;
+mod gamemode;
 mod gpu;
 mod imaging;
 mod launch;
@@ -26,6 +28,7 @@ mod printf;
 mod process;
 mod profiles;
 pub mod quality;
+mod registry;
 mod tasks;
 mod thunks;
 mod volumes;
@@ -60,6 +63,14 @@ fn main() {
     if exe == "--power" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(power::cli::main(&rest));
+    }
+    if exe == "--boot-time" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(boottime::cli(&rest));
+    }
+    if exe == "--gamemode" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(gamemode::cli(&rest));
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());
@@ -116,6 +127,13 @@ fn main() {
     if exe.as_os_str() == "--msiexec" || (msi::is_msiexec(&exe) && !is_real_pe(&exe)) {
         std::process::exit(msi::cli(&rest));
     }
+    // reg.exe et regedit.exe sont fournis par Winlux (module registry).
+    if exe.as_os_str() == "--reg" || (registry::cli::is_reg(&exe) && !is_real_pe(&exe)) {
+        std::process::exit(registry::cli::reg_main(&rest));
+    }
+    if exe.as_os_str() == "--regedit" || (registry::cli::is_regedit(&exe) && !is_real_pe(&exe)) {
+        std::process::exit(registry::cli::regedit_main(&rest));
+    }
     let source = match std::fs::read(&exe) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -123,7 +141,7 @@ fn main() {
             std::process::exit(1);
         }
     };
-    backup_registry();
+    registry::backup();
     if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
         crash::set_exe_name(name);
     }
@@ -162,7 +180,13 @@ fn main() {
         image.pe.stack_reserve,
         image.pe.stack_commit
     );
-    cpu::apply_launch(&cpu_settings, &image.import_names());
+    let imports = image.import_names();
+    cpu::apply_launch(&cpu_settings, &imports);
+    if cpu::is_heavy(&imports) {
+        // Jeu ou application 3D : le mode jeu lui donne la priorité.
+        let name = exe.file_name().map(|n| n.to_string_lossy().into_owned());
+        gamemode::register_current(name.as_deref().unwrap_or("jeu"));
+    }
     dlls::kernel32::init();
     process::init_process(&image, &launch::windows_args(&rest));
     process::run(image);
@@ -218,21 +242,6 @@ fn is_real_pe(path: &std::path::Path) -> bool {
         .and_then(|mut f| f.read_exact(&mut magic))
         .is_ok()
         && magic == *b"MZ"
-}
-
-fn backup_registry() {
-    let Some(data) = paths::data_dir() else {
-        return;
-    };
-    let src = data.join("registry.tsv");
-    if let Ok(meta) = std::fs::metadata(&src) {
-        if meta.len() > 0 {
-            let dst = data.join("registry.tsv.bak");
-            if let Err(e) = std::fs::copy(&src, &dst) {
-                log_warn!("registry", "sauvegarde impossible de registry.tsv : {e}");
-            }
-        }
-    }
 }
 
 /// Indique comment lancer un fichier sans l'exécuter : `console` ou `gui` sur
