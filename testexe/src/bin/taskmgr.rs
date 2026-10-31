@@ -4,10 +4,10 @@
 
 use winlux_testexe::*;
 
-#[path = "../shell/gpuinfo.rs"]
-mod gpuinfo;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/gpuinfo.rs"]
+mod gpuinfo;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
 #[path = "../shell/wm_standalone.rs"]
@@ -33,7 +33,14 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let hwnd = CreateWindowExA(
             0,
             c"WinluxTaskMgr".as_ptr(),
-            c"Gestionnaire des t\xE2ches".as_ptr(),
+            tr4(&[
+                b"Gestionnaire des t\xE2ches\0",
+                b"Task Manager\0",
+                b"Administrador de tareas\0",
+                b"Task-Manager\0",
+            ])
+            .as_ptr()
+            .cast(),
             0x00CF0000,
             80,
             60,
