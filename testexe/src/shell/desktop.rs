@@ -47,10 +47,7 @@ static mut SHORTCUTS: [(&'static [u8], &'static [u8], i32, i32); 16] = [(b"", b"
 static mut SHORTCUTS_COUNT: usize = 0;
 static mut START_SEARCH: [u8; 64] = [0; 64]; // Texte de recherche
 static mut START_SEARCH_LEN: usize = 0;
-static mut ENABLE_BLUR: bool = true; // Effet de flou activé
-static mut ENABLE_SMOOTH_ANIM: bool = true; // Animations fluides activées
-static mut ENABLE_THUMBNAILS: bool = true; // Miniatures activées
-static mut AUTO_THEME: bool = false; // Thème automatique
+use crate::gfx::{ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS, AUTO_THEME};
 static mut CONTEXT_APP: Option<usize> = None;
 static mut CONTEXT_DESKTOP: Option<usize> = None;
 static mut CONTEXT_RECT: Rect = Rect {
@@ -2234,6 +2231,7 @@ pub unsafe fn frame(hwnd: Handle) {
     }
     let animating = !BOOT_DONE
         || wm::animating()
+        || crate::gfx::theme_animating()
         || since(INTRO_START) < INTRO_MS + 40
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)
         || START_CLOSING
