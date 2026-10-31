@@ -234,8 +234,9 @@ pub const S_ADVANCED_SOUND: usize = 155;
 pub const S_SYSTEM_UPDATES: usize = 156;
 pub const S_PRIVACY: usize = 157;
 pub const S_PROCESSOR: usize = 158;
+pub const S_BLUETOOTH_DEVICES: usize = 159;
 
-const STRING_COUNT: usize = 159;
+const STRING_COUNT: usize = 160;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -421,6 +422,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Mises \xE0 jour syst\xE8me",
     b"Confidentialit\xE9",
     b"Processeur",
+    b"Bluetooth et appareils",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -605,6 +607,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"System updates",
     b"Privacy",
     b"Processor",
+    b"Bluetooth & devices",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -789,6 +792,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Actualizaciones del sistema",
     b"Privacidad",
     b"Procesador",
+    b"Bluetooth y dispositivos",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -973,6 +977,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Systemupdates",
     b"Datenschutz",
     b"Prozessor",
+    b"Bluetooth und Ger\xE4te",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {
