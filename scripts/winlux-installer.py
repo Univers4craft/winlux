@@ -27,6 +27,9 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 HW_DETECT = os.path.join(SCRIPT_DIR, "winlux-hw-detect.sh")
 INSTALL_SH = os.path.join(SCRIPT_DIR, "install.sh")
+SECUREBOOT_SH = next((p for p in (os.path.join(SCRIPT_DIR, "winlux-secureboot.sh"), "/usr/bin/winlux-secureboot") if os.path.exists(p)), None)
+sys.path[:0] = [SCRIPT_DIR, "/usr/share/winlux"]
+import winlux_autoinstall as autoinstall  # noqa: E402
 
 CSS = b"""
 @define-color bg_primary #0078D4;
@@ -368,6 +371,12 @@ TRANSLATIONS = {
         "summary_hostname": "Nom de l'ordinateur",
         "summary_user": "Utilisateur",
         "summary_autologin": "Connexion automatique",
+        "summary_local_account": "Compte : local (aucun compte en ligne)",
+        "summary_timezone": "Fuseau horaire",
+        "summary_packages": "Paquets supplémentaires",
+        "summary_answer_file": "Fichier de réponse",
+        "answer_file_ignored": "Fichier de réponse ignoré : {error}",
+        "answer_disk_missing": "Disque « {disk} » du fichier de réponse introuvable ou ambigu : choisissez-le.",
         "summary_encryption": "Chiffrement LUKS",
         "summary_yes": "Oui",
         "summary_no": "Non",
@@ -517,6 +526,12 @@ TRANSLATIONS = {
         "summary_hostname": "Computer name",
         "summary_user": "User",
         "summary_autologin": "Automatic login",
+        "summary_local_account": "Account: local (no online account)",
+        "summary_timezone": "Time zone",
+        "summary_packages": "Additional packages",
+        "summary_answer_file": "Answer file",
+        "answer_file_ignored": "Answer file ignored: {error}",
+        "answer_disk_missing": "Disk '{disk}' from the answer file was not found or is ambiguous: please choose it.",
         "summary_encryption": "LUKS encryption",
         "summary_yes": "Yes",
         "summary_no": "No",
@@ -666,6 +681,12 @@ TRANSLATIONS = {
         "summary_hostname": "Computername",
         "summary_user": "Benutzer",
         "summary_autologin": "Automatische Anmeldung",
+        "summary_local_account": "Konto: lokal (kein Online-Konto)",
+        "summary_timezone": "Zeitzone",
+        "summary_packages": "Zusätzliche Pakete",
+        "summary_answer_file": "Antwortdatei",
+        "answer_file_ignored": "Antwortdatei ignoriert: {error}",
+        "answer_disk_missing": "Datenträger „{disk}“ aus der Antwortdatei nicht gefunden oder mehrdeutig: bitte auswählen.",
         "summary_encryption": "LUKS-Verschlüsselung",
         "summary_yes": "Ja",
         "summary_no": "Nein",
@@ -815,6 +836,12 @@ TRANSLATIONS = {
         "summary_hostname": "Nombre del equipo",
         "summary_user": "Usuario",
         "summary_autologin": "Inicio automático",
+        "summary_local_account": "Cuenta: local (sin cuenta en línea)",
+        "summary_timezone": "Zona horaria",
+        "summary_packages": "Paquetes adicionales",
+        "summary_answer_file": "Archivo de respuestas",
+        "answer_file_ignored": "Archivo de respuestas ignorado: {error}",
+        "answer_disk_missing": "Disco «{disk}» del archivo de respuestas no encontrado o ambiguo: elíjalo.",
         "summary_encryption": "Cifrado LUKS",
         "summary_yes": "Sí",
         "summary_no": "No",
@@ -964,6 +991,12 @@ TRANSLATIONS = {
         "summary_hostname": "Nome del computer",
         "summary_user": "Utente",
         "summary_autologin": "Accesso automatico",
+        "summary_local_account": "Account: locale (nessun account online)",
+        "summary_timezone": "Fuso orario",
+        "summary_packages": "Pacchetti aggiuntivi",
+        "summary_answer_file": "File di risposta",
+        "answer_file_ignored": "File di risposta ignorato: {error}",
+        "answer_disk_missing": "Disco «{disk}» del file di risposta non trovato o ambiguo: sceglilo.",
         "summary_encryption": "Crittografia LUKS",
         "summary_yes": "Sì",
         "summary_no": "No",
@@ -1113,6 +1146,12 @@ TRANSLATIONS = {
         "summary_hostname": "Nome do computador",
         "summary_user": "Usuário",
         "summary_autologin": "Login automático",
+        "summary_local_account": "Conta: local (sem conta online)",
+        "summary_timezone": "Fuso horário",
+        "summary_packages": "Pacotes adicionais",
+        "summary_answer_file": "Arquivo de resposta",
+        "answer_file_ignored": "Arquivo de resposta ignorado: {error}",
+        "answer_disk_missing": "Disco «{disk}» do arquivo de resposta não encontrado ou ambíguo: escolha-o.",
         "summary_encryption": "Criptografia LUKS",
         "summary_yes": "Sim",
         "summary_no": "Não",
@@ -1823,12 +1862,18 @@ class InstallerApp(Gtk.Application):
             "fullname": "",
             "password": "",
             "autologin": True,
+            "password_hash": "",
+            "timezone": None,
+            "packages": [],
             "proxy_enabled": False,
             "proxy_host": "",
             "proxy_port": "",
             "network_ethernet": False,
             "import_items": [],
         }
+        self.answer_path = None
+        self.answer_settings = {}
+        self.skip_steps = set()
         self.disks = []
         self.wifi_networks = []
         self.wifi_connected_ssid = ""
@@ -1896,6 +1941,8 @@ class InstallerApp(Gtk.Application):
         self.build_summary_page()
         self.build_progress_page()
         self.build_done_page()
+        self.load_answer_file()
+        self.current_step = self.next_step(-1, 1)
         self.update_step()
         self.win.show_all()
         threading.Thread(target=self.bg_detect, daemon=True).start()
@@ -1908,6 +1955,62 @@ class InstallerApp(Gtk.Application):
             self.disk_partitions[disk["path"]] = parts
             self.detected_os[disk["path"]] = detect_existing_os(parts)
         GLib.idle_add(self.refresh_partition_page)
+        GLib.idle_add(self.apply_answer_disk)
+
+    # ── Fichier de réponse (installation silencieuse) ────────────
+
+    def load_answer_file(self):
+        try:
+            self.answer_path = autoinstall.find_answer_file()
+            if not self.answer_path:
+                return
+            settings, steps = autoinstall.load(self.answer_path)
+        except (autoinstall.AnswerFileError, OSError) as error:
+            self.answer_path = None
+            self.show_message(tr("answer_file_ignored", error=error))
+            return
+        self.answer_settings = settings
+        for key in ("language", "keyboard", "license_accepted", "install_type", "hostname",
+                    "username", "fullname", "password", "password_hash", "autologin", "timezone", "packages"):
+            if key in settings:
+                self.config[key] = settings[key]
+        self.skip_steps = set(steps)
+        self.skip_steps.discard(autoinstall.STEP_DISK)
+        self.skip_steps.discard(autoinstall.STEP_SUMMARY)
+        if autoinstall.STEP_LANGUAGE in steps:
+            self.update_ui_language()
+
+    def apply_answer_disk(self):
+        request = self.answer_settings.get("disk_request")
+        if not request:
+            return
+        disk = autoinstall.resolve_disk(request, self.disks)
+        if disk is None:
+            self.answer_settings["unattended"] = False
+            self.show_message(tr("answer_disk_missing", disk=request))
+            return
+        self.config["disk"] = disk
+        self.skip_steps.add(autoinstall.STEP_DISK)
+        if self.answer_settings.get("unattended"):
+            self.skip_steps.add(autoinstall.STEP_SUMMARY)
+            self.refresh_summary()
+            self.start_installation()
+        elif self.current_step == autoinstall.STEP_DISK:
+            self.current_step = self.next_step(self.current_step, 1)
+            self.update_step()
+
+    def next_step(self, step, direction):
+        step += direction
+        while 0 <= step < autoinstall.STEP_SUMMARY + 1 and step in self.skip_steps:
+            step += direction
+        return max(step, 0)
+
+    def show_message(self, text):
+        dialog = Gtk.MessageDialog(transient_for=getattr(self, "win", None), modal=True,
+                                   message_type=Gtk.MessageType.WARNING,
+                                   buttons=Gtk.ButtonsType.OK, text=text)
+        dialog.run()
+        dialog.destroy()
 
     def update_step(self):
         for i, lbl in enumerate(self.step_labels):
@@ -1918,11 +2021,14 @@ class InstallerApp(Gtk.Application):
                 ctx.add_class("active")
             elif i < self.current_step:
                 ctx.add_class("done")
+        if self.current_step == 8:
+            self.refresh_summary()
         page_name = f"page_{self.current_step}"
         self.pages.set_visible_child_name(page_name)
         if self.current_step == 3 and not self.wifi_scanned:
             self.on_wifi_scan(None)
-        self.btn_back.set_visible(self.current_step > 0 and self.current_step < 9)
+        self.btn_back.set_visible(0 < self.current_step < 9 and self.next_step(self.current_step, -1) < self.current_step
+                                  and self.next_step(self.current_step, -1) not in self.skip_steps)
         if self.current_step == 8:
             self.btn_next.set_label(tr("btn_install"))
             self.btn_next.get_style_context().remove_class("btn-primary")
@@ -1965,8 +2071,9 @@ class InstallerApp(Gtk.Application):
         self.btn_next.set_sensitive(ok)
 
     def on_back(self, _btn):
-        if self.current_step > 0:
-            self.current_step -= 1
+        previous = self.next_step(self.current_step, -1)
+        if previous < self.current_step and previous not in self.skip_steps:
+            self.current_step = previous
             self.update_step()
 
     def on_next(self, _btn):
@@ -1975,13 +2082,15 @@ class InstallerApp(Gtk.Application):
         elif self.current_step < len(STEPS) - 1:
             if self.current_step == 0:
                 self.update_ui_language()
+            target = self.next_step(self.current_step, 1)
             if self.current_step == 3:
                 self.apply_live_proxy()
-            if self.current_step == 4:
+            if target == 5:
+                # Aussi quand le fichier de réponse a fait sauter la page des disques.
                 self.start_windows_detection()
-            if self.current_step == 7:
+            if target == 8:
                 self.refresh_summary()
-            self.current_step += 1
+            self.current_step = target
             self.update_step()
 
     # ── Page 0 : Langue ──────────────────────────────────────────
@@ -2802,6 +2911,7 @@ class InstallerApp(Gtk.Application):
             ("Confirmer le mot de passe :", "password_confirm", "", True),
         ]
         self.account_entries = {}
+        self.account_error = Gtk.Label(label="", xalign=0)
         for i, (label_text, key, placeholder, is_password) in enumerate(fields):
             lbl = Gtk.Label(label=label_text, xalign=1)
             lbl.get_style_context().add_class("input-label")
@@ -2819,7 +2929,6 @@ class InstallerApp(Gtk.Application):
             grid.attach(entry, 1, i, 1, 1)
             self.account_entries[key] = entry
         box.pack_start(grid, False, False, 0)
-        self.account_error = Gtk.Label(label="", xalign=0)
         self.account_error.get_style_context().add_class("warning-text")
         self.account_error.set_margin_top(8)
         box.pack_start(self.account_error, False, False, 0)
@@ -2904,6 +3013,13 @@ class InstallerApp(Gtk.Application):
             lines.append(f"{tr('summary_import')} ({self.import_src_current['user']}) : {', '.join(items)}")
         else:
             lines.append(f"{tr('summary_import')} : {tr('summary_import_none')}")
+        lines.append(tr("summary_local_account"))
+        if self.config.get("timezone"):
+            lines.append(f"{tr('summary_timezone')} : {self.config['timezone']}")
+        if self.config.get("packages"):
+            lines.append(f"{tr('summary_packages')} : {', '.join(self.config['packages'])}")
+        if self.answer_path:
+            lines.append(f"{tr('summary_answer_file')} : {self.answer_path}")
         if self.hw_info:
             lines.append("")
             lines.append(f"CPU : {self.hw_info.get('cpu', '?')}")
@@ -3446,6 +3562,8 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
              "--removable", "--no-nvram", "--recheck"],
             check=True, timeout=60
         )
+        if SECUREBOOT_SH and os.path.exists("/usr/lib/shim/shimx64.efi.signed"):
+            subprocess.run(["sh", SECUREBOOT_SH, "install-esp", efi_dir, fsuuid], check=True, timeout=60)
         subprocess.run(["umount", efi_dir], timeout=10)
 
         if self.config["luks_enabled"]:
@@ -3533,14 +3651,16 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                             user_group_found = True
                 if not user_group_found:
                     f.write(f"{username}:x:{gid}:\n")
-        if password:
+        hashed = self.config.get("password_hash") or ""
+        if password and not hashed:
             try:
-                hashed = subprocess.check_output(
-                    ["openssl", "passwd", "-6", password],
-                    text=True, timeout=10
-                ).strip()
+                hashed = subprocess.run(
+                    ["openssl", "passwd", "-6", "-stdin"], input=password + "\n",
+                    capture_output=True, text=True, timeout=10, check=True
+                ).stdout.strip()
             except Exception:
                 hashed = "!"
+        if hashed:
             if os.path.exists(shadow_path):
                 with open(shadow_path, "a") as f:
                     f.write(f"{username}:{hashed}:19000:0:99999:7:::\n")
@@ -3591,12 +3711,28 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
             "username": self.config["username"],
             "fullname": self.config["fullname"],
             "autologin": self.config["autologin"],
+            "timezone": self.config.get("timezone"),
+            "packages": self.config.get("packages", []),
+            "answer_file": self.answer_path,
             "luks_enabled": self.config["luks_enabled"],
             "install_type": self.config["install_type"],
             "install_date": time.strftime("%Y-%m-%d %H:%M:%S"),
         }
         with open(f"{etc}/install-config.json", "w") as f:
             json.dump(config, f, ensure_ascii=False, indent=2)
+        timezone = self.config.get("timezone")
+        if timezone:
+            with open(f"{root_path}/etc/timezone", "w") as f:
+                f.write(timezone + "\n")
+            if os.path.exists(f"{root_path}/usr/share/zoneinfo/{timezone}"):
+                localtime = f"{root_path}/etc/localtime"
+                if os.path.lexists(localtime):
+                    os.remove(localtime)
+                os.symlink(f"/usr/share/zoneinfo/{timezone}", localtime)
+        if self.config.get("packages"):
+            # Installés par l'init du système au premier démarrage avec réseau.
+            with open(f"{etc}/first-boot-packages", "w") as f:
+                f.write("\n".join(self.config["packages"]) + "\n")
         try:
             self.configure_network_target(root_path)
         except Exception as e:
@@ -3771,6 +3907,8 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         self.cleanup_windows_import()
         self.set_progress(1.0, tr("progress_done"))
         GLib.idle_add(self.show_done)
+        if self.answer_settings.get("unattended") and self.answer_settings.get("reboot"):
+            GLib.timeout_add_seconds(10, lambda: self.on_reboot(None))
 
     def show_done(self):
         self.current_step = 10
