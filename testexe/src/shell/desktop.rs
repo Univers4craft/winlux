@@ -9,6 +9,7 @@
 
 use crate::explorer;
 use crate::gfx::*;
+use crate::locale::*;
 use crate::notifications;
 use crate::personalize::{self, bar_button, bar_thickness, tint};
 use crate::weather;
@@ -96,6 +97,9 @@ const TOAST_MS: i32 = 4500;
 static mut NET_PANEL: bool = false;
 static mut NET_HOVER: i32 = -1;
 static mut NET_SCAN_REQUESTED: bool = false;
+static mut VOL_PANEL: bool = false;
+static mut VOL_HOVER: i32 = -1;
+static mut VOL_SLIDER_DRAG: bool = false;
 /// Données réseau lues depuis Z:\run\winlux\networks.txt.
 /// Chaque entrée : SSID, signal (0-100), sécurité, en cours d'utilisation.
 static mut NET_ENTRIES: [NetEntry; 16] = [NetEntry::EMPTY; 16];
@@ -208,7 +212,7 @@ struct SearchResult {
 
 fn collect_results(query: &[u8], out: &mut [SearchResult; 16]) -> usize {
     let mut count = 0usize;
-    for app in &PINNED {
+    for app in &pinned_apps() {
         if count >= 16 {
             break;
         }
@@ -232,7 +236,7 @@ fn collect_results(query: &[u8], out: &mut [SearchResult; 16]) -> usize {
             }
         }
     }
-    for &(title, _, g, launch) in &RECOMMENDED {
+    for &(title, _, g, launch) in &recommended_apps() {
         if count >= 16 {
             break;
         }
@@ -311,11 +315,12 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 30] = [
-            (b"Terminal", b"xterm", 1),
-            (b"Explorateur de fichiers", b"nemo", 1),
-            (b"\xC9\x64iteur", b"mousepad", 1),
-            (b"Calculatrice", b"calc.exe", 1),
+        let apps: [(&'static [u8], &'static [u8], i32); 33] = [
+            (b"Bienvenue dans Winlux", b"welcome", 9),
+            (tr(S_TERMINAL), b"xterm", 1),
+            (tr(S_FILE_EXPLORER), b"nemo", 1),
+            (tr(S_NOTEPAD), b"mousepad", 1),
+            (tr(S_CALCULATOR), b"calc.exe", 1),
             (b"Capture d'\xE9cran", b"screenshot.exe", 1),
             (b"Visionneuse", b"imageviewer.exe", 1),
             (b"Post-it", b"postit.exe", 1),
@@ -336,12 +341,14 @@ fn init_apps() {
             (b"VS Code", b"code", 7),
             (b"Vim", b"vim", 7),
             (b"Geany", b"geany", 7),
-            (b"Param\xE8tres", b"cinnamon-settings", 8),
+            (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
             (b"Gestionnaire de paquets", b"mintinstall", 9),
             (b"Gestion des disques", b"diskmgr", 9),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
-            (b"Gestionnaire des t\xE2ches", b"taskmgr", 9),
+            (tr(S_TASK_MANAGER), b"taskmgr", 9),
             (b"Nettoyage de disque", b"diskcleaner", 9),
+            (b"Observateur d'\xE9v\xE9nements", b"eventviewer", 9),
+            (b"Restauration syst\xE8me", b"restore", 9),
         ];
         for (name, exec, cat) in apps.iter() {
             if ALL_APPS_COUNT < 64 {
@@ -384,7 +391,11 @@ fn layout() -> Layout {
     let count = taskbar_count();
     let button = bar_button();
     let buttons_w = count * button + (count - 1) * BUTTON_GAP;
-    let available = if vertical { h - TRAY_RESERVED_V } else { w - TRAY_RESERVED };
+    let available = if vertical {
+        h - TRAY_RESERVED_V
+    } else {
+        w - TRAY_RESERVED
+    };
     let buttons_x = if unsafe { ALIGN_LEFT } {
         if vertical {
             8
@@ -425,7 +436,11 @@ fn layout() -> Layout {
     let sh = 600.min(dh - 24);
     let (sx, st) = match pos {
         2 | 3 => {
-            let sx = if pos == 2 { desk.left + 12 } else { desk.right - 12 - sw };
+            let sx = if pos == 2 {
+                desk.left + 12
+            } else {
+                desk.right - 12 - sw
+            };
             let st = if unsafe { ALIGN_LEFT } {
                 desk.top + 12
             } else {
@@ -439,7 +454,11 @@ fn layout() -> Layout {
             } else {
                 (available - sw) / 2
             };
-            let st = if pos == 1 { desk.top + 12 } else { desk.bottom - 12 - sh };
+            let st = if pos == 1 {
+                desk.top + 12
+            } else {
+                desk.bottom - 12 - sh
+            };
             (sx, st)
         }
     };
@@ -513,7 +532,12 @@ fn tray(l: &Layout) -> Tray {
         let tray = right - 92 - 96;
         let weather_x = tray - 24 - weather::TRAY_WIDTH - 8;
         Tray {
-            weather: rect(weather_x - 4, b.top, weather_x + weather::TRAY_WIDTH, b.bottom),
+            weather: rect(
+                weather_x - 4,
+                b.top,
+                weather_x + weather::TRAY_WIDTH,
+                b.bottom,
+            ),
             chevron: rect(tray - 28, b.top, tray, b.bottom),
             net: rect(tray, b.top, tray + 24, b.bottom),
             volume: rect(tray + 24, b.top, tray + 52, b.bottom),
@@ -616,12 +640,18 @@ unsafe fn start_offset() -> i32 {
     }
 }
 
+pub unsafe fn open_start_menu() {
+    set_start(true);
+}
+
 unsafe fn set_start(open: bool) {
     if open == (START_OPEN && !START_CLOSING) {
         return;
     }
     NET_PANEL = false;
     NET_HOVER = -1;
+    VOL_PANEL = false;
+    VOL_HOVER = -1;
     START_ANIM = now();
     if open {
         START_OPEN = true;
@@ -723,7 +753,7 @@ pub fn desktop_icon_visible(i: usize) -> bool {
     i < DESKTOP_ICON_COUNT && icon_visible(i)
 }
 pub fn desktop_icon_info(i: usize) -> (&'static [u8], Glyph) {
-    DESKTOP_ICONS[i.min(DESKTOP_ICON_COUNT - 1)]
+    desktop_icon_list()[i.min(DESKTOP_ICON_COUNT - 1)]
 }
 pub unsafe fn toggle_desktop_icon(i: usize) {
     let shown = icon_visible(i);
@@ -755,8 +785,13 @@ unsafe fn place_icon(i: usize) {
     let rows = ((d.bottom - d.top - 12) / 96).max(1);
     let cols = ((d.right - d.left - 12) / 96).max(1);
     for cell in 0..rows * cols {
-        let (x, y) = (d.left + 12 + cell / rows * 96, d.top + 12 + cell % rows * 96);
-        if !(0..DESKTOP_ICON_COUNT).any(|j| j != i && icon_visible(j) && ICON_X[j] == x && ICON_Y[j] == y) {
+        let (x, y) = (
+            d.left + 12 + cell / rows * 96,
+            d.top + 12 + cell % rows * 96,
+        );
+        if !(0..DESKTOP_ICON_COUNT)
+            .any(|j| j != i && icon_visible(j) && ICON_X[j] == x && ICON_Y[j] == y)
+        {
             ICON_X[i] = x;
             ICON_Y[i] = y;
             return;
@@ -798,14 +833,7 @@ unsafe fn save_shell_state() {
         toast(b"Impossible d'enregistrer les raccourcis");
         return;
     }
-    let data = [
-        b'W',
-        b'T',
-        3,
-        PINNED_APPS,
-        DESKTOP_SHORTCUTS,
-        SYSTEM_ICONS,
-    ];
+    let data = [b'W', b'T', 3, PINNED_APPS, DESKTOP_SHORTCUTS, SYSTEM_ICONS];
     let mut written = 0;
     let ok = WriteFile(
         h,
@@ -1269,7 +1297,15 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
     fill(hdc, b, bar.left, bar.top, bar.right, bar.bottom, bg);
     let edge = personalize::bar_line();
     match personalize::BAR_POS {
-        1 => fill(hdc, b, bar.left, bar.bottom - 1, bar.right, bar.bottom, edge),
+        1 => fill(
+            hdc,
+            b,
+            bar.left,
+            bar.bottom - 1,
+            bar.right,
+            bar.bottom,
+            edge,
+        ),
         2 => fill(hdc, b, bar.right - 1, bar.top, bar.right, bar.bottom, edge),
         3 => fill(hdc, b, bar.left, bar.top, bar.left + 1, bar.bottom, edge),
         _ => fill(hdc, b, bar.left, bar.top, bar.right, bar.top + 1, edge),
@@ -1287,6 +1323,9 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(wm::APP_DISKMGR) => Glyph::Drive,
+            Some(wm::APP_EVENTVIEWER) => Glyph::Details,
+            Some(wm::APP_RESTORE) => Glyph::Refresh,
+            Some(wm::APP_WELCOME) => Glyph::Star,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1306,7 +1345,15 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             round_rect(hdc, b, r.left, r.top, r.right, r.bottom, 5, back);
         }
         set_glyph_bg(Some(back));
-        glyph(hdc, b, f, g, r.left + (button - gs) / 2, r.top + (button - gs) / 2, gs);
+        glyph(
+            hdc,
+            b,
+            f,
+            g,
+            r.left + (button - gs) / 2,
+            r.top + (button - gs) / 2,
+            gs,
+        );
         if running {
             // Indicateur d'application ouverte, comme sous Windows 11.
             let half = if focused { 8 } else { 3 };
@@ -1317,7 +1364,11 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             };
             if l.vertical {
                 let cy = (r.top + r.bottom) / 2;
-                let x = if personalize::BAR_POS == 2 { r.left } else { r.right - 3 };
+                let x = if personalize::BAR_POS == 2 {
+                    r.left
+                } else {
+                    r.right - 3
+                };
                 round_rect(hdc, b, x, cy - half, x + 3, cy + half, 1, c);
             } else {
                 let cx = (r.left + r.right) / 2;
@@ -1380,7 +1431,16 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
         let cx = (bar.left + bar.right) / 2;
         text_centered(hdc, f.body, 13, fg, cx, t.clock.top + 4, &clock);
         text_centered(hdc, f.small, 11, dim, cx, t.clock.top + 23, &date[..5]);
-        round_rect(hdc, b, t.chevron.left + 2, t.net.top, t.chevron.right - 2, t.battery.bottom, 5, tray_bg);
+        round_rect(
+            hdc,
+            b,
+            t.chevron.left + 2,
+            t.net.top,
+            t.chevron.right - 2,
+            t.battery.bottom,
+            5,
+            tray_bg,
+        );
         text_centered(hdc, f.semibold, 13, dim, cx, t.chevron.top + 7, b"^");
         if NET_IS_WIFI {
             draw_wifi(hdc, b, cx - 9, t.net.top + 6, NETWORK_CONNECTED != 0);
@@ -1395,13 +1455,48 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
         }
     } else {
         let right = bar.right - 12;
-        text(hdc, f.body, fg, right - text_width(&clock, 13), mid(&bar) - 16, &clock);
-        text(hdc, f.body, fg, right - text_width(&date, 13), mid(&bar) + 2, &date);
-        round_rect(hdc, b, t.net.left - 4, mid(&bar) - 18, t.battery.right, mid(&bar) + 18, 5, tray_bg);
+        text(
+            hdc,
+            f.body,
+            fg,
+            right - text_width(&clock, 13),
+            mid(&bar) - 16,
+            &clock,
+        );
+        text(
+            hdc,
+            f.body,
+            fg,
+            right - text_width(&date, 13),
+            mid(&bar) + 2,
+            &date,
+        );
+        round_rect(
+            hdc,
+            b,
+            t.net.left - 4,
+            mid(&bar) - 18,
+            t.battery.right,
+            mid(&bar) + 18,
+            5,
+            tray_bg,
+        );
         if NET_IS_WIFI {
-            draw_wifi(hdc, b, t.net.left + 6, mid(&bar) - 7, NETWORK_CONNECTED != 0);
+            draw_wifi(
+                hdc,
+                b,
+                t.net.left + 6,
+                mid(&bar) - 7,
+                NETWORK_CONNECTED != 0,
+            );
         } else {
-            draw_ethernet(hdc, b, t.net.left + 6, mid(&bar) - 7, NETWORK_CONNECTED != 0);
+            draw_ethernet(
+                hdc,
+                b,
+                t.net.left + 6,
+                mid(&bar) - 7,
+                NETWORK_CONNECTED != 0,
+            );
         }
         draw_volume(hdc, b, t.volume.left + 6, mid(&bar) - 7, VOLUME_LEVEL);
         if BATTERY_PRESENT != 0 {
@@ -1409,10 +1504,26 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
         } else {
             text(hdc, f.small, dim, t.battery.left + 8, mid(&bar) - 7, b"CA");
         }
-        text(hdc, f.semibold, dim, t.chevron.left + 4, mid(&bar) - 10, b"^");
+        text(
+            hdc,
+            f.semibold,
+            dim,
+            t.chevron.left + 4,
+            mid(&bar) - 10,
+            b"^",
+        );
         // Widget météo à gauche du chevron
         let weather_x = t.weather.left + 4;
-        round_rect(hdc, b, weather_x - 4, mid(&bar) - 18, weather_x + weather::TRAY_WIDTH, mid(&bar) + 18, 5, tray_bg);
+        round_rect(
+            hdc,
+            b,
+            weather_x - 4,
+            mid(&bar) - 18,
+            weather_x + weather::TRAY_WIDTH,
+            mid(&bar) + 18,
+            5,
+            tray_bg,
+        );
         weather::draw_tray(hdc, b, f, weather_x, mid(&bar) - 10);
     }
 }
@@ -1438,74 +1549,78 @@ struct App {
     glyph: Glyph,
     launch: Launch,
 }
-const PINNED: [App; 8] = [
-    App {
-        name: b"Explorer",
-        glyph: Glyph::Folder,
-        launch: Launch::Explorer,
-    },
-    App {
-        name: b"Param\xE8tres",
-        glyph: Glyph::Settings,
-        launch: Launch::Settings,
-    },
-    App {
-        name: b"\xC9\x64iteur",
-        glyph: Glyph::Code,
-        launch: Launch::Notepad,
-    },
-    App {
-        name: b"Utilitaires",
-        glyph: Glyph::Tools,
-        launch: Launch::Settings,
-    },
-    App {
-        name: b"Mises \xE0 jour",
-        glyph: Glyph::Store,
-        launch: Launch::Updates,
-    },
-    App {
-        name: b"Documents",
-        glyph: Glyph::Folder,
-        launch: Launch::Documents,
-    },
-    App {
-        name: b"Ce PC",
-        glyph: Glyph::Computer,
-        launch: Launch::Pc,
-    },
-    App {
-        name: b"Programmes .exe",
-        glyph: Glyph::Exe,
-        launch: Launch::Programs,
-    },
-];
-const RECOMMENDED: [(&[u8], &[u8], Glyph, Launch); 4] = [
-    (
-        b"Terminal",
-        b"Ouvrir un terminal Linux",
-        Glyph::Terminal,
-        Launch::Terminal,
-    ),
-    (
-        b"Navigateur",
-        b"Ouvrir le navigateur web",
-        Glyph::Store,
-        Launch::Browser,
-    ),
-    (
-        b"Documents",
-        b"Dossier personnel Linux",
-        Glyph::Folder,
-        Launch::Documents,
-    ),
-    (
-        b"Param\xE8tres Linux et Windows",
-        b"Clavier, r\xE9seau et alimentation",
-        Glyph::Settings,
-        Launch::Settings,
-    ),
-];
+fn pinned_apps() -> [App; 8] {
+    [
+        App {
+            name: tr(S_FILE_EXPLORER),
+            glyph: Glyph::Folder,
+            launch: Launch::Explorer,
+        },
+        App {
+            name: tr(S_SETTINGS_APP),
+            glyph: Glyph::Settings,
+            launch: Launch::Settings,
+        },
+        App {
+            name: tr(S_NOTEPAD),
+            glyph: Glyph::Code,
+            launch: Launch::Notepad,
+        },
+        App {
+            name: b"Utilitaires",
+            glyph: Glyph::Tools,
+            launch: Launch::Settings,
+        },
+        App {
+            name: b"Mises \xE0 jour",
+            glyph: Glyph::Store,
+            launch: Launch::Updates,
+        },
+        App {
+            name: tr(S_DOCUMENTS),
+            glyph: Glyph::Folder,
+            launch: Launch::Documents,
+        },
+        App {
+            name: tr(S_THIS_PC),
+            glyph: Glyph::Computer,
+            launch: Launch::Pc,
+        },
+        App {
+            name: b"Programmes .exe",
+            glyph: Glyph::Exe,
+            launch: Launch::Programs,
+        },
+    ]
+}
+fn recommended_apps() -> [(&'static [u8], &'static [u8], Glyph, Launch); 4] {
+    [
+        (
+            tr(S_TERMINAL),
+            b"Ouvrir un terminal Linux",
+            Glyph::Terminal,
+            Launch::Terminal,
+        ),
+        (
+            b"Navigateur",
+            b"Ouvrir le navigateur web",
+            Glyph::Store,
+            Launch::Browser,
+        ),
+        (
+            tr(S_DOCUMENTS),
+            b"Dossier personnel Linux",
+            Glyph::Folder,
+            Launch::Documents,
+        ),
+        (
+            tr(S_SETTINGS_APP),
+            b"Clavier, r\xE9seau et alimentation",
+            Glyph::Settings,
+            Launch::Settings,
+        ),
+    ]
+}
 
 /// Lance une application depuis la barre des tâches ou le menu Démarrer.
 unsafe fn launch(what: Launch) {
@@ -1574,6 +1689,29 @@ unsafe fn launch(what: Launch) {
                 wm::open(wm::APP_DISKMGR);
                 return;
             }
+            if cmd == b"eventviewer" {
+                wm::open(wm::APP_EVENTVIEWER);
+                return;
+            }
+            if cmd == b"restore" {
+                wm::open(wm::APP_RESTORE);
+                return;
+            }
+            if cmd == b"welcome" {
+                if wm::native_session() {
+                    ShellExecuteA(
+                        core::ptr::null_mut(),
+                        c"open".as_ptr(),
+                        c"winlux-welcome".as_ptr(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        1,
+                    );
+                } else {
+                    crate::welcome::open();
+                }
+                return;
+            }
             let mut wcmd = [0u16; 256];
             for (i, &b) in cmd.iter().enumerate() {
                 if i < 255 {
@@ -1640,9 +1778,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let y = s.top + 82;
     let title: &[u8] = unsafe {
         if START_SHOW_ALL_APPS {
-            b"Toutes mes applications"
+            tr(S_ALL_APPS)
         } else {
-            b"\xC9pingl\xE9"
+            tr(S_PINNED)
         }
     };
     text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, title);
@@ -1680,7 +1818,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             rgb(0x88, 0x88, 0x88),
             inner_l + 34,
             search_y + 8,
-            b"Rechercher...",
+            tr(S_SEARCH_PLACEHOLDER),
         );
     }
     if unsafe { START_SEARCH_LEN } > 0 {
@@ -1741,9 +1879,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     } else {
         let all: &[u8] = unsafe {
             if START_SHOW_ALL_APPS {
-                b"\xC9pingl\xE9"
+                tr(S_PINNED)
             } else {
-                b"Toutes mes applications"
+                tr(S_ALL_APPS)
             }
         };
         let all_w = text_width(all, 11) + 20;
@@ -1755,7 +1893,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             y + 2,
             all,
         );
-        for (i, app) in PINNED
+        for (i, app) in pinned_apps()
             .iter()
             .take((PIN_COLS * pin_rows(s)) as usize)
             .enumerate()
@@ -1891,9 +2029,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                 rgb(0xF2, 0xF2, 0xF2),
                 inner_l + 4,
                 ry,
-                b"Recommand\xE9",
+                tr(S_RECOMMENDED),
             );
-            for (i, (title, sub, g, _)) in RECOMMENDED.iter().enumerate() {
+            for (i, (title, sub, g, _)) in recommended_apps().iter().enumerate() {
                 let c = recommended_cell(s, i as i32);
                 if HOVER_START_ITEM == 100 + i as i32 {
                     round_rect(
@@ -1990,9 +2128,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         },
     );
     let label: &[u8] = if ALIGN_LEFT {
-        b"Barre : \xE0 gauche"
+        tr(S_ALIGN_LEFT)
     } else {
-        b"Barre : centr\xE9e"
+        tr(S_CENTER)
     };
     text_centered(
         hdc,
@@ -2122,9 +2260,9 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     let all_w = unsafe {
         text_width(
             if START_SHOW_ALL_APPS {
-                b"\xC9pingl\xE9"
+                tr(S_PINNED)
             } else {
-                b"Toutes mes applications"
+                tr(S_ALL_APPS)
             },
             11,
         ) + 20
@@ -2152,7 +2290,8 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
             }
         }
     } else {
-        for i in 0..PINNED.len() as i32 {
+        let pinned = pinned_apps();
+        for i in 0..pinned.len() as i32 {
             if inside(&pinned_cell(s, i), x, y) {
                 return i;
             }
@@ -2724,6 +2863,274 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     );
 }
 
+// ---------- Panneau volume (flyout mélangeur) ----------
+
+const VOL_PANEL_W: i32 = 320;
+
+unsafe fn vol_panel_rect(l: &Layout) -> Rect {
+    let h = 280;
+    let t = tray(l);
+    let x = t
+        .volume
+        .left
+        .clamp(l.desk.left + 12, l.right - VOL_PANEL_W - 12);
+    let y = l.bar_top - 12 - h;
+    rect(x, y, x + VOL_PANEL_W, y + h)
+}
+
+unsafe fn draw_vol_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if !VOL_PANEL {
+        return;
+    }
+    let r = vol_panel_rect(l);
+    let x = r.left;
+    let y = r.top;
+    let w = r.right - r.left;
+    let h = r.bottom - r.top;
+    panel(
+        hdc,
+        b,
+        x,
+        y,
+        x + w,
+        y + h,
+        8,
+        rgb(0x24, 0x27, 0x2F),
+        rgb(0x3A, 0x3F, 0x4A),
+    );
+
+    // Icône haut-parleur et titre
+    draw_volume(hdc, b, x + 16, y + 16, VOLUME_LEVEL);
+    text(
+        hdc,
+        f.semibold,
+        rgb(0xF2, 0xF2, 0xF2),
+        x + 48,
+        y + 18,
+        b"Volume",
+    );
+
+    // Niveau affiché
+    let mut pct = [0u8; 4];
+    let v = VOLUME_LEVEL.min(100);
+    let plen = if v >= 100 {
+        pct[0] = b'1';
+        pct[1] = b'0';
+        pct[2] = b'0';
+        pct[3] = b'%';
+        4
+    } else if v >= 10 {
+        pct[0] = b'0' + (v / 10) as u8;
+        pct[1] = b'0' + (v % 10) as u8;
+        pct[2] = b'%';
+        3
+    } else {
+        pct[0] = b'0' + v as u8;
+        pct[1] = b'%';
+        2
+    };
+    text(
+        hdc,
+        f.body,
+        rgb(0x9A, 0xA3, 0xAE),
+        x + w - 50,
+        y + 18,
+        &pct[..plen],
+    );
+
+    // Barre de volume (slider)
+    let bar_x = x + 16;
+    let bar_y = y + 56;
+    let bar_w = w - 32;
+    round_rect(
+        hdc,
+        b,
+        bar_x,
+        bar_y + 4,
+        bar_x + bar_w,
+        bar_y + 12,
+        4,
+        rgb(0x3A, 0x3F, 0x4A),
+    );
+    let fill_w = bar_w * v as i32 / 100;
+    if fill_w > 0 {
+        round_rect(
+            hdc,
+            b,
+            bar_x,
+            bar_y + 4,
+            bar_x + fill_w,
+            bar_y + 12,
+            4,
+            pal().accent,
+        );
+    }
+    // Curseur
+    let knob_x = bar_x + fill_w;
+    ellipse(
+        hdc,
+        b,
+        knob_x - 7,
+        bar_y,
+        knob_x + 7,
+        bar_y + 16,
+        rgb(0xF2, 0xF2, 0xF2),
+    );
+
+    // Séparateur
+    let sep_y = bar_y + 32;
+    fill(
+        hdc,
+        b,
+        x + 1,
+        sep_y,
+        x + w - 1,
+        sep_y + 1,
+        rgb(0x3A, 0x3F, 0x4A),
+    );
+
+    // Applications (simulé à partir des fenêtres ouvertes)
+    text(
+        hdc,
+        f.small,
+        rgb(0x9A, 0xA3, 0xAE),
+        x + 16,
+        sep_y + 10,
+        b"Applications",
+    );
+    let mut ay = sep_y + 30;
+    let mut drawn = 0;
+    for app in 0..wm::APP_COUNT {
+        if !wm::is_open(app) || drawn >= 4 {
+            continue;
+        }
+        let name = wm::title_of(app);
+        let hover = VOL_HOVER == 200 + app as i32;
+        if hover {
+            round_rect(
+                hdc,
+                b,
+                x + 8,
+                ay - 2,
+                x + w - 8,
+                ay + 26,
+                4,
+                rgb(0x2E, 0x33, 0x3D),
+            );
+        }
+        glyph(hdc, b, f, wm::glyph_of(app), x + 16, ay + 2, 16);
+        text_fit(
+            hdc,
+            f.body,
+            13,
+            rgb(0xF2, 0xF2, 0xF2),
+            x + 40,
+            ay + 4,
+            name,
+            w / 2 - 30,
+        );
+        // Mini barre de volume par app (100% par défaut)
+        let app_bar_x = x + w / 2 + 20;
+        let app_bar_w = w / 2 - 50;
+        round_rect(
+            hdc,
+            b,
+            app_bar_x,
+            ay + 8,
+            app_bar_x + app_bar_w,
+            ay + 14,
+            3,
+            rgb(0x3A, 0x3F, 0x4A),
+        );
+        round_rect(
+            hdc,
+            b,
+            app_bar_x,
+            ay + 8,
+            app_bar_x + app_bar_w,
+            ay + 14,
+            3,
+            pal().accent,
+        );
+        ay += 32;
+        drawn += 1;
+    }
+    if drawn == 0 {
+        text(
+            hdc,
+            f.small,
+            rgb(0x9A, 0xA3, 0xAE),
+            x + 16,
+            ay + 4,
+            b"Aucune application ouverte",
+        );
+    }
+
+    // Boutons en bas : Muet + Mélangeur
+    let btn_y = r.bottom - 44;
+    fill(
+        hdc,
+        b,
+        x + 1,
+        btn_y - 1,
+        x + w - 1,
+        btn_y,
+        rgb(0x3A, 0x3F, 0x4A),
+    );
+    let mute_r = rect(x + 16, btn_y + 4, x + w / 2 - 4, btn_y + 34);
+    round_rect(
+        hdc,
+        b,
+        mute_r.left,
+        mute_r.top,
+        mute_r.right,
+        mute_r.bottom,
+        4,
+        if VOL_HOVER == 300 {
+            rgb(0x3A, 0x3F, 0x4A)
+        } else {
+            rgb(0x31, 0x35, 0x3F)
+        },
+    );
+    text_centered(
+        hdc,
+        f.small,
+        11,
+        rgb(0xC5, 0xC5, 0xC5),
+        (mute_r.left + mute_r.right) / 2,
+        mute_r.top + 7,
+        if VOLUME_LEVEL == 0 {
+            b"R\xE9tablir"
+        } else {
+            b"Muet"
+        },
+    );
+    let mix_r = rect(x + w / 2 + 4, btn_y + 4, x + w - 16, btn_y + 34);
+    round_rect(
+        hdc,
+        b,
+        mix_r.left,
+        mix_r.top,
+        mix_r.right,
+        mix_r.bottom,
+        4,
+        if VOL_HOVER == 301 {
+            rgb(0x3A, 0x3F, 0x4A)
+        } else {
+            rgb(0x31, 0x35, 0x3F)
+        },
+    );
+    text_centered(
+        hdc,
+        f.small,
+        11,
+        rgb(0xC5, 0xC5, 0xC5),
+        (mix_r.left + mix_r.right) / 2,
+        mix_r.top + 7,
+        b"M\xE9langeur",
+    );
+}
+
 // ---------- Glisser-déposer et collage sur le bureau ----------
 
 pub unsafe fn handle_file_drop(do_copy: bool) {
@@ -2742,18 +3149,21 @@ pub unsafe fn handle_file_drop(do_copy: bool) {
 // ---------- Icônes du bureau ----------
 
 pub const DESKTOP_ICON_COUNT: usize = 7;
-const DESKTOP_ICONS: [(&[u8], Glyph); DESKTOP_ICON_COUNT] = [
-    (b"Ce PC", Glyph::Computer),
-    (b"Documents", Glyph::Folder),
-    (b"Corbeille", Glyph::Trash),
-    (b"Explorer", Glyph::Folder),
-    (b"Param\xE8tres", Glyph::Settings),
-    (b"Mon dossier", Glyph::Home),
-    (b"T\xE9l\xE9\x63hargements", Glyph::Download),
-];
+fn desktop_icon_list() -> [(&'static [u8], Glyph); DESKTOP_ICON_COUNT] {
+    [
+        (tr(S_THIS_PC), Glyph::Computer),
+        (tr(S_DOCUMENTS), Glyph::Folder),
+        (tr(S_TRASH), Glyph::Trash),
+        (tr(S_FILE_EXPLORER), Glyph::Folder),
+        (tr(S_SETTINGS_APP), Glyph::Settings),
+        (tr(S_HOME), Glyph::Home),
+        (tr(S_DOWNLOADS), Glyph::Download),
+    ]
+}
 
 unsafe fn desktop_icons(hdc: Handle, b: &mut Brushes, f: &Fonts) {
-    for (i, (name, g)) in DESKTOP_ICONS.iter().enumerate() {
+    let icons = desktop_icon_list();
+    for (i, (name, g)) in icons.iter().enumerate() {
         if !icon_visible(i) {
             continue;
         }
@@ -2912,8 +3322,10 @@ unsafe fn reflow_desk(l: &Layout) {
     wm::WORK = l.desk;
     wm::on_resize();
     for i in 0..DESKTOP_ICON_COUNT {
-        ICON_X[i] = (ICON_X[i] + dx).clamp(l.desk.left + 12, (l.desk.right - 80).max(l.desk.left + 12));
-        ICON_Y[i] = (ICON_Y[i] + dy).clamp(l.desk.top + 12, (l.desk.bottom - 90).max(l.desk.top + 12));
+        ICON_X[i] =
+            (ICON_X[i] + dx).clamp(l.desk.left + 12, (l.desk.right - 80).max(l.desk.left + 12));
+        ICON_Y[i] =
+            (ICON_Y[i] + dy).clamp(l.desk.top + 12, (l.desk.bottom - 90).max(l.desk.top + 12));
     }
 }
 
@@ -2966,7 +3378,7 @@ pub unsafe fn draw(hdc: Handle) {
             rgb(0x60, 0x60, 0x60),
             12,
             SCREEN_H - 28,
-            b"\xC9cran de veille",
+            tr(S_SLEEP),
         );
         f.release();
         b.release();
@@ -3006,6 +3418,7 @@ pub unsafe fn draw(hdc: Handle) {
         search_overlay(hdc, &mut b, &f, &l);
         notifications::draw(hdc, &mut b, &f, l.right, l.bar_top);
         draw_net_panel(hdc, &mut b, &f, &l);
+        draw_vol_panel(hdc, &mut b, &f, &l);
         weather::draw_panel(hdc, &mut b, &f, l.bar_top, l.right);
         draw_toast(hdc, &mut b, &f, &l);
         // Overlay de fermeture.
@@ -3159,6 +3572,7 @@ pub unsafe fn frame(hwnd: Handle) {
         || wm::animating()
         || crate::gfx::theme_animating()
         || notifications::animating()
+        || crate::welcome::animating()
         || since(INTRO_START) < INTRO_MS + 40
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)
         || START_CLOSING
@@ -3195,8 +3609,14 @@ pub unsafe fn tick(hwnd: Handle) {
     GetLocalTime(&mut now);
     let system = crate::settings::system_tick();
     let weather_changed = weather::poll();
+    let welcome = BOOT_DONE
+        && crate::login::logged_in()
+        && since(INTRO_START) > INTRO_MS
+        // La visite guidée attend la fin de l'assistant de personnalisation.
+        && !personalize::oobe_active()
+        && crate::welcome::maybe_show();
     let apps = BOOT_DONE && wm::tick();
-    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system || weather_changed {
+    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system || weather_changed || welcome {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
@@ -3272,22 +3692,32 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             weather::toggle();
             notifications::set_open(false);
             NET_PANEL = false;
+            VOL_PANEL = false;
         } else if inside(&t.chevron, x, y) {
             notifications::toggle();
             weather::PANEL_OPEN = false;
             NET_PANEL = false;
+            VOL_PANEL = false;
         } else if inside(&t.net, x, y) {
             NET_PANEL = !NET_PANEL;
+            VOL_PANEL = false;
             notifications::set_open(false);
             if NET_PANEL && !NET_SCAN_REQUESTED {
                 NET_SCAN_REQUESTED = true;
                 crate::settings::control(c"network-scan");
             }
-        } else if inside(&t.volume, x, y) || inside(&t.battery, x, y) {
+        } else if inside(&t.volume, x, y) {
+            VOL_PANEL = !VOL_PANEL;
+            VOL_HOVER = -1;
+            NET_PANEL = false;
+            notifications::set_open(false);
+        } else if inside(&t.battery, x, y) {
             crate::settings::open_page(3);
+            VOL_PANEL = false;
         } else if inside(&t.clock, x, y) {
             notifications::toggle();
             NET_PANEL = false;
+            VOL_PANEL = false;
         } else {
             return;
         }
@@ -3384,6 +3814,41 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         repaint(hwnd);
         return;
     }
+    if VOL_PANEL && !in_bar(&l, x, y) {
+        let pr = vol_panel_rect(&l);
+        if inside(&pr, x, y) {
+            let w = pr.right - pr.left;
+            let btn_y = pr.bottom - 44;
+            // Slider click: adjust volume
+            let bar_x = pr.left + 16;
+            let bar_w = w - 32;
+            let bar_y = pr.top + 56;
+            if y >= bar_y && y < bar_y + 20 && x >= bar_x && x < bar_x + bar_w {
+                let v = ((x - bar_x) * 100 / bar_w).max(0).min(100) as u32;
+                VOLUME_LEVEL = v;
+                if v <= 5 {
+                    crate::settings::control(c"volume-mute");
+                } else {
+                    // Set volume via repeated up/down to approximate
+                    crate::settings::control(c"volume-set");
+                }
+            }
+            // Mute button
+            if y >= btn_y + 4 && y < btn_y + 34 && x >= pr.left + 16 && x < pr.left + w / 2 - 4 {
+                crate::settings::control(c"volume-mute");
+            }
+            // Mixer button -> open advanced sound settings
+            if y >= btn_y + 4 && y < btn_y + 34 && x >= pr.left + w / 2 + 4 && x < pr.right - 16 {
+                crate::settings::open_page(16);
+                VOL_PANEL = false;
+            }
+        } else {
+            VOL_PANEL = false;
+            VOL_HOVER = -1;
+        }
+        repaint(hwnd);
+        return;
+    }
     if START_OPEN && !START_CLOSING {
         if inside(&l.start, x, y) {
             match start_item_at(&l, x, y) {
@@ -3460,11 +3925,11 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 }
                 i @ 0..=5 => {
                     set_start(false);
-                    launch(PINNED[i as usize].launch);
+                    launch(pinned_apps()[i as usize].launch);
                 }
                 i @ 100..=103 => {
                     set_start(false);
-                    launch(RECOMMENDED[(i - 100) as usize].3);
+                    launch(recommended_apps()[(i - 100) as usize].3);
                 }
                 _ => return,
             }
@@ -3482,7 +3947,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         }
         return;
     }
-    for i in (0..DESKTOP_ICONS.len()).rev() {
+    for i in (0..DESKTOP_ICON_COUNT).rev() {
         if !icon_visible(i) {
             continue;
         }
@@ -3636,6 +4101,44 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
             rp = true;
         }
     }
+    // Volume panel hover
+    if VOL_PANEL {
+        let pr = vol_panel_rect(&l);
+        let vh = if inside(&pr, x, y) {
+            let w = pr.right - pr.left;
+            let btn_y = pr.bottom - 44;
+            if y >= btn_y + 4 && y < btn_y + 34 {
+                if x < pr.left + w / 2 - 4 {
+                    300
+                } else if x >= pr.left + w / 2 + 4 {
+                    301
+                } else {
+                    -1
+                }
+            } else {
+                let sep_y = pr.top + 88;
+                let mut ay = sep_y + 30;
+                let mut found = -1i32;
+                for app in 0..wm::APP_COUNT {
+                    if !wm::is_open(app) {
+                        continue;
+                    }
+                    if y >= ay - 2 && y < ay + 26 {
+                        found = 200 + app as i32;
+                        break;
+                    }
+                    ay += 32;
+                }
+                found
+            }
+        } else {
+            -1
+        };
+        if vh != VOL_HOVER {
+            VOL_HOVER = vh;
+            rp = true;
+        }
+    }
     if DRAGGED_ICON >= 0 {
         let i = DRAGGED_ICON as usize;
         // Grille de 96 px, comme l'alignement automatique de Windows.
@@ -3784,7 +4287,7 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
                 }
                 return;
             }
-            for i in (0..DESKTOP_ICONS.len()).rev() {
+            for i in (0..DESKTOP_ICON_COUNT).rev() {
                 if icon_visible(i)
                     && inside(
                         &rect(ICON_X[i], ICON_Y[i], ICON_X[i] + 76, ICON_Y[i] + 84),
