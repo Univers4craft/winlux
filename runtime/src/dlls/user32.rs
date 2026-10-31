@@ -965,6 +965,14 @@ pub unsafe extern "win64" fn message_box_w(
     1
 }
 
+/// `MessageBeep` : son système Winlux correspondant à l'icône (erreur,
+/// question, avertissement, information ou son par défaut). Comme Windows,
+/// la fonction réussit même sans carte son.
+pub unsafe extern "win64" fn message_beep(kind: u32) -> i32 {
+    crate::dlls::winmm::play_system_sound(crate::dlls::winmm::system_sound_for_beep(kind));
+    1
+}
+
 // =====================================================================
 // GetWindowLong / SetWindowLong  (A/W + Ptr variants)
 // =====================================================================
@@ -2558,7 +2566,7 @@ pub fn exports() -> crate::dlls::Exports {
         "GetSysColor"=>fn get_sys_color, "GetSysColorBrush"=>fn get_sys_color_brush,
         "SystemParametersInfoA"=>fn system_parameters_info_a,
         "SystemParametersInfoW"=>fn system_parameters_info_w,
-        "MessageBoxA"=>fn message_box_a, "MessageBoxW"=>fn message_box_w,
+        "MessageBoxA"=>fn message_box_a, "MessageBoxW"=>fn message_box_w, "MessageBeep"=>fn message_beep,
         // --- Hooks ---
         "SetWindowsHookExA"=>fn set_windows_hook_ex_a, "SetWindowsHookExW"=>fn set_windows_hook_ex_w,
         "UnhookWindowsHookEx"=>fn unhook_windows_hook_ex,
