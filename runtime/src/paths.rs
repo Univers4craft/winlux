@@ -25,6 +25,13 @@ pub fn drive_c() -> PathBuf {
 /// Chemin Linux absolu → chemin Windows (`C:\...` ou `Z:\...`).
 pub fn to_windows(p: &Path) -> String {
     let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    for m in crate::mounts::list() {
+        if let Ok(r) = abs.strip_prefix(&m.mountpoint) {
+            let mut s = format!("{}:\\", m.letter);
+            s.push_str(&r.to_string_lossy().replace('/', "\\"));
+            return s;
+        }
+    }
     let c = std::fs::canonicalize(drive_c()).unwrap_or_else(|_| drive_c());
     let (drive, rest) = match abs.strip_prefix(&c) {
         Ok(r) => ("C:", r.to_path_buf()),
@@ -42,6 +49,16 @@ pub fn to_windows(p: &Path) -> String {
 
 /// Chemin Windows (absolu ou relatif) → chemin Linux.
 pub fn to_linux(w: &str) -> PathBuf {
+    to_linux_inner(w, true)
+}
+
+/// Comme `to_linux`, sans traverser les archives ouvertes : le chemin reste
+/// `.../photos.zip/dossier` (sert à retrouver l'archive elle-même).
+pub fn to_linux_raw(w: &str) -> PathBuf {
+    to_linux_inner(w, false)
+}
+
+fn to_linux_inner(w: &str, archives: bool) -> PathBuf {
     let mut w = w.trim_end_matches('\0');
     for pre in ["\\\\?\\", "\\??\\", "\\\\.\\"] {
         if let Some(r) = w.strip_prefix(pre) {
@@ -57,6 +74,7 @@ pub fn to_linux(w: &str) -> PathBuf {
                 'Z' => PathBuf::from("/"),
                 l => std::env::var_os(format!("WINLUX_DRIVE_{l}"))
                     .map(PathBuf::from)
+                    .or_else(|| crate::mounts::root_of(l))
                     .unwrap_or_else(drive_c),
             };
             (Some(root), &w[2..])
@@ -70,6 +88,12 @@ pub fn to_linux(w: &str) -> PathBuf {
     };
     if joined.exists() {
         return joined;
+    }
+    // Chemin à l'intérieur d'une archive ouverte (navigation façon dossier).
+    if archives {
+        if let Some(v) = crate::archive::resolve(&joined) {
+            return v;
+        }
     }
     fix_case(&joined).unwrap_or(joined)
 }

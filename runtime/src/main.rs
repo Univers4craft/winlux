@@ -1,29 +1,78 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod admin;
+mod archive;
+mod clr;
+mod cpu;
 mod crash;
+mod diskimage;
 mod dlls;
+mod firewall;
 mod loader;
 pub mod log;
 mod managed;
+mod mounts;
+mod netdrive;
 mod paths;
 mod pe;
 mod printf;
 mod process;
 mod profiles;
+pub mod quality;
+mod tasks;
 mod thunks;
 
 use std::path::PathBuf;
 
 fn main() {
     let mut args = std::env::args_os();
-    let _program = args.next();
+    let program = args.next();
+    // `winlux-drives …` (lien vers winlux) ou `winlux --drives …` : lecteurs réseau.
+    let invoked_as = program
+        .as_deref()
+        .map(std::path::Path::new)
+        .and_then(|p| p.file_name())
+        .is_some_and(|n| n == "winlux-drives");
+    if invoked_as {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(netdrive::main(&rest));
+    }
     let Some(exe) = args.next() else {
         eprintln!("winlux: usage: winlux PROGRAM.exe [arguments...]");
         std::process::exit(2);
     };
+    if exe == "--drives" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(netdrive::main(&rest));
+    }
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
+    }
+    if exe == "--tasks" || exe == "--firewall" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(if exe == "--tasks" {
+            tasks::cli(&rest)
+        } else {
+            firewall::cli(&rest)
+        });
+    }
+    let root_arg = |a: Option<std::ffi::OsString>| a.map(PathBuf::from);
+    if exe == "--cpu-report" {
+        std::process::exit(cpu::report_command(root_arg(args.next()).as_deref()));
+    }
+    if exe == "--cpu-profile" {
+        let profile = args.next().unwrap_or_default();
+        std::process::exit(cpu::profile_command(
+            &profile.to_string_lossy(),
+            root_arg(args.next()).as_deref(),
+        ));
+    }
+    if exe == "--fan-daemon" {
+        let sys = root_arg(args.next())
+            .map(cpu::Sys::at)
+            .unwrap_or_else(cpu::Sys::host);
+        std::process::exit(cpu::fan_daemon(&sys));
     }
     if exe == "--inspect" {
         let Some(path) = args.next() else {
@@ -42,21 +91,18 @@ fn main() {
         }
     };
     backup_registry();
-    profiles::apply(&exe);
-    if let Some(target) = managed::detect(&exe, &source) {
+    if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
+        crash::set_exe_name(name);
+    }
+    let cpu_settings = profiles::apply(&exe);
+    if let Some(assembly) = managed::managed_image(&exe, &source) {
         log_info!(
             "managed",
-            "{} détectée, utilisation du pont natif",
-            managed::description(&target)
+            "assembly .NET détectée, exécution via le CLR Winlux intégré"
         );
-        match managed::run(&target, &rest) {
-            Ok(status) => std::process::exit(status.code().unwrap_or(1)),
-            Err(error) => {
-                log_error!("managed", "{error}");
-                log_error!("managed", "les interfaces WPF/WinForms restent limitées tant que leurs API Windows ne sont pas complètes");
-                std::process::exit(1);
-            }
-        }
+        cpu::apply_launch(&cpu_settings, &[]);
+        let code = clr::execute_assembly(&assembly);
+        dlls::kernel32::flush_and_exit(code);
     }
     let image = match loader::load(&exe, true) {
         Ok(m) => m,
@@ -80,6 +126,7 @@ fn main() {
         image.pe.stack_reserve,
         image.pe.stack_commit
     );
+    cpu::apply_launch(&cpu_settings, &image.import_names());
     dlls::kernel32::init();
     process::init_process(&image, &rest);
     process::run(image);
@@ -111,7 +158,7 @@ fn inspect(exe: &std::path::Path) -> i32 {
             return 1;
         }
     };
-    if managed::detect(exe, &source).is_none() {
+    if managed::managed_image(exe, &source).is_none() {
         match pe::PeImage::parse(&source) {
             Ok(image) if image.is_dll() => {
                 eprintln!(

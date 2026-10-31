@@ -17,9 +17,10 @@ pub const CUSTOM_TITLE: bool = false;
 
 // ---------- Outils partagés (aussi utilisés par fonts.rs) ----------
 
-/// Vrai si la session est en anglais (Paramètres > Heure et langue).
+/// Vrai si l'interface n'est pas en français (l'anglais sert aussi pour
+/// l'espagnol et l'allemand).
 pub fn en() -> bool {
-    unsafe { crate::settings::english() }
+    unsafe { crate::admin_ui::english() }
 }
 /// Libellé localisé (octets Windows-1252).
 pub fn t(fr: &'static [u8], english: &'static [u8]) -> &'static [u8] {
