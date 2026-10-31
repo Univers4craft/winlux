@@ -114,6 +114,12 @@ jobs:
       - name: Vérifier le catalogue natif Linux et Windows
         run: python3 -B scripts/test-native-catalogue.py
 
+      - name: Vérifier benchmark, profils et migration de l'installateur
+        run: python3 -B scripts/test-installer-oobe.py
+
+      - name: Vérifier les fichiers de réponse d'installation silencieuse
+        run: python3 -B scripts/test-autoinstall.py
+
       - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
         run: python3 -B scripts/test-installer-partitioning.py
 
@@ -189,7 +195,7 @@ jobs:
         run: sh scripts/test-integration.sh
 
       - name: Installer MinGW-w64
-        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
 
       - name: Compiler et exécuter les tests C MinGW
         run: |

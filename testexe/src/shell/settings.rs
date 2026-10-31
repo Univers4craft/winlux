@@ -8,7 +8,12 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGE_COUNT: usize = 17;
+pub const PAGE_SYSUPDATE: usize = 17;
+pub const PAGE_PRIVACY: usize = 18;
+pub const PAGE_CPU: usize = 19;
+/// Page « Lecteurs réseau » (FTP, SFTP, SMB… montés comme un disque).
+pub const PAGE_NETDRIVES: usize = 20;
+const PAGE_COUNT: usize = 21;
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
         tr(S_SYSTEM_LINUX),
@@ -28,6 +33,10 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_LOCALIZATION),
         tr(S_FILE_MANAGER),
         tr(S_ADVANCED_SOUND),
+        tr(S_SYSTEM_UPDATES),
+        tr(S_PRIVACY),
+        tr(S_PROCESSOR),
+        tr(S_NETWORK_DRIVES),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -51,6 +60,9 @@ static mut LOG: Buffer = EMPTY;
 static mut UPDATES: Buffer = EMPTY;
 static mut PROGRESS: Buffer = EMPTY;
 static mut BUILD_INFO: Buffer = EMPTY;
+static mut SYSUPDATES: Buffer = EMPTY;
+/// Nombre de mises à jour système déjà signalé (u32::MAX : pas encore lu).
+static mut NOTIFIED_UPDATES: u32 = u32::MAX;
 static mut SELECTED_MODE: usize = 0;
 static mut LAST_ANIMATION: u32 = 0;
 static mut PAGE: usize = 0;
@@ -89,6 +101,7 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
     EXE_LEN = len;
     EXE_SCALE = 0;
     EXE_TRACE = false;
+    crate::settings_cpu::reset_program();
     let mut profile = [0u16; 2060];
     exe_profile_path(&mut profile);
     let h = CreateFileW(
@@ -101,11 +114,12 @@ pub unsafe fn open_exe_settings(path: &[u16]) {
         core::ptr::null_mut(),
     );
     if !h.is_null() && h as isize != -1 {
-        let mut data = [0u8; 128];
+        let mut data = [0u8; 1024];
         let mut read = 0;
-        ReadFile(h, data.as_mut_ptr(), 128, &mut read, core::ptr::null_mut());
+        ReadFile(h, data.as_mut_ptr(), 1024, &mut read, core::ptr::null_mut());
         CloseHandle(h);
-        let data = &data[..(read as usize).min(128)];
+        let data = &data[..(read as usize).min(1024)];
+        crate::settings_cpu::load_program(data);
         EXE_SCALE = EXE_SCALES
             .iter()
             .position(|&v| v == field(data, b"ui_scale"))
@@ -129,6 +143,7 @@ unsafe fn save_exe_settings(reset: bool) {
         }
         EXE_SCALE = 0;
         EXE_TRACE = false;
+        crate::settings_cpu::reset_program();
         EXE_NOTICE = b"Valeurs par d\xE9faut restaur\xE9es.";
         return;
     }
@@ -145,7 +160,7 @@ unsafe fn save_exe_settings(reset: bool) {
         EXE_NOTICE = b"Enregistrement impossible : le dossier du programme doit \xEAtre accessible en \xE9criture.";
         return;
     }
-    let mut data = [0u8; 48];
+    let mut data = [0u8; 512];
     let scale = EXE_SCALES[EXE_SCALE];
     data[..9].copy_from_slice(b"ui_scale=");
     data[9..9 + scale.len()].copy_from_slice(scale);
@@ -153,16 +168,17 @@ unsafe fn save_exe_settings(reset: bool) {
     data[n..n + 7].copy_from_slice(b"\ntrace=");
     data[n + 7] = if EXE_TRACE { b'1' } else { b'0' };
     data[n + 8] = b'\n';
+    let total = n + 9 + crate::settings_cpu::write_program(&mut data[n + 9..]);
     let mut written = 0;
     let ok = WriteFile(
         h,
         data.as_ptr(),
-        (n + 9) as u32,
+        total as u32,
         &mut written,
         core::ptr::null_mut(),
     );
     CloseHandle(h);
-    EXE_NOTICE = if ok != 0 && written == (n + 9) as u32 {
+    EXE_NOTICE = if ok != 0 && written == total as u32 {
         b"R\xE9glages enregistr\xE9s pour le prochain lancement."
     } else {
         b"Enregistrement incomplet : r\xE9essayez."
@@ -233,7 +249,32 @@ unsafe fn read(path: &core::ffi::CStr, target: &mut Buffer) -> bool {
 unsafe fn value(key: &[u8]) -> &'static [u8] {
     field(STATUS.get(), key)
 }
-fn field<'a>(data: &'a [u8], key: &[u8]) -> &'a [u8] {
+pub(crate) unsafe fn exe_path() -> &'static [u16] {
+    &EXE_PATH[..EXE_LEN]
+}
+pub(crate) unsafe fn exe_notice() -> &'static [u8] {
+    EXE_NOTICE
+}
+pub(crate) unsafe fn save_exe_settings_pub(reset: bool) {
+    save_exe_settings(reset);
+}
+pub(crate) unsafe fn launch_exe() {
+    let verb = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    if EXE_LEN > 0
+        && ShellExecuteW(
+            core::ptr::null_mut(),
+            verb.as_ptr(),
+            EXE_PATH.as_ptr(),
+            core::ptr::null(),
+            core::ptr::null(),
+            1,
+        ) as isize
+            <= 32
+    {
+        EXE_NOTICE = b"Lancement impossible : consultez le journal de lancement Winlux.";
+    }
+}
+pub(crate) fn field<'a>(data: &'a [u8], key: &[u8]) -> &'a [u8] {
     for line in data.split(|&c| c == b'\n') {
         if line.len() > key.len() && &line[..key.len()] == key && line[key.len()] == b'=' {
             return &line[key.len() + 1..];
@@ -243,6 +284,15 @@ fn field<'a>(data: &'a [u8], key: &[u8]) -> &'a [u8] {
 }
 unsafe fn available() -> bool {
     value(b"control_available") == b"1"
+}
+pub unsafe fn service_available() -> bool {
+    available()
+}
+pub unsafe fn status_value(key: &[u8]) -> &'static [u8] {
+    value(key)
+}
+unsafe fn sysupdate_busy() -> bool {
+    value(b"sysupdate_busy") == b"1"
 }
 unsafe fn updating() -> bool {
     // The Linux helper checks the owner PID; a stale progress file must never
@@ -261,7 +311,7 @@ unsafe fn restart_required() -> bool {
 fn restart_rect(c: &Rect) -> Rect {
     rect(c.left, c.top + 108, c.right, c.top + 156)
 }
-fn number(s: &[u8]) -> u32 {
+pub(crate) fn number(s: &[u8]) -> u32 {
     s.iter()
         .take_while(|c| c.is_ascii_digit())
         .fold(0u32, |n, &c| {
@@ -282,10 +332,13 @@ pub unsafe fn system_tick() -> bool {
         open_page(11);
         changed = true;
     }
+    changed |= crate::netdrives::poll(PAGE == PAGE_NETDRIVES && crate::wm::is_open(crate::wm::APP_SETTINGS));
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
     changed |= read(
         if PAGE == 7 {
             c"Z:\\run\\winlux\\update.log"
+        } else if PAGE == PAGE_SYSUPDATE {
+            c"Z:\\run\\winlux\\sysupdate.log"
         } else {
             c"Z:\\run\\winlux\\action.log"
         },
@@ -295,6 +348,12 @@ pub unsafe fn system_tick() -> bool {
     changed |= read(c"Z:\\run\\winlux\\update-progress", &mut PROGRESS);
     if PAGE == 9 {
         changed |= read(c"Z:\\usr\\share\\winlux\\BUILD-INFO", &mut BUILD_INFO);
+    }
+    if PAGE == PAGE_SYSUPDATE {
+        changed |= read(c"Z:\\run\\winlux\\sysupdates.txt", &mut SYSUPDATES);
+    }
+    if available() {
+        notify_updates();
     }
     if available() {
         crate::desktop::NETWORK_CONNECTED = number(value(b"network_connected"));
@@ -335,8 +394,51 @@ pub unsafe fn system_tick() -> bool {
     }
     changed
 }
+/// Notification quand de nouvelles mises à jour système apparaissent.
+unsafe fn notify_updates() {
+    let count = number(value(b"sysupdate_count"));
+    if !crate::login::logged_in() || count == NOTIFIED_UPDATES {
+        return;
+    }
+    let first = NOTIFIED_UPDATES == u32::MAX;
+    NOTIFIED_UPDATES = count;
+    if count == 0 || first && value(b"sysupdate_mode") == b"auto" {
+        return;
+    }
+    let mut msg = [0u8; 96];
+    let mut n = push_number(&mut msg, 0, count);
+    n = push(
+        &mut msg,
+        n,
+        if count == 1 {
+            b" mise \xE0 jour syst\xE8me disponible - Param\xE8tres > Mises \xE0 jour syst\xE8me"
+        } else {
+            b" mises \xE0 jour syst\xE8me disponibles - Param\xE8tres > Mises \xE0 jour syst\xE8me"
+        },
+    );
+    crate::desktop::toast(&msg[..n]);
+}
+fn push(buf: &mut [u8], at: usize, s: &[u8]) -> usize {
+    let n = s.len().min(buf.len().saturating_sub(at));
+    buf[at..at + n].copy_from_slice(&s[..n]);
+    at + n
+}
+fn push_number(buf: &mut [u8], at: usize, v: u32) -> usize {
+    let mut digits = [0u8; 10];
+    let mut i = digits.len();
+    let mut v = v;
+    loop {
+        i -= 1;
+        digits[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    push(buf, at, &digits[i..])
+}
 pub unsafe fn control(action: &core::ffi::CStr) -> bool {
-    if updating()
+    if (updating() || sysupdate_busy())
         && matches!(
             action.to_bytes(),
             b"poweroff" | b"reboot" | b"restart-session" | b"update-apply" | b"update-rollback"
@@ -414,7 +516,8 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
     if r.bottom > c.bottom - 24 {
         return;
     }
-    let disabled = updating() && (PAGE == 0 || PAGE == 7 && id != 4);
+    let disabled = updating() && (PAGE == 0 || PAGE == 7 && id != 4)
+        || PAGE == PAGE_SYSUPDATE && sysupdate_busy() && id >= 18;
     let selected = match (PAGE, id) {
         (4, 0) => value(b"layout") == b"fr",
         (4, 1) => value(b"layout") == b"us",
@@ -450,9 +553,21 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (15, 4) => unsafe { !crate::explorer::show_hidden() },
         (15, 6) => unsafe { crate::explorer::show_ext() },
         (15, 7) => unsafe { !crate::explorer::show_ext() },
+        (PAGE_SYSUPDATE, 0) => value(b"sysupdate_mode") == b"auto",
+        (PAGE_SYSUPDATE, 1) => !matches!(value(b"sysupdate_mode"), b"auto" | b"scheduled"),
+        (PAGE_SYSUPDATE, 2) => value(b"sysupdate_mode") == b"scheduled",
+        (PAGE_PRIVACY, 0) => value(b"privacy_telemetry") != b"on",
+        (PAGE_PRIVACY, 1) => value(b"privacy_telemetry") == b"on",
+        (PAGE_PRIVACY, 9) => value(b"privacy_microphone") != b"deny",
+        (PAGE_PRIVACY, 10) => value(b"privacy_camera") != b"deny",
+        (PAGE_PRIVACY, 11) => value(b"privacy_location") == b"allow",
+        (PAGE_PRIVACY, 18) => value(b"privacy_location_history") != b"on",
+        (PAGE_PRIVACY, 19) => value(b"privacy_location_history") == b"on",
         _ => false,
     };
-    let primary = PAGE == 7 && id == 1 || PAGE == 8 && id == 2;
+    let primary = PAGE == 7 && id == 1
+        || PAGE == 8 && id == 2
+        || PAGE == PAGE_SYSUPDATE && id == 19 && number(value(b"sysupdate_count")) > 0;
     round_rect(
         g.hdc,
         g.b,
@@ -934,20 +1049,24 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 b"Enregistrer",
                 b"Valeurs par d\xE9faut",
                 b"Lancer le .exe",
+                b"Processeur et priorit\xE9\x85",
             ]
             .iter()
             .enumerate()
             {
+                if i == 9 && !crate::settings_cpu::available() {
+                    continue;
+                }
                 button(g, &c, i as i32 / 3, i as i32 % 3, label, i as i32);
             }
             row(
                 g,
                 &c,
-                280,
+                300,
                 b"Application des r\xE9glages",
                 b"Enregistrer puis relancer le programme. Aucun profil n'est obligatoire.",
             );
-            row(g, &c, 350, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
+            row(g, &c, 366, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
         }
         9 => {
             let info = BUILD_INFO.get();
@@ -1295,10 +1414,10 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 &c,
                 1,
                 0,
-                if value(b"update_auto") == b"enabled" {
-                    b"D\xE9sactiver auto"
-                } else {
-                    b"Activer auto"
+                match value(b"sysupdate_mode") {
+                    b"auto" => b"Mode : automatique",
+                    b"scheduled" => b"Mode : planifi\xE9",
+                    _ => b"Mode : manuel",
                 },
                 3,
             );
@@ -1456,7 +1575,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 ay += 60;
             }
         }
+        PAGE_SYSUPDATE => draw_sysupdate(g, &c),
+        PAGE_PRIVACY => draw_privacy(g, &c),
+        PAGE_CPU => crate::settings_cpu::draw(g, &c),
+        PAGE_NETDRIVES => crate::netdrives::draw(g, &c),
         _ => {}
+    }
+    if PAGE == PAGE_NETDRIVES {
+        return;
     }
     let notice = if PAGE == 10 {
         EXE_NOTICE
@@ -1497,13 +1623,22 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     -1
 }
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
+    if PAGE == PAGE_NETDRIVES && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        return crate::netdrives::mouse(ev, x, y, &content(f));
+    }
     if let Mouse::Wheel(delta) = ev {
+        if PAGE == PAGE_CPU {
+            return crate::settings_cpu::scroll(if delta < 0 { 3 } else { -3 });
+        }
         if delta < 0 {
             SCROLL = SCROLL.saturating_add(3);
         } else {
             SCROLL = SCROLL.saturating_sub(3);
         }
         return true;
+    }
+    if ev == Mouse::Move && PAGE == PAGE_CPU {
+        return crate::settings_cpu::hover(&content(f), x, y);
     }
     if ev == Mouse::Move {
         let h = hit(f, x, y);
@@ -1523,6 +1658,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             system_tick();
             return true;
         }
+    }
+    if PAGE == PAGE_CPU {
+        return crate::settings_cpu::click(&content(f), x, y);
+    }
+    if PAGE == PAGE_NETDRIVES {
+        return crate::netdrives::mouse(ev, x, y, &content(f));
     }
     if PAGE == 7 {
         let c = content(f);
@@ -1566,28 +1707,18 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 c"browser-launch-firefox",
             ][id as usize],
         ),
+        (10, 9) if EXE_LEN > 0 && crate::settings_cpu::available() => {
+            open_page(PAGE_CPU);
+            crate::settings_cpu::focus_program();
+            return true;
+        }
         (10, id) if EXE_LEN > 0 && (0..=8).contains(&id) => {
             match id {
                 0..=4 => EXE_SCALE = id as usize,
                 5 => EXE_TRACE = !EXE_TRACE,
                 6 => save_exe_settings(false),
                 7 => save_exe_settings(true),
-                8 => {
-                    let verb = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-                    if ShellExecuteW(
-                        core::ptr::null_mut(),
-                        verb.as_ptr(),
-                        EXE_PATH.as_ptr(),
-                        core::ptr::null(),
-                        core::ptr::null(),
-                        1,
-                    ) as isize
-                        <= 32
-                    {
-                        EXE_NOTICE =
-                            b"Lancement impossible : consultez le journal de lancement Winlux.";
-                    }
-                }
+                8 => launch_exe(),
                 _ => {}
             }
             return true;
@@ -1745,11 +1876,10 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             SCROLL = 0;
             Some(c"update-rollback")
         }
-        (7, 3) => Some(if value(b"update_auto") == b"enabled" {
-            c"update-auto-off"
-        } else {
-            c"update-auto-on"
-        }),
+        (7, 3) => {
+            open_page(PAGE_SYSUPDATE);
+            return true;
+        }
         (7, 4) => {
             SHOW_LOG = !SHOW_LOG;
             SCROLL = 0;
@@ -1841,6 +1971,49 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             crate::explorer::set_show_ext(false);
             return true;
         }
+        (PAGE_SYSUPDATE, 0) => Some(c"sysupdate-mode-auto"),
+        (PAGE_SYSUPDATE, 1) => Some(c"sysupdate-mode-manual"),
+        (PAGE_SYSUPDATE, 2) => Some(c"sysupdate-mode-scheduled"),
+        (PAGE_SYSUPDATE, 9) => Some(c"sysupdate-hour-down"),
+        (PAGE_SYSUPDATE, 10) => Some(c"sysupdate-hour-up"),
+        (PAGE_SYSUPDATE, 11) => Some(c"sysupdate-day-next"),
+        (PAGE_SYSUPDATE, 18) => {
+            SHOW_LOG = false;
+            SCROLL = 0;
+            Some(c"sysupdate-check")
+        }
+        (PAGE_SYSUPDATE, 19) => {
+            if sysupdate_busy() || number(value(b"sysupdate_count")) == 0 {
+                return true;
+            }
+            SHOW_LOG = true;
+            SCROLL = 0;
+            Some(c"sysupdate-apply")
+        }
+        (PAGE_SYSUPDATE, 20) => {
+            SHOW_LOG = !SHOW_LOG;
+            SCROLL = 0;
+            return true;
+        }
+        (PAGE_PRIVACY, 0) => Some(c"privacy-telemetry-off"),
+        (PAGE_PRIVACY, 1) => Some(c"privacy-telemetry-on"),
+        (PAGE_PRIVACY, 9) => Some(if value(b"privacy_microphone") == b"deny" {
+            c"privacy-microphone-allow"
+        } else {
+            c"privacy-microphone-deny"
+        }),
+        (PAGE_PRIVACY, 10) => Some(if value(b"privacy_camera") == b"deny" {
+            c"privacy-camera-allow"
+        } else {
+            c"privacy-camera-deny"
+        }),
+        (PAGE_PRIVACY, 11) => Some(if value(b"privacy_location") == b"allow" {
+            c"privacy-location-deny"
+        } else {
+            c"privacy-location-allow"
+        }),
+        (PAGE_PRIVACY, 18) => Some(c"privacy-history-off"),
+        (PAGE_PRIVACY, 19) => Some(c"privacy-history-on"),
         _ => None,
     };
     if let Some(a) = action {
@@ -1850,11 +2023,23 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     false
 }
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
+    if PAGE == PAGE_NETDRIVES && crate::netdrives::key(vk, ch) {
+        return true;
+    }
     if PAGE == 7 && restart_required() {
         if !updating() && ch == 13 {
             control(c"reboot");
         }
         return true;
+    }
+    if PAGE == PAGE_CPU {
+        match vk {
+            0x26 => return crate::settings_cpu::scroll(-1),
+            0x28 => return crate::settings_cpu::scroll(1),
+            0x21 => return crate::settings_cpu::scroll(-10),
+            0x22 => return crate::settings_cpu::scroll(10),
+            _ => {}
+        }
     }
     match vk {
         0x26 => {
@@ -1887,6 +2072,143 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         }
         _ => false,
     }
+}
+unsafe fn draw_sysupdate(g: &mut Gfx, c: &Rect) {
+    let p = pal();
+    let mode = value(b"sysupdate_mode");
+    row(
+        g,
+        c,
+        44,
+        b"Mode de mise \xE0 jour",
+        match mode {
+            b"auto" => b"Automatique : recherche et installation chaque jour, sans intervention.",
+            b"scheduled" => b"Planifi\xE9 : installation au cr\xE9neau choisi ci-dessous.",
+            _ => b"Manuel : recherche chaque jour et notification ; vous installez quand vous voulez.",
+        },
+    );
+    button(g, c, 0, 0, b"Automatique", 0);
+    button(g, c, 0, 1, b"Manuel", 1);
+    button(g, c, 0, 2, b"Planifi\xE9", 2);
+    let mut slot = [0u8; 64];
+    let mut n = push(
+        &mut slot,
+        0,
+        match value(b"sysupdate_day") {
+            b"mon" => b"Chaque lundi",
+            b"tue" => b"Chaque mardi",
+            b"wed" => b"Chaque mercredi",
+            b"thu" => b"Chaque jeudi",
+            b"fri" => b"Chaque vendredi",
+            b"sat" => b"Chaque samedi",
+            b"sun" => b"Chaque dimanche",
+            _ => b"Tous les jours",
+        },
+    );
+    n = push(&mut slot, n, b" \xE0 ");
+    let hour = number(value(b"sysupdate_hour")).min(23);
+    if hour < 10 {
+        n = push(&mut slot, n, b"0");
+    }
+    n = push_number(&mut slot, n, hour);
+    n = push(&mut slot, n, b":00");
+    if mode != b"scheduled" {
+        n = push(&mut slot, n, b" (utilis\xE9 en mode Planifi\xE9)");
+    }
+    row(g, c, 166, b"Cr\xE9neau planifi\xE9", &slot[..n]);
+    button(g, c, 3, 0, b"Heure -", 9);
+    button(g, c, 3, 1, b"Heure +", 10);
+    button(g, c, 3, 2, b"Changer le jour", 11);
+    let count = number(value(b"sysupdate_count"));
+    let mut summary = [0u8; 128];
+    let mut n = 0;
+    if value(b"sysupdate_apt") != b"1" {
+        n = push(&mut summary, n, b"APT absent de cette session Live : seul Winlux est mis \xE0 jour (page Mises \xE0 jour).");
+    } else if sysupdate_busy() {
+        n = push(&mut summary, n, b"Installation des paquets en cours : n'\xE9teignez pas la machine.");
+    } else {
+        if count == 0 {
+            n = push(&mut summary, n, b"Syst\xE8me \xE0 jour");
+        } else {
+            n = push_number(&mut summary, n, count);
+            n = push(&mut summary, n, if count == 1 { b" paquet \xE0 mettre \xE0 jour" } else { b" paquets \xE0 mettre \xE0 jour" });
+        }
+        n = push(&mut summary, n, b" - derni\xE8re recherche : ");
+        n = push(&mut summary, n, value(b"sysupdate_last"));
+    }
+    row(g, c, 300, b"Paquets du syst\xE8me Linux (APT)", &summary[..n]);
+    button(g, c, 6, 0, b"Rechercher", 18);
+    button(g, c, 6, 1, b"Tout installer", 19);
+    button(g, c, 6, 2, if SHOW_LOG { b"Liste des paquets" } else { b"Journal" }, 20);
+    text(
+        g.hdc,
+        g.f.semibold,
+        p.text,
+        c.left,
+        c.top + 420,
+        if SHOW_LOG { b"Journal APT" } else { b"Paquets concern\xE9s" },
+    );
+    journal(
+        g,
+        c,
+        444,
+        if SHOW_LOG {
+            LOG.get()
+        } else if SYSUPDATES.len == 0 {
+            b"Aucun paquet en attente. Cliquez Rechercher pour interroger les d\xE9p\xF4ts APT."
+        } else {
+            SYSUPDATES.get()
+        },
+    );
+}
+unsafe fn draw_privacy(g: &mut Gfx, c: &Rect) {
+    row(
+        g,
+        c,
+        44,
+        b"T\xE9l\xE9m\xE9trie et donn\xE9es de diagnostic",
+        if value(b"privacy_telemetry") == b"on" {
+            b"Autoris\xE9e : aucun composant actuel de Winlux n'envoie pourtant de donn\xE9es."
+        } else {
+            b"D\xE9sactiv\xE9e : Winlux n'envoie aucune donn\xE9e d'utilisation."
+        },
+    );
+    button(g, c, 0, 0, b"D\xE9sactiv\xE9e", 0);
+    button(g, c, 0, 1, b"Autoris\xE9e", 1);
+    row(
+        g,
+        c,
+        166,
+        b"Autorisations des applications Windows (.exe)",
+        b"Bouton en surbrillance : acc\xE8s autoris\xE9. Cliquez pour bloquer ou autoriser.",
+    );
+    let state = |key: &[u8], allowed_default: bool| {
+        let v = value(key);
+        if allowed_default { v != b"deny" } else { v == b"allow" }
+    };
+    button(g, c, 3, 0, if state(b"privacy_microphone", true) { b"Microphone : autoris\xE9" } else { b"Microphone : bloqu\xE9" }, 9);
+    button(g, c, 3, 1, if state(b"privacy_camera", true) { b"Cam\xE9ra : autoris\xE9e" } else { b"Cam\xE9ra : bloqu\xE9e" }, 10);
+    button(g, c, 3, 2, if state(b"privacy_location", false) { b"Localisation : autoris\xE9e" } else { b"Localisation : bloqu\xE9e" }, 11);
+    row(
+        g,
+        c,
+        300,
+        b"Historique de localisation",
+        if value(b"privacy_location_history") == b"on" {
+            b"Activ\xE9 : conserv\xE9 uniquement sur cet ordinateur."
+        } else {
+            b"D\xE9sactiv\xE9 : aucune position n'est enregistr\xE9e."
+        },
+    );
+    button(g, c, 6, 0, b"D\xE9sactiv\xE9", 18);
+    button(g, c, 6, 1, b"Activ\xE9", 19);
+    row(
+        g,
+        c,
+        430,
+        b"Vos donn\xE9es restent chez vous",
+        b"Un micro refus\xE9 est bloqu\xE9 par le runtime ; cam\xE9ra et localisation ne sont pas encore expos\xE9es aux .exe.",
+    );
 }
 unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
     let p = pal();
@@ -1963,7 +2285,7 @@ unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
     journal(g, c, 366, LOG.get());
 }
 pub unsafe fn tick(_f: &Frame) -> bool {
-    let changed = system_tick();
+    let changed = system_tick() | crate::settings_cpu::tick(PAGE == PAGE_CPU);
     if updating() && GetTickCount().wrapping_sub(LAST_ANIMATION) > 90 {
         LAST_ANIMATION = GetTickCount();
         return true;
@@ -2008,6 +2330,7 @@ pub unsafe fn regression_checks() {
         "Sans redemarrage requis les actions normales sont conservees"
     );
     (STATUS, PAGE) = saved;
+    crate::settings_cpu::regression_checks();
 }
 
 pub unsafe fn regression_exe_settings(path: &[u16]) {

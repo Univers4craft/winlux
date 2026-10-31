@@ -701,6 +701,25 @@ if command -v apt-get >/dev/null 2>&1; then
     fi
 fi
 
+# --- Profil d'utilisation et applications recommandées ---
+if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
+    /usr/bin/winlux-profile --apply-boot >/dev/null 2>&1 || true
+    log "Profil d'utilisation appliqué."
+fi
+if test -s /etc/winlux/recommended-apps.txt && command -v apt-get >/dev/null 2>&1; then
+    apps=$(tr '\n' ' ' </etc/winlux/recommended-apps.txt)
+    if yesno "Installer les applications recommandées pour votre profil ($apps) ?" oui; then
+        log 'Installation des applications recommandées...'
+        apt-get update -qq 2>/dev/null || true
+        # Paquet par paquet : un nom absent du dépôt ne doit pas bloquer les autres.
+        for app in $apps; do
+            apt-get install -y --no-install-recommends "$app" >/dev/null 2>&1 \
+                && log "  $app installé" || log "  $app indisponible, ignoré"
+        done
+    fi
+    rm -f /etc/winlux/recommended-apps.txt
+fi
+
 # ============================================================
 #  Marquer le premier démarrage comme terminé
 # ============================================================

@@ -65,7 +65,7 @@ struct CompletionPortState {
     queue: VecDeque<CompletionPacket>,
     active: HashSet<ThreadId>,
 }
-struct CompletionPort {
+pub(crate) struct CompletionPort {
     state: Mutex<CompletionPortState>,
     changed: Condvar,
     max_concurrency: usize,
@@ -75,7 +75,7 @@ static IOCP_ASSOCIATIONS: OnceLock<Mutex<HashMap<usize, (Arc<CompletionPort>, us
 static NEXT_HANDLE: AtomicUsize = AtomicUsize::new(0x1_0000);
 static TEMP_FILE_SEQUENCE: AtomicU32 = AtomicU32::new(1);
 
-struct EventObject {
+pub(crate) struct EventObject {
     manual_reset: bool,
     signaled: Mutex<bool>,
     changed: Condvar,
@@ -84,7 +84,7 @@ struct MutexState {
     owner: Option<ThreadId>,
     recursion: usize,
 }
-struct MutexObject {
+pub(crate) struct MutexObject {
     state: Mutex<MutexState>,
     changed: Condvar,
 }
@@ -93,21 +93,58 @@ struct ThreadState {
     exit_code: u32,
     suspend_count: usize,
 }
-struct ThreadObject {
+pub(crate) struct ThreadObject {
     state: Mutex<ThreadState>,
     changed: Condvar,
+    /// Identifiant Linux du thread (0 tant qu'il n'a pas démarré).
+    pub(crate) os_tid: AtomicI32,
+    /// Affinité ou priorité demandée avant le démarrage (thread suspendu).
+    pub(crate) pending_cpus: Mutex<Option<Vec<usize>>>,
+    pub(crate) priority: AtomicI32,
+}
+
+/// Cible Linux d'un handle de thread Win32.
+pub(crate) enum ThreadTarget {
+    Running(i32),
+    NotStarted(Arc<ThreadObject>),
+}
+
+pub(crate) fn thread_target(h: usize) -> Option<ThreadTarget> {
+    if h == get_current_thread() {
+        return Some(ThreadTarget::Running(unsafe {
+            libc::syscall(libc::SYS_gettid) as i32
+        }));
+    }
+    match lookup_sync(h)? {
+        SyncHandle::Thread(t) => match t.os_tid.load(Ordering::Acquire) {
+            0 => Some(ThreadTarget::NotStarted(t)),
+            tid => Some(ThreadTarget::Running(tid)),
+        },
+        _ => None,
+    }
+}
+
+/// PID Linux d'un handle de processus (le processus courant ou un enfant).
+pub(crate) fn process_os_pid(h: usize) -> Option<i32> {
+    if h == get_current_process() {
+        return Some(std::process::id() as i32);
+    }
+    match lookup_sync(h)? {
+        SyncHandle::Process(p) => lock(&p.state).child.as_ref().map(|c| c.id() as i32),
+        _ => None,
+    }
 }
 struct ProcessState {
     child: Option<Child>,
     exit_code: u32,
     suspended: bool,
 }
-struct ProcessObject {
+pub(crate) struct ProcessObject {
     state: Mutex<ProcessState>,
     changed: Condvar,
 }
 #[derive(Clone)]
-enum SyncHandle {
+pub(crate) enum SyncHandle {
     Event(Arc<EventObject>),
     Mutex(Arc<MutexObject>),
     Thread(Arc<ThreadObject>),
@@ -273,12 +310,31 @@ pub extern "win64" fn get_std_handle(which: u32) -> usize {
 fn next_handle() -> usize {
     NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
 }
-
-pub(crate) fn insert_file(f: File) -> usize {
+pub(crate) fn insert_file(file: File) -> usize {
     let h = next_handle();
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
-        .insert(h, FileHandle::File(Arc::new(Mutex::new(f))));
+        .insert(h, FileHandle::File(Arc::new(Mutex::new(file))));
     h
+}
+pub(crate) fn duplicate_handle_impl(handle: usize) -> Option<usize> {
+    use std::os::unix::io::AsRawFd;
+    let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())));
+    let fh = handles.get(&handle)?;
+    let FileHandle::File(arc) = fh;
+    let fd = {
+        let f = lock(arc);
+        f.as_raw_fd()
+    };
+    let new_fd = unsafe { libc::dup(fd) };
+    if new_fd < 0 {
+        return None;
+    }
+    drop(handles);
+    let new_file = unsafe { std::os::unix::io::FromRawFd::from_raw_fd(new_fd) };
+    let new_h = next_handle();
+    lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
+        .insert(new_h, FileHandle::File(Arc::new(Mutex::new(new_file))));
+    Some(new_h)
 }
 fn post_iocp(port: &CompletionPort, packet: CompletionPacket) {
     lock(&port.state).queue.push_back(packet);
@@ -1786,14 +1842,15 @@ pub unsafe extern "win64" fn get_drive_type_a(root: *const u8) -> u32 {
         crate::process::set_last_error(87);
         return 1;
     }
-    3
+    crate::mounts::drive_type((*root as char).to_ascii_uppercase()).unwrap_or(3)
 }
 pub unsafe extern "win64" fn get_drive_type_w(root: *const u16) -> u32 {
     if root.is_null() {
         crate::process::set_last_error(87);
         return 1;
     }
-    3
+    let c = char::from_u32(*root as u32).unwrap_or('C');
+    crate::mounts::drive_type(c.to_ascii_uppercase()).unwrap_or(3)
 }
 
 fn move_file_ex_impl(src: &str, dst: &str, flags: u32) -> i32 {
@@ -2747,7 +2804,7 @@ fn same_sync(a: &SyncHandle, b: &SyncHandle) -> bool {
         _ => false,
     }
 }
-fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
+pub(crate) fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
     let obj = if let Some(name) = name {
         let key = name.to_lowercase();
         let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
@@ -2775,7 +2832,7 @@ fn add_sync(obj: SyncHandle, name: Option<String>) -> usize {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, obj);
     h
 }
-fn lookup_sync(h: usize) -> Option<SyncHandle> {
+pub(crate) fn lookup_sync(h: usize) -> Option<SyncHandle> {
     lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new())))
         .get(&h)
         .cloned()
@@ -3115,6 +3172,9 @@ pub unsafe extern "win64" fn create_thread(
             suspend_count: usize::from(flags & 4 != 0),
         }),
         changed: Condvar::new(),
+        os_tid: AtomicI32::new(0),
+        pending_cpus: Mutex::new(None),
+        priority: AtomicI32::new(0),
     });
     let handle = add_sync(SyncHandle::Thread(state.clone()), None);
     let f: extern "win64" fn(usize) -> u32 = std::mem::transmute(start);
@@ -3132,6 +3192,17 @@ pub unsafe extern "win64" fn create_thread(
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
             drop(s);
+            let os_tid = libc::syscall(libc::SYS_gettid) as i32;
+            {
+                // Même verrou que SetThreadAffinityMask/SetThreadPriority :
+                // une demande faite pendant le démarrage n'est jamais perdue.
+                let mut pending = lock(&state.pending_cpus);
+                if let Some(cpus) = pending.take() {
+                    crate::cpu::set_affinity(os_tid, &cpus);
+                }
+                super::kernel32_cpu::thread_started(os_tid, state.priority.load(Ordering::Relaxed));
+                state.os_tid.store(os_tid, Ordering::Release);
+            }
             crate::process::thread_attach_current();
             let code = f(param);
             crate::process::thread_detach_current();
@@ -5312,8 +5383,9 @@ fn format_local_time() -> String {
 
 // --- GetLogicalDrives, GetComputerName, GetUserName ---
 pub extern "win64" fn get_logical_drives() -> u32 {
-    0x04 | 0x0200_0000
-} // C: and Z:
+    // C:, Z: et les lecteurs dynamiques (images montées, lecteurs réseau).
+    0x04 | 0x0200_0000 | crate::mounts::drive_mask()
+}
 
 pub unsafe extern "win64" fn get_computer_name_a(buf: *mut u8, size: *mut u32) -> i32 {
     if buf.is_null() || size.is_null() {

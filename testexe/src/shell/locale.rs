@@ -231,8 +231,12 @@ pub const S_OPEN_COLON: usize = 153;
 // Pages Parametres ajoutees
 pub const S_FILE_MANAGER: usize = 154;
 pub const S_ADVANCED_SOUND: usize = 155;
+pub const S_SYSTEM_UPDATES: usize = 156;
+pub const S_PRIVACY: usize = 157;
+pub const S_PROCESSOR: usize = 158;
+pub const S_NETWORK_DRIVES: usize = 159;
 
-const STRING_COUNT: usize = 156;
+const STRING_COUNT: usize = 160;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -415,6 +419,10 @@ static FR: [&[u8]; STRING_COUNT] = [
     // 154-155 : Pages Parametres ajoutees
     b"Gestionnaire de fichiers",
     b"Son avanc\xE9",
+    b"Mises \xE0 jour syst\xE8me",
+    b"Confidentialit\xE9",
+    b"Processeur",
+    b"Lecteurs r\xE9seau",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -596,6 +604,10 @@ static EN: [&[u8]; STRING_COUNT] = [
     // 154-155 : Pages Parametres ajoutees
     b"File manager",
     b"Advanced sound",
+    b"System updates",
+    b"Privacy",
+    b"Processor",
+    b"Network drives",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -777,6 +789,10 @@ static ES: [&[u8]; STRING_COUNT] = [
     // 154-155 : Pages Parametres ajoutees
     b"Administrador de archivos",
     b"Sonido avanzado",
+    b"Actualizaciones del sistema",
+    b"Privacidad",
+    b"Procesador",
+    b"Unidades de red",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -958,6 +974,10 @@ static DE: [&[u8]; STRING_COUNT] = [
     // 154-155 : Pages Parametres ajoutees
     b"Dateimanager",
     b"Erweiterter Sound",
+    b"Systemupdates",
+    b"Datenschutz",
+    b"Prozessor",
+    b"Netzlaufwerke",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {

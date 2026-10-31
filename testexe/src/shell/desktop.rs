@@ -313,7 +313,8 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 32] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 35] = [
+            (b"Bienvenue dans Winlux", b"welcome", 9),
             (tr(S_TERMINAL), b"xterm", 1),
             (tr(S_FILE_EXPLORER), b"nemo", 1),
             (tr(S_NOTEPAD), b"mousepad", 1),
@@ -341,6 +342,8 @@ fn init_apps() {
             (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
             (b"Gestionnaire de paquets", b"mintinstall", 9),
             (b"Gestion des disques", b"diskmgr", 9),
+            (b"Planificateur de t\xE2ches", b"taskschd", 9),
+            (b"Pare-feu Winlux", b"firewall", 9),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
             (tr(S_TASK_MANAGER), b"taskmgr", 9),
             (b"Nettoyage de disque", b"diskcleaner", 9),
@@ -514,6 +517,10 @@ unsafe fn start_offset() -> i32 {
     } else {
         0
     }
+}
+
+pub unsafe fn open_start_menu() {
+    set_start(true);
 }
 
 unsafe fn set_start(open: bool) {
@@ -869,6 +876,65 @@ unsafe fn load_shell_state() {
         PINNED_APPS = data[3];
         DESKTOP_SHORTCUTS = data[4];
         SHOW_SYSTEM_ICONS = data[5] != 0;
+    }
+}
+
+const ICONS_PATH: &core::ffi::CStr = c"C:\\.local\\share\\winlux\\desktop-icons.dat";
+
+unsafe fn save_icon_positions() {
+    let file = CreateFileA(
+        ICONS_PATH.as_ptr(),
+        0x4000_0000, // GENERIC_WRITE
+        0,
+        core::ptr::null_mut(),
+        2, // CREATE_ALWAYS
+        0,
+        core::ptr::null_mut(),
+    );
+    if file.is_null() || file as isize == -1 {
+        return;
+    }
+    let mut buf = [0u8; 40]; // 5 icons * (x:i32 + y:i32) = 40 bytes
+    for i in 0..5 {
+        let off = i * 8;
+        buf[off..off + 4].copy_from_slice(&ICON_X[i].to_le_bytes());
+        buf[off + 4..off + 8].copy_from_slice(&ICON_Y[i].to_le_bytes());
+    }
+    let mut written = 0u32;
+    WriteFile(file, buf.as_ptr(), 40, &mut written, core::ptr::null_mut());
+    CloseHandle(file);
+}
+
+unsafe fn load_icon_positions() {
+    let file = CreateFileA(
+        ICONS_PATH.as_ptr(),
+        0x8000_0000, // GENERIC_READ
+        1,           // FILE_SHARE_READ
+        core::ptr::null_mut(),
+        3, // OPEN_EXISTING
+        0,
+        core::ptr::null_mut(),
+    );
+    if file.is_null() || file as isize == -1 {
+        return;
+    }
+    let mut buf = [0u8; 40];
+    let mut nread = 0u32;
+    ReadFile(
+        file,
+        buf.as_mut_ptr(),
+        40,
+        &mut nread,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(file);
+    if nread != 40 {
+        return;
+    }
+    for i in 0..5 {
+        let off = i * 8;
+        ICON_X[i] = i32::from_le_bytes([buf[off], buf[off + 1], buf[off + 2], buf[off + 3]]);
+        ICON_Y[i] = i32::from_le_bytes([buf[off + 4], buf[off + 5], buf[off + 6], buf[off + 7]]);
     }
 }
 
@@ -1298,8 +1364,11 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(wm::APP_DISKMGR) => Glyph::Drive,
+            Some(wm::APP_TASKSCHD) => Glyph::Clock,
+            Some(wm::APP_FIREWALL) => Glyph::Shield,
             Some(wm::APP_EVENTVIEWER) => Glyph::Details,
             Some(wm::APP_RESTORE) => Glyph::Refresh,
+            Some(wm::APP_WELCOME) => Glyph::Star,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1622,12 +1691,35 @@ unsafe fn launch(what: Launch) {
                 wm::open(wm::APP_DISKMGR);
                 return;
             }
+            if cmd == b"taskschd" || cmd == b"taskschd.msc" {
+                wm::open(wm::APP_TASKSCHD);
+                return;
+            }
+            if cmd == b"firewall" || cmd == b"wf.msc" || cmd == b"firewall.cpl" {
+                wm::open(wm::APP_FIREWALL);
+                return;
+            }
             if cmd == b"eventviewer" {
                 wm::open(wm::APP_EVENTVIEWER);
                 return;
             }
             if cmd == b"restore" {
                 wm::open(wm::APP_RESTORE);
+                return;
+            }
+            if cmd == b"welcome" {
+                if wm::native_session() {
+                    ShellExecuteA(
+                        core::ptr::null_mut(),
+                        c"open".as_ptr(),
+                        c"winlux-welcome".as_ptr(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        1,
+                    );
+                } else {
+                    crate::welcome::open();
+                }
                 return;
             }
             let mut wcmd = [0u16; 256];
@@ -3033,6 +3125,7 @@ pub unsafe fn init(
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
     wm::WORK = rect(0, 0, SCREEN_W, SCREEN_H - TASKBAR_HEIGHT);
+    load_icon_positions();
     BOOT_START = now();
     let mut v = [0i8; 4];
     if GetEnvironmentVariableA(c"WINLUX_NO_SPLASH".as_ptr(), v.as_mut_ptr(), 4) > 0 {
@@ -3274,6 +3367,7 @@ pub unsafe fn frame(hwnd: Handle) {
         || wm::animating()
         || crate::gfx::theme_animating()
         || notifications::animating()
+        || crate::welcome::animating()
         || since(INTRO_START) < INTRO_MS + 40
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)
         || START_CLOSING
@@ -3313,10 +3407,14 @@ pub unsafe fn tick(hwnd: Handle) {
     }
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
-    let system = crate::settings::system_tick();
+    let system = crate::settings::system_tick() | crate::firewall::system_tick();
     let weather_changed = weather::poll();
+    let welcome = BOOT_DONE
+        && crate::login::logged_in()
+        && since(INTRO_START) > INTRO_MS
+        && crate::welcome::maybe_show();
     let apps = BOOT_DONE && wm::tick();
-    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system || weather_changed {
+    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system || weather_changed || welcome {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
@@ -3882,6 +3980,7 @@ pub unsafe fn on_button_up(hwnd: Handle, x: i32, y: i32) {
     let mut rp = false;
     if DRAGGED_ICON >= 0 {
         DRAGGED_ICON = -1;
+        save_icon_positions();
         rp = true;
     }
     wm::on_button_up(x, y, &mut rp);
