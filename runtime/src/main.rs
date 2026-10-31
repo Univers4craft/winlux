@@ -24,6 +24,7 @@ mod netdrive;
 mod overlay;
 mod paths;
 mod pe;
+mod permissions;
 mod power;
 mod printf;
 mod process;
