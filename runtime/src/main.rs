@@ -41,6 +41,7 @@ fn main() {
             std::process::exit(1);
         }
     };
+    backup_registry();
     if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
         crash::set_exe_name(name);
     }
@@ -85,6 +86,21 @@ fn main() {
     dlls::kernel32::init();
     process::init_process(&image, &rest);
     process::run(image);
+}
+
+fn backup_registry() {
+    let Some(data) = paths::data_dir() else {
+        return;
+    };
+    let src = data.join("registry.tsv");
+    if let Ok(meta) = std::fs::metadata(&src) {
+        if meta.len() > 0 {
+            let dst = data.join("registry.tsv.bak");
+            if let Err(e) = std::fs::copy(&src, &dst) {
+                log_warn!("registry", "sauvegarde impossible de registry.tsv : {e}");
+            }
+        }
+    }
 }
 
 /// Indique comment lancer un fichier sans l'exécuter : `console` ou `gui` sur

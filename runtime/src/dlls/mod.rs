@@ -25,6 +25,8 @@ pub mod gui_x11;
 pub mod iphlpapi;
 pub mod kernel32;
 pub mod kernel32_misc;
+pub mod libgcc;
+pub mod libstdcpp;
 pub mod mfplat;
 pub mod mmap;
 pub mod mscoree;
@@ -308,6 +310,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "sechost",
                 exports: sechost::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "libgcc_s_seh-1",
+                exports: libgcc::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "libstdc++-6",
+                exports: libstdcpp::exports(),
                 handle: fake_module(),
             },
         ]

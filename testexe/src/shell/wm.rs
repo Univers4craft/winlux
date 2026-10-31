@@ -672,6 +672,9 @@ pub fn animating() -> bool {
         return true;
     }
     unsafe {
+        if !matches!(DRAG, Drag::None) {
+            return true;
+        }
         if TASK_VIEW || SNAP_LAYOUT_VISIBLE {
             return true;
         }

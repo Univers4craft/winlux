@@ -1,6 +1,6 @@
 # APT natif dans Winlux
 
-Cette intégration utilise Ubuntu Noble amd64 comme racine du système, avec
+Cette intégration utilise Ubuntu Resolute amd64 comme racine du système, avec
 les vrais outils `apt-get` et `dpkg`, leurs bases de paquets et leurs scripts
 de configuration. Ce n’est pas un environnement Ubuntu séparé.
 
@@ -11,8 +11,8 @@ La construction 0.2.6 déjà lancée reste basée sur le système précédent.
 
 Les outils habituels de construction de l’ISO sont requis, ainsi que
 `python3`, `curl`, `dpkg-deb`, `fakeroot`, `mkfs.ext4`, `debugfs` et QEMU.
-L’hôte de compilation doit être Ubuntu Noble amd64 ou un dérivé compatible,
-afin de conserver la même ABI que la base. Le workflow utilise Ubuntu 24.04.
+L’hôte de compilation doit être Ubuntu Resolute amd64 ou un dérivé compatible,
+afin de conserver la même ABI que la base. Le workflow utilise Ubuntu 26.04.
 
 ```sh
 python3 scripts/prepare-apt-base.py \
@@ -21,7 +21,7 @@ WINLUX_KERNEL=/chemin/vers/vmlinuz WINLUX_KERNEL_RELEASE=VERSION_DU_NOYAU \
   sh scripts/build-live-iso.sh build/winlux-native-apt.iso
 ```
 
-La préparation télécharge l’image Ubuntu Base officielle 24.04.5, vérifie
+La préparation télécharge l’image Ubuntu Base officielle 26.04.1, vérifie
 son SHA-256 fixé dans le script et installe les composants du bureau dans
 une VM jetable. APT vérifie les signatures des dépôts Ubuntu. Aucun script
 de maintenance Ubuntu ne s’exécute sur l’hôte. Les journaux sont conservés
@@ -70,7 +70,7 @@ de suppression des paquets essentiels peut néanmoins casser son système.
 ## Mises à jour Winlux
 
 Le constructeur produit un paquet Debian et un manifeste de format 3,
-identifié `backend=apt` et `base=ubuntu-noble`. Le moteur natif vérifie la
+identifié `backend=apt` et `base=ubuntu-resolute`. Le moteur natif vérifie la
 taille, le SHA-256, le nom et la version du paquet, puis passe par APT avec
 `--no-remove` et conservation des configurations locales. Il ne remplace
 pas les bibliothèques Linux par un arbre de fichiers hors de dpkg.

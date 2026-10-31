@@ -3,16 +3,22 @@
 //! bleu (BSOD) style Windows, on écrit un dump dans le journal, puis on
 //! quitte avec le code d'exception Windows.
 
-static mut CRASH_EXE_NAME: [u8; 256] = [0; 256];
+const CRASH_EXE_CAP: usize = 256;
+static mut CRASH_EXE_NAME: [u8; CRASH_EXE_CAP] = [0; CRASH_EXE_CAP];
 static mut CRASH_EXE_LEN: usize = 0;
 
 pub fn set_exe_name(name: &str) {
+    let n = name.len().min(CRASH_EXE_CAP - 1);
     unsafe {
-        let buf = &raw mut CRASH_EXE_NAME;
-        let n = name.len().min((*buf).len() - 1);
-        (&mut (*buf))[..n].copy_from_slice(&name.as_bytes()[..n]);
+        let dst = std::ptr::addr_of_mut!(CRASH_EXE_NAME) as *mut u8;
+        std::ptr::copy_nonoverlapping(name.as_ptr(), dst, n);
         CRASH_EXE_LEN = n;
     }
+}
+
+unsafe fn crash_exe_name() -> &'static [u8] {
+    let base = std::ptr::addr_of!(CRASH_EXE_NAME) as *const u8;
+    std::slice::from_raw_parts(base, CRASH_EXE_LEN)
 }
 
 extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
@@ -79,6 +85,53 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_
         write_hex(rdx);
         write_literal(b"\n");
 
+        // Dump complet des registres x86-64
+        write_literal(b"winlux: rax=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_RAX as usize] as usize);
+        write_literal(b" rbx=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_RBX as usize] as usize);
+        write_literal(b" rcx=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_RCX as usize] as usize);
+        write_literal(b" rdx=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_RDX as usize] as usize);
+        write_literal(b"\nwinlux: rsi=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_RSI as usize] as usize);
+        write_literal(b" rdi=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_RDI as usize] as usize);
+        write_literal(b" rbp=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_RBP as usize] as usize);
+        write_literal(b"\nwinlux: r8=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_R8 as usize] as usize);
+        write_literal(b" r9=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_R9 as usize] as usize);
+        write_literal(b" r10=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_R10 as usize] as usize);
+        write_literal(b" r11=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_R11 as usize] as usize);
+        write_literal(b"\nwinlux: r12=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_R12 as usize] as usize);
+        write_literal(b" r13=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_R13 as usize] as usize);
+        write_literal(b" r14=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_R14 as usize] as usize);
+        write_literal(b" r15=0x");
+        write_hex((*uc).uc_mcontext.gregs[libc::REG_R15 as usize] as usize);
+        write_literal(b"\n");
+
+        // Identification du module (try_lock pour rester async-signal-safe)
+        if let Ok(modules) = crate::loader::MODULES.try_lock() {
+            for m in modules.iter() {
+                if m.contains(rip) {
+                    write_literal(b"winlux: module=");
+                    write_literal(m.name.as_bytes());
+                    write_literal(b"+0x");
+                    write_hex(rip - m.base);
+                    write_literal(b"\n");
+                    break;
+                }
+            }
+        }
+
         libc::_exit(code as i32);
     }
 }
@@ -126,7 +179,7 @@ unsafe fn write_crash_log(
     write_fd_hex(fd, code as usize);
     write_fd(fd, b" exe=");
     if CRASH_EXE_LEN > 0 {
-        write_fd(fd, &CRASH_EXE_NAME[..CRASH_EXE_LEN]);
+        write_fd(fd, crash_exe_name());
     } else {
         write_fd(fd, b"unknown");
     }
@@ -165,7 +218,7 @@ unsafe fn write_crash_log(
         write_fd_hex(bfd, rip);
         write_fd(bfd, b"\n");
         if CRASH_EXE_LEN > 0 {
-            write_fd(bfd, &CRASH_EXE_NAME[..CRASH_EXE_LEN]);
+            write_fd(bfd, crash_exe_name());
         } else {
             write_fd(bfd, b"unknown.exe");
         }
