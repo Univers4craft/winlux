@@ -33,11 +33,16 @@ def windows():
             result[fields[0]] = (tuple(map(int, fields[2:6])), fields[7])
     return result
 
+# The Settings window title follows the interface language since #145.
+SETTINGS_TITLES = ("Paramètres Winlux", "Parametres Winlux", "Winlux Settings",
+                   "Configuración de Winlux", "Winlux-Einstellungen")
+
 def wait_title(title, timeout=90):
+    titles = (title,) if isinstance(title, str) else tuple(title)
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         for window, (_, text) in windows().items():
-            if title in text: return window
+            if any(name in text for name in titles): return window
         time.sleep(0.2)
     raise AssertionError(f"Window not mapped: {title}; {windows()}")
 
@@ -113,7 +118,7 @@ run("winlux-control", "status")
 subprocess.Popen(["winlux-shell-app", "explorer"], stdout=log, stderr=log)
 explorer = wait_title("Explorer Winlux")
 subprocess.Popen(["winlux-shell-app", "settings", "11"], stdout=log, stderr=log)
-settings = wait_title("Parametres Winlux")
+settings = wait_title(SETTINGS_TITLES)
 def settings_page(window):
     try:
         pid = int(run("xprop", "-id", str(window), "_NET_WM_PID").split("=")[-1].strip())
@@ -127,7 +132,7 @@ previous = client_ids()
 Gio.DesktopAppInfo.new_from_filename("/usr/share/applications/winlux-updates.desktop").launch([], None)
 def update_windows():
     return [int(identifier,16) for identifier,(_,title) in windows().items()
-            if int(identifier,16) not in previous and "Parametres Winlux" in title and
+            if int(identifier,16) not in previous and any(name in title for name in SETTINGS_TITLES) and
             settings_page(identifier)==b"WINLUX_SETTINGS_PAGE=7"]
 wait_for(lambda: len(update_windows())==1,"updates launcher opens its own settings window")
 updates=update_windows()[0]

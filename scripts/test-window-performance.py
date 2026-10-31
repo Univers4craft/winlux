@@ -17,6 +17,9 @@ manager = subprocess.Popen(["openbox", "--sm-disable", "--config-file", str(proj
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 window = module["Settings"]()
 failures = []
+# The title follows the interface language since #145.
+SETTINGS_TITLES = {"Paramètres Winlux", "Parametres Winlux", "Winlux Settings",
+                   "Configuración de Winlux", "Winlux-Einstellungen"}
 
 def run(*args):
     return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT, timeout=10)
@@ -38,7 +41,7 @@ def check():
         found = []
         deadline = time.monotonic() + 30
         while time.monotonic() < deadline:
-            found = [key for key, (_, title) in rows().items() if title == "Parametres Winlux"]
+            found = [key for key, (_, title) in rows().items() if title in SETTINGS_TITLES]
             if found: break
             time.sleep(0.05)
         assert found, "Settings window did not map"
