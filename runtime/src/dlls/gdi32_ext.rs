@@ -1044,28 +1044,6 @@ pub unsafe extern "win64" fn create_font_indirect_w(
     })
 }
 
-// ── EnumFontFamilies (stub — renvoie 1, pas d'appel du callback) ──
-
-pub unsafe extern "win64" fn enum_font_families_ex_a(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _proc: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    1
-}
-
-pub unsafe extern "win64" fn enum_font_families_ex_w(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _proc: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    1
-}
-
 // ── GetCharWidth / ABC (stub) ──────────────────────────────────────
 
 pub unsafe extern "win64" fn get_char_width_32a(
@@ -1325,8 +1303,6 @@ pub fn exports() -> crate::dlls::Exports {
         "StretchDIBits" => fn stretch_di_bits,
         "CreateFontIndirectA" => fn create_font_indirect_a,
         "CreateFontIndirectW" => fn create_font_indirect_w,
-        "EnumFontFamiliesExA" => fn enum_font_families_ex_a,
-        "EnumFontFamiliesExW" => fn enum_font_families_ex_w,
         "GetCharWidth32A" => fn get_char_width_32a,
         "GetCharWidth32W" => fn get_char_width_32w,
         "GetCharWidthA" => fn get_char_width_32a,

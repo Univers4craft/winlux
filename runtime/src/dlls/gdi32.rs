@@ -1822,49 +1822,6 @@ pub unsafe extern "win64" fn get_text_metrics_w(hdc: usize, tm: *mut c_void) -> 
 }
 
 // =====================================================================
-// EnumFontFamiliesEx
-// =====================================================================
-
-pub unsafe extern "win64" fn enum_font_families_ex_a(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _callback: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    // Stub : ne rapporte aucune police
-    1
-}
-
-pub unsafe extern "win64" fn enum_font_families_ex_w(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _callback: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    1
-}
-
-pub unsafe extern "win64" fn enum_fonts_a(
-    _hdc: usize,
-    _name: *const u8,
-    _callback: usize,
-    _lparam: isize,
-) -> i32 {
-    1
-}
-
-pub unsafe extern "win64" fn enum_fonts_w(
-    _hdc: usize,
-    _name: *const u16,
-    _callback: usize,
-    _lparam: isize,
-) -> i32 {
-    1
-}
-
-// =====================================================================
 // GetTextFaceA/W
 // =====================================================================
 
@@ -2205,9 +2162,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GetCharWidth32A"=>fn get_char_width_32a, "GetCharWidth32W"=>fn get_char_width_32w,
         "GetCharABCWidthsA"=>fn get_char_abc_widths_a, "GetCharABCWidthsW"=>fn get_char_abc_widths_w,
         // --- Font enum ---
-        "EnumFontFamiliesExA"=>fn enum_font_families_ex_a,
-        "EnumFontFamiliesExW"=>fn enum_font_families_ex_w,
-        "EnumFontsA"=>fn enum_fonts_a, "EnumFontsW"=>fn enum_fonts_w,
         // --- Raster ops ---
         "PatBlt"=>fn pat_blt,
         "BitBlt"=>fn bit_blt, "StretchBlt"=>fn stretch_blt,
