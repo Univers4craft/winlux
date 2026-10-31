@@ -17,7 +17,7 @@ mkdir -p "$(dirname -- "$log")"
 
 set -- qemu-system-x86_64 \
     -m "${WINLUX_QEMU_MEMORY:-2048}" \
-    -smp "${WINLUX_QEMU_CPUS:-2}" \
+    -smp "${WINLUX_QEMU_CPUS:-2}" -cpu "${WINLUX_QEMU_CPU:-max}" \
     -accel tcg \
     -display none \
     -nic none \

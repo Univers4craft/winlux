@@ -74,9 +74,22 @@ jobs:
           done
           xvfb-run -a -s '-screen 0 1920x1080x24 -noreset' /usr/bin/python3 -B scripts/test-window-performance.py
 
+      - name: Autoriser KVM
+        # Without it QEMU falls back to TCG: the APT base install and the VM
+        # validations are then far slower than their timeouts.
+        run: |
+          if test -e /dev/kvm; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules
+            sudo udevadm trigger --name-match=kvm
+          fi
+          ls -l /dev/kvm || true
+
       - name: Construire l'ISO
         run: |
-          kernel=$(find /boot -maxdepth 1 -name 'vmlinuz-*' | sort -V | tail -1)
+          # The runner boots a cloud (Azure) kernel without built-in virtio
+          # disk support; the APT base VM and real PCs need the generic one.
+          kernel=$(find /boot -maxdepth 1 -name 'vmlinuz-*-generic' | sort -V | tail -1)
           test -n "$kernel"
           release=$(basename "$kernel" | sed 's/^vmlinuz-//')
           # Ubuntu restricts /boot to root; copy only the kernel, then build
@@ -116,6 +129,7 @@ jobs:
         with:
           name: validation-logs
           path: |
+            build/apt-base/bootstrap.log
             build/browser-vm.*/serial.log
             build/native-vm.*/serial.log
             build/native-vm.*/programs.log

@@ -81,14 +81,14 @@ log="$work/install.log"
         fi
         sleep 1
     done
-) | timeout 240 qemu-system-x86_64 -m "${WINLUX_QEMU_MEMORY:-6144}" -smp 2 -accel "$accel" -display none -monitor none -serial stdio -nic none -no-reboot \
+) | timeout 240 qemu-system-x86_64 -m "${WINLUX_QEMU_MEMORY:-6144}" -smp 2 -accel "$accel" -cpu max -display none -monitor none -serial stdio -nic none -no-reboot \
     -kernel "$stage/boot/vmlinuz" -initrd "$work/install-initramfs.gz" \
     -append 'console=ttyS0,115200 rootfstype=ramfs rdinit=/install-init panic=1 winlux.install-test=1' \
     -drive "file=$disk,format=raw,if=virtio" >"$log" 2>&1
 grep -q '^WINLUX_INSTALL_EXIT=0' "$log" || { tail -n 60 "$log"; exit 1; }
 for mode in bios uefi; do
     log="$work/$mode.log"
-    set -- qemu-system-x86_64 -m 2048 -smp 2 -accel "$accel" -display none -monitor none -serial stdio -nic none -no-reboot -drive "file=$disk,format=raw,if=virtio"
+    set -- qemu-system-x86_64 -m 2048 -smp 2 -accel "$accel" -cpu max -display none -monitor none -serial stdio -nic none -no-reboot -drive "file=$disk,format=raw,if=virtio"
     if test "$mode" = uefi; then
         cp "${WINLUX_OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}" "$work/vars.fd"
         set -- "$@" -machine q35 -drive "if=pflash,format=raw,unit=0,readonly=on,file=${WINLUX_OVMF:-/usr/share/OVMF/OVMF_CODE_4M.fd}" -drive "if=pflash,format=raw,unit=1,file=$work/vars.fd"
