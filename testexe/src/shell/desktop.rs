@@ -94,6 +94,9 @@ const TOAST_MS: i32 = 4500;
 static mut NET_PANEL: bool = false;
 static mut NET_HOVER: i32 = -1;
 static mut NET_SCAN_REQUESTED: bool = false;
+static mut VOL_PANEL: bool = false;
+static mut VOL_HOVER: i32 = -1;
+static mut VOL_SLIDER_DRAG: bool = false;
 /// Données réseau lues depuis Z:\run\winlux\networks.txt.
 /// Chaque entrée : SSID, signal (0-100), sécurité, en cours d'utilisation.
 static mut NET_ENTRIES: [NetEntry; 16] = [NetEntry::EMPTY; 16];
@@ -309,7 +312,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 30] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 32] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
             (b"\xC9\x64iteur", b"mousepad", 1),
@@ -340,6 +343,8 @@ fn init_apps() {
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
             (b"Gestionnaire des t\xE2ches", b"taskmgr", 9),
             (b"Nettoyage de disque", b"diskcleaner", 9),
+            (b"Observateur d'\xE9v\xE9nements", b"eventviewer", 9),
+            (b"Restauration syst\xE8me", b"restore", 9),
         ];
         for (name, exec, cat) in apps.iter() {
             if ALL_APPS_COUNT < 64 {
@@ -516,6 +521,8 @@ unsafe fn set_start(open: bool) {
     }
     NET_PANEL = false;
     NET_HOVER = -1;
+    VOL_PANEL = false;
+    VOL_HOVER = -1;
     START_ANIM = now();
     if open {
         START_OPEN = true;
@@ -1290,6 +1297,8 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(wm::APP_DISKMGR) => Glyph::Drive,
+            Some(wm::APP_EVENTVIEWER) => Glyph::Details,
+            Some(wm::APP_RESTORE) => Glyph::Refresh,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1606,6 +1615,14 @@ unsafe fn launch(what: Launch) {
             }
             if cmd == b"diskmgr" {
                 wm::open(wm::APP_DISKMGR);
+                return;
+            }
+            if cmd == b"eventviewer" {
+                wm::open(wm::APP_EVENTVIEWER);
+                return;
+            }
+            if cmd == b"restore" {
+                wm::open(wm::APP_RESTORE);
                 return;
             }
             let mut wcmd = [0u16; 256];
@@ -2752,6 +2769,103 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     );
 }
 
+// ---------- Panneau volume (flyout mélangeur) ----------
+
+const VOL_PANEL_W: i32 = 320;
+
+unsafe fn vol_panel_rect(l: &Layout) -> Rect {
+    let h = 280;
+    let tray = l.w - 12 - 92 - 96;
+    let x = (tray + 24).min(l.w - VOL_PANEL_W - 12);
+    let y = l.bar_top - 12 - h;
+    rect(x, y, x + VOL_PANEL_W, y + h)
+}
+
+unsafe fn draw_vol_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if !VOL_PANEL {
+        return;
+    }
+    let r = vol_panel_rect(l);
+    let x = r.left;
+    let y = r.top;
+    let w = r.right - r.left;
+    let h = r.bottom - r.top;
+    panel(hdc, b, x, y, x + w, y + h, 8, rgb(0x24, 0x27, 0x2F), rgb(0x3A, 0x3F, 0x4A));
+
+    // Icône haut-parleur et titre
+    draw_volume(hdc, b, x + 16, y + 16, VOLUME_LEVEL);
+    text(hdc, f.semibold, rgb(0xF2, 0xF2, 0xF2), x + 48, y + 18, b"Volume");
+
+    // Niveau affiché
+    let mut pct = [0u8; 4];
+    let v = VOLUME_LEVEL.min(100);
+    let plen = if v >= 100 {
+        pct[0] = b'1'; pct[1] = b'0'; pct[2] = b'0'; pct[3] = b'%'; 4
+    } else if v >= 10 {
+        pct[0] = b'0' + (v / 10) as u8; pct[1] = b'0' + (v % 10) as u8; pct[2] = b'%'; 3
+    } else {
+        pct[0] = b'0' + v as u8; pct[1] = b'%'; 2
+    };
+    text(hdc, f.body, rgb(0x9A, 0xA3, 0xAE), x + w - 50, y + 18, &pct[..plen]);
+
+    // Barre de volume (slider)
+    let bar_x = x + 16;
+    let bar_y = y + 56;
+    let bar_w = w - 32;
+    round_rect(hdc, b, bar_x, bar_y + 4, bar_x + bar_w, bar_y + 12, 4, rgb(0x3A, 0x3F, 0x4A));
+    let fill_w = bar_w * v as i32 / 100;
+    if fill_w > 0 {
+        round_rect(hdc, b, bar_x, bar_y + 4, bar_x + fill_w, bar_y + 12, 4, pal().accent);
+    }
+    // Curseur
+    let knob_x = bar_x + fill_w;
+    ellipse(hdc, b, knob_x - 7, bar_y, knob_x + 7, bar_y + 16, rgb(0xF2, 0xF2, 0xF2));
+
+    // Séparateur
+    let sep_y = bar_y + 32;
+    fill(hdc, b, x + 1, sep_y, x + w - 1, sep_y + 1, rgb(0x3A, 0x3F, 0x4A));
+
+    // Applications (simulé à partir des fenêtres ouvertes)
+    text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), x + 16, sep_y + 10, b"Applications");
+    let mut ay = sep_y + 30;
+    let mut drawn = 0;
+    for app in 0..wm::APP_COUNT {
+        if !wm::is_open(app) || drawn >= 4 {
+            continue;
+        }
+        let name = wm::title_of(app);
+        let hover = VOL_HOVER == 200 + app as i32;
+        if hover {
+            round_rect(hdc, b, x + 8, ay - 2, x + w - 8, ay + 26, 4, rgb(0x2E, 0x33, 0x3D));
+        }
+        glyph(hdc, b, f, wm::glyph_of(app), x + 16, ay + 2, 16);
+        text_fit(hdc, f.body, 13, rgb(0xF2, 0xF2, 0xF2), x + 40, ay + 4, name, w / 2 - 30);
+        // Mini barre de volume par app (100% par défaut)
+        let app_bar_x = x + w / 2 + 20;
+        let app_bar_w = w / 2 - 50;
+        round_rect(hdc, b, app_bar_x, ay + 8, app_bar_x + app_bar_w, ay + 14, 3, rgb(0x3A, 0x3F, 0x4A));
+        round_rect(hdc, b, app_bar_x, ay + 8, app_bar_x + app_bar_w, ay + 14, 3, pal().accent);
+        ay += 32;
+        drawn += 1;
+    }
+    if drawn == 0 {
+        text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), x + 16, ay + 4, b"Aucune application ouverte");
+    }
+
+    // Boutons en bas : Muet + Mélangeur
+    let btn_y = r.bottom - 44;
+    fill(hdc, b, x + 1, btn_y - 1, x + w - 1, btn_y, rgb(0x3A, 0x3F, 0x4A));
+    let mute_r = rect(x + 16, btn_y + 4, x + w / 2 - 4, btn_y + 34);
+    round_rect(hdc, b, mute_r.left, mute_r.top, mute_r.right, mute_r.bottom, 4,
+        if VOL_HOVER == 300 { rgb(0x3A, 0x3F, 0x4A) } else { rgb(0x31, 0x35, 0x3F) });
+    text_centered(hdc, f.small, 11, rgb(0xC5, 0xC5, 0xC5), (mute_r.left + mute_r.right) / 2, mute_r.top + 7,
+        if VOLUME_LEVEL == 0 { b"R\xE9tablir" } else { b"Muet" });
+    let mix_r = rect(x + w / 2 + 4, btn_y + 4, x + w - 16, btn_y + 34);
+    round_rect(hdc, b, mix_r.left, mix_r.top, mix_r.right, mix_r.bottom, 4,
+        if VOL_HOVER == 301 { rgb(0x3A, 0x3F, 0x4A) } else { rgb(0x31, 0x35, 0x3F) });
+    text_centered(hdc, f.small, 11, rgb(0xC5, 0xC5, 0xC5), (mix_r.left + mix_r.right) / 2, mix_r.top + 7, b"M\xE9langeur");
+}
+
 // ---------- Glisser-déposer et collage sur le bureau ----------
 
 pub unsafe fn handle_file_drop(do_copy: bool) {
@@ -3007,6 +3121,7 @@ pub unsafe fn draw(hdc: Handle) {
         search_overlay(hdc, &mut b, &f, &l);
         notifications::draw(hdc, &mut b, &f, l.w, l.bar_top);
         draw_net_panel(hdc, &mut b, &f, &l);
+        draw_vol_panel(hdc, &mut b, &f, &l);
         weather::draw_panel(hdc, &mut b, &f, l.bar_top, l.w);
         draw_toast(hdc, &mut b, &f, &l);
         // Overlay de fermeture.
@@ -3263,22 +3378,32 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             weather::toggle();
             notifications::set_open(false);
             NET_PANEL = false;
+            VOL_PANEL = false;
         } else if x >= tray - 28 && x < tray {
             notifications::toggle();
             weather::PANEL_OPEN = false;
             NET_PANEL = false;
+            VOL_PANEL = false;
         } else if x >= tray && x < tray + 24 {
             NET_PANEL = !NET_PANEL;
+            VOL_PANEL = false;
             notifications::set_open(false);
             if NET_PANEL && !NET_SCAN_REQUESTED {
                 NET_SCAN_REQUESTED = true;
                 crate::settings::control(c"network-scan");
             }
-        } else if x >= tray + 24 && x < tray + 88 {
+        } else if x >= tray + 24 && x < tray + 52 {
+            VOL_PANEL = !VOL_PANEL;
+            VOL_HOVER = -1;
+            NET_PANEL = false;
+            notifications::set_open(false);
+        } else if x >= tray + 52 && x < tray + 88 {
             crate::settings::open_page(3);
+            VOL_PANEL = false;
         } else if x >= l.w - 12 - 92 {
             notifications::toggle();
             NET_PANEL = false;
+            VOL_PANEL = false;
         } else {
             return;
         }
@@ -3371,6 +3496,41 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
         } else {
             NET_PANEL = false;
             NET_HOVER = -1;
+        }
+        repaint(hwnd);
+        return;
+    }
+    if VOL_PANEL && y < l.bar_top {
+        let pr = vol_panel_rect(&l);
+        if inside(&pr, x, y) {
+            let w = pr.right - pr.left;
+            let btn_y = pr.bottom - 44;
+            // Slider click: adjust volume
+            let bar_x = pr.left + 16;
+            let bar_w = w - 32;
+            let bar_y = pr.top + 56;
+            if y >= bar_y && y < bar_y + 20 && x >= bar_x && x < bar_x + bar_w {
+                let v = ((x - bar_x) * 100 / bar_w).max(0).min(100) as u32;
+                VOLUME_LEVEL = v;
+                if v <= 5 {
+                    crate::settings::control(c"volume-mute");
+                } else {
+                    // Set volume via repeated up/down to approximate
+                    crate::settings::control(c"volume-set");
+                }
+            }
+            // Mute button
+            if y >= btn_y + 4 && y < btn_y + 34 && x >= pr.left + 16 && x < pr.left + w / 2 - 4 {
+                crate::settings::control(c"volume-mute");
+            }
+            // Mixer button -> open advanced sound settings
+            if y >= btn_y + 4 && y < btn_y + 34 && x >= pr.left + w / 2 + 4 && x < pr.right - 16 {
+                crate::settings::open_page(16);
+                VOL_PANEL = false;
+            }
+        } else {
+            VOL_PANEL = false;
+            VOL_HOVER = -1;
         }
         repaint(hwnd);
         return;
@@ -3618,6 +3778,33 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         };
         if nh != NET_HOVER {
             NET_HOVER = nh;
+            rp = true;
+        }
+    }
+    // Volume panel hover
+    if VOL_PANEL {
+        let pr = vol_panel_rect(&l);
+        let vh = if inside(&pr, x, y) {
+            let w = pr.right - pr.left;
+            let btn_y = pr.bottom - 44;
+            if y >= btn_y + 4 && y < btn_y + 34 {
+                if x < pr.left + w / 2 - 4 { 300 } else if x >= pr.left + w / 2 + 4 { 301 } else { -1 }
+            } else {
+                let sep_y = pr.top + 88;
+                let mut ay = sep_y + 30;
+                let mut found = -1i32;
+                for app in 0..wm::APP_COUNT {
+                    if !wm::is_open(app) { continue; }
+                    if y >= ay - 2 && y < ay + 26 { found = 200 + app as i32; break; }
+                    ay += 32;
+                }
+                found
+            }
+        } else {
+            -1
+        };
+        if vh != VOL_HOVER {
+            VOL_HOVER = vh;
             rp = true;
         }
     }

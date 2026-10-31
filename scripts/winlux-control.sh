@@ -173,7 +173,7 @@ perform() {
             elif have amixer; then
                 case "$action" in volume-up) amixer set Master 5%+ ;; volume-down) amixer set Master 5%- ;; *) amixer set Master toggle ;; esac
             else echo 'Aucun mixeur audio installe.' >&2; return 1; fi ;;
-        keyboard-fr|keyboard-us)
+        keyboard-fr|keyboard-us|keyboard-de)
             layout=${action#keyboard-}
             have setxkbmap || { echo 'setxkbmap indisponible' >&2; return 1; }
             setxkbmap -layout "$layout" || return
@@ -258,6 +258,12 @@ perform() {
             /usr/bin/winlux-close-session || return
             sync || return
             "$action" ;;
+        journal-status|journal-list|journal-errors|journal-crashes|journal-clear|journal-rotate)
+            winlux-journal "${action#journal-}" "$2" ;;
+        journal-export) winlux-journal export "$2" ;;
+        restore-create) winlux-restore create "$2" ;;
+        restore-list|restore-status) winlux-restore "${action#restore-}" ;;
+        restore-restore|restore-delete) winlux-restore "${action#restore-}" "$2" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
     esac
 }

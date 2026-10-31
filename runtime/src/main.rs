@@ -10,6 +10,7 @@ mod pe;
 mod printf;
 mod process;
 mod profiles;
+pub mod quality;
 mod thunks;
 
 use std::path::PathBuf;
@@ -42,6 +43,9 @@ fn main() {
         }
     };
     backup_registry();
+    if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
+        crash::set_exe_name(name);
+    }
     profiles::apply(&exe);
     if let Some(target) = managed::detect(&exe, &source) {
         log_info!(
