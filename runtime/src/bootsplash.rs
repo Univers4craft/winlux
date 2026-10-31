@@ -343,7 +343,10 @@ mod tests {
         let y = l.logo_y + l.size / 4;
         let left = background_pixel(&l, l.logo_x + l.size / 2 - 5, y);
         let right = background_pixel(&l, l.logo_x + l.size / 2 + 5, y);
-        assert!((left >> 16) & 0xFF > left & 0xFF / 2, "violet : {left:06x}");
+        assert!(
+            (left >> 16) & 0xFF > (left & 0xFF) / 2,
+            "violet : {left:06x}"
+        );
         assert!(
             right & 0xFF > 0xC0 && (right >> 16) & 0xFF < 0x90,
             "cyan : {right:06x}"
