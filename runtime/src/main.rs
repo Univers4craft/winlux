@@ -17,6 +17,7 @@ mod mounts;
 mod netdrive;
 mod paths;
 mod pe;
+mod power;
 mod printf;
 mod process;
 mod profiles;
@@ -50,6 +51,10 @@ fn main() {
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
+    }
+    if exe == "--power" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(power::cli::main(&rest));
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());
