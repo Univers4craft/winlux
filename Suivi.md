@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **199**
+- Réalisé : **202**
 - À faire ou en cours : **44**
-- Total : **243**
-- Progression : **81.9%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126, #127 et #111, issues #10 à #98)
+- Total : **246**
+- Progression : **82.1%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126, #127, #111 et #119, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -160,6 +160,9 @@
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
+- [x] Historique des fichiers maison : dossiers, destination (disque externe ou partage SMB/NFS), fréquence, rétention, instantanés incrémentaux par liens physiques, restauration des versions et lien vers les points de restauration système (`winlux-backup`, `scripts/test-backup.sh`).
+- [x] Multi-utilisateur : verrouillage, changement rapide d'utilisateur sans fermer la session, sessions simultanées sur un Xorg/VT par compte (`winlux-sessions`, `scripts/test-sessions.sh`).
+- [x] Bureau à distance maison : serveur RFB `winlux-remote` (capture X11, clavier/souris XTEST, curseur), authentification par compte Winlux chiffrée RSA-AES (TigerVNC/RealVNC), page « Bureau à distance » des Paramètres (`scripts/test-remote.sh`).
 
 ### Priorité 1 — Fiabiliser le runtime
 

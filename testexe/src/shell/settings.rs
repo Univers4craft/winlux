@@ -28,13 +28,15 @@ pub const PAGE_GRAPHICS: usize = 24;
 pub const PAGE_REPORT: usize = 25;
 /// Page « Imprimantes et scanners » (winspool + CUPS).
 pub const PAGE_PRINTERS: usize = 26;
-const PAGE_COUNT: usize = 27;
+/// Page « Bureau à distance » : état publié par winlux-remote-config.
+const PAGE_REMOTE: usize = 27;
+const PAGE_COUNT: usize = 28;
 /// Appareils Bluetooth affichés (une ligne de boutons chacun).
 const BT_ROWS: usize = 5;
 /// Ordre d'affichage du menu : la personnalisation suit l'apparence,
 /// l'alimentation suit le son et la batterie.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22, 25, 26,
+    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22, 25, 26, 27,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -65,6 +67,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_GRAPHICS),
         tr(S_REPORT_PAGE),
         tr(S_PRINTERS),
+        tr(S_REMOTE_DESKTOP),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -87,6 +90,7 @@ static mut ACTION: Buffer = EMPTY;
 static mut LOG: Buffer = EMPTY;
 static mut UPDATES: Buffer = EMPTY;
 static mut PROGRESS: Buffer = EMPTY;
+static mut REMOTE: Buffer = EMPTY;
 static mut BUILD_INFO: Buffer = EMPTY;
 static mut SYSUPDATES: Buffer = EMPTY;
 static mut BLUETOOTH: Buffer = EMPTY;
@@ -412,6 +416,9 @@ pub unsafe fn system_tick() -> bool {
         1
     };
     changed |= read(c"Z:\\run\\winlux\\update-progress", &mut PROGRESS);
+    if PAGE == PAGE_REMOTE {
+        changed |= read(c"Z:\\run\\winlux\\remote.txt", &mut REMOTE);
+    }
     if PAGE == PAGE_GRAPHICS {
         changed |= crate::gpuinfo::refresh(false);
     }
@@ -741,6 +748,13 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (15, 4) => unsafe { !crate::explorer::show_hidden() },
         (15, 6) => unsafe { crate::explorer::show_ext() },
         (15, 7) => unsafe { !crate::explorer::show_ext() },
+        (PAGE_REMOTE, 0) => remote(b"enabled") == b"1",
+        (PAGE_REMOTE, 1) => remote(b"enabled") != b"1",
+        (PAGE_REMOTE, 3) => remote(b"view_only") != b"1",
+        (PAGE_REMOTE, 4) => remote(b"view_only") == b"1",
+        (PAGE_REMOTE, 5) => remote(b"legacy") == b"1",
+        (PAGE_REMOTE, 13) => remote(b"port") == b"5900",
+        (PAGE_REMOTE, id @ 21..=26) => remote_account(id as usize - 21).is_some_and(|(_, allowed)| allowed),
         (PAGE_SYSUPDATE, 0) => value(b"sysupdate_mode") == b"auto",
         (PAGE_SYSUPDATE, 1) => !matches!(value(b"sysupdate_mode"), b"auto" | b"scheduled"),
         (PAGE_SYSUPDATE, 2) => value(b"sysupdate_mode") == b"scheduled",
@@ -1024,7 +1038,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         while end > 0 && text_width(&name[..end], 13) > r.right - r.left - 16 {
             end -= 1;
         }
-        text(g.hdc, g.f.body, p.text, r.left + 8, r.top + 9, &name[..end]);
+        // Centré dans la rangée, même quand les pages se resserrent.
+        let ty = r.top + (r.bottom - r.top - 18) / 2;
+        text(g.hdc, g.f.body, p.text, r.left + 8, ty, &name[..end]);
     }
     text(
         g.hdc,
@@ -1782,6 +1798,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 ay += 60;
             }
         }
+        PAGE_REMOTE => draw_remote(g, &c),
         PAGE_SYSUPDATE => draw_sysupdate(g, &c),
         PAGE_PRIVACY => draw_privacy(g, &c),
         PAGE_CPU => crate::settings_cpu::draw(g, &c),
@@ -1819,6 +1836,101 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     );
 }
 
+unsafe fn remote(key: &[u8]) -> &'static [u8] {
+    field(REMOTE.get(), key)
+}
+/// i-ème compte Winlux qui a un mot de passe : (nom, autorisé à distance).
+unsafe fn remote_account(i: usize) -> Option<(&'static [u8], bool)> {
+    let line = REMOTE
+        .get()
+        .split(|&v| v == b'\n')
+        .filter_map(|l| l.strip_prefix(b"account="))
+        .filter(|l| l.ends_with(b"|1"))
+        .nth(i)?;
+    let name = line.split(|&v| v == b'|').next()?;
+    let allowed = remote(b"allowed").split(|&v| v == b',').any(|a| a == name);
+    Some((name, allowed))
+}
+fn join(parts: &[&[u8]], out: &mut [u8]) -> usize {
+    let mut n = 0;
+    for part in parts {
+        let k = part.len().min(out.len() - n);
+        out[n..n + k].copy_from_slice(&part[..k]);
+        n += k;
+    }
+    n
+}
+unsafe fn draw_remote(g: &mut Gfx, c: &Rect) {
+    let address = match remote(b"address") {
+        b"" => tr(S_REMOTE_THIS_COMPUTER),
+        a => a,
+    };
+    let mut state = [0u8; 200];
+    let clients = remote(b"clients");
+    let n = if remote(b"enabled") != b"1" {
+        join(&[tr(S_REMOTE_OFF)], &mut state)
+    } else if remote(b"running") != b"1" {
+        join(&[tr(S_REMOTE_NOT_RUNNING)], &mut state)
+    } else if clients.is_empty() || clients == b"0" {
+        join(&[tr(S_REMOTE_IDLE)], &mut state)
+    } else {
+        let who = REMOTE
+            .get()
+            .split(|&v| v == b'\n')
+            .filter_map(|l| l.strip_prefix(b"client="))
+            .next()
+            .unwrap_or(b"");
+        let mut parts = who.split(|&v| v == b'|');
+        let (user, ip) = (parts.next().unwrap_or(b""), parts.next().unwrap_or(b""));
+        join(
+            &[tr(S_REMOTE_CONNECTED), clients, b" (", user, tr(S_REMOTE_FROM), ip, b")"],
+            &mut state,
+        )
+    };
+    row(g, c, 44, tr(S_REMOTE_DESKTOP), &state[..n]);
+    button(g, c, 0, 0, tr(S_REMOTE_ENABLE), 0);
+    button(g, c, 0, 1, tr(S_REMOTE_DISABLE), 1);
+    button(g, c, 0, 2, tr(S_REMOTE_REFRESH), 2);
+    button(g, c, 1, 0, tr(S_REMOTE_FULL_CONTROL), 3);
+    button(g, c, 1, 1, tr(S_REMOTE_VIEW_ONLY), 4);
+    button(g, c, 1, 2, tr(S_REMOTE_LEGACY), 5);
+    let mut addr = [0u8; 200];
+    let n = if remote(b"legacy") == b"1" {
+        join(
+            &[
+                address,
+                b":",
+                remote(b"port"),
+                tr(S_REMOTE_LEGACY_PASSWORD),
+                remote(b"legacy_password"),
+            ],
+            &mut addr,
+        )
+    } else if remote(b"fingerprint").is_empty() {
+        join(&[address, b":", remote(b"port")], &mut addr)
+    } else {
+        join(
+            &[address, b":", remote(b"port"), tr(S_REMOTE_FINGERPRINT), remote(b"fingerprint")],
+            &mut addr,
+        )
+    };
+    row(g, c, 214, tr(S_REMOTE_ADDRESS), &addr[..n]);
+    button(g, c, 4, 0, b"Port -", 12);
+    button(g, c, 4, 1, b"Port 5900", 13);
+    button(g, c, 4, 2, b"Port +", 14);
+    row(
+        g,
+        c,
+        346,
+        tr(S_REMOTE_ACCOUNTS),
+        tr(S_REMOTE_ACCOUNTS_HINT),
+    );
+    for i in 0..6 {
+        if let Some((name, _)) = remote_account(i) {
+            button(g, c, 7 + i as i32 / 3, i as i32 % 3, name, 21 + i as i32);
+        }
+    }
+}
 /// Petit tampon de texte Latin-1 pour composer les libellés dynamiques.
 struct Line {
     bytes: [u8; 96],
@@ -1998,8 +2110,8 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
             -1
         };
     }
-    // Dix rangées de trois boutons (Signaler un problème va jusqu'à 9).
-    for i in 0..30 {
+    // Douze rangées de trois boutons (Signaler un problème va jusqu'à 9, Bureau à distance jusqu'à 11).
+    for i in 0..36 {
         let r = button_rect(&c, i / 3, i % 3);
         if r.bottom <= c.bottom - 24 && inside(&r, x, y) {
             return i;
@@ -2064,6 +2176,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             SCROLL = 0;
             HOVER = -1;
             LAST_POLL = 0;
+            if i == PAGE_REMOTE {
+                control(c"remote-status");
+            }
             system_tick();
             return true;
         }
@@ -2322,6 +2437,32 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (16, 6) => Some(c"volume-down"),
         (16, 7) => Some(c"volume-mute"),
         (16, 8) => Some(c"volume-up"),
+        (PAGE_REMOTE, 0) => Some(c"remote-enable"),
+        (PAGE_REMOTE, 1) => Some(c"remote-disable"),
+        (PAGE_REMOTE, 2) => Some(c"remote-status"),
+        (PAGE_REMOTE, 3) => Some(c"remote-full-control"),
+        (PAGE_REMOTE, 4) => Some(c"remote-view-only"),
+        (PAGE_REMOTE, 5) => Some(if remote(b"legacy") == b"1" {
+            c"remote-legacy-off"
+        } else {
+            c"remote-legacy-on"
+        }),
+        (PAGE_REMOTE, 12) => Some(c"remote-port-down"),
+        (PAGE_REMOTE, 13) => Some(c"remote-port-default"),
+        (PAGE_REMOTE, 14) => Some(c"remote-port-up"),
+        (PAGE_REMOTE, id @ 21..=26) => {
+            if let Some((name, allowed)) = remote_account(id as usize - 21) {
+                let mut cmd = [0u8; 64];
+                let verb: &[u8] = if allowed { b"remote-deny " } else { b"remote-allow " };
+                let n = name.len().min(40);
+                cmd[..verb.len()].copy_from_slice(verb);
+                cmd[verb.len()..verb.len() + n].copy_from_slice(&name[..n]);
+                if let Ok(c) = core::ffi::CStr::from_bytes_until_nul(&cmd) {
+                    control(c);
+                }
+            }
+            return true;
+        }
         (14, 0..=3) => {
             unsafe {
                 CURRENT_LANG = match hit(f, x, y) {

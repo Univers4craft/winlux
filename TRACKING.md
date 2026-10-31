@@ -288,7 +288,7 @@
 - [ ] Gestionnaire d'archives. _(source: ROADMAP-SSD.md)_
 - [ ] Gestionnaire des tâches permettant de voir et arrêter une application bloquée. _(source: ROADMAP-SSD.md)_
 - [ ] Hibernation lorsque le matériel et le stockage la permettent. _(source: ROADMAP-SSD.md)_
-- [ ] Historique des fichiers pour retrouver une version précédente d'un _(source: ROADMAP-SSD.md)_
+- [x] Historique des fichiers pour retrouver une version précédente d'un _(source: ROADMAP-SSD.md)_
 - [ ] Historique des installations et des erreurs. _(source: ROADMAP-SSD.md)_
 - [ ] Identification et protection du support contenant l'installateur. _(source: ROADMAP-SSD.md)_
 - [ ] Imprimantes et scanners. _(source: ROADMAP-SSD.md)_

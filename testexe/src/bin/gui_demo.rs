@@ -26,6 +26,8 @@ mod diskmgr;
 mod eventviewer;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/filehistory.rs"]
+mod filehistory;
 #[path = "../shell/fonts.rs"]
 mod fonts;
 #[path = "../shell/thumbs.rs"]
