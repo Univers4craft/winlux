@@ -738,15 +738,11 @@ fn default_rect(app: usize) -> Rect {
         _ => (1040, 700),
     };
     let (w, h) = (w.min(ww - 40).max(480), h.min(wh - 40).max(320));
-    let offset = app as i32 * 36;
-    let x = wk.left + (ww - w) / 2 + offset - 18;
-    let y = wk.top + (wh - h) / 2 + offset - 18;
-    rect(
-        x.max(wk.left),
-        y.max(wk.top),
-        x.max(wk.left) + w,
-        y.max(wk.top) + h,
-    )
+    // Décalage en cascade, sans jamais sortir de la zone de travail.
+    let offset = (app as i32 % 6) * 36;
+    let x = (wk.left + (ww - w) / 2 + offset - 18).min(wk.right - w).max(wk.left);
+    let y = (wk.top + (wh - h) / 2 + offset - 18).min(wk.bottom - h).max(wk.top);
+    rect(x, y, x + w, y + h)
 }
 
 /// Ouvre l'application, ou la ramène au premier plan si elle est déjà ouverte.

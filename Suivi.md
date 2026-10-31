@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **124**
+- Réalisé : **127**
 - À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Total : **153**
+- Progression : **83.0%**
 
 ## À FAIRE (par priorité)
 
@@ -89,6 +89,9 @@
 - [x] Ajouter les fichiers binfmt, MIME et `.desktop`.
 - [x] Ajouter un premier script de génération ISO.
 - [x] Ajouter une base de thème visuel inspirée de Windows 11.
+- [x] Historique des fichiers maison : dossiers, destination (disque externe ou partage SMB/NFS), fréquence, rétention, instantanés incrémentaux par liens physiques, restauration des versions et lien vers les points de restauration système (`winlux-backup`, `scripts/test-backup.sh`).
+- [x] Multi-utilisateur : verrouillage, changement rapide d'utilisateur sans fermer la session, sessions simultanées sur un Xorg/VT par compte (`winlux-sessions`, `scripts/test-sessions.sh`).
+- [x] Bureau à distance maison : serveur RFB `winlux-remote` (capture X11, clavier/souris XTEST, curseur), authentification par compte Winlux chiffrée RSA-AES (TigerVNC/RealVNC), page « Bureau à distance » des Paramètres (`scripts/test-remote.sh`).
 
 ### Priorité 1 — Fiabiliser le runtime
 

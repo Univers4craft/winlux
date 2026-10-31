@@ -7,7 +7,7 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 17] = [
+const PAGES: [&[u8]; 18] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -25,7 +25,10 @@ const PAGES: [&[u8]; 17] = [
     b"Localisation",
     b"Gestionnaire de fichiers",
     b"Son avanc\xE9",
+    b"Bureau \xE0 distance",
 ];
+/// Page « Bureau à distance » : état publié par winlux-remote-config.
+const PAGE_REMOTE: usize = 17;
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
 struct Buffer {
@@ -46,6 +49,7 @@ static mut ACTION: Buffer = EMPTY;
 static mut LOG: Buffer = EMPTY;
 static mut UPDATES: Buffer = EMPTY;
 static mut PROGRESS: Buffer = EMPTY;
+static mut REMOTE: Buffer = EMPTY;
 static mut BUILD_INFO: Buffer = EMPTY;
 static mut SELECTED_MODE: usize = 0;
 static mut LAST_ANIMATION: u32 = 0;
@@ -299,6 +303,9 @@ pub unsafe fn system_tick() -> bool {
     );
     changed |= read(c"Z:\\run\\winlux\\updates.txt", &mut UPDATES);
     changed |= read(c"Z:\\run\\winlux\\update-progress", &mut PROGRESS);
+    if PAGE == PAGE_REMOTE {
+        changed |= read(c"Z:\\run\\winlux\\remote.txt", &mut REMOTE);
+    }
     if PAGE == 9 {
         changed |= read(c"Z:\\usr\\share\\winlux\\BUILD-INFO", &mut BUILD_INFO);
     }
@@ -454,6 +461,13 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (15, 4) => unsafe { !crate::explorer::show_hidden() },
         (15, 6) => unsafe { crate::explorer::show_ext() },
         (15, 7) => unsafe { !crate::explorer::show_ext() },
+        (PAGE_REMOTE, 0) => remote(b"enabled") == b"1",
+        (PAGE_REMOTE, 1) => remote(b"enabled") != b"1",
+        (PAGE_REMOTE, 3) => remote(b"view_only") != b"1",
+        (PAGE_REMOTE, 4) => remote(b"view_only") == b"1",
+        (PAGE_REMOTE, 5) => remote(b"legacy") == b"1",
+        (PAGE_REMOTE, 13) => remote(b"port") == b"5900",
+        (PAGE_REMOTE, id @ 21..=26) => remote_account(id as usize - 21).is_some_and(|(_, allowed)| allowed),
         _ => false,
     };
     let primary = PAGE == 7 && id == 1 || PAGE == 8 && id == 2 || PAGE == 14 && id == 14;
@@ -1481,6 +1495,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 ay += 60;
             }
         }
+        PAGE_REMOTE => draw_remote(g, &c),
         _ => {}
     }
     let notice = if PAGE == 10 {
@@ -1504,6 +1519,97 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     );
 }
 
+unsafe fn remote(key: &[u8]) -> &'static [u8] {
+    field(REMOTE.get(), key)
+}
+/// i-ème compte Winlux qui a un mot de passe : (nom, autorisé à distance).
+unsafe fn remote_account(i: usize) -> Option<(&'static [u8], bool)> {
+    let line = REMOTE
+        .get()
+        .split(|&v| v == b'\n')
+        .filter_map(|l| l.strip_prefix(b"account="))
+        .filter(|l| l.ends_with(b"|1"))
+        .nth(i)?;
+    let name = line.split(|&v| v == b'|').next()?;
+    let allowed = remote(b"allowed").split(|&v| v == b',').any(|a| a == name);
+    Some((name, allowed))
+}
+fn join(parts: &[&[u8]], out: &mut [u8]) -> usize {
+    let mut n = 0;
+    for part in parts {
+        let k = part.len().min(out.len() - n);
+        out[n..n + k].copy_from_slice(&part[..k]);
+        n += k;
+    }
+    n
+}
+unsafe fn draw_remote(g: &mut Gfx, c: &Rect) {
+    let mut state = [0u8; 200];
+    let clients = remote(b"clients");
+    let n = if remote(b"enabled") != b"1" {
+        join(&[b"D\xE9sactiv\xE9 : personne ne peut prendre le contr\xF4le de cet ordinateur."], &mut state)
+    } else if remote(b"running") != b"1" {
+        join(&[b"Activ\xE9, mais le serveur ne r\xE9pond pas : consultez le journal."], &mut state)
+    } else if clients.is_empty() || clients == b"0" {
+        join(&[b"Activ\xE9 \x95 aucune connexion en cours"], &mut state)
+    } else {
+        let who = REMOTE
+            .get()
+            .split(|&v| v == b'\n')
+            .filter_map(|l| l.strip_prefix(b"client="))
+            .next()
+            .unwrap_or(b"");
+        let mut parts = who.split(|&v| v == b'|');
+        let (user, ip) = (parts.next().unwrap_or(b""), parts.next().unwrap_or(b""));
+        join(
+            &[b"Activ\xE9 \x95 connexion(s) : ", clients, b" (", user, b" depuis ", ip, b")"],
+            &mut state,
+        )
+    };
+    row(g, c, 44, b"Bureau \xE0 distance", &state[..n]);
+    button(g, c, 0, 0, b"Activer", 0);
+    button(g, c, 0, 1, b"D\xE9sactiver", 1);
+    button(g, c, 0, 2, b"Actualiser", 2);
+    button(g, c, 1, 0, b"Contr\xF4le complet", 3);
+    button(g, c, 1, 1, b"Affichage seul", 4);
+    button(g, c, 1, 2, b"Ancien mot de passe VNC", 5);
+    let mut addr = [0u8; 200];
+    let n = if remote(b"legacy") == b"1" {
+        join(
+            &[
+                remote(b"address"),
+                b":",
+                remote(b"port"),
+                b" \x95 mot de passe VNC non chiffr\xE9 : ",
+                remote(b"legacy_password"),
+            ],
+            &mut addr,
+        )
+    } else if remote(b"fingerprint").is_empty() {
+        join(&[remote(b"address"), b":", remote(b"port")], &mut addr)
+    } else {
+        join(
+            &[remote(b"address"), b":", remote(b"port"), b" \x95 empreinte ", remote(b"fingerprint")],
+            &mut addr,
+        )
+    };
+    row(g, c, 214, b"Adresse \xE0 saisir dans TigerVNC ou RealVNC (chiffrement RSA-AES)", &addr[..n]);
+    button(g, c, 4, 0, b"Port -", 12);
+    button(g, c, 4, 1, b"Port 5900", 13);
+    button(g, c, 4, 2, b"Port +", 14);
+    row(
+        g,
+        c,
+        346,
+        b"Comptes autoris\xE9s",
+        b"Connexion avec le nom et le mot de passe du compte Winlux.",
+    );
+    for i in 0..6 {
+        if let Some((name, _)) = remote_account(i) {
+            button(g, c, 7 + i as i32 / 3, i as i32 % 3, name, 21 + i as i32);
+        }
+    }
+}
 fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     let c = content(f);
     if unsafe { PAGE == 7 && restart_required() } {
@@ -1513,7 +1619,7 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
             -1
         };
     }
-    for i in 0..24 {
+    for i in 0..36 {
         let r = button_rect(&c, i / 3, i % 3);
         if r.bottom <= c.bottom - 24 && inside(&r, x, y) {
             return i;
@@ -1545,6 +1651,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             SCROLL = 0;
             HOVER = -1;
             LAST_POLL = 0;
+            if i == PAGE_REMOTE {
+                control(c"remote-status");
+            }
             system_tick();
             return true;
         }
@@ -1794,6 +1903,32 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (16, 6) => Some(c"volume-down"),
         (16, 7) => Some(c"volume-mute"),
         (16, 8) => Some(c"volume-up"),
+        (PAGE_REMOTE, 0) => Some(c"remote-enable"),
+        (PAGE_REMOTE, 1) => Some(c"remote-disable"),
+        (PAGE_REMOTE, 2) => Some(c"remote-status"),
+        (PAGE_REMOTE, 3) => Some(c"remote-full-control"),
+        (PAGE_REMOTE, 4) => Some(c"remote-view-only"),
+        (PAGE_REMOTE, 5) => Some(if remote(b"legacy") == b"1" {
+            c"remote-legacy-off"
+        } else {
+            c"remote-legacy-on"
+        }),
+        (PAGE_REMOTE, 12) => Some(c"remote-port-down"),
+        (PAGE_REMOTE, 13) => Some(c"remote-port-default"),
+        (PAGE_REMOTE, 14) => Some(c"remote-port-up"),
+        (PAGE_REMOTE, id @ 21..=26) => {
+            if let Some((name, allowed)) = remote_account(id as usize - 21) {
+                let mut cmd = [0u8; 64];
+                let verb: &[u8] = if allowed { b"remote-deny " } else { b"remote-allow " };
+                let n = name.len().min(40);
+                cmd[..verb.len()].copy_from_slice(verb);
+                cmd[verb.len()..verb.len() + n].copy_from_slice(&name[..n]);
+                if let Ok(c) = core::ffi::CStr::from_bytes_until_nul(&cmd) {
+                    control(c);
+                }
+            }
+            return true;
+        }
         (14, 0) => {
             LOCALE_LANG = 0;
             Some(c"locale-fr")

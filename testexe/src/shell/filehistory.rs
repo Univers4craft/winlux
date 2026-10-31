@@ -612,7 +612,7 @@ unsafe fn draw_overview(g: &mut Gfx, x: i32, mut y: i32, w: i32) {
     }
     let enabled = status(b"enabled") == b"1";
     let dest = status(b"destination");
-    card(g, x, y, x + w, y + 96);
+    card(g, x, y, x + w, y + 112);
     let dot = if !enabled {
         p.text3
     } else if status(b"available") == b"1" {
@@ -653,11 +653,11 @@ unsafe fn draw_overview(g: &mut Gfx, x: i32, mut y: i32, w: i32) {
     };
     text_fit(g.hdc, g.f.body, 13, p.text2, x + 42, y + 44, detail, w - 60);
     let mut bx = x + 42;
-    bx = button(g, bx, y + 60 - 2, 150, if enabled { b"D\xE9sactiver" } else { b"Activer" }, 1, !enabled, false);
+    bx = button(g, bx, y + 70, 150, if enabled { b"D\xE9sactiver" } else { b"Activer" }, 1, !enabled, false);
     if !dest.is_empty() {
-        button(g, bx, y + 58, 200, b"Sauvegarder maintenant", 2, enabled, false);
+        button(g, bx, y + 70, 200, b"Sauvegarder maintenant", 2, enabled, false);
     }
-    y += 116;
+    y += 132;
     label_line(g, x, y, b"Destination", if dest.is_empty() { b"Aucune" } else { dest }, w);
     y += 50;
     if status(b"available") == b"1" {
@@ -911,7 +911,7 @@ unsafe fn draw_restore(g: &mut Gfx, x: i32, mut y: i32, w: i32, bottom: i32) {
     let mut n = 0;
     let mut idx = [0u8; 24];
     let mut k = 0;
-    for v in [SNAP_INDEX.min(count - 1) + 1, count] {
+    for (i, v) in [SNAP_INDEX.min(count - 1) + 1, count].into_iter().enumerate() {
         let mut digits = [0u8; 10];
         let mut d = 0;
         let mut v = v;
@@ -928,7 +928,7 @@ unsafe fn draw_restore(g: &mut Gfx, x: i32, mut y: i32, w: i32, bottom: i32) {
             idx[k] = digits[d];
             k += 1;
         }
-        if k < 12 {
+        if i == 0 {
             idx[k..k + 3].copy_from_slice(b" / ");
             k += 3;
         }

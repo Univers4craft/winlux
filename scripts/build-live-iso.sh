@@ -84,6 +84,12 @@ cp "$root/scripts/winlux-restore.sh" "$stage/usr/bin/winlux-restore"
 cp "$root/scripts/winlux-network.sh" "$stage/usr/bin/winlux-network"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
+# Historique des fichiers, sessions multi-utilisateur, bureau à distance
+cp "$root/scripts/winlux-backup.sh" "$stage/usr/bin/winlux-backup"
+cp "$root/scripts/winlux-sessions.sh" "$stage/usr/bin/winlux-sessions"
+cp "$root/scripts/winlux-remote-config.sh" "$stage/usr/bin/winlux-remote-config"
+cp "$root/target/release/winlux-remote" "$stage/usr/bin/winlux-remote"
+chmod 755 "$stage/usr/bin/winlux-backup" "$stage/usr/bin/winlux-sessions" "$stage/usr/bin/winlux-remote-config" "$stage/usr/bin/winlux-remote"
 mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
 cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
@@ -194,6 +200,7 @@ zstd -q -d -c "$usbhid_module" >"$stage/lib/modules/$kernel_release/usbhid.ko"
 zstd -q -d -c "$hid_generic_module" >"$stage/lib/modules/$kernel_release/hid-generic.ko"
 chmod 755 "$stage/usr/bin/Xvfb" "$stage/usr/bin/xkbcomp" "$stage/usr/bin/xrandr" "$stage/usr/bin/Xorg"
 copy_shared_libraries "$root/target/release/winlux"
+copy_shared_libraries "$root/target/release/winlux-remote"
 sh "$root/scripts/copy-audio-libraries.sh" "$stage"
 copy_shared_libraries /usr/bin/Xvfb
 copy_shared_libraries /usr/bin/xkbcomp
@@ -532,6 +539,13 @@ fi
         /bin/busybox sleep 1800
     done
 ) &
+(
+    # Historique des fichiers : chaque utilisateur selon sa fréquence.
+    while :; do
+        /usr/bin/winlux-backup auto-run >>/run/winlux/backup-auto.log 2>&1 || true
+        /bin/busybox sleep 60
+    done
+) &
 
 if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     echo "Winlux desktop preview: starting Xorg"
@@ -554,6 +568,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /bin/busybox cat /run/winlux/native-session.log >&2
         /bin/sh
     fi
+    # Bureau à distance : relancé au démarrage s'il était activé.
+    DISPLAY=:0 /usr/bin/winlux-remote-config ensure >/dev/null 2>&1 || true
     (
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
             DISPLAY=:0 /usr/bin/winlux-control status 2>/dev/null || true
