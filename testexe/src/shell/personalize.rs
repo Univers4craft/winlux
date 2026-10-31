@@ -1279,7 +1279,12 @@ unsafe fn save() {
         core::ptr::null_mut(),
     );
     if f.is_null() || f as isize == -1 {
-        crate::desktop::toast(b"Impossible d'enregistrer la personnalisation.");
+        crate::desktop::toast(tr4(&[
+            b"Impossible d'enregistrer la personnalisation.",
+            b"Couldn't save the personalization.",
+            b"No se pudo guardar la personalizaci\xF3n.",
+            b"Die Personalisierung konnte nicht gespeichert werden.",
+        ]));
         return;
     }
     let mut written = 0;
@@ -1352,7 +1357,7 @@ unsafe fn items(section: usize, a: &Rect, compact: bool) -> Items {
         0 => {
             let mut x = a.left;
             for (i, c) in CATEGORIES.iter().enumerate() {
-                let pw = pill_w(c);
+                let pw = pill_w(l(c));
                 it.push(i as i32, rect(x, a.top, x + pw, a.top + 32));
                 x += pw + 8;
             }
@@ -1374,7 +1379,13 @@ unsafe fn items(section: usize, a: &Rect, compact: bool) -> Items {
         }
         1 => {
             let mut x = a.left + 150;
-            for (i, label) in [b"Sombre".as_slice(), b"Clair"].iter().enumerate() {
+            for (i, label) in [
+                tr4(&[b"Sombre", b"Dark", b"Oscuro", b"Dunkel"]),
+                tr4(&[b"Clair", b"Light", b"Claro", b"Hell"]),
+            ]
+            .iter()
+            .enumerate()
+            {
                 let pw = pill_w(label).max(96);
                 it.push(63 + i as i32, rect(x, a.top, x + pw, a.top + 32));
                 x += pw + 8;
@@ -1515,11 +1526,36 @@ unsafe fn card(g: &mut Gfx, r: &Rect, selected: bool, hover: bool) {
 
 fn label_of(section: usize) -> &'static [u8] {
     match section {
-        0 => b"Choisissez une image : l'aper\xE7u est imm\xE9diat.",
-        1 => b"L'accent colore la s\xE9lection, les boutons et les indicateurs.",
-        2 => b"Emplacement, taille et alignement de la barre des t\xE2ches.",
-        3 => b"Cochez les ic\xF4nes \xE0 afficher sur le bureau.",
-        _ => b"Son jou\xE9 \xE0 l'ouverture de la session.",
+        0 => tr4(&[
+            b"Choisissez une image : l'aper\xE7u est imm\xE9diat.",
+            b"Choose a picture: the preview is instant.",
+            b"Elija una imagen: la vista previa es inmediata.",
+            b"W\xE4hlen Sie ein Bild: Die Vorschau erscheint sofort.",
+        ]),
+        1 => tr4(&[
+            b"L'accent colore la s\xE9lection, les boutons et les indicateurs.",
+            b"The accent colors the selection, buttons and indicators.",
+            b"El color de \xE9nfasis ti\xF1e la selecci\xF3n, los botones y los indicadores.",
+            b"Die Akzentfarbe f\xE4rbt Auswahl, Schaltfl\xE4chen und Anzeigen.",
+        ]),
+        2 => tr4(&[
+            b"Emplacement, taille et alignement de la barre des t\xE2ches.",
+            b"Taskbar position, size and alignment.",
+            b"Posici\xF3n, tama\xF1o y alineaci\xF3n de la barra de tareas.",
+            b"Position, Gr\xF6\xDFe und Ausrichtung der Taskleiste.",
+        ]),
+        3 => tr4(&[
+            b"Cochez les ic\xF4nes \xE0 afficher sur le bureau.",
+            b"Check the icons to show on the desktop.",
+            b"Marque los iconos que se mostrar\xE1n en el escritorio.",
+            b"W\xE4hlen Sie die Symbole, die auf dem Desktop erscheinen.",
+        ]),
+        _ => tr4(&[
+            b"Son jou\xE9 \xE0 l'ouverture de la session.",
+            b"Sound played when you sign in.",
+            b"Sonido que se reproduce al iniciar sesi\xF3n.",
+            b"Klang bei der Anmeldung.",
+        ]),
     }
 }
 
@@ -1591,7 +1627,7 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                     pill(
                         g,
                         &r,
-                        CATEGORIES[id as usize],
+                        l(CATEGORIES[id as usize]),
                         BG_CATEGORY == id as usize,
                         HOVER == id,
                     );
@@ -1652,19 +1688,30 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                     if sel { p.text } else { p.text2 },
                     r.left + 2,
                     r.bottom + 6,
-                    WALLPAPERS[i].name,
+                    l(WALLPAPERS[i].name),
                     r.right - r.left,
                 );
             }
         }
         1 => {
-            text(g.hdc, g.f.semibold, p.text, a.left, a.top + 8, b"Mode");
+            text(
+                g.hdc,
+                g.f.semibold,
+                p.text,
+                a.left,
+                a.top + 8,
+                tr4(&[b"Mode", b"Mode", b"Modo", b"Modus"]),
+            );
             for &(id, r) in &it.list[..it.len] {
                 match id {
                     63 | 64 => pill(
                         g,
                         &r,
-                        if id == 63 { b"Sombre" } else { b"Clair" },
+                        if id == 63 {
+                            tr4(&[b"Sombre", b"Dark", b"Oscuro", b"Dunkel"])
+                        } else {
+                            tr4(&[b"Clair", b"Light", b"Claro", b"Hell"])
+                        },
                         DARK == (id == 63),
                         HOVER == id,
                     ),
@@ -1683,14 +1730,32 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                         }
                         let (label, on): (&[u8], bool) = match id {
                             60 => (
-                                b"Couleur automatique d'apr\xE8s le fond d'\xE9\x63ran",
+                                tr4(&[
+                                    b"Couleur automatique d'apr\xE8s le fond d'\xE9cran",
+                                    b"Automatic color from the wallpaper",
+                                    b"Color autom\xE1tico seg\xFAn el fondo de pantalla",
+                                    b"Automatische Farbe aus dem Hintergrundbild",
+                                ]),
                                 ACCENT_INDEX < 0,
                             ),
                             61 => (
-                                b"Accent sur D\xE9marrer et la barre des t\xE2\x63hes",
+                                tr4(&[
+                                    b"Accent sur D\xE9marrer et la barre des t\xE2ches",
+                                    b"Accent on Start and taskbar",
+                                    b"\xC9nfasis en Inicio y la barra de tareas",
+                                    b"Akzent auf Start und Taskleiste",
+                                ]),
                                 ACCENT_SURFACES,
                             ),
-                            _ => (b"Accent sur les barres de titre et bordures", ACCENT_TITLES),
+                            _ => (
+                                tr4(&[
+                                    b"Accent sur les barres de titre et bordures",
+                                    b"Accent on title bars and borders",
+                                    b"\xC9nfasis en las barras de t\xEDtulo y los bordes",
+                                    b"Akzent auf Titelleisten und Rahmen",
+                                ]),
+                                ACCENT_TITLES,
+                            ),
                         };
                         text_fit(
                             g.hdc,
@@ -1777,7 +1842,7 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                 p.text,
                 a.left,
                 first.top - 22,
-                b"Position",
+                tr4(&[b"Position", b"Position", b"Posici\xF3n", b"Position"]),
             );
             let size_top = it.list[4].1.top;
             text(
@@ -1786,7 +1851,7 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                 p.text,
                 a.left,
                 size_top - 22,
-                b"Taille",
+                tr4(&[b"Taille", b"Size", b"Tama\xF1o", b"Gr\xF6\xDFe"]),
             );
             let align_top = it.list[7].1.top;
             text(
@@ -1795,7 +1860,12 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                 p.text,
                 a.left,
                 align_top - 22,
-                b"Alignement des ic\xF4nes",
+                tr4(&[
+                    b"Alignement des ic\xF4nes",
+                    b"Icon alignment",
+                    b"Alineaci\xF3n de los iconos",
+                    b"Symbolausrichtung",
+                ]),
             );
             for &(id, r) in &it.list[..it.len] {
                 let (sel, label, pos, thick, centered): (bool, &[u8], u8, i32, bool) = match id {
@@ -1803,7 +1873,7 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                         let k = (id - 10) as u8;
                         (
                             BAR_POS == k,
-                            BAR_POSITIONS[k as usize],
+                            l(BAR_POSITIONS[k as usize]),
                             k,
                             5,
                             !crate::desktop::ALIGN_LEFT,
@@ -1813,12 +1883,12 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                         crate::desktop::ALIGN_LEFT == (id == 20),
                         if id == 20 {
                             if bar_vertical() {
-                                b"En haut"
+                                tr4(&[b"En haut", b"Top", b"Arriba", b"Oben"])
                             } else {
-                                b"\xC0 gauche"
+                                tr4(&[b"\xC0 gauche", b"Left", b"Izquierda", b"Links"])
                             }
                         } else {
-                            b"Centr\xE9"
+                            tr4(&[b"Centr\xE9", b"Centered", b"Centrado", b"Zentriert"])
                         },
                         BAR_POS,
                         5,
@@ -1826,7 +1896,7 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                     ),
                     _ => (
                         BAR_SIZE == id as u8,
-                        BAR_SIZES[id as usize],
+                        l(BAR_SIZES[id as usize]),
                         BAR_POS,
                         3 + id * 2,
                         !crate::desktop::ALIGN_LEFT,
@@ -1860,7 +1930,12 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                 p.text,
                 a.left,
                 a.top + 4,
-                b"Ic\xF4nes du bureau",
+                tr4(&[
+                    b"Ic\xF4nes du bureau",
+                    b"Desktop icons",
+                    b"Iconos del escritorio",
+                    b"Desktopsymbole",
+                ]),
             );
             for &(id, r) in &it.list[..it.len] {
                 let i = id as usize;
@@ -1929,7 +2004,7 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                         p.text,
                         r.left + 32,
                         r.top + 8,
-                        b"\xC9\x63outer",
+                        tr4(&[b"\xC9couter", b"Listen", b"Escuchar", b"Anh\xF6ren"]),
                     );
                     continue;
                 }
@@ -1956,7 +2031,7 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                     p.text,
                     r.left + 44,
                     r.top + 7,
-                    SOUNDS[i].0,
+                    l(SOUNDS[i].0),
                 );
                 text_fit(
                     g.hdc,
@@ -1965,7 +2040,7 @@ unsafe fn draw_items(g: &mut Gfx, section: usize, a: &Rect, compact: bool) {
                     p.text2,
                     r.left + 44,
                     r.top + 26,
-                    SOUNDS[i].2,
+                    l(SOUNDS[i].2),
                     r.right - r.left - 180,
                 );
             }
@@ -2148,22 +2223,49 @@ unsafe fn draw_section(g: &mut Gfx, section: usize, r: &Rect, compact: bool) {
         let tx = m.left;
         let (title, detail): (&[u8], &[u8]) = match section {
             0 => (
-                WALLPAPERS[WALLPAPER].name,
-                CATEGORIES[WALLPAPERS[WALLPAPER].category],
+                l(WALLPAPERS[WALLPAPER].name),
+                l(CATEGORIES[WALLPAPERS[WALLPAPER].category]),
             ),
             1 => (
                 if ACCENT_INDEX < 0 {
-                    b"Accent automatique"
+                    tr4(&[
+                        b"Accent automatique",
+                        b"Automatic accent",
+                        b"\xC9nfasis autom\xE1tico",
+                        b"Automatischer Akzent",
+                    ])
                 } else {
-                    b"Accent personnalis\xE9"
+                    tr4(&[
+                        b"Accent personnalis\xE9",
+                        b"Custom accent",
+                        b"\xC9nfasis personalizado",
+                        b"Benutzerdefinierter Akzent",
+                    ])
                 },
-                if DARK { b"Mode sombre" } else { b"Mode clair" },
+                if DARK {
+                    tr4(&[
+                        b"Mode sombre",
+                        b"Dark mode",
+                        b"Modo oscuro",
+                        b"Dunkler Modus",
+                    ])
+                } else {
+                    tr4(&[b"Mode clair", b"Light mode", b"Modo claro", b"Heller Modus"])
+                },
             ),
             2 => (
-                BAR_POSITIONS[BAR_POS as usize],
-                BAR_SIZES[BAR_SIZE as usize],
+                l(BAR_POSITIONS[BAR_POS as usize]),
+                l(BAR_SIZES[BAR_SIZE as usize]),
             ),
-            _ => (b"Bureau", b"Ic\xF4nes syst\xE8me et raccourcis"),
+            _ => (
+                tr4(&[b"Bureau", b"Desktop", b"Escritorio", b"Desktop"]),
+                tr4(&[
+                    b"Ic\xF4nes syst\xE8me et raccourcis",
+                    b"System icons and shortcuts",
+                    b"Iconos del sistema y accesos directos",
+                    b"Systemsymbole und Verkn\xFCpfungen",
+                ]),
+            ),
         };
         let ty = m.bottom + 22;
         text(g.hdc, g.f.title, p.text, tx, ty, title);
@@ -2248,9 +2350,9 @@ unsafe fn activate(section: usize, id: i32) -> bool {
 fn tab_rect(c: &Rect, i: usize) -> Rect {
     let mut x = c.left;
     for k in 0..i {
-        x += pill_w(SECTIONS[k]) + 6;
+        x += pill_w(l(SECTIONS[k])) + 6;
     }
-    rect(x, c.top + 46, x + pill_w(SECTIONS[i]), c.top + 80)
+    rect(x, c.top + 46, x + pill_w(l(SECTIONS[i])), c.top + 80)
 }
 fn settings_area(c: &Rect) -> Rect {
     rect(c.left, c.top + 98, c.right, c.bottom - 28)
@@ -2264,7 +2366,7 @@ pub unsafe fn open_settings(section: usize) {
 pub unsafe fn draw_settings(g: &mut Gfx, c: &Rect) {
     for i in 0..SECTIONS.len() {
         let r = tab_rect(c, i);
-        pill(g, &r, SECTIONS[i], SECTION == i, HOVER == 900 + i as i32);
+        pill(g, &r, l(SECTIONS[i]), SECTION == i, HOVER == 900 + i as i32);
     }
     draw_section(g, SECTION, &settings_area(c), false);
 }
@@ -2322,7 +2424,12 @@ unsafe fn finish_oobe() {
     OOBE_ACTIVE = false;
     HOVER = -1;
     save();
-    crate::desktop::toast(b"Personnalisation enregistr\xE9\x65. Modifiable dans Param\xE8tres.");
+    crate::desktop::toast(tr4(&[
+        b"Personnalisation enregistr\xE9e. Modifiable dans Param\xE8tres.",
+        b"Personalization saved. You can change it in Settings.",
+        b"Personalizaci\xF3n guardada. Puede cambiarla en Configuraci\xF3n.",
+        b"Personalisierung gespeichert. \xC4nderbar in den Einstellungen.",
+    ]));
 }
 
 fn oobe_card(desk: &Rect) -> Rect {
@@ -2498,21 +2605,41 @@ pub unsafe fn draw_oobe(g: &mut Gfx, desk: &Rect) {
                 if cur || done { p.text } else { p.text2 },
                 c.left + 60,
                 y + 2,
-                name,
+                l(name),
             );
         }
     }
     let left = c.left + side + 36;
     let (title, sub): (&[u8], &[u8]) = match OOBE_STEP {
         0 => (
-            b"Bienvenue dans Winlux",
-            b"Quelques r\xE9glages pour que ce bureau vous ressemble.",
+            tr4(&[
+                b"Bienvenue dans Winlux",
+                b"Welcome to Winlux",
+                b"Bienvenido a Winlux",
+                b"Willkommen bei Winlux",
+            ]),
+            tr4(&[
+                b"Quelques r\xE9glages pour que ce bureau vous ressemble.",
+                b"A few settings to make this desktop your own.",
+                b"Algunos ajustes para que este escritorio se parezca a usted.",
+                b"Ein paar Einstellungen, damit dieser Desktop zu Ihnen passt.",
+            ]),
         ),
         6 => (
-            b"Tout est pr\xEAt",
-            b"Vos choix sont appliqu\xE9s et enregistr\xE9s.",
+            tr4(&[
+                b"Tout est pr\xEAt",
+                b"All set",
+                b"Todo listo",
+                b"Alles bereit",
+            ]),
+            tr4(&[
+                b"Vos choix sont appliqu\xE9s et enregistr\xE9s.",
+                b"Your choices are applied and saved.",
+                b"Sus elecciones se han aplicado y guardado.",
+                b"Ihre Auswahl wurde \xFCbernommen und gespeichert.",
+            ]),
         ),
-        s => (SECTIONS[s - 1], label_of(s - 1)),
+        s => (l(SECTIONS[s - 1]), label_of(s - 1)),
     };
     text(g.hdc, g.f.display, p.text, left, c.top + 32, title);
     text_fit(
@@ -2533,21 +2660,51 @@ pub unsafe fn draw_oobe(g: &mut Gfx, desk: &Rect) {
             if !user.is_empty() {
                 let mut hello = [0u8; 48];
                 let n = user.len().min(hello.len() - 10);
-                hello[..9].copy_from_slice(b"Bonjour, ");
+                hello[..9].copy_from_slice(tr4(&[b"Bonjour, ", b"Hello, ", b"Hola, ", b"Hallo, "]));
                 hello[9..9 + n].copy_from_slice(&user[..n]);
                 hello[9 + n] = b'!';
                 text(g.hdc, g.f.title, p.text, a.left, y, &hello[..10 + n]);
                 y += 40;
             }
             for line in [
-                b"Choisissez un fond d'\xE9\x63ran, une couleur d'accentuation,".as_slice(),
-                b"l'emplacement de la barre des t\xE2\x63hes, les ic\xF4nes du bureau",
-                b"et le son jou\xE9 \xE0 l'ouverture de session.",
+                tr4(&[
+                    b"Choisissez un fond d'\xE9cran, une couleur d'accentuation,",
+                    b"Choose a wallpaper, an accent color,",
+                    b"Elija un fondo de pantalla, un color de \xE9nfasis,",
+                    b"W\xE4hlen Sie ein Hintergrundbild, eine Akzentfarbe,",
+                ]),
+                tr4(&[
+                    b"l'emplacement de la barre des t\xE2ches, les ic\xF4nes du bureau",
+                    b"the taskbar position, the desktop icons",
+                    b"la posici\xF3n de la barra de tareas, los iconos del escritorio",
+                    b"die Position der Taskleiste, die Desktopsymbole",
+                ]),
+                tr4(&[
+                    b"et le son jou\xE9 \xE0 l'ouverture de session.",
+                    b"and the sound played when you sign in.",
+                    b"y el sonido que se reproduce al iniciar sesi\xF3n.",
+                    b"und den Klang bei der Anmeldung.",
+                ]),
                 b"",
-                b"Chaque choix s'applique tout de suite : le bureau derri\xE8re",
-                b"cette fen\xEAtre vous en montre le r\xE9sultat.",
+                tr4(&[
+                    b"Chaque choix s'applique tout de suite : le bureau derri\xE8re",
+                    b"Each choice applies right away: the desktop behind",
+                    b"Cada elecci\xF3n se aplica al momento: el escritorio detr\xE1s",
+                    b"Jede Wahl gilt sofort: Der Desktop hinter",
+                ]),
+                tr4(&[
+                    b"cette fen\xEAtre vous en montre le r\xE9sultat.",
+                    b"this window shows you the result.",
+                    b"de esta ventana le muestra el resultado.",
+                    b"diesem Fenster zeigt Ihnen das Ergebnis.",
+                ]),
                 b"",
-                b"Tout reste modifiable dans Param\xE8tres > Personnalisation.",
+                tr4(&[
+                    b"Tout reste modifiable dans Param\xE8tres > Personnalisation.",
+                    b"Everything can be changed in Settings > Personalization.",
+                    b"Todo se puede cambiar en Configuraci\xF3n > Personalizaci\xF3n.",
+                    b"Alles l\xE4sst sich unter Einstellungen > Personalisierung \xE4ndern.",
+                ]),
             ] {
                 text(g.hdc, g.f.body, p.text2, a.left, y, line);
                 y += 24;
@@ -2556,24 +2713,66 @@ pub unsafe fn draw_oobe(g: &mut Gfx, desk: &Rect) {
         6 => {
             let mut y = a.top + 4;
             let rows: [(&[u8], &[u8]); 5] = [
-                (b"Fond d'\xE9\x63ran", WALLPAPERS[WALLPAPER].name),
                 (
-                    b"Accent",
+                    tr4(&[
+                        b"Fond d'\xE9cran",
+                        b"Wallpaper",
+                        b"Fondo de pantalla",
+                        b"Hintergrundbild",
+                    ]),
+                    l(WALLPAPERS[WALLPAPER].name),
+                ),
+                (
+                    tr4(&[b"Accent", b"Accent", b"\xC9nfasis", b"Akzent"]),
                     if ACCENT_INDEX < 0 {
-                        b"Automatique"
+                        tr4(&[
+                            b"Automatique",
+                            b"Automatic",
+                            b"Autom\xE1tico",
+                            b"Automatisch",
+                        ])
                     } else {
-                        b"Personnalis\xE9"
+                        tr4(&[
+                            b"Personnalis\xE9",
+                            b"Custom",
+                            b"Personalizado",
+                            b"Benutzerdefiniert",
+                        ])
                     },
                 ),
-                (b"Barre des t\xE2\x63hes", BAR_POSITIONS[BAR_POS as usize]),
-                (b"Taille de la barre", BAR_SIZES[BAR_SIZE as usize]),
-                (b"Son de d\xE9marrage", SOUNDS[SOUND].0),
+                (
+                    tr4(&[
+                        b"Barre des t\xE2ches",
+                        b"Taskbar",
+                        b"Barra de tareas",
+                        b"Taskleiste",
+                    ]),
+                    l(BAR_POSITIONS[BAR_POS as usize]),
+                ),
+                (
+                    tr4(&[
+                        b"Taille de la barre",
+                        b"Taskbar size",
+                        b"Tama\xF1o de la barra",
+                        b"Gr\xF6\xDFe der Leiste",
+                    ]),
+                    l(BAR_SIZES[BAR_SIZE as usize]),
+                ),
+                (
+                    tr4(&[
+                        b"Son de d\xE9marrage",
+                        b"Startup sound",
+                        b"Sonido de inicio",
+                        b"Startsound",
+                    ]),
+                    l(SOUNDS[SOUND].0),
+                ),
             ];
             for (k, v) in rows {
                 round_rect(g.hdc, g.b, a.left, y, a.right, y + 44, 6, p.surface);
                 text(g.hdc, g.f.body, p.text2, a.left + 16, y + 14, k);
                 text(g.hdc, g.f.semibold, p.text, a.left + 230, y + 14, v);
-                if k == b"Accent" {
+                if k == tr4(&[b"Accent", b"Accent", b"\xC9nfasis", b"Akzent"]) {
                     round_rect(
                         g.hdc,
                         g.b,
@@ -2619,7 +2818,7 @@ pub unsafe fn draw_oobe(g: &mut Gfx, desk: &Rect) {
             p.text,
             (back.left + back.right) / 2,
             back.top + 10,
-            b"Retour",
+            tr4(&[b"Retour", b"Back", b"Atr\xE1s", b"Zur\xFCck"]),
         );
     }
     round_rect(
@@ -2644,9 +2843,9 @@ pub unsafe fn draw_oobe(g: &mut Gfx, desk: &Rect) {
         (next.left + next.right) / 2,
         next.top + 10,
         match OOBE_STEP {
-            0 => b"Commencer",
-            6 => b"Terminer",
-            _ => b"Suivant",
+            0 => tr4(&[b"Commencer", b"Get started", b"Empezar", b"Los geht's"]),
+            6 => tr4(&[b"Terminer", b"Finish", b"Finalizar", b"Fertigstellen"]),
+            _ => tr4(&[b"Suivant", b"Next", b"Siguiente", b"Weiter"]),
         },
     );
     if OOBE_STEP < 6 {
@@ -2656,7 +2855,12 @@ pub unsafe fn draw_oobe(g: &mut Gfx, desk: &Rect) {
             if HOVER == 1002 { p.accent } else { p.text2 },
             skip.left + 6,
             skip.top + 10,
-            b"Passer l'assistant",
+            tr4(&[
+                b"Passer l'assistant",
+                b"Skip the assistant",
+                b"Omitir el asistente",
+                b"Assistent \xFCberspringen",
+            ]),
         );
     }
 }
@@ -2737,3 +2941,118 @@ pub unsafe fn regression_checks() {
     }
     (BAR_POS, BAR_SIZE, ACCENT_INDEX) = saved;
 }
+
+// ---------- Traductions des listes constantes ----------
+
+/// Libellé d'une liste constante (catégories, positions, sons, étapes...)
+/// dans la langue de l'interface ; inchangé s'il n'est pas dans la table.
+fn l(fr: &'static [u8]) -> &'static [u8] {
+    match PERSO_LABELS.iter().find(|r| r.0 == fr) {
+        Some(r) => match ui_lang() {
+            1 => r.1,
+            2 => r.2,
+            3 => r.3,
+            _ => r.0,
+        },
+        None => fr,
+    }
+}
+
+/// `(français, anglais, espagnol, allemand)`.
+const PERSO_LABELS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    (b"En bas", b"Bottom", b"Abajo", b"Unten"),
+    (b"En haut", b"Top", b"Arriba", b"Oben"),
+    (b"\xC0 gauche", b"Left", b"Izquierda", b"Links"),
+    (b"\xC0 droite", b"Right", b"Derecha", b"Rechts"),
+    (b"Petite", b"Small", b"Peque\xF1a", b"Klein"),
+    (b"Moyenne", b"Medium", b"Mediana", b"Mittel"),
+    (b"Grande", b"Large", b"Grande", b"Gro\xDF"),
+    (b"Tous", b"All", b"Todos", b"Alle"),
+    (b"Nature", b"Nature", b"Naturaleza", b"Natur"),
+    (b"Abstrait", b"Abstract", b"Abstracto", b"Abstrakt"),
+    (b"Sombre", b"Dark", b"Oscuro", b"Dunkel"),
+    (b"Clair", b"Light", b"Claro", b"Hell"),
+    (b"Vagues", b"Waves", b"Olas", b"Wellen"),
+    (b"Prisme", b"Prism", b"Prisma", b"Prisma"),
+    (b"Collines", b"Hills", b"Colinas", b"H\xFCgel"),
+    (b"Cr\xE9puscule", b"Dusk", b"Crep\xFAsculo", b"D\xE4mmerung"),
+    (b"For\xEAt", b"Forest", b"Bosque", b"Wald"),
+    (
+        b"Nuit \xE9toil\xE9e",
+        b"Starry night",
+        b"Noche estrellada",
+        b"Sternennacht",
+    ),
+    (
+        b"Aurore bor\xE9ale",
+        b"Northern lights",
+        b"Aurora boreal",
+        b"Nordlicht",
+    ),
+    (
+        b"Bloom clair",
+        b"Light Bloom",
+        b"Bloom claro",
+        b"Helles Bloom",
+    ),
+    (b"Dunes", b"Dunes", b"Dunas", b"D\xFCnen"),
+    (b"Aucun", b"None", b"Ninguno", b"Keiner"),
+    (
+        b"D\xE9marrage silencieux.",
+        b"Silent startup.",
+        b"Inicio silencioso.",
+        b"Lautloser Start.",
+    ),
+    (b"Aurore", b"Dawn", b"Aurora", b"Morgenrot"),
+    (
+        b"Arp\xE8ge chaleureux, inspir\xE9 de Windows 11.",
+        b"Warm arpeggio, inspired by Windows 11.",
+        b"Arpegio c\xE1lido, inspirado en Windows 11.",
+        b"Warmes Arpeggio, inspiriert von Windows 11.",
+    ),
+    (b"Cristal", b"Crystal", b"Cristal", b"Kristall"),
+    (
+        b"Clochettes claires et l\xE9g\xE8res.",
+        b"Light, clear chimes.",
+        b"Campanillas claras y ligeras.",
+        b"Helle, leichte Gl\xF6ckchen.",
+    ),
+    (b"Brise", b"Breeze", b"Brisa", b"Brise"),
+    (
+        b"Nappe douce qui monte lentement.",
+        b"Soft pad that slowly rises.",
+        b"Fondo suave que sube lentamente.",
+        b"Sanfte Klangfl\xE4che, die langsam ansteigt.",
+    ),
+    (
+        b"Deux notes ascendantes, sobres.",
+        b"Two rising notes, understated.",
+        b"Dos notas ascendentes, sobrias.",
+        b"Zwei aufsteigende, schlichte T\xF6ne.",
+    ),
+    (b"Pulsation", b"Pulse", b"Pulso", b"Puls"),
+    (
+        b"Signal num\xE9rique bref et moderne.",
+        b"Short, modern digital signal.",
+        b"Se\xF1al digital breve y moderna.",
+        b"Kurzes, modernes Digitalsignal.",
+    ),
+    (b"Arri\xE8re-plan", b"Background", b"Fondo", b"Hintergrund"),
+    (b"Couleurs", b"Colors", b"Colores", b"Farben"),
+    (
+        b"Barre des t\xE2ches",
+        b"Taskbar",
+        b"Barra de tareas",
+        b"Taskleiste",
+    ),
+    (b"Bureau", b"Desktop", b"Escritorio", b"Desktop"),
+    (b"Sons", b"Sounds", b"Sonidos", b"Sounds"),
+    (b"Bienvenue", b"Welcome", b"Bienvenida", b"Willkommen"),
+    (
+        b"Son de d\xE9marrage",
+        b"Startup sound",
+        b"Sonido de inicio",
+        b"Startsound",
+    ),
+    (b"Termin\xE9", b"Done", b"Listo", b"Fertig"),
+];
