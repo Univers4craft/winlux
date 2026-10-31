@@ -10,6 +10,7 @@ mod diskimage;
 mod dlls;
 mod firewall;
 mod gpu;
+mod imaging;
 mod loader;
 pub mod log;
 mod managed;
@@ -91,6 +92,13 @@ fn main() {
             std::process::exit(2);
         };
         std::process::exit(inspect(&PathBuf::from(path)));
+    }
+    if exe == "--image-info" {
+        let Some(path) = args.next() else {
+            eprintln!("winlux: usage: winlux --image-info IMAGE");
+            std::process::exit(2);
+        };
+        std::process::exit(imaging::cli_info(&PathBuf::from(path)));
     }
     if let Some(code) = gpu_command(&exe, &mut args) {
         std::process::exit(code);

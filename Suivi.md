@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **197**
+- Réalisé : **198**
 - À faire ou en cours : **44**
-- Total : **241**
-- Progression : **81.7%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109 et #111, issues #10 à #98)
+- Total : **242**
+- Progression : **81.8%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104, #109, #126 et #111, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -239,6 +239,7 @@
 - [x] Impression : page Paramètres › Imprimantes et scanners (liste, imprimante par défaut, page de test, suppression, file d'attente avec annulation, recherche USB/réseau, ajout par adresse) ; CUPS ajouté aux paquets du bureau de l'ISO.
 
 - [x] Lecteur multimédia natif (`mediaplayer.exe`, `audioplayer.exe` en alias) : vidéo et audio, barre de progression avec aperçu au survol, volume, vitesse 0,25× à 3×, plein écran, sous-titres SRT/ASS/VTT externes et pistes intégrées (texte et PGS/VobSub), pistes audio, chapitres, liste de lecture du dossier, reprise à la dernière position, thème clair/sombre, FR/EN/DE/ES. L'Explorer ouvre l'audio/vidéo dedans ; MIME par défaut dans l'ISO.
+- [x] Visionneuse d'images native (`imageviewer.exe`) et décodeurs maison en Rust (`runtime/src/imaging`, aucune bibliothèque externe) : PNG/APNG, JPEG (progressif, CMYK), GIF animé, BMP, TIFF multipage, ICO/CUR/ICNS, WebP (avec et sans perte, animé), QOI, PSD/PSB et XCF (calques), SVG/SVGZ vectoriel net à tout zoom, AI/EPS (aperçu intégré), TGA, PCX, PNM/PAM/PFM, DDS (BC1-BC5), EXR, HDR, SGI, Sun, XBM/XPM, WBMP et RAW (CR2, CR3, NEF, ARW, DNG, ORF, RW2, RAF, PEF, SRW… via l'aperçu intégré). Zoom molette/ajusté/100 %, panoramique, rotation, miroir, pages/calques/images, dossier précédent/suivant, diaporama, panneau EXIF/IPTC/XMP, comparaison avant/après RAW (exposition, niveaux auto), aperçu 3D tournant (STL, OBJ, PLY, OFF, glTF/GLB, FBX binaire), impression via la boîte « Imprimer » quand elle est présente. Miniatures dans l'Explorateur (images, modèles 3D, vidéos/audio) avec cache disque. Garde-fou : HEIC/HEIF, AVIF, JPEG XL, JPEG 2000 et PDF ne sont pas encore décodés, donc jamais annoncés ni envoyés à la visionneuse. `winlux --image-info FICHIER` pour diagnostiquer.
 - [x] Moteur multimédia du runtime (`winlux_media.rs`, exports `WinluxMedia*`) : FFmpeg système en processus isolé, conteneurs MP4/MKV/WebM/AVI/MOV/FLV/WMV/MPEG/TS/M2TS/OGV/3GP…, codecs H.264/HEVC/AV1/VP8/VP9/MPEG-2/MPEG-4/VC-1/Theora/ProRes/DNxHD et AAC/MP3/Opus/Vorbis/FLAC/ALAC/PCM/AC-3/E-AC-3/DTS/WMA/APE ; un format n'est annoncé que si son décodeur existe ; VA-API/NVDEC avec repli logiciel puis sans son ; vignettes vidéo et pochettes avec cache disque. Voir `docs/MEDIA.md`.
 - [x] Corriger `SetTimer` : la version bouchon de `user32_ext` remplaçait la vraie et `GetMessage` ne livrait jamais `WM_TIMER` (aucune animation ni rafraîchissement périodique des applications autonomes).
 

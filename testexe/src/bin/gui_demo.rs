@@ -28,6 +28,8 @@ mod eventviewer;
 mod explorer;
 #[path = "../shell/fonts.rs"]
 mod fonts;
+#[path = "../shell/thumbs.rs"]
+mod thumbs;
 #[path = "../shell/firewall.rs"]
 mod firewall;
 #[path = "../shell/gpuinfo.rs"]
