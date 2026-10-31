@@ -17,6 +17,9 @@ manager = subprocess.Popen(["openbox", "--sm-disable", "--config-file", str(proj
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
 window = module["Settings"]()
 failures = []
+# The title follows the interface language since #145.
+SETTINGS_TITLES = {"Paramètres Winlux", "Parametres Winlux", "Winlux Settings",
+                   "Configuración de Winlux", "Winlux-Einstellungen"}
 
 def run(*args):
     return subprocess.check_output(args, text=True, stderr=subprocess.STDOUT, timeout=10)
@@ -32,9 +35,13 @@ def rows():
 
 def check():
     try:
+        # Mapping time is not what this test measures: the Settings window
+        # builds all of its pages first, which can take several seconds on a
+        # loaded runner. Only the geometry round trips below are timed.
         found = []
-        for _ in range(100):
-            found = [key for key, (_, title) in rows().items() if title == "Parametres Winlux"]
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            found = [key for key, (_, title) in rows().items() if title in SETTINGS_TITLES]
             if found: break
             time.sleep(0.05)
         assert found, "Settings window did not map"

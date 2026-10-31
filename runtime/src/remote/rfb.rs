@@ -719,6 +719,7 @@ pub fn serve(
     let mut prev: Option<Frame> = None;
     let mut last_send = Instant::now() - opts.frame_interval;
     let mut fb_size = (frame.width, frame.height);
+    let mut pending: Option<(bool, Rect)>;
     loop {
         let (incremental, flags) = {
             let (lock, cv) = &*link;
@@ -729,7 +730,11 @@ pub fn serve(
             if s.closed {
                 break;
             }
-            let (inc, _) = s.request.unwrap();
+            // Take the request now: one the client sends while this frame
+            // is being encoded must survive for the next round.
+            let request = s.request.take().unwrap();
+            let (inc, _) = request;
+            pending = Some(request);
             (
                 inc,
                 (
@@ -800,7 +805,13 @@ pub fn serve(
             count += 1;
         }
         if count == 0 {
-            // Rien de neuf : la demande incrémentale reste en attente.
+            // Rien de neuf : la demande incrémentale reste en attente,
+            // sauf si le client en a envoyé une nouvelle entre-temps.
+            let mut s = link.0.lock().unwrap();
+            if s.request.is_none() {
+                s.request = pending.take();
+            }
+            drop(s);
             last_send = Instant::now();
             continue;
         }
@@ -810,7 +821,6 @@ pub fn serve(
         out.put(&buf);
         out.flush()?;
         last_send = Instant::now();
-        link.0.lock().unwrap().request = None;
         prev = Some(frame.clone());
     }
     match reader_thread.join() {

@@ -216,6 +216,23 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do grep -q '^fan-daemon ' "$work/commands" 
 grep -qx "fan-daemon $work/root" "$work/commands"
 control cpu-fan-auto
 grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
+# Sans adaptateur, l'état ne doit jamais interroger bluetoothctl, qui
+# attendrait bluetoothd sans fin (blocage du démarrage de session).
+: > "$work/commands"
+sh "$project/scripts/winlux-bluetooth.sh" status
+grep -qx 'present=0' "$work/root/run/winlux/bluetooth.txt"
+if grep -q '^bluetoothctl' "$work/commands"; then echo 'ERROR: bluetoothctl queried without adapter' >&2; exit 1; fi
+mkdir -p "$work/root/sys/class/bluetooth/hci0"
+# Un bluetoothctl qui ne répond pas est abandonné après le délai.
+mkdir -p "$work/hang"
+printf '#!/bin/sh
+exec sleep 60
+' > "$work/hang/bluetoothctl"
+chmod 755 "$work/hang/bluetoothctl"
+started=$(date +%s)
+PATH="$work/hang:$PATH" WINLUX_BLUETOOTH_QUERY_SECONDS=1 sh "$project/scripts/winlux-bluetooth.sh" status
+test $(( $(date +%s) - started )) -lt 10
+grep -qx 'present=0' "$work/root/run/winlux/bluetooth.txt"
 control bluetooth-on
 grep -qx 'bluetooth_present=1' "$work/root/run/winlux/control.txt"
 grep -qx 'bluetooth_powered=1' "$work/root/run/winlux/control.txt"

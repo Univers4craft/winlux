@@ -178,11 +178,11 @@ winlux_term=console
 if test -f /usr/share/winlux/grub-theme/theme.txt; then
     sh "$root/scripts/winlux-grub-theme.sh" install /usr/share/winlux/grub-theme "$work/target/boot/grub/themes/winlux" && winlux_term=gfxterm
 fi
-cat >"$work/target/boot/grub/grub.cfg" <<EOF
-set default=0
-set timeout=8
-set winlux_term=console
-if [ "$winlux_term" = gfxterm ] && loadfont /boot/grub/themes/winlux/unicode.pf2; then
+# GRUB script has no && : the graphical theme block only exists when the
+# theme was copied, and is nested ifs otherwise.
+theme_block=
+if test "$winlux_term" = gfxterm; then
+    theme_block='if loadfont /boot/grub/themes/winlux/unicode.pf2; then
     insmod all_video
     insmod gfxterm
     insmod png
@@ -191,7 +191,13 @@ if [ "$winlux_term" = gfxterm ] && loadfont /boot/grub/themes/winlux/unicode.pf2
         set theme=/boot/grub/themes/winlux/theme.txt
         set winlux_term=gfxterm
     fi
+fi'
 fi
+cat >"$work/target/boot/grub/grub.cfg" <<EOF
+set default=0
+set timeout=8
+set winlux_term=console
+$theme_block
 serial --unit=0 --speed=115200
 terminal_input console serial
 terminal_output \$winlux_term serial
