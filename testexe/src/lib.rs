@@ -330,23 +330,6 @@ pub unsafe fn LoadCursorA(_instance: Handle, _id: usize) -> Handle {
 }
 
 #[repr(C)]
-pub struct WndClassA {
-    pub style: u32,
-    pub lpfnWndProc: Option<unsafe extern "system" fn(Handle, u32, usize, isize) -> isize>,
-    pub cbClsExtra: i32,
-    pub cbWndExtra: i32,
-    pub hInstance: Handle,
-    pub hIcon: Handle,
-    pub hCursor: Handle,
-    pub hbrBackground: usize,
-    pub lpszMenuName: *const c_char,
-    pub lpszClassName: *const c_char,
-}
-pub type WNDCLASSA = WndClassA;
-pub type MSG = Msg;
-pub type PAINTSTRUCT = PaintStruct;
-
-#[repr(C)]
 pub struct WaveFormatEx {
     pub format_tag: u16,
     pub channels: u16,
@@ -850,7 +833,6 @@ extern "C" {
     pub fn GetSystemMetrics(index: i32) -> i32;
     pub fn GetSysColor(index: i32) -> u32;
     pub fn GetSysColorBrush(index: i32) -> Handle;
-    pub fn LoadCursorA(instance: Handle, name: isize) -> Handle;
     pub fn SetTimer(hwnd: Handle, id: usize, elapse: u32, func: usize) -> usize;
     pub fn KillTimer(hwnd: Handle, id: usize) -> i32;
 }
