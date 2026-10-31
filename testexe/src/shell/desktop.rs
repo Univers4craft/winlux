@@ -707,7 +707,12 @@ fn fc(c: u32) -> u32 {
     }
 }
 
-unsafe fn wallpaper(hdc: Handle, l: &Layout) {
+unsafe fn wallpaper(hdc: Handle, b: &mut Brushes, l: &Layout) {
+    // Thème de contraste : arrière-plan uni, comme sous Windows.
+    if let Some(c) = crate::gfx::contrast_colors(crate::gfx::A11Y.contrast) {
+        fill(hdc, b, 0, 0, l.w, l.h, c.background);
+        return;
+    }
     personalize::paint_desktop(hdc, l.w, l.h);
 }
 
@@ -2606,6 +2611,8 @@ pub unsafe fn toast(msg: &[u8]) {
     TOAST_LEN = n;
     TOAST_START = now();
     notifications::push_simple(msg);
+    crate::a11y::sound_event(crate::a11y::Sound::Notification, msg);
+    crate::a11y::announce(msg);
 }
 
 unsafe fn draw_toast(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
@@ -3450,6 +3457,7 @@ pub unsafe fn init(
     ALIGN_LEFT = align_left;
     crate::settings::system_tick();
     personalize::load();
+    crate::a11y::init();
     load_shell_state();
     init_apps();
     crate::login::init();
@@ -3499,6 +3507,7 @@ pub unsafe fn draw(hdc: Handle) {
     let mut b = Brushes::new();
     let f = Fonts::new();
     SetBkMode(hdc, 1);
+    crate::a11y::begin_frame();
     if SCREENSAVER {
         fill(hdc, &mut b, 0, 0, SCREEN_W, SCREEN_H, rgb(0x00, 0x00, 0x00));
         for i in 0..12 {
@@ -3566,7 +3575,7 @@ pub unsafe fn draw(hdc: Handle) {
             reflow_desk(&l);
         }
         personalize::on_session_start();
-        wallpaper(hdc, &l);
+        wallpaper(hdc, &mut b, &l);
         if FADE > 600 {
             desktop_icons(hdc, &mut b, &f);
         }
@@ -3578,6 +3587,7 @@ pub unsafe fn draw(hdc: Handle) {
             };
             wm::draw(&mut g);
         }
+        crate::gfx::CHROME_MAP = crate::gfx::A11Y.contrast != 0;
         start_menu(hdc, &mut b, &f, &l);
         search_overlay(hdc, &mut b, &f, &l);
         notifications::draw(hdc, &mut b, &f, l.right, l.bar_top);
@@ -3665,10 +3675,12 @@ pub unsafe fn draw(hdc: Handle) {
         draw_context(hdc, &mut b, &f);
         // Éditeur de capture, au-dessus de tout le bureau.
         crate::snip::draw(hdc, &mut b, &f);
+        crate::gfx::CHROME_MAP = false;
         if crate::login::uac_visible() {
             crate::login::draw_uac(hdc, l.w, l.h);
         }
     }
+    crate::a11y::draw_overlay(hdc, &mut b, &f, l.w, l.h, l.bar_top);
     f.release();
     b.release();
 }
@@ -3738,7 +3750,9 @@ pub unsafe fn frame(hwnd: Handle) {
     if crate::snip::frame(hwnd, SCREEN_W, SCREEN_H, layout().bar_top) {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
+    crate::a11y::frame(hwnd);
     let animating = !BOOT_DONE
+        || crate::a11y::animating()
         || wm::animating()
         || crate::cliphist::animating()
         || crate::snip::animating()
@@ -3779,7 +3793,8 @@ pub unsafe fn tick(hwnd: Handle) {
     }
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
-    let system = crate::settings::system_tick() | crate::firewall::system_tick();
+    let system =
+        crate::settings::system_tick() | crate::firewall::system_tick() | crate::a11y::tick();
     let weather_changed = weather::poll();
     let welcome = BOOT_DONE
         && crate::login::logged_in()
@@ -4207,6 +4222,9 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         return;
     }
     LAST_INPUT = now();
+    if crate::a11y::on_mouse_move(x, y) {
+        repaint(hwnd);
+    }
     if !BOOT_DONE {
         return;
     }
@@ -4587,6 +4605,14 @@ pub unsafe fn on_other(hwnd: Handle, ev: Mouse, x: i32, y: i32) {
     }
 }
 
+/// Une touche a servi à un raccourci traité ailleurs (accessibilité :
+/// Win+U, Win+Plus…) : la touche Windows relâchée n'ouvre pas Démarrer.
+pub unsafe fn key_used_elsewhere(vk: u32) {
+    if vk != 0x5B && vk != 0x5C {
+        WIN_ALONE = false;
+    }
+}
+
 /// Clavier : touche Windows pour le menu Démarrer, Échap pour le fermer,
 /// le reste va à la fenêtre active.
 pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
@@ -4616,8 +4642,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         WIN_ALONE = false;
     }
     let win_down =
-        ((GetKeyState(0x5B) as u16) & 0x8000) != 0 || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-    let shift_down = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
+        ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0 || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+    let shift_down = ((crate::gfx::key_state(0x10) as u16) & 0x8000) != 0;
     if BOOT_DONE && ch == 0 {
         // Win+Maj+S / Impr. écran : capture ; Win+Maj+R : enregistrement vidéo.
         if (vk == 0x53 && win_down && shift_down) || vk == 0x2C {
@@ -4686,8 +4712,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Ctrl+Shift+Escape (Gestionnaire des tâches)
     if ch == 0 && vk == 0x1B {
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
-        let shift = ((GetKeyState(0x10) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
+        let shift = ((crate::gfx::key_state(0x10) as u16) & 0x8000) != 0;
         if ctrl && shift {
             wm::open(wm::APP_TASKMGR);
             repaint(hwnd);
@@ -4696,8 +4722,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+S (Recherche) ; Win+Maj+S est traité plus haut (outil Capture).
     if ch == 0 && vk == 0x53 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             SEARCH_OVERLAY = !SEARCH_OVERLAY;
             if SEARCH_OVERLAY {
@@ -4711,8 +4737,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+I (Paramètres)
     if ch == 0 && vk == 0x49 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             wm::open(wm::APP_SETTINGS);
             repaint(hwnd);
@@ -4721,8 +4747,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+L (Verrouiller)
     if ch == 0 && vk == 0x4C {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             crate::login::lock_screen();
             repaint(hwnd);
@@ -4731,8 +4757,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+E (Explorateur de fichiers)
     if ch == 0 && vk == 0x45 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             launch(Launch::Explorer);
             return;
@@ -4740,8 +4766,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+R
     if ch == 0 && vk == 0x52 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             wm::SHOW_RUN = true;
             unsafe {
@@ -4754,8 +4780,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+E
     if ch == 0 && vk == 0x45 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             explorer::open_pc();
             repaint(hwnd);
@@ -4764,8 +4790,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Tab (Vue des tâches)
     if ch == 0 && vk == 0x09 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             unsafe {
                 wm::TASK_VIEW = !wm::TASK_VIEW;
@@ -4776,9 +4802,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+flèches (snap layouts)
     if ch == 0 && (vk == 0x25 || vk == 0x26 || vk == 0x27 || vk == 0x28) {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             // Win+Ctrl+Left/Right : changer de bureau
             if vk == 0x25 {
@@ -4808,9 +4834,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Ctrl+D (nouveau bureau)
     if ch == 0 && vk == 0x44 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             unsafe {
                 wm::add_desktop();
@@ -4821,9 +4847,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+Ctrl+F4 (fermer le bureau courant)
     if ch == 0 && vk == 0x73 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if win && ctrl {
             let cur = wm::current_desktop();
             unsafe {
@@ -4835,8 +4861,8 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Win+D
     if ch == 0 && vk == 0x44 {
-        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
-            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        let win = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
         if win {
             for app in 0..wm::APP_COUNT {
                 if wm::is_open(app) && !wm::is_visible(app) { /* already minimized */ }
@@ -4867,7 +4893,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     // Alt+F4
     if ch == 0 && vk == 0x73 {
-        let alt = ((GetKeyState(0x12) as u16) & 0x8000) != 0;
+        let alt = ((crate::gfx::key_state(0x12) as u16) & 0x8000) != 0;
         if alt {
             for app in 0..wm::APP_COUNT {
                 if wm::is_open(app) && wm::is_active(app) {
@@ -4901,7 +4927,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
     }
     if ch == 0 && (vk == 0x5B || vk == 0x5C) {
         // Comme Windows : Démarrer s'ouvre au relâchement de la touche, si
-        // elle n'a pas servi à un raccourci (Win+V, Win+Maj+S…).
+        // elle n'a pas servi à un raccourci (Win+V, Win+E, Win+Plus…).
         WIN_ALONE = true;
         return;
     }
@@ -5025,7 +5051,7 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         return;
     }
     if ch == 0 && vk == 0x56 {
-        let ctrl = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+        let ctrl = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
         if ctrl {
             let desktop = explorer::desktop_folder_path();
             if !desktop.get().is_empty() {

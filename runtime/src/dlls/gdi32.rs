@@ -484,6 +484,7 @@ fn blit_common(
             source,
             destination,
             stretch,
+            smooth: stretch && gui::dc_stretch_mode(dst_hdc) == HALFTONE,
             rop: operation,
         }
     } else {
@@ -1999,12 +2000,21 @@ pub extern "win64" fn get_rop2(_hdc: usize) -> i32 {
     13
 }
 
-pub extern "win64" fn set_stretch_blt_mode(_hdc: usize, _mode: i32) -> i32 {
-    1 // ancien mode
+/// `HALFTONE` : la loupe et les agrandissements demandent un rendu lissé.
+const HALFTONE: i32 = 4;
+
+/// Mémorise le mode par DC ; HALFTONE active l'interpolation bilinéaire
+/// des `StretchBlt` entre fenêtres.
+pub extern "win64" fn set_stretch_blt_mode(hdc: usize, mode: i32) -> i32 {
+    if !(1..=HALFTONE).contains(&mode) {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    gui::set_dc_stretch_mode(hdc, mode)
 }
 
-pub extern "win64" fn get_stretch_blt_mode(_hdc: usize) -> i32 {
-    4 // HALFTONE
+pub extern "win64" fn get_stretch_blt_mode(hdc: usize) -> i32 {
+    gui::dc_stretch_mode(hdc)
 }
 
 pub extern "win64" fn set_poly_fill_mode(_hdc: usize, _mode: i32) -> i32 {

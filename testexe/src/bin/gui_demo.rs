@@ -10,6 +10,8 @@ use winlux_testexe::*;
 
 #[path = "../shell/cliphist.rs"]
 mod cliphist;
+#[path = "../shell/a11y.rs"]
+mod a11y;
 #[path = "../shell/admin_ui.rs"]
 mod admin_ui;
 #[path = "../shell/bsod.rs"]
@@ -793,7 +795,9 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             if DESKTOP && bsod::key_down() {
                 InvalidateRect(hwnd, core::ptr::null(), 0);
             } else if DESKTOP {
-                desktop::on_key(hwnd, 0, wparam as u16);
+                if let Some(ch) = a11y::filter_char(wparam as u16) {
+                    desktop::on_key(hwnd, 0, ch);
+                }
             } else if wm::native_app().is_some() {
                 wm::native_key(hwnd, 0, wparam as u16);
             }
@@ -811,7 +815,11 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             if DESKTOP && bsod::key_down() {
                 InvalidateRect(hwnd, core::ptr::null(), 0);
             } else if DESKTOP {
-                desktop::on_key(hwnd, wparam as u32, 0);
+                if a11y::key_down(hwnd, wparam as u32) {
+                    desktop::key_used_elsewhere(wparam as u32);
+                } else {
+                    desktop::on_key(hwnd, wparam as u32, 0);
+                }
             } else if wm::native_app().is_some() {
                 wm::native_key(hwnd, wparam as u32, 0);
             }
@@ -821,6 +829,7 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             GOT_KEYUP += 1;
             THREAD_KEY_UP_CLEAR |= ((GetKeyState(wparam as i32) as u16 & 0x8000) == 0) as u32;
             if DESKTOP {
+                a11y::key_up(hwnd, wparam as u32);
                 desktop::on_key_up(hwnd, wparam as u32);
             }
             0

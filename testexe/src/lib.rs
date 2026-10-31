@@ -1054,6 +1054,7 @@ extern "C" {
         sh: i32,
         rop: u32,
     ) -> i32;
+    pub fn SetStretchBltMode(hdc: Handle, mode: i32) -> i32;
     pub fn TextOutA(hdc: Handle, x: i32, y: i32, text: *const c_char, count: i32) -> i32;
     pub fn GetTextExtentPoint32A(
         hdc: Handle,

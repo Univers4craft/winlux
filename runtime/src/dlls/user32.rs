@@ -920,12 +920,18 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
     }
 }
 
+/// Couleur système, remplacée par le thème de contraste élevé s'il est actif.
+fn system_color(index: i32) -> Option<u32> {
+    crate::dlls::a11y::system_color(crate::dlls::a11y::current().contrast, index)
+        .or_else(|| gui::theme::system_color(index))
+}
+
 pub extern "win64" fn get_sys_color(index: i32) -> u32 {
-    gui::theme::system_color(index).unwrap_or(0)
+    system_color(index).unwrap_or(0)
 }
 
 pub extern "win64" fn get_sys_color_brush(index: i32) -> usize {
-    let Some(color) = gui::theme::system_color(index) else {
+    let Some(color) = system_color(index) else {
         return 0;
     };
     gui::system_color_brush(index as usize, color)
@@ -1886,6 +1892,27 @@ pub unsafe extern "win64" fn system_parameters_info_a(
     _update: u32,
 ) -> i32 {
     let _ = (action, param, data);
+    let a11y = crate::dlls::a11y::current();
+    match action {
+        // SPI_GETHIGHCONTRAST : HIGHCONTRAST { cbSize, dwFlags, lpszDefaultScheme }.
+        0x0042 if !data.is_null() => {
+            let flags = data.cast::<u32>().add(1);
+            // HCF_AVAILABLE | HCF_HIGHCONTRASTON si un thème est actif.
+            *flags = 0x2 | u32::from(a11y.contrast != 0);
+            return 1;
+        }
+        // SPI_GETCLIENTAREAANIMATION : BOOL.
+        0x1042 if !data.is_null() => {
+            *data.cast::<i32>() = i32::from(a11y.animations);
+            return 1;
+        }
+        // SPI_GETCARETWIDTH : DWORD en pixels.
+        0x2006 if !data.is_null() => {
+            *data.cast::<u32>() = u32::from(a11y.caret_width);
+            return 1;
+        }
+        _ => {}
+    }
     // SPI_GETWORKAREA = 0x0030
     if action == 0x0030 && !data.is_null() {
         let rect = data as *mut Rect;
