@@ -75,6 +75,8 @@ cargo build --release -p winlux
 bash scripts/build-tests.sh
 
 cp "$root/target/release/winlux" "$stage/usr/bin/winlux"
+# Lecteurs réseau (FTP, SFTP, SMB, NFS, WebDAV, S3) : même binaire.
+ln -sf winlux "$stage/usr/bin/winlux-drives"
 cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
 cp "$root/scripts/winlux-update-progress.py" "$stage/usr/bin/winlux-update-progress"
 chmod 755 "$stage/usr/bin/winlux-update-progress"
@@ -116,7 +118,16 @@ fi
 mkdir -p "$stage/usr/share/winlux/autoinstall"
 cp "$root/integration/autoinstall/"*.yaml "$stage/usr/share/winlux/autoinstall/"
 chmod 755 "$stage/usr/bin/winlux-installer" "$stage/usr/bin/winlux-hw-detect" "$stage/usr/bin/winlux-first-boot" "$stage/opt/winlux/scripts/install.sh"
+mkdir -p "$stage/usr/lib/winlux/python"
+for tool in benchmark profiles migrate; do
+    cp "$root/scripts/winlux_$tool.py" "$stage/usr/lib/winlux/python/winlux_$tool.py"
+done
+for tool in benchmark:benchmark profile:profiles migrate:migrate; do
+    printf '#!/bin/sh\nexec /usr/bin/python3 /usr/lib/winlux/python/winlux_%s.py "$@"\n' "${tool#*:}" >"$stage/usr/bin/winlux-${tool%%:*}"
+    chmod 755 "$stage/usr/bin/winlux-${tool%%:*}"
+done
 cp "$root/integration/winlux-installer.desktop" "$stage/usr/share/applications/winlux-installer.desktop"
+cp "$root/integration/winlux-migrate.desktop" "$stage/usr/share/applications/winlux-migrate.desktop"
 mkdir -p "$stage/root/Bureau"
 cp "$root/integration/winlux-installer.desktop" "$stage/root/Bureau/winlux-installer.desktop"
 mkdir -p "$stage/usr/share/winlux"
@@ -450,6 +461,10 @@ for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 s
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
 /usr/bin/winlux-hardware >/dev/null 2>&1 || true
 /usr/bin/winlux-firmware >/dev/null 2>&1 || true
+# Profil d'utilisation choisi à l'installation (sysctl, gouverneur CPU, E/S, GPU).
+if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
+    /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
+fi
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
 /bin/busybox mdev -s 2>/dev/null || true

@@ -25,6 +25,13 @@ pub fn drive_c() -> PathBuf {
 /// Chemin Linux absolu → chemin Windows (`C:\...` ou `Z:\...`).
 pub fn to_windows(p: &Path) -> String {
     let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    for m in crate::mounts::list() {
+        if let Ok(r) = abs.strip_prefix(&m.mountpoint) {
+            let mut s = format!("{}:\\", m.letter);
+            s.push_str(&r.to_string_lossy().replace('/', "\\"));
+            return s;
+        }
+    }
     let c = std::fs::canonicalize(drive_c()).unwrap_or_else(|_| drive_c());
     let (drive, rest) = match abs.strip_prefix(&c) {
         Ok(r) => ("C:", r.to_path_buf()),
@@ -57,6 +64,7 @@ pub fn to_linux(w: &str) -> PathBuf {
                 'Z' => PathBuf::from("/"),
                 l => std::env::var_os(format!("WINLUX_DRIVE_{l}"))
                     .map(PathBuf::from)
+                    .or_else(|| crate::mounts::root_of(l))
                     .unwrap_or_else(drive_c),
             };
             (Some(root), &w[2..])
