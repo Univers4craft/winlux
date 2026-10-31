@@ -415,6 +415,9 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
         return 0;
     }
     let m = &*msg;
+    if super::dataobject::dispatch_private(m.hwnd, m.message, m.wparam) {
+        return 0;
+    }
     let wnd_proc = gui::wnd_proc_of(m.hwnd);
     match wnd_proc {
         Some(wp) => gui::call_wndproc(wp, m.hwnd, m.message, m.wparam, m.lparam),
