@@ -32,6 +32,16 @@ pub static mut ALIGN_LEFT: bool = false;
 pub static mut VOLUME_LEVEL: u32 = 0;
 pub static mut BATTERY_LEVEL: u32 = 0;
 pub static mut BATTERY_PRESENT: u32 = 0;
+/// État d'alimentation lu par GetSystemPowerStatus (module power du runtime).
+pub static mut BATTERY_CHARGING: bool = false;
+pub static mut BATTERY_AC: bool = true;
+/// Autonomie restante en secondes (u32::MAX = inconnue).
+pub static mut BATTERY_SECS: u32 = u32::MAX;
+pub static mut BATTERY_SAVER: bool = false;
+static mut BATTERY_HOVER: bool = false;
+static mut LAST_POWER_POLL: u32 = 0;
+/// Dernier seuil d'alerte batterie signalé (20 puis 10 %).
+static mut LOW_WARNED: u32 = 101;
 pub static mut NETWORK_CONNECTED: u32 = 0;
 /// Indicateur Bluetooth : 0 éteint ou absent, 1 activé, 2 appareil connecté.
 pub static mut BLUETOOTH_STATE: u32 = 0;
@@ -1304,7 +1314,7 @@ unsafe fn draw_volume(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32) 
         }
     }
 }
-unsafe fn draw_battery(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32) {
+unsafe fn draw_battery(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32, charging: bool) {
     let c = rgb(0xF2, 0xF2, 0xF2);
     round_rect(hdc, b, x, y + 2, x + 22, y + 13, 2, c);
     fill(hdc, b, x + 1, y + 3, x + 21, y + 12, rgb(0x20, 0x22, 0x28));
@@ -1315,9 +1325,182 @@ unsafe fn draw_battery(hdc: Handle, b: &mut Brushes, x: i32, y: i32, level: u32)
         y + 4,
         x + 2 + (18 * level.min(100) as i32) / 100,
         y + 11,
-        if level > 20 { c } else { rgb(0xFF, 0x60, 0x50) },
+        if level > 20 || charging {
+            c
+        } else {
+            rgb(0xFF, 0x60, 0x50)
+        },
     );
     fill(hdc, b, x + 22, y + 5, x + 24, y + 10, c);
+    if charging {
+        // Éclair de charge, détouré sur la jauge.
+        let dark = rgb(0x20, 0x22, 0x28);
+        for (dx, top, bottom) in [(9, 3, 8), (10, 4, 8), (11, 7, 9), (12, 7, 12), (13, 7, 11)] {
+            fill(hdc, b, x + dx - 1, y + top, x + dx + 1, y + bottom + 1, dark);
+        }
+        let bolt = rgb(0x6C, 0xCB, 0x5F);
+        for (dx, top, bottom) in [(9, 4, 7), (10, 5, 7), (11, 7, 8), (12, 8, 11), (13, 8, 10)] {
+            fill(hdc, b, x + dx, y + top, x + dx + 1, y + bottom + 1, bolt);
+        }
+    }
+}
+
+/// Lit l'état d'alimentation comme une application Windows le ferait.
+/// Renvoie vrai si l'icône doit être redessinée.
+pub unsafe fn power_tick() -> bool {
+    let t = now();
+    if LAST_POWER_POLL != 0 && t.wrapping_sub(LAST_POWER_POLL) < 3000 {
+        return false;
+    }
+    LAST_POWER_POLL = t;
+    let mut st = SystemPowerStatus::default();
+    if GetSystemPowerStatus(&mut st) == 0 {
+        return false;
+    }
+    let before = (
+        BATTERY_PRESENT,
+        BATTERY_LEVEL,
+        BATTERY_CHARGING,
+        BATTERY_AC,
+        BATTERY_SECS / 60,
+        BATTERY_SAVER,
+    );
+    BATTERY_PRESENT = u32::from(st.battery_flag & 128 == 0 && st.battery_life_percent <= 100);
+    BATTERY_LEVEL = if BATTERY_PRESENT != 0 {
+        u32::from(st.battery_life_percent)
+    } else {
+        0
+    };
+    BATTERY_CHARGING = st.battery_flag & 8 != 0;
+    BATTERY_AC = st.ac_line_status == 1;
+    BATTERY_SECS = st.battery_life_time;
+    BATTERY_SAVER = st.system_status_flag & 1 != 0;
+    // Alertes façon Windows : batterie faible à 20 %, critique à 10 %.
+    if BATTERY_PRESENT != 0 && !BATTERY_AC {
+        if BATTERY_LEVEL <= 10 && LOW_WARNED > 10 {
+            LOW_WARNED = 10;
+            toast(b"Batterie critique : branchez votre PC, il va bient\xF4t se mettre en veille.");
+        } else if BATTERY_LEVEL <= 20 && LOW_WARNED > 20 {
+            LOW_WARNED = 20;
+            toast(b"Batterie faible : 20 % restants. Branchez votre PC.");
+        }
+    } else if BATTERY_AC {
+        LOW_WARNED = 101;
+    }
+    before
+        != (
+            BATTERY_PRESENT,
+            BATTERY_LEVEL,
+            BATTERY_CHARGING,
+            BATTERY_AC,
+            BATTERY_SECS / 60,
+            BATTERY_SAVER,
+        )
+}
+
+fn push(buf: &mut [u8], n: &mut usize, s: &[u8]) {
+    for &c in s {
+        if *n < buf.len() {
+            buf[*n] = c;
+            *n += 1;
+        }
+    }
+}
+fn push_num(buf: &mut [u8], n: &mut usize, v: u32) {
+    let mut digits = [0u8; 10];
+    let mut i = digits.len();
+    let mut v = v;
+    loop {
+        i -= 1;
+        digits[i] = b'0' + (v % 10) as u8;
+        v /= 10;
+        if v == 0 {
+            break;
+        }
+    }
+    push(buf, n, &digits[i..]);
+}
+
+/// Infobulle détaillée de l'icône batterie (pourcentage, état, autonomie).
+unsafe fn draw_battery_tip(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
+    if !BATTERY_HOVER || START_OPEN || NET_PANEL || notifications::is_open() {
+        return;
+    }
+    let mut line1 = [0u8; 64];
+    let mut n1 = 0;
+    let mut line2 = [0u8; 64];
+    let mut n2 = 0;
+    if BATTERY_PRESENT == 0 {
+        push(&mut line1, &mut n1, b"Alimentation secteur");
+        push(&mut line2, &mut n2, b"Aucune batterie d\xE9tect\xE9e");
+    } else {
+        push(&mut line1, &mut n1, b"Batterie : ");
+        push_num(&mut line1, &mut n1, BATTERY_LEVEL);
+        if BATTERY_AC {
+            push(&mut line1, &mut n1, b" % disponible (branch\xE9)");
+            push(
+                &mut line2,
+                &mut n2,
+                if BATTERY_CHARGING {
+                    b"En charge" as &[u8]
+                } else if BATTERY_LEVEL >= 99 {
+                    b"Charg\xE9e"
+                } else {
+                    b"Branch\xE9e, pas en charge"
+                },
+            );
+        } else {
+            push(&mut line1, &mut n1, b" % restants");
+            if BATTERY_SECS != u32::MAX {
+                let (h, m) = (BATTERY_SECS / 3600, BATTERY_SECS / 60 % 60);
+                push(&mut line2, &mut n2, b"Environ ");
+                if h > 0 {
+                    push_num(&mut line2, &mut n2, h);
+                    push(&mut line2, &mut n2, if m < 10 { b" h 0" } else { b" h " });
+                }
+                push_num(&mut line2, &mut n2, m);
+                push(&mut line2, &mut n2, b" min d'autonomie");
+            } else {
+                push(&mut line2, &mut n2, b"Estimation de l'autonomie en cours");
+            }
+        }
+    }
+    let mode: &[u8] = if BATTERY_SAVER {
+        b"Mode : \xC9conomie d'\xE9nergie"
+    } else {
+        b"Cliquez pour les options d'alimentation"
+    };
+    let w = text_width(&line1[..n1], 13)
+        .max(text_width(&line2[..n2], 13))
+        .max(text_width(mode, 11))
+        + 28;
+    let h = 72;
+    // Infobulle ancrée sur l'icône, du côté du bureau quelle que soit la
+    // position de la barre des tâches.
+    let bat = tray(l).battery;
+    let (cx, cy) = ((bat.left + bat.right) / 2, (bat.top + bat.bottom) / 2);
+    let (x, y) = match personalize::BAR_POS {
+        1 => (cx - w / 2, l.bar.bottom + 8),
+        2 => (l.bar.right + 8, cy - h / 2),
+        3 => (l.bar.left - w - 8, cy - h / 2),
+        _ => (cx - w / 2, l.bar.top - h - 8),
+    };
+    let x = x.clamp(8, (l.w - w - 8).max(8));
+    let y = y.clamp(8, (l.h - h - 8).max(8));
+    panel(
+        hdc,
+        b,
+        x,
+        y,
+        x + w,
+        y + h,
+        6,
+        rgb(0x2B, 0x2B, 0x2B),
+        rgb(0x3D, 0x3D, 0x3D),
+    );
+    text(hdc, f.semibold, rgb(0xF2, 0xF2, 0xF2), x + 14, y + 10, &line1[..n1]);
+    text(hdc, f.body, rgb(0xC5, 0xC5, 0xC5), x + 14, y + 30, &line2[..n2]);
+    text(hdc, f.small, rgb(0x9A, 0x9A, 0x9A), x + 14, y + 51, mode);
 }
 
 unsafe fn two_digits(v: u16) -> [u8; 2] {
@@ -1587,7 +1770,14 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
         }
         draw_volume(hdc, b, cx - 9, t.volume.top + 6, VOLUME_LEVEL);
         if BATTERY_PRESENT != 0 {
-            draw_battery(hdc, b, cx - 9, t.battery.top + 8, BATTERY_LEVEL);
+            draw_battery(
+                hdc,
+                b,
+                cx - 9,
+                t.battery.top + 8,
+                BATTERY_LEVEL,
+                BATTERY_CHARGING,
+            );
         } else {
             text_centered(hdc, f.small, 11, dim, cx, t.battery.top + 8, b"CA");
         }
@@ -1638,7 +1828,14 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
         }
         draw_volume(hdc, b, t.volume.left + 6, mid(&bar) - 7, VOLUME_LEVEL);
         if BATTERY_PRESENT != 0 {
-            draw_battery(hdc, b, t.battery.left + 6, mid(&bar) - 7, BATTERY_LEVEL);
+            draw_battery(
+                hdc,
+                b,
+                t.battery.left + 6,
+                mid(&bar) - 7,
+                BATTERY_LEVEL,
+                BATTERY_CHARGING,
+            );
         } else {
             text(hdc, f.small, dim, t.battery.left + 8, mid(&bar) - 7, b"CA");
         }
@@ -3607,6 +3804,7 @@ pub unsafe fn draw(hdc: Handle) {
         draw_vol_panel(hdc, &mut b, &f, &l);
         weather::draw_panel(hdc, &mut b, &f, l.bar_top, l.right);
         draw_toast(hdc, &mut b, &f, &l);
+        draw_battery_tip(hdc, &mut b, &f, &l);
         // Overlay de fermeture.
         if SHUTDOWN_ACTION > 0 {
             let t = since(SHUTDOWN_START);
@@ -3804,8 +4002,10 @@ pub unsafe fn tick(hwnd: Handle) {
     }
     let mut now = SystemTime::default();
     GetLocalTime(&mut now);
-    let system =
-        crate::settings::system_tick() | crate::firewall::system_tick() | crate::a11y::tick();
+    let system = crate::settings::system_tick()
+        | power_tick()
+        | crate::firewall::system_tick()
+        | crate::a11y::tick();
     let weather_changed = weather::poll();
     let welcome = BOOT_DONE
         && crate::login::logged_in()
@@ -3966,8 +4166,9 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             NET_PANEL = false;
             notifications::set_open(false);
         } else if inside(&t.battery, x, y) {
-            crate::settings::open_page(3);
+            BATTERY_HOVER = false;
             VOL_PANEL = false;
+            crate::settings::open_page(crate::settings::PAGE_POWER);
         } else if inside(&t.clock, x, y) {
             notifications::toggle();
             NET_PANEL = false;
@@ -4311,6 +4512,11 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
     };
     if hb != HOVER_BUTTON {
         HOVER_BUTTON = hb;
+        rp = true;
+    }
+    let bh = inside(&tray(&l).battery, x, y);
+    if bh != BATTERY_HOVER {
+        BATTERY_HOVER = bh;
         rp = true;
     }
     let hs = if START_OPEN {
