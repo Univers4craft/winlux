@@ -41,6 +41,9 @@ fn main() {
             std::process::exit(1);
         }
     };
+    if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
+        crash::set_exe_name(name);
+    }
     profiles::apply(&exe);
     if let Some(target) = managed::detect(&exe, &source) {
         log_info!(
