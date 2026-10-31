@@ -79,6 +79,8 @@ cp "$root/scripts/winlux-update.sh" "$stage/usr/bin/winlux-update"
 cp "$root/scripts/winlux-update-progress.py" "$stage/usr/bin/winlux-update-progress"
 chmod 755 "$stage/usr/bin/winlux-update-progress"
 cp "$root/scripts/winlux-control.sh" "$stage/usr/bin/winlux-control"
+cp "$root/scripts/winlux-sysupdate.sh" "$stage/usr/bin/winlux-sysupdate"
+chmod 755 "$stage/usr/bin/winlux-sysupdate"
 cp "$root/scripts/winlux-network.sh" "$stage/usr/bin/winlux-network"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
@@ -525,6 +527,7 @@ fi
 (
     while :; do
         /usr/bin/winlux-update --auto-run >>/run/winlux/auto-update.log 2>&1 || true
+        /usr/bin/winlux-sysupdate --tick >>/run/winlux/sysupdate-auto.log 2>&1 || true
         /bin/busybox sleep 1800
     done
 ) &

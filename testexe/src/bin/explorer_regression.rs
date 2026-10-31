@@ -30,6 +30,8 @@ mod terminal;
 mod utilities;
 #[path = "../shell/weather.rs"]
 mod weather;
+#[path = "../shell/welcome.rs"]
+mod welcome;
 #[path = "../shell/wm.rs"]
 mod wm;
 
@@ -39,6 +41,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         explorer::regression_checks();
         desktop::regression_checks();
         settings::regression_checks();
+        welcome::regression_checks();
     }
     finish()
 }

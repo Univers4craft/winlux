@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **124**
+- Réalisé : **127**
 - À faire : **26**
-- Total : **150**
-- Progression : **82.7%**
+- Total : **153**
+- Progression : **83.0%**
 
 ## À FAIRE (par priorité)
 
@@ -194,6 +194,9 @@
 - [x] Définir les variantes clair/sombre et le réglage d'échelle.
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
+- [x] Fenêtre « Bienvenue » au premier login (`welcome.rs`) : visite guidée en 8 étapes (Démarrer, Explorer, Paramètres, Terminal, raccourcis, confidentialité, choix du thème clair/sombre et de l’alignement), rouvrable depuis Démarrer.
+- [x] Paramètres > Mises à jour système : mode automatique, manuel ou planifié (jour/heure) pour APT (`winlux-sysupdate`) et Winlux, liste des paquets, journal et notification quand des mises à jour sont disponibles.
+- [x] Paramètres > Confidentialité : télémétrie et historique de localisation désactivés par défaut, autorisations micro/caméra/localisation des .exe (micro refusé appliqué par `winmm`).
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
 
 ### Priorité 6 — Qualité et livraison

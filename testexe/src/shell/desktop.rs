@@ -309,7 +309,8 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 30] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 31] = [
+            (b"Bienvenue dans Winlux", b"welcome", 9),
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
             (b"\xC9\x64iteur", b"mousepad", 1),
@@ -508,6 +509,10 @@ unsafe fn start_offset() -> i32 {
     } else {
         0
     }
+}
+
+pub unsafe fn open_start_menu() {
+    set_start(true);
 }
 
 unsafe fn set_start(open: bool) {
@@ -1290,6 +1295,7 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
             Some(wm::APP_UTILITIES) => Glyph::Tools,
             Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(wm::APP_DISKMGR) => Glyph::Drive,
+            Some(wm::APP_WELCOME) => Glyph::Star,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1606,6 +1612,21 @@ unsafe fn launch(what: Launch) {
             }
             if cmd == b"diskmgr" {
                 wm::open(wm::APP_DISKMGR);
+                return;
+            }
+            if cmd == b"welcome" {
+                if wm::native_session() {
+                    ShellExecuteA(
+                        core::ptr::null_mut(),
+                        c"open".as_ptr(),
+                        c"winlux-welcome".as_ptr(),
+                        core::ptr::null(),
+                        core::ptr::null(),
+                        1,
+                    );
+                } else {
+                    crate::welcome::open();
+                }
                 return;
             }
             let mut wcmd = [0u16; 256];
@@ -3150,6 +3171,7 @@ pub unsafe fn frame(hwnd: Handle) {
         || wm::animating()
         || crate::gfx::theme_animating()
         || notifications::animating()
+        || crate::welcome::animating()
         || since(INTRO_START) < INTRO_MS + 40
         || (START_ANIM != 0 && since(START_ANIM) < START_OPEN_MS + 40)
         || START_CLOSING
@@ -3191,8 +3213,12 @@ pub unsafe fn tick(hwnd: Handle) {
     GetLocalTime(&mut now);
     let system = crate::settings::system_tick();
     let weather_changed = weather::poll();
+    let welcome = BOOT_DONE
+        && crate::login::logged_in()
+        && since(INTRO_START) > INTRO_MS
+        && crate::welcome::maybe_show();
     let apps = BOOT_DONE && wm::tick();
-    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system || weather_changed {
+    if (now.minute != LAST_MINUTE && BOOT_DONE) || apps || system || weather_changed || welcome {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
 }
