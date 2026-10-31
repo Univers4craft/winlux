@@ -70,10 +70,12 @@ gzip -1 <"$work/archive.pipe" >"$work/install-initramfs.gz"
 wait "$archive_pid"
 rm "$work/archive.pipe"
 disk="$work/installed.img"
-truncate -s 4G "$disk"
+# The APT-native image is about 2 GiB compressed: leave room to install it.
+truncate -s 12G "$disk"
 log="$work/install.log"
+install_status=0
 (
-    for attempt in $(seq 1 180); do
+    for attempt in $(seq 1 540); do
         if grep -Eq 'WINLUX_INSTALL_EXIT=|Kernel panic' "$log" 2>/dev/null; then exit 0; fi
         if grep -q 'Saisissez exactement' "$log" 2>/dev/null; then
             printf 'EFFACER /dev/vda\n'
@@ -81,11 +83,13 @@ log="$work/install.log"
         fi
         sleep 1
     done
-) | timeout 240 qemu-system-x86_64 -m "${WINLUX_QEMU_MEMORY:-6144}" -smp 2 -accel "$accel" -cpu max -display none -monitor none -serial stdio -nic none -no-reboot \
+) | timeout "${WINLUX_INSTALL_TEST_TIMEOUT:-600}" qemu-system-x86_64 -m "${WINLUX_QEMU_MEMORY:-6144}" -smp 2 -accel "$accel" -cpu max -display none -monitor none -serial stdio -nic none -no-reboot \
     -kernel "$stage/boot/vmlinuz" -initrd "$work/install-initramfs.gz" \
     -append 'console=ttyS0,115200 rootfstype=ramfs rdinit=/install-init panic=1 winlux.install-test=1' \
-    -drive "file=$disk,format=raw,if=virtio" >"$log" 2>&1
-grep -q '^WINLUX_INSTALL_EXIT=0' "$log" || { tail -n 60 "$log"; exit 1; }
+    -drive "file=$disk,format=raw,if=virtio" >"$log" 2>&1 || install_status=$?
+# A timeout is a failure too: show where the installer stopped instead of
+# letting set -e end the script without a word.
+grep -q '^WINLUX_INSTALL_EXIT=0' "$log" || { echo "Installation en VM échouée (code ${install_status:-0}) :" >&2; tail -n 80 "$log"; exit 1; }
 for mode in bios uefi; do
     log="$work/$mode.log"
     set -- qemu-system-x86_64 -m 2048 -smp 2 -accel "$accel" -cpu max -display none -monitor none -serial stdio -nic none -no-reboot -drive "file=$disk,format=raw,if=virtio"
@@ -93,9 +97,10 @@ for mode in bios uefi; do
         cp "${WINLUX_OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}" "$work/vars.fd"
         set -- "$@" -machine q35 -drive "if=pflash,format=raw,unit=0,readonly=on,file=${WINLUX_OVMF:-/usr/share/OVMF/OVMF_CODE_4M.fd}" -drive "if=pflash,format=raw,unit=1,file=$work/vars.fd"
     fi
-    (for attempt in $(seq 1 80); do printf d || exit 0; sleep 0.5; done) | timeout 180 "$@" >"$log" 2>&1
+    boot_status=0
+    (for attempt in $(seq 1 80); do printf d || exit 0; sleep 0.5; done) | timeout 300 "$@" >"$log" 2>&1 || boot_status=$?
     for marker in WINLUX_SYSTEM_VERSION= WINLUX_LIVE_SEQUENTIAL_EXIT=0 WINLUX_LIVE_PARALLEL_EXIT=0 WINLUX_LIVE_X11_EXIT=0 WINLUX_LIVE_RESULT=0; do
-        grep -q "$marker" "$log" || { tail -n 60 "$log"; exit 1; }
+        grep -q "$marker" "$log" || { echo "Disque installé ($mode) : $marker absent (code $boot_status)" >&2; tail -n 80 "$log"; exit 1; }
     done
     echo "Disque installé validé : $mode"
 done
