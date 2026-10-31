@@ -459,7 +459,12 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
             mix(0, rgb(0xCC, 0xE4, 0xFF), fade_alpha, 1000),
             w / 2,
             h - 90,
-            b"Ouverture de l'autre session : votre bureau reste verrouill\xE9 et intact.",
+            tr4(&[
+                b"Ouverture de l'autre session : votre bureau reste verrouill\xE9 et intact.",
+                b"Opening the other session: your desktop stays locked and intact.",
+                b"Abriendo la otra sesi\xF3n: su escritorio sigue bloqueado e intacto.",
+                b"Die andere Sitzung wird ge\xF6ffnet: Ihr Desktop bleibt gesperrt und unver\xE4ndert.",
+            ]),
         );
     }
     // Message d'erreur.
@@ -814,9 +819,14 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
                 cx,
                 ay + avatar_size + 44,
                 if i == OWNER {
-                    b"Session verrouill\xE9e"
+                    tr4(&[
+                        b"Session verrouill\xE9e",
+                        b"Session locked",
+                        b"Sesi\xF3n bloqueada",
+                        b"Sitzung gesperrt",
+                    ])
                 } else {
-                    b"Connect\xE9"
+                    tr4(&[b"Connect\xE9", b"Signed in", b"Conectado", b"Angemeldet"])
                 },
             );
         }
