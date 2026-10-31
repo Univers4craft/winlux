@@ -1,6 +1,7 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
 mod crash;
+mod imaging;
 mod dlls;
 mod loader;
 pub mod log;
@@ -32,6 +33,13 @@ fn main() {
             std::process::exit(2);
         };
         std::process::exit(inspect(&PathBuf::from(path)));
+    }
+    if exe == "--image-info" {
+        let Some(path) = args.next() else {
+            eprintln!("winlux: usage: winlux --image-info IMAGE");
+            std::process::exit(2);
+        };
+        std::process::exit(imaging::cli_info(&PathBuf::from(path)));
     }
     let exe = PathBuf::from(exe);
     let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
