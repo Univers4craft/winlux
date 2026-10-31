@@ -40,6 +40,7 @@ pub unsafe fn native_app() -> Option<usize> {
     (NATIVE_APP != usize::MAX).then_some(NATIVE_APP)
 }
 pub unsafe fn native_init() {
+    crate::gfx::a11y_reload();
     let mut mode = [0i8; 32];
     let n = GetEnvironmentVariableA(c"WINLUX_SHELL_APP".as_ptr(), mode.as_mut_ptr(), 32);
     NATIVE_APP = if n == 8 && mode[0] == b'e' as i8 {
@@ -181,7 +182,7 @@ pub unsafe fn native_key(hwnd: Handle, vk: u32, ch: u16) {
     }
 }
 pub unsafe fn native_tick(hwnd: Handle) {
-    let changed = crate::settings::system_tick();
+    let changed = crate::settings::system_tick() | crate::gfx::a11y_reload();
     if app_tick(NATIVE_APP, &native_frame(hwnd)) || changed {
         InvalidateRect(hwnd, core::ptr::null(), 0);
     }
@@ -630,6 +631,10 @@ pub fn frame_of(r: &Rect) -> Frame {
     }
 }
 
+/// Fenêtre active et son cadre (lu par le Narrateur).
+pub fn active_window() -> Option<(usize, Rect)> {
+    unsafe { (ACTIVE != usize::MAX).then(|| (ACTIVE, WINS[ACTIVE].rect)) }
+}
 pub fn is_open(app: usize) -> bool {
     unsafe { WINS[app].open }
 }
@@ -2049,7 +2054,7 @@ pub unsafe fn on_button_up(x: i32, y: i32, repaint: &mut bool) -> bool {
         if inside(&fr.client, x, y) || (custom_title(APP_EXPLORER) && inside(&fr.title, x, y)) {
             app_mouse(APP_EXPLORER, Mouse::Up, x, y, &fr);
         } else {
-            let do_copy = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+            let do_copy = ((crate::gfx::key_state(0x11) as u16) & 0x8000) != 0;
             crate::desktop::handle_file_drop(do_copy);
             crate::explorer::cancel_file_drag();
         }
@@ -2157,7 +2162,7 @@ pub unsafe fn on_key(vk: u32, ch: u16) -> bool {
     }
     if vk == 0x09 && ch == 0 {
         // Tab
-        let alt_down = ((GetKeyState(0x12) as u16) & 0x8000) != 0;
+        let alt_down = ((crate::gfx::key_state(0x12) as u16) & 0x8000) != 0;
         if alt_down {
             let mut list = [usize::MAX; APP_COUNT];
             let mut count = 0;
@@ -2192,7 +2197,7 @@ pub unsafe fn on_key(vk: u32, ch: u16) -> bool {
     }
     if vk == 0x12 && ch == 0 {
         // if alt released
-        let alt_down = ((GetKeyState(0x12) as u16) & 0x8000) != 0;
+        let alt_down = ((crate::gfx::key_state(0x12) as u16) & 0x8000) != 0;
         if !alt_down && ALT_TAB {
             let mut list = [usize::MAX; APP_COUNT];
             let mut count = 0;

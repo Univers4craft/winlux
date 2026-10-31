@@ -143,6 +143,7 @@ jobs:
           sh scripts/test-network.sh
           sh scripts/test-control.sh
           sh scripts/test-display.sh
+          sh scripts/test-speak.sh
 
   # 3. Compile les .exe Windows puis les exécute sous Winlux.
   runtime-tests:

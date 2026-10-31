@@ -779,22 +779,6 @@ pub extern "win64" fn is_dlg_button_checked(_dlg: usize, _id: i32) -> u32 {
 
 // ── Divers ──────────────────────────────────────────────────────────
 
-pub extern "win64" fn system_parameters_info_a(
-    _action: u32,
-    _param: u32,
-    _data: usize,
-    _update: u32,
-) -> i32 {
-    1
-}
-pub extern "win64" fn system_parameters_info_w(
-    _action: u32,
-    _param: u32,
-    _data: usize,
-    _update: u32,
-) -> i32 {
-    1
-}
 pub extern "win64" fn get_class_name_a(_hwnd: usize, _buf: *mut u8, _max: i32) -> i32 {
     0
 }
@@ -1014,8 +998,6 @@ pub fn exports() -> crate::dlls::Exports {
         "SendDlgItemMessageA"=>fn send_dlg_item_message_a,
         "SendDlgItemMessageW"=>fn send_dlg_item_message_w,
         "CheckDlgButton"=>fn check_dlg_button, "IsDlgButtonChecked"=>fn is_dlg_button_checked,
-        "SystemParametersInfoA"=>fn system_parameters_info_a,
-        "SystemParametersInfoW"=>fn system_parameters_info_w,
         "GetClassNameA"=>fn get_class_name_a, "GetClassNameW"=>fn get_class_name_w,
         "GetClassLongA"=>fn get_class_long_a, "GetClassLongW"=>fn get_class_long_w,
         "GetClassLongPtrA"=>fn get_class_long_ptr_a, "GetClassLongPtrW"=>fn get_class_long_ptr_w,

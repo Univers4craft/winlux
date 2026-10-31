@@ -8,6 +8,8 @@
 
 use winlux_testexe::*;
 
+#[path = "../shell/a11y.rs"]
+mod a11y;
 #[path = "../shell/desktop.rs"]
 mod desktop;
 #[path = "../shell/diskcleaner.rs"]
@@ -750,7 +752,9 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             GOT_CHAR += 1;
             LAST_CHAR = wparam;
             if DESKTOP {
-                desktop::on_key(hwnd, 0, wparam as u16);
+                if let Some(ch) = a11y::filter_char(wparam as u16) {
+                    desktop::on_key(hwnd, 0, ch);
+                }
             } else if wm::native_app().is_some() {
                 wm::native_key(hwnd, 0, wparam as u16);
             }
@@ -766,7 +770,10 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             }
             ASYNC_KEY_PRESSED |= ((GetAsyncKeyState(vk) as u16 & 1) != 0) as u32;
             if DESKTOP {
-                desktop::on_key(hwnd, wparam as u32, 0);
+                desktop::note_key_down(wparam as u32);
+                if !a11y::key_down(hwnd, wparam as u32) {
+                    desktop::on_key(hwnd, wparam as u32, 0);
+                }
             } else if wm::native_app().is_some() {
                 wm::native_key(hwnd, wparam as u32, 0);
             }
@@ -775,6 +782,10 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
         WM_KEYUP => {
             GOT_KEYUP += 1;
             THREAD_KEY_UP_CLEAR |= ((GetKeyState(wparam as i32) as u16 & 0x8000) == 0) as u32;
+            if DESKTOP {
+                a11y::key_up(hwnd, wparam as u32);
+                desktop::on_key_up(hwnd, wparam as u32);
+            }
             0
         }
         WM_LBUTTONDOWN | WM_MOUSEMOVE | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_MBUTTONDOWN

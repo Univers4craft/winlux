@@ -4,6 +4,8 @@
 #![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
+#[path = "../shell/a11y.rs"]
+mod a11y;
 #[path = "../shell/desktop.rs"]
 mod desktop;
 #[path = "../shell/diskcleaner.rs"]
@@ -39,6 +41,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         explorer::regression_checks();
         desktop::regression_checks();
         settings::regression_checks();
+        a11y::regression_checks();
     }
     finish()
 }

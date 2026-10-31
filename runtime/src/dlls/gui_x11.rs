@@ -530,6 +530,8 @@ pub struct X11Backend {
     x11_cursors: HashMap<usize, u32>,
     /// Dernier handle de curseur Win32 appliqué à la fenêtre X11.
     current_cursor: usize,
+    /// Taille et couleur du pointeur (réglages d'accessibilité appliqués).
+    pointer_style: (u8, u8),
 }
 
 impl X11Backend {
@@ -584,6 +586,7 @@ impl X11Backend {
             xft_dirty: Cell::new(false),
             x11_cursors: HashMap::new(),
             current_cursor: 0x0001_0001,
+            pointer_style: (1, 0),
         })
     }
 
@@ -610,6 +613,8 @@ impl X11Backend {
     }
 
     fn init_cursors(&mut self) {
+        let a11y = crate::dlls::a11y::current();
+        self.pointer_style = (a11y.pointer_size, a11y.pointer_color);
         let arrow = self.arrow_cursor().or_else(|| self.create_font_cursor(68));
         if let Some(c) = arrow {
             self.x11_cursors.insert(0x0001_0001, c); // IDC_ARROW
@@ -652,7 +657,28 @@ impl X11Backend {
         }
     }
 
+    /// Reconstruit la flèche quand la taille ou la couleur du pointeur change.
+    fn refresh_pointer_style(&mut self) {
+        if self.x11_cursors.is_empty() {
+            return;
+        }
+        let a11y = crate::dlls::a11y::current();
+        let style = (a11y.pointer_size, a11y.pointer_color);
+        if style == self.pointer_style {
+            return;
+        }
+        self.pointer_style = style;
+        if let Some(arrow) = self.arrow_cursor() {
+            if let Some(old) = self.x11_cursors.insert(0x0001_0001, arrow) {
+                let _ = self.conn.free_cursor(old);
+            }
+            // Force la réapplication du curseur courant aux fenêtres.
+            self.current_cursor = 0;
+        }
+    }
+
     fn apply_cursor(&mut self) {
+        self.refresh_pointer_style();
         let handle = gui::CURSOR_HANDLE.load(std::sync::atomic::Ordering::Relaxed);
         if handle == self.current_cursor {
             return;
@@ -691,7 +717,9 @@ impl X11Backend {
             b"      XooX  ",
             b"       XX   ",
         ];
-        let scale = self.scale.max(1.0);
+        // Taille d'accessibilité : 1×, 1,5×, 2×, 2,5× ou 3× la flèche.
+        let size = self.pointer_style.0.clamp(1, 5) as f32;
+        let scale = self.scale.max(1.0) * (1.0 + (size - 1.0) * 0.5);
         let width = (12.0 * scale).ceil() as u16;
         let height = (19.0 * scale).ceil() as u16;
         let setup = self.conn.setup();
@@ -752,20 +780,16 @@ impl X11Backend {
             let _ = self.conn.free_gc(gc);
             pixmaps[slot] = pixmap;
         }
+        // Intérieur / contour : blanc, noir ou vert vif (bien visible).
+        let ((fr, fg, fb), (br, bg, bb)) = match self.pointer_style.1 {
+            1 => ((0, 0, 0), (u16::MAX, u16::MAX, u16::MAX)),
+            2 => ((0xC8C8, u16::MAX, 0), (0, 0, 0)),
+            _ => ((u16::MAX, u16::MAX, u16::MAX), (0, 0, 0)),
+        };
         let cursor = self.conn.generate_id().ok()?;
-        let created = self.conn.create_cursor(
-            cursor,
-            pixmaps[0],
-            pixmaps[1],
-            u16::MAX,
-            u16::MAX,
-            u16::MAX,
-            0,
-            0,
-            0,
-            0,
-            0,
-        );
+        let created = self
+            .conn
+            .create_cursor(cursor, pixmaps[0], pixmaps[1], fr, fg, fb, br, bg, bb, 0, 0);
         for p in pixmaps {
             let _ = self.conn.free_pixmap(p);
         }
@@ -1200,6 +1224,7 @@ impl X11Backend {
         source_rect: &Rect,
         destination_rect: &Rect,
         stretch: bool,
+        smooth: bool,
         rop: gui::RasterOp,
     ) {
         let Some(mut source_window) = self.windows.get(&source_hwnd).copied() else {
@@ -1242,16 +1267,25 @@ impl X11Backend {
             return;
         }
 
-        self.paint_stretched_pixels(source_window.window, destination_window, src, dst, rop);
+        self.paint_stretched_pixels(
+            source_window.window,
+            destination_window,
+            src,
+            dst,
+            smooth,
+            rop,
+        );
     }
 
-    /// Rééchantillonnage nearest-neighbor des pixels ZPixmap (formats 8/16/24/32bpp).
+    /// Rééchantillonnage des pixels ZPixmap (formats 8/16/24/32bpp) :
+    /// plus proche voisin, ou bilinéaire (mode HALFTONE) pour la loupe.
     fn paint_stretched_pixels(
         &self,
         source: Window,
         destination: &XWin,
         src: x11rb::protocol::xproto::Rectangle,
         dst: x11rb::protocol::xproto::Rectangle,
+        smooth: bool,
         rop: gui::RasterOp,
     ) {
         let depth = self.conn.setup().roots[self.screen].root_depth;
@@ -1278,14 +1312,15 @@ impl X11Backend {
         let stride = |width: usize| (width * bits_per_pixel).div_ceil(pad) * (pad / 8);
         let src_stride = stride(src.width as usize);
         let dst_stride = stride(dst.width as usize);
-        const MAX_IMAGE_BYTES: usize = 256 * 1024 - 64;
+        // Une loupe plein écran 4K tient sous cette limite ; au-delà, refus.
+        const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
         let Some(src_len) = src_stride.checked_mul(src.height as usize) else {
             return;
         };
         let Some(dst_len) = dst_stride.checked_mul(dst.height as usize) else {
             return;
         };
-        if src_len > MAX_IMAGE_BYTES || dst_len > MAX_IMAGE_BYTES {
+        if src_len > MAX_TOTAL_BYTES || dst_len > MAX_TOTAL_BYTES {
             return;
         }
         let image = match self.conn.get_image(
@@ -1306,33 +1341,37 @@ impl X11Backend {
         if image.len() < src_len {
             return;
         }
-        let mut output = vec![0u8; dst_len];
-        for dy in 0..dst.height as usize {
-            let sy = dy * src.height as usize / dst.height as usize;
-            for dx in 0..dst.width as usize {
-                let sx = dx * src.width as usize / dst.width as usize;
-                let from = sy * src_stride + sx * bytes_per_pixel;
-                let to = dy * dst_stride + dx * bytes_per_pixel;
-                output[to..to + bytes_per_pixel]
-                    .copy_from_slice(&image[from..from + bytes_per_pixel]);
-            }
-        }
+        let output = resample(
+            &image,
+            (src.width as usize, src.height as usize, src_stride),
+            (dst.width as usize, dst.height as usize, dst_stride),
+            bytes_per_pixel,
+            smooth,
+        );
         let _ = self.conn.change_gc(
             destination.gc,
             &ChangeGCAux::new().function(x11_function(rop)),
         );
-        let _ = self.conn.put_image(
-            x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
-            destination.window,
-            destination.gc,
-            dst.width,
-            dst.height,
-            dst.x,
-            dst.y,
-            0,
-            depth,
-            &output,
-        );
+        // PutImage doit tenir dans une requête X11 de base : envoi par bandes.
+        const MAX_REQUEST_BYTES: usize = 256 * 1024 - 64;
+        let rows = (MAX_REQUEST_BYTES / dst_stride.max(1)).max(1);
+        let mut row = 0usize;
+        while row < dst.height as usize {
+            let count = rows.min(dst.height as usize - row);
+            let _ = self.conn.put_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                destination.window,
+                destination.gc,
+                dst.width,
+                count as u16,
+                dst.x,
+                dst.y.saturating_add(row as i16),
+                0,
+                depth,
+                &output[row * dst_stride..(row + count) * dst_stride],
+            );
+            row += count;
+        }
         let _ = self.conn.change_gc(
             destination.gc,
             &ChangeGCAux::new().function(x11rb::protocol::xproto::GX::COPY),
@@ -1631,11 +1670,20 @@ impl X11Backend {
                     source,
                     destination,
                     stretch,
+                    smooth,
                     rop,
                 } => {
                     let source = self.scaled_rect(source);
                     let destination = self.scaled_rect(destination);
-                    self.paint_blit(w, *source_hwnd, &source, &destination, *stretch, *rop)
+                    self.paint_blit(
+                        w,
+                        *source_hwnd,
+                        &source,
+                        &destination,
+                        *stretch,
+                        *smooth,
+                        *rop,
+                    )
                 }
                 DrawCmd::Bitmap { rect, pixels, rop } => {
                     let destination = self.scaled_rect(rect);
@@ -2200,6 +2248,29 @@ mod tests {
     use super::*;
 
     #[test]
+    fn loupe_agrandissement_lisse_ou_net() {
+        // Deux pixels 32 bits : noir puis blanc, agrandis 4×.
+        let image = [0, 0, 0, 0, 255, 255, 255, 0];
+        let net = resample(&image, (2, 1, 8), (8, 1, 32), 4, false);
+        assert_eq!(&net[..4], &[0, 0, 0, 0]);
+        assert_eq!(&net[28..], &[255, 255, 255, 0]);
+        assert!(net.chunks(4).all(|p| p[0] == 0 || p[0] == 255));
+        let lisse = resample(&image, (2, 1, 8), (8, 1, 32), 4, true);
+        assert_eq!(lisse[0], 0, "le bord gauche reste noir");
+        assert_eq!(lisse[28], 255, "le bord droit reste blanc");
+        let gris: Vec<u8> = lisse.chunks(4).map(|p| p[0]).collect();
+        assert!(
+            gris.windows(2).all(|w| w[0] <= w[1]),
+            "dégradé croissant {gris:?}"
+        );
+        assert!(gris.iter().any(|&v| v > 0 && v < 255), "transition lissée");
+        // Pas de lignes (stride) plus large que la largeur utile.
+        let haut = resample(&[9, 9, 9, 0, 0, 0, 0, 0], (1, 2, 4), (2, 4, 8), 4, true);
+        assert_eq!(haut.len(), 32);
+        assert_eq!(haut[0], 9);
+    }
+
+    #[test]
     fn les_keysyms_deviennent_des_codes_vk_win32() {
         assert_eq!(keysym_to_vk(b'a' as u32), Some(0x41));
         assert_eq!(keysym_to_vk(b'A' as u32), Some(0x41));
@@ -2558,6 +2629,59 @@ mod tests {
         backend.conn.free_gc(gc).unwrap();
         backend.conn.free_pixmap(pixmap).unwrap();
     }
+}
+
+/// Agrandit/réduit une image ZPixmap. `src`/`dst` = (largeur, hauteur, pas).
+/// En mode lissé (pixels 24/32 bits), interpolation bilinéaire en virgule
+/// fixe ; sinon plus proche voisin, comme le mode COLORONCOLOR de Windows.
+fn resample(
+    image: &[u8],
+    src: (usize, usize, usize),
+    dst: (usize, usize, usize),
+    bytes_per_pixel: usize,
+    smooth: bool,
+) -> Vec<u8> {
+    let (sw, sh, s_stride) = src;
+    let (dw, dh, d_stride) = dst;
+    let mut output = vec![0u8; d_stride * dh];
+    if sw == 0 || sh == 0 || dw == 0 || dh == 0 {
+        return output;
+    }
+    let bilinear = smooth && bytes_per_pixel >= 3 && (sw > 1 || sh > 1);
+    for dy in 0..dh {
+        let row = &mut output[dy * d_stride..];
+        if !bilinear {
+            let sy = dy * sh / dh;
+            for dx in 0..dw {
+                let sx = dx * sw / dw;
+                let from = sy * s_stride + sx * bytes_per_pixel;
+                row[dx * bytes_per_pixel..(dx + 1) * bytes_per_pixel]
+                    .copy_from_slice(&image[from..from + bytes_per_pixel]);
+            }
+            continue;
+        }
+        // Centre du pixel de destination projeté dans la source (1/256 px).
+        let fy = ((2 * dy + 1) * sh * 128 / dh).saturating_sub(128);
+        let y0 = (fy >> 8).min(sh - 1);
+        let y1 = (y0 + 1).min(sh - 1);
+        let wy = (fy & 0xFF) as u32;
+        for dx in 0..dw {
+            let fx = ((2 * dx + 1) * sw * 128 / dw).saturating_sub(128);
+            let x0 = (fx >> 8).min(sw - 1);
+            let x1 = (x0 + 1).min(sw - 1);
+            let wx = (fx & 0xFF) as u32;
+            let at = |x: usize, y: usize, c: usize| {
+                u32::from(image[y * s_stride + x * bytes_per_pixel + c])
+            };
+            for c in 0..bytes_per_pixel {
+                let top = at(x0, y0, c) * (256 - wx) + at(x1, y0, c) * wx;
+                let bottom = at(x0, y1, c) * (256 - wx) + at(x1, y1, c) * wx;
+                let value = (top * (256 - wy) + bottom * wy + 32768) >> 16;
+                row[dx * bytes_per_pixel + c] = value.min(255) as u8;
+            }
+        }
+    }
+    output
 }
 
 impl gui::GuiBackend for X11Backend {

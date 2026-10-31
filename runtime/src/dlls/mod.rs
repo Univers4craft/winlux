@@ -2,6 +2,7 @@
 //! avec la convention d'appel Windows. Le chargeur relie directement les
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
+pub mod a11y;
 pub mod advapi32;
 pub mod advapi32_services;
 pub mod bcrypt;

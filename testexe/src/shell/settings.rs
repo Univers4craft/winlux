@@ -60,8 +60,6 @@ static mut EXE_TRACE: bool = false;
 static mut EXE_NOTICE: &[u8] = b"Les r\xE9glages sont facultatifs et propres \xE0 ce programme.";
 const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50; // 0-100, 50 par défaut
-static mut POINTER_SIZE: u32 = 1; // 1=normal, 2=large, 3=extra large
-static mut HIGH_CONTRAST: bool = false; // Mode contraste élevé
 static mut LOCALE_LANG: usize = 0; // 0=fr, 1=en
 static mut LOCALE_TZ: usize = 0; // index dans TIMEZONES
 const TIMEZONES: [(&[u8], &[u8]); 8] = [
@@ -742,41 +740,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 0, 1, b"Normale", 1);
             button(g, &c, 0, 2, b"Rapide", 2);
         }
-        12 => {
-            row(
-                g,
-                &c,
-                44,
-                b"Accessibilit\xE9",
-                b"Options d'accessibilit\xE9.",
-            );
-            let pointer_str = unsafe {
-                if POINTER_SIZE == 1 {
-                    "Normal"
-                } else if POINTER_SIZE == 2 {
-                    "Grand"
-                } else {
-                    "Tres grand"
-                }
-            };
-            row(g, &c, 84, b"Taille du pointeur", pointer_str.as_bytes());
-            button(g, &c, 0, 0, b"Normal", 0);
-            button(g, &c, 0, 1, b"Grand", 1);
-            button(g, &c, 0, 2, b"Tr\xE8s grand", 2);
-            row(
-                g,
-                &c,
-                124,
-                b"Contraste \xE9lev\xE9",
-                if unsafe { HIGH_CONTRAST } {
-                    b"Activ\xE9"
-                } else {
-                    b"D\xE9sactiv\xE9"
-                },
-            );
-            button(g, &c, 1, 0, b"Activer", 3);
-            button(g, &c, 1, 1, b"D\xE9sactiver", 4);
-        }
+        12 => crate::a11y::page_draw(g, &c),
         13 => {
             row(g, &c, 44, b"Effets visuels", b"Options d'effet visuels.");
             row(
@@ -797,7 +761,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 &c,
                 124,
                 b"Animations fluides",
-                if unsafe { ENABLE_SMOOTH_ANIM } {
+                if crate::gfx::animations() {
                     b"Activ\xE9es"
                 } else {
                     b"D\xE9sactiv\xE9es"
@@ -1493,6 +1457,9 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     -1
 }
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
+    if PAGE == 12 && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        return crate::a11y::page_mouse(ev, x, y, &content(f));
+    }
     if let Mouse::Wheel(delta) = ev {
         if delta < 0 {
             SCROLL = SCROLL.saturating_add(3);
@@ -1519,6 +1486,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             system_tick();
             return true;
         }
+    }
+    if PAGE == 12 {
+        return crate::a11y::page_mouse(ev, x, y, &content(f));
     }
     if PAGE == 7 {
         let c = content(f);
@@ -1667,26 +1637,6 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (8, 15) => Some(c"display-scale-down"),
         (8, 16) => Some(c"display-scale-auto"),
         (8, 17) => Some(c"display-scale-up"),
-        (12, 0) => {
-            unsafe { POINTER_SIZE = 1 };
-            Some(c"pointer-normal")
-        }
-        (12, 1) => {
-            unsafe { POINTER_SIZE = 2 };
-            Some(c"pointer-large")
-        }
-        (12, 2) => {
-            unsafe { POINTER_SIZE = 3 };
-            Some(c"pointer-xlarge")
-        }
-        (12, 3) => {
-            unsafe { HIGH_CONTRAST = true };
-            Some(c"contrast-on")
-        }
-        (12, 4) => {
-            unsafe { HIGH_CONTRAST = false };
-            Some(c"contrast-off")
-        }
         (13, 0) => {
             unsafe { ENABLE_BLUR = true };
             Some(c"blur-on")
@@ -1695,13 +1645,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             unsafe { ENABLE_BLUR = false };
             Some(c"blur-off")
         }
-        (13, 3) => {
-            unsafe { ENABLE_SMOOTH_ANIM = true };
-            Some(c"smooth-on")
-        }
-        (13, 4) => {
-            unsafe { ENABLE_SMOOTH_ANIM = false };
-            Some(c"smooth-off")
+        (13, id @ (3 | 4)) => {
+            // Même réglage que Accessibilité > Effets d'animation.
+            crate::gfx::A11Y.animations = id == 3;
+            ENABLE_SMOOTH_ANIM = id == 3;
+            crate::gfx::a11y_save();
+            return true;
         }
         (13, 6) => {
             unsafe { ENABLE_THUMBNAILS = true };
@@ -1820,6 +1769,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     false
 }
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
+    if PAGE == 12 && ch == 0 && crate::a11y::page_key(vk) {
+        return true;
+    }
     if PAGE == 7 && restart_required() {
         if !updating() && ch == 13 {
             control(c"reboot");
