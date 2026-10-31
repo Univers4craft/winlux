@@ -1557,6 +1557,49 @@ pub unsafe fn draw(g: &mut Gfx) {
             b"OK",
         );
     }
+    if crate::explorer::file_drag_active() {
+        let gl = crate::explorer::drag_glyph();
+        let cnt = crate::explorer::drag_count();
+        let p = pal();
+        let mx = MOUSE_X;
+        let my = MOUSE_Y;
+        glyph(g.hdc, g.b, g.f, gl, mx + 12, my + 4, 32);
+        if cnt > 1 {
+            let mut buf = [0u8; 16];
+            let mut i = 0;
+            let mut k = cnt;
+            let mut digits = [0u8; 10];
+            let mut d = 0;
+            while k > 0 {
+                digits[d] = b'0' + (k % 10) as u8;
+                d += 1;
+                k /= 10;
+            }
+            while d > 0 {
+                d -= 1;
+                buf[i] = digits[d];
+                i += 1;
+            }
+            round_rect(
+                g.hdc,
+                g.b,
+                mx + 36,
+                my,
+                mx + 36 + i as i32 * 8 + 8,
+                my + 18,
+                9,
+                p.accent,
+            );
+            text(
+                g.hdc,
+                g.f.small,
+                rgb(0xFF, 0xFF, 0xFF),
+                mx + 40,
+                my + 2,
+                &buf[..i],
+            );
+        }
+    }
 }
 
 // ---------- Souris et clavier ----------
@@ -1994,6 +2037,19 @@ pub unsafe fn on_button_up(x: i32, y: i32, repaint: &mut bool) -> bool {
             }
         }
         DRAG = Drag::None;
+        *repaint = true;
+        return true;
+    }
+    if CAPTURE == APP_EXPLORER && crate::explorer::file_drag_active() {
+        CAPTURE = usize::MAX;
+        let fr = frame_of(&WINS[APP_EXPLORER].rect);
+        if inside(&fr.client, x, y) || (custom_title(APP_EXPLORER) && inside(&fr.title, x, y)) {
+            app_mouse(APP_EXPLORER, Mouse::Up, x, y, &fr);
+        } else {
+            let do_copy = ((GetKeyState(0x11) as u16) & 0x8000) != 0;
+            crate::desktop::handle_file_drop(do_copy);
+            crate::explorer::cancel_file_drag();
+        }
         *repaint = true;
         return true;
     }
