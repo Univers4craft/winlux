@@ -968,8 +968,10 @@ fn devnames_device(bytes: &[u8], wide: bool) -> Option<String> {
     let off = u16::from_le_bytes(bytes.get(2..4)?.try_into().ok()?) as usize;
     if wide {
         let words: Vec<u16> = bytes
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         let s = words.get(off..)?;
         let n = s.iter().position(|&c| c == 0).unwrap_or(s.len());
@@ -1025,8 +1027,10 @@ unsafe fn read_inputs(
         name.copy_from_slice(&b[..(32 * cs).min(b.len())]);
         if wide {
             let w: Vec<u16> = name
-                .chunks_exact(2)
-                .map(|c| u16::from_le_bytes([c[0], c[1]]))
+                .as_chunks::<2>()
+                .0
+                .iter()
+                .map(|c| u16::from_le_bytes(*c))
                 .take_while(|&c| c != 0)
                 .collect();
             String::from_utf16_lossy(&w)

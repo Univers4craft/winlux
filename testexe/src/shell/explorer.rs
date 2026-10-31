@@ -19,6 +19,7 @@
 //! Explorer est lui-même un programme Windows qui s'exécute dans Winlux.
 
 use crate::gfx::*;
+use crate::locale::*;
 use crate::wm::{self, Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
@@ -416,10 +417,10 @@ fn parent(path: &[u8]) -> Option<&[u8]> {
 
 fn last_component(path: &[u8]) -> &[u8] {
     if path == HOME {
-        return b"Accueil";
+        return tr(S_HOME);
     }
     if path == PC {
-        return b"Ce PC";
+        return tr(S_THIS_PC);
     }
     if path.len() <= 3 {
         return if path.first() == Some(&b'Z') {
@@ -499,6 +500,18 @@ const PLACES: [Place; 6] = [
     },
 ];
 const TRASH: &[u8] = b"C:\\.local\\share\\Trash\\files";
+
+fn place_label(i: usize) -> &'static [u8] {
+    match i {
+        0 => tr(S_DESKTOP_FOLDER),
+        1 => tr(S_DOWNLOADS),
+        2 => tr(S_DOCUMENTS),
+        3 => tr(S_IMAGES),
+        4 => tr(S_MUSIC),
+        5 => tr(S_VIDEOS),
+        _ => PLACES[i].name,
+    }
+}
 
 fn place_path(i: usize) -> Path {
     let mut p = EMPTY_PATH;
@@ -846,7 +859,7 @@ unsafe fn reload(p: &mut Pane) {
     if loc.is(HOME) {
         for i in 0..PLACES.len() {
             let pp = place_path(i);
-            add_entry(p, PLACES[i].name, true, false, 0, 0, Some(Kind::Folder));
+            add_entry(p, place_label(i), true, false, 0, 0, Some(Kind::Folder));
             let _ = pp;
         }
     } else if loc.is(PC) {
@@ -1195,6 +1208,9 @@ pub unsafe fn open_pc() {
 }
 pub unsafe fn open_documents() {
     open_at(place_path(2).get());
+}
+pub unsafe fn open_downloads() {
+    open_at(place_path(1).get());
 }
 pub unsafe fn open_trash() {
     open_at(TRASH);
@@ -1867,13 +1883,13 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
     let mut segs: [(&[u8], usize); 24] = [(b"", 0); 24];
     let mut n;
     if loc == HOME {
-        segs[0] = (b"Accueil", 0);
+        segs[0] = (tr(S_HOME), 0);
         n = 1;
     } else if loc == PC {
-        segs[0] = (b"Ce PC", 0);
+        segs[0] = (tr(S_THIS_PC), 0);
         n = 1;
     } else {
-        segs[0] = (b"Ce PC", 0);
+        segs[0] = (tr(S_THIS_PC), 0);
         n = 1;
         segs[1] = (last_component(&loc[..3.min(loc.len())]), 3);
         n += 1;
@@ -1934,15 +1950,15 @@ unsafe fn nav_items(out: &mut [(&'static [u8], Glyph, Path, i32); 12]) -> usize 
         out[n] = (label, gl, p, indent);
         n += 1;
     };
-    push(b"Accueil", Glyph::Home, HOME, 0);
+    push(tr(S_HOME), Glyph::Home, HOME, 0);
     for i in 0..PLACES.len() {
         let pp = place_path(i);
-        push(PLACES[i].name, PLACES[i].glyph, pp.get(), 0);
+        push(place_label(i), PLACES[i].glyph, pp.get(), 0);
     }
-    push(b"Ce PC", Glyph::Computer, PC, 0);
+    push(tr(S_THIS_PC), Glyph::Computer, PC, 0);
     push(b"Dossier personnel (C:)", Glyph::Drive, b"C:\\", 1);
     push(b"Syst\xE8me Linux (Z:)", Glyph::LinuxDrive, b"Z:\\", 1);
-    push(b"Corbeille", Glyph::Trash, TRASH, 0);
+    push(tr(S_TRASH), Glyph::Trash, TRASH, 0);
     n
 }
 fn nav_row(geo: &Geo, i: usize) -> Rect {
@@ -2104,10 +2120,10 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
         );
         let (nx, _, dx, tx, sx) = detail_cols(&hr);
         let heads: [(&[u8], i32, SortKey); 4] = [
-            (b"Nom", nx - 28, SortKey::Name),
-            (b"Modifi\xE9 le", dx, SortKey::Date),
-            (b"Type", tx, SortKey::Kind),
-            (b"Taille", sx, SortKey::Size),
+            (tr(S_NAME), nx - 28, SortKey::Name),
+            (tr(S_DATE), dx, SortKey::Date),
+            (tr(S_TYPE), tx, SortKey::Kind),
+            (tr(S_SIZE), sx, SortKey::Size),
         ];
         for (label, x, key) in heads {
             text(g.hdc, g.f.caption, p.text2, x, hr.top + 8, label);
@@ -2434,11 +2450,9 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
     let pn = pane();
     let mut buf = [0u8; 256];
     let mut n = write_num(&mut buf, 0, pn.nview as u64);
-    let label: &[u8] = if pn.nview > 1 {
-        b" \xE9l\xE9ments"
-    } else {
-        b" \xE9l\xE9ment"
-    };
+    buf[n] = b' ';
+    n += 1;
+    let label = tr(S_ITEMS);
     buf[n..n + label.len()].copy_from_slice(label);
     n += label.len();
     let sc = sel_count(pn);
@@ -2446,11 +2460,9 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
         buf[n..n + 5].copy_from_slice(b"   |  "[..5].as_ref());
         n += 5;
         n = write_num(&mut buf, n, sc as u64);
-        let l2: &[u8] = if sc > 1 {
-            b" \xE9l\xE9ments s\xE9lectionn\xE9s"
-        } else {
-            b" \xE9l\xE9ment s\xE9lectionn\xE9"
-        };
+        buf[n] = b' ';
+        n += 1;
+        let l2 = tr(S_SELECTED);
         buf[n..n + l2.len()].copy_from_slice(l2);
         n += l2.len();
         if sc == 1 {
@@ -2548,22 +2560,22 @@ fn item_label(i: Item) -> &'static [u8] {
         Item::Hidden => b"\xC9l\xE9ments masqu\xE9s",
         Item::Ext => b"Extensions de noms de fichiers",
         Item::Nav => b"Volet de navigation",
-        Item::Sort(SortKey::Name) => b"Nom",
-        Item::Sort(SortKey::Date) => b"Date de modification",
-        Item::Sort(SortKey::Kind) => b"Type",
-        Item::Sort(SortKey::Size) => b"Taille",
+        Item::Sort(SortKey::Name) => tr(S_NAME),
+        Item::Sort(SortKey::Date) => tr(S_DATE),
+        Item::Sort(SortKey::Kind) => tr(S_TYPE),
+        Item::Sort(SortKey::Size) => tr(S_SIZE),
         Item::Asc => b"Croissant",
         Item::Desc => b"D\xE9croissant",
         Item::NewFolder => b"Dossier",
         Item::NewText => b"Document texte",
-        Item::Open => b"Ouvrir",
+        Item::Open => tr(S_OPEN),
         Item::OpenTab => b"Ouvrir dans un nouvel onglet",
         Item::ExeSettings => b"R\xE9glages de l'ex\xE9cutable",
-        Item::Cut => b"Couper",
-        Item::Copy => b"Copier",
-        Item::Paste => b"Coller",
-        Item::Rename => b"Renommer",
-        Item::Delete => b"Supprimer",
+        Item::Cut => tr(S_CUT),
+        Item::Copy => tr(S_COPY),
+        Item::Paste => tr(S_PASTE),
+        Item::Rename => tr(S_RENAME),
+        Item::Delete => tr(S_DELETE),
         Item::Refresh => b"Actualiser",
         Item::Terminal => b"Ouvrir dans le terminal",
         Item::CopyPath => b"Copier le chemin d'acc\xE8s",
@@ -2871,7 +2883,7 @@ unsafe fn new_item(folder: bool) {
     }
     let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
     let n = if folder {
-        unique_name(p.loc.get(), b"Nouveau dossier", b"", &mut path)
+        unique_name(p.loc.get(), tr(S_NEW_FOLDER), b"", &mut path)
     } else {
         unique_name(p.loc.get(), b"Nouveau document texte", b".txt", &mut path)
     };
@@ -4117,9 +4129,9 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
     if inside(&address_rect(geo), x, y) {
         let loc = pane().loc;
         if loc.is(HOME) {
-            ADDRESS.set(b"Accueil");
+            ADDRESS.set(tr(S_HOME));
         } else if loc.is(PC) {
-            ADDRESS.set(b"Ce PC");
+            ADDRESS.set(tr(S_THIS_PC));
         } else {
             ADDRESS.set(loc.get());
         }
@@ -4307,9 +4319,9 @@ fn ansi_char(ch: u16) -> Option<u8> {
 unsafe fn focus_address() {
     let loc = pane().loc;
     ADDRESS.set(if loc.is(HOME) {
-        b"Accueil"
+        tr(S_HOME)
     } else if loc.is(PC) {
-        b"Ce PC"
+        tr(S_THIS_PC)
     } else {
         loc.get()
     });
@@ -4418,9 +4430,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                         Focus::Address => {
                             let a = ADDRESS;
                             let s = a.get();
-                            if cmp_ci(s, b"Accueil").is_eq() {
+                            if cmp_ci(s, tr(S_HOME)).is_eq() {
                                 navigate(HOME);
-                            } else if cmp_ci(s, b"Ce PC").is_eq() {
+                            } else if cmp_ci(s, tr(S_THIS_PC)).is_eq() {
                                 navigate(PC);
                             } else if s.starts_with(b"http") || s.starts_with(b"www.") {
                                 let mut wb = [0u16; PATH_LEN + NAME_LEN + 2];

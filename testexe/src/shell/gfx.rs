@@ -275,6 +275,11 @@ pub fn mix(a: u32, c: u32, t: i32, n: i32) -> u32 {
 pub static mut DARK: bool = true;
 /// Couleur d'accentuation (COLORREF), bleu Windows par défaut.
 pub static mut ACCENT: u32 = rgb(0x4C, 0xC2, 0xFF);
+/// Couleur d'accentuation choisie (teinte « de base » de la palette Windows).
+pub static mut ACCENT_BASE: u32 = DEFAULT_ACCENT;
+pub const DEFAULT_ACCENT: u32 = rgb(0x00, 0x78, 0xD4);
+/// Accent sur la barre de titre et la bordure de la fenêtre active.
+pub static mut ACCENT_TITLES: bool = false;
 /// Mode contraste élevé (accessibilité).
 pub static mut HIGH_CONTRAST: bool = false;
 /// Réglages visuels partagés (source unique).
@@ -346,7 +351,11 @@ fn raw_pal(dark: bool) -> Palette {
             shadow: rgb(0x08, 0x0C, 0x18),
         }
     } else {
-        let accent = mix(accent, rgb(0, 0x3E, 0x92), 6, 10);
+        let accent = if unsafe { ACCENT_BASE } == DEFAULT_ACCENT {
+            mix(accent, rgb(0, 0x3E, 0x92), 6, 10)
+        } else {
+            mix(unsafe { ACCENT_BASE }, 0, 1, 10)
+        };
         Palette {
             window: rgb(0xF9, 0xF9, 0xF9),
             mica: rgb(0xEE, 0xF1, 0xF8),
@@ -400,6 +409,17 @@ pub fn pal() -> Palette {
         let prev = raw_pal(PREV_DARK);
         mix_pal(&prev, &target, e, 1000)
     }
+}
+
+/// Applique une couleur d'accentuation : la variante claire sert au thème
+/// sombre (texte noir dessus), la teinte de base au thème clair.
+pub unsafe fn set_accent(base: u32) {
+    ACCENT_BASE = base;
+    ACCENT = if base == DEFAULT_ACCENT {
+        rgb(0x4C, 0xC2, 0xFF)
+    } else {
+        mix(base, rgb(0xFF, 0xFF, 0xFF), 4, 10)
+    };
 }
 
 /// Vrai si une transition de thème est en cours (la boucle doit repeindre).
@@ -707,6 +727,8 @@ pub enum Glyph {
     Tools,
     Wifi,
     Ethernet,
+    Clock,
+    Shield,
 }
 
 pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y: i32, s: i32) {
@@ -2121,6 +2143,38 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                 y + s * 3 / 4,
                 c,
             );
+        }
+        Glyph::Clock => {
+            let p = pal();
+            ellipse(hdc, b, x + 1, y + 1, x + s - 1, y + s - 1, p.accent);
+            let t = (s / 9).max(2);
+            ellipse(hdc, b, x + 1 + t, y + 1 + t, x + s - 1 - t, y + s - 1 - t, glyph_bg());
+            let cx = x + s / 2;
+            let cy = y + s / 2;
+            let w = (s / 14).max(1);
+            fill(hdc, b, cx - w, y + s / 4, cx + w, cy + w, p.text);
+            fill(hdc, b, cx - w, cy - w, x + s * 2 / 3 + 1, cy + w, p.text);
+        }
+        Glyph::Shield => {
+            let p = pal();
+            let cx = x + s / 2;
+            let top = y + s / 10;
+            let mid = y + s * 11 / 20;
+            fill(hdc, b, x + s / 6, top + 2, x + s * 5 / 6, mid, p.accent);
+            fill(hdc, b, cx - 1, top, cx + 1, top + 2, p.accent);
+            let h = (y + s * 19 / 20 - mid).max(1);
+            for i in 0..h {
+                let half = (s / 3) * (h - i) / h;
+                fill(hdc, b, cx - half, mid + i, cx + half, mid + i + 1, p.accent);
+            }
+            // Coche claire au centre.
+            let w = (s / 12).max(1);
+            for i in 0..s / 6 {
+                fill(hdc, b, x + s / 3 + i, y + s / 2 + i, x + s / 3 + i + w, y + s / 2 + i + w, p.on_accent);
+            }
+            for i in 0..s / 3 {
+                fill(hdc, b, x + s / 2 + i - 1, y + s * 2 / 3 - i, x + s / 2 + i - 1 + w, y + s * 2 / 3 - i + w, p.on_accent);
+            }
         }
         Glyph::Wifi => {
             let c = pal().text;

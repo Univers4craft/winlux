@@ -93,11 +93,14 @@ Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir l
   TSV; il ne reproduit ni les vues 32/64 bits ni les règles ACL du registre Windows.
 - Les DLL intégrées utilisent des fonctions Linux natives et ne dépendent pas
   de Wine ni de bibliothèques Windows existantes.
-- Les PE managés 32/64 bits sont détectés avant le chargeur natif. Un apphost
-  moderne accompagné de son `.dll` et de son `.runtimeconfig.json` est relayé
-  vers `dotnet`; un ancien assembly CLR est relayé vers Mono. Le runtime doit
-  être installé sur l'hôte (`WINLUX_DOTNET`/`WINLUX_MONO` permettent de choisir
-  son chemin).
+- Les PE managés 32/64 bits (et l'apphost d'un .NET moderne, via son `.dll`
+  compagnon) sont exécutés par le CLR intégré (`runtime/src/clr`), sans runtime
+  .NET extérieur : interpréteur CIL, ramasse-miettes, exceptions .NET, appels
+  virtuels, BCL minimale (Console, Math, String, Environment, File, Path…) et
+  P/Invoke vers les DLL intégrées. Limites actuelles : pas de WinForms/WPF, pas
+  de génériques de la BCL (`List<T>`, `Dictionary`…), pas de délégués ni de
+  LINQ, structures traitées comme des références, paramètres flottants refusés
+  en P/Invoke.
 
 ## Stratégie d’intercouche
 
