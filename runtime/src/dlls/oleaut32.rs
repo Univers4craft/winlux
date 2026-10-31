@@ -8,6 +8,7 @@ use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
 const E_INVALIDARG: i32 = 0x8007_0057u32 as i32;
+#[allow(dead_code)]
 const E_OUTOFMEMORY: i32 = 0x8007_000eu32 as i32;
 const DISP_E_TYPEMISMATCH: i32 = 0x8002_0012u32 as i32;
 const DISP_E_BADINDEX: i32 = 0x8002_000bu32 as i32;
@@ -175,7 +176,7 @@ pub unsafe extern "win64" fn variant_change_type(
     }
     let src_vt = *(src as *const u16);
     if src_vt == target_vt {
-        if dest as *const c_void != src {
+        if !std::ptr::eq(dest, src) {
             return variant_copy(dest, src);
         }
         return 0;
@@ -241,7 +242,7 @@ pub unsafe extern "win64" fn variant_change_type(
             0
         }
         (VT_UI1, VT_I4) => {
-            let val = *((src as *const u8).add(8) as *const u8);
+            let val = *((src as *const u8).add(8));
             variant_clear(dest);
             *(dest as *mut u16) = VT_I4;
             *((dest as *mut u8).add(8) as *mut i32) = val as i32;
