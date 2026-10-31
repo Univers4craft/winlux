@@ -49,7 +49,7 @@ pub fn sha1(parts: &[&[u8]]) -> [u8; 20] {
     let len = msg.len() as u64;
     md_pad(len, &mut msg);
     let mut h: [u32; 5] = [0x67452301, 0xEFCDAB89, 0x98BADCFE, 0x10325476, 0xC3D2E1F0];
-    for block in msg.chunks_exact(64) {
+    for block in msg.as_chunks::<64>().0 {
         let mut w = [0u32; 80];
         for i in 0..16 {
             w[i] = u32::from_be_bytes(block[i * 4..i * 4 + 4].try_into().unwrap());
@@ -107,7 +107,7 @@ pub fn sha256(parts: &[&[u8]]) -> [u8; 32] {
         0x6a09e667, 0xbb67ae85, 0x3c6ef372, 0xa54ff53a, 0x510e527f, 0x9b05688c, 0x1f83d9ab,
         0x5be0cd19,
     ];
-    for block in msg.chunks_exact(64) {
+    for block in msg.as_chunks::<64>().0 {
         let mut w = [0u32; 64];
         for i in 0..16 {
             w[i] = u32::from_be_bytes(block[i * 4..i * 4 + 4].try_into().unwrap());

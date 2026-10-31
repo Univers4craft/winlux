@@ -134,7 +134,9 @@ impl Screen for X11Screen {
             if standard {
                 pixels.extend(
                     row[..w as usize * 4]
-                        .chunks_exact(4)
+                        .as_chunks::<4>()
+                        .0
+                        .iter()
                         .map(|p| u32::from_le_bytes([p[0], p[1], p[2], 0])),
                 );
                 continue;
