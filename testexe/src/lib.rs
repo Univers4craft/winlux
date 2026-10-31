@@ -1536,3 +1536,73 @@ fn panic(_: &core::panic::PanicInfo) -> ! {
     out(b"panic\n");
     unsafe { ExitProcess(101) }
 }
+
+// ---------- Langue de l'interface ----------
+
+/// Texte traduit : français, anglais, espagnol, allemand (Windows-1252).
+pub type Tr4 = [&'static [u8]; 4];
+
+static UI_LANG: core::sync::atomic::AtomicU8 = core::sync::atomic::AtomicU8::new(u8::MAX);
+static UI_LANG_TICK: core::sync::atomic::AtomicU32 = core::sync::atomic::AtomicU32::new(0);
+
+fn lang_index(code: &[u8]) -> Option<u8> {
+    match code.get(..2) {
+        Some(b"fr") | Some(b"FR") => Some(0),
+        Some(b"en") | Some(b"EN") => Some(1),
+        Some(b"es") | Some(b"ES") => Some(2),
+        Some(b"de") | Some(b"DE") => Some(3),
+        _ => None,
+    }
+}
+
+/// Langue de l'interface (0 fr, 1 en, 2 es, 3 de), pour les applications
+/// autonomes comme pour celles du bureau : `LANG=` de /etc/winlux/locale.conf
+/// (Paramètres > Langue), sinon la variable `LANG`, sinon le français.
+/// Relue au plus toutes les deux secondes pour suivre un changement.
+pub fn ui_lang() -> usize {
+    use core::sync::atomic::Ordering::Relaxed;
+    let now = unsafe { GetTickCount() };
+    let cached = UI_LANG.load(Relaxed);
+    if cached != u8::MAX && now.wrapping_sub(UI_LANG_TICK.load(Relaxed)) < 2000 {
+        return cached as usize;
+    }
+    let mut found = None;
+    unsafe {
+        let h = CreateFileA(
+            c"Z:\\etc\\winlux\\locale.conf".as_ptr(),
+            0x8000_0000,
+            1,
+            core::ptr::null_mut(),
+            3,
+            0,
+            core::ptr::null_mut(),
+        );
+        if !h.is_null() && h as isize != -1 {
+            let mut buf = [0u8; 256];
+            let mut read = 0u32;
+            ReadFile(h, buf.as_mut_ptr(), 256, &mut read, core::ptr::null_mut());
+            CloseHandle(h);
+            for line in buf[..(read as usize).min(256)].split(|&c| c == b'\n') {
+                if let Some(v) = line.strip_prefix(b"LANG=") {
+                    found = lang_index(v);
+                }
+            }
+        }
+        if found.is_none() {
+            let mut v = [0u8; 16];
+            let n = GetEnvironmentVariableA(c"LANG".as_ptr(), v.as_mut_ptr().cast(), 16);
+            if (2..16).contains(&n) {
+                found = lang_index(&v[..2]);
+            }
+        }
+    }
+    let lang = found.unwrap_or(0);
+    UI_LANG.store(lang, Relaxed);
+    UI_LANG_TICK.store(now, Relaxed);
+    lang as usize
+}
+
+/// Texte dans la langue de l'interface.
+pub fn tr4(s: &Tr4) -> &'static [u8] {
+    s[ui_lang()]
+}
