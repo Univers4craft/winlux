@@ -130,6 +130,37 @@ if [ ! -r "$exe" ]; then
     exit 1
 fi
 
+# Raccourci Windows (.lnk, par exemple sur le Bureau) : on ouvre sa cible
+# avec ses arguments, dans le dossier de travail qu'il indique.
+case "$exe" in
+    *.lnk|*.LNK|*.Lnk)
+        if ! resolved=$(winlux-applications resolve-lnk "$exe" 2>&1); then
+            show_error "Le raccourci « $(basename -- "$exe") » est illisible.
+$resolved"
+            exit 1
+        fi
+        target=$(printf '%s\n' "$resolved" | sed -n 1p)
+        workdir=$(printf '%s\n' "$resolved" | sed -n 2p)
+        set --
+        if [ "$(printf '%s\n' "$resolved" | wc -l)" -gt 2 ]; then
+            while IFS= read -r value; do set -- "$@" "$value"; done <<EOF_ARGS
+$(printf '%s\n' "$resolved" | sed 1,2d)
+EOF_ARGS
+        fi
+        if [ ! -e "$target" ]; then
+            show_error "La cible du raccourci « $(basename -- "$exe") » est introuvable : $target"
+            exit 1
+        fi
+        case "$target" in
+            *.exe|*.EXE|*.Exe|*.com|*.COM|*.msi|*.MSI)
+                if [ -n "$workdir" ] && [ -d "$workdir" ]; then export WINLUX_WORKDIR="$workdir"; fi
+                self=$(command -v -- "$0" 2>/dev/null || printf '%s' "$0")
+                exec "$self" "$target" "$@" ;;
+        esac
+        exec xdg-open "$target"
+        ;;
+esac
+
 # Paquet Windows Installer : le msiexec intégré au runtime l'installe.
 case "$exe" in
     *.msi|*.MSI|*.Msi)
@@ -175,9 +206,10 @@ $summary" "$mode"
 fi
 
 # Programme graphique (ou console lancée depuis un terminal) : le dossier du
-# programme devient le répertoire courant, comme dans l'explorateur Windows.
+# programme devient le répertoire courant, comme dans l'explorateur Windows,
+# sauf si un raccourci .lnk en indique un autre.
 mkdir -p "$state" 2>/dev/null || log=/dev/null
-cd "$(dirname -- "$exe")" 2>/dev/null || true
+cd "${WINLUX_WORKDIR:-$(dirname -- "$exe")}" 2>/dev/null || cd "$(dirname -- "$exe")" 2>/dev/null || true
 if [ "$kind" = console ]; then
     exec "$winlux" "$exe" "$@"
 fi
