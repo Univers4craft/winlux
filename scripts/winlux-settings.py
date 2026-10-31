@@ -53,6 +53,13 @@ _TR = {
     'redémarrage conseillé': ('restart recommended', 'se recomienda reiniciar', 'Neustart empfohlen'),
     'bureau et runtime Winlux (APT)': ('Winlux desktop and runtime (APT)', 'escritorio y runtime de Winlux (APT)', 'Winlux-Desktop und -Runtime (APT)'),
     'Mio': ('MiB', 'MiB', 'MiB'),
+    'Installation automatique suspendue : ': ('Automatic installation paused: ', 'Instalación automática suspendida: ', 'Automatische Installation ausgesetzt: '),
+    'Version écartée (le bureau n’a pas démarré) : ': ('Version set aside (the desktop did not start): ', 'Versión descartada (el escritorio no se inició): ', 'Version zurückgestellt (Desktop startete nicht): '),
+    'Version restaurée automatiquement : ': ('Version restored automatically: ', 'Versión restaurada automáticamente: ', 'Automatisch wiederhergestellte Version: '),
+    'Validation au prochain démarrage du bureau : ': ('Confirmed at the next desktop start: ', 'Se confirmará en el próximo inicio del escritorio: ', 'Wird beim nächsten Desktopstart bestätigt: '),
+    'Point de restauration avant mise à jour : ': ('Restore point before update: ', 'Punto de restauración antes de actualizar: ', 'Wiederherstellungspunkt vor dem Update: '),
+    'Version précédente conservée : ': ('Previous version kept: ', 'Versión anterior conservada: ', 'Vorherige Version aufbewahrt: '),
+    'Point de restauration': ('Restore point', 'Punto de restauración', 'Wiederherstellungspunkt'),
     'Système': ('System', 'Sistema', 'System'),
     'Applications': ('Apps', 'Aplicaciones', 'Apps'),
     'Réseau': ('Network', 'Red', 'Netzwerk'),
@@ -72,6 +79,22 @@ _TR = {
     'Son avancé': ('Advanced sound', 'Sonido avanzado', 'Erweiterter Sound'),
     'Mises à jour système': ('System updates', 'Actualizaciones del sistema', 'Systemupdates'),
     'Confidentialité': ('Privacy', 'Privacidad', 'Datenschutz'),
+    # Confidentialité et sécurité : verrouillage de l'écran.
+    'Confidentialité et sécurité': ('Privacy & security', 'Privacidad y seguridad', 'Datenschutz und Sicherheit'),
+    "Verrouillage de l’écran": ('Lock screen', 'Pantalla de bloqueo', 'Sperrbildschirm'),
+    'Verrouiller automatiquement après': ('Lock automatically after', 'Bloquear automáticamente después de', 'Automatisch sperren nach'),
+    'Jamais': ('Never', 'Nunca', 'Nie'),
+    '1 minute': ('1 minute', '1 minuto', '1 Minute'),
+    '{n} minutes': ('{n} minutes', '{n} minutos', '{n} Minuten'),
+    '1 heure': ('1 hour', '1 hora', '1 Stunde'),
+    'Demander le mot de passe à la sortie de veille': ('Ask for the password when waking from sleep', 'Pedir la contraseña al salir de la suspensión', 'Beim Aufwachen aus dem Energiesparmodus nach dem Kennwort fragen'),
+    'Verrouiller maintenant (Windows+L)': ('Lock now (Windows+L)', 'Bloquear ahora (Windows+L)', 'Jetzt sperren (Windows+L)'),
+    'Compte protégé : {account}': ('Protected account: {account}', 'Cuenta protegida: {account}', 'Geschütztes Konto: {account}'),
+    'Verrouillage automatique : {delay}': ('Automatic lock: {delay}', 'Bloqueo automático: {delay}', 'Automatische Sperre: {delay}'),
+    'Mot de passe au réveil : {state}': ('Password on wake: {state}', 'Contraseña al despertar: {state}', 'Kennwort beim Aufwachen: {state}'),
+    'oui': ('yes', 'sí', 'ja'),
+    'non': ('no', 'no', 'nein'),
+    'Ce compte n’a pas de mot de passe : l’écran se déverrouille d’un clic et ne se verrouille jamais tout seul.': ("This account has no password: the screen unlocks with a click and never locks by itself.", 'Esta cuenta no tiene contraseña: la pantalla se desbloquea con un clic y nunca se bloquea sola.', 'Dieses Konto hat kein Kennwort: Der Bildschirm wird per Klick entsperrt und sperrt sich nie von selbst.'),
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
     'Personnalisation du bureau': ('Desktop personalization', 'Personalización del escritorio', 'Desktop-Personalisierung'),
@@ -134,6 +157,8 @@ _TR = {
     'Mettre en veille': ('Sleep', 'Suspender', 'Energie sparen'),
     'Veille prolongée': ('Hibernate', 'Hibernar', 'Ruhezustand'),
     'Suivre la taille de la VM': ('Follow the VM size', 'Seguir el tamaño de la VM', 'VM-Größe folgen'),
+    'Définition recommandée': ('Recommended resolution', 'Resolución recomendada', 'Empfohlene Auflösung'),
+    'Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).': ('Virtual machine detected ({name}): display adapted to the VM (software cursor).', 'Máquina virtual detectada ({name}): pantalla adaptada a la VM (cursor por software).', 'Virtuelle Maschine erkannt ({name}): Anzeige an die VM angepasst (Software-Cursor).'),
     'Définition fixe': ('Fixed resolution', 'Resolución fija', 'Feste Auflösung'),
     'Échelle −': ('Scale −', 'Escala −', 'Skalierung −'),
     'Automatique': ('Automatic', 'Automática', 'Automatisch'),
@@ -204,9 +229,36 @@ PAGES = [_t("Système"), _t("Applications"), _t("Réseau"), _t("Son"), _t("Clavi
          _t("Souris"), _t("Personnalisation"), _t("Mises à jour"), _t("Écran"), _t("À propos"),
          _t("Programmes Windows"), _t("Navigateurs"), _t("Accessibilité"), _t("Effets visuels"),
          _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son avancé"), _t("Mises à jour système"),
-         _t("Confidentialité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
+         _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
          _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes")]
 GRAPHICS_PAGE = 24
+PRIVACY_PAGE = 18
+LOCK_DELAYS = (0, 60, 180, 300, 600, 900, 1800, 3600)
+
+
+def lock_delay_text(seconds):
+    if seconds <= 0: return _t("Jamais")
+    if seconds == 60: return _t("1 minute")
+    if seconds == 3600: return _t("1 heure")
+    return _t("{n} minutes").format(n=seconds // 60)
+
+
+def privacy_summary(status):
+    try: delay = int(status.get("lock_after", "300"))
+    except ValueError: delay = 300
+    lines = [_t("Compte protégé : {account}").format(account=status.get("lock_account") or "root"),
+             _t("Verrouillage automatique : {delay}").format(delay=lock_delay_text(delay)),
+             _t("Mot de passe au réveil : {state}").format(state=_t("oui") if status.get("lock_on_resume", "1") != "0" else _t("non"))]
+    if status.get("lock_password") == "0":
+        lines.append(_t("Ce compte n’a pas de mot de passe : l’écran se déverrouille d’un clic et ne se verrouille jamais tout seul."))
+    return "\n".join(lines)
+# Nom de l'hyperviseur écrit par winlux-hardware ; vide sur un vrai PC.
+try:
+    with open("/run/winlux/hw/virtual-machine", encoding="utf-8") as _vm: VIRTUAL_MACHINE = _vm.read().strip()
+except OSError:
+    VIRTUAL_MACHINE = ""
+_VM_NAMES = {"qemu": "QEMU/KVM", "virtualbox": "VirtualBox", "vmware": "VMware", "hyperv": "Hyper-V",
+             "xen": "Xen", "parallels": "Parallels"}
 FIELDS = {
     0: [(_t("Version"), "version"), (_t("Noyau"), "kernel")],
     2: [(_t("Connexion"), "network")], 3: [(_t("Volume"), "audio")],
@@ -237,7 +289,7 @@ ACTIONS = {
          (_t("Veille (batterie)"), "power-sleep-dc"), (_t("Capot"), "power-lid"), (_t("Bouton d'alimentation"), "power-button"),
          (_t("Luminosité −"), "power-brightness-down"), (_t("Luminosité +"), "power-brightness-up"),
          (_t("Mettre en veille"), "power-suspend"), (_t("Veille prolongée"), "power-hibernate")],
-    8: [(_t("Suivre la taille de la VM"), "display-follow"), (_t("Définition fixe"), "display-fixed"),
+    8: [(_t("Suivre la taille de la VM") if VIRTUAL_MACHINE else _t("Définition recommandée"), "display-follow"), (_t("Définition fixe"), "display-fixed"),
         (_t("Échelle −"), "display-scale-down"), (_t("Automatique"), "display-scale-auto"), (_t("Échelle +"), "display-scale-up")],
 }
 
@@ -275,7 +327,11 @@ def gpu_summary():
 # Rapport de winlux-update (toujours écrit en français) : traduit à l'affichage.
 UPDATE_PREFIXES = ("Version installée : ", "Version disponible : ", "Action en attente : ", "Portée : ",
                    "Composants : ", "Taille à télécharger : ", "Taille décompressée : ",
-                   "Action après installation : ", "Echec de la mise à jour : ")
+                   "Action après installation : ", "Echec de la mise à jour : ",
+                   "Installation automatique suspendue : ", "Version écartée (le bureau n’a pas démarré) : ",
+                   "Version restaurée automatiquement : ", "Validation au prochain démarrage du bureau : ",
+                   "Point de restauration avant mise à jour : ", "Version précédente conservée : ")
+PREVIOUS_PACKAGE = "/var/cache/winlux/previous.deb"
 UPDATE_SUFFIXES = (" octets", " Kio (hors sauvegarde et marge)")
 
 
@@ -378,11 +434,13 @@ class Settings(Gtk.Window):
                            row_spacing=8, column_spacing=8)
         self.body.pack_start(flow, False, False, 0)
         self.install_button = None
+        self.rollback_button = None
         for title, action in actions:
             button = Gtk.Button(label=title)
             button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
             if action == "update-apply": self.install_button = button
+            if action == "update-rollback": self.rollback_button = button
         self.buttons = flow
         if self.page in (1, 2, 3, 6):
             tool = {1:"apps", 2:"quick", 3:"quick", 6:"appearance"}[self.page]
@@ -405,6 +463,7 @@ class Settings(Gtk.Window):
             legacy_page = self.page
             button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
             self.body.pack_start(button, False, False, 0)
+        if self.page == PRIVACY_PAGE: self.privacy_controls()
         self.notice = self.label("")
         self.progress = Gtk.ProgressBar(show_text=True)
         self.body.pack_start(self.progress, False, False, 0)
@@ -422,6 +481,32 @@ class Settings(Gtk.Window):
         self.progress.set_visible(self.page == 7)
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
+        if self.rollback_button is not None:
+            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
+
+    def privacy_controls(self):
+        """Verrouillage de l’écran : délai d’inactivité, réveil, verrouiller tout de suite."""
+        status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+        self.label(_t("Verrouillage de l’écran"), "subtitle")
+        row = Gtk.Box(spacing=12)
+        row.pack_start(Gtk.Label(label=_t("Verrouiller automatiquement après"), xalign=0), True, True, 0)
+        delays = Gtk.ComboBoxText()
+        for seconds in LOCK_DELAYS: delays.append(str(seconds), lock_delay_text(seconds))
+        try: current = int(status.get("lock_after", "300"))
+        except ValueError: current = 300
+        delays.set_active_id(str(current if current in LOCK_DELAYS else 300))
+        delays.connect("changed", lambda combo: self.execute("lock-after-" + combo.get_active_id()))
+        row.pack_start(delays, False, False, 0)
+        self.body.pack_start(row, False, False, 0)
+        row = Gtk.Box(spacing=12)
+        row.pack_start(Gtk.Label(label=_t("Demander le mot de passe à la sortie de veille"), xalign=0), True, True, 0)
+        resume = Gtk.Switch(active=status.get("lock_on_resume", "1") != "0", valign=Gtk.Align.CENTER)
+        resume.connect("notify::active", lambda switch, _: self.execute("lock-resume-on" if switch.get_active() else "lock-resume-off"))
+        row.pack_start(resume, False, False, 0)
+        self.body.pack_start(row, False, False, 0)
+        lock = Gtk.Button(label=_t("Verrouiller maintenant (Windows+L)"), halign=Gtk.Align.START)
+        lock.connect("clicked", lambda *_: self.execute("lock-now"))
+        self.body.pack_start(lock, False, False, 0)
 
     def execute(self, action):
         if self.process is not None or self.busy: return
@@ -459,9 +544,16 @@ class Settings(Gtk.Window):
         if self.page == 7: text = read("/run/winlux/updates.txt")
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
+        if self.rollback_button is not None:
+            # Rien à restaurer tant qu'aucune version précédente n'est conservée.
+            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
+        if self.page == PRIVACY_PAGE: text = privacy_summary(status)
+        if self.page in (8, GRAPHICS_PAGE) and VIRTUAL_MACHINE:
+            name = _VM_NAMES.get(VIRTUAL_MACHINE, "VM")
+            text = _t("Machine virtuelle détectée ({name}) : affichage adapté à la VM (curseur logiciel).").format(name=name) + "\n" + text
         if self.state.get_text() != text: self.state.set_text(text)
         if self.process is None: self.notice.set_text(localize_update_text(read("/run/winlux/action.txt").strip()))
         progress = dict(line.split("=", 1) for line in read("/run/winlux/update-progress").splitlines() if "=" in line)
@@ -494,6 +586,7 @@ class Settings(Gtk.Window):
     def show_update_error(self, action, result):
         stages = {"checking": _t("Recherche et préparation"), "downloading": _t("Téléchargement"), "verifying": _t("Vérification"),
                   "extracting": _t("Décompression"), "backing-up": _t("Sauvegarde"),
+                  "restore-point": _t("Point de restauration"),
                   "installing": _t("Installation"), "finalizing": _t("Finalisation"), "restoring": _t("Restauration")}
         phase = read("/run/winlux/update-error-phase").strip()
         stage = stages.get(phase, phase or {"update-check": _t("Recherche"), "update-apply": _t("Mise à jour"),

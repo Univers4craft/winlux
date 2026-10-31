@@ -11,6 +11,45 @@ import json
 import os
 import sys
 
+
+# ── Langue : celle choisie dans l'installateur (WINLUX_LANG), sinon celle du système ──
+
+_COL = {"en": 0, "de": 1, "es": 2, "it": 3, "pt": 4}
+
+# Texte français -> (anglais, allemand, espagnol, italien, portugais).
+_TR = {
+    'Bureautique': ('Office', 'Büro', 'Ofimática', 'Ufficio', 'Escritório'),
+    'Développement': ('Development', 'Entwicklung', 'Desarrollo', 'Sviluppo', 'Desenvolvimento'),
+    'Serveur': ('Server', 'Server', 'Servidor', 'Server', 'Servidor'),
+    'Latence minimale et processeur à pleine fréquence pour les jeux .exe et natifs.': ('Minimal latency and full-speed processor for .exe and native games.', 'Minimale Latenz und Prozessor mit voller Taktfrequenz für .exe- und native Spiele.', 'Latencia mínima y procesador a máxima frecuencia para juegos .exe y nativos.', 'Latenza minima e processore alla massima frequenza per i giochi .exe e nativi.', 'Latência mínima e processador em frequência máxima para jogos .exe e nativos.'),
+    "Bureau réactif et économie d'énergie pour les documents, le web et les mails.": ('Responsive desktop and power saving for documents, the web and email.', 'Reaktionsschneller Desktop und Energiesparen für Dokumente, Web und E-Mail.', 'Escritorio ágil y ahorro de energía para documentos, la web y el correo.', 'Desktop reattivo e risparmio energetico per documenti, web e posta.', 'Área de trabalho responsiva e economia de energia para documentos, web e e-mail.'),
+    'Compilation rapide, nombreux fichiers surveillés et outils pour créer des .exe.': ('Fast builds, many watched files and tools to create .exe files.', 'Schnelles Kompilieren, viele überwachte Dateien und Werkzeuge zum Erstellen von .exe-Dateien.', 'Compilación rápida, muchos archivos vigilados y herramientas para crear .exe.', 'Compilazione rapida, molti file monitorati e strumenti per creare .exe.', 'Compilação rápida, muitos arquivos monitorados e ferramentas para criar .exe.'),
+    'Débit réseau et disque prioritaires, services en arrière-plan sans bureau chargé.': ('Network and disk throughput first, background services without a heavy desktop.', 'Netzwerk- und Datenträgerdurchsatz zuerst, Hintergrunddienste ohne schweren Desktop.', 'Prioridad al rendimiento de red y disco, servicios en segundo plano sin escritorio pesado.', 'Priorità a rete e disco, servizi in background senza desktop pesante.', 'Prioridade à rede e ao disco, serviços em segundo plano sem área de trabalho pesada.'),
+    'swappiness {swappiness} · CPU {governor} · E/S {io} · GPU {gpu}': ('swappiness {swappiness} · CPU {governor} · I/O {io} · GPU {gpu}', 'swappiness {swappiness} · CPU {governor} · E/A {io} · GPU {gpu}', 'swappiness {swappiness} · CPU {governor} · E/S {io} · GPU {gpu}', 'swappiness {swappiness} · CPU {governor} · I/O {io} · GPU {gpu}', 'swappiness {swappiness} · CPU {governor} · E/S {io} · GPU {gpu}'),
+    'RAM < 4 Go : swappiness relevée à 60 pour éviter les blocages.': ('RAM < 4 GB: swappiness raised to 60 to avoid freezes.', 'RAM < 4 GB: swappiness auf 60 erhöht, um Hänger zu vermeiden.', 'RAM < 4 GB: swappiness elevada a 60 para evitar bloqueos.', 'RAM < 4 GB: swappiness portata a 60 per evitare blocchi.', 'RAM < 4 GB: swappiness elevada para 60 para evitar travamentos.'),
+    'Aucun profil configuré.': ('No profile configured.', 'Kein Profil konfiguriert.', 'Ningún perfil configurado.', 'Nessun profilo configurato.', 'Nenhum perfil configurado.'),
+}
+
+
+def _lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="):
+                        code = line[5:].strip()
+        except OSError:
+            pass
+    return (code or "fr")[:2].lower()
+
+
+def _t(text):
+    """Texte dans la langue de l'installateur ou du système (le français sert de clé)."""
+    row = _TR.get(text)
+    col = _COL.get(_lang())
+    return row[col] if row and col is not None else text
+
 GiB = 1024 ** 3
 
 PROFILES = {
@@ -79,7 +118,18 @@ ORDER = ["gaming", "office", "dev", "server"]
 def summary_line(profile_id):
     p = PROFILES[profile_id]
     io = "/".join(dict.fromkeys(p["io"].values()))
-    return f"swappiness {p['sysctl']['vm.swappiness']} · CPU {p['governor'][0]} · E/S {io} · GPU {p['gpu_level']}"
+    return _t("swappiness {swappiness} · CPU {governor} · E/S {io} · GPU {gpu}").format(
+        swappiness=p["sysctl"]["vm.swappiness"], governor=p["governor"][0], io=io, gpu=p["gpu_level"])
+
+
+def display_name(profile_id):
+    """Nom du profil dans la langue de l'interface."""
+    return _t(PROFILES[profile_id]["name"])
+
+
+def display_description(profile_id):
+    """Description du profil dans la langue de l'interface."""
+    return _t(PROFILES[profile_id]["description"])
 
 
 def build_config(profile_id, benchmark=None, install_apps=True):
@@ -90,7 +140,7 @@ def build_config(profile_id, benchmark=None, install_apps=True):
     ram = ((benchmark or {}).get("results") or {}).get("ram", {}).get("total_bytes", 0)
     if ram and ram < 4 * GiB:
         sysctl["vm.swappiness"] = max(sysctl["vm.swappiness"], 60)
-        notes.append("RAM < 4 Go : swappiness relevée à 60 pour éviter les blocages.")
+        notes.append(_t("RAM < 4 Go : swappiness relevée à 60 pour éviter les blocages."))
     return {
         "id": profile_id,
         "name": base["name"],
@@ -208,13 +258,13 @@ def main():
     args = parser.parse_args()
     if args.list:
         for pid in ORDER:
-            print(f"{pid:<8} {PROFILES[pid]['name']:<14} {summary_line(pid)}")
+            print(f"{pid:<8} {display_name(pid):<14} {summary_line(pid)}")
         return 0
     if args.show:
         try:
             print(json.dumps(load(), ensure_ascii=False, indent=2))
         except OSError:
-            print("Aucun profil configuré.")
+            print(_t("Aucun profil configuré."))
         return 0
     if args.set:
         benchmark = None
