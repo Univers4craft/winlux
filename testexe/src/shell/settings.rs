@@ -7,7 +7,7 @@ use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
 pub const CUSTOM_TITLE: bool = false;
-const PAGES: [&[u8]; 14] = [
+const PAGES: [&[u8]; 16] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
@@ -22,6 +22,8 @@ const PAGES: [&[u8]; 14] = [
     b"Navigateurs",
     b"Accessibilit\xE9",
     b"Effets visuels",
+    b"Son avanc\xE9",
+    b"Localisation",
 ];
 const CAPACITY: usize = 32768;
 #[derive(Clone, Copy)]
@@ -425,6 +427,15 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (11, 1) => value(b"browser_default") == b"edge",
         (11, 4) => value(b"browser_default") == b"chrome",
         (11, 7) => value(b"browser_default") == b"firefox",
+        (15, 0) => value(b"locale_lang") == b"fr" || value(b"locale_lang").is_empty(),
+        (15, 1) => value(b"locale_lang") == b"en",
+        (15, 2) => value(b"locale_lang") == b"de",
+        (15, 3) => value(b"layout") == b"fr",
+        (15, 4) => value(b"layout") == b"us",
+        (15, 5) => value(b"layout") == b"de",
+        (15, 6) => value(b"timezone").starts_with(b"Europe/Paris") || value(b"timezone").is_empty(),
+        (15, 7) => value(b"timezone") == b"UTC",
+        (15, 8) => value(b"timezone").starts_with(b"America"),
         _ => false,
     };
     let primary = PAGE == 7 && id == 1 || PAGE == 8 && id == 2;
@@ -1314,6 +1325,49 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             text(g.hdc, g.f.small, p.text3, c.left, c.bottom - 30, b"Molette / Haut-Bas : d\xE9filer ; Page suivante/pr\xE9c\xE9dente : lecture rapide.");
         }
+        14 => {
+            row(g, &c, 44, b"P\xE9riph\xE9rique de sortie", value(b"audio_output"));
+            button(g, &c, 0, 0, b"Haut-parleurs", 0);
+            button(g, &c, 0, 1, b"Casque / HDMI", 1);
+            button(g, &c, 0, 2, b"Actualiser", 2);
+            row(g, &c, 170, b"P\xE9riph\xE9rique d'entr\xE9e", value(b"audio_input"));
+            button(g, &c, 1, 0, b"Micro int\xE9gr\xE9", 3);
+            button(g, &c, 1, 1, b"Micro externe", 4);
+            row(g, &c, 280, b"Volume principal", value(b"audio"));
+            button(g, &c, 3, 0, b"Volume -", 6);
+            button(g, &c, 3, 1, b"Muet / r\xE9tablir", 7);
+            button(g, &c, 3, 2, b"Volume +", 8);
+            row(g, &c, 370, b"Volume par application",
+                b"Chaque fen\xEAtre ouverte a son propre niveau de volume.");
+            let mut ay = 430i32;
+            for app in 0..crate::wm::APP_COUNT {
+                if !crate::wm::is_open(app) || ay + 50 > c.bottom - c.top {
+                    continue;
+                }
+                row(g, &c, ay, crate::wm::title_of(app), b"100 %");
+                ay += 60;
+            }
+        }
+        15 => {
+            row(g, &c, 44, b"Langue du syst\xE8me", value(b"locale_lang"));
+            button(g, &c, 0, 0, b"Fran\xE7ais", 0);
+            button(g, &c, 0, 1, b"English", 1);
+            button(g, &c, 0, 2, b"Deutsch", 2);
+            row(g, &c, 170, b"Disposition du clavier", value(b"layout"));
+            button(g, &c, 1, 0, b"AZERTY fran\xE7ais", 3);
+            button(g, &c, 1, 1, b"QWERTY US", 4);
+            button(g, &c, 1, 2, b"QWERTZ DE", 5);
+            row(g, &c, 280, b"Fuseau horaire", value(b"timezone"));
+            button(g, &c, 3, 0, b"Europe/Paris", 6);
+            button(g, &c, 3, 1, b"UTC", 7);
+            button(g, &c, 3, 2, b"America/New_York", 8);
+            row(g, &c, 370, b"Format de date",
+                if value(b"locale_lang") == b"en" { b"MM/DD/YYYY" } else { b"JJ/MM/AAAA" });
+            row(g, &c, 430, b"Gestionnaire de fichiers",
+                b"Explorer int\xE9gr\xE9 avec corbeille, double panneau, onglets.");
+            button(g, &c, 8, 0, b"Ouvrir Explorer", 9);
+            button(g, &c, 8, 1, b"Ouvrir la Corbeille", 10);
+        }
         _ => {}
     }
     let notice = if PAGE == 10 {
@@ -1618,6 +1672,33 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         } else {
             c"restart-session"
         }),
+        // Son avancé (page 14)
+        (14, 0) => Some(c"audio-output-speakers"),
+        (14, 1) => Some(c"audio-output-headphones"),
+        (14, 2) => Some(c"status"),
+        (14, 3) => Some(c"audio-input-builtin"),
+        (14, 4) => Some(c"audio-input-external"),
+        (14, 6) => Some(c"volume-down"),
+        (14, 7) => Some(c"volume-mute"),
+        (14, 8) => Some(c"volume-up"),
+        // Localisation (page 15)
+        (15, 0) => Some(c"locale-fr"),
+        (15, 1) => Some(c"locale-en"),
+        (15, 2) => Some(c"locale-de"),
+        (15, 3) => Some(c"keyboard-fr"),
+        (15, 4) => Some(c"keyboard-us"),
+        (15, 5) => Some(c"keyboard-de"),
+        (15, 6) => Some(c"timezone-paris"),
+        (15, 7) => Some(c"timezone-utc"),
+        (15, 8) => Some(c"timezone-newyork"),
+        (15, 9) => {
+            crate::explorer::open_home();
+            return true;
+        }
+        (15, 10) => {
+            crate::explorer::open_trash();
+            return true;
+        }
         _ => None,
     };
     if let Some(a) = action {

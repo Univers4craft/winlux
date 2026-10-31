@@ -522,7 +522,7 @@ pub fn title_of(app: usize) -> &'static [u8] {
         _ => b"Param\xE8tres",
     }
 }
-fn glyph_of(app: usize) -> Glyph {
+pub fn glyph_of(app: usize) -> Glyph {
     match app {
         APP_EXPLORER => Glyph::Folder,
         APP_SETTINGS => Glyph::Settings,
