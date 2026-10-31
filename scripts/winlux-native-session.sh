@@ -125,10 +125,13 @@ if test ! -f "$HOME/.config/winlux/welcome-complete" && test "${WINLUX_NO_WELCOM
     /usr/bin/winlux-welcome >/run/winlux/welcome.log 2>&1 &
 fi
 # Xfconf activates its own session-bus service. Set wallpaper per real output.
+# Default: the Winlux identity wallpaper, else the build's wallpaper.bmp.
+default_wallpaper=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
+test -f "$default_wallpaper" || default_wallpaper=/usr/share/winlux/wallpaper.bmp
 for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
     property="/backdrop/screen0/monitor$output/workspace0/last-image"
     if ! /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1; then
-        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s /usr/share/winlux/wallpaper.bmp
+        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s "$default_wallpaper"
         /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5
     fi
 done

@@ -11,6 +11,9 @@ use winlux_testexe::*;
 mod printers;
 #[path = "settings_gpu.rs"]
 mod graphics;
+/// Page « À propos » (logo, version, caractéristiques de l'appareil).
+#[path = "about.rs"]
+mod about;
 
 pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
@@ -1268,62 +1271,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             );
             row(g, &c, 410, b"P\xE9rim\xE8tre", b"\xC9chelle du rendu Winlux et traces ; les API manquantes restent \xE0 impl\xE9menter.");
         }
-        9 => {
-            let info = BUILD_INFO.get();
-            let version = field(info, b"version");
-            row(
-                g,
-                &c,
-                44,
-                b"Version de Winlux",
-                if version.is_empty() {
-                    value(b"version")
-                } else {
-                    version
-                },
-            );
-            row(g, &c, 104, b"Commit GitHub", field(info, b"commit"));
-            row(
-                g,
-                &c,
-                164,
-                b"Construction (UTC)",
-                field(info, b"built_at_utc"),
-            );
-            row(
-                g,
-                &c,
-                224,
-                b"Type de livrable",
-                match field(info, b"scope") {
-                    b"system" => b"Syst\xE8me complet",
-                    b"runtime" => b"Runtime uniquement",
-                    _ => b"Information indisponible",
-                },
-            );
-            row(
-                g,
-                &c,
-                284,
-                b"Sources suivies lors de la construction",
-                match field(info, b"tracked_sources") {
-                    b"clean" => b"Sans modification locale suivie",
-                    b"modified" => b"Modifications locales non valid\xE9es",
-                    _ => b"Information indisponible",
-                },
-            );
-            row(
-                g,
-                &c,
-                344,
-                b"Provenance",
-                if info.is_empty() {
-                    b"BUILD-INFO absent : ancienne image ou installation sans m\xE9tadonn\xE9es."
-                } else {
-                    b"Informations du livrable install\xE9, pas de la derni\xE8re release GitHub."
-                },
-            );
-        }
+        9 => about::draw(g, &c, BUILD_INFO.get(), value(b"version")),
         0 => {
             row(g, &c, 44, b"Version de Winlux", value(b"version"));
             button(g, &c, 0, 0, b"Relancer le bureau", 0);
