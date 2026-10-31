@@ -122,6 +122,7 @@ status() {
         done
         gpu_count=$(cat "$root/run/winlux/hw/gpu-count" 2>/dev/null || echo 0)
         printf 'gpu_count=%s\n' "$gpu_count"
+        printf 'virtual_machine=%s\n' "$(cat "$root/run/winlux/hw/virtual-machine" 2>/dev/null || true)"
         test "$(cat "$root/run/winlux/hw/has-nvidia" 2>/dev/null)" = 1 && printf 'gpu_nvidia=%s\n' "$(cat "$root/run/winlux/hw/nvidia-driver" 2>/dev/null || echo nouveau)"
         test "$(cat "$root/run/winlux/hw/has-amd" 2>/dev/null)" = 1 && printf 'gpu_amd=%s\n' "$(cat "$root/run/winlux/hw/amd-driver" 2>/dev/null || echo amdgpu)"
         test "$(cat "$root/run/winlux/hw/has-intel" 2>/dev/null)" = 1 && printf 'gpu_intel=i915\n'
@@ -133,6 +134,7 @@ status() {
         printf 'touchpad=%s\n' "$(cat "$root/run/winlux/hw/has-touchpad" 2>/dev/null || echo 0)"
         printf 'webcam=%s\n' "$(cat "$root/run/winlux/hw/has-webcam" 2>/dev/null || echo 0)"
         welcome=$(pref WELCOME_DONE); printf 'welcome_done=%s\n' "${welcome:-0}"
+        welcome=$(pref WELCOME_STEP); printf 'welcome_step=%s\n' "${welcome:-0}"
         # Vie privee : rien n'est envoye par defaut, la localisation est coupee.
         printf 'privacy_telemetry=%s\n' "$(privacy TELEMETRY off)"
         printf 'privacy_microphone=%s\n' "$(privacy MICROPHONE allow)"
@@ -390,7 +392,9 @@ perform() {
         sysupdate-check) winlux-sysupdate --check ;;
         sysupdate-apply) winlux-sysupdate --apply ;;
         welcome-done) save "$config/preferences.conf" WELCOME_DONE 1 ;;
-        welcome-reset) save "$config/preferences.conf" WELCOME_DONE 0 ;;
+        welcome-reset) save "$config/preferences.conf" WELCOME_DONE 0 && save "$config/preferences.conf" WELCOME_STEP 0 ;;
+        # Etape atteinte : la visite reprend la ou elle a ete fermee.
+        welcome-step-[0-9]|welcome-step-[0-9][0-9]) save "$config/preferences.conf" WELCOME_STEP "${action#welcome-step-}" ;;
         privacy-telemetry-on|privacy-telemetry-off) save "$config/privacy.conf" TELEMETRY "${action#privacy-telemetry-}" && chmod 644 "$config/privacy.conf" ;;
         privacy-microphone-allow|privacy-microphone-deny) save "$config/privacy.conf" MICROPHONE "${action#privacy-microphone-}" && chmod 644 "$config/privacy.conf" ;;
         privacy-camera-allow|privacy-camera-deny) save "$config/privacy.conf" CAMERA "${action#privacy-camera-}" && chmod 644 "$config/privacy.conf" ;;

@@ -154,6 +154,8 @@ jobs:
         run: |
           bash scripts/test-updater.sh
           sh scripts/test-update-notes.sh
+          python3 -B scripts/test-update-guard.py
+          python3 -B scripts/test-apt-metadata.py
 
       - name: Valider le réseau et les commandes des paramètres
         run: |
@@ -224,3 +226,85 @@ jobs:
         if: always()
         run: |
           ls -l target/x86_64-pc-windows-msvc/release/*.exe || true
+
+  # 4. Captures d'écran de l'interface, comparées à la dernière version verte
+  #    de master : alerte (sans échec) quand un écran change beaucoup.
+  captures:
+    name: Captures d'écran
+    runs-on: ubuntu-latest
+    needs: hygiene
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Installer Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-pe-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-pe-
+
+      - name: Compiler le runtime et les applications maison
+        run: |
+          cargo build --release -p winlux
+          bash scripts/build-tests.sh
+
+      - name: Installer l'écran virtuel
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb xauth openbox wmctrl python3-gi gir1.2-gtk-3.0 \
+            gir1.2-gdkpixbuf-2.0 fonts-dejavu-core libx11-6 libxft2 libcairo2
+
+      - name: Capturer les écrans
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/capture-ui.py build/captures
+
+      - name: Conserver les captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-ui
+          path: build/captures
+          retention-days: 30
+
+      - name: Récupérer les captures de la dernière version verte de master
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          mkdir -p build/captures-ref
+          for run in $(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch master --event push \
+                         --status success --limit 10 --json databaseId -q '.[].databaseId'); do
+            test "$run" = "$GITHUB_RUN_ID" && continue
+            if gh run download "$run" -R "$GITHUB_REPOSITORY" -n captures-ui -D build/captures-ref 2>/dev/null; then
+              echo "Référence : exécution $run"
+              break
+            fi
+          done
+
+      - name: Comparer à la version précédente
+        if: always()
+        run: |
+          /usr/bin/python3 -B scripts/compare-captures.py build/captures-ref build/captures build/captures-diff
+          cat build/captures-diff/rapport.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Conserver les différences
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-ui-diff
+          path: build/captures-diff
+          retention-days: 30

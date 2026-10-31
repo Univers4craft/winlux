@@ -39,6 +39,24 @@ Fichiers échangés avec le shell (`/run/winlux`, UTF-8) :
 Commandes : `refresh [--force]`, `details <clé>`, `install|remove|update <clé>`,
 `update-all`, `install-file <fichier>` (.exe, .msi, .deb, .AppImage, .flatpakref).
 
+### Logiciels courants (appli Bienvenue)
+
+L'étape « Vos premiers logiciels » de Bienvenue propose dix logiciels courants
+(Firefox, LibreOffice, VLC, Thunderbird, GIMP, 7-Zip, KeePassXC, Geany, OBS
+Studio, Notepad++), sans aucun produit Microsoft. La table `STARTER` de
+`winlux-store` donne pour chacun ses clés candidates par ordre de préférence
+(apt, puis Flathub, puis catalogue Windows) ; un logiciel sans clé utilisable
+sur la machine n'est pas affiché.
+
+- `starter --list` écrit `starter.txt` : `busy=0|1` puis
+  `app=id|état|pourcentage|icône|source` (état `i` installé, `a` disponible,
+  `w` en attente, `r` en cours, `f` échec) ;
+- `starter <id>...` ajoute les logiciels à la file
+  `~/.local/share/winlux/starter-queue.txt` et les installe un par un (en
+  attendant la fin d'une installation lancée depuis le Store) ;
+- `starter --resume` reprend la file au login suivant si la session a été
+  fermée pendant l'installation (lancé par le bureau et la session native).
+
 ### Catalogues Windows interchangeables
 
 Aucune source Windows n'est codée dans le Store. Chaque fichier JSON de
