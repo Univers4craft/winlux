@@ -509,6 +509,55 @@ unsafe fn set_display(value: f64) {
     }
 }
 
+pub unsafe fn key(vk: u32, ch: u16) -> bool {
+    if MODE != 0 {
+        return false;
+    }
+    if ch >= b'0' as u16 && ch <= b'9' as u16 {
+        calc_key(&[ch as u8]);
+        return true;
+    }
+    match ch as u8 {
+        b'+' => { calc_key(b"+"); return true; }
+        b'-' => { calc_key(b"-"); return true; }
+        b'*' => { calc_key(b"*"); return true; }
+        b'/' => { calc_key(b"/"); return true; }
+        b'.' | b',' => { calc_key(b"."); return true; }
+        b'=' | 13 => { calc_key(b"="); return true; }
+        b'%' => { calc_key(b"%"); return true; }
+        8 => { // Backspace
+            if CALC_DISPLAY_LEN > 0 {
+                CALC_DISPLAY_LEN -= 1;
+                CALC_DISPLAY[CALC_DISPLAY_LEN] = 0;
+            }
+            return true;
+        }
+        27 => { calc_key(b"C"); return true; } // Escape
+        _ => {}
+    }
+    // Numpad: VK_NUMPAD0..VK_NUMPAD9 = 0x60..0x69
+    if vk >= 0x60 && vk <= 0x69 {
+        calc_key(&[(vk - 0x60) as u8 + b'0']);
+        return true;
+    }
+    match vk {
+        0x6A => { calc_key(b"*"); true }   // VK_MULTIPLY
+        0x6B => { calc_key(b"+"); true }   // VK_ADD
+        0x6D => { calc_key(b"-"); true }   // VK_SUBTRACT
+        0x6E => { calc_key(b"."); true }   // VK_DECIMAL
+        0x6F => { calc_key(b"/"); true }   // VK_DIVIDE
+        0x0D => { calc_key(b"="); true }   // VK_RETURN
+        0x2E => {                           // VK_DELETE → C
+            calc_key(b"C"); true
+        }
+        _ => false,
+    }
+}
+
+pub unsafe fn tick(_f: &Frame) -> bool {
+    false
+}
+
 unsafe fn stopwatch_mouse(ev: Mouse, _x: i32, _y: i32, f: &Frame) -> bool {
     if ev != Mouse::LeftClick {
         return false;

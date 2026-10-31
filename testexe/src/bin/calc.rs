@@ -90,6 +90,20 @@ unsafe extern "system" fn wndproc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             InvalidateRect(hwnd, core::ptr::null_mut(), 1);
             0
         }
+        0x0100 => {
+            // WM_KEYDOWN
+            if calc::key(wparam as u32, 0) {
+                InvalidateRect(hwnd, core::ptr::null_mut(), 1);
+            }
+            0
+        }
+        0x0102 => {
+            // WM_CHAR
+            if calc::key(0, wparam as u16) {
+                InvalidateRect(hwnd, core::ptr::null_mut(), 1);
+            }
+            0
+        }
         _ => DefWindowProcA(hwnd, msg, wparam, lparam),
     }
 }

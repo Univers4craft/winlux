@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uchar, c_ulong, c_void, CString};
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
-    Atom, AtomEnum, ChangeGCAux, ConfigureNotifyEvent, ConfigureWindowAux, ConnectionExt as _,
-    CreateGCAux, CreateWindowAux, Gcontext, Window, WindowClass,
+    Atom, AtomEnum, ChangeGCAux, ChangeWindowAttributesAux, ConfigureNotifyEvent,
+    ConfigureWindowAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, Gcontext, Window,
+    WindowClass,
 };
 use x11rb::protocol::Event;
 use x11rb::rust_connection::RustConnection;
@@ -525,6 +526,10 @@ pub struct X11Backend {
     x11_dirty: Cell<bool>,
     /// Glyphes Xft pas encore confirmés par le serveur.
     xft_dirty: Cell<bool>,
+    /// Curseurs X11 pré-créés, indexés par handle Win32 (0x0001_0001..0x0001_000A).
+    x11_cursors: HashMap<usize, u32>,
+    /// Dernier handle de curseur Win32 appliqué à la fenêtre X11.
+    current_cursor: usize,
 }
 
 impl X11Backend {
@@ -577,7 +582,89 @@ impl X11Backend {
             back: HashMap::new(),
             x11_dirty: Cell::new(false),
             xft_dirty: Cell::new(false),
+            x11_cursors: HashMap::new(),
+            current_cursor: 0x0001_0001,
         })
+    }
+
+    fn create_font_cursor(&self, glyph: u16) -> Option<u32> {
+        let font = self.conn.generate_id().ok()?;
+        self.conn.open_font(font, b"cursor").ok()?.check().ok()?;
+        let cursor = self.conn.generate_id().ok()?;
+        let created = self.conn.create_glyph_cursor(
+            cursor,
+            font,
+            font,
+            glyph,
+            glyph + 1,
+            u16::MAX,
+            u16::MAX,
+            u16::MAX,
+            0,
+            0,
+            0,
+        );
+        let _ = self.conn.close_font(font);
+        created.ok()?.check().ok()?;
+        Some(cursor)
+    }
+
+    fn init_cursors(&mut self) {
+        let arrow = self.arrow_cursor().or_else(|| self.create_font_cursor(68));
+        if let Some(c) = arrow {
+            self.x11_cursors.insert(0x0001_0001, c); // IDC_ARROW
+        }
+        // IDC_IBEAM → xterm (glyph 152)
+        if let Some(c) = self.create_font_cursor(152) {
+            self.x11_cursors.insert(0x0001_0002, c);
+        }
+        // IDC_WAIT → watch (glyph 150)
+        if let Some(c) = self.create_font_cursor(150) {
+            self.x11_cursors.insert(0x0001_0003, c);
+        }
+        // IDC_CROSS → crosshair (glyph 34)
+        if let Some(c) = self.create_font_cursor(34) {
+            self.x11_cursors.insert(0x0001_0004, c);
+        }
+        // IDC_SIZENWSE → top_left_corner (glyph 134)
+        if let Some(c) = self.create_font_cursor(134) {
+            self.x11_cursors.insert(0x0001_0005, c);
+        }
+        // IDC_SIZENESW → bottom_left_corner (glyph 12)
+        if let Some(c) = self.create_font_cursor(12) {
+            self.x11_cursors.insert(0x0001_0006, c);
+        }
+        // IDC_SIZEWE → sb_h_double_arrow (glyph 108)
+        if let Some(c) = self.create_font_cursor(108) {
+            self.x11_cursors.insert(0x0001_0007, c);
+        }
+        // IDC_SIZENS → sb_v_double_arrow (glyph 116)
+        if let Some(c) = self.create_font_cursor(116) {
+            self.x11_cursors.insert(0x0001_0008, c);
+        }
+        // IDC_SIZEALL → fleur (glyph 52)
+        if let Some(c) = self.create_font_cursor(52) {
+            self.x11_cursors.insert(0x0001_0009, c);
+        }
+        // IDC_HAND → hand2 (glyph 60)
+        if let Some(c) = self.create_font_cursor(60) {
+            self.x11_cursors.insert(0x0001_000A, c);
+        }
+    }
+
+    fn apply_cursor(&mut self) {
+        let handle = gui::CURSOR_HANDLE.load(std::sync::atomic::Ordering::Relaxed);
+        if handle == self.current_cursor {
+            return;
+        }
+        self.current_cursor = handle;
+        if let Some(&xcursor) = self.x11_cursors.get(&handle) {
+            for xwin in self.windows.values() {
+                let aux = ChangeWindowAttributesAux::new().cursor(xcursor);
+                let _ = self.conn.change_window_attributes(xwin.window, &aux);
+            }
+            let _ = self.conn.flush();
+        }
     }
 
     /// Construit le curseur flèche (contour noir, intérieur blanc) à partir
@@ -2459,6 +2546,7 @@ impl gui::GuiBackend for X11Backend {
             }
             out.append(&mut self.deferred_events);
         }
+        self.apply_cursor();
         out
     }
 
@@ -2495,6 +2583,9 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn create_window(&mut self, hwnd: usize, title: &str, rect: Rect) {
+        if self.x11_cursors.is_empty() {
+            self.init_cursors();
+        }
         let setup = self.conn.setup();
         let scr = &setup.roots[self.screen];
         // Profondeur CopyFromParent (0) : le serveur prend celle de la racine.
@@ -2514,29 +2605,7 @@ impl gui::GuiBackend for X11Backend {
             Err(_) => return,
         };
         let bg = self.alloc_color(theme::BG_DEEP);
-        // Pointeur flèche façon Windows, à l'échelle de l'interface. Un
-        // serveur Xorg nu n'a que la croix X ou le petit curseur de police.
-        let pointer_cursor = self.arrow_cursor().or_else(|| {
-            let font = self.conn.generate_id().ok()?;
-            self.conn.open_font(font, b"cursor").ok()?.check().ok()?;
-            let cursor = self.conn.generate_id().ok()?;
-            let created = self.conn.create_glyph_cursor(
-                cursor,
-                font,
-                font,
-                68,
-                69,
-                u16::MAX,
-                u16::MAX,
-                u16::MAX,
-                0,
-                0,
-                0,
-            );
-            let _ = self.conn.close_font(font);
-            created.ok()?.check().ok()?;
-            Some(cursor)
-        });
+        let pointer_cursor = self.x11_cursors.get(&0x0001_0001).copied();
         let aux = CreateWindowAux::new().background_pixel(bg).event_mask(
             x11rb::protocol::xproto::EventMask::EXPOSURE
                 | x11rb::protocol::xproto::EventMask::STRUCTURE_NOTIFY
@@ -2570,13 +2639,7 @@ impl gui::GuiBackend for X11Backend {
             )
             .is_err()
         {
-            if let Some(cursor) = pointer_cursor {
-                let _ = self.conn.free_cursor(cursor);
-            }
             return;
-        }
-        if let Some(cursor) = pointer_cursor {
-            let _ = self.conn.free_cursor(cursor);
         }
 
         // Demande la fermeture propre via WM_DELETE_WINDOW.
@@ -2914,6 +2977,9 @@ impl Drop for X11Backend {
         }
         for font in self.fonts.values() {
             let _ = self.conn.close_font(font.id);
+        }
+        for &cursor in self.x11_cursors.values() {
+            let _ = self.conn.free_cursor(cursor);
         }
         let _ = self.conn.flush();
     }
