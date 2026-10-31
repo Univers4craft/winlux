@@ -1090,8 +1090,10 @@ impl Decoder {
             return false;
         };
         let slices: Vec<VASliceParameterBufferH264> = slices_raw
-            .chunks_exact(SLICE_LONG_SIZE)
-            .filter_map(|c| convert_slice(c, &pp, bits))
+            .as_chunks::<SLICE_LONG_SIZE>()
+            .0
+            .iter()
+            .filter_map(|c| convert_slice(c.as_slice(), &pp, bits))
             .collect();
         if slices.is_empty() {
             return false;
