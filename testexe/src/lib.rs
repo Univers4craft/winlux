@@ -697,6 +697,51 @@ extern "system" {
     pub fn WinluxJobPoll(job: u32, progress: *mut u32, msg: *mut u16, cap: u32) -> u32;
     pub fn WinluxJobCancel(job: u32);
     pub fn WinluxJobClose(job: u32);
+    // Moteur multimédia (runtime/src/dlls/winlux_media.rs).
+    pub fn WinluxMediaProbe(path: *const u16, out: *mut u8, cap: u32) -> i32;
+    pub fn WinluxMediaFormats(out: *mut u8, cap: u32) -> i32;
+    pub fn WinluxMediaOpen(path: *const u16, opts: *const MediaOpenOptions) -> usize;
+    pub fn WinluxMediaState(handle: usize, out: *mut MediaState) -> i32;
+    pub fn WinluxMediaFrame(handle: usize, out: *mut u8, cap: u32) -> u32;
+    pub fn WinluxMediaError(handle: usize, out: *mut u8, cap: u32) -> i32;
+    pub fn WinluxMediaClose(handle: usize) -> i32;
+    pub fn WinluxMediaThumbnail(path: *const u16, size: u32, out: *mut u8) -> i32;
+    pub fn WinluxMediaPreview(path: *const u16, at_ms: u32, w: u32, h: u32, out: *mut u8) -> i32;
+    pub fn WinluxMediaGetResume(path: *const u16) -> u32;
+    pub fn WinluxMediaSetResume(path: *const u16, ms: u32, duration_ms: u32) -> i32;
+    pub fn WinluxMediaKind(path: *const u16) -> u32;
+    pub fn WinluxMediaCanonical(path: *const u16, out: *mut u16, cap: u32) -> i32;
+    pub fn WinluxMediaSiblings(path: *const u16, out: *mut u16, cap: u32) -> i32;
+    pub fn WinluxMediaSubtitles(path: *const u16, out: *mut u16, cap: u32) -> i32;
+}
+
+/// Options d'ouverture d'une session de lecture (`WinluxMediaOpen`).
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct MediaOpenOptions {
+    pub start_ms: u32,
+    pub width: u32,
+    pub height: u32,
+    pub volume: u32,
+    pub speed: u32,
+    pub audio_track: i32,
+    pub sub_track: i32,
+    pub flags: u32,
+    pub sub_path: *const u16,
+}
+
+/// État d'une session de lecture (`WinluxMediaState`).
+#[repr(C)]
+#[derive(Clone, Copy, Default)]
+pub struct MediaState {
+    pub position_ms: u32,
+    pub status: u32,
+    pub frame_seq: u32,
+    pub width: u32,
+    pub height: u32,
+    pub hw_active: u32,
+    pub audio_active: u32,
+    pub reserved: u32,
 }
 
 #[link(name = "shell32", kind = "raw-dylib")]
@@ -865,6 +910,8 @@ extern "C" {
     pub fn SetCursor(cursor: Handle) -> Handle;
     pub fn LoadCursorW(instance: Handle, name: usize) -> Handle;
     pub fn SetTimer(hwnd: Handle, id: usize, elapse: u32, func: usize) -> usize;
+    pub fn GetWindowLongA(hwnd: Handle, index: i32) -> i32;
+    pub fn SetWindowLongA(hwnd: Handle, index: i32, value: i32) -> i32;
     pub fn KillTimer(hwnd: Handle, id: usize) -> i32;
 }
 
@@ -888,6 +935,21 @@ extern "C" {
         offset: u32,
     ) -> Handle;
     pub fn DeleteDC(dc: Handle) -> i32;
+    pub fn StretchDIBits(
+        dc: Handle,
+        xd: i32,
+        yd: i32,
+        wd: i32,
+        hd: i32,
+        xs: i32,
+        ys: i32,
+        ws: i32,
+        hs: i32,
+        bits: *const c_void,
+        info: *const BitmapInfoHeader,
+        usage: u32,
+        rop: u32,
+    ) -> i32;
     pub fn CreateFontA(
         height: i32,
         width: i32,

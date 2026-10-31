@@ -3,39 +3,882 @@
 //! interrupteurs et boutons Windows 11, fichiers et langue de l'interface.
 
 use crate::gfx::*;
+use crate::locale::Lang;
 use crate::wm::Gfx;
 use winlux_testexe::*;
 
 // ---------- Langue ----------
 
-static mut LANG_CHECKED: bool = false;
-static mut LANG_EN: bool = false;
+static mut ENV_LANG: Option<Lang> = None;
 
-/// Vrai si l'interface n'est pas en français (Paramètres > Langue, sinon
-/// `LANG`) : ces outils existent en français et en anglais, l'anglais sert
-/// aussi pour l'espagnol et l'allemand.
-pub unsafe fn english() -> bool {
-    if crate::locale::CURRENT_LANG != crate::locale::Lang::Fr {
-        return true;
+/// Langue de l'interface : Paramètres > Langue, sinon `LANG` au démarrage.
+pub unsafe fn lang() -> Lang {
+    if crate::locale::CURRENT_LANG != Lang::Fr {
+        return crate::locale::CURRENT_LANG;
     }
-    if !LANG_CHECKED {
-        LANG_CHECKED = true;
-        let mut v = [0i8; 64];
-        let n = GetEnvironmentVariableA(c"LANG".as_ptr(), v.as_mut_ptr(), 64);
-        let two = [v[0] as u8, v[1] as u8];
-        LANG_EN = (2..64).contains(&n) && matches!(&two, b"en" | b"es" | b"de");
+    if let Some(l) = ENV_LANG {
+        return l;
     }
-    LANG_EN
-}
-
-/// Texte selon la langue (chaînes en Windows-1252).
-pub fn t(fr: &'static [u8], en: &'static [u8]) -> &'static [u8] {
-    if unsafe { english() } {
-        en
+    let mut v = [0u8; 64];
+    let n = GetEnvironmentVariableA(c"LANG".as_ptr(), v.as_mut_ptr().cast(), 64);
+    let l = if (2..64).contains(&n) {
+        crate::locale::lang_from_code(&v[..2])
     } else {
-        fr
-    }
+        Lang::Fr
+    };
+    ENV_LANG = Some(l);
+    l
 }
+
+/// Vrai si l'interface est en anglais.
+pub unsafe fn english() -> bool {
+    lang() == Lang::En
+}
+
+/// Texte selon la langue (chaînes en Windows-1252). Les appels donnent le
+/// français et l'anglais ; l'espagnol et l'allemand viennent de
+/// `TRANSLATIONS` (l'anglais sert si une entrée manque).
+pub fn t(fr: &'static [u8], en: &'static [u8]) -> &'static [u8] {
+    let col = match unsafe { lang() } {
+        Lang::Fr => return fr,
+        Lang::En => return en,
+        Lang::Es => 2,
+        Lang::De => 3,
+    };
+    TRANSLATIONS
+        .iter()
+        .find(|r| r.0 == fr && r.1 == en)
+        .map_or(en, |r| if col == 2 { r.2 } else { r.3 })
+}
+
+/// Traductions espagnoles et allemandes des textes `t(fr, en)` :
+/// `(français, anglais, espagnol, allemand)`, retrouvées par le couple
+/// français/anglais (un même mot anglais peut avoir plusieurs genres).
+const TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    (
+        b"R\xE9seau connect\xE9",
+        b"Network connected",
+        b"Red conectada",
+        b"Netzwerk verbunden",
+    ),
+    (
+        b"R\xE9seau d\xE9connect\xE9",
+        b"Network disconnected",
+        b"Red desconectada",
+        b"Netzwerk getrennt",
+    ),
+    (
+        b"Branchement sur secteur",
+        b"Plugged in",
+        b"Conectado a la corriente",
+        b"Netzbetrieb",
+    ),
+    (
+        b"Passage sur batterie",
+        b"On battery",
+        b"Con bater\xEDa",
+        b"Akkubetrieb",
+    ),
+    (
+        b"P\xE9riph\xE9rique USB branch\xE9",
+        b"USB device connected",
+        b"Dispositivo USB conectado",
+        b"USB-Ger\xE4t angeschlossen",
+    ),
+    (
+        b"Journal d'\xE9v\xE9nements Windows",
+        b"Windows event log",
+        b"Registro de eventos de Windows",
+        b"Windows-Ereignisprotokoll",
+    ),
+    (b"Une fois", b"One time", b"Una vez", b"Einmal"),
+    (b"Quotidien", b"Daily", b"Diariamente", b"T\xE4glich"),
+    (
+        b"Hebdomadaire",
+        b"Weekly",
+        b"Semanalmente",
+        b"W\xF6chentlich",
+    ),
+    (b"Intervalle", b"Interval", b"Intervalo", b"Intervall"),
+    (
+        b"Au d\xE9marrage",
+        b"At startup",
+        b"Al iniciar el sistema",
+        b"Beim Start",
+    ),
+    (
+        b"\xC0 l'ouverture de session",
+        b"At log on",
+        b"Al iniciar sesi\xF3n",
+        b"Bei Anmeldung",
+    ),
+    (
+        b"Sur un \xE9v\xE9nement",
+        b"On an event",
+        b"Al producirse un evento",
+        b"Bei einem Ereignis",
+    ),
+    (b"Le ", b"On ", b"El ", b"Am "),
+    (b" \xE0 ", b" at ", b" a las ", b" um "),
+    (
+        b"Tous les jours \xE0 ",
+        b"Daily at ",
+        b"Todos los d\xEDas a las ",
+        b"T\xE4glich um ",
+    ),
+    (b"Tous les ", b"Every ", b"Cada ", b"Alle "),
+    (
+        b" jours \xE0 ",
+        b" days at ",
+        b" d\xEDas a las ",
+        b" Tage um ",
+    ),
+    (
+        b"Chaque semaine (",
+        b"Weekly (",
+        b"Cada semana (",
+        b"W\xF6chentlich (",
+    ),
+    (b") \xE0 ", b") at ", b") a las ", b") um "),
+    (b"Toutes les ", b"Every ", b"Cada ", b"Alle "),
+    (
+        b"Sur \xE9v\xE9nement : ",
+        b"On event: ",
+        b"Al producirse el evento: ",
+        b"Bei Ereignis: ",
+    ),
+    (
+        b"\xC0 la demande",
+        b"On demand",
+        b"A petici\xF3n",
+        b"Bei Bedarf",
+    ),
+    (
+        b"En cours",
+        b"Running",
+        b"En ejecuci\xF3n",
+        b"Wird ausgef\xFChrt",
+    ),
+    (b"Pr\xEAte", b"Ready", b"Lista", b"Bereit"),
+    (
+        b"D\xE9sactiv\xE9e",
+        b"Disabled",
+        b"Deshabilitada",
+        b"Deaktiviert",
+    ),
+    (
+        b"Jamais ex\xE9cut\xE9e",
+        b"Has not run yet",
+        b"A\xFAn no se ha ejecutado",
+        b"Noch nicht ausgef\xFChrt",
+    ),
+    (
+        b"R\xE9ussite (0x0)",
+        b"Success (0x0)",
+        b"Correcto (0x0)",
+        b"Erfolgreich (0x0)",
+    ),
+    (
+        b"Code de sortie ",
+        b"Exit code ",
+        b"C\xF3digo de salida ",
+        b"Exitcode ",
+    ),
+    (
+        b"Indiquez un nom pour la t\xE2che.",
+        b"Enter a name for the task.",
+        b"Escriba un nombre para la tarea.",
+        b"Geben Sie einen Namen f\xFCr die Aufgabe ein.",
+    ),
+    (
+        b"Indiquez le programme ou le script \xE0 lancer.",
+        b"Enter the program or script to start.",
+        b"Escriba el programa o script que se iniciar\xE1.",
+        b"Geben Sie das zu startende Programm oder Skript ein.",
+    ),
+    (
+        b"Heure invalide : utilisez HH:MM.",
+        b"Invalid time: use HH:MM.",
+        b"Hora no v\xE1lida: use HH:MM.",
+        b"Ung\xFCltige Uhrzeit: HH:MM verwenden.",
+    ),
+    (
+        b"Date invalide : utilisez AAAA-MM-JJ.",
+        b"Invalid date: use YYYY-MM-DD.",
+        b"Fecha no v\xE1lida: use AAAA-MM-DD.",
+        b"Ung\xFCltiges Datum: JJJJ-MM-TT verwenden.",
+    ),
+    (
+        b"Indiquez un nombre sup\xE9rieur \xE0 z\xE9ro.",
+        b"Enter a number greater than zero.",
+        b"Escriba un n\xFAmero mayor que cero.",
+        b"Geben Sie eine Zahl gr\xF6\xDFer als null ein.",
+    ),
+    (
+        b"Choisissez au moins un jour.",
+        b"Choose at least one day.",
+        b"Elija al menos un d\xEDa.",
+        b"W\xE4hlen Sie mindestens einen Tag.",
+    ),
+    (
+        b"T\xE2che enregistr\xE9e.",
+        b"Task saved.",
+        b"Tarea guardada.",
+        b"Aufgabe gespeichert.",
+    ),
+    (
+        b"Enregistrement impossible : droits insuffisants sur /etc/winlux/tasks.",
+        b"Cannot save: no write access to /etc/winlux/tasks.",
+        b"No se puede guardar: sin permiso de escritura en /etc/winlux/tasks.",
+        b"Speichern nicht m\xF6glich: kein Schreibzugriff auf /etc/winlux/tasks.",
+    ),
+    (
+        b"Ex\xE9cution demand\xE9e.",
+        b"Run requested.",
+        b"Ejecuci\xF3n solicitada.",
+        b"Ausf\xFChrung angefordert.",
+    ),
+    (
+        b"Arr\xEAt demand\xE9.",
+        b"Stop requested.",
+        b"Detenci\xF3n solicitada.",
+        b"Beenden angefordert.",
+    ),
+    (
+        b"T\xE2che supprim\xE9e.",
+        b"Task deleted.",
+        b"Tarea eliminada.",
+        b"Aufgabe gel\xF6scht.",
+    ),
+    (
+        b"Modification enregistr\xE9e.",
+        b"Change saved.",
+        b"Cambio guardado.",
+        b"\xC4nderung gespeichert.",
+    ),
+    (
+        b"Le service Winlux est introuvable.",
+        b"The Winlux service was not found.",
+        b"No se encuentra el servicio de Winlux.",
+        b"Der Winlux-Dienst wurde nicht gefunden.",
+    ),
+    (
+        b"Planificateur de t\xE2ches",
+        b"Task Scheduler",
+        b"Programador de tareas",
+        b"Aufgabenplanung",
+    ),
+    (b"Biblioth\xE8que", b"Library", b"Biblioteca", b"Bibliothek"),
+    (b"Historique", b"History", b"Historial", b"Verlauf"),
+    (
+        b"Biblioth\xE8que du Planificateur",
+        b"Task Scheduler Library",
+        b"Biblioteca del Programador de tareas",
+        b"Aufgabenplanungsbibliothek",
+    ),
+    (
+        b"Cr\xE9er une t\xE2che",
+        b"Create task",
+        b"Crear tarea",
+        b"Aufgabe erstellen",
+    ),
+    (
+        b"Propri\xE9t\xE9s",
+        b"Properties",
+        b"Propiedades",
+        b"Eigenschaften",
+    ),
+    (b"Ex\xE9cuter", b"Run", b"Ejecutar", b"Ausf\xFChren"),
+    (b"Fin", b"End", b"Finalizar", b"Beenden"),
+    (
+        b"D\xE9sactiver",
+        b"Disable",
+        b"Deshabilitar",
+        b"Deaktivieren",
+    ),
+    (b"Activer", b"Enable", b"Habilitar", b"Aktivieren"),
+    (b"Supprimer", b"Delete", b"Eliminar", b"L\xF6schen"),
+    (b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"),
+    (b"Nom", b"Name", b"Nombre", b"Name"),
+    (b"\xC9tat", b"Status", b"Estado", b"Status"),
+    (
+        b"D\xE9clencheurs",
+        b"Triggers",
+        b"Desencadenadores",
+        b"Trigger",
+    ),
+    (
+        b"Prochaine ex\xE9cution",
+        b"Next run time",
+        b"Pr\xF3xima ejecuci\xF3n",
+        b"N\xE4chste Ausf\xFChrung",
+    ),
+    (
+        b"Derni\xE8re ex\xE9cution",
+        b"Last run time",
+        b"\xDAltima ejecuci\xF3n",
+        b"Letzte Ausf\xFChrung",
+    ),
+    (
+        b"R\xE9sultat",
+        b"Last run result",
+        b"Resultado",
+        b"Ergebnis",
+    ),
+    (
+        b"Aucune t\xE2che. Cliquez sur \xAB Cr\xE9er une t\xE2che \xBB pour en ajouter une.",
+        b"No tasks yet. Click \"Create task\" to add one.",
+        b"No hay tareas. Haga clic en \xABCrear tarea\xBB para agregar una.",
+        b"Keine Aufgaben. Klicken Sie auf \"Aufgabe erstellen\", um eine hinzuzuf\xFCgen.",
+    ),
+    (
+        b"(aucune description)",
+        b"(no description)",
+        b"(sin descripci\xF3n)",
+        b"(keine Beschreibung)",
+    ),
+    (
+        b"Action : d\xE9marrer ",
+        b"Action: start ",
+        b"Acci\xF3n: iniciar ",
+        b"Aktion: starte ",
+    ),
+    (
+        b"Conditions : ",
+        b"Conditions: ",
+        b"Condiciones: ",
+        b"Bedingungen: ",
+    ),
+    (b"aucune", b"none", b"ninguna", b"keine"),
+    (
+        b"uniquement sur secteur",
+        b"only on AC power",
+        b"solo con corriente alterna",
+        b"nur im Netzbetrieb",
+    ),
+    (
+        b"seulement si le r\xE9seau est disponible",
+        b"only if a network is available",
+        b"solo si hay red disponible",
+        b"nur wenn ein Netzwerk verf\xFCgbar ist",
+    ),
+    (
+        b"Emplacement : ",
+        b"Location: ",
+        b"Ubicaci\xF3n: ",
+        b"Ort: ",
+    ),
+    (
+        b"  \xB7  Auteur : ",
+        b"  \xB7  Author: ",
+        b"  \xB7  Autor: ",
+        b"  \xB7  Autor: ",
+    ),
+    (
+        b"T\xE2che d\xE9marr\xE9e",
+        b"Task started",
+        b"Tarea iniciada",
+        b"Aufgabe gestartet",
+    ),
+    (
+        b"T\xE2che termin\xE9e",
+        b"Task completed",
+        b"Tarea completada",
+        b"Aufgabe abgeschlossen",
+    ),
+    (
+        b"T\xE2che non d\xE9marr\xE9e",
+        b"Task not started",
+        b"Tarea no iniciada",
+        b"Aufgabe nicht gestartet",
+    ),
+    (
+        b"T\xE2che arr\xEAt\xE9e (dur\xE9e d\xE9pass\xE9e)",
+        b"Task stopped (time limit)",
+        b"Tarea detenida (l\xEDmite de tiempo)",
+        b"Aufgabe beendet (Zeitlimit)",
+    ),
+    (
+        b"\xC9chec du lancement",
+        b"Launch failure",
+        b"Error al iniciar",
+        b"Startfehler",
+    ),
+    (
+        b"Lanc\xE9e manuellement",
+        b"Started manually",
+        b"Iniciada manualmente",
+        b"Manuell gestartet",
+    ),
+    (
+        b"D\xE9clencheur horaire",
+        b"Time trigger",
+        b"Desencadenador de hora",
+        b"Zeittrigger",
+    ),
+    (
+        b"D\xE9clencheur \xE0 intervalle",
+        b"Interval trigger",
+        b"Desencadenador de intervalo",
+        b"Intervalltrigger",
+    ),
+    (
+        b"D\xE9marrage du syst\xE8me",
+        b"System startup",
+        b"Inicio del sistema",
+        b"Systemstart",
+    ),
+    (
+        b"Ouverture de session",
+        b"User log on",
+        b"Inicio de sesi\xF3n",
+        b"Benutzeranmeldung",
+    ),
+    (
+        b"L'ordinateur est sur batterie",
+        b"The computer is on battery",
+        b"El equipo funciona con bater\xEDa",
+        b"Der Computer l\xE4uft im Akkubetrieb",
+    ),
+    (
+        b"Aucun r\xE9seau disponible",
+        b"No network available",
+        b"No hay red disponible",
+        b"Kein Netzwerk verf\xFCgbar",
+    ),
+    (
+        b"Une instance est d\xE9j\xE0 en cours",
+        b"An instance is already running",
+        b"Ya hay una instancia en ejecuci\xF3n",
+        b"Eine Instanz wird bereits ausgef\xFChrt",
+    ),
+    (b"Limite : ", b"Limit: ", b"L\xEDmite: ", b"Limit: "),
+    (
+        b"\xC9v\xE9nement : ",
+        b"Event: ",
+        b"Evento: ",
+        b"Ereignis: ",
+    ),
+    (
+        b"Historique d'ex\xE9cution",
+        b"Run history",
+        b"Historial de ejecuci\xF3n",
+        b"Ausf\xFChrungsverlauf",
+    ),
+    (
+        b"Date et heure",
+        b"Date and time",
+        b"Fecha y hora",
+        b"Datum und Uhrzeit",
+    ),
+    (b"T\xE2che", b"Task", b"Tarea", b"Aufgabe"),
+    (b"\xC9v\xE9nement", b"Event", b"Evento", b"Ereignis"),
+    (b"D\xE9tails", b"Details", b"Detalles", b"Details"),
+    (
+        b"Aucune ex\xE9cution enregistr\xE9e.",
+        b"No runs recorded yet.",
+        b"A\xFAn no hay ejecuciones registradas.",
+        b"Noch keine Ausf\xFChrungen aufgezeichnet.",
+    ),
+    (
+        b"Propri\xE9t\xE9s de la t\xE2che",
+        b"Task properties",
+        b"Propiedades de la tarea",
+        b"Aufgabeneigenschaften",
+    ),
+    (
+        b"Description",
+        b"Description",
+        b"Descripci\xF3n",
+        b"Beschreibung",
+    ),
+    (b"Facultative", b"Optional", b"Opcional", b"Optional"),
+    (b"D\xE9clencheur", b"Trigger", b"Desencadenador", b"Trigger"),
+    (
+        b"Date (AAAA-MM-JJ)",
+        b"Date (YYYY-MM-DD)",
+        b"Fecha (AAAA-MM-DD)",
+        b"Datum (JJJJ-MM-TT)",
+    ),
+    (
+        b"Heure (HH:MM)",
+        b"Time (HH:MM)",
+        b"Hora (HH:MM)",
+        b"Uhrzeit (HH:MM)",
+    ),
+    (
+        b"Tous les (jours)",
+        b"Recur every (days)",
+        b"Repetir cada (d\xEDas)",
+        b"Wiederholen alle (Tage)",
+    ),
+    (
+        b"R\xE9p\xE9ter toutes les (minutes)",
+        b"Repeat every (minutes)",
+        b"Repetir cada (minutos)",
+        b"Wiederholen alle (Minuten)",
+    ),
+    (
+        b"La t\xE2che d\xE9marre \xE0 chaque d\xE9marrage de l'ordinateur.",
+        b"The task starts every time the computer starts.",
+        b"La tarea se inicia cada vez que se inicia el equipo.",
+        b"Die Aufgabe startet bei jedem Start des Computers.",
+    ),
+    (
+        b"La t\xE2che d\xE9marre \xE0 chaque ouverture de session.",
+        b"The task starts every time a user logs on.",
+        b"La tarea se inicia cada vez que un usuario inicia sesi\xF3n.",
+        b"Die Aufgabe startet bei jeder Benutzeranmeldung.",
+    ),
+    (
+        b"Action : d\xE9marrer un programme",
+        b"Action: start a program",
+        b"Acci\xF3n: iniciar un programa",
+        b"Aktion: Programm starten",
+    ),
+    (
+        b"Programme ou script (.exe, .sh, .py ou commande Linux)",
+        b"Program or script (.exe, .sh, .py or Linux command)",
+        b"Programa o script (.exe, .sh, .py o comando de Linux)",
+        b"Programm oder Skript (.exe, .sh, .py oder Linux-Befehl)",
+    ),
+    (b"Arguments", b"Arguments", b"Argumentos", b"Argumente"),
+    (b"Facultatifs", b"Optional", b"Opcionales", b"Optional"),
+    (b"Commencer dans", b"Start in", b"Iniciar en", b"Starten in"),
+    (b"Facultatif", b"Optional", b"Opcional", b"Optional"),
+    (b"Conditions", b"Conditions", b"Condiciones", b"Bedingungen"),
+    (
+        b"Ne d\xE9marrer que si l'ordinateur est sur secteur",
+        b"Start only if the computer is on AC power",
+        b"Iniciar solo si el equipo est\xE1 conectado a la corriente",
+        b"Nur starten, wenn der Computer im Netzbetrieb l\xE4uft",
+    ),
+    (
+        b"Ne d\xE9marrer que si une connexion r\xE9seau est disponible",
+        b"Start only if a network connection is available",
+        b"Iniciar solo si hay una conexi\xF3n de red disponible",
+        b"Nur starten, wenn eine Netzwerkverbindung verf\xFCgbar ist",
+    ),
+    (
+        b"T\xE2che activ\xE9e",
+        b"Task enabled",
+        b"Tarea habilitada",
+        b"Aufgabe aktiviert",
+    ),
+    (b"Annuler", b"Cancel", b"Cancelar", b"Abbrechen"),
+    (b"Enregistrer", b"Save", b"Guardar", b"Speichern"),
+    (
+        b"R\xE9seau de domaine",
+        b"Domain network",
+        b"Red de dominio",
+        b"Dom\xE4nennetzwerk",
+    ),
+    (
+        b"R\xE9seau priv\xE9",
+        b"Private network",
+        b"Red privada",
+        b"Privates Netzwerk",
+    ),
+    (
+        b"R\xE9seau public",
+        b"Public network",
+        b"Red p\xFAblica",
+        b"\xD6ffentliches Netzwerk",
+    ),
+    (b"Domaine", b"Domain", b"Dominio", b"Dom\xE4ne"),
+    (b"Priv\xE9", b"Private", b"Privada", b"Privat"),
+    (b"Public", b"Public", b"P\xFAblica", b"\xD6ffentlich"),
+    (b"Tous", b"Any", b"Cualquiera", b"Alle"),
+    (
+        b"Enregistrement impossible : droits insuffisants sur /etc/winlux.",
+        b"Cannot save: no write access to /etc/winlux.",
+        b"No se puede guardar: sin permiso de escritura en /etc/winlux.",
+        b"Speichern nicht m\xF6glich: kein Schreibzugriff auf /etc/winlux.",
+    ),
+    (
+        b"Param\xE8tres appliqu\xE9s.",
+        b"Settings applied.",
+        b"Configuraci\xF3n aplicada.",
+        b"Einstellungen \xFCbernommen.",
+    ),
+    (
+        b"Enregistr\xE9, mais le service Winlux est introuvable.",
+        b"Saved, but the Winlux service was not found.",
+        b"Guardado, pero no se encuentra el servicio de Winlux.",
+        b"Gespeichert, aber der Winlux-Dienst wurde nicht gefunden.",
+    ),
+    (
+        b" souhaite recevoir des connexions entrantes.",
+        b" wants to accept incoming connections.",
+        b" quiere aceptar conexiones entrantes.",
+        b" m\xF6chte eingehende Verbindungen annehmen.",
+    ),
+    (
+        b"Pare-feu Winlux",
+        b"Winlux Firewall",
+        b"Firewall de Winlux",
+        b"Winlux-Firewall",
+    ),
+    (
+        b"Indiquez un nom pour la r\xE8gle.",
+        b"Enter a name for the rule.",
+        b"Escriba un nombre para la regla.",
+        b"Geben Sie einen Namen f\xFCr die Regel ein.",
+    ),
+    (
+        b"Ports invalides : exemple 80, 443 ou 8000-8100.",
+        b"Invalid ports: for example 80, 443 or 8000-8100.",
+        b"Puertos no v\xE1lidos: por ejemplo 80, 443 u 8000-8100.",
+        b"Ung\xFCltige Ports: zum Beispiel 80, 443 oder 8000-8100.",
+    ),
+    (
+        b"Choisissez au moins un profil.",
+        b"Choose at least one profile.",
+        b"Elija al menos un perfil.",
+        b"W\xE4hlen Sie mindestens ein Profil.",
+    ),
+    (
+        b"Nombre maximal de r\xE8gles atteint.",
+        b"Maximum number of rules reached.",
+        b"Se alcanz\xF3 el n\xFAmero m\xE1ximo de reglas.",
+        b"Maximale Anzahl von Regeln erreicht.",
+    ),
+    (
+        b"Vue d'ensemble",
+        b"Overview",
+        b"Informaci\xF3n general",
+        b"\xDCbersicht",
+    ),
+    (
+        b"R\xE8gles de trafic entrant",
+        b"Inbound rules",
+        b"Reglas de entrada",
+        b"Eingehende Regeln",
+    ),
+    (
+        b"R\xE8gles de trafic sortant",
+        b"Outbound rules",
+        b"Reglas de salida",
+        b"Ausgehende Regeln",
+    ),
+    (
+        b"Connexions bloqu\xE9es",
+        b"Blocked connections",
+        b"Conexiones bloqueadas",
+        b"Blockierte Verbindungen",
+    ),
+    (
+        b"Pare-feu et protection du r\xE9seau",
+        b"Firewall & network protection",
+        b"Firewall y protecci\xF3n de red",
+        b"Firewall- & Netzwerkschutz",
+    ),
+    (
+        b"nftables est absent : les r\xE8gles ne peuvent pas \xEAtre appliqu\xE9es.",
+        b"nftables is missing: rules cannot be applied.",
+        b"Falta nftables: no se pueden aplicar las reglas.",
+        b"nftables fehlt: Regeln k\xF6nnen nicht angewendet werden.",
+    ),
+    (
+        b"Le pare-feu est d\xE9sactiv\xE9 pour le r\xE9seau actuel.",
+        b"The firewall is off for the current network.",
+        b"El firewall est\xE1 desactivado para la red actual.",
+        b"Die Firewall ist f\xFCr das aktuelle Netzwerk deaktiviert.",
+    ),
+    (
+        b"Le service de pare-feu n'a pas encore appliqu\xE9 la configuration.",
+        b"The firewall service has not applied the configuration yet.",
+        b"El servicio de firewall a\xFAn no ha aplicado la configuraci\xF3n.",
+        b"Der Firewall-Dienst hat die Konfiguration noch nicht angewendet.",
+    ),
+    (
+        b"Le pare-feu prot\xE8ge cet ordinateur.",
+        b"The firewall is protecting this device.",
+        b"El firewall protege este equipo.",
+        b"Die Firewall sch\xFCtzt dieses Ger\xE4t.",
+    ),
+    (b" (actif)", b" (active)", b" (activa)", b" (aktiv)"),
+    (
+        b"Utiliser pour le r\xE9seau actuel",
+        b"Use for the current network",
+        b"Usar para la red actual",
+        b"F\xFCr das aktuelle Netzwerk verwenden",
+    ),
+    (b"Entrant :", b"Inbound:", b"Entrada:", b"Eingehend:"),
+    (b"Bloquer", b"Block", b"Bloquear", b"Blockieren"),
+    (b"Autoriser", b"Allow", b"Permitir", b"Zulassen"),
+    (b"Sortant :", b"Outbound:", b"Salida:", b"Ausgehend:"),
+    (
+        b"M'avertir lorsqu'une application commence \xE0 recevoir des connexions",
+        b"Notify me when an app starts accepting incoming connections",
+        b"Notificarme cuando una aplicaci\xF3n empiece a aceptar conexiones entrantes",
+        b"Benachrichtigen, wenn eine App eingehende Verbindungen annimmt",
+    ),
+    (
+        b"Nouvelle r\xE8gle",
+        b"New rule",
+        b"Nueva regla",
+        b"Neue Regel",
+    ),
+    (
+        b"D\xE9sactiver la r\xE8gle",
+        b"Disable rule",
+        b"Deshabilitar regla",
+        b"Regel deaktivieren",
+    ),
+    (
+        b"Activer la r\xE8gle",
+        b"Enable rule",
+        b"Habilitar regla",
+        b"Regel aktivieren",
+    ),
+    (b"Profil", b"Profile", b"Perfil", b"Profil"),
+    (b"Activ\xE9e", b"Enabled", b"Habilitada", b"Aktiviert"),
+    (b"Action", b"Action", b"Acci\xF3n", b"Aktion"),
+    (b"Protocole", b"Protocol", b"Protocolo", b"Protokoll"),
+    (b"Ports", b"Ports", b"Puertos", b"Ports"),
+    (b"Programme", b"Program", b"Programa", b"Programm"),
+    (
+        b"Aucune r\xE8gle. Le comportement par d\xE9faut du profil s'applique.",
+        b"No rules. The profile's default behavior applies.",
+        b"No hay reglas. Se aplica el comportamiento predeterminado del perfil.",
+        b"Keine Regeln. Das Standardverhalten des Profils gilt.",
+    ),
+    (b"Tous", b"All", b"Todos", b"Alle"),
+    (b"Oui", b"Yes", b"S\xED", b"Ja"),
+    (b"Non", b"No", b"No", b"Nein"),
+    (
+        b"Tous les programmes",
+        b"All programs",
+        b"Todos los programas",
+        b"Alle Programme",
+    ),
+    (
+        b"Effacer le journal",
+        b"Clear log",
+        b"Borrar registro",
+        b"Protokoll l\xF6schen",
+    ),
+    (b"Sens", b"Direction", b"Direcci\xF3n", b"Richtung"),
+    (b"Source", b"Source", b"Origen", b"Quelle"),
+    (b"Destination", b"Destination", b"Destino", b"Ziel"),
+    (b"Port", b"Port", b"Puerto", b"Port"),
+    (
+        b"Aucune connexion bloqu\xE9e n'a \xE9t\xE9 enregistr\xE9e.",
+        b"No blocked connections have been logged.",
+        b"No se ha registrado ninguna conexi\xF3n bloqueada.",
+        b"Es wurden keine blockierten Verbindungen protokolliert.",
+    ),
+    (b"Entrant", b"Inbound", b"Entrada", b"Eingehend"),
+    (b"Sortant", b"Outbound", b"Salida", b"Ausgehend"),
+    (
+        b"Propri\xE9t\xE9s de la r\xE8gle",
+        b"Rule properties",
+        b"Propiedades de la regla",
+        b"Regeleigenschaften",
+    ),
+    (
+        b"Nouvelle r\xE8gle de trafic entrant",
+        b"New inbound rule",
+        b"Nueva regla de entrada",
+        b"Neue eingehende Regel",
+    ),
+    (
+        b"Nouvelle r\xE8gle de trafic sortant",
+        b"New outbound rule",
+        b"Nueva regla de salida",
+        b"Neue ausgehende Regel",
+    ),
+    (
+        b"Autoriser la connexion",
+        b"Allow the connection",
+        b"Permitir la conexi\xF3n",
+        b"Verbindung zulassen",
+    ),
+    (
+        b"Bloquer la connexion",
+        b"Block the connection",
+        b"Bloquear la conexi\xF3n",
+        b"Verbindung blockieren",
+    ),
+    (
+        b"Ports locaux (vide = tous ; ex. 80, 443, 8000-8100)",
+        b"Local ports (empty = all; e.g. 80, 443, 8000-8100)",
+        b"Puertos locales (vac\xEDo = todos; p. ej. 80, 443, 8000-8100)",
+        b"Lokale Ports (leer = alle; z. B. 80, 443, 8000-8100)",
+    ),
+    (
+        b"Ports distants (vide = tous ; ex. 80, 443)",
+        b"Remote ports (empty = all; e.g. 80, 443)",
+        b"Puertos remotos (vac\xEDo = todos; p. ej. 80, 443)",
+        b"Remoteports (leer = alle; z. B. 80, 443)",
+    ),
+    (
+        b"Tous les ports",
+        b"All ports",
+        b"Todos los puertos",
+        b"Alle Ports",
+    ),
+    (
+        b"Programme (chemin du .exe ou de l'ex\xE9cutable Linux ; vide = tous)",
+        b"Program (path of the .exe or Linux executable; empty = all)",
+        b"Programa (ruta del .exe o del ejecutable de Linux; vac\xEDo = todos)",
+        b"Programm (Pfad der .exe oder Linux-Programmdatei; leer = alle)",
+    ),
+    (b"Profils", b"Profiles", b"Perfiles", b"Profile"),
+    (
+        b"R\xE8gle activ\xE9e",
+        b"Rule enabled",
+        b"Regla habilitada",
+        b"Regel aktiviert",
+    ),
+    (
+        b"Alerte de s\xE9curit\xE9 Winlux",
+        b"Winlux Security Alert",
+        b"Alerta de seguridad de Winlux",
+        b"Winlux-Sicherheitswarnung",
+    ),
+    (
+        b"Le Pare-feu Winlux a bloqu\xE9 certaines fonctionnalit\xE9s de cette application.",
+        b"Winlux Firewall has blocked some features of this app.",
+        b"El Firewall de Winlux bloque\xF3 algunas caracter\xEDsticas de esta aplicaci\xF3n.",
+        b"Die Winlux-Firewall hat einige Funktionen dieser App blockiert.",
+    ),
+    (b"Nom :", b"Name:", b"Nombre:", b"Name:"),
+    (b"Chemin :", b"Path:", b"Ruta:", b"Pfad:"),
+    (b"Ports :", b"Ports:", b"Puertos:", b"Ports:"),
+    (
+        b"Autoriser cette application \xE0 recevoir des connexions",
+        b"Allow this app to accept incoming connections",
+        b"\xBFPermitir que esta aplicaci\xF3n acepte conexiones entrantes",
+        b"Dieser App erlauben, eingehende Verbindungen anzunehmen,",
+    ),
+    (
+        b"sur les r\xE9seaux de type \xAB ",
+        b"on \"",
+        b"en redes de tipo \xAB",
+        b"in Netzwerken vom Typ \"",
+    ),
+    (b" \xBB ?", b"\" networks?", b"\xBB?", b"\"?"),
+    (
+        b"Autoriser l'acc\xE8s",
+        b"Allow access",
+        b"Permitir acceso",
+        b"Zugriff zulassen",
+    ),
+    (
+        b"L'application peut recevoir des connexions.",
+        b"The app can now accept connections.",
+        b"La aplicaci\xF3n ya puede aceptar conexiones.",
+        b"Die App kann jetzt Verbindungen annehmen.",
+    ),
+    (
+        b"L'application reste bloqu\xE9e.",
+        b"The app stays blocked.",
+        b"La aplicaci\xF3n sigue bloqueada.",
+        b"Die App bleibt blockiert.",
+    ),
+];
 
 // ---------- Zones cliquables ----------
 
