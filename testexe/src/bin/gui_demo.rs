@@ -8,22 +8,30 @@
 
 use winlux_testexe::*;
 
+#[path = "../shell/bsod.rs"]
+mod bsod;
 #[path = "../shell/desktop.rs"]
 mod desktop;
 #[path = "../shell/diskcleaner.rs"]
 mod diskcleaner;
 #[path = "../shell/diskmgr.rs"]
 mod diskmgr;
+#[path = "../shell/eventviewer.rs"]
+mod eventviewer;
 #[path = "../shell/explorer.rs"]
 mod explorer;
 #[path = "../shell/gfx.rs"]
 mod gfx;
+#[path = "../shell/locale.rs"]
+mod locale;
 #[path = "../shell/login.rs"]
 mod login;
 #[path = "../shell/notepad.rs"]
 mod notepad;
 #[path = "../shell/notifications.rs"]
 mod notifications;
+#[path = "../shell/restore.rs"]
+mod restore;
 #[path = "../shell/settings.rs"]
 mod settings;
 #[path = "../shell/settings_cpu.rs"]
@@ -36,6 +44,8 @@ mod terminal;
 mod utilities;
 #[path = "../shell/weather.rs"]
 mod weather;
+#[path = "../shell/welcome.rs"]
+mod welcome;
 #[path = "../shell/wm.rs"]
 mod wm;
 
@@ -339,7 +349,22 @@ unsafe fn draw_scene(hwnd: Handle, first: bool) {
     }
 
     if GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0 {
-        desktop::draw(hdc);
+        if bsod::ACTIVE {
+            let mut r = Rect {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            };
+            GetClientRect(hwnd, &mut r);
+            let mut brushes = gfx::Brushes::new();
+            let fonts = gfx::Fonts::new();
+            bsod::draw(hdc, &mut brushes, &fonts, r.right, r.bottom);
+            brushes.release();
+            fonts.release();
+        } else {
+            desktop::draw(hdc);
+        }
         EndPaint(hwnd, &ps);
         return;
     }
@@ -751,7 +776,9 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
         WM_CHAR => {
             GOT_CHAR += 1;
             LAST_CHAR = wparam;
-            if DESKTOP {
+            if DESKTOP && bsod::key_down() {
+                InvalidateRect(hwnd, core::ptr::null(), 0);
+            } else if DESKTOP {
                 desktop::on_key(hwnd, 0, wparam as u16);
             } else if wm::native_app().is_some() {
                 wm::native_key(hwnd, 0, wparam as u16);
@@ -767,7 +794,9 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
                 KEYBOARD_STATE_MATCH |= (keys[wparam] & 0x80 != 0) as u32;
             }
             ASYNC_KEY_PRESSED |= ((GetAsyncKeyState(vk) as u16 & 1) != 0) as u32;
-            if DESKTOP {
+            if DESKTOP && bsod::key_down() {
+                InvalidateRect(hwnd, core::ptr::null(), 0);
+            } else if DESKTOP {
                 desktop::on_key(hwnd, wparam as u32, 0);
             } else if wm::native_app().is_some() {
                 wm::native_key(hwnd, wparam as u32, 0);
@@ -801,7 +830,12 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
                 wm::native_mouse(hwnd, ev, x, y);
                 return 0;
             }
-            if DESKTOP {
+            if DESKTOP && bsod::ACTIVE {
+                if msg == WM_LBUTTONDOWN {
+                    bsod::mouse_down();
+                    InvalidateRect(hwnd, core::ptr::null(), 0);
+                }
+            } else if DESKTOP {
                 let x = (lparam as u32 & 0xFFFF) as i16 as i32;
                 let y = ((lparam as u32 >> 16) & 0xFFFF) as i16 as i32;
                 match msg {
@@ -834,6 +868,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         let desktop =
             GetEnvironmentVariableA(c"WINLUX_DESKTOP_DEMO".as_ptr(), core::ptr::null_mut(), 0) > 0;
         DESKTOP = desktop;
+        locale::load_lang();
         wm::native_init();
         if desktop {
             let mut align = [0i8; 8];
@@ -921,6 +956,16 @@ pub extern "C" fn mainCRTStartup() -> ! {
                 DispatchMessageA(&msg);
             } else {
                 if desktop {
+                    if bsod::ACTIVE {
+                        if bsod::tick() {
+                            InvalidateRect(hwnd, core::ptr::null(), 0);
+                        }
+                    } else {
+                        bsod::check_crash();
+                        if bsod::ACTIVE {
+                            InvalidateRect(hwnd, core::ptr::null(), 0);
+                        }
+                    }
                     desktop::frame(hwnd);
                     if GetTickCount().wrapping_sub(last_tick) >= 500 {
                         last_tick = GetTickCount();

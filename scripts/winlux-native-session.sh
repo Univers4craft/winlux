@@ -76,7 +76,9 @@ wait_bus_name session org.xfce.FileManager "$!" /run/winlux/file-manager.log
     }
 /usr/bin/winlux-trust-shortcuts
 has_bluetooth=false
-if test -d /sys/class/bluetooth && ls /sys/class/bluetooth/ >/dev/null 2>&1 && test -n "$(ls -A /sys/class/bluetooth/ 2>/dev/null)"; then
+if test "$(cat /run/winlux/hw/has-bluetooth 2>/dev/null)" = 1; then
+    has_bluetooth=true
+elif test -d /sys/class/bluetooth && test -n "$(ls -A /sys/class/bluetooth/ 2>/dev/null)"; then
     has_bluetooth=true
 fi
 if "$has_bluetooth"; then
@@ -128,7 +130,12 @@ for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); d
         /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5
     fi
 done
-LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
+gpu_count=$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)
+if test "$gpu_count" -gt 0; then
+    /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
+else
+    LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
+fi
 echo $! > /run/winlux/screensaver.pid
 (
     while :; do
