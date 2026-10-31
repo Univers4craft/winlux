@@ -284,6 +284,10 @@ fn mic() -> &'static Mic {
 /// demande et refermé quand plus personne n'écoute.
 pub fn subscribe_microphone() -> Arc<CaptureQueue> {
     let q = CaptureQueue::new();
+    // Micro refusé : file jamais alimentée, l'application n'entend que du silence.
+    if !crate::permissions::allowed(crate::permissions::Capability::Microphone) {
+        return q;
+    }
     let m = mic();
     lock(&m.subscribers).push(Arc::downgrade(&q));
     if !m.running.swap(true, Ordering::AcqRel) {
