@@ -974,7 +974,7 @@ unsafe fn draw_nav(g: &mut Gfx, f: &Frame) {
         let (label, gl): (&[u8], Glyph) = match i {
             0 => (t(b"Accueil", b"Home"), Glyph::Home),
             7 => (t(b"Biblioth\xE8que", b"Library"), Glyph::Grid),
-            k => (cat_label(k as usize - 1), CATS[k as usize - 1].3),
+            k => (cat_label(k as usize - 1), CATS[k as usize - 1].2),
         };
         let r = rect(c.left + 8, y, c.left + nav_w(f) - 8, y + 36);
         let active = match VIEW {
