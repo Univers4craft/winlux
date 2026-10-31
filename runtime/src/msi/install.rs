@@ -1035,7 +1035,7 @@ fn install_db(db: &Database, msi: &Path, opts: &Options, log: &mut Logger) -> Re
 }
 
 /// Date civile (année, mois, jour) d'un nombre de jours depuis 1970.
-fn civil(days: i64) -> (i64, i64, i64) {
+pub fn civil(days: i64) -> (i64, i64, i64) {
     let z = days + 719468;
     let era = z.div_euclid(146097);
     let doe = z - era * 146097;

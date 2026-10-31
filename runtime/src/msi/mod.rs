@@ -9,7 +9,7 @@ mod cfb;
 mod cond;
 mod db;
 mod install;
-pub use install::shortcut_bytes;
+pub use install::{civil, shortcut_bytes};
 mod lzx;
 
 use install::{Logger, Options};

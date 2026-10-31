@@ -15,6 +15,7 @@ pub mod inno;
 mod inno_layout;
 pub mod lzma;
 pub mod nsis;
+pub mod programs;
 
 use crate::dlls::advapi32::{apply_registry_edits, registry_key_is_empty, RegEdit};
 use std::collections::HashSet;
@@ -25,7 +26,9 @@ const USAGE: &str = "Winlux : installateurs NSIS et Inno Setup
   winlux --setup installateur.exe [/D=dossier]   installer
   winlux --setup --info installateur.exe          type, nom, version, dossier
   winlux --setup --list                           applications installées ainsi
-  winlux --setup --uninstall IDENTIFIANT|désinstalleur.exe";
+  winlux --setup --uninstall IDENTIFIANT|désinstalleur.exe
+  winlux --setup --programs [--out FICHIER]       toutes les applications inscrites
+  winlux --setup --remove CLÉ [--out FICHIER]     désinstaller l'une d'elles";
 
 /// Type d'installateur reconnu dans un `.exe`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -555,6 +558,37 @@ impl Installer {
                 return Err("écriture du registre impossible".into());
             }
         }
+        // Date et taille affichées par « Applications installées ».
+        let key = self.manifest.uninstall_key.clone();
+        let has =
+            |name: &str| crate::dlls::advapi32::read_registry_value_internal(&key, name).is_some();
+        let size_known = crate::dlls::advapi32::read_registry_value_internal(&key, "EstimatedSize")
+            .is_some_and(|b| b.iter().any(|&x| x != 0));
+        let (date, size) = (has("InstallDate"), size_known);
+        if !date {
+            let secs = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| d.as_secs());
+            let (y, m, d) = crate::msi::civil((secs / 86_400) as i64);
+            self.reg_str(&key, "InstallDate", &format!("{y:04}{m:02}{d:02}"));
+        }
+        if !size {
+            let bytes: u64 = self
+                .manifest
+                .files
+                .iter()
+                .filter_map(|f| std::fs::metadata(f).ok())
+                .map(|m| m.len())
+                .sum();
+            self.reg_dword(
+                &key,
+                "EstimatedSize",
+                (bytes / 1024).min(u32::MAX as u64) as u32,
+            );
+        }
+        if (!date || !size) && !self.flush_registry() {
+            return Err("écriture du registre impossible".into());
+        }
         self.manifest
             .save()
             .map_err(|e| format!("journal d'installation : {e}"))?;
@@ -700,7 +734,7 @@ pub fn install(path: &Path, opts: &Options, log: Logger) -> Result<Manifest, Str
 }
 
 /// Lit un argument chemin (Linux existant ou Windows).
-fn host_path(arg: &str) -> PathBuf {
+pub(crate) fn host_path(arg: &str) -> PathBuf {
     let p = Path::new(arg);
     if p.exists() {
         return p.to_path_buf();
@@ -731,6 +765,11 @@ pub fn cli(args: &[String]) -> i32 {
     let mut log = Logger { quiet: false };
     let mut opts = Options::default();
     let mut file = None;
+    let out = args
+        .iter()
+        .position(|a| a == "--out")
+        .and_then(|k| args.get(k + 1))
+        .cloned();
     let mut i = 0;
     while i < args.len() {
         let a = &args[i];
@@ -764,6 +803,30 @@ pub fn cli(args: &[String]) -> i32 {
                         1
                     }
                 };
+            }
+            "--programs" => {
+                let text = programs::format_list(&programs::list());
+                match &out {
+                    Some(o) => programs::write_out(o, &text),
+                    None => print!("{text}"),
+                }
+                return 0;
+            }
+            "--remove" => {
+                let Some(k) = args.get(i + 1) else {
+                    eprintln!("{USAGE}");
+                    return 2;
+                };
+                let (rc, msg) = programs::uninstall_key(k);
+                match &out {
+                    Some(o) => {
+                        let mut text = format!("code={rc}\nmessage={msg}\n");
+                        text.push_str(&programs::format_list(&programs::list()));
+                        programs::write_out(o, &text);
+                    }
+                    None => eprintln!("setup : {msg}"),
+                }
+                return rc;
             }
             "--uninstall" | "/uninstall" | "-u" => {
                 let Some(t) = args.get(i + 1) else {
