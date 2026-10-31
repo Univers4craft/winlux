@@ -22,9 +22,27 @@ impl Brushes {
         }
     }
     pub unsafe fn get(&mut self, color: u32) -> Handle {
-        for i in 0..self.len {
+        let hash = (color.wrapping_mul(2654435761) >> 24) as usize;
+        let start = hash % self.items.len();
+        let mut i = start;
+        loop {
+            if i >= self.len {
+                break;
+            }
             if self.items[i].0 == color {
                 return self.items[i].1;
+            }
+            i += 1;
+            if i == self.items.len() {
+                i = 0;
+            }
+            if i == start {
+                break;
+            }
+        }
+        for j in 0..self.len.min(start) {
+            if self.items[j].0 == color {
+                return self.items[j].1;
             }
         }
         let brush = CreateSolidBrush(color);
@@ -46,6 +64,7 @@ impl Brushes {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Fonts {
     pub title: Handle,
     pub body: Handle,
@@ -542,11 +561,46 @@ pub unsafe fn text_fit(
     text(hdc, font, color, x, y, &buf[..keep + 1]);
 }
 
+pub unsafe fn draw_tooltip(hdc: Handle, b: &mut Brushes, f: &Fonts, s: &[u8], mx: i32, my: i32, screen_w: i32) {
+    if s.is_empty() {
+        return;
+    }
+    let tw = text_width(s, 11) + 16;
+    let th = 24;
+    let tx = if mx + tw + 4 < screen_w { mx + 12 } else { mx - tw - 4 };
+    let ty = my - th - 4;
+    let p = pal();
+    round_rect(hdc, b, tx - 1, ty - 1, tx + tw + 1, ty + th + 1, 4, p.border);
+    round_rect(hdc, b, tx, ty, tx + tw, ty + th, 4, p.surface);
+    text(hdc, f.small, p.text, tx + 8, ty + 5, s);
+}
+
 /// Courbe d'animation « ease-out » cubique, en millièmes (0..=1000).
 pub fn ease_out(t: i32, duration: i32) -> i32 {
     let t = t.clamp(0, duration.max(1)) * 1000 / duration.max(1);
     let u = 1000 - t;
     1000 - u * u / 1000 * u / 1000
+}
+
+pub fn ease_in_out(t: i32, duration: i32) -> i32 {
+    let t = t.clamp(0, duration.max(1)) * 1000 / duration.max(1);
+    if t < 500 {
+        let u = t * 2;
+        u * u / 1000 * u / 1000 / 2
+    } else {
+        let u = 1000 - (t - 500) * 2;
+        1000 - u * u / 1000 * u / 1000 / 2
+    }
+}
+
+pub fn spring(t: i32, duration: i32) -> i32 {
+    let p = t.clamp(0, duration.max(1)) * 1000 / duration.max(1);
+    if p >= 1000 {
+        return 1000;
+    }
+    let decay = 1000 - p * p / 4000;
+    let bounce = sin_milli(p * 360 / 1000);
+    1000 - decay * bounce / 1000
 }
 
 /// Sinus en millièmes pour un angle en degrés (approximation de Bhaskara).
