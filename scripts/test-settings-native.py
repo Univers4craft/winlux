@@ -5,6 +5,11 @@ from pathlib import Path
 
 module = runpy.run_path(str(Path(__file__).with_name("winlux-settings.py")), run_name="settings_test")
 Gtk, GLib = module["Gtk"], module["GLib"]
+# Temps de démarrage (page Processeur) : durée lisible et étape la plus longue.
+boot = module["boot_summary"]({"boot_known": "1", "boot_total_ms": "8420", "boot_phases": "init:1500,drivers:3150",
+                               "boot_slowest": "drivers", "boot_slowest_ms": "3150"})
+assert module["seconds"]("8420") in boot and module["seconds"]("3150") in boot, boot
+assert module["boot_summary"]({"boot_known": "0"}) != boot
 window = module["Settings"]()
 failures = []
 

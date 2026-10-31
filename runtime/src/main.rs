@@ -3,6 +3,7 @@
 mod admin;
 mod archive;
 mod audio;
+mod boottime;
 mod clr;
 mod cpu;
 mod crash;
@@ -58,6 +59,10 @@ fn main() {
     if exe == "--power" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(power::cli::main(&rest));
+    }
+    if exe == "--boot-time" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(boottime::cli(&rest));
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());

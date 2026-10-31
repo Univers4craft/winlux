@@ -163,6 +163,8 @@ cpu_status() {
     if winlux --cpu-report "${root:-/}" > "$run/cpu.txt.tmp.$$" 2>/dev/null; then
         hybrid=$(cpu_pref HYBRID_POLICY) fan=$(cpu_pref FAN_CURVE)
         printf 'hybrid_policy=%s\nfan_curve=%s\n' "${hybrid:-auto}" "${fan:-auto}" >> "$run/cpu.txt.tmp.$$"
+        # Temps du dernier démarrage (repères notés par l'init).
+        winlux --boot-time "${root:-/}" >> "$run/cpu.txt.tmp.$$" 2>/dev/null || true
         mv "$run/cpu.txt.tmp.$$" "$run/cpu.txt"
     else rm -f "$run/cpu.txt.tmp.$$"; fi
 }
