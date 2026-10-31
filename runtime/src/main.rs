@@ -5,6 +5,7 @@ mod dlls;
 mod loader;
 pub mod log;
 mod managed;
+mod mounts;
 mod paths;
 mod pe;
 mod printf;
