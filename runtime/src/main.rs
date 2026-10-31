@@ -1,5 +1,6 @@
 #![allow(clippy::too_many_arguments, clippy::type_complexity)]
 
+mod clr;
 mod crash;
 mod dlls;
 mod loader;
@@ -47,20 +48,13 @@ fn main() {
         crash::set_exe_name(name);
     }
     profiles::apply(&exe);
-    if let Some(target) = managed::detect(&exe, &source) {
+    if let Some(assembly) = managed::managed_image(&exe, &source) {
         log_info!(
             "managed",
-            "{} détectée, utilisation du pont natif",
-            managed::description(&target)
+            "assembly .NET détectée, exécution via le CLR Winlux intégré"
         );
-        match managed::run(&target, &rest) {
-            Ok(status) => std::process::exit(status.code().unwrap_or(1)),
-            Err(error) => {
-                log_error!("managed", "{error}");
-                log_error!("managed", "les interfaces WPF/WinForms restent limitées tant que leurs API Windows ne sont pas complètes");
-                std::process::exit(1);
-            }
-        }
+        let code = clr::execute_assembly(&assembly);
+        dlls::kernel32::flush_and_exit(code);
     }
     let image = match loader::load(&exe, true) {
         Ok(m) => m,
@@ -115,7 +109,7 @@ fn inspect(exe: &std::path::Path) -> i32 {
             return 1;
         }
     };
-    if managed::detect(exe, &source).is_none() {
+    if managed::managed_image(exe, &source).is_none() {
         match pe::PeImage::parse(&source) {
             Ok(image) if image.is_dll() => {
                 eprintln!(

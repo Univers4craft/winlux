@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **168**
+- Réalisé : **171**
 - À faire ou en cours : **40**
-- Total : **208**
-- Progression : **80.8%**
-- Dernière mise à jour : 31/10/2026 (PRs #36 à #76 et #100, issues #10 à #98)
+- Total : **211**
+- Progression : **81.0%**
+- Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73 et #100, issues #10 à #98)
 
 ## À FAIRE (par priorité)
 
@@ -87,7 +87,7 @@
 - [ ] Graphisme 3D : Direct3D 9 et 12 avec backend Vulkan (#92).
 - [ ] Applications du shell : store de logiciels (#81), gestionnaire de polices (#82), planificateur de tâches (#83), pare-feu (#84), capture et enregistrement d'écran (#86), sauvegarde (#87), bureau à distance (#89).
 - [ ] Bureau : historique du presse-papiers Win+V (#85), multi-utilisateur complet (#88), accessibilité loupe/lecteur d'écran/contraste (#28).
-- [ ] Installateur : mode récupération, Secure Boot et installation silencieuse (#95), benchmark et profils d'utilisation (#96), personnalisation visuelle (#97), page de bienvenue, mises à jour et confidentialité (#98).
+- [ ] Installateur : mode récupération, Secure Boot et installation silencieuse (#95), benchmark et profils d'utilisation (#96), personnalisation visuelle (#97).
 
 ## DÉJÀ FAIT
 
@@ -261,6 +261,9 @@
 - [x] Définir les variantes clair/sombre et le réglage d'échelle.
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
+- [x] Fenêtre « Bienvenue » au premier login (`welcome.rs`) : visite guidée en 8 étapes (Démarrer, Explorer, Paramètres, Terminal, raccourcis, confidentialité, choix du thème clair/sombre et de l’alignement), rouvrable depuis Démarrer (#98).
+- [x] Paramètres > Mises à jour système : mode automatique, manuel ou planifié (jour/heure) pour APT (`winlux-sysupdate`) et Winlux, liste des paquets, journal et notification quand des mises à jour sont disponibles (#98).
+- [x] Paramètres > Confidentialité : télémétrie et historique de localisation désactivés par défaut, autorisations micro/caméra/localisation des .exe (micro refusé appliqué par `winmm`) (#98).
 - [x] Permettre le déplacement des icônes du prototype de bureau (placement
 
 ### Priorité 6 — Qualité et livraison

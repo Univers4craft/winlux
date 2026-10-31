@@ -42,6 +42,8 @@ mod terminal;
 mod utilities;
 #[path = "../shell/weather.rs"]
 mod weather;
+#[path = "../shell/welcome.rs"]
+mod welcome;
 #[path = "../shell/wm.rs"]
 mod wm;
 

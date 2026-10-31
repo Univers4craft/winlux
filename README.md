@@ -54,7 +54,7 @@ target/release/winlux chemin/vers/programme.exe [arguments...]
 
 Un dépôt privé exige une authentification. Pour l’affichage, prévoyez un serveur X11 et les bibliothèques Xft/Fontconfig. L’audio utilise ALSA ; MP3/AAC nécessitent `libmpg123.so.0` et `libfaad.so.2`. Les bibliothèques natives ne sont pas des DLL Windows.
 
-`WINLUX_TRACE=1` active les traces du chargeur. Un import non implémenté arrête normalement le programme. `WINLUX_DOTNET` et `WINLUX_MONO` précisent les pilotes .NET Linux ; ils ne rendent pas WPF/WinForms compatibles.
+`WINLUX_TRACE=1` active les traces du chargeur. Un import non implémenté arrête normalement le programme. Les programmes .NET sont exécutés par le CLR intégré, sans runtime .NET extérieur ; WPF/WinForms ne sont pas encore pris en charge.
 
 ### Intégration au bureau Linux
 

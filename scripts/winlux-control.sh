@@ -13,6 +13,7 @@ export DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS:-unix:path=/run/winlu
 value() { if test -r "$1"; then sed -n "s/^$2=//p" "$1" | head -n 1; fi; }
 pref() { value "$config/preferences.conf" "$1"; }
 input() { value "$config/input.conf" "$1"; }
+privacy() { v=$(value "$config/privacy.conf" "$1"); printf '%s\n' "${v:-$2}"; }
 save() {
     file=$1 key=$2 new_value=$3
     tmp="$file.$$"
@@ -90,6 +91,14 @@ status() {
         printf 'wifi=%s\n' "$(cat "$root/run/winlux/hw/has-wifi" 2>/dev/null || echo 0)"
         printf 'touchpad=%s\n' "$(cat "$root/run/winlux/hw/has-touchpad" 2>/dev/null || echo 0)"
         printf 'webcam=%s\n' "$(cat "$root/run/winlux/hw/has-webcam" 2>/dev/null || echo 0)"
+        welcome=$(pref WELCOME_DONE); printf 'welcome_done=%s\n' "${welcome:-0}"
+        # Vie privee : rien n'est envoye par defaut, la localisation est coupee.
+        printf 'privacy_telemetry=%s\n' "$(privacy TELEMETRY off)"
+        printf 'privacy_microphone=%s\n' "$(privacy MICROPHONE allow)"
+        printf 'privacy_camera=%s\n' "$(privacy CAMERA allow)"
+        printf 'privacy_location=%s\n' "$(privacy LOCATION deny)"
+        printf 'privacy_location_history=%s\n' "$(privacy LOCATION_HISTORY off)"
+        if have winlux-sysupdate; then winlux-sysupdate status 2>/dev/null || true; fi
         printf 'control_available=1\n'
         if have winlux-browsers; then winlux-browsers --status 2>/dev/null || true; fi
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
@@ -273,6 +282,21 @@ perform() {
         update-apply) winlux-update --apply ;;
         update-rollback) winlux-update --rollback ;;
         update-auto-on) winlux-update --auto enable ;;
+        sysupdate-mode-auto|sysupdate-mode-manual|sysupdate-mode-scheduled)
+            winlux-sysupdate --mode "${action#sysupdate-mode-}" || return
+            # Le mode s'applique aussi aux mises a jour de Winlux lui-meme.
+            if test "$action" = sysupdate-mode-auto; then winlux-update --auto enable; else winlux-update --auto disable; fi ;;
+        sysupdate-hour-up|sysupdate-hour-down) winlux-sysupdate --hour "${action#sysupdate-hour-}" ;;
+        sysupdate-day-next) winlux-sysupdate --day next ;;
+        sysupdate-check) winlux-sysupdate --check ;;
+        sysupdate-apply) winlux-sysupdate --apply ;;
+        welcome-done) save "$config/preferences.conf" WELCOME_DONE 1 ;;
+        welcome-reset) save "$config/preferences.conf" WELCOME_DONE 0 ;;
+        privacy-telemetry-on|privacy-telemetry-off) save "$config/privacy.conf" TELEMETRY "${action#privacy-telemetry-}" && chmod 644 "$config/privacy.conf" ;;
+        privacy-microphone-allow|privacy-microphone-deny) save "$config/privacy.conf" MICROPHONE "${action#privacy-microphone-}" && chmod 644 "$config/privacy.conf" ;;
+        privacy-camera-allow|privacy-camera-deny) save "$config/privacy.conf" CAMERA "${action#privacy-camera-}" && chmod 644 "$config/privacy.conf" ;;
+        privacy-location-allow|privacy-location-deny) save "$config/privacy.conf" LOCATION "${action#privacy-location-}" && chmod 644 "$config/privacy.conf" ;;
+        privacy-history-on|privacy-history-off) save "$config/privacy.conf" LOCATION_HISTORY "${action#privacy-history-}" && chmod 644 "$config/privacy.conf" ;;
         update-auto-off) winlux-update --auto disable ;;
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
@@ -281,7 +305,7 @@ perform() {
             printf 'restart-session\n' > "$run/session-action" ;;
         poweroff|reboot)
             test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
-            if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
+            if winlux-update --busy 2>/dev/null || winlux-sysupdate --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
             /usr/bin/winlux-shutdown-screen "$action" >/dev/null 2>&1 || true
             /usr/bin/winlux-close-session || return
             sync || return
@@ -296,14 +320,14 @@ perform() {
     esac
 }
 log="$run/action.log"
-case "$action" in update-*) log="$run/update.log" ;; esac
+case "$action" in update-*) log="$run/update.log" ;; sysupdate-*) log="$run/sysupdate.log" ;; esac
 case "$action" in update-check|update-apply|update-rollback) rm -f "$run/update-error-phase" ;; esac
 if perform > "$log" 2>&1; then
     message 'Operation terminee.'
     result=0
 else
     result=$?
-    if test "${action#update-}" != "$action"; then
+    if test "${action#update-}" != "$action" || test "${action#sysupdate-}" != "$action"; then
         detail=$(tail -n 1 "$log")
         message "Echec de la mise à jour : ${detail:-aucun détail dans le journal}"
     else
