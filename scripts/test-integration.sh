@@ -51,7 +51,7 @@ for type in x-scheme-handler/http x-scheme-handler/https text/html; do
     grep -q "^$type=winlux-browser.desktop;$" "$dest/etc/xdg/mimeapps.list" || fail "$type n'ouvre pas Edge par défaut"
 done
 DESTDIR="$dest" WINLUX_VERSION=test sh "$root/integration/install.sh" /usr >/dev/null
-test "$(grep -c 'winlux.desktop' "$dest/etc/xdg/mimeapps.list")" -eq 5 || fail "réinstallation non idempotente"
+test "$(grep -c 'winlux.desktop' "$dest/etc/xdg/mimeapps.list")" -eq 6 || fail "réinstallation non idempotente"
 test "$(grep -c 'winlux-browser.desktop' "$dest/etc/xdg/mimeapps.list")" -eq 4 || fail "réinstallation du navigateur non idempotente"
 ok "installation DESTDIR et associations MIME"
 
