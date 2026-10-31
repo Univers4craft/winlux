@@ -40,6 +40,8 @@ status() {
         printf 'mouse_speed=%s\n' "$(input MOUSE_SPEED | sed 's/^$/50/')"
         printf 'align=%s\n' "$(pref TASKBAR_ALIGN)"
         printf 'theme=%s\n' "$(pref THEME)"
+        printf 'lang=%s\n' "$(value "$config/locale.conf" LANG | sed 's/^$/fr/')"
+        printf 'timezone=%s\n' "$(cat /etc/timezone 2>/dev/null || printf 'Europe/Paris')"
         printf 'network='; if have ip; then
             iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1 { print $5 }')
             if test -n "$iface"; then
@@ -76,6 +78,18 @@ status() {
         else
             printf 'update_action=%s\n' "$(cat "$run/update-action" 2>/dev/null || true)"
         fi
+        gpu_count=$(cat "$root/run/winlux/hw/gpu-count" 2>/dev/null || echo 0)
+        printf 'gpu_count=%s\n' "$gpu_count"
+        test "$(cat "$root/run/winlux/hw/has-nvidia" 2>/dev/null)" = 1 && printf 'gpu_nvidia=%s\n' "$(cat "$root/run/winlux/hw/nvidia-driver" 2>/dev/null || echo nouveau)"
+        test "$(cat "$root/run/winlux/hw/has-amd" 2>/dev/null)" = 1 && printf 'gpu_amd=%s\n' "$(cat "$root/run/winlux/hw/amd-driver" 2>/dev/null || echo amdgpu)"
+        test "$(cat "$root/run/winlux/hw/has-intel" 2>/dev/null)" = 1 && printf 'gpu_intel=i915\n'
+        gpu_mode=$(cat "$root/run/winlux/hw/gpu-mode" 2>/dev/null || true)
+        test -n "$gpu_mode" && printf 'gpu_mode=%s\n' "$gpu_mode"
+        printf 'cpu_sockets=%s\n' "$(cat "$root/run/winlux/hw/cpu-sockets" 2>/dev/null || echo 1)"
+        printf 'cpu_threads=%s\n' "$(cat "$root/run/winlux/hw/cpu-threads" 2>/dev/null || echo 1)"
+        printf 'wifi=%s\n' "$(cat "$root/run/winlux/hw/has-wifi" 2>/dev/null || echo 0)"
+        printf 'touchpad=%s\n' "$(cat "$root/run/winlux/hw/has-touchpad" 2>/dev/null || echo 0)"
+        printf 'webcam=%s\n' "$(cat "$root/run/winlux/hw/has-webcam" 2>/dev/null || echo 0)"
         printf 'control_available=1\n'
         if have winlux-browsers; then winlux-browsers --status 2>/dev/null || true; fi
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
@@ -173,11 +187,25 @@ perform() {
             elif have amixer; then
                 case "$action" in volume-up) amixer set Master 5%+ ;; volume-down) amixer set Master 5%- ;; *) amixer set Master toggle ;; esac
             else echo 'Aucun mixeur audio installe.' >&2; return 1; fi ;;
-        keyboard-fr|keyboard-us)
+        keyboard-fr|keyboard-us|keyboard-de|keyboard-es|keyboard-gb|keyboard-it|keyboard-pt|keyboard-be)
             layout=${action#keyboard-}
             have setxkbmap || { echo 'setxkbmap indisponible' >&2; return 1; }
             setxkbmap -layout "$layout" || return
             save "$config/input.conf" XKB_LAYOUT "$layout" ;;
+        lang-fr|lang-en|lang-es|lang-de|locale-fr|locale-en|locale-es|locale-de)
+            lang=${action#*-}
+            save "$config/locale.conf" LANG "$lang" ;;
+        tz-*|timezone-*)
+            tz=${action#tz-}; tz=${tz#timezone-}
+            case "$tz" in *[!A-Za-z0-9/_+-]*) echo "Fuseau invalide : $tz" >&2; return 1 ;; esac
+            test -f "/usr/share/zoneinfo/$tz" || { echo "Fuseau inconnu : $tz" >&2; return 1; }
+            if have timedatectl; then
+                timedatectl set-timezone "$tz" || return
+            else
+                ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime || return
+                printf '%s\n' "$tz" > /etc/timezone || return
+            fi
+            save "$config/locale.conf" TIMEZONE "$tz" ;;
         tap-on|tap-off)
             tap=0; test "$action" != tap-on || tap=1
             apply_tap "$tap" || return
@@ -258,6 +286,12 @@ perform() {
             /usr/bin/winlux-close-session || return
             sync || return
             "$action" ;;
+        journal-status|journal-list|journal-errors|journal-crashes|journal-clear|journal-rotate)
+            winlux-journal "${action#journal-}" "$2" ;;
+        journal-export) winlux-journal export "$2" ;;
+        restore-create) winlux-restore create "$2" ;;
+        restore-list|restore-status) winlux-restore "${action#restore-}" ;;
+        restore-restore|restore-delete) winlux-restore "${action#restore-}" "$2" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
     esac
 }

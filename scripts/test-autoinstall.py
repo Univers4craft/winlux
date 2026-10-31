@@ -33,7 +33,12 @@ with open(EXAMPLE, encoding="utf-8") as handle:
 parsed = auto.parse_simple_yaml(text)
 settings, steps = auto.validate(parsed)
 check("exemple : analyseur YAML intégré", parsed["account"]["username"] == "winlux" and parsed["packages"] == ["vlc", "gimp"])
-check("exemple : étapes sautées", steps == {0, 1, 2, 3, 4, 5})
+check("exemple : étapes sautées", steps == {auto.STEP_LANGUAGE, auto.STEP_KEYBOARD, auto.STEP_LICENSE,
+                                             auto.STEP_DISK, auto.STEP_ACCOUNT})
+check("numéros de pages de l'installateur", (auto.STEP_DISK, auto.STEP_ACCOUNT, auto.STEP_SUMMARY) == (4, 7, 8))
+unattended = dict(parsed, unattended=True)
+check("unattended : réseau, import, chiffrement et résumé sautés",
+      {3, 5, 6, 8} <= auto.validate(unattended)[1])
 check("exemple : réglages", settings["timezone"] == "Europe/Paris" and settings["disk_request"] == "auto")
 try:
     import yaml
@@ -46,7 +51,7 @@ check("JSON accepté", auto.load_text(json.dumps({"language": "en_US"}), "f.json
 
 partial, partial_steps = auto.validate({"language": "de_DE"})
 check("langue seule : clavier déduit", partial["keyboard"] == "de" and partial_steps == {0, 1})
-check("compte sans mot de passe : page affichée", 5 not in auto.validate({"account": {"username": "abc"}})[1])
+check("compte sans mot de passe : page affichée", auto.STEP_ACCOUNT not in auto.validate({"account": {"username": "abc"}})[1])
 check("licence false : page affichée", 2 not in auto.validate({"license_accepted": False})[1])
 
 rejects("compte en ligne refusé", {"account": {"username": "abc", "microsoft_account": "x@y"}}, "compte local uniquement")

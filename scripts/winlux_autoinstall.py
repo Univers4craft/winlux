@@ -22,7 +22,9 @@ TOP_KEYS = {"version", "unattended", "language", "keyboard", "timezone", "licens
 PARTITION_KEYS = {"disk", "mode"}
 ACCOUNT_KEYS = {"hostname", "username", "fullname", "password", "password_hash", "autologin"}
 
-STEP_LANGUAGE, STEP_KEYBOARD, STEP_LICENSE, STEP_TYPE, STEP_DISK, STEP_ACCOUNT, STEP_SUMMARY = range(7)
+# Pages de l'installateur : le type d'installation se choisit sur la page des disques.
+(STEP_LANGUAGE, STEP_KEYBOARD, STEP_LICENSE, STEP_NETWORK, STEP_DISK, STEP_IMPORT,
+ STEP_ENCRYPTION, STEP_ACCOUNT, STEP_SUMMARY) = range(9)
 
 
 class AnswerFileError(ValueError):
@@ -183,7 +185,6 @@ def validate(data):
         if mode != "full":
             raise AnswerFileError("partitioning.mode : seul « full » (disque entier effacé) est disponible")
         settings["install_type"] = "full"
-        steps.add(STEP_TYPE)
         disk = partitioning.get("disk")
         if disk is not None:
             if not isinstance(disk, str) or not (disk == "auto" or re.fullmatch(r"/dev/[A-Za-z0-9/_-]+", disk)):
@@ -236,7 +237,8 @@ def validate(data):
         absent = [label for step, label in missing.items() if step not in steps]
         if absent:
             raise AnswerFileError("unattended : réglage(s) manquant(s) : " + ", ".join(absent))
-        steps.add(STEP_SUMMARY)
+        # Sans clic : pas de réseau à configurer, pas d'import Windows, pas de chiffrement.
+        steps.update({STEP_NETWORK, STEP_IMPORT, STEP_ENCRYPTION, STEP_SUMMARY})
     return settings, steps
 
 

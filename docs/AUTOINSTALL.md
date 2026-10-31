@@ -23,14 +23,14 @@ Le fichier est aussi couvert par la vérification d'intégrité du média.
 | Clé | Valeur | Page sautée |
 |---|---|---|
 | `version` | `1` | — |
-| `unattended` | `true` / `false` | Résumé (si `true`) |
+| `unattended` | `true` / `false` | Réseau, Import Windows, Chiffrement et Résumé (si `true`) |
 | `reboot` | redémarre 10 s après la fin (`unattended` seulement) | — |
 | `language` | `fr_FR`, `en_US`, `de_DE`, `es_ES`, `it_IT`, `pt_BR` | Langue (et Clavier) |
 | `keyboard` | `fr`, `us`, `gb`, `de`, `es`, `it`, `br`, `ch`, `be`, `ca` | Clavier |
 | `timezone` | `Europe/Paris`… | — |
 | `license_accepted` | `true` | Licence |
-| `partitioning.mode` | `full` (disque entier effacé, seul mode) | Type |
-| `partitioning.disk` | `auto` ou `/dev/sda`, `/dev/nvme0n1`… | Disque |
+| `partitioning.mode` | `full` (disque entier effacé, seul mode) | — |
+| `partitioning.disk` | `auto` ou `/dev/sda`, `/dev/nvme0n1`… | Partitionnement |
 | `account.hostname` | nom de la machine | — |
 | `account.username` | minuscules, chiffres, `-`, `_` (pas `root`) | Compte (avec un mot de passe) |
 | `account.fullname` | nom affiché | — |

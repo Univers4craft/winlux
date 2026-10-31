@@ -90,6 +90,24 @@ test "$(sha256sum "$iso" | awk '{print $1}')" = "$iso_sha" || die 'ISO modifiée
 needed=$(du -sk "$work/source" | awk '{ print $1 + 262144 }')
 budget=$(lsblk -bdnro SIZE "$device" | awk '{ printf "%.0f", ($1 / 1024 - 527360) * 0.94 }')
 test "$budget" -gt "$needed" || die 'disque trop petit pour la racine complète'
+# ── Choix de la langue et du clavier ───────────────────────────────
+install_lang=fr
+install_kb=fr
+if test -z "$test_image" && test -t 0; then
+    echo ''
+    echo '── Langue / Language ──────────────────────────'
+    echo '  1) Français   2) English   3) Español   4) Deutsch'
+    printf 'Choix [1] : ' >/dev/tty
+    IFS= read -r lang_choice </dev/tty || true
+    case "$lang_choice" in 2) install_lang=en ;; 3) install_lang=es ;; 4) install_lang=de ;; esac
+    echo ''
+    echo '── Clavier / Keyboard ────────────────────────'
+    echo '  1) fr (AZERTY)  2) us (QWERTY)  3) de  4) es  5) gb  6) it  7) pt  8) be'
+    printf 'Choix [1] : ' >/dev/tty
+    IFS= read -r kb_choice </dev/tty || true
+    case "$kb_choice" in 2) install_kb=us ;; 3) install_kb=de ;; 4) install_kb=es ;; 5) install_kb=gb ;; 6) install_kb=it ;; 7) install_kb=pt ;; 8) install_kb=be ;; esac
+    echo ''
+fi
 echo "ATTENTION : toutes les données du disque suivant seront effacées."
 lsblk -bd -o NAME,SIZE,MODEL,SERIAL,TRAN "$device"
 echo "ISO : $iso"
@@ -137,6 +155,10 @@ mounted=1
 free=$(df -Pk "$work/target" | awk 'NR==2 { print $4 }')
 test "$free" -gt "$needed" || die 'espace insuffisant pour la racine complète'
 cp -a "$work/source/." "$work/target/"
+# Ecrire la configuration langue/clavier choisie par l'utilisateur.
+mkdir -p "$work/target/etc/winlux"
+printf 'LANG=%s\n' "$install_lang" > "$work/target/etc/winlux/locale.conf"
+printf 'XKB_LAYOUT=%s\n' "$install_kb" > "$work/target/etc/winlux/input.conf"
 mkdir -p "$work/target/boot/grub" "$work/target/boot/efi"
 cp "$work/vmlinuz" "$work/target/boot/vmlinuz"
 cp "$work/initramfs.gz" "$work/target/boot/winlux-initramfs.cpio.gz"
