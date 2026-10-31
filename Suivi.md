@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **223**
-- À faire ou en cours : **40**
-- Total : **263**
-- Progression : **84.8%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158, presse-papiers Windows ↔ Linux #161, installateurs NSIS/Inno #179)
+- Réalisé : **227**
+- À faire ou en cours : **42**
+- Total : **269**
+- Progression : **84.4%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, installateurs NSIS/Inno et Applications installées #179)
 
 ## À FAIRE (par priorité)
 
@@ -27,9 +27,13 @@
 
 ### État actuel
 
+- [x] Identité visuelle (#170) : logo maison « Prisme » (plus aucun logo Microsoft), écran de démarrage du bureau, thème GRUB assorti, fonds « Winlux Nuit » / « Winlux Aube », page À propos avec matériel réel, son « Prisme ». Voir `docs/IDENTITE-VISUELLE.md`.
+- [ ] Identité visuelle, suite (#170) : écran pendant le chargement du noyau, sons système assortis, jeu d'icônes cohérent.
 - [x] Lecteurs réseau : FTP, FTPS, SFTP, WebDAV(S), SMB, NFS et S3 montés comme un disque avec lettre (`winlux-drives`, page Paramètres « Lecteurs réseau »), mots de passe chiffrés ChaCha20-Poly1305, reconnexion automatique et état hors ligne publiés dans le registre commun `mounts.tsv`. Seuls les protocoles dont l'outil de montage est présent sont proposés. Reste : modules noyau cifs/nfs dans l'ISO live (SMB passe par rclone en attendant, NFS masqué).
+- [x] Disques branchés (#168) : clés USB, disques externes et partition d'un Windows existant montés avec une lettre (`winlux --volumes`), NTFS en lecture/écriture, droits de l'utilisateur, même lettre au même volume, veille prolongée / démarrage rapide / volume « sale » détectés → lecture seule + message clair, bouton Réparer dans Gestion des disques, BitLocker expliqué (`docs/VOLUMES.md`).
+- [ ] Réseau local partagé Linux ↔ Windows (#168) : ports locaux joignables des deux côtés, ports ouverts affichés dans le pare-feu avec le nom de l'appli, proxy système commun.
 - [x] Écran de verrouillage de la session native au style Windows 11 (`winlux-lock`) : Windows+L, Démarrer > Verrouiller, inactivité, mot de passe au réveil, réglages dans Paramètres > Confidentialité et sécurité (#158).
-- [ ] Permissions des applications Windows : demande claire (dossiers personnels, webcam, micro, écran, réseau), choix mémorisé et révocable dans Paramètres (#158).
+- [x] Permissions des applications Windows : demande claire (dossiers personnels, webcam, micro, écran ; réseau autorisé d'office mais blocable), choix mémorisé et révocable dans Paramètres > Confidentialité et sécurité (#158).
 - [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
@@ -87,6 +91,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [ ] Faire tourner Paint.NET 5.1 sur le runtime .NET qu'il embarque : étape 1 livrée (#133), restent coreclr (exceptions MSVC, SEH x64), WIC, Direct2D/DirectWrite et WPF (#138, `docs/PAINTNET.md`).
 - [ ] Traduire toutes les applications en FR/EN/ES/DE : lots #120, #130, #131, #134 et #135 livrés, reste les applis encore en une seule langue (#139).
 - [ ] Traduire réellement l'installateur : choisir English ne traduit aujourd'hui que la barre des étapes (#140).
+- [ ] Intégrer les applis Windows au bureau : associations de fichiers, .lnk du Bureau et « Applications par défaut » livrés, reste « Ouvrir avec… » dans l'Explorateur (#152).
 - [ ] Glisser-déposer entre applis Windows et Linux (XDND ↔ `WM_DROPFILES`/`IDropTarget`, `DoDragDrop` vers Thunar), suite du pont presse-papiers (#159).
 - [ ] Démarrage sous 10 secondes et mode jeu : temps de démarrage mesuré et affiché livré, mode jeu livré, reste la réduction des étapes les plus longues (mesure en VM KVM) (#153).
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
@@ -95,6 +100,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] Applis Windows intégrées au bureau (#152) : associations de fichiers lues dans le registre (HKCU/HKLM\Software\Classes et HKCR, ProgID, OpenWithProgids, OpenWithList, SupportedTypes, UserChoice) → lanceurs cachés `winlux-assoc-*.desktop` (double-clic, « Ouvrir avec » de Thunar et xdg-open, document passé en chemin Windows), type MIME créé pour les extensions inconnues, programme par défaut seulement si l'utilisateur n'a rien choisi ; raccourcis .lnk du Bureau ouvrables (cible, arguments, dossier de travail) ; icônes des .exe/.lnk par thumbnailer tumbler ; fenêtre « Applications par défaut » (Paramètres > Applications) en FR/EN/ES/DE. Zone de notification : `Shell_NotifyIconA/W` (NIM_ADD/MODIFY/DELETE/SETVERSION, infobulle, état caché, bulles par notify-send, clics transmis au `uCallbackMessage` en format classique ou version 4) via l'assistant GTK `winlux-notify-icon`, et zone « systray » ajoutée au panneau (y compris aux panneaux déjà configurés).
 - [x] Mode jeu : un `.exe` Direct3D/OpenGL/Vulkan/XInput déclenche `winlux --gamemode daemon` (gouverneur performances sur secteur, priorité du jeu, sauvegardes et mises à jour en pause et en basse priorité, swappiness et compactage mémoire, veille bloquée), tout est restauré à la fermeture ; réglage dans Paramètres > Processeur, actions affichées selon le matériel (#153, `docs/PERFORMANCES.md`).
 - [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).
 

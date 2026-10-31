@@ -545,7 +545,9 @@ pub fn exports() -> crate::dlls::Exports {
         "SHGetFolderPathA"=>fn sh_get_folder_path_a,
         "CommandLineToArgvW"=>fn command_line_to_argv_w,
         "ShellExecuteA"=>fn shell_execute_a,"ShellExecuteW"=>fn shell_execute_w,
-        "ShellExecuteExA"=>fn shell_execute_ex_a,"ShellExecuteExW"=>fn shell_execute_ex_w
+        "ShellExecuteExA"=>fn shell_execute_ex_a,"ShellExecuteExW"=>fn shell_execute_ex_w,
+        "Shell_NotifyIconA"=>fn crate::dlls::notifyicon::shell_notify_icon_a,
+        "Shell_NotifyIconW"=>fn crate::dlls::notifyicon::shell_notify_icon_w
     }
 }
 

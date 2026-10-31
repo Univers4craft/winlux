@@ -180,6 +180,8 @@ fn unicode_string(at: usize, s: &[u16]) {
 }
 
 pub fn init_process(exe: &Module, args: &[String]) {
+    // Identité de l'application pour ses autorisations (caméra, micro…).
+    crate::permissions::init(&exe.path, args);
     let exe_win = crate::paths::to_windows(&exe.path);
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());

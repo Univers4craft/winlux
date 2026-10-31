@@ -1,0 +1,4 @@
+[Thumbnailer Entry]
+TryExec=/usr/bin/winlux-applications
+Exec=/usr/bin/winlux-applications thumbnail %i %o %s
+MimeType=application/x-ms-dos-executable;application/x-msdownload;application/vnd.microsoft.portable-executable;application/x-dosexec;application/x-ms-shortcut;
