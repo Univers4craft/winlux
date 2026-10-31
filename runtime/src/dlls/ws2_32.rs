@@ -53,6 +53,49 @@ const WIN_SO_TYPE: i32 = 0x1008;
 
 const WIN_TCP_NODELAY: i32 = 0x0001;
 const WIN_IPPROTO_TCP: i32 = 6;
+const WIN_IPPROTO_IP: i32 = 0;
+/// `AF_INET6` vaut 23 sous Windows et 10 sous Linux ; les structures
+/// `sockaddr_in6` ont la même forme, seule la famille change.
+const WIN_AF_INET6: i32 = 23;
+
+fn af_in(af: i32) -> i32 {
+    if af == WIN_AF_INET6 {
+        libc::AF_INET6
+    } else {
+        af
+    }
+}
+
+fn af_out(af: i32) -> i32 {
+    if af == libc::AF_INET6 {
+        WIN_AF_INET6
+    } else {
+        af
+    }
+}
+
+/// Copie d'une adresse donnée par l'appli, avec la famille Linux.
+unsafe fn addr_in(name: *const u8, len: i32) -> libc::sockaddr_storage {
+    let mut st: libc::sockaddr_storage = std::mem::zeroed();
+    let n = (len.max(0) as usize).min(std::mem::size_of::<libc::sockaddr_storage>());
+    if !name.is_null() && n >= 2 {
+        std::ptr::copy_nonoverlapping(name, &mut st as *mut _ as *mut u8, n);
+        st.ss_family = af_in(st.ss_family as i32) as u16;
+    }
+    st
+}
+
+/// Remet la famille Windows dans une adresse rendue à l'appli.
+unsafe fn addr_out(name: *mut u8, len: usize) {
+    if !name.is_null() && len >= 2 {
+        let f = std::ptr::read_unaligned(name as *const u16);
+        std::ptr::write_unaligned(name as *mut u16, af_out(f as i32) as u16);
+    }
+}
+const WIN_IPPROTO_IPV6: i32 = 41;
+/// `SO_EXCLUSIVEADDRUSE` (`~SO_REUSEADDR`) : un port lié sous Linux est déjà
+/// exclusif tant que personne ne demande `SO_REUSEADDR`.
+const WIN_SO_EXCLUSIVEADDRUSE: i32 = !WIN_SO_REUSEADDR;
 
 // WSA event constants
 const WSA_INVALID_EVENT: usize = 0;
@@ -260,7 +303,7 @@ unsafe fn make_libc_hints(hints: *const WinAddrInfoA) -> Option<libc::addrinfo> 
     let h = std::ptr::read_unaligned(hints);
     let mut out: libc::addrinfo = std::mem::zeroed();
     out.ai_flags = h.flags;
-    out.ai_family = h.family;
+    out.ai_family = af_in(h.family);
     out.ai_socktype = h.socktype;
     out.ai_protocol = h.protocol;
     Some(out)
@@ -345,7 +388,7 @@ pub extern "win64" fn socket(af: i32, kind: i32, protocol: i32) -> usize {
         set_error(WSA_NOT_INITIALISED);
         return usize::MAX;
     }
-    let s = unsafe { libc::socket(af, kind, protocol) };
+    let s = unsafe { libc::socket(af_in(af), kind, protocol) };
     if s < 0 {
         set_error(last_error());
         usize::MAX
@@ -377,9 +420,10 @@ pub unsafe extern "win64" fn connect(s: usize, name: *const u8, len: i32) -> i32
         set_error(10014);
         return SOCKET_ERROR;
     }
+    let addr = addr_in(name, len);
     let rc = libc::connect(
         s as i32,
-        name as *const libc::sockaddr,
+        &addr as *const _ as *const libc::sockaddr,
         len as libc::socklen_t,
     );
     if rc < 0 {
@@ -398,9 +442,10 @@ pub unsafe extern "win64" fn bind(s: usize, name: *const u8, len: i32) -> i32 {
         set_error(10014);
         return SOCKET_ERROR;
     }
+    let addr = addr_in(name, len);
     let rc = libc::bind(
         s as i32,
-        name as *const libc::sockaddr,
+        &addr as *const _ as *const libc::sockaddr,
         len as libc::socklen_t,
     );
     if rc < 0 {
@@ -444,6 +489,7 @@ pub unsafe extern "win64" fn accept(s: usize, name: *mut u8, len: *mut i32) -> u
         return usize::MAX;
     }
     if !len.is_null() {
+        addr_out(name, (*len).max(0) as usize);
         *len = n as i32;
     }
     lock(sockets()).insert(r as usize);
@@ -504,12 +550,17 @@ pub unsafe extern "win64" fn send_to(
         set_error(10038);
         return SOCKET_ERROR;
     }
+    let addr = addr_in(name, len);
     let r = libc::sendto(
         s as i32,
         b as *const c_void,
         n as usize,
         flags | libc::MSG_NOSIGNAL,
-        name as *const libc::sockaddr,
+        if name.is_null() {
+            std::ptr::null()
+        } else {
+            &addr as *const _ as *const libc::sockaddr
+        },
         len as libc::socklen_t,
     );
     if r < 0 {
@@ -558,6 +609,7 @@ pub unsafe extern "win64" fn recv_from(
         SOCKET_ERROR
     } else {
         if !len.is_null() {
+            addr_out(name, (*len).max(0) as usize);
             *len = addrlen as i32;
         }
         r as i32
@@ -601,6 +653,7 @@ unsafe fn socket_name_common(s: usize, name: *mut u8, len: *mut i32, peer: bool)
         set_error(last_error());
         SOCKET_ERROR
     } else {
+        addr_out(name, *len as usize);
         *len = n as i32;
         0
     }
@@ -673,6 +726,7 @@ unsafe fn make_addr_a(raw: *mut libc::addrinfo) -> Result<(usize, AddrInfoAlloca
                 &mut *storage as *mut _ as *mut u8,
                 length,
             );
+            storage.ss_family = af_out(storage.ss_family as i32) as u16;
             let p = Box::into_raw(storage);
             addrs.push(p as usize);
             p as *mut u8
@@ -688,7 +742,7 @@ unsafe fn make_addr_a(raw: *mut libc::addrinfo) -> Result<(usize, AddrInfoAlloca
         };
         let p = Box::into_raw(Box::new(WinAddrInfoA {
             flags: ai.ai_flags,
-            family: ai.ai_family,
+            family: af_out(ai.ai_family),
             socktype: ai.ai_socktype,
             protocol: ai.ai_protocol,
             addrlen: length,
@@ -764,6 +818,7 @@ unsafe fn make_addr_w(raw: *mut libc::addrinfo) -> Result<(usize, AddrInfoAlloca
                 &mut *storage as *mut _ as *mut u8,
                 length,
             );
+            storage.ss_family = af_out(storage.ss_family as i32) as u16;
             let p = Box::into_raw(storage);
             addrs.push(p as usize);
             p as *mut u8
@@ -780,7 +835,7 @@ unsafe fn make_addr_w(raw: *mut libc::addrinfo) -> Result<(usize, AddrInfoAlloca
         };
         let p = Box::into_raw(Box::new(WinAddrInfoW {
             flags: ai.ai_flags,
-            family: ai.ai_family,
+            family: af_out(ai.ai_family),
             socktype: ai.ai_socktype,
             protocol: ai.ai_protocol,
             addrlen: length,
@@ -920,7 +975,7 @@ unsafe extern "win64" fn get_addr_info_w(
         let p = hints as *const WinAddrInfoA;
         let hin = std::ptr::read_unaligned(p);
         h.ai_flags = hin.flags;
-        h.ai_family = hin.family;
+        h.ai_family = af_in(hin.family);
         h.ai_socktype = hin.socktype;
         h.ai_protocol = hin.protocol;
     }
@@ -999,6 +1054,39 @@ fn translate_sockopt(win_level: i32, win_opt: i32) -> Option<(i32, i32)> {
         (WIN_SOL_SOCKET, WIN_SO_ERROR) => Some((libc::SOL_SOCKET, libc::SO_ERROR)),
         (WIN_SOL_SOCKET, WIN_SO_TYPE) => Some((libc::SOL_SOCKET, libc::SO_TYPE)),
         (WIN_IPPROTO_TCP, WIN_TCP_NODELAY) => Some((libc::IPPROTO_TCP, libc::TCP_NODELAY)),
+        // IPPROTO_IP : les numéros Windows diffèrent de ceux de Linux
+        // (multidiffusion des jeux en réseau local, découverte d'appareils…).
+        (WIN_IPPROTO_IP, opt) => Some((
+            libc::IPPROTO_IP,
+            match opt {
+                1 => libc::IP_OPTIONS,
+                2 => libc::IP_HDRINCL,
+                3 => libc::IP_TOS,
+                4 => libc::IP_TTL,
+                9 => libc::IP_MULTICAST_IF,
+                10 => libc::IP_MULTICAST_TTL,
+                11 => libc::IP_MULTICAST_LOOP,
+                12 => libc::IP_ADD_MEMBERSHIP,
+                13 => libc::IP_DROP_MEMBERSHIP,
+                19 => libc::IP_PKTINFO,
+                _ => return None,
+            },
+        )),
+        // IPPROTO_IPV6 : IPV6_V6ONLY vaut 27 sous Windows, 26 sous Linux.
+        (WIN_IPPROTO_IPV6, opt) => Some((
+            libc::IPPROTO_IPV6,
+            match opt {
+                4 => libc::IPV6_UNICAST_HOPS,
+                9 => libc::IPV6_MULTICAST_IF,
+                10 => libc::IPV6_MULTICAST_HOPS,
+                11 => libc::IPV6_MULTICAST_LOOP,
+                12 => libc::IPV6_ADD_MEMBERSHIP,
+                13 => libc::IPV6_DROP_MEMBERSHIP,
+                19 => libc::IPV6_RECVPKTINFO,
+                27 => libc::IPV6_V6ONLY,
+                _ => return None,
+            },
+        )),
         (level, opt) if level != WIN_SOL_SOCKET => Some((level, opt)),
         _ => None,
     }
@@ -1018,6 +1106,9 @@ pub unsafe extern "win64" fn setsockopt(
     if optlen < 0 {
         set_error(WSAEFAULT);
         return SOCKET_ERROR;
+    }
+    if level == WIN_SOL_SOCKET && optname == WIN_SO_EXCLUSIVEADDRUSE {
+        return 0;
     }
     let Some((l, o)) = translate_sockopt(level, optname) else {
         set_error(WSAENOPROTOOPT);
@@ -1104,6 +1195,11 @@ pub unsafe extern "win64" fn getsockopt(
     if optval.is_null() || optlen.is_null() || *optlen < 0 {
         set_error(WSAEFAULT);
         return SOCKET_ERROR;
+    }
+    if level == WIN_SOL_SOCKET && optname == WIN_SO_EXCLUSIVEADDRUSE && *optlen >= 4 {
+        std::ptr::write_unaligned(optval as *mut i32, 0);
+        *optlen = 4;
+        return 0;
     }
     let Some((l, o)) = translate_sockopt(level, optname) else {
         set_error(WSAENOPROTOOPT);
@@ -1744,8 +1840,9 @@ pub unsafe extern "win64" fn getnameinfo(
     if flags & NI_DGRAM != 0 {
         lflags |= libc::NI_DGRAM;
     }
+    let sa_linux = addr_in(sa, sa_len);
     let rc = libc::getnameinfo(
-        sa as *const libc::sockaddr,
+        &sa_linux as *const _ as *const libc::sockaddr,
         sa_len as u32,
         if host.is_null() {
             std::ptr::null_mut()
@@ -1841,7 +1938,7 @@ pub extern "win64" fn wsa_socket_w(
     if flags & 0x01 != 0 {
         sock_flags |= libc::SOCK_NONBLOCK;
     } // WSA_FLAG_OVERLAPPED
-    let s = unsafe { libc::socket(af, kind | sock_flags, protocol) };
+    let s = unsafe { libc::socket(af_in(af), kind | sock_flags, protocol) };
     if s < 0 {
         set_error(last_error());
         INVALID_SOCKET
@@ -2300,7 +2397,7 @@ pub unsafe extern "win64" fn wsa_string_to_address_w(
         std::ptr::copy_nonoverlapping(&sin as *const _ as *const u8, addr, 16);
         *addr_len = 16;
         0
-    } else if af == libc::AF_INET6 {
+    } else if af == libc::AF_INET6 || af == WIN_AF_INET6 {
         if *addr_len < 28 {
             set_error(WSAEFAULT);
             return SOCKET_ERROR;
@@ -2313,7 +2410,7 @@ pub unsafe extern "win64" fn wsa_string_to_address_w(
             }
         };
         let mut sin6: libc::sockaddr_in6 = std::mem::zeroed();
-        sin6.sin6_family = libc::AF_INET6 as u16;
+        sin6.sin6_family = WIN_AF_INET6 as u16;
         sin6.sin6_port = port.to_be();
         if posix_inet_pton(
             libc::AF_INET6,
@@ -2358,7 +2455,7 @@ pub unsafe extern "win64" fn wsa_address_to_string_w(
         } else {
             format!("{}", ip)
         }
-    } else if family == libc::AF_INET6 as u16 {
+    } else if family == libc::AF_INET6 as u16 || family == WIN_AF_INET6 as u16 {
         if addr_len < 28 {
             set_error(WSAEFAULT);
             return SOCKET_ERROR;
@@ -2503,6 +2600,64 @@ mod tests {
             assert_eq!(wsa_cleanup(), 0);
             assert_eq!(socket(libc::AF_INET, libc::SOCK_STREAM, 0), usize::MAX);
             assert_eq!(wsa_get_last_error(), WSA_NOT_INITIALISED);
+        }
+    }
+
+    #[test]
+    fn options_ip_et_ipv6_traduites() {
+        assert_eq!(
+            translate_sockopt(WIN_IPPROTO_IPV6, 27),
+            Some((libc::IPPROTO_IPV6, libc::IPV6_V6ONLY))
+        );
+        assert_eq!(
+            translate_sockopt(WIN_IPPROTO_IP, 12),
+            Some((libc::IPPROTO_IP, libc::IP_ADD_MEMBERSHIP))
+        );
+        assert_eq!(translate_sockopt(WIN_IPPROTO_IP, 99), None);
+        assert_eq!((af_in(23), af_out(libc::AF_INET6)), (libc::AF_INET6, 23));
+        unsafe {
+            let mut sa = [0u8; 28];
+            sa[0] = 23;
+            let st = addr_in(sa.as_ptr(), 28);
+            assert_eq!(st.ss_family as i32, libc::AF_INET6);
+            sa[0] = libc::AF_INET6 as u8;
+            addr_out(sa.as_mut_ptr(), 28);
+            assert_eq!(sa[0], 23);
+        }
+        init();
+        unsafe {
+            let s = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            assert_ne!(s, INVALID_SOCKET);
+            let ttl: i32 = 32;
+            assert_eq!(
+                setsockopt(s, WIN_IPPROTO_IP, 4, &ttl as *const _ as *const u8, 4),
+                0
+            );
+            let mut out: i32 = 0;
+            let mut len: i32 = 4;
+            assert_eq!(
+                getsockopt(
+                    s,
+                    WIN_IPPROTO_IP,
+                    4,
+                    &mut out as *mut _ as *mut u8,
+                    &mut len
+                ),
+                0
+            );
+            assert_eq!(out, 32);
+            let on: i32 = 1;
+            assert_eq!(
+                setsockopt(
+                    s,
+                    WIN_SOL_SOCKET,
+                    WIN_SO_EXCLUSIVEADDRUSE,
+                    &on as *const _ as *const u8,
+                    4
+                ),
+                0
+            );
+            closesocket(s);
         }
     }
 

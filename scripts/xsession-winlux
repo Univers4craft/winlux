@@ -8,6 +8,8 @@ set -eu
 
 export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
 export HOME="${HOME:-$(eval echo ~$(whoami))}"
+# Proxy commun aux applis Windows et Linux (écrit par Winlux).
+if test -r /etc/winlux/proxy.env; then . /etc/winlux/proxy.env; fi
 
 conf=/etc/winlux/preferences.conf
 if test -r "$conf"; then
