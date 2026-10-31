@@ -1397,8 +1397,21 @@ pub unsafe extern "win64" fn round_rect(
 ) -> i32 {
     let brush = gui::dc_brush(hdc);
     let color = gui::object_color(brush).unwrap_or(0);
-    let rect = Rect { left, top, right, bottom };
-    gui::record(hdc, DrawCmd::RoundRect { rect, color, rx, ry });
+    let rect = Rect {
+        left,
+        top,
+        right,
+        bottom,
+    };
+    gui::record(
+        hdc,
+        DrawCmd::RoundRect {
+            rect,
+            color,
+            rx,
+            ry,
+        },
+    );
     1
 }
 

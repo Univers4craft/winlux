@@ -191,11 +191,35 @@ impl Cairo {
                 (self.new_path)(cr);
                 (self.move_to)(cr, x + rx, y);
                 (self.line_to)(cr, x + width - rx, y);
-                (self.curve_to)(cr, x + width - rx + rx * k, y, x + width, y + ry - ry * k, x + width, y + ry);
+                (self.curve_to)(
+                    cr,
+                    x + width - rx + rx * k,
+                    y,
+                    x + width,
+                    y + ry - ry * k,
+                    x + width,
+                    y + ry,
+                );
                 (self.line_to)(cr, x + width, y + height - ry);
-                (self.curve_to)(cr, x + width, y + height - ry + ry * k, x + width - rx + rx * k, y + height, x + width - rx, y + height);
+                (self.curve_to)(
+                    cr,
+                    x + width,
+                    y + height - ry + ry * k,
+                    x + width - rx + rx * k,
+                    y + height,
+                    x + width - rx,
+                    y + height,
+                );
                 (self.line_to)(cr, x + rx, y + height);
-                (self.curve_to)(cr, x + rx - rx * k, y + height, x, y + height - ry + ry * k, x, y + height - ry);
+                (self.curve_to)(
+                    cr,
+                    x + rx - rx * k,
+                    y + height,
+                    x,
+                    y + height - ry + ry * k,
+                    x,
+                    y + height - ry,
+                );
                 (self.line_to)(cr, x, y + ry);
                 (self.curve_to)(cr, x, y + ry - ry * k, x + rx - rx * k, y, x + rx, y);
                 (self.close_path)(cr);
