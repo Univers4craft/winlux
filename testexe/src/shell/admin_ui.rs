@@ -11,16 +11,19 @@ use winlux_testexe::*;
 static mut LANG_CHECKED: bool = false;
 static mut LANG_EN: bool = false;
 
-/// Vrai si l'interface est en anglais (Paramètres > Langue, sinon `LANG`).
+/// Vrai si l'interface n'est pas en français (Paramètres > Langue, sinon
+/// `LANG`) : ces outils existent en français et en anglais, l'anglais sert
+/// aussi pour l'espagnol et l'allemand.
 pub unsafe fn english() -> bool {
-    if crate::settings::LOCALE_LANG == 1 {
+    if crate::locale::CURRENT_LANG != crate::locale::Lang::Fr {
         return true;
     }
     if !LANG_CHECKED {
         LANG_CHECKED = true;
         let mut v = [0i8; 64];
         let n = GetEnvironmentVariableA(c"LANG".as_ptr(), v.as_mut_ptr(), 64);
-        LANG_EN = (2..64).contains(&n) && v[0] == b'e' as i8 && v[1] == b'n' as i8;
+        let two = [v[0] as u8, v[1] as u8];
+        LANG_EN = (2..64).contains(&n) && matches!(&two, b"en" | b"es" | b"de");
     }
     LANG_EN
 }

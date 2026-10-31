@@ -22,6 +22,7 @@ PACKAGES += ["apt", "dpkg", "bash", "coreutils", "findutils", "grep", "sed", "ta
              "xvfb", "xterm", "x11-xkb-utils", "xinput", "fonts-dejavu-core",
              "ncurses-base", "udev", "kmod", "util-linux", "dbus", "hello",
              "nftables"]
+PACKAGES += ["rsync", "openssh-client"]
 PACKAGES += ["xfonts-base", "libarchive-tools", "squashfs-tools", "libfaad2", "libmpg123-0",
              "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
              "libqt6core6t64", "libqt6gui6t64", "libqt6widgets6t64"]
@@ -33,7 +34,7 @@ DESKTOP_REQUIRED = ["apt", "dpkg", "bash", "busybox-static", "curl", "ca-certifi
     "network-manager", "network-manager-gnome", "udisks2", "gvfs", "libfaad2", "libmpg123-0",
     "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
     "libqt6core6t64", "libqt6gui6t64", "libqt6widgets6t64", "libasound2t64", "alsa-utils",
-    "libx11-6", "libxft2", "libcairo2", "polkitd", "winlux-kernel"]
+    "libx11-6", "libxft2", "libcairo2", "polkitd", "rsync", "openssh-client", "winlux-kernel"]
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)

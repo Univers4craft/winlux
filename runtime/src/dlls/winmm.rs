@@ -587,8 +587,15 @@ fn capture_thread(
     }
 }
 
+/// Paramètres > Confidentialité : le micro peut être refusé aux programmes .exe.
+fn microphone_allowed() -> bool {
+    std::fs::read_to_string("/etc/winlux/privacy.conf").map_or(true, |conf| {
+        !conf.lines().any(|l| l.trim() == "MICROPHONE=deny")
+    })
+}
+
 pub unsafe extern "win64" fn wave_in_get_num_devs() -> u32 {
-    if alsa_capture().is_ok() {
+    if microphone_allowed() && alsa_capture().is_ok() {
         1
     } else {
         0
@@ -605,6 +612,9 @@ pub unsafe extern "win64" fn wave_in_open(
 ) -> u32 {
     if device_id != 0 && device_id != u32::MAX {
         return 2; // MMSYSERR_BADDEVICEID
+    }
+    if !microphone_allowed() {
+        return 6; // MMSYSERR_NODRIVER
     }
     if pwfx.is_null() {
         return 11; // WAVERR_BADFORMAT
