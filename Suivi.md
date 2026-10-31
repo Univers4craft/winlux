@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **216**
-- À faire ou en cours : **37**
-- Total : **253**
-- Progression : **85.4%**
+- Réalisé : **217**
+- À faire ou en cours : **39**
+- Total : **256**
+- Progression : **84.8%**
 - Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140)
 
 ## À FAIRE (par priorité)
@@ -137,6 +137,9 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 - [x] Gestion GPU dans Paramètres > Graphismes : détection des capacités réelles (sysfs amdgpu/i915/xe, NVML), mesures en direct, profil/limite de puissance/overclocking seulement si le pilote les accepte, GPU par application sur machine hybride (`gpu=` du profil .exe, `winlux-prime-run`), onglets GPU du Gestionnaire des tâches et overlay de performances en jeu (raccourci configurable). Tout ce que la machine n'expose pas est masqué.
 - [x] Gestion de l'alimentation en Rust (`runtime/src/power/`) : batterie lue dans `/sys/class/power_supply` (pourcentage, charge/décharge, autonomie, santé), modes Performances maximales / Équilibré / Économie d'énergie (gouverneur cpufreq, EPP, turbo, luminosité, autosuspend USB, ASPM, SATA), veille et veille prolongée par `/sys/power` avec reprise propre, démon lancé par l'init maison (inactivité écran/veille, capot, bouton, batterie critique), icône batterie avec charge et infobulle, alertes 20 %/10 %, page Paramètres « Alimentation et batterie », API `GetSystemPowerStatus`, `SetThreadExecutionState`, `PowerCreateRequest/SetRequest/ClearRequest`, `PowerGetActiveScheme/SetActiveScheme`, `PowerReadFriendlyName`, `SetSuspendState`, `GetPwrCapabilities` (test PE `power_api`).
+- [x] Portable, veille et luminosité (#147) : veille sans perte d'évènement de réveil (`/sys/power/wakeup_count`, nouvel essai si le noyau est occupé), scripts avant/après veille dans `/usr/lib/winlux/sleep.d` et `/etc/winlux/sleep.d`, touches luminosité du clavier (sans double pas quand l'ACPI agit déjà, pas de 5 % sous 20 %), capot fermé avec un écran externe branché : la machine reste éveillée.
+- [ ] Écrans multiples (#147) : branchement à chaud, disposition, écran principal, définition et échelle par écran, API Win32 multi-écrans.
+- [ ] Pavé tactile (#147) : défilement et clic à deux doigts, défilement naturel, désactivation pendant la frappe, vitesse, pincer pour zoomer.
 
 - [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer.
 - [x] Bloquer les copies dans un descendant, les collisions et les alias de chemins ; tester le couper/coller et les raccourcis.
