@@ -158,6 +158,7 @@ jobs:
           sh scripts/test-network.sh
           sh scripts/test-control.sh
           sh scripts/test-display.sh
+          sh scripts/test-speak.sh
 
       - name: Valider sauvegarde, sessions et bureau à distance
         run: |

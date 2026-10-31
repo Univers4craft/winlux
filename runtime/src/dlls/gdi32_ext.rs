@@ -582,13 +582,6 @@ pub extern "win64" fn offset_viewport_org_ex(_hdc: usize, _x: i32, _y: i32, _old
 
 // ── Stretch mode ───────────────────────────────────────────────────
 
-pub extern "win64" fn set_stretch_blt_mode(_hdc: usize, _mode: i32) -> i32 {
-    1
-}
-pub extern "win64" fn get_stretch_blt_mode(_hdc: usize) -> i32 {
-    3
-} // COLORONCOLOR
-
 // ── ROP2 ───────────────────────────────────────────────────────────
 
 pub extern "win64" fn set_rop2(_hdc: usize, _mode: i32) -> i32 {
@@ -1314,8 +1307,6 @@ pub fn exports() -> crate::dlls::Exports {
         "SetViewportOrgEx" => fn set_viewport_org_ex,
         "SetWindowOrgEx" => fn set_window_org_ex,
         "OffsetViewportOrgEx" => fn offset_viewport_org_ex,
-        "SetStretchBltMode" => fn set_stretch_blt_mode,
-        "GetStretchBltMode" => fn get_stretch_blt_mode,
         "SetROP2" => fn set_rop2,
         "GetROP2" => fn get_rop2,
         "RealizePalette" => fn realize_palette,
