@@ -376,7 +376,14 @@ fn parse(w: &str) -> WinPath {
             )
         };
     }
-    if w.starts_with(['\\', '/']) {
+    // « /usr/bin/sh » : chemin Linux absolu (runtime, scripts, variables
+    // d'environnement), donc Z:. Seul « \\x » désigne la racine du lecteur
+    // courant, sinon /tmp deviendrait C:\tmp quand le dossier courant est
+    // dans le profil.
+    if w.starts_with('/') {
+        return mk(Root::Drive('Z'), split_comps(w, false, false), false);
+    }
+    if w.starts_with('\\') {
         return mk(Root::CurrentDrive, split_comps(w, false, false), false);
     }
     let comps = split_comps(w, false, true);

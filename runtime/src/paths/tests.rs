@@ -374,3 +374,18 @@ fn user_dirs_parse() {
     assert_eq!(parse_user_dirs(t, "XDG_X_DIR", h), None);
     assert_eq!(parse_user_dirs(t, "XDG_MUSIC_DIR", h), None);
 }
+
+#[test]
+fn chemin_linux_absolu_meme_quand_le_dossier_courant_est_sur_c() {
+    let env = Env::new("absolu");
+    // C: contient le dossier courant : « \x » vise C:\x, mais « /tmp/x »
+    // reste le chemin Linux (cas de la CI, où le dépôt est dans $HOME).
+    let cwd = std::env::current_dir().unwrap();
+    let c = cwd.parent().unwrap_or(&cwd).to_path_buf();
+    std::env::set_var("WINLUX_DRIVE_C", &c);
+    assert_eq!(to_linux("/tmp/x"), PathBuf::from("/tmp/x"));
+    assert_eq!(to_linux("/usr/bin/sh"), PathBuf::from("/usr/bin/sh"));
+    assert_eq!(full_windows("/tmp/x"), "Z:\\tmp\\x");
+    assert_eq!(to_linux("\\winlux-racine"), c.join("winlux-racine"));
+    drop(env);
+}
