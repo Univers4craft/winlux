@@ -247,6 +247,37 @@ enum Len {
     Wide,
 }
 
+/// Lit un nombre décimal dans `fmt` à partir de `*pos`; avance `*pos`.
+fn parse_decimal(fmt: &[u8], pos: &mut usize) -> Option<usize> {
+    let st = *pos;
+    while *pos < fmt.len() && fmt[*pos].is_ascii_digit() {
+        *pos += 1;
+    }
+    if *pos > st {
+        std::str::from_utf8(&fmt[st..*pos])
+            .ok()
+            .and_then(|x| x.parse().ok())
+    } else {
+        None
+    }
+}
+
+/// Récupère l'argument u64 : positionnel (index 0-basé) ou séquentiel.
+unsafe fn arg_u64(va: &mut VaList, pos_idx: Option<usize>) -> u64 {
+    match pos_idx {
+        Some(idx) => va.get_u64(idx),
+        None => va.next_u64(),
+    }
+}
+
+/// Récupère l'argument f64 : positionnel ou séquentiel.
+unsafe fn arg_f64(va: &mut VaList, pos_idx: Option<usize>) -> f64 {
+    match pos_idx {
+        Some(idx) => va.get_f64(idx),
+        None => va.next_f64(),
+    }
+}
+
 /// Formate `fmt` (octets, terminés ou non par 0) avec les arguments de `va`.
 pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
     let mut out = Vec::with_capacity(fmt.len() + 16);
@@ -261,6 +292,22 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
             continue;
         }
         i += 1;
+        // Vérifier un index positionnel : %N$ (POSIX).
+        let arg_pos = {
+            let saved = i;
+            let num = parse_decimal(fmt, &mut i);
+            if let Some(n) = num {
+                if i < fmt.len() && fmt[i] == b'$' {
+                    i += 1;
+                    Some(n - 1) // 1-basé → 0-basé
+                } else {
+                    i = saved;
+                    None
+                }
+            } else {
+                None
+            }
+        };
         let mut s = Spec::default();
         while i < fmt.len() {
             match fmt[i] {
@@ -274,12 +321,26 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
             i += 1;
         }
         if i < fmt.len() && fmt[i] == b'*' {
-            let w = va.next_u64() as i32;
+            i += 1;
+            // Vérifier *N$ pour width positionnel.
+            let saved = i;
+            let num = parse_decimal(fmt, &mut i);
+            let w = if let Some(n) = num {
+                if i < fmt.len() && fmt[i] == b'$' {
+                    i += 1;
+                    va.get_u64(n - 1) as i32
+                } else {
+                    i = saved;
+                    va.next_u64() as i32
+                }
+            } else {
+                i = saved;
+                va.next_u64() as i32
+            };
             if w < 0 {
                 s.left = true;
             }
             s.width = Some(w.unsigned_abs() as usize);
-            i += 1;
         } else {
             let st = i;
             while i < fmt.len() && fmt[i].is_ascii_digit() {
@@ -294,9 +355,23 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
         if i < fmt.len() && fmt[i] == b'.' {
             i += 1;
             if i < fmt.len() && fmt[i] == b'*' {
-                let p = va.next_u64() as i32;
-                s.prec = if p < 0 { None } else { Some(p as usize) };
                 i += 1;
+                // Vérifier *N$ pour precision positionnelle.
+                let saved = i;
+                let num = parse_decimal(fmt, &mut i);
+                let p = if let Some(n) = num {
+                    if i < fmt.len() && fmt[i] == b'$' {
+                        i += 1;
+                        va.get_u64(n - 1) as i32
+                    } else {
+                        i = saved;
+                        va.next_u64() as i32
+                    }
+                } else {
+                    i = saved;
+                    va.next_u64() as i32
+                };
+                s.prec = if p < 0 { None } else { Some(p as usize) };
             } else {
                 let st = i;
                 while i < fmt.len() && fmt[i].is_ascii_digit() {
@@ -344,17 +419,17 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
         i += 1;
         match conv {
             b'd' | b'i' => {
-                let raw = va.next_u64();
+                let raw = arg_u64(va, arg_pos);
                 let v: i64 = match len {
                     Len::Hh => raw as i8 as i64,
                     Len::H => raw as i16 as i64,
                     Len::Ll | Len::Size => raw as i64,
-                    _ => raw as i32 as i64, // int et long font 32 bits sous Windows
+                    _ => raw as i32 as i64,
                 };
                 fmt_int(&mut out, &s, v < 0, v.unsigned_abs(), conv);
             }
             b'u' | b'x' | b'X' | b'o' => {
-                let raw = va.next_u64();
+                let raw = arg_u64(va, arg_pos);
                 let v: u64 = match len {
                     Len::Hh => raw as u8 as u64,
                     Len::H => raw as u16 as u64,
@@ -364,17 +439,16 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
                 fmt_int(&mut out, &s, false, v, conv);
             }
             b'p' => {
-                let v = va.next_u64();
-                // La CRT Microsoft affiche les pointeurs sur 16 chiffres hexadécimaux majuscules.
+                let v = arg_u64(va, arg_pos);
                 let body = format!("{v:016X}");
                 pad(&mut out, body.as_bytes(), &Spec { zero: false, ..s }, 0);
             }
             b'f' | b'F' | b'e' | b'E' | b'g' | b'G' | b'a' | b'A' => {
-                let v = va.next_f64();
+                let v = arg_f64(va, arg_pos);
                 fmt_float(&mut out, &s, v, conv, o);
             }
             b'c' | b'C' => {
-                let raw = va.next_u64();
+                let raw = arg_u64(va, arg_pos);
                 let wide = match len {
                     Len::H => false,
                     Len::L | Len::Wide => true,
@@ -388,7 +462,7 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
                 pad(&mut out, &body, &Spec { zero: false, ..s }, 0);
             }
             b's' | b'S' | b'Z' => {
-                let p = va.next_u64() as usize;
+                let p = arg_u64(va, arg_pos) as usize;
                 let wide = match len {
                     Len::H => false,
                     Len::L | Len::Wide => true,
@@ -415,8 +489,7 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
                 pad(&mut out, &body, &Spec { zero: false, ..s }, 0);
             }
             b'n' => {
-                // %n est désactivé par défaut dans la CRT moderne : on consomme l'argument sans écrire.
-                va.next_u64();
+                arg_u64(va, arg_pos);
             }
             b'%' => out.push(b'%'),
             other => {
@@ -426,4 +499,79 @@ pub unsafe fn format(fmt: &[u8], va: &mut VaList, o: Opts) -> Vec<u8> {
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::thunks::VaList;
+
+    unsafe fn fmt_with(fmtstr: &[u8], args: &[u64]) -> String {
+        let mut va = VaList::new(args.as_ptr());
+        let out = format(fmtstr, &mut va, MSVCRT);
+        String::from_utf8(out).unwrap()
+    }
+
+    #[test]
+    fn positional_basic() {
+        unsafe {
+            let hello = b"hello\0";
+            let world = b"world\0";
+            let args = [hello.as_ptr() as u64, world.as_ptr() as u64];
+            assert_eq!(fmt_with(b"%2$s %1$s", &args), "world hello");
+        }
+    }
+
+    #[test]
+    fn positional_int() {
+        unsafe {
+            let args = [42u64, 7u64];
+            assert_eq!(fmt_with(b"%2$d+%1$d", &args), "7+42");
+        }
+    }
+
+    #[test]
+    fn positional_mixed_with_width() {
+        unsafe {
+            let hi = b"hi\0";
+            let args = [10u64, hi.as_ptr() as u64];
+            assert_eq!(fmt_with(b"%1$05d %2$s", &args), "00010 hi");
+        }
+    }
+
+    #[test]
+    fn positional_star_width() {
+        unsafe {
+            let ab = b"ab\0";
+            let args = [ab.as_ptr() as u64, 8u64];
+            assert_eq!(fmt_with(b"%*2$s", &args), "      ab");
+        }
+    }
+
+    #[test]
+    fn positional_reuse_arg() {
+        unsafe {
+            let args = [99u64];
+            assert_eq!(fmt_with(b"%1$d=%1$x", &args), "99=63");
+        }
+    }
+
+    #[test]
+    fn sequential_still_works() {
+        unsafe {
+            let a = b"A\0";
+            let b_str = b"B\0";
+            let args = [a.as_ptr() as u64, b_str.as_ptr() as u64];
+            assert_eq!(fmt_with(b"%s%s", &args), "AB");
+        }
+    }
+
+    #[test]
+    fn positional_float() {
+        unsafe {
+            let v = 3.14f64;
+            let args = [42u64, v.to_bits()];
+            assert_eq!(fmt_with(b"%2$.2f/%1$d", &args), "3.14/42");
+        }
+    }
 }

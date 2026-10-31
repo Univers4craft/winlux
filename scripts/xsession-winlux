@@ -21,9 +21,16 @@ fi
 input_conf=/etc/winlux/input.conf
 if test -r "$input_conf"; then
     keyboard_layout=$(sed -n 's/^XKB_LAYOUT=//p' "$input_conf")
-    case "$keyboard_layout" in fr|us|de|es|it|pt|gb)
+    case "$keyboard_layout" in fr|us|de|es|it|pt|gb|be)
         setxkbmap "$keyboard_layout" 2>/dev/null || true ;;
     esac
+fi
+
+locale_conf=/etc/winlux/locale.conf
+winlux_lang=fr
+if test -r "$locale_conf"; then
+    saved_lang=$(sed -n 's/^LANG=//p' "$locale_conf")
+    case "$saved_lang" in fr|en|es|de) winlux_lang=$saved_lang ;; esac
 fi
 
 # UI scale from screen height.
@@ -58,5 +65,6 @@ export WINLUX_UI_SCALE="$ui_scale"
 export WINLUX_TRAY_BATTERY="$tray_battery"
 export WINLUX_TRAY_BATTERY_PRESENT="$tray_battery_present"
 export WINLUX_TRAY_NETWORK="$tray_network"
+export WINLUX_LANG="$winlux_lang"
 
 exec winlux "$gui_demo"

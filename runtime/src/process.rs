@@ -30,6 +30,8 @@ pub const PEB_IMAGE_BASE: usize = 0x10;
 pub const PEB_PROCESS_PARAMETERS: usize = 0x20;
 pub const PEB_PROCESS_HEAP: usize = 0x30;
 
+#[allow(dead_code)]
+pub const DLL_PROCESS_DETACH: u32 = 0;
 pub const DLL_PROCESS_ATTACH: u32 = 1;
 pub const DLL_THREAD_ATTACH: u32 = 2;
 pub const DLL_THREAD_DETACH: u32 = 3;
@@ -359,6 +361,14 @@ fn run_tls_callbacks(m: &Module, reason: u32) {
     }
 }
 
+/// Alloue et copie un bloc de données TLS statique pour un module.
+unsafe fn alloc_tls_block(tls: &loader::TlsInfo) -> usize {
+    let raw = tls.raw_end.saturating_sub(tls.raw_start);
+    let block = alloc_zeroed((raw + tls.zero_fill + 16).max(16));
+    std::ptr::copy_nonoverlapping(tls.raw_start as *const u8, block as *mut u8, raw);
+    block
+}
+
 /// Termine l'initialisation Win32 d'une DLL chargée explicitement par LoadLibrary.
 pub fn initialize_dynamic_module(m: &Module) -> bool {
     let tls_context = if let Some(tls) = &m.tls {
@@ -388,13 +398,24 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
     if !loader::mark_initialized(m.base) {
         return true;
     }
-    if let Some((tls, array, index)) = tls_context {
-        let raw = tls.raw_end.saturating_sub(tls.raw_start);
-        let block = alloc_zeroed((raw + tls.zero_fill + 16).max(16));
-        unsafe {
-            std::ptr::copy_nonoverlapping(tls.raw_start as *const u8, block as *mut u8, raw);
-            *((array + index * 8) as *mut usize) = block;
-            if tls.index_addr != 0 {
+    if let Some((tls, _array, index)) = tls_context {
+        let tebs = THREAD_TEBS
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        for t in &tebs {
+            let array = unsafe { *((*t + TEB_TLS_POINTER) as *const usize) };
+            if array == 0 {
+                continue;
+            }
+            unsafe {
+                let block = alloc_tls_block(&tls);
+                *((array + index * 8) as *mut usize) = block;
+            }
+        }
+        if tls.index_addr != 0 {
+            unsafe {
                 *(tls.index_addr as *mut u32) = index as u32;
             }
         }
@@ -439,6 +460,7 @@ pub fn thread_detach_current() {
 fn start(exe: Module) -> u32 {
     init_thread();
     crate::crash::install();
+    crate::quality::init();
     let mods = loader::MODULES.lock().unwrap().clone();
     // Les dépendances ont été chargées après le .exe : on initialise en ordre inverse.
     for m in mods.iter().skip(1).rev() {
