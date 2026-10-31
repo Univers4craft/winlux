@@ -65,7 +65,36 @@ XScreenSaver exécute son animation Pipes après dix minutes, avec un lanceur po
 la prévisualiser. La session demeure administrateur à ce stade : son verrouillage
 par mot de passe est désactivé par XScreenSaver. Son moteur graphique original
 est lancé sous le compte dédié `winlux-saver`, sans modifier l'authentification.
-Ce dispositif n'est pas un écran de verrouillage sécurisé.
+XScreenSaver ne verrouille rien : c'est le rôle de `winlux-lock`.
+
+## Écran de verrouillage
+
+`winlux-lock` (scripts/winlux-lock.py) affiche un écran de verrouillage au
+style de Windows 11 : heure et date sur le fond d'écran, puis, au premier
+appui ou clic, l'avatar, le nom du compte et le champ mot de passe sur un fond
+flouté. Il couvre tous les écrans et prend clavier et souris, donc les
+raccourcis du bureau sont inactifs tant qu'il est affiché. Après cinq erreurs,
+la saisie est bloquée trente secondes.
+
+- Déclenchement : Windows+L (Openbox), Démarrer > alimentation > Verrouiller,
+  Paramètres > Confidentialité et sécurité, inactivité (`winlux-lock daemon`,
+  extension X MIT-SCREEN-SAVER) et mise en veille. Le module d'alimentation
+  du runtime affiche l'écran avant d'écrire dans `/sys/power/state`, pour que
+  le bureau ne soit jamais visible au réveil ; le service détecte aussi une
+  veille déclenchée ailleurs (écart CLOCK_BOOTTIME / CLOCK_MONOTONIC).
+- Mot de passe : celui du compte local. La session tournant encore en
+  administrateur, le compte protégé est le compte personnel créé à
+  l'installation (premier UID ≥ 1000), vérifié avec `crypt()` contre
+  `/etc/shadow` ; en session Live, c'est le mot de passe de
+  `/etc/winlux/users.conf`. Un compte sans mot de passe se déverrouille d'un
+  clic et ne se verrouille jamais tout seul.
+- Réglages : `/etc/winlux/lock.conf` (`LOCK_AFTER` en secondes, 0 = jamais,
+  5 minutes par défaut ; `LOCK_ON_RESUME=1`), via `winlux-control
+  lock-after-<s>`, `lock-resume-on|off` et `lock-now`.
+- Limites : un administrateur qui tue le processus lève le verrouillage, et
+  Ctrl+Alt+F1… change toujours de terminal virtuel. Le bureau PE historique
+  (gui_demo.exe) garde son propre écran de connexion (`login.rs`).
+- Test hors affichage : `python3 -B scripts/test-lock.py`.
 
 Les indicateurs réseau, audio et batterie lisent Linux ; l'absence d'une batterie
 virtuelle est indiquée comme alimentation secteur. Ils ne reproduisent pas

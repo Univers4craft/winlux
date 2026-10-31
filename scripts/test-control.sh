@@ -137,6 +137,26 @@ grep -qx 'privacy_location_history=off' "$work/root/run/winlux/control.txt"
 control privacy-microphone-deny
 grep -qx 'MICROPHONE=deny' "$work/root/etc/winlux/privacy.conf"
 grep -qx 'privacy_microphone=deny' "$work/root/run/winlux/control.txt"
+# Verrouillage de l'ecran : etat reel de winlux-lock, delai, reveil, Windows+L.
+printf 'root:root:winlux\n' > "$work/root/etc/winlux/users.conf"
+cat > "$work/bin/winlux-lock" <<MOCK
+#!/bin/sh
+case "\$1" in now) printf 'lock now\n' >> "\$WINLUX_CONTROL_TEST_LOG" ;; *) WINLUX_SESSION_USER=root exec python3 -B "$project/scripts/winlux-lock.py" "\$@" ;; esac
+MOCK
+chmod 755 "$work/bin/winlux-lock"
+control status
+grep -qx 'lock_after=300' "$work/root/run/winlux/control.txt"
+grep -qx 'lock_on_resume=1' "$work/root/run/winlux/control.txt"
+grep -qx 'lock_password=1' "$work/root/run/winlux/control.txt"
+control lock-after-900
+grep -qx 'LOCK_AFTER=900' "$work/root/etc/winlux/lock.conf"
+grep -qx 'lock_after=900' "$work/root/run/winlux/control.txt"
+control lock-resume-off
+grep -qx 'lock_on_resume=0' "$work/root/run/winlux/control.txt"
+if control lock-after-42 2>/dev/null; then echo 'delai de verrouillage invalide accepte' >&2; exit 1; fi
+control lock-now
+sleep 1
+grep -qx 'lock now' "$work/commands"
 grep -qx 'sysupdate_mode=manual' "$work/root/run/winlux/control.txt"
 control sysupdate-mode-scheduled
 grep -qx 'sysupdate_mode=scheduled' "$work/root/run/winlux/control.txt"
@@ -167,6 +187,8 @@ case "$1" in
   --cpu-report) printf 'cpu_count=4\ncap_governor=1\nprofiles=performance,powersave\ncap_hybrid=0\n' ;;
   --cpu-profile) test "$2" != balanced || { echo 'profil balanced indisponible' >&2; exit 1; }; printf 'cpu-profile %s %s\n' "$2" "$3" >> "$WINLUX_CONTROL_TEST_LOG" ;;
   --fan-daemon) printf 'fan-daemon %s\n' "$2" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+  --boot-time) printf 'boot_known=1\nboot_total_ms=8420\n' ;;
+  --gamemode) printf 'game_mode=auto\ngame_active=0\n' ;;
 esac
 MOCK
 chmod 755 "$work/bin/winlux"
@@ -174,6 +196,12 @@ control status
 grep -qx 'cap_governor=1' "$work/root/run/winlux/cpu.txt"
 grep -qx 'hybrid_policy=auto' "$work/root/run/winlux/cpu.txt"
 grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
+grep -qx 'boot_total_ms=8420' "$work/root/run/winlux/cpu.txt"
+grep -qx 'game_active=0' "$work/root/run/winlux/cpu.txt"
+control game-mode-off
+grep -qx 'GAME_MODE=off' "$work/root/etc/winlux/cpu.conf"
+control game-mode-auto
+grep -qx 'GAME_MODE=auto' "$work/root/etc/winlux/cpu.conf"
 control cpu-profile-performance
 grep -qx "cpu-profile performance $work/root" "$work/commands"
 grep -qx 'CPU_PROFILE=performance' "$work/root/etc/winlux/cpu.conf"
@@ -276,4 +304,4 @@ MOCK
 test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_03_00_0
 test "$(sh "$project/scripts/winlux-prime-run.sh" --integrated sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_00_02_0
 test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$PATH"')" = "$PATH"
-echo 'OK: control telemetry, Bluetooth, keyboard, touchpad, preferences, actions, update journal, system updates, privacy, welcome, host protection, CPU, power, GPU, overlay, prime-run'
+echo 'OK: control telemetry, Bluetooth, keyboard, touchpad, preferences, actions, update journal, system updates, privacy, lock screen, welcome, host protection, CPU, power, GPU, overlay, prime-run'

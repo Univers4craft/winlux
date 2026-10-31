@@ -325,6 +325,22 @@ fn idle_policy() {
 }
 
 #[test]
+fn lock_on_resume_setting() {
+    let f = Fake::new();
+    // Par défaut, le mot de passe est demandé au réveil.
+    assert!(sleep::lock_on_resume_at(&f.0));
+    fs::create_dir_all(f.0.join("etc/winlux")).unwrap();
+    fs::write(
+        f.0.join("etc/winlux/lock.conf"),
+        "LOCK_AFTER=300\nLOCK_ON_RESUME=0\n",
+    )
+    .unwrap();
+    assert!(!sleep::lock_on_resume_at(&f.0));
+    fs::write(f.0.join("etc/winlux/lock.conf"), "LOCK_ON_RESUME=1\n").unwrap();
+    assert!(sleep::lock_on_resume_at(&f.0));
+}
+
+#[test]
 fn evdev_events() {
     let ev = |kind: u16, code: u16, value: i32| {
         let mut b = [0u8; 24];

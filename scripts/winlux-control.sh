@@ -141,6 +141,8 @@ status() {
         printf 'privacy_camera=%s\n' "$(privacy CAMERA allow)"
         printf 'privacy_location=%s\n' "$(privacy LOCATION deny)"
         printf 'privacy_location_history=%s\n' "$(privacy LOCATION_HISTORY off)"
+        # Verrouillage de l'ecran (delai, sortie de veille, compte protege).
+        if have winlux-lock; then WINLUX_LOCK_ROOT="$root" winlux-lock status 2>/dev/null || true; fi
         # Signaler un probleme : reglages lus par winlux-report (rien n'est envoye seul).
         if have winlux-report; then WINLUX_REPORT_CONF="$config/report.conf" winlux-report --status 2>/dev/null || true; fi
         if have winlux-sysupdate; then winlux-sysupdate status 2>/dev/null || true; fi
@@ -165,6 +167,10 @@ cpu_status() {
     if winlux --cpu-report "${root:-/}" > "$run/cpu.txt.tmp.$$" 2>/dev/null; then
         hybrid=$(cpu_pref HYBRID_POLICY) fan=$(cpu_pref FAN_CURVE)
         printf 'hybrid_policy=%s\nfan_curve=%s\n' "${hybrid:-auto}" "${fan:-auto}" >> "$run/cpu.txt.tmp.$$"
+        # Temps du dernier démarrage (repères notés par l'init).
+        winlux --boot-time "${root:-/}" >> "$run/cpu.txt.tmp.$$" 2>/dev/null || true
+        # Mode jeu : réglage, capacités réelles et partie en cours.
+        winlux --gamemode status "${root:-/}" >> "$run/cpu.txt.tmp.$$" 2>/dev/null || true
         mv "$run/cpu.txt.tmp.$$" "$run/cpu.txt"
     else rm -f "$run/cpu.txt.tmp.$$"; fi
 }
@@ -354,6 +360,8 @@ perform() {
             have winlux || { echo 'Runtime winlux introuvable' >&2; return 1; }
             winlux --cpu-profile "${action#cpu-profile-}" "${root:-/}" || return
             save "$config/cpu.conf" CPU_PROFILE "${action#cpu-profile-}" ;;
+        game-mode-auto|game-mode-off)
+            save "$config/cpu.conf" GAME_MODE "${action#game-mode-}" ;;
         cpu-hybrid-auto|cpu-hybrid-heavy|cpu-hybrid-performance|cpu-hybrid-efficiency)
             save "$config/cpu.conf" HYBRID_POLICY "${action#cpu-hybrid-}" ;;
         cpu-fan-auto|cpu-fan-quiet|cpu-fan-balanced|cpu-fan-performance)
@@ -399,6 +407,11 @@ perform() {
         privacy-microphone-allow|privacy-microphone-deny) save "$config/privacy.conf" MICROPHONE "${action#privacy-microphone-}" && chmod 644 "$config/privacy.conf" ;;
         privacy-camera-allow|privacy-camera-deny) save "$config/privacy.conf" CAMERA "${action#privacy-camera-}" && chmod 644 "$config/privacy.conf" ;;
         privacy-location-allow|privacy-location-deny) save "$config/privacy.conf" LOCATION "${action#privacy-location-}" && chmod 644 "$config/privacy.conf" ;;
+        lock-now) if have winlux-lock; then (setsid winlux-lock now >/dev/null 2>&1 &); else echo 'winlux-lock absent' >&2; return 1; fi ;;
+        lock-after-0|lock-after-60|lock-after-180|lock-after-300|lock-after-600|lock-after-900|lock-after-1800|lock-after-3600)
+            save "$config/lock.conf" LOCK_AFTER "${action#lock-after-}" && chmod 644 "$config/lock.conf" ;;
+        lock-resume-on) save "$config/lock.conf" LOCK_ON_RESUME 1 && chmod 644 "$config/lock.conf" ;;
+        lock-resume-off) save "$config/lock.conf" LOCK_ON_RESUME 0 && chmod 644 "$config/lock.conf" ;;
         privacy-history-on|privacy-history-off) save "$config/privacy.conf" LOCATION_HISTORY "${action#privacy-history-}" && chmod 644 "$config/privacy.conf" ;;
         update-auto-off) winlux-update --auto disable ;;
         report-offer-on|report-offer-off) WINLUX_REPORT_CONF="$config/report.conf" winlux-report --set "offer=${action#report-offer-}" ;;
