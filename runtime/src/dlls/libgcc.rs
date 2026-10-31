@@ -122,7 +122,7 @@ unsafe fn phase1(exc: *mut u8) -> UnwindReason {
 
             // Call the personality routine (search phase)
             type PersonalityFn =
-                unsafe extern "C" fn(i32, i32, u64, *mut u8, *mut UnwindContext) -> i32;
+                unsafe extern "win64" fn(i32, i32, u64, *mut u8, *mut UnwindContext) -> i32;
             let personality: PersonalityFn = std::mem::transmute(handler);
             let exc_class = (exc.add(UE_CLASS) as *const u64).read_unaligned();
             let reason = personality(
@@ -197,7 +197,7 @@ unsafe fn phase2(exc: *mut u8) -> UnwindReason {
             };
 
             type PersonalityFn =
-                unsafe extern "C" fn(i32, i32, u64, *mut u8, *mut UnwindContext) -> i32;
+                unsafe extern "win64" fn(i32, i32, u64, *mut u8, *mut UnwindContext) -> i32;
             let personality: PersonalityFn = std::mem::transmute(handler);
             let exc_class = (exc.add(UE_CLASS) as *const u64).read_unaligned();
             let reason = personality(1, actions, exc_class, exc, &mut uc);
@@ -218,7 +218,7 @@ unsafe fn phase2(exc: *mut u8) -> UnwindReason {
 //  Public API (_Unwind_*)
 // ====================================================================
 
-pub unsafe extern "C" fn unwind_raise_exception(exc: *mut c_void) -> i32 {
+pub unsafe extern "win64" fn unwind_raise_exception(exc: *mut c_void) -> i32 {
     let exc = exc as *mut u8;
     let search = phase1(exc);
     if search != UnwindReason::HandlerFound {
@@ -230,31 +230,31 @@ pub unsafe extern "C" fn unwind_raise_exception(exc: *mut c_void) -> i32 {
     UnwindReason::FatalPhase2Error as i32
 }
 
-pub unsafe extern "C" fn unwind_resume(exc: *mut c_void) -> ! {
+pub unsafe extern "win64" fn unwind_resume(exc: *mut c_void) -> ! {
     let exc = exc as *mut u8;
     phase2(exc);
     std::process::abort();
 }
 
-pub unsafe extern "C" fn unwind_delete_exception(exc: *mut c_void) {
+pub unsafe extern "win64" fn unwind_delete_exception(exc: *mut c_void) {
     if exc.is_null() {
         return;
     }
     let cleanup_ptr = (exc as *const u8).add(UE_CLEANUP) as *const u64;
     let cleanup_fn = (*cleanup_ptr) as usize;
     if cleanup_fn != 0 {
-        type CleanupFn = unsafe extern "C" fn(i32, *mut c_void);
+        type CleanupFn = unsafe extern "win64" fn(i32, *mut c_void);
         let cleanup: CleanupFn = std::mem::transmute(cleanup_fn);
         cleanup(UnwindReason::ForeignExceptionCaught as i32, exc);
     }
 }
 
-pub unsafe extern "C" fn unwind_get_language_specific_data(ctx: *mut c_void) -> *mut c_void {
+pub unsafe extern "win64" fn unwind_get_language_specific_data(ctx: *mut c_void) -> *mut c_void {
     let uc = ctx as *const UnwindContext;
     (*uc).handler_data as *mut c_void
 }
 
-pub unsafe extern "C" fn unwind_get_region_start(ctx: *mut c_void) -> u64 {
+pub unsafe extern "win64" fn unwind_get_region_start(ctx: *mut c_void) -> u64 {
     let uc = ctx as *const UnwindContext;
     if (*uc).function_entry.is_null() {
         return 0;
@@ -263,34 +263,34 @@ pub unsafe extern "C" fn unwind_get_region_start(ctx: *mut c_void) -> u64 {
     (*uc).image_base + (*rf)[0] as u64
 }
 
-pub unsafe extern "C" fn unwind_get_ip(ctx: *mut c_void) -> u64 {
+pub unsafe extern "win64" fn unwind_get_ip(ctx: *mut c_void) -> u64 {
     let uc = ctx as *const UnwindContext;
     ctx_get((*uc).ctx.as_ptr(), CTX_RIP)
 }
 
-pub unsafe extern "C" fn unwind_set_ip(ctx: *mut c_void, ip: u64) {
+pub unsafe extern "win64" fn unwind_set_ip(ctx: *mut c_void, ip: u64) {
     let uc = ctx as *mut UnwindContext;
     ctx_set((*uc).ctx.as_mut_ptr(), CTX_RIP, ip);
 }
 
-pub unsafe extern "C" fn unwind_get_gr(ctx: *mut c_void, reg: i32) -> u64 {
+pub unsafe extern "win64" fn unwind_get_gr(ctx: *mut c_void, reg: i32) -> u64 {
     let uc = ctx as *const UnwindContext;
     let off = CTX_RAX + (reg as usize) * 8;
     ctx_get((*uc).ctx.as_ptr(), off)
 }
 
-pub unsafe extern "C" fn unwind_set_gr(ctx: *mut c_void, reg: i32, val: u64) {
+pub unsafe extern "win64" fn unwind_set_gr(ctx: *mut c_void, reg: i32, val: u64) {
     let uc = ctx as *mut UnwindContext;
     let off = CTX_RAX + (reg as usize) * 8;
     ctx_set((*uc).ctx.as_mut_ptr(), off, val);
 }
 
-pub unsafe extern "C" fn unwind_get_data_rel_base(ctx: *mut c_void) -> u64 {
+pub unsafe extern "win64" fn unwind_get_data_rel_base(ctx: *mut c_void) -> u64 {
     let uc = ctx as *const UnwindContext;
     (*uc).image_base
 }
 
-pub unsafe extern "C" fn unwind_get_text_rel_base(ctx: *mut c_void) -> u64 {
+pub unsafe extern "win64" fn unwind_get_text_rel_base(ctx: *mut c_void) -> u64 {
     let uc = ctx as *const UnwindContext;
     (*uc).image_base
 }
@@ -305,7 +305,7 @@ pub unsafe extern "C" fn unwind_get_text_rel_base(ctx: *mut c_void) -> u64 {
 // references LSDA (Language-Specific Data Area).
 // We'll need to implement LSDA parsing for real C++ catch.
 
-pub unsafe extern "C" fn gcc_personality_seh0(
+pub unsafe extern "win64" fn gcc_personality_seh0(
     _version: i32,
     _actions: i32,
     _exception_class: u64,
@@ -318,7 +318,7 @@ pub unsafe extern "C" fn gcc_personality_seh0(
 // __gxx_personality_seh0 — C++ personality with LSDA parsing.
 // This reads the DWARF-encoded LSDA (Language-Specific Data Area) from
 // .gcc_except_table to determine which catch/cleanup landing pads match.
-pub unsafe extern "C" fn gxx_personality_seh0(
+pub unsafe extern "win64" fn gxx_personality_seh0(
     _version: i32,
     actions: i32,
     _exception_class: u64,
@@ -466,7 +466,7 @@ unsafe fn read_encoded(p: *const u8, encoding: u8) -> (u64, usize) {
 }
 
 // ── RtlUnwindEx wrapper for phase2 (used by personality) ─────────────
-pub unsafe extern "C" fn unwind_force_unwind(
+pub unsafe extern "win64" fn unwind_force_unwind(
     exc: *mut c_void,
     _stop: *mut c_void,
     _stop_arg: *mut c_void,
@@ -475,7 +475,7 @@ pub unsafe extern "C" fn unwind_force_unwind(
     UnwindReason::FatalPhase2Error as i32
 }
 
-pub unsafe extern "C" fn unwind_backtrace(_ip: *mut c_void, _arg: *mut c_void) -> i32 {
+pub unsafe extern "win64" fn unwind_backtrace(_ip: *mut c_void, _arg: *mut c_void) -> i32 {
     UnwindReason::EndOfStack as i32
 }
 

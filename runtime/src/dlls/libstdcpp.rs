@@ -40,7 +40,7 @@ thread_local! {
 }
 
 // ── __cxa_allocate_exception ─────────────────────────────────────────
-pub unsafe extern "C" fn cxa_allocate_exception(size: u64) -> *mut c_void {
+pub unsafe extern "win64" fn cxa_allocate_exception(size: u64) -> *mut c_void {
     let total = ALLOC_SIZE + size as usize;
     let layout = std::alloc::Layout::from_size_align(total, 16).unwrap();
     let ptr = std::alloc::alloc_zeroed(layout);
@@ -52,7 +52,7 @@ pub unsafe extern "C" fn cxa_allocate_exception(size: u64) -> *mut c_void {
 }
 
 // ── __cxa_free_exception ─────────────────────────────────────────────
-pub unsafe extern "C" fn cxa_free_exception(obj: *mut c_void) {
+pub unsafe extern "win64" fn cxa_free_exception(obj: *mut c_void) {
     if obj.is_null() {
         return;
     }
@@ -65,7 +65,11 @@ pub unsafe extern "C" fn cxa_free_exception(obj: *mut c_void) {
 }
 
 // ── __cxa_throw ──────────────────────────────────────────────────────
-pub unsafe extern "C" fn cxa_throw(obj: *mut c_void, tinfo: *mut c_void, dtor: *mut c_void) -> ! {
+pub unsafe extern "win64" fn cxa_throw(
+    obj: *mut c_void,
+    tinfo: *mut c_void,
+    dtor: *mut c_void,
+) -> ! {
     let obj_ptr = obj as *mut u8;
     let hdr = obj_ptr.sub(ALLOC_SIZE);
 
@@ -84,7 +88,7 @@ pub unsafe extern "C" fn cxa_throw(obj: *mut c_void, tinfo: *mut c_void, dtor: *
     std::process::abort();
 }
 
-unsafe extern "C" fn cxa_exception_cleanup(_reason: i32, exc: *mut c_void) {
+unsafe extern "win64" fn cxa_exception_cleanup(_reason: i32, exc: *mut c_void) {
     if exc.is_null() {
         return;
     }
@@ -93,7 +97,7 @@ unsafe extern "C" fn cxa_exception_cleanup(_reason: i32, exc: *mut c_void) {
     let dtor_ptr = (hdr.add(0x08) as *const u64).read();
     let obj = ue.add(UE_SIZE); // user object is right after UE
     if dtor_ptr != 0 {
-        type DtorFn = unsafe extern "C" fn(*mut c_void);
+        type DtorFn = unsafe extern "win64" fn(*mut c_void);
         let dtor: DtorFn = std::mem::transmute(dtor_ptr);
         dtor(obj as *mut c_void);
     }
@@ -101,7 +105,7 @@ unsafe extern "C" fn cxa_exception_cleanup(_reason: i32, exc: *mut c_void) {
 }
 
 // ── __cxa_begin_catch ────────────────────────────────────────────────
-pub unsafe extern "C" fn cxa_begin_catch(exc: *mut c_void) -> *mut c_void {
+pub unsafe extern "win64" fn cxa_begin_catch(exc: *mut c_void) -> *mut c_void {
     if exc.is_null() {
         return std::ptr::null_mut();
     }
@@ -118,7 +122,7 @@ pub unsafe extern "C" fn cxa_begin_catch(exc: *mut c_void) -> *mut c_void {
 }
 
 // ── __cxa_end_catch ──────────────────────────────────────────────────
-pub unsafe extern "C" fn cxa_end_catch() {
+pub unsafe extern "win64" fn cxa_end_catch() {
     CAUGHT_STACK.with(|s| {
         let mut stack = s.borrow_mut();
         if let Some(ue) = stack.pop() {
@@ -131,7 +135,7 @@ pub unsafe extern "C" fn cxa_end_catch() {
                 let dtor_ptr = (hdr.add(0x08) as *const u64).read();
                 let obj = hdr.add(ALLOC_SIZE);
                 if dtor_ptr != 0 {
-                    type DtorFn = unsafe extern "C" fn(*mut c_void);
+                    type DtorFn = unsafe extern "win64" fn(*mut c_void);
                     let dtor: DtorFn = std::mem::transmute(dtor_ptr);
                     dtor(obj as *mut c_void);
                 }
@@ -142,7 +146,7 @@ pub unsafe extern "C" fn cxa_end_catch() {
 }
 
 // ── __cxa_rethrow ────────────────────────────────────────────────────
-pub unsafe extern "C" fn cxa_rethrow() -> ! {
+pub unsafe extern "win64" fn cxa_rethrow() -> ! {
     let ue = CAUGHT_STACK.with(|s| {
         let stack = s.borrow();
         stack.last().copied()
@@ -156,7 +160,7 @@ pub unsafe extern "C" fn cxa_rethrow() -> ! {
 }
 
 // ── __cxa_current_exception_type ─────────────────────────────────────
-pub unsafe extern "C" fn cxa_current_exception_type() -> *mut c_void {
+pub unsafe extern "win64" fn cxa_current_exception_type() -> *mut c_void {
     CAUGHT_STACK.with(|s| {
         let stack = s.borrow();
         match stack.last() {
@@ -170,13 +174,13 @@ pub unsafe extern "C" fn cxa_current_exception_type() -> *mut c_void {
 }
 
 // ── __cxa_pure_virtual ───────────────────────────────────────────────
-pub unsafe extern "C" fn cxa_pure_virtual() -> ! {
+pub unsafe extern "win64" fn cxa_pure_virtual() -> ! {
     eprintln!("winlux: pure virtual function called");
     std::process::abort();
 }
 
 // ── __cxa_atexit ─────────────────────────────────────────────────────
-pub unsafe extern "C" fn cxa_atexit(
+pub unsafe extern "win64" fn cxa_atexit(
     _func: *mut c_void,
     _arg: *mut c_void,
     _dso: *mut c_void,
@@ -188,7 +192,7 @@ pub unsafe extern "C" fn cxa_atexit(
 // For thread-safe static initialization
 use std::sync::atomic::{AtomicU8, Ordering};
 
-pub unsafe extern "C" fn cxa_guard_acquire(guard: *mut i64) -> i32 {
+pub unsafe extern "win64" fn cxa_guard_acquire(guard: *mut i64) -> i32 {
     let byte = guard as *const AtomicU8;
     if (*byte).load(Ordering::Acquire) != 0 {
         return 0; // Already initialized
@@ -197,12 +201,12 @@ pub unsafe extern "C" fn cxa_guard_acquire(guard: *mut i64) -> i32 {
     1
 }
 
-pub unsafe extern "C" fn cxa_guard_release(guard: *mut i64) {
+pub unsafe extern "win64" fn cxa_guard_release(guard: *mut i64) {
     let byte = guard as *mut AtomicU8;
     (*byte).store(1, Ordering::Release);
 }
 
-pub unsafe extern "C" fn cxa_guard_abort(_guard: *mut i64) {
+pub unsafe extern "win64" fn cxa_guard_abort(_guard: *mut i64) {
     // Nothing to do for our simple implementation
 }
 
