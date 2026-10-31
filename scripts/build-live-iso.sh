@@ -567,6 +567,8 @@ if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
 # planificateur de tâches (déclencheurs horaires, démarrage, événements).
 /usr/bin/winlux --firewall daemon >>/run/winlux/firewall.log 2>&1 &
 /usr/bin/winlux --tasks daemon >>/run/winlux/tasks.log 2>&1 &
+# Mode jeu : processeur et mémoire pour le jeu tant qu'il tourne.
+/usr/bin/winlux --gamemode daemon >>/run/winlux/gamemode.log 2>&1 &
 boot_mark services
 # Paquets demandés par un fichier de réponse : installés une fois, dès que le réseau répond.
 if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
@@ -642,6 +644,8 @@ if /bin/busybox grep -qw 'winlux.smoke=1' /proc/cmdline; then
 fi
 (
     while :; do
+        # Pas de mise à jour automatique pendant une partie (mode jeu).
+        while test -e /run/winlux/gamemode.active; do /bin/busybox sleep 30; done
         /usr/bin/winlux-update --auto-run >>/run/winlux/auto-update.log 2>&1 || true
         /usr/bin/winlux-sysupdate --tick >>/run/winlux/sysupdate-auto.log 2>&1 || true
         /bin/busybox sleep 1800
@@ -650,6 +654,7 @@ fi
 (
     # Historique des fichiers : chaque utilisateur selon sa fréquence.
     while :; do
+        while test -e /run/winlux/gamemode.active; do /bin/busybox sleep 30; done
         /usr/bin/winlux-backup auto-run >>/run/winlux/backup-auto.log 2>&1 || true
         /bin/busybox sleep 60
     done
