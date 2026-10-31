@@ -23,13 +23,14 @@ pub const BLUETOOTH_PAGE: usize = 22;
 pub const PAGE_POWER: usize = 23;
 /// Graphismes : GPU, mesures, réglages avancés et overlay en jeu.
 pub const PAGE_GRAPHICS: usize = 24;
-const PAGE_COUNT: usize = 25;
+pub const PAGE_REPORT: usize = 25;
+const PAGE_COUNT: usize = 26;
 /// Appareils Bluetooth affichés (une ligne de boutons chacun).
 const BT_ROWS: usize = 5;
 /// Ordre d'affichage du menu : la personnalisation suit l'apparence,
 /// l'alimentation suit le son et la batterie.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22,
+    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22, 25,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -58,6 +59,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_BLUETOOTH_DEVICES),
         tr(S_POWER_BATTERY),
         tr(S_GRAPHICS),
+        tr(S_REPORT_PAGE),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -746,6 +748,13 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (BLUETOOTH_PAGE, 1) => {
             field(BLUETOOTH.get(), b"present") == b"1" && field(BLUETOOTH.get(), b"powered") != b"1"
         }
+        (PAGE_REPORT, 9) => value(b"report_offer") != b"off",
+        (PAGE_REPORT, 10) => value(b"report_offer") == b"off",
+        (PAGE_REPORT, 18) => value(b"report_redact") != b"off",
+        (PAGE_REPORT, 19) => value(b"report_redact") == b"off",
+        (PAGE_REPORT, 27) => !matches!(value(b"report_mode"), b"browser" | b"file"),
+        (PAGE_REPORT, 28) => value(b"report_mode") == b"browser",
+        (PAGE_REPORT, 29) => value(b"report_mode") == b"file",
         _ => false,
     };
     let primary = PAGE == 7 && id == 1
@@ -1768,6 +1777,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         PAGE_CPU => crate::settings_cpu::draw(g, &c),
         PAGE_NETDRIVES => crate::netdrives::draw(g, &c),
         BLUETOOTH_PAGE => draw_bluetooth(g, &c),
+        PAGE_REPORT => draw_report(g, &c),
         _ => {}
     }
     if PAGE == PAGE_NETDRIVES {
@@ -1975,8 +1985,8 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
             -1
         };
     }
-    // Neuf rangées de trois boutons (la page Alimentation va jusqu'à 8).
-    for i in 0..27 {
+    // Dix rangées de trois boutons (Signaler un problème va jusqu'à 9).
+    for i in 0..30 {
         let r = button_rect(&c, i / 3, i % 3);
         if r.bottom <= c.bottom - 24 && inside(&r, x, y) {
             return i;
@@ -2408,6 +2418,21 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         } else {
             c"privacy-location-allow"
         }),
+        (PAGE_REPORT, id @ 0..=2) => {
+            report(match id {
+                0 => c"",
+                1 => c"--crash --force",
+                _ => c"--open-saved",
+            });
+            return true;
+        }
+        (PAGE_REPORT, 9) => Some(c"report-offer-on"),
+        (PAGE_REPORT, 10) => Some(c"report-offer-off"),
+        (PAGE_REPORT, 18) => Some(c"report-redact-on"),
+        (PAGE_REPORT, 19) => Some(c"report-redact-off"),
+        (PAGE_REPORT, 27) => Some(c"report-mode-auto"),
+        (PAGE_REPORT, 28) => Some(c"report-mode-browser"),
+        (PAGE_REPORT, 29) => Some(c"report-mode-file"),
         (PAGE_PRIVACY, 18) => Some(c"privacy-history-off"),
         (PAGE_PRIVACY, 19) => Some(c"privacy-history-on"),
         (BLUETOOTH_PAGE, 0) => Some(c"bluetooth-on"),
@@ -2693,6 +2718,48 @@ unsafe fn draw_privacy(g: &mut Gfx, c: &Rect) {
         b"Vos donn\xE9es restent chez vous",
         b"Un micro refus\xE9 est bloqu\xE9 par le runtime ; cam\xE9ra et localisation ne sont pas encore expos\xE9es aux .exe.",
     );
+}
+/// Lance « Signaler un problème » (winlux-report) : le rapport s'affiche en
+/// entier, modifiable, avant tout envoi.
+pub unsafe fn report(args: &core::ffi::CStr) {
+    if ShellExecuteA(
+        core::ptr::null_mut(),
+        c"open".as_ptr(),
+        c"winlux-report".as_ptr(),
+        args.as_ptr(),
+        core::ptr::null(),
+        1,
+    ) as isize
+        <= 32
+    {
+        crate::desktop::toast(tr(S_INFO_UNAVAILABLE));
+    }
+}
+unsafe fn draw_report(g: &mut Gfx, c: &Rect) {
+    row(g, c, 44, tr(S_REPORT_PAGE), tr(S_REPORT_DESC));
+    button(g, c, 0, 0, tr(S_REPORT_NEW), 0);
+    button(g, c, 0, 1, tr(S_REPORT_LAST), 1);
+    button(g, c, 0, 2, tr(S_REPORT_SAVED), 2);
+    let offer = value(b"report_offer") != b"off";
+    let offer_desc = if offer { S_REPORT_OFFER_ON_DESC } else { S_REPORT_OFFER_OFF_DESC };
+    row(g, c, 166, tr(S_REPORT_OFFER), tr(offer_desc));
+    button(g, c, 3, 0, tr(S_REPORT_PROPOSE), 9);
+    button(g, c, 3, 1, tr(S_REPORT_SILENT), 10);
+    let mask = value(b"report_redact") != b"off";
+    let mask_desc = if mask { S_REPORT_MASK_DESC } else { S_REPORT_NOMASK_DESC };
+    row(g, c, 300, tr(S_REPORT_PRIVATE), tr(mask_desc));
+    button(g, c, 6, 0, tr(S_REPORT_MASK), 18);
+    button(g, c, 6, 1, tr(S_REPORT_NOMASK), 19);
+    let mode = match (value(b"report_mode"), value(b"report_transport")) {
+        (b"browser", _) => S_REPORT_MODE_BROWSER,
+        (b"file", _) => S_REPORT_MODE_FILE,
+        (_, b"browser") => S_REPORT_MODE_AUTO_BROWSER,
+        _ => S_REPORT_MODE_RELAY,
+    };
+    row(g, c, 430, tr(S_REPORT_MODE), tr(mode));
+    button(g, c, 9, 0, tr(S_REPORT_AUTO), 27);
+    button(g, c, 9, 1, tr(S_REPORT_BROWSER), 28);
+    button(g, c, 9, 2, tr(S_REPORT_FILE), 29);
 }
 unsafe fn draw_installation(g: &mut Gfx, c: &Rect) {
     let p = pal();

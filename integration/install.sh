@@ -24,6 +24,7 @@ test -x "$root/target/release/winlux" || {
 install -Dm755 "$root/target/release/winlux" "$bin/winlux"
 install -Dm755 "$root/integration/winlux-open" "$bin/winlux-open"
 install -Dm755 "$root/integration/winlux-browser" "$bin/winlux-browser"
+install -Dm755 "$root/scripts/winlux-report.py" "$bin/winlux-report"
 install -Dm755 "$root/scripts/install-edge.sh" "$share/winlux/install-edge.sh"
 install -Dm755 "$root/scripts/winlux-update.sh" "$bin/winlux-update"
 install -Dm755 "$root/integration/uninstall.sh" "$share/winlux/uninstall.sh"
