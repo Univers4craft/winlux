@@ -6,6 +6,13 @@
 //! réapplique le profil (le micrologiciel remet parfois la luminosité et le
 //! gouverneur à zéro) et on remet le compteur d'inactivité à zéro.
 //!
+//! Fiabilité : on suit le protocole `/sys/power/wakeup_count` du noyau
+//! (un évènement de réveil arrivé pendant la préparation annule la veille au
+//! lieu de la perdre), on réessaie quand le noyau répond « occupé », et les
+//! scripts de `/usr/lib/winlux/sleep.d` puis `/etc/winlux/sleep.d` sont
+//! lancés avant (`pre suspend|hibernate`) et après (`post ...`) la veille :
+//! c'est là que les écrans et le pavé tactile sont réappliqués.
+//!
 //! Hibernation : le noyau reprend l'image avant de monter la racine quand la
 //! ligne de commande contient `resume=` et `resume_offset=`. `winlux --power
 //! hibernate-setup` prépare donc un fichier d'échange dédié, calcule son
@@ -38,7 +45,7 @@ pub fn capabilities_at(root: &Path) -> Capabilities {
     }
 }
 
-fn event(root: &Path, what: &str) {
+pub(crate) fn event(root: &Path, what: &str) {
     let dir = run_dir_at(root);
     if fs::create_dir_all(&dir).is_ok() {
         let _ = fs::write(
@@ -92,27 +99,122 @@ fn lock_before_sleep(root: &Path) {
     }
 }
 
-fn transition(root: &Path, state: &str) -> Result<(), String> {
-    lock_before_sleep(root);
-    event(
-        root,
-        if state == "disk" {
-            "hibernate"
-        } else {
-            "suspend"
-        },
-    );
-    // SAFETY: sync(2) n'a pas de précondition.
-    unsafe { libc::sync() };
-    let result = fs::OpenOptions::new()
+/// Scripts de veille, triés par nom ; un script de `/etc` remplace celui de
+/// même nom livré dans `/usr/lib`.
+pub fn hooks_at(root: &Path) -> Vec<std::path::PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+    let mut by_name = std::collections::BTreeMap::new();
+    for dir in ["usr/lib/winlux/sleep.d", "etc/winlux/sleep.d"] {
+        let Ok(entries) = fs::read_dir(root.join(dir)) else {
+            continue;
+        };
+        for e in entries.flatten() {
+            let executable = e
+                .metadata()
+                .is_ok_and(|m| m.is_file() && m.permissions().mode() & 0o111 != 0);
+            if executable {
+                by_name.insert(e.file_name(), e.path());
+            }
+        }
+    }
+    by_name.into_values().collect()
+}
+
+/// Lance les scripts (`pre`/`post`, `suspend`/`hibernate`), dix secondes au
+/// plus chacun : un script bloqué ne doit jamais empêcher la veille.
+pub fn run_hooks(root: &Path, phase: &str, kind: &str) -> usize {
+    let mut ran = 0;
+    for hook in hooks_at(root) {
+        let Ok(mut child) = std::process::Command::new(&hook)
+            .args([phase, kind])
+            .env("WINLUX_POWER_ROOT", root)
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+        else {
+            continue;
+        };
+        ran += 1;
+        for _ in 0..100 {
+            if child.try_wait().ok().flatten().is_some() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+        if child.try_wait().ok().flatten().is_none() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    ran
+}
+
+/// Arme `/sys/power/wakeup_count`. `Ok(false)` : un réveil est arrivé
+/// entre-temps, la veille doit être annulée. Sans ce fichier (noyau sans
+/// PM_SLEEP ou faux sysfs incomplet), on continue normalement.
+pub fn arm_wakeup_count(root: &Path) -> bool {
+    let path = root.join("sys/power/wakeup_count");
+    let Some(count) = read_trim(&path) else {
+        return true;
+    };
+    fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .and_then(|mut f| f.write_all(count.as_bytes()))
+        .is_ok()
+}
+
+fn write_state(root: &Path, state: &str) -> std::io::Result<()> {
+    fs::OpenOptions::new()
         .write(true)
         .open(root.join("sys/power/state"))
         .and_then(|mut f| f.write_all(state.as_bytes()))
-        .map_err(|e| format!("le noyau a refus\u{e9} la transition ({e})"));
+}
+
+fn transition(root: &Path, state: &str) -> Result<(), String> {
+    let kind = if state == "disk" {
+        "hibernate"
+    } else {
+        "suspend"
+    };
+    lock_before_sleep(root);
+    event(root, kind);
+    run_hooks(root, "pre", kind);
+    // SAFETY: sync(2) n'a pas de précondition.
+    unsafe { libc::sync() };
+    let mut result = Err(
+        "un \u{e9}v\u{e8}nement de r\u{e9}veil est arriv\u{e9} pendant la pr\u{e9}paration"
+            .to_string(),
+    );
+    for attempt in 0..3 {
+        if attempt > 0 {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+        }
+        if !arm_wakeup_count(root) {
+            continue;
+        }
+        match write_state(root, state) {
+            Ok(()) => {
+                result = Ok(());
+                break;
+            }
+            // EBUSY : un pilote n'était pas prêt ; EAGAIN/EINVAL après
+            // armement : un réveil vient d'arriver. On réessaie.
+            Err(e) if matches!(e.raw_os_error(), Some(libc::EBUSY | libc::EAGAIN)) => {
+                result = Err(format!("le noyau est occup\u{e9} ({e})"));
+            }
+            Err(e) => {
+                result = Err(format!("le noyau a refus\u{e9} la transition ({e})"));
+                break;
+            }
+        }
+    }
     // Retour de veille (ou échec) : rétablir l'écran et le profil.
     set_backlight_power_at(root, true);
     apply_profile_at(root, &Config::load_at(root));
     touch_activity_at(root);
+    run_hooks(root, "post", kind);
     event(root, if result.is_ok() { "resume" } else { "failed" });
     result
 }
