@@ -1,5 +1,6 @@
 //! Formats matriciels « simples » : TGA, PCX, PBM/PGM/PPM/PAM/PFM, QOI,
 //! farbfeld, SGI, Sun Raster, XBM, XPM, WBMP et Radiance HDR.
+#![allow(clippy::needless_range_loop)]
 
 use super::{be16, be32, le16, Error, Image, Page, Raster};
 
@@ -55,8 +56,14 @@ pub fn tga(d: &[u8]) -> Result<Image, Error> {
     let mut pix: Vec<[u8; 4]> = Vec::with_capacity(n);
     let decode_px = |b: &[u8]| -> [u8; 4] {
         if kind == 1 || kind == 9 {
-            let i = if bytes == 2 { le16(b, 0) as usize } else { b[0] as usize };
-            *cmap.get(i.wrapping_sub(cm_first)).unwrap_or(&[0, 0, 0, 255])
+            let i = if bytes == 2 {
+                le16(b, 0) as usize
+            } else {
+                b[0] as usize
+            };
+            *cmap
+                .get(i.wrapping_sub(cm_first))
+                .unwrap_or(&[0, 0, 0, 255])
         } else if kind == 3 || kind == 11 {
             [b[0], b[0], b[0], if bytes == 2 { b[1] } else { 255 }]
         } else {
@@ -242,7 +249,11 @@ pub fn pnm(d: &[u8]) -> Result<Image, Error> {
                     let o = p + ((y * w + x) as usize * ch + k) * 4;
                     let b = d.get(o..o + 4).ok_or(Error::Corrupt)?;
                     let bits = [b[0], b[1], b[2], b[3]];
-                    let v = f32::from_bits(if le { u32::from_le_bytes(bits) } else { u32::from_be_bytes(bits) });
+                    let v = f32::from_bits(if le {
+                        u32::from_le_bytes(bits)
+                    } else {
+                        u32::from_be_bytes(bits)
+                    });
                     c[k] = (super::tonemap(v) * 255.0) as u8;
                 }
                 if ch == 1 {
@@ -258,7 +269,11 @@ pub fn pnm(d: &[u8]) -> Result<Image, Error> {
     let w = t.num().ok_or(Error::Corrupt)?;
     let h = t.num().ok_or(Error::Corrupt)?;
     super::check_size(w, h)?;
-    let maxv = if kind == b'1' || kind == b'4' { 1 } else { t.num().ok_or(Error::Corrupt)?.max(1) };
+    let maxv = if kind == b'1' || kind == b'4' {
+        1
+    } else {
+        t.num().ok_or(Error::Corrupt)?.max(1)
+    };
     let mut r = Raster::new(w, h);
     let n = (w * h) as usize;
     let scale = |v: u32| (v.min(maxv) * 255 / maxv) as u8;
@@ -312,7 +327,11 @@ pub fn pnm(d: &[u8]) -> Result<Image, Error> {
                 c[3] = 255;
                 for k in 0..ch {
                     let o = p + (i * ch + k) * bs;
-                    let v = if bs == 2 { be16(d.get(o..o + 2).ok_or(Error::Corrupt)?, 0) as u32 } else { *d.get(o).ok_or(Error::Corrupt)? as u32 };
+                    let v = if bs == 2 {
+                        be16(d.get(o..o + 2).ok_or(Error::Corrupt)?, 0) as u32
+                    } else {
+                        *d.get(o).ok_or(Error::Corrupt)? as u32
+                    };
                     c[k] = scale(v);
                 }
                 if ch == 1 {
@@ -333,7 +352,10 @@ pub fn pnm(d: &[u8]) -> Result<Image, Error> {
 }
 
 fn pam(d: &[u8]) -> Result<Image, Error> {
-    let end = d.windows(7).position(|w| w == b"ENDHDR\n").ok_or(Error::Corrupt)?;
+    let end = d
+        .windows(7)
+        .position(|w| w == b"ENDHDR\n")
+        .ok_or(Error::Corrupt)?;
     let head = std::str::from_utf8(&d[..end]).map_err(|_| Error::Corrupt)?;
     let mut w = 0;
     let mut h = 0;
@@ -359,7 +381,11 @@ fn pam(d: &[u8]) -> Result<Image, Error> {
         let mut s = [0u32; 4];
         for (k, v) in s.iter_mut().enumerate().take(depth.min(4)) {
             let o = p + (i * depth + k) * bs;
-            *v = if bs == 2 { be16(d.get(o..o + 2).ok_or(Error::Corrupt)?, 0) as u32 } else { *d.get(o).ok_or(Error::Corrupt)? as u32 };
+            *v = if bs == 2 {
+                be16(d.get(o..o + 2).ok_or(Error::Corrupt)?, 0) as u32
+            } else {
+                *d.get(o).ok_or(Error::Corrupt)? as u32
+            };
             *v = (*v).min(maxv) * 255 / maxv;
         }
         let c = match depth {
@@ -417,7 +443,9 @@ pub fn qoi(d: &[u8]) -> Result<Image, Error> {
                 _ => run = (b & 63) as usize + 1,
             },
         }
-        let h = (px[0] as usize * 3 + px[1] as usize * 5 + px[2] as usize * 7 + px[3] as usize * 11) % 64;
+        let h =
+            (px[0] as usize * 3 + px[1] as usize * 5 + px[2] as usize * 7 + px[3] as usize * 11)
+                % 64;
         idx[h] = px;
         for _ in 0..run {
             if i < n {
@@ -569,7 +597,11 @@ pub fn sun(d: &[u8]) -> Result<Image, Error> {
                     let o = x * bs + if bs == 4 { 1 } else { 0 };
                     let c = row.get(o..o + 3).unwrap_or(&[0, 0, 0]);
                     // 32 bits : octet de tête = alpha (ARGB) s'il est utilisé
-                    let a = if bs == 4 { *row.get(x * 4).unwrap_or(&0) } else { 255 };
+                    let a = if bs == 4 {
+                        *row.get(x * 4).unwrap_or(&0)
+                    } else {
+                        255
+                    };
                     if kind == 3 {
                         [c[0], c[1], c[2], a]
                     } else {
@@ -748,7 +780,11 @@ pub fn hdr(d: &[u8]) -> Result<Image, Error> {
     let wu = w as usize;
     for y in 0..h as usize {
         let row = &mut rgbe[y * wu * 4..(y + 1) * wu * 4];
-        if (8..0x8000).contains(&wu) && d.get(p) == Some(&2) && d.get(p + 1) == Some(&2) && d.get(p + 2).is_some_and(|b| b & 0x80 == 0) {
+        if (8..0x8000).contains(&wu)
+            && d.get(p) == Some(&2)
+            && d.get(p + 1) == Some(&2)
+            && d.get(p + 2).is_some_and(|b| b & 0x80 == 0)
+        {
             p += 4;
             for c in 0..4 {
                 let mut x = 0;

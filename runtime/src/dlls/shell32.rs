@@ -214,7 +214,9 @@ fn image_viewer() -> Option<PathBuf> {
             return Some(p);
         }
     }
-    if let Some(dir) = crate::loader::main_module().and_then(|m| m.path.parent().map(Path::to_path_buf)) {
+    if let Some(dir) =
+        crate::loader::main_module().and_then(|m| m.path.parent().map(Path::to_path_buf))
+    {
         dirs.push(dir);
     }
     dirs.push("/opt/winlux/apps".into());

@@ -64,11 +64,17 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
                     if n == 0 {
                         break;
                     }
-                    data.extend_from_slice(d.get(p..p + n as usize).unwrap_or(&d[p.min(d.len())..]));
+                    data.extend_from_slice(
+                        d.get(p..p + n as usize).unwrap_or(&d[p.min(d.len())..]),
+                    );
                     p += n as usize;
                 }
                 let idx = lzw(&data, min_code, (fw * fh) as usize);
-                let before = if dispose == 3 { Some(canvas.clone()) } else { None };
+                let before = if dispose == 3 {
+                    Some(canvas.clone())
+                } else {
+                    None
+                };
                 let rows: Vec<u32> = if lf & 0x40 != 0 {
                     let mut r = Vec::new();
                     for (s, st) in [(0, 8), (4, 8), (2, 4), (1, 2)] {
@@ -93,12 +99,16 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
                     }
                     let (cx, cy) = (fx + x, fy + y);
                     if cx < w && cy < h {
-                        let c = ct.get(k as usize * 3..k as usize * 3 + 3).unwrap_or(&[0, 0, 0]);
+                        let c = ct
+                            .get(k as usize * 3..k as usize * 3 + 3)
+                            .unwrap_or(&[0, 0, 0]);
                         canvas.set(cx, cy, [c[0], c[1], c[2], 255]);
                     }
                 }
-                img.pages
-                    .push(Page::frame(canvas.clone(), if delay < 20 { 100 } else { delay }));
+                img.pages.push(Page::frame(
+                    canvas.clone(),
+                    if delay < 20 { 100 } else { delay },
+                ));
                 match dispose {
                     2 => {
                         for y in fy..(fy + fh).min(h) {

@@ -125,7 +125,8 @@ fn iptc(d: &[u8], img: &mut Image) {
         let ds = d[p + 2];
         let len = super::be16(d, p + 3) as usize;
         let v = d.get(p + 5..p + 5 + len).unwrap_or(&[]);
-        let s = String::from_utf8(v.to_vec()).unwrap_or_else(|_| v.iter().map(|&c| c as char).collect());
+        let s = String::from_utf8(v.to_vec())
+            .unwrap_or_else(|_| v.iter().map(|&c| c as char).collect());
         if rec == 2 {
             match ds {
                 5 => push(img, "iptc.title", s),

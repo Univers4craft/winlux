@@ -35,10 +35,13 @@ pub fn decode(d: &[u8], ext: &str) -> Result<Image, Error> {
         return Err(Error::Corrupt);
     }
     let mut img = Image::new(name);
-    img.meta.push(("model.triangles".into(), tris.len().to_string()));
+    img.meta
+        .push(("model.triangles".into(), tris.len().to_string()));
     img.pages.push(Page {
         name: String::new(),
-        content: super::Content::Model(Mesh { tris: normalize(tris) }),
+        content: super::Content::Model(Mesh {
+            tris: normalize(tris),
+        }),
         delay_ms: 0,
     });
     img.animated = true;
@@ -56,7 +59,11 @@ fn normalize(mut t: Vec<[f32; 9]>) -> Vec<[f32; 9]> {
             }
         }
     }
-    let c = [(lo[0] + hi[0]) / 2.0, (lo[1] + hi[1]) / 2.0, (lo[2] + hi[2]) / 2.0];
+    let c = [
+        (lo[0] + hi[0]) / 2.0,
+        (lo[1] + hi[1]) / 2.0,
+        (lo[2] + hi[2]) / 2.0,
+    ];
     let mut r = 0f32;
     for tri in &t {
         for v in tri.chunks_exact(3) {
@@ -101,13 +108,19 @@ fn stl(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
     for l in s.lines() {
         let l = l.trim();
         if let Some(r) = l.strip_prefix("vertex") {
-            let v: Vec<f32> = r.split_whitespace().filter_map(|x| x.parse().ok()).collect();
+            let v: Vec<f32> = r
+                .split_whitespace()
+                .filter_map(|x| x.parse().ok())
+                .collect();
             if v.len() >= 3 {
                 verts.extend_from_slice(&v[..3]);
             }
         }
     }
-    Ok(verts.chunks_exact(9).map(|c| c.try_into().unwrap_or([0.0; 9])).collect())
+    Ok(verts
+        .chunks_exact(9)
+        .map(|c| c.try_into().unwrap_or([0.0; 9]))
+        .collect())
 }
 
 fn fan(out: &mut Vec<[f32; 9]>, v: &[[f32; 3]], idx: &[usize]) {
@@ -136,7 +149,11 @@ fn obj(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
                 let idx: Vec<usize> = it
                     .filter_map(|t| {
                         let i: i64 = t.split('/').next()?.parse().ok()?;
-                        Some(if i < 0 { (v.len() as i64 + i) as usize } else { (i - 1) as usize })
+                        Some(if i < 0 {
+                            (v.len() as i64 + i) as usize
+                        } else {
+                            (i - 1) as usize
+                        })
                     })
                     .collect();
                 fan(&mut out, &v, &idx);
@@ -152,15 +169,31 @@ fn obj(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
 
 fn off(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
     let s = String::from_utf8_lossy(d);
-    let mut toks = s.lines().filter(|l| !l.trim_start().starts_with('#')).flat_map(|l| l.split_whitespace());
+    let mut toks = s
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .flat_map(|l| l.split_whitespace());
     let first = toks.next().ok_or(Error::Corrupt)?;
-    let nv: usize = if first.ends_with("OFF") { toks.next() } else { Some(first) }.and_then(|t| t.parse().ok()).ok_or(Error::Corrupt)?;
-    let nf: usize = toks.next().and_then(|t| t.parse().ok()).ok_or(Error::Corrupt)?;
+    let nv: usize = if first.ends_with("OFF") {
+        toks.next()
+    } else {
+        Some(first)
+    }
+    .and_then(|t| t.parse().ok())
+    .ok_or(Error::Corrupt)?;
+    let nf: usize = toks
+        .next()
+        .and_then(|t| t.parse().ok())
+        .ok_or(Error::Corrupt)?;
     let _ = toks.next();
     let mut v = Vec::with_capacity(nv.min(1 << 24));
     for _ in 0..nv {
         let p: Vec<f32> = (0..3).filter_map(|_| toks.next()?.parse().ok()).collect();
-        v.push([*p.first().unwrap_or(&0.0), *p.get(1).unwrap_or(&0.0), *p.get(2).unwrap_or(&0.0)]);
+        v.push([
+            *p.first().unwrap_or(&0.0),
+            *p.get(1).unwrap_or(&0.0),
+            *p.get(2).unwrap_or(&0.0),
+        ]);
     }
     let mut out = Vec::new();
     for _ in 0..nf {
@@ -172,7 +205,10 @@ fn off(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
 }
 
 fn ply(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
-    let end = d.windows(10).position(|w| w == b"end_header").ok_or(Error::Corrupt)?;
+    let end = d
+        .windows(10)
+        .position(|w| w == b"end_header")
+        .ok_or(Error::Corrupt)?;
     let head = String::from_utf8_lossy(&d[..end]);
     let mut body = end + 10;
     while body < d.len() && (d[body] == b'\r' || d[body] == b'\n') {
@@ -190,7 +226,15 @@ fn ply(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
     for l in head.lines() {
         let p: Vec<&str> = l.split_whitespace().collect();
         match p.as_slice() {
-            ["format", f, ..] => format = if f.starts_with("ascii") { "a" } else if f.contains("little") { "l" } else { "b" },
+            ["format", f, ..] => {
+                format = if f.starts_with("ascii") {
+                    "a"
+                } else if f.contains("little") {
+                    "l"
+                } else {
+                    "b"
+                }
+            }
             ["element", "vertex", n] => {
                 nv = n.parse().unwrap_or(0);
                 cur = "v";
@@ -200,7 +244,9 @@ fn ply(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
                 cur = "f";
             }
             ["element", ..] => cur = "",
-            ["property", "list", a, b, _] if cur == "f" => face_types = (a.to_string(), b.to_string()),
+            ["property", "list", a, b, _] if cur == "f" => {
+                face_types = (a.to_string(), b.to_string())
+            }
             ["property", t, name] if cur == "v" => vprops.push((t.to_string(), name.to_string())),
             _ => {}
         }
@@ -211,18 +257,35 @@ fn ply(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
         "double" | "float64" => 8,
         _ => 4,
     };
-    let xi = vprops.iter().position(|(_, n)| n == "x").ok_or(Error::Corrupt)?;
+    let xi = vprops
+        .iter()
+        .position(|(_, n)| n == "x")
+        .ok_or(Error::Corrupt)?;
     let mut v: Vec<[f32; 3]> = Vec::with_capacity(nv.min(1 << 24));
     let mut out = Vec::new();
     if format == "a" {
         let s = String::from_utf8_lossy(&d[body..]);
         let mut lines = s.lines();
         for _ in 0..nv {
-            let p: Vec<f32> = lines.next().unwrap_or("").split_whitespace().filter_map(|x| x.parse().ok()).collect();
-            v.push([*p.get(xi).unwrap_or(&0.0), *p.get(xi + 1).unwrap_or(&0.0), *p.get(xi + 2).unwrap_or(&0.0)]);
+            let p: Vec<f32> = lines
+                .next()
+                .unwrap_or("")
+                .split_whitespace()
+                .filter_map(|x| x.parse().ok())
+                .collect();
+            v.push([
+                *p.get(xi).unwrap_or(&0.0),
+                *p.get(xi + 1).unwrap_or(&0.0),
+                *p.get(xi + 2).unwrap_or(&0.0),
+            ]);
         }
         for _ in 0..nf {
-            let p: Vec<usize> = lines.next().unwrap_or("").split_whitespace().filter_map(|x| x.parse().ok()).collect();
+            let p: Vec<usize> = lines
+                .next()
+                .unwrap_or("")
+                .split_whitespace()
+                .filter_map(|x| x.parse().ok())
+                .collect();
             if let Some((_, idx)) = p.split_first() {
                 fan(&mut out, &v, idx);
             }
@@ -263,7 +326,9 @@ fn ply(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
     for _ in 0..nf {
         let n = rd(p, &face_types.0) as usize;
         p += size(&face_types.0);
-        let idx: Vec<usize> = (0..n).map(|i| rd(p + i * size(&face_types.1), &face_types.1) as usize).collect();
+        let idx: Vec<usize> = (0..n)
+            .map(|i| rd(p + i * size(&face_types.1), &face_types.1) as usize)
+            .collect();
         p += n * size(&face_types.1);
         fan(&mut out, &v, &idx);
         if p > d.len() {
@@ -277,7 +342,7 @@ fn ply(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
 #[derive(Clone, Debug)]
 pub enum Json {
     Null,
-    Bool(bool),
+    Bool(#[allow(dead_code)] bool),
     Num(f64),
     Str(String),
     Arr(Vec<Json>),
@@ -419,7 +484,11 @@ fn jvalue(s: &[u8], p: &mut usize, depth: usize) -> Option<Json> {
             while *p < s.len() && matches!(s[*p], b'-' | b'+' | b'.' | b'e' | b'E' | b'0'..=b'9') {
                 *p += 1;
             }
-            std::str::from_utf8(&s[st..*p]).ok()?.parse().ok().map(Json::Num)
+            std::str::from_utf8(&s[st..*p])
+                .ok()?
+                .parse()
+                .ok()
+                .map(Json::Num)
         }
     }
 }
@@ -456,23 +525,49 @@ fn m4_mul(a: &M4, b: &M4) -> M4 {
 
 fn node_matrix(n: &Json) -> M4 {
     if let Some(m) = n.get("matrix") {
-        let v: Vec<f32> = m.arr().iter().filter_map(|x| x.num()).map(|x| x as f32).collect();
+        let v: Vec<f32> = m
+            .arr()
+            .iter()
+            .filter_map(|x| x.num())
+            .map(|x| x as f32)
+            .collect();
         if v.len() == 16 {
             return v.try_into().unwrap_or([0.0; 16]);
         }
     }
     let g = |k: &str, d: &[f32]| -> Vec<f32> {
-        n.get(k).map(|a| a.arr().iter().filter_map(|x| x.num()).map(|x| x as f32).collect()).filter(|v: &Vec<f32>| v.len() == d.len()).unwrap_or_else(|| d.to_vec())
+        n.get(k)
+            .map(|a| {
+                a.arr()
+                    .iter()
+                    .filter_map(|x| x.num())
+                    .map(|x| x as f32)
+                    .collect()
+            })
+            .filter(|v: &Vec<f32>| v.len() == d.len())
+            .unwrap_or_else(|| d.to_vec())
     };
     let t = g("translation", &[0.0, 0.0, 0.0]);
     let q = g("rotation", &[0.0, 0.0, 0.0, 1.0]);
     let s = g("scale", &[1.0, 1.0, 1.0]);
     let (x, y, z, w) = (q[0], q[1], q[2], q[3]);
     let r = [
-        1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y + z * w), 2.0 * (x * z - y * w), 0.0,
-        2.0 * (x * y - z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z + x * w), 0.0,
-        2.0 * (x * z + y * w), 2.0 * (y * z - x * w), 1.0 - 2.0 * (x * x + y * y), 0.0,
-        0.0, 0.0, 0.0, 1.0,
+        1.0 - 2.0 * (y * y + z * z),
+        2.0 * (x * y + z * w),
+        2.0 * (x * z - y * w),
+        0.0,
+        2.0 * (x * y - z * w),
+        1.0 - 2.0 * (x * x + z * z),
+        2.0 * (y * z + x * w),
+        0.0,
+        2.0 * (x * z + y * w),
+        2.0 * (y * z - x * w),
+        1.0 - 2.0 * (x * x + y * y),
+        0.0,
+        0.0,
+        0.0,
+        0.0,
+        1.0,
     ];
     let mut m = r;
     for c in 0..3 {
@@ -490,10 +585,19 @@ fn gltf_json(json: &[u8], bin: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
     let j = parse_json(json).ok_or(Error::Corrupt)?;
     // tampons : BIN de GLB ou URI data:
     let mut buffers: Vec<Vec<u8>> = Vec::new();
-    for (i, b) in j.get("buffers").map(|b| b.arr()).unwrap_or(&[]).iter().enumerate() {
+    for (i, b) in j
+        .get("buffers")
+        .map(|b| b.arr())
+        .unwrap_or(&[])
+        .iter()
+        .enumerate()
+    {
         match b.get("uri").and_then(|u| u.str()) {
             Some(u) if u.starts_with("data:") => {
-                let data = u.split_once(";base64,").and_then(|(_, b)| super::base64(b)).unwrap_or_default();
+                let data = u
+                    .split_once(";base64,")
+                    .and_then(|(_, b)| super::base64(b))
+                    .unwrap_or_default();
                 buffers.push(data);
             }
             Some(_) => return Err(Error::Variant("glTF tampon externe")),
@@ -520,8 +624,13 @@ fn gltf_json(json: &[u8], bin: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
         };
         let bv = views.get(a.get("bufferView")?.num()? as usize)?;
         let buf = buffers.get(bv.get("buffer").and_then(|b| b.num()).unwrap_or(0.0) as usize)?;
-        let off = bv.get("byteOffset").and_then(|v| v.num()).unwrap_or(0.0) as usize + a.get("byteOffset").and_then(|v| v.num()).unwrap_or(0.0) as usize;
-        let stride = bv.get("byteStride").and_then(|v| v.num()).map(|v| v as usize).unwrap_or(comps * csize);
+        let off = bv.get("byteOffset").and_then(|v| v.num()).unwrap_or(0.0) as usize
+            + a.get("byteOffset").and_then(|v| v.num()).unwrap_or(0.0) as usize;
+        let stride = bv
+            .get("byteStride")
+            .and_then(|v| v.num())
+            .map(|v| v as usize)
+            .unwrap_or(comps * csize);
         let mut out = Vec::with_capacity(count * comps);
         for i in 0..count {
             for c in 0..comps {
@@ -542,15 +651,23 @@ fn gltf_json(json: &[u8], bin: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
     let meshes = j.get("meshes").map(|m| m.arr()).unwrap_or(&[]);
     let nodes = j.get("nodes").map(|m| m.arr()).unwrap_or(&[]);
     let mut out = Vec::new();
-    let mut emit = |mi: usize, m: &M4, out: &mut Vec<[f32; 9]>| {
+    let emit = |mi: usize, m: &M4, out: &mut Vec<[f32; 9]>| {
         let Some(mesh) = meshes.get(mi) else { return };
         for prim in mesh.get("primitives").map(|p| p.arr()).unwrap_or(&[]) {
             let mode = prim.get("mode").and_then(|v| v.num()).unwrap_or(4.0) as u32;
             if mode != 4 {
                 continue;
             }
-            let Some(pa) = prim.get("attributes").and_then(|a| a.get("POSITION")).and_then(|v| v.num()) else { continue };
-            let Some((pos, 3)) = read(pa as usize) else { continue };
+            let Some(pa) = prim
+                .get("attributes")
+                .and_then(|a| a.get("POSITION"))
+                .and_then(|v| v.num())
+            else {
+                continue;
+            };
+            let Some((pos, 3)) = read(pa as usize) else {
+                continue;
+            };
             let tv: Vec<[f32; 3]> = pos
                 .chunks_exact(3)
                 .map(|p| {
@@ -562,7 +679,9 @@ fn gltf_json(json: &[u8], bin: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
                 })
                 .collect();
             let idx: Vec<usize> = match prim.get("indices").and_then(|v| v.num()) {
-                Some(ia) => read(ia as usize).map(|(v, _)| v.into_iter().map(|x| x as usize).collect()).unwrap_or_default(),
+                Some(ia) => read(ia as usize)
+                    .map(|(v, _)| v.into_iter().map(|x| x as usize).collect())
+                    .unwrap_or_default(),
                 None => (0..tv.len()).collect(),
             };
             for t in idx.chunks_exact(3) {
@@ -575,14 +694,28 @@ fn gltf_json(json: &[u8], bin: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
         .get("scenes")
         .and_then(|s| s.idx(scene))
         .and_then(|s| s.get("nodes"))
-        .map(|n| n.arr().iter().filter_map(|x| x.num()).map(|x| x as usize).collect())
+        .map(|n| {
+            n.arr()
+                .iter()
+                .filter_map(|x| x.num())
+                .map(|x| x as usize)
+                .collect()
+        })
         .unwrap_or_default();
     if roots.is_empty() || nodes.is_empty() {
         for mi in 0..meshes.len() {
-            emit(mi, &[1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0], &mut out);
+            emit(
+                mi,
+                &[
+                    1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+                ],
+                &mut out,
+            );
         }
     } else {
-        let id: M4 = [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0];
+        let id: M4 = [
+            1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0,
+        ];
         let mut stack: Vec<(usize, M4, usize)> = roots.into_iter().map(|r| (r, id, 0)).collect();
         while let Some((ni, parent, depth)) = stack.pop() {
             let Some(n) = nodes.get(ni) else { continue };
@@ -609,16 +742,35 @@ fn fbx(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
     let wide = ver >= 7500;
     let mut out = Vec::new();
     let mut verts: Vec<f64> = Vec::new();
-    fn walk(d: &[u8], mut p: usize, end: usize, wide: bool, verts: &mut Vec<f64>, out: &mut Vec<[f32; 9]>, depth: usize) -> Option<()> {
+    fn walk(
+        d: &[u8],
+        mut p: usize,
+        end: usize,
+        wide: bool,
+        verts: &mut Vec<f64>,
+        out: &mut Vec<[f32; 9]>,
+        depth: usize,
+    ) -> Option<()> {
         if depth > 32 {
             return None;
         }
         while p < end {
             let (eo, np, _pl, hdr) = if wide {
-                let r = |o: usize| u64::from_le_bytes(d.get(p + o..p + o + 8).and_then(|b| b.try_into().ok()).unwrap_or([0; 8])) as usize;
+                let r = |o: usize| {
+                    u64::from_le_bytes(
+                        d.get(p + o..p + o + 8)
+                            .and_then(|b| b.try_into().ok())
+                            .unwrap_or([0; 8]),
+                    ) as usize
+                };
                 (r(0), r(8), r(16), 24)
             } else {
-                (super::le32(d, p) as usize, super::le32(d, p + 4) as usize, super::le32(d, p + 8) as usize, 12)
+                (
+                    super::le32(d, p) as usize,
+                    super::le32(d, p + 4) as usize,
+                    super::le32(d, p + 8) as usize,
+                    12,
+                )
             };
             if eo == 0 {
                 return Some(());
@@ -652,13 +804,25 @@ fn fbx(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
                             props.push(Vec::new());
                             continue;
                         }
-                        let data = if enc == 1 { super::inflate::inflate_zlib(raw, n * es + 16)? } else { raw.to_vec() };
+                        let data = if enc == 1 {
+                            super::inflate::inflate_zlib(raw, n * es + 16)?
+                        } else {
+                            raw.to_vec()
+                        };
                         let vals: Vec<f64> = (0..n)
                             .map(|i| match t {
                                 b'f' => f32le(&data, i * 4) as f64,
-                                b'd' => f64::from_le_bytes(data.get(i * 8..i * 8 + 8).and_then(|b| b.try_into().ok()).unwrap_or([0; 8])),
+                                b'd' => f64::from_le_bytes(
+                                    data.get(i * 8..i * 8 + 8)
+                                        .and_then(|b| b.try_into().ok())
+                                        .unwrap_or([0; 8]),
+                                ),
                                 b'i' => super::le32(&data, i * 4) as i32 as f64,
-                                b'l' => i64::from_le_bytes(data.get(i * 8..i * 8 + 8).and_then(|b| b.try_into().ok()).unwrap_or([0; 8])) as f64,
+                                b'l' => i64::from_le_bytes(
+                                    data.get(i * 8..i * 8 + 8)
+                                        .and_then(|b| b.try_into().ok())
+                                        .unwrap_or([0; 8]),
+                                ) as f64,
                                 _ => *data.get(i).unwrap_or(&0) as f64,
                             })
                             .collect();
@@ -670,7 +834,10 @@ fn fbx(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
             if name == b"Vertices" {
                 *verts = props.into_iter().next().unwrap_or_default();
             } else if name == b"PolygonVertexIndex" {
-                let v: Vec<[f32; 3]> = verts.chunks_exact(3).map(|c| [c[0] as f32, c[1] as f32, c[2] as f32]).collect();
+                let v: Vec<[f32; 3]> = verts
+                    .chunks_exact(3)
+                    .map(|c| [c[0] as f32, c[1] as f32, c[2] as f32])
+                    .collect();
                 let mut poly = Vec::new();
                 for &i in props.first().map(|v| v.as_slice()).unwrap_or(&[]) {
                     let i = i as i64;
@@ -698,7 +865,16 @@ fn fbx(d: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
 
 /// Rendu ombré (z-buffer) centré en (cx,cy), le modèle occupe `side` px.
 #[allow(clippy::too_many_arguments)]
-pub fn render(m: &Mesh, cv: &mut Canvas, cx: f32, cy: f32, side: f32, yaw: f32, pitch: f32, bg: [u8; 3]) {
+pub fn render(
+    m: &Mesh,
+    cv: &mut Canvas,
+    cx: f32,
+    cy: f32,
+    side: f32,
+    yaw: f32,
+    pitch: f32,
+    bg: [u8; 3],
+) {
     let (w, h) = (cv.w, cv.h);
     let mut zb = vec![f32::MIN; w * h];
     let (sy, cyw) = yaw.sin_cos();
@@ -717,7 +893,11 @@ pub fn render(m: &Mesh, cv: &mut Canvas, cx: f32, cy: f32, side: f32, yaw: f32, 
         (x / l, y / l, z / l)
     };
     let dark = (bg[0] as u32 + bg[1] as u32 + bg[2] as u32) < 384;
-    let base = if dark { [0.70, 0.78, 0.90] } else { [0.45, 0.58, 0.78] };
+    let base = if dark {
+        [0.70, 0.78, 0.90]
+    } else {
+        [0.45, 0.58, 0.78]
+    };
     for t in &m.tris {
         let a = rot(t[0], t[1], t[2]);
         let b = rot(t[3], t[4], t[5]);

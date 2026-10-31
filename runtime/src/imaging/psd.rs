@@ -96,8 +96,18 @@ fn flatten(pages: &[Page], w: u32, h: u32) -> Raster {
     for pg in pages.iter().rev() {
         if let super::Content::Raster(r) = &pg.content {
             for i in 0..out.px.len() / 4 {
-                let s = [r.px[i * 4], r.px[i * 4 + 1], r.px[i * 4 + 2], r.px[i * 4 + 3]];
-                let d = [out.px[i * 4], out.px[i * 4 + 1], out.px[i * 4 + 2], out.px[i * 4 + 3]];
+                let s = [
+                    r.px[i * 4],
+                    r.px[i * 4 + 1],
+                    r.px[i * 4 + 2],
+                    r.px[i * 4 + 3],
+                ];
+                let d = [
+                    out.px[i * 4],
+                    out.px[i * 4 + 1],
+                    out.px[i * 4 + 2],
+                    out.px[i * 4 + 3],
+                ];
                 out.px[i * 4..i * 4 + 4].copy_from_slice(&super::over(s, d));
             }
         }
@@ -128,7 +138,11 @@ fn read_planes(ctx: &Ctx, p: usize, w: u32, h: u32, nch: usize) -> Result<Vec<Ve
                 let mut buf = Vec::with_capacity(row * h as usize);
                 for y in 0..h as usize {
                     let k = counts_at + (c * h as usize + y) * cs;
-                    let n = if cs == 4 { be32(d, k) as usize } else { be16(d, k) as usize };
+                    let n = if cs == 4 {
+                        be32(d, k) as usize
+                    } else {
+                        be16(d, k) as usize
+                    };
                     let src = d.get(q..q + n).ok_or(Error::Corrupt)?;
                     let mut line = super::tiff::packbits(src, row);
                     line.resize(row, 0);
@@ -152,7 +166,11 @@ fn unpack(ctx: &Ctx, src: &[u8], w: u32, h: u32) -> Vec<u16> {
             for y in 0..h as usize {
                 for x in 0..w as usize {
                     let b = *src.get(y * row + x / 8).unwrap_or(&0);
-                    out[y * w as usize + x] = if (b >> (7 - x % 8)) & 1 == 1 { 0 } else { 65535 };
+                    out[y * w as usize + x] = if (b >> (7 - x % 8)) & 1 == 1 {
+                        0
+                    } else {
+                        65535
+                    };
                 }
             }
         }
@@ -163,12 +181,20 @@ fn unpack(ctx: &Ctx, src: &[u8], w: u32, h: u32) -> Vec<u16> {
         }
         16 => {
             for (i, v) in out.iter_mut().enumerate() {
-                *v = if i * 2 + 1 < src.len() { be16(src, i * 2) } else { 0 };
+                *v = if i * 2 + 1 < src.len() {
+                    be16(src, i * 2)
+                } else {
+                    0
+                };
             }
         }
         _ => {
             for (i, v) in out.iter_mut().enumerate() {
-                let f = if i * 4 + 3 < src.len() { f32::from_bits(be32(src, i * 4)) } else { 0.0 };
+                let f = if i * 4 + 3 < src.len() {
+                    f32::from_bits(be32(src, i * 4))
+                } else {
+                    0.0
+                };
                 *v = (super::tonemap(f) * 65535.0) as u16;
             }
         }
@@ -176,14 +202,26 @@ fn unpack(ctx: &Ctx, src: &[u8], w: u32, h: u32) -> Vec<u16> {
     out
 }
 
-fn compose(ctx: &Ctx, planes: &[Vec<u16>], w: u32, h: u32, nch: usize, alpha: Option<&[u16]>) -> Raster {
+fn compose(
+    ctx: &Ctx,
+    planes: &[Vec<u16>],
+    w: u32,
+    h: u32,
+    nch: usize,
+    alpha: Option<&[u16]>,
+) -> Raster {
     let mut r = Raster::new(w, h);
     let g = |c: usize, i: usize| -> u8 { planes.get(c).map(|p| (p[i] >> 8) as u8).unwrap_or(0) };
     // Le 4e canal du composite RGB est l'alpha fusionné, sauf s'il est vide.
     let alpha_valid = planes.get(3).is_some_and(|p| p.iter().any(|&v| v != 0));
     for i in 0..(w * h) as usize {
         let mut px = match ctx.mode {
-            3 => [g(0, i), g(1, i), g(2, i), if nch > 3 { g(3, i) } else { 255 }],
+            3 => [
+                g(0, i),
+                g(1, i),
+                g(2, i),
+                if nch > 3 { g(3, i) } else { 255 },
+            ],
             4 => {
                 let k = g(3, i) as u32;
                 let f = |c: u8| (c as u32 * k / 255) as u8;
@@ -193,7 +231,12 @@ fn compose(ctx: &Ctx, planes: &[Vec<u16>], w: u32, h: u32, nch: usize, alpha: Op
                 let k = g(0, i) as usize;
                 let n = ctx.palette.len() / 3;
                 if k < n {
-                    [ctx.palette[k], ctx.palette[n + k], ctx.palette[2 * n + k], 255]
+                    [
+                        ctx.palette[k],
+                        ctx.palette[n + k],
+                        ctx.palette[2 * n + k],
+                        255,
+                    ]
                 } else {
                     [0, 0, 0, 255]
                 }
@@ -207,7 +250,16 @@ fn compose(ctx: &Ctx, planes: &[Vec<u16>], w: u32, h: u32, nch: usize, alpha: Op
             }
             _ => {
                 let v = g(0, i);
-                [v, v, v, if nch > 1 && ctx.mode == 1 { g(1, i) } else { 255 }]
+                [
+                    v,
+                    v,
+                    v,
+                    if nch > 1 && ctx.mode == 1 {
+                        g(1, i)
+                    } else {
+                        255
+                    },
+                ]
             }
         };
         if ctx.mode == 3 && nch > 3 && !alpha_valid {
@@ -225,7 +277,13 @@ fn lab(l: f32, a: f32, b: f32) -> [u8; 4] {
     let fy = (l + 16.0) / 116.0;
     let fx = fy + a / 500.0;
     let fz = fy - b / 200.0;
-    let f = |t: f32| if t > 0.206_893 { t * t * t } else { (t - 16.0 / 116.0) / 7.787 };
+    let f = |t: f32| {
+        if t > 0.206_893 {
+            t * t * t
+        } else {
+            (t - 16.0 / 116.0) / 7.787
+        }
+    };
     let (x, y, z) = (0.950_47 * f(fx), f(fy), 1.088_83 * f(fz));
     let r = 3.2406 * x - 1.5372 * y - 0.4986 * z;
     let g = -0.9689 * x + 1.8758 * y + 0.0415 * z;
@@ -283,7 +341,11 @@ fn read_layers(ctx: &Ctx, start: usize, w: u32, h: u32) -> Option<Vec<(String, R
         let blen = be32(d, q) as usize;
         q += 4 + blen;
         let nlen = *d.get(q)? as usize;
-        let mut name: String = d.get(q + 1..q + 1 + nlen)?.iter().map(|&c| c as char).collect();
+        let mut name: String = d
+            .get(q + 1..q + 1 + nlen)?
+            .iter()
+            .map(|&c| c as char)
+            .collect();
         // nom Unicode (luni) s'il est présent
         let mut k = q + ((1 + nlen + 3) & !3);
         while k + 12 <= p {
@@ -328,13 +390,31 @@ fn read_layers(ctx: &Ctx, start: usize, w: u32, h: u32) -> Option<Vec<(String, R
         if lw == 0 || lh == 0 || lw > w * 4 || lh > h * 4 {
             continue;
         }
-        let get = |id: i16| planes.iter().find(|(i, _)| *i == id).map(|(_, v)| v.clone());
-        let nch = if ctx.mode == 4 { 4 } else if ctx.mode == 3 { 3 } else { 1 };
+        let get = |id: i16| {
+            planes
+                .iter()
+                .find(|(i, _)| *i == id)
+                .map(|(_, v)| v.clone())
+        };
+        let nch = if ctx.mode == 4 {
+            4
+        } else if ctx.mode == 3 {
+            3
+        } else {
+            1
+        };
         let pl: Vec<Vec<u16>> = (0..nch as i16)
             .map(|i| get(i).unwrap_or_else(|| vec![0; (lw * lh) as usize]))
             .collect();
         let alpha = get(-1);
-        let lr = compose(ctx, &pl, lw, lh, nch, Some(alpha.as_deref().unwrap_or(&vec![65535; (lw * lh) as usize])));
+        let lr = compose(
+            ctx,
+            &pl,
+            lw,
+            lh,
+            nch,
+            Some(alpha.as_deref().unwrap_or(&vec![65535; (lw * lh) as usize])),
+        );
         let mut canvas = Raster::new(w, h);
         for y in 0..lh as i32 {
             for x in 0..lw as i32 {

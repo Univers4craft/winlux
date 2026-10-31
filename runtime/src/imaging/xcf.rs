@@ -80,7 +80,10 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
     let v = if &d[9..13] == b"file" {
         0
     } else {
-        std::str::from_utf8(&d[10..13]).ok().and_then(|s| s.parse().ok()).unwrap_or(0)
+        std::str::from_utf8(&d[10..13])
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0)
     };
     let x = X { d, v };
     let mut p = 14;
@@ -92,7 +95,11 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
     if v >= 4 {
         let prec = be32(d, p);
         p += 4;
-        let ok = if v >= 7 { prec == 100 || prec == 150 } else { prec == 0 || prec == 1 };
+        let ok = if v >= 7 {
+            prec == 100 || prec == 150
+        } else {
+            prec == 0 || prec == 1
+        };
         if !ok {
             return Err(Error::Variant("XCF haute précision"));
         }
@@ -117,7 +124,9 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
         let ltype = be32(d, q + 8);
         q += 12;
         let nlen = be32(d, q) as usize;
-        let name = String::from_utf8_lossy(d.get(q + 4..q + 4 + nlen.saturating_sub(1)).unwrap_or(&[])).into_owned();
+        let name =
+            String::from_utf8_lossy(d.get(q + 4..q + 4 + nlen.saturating_sub(1)).unwrap_or(&[]))
+                .into_owned();
         q += 4 + nlen;
         let lpr = props(d, &mut q);
         if lpr.group || lw == 0 || lh == 0 || lw > 65_535 || lh > 65_535 {

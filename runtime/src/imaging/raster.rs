@@ -70,6 +70,7 @@ impl Canvas {
         }
     }
     /// Couleur RGBA 8 bits non prémultipliée.
+    #[allow(dead_code)]
     pub fn to_rgba8(&self) -> Vec<u8> {
         let mut out = Vec::with_capacity(self.w * self.h * 4);
         for p in &self.px {
@@ -353,7 +354,9 @@ pub fn stroke_polys(lines: &[(Vec<Pt>, bool)], width: f32, cap: u8, join: u8) ->
     for (pts, closed) in lines {
         let mut p: Vec<Pt> = Vec::with_capacity(pts.len());
         for &q in pts {
-            if p.last().is_none_or(|l: &Pt| (l.0 - q.0).abs() > 1e-4 || (l.1 - q.1).abs() > 1e-4) {
+            if p.last()
+                .is_none_or(|l: &Pt| (l.0 - q.0).abs() > 1e-4 || (l.1 - q.1).abs() > 1e-4)
+            {
                 p.push(q);
             }
         }
@@ -365,7 +368,12 @@ pub fn stroke_polys(lines: &[(Vec<Pt>, bool)], width: f32, cap: u8, join: u8) ->
                 out.push(disc(p[0], hw));
             } else if cap == 2 {
                 let c = p[0];
-                out.push(vec![(c.0 - hw, c.1 - hw), (c.0 + hw, c.1 - hw), (c.0 + hw, c.1 + hw), (c.0 - hw, c.1 + hw)]);
+                out.push(vec![
+                    (c.0 - hw, c.1 - hw),
+                    (c.0 + hw, c.1 - hw),
+                    (c.0 + hw, c.1 + hw),
+                    (c.0 - hw, c.1 + hw),
+                ]);
             }
             continue;
         }
@@ -397,7 +405,11 @@ pub fn stroke_polys(lines: &[(Vec<Pt>, bool)], width: f32, cap: u8, join: u8) ->
             ]));
         }
         // jointures
-        let joints: Vec<usize> = if *closed { (0..n).collect() } else { (1..n - 1).collect() };
+        let joints: Vec<usize> = if *closed {
+            (0..n).collect()
+        } else {
+            (1..n - 1).collect()
+        };
         for &j in &joints {
             let c = p[j];
             let n0 = normals[(j + segs - 1) % segs];

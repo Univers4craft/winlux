@@ -89,7 +89,11 @@ impl Huff {
             }
             code <<= 1;
         }
-        Some(Huff { counts, symbols, fast })
+        Some(Huff {
+            counts,
+            symbols,
+            fast,
+        })
     }
     fn decode(&self, b: &mut Bits) -> Option<u16> {
         // Lecture rapide si assez de bits sont disponibles.
@@ -121,8 +125,8 @@ impl Huff {
 }
 
 const LBASE: [u16; 29] = [
-    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115,
-    131, 163, 195, 227, 258,
+    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
+    163, 195, 227, 258,
 ];
 const LEXT: [u8; 29] = [
     0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
@@ -175,8 +179,9 @@ fn inflate_inner(data: &[u8], limit: usize) -> Option<(Vec<u8>, usize)> {
                     let hlit = b.get(5)? as usize + 257;
                     let hdist = b.get(5)? as usize + 1;
                     let hclen = b.get(4)? as usize + 4;
-                    const ORD: [usize; 19] =
-                        [16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15];
+                    const ORD: [usize; 19] = [
+                        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
+                    ];
                     let mut cl = [0u8; 19];
                     for &o in ORD.iter().take(hclen) {
                         cl[o] = b.get(3)? as u8;
@@ -248,7 +253,9 @@ fn inflate_inner(data: &[u8], limit: usize) -> Option<(Vec<u8>, usize)> {
 
 /// Décompresse un flux zlib (en-tête 2 octets + DEFLATE + Adler-32).
 pub fn inflate_zlib(data: &[u8], limit: usize) -> Option<Vec<u8>> {
-    if data.len() < 2 || data[0] & 0x0F != 8 || (((data[0] as u16) << 8) | data[1] as u16) % 31 != 0
+    if data.len() < 2
+        || data[0] & 0x0F != 8
+        || !(((data[0] as u16) << 8) | data[1] as u16).is_multiple_of(31)
     {
         // Certains fichiers (TIFF, PSD) écrivent parfois du DEFLATE brut.
         return inflate_raw(data, limit);

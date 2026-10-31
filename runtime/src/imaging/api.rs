@@ -51,7 +51,6 @@ unsafe fn put_latin1(s: &str, buf: *mut u8, cap: u32) -> u32 {
             0x2019 | 0x2018 => b'\'',
             0x201C | 0x201D => b'"',
             0x2013 | 0x2014 => b'-',
-            0x00D7 => 0xD7,
             _ => b'?',
         };
         *buf.add(n) = b;
@@ -176,7 +175,9 @@ pub unsafe extern "win64" fn winlux_image_info(h: usize, out: *mut ImageInfo) ->
 pub unsafe extern "win64" fn winlux_image_page(h: usize, page: u32, out: *mut PageInfo) -> i32 {
     let Some(l) = get(h) else { return 0 };
     let Ok(l) = l.lock() else { return 0 };
-    let Some(p) = l.img.pages.get(page as usize) else { return 0 };
+    let Some(p) = l.img.pages.get(page as usize) else {
+        return 0;
+    };
     if out.is_null() {
         return 0;
     }
@@ -198,15 +199,36 @@ pub unsafe extern "win64" fn winlux_image_page(h: usize, page: u32, out: *mut Pa
 /// Rend une page en BGRA 32 bits dans `out` (`stride` octets par ligne).
 /// `bg` = 0x00RRGGBB ; `flags` bit 0 : damier sous la transparence.
 #[allow(clippy::too_many_arguments)]
-pub unsafe extern "win64" fn winlux_image_render(h: usize, page: u32, view: *const ViewC, out: *mut u8, w: u32, hh: u32, stride: u32, bg: u32, flags: u32) -> i32 {
-    if out.is_null() || view.is_null() || w == 0 || hh == 0 || w > 16384 || hh > 16384 || stride < w * 4 {
+pub unsafe extern "win64" fn winlux_image_render(
+    h: usize,
+    page: u32,
+    view: *const ViewC,
+    out: *mut u8,
+    w: u32,
+    hh: u32,
+    stride: u32,
+    bg: u32,
+    flags: u32,
+) -> i32 {
+    if out.is_null()
+        || view.is_null()
+        || w == 0
+        || hh == 0
+        || w > 16384
+        || hh > 16384
+        || stride < w * 4
+    {
         return 0;
     }
     let Some(l) = get(h) else { return 0 };
     let Ok(mut l) = l.lock() else { return 0 };
     let v = *view;
     let vw = View {
-        zoom: if v.zoom.is_finite() && v.zoom > 0.0 { v.zoom.clamp(1e-4, 256.0) } else { 1.0 },
+        zoom: if v.zoom.is_finite() && v.zoom > 0.0 {
+            v.zoom.clamp(1e-4, 256.0)
+        } else {
+            1.0
+        },
         cx: v.cx,
         cy: v.cy,
         rot: (v.rot % 4) as u8,
@@ -219,28 +241,52 @@ pub unsafe extern "win64" fn winlux_image_render(h: usize, page: u32, view: *con
     };
     let buf = std::slice::from_raw_parts_mut(out, stride as usize * hh as usize);
     let bgc = [(bg >> 16) as u8, (bg >> 8) as u8, bg as u8];
-    l.render(page as usize, &vw, w as usize, hh as usize, stride as usize, buf, bgc, flags & 1 != 0);
+    l.render(
+        page as usize,
+        &vw,
+        w as usize,
+        hh as usize,
+        stride as usize,
+        buf,
+        bgc,
+        flags & 1 != 0,
+    );
     1
 }
 
 /// Métadonnée numéro `i` : clé stable (ex. « camera.model ») et valeur.
-pub unsafe extern "win64" fn winlux_image_meta(h: usize, i: u32, key: *mut u8, kcap: u32, val: *mut u8, vcap: u32) -> i32 {
+pub unsafe extern "win64" fn winlux_image_meta(
+    h: usize,
+    i: u32,
+    key: *mut u8,
+    kcap: u32,
+    val: *mut u8,
+    vcap: u32,
+) -> i32 {
     let Some(l) = get(h) else { return 0 };
     let Ok(l) = l.lock() else { return 0 };
-    let Some((k, v)) = l.img.meta.get(i as usize) else { return 0 };
+    let Some((k, v)) = l.img.meta.get(i as usize) else {
+        return 0;
+    };
     put_latin1(k, key, kcap);
     put_latin1(v, val, vcap);
     1
 }
 
 pub unsafe extern "win64" fn winlux_image_close(h: usize) -> i32 {
-    handles().lock().map(|mut m| m.remove(&h).is_some() as i32).unwrap_or(0)
+    handles()
+        .lock()
+        .map(|mut m| m.remove(&h).is_some() as i32)
+        .unwrap_or(0)
 }
 
 /// 1 si la visionneuse sait ouvrir ce fichier (d'après son extension).
 pub unsafe extern "win64" fn winlux_image_supported(path: *const u16) -> i32 {
     let Some(p) = path_of(path) else { return 0 };
-    let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let ext = p
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
     super::supported_ext(&ext) as i32
 }
 
@@ -297,8 +343,17 @@ fn fnv(s: &str) -> u64 {
 /// vignettes vidéo, préfixe distinct).
 pub fn thumb_key(p: &Path, size: u32) -> Option<String> {
     let m = std::fs::metadata(p).ok()?;
-    let mt = m.modified().ok()?.duration_since(std::time::UNIX_EPOCH).ok()?.as_secs();
-    Some(format!("img-{:016x}-{size}-{mt}-{}", fnv(&p.to_string_lossy()), m.len()))
+    let mt = m
+        .modified()
+        .ok()?
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+    Some(format!(
+        "img-{:016x}-{size}-{mt}-{}",
+        fnv(&p.to_string_lossy()),
+        m.len()
+    ))
 }
 
 pub fn cache_dir() -> PathBuf {
@@ -316,7 +371,10 @@ fn read_cache(key: &str, size: u32) -> Option<Option<Vec<u8>>> {
     if d.starts_with(b"WLTN") {
         return Some(None);
     }
-    if d.len() == 8 + (size * size * 4) as usize && d.starts_with(b"WLTB") && super::le32(&d, 4) == size {
+    if d.len() == 8 + (size * size * 4) as usize
+        && d.starts_with(b"WLTB")
+        && super::le32(&d, 4) == size
+    {
         return Some(Some(d[8..].to_vec()));
     }
     None
@@ -399,16 +457,25 @@ fn worker() {
 
 /// Vignette asynchrone : 1 = prête (`out` rempli, `size`×`size`×4 BGRA),
 /// 0 = en cours (redemander au prochain affichage), -1 = aucune vignette.
-pub unsafe extern "win64" fn winlux_image_thumbnail(path: *const u16, size: u32, out: *mut u8) -> i32 {
+pub unsafe extern "win64" fn winlux_image_thumbnail(
+    path: *const u16,
+    size: u32,
+    out: *mut u8,
+) -> i32 {
     if out.is_null() || !(16..=512).contains(&size) {
         return -1;
     }
     let Some(p) = path_of(path) else { return -1 };
-    let ext = p.extension().map(|e| e.to_string_lossy().to_ascii_lowercase()).unwrap_or_default();
+    let ext = p
+        .extension()
+        .map(|e| e.to_string_lossy().to_ascii_lowercase())
+        .unwrap_or_default();
     if !super::supported_ext(&ext) {
         return -1;
     }
-    let Some(key) = thumb_key(&p, size) else { return -1 };
+    let Some(key) = thumb_key(&p, size) else {
+        return -1;
+    };
     let (m, cv) = thumbs();
     let Ok(mut t) = m.lock() else { return -1 };
     if let Some(v) = t.ready.get(&key) {
@@ -432,7 +499,9 @@ pub unsafe extern "win64" fn winlux_image_thumbnail(path: *const u16, size: u32,
         }
         if t.workers < 2 {
             t.workers += 1;
-            let _ = std::thread::Builder::new().name("winlux-thumbs".into()).spawn(worker);
+            let _ = std::thread::Builder::new()
+                .name("winlux-thumbs".into())
+                .spawn(worker);
         }
         cv.notify_one();
     }

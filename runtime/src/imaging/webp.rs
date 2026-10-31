@@ -1,11 +1,14 @@
 //! WebP maison : conteneur RIFF (simple, étendu, animé), VP8L sans perte,
 //! VP8 avec perte (RFC 6386) et canal alpha ALPH.
+#![allow(clippy::needless_range_loop)]
 
 use super::vp8_tables::{AC_TABLE, BMODES_PROBA, COEFFS_PROBA0, COEFFS_UPDATE, DC_TABLE};
 use super::{le32, Error, Image, Page, Raster};
 
 fn le24(d: &[u8], p: usize) -> u32 {
-    d.get(p..p + 3).map(|b| b[0] as u32 | (b[1] as u32) << 8 | (b[2] as u32) << 16).unwrap_or(0)
+    d.get(p..p + 3)
+        .map(|b| b[0] as u32 | (b[1] as u32) << 8 | (b[2] as u32) << 16)
+        .unwrap_or(0)
 }
 
 pub fn decode(d: &[u8]) -> Result<Image, Error> {
@@ -45,7 +48,9 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
                 while q + 8 <= body.len() {
                     let sid = &body[q..q + 4];
                     let sl = le32(body, q + 4) as usize;
-                    let sb = body.get(q + 8..(q + 8 + sl).min(body.len())).ok_or(Error::Corrupt)?;
+                    let sb = body
+                        .get(q + 8..(q + 8 + sl).min(body.len()))
+                        .ok_or(Error::Corrupt)?;
                     q += 8 + sl + (sl & 1);
                     match sid {
                         b"ALPH" => fa = Some(sb),
@@ -75,7 +80,11 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
                     let (cx, cy) = (fx + x, fy + y);
                     if cx < cw && cy < ch {
                         let s = r.get(x, y);
-                        let v = if flags & 2 != 0 { s } else { super::over(s, canvas.get(cx, cy)) };
+                        let v = if flags & 2 != 0 {
+                            s
+                        } else {
+                            super::over(s, canvas.get(cx, cy))
+                        };
                         canvas.set(cx, cy, v);
                     }
                 }
@@ -108,7 +117,12 @@ struct LBits<'a> {
 
 impl<'a> LBits<'a> {
     fn new(d: &'a [u8]) -> Self {
-        LBits { d, pos: 0, acc: 0, n: 0 }
+        LBits {
+            d,
+            pos: 0,
+            acc: 0,
+            n: 0,
+        }
     }
     fn fill(&mut self) {
         while self.n <= 56 {
@@ -148,10 +162,16 @@ impl Code {
     fn from_lengths(lengths: &[u8]) -> Option<Code> {
         let nz: Vec<usize> = (0..lengths.len()).filter(|&i| lengths[i] > 0).collect();
         if nz.is_empty() {
-            return Some(Code { single: Some(0), ..Default::default() });
+            return Some(Code {
+                single: Some(0),
+                ..Default::default()
+            });
         }
         if nz.len() == 1 {
-            return Some(Code { single: Some(nz[0] as u16), ..Default::default() });
+            return Some(Code {
+                single: Some(nz[0] as u16),
+                ..Default::default()
+            });
         }
         let mut counts = [0u16; 16];
         for &l in lengths {
@@ -191,7 +211,12 @@ impl Code {
             }
             code <<= 1;
         }
-        Some(Code { fast, counts, symbols, single: None })
+        Some(Code {
+            fast,
+            counts,
+            symbols,
+            single: None,
+        })
     }
     fn read(&self, b: &mut LBits) -> u16 {
         if let Some(s) = self.single {
@@ -211,7 +236,11 @@ impl Code {
             code |= b.get(1) as i32;
             let count = self.counts[len] as i32;
             if code - count < first {
-                return self.symbols.get((index + (code - first)) as usize).copied().unwrap_or(0);
+                return self
+                    .symbols
+                    .get((index + (code - first)) as usize)
+                    .copied()
+                    .unwrap_or(0);
             }
             index += count;
             first += count;
@@ -235,7 +264,9 @@ fn read_code(b: &mut LBits, alphabet: usize) -> Option<Code> {
         }
         return Code::from_lengths(&lengths);
     }
-    const ORDER: [usize; 19] = [17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+    const ORDER: [usize; 19] = [
+        17, 18, 0, 1, 2, 3, 4, 5, 16, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+    ];
     let ncl = b.get(4) as usize + 4;
     let mut cl = [0u8; 19];
     for &o in ORDER.iter().take(ncl) {
@@ -294,16 +325,126 @@ fn prefix_value(b: &mut LBits, sym: u32) -> u32 {
 }
 
 const DIST_MAP: [(i8, i8); 120] = [
-    (0, 1), (1, 0), (1, 1), (-1, 1), (0, 2), (2, 0), (1, 2), (-1, 2), (2, 1), (-2, 1), (2, 2), (-2, 2),
-    (0, 3), (3, 0), (1, 3), (-1, 3), (3, 1), (-3, 1), (2, 3), (-2, 3), (3, 2), (-3, 2), (0, 4), (4, 0),
-    (1, 4), (-1, 4), (4, 1), (-4, 1), (3, 3), (-3, 3), (2, 4), (-2, 4), (4, 2), (-4, 2), (0, 5), (3, 4),
-    (-3, 4), (4, 3), (-4, 3), (5, 0), (1, 5), (-1, 5), (5, 1), (-5, 1), (2, 5), (-2, 5), (5, 2), (-5, 2),
-    (4, 4), (-4, 4), (3, 5), (-3, 5), (5, 3), (-5, 3), (0, 6), (6, 0), (1, 6), (-1, 6), (6, 1), (-6, 1),
-    (2, 6), (-2, 6), (6, 2), (-6, 2), (4, 5), (-4, 5), (5, 4), (-5, 4), (3, 6), (-3, 6), (6, 3), (-6, 3),
-    (0, 7), (7, 0), (1, 7), (-1, 7), (5, 5), (-5, 5), (7, 1), (-7, 1), (4, 6), (-4, 6), (6, 4), (-6, 4),
-    (2, 7), (-2, 7), (7, 2), (-7, 2), (3, 7), (-3, 7), (7, 3), (-7, 3), (5, 6), (-5, 6), (6, 5), (-6, 5),
-    (8, 0), (4, 7), (-4, 7), (7, 4), (-7, 4), (8, 1), (8, 2), (6, 6), (-6, 6), (8, 3), (5, 7), (-5, 7),
-    (7, 5), (-7, 5), (8, 4), (6, 7), (-6, 7), (7, 6), (-7, 6), (8, 5), (7, 7), (-7, 7), (8, 6), (8, 7),
+    (0, 1),
+    (1, 0),
+    (1, 1),
+    (-1, 1),
+    (0, 2),
+    (2, 0),
+    (1, 2),
+    (-1, 2),
+    (2, 1),
+    (-2, 1),
+    (2, 2),
+    (-2, 2),
+    (0, 3),
+    (3, 0),
+    (1, 3),
+    (-1, 3),
+    (3, 1),
+    (-3, 1),
+    (2, 3),
+    (-2, 3),
+    (3, 2),
+    (-3, 2),
+    (0, 4),
+    (4, 0),
+    (1, 4),
+    (-1, 4),
+    (4, 1),
+    (-4, 1),
+    (3, 3),
+    (-3, 3),
+    (2, 4),
+    (-2, 4),
+    (4, 2),
+    (-4, 2),
+    (0, 5),
+    (3, 4),
+    (-3, 4),
+    (4, 3),
+    (-4, 3),
+    (5, 0),
+    (1, 5),
+    (-1, 5),
+    (5, 1),
+    (-5, 1),
+    (2, 5),
+    (-2, 5),
+    (5, 2),
+    (-5, 2),
+    (4, 4),
+    (-4, 4),
+    (3, 5),
+    (-3, 5),
+    (5, 3),
+    (-5, 3),
+    (0, 6),
+    (6, 0),
+    (1, 6),
+    (-1, 6),
+    (6, 1),
+    (-6, 1),
+    (2, 6),
+    (-2, 6),
+    (6, 2),
+    (-6, 2),
+    (4, 5),
+    (-4, 5),
+    (5, 4),
+    (-5, 4),
+    (3, 6),
+    (-3, 6),
+    (6, 3),
+    (-6, 3),
+    (0, 7),
+    (7, 0),
+    (1, 7),
+    (-1, 7),
+    (5, 5),
+    (-5, 5),
+    (7, 1),
+    (-7, 1),
+    (4, 6),
+    (-4, 6),
+    (6, 4),
+    (-6, 4),
+    (2, 7),
+    (-2, 7),
+    (7, 2),
+    (-7, 2),
+    (3, 7),
+    (-3, 7),
+    (7, 3),
+    (-7, 3),
+    (5, 6),
+    (-5, 6),
+    (6, 5),
+    (-6, 5),
+    (8, 0),
+    (4, 7),
+    (-4, 7),
+    (7, 4),
+    (-7, 4),
+    (8, 1),
+    (8, 2),
+    (6, 6),
+    (-6, 6),
+    (8, 3),
+    (5, 7),
+    (-5, 7),
+    (7, 5),
+    (-7, 5),
+    (8, 4),
+    (6, 7),
+    (-6, 7),
+    (7, 6),
+    (-7, 6),
+    (8, 5),
+    (7, 7),
+    (-7, 7),
+    (8, 6),
+    (8, 7),
 ];
 
 enum Transform {
@@ -343,7 +484,15 @@ fn decode_stream(b: &mut LBits, w: u32, h: u32, top: bool) -> Option<Vec<u32>> {
                     for i in 1..pal.len() {
                         pal[i] = add_px(pal[i], pal[i - 1]);
                     }
-                    let bits = if n <= 2 { 3 } else if n <= 4 { 2 } else if n <= 16 { 1 } else { 0 };
+                    let bits = if n <= 2 {
+                        3
+                    } else if n <= 4 {
+                        2
+                    } else if n <= 16 {
+                        1
+                    } else {
+                        0
+                    };
                     xsize = sub(xsize, bits);
                     transforms.push(Transform::Index(bits, pal));
                 }
@@ -354,7 +503,11 @@ fn decode_stream(b: &mut LBits, w: u32, h: u32, top: bool) -> Option<Vec<u32>> {
     if cache_bits > 11 {
         return None;
     }
-    let cache_size = if cache_bits > 0 { 1usize << cache_bits } else { 0 };
+    let cache_size = if cache_bits > 0 {
+        1usize << cache_bits
+    } else {
+        0
+    };
     let (meta_bits, meta) = if top && b.get(1) == 1 {
         let bits = b.get(3) + 2;
         let m = decode_stream(b, sub(xsize, bits), sub(h, bits), false)?;
@@ -362,7 +515,10 @@ fn decode_stream(b: &mut LBits, w: u32, h: u32, top: bool) -> Option<Vec<u32>> {
     } else {
         (0, None)
     };
-    let ngroups = meta.as_ref().map(|m| m.iter().map(|&p| (p >> 8) & 0xFFFF).max().unwrap_or(0) as usize + 1).unwrap_or(1);
+    let ngroups = meta
+        .as_ref()
+        .map(|m| m.iter().map(|&p| (p >> 8) & 0xFFFF).max().unwrap_or(0) as usize + 1)
+        .unwrap_or(1);
     if ngroups > 4096 {
         return None;
     }
@@ -382,12 +538,19 @@ fn decode_stream(b: &mut LBits, w: u32, h: u32, top: bool) -> Option<Vec<u32>> {
     let mut cache = vec![0u32; cache_size];
     let mut i = 0usize;
     let mut cached_upto = 0usize;
-    let mw = if meta.is_some() { sub(xsize, meta_bits) } else { 1 };
+    let mw = if meta.is_some() {
+        sub(xsize, meta_bits)
+    } else {
+        1
+    };
     while i < total {
         let x = (i % xsize as usize) as u32;
         let y = (i / xsize as usize) as u32;
         let g = match &meta {
-            Some(m) => &groups[((m[((y >> meta_bits) * mw + (x >> meta_bits)) as usize] >> 8) & 0xFFFF) as usize],
+            Some(m) => {
+                &groups[((m[((y >> meta_bits) * mw + (x >> meta_bits)) as usize] >> 8) & 0xFFFF)
+                    as usize]
+            }
             None => &groups[0],
         };
         let s = g[0].read(b) as u32;
@@ -449,7 +612,11 @@ fn decode_stream(b: &mut LBits, w: u32, h: u32, top: bool) -> Option<Vec<u32>> {
                 for y in 0..h as usize {
                     for x in 0..out_w as usize {
                         let packed = px[y * cur_w as usize + (x >> bits)];
-                        let idx = if *bits == 0 { (packed >> 8) & 0xFF } else { ((packed >> 8) >> ((x as u32 & ((1 << bits) - 1)) * bpp)) & mask };
+                        let idx = if *bits == 0 {
+                            (packed >> 8) & 0xFF
+                        } else {
+                            ((packed >> 8) >> ((x as u32 & ((1 << bits) - 1)) * bpp)) & mask
+                        };
                         out[y * out_w as usize + x] = pal.get(idx as usize).copied().unwrap_or(0);
                     }
                 }
@@ -497,7 +664,10 @@ fn decode_stream(b: &mut LBits, w: u32, h: u32, top: bool) -> Option<Vec<u32>> {
                         } else if x == 0 {
                             px[i - wu]
                         } else {
-                            let mode = (data[((y as u32 >> bits) * bw + (x as u32 >> bits)) as usize] >> 8) & 0xF;
+                            let mode = (data
+                                [((y as u32 >> bits) * bw + (x as u32 >> bits)) as usize]
+                                >> 8)
+                                & 0xF;
                             let l = px[i - 1];
                             let t = px[i - wu];
                             let tl = px[i - wu - 1];
@@ -579,7 +749,12 @@ fn predict(mode: u32, l: u32, t: u32, tl: u32, tr: u32) -> u32 {
 fn argb_raster(px: &[u32], w: u32, h: u32) -> Raster {
     let mut r = Raster::new(w, h);
     for (i, &p) in px.iter().enumerate().take((w * h) as usize) {
-        r.px[i * 4..i * 4 + 4].copy_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8, (p >> 24) as u8]);
+        r.px[i * 4..i * 4 + 4].copy_from_slice(&[
+            (p >> 16) as u8,
+            (p >> 8) as u8,
+            p as u8,
+            (p >> 24) as u8,
+        ]);
     }
     r
 }
@@ -628,7 +803,8 @@ fn apply_alpha(r: &mut Raster, a: &[u8]) -> Result<(), Error> {
                     match filt {
                         1 => al[i - 1] as i32,
                         2 => al[i - w] as i32,
-                        _ => (al[i - 1] as i32 + al[i - w] as i32 - al[i - w - 1] as i32).clamp(0, 255),
+                        _ => (al[i - 1] as i32 + al[i - w] as i32 - al[i - w - 1] as i32)
+                            .clamp(0, 255),
                     }
                 };
                 al[i] = al[i].wrapping_add(pred as u8);
@@ -655,7 +831,13 @@ impl<'a> Bool<'a> {
     fn new(d: &'a [u8]) -> Self {
         let b0 = d.first().copied().unwrap_or(0) as u32;
         let b1 = d.get(1).copied().unwrap_or(0) as u32;
-        Bool { d, p: 2, value: (b0 << 8) | b1, range: 255, count: 0 }
+        Bool {
+            d,
+            p: 2,
+            value: (b0 << 8) | b1,
+            range: 255,
+            count: 0,
+        }
     }
     fn bit(&mut self, prob: u8) -> bool {
         let split = 1 + (((self.range - 1) * prob as u32) >> 8);
@@ -729,14 +911,22 @@ fn large(b: &mut Bool, p: &[u8; 11]) -> i32 {
         let tab = [CAT3, CAT4, CAT5, CAT6][cat];
         let mut v = 0i32;
         for &t in tab {
-            v += v + b.bit(t) as i32;
+            v = 2 * v + b.bit(t) as i32;
         }
         v + 3 + (8 << cat)
     }
 }
 
 /// Lit les coefficients d'un bloc ; renvoie l'indice du dernier non nul + 1.
-fn coeffs(b: &mut Bool, pr: &Probas, t: usize, ctx: usize, dq: (i32, i32), first: usize, out: &mut [i32; 16]) -> usize {
+fn coeffs(
+    b: &mut Bool,
+    pr: &Probas,
+    t: usize,
+    ctx: usize,
+    dq: (i32, i32),
+    first: usize,
+    out: &mut [i32; 16],
+) -> usize {
     let mut n = first;
     let mut p = &pr[t][BANDS[n]][ctx];
     while n < 16 {
@@ -827,6 +1017,7 @@ fn iwht(inp: &[i32; 16]) -> [i32; 16] {
     out
 }
 
+#[allow(dead_code)]
 struct Mb {
     i4: bool,
     ymode: u8,
@@ -856,9 +1047,31 @@ fn avg2b(a: u8, b: u8) -> u8 {
 fn predict_block(pl: &mut Plane, x0: usize, y0: usize, size: usize, mode: u8) {
     let has_top = y0 > 0;
     let has_left = x0 > 0;
-    let top: Vec<u8> = (0..size).map(|i| if has_top { pl.px[(y0 - 1) * pl.w + x0 + i] } else { 127 }).collect();
-    let left: Vec<u8> = (0..size).map(|i| if has_left { pl.px[(y0 + i) * pl.w + x0 - 1] } else { 129 }).collect();
-    let tl = if !has_top { 127 } else if !has_left { 129 } else { pl.px[(y0 - 1) * pl.w + x0 - 1] };
+    let top: Vec<u8> = (0..size)
+        .map(|i| {
+            if has_top {
+                pl.px[(y0 - 1) * pl.w + x0 + i]
+            } else {
+                127
+            }
+        })
+        .collect();
+    let left: Vec<u8> = (0..size)
+        .map(|i| {
+            if has_left {
+                pl.px[(y0 + i) * pl.w + x0 - 1]
+            } else {
+                129
+            }
+        })
+        .collect();
+    let tl = if !has_top {
+        127
+    } else if !has_left {
+        129
+    } else {
+        pl.px[(y0 - 1) * pl.w + x0 - 1]
+    };
     let shift = if size == 16 { 4 } else { 3 };
     for y in 0..size {
         for x in 0..size {
@@ -866,9 +1079,20 @@ fn predict_block(pl: &mut Plane, x0: usize, y0: usize, size: usize, mode: u8) {
                 0 => {
                     // DC
                     match (has_top, has_left) {
-                        (true, true) => ((top.iter().map(|&v| v as u32).sum::<u32>() + left.iter().map(|&v| v as u32).sum::<u32>() + size as u32) >> (shift + 1)) as u8,
-                        (true, false) => ((top.iter().map(|&v| v as u32).sum::<u32>() + (size as u32 / 2)) >> shift) as u8,
-                        (false, true) => ((left.iter().map(|&v| v as u32).sum::<u32>() + (size as u32 / 2)) >> shift) as u8,
+                        (true, true) => {
+                            ((top.iter().map(|&v| v as u32).sum::<u32>()
+                                + left.iter().map(|&v| v as u32).sum::<u32>()
+                                + size as u32)
+                                >> (shift + 1)) as u8
+                        }
+                        (true, false) => {
+                            ((top.iter().map(|&v| v as u32).sum::<u32>() + (size as u32 / 2))
+                                >> shift) as u8
+                        }
+                        (false, true) => {
+                            ((left.iter().map(|&v| v as u32).sum::<u32>() + (size as u32 / 2))
+                                >> shift) as u8
+                        }
                         _ => 128,
                     }
                 }
@@ -902,11 +1126,16 @@ fn predict4(pl: &mut Plane, x0: usize, y0: usize, mode: u8, tr: [u8; 4]) {
     let x = if yi == 0 { 127 } else { at(pl, xi - 1, yi - 1) };
     let l: Vec<u8> = (0..4).map(|i| at(pl, xi - 1, yi + i)).collect();
     let (i, j, k, ll) = (l[0], l[1], l[2], l[3]);
-    let (a, b, c, d, e, f, g, h) = (top[0], top[1], top[2], top[3], top[4], top[5], top[6], top[7]);
+    let (a, b, c, d, e, f, g, h) = (
+        top[0], top[1], top[2], top[3], top[4], top[5], top[6], top[7],
+    );
     let mut o = [[0u8; 4]; 4]; // o[y][x]
     match mode {
         0 => {
-            let dc = ((top[..4].iter().map(|&v| v as u32).sum::<u32>() + l.iter().map(|&v| v as u32).sum::<u32>() + 4) >> 3) as u8;
+            let dc = ((top[..4].iter().map(|&v| v as u32).sum::<u32>()
+                + l.iter().map(|&v| v as u32).sum::<u32>()
+                + 4)
+                >> 3) as u8;
             o = [[dc; 4]; 4];
         }
         1 => {
@@ -921,14 +1150,27 @@ fn predict4(pl: &mut Plane, x0: usize, y0: usize, mode: u8, tr: [u8; 4]) {
             o = [v; 4];
         }
         3 => {
-            let v = [avg3(x, i, j), avg3(i, j, k), avg3(j, k, ll), avg3(k, ll, ll)];
+            let v = [
+                avg3(x, i, j),
+                avg3(i, j, k),
+                avg3(j, k, ll),
+                avg3(k, ll, ll),
+            ];
             for (yy, row) in o.iter_mut().enumerate() {
                 *row = [v[yy]; 4];
             }
         }
         6 => {
             // LD
-            let s = [avg3(a, b, c), avg3(b, c, d), avg3(c, d, e), avg3(d, e, f), avg3(e, f, g), avg3(f, g, h), avg3(g, h, h)];
+            let s = [
+                avg3(a, b, c),
+                avg3(b, c, d),
+                avg3(c, d, e),
+                avg3(d, e, f),
+                avg3(e, f, g),
+                avg3(f, g, h),
+                avg3(g, h, h),
+            ];
             for (yy, row) in o.iter_mut().enumerate() {
                 for (xx, v) in row.iter_mut().enumerate() {
                     *v = s[xx + yy];
@@ -937,7 +1179,15 @@ fn predict4(pl: &mut Plane, x0: usize, y0: usize, mode: u8, tr: [u8; 4]) {
         }
         4 => {
             // RD
-            let s = [avg3(j, k, ll), avg3(i, j, k), avg3(x, i, j), avg3(a, x, i), avg3(b, a, x), avg3(c, b, a), avg3(d, c, b)];
+            let s = [
+                avg3(j, k, ll),
+                avg3(i, j, k),
+                avg3(x, i, j),
+                avg3(a, x, i),
+                avg3(b, a, x),
+                avg3(c, b, a),
+                avg3(d, c, b),
+            ];
             for (yy, row) in o.iter_mut().enumerate() {
                 for (xx, v) in row.iter_mut().enumerate() {
                     *v = s[3 - yy + xx];
@@ -1033,7 +1283,7 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
         return Err(Error::Variant("VP8 interframe"));
     }
     let part0 = (tag >> 5) as usize;
-    if &d[3..6] != [0x9D, 0x01, 0x2A] {
+    if d[3..6] != [0x9D, 0x01, 0x2A] {
         return Err(Error::Corrupt);
     }
     let w = (super::le16(d, 6) & 0x3FFF) as u32;
@@ -1118,9 +1368,15 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
         };
         let y2ac = ((AC_TABLE[clip(q + dq[2], 127)] as i32 * 101_581) >> 16).max(8);
         *qm = [
-            (DC_TABLE[clip(q + dq[0], 127)] as i32, AC_TABLE[clip(q, 127)] as i32),
+            (
+                DC_TABLE[clip(q + dq[0], 127)] as i32,
+                AC_TABLE[clip(q, 127)] as i32,
+            ),
             (DC_TABLE[clip(q + dq[1], 127)] as i32 * 2, y2ac),
-            (DC_TABLE[clip(q + dq[3], 117)] as i32, AC_TABLE[clip(q + dq[4], 127)] as i32),
+            (
+                DC_TABLE[clip(q + dq[3], 117)] as i32,
+                AC_TABLE[clip(q + dq[4], 127)] as i32,
+            ),
         ];
     }
     let _refresh = b.flag();
@@ -1130,7 +1386,11 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
         for band in t.iter_mut() {
             for c in band.iter_mut() {
                 for p in c.iter_mut() {
-                    *p = if b.bit(COEFFS_UPDATE[k]) { b.lit(8) as u8 } else { COEFFS_PROBA0[k] };
+                    *p = if b.bit(COEFFS_UPDATE[k]) {
+                        b.lit(8) as u8
+                    } else {
+                        COEFFS_PROBA0[k]
+                    };
                     k += 1;
                 }
             }
@@ -1140,9 +1400,21 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
     let skip_p = if use_skip { b.lit(8) as u8 } else { 0 };
     let mbw = w.div_ceil(16) as usize;
     let mbh = h.div_ceil(16) as usize;
-    let mut yp = Plane { w: mbw * 16, h: mbh * 16, px: vec![0; mbw * mbh * 256] };
-    let mut up = Plane { w: mbw * 8, h: mbh * 8, px: vec![0; mbw * mbh * 64] };
-    let mut vp = Plane { w: mbw * 8, h: mbh * 8, px: vec![0; mbw * mbh * 64] };
+    let mut yp = Plane {
+        w: mbw * 16,
+        h: mbh * 16,
+        px: vec![0; mbw * mbh * 256],
+    };
+    let mut up = Plane {
+        w: mbw * 8,
+        h: mbh * 8,
+        px: vec![0; mbw * mbh * 64],
+    };
+    let mut vp = Plane {
+        w: mbw * 8,
+        h: mbh * 8,
+        px: vec![0; mbw * mbh * 64],
+    };
     let mut intra_t = vec![0u8; mbw * 4];
     // contextes non nuls : [y 4 bits, u 2 bits, v 2 bits, dc]
     let mut nz_top = vec![[false; 9]; mbw];
@@ -1165,7 +1437,16 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
             };
             let skip = use_skip && b.bit(skip_p);
             let i4 = !b.bit(145);
-            let mut mb = Mb { i4, ymode: 0, bmodes: [0; 16], uvmode: 0, segment, skip, coefs: vec![[0; 16]; 24], has: [false; 24] };
+            let mut mb = Mb {
+                i4,
+                ymode: 0,
+                bmodes: [0; 16],
+                uvmode: 0,
+                segment,
+                skip,
+                coefs: vec![[0; 16]; 24],
+                has: [false; 24],
+            };
             if !i4 {
                 // numérotation commune : 0 DC, 1 TM, 2 V, 3 H
                 let ym = if b.bit(156) {
@@ -1359,7 +1640,11 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
     if level > 0 {
         let mut strengths = [[(0i32, 0i32, 0i32); 2]; 4];
         for (s, st) in strengths.iter_mut().enumerate() {
-            let mut base = if use_seg { seg_lf[s] + if abs_delta { 0 } else { level } } else { level };
+            let mut base = if use_seg {
+                seg_lf[s] + if abs_delta { 0 } else { level }
+            } else {
+                level
+            };
             let _ = &mut base;
             for (i4, slot) in st.iter_mut().enumerate() {
                 let mut lv = base;
@@ -1377,7 +1662,13 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
                         il = il.min(9 - sharp);
                     }
                     let il = il.max(1);
-                    let hev = if lv >= 40 { 2 } else if lv >= 15 { 1 } else { 0 };
+                    let hev = if lv >= 40 {
+                        2
+                    } else if lv >= 15 {
+                        1
+                    } else {
+                        0
+                    };
                     *slot = (2 * lv + il, il, hev);
                 }
             }
@@ -1389,7 +1680,9 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
                 if limit == 0 {
                     continue;
                 }
-                filter_mb(&mut yp, &mut up, &mut vp, mx, my, limit, il, hev, inner, simple);
+                filter_mb(
+                    &mut yp, &mut up, &mut vp, mx, my, limit, il, hev, inner, simple,
+                );
             }
         }
     }
@@ -1398,7 +1691,9 @@ pub fn vp8(d: &[u8]) -> Result<Raster, Error> {
     let mut r = Raster::new(w, h);
     let cw = up.w as i32;
     let chh = up.h as i32;
-    let csample = |pl: &Plane, x: i32, y: i32| -> i32 { pl.px[(y.clamp(0, chh - 1) * cw + x.clamp(0, cw - 1)) as usize] as i32 };
+    let csample = |pl: &Plane, x: i32, y: i32| -> i32 {
+        pl.px[(y.clamp(0, chh - 1) * cw + x.clamp(0, cw - 1)) as usize] as i32
+    };
     for y in 0..h as i32 {
         for x in 0..w as i32 {
             let yy = yp.px[(y as usize) * yp.w + x as usize] as i32;
@@ -1448,7 +1743,12 @@ fn clip1(v: i32) -> u8 {
 }
 
 fn filter2(p: &mut [u8], i: usize, s: usize) {
-    let (p1, p0, q0, q1) = (p[i - 2 * s] as i32, p[i - s] as i32, p[i] as i32, p[i + s] as i32);
+    let (p1, p0, q0, q1) = (
+        p[i - 2 * s] as i32,
+        p[i - s] as i32,
+        p[i] as i32,
+        p[i + s] as i32,
+    );
     let a = 3 * (q0 - p0) + sclip1(p1 - q1);
     let a1 = sclip2((a + 4) >> 3);
     let a2 = sclip2((a + 3) >> 3);
@@ -1456,7 +1756,12 @@ fn filter2(p: &mut [u8], i: usize, s: usize) {
     p[i] = clip1(q0 - a1);
 }
 fn filter4(p: &mut [u8], i: usize, s: usize) {
-    let (p1, p0, q0, q1) = (p[i - 2 * s] as i32, p[i - s] as i32, p[i] as i32, p[i + s] as i32);
+    let (p1, p0, q0, q1) = (
+        p[i - 2 * s] as i32,
+        p[i - s] as i32,
+        p[i] as i32,
+        p[i + s] as i32,
+    );
     let a = 3 * (q0 - p0);
     let a1 = sclip2((a + 4) >> 3);
     let a2 = sclip2((a + 3) >> 3);
@@ -1481,11 +1786,21 @@ fn filter6(p: &mut [u8], i: usize, s: usize) {
     p[i + 2 * s] = clip1(q2 - a3);
 }
 fn hev(p: &[u8], i: usize, s: usize, t: i32) -> bool {
-    let (p1, p0, q0, q1) = (p[i - 2 * s] as i32, p[i - s] as i32, p[i] as i32, p[i + s] as i32);
+    let (p1, p0, q0, q1) = (
+        p[i - 2 * s] as i32,
+        p[i - s] as i32,
+        p[i] as i32,
+        p[i + s] as i32,
+    );
     (p1 - p0).abs() > t || (q1 - q0).abs() > t
 }
 fn needs(p: &[u8], i: usize, s: usize, t: i32) -> bool {
-    let (p1, p0, q0, q1) = (p[i - 2 * s] as i32, p[i - s] as i32, p[i] as i32, p[i + s] as i32);
+    let (p1, p0, q0, q1) = (
+        p[i - 2 * s] as i32,
+        p[i - s] as i32,
+        p[i] as i32,
+        p[i + s] as i32,
+    );
     4 * (p0 - q0).abs() + (p1 - q1).abs() <= t
 }
 fn needs2(p: &[u8], i: usize, s: usize, t: i32, it: i32) -> bool {
@@ -1494,13 +1809,28 @@ fn needs2(p: &[u8], i: usize, s: usize, t: i32, it: i32) -> bool {
     if 4 * (p0 - q0).abs() + (p1 - q1).abs() > t {
         return false;
     }
-    (p3 - p2).abs() <= it && (p2 - p1).abs() <= it && (p1 - p0).abs() <= it && (q3 - q2).abs() <= it && (q2 - q1).abs() <= it && (q1 - q0).abs() <= it
+    (p3 - p2).abs() <= it
+        && (p2 - p1).abs() <= it
+        && (p1 - p0).abs() <= it
+        && (q3 - q2).abs() <= it
+        && (q2 - q1).abs() <= it
+        && (q1 - q0).abs() <= it
 }
 
 /// Filtre une arête : `start` premier pixel côté q, `step` à travers
 /// l'arête, `along` le long de l'arête, `n` pixels.
 #[allow(clippy::too_many_arguments)]
-fn edge(p: &mut [u8], start: usize, step: usize, along: usize, n: usize, thresh: i32, it: i32, hevt: i32, mb_edge: bool) {
+fn edge(
+    p: &mut [u8],
+    start: usize,
+    step: usize,
+    along: usize,
+    n: usize,
+    thresh: i32,
+    it: i32,
+    hevt: i32,
+    mb_edge: bool,
+) {
     let t2 = 2 * thresh + 1;
     for k in 0..n {
         let i = start + k * along;
@@ -1527,7 +1857,18 @@ fn simple_edge(p: &mut [u8], start: usize, step: usize, along: usize, n: usize, 
 }
 
 #[allow(clippy::too_many_arguments)]
-fn filter_mb(y: &mut Plane, u: &mut Plane, v: &mut Plane, mx: usize, my: usize, limit: i32, il: i32, hevt: i32, inner: bool, simple: bool) {
+fn filter_mb(
+    y: &mut Plane,
+    u: &mut Plane,
+    v: &mut Plane,
+    mx: usize,
+    my: usize,
+    limit: i32,
+    il: i32,
+    hevt: i32,
+    inner: bool,
+    simple: bool,
+) {
     let yw = y.w;
     let yo = my * 16 * yw + mx * 16;
     if simple {
@@ -1570,7 +1911,17 @@ fn filter_mb(y: &mut Plane, u: &mut Plane, v: &mut Plane, mx: usize, my: usize, 
     }
     if inner {
         for k in 1..4 {
-            edge(&mut y.px, yo + 4 * k * yw, yw, 1, 16, limit, il, hevt, false);
+            edge(
+                &mut y.px,
+                yo + 4 * k * yw,
+                yw,
+                1,
+                16,
+                limit,
+                il,
+                hevt,
+                false,
+            );
         }
         edge(&mut u.px, co + 4 * cw, cw, 1, 8, limit, il, hevt, false);
         edge(&mut v.px, co + 4 * cw, cw, 1, 8, limit, il, hevt, false);

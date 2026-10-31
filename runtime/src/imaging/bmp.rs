@@ -45,7 +45,11 @@ pub fn dib(d: &[u8], pixel_off: Option<usize>, icon: bool) -> Result<Raster, Err
     let mut pal_off = hs;
     if comp == 3 || comp == 6 {
         if hs >= 52 {
-            for (i, m) in masks.iter_mut().enumerate().take(if hs >= 56 { 4 } else { 3 }) {
+            for (i, m) in masks
+                .iter_mut()
+                .enumerate()
+                .take(if hs >= 56 { 4 } else { 3 })
+            {
                 *m = le32(d, 40 + i * 4);
             }
         } else {
@@ -142,7 +146,11 @@ pub fn dib(d: &[u8], pixel_off: Option<usize>, icon: bool) -> Result<Raster, Err
                             put(&mut r, x + k as u32, y, v as usize);
                         }
                         x += n as u32;
-                        let used = if comp == 1 { n as usize } else { (n as usize).div_ceil(2) };
+                        let used = if comp == 1 {
+                            n as usize
+                        } else {
+                            (n as usize).div_ceil(2)
+                        };
                         i += used + (used & 1);
                     }
                 }
@@ -152,7 +160,9 @@ pub fn dib(d: &[u8], pixel_off: Option<usize>, icon: bool) -> Result<Raster, Err
     }
     let mut any_alpha = false;
     for y in 0..h {
-        let row = px.get(y as usize * stride..(y as usize + 1) * stride).unwrap_or(&[]);
+        let row = px
+            .get(y as usize * stride..(y as usize + 1) * stride)
+            .unwrap_or(&[]);
         for x in 0..w {
             let c = match bpp {
                 1 | 2 | 4 | 8 => {
@@ -206,7 +216,10 @@ pub fn dib(d: &[u8], pixel_off: Option<usize>, icon: bool) -> Result<Raster, Err
         let mo = stride * h as usize;
         for y in 0..h {
             for x in 0..w {
-                let b = px.get(mo + y as usize * mstride + x as usize / 8).copied().unwrap_or(0);
+                let b = px
+                    .get(mo + y as usize * mstride + x as usize / 8)
+                    .copied()
+                    .unwrap_or(0);
                 if (b >> (7 - x % 8)) & 1 == 1 {
                     let ry = row_of(y);
                     let mut c = r.get(x, ry);
@@ -289,7 +302,11 @@ pub fn decode_icns(d: &[u8]) -> Result<Image, Error> {
             }
             _ => continue,
         };
-        let data = if typ == b"it32" { body.get(4..).unwrap_or(&[]) } else { body };
+        let data = if typ == b"it32" {
+            body.get(4..).unwrap_or(&[])
+        } else {
+            body
+        };
         if let Some(mut r) = icns_rle(data, side, 3) {
             // masque alpha séparé (s8mk, l8mk, h8mk, t8mk) : appliqué si présent
             let mk: &[u8] = match side {

@@ -65,7 +65,11 @@ impl<'a> Tiff<'a> {
             let typ = self.u16(e + 2)?;
             let count = self.u32(e + 4)?;
             let size = type_size(typ) * count as usize;
-            let at = if size <= 4 { e + 8 } else { self.u32(e + 8)? as usize };
+            let at = if size <= 4 {
+                e + 8
+            } else {
+                self.u32(e + 8)? as usize
+            };
             v.push(Entry {
                 tag,
                 typ,
@@ -132,7 +136,7 @@ fn type_size(t: u16) -> usize {
     }
 }
 
-pub fn find<'e>(ifd: &'e [Entry], tag: u16) -> Option<&'e Entry> {
+pub fn find(ifd: &[Entry], tag: u16) -> Option<&Entry> {
     ifd.iter().find(|e| e.tag == tag)
 }
 
@@ -265,7 +269,9 @@ pub fn decode_ifd(t: &Tiff, ifd: &[Entry]) -> Result<Raster, Error> {
                 let mut buf = match comp {
                     1 => src.to_vec(),
                     5 => lzw(src, need),
-                    8 | 32946 => super::inflate::inflate_zlib(src, need * 2 + 64).unwrap_or_default(),
+                    8 | 32946 => {
+                        super::inflate::inflate_zlib(src, need * 2 + 64).unwrap_or_default()
+                    }
                     32773 => packbits(src, need),
                     2..=4 => return Err(Error::Variant("TIFF CCITT")),
                     _ => return Err(Error::Variant("TIFF compression")),
@@ -288,7 +294,11 @@ pub fn decode_ifd(t: &Tiff, ifd: &[Entry]) -> Result<Raster, Error> {
                                     }
                                 };
                                 let v = rd(i).wrapping_add(rd(i - chunk_spp));
-                                let b = if t.le { v.to_le_bytes() } else { v.to_be_bytes() };
+                                let b = if t.le {
+                                    v.to_le_bytes()
+                                } else {
+                                    v.to_be_bytes()
+                                };
                                 row[i * 2] = b[0];
                                 row[i * 2 + 1] = b[1];
                             }
@@ -327,11 +337,19 @@ pub fn decode_ifd(t: &Tiff, ifd: &[Entry]) -> Result<Raster, Error> {
                 if photo == 0 {
                     g = 255 - g;
                 }
-                let a = if has_alpha && spp >= 2 { maxv(s[1]) } else { 255 };
+                let a = if has_alpha && spp >= 2 {
+                    maxv(s[1])
+                } else {
+                    255
+                };
                 [g, g, g, a]
             }
             2 if spp >= 3 => {
-                let a = if has_alpha && spp >= 4 { maxv(s[3]) } else { 255 };
+                let a = if has_alpha && spp >= 4 {
+                    maxv(s[3])
+                } else {
+                    255
+                };
                 [maxv(s[0]), maxv(s[1]), maxv(s[2]), a]
             }
             3 => {
@@ -354,9 +372,18 @@ pub fn decode_ifd(t: &Tiff, ifd: &[Entry]) -> Result<Raster, Error> {
                 [f(s[0]), f(s[1]), f(s[2]), 255]
             }
             6 if spp >= 3 => {
-                let (y, cb, cr) = (maxv(s[0]) as f32, maxv(s[1]) as f32 - 128.0, maxv(s[2]) as f32 - 128.0);
+                let (y, cb, cr) = (
+                    maxv(s[0]) as f32,
+                    maxv(s[1]) as f32 - 128.0,
+                    maxv(s[2]) as f32 - 128.0,
+                );
                 let c = |v: f32| v.round().clamp(0.0, 255.0) as u8;
-                [c(y + 1.402 * cr), c(y - 0.344 * cb - 0.714 * cr), c(y + 1.772 * cb), 255]
+                [
+                    c(y + 1.402 * cr),
+                    c(y - 0.344 * cb - 0.714 * cr),
+                    c(y + 1.772 * cb),
+                    255,
+                ]
             }
             _ => return Err(Error::Variant("TIFF photométrie")),
         };
@@ -369,7 +396,10 @@ fn read_sample(row: &[u8], i: usize, bps: usize, fmt: u32, le: bool) -> u16 {
     match bps {
         8 => *row.get(i).unwrap_or(&0) as u16 * 257,
         16 => {
-            let b = [*row.get(i * 2).unwrap_or(&0), *row.get(i * 2 + 1).unwrap_or(&0)];
+            let b = [
+                *row.get(i * 2).unwrap_or(&0),
+                *row.get(i * 2 + 1).unwrap_or(&0),
+            ];
             if le {
                 u16::from_le_bytes(b)
             } else {
@@ -383,7 +413,11 @@ fn read_sample(row: &[u8], i: usize, bps: usize, fmt: u32, le: bool) -> u16 {
                 *row.get(i * 4 + 2).unwrap_or(&0),
                 *row.get(i * 4 + 3).unwrap_or(&0),
             ];
-            let u = if le { u32::from_le_bytes(b) } else { u32::from_be_bytes(b) };
+            let u = if le {
+                u32::from_le_bytes(b)
+            } else {
+                u32::from_be_bytes(b)
+            };
             if fmt == 3 {
                 (super::tonemap(f32::from_bits(u)) * 65535.0) as u16
             } else {
@@ -567,7 +601,7 @@ pub fn raw_preview(data: &[u8], format: &'static str) -> Result<Image, Error> {
     img.raw = true;
     img.embedded_preview = true;
     let mut best: Option<Raster> = None;
-    let mut consider = |r: Raster, best: &mut Option<Raster>| {
+    let consider = |r: Raster, best: &mut Option<Raster>| {
         if best
             .as_ref()
             .is_none_or(|b| (r.w as u64 * r.h as u64) > (b.w as u64 * b.h as u64))

@@ -16,7 +16,10 @@ pub struct Node {
 
 impl Node {
     pub fn attr(&self, k: &str) -> Option<&str> {
-        self.attrs.iter().find(|(n, _)| n == k).map(|(_, v)| v.as_str())
+        self.attrs
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.as_str())
     }
 }
 
@@ -39,7 +42,9 @@ pub fn unescape(s: &str) -> String {
             "gt" => Some('>'),
             "quot" => Some('"'),
             "apos" => Some('\''),
-            _ if ent.starts_with("#x") => u32::from_str_radix(&ent[2..], 16).ok().and_then(char::from_u32),
+            _ if ent.starts_with("#x") => u32::from_str_radix(&ent[2..], 16)
+                .ok()
+                .and_then(char::from_u32),
             _ if ent.starts_with('#') => ent[1..].parse().ok().and_then(char::from_u32),
             _ => None,
         };
@@ -185,11 +190,7 @@ pub fn parse_xml(s: &str) -> Option<Node> {
 }
 
 fn strip_ns(n: &str) -> &str {
-    if n.starts_with("svg:") {
-        &n[4..]
-    } else {
-        n
-    }
+    n.strip_prefix("svg:").unwrap_or(n)
 }
 
 pub fn parse_color(s: &str) -> Option<[u8; 4]> {
@@ -204,7 +205,12 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
                 let a = if h.len() == 4 { v(3, 1)? * 17 } else { 255 };
                 Some([r, g, b, a])
             }
-            6 | 8 => Some([v(0, 2)?, v(2, 2)?, v(4, 2)?, if h.len() == 8 { v(6, 2)? } else { 255 }]),
+            6 | 8 => Some([
+                v(0, 2)?,
+                v(2, 2)?,
+                v(4, 2)?,
+                if h.len() == 8 { v(6, 2)? } else { 255 },
+            ]),
             12 => Some([v(0, 2)?, v(4, 2)?, v(8, 2)?, 255]),
             _ => None,
         };
@@ -212,7 +218,10 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
     let l = s.to_ascii_lowercase();
     if l.starts_with("rgb") || l.starts_with("hsl") {
         let inner = l.split_once('(')?.1.trim_end_matches(')');
-        let parts: Vec<&str> = inner.split(|c| c == ',' || c == ' ' || c == '/').filter(|p| !p.is_empty()).collect();
+        let parts: Vec<&str> = inner
+            .split([',', ' ', '/'])
+            .filter(|p| !p.is_empty())
+            .collect();
         let num = |p: &str, scale: f32| -> f32 {
             if let Some(v) = p.strip_suffix('%') {
                 v.parse::<f32>().unwrap_or(0.0) * scale / 100.0
@@ -220,12 +229,16 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
                 p.parse::<f32>().unwrap_or(0.0)
             }
         };
-        let a = parts.get(3).map(|p| if p.ends_with('%') { num(p, 1.0) } else { num(p, 1.0) }).unwrap_or(1.0);
+        let a = parts.get(3).map(|p| num(p, 1.0)).unwrap_or(1.0);
         if l.starts_with("hsl") {
             let h = num(parts.first()?, 360.0).rem_euclid(360.0) / 360.0;
             let sat = num(parts.get(1)?, 1.0);
             let lig = num(parts.get(2)?, 1.0);
-            let q = if lig < 0.5 { lig * (1.0 + sat) } else { lig + sat - lig * sat };
+            let q = if lig < 0.5 {
+                lig * (1.0 + sat)
+            } else {
+                lig + sat - lig * sat
+            };
             let p = 2.0 * lig - q;
             let f = |t: f32| {
                 let t = t.rem_euclid(1.0);
@@ -242,34 +255,88 @@ pub fn parse_color(s: &str) -> Option<[u8; 4]> {
             };
             return Some([f(h + 1.0 / 3.0), f(h), f(h - 1.0 / 3.0), (a * 255.0) as u8]);
         }
-        let c = |i: usize| -> Option<u8> { Some(num(parts.get(i)?, 255.0).round().clamp(0.0, 255.0) as u8) };
+        let c = |i: usize| -> Option<u8> {
+            Some(num(parts.get(i)?, 255.0).round().clamp(0.0, 255.0) as u8)
+        };
         return Some([c(0)?, c(1)?, c(2)?, (a.clamp(0.0, 1.0) * 255.0) as u8]);
     }
     let named: &[(&str, u32)] = &[
-        ("black", 0x000000), ("white", 0xFFFFFF), ("red", 0xFF0000), ("green", 0x008000),
-        ("blue", 0x0000FF), ("yellow", 0xFFFF00), ("cyan", 0x00FFFF), ("aqua", 0x00FFFF),
-        ("magenta", 0xFF00FF), ("fuchsia", 0xFF00FF), ("gray", 0x808080), ("grey", 0x808080),
-        ("silver", 0xC0C0C0), ("maroon", 0x800000), ("olive", 0x808000), ("lime", 0x00FF00),
-        ("teal", 0x008080), ("navy", 0x000080), ("purple", 0x800080), ("orange", 0xFFA500),
-        ("pink", 0xFFC0CB), ("brown", 0xA52A2A), ("gold", 0xFFD700), ("darkgray", 0xA9A9A9),
-        ("darkgrey", 0xA9A9A9), ("lightgray", 0xD3D3D3), ("lightgrey", 0xD3D3D3),
-        ("darkblue", 0x00008B), ("darkred", 0x8B0000), ("darkgreen", 0x006400),
-        ("lightblue", 0xADD8E6), ("skyblue", 0x87CEEB), ("steelblue", 0x4682B4),
-        ("royalblue", 0x4169E1), ("crimson", 0xDC143C), ("tomato", 0xFF6347), ("coral", 0xFF7F50),
-        ("salmon", 0xFA8072), ("khaki", 0xF0E68C), ("violet", 0xEE82EE), ("indigo", 0x4B0082),
-        ("tan", 0xD2B48C), ("beige", 0xF5F5DC), ("ivory", 0xFFFFF0), ("wheat", 0xF5DEB3),
-        ("chocolate", 0xD2691E), ("firebrick", 0xB22222), ("forestgreen", 0x228B22),
-        ("seagreen", 0x2E8B57), ("limegreen", 0x32CD32), ("darkorange", 0xFF8C00),
-        ("dodgerblue", 0x1E90FF), ("deepskyblue", 0x00BFFF), ("slategray", 0x708090),
-        ("dimgray", 0x696969), ("whitesmoke", 0xF5F5F5), ("gainsboro", 0xDCDCDC),
-        ("lavender", 0xE6E6FA), ("plum", 0xDDA0DD), ("orchid", 0xDA70D6), ("turquoise", 0x40E0D0),
-        ("midnightblue", 0x191970), ("darkslategray", 0x2F4F4F), ("goldenrod", 0xDAA520),
-        ("sienna", 0xA0522D), ("peru", 0xCD853F), ("hotpink", 0xFF69B4), ("deeppink", 0xFF1493),
+        ("black", 0x000000),
+        ("white", 0xFFFFFF),
+        ("red", 0xFF0000),
+        ("green", 0x008000),
+        ("blue", 0x0000FF),
+        ("yellow", 0xFFFF00),
+        ("cyan", 0x00FFFF),
+        ("aqua", 0x00FFFF),
+        ("magenta", 0xFF00FF),
+        ("fuchsia", 0xFF00FF),
+        ("gray", 0x808080),
+        ("grey", 0x808080),
+        ("silver", 0xC0C0C0),
+        ("maroon", 0x800000),
+        ("olive", 0x808000),
+        ("lime", 0x00FF00),
+        ("teal", 0x008080),
+        ("navy", 0x000080),
+        ("purple", 0x800080),
+        ("orange", 0xFFA500),
+        ("pink", 0xFFC0CB),
+        ("brown", 0xA52A2A),
+        ("gold", 0xFFD700),
+        ("darkgray", 0xA9A9A9),
+        ("darkgrey", 0xA9A9A9),
+        ("lightgray", 0xD3D3D3),
+        ("lightgrey", 0xD3D3D3),
+        ("darkblue", 0x00008B),
+        ("darkred", 0x8B0000),
+        ("darkgreen", 0x006400),
+        ("lightblue", 0xADD8E6),
+        ("skyblue", 0x87CEEB),
+        ("steelblue", 0x4682B4),
+        ("royalblue", 0x4169E1),
+        ("crimson", 0xDC143C),
+        ("tomato", 0xFF6347),
+        ("coral", 0xFF7F50),
+        ("salmon", 0xFA8072),
+        ("khaki", 0xF0E68C),
+        ("violet", 0xEE82EE),
+        ("indigo", 0x4B0082),
+        ("tan", 0xD2B48C),
+        ("beige", 0xF5F5DC),
+        ("ivory", 0xFFFFF0),
+        ("wheat", 0xF5DEB3),
+        ("chocolate", 0xD2691E),
+        ("firebrick", 0xB22222),
+        ("forestgreen", 0x228B22),
+        ("seagreen", 0x2E8B57),
+        ("limegreen", 0x32CD32),
+        ("darkorange", 0xFF8C00),
+        ("dodgerblue", 0x1E90FF),
+        ("deepskyblue", 0x00BFFF),
+        ("slategray", 0x708090),
+        ("dimgray", 0x696969),
+        ("whitesmoke", 0xF5F5F5),
+        ("gainsboro", 0xDCDCDC),
+        ("lavender", 0xE6E6FA),
+        ("plum", 0xDDA0DD),
+        ("orchid", 0xDA70D6),
+        ("turquoise", 0x40E0D0),
+        ("midnightblue", 0x191970),
+        ("darkslategray", 0x2F4F4F),
+        ("goldenrod", 0xDAA520),
+        ("sienna", 0xA0522D),
+        ("peru", 0xCD853F),
+        ("hotpink", 0xFF69B4),
+        ("deeppink", 0xFF1493),
     ];
     if l == "transparent" || l == "none" {
         return Some([0, 0, 0, 0]);
     }
-    named.iter().find(|(n, _)| *n == l).map(|(_, v)| [(v >> 16) as u8, (v >> 8) as u8, *v as u8, 255])
+    named
+        .iter()
+        .find(|(n, _)| *n == l)
+        .map(|(_, v)| [(v >> 16) as u8, (v >> 8) as u8, *v as u8, 255])
 }
 
 fn nums(s: &str) -> Vec<f32> {
@@ -312,7 +379,12 @@ fn nums(s: &str) -> Vec<f32> {
 
 fn length(s: Option<&str>, rel: f32) -> Option<f32> {
     let s = s?.trim();
-    let n: String = s.chars().take_while(|c| c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E').collect();
+    let n: String = s
+        .chars()
+        .take_while(|c| {
+            c.is_ascii_digit() || *c == '.' || *c == '-' || *c == '+' || *c == 'e' || *c == 'E'
+        })
+        .collect();
     let v: f32 = n.parse().ok()?;
     let unit = s[n.len()..].trim();
     Some(match unit {
@@ -346,7 +418,9 @@ fn transform(s: &str) -> Mat {
                 let a = g(0, 0.0).to_radians();
                 let r = Mat([a.cos(), a.sin(), -a.sin(), a.cos(), 0.0, 0.0]);
                 if v.len() >= 3 {
-                    Mat::translate(v[1], v[2]).mul(&r).mul(&Mat::translate(-v[1], -v[2]))
+                    Mat::translate(v[1], v[2])
+                        .mul(&r)
+                        .mul(&Mat::translate(-v[1], -v[2]))
                 } else {
                     r
                 }
@@ -369,7 +443,16 @@ pub enum Seg {
     Close,
 }
 
-fn arc_to(out: &mut Vec<Seg>, p0: Pt, rx: f32, ry: f32, phi: f32, large: bool, sweep: bool, p1: Pt) {
+fn arc_to(
+    out: &mut Vec<Seg>,
+    p0: Pt,
+    rx: f32,
+    ry: f32,
+    phi: f32,
+    large: bool,
+    sweep: bool,
+    p1: Pt,
+) {
     let (mut rx, mut ry) = (rx.abs(), ry.abs());
     if rx < 1e-6 || ry < 1e-6 {
         out.push(Seg::Line(p1));
@@ -405,18 +488,26 @@ fn arc_to(out: &mut Vec<Seg>, p0: Pt, rx: f32, ry: f32, phi: f32, large: bool, s
         }
     };
     let t1 = ang(1.0, 0.0, (x1 - cx1) / rx, (y1 - cy1) / ry);
-    let mut dt = ang((x1 - cx1) / rx, (y1 - cy1) / ry, (-x1 - cx1) / rx, (-y1 - cy1) / ry);
+    let mut dt = ang(
+        (x1 - cx1) / rx,
+        (y1 - cy1) / ry,
+        (-x1 - cx1) / rx,
+        (-y1 - cy1) / ry,
+    );
     if !sweep && dt > 0.0 {
         dt -= std::f32::consts::TAU;
     } else if sweep && dt < 0.0 {
         dt += std::f32::consts::TAU;
     }
-    let n = (dt.abs() / (std::f32::consts::FRAC_PI_2) ).ceil().max(1.0) as usize;
+    let n = (dt.abs() / (std::f32::consts::FRAC_PI_2)).ceil().max(1.0) as usize;
     let step = dt / n as f32;
     let alpha = 4.0 / 3.0 * (step / 4.0).tan();
     let pt = |t: f32| {
         let (st, ct) = t.sin_cos();
-        (cx + rx * ct * c - ry * st * s, cy + rx * ct * s + ry * st * c)
+        (
+            cx + rx * ct * c - ry * st * s,
+            cy + rx * ct * s + ry * st * c,
+        )
     };
     let der = |t: f32| {
         let (st, ct) = t.sin_cos();
@@ -444,7 +535,7 @@ pub fn parse_path(d: &str) -> Vec<Seg> {
     let mut start: Pt = (0.0, 0.0);
     let mut last_ctrl: Option<Pt> = None;
     let mut last_q: Option<Pt> = None;
-    let mut num = |i: &mut usize| -> Option<f32> {
+    let num = |i: &mut usize| -> Option<f32> {
         while *i < b.len() && (b[*i].is_ascii_whitespace() || b[*i] == b',') {
             *i += 1;
         }
@@ -571,7 +662,7 @@ pub fn parse_path(d: &str) -> Vec<Seg> {
                 last_q = None;
             }
             b'Q' | b'T' => {
-                let q = if cmd.to_ascii_uppercase() == b'Q' {
+                let q = if cmd.eq_ignore_ascii_case(&b'Q') {
                     let (x, y) = (n!(), n!());
                     (base.0 + x, base.1 + y)
                 } else {
@@ -582,8 +673,14 @@ pub fn parse_path(d: &str) -> Vec<Seg> {
                 };
                 let (x, y) = (n!(), n!());
                 let end = (base.0 + x, base.1 + y);
-                let c1 = (cur.0 + 2.0 / 3.0 * (q.0 - cur.0), cur.1 + 2.0 / 3.0 * (q.1 - cur.1));
-                let c2 = (end.0 + 2.0 / 3.0 * (q.0 - end.0), end.1 + 2.0 / 3.0 * (q.1 - end.1));
+                let c1 = (
+                    cur.0 + 2.0 / 3.0 * (q.0 - cur.0),
+                    cur.1 + 2.0 / 3.0 * (q.1 - cur.1),
+                );
+                let c2 = (
+                    end.0 + 2.0 / 3.0 * (q.0 - end.0),
+                    end.1 + 2.0 / 3.0 * (q.1 - end.1),
+                );
                 out.push(Seg::Cubic(c1, c2, end));
                 cur = end;
                 last_q = Some(q);
@@ -653,7 +750,12 @@ impl Default for Style {
 }
 
 fn f4(c: [u8; 4]) -> [f32; 4] {
-    [c[0] as f32 / 255.0, c[1] as f32 / 255.0, c[2] as f32 / 255.0, c[3] as f32 / 255.0]
+    [
+        c[0] as f32 / 255.0,
+        c[1] as f32 / 255.0,
+        c[2] as f32 / 255.0,
+        c[3] as f32 / 255.0,
+    ]
 }
 
 #[derive(Clone, Debug)]
@@ -728,7 +830,10 @@ fn decls(s: &str) -> Vec<(String, String)> {
     s.split(';')
         .filter_map(|d| {
             let (k, v) = d.split_once(':')?;
-            Some((k.trim().to_string(), v.trim().trim_end_matches("!important").trim().to_string()))
+            Some((
+                k.trim().to_string(),
+                v.trim().trim_end_matches("!important").trim().to_string(),
+            ))
         })
         .collect()
 }
@@ -736,7 +841,10 @@ fn decls(s: &str) -> Vec<(String, String)> {
 impl<'a> Builder<'a> {
     fn props(&self, n: &Node) -> Vec<(String, String)> {
         let mut p: Vec<(String, String)> = n.attrs.clone();
-        let classes: Vec<&str> = n.attr("class").map(|c| c.split_whitespace().collect()).unwrap_or_default();
+        let classes: Vec<&str> = n
+            .attr("class")
+            .map(|c| c.split_whitespace().collect())
+            .unwrap_or_default();
         for (sel, d) in &self.css {
             let hit = if let Some(c) = sel.strip_prefix('.') {
                 classes.contains(&c)
@@ -768,7 +876,10 @@ impl<'a> Builder<'a> {
                 PaintRef::Color(s.color)
             } else if let Some(u) = v.strip_prefix("url(") {
                 let (id, fb) = u.split_once(')').unwrap_or((u, ""));
-                let id = id.trim().trim_matches(|c| c == '\'' || c == '"').trim_start_matches('#');
+                let id = id
+                    .trim()
+                    .trim_matches(|c| c == '\'' || c == '"')
+                    .trim_start_matches('#');
                 PaintRef::Url(id.to_string(), parse_color(fb).map(f4))
             } else {
                 match parse_color(v) {
@@ -822,7 +933,13 @@ impl<'a> Builder<'a> {
         ((self.vw * self.vw + self.vh * self.vh) / 2.0).sqrt()
     }
 
-    fn resolve_paint(&self, p: &PaintRef, op: f32, bbox: [f32; 4], ctm: &Mat) -> Option<(Paint, f32)> {
+    fn resolve_paint(
+        &self,
+        p: &PaintRef,
+        op: f32,
+        bbox: [f32; 4],
+        ctm: &Mat,
+    ) -> Option<(Paint, f32)> {
         match p {
             PaintRef::None => None,
             PaintRef::Color(c) => Some((Paint::Solid(*c), op)),
@@ -854,16 +971,33 @@ impl<'a> Builder<'a> {
             cur = next;
         }
         let a = |k: &str| chain.iter().find_map(|c| c.attr(k));
-        let stops_node = chain.iter().find(|c| c.kids.iter().any(|k| k.name == "stop"))?;
+        let stops_node = chain
+            .iter()
+            .find(|c| c.kids.iter().any(|k| k.name == "stop"))?;
         let mut stops = Vec::new();
         for s in stops_node.kids.iter().filter(|k| k.name == "stop") {
             let props = self.props(s);
-            let get = |k: &str| props.iter().rev().find(|(n, _)| n == k).map(|(_, v)| v.as_str());
+            let get = |k: &str| {
+                props
+                    .iter()
+                    .rev()
+                    .find(|(n, _)| n == k)
+                    .map(|(_, v)| v.as_str())
+            };
             let off = get("offset")
-                .map(|o| if let Some(p) = o.strip_suffix('%') { p.parse::<f32>().unwrap_or(0.0) / 100.0 } else { o.parse().unwrap_or(0.0) })
+                .map(|o| {
+                    if let Some(p) = o.strip_suffix('%') {
+                        p.parse::<f32>().unwrap_or(0.0) / 100.0
+                    } else {
+                        o.parse().unwrap_or(0.0)
+                    }
+                })
                 .unwrap_or(0.0)
                 .clamp(0.0, 1.0);
-            let mut c = get("stop-color").and_then(parse_color).map(f4).unwrap_or([0.0, 0.0, 0.0, 1.0]);
+            let mut c = get("stop-color")
+                .and_then(parse_color)
+                .map(f4)
+                .unwrap_or([0.0, 0.0, 0.0, 1.0]);
             c[3] *= get("stop-opacity").map(opacity).unwrap_or(1.0);
             let off = stops.last().map(|l: &Stop| off.max(l.off)).unwrap_or(off);
             stops.push(Stop { off, color: c });
@@ -874,7 +1008,14 @@ impl<'a> Builder<'a> {
         let obb = a("gradientUnits") != Some("userSpaceOnUse");
         let gt = a("gradientTransform").map(transform).unwrap_or(Mat::ID);
         let unit = if obb {
-            Mat([bbox[2] - bbox[0], 0.0, 0.0, bbox[3] - bbox[1], bbox[0], bbox[1]])
+            Mat([
+                bbox[2] - bbox[0],
+                0.0,
+                0.0,
+                bbox[3] - bbox[1],
+                bbox[0],
+                bbox[1],
+            ])
         } else {
             Mat::ID
         };
@@ -904,14 +1045,27 @@ impl<'a> Builder<'a> {
             }
         };
         if n.name == "linearGradient" {
-            let l = [rel("x1", 0.0, self.vw), rel("y1", 0.0, self.vh), rel("x2", 1.0, self.vw), rel("y2", 0.0, self.vh)];
+            let l = [
+                rel("x1", 0.0, self.vw),
+                rel("y1", 0.0, self.vh),
+                rel("x2", 1.0, self.vw),
+                rel("y2", 0.0, self.vh),
+            ];
             Some(Paint::Linear(m, l, stops, spread))
         } else {
             let cx = rel("cx", 0.5, self.vw);
             let cy = rel("cy", 0.5, self.vh);
             let r = rel("r", 0.5, self.diag());
-            let fx = if a("fx").is_some() { rel("fx", 0.5, self.vw) } else { cx };
-            let fy = if a("fy").is_some() { rel("fy", 0.5, self.vh) } else { cy };
+            let fx = if a("fx").is_some() {
+                rel("fx", 0.5, self.vw)
+            } else {
+                cx
+            };
+            let fy = if a("fy").is_some() {
+                rel("fy", 0.5, self.vh)
+            } else {
+                cy
+            };
             Some(Paint::Radial(m, [cx, cy, r, fx, fy], stops, spread))
         }
     }
@@ -945,7 +1099,11 @@ impl<'a> Builder<'a> {
             "svg" if self.depth > 1 => {
                 let x = num("x", vw);
                 let y = num("y", vh);
-                let m = ctm.mul(&Mat::translate(x, y)).mul(&viewbox(n, num("width", vw), num("height", vh)));
+                let m = ctm.mul(&Mat::translate(x, y)).mul(&viewbox(
+                    n,
+                    num("width", vw),
+                    num("height", vh),
+                ));
                 for k in &n.kids {
                     self.walk(k, m, &st, op);
                 }
@@ -976,7 +1134,12 @@ impl<'a> Builder<'a> {
             }
             "path" => Some(parse_path(n.attr("d").unwrap_or(""))),
             "rect" => {
-                let (x, y, w, h) = (num("x", vw), num("y", vh), num("width", vw), num("height", vh));
+                let (x, y, w, h) = (
+                    num("x", vw),
+                    num("y", vh),
+                    num("width", vw),
+                    num("height", vh),
+                );
                 if w <= 0.0 || h <= 0.0 {
                     None
                 } else {
@@ -992,17 +1155,50 @@ impl<'a> Builder<'a> {
                     let ry = ry.unwrap_or(0.0).min(h / 2.0);
                     if rx > 0.0 && ry > 0.0 {
                         let mut s = vec![Seg::Move((x + rx, y)), Seg::Line((x + w - rx, y))];
-                        arc_to(&mut s, (x + w - rx, y), rx, ry, 0.0, false, true, (x + w, y + ry));
+                        arc_to(
+                            &mut s,
+                            (x + w - rx, y),
+                            rx,
+                            ry,
+                            0.0,
+                            false,
+                            true,
+                            (x + w, y + ry),
+                        );
                         s.push(Seg::Line((x + w, y + h - ry)));
-                        arc_to(&mut s, (x + w, y + h - ry), rx, ry, 0.0, false, true, (x + w - rx, y + h));
+                        arc_to(
+                            &mut s,
+                            (x + w, y + h - ry),
+                            rx,
+                            ry,
+                            0.0,
+                            false,
+                            true,
+                            (x + w - rx, y + h),
+                        );
                         s.push(Seg::Line((x + rx, y + h)));
-                        arc_to(&mut s, (x + rx, y + h), rx, ry, 0.0, false, true, (x, y + h - ry));
+                        arc_to(
+                            &mut s,
+                            (x + rx, y + h),
+                            rx,
+                            ry,
+                            0.0,
+                            false,
+                            true,
+                            (x, y + h - ry),
+                        );
                         s.push(Seg::Line((x, y + ry)));
                         arc_to(&mut s, (x, y + ry), rx, ry, 0.0, false, true, (x + rx, y));
                         s.push(Seg::Close);
                         Some(s)
                     } else {
-                        Some(vec![Seg::Move((x, y)), Seg::Line((x + w, y)), Seg::Line((x + w, y + h)), Seg::Line((x, y + h)), Seg::Close])
+                        Some(vec![
+                            Seg::Move((x, y)),
+                            Seg::Line((x + w, y)),
+                            Seg::Line((x + w, y + h)),
+                            Seg::Line((x, y + h)),
+                            Seg::Close,
+                        ])
                     }
                 }
             }
@@ -1019,18 +1215,43 @@ impl<'a> Builder<'a> {
                     None
                 } else {
                     let mut s = vec![Seg::Move((cx + rx, cy))];
-                    arc_to(&mut s, (cx + rx, cy), rx, ry, 0.0, false, true, (cx - rx, cy));
-                    arc_to(&mut s, (cx - rx, cy), rx, ry, 0.0, false, true, (cx + rx, cy));
+                    arc_to(
+                        &mut s,
+                        (cx + rx, cy),
+                        rx,
+                        ry,
+                        0.0,
+                        false,
+                        true,
+                        (cx - rx, cy),
+                    );
+                    arc_to(
+                        &mut s,
+                        (cx - rx, cy),
+                        rx,
+                        ry,
+                        0.0,
+                        false,
+                        true,
+                        (cx + rx, cy),
+                    );
                     s.push(Seg::Close);
                     Some(s)
                 }
             }
-            "line" => Some(vec![Seg::Move((num("x1", vw), num("y1", vh))), Seg::Line((num("x2", vw), num("y2", vh)))]),
+            "line" => Some(vec![
+                Seg::Move((num("x1", vw), num("y1", vh))),
+                Seg::Line((num("x2", vw), num("y2", vh))),
+            ]),
             "polyline" | "polygon" => {
                 let v = nums(n.attr("points").unwrap_or(""));
                 let mut s = Vec::new();
                 for (i, c) in v.chunks_exact(2).enumerate() {
-                    s.push(if i == 0 { Seg::Move((c[0], c[1])) } else { Seg::Line((c[0], c[1])) });
+                    s.push(if i == 0 {
+                        Seg::Move((c[0], c[1]))
+                    } else {
+                        Seg::Line((c[0], c[1]))
+                    });
                 }
                 if n.name == "polygon" && !s.is_empty() {
                     s.push(Seg::Close);
@@ -1132,7 +1353,11 @@ fn data_uri_image(href: &str) -> Option<super::Raster> {
 /// Transformation viewBox -> viewport (preserveAspectRatio xMidYMid meet
 /// par défaut, `none` respecté).
 fn viewbox(n: &Node, w: f32, h: f32) -> Mat {
-    let Some(vb) = n.attr("viewBox").map(nums).filter(|v| v.len() == 4 && v[2] > 0.0 && v[3] > 0.0) else {
+    let Some(vb) = n
+        .attr("viewBox")
+        .map(nums)
+        .filter(|v| v.len() == 4 && v[2] > 0.0 && v[3] > 0.0)
+    else {
         return Mat::ID;
     };
     let par = n.attr("preserveAspectRatio").unwrap_or("xMidYMid meet");
@@ -1141,12 +1366,30 @@ fn viewbox(n: &Node, w: f32, h: f32) -> Mat {
     if par.starts_with("none") {
         return Mat::scale(sx, sy).mul(&Mat::translate(-vb[0], -vb[1]));
     }
-    let s = if par.contains("slice") { sx.max(sy) } else { sx.min(sy) };
-    let ax = if par.contains("xMin") { 0.0 } else if par.contains("xMax") { 1.0 } else { 0.5 };
-    let ay = if par.contains("YMin") { 0.0 } else if par.contains("YMax") { 1.0 } else { 0.5 };
+    let s = if par.contains("slice") {
+        sx.max(sy)
+    } else {
+        sx.min(sy)
+    };
+    let ax = if par.contains("xMin") {
+        0.0
+    } else if par.contains("xMax") {
+        1.0
+    } else {
+        0.5
+    };
+    let ay = if par.contains("YMin") {
+        0.0
+    } else if par.contains("YMax") {
+        1.0
+    } else {
+        0.5
+    };
     let tx = (w - vb[2] * s) * ax;
     let ty = (h - vb[3] * s) * ay;
-    Mat::translate(tx, ty).mul(&Mat::scale(s, s)).mul(&Mat::translate(-vb[0], -vb[1]))
+    Mat::translate(tx, ty)
+        .mul(&Mat::scale(s, s))
+        .mul(&Mat::translate(-vb[0], -vb[1]))
 }
 
 pub fn parse(data: &[u8]) -> Option<Svg> {
@@ -1163,9 +1406,17 @@ pub fn parse(data: &[u8]) -> Option<Svg> {
         Some(v) => (v[2], v[3]),
         None => (300.0, 150.0),
     };
-    let w = length(root.attr("width"), dw).filter(|v| *v > 0.0).unwrap_or(dw);
-    let h = length(root.attr("height"), dh).filter(|v| *v > 0.0).unwrap_or(dh);
-    let (w, h) = if root.attr("width").is_some_and(|v| v.ends_with('%')) { (dw, dh) } else { (w, h) };
+    let w = length(root.attr("width"), dw)
+        .filter(|v| *v > 0.0)
+        .unwrap_or(dw);
+    let h = length(root.attr("height"), dh)
+        .filter(|v| *v > 0.0)
+        .unwrap_or(dh);
+    let (w, h) = if root.attr("width").is_some_and(|v| v.ends_with('%')) {
+        (dw, dh)
+    } else {
+        (w, h)
+    };
     let mut b = Builder {
         ids,
         css: parse_css(&css),
@@ -1177,7 +1428,11 @@ pub fn parse(data: &[u8]) -> Option<Svg> {
     let base = viewbox(&root, w, h);
     b.walk(&root, base, &Style::default(), 1.0);
     let items = b.items;
-    Some(Svg { w: w.max(1.0), h: h.max(1.0), items })
+    Some(Svg {
+        w: w.max(1.0),
+        h: h.max(1.0),
+        items,
+    })
 }
 
 fn flatten(segs: &[Seg], m: &Mat, tol: f32) -> Vec<(Vec<Pt>, bool)> {
@@ -1245,11 +1500,26 @@ fn bind(p: &Paint, view: &Mat) -> Paint {
 pub fn render(svg: &Svg, view: &Mat, cv: &mut Canvas) {
     for it in &svg.items {
         match it {
-            Item::Shape { segs, ctm, fill, stroke, evenodd, bbox } => {
+            Item::Shape {
+                segs,
+                ctm,
+                fill,
+                stroke,
+                evenodd,
+                bbox,
+            } => {
                 let m = view.mul(ctm);
                 // élimine les formes hors champ
-                let corners = [m.apply((bbox[0], bbox[1])), m.apply((bbox[2], bbox[1])), m.apply((bbox[0], bbox[3])), m.apply((bbox[2], bbox[3]))];
-                let sw = stroke.as_ref().map(|s| s.2 * m.scale_factor()).unwrap_or(0.0);
+                let corners = [
+                    m.apply((bbox[0], bbox[1])),
+                    m.apply((bbox[2], bbox[1])),
+                    m.apply((bbox[0], bbox[3])),
+                    m.apply((bbox[2], bbox[3])),
+                ];
+                let sw = stroke
+                    .as_ref()
+                    .map(|s| s.2 * m.scale_factor())
+                    .unwrap_or(0.0);
                 let minx = corners.iter().map(|c| c.0).fold(f32::MAX, f32::min) - sw;
                 let maxx = corners.iter().map(|c| c.0).fold(f32::MIN, f32::max) + sw;
                 let miny = corners.iter().map(|c| c.1).fold(f32::MAX, f32::min) - sw;
@@ -1267,16 +1537,52 @@ pub fn render(svg: &Svg, view: &Mat, cv: &mut Canvas) {
                     raster::fill(cv, &polys, false, &bind(p, view), *o);
                 }
             }
-            Item::Image { ctm, raster: r, rect, opacity } => {
-                let m = view.mul(ctm).mul(&Mat::translate(rect[0], rect[1])).mul(&Mat::scale(rect[2] / r.w.max(1) as f32, rect[3] / r.h.max(1) as f32));
+            Item::Image {
+                ctm,
+                raster: r,
+                rect,
+                opacity,
+            } => {
+                let m = view
+                    .mul(ctm)
+                    .mul(&Mat::translate(rect[0], rect[1]))
+                    .mul(&Mat::scale(
+                        rect[2] / r.w.max(1) as f32,
+                        rect[3] / r.h.max(1) as f32,
+                    ));
                 let Some(inv) = m.inv() else {
                     continue;
                 };
-                let corners = [m.apply((0.0, 0.0)), m.apply((r.w as f32, 0.0)), m.apply((0.0, r.h as f32)), m.apply((r.w as f32, r.h as f32))];
-                let x0 = corners.iter().map(|c| c.0).fold(f32::MAX, f32::min).max(0.0) as usize;
-                let x1 = (corners.iter().map(|c| c.0).fold(f32::MIN, f32::max).ceil().max(0.0) as usize).min(cv.w);
-                let y0 = corners.iter().map(|c| c.1).fold(f32::MAX, f32::min).max(0.0) as usize;
-                let y1 = (corners.iter().map(|c| c.1).fold(f32::MIN, f32::max).ceil().max(0.0) as usize).min(cv.h);
+                let corners = [
+                    m.apply((0.0, 0.0)),
+                    m.apply((r.w as f32, 0.0)),
+                    m.apply((0.0, r.h as f32)),
+                    m.apply((r.w as f32, r.h as f32)),
+                ];
+                let x0 = corners
+                    .iter()
+                    .map(|c| c.0)
+                    .fold(f32::MAX, f32::min)
+                    .max(0.0) as usize;
+                let x1 = (corners
+                    .iter()
+                    .map(|c| c.0)
+                    .fold(f32::MIN, f32::max)
+                    .ceil()
+                    .max(0.0) as usize)
+                    .min(cv.w);
+                let y0 = corners
+                    .iter()
+                    .map(|c| c.1)
+                    .fold(f32::MAX, f32::min)
+                    .max(0.0) as usize;
+                let y1 = (corners
+                    .iter()
+                    .map(|c| c.1)
+                    .fold(f32::MIN, f32::max)
+                    .ceil()
+                    .max(0.0) as usize)
+                    .min(cv.h);
                 for y in y0..y1 {
                     for x in x0..x1 {
                         let (u, v) = inv.apply((x as f32 + 0.5, y as f32 + 0.5));

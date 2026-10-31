@@ -50,7 +50,10 @@ fn check(name: &str, refname: &str, max_tol: u32, mean_tol: f64) {
     let img = decode(name);
     let (w, h, px) = reference(refname);
     let (max, mean) = diff(raster(&img, 0), w, h, &px);
-    assert!(max <= max_tol && mean <= mean_tol, "{name}: écart max {max}, moyen {mean:.3}");
+    assert!(
+        max <= max_tol && mean <= mean_tol,
+        "{name}: écart max {max}, moyen {mean:.3}"
+    );
 }
 
 #[test]
@@ -89,7 +92,13 @@ fn formats_sans_perte_identiques_a_la_reference() {
 
 #[test]
 fn formats_avec_perte_proches_de_la_reference() {
-    for f in ["t.jpg", "t_prog.jpg", "t_444.jpg", "t_gray.jpg", "t_jpeg.tif"] {
+    for f in [
+        "t.jpg",
+        "t_prog.jpg",
+        "t_444.jpg",
+        "t_gray.jpg",
+        "t_jpeg.tif",
+    ] {
         check(f, &format!("{f}.rgba"), 40, 1.5);
     }
     for f in ["t_lossy.webp", "t_lossy_alpha.webp"] {
@@ -137,7 +146,12 @@ fn raw_affiche_l_apercu_jpeg_et_les_exif() {
     let (w, h, px) = reference("t.jpg.rgba");
     let (max, mean) = diff(raster(&img, 0), w, h, &px);
     assert!(max <= 40 && mean <= 1.5, "{max} {mean}");
-    let get = |k: &str| img.meta.iter().find(|(n, _)| n == k).map(|(_, v)| v.clone());
+    let get = |k: &str| {
+        img.meta
+            .iter()
+            .find(|(n, _)| n == k)
+            .map(|(_, v)| v.clone())
+    };
     assert_eq!(get("camera.make").as_deref(), Some("WinluxCam"));
     assert_eq!(get("camera.model").as_deref(), Some("Testeur 3000"));
     assert_eq!(get("exposure").as_deref(), Some("1/250 s"));
@@ -150,23 +164,47 @@ fn svg_vectoriel_et_zoom_sans_perte() {
     assert_eq!(img.pages[0].size(), (40, 30));
     let mut l = Loaded::new(img);
     let mut out = vec![0u8; 40 * 30 * 4];
-    let v = View { zoom: 1.0, cx: 20.0, cy: 15.0, ..Default::default() };
+    let v = View {
+        zoom: 1.0,
+        cx: 20.0,
+        cy: 15.0,
+        ..Default::default()
+    };
     l.render(0, &v, 40, 30, 160, &mut out, [128, 128, 128], false);
     let px = |x: usize, y: usize| {
         let o = (y * 40 + x) * 4;
         [out[o + 2], out[o + 1], out[o]]
     };
-    assert!(px(1, 7)[0] > 200 && px(1, 7)[2] < 60, "début du dégradé rouge {:?}", px(1, 7));
-    assert!(px(18, 7)[2] > 200 && px(18, 7)[0] < 60, "fin du dégradé bleue {:?}", px(18, 7));
+    assert!(
+        px(1, 7)[0] > 200 && px(1, 7)[2] < 60,
+        "début du dégradé rouge {:?}",
+        px(1, 7)
+    );
+    assert!(
+        px(18, 7)[2] > 200 && px(18, 7)[0] < 60,
+        "fin du dégradé bleue {:?}",
+        px(18, 7)
+    );
     assert_eq!(px(30, 22), [0, 255, 0], "cercle vert (classe CSS)");
     assert_eq!(px(30, 5), [255, 255, 255], "fond blanc");
     assert_eq!(px(10, 28), [0, 0, 0], "triangle noir");
     // zoom x8 : le bord du cercle reste net (re-rastérisation)
     let mut big = vec![0u8; 64 * 64 * 4];
-    let v = View { zoom: 8.0, cx: 30.0, cy: 22.5, ..Default::default() };
+    let v = View {
+        zoom: 8.0,
+        cx: 30.0,
+        cy: 22.5,
+        ..Default::default()
+    };
     l.render(0, &v, 64, 64, 256, &mut big, [0, 0, 0], false);
-    let intermediate = big.chunks(4).filter(|p| p[1] > 20 && p[1] < 235 && p[0] < 20).count();
-    assert!(intermediate < 64 * 3, "bord flou : {intermediate} pixels intermédiaires");
+    let intermediate = big
+        .chunks(4)
+        .filter(|p| p[1] > 20 && p[1] < 235 && p[0] < 20)
+        .count();
+    assert!(
+        intermediate < 64 * 3,
+        "bord flou : {intermediate} pixels intermédiaires"
+    );
 }
 
 #[test]
@@ -186,11 +224,16 @@ fn modeles_3d_aperçu() {
 
 #[test]
 fn formats_sans_decodeur_jamais_annonces() {
-    assert_eq!(decode_file(&dir().join("t.heic")).unwrap_err(), Error::Unsupported("HEIC"));
+    assert_eq!(
+        decode_file(&dir().join("t.heic")).unwrap_err(),
+        Error::Unsupported("HEIC")
+    );
     for e in ["heic", "avif", "jxl", "jp2", "pdf"] {
         assert!(!supported_ext(e), "{e}");
     }
-    for e in ["png", "jpg", "webp", "cr2", "nef", "psd", "svg", "exr", "stl", "glb"] {
+    for e in [
+        "png", "jpg", "webp", "cr2", "nef", "psd", "svg", "exr", "stl", "glb",
+    ] {
         assert!(supported_ext(e), "{e}");
     }
 }
@@ -201,7 +244,13 @@ fn rendu_rotation_miroir_et_vignette() {
     let mut l = Loaded::new(img);
     let (w, h) = (40usize, 30usize);
     // rotation d'un quart de tour : la sortie 30x40 contient l'image tournée
-    let v = View { zoom: 1.0, cx: 20.0, cy: 15.0, rot: 1, ..Default::default() };
+    let v = View {
+        zoom: 1.0,
+        cx: 20.0,
+        cy: 15.0,
+        rot: 1,
+        ..Default::default()
+    };
     let mut out = vec![0u8; h * w * 4];
     l.render(0, &v, h, w, h * 4, &mut out, [0, 0, 0], false);
     let src = |x: u32, y: u32| raster(&l.img, 0).get(x, y);

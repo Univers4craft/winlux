@@ -97,7 +97,10 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
                         }
                     }
                     for (i, p) in px.iter().enumerate() {
-                        let (x, y) = (bx as u32 * 4 + (i % 4) as u32, by as u32 * 4 + (i / 4) as u32);
+                        let (x, y) = (
+                            bx as u32 * 4 + (i % 4) as u32,
+                            by as u32 * 4 + (i / 4) as u32,
+                        );
                         if x < w && y < h {
                             r.set(x, y, *p);
                         }
@@ -109,7 +112,11 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
             let bgra = matches!(kind, K::Bgra8);
             for i in 0..(w * h) as usize {
                 let c = src.get(i * 4..i * 4 + 4).ok_or(Error::Corrupt)?;
-                let px = if bgra { [c[2], c[1], c[0], c[3]] } else { [c[0], c[1], c[2], c[3]] };
+                let px = if bgra {
+                    [c[2], c[1], c[0], c[3]]
+                } else {
+                    [c[0], c[1], c[2], c[3]]
+                };
                 r.px[i * 4..i * 4 + 4].copy_from_slice(&px);
             }
         }
@@ -151,7 +158,12 @@ fn c565(v: u16) -> [u8; 4] {
     let r = ((v >> 11) & 31) as u32;
     let g = ((v >> 5) & 63) as u32;
     let b = (v & 31) as u32;
-    [(r * 255 / 31) as u8, (g * 255 / 63) as u8, (b * 255 / 31) as u8, 255]
+    [
+        (r * 255 / 31) as u8,
+        (g * 255 / 63) as u8,
+        (b * 255 / 31) as u8,
+        255,
+    ]
 }
 
 fn bc1(b: &[u8], out: &mut [[u8; 4]; 16], punch: bool) {
@@ -161,10 +173,25 @@ fn bc1(b: &[u8], out: &mut [[u8; 4]; 16], punch: bool) {
     let mix = |x: u8, y: u8, wx: u32, wy: u32| ((x as u32 * wx + y as u32 * wy) / (wx + wy)) as u8;
     let mut pal = [a, bb, [0; 4], [0; 4]];
     if c0 > c1 || !punch {
-        pal[2] = [mix(a[0], bb[0], 2, 1), mix(a[1], bb[1], 2, 1), mix(a[2], bb[2], 2, 1), 255];
-        pal[3] = [mix(a[0], bb[0], 1, 2), mix(a[1], bb[1], 1, 2), mix(a[2], bb[2], 1, 2), 255];
+        pal[2] = [
+            mix(a[0], bb[0], 2, 1),
+            mix(a[1], bb[1], 2, 1),
+            mix(a[2], bb[2], 2, 1),
+            255,
+        ];
+        pal[3] = [
+            mix(a[0], bb[0], 1, 2),
+            mix(a[1], bb[1], 1, 2),
+            mix(a[2], bb[2], 1, 2),
+            255,
+        ];
     } else {
-        pal[2] = [mix(a[0], bb[0], 1, 1), mix(a[1], bb[1], 1, 1), mix(a[2], bb[2], 1, 1), 255];
+        pal[2] = [
+            mix(a[0], bb[0], 1, 1),
+            mix(a[1], bb[1], 1, 1),
+            mix(a[2], bb[2], 1, 1),
+            255,
+        ];
         pal[3] = [0, 0, 0, 0];
     }
     let bits = u32::from_le_bytes([b[4], b[5], b[6], b[7]]);

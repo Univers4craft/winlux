@@ -72,11 +72,20 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
             b"acTL" => animated = true,
             b"fcTL" if len >= 26 => {
                 if let Some(f) = cur_fctl.take() {
-                    frames.push((f.0, f.1, f.2, f.3, f.4, f.5, f.6, std::mem::take(&mut cur_data)));
+                    frames.push((
+                        f.0,
+                        f.1,
+                        f.2,
+                        f.3,
+                        f.4,
+                        f.5,
+                        f.6,
+                        std::mem::take(&mut cur_data),
+                    ));
                 }
                 let dn = be16(body, 20) as u32;
                 let dd = be16(body, 22) as u32;
-                let delay = if dd == 0 { dn * 10 } else { dn * 1000 / dd };
+                let delay = (dn * 1000).checked_div(dd).unwrap_or(dn * 10);
                 cur_fctl = Some((
                     be32(body, 4),
                     be32(body, 8),
@@ -138,7 +147,11 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
                 Err(_) => break,
             }
         };
-        let before = if dispose == 2 { Some(canvas.clone()) } else { None };
+        let before = if dispose == 2 {
+            Some(canvas.clone())
+        } else {
+            None
+        };
         for y in 0..fh.min(frame.h) {
             for x in 0..fw.min(frame.w) {
                 let (cx, cy) = (fx + x, fy + y);

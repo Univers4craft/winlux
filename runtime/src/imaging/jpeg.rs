@@ -5,9 +5,9 @@
 use super::{be16, Error, Image, Page, Raster};
 
 const ZIGZAG: [usize; 64] = [
-    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27,
-    20, 13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58,
-    59, 52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
+    0, 1, 8, 16, 9, 2, 3, 10, 17, 24, 32, 25, 18, 11, 4, 5, 12, 19, 26, 33, 40, 48, 41, 34, 27, 20,
+    13, 6, 7, 14, 21, 28, 35, 42, 49, 56, 57, 50, 43, 36, 29, 22, 15, 23, 30, 37, 44, 51, 58, 59,
+    52, 45, 38, 31, 39, 46, 53, 60, 61, 54, 47, 55, 62, 63,
 ];
 
 #[derive(Clone, Default)]
@@ -178,7 +178,11 @@ pub fn decode_raster(data: &[u8], img: Option<&mut Image>) -> Result<Raster, Err
 
 /// `photometric` : interprétation TIFF des composantes (2 = RGB, 6 = YCbCr,
 /// 5 = CMJN), prioritaire sur les marqueurs JFIF/Adobe.
-pub fn decode_raster_ex(data: &[u8], mut img: Option<&mut Image>, photometric: Option<u32>) -> Result<Raster, Error> {
+pub fn decode_raster_ex(
+    data: &[u8],
+    mut img: Option<&mut Image>,
+    photometric: Option<u32>,
+) -> Result<Raster, Error> {
     if data.len() < 4 || data[0] != 0xFF || data[1] != 0xD8 {
         return Err(Error::Corrupt);
     }
@@ -193,7 +197,7 @@ pub fn decode_raster_ex(data: &[u8], mut img: Option<&mut Image>, photometric: O
     let mut jfif = false;
     let (mut hmax, mut vmax) = (1usize, 1usize);
     let (mut mcux, mut mcuy) = (0usize, 0usize);
-    let mut eobrun = 0u32;
+    let mut eobrun: u32;
     let mut p = 2;
     let mut frame_seen = false;
     while p + 4 <= data.len() {
@@ -321,7 +325,10 @@ pub fn decode_raster_ex(data: &[u8], mut img: Option<&mut Image>, photometric: O
                 for i in 0..ns {
                     let id = seg[1 + i * 2];
                     let t = seg[2 + i * 2];
-                    let ci = comps.iter().position(|c| c.id == id).ok_or(Error::Corrupt)?;
+                    let ci = comps
+                        .iter()
+                        .position(|c| c.id == id)
+                        .ok_or(Error::Corrupt)?;
                     comps[ci].td = (t >> 4) as usize & 3;
                     comps[ci].ta = (t & 15) as usize & 3;
                     sc.push(ci);
@@ -445,7 +452,9 @@ pub fn decode_raster_ex(data: &[u8], mut img: Option<&mut Image>, photometric: O
                 // avance jusqu'au prochain marqueur
                 p = rd.p;
                 while p + 1 < data.len()
-                    && !(data[p] == 0xFF && data[p + 1] != 0 && !(0xD0..=0xD7).contains(&data[p + 1]))
+                    && !(data[p] == 0xFF
+                        && data[p + 1] != 0
+                        && !(0xD0..=0xD7).contains(&data[p + 1]))
                 {
                     p += 1;
                 }
@@ -492,20 +501,20 @@ pub fn decode_raster_ex(data: &[u8], mut img: Option<&mut Image>, photometric: O
         Some(2) => 0,
         Some(6) => 1,
         _ => match adobe {
-        Some(t) => t,
-        None => {
-            if n == 3 {
-                // JFIF ou ids 1,2,3 => YCbCr ; ids 'R','G','B' => RGB
-                if !jfif && comps[0].id == b'R' && comps[1].id == b'G' {
-                    0
+            Some(t) => t,
+            None => {
+                if n == 3 {
+                    // JFIF ou ids 1,2,3 => YCbCr ; ids 'R','G','B' => RGB
+                    if !jfif && comps[0].id == b'R' && comps[1].id == b'G' {
+                        0
+                    } else {
+                        1
+                    }
                 } else {
-                    1
+                    0
                 }
-            } else {
-                0
             }
-        }
-    },
+        },
     };
     let rgba_tiff = photometric == Some(2) || photometric == Some(6);
     // Plans pleine résolution (suréchantillonnage bilinéaire centré).
@@ -533,12 +542,17 @@ pub fn decode_raster_ex(data: &[u8], mut img: Option<&mut Image>, photometric: O
                 }
                 4 if rgba_tiff => {
                     let (a, b, c) = (sample(0, x, y), sample(1, x, y), sample(2, x, y));
-                    let mut p = if transform == 0 { [clamp(a), clamp(b), clamp(c), 255] } else { ycc(a, b, c) };
+                    let mut p = if transform == 0 {
+                        [clamp(a), clamp(b), clamp(c), 255]
+                    } else {
+                        ycc(a, b, c)
+                    };
                     p[3] = clamp(sample(3, x, y));
                     p
                 }
                 4 => {
-                    let (mut cc, mut mm, mut yy) = (sample(0, x, y), sample(1, x, y), sample(2, x, y));
+                    let (mut cc, mut mm, mut yy) =
+                        (sample(0, x, y), sample(1, x, y), sample(2, x, y));
                     let k = sample(3, x, y);
                     if transform == 2 {
                         let rgb = ycc(cc, mm, yy);
@@ -572,7 +586,17 @@ pub fn decode_raster_ex(data: &[u8], mut img: Option<&mut Image>, photometric: O
 }
 
 #[allow(clippy::too_many_arguments)]
-fn upsample(pl: &[u8], pw: usize, ph: usize, h: usize, v: usize, hmax: usize, vmax: usize, w: usize, hh: usize) -> Vec<u8> {
+fn upsample(
+    pl: &[u8],
+    pw: usize,
+    ph: usize,
+    h: usize,
+    v: usize,
+    hmax: usize,
+    vmax: usize,
+    w: usize,
+    hh: usize,
+) -> Vec<u8> {
     let mut out = vec![0u8; w * hh];
     if h == hmax && v == vmax {
         for y in 0..hh {
@@ -683,8 +707,13 @@ fn idct8x8(input: &[i32; 64], out: &mut [u8; 64]) {
         let mut t = [[0f32; 8]; 8];
         for (x, row) in t.iter_mut().enumerate() {
             for (u, v) in row.iter_mut().enumerate() {
-                let cu = if u == 0 { std::f32::consts::FRAC_1_SQRT_2 } else { 1.0 };
-                *v = cu * (((2 * x + 1) as f32 * u as f32 * std::f32::consts::PI) / 16.0).cos() / 2.0;
+                let cu = if u == 0 {
+                    std::f32::consts::FRAC_1_SQRT_2
+                } else {
+                    1.0
+                };
+                *v = cu * (((2 * x + 1) as f32 * u as f32 * std::f32::consts::PI) / 16.0).cos()
+                    / 2.0;
             }
         }
         t

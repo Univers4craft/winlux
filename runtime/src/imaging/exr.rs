@@ -75,7 +75,12 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
             }
             ("compression", _) => comp = v[0],
             ("dataWindow", "box2i") => {
-                win = (le32(v, 0) as i32, le32(v, 4) as i32, le32(v, 8) as i32, le32(v, 12) as i32);
+                win = (
+                    le32(v, 0) as i32,
+                    le32(v, 4) as i32,
+                    le32(v, 8) as i32,
+                    le32(v, 12) as i32,
+                );
             }
             _ => {}
         }
@@ -111,7 +116,12 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
     };
     let has_rgb = chans.iter().any(|(n, _)| idx(n) == Some(0));
     for c in 0..chunks {
-        let o = u64::from_le_bytes(d.get(table + c * 8..table + c * 8 + 8).ok_or(Error::Corrupt)?.try_into().unwrap_or([0; 8])) as usize;
+        let o = u64::from_le_bytes(
+            d.get(table + c * 8..table + c * 8 + 8)
+                .ok_or(Error::Corrupt)?
+                .try_into()
+                .unwrap_or([0; 8]),
+        ) as usize;
         let y0 = le32(d, o) as i32 - win.1;
         let size = le32(d, o + 4) as usize;
         let src = d.get(o + 8..o + 8 + size).ok_or(Error::Corrupt)?;
@@ -146,7 +156,11 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
             let half_n = t.len().div_ceil(2);
             let mut out = vec![0u8; t.len()];
             for (k, v) in out.iter_mut().enumerate() {
-                *v = if k % 2 == 0 { t[k / 2] } else { t[half_n + k / 2] };
+                *v = if k % 2 == 0 {
+                    t[k / 2]
+                } else {
+                    t[half_n + k / 2]
+                };
             }
             out
         };
@@ -158,7 +172,10 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
                 for x in 0..w as usize {
                     let v = match t {
                         1 => {
-                            let v = half(u16::from_le_bytes([*raw.get(q).unwrap_or(&0), *raw.get(q + 1).unwrap_or(&0)]));
+                            let v = half(u16::from_le_bytes([
+                                *raw.get(q).unwrap_or(&0),
+                                *raw.get(q + 1).unwrap_or(&0),
+                            ]));
                             q += 2;
                             v
                         }

@@ -20,8 +20,8 @@ mod raster;
 mod simple;
 pub mod svg;
 mod tiff;
-pub mod webp;
 mod vp8_tables;
+pub mod webp;
 mod xcf;
 
 use raster::{Canvas, Mat};
@@ -229,15 +229,14 @@ impl Raster {
                     acc[2] += c[2] as u32 * a;
                     acc[3] += a;
                 }
-                let c = if acc[3] == 0 {
-                    [0, 0, 0, 0]
-                } else {
-                    [
-                        (acc[0] / acc[3]) as u8,
-                        (acc[1] / acc[3]) as u8,
-                        (acc[2] / acc[3]) as u8,
-                        (acc[3] / 4) as u8,
-                    ]
+                let c = match acc[3] {
+                    0 => [0, 0, 0, 0],
+                    n => [
+                        (acc[0] / n) as u8,
+                        (acc[1] / n) as u8,
+                        (acc[2] / n) as u8,
+                        (n / 4) as u8,
+                    ],
                 };
                 r.set(x, y, c);
             }
@@ -247,7 +246,11 @@ impl Raster {
     fn transformed(&self, o: u8) -> Raster {
         let (w, h) = (self.w, self.h);
         let swap = o >= 5;
-        let mut r = if swap { Raster::new(h, w) } else { Raster::new(w, h) };
+        let mut r = if swap {
+            Raster::new(h, w)
+        } else {
+            Raster::new(w, h)
+        };
         for y in 0..h {
             for x in 0..w {
                 let (nx, ny) = match o {
@@ -357,44 +360,209 @@ pub enum Family {
 pub struct Format {
     pub name: &'static str,
     pub exts: &'static [&'static str],
+    #[allow(dead_code)]
     pub family: Family,
     /// `false` : reconnu mais pas de décodeur, donc jamais annoncé.
     pub supported: bool,
 }
 
 pub const FORMATS: &[Format] = &[
-    Format { name: "PNG / APNG", exts: &["png", "apng"], family: Family::Common, supported: true },
-    Format { name: "JPEG", exts: &["jpg", "jpeg", "jpe", "jfif", "pjpeg", "pjp"], family: Family::Common, supported: true },
-    Format { name: "GIF", exts: &["gif"], family: Family::Common, supported: true },
-    Format { name: "BMP / DIB", exts: &["bmp", "dib", "rle"], family: Family::Common, supported: true },
-    Format { name: "TIFF", exts: &["tif", "tiff"], family: Family::Common, supported: true },
-    Format { name: "ICO / CUR", exts: &["ico", "cur"], family: Family::Common, supported: true },
-    Format { name: "WebP", exts: &["webp"], family: Family::Common, supported: true },
-    Format { name: "QOI", exts: &["qoi"], family: Family::Modern, supported: true },
-    Format { name: "HEIC / HEIF", exts: &["heic", "heif", "hif"], family: Family::Modern, supported: false },
-    Format { name: "AVIF", exts: &["avif"], family: Family::Modern, supported: false },
-    Format { name: "JPEG XL", exts: &["jxl"], family: Family::Modern, supported: false },
-    Format { name: "RAW (aperçu)", exts: &["cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "dng", "orf", "rw2", "raf", "pef", "srw", "x3f", "3fr", "fff", "iiq", "mos", "kdc", "dcr", "mrw", "erf", "rwl", "mef"], family: Family::Raw, supported: true },
-    Format { name: "Photoshop", exts: &["psd", "psb"], family: Family::Creative, supported: true },
-    Format { name: "GIMP", exts: &["xcf"], family: Family::Creative, supported: true },
-    Format { name: "SVG", exts: &["svg", "svgz"], family: Family::Creative, supported: true },
-    Format { name: "Illustrator (aperçu)", exts: &["ai"], family: Family::Creative, supported: true },
-    Format { name: "EPS (aperçu)", exts: &["eps", "epsi", "epsf"], family: Family::Creative, supported: true },
-    Format { name: "TGA", exts: &["tga", "icb", "vda", "vst"], family: Family::Special, supported: true },
-    Format { name: "PCX", exts: &["pcx"], family: Family::Special, supported: true },
-    Format { name: "Netpbm", exts: &["pbm", "pgm", "ppm", "pnm", "pam", "pfm"], family: Family::Special, supported: true },
-    Format { name: "DDS", exts: &["dds"], family: Family::Special, supported: true },
-    Format { name: "OpenEXR", exts: &["exr"], family: Family::Special, supported: true },
-    Format { name: "Radiance HDR", exts: &["hdr", "rgbe", "pic"], family: Family::Special, supported: true },
-    Format { name: "ICNS (macOS)", exts: &["icns"], family: Family::Special, supported: true },
-    Format { name: "SGI", exts: &["sgi", "rgb", "rgba", "bw"], family: Family::Special, supported: true },
-    Format { name: "Sun Raster", exts: &["ras", "sun"], family: Family::Special, supported: true },
-    Format { name: "XBM / XPM", exts: &["xbm", "xpm"], family: Family::Special, supported: true },
-    Format { name: "WBMP", exts: &["wbmp"], family: Family::Special, supported: true },
-    Format { name: "farbfeld", exts: &["ff"], family: Family::Special, supported: true },
-    Format { name: "JPEG 2000", exts: &["jp2", "j2k", "jpf", "jpx", "jpm", "j2c"], family: Family::Special, supported: false },
-    Format { name: "PDF", exts: &["pdf"], family: Family::Special, supported: false },
-    Format { name: "Modèles 3D (aperçu)", exts: &["stl", "obj", "glb", "gltf", "fbx", "ply", "off"], family: Family::Model, supported: true },
+    Format {
+        name: "PNG / APNG",
+        exts: &["png", "apng"],
+        family: Family::Common,
+        supported: true,
+    },
+    Format {
+        name: "JPEG",
+        exts: &["jpg", "jpeg", "jpe", "jfif", "pjpeg", "pjp"],
+        family: Family::Common,
+        supported: true,
+    },
+    Format {
+        name: "GIF",
+        exts: &["gif"],
+        family: Family::Common,
+        supported: true,
+    },
+    Format {
+        name: "BMP / DIB",
+        exts: &["bmp", "dib", "rle"],
+        family: Family::Common,
+        supported: true,
+    },
+    Format {
+        name: "TIFF",
+        exts: &["tif", "tiff"],
+        family: Family::Common,
+        supported: true,
+    },
+    Format {
+        name: "ICO / CUR",
+        exts: &["ico", "cur"],
+        family: Family::Common,
+        supported: true,
+    },
+    Format {
+        name: "WebP",
+        exts: &["webp"],
+        family: Family::Common,
+        supported: true,
+    },
+    Format {
+        name: "QOI",
+        exts: &["qoi"],
+        family: Family::Modern,
+        supported: true,
+    },
+    Format {
+        name: "HEIC / HEIF",
+        exts: &["heic", "heif", "hif"],
+        family: Family::Modern,
+        supported: false,
+    },
+    Format {
+        name: "AVIF",
+        exts: &["avif"],
+        family: Family::Modern,
+        supported: false,
+    },
+    Format {
+        name: "JPEG XL",
+        exts: &["jxl"],
+        family: Family::Modern,
+        supported: false,
+    },
+    Format {
+        name: "RAW (aperçu)",
+        exts: &[
+            "cr2", "cr3", "crw", "nef", "nrw", "arw", "srf", "sr2", "dng", "orf", "rw2", "raf",
+            "pef", "srw", "x3f", "3fr", "fff", "iiq", "mos", "kdc", "dcr", "mrw", "erf", "rwl",
+            "mef",
+        ],
+        family: Family::Raw,
+        supported: true,
+    },
+    Format {
+        name: "Photoshop",
+        exts: &["psd", "psb"],
+        family: Family::Creative,
+        supported: true,
+    },
+    Format {
+        name: "GIMP",
+        exts: &["xcf"],
+        family: Family::Creative,
+        supported: true,
+    },
+    Format {
+        name: "SVG",
+        exts: &["svg", "svgz"],
+        family: Family::Creative,
+        supported: true,
+    },
+    Format {
+        name: "Illustrator (aperçu)",
+        exts: &["ai"],
+        family: Family::Creative,
+        supported: true,
+    },
+    Format {
+        name: "EPS (aperçu)",
+        exts: &["eps", "epsi", "epsf"],
+        family: Family::Creative,
+        supported: true,
+    },
+    Format {
+        name: "TGA",
+        exts: &["tga", "icb", "vda", "vst"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "PCX",
+        exts: &["pcx"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "Netpbm",
+        exts: &["pbm", "pgm", "ppm", "pnm", "pam", "pfm"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "DDS",
+        exts: &["dds"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "OpenEXR",
+        exts: &["exr"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "Radiance HDR",
+        exts: &["hdr", "rgbe", "pic"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "ICNS (macOS)",
+        exts: &["icns"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "SGI",
+        exts: &["sgi", "rgb", "rgba", "bw"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "Sun Raster",
+        exts: &["ras", "sun"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "XBM / XPM",
+        exts: &["xbm", "xpm"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "WBMP",
+        exts: &["wbmp"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "farbfeld",
+        exts: &["ff"],
+        family: Family::Special,
+        supported: true,
+    },
+    Format {
+        name: "JPEG 2000",
+        exts: &["jp2", "j2k", "jpf", "jpx", "jpm", "j2c"],
+        family: Family::Special,
+        supported: false,
+    },
+    Format {
+        name: "PDF",
+        exts: &["pdf"],
+        family: Family::Special,
+        supported: false,
+    },
+    Format {
+        name: "Modèles 3D (aperçu)",
+        exts: &["stl", "obj", "glb", "gltf", "fbx", "ply", "off"],
+        family: Family::Model,
+        supported: true,
+    },
 ];
 
 fn ext_of(path: &str) -> String {
@@ -498,7 +666,11 @@ pub fn decode_bytes(d: &[u8], ext: &str) -> Result<Image, Error> {
         simple::pnm(d)?
     } else if matches!(ext.as_str(), "tga" | "icb" | "vda" | "vst") {
         simple::tga(d)?
-    } else if (starts(&[0, 0, 1, 0]) || starts(&[0, 0, 2, 0])) && (1..=256).contains(&le16(d, 4)) && d.len() >= 22 && (le32(d, 18) as usize) < d.len() {
+    } else if (starts(&[0, 0, 1, 0]) || starts(&[0, 0, 2, 0]))
+        && (1..=256).contains(&le16(d, 4))
+        && d.len() >= 22
+        && (le32(d, 18) as usize) < d.len()
+    {
         bmp::decode_ico(d)?
     } else if looks_svg(d) {
         let s = svg::parse(d).ok_or(Error::Corrupt)?;
@@ -566,17 +738,28 @@ fn looks_svg(d: &[u8]) -> bool {
 fn embedded_xmp_thumb(d: &[u8], name: &'static str) -> Result<Image, Error> {
     let key = b"xmpGImg:image>";
     let pos = d.windows(key.len()).position(|w| w == key);
-    let from_attr = || d.windows(15).position(|w| w == b"xmpGImg:image=\"").map(|p| p + 15);
+    let from_attr = || {
+        d.windows(15)
+            .position(|w| w == b"xmpGImg:image=\"")
+            .map(|p| p + 15)
+    };
     let start = match pos {
         Some(p) => p + key.len(),
         None => from_attr().ok_or(Error::Variant("aperçu absent"))?,
     };
-    let end = start + d[start..].iter().position(|&c| c == b'<' || c == b'"').ok_or(Error::Corrupt)?;
+    let end = start
+        + d[start..]
+            .iter()
+            .position(|&c| c == b'<' || c == b'"')
+            .ok_or(Error::Corrupt)?;
     let b64 = String::from_utf8_lossy(&d[start..end]).replace("&#xA;", "");
     let bytes = base64(&b64).ok_or(Error::Corrupt)?;
     let r = jpeg::decode_raster(&bytes, None)?;
     let mut img = Image::new(name);
-    meta::xmp(d.get(start.saturating_sub(65536)..end).unwrap_or(&[]), &mut img);
+    meta::xmp(
+        d.get(start.saturating_sub(65536)..end).unwrap_or(&[]),
+        &mut img,
+    );
     img.embedded_preview = true;
     img.pages.push(Page::raster(String::new(), r));
     Ok(img)
@@ -594,7 +777,7 @@ fn eps(d: &[u8]) -> Result<Image, Error> {
                 return Ok(img);
             }
         }
-        let wo = le32(d, 12) as usize;
+        let _wo = le32(d, 12) as usize;
         let wl = le32(d, 16) as usize;
         if wl > 0 {
             return Err(Error::Variant("EPS aperçu WMF"));
@@ -606,15 +789,31 @@ fn eps(d: &[u8]) -> Result<Image, Error> {
     }
     let s = String::from_utf8_lossy(&d[..d.len().min(8 << 20)]);
     if let Some(p) = s.find("%%BeginPreview:") {
-        let head: Vec<u32> = s[p + 15..].lines().next().unwrap_or("").split_whitespace().filter_map(|v| v.parse().ok()).collect();
+        let head: Vec<u32> = s[p + 15..]
+            .lines()
+            .next()
+            .unwrap_or("")
+            .split_whitespace()
+            .filter_map(|v| v.parse().ok())
+            .collect();
         if head.len() >= 3 {
             let (w, h, bits) = (head[0], head[1], head[2].max(1));
             check_size(w, h)?;
-            let end = s[p..].find("%%EndPreview").map(|e| p + e).unwrap_or(s.len());
+            let end = s[p..]
+                .find("%%EndPreview")
+                .map(|e| p + e)
+                .unwrap_or(s.len());
             let hex: Vec<u8> = s[p..end]
                 .lines()
                 .skip(1)
-                .flat_map(|l| l.trim_start_matches('%').trim().as_bytes().chunks(2).filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok()).collect::<Vec<_>>())
+                .flat_map(|l| {
+                    l.trim_start_matches('%')
+                        .trim()
+                        .as_bytes()
+                        .chunks(2)
+                        .filter_map(|c| u8::from_str_radix(std::str::from_utf8(c).ok()?, 16).ok())
+                        .collect::<Vec<_>>()
+                })
                 .collect();
             let stride = (w as usize * bits as usize).div_ceil(8);
             let mut r = Raster::new(w, h);
@@ -773,7 +972,17 @@ impl Loaded {
 
     /// Rend la page dans `out` (BGRA, `stride` octets par ligne).
     #[allow(clippy::too_many_arguments)]
-    pub fn render(&mut self, page: usize, v: &View, ow: usize, oh: usize, stride: usize, out: &mut [u8], bg: [u8; 3], checker: bool) {
+    pub fn render(
+        &mut self,
+        page: usize,
+        v: &View,
+        ow: usize,
+        oh: usize,
+        stride: usize,
+        out: &mut [u8],
+        bg: [u8; 3],
+        checker: bool,
+    ) {
         if ow == 0 || oh == 0 || out.len() < stride * (oh - 1) + ow * 4 {
             return;
         }
@@ -801,10 +1010,18 @@ impl Loaded {
                 let Some(inv) = view_m.inv() else {
                     return;
                 };
-                let auto = if v.auto_levels { Some(self.auto(page)) } else { None };
+                let auto = if v.auto_levels {
+                    Some(self.auto(page))
+                } else {
+                    None
+                };
                 let gain = 2f32.powf(v.exposure);
                 let adjust = v.exposure.abs() > 1e-3 || auto.is_some();
-                let split_x = if v.split >= 0.0 { (v.split * ow as f32) as usize } else { 0 };
+                let split_x = if v.split >= 0.0 {
+                    (v.split * ow as f32) as usize
+                } else {
+                    0
+                };
                 let Some(r) = self.mip(page, level) else {
                     return;
                 };
@@ -823,7 +1040,12 @@ impl Loaded {
                         let mut c = if nearest {
                             let p = r.get(su as u32, sv as u32);
                             let a = p[3] as f32 / 255.0;
-                            [p[0] as f32 / 255.0 * a, p[1] as f32 / 255.0 * a, p[2] as f32 / 255.0 * a, a]
+                            [
+                                p[0] as f32 / 255.0 * a,
+                                p[1] as f32 / 255.0 * a,
+                                p[2] as f32 / 255.0 * a,
+                                a,
+                            ]
                         } else {
                             r.sample_premul(su, sv)
                         };
@@ -832,7 +1054,9 @@ impl Loaded {
                                 let mut val = c[k];
                                 if let Some(l) = auto {
                                     let a = c[3].max(1e-6);
-                                    val = ((val / a - l[k]) / (l[k + 3] - l[k]).max(1e-3)).clamp(0.0, 1.0) * a;
+                                    val = ((val / a - l[k]) / (l[k + 3] - l[k]).max(1e-3))
+                                        .clamp(0.0, 1.0)
+                                        * a;
                                 }
                                 c[k] = (val * gain).min(c[3]);
                             }
@@ -846,22 +1070,29 @@ impl Loaded {
         let dark = (bg[0] as u32 + bg[1] as u32 + bg[2] as u32) < 384;
         let (c1, c2) = if dark { (0x3A, 0x30) } else { (0xFF, 0xE6) };
         let inv = view_m.inv();
-        let bgf = [bg[0] as f32 / 255.0, bg[1] as f32 / 255.0, bg[2] as f32 / 255.0];
+        let bgf = [
+            bg[0] as f32 / 255.0,
+            bg[1] as f32 / 255.0,
+            bg[2] as f32 / 255.0,
+        ];
         for y in 0..oh {
             let row = &mut out[y * stride..y * stride + ow * 4];
             for x in 0..ow {
                 let p = cv.px[y * ow + x];
                 let a = p[3].clamp(0.0, 1.0);
-                let base = if checker && a < 1.0 && inv.is_some_and(|i| {
-                    let (u, v) = i.apply((x as f32 + 0.5, y as f32 + 0.5));
-                    u >= 0.0 && v >= 0.0 && u < pw as f32 && v < ph as f32
-                }) {
+                let base = if checker
+                    && a < 1.0
+                    && inv.is_some_and(|i| {
+                        let (u, v) = i.apply((x as f32 + 0.5, y as f32 + 0.5));
+                        u >= 0.0 && v >= 0.0 && u < pw as f32 && v < ph as f32
+                    }) {
                     let k = if ((x / 8) + (y / 8)) % 2 == 0 { c1 } else { c2 };
                     [k as f32 / 255.0; 3]
                 } else {
                     bgf
                 };
-                let px = |i: usize| ((p[i] + base[i] * (1.0 - a)).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
+                let px =
+                    |i: usize| ((p[i] + base[i] * (1.0 - a)).clamp(0.0, 1.0) * 255.0 + 0.5) as u8;
                 row[x * 4] = px(2);
                 row[x * 4 + 1] = px(1);
                 row[x * 4 + 2] = px(0);
@@ -893,7 +1124,11 @@ pub fn view_matrix(v: &View, _pw: f32, _ph: f32, ow: f32, oh: f32) -> Mat {
         3 => Mat([0.0, -1.0, 1.0, 0.0, 0.0, 0.0]),
         _ => Mat::ID,
     };
-    let mir = if v.mirror { Mat::scale(-1.0, 1.0) } else { Mat::ID };
+    let mir = if v.mirror {
+        Mat::scale(-1.0, 1.0)
+    } else {
+        Mat::ID
+    };
     Mat::translate(ow / 2.0, oh / 2.0)
         .mul(&mir)
         .mul(&rot)
@@ -906,7 +1141,14 @@ pub fn thumbnail(img: &mut Loaded, size: u32) -> Vec<u8> {
     let s = size as usize;
     let (pw, ph) = img.img.pages.first().map(|p| p.size()).unwrap_or((1, 1));
     let zoom = (size as f32 / pw.max(1) as f32).min(size as f32 / ph.max(1) as f32);
-    let zoom = if matches!(img.img.pages.first().map(|p| &p.content), Some(Content::Vector(_))) { zoom } else { zoom.min(1.0) };
+    let zoom = if matches!(
+        img.img.pages.first().map(|p| &p.content),
+        Some(Content::Vector(_))
+    ) {
+        zoom
+    } else {
+        zoom.min(1.0)
+    };
     let v = View {
         zoom,
         cx: pw as f32 / 2.0,
@@ -917,7 +1159,10 @@ pub fn thumbnail(img: &mut Loaded, size: u32) -> Vec<u8> {
     let mut a = vec![0u8; s * s * 4];
     let mut b = vec![0u8; s * s * 4];
     img.render(0, &v, s, s, s * 4, &mut a, [0, 0, 0], false);
-    let is_model = matches!(img.img.pages.first().map(|p| &p.content), Some(Content::Model(_)));
+    let is_model = matches!(
+        img.img.pages.first().map(|p| &p.content),
+        Some(Content::Model(_))
+    );
     if is_model {
         // l'aperçu 3D n'a pas de transparence partielle : fond = transparent
         let mut out = vec![0u8; s * s * 4];
