@@ -4,9 +4,9 @@
 
 ## Statistiques
 
-- Réalisé : **189**
+- Réalisé : **190**
 - À faire ou en cours : **43**
-- Total : **232**
+- Total : **233**
 - Progression : **81.5%**
 - Dernière mise à jour : 31/10/2026 (PRs #36 à #76, #73, #100, #101, #103, #105, #110, #112, #113, #115, #114, #106, #107, #104 et graphisme 3D #92, issues #10 à #98)
 
