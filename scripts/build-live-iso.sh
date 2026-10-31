@@ -255,6 +255,7 @@ for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmo
         case "$module" in *.zst) zstd -q -d -c "$module" >"$destination" ;; *) cp "$module" "$destination" ;; esac
     done
 done
+sh "$root/scripts/stage-storage-tools.sh" "$stage" "$kernel_release"
 depmod -b "$stage" "$kernel_release" 2>/dev/null
 for metadata in modules.builtin modules.builtin.modinfo; do
     if test -f "/lib/modules/$kernel_release/$metadata"; then cp "/lib/modules/$kernel_release/$metadata" "$stage/lib/modules/$kernel_release/$metadata"; fi
