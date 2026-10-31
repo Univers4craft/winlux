@@ -97,7 +97,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 29] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 30] = [
             (b"Terminal", b"xterm", 1),
             (b"Explorateur de fichiers", b"nemo", 1),
             (b"Bloc-notes", b"mousepad", 1),
@@ -127,6 +127,7 @@ fn init_apps() {
             (b"Disques", b"gnome-disks", 9),
             (b"Moniteur syst\xE8me", b"gnome-system-monitor", 9),
             (b"Gestionnaire des t\xE2ches", b"taskmgr", 9),
+            (b"Nettoyage de disque", b"diskcleaner", 9),
         ];
         for (name, exec, cat) in apps.iter() {
             if ALL_APPS_COUNT < 64 {
@@ -960,6 +961,7 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout, dy: i32) 
             Some(wm::APP_EXPLORER) => Glyph::Folder,
             Some(wm::APP_NOTEPAD) => Glyph::File,
             Some(wm::APP_UTILITIES) => Glyph::Tools,
+            Some(wm::APP_CLEANUP) => Glyph::Drive,
             Some(_) => Glyph::Settings,
             None => Glyph::Start,
         };
@@ -1271,6 +1273,10 @@ unsafe fn launch(what: Launch) {
             // Gestionnaire des tâches intégré dans le WM
             if cmd == b"taskmgr" {
                 wm::open(wm::APP_TASKMGR);
+                return;
+            }
+            if cmd == b"diskcleaner" {
+                wm::open(wm::APP_CLEANUP);
                 return;
             }
             let mut wcmd = [0u16; 256];
