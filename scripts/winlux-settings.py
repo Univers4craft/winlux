@@ -79,8 +79,8 @@ class Settings(Gtk.Window):
         self.connect("destroy", Gtk.main_quit)
         try: requested = int(os.environ.get("WINLUX_SETTINGS_PAGE", "0"))
         except ValueError: requested = 0
-        # Le bureau numérote « Graphismes » 16 ; ici elle suit « Effets visuels ».
-        self.page = GRAPHICS_PAGE if requested == 16 else min(13, max(0, requested))
+        # Le bureau numérote « Graphismes » 22 ; ici elle suit « Effets visuels ».
+        self.page = GRAPHICS_PAGE if requested == 22 else min(13, max(0, requested))
         self.process = None
         self.active_action = None
         css = Gtk.CssProvider()
@@ -176,7 +176,7 @@ class Settings(Gtk.Window):
         if self.page in (1, 10, 12, 13, GRAPHICS_PAGE):
             self.label("Ouvrir les réglages détaillés de cette catégorie :")
             button = Gtk.Button(label="Réglages avancés")
-            legacy_page = 16 if self.page == GRAPHICS_PAGE else self.page
+            legacy_page = 22 if self.page == GRAPHICS_PAGE else self.page
             button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
             self.body.pack_start(button, False, False, 0)
         self.notice = self.label("")

@@ -41,6 +41,18 @@ cat > "$work/bin/winlux-network" <<'MOCK'
 #!/bin/sh
 printf 'network %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"
 MOCK
+cat > "$work/bin/apt-get" <<'MOCK'
+#!/bin/sh
+case "$*" in
+  '-s -q upgrade') echo 'Inst libfoo1 [1.0-1] (1.0-2 Ubuntu:26.04/resolute-updates [amd64])' ;;
+  *) printf 'apt-get %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+esac
+MOCK
+cat > "$work/bin/id" <<'MOCK'
+#!/bin/sh
+echo 0
+MOCK
+printf '#!/bin/sh\nexec sh "%s/scripts/winlux-sysupdate.sh" "$@"\n' "$project" > "$work/bin/winlux-sysupdate"
 chmod 755 "$work/bin/"*
 control() { sh "$project/scripts/winlux-control.sh" "$@"; }
 control status
@@ -95,6 +107,31 @@ control update-check
 grep -q '^desktop v1 -> v2$' "$work/root/run/winlux/updates.txt"
 control update-apply
 grep -q '^Update complete$' "$work/root/run/winlux/update.log"
+grep -qx 'welcome_done=0' "$work/root/run/winlux/control.txt"
+control welcome-done
+grep -qx 'welcome_done=1' "$work/root/run/winlux/control.txt"
+grep -qx 'privacy_telemetry=off' "$work/root/run/winlux/control.txt"
+grep -qx 'privacy_location=deny' "$work/root/run/winlux/control.txt"
+grep -qx 'privacy_location_history=off' "$work/root/run/winlux/control.txt"
+control privacy-microphone-deny
+grep -qx 'MICROPHONE=deny' "$work/root/etc/winlux/privacy.conf"
+grep -qx 'privacy_microphone=deny' "$work/root/run/winlux/control.txt"
+grep -qx 'sysupdate_mode=manual' "$work/root/run/winlux/control.txt"
+control sysupdate-mode-scheduled
+grep -qx 'sysupdate_mode=scheduled' "$work/root/run/winlux/control.txt"
+grep -qx 'update --auto disable' "$work/commands"
+control sysupdate-hour-up
+grep -qx 'sysupdate_hour=4' "$work/root/run/winlux/control.txt"
+control sysupdate-day-next
+grep -qx 'sysupdate_day=mon' "$work/root/run/winlux/control.txt"
+control sysupdate-mode-auto
+grep -qx 'update --auto enable' "$work/commands"
+control sysupdate-check
+grep -qx 'sysupdate_count=1' "$work/root/run/winlux/control.txt"
+grep -qx 'libfoo1 1.0-1 -> 1.0-2' "$work/root/run/winlux/sysupdates.txt"
+control sysupdate-apply
+grep -q '^apt-get -q -y .* upgrade$' "$work/commands"
+grep -qx 'sysupdate_count=0' "$work/root/run/winlux/control.txt"
 touch "$work/root/etc/winlux/live-session"
 if WINLUX_TEST_BUSY=1 control poweroff; then echo 'ERROR: shutdown allowed during update' >&2; exit 1; fi
 if WINLUX_TEST_BUSY=1 control reboot; then echo 'ERROR: reboot allowed during update' >&2; exit 1; fi
@@ -103,6 +140,33 @@ rm "$work/root/etc/winlux/live-session"
 if control reboot; then echo 'ERROR: refused-host-reboot failed' >&2; exit 1; fi
 grep -q 'Arret reserve a Winlux Live' "$work/root/run/winlux/action.log"
 if control 'keyboard-fr;reboot'; then echo 'ERROR: invalid-action failed' >&2; exit 1; fi
+cat > "$work/bin/winlux" <<'MOCK'
+#!/bin/sh
+case "$1" in
+  --cpu-report) printf 'cpu_count=4\ncap_governor=1\nprofiles=performance,powersave\ncap_hybrid=0\n' ;;
+  --cpu-profile) test "$2" != balanced || { echo 'profil balanced indisponible' >&2; exit 1; }; printf 'cpu-profile %s %s\n' "$2" "$3" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+  --fan-daemon) printf 'fan-daemon %s\n' "$2" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+esac
+MOCK
+chmod 755 "$work/bin/winlux"
+control status
+grep -qx 'cap_governor=1' "$work/root/run/winlux/cpu.txt"
+grep -qx 'hybrid_policy=auto' "$work/root/run/winlux/cpu.txt"
+grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
+control cpu-profile-performance
+grep -qx "cpu-profile performance $work/root" "$work/commands"
+grep -qx 'CPU_PROFILE=performance' "$work/root/etc/winlux/cpu.conf"
+if control cpu-profile-balanced; then echo 'ERROR: unavailable CPU profile accepted' >&2; exit 1; fi
+grep -qx 'CPU_PROFILE=performance' "$work/root/etc/winlux/cpu.conf"
+control cpu-hybrid-heavy
+grep -qx 'hybrid_policy=heavy' "$work/root/run/winlux/cpu.txt"
+if control 'cpu-hybrid-turbo'; then echo 'ERROR: invalid hybrid policy accepted' >&2; exit 1; fi
+control cpu-fan-quiet
+grep -qx 'FAN_CURVE=quiet' "$work/root/etc/winlux/cpu.conf"
+for attempt in 1 2 3 4 5 6 7 8 9 10; do grep -q '^fan-daemon ' "$work/commands" && break; sleep 0.1; done
+grep -qx "fan-daemon $work/root" "$work/commands"
+control cpu-fan-auto
+grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
 # GPU : seuls des jetons simples atteignent le runtime, qui revalide.
 cat > "$work/bin/winlux" <<'MOCK'
 #!/bin/sh
@@ -148,4 +212,4 @@ MOCK
 test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_03_00_0
 test "$(sh "$project/scripts/winlux-prime-run.sh" --integrated sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_00_02_0
 test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$PATH"')" = "$PATH"
-echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, host protection, GPU, overlay, prime-run'
+echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, system updates, privacy, welcome, host protection, CPU, GPU, overlay, prime-run'

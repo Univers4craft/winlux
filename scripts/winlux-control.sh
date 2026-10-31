@@ -15,7 +15,9 @@ pref() { value "$config/preferences.conf" "$1"; }
 overlay() { value "$config/overlay.conf" "$1"; }
 # Les jeux lancés par l'utilisateur lisent ce fichier : il reste lisible.
 save_overlay() { save "$config/overlay.conf" "$1" "$2" && chmod 644 "$config/overlay.conf"; }
+cpu_pref() { value "$config/cpu.conf" "$1"; }
 input() { value "$config/input.conf" "$1"; }
+privacy() { v=$(value "$config/privacy.conf" "$1"); printf '%s\n' "${v:-$2}"; }
 save() {
     file=$1 key=$2 new_value=$3
     tmp="$file.$$"
@@ -43,6 +45,8 @@ status() {
         printf 'mouse_speed=%s\n' "$(input MOUSE_SPEED | sed 's/^$/50/')"
         printf 'align=%s\n' "$(pref TASKBAR_ALIGN)"
         printf 'theme=%s\n' "$(pref THEME)"
+        printf 'lang=%s\n' "$(value "$config/locale.conf" LANG | sed 's/^$/fr/')"
+        printf 'timezone=%s\n' "$(cat /etc/timezone 2>/dev/null || printf 'Europe/Paris')"
         printf 'network='; if have ip; then
             iface=$(ip -4 route show default 2>/dev/null | awk 'NR==1 { print $5 }')
             if test -n "$iface"; then
@@ -88,18 +92,55 @@ status() {
             setting=$(overlay "OVERLAY_$(printf '%s' "$metric" | tr 'a-z' 'A-Z')")
             printf 'overlay_%s=%s\n' "$metric" "${setting:-1}"
         done
+        gpu_count=$(cat "$root/run/winlux/hw/gpu-count" 2>/dev/null || echo 0)
+        printf 'gpu_count=%s\n' "$gpu_count"
+        test "$(cat "$root/run/winlux/hw/has-nvidia" 2>/dev/null)" = 1 && printf 'gpu_nvidia=%s\n' "$(cat "$root/run/winlux/hw/nvidia-driver" 2>/dev/null || echo nouveau)"
+        test "$(cat "$root/run/winlux/hw/has-amd" 2>/dev/null)" = 1 && printf 'gpu_amd=%s\n' "$(cat "$root/run/winlux/hw/amd-driver" 2>/dev/null || echo amdgpu)"
+        test "$(cat "$root/run/winlux/hw/has-intel" 2>/dev/null)" = 1 && printf 'gpu_intel=i915\n'
+        gpu_mode=$(cat "$root/run/winlux/hw/gpu-mode" 2>/dev/null || true)
+        test -n "$gpu_mode" && printf 'gpu_mode=%s\n' "$gpu_mode"
+        printf 'cpu_sockets=%s\n' "$(cat "$root/run/winlux/hw/cpu-sockets" 2>/dev/null || echo 1)"
+        printf 'cpu_threads=%s\n' "$(cat "$root/run/winlux/hw/cpu-threads" 2>/dev/null || echo 1)"
+        printf 'wifi=%s\n' "$(cat "$root/run/winlux/hw/has-wifi" 2>/dev/null || echo 0)"
+        printf 'touchpad=%s\n' "$(cat "$root/run/winlux/hw/has-touchpad" 2>/dev/null || echo 0)"
+        printf 'webcam=%s\n' "$(cat "$root/run/winlux/hw/has-webcam" 2>/dev/null || echo 0)"
+        welcome=$(pref WELCOME_DONE); printf 'welcome_done=%s\n' "${welcome:-0}"
+        # Vie privee : rien n'est envoye par defaut, la localisation est coupee.
+        printf 'privacy_telemetry=%s\n' "$(privacy TELEMETRY off)"
+        printf 'privacy_microphone=%s\n' "$(privacy MICROPHONE allow)"
+        printf 'privacy_camera=%s\n' "$(privacy CAMERA allow)"
+        printf 'privacy_location=%s\n' "$(privacy LOCATION deny)"
+        printf 'privacy_location_history=%s\n' "$(privacy LOCATION_HISTORY off)"
+        if have winlux-sysupdate; then winlux-sysupdate status 2>/dev/null || true; fi
         printf 'control_available=1\n'
         if have winlux-browsers; then winlux-browsers --status 2>/dev/null || true; fi
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
         if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi
     } > "$run/control.txt.tmp.$$"
     mv "$run/control.txt.tmp.$$" "$run/control.txt"
+    cpu_status
     # --list lit seulement le manifeste deja en cache, sans acces reseau.
     if have winlux-update; then
         if winlux-update --list > "$run/updates.txt.tmp.$$" 2>/dev/null; then
             mv "$run/updates.txt.tmp.$$" "$run/updates.txt"
         else rm -f "$run/updates.txt.tmp.$$"; fi
     fi
+}
+# Capacites processeur detectees par le runtime : chaque section des
+# Parametres n'apparait que si son cap_*=1 (garde-fous materiels).
+cpu_status() {
+    have winlux || { rm -f "$run/cpu.txt"; return 0; }
+    if winlux --cpu-report "${root:-/}" > "$run/cpu.txt.tmp.$$" 2>/dev/null; then
+        hybrid=$(cpu_pref HYBRID_POLICY) fan=$(cpu_pref FAN_CURVE)
+        printf 'hybrid_policy=%s\nfan_curve=%s\n' "${hybrid:-auto}" "${fan:-auto}" >> "$run/cpu.txt.tmp.$$"
+        mv "$run/cpu.txt.tmp.$$" "$run/cpu.txt"
+    else rm -f "$run/cpu.txt.tmp.$$"; fi
+}
+fan_daemon() {
+    pid=$(cat "$run/fan-daemon.pid" 2>/dev/null || true)
+    case "$pid" in ''|*[!0-9]*) ;; *) if kill -0 "$pid" 2>/dev/null; then return 0; fi ;; esac
+    winlux --fan-daemon "${root:-/}" >> "$run/fan.log" 2>&1 &
+    printf '%s\n' "$!" > "$run/fan-daemon.pid"
 }
 apply_tap() {
     have xinput || { echo 'xinput indisponible : reglage du pave tactile impossible' >&2; return 1; }
@@ -185,11 +226,25 @@ perform() {
             elif have amixer; then
                 case "$action" in volume-up) amixer set Master 5%+ ;; volume-down) amixer set Master 5%- ;; *) amixer set Master toggle ;; esac
             else echo 'Aucun mixeur audio installe.' >&2; return 1; fi ;;
-        keyboard-fr|keyboard-us)
+        keyboard-fr|keyboard-us|keyboard-de|keyboard-es|keyboard-gb|keyboard-it|keyboard-pt|keyboard-be)
             layout=${action#keyboard-}
             have setxkbmap || { echo 'setxkbmap indisponible' >&2; return 1; }
             setxkbmap -layout "$layout" || return
             save "$config/input.conf" XKB_LAYOUT "$layout" ;;
+        lang-fr|lang-en|lang-es|lang-de|locale-fr|locale-en|locale-es|locale-de)
+            lang=${action#*-}
+            save "$config/locale.conf" LANG "$lang" ;;
+        tz-*|timezone-*)
+            tz=${action#tz-}; tz=${tz#timezone-}
+            case "$tz" in *[!A-Za-z0-9/_+-]*) echo "Fuseau invalide : $tz" >&2; return 1 ;; esac
+            test -f "/usr/share/zoneinfo/$tz" || { echo "Fuseau inconnu : $tz" >&2; return 1; }
+            if have timedatectl; then
+                timedatectl set-timezone "$tz" || return
+            else
+                ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime || return
+                printf '%s\n' "$tz" > /etc/timezone || return
+            fi
+            save "$config/locale.conf" TIMEZONE "$tz" ;;
         tap-on|tap-off)
             tap=0; test "$action" != tap-on || tap=1
             apply_tap "$tap" || return
@@ -260,6 +315,21 @@ perform() {
             metric=${action#overlay-}; state=${metric##*-}; metric=${metric%-*}
             on=0; test "$state" != on || on=1
             save_overlay "OVERLAY_$(printf '%s' "$metric" | tr 'a-z' 'A-Z')" "$on" ;;
+        cpu-profile-performance|cpu-profile-balanced|cpu-profile-powersave)
+            have winlux || { echo 'Runtime winlux introuvable' >&2; return 1; }
+            winlux --cpu-profile "${action#cpu-profile-}" "${root:-/}" || return
+            save "$config/cpu.conf" CPU_PROFILE "${action#cpu-profile-}" ;;
+        cpu-hybrid-auto|cpu-hybrid-heavy|cpu-hybrid-performance|cpu-hybrid-efficiency)
+            save "$config/cpu.conf" HYBRID_POLICY "${action#cpu-hybrid-}" ;;
+        cpu-fan-auto|cpu-fan-quiet|cpu-fan-balanced|cpu-fan-performance)
+            have winlux || { echo 'Runtime winlux introuvable' >&2; return 1; }
+            save "$config/cpu.conf" FAN_CURVE "${action#cpu-fan-}" || return
+            # Le demon rend lui-meme la main au firmware en mode auto.
+            test "$action" = cpu-fan-auto || fan_daemon ;;
+        cpu-restore)
+            profile=$(cpu_pref CPU_PROFILE)
+            case "$profile" in performance|balanced|powersave) winlux --cpu-profile "$profile" "${root:-/}" || true ;; esac
+            case "$(cpu_pref FAN_CURVE)" in quiet|balanced|performance) fan_daemon ;; esac ;;
         display-follow|display-fixed) winlux-display "${action#display-}" ;;
         display-mode-*) mode=${action#display-mode-}; case "$mode" in *[!0-9x]*|'') return 1 ;; esac; winlux-display mode "$mode" ;;
         display-scale-auto) winlux-display scale auto ;;
@@ -278,6 +348,21 @@ perform() {
         update-apply) winlux-update --apply ;;
         update-rollback) winlux-update --rollback ;;
         update-auto-on) winlux-update --auto enable ;;
+        sysupdate-mode-auto|sysupdate-mode-manual|sysupdate-mode-scheduled)
+            winlux-sysupdate --mode "${action#sysupdate-mode-}" || return
+            # Le mode s'applique aussi aux mises a jour de Winlux lui-meme.
+            if test "$action" = sysupdate-mode-auto; then winlux-update --auto enable; else winlux-update --auto disable; fi ;;
+        sysupdate-hour-up|sysupdate-hour-down) winlux-sysupdate --hour "${action#sysupdate-hour-}" ;;
+        sysupdate-day-next) winlux-sysupdate --day next ;;
+        sysupdate-check) winlux-sysupdate --check ;;
+        sysupdate-apply) winlux-sysupdate --apply ;;
+        welcome-done) save "$config/preferences.conf" WELCOME_DONE 1 ;;
+        welcome-reset) save "$config/preferences.conf" WELCOME_DONE 0 ;;
+        privacy-telemetry-on|privacy-telemetry-off) save "$config/privacy.conf" TELEMETRY "${action#privacy-telemetry-}" && chmod 644 "$config/privacy.conf" ;;
+        privacy-microphone-allow|privacy-microphone-deny) save "$config/privacy.conf" MICROPHONE "${action#privacy-microphone-}" && chmod 644 "$config/privacy.conf" ;;
+        privacy-camera-allow|privacy-camera-deny) save "$config/privacy.conf" CAMERA "${action#privacy-camera-}" && chmod 644 "$config/privacy.conf" ;;
+        privacy-location-allow|privacy-location-deny) save "$config/privacy.conf" LOCATION "${action#privacy-location-}" && chmod 644 "$config/privacy.conf" ;;
+        privacy-history-on|privacy-history-off) save "$config/privacy.conf" LOCATION_HISTORY "${action#privacy-history-}" && chmod 644 "$config/privacy.conf" ;;
         update-auto-off) winlux-update --auto disable ;;
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
@@ -286,23 +371,29 @@ perform() {
             printf 'restart-session\n' > "$run/session-action" ;;
         poweroff|reboot)
             test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
-            if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
+            if winlux-update --busy 2>/dev/null || winlux-sysupdate --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
             /usr/bin/winlux-shutdown-screen "$action" >/dev/null 2>&1 || true
             /usr/bin/winlux-close-session || return
             sync || return
             "$action" ;;
+        journal-status|journal-list|journal-errors|journal-crashes|journal-clear|journal-rotate)
+            winlux-journal "${action#journal-}" "$2" ;;
+        journal-export) winlux-journal export "$2" ;;
+        restore-create) winlux-restore create "$2" ;;
+        restore-list|restore-status) winlux-restore "${action#restore-}" ;;
+        restore-restore|restore-delete) winlux-restore "${action#restore-}" "$2" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
     esac
 }
 log="$run/action.log"
-case "$action" in update-*) log="$run/update.log" ;; esac
+case "$action" in update-*) log="$run/update.log" ;; sysupdate-*) log="$run/sysupdate.log" ;; esac
 case "$action" in update-check|update-apply|update-rollback) rm -f "$run/update-error-phase" ;; esac
 if perform "$@" > "$log" 2>&1; then
     message 'Operation terminee.'
     result=0
 else
     result=$?
-    if test "${action#update-}" != "$action"; then
+    if test "${action#update-}" != "$action" || test "${action#sysupdate-}" != "$action"; then
         detail=$(tail -n 1 "$log")
         message "Echec de la mise à jour : ${detail:-aucun détail dans le journal}"
     else

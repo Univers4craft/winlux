@@ -547,6 +547,7 @@ pub fn prime_env(gpus: &[Gpu], pref: Preference) -> Vec<(&'static str, String)> 
     let mut env = Vec::new();
     if target.driver == "nvidia" {
         env.push(("__NV_PRIME_RENDER_OFFLOAD", "1".to_owned()));
+        env.push(("__NV_PRIME_RENDER_OFFLOAD_PROVIDER", "NVIDIA-G0".to_owned()));
         env.push(("__GLX_VENDOR_LIBRARY_NAME", "nvidia".to_owned()));
         env.push(("__VK_LAYER_NV_optimus", "NVIDIA_only".to_owned()));
     } else {
