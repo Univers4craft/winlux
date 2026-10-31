@@ -3412,8 +3412,39 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         // Grille de 96 px, comme l'alignement automatique de Windows.
         let gx = ((x - 38).max(0) + 48) / 96 * 96 + 12;
         let gy = ((y - 42).max(0) + 48) / 96 * 96 + 12;
-        let nx = gx.min(l.w - 80);
-        let ny = gy.min(l.bar_top - 90);
+        let mut nx = gx.min(l.w - 80);
+        let mut ny = gy.min(l.bar_top - 90);
+        let occupied = |cx: i32, cy: i32, skip: usize| -> bool {
+            for j in 0..5usize {
+                if j != skip && ICON_X[j] == cx && ICON_Y[j] == cy {
+                    return true;
+                }
+            }
+            false
+        };
+        if occupied(nx, ny, i) {
+            let mut best_d = i32::MAX;
+            let mut bx = ICON_X[i];
+            let mut by = ICON_Y[i];
+            let cols = (l.w - 12) / 96;
+            let rows = (l.bar_top - 12) / 96;
+            for row in 0..rows {
+                for col in 0..cols {
+                    let cx = col * 96 + 12;
+                    let cy = row * 96 + 12;
+                    if !occupied(cx, cy, i) {
+                        let d = (cx - nx).abs() + (cy - ny).abs();
+                        if d < best_d {
+                            best_d = d;
+                            bx = cx;
+                            by = cy;
+                        }
+                    }
+                }
+            }
+            nx = bx;
+            ny = by;
+        }
         if nx != ICON_X[i] || ny != ICON_Y[i] {
             ICON_X[i] = nx;
             ICON_Y[i] = ny;
@@ -3638,6 +3669,16 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
                 SEARCH_HOVER = -1;
                 set_start(false);
             }
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Win+I (Paramètres)
+    if ch == 0 && vk == 0x49 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        if win {
+            wm::open(wm::APP_SETTINGS);
             repaint(hwnd);
             return;
         }
