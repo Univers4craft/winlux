@@ -707,6 +707,8 @@ pub enum DrawCmd {
         source: Rect,
         destination: Rect,
         stretch: bool,
+        /// Interpolation bilinéaire (mode HALFTONE) au lieu du plus proche voisin.
+        smooth: bool,
         rop: RasterOp,
     },
     /// Copie depuis une bitmap mémoire (pixels stockés en COLORREF).
@@ -797,6 +799,8 @@ pub struct DcState {
     pub pen: usize,
     pub font: usize,
     pub bitmap: usize,
+    /// Mode de `SetStretchBltMode` (4 = HALFTONE : agrandissement lissé).
+    pub stretch_mode: i32,
 }
 
 /// Objet GDI créé par l'invité (`CreateSolidBrush`, `CreatePen`).
@@ -886,6 +890,7 @@ pub fn create_dc(hwnd: usize) -> usize {
             pen: 8,   // BLACK_PEN stock
             font: 14, // SYSTEM_FONT stock
             bitmap: 0,
+            stretch_mode: 1, // BLACKONWHITE, valeur Windows par défaut
         },
     );
     hdc
@@ -945,6 +950,24 @@ pub fn set_dc_bk_mode(hdc: usize, mode: u32) -> u32 {
         },
         0,
     )
+}
+
+/// Change le mode d'agrandissement du DC et renvoie l'ancien (0 si invalide).
+pub fn set_dc_stretch_mode(hdc: usize, mode: i32) -> i32 {
+    with_dc(
+        hdc,
+        |d| {
+            let old = d.stretch_mode;
+            d.stretch_mode = mode;
+            old
+        },
+        0,
+    )
+}
+
+/// Mode d'agrandissement courant (`GetStretchBltMode`).
+pub fn dc_stretch_mode(hdc: usize) -> i32 {
+    with_dc(hdc, |d| d.stretch_mode, 0)
 }
 
 /// Couleur de texte courante d'un DC (utilisée par `TextOutA`).
@@ -1036,6 +1059,9 @@ pub fn create_solid_brush(color: u32) -> usize {
 pub fn system_color_brush(index: usize, color: u32) -> usize {
     let mut cache = lock(system_brushes());
     if let Some(&handle) = cache.get(&index) {
+        // Le thème de contraste peut changer pendant l'exécution : le pinceau
+        // système garde son handle mais suit la couleur courante.
+        lock(objects()).insert(handle, GdiObject::SystemBrush(color));
         return handle;
     }
     let handle = next_handle(0x0021_0000);

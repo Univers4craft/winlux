@@ -1015,6 +1015,7 @@ extern "C" {
         sh: i32,
         rop: u32,
     ) -> i32;
+    pub fn SetStretchBltMode(hdc: Handle, mode: i32) -> i32;
     pub fn TextOutA(hdc: Handle, x: i32, y: i32, text: *const c_char, count: i32) -> i32;
     pub fn GetTextExtentPoint32A(
         hdc: Handle,
@@ -1022,6 +1023,17 @@ extern "C" {
         count: i32,
         size: *mut [i32; 2],
     ) -> i32;
+    pub fn WinluxDrawImageA(
+        hdc: Handle,
+        path: *const c_char,
+        x: i32,
+        y: i32,
+        w: i32,
+        h: i32,
+        background: u32,
+    ) -> i32;
+    pub fn AddFontResourceA(name: *const c_char) -> i32;
+    pub fn RemoveFontResourceA(name: *const c_char) -> i32;
     pub fn WinluxDrawIconA(
         hdc: Handle,
         request: *const c_char,

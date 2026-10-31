@@ -2,6 +2,7 @@
 //! avec la convention d'appel Windows. Le chargeur relie directement les
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
+pub mod a11y;
 pub mod advapi32;
 pub mod advapi32_services;
 pub mod audio_com;
@@ -25,6 +26,7 @@ pub mod evdev;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
+pub mod gdi32_fonts;
 pub mod gl_bindings;
 pub mod gui;
 mod gui_cairo;
@@ -225,6 +227,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    e.extend(gdi32_fonts::exports());
                     e
                 },
                 handle: fake_module(),
