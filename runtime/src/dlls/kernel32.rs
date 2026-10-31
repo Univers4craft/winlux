@@ -325,7 +325,7 @@ pub(crate) fn duplicate_handle_impl(handle: usize) -> Option<usize> {
         let f = lock(arc);
         f.as_raw_fd()
     };
-    let new_fd = unsafe { libc::dup(fd) };
+    let new_fd = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
     if new_fd < 0 {
         return None;
     }
@@ -939,6 +939,10 @@ pub unsafe extern "win64" fn read_file(
     };
     if h == (-10isize) as usize {
         return match std::io::stdin().read(b) {
+            Ok(0) if !b.is_empty() && fd_is_pipe(0) => {
+                crate::process::set_last_error(109);
+                0
+            }
             Ok(n) => {
                 if !read.is_null() {
                     *read = n as u32;
@@ -961,6 +965,11 @@ pub unsafe extern "win64" fn read_file(
     };
     let result = { lock(&f).read(b) };
     match result {
+        Ok(0) if !b.is_empty() && fd_of_handle(h).is_some_and(fd_is_pipe) => {
+            // Fin d'un tube : Windows répond ERROR_BROKEN_PIPE.
+            crate::process::set_last_error(109);
+            0
+        }
         Ok(n) => {
             if !read.is_null() {
                 *read = n as u32;
@@ -3412,6 +3421,79 @@ fn insert_env_entry(entry: &str, env: &mut HashMap<String, (String, String)>) {
         }
     }
 }
+/// Descripteur Linux d'un handle de fichier ou d'un handle standard.
+fn fd_of_handle(h: usize) -> Option<i32> {
+    use std::os::unix::io::AsRawFd;
+    match h as isize {
+        -10 => return Some(0),
+        -11 => return Some(1),
+        -12 => return Some(2),
+        _ => {}
+    }
+    let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())));
+    match handles.get(&h)? {
+        FileHandle::File(f) => Some(lock(f).as_raw_fd()),
+    }
+}
+/// Le descripteur est-il un tube (CreatePipe, `|` du shell) ?
+fn fd_is_pipe(fd: i32) -> bool {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    unsafe { libc::fstat(fd, &mut st) == 0 && st.st_mode & libc::S_IFMT == libc::S_IFIFO }
+}
+/// Entrée/sortie standard d'un enfant d'après un handle de STARTUPINFO :
+/// 0 ou INVALID_HANDLE_VALUE → rien (/dev/null), sinon une copie du fd.
+fn stdio_for_handle(h: usize, _which: i32) -> Option<std::process::Stdio> {
+    if h == 0 || h == usize::MAX {
+        return Some(std::process::Stdio::null());
+    }
+    let fd = fd_of_handle(h)?;
+    let copy = unsafe { libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3) };
+    if copy < 0 {
+        return None;
+    }
+    let owned = unsafe { <std::os::fd::OwnedFd as std::os::fd::FromRawFd>::from_raw_fd(copy) };
+    Some(std::process::Stdio::from(owned))
+}
+/// Handle de processus Windows pour un enfant lancé ailleurs (ShellExecuteEx).
+pub(crate) fn add_child_process(child: Child) -> usize {
+    let object = Arc::new(ProcessObject {
+        state: Mutex::new(ProcessState {
+            child: Some(child),
+            exit_code: 259,
+            suspended: false,
+        }),
+        changed: Condvar::new(),
+    });
+    add_sync(SyncHandle::Process(object), None)
+}
+#[repr(C)]
+pub struct SecurityAttributes {
+    pub length: u32,
+    pub descriptor: *mut c_void,
+    pub inherit: i32,
+}
+/// `CreatePipe` : tube anonyme Linux, lu et écrit par ReadFile/WriteFile.
+pub unsafe extern "win64" fn create_pipe(
+    read: *mut usize,
+    write: *mut usize,
+    _sa: *const SecurityAttributes,
+    _size: u32,
+) -> i32 {
+    if read.is_null() || write.is_null() {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let mut fds = [0i32; 2];
+    if libc::pipe2(fds.as_mut_ptr(), libc::O_CLOEXEC) != 0 {
+        crate::process::set_last_error(8);
+        return 0;
+    }
+    let r: File = std::os::unix::io::FromRawFd::from_raw_fd(fds[0]);
+    let w: File = std::os::unix::io::FromRawFd::from_raw_fd(fds[1]);
+    *read = insert_file(r);
+    *write = insert_file(w);
+    1
+}
 unsafe fn create_process_common(
     application: Option<String>,
     command_line: *const u8,
@@ -3426,7 +3508,10 @@ unsafe fn create_process_common(
         crate::process::set_last_error(87);
         return 0;
     }
-    if creation_flags & !(0x0800_0000 | 0x0000_0400 | 0x0000_0004) != 0 {
+    // Le débogage (DEBUG_PROCESS, DEBUG_ONLY_THIS_PROCESS) n'est pas pris en
+    // charge ; les classes de priorité, consoles, groupes et
+    // STARTUPINFOEX sont acceptés (sans effet ou traduits plus bas).
+    if creation_flags & (0x1 | 0x2) != 0 {
         crate::process::set_last_error(50);
         return 0;
     }
@@ -3440,33 +3525,58 @@ unsafe fn create_process_common(
         crate::dlls::cstr(command_line)
     };
     let mut args = split_windows_command_line(&line);
+    let app_dir =
+        crate::loader::main_module().and_then(|m| m.path.parent().map(|d| d.to_path_buf()));
     let exe = if let Some(app) = application {
         if !args.is_empty() {
             args.remove(0);
         }
         app
     } else if !args.is_empty() {
-        args.remove(0)
+        // `C:\Program Files\App\app.exe arg` sans guillemets : comme Windows,
+        // on essaie les préfixes de plus en plus longs.
+        let mut taken = 1;
+        if !line.trim_start().starts_with('"') {
+            for n in 2..=args.len() {
+                let candidate = args[..n].join(" ");
+                if crate::launch::looks_like_path(&candidate)
+                    && crate::launch::find_program(&candidate, app_dir.as_deref()).is_some()
+                {
+                    taken = n;
+                }
+            }
+        }
+        args.drain(..taken).collect::<Vec<_>>().join(" ")
     } else {
         crate::process::set_last_error(87);
         return 0;
     };
-    let mut host_path = crate::paths::to_linux(&exe);
-    if !host_path.exists() && host_path.extension().is_none() {
-        let mut x = host_path.as_os_str().to_os_string();
-        x.push(".exe");
-        let p = std::path::PathBuf::from(x);
-        if p.exists() {
-            host_path = p;
-        }
-    }
+    let mut host_path = crate::launch::find_program(&exe, app_dir.as_deref())
+        .unwrap_or_else(|| crate::paths::to_linux(&exe));
     if !host_path.exists() && crate::msi::is_msiexec(&host_path) {
         // msiexec.exe est intégré au runtime : `winlux msiexec.exe …`.
         host_path = std::path::PathBuf::from("msiexec.exe");
     }
+    if !host_path.exists()
+        && (crate::registry::cli::is_reg(&host_path)
+            || crate::registry::cli::is_regedit(&host_path))
+    {
+        // reg.exe et regedit.exe sont intégrés au runtime eux aussi.
+        let name = host_path
+            .file_name()
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        let name = if name.ends_with(".exe") {
+            name
+        } else {
+            format!("{name}.exe")
+        };
+        host_path = std::path::PathBuf::from(name);
+    }
     let is_pe = host_path
         .extension()
-        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("exe"));
+        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("exe"))
+        || (host_path.is_file() && crate::launch::is_windows_program(&host_path));
     let suspended = creation_flags & 4 != 0;
     let mut target = Vec::<std::ffi::OsString>::new();
     if is_pe {
@@ -3478,9 +3588,25 @@ unsafe fn create_process_common(
             }
         };
         target.push(runtime.into_os_string());
+        target.push(host_path.into_os_string());
+        target.extend(args.iter().map(std::ffi::OsString::from));
+    } else if crate::launch::is_desktop_entry(&host_path) {
+        // Lanceur d'appli Linux : on exécute sa ligne `Exec=`.
+        let files = crate::launch::linux_args(&args);
+        let Some((argv, _terminal)) = crate::launch::desktop_command(&host_path, &files) else {
+            crate::process::set_last_error(193);
+            return 0;
+        };
+        target.extend(argv.into_iter().map(std::ffi::OsString::from));
+    } else {
+        // Appli Linux : les chemins Windows des arguments deviennent Linux.
+        target.push(host_path.into_os_string());
+        target.extend(
+            crate::launch::linux_args(&args)
+                .into_iter()
+                .map(std::ffi::OsString::from),
+        );
     }
-    target.push(host_path.into_os_string());
-    target.extend(args.iter().map(std::ffi::OsString::from));
     let mut cmd = if suspended {
         let mut c = Command::new("/bin/sh");
         c.arg("-c")
@@ -3499,9 +3625,28 @@ unsafe fn create_process_common(
         let cwd = crate::paths::to_linux(&crate::dlls::cstr(current_directory));
         cmd.current_dir(cwd);
     }
-    if inherit_handles != 0 {
-        crate::process::set_last_error(120);
-        return 0;
+    // STARTF_USESTDHANDLES : entrée, sortie et erreur du programme lancé
+    // (tubes de CreatePipe, fichiers, ou handles standard du parent).
+    if !startup.is_null() && (*startup).flags & 0x100 != 0 {
+        let s = &*startup;
+        match (
+            stdio_for_handle(s.std_input, 0),
+            stdio_for_handle(s.std_output, 1),
+            stdio_for_handle(s.std_error, 2),
+        ) {
+            (Some(i), Some(o), Some(e)) => {
+                cmd.stdin(i).stdout(o).stderr(e);
+            }
+            _ => {
+                crate::process::set_last_error(6);
+                return 0;
+            }
+        }
+    }
+    let _ = inherit_handles;
+    // DETACHED_PROCESS / CREATE_NEW_PROCESS_GROUP : nouveau groupe de processus.
+    if creation_flags & (0x8 | 0x200) != 0 {
+        std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     }
     if let Some(env) = environment {
         cmd.env_clear();
@@ -5810,10 +5955,33 @@ pub unsafe extern "win64" fn duplicate_handle(
     dst_handle: *mut usize,
     _access: u32,
     _inherit: i32,
-    _options: u32,
+    options: u32,
 ) -> i32 {
+    // Un fichier ou un tube reçoit un vrai double (son propre fd) : fermer
+    // l'original ne ferme pas la copie, comme sous Windows.
+    let std_fd = match src_handle as isize {
+        -10 => Some(0),
+        -11 => Some(1),
+        -12 => Some(2),
+        _ => None,
+    };
+    let copy = if let Some(fd) = std_fd {
+        let new_fd = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3);
+        (new_fd >= 0).then(|| insert_file(std::os::unix::io::FromRawFd::from_raw_fd(new_fd)))
+    } else {
+        duplicate_handle_impl(src_handle)
+    };
+    let result = match copy {
+        Some(h) => {
+            if options & 1 != 0 && std_fd.is_none() {
+                close_handle(src_handle);
+            }
+            h
+        }
+        None => src_handle,
+    };
     if !dst_handle.is_null() {
-        *dst_handle = src_handle;
+        *dst_handle = result;
     }
     1
 }
@@ -5956,15 +6124,46 @@ pub unsafe extern "win64" fn set_named_pipe_handle_state(
     1
 }
 
+/// `PeekNamedPipe` : octets en attente dans un tube (sans les consommer).
+/// Un tube vide dont l'écrivain est fermé répond ERROR_BROKEN_PIPE.
 pub unsafe extern "win64" fn peek_named_pipe(
-    _h: usize,
+    h: usize,
     _buf: *mut u8,
     _size: u32,
-    _read: *mut u32,
-    _total: *mut u32,
-    _left: *mut u32,
+    read: *mut u32,
+    total: *mut u32,
+    left: *mut u32,
 ) -> i32 {
-    0
+    let Some(fd) = fd_of_handle(h) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
+    let mut avail: libc::c_int = 0;
+    if libc::ioctl(fd, libc::FIONREAD, &mut avail) != 0 {
+        crate::process::set_last_error(1);
+        return 0;
+    }
+    if avail == 0 {
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        if libc::poll(&mut p, 1, 0) == 1 && p.revents & libc::POLLHUP != 0 {
+            crate::process::set_last_error(109);
+            return 0;
+        }
+    }
+    if !read.is_null() {
+        *read = 0;
+    }
+    if !total.is_null() {
+        *total = avail.max(0) as u32;
+    }
+    if !left.is_null() {
+        *left = 0;
+    }
+    1
 }
 
 pub unsafe extern "win64" fn get_overlapped_result_ex(
@@ -5982,7 +6181,7 @@ pub fn exports() -> crate::dlls::Exports {
      "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"GetOverlappedResultEx"=>fn get_overlapped_result_ex,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
      "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
      "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
-     "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"GetCurrentThreadId"=>fn get_current_thread_id,
+     "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreatePipe"=>fn create_pipe,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"GetCurrentThreadId"=>fn get_current_thread_id,
     "GetLastError"=>fn get_last_error, "SetLastError"=>fn set_last_error, "GetProcessHeap"=>fn get_process_heap,
       "HeapAlloc"=>fn heap_alloc,"HeapReAlloc"=>fn heap_realloc,"HeapFree"=>fn heap_free,"GlobalAlloc"=>fn global_alloc,"GlobalReAlloc"=>fn global_realloc,"GlobalLock"=>fn global_lock,"GlobalUnlock"=>fn global_unlock,"GlobalSize"=>fn global_size,"GlobalFlags"=>fn global_flags,"GlobalFree"=>fn global_free,"VirtualAlloc"=>fn virtual_alloc,"VirtualFree"=>fn virtual_free,"VirtualProtect"=>fn virtual_protect,"VirtualQuery"=>fn virtual_query,"VirtualQueryEx"=>fn virtual_query_ex,"FlushInstructionCache"=>fn flush_instruction_cache,
      "GetTickCount"=>fn get_tick_count,"GetTickCount64"=>fn get_tick_count64,"GetCurrentProcessId"=>fn get_current_process_id,"CreateThread"=>fn create_thread,"CloseHandle"=>fn close_handle,"GetEnvironmentVariableA"=>fn get_environment_variable_a,"SetEnvironmentVariableA"=>fn set_environment_variable_a,
@@ -6653,6 +6852,119 @@ mod tests {
         assert_eq!(wait_for_single_object(info.process, 5000), 0);
         assert_eq!(unsafe { get_exit_code_process(info.process, &mut code) }, 1);
         assert_eq!(code, 42);
+        close_handle(info.thread);
+        close_handle(info.process);
+    }
+
+    #[test]
+    fn create_process_relie_les_tubes_dentree_et_de_sortie_dune_appli_linux() {
+        let _teb = crate::process::test_teb();
+        let mut out_r = 0usize;
+        let mut out_w = 0usize;
+        let mut in_r = 0usize;
+        let mut in_w = 0usize;
+        unsafe {
+            assert_eq!(create_pipe(&mut out_r, &mut out_w, std::ptr::null(), 0), 1);
+            assert_eq!(create_pipe(&mut in_r, &mut in_w, std::ptr::null(), 0), 1);
+        }
+        // Copie du bout de lecture, puis fermeture de l'original (comme Python).
+        let mut out_copy = 0usize;
+        unsafe {
+            assert_eq!(
+                duplicate_handle(usize::MAX, out_r, usize::MAX, &mut out_copy, 0, 0, 1),
+                1
+            );
+        }
+        assert_ne!(out_copy, out_r);
+        let line = std::ffi::CString::new(
+            "sh -c \"read l; echo \\\"recu:$l:$1\\\"; echo err >&2; exit 7\" x Z:\\etc",
+        )
+        .unwrap();
+        let startup = StartupInfoA {
+            cb: std::mem::size_of::<StartupInfoA>() as u32,
+            reserved: std::ptr::null_mut(),
+            desktop: std::ptr::null_mut(),
+            title: std::ptr::null_mut(),
+            x: 0,
+            y: 0,
+            x_size: 0,
+            y_size: 0,
+            x_chars: 0,
+            y_chars: 0,
+            fill_attribute: 0,
+            flags: 0x100,
+            show_window: 0,
+            reserved2_size: 0,
+            reserved2: std::ptr::null_mut(),
+            std_input: in_r,
+            std_output: out_w,
+            std_error: out_w,
+        };
+        let mut info = ProcessInformation {
+            process: 0,
+            thread: 0,
+            process_id: 0,
+            thread_id: 0,
+        };
+        let ok = unsafe {
+            create_process_a(
+                std::ptr::null(),
+                line.as_ptr() as *const u8,
+                0,
+                0,
+                1,
+                0x0800_0000 | 0x20,
+                std::ptr::null(),
+                std::ptr::null(),
+                &startup,
+                &mut info,
+            )
+        };
+        assert_eq!(ok, 1, "erreur {}", get_last_error());
+        close_handle(in_r);
+        close_handle(out_w);
+        let mut n = 0u32;
+        let msg = b"bonjour\n";
+        unsafe {
+            assert_eq!(
+                write_file(in_w, msg.as_ptr(), msg.len() as u32, &mut n, 0),
+                1
+            );
+        }
+        close_handle(in_w);
+        assert_eq!(wait_for_single_object(info.process, 5000), 0);
+        let mut code = 0;
+        assert_eq!(unsafe { get_exit_code_process(info.process, &mut code) }, 1);
+        assert_eq!(code, 7);
+        let mut avail = 0u32;
+        unsafe {
+            assert_eq!(
+                peek_named_pipe(
+                    out_copy,
+                    std::ptr::null_mut(),
+                    0,
+                    std::ptr::null_mut(),
+                    &mut avail,
+                    std::ptr::null_mut()
+                ),
+                1
+            );
+        }
+        assert!(avail > 0);
+        let mut all = Vec::new();
+        let mut buf = [0u8; 64];
+        loop {
+            let mut got = 0u32;
+            let r = unsafe { read_file(out_copy, buf.as_mut_ptr(), 64, &mut got, 0) };
+            if r == 0 {
+                assert_eq!(get_last_error(), 109);
+                break;
+            }
+            all.extend_from_slice(&buf[..got as usize]);
+        }
+        // Le chemin Windows `Z:\etc` est arrivé en `/etc` dans l'appli Linux.
+        assert_eq!(String::from_utf8(all).unwrap(), "recu:bonjour:/etc\nerr\n");
+        close_handle(out_copy);
         close_handle(info.thread);
         close_handle(info.process);
     }
