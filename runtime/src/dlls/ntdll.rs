@@ -16,9 +16,7 @@ const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
 const STATUS_TIMEOUT: i32 = 0x0000_0102u32 as i32;
 const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023u32 as i32;
 
-fn lock<T>(m: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    m.lock().unwrap_or_else(|e| e.into_inner())
-}
+use super::lock;
 
 // ============================================================
 //  Fonctions Rtl* existantes (inchangées)
@@ -462,7 +460,7 @@ pub unsafe extern "win64" fn rtl_create_heap(
     _params: *mut c_void,
 ) -> usize {
     // On renvoie le heap global du processus.
-    crate::dlls::kernel32::PROCESS_HEAP
+    crate::dlls::kernel32::process_heap()
 }
 
 pub unsafe extern "win64" fn rtl_destroy_heap(_heap: usize) -> usize {
