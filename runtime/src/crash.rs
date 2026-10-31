@@ -21,6 +21,16 @@ unsafe fn crash_exe_name() -> &'static [u8] {
     std::slice::from_raw_parts(base, CRASH_EXE_LEN)
 }
 
+fn is_stack_overflow(addr: usize, rsp: usize) -> bool {
+    // A faulting address within 64 KiB below the stack pointer strongly
+    // suggests the thread hit its guard page.  On Linux the guard page
+    // sits right below the mapped stack, so after a deep recursion RSP
+    // passes the last valid page and the next touch faults.
+    let page = 4096usize;
+    let margin = 16 * page;
+    addr < rsp && rsp.saturating_sub(addr) <= margin
+}
+
 extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
         let uc = ctx as *mut libc::ucontext_t;
@@ -32,6 +42,11 @@ extern "C" fn on_signal(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_
         let rdx = (*uc).uc_mcontext.gregs[libc::REG_RDX as usize] as usize;
         let addr = (*info).si_addr() as usize;
         let (what, stop_code, code) = match sig {
+            libc::SIGSEGV | libc::SIGBUS if is_stack_overflow(addr, rsp) => (
+                b"EXCEPTION_STACK_OVERFLOW".as_slice(),
+                b"KERNEL_STACK_INPAGE_ERROR".as_slice(),
+                0xC000_00FDu32,
+            ),
             libc::SIGSEGV | libc::SIGBUS => (
                 b"EXCEPTION_ACCESS_VIOLATION".as_slice(),
                 b"IRQL_NOT_LESS_OR_EQUAL".as_slice(),
@@ -279,6 +294,9 @@ pub fn install() {
             -1,
             0,
         );
+        if stack == libc::MAP_FAILED {
+            return;
+        }
         let ss = libc::stack_t {
             ss_sp: stack,
             ss_flags: 0,
