@@ -13,7 +13,12 @@ pub const PAGE_PRIVACY: usize = 18;
 pub const PAGE_CPU: usize = 19;
 /// Page « Lecteurs réseau » (FTP, SFTP, SMB… montés comme un disque).
 pub const PAGE_NETDRIVES: usize = 20;
-const PAGE_COUNT: usize = 21;
+pub const PAGE_PERSONALIZE: usize = 21;
+const PAGE_COUNT: usize = 22;
+/// Ordre d'affichage du menu : la personnalisation suit l'apparence.
+const NAV_ORDER: [usize; PAGE_COUNT] = [
+    0, 1, 2, 3, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
         tr(S_SYSTEM_LINUX),
@@ -37,6 +42,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_PRIVACY),
         tr(S_PROCESSOR),
         tr(S_NETWORK_DRIVES),
+        tr(S_PERSONALIZATION),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -332,7 +338,9 @@ pub unsafe fn system_tick() -> bool {
         open_page(11);
         changed = true;
     }
-    changed |= crate::netdrives::poll(PAGE == PAGE_NETDRIVES && crate::wm::is_open(crate::wm::APP_SETTINGS));
+    changed |= crate::netdrives::poll(
+        PAGE == PAGE_NETDRIVES && crate::wm::is_open(crate::wm::APP_SETTINGS),
+    );
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
     changed |= read(
         if PAGE == 7 {
@@ -393,6 +401,13 @@ pub unsafe fn system_tick() -> bool {
         crate::gfx::check_auto_theme();
     }
     changed
+}
+/// Relaie un réglage au service système quand il existe, sans message sinon
+/// (la personnalisation est déjà enregistrée côté bureau).
+pub unsafe fn control_quiet(action: &core::ffi::CStr) {
+    if available() {
+        control(action);
+    }
 }
 /// Notification quand de nouvelles mises à jour système apparaissent.
 unsafe fn notify_updates() {
@@ -803,8 +818,9 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         b"Param\xE8tres",
     );
     let page_names = pages();
-    for (i, name) in page_names.iter().enumerate() {
-        let r = nav_rect(f, i);
+    for (pos, &i) in NAV_ORDER.iter().enumerate() {
+        let name = &page_names[i];
+        let r = nav_rect(f, pos);
         if i == PAGE {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.selected);
             fill(
@@ -842,6 +858,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         p.accent,
     );
     match PAGE {
+        PAGE_PERSONALIZE => crate::personalize::draw_settings(g, &c),
         5 => {
             let speed_str = unsafe {
                 if MOUSE_SPEED == 25 {
@@ -1272,13 +1289,11 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 g,
                 &c,
                 300,
-                b"Ic\xF4nes du bureau",
-                b"Ajoutez seulement les ic\xF4nes que vous voulez afficher.",
+                b"Fond d'\xE9\x63ran, couleurs, barre des t\xE2\x63hes, ic\xF4nes et sons",
+                b"Galerie et aper\xE7u dans la page Personnalisation.",
             );
-            button(g, &c, 5, 0, b"Afficher Corbeille", 12);
-            button(g, &c, 5, 1, b"Afficher Explorateur", 13);
-            button(g, &c, 6, 0, b"Afficher Ce PC", 14);
-            button(g, &c, 6, 1, b"Afficher Documents", 15);
+            button(g, &c, 5, 0, b"Personnaliser", 12);
+            button(g, &c, 5, 1, b"Assistant de bienvenue", 13);
             button(g, &c, 7, 0, b"R\xE9glages de l'\xE9cran", 18);
         }
         8 => {
@@ -1465,7 +1480,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             for i in 0..LANG_COUNT {
                 button(g, &c, i as i32 / 3, i as i32 % 3, LANG_NAMES[i], i as i32);
             }
-            row(g, &c, 164, tr(S_KEYBOARD_LAYOUT), tr(S_KEYBOARD_LAYOUT_DESC));
+            row(
+                g,
+                &c,
+                164,
+                tr(S_KEYBOARD_LAYOUT),
+                tr(S_KEYBOARD_LAYOUT_DESC),
+            );
             let kb_start = unsafe { LOCALE_KB_SCROLL };
             let kb_vis = 6usize.min(KEYBOARD_COUNT);
             for i in 0..kb_vis {
@@ -1553,19 +1574,36 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 4, 1, b"Masquer", 7);
         }
         16 => {
-            row(g, &c, 44, b"P\xE9riph\xE9rique de sortie", value(b"audio_output"));
+            row(
+                g,
+                &c,
+                44,
+                b"P\xE9riph\xE9rique de sortie",
+                value(b"audio_output"),
+            );
             button(g, &c, 0, 0, b"Haut-parleurs", 0);
             button(g, &c, 0, 1, b"Casque / HDMI", 1);
             button(g, &c, 0, 2, b"Actualiser", 2);
-            row(g, &c, 170, b"P\xE9riph\xE9rique d'entr\xE9e", value(b"audio_input"));
+            row(
+                g,
+                &c,
+                170,
+                b"P\xE9riph\xE9rique d'entr\xE9e",
+                value(b"audio_input"),
+            );
             button(g, &c, 1, 0, b"Micro int\xE9gr\xE9", 3);
             button(g, &c, 1, 1, b"Micro externe", 4);
             row(g, &c, 280, b"Volume principal", value(b"audio"));
             button(g, &c, 3, 0, b"Volume -", 6);
             button(g, &c, 3, 1, b"Muet / r\xE9tablir", 7);
             button(g, &c, 3, 2, b"Volume +", 8);
-            row(g, &c, 370, b"Volume par application",
-                b"Chaque fen\xEAtre ouverte a son propre niveau de volume.");
+            row(
+                g,
+                &c,
+                370,
+                b"Volume par application",
+                b"Chaque fen\xEAtre ouverte a son propre niveau de volume.",
+            );
             let mut ay = 430i32;
             for app in 0..crate::wm::APP_COUNT {
                 if !crate::wm::is_open(app) || ay + 50 > c.bottom - c.top {
@@ -1640,6 +1678,15 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if ev == Mouse::Move && PAGE == PAGE_CPU {
         return crate::settings_cpu::hover(&content(f), x, y);
     }
+    if PAGE == PAGE_PERSONALIZE && matches!(ev, Mouse::Move | Mouse::Down | Mouse::DoubleClick) {
+        let c = content(f);
+        if ev == Mouse::Move {
+            return crate::personalize::settings_move(&c, x, y);
+        }
+        if inside(&c, x, y) {
+            return crate::personalize::settings_click(&c, x, y);
+        }
+    }
     if ev == Mouse::Move {
         let h = hit(f, x, y);
         let changed = h != HOVER;
@@ -1649,8 +1696,8 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if ev != Mouse::Down && ev != Mouse::DoubleClick {
         return false;
     }
-    for i in 0..PAGE_COUNT {
-        if inside(&nav_rect(f, i), x, y) {
+    for (pos, &i) in NAV_ORDER.iter().enumerate() {
+        if inside(&nav_rect(f, pos), x, y) {
             PAGE = i;
             SCROLL = 0;
             HOVER = -1;
@@ -1690,10 +1737,14 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             unsafe { MOUSE_SPEED = 75 };
             Some(c"mouse-fast")
         }
-        (6, 12) => Some(c"desktop-icon-recycle"),
-        (6, 13) => Some(c"desktop-icon-explorer"),
-        (6, 14) => Some(c"desktop-icon-computer"),
-        (6, 15) => Some(c"desktop-icon-documents"),
+        (6, 12) => {
+            crate::personalize::open_settings(0);
+            return true;
+        }
+        (6, 13) => {
+            crate::personalize::start_oobe();
+            return true;
+        }
         (11, id) if (0..=8).contains(&id) => Some(
             [
                 c"browser-install-edge",
@@ -1900,13 +1951,15 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (16, 7) => Some(c"volume-mute"),
         (16, 8) => Some(c"volume-up"),
         (14, 0..=3) => {
-            unsafe { CURRENT_LANG = match hit(f, x, y) {
-                0 => Lang::Fr,
-                1 => Lang::En,
-                2 => Lang::Es,
-                3 => Lang::De,
-                _ => CURRENT_LANG,
-            }};
+            unsafe {
+                CURRENT_LANG = match hit(f, x, y) {
+                    0 => Lang::Fr,
+                    1 => Lang::En,
+                    2 => Lang::Es,
+                    3 => Lang::De,
+                    _ => CURRENT_LANG,
+                }
+            };
             let code = LANG_CODES[unsafe { CURRENT_LANG } as usize];
             let mut cmd = [0u8; 16];
             cmd[..5].copy_from_slice(b"lang-");
@@ -2125,28 +2178,61 @@ unsafe fn draw_sysupdate(g: &mut Gfx, c: &Rect) {
     if value(b"sysupdate_apt") != b"1" {
         n = push(&mut summary, n, b"APT absent de cette session Live : seul Winlux est mis \xE0 jour (page Mises \xE0 jour).");
     } else if sysupdate_busy() {
-        n = push(&mut summary, n, b"Installation des paquets en cours : n'\xE9teignez pas la machine.");
+        n = push(
+            &mut summary,
+            n,
+            b"Installation des paquets en cours : n'\xE9teignez pas la machine.",
+        );
     } else {
         if count == 0 {
             n = push(&mut summary, n, b"Syst\xE8me \xE0 jour");
         } else {
             n = push_number(&mut summary, n, count);
-            n = push(&mut summary, n, if count == 1 { b" paquet \xE0 mettre \xE0 jour" } else { b" paquets \xE0 mettre \xE0 jour" });
+            n = push(
+                &mut summary,
+                n,
+                if count == 1 {
+                    b" paquet \xE0 mettre \xE0 jour"
+                } else {
+                    b" paquets \xE0 mettre \xE0 jour"
+                },
+            );
         }
         n = push(&mut summary, n, b" - derni\xE8re recherche : ");
         n = push(&mut summary, n, value(b"sysupdate_last"));
     }
-    row(g, c, 300, b"Paquets du syst\xE8me Linux (APT)", &summary[..n]);
+    row(
+        g,
+        c,
+        300,
+        b"Paquets du syst\xE8me Linux (APT)",
+        &summary[..n],
+    );
     button(g, c, 6, 0, b"Rechercher", 18);
     button(g, c, 6, 1, b"Tout installer", 19);
-    button(g, c, 6, 2, if SHOW_LOG { b"Liste des paquets" } else { b"Journal" }, 20);
+    button(
+        g,
+        c,
+        6,
+        2,
+        if SHOW_LOG {
+            b"Liste des paquets"
+        } else {
+            b"Journal"
+        },
+        20,
+    );
     text(
         g.hdc,
         g.f.semibold,
         p.text,
         c.left,
         c.top + 420,
-        if SHOW_LOG { b"Journal APT" } else { b"Paquets concern\xE9s" },
+        if SHOW_LOG {
+            b"Journal APT"
+        } else {
+            b"Paquets concern\xE9s"
+        },
     );
     journal(
         g,
@@ -2184,11 +2270,48 @@ unsafe fn draw_privacy(g: &mut Gfx, c: &Rect) {
     );
     let state = |key: &[u8], allowed_default: bool| {
         let v = value(key);
-        if allowed_default { v != b"deny" } else { v == b"allow" }
+        if allowed_default {
+            v != b"deny"
+        } else {
+            v == b"allow"
+        }
     };
-    button(g, c, 3, 0, if state(b"privacy_microphone", true) { b"Microphone : autoris\xE9" } else { b"Microphone : bloqu\xE9" }, 9);
-    button(g, c, 3, 1, if state(b"privacy_camera", true) { b"Cam\xE9ra : autoris\xE9e" } else { b"Cam\xE9ra : bloqu\xE9e" }, 10);
-    button(g, c, 3, 2, if state(b"privacy_location", false) { b"Localisation : autoris\xE9e" } else { b"Localisation : bloqu\xE9e" }, 11);
+    button(
+        g,
+        c,
+        3,
+        0,
+        if state(b"privacy_microphone", true) {
+            b"Microphone : autoris\xE9"
+        } else {
+            b"Microphone : bloqu\xE9"
+        },
+        9,
+    );
+    button(
+        g,
+        c,
+        3,
+        1,
+        if state(b"privacy_camera", true) {
+            b"Cam\xE9ra : autoris\xE9e"
+        } else {
+            b"Cam\xE9ra : bloqu\xE9e"
+        },
+        10,
+    );
+    button(
+        g,
+        c,
+        3,
+        2,
+        if state(b"privacy_location", false) {
+            b"Localisation : autoris\xE9e"
+        } else {
+            b"Localisation : bloqu\xE9e"
+        },
+        11,
+    );
     row(
         g,
         c,
