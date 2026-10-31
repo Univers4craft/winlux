@@ -28,6 +28,8 @@ def check():
             window.nav.select_row(window.nav.get_row_at_index(7))
             window.poll()
             assert not window.install_button.get_parent().get_visible(), "Install button shown for current version"
+            if not Path(module["PREVIOUS_PACKAGE"]).is_file():
+                assert not window.rollback_button.get_parent().get_visible(), "Restore shown without a previous version"
         finally:
             namespace["read"] = original_read
         window.show_update_error("update-apply", 1)

@@ -154,6 +154,8 @@ jobs:
         run: |
           bash scripts/test-updater.sh
           sh scripts/test-update-notes.sh
+          python3 -B scripts/test-update-guard.py
+          python3 -B scripts/test-apt-metadata.py
 
       - name: Valider le réseau et les commandes des paramètres
         run: |

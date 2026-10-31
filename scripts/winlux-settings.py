@@ -53,6 +53,13 @@ _TR = {
     'redémarrage conseillé': ('restart recommended', 'se recomienda reiniciar', 'Neustart empfohlen'),
     'bureau et runtime Winlux (APT)': ('Winlux desktop and runtime (APT)', 'escritorio y runtime de Winlux (APT)', 'Winlux-Desktop und -Runtime (APT)'),
     'Mio': ('MiB', 'MiB', 'MiB'),
+    'Installation automatique suspendue : ': ('Automatic installation paused: ', 'Instalación automática suspendida: ', 'Automatische Installation ausgesetzt: '),
+    'Version écartée (le bureau n’a pas démarré) : ': ('Version set aside (the desktop did not start): ', 'Versión descartada (el escritorio no se inició): ', 'Version zurückgestellt (Desktop startete nicht): '),
+    'Version restaurée automatiquement : ': ('Version restored automatically: ', 'Versión restaurada automáticamente: ', 'Automatisch wiederhergestellte Version: '),
+    'Validation au prochain démarrage du bureau : ': ('Confirmed at the next desktop start: ', 'Se confirmará en el próximo inicio del escritorio: ', 'Wird beim nächsten Desktopstart bestätigt: '),
+    'Point de restauration avant mise à jour : ': ('Restore point before update: ', 'Punto de restauración antes de actualizar: ', 'Wiederherstellungspunkt vor dem Update: '),
+    'Version précédente conservée : ': ('Previous version kept: ', 'Versión anterior conservada: ', 'Vorherige Version aufbewahrt: '),
+    'Point de restauration': ('Restore point', 'Punto de restauración', 'Wiederherstellungspunkt'),
     'Système': ('System', 'Sistema', 'System'),
     'Applications': ('Apps', 'Aplicaciones', 'Apps'),
     'Réseau': ('Network', 'Red', 'Netzwerk'),
@@ -331,7 +338,11 @@ def cpu_summary():
 # Rapport de winlux-update (toujours écrit en français) : traduit à l'affichage.
 UPDATE_PREFIXES = ("Version installée : ", "Version disponible : ", "Action en attente : ", "Portée : ",
                    "Composants : ", "Taille à télécharger : ", "Taille décompressée : ",
-                   "Action après installation : ", "Echec de la mise à jour : ")
+                   "Action après installation : ", "Echec de la mise à jour : ",
+                   "Installation automatique suspendue : ", "Version écartée (le bureau n’a pas démarré) : ",
+                   "Version restaurée automatiquement : ", "Validation au prochain démarrage du bureau : ",
+                   "Point de restauration avant mise à jour : ", "Version précédente conservée : ")
+PREVIOUS_PACKAGE = "/var/cache/winlux/previous.deb"
 UPDATE_SUFFIXES = (" octets", " Kio (hors sauvegarde et marge)")
 
 
@@ -434,11 +445,13 @@ class Settings(Gtk.Window):
                            row_spacing=8, column_spacing=8)
         self.body.pack_start(flow, False, False, 0)
         self.install_button = None
+        self.rollback_button = None
         for title, action in actions:
             button = Gtk.Button(label=title)
             button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
             if action == "update-apply": self.install_button = button
+            if action == "update-rollback": self.rollback_button = button
         self.buttons = flow
         if self.page in (1, 2, 3, 6):
             tool = {1:"apps", 2:"quick", 3:"quick", 6:"appearance"}[self.page]
@@ -478,6 +491,8 @@ class Settings(Gtk.Window):
         self.progress.set_visible(self.page == 7)
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
+        if self.rollback_button is not None:
+            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
 
     def execute(self, action):
         if self.process is not None or self.busy: return
@@ -515,6 +530,9 @@ class Settings(Gtk.Window):
         if self.page == 7: text = read("/run/winlux/updates.txt")
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in text)
+        if self.rollback_button is not None:
+            # Rien à restaurer tant qu'aucune version précédente n'est conservée.
+            self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
@@ -551,6 +569,7 @@ class Settings(Gtk.Window):
     def show_update_error(self, action, result):
         stages = {"checking": _t("Recherche et préparation"), "downloading": _t("Téléchargement"), "verifying": _t("Vérification"),
                   "extracting": _t("Décompression"), "backing-up": _t("Sauvegarde"),
+                  "restore-point": _t("Point de restauration"),
                   "installing": _t("Installation"), "finalizing": _t("Finalisation"), "restoring": _t("Restauration")}
         phase = read("/run/winlux/update-error-phase").strip()
         stage = stages.get(phase, phase or {"update-check": _t("Recherche"), "update-apply": _t("Mise à jour"),
