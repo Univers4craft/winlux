@@ -3,9 +3,14 @@
 //!
 //! - une adresse web (`https://…`, `www.…`, `microsoft-edge:…`) s'ouvre dans
 //!   le navigateur par défaut de Winlux, Microsoft Edge (voir `browser_candidates`) ;
+//! - `mailto:` ouvre le client mail Linux (`xdg-email`), un autre protocole
+//!   (`steam:`, `magnet:`, `tel:`…) l'appli Linux qui le gère (`xdg-open`),
+//!   et `file:///…` le fichier désigné ;
+//! - un lanceur Linux `.desktop` est exécuté d'après sa ligne `Exec=` ;
 //! - un exécutable Windows (`.exe`, `.com`) est relancé dans Winlux ;
 //! - `shell:terminal` ouvre un terminal Linux ;
-//! - un nom de programme sans chemin est cherché dans le `PATH` Linux ;
+//! - un nom de programme sans chemin est cherché dans le `PATH` Linux, et
+//!   les chemins Windows de ses paramètres deviennent des chemins Linux ;
 //! - une image d'un format réellement décodé par Winlux (`imaging`) s'ouvre
 //!   dans la visionneuse maison `imageviewer.exe` ;
 //! - tout autre fichier ou dossier passe par `xdg-open`.
@@ -127,16 +132,7 @@ pub unsafe extern "win64" fn sh_get_folder_path_a(
 
 /// Programme Linux trouvé dans le `PATH`.
 fn which(name: &str) -> Option<PathBuf> {
-    if name.contains('/') {
-        let p = PathBuf::from(name);
-        return p.is_file().then_some(p);
-    }
-    std::env::var_os("PATH")
-        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
-        .unwrap_or_else(|| vec!["/usr/local/bin".into(), "/usr/bin".into(), "/bin".into()])
-        .into_iter()
-        .map(|dir| dir.join(name))
-        .find(|p| p.is_file())
+    crate::launch::which(name)
 }
 
 /// Navigateurs essayés dans l'ordre : `WINLUX_BROWSER`, le lanceur Winlux,
@@ -191,8 +187,47 @@ fn is_url(s: &str) -> bool {
         || lower.starts_with("https://")
         || lower.starts_with("www.")
         || lower.starts_with("microsoft-edge:")
-        || lower.starts_with("mailto:")
         || lower.starts_with("ftp://")
+}
+
+/// Commande d'un lanceur `.desktop`, dans un terminal s'il le demande.
+fn desktop_entry(path: &Path, args: &[String]) -> Result<(PathBuf, Vec<String>), isize> {
+    let files = crate::launch::linux_args(args);
+    let (mut argv, terminal) =
+        crate::launch::desktop_command(path, &files).ok_or(SE_ERR_NOASSOC)?;
+    if terminal {
+        let term = terminal_candidates()
+            .iter()
+            .find_map(|t| which(t))
+            .ok_or(SE_ERR_NOASSOC)?;
+        argv.insert(0, "-e".into());
+        return Ok((term, argv));
+    }
+    let program = argv.remove(0);
+    let program = which(&program).ok_or(SE_ERR_FNF)?;
+    Ok((program, argv))
+}
+
+/// Protocole autre que le web : le client mail pour `mailto:`, sinon
+/// l'appli Linux déclarée pour `x-scheme-handler/…` (via `xdg-open`).
+fn protocol(target: &str, scheme: &str) -> Result<(PathBuf, Vec<String>), isize> {
+    if scheme == "mailto" {
+        if let Some(mail) = which("xdg-email") {
+            return Ok((mail, vec![target.to_string()]));
+        }
+    }
+    if let Some(opener) = which("xdg-open") {
+        return Ok((opener, vec![target.to_string()]));
+    }
+    if scheme == "mailto" {
+        // Repli : le navigateur sait souvent ouvrir un webmail.
+        for candidate in browser_candidates() {
+            if let Some(program) = which(&candidate) {
+                return Ok((program, vec![target.to_string()]));
+            }
+        }
+    }
+    Err(SE_ERR_NOASSOC)
 }
 
 /// Découpe les paramètres comme la ligne de commande Windows.
@@ -253,6 +288,10 @@ pub fn resolve(file: &str, params: &str) -> Result<(PathBuf, Vec<String>), isize
         }
         return Err(SE_ERR_NOASSOC);
     }
+    if let Some(path) = crate::launch::file_uri_path(file) {
+        let as_windows = crate::paths::to_windows(&path);
+        return resolve(&as_windows, params);
+    }
     if file.eq_ignore_ascii_case("shell:terminal") {
         for candidate in terminal_candidates() {
             if let Some(program) = which(&candidate) {
@@ -261,9 +300,10 @@ pub fn resolve(file: &str, params: &str) -> Result<(PathBuf, Vec<String>), isize
         }
         return Err(SE_ERR_NOASSOC);
     }
-    let looks_like_path = file.contains('\\')
-        || file.contains('/')
-        || (file.len() >= 2 && file.as_bytes()[1] == b':');
+    if let Some(scheme) = crate::launch::uri_scheme(file).filter(|s| s != "shell") {
+        return protocol(file, &scheme);
+    }
+    let looks_like_path = crate::launch::looks_like_path(file);
     let path = crate::paths::to_linux(file);
     if looks_like_path || path.exists() {
         if !path.exists() {
@@ -273,6 +313,9 @@ pub fn resolve(file: &str, params: &str) -> Result<(PathBuf, Vec<String>), isize
             .extension()
             .map(|e| e.to_string_lossy().to_ascii_lowercase())
             .unwrap_or_default();
+        if path.is_file() && ext == "desktop" {
+            return desktop_entry(&path, &args);
+        }
         if path.is_file() && matches!(ext.as_str(), "exe" | "com" | "scr") {
             // The desktop launcher opens a terminal for console PEs and gives
             // graphical programs an error dialog when execution fails.
@@ -298,11 +341,37 @@ pub fn resolve(file: &str, params: &str) -> Result<(PathBuf, Vec<String>), isize
         let opener = which("xdg-open").ok_or(SE_ERR_NOASSOC)?;
         return Ok((opener, vec![path.to_string_lossy().into_owned()]));
     }
-    which(file).map(|p| (p, args)).ok_or(SE_ERR_FNF)
+    if file.to_ascii_lowercase().ends_with(".desktop") {
+        if let Some(p) = crate::launch::find_program(file, None) {
+            return desktop_entry(&p, &args);
+        }
+    }
+    if let Some(p) = which(file) {
+        if !crate::launch::is_windows_program(&p) {
+            return Ok((p, crate::launch::linux_args(&args)));
+        }
+    }
+    // `notepad`, `outil.exe` : programme Windows du PATH, relancé dans Winlux.
+    match crate::launch::find_program(file, None) {
+        Some(p) if crate::launch::is_windows_program(&p) => {
+            let me = std::env::current_exe().map_err(|_| SE_ERR_FNF)?;
+            let mut a = vec![p.to_string_lossy().into_owned()];
+            a.extend(args);
+            Ok((me, a))
+        }
+        Some(p) => Ok((p, crate::launch::linux_args(&args))),
+        None => Err(SE_ERR_FNF),
+    }
 }
 
-/// Lance la commande détachée ; un fil récupère le processus à sa fin.
-fn spawn(program: &Path, args: &[String], dir: Option<PathBuf>) -> bool {
+/// Lance la commande. Sans `keep`, un fil récupère le processus à sa fin ;
+/// avec `keep`, le processus est rendu pour devenir un handle Windows.
+fn spawn(
+    program: &Path,
+    args: &[String],
+    dir: Option<PathBuf>,
+    keep: bool,
+) -> Result<Option<std::process::Child>, ()> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null());
     if program
@@ -317,29 +386,38 @@ fn spawn(program: &Path, args: &[String], dir: Option<PathBuf>) -> bool {
         cmd.current_dir(d);
     }
     match cmd.spawn() {
+        Ok(child) if keep => Ok(Some(child)),
         Ok(mut child) => {
             std::thread::spawn(move || {
                 let _ = child.wait();
             });
-            true
+            Ok(None)
         }
-        Err(_) => false,
+        Err(_) => Err(()),
     }
 }
 
 fn execute(file: &str, params: &str, dir: Option<String>) -> isize {
+    execute_keep(file, params, dir, false).0
+}
+
+fn execute_keep(
+    file: &str,
+    params: &str,
+    dir: Option<String>,
+    keep: bool,
+) -> (isize, Option<std::process::Child>) {
     match resolve(file, params) {
         Ok((program, args)) => {
             let dir = dir
                 .filter(|d| !d.is_empty())
                 .map(|d| crate::paths::to_linux(&d));
-            if spawn(&program, &args, dir) {
-                SUCCESS
-            } else {
-                SE_ERR_FNF
+            match spawn(&program, &args, dir, keep) {
+                Ok(child) => (SUCCESS, child),
+                Err(()) => (SE_ERR_FNF, None),
             }
         }
-        Err(code) => code,
+        Err(code) => (code, None),
     }
 }
 
@@ -389,8 +467,9 @@ pub unsafe extern "win64" fn shell_execute_w(
     execute(&file, &opt_w(params).unwrap_or_default(), opt_w(dir))
 }
 
-/// `SHELLEXECUTEINFOA` (x64) : cbSize, fMask, hwnd, lpVerb, lpFile,
-/// lpParameters, lpDirectory, nShow, hInstApp…
+/// `SHELLEXECUTEINFOA/W` (x64) : cbSize, fMask, hwnd, lpVerb, lpFile,
+/// lpParameters, lpDirectory, nShow, hInstApp, lpIDList, lpClass,
+/// hkeyClass, dwHotKey, hIcon/hMonitor, hProcess.
 #[repr(C)]
 pub struct ShellExecuteInfo {
     size: u32,
@@ -402,7 +481,18 @@ pub struct ShellExecuteInfo {
     directory: usize,
     show: i32,
     inst_app: isize,
+    id_list: usize,
+    class: usize,
+    hkey_class: usize,
+    hot_key: u32,
+    icon: usize,
+    process: usize,
 }
+
+/// SEE_MASK_NOCLOSEPROCESS : l'appelant veut un handle pour attendre la fin.
+const SEE_MASK_NOCLOSEPROCESS: u32 = 0x40;
+/// Taille d'une structure qui contient le champ hProcess.
+const SEI_WITH_PROCESS: u32 = std::mem::size_of::<ShellExecuteInfo>() as u32;
 
 unsafe fn execute_ex(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
     if info.is_null() {
@@ -421,12 +511,20 @@ unsafe fn execute_ex(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
         crate::process::set_last_error(2);
         return 0;
     };
-    let code = execute(
+    let wants_process = i.mask & SEE_MASK_NOCLOSEPROCESS != 0 && i.size >= SEI_WITH_PROCESS;
+    if wants_process {
+        i.process = 0;
+    }
+    let (code, child) = execute_keep(
         &file,
         &text(i.parameters).unwrap_or_default(),
         text(i.directory),
+        wants_process,
     );
     i.inst_app = code;
+    if let Some(child) = child {
+        i.process = crate::dlls::kernel32::add_child_process(child);
+    }
     if code > 32 {
         1
     } else {
@@ -447,13 +545,82 @@ pub fn exports() -> crate::dlls::Exports {
         "SHGetFolderPathA"=>fn sh_get_folder_path_a,
         "CommandLineToArgvW"=>fn command_line_to_argv_w,
         "ShellExecuteA"=>fn shell_execute_a,"ShellExecuteW"=>fn shell_execute_w,
-        "ShellExecuteExA"=>fn shell_execute_ex_a,"ShellExecuteExW"=>fn shell_execute_ex_w
+        "ShellExecuteExA"=>fn shell_execute_ex_a,"ShellExecuteExW"=>fn shell_execute_ex_w,
+        "Shell_NotifyIconA"=>fn crate::dlls::notifyicon::shell_notify_icon_a,
+        "Shell_NotifyIconW"=>fn crate::dlls::notifyicon::shell_notify_icon_w
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn make_executable(p: &Path) {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+
+    #[test]
+    fn protocoles_desktop_et_programmes_linux_du_path() {
+        let dir = std::env::temp_dir().join(format!("winlux-proto-{}", std::process::id()));
+        let bin = dir.join("bin");
+        std::fs::create_dir_all(&bin).unwrap();
+        for name in ["xdg-email", "xdg-open", "lecteur-linux", "xterm"] {
+            std::fs::write(bin.join(name), b"#!/bin/sh\n").unwrap();
+            make_executable(&bin.join(name));
+        }
+        let entry = dir.join("Lecteur.desktop");
+        std::fs::write(&entry, "[Desktop Entry]\nExec=lecteur-linux --ouvrir %F\n").unwrap();
+        let film = dir.join("film.mkv");
+        std::fs::write(&film, b"x").unwrap();
+        let film_win = crate::paths::to_windows(&film);
+        let _env = crate::launch::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let old_path = std::env::var_os("PATH");
+        std::env::set_var("PATH", &bin);
+
+        assert_eq!(
+            resolve("mailto:moi@exemple.fr?subject=Salut", "").unwrap(),
+            (
+                bin.join("xdg-email"),
+                vec!["mailto:moi@exemple.fr?subject=Salut".into()]
+            )
+        );
+        assert_eq!(
+            resolve("steam://run/440", "").unwrap(),
+            (bin.join("xdg-open"), vec!["steam://run/440".into()])
+        );
+        // Lanceur .desktop : Exec= avec le fichier converti en chemin Linux.
+        let (program, args) = resolve(entry.to_str().unwrap(), &format!("\"{film_win}\"")).unwrap();
+        assert_eq!(program, bin.join("lecteur-linux"));
+        assert_eq!(
+            args,
+            vec!["--ouvrir".to_string(), film.to_string_lossy().into_owned()]
+        );
+        // Programme Linux du PATH : les chemins Windows deviennent Linux.
+        let (program, args) = resolve("lecteur-linux", &format!("-v \"{film_win}\"")).unwrap();
+        assert_eq!(program, bin.join("lecteur-linux"));
+        assert_eq!(
+            args,
+            vec!["-v".to_string(), film.to_string_lossy().into_owned()]
+        );
+        // Terminal=true : ouvert dans un terminal.
+        std::fs::write(
+            &entry,
+            "[Desktop Entry]\nExec=lecteur-linux\nTerminal=true\n",
+        )
+        .unwrap();
+        let (program, args) = resolve(entry.to_str().unwrap(), "").unwrap();
+        assert_eq!(program, bin.join("xterm"));
+        assert_eq!(args, vec!["-e".to_string(), "lecteur-linux".into()]);
+
+        match old_path {
+            Some(p) => std::env::set_var("PATH", p),
+            None => std::env::remove_var("PATH"),
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn decoded_images_open_in_the_winlux_viewer_and_others_do_not() {
@@ -540,6 +707,10 @@ mod tests {
         std::fs::create_dir_all(&bin).unwrap();
         let edge = bin.join("microsoft-edge-stable");
         std::fs::write(&edge, b"#!/bin/sh\n").unwrap();
+        make_executable(&edge);
+        let _env = crate::launch::TEST_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
         let old_path = std::env::var_os("PATH");
         let mut paths = vec![bin.clone()];
         if let Some(ref old) = old_path {
@@ -548,6 +719,7 @@ mod tests {
         std::env::set_var("PATH", std::env::join_paths(paths).unwrap());
         let launcher = bin.join("winlux-open");
         std::fs::write(&launcher, b"#!/bin/sh\n").unwrap();
+        make_executable(&launcher);
         assert_eq!(
             resolve(exe.to_str().unwrap(), "-a").unwrap(),
             (

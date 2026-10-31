@@ -31,6 +31,7 @@ _COL = {"en": 0, "es": 1, "de": 2}
 _TR = {
     'Bienvenue dans Winlux': ('Welcome to Winlux', 'Bienvenido a Winlux', 'Willkommen bei Winlux'),
     'Préparez votre ordinateur à votre rythme. Ces réglages restent accessibles à tout moment dans Paramètres.': ('Set up your computer at your own pace. These settings remain available at any time in Settings.', 'Prepare su equipo a su ritmo. Estos ajustes siguen disponibles en cualquier momento en Configuración.', 'Richten Sie Ihren Computer in Ihrem Tempo ein. Diese Einstellungen bleiben jederzeit in den Einstellungen verfügbar.'),
+    'Visite guidée et logiciels courants': ('Guided tour and common apps', 'Recorrido guiado y aplicaciones habituales', 'Geführte Tour und gängige Programme'),
     'Choisir le clavier': ('Choose the keyboard', 'Elegir el teclado', 'Tastatur auswählen'),
     'Configurer le réseau': ('Set up the network', 'Configurar la red', 'Netzwerk einrichten'),
     'Personnaliser l’apparence': ('Personalize the appearance', 'Personalizar la apariencia', 'Darstellung anpassen'),
@@ -63,6 +64,7 @@ class Welcome(Gtk.Window):
         intro = Gtk.Label(label=_t("Préparez votre ordinateur à votre rythme. Ces réglages restent accessibles à tout moment dans Paramètres."), xalign=0, wrap=True)
         box.pack_start(intro, False, False, 0)
         for label, command in (
+            (_t("Visite guidée et logiciels courants"), ["winlux-shell-app", "welcome"]),
             (_t("Choisir le clavier"), ["winlux-shell-app", "settings", "4"]),
             (_t("Configurer le réseau"), ["winlux-system-tools", "quick"]),
             (_t("Personnaliser l’apparence"), ["winlux-system-tools", "appearance"]),

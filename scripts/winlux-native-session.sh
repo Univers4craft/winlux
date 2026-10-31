@@ -91,6 +91,8 @@ if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
     /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
 fi
 /usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
+# Presse-papiers commun : copier dans un .exe, coller dans une appli Linux, et inversement.
+if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux/clipboard-bridge.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
 /usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
@@ -121,6 +123,10 @@ done
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
 /usr/bin/winlux-session-startup >/run/winlux/startup-apps.log 2>&1
+# Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
+if command -v winlux-store >/dev/null 2>&1; then
+    winlux-store starter --resume >/run/winlux/starter.log 2>&1 &
+fi
 if test ! -f "$HOME/.config/winlux/welcome-complete" && test "${WINLUX_NO_WELCOME:-0}" != 1 && ! grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     /usr/bin/winlux-welcome >/run/winlux/welcome.log 2>&1 &
 fi
@@ -139,6 +145,11 @@ else
     LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
 fi
 echo $! > /run/winlux/screensaver.pid
+# Verrouillage après inactivité et au retour de veille (Paramètres > Confidentialité et sécurité).
+if ! { test -f /run/winlux/lock-daemon.pid && kill -0 "$(cat /run/winlux/lock-daemon.pid)" 2>/dev/null; }; then
+    /usr/bin/winlux-lock daemon >/run/winlux/lock.log 2>&1 &
+    echo $! > /run/winlux/lock-daemon.pid
+fi
 (
     while :; do
         /usr/bin/winlux-applications refresh >/run/winlux/applications.log 2>&1 || true

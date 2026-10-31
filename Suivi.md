@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **217**
-- À faire ou en cours : **37**
-- Total : **254**
-- Progression : **85.4%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140)
+- Réalisé : **222**
+- À faire ou en cours : **41**
+- Total : **263**
+- Progression : **84.4%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152)
 
 ## À FAIRE (par priorité)
 
@@ -28,6 +28,8 @@
 ### État actuel
 
 - [x] Lecteurs réseau : FTP, FTPS, SFTP, WebDAV(S), SMB, NFS et S3 montés comme un disque avec lettre (`winlux-drives`, page Paramètres « Lecteurs réseau »), mots de passe chiffrés ChaCha20-Poly1305, reconnexion automatique et état hors ligne publiés dans le registre commun `mounts.tsv`. Seuls les protocoles dont l'outil de montage est présent sont proposés. Reste : modules noyau cifs/nfs dans l'ISO live (SMB passe par rclone en attendant, NFS masqué).
+- [x] Écran de verrouillage de la session native au style Windows 11 (`winlux-lock`) : Windows+L, Démarrer > Verrouiller, inactivité, mot de passe au réveil, réglages dans Paramètres > Confidentialité et sécurité (#158).
+- [ ] Permissions des applications Windows : demande claire (dossiers personnels, webcam, micro, écran, réseau), choix mémorisé et révocable dans Paramètres (#158).
 - [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
 
@@ -85,12 +87,20 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [ ] Faire tourner Paint.NET 5.1 sur le runtime .NET qu'il embarque : étape 1 livrée (#133), restent coreclr (exceptions MSVC, SEH x64), WIC, Direct2D/DirectWrite et WPF (#138, `docs/PAINTNET.md`).
 - [ ] Traduire toutes les applications en FR/EN/ES/DE : lots #120, #130, #131, #134 et #135 livrés, reste les applis encore en une seule langue (#139).
 - [ ] Traduire réellement l'installateur : choisir English ne traduit aujourd'hui que la barre des étapes (#140).
+- [ ] Intégrer les applis Windows au bureau : associations de fichiers, .lnk du Bureau et « Applications par défaut » livrés, reste « Ouvrir avec… » dans l'Explorateur (#152).
+- [ ] Glisser-déposer entre applis Windows et Linux (XDND ↔ `WM_DROPFILES`/`IDropTarget`, `DoDragDrop` vers Thunar), suite du pont presse-papiers (#159).
+- [ ] Démarrage sous 10 secondes et mode jeu : temps de démarrage mesuré et affiché livré, mode jeu livré, reste la réduction des étapes les plus longues (mesure en VM KVM) (#153).
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
 ## DÉJÀ FAIT
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] Applis Windows intégrées au bureau (#152) : associations de fichiers lues dans le registre (HKCU/HKLM\Software\Classes et HKCR, ProgID, OpenWithProgids, OpenWithList, SupportedTypes, UserChoice) → lanceurs cachés `winlux-assoc-*.desktop` (double-clic, « Ouvrir avec » de Thunar et xdg-open, document passé en chemin Windows), type MIME créé pour les extensions inconnues, programme par défaut seulement si l'utilisateur n'a rien choisi ; raccourcis .lnk du Bureau ouvrables (cible, arguments, dossier de travail) ; icônes des .exe/.lnk par thumbnailer tumbler ; fenêtre « Applications par défaut » (Paramètres > Applications) en FR/EN/ES/DE. Zone de notification : `Shell_NotifyIconA/W` (NIM_ADD/MODIFY/DELETE/SETVERSION, infobulle, état caché, bulles par notify-send, clics transmis au `uCallbackMessage` en format classique ou version 4) via l'assistant GTK `winlux-notify-icon`, et zone « systray » ajoutée au panneau (y compris aux panneaux déjà configurés).
+- [x] Mode jeu : un `.exe` Direct3D/OpenGL/Vulkan/XInput déclenche `winlux --gamemode daemon` (gouverneur performances sur secteur, priorité du jeu, sauvegardes et mises à jour en pause et en basse priorité, swappiness et compactage mémoire, veille bloquée), tout est restauré à la fermeture ; réglage dans Paramètres > Processeur, actions affichées selon le matériel (#153, `docs/PERFORMANCES.md`).
+- [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).
+
+- [x] Captures d'écran automatiques et mode machine virtuelle (#156) : `scripts/capture-ui.py` photographie sous Xvfb les 25 pages des Paramètres, le menu Démarrer, les popups, les outils système, Bienvenue et les applis maison PE (bureau, Explorateur, Store, Polices, Planificateur, Pare-feu) ; `scripts/compare-captures.py` les compare à la dernière version verte de master (job CI « Captures d'écran », artefacts `captures-ui` et `captures-ui-diff`, alerte au-delà de 2 % de pixels changés). `winlux-hardware` détecte l'hyperviseur (`/run/winlux/hw/virtual-machine`) et ne compte plus les cartes émulées comme GPU : curseur logiciel conservé, économiseur en GL logiciel, « Suivre la taille de la VM » seulement en VM.
 - [x] coreclr embarqué démarré : répartition SEH x64 (`seh.rs` : RtlVirtualUnwind, RtlUnwindEx, RtlRestoreContext, VEH, tables de fonctions dynamiques), exceptions C++ MSVC de coreclr, tas du GC, thread du finaliseur, System.Private.CoreLib puis `paintdotnet.dll` chargées et code managé exécuté (images relogées sur 64 Kio, VirtualQuery des piles, VerifyVersionInfo, InitializeContext2, locales nommées) (`docs/PAINTNET.md`).
 - [x] Issues fermées le 31/10/2026 car livrées sur master : impression (#77 par #111), audio des .exe (#78 par #115), manettes, webcam, micro et Bluetooth (#79 par #114), alimentation et batterie (#80 par #107), Store et polices (#81, #82 par #123 et #129), planificateur et pare-feu (#83, #84 par #112), presse-papiers Win+V et capture d'écran (#85, #86 par #109), sauvegarde, multi-utilisateur et bureau à distance (#87, #88, #89 par #119), CPU (#90 par #103), GPU (#91 par #104), Direct3D 9/12 (#92 par #127), installateur (#93 par #75, #116 et #118 ; #94 par #76 ; #95 par #100 ; #96 par #101 ; #97 par #105 ; #98 par #102).
 - [x] Aussi mergés : signalement de bugs vers GitHub (#121), visionneuse d'images (#126), noms de paquets Ubuntu 26.04 (#128), base APT vérifiée dans QEMU (#132), CLR maison (#73), SEH/TLS/services (#63), localisation (#72), détection du matériel (#61).
@@ -251,6 +261,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 - [x] Installer le runtime et le lanceur dans un chemin stable (`/usr/bin` par défaut, préfixe et `DESTDIR` configurables), avec association MIME par défaut dans `/etc/xdg/mimeapps.list`; validé dans une racine temporaire par `scripts/test-integration.sh`.
 - [x] Ajouter une procédure de désinstallation propre du binfmt, du MIME et du fichier `.desktop` (`integration/uninstall.sh`, restaure les associations précédentes).
+- [x] Lancement croisé Linux ↔ Windows (#164, `runtime/src/launch.rs`) : un `.exe` lance une appli Linux avec arguments, environnement, dossier courant, code de retour et tubes (`CreatePipe`, `STARTF_USESTDHANDLES`, `PeekNamedPipe`, fin de tube `ERROR_BROKEN_PIPE`, vrai `DuplicateHandle`), recherche du programme comme Windows puis dans le `PATH` Linux, chemins `C:\…` des arguments convertis en chemins Linux, lanceurs `.desktop`, protocoles (`mailto:` → client mail, `steam:`/`magnet:`… → `xdg-open`, `file:///`), `ShellExecuteEx` avec handle de processus. Dans l'autre sens, les chemins Linux donnés à un `.exe` deviennent `C:\…`/`Z:\…` (`WINLUX_KEEP_LINUX_PATHS=1` pour garder les chemins bruts).
 - [x] Gérer les chemins contenant des espaces ou des URI `file://`, les fichiers illisibles et les volumes montés `noexec` (le lanceur lit le fichier au lieu de l’exécuter; le dossier du programme devient le répertoire courant).
 - [x] Définir le comportement du terminal : `winlux --inspect` lit le sous-système PE, `winlux-open` ouvre un terminal (Konsole, GNOME Terminal, XFCE, xterm ou `WINLUX_TERMINAL`) qui reste ouvert pour les programmes console et lance directement les programmes graphiques.
 - [x] Ajouter une détection du fichier `.exe` et des messages d’erreur graphiques (kdialog, zenity, notify-send, xmessage) ou textuels adaptés.
@@ -293,6 +304,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher
 - [x] Fenêtre « Bienvenue » au premier login (`welcome.rs`) : visite guidée en 8 étapes (Démarrer, Explorer, Paramètres, Terminal, raccourcis, confidentialité, choix du thème clair/sombre et de l’alignement), rouvrable depuis Démarrer (#98).
+- [x] Premier démarrage guidé (#162) : Bienvenue passe à 10 étapes avec « Lancer un programme Windows » (.exe, .msi, lecteurs C:/Z:) et « Vos premiers logiciels » (10 logiciels courants installés en un clic via le Store, sans produit Microsoft, logiciels sans source masqués). File d'attente persistante (`winlux-store starter`) qui continue fenêtre fermée et reprend au login suivant ; la visite reprend à l'étape où on l'a fermée.
 - [x] Paramètres > Mises à jour système : mode automatique, manuel ou planifié (jour/heure) pour APT (`winlux-sysupdate`) et Winlux, liste des paquets, journal et notification quand des mises à jour sont disponibles (#98).
 - [x] Manettes : `xinput1_4` (état, vibration, capacités, touches) et `dinput8`/DirectInput 7 (clavier, souris, manettes, joysticks, volants) sur evdev (#79).
 - [x] Webcam : Media Foundation (MFEnumDeviceSources, source et lecteur synchrone/asynchrone, RGB32/NV12/YUY2/MJPG) sur V4L2, en respectant l'autorisation caméra (#79).
@@ -326,6 +338,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Ajouter le choix de langue et clavier à l'installateur (install.sh).
 - [x] Lire locale.conf au démarrage de session (xsession-winlux, export WINLUX_LANG).
 - [x] Presse-papiers Win32 réel partagé entre tous les programmes (fichier de session, `GetClipboardSequenceNumber`, CF_TEXT/CF_UNICODETEXT synthétisés, CF_DIB, CF_HDROP, formats enregistrés stables) et historique Win+V du bureau : texte, images et fichiers, recherche, épingles persistantes, « Tout effacer », limite 10/25/50/100, recoller d'un clic dans la fenêtre active. Ctrl+C/X/V du Bloc-notes et copie de fichiers de l'Explorateur passent par le presse-papiers système.
+- [x] Presse-papiers commun Windows ↔ Linux (`winlux --clipboard-bridge`, lancé avec la session) : texte, HTML, images (PNG/BMP, import JPEG/GIF/WebP/TIFF) et fichiers (couper/copier, collage dans Thunar) passent dans les deux sens entre un .exe et une appli Linux ; les copies Linux entrent dans l'historique Win+V (#159).
 - [x] Outil Capture (Win+Maj+S, Impr. écran, menu Démarrer) : écran figé et assombri, modes rectangle, fenêtre, plein écran et forme libre, copie automatique dans le presse-papiers, éditeur rapide (rognage, stylo, surligneur, flèche, texte, couleurs, tailles, annuler, copier, PNG dans Images\Captures d'écran). Extensions runtime `WinluxCaptureScreen`, `WinluxDrawStroke`, `WinluxDrawText`, `WinluxSavePng`.
 - [x] Enregistrement vidéo de l'écran (Win+Maj+R ou bouton caméra de l'outil Capture) : zone ou plein écran, micro et son système (PulseAudio/PipeWire), MP4 (H.264/AAC) ou WebM (VP9/Opus) via le ffmpeg du système, indicateur rouge avec minuteur et bouton stop dans la barre des tâches, fichier dans Vidéos\Enregistrements d'écran. L'ISO embarque ffmpeg s'il est présent sur la machine de construction.
 

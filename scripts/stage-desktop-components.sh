@@ -25,7 +25,7 @@ for directory in dbus-1 xdg gtk-3.0 fonts NetworkManager bluetooth udisks2 polki
 done
 mkdir -p "$stage/usr/lib/NetworkManager/conf.d"
 cp "$project/integration/native/network/90-winlux.conf" "$stage/usr/lib/NetworkManager/conf.d/90-winlux.conf"
-for name in winlux-system-tools winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-update-apt winlux-update-progress winlux-close-session winlux-shutdown-screen winlux-trust-shortcuts winlux-welcome winlux-report; do
+for name in winlux-system-tools winlux-notifications winlux-personalize winlux-session-startup winlux-popup winlux-update-apt winlux-update-progress winlux-close-session winlux-shutdown-screen winlux-trust-shortcuts winlux-welcome winlux-report winlux-lock; do
     cp --remove-destination "$project/scripts/$name.py" "$stage/usr/bin/$name"
     chmod 755 "$stage/usr/bin/$name"
 done
@@ -45,6 +45,9 @@ mkdir -p "$stage/usr/share/themes" "$stage/usr/share/xfce4/helpers"
 cp -a "$project/integration/native/themes/." "$stage/usr/share/themes/"
 cp -a "$project/integration/native/helpers/." "$stage/usr/share/xfce4/helpers/"
 cp -a "$project/integration/native/applications/." "$stage/usr/share/applications/"
+# Icônes des .exe et des raccourcis .lnk (Bureau, Explorateur, Thunar) via tumbler.
+mkdir -p "$stage/usr/share/thumbnailers"
+cp "$project/integration/native/thumbnailers/winlux-windows.thumbnailer" "$stage/usr/share/thumbnailers/"
 cp --remove-destination "$components/usr/libexec/xscreensaver/xscreensaver-gfx" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx.real"
 cp --remove-destination "$project/scripts/winlux-saver-gfx.py" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx"
 chmod 755 "$stage/usr/libexec/xscreensaver/xscreensaver-gfx" "$stage/usr/libexec/xscreensaver/xscreensaver-gfx.real"
@@ -52,7 +55,7 @@ cp --remove-destination "$project/scripts/winlux-systemctl.sh" "$stage/usr/bin/s
 chmod 755 "$stage/usr/bin/systemctl"
 cp --remove-destination "$project/scripts/winlux-apt-service-hook.sh" "$stage/usr/share/winlux/apt-service-hook"
 chmod 755 "$stage/usr/share/winlux/apt-service-hook"
-for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu'; do
+for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-notify-icon.py:winlux-notify-icon'; do
     source=${pair%:*}; destination=${pair#*:}
     cp --remove-destination "$project/scripts/$source" "$stage/usr/bin/$destination"
     chmod 755 "$stage/usr/bin/$destination"
