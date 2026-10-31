@@ -142,7 +142,9 @@ fn since(t: u32) -> i32 {
 fn parse_u32(s: &[u8]) -> u32 {
     s.iter()
         .take_while(|c| c.is_ascii_digit())
-        .fold(0u32, |n, &c| n.saturating_mul(10).saturating_add((c - b'0') as u32))
+        .fold(0u32, |n, &c| {
+            n.saturating_mul(10).saturating_add((c - b'0') as u32)
+        })
 }
 
 fn lower(c: u8) -> u8 {
@@ -500,9 +502,9 @@ unsafe fn start_offset() -> i32 {
             START_CLOSING = false;
             return 0;
         }
-        ease_out(t, START_CLOSE_MS) * 60 / 1000
+        ease_in_out(t, START_CLOSE_MS) * 60 / 1000
     } else if t < START_OPEN_MS {
-        (1000 - ease_out(t, START_OPEN_MS)) * 70 / 1000
+        (1000 - ease_in_out(t, START_OPEN_MS)) * 70 / 1000
     } else {
         0
     }
@@ -1121,7 +1123,11 @@ unsafe fn draw_wifi(hdc: Handle, b: &mut Brushes, x: i32, y: i32, on: bool) {
     }
 }
 unsafe fn draw_ethernet(hdc: Handle, b: &mut Brushes, x: i32, y: i32, on: bool) {
-    let c = if on { rgb(0xF2, 0xF2, 0xF2) } else { rgb(0x7A, 0x80, 0x8A) };
+    let c = if on {
+        rgb(0xF2, 0xF2, 0xF2)
+    } else {
+        rgb(0x7A, 0x80, 0x8A)
+    };
     // Small Ethernet plug icon: vertical bar + horizontal bar + two prongs
     fill(hdc, b, x + 6, y, x + 9, y + 12, c);
     fill(hdc, b, x + 2, y + 4, x + 13, y + 6, c);
@@ -1199,7 +1205,13 @@ unsafe fn net_read_scan() {
         return;
     }
     let mut read_bytes = 0u32;
-    ReadFile(h, BUF.as_mut_ptr(), BUF.len() as u32 - 1, &mut read_bytes, core::ptr::null_mut());
+    ReadFile(
+        h,
+        BUF.as_mut_ptr(),
+        BUF.len() as u32 - 1,
+        &mut read_bytes,
+        core::ptr::null_mut(),
+    );
     CloseHandle(h);
     let len = read_bytes as usize;
     BUF[len] = 0;
@@ -2455,10 +2467,24 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let y = r.top;
     let w = r.right - r.left;
     let h = r.bottom - r.top;
-    panel(hdc, b, x, y, x + w, y + h, 8, rgb(0x24, 0x27, 0x2F), rgb(0x3A, 0x3F, 0x4A));
+    panel(
+        hdc,
+        b,
+        x,
+        y,
+        x + w,
+        y + h,
+        8,
+        rgb(0x24, 0x27, 0x2F),
+        rgb(0x3A, 0x3F, 0x4A),
+    );
 
     // Header
-    let icon_g = if NET_IS_WIFI { Glyph::Wifi } else { Glyph::Ethernet };
+    let icon_g = if NET_IS_WIFI {
+        Glyph::Wifi
+    } else {
+        Glyph::Ethernet
+    };
     glyph(hdc, b, f, icon_g, x + 16, y + 14, 24);
     text(
         hdc,
@@ -2480,14 +2506,51 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         } else {
             b"Connect\xE9"
         };
-        ellipse(hdc, b, x + 20, sy + 12, x + 28, sy + 20, rgb(0x4C, 0xC2, 0x6A));
-        text(hdc, f.body, rgb(0xF2, 0xF2, 0xF2), x + 36, sy + 10, connected_label);
+        ellipse(
+            hdc,
+            b,
+            x + 20,
+            sy + 12,
+            x + 28,
+            sy + 20,
+            rgb(0x4C, 0xC2, 0x6A),
+        );
+        text(
+            hdc,
+            f.body,
+            rgb(0xF2, 0xF2, 0xF2),
+            x + 36,
+            sy + 10,
+            connected_label,
+        );
         if NET_ADDR_LEN > 0 {
-            text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), x + 36, sy + 30, &NET_ADDR[..NET_ADDR_LEN]);
+            text(
+                hdc,
+                f.small,
+                rgb(0x9A, 0xA3, 0xAE),
+                x + 36,
+                sy + 30,
+                &NET_ADDR[..NET_ADDR_LEN],
+            );
         }
     } else {
-        ellipse(hdc, b, x + 20, sy + 16, x + 28, sy + 24, rgb(0x7A, 0x80, 0x8A));
-        text(hdc, f.body, rgb(0x9A, 0xA3, 0xAE), x + 36, sy + 14, b"Non connect\xE9");
+        ellipse(
+            hdc,
+            b,
+            x + 20,
+            sy + 16,
+            x + 28,
+            sy + 24,
+            rgb(0x7A, 0x80, 0x8A),
+        );
+        text(
+            hdc,
+            f.body,
+            rgb(0x9A, 0xA3, 0xAE),
+            x + 36,
+            sy + 14,
+            b"Non connect\xE9",
+        );
     }
 
     // Network list
@@ -2495,71 +2558,198 @@ unsafe fn draw_net_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let rows = NET_COUNT.min(NET_ENTRIES.len());
     if rows == 0 {
         text_centered(
-            hdc, f.body, 13, rgb(0x9A, 0xA3, 0xAE),
-            x + w / 2, list_y + 14,
+            hdc,
+            f.body,
+            13,
+            rgb(0x9A, 0xA3, 0xAE),
+            x + w / 2,
+            list_y + 14,
             b"Aucun r\xE9seau d\xE9tect\xE9",
         );
     } else {
         for i in 0..rows {
             let ry = list_y + i as i32 * NET_ROW_H;
             if i > 0 {
-                fill(hdc, b, x + 16, ry - 1, x + w - 16, ry, rgb(0x34, 0x38, 0x42));
+                fill(
+                    hdc,
+                    b,
+                    x + 16,
+                    ry - 1,
+                    x + w - 16,
+                    ry,
+                    rgb(0x34, 0x38, 0x42),
+                );
             }
             let e = &NET_ENTRIES[i];
             let hover = NET_HOVER == i as i32;
             if hover {
-                round_rect(hdc, b, x + 8, ry + 2, x + w - 8, ry + NET_ROW_H - 2, 4, rgb(0x2E, 0x33, 0x3D));
+                round_rect(
+                    hdc,
+                    b,
+                    x + 8,
+                    ry + 2,
+                    x + w - 8,
+                    ry + NET_ROW_H - 2,
+                    4,
+                    rgb(0x2E, 0x33, 0x3D),
+                );
             }
             // Signal bars
-            let bars = if e.signal >= 75 { 4 } else if e.signal >= 50 { 3 } else if e.signal >= 25 { 2 } else { 1 };
+            let bars = if e.signal >= 75 {
+                4
+            } else if e.signal >= 50 {
+                3
+            } else if e.signal >= 25 {
+                2
+            } else {
+                1
+            };
             let sx = x + 20;
             let bar_y = ry + 14;
-            let bar_c = if e.in_use { rgb(0x60, 0xCD, 0xFF) } else { rgb(0xC8, 0xCD, 0xD4) };
+            let bar_c = if e.in_use {
+                rgb(0x60, 0xCD, 0xFF)
+            } else {
+                rgb(0xC8, 0xCD, 0xD4)
+            };
             for k in 0..4i32 {
                 let hgt = 3 + k * 3;
-                let c = if k < bars { bar_c } else { rgb(0x44, 0x48, 0x52) };
-                fill(hdc, b, sx + k * 4, bar_y + 14 - hgt, sx + k * 4 + 3, bar_y + 14, c);
+                let c = if k < bars {
+                    bar_c
+                } else {
+                    rgb(0x44, 0x48, 0x52)
+                };
+                fill(
+                    hdc,
+                    b,
+                    sx + k * 4,
+                    bar_y + 14 - hgt,
+                    sx + k * 4 + 3,
+                    bar_y + 14,
+                    c,
+                );
             }
             // SSID
             let name = &e.ssid[..e.ssid_len];
             text_fit(
-                hdc, f.body, 13,
-                if e.in_use { rgb(0x60, 0xCD, 0xFF) } else { rgb(0xF2, 0xF2, 0xF2) },
-                x + 44, ry + 8, name, w - 80,
+                hdc,
+                f.body,
+                13,
+                if e.in_use {
+                    rgb(0x60, 0xCD, 0xFF)
+                } else {
+                    rgb(0xF2, 0xF2, 0xF2)
+                },
+                x + 44,
+                ry + 8,
+                name,
+                w - 80,
             );
             // Security / connected indicator
             if e.in_use {
-                text(hdc, f.small, rgb(0x60, 0xCD, 0xFF), x + 44, ry + 28, b"Connect\xE9");
+                text(
+                    hdc,
+                    f.small,
+                    rgb(0x60, 0xCD, 0xFF),
+                    x + 44,
+                    ry + 28,
+                    b"Connect\xE9",
+                );
             } else if e.secured {
-                text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), x + 44, ry + 28, b"S\xE9curis\xE9");
+                text(
+                    hdc,
+                    f.small,
+                    rgb(0x9A, 0xA3, 0xAE),
+                    x + 44,
+                    ry + 28,
+                    b"S\xE9curis\xE9",
+                );
             } else {
-                text(hdc, f.small, rgb(0x9A, 0xA3, 0xAE), x + 44, ry + 28, b"Ouvert");
+                text(
+                    hdc,
+                    f.small,
+                    rgb(0x9A, 0xA3, 0xAE),
+                    x + 44,
+                    ry + 28,
+                    b"Ouvert",
+                );
             }
         }
     }
 
     // Bottom buttons
     let btn_y = list_y + rows as i32 * NET_ROW_H + 4;
-    fill(hdc, b, x + 1, btn_y - 1, x + w - 1, btn_y, rgb(0x3A, 0x3F, 0x4A));
+    fill(
+        hdc,
+        b,
+        x + 1,
+        btn_y - 1,
+        x + w - 1,
+        btn_y,
+        rgb(0x3A, 0x3F, 0x4A),
+    );
     // Disconnect button (if connected)
     if NETWORK_CONNECTED != 0 {
         let br = rect(x + 16, btn_y + 4, x + w / 2 - 4, btn_y + 34);
         let hover_disc = NET_HOVER == 100;
-        round_rect(hdc, b, br.left, br.top, br.right, br.bottom, 4,
-            if hover_disc { rgb(0x3A, 0x3F, 0x4A) } else { rgb(0x31, 0x35, 0x3F) });
-        text_centered(hdc, f.small, 11, rgb(0xC5, 0xC5, 0xC5), (br.left + br.right) / 2, br.top + 7, b"D\xE9connecter");
+        round_rect(
+            hdc,
+            b,
+            br.left,
+            br.top,
+            br.right,
+            br.bottom,
+            4,
+            if hover_disc {
+                rgb(0x3A, 0x3F, 0x4A)
+            } else {
+                rgb(0x31, 0x35, 0x3F)
+            },
+        );
+        text_centered(
+            hdc,
+            f.small,
+            11,
+            rgb(0xC5, 0xC5, 0xC5),
+            (br.left + br.right) / 2,
+            br.top + 7,
+            b"D\xE9connecter",
+        );
     }
     // Refresh button
     let rb = rect(
-        if NETWORK_CONNECTED != 0 { x + w / 2 + 4 } else { x + 16 },
+        if NETWORK_CONNECTED != 0 {
+            x + w / 2 + 4
+        } else {
+            x + 16
+        },
         btn_y + 4,
         x + w - 16,
         btn_y + 34,
     );
     let hover_ref = NET_HOVER == 101;
-    round_rect(hdc, b, rb.left, rb.top, rb.right, rb.bottom, 4,
-        if hover_ref { rgb(0x3A, 0x3F, 0x4A) } else { rgb(0x31, 0x35, 0x3F) });
-    text_centered(hdc, f.small, 11, rgb(0xC5, 0xC5, 0xC5), (rb.left + rb.right) / 2, rb.top + 7, b"Actualiser");
+    round_rect(
+        hdc,
+        b,
+        rb.left,
+        rb.top,
+        rb.right,
+        rb.bottom,
+        4,
+        if hover_ref {
+            rgb(0x3A, 0x3F, 0x4A)
+        } else {
+            rgb(0x31, 0x35, 0x3F)
+        },
+    );
+    text_centered(
+        hdc,
+        f.small,
+        11,
+        rgb(0xC5, 0xC5, 0xC5),
+        (rb.left + rb.right) / 2,
+        rb.top + 7,
+        b"Actualiser",
+    );
 }
 
 // ---------- Glisser-déposer et collage sur le bureau ----------
@@ -3152,8 +3342,11 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
             let list_y = pr.top + NET_HEADER_H + 52;
             let btn_y = list_y + rows as i32 * NET_ROW_H + 4;
             // Disconnect button
-            if NETWORK_CONNECTED != 0 && y >= btn_y + 4 && y < btn_y + 34
-                && x >= pr.left + 16 && x < pr.left + (pr.right - pr.left) / 2 - 4
+            if NETWORK_CONNECTED != 0
+                && y >= btn_y + 4
+                && y < btn_y + 34
+                && x >= pr.left + 16
+                && x < pr.left + (pr.right - pr.left) / 2 - 4
             {
                 crate::settings::control(c"network-disconnect");
                 NET_SCAN_REQUESTED = false;
@@ -3406,7 +3599,13 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
                 let w = pr.right - pr.left;
                 if NETWORK_CONNECTED != 0 && x < pr.left + w / 2 - 4 {
                     100 // disconnect
-                } else if x >= (if NETWORK_CONNECTED != 0 { pr.left + w / 2 + 4 } else { pr.left + 16 }) {
+                } else if x
+                    >= (if NETWORK_CONNECTED != 0 {
+                        pr.left + w / 2 + 4
+                    } else {
+                        pr.left + 16
+                    })
+                {
                     101 // refresh
                 } else {
                     -1
@@ -3427,8 +3626,39 @@ pub unsafe fn on_mouse_move(hwnd: Handle, x: i32, y: i32) {
         // Grille de 96 px, comme l'alignement automatique de Windows.
         let gx = ((x - 38).max(0) + 48) / 96 * 96 + 12;
         let gy = ((y - 42).max(0) + 48) / 96 * 96 + 12;
-        let nx = gx.min(l.w - 80);
-        let ny = gy.min(l.bar_top - 90);
+        let mut nx = gx.min(l.w - 80);
+        let mut ny = gy.min(l.bar_top - 90);
+        let occupied = |cx: i32, cy: i32, skip: usize| -> bool {
+            for j in 0..5usize {
+                if j != skip && ICON_X[j] == cx && ICON_Y[j] == cy {
+                    return true;
+                }
+            }
+            false
+        };
+        if occupied(nx, ny, i) {
+            let mut best_d = i32::MAX;
+            let mut bx = ICON_X[i];
+            let mut by = ICON_Y[i];
+            let cols = (l.w - 12) / 96;
+            let rows = (l.bar_top - 12) / 96;
+            for row in 0..rows {
+                for col in 0..cols {
+                    let cx = col * 96 + 12;
+                    let cy = row * 96 + 12;
+                    if !occupied(cx, cy, i) {
+                        let d = (cx - nx).abs() + (cy - ny).abs();
+                        if d < best_d {
+                            best_d = d;
+                            bx = cx;
+                            by = cy;
+                        }
+                    }
+                }
+            }
+            nx = bx;
+            ny = by;
+        }
         if nx != ICON_X[i] || ny != ICON_Y[i] {
             ICON_X[i] = nx;
             ICON_Y[i] = ny;
@@ -3653,6 +3883,16 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
                 SEARCH_HOVER = -1;
                 set_start(false);
             }
+            repaint(hwnd);
+            return;
+        }
+    }
+    // Win+I (Paramètres)
+    if ch == 0 && vk == 0x49 {
+        let win = ((GetKeyState(0x5B) as u16) & 0x8000) != 0
+            || ((GetKeyState(0x5C) as u16) & 0x8000) != 0;
+        if win {
+            wm::open(wm::APP_SETTINGS);
             repaint(hwnd);
             return;
         }

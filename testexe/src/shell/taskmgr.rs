@@ -1758,7 +1758,9 @@ pub unsafe fn key(vk: u32, _ch: u16) -> bool {
                         digits[dlen] = b'0' + (p % 10) as u8;
                         dlen += 1;
                         p /= 10;
-                        if p == 0 { break; }
+                        if p == 0 {
+                            break;
+                        }
                     }
                     for i in (0..dlen).rev() {
                         path[pos] = digits[i];

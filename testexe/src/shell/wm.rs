@@ -125,9 +125,14 @@ unsafe fn native_frame(hwnd: Handle) -> Frame {
         client: rect(0, title_h, outer.right, outer.bottom),
     }
 }
+static mut CACHED_FONTS: Option<Fonts> = None;
+
 pub unsafe fn native_draw(hwnd: Handle, hdc: Handle) {
     let f = native_frame(hwnd);
-    let fonts = Fonts::new();
+    if CACHED_FONTS.is_none() {
+        CACHED_FONTS = Some(Fonts::new());
+    }
+    let fonts = CACHED_FONTS.as_ref().unwrap();
     let mut brushes = Brushes::new();
     SetBkMode(hdc, 1);
     fill(
@@ -149,7 +154,6 @@ pub unsafe fn native_draw(hwnd: Handle, hdc: Handle) {
         &f,
     );
     brushes.release();
-    fonts.release();
 }
 pub unsafe fn native_mouse(hwnd: Handle, mut ev: Mouse, x: i32, y: i32) {
     MOUSE_X = x;
@@ -183,12 +187,40 @@ pub unsafe fn native_tick(hwnd: Handle) {
     }
 }
 
+// Layout constants – multiply by dpi_scale() for HiDPI.
 pub const TITLE_H: i32 = 40;
 const CAPTION_W: i32 = 46;
 const BORDER: i32 = 6;
 const OPEN_MS: i32 = 190;
 const CLOSE_MS: i32 = 130;
 const MINIMIZE_MS: i32 = 210;
+const MIN_WIN_W: i32 = 480;
+const MIN_WIN_H: i32 = 320;
+
+static mut DPI_SCALE_NUM: i32 = 1;
+static mut DPI_SCALE_DEN: i32 = 1;
+
+pub fn dpi_scale() -> (i32, i32) {
+    unsafe { (DPI_SCALE_NUM, DPI_SCALE_DEN) }
+}
+
+pub fn scaled_px(px: i32) -> i32 {
+    let (n, d) = dpi_scale();
+    (px * n + d / 2) / d
+}
+
+pub unsafe fn set_dpi(screen_h: i32) {
+    if screen_h >= 2160 {
+        DPI_SCALE_NUM = 2;
+        DPI_SCALE_DEN = 1;
+    } else if screen_h >= 1440 {
+        DPI_SCALE_NUM = 3;
+        DPI_SCALE_DEN = 2;
+    } else {
+        DPI_SCALE_NUM = 1;
+        DPI_SCALE_DEN = 1;
+    }
+}
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum Mouse {
@@ -754,6 +786,36 @@ pub unsafe fn close(app: usize) {
     }
 }
 
+pub unsafe fn toggle_alt_tab() {
+    if ALT_TAB {
+        let mut list = [usize::MAX; APP_COUNT];
+        let mut count = 0;
+        for &a in Z.iter().rev() {
+            if WINS[a].open && !WINS[a].minimized {
+                list[count] = a;
+                count += 1;
+            }
+        }
+        if count > 0 && ALT_TAB_INDEX >= 0 && (ALT_TAB_INDEX as usize) < count {
+            let app = list[ALT_TAB_INDEX as usize];
+            raise(app);
+        }
+        ALT_TAB = false;
+        ALT_TAB_INDEX = 0;
+    } else {
+        let mut count = 0i32;
+        for &a in Z.iter().rev() {
+            if WINS[a].open && !WINS[a].minimized {
+                count += 1;
+            }
+        }
+        if count > 0 {
+            ALT_TAB = true;
+            ALT_TAB_INDEX = 0;
+        }
+    }
+}
+
 pub unsafe fn toggle_maximize(app: usize) {
     let w = &mut WINS[app];
     if w.maximized {
@@ -844,12 +906,24 @@ unsafe fn draw_window(g: &mut Gfx, app: usize) {
             return;
         }
         Anim::Minimize if t < MINIMIZE_MS => {
-            let e = ease_out(t, MINIMIZE_MS);
-            (lerp_rect(&w.rect, &TASKBAR_SLOT[app], e), false, 1000 - e)
+            let e = ease_in_out(t, MINIMIZE_MS);
+            let slot = &TASKBAR_SLOT[app];
+            let r = &w.rect;
+            let hw = (r.right - r.left) * (1000 - e) / 1000 + (slot.right - slot.left) * e / 1000;
+            let cx = lerp((r.left + r.right) / 2, (slot.left + slot.right) / 2, e);
+            let top = lerp(r.top, slot.top, e * e / 1000);
+            let bottom = lerp(r.bottom, slot.bottom, e);
+            (rect(cx - hw / 2, top, cx + hw / 2, bottom), false, 1000 - e)
         }
         Anim::Restore if t < MINIMIZE_MS => {
-            let e = ease_out(t, MINIMIZE_MS);
-            (lerp_rect(&TASKBAR_SLOT[app], &w.rect, e), false, e)
+            let e = ease_in_out(t, MINIMIZE_MS);
+            let slot = &TASKBAR_SLOT[app];
+            let r = &w.rect;
+            let hw = (slot.right - slot.left) * (1000 - e) / 1000 + (r.right - r.left) * e / 1000;
+            let cx = lerp((slot.left + slot.right) / 2, (r.left + r.right) / 2, e);
+            let bottom = lerp(slot.bottom, r.bottom, e);
+            let top = lerp(slot.top, r.top, e * e / 1000);
+            (rect(cx - hw / 2, top, cx + hw / 2, bottom), false, e)
         }
         _ => {
             if w.anim != Anim::None {
@@ -1320,7 +1394,13 @@ pub unsafe fn draw(g: &mut Gfx) {
     }
     if ALT_TAB {
         let p = pal();
-        let sw = 420;
+        let mut tab_count = 0;
+        for &a in Z.iter().rev() {
+            if WINS[a].open && !WINS[a].minimized {
+                tab_count += 1;
+            }
+        }
+        let sw = (16 + tab_count.max(1) as i32 * 92 + 16).max(280);
         let sh = 140;
         let cx = (WORK.left + WORK.right - sw) / 2;
         let cy = (WORK.top + WORK.bottom - sh) / 2;
@@ -1379,15 +1459,7 @@ pub unsafe fn draw(g: &mut Gfx) {
             }
             glyph(g.hdc, g.b, g.f, glyph_of(app), x + 26, y + 8, 32);
             let t = title_of(app);
-            // simple text clipping by drawing truncated
-            text(
-                g.hdc,
-                g.f.small,
-                p.text,
-                x - 2,
-                y + 52,
-                if t.len() > 10 { b"..." } else { t },
-            );
+            text_fit(g.hdc, g.f.small, 11, p.text, x - 2, y + 52, t, 88);
             i += 1;
         }
     }
@@ -1665,11 +1737,13 @@ pub unsafe fn on_button_down(x: i32, y: i32, repaint: &mut bool) -> bool {
     let w = WINS[app];
     let r = w.rect;
     let fr = frame_of(&r);
-    // Double-clic : même endroit en moins de 500 ms.
     let t = now();
-    let double = t.wrapping_sub(LAST_CLICK_TIME) < 500
-        && (x - LAST_CLICK_X).abs() < 5
-        && (y - LAST_CLICK_Y).abs() < 5;
+    let dbl_time = GetDoubleClickTime();
+    let dbl_cx = GetSystemMetrics(36); // SM_CXDOUBLECLK
+    let dbl_cy = GetSystemMetrics(37); // SM_CYDOUBLECLK
+    let double = t.wrapping_sub(LAST_CLICK_TIME) < dbl_time
+        && (x - LAST_CLICK_X).abs() < dbl_cx / 2
+        && (y - LAST_CLICK_Y).abs() < dbl_cy / 2;
     LAST_CLICK_TIME = if double { 0 } else { t };
     LAST_CLICK_X = x;
     LAST_CLICK_Y = y;
@@ -1781,16 +1855,16 @@ pub unsafe fn on_mouse_move(x: i32, y: i32, repaint: &mut bool) -> bool {
             let (dx, dy) = (x - DRAG_X, y - DRAG_Y);
             let mut r = DRAG_RECT;
             if left {
-                r.left = (r.left + dx).min(r.right - 480);
+                r.left = (r.left + dx).min(r.right - MIN_WIN_W);
             }
             if right {
-                r.right = (r.right + dx).max(r.left + 480);
+                r.right = (r.right + dx).max(r.left + MIN_WIN_W);
             }
             if top {
-                r.top = (r.top + dy).clamp(WORK.top, r.bottom - 320);
+                r.top = (r.top + dy).clamp(WORK.top, r.bottom - MIN_WIN_H);
             }
             if bottom {
-                r.bottom = (r.bottom + dy).max(r.top + 320);
+                r.bottom = (r.bottom + dy).max(r.top + MIN_WIN_H);
             }
             w.rect = r;
             *repaint = true;

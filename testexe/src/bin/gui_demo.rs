@@ -28,10 +28,10 @@ mod notifications;
 mod settings;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
-#[path = "../shell/utilities.rs"]
-mod utilities;
 #[path = "../shell/terminal.rs"]
 mod terminal;
+#[path = "../shell/utilities.rs"]
+mod utilities;
 #[path = "../shell/weather.rs"]
 mod weather;
 #[path = "../shell/wm.rs"]

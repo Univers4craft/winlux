@@ -8,6 +8,19 @@ use winlux_testexe::*;
 pub const fn rgb(r: u32, g: u32, b: u32) -> u32 {
     r | (g << 8) | (b << 16)
 }
+pub const fn rgba(r: u32, g: u32, b: u32, a: u32) -> u32 {
+    r | (g << 8) | (b << 16) | (a << 24)
+}
+pub const fn alpha_of(c: u32) -> u32 {
+    (c >> 24) & 0xFF
+}
+pub fn blend(fg: u32, bg: u32, a: i32) -> u32 {
+    let a = a.clamp(0, 255);
+    let inv = 255 - a;
+    let ch =
+        |s: u32| ((((fg >> s) & 0xFF) as i32 * a + ((bg >> s) & 0xFF) as i32 * inv) / 255) as u32;
+    ch(0) | (ch(8) << 8) | (ch(16) << 16)
+}
 
 /// Pinceaux d'une peinture, libérés ensemble à la fin.
 pub struct Brushes {
@@ -22,9 +35,27 @@ impl Brushes {
         }
     }
     pub unsafe fn get(&mut self, color: u32) -> Handle {
-        for i in 0..self.len {
+        let hash = (color.wrapping_mul(2654435761) >> 24) as usize;
+        let start = hash % self.items.len();
+        let mut i = start;
+        loop {
+            if i >= self.len {
+                break;
+            }
             if self.items[i].0 == color {
                 return self.items[i].1;
+            }
+            i += 1;
+            if i == self.items.len() {
+                i = 0;
+            }
+            if i == start {
+                break;
+            }
+        }
+        for j in 0..self.len.min(start) {
+            if self.items[j].0 == color {
+                return self.items[j].1;
             }
         }
         let brush = CreateSolidBrush(color);
@@ -46,6 +77,7 @@ impl Brushes {
     }
 }
 
+#[derive(Clone, Copy)]
 pub struct Fonts {
     pub title: Handle,
     pub body: Handle,
@@ -209,12 +241,8 @@ pub unsafe fn round_rect(
     color: u32,
 ) {
     let radius = radius.min((r - l) / 2).min((bt - t) / 2).max(1);
-    fill(hdc, b, l + radius, t, r - radius, bt, color);
-    fill(hdc, b, l, t + radius, r, bt - radius, color);
-    ellipse(hdc, b, l, t, l + radius * 2, t + radius * 2, color);
-    ellipse(hdc, b, r - radius * 2, t, r, t + radius * 2, color);
-    ellipse(hdc, b, l, bt - radius * 2, l + radius * 2, bt, color);
-    ellipse(hdc, b, r - radius * 2, bt - radius * 2, r, bt, color);
+    SelectObject(hdc, b.get(color));
+    RoundRect(hdc, l, t, r, bt, radius * 2, radius * 2);
 }
 /// Surface flottante : liseré fin et fond, sans ombre lourde.
 pub unsafe fn panel(
@@ -542,11 +570,70 @@ pub unsafe fn text_fit(
     text(hdc, font, color, x, y, &buf[..keep + 1]);
 }
 
+pub unsafe fn draw_tooltip(
+    hdc: Handle,
+    b: &mut Brushes,
+    f: &Fonts,
+    s: &[u8],
+    mx: i32,
+    my: i32,
+    screen_w: i32,
+) {
+    if s.is_empty() {
+        return;
+    }
+    let tw = text_width(s, 11) + 16;
+    let th = 24;
+    let tx = if mx + tw + 4 < screen_w {
+        mx + 12
+    } else {
+        mx - tw - 4
+    };
+    let ty = my - th - 4;
+    let p = pal();
+    round_rect(
+        hdc,
+        b,
+        tx - 1,
+        ty - 1,
+        tx + tw + 1,
+        ty + th + 1,
+        4,
+        p.border,
+    );
+    round_rect(hdc, b, tx, ty, tx + tw, ty + th, 4, p.surface);
+    text(hdc, f.small, p.text, tx + 8, ty + 5, s);
+}
+
 /// Courbe d'animation « ease-out » cubique, en millièmes (0..=1000).
 pub fn ease_out(t: i32, duration: i32) -> i32 {
     let t = t.clamp(0, duration.max(1)) * 1000 / duration.max(1);
     let u = 1000 - t;
     1000 - u * u / 1000 * u / 1000
+}
+
+pub fn ease_in_out(t: i32, duration: i32) -> i32 {
+    let t = t.clamp(0, duration.max(1)) * 1000 / duration.max(1);
+    if t < 500 {
+        4 * t * t / 1000 * t / 1000_000
+    } else {
+        let u = 2000 - 2 * t;
+        1000 - u * u / 1000 * u / 8_000_000
+    }
+}
+
+pub fn spring(t: i32, duration: i32) -> i32 {
+    let t = t.clamp(0, duration.max(1)) * 1000 / duration.max(1);
+    if t == 0 {
+        return 0;
+    }
+    if t >= 1000 {
+        return 1000;
+    }
+    let decay = 1000 - (1000 - t) * (1000 - t) / 1000;
+    let angle = t * 540 / 1000;
+    let osc = sin_milli(angle);
+    decay + osc * (1000 - t) / 3000
 }
 
 /// Sinus en millièmes pour un angle en degrés (approximation de Bhaskara).
@@ -2050,7 +2137,15 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                     let y0 = cy - (r as i32 * sin_milli(deg)) / 1000;
                     let x1 = cx + ((r + arc_t) as i32 * cos_milli(deg)) / 1000;
                     let y1 = cy - ((r + arc_t) as i32 * sin_milli(deg)) / 1000;
-                    fill(hdc, b, x0.min(x1), y0.min(y1), x0.max(x1) + 1, y0.max(y1) + 1, c);
+                    fill(
+                        hdc,
+                        b,
+                        x0.min(x1),
+                        y0.min(y1),
+                        x0.max(x1) + 1,
+                        y0.max(y1) + 1,
+                        c,
+                    );
                 }
             }
         }
@@ -2059,10 +2154,26 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
             let t = (s / 8).max(1);
             let cx = x + s / 2;
             fill(hdc, b, cx - t, y + s / 6, cx + t, y + s * 5 / 6, c);
-            fill(hdc, b, x + s / 5, y + s / 3, x + s * 4 / 5, y + s / 3 + t, c);
+            fill(
+                hdc,
+                b,
+                x + s / 5,
+                y + s / 3,
+                x + s * 4 / 5,
+                y + s / 3 + t,
+                c,
+            );
             for &dx in &[s / 5, s * 4 / 5 - t] {
                 fill(hdc, b, x + dx, y + s / 3, x + dx + t, y + s / 2, c);
-                fill(hdc, b, x + dx - t, y + s / 2, x + dx + 2 * t, y + s / 2 + t * 2, c);
+                fill(
+                    hdc,
+                    b,
+                    x + dx - t,
+                    y + s / 2,
+                    x + dx + 2 * t,
+                    y + s / 2 + t * 2,
+                    c,
+                );
             }
         }
     }

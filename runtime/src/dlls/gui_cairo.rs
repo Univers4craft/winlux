@@ -15,6 +15,14 @@ pub enum Shape {
         y2: f64,
         width: f64,
     },
+    RoundRect {
+        x: f64,
+        y: f64,
+        width: f64,
+        height: f64,
+        rx: f64,
+        ry: f64,
+    },
 }
 
 pub struct Cairo {
@@ -42,6 +50,8 @@ pub struct Cairo {
     translate: unsafe extern "C" fn(*mut c_void, f64, f64),
     scale: unsafe extern "C" fn(*mut c_void, f64, f64),
     fill: unsafe extern "C" fn(*mut c_void),
+    close_path: unsafe extern "C" fn(*mut c_void),
+    curve_to: unsafe extern "C" fn(*mut c_void, f64, f64, f64, f64, f64, f64),
 }
 unsafe impl Send for Cairo {}
 
@@ -85,6 +95,8 @@ impl Cairo {
             translate: symbol!("cairo_translate"),
             scale: symbol!("cairo_scale"),
             fill: symbol!("cairo_fill"),
+            close_path: symbol!("cairo_close_path"),
+            curve_to: symbol!("cairo_curve_to"),
         })
     }
 
@@ -161,6 +173,57 @@ impl Cairo {
                 (self.move_to)(cr, x1 + 0.5, y1 + 0.5);
                 (self.line_to)(cr, x2 + 0.5, y2 + 0.5);
                 (self.stroke)(cr);
+            }
+            Shape::RoundRect {
+                x,
+                y,
+                width,
+                height,
+                rx,
+                ry,
+            } => {
+                if width <= 0.0 || height <= 0.0 {
+                    return false;
+                }
+                let rx = rx.min(width / 2.0).max(0.0);
+                let ry = ry.min(height / 2.0).max(0.0);
+                let k: f64 = 0.5522847498;
+                (self.new_path)(cr);
+                (self.move_to)(cr, x + rx, y);
+                (self.line_to)(cr, x + width - rx, y);
+                (self.curve_to)(
+                    cr,
+                    x + width - rx + rx * k,
+                    y,
+                    x + width,
+                    y + ry - ry * k,
+                    x + width,
+                    y + ry,
+                );
+                (self.line_to)(cr, x + width, y + height - ry);
+                (self.curve_to)(
+                    cr,
+                    x + width,
+                    y + height - ry + ry * k,
+                    x + width - rx + rx * k,
+                    y + height,
+                    x + width - rx,
+                    y + height,
+                );
+                (self.line_to)(cr, x + rx, y + height);
+                (self.curve_to)(
+                    cr,
+                    x + rx - rx * k,
+                    y + height,
+                    x,
+                    y + height - ry + ry * k,
+                    x,
+                    y + height - ry,
+                );
+                (self.line_to)(cr, x, y + ry);
+                (self.curve_to)(cr, x, y + ry - ry * k, x + rx - rx * k, y, x + rx, y);
+                (self.close_path)(cr);
+                (self.fill)(cr);
             }
         }
         (self.surface_flush)(self.surface);

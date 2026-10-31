@@ -846,6 +846,7 @@ extern "C" {
     pub fn FrameRect(hdc: Handle, rect: *const Rect, brush: Handle) -> i32;
     pub fn InvalidateRect(hwnd: Handle, rect: *const Rect, erase: i32) -> i32;
     pub fn GetSystemMetrics(index: i32) -> i32;
+    pub fn GetDoubleClickTime() -> u32;
     pub fn GetSysColor(index: i32) -> u32;
     pub fn GetSysColorBrush(index: i32) -> Handle;
     pub fn SetCursor(cursor: Handle) -> Handle;
@@ -961,6 +962,16 @@ extern "C" {
         brush: Handle,
     ) -> i32;
     pub fn Ellipse(hdc: Handle, left: i32, top: i32, right: i32, bottom: i32) -> i32;
+    pub fn RoundRect(
+        hdc: Handle,
+        left: i32,
+        top: i32,
+        right: i32,
+        bottom: i32,
+        width: i32,
+        height: i32,
+    ) -> i32;
+    pub fn SetPixelV(hdc: Handle, x: i32, y: i32, color: u32) -> i32;
     pub fn OpenClipboard(owner: Handle) -> i32;
     pub fn CloseClipboard() -> i32;
     pub fn EmptyClipboard() -> i32;
