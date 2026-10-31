@@ -6,6 +6,7 @@ pub mod advapi32;
 pub mod advapi32_services;
 pub mod bcrypt;
 pub mod comctl32;
+pub mod comdlg32;
 pub mod crt;
 pub mod crt_runtime;
 pub mod crt_scan;
@@ -23,6 +24,7 @@ pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
 pub mod iphlpapi;
+pub mod ipp;
 pub mod kernel32;
 pub mod kernel32_misc;
 pub mod libgcc;
@@ -35,6 +37,7 @@ pub mod ntdll;
 pub mod ole32;
 pub mod oleaut32;
 pub mod powrprof;
+pub mod print_pdf;
 pub mod propsys;
 pub mod quartz;
 pub mod resource;
@@ -52,6 +55,7 @@ pub mod winfile;
 pub mod winhttp;
 pub mod winlux_pty;
 pub mod winmm;
+pub mod winspool;
 pub mod wintrust;
 pub mod ws2_32;
 
@@ -203,6 +207,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    e.extend(winspool::gdi_exports());
                     e
                 },
                 handle: fake_module(),
@@ -310,6 +315,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "sechost",
                 exports: sechost::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winspool",
+                exports: winspool::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "comdlg32",
+                exports: comdlg32::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -425,6 +440,13 @@ pub fn normalize(dll: &str) -> String {
     // Alias courants pour les DLL de contrôles communs / shell.
     if base == "comctl32" || base == "iertutil" {
         return "comctl32".into();
+    }
+    // winspool.drv (et son API-set) : le spooler Winlux.
+    if base == "winspool.drv"
+        || base == "winspool"
+        || base.starts_with("ext-ms-win-printer-winspool-")
+    {
+        return "winspool".into();
     }
     if base == "shlwapi" {
         return "shlwapi".into();

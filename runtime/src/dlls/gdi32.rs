@@ -681,6 +681,7 @@ pub unsafe extern "win64" fn create_dib_section(
 
 pub extern "win64" fn delete_dc(dc: usize) -> i32 {
     if gui::dc_window(dc).is_some() {
+        crate::dlls::winspool::delete_printer_dc(dc);
         gui::free_dc(dc);
         1
     } else {
@@ -688,7 +689,10 @@ pub extern "win64" fn delete_dc(dc: usize) -> i32 {
     }
 }
 
-pub extern "win64" fn get_device_caps(_dc: usize, index: i32) -> i32 {
+pub extern "win64" fn get_device_caps(dc: usize, index: i32) -> i32 {
+    if let Some(v) = crate::dlls::winspool::device_caps(dc, index) {
+        return v;
+    }
     match index {
         8 => 1920,  // HORZRES
         10 => 1080, // VERTRES
@@ -755,6 +759,7 @@ unsafe fn text_extent(hdc: usize, s: &str, size: *mut Size) -> i32 {
         return 0;
     }
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    let font = crate::dlls::winspool::printer_text_font(hdc, font);
     let (cx, cy) = gui::measure_text(&font, s);
     std::ptr::write_unaligned(size, Size { cx, cy });
     1
@@ -1026,6 +1031,13 @@ pub unsafe extern "win64" fn rectangle(
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     }
+    // Les applications passent 5 arguments : sur un DC imprimante on prend
+    // la plume et le pinceau sélectionnés plutôt que les registres suivants.
+    let (pen, brush) = if crate::dlls::winspool::is_printer_dc(hdc) {
+        (gui::dc_pen(hdc), gui::dc_brush(hdc))
+    } else {
+        (pen, brush)
+    };
     let rect = Rect {
         left,
         top,
@@ -2036,40 +2048,81 @@ pub extern "win64" fn create_compatible_dc_from(dc: usize) -> usize {
     create_compatible_dc(dc)
 }
 
-pub extern "win64" fn create_dc_a(
-    _driver: *const u8,
-    _device: *const u8,
-    _output: *const u8,
-    _init: *const c_void,
+/// `CreateDC`/`CreateIC` : DC imprimante quand le pilote ou le périphérique
+/// désigne une imprimante (`WINSPOOL`, nom d'imprimante), sinon DC sans fenêtre.
+unsafe fn create_dc_common(
+    driver: *const c_void,
+    device: *const c_void,
+    init: *const c_void,
+    wide: bool,
+    info_only: bool,
 ) -> usize {
+    let read = |p: *const c_void| {
+        if p.is_null() {
+            None
+        } else if wide {
+            Some(crate::dlls::wstr(p as *const u16))
+        } else {
+            Some(crate::dlls::cstr(p as *const u8))
+        }
+    };
+    let (driver, device) = (read(driver), read(device));
+    let printing = driver
+        .as_deref()
+        .is_some_and(|d| !d.eq_ignore_ascii_case("DISPLAY"))
+        || device
+            .as_deref()
+            .is_some_and(|d| !d.is_empty() && !d.eq_ignore_ascii_case("DISPLAY"));
+    if printing {
+        if let Some(dc) = crate::dlls::winspool::create_printer_dc(
+            driver,
+            device,
+            init as *const u8,
+            wide,
+            info_only,
+        ) {
+            return dc;
+        }
+        crate::process::set_last_error(1801); // ERROR_INVALID_PRINTER_NAME
+        return 0;
+    }
     gui::create_dc(0) // DC sans fenêtre
 }
 
-pub extern "win64" fn create_dc_w(
-    _driver: *const u16,
-    _device: *const u16,
-    _output: *const u16,
-    _init: *const c_void,
-) -> usize {
-    gui::create_dc(0)
-}
-
-pub extern "win64" fn create_ic_a(
-    _driver: *const u8,
-    _device: *const u8,
+pub unsafe extern "win64" fn create_dc_a(
+    driver: *const u8,
+    device: *const u8,
     _output: *const u8,
-    _init: *const c_void,
+    init: *const c_void,
 ) -> usize {
-    gui::create_dc(0)
+    create_dc_common(driver.cast(), device.cast(), init, false, false)
 }
 
-pub extern "win64" fn create_ic_w(
-    _driver: *const u16,
-    _device: *const u16,
+pub unsafe extern "win64" fn create_dc_w(
+    driver: *const u16,
+    device: *const u16,
     _output: *const u16,
-    _init: *const c_void,
+    init: *const c_void,
 ) -> usize {
-    gui::create_dc(0)
+    create_dc_common(driver.cast(), device.cast(), init, true, false)
+}
+
+pub unsafe extern "win64" fn create_ic_a(
+    driver: *const u8,
+    device: *const u8,
+    _output: *const u8,
+    init: *const c_void,
+) -> usize {
+    create_dc_common(driver.cast(), device.cast(), init, false, true)
+}
+
+pub unsafe extern "win64" fn create_ic_w(
+    driver: *const u16,
+    device: *const u16,
+    _output: *const u16,
+    init: *const c_void,
+) -> usize {
+    create_dc_common(driver.cast(), device.cast(), init, true, true)
 }
 
 pub unsafe extern "win64" fn get_current_position_ex(hdc: usize, pt: *mut gui::Point) -> i32 {
