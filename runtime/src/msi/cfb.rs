@@ -196,7 +196,8 @@ impl Compound {
             }
         }
         let read_mini = |first: u32, size: usize| -> Option<Vec<u8>> {
-            let mut out = Vec::with_capacity(size);
+            // La taille annoncée vient du répertoire : capacité plafonnée.
+            let mut out = Vec::with_capacity(size.min(mini_stream.len()));
             for n in reader.chain(&mini_fat, first)? {
                 let start = n as usize * 64;
                 out.extend_from_slice(mini_stream.get(start..start + 64)?);

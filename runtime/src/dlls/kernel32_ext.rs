@@ -522,4 +522,24 @@ mod tests {
             assert!(locate_xstate_feature(ctx, 2, &mut size).is_null());
         }
     }
+
+    #[test]
+    fn locale_et_langues_d_interface() {
+        let _teb = crate::process::test_teb();
+        let mut buf = [0u16; 16];
+        unsafe {
+            use crate::dlls::nls::{
+                get_locale_info_ex, get_user_default_locale_name, locale_name_to_lcid,
+            };
+            assert_eq!(get_user_default_locale_name(buf.as_mut_ptr(), 16), 6);
+            assert_eq!(String::from_utf16_lossy(&buf[..5]), "fr-FR");
+            let name: Vec<u16> = "en-US\0".encode_utf16().collect();
+            assert_eq!(locale_name_to_lcid(name.as_ptr(), 0), 0x409);
+            assert_eq!(
+                get_locale_info_ex(name.as_ptr(), 0x5C, buf.as_mut_ptr(), 16),
+                6
+            );
+            assert_eq!(String::from_utf16_lossy(&buf[..5]), "en-US");
+        }
+    }
 }

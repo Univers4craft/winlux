@@ -480,6 +480,164 @@ fn font_candidates(spec: &FontSpec) -> Vec<Vec<u8>> {
     unique
 }
 
+/// Ce que l'on sait de la densité de l'écran, du plus au moins fiable.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ScreenDensity {
+    /// `Xft.dpi` choisi par l'utilisateur (Apparence XFCE, xrdb). 96 est la
+    /// valeur par défaut de toutes les sessions : elle n'apprend rien.
+    user_dpi: Option<f32>,
+    /// Densité physique de l'écran principal, d'après sa taille en
+    /// millimètres lue dans l'EDID (RandR).
+    physical_dpi: Option<f32>,
+    /// Hauteur de l'écran principal en pixels.
+    height: u32,
+}
+
+/// Facteur d'échelle automatique, aux paliers de Windows (100 %, 125 %…).
+///
+/// Xorg annonce toujours 96 ppp sur sa fenêtre racine : la taille réelle vient
+/// donc de l'EDID. La cible est d'environ 110 ppp effectifs, ce qui redonne les
+/// réglages par défaut de Windows : 100 % pour un 24 pouces 1080p ou un 27
+/// pouces 1440p, 125 % pour un portable 15,6 pouces 1080p, 150 % pour un 27
+/// pouces 4K ou un 13 pouces 1080p, 250 % pour un portable 15,6 pouces 4K.
+/// Sans aucune information physique (machine virtuelle, EDID absent), seule la
+/// définition compte : 150 % dès 1440 lignes, 200 % en 4K.
+fn automatic_scale(density: ScreenDensity) -> f32 {
+    if let Some(dpi) = density.user_dpi.filter(|dpi| (*dpi - 96.0).abs() > 1.0) {
+        return dpi_scale(dpi, None);
+    }
+    if let Some(dpi) = density.physical_dpi {
+        return dpi_scale(dpi * 96.0 / 110.0, None);
+    }
+    if density.height >= 2000 {
+        2.0
+    } else if density.height >= 1400 {
+        1.5
+    } else {
+        1.0
+    }
+}
+
+/// Lit `Xft.dpi` dans la base de ressources X (propriété RESOURCE_MANAGER).
+fn resource_dpi(resources: &str) -> Option<f32> {
+    resources.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim() == "Xft.dpi")
+            .then(|| value.trim().parse::<f32>().ok())
+            .flatten()
+            .filter(|dpi| dpi.is_finite() && (48.0..=480.0).contains(dpi))
+    })
+}
+
+/// Densité physique d'après la largeur en pixels et en millimètres. Les EDID
+/// fantaisistes (0 mm, ou 16x9 « cm » des projecteurs et de certaines
+/// télévisions) sont écartés.
+fn physical_dpi(width_px: u32, width_mm: u32) -> Option<f32> {
+    if width_mm < 100 || width_px == 0 {
+        return None;
+    }
+    let dpi = width_px as f32 * 25.4 / width_mm as f32;
+    (50.0..=400.0).contains(&dpi).then_some(dpi)
+}
+
+/// Taille annoncée par la fenêtre racine. Xorg la calcule toujours pour 96
+/// ppp, ce qui n'apprend rien ; une autre valeur vient d'une vraie mesure
+/// (DisplaySize, `-dpi`, serveur X sans RandR physique).
+fn root_dpi(width_px: u16, width_mm: u16) -> Option<f32> {
+    physical_dpi(width_px as u32, width_mm as u32).filter(|dpi| (*dpi - 96.0).abs() > 1.5)
+}
+
+/// Interroge le serveur X : `Xft.dpi`, puis la taille physique de l'écran
+/// principal (ou du premier écran branché) par RandR.
+fn screen_density(
+    conn: &RustConnection,
+    screen: &x11rb::protocol::xproto::Screen,
+) -> ScreenDensity {
+    let mut density = screen_density_randr(conn, screen.root, screen.height_in_pixels);
+    if density.physical_dpi.is_none() {
+        density.physical_dpi = root_dpi(screen.width_in_pixels, screen.width_in_millimeters);
+    }
+    density
+}
+
+fn screen_density_randr(conn: &RustConnection, root: u32, root_height: u16) -> ScreenDensity {
+    use x11rb::protocol::randr::{self, ConnectionExt as _};
+    let mut density = ScreenDensity {
+        height: root_height as u32,
+        ..ScreenDensity::default()
+    };
+    if let Some(reply) = conn
+        .get_property(
+            false,
+            root,
+            x11rb::protocol::xproto::AtomEnum::RESOURCE_MANAGER,
+            x11rb::protocol::xproto::AtomEnum::STRING,
+            0,
+            1 << 16,
+        )
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    {
+        density.user_dpi = resource_dpi(&String::from_utf8_lossy(&reply.value));
+    }
+    let randr_ok = conn
+        .randr_query_version(1, 3)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .is_some_and(|v| v.major_version > 1 || v.minor_version >= 3);
+    if !randr_ok {
+        return density;
+    }
+    let Some(resources) = conn
+        .randr_get_screen_resources_current(root)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    else {
+        return density;
+    };
+    let primary = conn
+        .randr_get_output_primary(root)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.output)
+        .filter(|output| *output != 0);
+    let outputs = primary.into_iter().chain(
+        resources
+            .outputs
+            .iter()
+            .copied()
+            .filter(|o| Some(*o) != primary),
+    );
+    for output in outputs {
+        let Some(info) = conn
+            .randr_get_output_info(output, resources.config_timestamp)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            continue;
+        };
+        if info.connection != randr::Connection::CONNECTED || info.crtc == 0 {
+            continue;
+        }
+        let Some(crtc) = conn
+            .randr_get_crtc_info(info.crtc, resources.config_timestamp)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            continue;
+        };
+        // Écran tourné d'un quart de tour : la largeur physique suit la hauteur.
+        let rotated = u16::from(crtc.rotation)
+            & (u16::from(randr::Rotation::ROTATE90) | u16::from(randr::Rotation::ROTATE270))
+            != 0;
+        let width_px = if rotated { crtc.height } else { crtc.width };
+        density.height = if rotated { crtc.width } else { crtc.height } as u32;
+        density.physical_dpi = physical_dpi(width_px as u32, info.mm_width);
+        break;
+    }
+    density
+}
+
 fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
     let automatic = ((dpi.max(1.0) / 96.0) * 4.0).round() / 4.0;
     requested
@@ -536,6 +694,10 @@ pub struct X11Backend {
     overlay: crate::overlay::Overlay,
     /// Taille et couleur du pointeur (réglages d'accessibilité appliqués).
     pointer_style: (u8, u8),
+    /// Gestes du pavé tactile (XInput 2.4) disponibles sur ce serveur.
+    gestures: bool,
+    /// Échelle du pincement au dernier cran de zoom envoyé.
+    pinch_last: f32,
     /// Glisser-déposer reçu depuis les applis Linux (XDND).
     xdnd: Option<crate::dlls::xdnd::Xdnd>,
 }
@@ -547,16 +709,24 @@ impl X11Backend {
         let setup = conn.setup();
         let scr = &setup.roots[screen];
         let colormap = scr.default_colormap;
-        let dpi_x = if scr.width_in_millimeters > 0 {
-            scr.width_in_pixels as f32 * 25.4 / scr.width_in_millimeters as f32
-        } else {
-            96.0
-        };
+        // WINLUX_UI_SCALE (Paramètres > Écran, session live) l'emporte ;
+        // « auto » ou rien : densité réelle de l'écran.
         let requested_scale = std::env::var("WINLUX_UI_SCALE")
             .ok()
             .and_then(|value| value.parse::<f32>().ok())
             .filter(|value| value.is_finite() && *value > 0.0);
-        let scale = dpi_scale(dpi_x, requested_scale);
+        let scale = match requested_scale {
+            Some(scale) => dpi_scale(96.0, Some(scale)),
+            None => automatic_scale(screen_density(&conn, scr)),
+        };
+        // Pincer pour zoomer : XInput 2.4 (Xorg 21.1+, pilote libinput).
+        let gestures = {
+            use x11rb::protocol::xinput::ConnectionExt as _;
+            conn.xinput_xi_query_version(2, 4)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .is_some_and(|v| (v.major_version, v.minor_version) >= (2, 4))
+        };
         let wm_protocols = conn
             .intern_atom(false, b"WM_PROTOCOLS")
             .ok()?
@@ -596,6 +766,8 @@ impl X11Backend {
             x11_cursors: HashMap::new(),
             current_cursor: 0x0001_0001,
             pointer_style: (1, 0),
+            gestures,
+            pinch_last: 1.0,
             xdnd,
         })
     }
@@ -1977,6 +2149,32 @@ impl X11Backend {
                     lparam,
                 })
             }
+            Event::XinputGesturePinchBegin(_) => {
+                crate::power::note_activity();
+                self.pinch_last = 1.0;
+                None
+            }
+            Event::XinputGesturePinchUpdate(e) => {
+                crate::power::note_activity();
+                let hwnd = *self.by_xwin.get(&e.event)?;
+                let scale = e.scale as f32 / 65536.0;
+                let (delta, last) = pinch_step(self.pinch_last, scale)?;
+                self.pinch_last = last;
+                // Comme un pavé tactile de précision sous Windows : le
+                // pincement devient Ctrl + molette (zoom des applications).
+                let lparam =
+                    pack_i16_pair(self.logical(e.root_x >> 16), self.logical(e.root_y >> 16));
+                Some(PendingEvent {
+                    hwnd,
+                    message: gui::WM_MOUSEWHEEL,
+                    wparam: ((delta as u16 as usize) << 16) | 0x0008,
+                    lparam,
+                })
+            }
+            Event::XinputGesturePinchEnd(_) => {
+                self.pinch_last = 1.0;
+                None
+            }
             Event::ButtonRelease(e) => {
                 gui::raw_mouse_button(e.detail, false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
@@ -2208,6 +2406,21 @@ fn button_wparam(detail: u8) -> usize {
     }
 }
 
+/// Pincement : un cran de zoom (±120) chaque fois que l'échelle a varié
+/// de 10 % depuis le dernier cran. Renvoie (delta, nouvelle référence).
+fn pinch_step(last: f32, scale: f32) -> Option<(i16, f32)> {
+    const STEP: f32 = 1.1;
+    if !scale.is_finite() || scale <= 0.0 {
+        None
+    } else if scale >= last * STEP {
+        Some((120, last * STEP))
+    } else if scale <= last / STEP {
+        Some((-120, last / STEP))
+    } else {
+        None
+    }
+}
+
 /// Message Win32 d'un bouton X11 (1 gauche, 2 milieu, 3 droit).
 fn button_message(detail: u8, down: bool) -> u32 {
     match (detail, down) {
@@ -2430,6 +2643,20 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pinch_becomes_ctrl_wheel_steps() {
+        // Écarter les doigts : un cran de zoom tous les 10 %.
+        assert_eq!(pinch_step(1.0, 1.05), None);
+        let (d, last) = pinch_step(1.0, 1.12).unwrap();
+        assert_eq!(d, 120);
+        assert!((last - 1.1).abs() < 1e-5);
+        assert_eq!(pinch_step(last, 1.15), None);
+        // Rapprocher : cran négatif.
+        assert_eq!(pinch_step(1.0, 0.85).map(|v| v.0), Some(-120));
+        assert_eq!(pinch_step(1.0, f32::NAN), None);
+        assert_eq!(pinch_step(1.0, 0.0), None);
+    }
+
+    #[test]
     fn loupe_agrandissement_lisse_ou_net() {
         // Deux pixels 32 bits : noir puis blanc, agrandis 4×.
         let image = [0, 0, 0, 0, 255, 255, 255, 0];
@@ -2577,6 +2804,65 @@ mod tests {
         assert_eq!(dpi_scale(192.0, None), 2.0);
         assert_eq!(dpi_scale(96.0, Some(2.5)), 2.5);
         assert_eq!(dpi_scale(500.0, None), 3.0);
+    }
+
+    #[test]
+    fn echelle_automatique_suit_la_taille_reelle_de_l_ecran() {
+        let ecran = |pixels: u32, mm: u32, lignes: u32| ScreenDensity {
+            user_dpi: None,
+            physical_dpi: physical_dpi(pixels, mm),
+            height: lignes,
+        };
+        // 24 pouces 1080p (531 mm) et 27 pouces 1440p (597 mm) : 100 %.
+        assert_eq!(automatic_scale(ecran(1920, 531, 1080)), 1.0);
+        assert_eq!(automatic_scale(ecran(2560, 597, 1440)), 1.0);
+        // Portable 15,6 pouces 1080p (344 mm) : 125 %.
+        assert_eq!(automatic_scale(ecran(1920, 344, 1080)), 1.25);
+        // Portable 13,3 pouces 1080p (294 mm) et 27 pouces 4K (597 mm) : 150 %.
+        assert_eq!(automatic_scale(ecran(1920, 294, 1080)), 1.5);
+        assert_eq!(automatic_scale(ecran(3840, 597, 2160)), 1.5);
+        // Portable 15,6 pouces 4K : 250 %.
+        assert_eq!(automatic_scale(ecran(3840, 344, 2160)), 2.5);
+        // Portable 1366x768 (15,6 pouces) : 100 %.
+        assert_eq!(automatic_scale(ecran(1366, 344, 768)), 1.0);
+        // EDID absent ou fantaisiste (projecteur « 16x9 ») : définition seule.
+        assert_eq!(automatic_scale(ecran(3840, 16, 2160)), 2.0);
+        assert_eq!(automatic_scale(ecran(2560, 0, 1440)), 1.5);
+        assert_eq!(automatic_scale(ecran(1920, 0, 1080)), 1.0);
+        // Xft.dpi choisi par l'utilisateur : prioritaire, sauf la valeur 96
+        // posée par défaut par toutes les sessions.
+        let choisi = |dpi: f32| ScreenDensity {
+            user_dpi: Some(dpi),
+            ..ecran(1920, 531, 1080)
+        };
+        assert_eq!(automatic_scale(choisi(144.0)), 1.5);
+        assert_eq!(
+            automatic_scale(ScreenDensity {
+                user_dpi: Some(96.0),
+                ..ecran(3840, 597, 2160)
+            }),
+            1.5
+        );
+    }
+
+    #[test]
+    fn racine_a_96_ppp_n_apprend_rien() {
+        assert_eq!(root_dpi(1920, 508), None); // valeur inventée par Xorg
+        assert_eq!(root_dpi(3840, 0), None);
+        let dpi = root_dpi(3840, 598).unwrap();
+        assert!((dpi - 163.1).abs() < 0.5);
+    }
+
+    #[test]
+    fn xft_dpi_est_lu_dans_les_ressources_x() {
+        assert_eq!(
+            resource_dpi("Xft.antialias:\t1\nXft.dpi:\t144\n"),
+            Some(144.0)
+        );
+        assert_eq!(resource_dpi("Xft.dpi: 120.5"), Some(120.5));
+        assert_eq!(resource_dpi("Xcursor.size: 24\n"), None);
+        assert_eq!(resource_dpi("Xft.dpi: abc\n"), None);
+        assert_eq!(resource_dpi("Xft.dpi: 0\n"), None);
     }
 
     #[test]
@@ -2920,6 +3206,33 @@ impl gui::GuiBackend for X11Backend {
         ))
     }
 
+    fn monitors(&mut self) -> Vec<crate::dlls::gui::Monitor> {
+        use x11rb::protocol::randr::ConnectionExt as _;
+        let root = self.conn.setup().roots[self.screen].root;
+        let Some(reply) = self
+            .conn
+            .randr_get_monitors(root, true)
+            .ok()
+            .and_then(|c| c.reply().ok())
+        else {
+            return Vec::new();
+        };
+        reply
+            .monitors
+            .iter()
+            .filter(|m| m.width > 0 && m.height > 0)
+            .map(|m| crate::dlls::gui::Monitor {
+                rect: Rect {
+                    left: self.logical(i32::from(m.x)),
+                    top: self.logical(i32::from(m.y)),
+                    right: self.logical(i32::from(m.x) + i32::from(m.width)),
+                    bottom: self.logical(i32::from(m.y) + i32::from(m.height)),
+                },
+                primary: m.primary,
+            })
+            .collect()
+    }
+
     fn create_window(&mut self, hwnd: usize, title: &str, rect: Rect) {
         if self.x11_cursors.is_empty() {
             self.init_cursors();
@@ -2978,6 +3291,20 @@ impl gui::GuiBackend for X11Backend {
             .is_err()
         {
             return;
+        }
+
+        if self.gestures {
+            use x11rb::protocol::xinput::{ConnectionExt as _, EventMask, XIEventMask};
+            // XI_GesturePinchBegin/Update/End (27..29), périphérique maître
+            // « tous » (1) : absents des constantes de xcb-proto 1.15.
+            let mask = XIEventMask::from((1u32 << 27) | (1 << 28) | (1 << 29));
+            let _ = self.conn.xinput_xi_select_events(
+                win,
+                &[EventMask {
+                    deviceid: 1,
+                    mask: vec![mask],
+                }],
+            );
         }
 
         // Demande la fermeture propre via WM_DELETE_WINDOW.

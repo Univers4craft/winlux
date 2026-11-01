@@ -27,7 +27,8 @@ import time
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 HW_DETECT = os.path.join(SCRIPT_DIR, "winlux-hw-detect.sh")
-INSTALL_SH = os.path.join(SCRIPT_DIR, "install.sh")
+INSTALL_SH = next((p for p in (os.path.join(SCRIPT_DIR, "install.sh"), "/opt/winlux/scripts/install.sh") if os.path.exists(p)),
+                  os.path.join(SCRIPT_DIR, "install.sh"))
 SECUREBOOT_SH = next((p for p in (os.path.join(SCRIPT_DIR, "winlux-secureboot.sh"), "/usr/bin/winlux-secureboot") if os.path.exists(p)), None)
 sys.path[:0] = [SCRIPT_DIR, "/usr/share/winlux"]
 import winlux_autoinstall as autoinstall  # noqa: E402
@@ -1946,8 +1947,32 @@ def human_size(size_bytes):
     return f"{size_bytes:.1f} Po"
 
 
+def live_medium_disk(mounts="/proc/self/mounts", sysfs="/sys"):
+    """Disque (« sdb ») du média Live dont Winlux a démarré : clé USB ou DVD.
+
+    L'installateur ne doit jamais le proposer comme destination : effacer la
+    clé d'installation en cours de route rendrait le PC inutilisable.
+    """
+    try:
+        with open(mounts, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "/run/winlux/live/media" and parts[0].startswith("/dev/"):
+            name = os.path.basename(os.path.realpath(parts[0]))
+            # Une partition (sdb1) désigne le disque qui la porte (sdb).
+            if os.path.exists(os.path.join(sysfs, "class/block", name, "partition")):
+                parent = os.path.realpath(os.path.join(sysfs, "class/block", name, ".."))
+                return os.path.basename(parent)
+            return name
+    return None
+
+
 def detect_disks():
     disks = []
+    live_disk = live_medium_disk()
     try:
         out = subprocess.check_output(
             ["lsblk", "-bdnJo", "NAME,SIZE,MODEL,TRAN,TYPE,RO,SERIAL,ROTA"],
@@ -1960,6 +1985,8 @@ def detect_disks():
             if dev.get("ro"):
                 continue
             name = dev["name"]
+            if name == live_disk:
+                continue  # la clé USB d'installation elle-même
             path = f"/dev/{name}"
             size = dev.get("size", 0) or 0
             if size < 2 * 1024**3:
@@ -5209,6 +5236,14 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
 
 def main():
     if os.geteuid() != 0:
+        # Le raccourci lance l'installateur directement : la session live est
+        # déjà root, une session ordinaire demande le mot de passe ici.
+        pkexec = shutil.which("pkexec")
+        if pkexec and os.environ.get("WINLUX_INSTALLER_ELEVATED") != "1":
+            os.execv(pkexec, [pkexec, "env", "WINLUX_INSTALLER_ELEVATED=1",
+                              "DISPLAY=" + os.environ.get("DISPLAY", ":0"),
+                              "XAUTHORITY=" + os.environ.get("XAUTHORITY", ""),
+                              os.path.abspath(__file__), *sys.argv[1:]])
         print("ERREUR : l'installateur doit être lancé en tant que root (sudo).", file=sys.stderr)
         sys.exit(1)
     signal.signal(signal.SIGINT, signal.SIG_DFL)

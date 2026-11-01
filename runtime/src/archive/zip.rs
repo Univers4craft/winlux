@@ -132,10 +132,18 @@ pub fn list(f: &mut File) -> Res<Vec<ZipEntry>> {
     } else {
         shift
     };
-    f.seek(SeekFrom::Start(cd_off + shift))?;
+    // Les tailles zip64 sont lues telles quelles dans le fichier : le
+    // répertoire central doit tenir dans l'archive avant d'être alloué.
+    let cd_start = cd_off
+        .checked_add(shift)
+        .ok_or_else(|| bad("répertoire central hors fichier"))?;
+    if cd_size > len.saturating_sub(cd_start) {
+        return Err(bad("répertoire central hors fichier"));
+    }
+    f.seek(SeekFrom::Start(cd_start))?;
     let mut cd = vec![0u8; cd_size as usize];
     f.read_exact(&mut cd)?;
-    let mut out = Vec::with_capacity(count as usize);
+    let mut out = Vec::with_capacity((count as usize).min(cd.len() / 46));
     let mut p = 0usize;
     while p + 46 <= cd.len() && u32le(&cd, p) == 0x0201_4b50 {
         let made_by = u16le(&cd, p + 4);

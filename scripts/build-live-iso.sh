@@ -92,6 +92,13 @@ cp "$root/scripts/winlux-bluetooth.sh" "$stage/usr/bin/winlux-bluetooth"
 chmod 755 "$stage/usr/bin/winlux-bluetooth"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
+mkdir -p "$stage/usr/lib/winlux/sleep.d"
+cp "$root/scripts/winlux-sleep-display.sh" "$stage/usr/lib/winlux/sleep.d/10-display"
+chmod 755 "$stage/usr/lib/winlux/sleep.d/10-display"
+cp "$root/scripts/winlux-touchpad.sh" "$stage/usr/bin/winlux-touchpad"
+chmod 755 "$stage/usr/bin/winlux-touchpad"
+cp "$root/scripts/winlux-sleep-touchpad.sh" "$stage/usr/lib/winlux/sleep.d/20-touchpad"
+chmod 755 "$stage/usr/lib/winlux/sleep.d/20-touchpad"
 cp "$root/scripts/winlux-prime-run.sh" "$stage/usr/bin/winlux-prime-run"
 chmod 755 "$stage/usr/bin/winlux-prime-run"
 # Historique des fichiers, sessions multi-utilisateur, bureau à distance
@@ -189,7 +196,7 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite print_suite; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite print_suite winpaths uac_suite; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -734,39 +741,35 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
             /bin/busybox sleep 3
         done
     ) &
-    # Quand la fenêtre de la VM change de taille, QEMU annonce un nouveau
-    # mode préféré : on l'applique pour que le bureau suive la fenêtre.
+    # Écrans : branchement à chaud, capot et taille de la fenêtre VM (QEMU
+    # annonce un nouveau mode préféré) sont suivis par le runtime.
     (
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
-            if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then
-                modes=$(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox grep -E '[*+]' | /bin/busybox tr -s ' ' | /bin/busybox tr '\n' ';')
-                if test "$modes" != "${last_modes:-}"; then echo "Winlux xrandr: $modes"; last_modes=$modes; fi
-            fi
-            # Follow the preferred VM mode, or keep the user's fixed mode.
-            DISPLAY=:0 /usr/bin/winlux-display sync 2>/dev/null || true
+            DISPLAY=:0 /usr/bin/winlux-display watch 2>>/run/winlux/display.log || true
             /bin/busybox sleep 1
         done
     ) &
+    if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then
+        (
+            while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
+                modes=$(DISPLAY=:0 /usr/bin/xrandr --current 2>/dev/null | /bin/busybox grep -E '[*+]' | /bin/busybox tr -s ' ' | /bin/busybox tr '\n' ';')
+                if test "$modes" != "${last_modes:-}"; then echo "Winlux xrandr: $modes"; last_modes=$modes; fi
+                /bin/busybox sleep 1
+            done
+        ) &
+    fi
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
         keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
         case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
-        tapping=$(/bin/busybox sed -n 's/^TAP_TO_CLICK=//p' /etc/winlux/input.conf 2>/dev/null)
-        case "$tapping" in 0|1)
-            for device in $(DISPLAY=:0 /usr/bin/xinput --list --id-only 2>/dev/null); do
-                DISPLAY=:0 /usr/bin/xinput set-prop "$device" 'libinput Tapping Enabled' "$tapping" 2>/dev/null || true
-            done ;;
-        esac
+        # Pavé tactile : toucher-clic, deux doigts, défilement naturel, vitesse.
+        DISPLAY=:0 /usr/bin/winlux-touchpad apply 2>/dev/null || true
         taskbar_align=$(/bin/busybox sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null)
         desktop_theme=$(/bin/busybox sed -n 's/^THEME=//p' /etc/winlux/preferences.conf 2>/dev/null)
-        # Échelle d'interface choisie d'après la hauteur de l'écran au lancement.
-        screen_height=$(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox awk '/\*/ { split($1, size, "x"); print size[2]; exit }')
-        ui_scale=1
-        if test "${screen_height:-0}" -ge 2000; then ui_scale=2
-        elif test "${screen_height:-0}" -ge 1400; then ui_scale=1.5
-        elif test "${screen_height:-0}" -ge 1000; then ui_scale=1.25
-        fi
-        saved_scale=$(/bin/busybox sed -n 's/^UI_SCALE=//p' /etc/winlux/display.conf 2>/dev/null)
-        case "$saved_scale" in 1|1.25|1.5|2) ui_scale=$saved_scale ;; esac
+        # Échelle du bureau : la plus grande demandée parmi les écrans
+        # allumés (densité réelle ou réglage par écran), les autres écrans
+        # sont réduits par RandR.
+        ui_scale=$(DISPLAY=:0 /usr/bin/winlux-display session-scale 2>/dev/null)
+        case "$ui_scale" in 1|1.25|1.5|1.75|2|2.5|3) ;; *) ui_scale=1 ;; esac
         input_diag=
         if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then input_diag=1; fi
         tray_battery=0

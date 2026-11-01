@@ -229,8 +229,9 @@ static INET_NTOA_BUF: OnceLock<Mutex<[u8; 16]>> = OnceLock::new();
 pub(crate) struct WinServent {
     s_name: *mut c_char,
     s_aliases: *mut *mut c_char,
-    s_port: i16,
+    // Disposition _WIN64 : s_proto précède s_port.
     s_proto: *mut c_char,
+    s_port: i16,
 }
 static SERVENT_BUF: OnceLock<Mutex<ServentBuf>> = OnceLock::new();
 struct ServentBuf {
@@ -266,8 +267,29 @@ fn error_from_errno(e: i32) -> i32 {
         libc::ENETUNREACH => 10051,
         libc::EHOSTUNREACH => 10065,
         libc::EWOULDBLOCK => 10035,
+        libc::ENOTCONN => 10057,
+        libc::EISCONN => 10056,
+        libc::EALREADY => 10037,
+        libc::EMSGSIZE => 10040,
+        libc::ECONNABORTED => 10053,
+        libc::ENOPROTOOPT => 10042,
+        libc::EBADF => 10038,
+        libc::ENETDOWN => 10050,
+        libc::ESHUTDOWN => 10058,
+        libc::EPROTONOSUPPORT => 10043,
+        libc::ESOCKTNOSUPPORT => 10044,
+        libc::EOPNOTSUPP => 10045,
         _ => 10022,
     }
+}
+/// Traduit les drapeaux Winsock de `recv` (MSG_WAITALL = 0x8 sous Windows,
+/// 0x100 sous Linux ; MSG_PEEK et MSG_OOB coïncident).
+fn recv_flags(win: i32) -> i32 {
+    let mut f = win & (libc::MSG_PEEK | libc::MSG_OOB);
+    if win & 0x8 != 0 {
+        f |= libc::MSG_WAITALL;
+    }
+    f
 }
 fn last_error() -> i32 {
     unsafe { error_from_errno(*libc::__errno_location()) }
@@ -408,6 +430,8 @@ pub extern "win64" fn closesocket(s: usize) -> i32 {
         SOCKET_ERROR
     } else {
         lock(sockets()).remove(&s);
+        // Un fd réutilisé ne doit pas hériter du masque WSAEventSelect.
+        lock(event_assoc()).remove(&s);
         0
     }
 }
@@ -536,7 +560,7 @@ pub unsafe extern "win64" fn recv(s: usize, b: *mut u8, n: i32, flags: i32) -> i
         set_error(if n < 0 { WSA_INVALID_PARAMETER } else { 10014 });
         return SOCKET_ERROR;
     }
-    let r = libc::recv(s as i32, b as *mut c_void, n as usize, flags);
+    let r = libc::recv(s as i32, b as *mut c_void, n as usize, recv_flags(flags));
     if r < 0 {
         set_error(last_error());
         SOCKET_ERROR
@@ -1258,6 +1282,13 @@ pub unsafe extern "win64" fn getsockopt(
         set_error(last_error());
         SOCKET_ERROR
     } else {
+        // SO_ERROR : l'application attend un code WSAE*, pas un errno Linux.
+        if l == libc::SOL_SOCKET && o == libc::SO_ERROR && sz >= 4 && !optval.is_null() {
+            let e = std::ptr::read_unaligned(optval as *const i32);
+            if e != 0 {
+                std::ptr::write_unaligned(optval as *mut i32, error_from_errno(e));
+            }
+        }
         *optlen = sz as i32;
         0
     }
@@ -1321,12 +1352,21 @@ pub unsafe extern "win64" fn ioctlsocket(s: usize, cmd: u32, argp: *mut u32) -> 
 }
 
 // ── select ──────────────────────────────────────────────────────────────
+/// Décalage de `fd_array` dans le `fd_set` Winsock x64 et taille maximale.
+const FD_ARRAY_OFFSET: usize = 8;
+const FD_SETSIZE_WIN: usize = 64;
+/// Un descripteur utilisable par `libc::FD_SET` (sinon indexation hors bornes).
+fn fd_set_ok(s: usize) -> bool {
+    valid_socket(s) && s < libc::FD_SETSIZE
+}
 unsafe fn read_fd_set(win: *const WinFdSet) -> Vec<usize> {
     if win.is_null() {
         return Vec::new();
     }
-    let count = std::ptr::read_unaligned(win as *const u32) as usize;
-    let base = (win as *const u8).add(4) as *const usize;
+    // `struct fd_set { u_int fd_count; SOCKET fd_array[64]; }` : sur x64 le
+    // tableau commence à l'offset 8 (alignement de SOCKET), pas 4.
+    let count = (std::ptr::read_unaligned(win as *const u32) as usize).min(FD_SETSIZE_WIN);
+    let base = (win as *const u8).add(FD_ARRAY_OFFSET) as *const usize;
     (0..count)
         .map(|i| std::ptr::read_unaligned(base.add(i)))
         .collect()
@@ -1336,8 +1376,9 @@ unsafe fn write_fd_set(win: *mut WinFdSet, socks: &[usize]) {
     if win.is_null() {
         return;
     }
+    let socks = &socks[..socks.len().min(FD_SETSIZE_WIN)];
     std::ptr::write_unaligned(win as *mut u32, socks.len() as u32);
-    let base = (win as *mut u8).add(4) as *mut usize;
+    let base = (win as *mut u8).add(FD_ARRAY_OFFSET) as *mut usize;
     for (i, &s) in socks.iter().enumerate() {
         std::ptr::write_unaligned(base.add(i), s);
     }
@@ -1366,6 +1407,18 @@ pub unsafe extern "win64" fn select(
     libc::FD_ZERO(&mut wr);
     libc::FD_ZERO(&mut ex);
 
+    // Une valeur qui n'est pas une socket (INVALID_SOCKET, fd fermé) fait
+    // échouer l'appel avec WSAENOTSOCK, comme sous Windows, au lieu de
+    // déborder le tableau de bits de `libc::FD_SET`.
+    if rfds
+        .iter()
+        .chain(&wfds)
+        .chain(&efds)
+        .any(|&s| !fd_set_ok(s))
+    {
+        set_error(10038);
+        return SOCKET_ERROR;
+    }
     for &s in &rfds {
         libc::FD_SET(s as i32, &mut rd);
         nfds = nfds.max(s as i32 + 1);
@@ -1948,11 +2001,11 @@ pub extern "win64" fn wsa_socket_w(
         set_error(WSA_NOT_INITIALISED);
         return INVALID_SOCKET;
     }
-    let mut sock_flags = 0i32;
-    if flags & 0x01 != 0 {
-        sock_flags |= libc::SOCK_NONBLOCK;
-    } // WSA_FLAG_OVERLAPPED
-    let s = unsafe { libc::socket(af_in(af), kind | sock_flags, protocol) };
+    // WSA_FLAG_OVERLAPPED (0x01) est le drapeau par défaut de presque tous
+    // les appels : il ne rend pas la socket non bloquante (ioctlsocket FIONBIO
+    // s'en charge).
+    let _ = flags;
+    let s = unsafe { libc::socket(af_in(af), kind, protocol) };
     if s < 0 {
         set_error(last_error());
         INVALID_SOCKET
@@ -2360,7 +2413,7 @@ pub unsafe extern "win64" fn wsa_duplicate_socket_w(s: usize, _pid: u32, info: *
         return SOCKET_ERROR;
     }
     // fill the WSAPROTOCOL_INFOW struct with minimal data
-    std::ptr::write_bytes(info, 0, 632); // size of WSAPROTOCOL_INFOW
+    std::ptr::write_bytes(info, 0, 628); // sizeof(WSAPROTOCOL_INFOW) sur x64
     0
 }
 
@@ -2521,8 +2574,8 @@ pub unsafe extern "win64" fn wsa_fd_is_set(s: usize, set: *const WinFdSet) -> i3
     if set.is_null() {
         return 0;
     }
-    let count = std::ptr::read_unaligned(set as *const u32) as usize;
-    let base = (set as *const u8).add(4) as *const usize;
+    let count = (std::ptr::read_unaligned(set as *const u32) as usize).min(FD_SETSIZE_WIN);
+    let base = (set as *const u8).add(FD_ARRAY_OFFSET) as *const usize;
     for i in 0..count {
         if std::ptr::read_unaligned(base.add(i)) == s {
             return 1;
@@ -2759,9 +2812,9 @@ mod tests {
         unsafe {
             let s = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
             // unconnected socket should be writable
-            let mut wset = [0u8; 4 + 8]; // count + 1 SOCKET
+            let mut wset = [0u8; 8 + 8]; // count (+ padding) + 1 SOCKET
             std::ptr::write_unaligned(wset.as_mut_ptr() as *mut u32, 1);
-            std::ptr::write_unaligned(wset.as_mut_ptr().add(4) as *mut usize, s);
+            std::ptr::write_unaligned(wset.as_mut_ptr().add(8) as *mut usize, s);
             let tv = WinTimeval { sec: 0, usec: 0 };
             let rc = select(
                 0,
