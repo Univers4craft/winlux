@@ -25,6 +25,7 @@ pub mod d3d12;
 pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
+pub mod dataobject;
 pub mod dbghelp;
 pub mod dinput8;
 pub mod dsound;
@@ -100,6 +101,7 @@ pub mod winspool;
 pub mod wintrust;
 pub mod ws2_32;
 pub mod xaudio2;
+pub mod xdnd;
 pub mod xinput;
 
 use std::collections::HashMap;
@@ -248,7 +250,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "ole32",
-                exports: ole32::exports(),
+                exports: {
+                    let mut e = ole32::exports();
+                    e.extend(dataobject::ole32_exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -266,6 +272,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = shell32::exports();
                     e.extend(knownfolders::shell32_exports());
+                    e.extend(dataobject::shell32_exports());
                     e
                 },
                 handle: fake_module(),

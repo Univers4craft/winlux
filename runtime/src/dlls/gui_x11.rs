@@ -536,6 +536,8 @@ pub struct X11Backend {
     overlay: crate::overlay::Overlay,
     /// Taille et couleur du pointeur (réglages d'accessibilité appliqués).
     pointer_style: (u8, u8),
+    /// Glisser-déposer reçu depuis les applis Linux (XDND).
+    xdnd: Option<crate::dlls::xdnd::Xdnd>,
 }
 
 impl X11Backend {
@@ -567,6 +569,7 @@ impl X11Backend {
             .reply()
             .ok()?
             .atom;
+        let xdnd = crate::dlls::xdnd::Xdnd::new(&conn);
         Some(X11Backend {
             conn,
             screen,
@@ -593,6 +596,7 @@ impl X11Backend {
             x11_cursors: HashMap::new(),
             current_cursor: 0x0001_0001,
             pointer_style: (1, 0),
+            xdnd,
         })
     }
 
@@ -1917,8 +1921,20 @@ impl X11Backend {
                 })
             }
             Event::ConfigureNotify(e) => self.on_configure(e),
+            Event::SelectionNotify(e) => {
+                let root = self.conn.setup().roots[self.screen].root;
+                let scale = self.scale;
+                self.xdnd
+                    .as_mut()?
+                    .selection_notify(&self.conn, &e, scale, root)?
+            }
             Event::ClientMessage(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
+                if let Some(xdnd) = self.xdnd.as_mut() {
+                    if let Some(out) = xdnd.client_message(&self.conn, &e, hwnd) {
+                        return out;
+                    }
+                }
                 let data = e.data.as_data32();
                 if e.type_ == self.wm_protocols && data[0] == self.wm_delete {
                     Some(PendingEvent {
@@ -2972,6 +2988,9 @@ impl gui::GuiBackend for X11Backend {
             AtomEnum::ATOM,
             &[self.wm_protocols, self.wm_delete],
         );
+        if let Some(xdnd) = self.xdnd.as_ref() {
+            xdnd.set_aware(&self.conn, win);
+        }
         let title_bytes = crate::dlls::encode_ansi(title);
         let _ = self.conn.change_property8(
             x11rb::protocol::xproto::PropMode::REPLACE,
