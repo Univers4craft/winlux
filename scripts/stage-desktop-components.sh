@@ -68,7 +68,7 @@ cp --remove-destination "$project/scripts/winlux-systemctl.sh" "$stage/usr/bin/s
 chmod 755 "$stage/usr/bin/systemctl"
 cp --remove-destination "$project/scripts/winlux-apt-service-hook.sh" "$stage/usr/share/winlux/apt-service-hook"
 chmod 755 "$stage/usr/share/winlux/apt-service-hook"
-for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-notify-icon.py:winlux-notify-icon'; do
+for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-desktop-paste.py:winlux-desktop-paste' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-notify-icon.py:winlux-notify-icon'; do
     source=${pair%:*}; destination=${pair#*:}
     cp --remove-destination "$project/scripts/$source" "$stage/usr/bin/$destination"
     chmod 755 "$stage/usr/bin/$destination"
