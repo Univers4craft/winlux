@@ -15,6 +15,68 @@ const ATTR_HIDDEN: u32 = 0x2;
 const ATTR_DIRECTORY: u32 = 0x10;
 const ATTR_ARCHIVE: u32 = 0x20;
 const ATTR_NORMAL: u32 = 0x80;
+pub(crate) const ATTR_REPARSE_POINT: u32 = 0x400;
+/// Étiquette de point d'analyse d'un lien symbolique (`dwReserved0`).
+pub(crate) const IO_REPARSE_TAG_SYMLINK: u32 = 0xA000_000C;
+
+/// Vrai si l'utilisateur courant peut écrire dans `path` (droits Linux réels,
+/// propriétaire, groupe, ACL POSIX et montage en lecture seule compris).
+pub(crate) fn writable(path: &std::path::Path) -> bool {
+    use std::os::unix::ffi::OsStrExt;
+    let Ok(c) = std::ffi::CString::new(path.as_os_str().as_bytes()) else {
+        return false;
+    };
+    // SAFETY: chaîne C valide, access ne garde pas le pointeur.
+    unsafe { libc::access(c.as_ptr(), libc::W_OK) == 0 }
+}
+
+/// Aucun bit d'écriture : c'est l'attribut « lecture seule » posé par
+/// `SetFileAttributes`, respecté même par l'administrateur comme sous Windows.
+pub(crate) fn no_write_bits(meta: &std::fs::Metadata) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    meta.permissions().mode() & 0o222 == 0
+}
+
+/// Attributs Windows d'un fichier Linux, et ses métadonnées (cible du lien).
+///
+/// - Un lien symbolique porte FILE_ATTRIBUTE_REPARSE_POINT, comme sous
+///   Windows : les applis prudentes (sauvegarde, désinstallation récursive)
+///   ne descendent pas dedans. Ses autres attributs sont ceux de la cible.
+/// - Lecture seule = l'utilisateur ne peut pas écrire le fichier (droits
+///   Linux réels), pas seulement « aucun bit w ». Jamais sur un dossier :
+///   Windows ignore cet attribut pour les dossiers.
+/// - Caché = nom commençant par un point.
+pub(crate) fn attributes(path: &std::path::Path) -> std::io::Result<(u32, std::fs::Metadata)> {
+    let link = std::fs::symlink_metadata(path)?;
+    let is_link = link.file_type().is_symlink();
+    let meta = if is_link {
+        std::fs::metadata(path).unwrap_or(link)
+    } else {
+        link
+    };
+    let mut a = 0;
+    if meta.is_dir() {
+        a |= ATTR_DIRECTORY;
+    } else if !meta.file_type().is_symlink() && (no_write_bits(&meta) || !writable(path)) {
+        a |= ATTR_READONLY;
+    }
+    if is_link {
+        a |= ATTR_REPARSE_POINT;
+    }
+    if path
+        .file_name()
+        .is_some_and(|n| n.to_string_lossy().starts_with('.'))
+    {
+        a |= ATTR_HIDDEN;
+    }
+    if meta.is_file() {
+        a |= ATTR_ARCHIVE;
+    }
+    if a == 0 {
+        a = ATTR_NORMAL;
+    }
+    Ok((a, meta))
+}
 
 #[repr(C)]
 pub struct Win32FindDataA {
@@ -52,6 +114,7 @@ struct Entry {
     access: u64,
     write: u64,
     size: u64,
+    reparse_tag: u32,
 }
 struct Search {
     entries: Vec<Entry>,
@@ -112,7 +175,10 @@ fn split_search_path(path: &str) -> Result<(std::path::PathBuf, String), u32> {
     if pattern.is_empty() || directory.contains('*') || directory.contains('?') {
         return Err(ERROR_INVALID_PARAMETER);
     }
-    Ok((crate::paths::to_linux(directory), pattern.to_string()))
+    let directory = crate::paths::to_linux(directory);
+    // « photos.zip\* » : on liste le contenu de l'archive ouverte.
+    let directory = crate::archive::opened_root(&directory).unwrap_or(directory);
+    Ok((directory, pattern.to_string()))
 }
 
 fn enumerate(path: &str) -> Result<Vec<Entry>, u32> {
@@ -127,29 +193,22 @@ fn enumerate(path: &str) -> Result<Vec<Entry>, u32> {
     let mut found = Vec::new();
     for item in entries {
         let item = item.map_err(|e| crate::dlls::kernel32::io_error_code(&e))?;
-        let name = item.file_name().to_string_lossy().into_owned();
+        // Nom présenté à l'appli : caractères interdits sous Windows codés.
+        let name = crate::paths::win_name(&item.file_name().to_string_lossy());
         if !wildcard_matches(&pattern, &name) {
             continue;
         }
-        let metadata = item
-            .metadata()
-            .map_err(|e| crate::dlls::kernel32::io_error_code(&e))?;
-        let mut attributes = 0;
-        if metadata.is_dir() {
-            attributes |= ATTR_DIRECTORY;
-        }
-        if metadata.permissions().readonly() {
-            attributes |= ATTR_READONLY;
-        }
-        if name.starts_with('.') {
-            attributes |= ATTR_HIDDEN;
-        }
-        if metadata.is_file() {
-            attributes |= ATTR_ARCHIVE;
-        }
-        if attributes == 0 {
-            attributes = ATTR_NORMAL;
-        }
+        let (attributes, metadata) = match attributes(&item.path()) {
+            Ok(x) => x,
+            // Fichier disparu entre la lecture du dossier et maintenant.
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => continue,
+            Err(e) => return Err(crate::dlls::kernel32::io_error_code(&e)),
+        };
+        let reparse_tag = if attributes & ATTR_REPARSE_POINT != 0 {
+            IO_REPARSE_TAG_SYMLINK
+        } else {
+            0
+        };
         let zero = std::time::UNIX_EPOCH;
         found.push(Entry {
             name,
@@ -161,7 +220,8 @@ fn enumerate(path: &str) -> Result<Vec<Entry>, u32> {
             ),
             access: filetime(metadata.accessed().unwrap_or(zero)),
             write: filetime(metadata.modified().unwrap_or(zero)),
-            size: metadata.len(),
+            size: if metadata.is_dir() { 0 } else { metadata.len() },
+            reparse_tag,
         });
     }
     found.sort_by_key(|a| a.name.to_lowercase());
@@ -180,6 +240,7 @@ unsafe fn copy_a(e: &Entry, out: *mut Win32FindDataA) {
     (*out).write_time = e.write;
     (*out).size_high = (e.size >> 32) as u32;
     (*out).size_low = e.size as u32;
+    (*out).reserved0 = e.reparse_tag;
     let bytes = crate::dlls::encode_ansi(&e.name);
     let n = bytes.len().min((*out).file_name.len() - 1);
     std::ptr::copy_nonoverlapping(bytes.as_ptr(), (*out).file_name.as_mut_ptr() as *mut u8, n);
@@ -192,6 +253,7 @@ unsafe fn copy_w(e: &Entry, out: *mut Win32FindDataW) {
     (*out).write_time = e.write;
     (*out).size_high = (e.size >> 32) as u32;
     (*out).size_low = e.size as u32;
+    (*out).reserved0 = e.reparse_tag;
     let mut wide: Vec<u16> = e.name.encode_utf16().collect();
     wide.truncate((*out).file_name.len() - 1);
     if wide.last().is_some_and(|c| (0xD800..=0xDBFF).contains(c)) {

@@ -760,19 +760,6 @@ pub extern "win64" fn map_virtual_key_a(_code: u32, _map_type: u32) -> u32 {
 pub extern "win64" fn map_virtual_key_w(_code: u32, _map_type: u32) -> u32 {
     0
 }
-pub unsafe extern "win64" fn get_keyboard_layout_name_a(_buf: *mut u8) -> i32 {
-    if !_buf.is_null() {
-        let s = b"0000040C\0";
-        std::ptr::copy_nonoverlapping(s.as_ptr(), _buf, 9);
-    }
-    1
-}
-pub extern "win64" fn get_keyboard_layout(_thread: u32) -> usize {
-    0x0000040C
-} // Français
-pub extern "win64" fn activate_keyboard_layout(_layout: usize, _flags: u32) -> usize {
-    0x0000040C
-}
 pub extern "win64" fn to_unicode_ex(
     _vk: u32,
     _scan: u32,
@@ -813,33 +800,6 @@ pub extern "win64" fn msg_wait_for_multiple_objects_ex(
     _flags: u32,
 ) -> u32 {
     0
-}
-pub extern "win64" fn monitor_from_point(_x: i32, _y: i32, _flags: u32) -> usize {
-    1
-}
-pub extern "win64" fn monitor_from_rect(_rect: usize, _flags: u32) -> usize {
-    1
-}
-pub extern "win64" fn monitor_from_window(_hwnd: usize, _flags: u32) -> usize {
-    1
-}
-pub unsafe extern "win64" fn get_monitor_info_a(_monitor: usize, info: *mut u8) -> i32 {
-    if info.is_null() {
-        return 0;
-    }
-    // MONITORINFO : cbSize(4), rcMonitor(16), rcWork(16), dwFlags(4) = 40 octets
-    let size = *(info as *const u32);
-    if size < 40 {
-        return 0;
-    }
-    let rect = [0i32, 0, 1920, 1080]; // résolution par défaut
-    std::ptr::copy_nonoverlapping(rect.as_ptr() as *const u8, info.add(4), 16);
-    std::ptr::copy_nonoverlapping(rect.as_ptr() as *const u8, info.add(20), 16);
-    *(info.add(36) as *mut u32) = 1; // MONITORINFOF_PRIMARY
-    1
-}
-pub unsafe extern "win64" fn get_monitor_info_w(monitor: usize, info: *mut u8) -> i32 {
-    get_monitor_info_a(monitor, info)
 }
 pub extern "win64" fn get_window_dc(_hwnd: usize) -> usize {
     crate::dlls::user32::get_dc(_hwnd)
@@ -915,19 +875,17 @@ pub fn exports() -> crate::dlls::Exports {
         "RemovePropA"=>fn remove_prop_a, "RemovePropW"=>fn remove_prop_w,
         "GetDCEx"=>fn get_dc_ex, "RedrawWindow"=>fn redraw_window, "GetUpdateRect"=>fn get_update_rect,
         "MapVirtualKeyA"=>fn map_virtual_key_a, "MapVirtualKeyW"=>fn map_virtual_key_w,
-        "GetKeyboardLayoutNameA"=>fn get_keyboard_layout_name_a,
-        "GetKeyboardLayout"=>fn get_keyboard_layout,
-        "ActivateKeyboardLayout"=>fn activate_keyboard_layout,
         "ToUnicodeEx"=>fn to_unicode_ex,
         "RegisterWindowMessageA"=>fn register_window_message_a,
         "RegisterWindowMessageW"=>fn register_window_message_w,
         "ReplyMessage"=>fn reply_message, "WaitMessage"=>fn wait_message,
         "MsgWaitForMultipleObjects"=>fn msg_wait_for_multiple_objects,
         "MsgWaitForMultipleObjectsEx"=>fn msg_wait_for_multiple_objects_ex,
-        "MonitorFromPoint"=>fn monitor_from_point,
-        "MonitorFromRect"=>fn monitor_from_rect,
-        "MonitorFromWindow"=>fn monitor_from_window,
-        "GetMonitorInfoA"=>fn get_monitor_info_a, "GetMonitorInfoW"=>fn get_monitor_info_w,
+        "MonitorFromPoint"=>fn crate::dlls::monitors::monitor_from_point_packed,
+        "MonitorFromRect"=>fn crate::dlls::monitors::monitor_from_rect,
+        "MonitorFromWindow"=>fn crate::dlls::monitors::monitor_from_window,
+        "GetMonitorInfoA"=>fn crate::dlls::monitors::get_monitor_info_a,
+        "GetMonitorInfoW"=>fn crate::dlls::monitors::get_monitor_info_w,
         "GetWindowDC"=>fn get_window_dc,
     }
 }

@@ -200,13 +200,17 @@ pub unsafe extern "win64" fn initterm_e(start: *const usize, end: *const usize) 
 
 // ---------- Fin de programme ----------
 
-fn atexit_list() -> &'static Mutex<Vec<usize>> {
-    static L: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// Fonctions de fin de programme : (fonction, argument). `atexit` enregistre
+/// une fonction sans argument, `__cxa_atexit` (destructeurs d'objets
+/// statiques C++) une fonction et l'objet à détruire.
+fn atexit_list() -> &'static Mutex<Vec<(usize, usize)>> {
+    static L: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
     &L
 }
 
-/// Exécute les fonctions enregistrées par `atexit`/`_onexit`, la dernière
-/// enregistrée en premier, une seule fois.
+/// Exécute les fonctions enregistrées par `atexit`/`_onexit`/`__cxa_atexit`,
+/// la dernière enregistrée en premier, une seule fois. Une fonction
+/// enregistrée pendant l'exécution (par un destructeur) passe aussi.
 pub fn run_atexit() {
     loop {
         let next = atexit_list()
@@ -214,9 +218,11 @@ pub fn run_atexit() {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop();
         match next {
-            Some(f) => unsafe {
-                let f: extern "win64" fn() = std::mem::transmute(f);
-                f();
+            Some((f, arg)) => unsafe {
+                // Passer l'argument en RCX est sans effet pour une fonction
+                // `void (*)(void)` : un seul chemin pour les deux formes.
+                let f: extern "win64" fn(usize) = std::mem::transmute(f);
+                f(arg);
             },
             None => break,
         }
@@ -224,14 +230,26 @@ pub fn run_atexit() {
 }
 
 pub extern "win64" fn atexit(f: usize) -> i32 {
+    register_atexit(f, 0)
+}
+
+/// Enregistre `f(arg)` pour la fin du programme (`__cxa_atexit`).
+pub fn register_atexit(f: usize, arg: usize) -> i32 {
     if f == 0 {
         return -1;
     }
     atexit_list()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(f);
+        .push((f, arg));
     0
+}
+
+/// Fixe errno depuis le code Rust (sans passer par le pointeur `_errno`).
+pub fn set_errno_value(v: i32) {
+    unsafe {
+        *errno() = v;
+    }
 }
 pub extern "win64" fn onexit(f: usize) -> usize {
     if atexit(f) == 0 {
@@ -1660,6 +1678,38 @@ mod tests {
     }
     extern "win64" fn echec() -> i32 {
         7
+    }
+    static ATEXIT_CALLS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    extern "win64" fn fin_premier() {
+        ATEXIT_CALLS.lock().unwrap().push(1);
+    }
+    extern "win64" fn fin_second() {
+        ATEXIT_CALLS.lock().unwrap().push(2);
+    }
+    extern "win64" fn destructeur(obj: usize) {
+        ATEXIT_CALLS.lock().unwrap().push(obj as u32);
+    }
+
+    #[test]
+    fn atexit_et_cxa_atexit_executent_en_ordre_inverse() {
+        assert_eq!(atexit(fin_premier as *const () as usize), 0);
+        assert_eq!(
+            unsafe {
+                crate::dlls::libstdcpp::cxa_atexit(
+                    destructeur as *const () as *mut c_void,
+                    0x33 as *mut c_void,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        assert_eq!(atexit(fin_second as *const () as usize), 0);
+        assert_eq!(atexit(0), -1);
+        run_atexit();
+        assert_eq!(*ATEXIT_CALLS.lock().unwrap(), vec![2, 0x33, 1]);
+        // Une seconde exécution ne rejoue rien.
+        run_atexit();
+        assert_eq!(ATEXIT_CALLS.lock().unwrap().len(), 3);
     }
 
     #[test]

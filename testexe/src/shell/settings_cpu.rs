@@ -55,8 +55,16 @@ const ID_RESET: i32 = 183;
 const ID_GAME: i32 = 190;
 const ID_CHIP: i32 = 1000;
 
+/// Langue figée pendant un parcours de la page : `walk` appelle `t` des
+/// dizaines de fois et chaque lecture relit tout l'état publié.
+static mut WALK_LANG: usize = usize::MAX;
+
 /// Langue de l'interface : 0 français, 1 anglais, 2 espagnol, 3 allemand.
 fn lang() -> usize {
+    let cached = unsafe { WALK_LANG };
+    if cached != usize::MAX {
+        return cached;
+    }
     match unsafe { crate::settings::status_value(b"locale_lang") } {
         b"en" => 1,
         b"es" => 2,
@@ -396,6 +404,9 @@ impl Walk<'_, '_> {
             if inside(&r, px, py) {
                 self.hit = id;
             }
+            if (px, py) == ALL_ZONES {
+                record_zone(id);
+            }
         }
         if let Some(g) = self.g.as_deref_mut() {
             let p = pal();
@@ -469,6 +480,9 @@ impl Walk<'_, '_> {
                 if let Some((px, py)) = self.probe {
                     if inside(&r, px, py) {
                         self.hit = chip;
+                    }
+                    if (px, py) == ALL_ZONES {
+                        record_zone(chip);
                     }
                 }
             }
@@ -588,6 +602,13 @@ fn profile_label(key: &[u8]) -> &'static [u8] {
 }
 
 unsafe fn walk(w: &mut Walk) {
+    WALK_LANG = usize::MAX;
+    WALK_LANG = lang();
+    walk_page(w);
+    WALK_LANG = usize::MAX;
+}
+
+unsafe fn walk_page(w: &mut Walk) {
     if !available() {
         w.row(
             t(
@@ -1089,6 +1110,28 @@ unsafe fn hit(c: &Rect, x: i32, y: i32) -> i32 {
     w.hit
 }
 
+/// Sonde spéciale : au lieu de chercher une zone sous un point, le parcours
+/// relève toutes les zones cliquables visibles (contrôles headless).
+const ALL_ZONES: (i32, i32) = (i32::MIN, i32::MIN);
+static mut ZONES: [i32; 96] = [0; 96];
+static mut ZONE_N: usize = 0;
+
+fn record_zone(id: i32) {
+    unsafe {
+        if ZONE_N < ZONES.len() {
+            ZONES[ZONE_N] = id;
+            ZONE_N += 1;
+        }
+    }
+}
+
+/// Toutes les zones cliquables de la page, en un seul parcours.
+unsafe fn zones(c: &Rect) -> &'static [i32] {
+    ZONE_N = 0;
+    hit(c, ALL_ZONES.0, ALL_ZONES.1);
+    &*core::ptr::slice_from_raw_parts(core::ptr::addr_of!(ZONES) as *const i32, ZONE_N)
+}
+
 pub unsafe fn hover(c: &Rect, x: i32, y: i32) -> bool {
     let h = hit(c, x, y);
     let changed = h != HOVER;
@@ -1291,12 +1334,9 @@ pub unsafe fn regression_checks() {
     INFO[..report.len()].copy_from_slice(report);
     INFO_LEN = report.len();
     let c = rect(300, 80, 1000, 4000);
-    let mut found = false;
-    for y in (80..4000).step_by(6) {
-        for x in (300..1000).step_by(20) {
-            found |= matches!(hit(&c, x, y), 100..=123 | 132 | 133 | 140..=142 | 160..=176);
-        }
-    }
+    let found = zones(&c)
+        .iter()
+        .any(|id| matches!(id, 100..=123 | 132 | 133 | 140..=142 | 160..=176));
     check!(
         !found,
         "Processeur : aucune commande pour une capacite absente"
@@ -1304,18 +1344,8 @@ pub unsafe fn regression_checks() {
     let full = b"cpu_count=4\ncpu_list=0-3\nfreq=0:1200,1:1300,2:1400,3:1500\nfreq_max=4000\ncap_freq=1\ncap_governor=1\nprofiles=performance,powersave\nprofile=powersave\ncap_hybrid=1\npcores=0-1\necores=2-3\ncap_affinity=1\ncap_numa=0\ncap_thermal=1\ntemp=50\ncap_throttle=0\ncap_fans=0\ncap_fan_control=0\ncap_prio_high=1\ncap_prio_realtime=0\nhybrid_policy=heavy\n";
     INFO[..full.len()].copy_from_slice(full);
     INFO_LEN = full.len();
-    let mut seen = [false; 4];
-    for y in (80..4000).step_by(6) {
-        for x in (300..1000).step_by(20) {
-            match hit(&c, x, y) {
-                100 => seen[0] = true,
-                101 => seen[1] = true,
-                102 => seen[2] = true,
-                111 => seen[3] = true,
-                _ => {}
-            }
-        }
-    }
+    let ids = zones(&c);
+    let seen = [100, 101, 102, 111].map(|id| ids.contains(&id));
     check!(
         seen[0] && !seen[1] && seen[2] && seen[3],
         "Processeur : seuls les profils disponibles et le routage hybride sont proposes"
@@ -1346,16 +1376,8 @@ pub unsafe fn regression_checks() {
     let game = b"cpu_count=1\ncpu_list=0\ngame_mode=off\ncap_game_governor=0\n";
     INFO[..game.len()].copy_from_slice(game);
     INFO_LEN = game.len();
-    let mut ids = [false; 2];
-    for y in (80..4000).step_by(6) {
-        for x in (300..1000).step_by(20) {
-            match hit(&c, x, y) {
-                ID_GAME => ids[0] = true,
-                191 => ids[1] = true,
-                _ => {}
-            }
-        }
-    }
+    let found = zones(&c);
+    let ids = [ID_GAME, 191].map(|id| found.contains(&id));
     check!(ids[0] && ids[1], "Processeur : le mode jeu se regle");
     reset_program();
     INFO = saved;

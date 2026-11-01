@@ -337,15 +337,29 @@ pub unsafe extern "win64" fn str_str_iw(haystack: *const u16, needle: *const u16
     }
     let h = crate::dlls::wstr(haystack);
     let n = crate::dlls::wstr(needle);
-    match h.to_lowercase().find(&n.to_lowercase()) {
-        Some(pos) => {
-            // Compter les caractères pour trouver l'offset en u16.
-            let char_pos = h[..pos].chars().count();
-            let u16_pos: usize = h.chars().take(char_pos).map(|c| c.len_utf16()).sum();
-            haystack.add(u16_pos)
-        }
-        None => std::ptr::null(),
+    // `to_lowercase()` peut changer la longueur (« İ » devient deux
+    // caractères) : l'index trouvé ne correspondait plus à `h` et
+    // `h[..pos]` pouvait couper un caractère (panique). Comparaison
+    // caractère par caractère, chacun réduit à sa première minuscule.
+    fn low(c: char) -> char {
+        c.to_lowercase().next().unwrap_or(c)
     }
+    let hc: Vec<char> = h.chars().map(low).collect();
+    let nc: Vec<char> = n.chars().map(low).collect();
+    if nc.is_empty() {
+        return haystack;
+    }
+    if nc.len() > hc.len() {
+        return std::ptr::null();
+    }
+    let mut u16_pos = 0usize;
+    for (i, &c) in hc.iter().enumerate() {
+        if i + nc.len() <= hc.len() && hc[i..i + nc.len()] == nc[..] {
+            return haystack.add(u16_pos);
+        }
+        u16_pos += c.len_utf16();
+    }
+    std::ptr::null()
 }
 
 /// SHCreateStreamOnFileA (IStream sur un fichier — stub)
@@ -394,6 +408,17 @@ mod tests {
         let mut buf: Vec<u16> = p.encode_utf16().chain([0]).collect();
         let r = unsafe { path_remove_filespec_w(buf.as_mut_ptr()) };
         (r, unsafe { crate::dlls::wstr(buf.as_ptr()) })
+    }
+
+    #[test]
+    fn str_str_iw_ignore_la_casse_sans_decaler() {
+        let h: Vec<u16> = "Ağaç İstanbul MERHABA".encode_utf16().chain([0]).collect();
+        let n: Vec<u16> = "merhaba".encode_utf16().chain([0]).collect();
+        let r = unsafe { str_str_iw(h.as_ptr(), n.as_ptr()) };
+        assert!(!r.is_null());
+        assert_eq!(unsafe { crate::dlls::wstr(r) }, "MERHABA");
+        let absent: Vec<u16> = "xyz".encode_utf16().chain([0]).collect();
+        assert!(unsafe { str_str_iw(h.as_ptr(), absent.as_ptr()) }.is_null());
     }
 
     #[test]

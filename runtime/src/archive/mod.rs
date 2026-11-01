@@ -655,6 +655,18 @@ fn write_tar_family(
     }
 }
 
+/// Archive ouverte vue comme un dossier : `/home/u/a.zip` → `<cache>/root`.
+/// Sert au listage (`FindFirstFile("...\\a.zip\\*")`) : le fichier .zip
+/// lui-même reste un fichier pour toutes les autres opérations.
+pub fn opened_root(path: &Path) -> Option<PathBuf> {
+    Format::from_name(&path.file_name()?.to_string_lossy())?;
+    if !path.is_file() {
+        return None;
+    }
+    let canon = std::fs::canonicalize(path).ok()?;
+    cache_valid(&canon).then(|| cache_dir(&canon).join("root"))
+}
+
 /// Résout un chemin qui traverse une ou plusieurs archives ouvertes :
 /// `/home/u/a.zip/doc/x.txt` → `<cache>/root/doc/x.txt`.
 pub fn resolve(path: &Path) -> Option<PathBuf> {
@@ -811,6 +823,9 @@ mod tests {
             // Le chemin « dans » l'archive se résout vers le cache.
             let virt = arc.join("projet/doc/a.txt");
             assert_eq!(resolve(&virt).unwrap(), root.join("projet/doc/a.txt"));
+            // L'archive elle-même se liste comme un dossier (Explorer : « p.zip\\* »).
+            assert_eq!(opened_root(&arc).unwrap(), root);
+            assert!(opened_root(&src).is_none());
             assert!(!commit(&arc, &Progress::default()).unwrap());
             // Modification : ajout, renommage, suppression.
             std::fs::write(root.join("projet/nouveau.txt"), "deux").unwrap();

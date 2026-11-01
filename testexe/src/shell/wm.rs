@@ -39,7 +39,8 @@ pub const APP_FONTS: usize = 14;
 pub const APP_FILEHISTORY: usize = 15;
 pub const APP_REGEDIT: usize = 16;
 pub const APP_PROGRAMS: usize = 17;
-pub const APP_COUNT: usize = 18;
+pub const APP_SYSINFO: usize = 18;
+pub const APP_COUNT: usize = 19;
 
 // Native session: each built-in application owns a separate X11/Win32 window.
 // The Linux window manager handles its frame, stacking and taskbar lifecycle.
@@ -74,6 +75,10 @@ pub unsafe fn native_init() {
         APP_WELCOME
     } else if n == 7 && mode[..7].iter().map(|c| *c as u8).eq(*b"regedit") {
         APP_REGEDIT
+    } else if n == 11 && mode[..11] == b"eventviewer".map(|c| c as i8) {
+        APP_EVENTVIEWER
+    } else if n == 8 && mode[..8] == b"msinfo32".map(|c| c as i8) {
+        APP_SYSINFO
     } else {
         usize::MAX
     };
@@ -121,6 +126,8 @@ pub unsafe fn native_launch(app: usize) {
         APP_FIREWALL => c"firewall",
         APP_TASKMGR => c"taskmgr",
         APP_WELCOME => c"welcome",
+        APP_EVENTVIEWER => c"eventviewer",
+        APP_SYSINFO => c"msinfo32",
         _ => c"editor",
     };
     ShellExecuteA(
@@ -315,7 +322,7 @@ const CLOSED: Win = Win {
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
+static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
@@ -594,6 +601,12 @@ pub fn title_of(app: usize) -> &'static [u8] {
             b"Restaurar sistema",
             b"Systemwiederherstellung",
         ]),
+        APP_SYSINFO => tr4(&[
+            b"Informations syst\xE8me",
+            b"System Information",
+            b"Informaci\xF3n del sistema",
+            b"Systeminformationen",
+        ]),
         APP_FILEHISTORY => tr4(&[
             b"Historique des fichiers",
             b"File History",
@@ -628,6 +641,7 @@ pub fn glyph_of(app: usize) -> Glyph {
         APP_EVENTVIEWER => Glyph::Details,
         APP_RESTORE => Glyph::Refresh,
         APP_FILEHISTORY => Glyph::Archive,
+        APP_SYSINFO => Glyph::Computer,
         APP_WELCOME => Glyph::Star,
         APP_REGEDIT => Glyph::Tools,
         _ => Glyph::Settings,
@@ -651,6 +665,7 @@ fn custom_title(app: usize) -> bool {
         APP_EVENTVIEWER => crate::eventviewer::CUSTOM_TITLE,
         APP_RESTORE => crate::restore::CUSTOM_TITLE,
         APP_FILEHISTORY => crate::filehistory::CUSTOM_TITLE,
+        APP_SYSINFO => crate::sysinfo::CUSTOM_TITLE,
         APP_WELCOME => crate::welcome::CUSTOM_TITLE,
         APP_REGEDIT => crate::regedit::CUSTOM_TITLE,
         _ => crate::settings::CUSTOM_TITLE,
@@ -675,6 +690,7 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
         APP_EVENTVIEWER => crate::eventviewer::draw(g, f),
         APP_RESTORE => crate::restore::draw(g, f),
         APP_FILEHISTORY => crate::filehistory::draw(g, f),
+        APP_SYSINFO => crate::sysinfo::draw(g, f),
         APP_WELCOME => crate::welcome::draw(g, f),
         APP_REGEDIT => crate::regedit::draw(g, f),
         _ => crate::settings::draw(g, f),
@@ -698,6 +714,7 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         APP_EVENTVIEWER => crate::eventviewer::mouse(ev, x, y, f),
         APP_RESTORE => crate::restore::mouse(ev, x, y, f),
         APP_FILEHISTORY => crate::filehistory::mouse(ev, x, y, f),
+        APP_SYSINFO => crate::sysinfo::mouse(ev, x, y, f),
         APP_WELCOME => crate::welcome::mouse(ev, x, y, f),
         APP_REGEDIT => crate::regedit::mouse(ev, x, y, f),
         _ => crate::settings::mouse(ev, x, y, f),
@@ -721,6 +738,7 @@ unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
         APP_EVENTVIEWER => crate::eventviewer::key(vk, ch),
         APP_RESTORE => crate::restore::key(vk, ch),
         APP_FILEHISTORY => crate::filehistory::key(vk, ch),
+        APP_SYSINFO => crate::sysinfo::key(vk, ch),
         APP_WELCOME => crate::welcome::key(vk, ch),
         APP_REGEDIT => crate::regedit::key(vk, ch),
         _ => crate::settings::key(vk, ch),
@@ -744,6 +762,7 @@ unsafe fn app_tick(app: usize, f: &Frame) -> bool {
         APP_EVENTVIEWER => crate::eventviewer::tick(f),
         APP_RESTORE => crate::restore::tick(f),
         APP_FILEHISTORY => crate::filehistory::tick(f),
+        APP_SYSINFO => crate::sysinfo::tick(f),
         APP_WELCOME => crate::welcome::tick(f),
         APP_REGEDIT => crate::regedit::tick(f),
         _ => crate::settings::tick(f),
@@ -880,6 +899,7 @@ fn default_rect(app: usize) -> Rect {
         APP_NOTEPAD => (1000, 680),
         APP_TASKMGR => (1000, 650),
         APP_FILEHISTORY => (1040, 700),
+        APP_SYSINFO => (1060, 700),
         APP_DISKMGR => (1000, 650),
         APP_STORE => (1180, 760),
         APP_FONTS => (1000, 680),
@@ -1744,7 +1764,9 @@ pub unsafe fn draw(g: &mut Gfx) {
                 j += 1;
             }
             buf[j] = 0;
-            text(g.hdc, g.f.body, p.text, cx + 22, cy + 70, &buf);
+            // Seulement le texte saisi : passer les 260 octets dessinait
+            // les zéros comme des cases jusqu'au bord de l'écran.
+            text(g.hdc, g.f.body, p.text, cx + 22, cy + 70, &buf[..j]);
         }
         round_rect(
             g.hdc,
@@ -1844,7 +1866,74 @@ unsafe fn snap_target(x: i32, y: i32) -> Option<Rect> {
 }
 
 /// Bouton gauche enfoncé : renvoie vrai si une fenêtre l'a pris.
+/// Lance la commande de la boîte « Exécuter » et la referme.
+unsafe fn run_submit() {
+    SHOW_RUN = false;
+    if RUN_LEN == 0 {
+        return;
+    }
+    let mut cmd = [0u16; 512];
+    let mut i = 0;
+    while i < RUN_LEN && i < 255 {
+        cmd[i] = RUN_TEXT[i] as u16;
+        i += 1;
+    }
+    cmd[i] = 0;
+    static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    ShellExecuteW(
+        core::ptr::null_mut(),
+        OPEN.as_ptr(),
+        cmd.as_ptr(),
+        core::ptr::null(),
+        core::ptr::null(),
+        1,
+    );
+}
+
+/// Rectangle de la boîte « Exécuter » et de son bouton OK (même géométrie que le dessin).
+fn run_rects() -> (Rect, Rect) {
+    let (sw, sh) = (420, 110);
+    let cx = unsafe { (WORK.left + WORK.right - sw) / 2 };
+    let cy = unsafe { WORK.top + 60 };
+    (
+        rect(cx, cy, cx + sw, cy + sh),
+        rect(cx + sw - 70, cy + 64, cx + sw - 16, cy + 88),
+    )
+}
+
+/// Alt relâché : valide la fenêtre choisie par Alt+Tab. Renvoie vrai si quelque chose a changé.
+pub unsafe fn alt_released() -> bool {
+    if !ALT_TAB {
+        return false;
+    }
+    let mut list = [usize::MAX; APP_COUNT];
+    let mut count = 0;
+    for &a in Z.iter().rev() {
+        if WINS[a].open && !WINS[a].minimized {
+            list[count] = a;
+            count += 1;
+        }
+    }
+    if count > 0 && ALT_TAB_INDEX >= 0 && (ALT_TAB_INDEX as usize) < count {
+        raise(list[ALT_TAB_INDEX as usize]);
+    }
+    ALT_TAB = false;
+    ALT_TAB_INDEX = 0;
+    true
+}
+
 pub unsafe fn on_button_down(x: i32, y: i32, repaint: &mut bool) -> bool {
+    // Boîte « Exécuter » : OK lance, un clic en dehors referme.
+    if SHOW_RUN {
+        let (dialog, ok) = run_rects();
+        if inside(&ok, x, y) {
+            run_submit();
+        } else if !inside(&dialog, x, y) {
+            SHOW_RUN = false;
+        }
+        *repaint = true;
+        return true;
+    }
     // Snap layout click
     if SNAP_LAYOUT_VISIBLE && SNAP_LAYOUT_APP != usize::MAX {
         let overlay = snap_overlay_rect(&WINS[SNAP_LAYOUT_APP].rect);
@@ -2442,27 +2531,13 @@ pub unsafe fn on_key(vk: u32, ch: u16) -> bool {
             return true;
         }
         if ch == 13 || vk == 0x0D {
-            // try to run
-            crate::wm::SHOW_RUN = false;
-            let mut cmd = [0u16; 512];
-            let mut i = 0;
-            while i < crate::wm::RUN_LEN && i < 255 {
-                cmd[i] = crate::wm::RUN_TEXT[i] as u16;
-                i += 1;
-            }
-            cmd[i] = 0;
-            static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-            ShellExecuteW(
-                core::ptr::null_mut(),
-                OPEN.as_ptr(),
-                cmd.as_ptr(),
-                core::ptr::null(),
-                core::ptr::null(),
-                1,
-            );
+            run_submit();
             return true;
         }
-        if ch >= 0x20 && ch < 0x7F && crate::wm::RUN_LEN < 255 {
+        let win_held = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        if ch >= 0x20 && ch < 0x7F && crate::wm::RUN_LEN < 255 && !win_held {
+            // Le « r » de Win+R n'entre pas dans la boîte.
             crate::wm::RUN_TEXT[crate::wm::RUN_LEN] = ch as u8;
             crate::wm::RUN_LEN += 1;
             crate::wm::RUN_TEXT[crate::wm::RUN_LEN] = 0;

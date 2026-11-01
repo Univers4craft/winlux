@@ -27,6 +27,21 @@ const TRAY_RESERVED_V: i32 = 190;
 
 pub static mut SCREEN_W: i32 = 1280;
 pub static mut SCREEN_H: i32 = 720;
+/// Coin de l'écran principal : avec plusieurs écrans, le bureau (barre des
+/// tâches, fenêtres) vit sur le principal, qui n'est pas forcément en 0,0.
+pub static mut SCREEN_X: i32 = 0;
+pub static mut SCREEN_Y: i32 = 0;
+
+/// Coin haut-gauche de l'écran principal (HMONITOR 1 = principal).
+pub unsafe fn primary_origin() -> (i32, i32) {
+    let mut info = [0u8; 40];
+    info[..4].copy_from_slice(&40u32.to_ne_bytes());
+    if GetMonitorInfoA(1usize as Handle, info.as_mut_ptr()) == 0 {
+        return (0, 0);
+    }
+    let at = |o: usize| i32::from_ne_bytes([info[o], info[o + 1], info[o + 2], info[o + 3]]);
+    (at(4), at(8))
+}
 pub static mut START_OPEN: bool = false;
 pub static mut ALIGN_LEFT: bool = false;
 pub static mut VOLUME_LEVEL: u32 = 0;
@@ -337,33 +352,21 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 39] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 26] = [
             (tr4(&[b"Bienvenue dans Winlux", b"Welcome to Winlux", b"Bienvenido a Winlux", b"Willkommen bei Winlux"]), b"welcome", 9),
-            (tr(S_TERMINAL), b"xterm", 1),
-            (tr(S_FILE_EXPLORER), b"nemo", 1),
-            (tr(S_NOTEPAD), b"mousepad", 1),
+            (tr(S_TERMINAL), b"terminal", 1),
+            (tr(S_FILE_EXPLORER), b"explorer", 1),
+            (tr(S_NOTEPAD), b"notepad", 1),
             (tr(S_CALCULATOR), b"calc.exe", 1),
             (tr4(&[b"Capture d'\xE9cran", b"Screenshot", b"Captura de pantalla", b"Bildschirmfoto"]), b"screenshot.exe", 1),
             (tr4(&[b"Visionneuse", b"Photos", b"Visor", b"Fotoanzeige"]), b"imageviewer.exe", 1),
             (tr4(&[b"Post-it", b"Sticky Notes", b"Notas r\xE1pidas", b"Kurznotizen"]), b"postit.exe", 1),
             (tr4(&[b"Lecteur PDF", b"PDF Reader", b"Lector de PDF", b"PDF-Reader"]), b"pdfviewer.exe", 1),
             (tr4(&[b"Lecteur multim\xE9dia", b"Media Player", b"Reproductor multimedia", b"Medienwiedergabe"]), b"winlux-mediaplayer", 5),
-            (tr4(&[b"Infos syst\xE8me", b"System info", b"Informaci\xF3n del sistema", b"Systeminfo"]), b"sysinfo.exe", 8),
-            (tr4(&[b"Utilitaires", b"Utilities", b"Utilidades", b"Dienstprogramme"]), b"utilities-terminal", 2),
-            (tr4(&[b"Archives", b"Archives", b"Archivos comprimidos", b"Archive"]), b"file-roller", 1),
-            (tr4(&[b"Visionneuse Linux", b"Linux image viewer", b"Visor de Linux", b"Linux-Bildanzeige"]), b"xviewer", 3),
-            (b"GIMP", b"gimp", 3),
-            (b"Inkscape", b"inkscape", 3),
+            (tr4(&[b"Informations syst\xE8me", b"System Information", b"Informaci\xF3n del sistema", b"Systeminformationen"]), b"msinfo32", 9),
+            (tr4(&[b"Utilitaires", b"Utilities", b"Utilidades", b"Dienstprogramme"]), b"utilities", 2),
             (b"Firefox", b"firefox", 4),
-            (b"Chromium", b"chromium", 4),
-            (b"Thunderbird", b"thunderbird", 4),
-            (b"VLC", b"vlc", 5),
-            (b"Rhythmbox", b"rhythmbox", 5),
-            (b"Audacity", b"audacity", 5),
-            (b"VS Code", b"code", 7),
-            (b"Vim", b"vim", 7),
-            (b"Geany", b"geany", 7),
-            (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
+            (tr(S_SETTINGS_APP), b"settings", 8),
             (b"Store", b"store", 9),
             (tr4(&[b"Polices", b"Fonts", b"Fuentes", b"Schriftarten"]), b"fonts", 8),
             (tr4(&[b"Applications install\xE9es", b"Installed apps", b"Aplicaciones instaladas", b"Installierte Apps"]), b"programs", 8),
@@ -378,7 +381,6 @@ fn init_apps() {
                 b"firewall",
                 9,
             ),
-            (tr4(&[b"Moniteur syst\xE8me", b"System Monitor", b"Monitor del sistema", b"Systemmonitor"]), b"gnome-system-monitor", 9),
             (tr(S_TASK_MANAGER), b"taskmgr", 9),
             (tr4(&[b"Nettoyage de disque", b"Disk Cleanup", b"Liberador de espacio en disco", b"Datentr\xE4gerbereinigung"]), b"diskcleaner", 9),
             (tr4(&[b"Observateur d'\xE9v\xE9nements", b"Event Viewer", b"Visor de eventos", b"Ereignisanzeige"]), b"eventviewer", 9),
@@ -662,8 +664,28 @@ fn power_rect(s: &Rect) -> Rect {
         bottom: s.bottom - 14,
     }
 }
+// Mise en page verticale du menu Démarrer, comme Windows 11 : la recherche
+// en haut, puis le titre « Épinglé » et son lien, puis la grille. Le dessin
+// (`start_menu`) et la détection du pointeur (`start_item_at`) lisent tous
+// les deux ces valeurs, pour ne plus jamais se décaler l'un de l'autre.
+const START_SEARCH_Y: i32 = 24;
+const START_SEARCH_H: i32 = 36;
+const START_SECTION_Y: i32 = 80;
+const START_GRID_Y: i32 = 118;
+const START_RESULT_H: i32 = 44;
+const CATEGORY_H: i32 = 38;
+const CATEGORY_ROWS: i32 = 4;
 const PIN_COLS: i32 = 6;
 const PIN_CELL_H: i32 = 84;
+/// Hauteur de la première ligne de résultats de recherche (sous « Résultats »).
+fn start_results_top(s: &Rect) -> i32 {
+    s.top + START_SEARCH_Y + START_SEARCH_H + 12 + 36
+}
+/// Hauteur de la première application listée dans « Toutes les applications »,
+/// sous les catégories et le titre « Applications ».
+fn all_apps_top(s: &Rect) -> i32 {
+    s.top + START_GRID_Y + CATEGORY_ROWS * CATEGORY_H + 16 + 40
+}
 fn pin_rows(s: &Rect) -> i32 {
     if s.bottom - s.top > 560 {
         2
@@ -675,7 +697,7 @@ fn pinned_cell(s: &Rect, i: i32) -> Rect {
     let (l, r) = (s.left + 28, s.right - 28);
     let cw = (r - l) / PIN_COLS;
     let x = l + (i % PIN_COLS) * cw;
-    let y = s.top + 118 + (i / PIN_COLS) * PIN_CELL_H;
+    let y = s.top + START_GRID_Y + (i / PIN_COLS) * PIN_CELL_H;
     Rect {
         left: x + 4,
         top: y,
@@ -686,7 +708,7 @@ fn pinned_cell(s: &Rect, i: i32) -> Rect {
 fn recommended_cell(s: &Rect, i: i32) -> Rect {
     let (l, r) = (s.left + 28, s.right - 28);
     let col_w = (r - l) / 2;
-    let y = s.top + 118 + pin_rows(s) * PIN_CELL_H + 54 + (i / 2) * 56;
+    let y = s.top + START_GRID_Y + pin_rows(s) * PIN_CELL_H + 54 + (i / 2) * 56;
     let x = l + (i % 2) * col_w;
     Rect {
         left: x,
@@ -697,10 +719,10 @@ fn recommended_cell(s: &Rect, i: i32) -> Rect {
 }
 fn category_cell(s: &Rect, i: i32) -> Rect {
     let (l, r) = (s.left + 28, s.right - 28);
-    let cat_h = 38;
+    let cat_h = CATEGORY_H;
     let cat_w = (r - l) / 3;
     let x = l + (i % 3) * cat_w;
-    let y = s.top + 118 + (i / 3) * cat_h;
+    let y = s.top + START_GRID_Y + (i / 3) * cat_h;
     Rect {
         left: x + 2,
         top: y,
@@ -742,6 +764,8 @@ unsafe fn set_start(open: bool) {
     if open {
         START_OPEN = true;
         START_CLOSING = false;
+        START_SHOW_ALL_APPS = false;
+        START_CATEGORY = 0;
         SEARCH_OVERLAY = false;
         weather::PANEL_OPEN = false;
     } else if START_OPEN {
@@ -792,7 +816,7 @@ fn app_launch(app: usize) -> Launch {
     } else if app == wm::APP_TERMINAL {
         Launch::Terminal
     } else if app == wm::APP_UTILITIES {
-        Launch::Settings
+        Launch::Exec(b"utilities")
     } else {
         Launch::Settings
     }
@@ -1168,7 +1192,7 @@ unsafe fn context_action(app: usize, desktop: Option<usize>, row: i32, persist: 
         }
         3 if desktop.is_none() => {
             if wm::is_open(app) {
-                wm::minimize(app);
+                wm::close(app);
             }
         }
         3 if !desktop.is_none() && wm::is_open(app) => wm::minimize(app),
@@ -1693,6 +1717,7 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             Some(wm::APP_PROGRAMS) => Glyph::Exe,
             Some(wm::APP_TASKSCHD) => Glyph::Clock,
             Some(wm::APP_FIREWALL) => Glyph::Shield,
+            Some(wm::APP_SYSINFO) => Glyph::Computer,
             Some(wm::APP_EVENTVIEWER) => Glyph::Details,
             Some(wm::APP_REGEDIT) => Glyph::Tools,
             Some(wm::APP_RESTORE) => Glyph::Refresh,
@@ -2043,13 +2068,15 @@ unsafe fn launch(what: Launch) {
             crate::notepad::open_new();
             wm::open(wm::APP_NOTEPAD);
         }
-        Launch::Pc | Launch::Programs => explorer::open_pc(),
+        Launch::Pc => explorer::open_pc(),
+        Launch::Programs => crate::programs::open(),
         Launch::Documents => explorer::open_documents(),
         Launch::Settings => {
             // Si on veut ouvrir les utilitaires, on passe par l'icône dédiée
             wm::open(wm::APP_SETTINGS);
         }
-        Launch::Updates => crate::settings::open_page(6),
+        // Page 7 = « Mises à jour » (la 6 est « Apparence »).
+        Launch::Updates => crate::settings::open_page(7),
         Launch::Terminal => {
             crate::terminal::init();
             wm::open(wm::APP_TERMINAL);
@@ -2088,6 +2115,26 @@ unsafe fn launch(what: Launch) {
         }
         Launch::Exec(cmd) => {
             // Applications intégrées dans le WM
+            if cmd == b"explorer" {
+                launch(Launch::Explorer);
+                return;
+            }
+            if cmd == b"notepad" {
+                launch(Launch::Notepad);
+                return;
+            }
+            if cmd == b"terminal" {
+                launch(Launch::Terminal);
+                return;
+            }
+            if cmd == b"settings" {
+                launch(Launch::Settings);
+                return;
+            }
+            if cmd == b"utilities" {
+                wm::open(wm::APP_UTILITIES);
+                return;
+            }
             if cmd == b"taskmgr" {
                 wm::open(wm::APP_TASKMGR);
                 return;
@@ -2120,7 +2167,11 @@ unsafe fn launch(what: Launch) {
                 wm::open(wm::APP_FIREWALL);
                 return;
             }
-            if cmd == b"eventviewer" {
+            if cmd == b"msinfo32" || cmd == b"msinfo32.exe" || cmd == b"sysinfo.exe" {
+                wm::open(wm::APP_SYSINFO);
+                return;
+            }
+            if cmd == b"eventviewer" || cmd == b"eventvwr" || cmd == b"eventvwr.msc" {
                 wm::open(wm::APP_EVENTVIEWER);
                 return;
             }
@@ -2158,7 +2209,7 @@ unsafe fn launch(what: Launch) {
                 }
             }
             static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-            ShellExecuteW(
+            let r = ShellExecuteW(
                 core::ptr::null_mut(),
                 OPEN.as_ptr(),
                 wcmd.as_ptr(),
@@ -2166,6 +2217,24 @@ unsafe fn launch(what: Launch) {
                 core::ptr::null(),
                 1,
             );
+            if (r as isize) <= 32 {
+                // Programme absent : le dire plutôt que de ne rien faire.
+                let mut msg = [0u8; 96];
+                let head = tr4(&[
+                    b"Application introuvable : ",
+                    b"Application not found: ",
+                    b"Aplicaci\xF3n no encontrada: ",
+                    b"Anwendung nicht gefunden: ",
+                ]);
+                let mut n = 0;
+                for &c in head.iter().chain(cmd.iter()) {
+                    if n < msg.len() {
+                        msg[n] = c;
+                        n += 1;
+                    }
+                }
+                toast(&msg[..n]);
+            }
         }
     }
 }
@@ -2204,27 +2273,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let inner_l = s.left + pad;
     let inner_r = s.right - pad;
 
-    text(
-        hdc,
-        f.large,
-        rgb(0xF2, 0xF2, 0xF2),
-        inner_l,
-        s.top + 28,
-        b"Winlux",
-    );
-
-    // Épinglé / Toutes les applications.
-    let y = s.top + 82;
-    let title: &[u8] = unsafe {
-        if START_SHOW_ALL_APPS {
-            tr(S_ALL_APPS)
-        } else {
-            tr(S_PINNED)
-        }
-    };
-    text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, title);
-    // Barre de recherche
-    let search_y = y + 40;
+    // Barre de recherche, tout en haut comme sous Windows 11 (#173 : elle
+    // était dessinée sur la première rangée d'épinglés).
+    let search_y = s.top + START_SEARCH_Y;
     let search_bg = if unsafe { START_SEARCH_ACTIVE } {
         tint(rgb(0x3A, 0x3F, 0x4A))
     } else {
@@ -2236,33 +2287,45 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         inner_l,
         search_y,
         inner_r,
-        search_y + 36,
+        search_y + START_SEARCH_H,
         18,
         search_bg,
     );
     glyph(hdc, b, f, Glyph::Search, inner_l + 10, search_y + 8, 18);
-    if unsafe { START_SEARCH_LEN > 0 } {
-        text(
-            hdc,
-            f.body,
-            rgb(0xE6, 0xE6, 0xE6),
-            inner_l + 34,
-            search_y + 8,
+    let (query, query_color): (&[u8], u32) = if unsafe { START_SEARCH_LEN > 0 } {
+        (
             unsafe { &START_SEARCH[..START_SEARCH_LEN] },
-        );
+            rgb(0xE6, 0xE6, 0xE6),
+        )
     } else {
-        text(
-            hdc,
-            f.body,
-            rgb(0x88, 0x88, 0x88),
-            inner_l + 34,
-            search_y + 8,
-            tr(S_SEARCH_PLACEHOLDER),
-        );
+        (tr(S_SEARCH_PLACEHOLDER), rgb(0x88, 0x88, 0x88))
+    };
+    text_fit(
+        hdc,
+        f.body,
+        13,
+        query_color,
+        inner_l + 34,
+        search_y + 9,
+        query,
+        inner_r - inner_l - 52,
+    );
+
+    // Épinglé / Toutes les applications.
+    let y = s.top + START_SECTION_Y;
+    let title: &[u8] = unsafe {
+        if START_SHOW_ALL_APPS {
+            tr(S_ALL_APPS)
+        } else {
+            tr(S_PINNED)
+        }
+    };
+    if unsafe { START_SEARCH_LEN } == 0 {
+        text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, title);
     }
     if unsafe { START_SEARCH_LEN } > 0 {
         // Mode recherche : afficher les résultats.
-        let results_y = search_y + 48;
+        let results_y = start_results_top(s) - 36;
         text(
             hdc,
             f.title,
@@ -2289,7 +2352,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             );
         }
         for i in 0..count {
-            let iy = results_y + 36 + (i as i32) * 44;
+            let iy = start_results_top(s) + (i as i32) * START_RESULT_H;
             if iy + 40 >= s.bottom - 72 {
                 break;
             }
@@ -2332,11 +2395,14 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             y + 2,
             all,
         );
-        for (i, app) in pinned_apps()
-            .iter()
-            .take((PIN_COLS * pin_rows(s)) as usize)
-            .enumerate()
-        {
+        // La grille des épinglés n'existe que dans la vue « Épinglé » : dans
+        // « Toutes les applications », les catégories prennent sa place.
+        let shown_pins = if START_SHOW_ALL_APPS {
+            0
+        } else {
+            (PIN_COLS * pin_rows(s)) as usize
+        };
+        for (i, app) in pinned_apps().iter().take(shown_pins).enumerate() {
             let c = pinned_cell(s, i as i32);
             if HOVER_START_ITEM == i as i32 {
                 round_rect(
@@ -2352,28 +2418,28 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             }
             let cx = (c.left + c.right) / 2;
             glyph(hdc, b, f, app.glyph, cx - 16, c.top + 10, 32);
-            text_centered(
+            // Libellé tronqué à la largeur de sa case : « Explorateur de
+            // fichiers » ne déborde plus sur « Paramètres ».
+            let max_w = c.right - c.left - 8;
+            let w = text_width(app.name, 11).min(max_w);
+            text_fit(
                 hdc,
                 f.small,
                 11,
                 rgb(0xE6, 0xE6, 0xE6),
-                cx,
+                cx - w / 2,
                 c.top + 52,
                 app.name,
+                max_w,
             );
         }
 
         // Recommandé / Catégories.
-        let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
+        let ry = s.top + START_GRID_Y + pin_rows(s) * PIN_CELL_H + 20;
         if START_SHOW_ALL_APPS {
-            text(
-                hdc,
-                f.title,
-                rgb(0xF2, 0xF2, 0xF2),
-                inner_l + 4,
-                ry,
-                tr4(&[b"Cat\xE9gories", b"Categories", b"Categor\xEDas", b"Kategorien"]),
-            );
+            // Les catégories sont des filtres placés directement sous le
+            // titre « Toutes les applications » ; l'ancien titre
+            // « Catégories » se dessinait par-dessus elles sur petit écran.
             let categories: [&[u8]; 12] = [
                 tr4(&[b"Toutes", b"All", b"Todas", b"Alle"]),
                 tr4(&[b"Accessoires", b"Accessories", b"Accesorios", b"Zubeh\xF6r"]),
@@ -2416,7 +2482,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     cat,
                 );
             }
-            let apps_y = ry + 120;
+            let apps_y = all_apps_top(s) - 40;
             text(
                 hdc,
                 f.title,
@@ -2742,7 +2808,7 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     }
     if unsafe { POWER_MENU } {
         let pr = power_rect(s);
-        let pw = 160;
+        let pw = 180;
         let ph = 3 * 36 + 8;
         let mx = pr.right - pw;
         let my = pr.top - ph - 4;
@@ -2756,15 +2822,14 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
             };
         }
     }
-    let y0 = s.top + 82;
+    let y0 = s.top + START_SECTION_Y;
     let inner_l = s.left + 28;
     let inner_r = s.right - 28;
     // Search results mode.
     if unsafe { START_SEARCH_LEN } > 0 {
-        let search_y = y0 + 40;
-        let results_y = search_y + 48 + 36;
+        let results_y = start_results_top(s);
         for i in 0..16i32 {
-            let iy = results_y + i * 44;
+            let iy = results_y + i * START_RESULT_H;
             if iy + 40 >= s.bottom - 72 {
                 break;
             }
@@ -2799,13 +2864,15 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
                 return 301 + i;
             }
         }
-        let apps_y = s.top + 118 + pin_rows(s) * PIN_CELL_H + 140;
-        let inner_l = s.left + 28;
+        let apps_y = all_apps_top(s);
         let mut displayed = 0;
         for i in 0..unsafe { ALL_APPS_COUNT } {
             let cat = unsafe { ALL_APPS[i].2 };
             if unsafe { START_CATEGORY == 0 || cat == START_CATEGORY } {
                 let app_y = apps_y + (displayed as i32) * 44;
+                if app_y + 40 >= s.bottom - 72 {
+                    break;
+                }
                 if y >= app_y && y < app_y + 40 && x >= inner_l + 4 && x < inner_r {
                     return 400 + i as i32;
                 }
@@ -2813,13 +2880,14 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
             }
         }
     } else {
-        let pinned = pinned_apps();
-        for i in 0..pinned.len() as i32 {
+        // Seules les cases réellement affichées répondent au pointeur.
+        let shown = (pinned_apps().len() as i32).min(PIN_COLS * pin_rows(s));
+        for i in 0..shown {
             if inside(&pinned_cell(s, i), x, y) {
                 return i;
             }
         }
-        let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
+        let ry = s.top + START_GRID_Y + pin_rows(s) * PIN_CELL_H + 20;
         if ry + 150 < s.bottom - 72 {
             for i in 0..4 {
                 if inside(&recommended_cell(s, i), x, y) {
@@ -3811,6 +3879,7 @@ pub unsafe fn init(
     crate::login::init();
     SCREEN_W = GetSystemMetrics(0).max(640);
     SCREEN_H = GetSystemMetrics(1).max(400);
+    (SCREEN_X, SCREEN_Y) = primary_origin();
     arrange_icons();
     // Les positions par défaut des icônes partent du coin de l'écran :
     // le premier affichage les recale dans la zone utile.
@@ -4131,12 +4200,15 @@ pub unsafe fn tick(hwnd: Handle) {
         return;
     }
     let (w, h) = (GetSystemMetrics(0).max(640), GetSystemMetrics(1).max(400));
-    if w != SCREEN_W || h != SCREEN_H {
+    let origin = primary_origin();
+    if w != SCREEN_W || h != SCREEN_H || origin != (SCREEN_X, SCREEN_Y) {
         SCREEN_W = w;
         SCREEN_H = h;
+        (SCREEN_X, SCREEN_Y) = origin;
         CONTEXT_APP = None;
         reflow_desk(&layout());
-        MoveWindow(hwnd, 0, 0, w, h, 1);
+        // Écran branché, débranché ou principal changé : le bureau suit.
+        MoveWindow(hwnd, origin.0, origin.1, w, h, 1);
         InvalidateRect(hwnd, core::ptr::null(), 0);
         return;
     }
@@ -4175,6 +4247,10 @@ static mut WIN_ALONE: bool = false;
 
 /// Relâchement d'une touche : la touche Windows seule ouvre Démarrer.
 pub unsafe fn on_key_up(hwnd: Handle, vk: u32) {
+    if vk == 0x12 && wm::alt_released() {
+        repaint(hwnd);
+        return;
+    }
     if (vk == 0x5B || vk == 0x5C) && WIN_ALONE {
         WIN_ALONE = false;
         if !BOOT_DONE || !crate::login::logged_in() || crate::snip::active() {
@@ -4257,16 +4333,12 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                     set_start(!(START_OPEN && !START_CLOSING));
                 } else {
                     set_start(false);
-                    match taskbar_app(i) {
-                        Some(wm::APP_EXPLORER) => {
-                            if wm::is_open(wm::APP_EXPLORER) {
-                                wm::toggle(wm::APP_EXPLORER)
-                            } else {
-                                explorer::open_home()
-                            }
+                    if let Some(app) = taskbar_app(i) {
+                        if wm::is_open(app) {
+                            wm::toggle(app)
+                        } else {
+                            launch(app_launch(app))
                         }
-                        Some(wm::APP_SETTINGS) => wm::toggle(wm::APP_SETTINGS),
-                        _ => {}
                     }
                 }
                 repaint(hwnd);
@@ -4425,8 +4497,24 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 if v <= 5 {
                     crate::settings::control(c"volume-mute");
                 } else {
-                    // Set volume via repeated up/down to approximate
-                    crate::settings::control(c"volume-set");
+                    // « volume-set NN » : winlux-control applique le niveau.
+                    let mut cmd = *b"volume-set 100\0";
+                    let mut n = 11;
+                    if v >= 100 {
+                        cmd[n..n + 3].copy_from_slice(b"100");
+                        n += 3;
+                    } else {
+                        if v >= 10 {
+                            cmd[n] = b'0' + (v / 10) as u8;
+                            n += 1;
+                        }
+                        cmd[n] = b'0' + (v % 10) as u8;
+                        n += 1;
+                    }
+                    cmd[n] = 0;
+                    if let Ok(c) = core::ffi::CStr::from_bytes_until_nul(&cmd) {
+                        crate::settings::control(c);
+                    }
                 }
             }
             // Mute button
@@ -4539,7 +4627,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                         launch(results[idx].launch);
                     }
                 }
-                i @ 0..=5 => {
+                i @ 0..=7 => {
                     set_start(false);
                     launch(pinned_apps()[i as usize].launch);
                 }
@@ -5074,6 +5162,14 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         }
         if START_OPEN {
             set_start(false);
+            repaint(hwnd);
+            return;
+        }
+        if NET_PANEL || VOL_PANEL {
+            NET_PANEL = false;
+            NET_HOVER = -1;
+            VOL_PANEL = false;
+            VOL_HOVER = -1;
             repaint(hwnd);
             return;
         }
