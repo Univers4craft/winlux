@@ -384,14 +384,27 @@ def explorer_accented_folders():
     home = Path(os.environ.get("HOME") or "/root")
     assert (home / "Téléchargements").is_dir(), f"{home}/Téléchargements absent de l'image"
     env = dict(os.environ, HOME=str(home), WINLUX_EXPECT_DOWNLOADS="1")
-    try:
-        result = subprocess.run(["/usr/bin/winlux", "/opt/winlux/tests/explorer_regression.exe"], env=env,
-                                capture_output=True, text=True, timeout=180)
-    except subprocess.TimeoutExpired as e:
-        partial = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
-        print("explorer_regression bloqué après :\n" + "\n".join(partial.splitlines()[-5:]), flush=True)
-        raise
-    lines = [line for line in (result.stdout + result.stderr).splitlines() if "Telechargements" in line or "ECHEC" in line]
+    # Sortie dans un fichier, pas un tube : un programme que les contrôles
+    # lancent (application, assistant de session) hérite du descripteur et
+    # garderait un tube ouvert après la fin d'explorer_regression.
+    output = Path("/run/winlux-explorer-regression.log")
+    with output.open("w") as handle:
+        process = subprocess.Popen(["/usr/bin/winlux", "/opt/winlux/tests/explorer_regression.exe"], env=env,
+                                   stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
+                                   start_new_session=True)
+        try:
+            process.wait(timeout=180)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            print("explorer_regression bloqué après :\n" + "\n".join(output.read_text(errors="replace").splitlines()[-5:]), flush=True)
+            raise
+        finally:
+            # Ce que les contrôles ont ouvert ne doit pas rester à l'écran
+            # pendant les tests suivants.
+            try: os.killpg(process.pid, 15)
+            except ProcessLookupError: pass
+    text = output.read_text(errors="replace")
+    lines = [line for line in text.splitlines() if "Telechargements" in line or "ECHEC" in line]
     print("\n".join(lines), flush=True)
     assert any(line.strip().startswith("OK") and "Telechargements" in line for line in lines), "Explorer cannot open Téléchargements"
 
