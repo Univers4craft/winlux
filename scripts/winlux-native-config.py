@@ -189,6 +189,14 @@ if not user_dirs.exists():
     user_dirs.write_text('XDG_DESKTOP_DIR="$HOME/Bureau"\nXDG_DOWNLOAD_DIR="$HOME/Téléchargements"\nXDG_DOCUMENTS_DIR="$HOME/Documents"\nXDG_PICTURES_DIR="$HOME/Images"\nXDG_MUSIC_DIR="$HOME/Musique"\nXDG_VIDEOS_DIR="$HOME/Vidéos"\n')
 desktop = home / "Bureau"
 desktop.mkdir(exist_ok=True)
+# Dossiers connus (C:\Users\<nom>\Downloads…) : ils doivent exister pour
+# les navigateurs et les .exe qui y enregistrent directement.
+for line in user_dirs.read_text(encoding="utf-8").splitlines():
+    key, _, value = line.partition("=")
+    value = value.strip().strip('"')
+    if key.startswith("XDG_") and value.startswith("$HOME/") and len(value) > 6:
+        try: (home / value[6:]).mkdir(parents=True, exist_ok=True)
+        except OSError: pass
 # Le bureau reste vide par défaut. Les icônes (Corbeille, Explorateur,
 # Documents, etc.) sont ajoutées explicitement depuis Paramètres.
 # Defaults for file opening, not a rewrite of the user's selected associations.
