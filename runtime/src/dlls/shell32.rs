@@ -353,9 +353,14 @@ fn spawn(
     args: &[String],
     dir: Option<PathBuf>,
     keep: bool,
+    elevate: bool,
 ) -> Result<Option<std::process::Child>, ()> {
     let mut cmd = Command::new(program);
     cmd.args(args).stdin(Stdio::null());
+    if elevate {
+        // Verbe « runas » : le .exe lancé affiche la demande UAC (uac.rs).
+        cmd.env("WINLUX_ELEVATE", "1");
+    }
     if program
         .file_name()
         .is_some_and(|name| name == "winlux-open")
@@ -379,8 +384,13 @@ fn spawn(
     }
 }
 
-fn execute(file: &str, params: &str, dir: Option<String>) -> isize {
-    execute_keep(file, params, dir, false).0
+fn execute(file: &str, params: &str, dir: Option<String>, verb: Option<String>) -> isize {
+    execute_keep(file, params, dir, false, is_runas(verb.as_deref())).0
+}
+
+/// Verbe « runas » : exécuter en tant qu'administrateur.
+fn is_runas(verb: Option<&str>) -> bool {
+    verb.is_some_and(|v| v.eq_ignore_ascii_case("runas"))
 }
 
 fn execute_keep(
@@ -388,13 +398,14 @@ fn execute_keep(
     params: &str,
     dir: Option<String>,
     keep: bool,
+    elevate: bool,
 ) -> (isize, Option<std::process::Child>) {
     match resolve(file, params) {
         Ok((program, args)) => {
             let dir = dir
                 .filter(|d| !d.is_empty())
                 .map(|d| crate::paths::to_linux(&d));
-            match spawn(&program, &args, dir, keep) {
+            match spawn(&program, &args, dir, keep, elevate) {
                 Ok(child) => (SUCCESS, child),
                 Err(()) => (SE_ERR_FNF, None),
             }
@@ -423,7 +434,7 @@ unsafe fn opt_w(p: *const u16) -> Option<String> {
 
 pub unsafe extern "win64" fn shell_execute_a(
     _hwnd: usize,
-    _verb: *const u8,
+    verb: *const u8,
     file: *const u8,
     params: *const u8,
     dir: *const u8,
@@ -432,12 +443,17 @@ pub unsafe extern "win64" fn shell_execute_a(
     let Some(file) = opt_a(file) else {
         return SE_ERR_FNF;
     };
-    execute(&file, &opt_a(params).unwrap_or_default(), opt_a(dir))
+    execute(
+        &file,
+        &opt_a(params).unwrap_or_default(),
+        opt_a(dir),
+        opt_a(verb),
+    )
 }
 
 pub unsafe extern "win64" fn shell_execute_w(
     _hwnd: usize,
-    _verb: *const u16,
+    verb: *const u16,
     file: *const u16,
     params: *const u16,
     dir: *const u16,
@@ -446,7 +462,12 @@ pub unsafe extern "win64" fn shell_execute_w(
     let Some(file) = opt_w(file) else {
         return SE_ERR_FNF;
     };
-    execute(&file, &opt_w(params).unwrap_or_default(), opt_w(dir))
+    execute(
+        &file,
+        &opt_w(params).unwrap_or_default(),
+        opt_w(dir),
+        opt_w(verb),
+    )
 }
 
 /// `SHELLEXECUTEINFOA/W` (x64) : cbSize, fMask, hwnd, lpVerb, lpFile,
@@ -502,6 +523,7 @@ unsafe fn execute_ex(info: *mut ShellExecuteInfo, wide: bool) -> i32 {
         &text(i.parameters).unwrap_or_default(),
         text(i.directory),
         wants_process,
+        is_runas(text(i.verb).as_deref()),
     );
     i.inst_app = code;
     if let Some(child) = child {

@@ -54,6 +54,8 @@ mod restore;
 mod regedit;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/sharing.rs"]
+mod sharing;
 #[path = "../shell/snip.rs"]
 mod snip;
 #[path = "../shell/store.rs"]

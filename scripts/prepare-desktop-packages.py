@@ -15,7 +15,7 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "python3-gi", "gir1.2-gtk-3.0", "network-manager", "network-manager-gnome",
             "bluez", "blueman", "brightnessctl", "flatpak", "gvfs", "gvfs-backends",
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
-            "xfce4-settings", "policykit-1-gnome", "wpasupplicant",
+            "xfce4-settings", "policykit-1-gnome", "pkexec", "wpasupplicant",
             "pciutils", "usbutils", "linux-firmware", "mesa-vulkan-drivers",
             # Polices aux métriques d'Arial, Times New Roman et Courier New :
             # les fenêtres des .exe gardent leur mise en page.
@@ -23,6 +23,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "libgl1", "libglx-mesa0", "irqbalance",
             # Lecteurs réseau montés comme disques (winlux-drives).
             "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",
+            # Partage de dossiers vers Windows et Mac (winlux-share) : serveur
+            # SMB standard et annonce WS-Discovery pour le panneau Réseau.
+            "samba", "wsdd",
             # Voix du Narrateur (Parametres > Accessibilite).
             "espeak-ng",
             # Impression : CUPS (pont IPP de winspool), filtres PDF et IPP-over-USB.

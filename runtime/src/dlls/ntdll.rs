@@ -834,10 +834,11 @@ pub unsafe extern "win64" fn rtl_sleep_condition_variable_srw(
     if cv.is_null() || srw.is_null() {
         return STATUS_INVALID_PARAMETER;
     }
-    // Relâcher le SRW lock (exclusif par défaut).
-    rtl_release_srw_lock_exclusive(srw);
+    // Prendre le mutex interne AVANT de relâcher le SRW : un RtlWake* émis
+    // entre les deux serait sinon perdu (le dormeur n'est pas encore en attente).
     let c = cond_get_or_init(cv as usize);
     let guard = lock(&c.mutex);
+    rtl_release_srw_lock_exclusive(srw);
     let result = if timeout == u32::MAX {
         let _guard = c.condvar.wait(guard).unwrap_or_else(|e| e.into_inner());
         STATUS_SUCCESS
@@ -866,6 +867,7 @@ pub unsafe extern "win64" fn rtl_wake_condition_variable(cv: *mut usize) {
         return;
     }
     let c = cond_get_or_init(cv as usize);
+    let _g = lock(&c.mutex);
     c.condvar.notify_one();
 }
 
@@ -874,6 +876,7 @@ pub unsafe extern "win64" fn rtl_wake_all_condition_variable(cv: *mut usize) {
         return;
     }
     let c = cond_get_or_init(cv as usize);
+    let _g = lock(&c.mutex);
     c.condvar.notify_all();
 }
 

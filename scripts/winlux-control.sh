@@ -132,6 +132,8 @@ status() {
         printf 'cpu_threads=%s\n' "$(cat "$root/run/winlux/hw/cpu-threads" 2>/dev/null || echo 1)"
         printf 'wifi=%s\n' "$(cat "$root/run/winlux/hw/has-wifi" 2>/dev/null || echo 0)"
         printf 'touchpad=%s\n' "$(cat "$root/run/winlux/hw/has-touchpad" 2>/dev/null || echo 0)"
+        # Réglages réellement acceptés par le pavé (rien sans pavé tactile).
+        if have winlux-touchpad; then winlux-touchpad status 2>/dev/null || true; fi
         printf 'webcam=%s\n' "$(cat "$root/run/winlux/hw/has-webcam" 2>/dev/null || echo 0)"
         welcome=$(pref WELCOME_DONE); printf 'welcome_done=%s\n' "${welcome:-0}"
         welcome=$(pref WELCOME_STEP); printf 'welcome_step=%s\n' "${welcome:-0}"
@@ -199,6 +201,8 @@ esac
 if ! mkdir "$run/control.lock" 2>/dev/null; then message 'Une operation est deja en cours. Consultez le journal.'; exit 1; fi
 trap 'rmdir "$run/control.lock" 2>/dev/null || true' EXIT HUP INT TERM
 action=$1
+# Alias accepte par les menus XFCE (whiskermenu) : « shutdown » = poweroff.
+case "$action" in shutdown) action=poweroff ;; esac
 message 'Operation en cours...'
 perform() {
     case "$action" in
@@ -261,11 +265,16 @@ perform() {
         bluetooth-on|bluetooth-off|bluetooth-scan) winlux-bluetooth "${action#bluetooth-}" ;;
         bluetooth-pair|bluetooth-connect|bluetooth-disconnect|bluetooth-remove)
             winlux-bluetooth "${action#bluetooth-}" "${2:-}" ;;
-        volume-up|volume-down|volume-mute)
+        volume-up|volume-down|volume-mute|volume-set)
+            # volume-set N : niveau absolu en pourcentage (curseur du bureau).
+            level="${2:-}"
+            if test "$action" = volume-set && test -z "$level"; then echo 'volume-set : niveau manquant' >&2; return 0; fi
+            case "$level" in *[!0-9]*) level=50 ;; esac
+            test "$level" -le 100 || level=100
             if have wpctl; then
-                case "$action" in volume-up) wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;; volume-down) wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;; *) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;; esac
+                case "$action" in volume-up) wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;; volume-down) wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;; volume-set) wpctl set-volume @DEFAULT_AUDIO_SINK@ "$level%" && wpctl set-mute @DEFAULT_AUDIO_SINK@ 0 ;; *) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;; esac
             elif have amixer; then
-                case "$action" in volume-up) amixer set Master 5%+ ;; volume-down) amixer set Master 5%- ;; *) amixer set Master toggle ;; esac
+                case "$action" in volume-up) amixer set Master 5%+ ;; volume-down) amixer set Master 5%- ;; volume-set) amixer set Master "$level%" unmute ;; *) amixer set Master toggle ;; esac
             else echo 'Aucun mixeur audio installe.' >&2; return 1; fi ;;
         keyboard-fr|keyboard-us|keyboard-de|keyboard-es|keyboard-gb|keyboard-it|keyboard-pt|keyboard-be)
             layout=${action#keyboard-}
@@ -286,6 +295,7 @@ perform() {
                 printf '%s\n' "$tz" > /etc/timezone || return
             fi
             save "$config/locale.conf" TIMEZONE "$tz" ;;
+        touchpad-set) winlux-touchpad set "${2:-}" "${3:-}" ;;
         tap-on|tap-off)
             tap=0; test "$action" != tap-on || tap=1
             apply_tap "$tap" || return
@@ -380,6 +390,9 @@ perform() {
             case "$profile" in performance|balanced|powersave) winlux --cpu-profile "$profile" "${root:-/}" || true ;; esac
             case "$(cpu_pref FAN_CURVE)" in quiet|balanced|performance) fan_daemon ;; esac ;;
         display-follow|display-fixed) winlux-display "${action#display-}" ;;
+        # Écrans multiples : « display-set layout extend », « display-set
+        # scale-step HDMI-1 up »… (arguments revalidés par winlux-display).
+        display-set) shift; winlux-display "$@" ;;
         display-mode-*) mode=${action#display-mode-}; case "$mode" in *[!0-9x]*|'') return 1 ;; esac; winlux-display mode "$mode" ;;
         display-scale-auto) winlux-display scale auto ;;
         display-scale-up|display-scale-down)
@@ -461,6 +474,9 @@ perform() {
             (winlux-backup run "$2" >"$run/backup/$2.log" 2>&1 &) ;;
         session-*) shift; winlux-sessions "${action#session-}" "$@" ;;
         remote-*) shift; winlux-remote-config "${action#remote-}" "$@" ;;
+        # Le dossier à partager est le dossier courant (fixé par l'Explorateur).
+        share-*) shift; winlux-share "${action#share-}" "$@" ;;
+        transfer-*) shift; winlux-transfer "${action#transfer-}" "$@" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
     esac
 }

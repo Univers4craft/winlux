@@ -41,6 +41,10 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
     let depth = be16(d, 22) as usize;
     let mode = be16(d, 24);
     super::check_size(w, h)?;
+    // Limites du format : 1 à 56 canaux, profondeur 1, 8, 16 ou 32 bits.
+    if nch == 0 || nch > 56 || !matches!(depth, 1 | 8 | 16 | 32) {
+        return Err(Error::Corrupt);
+    }
     let mut p = 26;
     let cm_len = be32(d, p) as usize;
     let palette = d.get(p + 4..p + 4 + cm_len).unwrap_or(&[]);
@@ -355,7 +359,10 @@ fn read_layers(ctx: &Ctx, start: usize, w: u32, h: u32) -> Option<Vec<(String, R
             let key = d.get(k + 4..k + 8)?;
             let len = be32(d, k + 8) as usize;
             if key == b"luni" && len >= 4 {
-                let n = be32(d, k + 12) as usize;
+                // Nombre d'unités UTF-16 borné par le bloc et par la section.
+                let n = (be32(d, k + 12) as usize)
+                    .min((len - 4) / 2)
+                    .min(p.saturating_sub(k + 16) / 2);
                 let u: Vec<u16> = (0..n).map(|i| be16(d, k + 16 + i * 2)).collect();
                 name = String::from_utf16_lossy(&u);
             }
@@ -374,20 +381,26 @@ fn read_layers(ctx: &Ctx, start: usize, w: u32, h: u32) -> Option<Vec<(String, R
     }
     let mut out = Vec::new();
     for l in ls {
-        let lw = (l.right - l.left).max(0) as u32;
-        let lh = (l.bottom - l.top).max(0) as u32;
+        let lw = l.right.saturating_sub(l.left).max(0) as u32;
+        let lh = l.bottom.saturating_sub(l.top).max(0) as u32;
+        // Dimensions vérifiées AVANT de lire les plans (allocation lw*lh).
+        let dims_ok = lw > 0
+            && lh > 0
+            && lw <= w.saturating_mul(4)
+            && lh <= h.saturating_mul(4)
+            && super::check_size(lw, lh).is_ok();
         let mut planes: Vec<(i16, Vec<u16>)> = Vec::new();
         for &(id, len) in l.chans.iter() {
             let q = p;
-            p += len;
-            if lw == 0 || lh == 0 || id < -1 {
+            p = p.saturating_add(len);
+            if !dims_ok || id < -1 {
                 continue;
             }
             if let Ok(mut v) = read_planes(ctx, q, lw, lh, 1) {
                 planes.push((id, v.remove(0)));
             }
         }
-        if lw == 0 || lh == 0 || lw > w * 4 || lh > h * 4 {
+        if !dims_ok {
             continue;
         }
         let get = |id: i16| {

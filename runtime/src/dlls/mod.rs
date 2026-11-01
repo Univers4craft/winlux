@@ -25,6 +25,7 @@ pub mod d3d12;
 pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
+pub mod dataobject;
 pub mod dbghelp;
 pub mod dinput8;
 pub mod dsound;
@@ -57,8 +58,10 @@ pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
 pub mod mmdevapi;
+pub mod monitors;
 pub mod mscoree;
 pub mod msvcrt;
+pub mod nls;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ole32;
@@ -70,6 +73,7 @@ pub mod quartz;
 pub mod resource;
 pub mod rpcrt4;
 pub mod sechost;
+pub mod security;
 pub mod seh;
 pub mod setupapi;
 pub mod sfnt;
@@ -78,6 +82,7 @@ pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
 pub mod taskschd;
+pub mod threadpool;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
@@ -100,6 +105,7 @@ pub mod winspool;
 pub mod wintrust;
 pub mod ws2_32;
 pub mod xaudio2;
+pub mod xdnd;
 pub mod xinput;
 
 use std::collections::HashMap;
@@ -182,6 +188,10 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_ext::kernel32_exports());
                     // Langue, pages de code et heure : priment sur les anciennes versions.
                     e.extend(crate::intl::api::kernel32_exports());
+                    // nls couvre les LCTYPE lus par la globalisation NLS de .NET
+                    // (formats monétaires, signe négatif…) : il passe après intl.
+                    e.extend(nls::exports());
+                    e.extend(threadpool::exports());
                     e
                 },
                 handle: fake_module(),
@@ -210,8 +220,20 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "user32",
                 exports: {
+                    // user32_ext contient surtout des bouchons : il ne doit
+                    // compléter user32 que pour les noms absents (sinon ses
+                    // stubs écrasaient GetParent, SetCapture, FindWindow,
+                    // SetWindowLongPtr(GWLP_WNDPROC)…). Quelques fonctions y
+                    // sont meilleures que celles de user32 : elles gagnent.
                     let mut e = user32::exports();
-                    e.extend(user32_ext::exports());
+                    for (name, addr) in user32_ext::exports() {
+                        let ext_wins = matches!(name, "GetKeyboardLayoutNameA");
+                        if ext_wins {
+                            e.insert(name, addr);
+                        } else {
+                            e.entry(name).or_insert(addr);
+                        }
+                    }
                     e.extend(clipboard::exports());
                     e.extend(crate::intl::api::user32_exports());
                     e
@@ -225,6 +247,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(advapi32_services::exports());
                     e.extend(kernel32_ext::advapi32_exports());
                     e.extend(kernel32_fs::advapi32_exports());
+                    e.extend(security::advapi32_exports());
                     e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
                     e
@@ -248,7 +271,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "ole32",
-                exports: ole32::exports(),
+                exports: {
+                    let mut e = ole32::exports();
+                    e.extend(dataobject::ole32_exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -266,6 +293,8 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = shell32::exports();
                     e.extend(knownfolders::shell32_exports());
+                    e.extend(security::shell32_exports());
+                    e.extend(dataobject::shell32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -520,6 +549,11 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-core-com-l1-") {
         return "ole32".into();
     }
+    // Windows Runtime (RoInitialize...) : servi par notre ole32, avant la
+    // règle générale api-ms-win-core-* → kernel32.
+    if base.starts_with("api-ms-win-core-winrt-") {
+        return "ole32".into();
+    }
     if base.starts_with("api-ms-win-core-localregistry-l1-") {
         return "advapi32".into();
     }
@@ -543,9 +577,6 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("api-ms-win-eventing-provider-l1-") {
         return "advapi32".into();
-    }
-    if base.starts_with("api-ms-win-core-winrt-") {
-        return "ole32".into();
     }
     if base.starts_with("api-ms-win-core-path-l1-") {
         return "kernel32".into();
@@ -759,6 +790,7 @@ mod tests {
                 "RegOpenKeyExW",
             ),
             ("api-ms-win-core-com-l1-1-0.dll", "ole32", "CoInitializeEx"),
+            ("api-ms-win-core-winrt-l1-1-0.dll", "ole32", "RoInitialize"),
             (
                 "api-ms-win-core-rtlsupport-l1-1-0.dll",
                 "ntdll",
