@@ -379,6 +379,20 @@ def installer_shortcut():
 installer_shortcut()
 print("WINLUX_NATIVE_INSTALLER_SHORTCUT=0", flush=True)
 
+def explorer_accented_folders():
+    """Explorateur de l'ISO : Téléchargements s'ouvre (pas « Ce dossier est introuvable »)."""
+    home = Path(os.environ.get("HOME") or "/root")
+    assert (home / "Téléchargements").is_dir(), f"{home}/Téléchargements absent de l'image"
+    env = dict(os.environ, HOME=str(home), WINLUX_EXPECT_DOWNLOADS="1")
+    result = subprocess.run(["/usr/bin/winlux", "/opt/winlux/tests/explorer_regression.exe"], env=env,
+                            capture_output=True, text=True, timeout=180)
+    lines = [line for line in (result.stdout + result.stderr).splitlines() if "Telechargements" in line or "ECHEC" in line]
+    print("\n".join(lines), flush=True)
+    assert any(line.strip().startswith("OK") and "Telechargements" in line for line in lines), "Explorer cannot open Téléchargements"
+
+explorer_accented_folders()
+print("WINLUX_NATIVE_EXPLORER_DOWNLOADS=0", flush=True)
+
 def fast_user_switch():
     """#119: a second account gets its own real Xorg on its own VT, then logs off."""
     guest = "invite"
