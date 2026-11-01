@@ -1907,6 +1907,11 @@ pub trait GuiBackend: Send {
     fn screen_size(&mut self) -> Option<(i32, i32)> {
         None
     }
+    /// Zone de travail (écran moins les barres qui réservent leur place) en
+    /// unités logiques Win32, pour SPI_GETWORKAREA.
+    fn work_area(&mut self) -> Option<Rect> {
+        None
+    }
     /// Écrans branchés et allumés (vide si le backend ne sait pas).
     fn monitors(&mut self) -> Vec<Monitor> {
         Vec::new()
@@ -1986,6 +1991,22 @@ pub fn monitors() -> Vec<Monitor> {
     let mut list = Vec::new();
     with_backend(|b| list = b.monitors());
     list
+}
+
+/// Zone de travail : l'écran entier si le gestionnaire de fenêtres n'en
+/// publie pas.
+pub fn work_area() -> Rect {
+    let mut area = None;
+    with_backend(|b| area = b.work_area());
+    area.unwrap_or_else(|| {
+        let (right, bottom) = screen_size();
+        Rect {
+            left: 0,
+            top: 0,
+            right,
+            bottom,
+        }
+    })
 }
 
 pub fn screen_size() -> (i32, i32) {
