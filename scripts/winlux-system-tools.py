@@ -545,5 +545,9 @@ def split_nmcli(line):
 if __name__ == "__main__":
     page = sys.argv[1] if len(sys.argv)>1 else "quick"
     if page not in ("quick","notifications","tasks","appearance","apps","files","recovery"): raise SystemExit(2)
+    # Le Gestionnaire des tâches complet (onglets, graphiques) est l'application
+    # Winlux intégrée ; cette page reste en secours si elle n'est pas installée.
+    if page == "tasks" and Path("/opt/winlux/tests/gui_demo.exe").is_file() and shutil.which("winlux-shell-app"):
+        os.execvp("winlux-shell-app", ["winlux-shell-app", "taskmgr"])
     Tools(page)
     Gtk.main()
