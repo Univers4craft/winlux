@@ -553,5 +553,9 @@ if __name__ == "__main__":
     # Winlux intégrée ; cette page reste en secours si elle n'est pas installée.
     if page == "tasks" and Path("/opt/winlux/tests/gui_demo.exe").is_file() and shutil.which("winlux-shell-app"):
         os.execvp("winlux-shell-app", ["winlux-shell-app", "taskmgr"])
+    # Notifications : panneau volant façon Windows 11 (avec le calendrier),
+    # aussi pour les raccourcis Win+N déjà enregistrés vers cette page.
+    if page == "notifications" and shutil.which("winlux-popup") and not os.environ.get("WINLUX_TOOLS_WINDOW"):
+        os.execvp("winlux-popup", ["winlux-popup", "notifications"])
     Tools(page)
     Gtk.main()

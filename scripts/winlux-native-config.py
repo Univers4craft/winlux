@@ -115,6 +115,56 @@ if panel_config.is_file():
             tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
     except (ET.ParseError, OSError, ValueError, TypeError):
         pass
+# Horloge : le greffon « clock » d'XFCE prenait la couleur de texte du thème
+# (gris foncé en Adwaita clair, illisible sur la barre noire) et ouvrait un
+# calendrier GTK brut. Il devient un genmon winlux-clock (texte clair fixé,
+# clic = calendrier et notifications façon Windows 11), même numéro de greffon
+# pour que winlux-control align-left/center garde l'ordre de la barre.
+if panel_config.is_file():
+    try:
+        tree = ET.parse(panel_config)
+        plugins = next((item for item in tree.getroot() if item.get("name") == "plugins"), None)
+        changed = False
+        for plugin in list(plugins) if plugins is not None else []:
+            name = plugin.get("name") or ""
+            if plugin.get("value") != "clock" or not name[7:].isdigit():
+                continue
+            plugin.set("value", "genmon")
+            for child in list(plugin):
+                plugin.remove(child)
+            for key, kind, value in [("command", "string", "/usr/bin/winlux-clock"), ("use-label", "bool", "false"),
+                                     ("text", "string", ""), ("update-period", "int", "2000"),
+                                     ("font", "string", "DejaVu Sans 10")]:
+                ET.SubElement(plugin, "property", {"name": key, "type": kind, "value": value})
+            rc = home / ".config/xfce4/panel" / f"genmon-{name[7:]}.rc"
+            rc.parent.mkdir(parents=True, exist_ok=True)
+            rc.write_text("Command=/usr/bin/winlux-clock\nUseLabel=0\nText=\nUpdatePeriod=2000\nFont=DejaVu Sans 10\n", encoding="utf-8")
+            changed = True
+        if changed:
+            tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
+    except (ET.ParseError, OSError, ValueError, TypeError):
+        pass
+# Couleurs de la barre (bloc « Winlux panel » de gtk.css) : remis à jour à
+# chaque session, le reste du fichier (personnalisation) n'est pas touché.
+panel_css_source = source / "config/gtk-3.0/gtk.css"
+panel_css = home / ".config/gtk-3.0/gtk.css"
+if panel_css_source.is_file() and panel_css.is_file():
+    try:
+        start, end = "/* Winlux panel */", "/* End Winlux panel */"
+        shipped = panel_css_source.read_text(encoding="utf-8")
+        if start in shipped and end in shipped:
+            block = shipped[shipped.index(start):shipped.index(end) + len(end)]
+            current = panel_css.read_text(encoding="utf-8")
+            if start in current and end in current[current.index(start):]:
+                updated = current[:current.index(start)] + block + current[current.index(end, current.index(start)) + len(end):]
+            else:
+                updated = current.rstrip("\n") + "\n" + block + "\n"
+            if updated != current:
+                temporary = panel_css.with_suffix(".css.tmp")
+                temporary.write_text(updated, encoding="utf-8")
+                temporary.replace(panel_css)
+    except (OSError, UnicodeDecodeError, ValueError):
+        pass
 # xfce4-genmon-plugin 4.2+ (Ubuntu 26.04) lit sa configuration dans xfconf
 # (/plugins/plugin-N/command...) et ignore les anciens genmon-N.rc : sans ces
 # propriétés, les icônes réseau, son, batterie et notifications de la barre

@@ -177,6 +177,17 @@ touch "$work/root/etc/winlux/live-session"
 if WINLUX_TEST_BUSY=1 control poweroff; then echo 'ERROR: shutdown allowed during update' >&2; exit 1; fi
 if WINLUX_TEST_BUSY=1 control reboot; then echo 'ERROR: reboot allowed during update' >&2; exit 1; fi
 if WINLUX_TEST_BUSY=1 control restart-session; then echo 'ERROR: session restart allowed during update' >&2; exit 1; fi
+# Arrêt réel : winlux-power (écran d'arrêt puis signal à l'init), jamais le
+# poweroff de systemd que l'image fournit et qui échoue sans systemd.
+cat > "$work/bin/winlux-power-mock" <<'MOCK'
+#!/bin/sh
+printf 'winlux-power %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"
+MOCK
+chmod +x "$work/bin/winlux-power-mock"
+WINLUX_POWER="$work/bin/winlux-power-mock" control poweroff
+WINLUX_POWER="$work/bin/winlux-power-mock" control reboot
+grep -qx 'winlux-power now poweroff' "$work/commands"
+grep -qx 'winlux-power now reboot' "$work/commands"
 rm "$work/root/etc/winlux/live-session"
 if control reboot; then echo 'ERROR: refused-host-reboot failed' >&2; exit 1; fi
 grep -q 'Arret reserve a Winlux Live' "$work/root/run/winlux/action.log"
