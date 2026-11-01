@@ -29,7 +29,6 @@
 | Session native : menu Démarrer fiable, barre des tâches, compositeur, finition Windows 11 | #203 |
 | Corrections de l'audit (runtime, shell, scripts, décodeurs, Winsock IPv6) | #206, #218, #220, #221, #222 |
 | Paint.NET jusqu'à son propre code (`Program.Start`) | #201 |
-| Recherche du menu Démarrer au-dessus des épingles, échelle automatique | #190 |
 | Réseau local partagé Windows ↔ Linux, ports ouverts, proxy commun | #186 |
 | Identité visuelle, suite : écran du noyau, sons, icônes | #187 |
 | Démarrage plus rapide (menu GRUB de 2 s) | #188 |

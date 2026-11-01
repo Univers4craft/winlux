@@ -67,6 +67,10 @@ L'ancien bureau entièrement PE (`gui_demo.exe` avec `WINLUX_DESKTOP_DEMO=1`, co
 
 Les applications Linux s'installent normalement (`apt`, Store, Flatpak, Snap, AppImage). Leurs fichiers `.desktop` sont reconnus par Démarrer, et un crochet APT actualise le catalogue après chaque installation. Un navigateur web est préparé hors ligne dans l'ISO (Paramètres › Navigateurs permet d'en choisir un autre et de le mettre par défaut) ; il tourne sous un compte isolé, et ses téléchargements arrivent dans `C:\Users\<nom>\Downloads` (voir [docs/BROWSERS.md](https://github.com/Univers4craft/winlux/blob/master/docs/BROWSERS.md)).
 
+## Échelle d'affichage
+
+Le runtime choisit l'échelle comme Windows (paliers de 100 à 300 %) : réglage `Xft.dpi` s'il existe, sinon taille physique de l'écran lue dans l'EDID par RandR, sinon définition. Les applications maison et les programmes Windows sont ainsi lisibles du petit portable à l'écran 4K.
+
 ## Langues
 
 Le bureau, l'Explorateur, les Paramètres, l'écran de verrouillage et les applications sont traduits en **français, anglais, espagnol et allemand**. Le changement de langue est immédiat (Paramètres › Localisation). Quelques applications restent à traduire (issue #139).

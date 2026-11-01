@@ -135,6 +135,7 @@ Cette liste décrit le code présent sur `master`. Certaines fonctions sont plus
 ### Bureau
 
 - Menu Démarrer façon Windows 11 : recherche, épingles, « Toutes les applications » avec catégories, recommandations, menu d'alimentation et de compte. Les programmes Windows installés y apparaissent automatiquement, avec leur icône extraite du `.exe`.
+- Échelle d'affichage automatique selon la taille physique réelle de l'écran (paliers Windows de 100 à 300 %), du portable 1366×768 à l'écran 4K.
 - Barre des tâches centrée ou alignée à gauche, zone de notification avec les icônes des applications Windows (`Shell_NotifyIcon`), réglages rapides réseau et volume.
 - **Explorateur** (application maison) : onglets, double volet, recherche, tri, copier/couper/coller, corbeille, ouverture des **archives ZIP, 7z, RAR et tar**, « Extraire tout », partage de dossier en un clic droit.
 - Bureau avec glisser-déposer et « Coller » ; un `.exe` posé sur le bureau garde son icône.
