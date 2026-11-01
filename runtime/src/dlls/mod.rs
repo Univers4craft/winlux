@@ -57,6 +57,7 @@ pub mod mmap;
 pub mod mmdevapi;
 pub mod mscoree;
 pub mod msvcrt;
+pub mod nls;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ole32;
@@ -72,10 +73,12 @@ pub mod seh;
 pub mod setupapi;
 pub mod sfnt;
 pub mod shell32;
+pub mod shell_folders;
 pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
 pub mod taskschd;
+pub mod threadpool;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
@@ -175,6 +178,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_gpu::exports());
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
+                    e.extend(nls::exports());
+                    e.extend(threadpool::exports());
                     e
                 },
                 handle: fake_module(),
@@ -252,7 +257,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "shell32",
-                exports: shell32::exports(),
+                exports: {
+                    let mut e = shell32::exports();
+                    e.extend(shell_folders::exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {

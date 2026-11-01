@@ -965,6 +965,89 @@ pub unsafe extern "win64" fn message_box_w(
     1
 }
 
+/// Station de fenêtres du processus : une seule, interactive (« WinSta0 »).
+const WINSTA0: usize = 0x5753_0001;
+
+pub extern "win64" fn get_process_window_station() -> usize {
+    WINSTA0
+}
+
+/// GetUserObjectInformation(A/W) : UOI_FLAGS (1) indique une station
+/// visible (WSF_VISIBLE), UOI_NAME (2) son nom.
+unsafe fn user_object_information(
+    obj: usize,
+    index: i32,
+    out: *mut u8,
+    len: u32,
+    needed: *mut u32,
+    wide: bool,
+) -> i32 {
+    if obj == 0 {
+        crate::process::set_last_error(6);
+        return 0;
+    }
+    let data: Vec<u8> = match index {
+        1 => [0u32, 0, 1].iter().flat_map(|v| v.to_le_bytes()).collect(),
+        2 => {
+            let name = if obj == WINSTA0 { "WinSta0" } else { "Default" };
+            if wide {
+                name.encode_utf16()
+                    .chain(Some(0))
+                    .flat_map(|c| c.to_le_bytes())
+                    .collect()
+            } else {
+                name.bytes().chain(Some(0)).collect()
+            }
+        }
+        _ => {
+            crate::process::set_last_error(87);
+            return 0;
+        }
+    };
+    if !needed.is_null() {
+        *needed = data.len() as u32;
+    }
+    if out.is_null() || (len as usize) < data.len() {
+        crate::process::set_last_error(122);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(data.as_ptr(), out, data.len());
+    1
+}
+pub unsafe extern "win64" fn get_user_object_information_w(
+    obj: usize,
+    index: i32,
+    out: *mut u8,
+    len: u32,
+    needed: *mut u32,
+) -> i32 {
+    user_object_information(obj, index, out, len, needed, true)
+}
+pub unsafe extern "win64" fn get_user_object_information_a(
+    obj: usize,
+    index: i32,
+    out: *mut u8,
+    len: u32,
+    needed: *mut u32,
+) -> i32 {
+    user_object_information(obj, index, out, len, needed, false)
+}
+
+/// CallWindowProc(A/W) : appelle la procédure de fenêtre précédente
+/// (sous-classement par SetWindowLongPtr(GWLP_WNDPROC)).
+pub unsafe extern "win64" fn call_window_proc(
+    prev: usize,
+    hwnd: usize,
+    msg: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    if prev == 0 {
+        return 0;
+    }
+    gui::call_wndproc(prev, hwnd, msg, wparam, lparam)
+}
+
 // =====================================================================
 // GetWindowLong / SetWindowLong  (A/W + Ptr variants)
 // =====================================================================
@@ -2439,6 +2522,9 @@ pub fn exports() -> crate::dlls::Exports {
         "UnregisterClassA"=>fn unregister_class_a, "UnregisterClassW"=>fn unregister_class_w,
         "CreateWindowExA"=>fn create_window_ex_a, "CreateWindowExW"=>fn create_window_ex_w,
         "DefWindowProcA"=>fn def_window_proc_a, "DefWindowProcW"=>fn def_window_proc_w,
+        "CallWindowProcA"=>fn call_window_proc, "CallWindowProcW"=>fn call_window_proc,
+        "GetProcessWindowStation"=>fn get_process_window_station,
+        "GetUserObjectInformationW"=>fn get_user_object_information_w, "GetUserObjectInformationA"=>fn get_user_object_information_a,
         // --- Message loop ---
         "GetMessageA"=>fn get_message_a, "GetMessageW"=>fn get_message_w,
         "PeekMessageA"=>fn peek_message_a, "PeekMessageW"=>fn peek_message_w,
@@ -2595,5 +2681,43 @@ pub fn exports() -> crate::dlls::Exports {
         // --- Misc ---
         "CharNextA"=>fn char_next_a, "CharPrevA"=>fn char_prev_a,
         "wsprintfA"=>fn wsprintfa, "wsprintfW"=>fn wsprintfw,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    unsafe extern "win64" fn echo_proc(_h: usize, msg: u32, w: usize, l: isize) -> isize {
+        msg as isize + w as isize + l
+    }
+
+    #[test]
+    fn station_interactive_et_procedure_precedente() {
+        unsafe {
+            let ws = get_process_window_station();
+            let mut flags = [0u8; 12];
+            let mut need = 0;
+            assert_eq!(
+                get_user_object_information_w(ws, 1, flags.as_mut_ptr(), 12, &mut need),
+                1
+            );
+            assert_eq!((need, flags[8] & 1), (12, 1)); // WSF_VISIBLE
+            let mut name = [0u8; 4];
+            assert_eq!(
+                get_user_object_information_w(ws, 2, name.as_mut_ptr(), 4, &mut need),
+                0
+            );
+            assert_eq!(need, 16); // « WinSta0 » + zéro, en UTF-16
+            assert_eq!(
+                get_user_object_information_w(0, 1, flags.as_mut_ptr(), 12, &mut need),
+                0
+            );
+            assert_eq!(
+                call_window_proc(echo_proc as *const () as usize, 1, 2, 3, 4),
+                9
+            );
+            assert_eq!(call_window_proc(0, 1, 2, 3, 4), 0);
+        }
     }
 }

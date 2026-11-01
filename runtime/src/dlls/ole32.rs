@@ -1084,6 +1084,37 @@ pub extern "win64" fn do_drag_drop(
     DRAGDROP_S_DROP
 }
 
+// ---------- CoWaitForMultipleHandles ----------
+
+/// `CoWaitForMultipleHandles` : attente des handles (COWAIT_WAITALL = 1) ;
+/// RPC_S_CALLPENDING si le délai expire, index du handle signalé sinon.
+pub unsafe extern "win64" fn co_wait_for_multiple_handles(
+    flags: u32,
+    timeout: u32,
+    count: u32,
+    handles: *const usize,
+    index: *mut u32,
+) -> i32 {
+    const RPC_S_CALLPENDING: i32 = 0x8001_0115u32 as i32;
+    if handles.is_null() || index.is_null() || count == 0 {
+        return E_INVALIDARG;
+    }
+    let r = crate::dlls::kernel32::wait_for_multiple_objects(
+        count,
+        handles,
+        i32::from(flags & 1 != 0),
+        timeout,
+    );
+    match r {
+        0x102 => RPC_S_CALLPENDING, // WAIT_TIMEOUT
+        r if r < count || (0x80..0x80 + count).contains(&r) => {
+            *index = r & 0x7F;
+            S_OK
+        }
+        _ => E_INVALIDARG,
+    }
+}
+
 // ---------- RoInitialize ----------
 
 /// `RoInitialize` : RO_INIT_SINGLETHREADED (0) donne un STA, RO_INIT_MULTITHREADED (1) le MTA.
@@ -1181,6 +1212,7 @@ pub fn exports() -> crate::dlls::Exports {
         "RegisterDragDrop"=>fn register_drag_drop,"RevokeDragDrop"=>fn revoke_drag_drop,"DoDragDrop"=>fn do_drag_drop,
         "PropVariantClear"=>fn prop_variant_clear,
         "CoGetContextToken"=>fn co_get_context_token,
+        "CoWaitForMultipleHandles"=>fn co_wait_for_multiple_handles,
         "RoInitialize"=>fn ro_initialize,"RoUninitialize"=>fn ro_uninitialize
     }
 }
@@ -1200,6 +1232,26 @@ mod tests {
         assert_eq!(unsafe { co_create_guid(&mut generated) }, S_OK);
         assert_eq!(generated.data3 >> 12, 4);
         assert_eq!(generated.data4[0] >> 6, 2);
+    }
+
+    #[test]
+    fn attente_de_handles_com() {
+        unsafe {
+            let e = crate::dlls::kernel32::create_event_w(0, 1, 0, std::ptr::null());
+            let mut index = 9;
+            assert_eq!(
+                co_wait_for_multiple_handles(0, 0, 1, &e, &mut index),
+                0x8001_0115u32 as i32
+            );
+            crate::dlls::kernel32::set_event(e);
+            assert_eq!(co_wait_for_multiple_handles(0, 0, 1, &e, &mut index), S_OK);
+            assert_eq!(index, 0);
+            assert_eq!(
+                co_wait_for_multiple_handles(0, 0, 0, &e, &mut index),
+                E_INVALIDARG
+            );
+            crate::dlls::kernel32::close_handle(e);
+        }
     }
 
     #[test]
