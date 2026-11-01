@@ -1,6 +1,9 @@
 #!/bin/sh
 # Start native services once. The init shell supervises xfdesktop separately.
 set -eu
+# Jeux Debian (/usr/games) et logiciels locaux : sans eux dans PATH, GIO
+# masquait leur raccourci (Démineur installé depuis la Boutique introuvable).
+export PATH="/usr/local/sbin:/usr/local/bin:$PATH:/usr/games:/usr/local/games"
 export DISPLAY=${DISPLAY:-:0}
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/0}
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
@@ -100,7 +103,10 @@ if "$has_bluetooth"; then
 fi
 /usr/bin/xfsettingsd --daemon >/run/winlux/xfsettings.log 2>&1
 # Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur.
-if test -d /usr/share/icons/Winlux && ! /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName >/dev/null 2>&1; then
+# Le défaut d'XFCE (elementary-xfce-dark) n'est pas livré : sans thème réel,
+# les icônes retombaient sur les silhouettes noires d'Adwaita (Installer…).
+icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null || true)
+if test -d /usr/share/icons/Winlux && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
     /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
 fi
 if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
@@ -142,6 +148,15 @@ done
 # fenêtre découverte doit se repeindre et un déplacement laisse des traînées.
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
     /usr/bin/picom --config "$HOME/.config/picom/picom.conf" >/run/winlux/compositor.log 2>&1 &
+    # Le bureau (xfdesktop) est lancé ensuite par l'init : son arrivée laissait
+    # noires les fenêtres déjà ouvertes (Bienvenue au premier démarrage).
+    # Une remise à zéro de picom, une fois le bureau affiché, les repeint.
+    (
+        tries=0
+        while ! pgrep -x xfdesktop >/dev/null 2>&1 && test "$tries" -lt 60; do sleep 0.5; tries=$((tries + 1)); done
+        sleep 2
+        pkill -USR1 -x picom 2>/dev/null
+    ) >/dev/null 2>&1 &
 fi
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid

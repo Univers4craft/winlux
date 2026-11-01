@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<actions>
+<action>
+	<icon>utilities-terminal</icon>
+	<name>Ouvrir dans le terminal</name>
+	<name xml:lang="en">Open in Terminal</name>
+	<name xml:lang="es">Abrir en el terminal</name>
+	<name xml:lang="de">Im Terminal öffnen</name>
+	<submenu></submenu>
+	<unique-id>1793570335019944-1</unique-id>
+	<command>exo-open --working-directory %f --launch TerminalEmulator</command>
+	<description></description>
+	<range></range>
+	<patterns>*</patterns>
+	<startup-notify/>
+	<directories/>
+</action>
+</actions>

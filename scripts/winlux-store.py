@@ -799,7 +799,10 @@ class Apt(Source):
         return self.apt(["install", "--no-install-recommends", "--", ref], progress)
 
     def remove(self, ref, progress):
-        return self.apt(["remove", "--", ref], progress)
+        # Désinstaller sans trace, comme Windows : fichiers de configuration du
+        # paquet et dépendances installées pour lui seul partent aussi (apt
+        # remove laissait 10 bibliothèques et les réglages de Démineur).
+        return self.apt(["purge", "--autoremove", "--", ref], progress)
 
     def update(self, refs, progress):
         return self.apt(["install", "--only-upgrade", "--", *refs], progress)
@@ -1709,6 +1712,15 @@ def operate(action, target, hook=None, reindex=True, known=""):
             code = fn(app.ref, progress) if fn else src.update([app.ref], progress)
         done = {"install": "installed", "remove": "removed", "update": "updated",
                 "update-all": "all_updated", "install-file": "installed"}.get(action)
+        # Index à jour avant l'état final : la Boutique le relit dès « done »
+        # et affichait encore « Obtenir » pour le logiciel tout juste installé.
+        if reindex:
+            try:
+                sources, apps = collect(False)
+                write_index(sources, apps, False)
+                reindex = False
+            except Exception:
+                pass
         if code == 0:
             progress(100, tr(done, name=name) if done else name, "done")
         elif code in MESSAGES:

@@ -7,7 +7,7 @@
 # ce qui appartient à la session de l'utilisateur, avec son propre bus D-Bus,
 # son propre gestionnaire de fenêtres, sa barre des tâches et son bureau.
 set -eu
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH:/usr/games:/usr/local/games"
 uid=$(id -u)
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$uid}
 if ! mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || ! test -w "$XDG_RUNTIME_DIR"; then
@@ -49,6 +49,12 @@ fi
 if test -x /usr/bin/winlux-native-config; then /usr/bin/winlux-native-config >"$logs/native-config.log" 2>&1 || true; fi
 
 if test -x /usr/bin/xfsettingsd; then /usr/bin/xfsettingsd --daemon >"$logs/xfsettings.log" 2>&1 || true; fi
+# Thème d'icônes Winlux si celui configuré n'est pas installé (défaut XFCE
+# elementary-xfce-dark, absent) : sinon icônes noires d'Adwaita.
+icon_theme=$(xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null || true)
+if test -d /usr/share/icons/Winlux && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
+    xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux 2>/dev/null || true
+fi
 rc="$HOME/.config/openbox/rc.xml"
 if test -f "$rc"; then
     /usr/bin/openbox --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &

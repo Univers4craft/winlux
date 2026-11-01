@@ -581,7 +581,10 @@ pub fn mount_options(
             o.push(format!("uid={uid}"));
             o.push(format!("gid={gid}"));
             o.push("umask=022".into());
-            o.push("iocharset=utf8".into());
+            // `utf8` (noms en UTF-8 par le pilote lui-même) plutôt que
+            // `iocharset=utf8`, qui exige le module nls_utf8 : sans lui,
+            // aucune clé FAT ne se montait (« IO charset utf8 not found »).
+            o.push("utf8".into());
             o.push("shortname=mixed".into());
             o.push("flush".into());
         }
@@ -1503,6 +1506,7 @@ mod tests {
         let o = mount_options("ntfs-3g", 1000, 100, true, false);
         assert_eq!(o, "ro,nosuid,nodev,uid=1000,gid=100,umask=022");
         assert!(mount_options("vfat", 0, 0, false, false).contains("shortname=mixed"));
+        assert!(!mount_options("vfat", 0, 0, false, false).contains("iocharset"));
         assert_eq!(
             mount_options("ext4", 1000, 1000, true, true),
             "ro,nosuid,nodev"

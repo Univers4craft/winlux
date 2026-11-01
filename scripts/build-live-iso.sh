@@ -297,7 +297,9 @@ fi
 # Display drivers of the usual VM adapters (QEMU std VGA, QXL, VMware and
 # VirtualBox VMSVGA): without a DRM device the modesetting driver of Xorg has
 # nothing to drive and the desktop never appears (virtio-gpu is loaded apart).
-for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1 bochs qxl vmwgfx cifs nfs nfsv3 nfsv4; do
+# nls_utf8: FAT and exFAT USB keys are mounted with iocharset=utf8 (volumes.rs);
+# without it every such key failed with "IO charset utf8 not found".
+for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1 nls_utf8 bochs qxl vmwgfx cifs nfs nfsv3 nfsv4; do
     modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
         test "$directive" = insmod || continue
         destination="$stage${module%.zst}"
@@ -789,6 +791,10 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         export WINLUX_UI_SCALE="$ui_scale" WINLUX_THEME="$desktop_theme"
         /usr/bin/xfdesktop --disable-wm-check >/run/winlux/desktop.log 2>&1 &
         desktop_pid=$!
+        # Bureau relancé (plantage, redémarrage de session) : picom gardait
+        # alors toutes les fenêtres noires ; une remise à zéro les repeint.
+        if test -n "${desktop_started:-}"; then (/bin/busybox sleep 2; /bin/busybox killall -USR1 picom 2>/dev/null) & fi
+        desktop_started=1
         echo "WINLUX_DESKTOP_READY pid=$desktop_pid"
         if ! test -e /run/winlux/boot-recorded; then
             boot_mark desktop

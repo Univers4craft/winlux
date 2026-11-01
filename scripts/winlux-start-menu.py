@@ -2,6 +2,7 @@
 """Windows 11 inspired native Start: real XDG apps, pins and context actions."""
 import json
 import os
+import pwd
 from pathlib import Path
 import shutil
 from string import Template
@@ -17,6 +18,25 @@ from gi.repository import Gtk, Gdk, Gio, GLib
 # ── Recherche : ni casse ni accents (« parametres » trouve « Paramètres ») ──
 
 _LIGATURES = str.maketrans({"œ": "oe", "æ": "ae", "ø": "o", "đ": "d", "ł": "l", "ı": "i"})
+
+
+def account_name():
+    """Nom du compte affiché en bas du menu, comme sous Windows : le nom
+    complet saisi à l'installation, sinon l'identifiant ; « Winlux » pour la
+    session live."""
+    try:
+        entry = pwd.getpwuid(os.getuid())
+    except KeyError:
+        return "Winlux"
+    if entry.pw_uid == 0:
+        # Système installé : le bureau tourne encore sous root, le compte
+        # créé à l'installation est noté dans install-config.json.
+        try:
+            config = json.loads(Path("/etc/winlux/install-config.json").read_text(encoding="utf-8"))
+            return str(config.get("fullname") or config.get("username") or "Winlux")
+        except (OSError, ValueError, AttributeError):
+            return "Winlux"
+    return entry.pw_gecos.split(",")[0].strip() or entry.pw_name
 
 
 def fold(text):
@@ -292,7 +312,7 @@ class Start(Gtk.Application):
         footer = Gtk.Box(spacing=12)
         footer.get_style_context().add_class("footer")
         footer.pack_start(Gtk.Image.new_from_icon_name("avatar-default-symbolic", Gtk.IconSize.LARGE_TOOLBAR), False, False, 0)
-        footer.pack_start(Gtk.Label(label="Winlux", xalign=0), True, True, 0)
+        footer.pack_start(Gtk.Label(label=account_name(), xalign=0), True, True, 0)
         power = Gtk.Button.new_from_icon_name("system-shutdown-symbolic", Gtk.IconSize.LARGE_TOOLBAR)
         power.set_tooltip_text(_t("Options d’alimentation"))
         on_click(power, lambda: self.power(power))
@@ -348,7 +368,13 @@ class Start(Gtk.Application):
         return self.hide() if event.keyval == Gdk.KEY_Escape else False
 
     def toggle_list(self, *_):
-        self.all_apps = not self.all_apps
+        # « Retour » depuis une recherche : effacer la recherche (le texte
+        # tapé gardait sinon les résultats affichés, bouton sans effet).
+        if self.search.get_text().strip():
+            self.all_apps = False
+            self.search.set_text("")
+        else:
+            self.all_apps = not self.all_apps
         self.render()
 
     def first_result(self, *_):
@@ -430,7 +456,8 @@ class Start(Gtk.Application):
                     self.content.pack_start(heading, False, False, 0)
                     previous = group
                 self.content.pack_start(self.app_button(app), False, False, 0)
-            if not self.results: self.content.pack_start(Gtk.Label(label=_t("Aucune application trouvée")), False, False, 0)
+            if not self.results and not (query and (self.file_results or any(query in fold(label) for label, _ in SETTINGS))):
+                self.content.pack_start(Gtk.Label(label=_t("Aucune application trouvée")), False, False, 0)
         else:
             grid = Gtk.Grid(column_homogeneous=True, column_spacing=4, row_spacing=12)
             self.content.pack_start(grid, False, False, 0)
