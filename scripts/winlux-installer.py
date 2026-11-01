@@ -4476,7 +4476,14 @@ class InstallerApp(Gtk.Application):
     def on_reboot(self, _btn):
         try:
             subprocess.run(["sync"], timeout=10)
-            subprocess.run(["reboot"], timeout=10)
+            # En live, PID 1 est le script /init : « reboot » (systemctl)
+            # ne faisait rien et le bouton fermait seulement l'installateur.
+            # winlux-power sait redémarrer dans les deux cas.
+            power = shutil.which("winlux-power")
+            if power:
+                subprocess.Popen([power, "now", "reboot"], start_new_session=True)
+            else:
+                subprocess.run(["reboot"], timeout=10)
         except Exception:
             pass
         self.quit()
@@ -4983,6 +4990,13 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
     def configure_first_boot(self, root_path):
         etc = f"{root_path}/etc/winlux"
         os.makedirs(etc, exist_ok=True)
+        # « Installer Winlux » n'a plus de sens une fois installé : ni sur le
+        # bureau ni dans le menu Démarrer du système copié depuis le live.
+        for leftover in ("root/Bureau/winlux-installer.desktop", "usr/share/applications/winlux-installer.desktop"):
+            try:
+                os.remove(f"{root_path}/{leftover}")
+            except OSError:
+                pass
         locale = self.config["language"] + ".UTF-8"
         keyboard = self.config["keyboard"]
         locale_conf = f"{root_path}/etc/default/locale"

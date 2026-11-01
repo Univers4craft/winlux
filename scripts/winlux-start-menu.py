@@ -23,13 +23,19 @@ _LIGATURES = str.maketrans({"œ": "oe", "æ": "ae", "ø": "o", "đ": "d", "ł": 
 def account_name():
     """Nom du compte affiché en bas du menu, comme sous Windows : le nom
     complet saisi à l'installation, sinon l'identifiant ; « Winlux » pour la
-    session live (root)."""
+    session live."""
     try:
         entry = pwd.getpwuid(os.getuid())
     except KeyError:
         return "Winlux"
     if entry.pw_uid == 0:
-        return "Winlux"
+        # Système installé : le bureau tourne encore sous root, le compte
+        # créé à l'installation est noté dans install-config.json.
+        try:
+            config = json.loads(Path("/etc/winlux/install-config.json").read_text(encoding="utf-8"))
+            return str(config.get("fullname") or config.get("username") or "Winlux")
+        except (OSError, ValueError, AttributeError):
+            return "Winlux"
     return entry.pw_gecos.split(",")[0].strip() or entry.pw_name
 
 

@@ -18,6 +18,9 @@
     <keybind key="W-l"><action name="Execute"><command>winlux-lock now</command></action></keybind>
     <keybind key="W-e"><action name="Execute"><command>winlux-shell-app explorer</command></action></keybind>
     <keybind key="W-Return"><action name="Execute"><command>winlux-terminal</command></action></keybind>
+    <!-- Ctrl+Alt+T par openbox : actif dès l'apparition du bureau (par xfsettingsd, il ne
+         répondait qu'un peu plus tard). -->
+    <keybind key="C-A-t"><action name="Execute"><command>winlux-terminal</command></action></keybind>
     <keybind key="W-space"><action name="Execute"><command>winlux-start-menu</command></action></keybind>
     <keybind key="C-S-Escape"><action name="Execute"><command>winlux-shell-app taskmgr</command></action></keybind>
     <keybind key="W-a"><action name="Execute"><command>winlux-system-tools quick</command></action></keybind>

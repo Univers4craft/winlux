@@ -145,6 +145,15 @@ done
 # fenêtre découverte doit se repeindre et un déplacement laisse des traînées.
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
     /usr/bin/picom --config "$HOME/.config/picom/picom.conf" >/run/winlux/compositor.log 2>&1 &
+    # Le bureau (xfdesktop) est lancé ensuite par l'init : son arrivée laissait
+    # noires les fenêtres déjà ouvertes (Bienvenue au premier démarrage).
+    # Une remise à zéro de picom, une fois le bureau affiché, les repeint.
+    (
+        tries=0
+        while ! pgrep -x xfdesktop >/dev/null 2>&1 && test "$tries" -lt 60; do sleep 0.5; tries=$((tries + 1)); done
+        sleep 2
+        pkill -USR1 -x picom 2>/dev/null
+    ) >/dev/null 2>&1 &
 fi
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid

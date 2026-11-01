@@ -112,6 +112,8 @@ XFCE_SHORTCUTS = {
     "<Alt>Print": ("xfce4-screenshooter -w", None),
     "<Shift>Print": ("xfce4-screenshooter -r", None),
     "<Alt><Super>s": ("orca", None),
+    # Ctrl+Alt+T est tenu par openbox (actif dès l'apparition du bureau).
+    "<Primary><Alt>t": ("exo-open --launch TerminalEmulator", None),
 }
 
 
@@ -134,7 +136,7 @@ def winlux_shortcuts(path):
     if len(existing) <= 1:
         # Canal pas encore créé par xfsettingsd : sans liste personnelle, il
         # recopierait les défauts d'XFCE ; garder ceux qui restent utiles.
-        for key, command in (("<Primary><Alt>t", "exo-open --launch TerminalEmulator"), ("<Primary>Escape", "xfdesktop --menu"),
+        for key, command in (("<Primary>Escape", "xfdesktop --menu"),
                              ("<Primary><Alt>Escape", "xkill"), ("XF86WWW", "exo-open --launch WebBrowser"),
                              ("HomePage", "exo-open --launch WebBrowser"), ("XF86Mail", "exo-open --launch MailReader")):
             if key not in existing:
@@ -166,6 +168,13 @@ def winlux_shortcuts(path):
 
 
 winlux_shortcuts(home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml")
+# Système installé : le lanceur « Installer Winlux » copié depuis le live
+# restait sur le bureau.
+if Path("/etc/winlux/install-config.json").is_file():
+    try:
+        (home / "Bureau/winlux-installer.desktop").unlink()
+    except OSError:
+        pass
 # Corbeille vide d'un nouveau profil : sans ces dossiers (créés d'habitude au
 # premier envoi), l'Explorateur affichait « Ce dossier est introuvable ».
 for directory in ("files", "info"):
@@ -318,7 +327,7 @@ if openbox_config.is_file():
                 defaults = ET.parse(default_rc).getroot().find(f"{{{namespace}}}keyboard")
                 if defaults is not None:
                     for binding in defaults:
-                        if binding.get("key") in ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l") and binding.get("key") not in keys:
+                        if binding.get("key") in ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t") and binding.get("key") not in keys:
                             keyboard.append(ET.fromstring(ET.tostring(binding)))
                             changed = True
             for binding in list(keyboard):
