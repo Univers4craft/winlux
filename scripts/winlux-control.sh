@@ -201,6 +201,8 @@ esac
 if ! mkdir "$run/control.lock" 2>/dev/null; then message 'Une operation est deja en cours. Consultez le journal.'; exit 1; fi
 trap 'rmdir "$run/control.lock" 2>/dev/null || true' EXIT HUP INT TERM
 action=$1
+# Alias accepte par les menus XFCE (whiskermenu) : « shutdown » = poweroff.
+case "$action" in shutdown) action=poweroff ;; esac
 message 'Operation en cours...'
 perform() {
     case "$action" in
@@ -263,11 +265,16 @@ perform() {
         bluetooth-on|bluetooth-off|bluetooth-scan) winlux-bluetooth "${action#bluetooth-}" ;;
         bluetooth-pair|bluetooth-connect|bluetooth-disconnect|bluetooth-remove)
             winlux-bluetooth "${action#bluetooth-}" "${2:-}" ;;
-        volume-up|volume-down|volume-mute)
+        volume-up|volume-down|volume-mute|volume-set)
+            # volume-set N : niveau absolu en pourcentage (curseur du bureau).
+            level="${2:-}"
+            if test "$action" = volume-set && test -z "$level"; then echo 'volume-set : niveau manquant' >&2; return 0; fi
+            case "$level" in *[!0-9]*) level=50 ;; esac
+            test "$level" -le 100 || level=100
             if have wpctl; then
-                case "$action" in volume-up) wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;; volume-down) wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;; *) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;; esac
+                case "$action" in volume-up) wpctl set-volume -l 1 @DEFAULT_AUDIO_SINK@ 5%+ ;; volume-down) wpctl set-volume @DEFAULT_AUDIO_SINK@ 5%- ;; volume-set) wpctl set-volume @DEFAULT_AUDIO_SINK@ "$level%" && wpctl set-mute @DEFAULT_AUDIO_SINK@ 0 ;; *) wpctl set-mute @DEFAULT_AUDIO_SINK@ toggle ;; esac
             elif have amixer; then
-                case "$action" in volume-up) amixer set Master 5%+ ;; volume-down) amixer set Master 5%- ;; *) amixer set Master toggle ;; esac
+                case "$action" in volume-up) amixer set Master 5%+ ;; volume-down) amixer set Master 5%- ;; volume-set) amixer set Master "$level%" unmute ;; *) amixer set Master toggle ;; esac
             else echo 'Aucun mixeur audio installe.' >&2; return 1; fi ;;
         keyboard-fr|keyboard-us|keyboard-de|keyboard-es|keyboard-gb|keyboard-it|keyboard-pt|keyboard-be)
             layout=${action#keyboard-}
@@ -433,7 +440,7 @@ perform() {
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
             test -f "$root/etc/winlux/live-session" || { echo 'Redemarrage de session reserve a Winlux Live' >&2; return 1; }
-            /usr/bin/winlux-shutdown-screen restart-session >/dev/null 2>&1 || true
+            "${WINLUX_POWER:-/usr/bin/winlux-power}" screen restart-session >/dev/null 2>&1 || true
             printf 'restart-session\n' > "$run/session-action" ;;
         power-profile-performance|power-profile-balanced|power-profile-saver)
             winlux --power profile "${action#power-profile-}" ;;
@@ -449,10 +456,11 @@ perform() {
         poweroff|reboot)
             test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
             if winlux-update --busy 2>/dev/null || winlux-sysupdate --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
-            /usr/bin/winlux-shutdown-screen "$action" >/dev/null 2>&1 || true
-            /usr/bin/winlux-close-session || return
-            sync || return
-            "$action" ;;
+            # Les commandes poweroff/reboot de l'image sont celles de systemd,
+            # qui n'est pas l'init de Winlux : elles échouaient sans rien
+            # éteindre. winlux-power ferme les applications derrière l'écran
+            # « Arrêt en cours » puis signale l'init (USR2 arrêt, TERM redémarrage).
+            "${WINLUX_POWER:-/usr/bin/winlux-power}" now "$action" ;;
         journal-status|journal-list|journal-errors|journal-crashes|journal-clear|journal-rotate)
             winlux-journal "${action#journal-}" "$2" ;;
         journal-export) winlux-journal export "$2" ;;

@@ -288,7 +288,7 @@ class Tools(Gtk.Window):
             ("Volume −", ["winlux-control","volume-down"],"winlux-control"),
             (_t("Muet / rétablir"), ["winlux-control","volume-mute"],"winlux-control"),
             ("Volume +", ["winlux-control","volume-up"],"winlux-control"),
-            (_t("Alimentation"), ["winlux-shell-app","settings","0"],"winlux-shell-app")]:
+            (_t("Alimentation"), ["winlux-shell-app","settings","23"],"winlux-shell-app")]:
             self.button(title, lambda command=args: self.command(command), bool(shutil.which(binary)))
         ssid=self.entry(_t("Nom du réseau Wi-Fi à rejoindre"))
         self.button(_t("Se connecter au réseau"),lambda:self.command(["nmcli","--wait","90","device","wifi","connect",ssid.get_text()]) if ssid.get_text() else None,bool(shutil.which("nmcli")))
@@ -549,5 +549,9 @@ if __name__ == "__main__":
     # Winlux intégrée ; cette page reste en secours si elle n'est pas installée.
     if page == "tasks" and Path("/opt/winlux/tests/gui_demo.exe").is_file() and shutil.which("winlux-shell-app"):
         os.execvp("winlux-shell-app", ["winlux-shell-app", "taskmgr"])
+    # Notifications : panneau volant façon Windows 11 (avec le calendrier),
+    # aussi pour les raccourcis Win+N déjà enregistrés vers cette page.
+    if page == "notifications" and shutil.which("winlux-popup") and not os.environ.get("WINLUX_TOOLS_WINDOW"):
+        os.execvp("winlux-popup", ["winlux-popup", "notifications"])
     Tools(page)
     Gtk.main()

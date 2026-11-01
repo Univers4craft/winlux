@@ -494,6 +494,24 @@ def read(name):
     except OSError: return ""
 
 
+def _power_modes():
+    """Modes d'alimentation disponibles (winlux-power-modes, installé à côté)."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-power-modes.py"), here.with_name("winlux-power-modes")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_power_modes", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_power_modes", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module.detect()[1]
+            except Exception:
+                return []
+    return []
+
+
 def _extra_pages():
     """Pages branchées sur les services (winlux-settings-pages, installé à côté)."""
     from importlib.machinery import SourceFileLoader
@@ -592,6 +610,11 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         # Les pages branchées affichent leurs propres réglages : pas de cadre d'état vide.
         self.state = Gtk.Label() if extra else self.label(_t("Chargement…"), "card")
         actions = list(ACTIONS.get(self.page, []))
+        if self.page == 23:
+            # Modes Économie / Normal / Turbo : seulement ceux que la machine sait appliquer.
+            available = _power_modes()
+            actions = [(title, action) for title, action in actions
+                       if not action.startswith("power-profile-") or action[len("power-profile-"):] in available]
         if self.page == 11:
             actions = [(_t(verb).format(name=name), f"browser-{action}-{name}") for name in ("edge", "chrome", "firefox")
                        for verb, action in (("Installer {name}", "install"), ("Par défaut : {name}", "default"), ("Ouvrir {name}", "launch"))]

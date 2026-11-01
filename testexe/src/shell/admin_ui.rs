@@ -56,6 +56,39 @@ pub fn t(fr: &'static [u8], en: &'static [u8]) -> &'static [u8] {
 /// français/anglais (un même mot anglais peut avoir plusieurs genres).
 const TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
     (
+        b"Ports ouverts",
+        b"Open ports",
+        b"Puertos abiertos",
+        b"Offene Ports",
+    ),
+    (
+        b"Les applications Windows et Linux partagent les m\xEAmes ports : chacune peut joindre l'autre sur cet ordinateur.",
+        b"Windows and Linux apps share the same ports: each can reach the other on this computer.",
+        b"Las aplicaciones de Windows y Linux comparten los mismos puertos: cada una puede llegar a la otra en este equipo.",
+        b"Windows- und Linux-Apps teilen dieselben Ports: Jede erreicht die andere auf diesem Computer.",
+    ),
+    (b"Application", b"App", b"Aplicaci\xF3n", b"App"),
+    (
+        b"Accessible depuis",
+        b"Reachable from",
+        b"Accesible desde",
+        b"Erreichbar von",
+    ),
+    (
+        b"Aucune application n'attend de connexion.",
+        b"No app is waiting for connections.",
+        b"Ninguna aplicaci\xF3n espera conexiones.",
+        b"Keine App wartet auf Verbindungen.",
+    ),
+    (b"Syst\xE8me", b"System", b"Sistema", b"System"),
+    (b"R\xE9seau", b"Network", b"Red", b"Netzwerk"),
+    (
+        b"Cet ordinateur uniquement",
+        b"This computer only",
+        b"Solo este equipo",
+        b"Nur dieser Computer",
+    ),
+    (
         b"R\xE9seau connect\xE9",
         b"Network connected",
         b"Red conectada",
