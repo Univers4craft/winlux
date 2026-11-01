@@ -40,6 +40,8 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    'Révision : {value}': ('Revision: {value}', 'Revisión: {value}', 'Revision: {value}'),
+    'Compilée le : {value}': ('Built on: {value}', 'Compilada el: {value}', 'Erstellt am: {value}'),
     # Refonte des Paramètres (catégories, réglages intégrés)
     'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
     'Gérer les applications': ('Manage apps', 'Administrar aplicaciones', 'Apps verwalten'),
@@ -562,6 +564,19 @@ def _extra_pages():
 EXTRA = _extra_pages()
 
 
+def about_build(info):
+    """BUILD-INFO lisible (« Révision », « Compilée le ») au lieu des clés brutes
+    commit=, tracked_sources=, scope=…"""
+    values = dict(line.split("=", 1) for line in info.splitlines() if "=" in line)
+    lines = []
+    if values.get("commit"):
+        lines.append(_t("Révision : {value}").format(value=values["commit"][:10]))
+    built = values.get("built_at_utc", "")
+    if len(built) >= 10 and built[4] == "-":
+        lines.append(_t("Compilée le : {value}").format(value=f"{built[8:10]}/{built[5:7]}/{built[:4]}"))
+    return "".join("\n" + line for line in lines)
+
+
 class Settings(EXTRA.ExtraPages, Gtk.Window):
     def __init__(self):
         super().__init__(title=_t("Paramètres"))
@@ -902,7 +917,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             # Rien à restaurer tant qu'aucune version précédente n'est conservée.
             self.rollback_button.get_parent().set_visible(Path(PREVIOUS_PACKAGE).is_file())
         if self.page == 7: text = localize_update_text(text)
-        if self.page == 9: text += "\n" + read("/usr/share/winlux/BUILD-INFO")
+        if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
         if self.page == GRAPHICS_PAGE: text = gpu_summary()
         if self.page == CPU_PAGE: text = cpu_summary()
         if self.page == PRIVACY_PAGE: text = privacy_summary(status)
