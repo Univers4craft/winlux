@@ -96,6 +96,62 @@ const WIN_IPPROTO_IPV6: i32 = 41;
 /// `SO_EXCLUSIVEADDRUSE` (`~SO_REUSEADDR`) : un port lié sous Linux est déjà
 /// exclusif tant que personne ne demande `SO_REUSEADDR`.
 const WIN_SO_EXCLUSIVEADDRUSE: i32 = !WIN_SO_REUSEADDR;
+// Drapeaux WSAPoll (Windows) ↔ poll (Linux) : les valeurs diffèrent.
+const WIN_POLLRDNORM: i16 = 0x0100;
+const WIN_POLLRDBAND: i16 = 0x0200;
+const WIN_POLLPRI: i16 = 0x0400;
+const WIN_POLLWRNORM: i16 = 0x0010;
+const WIN_POLLWRBAND: i16 = 0x0020;
+const WIN_POLLERR: i16 = 0x0001;
+const WIN_POLLHUP: i16 = 0x0002;
+const WIN_POLLNVAL: i16 = 0x0004;
+fn poll_events_to_linux(w: i16) -> i16 {
+    let mut e = 0i16;
+    if w & WIN_POLLRDNORM != 0 {
+        e |= libc::POLLIN | libc::POLLRDNORM;
+    }
+    if w & WIN_POLLRDBAND != 0 {
+        e |= libc::POLLRDBAND;
+    }
+    if w & WIN_POLLPRI != 0 {
+        e |= libc::POLLPRI;
+    }
+    if w & WIN_POLLWRNORM != 0 {
+        e |= libc::POLLOUT | libc::POLLWRNORM;
+    }
+    if w & WIN_POLLWRBAND != 0 {
+        e |= libc::POLLWRBAND;
+    }
+    e
+}
+fn poll_events_to_win(l: i16) -> i16 {
+    let mut e = 0i16;
+    if l & (libc::POLLIN | libc::POLLRDNORM) != 0 {
+        e |= WIN_POLLRDNORM;
+    }
+    if l & libc::POLLRDBAND != 0 {
+        e |= WIN_POLLRDBAND;
+    }
+    if l & libc::POLLPRI != 0 {
+        e |= WIN_POLLPRI;
+    }
+    if l & (libc::POLLOUT | libc::POLLWRNORM) != 0 {
+        e |= WIN_POLLWRNORM;
+    }
+    if l & libc::POLLWRBAND != 0 {
+        e |= WIN_POLLWRBAND;
+    }
+    if l & libc::POLLERR != 0 {
+        e |= WIN_POLLERR;
+    }
+    if l & libc::POLLHUP != 0 {
+        e |= WIN_POLLHUP;
+    }
+    if l & libc::POLLNVAL != 0 {
+        e |= WIN_POLLNVAL;
+    }
+    e
+}
 
 // WSA event constants
 const WSA_INVALID_EVENT: usize = 0;
@@ -174,9 +230,39 @@ fn events() -> &'static Mutex<HashMap<usize, EventState>> {
     EVENTS.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-static EVENT_ASSOC: OnceLock<Mutex<HashMap<usize, (usize, i32)>>> = OnceLock::new();
-fn event_assoc() -> &'static Mutex<HashMap<usize, (usize, i32)>> {
+/// Socket → (événement, masque FD_*, FD_WRITE/FD_CONNECT armés). Sous
+/// Windows FD_WRITE et FD_CONNECT sont signalés une seule fois (après la
+/// connexion ou après un envoi en WSAEWOULDBLOCK), pas à chaque fois que la
+/// socket est écrivable : sinon l'attente ne bloquerait jamais.
+#[derive(Clone, Copy)]
+struct EventAssoc {
+    event: usize,
+    mask: i32,
+    write_armed: bool,
+}
+static EVENT_ASSOC: OnceLock<Mutex<HashMap<usize, EventAssoc>>> = OnceLock::new();
+fn event_assoc() -> &'static Mutex<HashMap<usize, EventAssoc>> {
     EVENT_ASSOC.get_or_init(|| Mutex::new(HashMap::new()))
+}
+/// Réarme FD_WRITE après un envoi refusé (EWOULDBLOCK) sur une socket suivie.
+fn rearm_write(s: usize) {
+    if let Some(a) = lock(event_assoc()).get_mut(&s) {
+        a.write_armed = true;
+    }
+}
+/// Événements poll à surveiller pour une socket associée par WSAEventSelect.
+fn assoc_poll_events(a: &EventAssoc) -> i16 {
+    let mut e = 0i16;
+    if a.mask & (FD_READ | FD_ACCEPT | FD_CLOSE) != 0 {
+        e |= libc::POLLIN;
+    }
+    if a.write_armed && a.mask & (FD_WRITE | FD_CONNECT) != 0 {
+        e |= libc::POLLOUT;
+    }
+    if a.mask & FD_OOB != 0 {
+        e |= libc::POLLPRI;
+    }
+    e
 }
 
 #[repr(C)]
@@ -461,9 +547,14 @@ pub unsafe extern "win64" fn connect(s: usize, name: *const u8, len: i32) -> i32
         len as libc::socklen_t,
     );
     if rc < 0 {
-        set_error(last_error());
+        let e = last_error();
+        if e == libc::EINPROGRESS || e == libc::EWOULDBLOCK {
+            rearm_write(s);
+        }
+        set_error(e);
         SOCKET_ERROR
     } else {
+        rearm_write(s);
         0
     }
 }
@@ -522,8 +613,8 @@ pub unsafe extern "win64" fn accept(s: usize, name: *mut u8, len: *mut i32) -> u
         set_error(last_error());
         return usize::MAX;
     }
+    addr_out(name, n as usize);
     if !len.is_null() {
-        addr_out(name, (*len).max(0) as usize);
         *len = n as i32;
     }
     lock(sockets()).insert(r as usize);
@@ -602,7 +693,11 @@ pub unsafe extern "win64" fn send_to(
         len as libc::socklen_t,
     );
     if r < 0 {
-        set_error(last_error());
+        let e = last_error();
+        if e == libc::EWOULDBLOCK {
+            rearm_write(s);
+        }
+        set_error(e);
         SOCKET_ERROR
     } else {
         r as i32
@@ -646,8 +741,8 @@ pub unsafe extern "win64" fn recv_from(
         set_error(last_error());
         SOCKET_ERROR
     } else {
+        addr_out(name, addrlen as usize);
         if !len.is_null() {
-            addr_out(name, (*len).max(0) as usize);
             *len = addrlen as i32;
         }
         r as i32
@@ -766,6 +861,7 @@ unsafe fn make_addr_a(raw: *mut libc::addrinfo) -> Result<(usize, AddrInfoAlloca
             );
             storage.ss_family = af_out(storage.ss_family as i32) as u16;
             let p = Box::into_raw(storage);
+            addr_out(p as *mut u8, length);
             addrs.push(p as usize);
             p as *mut u8
         };
@@ -858,6 +954,7 @@ unsafe fn make_addr_w(raw: *mut libc::addrinfo) -> Result<(usize, AddrInfoAlloca
             );
             storage.ss_family = af_out(storage.ss_family as i32) as u16;
             let p = Box::into_raw(storage);
+            addr_out(p as *mut u8, length);
             addrs.push(p as usize);
             p as *mut u8
         };
@@ -1092,6 +1189,10 @@ fn translate_sockopt(win_level: i32, win_opt: i32) -> Option<(i32, i32)> {
         (WIN_SOL_SOCKET, WIN_SO_ERROR) => Some((libc::SOL_SOCKET, libc::SO_ERROR)),
         (WIN_SOL_SOCKET, WIN_SO_TYPE) => Some((libc::SOL_SOCKET, libc::SO_TYPE)),
         (WIN_IPPROTO_TCP, WIN_TCP_NODELAY) => Some((libc::IPPROTO_TCP, libc::TCP_NODELAY)),
+        (WIN_IPPROTO_TCP, 3) => Some((libc::IPPROTO_TCP, libc::TCP_KEEPIDLE)),
+        (WIN_IPPROTO_TCP, 4) => Some((libc::IPPROTO_TCP, libc::TCP_MAXSEG)),
+        (WIN_IPPROTO_TCP, 16) => Some((libc::IPPROTO_TCP, libc::TCP_KEEPCNT)),
+        (WIN_IPPROTO_TCP, 17) => Some((libc::IPPROTO_TCP, libc::TCP_KEEPINTVL)),
         // IPPROTO_IP : les numéros Windows diffèrent de ceux de Linux
         // (multidiffusion des jeux en réseau local, découverte d'appareils…).
         (WIN_IPPROTO_IP, opt) => Some((
@@ -1516,7 +1617,7 @@ pub unsafe extern "win64" fn wsa_poll(fds: *mut WsaPollFd, nfds: u32, timeout: i
         let w = std::ptr::read_unaligned(fds.add(i));
         pfds.push(libc::pollfd {
             fd: w.fd as i32,
-            events: w.events,
+            events: poll_events_to_linux(w.events),
             revents: 0,
         });
     }
@@ -1526,7 +1627,7 @@ pub unsafe extern "win64" fn wsa_poll(fds: *mut WsaPollFd, nfds: u32, timeout: i
         return SOCKET_ERROR;
     }
     for (i, pfd) in pfds.iter().enumerate().take(n) {
-        (*fds.add(i)).revents = pfd.revents;
+        (*fds.add(i)).revents = poll_events_to_win(pfd.revents);
     }
     rc
 }
@@ -1553,7 +1654,7 @@ pub unsafe extern "win64" fn inet_pton(af: i32, src: *const u8, dst: *mut u8) ->
         Ok(c) => c,
         Err(_) => return 0,
     };
-    let rc = posix_inet_pton(af, c.as_ptr(), dst as *mut c_void);
+    let rc = posix_inet_pton(af_in(af), c.as_ptr(), dst as *mut c_void);
     if rc < 0 {
         set_error(last_error());
         SOCKET_ERROR
@@ -1572,7 +1673,12 @@ pub unsafe extern "win64" fn inet_ntop(
         set_error(WSAEFAULT);
         return std::ptr::null();
     }
-    let r = posix_inet_ntop(af, src as *const c_void, dst as *mut c_char, size as u32);
+    let r = posix_inet_ntop(
+        af_in(af),
+        src as *const c_void,
+        dst as *mut c_char,
+        size as u32,
+    );
     if r.is_null() {
         set_error(last_error());
         std::ptr::null()
@@ -1593,7 +1699,7 @@ pub unsafe extern "win64" fn inet_ntop_w(
     }
     let mut buf = [0u8; 64];
     let r = posix_inet_ntop(
-        af,
+        af_in(af),
         src as *const c_void,
         buf.as_mut_ptr() as *mut c_char,
         64,
@@ -1628,7 +1734,7 @@ pub unsafe extern "win64" fn inet_pton_w(af: i32, src: *const u16, dst: *mut u8)
         Ok(c) => c,
         Err(_) => return 0,
     };
-    let rc = posix_inet_pton(af, c.as_ptr(), dst as *mut c_void);
+    let rc = posix_inet_pton(af_in(af), c.as_ptr(), dst as *mut c_void);
     if rc < 0 {
         set_error(last_error());
         SOCKET_ERROR
@@ -1944,7 +2050,7 @@ pub unsafe extern "win64" fn get_name_info_w(
     if STARTUPS.load(Ordering::Acquire) == 0 {
         return WSA_NOT_INITIALISED;
     }
-    if sa.is_null() {
+    if sa.is_null() || (!host.is_null() && host_len == 0) || (!serv.is_null() && serv_len == 0) {
         return WSAEFAULT;
     }
     let mut hbuf = vec![0u8; host_len.max(1) as usize];
@@ -2139,7 +2245,7 @@ pub extern "win64" fn wsa_close_event(h: usize) -> i32 {
         unsafe {
             libc::close(st.fd);
         }
-        lock(event_assoc()).retain(|_, (evt, _)| *evt != h);
+        lock(event_assoc()).retain(|_, a| a.event != h);
         1 // TRUE
     } else {
         set_error(WSAEINVAL);
@@ -2193,7 +2299,11 @@ pub unsafe extern "win64" fn wsa_wait_for_multiple_events(
         .map(|i| std::ptr::read_unaligned(events_arr.add(i)))
         .collect();
     let ev = events();
+    // Les n premières entrées sont les eventfd ; ensuite les sockets
+    // associées par WSAEventSelect (elles n'étaient jamais surveillées, donc
+    // l'attente ne se terminait jamais sur l'activité réseau).
     let mut pfds: Vec<libc::pollfd> = Vec::with_capacity(n);
+    let mut owners: Vec<usize> = Vec::new();
     {
         let g = lock(ev);
         for &h in &handles {
@@ -2208,13 +2318,29 @@ pub unsafe extern "win64" fn wsa_wait_for_multiple_events(
                 return WSA_WAIT_FAILED;
             }
         }
+        let assoc = lock(event_assoc());
+        for (i, &h) in handles.iter().enumerate() {
+            for (&sock, a) in assoc.iter() {
+                if a.event == h {
+                    let e = assoc_poll_events(a);
+                    if e != 0 {
+                        pfds.push(libc::pollfd {
+                            fd: sock as i32,
+                            events: e,
+                            revents: 0,
+                        });
+                        owners.push(i);
+                    }
+                }
+            }
+        }
     }
     let ms = if timeout == u32::MAX {
         -1i32
     } else {
         timeout as i32
     };
-    let rc = libc::poll(pfds.as_mut_ptr(), n as libc::nfds_t, ms);
+    let rc = libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, ms);
     if rc < 0 {
         set_error(last_error());
         return WSA_WAIT_FAILED;
@@ -2222,22 +2348,40 @@ pub unsafe extern "win64" fn wsa_wait_for_multiple_events(
     if rc == 0 {
         return WSA_WAIT_TIMEOUT;
     }
+    let mut ready = vec![false; n];
+    let mut by_event = vec![false; n];
+    for (i, p) in pfds.iter().enumerate() {
+        if p.revents == 0 {
+            continue;
+        }
+        if i < n {
+            if p.revents & libc::POLLIN != 0 {
+                ready[i] = true;
+                by_event[i] = true;
+            }
+        } else {
+            let o = owners[i - n];
+            if p.revents & (p.events | libc::POLLHUP | libc::POLLERR | libc::POLLNVAL) != 0 {
+                ready[o] = true;
+            }
+        }
+    }
     if wait_all != 0 {
-        let ready = pfds
-            .iter()
-            .filter(|p| p.revents & libc::POLLIN != 0)
-            .count();
-        if ready < n {
+        if ready.iter().any(|r| !r) {
             return WSA_WAIT_TIMEOUT;
         }
-        for &h in &handles {
-            wsa_reset_event(h);
+        for (i, &h) in handles.iter().enumerate() {
+            if by_event[i] {
+                wsa_reset_event(h);
+            }
         }
         return WSA_WAIT_EVENT_0;
     }
-    for (i, p) in pfds.iter().enumerate() {
-        if p.revents & libc::POLLIN != 0 {
-            wsa_reset_event(handles[i]);
+    for i in 0..n {
+        if ready[i] {
+            if by_event[i] {
+                wsa_reset_event(handles[i]);
+            }
             return WSA_WAIT_EVENT_0 + i as u32;
         }
     }
@@ -2257,7 +2401,18 @@ pub extern "win64" fn wsa_event_select(s: usize, event: usize, mask: i32) -> i32
             libc::fcntl(s as i32, libc::F_SETFL, flags | libc::O_NONBLOCK);
         }
     }
-    lock(event_assoc()).insert(s, (event, mask));
+    if event == 0 || mask == 0 {
+        lock(event_assoc()).remove(&s);
+    } else {
+        lock(event_assoc()).insert(
+            s,
+            EventAssoc {
+                event,
+                mask,
+                write_armed: true,
+            },
+        );
+    }
     0
 }
 
@@ -2278,7 +2433,9 @@ pub unsafe extern "win64" fn wsa_enum_network_events(
         wsa_reset_event(event);
     }
 
-    let mask = lock(event_assoc()).get(&s).map(|(_, m)| *m).unwrap_or(0);
+    let assoc = lock(event_assoc()).get(&s).copied();
+    let mask = assoc.map(|a| a.mask).unwrap_or(0);
+    let write_armed = assoc.map(|a| a.write_armed).unwrap_or(false);
     let mut result = WsaNetworkEvents::default();
 
     // poll the socket to determine which events are ready
@@ -2292,7 +2449,7 @@ pub unsafe extern "win64" fn wsa_enum_network_events(
     if pfd.revents & libc::POLLIN != 0 && mask & FD_READ != 0 {
         result.network_events |= FD_READ;
     }
-    if pfd.revents & libc::POLLOUT != 0 && mask & FD_WRITE != 0 {
+    if pfd.revents & libc::POLLOUT != 0 && mask & FD_WRITE != 0 && write_armed {
         result.network_events |= FD_WRITE;
     }
     if pfd.revents & libc::POLLPRI != 0 && mask & FD_OOB != 0 {
@@ -2301,8 +2458,14 @@ pub unsafe extern "win64" fn wsa_enum_network_events(
     if pfd.revents & libc::POLLIN != 0 && mask & FD_ACCEPT != 0 {
         result.network_events |= FD_ACCEPT;
     }
-    if pfd.revents & libc::POLLOUT != 0 && mask & FD_CONNECT != 0 {
+    if pfd.revents & libc::POLLOUT != 0 && mask & FD_CONNECT != 0 && write_armed {
         result.network_events |= FD_CONNECT;
+    }
+    if result.network_events & (FD_WRITE | FD_CONNECT) != 0 {
+        // Signalés une fois : réarmés par le prochain envoi en WSAEWOULDBLOCK.
+        if let Some(a) = lock(event_assoc()).get_mut(&s) {
+            a.write_armed = false;
+        }
     }
     if pfd.revents & libc::POLLHUP != 0 && mask & FD_CLOSE != 0 {
         result.network_events |= FD_CLOSE;
@@ -2804,6 +2967,112 @@ mod tests {
             let s = crate::dlls::cstr(buf.as_ptr());
             assert_eq!(s, "10.0.0.1");
         }
+    }
+
+    #[test]
+    fn af_inet6_windows_est_traduit() {
+        init();
+        unsafe {
+            // Sans IPv6 sur la machine de test, rien à vérifier.
+            let probe = libc::socket(libc::AF_INET6, libc::SOCK_STREAM, 0);
+            if probe < 0 {
+                cleanup();
+                return;
+            }
+            libc::close(probe);
+            // 23 = AF_INET6 côté Windows ; sans traduction, Linux refuse la famille.
+            let s = socket(WIN_AF_INET6, libc::SOCK_STREAM, 0);
+            assert_ne!(
+                s,
+                usize::MAX,
+                "socket IPv6 refusée : {}",
+                wsa_get_last_error()
+            );
+            let mut sin6 = [0u8; 28];
+            sin6[0] = WIN_AF_INET6 as u8; // famille Windows
+            sin6[23] = 1; // ::1
+            assert_eq!(
+                bind(s, sin6.as_ptr(), 28),
+                0,
+                "bind ::1 : {}",
+                wsa_get_last_error()
+            );
+            let mut out = [0u8; 28];
+            let mut len = 28i32;
+            assert_eq!(get_socket_name(s, out.as_mut_ptr(), &mut len), 0);
+            // La famille rendue au programme est bien celle de Windows.
+            assert_eq!(u16::from_ne_bytes([out[0], out[1]]), WIN_AF_INET6 as u16);
+            closesocket(s);
+            let mut dst = [0u8; 16];
+            assert_eq!(
+                inet_pton(WIN_AF_INET6, b"::1\0".as_ptr(), dst.as_mut_ptr()),
+                1
+            );
+            assert_eq!(dst[15], 1);
+        }
+        cleanup();
+    }
+
+    #[test]
+    fn drapeaux_wsapoll_traduits() {
+        assert_eq!(
+            poll_events_to_linux(WIN_POLLRDNORM) & libc::POLLIN,
+            libc::POLLIN
+        );
+        assert_eq!(
+            poll_events_to_linux(WIN_POLLWRNORM) & libc::POLLOUT,
+            libc::POLLOUT
+        );
+        assert_eq!(poll_events_to_win(libc::POLLIN), WIN_POLLRDNORM);
+        assert_eq!(
+            poll_events_to_win(libc::POLLHUP | libc::POLLERR),
+            WIN_POLLHUP | WIN_POLLERR
+        );
+    }
+
+    #[test]
+    fn wsaeventselect_reveille_sur_connexion_entrante() {
+        init();
+        unsafe {
+            let srv = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            let mut addr: libc::sockaddr_in = std::mem::zeroed();
+            addr.sin_family = libc::AF_INET as u16;
+            addr.sin_addr.s_addr = u32::from_ne_bytes([127, 0, 0, 1]);
+            assert_eq!(
+                bind(srv, &addr as *const _ as *const u8, 16),
+                0,
+                "bind : {}",
+                wsa_get_last_error()
+            );
+            assert_eq!(listen(srv, 4), 0);
+            let mut len = 16i32;
+            assert_eq!(
+                get_socket_name(srv, &mut addr as *mut _ as *mut u8, &mut len),
+                0
+            );
+            let ev = wsa_create_event();
+            assert_ne!(ev, WSA_INVALID_EVENT);
+            assert_eq!(wsa_event_select(srv, ev, FD_ACCEPT | FD_CLOSE), 0);
+            // Rien en attente : l'attente expire.
+            assert_eq!(
+                wsa_wait_for_multiple_events(1, &ev, 0, 10, 0),
+                WSA_WAIT_TIMEOUT
+            );
+            let cli = socket(libc::AF_INET, libc::SOCK_STREAM, 0);
+            assert_eq!(connect(cli, &addr as *const _ as *const u8, 16), 0);
+            // La socket associée signale l'événement sans WSASetEvent.
+            assert_eq!(
+                wsa_wait_for_multiple_events(1, &ev, 0, 2000, 0),
+                WSA_WAIT_EVENT_0
+            );
+            let mut ne = WsaNetworkEvents::default();
+            assert_eq!(wsa_enum_network_events(srv, ev, &mut ne), 0);
+            assert_ne!(ne.network_events & FD_ACCEPT, 0);
+            closesocket(cli);
+            closesocket(srv);
+            wsa_close_event(ev);
+        }
+        cleanup();
     }
 
     #[test]

@@ -122,6 +122,17 @@ fn crash_dir() -> std::path::PathBuf {
     std::path::PathBuf::from("/tmp/winlux-crashes")
 }
 
+/// Dossier des dumps, résolu à l'installation du gestionnaire : dans le
+/// gestionnaire de signal lui-même, `env::var` et `PathBuf` allouent et
+/// peuvent bloquer sur un verrou déjà pris par le thread qui a planté.
+static CRASH_DIR_C: std::sync::OnceLock<std::ffi::CString> = std::sync::OnceLock::new();
+fn crash_dir_c() -> &'static std::ffi::CString {
+    CRASH_DIR_C.get_or_init(|| {
+        std::ffi::CString::new(crash_dir().to_string_lossy().into_owned())
+            .unwrap_or_else(|_| std::ffi::CString::new("/tmp/winlux-crashes").unwrap())
+    })
+}
+
 struct CrashFrame {
     rip: u64,
     rbp: u64,
@@ -210,9 +221,11 @@ extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *
         };
 
         // Write minidump-like crash file
-        let dir = crash_dir();
         let mut path_buf = [0u8; 256];
-        let dir_bytes = dir.to_str().unwrap_or("/tmp/winlux-crashes").as_bytes();
+        let dir_bytes = match CRASH_DIR_C.get() {
+            Some(c) => c.as_bytes(),
+            None => b"/tmp/winlux-crashes".as_slice(),
+        };
         let ts = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_secs())
@@ -272,7 +285,13 @@ extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *
         path_buf[pos] = 0;
 
         // Ensure directory exists (best-effort, may fail in signal handler)
-        let _ = libc::mkdir(dir_bytes.as_ptr() as *const i8, 0o755);
+        let _ = libc::mkdir(
+            match CRASH_DIR_C.get() {
+                Some(c) => c.as_ptr(),
+                None => c"/tmp/winlux-crashes".as_ptr(),
+            },
+            0o755,
+        );
 
         let fd = libc::open(
             path_buf.as_ptr() as *const i8,
@@ -359,6 +378,7 @@ extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *
 }
 
 fn install_crash_handler() {
+    let _ = crash_dir_c();
     unsafe {
         let size = 64 * 1024;
         let stack = libc::mmap(

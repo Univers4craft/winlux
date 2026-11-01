@@ -346,7 +346,12 @@ pub fn allowed(cap: Capability) -> bool {
                 d == Decision::Allow
             }
             Some(None) => false,
-            None => true,
+            // Impossible de demander (pas d'assistant ni d'écran) : ce qui
+            // touche à la vie privée est refusé plutôt qu'accordé en silence.
+            None => !matches!(
+                cap,
+                Capability::Camera | Capability::Microphone | Capability::Screen
+            ),
         },
     };
     lock(&SESSION)
@@ -408,7 +413,15 @@ pub unsafe fn sockaddr_is_local(name: *const u8, len: i32) -> bool {
     match family {
         1 => true,
         2 => bytes.len() >= 8 && bytes[4] == 127,
-        10 | 23 => bytes.len() >= 24 && bytes[8..23].iter().all(|&b| b == 0) && bytes[23] == 1,
+        // ::1, ou 127.x en IPv4 mappé (::ffff:127.0.0.0/8).
+        10 | 23 => {
+            bytes.len() >= 24
+                && ((bytes[8..23].iter().all(|&b| b == 0) && bytes[23] == 1)
+                    || (bytes[8..18].iter().all(|&b| b == 0)
+                        && bytes[18] == 0xff
+                        && bytes[19] == 0xff
+                        && bytes[20] == 127))
+        }
         _ => false,
     }
 }
