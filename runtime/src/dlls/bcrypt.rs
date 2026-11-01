@@ -176,17 +176,62 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
     if hash_handle.is_null() || hash_length(alg).is_none() {
         return 0xC000_000Du32 as i32;
     }
-    // Store the algorithm in the handle
-    *hash_handle = alg | 0x8000_0000;
+    if digest(alg, b"").is_none() {
+        return STATUS_NOT_SUPPORTED;
+    }
+    // Handle = algorithme (16 bits bas) | numéro de séquence (bits hauts).
+    let seq = HASH_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed) & 0xFFFF;
+    let h = alg | (seq << 16) | 0x8000_0000;
+    hash_states()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(h, Vec::new());
+    *hash_handle = h;
     0
 }
 
+// SHA-1/SHA-256 maison, partagés avec winlux-remote.
+#[allow(dead_code)]
+#[path = "../remote/crypto.rs"]
+mod crypto;
+
+const STATUS_NOT_SUPPORTED: i32 = 0xC000_00BBu32 as i32;
+
+/// Données accumulées par handle de hachage (BCryptHashData), jusqu'à
+/// BCryptFinishHash.
+fn hash_states() -> &'static std::sync::Mutex<std::collections::HashMap<usize, Vec<u8>>> {
+    static S: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<usize, Vec<u8>>>> =
+        std::sync::OnceLock::new();
+    S.get_or_init(|| std::sync::Mutex::new(std::collections::HashMap::new()))
+}
+static HASH_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
+
+/// Condensat réel pour les algorithmes implémentés en interne ; `None` pour
+/// les autres (plutôt que des zéros présentés comme un succès).
+fn digest(alg: usize, data: &[u8]) -> Option<Vec<u8>> {
+    match alg {
+        ALG_SHA256 => Some(crypto::sha256(&[data]).to_vec()),
+        ALG_SHA1 => Some(crypto::sha1(&[data]).to_vec()),
+        _ => None,
+    }
+}
+
 pub unsafe extern "win64" fn bcrypt_hash_data(
-    _hash: usize,
-    _input: *const u8,
-    _input_len: u32,
+    hash: usize,
+    input: *const u8,
+    input_len: u32,
     _flags: u32,
 ) -> i32 {
+    let mut states = hash_states().lock().unwrap_or_else(|e| e.into_inner());
+    let Some(buf) = states.get_mut(&hash) else {
+        return 0xC000_0008u32 as i32; // STATUS_INVALID_HANDLE
+    };
+    if input_len > 0 {
+        if input.is_null() {
+            return 0xC000_000Du32 as i32;
+        }
+        buf.extend_from_slice(std::slice::from_raw_parts(input, input_len as usize));
+    }
     0
 }
 
@@ -199,17 +244,30 @@ pub unsafe extern "win64" fn bcrypt_finish_hash(
     if output.is_null() {
         return 0xC000_000Du32 as i32;
     }
-    // Fill with deterministic placeholder bytes (real hashing would need state tracking)
-    let alg = hash & 0x7FFF_FFFF;
+    let alg = hash & 0xFFFF;
     let expected = hash_length(alg).unwrap_or(0);
-    if output_len < expected {
+    if output_len != expected {
         return 0xC000_000Du32 as i32;
     }
-    std::ptr::write_bytes(output, 0, output_len as usize);
+    let data = hash_states()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&hash);
+    let Some(data) = data else {
+        return 0xC000_0008u32 as i32;
+    };
+    let Some(d) = digest(alg, &data) else {
+        return STATUS_NOT_SUPPORTED;
+    };
+    std::ptr::copy_nonoverlapping(d.as_ptr(), output, d.len());
     0
 }
 
-pub unsafe extern "win64" fn bcrypt_destroy_hash(_hash: usize) -> i32 {
+pub unsafe extern "win64" fn bcrypt_destroy_hash(hash: usize) -> i32 {
+    hash_states()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&hash);
     0
 }
 
@@ -226,10 +284,21 @@ pub unsafe extern "win64" fn bcrypt_hash(
         return 0xC000_000Du32 as i32;
     }
     let expected = hash_length(alg).unwrap_or(0);
-    if output_len < expected {
+    if output_len != expected {
         return 0xC000_000Du32 as i32;
     }
-    std::ptr::write_bytes(output, 0, output_len as usize);
+    if _secret_len != 0 {
+        return STATUS_NOT_SUPPORTED; // HMAC non pris en charge
+    }
+    let data: &[u8] = if _input.is_null() || _input_len == 0 {
+        &[]
+    } else {
+        std::slice::from_raw_parts(_input, _input_len as usize)
+    };
+    let Some(d) = digest(alg, data) else {
+        return STATUS_NOT_SUPPORTED;
+    };
+    std::ptr::copy_nonoverlapping(d.as_ptr(), output, d.len());
     0
 }
 

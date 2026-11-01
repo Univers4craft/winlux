@@ -321,6 +321,9 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
         // WM_QUIT (posted par PostQuitMessage) termine la boucle (renvoie 0).
         if let Some(m) = gui::take_message(&q, hwnd, min, max) {
             if m.message == gui::WM_QUIT {
+                // Win32 renseigne le MSG (wParam = code de sortie) avant de
+                // renvoyer 0 : `return msg.wParam` dans l'appli lit cette valeur.
+                write_msg(out, &m);
                 return 0;
             }
             gui::observe_key_message(&m);
@@ -360,9 +363,14 @@ pub unsafe extern "win64" fn peek_message_a(
     if remove & 0x1 != 0 {
         if let Some(m) = gui::take_message(&q, hwnd, min, max) {
             if m.message == gui::WM_QUIT {
-                // PM_REMOVE sur WM_QUIT : on le remet et on renvoie -1 (fin).
+                // Comme Win32 : le MSG est rempli et la fonction renvoie « vrai »
+                // afin que la boucle classique `while (PeekMessage(...)) { if
+                // (msg.message == WM_QUIT) break; }` voie bien WM_QUIT. Le
+                // message reste en tête de file pour qu'un GetMessage ultérieur
+                // termine lui aussi.
+                write_msg(out, &m);
                 gui::prepend_message(&q, m);
-                return -1;
+                return 1;
             }
             gui::observe_key_message(&m);
             write_msg(out, &m);

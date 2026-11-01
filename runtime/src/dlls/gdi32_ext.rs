@@ -188,8 +188,9 @@ pub unsafe extern "win64" fn ext_text_out_a(
     count: u32,
     _dx: *const i32,
 ) -> i32 {
-    let _ = options;
-    if !rect.is_null() {
+    // ETO_OPAQUE (0x2) remplit le rectangle ; ETO_CLIPPED seul ne doit pas
+    // écraser le fond.
+    if !rect.is_null() && options & 0x2 != 0 {
         let r = std::ptr::read_unaligned(rect);
         let bk = gui::dc_bk_color(hdc);
         gui::record(hdc, DrawCmd::FillRect { rect: r, color: bk });
@@ -228,8 +229,9 @@ pub unsafe extern "win64" fn ext_text_out_w(
     count: u32,
     _dx: *const i32,
 ) -> i32 {
-    let _ = options;
-    if !rect.is_null() {
+    // ETO_OPAQUE (0x2) remplit le rectangle ; ETO_CLIPPED seul ne doit pas
+    // écraser le fond.
+    if !rect.is_null() && options & 0x2 != 0 {
         let r = std::ptr::read_unaligned(rect);
         let bk = gui::dc_bk_color(hdc);
         gui::record(hdc, DrawCmd::FillRect { rect: r, color: bk });
@@ -503,10 +505,6 @@ pub extern "win64" fn set_rect_rgn(_rgn: usize, _l: i32, _t: i32, _r: i32, _b: i
 
 // ── Pixel ──────────────────────────────────────────────────────────
 
-pub extern "win64" fn get_pixel(_hdc: usize, _x: i32, _y: i32) -> u32 {
-    0x00FF_FFFF // CLR_INVALID stub → blanc
-}
-
 pub extern "win64" fn set_pixel(hdc: usize, x: i32, y: i32, color: u32) -> u32 {
     let rect = Rect {
         left: x,
@@ -570,12 +568,6 @@ pub extern "win64" fn set_map_mode(_hdc: usize, _mode: i32) -> i32 {
 pub extern "win64" fn get_map_mode(_hdc: usize) -> i32 {
     1
 } // MM_TEXT
-pub extern "win64" fn set_viewport_org_ex(_hdc: usize, _x: i32, _y: i32, _old: usize) -> i32 {
-    1
-}
-pub extern "win64" fn set_window_org_ex(_hdc: usize, _x: i32, _y: i32, _old: usize) -> i32 {
-    1
-}
 pub extern "win64" fn offset_viewport_org_ex(_hdc: usize, _x: i32, _y: i32, _old: usize) -> i32 {
     1
 }
@@ -1161,17 +1153,6 @@ pub extern "win64" fn get_current_object(hdc: usize, obj_type: u32) -> usize {
     }
 }
 
-pub extern "win64" fn get_object_type(obj: usize) -> u32 {
-    if obj == 0 {
-        return 0;
-    }
-    if gui::object_info(obj).is_some() {
-        1
-    } else {
-        0
-    } // OBJ_PEN par défaut
-}
-
 pub extern "win64" fn set_text_align(_hdc: usize, _align: u32) -> u32 {
     0
 }
@@ -1210,21 +1191,6 @@ pub unsafe extern "win64" fn get_text_face_w(hdc: usize, count: i32, buf: *mut u
     std::ptr::copy_nonoverlapping(w.as_ptr(), buf, n);
     *buf.add(n) = 0;
     n as i32
-}
-
-pub unsafe extern "win64" fn get_clip_box(_hdc: usize, rect: *mut Rect) -> i32 {
-    if !rect.is_null() {
-        std::ptr::write(
-            rect,
-            Rect {
-                left: 0,
-                top: 0,
-                right: 1920,
-                bottom: 1080,
-            },
-        );
-    }
-    1 // SIMPLEREGION
 }
 
 pub extern "win64" fn get_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {
@@ -1274,7 +1240,6 @@ pub fn exports() -> crate::dlls::Exports {
         // pas accepter les objets système ni empêcher la libération réelle.
         "CombineRgn" => fn combine_rgn,
         "SetRectRgn" => fn set_rect_rgn,
-        "GetPixel" => fn get_pixel,
         "SetPixel" => fn set_pixel,
         "SetPixelV" => fn set_pixel_v,
         "FillRect" => fn fill_rect,
@@ -1282,8 +1247,6 @@ pub fn exports() -> crate::dlls::Exports {
         "InvertRect" => fn invert_rect,
         "SetMapMode" => fn set_map_mode,
         "GetMapMode" => fn get_map_mode,
-        "SetViewportOrgEx" => fn set_viewport_org_ex,
-        "SetWindowOrgEx" => fn set_window_org_ex,
         "OffsetViewportOrgEx" => fn offset_viewport_org_ex,
         "SetROP2" => fn set_rop2,
         "GetROP2" => fn get_rop2,
@@ -1305,7 +1268,6 @@ pub fn exports() -> crate::dlls::Exports {
         "CreateBrushIndirect" => fn create_brush_indirect,
         "ExtCreatePen" => fn ext_create_pen,
         "GetCurrentObject" => fn get_current_object,
-        "GetObjectType" => fn get_object_type,
         "SetTextAlign" => fn set_text_align,
         "GetTextAlign" => fn get_text_align,
         "SetTextJustification" => fn set_text_justification,
@@ -1313,7 +1275,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GetTextCharacterExtra" => fn get_text_char_extra,
         "GetTextFaceA" => fn get_text_face_a,
         "GetTextFaceW" => fn get_text_face_w,
-        "GetClipBox" => fn get_clip_box,
         "GetClipRgn" => fn get_clip_rgn,
         "GdiFlush" => fn gdi_flush,
         "GdiSetBatchLimit" => fn gdi_set_batch_limit,

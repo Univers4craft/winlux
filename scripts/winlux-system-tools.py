@@ -288,7 +288,7 @@ class Tools(Gtk.Window):
             ("Volume −", ["winlux-control","volume-down"],"winlux-control"),
             (_t("Muet / rétablir"), ["winlux-control","volume-mute"],"winlux-control"),
             ("Volume +", ["winlux-control","volume-up"],"winlux-control"),
-            (_t("Alimentation"), ["winlux-shell-app","settings","0"],"winlux-shell-app")]:
+            (_t("Alimentation"), ["winlux-shell-app","settings","23"],"winlux-shell-app")]:
             self.button(title, lambda command=args: self.command(command), bool(shutil.which(binary)))
         ssid=self.entry(_t("Nom du réseau Wi-Fi à rejoindre"))
         self.button(_t("Se connecter au réseau"),lambda:self.command(["nmcli","--wait","90","device","wifi","connect",ssid.get_text()]) if ssid.get_text() else None,bool(shutil.which("nmcli")))
