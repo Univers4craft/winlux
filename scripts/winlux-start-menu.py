@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+from string import Template
 import subprocess
 import threading
 import gi
@@ -105,6 +106,39 @@ def category(app):
         if key in categories: return label
     return _t("Autres applications")
 
+# Couleurs du menu Démarrer : texte/fond au moins 4,5:1 (WCAG AA) dans les deux
+# thèmes, vérifié par scripts/test-shell-contrast.py.
+PALETTES = {
+    "dark": {"bg": "#242238", "fg": "#f7f5ff", "border": "#6b5f92", "field": "#171624", "dim": "#b8b1d6",
+             "hover": "#433b60", "footer": "#1d1a2d", "accent": "#b19af9", "selected": "#7c4dff", "on_selected": "#ffffff"},
+    "light": {"bg": "#f6f4fc", "fg": "#1f1b2e", "border": "#c9c0e6", "field": "#ffffff", "dim": "#5e5778",
+              "hover": "#e4ddf7", "footer": "#ebe7f6", "accent": "#7c4dff", "selected": "#7c4dff", "on_selected": "#ffffff"},
+}
+MENU_CSS = Template("""
+  #winlux-start { background: $bg; color: $fg; border: 1px solid $border; border-radius: 8px; }
+  #winlux-start box, #winlux-start scrolledwindow, #winlux-start viewport { background: transparent; }
+  #winlux-start label, #winlux-start image, #winlux-start button { color: $fg; text-shadow: none; -gtk-icon-shadow: none; }
+  #winlux-start entry { border-radius: 5px; background: $field; color: $fg; padding: 9px; border: 1px solid $border;
+                        border-bottom: 2px solid $accent; box-shadow: none; }
+  #winlux-start entry image { color: $dim; }
+  #winlux-start entry selection { background: $selected; color: $on_selected; }
+  #winlux-start button { background: transparent; border: none; box-shadow: none; border-radius: 5px; padding: 7px; }
+  #winlux-start button:hover, #winlux-start button:focus { background: $hover; }
+  #winlux-start .heading { font-weight: bold; font-size: 12pt; }
+  #winlux-start .footer { background: $footer; padding: 12px 25px; }
+  #winlux-start .app-name { font-size: 9pt; }
+""")
+
+
+def dark_theme():
+    """Thème sombre demandé : préférence GTK, thème « …-dark » ou GTK_THEME=…:dark."""
+    forced = os.environ.get("GTK_THEME")
+    if forced: return "dark" in forced.casefold()  # GTK ignore alors la préférence
+    settings = Gtk.Settings.get_default()
+    name = (settings.get_property("gtk-theme-name") or "").casefold()
+    return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name
+
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -157,17 +191,14 @@ class Start(Gtk.Application):
         self.window.connect("key-press-event", self.key)
         self.window.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.window.connect("button-press-event", self.outside_click)
-        css = Gtk.CssProvider()
-        css.load_from_data(b"""
-          #winlux-start { background: #242238; color: #f7f5ff; border: 1px solid #6b5f92; border-radius: 8px; }
-          #winlux-start entry { border-radius: 5px; background: #171624; padding: 9px; border-bottom: 2px solid #b19af9; }
-          #winlux-start button { background: transparent; border: none; box-shadow: none; border-radius: 5px; padding: 7px; }
-          #winlux-start button:hover { background: #433b60; }
-          #winlux-start .heading { font-weight: bold; font-size: 12pt; }
-          #winlux-start .footer { background: #1d1a2d; padding: 12px 25px; }
-          #winlux-start .app-name { font-size: 9pt; }
-        """)
-        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.css = Gtk.CssProvider()
+        # Au-dessus du gtk.css utilisateur (winlux-personalize) : le menu garde
+        # sa propre palette, lisible dans les deux thèmes.
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+        settings = Gtk.Settings.get_default()
+        for name in ("gtk-theme-name", "gtk-application-prefer-dark-theme"):
+            settings.connect("notify::" + name, lambda *_: self.apply_theme())
+        self.apply_theme()
         self.window.set_name("winlux-start")
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.window.add(outer)
@@ -199,6 +230,14 @@ class Start(Gtk.Application):
         power.connect("clicked", self.power)
         footer.pack_end(power, False, False, 0)
         outer.pack_end(footer, False, False, 0)
+
+    def apply_theme(self):
+        """Menu clair en thème clair, sombre en thème sombre, comme Windows 11.
+
+        Chaque nœud qui porte du texte ou une icône symbolique reçoit sa couleur :
+        sinon le thème GTK impose la sienne (Adwaita clair : texte gris foncé des
+        boutons et des champs) sur le fond du menu et le texte disparaît."""
+        self.css.load_from_data(MENU_CSS.substitute(PALETTES["dark" if dark_theme() else "light"]).encode())
 
     def hide(self):
         if self.window.has_grab():self.window.grab_remove()

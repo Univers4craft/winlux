@@ -290,8 +290,24 @@ pub fn font_dirs() -> Vec<PathBuf> {
     if let Some(h) = &home {
         dirs.push(h.join(".fonts"));
     }
-    dirs.push(crate::paths::drive_c().join("windows/Fonts"));
+    dirs.extend(windows_font_dirs());
     dirs
+}
+
+/// Dossiers de polices côté Windows : `C:\Windows\Fonts` (installateurs,
+/// msiexec) et le dossier par utilisateur de Windows 10+
+/// (`%LOCALAPPDATA%\Microsoft\Windows\Fonts`). La casse réelle du disque
+/// est respectée (`Windows` ou `windows`).
+pub fn windows_font_dirs() -> Vec<PathBuf> {
+    vec![
+        windows_fonts_dir(),
+        crate::paths::to_linux("C:\\AppData\\Local\\Microsoft\\Windows\\Fonts"),
+    ]
+}
+
+/// `C:\Windows\Fonts` sur le disque Linux.
+pub fn windows_fonts_dir() -> PathBuf {
+    crate::paths::to_linux("C:\\Windows\\Fonts")
 }
 
 fn scan_dir(dir: &Path, depth: u32, out: &mut Vec<FontFace>) {
@@ -732,7 +748,7 @@ pub fn resolve_font_path(name: &str) -> PathBuf {
     if direct.exists() || name.contains(['\\', '/', ':']) {
         return direct;
     }
-    let fonts = crate::paths::drive_c().join("windows/Fonts").join(name);
+    let fonts = windows_fonts_dir().join(name);
     if fonts.exists() {
         fonts
     } else {
