@@ -426,6 +426,10 @@ fn last_component(path: &[u8]) -> &[u8] {
     if path == PC {
         return tr(S_THIS_PC);
     }
+    // Onglet et titre « Corbeille », pas « files ».
+    if path == TRASH {
+        return tr(S_TRASH);
+    }
     if path.len() <= 3 {
         let letter = path.first().copied().unwrap_or(b'C');
         if letter != b'C' && letter != b'Z' {
@@ -2122,6 +2126,8 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
         Glyph::Home
     } else if loc == PC || loc.len() <= 3 {
         Glyph::Computer
+    } else if loc == TRASH {
+        Glyph::Trash
     } else {
         Glyph::Folder
     };
@@ -2136,6 +2142,9 @@ unsafe fn draw_breadcrumb(g: &mut Gfx, a: &Rect, loc: &[u8]) {
         n = 1;
     } else if loc == PC {
         segs[0] = (tr(S_THIS_PC), 0);
+        n = 1;
+    } else if loc == TRASH {
+        segs[0] = (tr(S_TRASH), loc.len());
         n = 1;
     } else {
         segs[0] = (tr(S_THIS_PC), 0);
@@ -2836,6 +2845,7 @@ enum Item {
     CompressZipPw,
     ConnectNet,
     Share,
+    Restore,
 }
 
 fn item_label(i: Item) -> &'static [u8] {
@@ -2874,6 +2884,7 @@ fn item_label(i: Item) -> &'static [u8] {
         Item::Paste => tr(S_PASTE),
         Item::Rename => tr(S_RENAME),
         Item::Delete => tr(S_DELETE),
+        Item::Restore => tr4(&[b"Restaurer", b"Restore", b"Restaurar", b"Wiederherstellen"]),
         Item::Refresh => tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
         Item::Terminal => tr4(&[b"Ouvrir dans le terminal", b"Open in terminal", b"Abrir en el terminal", b"Im Terminal \xF6ffnen"]),
         Item::CopyPath => tr4(&[b"Copier le chemin d'acc\xE8s", b"Copy as path", b"Copiar como ruta de acceso", b"Als Pfad kopieren"]),
@@ -2984,6 +2995,7 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
         ],
         Menu::New => &[Item::NewFolder, Item::NewText],
         Menu::Context { on_item: true, .. } => &[
+            Item::Restore,
             Item::Open,
             Item::OpenWith,
             Item::OpenTab,
@@ -3049,6 +3061,7 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Compress7z => !in_pc && !in_home && formats & 2 != 0,
             Item::CompressTarGz => !in_pc && !in_home && formats & 8 != 0,
             Item::ConnectNet => in_pc,
+            Item::Restore => p.loc.is(TRASH),
             // Fichier seulement : programmes Linux et Windows qui savent l'ouvrir.
             Item::OpenWith => !in_pc && first_sel(p).is_some_and(|i| !p.entries[i].dir),
             // Dossier seulement, et seulement si le partage existe (Samba).
@@ -3189,7 +3202,7 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
             Item::Paste => Some(Glyph::Paste),
             Item::Rename => Some(Glyph::Rename),
             Item::Delete => Some(Glyph::Delete),
-            Item::Refresh => Some(Glyph::Refresh),
+            Item::Refresh | Item::Restore => Some(Glyph::Refresh),
             Item::NewFolder => Some(Glyph::Folder),
             Item::NewText => Some(Glyph::Text),
             Item::Terminal => Some(Glyph::Terminal),
@@ -4459,6 +4472,150 @@ unsafe fn delete_selection() {
     }
 }
 
+const TRASH_INFO: &[u8] = b"C:\\.local\\share\\Trash\\info";
+
+/// Emplacement d'origine (chemin Windows) noté dans une fiche .trashinfo :
+/// %XX décodés, UTF-8 ramené en Windows-1252, dossier personnel en C:.
+unsafe fn trash_origin(info: &[u8], out: &mut [u8; PATH_LEN + NAME_LEN + 2]) -> usize {
+    let mut wide = [0u16; PATH_LEN + NAME_LEN + 2];
+    let h = CreateFileW(wstr(&mut wide, info), 0x8000_0000, 1, core::ptr::null_mut(), 3, 0, core::ptr::null_mut());
+    if h.is_null() || h as isize == -1 {
+        return 0;
+    }
+    let mut buf = [0u8; 2048];
+    let mut got = 0u32;
+    ReadFile(h, buf.as_mut_ptr(), buf.len() as u32, &mut got, core::ptr::null_mut());
+    CloseHandle(h);
+    let text = &buf[..got as usize];
+    let Some(start) = text.windows(5).position(|w| w == b"Path=").map(|k| k + 5) else {
+        return 0;
+    };
+    let line = &text[start..];
+    let line = &line[..line.iter().position(|&c| c == b'\n' || c == b'\r').unwrap_or(line.len())];
+    // %XX → octets UTF-8.
+    let mut utf = [0u8; 1024];
+    let mut un = 0;
+    let mut k = 0;
+    while k < line.len() && un < utf.len() {
+        let hex = |c: u8| (c as char).to_digit(16).map(|d| d as u8);
+        if line[k] == b'%' && k + 2 < line.len() {
+            if let (Some(a), Some(b)) = (hex(line[k + 1]), hex(line[k + 2])) {
+                utf[un] = a * 16 + b;
+                un += 1;
+                k += 3;
+                continue;
+            }
+        }
+        utf[un] = line[k];
+        un += 1;
+        k += 1;
+    }
+    // UTF-8 → Windows-1252 (accents latins), comme les noms de l'Explorateur.
+    let mut linux = [0u8; 1024];
+    let mut ln = 0;
+    let mut k = 0;
+    while k < un {
+        let c = utf[k];
+        let (ch, step) = if c < 0x80 {
+            (c, 1)
+        } else if c & 0xE0 == 0xC0 && k + 1 < un {
+            let code = ((c as u16 & 0x1F) << 6) | (utf[k + 1] as u16 & 0x3F);
+            match ansi_char(code) {
+                Some(b) => (b, 2),
+                None => return 0,
+            }
+        } else {
+            return 0;
+        };
+        linux[ln] = ch;
+        ln += 1;
+        k += step;
+    }
+    let linux = &linux[..ln];
+    let mut home = [0i8; 200];
+    let hn = GetEnvironmentVariableA(c"HOME".as_ptr(), home.as_mut_ptr(), 200) as usize;
+    let home: &[u8] = core::slice::from_raw_parts(home.as_ptr() as *const u8, hn.min(199));
+    let (prefix, rest): (&[u8], &[u8]) = if !home.is_empty() && linux.starts_with(home) && linux.get(home.len()) == Some(&b'/') {
+        (b"C:", &linux[home.len()..])
+    } else {
+        (b"Z:", linux)
+    };
+    let n = prefix.len() + rest.len();
+    if rest.first() != Some(&b'/') || n >= PATH_LEN {
+        return 0;
+    }
+    out[..2].copy_from_slice(prefix);
+    for (d, &c) in out[2..n].iter_mut().zip(rest) {
+        *d = if c == b'/' { b'\\' } else { c };
+    }
+    out[n] = 0;
+    n
+}
+
+/// Corbeille > Restaurer : chaque élément retrouve son dossier d'origine
+/// (recréé au besoin), sous un nom libre si la place est prise, comme Windows.
+unsafe fn restore_selection() {
+    let p = pane();
+    if !p.loc.is(TRASH) {
+        return;
+    }
+    let mut failed = 0u32;
+    for v in 0..p.nview {
+        let i = p.view[v] as usize;
+        if !is_sel(p, i) {
+            continue;
+        }
+        let name = p.entries[i].name();
+        let mut src = [0u8; PATH_LEN + NAME_LEN + 2];
+        let mut info = [0u8; PATH_LEN + NAME_LEN + 2];
+        let mut nm = [0u8; NAME_LEN + 12];
+        nm[..name.len()].copy_from_slice(name);
+        nm[name.len()..name.len() + 10].copy_from_slice(b".trashinfo");
+        let sn = join(&mut src, TRASH, name);
+        let il = join(&mut info, TRASH_INFO, &nm[..name.len() + 10]);
+        let mut original = [0u8; PATH_LEN + NAME_LEN + 2];
+        let on = if sn == 0 || il == 0 { 0 } else { trash_origin(&info[..il], &mut original) };
+        if on == 0 {
+            failed += 1;
+            continue;
+        }
+        let cut = original[..on].iter().rposition(|&c| c == b'\\').unwrap_or(2);
+        let mut wdir = [0u16; PATH_LEN + NAME_LEN + 2];
+        for k in 3..=cut {
+            if k == cut || original[k] == b'\\' {
+                CreateDirectoryW(wstr(&mut wdir, &original[..k]), core::ptr::null_mut());
+            }
+        }
+        let leaf = &original[cut + 1..on];
+        let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
+        let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
+        let dn = if GetFileAttributesW(wstr(&mut wd, &original[..on])) == u32::MAX {
+            dst[..on + 1].copy_from_slice(&original[..on + 1]);
+            on
+        } else {
+            let (base, ext) = match leaf.iter().rposition(|&c| c == b'.') {
+                Some(k) if k > 0 && !p.entries[i].dir => (&leaf[..k], &leaf[k..]),
+                _ => (leaf, &b""[..]),
+            };
+            unique_name(&original[..cut.max(3)], base, ext, &mut dst)
+        };
+        let mut ws = [0u16; PATH_LEN + NAME_LEN + 2];
+        let mut wt = [0u16; PATH_LEN + NAME_LEN + 2];
+        if dn == 0 || MoveFileW(wstr(&mut ws, &src[..sn]), wstr(&mut wt, &dst[..dn])) == 0 {
+            failed += 1;
+            continue;
+        }
+        let mut wi = [0u16; PATH_LEN + NAME_LEN + 2];
+        DeleteFileW(wstr(&mut wi, &info[..il]));
+    }
+    reload(p);
+    if failed > 0 {
+        notify(tr4(&[b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre restaur\xE9s.", b"Some items couldn't be restored.", b"Algunos elementos no se pudieron restaurar.", b"Einige Elemente konnten nicht wiederhergestellt werden."]));
+    } else {
+        notify(tr4(&[b"\xC9l\xE9ments restaur\xE9s \xE0 leur emplacement d'origine.", b"Items restored to their original location.", b"Elementos restaurados a su ubicaci\xF3n original.", b"Elemente am urspr\xFCnglichen Ort wiederhergestellt."]));
+    }
+}
+
 /// Chemin Linux (UTF-8 approché, encodé en %XX pour la Corbeille) d'un chemin Windows.
 #[allow(non_snake_case)]
 fn GetFullPathLinux(win: &[u8], out: &mut [u8; 600]) -> usize {
@@ -4576,6 +4733,7 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             }
         }
         Item::Delete => delete_selection(),
+        Item::Restore => restore_selection(),
         Item::Refresh => reload(p),
         Item::Terminal => open_terminal(),
         Item::CopyPath => {
