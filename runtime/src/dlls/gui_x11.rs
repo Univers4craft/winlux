@@ -518,6 +518,8 @@ pub struct X11Backend {
     /// Table de correspondance keycode X11 → keysyms (lue à la demande).
     keymap: HashMap<u8, Vec<u32>>,
     keyboard: Option<XkbKeyboard>,
+    /// Touche morte en attente (^, ¨…), composée avec la frappe suivante.
+    dead_keys: crate::intl::keyboard::DeadKeys,
     /// Tampon arrière de chaque fenêtre : la peinture y est composée puis
     /// recopiée d'un bloc, sans scintillement, et les Expose sont servis
     /// sans rejouer les commandes GDI.
@@ -586,6 +588,7 @@ impl X11Backend {
             scale,
             keymap: HashMap::new(),
             keyboard: unsafe { XkbKeyboard::connect() },
+            dead_keys: Default::default(),
             back: HashMap::new(),
             overlay: crate::overlay::Overlay::new(),
             x11_dirty: Cell::new(false),
@@ -2081,6 +2084,16 @@ impl X11Backend {
                 } else {
                     sym.map(keysym_to_char).filter(|c| *c != 0)
                 };
+                // Touches mortes : « ^ » puis « e » donnent « ê », comme le
+                // pilote clavier Windows (accent seul suivi de la lettre
+                // quand ils ne se combinent pas).
+                let typed = self
+                    .dead_keys
+                    .feed(sym.unwrap_or(0), ch.and_then(|c| char::from_u32(c as u32)));
+                if let Some(prefix) = typed.prefix {
+                    gui::set_key_prefix(hwnd, vk, lparam, prefix as u16);
+                }
+                let ch = typed.ch.and_then(|c| u16::try_from(c as u32).ok());
                 gui::set_key_char(hwnd, vk, lparam, ch);
                 Some(PendingEvent {
                     hwnd,

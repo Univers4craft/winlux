@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Informations système
+Name[en]=System Information
+Name[es]=Información del sistema
+Name[de]=Systeminformationen
+Comment=Carte mère, processeur, mémoire, disques, carte graphique, réseau, pilotes et version de Winlux
+Comment[en]=Motherboard, processor, memory, disks, graphics, network, drivers and Winlux version
+Comment[es]=Placa base, procesador, memoria, discos, gráficos, red, controladores y versión de Winlux
+Comment[de]=Mainboard, Prozessor, Speicher, Laufwerke, Grafik, Netzwerk, Treiber und Winlux-Version
+Exec=/usr/bin/winlux-shell-app msinfo32
+Icon=computer
+StartupWMClass=winlux-msinfo32
+Terminal=false
+Categories=System;Monitor;
