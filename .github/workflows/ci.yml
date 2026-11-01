@@ -134,6 +134,9 @@ jobs:
       - name: Vérifier la fenêtre UAC (comptes administrateurs, mot de passe, langues)
         run: python3 -B scripts/test-uac.py
 
+      - name: Vérifier « Coller » sur le bureau (couper = déplacer, noms en double)
+        run: python3 -B scripts/test-desktop-paste.py
+
       - name: Vérifier les grandes images X11 en 1080p
         run: |
           sudo apt-get update -q
@@ -180,6 +183,15 @@ jobs:
           sh scripts/test-backup.sh
           sh scripts/test-sessions.sh
           sh scripts/test-remote.sh
+          sh scripts/test-share.sh
+          sh scripts/test-transfer.sh
+
+      - name: Partage face aux clients Windows 11 et macOS (vrai Samba)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q samba smbclient wsdd
+          sudo systemctl stop smbd nmbd wsdd 2>/dev/null || true
+          sudo sh scripts/test-share-clients.sh
 
   # 3. Compile les .exe Windows puis les exécute sous Winlux.
   runtime-tests:
