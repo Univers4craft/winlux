@@ -112,24 +112,6 @@ pub unsafe extern "win64" fn command_line_to_argv_w(
     argv
 }
 
-pub unsafe extern "win64" fn sh_get_folder_path_a(
-    _owner: usize,
-    _csidl: i32,
-    _token: usize,
-    _flags: u32,
-    path: *mut u8,
-) -> i32 {
-    if path.is_null() {
-        return -1;
-    }
-    crate::dlls::put_a(
-        &std::env::var("HOME").unwrap_or_else(|_| "/".into()),
-        path,
-        4096,
-    );
-    0
-}
-
 /// Programme Linux trouvé dans le `PATH`.
 fn which(name: &str) -> Option<PathBuf> {
     crate::launch::which(name)
@@ -542,7 +524,6 @@ pub unsafe extern "win64" fn shell_execute_ex_w(info: *mut ShellExecuteInfo) -> 
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
-        "SHGetFolderPathA"=>fn sh_get_folder_path_a,
         "CommandLineToArgvW"=>fn command_line_to_argv_w,
         "ShellExecuteA"=>fn shell_execute_a,"ShellExecuteW"=>fn shell_execute_w,
         "ShellExecuteExA"=>fn shell_execute_ex_a,"ShellExecuteExW"=>fn shell_execute_ex_w,

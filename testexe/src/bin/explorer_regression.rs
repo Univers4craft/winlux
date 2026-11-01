@@ -62,8 +62,12 @@ mod snip;
 mod store;
 #[path = "../shell/settings_cpu.rs"]
 mod settings_cpu;
+#[path = "../shell/sysmon.rs"]
+mod sysmon;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
+#[path = "../shell/sysinfo.rs"]
+mod sysinfo;
 #[path = "../shell/taskschd.rs"]
 mod taskschd;
 #[path = "../shell/terminal.rs"]

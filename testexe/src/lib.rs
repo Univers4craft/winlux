@@ -672,6 +672,9 @@ extern "system" {
         info: *mut ProcessInformation,
     ) -> i32;
     pub fn GetExitCodeProcess(process: Handle, code: *mut u32) -> i32;
+    pub fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
+    pub fn TerminateProcess(process: Handle, code: u32) -> i32;
+    pub fn SetPriorityClass(process: Handle, class: u32) -> i32;
     pub fn GetCommandLineA() -> *const c_char;
     pub fn GetCommandLineW() -> *const u16;
     pub fn GetModuleHandleA(name: *const c_char) -> Handle;
