@@ -2,6 +2,7 @@
 """Real device state for the native panel; never invent battery/network levels."""
 from pathlib import Path
 import html
+import json
 import re
 import subprocess
 import sys
@@ -51,9 +52,15 @@ directory.mkdir(parents=True, exist_ok=True)
 color = "#e7ddf5"
 if kind == "battery":
     batteries = list(Path("/sys/class/power_supply").glob("BAT*/capacity"))
+    level = None
     if batteries:
-        level = max(0, min(100, int(batteries[0].read_text().strip())))
-        status = (batteries[0].parent / "status").read_text().strip()
+        # Une batterie absente ou en défaut expose parfois un fichier vide ou illisible.
+        try:
+            level = max(0, min(100, int(batteries[0].read_text().strip())))
+            status = (batteries[0].parent / "status").read_text().strip()
+        except (OSError, ValueError):
+            level = None
+    if level is not None:
         body = f'<rect x="3" y="7" width="18" height="11" rx="2" fill="none" stroke="{color}" stroke-width="1.5"/><path d="M22 10v5" stroke="{color}" stroke-width="2"/><rect x="5" y="9" width="{14 * level / 100:.1f}" height="7" fill="{color}"/>'
         tooltip, identity = f"Batterie : {level}% — {status}", f"battery-{level}"
     else:
@@ -61,12 +68,29 @@ if kind == "battery":
         tooltip, identity = _t("Alimentation secteur — aucune batterie exposée par la machine"), "power-ac"
     page = 3
 elif kind == "audio":
-    try:
-        result = subprocess.run(["amixer", "get", "Master"], capture_output=True, text=True, timeout=2)
-        values = re.findall(r"\[(\d+)%\]", result.stdout)
-        level = int(values[-1]) if values else None
-        muted = "[off]" in result.stdout
-    except (OSError, subprocess.TimeoutExpired): level, muted = None, False
+    # Même détection que le panneau Son : PipeWire/PulseAudio (hors puits
+    # factice « auto_null »), puis wpctl, puis ALSA.
+    def run(args):
+        try:
+            result = subprocess.run(args, capture_output=True, text=True, timeout=2)
+            return result.stdout if result.returncode == 0 else ""
+        except (OSError, subprocess.SubprocessError): return ""
+    level, muted = None, False
+    default = run(["pactl", "get-default-sink"]).strip()
+    if default and default != "auto_null":
+        try:
+            for sink in json.loads(run(["pactl", "-f", "json", "list", "sinks"]) or "[]"):
+                if sink.get("name") == default:
+                    level = max([int(str(c.get("value_percent", "0")).rstrip("%")) for c in sink.get("volume", {}).values()] or [0])
+                    muted = bool(sink.get("mute"))
+        except (ValueError, TypeError, AttributeError): pass
+    if level is None:
+        found = re.search(r"Volume:\s*([0-9.]+)", run(["wpctl", "get-volume", "@DEFAULT_AUDIO_SINK@"]))
+        if found: level, muted = round(float(found[1]) * 100), "MUTED" in found.string
+    if level is None:
+        output = run(["amixer", "get", "Master"])
+        values = re.findall(r"\[(\d+)%\]", output)
+        if values: level, muted = int(values[-1]), "[off]" in output
     wave = 0 if level is None or muted or level == 0 else 1 if level < 40 else 2 if level < 75 else 3
     body = f'<path d="M3 9h4l5-5v16l-5-5H3z" fill="{color}"/>'
     if not wave: body += f'<path d="m16 9 6 6m0-6-6 6" stroke="{color}" stroke-width="1.7"/>'
@@ -95,6 +119,7 @@ else:
     raise SystemExit(2)
 icon = directory / (identity + ".svg")
 if not icon.exists(): icon.write_text(f'<svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24">{body}</svg>')
-target = "notifications" if kind == "notifications" else "quick"
-command = "/usr/bin/winlux-popup volume" if kind=="audio" else "/usr/bin/winlux-popup power" if kind=="battery" else f"/usr/bin/winlux-system-tools {target}"
+# Son, alimentation et notifications : panneaux volants ancrés à la barre.
+command = {"audio": "/usr/bin/winlux-popup volume", "battery": "/usr/bin/winlux-popup power",
+           "notifications": "/usr/bin/winlux-popup notifications"}.get(kind, "/usr/bin/winlux-system-tools quick")
 print(f"<img>{icon}</img><tool>{html.escape(tooltip)}</tool><click>{command}</click>")

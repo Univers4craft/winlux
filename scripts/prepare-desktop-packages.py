@@ -15,7 +15,7 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "python3-gi", "gir1.2-gtk-3.0", "network-manager", "network-manager-gnome",
             "bluez", "blueman", "brightnessctl", "flatpak", "gvfs", "gvfs-backends",
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
-            "xfce4-settings", "policykit-1-gnome", "wpasupplicant",
+            "xfce4-settings", "policykit-1-gnome", "pkexec", "wpasupplicant",
             "pciutils", "usbutils", "linux-firmware", "mesa-vulkan-drivers",
             # Polices aux métriques d'Arial, Times New Roman et Courier New :
             # les fenêtres des .exe gardent leur mise en page.

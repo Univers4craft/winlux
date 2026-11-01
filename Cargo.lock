@@ -150,7 +150,7 @@ dependencies = [
 
 [[package]]
 name = "winlux"
-version = "0.1.0"
+version = "0.2.12"
 dependencies = [
  "libc",
  "png",
@@ -159,11 +159,11 @@ dependencies = [
 
 [[package]]
 name = "winlux-testdll"
-version = "0.1.0"
+version = "0.2.12"
 
 [[package]]
 name = "winlux-testexe"
-version = "0.1.0"
+version = "0.2.12"
 
 [[package]]
 name = "x11rb"

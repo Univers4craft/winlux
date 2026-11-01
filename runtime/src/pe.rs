@@ -15,6 +15,8 @@ pub const DIR_IMPORT: usize = 1;
 pub const DIR_BASERELOC: usize = 5;
 pub const DIR_TLS: usize = 9;
 pub const DIR_DELAY_IMPORT: usize = 13;
+pub const DIR_COM_DESCRIPTOR: usize = 14;
+const COMIMAGE_FLAGS_ILONLY: u32 = 1;
 
 pub const SCN_MEM_EXECUTE: u32 = 0x2000_0000;
 pub const SCN_MEM_READ: u32 = 0x4000_0000;
@@ -74,6 +76,10 @@ pub struct PeImage {
     pub stack_commit: u64,
     pub dirs: Vec<DataDir>,
     pub sections: Vec<Section>,
+    /// Assembly .NET « IL seul » au format PE32 (AnyCPU) : comme sous
+    /// Windows 64 bits, elle se charge en tant qu'image mais sans imports,
+    /// relocations ni point d'entrée ; c'est le CLR qui la lit.
+    pub il_only32: bool,
 }
 
 pub fn rd16(b: &[u8], o: usize) -> Option<u16> {
@@ -104,6 +110,16 @@ pub fn peek_subsystem(file: &[u8]) -> Option<u16> {
 
 impl PeImage {
     pub fn parse(file: &[u8]) -> Result<PeImage, PeError> {
+        Self::parse_with(file, false)
+    }
+
+    /// Comme `parse`, en acceptant aussi une assembly .NET IL seul au
+    /// format PE32, que `LoadLibraryEx` charge dans un processus 64 bits.
+    pub fn parse_il_only(file: &[u8]) -> Result<PeImage, PeError> {
+        Self::parse_with(file, true)
+    }
+
+    fn parse_with(file: &[u8], il_only32: bool) -> Result<PeImage, PeError> {
         if file.len() < 0x40 {
             return Err(PeError::TooSmall);
         }
@@ -121,36 +137,50 @@ impl PeImage {
         let characteristics = rd16(file, coff + 18).ok_or(PeError::TooSmall)?;
         let opt = coff + 20;
         let magic = rd16(file, opt).ok_or(PeError::TooSmall)?;
-        if magic == PE32_MAGIC {
-            return Err(PeError::Pe32(machine));
-        }
-        if magic != PE32PLUS_MAGIC {
-            return Err(PeError::Bad("magic de l'en-tête optionnel inconnu"));
-        }
-        if machine != IMAGE_FILE_MACHINE_AMD64 {
-            return Err(PeError::Machine(machine));
-        }
         let g32 = |o: usize| rd32(file, opt + o).ok_or(PeError::Bad("en-tête optionnel tronqué"));
         let g64 = |o: usize| rd64(file, opt + o).ok_or(PeError::Bad("en-tête optionnel tronqué"));
         let g16 = |o: usize| rd16(file, opt + o).ok_or(PeError::Bad("en-tête optionnel tronqué"));
-        let ndirs = (g32(108)? as usize).min(16);
+        let pe32 = magic == PE32_MAGIC;
+        if pe32 && !il_only32 {
+            return Err(PeError::Pe32(machine));
+        }
+        if !pe32 && magic != PE32PLUS_MAGIC {
+            return Err(PeError::Bad("magic de l'en-tête optionnel inconnu"));
+        }
+        if !pe32 && machine != IMAGE_FILE_MACHINE_AMD64 {
+            return Err(PeError::Machine(machine));
+        }
+        // PE32 : champs de 32 bits pour ImageBase et la pile, répertoires 16 octets plus tôt.
+        let (dirs_at, wide) = if pe32 { (92, 0) } else { (108, 8) };
+        let ndirs = (g32(dirs_at)? as usize).min(16);
         let mut dirs = vec![DataDir::default(); 16];
         for (i, d) in dirs.iter_mut().enumerate().take(ndirs) {
-            d.rva = g32(112 + i * 8)?;
-            d.size = g32(116 + i * 8)?;
+            d.rva = g32(dirs_at + 4 + i * 8)?;
+            d.size = g32(dirs_at + 8 + i * 8)?;
+        }
+        if pe32 {
+            let cor = dirs[DIR_COM_DESCRIPTOR];
+            if cor.rva == 0 {
+                return Err(PeError::Pe32(machine));
+            }
         }
         let img = PeImage {
             characteristics,
             entry_rva: g32(16)?,
-            image_base: g64(24)?,
+            image_base: if pe32 { g32(28)? as u64 } else { g64(24)? },
             section_alignment: g32(32)?,
             size_of_image: g32(56)?,
             size_of_headers: g32(60)?,
             subsystem: g16(68)?,
             dll_characteristics: g16(70)?,
-            stack_reserve: g64(72)?,
-            stack_commit: g64(80)?,
+            stack_reserve: if pe32 { g32(72)? as u64 } else { g64(72)? },
+            stack_commit: if pe32 {
+                g32(76)? as u64
+            } else {
+                g64(72 + wide)?
+            },
             dirs,
+            il_only32: pe32,
             sections: {
                 let mut v = Vec::with_capacity(nsections);
                 let mut s = opt + opt_size;
@@ -188,7 +218,25 @@ impl PeImage {
                 // on tolère, la copie sera tronquée à la taille réelle.
             }
         }
+        if img.il_only32
+            && !img
+                .cor_flags(file)
+                .is_some_and(|f| f & COMIMAGE_FLAGS_ILONLY != 0)
+        {
+            return Err(PeError::Pe32(machine));
+        }
         Ok(img)
+    }
+
+    /// Drapeaux de l'en-tête CLR (IMAGE_COR20_HEADER.Flags), lus dans le fichier.
+    fn cor_flags(&self, file: &[u8]) -> Option<u32> {
+        let cor = self.dirs[DIR_COM_DESCRIPTOR];
+        let s = self
+            .sections
+            .iter()
+            .find(|s| cor.rva >= s.rva && cor.rva < s.rva + s.virtual_size.max(s.raw_size))?;
+        let off = (s.raw_ptr + (cor.rva - s.rva)) as usize;
+        rd32(file, off.checked_add(16)?)
     }
 
     pub fn dir(&self, i: usize) -> DataDir {
@@ -233,6 +281,61 @@ mod tests {
         assert_eq!(peek_subsystem(&b), Some(2));
         assert_eq!(peek_subsystem(&b[..0x90]), None);
         assert_eq!(peek_subsystem(b"MZ"), None);
+    }
+
+    /// Assembly .NET AnyCPU minimale : PE32, une section, en-tête CLR.
+    fn il_only_image(cor_flags: u32) -> Vec<u8> {
+        let mut b = vec![0u8; 0x400];
+        b[..2].copy_from_slice(b"MZ");
+        b[0x3c..0x40].copy_from_slice(&0x80u32.to_le_bytes());
+        b[0x80..0x84].copy_from_slice(b"PE\0\0");
+        let coff = 0x84;
+        b[coff..coff + 2].copy_from_slice(&0x14cu16.to_le_bytes());
+        b[coff + 2..coff + 4].copy_from_slice(&1u16.to_le_bytes());
+        b[coff + 16..coff + 18].copy_from_slice(&224u16.to_le_bytes());
+        b[coff + 18..coff + 20].copy_from_slice(&0x2102u16.to_le_bytes());
+        let opt = coff + 20;
+        let put = |b: &mut Vec<u8>, o: usize, v: u32| b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        b[opt..opt + 2].copy_from_slice(&PE32_MAGIC.to_le_bytes());
+        put(&mut b, opt + 16, 0x2000); // point d'entrée (stub mscoree)
+        put(&mut b, opt + 28, 0x40_0000); // ImageBase 32 bits
+        put(&mut b, opt + 32, 0x2000);
+        put(&mut b, opt + 56, 0x4000);
+        put(&mut b, opt + 60, 0x200);
+        put(&mut b, opt + 72, 0x10_0000);
+        put(&mut b, opt + 76, 0x1000);
+        put(&mut b, opt + 92, 16);
+        put(&mut b, opt + 96 + 14 * 8, 0x2008); // en-tête CLR
+        put(&mut b, opt + 100 + 14 * 8, 72);
+        let sec = opt + 224;
+        b[sec..sec + 5].copy_from_slice(b".text");
+        put(&mut b, sec + 8, 0x200);
+        put(&mut b, sec + 12, 0x2000);
+        put(&mut b, sec + 16, 0x200);
+        put(&mut b, sec + 20, 0x200);
+        put(&mut b, sec + 36, 0x6000_0020);
+        put(&mut b, 0x200 + 8, 72);
+        put(&mut b, 0x200 + 8 + 16, cor_flags);
+        b
+    }
+
+    #[test]
+    fn accepte_une_assembly_il_seul_32_bits_pour_le_clr() {
+        let b = il_only_image(1);
+        // Lancée comme programme : refusée (32 bits) ; chargée par LoadLibrary : acceptée.
+        assert!(matches!(PeImage::parse(&b), Err(PeError::Pe32(0x14c))));
+        let img = PeImage::parse_il_only(&b).unwrap();
+        assert!(img.il_only32);
+        assert_eq!(img.image_base, 0x40_0000);
+        assert_eq!(img.stack_reserve, 0x10_0000);
+        assert_eq!(img.stack_commit, 0x1000);
+        assert_eq!(img.dir(DIR_COM_DESCRIPTOR).rva, 0x2008);
+        assert_eq!(img.sections.len(), 1);
+        // Une image PE32 avec du code natif (pas « IL seul ») reste refusée.
+        assert!(matches!(
+            PeImage::parse_il_only(&il_only_image(0)),
+            Err(PeError::Pe32(0x14c))
+        ));
     }
 
     #[test]

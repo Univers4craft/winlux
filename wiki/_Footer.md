@@ -1,0 +1,1 @@
+Winlux · GPL 3 ou ultérieure · Ce wiki est généré depuis le dossier [`wiki/`](https://github.com/Univers4craft/winlux/tree/master/wiki) du dépôt : proposez vos corrections par pull request. Winlux n'est ni affilié à Microsoft, ni approuvé par Microsoft.

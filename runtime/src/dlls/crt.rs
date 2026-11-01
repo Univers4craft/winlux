@@ -349,8 +349,19 @@ pub unsafe extern "win64" fn wcsstr(h: *const u16, n: *const u16) -> *mut u16 {
 
 // ---------- Conversions numériques ----------
 
-/// Analyse un entier et renvoie (valeur absolue, négatif, pointeur de fin).
-unsafe fn parse_int(s: *const u8, base: i32) -> (u64, bool, *const u8) {
+/// Résultat de `parse_int` : valeur absolue, signe, fin, dépassement de u64.
+struct ParsedInt {
+    value: u64,
+    negative: bool,
+    end: *const u8,
+    overflow: bool,
+}
+
+const ERANGE: i32 = 34;
+
+/// Analyse un entier (valeur absolue, négatif, pointeur de fin) et signale
+/// un dépassement de 64 bits au lieu de boucler silencieusement.
+unsafe fn parse_int(s: *const u8, base: i32) -> ParsedInt {
     let mut p = s;
     while *p == b' ' || *p == b'\t' || *p == b'\n' || *p == b'\r' || *p == 0x0b || *p == 0x0c {
         p = p.add(1);
@@ -371,6 +382,7 @@ unsafe fn parse_int(s: *const u8, base: i32) -> (u64, bool, *const u8) {
     }
     let start = p;
     let mut value: u64 = 0;
+    let mut overflow = false;
     loop {
         let c = *p;
         let d = match c {
@@ -382,13 +394,60 @@ unsafe fn parse_int(s: *const u8, base: i32) -> (u64, bool, *const u8) {
         if d >= radix as u32 {
             break;
         }
-        value = value.wrapping_mul(radix as u64).wrapping_add(d as u64);
+        match value
+            .checked_mul(radix as u64)
+            .and_then(|v| v.checked_add(d as u64))
+        {
+            Some(v) => value = v,
+            None => overflow = true,
+        }
         p = p.add(1);
     }
     if p == start {
-        (0, false, s)
+        ParsedInt {
+            value: 0,
+            negative: false,
+            end: s,
+            overflow: false,
+        }
     } else {
-        (value, neg, p)
+        ParsedInt {
+            value,
+            negative: neg,
+            end: p,
+            overflow,
+        }
+    }
+}
+
+/// Valeur signée saturée (strtol/strtoll) : LONG_MAX/LONG_MIN et errno ERANGE
+/// quand le texte dépasse `max` ou `min`.
+fn saturate_signed(parsed: &ParsedInt, max: u64) -> i64 {
+    let limit = if parsed.negative { max + 1 } else { max };
+    if parsed.overflow || parsed.value > limit {
+        crate::dlls::crt_runtime::set_errno_value(ERANGE);
+        if parsed.negative {
+            -(max as i64) - 1
+        } else {
+            max as i64
+        }
+    } else if parsed.negative {
+        (parsed.value as i64).wrapping_neg()
+    } else {
+        parsed.value as i64
+    }
+}
+
+/// Valeur non signée saturée (strtoul/strtoull) : ULONG_MAX et errno ERANGE
+/// en cas de dépassement ; un signe moins négative la valeur modulo 2^n.
+fn saturate_unsigned(parsed: &ParsedInt, max: u64) -> u64 {
+    if parsed.overflow || parsed.value > max {
+        crate::dlls::crt_runtime::set_errno_value(ERANGE);
+        max
+    } else if parsed.negative {
+        parsed.value.wrapping_neg() & max
+    } else {
+        parsed.value
     }
 }
 unsafe fn set_end(end: *mut *mut u8, p: *const u8) {
@@ -397,54 +456,47 @@ unsafe fn set_end(end: *mut *mut u8, p: *const u8) {
     }
 }
 pub unsafe extern "win64" fn atoi(s: *const u8) -> i32 {
-    let (v, n, _) = parse_int(s, 10);
-    if n {
-        -(v as i64) as i32
+    let p = parse_int(s, 10);
+    if p.negative {
+        (p.value as i64).wrapping_neg() as i32
     } else {
-        v as i32
+        p.value as i32
     }
 }
 pub unsafe extern "win64" fn atol(s: *const u8) -> i32 {
     atoi(s)
 }
 pub unsafe extern "win64" fn atoll(s: *const u8) -> i64 {
-    let (v, n, _) = parse_int(s, 10);
-    if n {
-        -(v as i64)
+    let p = parse_int(s, 10);
+    if p.negative {
+        (p.value as i64).wrapping_neg()
     } else {
-        v as i64
+        p.value as i64
     }
 }
 pub unsafe extern "win64" fn ato64(s: *const u8) -> i64 {
     atoll(s)
 }
+/// strtol : `long` est 32 bits dans la CRT Windows.
 pub unsafe extern "win64" fn strtol(s: *const u8, end: *mut *mut u8, base: i32) -> i32 {
-    let (v, n, p) = parse_int(s, base);
-    set_end(end, p);
-    if n {
-        -(v as i64) as i32
-    } else {
-        v as i32
-    }
+    let p = parse_int(s, base);
+    set_end(end, p.end);
+    saturate_signed(&p, i32::MAX as u64) as i32
 }
 pub unsafe extern "win64" fn strtoul(s: *const u8, end: *mut *mut u8, base: i32) -> u32 {
-    let (v, _, p) = parse_int(s, base);
-    set_end(end, p);
-    v as u32
+    let p = parse_int(s, base);
+    set_end(end, p.end);
+    saturate_unsigned(&p, u32::MAX as u64) as u32
 }
 pub unsafe extern "win64" fn strtoll(s: *const u8, end: *mut *mut u8, base: i32) -> i64 {
-    let (v, n, p) = parse_int(s, base);
-    set_end(end, p);
-    if n {
-        -(v as i64)
-    } else {
-        v as i64
-    }
+    let p = parse_int(s, base);
+    set_end(end, p.end);
+    saturate_signed(&p, i64::MAX as u64)
 }
 pub unsafe extern "win64" fn strtoull(s: *const u8, end: *mut *mut u8, base: i32) -> u64 {
-    let (v, _, p) = parse_int(s, base);
-    set_end(end, p);
-    v
+    let p = parse_int(s, base);
+    set_end(end, p.end);
+    saturate_unsigned(&p, u64::MAX)
 }
 pub unsafe extern "win64" fn strtod(s: *const u8, end: *mut *mut u8) -> f64 {
     let mut p = s;
@@ -860,7 +912,7 @@ crate::varargs_thunk!(vsnprintf_c99_thunk => imp_vsnprintf_c99);
 // ---------- Variantes larges (wchar_t) ----------
 
 /// Formate une chaîne de format large en UTF-16 via le moteur étroit.
-unsafe fn format_wide(fmt: *const u16, va: &mut crate::thunks::VaList) -> Vec<u16> {
+pub(crate) unsafe fn format_wide(fmt: *const u16, va: &mut crate::thunks::VaList) -> Vec<u16> {
     let narrow = {
         let n = crate::printf::wide_len(fmt);
         let text = String::from_utf16_lossy(std::slice::from_raw_parts(fmt, n));
@@ -946,6 +998,41 @@ unsafe extern "win64" fn imp_snwprintf_c99(args: *const u64) -> i32 {
     let (_, len) = write_limited_w(dst, size, &w);
     len as i32
 }
+/// `swprintf`/`_swprintf` de msvcrt : forme historique sans taille,
+/// `swprintf(buf, fmt, ...)`. La forme C99 avec taille est `_swprintf_c`
+/// (ou l'inline swprintf des en-têtes UCRT, qui passe par
+/// `__stdio_common_vswprintf`).
+unsafe extern "win64" fn imp_swprintf_legacy(args: *const u64) -> i32 {
+    let mut v = crate::thunks::VaList::new(args);
+    let dst = v.next_u64() as *mut u16;
+    let fmt = v.next_ptr::<u16>();
+    let w = format_wide(fmt, &mut v);
+    if dst.is_null() {
+        return -1;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), dst, w.len());
+    *dst.add(w.len()) = 0;
+    w.len() as i32
+}
+/// `swprintf_s(buf, count, fmt, ...)` : -1 et chaîne vide si le résultat ne
+/// tient pas (avec le terminateur) dans `count` caractères.
+unsafe extern "win64" fn imp_swprintf_s(args: *const u64) -> i32 {
+    let mut v = crate::thunks::VaList::new(args);
+    let dst = v.next_u64() as *mut u16;
+    let size = v.next_u64() as usize;
+    let fmt = v.next_ptr::<u16>();
+    let w = format_wide(fmt, &mut v);
+    if dst.is_null() || size == 0 {
+        return -1;
+    }
+    if w.len() >= size {
+        *dst = 0;
+        return -1;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), dst, w.len());
+    *dst.add(w.len()) = 0;
+    w.len() as i32
+}
 unsafe extern "win64" fn imp_snwprintf_s(args: *const u64) -> i32 {
     let mut v = crate::thunks::VaList::new(args);
     let dst = v.next_u64() as *mut u16;
@@ -980,6 +1067,8 @@ unsafe extern "win64" fn imp_vsnwprintf(args: *const u64) -> i32 {
 crate::varargs_thunk!(snwprintf_thunk => imp_snwprintf);
 crate::varargs_thunk!(snwprintf_c99_thunk => imp_snwprintf_c99);
 crate::varargs_thunk!(snwprintf_s_thunk => imp_snwprintf_s);
+crate::varargs_thunk!(swprintf_legacy_thunk => imp_swprintf_legacy);
+crate::varargs_thunk!(swprintf_s_thunk => imp_swprintf_s);
 crate::varargs_thunk!(vsnwprintf_thunk => imp_vsnwprintf);
 
 pub fn exports() -> crate::dlls::Exports {
@@ -1012,7 +1101,8 @@ pub fn exports() -> crate::dlls::Exports {
         "_snprintf"=>fn snprintf_thunk,"snprintf"=>fn snprintf_c99_thunk,"_snprintf_s"=>fn snprintf_s_thunk,
         "_vsnprintf"=>fn vsnprintf_thunk,"vsnprintf"=>fn vsnprintf_c99_thunk,
         "_itow"=>fn itow,"_ltow"=>fn itow,"_i64tow"=>fn i64tow,"_ui64tow"=>fn ui64tow,"_ultow"=>fn ultow,
-        "_snwprintf"=>fn snwprintf_thunk,"swprintf"=>fn snwprintf_c99_thunk,"_snwprintf_s"=>fn snwprintf_s_thunk,
+        "_snwprintf"=>fn snwprintf_thunk,"swprintf"=>fn swprintf_legacy_thunk,"_swprintf"=>fn swprintf_legacy_thunk,
+        "_swprintf_c"=>fn snwprintf_c99_thunk,"swprintf_s"=>fn swprintf_s_thunk,"_snwprintf_s"=>fn snwprintf_s_thunk,
         "_vsnwprintf"=>fn vsnwprintf_thunk,
     }
 }
@@ -1025,6 +1115,87 @@ mod tests {
         let mut v = s.as_bytes().to_vec();
         v.push(0);
         v
+    }
+
+    fn errno_value() -> i32 {
+        unsafe { *crate::dlls::crt_runtime::errno() }
+    }
+
+    #[test]
+    fn strtol_sature_et_positionne_erange() {
+        unsafe {
+            let mut end: *mut u8 = std::ptr::null_mut();
+            crate::dlls::crt_runtime::set_errno_value(0);
+            let s = cs("2147483648");
+            assert_eq!(strtol(s.as_ptr(), &mut end, 10), i32::MAX);
+            assert_eq!(errno_value(), 34);
+            assert_eq!(end as usize, s.as_ptr() as usize + 10);
+            crate::dlls::crt_runtime::set_errno_value(0);
+            let s = cs("-2147483649");
+            assert_eq!(strtol(s.as_ptr(), &mut end, 10), i32::MIN);
+            assert_eq!(errno_value(), 34);
+            crate::dlls::crt_runtime::set_errno_value(0);
+            let s = cs("-2147483648");
+            assert_eq!(strtol(s.as_ptr(), &mut end, 10), i32::MIN);
+            assert_eq!(errno_value(), 0);
+            let s = cs("4294967296");
+            assert_eq!(strtoul(s.as_ptr(), &mut end, 10), u32::MAX);
+            assert_eq!(errno_value(), 34);
+            crate::dlls::crt_runtime::set_errno_value(0);
+            let s = cs("99999999999999999999");
+            assert_eq!(strtoll(s.as_ptr(), &mut end, 10), i64::MAX);
+            assert_eq!(errno_value(), 34);
+            crate::dlls::crt_runtime::set_errno_value(0);
+            let s = cs("-99999999999999999999");
+            assert_eq!(strtoll(s.as_ptr(), &mut end, 10), i64::MIN);
+            assert_eq!(strtoull(s.as_ptr(), &mut end, 10), u64::MAX);
+            crate::dlls::crt_runtime::set_errno_value(0);
+            let s = cs("-1");
+            assert_eq!(strtoul(s.as_ptr(), &mut end, 10), u32::MAX);
+            assert_eq!(errno_value(), 0);
+            let s = cs("0x7fffffff fin");
+            assert_eq!(strtol(s.as_ptr(), &mut end, 0), i32::MAX);
+            assert_eq!(end as usize, s.as_ptr() as usize + 10);
+            assert_eq!(errno_value(), 0);
+        }
+    }
+
+    #[test]
+    fn swprintf_legacy_et_swprintf_s_suivent_msvc() {
+        let fmt: Vec<u16> = "%d-%s\0".encode_utf16().collect();
+        let arg: Vec<u16> = "ok\0".encode_utf16().collect();
+        let mut out = [0xffffu16; 16];
+        unsafe {
+            // swprintf(buf, fmt, …) sans taille.
+            let args = [
+                out.as_mut_ptr() as u64,
+                fmt.as_ptr() as u64,
+                7,
+                arg.as_ptr() as u64,
+            ];
+            assert_eq!(imp_swprintf_legacy(args.as_ptr()), 4);
+            assert_eq!(String::from_utf16(&out[..4]).unwrap(), "7-ok");
+            assert_eq!(out[4], 0);
+            // swprintf_s(buf, count, fmt, …) : -1 et chaîne vide si trop long.
+            let args = [
+                out.as_mut_ptr() as u64,
+                4,
+                fmt.as_ptr() as u64,
+                7,
+                arg.as_ptr() as u64,
+            ];
+            assert_eq!(imp_swprintf_s(args.as_ptr()), -1);
+            assert_eq!(out[0], 0);
+            let args = [
+                out.as_mut_ptr() as u64,
+                5,
+                fmt.as_ptr() as u64,
+                7,
+                arg.as_ptr() as u64,
+            ];
+            assert_eq!(imp_swprintf_s(args.as_ptr()), 4);
+            assert_eq!(String::from_utf16(&out[..4]).unwrap(), "7-ok");
+        }
     }
 
     #[test]

@@ -288,16 +288,29 @@ fn element_size_for_vt(vt: u16) -> u32 {
     }
 }
 
+/// Taille maximale des données d'un SAFEARRAY (1 Gio).
+const MAX_SAFEARRAY_BYTES: usize = 1 << 30;
+
 pub unsafe extern "win64" fn safe_array_create(vt: u16, dims: u32, bounds_ptr: usize) -> usize {
-    if dims == 0 || bounds_ptr == 0 {
+    // `cDims` est un USHORT côté Windows ; le produit des dimensions est
+    // calculé sans débordement et plafonné à 1 Gio (échec = NULL, comme
+    // Windows en cas de mémoire insuffisante).
+    if dims == 0 || dims > 0xFFFF || bounds_ptr == 0 {
         return 0;
     }
     let bounds_slice =
         std::slice::from_raw_parts(bounds_ptr as *const SafeArrayBound, dims as usize);
     let bounds: Vec<SafeArrayBound> = bounds_slice.to_vec();
     let elem_size = element_size_for_vt(vt);
-    let total_elements: usize = bounds.iter().map(|b| b.elements as usize).product();
-    let data_size = total_elements * elem_size as usize;
+    let total_elements = bounds
+        .iter()
+        .try_fold(1usize, |acc, b| acc.checked_mul(b.elements as usize));
+    let Some(data_size) = total_elements
+        .and_then(|n| n.checked_mul(elem_size as usize))
+        .filter(|&n| n <= MAX_SAFEARRAY_BYTES)
+    else {
+        return 0;
+    };
     let data = vec![0u8; data_size];
 
     let inner = Box::new(SafeArrayInner {
@@ -319,7 +332,12 @@ pub unsafe extern "win64" fn safe_array_create_vector(vt: u16, lower: i32, count
         lower_bound: lower,
     };
     let elem_size = element_size_for_vt(vt);
-    let data_size = count as usize * elem_size as usize;
+    let Some(data_size) = (count as usize)
+        .checked_mul(elem_size as usize)
+        .filter(|&n| n <= MAX_SAFEARRAY_BYTES)
+    else {
+        return 0;
+    };
     let data = vec![0u8; data_size];
 
     let inner = Box::new(SafeArrayInner {

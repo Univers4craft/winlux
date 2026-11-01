@@ -9,6 +9,7 @@ mod clr;
 mod cpu;
 mod crash;
 mod diskimage;
+mod display;
 mod dlls;
 mod firewall;
 mod gamemode;
@@ -22,6 +23,7 @@ mod managed;
 mod mounts;
 mod msi;
 mod netdrive;
+mod netports;
 mod overlay;
 mod paths;
 mod pe;
@@ -30,6 +32,7 @@ mod power;
 mod printf;
 mod process;
 mod profiles;
+mod proxy;
 pub mod quality;
 mod registry;
 mod setup;
@@ -86,6 +89,10 @@ fn main() {
     }
     if exe == "--clipboard-bridge" {
         std::process::exit(clipbridge::run());
+    }
+    if exe == "--display" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(display::main(&rest));
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());

@@ -58,8 +58,10 @@ pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
 pub mod mmdevapi;
+pub mod monitors;
 pub mod mscoree;
 pub mod msvcrt;
+pub mod nls;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ole32;
@@ -80,6 +82,7 @@ pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
 pub mod taskschd;
+pub mod threadpool;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
@@ -185,6 +188,10 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_ext::kernel32_exports());
                     // Langue, pages de code et heure : priment sur les anciennes versions.
                     e.extend(crate::intl::api::kernel32_exports());
+                    // nls couvre les LCTYPE lus par la globalisation NLS de .NET
+                    // (formats monétaires, signe négatif…) : il passe après intl.
+                    e.extend(nls::exports());
+                    e.extend(threadpool::exports());
                     e
                 },
                 handle: fake_module(),
@@ -213,8 +220,20 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "user32",
                 exports: {
+                    // user32_ext contient surtout des bouchons : il ne doit
+                    // compléter user32 que pour les noms absents (sinon ses
+                    // stubs écrasaient GetParent, SetCapture, FindWindow,
+                    // SetWindowLongPtr(GWLP_WNDPROC)…). Quelques fonctions y
+                    // sont meilleures que celles de user32 : elles gagnent.
                     let mut e = user32::exports();
-                    e.extend(user32_ext::exports());
+                    for (name, addr) in user32_ext::exports() {
+                        let ext_wins = matches!(name, "GetKeyboardLayoutNameA");
+                        if ext_wins {
+                            e.insert(name, addr);
+                        } else {
+                            e.entry(name).or_insert(addr);
+                        }
+                    }
                     e.extend(clipboard::exports());
                     e.extend(crate::intl::api::user32_exports());
                     e
@@ -530,6 +549,11 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-core-com-l1-") {
         return "ole32".into();
     }
+    // Windows Runtime (RoInitialize...) : servi par notre ole32, avant la
+    // règle générale api-ms-win-core-* → kernel32.
+    if base.starts_with("api-ms-win-core-winrt-") {
+        return "ole32".into();
+    }
     if base.starts_with("api-ms-win-core-localregistry-l1-") {
         return "advapi32".into();
     }
@@ -553,9 +577,6 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("api-ms-win-eventing-provider-l1-") {
         return "advapi32".into();
-    }
-    if base.starts_with("api-ms-win-core-winrt-") {
-        return "ole32".into();
     }
     if base.starts_with("api-ms-win-core-path-l1-") {
         return "kernel32".into();
@@ -744,9 +765,58 @@ pub unsafe fn put_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
     w.len() as u32
 }
 
+/// Copie tronquante façon `GetWindowTextA` : le tampon de `cap` caractères
+/// reçoit au plus `cap - 1` caractères, est toujours terminé par un NUL, et
+/// la fonction renvoie le nombre de caractères copiés (0 si `cap` est nul).
+///
+/// # Sécurité
+/// `buf` doit pointer sur `cap` octets inscriptibles (ou être nul).
+pub unsafe fn put_text_a(s: &str, buf: *mut u8, cap: u32) -> u32 {
+    if buf.is_null() || cap == 0 {
+        return 0;
+    }
+    let b = s.as_bytes();
+    let n = b.len().min(cap as usize - 1);
+    std::ptr::copy_nonoverlapping(b.as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    n as u32
+}
+
+/// Variante large de [`put_text_a`] (`GetWindowTextW`, `GetClassNameW`…).
+///
+/// # Sécurité
+/// `buf` doit pointer sur `cap` mots de 16 bits inscriptibles (ou être nul).
+pub unsafe fn put_text_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
+    if buf.is_null() || cap == 0 {
+        return 0;
+    }
+    let w: Vec<u16> = s.encode_utf16().collect();
+    let n = w.len().min(cap as usize - 1);
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    n as u32
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{lookup, normalize};
+    use super::{lookup, normalize, put_text_a, put_text_w};
+
+    #[test]
+    fn put_text_tronque_et_termine_toujours_par_nul() {
+        let mut a = [0xAAu8; 4];
+        assert_eq!(unsafe { put_text_a("Bonjour", a.as_mut_ptr(), 4) }, 3);
+        assert_eq!(&a, b"Bon\0");
+        let mut a = [0xAAu8; 16];
+        assert_eq!(unsafe { put_text_a("Bonjour", a.as_mut_ptr(), 16) }, 7);
+        assert_eq!(&a[..8], b"Bonjour\0");
+        assert_eq!(unsafe { put_text_a("x", a.as_mut_ptr(), 0) }, 0);
+        assert_eq!(unsafe { put_text_a("x", std::ptr::null_mut(), 4) }, 0);
+        let mut w = [0xAAAAu16; 3];
+        assert_eq!(unsafe { put_text_w("été", w.as_mut_ptr(), 3) }, 2);
+        assert_eq!(w, ['é' as u16, 't' as u16, 0]);
+        assert_eq!(unsafe { put_text_w("", w.as_mut_ptr(), 1) }, 0);
+        assert_eq!(w[0], 0);
+    }
 
     #[test]
     fn normalise_les_alias_de_dll() {
@@ -769,6 +839,7 @@ mod tests {
                 "RegOpenKeyExW",
             ),
             ("api-ms-win-core-com-l1-1-0.dll", "ole32", "CoInitializeEx"),
+            ("api-ms-win-core-winrt-l1-1-0.dll", "ole32", "RoInitialize"),
             (
                 "api-ms-win-core-rtlsupport-l1-1-0.dll",
                 "ntdll",

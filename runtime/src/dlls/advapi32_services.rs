@@ -610,7 +610,10 @@ pub unsafe extern "win64" fn delete_service(service: usize) -> i32 {
         return fail(1072);
     }
     let sub = std::ffi::CString::new(reg_path(&name)).unwrap();
-    let rc = crate::dlls::advapi32::reg_delete_key_a(HKEY_LOCAL_MACHINE, sub.as_ptr() as *const u8);
+    // La clé du service a des sous-clés (Parameters…) : RegDeleteKey n'est
+    // pas récursif et échouait avec ERROR_ACCESS_DENIED.
+    let rc =
+        crate::dlls::advapi32::reg_delete_tree_a(HKEY_LOCAL_MACHINE, sub.as_ptr() as *const u8);
     if rc != 0 && rc != 2 {
         crate::process::set_last_error(rc as u32);
         return 0;

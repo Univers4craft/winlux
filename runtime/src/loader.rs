@@ -87,7 +87,8 @@ impl Module {
         names
     }
     pub fn entry(&self) -> Option<usize> {
-        (self.pe.entry_rva != 0).then(|| self.base + self.pe.entry_rva as usize)
+        (self.pe.entry_rva != 0 && !self.pe.il_only32)
+            .then(|| self.base + self.pe.entry_rva as usize)
     }
     pub fn contains(&self, addr: usize) -> bool {
         addr >= self.base && addr < self.base + self.size
@@ -234,20 +235,89 @@ unsafe fn map_aligned(size: usize) -> Option<usize> {
     Some(base)
 }
 
+/// Verrou de chargement, réentrant pour le même thread : deux threads qui
+/// appellent LoadLibrary en même temps sont sérialisés (comme par le verrou
+/// du chargeur Windows), mais un module chargé depuis la résolution des
+/// imports ou depuis DllMain reprend le verrou sans s'interbloquer.
+struct LoadLock {
+    state: Mutex<(Option<std::thread::ThreadId>, usize)>,
+    released: std::sync::Condvar,
+}
+static LOAD_LOCK: LoadLock = LoadLock {
+    state: Mutex::new((None, 0)),
+    released: std::sync::Condvar::new(),
+};
+struct LoadGuard;
+impl Drop for LoadGuard {
+    fn drop(&mut self) {
+        let mut s = LOAD_LOCK
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        s.1 -= 1;
+        if s.1 == 0 {
+            s.0 = None;
+            LOAD_LOCK.released.notify_all();
+        }
+    }
+}
+fn load_lock() -> LoadGuard {
+    let me = std::thread::current().id();
+    let mut s = LOAD_LOCK
+        .state
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    while s.0.is_some_and(|owner| owner != me) {
+        s = LOAD_LOCK
+            .released
+            .wait(s)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
+    s.0 = Some(me);
+    s.1 += 1;
+    LoadGuard
+}
+
 /// Charge un module et toutes ses dépendances. Renvoie l'index dans MODULES.
 pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
+    let _serialized = load_lock();
     if let Some(existing) = find_module_by_path(path) {
         increment_ref(existing.base);
         return Ok(existing);
     }
+    let m = load_unlocked(path, force_reloc)?;
+    // Une liaison qui échoue (import introuvable, protection impossible) ne
+    // laisse pas un module à moitié lié dans la liste : GetModuleHandle ne
+    // doit pas le trouver et un nouveau LoadLibrary doit réessayer.
+    let linked = if m.pe.il_only32 {
+        protect(&m)
+    } else {
+        resolve_imports(&m).and_then(|()| protect(&m))
+    };
+    if let Err(e) = linked {
+        remove_module(m.base);
+        unsafe {
+            libc::munmap(m.base as *mut libc::c_void, m.size);
+        }
+        return Err(e);
+    }
+    Ok(m)
+}
+
+/// Projette l'image et l'ajoute à MODULES ; la liaison (imports, protections)
+/// reste à faire par `load`.
+fn load_unlocked(path: &Path, force_reloc: bool) -> Result<Module, String> {
     let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
-    let pe = PeImage::parse(&file).map_err(|e| format!("{} : {e}", path.display()))?;
+    let pe = PeImage::parse_il_only(&file).map_err(|e| format!("{} : {e}", path.display()))?;
     let size = round_up(pe.size_of_image as usize, PAGE);
     let relocs_stripped = pe.characteristics & 0x0001 != 0;
     let has_relocs = pe.dir(DIR_BASERELOC).size != 0;
 
     let base = unsafe {
-        let preferred = if force_reloc && has_relocs {
+        let preferred = if pe.il_only32 {
+            // Assembly IL seul : n'importe où, comme le fait Windows 64 bits.
+            Some(map_aligned(size).ok_or("mémoire insuffisante pour l'image")?)
+        } else if force_reloc && has_relocs {
             None
         } else {
             map_at(pe.image_base as usize, size, true)
@@ -312,6 +382,12 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
         refcount: 1,
     };
 
+    if m.pe.il_only32 {
+        // Ni relocations, ni imports (mscoree), ni point d'entrée : le CLR
+        // lit les métadonnées directement dans l'image projetée.
+        MODULES.lock().unwrap().push(m.clone());
+        return Ok(m);
+    }
     let delta = base.wrapping_sub(m.pe.image_base as usize);
     if delta != 0 {
         apply_relocations(&m, delta)?;
@@ -324,8 +400,6 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
     m.tls = read_tls(&m);
 
     MODULES.lock().unwrap().push(m.clone());
-    resolve_imports(&m)?;
-    protect(&m)?;
     Ok(m)
 }
 
@@ -889,6 +963,7 @@ mod tests {
                 stack_commit: 0,
                 dirs,
                 sections: vec![],
+                il_only32: false,
             },
             tls: None,
             initialized: false,
@@ -919,6 +994,7 @@ mod tests {
                 stack_commit: 0,
                 dirs: vec![DataDir::default(); 16],
                 sections: vec![],
+                il_only32: false,
             },
             tls: None,
             initialized: false,
@@ -966,6 +1042,7 @@ mod tests {
                 stack_commit: 0,
                 dirs,
                 sections: vec![],
+                il_only32: false,
             },
             tls: None,
             initialized: false,

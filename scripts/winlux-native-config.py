@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import shutil
+import subprocess
 import pwd
 import grp
 import sys
@@ -40,43 +41,43 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
+def ensure_system_account(name, first_uid, comment, home):
+    """Compte système « name » créé par useradd/groupadd (verrous, shadow,
+    nss cohérents) ; /etc/passwd n'est complété à la main qu'en leur absence.
+    Rien n'est écrit si le compte existe déjà."""
+    try: return pwd.getpwnam(name)
+    except KeyError: pass
+    used = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
+    uid = first_uid
+    while uid in used: uid += 1
+    if shutil.which("groupadd") and shutil.which("useradd"):
+        try: grp.getgrnam(name)
+        except KeyError: subprocess.run(["groupadd", "--gid", str(uid), name], check=True)
+        subprocess.run(["useradd", "--system", "--uid", str(uid), "--gid", str(uid), "--no-create-home",
+                        "--home-dir", home, "--shell", "/bin/false", "--comment", comment, name], check=True)
+    else:
+        try: grp.getgrnam(name)
+        except KeyError:
+            with Path("/etc/group").open("a") as stream: stream.write(f"{name}:x:{uid}:\n")
+        with Path("/etc/passwd").open("a") as stream: stream.write(f"{name}:!:{uid}:{uid}:{comment}:{home}:/bin/false\n")
+    return pwd.getpwnam(name)
+
+
 if os.geteuid() == 0:
-    try:
-        pwd.getpwnam("messagebus")
-    except KeyError:
-        used = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
-        bus_uid = 990
-        while bus_uid in used: bus_uid += 1
-        with Path("/etc/group").open("a") as stream: stream.write(f"messagebus:x:{bus_uid}:\n")
-        with Path("/etc/passwd").open("a") as stream: stream.write(f"messagebus:!:{bus_uid}:{bus_uid}:D-Bus:/nonexistent:/bin/false\n")
+    ensure_system_account("messagebus", 990, "D-Bus", "/nonexistent")
     bus_group=grp.getgrnam("messagebus")
     helper=Path("/usr/lib/dbus-1.0/dbus-daemon-launch-helper")
     if helper.is_file():
         os.chown(helper,0,bus_group.gr_gid)
         helper.chmod(0o4754)
-    try: pwd.getpwnam("polkitd")
-    except KeyError:
-        used={entry.pw_uid for entry in pwd.getpwall()}|{entry.gr_gid for entry in grp.getgrall()}
-        uid=980
-        while uid in used:uid+=1
-        with Path("/etc/group").open("a") as stream:stream.write(f"polkitd:x:{uid}:\n")
-        with Path("/etc/passwd").open("a") as stream:stream.write(f"polkitd:!:{uid}:{uid}:PolicyKit:/nonexistent:/bin/false\n")
-    policy_user=pwd.getpwnam("polkitd")
+    policy_user=ensure_system_account("polkitd", 980, "PolicyKit", "/nonexistent")
     policy_state=Path("/var/lib/polkit-1")
     policy_state.mkdir(parents=True,exist_ok=True)
     os.chown(policy_state,policy_user.pw_uid,policy_user.pw_gid)
     policy_state.chmod(0o700)
     for directory in ("/var/lib/NetworkManager","/var/lib/bluetooth","/var/lib/udisks2"):
         Path(directory).mkdir(parents=True,exist_ok=True)
-    try:
-        saver = pwd.getpwnam("winlux-saver")
-    except KeyError:
-        occupied = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
-        uid = 1002
-        while uid in occupied: uid += 1
-        with Path("/etc/group").open("a") as stream: stream.write(f"winlux-saver:x:{uid}:\n")
-        with Path("/etc/passwd").open("a") as stream: stream.write(f"winlux-saver:!:{uid}:{uid}:Winlux screensaver:/home/winlux-saver:/bin/false\n")
-        saver = pwd.getpwnam("winlux-saver")
+    saver = ensure_system_account("winlux-saver", 1002, "Winlux screensaver", "/home/winlux-saver")
     directory = Path(saver.pw_dir)
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(0o700)
@@ -119,6 +120,56 @@ if panel_config.is_file():
             ids.insert(position, ET.Element("value", {"type": "int", "value": str(number)}))
             tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
     except (ET.ParseError, OSError, ValueError, TypeError):
+        pass
+# Horloge : le greffon « clock » d'XFCE prenait la couleur de texte du thème
+# (gris foncé en Adwaita clair, illisible sur la barre noire) et ouvrait un
+# calendrier GTK brut. Il devient un genmon winlux-clock (texte clair fixé,
+# clic = calendrier et notifications façon Windows 11), même numéro de greffon
+# pour que winlux-control align-left/center garde l'ordre de la barre.
+if panel_config.is_file():
+    try:
+        tree = ET.parse(panel_config)
+        plugins = next((item for item in tree.getroot() if item.get("name") == "plugins"), None)
+        changed = False
+        for plugin in list(plugins) if plugins is not None else []:
+            name = plugin.get("name") or ""
+            if plugin.get("value") != "clock" or not name[7:].isdigit():
+                continue
+            plugin.set("value", "genmon")
+            for child in list(plugin):
+                plugin.remove(child)
+            for key, kind, value in [("command", "string", "/usr/bin/winlux-clock"), ("use-label", "bool", "false"),
+                                     ("text", "string", ""), ("update-period", "int", "2000"),
+                                     ("font", "string", "DejaVu Sans 10")]:
+                ET.SubElement(plugin, "property", {"name": key, "type": kind, "value": value})
+            rc = home / ".config/xfce4/panel" / f"genmon-{name[7:]}.rc"
+            rc.parent.mkdir(parents=True, exist_ok=True)
+            rc.write_text("Command=/usr/bin/winlux-clock\nUseLabel=0\nText=\nUpdatePeriod=2000\nFont=DejaVu Sans 10\n", encoding="utf-8")
+            changed = True
+        if changed:
+            tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
+    except (ET.ParseError, OSError, ValueError, TypeError):
+        pass
+# Couleurs de la barre (bloc « Winlux panel » de gtk.css) : remis à jour à
+# chaque session, le reste du fichier (personnalisation) n'est pas touché.
+panel_css_source = source / "config/gtk-3.0/gtk.css"
+panel_css = home / ".config/gtk-3.0/gtk.css"
+if panel_css_source.is_file() and panel_css.is_file():
+    try:
+        start, end = "/* Winlux panel */", "/* End Winlux panel */"
+        shipped = panel_css_source.read_text(encoding="utf-8")
+        if start in shipped and end in shipped:
+            block = shipped[shipped.index(start):shipped.index(end) + len(end)]
+            current = panel_css.read_text(encoding="utf-8")
+            if start in current and end in current[current.index(start):]:
+                updated = current[:current.index(start)] + block + current[current.index(end, current.index(start)) + len(end):]
+            else:
+                updated = current.rstrip("\n") + "\n" + block + "\n"
+            if updated != current:
+                temporary = panel_css.with_suffix(".css.tmp")
+                temporary.write_text(updated, encoding="utf-8")
+                temporary.replace(panel_css)
+    except (OSError, UnicodeDecodeError, ValueError):
         pass
 # xfce4-genmon-plugin 4.2+ (Ubuntu 26.04) lit sa configuration dans xfconf
 # (/plugins/plugin-N/command...) et ignore les anciens genmon-N.rc : sans ces

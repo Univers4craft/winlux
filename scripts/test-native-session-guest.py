@@ -6,6 +6,7 @@ import signal
 from pathlib import Path
 import re
 import subprocess
+import shutil
 import time
 
 def run(*args, **kwargs):
@@ -323,6 +324,87 @@ def system_services():
 system_services()
 print("WINLUX_NATIVE_SYSTEM_SERVICES=0", flush=True)
 
+def network():
+    """The VM's DHCP DNS server (not QEMU's usual 10.0.2.3) must resolve names."""
+    deadline = time.monotonic() + 90
+    while True:
+        probe = subprocess.run(["getent", "hosts", "github.com"], capture_output=True, text=True)
+        if probe.returncode == 0: break
+        if time.monotonic() > deadline:
+            for command in (["cat", "/etc/resolv.conf"], ["ls", "-l", "/etc/resolv.conf"], ["ip", "-4", "addr"],
+                            ["ip", "route"], ["nmcli", "device"], ["nmcli", "general"]):
+                print("$", " ".join(command), flush=True)
+                print(subprocess.run(command, capture_output=True, text=True).stdout, flush=True)
+            for name in ("network-manager.log", "network-fallback.log"):
+                path = Path("/run/winlux") / name
+                if path.exists():
+                    print(f"--- {path}", flush=True)
+                    print("\n".join(path.read_text(errors="replace").splitlines()[-40:]), flush=True)
+            raise AssertionError("DNS does not resolve github.com")
+        time.sleep(1)
+    print(probe.stdout.strip(), flush=True)
+
+network()
+print("WINLUX_NATIVE_NETWORK_DNS=0", flush=True)
+
+def installer_shortcut():
+    """The live ISO's « Installer Winlux » shortcut opens the installer window."""
+    before = client_ids()
+    Gio.DesktopAppInfo.new_from_filename("/usr/share/applications/winlux-installer.desktop").launch([], None)
+    deadline = time.monotonic() + 90
+    found = None
+    while found is None and time.monotonic() < deadline:
+        for window in client_ids() - before:
+            klass = subprocess.run(["xprop", "-id", hex(window), "WM_CLASS"], capture_output=True, text=True).stdout
+            if "installer" in klass.lower(): found = window
+        time.sleep(0.5)
+    if found is None:
+        print(subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True).stdout[-3000:], flush=True)
+        try:
+            direct = subprocess.run(["/usr/bin/winlux-installer"], capture_output=True, text=True, timeout=20)
+            print("winlux-installer exit", direct.returncode, direct.stdout[-2000:], direct.stderr[-4000:], flush=True)
+        except subprocess.TimeoutExpired as running:
+            print("winlux-installer still running:", (running.stderr or b"")[-2000:], flush=True)
+        raise AssertionError("installer window not mapped from its shortcut")
+    capture("native-installer")
+    run("wmctrl", "-ic", hex(found))
+    subprocess.run(["pkill", "-f", "/usr/bin/winlux-installer"])
+
+installer_shortcut()
+print("WINLUX_NATIVE_INSTALLER_SHORTCUT=0", flush=True)
+
+def explorer_accented_folders():
+    """Explorateur de l'ISO : Téléchargements s'ouvre (pas « Ce dossier est introuvable »)."""
+    home = Path(os.environ.get("HOME") or "/root")
+    assert (home / "Téléchargements").is_dir(), f"{home}/Téléchargements absent de l'image"
+    env = dict(os.environ, HOME=str(home), WINLUX_EXPECT_DOWNLOADS="1")
+    # Sortie dans un fichier, pas un tube : un programme que les contrôles
+    # lancent (application, assistant de session) hérite du descripteur et
+    # garderait un tube ouvert après la fin d'explorer_regression.
+    output = Path("/run/winlux-explorer-regression.log")
+    with output.open("w") as handle:
+        process = subprocess.Popen(["/usr/bin/winlux", "/opt/winlux/tests/explorer_regression.exe"], env=env,
+                                   stdin=subprocess.DEVNULL, stdout=handle, stderr=subprocess.STDOUT,
+                                   start_new_session=True)
+        try:
+            process.wait(timeout=180)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            print("explorer_regression bloqué après :\n" + "\n".join(output.read_text(errors="replace").splitlines()[-5:]), flush=True)
+            raise
+        finally:
+            # Ce que les contrôles ont ouvert ne doit pas rester à l'écran
+            # pendant les tests suivants.
+            try: os.killpg(process.pid, 15)
+            except ProcessLookupError: pass
+    text = output.read_text(errors="replace")
+    lines = [line for line in text.splitlines() if "Telechargements" in line or "ECHEC" in line]
+    print("\n".join(lines), flush=True)
+    assert any(line.strip().startswith("OK") and "Telechargements" in line for line in lines), "Explorer cannot open Téléchargements"
+
+explorer_accented_folders()
+print("WINLUX_NATIVE_EXPLORER_DOWNLOADS=0", flush=True)
+
 def fast_user_switch():
     """#119: a second account gets its own real Xorg on its own VT, then logs off."""
     guest = "invite"
@@ -365,4 +447,44 @@ except Exception:
         print("\n".join(path.read_text(errors="replace").splitlines()[-25:]), flush=True)
     raise
 print("WINLUX_NATIVE_FAST_USER_SWITCH=0", flush=True)
+
+def update_from_previous_release():
+    """Paramètres > Mettre à jour : l'outil de la version publiée installe la nouvelle."""
+    bench = Path("/opt/winlux-test/update")
+    if not bench.is_dir(): return False
+    manifest = dict(line.split("=", 1) for line in (bench / "winlux-update-manifest.txt").read_text().splitlines())
+    previous = run("dpkg-deb", "-f", str(bench / "previous.deb"), "Version").strip()
+    run("apt-get", "--no-remove", "-y", "--allow-downgrades", "-o", "Dpkg::Options::=--force-confold",
+        "install", str(bench / "previous.deb"), timeout=600)
+    assert run("dpkg-query", "-W", "-f=${Version}", "winlux-desktop").strip() == previous
+    assert Path("/usr/share/winlux/version").read_text().strip() == "v" + previous
+    # Les adresses GitHub que lit l'outil publié pointent vers les fichiers
+    # préparés (test-update-curl-shim.py) ; tout le reste (APT, vérifications,
+    # point de restauration) est le vrai code de la version publiée.
+    if (bench / "winlux-update-apt").exists():
+        print(f"Outil de mise à jour de v{previous} connu cassé : test avec l'outil actuel", flush=True)
+        shutil.copyfile(bench / "winlux-update-apt", "/usr/bin/winlux-update-apt")
+        Path("/usr/bin/winlux-update-apt").chmod(0o755)
+    shim = Path("/tmp/winlux-update-shim"); shim.mkdir(exist_ok=True)
+    shutil.copyfile(bench / "curl", shim / "curl"); (shim / "curl").chmod(0o755)
+    env = dict(os.environ, PATH=f"{shim}:" + os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"))
+    result = subprocess.run(["winlux-control", "update-apply"], env=env, capture_output=True, text=True, timeout=900)
+    if result.returncode != 0:
+        # winlux-control écrit la sortie de l'outil dans update.log (lu par Paramètres).
+        for name in ("update.log", "update-progress", "update-error-phase", "action.txt"):
+            path = Path("/run/winlux") / name
+            if path.exists():
+                print(f"--- {path}", flush=True)
+                print("\n".join(path.read_text(errors="replace").splitlines()[-60:]), flush=True)
+        print(subprocess.run(["df", "-h", "/", "/var"], capture_output=True, text=True).stdout, flush=True)
+    assert result.returncode == 0, "update from " + previous + " failed"
+    new = manifest["version"]
+    assert Path("/usr/share/winlux/version").read_text().strip() == new, Path("/usr/share/winlux/version").read_text()
+    assert "v" + run("dpkg-query", "-W", "-f=${Version}", "winlux-desktop").strip() == new
+    assert run("dpkg", "--audit").strip() == ""
+    assert Path("/run/winlux/update-action").read_text().strip() == "reboot"
+    print(f"WINLUX_NATIVE_UPDATE_FROM=v{previous}->{new}", flush=True)
+    return True
+
+if update_from_previous_release(): print("WINLUX_NATIVE_UPDATE=0", flush=True)
 print("WINLUX_NATIVE_RESULT=0", flush=True)

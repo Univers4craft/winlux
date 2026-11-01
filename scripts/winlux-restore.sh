@@ -9,7 +9,9 @@
 set -eu
 
 RESTORE_DIR=/var/lib/winlux/restore
-CONF_DIRS="/etc/winlux /etc/passwd /etc/group"
+# Les comptes : passwd/group sans leurs mots de passe (shadow/gshadow) seraient
+# incohérents après restauration ; cp -a conserve leurs droits (0640 root:shadow).
+CONF_DIRS="/etc/winlux /etc/passwd /etc/group /etc/shadow /etc/gshadow"
 
 mkdir -p "$RESTORE_DIR"
 

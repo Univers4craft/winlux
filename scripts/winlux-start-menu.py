@@ -64,6 +64,7 @@ _TR = {
     'Impossible d’ouvrir l’application': ("Couldn't open the app", 'No se puede abrir la aplicación', 'Die App konnte nicht geöffnet werden'),
     'Résultats': ('Results', 'Resultados', 'Ergebnisse'),
     'Toutes les applications': ('All apps', 'Todas las aplicaciones', 'Alle Apps'),
+    '‹  Retour': ('‹  Back', '‹  Volver', '‹  Zurück'),
     'Paramètres · ': ('Settings · ', 'Configuración · ', 'Einstellungen · '),
     'Fichier · ': ('File · ', 'Archivo · ', 'Datei · '),
     '30 premiers fichiers affichés. Précisez la recherche.': ('First 30 files shown. Refine your search.', 'Se muestran los 30 primeros archivos. Precise la búsqueda.', 'Die ersten 30 Dateien werden angezeigt. Verfeinern Sie die Suche.'),
@@ -129,6 +130,10 @@ MENU_CSS = Template("""
   #winlux-start .heading { font-weight: bold; font-size: 12pt; }
   #winlux-start .footer { background: $footer; padding: 12px 25px; }
   #winlux-start .app-name { font-size: 9pt; }
+  menu.winlux-menu, .winlux-menu.menu { background: $bg; border: 1px solid $border; border-radius: 8px; padding: 4px; }
+  menu.winlux-menu menuitem { color: $fg; padding: 8px 18px 8px 12px; border-radius: 4px; min-width: 150px; }
+  menu.winlux-menu menuitem label, menu.winlux-menu menuitem image { color: $fg; -gtk-icon-shadow: none; }
+  menu.winlux-menu menuitem:hover { background: $hover; }
 """)
 
 
@@ -370,7 +375,7 @@ class Start(Gtk.Application):
         query = self.search.get_text().strip().casefold()
         listing = self.all_apps or bool(query)
         self.heading.set_text(_t("Résultats") if query else _t("Toutes les applications") if listing else _t("Épinglé"))
-        self.toggle.set_label("‹  Retour" if listing else _t("Toutes les applications  ›"))
+        self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
         self.results = sorted((app for app in self.apps.values() if query in app.get_display_name().casefold()), key=lambda app: app.get_display_name().casefold())
         if listing:
             if query:
@@ -451,9 +456,16 @@ class Start(Gtk.Application):
         if self.window.has_grab():self.window.grab_remove()
         self.window.get_display().get_default_seat().ungrab()
         menu = Gtk.Menu()
+        menu.get_style_context().add_class("winlux-menu")
         self.context = menu
-        for title, callback in actions:
-            item = Gtk.MenuItem(label=title)
+        for entry in actions:
+            title, callback = entry[0], entry[1]
+            item = Gtk.MenuItem()
+            row = Gtk.Box(spacing=12)
+            if len(entry) > 2:
+                row.pack_start(Gtk.Image.new_from_icon_name(entry[2], Gtk.IconSize.MENU), False, False, 0)
+            row.pack_start(Gtk.Label(label=title, xalign=0), True, True, 0)
+            item.add(row)
             item.connect("activate", lambda _, action=callback: action())
             menu.append(item)
         def deactivate(*_):
@@ -489,14 +501,18 @@ class Start(Gtk.Application):
         return True
 
     def power(self, widget):
+        # Confirmation, fermeture des applications et arrêt réel : winlux-power
+        # (l'ancien chemin appelait le poweroff de systemd, absent, et rien ne
+        # s'éteignait).
         def action(name):
-            subprocess.Popen(["/usr/bin/winlux-desktop-action", name])
             self.hide()
+            subprocess.Popen(["/usr/bin/winlux-power", "ask", name], start_new_session=True)
         def lock():
-            subprocess.Popen(["/usr/bin/winlux-lock", "now"], start_new_session=True)
             self.hide()
-        self.menu(widget, None, [(_t("Verrouiller"), lock), (_t("Redémarrer"), lambda: action("reboot")),
-                                 (_t("Arrêter"), lambda: action("shutdown"))])
+            subprocess.Popen(["/usr/bin/winlux-lock", "now"], start_new_session=True)
+        self.menu(widget, None, [(_t("Verrouiller"), lock, "system-lock-screen-symbolic"),
+                                 (_t("Redémarrer"), lambda: action("reboot"), "view-refresh-symbolic"),
+                                 (_t("Arrêter"), lambda: action("shutdown"), "system-shutdown-symbolic")])
 
 if __name__ == "__main__":
     raise SystemExit(Start().run())

@@ -656,8 +656,19 @@ pub fn apply(cfg: &Config, apps: &BTreeMap<PathBuf, BTreeSet<Listen>>) -> Result
     }
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     let count = cfg.active_rules().count();
+    let dropped = !cgroups
+        && cfg
+            .active_rules()
+            .any(|r| r.dir == Dir::Out && !r.program.is_empty());
     if out.status.success() {
-        write_status(rules.is_some(), "", count);
+        // Les règles sortantes par application sont omises sans cgroup v2 :
+        // le dire dans l'état plutôt que d'afficher « actif » sans elles.
+        let note = if dropped {
+            "règles sortantes par application ignorées : cgroup v2 indisponible"
+        } else {
+            ""
+        };
+        write_status(rules.is_some(), note, count);
         Ok(())
     } else {
         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();
@@ -922,6 +933,7 @@ pub fn daemon() -> ! {
             let _ = apply(&cfg, &new_apps);
         }
         assign_cgroups(&cfg);
+        write_ports();
         if cfg.notify && cfg.enabled[cfg.profile] && !prompt_file().exists() {
             let known = load_known();
             if let Some(prog) = new_listeners(&cfg, &new_apps, &known).into_iter().next() {
@@ -933,8 +945,21 @@ pub fn daemon() -> ! {
     }
 }
 
+/// Page « Ports ouverts » : tous les ports en écoute, y compris ceux
+/// réservés à la machine, avec le nom de l'appli (Windows ou Linux).
+fn write_ports() {
+    let text: String = crate::netports::open_ports()
+        .iter()
+        .map(|p| crate::netports::port_line(p) + "\n")
+        .collect();
+    let path = admin::path(RUN_DIR).join("ports.txt");
+    if admin::read_text(&path).as_deref() != Some(text.as_str()) {
+        let _ = admin::write_text(&path, &text);
+    }
+}
+
 fn usage() -> i32 {
-    eprintln!("usage : winlux --firewall daemon | apply | status | listening | answer allow|block | clear-log");
+    eprintln!("usage : winlux --firewall daemon | apply | status | listening | ports | answer allow|block | clear-log");
     2
 }
 
@@ -958,6 +983,12 @@ pub fn cli(args: &[String]) -> i32 {
             match ruleset(&cfg, &listening_programs(), cgroups_available()) {
                 Some(r) => print!("{r}"),
                 None => println!("pare-feu désactivé pour ce profil"),
+            }
+            0
+        }
+        "ports" => {
+            for p in crate::netports::open_ports() {
+                println!("{}", crate::netports::port_line(&p));
             }
             0
         }
