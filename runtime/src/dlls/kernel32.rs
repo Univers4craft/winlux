@@ -47,6 +47,9 @@ static OVERLAPPED_HANDLES: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
 fn overlapped_handles() -> &'static Mutex<HashSet<usize>> {
     OVERLAPPED_HANDLES.get_or_init(|| Mutex::new(HashSet::new()))
 }
+pub(crate) fn mark_overlapped_handle(h: usize) {
+    lock(overlapped_handles()).insert(h);
+}
 pub(crate) fn is_overlapped_handle(h: usize) -> bool {
     lock(overlapped_handles()).contains(&h)
 }
@@ -1242,10 +1245,42 @@ unsafe fn create_file_str(
             }
         }
     }
-    let want_read = access & 0x8000_0000 != 0 || access & 1 != 0;
-    let want_write = access & 0x4000_0000 != 0 || access & 2 != 0;
+    let want_read = access & (0x8000_0000 | 0x1000_0000 | 0x0200_0000 | 1) != 0;
+    // GENERIC_WRITE, GENERIC_ALL, MAXIMUM_ALLOWED ou FILE_WRITE_DATA.
+    let want_write = access & (0x4000_0000 | 0x1000_0000 | 0x0200_0000 | 2) != 0;
+    // FILE_APPEND_DATA seul (sans FILE_WRITE_DATA) : chaque écriture va en
+    // fin de fichier, comme O_APPEND. C'est ce qu'utilise appendFile() de
+    // Node/Bun (journaux, transcriptions de session de Claude Code).
+    let append_only = access & 4 != 0 && !want_write;
     let mut o = OpenOptions::new();
-    o.read(want_read || !want_write).write(want_write);
+    o.read(want_read || !(want_write || append_only)).write(want_write);
+    if append_only {
+        o.append(true);
+    }
+    use std::os::unix::fs::OpenOptionsExt;
+    // FILE_FLAG_OPEN_REPARSE_POINT : on ouvre le lien symbolique lui-même
+    // (lstat() de Node/Bun, lecture de la cible avec DeviceIoControl).
+    if _flags & 0x0020_0000 != 0
+        && p.symlink_metadata().is_ok_and(|m| m.file_type().is_symlink())
+        && !want_write
+        && !append_only
+    {
+        o.custom_flags(libc::O_PATH | libc::O_NOFOLLOW);
+    }
+    // Un dossier s'ouvre avec FILE_FLAG_BACKUP_SEMANTICS, y compris pour
+    // en modifier les attributs ou les dates : sous Linux, en lecture seule.
+    let is_dir = p.is_dir();
+    if is_dir {
+        if _flags & 0x0200_0000 == 0 {
+            crate::process::set_last_error(5);
+            return usize::MAX;
+        }
+        if matches!(creation, 1) {
+            crate::process::set_last_error(80); // ERROR_FILE_EXISTS
+            return usize::MAX;
+        }
+        o.read(true).write(false).append(false).custom_flags(libc::O_DIRECTORY);
+    }
     // Rust exige `write` pour créer ou tronquer : CreateFile(GENERIC_READ,
     // OPEN_ALWAYS) sur un fichier absent échouait avec 87.
     let needs_write = match creation {
@@ -1253,7 +1288,7 @@ unsafe fn create_file_str(
         2 | 5 => true,
         _ => false,
     };
-    if needs_write && !want_write {
+    if needs_write && !want_write && !append_only && !is_dir {
         o.write(true);
     }
     match creation {
@@ -1980,7 +2015,7 @@ pub unsafe extern "win64" fn unlock_file(
     }
 }
 
-fn disk_free(path: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn disk_free(path: &str) -> Option<(u64, u64, u64)> {
     let linux = crate::paths::to_linux(path);
     let text = linux.to_string_lossy().into_owned();
     let c = std::ffi::CString::new(text).ok()?;
@@ -4475,6 +4510,9 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         return 0;
     }
     crate::dlls::ntdll_file::forget_dir_cursor(handle);
+    if crate::dlls::kernel32_node::close_snapshot(handle) {
+        return 1;
+    }
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .remove(&handle)
         .is_some()
@@ -4965,7 +5003,7 @@ pub unsafe extern "win64" fn create_file_w(
             return usize::MAX;
         }
     };
-    create_file_str(
+    let h = create_file_str(
         &s.to_string_lossy(),
         access,
         share,
@@ -4973,7 +5011,13 @@ pub unsafe extern "win64" fn create_file_w(
         creation,
         flags,
         template,
-    )
+    );
+    crate::trace!(
+        "CreateFileW({}, accès {access:#x}, disposition {creation}, options {flags:#x}) = {h:#x} (erreur {})",
+        s.to_string_lossy(),
+        crate::process::last_error()
+    );
+    h
 }
 pub unsafe extern "win64" fn get_environment_variable_w(
     name: *const u16,
@@ -6055,7 +6099,7 @@ pub extern "win64" fn decode_pointer(ptr: usize) -> usize {
 }
 
 // --- Helpers (hostname, date/time without chrono/nix) ---
-fn get_hostname_string() -> String {
+pub(crate) fn get_hostname_string() -> String {
     let mut buf = [0u8; 256];
     if unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) } == 0 {
         let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());

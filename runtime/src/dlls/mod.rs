@@ -11,6 +11,7 @@ pub mod clipboard;
 pub mod comctl32;
 pub mod comdlg32;
 pub mod comobj;
+pub mod credentials;
 pub mod crt;
 pub mod crt_runtime;
 pub mod crt_scan;
@@ -254,6 +255,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(kernel32_ext::advapi32_exports());
                     e.extend(kernel32_fs::advapi32_exports());
                     e.extend(security::advapi32_exports());
+                    e.extend(credentials::exports());
                     e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
                     e
