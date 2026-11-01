@@ -1,0 +1,19 @@
+[Desktop Entry]
+Type=Application
+Name=Winlux USB Creator
+Name[fr]=Créateur de clé USB Winlux
+Name[de]=Winlux USB-Stick-Ersteller
+Name[es]=Creador de USB de Winlux
+Name[it]=Creatore di chiavette USB Winlux
+Name[pt]=Criador de pen USB Winlux
+Comment=Create a USB stick to install Winlux on a PC
+Comment[fr]=Créer une clé USB pour installer Winlux sur un PC
+Comment[de]=USB-Stick zur Installation von Winlux erstellen
+Comment[es]=Crear una memoria USB para instalar Winlux en un PC
+Comment[it]=Creare una chiavetta USB per installare Winlux su un PC
+Comment[pt]=Criar uma pen USB para instalar o Winlux num PC
+Exec=winlux-usb-creator
+Icon=winlux-usb-creator
+Terminal=false
+Categories=System;Utility;
+Keywords=USB;ISO;installation;clé;bootable;
