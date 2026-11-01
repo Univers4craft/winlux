@@ -365,6 +365,11 @@ def installer_shortcut():
         time.sleep(0.5)
     if found is None:
         print(subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True).stdout[-3000:], flush=True)
+        try:
+            direct = subprocess.run(["/usr/bin/winlux-installer"], capture_output=True, text=True, timeout=20)
+            print("winlux-installer exit", direct.returncode, direct.stdout[-2000:], direct.stderr[-4000:], flush=True)
+        except subprocess.TimeoutExpired as running:
+            print("winlux-installer still running:", (running.stderr or b"")[-2000:], flush=True)
         raise AssertionError("installer window not mapped from its shortcut")
     capture("native-installer")
     run("wmctrl", "-ic", hex(found))

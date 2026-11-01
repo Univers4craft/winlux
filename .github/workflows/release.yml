@@ -17,6 +17,9 @@ on:
       - scripts/test-native-session-vm.sh
       - scripts/winlux-sessions.sh
       - scripts/winlux-user-session.sh
+      - scripts/winlux-network-watch.sh
+      - scripts/stage-apt-root.py
+      - scripts/winlux-update-apt.py
   workflow_dispatch:
 
 permissions:
