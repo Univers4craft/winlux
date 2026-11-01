@@ -28,3 +28,42 @@ with tempfile.TemporaryDirectory(prefix="apt-cache-check.") as temporary:
     assert target.read_bytes() == b"new package"
     assert not list(root.glob(".package-*"))
 print("OK: native manifest compatibility, package ownership boundaries and atomic cache replacement")
+
+# Mise à jour sans manifeste publié : repli sur l'API GitHub des releases.
+import json, subprocess
+scope = updater["release_metadata"].__globals__
+manifest_url, api_url = scope["MANIFEST_URL"], scope["RELEASE_API"]
+release = {"tag_name": "v0.3.1", "assets": [
+    {"name": "winlux-live-v0.3.1.iso", "size": 9},
+    {"name": "winlux-desktop-v0.3.1.deb", "size": 4096, "digest": "sha256:" + "b" * 64}]}
+def fake(files, codes={}):
+    def download(url, destination, accept=None):
+        if url in codes: raise subprocess.CalledProcessError(codes[url], "curl")
+        if url not in files: raise subprocess.CalledProcessError(22, "curl")
+        Path(destination).write_text(files[url])
+    return download
+def failure(message):
+    try: scope["release_metadata"](work)
+    except RuntimeError as error: assert message in str(error), error
+    else: raise AssertionError("expected failure: " + message)
+with tempfile.TemporaryDirectory(prefix="apt-fallback-check.") as temporary:
+    work = Path(temporary)
+    scope["download"] = fake({manifest_url: valid})
+    assert scope["release_metadata"](work)[0]["version"] == "v0.3.0"
+    scope["download"] = fake({api_url: json.dumps(release)})
+    data = scope["release_metadata"](work)[0]
+    assert (data["version"], data["asset"], data["sha256"], data["download_bytes"]) == ("v0.3.1", "winlux-desktop-v0.3.1.deb", "b" * 64, "4096"), data
+    assert int(data["unpacked_kib"]) >= 4096 * 3 // 1024 and (work / "manifest").read_text().count("format=3") == 1
+    del release["assets"][1]["digest"]
+    sums = "https://github.com/Univers4craft/winlux/releases/download/v0.3.1/winlux-desktop-v0.3.1.deb.sha256"
+    scope["download"] = fake({api_url: json.dumps(release), sums: "c" * 64 + "  winlux-desktop-v0.3.1.deb\n"})
+    assert scope["release_metadata"](work)[0]["sha256"] == "c" * 64
+    scope["download"] = fake({api_url: json.dumps(release)})
+    failure("empreinte SHA-256")
+    scope["download"] = fake({api_url: json.dumps({"tag_name": "v0.3.2", "assets": []})})
+    failure("ni manifeste ni paquet")
+    scope["download"] = fake({}, {manifest_url: 6})
+    failure("DNS")
+    scope["download"] = fake({}, {api_url: 28})
+    failure("délai dépassé")
+print("OK: update metadata falls back to the GitHub release when the manifest is missing")
