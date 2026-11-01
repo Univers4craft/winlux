@@ -660,16 +660,52 @@ static SIMPLE_COM_VTABLE: SimpleComVTable = SimpleComVTable {
     release: SimpleComObj::release,
 };
 
+// ────────────────────── Typage des objets COM maison ──────────────────────
+//
+// Les méthodes du contexte reçoivent des `ID3D11Resource*` / vues sans type :
+// on reconnaît nos objets à leur vtable (premier mot) avant tout cast, au
+// lieu de supposer qu'un pointeur quelconque est un `Buffer`.
+
+unsafe fn vtable_ptr(p: *const c_void) -> *const c_void {
+    if p.is_null() {
+        return std::ptr::null();
+    }
+    *(p as *const *const c_void)
+}
+
+unsafe fn as_buffer(p: *mut c_void) -> Option<*mut Buffer> {
+    (vtable_ptr(p) == &BUFFER_VTABLE as *const BufferVTable as *const c_void)
+        .then_some(p as *mut Buffer)
+}
+
+unsafe fn as_texture2d(p: *mut c_void) -> Option<*mut Texture2D> {
+    (vtable_ptr(p) == &TEXTURE2D_VTABLE as *const Texture2DVTable as *const c_void)
+        .then_some(p as *mut Texture2D)
+}
+
+unsafe fn as_simple(p: *mut c_void) -> Option<*mut SimpleComObj> {
+    (vtable_ptr(p) == &SIMPLE_COM_VTABLE as *const SimpleComVTable as *const c_void)
+        .then_some(p as *mut SimpleComObj)
+}
+
+/// Taille (octets) du niveau 0 d'une texture 2D, sans débordement.
+fn texture_bytes(desc: &D3D11Texture2DDesc) -> Option<usize> {
+    let elem = dxgi_format_element_size(desc.format) as usize;
+    (desc.width as usize)
+        .checked_mul(desc.height as usize)?
+        .checked_mul(elem)
+        .filter(|&n| n <= 1 << 30)
+}
+
 fn create_render_target_view(resource: *mut c_void) -> *mut SimpleComObj {
     let g = match gl::gl() {
         Some(g) => g,
         None => return std::ptr::null_mut(),
     };
 
-    let tex_gl = if !resource.is_null() {
-        unsafe { (*(resource as *mut Texture2D)).gl_texture }
-    } else {
-        0
+    let tex_gl = match unsafe { as_texture2d(resource) } {
+        Some(t) => unsafe { (*t).gl_texture },
+        None => 0,
     };
 
     let mut fbo = 0u32;
@@ -845,6 +881,8 @@ struct DeviceContextState {
     current_program: gl::GLuint,
     current_vao: gl::GLuint,
     topology: u32,
+    /// Format du tampon d'index courant (DXGI_FORMAT_R16_UINT ou R32_UINT).
+    index_format: u32,
     viewports: [D3D11Viewport; 16],
     num_viewports: u32,
 }
@@ -859,6 +897,7 @@ impl Default for DeviceContextState {
             current_program: 0,
             current_vao: 0,
             topology: D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST,
+            index_format: DXGI_FORMAT_R16_UINT,
             viewports: [D3D11Viewport::default(); 16],
             num_viewports: 0,
         }
@@ -1191,10 +1230,9 @@ unsafe extern "win64" fn ctx_vs_set_shader(
     _n: u32,
 ) {
     let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
-    s.current_vs = if !shader.is_null() {
-        (*(shader as *mut SimpleComObj)).gl_id
-    } else {
-        0
+    s.current_vs = match as_simple(shader) {
+        Some(o) => (*o).gl_id,
+        None => 0,
     };
     update_program(&mut s);
 }
@@ -1206,10 +1244,9 @@ unsafe extern "win64" fn ctx_ps_set_shader(
     _n: u32,
 ) {
     let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
-    s.current_ps = if !shader.is_null() {
-        (*(shader as *mut SimpleComObj)).gl_id
-    } else {
-        0
+    s.current_ps = match as_simple(shader) {
+        Some(o) => (*o).gl_id,
+        None => 0,
     };
     update_program(&mut s);
 }
@@ -1248,10 +1285,10 @@ unsafe extern "win64" fn ctx_ia_set_vertex_buffers(
     let Some(g) = gl::gl() else { return };
     for i in 0..count {
         let buf_ptr = *buffers.add(i as usize);
-        if buf_ptr.is_null() {
+        let Some(buf) = as_buffer(buf_ptr) else {
             continue;
-        }
-        let buf = &*(buf_ptr as *mut Buffer);
+        };
+        let buf = &*buf;
         let _stride = *strides.add(i as usize);
         let _offset = *offsets.add(i as usize);
         (g.BindBuffer)(gl::GL_ARRAY_BUFFER, buf.gl_buffer);
@@ -1259,15 +1296,26 @@ unsafe extern "win64" fn ctx_ia_set_vertex_buffers(
 }
 
 unsafe extern "win64" fn ctx_ia_set_index_buffer(
-    _this: *mut DeviceContext,
+    this: *mut DeviceContext,
     buffer: *mut c_void,
-    _format: u32,
+    format: u32,
     _offset: u32,
 ) {
     let Some(g) = gl::gl() else { return };
-    if !buffer.is_null() {
-        let buf = &*(buffer as *mut Buffer);
-        (g.BindBuffer)(gl::GL_ELEMENT_ARRAY_BUFFER, buf.gl_buffer);
+    // Le format d'index (16 ou 32 bits) est mémorisé pour les tirages.
+    let mut s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
+    s.index_format = format;
+    if let Some(buf) = as_buffer(buffer) {
+        (g.BindBuffer)(gl::GL_ELEMENT_ARRAY_BUFFER, (*buf).gl_buffer);
+    }
+}
+
+/// (type GL, taille) des indices selon le format mémorisé.
+fn index_type(format: u32) -> (gl::GLenum, usize) {
+    if format == DXGI_FORMAT_R32_UINT {
+        (gl::GL_UNSIGNED_INT, 4)
+    } else {
+        (gl::GL_UNSIGNED_SHORT, 2)
     }
 }
 
@@ -1287,8 +1335,9 @@ unsafe extern "win64" fn ctx_draw_indexed(
     let Some(g) = gl::gl() else { return };
     let s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
     let mode = topology_to_gl(s.topology);
-    let offset = (start_index * 2) as *const c_void; // assume 16-bit indices
-    (g.DrawElements)(mode, index_count as i32, gl::GL_UNSIGNED_SHORT, offset);
+    let (ty, size) = index_type(s.index_format);
+    let offset = (start_index as usize * size) as *const c_void;
+    (g.DrawElements)(mode, index_count as i32, ty, offset);
 }
 
 unsafe extern "win64" fn ctx_draw_instanced(
@@ -1303,7 +1352,7 @@ unsafe extern "win64" fn ctx_draw_instanced(
 }
 
 unsafe extern "win64" fn ctx_draw_indexed_instanced(
-    _this: *mut DeviceContext,
+    this: *mut DeviceContext,
     ipc: u32,
     ic: u32,
     start: u32,
@@ -1311,14 +1360,10 @@ unsafe extern "win64" fn ctx_draw_indexed_instanced(
     _ibase: u32,
 ) {
     let Some(g) = gl::gl() else { return };
-    let offset = (start * 2) as *const c_void;
-    (g.DrawElementsInstanced)(
-        gl::GL_TRIANGLES,
-        ipc as i32,
-        gl::GL_UNSIGNED_SHORT,
-        offset,
-        ic as i32,
-    );
+    let s = (*this).state.lock().unwrap_or_else(|e| e.into_inner());
+    let (ty, size) = index_type(s.index_format);
+    let offset = (start as usize * size) as *const c_void;
+    (g.DrawElementsInstanced)(gl::GL_TRIANGLES, ipc as i32, ty, offset, ic as i32);
 }
 
 unsafe extern "win64" fn ctx_map(
@@ -1332,45 +1377,76 @@ unsafe extern "win64" fn ctx_map(
     if resource.is_null() || mapped.is_null() {
         return E_INVALIDARG;
     }
-
-    // Check if it's a buffer (resource dimension == 1)
-    let res_type_ptr = resource as *const usize;
-    let _vtable = *res_type_ptr as *const usize;
-
-    // Try to map as a buffer
-    let buf = resource as *mut Buffer;
-    let mut guard = (*buf)
-        .staging_data
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let ptr = guard.as_mut_ptr();
-
-    (*mapped).data = ptr as *mut c_void;
-    (*mapped).row_pitch = (*buf).desc.byte_width;
-    (*mapped).depth_pitch = 0;
-    S_OK
+    if let Some(buf) = as_buffer(resource) {
+        let mut guard = (*buf)
+            .staging_data
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let ptr = guard.as_mut_ptr();
+        (*mapped).data = ptr as *mut c_void;
+        (*mapped).row_pitch = (*buf).desc.byte_width;
+        (*mapped).depth_pitch = 0;
+        return S_OK;
+    }
+    if let Some(tex) = as_texture2d(resource) {
+        // Texture : tampon CPU dimensionné au niveau 0, renvoyé à l'appli
+        // (téléversé au Unmap).
+        let desc = (*tex).desc;
+        let Some(bytes) = texture_bytes(&desc) else {
+            return E_INVALIDARG;
+        };
+        let mut guard = (*tex).staging_buf.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.len() != bytes {
+            guard.resize(bytes, 0);
+        }
+        (*mapped).data = guard.as_mut_ptr() as *mut c_void;
+        (*mapped).row_pitch = desc.width * dxgi_format_element_size(desc.format);
+        (*mapped).depth_pitch = bytes as u32;
+        return S_OK;
+    }
+    E_INVALIDARG
 }
 
 unsafe extern "win64" fn ctx_unmap(_this: *mut DeviceContext, resource: *mut c_void, _sub: u32) {
-    if resource.is_null() {
-        return;
-    }
     let Some(g) = gl::gl() else { return };
+    if let Some(buf) = as_buffer(resource) {
+        let guard = (*buf)
+            .staging_data
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let target = bind_flags_to_gl_target((*buf).desc.bind_flags);
+        (g.BindBuffer)(target, (*buf).gl_buffer);
+        (g.BufferSubData)(
+            target,
+            0,
+            guard.len() as isize,
+            guard.as_ptr() as *const c_void,
+        );
+        (g.BindBuffer)(target, 0);
+    } else if let Some(tex) = as_texture2d(resource) {
+        let guard = (*tex).staging_buf.lock().unwrap_or_else(|e| e.into_inner());
+        if (*tex).gl_texture != 0 && texture_bytes(&(*tex).desc) == Some(guard.len()) {
+            upload_texture_level0(g, &*tex, guard.as_ptr() as *const c_void);
+        }
+    }
+}
 
-    let buf = resource as *mut Buffer;
-    let guard = (*buf)
-        .staging_data
-        .lock()
-        .unwrap_or_else(|e| e.into_inner());
-    let target = bind_flags_to_gl_target((*buf).desc.bind_flags);
-    (g.BindBuffer)(target, (*buf).gl_buffer);
-    (g.BufferSubData)(
-        target,
+/// Téléverse le niveau 0 d'une texture 2D depuis un tampon CPU.
+unsafe fn upload_texture_level0(g: &gl::GlFunctions, tex: &Texture2D, data: *const c_void) {
+    let (_, gl_format, gl_type) = dxgi_format_to_gl(tex.desc.format);
+    (g.BindTexture)(gl::GL_TEXTURE_2D, tex.gl_texture);
+    (g.TexSubImage2D)(
+        gl::GL_TEXTURE_2D,
         0,
-        guard.len() as isize,
-        guard.as_ptr() as *const c_void,
+        0,
+        0,
+        tex.desc.width as i32,
+        tex.desc.height as i32,
+        gl_format,
+        gl_type,
+        data,
     );
-    (g.BindBuffer)(target, 0);
+    (g.BindTexture)(gl::GL_TEXTURE_2D, 0);
 }
 
 unsafe extern "win64" fn ctx_om_set_render_targets(
@@ -1384,16 +1460,15 @@ unsafe extern "win64" fn ctx_om_set_render_targets(
 
     if count > 0 && !rtvs.is_null() {
         let rtv = *rtvs;
-        if !rtv.is_null() {
-            let obj = &*(rtv as *mut SimpleComObj);
-            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, obj.gl_id);
-            s.current_rtv = rtv as *mut SimpleComObj;
+        if let Some(obj) = as_simple(rtv) {
+            (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, (*obj).gl_id);
+            s.current_rtv = obj;
         }
     } else {
         (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, 0);
         s.current_rtv = std::ptr::null_mut();
     }
-    s.current_dsv = dsv as *mut SimpleComObj;
+    s.current_dsv = as_simple(dsv).unwrap_or(std::ptr::null_mut());
 }
 
 unsafe extern "win64" fn ctx_om_set_rt_uav(
@@ -1415,11 +1490,11 @@ unsafe extern "win64" fn ctx_clear_rtv(
     color: *const [f32; 4],
 ) {
     let Some(g) = gl::gl() else { return };
-    if view.is_null() || color.is_null() {
+    if color.is_null() {
         return;
     }
-
-    let obj = &*(view as *mut SimpleComObj);
+    let Some(obj) = as_simple(view) else { return };
+    let obj = &*obj;
     let c = &*color;
 
     (g.BindFramebuffer)(gl::GL_FRAMEBUFFER, obj.gl_id);
@@ -1498,20 +1573,24 @@ unsafe extern "win64" fn ctx_update_subresource(
         return;
     }
     let Some(g) = gl::gl() else { return };
-
-    let buf = resource as *mut Buffer;
-    let target = bind_flags_to_gl_target((*buf).desc.bind_flags);
-    let size = (*buf).desc.byte_width;
-
-    (g.BindBuffer)(target, (*buf).gl_buffer);
-    (g.BufferSubData)(target, 0, size as isize, data);
-    (g.BindBuffer)(target, 0);
+    if let Some(buf) = as_buffer(resource) {
+        let target = bind_flags_to_gl_target((*buf).desc.bind_flags);
+        let size = (*buf).desc.byte_width;
+        (g.BindBuffer)(target, (*buf).gl_buffer);
+        (g.BufferSubData)(target, 0, size as isize, data);
+        (g.BindBuffer)(target, 0);
+    } else if let Some(tex) = as_texture2d(resource) {
+        // Sous-ressource 0 entière seulement (pas de boîte partielle).
+        if (*tex).gl_texture != 0 && texture_bytes(&(*tex).desc).is_some() {
+            upload_texture_level0(g, &*tex, data);
+        }
+    }
 }
 
 unsafe extern "win64" fn ctx_generate_mips(_: *mut DeviceContext, srv: *mut c_void) {
     let Some(g) = gl::gl() else { return };
-    if !srv.is_null() {
-        let obj = &*(srv as *mut SimpleComObj);
+    if let Some(obj) = as_simple(srv) {
+        let obj = &*obj;
         if obj.resource_tex != 0 {
             (g.BindTexture)(gl::GL_TEXTURE_2D, obj.resource_tex);
             (g.GenerateMipmap)(gl::GL_TEXTURE_2D);
@@ -1856,7 +1935,12 @@ unsafe extern "win64" fn dev_addref(this: *mut Device) -> u32 {
 unsafe extern "win64" fn dev_release(this: *mut Device) -> u32 {
     let prev = (*this).ref_count.fetch_sub(1, Ordering::AcqRel);
     if prev == 1 {
-        let _ = Box::from_raw(this);
+        let dev = Box::from_raw(this);
+        // L'appareil relâche sa propre référence sur le contexte immédiat ;
+        // celui-ci survit tant que l'application en détient une.
+        if !dev.context.is_null() {
+            ctx_release(dev.context);
+        }
         return 0;
     }
     prev - 1
@@ -1917,10 +2001,9 @@ unsafe extern "win64" fn dev_create_srv(
     if out.is_null() {
         return E_INVALIDARG;
     }
-    let tex_gl = if !resource.is_null() {
-        (*(resource as *mut Texture2D)).gl_texture
-    } else {
-        0
+    let tex_gl = match as_texture2d(resource) {
+        Some(t) => (*t).gl_texture,
+        None => 0,
     };
     *out = Box::into_raw(Box::new(SimpleComObj {
         vtable: &SIMPLE_COM_VTABLE,
@@ -2312,6 +2395,8 @@ pub unsafe extern "win64" fn D3D11CreateDevice(
         *feature_level = fl;
     }
     if !context.is_null() {
+        // Référence remise à l'application, distincte de celle de l'appareil.
+        ctx_addref(ctx);
         *context = ctx as usize;
     }
 

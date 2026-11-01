@@ -69,7 +69,12 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
                     );
                     p += n as usize;
                 }
-                let idx = lzw(&data, min_code, (fw * fh) as usize);
+                // Une image vide ou démesurée est ignorée (mais ses données
+                // ont été consommées) : jamais d'allocation sur foi du fichier.
+                if super::check_size(fw, fh).is_err() {
+                    continue;
+                }
+                let idx = lzw(&data, min_code, fw as usize * fh as usize);
                 let before = if dispose == 3 {
                     Some(canvas.clone())
                 } else {
@@ -151,7 +156,8 @@ fn lzw(data: &[u8], min: u8, need: usize) -> Vec<u8> {
     }
     let mut next = end + 1;
     let mut size = min + 1;
-    let mut out = Vec::with_capacity(need);
+    // La capacité est plafonnée : `need` vient du fichier.
+    let mut out = Vec::with_capacity(need.min(1 << 24));
     let mut prev: Option<u32> = None;
     let (mut acc, mut nbits, mut p) = (0u32, 0u32, 0usize);
     let mut tmp = Vec::new();
