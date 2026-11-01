@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **230**
-- À faire ou en cours : **42**
-- Total : **272**
-- Progression : **84.6%**
+- Réalisé : **231**
+- À faire ou en cours : **45**
+- Total : **276**
+- Progression : **83.7%**
 - Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC)
 
 ## À FAIRE (par priorité)
@@ -36,6 +36,11 @@
 - [x] Permissions des applications Windows : demande claire (dossiers personnels, webcam, micro, écran ; réseau autorisé d'office mais blocable), choix mémorisé et révocable dans Paramètres > Confidentialité et sécurité (#158).
 - [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
+
+- [x] Stabilité de la session native (testée dans une VM de l'ISO v0.2.12, captures dans `docs/captures/stabilite-session/`) : menu Démarrer qui ignorait les clics une fois sur deux (saisie du pointeur), Paramètres en une seule fenêtre qui s'ouvre sur la page demandée, un bouton de barre des tâches par fenêtre (plus de menu de regroupement), compositeur picom (plus de traînées en déplaçant une fenêtre, ombres, coins arrondis), port Ethernet géré par NetworkManager, traductions fr/en/es/de conservées dans l'image (bureau, Corbeille, éditeur en français).
+- [ ] Explorateur en session native : les fichiers texte s'ouvrent dans un Mousepad vide (Corbeille comprise) ; passer par l'association Linux (PR séparée, après #174).
+- [ ] Repeinture de l'Explorateur après un Expose partiel (fenêtre noire jusqu'au survol après le redémarrage du compositeur, `gui_x11.rs`).
+- [ ] Finition Windows 11 de la session native : menu Démarrer aligné sur la barre, indicateur de fenêtre ouverte, cadre openbox sans poignée noire, volet latéral de Thunar trop étroit, avertissement « compte administrateur ».
 
 ### Priorité 1 — Fiabiliser le runtime
 

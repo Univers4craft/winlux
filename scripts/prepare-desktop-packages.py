@@ -27,7 +27,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             # Son : PipeWire (un flux par .exe, volume par application) et pactl.
             "pipewire", "pipewire-pulse", "pipewire-alsa", "wireplumber", "pulseaudio-utils",
             # Écran de verrouillage (winlux-lock) : crypt() des mots de passe, inactivité X11.
-            "libcrypt1", "libxss1", "python3-gi-cairo"]
+            "libcrypt1", "libxss1", "python3-gi-cairo",
+            # Compositeur : déplacements sans traînées, ombres et coins arrondis.
+            "picom"]
 
 def main():
     work = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/desktop-components").resolve()

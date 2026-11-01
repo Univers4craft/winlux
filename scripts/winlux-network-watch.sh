@@ -8,6 +8,9 @@ while :; do
             interface=${entry##*/}
             case "$interface" in lo|*[!a-zA-Z0-9_.:-]*) continue ;; esac
             test -e "$entry/device" && test ! -d "$entry/wireless" || continue
+            # Une interface éteinte ne publie pas de porteuse : l'allumer
+            # d'abord, la vérification suivante verra le câble.
+            ip link set dev "$interface" up 2>/dev/null || true
             test "$(cat "$entry/carrier" 2>/dev/null || true)" = 1 || continue
             managed=$(nmcli -g GENERAL.MANAGED device show "$interface" 2>/dev/null || true)
             case "$managed" in yes|true) continue ;; esac

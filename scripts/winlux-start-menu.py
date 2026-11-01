@@ -140,7 +140,6 @@ class Start(Gtk.Application):
         self.window.show_all()
         self.window.present()
         self.search.grab_focus()
-        GLib.idle_add(self.grab_pointer)
 
     def build(self):
         self.window = Gtk.ApplicationWindow(application=self, title=_t("Démarrer Winlux"))
@@ -155,6 +154,10 @@ class Start(Gtk.Application):
         self.window.connect("key-press-event", self.key)
         self.window.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.window.connect("button-press-event", self.outside_click)
+        # La saisie du pointeur n'aboutit que sur une fenêtre réellement
+        # visible ; openbox mappe d'abord la fenêtre dans un cadre encore
+        # caché (NOT_VIEWABLE), d'où quelques nouvelles tentatives.
+        self.window.connect("map-event", lambda *_: self.grab_soon())
         css = Gtk.CssProvider()
         css.load_from_data(b"""
           #winlux-start { background: #242238; color: #f7f5ff; border: 1px solid #6b5f92; border-radius: 8px; }
@@ -204,11 +207,23 @@ class Start(Gtk.Application):
         self.window.hide()
         return True
 
+    def grab_soon(self):
+        self.grab_attempts = 0
+        GLib.timeout_add(30, self.grab_pointer)
+        return False
+
     def grab_pointer(self):
         if self.window.get_visible() and not self.context:
+            # owner_events=True : les clics dans le menu restent livrés aux boutons ;
+            # seuls les clics hors de nos fenêtres reviennent à outside_click.
+            # Avec False, chaque clic partait vers la fenêtre principale et le
+            # menu ne réagissait que lorsque la saisie avait échoué (1 fois sur 2).
             self.pointer_status=self.window.get_display().get_default_seat().grab(self.window.get_window(),Gdk.SeatCapabilities.POINTER,
-                False,None,None,None,None)
+                True,None,None,None,None)
             if self.pointer_status==Gdk.GrabStatus.SUCCESS:self.window.grab_add()
+            elif self.pointer_status==Gdk.GrabStatus.NOT_VIEWABLE:
+                self.grab_attempts = getattr(self, "grab_attempts", 0) + 1
+                return self.grab_attempts < 30
         return False
 
     def outside_click(self, _, event):

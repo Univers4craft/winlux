@@ -87,6 +87,11 @@ def main():
     # Native Debian scripts may configure services; the build never starts them.
     policy = root / "usr/sbin/policy-rc.d"
     policy.write_text("#!/bin/sh\nexit 101\n"); policy.chmod(0o755)
+    # ubuntu-base exclut toutes les traductions (dpkg.cfg.d/excludes) : sans
+    # elles le bureau, la Corbeille et l'éditeur restent en anglais. Garder
+    # celles des quatre langues de l'interface ; lu après « excludes ».
+    (root / "etc/dpkg/dpkg.cfg.d/winlux-locales").write_text(
+        "".join(f"path-include=/usr/share/locale/{lang}/LC_MESSAGES/*.mo\n" for lang in ("fr", "en", "es", "de")))
     (root / "etc/resolv.conf").unlink(missing_ok=True)
     (root / "etc/resolv.conf").write_text("nameserver 10.0.2.3\n")
     # Signed Ubuntu indexes authenticate packages; no trusted=yes or disabled checks.
