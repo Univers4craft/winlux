@@ -43,6 +43,7 @@ def targets(runtime, testdir):
         found.append((f"parametres-{page:02d}", [python, "-B", str(scripts / "winlux-settings.py")],
                       {"WINLUX_SETTINGS_PAGE": str(page)}))
     found.append(("menu-demarrer", [python, "-B", str(scripts / "winlux-start-menu.py")], {}))
+    found.append(("menu-demarrer-clair", [python, "-B", str(scripts / "winlux-start-menu.py")], {"GTK_THEME": "Adwaita"}))
     for kind in ("volume", "power"):
         found.append((f"popup-{kind}", [python, "-B", str(scripts / "winlux-popup.py"), kind], {}))
     for page in ("quick", "notifications", "tasks", "appearance", "apps", "files", "recovery"):

@@ -645,7 +645,23 @@ pub fn take_key_char(hwnd: usize, vk: usize, lparam: isize) -> Option<u16> {
     }
 }
 
+/// Accent isolé à taper avant le caractère d'une frappe (touche morte
+/// suivie d'une lettre qu'elle ne peut pas accentuer : « ^x »).
+fn key_prefixes() -> &'static Mutex<HashMap<KeyCharKey, u16>> {
+    static K: OnceLock<Mutex<HashMap<KeyCharKey, u16>>> = OnceLock::new();
+    K.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn set_key_prefix(hwnd: usize, vk: usize, lparam: isize, ch: u16) {
+    lock(key_prefixes()).insert(KeyCharKey { hwnd, vk, lparam }, ch);
+}
+
+pub fn take_key_prefix(hwnd: usize, vk: usize, lparam: isize) -> Option<u16> {
+    lock(key_prefixes()).remove(&KeyCharKey { hwnd, vk, lparam })
+}
+
 fn discard_key_chars(hwnd: usize) {
+    lock(key_prefixes()).retain(|key, _| key.hwnd != hwnd);
     lock(key_chars()).retain(|key, _| key.hwnd != hwnd);
 }
 

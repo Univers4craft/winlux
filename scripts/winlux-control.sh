@@ -467,6 +467,9 @@ perform() {
             (winlux-backup run "$2" >"$run/backup/$2.log" 2>&1 &) ;;
         session-*) shift; winlux-sessions "${action#session-}" "$@" ;;
         remote-*) shift; winlux-remote-config "${action#remote-}" "$@" ;;
+        # Le dossier à partager est le dossier courant (fixé par l'Explorateur).
+        share-*) shift; winlux-share "${action#share-}" "$@" ;;
+        transfer-*) shift; winlux-transfer "${action#transfer-}" "$@" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
     esac
 }

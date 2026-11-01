@@ -270,3 +270,188 @@ fn svgz_compresse_par_gzip() {
     let img = decode("t.svgz");
     assert!(matches!(img.pages[0].content, Content::Vector(_)));
 }
+
+// --- Robustesse sur en-têtes malformés (#213) ------------------------------
+//
+// Le profil release compile avec `panic = "abort"` : chaque décodeur doit
+// rendre une erreur propre, jamais paniquer ni allouer sur foi du fichier.
+
+fn malformed(name: &str, patch: impl FnOnce(&mut Vec<u8>)) -> Result<Image, Error> {
+    let mut d = std::fs::read(dir().join(name)).unwrap();
+    patch(&mut d);
+    decode_bytes(&d, &ext_of(name))
+}
+
+#[test]
+fn png_profondeur_invalide() {
+    // IHDR : profondeur à l'octet 24 (0 = division par zéro, 7 = décalage
+    // hors octet, 3 = non prévue par le format).
+    for depth in [0u8, 3, 7, 32, 255] {
+        let r = malformed("ref.png", |d| d[24] = depth);
+        assert!(
+            matches!(r, Err(Error::Corrupt)),
+            "profondeur {depth}: {r:?}"
+        );
+    }
+    // Entrelacement inconnu.
+    assert!(malformed("ref.png", |d| d[28] = 2).is_err());
+}
+
+#[test]
+fn apng_trame_hors_canevas() {
+    // APNG synthétique 2×2 : fcTL annonçant une trame 60000×60000.
+    fn chunk(kind: &[u8], body: &[u8]) -> Vec<u8> {
+        let mut v = (body.len() as u32).to_be_bytes().to_vec();
+        v.extend_from_slice(kind);
+        v.extend_from_slice(body);
+        v.extend_from_slice(&[0, 0, 0, 0]);
+        v
+    }
+    let mut d = b"\x89PNG\r\n\x1a\n".to_vec();
+    d.extend(chunk(b"IHDR", &[0, 0, 0, 2, 0, 0, 0, 2, 8, 6, 0, 0, 0]));
+    d.extend(chunk(b"acTL", &[0, 0, 0, 2, 0, 0, 0, 0]));
+    let mut fctl = vec![0, 0, 0, 0];
+    fctl.extend_from_slice(&60000u32.to_be_bytes());
+    fctl.extend_from_slice(&60000u32.to_be_bytes());
+    fctl.extend_from_slice(&[0; 8]);
+    fctl.extend_from_slice(&[0, 1, 0, 10, 0, 0]);
+    d.extend(chunk(b"fcTL", &fctl));
+    // IDAT : zlib « stored » de 2 lignes (1 filtre + 8 octets).
+    let raw = [0u8; 18];
+    let mut z = vec![0x78, 0x01, 0x01, 18, 0, 237, 255];
+    z.extend_from_slice(&raw);
+    z.extend_from_slice(&[0, 0, 0, 1]);
+    d.extend(chunk(b"IDAT", &z));
+    d.extend(chunk(b"fcTL", &fctl));
+    d.extend(chunk(b"fdAT", &[0, 0, 0, 1, 1, 2, 3]));
+    d.extend(chunk(b"IEND", &[]));
+    let img = decode_bytes(&d, "png").expect("l'image de base reste lisible");
+    assert_eq!((raster(&img, 0).w, raster(&img, 0).h), (2, 2));
+}
+
+#[test]
+fn gif_trame_demesuree() {
+    // Descripteur d'image 65535×65535 sur un canevas 2×2 : trame ignorée.
+    let mut d = b"GIF89a\x02\x00\x02\x00\x00\x00\x00".to_vec();
+    d.extend_from_slice(&[0x2C, 0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF, 0, 2, 0, 0x3B]);
+    assert!(matches!(decode_bytes(&d, "gif"), Err(Error::Corrupt)));
+    // Trame vide (0×0).
+    let mut d = b"GIF89a\x02\x00\x02\x00\x00\x00\x00".to_vec();
+    d.extend_from_slice(&[0x2C, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0x3B]);
+    assert!(matches!(decode_bytes(&d, "gif"), Err(Error::Corrupt)));
+}
+
+#[test]
+fn jpeg_composantes_et_sos_tronque() {
+    // SOF0 avec 5 composantes.
+    let mut d = vec![0xFF, 0xD8];
+    d.extend_from_slice(&[0xFF, 0xC0, 0, 23, 8, 0, 1, 0, 1, 5]);
+    for i in 0..5u8 {
+        d.extend_from_slice(&[i + 1, 0x11, 0]);
+    }
+    d.extend_from_slice(&[0xFF, 0xD9]);
+    assert!(matches!(decode_bytes(&d, "jpg"), Err(Error::Corrupt)));
+    // SOF0 correct puis SOS vide (longueur 2) et SOS trop court.
+    for sos in [&[0xFF, 0xDA, 0, 2][..], &[0xFF, 0xDA, 0, 4, 1, 1][..]] {
+        let mut d = vec![0xFF, 0xD8];
+        d.extend_from_slice(&[0xFF, 0xC0, 0, 11, 8, 0, 1, 0, 1, 1, 1, 0x11, 0]);
+        d.extend_from_slice(sos);
+        d.extend_from_slice(&[0xFF, 0xD9]);
+        assert!(matches!(decode_bytes(&d, "jpg"), Err(Error::Corrupt)));
+    }
+}
+
+#[test]
+fn tiff_tuile_de_taille_nulle() {
+    // IFD little-endian 4×4 avec TileWidth/TileLength = 0.
+    fn tiff(entries: &[(u16, u32)]) -> Vec<u8> {
+        let mut d = b"II*\0\x08\0\0\0".to_vec();
+        d.extend_from_slice(&(entries.len() as u16).to_le_bytes());
+        for &(tag, v) in entries {
+            d.extend_from_slice(&tag.to_le_bytes());
+            d.extend_from_slice(&4u16.to_le_bytes());
+            d.extend_from_slice(&1u32.to_le_bytes());
+            d.extend_from_slice(&v.to_le_bytes());
+        }
+        d.extend_from_slice(&[0; 4]);
+        d.resize(d.len() + 64, 0x80);
+        d
+    }
+    let base = [(256, 4), (257, 4), (258, 8), (259, 1), (262, 1), (277, 1)];
+    let mut e = base.to_vec();
+    e.extend_from_slice(&[(322, 0), (323, 0), (324, 200), (325, 16)]);
+    assert!(matches!(
+        decode_bytes(&tiff(&e), "tif"),
+        Err(Error::Corrupt)
+    ));
+    // Profondeur 0 bit et profondeur 200 bits.
+    for bps in [0, 200] {
+        let mut e = base.to_vec();
+        e[2] = (258, bps);
+        e.extend_from_slice(&[(273, 200), (278, 4), (279, 16)]);
+        assert!(decode_bytes(&tiff(&e), "tif").is_err());
+    }
+    // Le même fichier avec une profondeur valide se décode.
+    let mut e = base.to_vec();
+    e.extend_from_slice(&[(273, 200), (278, 4), (279, 16)]);
+    assert!(decode_bytes(&tiff(&e), "tif").is_ok());
+}
+
+#[test]
+fn psd_canaux_et_profondeur() {
+    // 0 canal, 300 canaux, profondeur 3 bits.
+    assert!(malformed("t.psd", |d| d[13] = 0).is_err());
+    assert!(malformed("t.psd", |d| d[12] = 1).is_err());
+    assert!(malformed("t.psd", |d| d[23] = 3).is_err());
+    assert!(malformed("t.psd", |_| {}).is_ok());
+}
+
+#[test]
+fn exr_compression_vide() {
+    let mut d = vec![0x76, 0x2F, 0x31, 0x01, 2, 0, 0, 0];
+    d.extend_from_slice(b"compression\0compression\0");
+    d.extend_from_slice(&[0, 0, 0, 0, 0]);
+    assert!(matches!(decode_bytes(&d, "exr"), Err(Error::Corrupt)));
+}
+
+#[test]
+fn xcf_hierarchie_demesuree() {
+    // Calque 2×2 dont la hiérarchie annonce 4 milliards de pixels.
+    let mut d = b"gimp xcf file\0".to_vec();
+    d.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 0]);
+    d.extend_from_slice(&[0; 8]); // fin des propriétés
+    let layer_at = (d.len() + 12) as u32;
+    d.extend_from_slice(&layer_at.to_be_bytes());
+    d.extend_from_slice(&[0; 8]); // fin des calques, fin des canaux
+                                  // calque
+    d.extend_from_slice(&[0, 0, 0, 2, 0, 0, 0, 2, 0, 0, 0, 0, 0, 0, 0, 2, b'a', 0]);
+    d.extend_from_slice(&[0; 8]); // fin des propriétés
+    let hier_at = (d.len() + 8) as u32;
+    d.extend_from_slice(&hier_at.to_be_bytes());
+    d.extend_from_slice(&[0; 4]); // masque
+    d.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 3]);
+    let lvl = (d.len() + 4) as u32;
+    d.extend_from_slice(&lvl.to_be_bytes());
+    d.extend_from_slice(&[0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0, 0, 0, 0]);
+    let img = decode_bytes(&d, "xcf").expect("composite décodable");
+    assert_eq!(raster(&img, 0).w, 2);
+}
+
+#[test]
+fn eps_apercu_bits_invalides() {
+    let d = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BeginPreview: 4 4 3 1\n%0F\n%%EndPreview\n";
+    assert!(matches!(decode_bytes(d, "eps"), Err(Error::Variant(_))));
+    let d = b"%!PS-Adobe-3.0 EPSF-3.0\n%%BeginPreview: 4 4 1 1\n%0F\n%%EndPreview\n";
+    assert!(decode_bytes(d, "eps").is_ok());
+}
+
+#[test]
+fn gltf_accesseur_demesure() {
+    let j = br#"{"asset":{"version":"2.0"},
+        "buffers":[{"byteLength":4,"uri":"data:application/octet-stream;base64,AAAAAA=="}],
+        "bufferViews":[{"buffer":0,"byteLength":4}],
+        "accessors":[{"bufferView":0,"componentType":5126,"count":100000000,"type":"VEC3"}],
+        "meshes":[{"primitives":[{"attributes":{"POSITION":0}}]}],
+        "nodes":[{"mesh":0}],"scenes":[{"nodes":[0]}]}"#;
+    assert!(matches!(decode_bytes(j, "gltf"), Err(Error::Corrupt)));
+}

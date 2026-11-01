@@ -15,6 +15,7 @@ mod firewall;
 mod gamemode;
 mod gpu;
 mod imaging;
+mod intl;
 mod launch;
 mod loader;
 pub mod log;
@@ -35,6 +36,7 @@ mod registry;
 mod setup;
 mod tasks;
 mod thunks;
+mod uac;
 mod volumes;
 
 use std::path::PathBuf;
@@ -67,6 +69,13 @@ fn main() {
     if exe == "--power" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(power::cli::main(&rest));
+    }
+    if exe == "--intl" {
+        std::process::exit(intl::report());
+    }
+    if exe == "--text" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(intl::text::cli(&rest));
     }
     if exe == "--boot-time" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
@@ -165,6 +174,7 @@ fn main() {
         }
     };
     registry::backup();
+    paths::install_windows_env();
     if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
         crash::set_exe_name(name);
     }
@@ -203,6 +213,7 @@ fn main() {
         image.pe.stack_reserve,
         image.pe.stack_commit
     );
+    uac::check_launch(image.base, &exe);
     let imports = image.import_names();
     cpu::apply_launch(&cpu_settings, &imports);
     if cpu::is_heavy(&imports) {

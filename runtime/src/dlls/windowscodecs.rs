@@ -211,6 +211,29 @@ fn bytes_per_pixel(fmt: &Guid) -> Option<u32> {
 
 // --- Pixels -------------------------------------------------------------------
 
+/// Taille maximale du tampon d'un bitmap WIC (1 Gio).
+const MAX_PIX_BYTES: u64 = 1 << 30;
+
+/// Rectangle valide et inclus dans `w`×`h` (calcul en 64 bits : `x + w`
+/// peut déborder un `i32`).
+fn rect_in(r: &WicRect, w: u32, h: u32) -> bool {
+    r.x >= 0
+        && r.y >= 0
+        && r.w >= 0
+        && r.h >= 0
+        && r.x as i64 + r.w as i64 <= w as i64
+        && r.y as i64 + r.h as i64 <= h as i64
+}
+
+/// Vrai si un tampon de `size` octets au pas `stride` contient `h` lignes de
+/// `row` octets (sans débordement).
+fn buffer_fits(stride: u32, size: u32, row: u64, h: u64) -> bool {
+    if h == 0 {
+        return true;
+    }
+    (stride as u64) >= row && (size as u64) >= (stride as u64) * (h - 1) + row
+}
+
 #[derive(Clone, Debug)]
 pub struct Pix {
     pub w: u32,
@@ -224,13 +247,19 @@ pub struct Pix {
 impl Pix {
     fn zeroed(w: u32, h: u32, fmt: Guid) -> Option<Pix> {
         let bpp = bytes_per_pixel(&fmt)?;
-        let stride = (w * bpp + 3) & !3;
+        // Stride et taille calculés sans débordement, plafonnés à 1 Gio :
+        // les dimensions viennent de l'application ou d'un fichier.
+        let stride = (w as u64 * bpp as u64 + 3) & !3;
+        let total = stride * h as u64;
+        if stride > u32::MAX as u64 || total > MAX_PIX_BYTES {
+            return None;
+        }
         Some(Pix {
             w,
             h,
             fmt,
-            stride,
-            data: vec![0; stride as usize * h as usize],
+            stride: stride as u32,
+            data: vec![0; total as usize],
             dpi: (96.0, 96.0),
         })
     }
@@ -346,13 +375,7 @@ unsafe fn copy_pixels(
     } else {
         *rect
     };
-    if r.x < 0
-        || r.y < 0
-        || r.w < 0
-        || r.h < 0
-        || r.x + r.w > pix.w as i32
-        || r.y + r.h > pix.h as i32
-    {
+    if !rect_in(&r, pix.w, pix.h) {
         return E_INVALIDARG;
     }
     let bpp = bytes_per_pixel(&pix.fmt).unwrap_or(4) as usize;
@@ -360,7 +383,7 @@ unsafe fn copy_pixels(
     if r.h == 0 || r.w == 0 {
         return S_OK;
     }
-    if (stride as usize) < row || (size as usize) < stride as usize * (r.h as usize - 1) + row {
+    if !buffer_fits(stride, size, row as u64, r.h as u64) {
         return E_INVALIDARG;
     }
     for y in 0..r.h as usize {
@@ -760,15 +783,18 @@ unsafe extern "win64" fn create_bitmap_from_memory(
         return E_INVALIDARG;
     }
     *out = std::ptr::null_mut();
-    let Some(mut pix) = Pix::zeroed(w, h, *fmt) else {
+    let Some(bpp) = bytes_per_pixel(&*fmt) else {
         return WINCODEC_ERR_UNSUPPORTEDPIXELFORMAT;
     };
-    let row = (w * bytes_per_pixel(&*fmt).unwrap_or(4)) as usize;
-    if h > 0
-        && ((stride as usize) < row || (size as usize) < stride as usize * (h as usize - 1) + row)
-    {
+    let row = w as u64 * bpp as u64;
+    // Le tampon de l'appelant doit couvrir toutes les lignes avant d'allouer.
+    if !buffer_fits(stride, size, row, h as u64) {
         return E_INVALIDARG;
     }
+    let Some(mut pix) = Pix::zeroed(w, h, *fmt) else {
+        return E_INVALIDARG;
+    };
+    let row = row as usize;
     for y in 0..h as usize {
         let dst = y * pix.stride as usize;
         std::ptr::copy_nonoverlapping(
@@ -1062,13 +1088,7 @@ unsafe extern "win64" fn bitmap_lock(
     } else {
         *rect
     };
-    if r.x < 0
-        || r.y < 0
-        || r.w <= 0
-        || r.h <= 0
-        || r.x + r.w > p.w as i32
-        || r.y + r.h > p.h as i32
-    {
+    if r.w <= 0 || r.h <= 0 || !rect_in(&r, p.w, p.h) {
         return E_INVALIDARG;
     }
     // Un verrou en écriture est exclusif ; plusieurs lectures sont permises.
@@ -1159,13 +1179,7 @@ unsafe extern "win64" fn converter_can_convert(
 }
 
 fn clip(pix: &Pix, r: WicRect) -> Option<Pix> {
-    if r.x < 0
-        || r.y < 0
-        || r.w <= 0
-        || r.h <= 0
-        || r.x + r.w > pix.w as i32
-        || r.y + r.h > pix.h as i32
-    {
+    if r.w <= 0 || r.h <= 0 || !rect_in(&r, pix.w, pix.h) {
         return None;
     }
     let mut out = Pix::zeroed(r.w as u32, r.h as u32, pix.fmt)?;

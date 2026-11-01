@@ -55,4 +55,5 @@ touch "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/marker"
 manager --install firefox
 test -f "$WINLUX_BROWSER_ROOT/opt/winlux/browsers/firefox/marker"
 if manager --install unknown >/dev/null 2>&1; then exit 1; fi
+python3 -B "$project/scripts/test-browser-downloads.py"
 echo 'OK: offline browser selection, installation, default, URL arguments, checksums and cleanup'

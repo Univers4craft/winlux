@@ -197,19 +197,43 @@ fn is_video(f: u32) -> bool {
     matches!(f, D3DFMT_NV12 | D3DFMT_YV12 | D3DFMT_P010)
 }
 
-/// (pitch, taille) d'un niveau.
+/// Dimension maximale d'une surface ou d'une texture (comme les pilotes D3D9).
+pub(crate) const MAX_SURFACE_DIM: u32 = 16384;
+/// Mémoire CPU maximale d'une surface (1 Gio).
+pub(crate) const MAX_SURFACE_BYTES: u64 = 1 << 30;
+
+/// (pitch, taille) d'un niveau, calculés en 64 bits : les dimensions
+/// viennent de l'application et `w * bpp * h` déborderait un `u32`.
 pub(crate) fn level_layout(f: u32, w: u32, h: u32) -> (u32, usize) {
-    let Some(fi) = format_info(f) else {
-        return (w * 4, (w * 4 * h) as usize);
+    let (w64, h64) = (w as u64, h as u64);
+    let (pitch, size) = match format_info(f) {
+        None => (w64 * 4, w64 * 4 * h64),
+        Some(fi) if fi.block != 0 => {
+            let bw = w64.div_ceil(4).max(1);
+            let bh = h64.div_ceil(4).max(1);
+            (bw * fi.block as u64, bw * fi.block as u64 * bh)
+        }
+        Some(fi) => {
+            let pitch = (w64 * fi.bpp as u64).next_multiple_of(4);
+            let rows = if is_video(f) {
+                h64 + h64.div_ceil(2)
+            } else {
+                h64
+            };
+            (pitch, pitch * rows)
+        }
     };
-    if fi.block != 0 {
-        let bw = w.div_ceil(4).max(1);
-        let bh = h.div_ceil(4).max(1);
-        return (bw * fi.block, (bw * fi.block * bh) as usize);
-    }
-    let pitch = (w * fi.bpp).next_multiple_of(4);
-    let rows = if is_video(f) { h + h.div_ceil(2) } else { h };
-    (pitch, (pitch * rows) as usize)
+    (pitch.min(u32::MAX as u64) as u32, size as usize)
+}
+
+/// Vrai si une surface `w`×`h` de ce format peut être allouée (dimensions
+/// bornées, taille ≤ 1 Gio) ; sinon l'appel D3D est refusé.
+pub(crate) fn surface_fits(f: u32, w: u32, h: u32) -> bool {
+    w > 0
+        && h > 0
+        && w <= MAX_SURFACE_DIM
+        && h <= MAX_SURFACE_DIM
+        && (level_layout(f, w, h).1 as u64) <= MAX_SURFACE_BYTES
 }
 
 // ── Objets COM ─────────────────────────────────────────────────────────────
@@ -1191,6 +1215,9 @@ unsafe fn create_device(
         pp.format = D3DFMT_X8R8G8B8;
     }
     pp.count = pp.count.max(1);
+    // Tampon arrière borné : une taille absurde donnerait une surface nulle.
+    pp.width = pp.width.clamp(1, MAX_SURFACE_DIM);
+    pp.height = pp.height.clamp(1, MAX_SURFACE_DIM);
     let gl_state = create_gl(window, pp.width, pp.height);
     if gl_state.is_none() {
         log_warn!(
@@ -1311,6 +1338,9 @@ unsafe fn make_surface(
     usage: u32,
     pool: u32,
 ) -> *mut Obj {
+    if !surface_fits(format, w, h) {
+        return std::ptr::null_mut();
+    }
     let (pitch, size) = level_layout(format, w, h);
     let mut s = SurfaceData {
         width: w,
@@ -1817,7 +1847,10 @@ unsafe fn make_texture(
     faces: u32,
 ) -> Option<*mut Obj> {
     format_info(format)?;
-    if w == 0 || h == 0 || w > 16384 || h > 16384 {
+    // Toutes les faces et tous les niveaux (≤ 4/3 du niveau 0) tiennent en 1 Gio.
+    if !surface_fits(format, w, h)
+        || (level_layout(format, w, h).1 as u64) * faces as u64 * 4 / 3 > MAX_SURFACE_BYTES
+    {
         return None;
     }
     let n = if usage & D3DUSAGE_AUTOGENMIPMAP != 0 {
@@ -2418,6 +2451,8 @@ unsafe extern "win64" fn dev_reset(this: *mut Obj, pp: *mut PresentParams) -> i3
     if pp.format == D3DFMT_UNKNOWN {
         pp.format = D3DFMT_X8R8G8B8;
     }
+    pp.width = pp.width.clamp(1, MAX_SURFACE_DIM);
+    pp.height = pp.height.clamp(1, MAX_SURFACE_DIM);
     d.release_bindings();
     for p in [d.backbuffer, d.auto_depth] {
         if !p.is_null() {
@@ -2648,7 +2683,13 @@ unsafe extern "win64" fn dev_create_volume(
     out: *mut *mut Obj,
     _shared: *mut usize,
 ) -> i32 {
-    if out.is_null() || format_info(format).is_none() || w == 0 || h == 0 || depth == 0 {
+    if out.is_null()
+        || format_info(format).is_none()
+        || !surface_fits(format, w, h)
+        || depth == 0
+        || depth > MAX_SURFACE_DIM
+        || (level_layout(format, w, h).1 as u64) * depth as u64 > MAX_SURFACE_BYTES
+    {
         return D3DERR_INVALIDCALL;
     }
     // Stockage CPU seulement : les textures 3D ne sont pas encore échantillonnées.
@@ -2738,7 +2779,7 @@ unsafe extern "win64" fn dev_create_rt(
     out: *mut *mut Obj,
     _shared: *mut usize,
 ) -> i32 {
-    if out.is_null() || format_info(format).is_none() || w == 0 || h == 0 {
+    if out.is_null() || format_info(format).is_none() || !surface_fits(format, w, h) {
         return D3DERR_INVALIDCALL;
     }
     let d = dev!(this);
@@ -2765,7 +2806,7 @@ unsafe extern "win64" fn dev_create_ds(
     out: *mut *mut Obj,
     _shared: *mut usize,
 ) -> i32 {
-    if out.is_null() || !is_depth(format) || w == 0 || h == 0 {
+    if out.is_null() || !is_depth(format) || !surface_fits(format, w, h) {
         return D3DERR_INVALIDCALL;
     }
     let d = dev!(this);
@@ -2790,7 +2831,7 @@ unsafe extern "win64" fn dev_create_offscreen(
     out: *mut *mut Obj,
     _shared: *mut usize,
 ) -> i32 {
-    if out.is_null() || format_info(format).is_none() || w == 0 || h == 0 {
+    if out.is_null() || format_info(format).is_none() || !surface_fits(format, w, h) {
         return D3DERR_INVALIDCALL;
     }
     let d = dev!(this);
@@ -4968,7 +5009,8 @@ pub(crate) unsafe fn create_video_surface(
 ) -> Option<*mut Obj> {
     let m = dev_of(device)?;
     let d = lock(m);
-    Some(make_surface(&d, device, w, h, format, 0, D3DPOOL_DEFAULT))
+    let s = make_surface(&d, device, w, h, format, 0, D3DPOOL_DEFAULT);
+    (!s.is_null()).then_some(s)
 }
 
 /// Accès interne (DXVA2) : tampon CPU d'une surface, verrouillé le temps de `f`.

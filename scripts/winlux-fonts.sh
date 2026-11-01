@@ -83,10 +83,19 @@ linux_path() {
     esac
 }
 
+# Dossiers de polices des applications Windows (C:\Windows\Fonts et le
+# dossier par utilisateur de Windows 10+) : visibles de Linux, et
+# désinstallables comme les polices de l'utilisateur.
+drive_c=${WINLUX_DRIVE_C:-$home}
+windows_dirs="$drive_c/Windows/Fonts $drive_c/windows/Fonts $drive_c/WINDOWS/Fonts $drive_c/AppData/Local/Microsoft/Windows/Fonts"
+
 is_user_font() {
     case "$1" in
         "$user_dir"/*|"$home"/.fonts/*) return 0 ;;
     esac
+    for dir in $windows_dirs; do
+        case "$1" in "$dir"/*) return 0 ;; esac
+    done
     return 1
 }
 
@@ -109,7 +118,7 @@ list() {
         if have fc-list; then
             fc-list --format '%{family[0]}|%{style[0]}|%{file}\n' 2>/dev/null
         else
-            for dir in "$root/usr/share/fonts" "$root/usr/local/share/fonts" "$user_dir" "$home/.fonts"; do
+            for dir in "$root/usr/share/fonts" "$root/usr/local/share/fonts" "$user_dir" "$home/.fonts" $windows_dirs; do
                 test -d "$dir" || continue
                 find "$dir" -type f \( -iname '*.ttf' -o -iname '*.otf' -o -iname '*.ttc' -o -iname '*.otc' \) 2>/dev/null \
                     | while IFS= read -r f; do
@@ -118,9 +127,11 @@ list() {
                     done
             done
         fi
-    } | awk -F'|' -v user="$user_dir/" -v legacy="$home/.fonts/" '
+    } | awk -F'|' -v user="$user_dir/" -v legacy="$home/.fonts/" -v drive="$drive_c/" '
         NF >= 3 && $3 ~ /\.([Tt][Tt][FfCc]|[Oo][Tt][FfCc])$/ {
-            scope = (index($3, user) == 1 || index($3, legacy) == 1) ? "user" : "system"
+            rest = (index($3, drive) == 1) ? tolower(substr($3, length(drive) + 1)) : ""
+            windows = (index(rest, "windows/fonts/") == 1 || index(rest, "appdata/local/microsoft/windows/fonts/") == 1)
+            scope = (index($3, user) == 1 || index($3, legacy) == 1 || windows) ? "user" : "system"
             print "font=" $1 "|" $2 "|" scope "|" $3
         }' | sort -f -u > "$out"
     mv "$out" "$run/fonts.txt"

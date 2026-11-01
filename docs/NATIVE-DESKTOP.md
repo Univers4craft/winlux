@@ -19,8 +19,14 @@ seuls (fournis par les données XFCE) ne suffisent pas : la construction exige
 Paramètres utilise désormais une fenêtre GTK redimensionnable, une recherche
 de catégories et des pages défilantes. Les opérations de contrôle s'exécutent
 sans bloquer l'interface ; la page des mises à jour affiche progression et
-journal. Les catégories avancées Applications, Programmes Windows,
-Accessibilité et Effets visuels ouvrent encore les écrans PE existants.
+journal. Les pages Programmes Windows, Accessibilité, Effets visuels,
+Localisation, Gestionnaire de fichiers, Son avancé, Mises à jour système,
+Lecteurs réseau, Personnalisation du bureau et Bluetooth et appareils viennent
+de `winlux-settings-pages` (installé à côté de `winlux-settings`) et agissent
+sur la session réelle : BlueZ, pactl, winlux-sysupdate, winlux-drives,
+registre Windows (`Explorer\Advanced`, relu par l'Explorateur), xsettings et
+Openbox, `accessibility.ini` et `<programme>.exe.winlux.ini` partagés avec le
+runtime. Une page sans service ou sans matériel n'apparaît pas dans la liste.
 `WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings` conserve l'ancien écran.
 Le test `xvfb-run -a /usr/bin/python3 -B scripts/test-settings-native.py`
 vérifie la navigation sans effectuer d'action système.

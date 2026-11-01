@@ -1946,8 +1946,32 @@ def human_size(size_bytes):
     return f"{size_bytes:.1f} Po"
 
 
+def live_medium_disk(mounts="/proc/self/mounts", sysfs="/sys"):
+    """Disque (« sdb ») du média Live dont Winlux a démarré : clé USB ou DVD.
+
+    L'installateur ne doit jamais le proposer comme destination : effacer la
+    clé d'installation en cours de route rendrait le PC inutilisable.
+    """
+    try:
+        with open(mounts, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "/run/winlux/live/media" and parts[0].startswith("/dev/"):
+            name = os.path.basename(os.path.realpath(parts[0]))
+            # Une partition (sdb1) désigne le disque qui la porte (sdb).
+            if os.path.exists(os.path.join(sysfs, "class/block", name, "partition")):
+                parent = os.path.realpath(os.path.join(sysfs, "class/block", name, ".."))
+                return os.path.basename(parent)
+            return name
+    return None
+
+
 def detect_disks():
     disks = []
+    live_disk = live_medium_disk()
     try:
         out = subprocess.check_output(
             ["lsblk", "-bdnJo", "NAME,SIZE,MODEL,TRAN,TYPE,RO,SERIAL,ROTA"],
@@ -1960,6 +1984,8 @@ def detect_disks():
             if dev.get("ro"):
                 continue
             name = dev["name"]
+            if name == live_disk:
+                continue  # la clé USB d'installation elle-même
             path = f"/dev/{name}"
             size = dev.get("size", 0) or 0
             if size < 2 * 1024**3:

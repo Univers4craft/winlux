@@ -165,6 +165,49 @@ impl Screen {
         self.private = false;
     }
 
+    /// Remet l'écran à l'état initial sans construire un `Screen` (1,7 Mo)
+    /// sur la pile : `Screen::new()` par valeur dépassait la pile de 1 Mo
+    /// du programme et faisait planter le bureau à l'ouverture du terminal.
+    fn reinit(&mut self) {
+        for row in self.cells.iter_mut().chain(self.alt_cells.iter_mut()) {
+            for c in row.iter_mut() {
+                *c = Cell::blank();
+            }
+        }
+        for row in self.scroll.iter_mut() {
+            for c in row.iter_mut() {
+                *c = Cell::blank();
+            }
+        }
+        self.scroll_len = 0;
+        self.cols = 80;
+        self.rows = 24;
+        self.cx = 0;
+        self.cy = 0;
+        self.cursor_vis = true;
+        self.saved_cx = 0;
+        self.saved_cy = 0;
+        self.saved_fg = DEFAULT_FG;
+        self.saved_bg = DEFAULT_BG;
+        self.saved_attr = 0;
+        self.fg = DEFAULT_FG;
+        self.bg = DEFAULT_BG;
+        self.attr = 0;
+        self.scroll_top = 0;
+        self.scroll_bot = 23;
+        self.state = Parse::Normal;
+        self.reset_params();
+        self.osc_buf = [0; 256];
+        self.osc_len = 0;
+        self.alt_cx = 0;
+        self.alt_cy = 0;
+        self.using_alt = false;
+        self.title = [0; 64];
+        self.title_len = 0;
+        self.view_off = 0;
+        self.wrap_next = false;
+    }
+
     fn param(&self, idx: usize, def: u16) -> u16 {
         if idx < self.nparam && self.params[idx] != 0 {
             self.params[idx]
@@ -816,11 +859,9 @@ unsafe fn open_tab() -> bool {
     if pty == 0 {
         return false;
     }
-    TABS[slot] = Tab {
-        active: true,
-        pty,
-        screen: Screen::new(),
-    };
+    TABS[slot].active = true;
+    TABS[slot].pty = pty;
+    TABS[slot].screen.reinit();
     TABS[slot].screen.resize(cols, rows);
     TAB_COUNT += 1;
     ACTIVE_TAB = slot;

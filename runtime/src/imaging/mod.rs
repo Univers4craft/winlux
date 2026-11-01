@@ -799,6 +799,9 @@ fn eps(d: &[u8]) -> Result<Image, Error> {
         if head.len() >= 3 {
             let (w, h, bits) = (head[0], head[1], head[2].max(1));
             check_size(w, h)?;
+            if !matches!(bits, 1 | 2 | 4 | 8) {
+                return Err(Error::Variant("EPS aperçu"));
+            }
             let end = s[p..]
                 .find("%%EndPreview")
                 .map(|e| p + e)

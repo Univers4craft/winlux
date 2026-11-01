@@ -54,6 +54,8 @@ mod restore;
 mod regedit;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/sharing.rs"]
+mod sharing;
 #[path = "../shell/snip.rs"]
 mod snip;
 #[path = "../shell/store.rs"]
@@ -64,6 +66,8 @@ mod settings_cpu;
 mod sysmon;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
+#[path = "../shell/sysinfo.rs"]
+mod sysinfo;
 #[path = "../shell/taskschd.rs"]
 mod taskschd;
 #[path = "../shell/terminal.rs"]
