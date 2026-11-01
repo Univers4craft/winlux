@@ -52,9 +52,15 @@ directory.mkdir(parents=True, exist_ok=True)
 color = "#e7ddf5"
 if kind == "battery":
     batteries = list(Path("/sys/class/power_supply").glob("BAT*/capacity"))
+    level = None
     if batteries:
-        level = max(0, min(100, int(batteries[0].read_text().strip())))
-        status = (batteries[0].parent / "status").read_text().strip()
+        # Une batterie absente ou en défaut expose parfois un fichier vide ou illisible.
+        try:
+            level = max(0, min(100, int(batteries[0].read_text().strip())))
+            status = (batteries[0].parent / "status").read_text().strip()
+        except (OSError, ValueError):
+            level = None
+    if level is not None:
         body = f'<rect x="3" y="7" width="18" height="11" rx="2" fill="none" stroke="{color}" stroke-width="1.5"/><path d="M22 10v5" stroke="{color}" stroke-width="2"/><rect x="5" y="9" width="{14 * level / 100:.1f}" height="7" fill="{color}"/>'
         tooltip, identity = f"Batterie : {level}% — {status}", f"battery-{level}"
     else:

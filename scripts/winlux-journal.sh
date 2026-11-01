@@ -29,7 +29,9 @@ case "${1:-status}" in
             printf 'Journal vide\n'
         fi
         if test -f "$CRASH_FILE"; then
-            crashes=$(grep -c '^\[CRASH\]' "$CRASH_FILE" 2>/dev/null || echo 0)
+            # grep -c affiche déjà 0 (et sort en erreur) sans correspondance.
+            crashes=$(grep -c '^\[CRASH\]' "$CRASH_FILE" 2>/dev/null || true)
+            crashes=${crashes:-0}
             printf 'Crash dumps: %s\n' "$crashes"
         fi
         ;;

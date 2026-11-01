@@ -657,15 +657,38 @@ def run_lock():
     Gtk.main()
 
 
+def claim_marker(marker):
+    """Crée le marqueur de verrouillage de façon atomique (O_EXCL).
+
+    Deux « winlux-lock now » simultanés (raccourci et démon) ne doivent ouvrir
+    qu'un seul écran : seul celui qui crée le fichier continue. Un marqueur
+    laissé par un processus disparu est remplacé.
+    """
+    for _attempt in range(2):
+        try:
+            marker.parent.mkdir(parents=True, exist_ok=True)
+            fd = os.open(marker, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o644)
+        except FileExistsError:
+            if is_locked():
+                return False
+            try:
+                marker.unlink()
+            except OSError:
+                pass
+            continue
+        except OSError:
+            # /run indisponible (tests) : on verrouille sans marqueur.
+            return True
+        with os.fdopen(fd, "w") as handle:
+            handle.write(f"{os.getpid()}\n")
+        return True
+    return False
+
+
 def lock_now():
-    if is_locked():
-        return 0
     marker = active_file()
-    try:
-        marker.parent.mkdir(parents=True, exist_ok=True)
-        marker.write_text(f"{os.getpid()}\n")
-    except OSError:
-        pass
+    if not claim_marker(marker):
+        return 0
     # Un signal ordinaire ne doit pas lever le verrouillage.
     for sig in (signal.SIGINT, signal.SIGTERM, signal.SIGHUP, signal.SIGQUIT):
         signal.signal(sig, signal.SIG_IGN)

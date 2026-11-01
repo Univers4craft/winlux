@@ -44,10 +44,14 @@ install_browser() {
     if command -v winlux-update >/dev/null 2>&1 && winlux-update --busy 2>/dev/null; then echo 'Attendez la fin de la mise à jour système.' >&2; return 1; fi
     mkdir -p "$installed" "$run"
     chmod 755 "$installed"
-    mkdir "$run/browser-install.lock" 2>/dev/null || { echo 'Installation navigateur déjà en cours' >&2; return 1; }
-    work=$(mktemp -d "$installed/.install-$id.XXXXXX")
+    # Le trap est posé avant la prise du verrou : une interruption entre les
+    # deux ne laisse pas de verrou orphelin ; lock_held dit s'il nous appartient.
+    work=; lock_held=
     previous="$installed/.$id.previous"
-    trap 'if test -d "$previous" && ! test -d "$installed/$id"; then mv "$previous" "$installed/$id"; fi; rm -rf "$work"; rmdir "$run/browser-install.lock" 2>/dev/null || true' EXIT HUP INT TERM
+    trap 'if test -d "$previous" && ! test -d "$installed/$id"; then mv "$previous" "$installed/$id"; fi; test -z "$work" || rm -rf "$work"; test -z "$lock_held" || rmdir "$run/browser-install.lock" 2>/dev/null || true' EXIT HUP INT TERM
+    mkdir "$run/browser-install.lock" 2>/dev/null || { echo 'Installation navigateur déjà en cours' >&2; trap - EXIT HUP INT TERM; return 1; }
+    lock_held=1
+    work=$(mktemp -d "$installed/.install-$id.XXXXXX")
     cp "$cache/$id.deb" "$work/package.deb"
     hash=$(cat "$cache/$id.sha256")
     printf '%s  %s\n' "$hash" "$work/package.deb" | sha256sum -c - || return 1
