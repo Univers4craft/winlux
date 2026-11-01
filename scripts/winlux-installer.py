@@ -27,7 +27,8 @@ import time
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 HW_DETECT = os.path.join(SCRIPT_DIR, "winlux-hw-detect.sh")
-INSTALL_SH = os.path.join(SCRIPT_DIR, "install.sh")
+INSTALL_SH = next((p for p in (os.path.join(SCRIPT_DIR, "install.sh"), "/opt/winlux/scripts/install.sh") if os.path.exists(p)),
+                  os.path.join(SCRIPT_DIR, "install.sh"))
 SECUREBOOT_SH = next((p for p in (os.path.join(SCRIPT_DIR, "winlux-secureboot.sh"), "/usr/bin/winlux-secureboot") if os.path.exists(p)), None)
 sys.path[:0] = [SCRIPT_DIR, "/usr/share/winlux"]
 import winlux_autoinstall as autoinstall  # noqa: E402
@@ -5235,6 +5236,14 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
 
 def main():
     if os.geteuid() != 0:
+        # Le raccourci lance l'installateur directement : la session live est
+        # déjà root, une session ordinaire demande le mot de passe ici.
+        pkexec = shutil.which("pkexec")
+        if pkexec and os.environ.get("WINLUX_INSTALLER_ELEVATED") != "1":
+            os.execv(pkexec, [pkexec, "env", "WINLUX_INSTALLER_ELEVATED=1",
+                              "DISPLAY=" + os.environ.get("DISPLAY", ":0"),
+                              "XAUTHORITY=" + os.environ.get("XAUTHORITY", ""),
+                              os.path.abspath(__file__), *sys.argv[1:]])
         print("ERREUR : l'installateur doit être lancé en tant que root (sudo).", file=sys.stderr)
         sys.exit(1)
     signal.signal(signal.SIGINT, signal.SIG_DFL)

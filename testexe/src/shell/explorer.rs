@@ -6444,6 +6444,22 @@ pub unsafe fn tick(_f: &Frame) -> bool {
 /// linker retire cette fonction inutilisée de l'exécutable du bureau.
 #[doc(hidden)]
 pub unsafe fn regression_checks() {
+    // Dossier accentué réel (VM de l'ISO) : « Téléchargements » doit s'ouvrir,
+    // pas « Ce dossier est introuvable ». Seulement si le test le demande.
+    let mut flag = [0u8; 4];
+    if GetEnvironmentVariableA(c"WINLUX_EXPECT_DOWNLOADS".as_ptr(), flag.as_mut_ptr().cast(), 4) == 1 && flag[0] == b'1' {
+        let downloads = place_path(1);
+        let mut pattern = [0u16; PATH_LEN + NAME_LEN + 2];
+        let n = wjoin(&mut pattern, downloads.get(), b"*");
+        let mut data: Win32FindDataW = core::mem::zeroed();
+        let h = if n == 0 { -1isize as Handle } else { FindFirstFileW(pattern.as_ptr(), &mut data) };
+        // Dossier vide : aucune entrée, ce n'est pas un échec de lecture.
+        let listed = h as isize != -1 || GetLastError() == 2 || GetLastError() == 18;
+        if h as isize != -1 {
+            FindClose(h);
+        }
+        check!(exists_dir(downloads.get()) && listed, "Explorer ouvre le dossier Telechargements (nom accentue)");
+    }
     let mut scratch = [0u8; PATH_LEN + NAME_LEN + 2];
     let long_name = [b'a'; 200];
     let mut path = EMPTY_PATH;
