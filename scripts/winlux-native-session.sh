@@ -100,7 +100,10 @@ if "$has_bluetooth"; then
 fi
 /usr/bin/xfsettingsd --daemon >/run/winlux/xfsettings.log 2>&1
 # Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur.
-if test -d /usr/share/icons/Winlux && ! /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName >/dev/null 2>&1; then
+# Le défaut d'XFCE (elementary-xfce-dark) n'est pas livré : sans thème réel,
+# les icônes retombaient sur les silhouettes noires d'Adwaita (Installer…).
+icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null || true)
+if test -d /usr/share/icons/Winlux && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
     /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
 fi
 if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
