@@ -253,6 +253,8 @@ static mut RENAME_INDEX: usize = usize::MAX;
 /// Nom entièrement sélectionné au début d'un renommage : la première frappe le remplace.
 static mut RENAME_FRESH: bool = false;
 static mut RENAME_TAIL: usize = 0;
+/// Ctrl+A pendant le renommage : le nom entier, extension comprise, sera remplacé.
+static mut RENAME_ALL: bool = false;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Menu {
@@ -2681,7 +2683,14 @@ unsafe fn draw_rename(g: &mut Gfx, r: Rect) {
         p.surface,
     );
     if RENAME_FRESH {
-        let w = text_width(RENAME.get(), 12).min(r.right - r.left - 10);
+        // Comme sous Windows : seul le nom est sélectionné, pas l'extension.
+        let name = RENAME.get();
+        let base = if RENAME_ALL || p_is_dir_renamed() {
+            name.len()
+        } else {
+            name.iter().rposition(|&c| c == b'.').filter(|&i| i > 0).unwrap_or(name.len())
+        };
+        let w = text_width(&name[..base], 12).min(r.right - r.left - 10);
         fill(
             g.hdc,
             g.b,
@@ -2718,7 +2727,12 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
     let mut n = write_num(&mut buf, 0, pn.nview as u64);
     buf[n] = b' ';
     n += 1;
-    let label = tr(S_ITEMS);
+    // « 1 élément », pas « 1 éléments ».
+    let label = if pn.nview == 1 {
+        tr4(&[b"\xE9l\xE9ment", b"item", b"elemento", b"Element"])
+    } else {
+        tr(S_ITEMS)
+    };
     buf[n..n + label.len()].copy_from_slice(label);
     n += label.len();
     let sc = sel_count(pn);
@@ -3342,6 +3356,7 @@ unsafe fn start_rename(index: usize) {
     RENAME_INDEX = index;
     RENAME_FRESH = true;
     RENAME_TAIL = 0;
+    RENAME_ALL = false;
     FOCUS = Focus::Rename;
 }
 
@@ -5681,6 +5696,47 @@ unsafe fn pane_rect_inner(geo: &Geo, which: usize) -> Rect {
     }
 }
 
+/// Cible d'un glisser de fichiers sous le pointeur, comme dans l'Explorateur
+/// Windows : un dossier de la liste (hors sélection), l'autre volet ou un
+/// emplacement du volet de gauche. Rend aussi l'élément à mettre en surbrillance.
+unsafe fn drop_target(geo: &Geo, x: i32, y: i32) -> Option<(Path, Option<(usize, usize)>)> {
+    let t = tab();
+    for which in 0..if t.dual { 2 } else { 1 } {
+        let r = pane_rect_inner(geo, which);
+        if !inside(&r, x, y) {
+            continue;
+        }
+        let pn = &t.panes[which];
+        if let Some(v) = item_at(pn, &r, x, y) {
+            let idx = pn.view[v] as usize;
+            if pn.entries[idx].dir && !(which == t.focus && is_sel(pn, idx)) {
+                let mut buf = [0u8; PATH_LEN + NAME_LEN + 2];
+                let n = item_path(pn, idx, &mut buf);
+                let mut dest = EMPTY_PATH;
+                if n > 0 && dest.set(&buf[..n]) {
+                    return Some((dest, Some((which, v))));
+                }
+                return None;
+            }
+        }
+        if which != t.focus && !pn.loc.is(HOME) && !pn.loc.is(PC) {
+            return Some((pn.loc, None));
+        }
+        return None;
+    }
+    if inside(&geo.nav, x, y) {
+        let mut items = [(&b""[..], Glyph::Folder, EMPTY_PATH, 0); NAV_MAX];
+        let n = nav_items(&mut items);
+        for i in 0..n {
+            let path = items[i].2;
+            if inside(&nav_row(geo, i), x, y) && !path.is(HOME) && !path.is(PC) && !path.is(pane().loc.get()) {
+                return Some((path, None));
+            }
+        }
+    }
+    None
+}
+
 unsafe fn update_hover(geo: &Geo, x: i32, y: i32) -> bool {
     let (mut h, mut zone) = (-1, 0u32);
     for which in 0..if tab().dual { 2 } else { 1 } {
@@ -5784,6 +5840,14 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 return true;
             }
             if FILE_DRAG_ACTIVE {
+                // Surbrillance du dossier visé (les emplacements du volet de
+                // gauche suivent déjà le pointeur).
+                let (h, zone) = match drop_target(&geo, x, y) {
+                    Some((_, Some((which, v)))) => (v as i32, which as u32 + 1),
+                    _ => (-1, 0),
+                };
+                HOVER = h;
+                HOVER_ZONE = zone;
                 return true;
             }
             update_hover(&geo, x, y)
@@ -5807,17 +5871,17 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                 return true;
             }
             if was_file_drag {
-                let t = tab();
-                if t.dual {
-                    let other = 1 - t.focus;
-                    let r = geo.panes[other];
-                    if inside(&r, x, y) {
-                        let dest_loc = t.panes[other].loc;
-                        if !dest_loc.is(HOME) && !dest_loc.is(PC) {
-                            let do_copy = ctrl();
-                            drop_files_to(dest_loc.get(), do_copy);
+                HOVER = -1;
+                HOVER_ZONE = 0;
+                match drop_target(&geo, x, y) {
+                    // Déposé sur la Corbeille : mis à la corbeille, comme Suppr.
+                    Some((dest, _)) if dest.is(TRASH) => {
+                        if !pane().loc.is(TRASH) {
+                            delete_selection();
                         }
                     }
+                    Some((dest, _)) => drop_files_to(dest.get(), ctrl()),
+                    None => {}
                 }
                 cancel_file_drag();
                 return true;
@@ -6136,6 +6200,11 @@ unsafe fn window_shortcut(vk: u32, control: bool) -> bool {
         0x4C if control => focus_address(),
         0x46 if control => FOCUS = Focus::Search,
         0x41 if control && FOCUS == Focus::Address => ADDRESS_SELECTED = true,
+        0x41 if control && FOCUS == Focus::Rename => {
+            RENAME_FRESH = true;
+            RENAME_TAIL = 0;
+            RENAME_ALL = true;
+        }
         _ => return false,
     }
     true
@@ -6180,8 +6249,10 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         }
         if FOCUS == Focus::Rename && RENAME_FRESH && ch != 0 && ch != 13 && ch != 27 {
             RENAME_FRESH = false;
+            let all = RENAME_ALL;
+            RENAME_ALL = false;
             // Comme sous Windows, l'extension est conservée si on retape le nom.
-            let ext_start = if p_is_dir_renamed() {
+            let ext_start = if all || p_is_dir_renamed() {
                 fl.len
             } else {
                 fl.get()
