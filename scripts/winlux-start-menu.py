@@ -139,6 +139,31 @@ def dark_theme():
     return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name
 
 
+def on_click(button, callback):
+    """Clic fiable pendant la saisie du pointeur du menu.
+
+    Sous cette saisie, GTK ne reçoit pas toujours l'entrée du pointeur dans le
+    bouton : il n'est alors pas « survolé » et « clicked » n'est jamais émis
+    (Paramètres ne s'ouvrait pas un essai sur deux). Le relâchement du bouton
+    gauche dans ses limites suffit donc ; Entrée/Espace passent par clicked.
+    """
+    pending = []
+    def run():
+        pending.clear()
+        callback()
+        return False
+    def released(widget, event):
+        inside = 0 <= event.x < widget.get_allocated_width() and 0 <= event.y < widget.get_allocated_height()
+        if event.button == 1 and inside and not pending:
+            # Après le traitement GTK : un « clicked » émis entre-temps est ignoré.
+            pending.append(True)
+            GLib.idle_add(run)
+        return False
+    def clicked(*_):
+        if not pending: callback()
+    button.connect("button-release-event", released)
+    button.connect("clicked", clicked)
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -225,7 +250,7 @@ class Start(Gtk.Application):
         self.heading.get_style_context().add_class("heading")
         header.pack_start(self.heading, True, True, 0)
         self.toggle = Gtk.Button(label=_t("Toutes les applications  ›"))
-        self.toggle.connect("clicked", self.toggle_list)
+        on_click(self.toggle, self.toggle_list)
         header.pack_end(self.toggle, False, False, 0)
         body.pack_start(header, False, False, 0)
         scroll = Gtk.ScrolledWindow()
@@ -239,7 +264,7 @@ class Start(Gtk.Application):
         footer.pack_start(Gtk.Label(label="Winlux", xalign=0), True, True, 0)
         power = Gtk.Button.new_from_icon_name("system-shutdown-symbolic", Gtk.IconSize.LARGE_TOOLBAR)
         power.set_tooltip_text(_t("Options d’alimentation"))
-        power.connect("clicked", self.power)
+        on_click(power, lambda: self.power(power))
         footer.pack_end(power, False, False, 0)
         outer.pack_end(footer, False, False, 0)
 
@@ -333,7 +358,7 @@ class Start(Gtk.Application):
         box.pack_start(label, True, True, 0)
         button.add(box)
         button.set_tooltip_text(app.get_display_name())
-        button.connect("clicked", lambda *_: self.launch(app))
+        on_click(button, lambda: self.launch(app))
         button.connect("button-press-event", lambda widget, event: self.app_context(widget, event, app))
         return button
 
@@ -350,7 +375,7 @@ class Start(Gtk.Application):
                 for label, page in SETTINGS:
                     if query in label.casefold():
                         button = Gtk.Button(label=_t("Paramètres · ") + label)
-                        button.connect("clicked", lambda _, target=page: self.open_setting(target))
+                        on_click(button, lambda target=page: self.open_setting(target))
                         self.content.pack_start(button, False, False, 0)
                 if query != self.file_query:
                     self.file_query = query
@@ -360,7 +385,7 @@ class Start(Gtk.Application):
                         threading.Thread(target=self.find_files, args=(query, self.file_generation), daemon=True).start()
                 for path in self.file_results:
                     button = Gtk.Button(label=_t("Fichier · ") + str(path.relative_to(Path.home())))
-                    button.connect("clicked", lambda _, target=path: self.open_file(target))
+                    on_click(button, lambda target=path: self.open_file(target))
                     self.content.pack_start(button, False, False, 0)
                 if len(self.file_results) == 30:
                     self.content.pack_start(Gtk.Label(label=_t("30 premiers fichiers affichés. Précisez la recherche."), xalign=0), False, False, 0)
