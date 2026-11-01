@@ -11,7 +11,7 @@
    <item label="Document texte"><action name="Execute"><command>winlux-desktop-action text</command></action></item>
   </menu>
   <item label="Actualiser"><action name="Execute"><command>winlux-desktop-action refresh</command></action></item>
-  <item label="Personnaliser le bureau"><action name="Execute"><command>winlux-system-tools appearance</command></action></item>
+  <item label="Personnaliser le bureau"><action name="Execute"><command>winlux-shell-app settings 21</command></action></item>
   <separator/>
   <item label="Écran de veille : tuyaux 3D"><action name="Execute"><command>winlux-desktop-action screensaver</command></action></item>
   <item label="Réglages de l’écran de veille"><action name="Execute"><command>winlux-desktop-action screensaver-settings</command></action></item>

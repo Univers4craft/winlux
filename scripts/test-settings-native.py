@@ -50,29 +50,54 @@ def walk(widget):
 
 def check():
     try:
-        for index, title in enumerate(module["PAGES"]):
-            if index in window.hidden_pages:
-                # Page impossible sur cette machine : absente de la liste, jamais vide.
-                assert not window.nav.get_row_at_index(index).get_child_visible(), title
-                continue
-            window.nav.select_row(window.nav.get_row_at_index(index))
-            assert window.page == index, title
-            assert window.body.get_children()[0].get_text() == title
-            assert window.progress.get_visible() == (index == 7)
-            if index in window.EXTRA_PAGES:
-                # Une page branchée montre des réglages, pas un cadre d'état vide.
-                controls = [w for w in walk(window.body) if isinstance(w, (Gtk.Switch, Gtk.ComboBox, Gtk.Button, Gtk.Scale))
-                            or (isinstance(w, Gtk.Label) and w.get_text().strip() and in_card(w))]
-                assert controls, f"Page vide : {title}"
-                empty = [w for w in walk(window.body) if isinstance(w, Gtk.Label) and "card" in w.get_style_context().list_classes()
-                         and not w.get_text().strip()]
-                assert not empty, f"Cadre vide : {title}"
+        rows = window.rows
+        visited = set()
+        for category, (name, pages) in enumerate(module["CATEGORIES"]):
+            shown = [page for page in pages if page not in window.hidden_pages]
+            # Une catégorie sans page possible sur cette machine n'apparaît pas.
+            assert rows[("category", category)].get_child_visible() == bool(shown) or not shown, name
+            for index in pages:
+                title = module["PAGES"][index]
+                if index in window.hidden_pages:
+                    assert not rows[("page", index)].get_child_visible(), title
+                    continue
+                window.nav.select_row(rows[("category", category)])
+                window.open_page(index)
+                visited.add(index)
+                assert window.current == index, title
+                # Sous-pages dépliées sous la catégorie ouverte, et seulement elle.
+                for (kind, key), row in rows.items():
+                    if kind == "page" and key not in window.hidden_pages:
+                        expected = module["category_of"](key) == category and len(shown) > 1
+                        assert row.get_child_visible() == expected, (title, module["PAGES"][key])
+                labels = [w for w in window.body.get_children() if isinstance(w, Gtk.Label)]
+                assert title in [w.get_text() for w in labels[:2]], title
+                assert window.progress.get_visible() == (index == 7)
+                # Plus aucune fenêtre séparée : ni « Réglages avancés » ni outils à part.
+                buttons = [w.get_label() for w in walk(window.body) if isinstance(w, Gtk.Button) and w.get_label()]
+                assert module["_t"]("Réglages avancés") not in buttons, title
+                if index in window.EXTRA_PAGES and not (index == module["SOUND_PAGE"] and window.sound_fallback):
+                    # Une page branchée montre des réglages, pas un cadre d'état vide.
+                    controls = [w for w in walk(window.body) if isinstance(w, (Gtk.Switch, Gtk.ComboBox, Gtk.Button, Gtk.Scale))
+                                or (isinstance(w, Gtk.Label) and w.get_text().strip() and in_card(w))]
+                    assert controls, f"Page vide : {title}"
+                    empty = [w for w in walk(window.body) if isinstance(w, Gtk.Label) and "card" in w.get_style_context().list_classes()
+                             and not w.get_text().strip()]
+                    assert not empty, f"Cadre vide : {title}"
+        # Toute page existante est rangée dans une catégorie ou fondue dans une autre.
+        placed = {page for _, pages in module["CATEGORIES"] for page in pages} | set(module["MERGED"])
+        assert placed == set(range(len(module["PAGES"]))), sorted(set(range(len(module["PAGES"]))) - placed)
+        # Les anciens numéros ouvrent la page fusionnée.
+        window.open_page(5)
+        assert window.current == 4
+        window.open_page(3)
+        assert window.current == module["SOUND_PAGE"]
         assert window.process is None, "Navigation launched a system action"
         namespace = window.poll.__globals__
         original_read = namespace["read"]
         try:
             namespace["read"] = lambda path: "Winlux est à jour.\n" if path == "/run/winlux/updates.txt" else original_read(path)
-            window.nav.select_row(window.nav.get_row_at_index(7))
+            window.open_page(7)
             window.poll()
             assert not window.install_button.get_parent().get_visible(), "Install button shown for current version"
             if not Path(module["PREVIOUS_PACKAGE"]).is_file():
@@ -94,4 +119,4 @@ GLib.idle_add(check)
 Gtk.main()
 if failures:
     raise failures[0]
-print(f"OK: {len(module['PAGES'])} native settings pages, progress visibility, no system actions")
+print(f"OK: {len(module['CATEGORIES'])} categories, {len(module['PAGES'])} native settings pages, progress visibility, no system actions")

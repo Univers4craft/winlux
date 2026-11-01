@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Applications et démarrage
-Exec=/usr/bin/winlux-system-tools apps
+Exec=/usr/bin/winlux-shell-app settings 1
 Icon=system-software-install
 Categories=Settings;PackageManager;
 Terminal=false
