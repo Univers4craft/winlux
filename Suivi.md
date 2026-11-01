@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **262**
-- À faire ou en cours : **42**
+- Réalisé : **263**
+- À faire ou en cours : **41**
 - Total : **304**
-- Progression : **86.2%**
+- Progression : **86.5%**
 - Dernière mise à jour : 01/11/2026 (Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
 
 ## À FAIRE (par priorité)
@@ -29,7 +29,7 @@
 
 - [x] ISO v0.2.12 réparée pour la v0.2.13 (#200) : carte filaire laissée « non gérée » par NetworkManager (réglage Ubuntu Netplan) et DNS de QEMU figé dans l'image, donc pas de réseau ni de mise à jour ; secours DHCP qui ne rallumait pas une carte éteinte ; installateur sans ses modules Python (`/usr/lib/winlux/python` exclu du paquet) ; raccourci « Installer Winlux » dépendant de pkexec absent de l'image ; mise à jour qui se repose sur l'API GitHub quand le manifeste manque.
 - [x] Identité visuelle (#170) : logo maison « Prisme » (plus aucun logo Microsoft), écran de démarrage du bureau, thème GRUB assorti, fonds « Winlux Nuit » / « Winlux Aube », page À propos avec matériel réel, son « Prisme ». Voir `docs/IDENTITE-VISUELLE.md`.
-- [ ] Identité visuelle, suite (#170) : écran pendant le chargement du noyau, sons système assortis, jeu d'icônes cohérent.
+- [x] Identité visuelle, suite (#170, #187) : écran Prisme dans le framebuffer pendant le chargement du noyau (`winlux --boot-splash`), 10 sons système maison (MessageBeep/PlaySound des .exe, notifications, périphériques), thème d'icônes « Winlux » (34 icônes).
 - [x] Lecteurs réseau : FTP, FTPS, SFTP, WebDAV(S), SMB, NFS et S3 montés comme un disque avec lettre (`winlux-drives`, page Paramètres « Lecteurs réseau »), mots de passe chiffrés ChaCha20-Poly1305, reconnexion automatique et état hors ligne publiés dans le registre commun `mounts.tsv`. Seuls les protocoles dont l'outil de montage est présent sont proposés. Reste : modules noyau cifs/nfs dans l'ISO live (SMB passe par rclone en attendant, NFS masqué).
 - [x] Disques branchés (#168) : clés USB, disques externes et partition d'un Windows existant montés avec une lettre (`winlux --volumes`), NTFS en lecture/écriture, droits de l'utilisateur, même lettre au même volume, veille prolongée / démarrage rapide / volume « sale » détectés → lecture seule + message clair, bouton Réparer dans Gestion des disques, BitLocker expliqué (`docs/VOLUMES.md`).
 - [x] Réseau local partagé Linux ↔ Windows (#168) : WinSock traduit IPv6 (AF_INET6 23↔10), multidiffusion et `IPV6_V6ONLY` ; iphlpapi `GetExtendedTcpTable`/`GetExtendedUdpTable` avec PID ; page « Ports ouverts » du pare-feu avec le nom de l'appli et sa portée ; proxy commun (WinHTTP, registre Internet Settings ↔ `/etc/winlux/proxy.conf` et session Linux) (`docs/RESEAU-LOCAL.md`).

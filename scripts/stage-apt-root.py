@@ -26,8 +26,8 @@ def owned_paths(root):
 def winlux_path(relative):
     if relative == "usr/share/winlux/kernel-version": return False
     return (relative.startswith(("usr/bin/winlux", "usr/share/winlux/", "usr/lib/winlux/", "opt/winlux/",
-                                "usr/share/themes/Winlux/", "usr/share/xfce4/helpers/winlux",
-                                "usr/share/thumbnailers/winlux"))
+                                "usr/share/themes/Winlux/", "usr/share/icons/Winlux/",
+                                "usr/share/xfce4/helpers/winlux", "usr/share/thumbnailers/winlux"))
             or relative.startswith("usr/share/applications/winlux")
             # Xorg : seuls les fichiers Winlux (20-winlux-display.conf), jamais 40-libinput.conf.
             or relative.startswith("usr/share/X11/xorg.conf.d/") and "winlux" in Path(relative).name
