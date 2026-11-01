@@ -220,6 +220,15 @@ fn journal_origin() -> &'static str {
     })
 }
 
+/// Étape notée dans le journal quel que soit le niveau choisi (lancement et
+/// fin d'un programme) : `winlux-report` en tire la chronologie d'un plantage.
+pub fn journal_event(target: &str, message: &str) {
+    if cfg!(test) || !config().journal {
+        return;
+    }
+    write_to_journal(Level::Info, target, message);
+}
+
 fn write_to_journal(level: Level, target: &str, message: &str) {
     if let Ok(mut guard) = journal_file().lock() {
         if let Some(ref mut f) = *guard {

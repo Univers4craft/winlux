@@ -139,6 +139,44 @@ int main(int argc, char **argv) {
     DWORD written = 0;
     CHECK("WriteConsoleA/WriteFile", WriteFile(GetStdHandle(STD_OUTPUT_HANDLE), "  OK     WriteFile\n", 19, &written, NULL) && written == 19);
 
+    /* Langue, pages de code, clavier et heure (module intl) */
+    WCHAR wtext[64];
+    char ntext[64];
+    int nw = MultiByteToWideChar(1252, 0, "\xe9t\xe9 \x80", -1, wtext, 64);
+    CHECK("MultiByteToWideChar 1252 (été €)", nw == 6 && wtext[0] == 0xe9 && wtext[4] == 0x20ac);
+    int nn = WideCharToMultiByte(850, 0, L"éà", -1, ntext, 64, NULL, NULL);
+    CHECK("WideCharToMultiByte 850 (é à)", nn == 3 && (unsigned char)ntext[0] == 0x82 && (unsigned char)ntext[1] == 0x85);
+    nw = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, "\xff", 1, wtext, 64);
+    CHECK("UTF-8 strict refuse un octet invalide", nw == 0 && GetLastError() == ERROR_NO_UNICODE_TRANSLATION);
+    CHECK("GetACP/GetOEMCP", GetACP() == 1252 && (GetOEMCP() == 850 || GetOEMCP() == 437));
+    CHECK("GetLocaleInfoEx fr-FR décimale", GetLocaleInfoEx(L"fr-FR", LOCALE_SDECIMAL, wtext, 64) == 2 && wtext[0] == L',');
+    CHECK("GetLocaleInfoEx de-DE langue", GetLocaleInfoEx(L"de-DE", LOCALE_SENGLISHLANGUAGENAME, wtext, 64) == 7 && wcscmp(wtext, L"German") == 0);
+    CHECK("LocaleNameToLCID", LocaleNameToLCID(L"es-ES", 0) == 0x0C0A);
+    SYSTEMTIME st = {2026, 10, 0, 31, 9, 7, 3, 0};
+    GetDateFormatEx(L"fr-FR", DATE_LONGDATE, &st, NULL, wtext, 64, NULL);
+    CHECK("GetDateFormatEx fr-FR", wcscmp(wtext, L"samedi 31 octobre 2026") == 0);
+    GetTimeFormatEx(L"en-US", TIME_NOSECONDS, &st, NULL, wtext, 64);
+    CHECK("GetTimeFormatEx en-US", wcscmp(wtext, L"9:07 AM") == 0);
+    SYSTEMTIME midnight = {2026, 10, 0, 31, 0, 0, 0, 0}, back;
+    FILETIME ft;
+    CHECK("SystemTimeToFileTime", SystemTimeToFileTime(&midnight, &ft) && (((ULONGLONG)ft.dwHighDateTime << 32) | ft.dwLowDateTime) == 134378784000000000ULL);
+    CHECK("FileTimeToSystemTime", FileTimeToSystemTime(&ft, &back) && back.wYear == 2026 && back.wDay == 31 && back.wDayOfWeek == 6);
+    TIME_ZONE_INFORMATION paris = {0};
+    paris.Bias = -60;
+    paris.StandardDate.wMonth = 10; paris.StandardDate.wDay = 5; paris.StandardDate.wHour = 3;
+    paris.DaylightDate.wMonth = 3; paris.DaylightDate.wDay = 5; paris.DaylightDate.wHour = 2;
+    paris.DaylightBias = -60;
+    SYSTEMTIME summer = {2026, 7, 0, 14, 12, 0, 0, 0}, local;
+    CHECK("SystemTimeToTzSpecificLocalTime (Paris, été)", SystemTimeToTzSpecificLocalTime(&paris, &summer, &local) && local.wHour == 14);
+    TIME_ZONE_INFORMATION tzi;
+    CHECK("GetTimeZoneInformation", GetTimeZoneInformation(&tzi) != TIME_ZONE_ID_INVALID);
+    char klid[KL_NAMELENGTH];
+    CHECK("GetKeyboardLayoutNameA", GetKeyboardLayoutNameA(klid) && strlen(klid) == 8);
+    CHECK("GetKeyboardLayout", ((ULONG_PTR)GetKeyboardLayout(0) >> 16) == (strtoul(klid, NULL, 16) & 0xFFFF));
+    char oem[8];
+    CharToOemA("\xe9", oem);
+    CHECK("CharToOemA", GetOEMCP() != 850 || (unsigned char)oem[0] == 0x82);
+
     printf("%d échec(s)\n", failures);
     return failures;
 }

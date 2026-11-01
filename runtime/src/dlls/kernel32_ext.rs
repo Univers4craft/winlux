@@ -397,162 +397,7 @@ pub extern "win64" fn rtl_dll_shutdown_in_progress() -> u8 {
     0
 }
 
-// --- Locales nommées -------------------------------------------------------------
-
-/// Locale de l'utilisateur Winlux (même valeur que GetUserDefaultLCID).
-const USER_LOCALE: &str = "fr-FR";
-const USER_LCID: u32 = 0x040C;
-
-unsafe fn put_name(name: &str, buf: *mut u16, cap: i32) -> i32 {
-    let need = name.encode_utf16().count() + 1;
-    if cap == 0 {
-        return need as i32;
-    }
-    if buf.is_null() || (cap as usize) < need {
-        set_last_error(ERROR_INSUFFICIENT_BUFFER);
-        return 0;
-    }
-    crate::dlls::put_w(name, buf, cap as u32);
-    need as i32
-}
-
-pub unsafe extern "win64" fn get_user_default_locale_name(buf: *mut u16, cap: i32) -> i32 {
-    put_name(USER_LOCALE, buf, cap)
-}
-
-/// Nom de locale → LCID pour les quelques locales que Winlux décrit ;
-/// la chaîne vide est la locale invariante (0x7F).
-fn lcid_of(name: &str) -> Option<u32> {
-    Some(match name.to_ascii_lowercase().as_str() {
-        "" | "!x-sys-default-locale" => {
-            if name.is_empty() {
-                0x7F
-            } else {
-                USER_LCID
-            }
-        }
-        "fr-fr" | "fr" => USER_LCID,
-        "en-us" | "en" => 0x0409,
-        _ => return None,
-    })
-}
-
-/// GetLocaleInfoEx : LOCALE_SNAME et les codes de page sont calculés ici,
-/// le reste passe par GetLocaleInfoW avec l'identifiant correspondant.
-pub unsafe extern "win64" fn get_locale_info_ex(
-    name: *const u16,
-    lc_type: u32,
-    buf: *mut u16,
-    cap: i32,
-) -> i32 {
-    const LOCALE_RETURN_NUMBER: u32 = 0x2000_0000;
-    let text = if name.is_null() {
-        USER_LOCALE.to_string()
-    } else {
-        crate::dlls::wstr(name)
-    };
-    let Some(lcid) = lcid_of(&text) else {
-        set_last_error(ERROR_INVALID_PARAMETER);
-        return 0;
-    };
-    let canonical = match lcid {
-        0x7F => "",
-        0x0409 => "en-US",
-        _ => USER_LOCALE,
-    };
-    let number = |v: u32| -> i32 {
-        if cap == 0 {
-            return 2;
-        }
-        if buf.is_null() || cap < 2 {
-            set_last_error(ERROR_INSUFFICIENT_BUFFER);
-            return 0;
-        }
-        (buf as *mut u32).write_unaligned(v);
-        2
-    };
-    let base = lc_type & !LOCALE_RETURN_NUMBER & 0x0FFF_FFFF;
-    if lc_type & LOCALE_RETURN_NUMBER != 0 {
-        return match base {
-            0x01 => number(lcid),                                 // LOCALE_ILANGUAGE
-            0x0B => number(if lcid == 0x7F { 437 } else { 850 }), // LOCALE_IDEFAULTCODEPAGE
-            0x1004 => number(1252),                               // LOCALE_IDEFAULTANSICODEPAGE
-            0x1011 => number(if lcid == 0x7F { 2 } else { 1 }), // LOCALE_IFIRSTDAYOFWEEK… approximé
-            _ => {
-                set_last_error(1004);
-                0
-            }
-        };
-    }
-    match base {
-        0x5C | 0x7B => put_name(canonical, buf, cap), // LOCALE_SNAME, LOCALE_SPARENT approché
-        0x59 => put_name(canonical.split('-').next().unwrap_or(""), buf, cap), // LOCALE_SISO639LANGNAME
-        0x5A => put_name(canonical.split('-').nth(1).unwrap_or(""), buf, cap), // LOCALE_SISO3166CTRYNAME
-        _ => crate::dlls::kernel32::get_locale_info_w(lcid, lc_type, buf, cap),
-    }
-}
-
-pub unsafe extern "win64" fn locale_name_to_lcid(name: *const u16, _flags: u32) -> u32 {
-    let text = if name.is_null() {
-        USER_LOCALE.to_string()
-    } else {
-        crate::dlls::wstr(name)
-    };
-    lcid_of(&text).unwrap_or(0)
-}
-
-pub unsafe extern "win64" fn lcid_to_locale_name(
-    lcid: u32,
-    buf: *mut u16,
-    cap: i32,
-    _flags: u32,
-) -> i32 {
-    let name = match lcid {
-        0x7F => "",
-        0x0409 => "en-US",
-        0x040C | 0x0400 | 0x0800 | 0 => USER_LOCALE,
-        _ => {
-            set_last_error(ERROR_INVALID_PARAMETER);
-            return 0;
-        }
-    };
-    put_name(name, buf, cap)
-}
-
-/// Get{User,System,Thread,Process}PreferredUILanguages : une seule langue
-/// d'interface, celle de l'utilisateur, en liste multi-chaîne terminée par
-/// deux zéros. MUI_LANGUAGE_ID (4) la donne en hexadécimal (« 040C »).
-pub unsafe extern "win64" fn get_preferred_ui_languages(
-    flags: u32,
-    count: *mut u32,
-    buf: *mut u16,
-    len: *mut u32,
-) -> i32 {
-    if count.is_null() || len.is_null() {
-        set_last_error(ERROR_INVALID_PARAMETER);
-        return 0;
-    }
-    let item = if flags & 4 != 0 {
-        format!("{USER_LCID:04X}")
-    } else {
-        USER_LOCALE.to_string()
-    };
-    let mut wide: Vec<u16> = item.encode_utf16().collect();
-    wide.extend([0, 0]);
-    *count = 1;
-    if buf.is_null() {
-        *len = wide.len() as u32;
-        return 1;
-    }
-    if (*len as usize) < wide.len() {
-        *len = wide.len() as u32;
-        set_last_error(ERROR_INSUFFICIENT_BUFFER);
-        return 0;
-    }
-    std::ptr::copy_nonoverlapping(wide.as_ptr(), buf, wide.len());
-    *len = wide.len() as u32;
-    1
-}
+// Locales nommées (GetLocaleInfoEx, LocaleNameToLCID…) : voir crate::intl::api.
 
 pub fn kernel32_exports() -> crate::dlls::Exports {
     crate::exports! {
@@ -576,14 +421,6 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "IsWow64Process2" => fn is_wow64_process2,
         "SetThreadDescription" => fn set_thread_description,
         "GetTempPath2W" => fn get_temp_path2_w,
-        "GetUserDefaultLocaleName" => fn get_user_default_locale_name,
-        "GetLocaleInfoEx" => fn get_locale_info_ex,
-        "LocaleNameToLCID" => fn locale_name_to_lcid,
-        "LCIDToLocaleName" => fn lcid_to_locale_name,
-        "GetUserPreferredUILanguages" => fn get_preferred_ui_languages,
-        "GetSystemPreferredUILanguages" => fn get_preferred_ui_languages,
-        "GetThreadPreferredUILanguages" => fn get_preferred_ui_languages,
-        "GetProcessPreferredUILanguages" => fn get_preferred_ui_languages,
     }
 }
 
@@ -683,34 +520,6 @@ mod tests {
             assert_eq!(locate_xstate_feature(ctx, 1, &mut size), ctx.add(0x1A0));
             assert_eq!(size, 256);
             assert!(locate_xstate_feature(ctx, 2, &mut size).is_null());
-        }
-    }
-
-    #[test]
-    fn locale_et_langues_d_interface() {
-        let _teb = crate::process::test_teb();
-        let mut buf = [0u16; 16];
-        unsafe {
-            assert_eq!(get_user_default_locale_name(buf.as_mut_ptr(), 16), 6);
-            assert_eq!(String::from_utf16_lossy(&buf[..5]), "fr-FR");
-            let name: Vec<u16> = "en-US\0".encode_utf16().collect();
-            assert_eq!(locale_name_to_lcid(name.as_ptr(), 0), 0x409);
-            assert_eq!(
-                get_locale_info_ex(name.as_ptr(), 0x5C, buf.as_mut_ptr(), 16),
-                6
-            );
-            assert_eq!(String::from_utf16_lossy(&buf[..5]), "en-US");
-            let (mut count, mut len) = (0u32, 0u32);
-            assert_eq!(
-                get_preferred_ui_languages(8, &mut count, std::ptr::null_mut(), &mut len),
-                1
-            );
-            assert_eq!((count, len), (1, 7));
-            assert_eq!(
-                get_preferred_ui_languages(8, &mut count, buf.as_mut_ptr(), &mut len),
-                1
-            );
-            assert_eq!(&buf[5..7], &[0, 0]);
         }
     }
 }
