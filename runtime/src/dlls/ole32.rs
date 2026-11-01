@@ -1084,6 +1084,79 @@ pub extern "win64" fn do_drag_drop(
     DRAGDROP_S_DROP
 }
 
+// ---------- RoInitialize ----------
+
+/// `RoInitialize` : RO_INIT_SINGLETHREADED (0) donne un STA, RO_INIT_MULTITHREADED (1) le MTA.
+pub extern "win64" fn ro_initialize(init_type: u32) -> i32 {
+    co_initialize_ex(0, if init_type == 1 { 0 } else { 2 })
+}
+pub extern "win64" fn ro_uninitialize() {
+    co_uninitialize()
+}
+
+// ---------- CoGetContextToken ----------
+
+/// Objet de contexte COM : un par appartement STA (thread), un seul pour le
+/// MTA. Le jeton est son pointeur IUnknown, sans référence ajoutée, comme
+/// sous Windows ; seul IUnknown est exposé.
+#[repr(C)]
+struct ContextObject {
+    vtbl: &'static ContextVtbl,
+}
+#[repr(C)]
+struct ContextVtbl {
+    query_interface: unsafe extern "win64" fn(*mut c_void, *const u8, *mut *mut c_void) -> i32,
+    add_ref: extern "win64" fn(*mut c_void) -> u32,
+    release: extern "win64" fn(*mut c_void) -> u32,
+}
+unsafe impl Sync for ContextObject {}
+
+unsafe extern "win64" fn context_qi(
+    this: *mut c_void,
+    iid: *const u8,
+    out: *mut *mut c_void,
+) -> i32 {
+    if out.is_null() {
+        return E_POINTER;
+    }
+    const IID_IUNKNOWN: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
+    if !iid.is_null() && std::slice::from_raw_parts(iid, 16) == IID_IUNKNOWN {
+        *out = this;
+        return S_OK;
+    }
+    *out = std::ptr::null_mut();
+    E_NOINTERFACE
+}
+extern "win64" fn context_ref(_this: *mut c_void) -> u32 {
+    1
+}
+static CONTEXT_VTBL: ContextVtbl = ContextVtbl {
+    query_interface: context_qi,
+    add_ref: context_ref,
+    release: context_ref,
+};
+static MTA_CONTEXT: ContextObject = ContextObject {
+    vtbl: &CONTEXT_VTBL,
+};
+thread_local! {
+    static STA_CONTEXT: ContextObject = const { ContextObject { vtbl: &CONTEXT_VTBL } };
+}
+
+/// `CoGetContextToken` : jeton du contexte COM du thread. Un thread sans
+/// CoInitialize est dans le MTA implicite, comme sous Windows 8 et suivants.
+pub unsafe extern "win64" fn co_get_context_token(token: *mut usize) -> i32 {
+    if token.is_null() {
+        return E_POINTER;
+    }
+    let sta = COM_APARTMENT.with(|a| matches!(a.get(), Some((2, _))));
+    *token = if sta {
+        STA_CONTEXT.with(|c| c as *const ContextObject as usize)
+    } else {
+        &MTA_CONTEXT as *const ContextObject as usize
+    };
+    S_OK
+}
+
 // ---------- PropVariantClear ----------
 
 pub unsafe extern "win64" fn prop_variant_clear(v: *mut c_void) -> i32 {
@@ -1106,7 +1179,9 @@ pub fn exports() -> crate::dlls::Exports {
         "CoGetMalloc"=>fn co_get_malloc,
         "OleSetClipboard"=>fn ole_set_clipboard,"OleGetClipboard"=>fn ole_get_clipboard,"OleFlushClipboard"=>fn ole_flush_clipboard,
         "RegisterDragDrop"=>fn register_drag_drop,"RevokeDragDrop"=>fn revoke_drag_drop,"DoDragDrop"=>fn do_drag_drop,
-        "PropVariantClear"=>fn prop_variant_clear
+        "PropVariantClear"=>fn prop_variant_clear,
+        "CoGetContextToken"=>fn co_get_context_token,
+        "RoInitialize"=>fn ro_initialize,"RoUninitialize"=>fn ro_uninitialize
     }
 }
 
@@ -1125,6 +1200,35 @@ mod tests {
         assert_eq!(unsafe { co_create_guid(&mut generated) }, S_OK);
         assert_eq!(generated.data3 >> 12, 4);
         assert_eq!(generated.data4[0] >> 6, 2);
+    }
+
+    #[test]
+    fn jeton_de_contexte_par_appartement() {
+        std::thread::spawn(|| unsafe {
+            let (mut mta, mut sta, mut other) = (0usize, 0usize, 0usize);
+            // Sans CoInitialize : MTA implicite, jeton commun au processus.
+            assert_eq!(co_get_context_token(&mut mta), S_OK);
+            assert_ne!(mta, 0);
+            assert_eq!(co_get_context_token(std::ptr::null_mut()), E_POINTER);
+            assert_eq!(ro_initialize(0), S_OK); // RO_INIT_SINGLETHREADED → STA
+            assert_eq!(co_get_context_token(&mut sta), S_OK);
+            assert_ne!(sta, mta);
+            assert_eq!(ro_initialize(1), RPC_E_CHANGED_MODE);
+            ro_uninitialize();
+            // Le jeton est un IUnknown : QueryInterface(IID_IUnknown) le renvoie.
+            let vtbl = *(sta as *const *const ContextVtbl);
+            let iid_unknown: [u8; 16] = [0, 0, 0, 0, 0, 0, 0, 0, 0xC0, 0, 0, 0, 0, 0, 0, 0x46];
+            let mut out = std::ptr::null_mut();
+            assert_eq!(
+                ((*vtbl).query_interface)(sta as *mut _, iid_unknown.as_ptr(), &mut out),
+                S_OK
+            );
+            assert_eq!(out as usize, sta);
+            assert_eq!(co_get_context_token(&mut other), S_OK);
+            assert_eq!(other, mta);
+        })
+        .join()
+        .unwrap();
     }
 
     #[test]

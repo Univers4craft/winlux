@@ -1308,8 +1308,16 @@ pub unsafe extern "win64" fn DXGIGetDebugInterface1(
     E_NOINTERFACE
 }
 
+/// `DXGIDeclareAdapterRemovalSupport` : l'application sait gérer le retrait
+/// d'un adaptateur ; rien à préparer ici.
+#[allow(non_snake_case)]
+pub extern "win64" fn DXGIDeclareAdapterRemovalSupport() -> i32 {
+    0
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "DXGIDeclareAdapterRemovalSupport" => fn DXGIDeclareAdapterRemovalSupport,
         "CreateDXGIFactory" => fn CreateDXGIFactory,
         "CreateDXGIFactory1" => fn CreateDXGIFactory1,
         "CreateDXGIFactory2" => fn CreateDXGIFactory2,

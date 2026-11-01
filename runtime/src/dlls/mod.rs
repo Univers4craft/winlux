@@ -501,6 +501,11 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-core-com-l1-") {
         return "ole32".into();
     }
+    // Windows Runtime (RoInitialize...) : servi par notre ole32, avant la
+    // règle générale api-ms-win-core-* → kernel32.
+    if base.starts_with("api-ms-win-core-winrt-") {
+        return "ole32".into();
+    }
     if base.starts_with("api-ms-win-core-localregistry-l1-") {
         return "advapi32".into();
     }
@@ -524,9 +529,6 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("api-ms-win-eventing-provider-l1-") {
         return "advapi32".into();
-    }
-    if base.starts_with("api-ms-win-core-winrt-") {
-        return "ole32".into();
     }
     if base.starts_with("api-ms-win-core-path-l1-") {
         return "kernel32".into();
@@ -763,6 +765,7 @@ mod tests {
                 "RegOpenKeyExW",
             ),
             ("api-ms-win-core-com-l1-1-0.dll", "ole32", "CoInitializeEx"),
+            ("api-ms-win-core-winrt-l1-1-0.dll", "ole32", "RoInitialize"),
             (
                 "api-ms-win-core-rtlsupport-l1-1-0.dll",
                 "ntdll",

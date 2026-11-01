@@ -433,12 +433,40 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
     true
 }
 
+/// Modules qui ont appelé `DisableThreadLibraryCalls` : leur DllMain ne
+/// reçoit plus DLL_THREAD_ATTACH/DETACH (les rappels TLS, si).
+static NO_THREAD_CALLS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// `DisableThreadLibraryCalls(hModule)`.
+pub fn disable_thread_library_calls(module: usize) -> bool {
+    if !loader::MODULES
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|m| m.base == module)
+    {
+        return false;
+    }
+    let mut list = NO_THREAD_CALLS.lock().unwrap_or_else(|e| e.into_inner());
+    if !list.contains(&module) {
+        list.push(module);
+    }
+    true
+}
+
+fn thread_calls_enabled(module: usize) -> bool {
+    !NO_THREAD_CALLS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&module)
+}
+
 pub fn thread_attach_current() {
     init_thread();
     let mods = loader::MODULES.lock().unwrap().clone();
     for m in mods.into_iter().skip(1) {
         run_tls_callbacks(&m, DLL_THREAD_ATTACH);
-        if let Some(e) = m.entry() {
+        if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
             let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
                 unsafe { std::mem::transmute(e) };
             let _ = dllmain(m.base, DLL_THREAD_ATTACH, 0);
@@ -450,7 +478,7 @@ pub fn thread_detach_current() {
     let mods = loader::MODULES.lock().unwrap().clone();
     for m in mods.into_iter().skip(1).rev() {
         run_tls_callbacks(&m, DLL_THREAD_DETACH);
-        if let Some(e) = m.entry() {
+        if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
             let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
                 unsafe { std::mem::transmute(e) };
             let _ = dllmain(m.base, DLL_THREAD_DETACH, 0);

@@ -445,6 +445,21 @@ pub unsafe extern "win64" fn get_locale_info_ex(
     buf: *mut u16,
     cap: i32,
 ) -> i32 {
+    let r = locale_info_ex(name, lc_type, buf, cap);
+    if r == 0 {
+        crate::trace!(
+            "GetLocaleInfoEx({:?}, 0x{lc_type:x}) : échec",
+            if name.is_null() {
+                String::from("<défaut>")
+            } else {
+                crate::dlls::wstr(name)
+            }
+        );
+    }
+    r
+}
+
+unsafe fn locale_info_ex(name: *const u16, lc_type: u32, buf: *mut u16, cap: i32) -> i32 {
     const LOCALE_RETURN_NUMBER: u32 = 0x2000_0000;
     let text = if name.is_null() {
         USER_LOCALE.to_string()
