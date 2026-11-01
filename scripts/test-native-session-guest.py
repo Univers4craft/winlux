@@ -439,7 +439,14 @@ def update_from_previous_release():
     shutil.copyfile(bench / "curl", shim / "curl"); (shim / "curl").chmod(0o755)
     env = dict(os.environ, PATH=f"{shim}:" + os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"))
     result = subprocess.run(["winlux-control", "update-apply"], env=env, capture_output=True, text=True, timeout=900)
-    print(result.stdout[-3000:], result.stderr[-3000:], flush=True)
+    if result.returncode != 0:
+        # winlux-control écrit la sortie de l'outil dans update.log (lu par Paramètres).
+        for name in ("update.log", "update-progress", "update-error-phase", "action.txt"):
+            path = Path("/run/winlux") / name
+            if path.exists():
+                print(f"--- {path}", flush=True)
+                print("\n".join(path.read_text(errors="replace").splitlines()[-60:]), flush=True)
+        print(subprocess.run(["df", "-h", "/", "/var"], capture_output=True, text=True).stdout, flush=True)
     assert result.returncode == 0, "update from " + previous + " failed"
     new = manifest["version"]
     assert Path("/usr/share/winlux/version").read_text().strip() == new, Path("/usr/share/winlux/version").read_text()
