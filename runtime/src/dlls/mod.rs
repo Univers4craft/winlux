@@ -17,6 +17,9 @@ pub mod crt_scan;
 pub mod crt_stdio;
 pub mod crt_ucrt;
 pub mod crypt32;
+pub mod cxx_eh;
+pub mod d2d1;
+pub mod d2d_raster;
 pub mod d3d11;
 pub mod d3d12;
 pub mod d3d9;
@@ -68,8 +71,10 @@ pub mod rpcrt4;
 pub mod sechost;
 pub mod seh;
 pub mod setupapi;
+pub mod sfnt;
 pub mod shell32;
 pub mod shlwapi;
+pub mod shlwapi_reg;
 pub mod spirv;
 pub mod taskschd;
 pub mod user32;
@@ -81,6 +86,7 @@ pub mod va_bindings;
 pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
+pub mod windowscodecs;
 pub mod winfile;
 pub mod winhttp;
 pub mod winlux_capture;
@@ -139,6 +145,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crt_scan::exports());
             e.extend(crt_runtime::exports());
             e.extend(crt_ucrt::exports());
+            e.extend(cxx_eh::exports());
             e
         };
         let mut ucrt = crt.clone();
@@ -148,6 +155,7 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(crt_scan::exports());
         ucrt.extend(crt_runtime::exports());
         ucrt.extend(crt_ucrt::exports());
+        ucrt.extend(cxx_eh::exports());
         vec![
             Builtin {
                 name: "kernel32",
@@ -415,6 +423,16 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "userenv",
                 exports: userenv::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "windowscodecs",
+                exports: windowscodecs::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d2d1",
+                exports: d2d1::exports(),
                 handle: fake_module(),
             },
             Builtin {

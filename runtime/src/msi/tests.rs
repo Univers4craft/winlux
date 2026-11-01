@@ -228,3 +228,92 @@ fn raccourci_lisible() {
     assert_eq!(&lnk[..4], &[0x4C, 0, 0, 0]);
     assert_eq!(lnk.len(), 76 + 2 + 8 + 2 + 28 + 2 + 14 + 2 + 6);
 }
+
+/// `testdata/tables.msi` : `tables.wxs` construit par wixl, puis les tables
+/// de `testdata/tables/*.idt` ajoutées par `msibuild -i` (wixl ne sait pas
+/// les écrire).
+#[test]
+fn tables_complementaires() {
+    let _a = crate::mounts::TEST_ENV_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let _b = crate::dlls::advapi32::REGISTRY_TEST_LOCK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let env = Env::new("tables");
+    let set = |k: &str, n: &str, v: &str| crate::dlls::advapi32::RegEdit::Set {
+        key: k.into(),
+        name: n.into(),
+        kind: 1,
+        bytes: v
+            .encode_utf16()
+            .chain([0])
+            .flat_map(u16::to_le_bytes)
+            .collect(),
+    };
+    assert!(crate::dlls::advapi32::apply_registry_edits(&[
+        set("hklm\\software\\ancienne appli", "Dossier", "C:\\Ancien\\"),
+        set("hklm\\software\\ancienne appli", "AEffacer", "x"),
+        set("hkcu\\environment", "WINLUX_LISTE", "a"),
+        set("hkcu\\environment", "WINLUX_VIEUX", "v"),
+    ]));
+    let c = env.root.join("c");
+    std::fs::create_dir_all(c.join("windows")).unwrap();
+    std::fs::write(c.join("windows/winlux.ini"), "[Plugins]\r\nListe=x\r\n").unwrap();
+    let dir = c.join("Program Files/Winlux Tables");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("ancien.log"), "journal").unwrap();
+    let msi = env.root.join("tables.msi");
+    std::fs::write(&msi, include_bytes!("testdata/tables.msi")).unwrap();
+    let code = cli(&[
+        "/i".into(),
+        msi.to_string_lossy().into_owned(),
+        "/qn".into(),
+    ]);
+    assert_eq!(code, 0);
+    let reg = |k: &str, n: &str| {
+        crate::dlls::advapi32::read_registry_value_internal(k, n).map(|b| utf16(&b))
+    };
+    // AppSearch + IniFile.
+    let ini = std::fs::read_to_string(dir.join("app.ini")).unwrap();
+    assert!(ini.contains("Dossier=C:\\Program Files\\Winlux Tables\\"));
+    assert!(ini.contains("Ancien=C:\\Ancien\\"), "{ini}");
+    let shared = || std::fs::read_to_string(c.join("windows/winlux.ini")).unwrap();
+    assert!(shared().contains("Liste=x,tables"));
+    // Environment.
+    assert_eq!(
+        reg("hkcu\\environment", "WINLUX_TABLES").as_deref(),
+        Some("C:\\Program Files\\Winlux Tables\\")
+    );
+    assert_eq!(
+        reg("hkcu\\environment", "WINLUX_LISTE").as_deref(),
+        Some("a;nouveau")
+    );
+    assert!(reg("hkcu\\environment", "WINLUX_VIEUX").is_none());
+    // RemoveFile + RemoveRegistry.
+    assert!(!dir.join("ancien.log").exists());
+    assert!(reg("hklm\\software\\ancienne appli", "AEffacer").is_none());
+
+    std::fs::write(dir.join("nouveau.log"), "journal").unwrap();
+    let code = cli(&[
+        "/x".into(),
+        "{7B2C6D1F-2222-4333-8444-A55566667777}".into(),
+        "/qn".into(),
+    ]);
+    assert_eq!(code, 0);
+    assert!(!dir.join("app.ini").exists());
+    assert!(
+        !dir.join("nouveau.log").exists(),
+        "RemoveFile à la désinstallation"
+    );
+    assert!(shared().contains("Liste=x\r\n"));
+    assert!(reg("hkcu\\environment", "WINLUX_TABLES").is_none());
+    assert_eq!(
+        reg("hkcu\\environment", "WINLUX_LISTE").as_deref(),
+        Some("a")
+    );
+    assert_eq!(
+        reg("hkcu\\environment", "WINLUX_VIEUX").as_deref(),
+        Some("v")
+    );
+}

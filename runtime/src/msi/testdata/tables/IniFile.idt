@@ -1,0 +1,6 @@
+IniFile	FileName	DirProperty	Section	Key	Value	Action	Component_
+s72	l255	S72	l96	l128	l255	i2	s72
+IniFile	IniFile
+ini1	app.ini	INSTALLDIR	General	Dossier	[INSTALLDIR]	0	Principal
+ini2	app.ini	INSTALLDIR	General	Ancien	[ANCIEN]	0	Principal
+ini3	winlux.ini		Plugins	Liste	tables	3	Principal
