@@ -819,7 +819,8 @@ pub unsafe extern "win64" fn get_monitor_info_a(_monitor: usize, info: *mut u8) 
     if size < 40 {
         return 0;
     }
-    let rect = [0i32, 0, 1920, 1080]; // résolution par défaut
+    let (w, h) = crate::dlls::gui::screen_size(); // écran réel (1920×1080 sans affichage)
+    let rect = [0i32, 0, w, h];
     std::ptr::copy_nonoverlapping(rect.as_ptr() as *const u8, info.add(4), 16);
     std::ptr::copy_nonoverlapping(rect.as_ptr() as *const u8, info.add(20), 16);
     *(info.add(36) as *mut u32) = 1; // MONITORINFOF_PRIMARY

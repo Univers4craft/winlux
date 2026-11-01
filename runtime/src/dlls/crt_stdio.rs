@@ -655,7 +655,7 @@ pub unsafe fn write_bytes(p: *mut c_void, b: &[u8]) -> i32 {
     }
 }
 
-unsafe fn format_narrow(fmt: *const u8, va: &mut crate::thunks::VaList) -> Vec<u8> {
+pub(crate) unsafe fn format_narrow(fmt: *const u8, va: &mut crate::thunks::VaList) -> Vec<u8> {
     crate::printf::format(
         std::slice::from_raw_parts(fmt, crate::printf::narrow_len(fmt)),
         va,

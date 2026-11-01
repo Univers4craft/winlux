@@ -472,13 +472,14 @@ pub extern "win64" fn restore_dc(hdc: usize, saved: i32) -> i32 {
 
 // ── Régions (stubs) ────────────────────────────────────────────────
 
+/// Les régions sont de vrais objets GDI (voir `gdi32::create_rect_rgn`) ;
+/// ces exports s'alignent sur eux plutôt que de renvoyer 1 (= WHITE_BRUSH).
 pub extern "win64" fn create_rect_rgn(left: i32, top: i32, right: i32, bottom: i32) -> usize {
-    let _ = (left, top, right, bottom);
-    0x1 // factice non nul
+    crate::dlls::gdi32::create_rect_rgn(left, top, right, bottom)
 }
 
-pub extern "win64" fn create_rect_rgn_indirect(_rect: *const Rect) -> usize {
-    0x1
+pub unsafe extern "win64" fn create_rect_rgn_indirect(rect: *const Rect) -> usize {
+    crate::dlls::gdi32::create_rect_rgn_indirect(rect)
 }
 
 pub extern "win64" fn select_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {
@@ -493,12 +494,12 @@ pub extern "win64" fn exclude_clip_rect(_hdc: usize, _l: i32, _t: i32, _r: i32, 
     1 // SIMPLEREGION
 }
 
-pub extern "win64" fn combine_rgn(_dst: usize, _src1: usize, _src2: usize, _mode: i32) -> i32 {
-    1 // SIMPLEREGION
+pub extern "win64" fn combine_rgn(dst: usize, src1: usize, src2: usize, mode: i32) -> i32 {
+    crate::dlls::gdi32::combine_rgn(dst, src1, src2, mode)
 }
 
-pub extern "win64" fn set_rect_rgn(_rgn: usize, _l: i32, _t: i32, _r: i32, _b: i32) -> i32 {
-    1
+pub extern "win64" fn set_rect_rgn(rgn: usize, l: i32, t: i32, r: i32, b: i32) -> i32 {
+    crate::dlls::gdi32::set_rect_rgn(rgn, l, t, r, b)
 }
 
 // ── Pixel ──────────────────────────────────────────────────────────

@@ -328,6 +328,57 @@ pub fn alloc_hwnd() -> usize {
 pub struct Queue {
     pub items: Mutex<VecDeque<Msg>>,
     pub changed: Condvar,
+    /// Descripteur d'éveil (`eventfd`) : signalé à chaque dépôt pour sortir
+    /// un `GetMessage` bloqué dans `poll` sur la connexion X11.
+    wake: WakeFd,
+}
+
+/// `eventfd` non bloquant servant d'éveil à une file de messages.
+struct WakeFd(i32);
+
+impl WakeFd {
+    fn new() -> WakeFd {
+        // SAFETY : appel système sans pointeur ; -1 signifie « pas d'éveil ».
+        WakeFd(unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) })
+    }
+
+    fn signal(&self) {
+        if self.0 >= 0 {
+            let one: u64 = 1;
+            // SAFETY : écriture de 8 octets depuis une variable locale.
+            unsafe { libc::write(self.0, (&one as *const u64).cast(), 8) };
+        }
+    }
+
+    fn drain(&self) {
+        if self.0 >= 0 {
+            let mut v: u64 = 0;
+            // SAFETY : lecture de 8 octets dans une variable locale.
+            unsafe { libc::read(self.0, (&mut v as *mut u64).cast(), 8) };
+        }
+    }
+}
+
+impl Drop for WakeFd {
+    fn drop(&mut self) {
+        if self.0 >= 0 {
+            // SAFETY : descripteur ouvert par `new`, fermé une seule fois.
+            unsafe { libc::close(self.0) };
+        }
+    }
+}
+
+fn new_queue() -> Arc<Queue> {
+    Arc::new(Queue {
+        items: Mutex::new(VecDeque::new()),
+        changed: Condvar::new(),
+        wake: WakeFd::new(),
+    })
+}
+
+/// Réveille le thread propriétaire de la file (dépôt, minuteur, peinture).
+pub fn wake_thread(tid: ThreadId) {
+    queue_for(tid).wake.signal();
 }
 
 fn queues() -> &'static Mutex<HashMap<ThreadId, Arc<Queue>>> {
@@ -341,10 +392,7 @@ pub fn current_queue() -> Arc<Queue> {
     if let Some(q) = map.get(&tid) {
         return q.clone();
     }
-    let q = Arc::new(Queue {
-        items: Mutex::new(VecDeque::new()),
-        changed: Condvar::new(),
-    });
+    let q = new_queue();
     map.insert(tid, q.clone());
     q
 }
@@ -354,10 +402,7 @@ fn queue_for(tid: ThreadId) -> Arc<Queue> {
     if let Some(q) = map.get(&tid) {
         return q.clone();
     }
-    let q = Arc::new(Queue {
-        items: Mutex::new(VecDeque::new()),
-        changed: Condvar::new(),
-    });
+    let q = new_queue();
     map.insert(tid, q.clone());
     q
 }
@@ -368,6 +413,7 @@ pub fn post_to_thread(tid: ThreadId, msg: Msg) -> bool {
     let q = queue_for(tid);
     lock(&q.items).push_back(msg);
     q.changed.notify_all();
+    q.wake.signal();
     true
 }
 
@@ -402,26 +448,51 @@ pub fn set_focus(hwnd: usize) -> Option<usize> {
     if hwnd != 0 && window_owner(hwnd).as_ref() != Some(&tid) {
         return None;
     }
-    let mut map = lock(focused_windows());
-    let old = map.get(&tid).copied().unwrap_or(0);
-    if hwnd == 0 {
-        map.remove(&tid);
-    } else {
-        map.insert(tid, hwnd);
+    let old = {
+        let mut map = lock(focused_windows());
+        let old = map.get(&tid).copied().unwrap_or(0);
+        if hwnd == 0 {
+            map.remove(&tid);
+        } else {
+            map.insert(tid, hwnd);
+        }
+        old
+    };
+    if hwnd != 0 {
+        activate_top_level(hwnd);
     }
     Some(old)
+}
+
+/// Monte au sommet de l'ordre Z la fenêtre de premier niveau qui contient `hwnd`.
+fn activate_top_level(hwnd: usize) {
+    let top = {
+        let map = lock(windows());
+        let mut h = hwnd;
+        while let Some(parent) = map.get(&h).map(|w| w.parent).filter(|&p| p != 0) {
+            h = parent;
+        }
+        map.contains_key(&h).then_some(h)
+    };
+    if let Some(top) = top {
+        bring_to_top(top);
+    }
 }
 
 /// Applique un changement de focus reçu du backend ; `None` signifie que
 /// l'événement ne change pas l'état connu (ou que la fenêtre est détruite).
 pub fn set_focus_from_backend(hwnd: usize) -> Option<usize> {
     let owner = window_owner(hwnd)?;
-    let mut map = lock(focused_windows());
-    let old = map.get(&owner).copied().unwrap_or(0);
-    if old == hwnd {
-        return None;
-    }
-    map.insert(owner, hwnd);
+    let old = {
+        let mut map = lock(focused_windows());
+        let old = map.get(&owner).copied().unwrap_or(0);
+        if old == hwnd {
+            return None;
+        }
+        map.insert(owner, hwnd);
+        old
+    };
+    activate_top_level(hwnd);
     Some(old)
 }
 
@@ -829,6 +900,8 @@ pub enum GdiObject {
         color: u32,
     },
     Font(FontSpec),
+    /// Région rectangulaire (`CreateRectRgn` et consorts) : boîte englobante.
+    Region(Rect),
     Bitmap {
         width: usize,
         height: usize,
@@ -853,6 +926,7 @@ pub enum GdiObjectInfo {
         color: u32,
     },
     Font(FontSpec),
+    Region(Rect),
     Bitmap {
         width: usize,
         height: usize,
@@ -1062,6 +1136,44 @@ fn is_stock_pen(handle: usize) -> bool {
 
 fn is_stock_font(handle: usize) -> bool {
     matches!(handle, 11 | 12 | 13 | 14 | 15 | 17 | 18)
+}
+
+/// Région rectangulaire : un vrai handle de la table d'objets GDI (jamais un
+/// handle « stock » comme 1 = WHITE_BRUSH), accepté par `DeleteObject`.
+pub fn create_region(rect: Rect) -> usize {
+    let h = next_handle(0x0021_0000);
+    lock(objects()).insert(h, GdiObject::Region(normalize_rect(rect)));
+    h
+}
+
+/// Boîte englobante d'une région, `None` si le handle n'en est pas une.
+pub fn region_rect(handle: usize) -> Option<Rect> {
+    match lock(objects()).get(&handle) {
+        Some(GdiObject::Region(rect)) => Some(*rect),
+        _ => None,
+    }
+}
+
+/// Remplace la boîte d'une région existante ; faux si le handle est inconnu.
+pub fn set_region_rect(handle: usize, rect: Rect) -> bool {
+    match lock(objects()).get_mut(&handle) {
+        Some(GdiObject::Region(current)) => {
+            *current = normalize_rect(rect);
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Rectangle ordonné (gauche ≤ droite, haut ≤ bas), comme GDI le fait pour
+/// les régions.
+fn normalize_rect(rect: Rect) -> Rect {
+    Rect {
+        left: rect.left.min(rect.right),
+        top: rect.top.min(rect.bottom),
+        right: rect.left.max(rect.right),
+        bottom: rect.top.max(rect.bottom),
+    }
 }
 
 pub fn create_solid_brush(color: u32) -> usize {
@@ -1301,6 +1413,7 @@ pub fn object_info(handle: usize) -> Option<GdiObjectInfo> {
                     color: *color,
                 },
                 GdiObject::Font(spec) => GdiObjectInfo::Font(spec.clone()),
+                GdiObject::Region(rect) => GdiObjectInfo::Region(*rect),
                 GdiObject::Bitmap {
                     width,
                     height,
@@ -1364,7 +1477,7 @@ pub fn object_color(handle: usize) -> Option<u32> {
             return match object {
                 GdiObject::Brush(c) | GdiObject::SystemBrush(c) => Some(*c),
                 GdiObject::Pen { color, .. } => Some(*color),
-                GdiObject::Font(_) | GdiObject::Bitmap { .. } => None,
+                GdiObject::Font(_) | GdiObject::Bitmap { .. } | GdiObject::Region(_) => None,
             };
         }
     }
@@ -1537,25 +1650,42 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
             color,
             width,
         } => {
-            // Bresenham simplifié
-            let (mut cx, mut cy) = (*x1, *y1);
-            let dx = (*x2 - *x1).abs();
-            let dy = -(*y2 - *y1).abs();
-            let sx = if *x1 < *x2 { 1 } else { -1 };
-            let sy = if *y1 < *y2 { 1 } else { -1 };
+            // Bresenham borné : la ligne est d'abord clippée au rectangle du
+            // DC (élargi de l'épaisseur du trait), en i64, pour que des
+            // coordonnées lointaines ne coûtent ni débordement ni millions
+            // d'itérations hors champ.
+            let pen = (*width).max(1) as i64;
+            let clip = Rect {
+                left: 0,
+                top: 0,
+                right: bounds.right,
+                bottom: bounds.bottom,
+            };
+            let Some((cx1, cy1, cx2, cy2)) =
+                clip_line(*x1 as i64, *y1 as i64, *x2 as i64, *y2 as i64, &clip, pen)
+            else {
+                return true;
+            };
+            let (mut cx, mut cy) = (cx1, cy1);
+            let dx = (cx2 - cx1).abs();
+            let dy = -(cy2 - cy1).abs();
+            let sx = if cx1 < cx2 { 1 } else { -1 };
+            let sy = if cy1 < cy2 { 1 } else { -1 };
             let mut err = dx + dy;
             loop {
-                if cx >= 0 && cy >= 0 && cx < bounds.right && cy < bounds.bottom {
-                    for oy in 0..(*width).max(1) as i32 {
-                        for ox in 0..(*width).max(1) as i32 {
-                            let (px, py) = (cx + ox, cy + oy);
-                            if px < bounds.right && py < bounds.bottom {
-                                put(px, py, *color, RasterOp::Copy);
-                            }
+                for oy in 0..pen {
+                    for ox in 0..pen {
+                        let (px, py) = (cx + ox, cy + oy);
+                        if px >= 0
+                            && py >= 0
+                            && px < bounds.right as i64
+                            && py < bounds.bottom as i64
+                        {
+                            put(px as i32, py as i32, *color, RasterOp::Copy);
                         }
                     }
                 }
-                if cx == *x2 && cy == *y2 {
+                if cx == cx2 && cy == cy2 {
                     break;
                 }
                 let e2 = 2 * err;
@@ -1613,6 +1743,76 @@ fn draw_to_bitmap(handle: usize, cmd: &DrawCmd) -> bool {
         DrawCmd::Text { .. } | DrawCmd::Blit { .. } => {}
     }
     true
+}
+
+/// Clippe le segment (x1,y1)-(x2,y2) au rectangle `clip` élargi de `pen - 1`
+/// vers la gauche et le haut (le trait s'étend vers la droite et le bas),
+/// par Cohen–Sutherland en i64. `None` si rien n'est visible.
+fn clip_line(
+    mut x1: i64,
+    mut y1: i64,
+    mut x2: i64,
+    mut y2: i64,
+    clip: &Rect,
+    pen: i64,
+) -> Option<(i64, i64, i64, i64)> {
+    let (xmin, ymin) = (clip.left as i64 - (pen - 1), clip.top as i64 - (pen - 1));
+    let (xmax, ymax) = (clip.right as i64 - 1, clip.bottom as i64 - 1);
+    if xmax < xmin || ymax < ymin {
+        return None;
+    }
+    const LEFT: u8 = 1;
+    const RIGHT: u8 = 2;
+    const BOTTOM: u8 = 4;
+    const TOP: u8 = 8;
+    let code = |x: i64, y: i64| -> u8 {
+        let mut c = 0;
+        if x < xmin {
+            c |= LEFT;
+        } else if x > xmax {
+            c |= RIGHT;
+        }
+        if y < ymin {
+            c |= TOP;
+        } else if y > ymax {
+            c |= BOTTOM;
+        }
+        c
+    };
+    let (mut c1, mut c2) = (code(x1, y1), code(x2, y2));
+    loop {
+        if c1 | c2 == 0 {
+            return Some((x1, y1, x2, y2));
+        }
+        if c1 & c2 != 0 {
+            return None;
+        }
+        let out = if c1 != 0 { c1 } else { c2 };
+        let (dx, dy) = (x2 - x1, y2 - y1);
+        // Division entière : les coordonnées restent sur la droite à un pixel
+        // près, suffisant pour un tracé Bresenham.
+        let along = |a: i64, num: i64, den: i64, span: i64| -> i64 {
+            (a as i128 + num as i128 * span as i128 / den as i128) as i64
+        };
+        let (x, y) = if out & TOP != 0 {
+            (along(x1, dx, dy, ymin - y1), ymin)
+        } else if out & BOTTOM != 0 {
+            (along(x1, dx, dy, ymax - y1), ymax)
+        } else if out & RIGHT != 0 {
+            (xmax, along(y1, dy, dx, xmax - x1))
+        } else {
+            (xmin, along(y1, dy, dx, xmin - x1))
+        };
+        if out == c1 {
+            x1 = x;
+            y1 = y;
+            c1 = code(x1, y1);
+        } else {
+            x2 = x;
+            y2 = y;
+            c2 = code(x2, y2);
+        }
+    }
 }
 
 fn raster_color(source: u32, destination: u32, rop: RasterOp) -> u32 {
@@ -1683,6 +1883,16 @@ pub trait GuiBackend: Send {
     /// backend peut en produire (X11) et `false` s'il est headless, auquel cas
     /// une boucle `GetMessage` vide doit se terminer.
     fn wait(&mut self, _timeout_ms: u32) -> bool {
+        false
+    }
+    /// Descripteur de la connexion hôte à surveiller par `poll` (X11), `None`
+    /// en headless : `GetMessage` bloque alors sans tenir le verrou du backend.
+    fn event_fd(&mut self) -> Option<i32> {
+        None
+    }
+    /// Lit sans bloquer les événements déjà arrivés ; vrai si au moins un
+    /// attend d'être pompé.
+    fn poll_pending(&mut self) -> bool {
         false
     }
     /// Taille actuelle de l'écran en unités logiques Win32. Elle suit les
@@ -1821,9 +2031,45 @@ pub fn pump_backend() {
 
 /// Attend des événements hôte (au plus `timeout_ms`). Renvoie `false` si le
 /// backend est headless : une boucle `GetMessage` vide doit alors se terminer.
+/// Vrai avec un affichage réel (X11) ; faux en headless, où une boucle
+/// `GetMessage` vide se termine au lieu d'attendre.
+pub fn backend_is_interactive() -> bool {
+    lock(backend()).event_fd().is_some()
+}
+
 pub fn wait_backend(timeout_ms: u32) -> bool {
-    let mut b = lock(backend());
-    b.wait(timeout_ms)
+    let fd = {
+        let mut b = lock(backend());
+        let Some(fd) = b.event_fd() else {
+            return b.wait(timeout_ms);
+        };
+        if b.poll_pending() {
+            return true;
+        }
+        fd
+    };
+    // Le verrou du backend est relâché : les autres threads peuvent peindre
+    // pendant que celui-ci dort sur la connexion X11 et sur son éveil.
+    let q = current_queue();
+    poll_fds(&[fd, q.wake.0], timeout_ms);
+    q.wake.drain();
+    true
+}
+
+/// Attend que l'un des descripteurs soit lisible (au plus `timeout_ms`) ;
+/// les descripteurs négatifs sont ignorés par `poll`.
+fn poll_fds(fds: &[i32], timeout_ms: u32) {
+    let mut pfds: Vec<libc::pollfd> = fds
+        .iter()
+        .map(|&fd| libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        })
+        .collect();
+    let timeout = timeout_ms.min(i32::MAX as u32) as i32;
+    // SAFETY : `pfds` est un tableau valide de `len` entrées pour la durée de l'appel.
+    unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, timeout) };
 }
 
 /// Transmet les commandes accumulées par les appels GDI invités au backend de
@@ -1908,6 +2154,20 @@ pub fn destroy_window(hwnd: usize) -> bool {
         unsafe { call_wndproc(wp, hwnd, WM_DESTROY, 0, 0) };
     }
     with_backend(|b| b.destroy_window(hwnd));
+    // Plus aucun rappel sur une HWND morte : minuteurs, capture de la souris,
+    // ordre Z et messages encore en file pour cette fenêtre.
+    remove_window_timers(hwnd);
+    let _ = CAPTURE_HWND.compare_exchange(
+        hwnd,
+        0,
+        std::sync::atomic::Ordering::Relaxed,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+    lock(z_order()).retain(|&h| h != hwnd);
+    if let Some(owner) = owner.as_ref() {
+        let q = queue_for(*owner);
+        lock(&q.items).retain(|m| m.hwnd != hwnd);
+    }
     // Les enfants sont détruits récursivement.
     let children: Vec<usize> = lock(windows())
         .iter()
@@ -1941,9 +2201,48 @@ pub fn lookup_class(name: &str) -> Option<ClassInfo> {
 
 // ---------- Accès utilisés par user32 ----------
 
-/// Insère une fenêtre déjà construite dans la table.
+/// Insère une fenêtre déjà construite dans la table ; une fenêtre de premier
+/// niveau arrive au sommet de l'ordre Z.
 pub fn insert_window(hwnd: usize, w: Window) {
+    let top_level = w.parent == 0;
     lock(windows()).insert(hwnd, w);
+    if top_level {
+        bring_to_top(hwnd);
+    }
+}
+
+/// Ordre Z des fenêtres de premier niveau, du sommet vers le fond. Une seule
+/// clé : la dernière fenêtre créée ou activée est en tête, sans dépendre de
+/// l'itération d'une table de hachage.
+fn z_order() -> &'static Mutex<Vec<usize>> {
+    static Z: OnceLock<Mutex<Vec<usize>>> = OnceLock::new();
+    Z.get_or_init(|| Mutex::new(Vec::new()))
+}
+
+/// Place la fenêtre au sommet de l'ordre Z (création, activation).
+pub fn bring_to_top(hwnd: usize) {
+    let mut z = lock(z_order());
+    z.retain(|&h| h != hwnd);
+    z.insert(0, hwnd);
+}
+
+/// Fenêtres de premier niveau du sommet vers le fond (ordre d'`EnumWindows`).
+fn top_level_in_z_order(map: &HashMap<usize, Window>) -> Vec<usize> {
+    let z = lock(z_order());
+    let mut out: Vec<usize> = z
+        .iter()
+        .copied()
+        .filter(|h| map.get(h).is_some_and(|w| w.parent == 0))
+        .collect();
+    // Fenêtres insérées sans passer par `insert_window` : après, par handle.
+    let mut rest: Vec<usize> = map
+        .iter()
+        .filter(|(h, w)| w.parent == 0 && !out.contains(h))
+        .map(|(h, _)| *h)
+        .collect();
+    rest.sort_unstable();
+    out.extend(rest);
+    out
 }
 
 /// Expose le backend pour les wrappers (user32/gdi32).
@@ -2053,8 +2352,15 @@ pub fn set_visible(hwnd: usize, visible: bool) -> bool {
     }
 }
 
+/// Fenêtre de premier niveau au sommet de l'ordre Z (visible de préférence).
 pub fn first_window() -> Option<usize> {
-    lock(windows()).keys().next().copied()
+    let map = lock(windows());
+    let order = top_level_in_z_order(&map);
+    order
+        .iter()
+        .copied()
+        .find(|h| map.get(h).is_some_and(|w| w.visible))
+        .or_else(|| order.first().copied())
 }
 
 /// Ouvre un cycle de peinture : marque la zone comme validée et alloue un vrai
@@ -2083,9 +2389,48 @@ pub fn end_paint(_hwnd: usize, hdc: usize) -> bool {
 
 /// Retire et renvoie le premier message correspondant au filtre.
 pub fn take_message(q: &Queue, hwnd: usize, min: u32, max: u32) -> Option<Msg> {
-    let mut items = lock(&q.items);
-    let idx = items.iter().position(|m| match_filter(m, hwnd, min, max));
-    idx.map(|i| items.remove(i).unwrap())
+    let taken = {
+        let mut items = lock(&q.items);
+        let idx = items.iter().position(|m| match_filter(m, hwnd, min, max))?;
+        items.remove(idx)?
+    };
+    if taken.message == WM_PAINT {
+        // Le WM_PAINT n'est plus en file ; la zone reste invalidée tant que
+        // BeginPaint/ValidateRect n'a pas été appelé (voir `pending_paint`).
+        if let Some(w) = lock(windows()).get_mut(&taken.hwnd) {
+            w.paint_queued = false;
+        }
+    }
+    Some(taken)
+}
+
+/// `WM_PAINT` synthétisé quand la file est vide, comme sous Windows : une
+/// fenêtre visible du thread appelant dont la zone est toujours invalidée (pas
+/// de `BeginPaint`/`ValidateRect` depuis `InvalidateRect`) le reçoit à nouveau.
+pub fn pending_paint(hwnd: usize, min: u32, max: u32) -> Option<Msg> {
+    if !(min == 0 && max == 0) && !(min..=max).contains(&WM_PAINT) {
+        return None;
+    }
+    let tid = std::thread::current().id();
+    let map = lock(windows());
+    let order = lock(z_order());
+    let candidates = order.iter().copied().chain(map.keys().copied());
+    let target = candidates.filter(|h| hwnd == 0 || *h == hwnd).find(|h| {
+        map.get(h)
+            .is_some_and(|w| w.owner == tid && w.visible && w.needs_paint && !w.paint_queued)
+    })?;
+    Some(Msg::new(target, WM_PAINT, 0, 0))
+}
+
+/// `ValidateRect` : la fenêtre n'a plus besoin d'être repeinte.
+pub fn validate_window(hwnd: usize) -> bool {
+    match lock(windows()).get_mut(&hwnd) {
+        Some(w) => {
+            w.needs_paint = false;
+            true
+        }
+        None => false,
+    }
 }
 
 /// Remet un message en tête de file (pour WM_QUIT non retiré).
@@ -2125,6 +2470,7 @@ pub fn post_quit(q: &Queue, code: i32) {
         l_private: 0,
     });
     q.changed.notify_all();
+    q.wake.signal();
 }
 
 // ---------- Défaut ----------
@@ -2137,6 +2483,12 @@ pub fn def_window_proc(hwnd: usize, message: u32, _wparam: usize, _lparam: isize
             0
         }
         WM_ERASEBKGND => 1, // on « efface » en peignant nous-mêmes
+        // Comme BeginPaint/EndPaint de DefWindowProc : la zone est validée,
+        // sinon la fenêtre recevrait WM_PAINT sans fin.
+        WM_PAINT => {
+            validate_window(hwnd);
+            0
+        }
         _ => 0,
     }
 }
@@ -2204,11 +2556,7 @@ pub fn set_wnd_proc(hwnd: usize, new_proc: usize) -> Option<usize> {
 
 /// Énumère les HWNDs de toutes les fenêtres de premier niveau.
 pub fn enum_top_level_windows() -> Vec<usize> {
-    lock(windows())
-        .iter()
-        .filter(|(_, w)| w.parent == 0)
-        .map(|(h, _)| *h)
-        .collect()
+    top_level_in_z_order(&lock(windows()))
 }
 
 /// Cherche une fenêtre par nom de classe et/ou titre.
@@ -2239,19 +2587,39 @@ pub fn get_window_relative(hwnd: usize, cmd: u32) -> Option<usize> {
     }
     // GW_HWNDFIRST=0 GW_HWNDLAST=1 GW_HWNDNEXT=2 GW_HWNDPREV=3
     // GW_OWNER=4 GW_CHILD=5
+    // Fratrie dans un ordre stable : ordre Z pour le premier niveau, handle
+    // croissant pour les enfants d'un même parent.
+    let siblings = |parent: usize| -> Vec<usize> {
+        if parent == 0 {
+            top_level_in_z_order(&map)
+        } else {
+            let mut v: Vec<usize> = map
+                .iter()
+                .filter(|(_, w)| w.parent == parent)
+                .map(|(h, _)| *h)
+                .collect();
+            v.sort_unstable();
+            v
+        }
+    };
     match cmd {
+        0..=3 => {
+            let parent = map.get(&hwnd).map_or(0, |w| w.parent);
+            let list = siblings(parent);
+            let pos = list.iter().position(|&h| h == hwnd)?;
+            match cmd {
+                0 => list.first().copied(),
+                1 => list.last().copied(),
+                2 => list.get(pos + 1).copied(),
+                _ => pos.checked_sub(1).and_then(|p| list.get(p).copied()),
+            }
+        }
         4 => {
             // GW_OWNER : même chose que parent ici
             map.get(&hwnd)
                 .and_then(|w| if w.parent != 0 { Some(w.parent) } else { None })
         }
-        5 => {
-            // GW_CHILD : premier enfant
-            let parent = hwnd;
-            map.iter()
-                .find(|(_, w)| w.parent == parent)
-                .map(|(h, _)| *h)
-        }
+        5 => siblings(hwnd).first().copied(), // GW_CHILD : premier enfant
         _ => None,
     }
 }
@@ -2332,6 +2700,8 @@ static NEXT_TIMER_ID: AtomicUsize = AtomicUsize::new(1);
 
 #[allow(dead_code)]
 struct TimerEntry {
+    /// Thread qui reçoit les WM_TIMER : celui de la fenêtre, sinon le créateur.
+    owner: ThreadId,
     hwnd: usize,
     id: usize,
     interval_ms: u32,
@@ -2345,22 +2715,44 @@ fn timers() -> &'static Mutex<Vec<TimerEntry>> {
 }
 
 pub fn set_timer(hwnd: usize, id: usize, interval: u32, callback: usize) -> usize {
+    let current = std::thread::current().id();
+    let owner = if hwnd == 0 {
+        current
+    } else {
+        match window_owner(hwnd) {
+            Some(owner) => owner,
+            // Win32 : SetTimer échoue sur une HWND inconnue.
+            None => return 0,
+        }
+    };
     let mut t = lock(timers());
-    // Remplacer un timer existant avec le même (hwnd, id)
-    t.retain(|e| !(e.hwnd == hwnd && e.id == id));
-    let real_id = if id == 0 {
+    // Remplacer un timer existant avec le même (thread, hwnd, id). Sans
+    // fenêtre, l'identifiant est attribué par le système.
+    let real_id = if hwnd == 0 {
         NEXT_TIMER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
     } else {
+        t.retain(|e| !(e.owner == owner && e.hwnd == hwnd && e.id == id));
         id
     };
     t.push(TimerEntry {
+        owner,
         hwnd,
         id: real_id,
         interval_ms: interval,
         callback,
         next_fire: crate::dlls::kernel32::get_tick_count64() + interval.max(10) as u64,
     });
+    drop(t);
+    if owner != current {
+        // Le thread propriétaire dort peut-être sans échéance : le réveiller.
+        wake_thread(owner);
+    }
     real_id
+}
+
+/// Retire tous les minuteurs d'une fenêtre détruite.
+fn remove_window_timers(hwnd: usize) {
+    lock(timers()).retain(|e| e.hwnd != hwnd);
 }
 
 /// Prochain WM_TIMER échu correspondant au filtre (`overdue_only` : seulement
@@ -2372,6 +2764,7 @@ pub fn due_timer(hwnd: usize, min: u32, max: u32, overdue_only: bool) -> Option<
         return None;
     }
     let now = crate::dlls::kernel32::get_tick_count64();
+    let tid = std::thread::current().id();
     let mut t = lock(timers());
     let e = t.iter_mut().find(|e| {
         let interval = e.interval_ms.max(10) as u64;
@@ -2380,7 +2773,7 @@ pub fn due_timer(hwnd: usize, min: u32, max: u32, overdue_only: bool) -> Option<
         } else {
             e.next_fire
         };
-        (hwnd == 0 || e.hwnd == hwnd) && now >= limit
+        e.owner == tid && (hwnd == 0 || e.hwnd == hwnd) && now >= limit
     })?;
     let interval = e.interval_ms.max(10) as u64;
     e.next_fire = if e.next_fire == 0 || now >= e.next_fire + 4 * interval {
@@ -2399,20 +2792,24 @@ pub fn due_timer(hwnd: usize, min: u32, max: u32, overdue_only: bool) -> Option<
     })
 }
 
-/// Millisecondes avant le prochain minuteur (pour borner l'attente).
+/// Millisecondes avant le prochain minuteur du thread appelant (pour borner
+/// l'attente).
 pub fn next_timer_ms(hwnd: usize) -> Option<u32> {
     let now = crate::dlls::kernel32::get_tick_count64();
+    let tid = std::thread::current().id();
     lock(timers())
         .iter()
-        .filter(|e| hwnd == 0 || e.hwnd == hwnd)
+        .filter(|e| e.owner == tid && (hwnd == 0 || e.hwnd == hwnd))
         .map(|e| e.next_fire.saturating_sub(now).min(u32::MAX as u64) as u32)
         .min()
 }
 
+/// `KillTimer` : seuls les minuteurs du thread appelant sont concernés.
 pub fn kill_timer(hwnd: usize, id: usize) -> bool {
+    let tid = std::thread::current().id();
     let mut t = lock(timers());
     let before = t.len();
-    t.retain(|e| !(e.hwnd == hwnd && e.id == id));
+    t.retain(|e| !(e.owner == tid && e.hwnd == hwnd && e.id == id));
     t.len() < before
 }
 
@@ -2784,6 +3181,196 @@ mod tests {
         assert_eq!(dc_window(0x00DE_AD00), None);
         // Sans DC, les réglages sont sans effet et renvoient la valeur neutre.
         assert_eq!(set_dc_bk_mode(0x00DE_AD00, 1), 0);
+    }
+
+    #[test]
+    fn la_ligne_est_clippee_au_rectangle_du_dc() {
+        let clip = Rect::from_size(0, 0, 100, 50);
+        // Entièrement visible : inchangée.
+        assert_eq!(clip_line(1, 2, 30, 40, &clip, 1), Some((1, 2, 30, 40)));
+        // Entièrement hors champ : rien à tracer.
+        assert_eq!(clip_line(-10, -10, -5, -20, &clip, 1), None);
+        assert_eq!(clip_line(200, 0, 300, 49, &clip, 1), None);
+        // Traverse le rectangle : extrémités ramenées sur ses bords.
+        assert_eq!(
+            clip_line(-100, 25, 300, 25, &clip, 1),
+            Some((0, 25, 99, 25))
+        );
+        // Coordonnées extrêmes : pas de débordement, segment borné au DC.
+        let far = i32::MAX as i64;
+        let (x1, y1, x2, y2) = clip_line(-far, -far, far, far, &clip, 1).unwrap();
+        assert!((0..100).contains(&x1) && (0..50).contains(&y1));
+        assert!((0..100).contains(&x2) && (0..50).contains(&y2));
+        assert_eq!(
+            clip_line(i32::MIN as i64, 0, i32::MAX as i64, 0, &clip, 1),
+            Some((0, 0, 99, 0))
+        );
+        // Trait épais : une origine un peu à gauche déborde encore dans le DC.
+        assert_eq!(clip_line(-2, 10, -2, 20, &clip, 3), Some((-2, 10, -2, 20)));
+        assert_eq!(clip_line(-3, 10, -3, 20, &clip, 3), None);
+        // DC vide : rien.
+        assert_eq!(clip_line(0, 0, 1, 1, &Rect::default(), 1), None);
+    }
+
+    #[test]
+    fn les_minuteurs_appartiennent_a_leur_thread() {
+        let id = set_timer(0, 0, 0, 0);
+        assert_ne!(id, 0);
+        // Un autre thread ne voit ni n'arrête ce minuteur.
+        let other = std::thread::spawn(move || (next_timer_ms(0), kill_timer(0, id)))
+            .join()
+            .unwrap();
+        assert_eq!(other, (None, false));
+        assert!(next_timer_ms(0).is_some_and(|ms| ms <= 10));
+        std::thread::sleep(std::time::Duration::from_millis(15));
+        let m = due_timer(0, 0, 0, false).expect("WM_TIMER échu sur le thread créateur");
+        assert_eq!((m.message, m.wparam), (0x0113, id));
+        assert!(kill_timer(0, id));
+        assert!(!kill_timer(0, id));
+        // Un minuteur de fenêtre appartient au thread de la fenêtre et
+        // disparaît avec elle ; une HWND inconnue est refusée.
+        let hwnd = fenetre_de_test();
+        assert_eq!(set_timer(hwnd, 7, 1000, 0), 7);
+        assert!(next_timer_ms(hwnd).is_some());
+        destroy_window(hwnd);
+        assert_eq!(next_timer_ms(hwnd), None);
+        assert_eq!(set_timer(hwnd, 7, 1000, 0), 0);
+    }
+
+    #[test]
+    fn detruire_une_fenetre_libere_capture_et_messages() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        set_capture(hwnd);
+        assert_eq!(get_capture(), hwnd);
+        assert!(post_to_window(hwnd, Msg::new(hwnd, WM_KEYDOWN, 0x41, 0)));
+        assert!(peek_message(&q, hwnd, 0, 0).is_some());
+        assert!(enum_top_level_windows().contains(&hwnd));
+        assert!(destroy_window(hwnd));
+        assert_eq!(get_capture(), 0);
+        assert!(peek_message(&q, hwnd, 0, 0).is_none());
+        assert!(!enum_top_level_windows().contains(&hwnd));
+        assert!(!post_to_window(hwnd, Msg::new(hwnd, WM_KEYDOWN, 0x41, 0)));
+    }
+
+    #[test]
+    fn wm_paint_est_reemis_tant_que_la_fenetre_ne_valide_pas() {
+        let hwnd = fenetre_de_test();
+        let q = current_queue();
+        assert!(pending_paint(hwnd, 0, 0).is_none());
+        request_paint(hwnd);
+        let m = take_message(&q, hwnd, 0, 0).expect("WM_PAINT en file");
+        assert_eq!(m.message, WM_PAINT);
+        // Sans BeginPaint, la zone reste invalidée : WM_PAINT revient dès que
+        // la file est vide, mais pas pour un filtre qui l'exclut.
+        assert_eq!(pending_paint(hwnd, 0, 0).map(|m| m.hwnd), Some(hwnd));
+        assert_eq!(pending_paint(0, 0, 0).map(|m| m.hwnd), Some(hwnd));
+        assert!(pending_paint(hwnd, WM_KEYDOWN, WM_KEYDOWN).is_none());
+        assert!(validate_window(hwnd));
+        assert!(pending_paint(hwnd, 0, 0).is_none());
+        // BeginPaint valide aussi.
+        request_paint(hwnd);
+        assert!(take_message(&q, hwnd, 0, 0).is_some());
+        let (hdc, _) = begin_paint(hwnd).unwrap();
+        end_paint(hwnd, hdc);
+        assert!(pending_paint(hwnd, 0, 0).is_none());
+        // DefWindowProc valide lui-même (comme BeginPaint/EndPaint sous Windows).
+        request_paint(hwnd);
+        assert!(take_message(&q, hwnd, 0, 0).is_some());
+        def_window_proc(hwnd, WM_PAINT, 0, 0);
+        assert!(pending_paint(hwnd, 0, 0).is_none());
+        destroy_window(hwnd);
+        assert!(pending_paint(hwnd, 0, 0).is_none());
+    }
+
+    #[test]
+    fn l_ordre_z_est_stable_et_suit_l_activation() {
+        let _guard = lock(&KEYBOARD_GLOBAL_TEST_LOCK);
+        let a = fenetre_de_test();
+        let b = fenetre_de_test();
+        let c = fenetre_de_test();
+        let pos = |list: &[usize], h: usize| list.iter().position(|&x| x == h).unwrap();
+        // Création : la plus récente au sommet.
+        let z = enum_top_level_windows();
+        assert!(pos(&z, c) < pos(&z, b) && pos(&z, b) < pos(&z, a));
+        assert_eq!(z, enum_top_level_windows(), "ordre reproductible");
+        // Activation : la fenêtre activée passe devant, les autres gardent leur ordre.
+        assert_eq!(set_focus(a), Some(0));
+        let z = enum_top_level_windows();
+        assert!(pos(&z, a) < pos(&z, c) && pos(&z, c) < pos(&z, b));
+        bring_to_top(b);
+        let z = enum_top_level_windows();
+        assert!(pos(&z, b) < pos(&z, a) && pos(&z, a) < pos(&z, c));
+        // Enfants : ordre stable par handle, navigation GW_* cohérente.
+        let enfant = |parent: usize| {
+            let h = alloc_hwnd();
+            let proc_addr: extern "win64" fn(usize, u32, usize, isize) -> isize = wnd_proc_inerte;
+            insert_window(
+                h,
+                Window {
+                    class: "Enfant".to_string(),
+                    wnd_proc: proc_addr as usize,
+                    background: 0,
+                    title: String::new(),
+                    rect: Rect::from_size(0, 0, 10, 10),
+                    visible: true,
+                    parent,
+                    owner: std::thread::current().id(),
+                    needs_paint: false,
+                    paint_queued: false,
+                    style: 0,
+                    ex_style: 0,
+                    pending: Vec::new(),
+                },
+            );
+            h
+        };
+        let d = enfant(a);
+        let e = enfant(a);
+        assert_eq!(get_window_relative(a, 5), Some(d)); // GW_CHILD
+        assert_eq!(get_window_relative(d, 0), Some(d)); // GW_HWNDFIRST
+        assert_eq!(get_window_relative(d, 1), Some(e)); // GW_HWNDLAST
+        assert_eq!(get_window_relative(d, 2), Some(e)); // GW_HWNDNEXT
+        assert_eq!(get_window_relative(e, 3), Some(d)); // GW_HWNDPREV
+        assert_eq!(get_window_relative(e, 2), None);
+        assert_eq!(get_window_relative(d, 4), Some(a)); // GW_OWNER
+        assert!(!enum_top_level_windows().contains(&d));
+        set_focus(0);
+        for h in [a, b, c] {
+            destroy_window(h);
+        }
+        let z = enum_top_level_windows();
+        assert!(!z.contains(&a) && !z.contains(&b) && !z.contains(&c));
+        assert_eq!(get_window_relative(d, 5), None);
+    }
+
+    #[test]
+    fn une_region_est_un_vrai_objet_gdi() {
+        let rgn = create_region(Rect {
+            left: 10,
+            top: 20,
+            right: 5,
+            bottom: 40,
+        });
+        assert!(
+            rgn > 0x0010_0000,
+            "pas un objet stock comme 1 = WHITE_BRUSH"
+        );
+        assert_eq!(
+            region_rect(rgn),
+            Some(Rect {
+                left: 5,
+                top: 20,
+                right: 10,
+                bottom: 40
+            })
+        );
+        assert!(matches!(object_info(rgn), Some(GdiObjectInfo::Region(_))));
+        assert_eq!(object_color(rgn), None);
+        assert!(set_region_rect(rgn, Rect::from_size(0, 0, 3, 3)));
+        assert!(delete_object(rgn));
+        assert_eq!(region_rect(rgn), None);
+        assert!(!set_region_rect(rgn, Rect::default()));
     }
 }
 

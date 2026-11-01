@@ -8,6 +8,7 @@ use crate::dlls::gui_cairo::{Cairo, Shape};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uchar, c_ulong, c_void, CString};
+use std::os::unix::io::AsRawFd;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ChangeGCAux, ChangeWindowAttributesAux, ConfigureNotifyEvent,
@@ -26,6 +27,44 @@ struct XWin {
     y: i32,
     width: u16,
     height: u16,
+}
+
+/// Dégradé de fond déjà calculé, invalidé quand le contraste change.
+#[derive(Default)]
+struct ThemeCache {
+    contrast: u8,
+    bands: HashMap<u16, std::sync::Arc<Vec<(i16, u16, u32)>>>,
+}
+
+/// Bandes (y, hauteur, pixel) du fond d'une fenêtre de `height` pixels :
+/// 32 bandes du dégradé clair, ou une seule bande de la couleur de fond du
+/// thème de contraste. `alloc` convertit un COLORREF en pixel X11.
+fn compute_theme_bands(
+    height: u16,
+    contrast: u8,
+    alloc: impl Fn(u32) -> u32,
+) -> Vec<(i16, u16, u32)> {
+    let h = height.max(1) as u32;
+    if let Some(colors) = crate::dlls::a11y::contrast_colors(contrast) {
+        return vec![(0, h.min(u16::MAX as u32) as u16, alloc(colors.background))];
+    }
+    let bands = 32u32;
+    (0..bands)
+        .map(|i| {
+            let t = i as f32 / (bands - 1) as f32;
+            let c = theme::lerp_colorref(theme::GRADIENT_TOP, theme::GRADIENT_BOTTOM, t);
+            let y = (i * h / bands) as i16;
+            let band_h = ((i + 1) * h / bands - i * h / bands).max(1) as u16;
+            (y, band_h, alloc(c))
+        })
+        .collect()
+}
+
+/// Vrai pour un FocusIn/FocusOut dû à un grab (menu, glisser) : le focus
+/// réel de la fenêtre n'a pas changé.
+fn focus_is_grab(mode: x11rb::protocol::xproto::NotifyMode) -> bool {
+    use x11rb::protocol::xproto::NotifyMode;
+    matches!(mode, NotifyMode::GRAB | NotifyMode::UNGRAB)
 }
 
 #[derive(Clone, Copy)]
@@ -667,6 +706,8 @@ pub struct X11Backend {
     /// Pixels X11 déjà alloués, notamment pour éviter des milliers d'aller-retours
     /// lors du rafraîchissement animé des icônes PNG.
     color_cache: RefCell<HashMap<u32, u32>>,
+    /// Bandes du dégradé de fond par hauteur de fenêtre (voir `theme_bands`).
+    theme_cache: RefCell<ThemeCache>,
     /// One bounded server-side cache for the large desktop background.
     bitmap_cache: RefCell<Option<BitmapCache>>,
     /// Rendu vectoriel antialiasé Xft/Fontconfig, si les bibliothèques hôte sont présentes.
@@ -741,6 +782,7 @@ impl X11Backend {
             content: HashMap::new(),
             fonts: HashMap::new(),
             color_cache: RefCell::new(HashMap::new()),
+            theme_cache: RefCell::new(ThemeCache::default()),
             bitmap_cache: RefCell::new(None),
             xft: unsafe { XftRenderer::connect() },
             scale,
@@ -1199,21 +1241,36 @@ impl X11Backend {
         let _ = self.conn.flush();
     }
 
+    /// Bandes du dégradé de fond pour une hauteur de fenêtre : (y, hauteur,
+    /// pixel X11). Calculées une fois par hauteur et mises en cache ; le cache
+    /// est vidé quand les préférences d'accessibilité (contraste) changent,
+    /// `a11y::current` relisant le fichier de réglages sur sa date de
+    /// modification. `draw` ne recalcule donc plus le thème à chaque flush.
+    fn theme_bands(&self, height: u16) -> std::sync::Arc<Vec<(i16, u16, u32)>> {
+        let contrast = crate::dlls::a11y::current().contrast;
+        let mut cache = self.theme_cache.borrow_mut();
+        if cache.contrast != contrast {
+            cache.contrast = contrast;
+            cache.bands.clear();
+        }
+        if let Some(bands) = cache.bands.get(&height) {
+            return bands.clone();
+        }
+        let bands = std::sync::Arc::new(compute_theme_bands(height, contrast, |c| {
+            self.alloc_color(c)
+        }));
+        cache.bands.insert(height, bands.clone());
+        bands
+    }
+
     /// Dessine un fond clair avec un dégradé discret, proche des surfaces
     /// d'application de Windows 11. Le contenu GDI invité est posé ensuite.
     fn paint_theme(&self, w: &XWin) {
         self.before_x11();
-        let bands = 32u32;
-        let h = w.height.max(1) as u32;
-        for i in 0..bands {
-            let t = i as f32 / (bands - 1) as f32;
-            let c = theme::lerp_colorref(theme::GRADIENT_TOP, theme::GRADIENT_BOTTOM, t);
-            let pixel = self.alloc_color(c);
+        for &(y, band_h, pixel) in self.theme_bands(w.height).iter() {
             let _ = self
                 .conn
                 .change_gc(w.gc, &ChangeGCAux::new().foreground(pixel));
-            let y = (i * h / bands) as i16;
-            let band_h = ((i + 1) * h / bands - i * h / bands).max(1) as u16;
             let _ = self.conn.poly_fill_rectangle(
                 w.window,
                 w.gc,
@@ -2167,6 +2224,12 @@ impl X11Backend {
                 })
             }
             Event::FocusIn(e) => {
+                // NotifyGrab/NotifyUngrab : focus temporairement pris par un
+                // menu ou un glisser (grab du clavier) ; la fenêtre ne perd
+                // pas réellement le focus, ne pas le signaler.
+                if focus_is_grab(e.mode) {
+                    return None;
+                }
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,
@@ -2176,6 +2239,9 @@ impl X11Backend {
                 })
             }
             Event::FocusOut(e) => {
+                if focus_is_grab(e.mode) {
+                    return None;
+                }
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,
@@ -3102,24 +3168,37 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn wait(&mut self, timeout_ms: u32) -> bool {
-        use std::time::{Duration, Instant};
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        loop {
-            match self.conn.poll_for_event() {
-                Ok(Some(ev)) => self.pending.push(ev),
-                Ok(None) => {}
-                // Connexion perdue : on laisse la boucle de messages se vider.
-                Err(_) => return !self.pending.is_empty(),
-            }
-            if !self.pending.is_empty() {
-                return true;
-            }
-            if Instant::now() >= deadline {
-                // Backend réel : GetMessage doit continuer d'attendre.
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(5));
+        // Les événements déjà lus par x11rb (pendant une réponse) ne rendent
+        // pas la socket lisible : on les prend d'abord sans bloquer.
+        if self.poll_pending() {
+            return true;
         }
+        // Puis on dort sur la socket X11 jusqu'au prochain événement ou à
+        // l'échéance, au lieu d'interroger le serveur toutes les 5 ms.
+        let mut pfd = libc::pollfd {
+            fd: self.conn.stream().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let timeout = timeout_ms.min(i32::MAX as u32) as i32;
+        // SAFETY : `pfd` est une entrée valide pour la durée de l'appel.
+        unsafe { libc::poll(&mut pfd, 1, timeout) };
+        self.poll_pending();
+        // Backend réel : GetMessage doit continuer d'attendre.
+        true
+    }
+
+    fn event_fd(&mut self) -> Option<i32> {
+        Some(self.conn.stream().as_raw_fd())
+    }
+
+    fn poll_pending(&mut self) -> bool {
+        // Une erreur (connexion perdue) arrête la lecture : la boucle de
+        // messages se vide avec ce qui a déjà été lu.
+        while let Ok(Some(ev)) = self.conn.poll_for_event() {
+            self.pending.push(ev);
+        }
+        !self.pending.is_empty()
     }
 
     fn native_window(&mut self, hwnd: usize) -> Option<u64> {

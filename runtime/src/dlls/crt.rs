@@ -860,7 +860,7 @@ crate::varargs_thunk!(vsnprintf_c99_thunk => imp_vsnprintf_c99);
 // ---------- Variantes larges (wchar_t) ----------
 
 /// Formate une chaîne de format large en UTF-16 via le moteur étroit.
-unsafe fn format_wide(fmt: *const u16, va: &mut crate::thunks::VaList) -> Vec<u16> {
+pub(crate) unsafe fn format_wide(fmt: *const u16, va: &mut crate::thunks::VaList) -> Vec<u16> {
     let narrow = {
         let n = crate::printf::wide_len(fmt);
         let text = String::from_utf16_lossy(std::slice::from_raw_parts(fmt, n));
