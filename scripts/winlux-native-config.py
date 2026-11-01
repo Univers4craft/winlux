@@ -305,6 +305,7 @@ if openbox_config.is_file():
         tree = ET.parse(openbox_config)
         keyboard = tree.getroot().find(f"{{{namespace}}}keyboard")
         changed = False
+        default_rc = source / "config/openbox/rc.xml"
         if keyboard is not None:
             keys = {binding.get("key") for binding in keyboard}
             for key, page in [("C-S-Escape", "tasks"), ("W-a", "quick"), ("W-n", "notifications")]:
@@ -313,7 +314,6 @@ if openbox_config.is_file():
                     action = ET.SubElement(binding, f"{{{namespace}}}action", name="Execute")
                     ET.SubElement(action, f"{{{namespace}}}command").text = "winlux-system-tools " + page
                     changed = True
-            default_rc = source / "config/openbox/rc.xml"
             if default_rc.is_file():
                 defaults = ET.parse(default_rc).getroot().find(f"{{{namespace}}}keyboard")
                 if defaults is not None:
@@ -326,12 +326,33 @@ if openbox_config.is_file():
                 if binding.get("key") == "Super_L" and len(commands) == 1 and commands[0].text == "winlux-start-menu":
                     keyboard.remove(binding)
                     changed = True
+        # Le clic droit sur le bureau ouvrait toujours le menu d'Openbox, même sur
+        # un fichier (ni Renommer ni Supprimer) et le bureau n'avait jamais le
+        # clavier : remplacer la liaison livrée par celle d'aujourd'hui.
+        mouse = tree.getroot().find(f"{{{namespace}}}mouse")
+        desktop = next((item for item in mouse if item.get("name") == "Desktop"), None) if mouse is not None else None
+        if desktop is not None and default_rc.is_file() and len(desktop) == 1 and desktop[0].get("button") == "Right" \
+                and desktop[0].findtext(f"{{{namespace}}}action/{{{namespace}}}menu") == "root-menu":
+            default_mouse = ET.parse(default_rc).getroot().find(f"{{{namespace}}}mouse")
+            position = list(mouse).index(desktop)
+            mouse.remove(desktop)
+            for context in [item for item in default_mouse if item.get("name") in ("Desktop", "Root")][::-1]:
+                mouse.insert(position, ET.fromstring(ET.tostring(context)))
+            changed = True
         if changed:
             temporary = openbox_config.with_suffix(".xml.tmp")
             tree.write(temporary, encoding="utf-8", xml_declaration=True)
             temporary.replace(openbox_config)
     except ET.ParseError:
         print(_t("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée."), file=sys.stderr)
+# Action « Open Terminal Here » d'origine (anglaise) du menu des dossiers et du
+# bureau : remplacée par celle livrée, traduite.
+uca = home / ".config/Thunar/uca.xml"
+try:
+    if uca.is_file() and uca.read_text(encoding="utf-8").count("<action>") == 1 and "<name>Open Terminal Here</name>" in uca.read_text(encoding="utf-8"):
+        shutil.copyfile(source / "config/Thunar/uca.xml", uca)
+except (OSError, UnicodeDecodeError):
+    pass
 # « Coller » dans le menu du bureau (clic droit) : ajouté une fois aux menus
 # Openbox déjà copiés, avant « Nouveau », sans toucher au reste.
 openbox_menu = home / ".config/openbox/menu.xml"

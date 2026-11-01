@@ -52,7 +52,10 @@
     <context name="Left"><mousebind button="Left" action="Drag"><action name="Resize"><edge>left</edge></action></mousebind></context>
     <context name="Right"><mousebind button="Left" action="Drag"><action name="Resize"><edge>right</edge></action></mousebind></context>
     <context name="Top"><mousebind button="Left" action="Drag"><action name="Resize"><edge>top</edge></action></mousebind></context>
-    <context name="Desktop"><mousebind button="Right" action="Press"><action name="ShowMenu"><menu>root-menu</menu></action></mousebind></context>
+    <!-- Bureau : xfdesktop affiche lui-même le menu d'un fichier (Ouvrir, Renommer,
+         Supprimer…) ou de l'espace vide ; un clic lui donne le clavier (Ctrl+C/V, Suppr, F2). -->
+    <context name="Desktop"><mousebind button="Left" action="Press"><action name="Focus"><desktop>yes</desktop></action></mousebind></context>
+    <context name="Root"><mousebind button="Right" action="Press"><action name="ShowMenu"><menu>root-menu</menu></action></mousebind></context>
   </mouse>
   <menu><file>~/.config/openbox/menu.xml</file><hideDelay>200</hideDelay><applicationIcons>yes</applicationIcons></menu>
   <applications>

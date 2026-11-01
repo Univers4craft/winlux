@@ -789,6 +789,10 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         export WINLUX_UI_SCALE="$ui_scale" WINLUX_THEME="$desktop_theme"
         /usr/bin/xfdesktop --disable-wm-check >/run/winlux/desktop.log 2>&1 &
         desktop_pid=$!
+        # Bureau relancé (plantage, redémarrage de session) : picom gardait
+        # alors toutes les fenêtres noires ; une remise à zéro les repeint.
+        if test -n "${desktop_started:-}"; then (/bin/busybox sleep 2; /bin/busybox killall -USR1 picom 2>/dev/null) & fi
+        desktop_started=1
         echo "WINLUX_DESKTOP_READY pid=$desktop_pid"
         if ! test -e /run/winlux/boot-recorded; then
             boot_mark desktop
