@@ -702,11 +702,10 @@ fn capture_thread(
     }
 }
 
-/// Paramètres > Confidentialité : le micro peut être refusé aux programmes .exe.
+/// Paramètres > Confidentialité : le micro peut être refusé à tous les .exe
+/// ou à cette application (question posée la première fois).
 fn microphone_allowed() -> bool {
-    std::fs::read_to_string("/etc/winlux/privacy.conf").map_or(true, |conf| {
-        !conf.lines().any(|l| l.trim() == "MICROPHONE=deny")
-    })
+    crate::permissions::allowed(crate::permissions::Capability::Microphone)
 }
 
 fn microphone_available() -> bool {

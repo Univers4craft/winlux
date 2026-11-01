@@ -224,15 +224,11 @@ pub fn probe(path: &Path) -> Option<Camera> {
     })
 }
 
-/// Autorisation « Caméra » de la page Confidentialité des Paramètres
-/// (`/etc/winlux/privacy.conf`, `CAMERA=deny` bloque l'accès des .exe).
+/// Autorisation « Caméra » : interrupteur global de Paramètres
+/// (`/etc/winlux/privacy.conf`, `CAMERA=deny`), puis choix de l'utilisateur
+/// pour cette application (demandé la première fois).
 pub fn camera_allowed() -> bool {
-    let path = std::env::var_os("WINLUX_PRIVACY_CONF")
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("/etc/winlux/privacy.conf"));
-    std::fs::read_to_string(path).map_or(true, |conf| {
-        !conf.lines().any(|l| l.trim() == "CAMERA=deny")
-    })
+    crate::permissions::allowed(crate::permissions::Capability::Camera)
 }
 
 /// Caméras branchées, triées par numéro de nœud (aucune si l'utilisateur

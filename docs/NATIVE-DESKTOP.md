@@ -96,6 +96,37 @@ la saisie est bloquée trente secondes.
   (gui_demo.exe) garde son propre écran de connexion (`login.rs`).
 - Test hors affichage : `python3 -B scripts/test-lock.py`.
 
+## Autorisations des applications Windows
+
+Comme sous Windows 11, une application `.exe` demande la première fois
+qu'elle veut accéder à quelque chose de sensible. La fenêtre
+`winlux-permission ask` (Autoriser / Ne pas autoriser, refus par défaut au
+clavier, fermée sans réponse au bout de deux minutes) explique en une phrase
+ce que l'application pourra faire. Le choix est retenu par programme dans
+`~/.config/winlux/permissions.tsv` et se change dans Paramètres >
+Confidentialité et sécurité (interrupteur par autorisation, « Tout
+redemander »). Aucun fichier n'est analysé : ce n'est pas un antivirus.
+
+| Autorisation | Contrôle dans le runtime (`runtime/src/permissions.rs`) | Demandée ? |
+|---|---|---|
+| Fichiers personnels (Bureau, Documents, Images, Musique, Vidéos, Téléchargements, d'après `user-dirs.dirs`) | conversion des chemins Windows (`paths::to_linux`) ; un refus rend « fichier introuvable » | oui |
+| Caméra | énumération V4L2 (`v4l2::camera_allowed`) | oui |
+| Micro | waveIn, DirectSound et WASAPI (`audio::subscribe_microphone`) ; un refus donne du silence | oui |
+| Capture de l'écran | `gui::capture_screen` | oui |
+| Réseau et Internet | `connect`/`sendto` hors boucle locale, WinHTTP | non : autorisé d'office, mais listé et blocable |
+
+- Restent libres sans question : le dossier de l'application (un installateur
+  lancé depuis Téléchargements lit ce dossier) et le dossier des fichiers
+  ouverts par double-clic ou glisser-déposer (arguments de la ligne de
+  commande).
+- Les interrupteurs « Caméra / Micro pour toutes les applications »
+  (`/etc/winlux/privacy.conf`) l'emportent sur les choix par application.
+- Les connexions entrantes restent gérées par l'alerte du pare-feu.
+- Les programmes livrés avec Winlux (`/opt/winlux`, `/usr/lib/winlux`) ne
+  demandent rien. Sans affichage ou sans `winlux-permission`, le comportement
+  précédent s'applique (accès autorisé, rien n'est retenu).
+- Tests : `cargo test -p winlux permissions`, `python3 -B scripts/test-permission.py`.
+
 Les indicateurs réseau, audio et batterie lisent Linux ; l'absence d'une batterie
 virtuelle est indiquée comme alimentation secteur. Ils ne reproduisent pas
 automatiquement la batterie physique de l'ordinateur hôte.

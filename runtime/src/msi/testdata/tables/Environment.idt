@@ -1,0 +1,6 @@
+Environment	Name	Value	Component_
+s72	l255	L255	s72
+Environment	Environment
+env1	=WINLUX_TABLES	[INSTALLDIR]	Principal
+env2	=WINLUX_LISTE	[~];nouveau	Principal
+env3	!WINLUX_VIEUX		Principal

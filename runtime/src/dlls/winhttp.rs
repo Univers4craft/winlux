@@ -521,6 +521,9 @@ fn perform(request: &Request) -> Result<Response, u32> {
     let config = private_file(&directory, "request.conf", config.as_bytes())?;
     // No shell, no URL/header/credential in the process command line. curl's
     // user config is disabled; there is no switch to ignore TLS validation.
+    if !crate::permissions::allowed(crate::permissions::Capability::Network) {
+        return Err(12029); // ERROR_WINHTTP_CANNOT_CONNECT
+    }
     let output = Command::new("/usr/bin/curl")
         .arg("--disable")
         .arg("--config")

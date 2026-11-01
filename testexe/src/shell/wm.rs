@@ -37,7 +37,9 @@ pub const APP_FIREWALL: usize = 12;
 pub const APP_STORE: usize = 13;
 pub const APP_FONTS: usize = 14;
 pub const APP_FILEHISTORY: usize = 15;
-pub const APP_COUNT: usize = 16;
+pub const APP_REGEDIT: usize = 16;
+pub const APP_PROGRAMS: usize = 17;
+pub const APP_COUNT: usize = 18;
 
 // Native session: each built-in application owns a separate X11/Win32 window.
 // The Linux window manager handles its frame, stacking and taskbar lifecycle.
@@ -60,12 +62,18 @@ pub unsafe fn native_init() {
         APP_STORE
     } else if n == 5 && mode[0] == b'f' as i8 {
         APP_FONTS
+    } else if n == 8 && mode[0] == b'p' as i8 {
+        APP_PROGRAMS
     } else if n == 8 && mode[0] == b't' as i8 {
         APP_TASKSCHD
     } else if n == 8 && mode[0] == b'f' as i8 {
         APP_FIREWALL
+    } else if n == 7 && mode[..7] == b"taskmgr".map(|c| c as i8) {
+        APP_TASKMGR
     } else if n == 7 && mode[0] == b'w' as i8 {
         APP_WELCOME
+    } else if n == 7 && mode[..7].iter().map(|c| *c as u8).eq(*b"regedit") {
+        APP_REGEDIT
     } else {
         usize::MAX
     };
@@ -86,6 +94,8 @@ pub unsafe fn native_init() {
         crate::store::open();
     } else if NATIVE_APP == APP_FONTS {
         crate::fonts::open();
+    } else if NATIVE_APP == APP_PROGRAMS {
+        crate::programs::open();
     } else if NATIVE_APP == APP_WELCOME {
         crate::welcome::open();
     } else if NATIVE_APP == APP_SETTINGS {
@@ -106,8 +116,10 @@ pub unsafe fn native_launch(app: usize) {
         APP_SETTINGS => c"settings",
         APP_STORE => c"store",
         APP_FONTS => c"fonts",
+        APP_PROGRAMS => c"programs",
         APP_TASKSCHD => c"taskschd",
         APP_FIREWALL => c"firewall",
+        APP_TASKMGR => c"taskmgr",
         APP_WELCOME => c"welcome",
         _ => c"editor",
     };
@@ -303,7 +315,7 @@ const CLOSED: Win = Win {
 
 static mut WINS: [Win; APP_COUNT] = [CLOSED; APP_COUNT];
 /// Ordre d'empilement, du fond vers le premier plan.
-static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15];
+static mut Z: [usize; APP_COUNT] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17];
 /// Fenêtre active (au premier plan et non réduite), ou `usize::MAX`.
 static mut ACTIVE: usize = usize::MAX;
 
@@ -562,6 +574,12 @@ pub fn title_of(app: usize) -> &'static [u8] {
         ]),
         APP_STORE => b"Store",
         APP_FONTS => tr4(&[b"Polices", b"Fonts", b"Fuentes", b"Schriftarten"]),
+        APP_PROGRAMS => tr4(&[
+            b"Applications install\xE9es",
+            b"Installed apps",
+            b"Aplicaciones instaladas",
+            b"Installierte Apps",
+        ]),
         APP_TASKSCHD => crate::admin_ui::t(b"Planificateur de t\xE2ches", b"Task Scheduler"),
         APP_FIREWALL => crate::admin_ui::t(b"Pare-feu Winlux", b"Winlux Firewall"),
         APP_EVENTVIEWER => tr4(&[
@@ -583,6 +601,12 @@ pub fn title_of(app: usize) -> &'static [u8] {
             b"Dateiversionsverlauf",
         ]),
         APP_WELCOME => tr4(&[b"Bienvenue", b"Welcome", b"Bienvenido", b"Willkommen"]),
+        APP_REGEDIT => tr4(&[
+            b"\xC9diteur du Registre",
+            b"Registry Editor",
+            b"Editor del Registro",
+            b"Registrierungs-Editor",
+        ]),
         _ => tr(S_SETTINGS_APP),
     }
 }
@@ -598,12 +622,14 @@ pub fn glyph_of(app: usize) -> Glyph {
         APP_DISKMGR => Glyph::Drive,
         APP_STORE => Glyph::Store,
         APP_FONTS => Glyph::Text,
+        APP_PROGRAMS => Glyph::Exe,
         APP_TASKSCHD => Glyph::Clock,
         APP_FIREWALL => Glyph::Shield,
         APP_EVENTVIEWER => Glyph::Details,
         APP_RESTORE => Glyph::Refresh,
         APP_FILEHISTORY => Glyph::Archive,
         APP_WELCOME => Glyph::Star,
+        APP_REGEDIT => Glyph::Tools,
         _ => Glyph::Settings,
     }
 }
@@ -619,12 +645,14 @@ fn custom_title(app: usize) -> bool {
         APP_DISKMGR => crate::diskmgr::CUSTOM_TITLE,
         APP_STORE => crate::store::CUSTOM_TITLE,
         APP_FONTS => crate::fonts::CUSTOM_TITLE,
+        APP_PROGRAMS => crate::programs::CUSTOM_TITLE,
         APP_TASKSCHD => crate::taskschd::CUSTOM_TITLE,
         APP_FIREWALL => crate::firewall::CUSTOM_TITLE,
         APP_EVENTVIEWER => crate::eventviewer::CUSTOM_TITLE,
         APP_RESTORE => crate::restore::CUSTOM_TITLE,
         APP_FILEHISTORY => crate::filehistory::CUSTOM_TITLE,
         APP_WELCOME => crate::welcome::CUSTOM_TITLE,
+        APP_REGEDIT => crate::regedit::CUSTOM_TITLE,
         _ => crate::settings::CUSTOM_TITLE,
     }
 }
@@ -641,12 +669,14 @@ unsafe fn app_draw(app: usize, g: &mut Gfx, f: &Frame) {
         APP_DISKMGR => crate::diskmgr::draw(g, f),
         APP_STORE => crate::store::draw(g, f),
         APP_FONTS => crate::fonts::draw(g, f),
+        APP_PROGRAMS => crate::programs::draw(g, f),
         APP_TASKSCHD => crate::taskschd::draw(g, f),
         APP_FIREWALL => crate::firewall::draw(g, f),
         APP_EVENTVIEWER => crate::eventviewer::draw(g, f),
         APP_RESTORE => crate::restore::draw(g, f),
         APP_FILEHISTORY => crate::filehistory::draw(g, f),
         APP_WELCOME => crate::welcome::draw(g, f),
+        APP_REGEDIT => crate::regedit::draw(g, f),
         _ => crate::settings::draw(g, f),
     }
 }
@@ -662,12 +692,14 @@ unsafe fn app_mouse(app: usize, ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         APP_DISKMGR => crate::diskmgr::mouse(ev, x, y, f),
         APP_STORE => crate::store::mouse(ev, x, y, f),
         APP_FONTS => crate::fonts::mouse(ev, x, y, f),
+        APP_PROGRAMS => crate::programs::mouse(ev, x, y, f),
         APP_TASKSCHD => crate::taskschd::mouse(ev, x, y, f),
         APP_FIREWALL => crate::firewall::mouse(ev, x, y, f),
         APP_EVENTVIEWER => crate::eventviewer::mouse(ev, x, y, f),
         APP_RESTORE => crate::restore::mouse(ev, x, y, f),
         APP_FILEHISTORY => crate::filehistory::mouse(ev, x, y, f),
         APP_WELCOME => crate::welcome::mouse(ev, x, y, f),
+        APP_REGEDIT => crate::regedit::mouse(ev, x, y, f),
         _ => crate::settings::mouse(ev, x, y, f),
     }
 }
@@ -683,12 +715,14 @@ unsafe fn app_key(app: usize, vk: u32, ch: u16) -> bool {
         APP_DISKMGR => crate::diskmgr::key(vk, ch),
         APP_STORE => crate::store::key(vk, ch),
         APP_FONTS => crate::fonts::key(vk, ch),
+        APP_PROGRAMS => crate::programs::key(vk, ch),
         APP_TASKSCHD => crate::taskschd::key(vk, ch),
         APP_FIREWALL => crate::firewall::key(vk, ch),
         APP_EVENTVIEWER => crate::eventviewer::key(vk, ch),
         APP_RESTORE => crate::restore::key(vk, ch),
         APP_FILEHISTORY => crate::filehistory::key(vk, ch),
         APP_WELCOME => crate::welcome::key(vk, ch),
+        APP_REGEDIT => crate::regedit::key(vk, ch),
         _ => crate::settings::key(vk, ch),
     }
 }
@@ -704,12 +738,14 @@ unsafe fn app_tick(app: usize, f: &Frame) -> bool {
         APP_DISKMGR => crate::diskmgr::tick(f),
         APP_STORE => crate::store::tick(f),
         APP_FONTS => crate::fonts::tick(f),
+        APP_PROGRAMS => crate::programs::tick(f),
         APP_TASKSCHD => crate::taskschd::tick(f),
         APP_FIREWALL => crate::firewall::tick(f),
         APP_EVENTVIEWER => crate::eventviewer::tick(f),
         APP_RESTORE => crate::restore::tick(f),
         APP_FILEHISTORY => crate::filehistory::tick(f),
         APP_WELCOME => crate::welcome::tick(f),
+        APP_REGEDIT => crate::regedit::tick(f),
         _ => crate::settings::tick(f),
     }
 }
@@ -847,6 +883,7 @@ fn default_rect(app: usize) -> Rect {
         APP_DISKMGR => (1000, 650),
         APP_STORE => (1180, 760),
         APP_FONTS => (1000, 680),
+        APP_PROGRAMS => (980, 680),
         APP_TASKSCHD => (1120, 700),
         APP_FIREWALL => (1060, 680),
         APP_WELCOME => (920, 600),

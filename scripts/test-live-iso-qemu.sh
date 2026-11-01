@@ -76,6 +76,7 @@ for marker in \
 do
     if ! grep -q "$marker" "$log"; then
         echo "marqueur absent : $marker (journal : $log)" >&2
+        grep -A20 'WINLUX_LIVE_TERMINAL_FAILED' "$log" >&2 || true
         tail -100 "$log" >&2
         exit 1
     fi

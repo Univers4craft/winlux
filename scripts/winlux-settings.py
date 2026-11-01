@@ -95,6 +95,18 @@ _TR = {
     'oui': ('yes', 'sí', 'ja'),
     'non': ('no', 'no', 'nein'),
     'Ce compte n’a pas de mot de passe : l’écran se déverrouille d’un clic et ne se verrouille jamais tout seul.': ("This account has no password: the screen unlocks with a click and never locks by itself.", 'Esta cuenta no tiene contraseña: la pantalla se desbloquea con un clic y nunca se bloquea sola.', 'Dieses Konto hat kein Kennwort: Der Bildschirm wird per Klick entsperrt und sperrt sich nie von selbst.'),
+    # Confidentialité et sécurité : autorisations des applications Windows.
+    'Autorisations des applications Windows': ('Windows app permissions', 'Permisos de las aplicaciones de Windows', 'Berechtigungen von Windows-Apps'),
+    'Chaque application demande la première fois. Votre choix est retenu ; changez-le ici à tout moment.': ('Each app asks the first time. Your choice is remembered; change it here at any time.', 'Cada aplicación pregunta la primera vez. Su elección se recuerda; cámbiela aquí cuando quiera.', 'Jede App fragt beim ersten Mal. Ihre Wahl wird gespeichert; Sie können sie hier jederzeit ändern.'),
+    'Caméra pour toutes les applications': ('Camera for all apps', 'Cámara para todas las aplicaciones', 'Kamera für alle Apps'),
+    'Micro pour toutes les applications': ('Microphone for all apps', 'Micrófono para todas las aplicaciones', 'Mikrofon für alle Apps'),
+    'Aucune application Windows n’a encore demandé d’autorisation.': ('No Windows app has asked for permission yet.', 'Ninguna aplicación de Windows ha pedido permiso todavía.', 'Noch keine Windows-App hat eine Berechtigung angefordert.'),
+    'Fichiers personnels': ('Personal files', 'Archivos personales', 'Persönliche Dateien'),
+    'Caméra': ('Camera', 'Cámara', 'Kamera'),
+    'Micro': ('Microphone', 'Micrófono', 'Mikrofon'),
+    'Capture de l’écran': ('Screen capture', 'Captura de pantalla', 'Bildschirmaufnahme'),
+    'Réseau et Internet': ('Network & Internet', 'Red e Internet', 'Netzwerk und Internet'),
+    'Tout redemander': ('Ask again for everything', 'Volver a preguntar todo', 'Alles erneut fragen'),
     'Processeur': ('Processor', 'Procesador', 'Prozessor'),
     'Lecteurs réseau': ('Network drives', 'Unidades de red', 'Netzlaufwerke'),
     'Personnalisation du bureau': ('Desktop personalization', 'Personalización del escritorio', 'Desktop-Personalisierung'),
@@ -272,6 +284,30 @@ def lock_delay_text(seconds):
     if seconds == 60: return _t("1 minute")
     if seconds == 3600: return _t("1 heure")
     return _t("{n} minutes").format(n=seconds // 60)
+
+
+PERMISSION_ORDER = ("files", "camera", "microphone", "screen", "network")
+PERMISSION_NAMES = {"files": "Fichiers personnels", "camera": "Caméra", "microphone": "Micro",
+                    "screen": "Capture de l’écran", "network": "Réseau et Internet"}
+
+
+def permission_tool():
+    import shutil, sys
+    if shutil.which("winlux-permission"): return ["winlux-permission"]
+    return [sys.executable, str(Path(__file__).with_name("winlux-permission.py"))]
+
+
+def permission_apps():
+    """{programme: {capacité: allow|deny}} d’après winlux-permission list."""
+    try:
+        out = subprocess.run(permission_tool() + ["list"], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return {}
+    apps = {}
+    for line in out.splitlines():
+        parts = line.split("\t", 2)
+        if len(parts) == 3 and parts[0] in PERMISSION_NAMES: apps.setdefault(parts[2], {})[parts[0]] = parts[1]
+    return dict(sorted(apps.items(), key=lambda item: Path(item[0]).name.casefold()))
 
 
 def privacy_summary(status):
@@ -560,7 +596,9 @@ class Settings(Gtk.Window):
             legacy_page = self.page
             button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
             self.body.pack_start(button, False, False, 0)
-        if self.page == PRIVACY_PAGE: self.privacy_controls()
+        if self.page == PRIVACY_PAGE:
+            self.privacy_controls()
+            self.permission_controls()
         self.notice = self.label("")
         self.progress = Gtk.ProgressBar(show_text=True)
         self.body.pack_start(self.progress, False, False, 0)
@@ -604,6 +642,55 @@ class Settings(Gtk.Window):
         lock = Gtk.Button(label=_t("Verrouiller maintenant (Windows+L)"), halign=Gtk.Align.START)
         lock.connect("clicked", lambda *_: self.execute("lock-now"))
         self.body.pack_start(lock, False, False, 0)
+
+    def permission_controls(self):
+        """Autorisations des .exe : interrupteurs globaux, puis une carte par application."""
+        status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+        self.label(_t("Autorisations des applications Windows"), "subtitle")
+        self.label(_t("Chaque application demande la première fois. Votre choix est retenu ; changez-le ici à tout moment."))
+        for key, action, title in (("privacy_camera", "privacy-camera", _t("Caméra pour toutes les applications")),
+                                   ("privacy_microphone", "privacy-microphone", _t("Micro pour toutes les applications"))):
+            row = Gtk.Box(spacing=12)
+            row.pack_start(Gtk.Label(label=title, xalign=0), True, True, 0)
+            switch = Gtk.Switch(active=status.get(key, "allow") != "deny", valign=Gtk.Align.CENTER)
+            switch.connect("notify::active", lambda widget, _, base=action: self.execute(base + ("-allow" if widget.get_active() else "-deny")))
+            row.pack_start(switch, False, False, 0)
+            self.body.pack_start(row, False, False, 0)
+        apps = permission_apps()
+        if not apps:
+            self.label(_t("Aucune application Windows n’a encore demandé d’autorisation."), "subtitle")
+        for exe, caps in apps.items():
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            card.get_style_context().add_class("card")
+            head = Gtk.Box(spacing=12)
+            names = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            names.pack_start(Gtk.Label(label=Path(exe).name, xalign=0), False, False, 0)
+            where = Gtk.Label(label=exe, xalign=0, ellipsize=3)
+            where.get_style_context().add_class("subtitle")
+            names.pack_start(where, False, False, 0)
+            head.pack_start(names, True, True, 0)
+            again = Gtk.Button(label=_t("Tout redemander"), valign=Gtk.Align.CENTER)
+            again.connect("clicked", lambda *_, path=exe: self.change_permission(["forget", path], refresh=True))
+            head.pack_start(again, False, False, 0)
+            card.pack_start(head, False, False, 0)
+            for cap in PERMISSION_ORDER:
+                if cap not in caps: continue
+                row = Gtk.Box(spacing=12)
+                row.pack_start(Gtk.Label(label=_t(PERMISSION_NAMES[cap]), xalign=0), True, True, 0)
+                switch = Gtk.Switch(active=caps[cap] == "allow", valign=Gtk.Align.CENTER)
+                switch.connect("notify::active", lambda widget, _, c=cap, path=exe:
+                               self.change_permission(["set", c, "allow" if widget.get_active() else "deny", path]))
+                row.pack_start(switch, False, False, 0)
+                card.pack_start(row, False, False, 0)
+            self.body.pack_start(card, False, False, 0)
+
+    def change_permission(self, args, refresh=False):
+        try:
+            subprocess.run(permission_tool() + args, check=True, timeout=5,
+                           stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+        except (OSError, subprocess.SubprocessError) as error:
+            self.show_error(_t("L’opération a échoué"), str(error))
+        if refresh: self.select(self.nav, self.nav.get_selected_row())
 
     def execute(self, action):
         if self.process is not None or self.busy: return

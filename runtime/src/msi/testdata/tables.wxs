@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Product Id="{7B2C6D1F-2222-4333-8444-A55566667777}" Name="Winlux Tables" Language="1036" Codepage="1252"
+           Version="2.0.0" Manufacturer="Équipe Winlux" UpgradeCode="{1F0E0D0C-AAAA-4BBB-8CCC-DDDDEEEEFFF0}">
+    <Package InstallerVersion="200" Compressed="yes" Description="Tables complémentaires"/>
+    <Media Id="1" Cabinet="d.cab" EmbedCab="yes"/>
+    <Property Id="ALLUSERS" Value="1"/>
+    <Property Id="ANCIEN">
+      <RegistrySearch Id="cherche" Root="HKLM" Key="Software\Ancienne Appli" Name="Dossier" Type="raw"/>
+    </Property>
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLDIR" Name="Winlux Tables">
+          <Component Id="Principal" Guid="{11111111-3333-4333-8444-555555555555}" Win64="yes">
+            <File Id="app.exe" Name="app.exe" Source="app.exe" KeyPath="yes"/>
+          </Component>
+        </Directory>
+      </Directory>
+    </Directory>
+    <Feature Id="Tout" Level="1"><ComponentRef Id="Principal"/></Feature>
+  </Product>
+</Wix>
