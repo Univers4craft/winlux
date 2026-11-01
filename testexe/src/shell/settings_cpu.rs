@@ -1341,7 +1341,7 @@ pub unsafe fn regression_checks() {
         !found,
         "Processeur : aucune commande pour une capacite absente"
     );
-    let full = b"cpu_count=4\ncpu_list=0-3\nfreq=0:1200,1:1300,2:1400,3:1500\nfreq_max=4000\ncap_freq=1,powersave\nprofile=powersave\ncap_hybrid=1\npcores=0-1\necores=2-3\ncap_affinity=1\ncap_numa=0\ncap_thermal=1\ntemp=50\ncap_throttle=0\ncap_fans=0\ncap_fan_control=0\ncap_prio_high=1\ncap_prio_realtime=0\nhybrid_policy=heavy\n";
+    let full = b"cpu_count=4\ncpu_list=0-3\nfreq=0:1200,1:1300,2:1400,3:1500\nfreq_max=4000\ncap_freq=1\ncap_governor=1\nprofiles=performance,powersave\nprofile=powersave\ncap_hybrid=1\npcores=0-1\necores=2-3\ncap_affinity=1\ncap_numa=0\ncap_thermal=1\ntemp=50\ncap_throttle=0\ncap_fans=0\ncap_fan_control=0\ncap_prio_high=1\ncap_prio_realtime=0\nhybrid_policy=heavy\n";
     INFO[..full.len()].copy_from_slice(full);
     INFO_LEN = full.len();
     let ids = zones(&c);

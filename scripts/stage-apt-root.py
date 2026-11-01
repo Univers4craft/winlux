@@ -29,6 +29,7 @@ def winlux_path(relative):
                                 "usr/share/themes/Winlux/", "usr/share/xfce4/helpers/winlux"))
             or relative.startswith("usr/share/applications/winlux")
             or relative == "usr/share/mime/packages/winlux.xml"
+            or relative == "usr/share/thumbnailers/winlux-windows.thumbnailer"
             or relative == "usr/share/dbus-1/services/org.freedesktop.Notifications.service"
             or relative == "usr/lib/NetworkManager/conf.d/90-winlux.conf"
             or relative == "usr/bin/systemctl"
