@@ -56,5 +56,10 @@ pub fn exports() -> crate::dlls::Exports {
         "GetIfTable" => fn GetIfTable,
         "GetBestInterfaceEx" => fn GetBestInterfaceEx,
         "GetNumberOfInterfaces" => fn GetNumberOfInterfaces,
+        "GetExtendedTcpTable" => fn crate::netports::get_extended_tcp_table,
+        "GetExtendedUdpTable" => fn crate::netports::get_extended_udp_table,
+        "GetTcpTable" => fn crate::netports::get_tcp_table,
+        "GetTcpTable2" => fn crate::netports::get_tcp_table2,
+        "GetUdpTable" => fn crate::netports::get_udp_table,
     }
 }
