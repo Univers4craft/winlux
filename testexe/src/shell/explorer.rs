@@ -1206,6 +1206,34 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
     }
 }
 
+/// « Ouvrir avec… » : sélecteur de `winlux-open-with` (programmes Linux, et
+/// programmes Windows déclarés dans le registre), qui reçoit le chemin Windows.
+unsafe fn open_with(path: &[u8]) {
+    let mut quoted = [0u8; PATH_LEN + NAME_LEN + 2];
+    if path.len() + 2 >= quoted.len() {
+        return;
+    }
+    quoted[0] = b'"';
+    quoted[1..=path.len()].copy_from_slice(path);
+    quoted[path.len() + 1] = b'"';
+    let mut wparams = [0u16; PATH_LEN + NAME_LEN + 2];
+    let params = wstr(&mut wparams, &quoted[..path.len() + 2]);
+    let mut wprogram = [0u16; PATH_LEN + NAME_LEN + 2];
+    let program = wstr(&mut wprogram, b"winlux-open-with");
+    let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    let r = ShellExecuteW(
+        core::ptr::null_mut(),
+        wopen.as_ptr(),
+        program,
+        params,
+        core::ptr::null(),
+        1,
+    );
+    if (r as isize) <= 32 {
+        notify(tr4(&[b"Aucune application ne sait ouvrir ce fichier.", b"No app can open this file.", b"Ninguna aplicaci\xF3n puede abrir este archivo.", b"Keine App kann diese Datei \xF6ffnen."]));
+    }
+}
+
 /// Ouvre un fichier audio/vidéo dans le lecteur multimédia de Winlux.
 unsafe fn open_media(path: &[u8]) -> bool {
     let mut params = [0u16; PATH_LEN + NAME_LEN + 4];
@@ -2785,6 +2813,7 @@ enum Item {
     NewFolder,
     NewText,
     Open,
+    OpenWith,
     OpenTab,
     ExeSettings,
     Cut,
@@ -2830,6 +2859,12 @@ fn item_label(i: Item) -> &'static [u8] {
         Item::NewFolder => tr4(&[b"Dossier", b"Folder", b"Carpeta", b"Ordner"]),
         Item::NewText => tr4(&[b"Document texte", b"Text document", b"Documento de texto", b"Textdokument"]),
         Item::Open => tr(S_OPEN),
+        Item::OpenWith => t4([
+            b"Ouvrir avec...",
+            b"Open with...",
+            b"Abrir con...",
+            b"\xD6ffnen mit...",
+        ]),
         Item::OpenTab => tr4(&[b"Ouvrir dans un nouvel onglet", b"Open in new tab", b"Abrir en una pesta\xF1a nueva", b"In neuer Registerkarte \xF6ffnen"]),
         Item::ExeSettings => tr4(&[b"R\xE9glages de l'ex\xE9cutable", b"Executable settings", b"Ajustes del ejecutable", b"Einstellungen der ausf\xFChrbaren Datei"]),
         Item::Cut => tr(S_CUT),
@@ -2948,6 +2983,7 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
         Menu::New => &[Item::NewFolder, Item::NewText],
         Menu::Context { on_item: true, .. } => &[
             Item::Open,
+            Item::OpenWith,
             Item::OpenTab,
             Item::ExeSettings,
             Item::ExtractAll,
@@ -3011,6 +3047,8 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Compress7z => !in_pc && !in_home && formats & 2 != 0,
             Item::CompressTarGz => !in_pc && !in_home && formats & 8 != 0,
             Item::ConnectNet => in_pc,
+            // Fichier seulement : programmes Linux et Windows qui savent l'ouvrir.
+            Item::OpenWith => !in_pc && first_sel(p).is_some_and(|i| !p.entries[i].dir),
             // Dossier seulement, et seulement si le partage existe (Samba).
             Item::Share => {
                 !in_pc
@@ -3153,7 +3191,7 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
             Item::NewFolder => Some(Glyph::Folder),
             Item::NewText => Some(Glyph::Text),
             Item::Terminal => Some(Glyph::Terminal),
-            Item::Open => Some(Glyph::Forward),
+            Item::Open | Item::OpenWith => Some(Glyph::Forward),
             Item::OpenTab => Some(Glyph::Plus),
             Item::Nav => Some(Glyph::Split),
             Item::ExtractAll | Item::ExtractHere => Some(Glyph::Archive),
@@ -4538,6 +4576,15 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             ask_password(JobKind::Create, false);
         }
         Item::ConnectNet => crate::settings::open_page(crate::settings::PAGE_NETDRIVES),
+        Item::OpenWith => {
+            if let Some(i) = first_sel(p) {
+                let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
+                let n = item_path(p, i, &mut b);
+                if n > 0 {
+                    open_with(&b[..n]);
+                }
+            }
+        }
         Item::Share => {
             if let Some(i) = first_sel(p) {
                 let mut b = [0u8; PATH_LEN + NAME_LEN + 2];

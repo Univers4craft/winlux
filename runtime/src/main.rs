@@ -65,6 +65,16 @@ fn main() {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(netdrive::main(&rest));
     }
+    if exe == "--exports" {
+        // Une ligne « dll<TAB>fonction » par export intégré : la base des
+        // mesures de compatibilité (docs/COMPATIBILITE.md).
+        for (dll, names) in dlls::builtin_exports() {
+            for name in names {
+                println!("{dll}\t{name}");
+            }
+        }
+        return;
+    }
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
