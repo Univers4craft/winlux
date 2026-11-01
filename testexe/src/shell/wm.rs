@@ -139,8 +139,15 @@ pub unsafe fn native_launch(app: usize) {
         1,
     );
 }
+/// Une seule application Paramètres : dès que les Paramètres Winlux (GTK)
+/// sont installés, le bureau PE les ouvre au lieu de sa propre fenêtre.
+pub unsafe fn unified_settings() -> bool {
+    NATIVE_APP != APP_SETTINGS
+        && GetFileAttributesA(c"Z:\\usr\\bin\\winlux-settings".as_ptr()) != u32::MAX
+        && GetFileAttributesA(c"Z:\\usr\\bin\\winlux-shell-app".as_ptr()) != u32::MAX
+}
 pub unsafe fn native_settings(page: usize) -> bool {
-    if !native_session() || NATIVE_APP == APP_SETTINGS {
+    if !(native_session() || unified_settings()) || NATIVE_APP == APP_SETTINGS {
         return false;
     }
     let value = [
@@ -919,6 +926,9 @@ fn default_rect(app: usize) -> Rect {
 
 /// Ouvre l'application, ou la ramène au premier plan si elle est déjà ouverte.
 pub unsafe fn open(app: usize) {
+    if app == APP_SETTINGS && !native_session() && native_settings(crate::settings::current_page()) {
+        return;
+    }
     if native_session() && NATIVE_APP != app {
         native_launch(app);
         return;

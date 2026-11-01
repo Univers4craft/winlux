@@ -1,6 +1,6 @@
 [Desktop Entry]
 Type=Application
-Name=Paramètres Winlux
+Name=Paramètres
 Comment=Paramètres Linux, Windows, affichage et applications
 Exec=/usr/bin/winlux-shell-app settings
 Icon=/usr/share/winlux/native/icons/settings.svg

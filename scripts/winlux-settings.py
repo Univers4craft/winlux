@@ -30,6 +30,7 @@ _COL = {"en": 0, "es": 1, "de": 2}
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
     # Refonte des Paramètres (catégories, réglages intégrés)
+    'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
     'Gérer les applications': ('Manage apps', 'Administrar aplicaciones', 'Apps verwalten'),
     'Bluetooth': ('Bluetooth', 'Bluetooth', 'Bluetooth'),
     'Clavier et souris': ('Keyboard & mouse', 'Teclado y mouse', 'Tastatur und Maus'),
@@ -553,7 +554,7 @@ EXTRA = _extra_pages()
 
 class Settings(EXTRA.ExtraPages, Gtk.Window):
     def __init__(self):
-        super().__init__(title=_t("Paramètres Winlux"))
+        super().__init__(title=_t("Paramètres"))
         self.set_icon_name("preferences-system")
         self.set_default_size(1020, 740)
         self.set_size_request(720, 500)
@@ -606,7 +607,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         side.set_name("sidebar")
         side.set_size_request(240, -1)
         outer.pack_start(side, False, False, 0)
-        side.pack_start(Gtk.Label(label=_t("WINLUX · PARAMÈTRES"), xalign=0), False, False, 0)
+        heading = Gtk.Label(label=_t("Paramètres"), xalign=0)
+        heading.get_style_context().add_class("heading")
+        side.pack_start(heading, False, False, 0)
         search = Gtk.SearchEntry(placeholder_text=_t("Rechercher un réglage"))
         side.pack_start(search, False, False, 0)
         nav_scroll = Gtk.ScrolledWindow()

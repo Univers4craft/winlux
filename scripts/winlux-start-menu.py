@@ -92,9 +92,20 @@ STATE = Path.home() / ".config/winlux/start.json"
 DEFAULTS = ["winlux-explorer.desktop", "winlux-browser-edge.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
 SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 2),
-            (_t("Son"), 3), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 5), (_t("Personnalisation fond écran thème"), 6),
+            (_t("Son"), 16), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 4), (_t("Personnalisation fond écran thème"), 21),
             (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11),
             (_t("Partage de dossiers et transfert des réglages"), 28)]
+# Une seule application Paramètres : les panneaux de réglages du bureau XFCE et
+# les raccourcis vers une page des Paramètres ne s'affichent pas à part (la
+# recherche trouve les pages ci-dessus).
+SETTINGS_KEPT = {"winlux-settings.desktop", "winlux-updates.desktop"}
+
+
+def listed(app):
+    if not app.should_show() or not app.get_id(): return False
+    if app.get_id() in SETTINGS_KEPT: return True
+    categories = set((app.get_categories() or "").split(";")) if hasattr(app, "get_categories") else set()
+    return "Settings" not in categories
 
 def category(app):
     """Use installed desktop metadata, including generated Windows launchers."""
@@ -167,7 +178,7 @@ class Start(Gtk.Application):
             self.hide()
             return
         if not self.window: self.build()
-        self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all() if app.should_show() and app.get_id()}
+        self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all() if listed(app)}
         self.all_apps = False
         self.search.set_text("")
         self.render()

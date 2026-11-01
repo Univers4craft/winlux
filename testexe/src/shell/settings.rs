@@ -781,6 +781,10 @@ pub unsafe fn control(action: &core::ffi::CStr) -> bool {
         false
     }
 }
+/// Page affichée (ou à ouvrir) : sert à ouvrir les Paramètres unifiés au bon endroit.
+pub unsafe fn current_page() -> usize {
+    PAGE
+}
 pub unsafe fn open_page(page: usize) {
     if crate::wm::native_settings(page) {
         return;
