@@ -1,0 +1,16 @@
+[Desktop Entry]
+Type=Application
+Name=Éditeur du Registre
+Name[en]=Registry Editor
+Name[es]=Editor del Registro
+Name[de]=Registrierungs-Editor
+Comment=Consulter et modifier le registre Windows des applications
+Comment[en]=View and edit the Windows registry used by applications
+Comment[es]=Ver y modificar el Registro de Windows de las aplicaciones
+Comment[de]=Die Windows-Registrierung der Anwendungen anzeigen und bearbeiten
+Exec=/usr/bin/winlux --regedit %f
+Icon=preferences-system
+StartupWMClass=winlux-regedit
+Terminal=false
+MimeType=text/x-ms-regedit;
+Categories=System;Settings;

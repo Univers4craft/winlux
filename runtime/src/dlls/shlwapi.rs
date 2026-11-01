@@ -358,7 +358,7 @@ pub unsafe extern "win64" fn sh_create_stream_on_file_a(
 }
 
 pub fn exports() -> crate::dlls::Exports {
-    crate::exports! {
+    let mut m = crate::exports! {
         "PathFileExistsA" => fn path_file_exists_a,
         "PathFileExistsW" => fn path_file_exists_w,
         "PathIsDirectoryA" => fn path_is_directory_a,
@@ -380,7 +380,10 @@ pub fn exports() -> crate::dlls::Exports {
         "StrCmpNIW" => fn str_cmp_niw,
         "StrStrIW" => fn str_str_iw,
         "SHCreateStreamOnFileA" => fn sh_create_stream_on_file_a,
-    }
+    };
+    // SHGetValue, SHRegGetUSValue, AssocQueryString… : voir shlwapi_reg.rs.
+    m.extend(super::shlwapi_reg::exports());
+    m
 }
 
 #[cfg(test)]

@@ -1300,7 +1300,6 @@ pub(crate) unsafe fn query_native_value(handle: usize, name: &str) -> Result<(u3
 }
 
 /// Octets bruts d'une valeur (chemin `hklm\…`, `hkcr\…`, `HKEY_…\…`).
-#[cfg(test)]
 pub fn read_registry_value_internal(key_path: &str, value_name: &str) -> Option<Vec<u8>> {
     let path = reg::canonical(key_path)?;
     reg::read(|d| {
@@ -1365,6 +1364,14 @@ pub fn registry_key_is_empty(key: &str) -> bool {
     };
     reg::read(|d| Ok(d.exists(&key) && d.values(&key).is_empty() && !d.has_subkeys(&key)))
         .unwrap_or(false)
+}
+
+/// Vrai si la clé existe (chemin canonique : hklm\…, HKEY_CURRENT_USER\…).
+pub fn registry_key_exists(key: &str) -> bool {
+    let Some(key) = reg::canonical(key) else {
+        return false;
+    };
+    reg::read(|d| Ok(d.exists(&key))).unwrap_or(false)
 }
 
 pub unsafe extern "win64" fn get_user_name_a(buf: *mut u8, size: *mut u32) -> i32 {

@@ -65,6 +65,8 @@ for driver in virtio_pci virtio_blk virtio_scsi sr_mod sd_mod ata_piix ahci nvme
     done
 done
 # Device metadata must be recorded in the same fakeroot session as packing.
+# xz keeps the ISO under GitHub's 2 GiB per-file release limit (gzip was
+# 2.04 GiB at v0.2.10); the Ubuntu kernel's squashfs reads xz natively.
 fakeroot sh -c '
     set -eu
     rm -f "$1/dev/console" "$1/dev/null" "$1/dev/zero" "$1/dev/tty" "$1/dev/ttyS0"
@@ -73,7 +75,7 @@ fakeroot sh -c '
     mknod -m 666 "$1/dev/zero" c 1 5
     mknod -m 666 "$1/dev/tty" c 5 0
     mknod -m 666 "$1/dev/ttyS0" c 4 64
-    mksquashfs "$1" "$2" -noappend -all-root -processors 2 -comp gzip -b 1M -no-progress
+    mksquashfs "$1" "$2" -noappend -all-root -processors "$(nproc)" -comp xz -Xbcj x86 -Xdict-size 100% -b 1M -no-progress
 ' sh "$stage" "$iso_root/boot/winlux-rootfs.squashfs"
 fakeroot sh -c '
     set -eu
