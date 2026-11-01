@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **238**
+- Réalisé : **239**
 - À faire ou en cours : **45**
-- Total : **283**
-- Progression : **84.1%**
+- Total : **284**
+- Progression : **84.2%**
 - Dernière mise à jour : 01/11/2026 (audit : menu Démarrer et barre des tâches du shell PE, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174)
 
 ## À FAIRE (par priorité)
@@ -105,6 +105,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 ### Livré par pull requests (fin octobre 2026)
 
 - [x] Audit du 01/11/2026, shell PE (issues #207, #208) : mode « Toutes les applications » du menu Démarrer utilisable (liste alignée sur le clic, bornée, sans grille épinglée dessous, retour aux épinglées à chaque ouverture) ; tous les boutons de la barre des tâches ouvrent ou basculent leur application ; tuiles « Ce PC » et « Programmes .exe » actives, « Programmes .exe » ouvre Applications installées, « Mises à jour » ouvre la bonne page ; menu Alimentation cliquable sur toute sa largeur ; « Fermer » du menu contextuel ferme ; curseur de volume envoie le niveau ; Échap ferme les volets réseau/volume ; Alt+Tab bascule au relâchement d'Alt ; boîte Exécuter : OK cliquable, clic dehors referme, le « r » de Win+R et 260 cases parasites ne s'affichent plus ; liste « Toutes les applications » sans commandes absentes de l'ISO et message « Application introuvable » en cas d'échec ; le Terminal ne fait plus planter le bureau (écran de 1,7 Mo construit sur une pile de 1 Mo).
+- [x] README réécrit en détail et wiki complet (`wiki/`, 17 pages avec sommaire et menu : but et principes, architecture, bureau, compatibilité, registre, chemins et droits, réseau et disques, Paramètres, installation, publication et mises à jour, construction de l'ISO, tests et CI, contribution, feuille de route, limites, FAQ), publié sur le wiki GitHub par le workflow `wiki.yml` à chaque fusion.
 - [x] Applis Windows intégrées au bureau (#152) : associations de fichiers lues dans le registre (HKCU/HKLM\Software\Classes et HKCR, ProgID, OpenWithProgids, OpenWithList, SupportedTypes, UserChoice) → lanceurs cachés `winlux-assoc-*.desktop` (double-clic, « Ouvrir avec » de Thunar et xdg-open, document passé en chemin Windows), type MIME créé pour les extensions inconnues, programme par défaut seulement si l'utilisateur n'a rien choisi ; raccourcis .lnk du Bureau ouvrables (cible, arguments, dossier de travail) ; icônes des .exe/.lnk par thumbnailer tumbler ; fenêtre « Applications par défaut » (Paramètres > Applications) en FR/EN/ES/DE. Zone de notification : `Shell_NotifyIconA/W` (NIM_ADD/MODIFY/DELETE/SETVERSION, infobulle, état caché, bulles par notify-send, clics transmis au `uCallbackMessage` en format classique ou version 4) via l'assistant GTK `winlux-notify-icon`, et zone « systray » ajoutée au panneau (y compris aux panneaux déjà configurés).
 - [x] Gestionnaire des tâches complet façon Windows 11 : processus groupés avec .exe reconnus, tri, recherche, fin de tâche et priorité réelles (`OpenProcess`/`TerminateProcess`/`SetPriorityClass` sur tout processus), graphiques processeur/mémoire/disques/réseau/GPU, historique des applications, démarrage XDG activable, utilisateurs, détails, services (masqués sans systemd), vitesse d'actualisation ; ouvert par Ctrl+Maj+Échap (#178).
 - [x] Mode jeu : un `.exe` Direct3D/OpenGL/Vulkan/XInput déclenche `winlux --gamemode daemon` (gouverneur performances sur secteur, priorité du jeu, sauvegardes et mises à jour en pause et en basse priorité, swappiness et compactage mémoire, veille bloquée), tout est restauré à la fermeture ; réglage dans Paramètres > Processeur, actions affichées selon le matériel (#153, `docs/PERFORMANCES.md`).
