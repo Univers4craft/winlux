@@ -1,6 +1,9 @@
 //! Tests sur un faux sysfs construit dans un dossier temporaire.
 
-use super::daemon::{decode_event, idle_step, Hw, IdleStep};
+use super::daemon::{
+    acpi_inputs, brightness_key, brightness_step, decode_event, external_display_at, has_key,
+    idle_step, lid_action, Hw, IdleStep,
+};
 use super::*;
 use std::sync::atomic::AtomicUsize;
 
@@ -352,6 +355,135 @@ fn evdev_events() {
     assert_eq!(decode_event(&ev(5, 0, 1)), Some(Hw::LidClosed));
     assert_eq!(decode_event(&ev(5, 0, 0)), Some(Hw::LidOpened));
     assert_eq!(decode_event(&ev(0, 0, 0)), None);
+    assert_eq!(decode_event(&ev(1, 225, 1)), Some(Hw::BrightnessUp));
+    assert_eq!(
+        decode_event(&ev(1, 224, 2)),
+        Some(Hw::BrightnessDown),
+        "répétition"
+    );
+    assert_eq!(decode_event(&ev(1, 225, 0)), None);
+}
+
+#[test]
+fn brightness_keys_devices_are_found_by_capability() {
+    let f = Fake::new();
+    // Bit 224 et 225 : quatrième mot de 64 bits (le plus à gauche ici).
+    f.put("sys/class/input/event3/device/name", "Video Bus")
+        .put(
+            "sys/class/input/event3/device/capabilities/key",
+            "3e000b00000000 0 0 0",
+        )
+        .put("sys/class/input/event5/device/name", "USB Optical Mouse")
+        .put(
+            "sys/class/input/event5/device/capabilities/key",
+            "1f0000 0 0 0 0",
+        )
+        .put("sys/class/input/event0/device/name", "Lid Switch");
+    assert!(has_key("3e000b00000000 0 0 0", 224));
+    assert!(has_key("3e000b00000000 0 0 0", 225));
+    assert!(!has_key("1f0000 0 0 0 0", 225));
+    assert!(!has_key("", 225));
+    let found = acpi_inputs(&f.0);
+    let names: Vec<_> = found
+        .iter()
+        .map(|p| p.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["event0", "event3"]);
+}
+
+#[test]
+fn brightness_steps_are_finer_at_the_bottom() {
+    assert_eq!(brightness_step(80, true), 90);
+    assert_eq!(brightness_step(95, true), 100);
+    assert_eq!(brightness_step(10, true), 15);
+    assert_eq!(brightness_step(20, false), 15);
+    assert_eq!(brightness_step(5, false), 5);
+    assert_eq!(brightness_step(50, false), 40);
+}
+
+#[test]
+fn brightness_key_steps_once_even_when_the_kernel_already_did() {
+    let f = Fake::new();
+    f.put("sys/class/backlight/intel_backlight/max_brightness", "100")
+        .put("sys/class/backlight/intel_backlight/brightness", "50");
+    // Le noyau n'a rien fait : on fait le pas.
+    assert_eq!(brightness_key(&f.0, true, Some(50)), Some(60));
+    assert_eq!(
+        f.get("sys/class/backlight/intel_backlight/brightness"),
+        "60"
+    );
+    // Le noyau a déjà monté de 60 à 70 : on ne rajoute rien.
+    f.put("sys/class/backlight/intel_backlight/brightness", "70");
+    assert_eq!(brightness_key(&f.0, true, Some(60)), Some(70));
+    assert_eq!(
+        f.get("sys/class/backlight/intel_backlight/brightness"),
+        "70"
+    );
+    // La préférence suit, pour que la reprise de veille ne la remette pas.
+    assert_eq!(Config::load_at(&f.0).brightness, 70);
+    // Sans rétroéclairage (VM, écran externe) : rien.
+    let g = Fake::new();
+    assert_eq!(brightness_key(&g.0, true, None), None);
+}
+
+#[test]
+fn closing_the_lid_with_an_external_screen_keeps_the_machine_awake() {
+    let f = Fake::new();
+    f.put("sys/class/drm/card0-eDP-1/status", "connected")
+        .put("sys/class/drm/card0-HDMI-A-1/status", "disconnected");
+    assert!(!external_display_at(&f.0));
+    assert_eq!(lid_action(Action::Sleep, false), Action::Sleep);
+    f.put("sys/class/drm/card0-HDMI-A-1/status", "connected");
+    assert!(external_display_at(&f.0));
+    assert_eq!(lid_action(Action::Sleep, true), Action::Nothing);
+    assert_eq!(lid_action(Action::Hibernate, true), Action::Nothing);
+    assert_eq!(
+        lid_action(Action::Shutdown, true),
+        Action::Shutdown,
+        "choix explicite gardé"
+    );
+}
+
+#[test]
+fn suspend_follows_wakeup_count_and_runs_hooks() {
+    use std::os::unix::fs::PermissionsExt;
+    let f = Fake::new();
+    f.put("sys/power/state", "freeze mem")
+        .put("sys/power/wakeup_count", "42");
+    let log = f.0.join("hooks.log");
+    for (dir, name) in [
+        ("usr/lib/winlux/sleep.d", "10-ecrans"),
+        ("usr/lib/winlux/sleep.d", "20-pave"),
+        ("etc/winlux/sleep.d", "20-pave"),
+    ] {
+        let p = f.0.join(dir).join(name);
+        fs::create_dir_all(p.parent().unwrap()).unwrap();
+        fs::write(
+            &p,
+            format!(
+                "#!/bin/sh\necho \"{dir}/{name} $1 $2\" >> '{}'\n",
+                log.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&p, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    // Un fichier non exécutable est ignoré.
+    f.put("etc/winlux/sleep.d/README", "notes");
+    assert_eq!(sleep::hooks_at(&f.0).len(), 2);
+    sleep::suspend_at(&f.0).unwrap();
+    // Faux sysfs : fichier ordinaire écrit sans troncature.
+    assert!(f.get("sys/power/state").starts_with("mem"));
+    assert_eq!(f.get("sys/power/wakeup_count"), "42");
+    let ran = fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        ran,
+        "usr/lib/winlux/sleep.d/10-ecrans pre suspend\n\
+         etc/winlux/sleep.d/20-pave pre suspend\n\
+         usr/lib/winlux/sleep.d/10-ecrans post suspend\n\
+         etc/winlux/sleep.d/20-pave post suspend\n"
+    );
+    assert!(f.get("run/winlux/power-event").starts_with("resume "));
 }
 
 #[test]

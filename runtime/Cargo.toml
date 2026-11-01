@@ -17,4 +17,4 @@ path = "src/remote/main.rs"
 [dependencies]
 libc = "0.2"
 png = "0.18.1"
-x11rb = { version = "0.14.0", features = ["screensaver", "xtest", "xfixes", "randr"] }
+x11rb = { version = "0.14.0", features = ["screensaver", "xtest", "xfixes", "randr", "xinput"] }
