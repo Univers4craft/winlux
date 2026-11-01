@@ -39,6 +39,7 @@ pub fn set_exe_path(path: &str) {
         std::ptr::copy_nonoverlapping(path.as_ptr(), dst, n);
         CRASH_EXE_PATH_LEN = n;
     }
+    crate::log::journal_event("session", &format!("démarrage de {path}"));
 }
 
 unsafe fn crash_exe_path() -> &'static [u8] {

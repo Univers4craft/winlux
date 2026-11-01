@@ -348,7 +348,7 @@ fn init_apps() {
             (tr4(&[b"Post-it", b"Sticky Notes", b"Notas r\xE1pidas", b"Kurznotizen"]), b"postit.exe", 1),
             (tr4(&[b"Lecteur PDF", b"PDF Reader", b"Lector de PDF", b"PDF-Reader"]), b"pdfviewer.exe", 1),
             (tr4(&[b"Lecteur multim\xE9dia", b"Media Player", b"Reproductor multimedia", b"Medienwiedergabe"]), b"winlux-mediaplayer", 5),
-            (tr4(&[b"Infos syst\xE8me", b"System info", b"Informaci\xF3n del sistema", b"Systeminfo"]), b"sysinfo.exe", 8),
+            (tr4(&[b"Informations syst\xE8me", b"System Information", b"Informaci\xF3n del sistema", b"Systeminformationen"]), b"msinfo32", 9),
             (tr4(&[b"Utilitaires", b"Utilities", b"Utilidades", b"Dienstprogramme"]), b"utilities-terminal", 2),
             (tr4(&[b"Archives", b"Archives", b"Archivos comprimidos", b"Archive"]), b"file-roller", 1),
             (tr4(&[b"Visionneuse Linux", b"Linux image viewer", b"Visor de Linux", b"Linux-Bildanzeige"]), b"xviewer", 3),
@@ -1713,6 +1713,7 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             Some(wm::APP_PROGRAMS) => Glyph::Exe,
             Some(wm::APP_TASKSCHD) => Glyph::Clock,
             Some(wm::APP_FIREWALL) => Glyph::Shield,
+            Some(wm::APP_SYSINFO) => Glyph::Computer,
             Some(wm::APP_EVENTVIEWER) => Glyph::Details,
             Some(wm::APP_REGEDIT) => Glyph::Tools,
             Some(wm::APP_RESTORE) => Glyph::Refresh,
@@ -2140,7 +2141,11 @@ unsafe fn launch(what: Launch) {
                 wm::open(wm::APP_FIREWALL);
                 return;
             }
-            if cmd == b"eventviewer" {
+            if cmd == b"msinfo32" || cmd == b"msinfo32.exe" || cmd == b"sysinfo.exe" {
+                wm::open(wm::APP_SYSINFO);
+                return;
+            }
+            if cmd == b"eventviewer" || cmd == b"eventvwr" || cmd == b"eventvwr.msc" {
                 wm::open(wm::APP_EVENTVIEWER);
                 return;
             }

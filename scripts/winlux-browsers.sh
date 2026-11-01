@@ -107,9 +107,18 @@ launch() {
             if test -f "$helper" && ! test -L "$helper"; then chown root:root "$helper"; chmod 4755 "$helper"; fi
         done
         mkdir -p "$run"
+        # Téléchargements : le dossier de l'utilisateur (C:\Users\<nom>\Downloads),
+        # et « Ouvrir le dossier » ouvre l'Explorateur de la session.
+        downloads=/usr/share/winlux/native/browser/winlux-browser-downloads.py
+        bus_config=
+        if test -f "$downloads"; then
+            /usr/bin/python3 "$downloads" prepare >>"$run/browser-downloads.log" 2>&1 || true
+            /usr/bin/python3 "$downloads" serve "$$" >>"$run/browser-downloads.log" 2>&1 &
+            test ! -f "${downloads%/*}/session-bus.conf" || bus_config="--config-file=${downloads%/*}/session-bus.conf"
+        fi
         if /usr/bin/setpriv --reuid=winlux-web --regid=winlux-web --init-groups --reset-env \
             env HOME="$home" USER=winlux-web LOGNAME=winlux-web DISPLAY="${DISPLAY:-:0}" \
-            /usr/bin/dbus-run-session -- "$program" "$@"; then return 0; else
+            /usr/bin/dbus-run-session $bus_config -- "$program" "$@"; then return 0; else
             printf 'Le navigateur a échoué. Consultez le journal navigateur.\n' > "$run/action.txt"
             printf '1\n' > "$run/browser-chooser"
             return 1
