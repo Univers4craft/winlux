@@ -4,15 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **246**
+- Réalisé : **247**
 - À faire ou en cours : **45**
-- Total : **291**
-- Progression : **84.5%**
-<<<<<<< HEAD
-- Dernière mise à jour : 01/11/2026 (audit runtime graphique #210, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168)
-=======
-- Dernière mise à jour : 01/11/2026 (audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228)
->>>>>>> origin/master
+- Total : **292**
+- Progression : **84.6%**
+- Dernière mise à jour : 01/11/2026 (audit runtime graphique #210, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228)
 
 ## À FAIRE (par priorité)
 
