@@ -2355,26 +2355,35 @@ pub extern "win64" fn free_library(module: usize) -> i32 {
         crate::process::set_last_error(5);
         return 0;
     }
-    let mut mods = crate::loader::MODULES.lock().unwrap();
-    if let Some(m) = mods.iter_mut().find(|m| m.base == module) {
+    // Le compteur est décrémenté sous MODULES, mais DllMain(DLL_PROCESS_DETACH)
+    // est appelé verrou relâché : il peut lui-même charger ou libérer des
+    // modules, ou créer des threads qui lisent la liste.
+    let detach = {
+        let mut mods = crate::loader::MODULES.lock().unwrap();
+        let Some(m) = mods.iter_mut().find(|m| m.base == module) else {
+            crate::process::set_last_error(6);
+            return 0;
+        };
         if m.refcount == 0 {
             crate::process::set_last_error(5);
             return 0;
         }
         m.refcount -= 1;
-        if m.refcount == 0 {
-            if let Some(entry) = m.entry() {
-                let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
-                    unsafe { std::mem::transmute(entry) };
-                let _ = dllmain(m.base, 0, 0);
-            }
-            // Ne pas démapper/retirer physiquement pour l'instant pour rester sûr ;
-            // on laisse la DLL chargée mais le compteur est à zéro.
+        if m.refcount == 0 && m.initialized {
+            m.initialized = false;
+            m.entry().map(|entry| (entry, m.base))
+        } else {
+            None
         }
-        return 1;
+    };
+    if let Some((entry, base)) = detach {
+        let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
+            unsafe { std::mem::transmute(entry) };
+        let _ = dllmain(base, 0, 0);
+        // Ne pas démapper/retirer physiquement pour l'instant pour rester sûr ;
+        // on laisse la DLL chargée mais le compteur est à zéro.
     }
-    crate::process::set_last_error(6);
-    0
+    1
 }
 pub extern "win64" fn get_current_process() -> usize {
     (-1isize) as usize
