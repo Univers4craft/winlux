@@ -478,6 +478,10 @@ boot_mark() {
 }
 /bin/busybox rm -f /run/winlux/boot-times /run/winlux/boot-recorded
 boot_mark init
+# Écran Prisme dans le framebuffer jusqu'à l'arrivée du bureau (#170).
+if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline && ! /bin/busybox grep -qw 'winlux.check-iso=1' /proc/cmdline && test -e /dev/fb0 && test -x /usr/bin/winlux; then
+    /usr/bin/winlux --boot-splash >/run/winlux/boot-splash.log 2>&1 &
+fi
 safe_power() {
     if /usr/bin/winlux-update --busy; then
         echo 'Installation en cours : arrêt/redémarrage différé. Réessayez après la fin.'
@@ -687,7 +691,8 @@ fi
 
 if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     echo "Winlux desktop preview: starting Xorg"
-    /usr/bin/Xorg :0 -noreset -nolisten tcp -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
+    /bin/busybox touch /run/winlux/splash.stop
+    /usr/bin/Xorg :0 -background none -noreset -nolisten tcp -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
     xorg_pid=$!
     # Attendre que Xorg réponde (au plus 10 s) au lieu d'une pause fixe de 3 s.
     for attempt in $(/bin/busybox seq 1 100); do
