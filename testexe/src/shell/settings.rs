@@ -116,6 +116,11 @@ static mut PAGE: usize = 0;
 static mut SCROLL: usize = 0;
 static mut LAST_POLL: u32 = 0;
 static mut HOVER: i32 = -1;
+/// Boutons dessinés au dernier passage de `draw` : rectangle et identifiant.
+/// `hit()` s'en sert, ce qui garantit qu'un clic touche le bouton affiché et
+/// qu'une zone vide ne déclenche rien, quelle que soit la mise en page.
+static mut BUTTONS: [(Rect, i32); 64] = [(Rect { left: 0, top: 0, right: 0, bottom: 0 }, -1); 64];
+static mut BUTTON_COUNT: usize = 0;
 static mut SHOW_LOG: bool = false;
 static mut EXE_PATH: [u16; 2048] = [0; 2048];
 static mut EXE_LEN: usize = 0;
@@ -129,6 +134,9 @@ const EXE_SCALES: [&[u8]; 5] = [b"auto", b"1", b"1.25", b"1.5", b"2"];
 static mut MOUSE_SPEED: u32 = 50;
 static mut LOCALE_KB_SCROLL: usize = 0;
 static mut LOCALE_TZ_SCROLL: usize = 0;
+/// Hauteur (relative au contenu) des deux rangées de claviers et de fuseaux.
+const LOCALE_KB_Y: i32 = 264;
+const LOCALE_TZ_Y: i32 = 420;
 use crate::gfx::{AUTO_THEME, ENABLE_BLUR, ENABLE_SMOOTH_ANIM, ENABLE_THUMBNAILS};
 
 fn exe_profile_path(out: &mut [u16; 2060]) {
@@ -400,7 +408,13 @@ pub unsafe fn system_tick() -> bool {
     let mut changed = read(c"Z:\\run\\winlux\\control.txt", &mut STATUS);
     if GetFileAttributesA(c"Z:\\run\\winlux\\browser-chooser".as_ptr()) != u32::MAX {
         DeleteFileA(c"Z:\\run\\winlux\\browser-chooser".as_ptr());
-        open_page(11);
+        // open_page() relancerait system_tick() : on bascule la page ici,
+        // le reste de ce passage lit déjà tout ce que la page 11 affiche.
+        if !crate::wm::native_settings(11) {
+            PAGE = 11;
+            SCROLL = 0;
+            crate::wm::open(crate::wm::APP_SETTINGS);
+        }
         changed = true;
     }
     changed |= crate::netdrives::poll(
@@ -718,10 +732,28 @@ fn button_rect(c: &Rect, row: i32, col: i32) -> Rect {
     )
 }
 unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i32) {
+    button_in(g, c, button_rect(c, row, col), label, id);
+}
+/// Bouton à une hauteur libre (`y` relatif au contenu) : les pages qui
+/// alternent cartes et boutons ne sont plus prisonnières du pas de 44 px.
+unsafe fn button_y(g: &mut Gfx, c: &Rect, y: i32, col: i32, label: &[u8], id: i32) {
+    let w = ((c.right - c.left - 16) / 3).max(70);
+    let r = rect(
+        c.left + col * (w + 8),
+        c.top + y,
+        c.left + col * (w + 8) + w,
+        c.top + y + 36,
+    );
+    button_in(g, c, r, label, id);
+}
+unsafe fn button_in(g: &mut Gfx, c: &Rect, r: Rect, label: &[u8], id: i32) {
     let p = pal();
-    let r = button_rect(c, row, col);
     if r.bottom > c.bottom - 24 {
         return;
+    }
+    if BUTTON_COUNT < BUTTONS.len() {
+        BUTTONS[BUTTON_COUNT] = (r, id);
+        BUTTON_COUNT += 1;
     }
     let disabled = updating() && (PAGE == 0 || PAGE == 7 && id != 4)
         || PAGE == PAGE_SYSUPDATE && sysupdate_busy() && id >= 18;
@@ -981,6 +1013,7 @@ fn wrap_len(line: &[u8], width: i32) -> usize {
 }
 
 pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
+    BUTTON_COUNT = 0;
     MOUSE_SPEED = match value(b"mouse_speed") {
         b"25" => 25,
         b"75" => 75,
@@ -1093,7 +1126,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(
                 g,
                 &c,
-                84,
+                104,
                 tr4(&[b"Effet de flou", b"Blur effect", b"Efecto de desenfoque", b"Unsch\xE4rfeeffekt"]),
                 if unsafe { ENABLE_BLUR } {
                     tr4(&[b"Activ\xE9", b"On", b"Activado", b"Ein"])
@@ -1101,12 +1134,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     tr4(&[b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"])
                 },
             );
-            button(g, &c, 0, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 1);
+            button_y(g, &c, 168, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 0);
+            button_y(g, &c, 168, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 1);
             row(
                 g,
                 &c,
-                124,
+                216,
                 tr4(&[b"Animations fluides", b"Smooth animations", b"Animaciones fluidas", b"Fl\xFCssige Animationen"]),
                 if crate::gfx::animations() {
                     tr4(&[b"Activ\xE9es", b"On", b"Activadas", b"Ein"])
@@ -1114,12 +1147,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     tr4(&[b"D\xE9sactiv\xE9es", b"Off", b"Desactivadas", b"Aus"])
                 },
             );
-            button(g, &c, 1, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 3);
-            button(g, &c, 1, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 4);
+            button_y(g, &c, 280, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 3);
+            button_y(g, &c, 280, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 4);
             row(
                 g,
                 &c,
-                164,
+                328,
                 tr4(&[b"Miniatures des fen\xEAtres", b"Window thumbnails", b"Miniaturas de ventanas", b"Fenstervorschauen"]),
                 if unsafe { ENABLE_THUMBNAILS } {
                     tr4(&[b"Activ\xE9es", b"On", b"Activadas", b"Ein"])
@@ -1127,12 +1160,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     tr4(&[b"D\xE9sactiv\xE9es", b"Off", b"Desactivadas", b"Aus"])
                 },
             );
-            button(g, &c, 2, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 6);
-            button(g, &c, 2, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 7);
+            button_y(g, &c, 392, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 6);
+            button_y(g, &c, 392, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 7);
             row(
                 g,
                 &c,
-                204,
+                440,
                 tr4(&[b"Th\xE8me automatique", b"Automatic theme", b"Tema autom\xE1tico", b"Automatisches Design"]),
                 if unsafe { AUTO_THEME } {
                     tr4(&[b"Activ\xE9", b"On", b"Activado", b"Ein"])
@@ -1140,8 +1173,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     tr4(&[b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"])
                 },
             );
-            button(g, &c, 3, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 9);
-            button(g, &c, 3, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 10);
+            button_y(g, &c, 504, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 9);
+            button_y(g, &c, 504, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 10);
         }
         11 => {
             row(
@@ -1374,14 +1407,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 tr4(&[b"Barre des t\xE2ches", b"Taskbar", b"Barra de tareas", b"Taskleiste"]),
                 tr4(&[b"Pr\xE9f\xE9rences enregistr\xE9es pour la prochaine session.", b"Preferences saved for the next session.", b"Preferencias guardadas para la pr\xF3xima sesi\xF3n.", b"Einstellungen f\xFCr die n\xE4chste Sitzung gespeichert."]),
             );
-            button(g, &c, 0, 0, tr4(&[b"Aligner \xE0 gauche", b"Align left", b"Alinear a la izquierda", b"Links ausrichten"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"Centrer", b"Center", b"Centrar", b"Zentrieren"]), 1);
-            button(g, &c, 1, 0, tr4(&[b"Th\xE8me sombre", b"Dark theme", b"Tema oscuro", b"Dunkles Design"]), 3);
-            button(g, &c, 1, 1, tr4(&[b"Th\xE8me clair", b"Light theme", b"Tema claro", b"Helles Design"]), 4);
+            button_y(g, &c, 108, 0, tr4(&[b"Aligner \xE0 gauche", b"Align left", b"Alinear a la izquierda", b"Links ausrichten"]), 0);
+            button_y(g, &c, 108, 1, tr4(&[b"Centrer", b"Center", b"Centrar", b"Zentrieren"]), 1);
+            button_y(g, &c, 152, 0, tr4(&[b"Th\xE8me sombre", b"Dark theme", b"Tema oscuro", b"Dunkles Design"]), 3);
+            button_y(g, &c, 152, 1, tr4(&[b"Th\xE8me clair", b"Light theme", b"Tema claro", b"Helles Design"]), 4);
             row(
                 g,
                 &c,
-                164,
+                200,
                 tr4(&[b"Th\xE8me automatique", b"Automatic theme", b"Tema autom\xE1tico", b"Automatisches Design"]),
                 if unsafe { AUTO_THEME } {
                     tr4(&[b"Jour clair / nuit sombre (8h\x9620h)", b"Light by day / dark by night (8am\x968pm)", b"Claro de d\xEDa / oscuro de noche (8\x9620 h)", b"Tags\xFCber hell / nachts dunkel (8\x9620 Uhr)"])
@@ -1389,12 +1422,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     tr4(&[b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"])
                 },
             );
-            button(g, &c, 2, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 5);
-            button(g, &c, 2, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 6);
+            button_y(g, &c, 256, 0, tr4(&[b"Activer", b"Turn on", b"Activar", b"Aktivieren"]), 5);
+            button_y(g, &c, 256, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 6);
             row(
                 g,
                 &c,
-                254,
+                304,
                 tr4(&[b"Stockage", b"Storage", b"Almacenamiento", b"Speicher"]),
                 if value(b"persistent") == b"1" {
                     tr4(&[b"Les pr\xE9f\xE9rences sont conserv\xE9es sur le disque.", b"Preferences are kept on disk.", b"Las preferencias se conservan en el disco.", b"Die Einstellungen werden auf dem Datentr\xE4ger gespeichert."])
@@ -1405,13 +1438,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(
                 g,
                 &c,
-                300,
+                364,
                 tr4(&[b"Fond d'\xE9cran, couleurs, barre des t\xE2ches, ic\xF4nes et sons", b"Wallpaper, colors, taskbar, icons and sounds", b"Fondo de pantalla, colores, barra de tareas, iconos y sonidos", b"Hintergrund, Farben, Taskleiste, Symbole und Sounds"]),
                 tr4(&[b"Galerie et aper\xE7u dans la page Personnalisation.", b"Gallery and preview on the Personalization page.", b"Galer\xEDa y vista previa en la p\xE1gina Personalizaci\xF3n.", b"Galerie und Vorschau auf der Seite Personalisierung."]),
             );
-            button(g, &c, 5, 0, tr4(&[b"Personnaliser", b"Personalize", b"Personalizar", b"Anpassen"]), 12);
-            button(g, &c, 5, 1, tr4(&[b"Assistant de bienvenue", b"Welcome assistant", b"Asistente de bienvenida", b"Willkommensassistent"]), 13);
-            button(g, &c, 7, 0, tr4(&[b"R\xE9glages de l'\xE9cran", b"Display settings", b"Configuraci\xF3n de pantalla", b"Bildschirmeinstellungen"]), 18);
+            button_y(g, &c, 420, 0, tr4(&[b"Personnaliser", b"Personalize", b"Personalizar", b"Anpassen"]), 12);
+            button_y(g, &c, 420, 1, tr4(&[b"Assistant de bienvenue", b"Welcome assistant", b"Asistente de bienvenida", b"Willkommensassistent"]), 13);
+            button_y(g, &c, 420, 2, tr4(&[b"R\xE9glages de l'\xE9cran", b"Display settings", b"Configuraci\xF3n de pantalla", b"Bildschirmeinstellungen"]), 18);
         }
         7 => {
             if updating() {
@@ -1538,12 +1571,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             row(g, &c, 44, tr(S_LANGUAGE), tr(S_LANGUAGE_DESC));
             let cur_lang = unsafe { CURRENT_LANG } as usize;
             for i in 0..LANG_COUNT {
-                button(g, &c, i as i32 / 3, i as i32 % 3, LANG_NAMES[i], i as i32);
+                button_y(g, &c, 108 + 44 * (i as i32 / 3), i as i32 % 3, LANG_NAMES[i], i as i32);
             }
             row(
                 g,
                 &c,
-                164,
+                200,
                 tr(S_KEYBOARD_LAYOUT),
                 tr(S_KEYBOARD_LAYOUT_DESC),
             );
@@ -1552,27 +1585,27 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             for i in 0..kb_vis {
                 let idx = kb_start + i;
                 if idx < KEYBOARD_COUNT {
-                    button(
+                    button_y(
                         g,
                         &c,
-                        2 + i as i32 / 3,
+                        LOCALE_KB_Y + 44 * (i as i32 / 3),
                         i as i32 % 3,
                         KEYBOARD_NAMES[idx],
                         (10 + idx) as i32,
                     );
                 }
             }
-            row(g, &c, 344, tr(S_TIMEZONE), tr(S_TIMEZONE_DESC));
-            row(g, &c, 404, tr(S_CURRENT_TIMEZONE), value(b"timezone"));
+            // Une seule carte : le fuseau actuel sert de valeur.
+            row(g, &c, 356, tr(S_TIMEZONE), value(b"timezone"));
             let tz_start = unsafe { LOCALE_TZ_SCROLL };
             let tz_vis = 6usize.min(TZ_COUNT);
             for i in 0..tz_vis {
                 let idx = tz_start + i;
                 if idx < TZ_COUNT {
-                    button(
+                    button_y(
                         g,
                         &c,
-                        7 + i as i32 / 3,
+                        LOCALE_TZ_Y + 44 * (i as i32 / 3),
                         i as i32 % 3,
                         tr(TZ_STRINGS[idx]),
                         (30 + idx) as i32,
@@ -1603,13 +1636,13 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     _ => tr4(&[b"Mosa\xEFques", b"Tiles", b"Mosaicos", b"Kacheln"]),
                 },
             );
-            button(g, &c, 0, 0, tr4(&[b"Grandes ic\xF4nes", b"Large icons", b"Iconos grandes", b"Gro\xDFe Symbole"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"D\xE9tails", b"Details", b"Detalles", b"Details"]), 1);
-            button(g, &c, 0, 2, tr4(&[b"Mosa\xEFques", b"Tiles", b"Mosaicos", b"Kacheln"]), 2);
+            button_y(g, &c, 160, 0, tr4(&[b"Grandes ic\xF4nes", b"Large icons", b"Iconos grandes", b"Gro\xDFe Symbole"]), 0);
+            button_y(g, &c, 160, 1, tr4(&[b"D\xE9tails", b"Details", b"Detalles", b"Details"]), 1);
+            button_y(g, &c, 160, 2, tr4(&[b"Mosa\xEFques", b"Tiles", b"Mosaicos", b"Kacheln"]), 2);
             row(
                 g,
                 &c,
-                230,
+                208,
                 tr4(&[b"\xC9l\xE9ments masqu\xE9s", b"Hidden items", b"Elementos ocultos", b"Ausgeblendete Elemente"]),
                 if unsafe { crate::explorer::show_hidden() } {
                     tr4(&[b"Visibles", b"Shown", b"Visibles", b"Sichtbar"])
@@ -1617,12 +1650,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     tr4(&[b"Masqu\xE9s", b"Hidden", b"Ocultos", b"Ausgeblendet"])
                 },
             );
-            button(g, &c, 2, 0, tr4(&[b"Afficher", b"Show", b"Mostrar", b"Anzeigen"]), 3);
-            button(g, &c, 2, 1, tr4(&[b"Masquer", b"Hide", b"Ocultar", b"Ausblenden"]), 4);
+            button_y(g, &c, 272, 0, tr4(&[b"Afficher", b"Show", b"Mostrar", b"Anzeigen"]), 3);
+            button_y(g, &c, 272, 1, tr4(&[b"Masquer", b"Hide", b"Ocultar", b"Ausblenden"]), 4);
             row(
                 g,
                 &c,
-                356,
+                320,
                 tr4(&[b"Extensions de noms de fichiers", b"File name extensions", b"Extensiones de nombre de archivo", b"Dateinamenerweiterungen"]),
                 if unsafe { crate::explorer::show_ext() } {
                     tr4(&[b"Affich\xE9es", b"Shown", b"Visibles", b"Angezeigt"])
@@ -1630,8 +1663,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     tr4(&[b"Masqu\xE9es", b"Hidden", b"Ocultas", b"Ausgeblendet"])
                 },
             );
-            button(g, &c, 4, 0, tr4(&[b"Afficher", b"Show", b"Mostrar", b"Anzeigen"]), 6);
-            button(g, &c, 4, 1, tr4(&[b"Masquer", b"Hide", b"Ocultar", b"Ausblenden"]), 7);
+            button_y(g, &c, 384, 0, tr4(&[b"Afficher", b"Show", b"Mostrar", b"Anzeigen"]), 6);
+            button_y(g, &c, 384, 1, tr4(&[b"Masquer", b"Hide", b"Ocultar", b"Ausblenden"]), 7);
         }
         16 => {
             row(
@@ -1641,30 +1674,30 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 tr4(&[b"P\xE9riph\xE9rique de sortie", b"Output device", b"Dispositivo de salida", b"Ausgabeger\xE4t"]),
                 value(b"audio_output"),
             );
-            button(g, &c, 0, 0, tr4(&[b"Haut-parleurs", b"Speakers", b"Altavoces", b"Lautsprecher"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"Casque / HDMI", b"Headphones / HDMI", b"Auriculares / HDMI", b"Kopfh\xF6rer / HDMI"]), 1);
-            button(g, &c, 0, 2, tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]), 2);
+            button_y(g, &c, 108, 0, tr4(&[b"Haut-parleurs", b"Speakers", b"Altavoces", b"Lautsprecher"]), 0);
+            button_y(g, &c, 108, 1, tr4(&[b"Casque / HDMI", b"Headphones / HDMI", b"Auriculares / HDMI", b"Kopfh\xF6rer / HDMI"]), 1);
+            button_y(g, &c, 108, 2, tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]), 2);
             row(
                 g,
                 &c,
-                170,
+                156,
                 tr4(&[b"P\xE9riph\xE9rique d'entr\xE9e", b"Input device", b"Dispositivo de entrada", b"Eingabeger\xE4t"]),
                 value(b"audio_input"),
             );
-            button(g, &c, 1, 0, tr4(&[b"Micro int\xE9gr\xE9", b"Built-in microphone", b"Micr\xF3fono integrado", b"Integriertes Mikrofon"]), 3);
-            button(g, &c, 1, 1, tr4(&[b"Micro externe", b"External microphone", b"Micr\xF3fono externo", b"Externes Mikrofon"]), 4);
-            row(g, &c, 280, tr4(&[b"Volume principal", b"Main volume", b"Volumen principal", b"Hauptlautst\xE4rke"]), value(b"audio"));
-            button(g, &c, 3, 0, tr4(&[b"Volume -", b"Volume -", b"Volumen -", b"Lautst\xE4rke -"]), 6);
-            button(g, &c, 3, 1, tr4(&[b"Muet / r\xE9tablir", b"Mute / unmute", b"Silenciar / restablecer", b"Stumm / Ton an"]), 7);
-            button(g, &c, 3, 2, tr4(&[b"Volume +", b"Volume +", b"Volumen +", b"Lautst\xE4rke +"]), 8);
+            button_y(g, &c, 220, 0, tr4(&[b"Micro int\xE9gr\xE9", b"Built-in microphone", b"Micr\xF3fono integrado", b"Integriertes Mikrofon"]), 3);
+            button_y(g, &c, 220, 1, tr4(&[b"Micro externe", b"External microphone", b"Micr\xF3fono externo", b"Externes Mikrofon"]), 4);
+            row(g, &c, 268, tr4(&[b"Volume principal", b"Main volume", b"Volumen principal", b"Hauptlautst\xE4rke"]), value(b"audio"));
+            button_y(g, &c, 332, 0, tr4(&[b"Volume -", b"Volume -", b"Volumen -", b"Lautst\xE4rke -"]), 6);
+            button_y(g, &c, 332, 1, tr4(&[b"Muet / r\xE9tablir", b"Mute / unmute", b"Silenciar / restablecer", b"Stumm / Ton an"]), 7);
+            button_y(g, &c, 332, 2, tr4(&[b"Volume +", b"Volume +", b"Volumen +", b"Lautst\xE4rke +"]), 8);
             row(
                 g,
                 &c,
-                370,
+                380,
                 tr4(&[b"Volume par application", b"Volume per app", b"Volumen por aplicaci\xF3n", b"Lautst\xE4rke pro App"]),
                 tr4(&[b"Chaque fen\xEAtre ouverte a son propre niveau de volume.", b"Each open window has its own volume level.", b"Cada ventana abierta tiene su propio nivel de volumen.", b"Jedes ge\xF6ffnete Fenster hat eine eigene Lautst\xE4rke."]),
             );
-            let mut ay = 430i32;
+            let mut ay = 440i32;
             for app in 0..crate::wm::APP_COUNT {
                 if !crate::wm::is_open(app) || ay + 50 > c.bottom - c.top {
                     continue;
@@ -1986,14 +2019,30 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
             -1
         };
     }
-    // Douze rangées de trois boutons (Signaler un problème va jusqu'à 9, Bureau à distance jusqu'à 11).
-    for i in 0..36 {
-        let r = button_rect(&c, i / 3, i % 3);
-        if r.bottom <= c.bottom - 24 && inside(&r, x, y) {
-            return i;
+    // Les boutons réellement dessinés au dernier passage, avec leur identifiant.
+    for k in 0..unsafe { BUTTON_COUNT } {
+        let (r, id) = unsafe { BUTTONS[k] };
+        if inside(&r, x, y) {
+            return id;
         }
     }
     -1
+}
+/// Fait défiler la liste des claviers ou des fuseaux de la page Localisation
+/// quand la molette tourne au-dessus de l'une d'elles.
+unsafe fn locale_wheel(c: &Rect, y: i32, down: bool) -> bool {
+    let (list, count, vis) = if y >= c.top + LOCALE_KB_Y && y < c.top + LOCALE_KB_Y + 80 {
+        (core::ptr::addr_of_mut!(LOCALE_KB_SCROLL), KEYBOARD_COUNT, 6)
+    } else if y >= c.top + LOCALE_TZ_Y && y < c.top + LOCALE_TZ_Y + 80 {
+        (core::ptr::addr_of_mut!(LOCALE_TZ_SCROLL), TZ_COUNT, 6)
+    } else {
+        return false;
+    };
+    let max = count.saturating_sub(vis);
+    let cur = *list;
+    let next = if down { (cur + 3).min(max) } else { cur.saturating_sub(3) };
+    *list = next;
+    next != cur
 }
 pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if PAGE == 12 && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
@@ -2008,6 +2057,10 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if let Mouse::Wheel(delta) = ev {
         if PAGE == PAGE_CPU {
             return crate::settings_cpu::scroll(if delta < 0 { 3 } else { -3 });
+        }
+        if PAGE == 14 && locale_wheel(&content(f), y, delta < 0) {
+            HOVER = hit(f, x, y);
+            return true;
         }
         if delta < 0 {
             SCROLL = SCROLL.saturating_add(3);
