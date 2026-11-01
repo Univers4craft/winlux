@@ -193,7 +193,15 @@ pub unsafe fn native_keep_visible(hwnd: Handle) {
     let x = r.left.min(area.right - w).max(area.left);
     let y = r.top.min(area.bottom - BOTTOM - h).max(area.top + TITLE);
     if (x, y, w, h) != (r.left, r.top, r.right - r.left, r.bottom - r.top) {
-        SetWindowPos(hwnd, core::ptr::null_mut(), x, y, w, h, SWP_NOZORDER | SWP_NOACTIVATE);
+        SetWindowPos(
+            hwnd,
+            core::ptr::null_mut(),
+            x,
+            y,
+            w,
+            h,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
     }
 }
 unsafe fn native_frame(hwnd: Handle) -> Frame {
