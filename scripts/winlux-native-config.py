@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import shutil
+import subprocess
 import pwd
 import grp
 import sys
@@ -40,43 +41,43 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
+def ensure_system_account(name, first_uid, comment, home):
+    """Compte système « name » créé par useradd/groupadd (verrous, shadow,
+    nss cohérents) ; /etc/passwd n'est complété à la main qu'en leur absence.
+    Rien n'est écrit si le compte existe déjà."""
+    try: return pwd.getpwnam(name)
+    except KeyError: pass
+    used = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
+    uid = first_uid
+    while uid in used: uid += 1
+    if shutil.which("groupadd") and shutil.which("useradd"):
+        try: grp.getgrnam(name)
+        except KeyError: subprocess.run(["groupadd", "--gid", str(uid), name], check=True)
+        subprocess.run(["useradd", "--system", "--uid", str(uid), "--gid", str(uid), "--no-create-home",
+                        "--home-dir", home, "--shell", "/bin/false", "--comment", comment, name], check=True)
+    else:
+        try: grp.getgrnam(name)
+        except KeyError:
+            with Path("/etc/group").open("a") as stream: stream.write(f"{name}:x:{uid}:\n")
+        with Path("/etc/passwd").open("a") as stream: stream.write(f"{name}:!:{uid}:{uid}:{comment}:{home}:/bin/false\n")
+    return pwd.getpwnam(name)
+
+
 if os.geteuid() == 0:
-    try:
-        pwd.getpwnam("messagebus")
-    except KeyError:
-        used = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
-        bus_uid = 990
-        while bus_uid in used: bus_uid += 1
-        with Path("/etc/group").open("a") as stream: stream.write(f"messagebus:x:{bus_uid}:\n")
-        with Path("/etc/passwd").open("a") as stream: stream.write(f"messagebus:!:{bus_uid}:{bus_uid}:D-Bus:/nonexistent:/bin/false\n")
+    ensure_system_account("messagebus", 990, "D-Bus", "/nonexistent")
     bus_group=grp.getgrnam("messagebus")
     helper=Path("/usr/lib/dbus-1.0/dbus-daemon-launch-helper")
     if helper.is_file():
         os.chown(helper,0,bus_group.gr_gid)
         helper.chmod(0o4754)
-    try: pwd.getpwnam("polkitd")
-    except KeyError:
-        used={entry.pw_uid for entry in pwd.getpwall()}|{entry.gr_gid for entry in grp.getgrall()}
-        uid=980
-        while uid in used:uid+=1
-        with Path("/etc/group").open("a") as stream:stream.write(f"polkitd:x:{uid}:\n")
-        with Path("/etc/passwd").open("a") as stream:stream.write(f"polkitd:!:{uid}:{uid}:PolicyKit:/nonexistent:/bin/false\n")
-    policy_user=pwd.getpwnam("polkitd")
+    policy_user=ensure_system_account("polkitd", 980, "PolicyKit", "/nonexistent")
     policy_state=Path("/var/lib/polkit-1")
     policy_state.mkdir(parents=True,exist_ok=True)
     os.chown(policy_state,policy_user.pw_uid,policy_user.pw_gid)
     policy_state.chmod(0o700)
     for directory in ("/var/lib/NetworkManager","/var/lib/bluetooth","/var/lib/udisks2"):
         Path(directory).mkdir(parents=True,exist_ok=True)
-    try:
-        saver = pwd.getpwnam("winlux-saver")
-    except KeyError:
-        occupied = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
-        uid = 1002
-        while uid in occupied: uid += 1
-        with Path("/etc/group").open("a") as stream: stream.write(f"winlux-saver:x:{uid}:\n")
-        with Path("/etc/passwd").open("a") as stream: stream.write(f"winlux-saver:!:{uid}:{uid}:Winlux screensaver:/home/winlux-saver:/bin/false\n")
-        saver = pwd.getpwnam("winlux-saver")
+    saver = ensure_system_account("winlux-saver", 1002, "Winlux screensaver", "/home/winlux-saver")
     directory = Path(saver.pw_dir)
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(0o700)

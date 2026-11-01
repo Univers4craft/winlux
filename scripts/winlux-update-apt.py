@@ -59,10 +59,21 @@ def busy():
         try: os.kill(int(pid), 0); return True
         except ProcessLookupError: pass
     # APT uses POSIX record locks, not flock. Respect manual terminal installs.
+    # Les verrous ne sont jamais créés ici : un fichier absent signifie « libre ».
     for path in ("/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock"):
-        with open(path, "a") as handle:
-            try: fcntl.lockf(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError: return True
+        try:
+            handle = open(path, "r+")
+            mode = fcntl.LOCK_EX
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            try: handle = open(path, "r")
+            except OSError: continue
+            # Un verrou partagé est refusé tant qu'APT tient le verrou exclusif.
+            mode = fcntl.LOCK_SH
+        with handle:
+            try: fcntl.lockf(handle, mode | fcntl.LOCK_NB)
+            except (BlockingIOError, PermissionError): return True
     return False
 
 def phase(name, percent, item):
@@ -272,8 +283,13 @@ def main():
                 # never execute distribution maintainer scripts on the host.
                 run("dpkg", "--configure", "--pending")
                 restored.touch()
-            audit = subprocess.check_output(["dpkg", "--audit"], text=True)
-            if audit: raise RuntimeError("Installation APT inachevée. Exécutez dpkg --configure -a.\n" + audit)
+            # dpkg --audit sort en erreur dès qu'il a quelque chose à signaler :
+            # une installation inachevée se termine ici, sans bloquer le démarrage.
+            audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True).stdout.strip()
+            if audit:
+                subprocess.run(["dpkg", "--configure", "-a"])
+                audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True).stdout.strip()
+            if audit: print("Installation APT inachevée. Exécutez dpkg --configure -a.\n" + audit, file=sys.stderr)
             version = read("/usr/share/winlux/version")
             if read(STATE / "apt-desktop-cache-version") != version:
                 run("update-desktop-database", "/usr/share/applications")
@@ -329,6 +345,10 @@ def main():
                     if digest != data["sha256"]:
                         package.unlink()
                         raise ValueError("Empreinte SHA-256 incorrecte : le paquet téléchargé a été supprimé")
+                    # Le téléchargement vérifié prend son nom définitif : dpkg refuse un « .part ».
+                    verified = package.with_suffix(".deb")
+                    package.replace(verified)
+                    package = verified
                     restore_point(data["version"])
                     previous = installed_version()
                     phase("installing", -1, "Installation du paquet Winlux avec APT ; consultez le journal pour les détails")

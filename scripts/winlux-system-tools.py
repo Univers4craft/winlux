@@ -474,7 +474,11 @@ class Tools(Gtk.Window):
     def files(self):
         self.label(_t("L’Explorateur natif propose les favoris dans sa barre latérale, les miniatures et les périphériques amovibles."))
         self.button(_t("Ouvrir le gestionnaire de fichiers complet"), lambda: self.command(["Thunar"]), bool(shutil.which("Thunar")))
-        for label,path in [(_t("Dossier personnel"),HOME),(_t("Documents"),HOME/_t("Documents")),(_t("Téléchargements"),HOME/_t("Téléchargements"))]:
+        # Dossiers XDG réels (user-dirs.dirs) : leur nom sur disque ne suit pas la langue de l'interface.
+        def xdg(kind,fallback):
+            special=GLib.get_user_special_dir(kind)
+            return Path(special) if special else HOME/fallback
+        for label,path in [(_t("Dossier personnel"),HOME),(_t("Documents"),xdg(GLib.UserDirectory.DIRECTORY_DOCUMENTS,"Documents")),(_t("Téléchargements"),xdg(GLib.UserDirectory.DIRECTORY_DOWNLOAD,"Téléchargements"))]:
             self.button(label,lambda target=path:self.command(["Thunar",str(target)]))
         self.button(_t("Corbeille"),lambda:self.command(["Thunar","trash:///"]))
         self.button(_t("Ajouter un dossier aux favoris"),self.add_bookmark)

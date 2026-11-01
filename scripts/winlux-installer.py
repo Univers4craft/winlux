@@ -4934,6 +4934,21 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                 f.write(f"{username} ALL=(ALL:ALL) ALL\n")
             os.chmod(sudoers_file, 0o440)
 
+    @staticmethod
+    def write_winlux_conf(path, values):
+        """Écrit des clés KEY=valeur sans toucher aux autres clés du fichier."""
+        lines = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = [line.rstrip("\n") for line in f]
+        except OSError:
+            pass
+        lines = [line for line in lines if line.split("=", 1)[0] not in values]
+        lines += [f"{key}={value}" for key, value in values.items() if value]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        os.chmod(path, 0o644)
+
     def configure_first_boot(self, root_path):
         etc = f"{root_path}/etc/winlux"
         os.makedirs(etc, exist_ok=True)
@@ -4946,6 +4961,12 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         kb_conf = f"{root_path}/etc/default/keyboard"
         with open(kb_conf, "w") as f:
             f.write(f'XKBMODEL="pc105"\nXKBLAYOUT="{keyboard}"\nXKBVARIANT=""\nXKBOPTIONS=""\n')
+        # Réglages lus par la session Winlux (xsession-winlux, winlux-control
+        # lang-*/keyboard-*/tz-*) : LANG sur deux lettres dans locale.conf,
+        # XKB_LAYOUT dans input.conf, au format clé=valeur de winlux-control.
+        self.write_winlux_conf(f"{etc}/locale.conf", {"LANG": self.config["language"][:2].lower(),
+                                                      "TIMEZONE": self.config.get("timezone") or ""})
+        self.write_winlux_conf(f"{etc}/input.conf", {"XKB_LAYOUT": keyboard})
         locale_gen = f"{root_path}/etc/locale.gen"
         if os.path.exists(locale_gen):
             with open(locale_gen, "a") as f:
@@ -5209,6 +5230,18 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
 
 def main():
     if os.geteuid() != 0:
+        # Sur le Live la session est root ; sur un système installé, on demande
+        # l'élévation nous-mêmes (pkexec, sinon sudo graphique) au lieu de
+        # l'exiger du lanceur .desktop, qui ne peut pas savoir ce qui est installé.
+        if not os.environ.get("WINLUX_INSTALLER_ELEVATED"):
+            env = dict(os.environ, WINLUX_INSTALLER_ELEVATED="1")
+            helpers = [["pkexec", "env", f"DISPLAY={env.get('DISPLAY', '')}",
+                        f"XAUTHORITY={env.get('XAUTHORITY', '')}", "WINLUX_INSTALLER_ELEVATED=1"]]
+            if env.get("SUDO_ASKPASS"):
+                helpers.append(["sudo", "-A", "-E"])
+            for helper in helpers:
+                if shutil.which(helper[0]):
+                    os.execvpe(helper[0], helper + [sys.executable, os.path.abspath(__file__)] + sys.argv[1:], env)
         print("ERREUR : l'installateur doit être lancé en tant que root (sudo).", file=sys.stderr)
         sys.exit(1)
     signal.signal(signal.SIGINT, signal.SIG_DFL)

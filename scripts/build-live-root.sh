@@ -9,7 +9,7 @@ linkage=$(LC_ALL=C ldd /usr/bin/busybox 2>&1 || true)
 case "$linkage" in *'not a dynamic executable'*|*'statically linked'*) ;;
     *) echo 'busybox-static requis pour le petit initramfs' >&2; exit 1 ;;
 esac
-for applet in sh mount umount mdev insmod awk seq findfs switch_root cat mkdir chmod sleep chroot sha256sum; do
+for applet in sh mount umount mdev insmod awk seq findfs switch_root cat mkdir chmod sleep chroot sha256sum loadkmap reboot sync; do
     /usr/bin/busybox --list | grep -Fxq "$applet" || { echo "applet de démarrage absente : $applet" >&2; exit 1; }
 done
 work=$(mktemp -d "$project/build/live-boot.XXXXXX")
@@ -48,7 +48,13 @@ else
     echo 'cryptsetup absent : les installations chiffrées (LUKS) ne seront pas proposées' >&2
 fi
 for driver in virtio_pci virtio_blk virtio_scsi sr_mod sd_mod ata_piix ahci nvme usb_storage uas xhci_pci xhci_hcd ehci_pci ehci_hcd uhci_hcd hid usbhid hid_generic mmc_core sdhci sdhci_pci loop isofs squashfs overlay vfat ext4 $crypt_drivers; do
-    modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
+    # Pas de pipeline : l'échec de modprobe (pilote absent) est visible et la
+    # boucle, lue depuis un fichier, s'exécute dans le shell courant (set -e).
+    if ! modprobe -S "$kernel_release" --show-depends "$driver" >"$work/depends" 2>"$work/depends.err"; then
+        echo "pilote optionnel absent du noyau $kernel_release : $driver ($(tr '\n' ' ' <"$work/depends.err"))" >&2
+        continue
+    fi
+    while read -r directive module rest; do
         test "$directive" = insmod || continue
         relative=${module#/}
         case "$relative" in *.zst|*.xz|*.gz) relative=${relative%.*} ;; esac
@@ -62,8 +68,14 @@ for driver in virtio_pci virtio_blk virtio_scsi sr_mod sd_mod ata_piix ahci nvme
             esac
             printf '%s\n' "$relative" >>"$tiny/modules-to-load"
         fi
-    done
+    done <"$work/depends"
 done
+# Image reproductible : horodatages figés (SOURCE_DATE_EPOCH, sinon 0) quand
+# mksquashfs (≥ 4.4) propose -mkfs-time/-all-time ; sinon l'option est omise.
+squash_time_options=
+if mksquashfs -help 2>&1 | grep -q -- '-all-time'; then
+    squash_time_options="-mkfs-time ${SOURCE_DATE_EPOCH:-0} -all-time ${SOURCE_DATE_EPOCH:-0}"
+fi
 # Device metadata must be recorded in the same fakeroot session as packing.
 # xz keeps the ISO under GitHub's 2 GiB per-file release limit (gzip was
 # 2.04 GiB at v0.2.10); the Ubuntu kernel's squashfs reads xz natively.
@@ -75,8 +87,9 @@ fakeroot sh -c '
     mknod -m 666 "$1/dev/zero" c 1 5
     mknod -m 666 "$1/dev/tty" c 5 0
     mknod -m 666 "$1/dev/ttyS0" c 4 64
-    mksquashfs "$1" "$2" -noappend -all-root -processors "$(nproc)" -comp xz -Xbcj x86 -Xdict-size 100% -b 1M -no-progress
-' sh "$stage" "$iso_root/boot/winlux-rootfs.squashfs"
+    # shellcheck disable=SC2086 # $3 : options facultatives séparées par des espaces
+    mksquashfs "$1" "$2" -noappend -all-root -processors "$(nproc)" -comp xz -Xbcj x86 -Xdict-size 100% -b 1M -no-progress $3
+' sh "$stage" "$iso_root/boot/winlux-rootfs.squashfs" "$squash_time_options"
 fakeroot sh -c '
     set -eu
     cd "$1"

@@ -1,6 +1,6 @@
 [package]
 name = "winlux"
-version = "0.1.0"
+version = "0.2.12"
 edition = "2021"
 description = "Runtime Winlux : chargeur PE et API Win32 écrits de zéro (clean-room), sans Wine"
 license = "GPL-3.0-or-later"

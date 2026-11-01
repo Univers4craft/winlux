@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **233**
+- Réalisé : **234**
 - À faire ou en cours : **46**
-- Total : **279**
-- Progression : **83.5%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins Windows ↔ Linux #175)
+- Total : **280**
+- Progression : **83.6%**
+- Dernière mise à jour : 01/11/2026 (audit scripts #214 hors fil de release ; toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins Windows ↔ Linux #175)
 
 ## À FAIRE (par priorité)
 
@@ -105,6 +105,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] Audit du 01/11/2026, scripts (#214, partie hors fil de release) : mise à jour en place (`dpkg --audit` non bloquant au démarrage, `.deb` installé sous son nom définitif et non `.part`, verrous dpkg jamais créés par `busy()`), initramfs (échecs `modprobe` visibles, applets `loadkmap`/`reboot`/`sync` vérifiées, squashfs reproductible via `-mkfs-time`/`-all-time`), shim `systemctl` (lignes Exec* confiées à `sh -c` sans `eval`, pid 0 jamais « vivant »), hook APT sans démarrage d'unités en chroot ou sous systemd, `winlux-hw-detect` sur `lsblk -P` (modèles et points de montage avec espaces, `DISK_COUNT` exact), points de restauration avec `/etc/shadow`/`gshadow`, `winlux-journal` (double « 0 »), `winlux-browsers` (trap avant le verrou), `winlux-launch-exe` (`shift` sans argument, C:\ = `WINLUX_DRIVE_C` comme le runtime), `winlux-tray` (capacité batterie illisible), `winlux-lock` (marqueur en `O_EXCL`), `winlux-native-config` (comptes système par `useradd`/`groupadd`), premier démarrage (`USER_GROUPS`, thème écrit dans `preferences.conf` lu par la session, fichier `autologin-user` orphelin retiré), installateur (`/etc/winlux/locale.conf` et `input.conf` écrits, lanceur sans `pkexec` : élévation faite par l'installateur lui-même), paquet APT (`usr/lib/winlux/python`, `xorg.conf.d` Winlux, thumbnailer), menu Whisker (`lock-now`, `poweroff`), dossiers XDG réels dans Outils système, `Cargo.toml` alignés sur `VERSION` (0.2.12).
 - [x] Applis Windows intégrées au bureau (#152) : associations de fichiers lues dans le registre (HKCU/HKLM\Software\Classes et HKCR, ProgID, OpenWithProgids, OpenWithList, SupportedTypes, UserChoice) → lanceurs cachés `winlux-assoc-*.desktop` (double-clic, « Ouvrir avec » de Thunar et xdg-open, document passé en chemin Windows), type MIME créé pour les extensions inconnues, programme par défaut seulement si l'utilisateur n'a rien choisi ; raccourcis .lnk du Bureau ouvrables (cible, arguments, dossier de travail) ; icônes des .exe/.lnk par thumbnailer tumbler ; fenêtre « Applications par défaut » (Paramètres > Applications) en FR/EN/ES/DE. Zone de notification : `Shell_NotifyIconA/W` (NIM_ADD/MODIFY/DELETE/SETVERSION, infobulle, état caché, bulles par notify-send, clics transmis au `uCallbackMessage` en format classique ou version 4) via l'assistant GTK `winlux-notify-icon`, et zone « systray » ajoutée au panneau (y compris aux panneaux déjà configurés).
 - [x] Gestionnaire des tâches complet façon Windows 11 : processus groupés avec .exe reconnus, tri, recherche, fin de tâche et priorité réelles (`OpenProcess`/`TerminateProcess`/`SetPriorityClass` sur tout processus), graphiques processeur/mémoire/disques/réseau/GPU, historique des applications, démarrage XDG activable, utilisateurs, détails, services (masqués sans systemd), vitesse d'actualisation ; ouvert par Ctrl+Maj+Échap (#178).
 - [x] Mode jeu : un `.exe` Direct3D/OpenGL/Vulkan/XInput déclenche `winlux --gamemode daemon` (gouverneur performances sur secteur, priorité du jeu, sauvegardes et mises à jour en pause et en basse priorité, swappiness et compactage mémoire, veille bloquée), tout est restauré à la fermeture ; réglage dans Paramètres > Processeur, actions affichées selon le matériel (#153, `docs/PERFORMANCES.md`).
