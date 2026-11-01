@@ -4,6 +4,7 @@ case "${1:-}" in
     context) exec /usr/bin/xdotool key --clearmodifiers super+F10 ;;
     menu) exec /usr/bin/winlux-start-menu ;;
     refresh) /usr/bin/winlux-applications refresh; exec /usr/bin/xrefresh ;;
+    paste) exec /usr/bin/winlux-desktop-paste ;;
     folder|text)
         directory="${HOME:-/root}/Bureau"; mkdir -p "$directory"
         if test "$1" = folder; then name='Nouveau dossier'; suffix=; else name='Nouveau document'; suffix=.txt; fi
