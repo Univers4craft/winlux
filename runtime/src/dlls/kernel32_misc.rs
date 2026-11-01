@@ -567,6 +567,31 @@ pub unsafe extern "win64" fn format_message_w(
     std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
     n
 }
+/// LocalAlloc : mémoire du tas du processus ; LMEM_ZEROINIT (0x40) la met à
+/// zéro. LMEM_MOVEABLE renvoie aussi un pointeur, que LocalLock rend tel quel.
+pub unsafe extern "win64" fn local_alloc(flags: u32, size: usize) -> *mut c_void {
+    let heap_flags = if flags & 0x40 != 0 { 8 } else { 0 };
+    crate::dlls::kernel32::heap_alloc(0, heap_flags, size.max(1))
+}
+pub unsafe extern "win64" fn local_realloc(p: *mut c_void, size: usize, flags: u32) -> *mut c_void {
+    if p.is_null() {
+        return local_alloc(flags, size);
+    }
+    let heap_flags = if flags & 0x40 != 0 { 8 } else { 0 };
+    crate::dlls::kernel32::heap_realloc(0, heap_flags, p, size.max(1))
+}
+pub extern "win64" fn local_lock(p: *mut c_void) -> *mut c_void {
+    p
+}
+pub extern "win64" fn local_unlock(_p: *mut c_void) -> i32 {
+    0
+}
+pub unsafe extern "win64" fn local_size(p: *mut c_void) -> usize {
+    if p.is_null() {
+        return 0;
+    }
+    crate::dlls::kernel32::heap_size(0, 0, p)
+}
 pub unsafe extern "win64" fn local_free(p: *mut c_void) -> *mut c_void {
     if !p.is_null() {
         crate::dlls::kernel32::heap_free(0, 0, p);
@@ -680,6 +705,8 @@ pub fn exports() -> crate::dlls::Exports {
         "lstrcatA" => fn lstrcat_a, "lstrcatW" => fn lstrcat_w, "lstrcmpA" => fn lstrcmp_a, "lstrcmpiA" => fn lstrcmpi_a,
         "lstrcmpW" => fn lstrcmp_w, "lstrcmpiW" => fn lstrcmpi_w,
         "FormatMessageA" => fn format_message_a, "FormatMessageW" => fn format_message_w, "LocalFree" => fn local_free,
+        "LocalAlloc" => fn local_alloc, "LocalReAlloc" => fn local_realloc, "LocalLock" => fn local_lock,
+        "LocalUnlock" => fn local_unlock, "LocalSize" => fn local_size,
         "GetCurrentPackageId" => fn get_current_package_id,
         "GetCurrentPackageFullName" => fn get_current_package_name,
         "GetCurrentPackageFamilyName" => fn get_current_package_name,

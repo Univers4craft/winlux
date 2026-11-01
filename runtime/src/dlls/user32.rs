@@ -321,6 +321,9 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
         // WM_QUIT (posted par PostQuitMessage) termine la boucle (renvoie 0).
         if let Some(m) = gui::take_message(&q, hwnd, min, max) {
             if m.message == gui::WM_QUIT {
+                // Win32 renseigne le MSG (wParam = code de sortie) avant de
+                // renvoyer 0 : `return msg.wParam` dans l'appli lit cette valeur.
+                write_msg(out, &m);
                 return 0;
             }
             gui::observe_key_message(&m);
@@ -360,9 +363,14 @@ pub unsafe extern "win64" fn peek_message_a(
     if remove & 0x1 != 0 {
         if let Some(m) = gui::take_message(&q, hwnd, min, max) {
             if m.message == gui::WM_QUIT {
-                // PM_REMOVE sur WM_QUIT : on le remet et on renvoie -1 (fin).
+                // Comme Win32 : le MSG est rempli et la fonction renvoie « vrai »
+                // afin que la boucle classique `while (PeekMessage(...)) { if
+                // (msg.message == WM_QUIT) break; }` voie bien WM_QUIT. Le
+                // message reste en tête de file pour qu'un GetMessage ultérieur
+                // termine lui aussi.
+                write_msg(out, &m);
                 gui::prepend_message(&q, m);
-                return -1;
+                return 1;
             }
             gui::observe_key_message(&m);
             write_msg(out, &m);
@@ -916,15 +924,23 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
     use crate::dlls::gui::theme;
     let _ = theme::ACCENT; // thème présent et lié
     match index {
-        0 | 16 | 78 => gui::screen_size().0, // SM_CXSCREEN, SM_CXFULLSCREEN, SM_CXVIRTUALSCREEN
-        1 | 17 | 79 => gui::screen_size().1, // SM_CYSCREEN, SM_CYFULLSCREEN, SM_CYVIRTUALSCREEN
-        2 => 4,                              // SM_CYCAPTION
-        3 => 4,                              // SM_CXBORDER
-        4 => 4,                              // SM_CYBORDER
-        7 => 32,                             // SM_CYHSCROLL
-        8 => 16,                             // SM_CYVSCROLL
-        90 => 96,                            // LOGPIXELSX
-        91 => 96,                            // LOGPIXELSY
+        // SM_CXSCREEN/SM_CYSCREEN : écran principal, comme Windows.
+        0 | 16 => crate::dlls::monitors::list()[0].rect.width(),
+        1 | 17 => crate::dlls::monitors::list()[0].rect.height(),
+        // Écran virtuel (tous les écrans) et nombre d'écrans.
+        76 => crate::dlls::monitors::virtual_rect().left,
+        77 => crate::dlls::monitors::virtual_rect().top,
+        78 => crate::dlls::monitors::virtual_rect().width(),
+        79 => crate::dlls::monitors::virtual_rect().height(),
+        80 => crate::dlls::monitors::count(), // SM_CMONITORS
+        81 => 1,                              // SM_SAMEDISPLAYFORMAT
+        2 => 4,                               // SM_CYCAPTION
+        3 => 4,                               // SM_CXBORDER
+        4 => 4,                               // SM_CYBORDER
+        7 => 32,                              // SM_CYHSCROLL
+        8 => 16,                              // SM_CYVSCROLL
+        90 => 96,                             // LOGPIXELSX
+        91 => 96,                             // LOGPIXELSY
         _ => 0,
     }
 }
@@ -972,6 +988,89 @@ pub unsafe extern "win64" fn message_box_w(
         crate::dlls::wstr(text)
     );
     1
+}
+
+/// Station de fenêtres du processus : une seule, interactive (« WinSta0 »).
+const WINSTA0: usize = 0x5753_0001;
+
+pub extern "win64" fn get_process_window_station() -> usize {
+    WINSTA0
+}
+
+/// GetUserObjectInformation(A/W) : UOI_FLAGS (1) indique une station
+/// visible (WSF_VISIBLE), UOI_NAME (2) son nom.
+unsafe fn user_object_information(
+    obj: usize,
+    index: i32,
+    out: *mut u8,
+    len: u32,
+    needed: *mut u32,
+    wide: bool,
+) -> i32 {
+    if obj == 0 {
+        crate::process::set_last_error(6);
+        return 0;
+    }
+    let data: Vec<u8> = match index {
+        1 => [0u32, 0, 1].iter().flat_map(|v| v.to_le_bytes()).collect(),
+        2 => {
+            let name = if obj == WINSTA0 { "WinSta0" } else { "Default" };
+            if wide {
+                name.encode_utf16()
+                    .chain(Some(0))
+                    .flat_map(|c| c.to_le_bytes())
+                    .collect()
+            } else {
+                name.bytes().chain(Some(0)).collect()
+            }
+        }
+        _ => {
+            crate::process::set_last_error(87);
+            return 0;
+        }
+    };
+    if !needed.is_null() {
+        *needed = data.len() as u32;
+    }
+    if out.is_null() || (len as usize) < data.len() {
+        crate::process::set_last_error(122);
+        return 0;
+    }
+    std::ptr::copy_nonoverlapping(data.as_ptr(), out, data.len());
+    1
+}
+pub unsafe extern "win64" fn get_user_object_information_w(
+    obj: usize,
+    index: i32,
+    out: *mut u8,
+    len: u32,
+    needed: *mut u32,
+) -> i32 {
+    user_object_information(obj, index, out, len, needed, true)
+}
+pub unsafe extern "win64" fn get_user_object_information_a(
+    obj: usize,
+    index: i32,
+    out: *mut u8,
+    len: u32,
+    needed: *mut u32,
+) -> i32 {
+    user_object_information(obj, index, out, len, needed, false)
+}
+
+/// CallWindowProc(A/W) : appelle la procédure de fenêtre précédente
+/// (sous-classement par SetWindowLongPtr(GWLP_WNDPROC)).
+pub unsafe extern "win64" fn call_window_proc(
+    prev: usize,
+    hwnd: usize,
+    msg: u32,
+    wparam: usize,
+    lparam: isize,
+) -> isize {
+    if prev == 0 {
+        return 0;
+    }
+    gui::call_wndproc(prev, hwnd, msg, wparam, lparam)
 }
 
 // =====================================================================
@@ -2320,59 +2419,6 @@ pub extern "win64" fn unregister_class_w(_name: *const u16, _instance: usize) ->
     1
 }
 
-pub extern "win64" fn monitor_from_window(_hwnd: usize, _flags: u32) -> usize {
-    1 // Handle de moniteur factice
-}
-
-pub extern "win64" fn monitor_from_point(_pt_x: i32, _pt_y: i32, _flags: u32) -> usize {
-    1
-}
-
-pub unsafe extern "win64" fn get_monitor_info_a(monitor: usize, info: *mut c_void) -> i32 {
-    let _ = monitor;
-    if info.is_null() {
-        return 0;
-    }
-    let (w, h) = gui::screen_size();
-    // MONITORINFO : cbSize(4) + rcMonitor(16) + rcWork(16) + dwFlags(4) = 40 bytes
-    let ptr = info as *mut u8;
-    let size = *(ptr as *const u32);
-    if size >= 40 {
-        let rc = ptr.add(4) as *mut Rect;
-        *rc = Rect {
-            left: 0,
-            top: 0,
-            right: w,
-            bottom: h,
-        };
-        let work = ptr.add(20) as *mut Rect;
-        *work = Rect {
-            left: 0,
-            top: 0,
-            right: w,
-            bottom: h,
-        };
-        let flags = ptr.add(36) as *mut u32;
-        *flags = 1; // MONITORINFOF_PRIMARY
-    }
-    1
-}
-
-pub unsafe extern "win64" fn get_monitor_info_w(monitor: usize, info: *mut c_void) -> i32 {
-    get_monitor_info_a(monitor, info)
-}
-
-pub extern "win64" fn enum_display_monitors(
-    _hdc: usize,
-    _clip: *const Rect,
-    _proc: usize,
-    _data: isize,
-) -> i32 {
-    // Appeler le callback avec notre unique moniteur
-    // Simplification : retourne 1 (succès) sans appeler
-    1
-}
-
 pub extern "win64" fn get_dc_ex(_hwnd: usize, _rgn: usize, _flags: u32) -> usize {
     gui::create_dc(_hwnd)
 }
@@ -2436,6 +2482,9 @@ pub fn exports() -> crate::dlls::Exports {
         "UnregisterClassA"=>fn unregister_class_a, "UnregisterClassW"=>fn unregister_class_w,
         "CreateWindowExA"=>fn create_window_ex_a, "CreateWindowExW"=>fn create_window_ex_w,
         "DefWindowProcA"=>fn def_window_proc_a, "DefWindowProcW"=>fn def_window_proc_w,
+        "CallWindowProcA"=>fn call_window_proc, "CallWindowProcW"=>fn call_window_proc,
+        "GetProcessWindowStation"=>fn get_process_window_station,
+        "GetUserObjectInformationW"=>fn get_user_object_information_w, "GetUserObjectInformationA"=>fn get_user_object_information_a,
         // --- Message loop ---
         "GetMessageA"=>fn get_message_a, "GetMessageW"=>fn get_message_w,
         "PeekMessageA"=>fn peek_message_a, "PeekMessageW"=>fn peek_message_w,
@@ -2579,9 +2628,11 @@ pub fn exports() -> crate::dlls::Exports {
         "SetPropA"=>fn set_prop_a, "SetPropW"=>fn set_prop_w,
         "RemovePropA"=>fn remove_prop_a, "RemovePropW"=>fn remove_prop_w,
         // --- Monitor ---
-        "MonitorFromWindow"=>fn monitor_from_window, "MonitorFromPoint"=>fn monitor_from_point,
-        "GetMonitorInfoA"=>fn get_monitor_info_a, "GetMonitorInfoW"=>fn get_monitor_info_w,
-        "EnumDisplayMonitors"=>fn enum_display_monitors,
+        "MonitorFromWindow"=>fn crate::dlls::monitors::monitor_from_window,
+        "MonitorFromPoint"=>fn crate::dlls::monitors::monitor_from_point_packed,
+        "MonitorFromRect"=>fn crate::dlls::monitors::monitor_from_rect,
+        "GetMonitorInfoA"=>fn crate::dlls::monitors::get_monitor_info_a, "GetMonitorInfoW"=>fn crate::dlls::monitors::get_monitor_info_w,
+        "EnumDisplayMonitors"=>fn crate::dlls::monitors::enum_display_monitors,
         // --- Deferred window pos ---
         "BeginDeferWindowPos"=>fn begin_defer_window_pos,
         "DeferWindowPos"=>fn defer_window_pos,
@@ -2589,5 +2640,43 @@ pub fn exports() -> crate::dlls::Exports {
         // --- Misc ---
         "CharNextA"=>fn char_next_a, "CharPrevA"=>fn char_prev_a,
         "wsprintfA"=>fn wsprintfa, "wsprintfW"=>fn wsprintfw,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    unsafe extern "win64" fn echo_proc(_h: usize, msg: u32, w: usize, l: isize) -> isize {
+        msg as isize + w as isize + l
+    }
+
+    #[test]
+    fn station_interactive_et_procedure_precedente() {
+        unsafe {
+            let ws = get_process_window_station();
+            let mut flags = [0u8; 12];
+            let mut need = 0;
+            assert_eq!(
+                get_user_object_information_w(ws, 1, flags.as_mut_ptr(), 12, &mut need),
+                1
+            );
+            assert_eq!((need, flags[8] & 1), (12, 1)); // WSF_VISIBLE
+            let mut name = [0u8; 4];
+            assert_eq!(
+                get_user_object_information_w(ws, 2, name.as_mut_ptr(), 4, &mut need),
+                0
+            );
+            assert_eq!(need, 16); // « WinSta0 » + zéro, en UTF-16
+            assert_eq!(
+                get_user_object_information_w(0, 1, flags.as_mut_ptr(), 12, &mut need),
+                0
+            );
+            assert_eq!(
+                call_window_proc(echo_proc as *const () as usize, 1, 2, 3, 4),
+                9
+            );
+            assert_eq!(call_window_proc(0, 1, 2, 3, 4), 0);
+        }
     }
 }
