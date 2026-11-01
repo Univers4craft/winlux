@@ -61,14 +61,25 @@ const CTX_RIP: usize = 0xF8;
 const CTX_SIZE: usize = 1232;
 
 // ── PE caller context (set by naked cxa_throw / _Unwind_Resume) ─────
-use std::sync::atomic::{AtomicU64, Ordering};
-pub static THROW_CALLER_RIP: AtomicU64 = AtomicU64::new(0);
-pub static THROW_CALLER_RSP: AtomicU64 = AtomicU64::new(0);
+// Par thread : deux threads qui lèvent une exception en même temps ne
+// doivent pas se voler leur contexte de départ.
+use std::cell::Cell;
+thread_local! {
+    static THROW_CALLER_RIP: Cell<u64> = const { Cell::new(0) };
+    static THROW_CALLER_RSP: Cell<u64> = const { Cell::new(0) };
+}
 
 #[inline(never)]
 pub unsafe extern "win64" fn store_throw_ctx(rip: u64, rsp: u64) {
-    THROW_CALLER_RIP.store(rip, Ordering::Relaxed);
-    THROW_CALLER_RSP.store(rsp, Ordering::Relaxed);
+    let _ = THROW_CALLER_RIP.try_with(|c| c.set(rip));
+    let _ = THROW_CALLER_RSP.try_with(|c| c.set(rsp));
+}
+
+fn throw_ctx() -> (u64, u64) {
+    (
+        THROW_CALLER_RIP.try_with(Cell::get).unwrap_or(0),
+        THROW_CALLER_RSP.try_with(Cell::get).unwrap_or(0),
+    )
 }
 
 // ── _Unwind_Context ──────────────────────────────────────────────────
@@ -102,8 +113,7 @@ unsafe fn ctx_set(c: *mut u8, off: usize, v: u64) {
 unsafe fn phase1(exc: *mut u8) -> UnwindReason {
     let mut uc = std::mem::zeroed::<UnwindContext>();
     // Start directly from the PE frame that threw (set by naked cxa_throw).
-    let throw_rip = THROW_CALLER_RIP.load(Ordering::Relaxed);
-    let throw_rsp = THROW_CALLER_RSP.load(Ordering::Relaxed);
+    let (throw_rip, throw_rsp) = throw_ctx();
     if throw_rip != 0 {
         ctx_set(uc.ctx.as_mut_ptr(), CTX_RIP, throw_rip);
         ctx_set(uc.ctx.as_mut_ptr(), CTX_RSP, throw_rsp);
@@ -180,8 +190,7 @@ unsafe fn phase2(exc: *mut u8) -> UnwindReason {
     let target_frame = (exc.add(UE_PRIVATE1) as *const u64).read_unaligned();
 
     let mut uc = std::mem::zeroed::<UnwindContext>();
-    let throw_rip = THROW_CALLER_RIP.load(Ordering::Relaxed);
-    let throw_rsp = THROW_CALLER_RSP.load(Ordering::Relaxed);
+    let (throw_rip, throw_rsp) = throw_ctx();
     if throw_rip != 0 {
         ctx_set(uc.ctx.as_mut_ptr(), CTX_RIP, throw_rip);
         ctx_set(uc.ctx.as_mut_ptr(), CTX_RSP, throw_rsp);
@@ -428,7 +437,7 @@ pub unsafe extern "win64" fn gxx_personality_seh0(
 
     let tt_encoding = p.read();
     p = p.add(1);
-    let _tt_base = if tt_encoding != 0xFF {
+    let tt_base = if tt_encoding != 0xFF {
         let (val, adv) = read_uleb128(p);
         p = p.add(adv);
         p as u64 + val
@@ -441,6 +450,7 @@ pub unsafe extern "win64" fn gxx_personality_seh0(
     let (cs_table_len, adv) = read_uleb128(p);
     p = p.add(adv);
     let cs_table_end = p as u64 + cs_table_len;
+    let action_table = cs_table_end as *const u8;
 
     // Walk the call-site table
     while (p as u64) < cs_table_end {
@@ -450,30 +460,133 @@ pub unsafe extern "win64" fn gxx_personality_seh0(
         p = p.add(adv);
         let (cs_lp, adv) = read_encoded(p, cs_encoding);
         p = p.add(adv);
-        let (_cs_action, adv) = read_uleb128(p);
+        let (cs_action, adv) = read_uleb128(p);
         p = p.add(adv);
 
-        if ip_offset >= cs_start && ip_offset < cs_start + cs_len {
-            if cs_lp == 0 {
+        if ip_offset < cs_start || ip_offset >= cs_start + cs_len {
+            continue;
+        }
+        if cs_lp == 0 {
+            return UnwindReason::ContinueUnwind as i32;
+        }
+        let landing_pad = lp_start + cs_lp;
+
+        // Filtrage par type : la table d'actions dit quels `catch` ce site
+        // possède ; seul un type qui correspond à l'exception levée (ou un
+        // `catch (...)`) arrête la recherche. Sans action, le site n'a que
+        // des nettoyages (destructeurs) : on y passe en phase 2 seulement.
+        let thrown = thrown_type_info(_exception_class, exc as *const u8);
+        let mut selector: u64 = 0;
+        let mut has_cleanup = cs_action == 0;
+        if cs_action != 0 {
+            let mut record = action_table.add((cs_action - 1) as usize);
+            loop {
+                let (filter, adv) = read_sleb128(record);
+                let disp_at = record.add(adv);
+                let (disp, _) = read_sleb128(disp_at);
+                if filter == 0 {
+                    has_cleanup = true;
+                } else if filter > 0 {
+                    let catch_type = type_table_entry(tt_base, tt_encoding, filter as u64);
+                    if catch_matches(catch_type, thrown) {
+                        selector = filter as u64;
+                        break;
+                    }
+                }
+                // filter < 0 : spécification d'exception, ignorée.
+                if disp == 0 {
+                    break;
+                }
+                record = disp_at.offset(disp as isize);
+            }
+        }
+
+        if actions & _UA_SEARCH_PHASE != 0 {
+            return if selector != 0 {
+                UnwindReason::HandlerFound as i32
+            } else {
+                UnwindReason::ContinueUnwind as i32
+            };
+        }
+        if actions & _UA_CLEANUP_PHASE != 0 {
+            if selector == 0 && !has_cleanup {
                 return UnwindReason::ContinueUnwind as i32;
             }
-            let landing_pad = lp_start + cs_lp;
-
-            if actions & _UA_SEARCH_PHASE != 0 {
-                return UnwindReason::HandlerFound as i32;
-            }
-            if actions & _UA_CLEANUP_PHASE != 0 {
-                // Set up landing pad
-                // GR 0 = RAX = exception object pointer
-                // GR 1 = RDX = type selector
-                ctx_set((*uc).ctx.as_mut_ptr(), CTX_RAX, exc as u64);
-                ctx_set((*uc).ctx.as_mut_ptr(), CTX_RDX, _cs_action);
-                ctx_set((*uc).ctx.as_mut_ptr(), CTX_RIP, landing_pad);
-                return UnwindReason::InstallContext as i32;
-            }
+            // Set up landing pad
+            // GR 0 = RAX = exception object pointer
+            // GR 1 = RDX = type selector (0 : nettoyage seul)
+            ctx_set((*uc).ctx.as_mut_ptr(), CTX_RAX, exc as u64);
+            ctx_set((*uc).ctx.as_mut_ptr(), CTX_RDX, selector);
+            ctx_set((*uc).ctx.as_mut_ptr(), CTX_RIP, landing_pad);
+            return UnwindReason::InstallContext as i32;
         }
     }
     UnwindReason::ContinueUnwind as i32
+}
+
+/// `std::type_info` de l'objet levé : lu dans l'en-tête __cxa_exception qui
+/// précède le _Unwind_Exception (exceptions GNU C++ uniquement).
+unsafe fn thrown_type_info(exception_class: u64, exc: *const u8) -> *const u8 {
+    const GXX_EXCEPTION_CLASS: u64 = u64::from_le_bytes(*b"GNUCC++\0");
+    const GXX_DEPENDENT_CLASS: u64 = u64::from_le_bytes(*b"GNUCC++\x01");
+    if exc.is_null()
+        || (exception_class != GXX_EXCEPTION_CLASS && exception_class != GXX_DEPENDENT_CLASS)
+    {
+        return std::ptr::null();
+    }
+    // Même disposition que libstdcpp.rs : exception_type à l'offset 0 de
+    // l'en-tête, qui fait 0x58 octets avant le _Unwind_Exception.
+    (exc.sub(0x58) as *const u64).read_unaligned() as *const u8
+}
+
+/// Entrée `index` de la table des types (indexée à rebours depuis `tt_base`).
+unsafe fn type_table_entry(tt_base: u64, tt_encoding: u8, index: u64) -> *const u8 {
+    if tt_base == 0 || tt_encoding == 0xFF {
+        return std::ptr::null();
+    }
+    let size = match tt_encoding & 0x0F {
+        0x02 => 2,
+        0x03 | 0x0B => 4,
+        _ => 8,
+    };
+    let at = (tt_base as *const u8).sub(size * index as usize);
+    let (mut value, _) = read_encoded(at, tt_encoding);
+    if value == 0 {
+        return std::ptr::null();
+    }
+    // DW_EH_PE_pcrel : relatif à l'adresse de l'entrée.
+    if tt_encoding & 0x70 == 0x10 {
+        value = value.wrapping_add(at as u64);
+    }
+    // DW_EH_PE_indirect : l'entrée contient l'adresse du pointeur.
+    if tt_encoding & 0x80 != 0 {
+        value = (value as *const u64).read_unaligned();
+    }
+    value as *const u8
+}
+
+/// Nom d'un `std::type_info` GNU : pointeur `const char*` juste après la vtable.
+unsafe fn type_info_name(ti: *const u8) -> &'static [u8] {
+    let name = (ti.add(8) as *const *const u8).read_unaligned();
+    if name.is_null() {
+        return &[];
+    }
+    // Un nom qui commence par '*' est unique par adresse ; on compare le texte.
+    let start = if *name == b'*' { name.add(1) } else { name };
+    std::slice::from_raw_parts(start, crate::printf::narrow_len(start))
+}
+
+/// Un `catch (T)` attrape l'exception si T est `...` (type nul) ou si les
+/// deux `type_info` ont le même nom décoré. Les conversions vers une classe
+/// de base ne sont pas tentées.
+unsafe fn catch_matches(catch_type: *const u8, thrown: *const u8) -> bool {
+    if catch_type.is_null() {
+        return true;
+    }
+    if thrown.is_null() {
+        return false;
+    }
+    catch_type == thrown || type_info_name(catch_type) == type_info_name(thrown)
 }
 
 // ── DWARF encoding helpers ──────────────────────────────────────────
@@ -495,7 +608,6 @@ unsafe fn read_uleb128(mut p: *const u8) -> (u64, usize) {
     (result, count)
 }
 
-#[allow(dead_code)]
 unsafe fn read_sleb128(mut p: *const u8) -> (i64, usize) {
     let mut result: i64 = 0;
     let mut shift = 0u32;

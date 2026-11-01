@@ -41,6 +41,15 @@ enum FileHandle {
     File(Arc<Mutex<File>>),
 }
 static HANDLES: OnceLock<Mutex<HashMap<usize, FileHandle>>> = OnceLock::new();
+/// Handles ouverts avec FILE_FLAG_OVERLAPPED : seuls ceux-là rendent
+/// ReadFile/WriteFile asynchrones quand un OVERLAPPED est fourni.
+static OVERLAPPED_HANDLES: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
+fn overlapped_handles() -> &'static Mutex<HashSet<usize>> {
+    OVERLAPPED_HANDLES.get_or_init(|| Mutex::new(HashSet::new()))
+}
+fn is_overlapped_handle(h: usize) -> bool {
+    lock(overlapped_handles()).contains(&h)
+}
 struct IoResult {
     done: bool,
     bytes: u32,
@@ -97,6 +106,10 @@ struct ThreadState {
     finished: bool,
     exit_code: u32,
     suspend_count: usize,
+    /// Identifiant Win32 du thread (son tid Linux, celui que lit
+    /// GetCurrentThreadId dans le thread) ; 0 tant que le thread n'a pas pris
+    /// la main une première fois.
+    win_tid: u32,
 }
 pub(crate) struct ThreadObject {
     state: Mutex<ThreadState>,
@@ -106,6 +119,46 @@ pub(crate) struct ThreadObject {
     /// Affinité ou priorité demandée avant le démarrage (thread suspendu).
     pub(crate) pending_cpus: Mutex<Option<Vec<usize>>>,
     pub(crate) priority: AtomicI32,
+    /// Contexte de retour vers le pont de thread (setjmp maison) : ExitThread
+    /// y saute pour terminer le thread proprement sans dérouler les trames
+    /// Windows, qui n'ont pas d'informations de déroulement Linux.
+    exit_jump: Mutex<Box<[u64; 8]>>,
+}
+
+core::arch::global_asm!(
+    ".globl winlux_thread_setjmp",
+    ".p2align 4",
+    "winlux_thread_setjmp:",
+    // RCX = tampon de 8 mots : rbx, rbp, r12-r15, rsp après retour, rip.
+    "mov [rcx], rbx",
+    "mov [rcx+8], rbp",
+    "mov [rcx+16], r12",
+    "mov [rcx+24], r13",
+    "mov [rcx+32], r14",
+    "mov [rcx+40], r15",
+    "lea rax, [rsp+8]",
+    "mov [rcx+48], rax",
+    "mov rax, [rsp]",
+    "mov [rcx+56], rax",
+    "xor eax, eax",
+    "ret",
+    ".globl winlux_thread_longjmp",
+    ".p2align 4",
+    "winlux_thread_longjmp:",
+    // RCX = tampon, RDX = valeur rendue par le second retour de setjmp.
+    "mov rbx, [rcx]",
+    "mov rbp, [rcx+8]",
+    "mov r12, [rcx+16]",
+    "mov r13, [rcx+24]",
+    "mov r14, [rcx+32]",
+    "mov r15, [rcx+40]",
+    "mov rsp, [rcx+48]",
+    "mov rax, rdx",
+    "jmp qword ptr [rcx+56]",
+);
+extern "win64" {
+    fn winlux_thread_setjmp(buf: *mut u64) -> u64;
+    fn winlux_thread_longjmp(buf: *mut u64, value: u64) -> !;
 }
 
 /// Cible Linux d'un handle de thread Win32.
@@ -346,6 +399,9 @@ pub(crate) fn duplicate_handle_impl(handle: usize) -> Option<usize> {
     let new_h = next_handle();
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .insert(new_h, FileHandle::File(Arc::new(Mutex::new(new_file))));
+    if is_overlapped_handle(handle) {
+        lock(overlapped_handles()).insert(new_h);
+    }
     Some(new_h)
 }
 fn post_iocp(port: &CompletionPort, packet: CompletionPacket) {
@@ -451,6 +507,78 @@ unsafe fn bytes_mut<'a>(p: *mut u8, len: usize) -> Option<&'a mut [u8]> {
 use super::lock;
 fn sync_gate() -> std::sync::MutexGuard<'static, ()> {
     lock(SYNC_GATE.get_or_init(|| Mutex::new(())))
+}
+
+/// ReadFile/WriteFile avec un OVERLAPPED sur un handle ouvert sans
+/// FILE_FLAG_OVERLAPPED : l'opération est synchrone, à la position donnée
+/// par l'OVERLAPPED (Windows ignore alors le pointeur de fichier courant).
+unsafe fn sync_io_at_overlapped(
+    h: usize,
+    buffer: usize,
+    len: u32,
+    done: *mut u32,
+    overlapped: usize,
+    is_write: bool,
+) -> i32 {
+    if !overlapped.is_multiple_of(std::mem::align_of::<Overlapped>()) || (len != 0 && buffer == 0) {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let file = {
+        let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())));
+        let Some(FileHandle::File(f)) = handles.get(&h) else {
+            crate::process::set_last_error(6);
+            return 0;
+        };
+        f.clone()
+    };
+    let ov = overlapped as *mut Overlapped;
+    let offset = ((*ov).offset_high as u64) << 32 | (*ov).offset as u64;
+    let mut f = lock(&file);
+    // Un tube n'a pas de position : on lit ou écrit simplement dans l'ordre.
+    let seekable = f.stream_position().is_ok();
+    if seekable {
+        if let Err(e) = f.seek(SeekFrom::Start(offset)) {
+            (*ov).internal = 0xC000_000D; // STATUS_INVALID_PARAMETER
+            crate::process::set_last_error(io_error_code(&e));
+            return 0;
+        }
+    }
+    let result = if is_write {
+        f.write(std::slice::from_raw_parts(
+            buffer as *const u8,
+            len as usize,
+        ))
+    } else {
+        f.read(std::slice::from_raw_parts_mut(
+            buffer as *mut u8,
+            len as usize,
+        ))
+    };
+    drop(f);
+    match result {
+        Ok(n) => {
+            (*ov).internal = 0;
+            (*ov).internal_high = n;
+            if !done.is_null() {
+                *done = n as u32;
+            }
+            if (*ov).event != 0 {
+                set_event((*ov).event);
+            }
+            1
+        }
+        Err(e) => {
+            let code = io_error_code(&e);
+            (*ov).internal = 0xC000_0001; // STATUS_UNSUCCESSFUL
+            (*ov).internal_high = 0;
+            if (*ov).event != 0 {
+                set_event((*ov).event);
+            }
+            crate::process::set_last_error(code);
+            0
+        }
+    }
 }
 
 fn start_overlapped_io(
@@ -883,7 +1011,10 @@ pub unsafe extern "win64" fn write_file(
         *written = 0;
     }
     if ov != 0 {
-        return start_overlapped_io(h, buf as usize, len, ov, true);
+        if is_overlapped_handle(h) {
+            return start_overlapped_io(h, buf as usize, len, ov, true);
+        }
+        return sync_io_at_overlapped(h, buf as usize, len, written, ov, true);
     }
     let Some(s) = bytes(buf, len as usize) else {
         crate::process::set_last_error(87);
@@ -954,13 +1085,19 @@ pub unsafe extern "win64" fn read_file(
         *read = 0;
     }
     if ov != 0 {
-        return start_overlapped_io(h, buf as usize, len, ov, false);
+        if is_overlapped_handle(h) {
+            return start_overlapped_io(h, buf as usize, len, ov, false);
+        }
+        return sync_io_at_overlapped(h, buf as usize, len, read, ov, false);
     }
     let Some(b) = bytes_mut(buf, len as usize) else {
         crate::process::set_last_error(87);
         return 0;
     };
     if h == (-10isize) as usize {
+        // Les invites écrites sans retour à la ligne doivent apparaître
+        // avant que le programme n'attende la saisie.
+        crate::dlls::crt_stdio::flush_console_output();
         return match std::io::stdin().read(b) {
             Ok(0) if !b.is_empty() && fd_is_pipe(0) => {
                 crate::process::set_last_error(109);
@@ -1101,6 +1238,9 @@ unsafe fn create_file_str(
     let h = next_handle();
     lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .insert(h, FileHandle::File(Arc::new(Mutex::new(f))));
+    if _flags & 0x4000_0000 != 0 {
+        lock(overlapped_handles()).insert(h);
+    }
     h
 }
 pub unsafe extern "win64" fn get_file_size(h: usize, high: *mut u32) -> u32 {
@@ -1558,15 +1698,37 @@ pub unsafe extern "win64" fn get_file_size_ex(h: usize, out: *mut i64) -> i32 {
     }
 }
 
-pub extern "win64" fn get_file_type(h: usize) -> u32 {
-    if h == (-10isize) as usize || h == (-11isize) as usize || h == (-12isize) as usize {
-        return 2;
+/// FILE_TYPE_DISK (1), FILE_TYPE_CHAR (2) ou FILE_TYPE_PIPE (3) d'après le
+/// descripteur Linux : une console est un caractère, un tube ou une socket
+/// un tube, le reste un disque.
+fn file_type_of_fd(fd: i32) -> u32 {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } != 0 {
+        return 0;
     }
-    if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).contains_key(&h) {
-        1
-    } else {
-        crate::process::set_last_error(6);
-        0
+    match st.st_mode & libc::S_IFMT {
+        libc::S_IFCHR => 2,
+        libc::S_IFIFO | libc::S_IFSOCK => 3,
+        _ => 1,
+    }
+}
+pub extern "win64" fn get_file_type(h: usize) -> u32 {
+    let std_fd = match h as isize {
+        -10 => Some(0),
+        -11 => Some(1),
+        -12 => Some(2),
+        _ => None,
+    };
+    let fd = std_fd.or_else(|| fd_of_handle(h));
+    match fd.map(file_type_of_fd) {
+        Some(0) | None => {
+            crate::process::set_last_error(6);
+            0
+        }
+        Some(kind) => {
+            crate::process::set_last_error(0);
+            kind
+        }
     }
 }
 
@@ -2215,26 +2377,35 @@ pub extern "win64" fn free_library(module: usize) -> i32 {
         crate::process::set_last_error(5);
         return 0;
     }
-    let mut mods = crate::loader::MODULES.lock().unwrap();
-    if let Some(m) = mods.iter_mut().find(|m| m.base == module) {
+    // Le compteur est décrémenté sous MODULES, mais DllMain(DLL_PROCESS_DETACH)
+    // est appelé verrou relâché : il peut lui-même charger ou libérer des
+    // modules, ou créer des threads qui lisent la liste.
+    let detach = {
+        let mut mods = crate::loader::MODULES.lock().unwrap();
+        let Some(m) = mods.iter_mut().find(|m| m.base == module) else {
+            crate::process::set_last_error(6);
+            return 0;
+        };
         if m.refcount == 0 {
             crate::process::set_last_error(5);
             return 0;
         }
         m.refcount -= 1;
-        if m.refcount == 0 {
-            if let Some(entry) = m.entry() {
-                let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
-                    unsafe { std::mem::transmute(entry) };
-                let _ = dllmain(m.base, 0, 0);
-            }
-            // Ne pas démapper/retirer physiquement pour l'instant pour rester sûr ;
-            // on laisse la DLL chargée mais le compteur est à zéro.
+        if m.refcount == 0 && m.initialized {
+            m.initialized = false;
+            m.entry().map(|entry| (entry, m.base))
+        } else {
+            None
         }
-        return 1;
+    };
+    if let Some((entry, base)) = detach {
+        let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
+            unsafe { std::mem::transmute(entry) };
+        let _ = dllmain(base, 0, 0);
+        // Ne pas démapper/retirer physiquement pour l'instant pour rester sûr ;
+        // on laisse la DLL chargée mais le compteur est à zéro.
     }
-    crate::process::set_last_error(6);
-    0
+    1
 }
 pub extern "win64" fn get_current_process() -> usize {
     (-1isize) as usize
@@ -2403,18 +2574,18 @@ pub unsafe extern "win64" fn heap_realloc(
         crate::process::set_last_error(87);
         return std::ptr::null_mut();
     }
-    let old = lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())))
-        .get(&(p as usize))
-        .copied();
-    let Some(old) = old else {
+    // Tout sous le verrou du tas : un HeapFree/HeapSize concurrent sur le
+    // même bloc ne voit jamais l'ancien pointeur après le realloc.
+    let mut allocations = lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let Some(old) = allocations.get(&(p as usize)).copied() else {
         crate::process::set_last_error(87);
         return std::ptr::null_mut();
     };
     let q = libc::realloc(p, size.max(1));
     if q.is_null() {
+        crate::process::set_last_error(8);
         return q;
     }
-    let mut allocations = lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
     allocations.remove(&(p as usize));
     allocations.insert(q as usize, size.max(1));
     if flags & 8 != 0 && size > old {
@@ -2442,14 +2613,23 @@ pub(crate) fn create_global_memory(
     flags: u32,
 ) -> Option<(usize, Arc<Mutex<GlobalMemory>>)> {
     let mut bytes = Vec::new();
-    bytes.try_reserve_exact(size).ok()?;
+    // Au moins un octet de capacité : le pointeur d'un bloc GMEM_FIXED sert
+    // de handle et doit être unique même pour une taille nulle.
+    bytes.try_reserve_exact(size.max(1)).ok()?;
     bytes.resize(size, 0);
+    // GMEM_FIXED (bit GMEM_MOVEABLE = 0x2 absent) : le handle est le
+    // pointeur lui-même, utilisable directement et rendu tel quel par
+    // GlobalLock. GMEM_MOVEABLE garde un numéro de handle opaque.
+    let handle = if flags & 0x2 == 0 {
+        bytes.as_ptr() as usize
+    } else {
+        next_handle()
+    };
     let memory = Arc::new(Mutex::new(GlobalMemory {
         bytes,
         locks: 0,
         flags,
     }));
-    let handle = next_handle();
     lock(GLOBAL_MEMORY.get_or_init(|| Mutex::new(HashMap::new())))
         .insert(handle, Arc::clone(&memory));
     Some((handle, memory))
@@ -2478,14 +2658,27 @@ pub extern "win64" fn global_realloc(handle: usize, size: usize, flags: u32) -> 
         crate::process::set_last_error(6);
         return 0;
     };
-    let mut memory = lock(&memory);
-    let old = memory.bytes.len();
-    if size > old && memory.bytes.try_reserve_exact(size - old).is_err() {
+    let mut memory_guard = lock(&memory);
+    let old = memory_guard.bytes.len();
+    if size > old && memory_guard.bytes.try_reserve_exact(size - old).is_err() {
         crate::process::set_last_error(8);
         return 0;
     }
-    memory.bytes.resize(size, 0);
-    memory.flags = flags;
+    memory_guard.bytes.resize(size, 0);
+    // GMEM_MODIFY (0x80) change seulement les attributs.
+    if flags & 0x80 == 0 {
+        memory_guard.flags = (memory_guard.flags & 0x2) | (flags & !0x2);
+    }
+    let fixed = memory_guard.flags & 0x2 == 0;
+    let new_ptr = memory_guard.bytes.as_ptr() as usize;
+    drop(memory_guard);
+    if fixed && new_ptr != handle {
+        // Bloc fixe déplacé : le nouveau pointeur devient le handle.
+        let mut table = lock(GLOBAL_MEMORY.get_or_init(|| Mutex::new(HashMap::new())));
+        table.remove(&handle);
+        table.insert(new_ptr, memory);
+        return new_ptr;
+    }
     handle
 }
 pub extern "win64" fn global_lock(handle: usize) -> *mut c_void {
@@ -3408,54 +3601,66 @@ pub unsafe extern "win64" fn create_thread(
         crate::process::set_last_error(if start == 0 { 87 } else { 50 });
         return 0;
     }
-    let tid = NEXT_THREAD.fetch_add(1, Ordering::Relaxed);
+    let seq = NEXT_THREAD.fetch_add(1, Ordering::Relaxed);
     let state = Arc::new(ThreadObject {
         state: Mutex::new(ThreadState {
             finished: false,
             exit_code: 259,
             suspend_count: usize::from(flags & 4 != 0),
+            win_tid: 0,
         }),
         changed: Condvar::new(),
         os_tid: AtomicI32::new(0),
         pending_cpus: Mutex::new(None),
         priority: AtomicI32::new(0),
+        exit_jump: Mutex::new(Box::new([0; 8])),
     });
     let handle = add_sync(SyncHandle::Thread(state.clone()), None);
     let f: extern "win64" fn(usize) -> u32 = std::mem::transmute(start);
-    let mut builder = std::thread::Builder::new().name(format!("win-thread-{tid}"));
+    let mut builder = std::thread::Builder::new().name(format!("win-thread-{seq}"));
     if stack != 0 {
         builder = builder.stack_size(stack.max(64 * 1024));
     }
+    let thread = state.clone();
     if builder
         .spawn(move || {
-            let mut s = lock(&state.state);
+            let os_tid = libc::syscall(libc::SYS_gettid) as i32;
+            let mut s = lock(&thread.state);
+            // L'identifiant rendu par CreateThread est celui que
+            // GetCurrentThreadId donnera dans le thread : le créateur attend
+            // qu'il soit connu, même pour un thread créé suspendu.
+            s.win_tid = os_tid as u32;
+            thread.changed.notify_all();
             while s.suspend_count != 0 {
-                s = state
+                s = thread
                     .changed
                     .wait(s)
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
             }
             drop(s);
-            let os_tid = libc::syscall(libc::SYS_gettid) as i32;
             {
                 // Même verrou que SetThreadAffinityMask/SetThreadPriority :
                 // une demande faite pendant le démarrage n'est jamais perdue.
-                let mut pending = lock(&state.pending_cpus);
+                let mut pending = lock(&thread.pending_cpus);
                 if let Some(cpus) = pending.take() {
                     crate::cpu::set_affinity(os_tid, &cpus);
                 }
-                super::kernel32_cpu::thread_started(os_tid, state.priority.load(Ordering::Relaxed));
-                state.os_tid.store(os_tid, Ordering::Release);
+                super::kernel32_cpu::thread_started(
+                    os_tid,
+                    thread.priority.load(Ordering::Relaxed),
+                );
+                thread.os_tid.store(os_tid, Ordering::Release);
             }
+            CURRENT_THREAD.with(|c| *c.borrow_mut() = Some(thread.clone()));
             crate::process::thread_attach_current();
-            let code = f(param);
-            crate::process::thread_detach_current();
-            release_iocp_slots_for_current_thread();
-            let _gate = sync_gate();
-            let mut s = lock(&state.state);
-            s.exit_code = code;
-            s.finished = true;
-            state.changed.notify_all();
+            let jump: *mut u64 = lock(&thread.exit_jump).as_mut_ptr();
+            // Second retour (valeur 1) : ExitThread a déjà enregistré le code
+            // et signalé le handle ; le thread se termine simplement ici.
+            if winlux_thread_setjmp(jump) == 0 {
+                let code = f(param);
+                finish_current_thread(code);
+            }
+            std::hint::black_box(&thread);
         })
         .is_err()
     {
@@ -3463,10 +3668,62 @@ pub unsafe extern "win64" fn create_thread(
         crate::process::set_last_error(8);
         return 0;
     }
+    let tid = {
+        let mut s = lock(&state.state);
+        while s.win_tid == 0 {
+            s = state
+                .changed
+                .wait(s)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        s.win_tid
+    };
     if !id.is_null() {
         *id = tid;
     }
     handle
+}
+
+thread_local! {
+    /// Objet de thread Win32 du thread courant (None pour le thread
+    /// principal et les threads Rust internes).
+    static CURRENT_THREAD: std::cell::RefCell<Option<Arc<ThreadObject>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Termine le thread Win32 courant : rappels DLL_THREAD_DETACH, libération
+/// du TEB, puis signalement du handle avec son code de sortie. Appelé à la
+/// fin naturelle de la procédure du thread et par ExitThread.
+/// `ExitThread` : enregistre le code, signale le handle puis revient au pont
+/// de thread par le contexte sauvé à son démarrage. Sur un thread qui n'a
+/// pas été créé par CreateThread (thread principal, threads internes), on
+/// retombe sur pthread_exit.
+pub(crate) fn exit_current_thread(code: u32) -> ! {
+    let jump = CURRENT_THREAD
+        .try_with(|c| c.borrow().as_ref().map(|t| lock(&t.exit_jump).as_mut_ptr()))
+        .ok()
+        .flatten();
+    finish_current_thread(code);
+    match jump {
+        Some(jump) => unsafe { winlux_thread_longjmp(jump, 1) },
+        None => unsafe { libc::pthread_exit(code as usize as *mut c_void) },
+    }
+}
+
+pub(crate) fn finish_current_thread(code: u32) {
+    crate::process::thread_detach_current();
+    release_iocp_slots_for_current_thread();
+    let thread = CURRENT_THREAD
+        .try_with(|c| c.borrow_mut().take())
+        .ok()
+        .flatten();
+    if let Some(thread) = thread {
+        let _gate = sync_gate();
+        let mut s = lock(&thread.state);
+        s.exit_code = code;
+        s.finished = true;
+        thread.changed.notify_all();
+    }
 }
 pub(crate) fn split_windows_command_line(line: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -4154,8 +4411,10 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         .is_some()
     {
         lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&handle);
+        lock(overlapped_handles()).remove(&handle);
         1
     } else if crate::dlls::mmap::close_mapping(handle) || remove_sync(handle) {
+        remove_waitable_timer(handle);
         1
     } else {
         crate::process::set_last_error(6);
@@ -4554,13 +4813,17 @@ pub unsafe extern "win64" fn get_module_file_name_a(module: usize, buf: *mut u8,
         crate::process::set_last_error(122);
         return 0;
     }
-    let ret = write_a_text(&s, buf, size);
-    if ret > size {
+    let b = crate::dlls::encode_ansi(&s);
+    if b.len() >= size as usize {
+        // Tampon trop petit : chemin tronqué, terminé, nSize renvoyé et
+        // ERROR_INSUFFICIENT_BUFFER (comportement Windows XP et suivants).
+        let n = size as usize - 1;
+        std::ptr::copy_nonoverlapping(b.as_ptr(), buf, n);
+        *buf.add(n) = 0;
         crate::process::set_last_error(122);
-        0
-    } else {
-        ret
+        return size;
     }
+    write_a_text(&s, buf, size)
 }
 pub unsafe extern "win64" fn get_file_attributes_a(path: *const u8) -> u32 {
     if path.is_null() {
@@ -4743,13 +5006,15 @@ pub unsafe extern "win64" fn get_module_file_name_w(
         crate::process::set_last_error(122);
         return 0;
     }
-    let ret = write_w_text(&s, buf, size);
-    if ret > size {
+    let w: Vec<u16> = s.encode_utf16().collect();
+    if w.len() >= size as usize {
+        let n = size as usize - 1;
+        std::ptr::copy_nonoverlapping(w.as_ptr(), buf, n);
+        *buf.add(n) = 0;
         crate::process::set_last_error(122);
-        0
-    } else {
-        ret
+        return size;
     }
+    write_w_text(&s, buf, size)
 }
 pub unsafe extern "win64" fn get_file_attributes_w(path: *const u16) -> u32 {
     let s = match cstring_from_wide(path) {
@@ -5319,18 +5584,37 @@ pub extern "win64" fn find_close(handle: usize) -> i32 {
 }
 
 // --- SRW Locks (Slim Reader/Writer) ---
-// SRW Lock : atomic spinlock (state: -1 = exclusive, 0 = free, >0 = shared count)
-struct SrwLockState {
-    state: AtomicI32,
+// Un SRWLOCK Windows est un seul mot dont on ne touche pas le contenu : l'état
+// réel vit dans une table indexée par l'adresse du verrou, partagée avec les
+// RtlAcquireSRWLock* de ntdll. L'attente est bloquante (Mutex + Condvar),
+// pas un spin : un thread qui attend un verrou tenu longtemps ne consomme pas
+// de processeur.
+struct SrwInner {
+    /// Un écrivain détient le verrou.
+    exclusive: bool,
+    /// Nombre de lecteurs qui le détiennent.
+    shared: u32,
+    /// Écrivains en attente : les nouveaux lecteurs patientent pour ne pas
+    /// les affamer.
+    writers_waiting: u32,
+}
+pub(crate) struct SrwLockState {
+    inner: Mutex<SrwInner>,
+    changed: Condvar,
 }
 static SRW_LOCKS: OnceLock<Mutex<HashMap<usize, Arc<SrwLockState>>>> = OnceLock::new();
 
-fn get_srw(p: usize) -> Arc<SrwLockState> {
+pub(crate) fn get_srw(p: usize) -> Arc<SrwLockState> {
     let mut map = lock(SRW_LOCKS.get_or_init(|| Mutex::new(HashMap::new())));
     map.entry(p)
         .or_insert_with(|| {
             Arc::new(SrwLockState {
-                state: AtomicI32::new(0),
+                inner: Mutex::new(SrwInner {
+                    exclusive: false,
+                    shared: 0,
+                    writers_waiting: 0,
+                }),
+                changed: Condvar::new(),
             })
         })
         .clone()
@@ -5345,75 +5629,72 @@ pub extern "win64" fn initialize_srw_lock(p: usize) {
 }
 pub extern "win64" fn acquire_srw_lock_exclusive(p: usize) {
     let srw = get_srw(p);
-    loop {
-        if srw
-            .state
-            .compare_exchange(0, -1, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
-        {
-            return;
-        }
-        std::hint::spin_loop();
+    let mut s = lock(&srw.inner);
+    s.writers_waiting += 1;
+    while s.exclusive || s.shared != 0 {
+        s = srw
+            .changed
+            .wait(s)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
     }
+    s.writers_waiting -= 1;
+    s.exclusive = true;
 }
 pub extern "win64" fn release_srw_lock_exclusive(p: usize) {
     let srw = get_srw(p);
-    srw.state.store(0, Ordering::Release);
+    let mut s = lock(&srw.inner);
+    s.exclusive = false;
+    srw.changed.notify_all();
 }
 pub extern "win64" fn acquire_srw_lock_shared(p: usize) {
     let srw = get_srw(p);
-    loop {
-        let s = srw.state.load(Ordering::Relaxed);
-        if s >= 0
-            && srw
-                .state
-                .compare_exchange(s, s + 1, Ordering::Acquire, Ordering::Relaxed)
-                .is_ok()
-        {
-            return;
-        }
-        std::hint::spin_loop();
+    let mut s = lock(&srw.inner);
+    while s.exclusive || s.writers_waiting != 0 {
+        s = srw
+            .changed
+            .wait(s)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
     }
+    s.shared += 1;
 }
 pub extern "win64" fn release_srw_lock_shared(p: usize) {
     let srw = get_srw(p);
-    srw.state.fetch_sub(1, Ordering::Release);
+    let mut s = lock(&srw.inner);
+    s.shared = s.shared.saturating_sub(1);
+    if s.shared == 0 {
+        srw.changed.notify_all();
+    }
 }
 pub extern "win64" fn try_acquire_srw_lock_exclusive(p: usize) -> u8 {
     let srw = get_srw(p);
-    if srw
-        .state
-        .compare_exchange(0, -1, Ordering::Acquire, Ordering::Relaxed)
-        .is_ok()
-    {
-        1
-    } else {
+    let mut s = lock(&srw.inner);
+    if s.exclusive || s.shared != 0 {
         0
+    } else {
+        s.exclusive = true;
+        1
     }
 }
 pub extern "win64" fn try_acquire_srw_lock_shared(p: usize) -> u8 {
     let srw = get_srw(p);
-    let s = srw.state.load(Ordering::Relaxed);
-    if s >= 0
-        && srw
-            .state
-            .compare_exchange(s, s + 1, Ordering::Acquire, Ordering::Relaxed)
-            .is_ok()
-    {
-        1
-    } else {
+    let mut s = lock(&srw.inner);
+    if s.exclusive {
         0
+    } else {
+        s.shared += 1;
+        1
     }
 }
 
 // --- Condition Variables ---
-struct CondVarState {
+// Même table pour kernel32 et les RtlSleepConditionVariable* de ntdll.
+pub(crate) struct CondVarState {
     cv: Condvar,
     mu: Mutex<()>,
 }
 static COND_VARS: OnceLock<Mutex<HashMap<usize, Arc<CondVarState>>>> = OnceLock::new();
 
-fn get_condvar(p: usize) -> Arc<CondVarState> {
+pub(crate) fn get_condvar(p: usize) -> Arc<CondVarState> {
     let mut map = lock(COND_VARS.get_or_init(|| Mutex::new(HashMap::new())));
     map.entry(p)
         .or_insert_with(|| {
@@ -5423,6 +5704,38 @@ fn get_condvar(p: usize) -> Arc<CondVarState> {
             })
         })
         .clone()
+}
+
+/// Attente sur une variable de condition : `release` relâche le verrou
+/// applicatif une fois le mutex interne pris (un réveil émis entre les deux
+/// n'est donc jamais perdu), `reacquire` le reprend avant de rendre la main.
+/// Renvoie vrai si le délai a expiré.
+pub(crate) fn condvar_sleep(
+    cv: usize,
+    ms: u32,
+    release: impl FnOnce(),
+    reacquire: impl FnOnce(),
+) -> bool {
+    let cond = get_condvar(cv);
+    let guard = cond.mu.lock().unwrap_or_else(|e| e.into_inner());
+    release();
+    let timed_out = if ms == u32::MAX {
+        drop(
+            cond.cv
+                .wait(guard)
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        false
+    } else {
+        let (g, result) = cond
+            .cv
+            .wait_timeout(guard, std::time::Duration::from_millis(ms as u64))
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        drop(g);
+        result.timed_out()
+    };
+    reacquire();
+    timed_out
 }
 
 pub extern "win64" fn initialize_condition_variable(p: usize) {
@@ -5436,42 +5749,48 @@ pub extern "win64" fn sleep_condition_variable_srw(
     cv: usize,
     srw: usize,
     ms: u32,
-    _flags: u32,
+    flags: u32,
 ) -> i32 {
-    let cond = get_condvar(cv);
-    let guard = cond.mu.lock().unwrap();
-    release_srw_lock_exclusive(srw);
-    if ms == u32::MAX {
-        drop(cond.cv.wait(guard).unwrap());
+    // CONDITION_VARIABLE_LOCKMODE_SHARED (1) : le SRW est tenu en partagé.
+    let shared = flags & 1 != 0;
+    let timed_out = condvar_sleep(
+        cv,
+        ms,
+        || {
+            if shared {
+                release_srw_lock_shared(srw)
+            } else {
+                release_srw_lock_exclusive(srw)
+            }
+        },
+        || {
+            if shared {
+                acquire_srw_lock_shared(srw)
+            } else {
+                acquire_srw_lock_exclusive(srw)
+            }
+        },
+    );
+    if timed_out {
+        crate::process::set_last_error(258);
+        0
     } else {
-        drop(
-            cond.cv
-                .wait_timeout(guard, std::time::Duration::from_millis(ms as u64))
-                .unwrap(),
-        );
+        1
     }
-    acquire_srw_lock_exclusive(srw);
-    1
 }
 pub extern "win64" fn sleep_condition_variable_cs(cv: usize, cs: usize, ms: u32) -> i32 {
-    let cond = get_condvar(cv);
-    let guard = cond.mu.lock().unwrap();
-    unsafe {
-        leave_critical_section(cs as *mut c_void);
-    }
-    if ms == u32::MAX {
-        drop(cond.cv.wait(guard).unwrap());
+    let timed_out = condvar_sleep(
+        cv,
+        ms,
+        || unsafe { leave_critical_section(cs as *mut c_void) },
+        || unsafe { enter_critical_section(cs as *mut c_void) },
+    );
+    if timed_out {
+        crate::process::set_last_error(258);
+        0
     } else {
-        drop(
-            cond.cv
-                .wait_timeout(guard, std::time::Duration::from_millis(ms as u64))
-                .unwrap(),
-        );
+        1
     }
-    unsafe {
-        enter_critical_section(cs as *mut c_void);
-    }
-    1
 }
 pub extern "win64" fn wake_condition_variable(cv: usize) {
     let cond = get_condvar(cv);
@@ -5487,33 +5806,92 @@ pub extern "win64" fn wake_all_condition_variable(cv: usize) {
 }
 
 // --- InitOnce ---
+// Le mot INIT_ONCE porte l'état dans ses deux bits bas (0 : jamais commencé,
+// 1 : initialisation en cours, 2 : terminée) et le contexte dans les bits
+// hauts, comme sous Windows. Les prétendants attendent sous un verrou global
+// (Mutex + Condvar) que le premier termine : une seule initialisation, sans
+// course entre deux threads qui lisent « pas encore fait » en même temps.
+const INIT_ONCE_CHECK_ONLY: u32 = 1;
+const INIT_ONCE_ASYNC: u32 = 2;
+const INIT_ONCE_INIT_FAILED: u32 = 4;
+static INIT_ONCE_GATE: OnceLock<(Mutex<()>, Condvar)> = OnceLock::new();
+fn init_once_gate() -> &'static (Mutex<()>, Condvar) {
+    INIT_ONCE_GATE.get_or_init(|| (Mutex::new(()), Condvar::new()))
+}
 pub extern "win64" fn init_once_begin_initialize(
     init_once: usize,
-    _flags: u32,
+    flags: u32,
     pending: *mut i32,
-    _context: *mut usize,
+    context: *mut usize,
 ) -> i32 {
-    if init_once == 0 || pending.is_null() {
+    if init_once == 0 || pending.is_null() || flags & !(INIT_ONCE_CHECK_ONLY | INIT_ONCE_ASYNC) != 0
+    {
         crate::process::set_last_error(87);
         return 0;
     }
-    unsafe {
-        let val = std::ptr::read_volatile(init_once as *const u32);
-        if val == 2 {
-            *pending = 0;
-            return 1;
-        } // already done
-        *pending = 1;
+    let (mu, cv) = init_once_gate();
+    let mut guard = mu.lock().unwrap_or_else(|e| e.into_inner());
+    loop {
+        let value = unsafe { std::ptr::read_volatile(init_once as *const usize) };
+        match value & 3 {
+            2 => {
+                unsafe {
+                    *pending = 0;
+                    if !context.is_null() {
+                        *context = value & !3;
+                    }
+                }
+                return 1;
+            }
+            0 if flags & INIT_ONCE_CHECK_ONLY != 0 => {
+                crate::process::set_last_error(1001); // ERROR_GEN_FAILURE : rien n'a encore été fait
+                unsafe { *pending = 1 };
+                return 0;
+            }
+            0 => {
+                // Mode asynchrone : plusieurs initialisations concurrentes sont
+                // permises, seule la première InitOnceComplete est retenue.
+                if flags & INIT_ONCE_ASYNC == 0 {
+                    unsafe { std::ptr::write_volatile(init_once as *mut usize, 1) };
+                }
+                unsafe { *pending = 1 };
+                return 1;
+            }
+            _ => {
+                if flags & INIT_ONCE_CHECK_ONLY != 0 {
+                    crate::process::set_last_error(1001);
+                    unsafe { *pending = 1 };
+                    return 0;
+                }
+                if flags & INIT_ONCE_ASYNC != 0 {
+                    unsafe { *pending = 1 };
+                    return 1;
+                }
+                guard = cv.wait(guard).unwrap_or_else(|e| e.into_inner());
+            }
+        }
     }
-    1
 }
-pub extern "win64" fn init_once_complete(init_once: usize, _flags: u32, _context: usize) -> i32 {
-    if init_once == 0 {
+pub extern "win64" fn init_once_complete(init_once: usize, flags: u32, context: usize) -> i32 {
+    if init_once == 0 || context & 3 != 0 {
+        crate::process::set_last_error(87);
         return 0;
     }
-    unsafe {
-        std::ptr::write_volatile(init_once as *mut u32, 2);
+    let (mu, cv) = init_once_gate();
+    let _guard = mu.lock().unwrap_or_else(|e| e.into_inner());
+    let value = unsafe { std::ptr::read_volatile(init_once as *const usize) };
+    if value & 3 == 2 {
+        // Déjà terminée par un autre initialiseur (mode asynchrone).
+        crate::process::set_last_error(1001);
+        return 0;
     }
+    let new = if flags & INIT_ONCE_INIT_FAILED != 0 {
+        0
+    } else {
+        context | 2
+    };
+    unsafe { std::ptr::write_volatile(init_once as *mut usize, new) };
+    cv.notify_all();
     1
 }
 pub extern "win64" fn init_once_initialize(init_once: usize) {
@@ -5523,7 +5901,38 @@ pub extern "win64" fn init_once_initialize(init_once: usize) {
         }
     }
 }
-
+/// `InitOnceExecuteOnce` : exécute `callback(init_once, parameter, context)`
+/// une seule fois ; les autres threads attendent qu'il ait terminé.
+pub unsafe extern "win64" fn init_once_execute_once(
+    init_once: usize,
+    callback: usize,
+    parameter: usize,
+    context: *mut usize,
+) -> i32 {
+    if init_once == 0 || callback == 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let mut pending = 0;
+    if init_once_begin_initialize(init_once, 0, &mut pending, context) == 0 {
+        return 0;
+    }
+    if pending == 0 {
+        return 1;
+    }
+    let f: extern "win64" fn(usize, usize, *mut usize) -> i32 = std::mem::transmute(callback);
+    let mut produced = 0usize;
+    let ok = f(init_once, parameter, &mut produced) != 0;
+    if !context.is_null() {
+        *context = produced;
+    }
+    init_once_complete(
+        init_once,
+        if ok { 0 } else { INIT_ONCE_INIT_FAILED },
+        if ok { produced & !3 } else { 0 },
+    );
+    i32::from(ok)
+}
 // --- Fiber Local Storage (FLS) ---
 static FLS_CALLBACKS: OnceLock<Mutex<HashMap<u32, usize>>> = OnceLock::new();
 
@@ -5550,61 +5959,24 @@ pub unsafe extern "win64" fn fls_set_value(slot: u32, data: *mut c_void) -> i32 
 }
 
 // --- Interlocked SList ---
+// Même implémentation que RtlInterlockedPushEntrySList & co. (ntdll) : une
+// seule table et un verrou global, l'en-tête de 16 octets ne pouvant pas être
+// mis à jour atomiquement sans CMPXCHG16B.
 pub extern "win64" fn initialize_slist_head(head: usize) {
-    if head != 0 {
-        unsafe {
-            std::ptr::write_bytes(head as *mut u8, 0, 16);
-        }
-    }
+    unsafe { super::ntdll::rtl_initialize_slist_head(head as *mut u8) }
 }
 pub unsafe extern "win64" fn interlocked_push_entry_slist(head: usize, entry: usize) -> usize {
-    if head == 0 || entry == 0 {
-        return 0;
-    }
-    let next_ptr = head as *mut usize;
-    let count_ptr = (head + 8) as *mut u32;
-    let old = std::ptr::read_volatile(next_ptr);
-    std::ptr::write_volatile(entry as *mut usize, old);
-    std::ptr::write_volatile(next_ptr, entry);
-    let c = std::ptr::read_volatile(count_ptr);
-    std::ptr::write_volatile(count_ptr, c.wrapping_add(1));
-    old
+    super::ntdll::rtl_interlocked_push_entry_slist(head as *mut u8, entry as *mut u8) as usize
 }
 pub unsafe extern "win64" fn interlocked_pop_entry_slist(head: usize) -> usize {
-    if head == 0 {
-        return 0;
-    }
-    let next_ptr = head as *mut usize;
-    let count_ptr = (head + 8) as *mut u32;
-    let top = std::ptr::read_volatile(next_ptr);
-    if top == 0 {
-        return 0;
-    }
-    let next = std::ptr::read_volatile(top as *const usize);
-    std::ptr::write_volatile(next_ptr, next);
-    let c = std::ptr::read_volatile(count_ptr);
-    std::ptr::write_volatile(count_ptr, c.saturating_sub(1));
-    top
+    super::ntdll::rtl_interlocked_pop_entry_slist(head as *mut u8) as usize
 }
 pub unsafe extern "win64" fn interlocked_flush_slist(head: usize) -> usize {
-    if head == 0 {
-        return 0;
-    }
-    let next_ptr = head as *mut usize;
-    let count_ptr = (head + 8) as *mut u32;
-    let first = std::ptr::read_volatile(next_ptr);
-    std::ptr::write_volatile(next_ptr, 0);
-    std::ptr::write_volatile(count_ptr, 0);
-    first
+    super::ntdll::rtl_interlocked_flush_slist(head as *mut u8) as usize
 }
 pub unsafe extern "win64" fn query_depth_slist(head: usize) -> u16 {
-    if head == 0 {
-        return 0;
-    }
-    let count_ptr = (head + 8) as *const u32;
-    std::ptr::read_volatile(count_ptr) as u16
+    super::ntdll::rtl_query_depth_slist(head as *const u8)
 }
-
 // --- Encode/Decode Pointer ---
 pub extern "win64" fn encode_pointer(ptr: usize) -> usize {
     ptr ^ 0xDEAD_BEEF_CAFE_BABE
@@ -5656,8 +6028,14 @@ pub unsafe extern "win64" fn get_computer_name_w(buf: *mut u16, size: *mut u32) 
     }
     let name = get_hostname_string();
     let upper = name.to_ascii_uppercase();
+    let n = upper.encode_utf16().count() as u32;
+    if *size <= n {
+        *size = n + 1;
+        crate::process::set_last_error(111);
+        return 0;
+    }
     crate::dlls::put_w(&upper, buf, *size);
-    *size = upper.encode_utf16().count() as u32;
+    *size = n;
     1
 }
 
@@ -5673,28 +6051,134 @@ pub extern "win64" fn get_active_processor_count(_group: u16) -> u32 {
 }
 
 // --- Waitable Timer (stubs) ---
-pub extern "win64" fn create_waitable_timer_a(
+// --- Minuteurs (CreateWaitableTimer) ---
+// Un minuteur est un événement de la table des handles (donc attendable par
+// WaitForSingleObject/WaitForMultipleObjects) ; SetWaitableTimer programme un
+// thread qui le signale à l'échéance puis à chaque période. La génération
+// invalide les programmations précédentes (CancelWaitableTimer, nouveau
+// SetWaitableTimer, CloseHandle).
+static WAITABLE_TIMERS: OnceLock<Mutex<HashMap<usize, Arc<AtomicUsize>>>> = OnceLock::new();
+fn waitable_timers() -> &'static Mutex<HashMap<usize, Arc<AtomicUsize>>> {
+    WAITABLE_TIMERS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+fn remove_waitable_timer(h: usize) -> bool {
+    match lock(waitable_timers()).remove(&h) {
+        Some(generation) => {
+            generation.fetch_add(1, Ordering::AcqRel);
+            true
+        }
+        None => false,
+    }
+}
+pub unsafe extern "win64" fn create_waitable_timer_a(
     _attr: usize,
     manual: i32,
-    _name: *const u8,
+    name: *const u8,
 ) -> usize {
-    let _ = manual;
-    next_handle()
+    let obj = SyncHandle::Event(Arc::new(EventObject {
+        manual_reset: manual != 0,
+        signaled: Mutex::new(false),
+        changed: Condvar::new(),
+    }));
+    let h = add_sync(obj, named_event(name));
+    if h != 0 {
+        lock(waitable_timers()).insert(h, Arc::new(AtomicUsize::new(0)));
+    }
+    h
+}
+pub unsafe extern "win64" fn create_waitable_timer_w(
+    attr: usize,
+    manual: i32,
+    name: *const u16,
+) -> usize {
+    let n = sync_name_w(name);
+    create_waitable_timer_a(
+        attr,
+        manual,
+        n.as_ref().map_or(std::ptr::null(), |c| c.as_ptr().cast()),
+    )
+}
+pub unsafe extern "win64" fn create_waitable_timer_ex_w(
+    attr: usize,
+    name: *const u16,
+    flags: u32,
+    _access: u32,
+) -> usize {
+    // CREATE_WAITABLE_TIMER_MANUAL_RESET = 1.
+    create_waitable_timer_w(attr, i32::from(flags & 1 != 0), name)
 }
 pub unsafe extern "win64" fn set_waitable_timer(
-    _h: usize,
-    _due: *const i64,
-    _period: i32,
+    h: usize,
+    due: *const i64,
+    period: i32,
     _routine: usize,
     _arg: usize,
     _resume: i32,
 ) -> i32 {
+    let Some(generation) = lock(waitable_timers()).get(&h).cloned() else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
+    let Some(SyncHandle::Event(event)) = lookup_sync(h) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
+    if due.is_null() || period < 0 {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let due = due.read_unaligned();
+    // Échéance : relative (négative, en unités de 100 ns) ou absolue (FILETIME).
+    let first = if due <= 0 {
+        std::time::Duration::from_nanos((-due) as u64 * 100)
+    } else {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| (d.as_nanos() / 100) as i64)
+            + crate::intl::tz::FILETIME_UNIX_EPOCH;
+        std::time::Duration::from_nanos((due - now).max(0) as u64 * 100)
+    };
+    let my_generation = generation.fetch_add(1, Ordering::AcqRel) + 1;
+    *lock(&event.signaled) = false;
+    let period = std::time::Duration::from_millis(period as u64);
+    let spawned = std::thread::Builder::new()
+        .name("winlux-waitable-timer".into())
+        .spawn(move || {
+            let mut wait = first;
+            loop {
+                std::thread::sleep(wait);
+                if generation.load(Ordering::Acquire) != my_generation {
+                    return;
+                }
+                {
+                    let _gate = sync_gate();
+                    *lock(&event.signaled) = true;
+                    event.changed.notify_all();
+                }
+                if period.is_zero() {
+                    return;
+                }
+                wait = period;
+            }
+        });
+    if spawned.is_err() {
+        crate::process::set_last_error(8);
+        return 0;
+    }
     1
 }
-pub extern "win64" fn cancel_waitable_timer(_h: usize) -> i32 {
-    1
+pub extern "win64" fn cancel_waitable_timer(h: usize) -> i32 {
+    match lock(waitable_timers()).get(&h) {
+        Some(generation) => {
+            generation.fetch_add(1, Ordering::AcqRel);
+            1
+        }
+        None => {
+            crate::process::set_last_error(6);
+            0
+        }
+    }
 }
-
 // --- GetFileInformationByHandle ---
 #[repr(C)]
 pub struct ByHandleFileInformation {
@@ -6287,25 +6771,54 @@ pub unsafe extern "win64" fn duplicate_handle(
         -12 => Some(2),
         _ => None,
     };
-    let copy = if let Some(fd) = std_fd {
+    // Pseudo-handles (processus et thread courants) : Windows rend un vrai
+    // handle vers le même objet ; ici il reste utilisable tel quel.
+    let pseudo = src_handle == get_current_process() || src_handle == get_current_thread();
+    let copy = if pseudo {
+        Some(src_handle)
+    } else if let Some(fd) = std_fd {
         let new_fd = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3);
         (new_fd >= 0).then(|| insert_file(std::os::unix::io::FromRawFd::from_raw_fd(new_fd)))
+    } else if let Some(h) = duplicate_handle_impl(src_handle) {
+        Some(h)
     } else {
-        duplicate_handle_impl(src_handle)
+        // Objet de synchronisation (événement, mutex, sémaphore, thread,
+        // processus, port de complétion) : nouveau numéro de handle vers le
+        // même objet partagé par comptage de références (Arc). Fermer la
+        // copie ne ferme pas l'original ; un objet nommé compte un
+        // utilisateur de plus.
+        lookup_sync(src_handle).map(add_sync_reference)
     };
-    let result = match copy {
-        Some(h) => {
-            if options & 1 != 0 && std_fd.is_none() {
-                close_handle(src_handle);
-            }
-            h
+    let Some(result) = copy else {
+        if !dst_handle.is_null() {
+            *dst_handle = 0;
         }
-        None => src_handle,
+        crate::process::set_last_error(6);
+        return 0;
     };
+    if options & 1 != 0 && std_fd.is_none() && !pseudo {
+        close_handle(src_handle);
+    }
     if !dst_handle.is_null() {
         *dst_handle = result;
     }
     1
+}
+
+/// Nouveau handle vers un objet de synchronisation existant (DuplicateHandle).
+fn add_sync_reference(obj: SyncHandle) -> usize {
+    {
+        let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
+        for (named, count) in names.values_mut() {
+            if same_sync(&obj, named) {
+                *count += 1;
+                break;
+            }
+        }
+    }
+    let h = next_handle();
+    lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, obj);
+    h
 }
 
 /// Nom large d'objet de synchronisation converti pour les variantes A
@@ -6353,11 +6866,19 @@ pub unsafe extern "win64" fn get_module_handle_ex_w(
         return 0;
     }
     if flags & 4 != 0 {
-        // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
-        if let Some(m) = crate::loader::find_module_by_addr(module as usize) {
+        // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS : `module` est une adresse,
+        // jamais un nom. Sans module à cette adresse : ERROR_MOD_NOT_FOUND.
+        let address = module as usize;
+        if let Some(m) = crate::loader::find_module_by_addr(address) {
+            if flags & 3 == 0 {
+                crate::loader::increment_ref(m.base);
+            }
             *handle = m.base;
             return 1;
         }
+        *handle = 0;
+        crate::process::set_last_error(126);
+        return 0;
     }
     let name = if module.is_null() {
         String::new()
@@ -6605,13 +7126,13 @@ pub fn exports() -> crate::dlls::Exports {
      "FindFirstFileA"=>fn find_first_file_a,"FindNextFileA"=>fn find_next_file_a,"FindClose"=>fn find_close,
      "InitializeSRWLock"=>fn initialize_srw_lock,"AcquireSRWLockExclusive"=>fn acquire_srw_lock_exclusive,"ReleaseSRWLockExclusive"=>fn release_srw_lock_exclusive,"AcquireSRWLockShared"=>fn acquire_srw_lock_shared,"ReleaseSRWLockShared"=>fn release_srw_lock_shared,"TryAcquireSRWLockExclusive"=>fn try_acquire_srw_lock_exclusive,"TryAcquireSRWLockShared"=>fn try_acquire_srw_lock_shared,
      "InitializeConditionVariable"=>fn initialize_condition_variable,"SleepConditionVariableSRW"=>fn sleep_condition_variable_srw,"SleepConditionVariableCS"=>fn sleep_condition_variable_cs,"WakeConditionVariable"=>fn wake_condition_variable,"WakeAllConditionVariable"=>fn wake_all_condition_variable,
-     "InitOnceBeginInitialize"=>fn init_once_begin_initialize,"InitOnceComplete"=>fn init_once_complete,"InitOnceInitialize"=>fn init_once_initialize,
+     "InitOnceBeginInitialize"=>fn init_once_begin_initialize,"InitOnceComplete"=>fn init_once_complete,"InitOnceInitialize"=>fn init_once_initialize,"InitOnceExecuteOnce"=>fn init_once_execute_once,
      "FlsAlloc"=>fn fls_alloc,"FlsFree"=>fn fls_free,"FlsGetValue"=>fn fls_get_value,"FlsSetValue"=>fn fls_set_value,
      "InitializeSListHead"=>fn initialize_slist_head,"InterlockedPushEntrySList"=>fn interlocked_push_entry_slist,"InterlockedPopEntrySList"=>fn interlocked_pop_entry_slist,"InterlockedFlushSList"=>fn interlocked_flush_slist,"QueryDepthSList"=>fn query_depth_slist,
      "EncodePointer"=>fn encode_pointer,"DecodePointer"=>fn decode_pointer,
      "GetLogicalDrives"=>fn get_logical_drives,"GetComputerNameA"=>fn get_computer_name_a,"GetComputerNameW"=>fn get_computer_name_w,
      "GetActiveProcessorCount"=>fn get_active_processor_count,
-     "CreateWaitableTimerA"=>fn create_waitable_timer_a,"SetWaitableTimer"=>fn set_waitable_timer,"CancelWaitableTimer"=>fn cancel_waitable_timer,
+     "CreateWaitableTimerA"=>fn create_waitable_timer_a,"CreateWaitableTimerW"=>fn create_waitable_timer_w,"CreateWaitableTimerExW"=>fn create_waitable_timer_ex_w,"SetWaitableTimer"=>fn set_waitable_timer,"CancelWaitableTimer"=>fn cancel_waitable_timer,
      "GetFileInformationByHandle"=>fn get_file_information_by_handle,"GetFileInformationByHandleEx"=>fn get_file_information_by_handle_ex,"ReadDirectoryChangesW"=>fn read_directory_changes_w,
      "CreateNamedPipeA"=>fn create_named_pipe_a,"ConnectNamedPipe"=>fn connect_named_pipe,"DisconnectNamedPipe"=>fn disconnect_named_pipe,
      "CreateFileMappingA"=>fn create_file_mapping_a,"CreateFileMappingW"=>fn create_file_mapping_w,"MapViewOfFile"=>fn map_view_of_file,"UnmapViewOfFile"=>fn unmap_view_of_file,
@@ -6816,7 +7337,8 @@ mod tests {
             next_handle()
         );
         let c = CString::new(path).unwrap();
-        let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0, 0) };
+        let h =
+            unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0x4000_0000, 0) };
         assert_ne!(h, usize::MAX);
         let payload = *b"async";
         let mut ov = Overlapped {
@@ -6885,7 +7407,8 @@ mod tests {
             next_handle()
         );
         let c = CString::new(path).unwrap();
-        let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0, 0) };
+        let h =
+            unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0x4000_0000, 0) };
         assert_ne!(h, usize::MAX);
         let file = {
             let handles = lock(HANDLES.get().unwrap());
@@ -7508,6 +8031,542 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .is_empty()
+        );
+    }
+}
+
+/// Tests de l'audit kernel32/ntdll (#211) : threads, handles, mémoire
+/// globale, SList, SRW, InitOnce, horodatages, locale et chemins de module.
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+
+    extern "win64" fn thread_records_its_id_then_exits(param: usize) -> u32 {
+        unsafe {
+            *(param as *mut u32) = get_current_thread_id();
+        }
+        super::super::kernel32_misc::exit_thread(7)
+    }
+
+    #[test]
+    fn create_thread_rend_l_id_du_thread_et_exit_thread_signale_le_handle() {
+        init();
+        let mut seen = 0u32;
+        let mut tid = 0u32;
+        let h = unsafe {
+            create_thread(
+                0,
+                0,
+                thread_records_its_id_then_exits as *const () as usize,
+                &mut seen as *mut u32 as usize,
+                0,
+                &mut tid,
+            )
+        };
+        assert_ne!(h, 0);
+        assert_ne!(tid, 0);
+        // ExitThread signale le handle : WaitForSingleObject rend la main…
+        assert_eq!(wait_for_single_object(h, 5_000), 0);
+        // … GetExitCodeThread lit le code passé à ExitThread…
+        let mut code = 0;
+        assert_eq!(unsafe { get_exit_code_thread(h, &mut code) }, 1);
+        assert_eq!(code, 7);
+        // … et l'id rendu par CreateThread est celui de GetCurrentThreadId.
+        assert_eq!(seen, tid);
+        assert_eq!(close_handle(h), 1);
+    }
+
+    #[test]
+    fn duplicate_handle_copie_un_objet_de_synchronisation() {
+        init();
+        let event = unsafe { create_event_a(0, 1, 0, std::ptr::null()) };
+        let mut copy = 0usize;
+        assert_eq!(
+            unsafe { duplicate_handle(usize::MAX, event, usize::MAX, &mut copy, 0, 0, 2) },
+            1
+        );
+        assert_ne!(copy, 0);
+        assert_ne!(copy, event);
+        // Même objet : signaler la copie réveille l'original.
+        assert_eq!(set_event(copy), 1);
+        assert_eq!(wait_for_single_object(event, 0), 0);
+        // Fermer la copie ne ferme pas l'original.
+        assert_eq!(close_handle(copy), 1);
+        assert_eq!(reset_event(event), 1);
+        assert_eq!(wait_for_single_object(event, 0), 258);
+        // DUPLICATE_CLOSE_SOURCE ferme l'original, la copie survit.
+        let mut second = 0usize;
+        assert_eq!(
+            unsafe { duplicate_handle(usize::MAX, event, usize::MAX, &mut second, 0, 0, 1) },
+            1
+        );
+        assert_eq!(close_handle(event), 0);
+        assert_eq!(set_event(second), 1);
+        assert_eq!(close_handle(second), 1);
+        // Handle inconnu : échec ERROR_INVALID_HANDLE.
+        crate::process::init_thread();
+        let mut none = 1usize;
+        assert_eq!(
+            unsafe { duplicate_handle(usize::MAX, 0xdead_0000, usize::MAX, &mut none, 0, 0, 0) },
+            0
+        );
+        assert_eq!(none, 0);
+        assert_eq!(crate::process::last_error(), 6);
+    }
+
+    #[test]
+    fn global_alloc_fixe_rend_un_pointeur_direct() {
+        init();
+        // GMEM_FIXED : le handle est le pointeur, GlobalLock le rend tel quel.
+        let fixed = global_alloc(0x40, 16);
+        assert_ne!(fixed, 0);
+        assert_eq!(global_lock(fixed) as usize, fixed);
+        unsafe {
+            *(fixed as *mut u8) = 0x5a;
+        }
+        assert_eq!(global_size(fixed), 16);
+        let grown = global_realloc(fixed, 4096, 0);
+        assert_ne!(grown, 0);
+        assert_eq!(global_lock(grown) as usize, grown);
+        assert_eq!(unsafe { *(grown as *const u8) }, 0x5a);
+        assert_eq!(global_size(grown), 4096);
+        assert_eq!(global_free(grown), 0);
+        // GMEM_MOVEABLE : handle opaque, distinct du pointeur verrouillé.
+        let moveable = global_alloc(0x42, 8);
+        assert_ne!(moveable, 0);
+        let p = global_lock(moveable) as usize;
+        assert_ne!(p, moveable);
+        assert_eq!(global_unlock(moveable), 0);
+        assert_eq!(global_free(moveable), 0);
+        // Un bloc fixe de taille nulle garde un handle unique.
+        let a = global_alloc(0, 0);
+        let b = global_alloc(0, 0);
+        assert_ne!(a, b);
+        assert_eq!(global_free(a), 0);
+        assert_eq!(global_free(b), 0);
+    }
+
+    #[test]
+    fn slist_empile_depile_et_vide_sous_verrou() {
+        #[repr(C, align(16))]
+        struct Entry {
+            next: usize,
+            value: u32,
+        }
+        #[repr(C, align(16))]
+        struct Head([u8; 16]);
+        let mut head = Head([0; 16]);
+        let mut entries = [
+            Entry { next: 0, value: 1 },
+            Entry { next: 0, value: 2 },
+            Entry { next: 0, value: 3 },
+        ];
+        let h = &mut head as *mut Head as usize;
+        unsafe {
+            initialize_slist_head(h);
+            assert_eq!(query_depth_slist(h), 0);
+            for e in entries.iter_mut() {
+                interlocked_push_entry_slist(h, e as *mut Entry as usize);
+            }
+            assert_eq!(query_depth_slist(h), 3);
+            // Même table que ntdll : RtlQueryDepthSList voit la même pile.
+            assert_eq!(
+                super::super::ntdll::rtl_query_depth_slist(h as *const u8),
+                3
+            );
+            let top = interlocked_pop_entry_slist(h) as *const Entry;
+            assert_eq!((*top).value, 3);
+            assert_eq!(query_depth_slist(h), 2);
+            let first = interlocked_flush_slist(h) as *const Entry;
+            assert_eq!((*first).value, 2);
+            assert_eq!(((*first).next as *const Entry).read().value, 1);
+            assert_eq!(query_depth_slist(h), 0);
+            assert_eq!(interlocked_pop_entry_slist(h), 0);
+        }
+    }
+
+    #[test]
+    fn srw_lock_bloque_un_second_thread_sans_spin() {
+        static ORDER: AtomicU32 = AtomicU32::new(0);
+        let lock_word = Box::leak(Box::new(0usize)) as *mut usize as usize;
+        initialize_srw_lock(lock_word);
+        acquire_srw_lock_exclusive(lock_word);
+        assert_eq!(try_acquire_srw_lock_exclusive(lock_word), 0);
+        assert_eq!(try_acquire_srw_lock_shared(lock_word), 0);
+        let waiter = std::thread::spawn(move || {
+            // Le ntdll Rtl* partage le même état que kernel32.
+            unsafe { super::super::ntdll::rtl_acquire_srw_lock_exclusive(lock_word as *mut usize) };
+            let seen = ORDER.fetch_add(1, Ordering::SeqCst);
+            release_srw_lock_exclusive(lock_word);
+            seen
+        });
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Le second thread n'a pas pu entrer tant que le verrou était tenu.
+        assert_eq!(ORDER.load(Ordering::SeqCst), 0);
+        ORDER.fetch_add(1, Ordering::SeqCst);
+        release_srw_lock_exclusive(lock_word);
+        assert_eq!(waiter.join().unwrap(), 1);
+        // Deux lecteurs entrent ensemble ; un écrivain attend qu'ils sortent.
+        acquire_srw_lock_shared(lock_word);
+        assert_eq!(try_acquire_srw_lock_shared(lock_word), 1);
+        assert_eq!(try_acquire_srw_lock_exclusive(lock_word), 0);
+        release_srw_lock_shared(lock_word);
+        release_srw_lock_shared(lock_word);
+        assert_eq!(try_acquire_srw_lock_exclusive(lock_word), 1);
+        release_srw_lock_exclusive(lock_word);
+    }
+
+    static INIT_ONCE_RUNS: AtomicUsize = AtomicUsize::new(0);
+    extern "win64" fn init_once_callback(_once: usize, param: usize, context: *mut usize) -> i32 {
+        INIT_ONCE_RUNS.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        unsafe {
+            *context = param;
+        }
+        1
+    }
+
+    #[test]
+    fn init_once_execute_once_n_initialise_qu_une_fois_sous_concurrence() {
+        let once = Box::leak(Box::new(0usize)) as *mut usize as usize;
+        init_once_initialize(once);
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let mut context = 0usize;
+                    let ok = unsafe {
+                        init_once_execute_once(
+                            once,
+                            init_once_callback as *const () as usize,
+                            0x1230,
+                            &mut context,
+                        )
+                    };
+                    (ok, context)
+                })
+            })
+            .collect();
+        for t in threads {
+            // Tous reçoivent le contexte produit par l'unique initialisation.
+            assert_eq!(t.join().unwrap(), (1, 0x1230));
+        }
+        assert_eq!(INIT_ONCE_RUNS.load(Ordering::SeqCst), 1);
+        // Le mot garde l'état « terminé » et le contexte.
+        let mut pending = 1;
+        let mut context = 0usize;
+        assert_eq!(
+            init_once_begin_initialize(once, 1, &mut pending, &mut context),
+            1
+        );
+        assert_eq!((pending, context), (0, 0x1230));
+    }
+
+    #[test]
+    fn system_time_et_file_time_font_l_aller_retour() {
+        use crate::intl::api::{file_time_to_system_time, system_time_to_file_time};
+        let dates = [
+            (1601, 1, 1, 0, 0, 0, 0, 1u16),    // origine FILETIME, lundi
+            (1970, 1, 1, 0, 0, 0, 0, 4),       // origine Unix, jeudi
+            (2000, 2, 29, 12, 30, 45, 500, 2), // bissextile (divisible par 400)
+            (2024, 2, 29, 23, 59, 59, 999, 4), // bissextile
+            (2026, 11, 1, 9, 15, 0, 0, 0),     // date de l'audit, dimanche
+            (2100, 3, 1, 0, 0, 0, 0, 1),       // 2100 n'est pas bissextile
+        ];
+        for (year, month, day, hour, minute, second, millis, weekday) in dates {
+            let st = crate::intl::tz::SystemTime {
+                year,
+                month,
+                day_of_week: 0,
+                day,
+                hour,
+                minute,
+                second,
+                millis,
+            };
+            let mut ft = 0i64;
+            assert_eq!(unsafe { system_time_to_file_time(&st, &mut ft) }, 1);
+            let mut back = crate::intl::tz::SystemTime::default();
+            assert_eq!(unsafe { file_time_to_system_time(&ft, &mut back) }, 1);
+            assert_eq!(
+                (
+                    back.year,
+                    back.month,
+                    back.day,
+                    back.hour,
+                    back.minute,
+                    back.second,
+                    back.millis,
+                    back.day_of_week
+                ),
+                (year, month, day, hour, minute, second, millis, weekday),
+                "{year}-{month:02}-{day:02}"
+            );
+        }
+        // Valeurs de référence : 1970-01-01 = 116444736000000000 ;
+        // 2026-11-01 09:15:00 UTC = 1793524500 s depuis 1970.
+        let unix = crate::intl::tz::SystemTime {
+            year: 1970,
+            month: 1,
+            day: 1,
+            ..Default::default()
+        };
+        let mut ft = 0i64;
+        assert_eq!(unsafe { system_time_to_file_time(&unix, &mut ft) }, 1);
+        assert_eq!(ft, 116_444_736_000_000_000);
+        let audit = crate::intl::tz::SystemTime {
+            year: 2026,
+            month: 11,
+            day: 1,
+            hour: 9,
+            minute: 15,
+            ..Default::default()
+        };
+        assert_eq!(unsafe { system_time_to_file_time(&audit, &mut ft) }, 1);
+        assert_eq!(ft, 116_444_736_000_000_000 + 1_793_524_500 * 10_000_000);
+        // 29 février d'une année non bissextile : refusé.
+        let bad = crate::intl::tz::SystemTime {
+            year: 2023,
+            month: 2,
+            day: 29,
+            ..Default::default()
+        };
+        assert_eq!(unsafe { system_time_to_file_time(&bad, &mut ft) }, 0);
+    }
+
+    #[test]
+    fn get_locale_info_w_garde_le_dernier_caractere() {
+        let _teb = crate::process::test_teb();
+        const LOCALE_SENGLISHLANGUAGENAME: u32 = 0x1001;
+        unsafe {
+            let need = super::super::nls::get_locale_info_w(
+                0x0409,
+                LOCALE_SENGLISHLANGUAGENAME,
+                std::ptr::null_mut(),
+                0,
+            );
+            assert_eq!(need, 8); // "English" + NUL
+            let mut buf = [0xffffu16; 8];
+            assert_eq!(
+                super::super::nls::get_locale_info_w(
+                    0x0409,
+                    LOCALE_SENGLISHLANGUAGENAME,
+                    buf.as_mut_ptr(),
+                    buf.len() as i32
+                ),
+                8
+            );
+            assert_eq!(String::from_utf16(&buf[..7]).unwrap(), "English");
+            assert_eq!(buf[7], 0);
+            // Un caractère de moins : refus, pas de troncature silencieuse.
+            let mut short = [0xffffu16; 7];
+            assert_eq!(
+                super::super::nls::get_locale_info_w(
+                    0x0409,
+                    LOCALE_SENGLISHLANGUAGENAME,
+                    short.as_mut_ptr(),
+                    short.len() as i32
+                ),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 122);
+        }
+    }
+
+    #[test]
+    fn get_module_file_name_a_tronque_et_signale_le_tampon_insuffisant() {
+        let _teb = crate::process::test_teb();
+        let image: &'static mut [u8] = Box::leak(vec![0u8; 8192].into_boxed_slice());
+        let base = image.as_ptr() as usize;
+        let module = crate::loader::Module {
+            name: "winlux-audit-trunc.dll".into(),
+            path: "/tmp/winlux-audit-trunc.dll".into(),
+            base,
+            size: image.len(),
+            pe: crate::pe::PeImage {
+                characteristics: 0,
+                entry_rva: 0,
+                image_base: 0,
+                section_alignment: 0x1000,
+                size_of_image: image.len() as u32,
+                size_of_headers: 0,
+                subsystem: 3,
+                dll_characteristics: 0,
+                stack_reserve: 0,
+                stack_commit: 0,
+                dirs: vec![crate::pe::DataDir::default(); 16],
+                sections: vec![],
+                il_only32: false,
+            },
+            tls: None,
+            initialized: true,
+            refcount: 1,
+        };
+        crate::loader::MODULES.lock().unwrap().push(module);
+        let expected = "Z:\\tmp\\winlux-audit-trunc.dll";
+        unsafe {
+            let mut full = [0u8; 64];
+            let n = get_module_file_name_a(base, full.as_mut_ptr(), full.len() as u32);
+            assert_eq!(n as usize, expected.len());
+            assert_eq!(std::str::from_utf8(&full[..n as usize]).unwrap(), expected);
+            // Tampon trop petit : nSize renvoyé, chaîne tronquée terminée,
+            // ERROR_INSUFFICIENT_BUFFER.
+            let mut small = [0xaau8; 10];
+            crate::process::set_last_error(0);
+            assert_eq!(get_module_file_name_a(base, small.as_mut_ptr(), 10), 10);
+            assert_eq!(crate::process::last_error(), 122);
+            assert_eq!(&small[..9], &expected.as_bytes()[..9]);
+            assert_eq!(small[9], 0);
+            // Idem en large.
+            let mut small_w = [0xaaaau16; 6];
+            assert_eq!(get_module_file_name_w(base, small_w.as_mut_ptr(), 6), 6);
+            assert_eq!(crate::process::last_error(), 122);
+            assert_eq!(String::from_utf16(&small_w[..5]).unwrap(), "Z:\\tm");
+            assert_eq!(small_w[5], 0);
+        }
+        crate::loader::remove_module(base);
+    }
+
+    #[test]
+    fn read_file_avec_overlapped_est_synchrone_sans_file_flag_overlapped() {
+        init();
+        crate::process::init_thread();
+        let path = format!(
+            "Z:\\tmp\\winlux-sync-ov-{}-{}.bin",
+            std::process::id(),
+            next_handle()
+        );
+        let c = std::ffi::CString::new(path).unwrap();
+        let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0, 0) };
+        assert_ne!(h, usize::MAX);
+        let mut ov = Overlapped {
+            internal: 0,
+            internal_high: 0,
+            offset: 4,
+            offset_high: 0,
+            event: 0,
+        };
+        let mut done = 0;
+        // Écriture à l'offset 4 de l'OVERLAPPED, terminée au retour.
+        assert_eq!(
+            unsafe {
+                write_file(
+                    h,
+                    b"sync".as_ptr(),
+                    4,
+                    &mut done,
+                    &mut ov as *mut _ as usize,
+                )
+            },
+            1
+        );
+        assert_eq!(done, 4);
+        assert_eq!(ov.internal, 0);
+        let mut out = [0u8; 4];
+        ov.offset = 4;
+        assert_eq!(
+            unsafe {
+                read_file(
+                    h,
+                    out.as_mut_ptr(),
+                    4,
+                    &mut done,
+                    &mut ov as *mut _ as usize,
+                )
+            },
+            1
+        );
+        assert_eq!((&out, done), (b"sync", 4));
+        assert_eq!(unsafe { get_file_size(h, std::ptr::null_mut()) }, 8);
+        assert_eq!(close_handle(h), 1);
+        assert_eq!(unsafe { delete_file_a(c.as_ptr() as *const u8) }, 1);
+    }
+
+    #[test]
+    fn get_file_type_distingue_disque_tube_et_caractere() {
+        init();
+        let mut r = 0usize;
+        let mut w = 0usize;
+        assert_eq!(
+            unsafe { create_pipe(&mut r, &mut w, std::ptr::null(), 0) },
+            1
+        );
+        assert_eq!(get_file_type(r), 3);
+        close_handle(r);
+        close_handle(w);
+        let dev = std::ffi::CString::new("Z:\\dev\\null").unwrap();
+        let h = unsafe { create_file_a(dev.as_ptr() as *const u8, 0x80000000, 7, 0, 3, 0, 0) };
+        assert_ne!(h, usize::MAX);
+        assert_eq!(get_file_type(h), 2);
+        close_handle(h);
+        let path = format!("Z:\\tmp\\winlux-ftype-{}.bin", std::process::id());
+        let c = std::ffi::CString::new(path).unwrap();
+        let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0, 0) };
+        assert_eq!(get_file_type(h), 1);
+        close_handle(h);
+        unsafe { delete_file_a(c.as_ptr() as *const u8) };
+    }
+
+    #[test]
+    fn waitable_timer_est_attendable_et_annulable() {
+        init();
+        let h = unsafe { create_waitable_timer_a(0, 1, std::ptr::null()) };
+        assert_ne!(h, 0);
+        let due = -200_000i64; // 20 ms
+        assert_eq!(unsafe { set_waitable_timer(h, &due, 0, 0, 0, 0) }, 1);
+        assert_eq!(wait_for_single_object(h, 0), 258);
+        assert_eq!(wait_for_single_object(h, 5_000), 0);
+        let periodic = unsafe { create_waitable_timer_a(0, 0, std::ptr::null()) };
+        assert_eq!(
+            unsafe { set_waitable_timer(periodic, &due, 20, 0, 0, 0) },
+            1
+        );
+        assert_eq!(wait_for_single_object(periodic, 5_000), 0);
+        assert_eq!(wait_for_single_object(periodic, 5_000), 0);
+        assert_eq!(cancel_waitable_timer(periodic), 1);
+        assert_eq!(close_handle(periodic), 1);
+        assert_eq!(close_handle(h), 1);
+        assert_eq!(cancel_waitable_timer(h), 0);
+    }
+
+    #[test]
+    fn format_message_from_string_sans_arguments_copie_les_insertions() {
+        let _teb = crate::process::test_teb();
+        use super::super::kernel32_misc::format_message_a;
+        let template = b"Fichier %1 : %2!d! octets%n%%%0ignore\0";
+        let mut out = [0u8; 64];
+        // Sans arguments : %1 et %2!d! restent tels quels, pas de plantage.
+        let n = unsafe {
+            format_message_a(
+                0x400,
+                template.as_ptr() as usize,
+                0,
+                0,
+                out.as_mut_ptr(),
+                64,
+                0,
+            )
+        };
+        assert_eq!(
+            std::str::from_utf8(&out[..n as usize]).unwrap(),
+            "Fichier %1 : %2!d! octets\r\n%"
+        );
+        let name = b"a.txt\0";
+        let args: [usize; 2] = [name.as_ptr() as usize, 42];
+        let n = unsafe {
+            format_message_a(
+                0x400 | 0x2000,
+                template.as_ptr() as usize,
+                0,
+                0,
+                out.as_mut_ptr(),
+                64,
+                args.as_ptr() as usize,
+            )
+        };
+        assert_eq!(
+            std::str::from_utf8(&out[..n as usize]).unwrap(),
+            "Fichier a.txt : 42 octets\r\n%"
         );
     }
 }
