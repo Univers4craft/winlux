@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **231**
+- Réalisé : **234**
 - À faire ou en cours : **45**
-- Total : **276**
-- Progression : **83.7%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178)
+- Total : **279**
+- Progression : **83.9%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins Windows ↔ Linux #175, glisser-déposer Windows ↔ Linux #189)
 
 ## À FAIRE (par priorité)
 
@@ -52,6 +52,7 @@
 - [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
 - [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
+- [ ] Droits Windows tirés des permissions Linux (jetons, SID, `GetFileSecurity`/`GetNamedSecurityInfo`) et UAC maison : manifeste `requireAdministrator` ou `runas` → demande du mot de passe local, fichiers créés laissés à l'utilisateur (#175, partie 2).
 - [ ] Faire tourner Paint.NET (#138) : runtime embarqué par l'appli (coreclr), puis WIC, Direct2D/DirectWrite et WPF. Étapes et blocages mesurés dans `docs/PAINTNET.md`.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
 - [ ] Brancher Media Foundation/DirectShow des `.exe` sur le moteur multimédia du runtime (`winlux_media.rs`) : le lecteur du shell lit déjà tous les formats, mais `mfplat`/`quartz` restent des bouchons pour les programmes Windows.
@@ -95,8 +96,8 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [ ] Informations système détaillées (carte mère, processeur, mémoire, disques, GPU, réseau, pilotes, version) avec export (#178).
 - [ ] Outil de diagnostic : rapport lisible après un plantage, enregistré ou envoyé par `winlux-report` (#178).
 - [ ] Intégrer les applis Windows au bureau : associations de fichiers, .lnk du Bureau et « Applications par défaut » livrés, reste « Ouvrir avec… » dans l'Explorateur (#152).
-- [ ] Glisser-déposer entre applis Windows et Linux (XDND ↔ `WM_DROPFILES`/`IDropTarget`, `DoDragDrop` vers Thunar), suite du pont presse-papiers (#159).
 - [ ] Démarrage sous 10 secondes et mode jeu : temps de démarrage mesuré et affiché livré, mode jeu livré, reste la réduction des étapes les plus longues (mesure en VM KVM) (#153).
+- [ ] Compatibilité Linux ↔ Windows du texte, des polices, de la langue, du clavier et de l'heure : livré dans la PR de #183 ; restent les clés de registre dynamiques, `ToUnicode`/`VkKeyScan` selon la disposition et les pages 1250/1251/866 (#183, `docs/INTL.md`).
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
 ## DÉJÀ FAIT
@@ -106,7 +107,9 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Applis Windows intégrées au bureau (#152) : associations de fichiers lues dans le registre (HKCU/HKLM\Software\Classes et HKCR, ProgID, OpenWithProgids, OpenWithList, SupportedTypes, UserChoice) → lanceurs cachés `winlux-assoc-*.desktop` (double-clic, « Ouvrir avec » de Thunar et xdg-open, document passé en chemin Windows), type MIME créé pour les extensions inconnues, programme par défaut seulement si l'utilisateur n'a rien choisi ; raccourcis .lnk du Bureau ouvrables (cible, arguments, dossier de travail) ; icônes des .exe/.lnk par thumbnailer tumbler ; fenêtre « Applications par défaut » (Paramètres > Applications) en FR/EN/ES/DE. Zone de notification : `Shell_NotifyIconA/W` (NIM_ADD/MODIFY/DELETE/SETVERSION, infobulle, état caché, bulles par notify-send, clics transmis au `uCallbackMessage` en format classique ou version 4) via l'assistant GTK `winlux-notify-icon`, et zone « systray » ajoutée au panneau (y compris aux panneaux déjà configurés).
 - [x] Gestionnaire des tâches complet façon Windows 11 : processus groupés avec .exe reconnus, tri, recherche, fin de tâche et priorité réelles (`OpenProcess`/`TerminateProcess`/`SetPriorityClass` sur tout processus), graphiques processeur/mémoire/disques/réseau/GPU, historique des applications, démarrage XDG activable, utilisateurs, détails, services (masqués sans systemd), vitesse d'actualisation ; ouvert par Ctrl+Maj+Échap (#178).
 - [x] Mode jeu : un `.exe` Direct3D/OpenGL/Vulkan/XInput déclenche `winlux --gamemode daemon` (gouverneur performances sur secteur, priorité du jeu, sauvegardes et mises à jour en pause et en basse priorité, swappiness et compactage mémoire, veille bloquée), tout est restauré à la fermeture ; réglage dans Paramètres > Processeur, actions affichées selon le matériel (#153, `docs/PERFORMANCES.md`).
+- [x] Accents, polices, langue, clavier et heure (#183, `docs/INTL.md`) : pages de code 1252/850/858/437/8859/UTF-8 et API A/W complètes, console en page OEM, noms ZIP Windows (OEM, champ Unicode Path), `winlux --text` (UTF-16, CRLF), locale et formats suivis depuis Paramètres et glibc, disposition clavier XKB → HKL, touches mortes, fuseau TZif et vraies conversions FILETIME (les dates de fichiers des .exe valaient toutes le 1er janvier 2024), polices de `C:\Windows\Fonts` visibles de Linux et remplacements Arial/Segoe UI.
 - [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).
+- [x] Chemins Windows ↔ Linux (#175, partie 1) : `C:\Users\<nom>` et ses dossiers connus suivent les dossiers XDG (Documents, Bureau…), `SHGetFolderPath`/`SHGetKnownFolderPath`/`GetUserProfileDirectory`, variables `USERPROFILE`/`APPDATA`…, `ExpandEnvironmentStrings`, noms Linux interdits sous Windows codés comme Cygwin, casse stable, chemins longs, `NUL`, UNC, liens symboliques (REPARSE_POINT, `CreateSymbolicLink`), `GetFullPathName` sur le texte, lecture seule réelle ; accents perdus par `CreateFileW`/`LoadLibraryW` & co corrigés. Test PE `winpaths`, `docs/CHEMINS-ET-DROITS.md`.
 
 - [x] Captures d'écran automatiques et mode machine virtuelle (#156) : `scripts/capture-ui.py` photographie sous Xvfb les 25 pages des Paramètres, le menu Démarrer, les popups, les outils système, Bienvenue et les applis maison PE (bureau, Explorateur, Store, Polices, Planificateur, Pare-feu) ; `scripts/compare-captures.py` les compare à la dernière version verte de master (job CI « Captures d'écran », artefacts `captures-ui` et `captures-ui-diff`, alerte au-delà de 2 % de pixels changés). `winlux-hardware` détecte l'hyperviseur (`/run/winlux/hw/virtual-machine`) et ne compte plus les cartes émulées comme GPU : curseur logiciel conservé, économiseur en GL logiciel, « Suivre la taille de la VM » seulement en VM.
 - [x] Direct2D 1.0 logiciel maison (`d2d1.rs`, `d2d_raster.rs`) : géométries, chemins, pinceaux unis, bitmaps, cible de rendu sur bitmap WIC, rendu anticrénelé, transformations et découpe ; `ID2D1DeviceContext` et dégradés à venir (`docs/PAINTNET.md`).
@@ -355,6 +358,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Lire locale.conf au démarrage de session (xsession-winlux, export WINLUX_LANG).
 - [x] Presse-papiers Win32 réel partagé entre tous les programmes (fichier de session, `GetClipboardSequenceNumber`, CF_TEXT/CF_UNICODETEXT synthétisés, CF_DIB, CF_HDROP, formats enregistrés stables) et historique Win+V du bureau : texte, images et fichiers, recherche, épingles persistantes, « Tout effacer », limite 10/25/50/100, recoller d'un clic dans la fenêtre active. Ctrl+C/X/V du Bloc-notes et copie de fichiers de l'Explorateur passent par le presse-papiers système.
 - [x] Presse-papiers commun Windows ↔ Linux (`winlux --clipboard-bridge`, lancé avec la session) : texte, HTML, images (PNG/BMP, import JPEG/GIF/WebP/TIFF) et fichiers (couper/copier, collage dans Thunar) passent dans les deux sens entre un .exe et une appli Linux ; les copies Linux entrent dans l'historique Win+V (#159).
+- [x] Glisser-déposer entre applis Windows et Linux, dans les deux sens et entre deux .exe : dépôt XDND (Thunar, bureau, navigateur) livré aux .exe par `IDropTarget` ou `WM_DROPFILES` (`DragAcceptFiles`, `DragQueryFile`, `DragQueryPoint`), `DoDragDrop` maison vers les fenêtres Linux ; presse-papiers OLE réel (`OleSetClipboard`, `OleGetClipboard`, `IDataObject` maison) utilisé par .NET/WinForms/WPF (#159).
 - [x] Outil Capture (Win+Maj+S, Impr. écran, menu Démarrer) : écran figé et assombri, modes rectangle, fenêtre, plein écran et forme libre, copie automatique dans le presse-papiers, éditeur rapide (rognage, stylo, surligneur, flèche, texte, couleurs, tailles, annuler, copier, PNG dans Images\Captures d'écran). Extensions runtime `WinluxCaptureScreen`, `WinluxDrawStroke`, `WinluxDrawText`, `WinluxSavePng`.
 - [x] Enregistrement vidéo de l'écran (Win+Maj+R ou bouton caméra de l'outil Capture) : zone ou plein écran, micro et son système (PulseAudio/PipeWire), MP4 (H.264/AAC) ou WebM (VP9/Opus) via le ffmpeg du système, indicateur rouge avec minuteur et bouton stop dans la barre des tâches, fichier dans Vidéos\Enregistrements d'écran. L'ISO embarque ffmpeg s'il est présent sur la machine de construction.
 
