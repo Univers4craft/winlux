@@ -91,6 +91,12 @@ for path in (source / "config").rglob("*"):
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.exists() or (reset_panel and path.name == "xfce4-panel.xml"):
             shutil.copyfile(path, target)
+# Corbeille vide d'un nouveau profil : sans ces dossiers (créés d'habitude au
+# premier envoi), l'Explorateur affichait « Ce dossier est introuvable ».
+for directory in ("files", "info"):
+    trash = home / ".local/share/Trash" / directory
+    trash.mkdir(parents=True, exist_ok=True)
+(home / ".local/share/Trash").chmod(0o700)
 # Zone de notification des programmes Windows (Shell_NotifyIcon) : ajoutée une
 # fois aux panneaux déjà configurés, juste avant les icônes réseau/son/batterie.
 panel_config = home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
