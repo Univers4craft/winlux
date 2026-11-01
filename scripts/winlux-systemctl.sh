@@ -77,9 +77,16 @@ read_pid() {
     test -f "$pidfile" && cat "$pidfile"
 }
 
+# Un pid vide, non numérique ou nul (oneshot RemainAfterExit) n'est jamais
+# « vivant » : kill -0 0 interrogerait tout le groupe de processus.
+pid_alive() {
+    case "${1:-}" in ''|*[!0-9]*) return 1 ;; esac
+    test "$1" -gt 0 && kill -0 "$1" 2>/dev/null
+}
+
 is_running() {
     pid=$(read_pid "$1")
-    test -n "$pid" && kill -0 "$pid" 2>/dev/null
+    pid_alive "$pid"
 }
 
 build_env() {
@@ -99,6 +106,37 @@ build_env() {
     done
 }
 
+# Ligne Exec* d'une unité : préfixes systemd (-, @, :, +, !) retirés, commande
+# relative résolue dans PATH. La ligne garde ses guillemets : elle est confiée
+# telle quelle à sh -c par run_exec, jamais découpée par le shell courant.
+exec_command() {
+    cmd=$1
+    while :; do
+        case "$cmd" in -*|@*|:*|+*|!*) cmd=${cmd#?} ;; *) break ;; esac
+    done
+    case "$cmd" in
+        /*|'"'*) ;;
+        *)
+            program=${cmd%% *}
+            if resolved=$(command -v "$program" 2>/dev/null) && test -n "$resolved"; then
+                case "$cmd" in *' '*) cmd="$resolved ${cmd#* }" ;; *) cmd=$resolved ;; esac
+            fi ;;
+    esac
+    printf '%s\n' "$cmd"
+}
+
+# Exécute une ligne Exec* dans un shell enfant (guillemets respectés, pas
+# d'eval dans ce script), sous l'utilisateur de l'unité le cas échéant.
+run_exec() {
+    if test -n "${run_as:-}"; then
+        # shellcheck disable=SC2086 # env_prefix et run_as sont des listes de mots
+        env $env_prefix $run_as "exec $1"
+    else
+        # shellcheck disable=SC2086
+        env $env_prefix /bin/sh -c "exec $1"
+    fi
+}
+
 do_start() {
     name=$(unit_name "$1")
     if is_masked "$1"; then
@@ -108,9 +146,7 @@ do_start() {
     if is_running "$1"; then return 0; fi
     parse_unit "$unit_file"
     test -n "$_exec_start" || { echo "Unit $name has no ExecStart." >&2; return 1; }
-    cmd=$_exec_start
-    case "$cmd" in -*) cmd=${cmd#-} ;; esac
-    case "$cmd" in /*)  ;; *) cmd=$(command -v "$cmd" 2>/dev/null || echo "$cmd") ;; esac
+    cmd=$(exec_command "$_exec_start")
 
     build_env
     env_prefix=""
@@ -130,31 +166,19 @@ do_start() {
     logfile="$LOG_DIR/service-${name%.service}.log"
     case "$_type" in
         oneshot)
-            if test -n "$run_as"; then
-                env $env_prefix $run_as "$cmd" >>"$logfile" 2>&1
-            else
-                env $env_prefix $cmd >>"$logfile" 2>&1
-            fi
+            run_exec "$cmd" >>"$logfile" 2>&1
             if test "$_remain_after" = yes; then
                 echo "0" > "$pidfile"
             fi
             ;;
         forking)
-            if test -n "$run_as"; then
-                env $env_prefix $run_as "$cmd" >>"$logfile" 2>&1
-            else
-                env $env_prefix $cmd >>"$logfile" 2>&1
-            fi
+            run_exec "$cmd" >>"$logfile" 2>&1
             if test -n "$_pidfile" && test -f "$_pidfile"; then
                 cp "$_pidfile" "$pidfile"
             fi
             ;;
         simple|notify|dbus|idle|exec|*)
-            if test -n "$run_as"; then
-                env $env_prefix $run_as "$cmd" >>"$logfile" 2>&1 &
-            else
-                env $env_prefix $cmd >>"$logfile" 2>&1 &
-            fi
+            run_exec "$cmd" >>"$logfile" 2>&1 &
             echo "$!" > "$pidfile"
             ;;
     esac
@@ -166,13 +190,12 @@ do_stop() {
     if test -n "$unit_file"; then
         parse_unit "$unit_file"
         if test -n "$_exec_stop"; then
-            cmd=$_exec_stop
-            case "$cmd" in -*) cmd=${cmd#-} ;; esac
-            eval "$cmd" >>"$LOG_DIR/service-${name%.service}.log" 2>&1 || true
+            run_as=""; env_prefix=""
+            run_exec "$(exec_command "$_exec_stop")" >>"$LOG_DIR/service-${name%.service}.log" 2>&1 || true
         fi
     fi
     pid=$(read_pid "$1")
-    if test -n "$pid" && test "$pid" != 0 && kill -0 "$pid" 2>/dev/null; then
+    if pid_alive "$pid"; then
         kill "$pid" 2>/dev/null || true
         attempt=0
         while test "$attempt" -lt 20 && kill -0 "$pid" 2>/dev/null; do
@@ -191,10 +214,11 @@ do_reload() {
     unit_file=$(find_unit_file "$1") || { echo "Unit $name not found." >&2; return 1; }
     parse_unit "$unit_file"
     if test -n "$_exec_reload"; then
-        eval "$_exec_reload" >>"$LOG_DIR/service-${name%.service}.log" 2>&1
+        run_as=""; env_prefix=""
+        run_exec "$(exec_command "$_exec_reload")" >>"$LOG_DIR/service-${name%.service}.log" 2>&1
     else
         pid=$(read_pid "$1")
-        if test -n "$pid" && kill -0 "$pid" 2>/dev/null; then
+        if pid_alive "$pid"; then
             kill -HUP "$pid"
         fi
     fi

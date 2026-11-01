@@ -16,6 +16,21 @@ use std::cell::RefCell;
 use std::ffi::c_void;
 use std::sync::Mutex;
 
+/// Journal détaillé de la répartition (`WINLUX_SEH_TRACE=1`) : un cadre
+/// par ligne, pour suivre les exceptions imbriquées et relancées.
+fn seh_trace() -> bool {
+    static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("WINLUX_SEH_TRACE").is_some_and(|v| v != "0"))
+}
+
+macro_rules! seh_trace {
+    ($($arg:tt)*) => {
+        if seh_trace() {
+            eprintln!("winlux[seh] {}", format_args!($($arg)*));
+        }
+    };
+}
+
 pub const CONTEXT_SIZE: usize = 1232;
 
 pub const CTX_RAX: usize = 0x78;
@@ -250,6 +265,12 @@ pub unsafe extern "win64" fn rtl_restore_context(ctx: *mut u8, rec: *mut Excepti
     if !rec.is_null() && (*rec).code == STATUS_UNWIND_CONSOLIDATE && (*rec).nparams >= 1 {
         let callback = (*rec).info[0];
         let mut slot = 0u64;
+        seh_trace!(
+            "consolidation : rappel {}, cible {} (rsp {:#x})",
+            crate::thunks::describe_site(callback),
+            crate::thunks::describe_site(target.get(CTX_RIP) as usize),
+            target.get(CTX_RSP)
+        );
         let index = push_frame(FrameKind::Consolidate, target);
         let rip = call_consolidate(callback, rec, frame_slot_ptr(index, &mut slot));
         pop_frames_from(index);
@@ -859,6 +880,12 @@ unsafe fn step(handler_type: u32, dispatch: &mut DispatcherContext, ctx: &mut Co
         }
         None => match trampoline_resume(ctx) {
             Some(next) => {
+                seh_trace!(
+                    "trampoline à rsp {:#x} : reprise à {} (rsp {:#x})",
+                    ctx.get(CTX_RSP),
+                    crate::thunks::describe_site(next.get(CTX_RIP) as usize),
+                    next.get(CTX_RSP)
+                );
                 dispatch.function_entry = std::ptr::null();
                 dispatch.establisher_frame = ctx.get(CTX_RSP);
                 *ctx = next;
@@ -975,11 +1002,18 @@ pub unsafe fn dispatch(rec: *mut ExceptionRecord, orig: &mut Context) -> Unhandl
                 return Unhandled::NotHandled;
             }
             if dc.language_handler == 0 {
+                seh_trace!(
+                    "recherche {:#x} : cadre {} (établi {:#x}) sans gestionnaire",
+                    (*rec).code,
+                    crate::thunks::describe_site(dc.control_pc as usize),
+                    dc.establisher_frame
+                );
                 break 'retry;
             }
             let index = push_frame(FrameKind::Handler, *orig);
             let mut slot = 0u64;
             let (handler, frame) = (dc.language_handler, dc.establisher_frame);
+            let pc = dc.control_pc;
             let r = call_handler_tramp(
                 rec,
                 frame,
@@ -989,6 +1023,14 @@ pub unsafe fn dispatch(rec: *mut ExceptionRecord, orig: &mut Context) -> Unhandl
                 frame_slot_ptr(index, &mut slot),
             );
             pop_frames_from(index);
+            seh_trace!(
+                "recherche {:#x} : cadre {} (établi {:#x}), gestionnaire {}, disposition {}",
+                (*rec).code,
+                crate::thunks::describe_site(pc as usize),
+                frame,
+                crate::thunks::describe_site(handler),
+                r
+            );
             match r {
                 DISPOSITION_CONTINUE_EXECUTION => {
                     if (*rec).flags & EXCEPTION_NONCONTINUABLE != 0 {
@@ -1050,10 +1092,11 @@ unsafe fn virtual_unwind_raw(
 /// Lève une exception logicielle depuis le CONTEXT de l'appelant.
 pub unsafe fn raise(rec: &mut ExceptionRecord, ctx: &mut Context) -> ! {
     crate::trace!(
-        "exception {:#010x} levée à {} (arguments {:x?})",
+        "exception {:#010x} levée à {} (arguments {:x?}, rsp {:#x})",
         rec.code,
         crate::thunks::describe_site(rec.address),
-        &rec.info[..(rec.nparams as usize).min(4)]
+        &rec.info[..(rec.nparams as usize).min(4)],
+        ctx.get(0x98)
     );
     match dispatch(rec, ctx) {
         Unhandled::Noncontinuable => {
@@ -1245,6 +1288,13 @@ unsafe fn unwind_ex(
             let mut slot = 0u64;
             let handler = dc.language_handler;
             let frame = dc.establisher_frame;
+            seh_trace!(
+                "déroulement vers {:#x} : cadre {} (établi {:#x}), gestionnaire {}",
+                target_frame,
+                crate::thunks::describe_site(dc.control_pc as usize),
+                frame,
+                crate::thunks::describe_site(handler)
+            );
             let r = call_handler_tramp(
                 rec,
                 frame,
@@ -1286,6 +1336,63 @@ unsafe fn unwind_ex(
         std::ptr::copy_nonoverlapping(context.0.as_ptr(), out_ctx, CONTEXT_SIZE);
     }
     rtl_restore_context(context.ptr(), rec)
+}
+
+/// Déroule jusqu'à `target_frame` / `target_ip` à partir du CONTEXT
+/// `start` (celui de l'exception) : utilisé par les gestionnaires de
+/// langage écrits dans Winlux, dont les cadres Rust ne sont pas déroulables.
+pub unsafe fn unwind_from(
+    target_frame: u64,
+    target_ip: u64,
+    rec: *mut ExceptionRecord,
+    retval: u64,
+    start: *const u8,
+) -> ! {
+    let mut c = Context::zeroed();
+    std::ptr::copy_nonoverlapping(start, c.ptr(), CONTEXT_SIZE);
+    unwind_ex(
+        target_frame,
+        target_ip,
+        rec,
+        retval,
+        &c,
+        std::ptr::null_mut(),
+    )
+}
+
+/// CONTEXT cible de la consolidation en cours (cadre dont le `catch` s'exécute).
+pub fn consolidate_target() -> Option<Context> {
+    FRAMES.with(|f| {
+        f.borrow()
+            .iter()
+            .rev()
+            .find(|e| e.kind == FrameKind::Consolidate)
+            .map(|e| e.resume)
+    })
+}
+
+/// Appelle le code invité `func(arg, arg)` (funclet de `catch`) de sorte
+/// qu'un déroulement qui le traverse reprenne dans le cadre `target`.
+pub unsafe fn call_funclet(func: usize, arg: u64, target: Context) -> u64 {
+    let index = push_frame(FrameKind::Consolidate, target);
+    let mut slot = 0u64;
+    let r = call_consolidate(
+        func,
+        arg as *mut ExceptionRecord,
+        frame_slot_ptr(index, &mut slot),
+    );
+    pop_frames_from(index);
+    r
+}
+
+/// Base du module invité contenant `addr`.
+pub fn module_base(addr: usize) -> Option<usize> {
+    crate::loader::MODULES
+        .try_lock()
+        .ok()?
+        .iter()
+        .find(|m| m.contains(addr))
+        .map(|m| m.base)
 }
 
 unsafe extern "win64" fn rtl_unwind_ex_impl(

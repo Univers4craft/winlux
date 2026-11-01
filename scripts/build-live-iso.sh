@@ -92,6 +92,13 @@ cp "$root/scripts/winlux-bluetooth.sh" "$stage/usr/bin/winlux-bluetooth"
 chmod 755 "$stage/usr/bin/winlux-bluetooth"
 cp "$root/scripts/winlux-display.sh" "$stage/usr/bin/winlux-display"
 chmod 755 "$stage/usr/bin/winlux-display"
+mkdir -p "$stage/usr/lib/winlux/sleep.d"
+cp "$root/scripts/winlux-sleep-display.sh" "$stage/usr/lib/winlux/sleep.d/10-display"
+chmod 755 "$stage/usr/lib/winlux/sleep.d/10-display"
+cp "$root/scripts/winlux-touchpad.sh" "$stage/usr/bin/winlux-touchpad"
+chmod 755 "$stage/usr/bin/winlux-touchpad"
+cp "$root/scripts/winlux-sleep-touchpad.sh" "$stage/usr/lib/winlux/sleep.d/20-touchpad"
+chmod 755 "$stage/usr/lib/winlux/sleep.d/20-touchpad"
 cp "$root/scripts/winlux-prime-run.sh" "$stage/usr/bin/winlux-prime-run"
 chmod 755 "$stage/usr/bin/winlux-prime-run"
 # Historique des fichiers, sessions multi-utilisateur, bureau à distance
@@ -100,6 +107,10 @@ cp "$root/scripts/winlux-sessions.sh" "$stage/usr/bin/winlux-sessions"
 cp "$root/scripts/winlux-remote-config.sh" "$stage/usr/bin/winlux-remote-config"
 cp "$root/target/release/winlux-remote" "$stage/usr/bin/winlux-remote"
 chmod 755 "$stage/usr/bin/winlux-backup" "$stage/usr/bin/winlux-sessions" "$stage/usr/bin/winlux-remote-config" "$stage/usr/bin/winlux-remote"
+# Partage de dossiers (Samba si présent) et transfert des réglages par fichier.
+cp "$root/scripts/winlux-share.sh" "$stage/usr/bin/winlux-share"
+cp "$root/scripts/winlux-transfer.sh" "$stage/usr/bin/winlux-transfer"
+chmod 755 "$stage/usr/bin/winlux-share" "$stage/usr/bin/winlux-transfer"
 mkdir -p "$stage/usr/share/winlux"
 # Store de logiciels et gestionnaire de polices du shell.
 cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
@@ -185,7 +196,7 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite print_suite winpaths uac_suite; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -283,7 +294,10 @@ if test -d /usr/share/alsa; then
 fi
 # Keep normal module names and dependency metadata so udev/modprobe can bind
 # network, audio and common input devices instead of relying on host drivers.
-for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1; do
+# Display drivers of the usual VM adapters (QEMU std VGA, QXL, VMware and
+# VirtualBox VMSVGA): without a DRM device the modesetting driver of Xorg has
+# nothing to drive and the desktop never appears (virtio-gpu is loaded apart).
+for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1 bochs qxl vmwgfx cifs nfs nfsv3 nfsv4; do
     modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
         test "$directive" = insmod || continue
         destination="$stage${module%.zst}"
@@ -501,7 +515,7 @@ boot_mark recovery
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid-generic.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/serio-raw.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/psmouse.ko 2>/dev/null || true
-for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
+for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio bochs qxl vmwgfx; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
@@ -559,7 +573,10 @@ fi
 # arrière-plan et en basse priorité, elle ne retarde plus le bureau.
 browser_setup_pid=
 if test -f /usr/share/winlux/browsers/edge.deb; then
-    /bin/busybox nice -n 10 /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 &
+    # The static BusyBox of the image has no nice applet: use coreutils.
+    nice=
+    if test -x /usr/bin/nice; then nice='/usr/bin/nice -n 10'; fi
+    $nice /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 &
     browser_setup_pid=$!
 fi
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
@@ -694,6 +711,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
     export XDG_RUNTIME_DIR=/run/user/0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus
     export WINLUX_NATIVE_SHELL=1
+    # Proxy commun aux applis Windows et Linux (écrit par Winlux).
+    if test -r /etc/winlux/proxy.env; then . /etc/winlux/proxy.env; fi
     if test -d /usr/lib/locale/fr_FR.utf8; then export LANG=fr_FR.UTF-8; else export LANG=C.UTF-8; fi
     if ! /usr/bin/winlux-native-session >/run/winlux/native-session.log 2>&1; then
         /bin/busybox cat /run/winlux/native-session.log >&2
@@ -712,6 +731,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     ) &
     # Bureau à distance : relancé au démarrage s'il était activé.
     DISPLAY=:0 /usr/bin/winlux-remote-config ensure >/dev/null 2>&1 || true
+    # Dossiers partagés : serveur relancé s'il y a des partages actifs.
+    /usr/bin/winlux-share ensure >/dev/null 2>&1 &
     # Tâches planifiées « à l'ouverture de session ».
     /usr/bin/winlux --tasks fire logon >>/run/winlux/tasks.log 2>&1 &
     (
@@ -720,39 +741,35 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
             /bin/busybox sleep 3
         done
     ) &
-    # Quand la fenêtre de la VM change de taille, QEMU annonce un nouveau
-    # mode préféré : on l'applique pour que le bureau suive la fenêtre.
+    # Écrans : branchement à chaud, capot et taille de la fenêtre VM (QEMU
+    # annonce un nouveau mode préféré) sont suivis par le runtime.
     (
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
-            if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then
-                modes=$(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox grep -E '[*+]' | /bin/busybox tr -s ' ' | /bin/busybox tr '\n' ';')
-                if test "$modes" != "${last_modes:-}"; then echo "Winlux xrandr: $modes"; last_modes=$modes; fi
-            fi
-            # Follow the preferred VM mode, or keep the user's fixed mode.
-            DISPLAY=:0 /usr/bin/winlux-display sync 2>/dev/null || true
+            DISPLAY=:0 /usr/bin/winlux-display watch 2>>/run/winlux/display.log || true
             /bin/busybox sleep 1
         done
     ) &
+    if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then
+        (
+            while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
+                modes=$(DISPLAY=:0 /usr/bin/xrandr --current 2>/dev/null | /bin/busybox grep -E '[*+]' | /bin/busybox tr -s ' ' | /bin/busybox tr '\n' ';')
+                if test "$modes" != "${last_modes:-}"; then echo "Winlux xrandr: $modes"; last_modes=$modes; fi
+                /bin/busybox sleep 1
+            done
+        ) &
+    fi
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
         keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
         case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
-        tapping=$(/bin/busybox sed -n 's/^TAP_TO_CLICK=//p' /etc/winlux/input.conf 2>/dev/null)
-        case "$tapping" in 0|1)
-            for device in $(DISPLAY=:0 /usr/bin/xinput --list --id-only 2>/dev/null); do
-                DISPLAY=:0 /usr/bin/xinput set-prop "$device" 'libinput Tapping Enabled' "$tapping" 2>/dev/null || true
-            done ;;
-        esac
+        # Pavé tactile : toucher-clic, deux doigts, défilement naturel, vitesse.
+        DISPLAY=:0 /usr/bin/winlux-touchpad apply 2>/dev/null || true
         taskbar_align=$(/bin/busybox sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null)
         desktop_theme=$(/bin/busybox sed -n 's/^THEME=//p' /etc/winlux/preferences.conf 2>/dev/null)
-        # Échelle d'interface choisie d'après la hauteur de l'écran au lancement.
-        screen_height=$(DISPLAY=:0 /usr/bin/xrandr --query 2>/dev/null | /bin/busybox awk '/\*/ { split($1, size, "x"); print size[2]; exit }')
-        ui_scale=1
-        if test "${screen_height:-0}" -ge 2000; then ui_scale=2
-        elif test "${screen_height:-0}" -ge 1400; then ui_scale=1.5
-        elif test "${screen_height:-0}" -ge 1000; then ui_scale=1.25
-        fi
-        saved_scale=$(/bin/busybox sed -n 's/^UI_SCALE=//p' /etc/winlux/display.conf 2>/dev/null)
-        case "$saved_scale" in 1|1.25|1.5|2) ui_scale=$saved_scale ;; esac
+        # Échelle du bureau : la plus grande demandée parmi les écrans
+        # allumés (densité réelle ou réglage par écran), les autres écrans
+        # sont réduits par RandR.
+        ui_scale=$(DISPLAY=:0 /usr/bin/winlux-display session-scale 2>/dev/null)
+        case "$ui_scale" in 1|1.25|1.5|1.75|2|2.5|3) ;; *) ui_scale=1 ;; esac
         input_diag=
         if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then input_diag=1; fi
         tray_battery=0
@@ -840,6 +857,15 @@ chmod 755 "$stage/init"
 if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
     python3 "$root/scripts/stage-apt-root.py" "$stage" "$apt_base" --package "$root/build/winlux-desktop.deb"
 fi
+# Samba et wsdd ne démarrent jamais seuls : winlux-share lance smbd et wsdd
+# uniquement quand l'utilisateur partage un dossier (pas de nmbd ni d'AD DC).
+for unit in smbd nmbd samba samba-ad-dc wsdd; do
+    rm -f "$stage/etc/winlux/services-enabled/$unit.service"
+    if test -e "$stage/usr/lib/systemd/system/$unit.service" || test -e "$stage/lib/systemd/system/$unit.service"; then
+        mkdir -p "$stage/etc/systemd/system"
+        ln -sfn /dev/null "$stage/etc/systemd/system/$unit.service"
+    fi
+done
 
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"
@@ -848,7 +874,7 @@ sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"
 sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$iso_root/boot/grub/themes/winlux"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
-set timeout=5
+set timeout=2
 set timeout_style=menu
 set winlux_term=console
 if loadfont /boot/grub/themes/winlux/unicode.pf2; then
@@ -865,6 +891,11 @@ if serial --unit=0 --speed=115200; then
     terminal_input serial console
     terminal_output serial $winlux_term
 fi
+# Installation Winlux sur un disque : cherchée une fois, avant le menu. Une
+# recherche ratée à l'intérieur d'une entrée fait attendre GRUB 10 s sur
+# « Press any key to continue » à chaque démarrage live.
+set winlux_root=
+search --no-floppy --label WINLUX_ROOT --set=winlux_root
 menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
     linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4
     initrd /boot/winlux-initramfs.cpio.gz
@@ -874,7 +905,7 @@ function winlux_live {
     initrd /boot/winlux-initramfs.cpio.gz
 }
 menuentry "Winlux Desktop" {
-    if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then
+    if test -n "$winlux_root"; then
         if test -f "($winlux_root)/boot/vmlinuz"; then
             # Load the updated kernel and persistent root from the disk.
             if test -f "($winlux_root)/boot/winlux-split-root"; then

@@ -22,6 +22,8 @@ struct Options {
     agent: String,
     proxy: Option<String>,
     bypass: String,
+    /// Accès par défaut ou automatique : proxy système commun à Linux.
+    system_proxy: bool,
     connect_ms: i32,
     total_ms: i32,
     context: usize,
@@ -165,7 +167,7 @@ pub unsafe extern "win64" fn open(
     bypass: *const u16,
     flags: u32,
 ) -> usize {
-    if flags != 0 || !matches!(access, 0 | 1 | 3) {
+    if flags != 0 || !matches!(access, 0 | 1 | 3 | 4) {
         return fail(50);
     }
     let (agent, proxy, bypass) = match (
@@ -185,6 +187,7 @@ pub unsafe extern "win64" fn open(
             agent,
             proxy: (access == 3).then_some(proxy),
             bypass,
+            system_proxy: matches!(access, 0 | 4),
             connect_ms: 60000,
             total_ms: 120000,
             context: 0,
@@ -477,7 +480,15 @@ fn perform(request: &Request) -> Result<Response, u32> {
             request.options.total_ms as f64 / 1000.0
         ));
     }
-    if let Some(proxy) = &request.options.proxy {
+    let system = if request.options.system_proxy {
+        crate::proxy::load()
+            .and_then(|p| crate::proxy::for_request(&p, &request.host, request.secure))
+    } else {
+        None
+    };
+    if let Some(proxy) = system {
+        config.push_str(&format!("proxy = {}\n", quote(&proxy)));
+    } else if let Some(proxy) = &request.options.proxy {
         if proxy.contains([';', '=']) {
             return Err(50);
         }
@@ -510,6 +521,9 @@ fn perform(request: &Request) -> Result<Response, u32> {
     let config = private_file(&directory, "request.conf", config.as_bytes())?;
     // No shell, no URL/header/credential in the process command line. curl's
     // user config is disabled; there is no switch to ignore TLS validation.
+    if !crate::permissions::allowed(crate::permissions::Capability::Network) {
+        return Err(12029); // ERROR_WINHTTP_CANNOT_CONNECT
+    }
     let output = Command::new("/usr/bin/curl")
         .arg("--disable")
         .arg("--config")
@@ -829,26 +843,55 @@ pub struct IeProxyConfig {
     proxy: *mut u16,
     bypass: *mut u16,
 }
+/// Chaîne large allouée pour l'appelant (qui la libère avec GlobalFree ;
+/// la libération échoue sans dommage, la chaîne est minuscule).
+fn alloc_wide(s: &str) -> *mut u16 {
+    if s.is_empty() {
+        return std::ptr::null_mut();
+    }
+    let w: Vec<u16> = s.encode_utf16().chain([0]).collect();
+    unsafe {
+        let p = libc::malloc(w.len() * 2) as *mut u16;
+        if !p.is_null() {
+            std::ptr::copy_nonoverlapping(w.as_ptr(), p, w.len());
+        }
+        p
+    }
+}
+/// Proxy système (commun à Linux) au format WinHTTP.
+fn system_proxy_strings() -> Option<(String, String)> {
+    let p = crate::proxy::load()?;
+    Some((crate::proxy::windows_server(&p), p.bypass.clone()))
+}
 pub unsafe extern "win64" fn default_proxy(out: *mut ProxyInfo) -> i32 {
     if out.is_null() {
         return fail(87);
     }
-    out.write(ProxyInfo {
-        access: 1,
-        proxy: std::ptr::null_mut(),
-        bypass: std::ptr::null_mut(),
-    });
+    let info = match system_proxy_strings() {
+        Some((server, bypass)) => ProxyInfo {
+            access: 3,
+            proxy: alloc_wide(&server),
+            bypass: alloc_wide(&bypass),
+        },
+        None => ProxyInfo {
+            access: 1,
+            proxy: std::ptr::null_mut(),
+            bypass: std::ptr::null_mut(),
+        },
+    };
+    out.write(info);
     1
 }
 pub unsafe extern "win64" fn ie_proxy(out: *mut IeProxyConfig) -> i32 {
     if out.is_null() {
         return fail(87);
     }
+    let (server, bypass) = system_proxy_strings().unwrap_or_default();
     out.write(IeProxyConfig {
         autodetect: 0,
         url: std::ptr::null_mut(),
-        proxy: std::ptr::null_mut(),
-        bypass: std::ptr::null_mut(),
+        proxy: alloc_wide(&server),
+        bypass: alloc_wide(&bypass),
     });
     1
 }

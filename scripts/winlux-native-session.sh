@@ -62,6 +62,18 @@ if test -x /usr/sbin/NetworkManager; then
     echo "$network_pid" >/run/winlux/network-manager.pid
     /usr/bin/winlux-network-watch "$network_pid" >/run/winlux/network-fallback.log 2>&1 &
 fi
+# Printing (#111): there is no systemd to socket-activate CUPS, start it here.
+if test -x /usr/sbin/cupsd && ! test -S /run/cups/cups.sock; then
+    mkdir -p /run/cups /var/spool/cups/tmp /var/cache/cups
+    /usr/sbin/cupsd -f >/run/winlux/cups.log 2>&1 &
+fi
+# Sound (#115): PipeWire with its session manager and Pulse server gives every
+# .exe its own stream (per-app volume). ALSA alone stays the fallback.
+if test -x /usr/bin/pipewire && test -x /usr/bin/wireplumber; then
+    /usr/bin/pipewire >/run/winlux/pipewire.log 2>&1 &
+    /usr/bin/wireplumber >/run/winlux/wireplumber.log 2>&1 &
+    if test -x /usr/bin/pipewire-pulse; then /usr/bin/pipewire-pulse >/run/winlux/pipewire-pulse.log 2>&1 & fi
+fi
 # Start the desktop file service after its hardware dependencies are ready.
 # An early GVfs activation could otherwise time out on software-emulated CPUs.
 /usr/bin/Thunar --daemon >/run/winlux/file-manager.log 2>&1 &
@@ -99,6 +111,8 @@ fi
 if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux/clipboard-bridge.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
+# Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.
+if test -x /usr/bin/winlux-share; then /usr/bin/winlux-share ensure >/dev/null 2>&1 & fi
 /usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
 case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac

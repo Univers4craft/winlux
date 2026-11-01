@@ -73,7 +73,7 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
                     chans.push((n, pt));
                 }
             }
-            ("compression", _) => comp = v[0],
+            ("compression", _) => comp = *v.first().ok_or(Error::Corrupt)?,
             ("dataWindow", "box2i") => {
                 win = (
                     le32(v, 0) as i32,
@@ -86,9 +86,16 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
         }
         p += size;
     }
-    let w = (win.2 - win.0 + 1).max(0) as u32;
-    let h = (win.3 - win.1 + 1).max(0) as u32;
+    let w = win.2.saturating_sub(win.0).saturating_add(1).max(0) as u32;
+    let h = win.3.saturating_sub(win.1).saturating_add(1).max(0) as u32;
     super::check_size(w, h)?;
+    // Tampon flottant de 16 octets par pixel : 64 mégapixels au plus (1 Gio).
+    if w as u64 * h as u64 > 1 << 26 || chans.len() > 256 {
+        return Err(Error::TooLarge);
+    }
+    if chans.is_empty() {
+        return Err(Error::Corrupt);
+    }
     let lines = match comp {
         0..=2 => 1,
         3 => 16,
@@ -127,6 +134,9 @@ pub fn decode(d: &[u8]) -> Result<Image, Error> {
         let src = d.get(o + 8..o + 8 + size).ok_or(Error::Corrupt)?;
         let n_lines = (lines as i32).min(h as i32 - y0).max(0) as usize;
         let expect = line_bytes * n_lines;
+        if expect > 256 << 20 {
+            return Err(Error::TooLarge);
+        }
         let raw = if size == expect || comp == 0 {
             src.to_vec()
         } else {

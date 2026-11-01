@@ -119,6 +119,10 @@ pub fn tr(fr: &'static [u8], en: &'static [u8]) -> &'static [u8] {
 
 // ---------- Données ----------
 
+pub fn fnv_hash(bytes: &[u8]) -> u32 {
+    fnv(bytes)
+}
+
 fn fnv(bytes: &[u8]) -> u32 {
     let mut h: u32 = 0x811C_9DC5;
     for &b in bytes {
@@ -128,7 +132,7 @@ fn fnv(bytes: &[u8]) -> u32 {
     h
 }
 
-unsafe fn global_copy(src: &[u8]) -> Handle {
+pub unsafe fn global_copy(src: &[u8]) -> Handle {
     let h = GlobalAlloc(0x0002, src.len().max(1));
     if h.is_null() {
         return h;
@@ -613,8 +617,16 @@ pub unsafe fn get_text(out: &mut [u8]) -> usize {
     n
 }
 
-/// Publie une liste de fichiers (CF_HDROP) pour l'historique et les autres programmes.
-pub unsafe fn set_files(paths: &[&[u8]]) -> bool {
+/// Format enregistré « Preferred DropEffect » : 2 = couper (déplacer),
+/// 5 = copier. Le pont presse-papiers le traduit en « cut »/« copy » pour
+/// Thunar et le bureau, et inversement.
+unsafe fn drop_effect_format() -> u32 {
+    RegisterClipboardFormatA(c"Preferred DropEffect".as_ptr())
+}
+
+/// Publie une liste de fichiers (CF_HDROP) pour l'historique et les autres
+/// programmes ; `cut` marque un déplacement (Couper).
+pub unsafe fn set_files(paths: &[&[u8]], cut: bool) -> bool {
     let mut buf = [0u8; 8192];
     let n = build_hdrop(paths, &mut buf);
     if n == 0 {
@@ -626,8 +638,33 @@ pub unsafe fn set_files(paths: &[&[u8]]) -> bool {
     }
     EmptyClipboard();
     let ok = SetClipboardData(CF_HDROP, h as usize) != 0;
+    let effect: u32 = if cut { 2 } else { 5 };
+    let format = drop_effect_format();
+    let e = global_copy(&effect.to_le_bytes());
+    if ok && format != 0 && !e.is_null() {
+        SetClipboardData(format, e as usize);
+    }
     CloseClipboard();
     ok
+}
+
+/// Vrai si les fichiers du presse-papiers ont été coupés (déplacement).
+pub unsafe fn files_cut() -> bool {
+    let format = drop_effect_format();
+    if format == 0 || OpenClipboard(core::ptr::null_mut()) == 0 {
+        return false;
+    }
+    let mut effect = 0u32;
+    let h = GetClipboardData(format) as Handle;
+    if !h.is_null() && GlobalSize(h) >= 4 {
+        let p = GlobalLock(h) as *const u8;
+        if !p.is_null() {
+            effect = u32::from_le_bytes([*p, *p.add(1), *p.add(2), *p.add(3)]);
+            GlobalUnlock(h);
+        }
+    }
+    CloseClipboard();
+    effect & 2 != 0 && effect & 1 == 0
 }
 
 /// Chemins complets du CF_HDROP courant, séparés par « \n ».

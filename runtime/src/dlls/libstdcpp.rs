@@ -17,8 +17,8 @@ use std::ffi::c_void;
 //   0x10  unexpected_handler
 //   0x18  terminate_handler
 //   0x20  next_exception
-//   0x28  handler_count
-//   0x30  handler_switch_value
+//   0x28  handler_count   (négatif pendant un __cxa_rethrow)
+//   0x30  taille de l'objet (pour libérer avec la bonne disposition)
 //   0x38  action_record
 //   0x40  language_specific_data
 //   0x48  caught_ptr
@@ -47,8 +47,22 @@ pub unsafe extern "win64" fn cxa_allocate_exception(size: u64) -> *mut c_void {
     if ptr.is_null() {
         std::process::abort();
     }
+    (ptr.add(0x30) as *mut u64).write(size);
     // Return pointer to the user object (after header + _Unwind_Exception)
     ptr.add(ALLOC_SIZE) as *mut c_void
+}
+
+const OBJECT_SIZE_OFFSET: usize = 0x30;
+const HANDLER_COUNT_OFFSET: usize = 0x28;
+
+unsafe fn header_of(ue: *mut u8) -> *mut u8 {
+    ue.sub(CXA_HDR_SIZE)
+}
+unsafe fn handler_count(hdr: *mut u8) -> i64 {
+    (hdr.add(HANDLER_COUNT_OFFSET) as *const i64).read()
+}
+unsafe fn set_handler_count(hdr: *mut u8, v: i64) {
+    (hdr.add(HANDLER_COUNT_OFFSET) as *mut i64).write(v);
 }
 
 // ── __cxa_free_exception ─────────────────────────────────────────────
@@ -57,8 +71,8 @@ pub unsafe extern "win64" fn cxa_free_exception(obj: *mut c_void) {
         return;
     }
     let hdr = (obj as *mut u8).sub(ALLOC_SIZE);
-    let size_guess = 256; // We don't track size; use header-only dealloc
-    let total = ALLOC_SIZE + size_guess;
+    let size = (hdr.add(OBJECT_SIZE_OFFSET) as *const u64).read() as usize;
+    let total = ALLOC_SIZE + size;
     let layout = std::alloc::Layout::from_size_align(total, 16)
         .unwrap_or_else(|_| std::alloc::Layout::from_size_align(ALLOC_SIZE, 16).unwrap());
     std::alloc::dealloc(hdr, layout);
@@ -133,39 +147,50 @@ pub unsafe extern "win64" fn cxa_begin_catch(exc: *mut c_void) -> *mut c_void {
         return std::ptr::null_mut();
     }
     let ue = exc as *mut u8;
-    CAUGHT_STACK.with(|s| s.borrow_mut().push(ue));
-    // Return pointer to the thrown object (after _Unwind_Exception header)
-    // Actually for GCC, the exc pointer points to _Unwind_Exception,
-    // and the thrown object is at hdr + ALLOC_SIZE (which is ue + UE_SIZE for our layout).
-    // But the C++ runtime passes exc as the value of RAX from the landing pad,
-    // which is the _Unwind_Exception*. The actual thrown object is after the full header.
-    let hdr = ue.sub(CXA_HDR_SIZE);
+    let hdr = header_of(ue);
+    // Comme libstdc++ : un compte négatif signale une exception en cours de
+    // __cxa_rethrow, rattrapée par un bloc plus haut ; il redevient positif.
+    let count = handler_count(hdr);
+    let count = if count < 0 { -count + 1 } else { count + 1 };
+    set_handler_count(hdr, count);
+    CAUGHT_STACK.with(|s| {
+        let mut stack = s.borrow_mut();
+        if stack.last().copied() != Some(ue) {
+            stack.push(ue);
+        }
+    });
+    // L'objet levé suit l'en-tête complet (ue + UE_SIZE pour notre disposition).
     let obj = hdr.add(ALLOC_SIZE);
     obj as *mut c_void
 }
 
 // ── __cxa_end_catch ──────────────────────────────────────────────────
 pub unsafe extern "win64" fn cxa_end_catch() {
-    CAUGHT_STACK.with(|s| {
-        let mut stack = s.borrow_mut();
-        if let Some(ue) = stack.pop() {
-            let hdr = ue.sub(CXA_HDR_SIZE);
-            // Decrement handler count or free
-            let handler_count = hdr.add(0x28) as *mut i64;
-            *handler_count -= 1;
-            if *handler_count <= 0 {
-                // Free the exception
-                let dtor_ptr = (hdr.add(0x08) as *const u64).read();
-                let obj = hdr.add(ALLOC_SIZE);
-                if dtor_ptr != 0 {
-                    type DtorFn = unsafe extern "win64" fn(*mut c_void);
-                    let dtor: DtorFn = std::mem::transmute(dtor_ptr);
-                    dtor(obj as *mut c_void);
-                }
-                // Don't free memory during rethrow scenarios
-            }
+    let top = CAUGHT_STACK.with(|s| s.borrow().last().copied());
+    let Some(ue) = top else { return };
+    let hdr = header_of(ue);
+    let count = handler_count(hdr);
+    if count < 0 {
+        // Exception relancée : elle quitte ce bloc sans être détruite.
+        let count = count + 1;
+        set_handler_count(hdr, count);
+        if count == 0 {
+            CAUGHT_STACK.with(|s| {
+                s.borrow_mut().pop();
+            });
         }
+        return;
+    }
+    let count = count - 1;
+    set_handler_count(hdr, count);
+    if count > 0 {
+        return;
+    }
+    CAUGHT_STACK.with(|s| {
+        s.borrow_mut().pop();
     });
+    // Dernier bloc catch : destructeur puis libération.
+    cxa_exception_cleanup(0, ue as *mut c_void);
 }
 
 // ── __cxa_rethrow ────────────────────────────────────────────────────
@@ -194,9 +219,22 @@ unsafe extern "win64" fn cxa_rethrow_inner() -> ! {
     });
     match ue {
         Some(ue) => {
-            super::libgcc::unwind_resume_inner(ue as *mut c_void);
+            // Le compte de gestionnaires devient négatif : le __cxa_end_catch
+            // du bloc qui relance ne détruit pas l'objet. Nouvelle recherche
+            // complète d'un gestionnaire depuis ce point, comme libstdc++.
+            let hdr = header_of(ue);
+            let count = handler_count(hdr);
+            if count > 0 {
+                set_handler_count(hdr, -count);
+            }
+            super::libgcc::unwind_raise_exception(ue as *mut c_void);
+            eprintln!("winlux: exception C++ relancée sans gestionnaire");
+            std::process::abort();
         }
-        None => std::process::abort(),
+        None => {
+            eprintln!("winlux: __cxa_rethrow sans exception en cours");
+            std::process::abort();
+        }
     }
 }
 
@@ -221,34 +259,73 @@ pub unsafe extern "win64" fn cxa_pure_virtual() -> ! {
 }
 
 // ── __cxa_atexit ─────────────────────────────────────────────────────
+/// `__cxa_atexit(dtor, obj, dso)` : le destructeur de l'objet statique est
+/// exécuté à la sortie, en ordre inverse d'enregistrement, avec `atexit`.
 pub unsafe extern "win64" fn cxa_atexit(
-    _func: *mut c_void,
-    _arg: *mut c_void,
+    func: *mut c_void,
+    arg: *mut c_void,
     _dso: *mut c_void,
 ) -> i32 {
-    0
+    super::crt_runtime::register_atexit(func as usize, arg as usize)
 }
 
 // ── __cxa_guard_acquire / release / abort ────────────────────────────
-// For thread-safe static initialization
+// Initialisation des statiques locales, sans course : le premier octet du
+// garde vaut 1 une fois l'objet construit ; pendant la construction, le
+// garde figure dans `GUARDS_IN_PROGRESS` et les autres threads attendent sous
+// le verrou (Mutex + Condvar) au lieu de construire l'objet une seconde fois.
+use std::collections::HashSet;
 use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::LazyLock;
+use std::sync::{Condvar, Mutex};
+
+static GUARDS_IN_PROGRESS: LazyLock<Mutex<HashSet<usize>>> =
+    LazyLock::new(|| Mutex::new(HashSet::new()));
+static GUARD_RELEASED: Condvar = Condvar::new();
 
 pub unsafe extern "win64" fn cxa_guard_acquire(guard: *mut i64) -> i32 {
-    let byte = guard as *const AtomicU8;
-    if (*byte).load(Ordering::Acquire) != 0 {
-        return 0; // Already initialized
+    if guard.is_null() {
+        return 0;
     }
-    // Simple: just claim it (no contention handling for now)
-    1
+    let byte = guard as *const AtomicU8;
+    let mut busy = GUARDS_IN_PROGRESS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    loop {
+        if (*byte).load(Ordering::Acquire) != 0 {
+            return 0; // déjà initialisé
+        }
+        if busy.insert(guard as usize) {
+            return 1; // à nous de construire l'objet
+        }
+        // Un autre thread construit : attendre sa release/abort.
+        busy = GUARD_RELEASED
+            .wait(busy)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+    }
 }
 
 pub unsafe extern "win64" fn cxa_guard_release(guard: *mut i64) {
-    let byte = guard as *mut AtomicU8;
-    (*byte).store(1, Ordering::Release);
+    if guard.is_null() {
+        return;
+    }
+    let mut busy = GUARDS_IN_PROGRESS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    (*(guard as *mut AtomicU8)).store(1, Ordering::Release);
+    busy.remove(&(guard as usize));
+    GUARD_RELEASED.notify_all();
 }
 
-pub unsafe extern "win64" fn cxa_guard_abort(_guard: *mut i64) {
-    // Nothing to do for our simple implementation
+pub unsafe extern "win64" fn cxa_guard_abort(guard: *mut i64) {
+    if guard.is_null() {
+        return;
+    }
+    let mut busy = GUARDS_IN_PROGRESS
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    busy.remove(&(guard as usize));
+    GUARD_RELEASED.notify_all();
 }
 
 // ── Exports ─────────────────────────────────────────────────────────

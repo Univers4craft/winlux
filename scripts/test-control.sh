@@ -177,6 +177,17 @@ touch "$work/root/etc/winlux/live-session"
 if WINLUX_TEST_BUSY=1 control poweroff; then echo 'ERROR: shutdown allowed during update' >&2; exit 1; fi
 if WINLUX_TEST_BUSY=1 control reboot; then echo 'ERROR: reboot allowed during update' >&2; exit 1; fi
 if WINLUX_TEST_BUSY=1 control restart-session; then echo 'ERROR: session restart allowed during update' >&2; exit 1; fi
+# Arrêt réel : winlux-power (écran d'arrêt puis signal à l'init), jamais le
+# poweroff de systemd que l'image fournit et qui échoue sans systemd.
+cat > "$work/bin/winlux-power-mock" <<'MOCK'
+#!/bin/sh
+printf 'winlux-power %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"
+MOCK
+chmod +x "$work/bin/winlux-power-mock"
+WINLUX_POWER="$work/bin/winlux-power-mock" control poweroff
+WINLUX_POWER="$work/bin/winlux-power-mock" control reboot
+grep -qx 'winlux-power now poweroff' "$work/commands"
+grep -qx 'winlux-power now reboot' "$work/commands"
 rm "$work/root/etc/winlux/live-session"
 if control reboot; then echo 'ERROR: refused-host-reboot failed' >&2; exit 1; fi
 grep -q 'Arret reserve a Winlux Live' "$work/root/run/winlux/action.log"
@@ -216,6 +227,23 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do grep -q '^fan-daemon ' "$work/commands" 
 grep -qx "fan-daemon $work/root" "$work/commands"
 control cpu-fan-auto
 grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
+# Sans adaptateur, l'état ne doit jamais interroger bluetoothctl, qui
+# attendrait bluetoothd sans fin (blocage du démarrage de session).
+: > "$work/commands"
+sh "$project/scripts/winlux-bluetooth.sh" status
+grep -qx 'present=0' "$work/root/run/winlux/bluetooth.txt"
+if grep -q '^bluetoothctl' "$work/commands"; then echo 'ERROR: bluetoothctl queried without adapter' >&2; exit 1; fi
+mkdir -p "$work/root/sys/class/bluetooth/hci0"
+# Un bluetoothctl qui ne répond pas est abandonné après le délai.
+mkdir -p "$work/hang"
+printf '#!/bin/sh
+exec sleep 60
+' > "$work/hang/bluetoothctl"
+chmod 755 "$work/hang/bluetoothctl"
+started=$(date +%s)
+PATH="$work/hang:$PATH" WINLUX_BLUETOOTH_QUERY_SECONDS=1 sh "$project/scripts/winlux-bluetooth.sh" status
+test $(( $(date +%s) - started )) -lt 10
+grep -qx 'present=0' "$work/root/run/winlux/bluetooth.txt"
 control bluetooth-on
 grep -qx 'bluetooth_present=1' "$work/root/run/winlux/control.txt"
 grep -qx 'bluetooth_powered=1' "$work/root/run/winlux/control.txt"

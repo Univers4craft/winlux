@@ -91,12 +91,16 @@ pub unsafe extern "win64" fn write_console_a(
     } else {
         std::slice::from_raw_parts(buf, n as usize)
     };
-    // Les octets sont dans la page de code de la console (Windows-1252) :
-    // on les convertit pour le terminal Linux, qui attend de l'UTF-8.
-    let text = if CONSOLE_OUTPUT_CP.load(Ordering::Relaxed) == 65001 {
+    // Les octets sont dans la page de code de la console (OEM de la locale,
+    // 850 en Europe de l'Ouest, sauf SetConsoleOutputCP) : on les convertit
+    // pour le terminal Linux, qui attend de l'UTF-8.
+    let cp = get_console_output_cp();
+    let text = if cp == 65001 {
         bytes.to_vec()
     } else {
-        crate::dlls::decode_ansi(bytes).into_bytes()
+        crate::intl::codepage::decode(cp, bytes, false)
+            .unwrap_or_else(|_| crate::dlls::decode_ansi(bytes))
+            .into_bytes()
     };
     if !write_std(h, &text) {
         crate::process::set_last_error(232);
@@ -110,8 +114,9 @@ pub unsafe extern "win64" fn write_console_a(
 
 static CONSOLE_MODE_IN: AtomicU32 = AtomicU32::new(0x1f7);
 static CONSOLE_MODE_OUT: AtomicU32 = AtomicU32::new(0x3);
-static CONSOLE_CP: AtomicU32 = AtomicU32::new(1252);
-static CONSOLE_OUTPUT_CP: AtomicU32 = AtomicU32::new(1252);
+/// 0 : page OEM de la locale (valeur par défaut de la console Windows).
+static CONSOLE_CP: AtomicU32 = AtomicU32::new(0);
+static CONSOLE_OUTPUT_CP: AtomicU32 = AtomicU32::new(0);
 
 pub unsafe extern "win64" fn get_console_mode(h: usize, mode: *mut u32) -> i32 {
     if mode.is_null() {
@@ -151,20 +156,26 @@ pub extern "win64" fn set_console_mode(h: usize, mode: u32) -> i32 {
     1
 }
 pub extern "win64" fn get_console_cp() -> u32 {
-    CONSOLE_CP.load(Ordering::Relaxed)
+    match CONSOLE_CP.load(Ordering::Relaxed) {
+        0 => crate::intl::codepage::resolve(crate::intl::codepage::CP_OEMCP),
+        cp => cp,
+    }
 }
 pub extern "win64" fn get_console_output_cp() -> u32 {
-    CONSOLE_OUTPUT_CP.load(Ordering::Relaxed)
+    match CONSOLE_OUTPUT_CP.load(Ordering::Relaxed) {
+        0 => crate::intl::codepage::resolve(crate::intl::codepage::CP_OEMCP),
+        cp => cp,
+    }
 }
 pub extern "win64" fn set_console_cp(cp: u32) -> i32 {
-    if is_valid_code_page(cp) == 0 {
+    if !crate::intl::codepage::is_valid(cp) {
         return 0;
     }
     CONSOLE_CP.store(cp, Ordering::Relaxed);
     1
 }
 pub extern "win64" fn set_console_output_cp(cp: u32) -> i32 {
-    if is_valid_code_page(cp) == 0 {
+    if !crate::intl::codepage::is_valid(cp) {
         return 0;
     }
     CONSOLE_OUTPUT_CP.store(cp, Ordering::Relaxed);
@@ -215,33 +226,13 @@ pub extern "win64" fn set_console_text_attribute(h: usize, _attr: u16) -> i32 {
 
 // ---------- Pages de code ----------
 
-pub extern "win64" fn get_acp() -> u32 {
-    1252
-}
-pub extern "win64" fn get_oemcp() -> u32 {
-    850
-}
-pub extern "win64" fn is_valid_code_page(cp: u32) -> i32 {
-    matches!(cp, 437 | 850 | 1252 | 20127 | 28591 | 65000 | 65001) as i32
-}
+// GetACP, GetOEMCP, IsValidCodePage, GetCPInfo : voir crate::intl::api.
 pub extern "win64" fn is_dbcs_lead_byte(_b: u8) -> i32 {
     0
 }
 pub extern "win64" fn is_dbcs_lead_byte_ex(_cp: u32, _b: u8) -> i32 {
     0
 }
-/// `CPINFO` : taille maximale d'un caractère, caractère par défaut, octets de tête.
-pub unsafe extern "win64" fn get_cp_info(cp: u32, info: *mut u8) -> i32 {
-    if info.is_null() || is_valid_code_page(cp) == 0 && cp != 0 && cp != 1 {
-        crate::process::set_last_error(87);
-        return 0;
-    }
-    std::ptr::write_bytes(info, 0, 20);
-    *(info as *mut u32) = if cp == 65001 { 4 } else { 1 };
-    *info.add(4) = b'?';
-    1
-}
-
 // ---------- Environnement en un bloc ----------
 
 fn environment_block() -> Vec<String> {
@@ -402,10 +393,10 @@ pub extern "win64" fn switch_to_thread() -> i32 {
     1
 }
 pub extern "win64" fn exit_thread(code: u32) -> ! {
-    // Sans pile de retour vers le pont de thread, on termine le thread
-    // courant via pthread_exit : les destructeurs Rust ne sont pas exécutés.
-    crate::process::thread_detach_current();
-    unsafe { libc::pthread_exit(code as usize as *mut c_void) }
+    // Le handle du thread est signalé et son code enregistré, pour que
+    // WaitForSingleObject(hThread) rende la main et que GetExitCodeThread
+    // lise `code` ; puis retour au pont de thread (voir kernel32).
+    crate::dlls::kernel32::exit_current_thread(code)
 }
 
 // ---------- Chaînes « lstr » ----------
@@ -497,12 +488,34 @@ fn system_message(code: u32) -> Option<&'static str> {
 }
 
 const FORMAT_MESSAGE_ALLOCATE_BUFFER: u32 = 0x100;
+const FORMAT_MESSAGE_IGNORE_INSERTS: u32 = 0x200;
+const FORMAT_MESSAGE_FROM_STRING: u32 = 0x400;
 const FORMAT_MESSAGE_FROM_SYSTEM: u32 = 0x1000;
 
-/// Sous-ensemble de `FormatMessage` : messages système (`FROM_SYSTEM`) avec
-/// ou sans allocation du tampon. Les chaînes de format applicatives ne sont
-/// pas encore interprétées.
-unsafe fn format_message(flags: u32, code: u32) -> Option<String> {
+/// `FormatMessage` : messages système (`FROM_SYSTEM`) ou chaîne de format
+/// applicative (`FROM_STRING`) dont les insertions `%1`…`%99` (avec un
+/// format optionnel `!s!`, `!d!`, `!x!`…) sont lues dans `args`. Sans `args`
+/// (pointeur nul) ou avec `IGNORE_INSERTS`, les insertions sont copiées
+/// telles quelles au lieu de déréférencer un pointeur nul ; `%n`, `%r`,
+/// `%t`, `%%`, `%!`, `%.` et `%0` sont toujours interprétés.
+unsafe fn format_message(
+    flags: u32,
+    source: usize,
+    code: u32,
+    args: usize,
+    wide: bool,
+) -> Option<String> {
+    if flags & FORMAT_MESSAGE_FROM_STRING != 0 {
+        if source == 0 {
+            return None;
+        }
+        let template = if wide {
+            crate::dlls::wstr(source as *const u16)
+        } else {
+            crate::dlls::cstr(source as *const u8)
+        };
+        return Some(expand_inserts(&template, flags, args, wide));
+    }
     if flags & FORMAT_MESSAGE_FROM_SYSTEM == 0 {
         return None;
     }
@@ -513,16 +526,160 @@ unsafe fn format_message(flags: u32, code: u32) -> Option<String> {
             .unwrap_or_else(|| format!("Erreur Windows {code}."))
     ))
 }
+
+/// Valeur du n-ième argument d'insertion (tableau de pointeurs ou va_list,
+/// identiques sur x64 : des mots de 8 octets).
+unsafe fn insert_arg(args: usize, index: usize) -> Option<usize> {
+    if args == 0 || index == 0 {
+        return None;
+    }
+    Some(*(args as *const usize).add(index - 1))
+}
+
+unsafe fn expand_inserts(template: &str, flags: u32, args: usize, wide: bool) -> String {
+    let chars: Vec<char> = template.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c != '%' {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let Some(&next) = chars.get(i) else {
+            break;
+        };
+        match next {
+            '0' => break,
+            'n' => {
+                out.push_str("\r\n");
+                i += 1;
+            }
+            'r' => {
+                out.push('\r');
+                i += 1;
+            }
+            't' => {
+                out.push('\t');
+                i += 1;
+            }
+            '%' | '!' | '.' => {
+                out.push(next);
+                i += 1;
+            }
+            '1'..='9' => {
+                let start = i;
+                let mut n = 0usize;
+                while i < chars.len() && i - start < 2 && chars[i].is_ascii_digit() {
+                    n = n * 10 + chars[i].to_digit(10).unwrap_or(0) as usize;
+                    i += 1;
+                }
+                let mut spec = String::new();
+                if chars.get(i) == Some(&'!') {
+                    let mut j = i + 1;
+                    while j < chars.len() && chars[j] != '!' {
+                        spec.push(chars[j]);
+                        j += 1;
+                    }
+                    if j < chars.len() {
+                        i = j + 1;
+                    } else {
+                        spec.clear();
+                    }
+                }
+                let verbatim = flags & FORMAT_MESSAGE_IGNORE_INSERTS != 0 || args == 0;
+                match insert_arg(args, n).filter(|_| !verbatim) {
+                    Some(value) => out.push_str(&format_insert(value, &spec, wide)),
+                    None => {
+                        out.push('%');
+                        out.extend(chars[start..start + n.to_string().len()].iter());
+                        if !spec.is_empty() {
+                            out.push('!');
+                            out.push_str(&spec);
+                            out.push('!');
+                        }
+                    }
+                }
+            }
+            other => {
+                out.push(other);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Une insertion formatée : chaîne (`s`, par défaut), ou entier selon le
+/// format printf réduit (`d`, `i`, `u`, `x`, `X`, `c`, modificateurs `l`/`ll`
+/// et largeur ignorée pour l'essentiel).
+unsafe fn format_insert(value: usize, spec: &str, wide: bool) -> String {
+    let conv = spec
+        .chars()
+        .rev()
+        .find(|c| c.is_ascii_alphabetic())
+        .unwrap_or('s');
+    match conv {
+        's' | 'S' if value == 0 => "(null)".to_string(),
+        's' => {
+            if wide != (conv == 'S') {
+                crate::dlls::wstr(value as *const u16)
+            } else {
+                crate::dlls::cstr(value as *const u8)
+            }
+        }
+        'S' => {
+            if wide {
+                crate::dlls::cstr(value as *const u8)
+            } else {
+                crate::dlls::wstr(value as *const u16)
+            }
+        }
+        'c' | 'C' => char::from_u32(value as u32).unwrap_or('?').to_string(),
+        'd' | 'i' => {
+            if spec.contains("ll") || spec.contains("I64") {
+                (value as i64).to_string()
+            } else {
+                (value as i32).to_string()
+            }
+        }
+        'u' => {
+            if spec.contains("ll") || spec.contains("I64") {
+                (value as u64).to_string()
+            } else {
+                (value as u32).to_string()
+            }
+        }
+        'x' => {
+            if spec.contains("ll") || spec.contains("I64") {
+                format!("{:x}", value as u64)
+            } else {
+                format!("{:x}", value as u32)
+            }
+        }
+        'X' => {
+            if spec.contains("ll") || spec.contains("I64") {
+                format!("{:X}", value as u64)
+            } else {
+                format!("{:X}", value as u32)
+            }
+        }
+        'p' => format!("{value:016X}"),
+        _ => crate::dlls::cstr(value as *const u8),
+    }
+}
 pub unsafe extern "win64" fn format_message_a(
     flags: u32,
-    _src: usize,
+    src: usize,
     code: u32,
     _lang: u32,
     buf: *mut u8,
     size: u32,
-    _args: usize,
+    args: usize,
 ) -> u32 {
-    let Some(text) = format_message(flags, code) else {
+    let Some(text) = format_message(flags, src, code, args, false) else {
         crate::process::set_last_error(87);
         return 0;
     };
@@ -547,14 +704,14 @@ pub unsafe extern "win64" fn format_message_a(
 }
 pub unsafe extern "win64" fn format_message_w(
     flags: u32,
-    _src: usize,
+    src: usize,
     code: u32,
     _lang: u32,
     buf: *mut u16,
     size: u32,
-    _args: usize,
+    args: usize,
 ) -> u32 {
-    let Some(text) = format_message(flags, code) else {
+    let Some(text) = format_message(flags, src, code, args, true) else {
         crate::process::set_last_error(87);
         return 0;
     };
@@ -576,6 +733,31 @@ pub unsafe extern "win64" fn format_message_w(
     std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
     n
 }
+/// LocalAlloc : mémoire du tas du processus ; LMEM_ZEROINIT (0x40) la met à
+/// zéro. LMEM_MOVEABLE renvoie aussi un pointeur, que LocalLock rend tel quel.
+pub unsafe extern "win64" fn local_alloc(flags: u32, size: usize) -> *mut c_void {
+    let heap_flags = if flags & 0x40 != 0 { 8 } else { 0 };
+    crate::dlls::kernel32::heap_alloc(0, heap_flags, size.max(1))
+}
+pub unsafe extern "win64" fn local_realloc(p: *mut c_void, size: usize, flags: u32) -> *mut c_void {
+    if p.is_null() {
+        return local_alloc(flags, size);
+    }
+    let heap_flags = if flags & 0x40 != 0 { 8 } else { 0 };
+    crate::dlls::kernel32::heap_realloc(0, heap_flags, p, size.max(1))
+}
+pub extern "win64" fn local_lock(p: *mut c_void) -> *mut c_void {
+    p
+}
+pub extern "win64" fn local_unlock(_p: *mut c_void) -> i32 {
+    0
+}
+pub unsafe extern "win64" fn local_size(p: *mut c_void) -> usize {
+    if p.is_null() {
+        return 0;
+    }
+    crate::dlls::kernel32::heap_size(0, 0, p)
+}
 pub unsafe extern "win64" fn local_free(p: *mut c_void) -> *mut c_void {
     if !p.is_null() {
         crate::dlls::kernel32::heap_free(0, 0, p);
@@ -585,18 +767,7 @@ pub unsafe extern "win64" fn local_free(p: *mut c_void) -> *mut c_void {
 
 // ---------- Locale ----------
 
-pub extern "win64" fn get_user_default_lcid() -> u32 {
-    0x040C
-} // fr-FR
-pub extern "win64" fn get_thread_locale() -> u32 {
-    0x040C
-}
-pub extern "win64" fn get_user_default_lang_id() -> u16 {
-    0x040C
-}
-pub extern "win64" fn get_user_default_ui_language() -> u16 {
-    0x040C
-}
+// GetUserDefaultLCID, GetUserDefaultUILanguage… : voir crate::intl::api.
 
 /// Winlux n'exécute pas d'applications empaquetées (MSIX/AppX) : les API de
 /// paquet répondent `APPMODEL_ERROR_NO_PACKAGE`, ce que les programmes
@@ -686,8 +857,7 @@ pub fn exports() -> crate::dlls::Exports {
         "SetConsoleCtrlHandler" => fn set_console_ctrl_handler, "SetConsoleTitleA" => fn set_console_title_a, "SetConsoleTitleW" => fn set_console_title_w,
         "GetConsoleWindow" => fn get_console_window, "AllocConsole" => fn alloc_console, "FreeConsole" => fn free_console, "AttachConsole" => fn attach_console,
         "GetConsoleScreenBufferInfo" => fn get_console_screen_buffer_info, "SetConsoleTextAttribute" => fn set_console_text_attribute,
-        "GetACP" => fn get_acp, "GetOEMCP" => fn get_oemcp, "IsValidCodePage" => fn is_valid_code_page,
-        "IsDBCSLeadByte" => fn is_dbcs_lead_byte, "IsDBCSLeadByteEx" => fn is_dbcs_lead_byte_ex, "GetCPInfo" => fn get_cp_info,
+        "IsDBCSLeadByte" => fn is_dbcs_lead_byte, "IsDBCSLeadByteEx" => fn is_dbcs_lead_byte_ex,
         "GetEnvironmentStringsW" => fn get_environment_strings_w, "GetEnvironmentStrings" => fn get_environment_strings_a,
         "GetEnvironmentStringsA" => fn get_environment_strings_a,
         "FreeEnvironmentStringsW" => fn free_environment_strings_w, "FreeEnvironmentStringsA" => fn free_environment_strings_a,
@@ -701,8 +871,8 @@ pub fn exports() -> crate::dlls::Exports {
         "lstrcatA" => fn lstrcat_a, "lstrcatW" => fn lstrcat_w, "lstrcmpA" => fn lstrcmp_a, "lstrcmpiA" => fn lstrcmpi_a,
         "lstrcmpW" => fn lstrcmp_w, "lstrcmpiW" => fn lstrcmpi_w,
         "FormatMessageA" => fn format_message_a, "FormatMessageW" => fn format_message_w, "LocalFree" => fn local_free,
-        "GetUserDefaultLCID" => fn get_user_default_lcid, "GetThreadLocale" => fn get_thread_locale,
-        "GetUserDefaultLangID" => fn get_user_default_lang_id, "GetUserDefaultUILanguage" => fn get_user_default_ui_language,
+        "LocalAlloc" => fn local_alloc, "LocalReAlloc" => fn local_realloc, "LocalLock" => fn local_lock,
+        "LocalUnlock" => fn local_unlock, "LocalSize" => fn local_size,
         "GetCurrentPackageId" => fn get_current_package_id,
         "GetCurrentPackageFullName" => fn get_current_package_name,
         "GetCurrentPackageFamilyName" => fn get_current_package_name,
@@ -817,12 +987,7 @@ mod tests {
     fn filtre_d_exception_et_pages_de_code() {
         let old = set_unhandled_exception_filter(0x1234);
         assert_eq!(set_unhandled_exception_filter(old), 0x1234);
-        assert_eq!(get_acp(), 1252);
-        assert_eq!(is_valid_code_page(65001), 1);
-        assert_eq!(is_valid_code_page(12345), 0);
-        let mut info = [0u8; 20];
-        assert_eq!(unsafe { get_cp_info(1252, info.as_mut_ptr()) }, 1);
-        assert_eq!(info[0], 1);
+        assert_eq!(set_console_output_cp(12345), 0);
     }
 
     #[test]

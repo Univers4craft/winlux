@@ -288,7 +288,7 @@ class Tools(Gtk.Window):
             ("Volume −", ["winlux-control","volume-down"],"winlux-control"),
             (_t("Muet / rétablir"), ["winlux-control","volume-mute"],"winlux-control"),
             ("Volume +", ["winlux-control","volume-up"],"winlux-control"),
-            (_t("Alimentation"), ["winlux-shell-app","settings","0"],"winlux-shell-app")]:
+            (_t("Alimentation"), ["winlux-shell-app","settings","23"],"winlux-shell-app")]:
             self.button(title, lambda command=args: self.command(command), bool(shutil.which(binary)))
         ssid=self.entry(_t("Nom du réseau Wi-Fi à rejoindre"))
         self.button(_t("Se connecter au réseau"),lambda:self.command(["nmcli","--wait","90","device","wifi","connect",ssid.get_text()]) if ssid.get_text() else None,bool(shutil.which("nmcli")))
@@ -474,7 +474,11 @@ class Tools(Gtk.Window):
     def files(self):
         self.label(_t("L’Explorateur natif propose les favoris dans sa barre latérale, les miniatures et les périphériques amovibles."))
         self.button(_t("Ouvrir le gestionnaire de fichiers complet"), lambda: self.command(["Thunar"]), bool(shutil.which("Thunar")))
-        for label,path in [(_t("Dossier personnel"),HOME),(_t("Documents"),HOME/_t("Documents")),(_t("Téléchargements"),HOME/_t("Téléchargements"))]:
+        # Dossiers XDG réels (user-dirs.dirs) : leur nom sur disque ne suit pas la langue de l'interface.
+        def xdg(kind,fallback):
+            special=GLib.get_user_special_dir(kind)
+            return Path(special) if special else HOME/fallback
+        for label,path in [(_t("Dossier personnel"),HOME),(_t("Documents"),xdg(GLib.UserDirectory.DIRECTORY_DOCUMENTS,"Documents")),(_t("Téléchargements"),xdg(GLib.UserDirectory.DIRECTORY_DOWNLOAD,"Téléchargements"))]:
             self.button(label,lambda target=path:self.command(["Thunar",str(target)]))
         self.button(_t("Corbeille"),lambda:self.command(["Thunar","trash:///"]))
         self.button(_t("Ajouter un dossier aux favoris"),self.add_bookmark)
@@ -545,5 +549,13 @@ def split_nmcli(line):
 if __name__ == "__main__":
     page = sys.argv[1] if len(sys.argv)>1 else "quick"
     if page not in ("quick","notifications","tasks","appearance","apps","files","recovery"): raise SystemExit(2)
+    # Le Gestionnaire des tâches complet (onglets, graphiques) est l'application
+    # Winlux intégrée ; cette page reste en secours si elle n'est pas installée.
+    if page == "tasks" and Path("/opt/winlux/tests/gui_demo.exe").is_file() and shutil.which("winlux-shell-app"):
+        os.execvp("winlux-shell-app", ["winlux-shell-app", "taskmgr"])
+    # Notifications : panneau volant façon Windows 11 (avec le calendrier),
+    # aussi pour les raccourcis Win+N déjà enregistrés vers cette page.
+    if page == "notifications" and shutil.which("winlux-popup") and not os.environ.get("WINLUX_TOOLS_WINDOW"):
+        os.execvp("winlux-popup", ["winlux-popup", "notifications"])
     Tools(page)
     Gtk.main()

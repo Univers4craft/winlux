@@ -9,6 +9,10 @@ des codecs, des services et parfois d’un runtime managé.
 Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir le
 [diagnostic et les blocages constatés](docs/CHATGPT-WINDOWS.md).
 
+Ce qu'il reste à écrire pour faire tourner presque toutes les applications,
+mesuré sur de vrais logiciels et classé par impact :
+[docs/COMPATIBILITE.md](docs/COMPATIBILITE.md).
+
 ## Ce qui est déjà partagé
 
 - Les exécutables PE64 peuvent être chargés directement par le runtime.

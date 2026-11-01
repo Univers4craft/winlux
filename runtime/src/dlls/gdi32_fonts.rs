@@ -33,6 +33,8 @@ pub struct FontFace {
     pub unicode_ranges: [u32; 4],
     pub code_pages: [u32; 2],
     pub path: PathBuf,
+    /// Rang de la face dans une collection `.ttc` (0 sinon).
+    pub index: u32,
 }
 
 // ---------------------------------------------------------------------
@@ -87,8 +89,12 @@ fn parse_source(src: &(impl Source + ?Sized), path: &Path) -> Vec<FontFace> {
             return Vec::new();
         };
         (0..count)
-            .filter_map(|i| be32(&offsets, i * 4))
-            .filter_map(|off| parse_face(src, off as u64, path))
+            .filter_map(|i| Some((i, be32(&offsets, i * 4)?)))
+            .filter_map(|(i, off)| {
+                let mut f = parse_face(src, off as u64, path)?;
+                f.index = i as u32;
+                Some(f)
+            })
             .collect()
     } else {
         parse_face(src, 0, path).into_iter().collect()
@@ -155,6 +161,7 @@ fn parse_face(src: &(impl Source + ?Sized), base: u64, path: &Path) -> Option<Fo
         unicode_ranges: [1, 0, 0, 0],
         code_pages: [1, 0],
         path: path.to_path_buf(),
+        index: 0,
     };
     if let Some(os2) = table(b"OS/2") {
         face.avg_width = be16(&os2, 2).map_or(face.avg_width, |v| v as i16);
@@ -283,8 +290,24 @@ pub fn font_dirs() -> Vec<PathBuf> {
     if let Some(h) = &home {
         dirs.push(h.join(".fonts"));
     }
-    dirs.push(crate::paths::drive_c().join("windows/Fonts"));
+    dirs.extend(windows_font_dirs());
     dirs
+}
+
+/// Dossiers de polices côté Windows : `C:\Windows\Fonts` (installateurs,
+/// msiexec) et le dossier par utilisateur de Windows 10+
+/// (`%LOCALAPPDATA%\Microsoft\Windows\Fonts`). La casse réelle du disque
+/// est respectée (`Windows` ou `windows`).
+pub fn windows_font_dirs() -> Vec<PathBuf> {
+    vec![
+        windows_fonts_dir(),
+        crate::paths::to_linux("C:\\AppData\\Local\\Microsoft\\Windows\\Fonts"),
+    ]
+}
+
+/// `C:\Windows\Fonts` sur le disque Linux.
+pub fn windows_fonts_dir() -> PathBuf {
+    crate::paths::to_linux("C:\\Windows\\Fonts")
 }
 
 fn scan_dir(dir: &Path, depth: u32, out: &mut Vec<FontFace>) {
@@ -725,7 +748,7 @@ pub fn resolve_font_path(name: &str) -> PathBuf {
     if direct.exists() || name.contains(['\\', '/', ':']) {
         return direct;
     }
-    let fonts = crate::paths::drive_c().join("windows/Fonts").join(name);
+    let fonts = windows_fonts_dir().join(name);
     if fonts.exists() {
         fonts
     } else {

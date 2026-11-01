@@ -32,4 +32,14 @@ if test -f "$dir/cpp_exceptions.exe"; then
     fi
 fi
 
+if test -f "$dir/eh_msvc.exe"; then
+    set +e
+    WINLUX_GUI=headless "$runtime" "$dir/eh_msvc.exe" >"$work/msvc.txt" 2>&1
+    msvc_status=$?
+    set -e
+    cat "$work/msvc.txt"
+    test "$msvc_status" -eq 0 || { echo "eh_msvc.exe : le test n° $msvc_status a échoué" >&2; exit 1; }
+    echo "eh_msvc : exceptions C++ et __try au format MSVC OK"
+fi
+
 echo "Tests MinGW réussis."

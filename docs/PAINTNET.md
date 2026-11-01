@@ -107,6 +107,72 @@ Ajouté par la PR 2 (démarrage de coreclr) :
 - Diagnostic : `WINLUX_APITRACE=1` journalise chaque appel d'API intégrée
   avec son appelant, et `WINLUX_LOG=trace` chaque exception levée.
 
+## La boucle d'exceptions après `paintdotnet.dll` (état au 31/10/2026)
+
+Ce que montrent les journaux de Winlux (`WINLUX_LOG=trace`,
+`WINLUX_APITRACE=1`) :
+
+- coreclr charge `System.Private.CoreLib.dll` puis `paintdotnet.dll`
+  (relogées, alignées sur 64 Kio). Le code managé s'exécute.
+- Ensuite, la même exception C++ MSVC (0xE06D7363) revient une dizaine de
+  fois. À chaque tour, il y a une levée avec objet, une relance `throw;`
+  (arguments nuls) et une nouvelle levée de l'exception d'origine.
+- La boucle se termine par « Stack overflow. », suivi d'une exception
+  managée non gérée (0xE0434352, HRESULT 0x8007007E).
+- Le test MinGW `cpp_exceptions` (lancer, relancer, try imbriqués) passe
+  avec le SEH de Winlux. Le modèle de GCC n'exécute toutefois pas les blocs
+  `catch` comme MSVC.
+
+Hypothèse à vérifier : sous MSVC, un bloc `catch` s'exécute pendant le
+rappel de consolidation de `RtlUnwindEx` (`RtlRestoreContext`). Une relance
+`throw;` faite dans ce rappel doit être déroulée au-delà du cadre du `try`
+déjà traité. Si notre substitution des cadres de trampoline
+(`FrameKind::Consolidate` dans `seh.rs`) fait reprendre le parcours trop
+bas, le même `catch` reprend l'exception à chaque fois, et la pile déborde.
+
+### Mesures du 31/10/2026 au soir
+
+`seh.rs` sait maintenant tout journaliser : `WINLUX_SEH_TRACE=1` écrit une
+ligne par cadre parcouru (recherche ou déroulement, cadre d'établissement,
+gestionnaire, disposition), par consolidation (rappel, cadre cible) et par
+trampoline traversé. La trace des levées donne aussi RSP.
+
+Ce que montrent ces journaux sur Paint.NET :
+
+- À chaque tour, RSP descend d'environ 23 Kio : la pile n'est jamais
+  rendue, d'où le « Stack overflow. » final.
+- Le tour se répète à l'identique : le bloc `catch` du cadre parent
+  s'exécute, il relance (`throw;`), le bloc de capture de la relance lève à
+  nouveau l'exception d'origine, le trampoline de consolidation ramène le
+  parcours dans le cadre parent, et le gestionnaire de ce cadre reprend la
+  même exception dans le même `catch`.
+- Le parcours des cadres par Winlux suit bien le modèle de Windows : après
+  le trampoline de consolidation, on reprend dans le cadre cible, avec le
+  même cadre d'établissement que lors de la première capture.
+
+Contre-épreuve : un petit `.exe` MSVC compilé avec clang et lld-link
+(`throw;` dans un `catch`, rattrapé par l'appelant) passe avec Winlux quand
+il utilise `__CxxFrameHandler3` : le `catch` s'exécute une seule fois et la
+relance atteint bien l'appelant. coreclr, lui, utilise `__CxxFrameHandler4`
+(lié statiquement), qui ne se protège pas de la même façon contre une
+nouvelle capture dans le cadre parent. Il attend donc quelque chose du
+système (contexte de répartition, drapeaux de l'enregistrement, état du
+cadre) que Winlux ne fournit pas encore.
+
+Fait ensuite (`runtime/src/dlls/cxx_eh.rs`) : notre propre
+`_CxxThrowException`, `__CxxFrameHandler3`, `__C_specific_handler`
+(`__try/__except`, `__try/__finally`) et `__current_exception(_context)`
+dans le `vcruntime140` intégré, écrits d'après le format public des tables
+d'exceptions. Les programmes C++ compilés en `/MD` peuvent donc lever et
+capturer des exceptions. `testc/msvc/eh_msvc.cpp` (clang en mode MSVC,
+lld-link) les vérifie en CI : destructeurs, choix du type, capture par
+référence et par copie, `catch(...)`, relance, lancer depuis un `catch`,
+`try` imbriqué dans un `catch`, filtres `__except` et blocs `__finally`.
+
+Reste `__CxxFrameHandler4` (format compressé de VS 2019 et plus récent,
+celui de coreclr) : l'écrire dira précisément ce que FH4 attend du système
+lors d'une relance, ce qu'il faudra ensuite fournir dans `seh.rs`.
+
 ## Ce qui casse, dans l'ordre où on le rencontre
 
 1. **coreclr, après le chargement de `paintdotnet.dll`** : une exception C++
@@ -119,9 +185,46 @@ Ajouté par la PR 2 (démarrage de coreclr) :
    kernel32, 34 de `System.Globalization.Native` (ICU) et quelques-unes de
    `ntdll`, `advapi32` et `ole32`.
 3. **WIC** (`windowscodecs`) : tous les bitmaps de Paint.NET passent par
-   WIC.
+   WIC. Depuis la PR 3, Winlux fournit sa propre fabrique WIC
+   (`runtime/src/dlls/windowscodecs.rs`), branchée sur les décodeurs maison :
+   décodage (PNG, JPEG, GIF, BMP, TIFF, WebP, DDS) depuis un fichier, un flux
+   ou un descripteur, bitmaps en mémoire avec `Lock`, conversion entre les
+   formats 8, 24 et 32 bits (BGRA, RGBA, prémultipliés), mise à l'échelle,
+   découpe, rotation et miroir, et `IWICStream`. Manquent encore les
+   encodeurs (enregistrement), les palettes, les profils de couleur et les
+   métadonnées. Comme Paint.NET s'arrête avant d'appeler WIC, cette partie
+   n'est vérifiée que par les tests unitaires pour l'instant.
 4. **Direct2D et DirectWrite** : Paint.NET peint le canevas et les contrôles
-   en Direct2D, sur Direct3D 11 ou sur le rendu logiciel WARP.
+   en Direct2D, sur Direct3D 11 ou sur le rendu logiciel WARP. Depuis la
+   PR 4, Winlux fournit un Direct2D 1.0 logiciel maison
+   (`runtime/src/dlls/d2d1.rs`, sur le rasteriseur `d2d_raster.rs`) :
+   fabrique, géométries rectangle, rectangle arrondi, ellipse et chemin
+   (lignes, Bézier cubiques et quadratiques, arcs, règles pair-impair et
+   non nulle, test de contenance et boîte englobante), pinceaux unis avec
+   opacité, bitmaps (copie depuis la mémoire ou un bitmap WIC), cible de
+   rendu sur bitmap WIC (`CreateWicBitmapRenderTarget`) avec effacement,
+   remplissage et contour anticrénelés, `DrawBitmap` (plus proche voisin ou
+   bilinéaire), transformations, découpe alignée sur les axes, et les
+   fonctions `D2D1MakeRotateMatrix`, `D2D1MakeSkewMatrix`,
+   `D2D1InvertMatrix`. Manquent encore : `ID2D1Factory1` et le contexte de
+   périphérique (`ID2D1DeviceContext`, effets), les dégradés, les pinceaux
+   bitmap, les styles de trait, les calques et les cibles HWND et DXGI.
+   DirectWrite (`runtime/src/dlls/dwrite.rs`) s'appuie sur un lecteur maison
+   des contours TrueType (`sfnt.rs` : `cmap` 4 et 12, glyphes simples et
+   composites, métriques `hhea`, `OS/2`, `post`) et sur le catalogue de
+   polices de `gdi32_fonts` : collection système, familles, polices et faces
+   (indices et métriques de glyphes, `GetGlyphRunOutline`), formats et mise
+   en page du texte (sauts de ligne, coupure aux espaces, tabulations,
+   alignements, interligne, métriques de lignes et de grappes, tests de
+   position, `Draw` vers le `IDWriteTextRenderer` de l'appli), avec polices
+   de secours par caractère et remplacement des polices Windows absentes
+   (Segoe UI, Arial, Times New Roman, Consolas… par Selawik, Noto,
+   Liberation ou DejaVu). Direct2D dessine le texte (`DrawText`,
+   `DrawTextLayout`, `DrawGlyphRun`). Manquent : la mise en forme OpenType
+   (ligatures, crénage, écritures complexes, bidi), les polices CFF, les
+   attributs par plage et `IDWriteFactory1` et suivantes. Comme pour WIC,
+   ce n'est vérifié que par les tests unitaires tant que Paint.NET s'arrête
+   avant.
 5. **WPF** : `wpfgfx_cor3.dll` (composition MIL, rendu Direct3D 9 ou
    logiciel), `PresentationNative_cor3.dll` et `DirectWriteForwarder.dll`
    (mixte, via `ijwhost.dll`).
@@ -135,8 +238,8 @@ Ajouté par la PR 2 (démarrage de coreclr) :
    du code managé)*. Suite : suspension de threads, exceptions matérielles,
    imports de clrjit, jusqu'à un « Hello world » .NET 9 autonome.
 3. BCL : imports directs de CoreLib et globalisation.
-4. WIC : décodeurs et encodeurs branchés sur les décodeurs maison.
-5. Direct2D et DirectWrite.
+4. WIC : décodeurs branchés sur les décodeurs maison *(PR 3)*, encodeurs ensuite.
+5. Direct2D 1.0 logiciel et DirectWrite *(PR 4)*, puis `ID2D1DeviceContext`.
 6. WPF (`wpfgfx`) et la fenêtre principale de Paint.NET.
 
 Chaque étape se valide sur un petit programme .NET autonome de référence

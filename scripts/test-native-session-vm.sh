@@ -32,15 +32,39 @@ if test -n "${WINLUX_EXTERNAL_EXE:-}"; then
         done
     fi
 fi
+# Vraie mise à jour depuis la version publiée précédente : son paquet est
+# installé dans la VM, puis son propre outil installe le nouveau paquet.
+if test -n "${WINLUX_UPDATE_FROM_DEB:-}"; then
+    new="$root/build/winlux-desktop.deb"
+    test -f "$WINLUX_UPDATE_FROM_DEB" && test -f "$new"
+    version=$(dpkg-deb -f "$new" Version)
+    asset="winlux-desktop-v$version.deb"
+    digest=$(sha256sum "$new" | cut -d' ' -f1)
+    printf 'format=3\nbackend=apt\nbase=ubuntu-resolute\nversion=v%s\nscope=system\naction=reboot\ncomponents=runtime,desktop,applications,updater,integration\nasset=%s\nsha256=%s\ndownload_bytes=%s\nunpacked_kib=%s\n' \
+        "$version" "$asset" "$digest" "$(stat -c %s "$new")" "$(dpkg-deb -f "$new" Installed-Size)" > "$work/update-manifest.txt"
+    debugfs -w -R 'mkdir /opt/winlux-test' "$disk" >/dev/null 2>&1 || true
+    debugfs -w -R 'mkdir /opt/winlux-test/update' "$disk" >/dev/null 2>&1
+    debugfs -w -R "write $WINLUX_UPDATE_FROM_DEB /opt/winlux-test/update/previous.deb" "$disk" >/dev/null 2>&1
+    debugfs -w -R "write $new /opt/winlux-test/update/$asset" "$disk" >/dev/null 2>&1
+    debugfs -w -R "write $work/update-manifest.txt /opt/winlux-test/update/winlux-update-manifest.txt" "$disk" >/dev/null 2>&1
+    debugfs -w -R "write $root/scripts/test-update-curl-shim.py /opt/winlux-test/update/curl" "$disk" >/dev/null 2>&1
+    # Version publiée dont l'outil de mise à jour est connu cassé : son paquet
+    # est installé, mais c'est l'outil actuel qui fait la mise à jour.
+    if test "${WINLUX_UPDATE_WITH_CURRENT_TOOL:-0}" = 1; then
+        debugfs -w -R "write $root/scripts/winlux-update-apt.py /opt/winlux-test/update/winlux-update-apt" "$disk" >/dev/null 2>&1
+    fi
+    : "${WINLUX_NATIVE_TEST_TIMEOUT:=1200}"
+fi
 echo "Native desktop diagnostic ($accel): $work"
 result=0
 timeout -k 5s "${WINLUX_NATIVE_TEST_TIMEOUT:-600}" qemu-system-x86_64 \
     -m "${WINLUX_QEMU_MEMORY:-4096}" -smp 2 -accel "$accel" -cpu max \
-    -display none -monitor none -serial stdio -no-reboot -nic none \
+    -display none -monitor none -serial stdio -no-reboot \
+    -nic user,model=e1000,dns=10.0.2.53 \
     -kernel "$stage/boot/vmlinuz" \
     -append 'root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0 panic=1 loglevel=3 winlux.native-smoke=1' \
     -drive "file=$disk,if=virtio,format=raw" </dev/null > "$log" 2>&1 || result=$?
-for name in native-desktop native-start-menu native-start-all native-start-search native-settings-updates native-vendor-external native-vendor-chatgpt native-vendor-claude native-pipes-1 native-pipes-2; do
+for name in native-desktop native-start-menu native-start-all native-start-search native-settings-updates native-vendor-external native-vendor-chatgpt native-vendor-claude native-pipes-1 native-pipes-2 native-installer; do
     debugfs -R "dump /var/lib/winlux/$name.xwd $work/$name.xwd" "$disk" >/dev/null 2>&1 || true
     if test -s "$work/$name.xwd" && command -v convert >/dev/null 2>&1; then
         convert "$work/$name.xwd" "$work/$name.png"
@@ -54,17 +78,24 @@ debugfs -R "dump /var/lib/winlux/vendor-result.txt $work/vendor-result.txt" "$di
 debugfs -R "dump /var/lib/winlux/vendor-results.json $work/vendor-results.json" "$disk" >/dev/null 2>&1 || true
 debugfs -R "dump /var/lib/winlux/window-latency.json $work/window-latency.json" "$disk" >/dev/null 2>&1 || true
 debugfs -R "rdump /var/lib/winlux/session-logs $work" "$disk" >/dev/null 2>&1 || true
-grep -q 'WINLUX_NATIVE_WINDOW_SNAPPING=0' "$log" || { tail -60 "$log"; exit 1; }
+show_failure() {
+    # The session diagnostic block first, then the end of the serial log.
+    sed -n '/^winlux-native-session: /,/^WINLUX_NATIVE_EXIT=/p' "$log" | head -300
+    # Guest test output (markers, traceback) without the session trace.
+    sed -n '/WINLUX_NATIVE_APT_RESULT=/,/^WINLUX_NATIVE_EXIT=/p' "$log" | grep -v '^+ ' | grep -v 'dbind-WARNING' | tail -120
+    tail -60 "$log"
+}
+grep -q 'WINLUX_NATIVE_WINDOW_SNAPPING=0' "$log" || { show_failure "$log"; exit 1; }
 for marker in WINLUX_NATIVE_DESKTOP_FILE_SERVICE=0 WINLUX_NATIVE_HARDWARE_SERVICES=0 WINLUX_NATIVE_SETTINGS_ROUTES=0 WINLUX_NATIVE_WINDOW_CONTROLS=0 WINLUX_NATIVE_EDITOR_SAVE=0 WINLUX_NATIVE_EDGE_WINDOWED=0 WINLUX_NATIVE_TASKBAR_AND_MENU=0 WINLUX_NATIVE_PIPES_ANIMATED=0 WINLUX_NATIVE_CLOSE=0 WINLUX_NATIVE_RESULT=0 WINLUX_NATIVE_EXIT=0; do
     if ! grep -q "$marker" "$log"; then
         echo "Missing $marker; see $work" >&2
-        tail -60 "$log"
+        show_failure "$log"
         exit 1
     fi
 done
-test "$result" = 0 || { tail -60 "$log"; exit 1; }
+test "$result" = 0 || { show_failure "$log"; exit 1; }
 if test -f "$stage/usr/share/winlux/update-backend" && grep -qx apt "$stage/usr/share/winlux/update-backend"; then
-    grep -q 'WINLUX_NATIVE_APT_RESULT=0' "$log" || { tail -60 "$log"; exit 1; }
+    grep -q 'WINLUX_NATIVE_APT_RESULT=0' "$log" || { show_failure "$log"; exit 1; }
 fi
 if test "${WINLUX_KEEP_TEST_DISK:-0}" != 1; then rm "$disk"; fi
 echo "OK: mixed PE/Linux windows, controls, editor, catalogue, panel and animated pipes. Captures: $work"

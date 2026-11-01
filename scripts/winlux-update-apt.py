@@ -59,10 +59,21 @@ def busy():
         try: os.kill(int(pid), 0); return True
         except ProcessLookupError: pass
     # APT uses POSIX record locks, not flock. Respect manual terminal installs.
+    # Les verrous ne sont jamais créés ici : un fichier absent signifie « libre ».
     for path in ("/var/lib/dpkg/lock-frontend", "/var/lib/dpkg/lock"):
-        with open(path, "a") as handle:
-            try: fcntl.lockf(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-            except BlockingIOError: return True
+        try:
+            handle = open(path, "r+")
+            mode = fcntl.LOCK_EX
+        except FileNotFoundError:
+            continue
+        except PermissionError:
+            try: handle = open(path, "r")
+            except OSError: continue
+            # Un verrou partagé est refusé tant qu'APT tient le verrou exclusif.
+            mode = fcntl.LOCK_SH
+        with handle:
+            try: fcntl.lockf(handle, mode | fcntl.LOCK_NB)
+            except (BlockingIOError, PermissionError): return True
     return False
 
 def phase(name, percent, item):
@@ -72,9 +83,65 @@ def phase(name, percent, item):
     temporary.write_text(f"phase={name}\npercent={percent}\ndone=0\ntotal=0\nitem={item}\n")
     temporary.replace(destination)
 
-def download(url, destination):
-    run("curl", "--fail", "--location", "--silent", "--show-error", "--proto", "=https",
-        "--connect-timeout", "20", "--max-time", "900", "--output", str(destination), url)
+def download(url, destination, accept=None):
+    command = ["curl", "--fail", "--location", "--silent", "--show-error", "--proto", "=https",
+               "--connect-timeout", "20", "--max-time", "900", "--output", str(destination)]
+    if accept: command += ["--header", "Accept: " + accept]
+    run(*command, url)
+
+MANIFEST_URL = f"https://github.com/{REPOSITORY}/releases/latest/download/winlux-update-manifest.txt"
+RELEASE_API = f"https://api.github.com/repos/{REPOSITORY}/releases/latest"
+# Codes de curl qui signifient « pas de réseau », pas « fichier absent ».
+OFFLINE_CODES = {5: "proxy introuvable", 6: "nom github.com introuvable (DNS)", 7: "connexion refusée",
+                 28: "délai dépassé", 35: "échec TLS", 56: "connexion coupée"}
+
+def offline_error(error):
+    reason = OFFLINE_CODES.get(error.returncode)
+    if reason is None: return None
+    return RuntimeError("GitHub est injoignable (" + reason + ") : vérifiez la connexion réseau puis relancez la recherche.")
+
+def manifest_from_release(release):
+    """Manifeste reconstruit depuis la release GitHub, quand le fichier manque."""
+    tag = release.get("tag_name", "")
+    debs = [asset for asset in release.get("assets", []) if re.fullmatch(r"winlux-desktop-[A-Za-z0-9._+-]+\.deb", asset.get("name", ""))]
+    if not debs:
+        raise RuntimeError(f"La dernière version publiée ({tag or 'inconnue'}) ne contient ni manifeste ni paquet "
+                           "winlux-desktop .deb : aucune mise à jour installable pour l’instant.")
+    deb = debs[0]
+    digest = deb.get("digest") or ""
+    checksum = digest[7:] if digest.startswith("sha256:") else ""
+    return deb, tag, checksum
+
+def release_metadata(work):
+    """Manifeste de la dernière release, ou repli sur l'API GitHub s'il n'a pas été publié."""
+    metadata = work / "manifest"
+    try:
+        download(MANIFEST_URL, metadata)
+        return manifest(metadata.read_text()), metadata.read_text()
+    except subprocess.CalledProcessError as error:
+        offline = offline_error(error)
+        if offline: raise offline from None
+    print("Manifeste absent de la dernière version : informations lues dans la release GitHub.", flush=True)
+    listing_file = work / "release.json"
+    try: download(RELEASE_API, listing_file, "application/vnd.github+json")
+    except subprocess.CalledProcessError as error:
+        raise (offline_error(error) or RuntimeError("Aucune version publiée de Winlux n’a été trouvée sur GitHub.")) from None
+    deb, tag, checksum = manifest_from_release(json.loads(listing_file.read_text()))
+    if not checksum:
+        # Anciennes releases : la somme vient du fichier .sha256 publié à côté.
+        sums = work / "package.sha256"
+        try: download(f"https://github.com/{REPOSITORY}/releases/download/{tag}/{deb['name']}.sha256", sums)
+        except subprocess.CalledProcessError as error:
+            raise (offline_error(error) or RuntimeError(f"La version {tag} ne publie pas l’empreinte SHA-256 de son paquet : "
+                                                         "mise à jour refusée par sécurité.")) from None
+        checksum = (sums.read_text().split() or [""])[0].lower()
+    size = int(deb.get("size") or 0)
+    text = (f"format=3\nbackend=apt\nbase=ubuntu-resolute\nversion={tag}\nscope=system\naction=reboot\n"
+            f"asset={deb['name']}\nsha256={checksum}\ndownload_bytes={size}\n"
+            # Taille décompressée inconnue : estimation prudente (×3).
+            f"unpacked_kib={size * 3 // 1024}\nsource=github-api\n")
+    metadata.write_text(text)
+    return manifest(text), text
 
 def listing():
     print("Version installée : " + read("/usr/share/winlux/version"))
@@ -218,8 +285,20 @@ def install(package, rollback=False, version=None):
     if version and actual != version.removeprefix("v"): raise ValueError("Version du paquet incorrecte")
     command = ["apt-get", "--no-remove", "--reinstall", "-y", "-o", "Dpkg::Options::=--force-confold"]
     if rollback: command.append("--allow-downgrades")
-    subprocess.run(command + ["install", str(package)], check=True,
-                   env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+    # APT n'accepte un fichier local que s'il se termine par .deb : le
+    # téléchargement (download-<sha>.part) est exposé sous ce nom le temps de
+    # l'installation. Sans cela, la v0.2.12 ne pouvait installer aucune mise à jour.
+    package = Path(package)
+    staged = None
+    if package.suffix != ".deb":
+        staged = package.with_name(package.stem + ".deb")
+        staged.unlink(missing_ok=True)
+        os.link(package, staged)
+    try:
+        subprocess.run(command + ["install", str(staged or package)], check=True,
+                       env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+    finally:
+        if staged: staged.unlink(missing_ok=True)
 
 def cache_copy(source, destination):
     with tempfile.NamedTemporaryFile(dir=destination.parent, prefix=".package-", delete=False) as handle:
@@ -272,8 +351,13 @@ def main():
                 # never execute distribution maintainer scripts on the host.
                 run("dpkg", "--configure", "--pending")
                 restored.touch()
-            audit = subprocess.check_output(["dpkg", "--audit"], text=True)
-            if audit: raise RuntimeError("Installation APT inachevée. Exécutez dpkg --configure -a.\n" + audit)
+            # dpkg --audit sort en erreur dès qu'il a quelque chose à signaler :
+            # une installation inachevée se termine ici, sans bloquer le démarrage.
+            audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True).stdout.strip()
+            if audit:
+                subprocess.run(["dpkg", "--configure", "-a"])
+                audit = subprocess.run(["dpkg", "--audit"], capture_output=True, text=True).stdout.strip()
+            if audit: print("Installation APT inachevée. Exécutez dpkg --configure -a.\n" + audit, file=sys.stderr)
             version = read("/usr/share/winlux/version")
             if read(STATE / "apt-desktop-cache-version") != version:
                 run("update-desktop-database", "/usr/share/applications")
@@ -301,10 +385,8 @@ def main():
                     cache_copy(work / "current.deb", previous)
                 else:
                     phase("checking", 0, "Recherche de la mise à jour Winlux")
-                    metadata = work / "manifest"
-                    download(f"https://github.com/{REPOSITORY}/releases/latest/download/winlux-update-manifest.txt", metadata)
-                    data = manifest(metadata.read_text())
-                    shutil.copy2(metadata, STATE / "available-manifest")
+                    data, _ = release_metadata(work)
+                    shutil.copy2(work / "manifest", STATE / "available-manifest")
                     listing()
                     if args == ["--check"] or data["version"] == read("/usr/share/winlux/version"):
                         phase("idle", 100, "Recherche terminée")

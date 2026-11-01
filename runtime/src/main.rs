@@ -10,11 +10,13 @@ mod clr;
 mod cpu;
 mod crash;
 mod diskimage;
+mod display;
 mod dlls;
 mod firewall;
 mod gamemode;
 mod gpu;
 mod imaging;
+mod intl;
 mod launch;
 mod loader;
 pub mod log;
@@ -22,17 +24,22 @@ mod managed;
 mod mounts;
 mod msi;
 mod netdrive;
+mod netports;
 mod overlay;
 mod paths;
 mod pe;
+mod permissions;
 mod power;
 mod printf;
 mod process;
 mod profiles;
+mod proxy;
 pub mod quality;
 mod registry;
+mod setup;
 mod tasks;
 mod thunks;
+mod uac;
 mod volumes;
 
 use std::path::PathBuf;
@@ -58,6 +65,16 @@ fn main() {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(netdrive::main(&rest));
     }
+    if exe == "--exports" {
+        // Une ligne « dll<TAB>fonction » par export intégré : la base des
+        // mesures de compatibilité (docs/COMPATIBILITE.md).
+        for (dll, names) in dlls::builtin_exports() {
+            for name in names {
+                println!("{dll}\t{name}");
+            }
+        }
+        return;
+    }
     if exe == "--version" {
         println!("winlux {}", include_str!("../../VERSION").trim());
         return;
@@ -65,6 +82,13 @@ fn main() {
     if exe == "--power" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(power::cli::main(&rest));
+    }
+    if exe == "--intl" {
+        std::process::exit(intl::report());
+    }
+    if exe == "--text" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(intl::text::cli(&rest));
     }
     if exe == "--boot-time" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
@@ -80,6 +104,10 @@ fn main() {
     }
     if exe == "--clipboard-bridge" {
         std::process::exit(clipbridge::run());
+    }
+    if exe == "--display" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(display::main(&rest));
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());
@@ -143,6 +171,18 @@ fn main() {
     if exe.as_os_str() == "--regedit" || (registry::cli::is_regedit(&exe) && !is_real_pe(&exe)) {
         std::process::exit(registry::cli::regedit_main(&rest));
     }
+    // Installateurs NSIS / Inno Setup et leurs désinstalleurs : pris en
+    // charge par Winlux lui-même (module setup), sans exécuter leur code.
+    if exe.as_os_str() == "--setup" {
+        std::process::exit(setup::cli(&rest));
+    }
+    if std::env::var_os("WINLUX_SETUP_NATIVE").is_none() {
+        if let Some(code) = setup::launch(&exe, &rest) {
+            std::process::exit(code);
+        }
+    }
+    // Variables d'environnement Windows écrites par les installateurs.
+    msi::extra::apply_registry_environment();
     let source = match std::fs::read(&exe) {
         Ok(bytes) => bytes,
         Err(error) => {
@@ -151,6 +191,7 @@ fn main() {
         }
     };
     registry::backup();
+    paths::install_windows_env();
     if let Some(name) = exe.file_name().and_then(|n| n.to_str()) {
         crash::set_exe_name(name);
     }
@@ -189,6 +230,7 @@ fn main() {
         image.pe.stack_reserve,
         image.pe.stack_commit
     );
+    uac::check_launch(image.base, &exe);
     let imports = image.import_names();
     cpu::apply_launch(&cpu_settings, &imports);
     if cpu::is_heavy(&imports) {

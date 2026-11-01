@@ -296,6 +296,10 @@ pub fn decode_raster_ex(
                     return Err(Error::Variant("JPEG DNL"));
                 }
                 super::check_size(width as u32, height as u32)?;
+                // Au plus quatre composantes (tables DC/AC indexées sur 2 bits).
+                if n == 0 || n > 4 {
+                    return Err(Error::Corrupt);
+                }
                 for i in 0..n {
                     let c = seg.get(6 + i * 3..9 + i * 3).ok_or(Error::Corrupt)?;
                     comps.push(Comp {
@@ -320,7 +324,11 @@ pub fn decode_raster_ex(
                 if comps.is_empty() {
                     return Err(Error::Corrupt);
                 }
-                let ns = seg[0] as usize;
+                // En-tête SOS : Ns (1..=4) puis Ns paires (Cs, Td/Ta), Ss, Se, Ah/Al.
+                let ns = *seg.first().ok_or(Error::Corrupt)? as usize;
+                if ns == 0 || ns > 4 || seg.len() < 4 + ns * 2 {
+                    return Err(Error::Corrupt);
+                }
                 let mut sc: Vec<usize> = Vec::new();
                 for i in 0..ns {
                     let id = seg[1 + i * 2];
@@ -329,12 +337,15 @@ pub fn decode_raster_ex(
                         .iter()
                         .position(|c| c.id == id)
                         .ok_or(Error::Corrupt)?;
+                    if sc.contains(&ci) {
+                        return Err(Error::Corrupt);
+                    }
                     comps[ci].td = (t >> 4) as usize & 3;
                     comps[ci].ta = (t & 15) as usize & 3;
                     sc.push(ci);
                 }
                 let o = 1 + ns * 2;
-                let ss = seg[o] as usize;
+                let ss = (seg[o] as usize).min(63);
                 let se = (seg[o + 1] as usize).min(63);
                 let ah = seg[o + 2] >> 4;
                 let al = seg[o + 2] & 15;

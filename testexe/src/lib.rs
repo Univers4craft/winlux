@@ -672,6 +672,9 @@ extern "system" {
         info: *mut ProcessInformation,
     ) -> i32;
     pub fn GetExitCodeProcess(process: Handle, code: *mut u32) -> i32;
+    pub fn OpenProcess(access: u32, inherit: i32, pid: u32) -> Handle;
+    pub fn TerminateProcess(process: Handle, code: u32) -> i32;
+    pub fn SetPriorityClass(process: Handle, class: u32) -> i32;
     pub fn GetCommandLineA() -> *const c_char;
     pub fn GetCommandLineW() -> *const u16;
     pub fn GetModuleHandleA(name: *const c_char) -> Handle;
@@ -979,6 +982,53 @@ extern "system" {
     pub fn RegDeleteValueA(key: Handle, name: *const c_char) -> i32;
     pub fn RegDeleteKeyA(root: Handle, sub: *const c_char) -> i32;
     pub fn RegCloseKey(key: Handle) -> i32;
+    pub fn RegOpenKeyExA(
+        root: Handle,
+        sub: *const c_char,
+        options: u32,
+        access: u32,
+        result: *mut Handle,
+    ) -> i32;
+    pub fn RegEnumKeyExA(
+        key: Handle,
+        index: u32,
+        name: *mut c_char,
+        name_len: *mut u32,
+        reserved: *mut u32,
+        class: *mut c_char,
+        class_len: *mut u32,
+        last_write: *mut u64,
+    ) -> i32;
+    pub fn RegEnumValueA(
+        key: Handle,
+        index: u32,
+        name: *mut c_char,
+        name_len: *mut u32,
+        reserved: *mut u32,
+        kind: *mut u32,
+        data: *mut u8,
+        data_len: *mut u32,
+    ) -> i32;
+    pub fn RegQueryInfoKeyA(
+        key: Handle,
+        class: *mut c_char,
+        class_len: *mut u32,
+        reserved: *mut u32,
+        sub_keys: *mut u32,
+        max_sub_key_len: *mut u32,
+        max_class_len: *mut u32,
+        values: *mut u32,
+        max_value_name_len: *mut u32,
+        max_value_len: *mut u32,
+        security: *mut u32,
+        last_write: *mut u64,
+    ) -> i32;
+    pub fn RegDeleteTreeA(key: Handle, sub: *const c_char) -> i32;
+    // Fonctions privées du runtime pour l'Éditeur du Registre.
+    pub fn WinluxRegImportA(path: *const c_char) -> i32;
+    pub fn WinluxRegExportA(path: *const c_char, key: *const c_char) -> i32;
+    pub fn WinluxRegRenameValueA(key: Handle, old: *const c_char, new: *const c_char) -> i32;
+    pub fn WinluxRegRenameKeyA(root: Handle, sub: *const c_char, new: *const c_char) -> i32;
 }
 
 #[link(name = "user32", kind = "raw-dylib")]
@@ -990,6 +1040,7 @@ extern "C" {
     pub fn GetClipboardData(format: u32) -> usize;
     pub fn IsClipboardFormatAvailable(format: u32) -> i32;
     pub fn GetClipboardSequenceNumber() -> u32;
+    pub fn RegisterClipboardFormatA(name: *const c_char) -> u32;
     pub fn RegisterClassExA(wc: *const WndClassExA) -> u16;
     pub fn CreateWindowExA(
         ex_style: u32,
@@ -1052,6 +1103,7 @@ extern "C" {
     pub fn FrameRect(hdc: Handle, rect: *const Rect, brush: Handle) -> i32;
     pub fn InvalidateRect(hwnd: Handle, rect: *const Rect, erase: i32) -> i32;
     pub fn GetSystemMetrics(index: i32) -> i32;
+    pub fn GetMonitorInfoA(monitor: Handle, info: *mut u8) -> i32;
     pub fn GetDoubleClickTime() -> u32;
     pub fn GetSysColor(index: i32) -> u32;
     pub fn GetSysColorBrush(index: i32) -> Handle;

@@ -122,13 +122,36 @@ start_session() {
         test "$tries" -lt 100 || { kill "$xpid" 2>/dev/null || true; fail "le serveur X :$n ne répond pas"; }
         sleep 0.1
     done
-    shell=${WINLUX_SESSION_SHELL:-/usr/share/winlux/xsession-winlux}
+    # Bureau natif (XFCE + Openbox) comme pour le premier compte ; l'ancien
+    # bureau de démonstration ne sert que s'il est le seul installé.
+    shell=${WINLUX_SESSION_SHELL:-}
+    if test -z "$shell"; then
+        shell=/usr/share/winlux/xsession-winlux
+        if test -x /usr/bin/winlux-user-session && test -x /usr/bin/openbox; then shell=/usr/bin/winlux-user-session; fi
+    fi
     uid=
     if test "$user" != root && have id; then uid=$(id -u "$user" 2>/dev/null || true); fi
+    runtime=
+    if test -n "$uid"; then
+        # Dossiers créés ici par root : ils doivent appartenir au compte.
+        gid=$(id -g "$user")
+        chown "$uid:$gid" "$root$home" 2>/dev/null || true
+        for sub in Bureau Documents Images Musique Vidéos Téléchargements; do chown "$uid:$gid" "$root$home/$sub" 2>/dev/null || true; done
+        runtime="$root/run/user/$uid"
+        mkdir -p "$runtime"
+        chown "$uid:$gid" "$runtime" 2>/dev/null || true
+        chmod 700 "$runtime"
+    fi
+    # Arrêter/Redémarrer depuis ce bureau : le compte n'est pas root, le
+    # relais root de winlux-power transmet sa demande à l'init (sans pkexec).
+    if test -n "$uid" && test -x "$root/usr/bin/winlux-power"; then
+        (setsid "$root/usr/bin/winlux-power" serve >/dev/null 2>&1 &)
+    fi
     (
         export DISPLAY=":$n" HOME="$home" USER="$user" LOGNAME="$user"
         # Ouverte par un compte déjà authentifié sur l'écran de verrouillage.
         export WINLUX_SESSION_USER="$user" WINLUX_NO_SPLASH=1
+        if test -n "$runtime"; then export XDG_RUNTIME_DIR="/run/user/$uid"; fi
         if test -n "$uid" && have setpriv && have xhost; then
             xhost "+si:localuser:$user" >/dev/null 2>&1 || true
             exec setpriv --reuid="$uid" --regid="$(id -g "$user")" --init-groups "$shell"

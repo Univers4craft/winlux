@@ -43,7 +43,8 @@ def targets(runtime, testdir):
         found.append((f"parametres-{page:02d}", [python, "-B", str(scripts / "winlux-settings.py")],
                       {"WINLUX_SETTINGS_PAGE": str(page)}))
     found.append(("menu-demarrer", [python, "-B", str(scripts / "winlux-start-menu.py")], {}))
-    for kind in ("volume", "power"):
+    found.append(("menu-demarrer-clair", [python, "-B", str(scripts / "winlux-start-menu.py")], {"GTK_THEME": "Adwaita"}))
+    for kind in ("volume", "power", "calendar"):
         found.append((f"popup-{kind}", [python, "-B", str(scripts / "winlux-popup.py"), kind], {}))
     for page in ("quick", "notifications", "tasks", "appearance", "apps", "files", "recovery"):
         found.append((f"outils-{page}", [python, "-B", str(scripts / "winlux-system-tools.py"), page], {}))
@@ -52,7 +53,7 @@ def targets(runtime, testdir):
     if Path(runtime).is_file() and demo.is_file():
         pe = {"WINLUX_AUDIO": "null", "WINLUX_NO_SPLASH": "1", "WINLUX_NO_LOGIN": "1", "WINLUX_NO_OOBE": "1"}
         found.append(("bureau-pe", [str(runtime), str(demo)], dict(pe, WINLUX_DESKTOP_DEMO="1")))
-        for app in ("explorer", "store", "fonts", "taskschd", "firewall"):
+        for app in ("explorer", "store", "fonts", "programs", "taskschd", "firewall"):
             found.append((f"appli-{app}", [str(runtime), str(demo)],
                           dict(pe, WINLUX_NATIVE_SHELL="1", WINLUX_SHELL_APP=app)))
     return found
@@ -79,10 +80,19 @@ def isolated_home(directory):
         settings.write("gtk-cursor-blink=false\ngtk-enable-animations=false\n")
     for name in ("state", "data", "cache", "home"):
         (directory / name).mkdir()
+    # Deux notifications fixes pour le panneau Notifications et calendrier.
+    (directory / "state/winlux").mkdir()
+    (directory / "state/winlux/notifications.json").write_text(json.dumps([
+        {"id": 1, "app": "Mises à jour Winlux", "title": "Mise à jour disponible",
+         "body": "Une nouvelle version de Winlux est prête à être installée.", "actions": ["install", "Installer"],
+         "time": 1793520000},
+        {"id": 2, "app": "Firefox", "title": "Téléchargement terminé",
+         "body": "setup.exe a été enregistré dans Téléchargements.", "actions": [], "time": 1793541600}],
+        ensure_ascii=False), encoding="utf-8")
     return {"XDG_CONFIG_HOME": str(config), "XDG_STATE_HOME": str(directory / "state"),
             "XDG_DATA_HOME": str(directory / "data"), "XDG_CACHE_HOME": str(directory / "cache"),
             "HOME": str(directory / "home"), "LANG": "fr_FR.UTF-8", "WINLUX_LANG": "fr",
-            "NO_AT_BRIDGE": "1", "GTK_A11Y": "none", "TZ": "UTC"}
+            "NO_AT_BRIDGE": "1", "GTK_A11Y": "none", "TZ": "UTC", "WINLUX_TODAY": "2026-11-01"}
 
 
 def capture(name, command, extra, base_env, blank, output, timeout):

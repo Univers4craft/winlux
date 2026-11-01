@@ -3,6 +3,7 @@
 from pathlib import Path
 import os
 import shutil
+import subprocess
 import pwd
 import grp
 import sys
@@ -40,43 +41,43 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
+def ensure_system_account(name, first_uid, comment, home):
+    """Compte système « name » créé par useradd/groupadd (verrous, shadow,
+    nss cohérents) ; /etc/passwd n'est complété à la main qu'en leur absence.
+    Rien n'est écrit si le compte existe déjà."""
+    try: return pwd.getpwnam(name)
+    except KeyError: pass
+    used = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
+    uid = first_uid
+    while uid in used: uid += 1
+    if shutil.which("groupadd") and shutil.which("useradd"):
+        try: grp.getgrnam(name)
+        except KeyError: subprocess.run(["groupadd", "--gid", str(uid), name], check=True)
+        subprocess.run(["useradd", "--system", "--uid", str(uid), "--gid", str(uid), "--no-create-home",
+                        "--home-dir", home, "--shell", "/bin/false", "--comment", comment, name], check=True)
+    else:
+        try: grp.getgrnam(name)
+        except KeyError:
+            with Path("/etc/group").open("a") as stream: stream.write(f"{name}:x:{uid}:\n")
+        with Path("/etc/passwd").open("a") as stream: stream.write(f"{name}:!:{uid}:{uid}:{comment}:{home}:/bin/false\n")
+    return pwd.getpwnam(name)
+
+
 if os.geteuid() == 0:
-    try:
-        pwd.getpwnam("messagebus")
-    except KeyError:
-        used = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
-        bus_uid = 990
-        while bus_uid in used: bus_uid += 1
-        with Path("/etc/group").open("a") as stream: stream.write(f"messagebus:x:{bus_uid}:\n")
-        with Path("/etc/passwd").open("a") as stream: stream.write(f"messagebus:!:{bus_uid}:{bus_uid}:D-Bus:/nonexistent:/bin/false\n")
+    ensure_system_account("messagebus", 990, "D-Bus", "/nonexistent")
     bus_group=grp.getgrnam("messagebus")
     helper=Path("/usr/lib/dbus-1.0/dbus-daemon-launch-helper")
     if helper.is_file():
         os.chown(helper,0,bus_group.gr_gid)
         helper.chmod(0o4754)
-    try: pwd.getpwnam("polkitd")
-    except KeyError:
-        used={entry.pw_uid for entry in pwd.getpwall()}|{entry.gr_gid for entry in grp.getgrall()}
-        uid=980
-        while uid in used:uid+=1
-        with Path("/etc/group").open("a") as stream:stream.write(f"polkitd:x:{uid}:\n")
-        with Path("/etc/passwd").open("a") as stream:stream.write(f"polkitd:!:{uid}:{uid}:PolicyKit:/nonexistent:/bin/false\n")
-    policy_user=pwd.getpwnam("polkitd")
+    policy_user=ensure_system_account("polkitd", 980, "PolicyKit", "/nonexistent")
     policy_state=Path("/var/lib/polkit-1")
     policy_state.mkdir(parents=True,exist_ok=True)
     os.chown(policy_state,policy_user.pw_uid,policy_user.pw_gid)
     policy_state.chmod(0o700)
     for directory in ("/var/lib/NetworkManager","/var/lib/bluetooth","/var/lib/udisks2"):
         Path(directory).mkdir(parents=True,exist_ok=True)
-    try:
-        saver = pwd.getpwnam("winlux-saver")
-    except KeyError:
-        occupied = {entry.pw_uid for entry in pwd.getpwall()} | {entry.gr_gid for entry in grp.getgrall()}
-        uid = 1002
-        while uid in occupied: uid += 1
-        with Path("/etc/group").open("a") as stream: stream.write(f"winlux-saver:x:{uid}:\n")
-        with Path("/etc/passwd").open("a") as stream: stream.write(f"winlux-saver:!:{uid}:{uid}:Winlux screensaver:/home/winlux-saver:/bin/false\n")
-        saver = pwd.getpwnam("winlux-saver")
+    saver = ensure_system_account("winlux-saver", 1002, "Winlux screensaver", "/home/winlux-saver")
     directory = Path(saver.pw_dir)
     directory.mkdir(parents=True, exist_ok=True)
     directory.chmod(0o700)
@@ -111,6 +112,88 @@ if panel_config.is_file():
             values = list(ids)
             position = next((index for index, item in enumerate(values) if item.get("value") in genmon), len(values) - 1 if values else 0)
             ids.insert(position, ET.Element("value", {"type": "int", "value": str(number)}))
+            tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
+    except (ET.ParseError, OSError, ValueError, TypeError):
+        pass
+# Horloge : le greffon « clock » d'XFCE prenait la couleur de texte du thème
+# (gris foncé en Adwaita clair, illisible sur la barre noire) et ouvrait un
+# calendrier GTK brut. Il devient un genmon winlux-clock (texte clair fixé,
+# clic = calendrier et notifications façon Windows 11), même numéro de greffon
+# pour que winlux-control align-left/center garde l'ordre de la barre.
+if panel_config.is_file():
+    try:
+        tree = ET.parse(panel_config)
+        plugins = next((item for item in tree.getroot() if item.get("name") == "plugins"), None)
+        changed = False
+        for plugin in list(plugins) if plugins is not None else []:
+            name = plugin.get("name") or ""
+            if plugin.get("value") != "clock" or not name[7:].isdigit():
+                continue
+            plugin.set("value", "genmon")
+            for child in list(plugin):
+                plugin.remove(child)
+            for key, kind, value in [("command", "string", "/usr/bin/winlux-clock"), ("use-label", "bool", "false"),
+                                     ("text", "string", ""), ("update-period", "int", "2000"),
+                                     ("font", "string", "DejaVu Sans 10")]:
+                ET.SubElement(plugin, "property", {"name": key, "type": kind, "value": value})
+            rc = home / ".config/xfce4/panel" / f"genmon-{name[7:]}.rc"
+            rc.parent.mkdir(parents=True, exist_ok=True)
+            rc.write_text("Command=/usr/bin/winlux-clock\nUseLabel=0\nText=\nUpdatePeriod=2000\nFont=DejaVu Sans 10\n", encoding="utf-8")
+            changed = True
+        if changed:
+            tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
+    except (ET.ParseError, OSError, ValueError, TypeError):
+        pass
+# Couleurs de la barre (bloc « Winlux panel » de gtk.css) : remis à jour à
+# chaque session, le reste du fichier (personnalisation) n'est pas touché.
+panel_css_source = source / "config/gtk-3.0/gtk.css"
+panel_css = home / ".config/gtk-3.0/gtk.css"
+if panel_css_source.is_file() and panel_css.is_file():
+    try:
+        start, end = "/* Winlux panel */", "/* End Winlux panel */"
+        shipped = panel_css_source.read_text(encoding="utf-8")
+        if start in shipped and end in shipped:
+            block = shipped[shipped.index(start):shipped.index(end) + len(end)]
+            current = panel_css.read_text(encoding="utf-8")
+            if start in current and end in current[current.index(start):]:
+                updated = current[:current.index(start)] + block + current[current.index(end, current.index(start)) + len(end):]
+            else:
+                updated = current.rstrip("\n") + "\n" + block + "\n"
+            if updated != current:
+                temporary = panel_css.with_suffix(".css.tmp")
+                temporary.write_text(updated, encoding="utf-8")
+                temporary.replace(panel_css)
+    except (OSError, UnicodeDecodeError, ValueError):
+        pass
+# xfce4-genmon-plugin 4.2+ (Ubuntu 26.04) lit sa configuration dans xfconf
+# (/plugins/plugin-N/command...) et ignore les anciens genmon-N.rc : sans ces
+# propriétés, les icônes réseau, son, batterie et notifications de la barre
+# des tâches restent vides. Reporter chaque genmon-N.rc une fois.
+if panel_config.is_file():
+    try:
+        tree = ET.parse(panel_config)
+        plugins = next((item for item in tree.getroot() if item.get("name") == "plugins"), None)
+        changed = False
+        for plugin in list(plugins) if plugins is not None else []:
+            name = plugin.get("name") or ""
+            if plugin.get("value") != "genmon" or not name[7:].isdigit():
+                continue
+            if any(child.get("name") == "command" for child in plugin):
+                continue
+            rc = home / ".config/xfce4/panel" / f"genmon-{name[7:]}.rc"
+            if not rc.is_file():
+                continue
+            values = dict(line.split("=", 1) for line in rc.read_text(encoding="utf-8").splitlines() if "=" in line)
+            if not values.get("Command"):
+                continue
+            for key, kind, value in [("command", "string", values["Command"]),
+                                     ("use-label", "bool", "true" if values.get("UseLabel") == "1" else "false"),
+                                     ("text", "string", values.get("Text", "")),
+                                     ("update-period", "int", str(int(values.get("UpdatePeriod", "3000") or 3000))),
+                                     ("font", "string", values.get("Font", "DejaVu Sans 10"))]:
+                ET.SubElement(plugin, "property", {"name": key, "type": kind, "value": value})
+            changed = True
+        if changed:
             tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
     except (ET.ParseError, OSError, ValueError, TypeError):
         pass
@@ -151,15 +234,37 @@ if openbox_config.is_file():
             temporary.replace(openbox_config)
     except ET.ParseError:
         print(_t("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée."), file=sys.stderr)
+# « Coller » dans le menu du bureau (clic droit) : ajouté une fois aux menus
+# Openbox déjà copiés, avant « Nouveau », sans toucher au reste.
+openbox_menu = home / ".config/openbox/menu.xml"
+if openbox_menu.is_file():
+    try:
+        menu_text = openbox_menu.read_text(encoding="utf-8")
+        anchor = '  <menu id="new-menu"'
+        if "winlux-desktop-action paste" not in menu_text and anchor in menu_text:
+            item = '  <item label="Coller"><action name="Execute"><command>winlux-desktop-action paste</command></action></item>\n'
+            temporary = openbox_menu.with_suffix(".xml.tmp")
+            temporary.write_text(menu_text.replace(anchor, item + anchor, 1), encoding="utf-8")
+            temporary.replace(openbox_menu)
+    except (OSError, UnicodeDecodeError):
+        pass
 if not (home / ".xscreensaver").exists(): shutil.copyfile(source / "xscreensaver", home / ".xscreensaver")
 user_dirs = home / ".config/user-dirs.dirs"
 if not user_dirs.exists():
     user_dirs.write_text('XDG_DESKTOP_DIR="$HOME/Bureau"\nXDG_DOWNLOAD_DIR="$HOME/Téléchargements"\nXDG_DOCUMENTS_DIR="$HOME/Documents"\nXDG_PICTURES_DIR="$HOME/Images"\nXDG_MUSIC_DIR="$HOME/Musique"\nXDG_VIDEOS_DIR="$HOME/Vidéos"\n')
 desktop = home / "Bureau"
 desktop.mkdir(exist_ok=True)
+# Dossiers connus (C:\Users\<nom>\Downloads…) : ils doivent exister pour
+# les navigateurs et les .exe qui y enregistrent directement.
+for line in user_dirs.read_text(encoding="utf-8").splitlines():
+    key, _, value = line.partition("=")
+    value = value.strip().strip('"')
+    if key.startswith("XDG_") and value.startswith("$HOME/") and len(value) > 6:
+        try: (home / value[6:]).mkdir(parents=True, exist_ok=True)
+        except OSError: pass
 # Le bureau reste vide par défaut. Les icônes (Corbeille, Explorateur,
 # Documents, etc.) sont ajoutées explicitement depuis Paramètres.
 # Defaults for file opening, not a rewrite of the user's selected associations.
 mimeapps = home / ".config/mimeapps.list"
 if not mimeapps.exists():
-    mimeapps.write_text("[Default Applications]\ntext/plain=org.xfce.mousepad.desktop;\ntext/x-python=org.xfce.mousepad.desktop;\ntext/x-shellscript=org.xfce.mousepad.desktop;\ninode/directory=winlux-explorer.desktop;\napplication/x-ms-dos-executable=winlux.desktop;\napplication/x-msdownload=winlux.desktop;\napplication/vnd.microsoft.portable-executable=winlux.desktop;\napplication/x-ms-shortcut=winlux.desktop;\nx-scheme-handler/http=winlux-browser.desktop;\nx-scheme-handler/https=winlux-browser.desktop;\n")
+    mimeapps.write_text("[Default Applications]\ntext/plain=org.xfce.mousepad.desktop;\ntext/x-python=org.xfce.mousepad.desktop;\ntext/x-shellscript=org.xfce.mousepad.desktop;\ninode/directory=winlux-explorer.desktop;\napplication/x-ms-dos-executable=winlux.desktop;\napplication/x-msdownload=winlux.desktop;\napplication/vnd.microsoft.portable-executable=winlux.desktop;\napplication/x-ms-shortcut=winlux.desktop;\ntext/x-ms-regedit=winlux-regedit.desktop;\nx-scheme-handler/http=winlux-browser.desktop;\nx-scheme-handler/https=winlux-browser.desktop;\n")
