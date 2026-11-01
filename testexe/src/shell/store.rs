@@ -1340,9 +1340,14 @@ unsafe fn draw_search(g: &mut Gfx, body: &Rect) {
     let q = SEARCH.get();
     let mut found = false;
     let end = grid(g, body, y + 44, |i| {
+        // Le nom du paquet aussi (sans « apt: ») : « mines » trouve le
+        // Démineur (gnome-mines).
+        let key = app_field(i, F_KEY);
+        let reference = key.iter().position(|&c| c == b':').map_or(key, |p| &key[p + 1..]);
         let m = contains_ci(app_field(i, F_NAME), q)
             || contains_ci(app_field(i, F_SUMMARY), q)
-            || contains_ci(app_field(i, F_PUB), q);
+            || contains_ci(app_field(i, F_PUB), q)
+            || contains_ci(reference, q);
         found |= m;
         m
     });

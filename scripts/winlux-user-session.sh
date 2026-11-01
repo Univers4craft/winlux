@@ -7,7 +7,7 @@
 # ce qui appartient à la session de l'utilisateur, avec son propre bus D-Bus,
 # son propre gestionnaire de fenêtres, sa barre des tâches et son bureau.
 set -eu
-export PATH="/usr/bin:/bin:/usr/sbin:/sbin:$PATH"
+export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH:/usr/games:/usr/local/games"
 uid=$(id -u)
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/$uid}
 if ! mkdir -p "$XDG_RUNTIME_DIR" 2>/dev/null || ! test -w "$XDG_RUNTIME_DIR"; then

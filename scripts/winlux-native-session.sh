@@ -1,6 +1,9 @@
 #!/bin/sh
 # Start native services once. The init shell supervises xfdesktop separately.
 set -eu
+# Jeux Debian (/usr/games) et logiciels locaux : sans eux dans PATH, GIO
+# masquait leur raccourci (Démineur installé depuis la Boutique introuvable).
+export PATH="/usr/local/sbin:/usr/local/bin:$PATH:/usr/games:/usr/local/games"
 export DISPLAY=${DISPLAY:-:0}
 export XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR:-/run/user/0}
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
