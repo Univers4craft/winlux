@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git tag -a v0.2.*)",
+      "Bash(git push origin v0.2.*)",
+      "Bash(gh release edit v0.2.*)"
+    ]
+  }
+}
