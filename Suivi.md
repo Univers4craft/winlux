@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **243**
+- Réalisé : **244**
 - À faire ou en cours : **45**
-- Total : **288**
+- Total : **289**
 - Progression : **84.4%**
-- Dernière mise à jour : 01/11/2026 (audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147)
+- Dernière mise à jour : 01/11/2026 (audit Paramètres #209, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147)
 
 ## À FAIRE (par priorité)
 
@@ -104,6 +104,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] Audit du 01/11/2026, Paramètres (#209, partie settings.rs) : les clics touchent le bouton affiché (registre des boutons dessinés au lieu d'un index de grille : Personnaliser, Assistant, Réglages de l'écran, claviers, fuseaux, Éléments masqués et Extensions déclenchaient le mauvais réglage ou rien) ; pages Apparence, Effets visuels, Localisation, Gestionnaire de fichiers et Son avancé remises en page (les cartes recouvraient des boutons, Thème sombre/clair et Deutsch étaient cachés) ; la molette fait défiler les 8 dispositions de clavier et les 12 fuseaux ; la détection du choix de navigateur ne relance plus system_tick.
 - [x] Audit du 01/11/2026, shell PE (issues #207, #208) : mode « Toutes les applications » du menu Démarrer utilisable (liste alignée sur le clic, bornée, sans grille épinglée dessous, retour aux épinglées à chaque ouverture) ; tous les boutons de la barre des tâches ouvrent ou basculent leur application ; tuiles « Ce PC » et « Programmes .exe » actives, « Programmes .exe » ouvre Applications installées, « Mises à jour » ouvre la bonne page ; menu Alimentation cliquable sur toute sa largeur ; « Fermer » du menu contextuel ferme ; curseur de volume envoie le niveau ; Échap ferme les volets réseau/volume ; Alt+Tab bascule au relâchement d'Alt ; boîte Exécuter : OK cliquable, clic dehors referme, le « r » de Win+R et 260 cases parasites ne s'affichent plus ; liste « Toutes les applications » sans commandes absentes de l'ISO et message « Application introuvable » en cas d'échec ; le Terminal ne fait plus planter le bureau (écran de 1,7 Mo construit sur une pile de 1 Mo).
 - [x] Audit du 01/11/2026, décodeurs (#213) : vérifications de bornes avant toute allocation ou lecture dans les décodeurs d'images (PNG/APNG, GIF, JPEG, TIFF, PSD, EXR, XCF, WebP, EPS, glTF), les archives et installateurs (CFB, zip64, CAB, NSIS), les métadonnées CLR (flux, tas, RVA, sections EH, récursion des signatures limitée à 64), WIC, Direct3D 9/11, DXGI, XAudio2 et `SafeArrayCreate` : plafonds de taille, calculs en `checked_*`/64 bits, erreurs propres au lieu de paniques (`panic = "abort"` en release), avec un test d'en-tête malformé par format d'image.
 - [x] README réécrit en détail et wiki complet (`wiki/`, 17 pages avec sommaire et menu : but et principes, architecture, bureau, compatibilité, registre, chemins et droits, réseau et disques, Paramètres, installation, publication et mises à jour, construction de l'ISO, tests et CI, contribution, feuille de route, limites, FAQ), publié sur le wiki GitHub par le workflow `wiki.yml` à chaque fusion.
