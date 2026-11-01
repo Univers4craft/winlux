@@ -92,6 +92,80 @@ for path in (source / "config").rglob("*"):
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.exists() or (reset_panel and path.name == "xfce4-panel.xml"):
             shutil.copyfile(path, target)
+# Raccourcis clavier : xfsettingsd applique ceux d'XFCE et les saisit avant
+# openbox. Windows+E ouvrait Thunar sur « / », Windows+R/P et Ctrl+Alt+L
+# visaient des programmes absents de l'image. Une valeur restée celle d'XFCE
+# devient l'équivalent Winlux ; un choix personnel est conservé.
+XFCE_SHORTCUTS = {
+    "<Super>e": ("thunar", "winlux-shell-app explorer"),
+    "<Primary><Alt>f": ("thunar", "winlux-shell-app explorer"),
+    "<Super>r": ("xfce4-appfinder -c", "winlux-start-menu"),
+    "<Alt>F1": ("xfce4-popup-applicationsmenu", "winlux-start-menu"),
+    "<Alt>F2": ("xfce4-appfinder --collapsed", "winlux-start-menu"),
+    "<Alt>F3": ("xfce4-appfinder", "winlux-start-menu"),
+    "<Super>p": ("xfce4-display-settings --minimal", "winlux-shell-app settings 8"),
+    "XF86Display": ("xfce4-display-settings --minimal", "winlux-shell-app settings 8"),
+    "<Primary><Alt>l": ("xflock4", "winlux-lock now"),
+    "<Primary><Alt>Delete": ("xfce4-session-logout", "winlux-system-tools tasks"),
+    "<Primary><Shift>Escape": ("xfce4-taskmanager", "winlux-system-tools tasks"),
+    "Print": ("xfce4-screenshooter", None),
+    "<Alt>Print": ("xfce4-screenshooter -w", None),
+    "<Shift>Print": ("xfce4-screenshooter -r", None),
+    "<Alt><Super>s": ("orca", None),
+}
+
+
+def winlux_shortcuts(path):
+    """Remplace dans le canal xfce4-keyboard-shortcuts les commandes XFCE par défaut."""
+    try:
+        tree = ET.parse(path) if path.is_file() else ET.ElementTree(ET.Element("channel", {"name": "xfce4-keyboard-shortcuts", "version": "1.0"}))
+    except (ET.ParseError, OSError):
+        return
+    root = tree.getroot()
+
+    def child(parent, name):
+        found = next((item for item in parent if item.get("name") == name), None)
+        if found is None:
+            found = ET.SubElement(parent, "property", {"name": name, "type": "empty"})
+        return found
+
+    custom = child(child(root, "commands"), "custom")
+    existing = {item.get("name"): item for item in custom}
+    if len(existing) <= 1:
+        # Canal pas encore créé par xfsettingsd : sans liste personnelle, il
+        # recopierait les défauts d'XFCE ; garder ceux qui restent utiles.
+        for key, command in (("<Primary><Alt>t", "exo-open --launch TerminalEmulator"), ("<Primary>Escape", "xfdesktop --menu"),
+                             ("<Primary><Alt>Escape", "xkill"), ("XF86WWW", "exo-open --launch WebBrowser"),
+                             ("HomePage", "exo-open --launch WebBrowser"), ("XF86Mail", "exo-open --launch MailReader")):
+            if key not in existing:
+                existing[key] = ET.SubElement(custom, "property", {"name": key, "type": "string", "value": command})
+        for key, (_, command) in XFCE_SHORTCUTS.items():
+            if command and key not in existing:
+                existing[key] = ET.SubElement(custom, "property", {"name": key, "type": "string", "value": command})
+    changed = not path.is_file()
+    for key, (stock, command) in XFCE_SHORTCUTS.items():
+        item = existing.get(key)
+        if item is None or item.get("value") != stock:
+            continue
+        if command is None:
+            custom.remove(item)
+        else:
+            item.set("value", command)
+            for extra in list(item):
+                item.remove(extra)
+        changed = True
+    override = existing.get("override")
+    if override is None:
+        ET.SubElement(custom, "property", {"name": "override", "type": "bool", "value": "true"})
+        changed = True
+    if changed:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_name(path.name + ".tmp")
+        tree.write(temporary, encoding="UTF-8", xml_declaration=True)
+        temporary.replace(path)
+
+
+winlux_shortcuts(home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-keyboard-shortcuts.xml")
 # Corbeille vide d'un nouveau profil : sans ces dossiers (créés d'habitude au
 # premier envoi), l'Explorateur affichait « Ce dossier est introuvable ».
 for directory in ("files", "info"):
