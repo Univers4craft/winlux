@@ -183,6 +183,20 @@ if openbox_config.is_file():
             temporary.replace(openbox_config)
     except ET.ParseError:
         print(_t("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée."), file=sys.stderr)
+# « Coller » dans le menu du bureau (clic droit) : ajouté une fois aux menus
+# Openbox déjà copiés, avant « Nouveau », sans toucher au reste.
+openbox_menu = home / ".config/openbox/menu.xml"
+if openbox_menu.is_file():
+    try:
+        menu_text = openbox_menu.read_text(encoding="utf-8")
+        anchor = '  <menu id="new-menu"'
+        if "winlux-desktop-action paste" not in menu_text and anchor in menu_text:
+            item = '  <item label="Coller"><action name="Execute"><command>winlux-desktop-action paste</command></action></item>\n'
+            temporary = openbox_menu.with_suffix(".xml.tmp")
+            temporary.write_text(menu_text.replace(anchor, item + anchor, 1), encoding="utf-8")
+            temporary.replace(openbox_menu)
+    except (OSError, UnicodeDecodeError):
+        pass
 if not (home / ".xscreensaver").exists(): shutil.copyfile(source / "xscreensaver", home / ".xscreensaver")
 user_dirs = home / ".config/user-dirs.dirs"
 if not user_dirs.exists():
