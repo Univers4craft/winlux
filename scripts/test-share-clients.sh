@@ -53,7 +53,7 @@ host=127.0.0.1
 # Client Windows 11 : SMB 3.1.1 seulement, signature exigée, NTLMv2.
 win() {
     smbclient "//$host/Photos été" -p "$port" -m SMB3_11 --option='client min protocol=SMB3_11' \
-        --client-protection=sign --option='client ntlmv2 auth=yes' "$@"
+        --client-protection=sign "$@"
 }
 mac() {
     smbclient "//$host/Photos été" -p "$port" -m SMB3 --option='client min protocol=SMB3' "$@"
@@ -63,6 +63,8 @@ smbclient -L "$host" -p "$port" -m SMB3_11 --client-protection=sign -U 'wlxalice
     | grep -q 'Photos été' || fail "Windows 11 : le partage n'apparaît pas dans la liste"
 printf 'Bonjour depuis Windows\r\n' > "$work/note.txt"
 long=$(printf 'Dossier très long %.0s' 1 2 3 4 5 6 7 8 9 10 11 12)
+# Windows interdit l'espace final dans un nom (Samba récent aussi).
+long=${long% }
 win -U 'wlxalice%Motdepasse-1' -c "mkdir \"$long\"; put \"$work/note.txt\" \"$long/Résumé à lire.txt\"" >"$work/smb.log" 2>&1 \
     || fail "Windows 11 : écriture refusée au propriétaire"
 test "$(stat -c %U "$HOME/Photos été/$long/Résumé à lire.txt")" = wlxalice || fail "fichier écrit sous un autre propriétaire"
