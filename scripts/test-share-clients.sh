@@ -34,6 +34,7 @@ share() { sh "$project/scripts/winlux-share.sh" "$@" >/dev/null; }
 state="$root/run/winlux/shares.txt"
 fail() {
     echo "ÉCHEC : $*" >&2
+    cat "$work/smb.log" >&2 2>/dev/null || true
     cat "$root/etc/winlux/samba/smb.conf" "$root"/run/winlux/samba/log.* 2>/dev/null | tail -n 60 >&2 || true
     exit 1
 }
@@ -62,10 +63,10 @@ smbclient -L "$host" -p "$port" -m SMB3_11 --client-protection=sign -U 'wlxalice
     | grep -q 'Photos été' || fail "Windows 11 : le partage n'apparaît pas dans la liste"
 printf 'Bonjour depuis Windows\r\n' > "$work/note.txt"
 long=$(printf 'Dossier très long %.0s' 1 2 3 4 5 6 7 8 9 10 11 12)
-win -U 'wlxalice%Motdepasse-1' -c "mkdir \"$long\"; put \"$work/note.txt\" \"$long/Résumé à lire.txt\"" >/dev/null 2>&1 \
+win -U 'wlxalice%Motdepasse-1' -c "mkdir \"$long\"; put \"$work/note.txt\" \"$long/Résumé à lire.txt\"" >"$work/smb.log" 2>&1 \
     || fail "Windows 11 : écriture refusée au propriétaire"
 test "$(stat -c %U "$HOME/Photos été/$long/Résumé à lire.txt")" = wlxalice || fail "fichier écrit sous un autre propriétaire"
-win -U 'wlxbob%Autre-2' -c "get \"$long/Résumé à lire.txt\" \"$work/relu.txt\"" >/dev/null 2>&1 \
+win -U 'wlxbob%Autre-2' -c "get \"$long/Résumé à lire.txt\" \"$work/relu.txt\"" >"$work/smb.log" 2>&1 \
     || fail "Windows 11 : lecture refusée à un compte en lecture"
 cmp -s "$work/note.txt" "$work/relu.txt" || fail "Windows 11 : contenu relu différent"
 win -U 'wlxbob%Autre-2' -c "put \"$work/note.txt\" interdit.txt" >/dev/null 2>&1 || true
