@@ -177,7 +177,19 @@ def prepare():
         uid,
         gid,
     )
-    for parent in (BROWSER_HOME / ".local/share", BROWSER_HOME / ".local"):
+    # La session est XFCE : xdg-open passe par exo-open et le gestionnaire de
+    # fichiers XFCE (Thunar, qui ne peut pas tourner sous ce compte).
+    write_if_changed(config / "xfce4/helpers.rc", "FileManager=winlux-browser-folder\n", uid, gid)
+    write_if_changed(
+        BROWSER_HOME / ".local/share/xfce4/helpers/winlux-browser-folder.desktop",
+        "[Desktop Entry]\nType=X-XFCE-Helper\nX-XFCE-Category=FileManager\nName=Explorateur\n"
+        "Icon=system-file-manager\nX-XFCE-Binaries=python3;\n"
+        f"X-XFCE-Commands=/usr/bin/python3 {SELF} open;\n"
+        f'X-XFCE-CommandsWithParameter=/usr/bin/python3 {SELF} open "%s";\n',
+        uid,
+        gid,
+    )
+    for parent in (BROWSER_HOME / ".local/share/xfce4", BROWSER_HOME / ".local/share", BROWSER_HOME / ".local"):
         os.chown(parent, uid, gid)
     # Boîte aux lettres : le navigateur dépose, seul root lit.
     SPOOL.mkdir(parents=True, exist_ok=True)
@@ -346,9 +358,10 @@ def main(argv):
         return serve(int(argv[2]) if len(argv) > 2 and argv[2].isdigit() else 0)
     if command == "filemanager":
         return filemanager()
-    if command == "open" and len(argv) > 2:
-        path = uri_path(argv[2]) or argv[2]
-        return request(path)
+    if command == "open":
+        # Sans argument : le dossier Téléchargements lui-même.
+        path = argv[2] if len(argv) > 2 and argv[2] else str(BROWSER_DOWNLOADS)
+        return request(uri_path(path) or path)
     print("usage: winlux-browser-downloads prepare|serve [PID]|filemanager|open CHEMIN", file=sys.stderr)
     return 2
 
