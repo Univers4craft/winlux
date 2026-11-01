@@ -36,6 +36,9 @@ scope = updater["release_metadata"].__globals__
 manifest_url, api_url = scope["MANIFEST_URL"], scope["RELEASE_API"]
 release = {"tag_name": "v0.3.1", "assets": [
     {"name": "winlux-live-v0.3.1.iso", "size": 9},
+    # Créateur de clé USB (#225) : un second .deb dans chaque release, jamais
+    # pris pour la mise à jour du bureau.
+    {"name": "winlux-usb-creator_0.3.1_all.deb", "size": 512, "digest": "sha256:" + "c" * 64},
     {"name": "winlux-desktop-v0.3.1.deb", "size": 4096, "digest": "sha256:" + "b" * 64}]}
 def fake(files, codes={}):
     def download(url, destination, accept=None):
@@ -55,7 +58,7 @@ with tempfile.TemporaryDirectory(prefix="apt-fallback-check.") as temporary:
     data = scope["release_metadata"](work)[0]
     assert (data["version"], data["asset"], data["sha256"], data["download_bytes"]) == ("v0.3.1", "winlux-desktop-v0.3.1.deb", "b" * 64, "4096"), data
     assert int(data["unpacked_kib"]) >= 4096 * 3 // 1024 and (work / "manifest").read_text().count("format=3") == 1
-    del release["assets"][1]["digest"]
+    del release["assets"][2]["digest"]
     sums = "https://github.com/Univers4craft/winlux/releases/download/v0.3.1/winlux-desktop-v0.3.1.deb.sha256"
     scope["download"] = fake({api_url: json.dumps(release), sums: "c" * 64 + "  winlux-desktop-v0.3.1.deb\n"})
     assert scope["release_metadata"](work)[0]["sha256"] == "c" * 64
