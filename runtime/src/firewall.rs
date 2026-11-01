@@ -656,8 +656,19 @@ pub fn apply(cfg: &Config, apps: &BTreeMap<PathBuf, BTreeSet<Listen>>) -> Result
     }
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     let count = cfg.active_rules().count();
+    let dropped = !cgroups
+        && cfg
+            .active_rules()
+            .any(|r| r.dir == Dir::Out && !r.program.is_empty());
     if out.status.success() {
-        write_status(rules.is_some(), "", count);
+        // Les règles sortantes par application sont omises sans cgroup v2 :
+        // le dire dans l'état plutôt que d'afficher « actif » sans elles.
+        let note = if dropped {
+            "règles sortantes par application ignorées : cgroup v2 indisponible"
+        } else {
+            ""
+        };
+        write_status(rules.is_some(), note, count);
         Ok(())
     } else {
         let msg = String::from_utf8_lossy(&out.stderr).trim().to_string();

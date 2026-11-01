@@ -827,8 +827,19 @@ pub unsafe extern "win64" fn reg_notify_change_key_value(
             return ERROR_INVALID_PARAMETER;
         }
         std::thread::spawn(move || {
-            reg::wait_for_change(None);
-            crate::dlls::kernel32::set_event(event);
+            // S'arrête quand la clé est fermée (comme Windows) au lieu de
+            // rester bloqué à vie si le registre ne change jamais.
+            loop {
+                let before = reg::store_stamp();
+                reg::wait_for_change(Some(std::time::Duration::from_secs(1)));
+                if reg::store_stamp() != before {
+                    crate::dlls::kernel32::set_event(event);
+                    return;
+                }
+                if reg::handle_path(handle).is_err() {
+                    return;
+                }
+            }
         });
     } else {
         reg::wait_for_change(None);

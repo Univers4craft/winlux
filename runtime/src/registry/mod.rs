@@ -943,6 +943,11 @@ pub fn backup() {
 }
 
 /// Attend qu'une autre appli modifie le registre (RegNotifyChangeKeyValue).
+/// Empreinte du fichier du registre (inode, date, taille) : change à chaque écriture.
+pub fn store_stamp() -> Stamp {
+    stamp(&store_path())
+}
+
 pub fn wait_for_change(timeout: Option<std::time::Duration>) {
     let path = store_path();
     let start = stamp(&path);
@@ -1021,7 +1026,16 @@ pub fn create(path: &str) -> Result<(usize, bool), i32> {
     let created = if exists {
         false
     } else {
-        write(|d| Ok(d.ensure(path)))?
+        // Revérifié sous le verrou d'écriture : deux programmes qui créent
+        // la même clé en même temps ne doivent pas se croire tous deux
+        // « premiers ».
+        write(|d| {
+            if d.key(path).is_some() {
+                Ok(false)
+            } else {
+                Ok(d.ensure(path))
+            }
+        })?
     };
     Ok((new_handle(path.to_string()), created))
 }
