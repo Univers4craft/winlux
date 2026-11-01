@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **240**
+- Réalisé : **243**
 - À faire ou en cours : **45**
-- Total : **285**
-- Progression : **84.2%**
-- Dernière mise à jour : 01/11/2026 (audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174)
+- Total : **288**
+- Progression : **84.4%**
+- Dernière mise à jour : 01/11/2026 (audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147)
 
 ## À FAIRE (par priorité)
 
@@ -169,6 +169,9 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 - [x] Gestion GPU dans Paramètres > Graphismes : détection des capacités réelles (sysfs amdgpu/i915/xe, NVML), mesures en direct, profil/limite de puissance/overclocking seulement si le pilote les accepte, GPU par application sur machine hybride (`gpu=` du profil .exe, `winlux-prime-run`), onglets GPU du Gestionnaire des tâches et overlay de performances en jeu (raccourci configurable). Tout ce que la machine n'expose pas est masqué.
 - [x] Gestion de l'alimentation en Rust (`runtime/src/power/`) : batterie lue dans `/sys/class/power_supply` (pourcentage, charge/décharge, autonomie, santé), modes Performances maximales / Équilibré / Économie d'énergie (gouverneur cpufreq, EPP, turbo, luminosité, autosuspend USB, ASPM, SATA), veille et veille prolongée par `/sys/power` avec reprise propre, démon lancé par l'init maison (inactivité écran/veille, capot, bouton, batterie critique), icône batterie avec charge et infobulle, alertes 20 %/10 %, page Paramètres « Alimentation et batterie », API `GetSystemPowerStatus`, `SetThreadExecutionState`, `PowerCreateRequest/SetRequest/ClearRequest`, `PowerGetActiveScheme/SetActiveScheme`, `PowerReadFriendlyName`, `SetSuspendState`, `GetPwrCapabilities` (test PE `power_api`).
+- [x] Portable, veille et luminosité (#147) : veille sans perte d'évènement de réveil (`/sys/power/wakeup_count`, nouvel essai si le noyau est occupé), scripts avant/après veille dans `/usr/lib/winlux/sleep.d` et `/etc/winlux/sleep.d`, touches luminosité du clavier (sans double pas quand l'ACPI agit déjà, pas de 5 % sous 20 %), capot fermé avec un écran externe branché : la machine reste éveillée.
+- [x] Écrans multiples (#147) : `winlux --display` (politique en Rust, `xrandr` pour la plomberie) : branchement à chaud suivi par `/sys/class/drm` sans sonder les écrans en boucle, disposition étendre/dupliquer/un seul écran, écran principal, position, définition et mise à l'échelle par écran (le bureau dessine à la plus grande échelle, les autres écrans réduits par RandR), réglages mémorisés par ensemble d'écrans, capot fermé avec écran externe : dalle interne éteinte, échelle recommandée selon la densité réelle (EDID). Nouvelle page Paramètres « Écran » avec schéma cliquable. API Win32 `EnumDisplayMonitors`, `GetMonitorInfo(Ex)`, `MonitorFromPoint/Rect/Window`, `SM_CMONITORS`, écran virtuel ; le bureau suit l'écran principal. Reste : valider sur un vrai portable avec écran externe.
+- [x] Pavé tactile (#147) : `winlux-touchpad` lit les réglages que le pavé accepte réellement (libinput) : toucher-clic, défilement à deux doigts, clic droit à deux doigts, défilement naturel, désactivation pendant la frappe, vitesse ; réappliqués au début de session et à la reprise de veille. Pincer pour zoomer : gestes XInput 2.4 traduits en Ctrl + molette, comme un pavé de précision Windows. Section Paramètres cachée sans pavé tactile (ordinateur fixe, VM).
 
 - [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer.
 - [x] Bloquer les copies dans un descendant, les collisions et les alias de chemins ; tester le couper/coller et les raccourcis.

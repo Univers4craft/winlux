@@ -176,6 +176,7 @@ jobs:
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
           sh scripts/test-display.sh
+          sh scripts/test-touchpad.sh
           sh scripts/test-speak.sh
 
       - name: Valider sauvegarde, sessions et bureau à distance

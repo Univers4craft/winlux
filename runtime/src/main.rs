@@ -9,6 +9,7 @@ mod clr;
 mod cpu;
 mod crash;
 mod diskimage;
+mod display;
 mod dlls;
 mod firewall;
 mod gamemode;
@@ -86,6 +87,10 @@ fn main() {
     }
     if exe == "--clipboard-bridge" {
         std::process::exit(clipbridge::run());
+    }
+    if exe == "--display" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(display::main(&rest));
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());

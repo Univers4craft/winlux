@@ -58,6 +58,7 @@ pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
 pub mod mmdevapi;
+pub mod monitors;
 pub mod mscoree;
 pub mod msvcrt;
 pub mod notifyicon;

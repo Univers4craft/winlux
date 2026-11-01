@@ -916,15 +916,23 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
     use crate::dlls::gui::theme;
     let _ = theme::ACCENT; // thème présent et lié
     match index {
-        0 | 16 | 78 => gui::screen_size().0, // SM_CXSCREEN, SM_CXFULLSCREEN, SM_CXVIRTUALSCREEN
-        1 | 17 | 79 => gui::screen_size().1, // SM_CYSCREEN, SM_CYFULLSCREEN, SM_CYVIRTUALSCREEN
-        2 => 4,                              // SM_CYCAPTION
-        3 => 4,                              // SM_CXBORDER
-        4 => 4,                              // SM_CYBORDER
-        7 => 32,                             // SM_CYHSCROLL
-        8 => 16,                             // SM_CYVSCROLL
-        90 => 96,                            // LOGPIXELSX
-        91 => 96,                            // LOGPIXELSY
+        // SM_CXSCREEN/SM_CYSCREEN : écran principal, comme Windows.
+        0 | 16 => crate::dlls::monitors::list()[0].rect.width(),
+        1 | 17 => crate::dlls::monitors::list()[0].rect.height(),
+        // Écran virtuel (tous les écrans) et nombre d'écrans.
+        76 => crate::dlls::monitors::virtual_rect().left,
+        77 => crate::dlls::monitors::virtual_rect().top,
+        78 => crate::dlls::monitors::virtual_rect().width(),
+        79 => crate::dlls::monitors::virtual_rect().height(),
+        80 => crate::dlls::monitors::count(), // SM_CMONITORS
+        81 => 1,                              // SM_SAMEDISPLAYFORMAT
+        2 => 4,                               // SM_CYCAPTION
+        3 => 4,                               // SM_CXBORDER
+        4 => 4,                               // SM_CYBORDER
+        7 => 32,                              // SM_CYHSCROLL
+        8 => 16,                              // SM_CYVSCROLL
+        90 => 96,                             // LOGPIXELSX
+        91 => 96,                             // LOGPIXELSY
         _ => 0,
     }
 }
@@ -2320,59 +2328,6 @@ pub extern "win64" fn unregister_class_w(_name: *const u16, _instance: usize) ->
     1
 }
 
-pub extern "win64" fn monitor_from_window(_hwnd: usize, _flags: u32) -> usize {
-    1 // Handle de moniteur factice
-}
-
-pub extern "win64" fn monitor_from_point(_pt_x: i32, _pt_y: i32, _flags: u32) -> usize {
-    1
-}
-
-pub unsafe extern "win64" fn get_monitor_info_a(monitor: usize, info: *mut c_void) -> i32 {
-    let _ = monitor;
-    if info.is_null() {
-        return 0;
-    }
-    let (w, h) = gui::screen_size();
-    // MONITORINFO : cbSize(4) + rcMonitor(16) + rcWork(16) + dwFlags(4) = 40 bytes
-    let ptr = info as *mut u8;
-    let size = *(ptr as *const u32);
-    if size >= 40 {
-        let rc = ptr.add(4) as *mut Rect;
-        *rc = Rect {
-            left: 0,
-            top: 0,
-            right: w,
-            bottom: h,
-        };
-        let work = ptr.add(20) as *mut Rect;
-        *work = Rect {
-            left: 0,
-            top: 0,
-            right: w,
-            bottom: h,
-        };
-        let flags = ptr.add(36) as *mut u32;
-        *flags = 1; // MONITORINFOF_PRIMARY
-    }
-    1
-}
-
-pub unsafe extern "win64" fn get_monitor_info_w(monitor: usize, info: *mut c_void) -> i32 {
-    get_monitor_info_a(monitor, info)
-}
-
-pub extern "win64" fn enum_display_monitors(
-    _hdc: usize,
-    _clip: *const Rect,
-    _proc: usize,
-    _data: isize,
-) -> i32 {
-    // Appeler le callback avec notre unique moniteur
-    // Simplification : retourne 1 (succès) sans appeler
-    1
-}
-
 pub extern "win64" fn get_dc_ex(_hwnd: usize, _rgn: usize, _flags: u32) -> usize {
     gui::create_dc(_hwnd)
 }
@@ -2579,9 +2534,11 @@ pub fn exports() -> crate::dlls::Exports {
         "SetPropA"=>fn set_prop_a, "SetPropW"=>fn set_prop_w,
         "RemovePropA"=>fn remove_prop_a, "RemovePropW"=>fn remove_prop_w,
         // --- Monitor ---
-        "MonitorFromWindow"=>fn monitor_from_window, "MonitorFromPoint"=>fn monitor_from_point,
-        "GetMonitorInfoA"=>fn get_monitor_info_a, "GetMonitorInfoW"=>fn get_monitor_info_w,
-        "EnumDisplayMonitors"=>fn enum_display_monitors,
+        "MonitorFromWindow"=>fn crate::dlls::monitors::monitor_from_window,
+        "MonitorFromPoint"=>fn crate::dlls::monitors::monitor_from_point_packed,
+        "MonitorFromRect"=>fn crate::dlls::monitors::monitor_from_rect,
+        "GetMonitorInfoA"=>fn crate::dlls::monitors::get_monitor_info_a, "GetMonitorInfoW"=>fn crate::dlls::monitors::get_monitor_info_w,
+        "EnumDisplayMonitors"=>fn crate::dlls::monitors::enum_display_monitors,
         // --- Deferred window pos ---
         "BeginDeferWindowPos"=>fn begin_defer_window_pos,
         "DeferWindowPos"=>fn defer_window_pos,
