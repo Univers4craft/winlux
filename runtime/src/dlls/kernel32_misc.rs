@@ -488,12 +488,34 @@ fn system_message(code: u32) -> Option<&'static str> {
 }
 
 const FORMAT_MESSAGE_ALLOCATE_BUFFER: u32 = 0x100;
+const FORMAT_MESSAGE_IGNORE_INSERTS: u32 = 0x200;
+const FORMAT_MESSAGE_FROM_STRING: u32 = 0x400;
 const FORMAT_MESSAGE_FROM_SYSTEM: u32 = 0x1000;
 
-/// Sous-ensemble de `FormatMessage` : messages système (`FROM_SYSTEM`) avec
-/// ou sans allocation du tampon. Les chaînes de format applicatives ne sont
-/// pas encore interprétées.
-unsafe fn format_message(flags: u32, code: u32) -> Option<String> {
+/// `FormatMessage` : messages système (`FROM_SYSTEM`) ou chaîne de format
+/// applicative (`FROM_STRING`) dont les insertions `%1`…`%99` (avec un
+/// format optionnel `!s!`, `!d!`, `!x!`…) sont lues dans `args`. Sans `args`
+/// (pointeur nul) ou avec `IGNORE_INSERTS`, les insertions sont copiées
+/// telles quelles au lieu de déréférencer un pointeur nul ; `%n`, `%r`,
+/// `%t`, `%%`, `%!`, `%.` et `%0` sont toujours interprétés.
+unsafe fn format_message(
+    flags: u32,
+    source: usize,
+    code: u32,
+    args: usize,
+    wide: bool,
+) -> Option<String> {
+    if flags & FORMAT_MESSAGE_FROM_STRING != 0 {
+        if source == 0 {
+            return None;
+        }
+        let template = if wide {
+            crate::dlls::wstr(source as *const u16)
+        } else {
+            crate::dlls::cstr(source as *const u8)
+        };
+        return Some(expand_inserts(&template, flags, args, wide));
+    }
     if flags & FORMAT_MESSAGE_FROM_SYSTEM == 0 {
         return None;
     }
@@ -504,16 +526,160 @@ unsafe fn format_message(flags: u32, code: u32) -> Option<String> {
             .unwrap_or_else(|| format!("Erreur Windows {code}."))
     ))
 }
+
+/// Valeur du n-ième argument d'insertion (tableau de pointeurs ou va_list,
+/// identiques sur x64 : des mots de 8 octets).
+unsafe fn insert_arg(args: usize, index: usize) -> Option<usize> {
+    if args == 0 || index == 0 {
+        return None;
+    }
+    Some(*(args as *const usize).add(index - 1))
+}
+
+unsafe fn expand_inserts(template: &str, flags: u32, args: usize, wide: bool) -> String {
+    let chars: Vec<char> = template.chars().collect();
+    let mut out = String::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        if c != '%' {
+            out.push(c);
+            i += 1;
+            continue;
+        }
+        i += 1;
+        let Some(&next) = chars.get(i) else {
+            break;
+        };
+        match next {
+            '0' => break,
+            'n' => {
+                out.push_str("\r\n");
+                i += 1;
+            }
+            'r' => {
+                out.push('\r');
+                i += 1;
+            }
+            't' => {
+                out.push('\t');
+                i += 1;
+            }
+            '%' | '!' | '.' => {
+                out.push(next);
+                i += 1;
+            }
+            '1'..='9' => {
+                let start = i;
+                let mut n = 0usize;
+                while i < chars.len() && i - start < 2 && chars[i].is_ascii_digit() {
+                    n = n * 10 + chars[i].to_digit(10).unwrap_or(0) as usize;
+                    i += 1;
+                }
+                let mut spec = String::new();
+                if chars.get(i) == Some(&'!') {
+                    let mut j = i + 1;
+                    while j < chars.len() && chars[j] != '!' {
+                        spec.push(chars[j]);
+                        j += 1;
+                    }
+                    if j < chars.len() {
+                        i = j + 1;
+                    } else {
+                        spec.clear();
+                    }
+                }
+                let verbatim = flags & FORMAT_MESSAGE_IGNORE_INSERTS != 0 || args == 0;
+                match insert_arg(args, n).filter(|_| !verbatim) {
+                    Some(value) => out.push_str(&format_insert(value, &spec, wide)),
+                    None => {
+                        out.push('%');
+                        out.extend(chars[start..start + n.to_string().len()].iter());
+                        if !spec.is_empty() {
+                            out.push('!');
+                            out.push_str(&spec);
+                            out.push('!');
+                        }
+                    }
+                }
+            }
+            other => {
+                out.push(other);
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// Une insertion formatée : chaîne (`s`, par défaut), ou entier selon le
+/// format printf réduit (`d`, `i`, `u`, `x`, `X`, `c`, modificateurs `l`/`ll`
+/// et largeur ignorée pour l'essentiel).
+unsafe fn format_insert(value: usize, spec: &str, wide: bool) -> String {
+    let conv = spec
+        .chars()
+        .rev()
+        .find(|c| c.is_ascii_alphabetic())
+        .unwrap_or('s');
+    match conv {
+        's' | 'S' if value == 0 => "(null)".to_string(),
+        's' => {
+            if wide != (conv == 'S') {
+                crate::dlls::wstr(value as *const u16)
+            } else {
+                crate::dlls::cstr(value as *const u8)
+            }
+        }
+        'S' => {
+            if wide {
+                crate::dlls::cstr(value as *const u8)
+            } else {
+                crate::dlls::wstr(value as *const u16)
+            }
+        }
+        'c' | 'C' => char::from_u32(value as u32).unwrap_or('?').to_string(),
+        'd' | 'i' => {
+            if spec.contains("ll") || spec.contains("I64") {
+                (value as i64).to_string()
+            } else {
+                (value as i32).to_string()
+            }
+        }
+        'u' => {
+            if spec.contains("ll") || spec.contains("I64") {
+                (value as u64).to_string()
+            } else {
+                (value as u32).to_string()
+            }
+        }
+        'x' => {
+            if spec.contains("ll") || spec.contains("I64") {
+                format!("{:x}", value as u64)
+            } else {
+                format!("{:x}", value as u32)
+            }
+        }
+        'X' => {
+            if spec.contains("ll") || spec.contains("I64") {
+                format!("{:X}", value as u64)
+            } else {
+                format!("{:X}", value as u32)
+            }
+        }
+        'p' => format!("{value:016X}"),
+        _ => crate::dlls::cstr(value as *const u8),
+    }
+}
 pub unsafe extern "win64" fn format_message_a(
     flags: u32,
-    _src: usize,
+    src: usize,
     code: u32,
     _lang: u32,
     buf: *mut u8,
     size: u32,
-    _args: usize,
+    args: usize,
 ) -> u32 {
-    let Some(text) = format_message(flags, code) else {
+    let Some(text) = format_message(flags, src, code, args, false) else {
         crate::process::set_last_error(87);
         return 0;
     };
@@ -538,14 +704,14 @@ pub unsafe extern "win64" fn format_message_a(
 }
 pub unsafe extern "win64" fn format_message_w(
     flags: u32,
-    _src: usize,
+    src: usize,
     code: u32,
     _lang: u32,
     buf: *mut u16,
     size: u32,
-    _args: usize,
+    args: usize,
 ) -> u32 {
-    let Some(text) = format_message(flags, code) else {
+    let Some(text) = format_message(flags, src, code, args, true) else {
         crate::process::set_last_error(87);
         return 0;
     };

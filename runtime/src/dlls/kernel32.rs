@@ -1698,15 +1698,37 @@ pub unsafe extern "win64" fn get_file_size_ex(h: usize, out: *mut i64) -> i32 {
     }
 }
 
-pub extern "win64" fn get_file_type(h: usize) -> u32 {
-    if h == (-10isize) as usize || h == (-11isize) as usize || h == (-12isize) as usize {
-        return 2;
+/// FILE_TYPE_DISK (1), FILE_TYPE_CHAR (2) ou FILE_TYPE_PIPE (3) d'après le
+/// descripteur Linux : une console est un caractère, un tube ou une socket
+/// un tube, le reste un disque.
+fn file_type_of_fd(fd: i32) -> u32 {
+    let mut st: libc::stat = unsafe { std::mem::zeroed() };
+    if unsafe { libc::fstat(fd, &mut st) } != 0 {
+        return 0;
     }
-    if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new()))).contains_key(&h) {
-        1
-    } else {
-        crate::process::set_last_error(6);
-        0
+    match st.st_mode & libc::S_IFMT {
+        libc::S_IFCHR => 2,
+        libc::S_IFIFO | libc::S_IFSOCK => 3,
+        _ => 1,
+    }
+}
+pub extern "win64" fn get_file_type(h: usize) -> u32 {
+    let std_fd = match h as isize {
+        -10 => Some(0),
+        -11 => Some(1),
+        -12 => Some(2),
+        _ => None,
+    };
+    let fd = std_fd.or_else(|| fd_of_handle(h));
+    match fd.map(file_type_of_fd) {
+        Some(0) | None => {
+            crate::process::set_last_error(6);
+            0
+        }
+        Some(kind) => {
+            crate::process::set_last_error(0);
+            kind
+        }
     }
 }
 
@@ -4791,13 +4813,17 @@ pub unsafe extern "win64" fn get_module_file_name_a(module: usize, buf: *mut u8,
         crate::process::set_last_error(122);
         return 0;
     }
-    let ret = write_a_text(&s, buf, size);
-    if ret > size {
+    let b = crate::dlls::encode_ansi(&s);
+    if b.len() >= size as usize {
+        // Tampon trop petit : chemin tronqué, terminé, nSize renvoyé et
+        // ERROR_INSUFFICIENT_BUFFER (comportement Windows XP et suivants).
+        let n = size as usize - 1;
+        std::ptr::copy_nonoverlapping(b.as_ptr(), buf, n);
+        *buf.add(n) = 0;
         crate::process::set_last_error(122);
-        0
-    } else {
-        ret
+        return size;
     }
+    write_a_text(&s, buf, size)
 }
 pub unsafe extern "win64" fn get_file_attributes_a(path: *const u8) -> u32 {
     if path.is_null() {
@@ -4980,13 +5006,15 @@ pub unsafe extern "win64" fn get_module_file_name_w(
         crate::process::set_last_error(122);
         return 0;
     }
-    let ret = write_w_text(&s, buf, size);
-    if ret > size {
+    let w: Vec<u16> = s.encode_utf16().collect();
+    if w.len() >= size as usize {
+        let n = size as usize - 1;
+        std::ptr::copy_nonoverlapping(w.as_ptr(), buf, n);
+        *buf.add(n) = 0;
         crate::process::set_last_error(122);
-        0
-    } else {
-        ret
+        return size;
     }
+    write_w_text(&s, buf, size)
 }
 pub unsafe extern "win64" fn get_file_attributes_w(path: *const u16) -> u32 {
     let s = match cstring_from_wide(path) {
@@ -6000,8 +6028,14 @@ pub unsafe extern "win64" fn get_computer_name_w(buf: *mut u16, size: *mut u32) 
     }
     let name = get_hostname_string();
     let upper = name.to_ascii_uppercase();
+    let n = upper.encode_utf16().count() as u32;
+    if *size <= n {
+        *size = n + 1;
+        crate::process::set_last_error(111);
+        return 0;
+    }
     crate::dlls::put_w(&upper, buf, *size);
-    *size = upper.encode_utf16().count() as u32;
+    *size = n;
     1
 }
 
@@ -6832,11 +6866,19 @@ pub unsafe extern "win64" fn get_module_handle_ex_w(
         return 0;
     }
     if flags & 4 != 0 {
-        // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS
-        if let Some(m) = crate::loader::find_module_by_addr(module as usize) {
+        // GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS : `module` est une adresse,
+        // jamais un nom. Sans module à cette adresse : ERROR_MOD_NOT_FOUND.
+        let address = module as usize;
+        if let Some(m) = crate::loader::find_module_by_addr(address) {
+            if flags & 3 == 0 {
+                crate::loader::increment_ref(m.base);
+            }
             *handle = m.base;
             return 1;
         }
+        *handle = 0;
+        crate::process::set_last_error(126);
+        return 0;
     }
     let name = if module.is_null() {
         String::new()
@@ -7989,6 +8031,542 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .is_empty()
+        );
+    }
+}
+
+/// Tests de l'audit kernel32/ntdll (#211) : threads, handles, mémoire
+/// globale, SList, SRW, InitOnce, horodatages, locale et chemins de module.
+#[cfg(test)]
+mod audit_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
+
+    extern "win64" fn thread_records_its_id_then_exits(param: usize) -> u32 {
+        unsafe {
+            *(param as *mut u32) = get_current_thread_id();
+        }
+        super::super::kernel32_misc::exit_thread(7)
+    }
+
+    #[test]
+    fn create_thread_rend_l_id_du_thread_et_exit_thread_signale_le_handle() {
+        init();
+        let mut seen = 0u32;
+        let mut tid = 0u32;
+        let h = unsafe {
+            create_thread(
+                0,
+                0,
+                thread_records_its_id_then_exits as *const () as usize,
+                &mut seen as *mut u32 as usize,
+                0,
+                &mut tid,
+            )
+        };
+        assert_ne!(h, 0);
+        assert_ne!(tid, 0);
+        // ExitThread signale le handle : WaitForSingleObject rend la main…
+        assert_eq!(wait_for_single_object(h, 5_000), 0);
+        // … GetExitCodeThread lit le code passé à ExitThread…
+        let mut code = 0;
+        assert_eq!(unsafe { get_exit_code_thread(h, &mut code) }, 1);
+        assert_eq!(code, 7);
+        // … et l'id rendu par CreateThread est celui de GetCurrentThreadId.
+        assert_eq!(seen, tid);
+        assert_eq!(close_handle(h), 1);
+    }
+
+    #[test]
+    fn duplicate_handle_copie_un_objet_de_synchronisation() {
+        init();
+        let event = unsafe { create_event_a(0, 1, 0, std::ptr::null()) };
+        let mut copy = 0usize;
+        assert_eq!(
+            unsafe { duplicate_handle(usize::MAX, event, usize::MAX, &mut copy, 0, 0, 2) },
+            1
+        );
+        assert_ne!(copy, 0);
+        assert_ne!(copy, event);
+        // Même objet : signaler la copie réveille l'original.
+        assert_eq!(set_event(copy), 1);
+        assert_eq!(wait_for_single_object(event, 0), 0);
+        // Fermer la copie ne ferme pas l'original.
+        assert_eq!(close_handle(copy), 1);
+        assert_eq!(reset_event(event), 1);
+        assert_eq!(wait_for_single_object(event, 0), 258);
+        // DUPLICATE_CLOSE_SOURCE ferme l'original, la copie survit.
+        let mut second = 0usize;
+        assert_eq!(
+            unsafe { duplicate_handle(usize::MAX, event, usize::MAX, &mut second, 0, 0, 1) },
+            1
+        );
+        assert_eq!(close_handle(event), 0);
+        assert_eq!(set_event(second), 1);
+        assert_eq!(close_handle(second), 1);
+        // Handle inconnu : échec ERROR_INVALID_HANDLE.
+        crate::process::init_thread();
+        let mut none = 1usize;
+        assert_eq!(
+            unsafe { duplicate_handle(usize::MAX, 0xdead_0000, usize::MAX, &mut none, 0, 0, 0) },
+            0
+        );
+        assert_eq!(none, 0);
+        assert_eq!(crate::process::last_error(), 6);
+    }
+
+    #[test]
+    fn global_alloc_fixe_rend_un_pointeur_direct() {
+        init();
+        // GMEM_FIXED : le handle est le pointeur, GlobalLock le rend tel quel.
+        let fixed = global_alloc(0x40, 16);
+        assert_ne!(fixed, 0);
+        assert_eq!(global_lock(fixed) as usize, fixed);
+        unsafe {
+            *(fixed as *mut u8) = 0x5a;
+        }
+        assert_eq!(global_size(fixed), 16);
+        let grown = global_realloc(fixed, 4096, 0);
+        assert_ne!(grown, 0);
+        assert_eq!(global_lock(grown) as usize, grown);
+        assert_eq!(unsafe { *(grown as *const u8) }, 0x5a);
+        assert_eq!(global_size(grown), 4096);
+        assert_eq!(global_free(grown), 0);
+        // GMEM_MOVEABLE : handle opaque, distinct du pointeur verrouillé.
+        let moveable = global_alloc(0x42, 8);
+        assert_ne!(moveable, 0);
+        let p = global_lock(moveable) as usize;
+        assert_ne!(p, moveable);
+        assert_eq!(global_unlock(moveable), 0);
+        assert_eq!(global_free(moveable), 0);
+        // Un bloc fixe de taille nulle garde un handle unique.
+        let a = global_alloc(0, 0);
+        let b = global_alloc(0, 0);
+        assert_ne!(a, b);
+        assert_eq!(global_free(a), 0);
+        assert_eq!(global_free(b), 0);
+    }
+
+    #[test]
+    fn slist_empile_depile_et_vide_sous_verrou() {
+        #[repr(C, align(16))]
+        struct Entry {
+            next: usize,
+            value: u32,
+        }
+        #[repr(C, align(16))]
+        struct Head([u8; 16]);
+        let mut head = Head([0; 16]);
+        let mut entries = [
+            Entry { next: 0, value: 1 },
+            Entry { next: 0, value: 2 },
+            Entry { next: 0, value: 3 },
+        ];
+        let h = &mut head as *mut Head as usize;
+        unsafe {
+            initialize_slist_head(h);
+            assert_eq!(query_depth_slist(h), 0);
+            for e in entries.iter_mut() {
+                interlocked_push_entry_slist(h, e as *mut Entry as usize);
+            }
+            assert_eq!(query_depth_slist(h), 3);
+            // Même table que ntdll : RtlQueryDepthSList voit la même pile.
+            assert_eq!(
+                super::super::ntdll::rtl_query_depth_slist(h as *const u8),
+                3
+            );
+            let top = interlocked_pop_entry_slist(h) as *const Entry;
+            assert_eq!((*top).value, 3);
+            assert_eq!(query_depth_slist(h), 2);
+            let first = interlocked_flush_slist(h) as *const Entry;
+            assert_eq!((*first).value, 2);
+            assert_eq!(((*first).next as *const Entry).read().value, 1);
+            assert_eq!(query_depth_slist(h), 0);
+            assert_eq!(interlocked_pop_entry_slist(h), 0);
+        }
+    }
+
+    #[test]
+    fn srw_lock_bloque_un_second_thread_sans_spin() {
+        static ORDER: AtomicU32 = AtomicU32::new(0);
+        let lock_word = Box::leak(Box::new(0usize)) as *mut usize as usize;
+        initialize_srw_lock(lock_word);
+        acquire_srw_lock_exclusive(lock_word);
+        assert_eq!(try_acquire_srw_lock_exclusive(lock_word), 0);
+        assert_eq!(try_acquire_srw_lock_shared(lock_word), 0);
+        let waiter = std::thread::spawn(move || {
+            // Le ntdll Rtl* partage le même état que kernel32.
+            unsafe { super::super::ntdll::rtl_acquire_srw_lock_exclusive(lock_word as *mut usize) };
+            let seen = ORDER.fetch_add(1, Ordering::SeqCst);
+            release_srw_lock_exclusive(lock_word);
+            seen
+        });
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // Le second thread n'a pas pu entrer tant que le verrou était tenu.
+        assert_eq!(ORDER.load(Ordering::SeqCst), 0);
+        ORDER.fetch_add(1, Ordering::SeqCst);
+        release_srw_lock_exclusive(lock_word);
+        assert_eq!(waiter.join().unwrap(), 1);
+        // Deux lecteurs entrent ensemble ; un écrivain attend qu'ils sortent.
+        acquire_srw_lock_shared(lock_word);
+        assert_eq!(try_acquire_srw_lock_shared(lock_word), 1);
+        assert_eq!(try_acquire_srw_lock_exclusive(lock_word), 0);
+        release_srw_lock_shared(lock_word);
+        release_srw_lock_shared(lock_word);
+        assert_eq!(try_acquire_srw_lock_exclusive(lock_word), 1);
+        release_srw_lock_exclusive(lock_word);
+    }
+
+    static INIT_ONCE_RUNS: AtomicUsize = AtomicUsize::new(0);
+    extern "win64" fn init_once_callback(_once: usize, param: usize, context: *mut usize) -> i32 {
+        INIT_ONCE_RUNS.fetch_add(1, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        unsafe {
+            *context = param;
+        }
+        1
+    }
+
+    #[test]
+    fn init_once_execute_once_n_initialise_qu_une_fois_sous_concurrence() {
+        let once = Box::leak(Box::new(0usize)) as *mut usize as usize;
+        init_once_initialize(once);
+        let threads: Vec<_> = (0..4)
+            .map(|_| {
+                std::thread::spawn(move || {
+                    let mut context = 0usize;
+                    let ok = unsafe {
+                        init_once_execute_once(
+                            once,
+                            init_once_callback as *const () as usize,
+                            0x1230,
+                            &mut context,
+                        )
+                    };
+                    (ok, context)
+                })
+            })
+            .collect();
+        for t in threads {
+            // Tous reçoivent le contexte produit par l'unique initialisation.
+            assert_eq!(t.join().unwrap(), (1, 0x1230));
+        }
+        assert_eq!(INIT_ONCE_RUNS.load(Ordering::SeqCst), 1);
+        // Le mot garde l'état « terminé » et le contexte.
+        let mut pending = 1;
+        let mut context = 0usize;
+        assert_eq!(
+            init_once_begin_initialize(once, 1, &mut pending, &mut context),
+            1
+        );
+        assert_eq!((pending, context), (0, 0x1230));
+    }
+
+    #[test]
+    fn system_time_et_file_time_font_l_aller_retour() {
+        use crate::intl::api::{file_time_to_system_time, system_time_to_file_time};
+        let dates = [
+            (1601, 1, 1, 0, 0, 0, 0, 1u16),    // origine FILETIME, lundi
+            (1970, 1, 1, 0, 0, 0, 0, 4),       // origine Unix, jeudi
+            (2000, 2, 29, 12, 30, 45, 500, 2), // bissextile (divisible par 400)
+            (2024, 2, 29, 23, 59, 59, 999, 4), // bissextile
+            (2026, 11, 1, 9, 15, 0, 0, 0),     // date de l'audit, dimanche
+            (2100, 3, 1, 0, 0, 0, 0, 1),       // 2100 n'est pas bissextile
+        ];
+        for (year, month, day, hour, minute, second, millis, weekday) in dates {
+            let st = crate::intl::tz::SystemTime {
+                year,
+                month,
+                day_of_week: 0,
+                day,
+                hour,
+                minute,
+                second,
+                millis,
+            };
+            let mut ft = 0i64;
+            assert_eq!(unsafe { system_time_to_file_time(&st, &mut ft) }, 1);
+            let mut back = crate::intl::tz::SystemTime::default();
+            assert_eq!(unsafe { file_time_to_system_time(&ft, &mut back) }, 1);
+            assert_eq!(
+                (
+                    back.year,
+                    back.month,
+                    back.day,
+                    back.hour,
+                    back.minute,
+                    back.second,
+                    back.millis,
+                    back.day_of_week
+                ),
+                (year, month, day, hour, minute, second, millis, weekday),
+                "{year}-{month:02}-{day:02}"
+            );
+        }
+        // Valeurs de référence : 1970-01-01 = 116444736000000000 ;
+        // 2026-11-01 09:15:00 UTC = 1793524500 s depuis 1970.
+        let unix = crate::intl::tz::SystemTime {
+            year: 1970,
+            month: 1,
+            day: 1,
+            ..Default::default()
+        };
+        let mut ft = 0i64;
+        assert_eq!(unsafe { system_time_to_file_time(&unix, &mut ft) }, 1);
+        assert_eq!(ft, 116_444_736_000_000_000);
+        let audit = crate::intl::tz::SystemTime {
+            year: 2026,
+            month: 11,
+            day: 1,
+            hour: 9,
+            minute: 15,
+            ..Default::default()
+        };
+        assert_eq!(unsafe { system_time_to_file_time(&audit, &mut ft) }, 1);
+        assert_eq!(ft, 116_444_736_000_000_000 + 1_793_524_500 * 10_000_000);
+        // 29 février d'une année non bissextile : refusé.
+        let bad = crate::intl::tz::SystemTime {
+            year: 2023,
+            month: 2,
+            day: 29,
+            ..Default::default()
+        };
+        assert_eq!(unsafe { system_time_to_file_time(&bad, &mut ft) }, 0);
+    }
+
+    #[test]
+    fn get_locale_info_w_garde_le_dernier_caractere() {
+        let _teb = crate::process::test_teb();
+        const LOCALE_SENGLISHLANGUAGENAME: u32 = 0x1001;
+        unsafe {
+            let need = super::super::nls::get_locale_info_w(
+                0x0409,
+                LOCALE_SENGLISHLANGUAGENAME,
+                std::ptr::null_mut(),
+                0,
+            );
+            assert_eq!(need, 8); // "English" + NUL
+            let mut buf = [0xffffu16; 8];
+            assert_eq!(
+                super::super::nls::get_locale_info_w(
+                    0x0409,
+                    LOCALE_SENGLISHLANGUAGENAME,
+                    buf.as_mut_ptr(),
+                    buf.len() as i32
+                ),
+                8
+            );
+            assert_eq!(String::from_utf16(&buf[..7]).unwrap(), "English");
+            assert_eq!(buf[7], 0);
+            // Un caractère de moins : refus, pas de troncature silencieuse.
+            let mut short = [0xffffu16; 7];
+            assert_eq!(
+                super::super::nls::get_locale_info_w(
+                    0x0409,
+                    LOCALE_SENGLISHLANGUAGENAME,
+                    short.as_mut_ptr(),
+                    short.len() as i32
+                ),
+                0
+            );
+            assert_eq!(crate::process::last_error(), 122);
+        }
+    }
+
+    #[test]
+    fn get_module_file_name_a_tronque_et_signale_le_tampon_insuffisant() {
+        let _teb = crate::process::test_teb();
+        let image: &'static mut [u8] = Box::leak(vec![0u8; 8192].into_boxed_slice());
+        let base = image.as_ptr() as usize;
+        let module = crate::loader::Module {
+            name: "winlux-audit-trunc.dll".into(),
+            path: "/tmp/winlux-audit-trunc.dll".into(),
+            base,
+            size: image.len(),
+            pe: crate::pe::PeImage {
+                characteristics: 0,
+                entry_rva: 0,
+                image_base: 0,
+                section_alignment: 0x1000,
+                size_of_image: image.len() as u32,
+                size_of_headers: 0,
+                subsystem: 3,
+                dll_characteristics: 0,
+                stack_reserve: 0,
+                stack_commit: 0,
+                dirs: vec![crate::pe::DataDir::default(); 16],
+                sections: vec![],
+                il_only32: false,
+            },
+            tls: None,
+            initialized: true,
+            refcount: 1,
+        };
+        crate::loader::MODULES.lock().unwrap().push(module);
+        let expected = "Z:\\tmp\\winlux-audit-trunc.dll";
+        unsafe {
+            let mut full = [0u8; 64];
+            let n = get_module_file_name_a(base, full.as_mut_ptr(), full.len() as u32);
+            assert_eq!(n as usize, expected.len());
+            assert_eq!(std::str::from_utf8(&full[..n as usize]).unwrap(), expected);
+            // Tampon trop petit : nSize renvoyé, chaîne tronquée terminée,
+            // ERROR_INSUFFICIENT_BUFFER.
+            let mut small = [0xaau8; 10];
+            crate::process::set_last_error(0);
+            assert_eq!(get_module_file_name_a(base, small.as_mut_ptr(), 10), 10);
+            assert_eq!(crate::process::last_error(), 122);
+            assert_eq!(&small[..9], &expected.as_bytes()[..9]);
+            assert_eq!(small[9], 0);
+            // Idem en large.
+            let mut small_w = [0xaaaau16; 6];
+            assert_eq!(get_module_file_name_w(base, small_w.as_mut_ptr(), 6), 6);
+            assert_eq!(crate::process::last_error(), 122);
+            assert_eq!(String::from_utf16(&small_w[..5]).unwrap(), "Z:\\tm");
+            assert_eq!(small_w[5], 0);
+        }
+        crate::loader::remove_module(base);
+    }
+
+    #[test]
+    fn read_file_avec_overlapped_est_synchrone_sans_file_flag_overlapped() {
+        init();
+        crate::process::init_thread();
+        let path = format!(
+            "Z:\\tmp\\winlux-sync-ov-{}-{}.bin",
+            std::process::id(),
+            next_handle()
+        );
+        let c = std::ffi::CString::new(path).unwrap();
+        let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0, 0) };
+        assert_ne!(h, usize::MAX);
+        let mut ov = Overlapped {
+            internal: 0,
+            internal_high: 0,
+            offset: 4,
+            offset_high: 0,
+            event: 0,
+        };
+        let mut done = 0;
+        // Écriture à l'offset 4 de l'OVERLAPPED, terminée au retour.
+        assert_eq!(
+            unsafe {
+                write_file(
+                    h,
+                    b"sync".as_ptr(),
+                    4,
+                    &mut done,
+                    &mut ov as *mut _ as usize,
+                )
+            },
+            1
+        );
+        assert_eq!(done, 4);
+        assert_eq!(ov.internal, 0);
+        let mut out = [0u8; 4];
+        ov.offset = 4;
+        assert_eq!(
+            unsafe {
+                read_file(
+                    h,
+                    out.as_mut_ptr(),
+                    4,
+                    &mut done,
+                    &mut ov as *mut _ as usize,
+                )
+            },
+            1
+        );
+        assert_eq!((&out, done), (b"sync", 4));
+        assert_eq!(unsafe { get_file_size(h, std::ptr::null_mut()) }, 8);
+        assert_eq!(close_handle(h), 1);
+        assert_eq!(unsafe { delete_file_a(c.as_ptr() as *const u8) }, 1);
+    }
+
+    #[test]
+    fn get_file_type_distingue_disque_tube_et_caractere() {
+        init();
+        let mut r = 0usize;
+        let mut w = 0usize;
+        assert_eq!(
+            unsafe { create_pipe(&mut r, &mut w, std::ptr::null(), 0) },
+            1
+        );
+        assert_eq!(get_file_type(r), 3);
+        close_handle(r);
+        close_handle(w);
+        let dev = std::ffi::CString::new("Z:\\dev\\null").unwrap();
+        let h = unsafe { create_file_a(dev.as_ptr() as *const u8, 0x80000000, 7, 0, 3, 0, 0) };
+        assert_ne!(h, usize::MAX);
+        assert_eq!(get_file_type(h), 2);
+        close_handle(h);
+        let path = format!("Z:\\tmp\\winlux-ftype-{}.bin", std::process::id());
+        let c = std::ffi::CString::new(path).unwrap();
+        let h = unsafe { create_file_a(c.as_ptr() as *const u8, 0xC0000000, 7, 0, 2, 0, 0) };
+        assert_eq!(get_file_type(h), 1);
+        close_handle(h);
+        unsafe { delete_file_a(c.as_ptr() as *const u8) };
+    }
+
+    #[test]
+    fn waitable_timer_est_attendable_et_annulable() {
+        init();
+        let h = unsafe { create_waitable_timer_a(0, 1, std::ptr::null()) };
+        assert_ne!(h, 0);
+        let due = -200_000i64; // 20 ms
+        assert_eq!(unsafe { set_waitable_timer(h, &due, 0, 0, 0, 0) }, 1);
+        assert_eq!(wait_for_single_object(h, 0), 258);
+        assert_eq!(wait_for_single_object(h, 5_000), 0);
+        let periodic = unsafe { create_waitable_timer_a(0, 0, std::ptr::null()) };
+        assert_eq!(
+            unsafe { set_waitable_timer(periodic, &due, 20, 0, 0, 0) },
+            1
+        );
+        assert_eq!(wait_for_single_object(periodic, 5_000), 0);
+        assert_eq!(wait_for_single_object(periodic, 5_000), 0);
+        assert_eq!(cancel_waitable_timer(periodic), 1);
+        assert_eq!(close_handle(periodic), 1);
+        assert_eq!(close_handle(h), 1);
+        assert_eq!(cancel_waitable_timer(h), 0);
+    }
+
+    #[test]
+    fn format_message_from_string_sans_arguments_copie_les_insertions() {
+        let _teb = crate::process::test_teb();
+        use super::super::kernel32_misc::format_message_a;
+        let template = b"Fichier %1 : %2!d! octets%n%%%0ignore\0";
+        let mut out = [0u8; 64];
+        // Sans arguments : %1 et %2!d! restent tels quels, pas de plantage.
+        let n = unsafe {
+            format_message_a(
+                0x400,
+                template.as_ptr() as usize,
+                0,
+                0,
+                out.as_mut_ptr(),
+                64,
+                0,
+            )
+        };
+        assert_eq!(
+            std::str::from_utf8(&out[..n as usize]).unwrap(),
+            "Fichier %1 : %2!d! octets\r\n%"
+        );
+        let name = b"a.txt\0";
+        let args: [usize; 2] = [name.as_ptr() as usize, 42];
+        let n = unsafe {
+            format_message_a(
+                0x400 | 0x2000,
+                template.as_ptr() as usize,
+                0,
+                0,
+                out.as_mut_ptr(),
+                64,
+                args.as_ptr() as usize,
+            )
+        };
+        assert_eq!(
+            std::str::from_utf8(&out[..n as usize]).unwrap(),
+            "Fichier a.txt : 42 octets\r\n%"
         );
     }
 }

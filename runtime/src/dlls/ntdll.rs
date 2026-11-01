@@ -15,6 +15,7 @@ const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
 const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
 const STATUS_TIMEOUT: i32 = 0x0000_0102u32 as i32;
 const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023u32 as i32;
+const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004u32 as i32;
 const STATUS_ACCESS_DENIED: i32 = 0xC000_0022u32 as i32;
 const STATUS_OBJECT_NAME_NOT_FOUND: i32 = 0xC000_0034u32 as i32;
 const STATUS_OBJECT_NAME_COLLISION: i32 = 0xC000_0035u32 as i32;
@@ -1313,29 +1314,114 @@ pub unsafe extern "win64" fn nt_set_information_thread(
     STATUS_SUCCESS // Silently succeed
 }
 
-/// `NtQuerySystemInformation` : stub.
+/// Copie `bytes` dans le tampon de sortie d'une requête Nt* : taille
+/// requise dans `return_length`, STATUS_INFO_LENGTH_MISMATCH si trop petit.
+unsafe fn write_info(info: *mut c_void, length: u32, return_length: *mut u32, bytes: &[u8]) -> i32 {
+    if !return_length.is_null() {
+        *return_length = bytes.len() as u32;
+    }
+    if (length as usize) < bytes.len() {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    if info.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), info as *mut u8, bytes.len());
+    STATUS_SUCCESS
+}
+
+/// `NtQuerySystemInformation` : SystemBasicInformation (0),
+/// SystemProcessorInformation (1), SystemTimeOfDayInformation (3) et
+/// SystemProcessorPerformanceInformation (8), avec les dispositions publiques
+/// de winternl.h.
 pub unsafe extern "win64" fn nt_query_system_information(
     info_class: u32,
     info: *mut c_void,
     length: u32,
     return_length: *mut u32,
 ) -> i32 {
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
     match info_class {
         0 => {
-            // SystemBasicInformation : taille de page et nombre de processeurs.
-            if length < 44 {
-                return STATUS_BUFFER_TOO_SMALL;
+            // SYSTEM_BASIC_INFORMATION (64 octets).
+            let mut sys: crate::dlls::kernel32::SystemInfo = std::mem::zeroed();
+            crate::dlls::kernel32::get_system_info(&mut sys);
+            let pages = libc::sysconf(libc::_SC_PHYS_PAGES).max(0) as u32;
+            let mut b = Vec::with_capacity(64);
+            b.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+            b.extend_from_slice(&156_250u32.to_le_bytes()); // TimerResolution (15,625 ms)
+            b.extend_from_slice(&4096u32.to_le_bytes()); // PageSize
+            b.extend_from_slice(&pages.to_le_bytes()); // NumberOfPhysicalPages
+            b.extend_from_slice(&0u32.to_le_bytes()); // LowestPhysicalPageNumber
+            b.extend_from_slice(&pages.to_le_bytes()); // HighestPhysicalPageNumber
+            b.extend_from_slice(&65536u32.to_le_bytes()); // AllocationGranularity
+            b.extend_from_slice(&(sys.minimum_application_address as u64).to_le_bytes());
+            b.extend_from_slice(&(sys.maximum_application_address as u64).to_le_bytes());
+            b.extend_from_slice(&(sys.active_processor_mask as u64).to_le_bytes());
+            b.push(cpus.min(255) as u8); // NumberOfProcessors
+            b.resize(64, 0);
+            write_info(info, length, return_length, &b)
+        }
+        1 => {
+            // SYSTEM_PROCESSOR_INFORMATION (12 octets) : AMD64, niveau 6.
+            let mut b = Vec::with_capacity(12);
+            b.extend_from_slice(&9u16.to_le_bytes()); // PROCESSOR_ARCHITECTURE_AMD64
+            b.extend_from_slice(&6u16.to_le_bytes()); // ProcessorLevel
+            b.extend_from_slice(&0u16.to_le_bytes()); // ProcessorRevision
+            b.extend_from_slice(&(cpus.min(u16::MAX as usize) as u16).to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes()); // ProcessorFeatureBits
+            write_info(info, length, return_length, &b)
+        }
+        3 => {
+            // SYSTEM_TIMEOFDAY_INFORMATION (48 octets) : démarrage, heure,
+            // biais de fuseau en unités de 100 ns.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| (d.as_nanos() / 100) as i64)
+                + crate::intl::tz::FILETIME_UNIX_EPOCH;
+            let uptime = crate::dlls::kernel32::get_tick_count64() as i64 * 10_000;
+            let boot = now - uptime;
+            let mut b = Vec::with_capacity(48);
+            b.extend_from_slice(&boot.to_le_bytes()); // BootTime
+            b.extend_from_slice(&now.to_le_bytes()); // CurrentTime
+            b.extend_from_slice(&0i64.to_le_bytes()); // TimeZoneBias
+            b.extend_from_slice(&0u32.to_le_bytes()); // TimeZoneId
+            b.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+            b.extend_from_slice(&0u64.to_le_bytes()); // BootTimeBias
+            b.extend_from_slice(&0u64.to_le_bytes()); // SleepTimeBias
+            write_info(info, length, return_length, &b)
+        }
+        8 => {
+            // SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION : 48 octets par
+            // processeur, temps en unités de 100 ns depuis /proc/stat.
+            let stat = std::fs::read_to_string("/proc/stat").unwrap_or_default();
+            let hz = libc::sysconf(libc::_SC_CLK_TCK).max(1) as i64;
+            let mut b = Vec::with_capacity(48 * cpus);
+            for i in 0..cpus {
+                let prefix = format!("cpu{i} ");
+                let fields: Vec<i64> = stat
+                    .lines()
+                    .find(|l| l.starts_with(&prefix))
+                    .map(|l| {
+                        l.split_whitespace()
+                            .skip(1)
+                            .filter_map(|f| f.parse().ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let get = |k: usize| fields.get(k).copied().unwrap_or(0) * 10_000_000 / hz;
+                let (user, nice, system, idle, irq, softirq) =
+                    (get(0), get(1), get(2), get(3), get(5), get(6));
+                // Comme sous Windows, KernelTime inclut IdleTime.
+                b.extend_from_slice(&idle.to_le_bytes()); // IdleTime
+                b.extend_from_slice(&(system + idle + irq + softirq).to_le_bytes()); // KernelTime
+                b.extend_from_slice(&(user + nice).to_le_bytes()); // UserTime
+                b.extend_from_slice(&softirq.to_le_bytes()); // DpcTime
+                b.extend_from_slice(&irq.to_le_bytes()); // InterruptTime
+                b.extend_from_slice(&0u32.to_le_bytes()); // InterruptCount
+                b.extend_from_slice(&0u32.to_le_bytes()); // remplissage
             }
-            if info.is_null() {
-                return STATUS_INVALID_PARAMETER;
-            }
-            std::ptr::write_bytes(info as *mut u8, 0, 44);
-            // PageSize à offset 0 (pour certains layouts)
-            std::ptr::write_unaligned(info as *mut u32, 4096);
-            if !return_length.is_null() {
-                *return_length = 44;
-            }
-            STATUS_SUCCESS
+            write_info(info, length, return_length, &b)
         }
         _ => {
             if !return_length.is_null() {
