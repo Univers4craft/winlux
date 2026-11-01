@@ -150,10 +150,21 @@ echo ''
 echo '[disk]'
 
 disk_index=0
+# Valeur d'une clé dans une ligne « lsblk -P » (CLÉ="valeur" ...) : les
+# espaces des modèles, étiquettes et points de montage ne cassent plus le
+# découpage, contrairement à l'ancienne lecture mot à mot de la sortie brute.
+lsblk_value() {
+    printf '%s\n' "$2" | sed -n "s/.*\(^\|[[:space:]]\)$1=\"\([^\"]*\)\".*/\2/p" | sed 's/\\x20/ /g; s/\\x5c/\\/g'
+}
 if has lsblk; then
-    lsblk -bdnro NAME,SIZE,MODEL,TRAN,TYPE,ROTA,RM 2>/dev/null | while IFS= read -r line; do
-        set -- $line
-        name=$1 size=${2:-0} model=${3:-} tran=${4:-} dtype=${5:-} rota=${6:-1} removable=${7:-0}
+    # Boucles alimentées par un here-document : elles s'exécutent dans le shell
+    # courant, donc disk_index survit et DISK_COUNT est exact.
+    while IFS= read -r line; do
+        test -n "$line" || continue
+        name=$(lsblk_value NAME "$line"); size=$(lsblk_value SIZE "$line"); size=${size:-0}
+        model=$(lsblk_value MODEL "$line"); tran=$(lsblk_value TRAN "$line")
+        dtype=$(lsblk_value TYPE "$line"); rota=$(lsblk_value ROTA "$line"); rota=${rota:-1}
+        removable=$(lsblk_value RM "$line"); removable=${removable:-0}
         case "$dtype" in disk|loop) ;; *) continue ;; esac
         # Skip tiny loop devices (likely snap mounts)
         test "$dtype" = loop && test "$size" -lt 1073741824 2>/dev/null && continue
@@ -173,20 +184,25 @@ if has lsblk; then
         printf 'DISK_%d_REMOVABLE=%s\n' "$disk_index" "$removable"
         # List partitions
         part_idx=0
-        lsblk -bnro NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "/dev/$name" 2>/dev/null | while IFS= read -r pline; do
-            set -- $pline
-            pname=$1
+        while IFS= read -r pline; do
+            test -n "$pline" || continue
+            pname=$(lsblk_value NAME "$pline")
             test "$pname" = "$name" && continue
-            psize=${2:-0} pfs=${3:-} plabel=${4:-} pmount=${5:-}
+            psize=$(lsblk_value SIZE "$pline"); psize=${psize:-0}
+            pfs=$(lsblk_value FSTYPE "$pline"); plabel=$(lsblk_value LABEL "$pline"); pmount=$(lsblk_value MOUNTPOINT "$pline")
             printf 'DISK_%d_PART_%d_NAME=%s\n' "$disk_index" "$part_idx" "$pname"
             printf 'DISK_%d_PART_%d_SIZE_BYTES=%s\n' "$disk_index" "$part_idx" "$psize"
             printf 'DISK_%d_PART_%d_FSTYPE=%s\n' "$disk_index" "$part_idx" "$pfs"
             printf 'DISK_%d_PART_%d_LABEL=%s\n' "$disk_index" "$part_idx" "$plabel"
             printf 'DISK_%d_PART_%d_MOUNT=%s\n' "$disk_index" "$part_idx" "$pmount"
             part_idx=$((part_idx + 1))
-        done
+        done <<PARTS
+$(lsblk -bnP -o NAME,SIZE,FSTYPE,LABEL,MOUNTPOINT "/dev/$name" 2>/dev/null)
+PARTS
         disk_index=$((disk_index + 1))
-    done
+    done <<DISKS
+$(lsblk -bdnP -o NAME,SIZE,MODEL,TRAN,TYPE,ROTA,RM 2>/dev/null)
+DISKS
 else
     for dev in /sys/block/*; do
         name=$(basename "$dev")
