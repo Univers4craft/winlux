@@ -33,6 +33,8 @@ pub struct FontFace {
     pub unicode_ranges: [u32; 4],
     pub code_pages: [u32; 2],
     pub path: PathBuf,
+    /// Rang de la face dans une collection `.ttc` (0 sinon).
+    pub index: u32,
 }
 
 // ---------------------------------------------------------------------
@@ -87,8 +89,12 @@ fn parse_source(src: &(impl Source + ?Sized), path: &Path) -> Vec<FontFace> {
             return Vec::new();
         };
         (0..count)
-            .filter_map(|i| be32(&offsets, i * 4))
-            .filter_map(|off| parse_face(src, off as u64, path))
+            .filter_map(|i| Some((i, be32(&offsets, i * 4)?)))
+            .filter_map(|(i, off)| {
+                let mut f = parse_face(src, off as u64, path)?;
+                f.index = i as u32;
+                Some(f)
+            })
             .collect()
     } else {
         parse_face(src, 0, path).into_iter().collect()
@@ -155,6 +161,7 @@ fn parse_face(src: &(impl Source + ?Sized), base: u64, path: &Path) -> Option<Fo
         unicode_ranges: [1, 0, 0, 0],
         code_pages: [1, 0],
         path: path.to_path_buf(),
+        index: 0,
     };
     if let Some(os2) = table(b"OS/2") {
         face.avg_width = be16(&os2, 2).map_or(face.avg_width, |v| v as i16);
