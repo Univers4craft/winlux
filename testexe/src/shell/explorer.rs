@@ -1173,17 +1173,8 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
                 core::ptr::null_mut(),
             );
             CloseHandle(h);
-            // Extract filename from path
-            let mut fname_start = 0;
-            let mut k = 0;
-            while k < n {
-                if path[k] == b'\\' || path[k] == b'/' {
-                    fname_start = k + 1;
-                }
-                k += 1;
-            }
             unsafe {
-                crate::notepad::load_into_active(&buf[..got as usize], &path[fname_start..n]);
+                crate::notepad::load_into_active(&buf[..got as usize], &path[..n]);
             }
         }
         wm::open(wm::APP_NOTEPAD);
