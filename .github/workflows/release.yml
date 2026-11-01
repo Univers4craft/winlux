@@ -17,6 +17,10 @@ on:
       - scripts/test-native-session-vm.sh
       - scripts/winlux-sessions.sh
       - scripts/winlux-user-session.sh
+      - scripts/winlux-network-watch.sh
+      - scripts/stage-apt-root.py
+      - scripts/winlux-update-apt.py
+      - scripts/test-update-curl-shim.py
   workflow_dispatch:
 
 permissions:
@@ -136,6 +140,23 @@ jobs:
           WINLUX_QEMU_MEMORY: 4096
         run: sh scripts/test-browsers-vm.sh
 
+      - name: Préparer la mise à jour depuis la dernière version publiée
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Le test VM installe ce paquet puis lance « Mettre à jour » des
+          # Paramètres avec l'outil de cette version vers le nouveau paquet.
+          previous=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          if [ "$previous" = "$(cat VERSION)" ]; then echo "Version $previous déjà publiée : test de mise à jour ignoré"; exit 0; fi
+          mkdir -p build/previous-release
+          gh release download "$previous" --repo "$GITHUB_REPOSITORY" --dir build/previous-release \
+            --pattern "winlux-desktop-$previous.deb" --pattern "winlux-desktop-$previous.deb.sha256"
+          (cd build/previous-release && sha256sum -c "winlux-desktop-$previous.deb.sha256")
+          echo "WINLUX_UPDATE_FROM_DEB=$PWD/build/previous-release/winlux-desktop-$previous.deb" >> "$GITHUB_ENV"
+          # v0.2.12 : son outil passe à APT un fichier « .part » qu'APT refuse ;
+          # ces installations doivent être réinstallées une fois.
+          case "$previous" in v0.2.12) echo "WINLUX_UPDATE_WITH_CURRENT_TOOL=1" >> "$GITHUB_ENV" ;; esac
+
       - name: Valider le bureau natif en VM
         env:
           WINLUX_QEMU_MEMORY: 4096
@@ -205,3 +226,23 @@ jobs:
             --title "Winlux $GITHUB_REF_NAME"
           # Le manifeste latest ne devient visible qu'après tous les uploads.
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest
+
+      - name: Vérifier le chemin de mise à jour publié
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Ce que lit winlux-update-apt sur un PC installé : le manifeste
+          # « latest », puis le paquet et son empreinte qu'il désigne.
+          url="https://github.com/$GITHUB_REPOSITORY/releases/latest/download/winlux-update-manifest.txt"
+          for attempt in 1 2 3 4 5 6; do
+            if curl -fsSL -o published-manifest.txt "$url" && grep -qx "version=$GITHUB_REF_NAME" published-manifest.txt; then break; fi
+            sleep 10
+          done
+          grep -qx "version=$GITHUB_REF_NAME" published-manifest.txt || { echo "Manifeste de mise à jour absent ou périmé sur la release latest" >&2; exit 1; }
+          cmp published-manifest.txt build/winlux-update-manifest.txt
+          asset=$(sed -n 's/^asset=//p' published-manifest.txt)
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name' > published-assets.txt
+          grep -qx "$asset" published-assets.txt
+          grep -qx "$asset.sha256" published-assets.txt
+          echo "Mise à jour publiée : $(cat published-manifest.txt | tr '\n' ' ')"
