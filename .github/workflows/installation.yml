@@ -1,0 +1,217 @@
+name: Créateur de clé USB
+
+# Teste et fabrique le créateur de clé USB d'installation (dossier installation/) :
+# un .deb pour Linux/Winlux et un .exe pour Windows. Quand le workflow Release
+# a publié une version, les deux fichiers sont ajoutés à cette version, à côté
+# de l'ISO. Ce fichier ne modifie pas release.yml.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - installation/**
+      - scripts/winlux-installer.py
+      - assets/brand/**
+      - .github/workflows/installation.yml
+  pull_request:
+    paths:
+      - installation/**
+      - scripts/winlux-installer.py
+      - assets/brand/**
+      - .github/workflows/installation.yml
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Version publiée à laquelle ajouter l'outil (ex. v0.2.12) ; vide = simple construction"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installation-${{ github.event_name }}-${{ github.ref }}-${{ github.event.workflow_run.id || '' }}
+  cancel-in-progress: true
+
+jobs:
+  meta:
+    name: Version
+    # Après Release : seulement pour une étiquette publiée avec succès.
+    if: >-
+      github.event_name != 'workflow_run' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       startsWith(github.event.workflow_run.head_branch, 'v'))
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      publish: ${{ steps.v.outputs.publish }}
+      ref: ${{ steps.v.outputs.ref }}
+    steps:
+      - id: v
+        env:
+          EVENT: ${{ github.event_name }}
+          RUN_TAG: ${{ github.event.workflow_run.head_branch }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+        run: |
+          set -eu
+          case "$EVENT" in
+            workflow_run) echo "version=$RUN_TAG" >>"$GITHUB_OUTPUT"; echo "publish=$RUN_TAG" >>"$GITHUB_OUTPUT"
+                          echo "ref=$RUN_SHA" >>"$GITHUB_OUTPUT" ;;
+            workflow_dispatch) echo "version=$INPUT_TAG" >>"$GITHUB_OUTPUT"; echo "publish=$INPUT_TAG" >>"$GITHUB_OUTPUT"
+                               echo "ref=" >>"$GITHUB_OUTPUT" ;;
+            *) echo "version=" >>"$GITHUB_OUTPUT"; echo "publish=" >>"$GITHUB_OUTPUT"; echo "ref=" >>"$GITHUB_OUTPUT" ;;
+          esac
+
+  linux:
+    name: Linux (tests + .deb)
+    needs: meta
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+          fetch-depth: 1
+
+      - name: Outils de test
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends python3-tk xvfb xauth fdisk \
+            grub-common grub-pc-bin grub-efi-amd64-bin xorriso mtools qemu-system-x86 ovmf
+          # KVM accélère le démarrage QEMU quand le runner l'offre.
+          if test -e /dev/kvm; then
+            echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm.rules
+            sudo udevadm control --reload-rules && sudo udevadm trigger --name-match=kvm || true
+          fi
+
+      - name: Tests unitaires (sans droits)
+        run: xvfb-run -a python3 -B installation/tests/test_winlux_usb.py
+
+      - name: Écriture sur une clé loop + démarrage USB en BIOS et UEFI
+        run: sudo PYTHON=/usr/bin/python3 sh installation/tests/test-block-device.sh
+
+      - name: Paquet .deb
+        env:
+          WINLUX_USB_VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          set -eu
+          deb=$(sh installation/packaging/build-deb.sh "$PWD/out")
+          dpkg-deb --info "$deb"
+          sudo apt-get install -y -q "$deb"
+          winlux-usb-creator --version
+          winlux-usb-creator list --all
+          xvfb-run -a timeout 4 winlux-usb-creator || test $? = 124  # la fenêtre s'ouvre et reste ouverte
+          sudo apt-get remove -y -q winlux-usb-creator
+          test ! -e /usr/lib/winlux-usb-creator
+          (cd out && sha256sum ./*.deb | sed 's| \./| |' > "$(basename "$deb").sha256")
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winlux-usb-creator-deb
+          path: out/*
+
+  windows:
+    name: Windows (tests + .exe)
+    needs: meta
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.meta.outputs.ref }}
+          fetch-depth: 1
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Tests unitaires
+        run: python -B installation/tests/test_winlux_usb.py
+
+      - name: Exécutable
+        env:
+          WINLUX_USB_VERSION: ${{ needs.meta.outputs.version }}
+        run: |
+          $exe = & installation\packaging\build-exe.ps1 -Version $env:WINLUX_USB_VERSION | Select-Object -Last 1
+          "EXE=$($exe.FullName)" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+
+      - name: Diagnostic de l'exécutable (Tk et disques embarqués)
+        run: |
+          $p = Start-Process -Wait -PassThru -FilePath $env:EXE -ArgumentList "self-test","--output","$env:RUNNER_TEMP\self-test.json"
+          Get-Content "$env:RUNNER_TEMP\self-test.json"
+          if ($p.ExitCode -ne 0) { throw "self-test : code $($p.ExitCode)" }
+
+      - name: Écriture sur un disque virtuel VHD (volume FAT32 monté)
+        run: |
+          $ErrorActionPreference = "Stop"
+          $w = "$env:RUNNER_TEMP\wlx"
+          New-Item -ItemType Directory -Force $w | Out-Null
+          python installation\packaging\fake-iso.py "$w\a.iso" 20972520
+          python installation\packaging\fake-iso.py "$w\b.iso" 31458280
+          @"
+          create vdisk file="$w\stick.vhd" maximum=64 type=fixed
+          select vdisk file="$w\stick.vhd"
+          attach vdisk
+          create partition primary
+          format fs=fat32 quick label=ANCIENNE
+          assign letter=W
+          "@ | Set-Content -Encoding ascii "$w\attach.txt"
+          diskpart /s "$w\attach.txt"
+          Set-Content W:\ancien.txt "ancien contenu"
+          $n = (Get-DiskImage -ImagePath "$w\stick.vhd" | Get-Disk).Number
+          $dev = "\\.\PhysicalDrive$n"
+          python installation\winlux-usb-creator.py list --all
+          # 1. Depuis les sources : verrouillage et démontage de W:, écriture, relecture.
+          python installation\winlux-usb-creator.py write --image "$w\a.iso" --device $dev --yes --allow-fixed
+          if ($LASTEXITCODE -ne 0) { throw "écriture (sources) : code $LASTEXITCODE" }
+          if (Test-Path W:\ancien.txt) { throw "le volume W: est toujours monté" }
+          # 2. Avec l'exécutable fabriqué, par-dessus.
+          $p = Start-Process -Wait -PassThru -FilePath $env:EXE -ArgumentList "write","--image","$w\b.iso","--device",$dev,"--yes","--allow-fixed"
+          if ($p.ExitCode -ne 0) { throw "écriture (.exe) : code $($p.ExitCode)" }
+          @"
+          select vdisk file="$w\stick.vhd"
+          detach vdisk
+          "@ | Set-Content -Encoding ascii "$w\detach.txt"
+          diskpart /s "$w\detach.txt"
+          # Un VHD fixe est l'image brute du disque suivie d'un pied de page de 512 octets.
+          python -c "import sys; a=open(sys.argv[1],'rb').read(); b=open(sys.argv[2],'rb').read(len(a)); sys.exit(0 if a==b else 'contenu différent')" "$w\b.iso" "$w\stick.vhd"
+          if ($LASTEXITCODE -ne 0) { throw "le disque ne contient pas l'image" }
+          "Disque virtuel identique à l'image."
+
+      - name: Somme SHA-256
+        run: |
+          $f = Get-Item $env:EXE
+          "$((Get-FileHash $f -Algorithm SHA256).Hash.ToLower())  $($f.Name)" | Set-Content -Encoding ascii "$($f.FullName).sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: winlux-usb-creator-exe
+          path: build/installation/dist/*
+
+  publish:
+    name: Ajouter à la version publiée
+    needs: [meta, linux, windows]
+    if: needs.meta.outputs.publish != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: out
+          merge-multiple: true
+      - name: Envoyer le .exe et le .deb
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.meta.outputs.publish }}
+        run: |
+          set -eu
+          ls -l out
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null
+          gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber

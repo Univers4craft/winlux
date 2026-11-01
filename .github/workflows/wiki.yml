@@ -1,0 +1,66 @@
+name: Wiki
+
+# Publie le dossier wiki/ du dépôt sur le wiki GitHub (Univers4craft/winlux.wiki).
+# Les pages se modifient par pull request dans wiki/ : une modification faite
+# directement sur le wiki GitHub est remplacée à la publication suivante.
+on:
+  push:
+    branches: [master]
+    paths:
+      - wiki/**
+      - .github/workflows/wiki.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: wiki
+  cancel-in-progress: false
+
+jobs:
+  publier:
+    name: Publier le wiki
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Vérifier les liens internes du wiki
+        run: |
+          python3 - <<'EOF'
+          import pathlib, re, sys
+          pages = {p.stem for p in pathlib.Path("wiki").glob("*.md")}
+          bad = 0
+          for page in sorted(pathlib.Path("wiki").glob("*.md")):
+              for target in re.findall(r"\]\(([A-Za-z0-9_-]+)(?:#[^)]*)?\)", re.sub(r"`[^`]*`", "", page.read_text(encoding="utf-8"))):
+                  if target not in pages:
+                      print(f"::error file={page}::lien vers une page absente : {target}")
+                      bad = 1
+          sys.exit(bad)
+          EOF
+
+      - name: Publier les pages
+        env:
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+          url="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.wiki.git"
+          if ! git clone --depth 1 "$url" wiki-git 2>clone.log; then
+            sed "s/${TOKEN}/***/g" clone.log
+            echo "::error::Le wiki GitHub n'existe pas encore. Activez Wikis dans Settings > Features, créez une première page (n'importe quel texte), puis relancez ce workflow."
+            exit 1
+          fi
+          find wiki-git -mindepth 1 -maxdepth 1 ! -name .git -exec rm -rf {} +
+          cp -a wiki/. wiki-git/
+          cd wiki-git
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          if git diff --cached --quiet; then
+            echo "Wiki déjà à jour."
+            exit 0
+          fi
+          git commit -q -m "Wiki depuis ${GITHUB_SHA::7} (wiki/ du dépôt)"
+          git push -q origin HEAD
+          echo "Wiki publié : https://github.com/${GITHUB_REPOSITORY}/wiki"

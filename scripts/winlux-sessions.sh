@@ -142,6 +142,11 @@ start_session() {
         chown "$uid:$gid" "$runtime" 2>/dev/null || true
         chmod 700 "$runtime"
     fi
+    # Arrêter/Redémarrer depuis ce bureau : le compte n'est pas root, le
+    # relais root de winlux-power transmet sa demande à l'init (sans pkexec).
+    if test -n "$uid" && test -x "$root/usr/bin/winlux-power"; then
+        (setsid "$root/usr/bin/winlux-power" serve >/dev/null 2>&1 &)
+    fi
     (
         export DISPLAY=":$n" HOME="$home" USER="$user" LOGNAME="$user"
         # Ouverte par un compte déjà authentifié sur l'écran de verrouillage.

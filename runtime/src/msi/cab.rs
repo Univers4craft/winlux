@@ -126,6 +126,11 @@ impl<'a> Cabinet<'a> {
             }
             let packed = u16_at(self.data, at + 4).ok_or_else(bad)? as usize;
             let plain = u16_at(self.data, at + 6).ok_or_else(bad)? as usize;
+            // Un bloc CFDATA décompressé fait au plus 32 Kio (MS-CAB) : au-delà,
+            // `plain_total` ne reflète plus rien de réel.
+            if plain > 0x8000 {
+                return Err(bad());
+            }
             let start = at + 8 + self.data_reserve;
             let block = self.data.get(start..start + packed).ok_or_else(bad)?;
             at = start + packed;

@@ -175,7 +175,10 @@ fn split_search_path(path: &str) -> Result<(std::path::PathBuf, String), u32> {
     if pattern.is_empty() || directory.contains('*') || directory.contains('?') {
         return Err(ERROR_INVALID_PARAMETER);
     }
-    Ok((crate::paths::to_linux(directory), pattern.to_string()))
+    let directory = crate::paths::to_linux(directory);
+    // « photos.zip\* » : on liste le contenu de l'archive ouverte.
+    let directory = crate::archive::opened_root(&directory).unwrap_or(directory);
+    Ok((directory, pattern.to_string()))
 }
 
 fn enumerate(path: &str) -> Result<Vec<Entry>, u32> {

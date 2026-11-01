@@ -109,7 +109,8 @@ impl Font {
         let mut m = Metrics {
             units_per_em,
             line_gap,
-            cap_height: units_per_em * 7 / 10,
+            // En u32 : `units_per_em * 7` déborde u16 dès 9363 unités.
+            cap_height: (u32::from(units_per_em) * 7 / 10) as u16,
             x_height: units_per_em / 2,
             underline_position: -(units_per_em as i16 / 10),
             underline_thickness: units_per_em / 20,
@@ -734,6 +735,40 @@ pub mod tests {
         let mut r = Rec::default();
         assert!(f.outline(0, &mut r));
         assert!(r.0.is_empty());
+    }
+
+    /// Décalage d'une table dans l'en-tête de `tiny_font`.
+    fn table_record(data: &[u8], tag: &[u8; 4]) -> usize {
+        let n = u16::from_be_bytes([data[4], data[5]]) as usize;
+        (0..n)
+            .map(|i| 12 + i * 16)
+            .find(|&rec| &data[rec..rec + 4] == tag)
+            .expect("table présente")
+    }
+
+    #[test]
+    fn units_per_em_maximal_ne_deborde_pas() {
+        let mut data = tiny_font();
+        let rec = table_record(&data, b"head");
+        let head = u32::from_be_bytes(data[rec + 8..rec + 12].try_into().unwrap()) as usize;
+        data[head + 18..head + 20].copy_from_slice(&0xFFFFu16.to_be_bytes());
+        let f = Font::parse(data, 0).expect("police lisible");
+        assert_eq!(f.metrics.units_per_em, 65535);
+        assert_eq!(f.metrics.cap_height, 45874); // 65535 × 7 / 10 sans débordement u16
+    }
+
+    #[test]
+    fn une_table_hors_fichier_est_rejetee() {
+        let mut data = tiny_font();
+        let rec = table_record(&data, b"hhea");
+        // Longueur énorme : offset + longueur déborderait, la table est refusée.
+        data[rec + 12..rec + 16].copy_from_slice(&0xFFFF_FFF0u32.to_be_bytes());
+        assert!(Font::parse(data.clone(), 0).is_none());
+        // Décalage au-delà de la fin du fichier.
+        let fin = data.len() as u32;
+        data[rec + 8..rec + 12].copy_from_slice(&fin.to_be_bytes());
+        data[rec + 12..rec + 16].copy_from_slice(&36u32.to_be_bytes());
+        assert!(Font::parse(data, 0).is_none());
     }
 
     #[test]

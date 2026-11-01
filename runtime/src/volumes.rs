@@ -656,12 +656,37 @@ fn unmount(mp: &Path, lazy: bool) -> bool {
         .is_ok_and(|s| s.success())
 }
 
+/// Décode les échappements octaux de /proc/self/mounts (`\040` espace,
+/// `\011` tabulation, `\012` retour à la ligne, `\134` barre oblique).
+fn unescape_mount(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'\\'
+            && i + 3 < b.len()
+            && b[i + 1..i + 4].iter().all(|c| (b'0'..=b'7').contains(c))
+        {
+            let v = (b[i + 1] - b'0') * 64 + (b[i + 2] - b'0') * 8 + (b[i + 3] - b'0');
+            out.push(v);
+            i += 4;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
 fn is_mounted(mp: &Path) -> bool {
-    let target = mp.to_string_lossy().replace(' ', "\\040");
+    let target = mp.to_string_lossy();
     admin::read_text(&admin::path("proc/self/mounts"))
         .map(|t| {
-            t.lines()
-                .any(|l| l.split(' ').nth(1) == Some(target.as_str()))
+            t.lines().any(|l| {
+                l.split(' ')
+                    .nth(1)
+                    .is_some_and(|m| unescape_mount(m) == target)
+            })
         })
         .unwrap_or(false)
 }
@@ -1291,6 +1316,13 @@ pub fn cli(args: &[String]) -> i32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unescape_mount_decode_tous_les_echappements() {
+        assert_eq!(unescape_mount("/mnt/Mon\\040disque"), "/mnt/Mon disque");
+        assert_eq!(unescape_mount("/a\\011b\\012c\\134d"), "/a\tb\nc\\d");
+        assert_eq!(unescape_mount("/sans\\x"), "/sans\\x");
+    }
 
     fn boot(oem: &[u8; 8]) -> Vec<u8> {
         let mut b = vec![0u8; 4096];

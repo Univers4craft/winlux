@@ -44,10 +44,14 @@ install_browser() {
     if command -v winlux-update >/dev/null 2>&1 && winlux-update --busy 2>/dev/null; then echo 'Attendez la fin de la mise à jour système.' >&2; return 1; fi
     mkdir -p "$installed" "$run"
     chmod 755 "$installed"
-    mkdir "$run/browser-install.lock" 2>/dev/null || { echo 'Installation navigateur déjà en cours' >&2; return 1; }
-    work=$(mktemp -d "$installed/.install-$id.XXXXXX")
+    # Le trap est posé avant la prise du verrou : une interruption entre les
+    # deux ne laisse pas de verrou orphelin ; lock_held dit s'il nous appartient.
+    work=; lock_held=
     previous="$installed/.$id.previous"
-    trap 'if test -d "$previous" && ! test -d "$installed/$id"; then mv "$previous" "$installed/$id"; fi; rm -rf "$work"; rmdir "$run/browser-install.lock" 2>/dev/null || true' EXIT HUP INT TERM
+    trap 'if test -d "$previous" && ! test -d "$installed/$id"; then mv "$previous" "$installed/$id"; fi; test -z "$work" || rm -rf "$work"; test -z "$lock_held" || rmdir "$run/browser-install.lock" 2>/dev/null || true' EXIT HUP INT TERM
+    mkdir "$run/browser-install.lock" 2>/dev/null || { echo 'Installation navigateur déjà en cours' >&2; trap - EXIT HUP INT TERM; return 1; }
+    lock_held=1
+    work=$(mktemp -d "$installed/.install-$id.XXXXXX")
     cp "$cache/$id.deb" "$work/package.deb"
     hash=$(cat "$cache/$id.sha256")
     printf '%s  %s\n' "$hash" "$work/package.deb" | sha256sum -c - || return 1
@@ -107,9 +111,18 @@ launch() {
             if test -f "$helper" && ! test -L "$helper"; then chown root:root "$helper"; chmod 4755 "$helper"; fi
         done
         mkdir -p "$run"
+        # Téléchargements : le dossier de l'utilisateur (C:\Users\<nom>\Downloads),
+        # et « Ouvrir le dossier » ouvre l'Explorateur de la session.
+        downloads=/usr/share/winlux/native/browser/winlux-browser-downloads.py
+        bus_config=
+        if test -f "$downloads"; then
+            /usr/bin/python3 "$downloads" prepare >>"$run/browser-downloads.log" 2>&1 || true
+            /usr/bin/python3 "$downloads" serve "$$" >>"$run/browser-downloads.log" 2>&1 &
+            test ! -f "${downloads%/*}/session-bus.conf" || bus_config="--config-file=${downloads%/*}/session-bus.conf"
+        fi
         if /usr/bin/setpriv --reuid=winlux-web --regid=winlux-web --init-groups --reset-env \
             env HOME="$home" USER=winlux-web LOGNAME=winlux-web DISPLAY="${DISPLAY:-:0}" \
-            /usr/bin/dbus-run-session -- "$program" "$@"; then return 0; else
+            /usr/bin/dbus-run-session $bus_config -- "$program" "$@"; then return 0; else
             printf 'Le navigateur a échoué. Consultez le journal navigateur.\n' > "$run/action.txt"
             printf '1\n' > "$run/browser-chooser"
             return 1

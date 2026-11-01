@@ -77,14 +77,19 @@ fn names_match(rsrc: &[u8], name_offset: usize, ptr: usize) -> bool {
         Some(l) => l as usize,
         None => return false,
     };
-    // Le pointeur pointe vers une chaîne UTF-16 terminée par 0.
-    let user = unsafe { std::slice::from_raw_parts(ptr as *const u16, 256) };
-    for (i, &u) in user.iter().enumerate().take(len) {
+    // Le pointeur pointe vers une chaîne UTF-16 terminée par 0 : on la lit
+    // unité par unité jusqu'au NUL, sans jamais dépasser sa fin.
+    if ptr == 0 || len > 256 {
+        return false;
+    }
+    let user = ptr as *const u16;
+    for i in 0..len {
         let c = match rd16(rsrc, name_offset + 2 + i * 2) {
             Some(c) => c,
             None => return false,
         };
-        if i >= 256 || u == 0 {
+        let u = unsafe { std::ptr::read_unaligned(user.add(i)) };
+        if u == 0 {
             return false;
         }
         // Comparaison insensible à la casse pour ASCII.
@@ -103,7 +108,7 @@ fn names_match(rsrc: &[u8], name_offset: usize, ptr: usize) -> bool {
         }
     }
     // L'utilisateur doit aussi avoir fini.
-    len < 256 && user.get(len).copied().unwrap_or(0) == 0
+    unsafe { std::ptr::read_unaligned(user.add(len)) == 0 }
 }
 
 /// Parcourt l'arbre : type → name → language (on prend le premier langage).
@@ -148,6 +153,15 @@ fn find_resource_data(
     Some((data_rva, data_size))
 }
 
+/// Manifeste d'application (RT_MANIFEST, identifiant 1) d'un module chargé.
+pub fn manifest(base: usize) -> Option<String> {
+    let (rva, size) = find_resource_data(base, 24, 1, false, false)?;
+    // SAFETY: find_resource_data a vérifié que la section est dans l'image.
+    let bytes =
+        unsafe { std::slice::from_raw_parts((base + rva as usize) as *const u8, size as usize) };
+    Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
 // ── Fonctions exportées ─────────────────────────────────────────────
 
 fn is_int_resource(p: usize) -> bool {
@@ -166,20 +180,25 @@ pub unsafe extern "win64" fn find_resource_a(hmod: usize, name: *const u8, ty: *
         return 0;
     }
 
+    // Les chaînes converties doivent survivre jusqu'à la fin de la recherche :
+    // elles sont déclarées ici (et non dans les branches `else`, où elles
+    // étaient libérées avant d'être lues).
+    let type_w: Vec<u16>;
+    let name_w: Vec<u16>;
     let type_id = if is_int_resource(ty as usize) {
         ty as usize
     } else {
         // Convertir la chaîne ANSI en UTF-16 pour la comparaison.
         let s = crate::dlls::cstr(ty);
-        let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
-        w.as_ptr() as usize
+        type_w = s.encode_utf16().chain(std::iter::once(0)).collect();
+        type_w.as_ptr() as usize
     };
     let name_id = if is_int_resource(name as usize) {
         name as usize
     } else {
         let s = crate::dlls::cstr(name);
-        let w: Vec<u16> = s.encode_utf16().chain(std::iter::once(0)).collect();
-        w.as_ptr() as usize
+        name_w = s.encode_utf16().chain(std::iter::once(0)).collect();
+        name_w.as_ptr() as usize
     };
 
     let type_is_str = !is_int_resource(ty as usize);
