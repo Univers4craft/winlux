@@ -365,9 +365,10 @@ def fast_user_switch():
 try:
     fast_user_switch()
 except Exception:
-    for path in sorted(Path("/run/winlux").glob("session-invite.log")) + sorted(Path("/run/winlux").glob("Xorg.*.log")):
+    logs = sorted(Path("/run/winlux").glob("session-invite.log")) + sorted(Path("/run/user").glob("*/winlux/*.log"))
+    for path in logs + sorted(Path("/run/winlux").glob("Xorg.[1-9].log")):
         print(f"--- {path}", flush=True)
-        print("\n".join(path.read_text(errors="replace").splitlines()[-40:]), flush=True)
+        print("\n".join(path.read_text(errors="replace").splitlines()[-25:]), flush=True)
     raise
 print("WINLUX_NATIVE_FAST_USER_SWITCH=0", flush=True)
 print("WINLUX_NATIVE_RESULT=0", flush=True)
