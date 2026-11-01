@@ -108,6 +108,8 @@ static mut STATUS: [u8; 1024] = [0; 1024];
 static mut STATUS_LEN: usize = 0;
 static mut LOG: [u8; 32768] = [0; 32768];
 static mut LOG_LEN: usize = 0;
+static mut PORTS: [u8; 16384] = [0; 16384];
+static mut PORTS_LEN: usize = 0;
 static mut PROMPT: [u8; 1024] = [0; 1024];
 static mut PROMPT_LEN: usize = 0;
 static mut ANSWERED: Field<200> = Field::new();
@@ -326,6 +328,11 @@ unsafe fn refresh() {
         &mut LOG,
         true,
     );
+    PORTS_LEN = read_file(
+        c"Z:\\run\\winlux\\firewall\\ports.txt".as_ptr(),
+        &mut PORTS,
+        false,
+    );
     read_prompt();
 }
 
@@ -491,7 +498,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         t(b"Pare-feu Winlux", b"Winlux Firewall"),
         NAV_W - 64,
     );
-    let nav: [(&[u8], Glyph); 4] = [
+    let nav: [(&[u8], Glyph); 5] = [
         (t(b"Vue d'ensemble", b"Overview"), Glyph::Home),
         (
             t(b"R\xE8gles de trafic entrant", b"Inbound rules"),
@@ -505,6 +512,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             t(b"Connexions bloqu\xE9es", b"Blocked connections"),
             Glyph::List,
         ),
+        (t(b"Ports ouverts", b"Open ports"), Glyph::List),
     ];
     for (i, (label, gl)) in nav.iter().enumerate() {
         nav_item(
@@ -523,7 +531,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     match PAGE {
         0 => draw_overview(g, h, &area),
         1 | 2 => draw_rules(g, h, &area),
-        _ => draw_log(g, h, &area),
+        3 => draw_log(g, h, &area),
+        _ => draw_ports(g, h, &area),
     }
     if EDITING {
         draw_editor(g, h, c);
@@ -883,6 +892,114 @@ unsafe fn draw_rules(g: &mut Gfx, h: &mut Hits, a: &Rect) {
     }
     if !NOTICE.is_empty() {
         text(g.hdc, g.f.caption, p.text3, x, a.bottom - 20, NOTICE);
+    }
+}
+
+/// Ports en écoute de la machine : applis Windows et Linux partagent les
+/// mêmes ports. Écrit par le service (`ports.txt` :
+/// `proto  port  local|network  pid  nom  programme`).
+unsafe fn draw_ports(g: &mut Gfx, h: &mut Hits, a: &Rect) {
+    let p = pal();
+    let x = a.left + 24;
+    text(
+        g.hdc,
+        g.f.large,
+        p.text,
+        x,
+        a.top + 18,
+        t(b"Ports ouverts", b"Open ports"),
+    );
+    text_fit(
+        g.hdc,
+        g.f.body,
+        13,
+        p.text2,
+        x,
+        a.top + 60,
+        t(
+            b"Les applications Windows et Linux partagent les m\xEAmes ports : chacune peut joindre l'autre sur cet ordinateur.",
+            b"Windows and Linux apps share the same ports: each can reach the other on this computer.",
+        ),
+        a.right - x - 16,
+    );
+    let s1 = t(b"Actualiser", b"Refresh");
+    button(
+        g,
+        h,
+        rect(x, a.top + 88, x + button_w(s1), a.top + 120),
+        ID_REFRESH,
+        s1,
+        false,
+        true,
+    );
+    let width = a.right - x - 16;
+    let cols: [(&[u8], i32); 5] = [
+        (t(b"Application", b"App"), width * 38 / 100),
+        (t(b"Protocole", b"Protocol"), width * 12 / 100),
+        (t(b"Port", b"Port"), width * 12 / 100),
+        (t(b"Accessible depuis", b"Reachable from"), width * 28 / 100),
+        (b"PID", width * 10 / 100),
+    ];
+    let mut y = header(g, x, a.top + 136, a.right - 16, &cols);
+    let data = &PORTS[..PORTS_LEN];
+    let n = data
+        .split(|&c| c == b'\n')
+        .filter(|l| !l.is_empty())
+        .count();
+    if n == 0 {
+        text(
+            g.hdc,
+            g.f.body,
+            p.text2,
+            x,
+            y + 12,
+            t(
+                b"Aucune application n'attend de connexion.",
+                b"No app is waiting for connections.",
+            ),
+        );
+        return;
+    }
+    let visible = ((a.bottom - 24 - y) / 30).max(1) as usize;
+    if SCROLL + visible > n {
+        SCROLL = n.saturating_sub(visible);
+    }
+    for line in data
+        .split(|&c| c == b'\n')
+        .filter(|l| !l.is_empty())
+        .skip(SCROLL)
+        .take(visible)
+    {
+        let mut cx = x;
+        let name = column(line, 4);
+        let name: &[u8] = if name.is_empty() {
+            t(b"Syst\xE8me", b"System")
+        } else {
+            name
+        };
+        cell(g, cx, y + 6, cols[0].1, name, p.text);
+        cx += cols[0].1;
+        cell(g, cx, y + 6, cols[1].1, column(line, 0), p.text2);
+        cx += cols[1].1;
+        cell(g, cx, y + 6, cols[2].1, column(line, 1), p.text);
+        cx += cols[2].1;
+        let scope: &[u8] = if column(line, 2) == b"local" {
+            t(b"Cet ordinateur uniquement", b"This computer only")
+        } else {
+            t(b"R\xE9seau", b"Network")
+        };
+        cell(g, cx, y + 6, cols[3].1, scope, p.text2);
+        cx += cols[3].1;
+        let pid = column(line, 3);
+        cell(
+            g,
+            cx,
+            y + 6,
+            a.right - 16 - cx,
+            if pid == b"0" { b"" } else { pid },
+            p.text2,
+        );
+        y += 30;
     }
 }
 
@@ -1313,7 +1430,7 @@ unsafe fn click(id: u16) -> bool {
         return true;
     }
     match id {
-        i if (ID_NAV..ID_NAV + 4).contains(&i) => {
+        i if (ID_NAV..ID_NAV + 5).contains(&i) => {
             PAGE = (i - ID_NAV) as usize;
             SCROLL = 0;
             SELECTED = usize::MAX;

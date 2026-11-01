@@ -596,3 +596,54 @@ fn chemins_saisis() {
     assert_eq!(predefined(0xFFFF_FFFF_8000_0001), Some("hkcu"));
     assert_eq!(predefined(0x1_8000_0001), None);
 }
+
+#[test]
+fn proxy_partage_avec_linux() {
+    let _serial = TEST_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let root = crate::admin::test_root::Root::new("registry-proxy");
+    let previous = std::env::var_os("WINLUX_REGISTRY_PATH");
+    std::env::set_var("WINLUX_REGISTRY_PATH", root.dir.join("registry.tsv"));
+    // Proxy Linux → visible dans Internet Settings.
+    crate::proxy::save(Some(&crate::proxy::Proxy {
+        http: "proxy.lan:3128".into(),
+        https: "proxy.lan:3128".into(),
+        bypass: "<local>".into(),
+    }))
+    .unwrap();
+    let seen = read(|d| Ok(proxy_values(d))).unwrap();
+    assert_eq!(seen, (true, "proxy.lan:3128".into(), "<local>".into()));
+    // Une appli Windows coupe le proxy → les applis Linux aussi.
+    write(|d| {
+        d.set(INTERNET_SETTINGS, "ProxyEnable", REG_DWORD, vec![0; 4]);
+        Ok(())
+    })
+    .unwrap();
+    assert_eq!(crate::proxy::load(), None);
+    let env = std::fs::read_to_string(root.dir.join(crate::proxy::ENV_FILE)).unwrap();
+    assert!(env.contains("unset http_proxy"));
+    // Puis en règle un autre, par protocole.
+    write(|d| {
+        d.set(
+            INTERNET_SETTINGS,
+            "ProxyServer",
+            REG_SZ,
+            utf16z("http=a:1;https=b:2"),
+        );
+        d.set(
+            INTERNET_SETTINGS,
+            "ProxyEnable",
+            REG_DWORD,
+            vec![1, 0, 0, 0],
+        );
+        Ok(())
+    })
+    .unwrap();
+    let p = crate::proxy::load().unwrap();
+    assert_eq!((p.http.as_str(), p.https.as_str()), ("a:1", "b:2"));
+    match previous {
+        Some(v) => std::env::set_var("WINLUX_REGISTRY_PATH", v),
+        None => std::env::remove_var("WINLUX_REGISTRY_PATH"),
+    }
+}
