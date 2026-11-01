@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **245**
+- Réalisé : **246**
 - À faire ou en cours : **45**
-- Total : **290**
+- Total : **291**
 - Progression : **84.5%**
-- Dernière mise à jour : 01/11/2026 (audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168)
+- Dernière mise à jour : 01/11/2026 (audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228)
 
 ## À FAIRE (par priorité)
 
@@ -316,6 +316,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 ### Priorité 5 — Thème Windows 11
 
+- [x] Barre des tâches de la session native : horloge lisible (genmon `winlux-clock`, texte clair fixé, bloc « Winlux panel » de gtk.css resynchronisé à chaque session), panneau volant Notifications + calendrier façon Windows 11 au clic sur l'horloge ou la cloche (mois navigable, jour courant mis en avant, croix par notification, Ne pas déranger), modes d'alimentation Économie / Normal / Turbo détectés (`winlux-power-modes` : power-profiles-daemon, tuned, puis gouverneurs cpufreq/EPP ; section cachée sans choix réel), panneau Son caché sans sortie réelle et mélangeur par application (une barre par flux PipeWire/Pulse qui joue). Test de contraste sur les vrais pixels de la barre.
 - [x] Accessibilité : page Paramètres > Accessibilité (aperçu en direct, navigation au clavier), 4 thèmes de contraste (shell, barre des tâches, menu Démarrer et `GetSysColor` des .exe), Loupe plein écran/lentille/ancrée (Win+Plus/Moins/Échap, lissage HALFTONE, inversion), Narrateur `winlux-speak` (espeak-ng ou piper : fenêtre active, texte survolé, frappes, Insérer+flèches), touches rémanentes (Maj ×5) et filtres, taille/couleur du pointeur X11, épaisseur du curseur de texte, animations désactivables, sous-titres et clignotement pour les sons système. Réglages partagés dans `~/.local/share/winlux/accessibility.ini`.
 - [x] Planificateur de tâches maison (service `winlux --tasks daemon`, sans systemd ni cron) : déclencheurs horaires, intervalle, démarrage, ouverture de session et événements système (réseau, secteur/batterie, USB), conditions secteur/réseau, historique, application graphique Windows 11 FR/EN.
 - [x] Pare-feu maison sur nftables (`winlux --firewall daemon`) : profils domaine/privé/public, règles entrantes/sortantes par port, protocole et application, journal des connexions bloquées, alerte à la première écoute d'une application, application graphique Windows 11 FR/EN.
