@@ -617,6 +617,11 @@ fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
     let fixed: &[u8] = match e.kind {
         Kind::Folder => tr4(&[b"Dossier de fichiers", b"File folder", b"Carpeta de archivos", b"Dateiordner"]),
         Kind::Drive | Kind::LinuxDrive => tr4(&[b"Disque local", b"Local disk", b"Disco local", b"Lokaler Datentr\xE4ger"]),
+        Kind::Removable
+            if unsafe { drive_letter_in(e.name()).and_then(|l| find_drive(l)) }.is_some_and(|d| d.disk) =>
+        {
+            t4([b"Lecteur amovible", b"Removable drive", b"Unidad extra\xEDble", b"Wechseldatentr\xE4ger"])
+        }
         Kind::Removable => t4([
             b"Image disque mont\xE9e",
             b"Mounted disc image",
@@ -4853,12 +4858,15 @@ const LABEL_LEN: usize = 72;
 struct DynDrive {
     letter: u8,
     network: bool,
+    /// Disque branché (clé USB, disque externe), pas une image montée.
+    disk: bool,
     online: bool,
     label: [u8; LABEL_LEN],
     len: usize,
 }
 const EMPTY_DRIVE: DynDrive = DynDrive {
     letter: 0,
+    disk: false,
     network: false,
     online: true,
     label: [0; LABEL_LEN],
@@ -4917,6 +4925,7 @@ unsafe fn refresh_drives() {
         let d = &mut DRIVES[NDRIVES];
         d.letter = letter as u8;
         d.network = kind.iter().map(|&c| c as u8).eq(b"network".iter().copied());
+        d.disk = kind.iter().map(|&c| c as u8).eq(b"disk".iter().copied());
         d.online = state.is_empty() || state.iter().map(|&c| c as u8).eq(b"ok".iter().copied());
         let mut n = ansi_from_wide(label, &mut d.label[..LABEL_LEN - 20]);
         if n == 0 {
@@ -6708,8 +6717,42 @@ unsafe fn watch_folders() -> bool {
     repaint
 }
 
+/// Lecteurs branchés ou retirés (clé USB, lecteur réseau) : « Ce PC » et le
+/// volet de gauche suivent sans Actualiser, comme sous Windows.
+static mut DRIVES_CHECKED: u32 = 0;
+static mut DRIVES_SIG: u64 = 0;
+
+unsafe fn watch_drives() -> bool {
+    let now = GetTickCount();
+    if now.wrapping_sub(DRIVES_CHECKED) < 2000 {
+        return false;
+    }
+    DRIVES_CHECKED = now;
+    let mut buf = [0u16; 4096];
+    let n = WinluxMountList(buf.as_mut_ptr(), buf.len() as u32).max(0) as usize;
+    let sig = buf[..n.min(buf.len())]
+        .iter()
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100_0000_01b3))
+        | 1;
+    if DRIVES_SIG == 0 || sig == DRIVES_SIG {
+        DRIVES_SIG = sig;
+        return false;
+    }
+    DRIVES_SIG = sig;
+    refresh_drives();
+    for i in 0..NTABS {
+        for which in 0..2 {
+            let pn = &mut TABS[i].panes[which];
+            if pn.loc.is(PC) {
+                reload(pn);
+            }
+        }
+    }
+    true
+}
+
 pub unsafe fn tick(_f: &Frame) -> bool {
-    let refreshed = watch_folders();
+    let refreshed = watch_folders() | watch_drives();
     let mut animating = refreshed || poll_job() || PASSWORD_OPEN || crate::thumbs::pending();
     animating |= crate::sharing::dialog_tick();
     for i in 0..NTABS {
