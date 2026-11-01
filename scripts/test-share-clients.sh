@@ -62,11 +62,17 @@ mac() {
 smbclient -L "$host" -p "$port" -m SMB3_11 --client-protection=sign -U 'wlxalice%Motdepasse-1' 2>/dev/null \
     | grep -q 'Photos été' || fail "Windows 11 : le partage n'apparaît pas dans la liste"
 printf 'Bonjour depuis Windows\r\n' > "$work/note.txt"
-long=$(printf 'Dossier très long %.0s' 1 2 3 4 5 6 7 8 9 10 11 12)
-# Windows interdit l'espace final dans un nom (Samba récent aussi).
-long=${long% }
-win -U 'wlxalice%Motdepasse-1' -c "mkdir \"$long\"; put \"$work/note.txt\" \"$long/Résumé à lire.txt\"" >"$work/smb.log" 2>&1 \
-    || fail "Windows 11 : écriture refusée au propriétaire"
+win -U 'wlxalice%Motdepasse-1' -c "mkdir \"Été\"; put \"$work/note.txt\" \"Été/Résumé.txt\"" >"$work/smb.log" 2>&1 \
+    || fail "Windows 11 : nom accentué refusé"
+# Chemin de plus de 260 caractères, en dossiers imbriqués comme sous Windows.
+long= mk=
+for i in 1 2 3 4 5 6; do
+    long="${long:+$long/}Dossier très long numéro $i pour le chemin"
+    mk="$mk mkdir \"$long\";"
+done
+win -U 'wlxalice%Motdepasse-1' -c "$mk put \"$work/note.txt\" \"$long/Résumé à lire.txt\"" >"$work/smb.log" 2>&1 \
+    || fail "Windows 11 : écriture refusée au propriétaire (chemin long)"
+test "${#long}" -gt 260 || fail "chemin de test trop court"
 test "$(stat -c %U "$HOME/Photos été/$long/Résumé à lire.txt")" = wlxalice || fail "fichier écrit sous un autre propriétaire"
 win -U 'wlxbob%Autre-2' -c "get \"$long/Résumé à lire.txt\" \"$work/relu.txt\"" >"$work/smb.log" 2>&1 \
     || fail "Windows 11 : lecture refusée à un compte en lecture"
