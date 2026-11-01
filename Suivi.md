@@ -144,6 +144,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Corrections UX : curseurs, clavier des apps, recherche Start, souris Notepad (#59).
 - [x] Glisser-déposer de fichiers et Ctrl+C/V entre Explorer et bureau (#60).
 - [x] Paramètres : pages Localisation et Gestionnaire de fichiers (#62).
+- [x] Paramètres natifs (GTK) : les 10 pages restées vides en v0.2.12 (Bluetooth, Personnalisation du bureau, Lecteurs réseau, Mises à jour système, Son avancé, Gestionnaire de fichiers, Localisation, Accessibilité, Effets visuels, Programmes Windows) sont branchées sur les vrais services ; page sans service masquée.
 - [x] Mixeur de volume dans la barre des tâches et réglages de localisation (#64).
 - [x] Registre Windows complet (énumération, clés pré-remplies), COM/OLE étendu, SafeArray, crash handler enrichi (#65).
 - [x] WinSock complet pour le réseau des .exe (#66).
