@@ -306,4 +306,69 @@ for window in [explorer, settings, editor, terminal, browser]:
     wait_for(lambda: int(window, 16) not in client_ids(), "close")
 run("wmctrl", "-m")
 print("WINLUX_NATIVE_CLOSE=0", flush=True)
+
+def system_services():
+    """v0.2.13: CUPS answers, PipeWire serves Pulse clients, SMB/NFS modules ship."""
+    deadline = time.monotonic() + 30
+    while not Path("/run/cups/cups.sock").exists():
+        assert time.monotonic() < deadline, "cupsd not started: " + Path("/run/winlux/cups.log").read_text(errors="replace")[-2000:]
+        time.sleep(0.5)
+    print(run("lpstat", "-r"), flush=True)
+    deadline = time.monotonic() + 30
+    while True:
+        info = subprocess.run(["pactl", "info"], capture_output=True, text=True)
+        if info.returncode == 0 and "PipeWire" in info.stdout: break
+        if time.monotonic() > deadline:
+            raise AssertionError("PipeWire not serving Pulse clients: " + info.stdout + info.stderr
+                                 + Path("/run/winlux/pipewire.log").read_text(errors="replace")[-1500:])
+        time.sleep(0.5)
+    release = os.uname().release
+    for module in ["cifs", "nfs", "nfsv4"]:
+        run("modprobe", "-n", "-S", release, module)
+
+system_services()
+print("WINLUX_NATIVE_SYSTEM_SERVICES=0", flush=True)
+
+def fast_user_switch():
+    """#119: a second account gets its own real Xorg on its own VT, then logs off."""
+    guest = "invite"
+    if subprocess.run(["id", guest], capture_output=True).returncode != 0:
+        run("useradd", "-m", "-s", "/bin/bash", guest)
+    users = Path("/etc/winlux/users.conf")
+    if users.exists() and not any(line.split(":", 1)[0] == guest for line in users.read_text().splitlines()):
+        with users.open("a") as handle: handle.write(guest + ":user:\n")
+    run("winlux-sessions", "switch", guest, timeout=60)
+    entry = Path("/run/winlux/sessions") / guest
+    fields = dict(line.split("=", 1) for line in entry.read_text().splitlines() if "=" in line)
+    display, vt = fields["display"], fields["vt"]
+    assert Path("/sys/class/tty/tty0/active").read_text().strip() == "tty" + vt, "VT not activated"
+    # The second desktop must come up on that server, with its own WM.
+    env = dict(os.environ, DISPLAY=display)
+    deadline = time.monotonic() + 90
+    while time.monotonic() < deadline:
+        probe = subprocess.run(["xprop", "-root", "_NET_SUPPORTING_WM_CHECK"], env=env, capture_output=True, text=True)
+        if "window id" in probe.stdout: break
+        time.sleep(1)
+    else:
+        raise AssertionError("no window manager on " + display)
+    listed = Path("/run/winlux/sessions.txt").read_text()
+    assert f"session={guest}|{display}|{vt}|active" in listed, listed
+    # The first desktop kept running while the other user was active.
+    run("wmctrl", "-m")
+    run("winlux-sessions", "logoff", guest, timeout=30)
+    wait_for(lambda: not entry.exists(), "session still registered after logoff")
+    deadline = time.monotonic() + 20
+    while Path("/tmp/.X11-unix/X" + display.lstrip(":")).exists() and time.monotonic() < deadline:
+        time.sleep(0.5)
+    assert not Path("/tmp/.X11-unix/X" + display.lstrip(":")).exists(), "X server left running"
+
+try:
+    fast_user_switch()
+except Exception:
+    logs = sorted(Path("/run/winlux").glob("session-invite.log")) + sorted(Path("/run/user").glob("*/winlux/*.log"))
+    for path in logs + sorted(Path("/run/winlux").glob("Xorg.[1-9].log")):
+        print(f"--- {path}", flush=True)
+        print("\n".join(path.read_text(errors="replace").splitlines()[-25:]), flush=True)
+    raise
+print("WINLUX_NATIVE_FAST_USER_SWITCH=0", flush=True)
 print("WINLUX_NATIVE_RESULT=0", flush=True)

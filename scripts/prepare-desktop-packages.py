@@ -27,6 +27,8 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "espeak-ng",
             # Impression : CUPS (pont IPP de winspool), filtres PDF et IPP-over-USB.
             "cups", "cups-filters", "ipp-usb",
+            # Son : PipeWire (un flux par .exe, volume par application) et pactl.
+            "pipewire", "pipewire-pulse", "pipewire-alsa", "wireplumber", "pulseaudio-utils",
             # Écran de verrouillage (winlux-lock) : crypt() des mots de passe, inactivité X11.
             "libcrypt1", "libxss1", "python3-gi-cairo"]
 
