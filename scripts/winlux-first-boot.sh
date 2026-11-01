@@ -498,23 +498,34 @@ fi
 hostname "$HOSTNAME_CHOICE" 2>/dev/null || true
 
 # --- Thème ---
+# Lu par xsession-winlux (THEME= dans /etc/winlux/preferences.conf) et
+# winlux-control theme-* : même fichier, même clé.
 log "Thème : $THEME_CHOICE"
 mkdir -p /etc/winlux
-printf '%s\n' "$THEME_CHOICE" >/etc/winlux/theme
+preferences=/etc/winlux/preferences.conf
+if test -r "$preferences"; then
+    sed '/^THEME=/d' "$preferences" >"$preferences.$$" || :
+else
+    : >"$preferences.$$"
+fi
+printf 'THEME=%s\n' "$THEME_CHOICE" >>"$preferences.$$"
+mv "$preferences.$$" "$preferences"
+chmod 644 "$preferences"
 
 # --- Compte utilisateur ---
+# USER_GROUPS : GROUPS est une variable réservée de bash (groupes du shell).
 log "Création du compte : $USERNAME"
-GROUPS="sudo,audio,video,plugdev,input"
+USER_GROUPS="sudo,audio,video,plugdev,input"
 for grp in netdev bluetooth lpadmin scanner; do
     if getent group "$grp" >/dev/null 2>&1; then
-        GROUPS="$GROUPS,$grp"
+        USER_GROUPS="$USER_GROUPS,$grp"
     fi
 done
 
 if ! id "$USERNAME" >/dev/null 2>&1; then
-    useradd -m -s /bin/bash -c "$FULLNAME" -G "$GROUPS" "$USERNAME"
+    useradd -m -s /bin/bash -c "$FULLNAME" -G "$USER_GROUPS" "$USERNAME"
 else
-    usermod -c "$FULLNAME" -G "$GROUPS" -s /bin/bash "$USERNAME" 2>/dev/null || true
+    usermod -c "$FULLNAME" -G "$USER_GROUPS" -s /bin/bash "$USERNAME" 2>/dev/null || true
 fi
 printf '%s:%s\n' "$USERNAME" "$USER_PASSWORD" | chpasswd
 
@@ -586,9 +597,9 @@ ExecStart=
 ExecStart=-/sbin/agetty --autologin $USERNAME --noclear %I \$TERM
 EOF
     fi
-    # Winlux init (session Xorg directe)
-    mkdir -p /etc/winlux
-    printf '%s\n' "$USERNAME" >/etc/winlux/autologin-user
+    # L'init Winlux ouvre la session Xorg directement : aucun fichier
+    # /etc/winlux/autologin-user n'est lu, le choix est conservé dans
+    # install-config.json (autologin) pour les outils qui l'affichent.
 fi
 
 # --- Installation des applications sélectionnées ---
