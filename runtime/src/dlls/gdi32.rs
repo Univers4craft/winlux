@@ -212,6 +212,8 @@ unsafe fn get_object_common(obj: usize, size: i32, out: *mut c_void, wide: bool)
             }
         }
         gui::GdiObjectInfo::Bitmap { .. } => core::mem::size_of::<BitmapObject>(),
+        // GetObject ne décrit pas les régions (GetRgnBox s'en charge).
+        gui::GdiObjectInfo::Region(_) => return 0,
     };
     if out.is_null() && size == 0 {
         return needed as i32;
@@ -319,6 +321,7 @@ unsafe fn get_object_common(obj: usize, size: i32, out: *mut c_void, wide: bool)
                 },
             );
         }
+        gui::GdiObjectInfo::Region(_) => return 0,
     }
     needed as i32
 }
@@ -542,6 +545,47 @@ struct ResizeCache {
 static RESIZE_CACHE: Mutex<Option<ResizeCache>> = Mutex::new(None);
 
 #[cfg(test)]
+mod region_tests {
+    use super::*;
+
+    #[test]
+    fn create_rect_rgn_alloue_un_objet_region() {
+        let rgn = create_rect_rgn(10, 10, 30, 20);
+        assert_ne!(rgn, 1, "1 est WHITE_BRUSH");
+        assert_eq!(get_object_type(rgn), 8); // OBJ_REGION
+        let mut boite = Rect::default();
+        assert_eq!(unsafe { get_rgn_box(rgn, &mut boite) }, SIMPLEREGION);
+        assert_eq!(boite, Rect::from_size(10, 10, 20, 10));
+        assert_eq!(pt_in_region(rgn, 10, 10), 1);
+        assert_eq!(pt_in_region(rgn, 30, 10), 0);
+        let dehors = Rect::from_size(40, 40, 5, 5);
+        let dedans = Rect::from_size(25, 15, 20, 20);
+        assert_eq!(unsafe { rect_in_region(rgn, &dehors) }, 0);
+        assert_eq!(unsafe { rect_in_region(rgn, &dedans) }, 1);
+        assert_eq!(offset_rgn(rgn, 5, 5), SIMPLEREGION);
+        assert_eq!(unsafe { get_rgn_box(rgn, &mut boite) }, SIMPLEREGION);
+        assert_eq!(boite, Rect::from_size(15, 15, 20, 10));
+        // Combinaison dans une région cible, puis libération par DeleteObject.
+        let autre = create_rect_rgn(0, 0, 100, 100);
+        let cible = create_rect_rgn(0, 0, 0, 0);
+        assert_eq!(combine_rgn(cible, rgn, autre, 1), SIMPLEREGION); // RGN_AND
+        assert_eq!(unsafe { get_rgn_box(cible, &mut boite) }, SIMPLEREGION);
+        assert_eq!(boite, Rect::from_size(15, 15, 20, 10));
+        assert_eq!(set_rect_rgn(cible, 0, 0, 0, 0), 1);
+        assert_eq!(unsafe { get_rgn_box(cible, &mut boite) }, NULLREGION);
+        for h in [rgn, autre, cible] {
+            assert_eq!(delete_object(h), 1);
+            assert_eq!(get_object_type(h), 0);
+        }
+        assert_eq!(unsafe { get_rgn_box(rgn, &mut boite) }, REGION_ERROR);
+        // L'export « ext » suit le même chemin.
+        let via_ext = crate::dlls::gdi32_ext::create_rect_rgn(0, 0, 1, 1);
+        assert_eq!(get_object_type(via_ext), 8);
+        assert_eq!(delete_object(via_ext), 1);
+    }
+}
+
+#[cfg(test)]
 mod scaling_tests {
     use super::*;
     #[test]
@@ -713,11 +757,11 @@ pub extern "win64" fn get_device_caps(dc: usize, index: i32) -> i32 {
         return v;
     }
     match index {
-        8 => 1920,  // HORZRES
-        10 => 1080, // VERTRES
-        12 => 24,   // BITSPIXEL
-        90 => 96,   // LOGPIXELSX
-        88 => 96,   // LOGPIXELSY
+        8 => gui::screen_size().0,  // HORZRES : écran réel, 1920 sans affichage
+        10 => gui::screen_size().1, // VERTRES
+        12 => 24,                   // BITSPIXEL
+        90 => 96,                   // LOGPIXELSX
+        88 => 96,                   // LOGPIXELSY
         _ => 0,
     }
 }
@@ -1550,68 +1594,134 @@ pub unsafe extern "win64" fn set_pixel_v(hdc: usize, x: i32, y: i32, color: u32)
 // Region functions
 // =====================================================================
 
-static NEXT_REGION: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0x0020_0000);
-
-pub extern "win64" fn create_rect_rgn(_left: i32, _top: i32, _right: i32, _bottom: i32) -> usize {
-    NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+/// `CreateRectRgn` : un vrai objet GDI (table `gui::objects`), libéré par
+/// `DeleteObject`. Les régions restent des rectangles (boîte englobante).
+pub extern "win64" fn create_rect_rgn(left: i32, top: i32, right: i32, bottom: i32) -> usize {
+    gui::create_region(Rect {
+        left,
+        top,
+        right,
+        bottom,
+    })
 }
 
-pub extern "win64" fn create_rect_rgn_indirect(_rect: *const Rect) -> usize {
-    NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+pub unsafe extern "win64" fn create_rect_rgn_indirect(rect: *const Rect) -> usize {
+    if rect.is_null() {
+        return 0;
+    }
+    gui::create_region(*rect)
 }
 
-pub extern "win64" fn create_elliptic_rgn(
-    _left: i32,
-    _top: i32,
-    _right: i32,
-    _bottom: i32,
-) -> usize {
-    NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+pub extern "win64" fn create_elliptic_rgn(left: i32, top: i32, right: i32, bottom: i32) -> usize {
+    create_rect_rgn(left, top, right, bottom)
 }
 
-pub extern "win64" fn combine_rgn(_dest: usize, _src1: usize, _src2: usize, _mode: i32) -> i32 {
-    1 // SIMPLEREGION
+/// Codes de retour des fonctions de région.
+const NULLREGION: i32 = 1;
+const SIMPLEREGION: i32 = 2;
+const REGION_ERROR: i32 = 0;
+
+fn region_complexity(rect: &Rect) -> i32 {
+    if rect.width() <= 0 || rect.height() <= 0 {
+        NULLREGION
+    } else {
+        SIMPLEREGION
+    }
+}
+
+pub extern "win64" fn combine_rgn(dest: usize, src1: usize, src2: usize, mode: i32) -> i32 {
+    // RGN_AND=1 RGN_OR=2 RGN_XOR=3 RGN_DIFF=4 RGN_COPY=5 ; les modes autres
+    // que la copie sont approchés par leur boîte englobante.
+    let (Some(a), Some(b)) = (gui::region_rect(src1), gui::region_rect(src2)) else {
+        return REGION_ERROR;
+    };
+    let result = match mode {
+        1 => Rect {
+            left: a.left.max(b.left),
+            top: a.top.max(b.top),
+            right: a.right.min(b.right),
+            bottom: a.bottom.min(b.bottom),
+        },
+        2 | 3 => Rect {
+            left: a.left.min(b.left),
+            top: a.top.min(b.top),
+            right: a.right.max(b.right),
+            bottom: a.bottom.max(b.bottom),
+        },
+        _ => a,
+    };
+    let result = if result.width() <= 0 || result.height() <= 0 {
+        Rect::default()
+    } else {
+        result
+    };
+    if gui::set_region_rect(dest, result) {
+        region_complexity(&result)
+    } else {
+        REGION_ERROR
+    }
 }
 
 pub extern "win64" fn set_rect_rgn(
-    _rgn: usize,
-    _left: i32,
-    _top: i32,
-    _right: i32,
-    _bottom: i32,
+    rgn: usize,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
 ) -> i32 {
-    1
+    gui::set_region_rect(
+        rgn,
+        Rect {
+            left,
+            top,
+            right,
+            bottom,
+        },
+    ) as i32
 }
 
 #[allow(dead_code)]
 pub extern "win64" fn delete_rgn(rgn: usize) -> i32 {
-    let _ = rgn;
-    1
+    gui::delete_object(rgn) as i32
 }
 
-pub extern "win64" fn offset_rgn(_rgn: usize, _x: i32, _y: i32) -> i32 {
-    1
+pub extern "win64" fn offset_rgn(rgn: usize, x: i32, y: i32) -> i32 {
+    let Some(r) = gui::region_rect(rgn) else {
+        return REGION_ERROR;
+    };
+    let moved = Rect {
+        left: r.left.saturating_add(x),
+        top: r.top.saturating_add(y),
+        right: r.right.saturating_add(x),
+        bottom: r.bottom.saturating_add(y),
+    };
+    gui::set_region_rect(rgn, moved);
+    region_complexity(&moved)
 }
 
-pub unsafe extern "win64" fn get_rgn_box(_rgn: usize, rect: *mut Rect) -> i32 {
+pub unsafe extern "win64" fn get_rgn_box(rgn: usize, rect: *mut Rect) -> i32 {
+    let Some(gui::GdiObjectInfo::Region(r)) = gui::object_info(rgn) else {
+        return REGION_ERROR;
+    };
     if !rect.is_null() {
-        *rect = Rect {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
+        *rect = r;
     }
-    1
+    region_complexity(&r)
 }
 
-pub extern "win64" fn pt_in_region(_rgn: usize, _x: i32, _y: i32) -> i32 {
-    0
+pub extern "win64" fn pt_in_region(rgn: usize, x: i32, y: i32) -> i32 {
+    match gui::region_rect(rgn) {
+        Some(r) => i32::from(x >= r.left && x < r.right && y >= r.top && y < r.bottom),
+        None => 0,
+    }
 }
 
-pub extern "win64" fn rect_in_region(_rgn: usize, _rect: *const Rect) -> i32 {
-    0
+pub unsafe extern "win64" fn rect_in_region(rgn: usize, rect: *const Rect) -> i32 {
+    let (Some(r), false) = (gui::region_rect(rgn), rect.is_null()) else {
+        return 0;
+    };
+    let q = *rect;
+    i32::from(q.left < r.right && q.right > r.left && q.top < r.bottom && q.bottom > r.top)
 }
 
 pub extern "win64" fn equal_rgn(_rgn1: usize, _rgn2: usize) -> i32 {
@@ -1936,7 +2046,7 @@ pub unsafe extern "win64" fn get_text_face_a(hdc: usize, count: i32, buf: *mut u
     if buf.is_null() {
         return font.face.len() as i32 + 1;
     }
-    crate::dlls::put_a(&font.face, buf, count as u32) as i32
+    crate::dlls::put_text_a(&font.face, buf, count.max(0) as u32) as i32
 }
 
 pub unsafe extern "win64" fn get_text_face_w(hdc: usize, count: i32, buf: *mut u16) -> i32 {
@@ -1944,7 +2054,7 @@ pub unsafe extern "win64" fn get_text_face_w(hdc: usize, count: i32, buf: *mut u
     if buf.is_null() {
         return font.face.len() as i32 + 1;
     }
-    crate::dlls::put_w(&font.face, buf, count as u32) as i32
+    crate::dlls::put_text_w(&font.face, buf, count.max(0) as u32) as i32
 }
 
 // =====================================================================
@@ -2031,6 +2141,7 @@ pub extern "win64" fn get_object_type(obj: usize) -> u32 {
             gui::GdiObjectInfo::Pen { .. } => 1,
             gui::GdiObjectInfo::Font { .. } => 6,
             gui::GdiObjectInfo::Bitmap { .. } => 7,
+            gui::GdiObjectInfo::Region(_) => 8, // OBJ_REGION
         }
     } else {
         0
