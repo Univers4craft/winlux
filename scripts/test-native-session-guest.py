@@ -6,6 +6,7 @@ import signal
 from pathlib import Path
 import re
 import subprocess
+import shutil
 import time
 
 def run(*args, **kwargs):
@@ -420,4 +421,33 @@ except Exception:
         print("\n".join(path.read_text(errors="replace").splitlines()[-25:]), flush=True)
     raise
 print("WINLUX_NATIVE_FAST_USER_SWITCH=0", flush=True)
+
+def update_from_previous_release():
+    """Paramètres > Mettre à jour : l'outil de la version publiée installe la nouvelle."""
+    bench = Path("/opt/winlux-test/update")
+    if not bench.is_dir(): return False
+    manifest = dict(line.split("=", 1) for line in (bench / "winlux-update-manifest.txt").read_text().splitlines())
+    previous = run("dpkg-deb", "-f", str(bench / "previous.deb"), "Version").strip()
+    run("apt-get", "--no-remove", "-y", "--allow-downgrades", "-o", "Dpkg::Options::=--force-confold",
+        "install", str(bench / "previous.deb"), timeout=600)
+    assert run("dpkg-query", "-W", "-f=${Version}", "winlux-desktop").strip() == previous
+    assert Path("/usr/share/winlux/version").read_text().strip() == "v" + previous
+    # Les adresses GitHub que lit l'outil publié pointent vers les fichiers
+    # préparés (test-update-curl-shim.py) ; tout le reste (APT, vérifications,
+    # point de restauration) est le vrai code de la version publiée.
+    shim = Path("/tmp/winlux-update-shim"); shim.mkdir(exist_ok=True)
+    shutil.copyfile(bench / "curl", shim / "curl"); (shim / "curl").chmod(0o755)
+    env = dict(os.environ, PATH=f"{shim}:" + os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"))
+    result = subprocess.run(["winlux-control", "update-apply"], env=env, capture_output=True, text=True, timeout=900)
+    print(result.stdout[-3000:], result.stderr[-3000:], flush=True)
+    assert result.returncode == 0, "update from " + previous + " failed"
+    new = manifest["version"]
+    assert Path("/usr/share/winlux/version").read_text().strip() == new, Path("/usr/share/winlux/version").read_text()
+    assert "v" + run("dpkg-query", "-W", "-f=${Version}", "winlux-desktop").strip() == new
+    assert run("dpkg", "--audit").strip() == ""
+    assert Path("/run/winlux/update-action").read_text().strip() == "reboot"
+    print(f"WINLUX_NATIVE_UPDATE_FROM=v{previous}->{new}", flush=True)
+    return True
+
+if update_from_previous_release(): print("WINLUX_NATIVE_UPDATE=0", flush=True)
 print("WINLUX_NATIVE_RESULT=0", flush=True)

@@ -32,6 +32,24 @@ if test -n "${WINLUX_EXTERNAL_EXE:-}"; then
         done
     fi
 fi
+# Vraie mise à jour depuis la version publiée précédente : son paquet est
+# installé dans la VM, puis son propre outil installe le nouveau paquet.
+if test -n "${WINLUX_UPDATE_FROM_DEB:-}"; then
+    new="$root/build/winlux-desktop.deb"
+    test -f "$WINLUX_UPDATE_FROM_DEB" && test -f "$new"
+    version=$(dpkg-deb -f "$new" Version)
+    asset="winlux-desktop-v$version.deb"
+    digest=$(sha256sum "$new" | cut -d' ' -f1)
+    printf 'format=3\nbackend=apt\nbase=ubuntu-resolute\nversion=v%s\nscope=system\naction=reboot\ncomponents=runtime,desktop,applications,updater,integration\nasset=%s\nsha256=%s\ndownload_bytes=%s\nunpacked_kib=%s\n' \
+        "$version" "$asset" "$digest" "$(stat -c %s "$new")" "$(dpkg-deb -f "$new" Installed-Size)" > "$work/update-manifest.txt"
+    debugfs -w -R 'mkdir /opt/winlux-test' "$disk" >/dev/null 2>&1 || true
+    debugfs -w -R 'mkdir /opt/winlux-test/update' "$disk" >/dev/null 2>&1
+    debugfs -w -R "write $WINLUX_UPDATE_FROM_DEB /opt/winlux-test/update/previous.deb" "$disk" >/dev/null 2>&1
+    debugfs -w -R "write $new /opt/winlux-test/update/$asset" "$disk" >/dev/null 2>&1
+    debugfs -w -R "write $work/update-manifest.txt /opt/winlux-test/update/winlux-update-manifest.txt" "$disk" >/dev/null 2>&1
+    debugfs -w -R "write $root/scripts/test-update-curl-shim.py /opt/winlux-test/update/curl" "$disk" >/dev/null 2>&1
+    : "${WINLUX_NATIVE_TEST_TIMEOUT:=1200}"
+fi
 echo "Native desktop diagnostic ($accel): $work"
 result=0
 timeout -k 5s "${WINLUX_NATIVE_TEST_TIMEOUT:-600}" qemu-system-x86_64 \

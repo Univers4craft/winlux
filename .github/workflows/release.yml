@@ -20,6 +20,7 @@ on:
       - scripts/winlux-network-watch.sh
       - scripts/stage-apt-root.py
       - scripts/winlux-update-apt.py
+      - scripts/test-update-curl-shim.py
   workflow_dispatch:
 
 permissions:
@@ -138,6 +139,20 @@ jobs:
         env:
           WINLUX_QEMU_MEMORY: 4096
         run: sh scripts/test-browsers-vm.sh
+
+      - name: Préparer la mise à jour depuis la dernière version publiée
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Le test VM installe ce paquet puis lance « Mettre à jour » des
+          # Paramètres avec l'outil de cette version vers le nouveau paquet.
+          previous=$(gh release view --repo "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          if [ "$previous" = "$(cat VERSION)" ]; then echo "Version $previous déjà publiée : test de mise à jour ignoré"; exit 0; fi
+          mkdir -p build/previous-release
+          gh release download "$previous" --repo "$GITHUB_REPOSITORY" --dir build/previous-release \
+            --pattern "winlux-desktop-$previous.deb" --pattern "winlux-desktop-$previous.deb.sha256"
+          (cd build/previous-release && sha256sum -c "winlux-desktop-$previous.deb.sha256")
+          echo "WINLUX_UPDATE_FROM_DEB=$PWD/build/previous-release/winlux-desktop-$previous.deb" >> "$GITHUB_ENV"
 
       - name: Valider le bureau natif en VM
         env:
