@@ -136,7 +136,14 @@ class Start(Gtk.Application):
         width, height = min(660, area.width - 24), min(650, area.height - 24)
         self.window.set_default_size(width, height)
         self.window.set_size_request(width, height)
-        self.window.move(area.x + (area.width - width) // 2, area.y + area.height - height - 10)
+        # Comme Windows 11 : barre alignée à gauche, le menu s'ouvre au-dessus
+        # du bouton Démarrer ; barre centrée ou ouverture au clavier, il est
+        # centré.
+        x = area.x + (area.width - width) // 2
+        _, pointer_x, pointer_y = self.window.get_display().get_default_seat().get_pointer().get_position()
+        if pointer_y >= area.y + area.height and area.x <= pointer_x < area.x + area.width // 3:
+            x = area.x + 12
+        self.window.move(x, area.y + area.height - height - 10)
         self.window.show_all()
         self.window.present()
         self.search.grab_focus()

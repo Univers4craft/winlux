@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **233**
+- Réalisé : **234**
 - À faire ou en cours : **49**
-- Total : **282**
-- Progression : **82.6%**
+- Total : **283**
+- Progression : **82.7%**
 - Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins Windows ↔ Linux #175, stabilité de la session native #203)
 
 ## À FAIRE (par priorité)
@@ -40,7 +40,8 @@
 - [x] Stabilité de la session native (testée dans une VM de l'ISO v0.2.12, captures dans `docs/captures/stabilite-session/`) : menu Démarrer qui ignorait les clics une fois sur deux (saisie du pointeur), Paramètres en une seule fenêtre qui s'ouvre sur la page demandée, un bouton de barre des tâches par fenêtre (plus de menu de regroupement), compositeur picom (plus de traînées en déplaçant une fenêtre, ombres, coins arrondis), traductions fr/en/es/de conservées dans l'image (bureau, Corbeille, éditeur en français).
 - [ ] Explorateur en session native : les fichiers texte s'ouvrent dans un Mousepad vide (Corbeille comprise) ; passer par l'association Linux (PR séparée, après #174).
 - [ ] Repeinture de l'Explorateur après un Expose partiel (fenêtre noire jusqu'au survol après le redémarrage du compositeur, `gui_x11.rs`).
-- [ ] Finition Windows 11 de la session native : menu Démarrer aligné sur la barre, indicateur de fenêtre ouverte, cadre openbox sans poignée noire, volet latéral de Thunar trop étroit, avertissement « compte administrateur ».
+- [x] Finition Windows 11 de la session native (1re passe) : menu Démarrer ouvert au-dessus du bouton quand la barre est à gauche, cadre de fenêtre sans coins noirs en bas et titre en graisse normale, volet latéral de la Corbeille (Thunar) lisible et vue détaillée. Captures dans `docs/captures/finition-session/`.
+- [ ] Finition Windows 11, suite : avertissement « compte administrateur » de Thunar et Mousepad (bureau lancé en root), types de fichiers en anglais dans Thunar, fenêtre de l'Explorateur placée en partie sous la barre des tâches.
 
 ### Priorité 1 — Fiabiliser le runtime
 
