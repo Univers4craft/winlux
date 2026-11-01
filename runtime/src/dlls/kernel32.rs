@@ -2543,18 +2543,18 @@ pub unsafe extern "win64" fn heap_realloc(
         crate::process::set_last_error(87);
         return std::ptr::null_mut();
     }
-    let old = lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())))
-        .get(&(p as usize))
-        .copied();
-    let Some(old) = old else {
+    // Tout sous le verrou du tas : un HeapFree/HeapSize concurrent sur le
+    // même bloc ne voit jamais l'ancien pointeur après le realloc.
+    let mut allocations = lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
+    let Some(old) = allocations.get(&(p as usize)).copied() else {
         crate::process::set_last_error(87);
         return std::ptr::null_mut();
     };
     let q = libc::realloc(p, size.max(1));
     if q.is_null() {
+        crate::process::set_last_error(8);
         return q;
     }
-    let mut allocations = lock(HEAP_ALLOCS.get_or_init(|| Mutex::new(HashMap::new())));
     allocations.remove(&(p as usize));
     allocations.insert(q as usize, size.max(1));
     if flags & 8 != 0 && size > old {
@@ -2582,14 +2582,23 @@ pub(crate) fn create_global_memory(
     flags: u32,
 ) -> Option<(usize, Arc<Mutex<GlobalMemory>>)> {
     let mut bytes = Vec::new();
-    bytes.try_reserve_exact(size).ok()?;
+    // Au moins un octet de capacité : le pointeur d'un bloc GMEM_FIXED sert
+    // de handle et doit être unique même pour une taille nulle.
+    bytes.try_reserve_exact(size.max(1)).ok()?;
     bytes.resize(size, 0);
+    // GMEM_FIXED (bit GMEM_MOVEABLE = 0x2 absent) : le handle est le
+    // pointeur lui-même, utilisable directement et rendu tel quel par
+    // GlobalLock. GMEM_MOVEABLE garde un numéro de handle opaque.
+    let handle = if flags & 0x2 == 0 {
+        bytes.as_ptr() as usize
+    } else {
+        next_handle()
+    };
     let memory = Arc::new(Mutex::new(GlobalMemory {
         bytes,
         locks: 0,
         flags,
     }));
-    let handle = next_handle();
     lock(GLOBAL_MEMORY.get_or_init(|| Mutex::new(HashMap::new())))
         .insert(handle, Arc::clone(&memory));
     Some((handle, memory))
@@ -2618,14 +2627,27 @@ pub extern "win64" fn global_realloc(handle: usize, size: usize, flags: u32) -> 
         crate::process::set_last_error(6);
         return 0;
     };
-    let mut memory = lock(&memory);
-    let old = memory.bytes.len();
-    if size > old && memory.bytes.try_reserve_exact(size - old).is_err() {
+    let mut memory_guard = lock(&memory);
+    let old = memory_guard.bytes.len();
+    if size > old && memory_guard.bytes.try_reserve_exact(size - old).is_err() {
         crate::process::set_last_error(8);
         return 0;
     }
-    memory.bytes.resize(size, 0);
-    memory.flags = flags;
+    memory_guard.bytes.resize(size, 0);
+    // GMEM_MODIFY (0x80) change seulement les attributs.
+    if flags & 0x80 == 0 {
+        memory_guard.flags = (memory_guard.flags & 0x2) | (flags & !0x2);
+    }
+    let fixed = memory_guard.flags & 0x2 == 0;
+    let new_ptr = memory_guard.bytes.as_ptr() as usize;
+    drop(memory_guard);
+    if fixed && new_ptr != handle {
+        // Bloc fixe déplacé : le nouveau pointeur devient le handle.
+        let mut table = lock(GLOBAL_MEMORY.get_or_init(|| Mutex::new(HashMap::new())));
+        table.remove(&handle);
+        table.insert(new_ptr, memory);
+        return new_ptr;
+    }
     handle
 }
 pub extern "win64" fn global_lock(handle: usize) -> *mut c_void {
@@ -6706,25 +6728,54 @@ pub unsafe extern "win64" fn duplicate_handle(
         -12 => Some(2),
         _ => None,
     };
-    let copy = if let Some(fd) = std_fd {
+    // Pseudo-handles (processus et thread courants) : Windows rend un vrai
+    // handle vers le même objet ; ici il reste utilisable tel quel.
+    let pseudo = src_handle == get_current_process() || src_handle == get_current_thread();
+    let copy = if pseudo {
+        Some(src_handle)
+    } else if let Some(fd) = std_fd {
         let new_fd = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3);
         (new_fd >= 0).then(|| insert_file(std::os::unix::io::FromRawFd::from_raw_fd(new_fd)))
+    } else if let Some(h) = duplicate_handle_impl(src_handle) {
+        Some(h)
     } else {
-        duplicate_handle_impl(src_handle)
+        // Objet de synchronisation (événement, mutex, sémaphore, thread,
+        // processus, port de complétion) : nouveau numéro de handle vers le
+        // même objet partagé par comptage de références (Arc). Fermer la
+        // copie ne ferme pas l'original ; un objet nommé compte un
+        // utilisateur de plus.
+        lookup_sync(src_handle).map(add_sync_reference)
     };
-    let result = match copy {
-        Some(h) => {
-            if options & 1 != 0 && std_fd.is_none() {
-                close_handle(src_handle);
-            }
-            h
+    let Some(result) = copy else {
+        if !dst_handle.is_null() {
+            *dst_handle = 0;
         }
-        None => src_handle,
+        crate::process::set_last_error(6);
+        return 0;
     };
+    if options & 1 != 0 && std_fd.is_none() && !pseudo {
+        close_handle(src_handle);
+    }
     if !dst_handle.is_null() {
         *dst_handle = result;
     }
     1
+}
+
+/// Nouveau handle vers un objet de synchronisation existant (DuplicateHandle).
+fn add_sync_reference(obj: SyncHandle) -> usize {
+    {
+        let mut names = lock(SYNC_NAMES.get_or_init(|| Mutex::new(HashMap::new())));
+        for (named, count) in names.values_mut() {
+            if same_sync(&obj, named) {
+                *count += 1;
+                break;
+            }
+        }
+    }
+    let h = next_handle();
+    lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, obj);
+    h
 }
 
 /// Nom large d'objet de synchronisation converti pour les variantes A
