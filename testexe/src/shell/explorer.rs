@@ -1297,6 +1297,7 @@ pub unsafe fn open_at(path: &[u8]) {
         return;
     }
     if !wm::is_open(wm::APP_EXPLORER) || NTABS == 0 {
+        load_folder_options();
         NTABS = 0;
         CUR = 0;
         open_tab(path);
@@ -1311,6 +1312,7 @@ pub unsafe fn open_home() {
 /// Prépare le premier onglet pendant l'écran de démarrage.
 pub unsafe fn preload() {
     if NTABS == 0 {
+        load_folder_options();
         open_tab(HOME);
     }
     for i in 0..PLACES.len() {
@@ -1363,6 +1365,76 @@ pub unsafe fn show_ext() -> bool {
 }
 pub unsafe fn set_show_ext(v: bool) {
     SHOW_EXT = v;
+}
+
+// ---------- Options des dossiers (registre, comme Windows) ----------
+//
+// Paramètres > Gestionnaire de fichiers écrit ces valeurs ; les programmes
+// Windows lisent les mêmes (Hidden 1 = afficher, 2 = masquer ; HideFileExt).
+
+const KEY_ADVANCED: &core::ffi::CStr =
+    c"Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\Advanced";
+const KEY_WINLUX: &core::ffi::CStr = c"Software\\Winlux\\Explorer";
+const HKEY_CURRENT_USER: usize = 0x8000_0001;
+
+unsafe fn reg_dword(key: &core::ffi::CStr, name: &core::ffi::CStr) -> Option<u32> {
+    let mut h: Handle = core::ptr::null_mut();
+    if RegOpenKeyExA(HKEY_CURRENT_USER as Handle, key.as_ptr(), 0, 0x2_0019, &mut h) != 0 {
+        return None;
+    }
+    let mut value = 0u32;
+    let mut kind = 0u32;
+    let mut size = 4u32;
+    let r = RegQueryValueExA(
+        h,
+        name.as_ptr(),
+        core::ptr::null_mut(),
+        &mut kind,
+        (&mut value as *mut u32).cast(),
+        &mut size,
+    );
+    RegCloseKey(h);
+    (r == 0 && kind == 4 && size == 4).then_some(value)
+}
+
+unsafe fn reg_set_dword(key: &core::ffi::CStr, name: &core::ffi::CStr, value: u32) {
+    let mut h: Handle = core::ptr::null_mut();
+    if RegCreateKeyExA(
+        HKEY_CURRENT_USER as Handle,
+        key.as_ptr(),
+        0,
+        core::ptr::null(),
+        0,
+        0x2_0006,
+        core::ptr::null_mut(),
+        &mut h,
+        core::ptr::null_mut(),
+    ) != 0
+    {
+        return;
+    }
+    RegSetValueExA(h, name.as_ptr(), 0, 4, (&value as *const u32).cast(), 4);
+    RegCloseKey(h);
+}
+
+/// Relu à chaque nouvelle fenêtre : les Paramètres ont pu changer entre-temps.
+unsafe fn load_folder_options() {
+    if let Some(v) = reg_dword(KEY_ADVANCED, c"Hidden") {
+        SHOW_HIDDEN = v == 1;
+    }
+    if let Some(v) = reg_dword(KEY_ADVANCED, c"HideFileExt") {
+        SHOW_EXT = v == 0;
+    }
+    if let Some(v) = reg_dword(KEY_WINLUX, c"DefaultView") {
+        if v <= 6 {
+            set_view(v as u8);
+        }
+    }
+}
+
+unsafe fn save_folder_options() {
+    reg_set_dword(KEY_ADVANCED, c"Hidden", if SHOW_HIDDEN { 1 } else { 2 });
+    reg_set_dword(KEY_ADVANCED, c"HideFileExt", u32::from(!SHOW_EXT));
 }
 
 // ---------- Sélection ----------
@@ -4066,13 +4138,17 @@ unsafe fn run_item(it: Item, geo: &Geo) {
         Item::Compact => COMPACT = !COMPACT,
         Item::Hidden => {
             SHOW_HIDDEN = !SHOW_HIDDEN;
+            save_folder_options();
             for t in TABS[..NTABS].iter_mut() {
                 for pn in t.panes.iter_mut() {
                     rebuild_view(pn);
                 }
             }
         }
-        Item::Ext => SHOW_EXT = !SHOW_EXT,
+        Item::Ext => {
+            SHOW_EXT = !SHOW_EXT;
+            save_folder_options();
+        }
         Item::Nav => SHOW_NAV = !SHOW_NAV,
         Item::Sort(k) => {
             SORT = k;

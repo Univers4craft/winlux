@@ -201,14 +201,43 @@ fn is_leap(y: u64) -> bool {
     (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400)
 }
 
+/// Programme à l'origine des lignes du journal, « calc.exe[1234] » ou
+/// « winlux[1234] » pour les services : l'Observateur d'événements s'en sert
+/// comme source et pour ranger les événements des applications .exe.
+fn journal_origin() -> &'static str {
+    static ORIGIN: OnceLock<String> = OnceLock::new();
+    ORIGIN.get_or_init(|| {
+        let name = std::env::args_os()
+            .nth(1)
+            .filter(|a| !a.to_string_lossy().starts_with("--"))
+            .and_then(|a| {
+                std::path::Path::new(&a)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().replace([' ', '[', ']'], "_"))
+            })
+            .unwrap_or_else(|| "winlux".into());
+        format!("{name}[{}]", std::process::id())
+    })
+}
+
+/// Étape notée dans le journal quel que soit le niveau choisi (lancement et
+/// fin d'un programme) : `winlux-report` en tire la chronologie d'un plantage.
+pub fn journal_event(target: &str, message: &str) {
+    if cfg!(test) || !config().journal {
+        return;
+    }
+    write_to_journal(Level::Info, target, message);
+}
+
 fn write_to_journal(level: Level, target: &str, message: &str) {
     if let Ok(mut guard) = journal_file().lock() {
         if let Some(ref mut f) = *guard {
             let _ = writeln!(
                 f,
-                "{} [{}] {}: {}",
+                "{} [{}] {} {}: {}",
                 timestamp(),
                 level.as_str(),
+                journal_origin(),
                 target,
                 message
             );
