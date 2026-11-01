@@ -33,13 +33,17 @@ pub const PAGE_REPORT: usize = 25;
 pub const PAGE_PRINTERS: usize = 26;
 /// Page « Bureau à distance » : état publié par winlux-remote-config.
 const PAGE_REMOTE: usize = 27;
-const PAGE_COUNT: usize = 28;
+/// Page « Partage et transfert » : dossiers partagés (SMB) et transfert des
+/// réglages par fichier (shell/sharing.rs).
+pub const PAGE_SHARING: usize = 28;
+const PAGE_COUNT: usize = 29;
 /// Appareils Bluetooth affichés (une ligne de boutons chacun).
 const BT_ROWS: usize = 5;
 /// Ordre d'affichage du menu : la personnalisation suit l'apparence,
 /// l'alimentation suit le son et la batterie.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22, 25, 26, 27,
+    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 28, 22, 25, 26,
+    27,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -71,6 +75,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_REPORT_PAGE),
         tr(S_PRINTERS),
         tr(S_REMOTE_DESKTOP),
+        tr(S_SHARING),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -398,6 +403,8 @@ pub unsafe fn system_tick() -> bool {
     changed |= crate::netdrives::poll(
         PAGE == PAGE_NETDRIVES && crate::wm::is_open(crate::wm::APP_SETTINGS),
     );
+    changed |=
+        crate::sharing::poll(PAGE == PAGE_SHARING && crate::wm::is_open(crate::wm::APP_SETTINGS));
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
     changed |= read(
         if PAGE == 7 {
@@ -1754,9 +1761,10 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         BLUETOOTH_PAGE => draw_bluetooth(g, &c),
         PAGE_REPORT => draw_report(g, &c),
         PAGE_PRINTERS => printers::draw(g, &c, SCROLL),
+        PAGE_SHARING => crate::sharing::draw(g, &c),
         _ => {}
     }
-    if PAGE == PAGE_NETDRIVES {
+    if PAGE == PAGE_NETDRIVES || PAGE == PAGE_SHARING {
         return;
     }
     let notice = if PAGE == 10 {
@@ -2074,6 +2082,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if PAGE == PAGE_NETDRIVES && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
         return crate::netdrives::mouse(ev, x, y, &content(f));
     }
+    if PAGE == PAGE_SHARING && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        return crate::sharing::mouse(ev, x, y, &content(f));
+    }
     if let Mouse::Wheel(delta) = ev {
         if PAGE == PAGE_CPU {
             return crate::settings_cpu::scroll(if delta < 0 { 3 } else { -3 });
@@ -2145,6 +2156,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if PAGE == PAGE_NETDRIVES {
         return crate::netdrives::mouse(ev, x, y, &content(f));
+    }
+    if PAGE == PAGE_SHARING {
+        return crate::sharing::mouse(ev, x, y, &content(f));
     }
     if PAGE == 7 {
         let c = content(f);
