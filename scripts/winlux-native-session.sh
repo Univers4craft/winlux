@@ -99,6 +99,10 @@ if "$has_bluetooth"; then
     done
 fi
 /usr/bin/xfsettingsd --daemon >/run/winlux/xfsettings.log 2>&1
+# Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur.
+if test -d /usr/share/icons/Winlux && ! /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName >/dev/null 2>&1; then
+    /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
+fi
 if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
     /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
 fi

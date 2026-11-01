@@ -3,6 +3,8 @@
 import json
 import os
 from pathlib import Path
+import shutil
+import subprocess
 import time
 import gi
 gi.require_version("Gtk", "3.0")
@@ -10,6 +12,24 @@ from gi.repository import Gtk, Gio, GLib
 
 STATE = Path(os.environ.get("XDG_STATE_HOME",Path.home()/".local/state")) / "winlux/notifications.json"
 PREF = Path(os.environ.get("XDG_CONFIG_HOME",Path.home()/".config")) / "winlux/do-not-disturb"
+SOUNDS_OFF = PREF.with_name("system-sounds-off")
+SOUNDS = Path(os.environ.get("WINLUX_SOUNDS_DIR", "/usr/share/winlux/sounds"))
+
+def play_sound(name):
+    """Son système Winlux (assets/sounds), sans bloquer ni échouer."""
+    path = SOUNDS / f"{name}.wav"
+    if SOUNDS_OFF.exists() or not path.is_file():
+        return False
+    for player in ("pw-play", "paplay", "aplay"):
+        exe = shutil.which(player)
+        if exe:
+            args = [exe, "-q", str(path)] if player == "aplay" else [exe, str(path)]
+            try:
+                subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                return True
+            except OSError:
+                continue
+    return False
 XML = '''<node><interface name="org.freedesktop.Notifications">
 <method name="GetCapabilities"><arg type="as" direction="out"/></method>
 <method name="GetServerInformation"><arg type="s" direction="out"/><arg type="s" direction="out"/><arg type="s" direction="out"/><arg type="s" direction="out"/></method>
@@ -28,6 +48,13 @@ class Notifications:
         self.sequence = max([item.get("id", 0) for item in self.history] + [0])
         self.live = {}
         self.toast = None
+        # Clé USB, disque ou lecteur branché / retiré : sons système assortis.
+        try:
+            self.volumes = Gio.VolumeMonitor.get()
+            self.volumes.connect("drive-connected", lambda *_: play_sound("appareil-branche"))
+            self.volumes.connect("drive-disconnected", lambda *_: play_sound("appareil-retire"))
+        except Exception:
+            self.volumes = None
         self.owner = Gio.bus_own_name(Gio.BusType.SESSION, "org.freedesktop.Notifications",
             Gio.BusNameOwnerFlags.NONE, self.acquired, None, lambda *_: Gtk.main_quit())
 
@@ -99,7 +126,13 @@ class Notifications:
             retained = {item["id"] for item in self.history}
             self.live = {key: value for key, value in self.live.items() if key in retained}
             self.save()
-            if not PREF.exists(): self.show(identity,title[:1024],body[:8192],timeout)
+            if not PREF.exists():
+                self.show(identity,title[:1024],body[:8192],timeout)
+                # Indices standard : « suppress-sound » coupe le son,
+                # « sound-name » choisit un son système Winlux connu.
+                if not bool(hints.get("suppress-sound", False)):
+                    wanted = str(hints.get("sound-name", "notification"))
+                    play_sound(wanted if (SOUNDS / f"{wanted}.wav").is_file() and "/" not in wanted else "notification")
             invocation.return_value(GLib.Variant("(u)", (identity,)))
 
     def show(self, identity, title, body, timeout):

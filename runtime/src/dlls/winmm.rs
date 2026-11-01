@@ -307,6 +307,12 @@ pub unsafe extern "win64" fn play_sound_a(name: *const u8, _module: usize, flags
         }
         return 1;
     }
+    if !name.is_null()
+        && flags & SND_ALIAS != 0
+        && flags & (SND_MEMORY | SND_LOOP | 0x0010_0000) == 0
+    {
+        return play_alias(&crate::dlls::cstr(name), flags);
+    }
     if name.is_null()
         || flags & (SND_MEMORY | SND_LOOP) != 0
         || flags
@@ -319,6 +325,62 @@ pub unsafe extern "win64" fn play_sound_a(name: *const u8, _module: usize, flags
     play_sound_path(&crate::dlls::cstr(name), flags)
 }
 fn play_sound_path(name: &str, flags: u32) -> i32 {
+    play_sound_file(crate::paths::to_linux(name), flags)
+}
+
+const SND_NODEFAULT: u32 = 0x0002;
+const SND_ALIAS: u32 = 0x0001_0000;
+
+/// Sons système Winlux (assets/sounds, synthétisés par
+/// scripts/render-sounds.py) : nom Windows de l'alias → fichier.
+pub fn system_sound_for_alias(alias: &str) -> Option<&'static str> {
+    let a = alias.to_ascii_lowercase();
+    Some(match a.as_str() {
+        "systemasterisk" => "information",
+        "systemexclamation" => "avertissement",
+        "systemhand" | "criticalbatteryalarm" => "erreur",
+        "systemquestion" => "question",
+        "systemdefault" | ".default" => "defaut",
+        "systemnotification" | "notification.default" | "mailbeep" => "notification",
+        "deviceconnect" => "appareil-branche",
+        "devicedisconnect" | "devicefail" => "appareil-retire",
+        "windowslogon" | "systemstart" | "windowsunlock" => "connexion",
+        "windowslogoff" | "systemexit" => "deconnexion",
+        _ => return None,
+    })
+}
+
+/// Son de `MessageBeep(type)` selon l'icône demandée.
+pub fn system_sound_for_beep(kind: u32) -> &'static str {
+    match kind & 0xF0 {
+        0x10 => "erreur",
+        0x20 => "question",
+        0x30 => "avertissement",
+        0x40 => "information",
+        _ => "defaut",
+    }
+}
+
+/// Joue un son système en arrière-plan ; 0 si le fichier ou l'audio manque.
+pub fn play_system_sound(name: &str) -> i32 {
+    let dir = std::env::var_os("WINLUX_SOUNDS_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/usr/share/winlux/sounds"));
+    play_sound_file(dir.join(format!("{name}.wav")), SND_ASYNC)
+}
+
+fn play_alias(alias: &str, flags: u32) -> i32 {
+    match system_sound_for_alias(alias) {
+        Some(name) => play_system_sound(name),
+        None if flags & SND_NODEFAULT == 0 => play_system_sound("defaut"),
+        None => {
+            crate::process::set_last_error(2);
+            0
+        }
+    }
+}
+
+fn play_sound_file(filename: std::path::PathBuf, flags: u32) -> i32 {
     {
         let mut list = lock(jobs());
         list.retain(|j| !j.thread.is_finished());
@@ -329,7 +391,6 @@ fn play_sound_path(name: &str, flags: u32) -> i32 {
             j.cancel.store(true, Ordering::Relaxed);
         }
     }
-    let filename = crate::paths::to_linux(name);
     let f = match std::fs::File::open(filename) {
         Ok(f) => f,
         Err(e) => {
@@ -393,6 +454,9 @@ pub unsafe extern "win64" fn play_sound_w(name: *const u16, _module: usize, flag
             return 0;
         }
     };
+    if flags & SND_ALIAS != 0 && flags & (SND_MEMORY | SND_LOOP | 0x0010_0000) == 0 {
+        return play_alias(&s, flags);
+    }
     if flags & (SND_MEMORY | SND_LOOP) != 0
         || flags
             & !(SND_ASYNC | SND_LOOP | SND_MEMORY | SND_PURGE | SND_NOSTOP | 0x0002 | 0x0002_0000)
@@ -1108,5 +1172,40 @@ mod tests {
         assert_eq!(decoded.samples, [i16::MIN, i16::MAX]);
         w.pop();
         assert!(decode_wave(&w).is_none());
+    }
+
+    #[test]
+    fn sons_systeme_winlux() {
+        assert_eq!(system_sound_for_beep(0x10), "erreur");
+        assert_eq!(system_sound_for_beep(0x30), "avertissement");
+        assert_eq!(system_sound_for_beep(0xFFFF_FFFF), "defaut");
+        assert_eq!(
+            system_sound_for_alias("SystemAsterisk"),
+            Some("information")
+        );
+        assert_eq!(
+            system_sound_for_alias("DeviceConnect"),
+            Some("appareil-branche")
+        );
+        assert_eq!(system_sound_for_alias("inconnu"), None);
+        // Chaque son annoncé existe et se décode.
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../assets/sounds");
+        for alias in [
+            "SystemAsterisk",
+            "SystemExclamation",
+            "SystemHand",
+            "SystemQuestion",
+            "SystemDefault",
+            "SystemNotification",
+            "DeviceConnect",
+            "DeviceDisconnect",
+            "WindowsLogon",
+            "WindowsLogoff",
+        ] {
+            let name = system_sound_for_alias(alias).unwrap();
+            let raw = std::fs::read(dir.join(format!("{name}.wav"))).unwrap();
+            let w = decode_wave(&raw).expect("WAV PCM");
+            assert!(w.samples.len() > 2000, "{name} trop court");
+        }
     }
 }

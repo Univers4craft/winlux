@@ -3,6 +3,7 @@
 mod admin;
 mod archive;
 mod audio;
+mod bootsplash;
 mod boottime;
 mod clipbridge;
 mod clr;
@@ -82,6 +83,10 @@ fn main() {
     if exe == "--boot-time" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(boottime::cli(&rest));
+    }
+    if exe == "--boot-splash" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(bootsplash::cli(&rest));
     }
     if exe == "--gamemode" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
