@@ -87,7 +87,8 @@ impl Module {
         names
     }
     pub fn entry(&self) -> Option<usize> {
-        (self.pe.entry_rva != 0).then(|| self.base + self.pe.entry_rva as usize)
+        (self.pe.entry_rva != 0 && !self.pe.il_only32)
+            .then(|| self.base + self.pe.entry_rva as usize)
     }
     pub fn contains(&self, addr: usize) -> bool {
         addr >= self.base && addr < self.base + self.size
@@ -241,13 +242,16 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
         return Ok(existing);
     }
     let file = std::fs::read(path).map_err(|e| format!("{} : {e}", path.display()))?;
-    let pe = PeImage::parse(&file).map_err(|e| format!("{} : {e}", path.display()))?;
+    let pe = PeImage::parse_il_only(&file).map_err(|e| format!("{} : {e}", path.display()))?;
     let size = round_up(pe.size_of_image as usize, PAGE);
     let relocs_stripped = pe.characteristics & 0x0001 != 0;
     let has_relocs = pe.dir(DIR_BASERELOC).size != 0;
 
     let base = unsafe {
-        let preferred = if force_reloc && has_relocs {
+        let preferred = if pe.il_only32 {
+            // Assembly IL seul : n'importe où, comme le fait Windows 64 bits.
+            Some(map_aligned(size).ok_or("mémoire insuffisante pour l'image")?)
+        } else if force_reloc && has_relocs {
             None
         } else {
             map_at(pe.image_base as usize, size, true)
@@ -312,6 +316,13 @@ pub fn load(path: &Path, force_reloc: bool) -> Result<Module, String> {
         refcount: 1,
     };
 
+    if m.pe.il_only32 {
+        // Ni relocations, ni imports (mscoree), ni point d'entrée : le CLR
+        // lit les métadonnées directement dans l'image projetée.
+        MODULES.lock().unwrap().push(m.clone());
+        protect(&m)?;
+        return Ok(m);
+    }
     let delta = base.wrapping_sub(m.pe.image_base as usize);
     if delta != 0 {
         apply_relocations(&m, delta)?;
@@ -889,6 +900,7 @@ mod tests {
                 stack_commit: 0,
                 dirs,
                 sections: vec![],
+                il_only32: false,
             },
             tls: None,
             initialized: false,
@@ -919,6 +931,7 @@ mod tests {
                 stack_commit: 0,
                 dirs: vec![DataDir::default(); 16],
                 sections: vec![],
+                il_only32: false,
             },
             tls: None,
             initialized: false,
@@ -966,6 +979,7 @@ mod tests {
                 stack_commit: 0,
                 dirs,
                 sections: vec![],
+                il_only32: false,
             },
             tls: None,
             initialized: false,
