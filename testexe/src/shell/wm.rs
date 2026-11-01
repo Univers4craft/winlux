@@ -69,6 +69,8 @@ pub unsafe fn native_init() {
         APP_TASKSCHD
     } else if n == 8 && mode[0] == b'f' as i8 {
         APP_FIREWALL
+    } else if n == 7 && mode[..7] == b"taskmgr".map(|c| c as i8) {
+        APP_TASKMGR
     } else if n == 7 && mode[0] == b'w' as i8 {
         APP_WELCOME
     } else if n == 7 && mode[..7].iter().map(|c| *c as u8).eq(*b"regedit") {
@@ -122,6 +124,7 @@ pub unsafe fn native_launch(app: usize) {
         APP_PROGRAMS => c"programs",
         APP_TASKSCHD => c"taskschd",
         APP_FIREWALL => c"firewall",
+        APP_TASKMGR => c"taskmgr",
         APP_WELCOME => c"welcome",
         APP_EVENTVIEWER => c"eventviewer",
         APP_SYSINFO => c"msinfo32",
