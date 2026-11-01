@@ -1,11 +1,11 @@
 border.width: 1
-padding.width: 10
-padding.height: 9
+padding.width: 12
+padding.height: 10
 window.client.padding.width: 1
 window.client.padding.height: 1
 window.active.client.color: #242a38
 window.inactive.client.color: #202430
-window.active.border.color: #8178b7
+window.active.border.color: #5b5480
 window.inactive.border.color: #343b4b
 window.active.title.bg: flat solid
 window.active.title.bg.color: #242a38
@@ -35,6 +35,14 @@ window.active.handle.bg: flat solid
 window.active.handle.bg.color: #242a38
 window.inactive.handle.bg: flat solid
 window.inactive.handle.bg.color: #202430
+# Poignée basse discrète, comme le bord d'une fenêtre Windows 11 : même teinte
+# que la fenêtre (les coins restaient noirs faute de couleur définie), mais
+# assez haute pour redimensionner par le bas.
+window.handle.width: 4
+window.active.grip.bg: flat solid
+window.active.grip.bg.color: #242a38
+window.inactive.grip.bg: flat solid
+window.inactive.grip.bg.color: #202430
 window.inactive.button.close.hover.bg: flat solid
 window.inactive.button.close.hover.bg.color: #c42b3b
 window.inactive.button.close.hover.image.color: #ffffff

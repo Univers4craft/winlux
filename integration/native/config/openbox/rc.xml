@@ -4,7 +4,7 @@
   <focus><focusNew>yes</focusNew><followMouse>no</followMouse><raiseOnFocus>yes</raiseOnFocus></focus>
   <placement><policy>Smart</policy><center>yes</center><monitor>Mouse</monitor></placement>
   <theme><name>Winlux</name><titleLayout>NLIMC</titleLayout><keepBorder>yes</keepBorder>
-    <font place="ActiveWindow"><name>DejaVu Sans</name><size>10</size><weight>Bold</weight></font>
+    <font place="ActiveWindow"><name>DejaVu Sans</name><size>10</size><weight>Normal</weight></font>
     <font place="InactiveWindow"><name>DejaVu Sans</name><size>10</size></font>
     <font place="MenuItem"><name>DejaVu Sans</name><size>10</size></font>
   </theme>
