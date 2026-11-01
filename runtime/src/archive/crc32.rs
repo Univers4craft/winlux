@@ -42,7 +42,6 @@ impl Crc32 {
     }
 }
 
-#[cfg(test)]
 pub fn crc32(data: &[u8]) -> u32 {
     let mut c = Crc32::new();
     c.update(data);

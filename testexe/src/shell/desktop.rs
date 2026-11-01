@@ -352,7 +352,7 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 37] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 39] = [
             (tr4(&[b"Bienvenue dans Winlux", b"Welcome to Winlux", b"Bienvenido a Winlux", b"Willkommen bei Winlux"]), b"welcome", 9),
             (tr(S_TERMINAL), b"xterm", 1),
             (tr(S_FILE_EXPLORER), b"nemo", 1),
@@ -381,6 +381,7 @@ fn init_apps() {
             (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
             (b"Store", b"store", 9),
             (tr4(&[b"Polices", b"Fonts", b"Fuentes", b"Schriftarten"]), b"fonts", 8),
+            (tr4(&[b"Applications install\xE9es", b"Installed apps", b"Aplicaciones instaladas", b"Installierte Apps"]), b"programs", 8),
             (tr4(&[b"Gestion des disques", b"Disk Management", b"Administraci\xF3n de discos", b"Datentr\xE4gerverwaltung"]), b"diskmgr", 9),
             (
                 crate::admin_ui::t(b"Planificateur de t\xE2ches", b"Task Scheduler"),
@@ -397,6 +398,7 @@ fn init_apps() {
             (tr4(&[b"Nettoyage de disque", b"Disk Cleanup", b"Liberador de espacio en disco", b"Datentr\xE4gerbereinigung"]), b"diskcleaner", 9),
             (tr4(&[b"Observateur d'\xE9v\xE9nements", b"Event Viewer", b"Visor de eventos", b"Ereignisanzeige"]), b"eventviewer", 9),
             (tr4(&[b"Restauration syst\xE8me", b"System Restore", b"Restaurar sistema", b"Systemwiederherstellung"]), b"restore", 9),
+            (tr4(&[b"\xC9diteur du Registre", b"Registry Editor", b"Editor del Registro", b"Registrierungs-Editor"]), b"regedit", 9),
             (tr4(&[b"Historique des fichiers", b"File History", b"Historial de archivos", b"Dateiversionsverlauf"]), b"filehistory", 9),
         ];
         for (name, exec, cat) in apps.iter() {
@@ -1703,9 +1705,11 @@ unsafe fn taskbar(hdc: Handle, b: &mut Brushes, f: &Fonts, l0: &Layout, dy: i32)
             Some(wm::APP_DISKMGR) => Glyph::Drive,
             Some(wm::APP_STORE) => Glyph::Store,
             Some(wm::APP_FONTS) => Glyph::Text,
+            Some(wm::APP_PROGRAMS) => Glyph::Exe,
             Some(wm::APP_TASKSCHD) => Glyph::Clock,
             Some(wm::APP_FIREWALL) => Glyph::Shield,
             Some(wm::APP_EVENTVIEWER) => Glyph::Details,
+            Some(wm::APP_REGEDIT) => Glyph::Tools,
             Some(wm::APP_RESTORE) => Glyph::Refresh,
             Some(wm::APP_FILEHISTORY) => Glyph::Archive,
             Some(wm::APP_WELCOME) => Glyph::Star,
@@ -2119,6 +2123,10 @@ unsafe fn launch(what: Launch) {
                 crate::fonts::open();
                 return;
             }
+            if cmd == b"programs" || cmd == b"appwiz.cpl" {
+                crate::programs::open();
+                return;
+            }
             if cmd == b"taskschd" || cmd == b"taskschd.msc" {
                 wm::open(wm::APP_TASKSCHD);
                 return;
@@ -2133,6 +2141,10 @@ unsafe fn launch(what: Launch) {
             }
             if cmd == b"restore" {
                 wm::open(wm::APP_RESTORE);
+                return;
+            }
+            if cmd == b"regedit" || cmd == b"regedit.exe" || cmd == b"regedt32" {
+                wm::open(wm::APP_REGEDIT);
                 return;
             }
             if cmd == b"filehistory" {
