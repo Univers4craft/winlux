@@ -2766,7 +2766,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod tests {
+mod tests_messages {
     use super::*;
 
     unsafe extern "win64" fn echo_proc(_h: usize, msg: u32, w: usize, l: isize) -> isize {
