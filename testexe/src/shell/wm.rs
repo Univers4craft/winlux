@@ -1764,7 +1764,9 @@ pub unsafe fn draw(g: &mut Gfx) {
                 j += 1;
             }
             buf[j] = 0;
-            text(g.hdc, g.f.body, p.text, cx + 22, cy + 70, &buf);
+            // Seulement le texte saisi : passer les 260 octets dessinait
+            // les zéros comme des cases jusqu'au bord de l'écran.
+            text(g.hdc, g.f.body, p.text, cx + 22, cy + 70, &buf[..j]);
         }
         round_rect(
             g.hdc,
@@ -1864,7 +1866,74 @@ unsafe fn snap_target(x: i32, y: i32) -> Option<Rect> {
 }
 
 /// Bouton gauche enfoncé : renvoie vrai si une fenêtre l'a pris.
+/// Lance la commande de la boîte « Exécuter » et la referme.
+unsafe fn run_submit() {
+    SHOW_RUN = false;
+    if RUN_LEN == 0 {
+        return;
+    }
+    let mut cmd = [0u16; 512];
+    let mut i = 0;
+    while i < RUN_LEN && i < 255 {
+        cmd[i] = RUN_TEXT[i] as u16;
+        i += 1;
+    }
+    cmd[i] = 0;
+    static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    ShellExecuteW(
+        core::ptr::null_mut(),
+        OPEN.as_ptr(),
+        cmd.as_ptr(),
+        core::ptr::null(),
+        core::ptr::null(),
+        1,
+    );
+}
+
+/// Rectangle de la boîte « Exécuter » et de son bouton OK (même géométrie que le dessin).
+fn run_rects() -> (Rect, Rect) {
+    let (sw, sh) = (420, 110);
+    let cx = unsafe { (WORK.left + WORK.right - sw) / 2 };
+    let cy = unsafe { WORK.top + 60 };
+    (
+        rect(cx, cy, cx + sw, cy + sh),
+        rect(cx + sw - 70, cy + 64, cx + sw - 16, cy + 88),
+    )
+}
+
+/// Alt relâché : valide la fenêtre choisie par Alt+Tab. Renvoie vrai si quelque chose a changé.
+pub unsafe fn alt_released() -> bool {
+    if !ALT_TAB {
+        return false;
+    }
+    let mut list = [usize::MAX; APP_COUNT];
+    let mut count = 0;
+    for &a in Z.iter().rev() {
+        if WINS[a].open && !WINS[a].minimized {
+            list[count] = a;
+            count += 1;
+        }
+    }
+    if count > 0 && ALT_TAB_INDEX >= 0 && (ALT_TAB_INDEX as usize) < count {
+        raise(list[ALT_TAB_INDEX as usize]);
+    }
+    ALT_TAB = false;
+    ALT_TAB_INDEX = 0;
+    true
+}
+
 pub unsafe fn on_button_down(x: i32, y: i32, repaint: &mut bool) -> bool {
+    // Boîte « Exécuter » : OK lance, un clic en dehors referme.
+    if SHOW_RUN {
+        let (dialog, ok) = run_rects();
+        if inside(&ok, x, y) {
+            run_submit();
+        } else if !inside(&dialog, x, y) {
+            SHOW_RUN = false;
+        }
+        *repaint = true;
+        return true;
+    }
     // Snap layout click
     if SNAP_LAYOUT_VISIBLE && SNAP_LAYOUT_APP != usize::MAX {
         let overlay = snap_overlay_rect(&WINS[SNAP_LAYOUT_APP].rect);
@@ -2462,27 +2531,13 @@ pub unsafe fn on_key(vk: u32, ch: u16) -> bool {
             return true;
         }
         if ch == 13 || vk == 0x0D {
-            // try to run
-            crate::wm::SHOW_RUN = false;
-            let mut cmd = [0u16; 512];
-            let mut i = 0;
-            while i < crate::wm::RUN_LEN && i < 255 {
-                cmd[i] = crate::wm::RUN_TEXT[i] as u16;
-                i += 1;
-            }
-            cmd[i] = 0;
-            static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-            ShellExecuteW(
-                core::ptr::null_mut(),
-                OPEN.as_ptr(),
-                cmd.as_ptr(),
-                core::ptr::null(),
-                core::ptr::null(),
-                1,
-            );
+            run_submit();
             return true;
         }
-        if ch >= 0x20 && ch < 0x7F && crate::wm::RUN_LEN < 255 {
+        let win_held = ((crate::gfx::key_state(0x5B) as u16) & 0x8000) != 0
+            || ((crate::gfx::key_state(0x5C) as u16) & 0x8000) != 0;
+        if ch >= 0x20 && ch < 0x7F && crate::wm::RUN_LEN < 255 && !win_held {
+            // Le « r » de Win+R n'entre pas dans la boîte.
             crate::wm::RUN_TEXT[crate::wm::RUN_LEN] = ch as u8;
             crate::wm::RUN_LEN += 1;
             crate::wm::RUN_TEXT[crate::wm::RUN_LEN] = 0;

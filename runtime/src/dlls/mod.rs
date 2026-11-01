@@ -25,6 +25,7 @@ pub mod d3d12;
 pub mod d3d9;
 pub mod d3d9_shader;
 pub mod d3d_shader;
+pub mod dataobject;
 pub mod dbghelp;
 pub mod dinput8;
 pub mod dsound;
@@ -57,8 +58,10 @@ pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
 pub mod mmdevapi;
+pub mod monitors;
 pub mod mscoree;
 pub mod msvcrt;
+pub mod nls;
 pub mod notifyicon;
 pub mod ntdll;
 pub mod ole32;
@@ -70,6 +73,7 @@ pub mod quartz;
 pub mod resource;
 pub mod rpcrt4;
 pub mod sechost;
+pub mod security;
 pub mod seh;
 pub mod setupapi;
 pub mod sfnt;
@@ -78,6 +82,7 @@ pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
 pub mod taskschd;
+pub mod threadpool;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
@@ -100,6 +105,7 @@ pub mod winspool;
 pub mod wintrust;
 pub mod ws2_32;
 pub mod xaudio2;
+pub mod xdnd;
 pub mod xinput;
 
 use std::collections::HashMap;
@@ -146,6 +152,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crt_runtime::exports());
             e.extend(crt_ucrt::exports());
             e.extend(cxx_eh::exports());
+            e.extend(crate::intl::api::crt_exports());
             e
         };
         let mut ucrt = crt.clone();
@@ -156,6 +163,7 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(crt_runtime::exports());
         ucrt.extend(crt_ucrt::exports());
         ucrt.extend(cxx_eh::exports());
+        ucrt.extend(crate::intl::api::crt_exports());
         vec![
             Builtin {
                 name: "kernel32",
@@ -178,6 +186,12 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(winlux_gpu::exports());
                     e.extend(seh::kernel32_exports());
                     e.extend(kernel32_ext::kernel32_exports());
+                    // Langue, pages de code et heure : priment sur les anciennes versions.
+                    e.extend(crate::intl::api::kernel32_exports());
+                    // nls couvre les LCTYPE lus par la globalisation NLS de .NET
+                    // (formats monétaires, signe négatif…) : il passe après intl.
+                    e.extend(nls::exports());
+                    e.extend(threadpool::exports());
                     e
                 },
                 handle: fake_module(),
@@ -221,6 +235,7 @@ fn builtins() -> &'static Vec<Builtin> {
                         }
                     }
                     e.extend(clipboard::exports());
+                    e.extend(crate::intl::api::user32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -232,6 +247,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(advapi32_services::exports());
                     e.extend(kernel32_ext::advapi32_exports());
                     e.extend(kernel32_fs::advapi32_exports());
+                    e.extend(security::advapi32_exports());
+                    e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
                     e
                 },
@@ -254,7 +271,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "ole32",
-                exports: ole32::exports(),
+                exports: {
+                    let mut e = ole32::exports();
+                    e.extend(dataobject::ole32_exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -272,6 +293,8 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = shell32::exports();
                     e.extend(knownfolders::shell32_exports());
+                    e.extend(security::shell32_exports());
+                    e.extend(dataobject::shell32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -526,6 +549,11 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-core-com-l1-") {
         return "ole32".into();
     }
+    // Windows Runtime (RoInitialize...) : servi par notre ole32, avant la
+    // règle générale api-ms-win-core-* → kernel32.
+    if base.starts_with("api-ms-win-core-winrt-") {
+        return "ole32".into();
+    }
     if base.starts_with("api-ms-win-core-localregistry-l1-") {
         return "advapi32".into();
     }
@@ -549,9 +577,6 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("api-ms-win-eventing-provider-l1-") {
         return "advapi32".into();
-    }
-    if base.starts_with("api-ms-win-core-winrt-") {
-        return "ole32".into();
     }
     if base.starts_with("api-ms-win-core-path-l1-") {
         return "kernel32".into();
@@ -695,42 +720,19 @@ pub unsafe fn cstr(p: *const u8) -> String {
     decode_ansi(std::slice::from_raw_parts(p, n))
 }
 
-const CP1252: [u16; 32] = [
-    0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039,
-    0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
-    0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
-];
-
-/// Codepage ANSI par défaut de Winlux (Windows-1252), convertie vers UTF-8
-/// pour l'interface Linux. Les API Unicode `W` évitent cette conversion.
+/// Page ANSI de la locale (Windows-1252 en Europe de l'Ouest), convertie
+/// vers UTF-8 pour l'interface Linux. Les API Unicode `W` évitent cette
+/// conversion.
 pub fn decode_ansi(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|&b| {
-            let n = if (0x80..=0x9f).contains(&b) {
-                CP1252[(b - 0x80) as usize] as u32
-            } else {
-                b as u32
-            };
-            char::from_u32(n).unwrap_or('\u{fffd}')
-        })
-        .collect()
+    let cp = crate::intl::codepage::resolve(crate::intl::codepage::CP_ACP);
+    crate::intl::codepage::decode(cp, bytes, false).unwrap_or_default()
 }
 
 pub fn encode_ansi(text: &str) -> Vec<u8> {
-    text.chars()
-        .map(|c| {
-            let n = c as u32;
-            if n <= 0x7f || (0xa0..=0xff).contains(&n) {
-                return n as u8;
-            }
-            CP1252
-                .iter()
-                .position(|&x| x as u32 == n)
-                .map(|i| i as u8 + 0x80)
-                .unwrap_or(b'?')
-        })
-        .collect()
+    let cp = crate::intl::codepage::resolve(crate::intl::codepage::CP_ACP);
+    crate::intl::codepage::encode(cp, text, b'?', true)
+        .map(|e| e.bytes)
+        .unwrap_or_default()
 }
 
 pub unsafe fn wstr(p: *const u16) -> String {
@@ -788,6 +790,7 @@ mod tests {
                 "RegOpenKeyExW",
             ),
             ("api-ms-win-core-com-l1-1-0.dll", "ole32", "CoInitializeEx"),
+            ("api-ms-win-core-winrt-l1-1-0.dll", "ole32", "RoInitialize"),
             (
                 "api-ms-win-core-rtlsupport-l1-1-0.dll",
                 "ntdll",

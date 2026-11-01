@@ -153,6 +153,15 @@ fn find_resource_data(
     Some((data_rva, data_size))
 }
 
+/// Manifeste d'application (RT_MANIFEST, identifiant 1) d'un module chargé.
+pub fn manifest(base: usize) -> Option<String> {
+    let (rva, size) = find_resource_data(base, 24, 1, false, false)?;
+    // SAFETY: find_resource_data a vérifié que la section est dans l'image.
+    let bytes =
+        unsafe { std::slice::from_raw_parts((base + rva as usize) as *const u8, size as usize) };
+    Some(String::from_utf8_lossy(bytes).into_owned())
+}
+
 // ── Fonctions exportées ─────────────────────────────────────────────
 
 fn is_int_resource(p: usize) -> bool {

@@ -183,12 +183,34 @@ if openbox_config.is_file():
             temporary.replace(openbox_config)
     except ET.ParseError:
         print(_t("Configuration Openbox personnalisée illisible : migration des raccourcis ignorée."), file=sys.stderr)
+# « Coller » dans le menu du bureau (clic droit) : ajouté une fois aux menus
+# Openbox déjà copiés, avant « Nouveau », sans toucher au reste.
+openbox_menu = home / ".config/openbox/menu.xml"
+if openbox_menu.is_file():
+    try:
+        menu_text = openbox_menu.read_text(encoding="utf-8")
+        anchor = '  <menu id="new-menu"'
+        if "winlux-desktop-action paste" not in menu_text and anchor in menu_text:
+            item = '  <item label="Coller"><action name="Execute"><command>winlux-desktop-action paste</command></action></item>\n'
+            temporary = openbox_menu.with_suffix(".xml.tmp")
+            temporary.write_text(menu_text.replace(anchor, item + anchor, 1), encoding="utf-8")
+            temporary.replace(openbox_menu)
+    except (OSError, UnicodeDecodeError):
+        pass
 if not (home / ".xscreensaver").exists(): shutil.copyfile(source / "xscreensaver", home / ".xscreensaver")
 user_dirs = home / ".config/user-dirs.dirs"
 if not user_dirs.exists():
     user_dirs.write_text('XDG_DESKTOP_DIR="$HOME/Bureau"\nXDG_DOWNLOAD_DIR="$HOME/Téléchargements"\nXDG_DOCUMENTS_DIR="$HOME/Documents"\nXDG_PICTURES_DIR="$HOME/Images"\nXDG_MUSIC_DIR="$HOME/Musique"\nXDG_VIDEOS_DIR="$HOME/Vidéos"\n')
 desktop = home / "Bureau"
 desktop.mkdir(exist_ok=True)
+# Dossiers connus (C:\Users\<nom>\Downloads…) : ils doivent exister pour
+# les navigateurs et les .exe qui y enregistrent directement.
+for line in user_dirs.read_text(encoding="utf-8").splitlines():
+    key, _, value = line.partition("=")
+    value = value.strip().strip('"')
+    if key.startswith("XDG_") and value.startswith("$HOME/") and len(value) > 6:
+        try: (home / value[6:]).mkdir(parents=True, exist_ok=True)
+        except OSError: pass
 # Le bureau reste vide par défaut. Les icônes (Corbeille, Explorateur,
 # Documents, etc.) sont ajoutées explicitement depuis Paramètres.
 # Defaults for file opening, not a rewrite of the user's selected associations.

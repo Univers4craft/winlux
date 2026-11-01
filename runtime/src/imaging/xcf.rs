@@ -170,7 +170,8 @@ fn read_hierarchy(x: &X, hp: usize, ltype: u32, comp: u8, cmap: &[u8]) -> Option
     let w = be32(d, hp);
     let h = be32(d, hp + 4);
     let bpp = be32(d, hp + 8) as usize;
-    if bpp == 0 || bpp > 4 {
+    // Dimensions de la hiérarchie bornées avant d'allouer le calque.
+    if bpp == 0 || bpp > 4 || super::check_size(w, h).is_err() {
         return None;
     }
     let mut p = hp + 12;

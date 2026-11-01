@@ -193,6 +193,10 @@ _TR = {
     'Appliquer la définition': ('Apply resolution', 'Aplicar resolución', 'Auflösung übernehmen'),
     'Ouvrir les réglages détaillés de cette catégorie :': ('Open the detailed settings for this category:', 'Abrir la configuración detallada de esta categoría:', 'Detaillierte Einstellungen dieser Kategorie öffnen:'),
     'Réglages avancés': ('Advanced settings', 'Configuración avanzada', 'Erweiterte Einstellungen'),
+    'Imprimantes et scanners': ('Printers and scanners', 'Impresoras y escáneres', 'Drucker und Scanner'),
+    'Bureau à distance': ('Remote Desktop', 'Escritorio remoto', 'Remotedesktop'),
+    'Partage et transfert': ('Sharing and transfer', 'Compartir y transferir', 'Freigabe und Übertragung'),
+    'Dossiers partagés sur le réseau et transfert de vos réglages vers un autre PC Winlux :': ('Folders shared on the network and moving your settings to another Winlux PC:', 'Carpetas compartidas en la red y transferencia de sus ajustes a otro PC con Winlux:', 'Im Netzwerk freigegebene Ordner und Übertragung Ihrer Einstellungen auf einen anderen Winlux-PC:'),
     'La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.': ('Preparing updates uses the disk. Keep the VM running during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga la VM encendida durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie die VM während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
     'Redémarrer après installation': ('Restart after installation', 'Reiniciar tras la instalación', 'Nach der Installation neu starten'),
@@ -272,8 +276,13 @@ PAGES = [_t("Système"), _t("Applications"), _t("Réseau"), _t("Son"), _t("Clavi
          _t("Programmes Windows"), _t("Navigateurs"), _t("Accessibilité"), _t("Effets visuels"),
          _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son avancé"), _t("Mises à jour système"),
          _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
-         _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes")]
+         _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes"),
+         _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
+         _t("Partage et transfert")]
 GRAPHICS_PAGE = 24
+# Pages 25 à 28 : leur interface complète est celle des Paramètres du bureau.
+LEGACY_PAGES = (25, 26, 27, 28)
+SHARING_PAGE = 28
 CPU_PAGE = 19
 PRIVACY_PAGE = 18
 LOCK_DELAYS = (0, 60, 180, 300, 600, 900, 1800, 3600)
@@ -484,7 +493,26 @@ def read(name):
     try: return Path(name).read_text(errors="replace")
     except OSError: return ""
 
-class Settings(Gtk.Window):
+
+def _extra_pages():
+    """Pages branchées sur les services (winlux-settings-pages, installé à côté)."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-settings-pages.py"), here.with_name("winlux-settings-pages")):
+        if candidate.is_file():
+            loader = SourceFileLoader("winlux_settings_pages", str(candidate))
+            spec = importlib.util.spec_from_loader("winlux_settings_pages", loader)
+            module = importlib.util.module_from_spec(spec)
+            loader.exec_module(module)
+            return module
+    raise ImportError("winlux-settings-pages introuvable")
+
+
+EXTRA = _extra_pages()
+
+
+class Settings(EXTRA.ExtraPages, Gtk.Window):
     def __init__(self):
         super().__init__(title=_t("Paramètres Winlux"))
         self.set_icon_name("preferences-system")
@@ -492,6 +520,10 @@ class Settings(Gtk.Window):
         self.set_size_request(720, 500)
         self.connect("destroy", Gtk.main_quit)
         self.page = min(len(PAGES) - 1, max(0, int(os.environ.get("WINLUX_SETTINGS_PAGE", "0"))))
+        # Une page sans contenu possible sur cette machine n'apparaît pas.
+        status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+        self.hidden_pages = {page for page in EXTRA.ExtraPages.EXTRA_PAGES if not EXTRA.page_available(page, status)}
+        if self.page in self.hidden_pages: self.page = 0
         self.process = None
         self.active_action = None
         css = Gtk.CssProvider()
@@ -509,6 +541,7 @@ class Settings(Gtk.Window):
           .heading { font-size: 24px; font-weight: bold; }
           .subtitle { color: #adb6c9; }
           .card { background: #242a38; border-radius: 8px; padding: 16px; }
+          .section { font-size: 16px; font-weight: bold; margin-top: 6px; }
         """)
         Gtk.StyleContext.add_provider_for_screen(self.get_screen(), css, 600)
         personal = Path.home() / ".config/gtk-3.0/gtk.css"
@@ -530,7 +563,8 @@ class Settings(Gtk.Window):
         self.nav = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
         nav_scroll.add(self.nav)
         for title in PAGES: self.nav.add(Gtk.Label(label=title, xalign=0))
-        self.nav.set_filter_func(lambda row: search.get_text().casefold() in PAGES[row.get_index()].casefold())
+        self.nav.set_filter_func(lambda row: row.get_index() not in self.hidden_pages
+                                 and search.get_text().casefold() in PAGES[row.get_index()].casefold())
         search.connect("search-changed", lambda *_: self.nav.invalidate_filter())
         self.nav.connect("row-selected", self.select)
         scroll = Gtk.ScrolledWindow()
@@ -554,7 +588,9 @@ class Settings(Gtk.Window):
         for child in self.body.get_children(): child.destroy()
         self.label(PAGES[self.page], "heading")
         self.label(_t("Vos préférences et l’état réel de votre ordinateur."), "subtitle")
-        self.state = self.label(_t("Chargement…"), "card")
+        extra = self.page in EXTRA.ExtraPages.EXTRA_PAGES
+        # Les pages branchées affichent leurs propres réglages : pas de cadre d'état vide.
+        self.state = Gtk.Label() if extra else self.label(_t("Chargement…"), "card")
         actions = list(ACTIONS.get(self.page, []))
         if self.page == 11:
             actions = [(_t(verb).format(name=name), f"browser-{action}-{name}") for name in ("edge", "chrome", "firefox")
@@ -590,8 +626,10 @@ class Settings(Gtk.Window):
             button = Gtk.Button(label=_t("Appliquer la définition"))
             button.connect("clicked", lambda *_: self.execute("display-mode-" + self.modes.get_active_text()) if self.modes.get_active_text() else None)
             self.body.pack_start(button, False, False, 0)
-        if self.page in (1, 10, 12, 13, CPU_PAGE, GRAPHICS_PAGE):
-            self.label(_t("Ouvrir les réglages détaillés de cette catégorie :"))
+        if extra: self.extra_page(self.page)
+        if self.page in (1, CPU_PAGE, GRAPHICS_PAGE) + LEGACY_PAGES:
+            self.label(_t("Dossiers partagés sur le réseau et transfert de vos réglages vers un autre PC Winlux :")
+                       if self.page == SHARING_PAGE else _t("Ouvrir les réglages détaillés de cette catégorie :"))
             button = Gtk.Button(label=_t("Réglages avancés"))
             legacy_page = self.page
             button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
@@ -692,7 +730,7 @@ class Settings(Gtk.Window):
             self.show_error(_t("L’opération a échoué"), str(error))
         if refresh: self.select(self.nav, self.nav.get_selected_row())
 
-    def execute(self, action):
+    def execute(self, action, *extra):
         if self.process is not None or self.busy: return
         if action in ("reboot", "poweroff", "restart-session", "update-rollback"):
             dialog = Gtk.MessageDialog(transient_for=self, modal=True, buttons=Gtk.ButtonsType.OK_CANCEL,
@@ -701,7 +739,7 @@ class Settings(Gtk.Window):
             dialog.destroy()
             if answer != Gtk.ResponseType.OK: return
         try:
-            self.process = subprocess.Popen(["winlux-control", action], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            self.process = subprocess.Popen(["winlux-control", action, *extra], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
         except OSError as error:
             self.show_error(_t("Impossible de lancer l’opération"), str(error))
             return
@@ -722,6 +760,8 @@ class Settings(Gtk.Window):
             elif result:
                 detail = read("/run/winlux/action.log").strip()[-3000:] or _t("Aucun détail n’a été écrit dans le journal.")
                 self.show_error(_t("L’opération a échoué"), _t("Code : {code}\n\n{detail}").format(code=result, detail=detail))
+            # Page branchée : l'état relu après l'action (appareil appairé, mode changé…).
+            GLib.idle_add(self.extra_refresh)
         self.buttons.set_sensitive(self.process is None and not self.busy)
         fields = FIELDS.get(self.page, [])
         text = "\n".join(_t("{label} : {value}").format(label=label, value=status.get(key) or _t("Indisponible")) for label, key in fields)
