@@ -480,6 +480,164 @@ fn font_candidates(spec: &FontSpec) -> Vec<Vec<u8>> {
     unique
 }
 
+/// Ce que l'on sait de la densité de l'écran, du plus au moins fiable.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ScreenDensity {
+    /// `Xft.dpi` choisi par l'utilisateur (Apparence XFCE, xrdb). 96 est la
+    /// valeur par défaut de toutes les sessions : elle n'apprend rien.
+    user_dpi: Option<f32>,
+    /// Densité physique de l'écran principal, d'après sa taille en
+    /// millimètres lue dans l'EDID (RandR).
+    physical_dpi: Option<f32>,
+    /// Hauteur de l'écran principal en pixels.
+    height: u32,
+}
+
+/// Facteur d'échelle automatique, aux paliers de Windows (100 %, 125 %…).
+///
+/// Xorg annonce toujours 96 ppp sur sa fenêtre racine : la taille réelle vient
+/// donc de l'EDID. La cible est d'environ 110 ppp effectifs, ce qui redonne les
+/// réglages par défaut de Windows : 100 % pour un 24 pouces 1080p ou un 27
+/// pouces 1440p, 125 % pour un portable 15,6 pouces 1080p, 150 % pour un 27
+/// pouces 4K ou un 13 pouces 1080p, 250 % pour un portable 15,6 pouces 4K.
+/// Sans aucune information physique (machine virtuelle, EDID absent), seule la
+/// définition compte : 150 % dès 1440 lignes, 200 % en 4K.
+fn automatic_scale(density: ScreenDensity) -> f32 {
+    if let Some(dpi) = density.user_dpi.filter(|dpi| (*dpi - 96.0).abs() > 1.0) {
+        return dpi_scale(dpi, None);
+    }
+    if let Some(dpi) = density.physical_dpi {
+        return dpi_scale(dpi * 96.0 / 110.0, None);
+    }
+    if density.height >= 2000 {
+        2.0
+    } else if density.height >= 1400 {
+        1.5
+    } else {
+        1.0
+    }
+}
+
+/// Lit `Xft.dpi` dans la base de ressources X (propriété RESOURCE_MANAGER).
+fn resource_dpi(resources: &str) -> Option<f32> {
+    resources.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim() == "Xft.dpi")
+            .then(|| value.trim().parse::<f32>().ok())
+            .flatten()
+            .filter(|dpi| dpi.is_finite() && (48.0..=480.0).contains(dpi))
+    })
+}
+
+/// Densité physique d'après la largeur en pixels et en millimètres. Les EDID
+/// fantaisistes (0 mm, ou 16x9 « cm » des projecteurs et de certaines
+/// télévisions) sont écartés.
+fn physical_dpi(width_px: u32, width_mm: u32) -> Option<f32> {
+    if width_mm < 100 || width_px == 0 {
+        return None;
+    }
+    let dpi = width_px as f32 * 25.4 / width_mm as f32;
+    (50.0..=400.0).contains(&dpi).then_some(dpi)
+}
+
+/// Taille annoncée par la fenêtre racine. Xorg la calcule toujours pour 96
+/// ppp, ce qui n'apprend rien ; une autre valeur vient d'une vraie mesure
+/// (DisplaySize, `-dpi`, serveur X sans RandR physique).
+fn root_dpi(width_px: u16, width_mm: u16) -> Option<f32> {
+    physical_dpi(width_px as u32, width_mm as u32).filter(|dpi| (*dpi - 96.0).abs() > 1.5)
+}
+
+/// Interroge le serveur X : `Xft.dpi`, puis la taille physique de l'écran
+/// principal (ou du premier écran branché) par RandR.
+fn screen_density(
+    conn: &RustConnection,
+    screen: &x11rb::protocol::xproto::Screen,
+) -> ScreenDensity {
+    let mut density = screen_density_randr(conn, screen.root, screen.height_in_pixels);
+    if density.physical_dpi.is_none() {
+        density.physical_dpi = root_dpi(screen.width_in_pixels, screen.width_in_millimeters);
+    }
+    density
+}
+
+fn screen_density_randr(conn: &RustConnection, root: u32, root_height: u16) -> ScreenDensity {
+    use x11rb::protocol::randr::{self, ConnectionExt as _};
+    let mut density = ScreenDensity {
+        height: root_height as u32,
+        ..ScreenDensity::default()
+    };
+    if let Some(reply) = conn
+        .get_property(
+            false,
+            root,
+            x11rb::protocol::xproto::AtomEnum::RESOURCE_MANAGER,
+            x11rb::protocol::xproto::AtomEnum::STRING,
+            0,
+            1 << 16,
+        )
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    {
+        density.user_dpi = resource_dpi(&String::from_utf8_lossy(&reply.value));
+    }
+    let randr_ok = conn
+        .randr_query_version(1, 3)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .is_some_and(|v| v.major_version > 1 || v.minor_version >= 3);
+    if !randr_ok {
+        return density;
+    }
+    let Some(resources) = conn
+        .randr_get_screen_resources_current(root)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    else {
+        return density;
+    };
+    let primary = conn
+        .randr_get_output_primary(root)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.output)
+        .filter(|output| *output != 0);
+    let outputs = primary.into_iter().chain(
+        resources
+            .outputs
+            .iter()
+            .copied()
+            .filter(|o| Some(*o) != primary),
+    );
+    for output in outputs {
+        let Some(info) = conn
+            .randr_get_output_info(output, resources.config_timestamp)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            continue;
+        };
+        if info.connection != randr::Connection::CONNECTED || info.crtc == 0 {
+            continue;
+        }
+        let Some(crtc) = conn
+            .randr_get_crtc_info(info.crtc, resources.config_timestamp)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            continue;
+        };
+        // Écran tourné d'un quart de tour : la largeur physique suit la hauteur.
+        let rotated = u16::from(crtc.rotation)
+            & (u16::from(randr::Rotation::ROTATE90) | u16::from(randr::Rotation::ROTATE270))
+            != 0;
+        let width_px = if rotated { crtc.height } else { crtc.width };
+        density.height = if rotated { crtc.width } else { crtc.height } as u32;
+        density.physical_dpi = physical_dpi(width_px as u32, info.mm_width);
+        break;
+    }
+    density
+}
+
 fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
     let automatic = ((dpi.max(1.0) / 96.0) * 4.0).round() / 4.0;
     requested
@@ -536,6 +694,8 @@ pub struct X11Backend {
     overlay: crate::overlay::Overlay,
     /// Taille et couleur du pointeur (réglages d'accessibilité appliqués).
     pointer_style: (u8, u8),
+    /// Glisser-déposer reçu depuis les applis Linux (XDND).
+    xdnd: Option<crate::dlls::xdnd::Xdnd>,
 }
 
 impl X11Backend {
@@ -545,16 +705,16 @@ impl X11Backend {
         let setup = conn.setup();
         let scr = &setup.roots[screen];
         let colormap = scr.default_colormap;
-        let dpi_x = if scr.width_in_millimeters > 0 {
-            scr.width_in_pixels as f32 * 25.4 / scr.width_in_millimeters as f32
-        } else {
-            96.0
-        };
+        // WINLUX_UI_SCALE (Paramètres > Écran, session live) l'emporte ;
+        // « auto » ou rien : densité réelle de l'écran.
         let requested_scale = std::env::var("WINLUX_UI_SCALE")
             .ok()
             .and_then(|value| value.parse::<f32>().ok())
             .filter(|value| value.is_finite() && *value > 0.0);
-        let scale = dpi_scale(dpi_x, requested_scale);
+        let scale = match requested_scale {
+            Some(scale) => dpi_scale(96.0, Some(scale)),
+            None => automatic_scale(screen_density(&conn, scr)),
+        };
         let wm_protocols = conn
             .intern_atom(false, b"WM_PROTOCOLS")
             .ok()?
@@ -567,6 +727,7 @@ impl X11Backend {
             .reply()
             .ok()?
             .atom;
+        let xdnd = crate::dlls::xdnd::Xdnd::new(&conn);
         Some(X11Backend {
             conn,
             screen,
@@ -593,6 +754,7 @@ impl X11Backend {
             x11_cursors: HashMap::new(),
             current_cursor: 0x0001_0001,
             pointer_style: (1, 0),
+            xdnd,
         })
     }
 
@@ -1917,8 +2079,20 @@ impl X11Backend {
                 })
             }
             Event::ConfigureNotify(e) => self.on_configure(e),
+            Event::SelectionNotify(e) => {
+                let root = self.conn.setup().roots[self.screen].root;
+                let scale = self.scale;
+                self.xdnd
+                    .as_mut()?
+                    .selection_notify(&self.conn, &e, scale, root)?
+            }
             Event::ClientMessage(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
+                if let Some(xdnd) = self.xdnd.as_mut() {
+                    if let Some(out) = xdnd.client_message(&self.conn, &e, hwnd) {
+                        return out;
+                    }
+                }
                 let data = e.data.as_data32();
                 if e.type_ == self.wm_protocols && data[0] == self.wm_delete {
                     Some(PendingEvent {
@@ -2564,6 +2738,65 @@ mod tests {
     }
 
     #[test]
+    fn echelle_automatique_suit_la_taille_reelle_de_l_ecran() {
+        let ecran = |pixels: u32, mm: u32, lignes: u32| ScreenDensity {
+            user_dpi: None,
+            physical_dpi: physical_dpi(pixels, mm),
+            height: lignes,
+        };
+        // 24 pouces 1080p (531 mm) et 27 pouces 1440p (597 mm) : 100 %.
+        assert_eq!(automatic_scale(ecran(1920, 531, 1080)), 1.0);
+        assert_eq!(automatic_scale(ecran(2560, 597, 1440)), 1.0);
+        // Portable 15,6 pouces 1080p (344 mm) : 125 %.
+        assert_eq!(automatic_scale(ecran(1920, 344, 1080)), 1.25);
+        // Portable 13,3 pouces 1080p (294 mm) et 27 pouces 4K (597 mm) : 150 %.
+        assert_eq!(automatic_scale(ecran(1920, 294, 1080)), 1.5);
+        assert_eq!(automatic_scale(ecran(3840, 597, 2160)), 1.5);
+        // Portable 15,6 pouces 4K : 250 %.
+        assert_eq!(automatic_scale(ecran(3840, 344, 2160)), 2.5);
+        // Portable 1366x768 (15,6 pouces) : 100 %.
+        assert_eq!(automatic_scale(ecran(1366, 344, 768)), 1.0);
+        // EDID absent ou fantaisiste (projecteur « 16x9 ») : définition seule.
+        assert_eq!(automatic_scale(ecran(3840, 16, 2160)), 2.0);
+        assert_eq!(automatic_scale(ecran(2560, 0, 1440)), 1.5);
+        assert_eq!(automatic_scale(ecran(1920, 0, 1080)), 1.0);
+        // Xft.dpi choisi par l'utilisateur : prioritaire, sauf la valeur 96
+        // posée par défaut par toutes les sessions.
+        let choisi = |dpi: f32| ScreenDensity {
+            user_dpi: Some(dpi),
+            ..ecran(1920, 531, 1080)
+        };
+        assert_eq!(automatic_scale(choisi(144.0)), 1.5);
+        assert_eq!(
+            automatic_scale(ScreenDensity {
+                user_dpi: Some(96.0),
+                ..ecran(3840, 597, 2160)
+            }),
+            1.5
+        );
+    }
+
+    #[test]
+    fn racine_a_96_ppp_n_apprend_rien() {
+        assert_eq!(root_dpi(1920, 508), None); // valeur inventée par Xorg
+        assert_eq!(root_dpi(3840, 0), None);
+        let dpi = root_dpi(3840, 598).unwrap();
+        assert!((dpi - 163.1).abs() < 0.5);
+    }
+
+    #[test]
+    fn xft_dpi_est_lu_dans_les_ressources_x() {
+        assert_eq!(
+            resource_dpi("Xft.antialias:\t1\nXft.dpi:\t144\n"),
+            Some(144.0)
+        );
+        assert_eq!(resource_dpi("Xft.dpi: 120.5"), Some(120.5));
+        assert_eq!(resource_dpi("Xcursor.size: 24\n"), None);
+        assert_eq!(resource_dpi("Xft.dpi: abc\n"), None);
+        assert_eq!(resource_dpi("Xft.dpi: 0\n"), None);
+    }
+
+    #[test]
     fn interpolation_bilineaire_des_bitmaps_est_stable() {
         let pixels = [0x0000_0000, 0x0000_00ff, 0x0000_ff00, 0x00ff_0000];
         assert_eq!(bilinear_colorref(&pixels, 2, 2, 0.0, 0.0), 0x0000_0000);
@@ -2972,6 +3205,9 @@ impl gui::GuiBackend for X11Backend {
             AtomEnum::ATOM,
             &[self.wm_protocols, self.wm_delete],
         );
+        if let Some(xdnd) = self.xdnd.as_ref() {
+            xdnd.set_aware(&self.conn, win);
+        }
         let title_bytes = crate::dlls::encode_ansi(title);
         let _ = self.conn.change_property8(
             x11rb::protocol::xproto::PropMode::REPLACE,
