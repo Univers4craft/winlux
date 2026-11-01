@@ -701,6 +701,21 @@ pub fn module_handle(dll: &str) -> Option<usize> {
     crate::loader::find_module_by_name(dll).map(|m| m.base)
 }
 
+/// Toutes les DLL intégrées et leurs exports, triés : sert à `winlux
+/// --exports` et à l'outil de mesure `scripts/compat-imports.py`.
+pub fn builtin_exports() -> Vec<(&'static str, Vec<&'static str>)> {
+    let mut out: Vec<(&'static str, Vec<&'static str>)> = builtins()
+        .iter()
+        .map(|b| {
+            let mut names: Vec<&'static str> = b.exports.keys().copied().collect();
+            names.sort_unstable();
+            (b.name, names)
+        })
+        .collect();
+    out.sort_unstable_by_key(|(name, _)| *name);
+    out
+}
+
 /// Si `h` est le HMODULE d'une DLL intégrée, renvoie son nom normalisé.
 pub fn builtin_by_handle(h: usize) -> Option<&'static str> {
     builtins().iter().find(|b| b.handle == h).map(|b| b.name)

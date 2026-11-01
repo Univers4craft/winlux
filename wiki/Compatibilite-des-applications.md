@@ -20,6 +20,22 @@ Cette page dit ce que le runtime Winlux sait faire pour un programme Windows, ce
 | Pilotes Windows (`.sys`), antivirus, anti-triche noyau | **Hors périmètre** : il n'y a pas de noyau Windows. |
 | Paquets MSIX / Store Microsoft | **Non pris en charge.** |
 
+## Ce qui reste pour presque tout faire tourner
+
+L'état des lieux mesuré (21 vrais logiciels, 1 834 fonctions et 73 DLL qui manquent, classés par nombre d'applications bloquées) est dans [docs/COMPATIBILITE.md](https://github.com/Univers4craft/winlux/blob/master/docs/COMPATIBILITE.md). En résumé, par ordre d'impact :
+
+1. Les fonctions Win32 de base les plus demandées et les petites DLL absentes (`imm32`, `psapi`, `msimg32`…) : #14, #26.
+2. OpenGL et Vulkan pour les applis : #233.
+3. Le dossier System32 et les redistribuables Visual C++ : #234.
+4. HTTPS et sécurité (Schannel, certificats, WinINet) : #235.
+5. Les shaders Direct3D 10/11/12 : #137.
+6. Les programmes 32 bits : #232.
+7. Chromium, Electron et WebView2 : #236.
+8. WinForms et WPF : #22, #138.
+9. Les anciens DirectX et le MIDI : #237.
+
+Pour mesurer un logiciel précis : `winlux --exports > exports.tsv`, puis `python3 scripts/compat-imports.py exports.tsv DOSSIER_DU_LOGICIEL`.
+
 ## Le chargeur
 
 - Format **PE32+ x86-64** : sections, relocations, imports par nom et par ordinal, imports différés, ressources, manifestes (élévation, DPI).
