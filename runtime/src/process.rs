@@ -264,6 +264,8 @@ fn install_signal_stack() {
             && current.ss_flags & libc::SS_DISABLE == 0
             && current.ss_size != 0
         {
+            // Pile déjà installée (par la bibliothèque standard de Rust sur
+            // ses threads, par exemple) : elle appartient à son auteur.
             return;
         }
         let stack = libc::mmap(
@@ -284,18 +286,33 @@ fn install_signal_stack() {
         };
         if libc::sigaltstack(&ss, std::ptr::null_mut()) != 0 {
             libc::munmap(stack, SIGNAL_STACK_SIZE);
+            return;
         }
+        OWN_SIGNAL_STACK.with(|own| own.set(stack as usize));
     }
 }
 
-/// Retire la pile de signal du thread courant et la libère.
+thread_local! {
+    /// Pile de signal installée par `install_signal_stack` sur ce thread
+    /// (0 si c'est quelqu'un d'autre qui l'a installée). Seule celle-ci est
+    /// libérée à la fin du thread : la bibliothèque standard de Rust libère
+    /// elle-même la sienne, et un second `munmap` de la même plage aurait
+    /// pu retirer une page déjà réutilisée (tas, TEB d'un autre thread).
+    static OWN_SIGNAL_STACK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Retire la pile de signal du thread courant et la libère, seulement si
+/// c'est `install_signal_stack` qui l'a posée.
 fn remove_signal_stack() {
+    let own = OWN_SIGNAL_STACK.with(|own| own.replace(0));
+    if own == 0 {
+        return;
+    }
     unsafe {
         let mut current: libc::stack_t = std::mem::zeroed();
         if libc::sigaltstack(std::ptr::null(), &mut current) != 0
-            || current.ss_flags & libc::SS_DISABLE != 0
             || current.ss_flags & libc::SS_ONSTACK != 0
-            || current.ss_sp.is_null()
+            || current.ss_sp as usize != own
         {
             return;
         }
@@ -305,7 +322,7 @@ fn remove_signal_stack() {
             ss_size: 0,
         };
         if libc::sigaltstack(&off, std::ptr::null_mut()) == 0 {
-            libc::munmap(current.ss_sp, current.ss_size);
+            libc::munmap(own as *mut libc::c_void, SIGNAL_STACK_SIZE);
         }
     }
 }

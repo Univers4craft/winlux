@@ -282,6 +282,11 @@ pub unsafe extern "win64" fn set_threadpool_timer(
     _window_ms: u32,
 ) {
     let Some(t) = timer.as_ref() else { return };
+    // Sous le verrou de la liste, celui de la variable de condition : un
+    // réveil émis pendant que le thread des minuteurs recalcule la prochaine
+    // échéance (sans la voir) serait sinon perdu et le minuteur ne partirait
+    // jamais.
+    let _list = lock(&timers().list);
     {
         let mut d = lock(&t.due);
         *d = if due.is_null() {
