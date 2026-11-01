@@ -26,6 +26,20 @@ affiche `WINLUX_BOOT_PHASES=nom:ms,…`. `winlux --boot-time` donne le rapport
 Paramètres > Processeur l'affiche ; la section est absente tant qu'aucun
 démarrage complet n'a été mesuré.
 
+## Mesure et GRUB
+
+Mesure du 31/10/2026 en VM KVM (i5-1235U, QEMU `-cpu host -smp 4`, BIOS),
+médiane de 3 démarrages jusqu'à `WINLUX_DESKTOP_READY` : 53,0 s avant #155,
+40,3 s après. Après le noyau, les étapes totalisent 9,4 s (session 3,4 s,
+Xorg 1,9 s, vérification système 1,2 s, pilotes 1,1 s).
+
+Le reste était dans GRUB : la recherche de `WINLUX_ROOT` faite dans l'entrée
+« Winlux Desktop » échouait en live et GRUB attendait alors 10 s sur « Press
+any key to continue ». Elle est faite une fois avant le menu, et le menu
+attend 2 s au lieu de 5. Les 14 s de la recherche elle-même viennent du
+lecteur de disquette émulé de la machine QEMU `pc` (i440fx) : en `q35`, comme
+sur un PC réel, elle prend une demi-seconde.
+
 ## Mode jeu
 
 Réglage : Paramètres > Processeur > Mode jeu (`GAME_MODE=auto|off` dans
