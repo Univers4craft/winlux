@@ -1375,7 +1375,9 @@ unsafe extern "win64" fn v_set_output_matrix(
     m: *const f32,
     _set: u32,
 ) -> i32 {
-    if m.is_null() || src_ch == 0 || dst_ch == 0 {
+    // XAUDIO2_MAX_AUDIO_CHANNELS = 64 : au-delà, la matrice lue chez
+    // l'appelant serait démesurée (et `src_ch * dst_ch` déborderait).
+    if m.is_null() || src_ch == 0 || dst_ch == 0 || src_ch > 64 || dst_ch > 64 {
         return E_INVALIDARG;
     }
     let data = std::slice::from_raw_parts(m, (src_ch * dst_ch) as usize).to_vec();

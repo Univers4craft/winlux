@@ -241,6 +241,14 @@ pub fn decode_ifd(t: &Tiff, ifd: &[Entry]) -> Result<Raster, Error> {
     if offs.is_empty() {
         return Err(Error::Corrupt);
     }
+    // Tuile/bande de taille nulle (division par zéro) ou démesurée, profondeur
+    // hors 1..=32 : fichier rejeté avant toute allocation.
+    if tw == 0 || th == 0 || super::check_size(tw, th).is_err() || bps == 0 || bps > 32 {
+        return Err(Error::Corrupt);
+    }
+    if (w as u64 * h as u64).saturating_mul(spp as u64) > 1 << 29 {
+        return Err(Error::TooLarge);
+    }
     if comp == 6 || comp == 7 {
         return decode_jpeg_tiles(t, ifd, &offs, &counts, w, h, tw, th);
     }
@@ -250,6 +258,11 @@ pub fn decode_ifd(t: &Tiff, ifd: &[Entry]) -> Result<Raster, Error> {
     let planes = if planar == 2 { spp } else { 1 };
     let chunk_spp = if planar == 2 { 1 } else { spp };
     let row_bytes = (tw as usize * chunk_spp * bps).div_ceil(8);
+    // Taille d'une tuile décompressée : plafonnée (256 Mio) avant allocation.
+    let need = row_bytes
+        .checked_mul(th as usize)
+        .filter(|&n| n <= 256 << 20)
+        .ok_or(Error::TooLarge)?;
     let palette = find(ifd, 0x140).map(|e| t.vals(e)).unwrap_or_default();
     // tampon de samples normalisés 0..=65535 [plane][y][x*chunk_spp]
     let mut samples = vec![0u16; w as usize * h as usize * spp];
@@ -265,7 +278,6 @@ pub fn decode_ifd(t: &Tiff, ifd: &[Entry]) -> Result<Raster, Error> {
                 let Some(src) = t.d.get(o..(o + c).min(t.d.len())) else {
                     continue;
                 };
-                let need = row_bytes * th as usize;
                 let mut buf = match comp {
                     1 => src.to_vec(),
                     5 => lzw(src, need),

@@ -111,6 +111,17 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
     }
     let hd = hd.ok_or(Error::Corrupt)?;
     super::check_size(hd.w, hd.h)?;
+    // Profondeur autorisée par type de couleur (PNG §11.2.2) : une valeur
+    // hors liste ferait diviser par zéro ou décaler hors de l'octet.
+    let depth_ok = match hd.color {
+        0 => matches!(hd.depth, 1 | 2 | 4 | 8 | 16),
+        3 => matches!(hd.depth, 1 | 2 | 4 | 8),
+        2 | 4 | 6 => matches!(hd.depth, 8 | 16),
+        _ => false,
+    };
+    if !depth_ok || hd.interlace > 1 {
+        return Err(Error::Corrupt);
+    }
     let ctx = Ctx {
         hd: &hd,
         plte,
@@ -139,6 +150,14 @@ pub fn decode(data: &[u8]) -> Result<Image, Error> {
     img.animated = true;
     let mut canvas = Raster::new(hd.w, hd.h);
     for (i, (fw, fh, fx, fy, delay, dispose, blend, fdata)) in frames.into_iter().enumerate() {
+        // Une image doit tenir dans le canevas (fcTL) : sinon on s'arrête
+        // proprement au lieu d'allouer une trame démesurée.
+        if super::check_size(fw, fh).is_err()
+            || fx as u64 + fw as u64 > hd.w as u64
+            || fy as u64 + fh as u64 > hd.h as u64
+        {
+            break;
+        }
         let frame = if i == 0 && default_is_frame {
             main.clone()
         } else {
