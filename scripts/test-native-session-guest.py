@@ -329,6 +329,50 @@ def system_services():
 system_services()
 print("WINLUX_NATIVE_SYSTEM_SERVICES=0", flush=True)
 
+def network():
+    """The VM's DHCP DNS server (not QEMU's usual 10.0.2.3) must resolve names."""
+    deadline = time.monotonic() + 90
+    while True:
+        probe = subprocess.run(["getent", "hosts", "github.com"], capture_output=True, text=True)
+        if probe.returncode == 0: break
+        if time.monotonic() > deadline:
+            for command in (["cat", "/etc/resolv.conf"], ["ls", "-l", "/etc/resolv.conf"], ["ip", "-4", "addr"],
+                            ["ip", "route"], ["nmcli", "device"], ["nmcli", "general"]):
+                print("$", " ".join(command), flush=True)
+                print(subprocess.run(command, capture_output=True, text=True).stdout, flush=True)
+            for name in ("network-manager.log", "network-fallback.log"):
+                path = Path("/run/winlux") / name
+                if path.exists():
+                    print(f"--- {path}", flush=True)
+                    print("\n".join(path.read_text(errors="replace").splitlines()[-40:]), flush=True)
+            raise AssertionError("DNS does not resolve github.com")
+        time.sleep(1)
+    print(probe.stdout.strip(), flush=True)
+
+network()
+print("WINLUX_NATIVE_NETWORK_DNS=0", flush=True)
+
+def installer_shortcut():
+    """The live ISO's « Installer Winlux » shortcut opens the installer window."""
+    before = client_ids()
+    Gio.DesktopAppInfo.new_from_filename("/usr/share/applications/winlux-installer.desktop").launch([], None)
+    deadline = time.monotonic() + 90
+    found = None
+    while found is None and time.monotonic() < deadline:
+        for window in client_ids() - before:
+            klass = subprocess.run(["xprop", "-id", hex(window), "WM_CLASS"], capture_output=True, text=True).stdout
+            if "installer" in klass.lower(): found = window
+        time.sleep(0.5)
+    if found is None:
+        print(subprocess.run(["ps", "-eo", "pid,args"], capture_output=True, text=True).stdout[-3000:], flush=True)
+        raise AssertionError("installer window not mapped from its shortcut")
+    capture("native-installer")
+    run("wmctrl", "-ic", hex(found))
+    subprocess.run(["pkill", "-f", "/usr/bin/winlux-installer"])
+
+installer_shortcut()
+print("WINLUX_NATIVE_INSTALLER_SHORTCUT=0", flush=True)
+
 def fast_user_switch():
     """#119: a second account gets its own real Xorg on its own VT, then logs off."""
     guest = "invite"

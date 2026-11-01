@@ -36,11 +36,12 @@ echo "Native desktop diagnostic ($accel): $work"
 result=0
 timeout -k 5s "${WINLUX_NATIVE_TEST_TIMEOUT:-600}" qemu-system-x86_64 \
     -m "${WINLUX_QEMU_MEMORY:-4096}" -smp 2 -accel "$accel" -cpu max \
-    -display none -monitor none -serial stdio -no-reboot -nic none \
+    -display none -monitor none -serial stdio -no-reboot \
+    -nic user,model=e1000,dns=10.0.2.53 \
     -kernel "$stage/boot/vmlinuz" \
     -append 'root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0 panic=1 loglevel=3 winlux.native-smoke=1' \
     -drive "file=$disk,if=virtio,format=raw" </dev/null > "$log" 2>&1 || result=$?
-for name in native-desktop native-start-menu native-start-all native-start-search native-settings-updates native-vendor-external native-vendor-chatgpt native-vendor-claude native-pipes-1 native-pipes-2; do
+for name in native-desktop native-start-menu native-start-all native-start-search native-settings-updates native-vendor-external native-vendor-chatgpt native-vendor-claude native-pipes-1 native-pipes-2 native-installer; do
     debugfs -R "dump /var/lib/winlux/$name.xwd $work/$name.xwd" "$disk" >/dev/null 2>&1 || true
     if test -s "$work/$name.xwd" && command -v convert >/dev/null 2>&1; then
         convert "$work/$name.xwd" "$work/$name.png"

@@ -5209,6 +5209,14 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
 
 def main():
     if os.geteuid() != 0:
+        # Le raccourci lance l'installateur directement : la session live est
+        # déjà root, une session ordinaire demande le mot de passe ici.
+        pkexec = shutil.which("pkexec")
+        if pkexec and os.environ.get("WINLUX_INSTALLER_ELEVATED") != "1":
+            os.execv(pkexec, [pkexec, "env", "WINLUX_INSTALLER_ELEVATED=1",
+                              "DISPLAY=" + os.environ.get("DISPLAY", ":0"),
+                              "XAUTHORITY=" + os.environ.get("XAUTHORITY", ""),
+                              os.path.abspath(__file__), *sys.argv[1:]])
         print("ERREUR : l'installateur doit être lancé en tant que root (sudo).", file=sys.stderr)
         sys.exit(1)
     signal.signal(signal.SIGINT, signal.SIG_DFL)
