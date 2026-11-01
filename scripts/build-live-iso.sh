@@ -723,7 +723,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     # Bureau à distance : relancé au démarrage s'il était activé.
     DISPLAY=:0 /usr/bin/winlux-remote-config ensure >/dev/null 2>&1 || true
     # Dossiers partagés : serveur relancé s'il y a des partages actifs.
-    /usr/bin/winlux-share ensure >/dev/null 2>&1 || true
+    /usr/bin/winlux-share ensure >/dev/null 2>&1 &
     # Tâches planifiées « à l'ouverture de session ».
     /usr/bin/winlux --tasks fire logon >>/run/winlux/tasks.log 2>&1 &
     (
@@ -852,6 +852,15 @@ chmod 755 "$stage/init"
 if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
     python3 "$root/scripts/stage-apt-root.py" "$stage" "$apt_base" --package "$root/build/winlux-desktop.deb"
 fi
+# Samba et wsdd ne démarrent jamais seuls : winlux-share lance smbd et wsdd
+# uniquement quand l'utilisateur partage un dossier (pas de nmbd ni d'AD DC).
+for unit in smbd nmbd samba samba-ad-dc wsdd; do
+    rm -f "$stage/etc/winlux/services-enabled/$unit.service"
+    if test -e "$stage/usr/lib/systemd/system/$unit.service" || test -e "$stage/lib/systemd/system/$unit.service"; then
+        mkdir -p "$stage/etc/systemd/system"
+        ln -sfn /dev/null "$stage/etc/systemd/system/$unit.service"
+    fi
+done
 
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"
