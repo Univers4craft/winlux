@@ -1,0 +1,5 @@
+Command=/usr/bin/winlux-clock
+UseLabel=0
+Text=
+UpdatePeriod=2000
+Font=DejaVu Sans 10

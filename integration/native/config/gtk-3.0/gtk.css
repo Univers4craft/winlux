@@ -7,4 +7,13 @@
 #whiskermenu-window treeview:selected { background: #594270; }
 #whiskermenu-window button:hover { background: #493459; }
 .xfdesktop-icon-view { text-shadow: none; }
+/* Winlux panel */
+/* Texte de la barre toujours clair sur la barre sombre, même en thème clair
+   ou après winlux-personalize (dont « window box » et « button » peindraient
+   sinon les boutons de la barre). Resynchronisé par winlux-native-config. */
+.xfce4-panel box, .xfce4-panel button { background-color: transparent; }
+.xfce4-panel label, .xfce4-panel button, .xfce4-panel button label { color: #f3f0fa; text-shadow: none; }
+.xfce4-panel button:hover { background-color: #443350; }
+.xfce4-panel button:checked { background-color: #60467b; }
 .xfce4-panel #clock-button label { min-width: 80px; padding: 0 4px; }
+/* End Winlux panel */

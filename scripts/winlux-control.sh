@@ -440,7 +440,7 @@ perform() {
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
             test -f "$root/etc/winlux/live-session" || { echo 'Redemarrage de session reserve a Winlux Live' >&2; return 1; }
-            /usr/bin/winlux-shutdown-screen restart-session >/dev/null 2>&1 || true
+            "${WINLUX_POWER:-/usr/bin/winlux-power}" screen restart-session >/dev/null 2>&1 || true
             printf 'restart-session\n' > "$run/session-action" ;;
         power-profile-performance|power-profile-balanced|power-profile-saver)
             winlux --power profile "${action#power-profile-}" ;;
@@ -456,10 +456,11 @@ perform() {
         poweroff|reboot)
             test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
             if winlux-update --busy 2>/dev/null || winlux-sysupdate --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
-            /usr/bin/winlux-shutdown-screen "$action" >/dev/null 2>&1 || true
-            /usr/bin/winlux-close-session || return
-            sync || return
-            "$action" ;;
+            # Les commandes poweroff/reboot de l'image sont celles de systemd,
+            # qui n'est pas l'init de Winlux : elles échouaient sans rien
+            # éteindre. winlux-power ferme les applications derrière l'écran
+            # « Arrêt en cours » puis signale l'init (USR2 arrêt, TERM redémarrage).
+            "${WINLUX_POWER:-/usr/bin/winlux-power}" now "$action" ;;
         journal-status|journal-list|journal-errors|journal-crashes|journal-clear|journal-rotate)
             winlux-journal "${action#journal-}" "$2" ;;
         journal-export) winlux-journal export "$2" ;;

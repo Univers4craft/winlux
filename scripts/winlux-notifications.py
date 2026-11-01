@@ -18,7 +18,7 @@ XML = '''<node><interface name="org.freedesktop.Notifications">
 <signal name="NotificationClosed"><arg type="u"/><arg type="u"/></signal>
 <signal name="ActionInvoked"><arg type="u"/><arg type="s"/></signal>
 </interface><interface name="org.winlux.Notifications">
-<method name="Clear"/><method name="Activate"><arg type="u" direction="in"/><arg type="s" direction="in"/></method>
+<method name="Clear"/><method name="Dismiss"><arg type="u" direction="in"/></method><method name="Activate"><arg type="u" direction="in"/><arg type="s" direction="in"/></method>
 </interface></node>'''
 
 class Notifications:
@@ -55,6 +55,17 @@ class Notifications:
                 self.toast.destroy()
                 self.toast=None
             self.history = []
+            self.save()
+            invocation.return_value(None)
+        elif method == "Dismiss":
+            # Croix d'une notification dans le panneau : retirée de l'historique.
+            identity = values[0]
+            live = self.live.pop(identity, None)
+            if live:
+                connection.emit_signal(live[0], path, "org.freedesktop.Notifications", "NotificationClosed", GLib.Variant("(uu)", (identity, 2)))
+            if self.toast and getattr(self, "toast_id", None) == identity:
+                self.toast.destroy(); self.toast = None
+            self.history = [item for item in self.history if item["id"] != identity]
             self.save()
             invocation.return_value(None)
         elif method == "Activate":
