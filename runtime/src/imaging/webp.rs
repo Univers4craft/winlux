@@ -462,11 +462,18 @@ fn decode_stream(b: &mut LBits, w: u32, h: u32, top: bool) -> Option<Vec<u32>> {
     let mut xsize = w;
     let mut transforms = Vec::new();
     if top {
+        // Chaque transformation n'apparaît qu'une fois (VP8L §4) : une
+        // seconde transformation d'index rendrait la largeur incohérente.
+        let mut seen = [false; 4];
         while b.get(1) == 1 {
             if transforms.len() >= 4 {
                 return None;
             }
-            match b.get(2) {
+            let kind = b.get(2) as usize;
+            if std::mem::replace(&mut seen[kind & 3], true) {
+                return None;
+            }
+            match kind {
                 0 => {
                     let bits = b.get(3) + 2;
                     let data = decode_stream(b, sub(xsize, bits), sub(h, bits), false)?;
@@ -606,12 +613,15 @@ fn decode_stream(b: &mut LBits, w: u32, h: u32, top: bool) -> Option<Vec<u32>> {
         match t {
             Transform::Index(bits, pal) => {
                 let out_w = w;
+                if cur_w != sub(out_w, *bits) {
+                    return None;
+                }
                 let mut out = vec![0u32; out_w as usize * h as usize];
                 let bpp = 8 >> bits;
                 let mask = (1u32 << bpp) - 1;
                 for y in 0..h as usize {
                     for x in 0..out_w as usize {
-                        let packed = px[y * cur_w as usize + (x >> bits)];
+                        let packed = *px.get(y * cur_w as usize + (x >> bits))?;
                         let idx = if *bits == 0 {
                             (packed >> 8) & 0xFF
                         } else {
