@@ -1296,6 +1296,13 @@ pub unsafe fn open_at(path: &[u8]) {
     if wm::native_explorer(path) {
         return;
     }
+    // Archive ou image disque (double-clic sur le Bureau, « Ouvrir avec ») :
+    // on ouvre son dossier puis on y entre, comme l'Explorateur de Windows.
+    if let Some(dir) = parent(path).filter(|_| storage_file(path)) {
+        open_at(dir);
+        open_storage_item(path, kind_of(last_component(path), false));
+        return;
+    }
     if !wm::is_open(wm::APP_EXPLORER) || NTABS == 0 {
         NTABS = 0;
         CUR = 0;
@@ -1759,6 +1766,32 @@ fn command_rects(g: &Geo) -> [Rect; 11] {
     out
 }
 
+/// Bouton « Extraire tout » de la barre de commandes, comme dans Windows 11
+/// quand on se trouve dans une archive (aligné à droite).
+unsafe fn extract_rect(g: &Geo) -> Option<Rect> {
+    let loc = pane().loc.get();
+    archive_of(loc)?;
+    let w = 30 + text_width(extract_label(), 13);
+    Some(rect(g.command.right - 10 - w, g.command.top + 7, g.command.right - 10, g.command.top + 39))
+}
+
+fn extract_label() -> &'static [u8] {
+    t4([b"Extraire tout", b"Extract all", b"Extraer todo", b"Alle extrahieren"])
+}
+
+/// Archive (la plus extérieure) que traverse `path` : `C:\a\b.zip\c` → `C:\a\b.zip`.
+fn archive_of(path: &[u8]) -> Option<&[u8]> {
+    let mut end = 0;
+    for (i, c) in path.split(|&c| c == b'\\').enumerate() {
+        end += c.len();
+        if i > 0 && kind_of(c, false) == Kind::Archive {
+            return Some(&path[..end]);
+        }
+        end += 1;
+    }
+    None
+}
+
 unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     let p = pal();
     fill(
@@ -1912,10 +1945,21 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     );
     let has_sel = sel_count(pn) > 0 && !pn.loc.is(HOME) && !pn.loc.is(PC);
     let rects = command_rects(geo);
+    let extract = extract_rect(geo);
+    let limit = extract.map_or(geo.command.right - 8, |e| e.left - 8);
+    if let Some(r) = extract {
+        if hovered(&r) {
+            round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.hover);
+        }
+        set_glyph_bg(Some(if hovered(&r) { p.hover } else { p.window }));
+        glyph(g.hdc, g.b, g.f, Glyph::Archive, r.left + 8, r.top + 8, 16);
+        set_glyph_bg(None);
+        text(g.hdc, g.f.caption, p.text, r.left + 30, r.top + 9, extract_label());
+    }
     for (i, (cmd, gl, label, _)) in COMMANDS.iter().enumerate() {
         let label = tr4(label);
         let r = rects[i];
-        if r.right > geo.command.right - 8 {
+        if r.right > limit {
             break;
         }
         let enabled = match cmd {
@@ -5155,6 +5199,16 @@ unsafe fn format_badge(g: &mut Gfx, e: &Entry, x: i32, y: i32, s: i32) {
 
 /// Double-clic sur un fichier : archive → on entre dedans ; image → montage.
 /// Renvoie vrai si l'élément a été pris en charge.
+/// Fichier archive ou image disque existant (pas un dossier du même nom).
+fn storage_file(path: &[u8]) -> bool {
+    if !matches!(kind_of(last_component(path), false), Kind::Archive | Kind::DiskImage) {
+        return false;
+    }
+    let mut buf = [0u16; PATH_LEN + NAME_LEN + 2];
+    let a = unsafe { GetFileAttributesW(wstr(&mut buf, path)) };
+    a != u32::MAX && a & 0x10 == 0
+}
+
 unsafe fn open_storage_item(path: &[u8], kind: Kind) -> bool {
     if !matches!(kind, Kind::Archive | Kind::DiskImage) {
         return false;
@@ -5440,8 +5494,18 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
         FOCUS = Focus::List;
     }
     let rects = command_rects(geo);
+    let extract = extract_rect(geo);
+    if extract.is_some_and(|r| inside(&r, x, y)) {
+        let mut a = [0u8; PATH_LEN + NAME_LEN + 2];
+        if let Some(src) = archive_of(pane().loc.get()) {
+            a[..src.len()].copy_from_slice(src);
+            extract_archive(&a[..src.len()], false, None);
+        }
+        return true;
+    }
+    let limit = extract.map_or(geo.command.right - 8, |e| e.left - 8);
     for (i, r) in rects.iter().enumerate() {
-        if inside(r, x, y) && r.right <= geo.command.right - 8 {
+        if inside(r, x, y) && r.right <= limit {
             run_cmd(COMMANDS[i].0, geo);
             return true;
         }
