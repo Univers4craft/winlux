@@ -397,44 +397,7 @@ pub extern "win64" fn rtl_dll_shutdown_in_progress() -> u8 {
     0
 }
 
-// --- Locales nommées -------------------------------------------------------------
-
-use super::nls::{USER_LCID, USER_LOCALE};
-
-/// Get{User,System,Thread,Process}PreferredUILanguages : une seule langue
-/// d'interface, celle de l'utilisateur, en liste multi-chaîne terminée par
-/// deux zéros. MUI_LANGUAGE_ID (4) la donne en hexadécimal (« 040C »).
-pub unsafe extern "win64" fn get_preferred_ui_languages(
-    flags: u32,
-    count: *mut u32,
-    buf: *mut u16,
-    len: *mut u32,
-) -> i32 {
-    if count.is_null() || len.is_null() {
-        set_last_error(ERROR_INVALID_PARAMETER);
-        return 0;
-    }
-    let item = if flags & 4 != 0 {
-        format!("{USER_LCID:04X}")
-    } else {
-        USER_LOCALE.to_string()
-    };
-    let mut wide: Vec<u16> = item.encode_utf16().collect();
-    wide.extend([0, 0]);
-    *count = 1;
-    if buf.is_null() {
-        *len = wide.len() as u32;
-        return 1;
-    }
-    if (*len as usize) < wide.len() {
-        *len = wide.len() as u32;
-        set_last_error(ERROR_INSUFFICIENT_BUFFER);
-        return 0;
-    }
-    std::ptr::copy_nonoverlapping(wide.as_ptr(), buf, wide.len());
-    *len = wide.len() as u32;
-    1
-}
+// Locales nommées (GetLocaleInfoEx, LocaleNameToLCID…) : voir crate::intl::api.
 
 pub fn kernel32_exports() -> crate::dlls::Exports {
     crate::exports! {
@@ -458,10 +421,6 @@ pub fn kernel32_exports() -> crate::dlls::Exports {
         "IsWow64Process2" => fn is_wow64_process2,
         "SetThreadDescription" => fn set_thread_description,
         "GetTempPath2W" => fn get_temp_path2_w,
-        "GetUserPreferredUILanguages" => fn get_preferred_ui_languages,
-        "GetSystemPreferredUILanguages" => fn get_preferred_ui_languages,
-        "GetThreadPreferredUILanguages" => fn get_preferred_ui_languages,
-        "GetProcessPreferredUILanguages" => fn get_preferred_ui_languages,
     }
 }
 
@@ -581,17 +540,6 @@ mod tests {
                 6
             );
             assert_eq!(String::from_utf16_lossy(&buf[..5]), "en-US");
-            let (mut count, mut len) = (0u32, 0u32);
-            assert_eq!(
-                get_preferred_ui_languages(8, &mut count, std::ptr::null_mut(), &mut len),
-                1
-            );
-            assert_eq!((count, len), (1, 7));
-            assert_eq!(
-                get_preferred_ui_languages(8, &mut count, buf.as_mut_ptr(), &mut len),
-                1
-            );
-            assert_eq!(&buf[5..7], &[0, 0]);
         }
     }
 }

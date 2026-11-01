@@ -786,14 +786,24 @@ unsafe extern "win64" fn sc_resize(
     _fmt: u32,
     _flags: u32,
 ) -> i32 {
+    // 0 = garder la taille courante (comme DXGI) ; au-delà de 16384 la
+    // texture GL ne peut être créée : appel refusé plutôt qu'un tampon invalide.
+    if w > MAX_BACKBUFFER_DIM || h > MAX_BACKBUFFER_DIM {
+        return E_INVALIDARG;
+    }
     let mut guard = (*this).gl_ctx.lock().unwrap_or_else(|e| e.into_inner());
     if let Some(ref mut ctx) = *guard {
+        let w = if w == 0 { ctx.width } else { w };
+        let h = if h == 0 { ctx.height } else { h };
         ctx.resize(w, h);
-        (*this).desc.buffer_desc.width = w;
-        (*this).desc.buffer_desc.height = h;
+        (*this).desc.buffer_desc.width = ctx.width;
+        (*this).desc.buffer_desc.height = ctx.height;
     }
     S_OK
 }
+
+/// Dimension maximale du tampon arrière (limite des textures GL courantes).
+const MAX_BACKBUFFER_DIM: u32 = 16384;
 
 unsafe extern "win64" fn sc_resize_target(_: *mut DxgiSwapChain, _: *const DxgiModeDesc) -> i32 {
     S_OK

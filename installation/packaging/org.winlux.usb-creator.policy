@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE policyconfig PUBLIC "-//freedesktop//DTD PolicyKit Policy Configuration 1.0//EN"
+ "http://www.freedesktop.org/standards/PolicyKit/1/policyconfig.dtd">
+<policyconfig>
+  <vendor>Winlux</vendor>
+  <action id="org.winlux.usb-creator.write">
+    <description>Write the Winlux image to a USB stick</description>
+    <description xml:lang="fr">Écrire l'image de Winlux sur une clé USB</description>
+    <message>Authentication is required to erase the USB stick and write Winlux to it</message>
+    <message xml:lang="fr">Une authentification est nécessaire pour effacer la clé USB et y écrire Winlux</message>
+    <message xml:lang="de">Zum Löschen des USB-Sticks und Schreiben von Winlux ist eine Authentifizierung nötig</message>
+    <message xml:lang="es">Se necesita autenticación para borrar la memoria USB y escribir Winlux</message>
+    <message xml:lang="it">È necessaria l'autenticazione per cancellare la chiavetta USB e scrivervi Winlux</message>
+    <message xml:lang="pt">É necessária autenticação para apagar a pen USB e escrever o Winlux</message>
+    <icon_name>winlux-usb-creator</icon_name>
+    <defaults>
+      <allow_any>auth_admin</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin_keep</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/winlux-usb-creator/winlux-usb-creator</annotate>
+  </action>
+</policyconfig>

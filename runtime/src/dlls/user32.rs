@@ -399,6 +399,12 @@ pub unsafe extern "win64" fn translate_message(msg: *const Msg) -> i32 {
     // effectif (majuscules, ponctuation, accents) ; à défaut on retombe sur la
     // disposition US non modifiée.
     if m.message == gui::WM_KEYDOWN {
+        if let Some(prefix) = gui::take_key_prefix(m.hwnd, m.wparam, m.lparam) {
+            gui::post_to_window(
+                m.hwnd,
+                gui::Msg::new(m.hwnd, gui::WM_CHAR, prefix as usize, m.lparam),
+            );
+        }
         if let Some(ch) = gui::take_key_char(m.hwnd, m.wparam, m.lparam) {
             return gui::post_to_window(
                 m.hwnd,
@@ -415,6 +421,9 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
         return 0;
     }
     let m = &*msg;
+    if super::dataobject::dispatch_private(m.hwnd, m.message, m.wparam) {
+        return 0;
+    }
     let wnd_proc = gui::wnd_proc_of(m.hwnd);
     match wnd_proc {
         Some(wp) => gui::call_wndproc(wp, m.hwnd, m.message, m.wparam, m.lparam),
@@ -2182,18 +2191,6 @@ pub unsafe extern "win64" fn translate_accelerator_w(
     0
 }
 
-pub extern "win64" fn get_keyboard_layout(_thread: u32) -> usize {
-    0x0409_0409 // en-US
-}
-
-pub extern "win64" fn get_keyboard_layout_name_a(_name: *mut u8) -> i32 {
-    0
-}
-
-pub extern "win64" fn get_keyboard_layout_name_w(_name: *mut u16) -> i32 {
-    0
-}
-
 pub extern "win64" fn get_key_name_text_a(_lparam: i32, _buf: *mut u8, _max: i32) -> i32 {
     0
 }
@@ -2599,9 +2596,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GetKeyboardState"=>fn get_keyboard_state,
         "MapVirtualKeyA"=>fn map_virtual_key_a, "MapVirtualKeyW"=>fn map_virtual_key_w,
         "MapVirtualKeyExA"=>fn map_virtual_key_ex_a, "MapVirtualKeyExW"=>fn map_virtual_key_ex_w,
-        "GetKeyboardLayout"=>fn get_keyboard_layout,
-        "GetKeyboardLayoutNameA"=>fn get_keyboard_layout_name_a,
-        "GetKeyboardLayoutNameW"=>fn get_keyboard_layout_name_w,
         "GetKeyNameTextA"=>fn get_key_name_text_a, "GetKeyNameTextW"=>fn get_key_name_text_w,
         "VkKeyScanA"=>fn vk_key_scan_a, "VkKeyScanW"=>fn vk_key_scan_w,
         "ToUnicode"=>fn to_unicode, "ToUnicodeEx"=>fn to_unicode_ex,

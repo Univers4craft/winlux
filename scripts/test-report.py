@@ -13,6 +13,7 @@ os.environ["WINLUX_REPORT_DEFAULTS"] = str(tmp / "defaults.conf")
 os.environ["WINLUX_JOURNAL_DIR"] = str(tmp / "journal")
 os.environ["WINLUX_RUN_DIR"] = str(tmp / "run")
 os.environ["XDG_STATE_HOME"] = str(tmp / "state")
+os.environ["WINLUX_PSTORE"] = str(tmp / "pstore")
 (tmp / "journal").mkdir()
 (tmp / "run").mkdir()
 r = runpy.run_path(str(Path(__file__).with_name("winlux-report.py")), run_name="report_test")
@@ -108,6 +109,39 @@ except SystemExit:
 assert r["mark_offered"](crash) and not r["mark_offered"](crash)
 (tmp / "journal" / "crash.log").write_text(LOG)
 assert r["last_crash"]()["exe"] == "Jeu.exe" and r["last_crash"](300) is None
+# Diagnostic : chronologie du programme, vérifications, arrêt du système.
+lines = ["2026-10-31T10:00:00.000Z [info] Jeu.exe[43] session: démarrage de /home/alice/Jeux/Jeu.exe",
+         "2026-10-31T10:00:05.000Z [warn] Jeu.exe[43] d3d12: kernel32!GetDpiForWindow non implémentée",
+         "2026-10-31T10:00:06.000Z [warn] Jeu.exe[43] d3d12: kernel32!GetDpiForWindow non implémentée",
+         "2026-10-31T10:00:06.000Z [warn] Autre.exe[44] gdi32: rien à voir",
+         "2026-10-31T10:00:07 [warn] d3d9: ancien format sans origine"]
+start = r["utc_seconds"]("2026-10-31T10:00:00")
+assert start == 1793440800, start
+jeu = dict(missing, ts=str(start + 125))
+assert [e[2] for e in r["program_events"](jeu, lines)] == ["session", "d3d12", "d3d12"]
+sys_events = [(start + 120, "oom", "Out of memory: Killed process 43 (Jeu.exe)")]
+st = r["steps"](jeu, lines, sys_events, "fr")
+texts = [t for _, t in st]
+assert texts[0] == "Lancement de Jeu.exe" and "GetDpiForWindow" in texts[1], texts
+assert any(t.startswith("Système : Out of memory") for t in texts), texts
+assert "… et 1 autres messages semblables." in texts and texts[-1] == "Le programme a fonctionné 2 min 05 s avant de s'arrêter.", texts
+assert r["steps"](None, lines, [], "fr") == []
+ck = r["checks"](jeu, lines, sys_events, "llvmpipe (LLVM 17)", "en")
+joined = " ".join(t for _, t in ck)
+assert "ran out of memory" in joined and "(Jeu.exe)" in joined and "GetDpiForWindow" in joined, joined
+assert r["human_size"](28.4 * 1024 ** 3, "fr") == "28,4 Go" and r["human_size"](2 * 1024 ** 3, "en") == "2 GB"
+pstore = tmp / "pstore"
+assert r["previous_boot_problem"]() is None or r["run"](["journalctl", "-b", "-1", "-q", "-n", "1"])
+pstore.mkdir()
+(pstore / "dmesg-ramoops-0").write_text("<0>[ 12.3] BUG: kernel NULL pointer dereference\n<0>[ 12.4] Kernel panic - not syncing\n")
+problem = r["previous_boot_problem"]()
+assert problem and problem["reason"] == "panic" and len(problem["lines"]) == 2, problem
+assert r["mark_system_offered"](problem) and not r["mark_system_offered"](problem)
+system = r["Report"](None, system=problem, language="fr")
+assert system.kind() == "system" and system.title().startswith("[Arrêt du système] BUG: kernel NULL"), system.title()
+assert "runtime" in system.labels() and "plantage" in system.labels()
+body = system.body("", redacted=True)
+assert "Kernel panic" in body and "La session précédente s'est arrêtée brutalement" in body, body
 # Relais : seuls des rapports winlux-report passent, sans mention ni étiquette inconnue.
 relay = runpy.run_path(str(Path(__file__).parent.parent / "integration/report-relay/winlux-report-relay.py"),
                        run_name="relay_test")

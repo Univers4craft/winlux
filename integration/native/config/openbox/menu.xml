@@ -5,6 +5,7 @@
   <item label="Fichiers et périphériques"><action name="Execute"><command>winlux-system-tools files</command></action></item>
   <item label="Ouvrir le terminal"><action name="Execute"><command>winlux-terminal</command></action></item>
   <separator/>
+  <item label="Coller"><action name="Execute"><command>winlux-desktop-action paste</command></action></item>
   <menu id="new-menu" label="Nouveau">
    <item label="Dossier"><action name="Execute"><command>winlux-desktop-action folder</command></action></item>
    <item label="Document texte"><action name="Execute"><command>winlux-desktop-action text</command></action></item>

@@ -134,13 +134,21 @@ impl Assembly {
 
         let mut cursor = streams_offset + 4;
         for _ in 0..num_streams {
+            if cursor + 8 > data.len() {
+                return Err(err("en-tête de flux tronqué"));
+            }
             let off = rd32(&data, cursor) as usize;
             let size = rd32(&data, cursor + 4) as usize;
             let name_start = cursor + 8;
-            let name_end =
-                data[name_start..].iter().position(|&b| b == 0).unwrap_or(0) + name_start;
+            let name_bytes = data.get(name_start..).unwrap_or(&[]);
+            let name_end = name_bytes.iter().position(|&b| b == 0).unwrap_or(0) + name_start;
             let name = std::str::from_utf8(&data[name_start..name_end]).unwrap_or("");
+            // Un flux doit être contenu dans le fichier : offset et taille
+            // sont vérifiés ici pour que les tas se lisent sans débordement.
             let abs_off = meta_off + off;
+            if abs_off > data.len() || size > data.len() - abs_off {
+                return Err(err("flux de métadonnées hors fichier"));
+            }
             match name {
                 "#Strings" => {
                     strings_offset = abs_off;
@@ -403,7 +411,12 @@ impl Assembly {
         if start >= self.strings_offset + self.strings_size {
             return "";
         }
-        let bytes = &self.data[start..self.strings_offset + self.strings_size];
+        let Some(bytes) = self
+            .data
+            .get(start..self.strings_offset + self.strings_size)
+        else {
+            return "";
+        };
         let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
         std::str::from_utf8(&bytes[..end]).unwrap_or("")
     }
@@ -413,7 +426,7 @@ impl Assembly {
         if start >= self.us_offset + self.us_size {
             return String::new();
         }
-        let (blob_len, hdr) = decode_blob_length(&self.data[start..]);
+        let (blob_len, hdr) = decode_blob_length(self.data.get(start..).unwrap_or(&[]));
         if blob_len == 0 {
             return String::new();
         }
@@ -437,7 +450,7 @@ impl Assembly {
         if start >= self.blob_offset + self.blob_size {
             return &[];
         }
-        let (len, hdr) = decode_blob_length(&self.data[start..]);
+        let (len, hdr) = decode_blob_length(self.data.get(start..).unwrap_or(&[]));
         let data_start = start + hdr;
         self.data.get(data_start..data_start + len).unwrap_or(&[])
     }
@@ -718,7 +731,7 @@ impl Assembly {
 
     pub fn rva_data_from(&self, rva: u32) -> &[u8] {
         match self.rva_to_offset(rva) {
-            Some(off) => &self.data[off..],
+            Some(off) => self.data.get(off..).unwrap_or(&[]),
             None => &[],
         }
     }
@@ -780,8 +793,9 @@ impl Assembly {
 
 fn rva_to_offset(sections: &[SectionInfo], rva: u32) -> Option<usize> {
     for s in sections {
-        if rva >= s.rva && rva < s.rva + s.vsize {
-            return Some((s.raw_ptr + (rva - s.rva)) as usize);
+        // Calcul en 64 bits : `rva + vsize` d'une section corrompue déborde.
+        if rva >= s.rva && (rva as u64) < s.rva as u64 + s.vsize as u64 {
+            return Some((s.raw_ptr as u64 + (rva - s.rva) as u64) as usize);
         }
     }
     None
@@ -854,7 +868,12 @@ fn parse_method_body(data: &[u8]) -> Option<MethodBody> {
                 if kind & 0x01 != 0 {
                     if is_fat {
                         let sect_size = (rd32(data, sect_off) >> 8) as usize;
-                        let count = (sect_size - 4) / 24;
+                        if sect_size < 4 {
+                            break;
+                        }
+                        // Clauses bornées par la section ET par le corps.
+                        let count = ((sect_size - 4) / 24)
+                            .min(data.len().saturating_sub(sect_off + 4) / 24);
                         for i in 0..count {
                             let base = sect_off + 4 + i * 24;
                             exception_clauses.push(ExceptionClause {
@@ -869,7 +888,11 @@ fn parse_method_body(data: &[u8]) -> Option<MethodBody> {
                         sect_off += sect_size;
                     } else {
                         let sect_size = *data.get(sect_off + 1)? as usize;
-                        let count = (sect_size - 4) / 12;
+                        if sect_size < 4 {
+                            break;
+                        }
+                        let count = ((sect_size - 4) / 12)
+                            .min(data.len().saturating_sub(sect_off + 4) / 12);
                         for i in 0..count {
                             let base = sect_off + 4 + i * 12;
                             exception_clauses.push(ExceptionClause {
@@ -945,7 +968,26 @@ pub enum ElementType {
     Sentinel,
 }
 
+/// Profondeur maximale d'imbrication d'une signature de type (`T[][]...`,
+/// `List<List<...>>`) : au-delà, le blob est tenu pour corrompu.
+const MAX_TYPE_DEPTH: u32 = 64;
+
+/// Nombre d'éléments annoncé par un blob, borné par les octets restants
+/// (chaque élément occupe au moins un octet).
+fn bounded_count(count: u32, blob: &[u8], off: usize) -> usize {
+    (count as usize).min(blob.len().saturating_sub(off))
+}
+
 pub fn decode_type(blob: &[u8], off: &mut usize) -> ElementType {
+    decode_type_depth(blob, off, 0)
+}
+
+fn decode_type_depth(blob: &[u8], off: &mut usize, depth: u32) -> ElementType {
+    if depth > MAX_TYPE_DEPTH {
+        *off = blob.len();
+        return ElementType::Object;
+    }
+    let decode_type = |blob: &[u8], off: &mut usize| decode_type_depth(blob, off, depth + 1);
     let tag = blob.get(*off).copied().unwrap_or(0);
     *off += 1;
     match tag {
@@ -989,8 +1031,8 @@ pub fn decode_type(blob: &[u8], off: &mut usize) -> ElementType {
         }
         0x15 => {
             let inner = decode_type(blob, off);
-            let count = decode_compressed_u32(blob, off);
-            let mut args = Vec::with_capacity(count as usize);
+            let count = bounded_count(decode_compressed_u32(blob, off), blob, *off);
+            let mut args = Vec::with_capacity(count);
             for _ in 0..count {
                 args.push(decode_type(blob, off));
             }
@@ -1036,9 +1078,9 @@ pub fn decode_method_sig(blob: &[u8]) -> MethodSig {
     } else {
         0
     };
-    let param_count = decode_compressed_u32(blob, &mut off);
+    let param_count = bounded_count(decode_compressed_u32(blob, &mut off), blob, off);
     let ret_type = decode_type(blob, &mut off);
-    let mut param_types = Vec::with_capacity(param_count as usize);
+    let mut param_types = Vec::with_capacity(param_count);
     for _ in 0..param_count {
         param_types.push(decode_type(blob, &mut off));
     }
@@ -1060,8 +1102,8 @@ pub fn decode_locals_sig(blob: &[u8]) -> Vec<ElementType> {
     if tag != 0x07 {
         return Vec::new();
     }
-    let count = decode_compressed_u32(blob, &mut off);
-    let mut types = Vec::with_capacity(count as usize);
+    let count = bounded_count(decode_compressed_u32(blob, &mut off), blob, off);
+    let mut types = Vec::with_capacity(count);
     for _ in 0..count {
         types.push(decode_type(blob, &mut off));
     }

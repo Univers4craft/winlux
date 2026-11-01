@@ -126,8 +126,13 @@ impl<'a> Data<'a> {
                 let mut len = [0u8; 4];
                 r.read_exact(&mut len)?;
                 let size = u32::from_le_bytes(len) as usize & 0x7FFF_FFFF;
-                let mut out = vec![0u8; size];
-                r.read_exact(&mut out)?;
+                // La taille vient du flux : on lit au plus `size` octets sans
+                // allouer d'avance (un fichier ne peut dépasser le flux).
+                let mut out = Vec::with_capacity(size.min(16 << 20));
+                r.by_ref().take(size as u64).read_to_end(&mut out)?;
+                if out.len() != size {
+                    return Err(bad("fichier tronqué"));
+                }
                 *pos += 4 + size as u64;
                 Ok(out)
             }
@@ -1255,6 +1260,11 @@ fn load(data: &[u8]) -> Result<(Script, Data<'_>, usize), String> {
     }
     let header_len = le_u32(data, fh + 20).ok_or("en-tête tronqué")? as usize;
     let total = le_u32(data, fh + 24).ok_or("en-tête tronqué")? as usize;
+    // L'en-tête (pages, sections, entrées, chaînes) fait quelques centaines
+    // de Kio au plus : une valeur démesurée est un fichier corrompu.
+    if header_len == 0 || header_len > 64 << 20 {
+        return Err("en-tête NSIS invraisemblable".into());
+    }
     let start = fh + 28;
     let end = (fh + total).min(data.len());
     let body = data.get(start..end).ok_or("installateur tronqué")?;
