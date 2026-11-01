@@ -44,14 +44,19 @@ wait_bus_name() {
     cat "$service_log" >&2
     return 1
 }
+# polkitd et udisksd démarrent en même temps ; on attend ensuite les deux.
+polkit_pid=
+udisks_pid=
 if test -x /usr/lib/polkit-1/polkitd; then
     /usr/lib/polkit-1/polkitd >/run/winlux/polkit.log 2>&1 &
-    wait_bus_name system org.freedesktop.PolicyKit1 "$!" /run/winlux/polkit.log
+    polkit_pid=$!
 fi
 if test -x /usr/libexec/udisks2/udisksd; then
     /usr/libexec/udisks2/udisksd --no-debug >/run/winlux/udisks.log 2>&1 &
-    wait_bus_name system org.freedesktop.UDisks2 "$!" /run/winlux/udisks.log
+    udisks_pid=$!
 fi
+if test -n "$polkit_pid"; then wait_bus_name system org.freedesktop.PolicyKit1 "$polkit_pid" /run/winlux/polkit.log; fi
+if test -n "$udisks_pid"; then wait_bus_name system org.freedesktop.UDisks2 "$udisks_pid" /run/winlux/udisks.log; fi
 if test -x /usr/sbin/NetworkManager; then
     mkdir -p /etc/netplan /etc/NetworkManager/system-connections
     if test -x /usr/sbin/wpa_supplicant; then
@@ -107,6 +112,18 @@ if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
     /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
 fi
 /usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
+# Fond d'écran fixé avant la barre des tâches : le bureau arrive avec lui.
+# Xfconf activates its own session-bus service. Set wallpaper per real output.
+# Default: the Winlux identity wallpaper, else the build's wallpaper.bmp.
+default_wallpaper=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
+test -f "$default_wallpaper" || default_wallpaper=/usr/share/winlux/wallpaper.bmp
+for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
+    property="/backdrop/screen0/monitor$output/workspace0/last-image"
+    if ! /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1; then
+        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s "$default_wallpaper"
+        /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5
+    fi
+done
 # Presse-papiers commun : copier dans un .exe, coller dans une appli Linux, et inversement.
 if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux/clipboard-bridge.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
@@ -115,6 +132,9 @@ if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlu
 if test -x /usr/bin/winlux-share; then /usr/bin/winlux-share ensure >/dev/null 2>&1 & fi
 /usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
+# Réglages restaurés sans le rapport d'état complet de winlux-control
+# (l'init le rafraîchit toutes les 3 s) : 18 s de gagnées en VM émulée.
+export WINLUX_CONTROL_NO_STATUS=1
 case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
 # Restore the user's input choice on each session, without resetting defaults.
 speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
@@ -125,9 +145,15 @@ case "$speed" in
 esac
 # Profil processeur et courbe de ventilateurs choisis dans les Parametres.
 if test -s /etc/winlux/cpu.conf; then /usr/bin/winlux-control cpu-restore || true; fi
-for query in /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders /usr/bin/gdk-pixbuf-query-loaders; do
-    if test -x "$query"; then "$query" --update-cache; break; fi
-done
+unset WINLUX_CONTROL_NO_STATUS
+# Cache des chargeurs d'images : régénéré seulement s'il manque ou si un
+# chargeur a été installé depuis (paquet APT), pas à chaque démarrage.
+pixbuf_dir=/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0
+if ! test -s "$pixbuf_dir/loaders.cache" || test -n "$(find "$pixbuf_dir/loaders" -newer "$pixbuf_dir/loaders.cache" -print 2>/dev/null | head -n 1)"; then
+    for query in /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders /usr/bin/gdk-pixbuf-query-loaders; do
+        if test -x "$query"; then "$query" --update-cache; break; fi
+    done
+fi
 # Shared MIME and desktop caches are generated when building the image,
 # rather than scanning the full database on every cold boot.
 /usr/bin/winlux-applications refresh
@@ -153,17 +179,6 @@ fi
 if test ! -f "$HOME/.config/winlux/welcome-complete" && test "${WINLUX_NO_WELCOME:-0}" != 1 && ! grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     /usr/bin/winlux-welcome >/run/winlux/welcome.log 2>&1 &
 fi
-# Xfconf activates its own session-bus service. Set wallpaper per real output.
-# Default: the Winlux identity wallpaper, else the build's wallpaper.bmp.
-default_wallpaper=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
-test -f "$default_wallpaper" || default_wallpaper=/usr/share/winlux/wallpaper.bmp
-for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
-    property="/backdrop/screen0/monitor$output/workspace0/last-image"
-    if ! /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1; then
-        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s "$default_wallpaper"
-        /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5
-    fi
-done
 gpu_count=$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)
 if test "$gpu_count" -gt 0; then
     /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &

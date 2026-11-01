@@ -4829,14 +4829,17 @@ class InstallerApp(Gtk.Application):
     chainloader /EFI/Microsoft/Boot/bootmgfw.efi
 }}
 """
+        # Menu court (#188) : 2 s, 5 s quand Windows est proposé à côté.
+        menu_timeout = 5 if windows_entry else 2
         grub_cfg = f"""set default=0
-set timeout=8
+set timeout={menu_timeout}
+set timeout_style=menu
 serial --unit=0 --speed=115200
 terminal_input console serial
 terminal_output console serial
 menuentry "Winlux Desktop" {{
     search --no-floppy --fs-uuid {search_uuid} --set=root
-    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 winlux.interactive=1{extra}
+    linux /boot/vmlinuz root={root_arg} rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1{extra}
     {initrd}
 }}
 {windows_entry}menuentry "Winlux diagnostic" --hotkey=d {{

@@ -19,8 +19,20 @@ load_module() {
     modprobe "$1" 2>/dev/null && log "Module chargé : $1" || true
 }
 
-# PCI et USB (nécessaires pour énumérer le matériel)
-for m in pci_hotplug shpchp pciehp; do load_module "$m"; done
+# Pilotes du matériel réellement présent : l'init a déjà lancé udev
+# (trigger + settle), qui charge chaque pilote d'après le modalias du
+# périphérique. Ce passage rattrape seulement ce qu'udev aurait manqué, en un
+# seul appel à modprobe. Auparavant, une soixantaine de pilotes (Wi-Fi,
+# Ethernet, son, stockage…) étaient chargés à l'aveugle, puis udev rejouait
+# tous les événements avec jusqu'à 10 s d'attente : c'était l'étape la plus
+# longue du démarrage.
+coldplug_modules() {
+    find /sys/devices -name modalias -type f 2>/dev/null | xargs cat 2>/dev/null | sort -u >/run/winlux/hw/modaliases || true
+    if test -s /run/winlux/hw/modaliases; then
+        xargs modprobe -a -b -q </run/winlux/hw/modaliases 2>/dev/null || true
+    fi
+    log "Pilotes du matériel présent chargés ($(wc -l </run/winlux/hw/modaliases 2>/dev/null || echo 0) modalias)"
+}
 
 # --- Énumération PCI ---
 enumerate_pci() {
@@ -462,12 +474,22 @@ detect_wifi() {
         log "Interface Wi-Fi détectée : $iface"
     done
 
-    # Charger les pilotes Wi-Fi courants
-    for m in iwlwifi iwlmvm ath9k ath10k_pci ath11k_pci rtw88_pci rtw89_pci \
-             brcmfmac mt7921e rtl8xxxu rtl8192ce rtl8188ee; do
-        load_module "$m"
-    done
-
+    # Une carte Wi-Fi PCI (classe 0x0280) dont l'interface n'est pas encore
+    # créée (firmware en cours de chargement) : la laisser apparaître, 3 s au plus.
+    wifi_pci=0
+    if test "$wifi_found" = 0; then
+        for dev in /sys/bus/pci/devices/*; do
+            case "$(cat "$dev/class" 2>/dev/null)" in 0x0280*) wifi_pci=1; break ;; esac
+        done
+    fi
+    if test "$wifi_pci" = 1; then
+        for attempt in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15; do
+            for dev in /sys/class/net/*; do
+                if test -d "$dev/wireless" || test -d "$dev/phy80211"; then break 2; fi
+            done
+            sleep 0.2
+        done
+    fi
     # Re-scanner après chargement des modules
     if test "$wifi_found" = 0; then
         for dev in /sys/class/net/*; do
@@ -490,19 +512,11 @@ detect_wifi() {
 
 # --- Réseau : Ethernet ---
 detect_ethernet() {
-    for m in e1000e igb igc ixgbe i40e r8169 r8125 tg3 bnxt_en mlx5_core \
-             atlantic virtio_net; do
-        load_module "$m"
-    done
-    log "Pilotes Ethernet chargés"
+    log "Pilotes Ethernet : chargés par udev selon le matériel présent"
 }
 
 # --- Bluetooth ---
 detect_bluetooth() {
-    for m in bluetooth btusb btintel btrtl btbcm bnep rfcomm; do
-        load_module "$m"
-    done
-
     bt_found=0
     if test -d /sys/class/bluetooth && test -n "$(ls -A /sys/class/bluetooth/ 2>/dev/null)"; then
         bt_found=1
@@ -510,17 +524,15 @@ detect_bluetooth() {
             log "Adaptateur Bluetooth détecté : $(basename "$adapter")"
         done
     fi
+    if test "$bt_found" = 1; then
+        # Protocoles réseau et série Bluetooth, utiles seulement avec un adaptateur.
+        for m in bnep rfcomm; do load_module "$m"; done
+    fi
     printf '%s\n' "$bt_found" >/run/winlux/hw/has-bluetooth
 }
 
 # --- Audio ---
 detect_audio() {
-    for m in snd_hda_intel snd_hda_codec_realtek snd_hda_codec_hdmi \
-             snd_usb_audio snd_intel8x0 snd_sof_pci_intel_tgl \
-             snd_sof_pci_intel_cnl snd_sof_pci_intel_icl; do
-        load_module "$m"
-    done
-
     audio_found=0
     if test -d /proc/asound && test -n "$(ls /proc/asound/card* 2>/dev/null)"; then
         audio_found=1
@@ -547,11 +559,7 @@ detect_audio() {
 
 # --- Périphériques d'entrée ---
 detect_input() {
-    # Touchpad
-    for m in i2c_hid_acpi i2c_hid hid_multitouch; do
-        load_module "$m"
-    done
-
+    # Touchpad (i2c_hid_acpi, hid_multitouch : chargés d'après le modalias)
     touchpad_found=0
     for dev in /sys/class/input/event*; do
         test -d "$dev/device" || continue
@@ -582,7 +590,6 @@ detect_input() {
 
 # --- Webcam ---
 detect_webcam() {
-    load_module uvcvideo
     webcam_found=0
     for dev in /sys/class/video4linux/video*; do
         test -d "$dev" || continue
@@ -627,11 +634,6 @@ detect_power() {
     done
     printf '%s\n' "$battery_found" >/run/winlux/hw/has-battery
 
-    # Charger les modules ACPI pour la gestion de l'alimentation
-    for m in ac battery button thermal fan processor; do
-        load_module "$m"
-    done
-
     # Gestion thermique
     if test -d /sys/class/thermal; then
         for zone in /sys/class/thermal/thermal_zone*; do
@@ -646,10 +648,6 @@ detect_power() {
 
 # --- Stockage ---
 detect_storage() {
-    for m in nvme ahci sd_mod uas usb_storage mmc_core sdhci sdhci_pci; do
-        load_module "$m"
-    done
-
     for disk in /sys/block/sd* /sys/block/nvme* /sys/block/mmcblk*; do
         test -d "$disk" || continue
         name=$(basename "$disk")
@@ -665,12 +663,9 @@ detect_storage() {
 # --- Firmware ---
 load_firmware() {
     if test -d /lib/firmware; then
+        # Le noyau lit lui-même /lib/firmware quand un pilote le demande :
+        # rejouer tous les événements udev (jusqu'à 10 s) n'apportait rien.
         log "Répertoire firmware disponible : /lib/firmware"
-        if command -v udevadm >/dev/null 2>&1; then
-            udevadm trigger --action=add 2>/dev/null || true
-            udevadm settle --timeout=10 2>/dev/null || true
-            log "Firmware rechargé via udev"
-        fi
     else
         log "ATTENTION : /lib/firmware absent — certains périphériques peuvent ne pas fonctionner"
     fi
@@ -697,6 +692,7 @@ hardware_summary() {
 
 # --- Exécution principale ---
 main() {
+    coldplug_modules
     enumerate_pci
     detect_virtual_machine
     detect_gpu

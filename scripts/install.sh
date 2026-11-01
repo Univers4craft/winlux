@@ -195,7 +195,8 @@ fi'
 fi
 cat >"$work/target/boot/grub/grub.cfg" <<EOF
 set default=0
-set timeout=8
+set timeout=2
+set timeout_style=menu
 set winlux_term=console
 $theme_block
 serial --unit=0 --speed=115200
@@ -203,7 +204,7 @@ terminal_input console serial
 terminal_output \$winlux_term serial
 menuentry "Winlux Desktop installé" {
     search --no-floppy --fs-uuid $fsuuid --set=root
-    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 winlux.interactive=1
+    linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
     $initrd_line
 }
 menuentry "Winlux diagnostic installé" --hotkey=d {

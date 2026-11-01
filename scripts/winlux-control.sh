@@ -496,5 +496,8 @@ else
         message "Echec de l'operation. Le journal indique la cause."
     fi
 fi
-status
+# Au démarrage de session, l'init rafraîchit déjà l'état toutes les 3 s :
+# inutile de relancer ici la vingtaine de sondes de status (plusieurs
+# secondes par appel) entre chaque réglage restauré.
+if test "${WINLUX_CONTROL_NO_STATUS:-0}" != 1; then status; fi
 exit "$result"
