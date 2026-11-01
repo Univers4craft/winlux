@@ -431,6 +431,8 @@ pub const VK_A: i32 = 0x41;
 pub const WS_OVERLAPPEDWINDOW: u32 = 0x00CF_0000;
 pub const WS_VISIBLE: u32 = 0x1000_0000;
 pub const SWP_NOSIZE: u32 = 0x0001;
+pub const SWP_NOZORDER: u32 = 0x0004;
+pub const SWP_NOACTIVATE: u32 = 0x0010;
 pub const SWP_NOMOVE: u32 = 0x0002;
 pub const SW_SHOW: i32 = 5;
 pub const SW_SHOWNORMAL: i32 = 1;
@@ -1095,6 +1097,7 @@ extern "C" {
         flags: u32,
     ) -> i32;
     pub fn MoveWindow(hwnd: Handle, x: i32, y: i32, cx: i32, cy: i32, repaint: i32) -> i32;
+    pub fn SystemParametersInfoA(action: u32, param: u32, data: *mut core::ffi::c_void, update: u32) -> i32;
     pub fn BeginPaint(hwnd: Handle, ps: *mut PaintStruct) -> Handle;
     pub fn EndPaint(hwnd: Handle, ps: *const PaintStruct) -> i32;
     pub fn GetDC(hwnd: Handle) -> Handle;
