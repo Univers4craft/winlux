@@ -5,6 +5,7 @@ root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 (cd "$root/testdll" && cargo build --release)
 (cd "$root/testexe" && cargo build --release)
 (cd "$root/testexe" && cargo rustc --release --bin delay_import -- -C link-arg=/delayload:testdll.dll -C link-arg=/delayload:winlux_optional_never_installed.dll)
+(cd "$root/testexe" && cargo rustc --release --bin uac_suite -- -C link-arg=/manifest:embed "-C" "link-arg=/manifestuac:level='requireAdministrator' uiAccess='false'")
 out="$root/target/x86_64-pc-windows-msvc/release"
 cp "$out/winlux_testdll.dll" "$out/testdll.dll"
 echo "Tests Windows construits dans $out"

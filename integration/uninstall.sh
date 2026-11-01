@@ -29,9 +29,9 @@ if [ -z "$destdir" ] && [ -w /proc/sys/fs/binfmt_misc/winlux ]; then
     echo -1 >/proc/sys/fs/binfmt_misc/winlux || true
 fi
 rm -f "$etc/binfmt.d/winlux.conf"
-rm -f "$bin/winlux" "$bin/winlux-open" "$bin/winlux-update" "$bin/winlux-browser" "$bin/winlux-report"
+rm -f "$bin/winlux" "$bin/winlux-open" "$bin/winlux-update" "$bin/winlux-browser" "$bin/winlux-report" "$bin/winlux-uac"
 rm -f "$share/applications/winlux.desktop" "$share/applications/winlux-browser.desktop" "$share/mime/packages/winlux.xml"
-rm -f "$share/winlux/version" "$share/winlux/uninstall.sh" "$share/winlux/install-edge.sh"
+rm -f "$share/winlux/version" "$share/winlux/uninstall.sh" "$share/winlux/install-edge.sh" "$share/winlux/winlux-lock.py"
 rmdir "$share/winlux" 2>/dev/null || true
 
 mimeapps="$etc/xdg/mimeapps.list"

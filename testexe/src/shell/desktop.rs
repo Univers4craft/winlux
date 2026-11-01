@@ -649,8 +649,28 @@ fn power_rect(s: &Rect) -> Rect {
         bottom: s.bottom - 14,
     }
 }
+// Mise en page verticale du menu Démarrer, comme Windows 11 : la recherche
+// en haut, puis le titre « Épinglé » et son lien, puis la grille. Le dessin
+// (`start_menu`) et la détection du pointeur (`start_item_at`) lisent tous
+// les deux ces valeurs, pour ne plus jamais se décaler l'un de l'autre.
+const START_SEARCH_Y: i32 = 24;
+const START_SEARCH_H: i32 = 36;
+const START_SECTION_Y: i32 = 80;
+const START_GRID_Y: i32 = 118;
+const START_RESULT_H: i32 = 44;
+const CATEGORY_H: i32 = 38;
+const CATEGORY_ROWS: i32 = 4;
 const PIN_COLS: i32 = 6;
 const PIN_CELL_H: i32 = 84;
+/// Hauteur de la première ligne de résultats de recherche (sous « Résultats »).
+fn start_results_top(s: &Rect) -> i32 {
+    s.top + START_SEARCH_Y + START_SEARCH_H + 12 + 36
+}
+/// Hauteur de la première application listée dans « Toutes les applications »,
+/// sous les catégories et le titre « Applications ».
+fn all_apps_top(s: &Rect) -> i32 {
+    s.top + START_GRID_Y + CATEGORY_ROWS * CATEGORY_H + 16 + 40
+}
 fn pin_rows(s: &Rect) -> i32 {
     if s.bottom - s.top > 560 {
         2
@@ -662,7 +682,7 @@ fn pinned_cell(s: &Rect, i: i32) -> Rect {
     let (l, r) = (s.left + 28, s.right - 28);
     let cw = (r - l) / PIN_COLS;
     let x = l + (i % PIN_COLS) * cw;
-    let y = s.top + 118 + (i / PIN_COLS) * PIN_CELL_H;
+    let y = s.top + START_GRID_Y + (i / PIN_COLS) * PIN_CELL_H;
     Rect {
         left: x + 4,
         top: y,
@@ -673,7 +693,7 @@ fn pinned_cell(s: &Rect, i: i32) -> Rect {
 fn recommended_cell(s: &Rect, i: i32) -> Rect {
     let (l, r) = (s.left + 28, s.right - 28);
     let col_w = (r - l) / 2;
-    let y = s.top + 118 + pin_rows(s) * PIN_CELL_H + 54 + (i / 2) * 56;
+    let y = s.top + START_GRID_Y + pin_rows(s) * PIN_CELL_H + 54 + (i / 2) * 56;
     let x = l + (i % 2) * col_w;
     Rect {
         left: x,
@@ -684,10 +704,10 @@ fn recommended_cell(s: &Rect, i: i32) -> Rect {
 }
 fn category_cell(s: &Rect, i: i32) -> Rect {
     let (l, r) = (s.left + 28, s.right - 28);
-    let cat_h = 38;
+    let cat_h = CATEGORY_H;
     let cat_w = (r - l) / 3;
     let x = l + (i % 3) * cat_w;
-    let y = s.top + 118 + (i / 3) * cat_h;
+    let y = s.top + START_GRID_Y + (i / 3) * cat_h;
     Rect {
         left: x + 2,
         top: y,
@@ -2238,27 +2258,9 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
     let inner_l = s.left + pad;
     let inner_r = s.right - pad;
 
-    text(
-        hdc,
-        f.large,
-        rgb(0xF2, 0xF2, 0xF2),
-        inner_l,
-        s.top + 28,
-        b"Winlux",
-    );
-
-    // Épinglé / Toutes les applications.
-    let y = s.top + 82;
-    let title: &[u8] = unsafe {
-        if START_SHOW_ALL_APPS {
-            tr(S_ALL_APPS)
-        } else {
-            tr(S_PINNED)
-        }
-    };
-    text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, title);
-    // Barre de recherche
-    let search_y = y + 40;
+    // Barre de recherche, tout en haut comme sous Windows 11 (#173 : elle
+    // était dessinée sur la première rangée d'épinglés).
+    let search_y = s.top + START_SEARCH_Y;
     let search_bg = if unsafe { START_SEARCH_ACTIVE } {
         tint(rgb(0x3A, 0x3F, 0x4A))
     } else {
@@ -2270,33 +2272,45 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
         inner_l,
         search_y,
         inner_r,
-        search_y + 36,
+        search_y + START_SEARCH_H,
         18,
         search_bg,
     );
     glyph(hdc, b, f, Glyph::Search, inner_l + 10, search_y + 8, 18);
-    if unsafe { START_SEARCH_LEN > 0 } {
-        text(
-            hdc,
-            f.body,
-            rgb(0xE6, 0xE6, 0xE6),
-            inner_l + 34,
-            search_y + 8,
+    let (query, query_color): (&[u8], u32) = if unsafe { START_SEARCH_LEN > 0 } {
+        (
             unsafe { &START_SEARCH[..START_SEARCH_LEN] },
-        );
+            rgb(0xE6, 0xE6, 0xE6),
+        )
     } else {
-        text(
-            hdc,
-            f.body,
-            rgb(0x88, 0x88, 0x88),
-            inner_l + 34,
-            search_y + 8,
-            tr(S_SEARCH_PLACEHOLDER),
-        );
+        (tr(S_SEARCH_PLACEHOLDER), rgb(0x88, 0x88, 0x88))
+    };
+    text_fit(
+        hdc,
+        f.body,
+        13,
+        query_color,
+        inner_l + 34,
+        search_y + 9,
+        query,
+        inner_r - inner_l - 52,
+    );
+
+    // Épinglé / Toutes les applications.
+    let y = s.top + START_SECTION_Y;
+    let title: &[u8] = unsafe {
+        if START_SHOW_ALL_APPS {
+            tr(S_ALL_APPS)
+        } else {
+            tr(S_PINNED)
+        }
+    };
+    if unsafe { START_SEARCH_LEN } == 0 {
+        text(hdc, f.title, rgb(0xF2, 0xF2, 0xF2), inner_l + 4, y, title);
     }
     if unsafe { START_SEARCH_LEN } > 0 {
         // Mode recherche : afficher les résultats.
-        let results_y = search_y + 48;
+        let results_y = start_results_top(s) - 36;
         text(
             hdc,
             f.title,
@@ -2323,7 +2337,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             );
         }
         for i in 0..count {
-            let iy = results_y + 36 + (i as i32) * 44;
+            let iy = start_results_top(s) + (i as i32) * START_RESULT_H;
             if iy + 40 >= s.bottom - 72 {
                 break;
             }
@@ -2366,12 +2380,14 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             y + 2,
             all,
         );
-        let shown = if START_SHOW_ALL_APPS {
+        // La grille des épinglés n'existe que dans la vue « Épinglé » : dans
+        // « Toutes les applications », les catégories prennent sa place.
+        let shown_pins = if START_SHOW_ALL_APPS {
             0
         } else {
             (PIN_COLS * pin_rows(s)) as usize
         };
-        for (i, app) in pinned_apps().iter().take(shown).enumerate() {
+        for (i, app) in pinned_apps().iter().take(shown_pins).enumerate() {
             let c = pinned_cell(s, i as i32);
             if HOVER_START_ITEM == i as i32 {
                 round_rect(
@@ -2387,24 +2403,28 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
             }
             let cx = (c.left + c.right) / 2;
             glyph(hdc, b, f, app.glyph, cx - 16, c.top + 10, 32);
-            text_centered(
+            // Libellé tronqué à la largeur de sa case : « Explorateur de
+            // fichiers » ne déborde plus sur « Paramètres ».
+            let max_w = c.right - c.left - 8;
+            let w = text_width(app.name, 11).min(max_w);
+            text_fit(
                 hdc,
                 f.small,
                 11,
                 rgb(0xE6, 0xE6, 0xE6),
-                cx,
+                cx - w / 2,
                 c.top + 52,
                 app.name,
+                max_w,
             );
         }
 
         // Recommandé / Catégories.
-        let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
+        let ry = s.top + START_GRID_Y + pin_rows(s) * PIN_CELL_H + 20;
         if START_SHOW_ALL_APPS {
-            // Les catégories occupent la place de la grille épinglée (118 → 232),
-            // la liste commence juste dessous.
-            let ry = s.top + 118;
-            // 12 catégories sur 4 rangées de 38 px : la liste commence à +160.
+            // Les catégories sont des filtres placés directement sous le
+            // titre « Toutes les applications » ; l'ancien titre
+            // « Catégories » se dessinait par-dessus elles sur petit écran.
             let categories: [&[u8]; 12] = [
                 tr4(&[b"Toutes", b"All", b"Todas", b"Alle"]),
                 tr4(&[b"Accessoires", b"Accessories", b"Accesorios", b"Zubeh\xF6r"]),
@@ -2447,7 +2467,7 @@ unsafe fn start_menu(hdc: Handle, b: &mut Brushes, f: &Fonts, l: &Layout) {
                     cat,
                 );
             }
-            let apps_y = ry + 160;
+            let apps_y = all_apps_top(s) - 40;
             text(
                 hdc,
                 f.title,
@@ -2787,15 +2807,14 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
             };
         }
     }
-    let y0 = s.top + 82;
+    let y0 = s.top + START_SECTION_Y;
     let inner_l = s.left + 28;
     let inner_r = s.right - 28;
     // Search results mode.
     if unsafe { START_SEARCH_LEN } > 0 {
-        let search_y = y0 + 40;
-        let results_y = search_y + 48 + 36;
+        let results_y = start_results_top(s);
         for i in 0..16i32 {
-            let iy = results_y + i * 44;
+            let iy = results_y + i * START_RESULT_H;
             if iy + 40 >= s.bottom - 72 {
                 break;
             }
@@ -2830,10 +2849,7 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
                 return 301 + i;
             }
         }
-        // Même géométrie que le dessin : liste sous les catégories, bornée
-        // par le bas du menu (sinon des lignes invisibles avalent les clics).
-        let apps_y = s.top + 118 + 160 + 40;
-        let inner_l = s.left + 28;
+        let apps_y = all_apps_top(s);
         let mut displayed = 0;
         for i in 0..unsafe { ALL_APPS_COUNT } {
             let cat = unsafe { ALL_APPS[i].2 };
@@ -2849,13 +2865,14 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
             }
         }
     } else {
-        let shown = (PIN_COLS * pin_rows(s)) as usize;
-        for i in 0..pinned_apps().len().min(shown) as i32 {
+        // Seules les cases réellement affichées répondent au pointeur.
+        let shown = (pinned_apps().len() as i32).min(PIN_COLS * pin_rows(s));
+        for i in 0..shown {
             if inside(&pinned_cell(s, i), x, y) {
                 return i;
             }
         }
-        let ry = s.top + 118 + pin_rows(s) * PIN_CELL_H + 20;
+        let ry = s.top + START_GRID_Y + pin_rows(s) * PIN_CELL_H + 20;
         if ry + 150 < s.bottom - 72 {
             for i in 0..4 {
                 if inside(&recommended_cell(s, i), x, y) {
