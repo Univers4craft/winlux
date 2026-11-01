@@ -393,10 +393,10 @@ pub extern "win64" fn switch_to_thread() -> i32 {
     1
 }
 pub extern "win64" fn exit_thread(code: u32) -> ! {
-    // Sans pile de retour vers le pont de thread, on termine le thread
-    // courant via pthread_exit : les destructeurs Rust ne sont pas exécutés.
-    crate::process::thread_detach_current();
-    unsafe { libc::pthread_exit(code as usize as *mut c_void) }
+    // Le handle du thread est signalé et son code enregistré, pour que
+    // WaitForSingleObject(hThread) rende la main et que GetExitCodeThread
+    // lise `code` ; puis retour au pont de thread (voir kernel32).
+    crate::dlls::kernel32::exit_current_thread(code)
 }
 
 // ---------- Chaînes « lstr » ----------

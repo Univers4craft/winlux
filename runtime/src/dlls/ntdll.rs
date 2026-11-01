@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 // ---------- Constantes NTSTATUS ----------
 
@@ -696,132 +696,71 @@ unsafe fn slist_depth(head: *const u8) -> u16 {
 // ============================================================
 //  SRW Locks (Slim Reader/Writer Locks)
 // ============================================================
-
-/// On utilise une table globale indexée par l'adresse du SRWLOCK guest.
-/// Le SRWLOCK Windows est un seul pointeur (8 octets sur x64). On ne touche
-/// pas à la mémoire guest sauf pour écrire 0 (init) ou un marqueur.
-/// SRW Lock implémenté via pthread_rwlock (stable, pas de force_unlock).
-/// Chaque adresse SRW lock Win32 est associée à un pthread_rwlock_t alloué en heap.
-struct SrwState {
-    rwlock: *mut libc::pthread_rwlock_t,
-}
-
-unsafe impl Send for SrwState {}
-unsafe impl Sync for SrwState {}
-
-impl Drop for SrwState {
-    fn drop(&mut self) {
-        unsafe {
-            libc::pthread_rwlock_destroy(self.rwlock);
-            let layout = std::alloc::Layout::new::<libc::pthread_rwlock_t>();
-            std::alloc::dealloc(self.rwlock as *mut u8, layout);
-        }
-    }
-}
-
-impl SrwState {
-    fn new() -> Self {
-        unsafe {
-            let layout = std::alloc::Layout::new::<libc::pthread_rwlock_t>();
-            let ptr = std::alloc::alloc_zeroed(layout) as *mut libc::pthread_rwlock_t;
-            libc::pthread_rwlock_init(ptr, std::ptr::null());
-            SrwState { rwlock: ptr }
-        }
-    }
-}
-
-static SRW_TABLE: OnceLock<Mutex<HashMap<usize, Arc<SrwState>>>> = OnceLock::new();
-
-fn srw_get_or_init(addr: usize) -> Arc<SrwState> {
-    let mut table = lock(SRW_TABLE.get_or_init(|| Mutex::new(HashMap::new())));
-    table
-        .entry(addr)
-        .or_insert_with(|| Arc::new(SrwState::new()))
-        .clone()
-}
+//
+// Un seul état pour kernel32 et ntdll : les Rtl* délèguent à
+// l'implémentation de kernel32 (attente bloquante, table indexée par
+// l'adresse du SRWLOCK). Un programme qui mélange AcquireSRWLockExclusive et
+// RtlReleaseSRWLockExclusive voit donc le même verrou.
 
 pub unsafe extern "win64" fn rtl_initialize_srw_lock(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    *lock_ptr = 0;
-    srw_get_or_init(lock_ptr as usize);
+    super::kernel32::initialize_srw_lock(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_acquire_srw_lock_exclusive(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_wrlock(s.rwlock);
+    super::kernel32::acquire_srw_lock_exclusive(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_release_srw_lock_exclusive(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_unlock(s.rwlock);
+    super::kernel32::release_srw_lock_exclusive(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_acquire_srw_lock_shared(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_rdlock(s.rwlock);
+    super::kernel32::acquire_srw_lock_shared(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_release_srw_lock_shared(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_unlock(s.rwlock);
+    super::kernel32::release_srw_lock_shared(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_exclusive(lock_ptr: *mut usize) -> u8 {
     if lock_ptr.is_null() {
         return 0;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    if libc::pthread_rwlock_trywrlock(s.rwlock) == 0 {
-        1
-    } else {
-        0
+    super::kernel32::try_acquire_srw_lock_exclusive(lock_ptr as usize)
+}
+
+pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_shared(lock_ptr: *mut usize) -> u8 {
+    if lock_ptr.is_null() {
+        return 0;
     }
+    super::kernel32::try_acquire_srw_lock_shared(lock_ptr as usize)
 }
 
 // ============================================================
 //  Condition Variables
 // ============================================================
-
-struct CondState {
-    condvar: Condvar,
-    mutex: Mutex<()>,
-}
-
-static COND_TABLE: OnceLock<Mutex<HashMap<usize, Arc<CondState>>>> = OnceLock::new();
-
-fn cond_get_or_init(addr: usize) -> Arc<CondState> {
-    let mut table = lock(COND_TABLE.get_or_init(|| Mutex::new(HashMap::new())));
-    table
-        .entry(addr)
-        .or_insert_with(|| {
-            Arc::new(CondState {
-                condvar: Condvar::new(),
-                mutex: Mutex::new(()),
-            })
-        })
-        .clone()
-}
+// Même table que kernel32 (InitializeConditionVariable & co.).
 
 pub unsafe extern "win64" fn rtl_initialize_condition_variable(cv: *mut usize) {
     if cv.is_null() {
         return;
     }
-    *cv = 0;
-    cond_get_or_init(cv as usize);
+    super::kernel32::initialize_condition_variable(cv as usize);
 }
 
 /// `RtlSleepConditionVariableSRW` : attend la condition en relâchant le SRW lock.
@@ -829,57 +768,73 @@ pub unsafe extern "win64" fn rtl_sleep_condition_variable_srw(
     cv: *mut usize,
     srw: *mut usize,
     timeout: u32,
-    _flags: u32,
+    flags: u32,
 ) -> i32 {
     if cv.is_null() || srw.is_null() {
         return STATUS_INVALID_PARAMETER;
     }
-    // Prendre le mutex interne AVANT de relâcher le SRW : un RtlWake* émis
-    // entre les deux serait sinon perdu (le dormeur n'est pas encore en attente).
-    let c = cond_get_or_init(cv as usize);
-    let guard = lock(&c.mutex);
-    rtl_release_srw_lock_exclusive(srw);
-    let result = if timeout == u32::MAX {
-        let _guard = c.condvar.wait(guard).unwrap_or_else(|e| e.into_inner());
-        STATUS_SUCCESS
-    } else {
-        match c
-            .condvar
-            .wait_timeout(guard, std::time::Duration::from_millis(timeout as u64))
-        {
-            Ok((_, result)) => {
-                if result.timed_out() {
-                    STATUS_TIMEOUT
-                } else {
-                    STATUS_SUCCESS
-                }
+    let shared = flags & 1 != 0;
+    let srw = srw as usize;
+    let timed_out = super::kernel32::condvar_sleep(
+        cv as usize,
+        timeout,
+        || {
+            if shared {
+                super::kernel32::release_srw_lock_shared(srw)
+            } else {
+                super::kernel32::release_srw_lock_exclusive(srw)
             }
-            Err(_) => STATUS_SUCCESS,
-        }
-    };
-    // Reprendre le SRW lock.
-    rtl_acquire_srw_lock_exclusive(srw);
-    result
+        },
+        || {
+            if shared {
+                super::kernel32::acquire_srw_lock_shared(srw)
+            } else {
+                super::kernel32::acquire_srw_lock_exclusive(srw)
+            }
+        },
+    );
+    if timed_out {
+        STATUS_TIMEOUT
+    } else {
+        STATUS_SUCCESS
+    }
+}
+
+/// `RtlSleepConditionVariableCS` : même chose avec une section critique.
+pub unsafe extern "win64" fn rtl_sleep_condition_variable_cs(
+    cv: *mut usize,
+    cs: *mut c_void,
+    timeout: u32,
+) -> i32 {
+    if cv.is_null() || cs.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let timed_out = super::kernel32::condvar_sleep(
+        cv as usize,
+        timeout,
+        || super::kernel32::leave_critical_section(cs),
+        || super::kernel32::enter_critical_section(cs),
+    );
+    if timed_out {
+        STATUS_TIMEOUT
+    } else {
+        STATUS_SUCCESS
+    }
 }
 
 pub unsafe extern "win64" fn rtl_wake_condition_variable(cv: *mut usize) {
     if cv.is_null() {
         return;
     }
-    let c = cond_get_or_init(cv as usize);
-    let _g = lock(&c.mutex);
-    c.condvar.notify_one();
+    super::kernel32::wake_condition_variable(cv as usize);
 }
 
 pub unsafe extern "win64" fn rtl_wake_all_condition_variable(cv: *mut usize) {
     if cv.is_null() {
         return;
     }
-    let c = cond_get_or_init(cv as usize);
-    let _g = lock(&c.mutex);
-    c.condvar.notify_all();
+    super::kernel32::wake_all_condition_variable(cv as usize);
 }
-
 // ============================================================
 //  Fiber Local Storage (FLS)
 // ============================================================
@@ -1895,9 +1850,11 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlAcquireSRWLockShared" => fn rtl_acquire_srw_lock_shared,
         "RtlReleaseSRWLockShared" => fn rtl_release_srw_lock_shared,
         "RtlTryAcquireSRWLockExclusive" => fn rtl_try_acquire_srw_lock_exclusive,
+        "RtlTryAcquireSRWLockShared" => fn rtl_try_acquire_srw_lock_shared,
         // --- Rtl : Condition Variables ---
         "RtlInitializeConditionVariable" => fn rtl_initialize_condition_variable,
         "RtlSleepConditionVariableSRW" => fn rtl_sleep_condition_variable_srw,
+        "RtlSleepConditionVariableCS" => fn rtl_sleep_condition_variable_cs,
         "RtlWakeConditionVariable" => fn rtl_wake_condition_variable,
         "RtlWakeAllConditionVariable" => fn rtl_wake_all_condition_variable,
         // --- Rtl : FLS ---
