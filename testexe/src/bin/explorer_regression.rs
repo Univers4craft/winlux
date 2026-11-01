@@ -86,6 +86,7 @@ mod wm;
 #[no_mangle]
 pub extern "C" fn mainCRTStartup() -> ! {
     unsafe {
+        wm::SHELL_SETTINGS_ONLY = true;
         explorer::regression_checks();
         desktop::regression_checks();
         settings::regression_checks();

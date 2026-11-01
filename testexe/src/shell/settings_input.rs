@@ -1,4 +1,6 @@
-//! Paramètres > Clavier et pavé tactile.
+//! Paramètres > Bluetooth et appareils > Clavier et souris.
+//!
+//! Une seule page pour le clavier, la souris et le pavé tactile.
 //!
 //! Le pavé tactile n'apparaît que si `winlux-touchpad` en trouve un (rien
 //! sur un ordinateur fixe ni en VM) et chaque réglage seulement si le pavé
@@ -19,6 +21,7 @@ const BTN_H: i32 = 30;
 const KEYBOARD: u32 = 1;
 const TOGGLE: u32 = 2;
 const SPEED: u32 = 3;
+const MOUSE: u32 = 4;
 
 /// Réglages oui/non : (clé d'état et de commande).
 const TOGGLES: [&[u8]; 5] = [b"tap", b"twofinger", b"clickfinger", b"natural", b"dwt"];
@@ -74,8 +77,24 @@ unsafe fn items(mut visit: impl FnMut(Item)) {
     ];
     visit(Item::Row(
         tr4(&[b"Disposition actuelle", b"Current layout", b"Distribuci\xF3n actual", b"Aktuelles Layout"]),
-        tr4(&[b"Autres dispositions : page Localisation.", b"Other layouts: Localization page.", b"Otras distribuciones: p\xE1gina Localizaci\xF3n.", b"Weitere Layouts: Seite Lokalisierung."]),
+        tr4(&[b"Autres dispositions : Heure et langue.", b"Other layouts: Time & language.", b"Otras distribuciones: Hora e idioma.", b"Weitere Layouts: Zeit und Sprache."]),
         &keyboards,
+    ));
+    visit(Item::Header(tr4(&[b"Souris", b"Mouse", b"Mouse", b"Maus"])));
+    let speed = match value(b"mouse_speed") {
+        b"25" => 0,
+        b"75" => 2,
+        _ => 1,
+    };
+    let mice = [
+        btn(tr4(&[b"Lente", b"Slow", b"Lenta", b"Langsam"]), act(MOUSE, 0), speed == 0),
+        btn(tr4(&[b"Normale", b"Normal", b"Normal", b"Normal"]), act(MOUSE, 1), speed == 1),
+        btn(tr4(&[b"Rapide", b"Fast", b"R\xE1pida", b"Schnell"]), act(MOUSE, 2), speed == 2),
+    ];
+    visit(Item::Row(
+        tr4(&[b"Rapidit\xE9 de la souris", b"Mouse speed", b"Velocidad del mouse", b"Mausgeschwindigkeit"]),
+        tr4(&[b"Vitesse du pointeur pour toutes les souris branch\xE9es.", b"Pointer speed for every connected mouse.", b"Velocidad del puntero para todos los ratones conectados.", b"Zeigergeschwindigkeit f\xFCr alle angeschlossenen M\xE4use."]),
+        &mice,
     ));
     if tp(b"present") != b"1" {
         return;
@@ -270,6 +289,13 @@ pub unsafe fn click(f: &Frame, x: i32, y: i32) -> bool {
     match kind {
         KEYBOARD => {
             control(if arg == 0 { c"keyboard-fr" } else { c"keyboard-us" });
+        }
+        MOUSE => {
+            control(match arg {
+                0 => c"mouse-slow",
+                1 => c"mouse-normal",
+                _ => c"mouse-fast",
+            });
         }
         TOGGLE => {
             let key = TOGGLES[(arg >> 1) as usize % TOGGLES.len()];

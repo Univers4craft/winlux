@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=Personnalisation Winlux
-Exec=/usr/bin/winlux-system-tools appearance
+Exec=/usr/bin/winlux-shell-app settings 21
 Icon=preferences-desktop-theme
 Categories=Settings;
 Terminal=false

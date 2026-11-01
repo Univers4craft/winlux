@@ -40,7 +40,7 @@ def windows():
     return result
 
 # The Settings window title follows the interface language since #145.
-SETTINGS_TITLES = ("Paramètres Winlux", "Parametres Winlux", "Winlux Settings",
+SETTINGS_TITLES = ("Paramètres", "Settings", "Configuración", "Einstellungen", "Paramètres Winlux", "Parametres Winlux", "Winlux Settings",
                    "Configuración de Winlux", "Winlux-Einstellungen")
 
 def wait_title(title, timeout=90):

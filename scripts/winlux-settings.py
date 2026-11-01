@@ -29,6 +29,14 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    # Refonte des Paramètres (catégories, réglages intégrés)
+    'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
+    'Gérer les applications': ('Manage apps', 'Administrar aplicaciones', 'Apps verwalten'),
+    'Bluetooth': ('Bluetooth', 'Bluetooth', 'Bluetooth'),
+    'Clavier et souris': ('Keyboard & mouse', 'Teclado y mouse', 'Tastatur und Maus'),
+    'Fond d’écran et couleurs': ('Background & colors', 'Fondo y colores', 'Hintergrund und Farben'),
+    'Heure et langue': ('Time & language', 'Hora e idioma', 'Zeit und Sprache'),
+    'Système Linux': ('Linux system', 'Sistema Linux', 'Linux-System'),
     'Echec de la mise à jour : ': ('Update failed: ', 'Error en la actualización: ', 'Update fehlgeschlagen: '),
     'aucun détail dans le journal': ('no details in the log', 'ningún detalle en el registro', 'keine Details im Protokoll'),
     "Echec de l'operation. Le journal indique la cause.": ('The operation failed. The log shows the cause.', 'La operación ha fallado. El registro indica la causa.', 'Der Vorgang ist fehlgeschlagen. Die Ursache steht im Protokoll.'),
@@ -271,18 +279,38 @@ def _t(text):
     return row[_COL[_LANG]] if row and _LANG in _COL else text
 
 
-PAGES = [_t("Système"), _t("Applications"), _t("Réseau"), _t("Son"), _t("Clavier"),
+# Les numéros de page ne changent jamais : barre des tâches, menu Démarrer,
+# assistant d’accueil et Paramètres PE ouvrent une page par son numéro.
+PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t("Son"), _t("Clavier et souris"),
          _t("Souris"), _t("Personnalisation"), _t("Mises à jour"), _t("Écran"), _t("À propos"),
          _t("Programmes Windows"), _t("Navigateurs"), _t("Accessibilité"), _t("Effets visuels"),
-         _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son avancé"), _t("Mises à jour système"),
-         _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Personnalisation du bureau"),
-         _t("Bluetooth et appareils"), _t("Alimentation et batterie"), _t("Graphismes"),
+         _t("Localisation"), _t("Gestionnaire de fichiers"), _t("Son"), _t("Mises à jour système"),
+         _t("Confidentialité et sécurité"), _t("Processeur"), _t("Lecteurs réseau"), _t("Fond d’écran et couleurs"),
+         _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert")]
 GRAPHICS_PAGE = 24
-# Pages 25 à 28 : leur interface complète est celle des Paramètres du bureau.
-LEGACY_PAGES = (25, 26, 27, 28)
-SHARING_PAGE = 28
+# Menu façon Windows 11 : catégories et sous-pages (même ordre que les
+# Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
+# fenêtre « Réglages avancés » ni d’outil séparé.
+CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 19, 0, 27, 25, 9]),
+              (_t("Bluetooth et appareils"), [22, 4, 26]),
+              (_t("Réseau et Internet"), [2, 20, 28]),
+              (_t("Personnalisation"), [21, 13]),
+              (_t("Applications"), [1, 10, 11, 15]),
+              (_t("Heure et langue"), [14]),
+              (_t("Accessibilité"), [12]),
+              (_t("Confidentialité et sécurité"), [18]),
+              (_t("Mises à jour"), [7, 17])]
+# Anciennes pages fondues dans une autre : Son (3) dans Son, Souris (5) dans
+# Clavier et souris, Personnalisation (6) dans Fond d’écran et couleurs.
+MERGED = {3: 16, 5: 4, 6: 21}
+SOUND_PAGE = 16
+
+
+def category_of(page):
+    page = MERGED.get(page, page)
+    return next((index for index, (_, pages) in enumerate(CATEGORIES) if page in pages), 0)
 CPU_PAGE = 19
 PRIVACY_PAGE = 18
 LOCK_DELAYS = (0, 60, 180, 300, 600, 900, 1800, 3600)
@@ -341,8 +369,6 @@ FIELDS = {
     23: [(_t("Batterie"), "battery"), (_t("Mode"), "power_profile"), (_t("Écran éteint après"), "power_screen_now"),
          (_t("Veille après"), "power_sleep_now"), (_t("Capot"), "power_lid"), (_t("Bouton d'alimentation"), "power_button"),
          (_t("Luminosité (%)"), "power_brightness")],
-    4: [(_t("Disposition"), "layout"), (_t("Toucher-clic"), "tap")],
-    5: [(_t("Vitesse"), "mouse_speed")], 6: [(_t("Alignement"), "align")],
     8: [(_t("Définition"), "display_current"), (_t("Échelle"), "display_scale")],
     9: [(_t("Version"), "version"), (_t("Noyau"), "kernel")],
     11: [(_t("Navigateur par défaut"), "browser_default")],
@@ -352,11 +378,7 @@ ACTIONS = {
         (_t("Signaler un problème"), "report-open")],
     2: [(_t("Renouveler la connexion"), "network-renew")],
     3: [(_t("Volume −"), "volume-down"), (_t("Muet / rétablir"), "volume-mute"), (_t("Volume +"), "volume-up")],
-    4: [(_t("Français AZERTY"), "keyboard-fr"), (_t("Anglais QWERTY"), "keyboard-us"), (_t("Activer toucher-clic"), "tap-on"), (_t("Désactiver toucher-clic"), "tap-off")],
-    5: [(_t("Lente"), "mouse-slow"), (_t("Normale"), "mouse-normal"), (_t("Rapide"), "mouse-fast")],
-    6: [(_t("À gauche"), "align-left"), (_t("Centrer"), "align-center"),
-        (_t("Ajouter Corbeille"), "desktop-icon-recycle"), (_t("Ajouter Explorateur"), "desktop-icon-explorer"),
-        (_t("Ajouter Ce PC"), "desktop-icon-computer"), (_t("Ajouter Documents"), "desktop-icon-documents")],
+    # Clavier, souris et personnalisation : réglages complets dans winlux-settings-pages.
     7: [(_t("Rechercher"), "update-check"), (_t("Installer"), "update-apply"), (_t("Restaurer"), "update-rollback"),
         (_t("Mises à jour auto : activer"), "update-auto-on"), (_t("Désactiver"), "update-auto-off")],
     23: [(_t("Performances maximales"), "power-profile-performance"), (_t("Équilibré"), "power-profile-balanced"),
@@ -532,18 +554,26 @@ EXTRA = _extra_pages()
 
 class Settings(EXTRA.ExtraPages, Gtk.Window):
     def __init__(self):
-        super().__init__(title=_t("Paramètres Winlux"))
+        super().__init__(title=_t("Paramètres"))
         self.set_icon_name("preferences-system")
         self.set_default_size(1020, 740)
         self.set_size_request(720, 500)
         # Seule fenêtre de l'application en session ; sous Gtk.main() (tests),
         # la fermer quitte encore la boucle.
         self.connect("destroy", lambda *_: Gtk.main_level() and Gtk.main_quit())
-        self.page = min(len(PAGES) - 1, max(0, int(os.environ.get("WINLUX_SETTINGS_PAGE", "0"))))
+        try: wanted = int(os.environ.get("WINLUX_SETTINGS_PAGE", "8"))
+        except ValueError: wanted = 8
+        wanted = MERGED.get(min(len(PAGES) - 1, max(0, wanted)), min(len(PAGES) - 1, max(0, wanted)))
         # Une page sans contenu possible sur cette machine n'apparaît pas.
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.hidden_pages = {page for page in EXTRA.ExtraPages.EXTRA_PAGES if not EXTRA.page_available(page, status)}
-        if self.page in self.hidden_pages: self.page = 0
+        # Sans PipeWire, « Son » garde les commandes simples de l’ancienne page.
+        self.sound_fallback = SOUND_PAGE in self.hidden_pages
+        self.hidden_pages.discard(SOUND_PAGE)
+        self.hidden_pages |= set(MERGED)
+        if wanted in self.hidden_pages: wanted = 8
+        self.current = wanted
+        self.page = wanted
         self.process = None
         self.active_action = None
         css = Gtk.CssProvider()
@@ -554,6 +584,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
           #sidebar row { padding: 10px; border-radius: 6px; }
           #sidebar row:hover { background: #30374a; }
           #sidebar row:selected { background: #423d66; }
+          #sidebar .sub { color: #c5cbe0; font-size: 13px; }
+          #sidebar .open { font-weight: bold; }
+          #content list, #content list row { background: #242a38; color: #ecedf5; }
+          #content list row:hover { background: #2c3344; }
           entry { background: #171b25; color: #ecedf5; border: 1px solid #48536b; border-radius: 6px; padding: 8px; }
           button { background: #30384b; color: #ecedf5; border: 1px solid #48536b; border-radius: 6px; padding: 10px 14px; box-shadow: none; }
           button:hover { background: #414b64; }
@@ -575,23 +609,40 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         side.set_name("sidebar")
         side.set_size_request(240, -1)
         outer.pack_start(side, False, False, 0)
-        side.pack_start(Gtk.Label(label=_t("WINLUX · PARAMÈTRES"), xalign=0), False, False, 0)
+        heading = Gtk.Label(label=_t("Paramètres"), xalign=0)
+        heading.get_style_context().add_class("heading")
+        side.pack_start(heading, False, False, 0)
         search = Gtk.SearchEntry(placeholder_text=_t("Rechercher un réglage"))
         side.pack_start(search, False, False, 0)
         nav_scroll = Gtk.ScrolledWindow()
         side.pack_start(nav_scroll, True, True, 0)
         self.nav = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
         nav_scroll.add(self.nav)
-        for title in PAGES: self.nav.add(Gtk.Label(label=title, xalign=0))
-        self.nav.set_filter_func(lambda row: row.get_index() not in self.hidden_pages
-                                 and search.get_text().casefold() in PAGES[row.get_index()].casefold())
+        self.search = search
+        self.rows = {}
+        for index, (title, pages) in enumerate(CATEGORIES):
+            row = Gtk.ListBoxRow()
+            row.entry = ("category", index)
+            row.add(Gtk.Label(label=title, xalign=0))
+            self.nav.add(row)
+            self.rows[("category", index)] = row
+            for page in pages:
+                row = Gtk.ListBoxRow()
+                row.entry = ("page", page)
+                label = Gtk.Label(label=PAGES[page], xalign=0, margin_start=18)
+                label.get_style_context().add_class("sub")
+                row.add(label)
+                self.nav.add(row)
+                self.rows[("page", page)] = row
+        self.nav.set_filter_func(self.nav_visible)
         search.connect("search-changed", lambda *_: self.nav.invalidate_filter())
-        self.nav.connect("row-selected", self.select)
+        self.nav.connect("row-selected", self.nav_selected)
         scroll = Gtk.ScrolledWindow()
         outer.pack_start(scroll, True, True, 0)
         self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin=28)
+        self.body.set_name("content")
         scroll.add(self.body)
-        self.nav.select_row(self.nav.get_row_at_index(self.page))
+        self.open_page(self.current)
         GLib.timeout_add(1000, self.poll)
         self.show_all()
         self.progress.set_visible(self.page == 7)
@@ -602,17 +653,59 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.body.pack_start(label, False, False, 0)
         return label
 
+    def shown_pages(self, category):
+        return [page for page in CATEGORIES[category][1] if page not in self.hidden_pages]
+
+    def nav_visible(self, row):
+        kind, key = row.entry
+        query = self.search.get_text().strip().casefold()
+        if kind == "category":
+            pages = self.shown_pages(key)
+            return bool(pages) and (not query or query in CATEGORIES[key][0].casefold()
+                                    or any(query in PAGES[page].casefold() for page in pages))
+        if key in self.hidden_pages: return False
+        category = category_of(key)
+        if query: return query in PAGES[key].casefold() or query in CATEGORIES[category][0].casefold()
+        return category == category_of(self.current) and len(self.shown_pages(category)) > 1
+
+    def nav_selected(self, _, row):
+        if row is None or getattr(self, "_navigating", False): return
+        kind, key = row.entry
+        if kind == "page": self.open_page(key)
+        elif key != category_of(self.current) or len(self.shown_pages(key)) == 1:
+            pages = self.shown_pages(key)
+            if pages: self.open_page(pages[0])
+        else: self.open_page(self.current)
+
     def open_page(self, page):
-        self.nav.select_row(self.nav.get_row_at_index(min(len(PAGES) - 1, max(0, page))))
+        """Ouvre une sous-page : menu déplié sur sa catégorie, puis son contenu."""
+        page = MERGED.get(page, page)
+        if page in self.hidden_pages: return
+        self.current = page
+        category = category_of(page)
+        self._navigating = True
+        try:
+            self.nav.invalidate_filter()
+            single = len(self.shown_pages(category)) == 1
+            for (kind, key), row in self.rows.items():
+                if kind == "category":
+                    style = row.get_child().get_style_context()
+                    if key == category and not single: style.add_class("open")
+                    else: style.remove_class("open")
+            self.nav.select_row(self.rows[("category", category) if single else ("page", page)])
+        finally:
+            self._navigating = False
+        self.select(self.nav, None)
 
     def select(self, _, row):
-        if row is None: return
-        self.page = row.get_index()
         # Page visible lisible de l'extérieur (xprop WM_WINDOW_ROLE).
-        self.set_role(f"page-{self.page}")
+        self.set_role(f"page-{self.current}")
+        self.page = 3 if self.current == SOUND_PAGE and self.sound_fallback else self.current
         for child in self.body.get_children(): child.destroy()
-        self.label(PAGES[self.page], "heading")
-        self.label(_t("Vos préférences et l’état réel de votre ordinateur."), "subtitle")
+        category = category_of(self.current)
+        if len(self.shown_pages(category)) > 1:
+            self.label(CATEGORIES[category][0] + "  ›", "subtitle")
+        self.label(PAGES[self.current], "heading")
         extra = self.page in EXTRA.ExtraPages.EXTRA_PAGES
         # Les pages branchées affichent leurs propres réglages : pas de cadre d'état vide.
         self.state = Gtk.Label() if extra else self.label(_t("Chargement…"), "card")
@@ -637,15 +730,6 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             if action == "update-apply": self.install_button = button
             if action == "update-rollback": self.rollback_button = button
         self.buttons = flow
-        if self.page in (1, 2, 3, 6):
-            tool = {1:"apps", 2:"quick", 3:"quick", 6:"appearance"}[self.page]
-            shortcut = Gtk.Button(label={1:_t("Installer, désinstaller et gérer le démarrage"),2:_t("Wi-Fi et Bluetooth"),3:_t("Réglages rapides"),6:_t("Thèmes, accent, fond et barre des tâches")}[self.page])
-            shortcut.connect("clicked", lambda *_: subprocess.Popen(["winlux-system-tools", tool]))
-            self.body.pack_start(shortcut, False, False, 0)
-        if self.page == 1:
-            defaults = Gtk.Button(label=_t("Applications par défaut"))
-            defaults.connect("clicked", lambda *_: subprocess.Popen(["winlux-default-apps"]))
-            self.body.pack_start(defaults, False, False, 0)
         if self.page == 8:
             self.modes = Gtk.ComboBoxText()
             status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
@@ -657,13 +741,10 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             button.connect("clicked", lambda *_: self.execute("display-mode-" + self.modes.get_active_text()) if self.modes.get_active_text() else None)
             self.body.pack_start(button, False, False, 0)
         if extra: self.extra_page(self.page)
-        if self.page in (1, CPU_PAGE, GRAPHICS_PAGE) + LEGACY_PAGES:
-            self.label(_t("Dossiers partagés sur le réseau et transfert de vos réglages vers un autre PC Winlux :")
-                       if self.page == SHARING_PAGE else _t("Ouvrir les réglages détaillés de cette catégorie :"))
-            button = Gtk.Button(label=_t("Réglages avancés"))
-            legacy_page = self.page
-            button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", str(legacy_page)], env=dict(os.environ, WINLUX_LEGACY_SETTINGS="1")))
-            self.body.pack_start(button, False, False, 0)
+        sections = EXTRA.ExtraPages.EXTRA_SECTIONS.get(self.page)
+        if sections:
+            self.status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+            getattr(self, sections)()
         if self.page == PRIVACY_PAGE:
             self.privacy_controls()
             self.permission_controls()
@@ -673,9 +754,6 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.details = self.label("")
         if self.page == 7:
             self.label(_t("La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation."), "subtitle")
-            recovery = Gtk.Button(label=_t("Secours et restauration"))
-            recovery.connect("clicked", lambda *_: subprocess.Popen(["winlux-system-tools", "recovery"]))
-            self.body.pack_start(recovery, False, False, 0)
             restart = Gtk.Button(label=_t("Redémarrer après installation"))
             restart.connect("clicked", lambda *_: self.execute("reboot"))
             self.body.pack_start(restart, False, False, 0)
@@ -758,7 +836,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                            stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
         except (OSError, subprocess.SubprocessError) as error:
             self.show_error(_t("L’opération a échoué"), str(error))
-        if refresh: self.select(self.nav, self.nav.get_selected_row())
+        if refresh: self.select(self.nav, None)
 
     def execute(self, action, *extra):
         if self.process is not None or self.busy: return

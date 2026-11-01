@@ -89,26 +89,24 @@ def extensions_of(kind):
                     _GLOBS.setdefault(parts[1], []).append(parts[2][1:].lower())
     return _GLOBS.get(kind, [])
 
-class DefaultApps(Gtk.Window):
-    def __init__(self):
-        super().__init__(title=_t("Applications par défaut"))
-        self.set_icon_name("preferences-desktop-default-applications")
-        self.set_default_size(860, 680)
-        self.connect("destroy", Gtk.main_quit)
-        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin=24)
-        self.add(outer)
-        heading = Gtk.Label(xalign=0)
-        heading.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(_t('Applications par défaut'))}</span>")
-        outer.pack_start(heading, False, False, 0)
-        outer.pack_start(Gtk.Label(label=_t("Choisissez le programme qui ouvre chaque type de fichier. Les programmes Windows installés apparaissent ici dès qu’ils déclarent les fichiers qu’ils savent ouvrir."),
-                                   xalign=0, wrap=True), False, False, 0)
+class DefaultAppsPanel(Gtk.Box):
+    """Le contenu de la page, intégré aussi dans Paramètres > Applications."""
+
+    def __init__(self, window, scrolled=False):
+        super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=12)
+        self.window = window
+        self.pack_start(Gtk.Label(label=_t("Choisissez le programme qui ouvre chaque type de fichier. Les programmes Windows installés apparaissent ici dès qu’ils déclarent les fichiers qu’ils savent ouvrir."),
+                                  xalign=0, wrap=True), False, False, 0)
         self.search = Gtk.SearchEntry(placeholder_text=_t("Rechercher un type de fichier (.txt, image, PDF…)"))
         self.search.connect("search-changed", lambda *_: self.types.invalidate_filter())
-        outer.pack_start(self.search, False, False, 0)
-        scroll = Gtk.ScrolledWindow()
-        outer.pack_start(scroll, True, True, 0)
+        self.pack_start(self.search, False, False, 0)
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12)
-        scroll.add(body)
+        if scrolled:
+            scroll = Gtk.ScrolledWindow()
+            self.pack_start(scroll, True, True, 0)
+            scroll.add(body)
+        else:
+            self.pack_start(body, False, False, 0)
 
         body.pack_start(self.section(_t("Programmes Windows")), False, False, 0)
         apps = windows_apps()
@@ -161,7 +159,6 @@ class DefaultApps(Gtk.Window):
             self.choosers.append(chooser)
         body.pack_start(self.types, False, False, 0)
         self.refresh_buttons()
-        self.show_all()
 
     def section(self, title):
         label = Gtk.Label(xalign=0, margin_top=12)
@@ -183,7 +180,7 @@ class DefaultApps(Gtk.Window):
         try:
             for kind in kinds: app.set_as_default_for_type(kind)
         except GLib.Error as error:
-            dialog = Gtk.MessageDialog(transient_for=self, modal=True, message_type=Gtk.MessageType.ERROR,
+            dialog = Gtk.MessageDialog(transient_for=self.window, modal=True, message_type=Gtk.MessageType.ERROR,
                                        buttons=Gtk.ButtonsType.CLOSE, text=_t("Impossible d’enregistrer ce choix"))
             dialog.format_secondary_text(error.message)
             dialog.run()
@@ -200,6 +197,20 @@ class DefaultApps(Gtk.Window):
                                              and Gio.AppInfo.get_default_for_type(kind, False) is not None for kind in kinds)
             button.set_label(_t("Par défaut pour tous ses types") if everywhere else _t("Utiliser pour tous ses types"))
             button.set_sensitive(not everywhere)
+
+class DefaultApps(Gtk.Window):
+    def __init__(self):
+        super().__init__(title=_t("Applications par défaut"))
+        self.set_icon_name("preferences-desktop-default-applications")
+        self.set_default_size(860, 680)
+        self.connect("destroy", Gtk.main_quit)
+        outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin=24)
+        self.add(outer)
+        heading = Gtk.Label(xalign=0)
+        heading.set_markup(f"<span size='x-large' weight='bold'>{GLib.markup_escape_text(_t('Applications par défaut'))}</span>")
+        outer.pack_start(heading, False, False, 0)
+        outer.pack_start(DefaultAppsPanel(self, scrolled=True), True, True, 0)
+        self.show_all()
 
 if __name__ == "__main__":
     if len(sys.argv) > 1 and sys.argv[1] == "--list":

@@ -67,8 +67,8 @@ class Welcome(Gtk.Window):
             (_t("Visite guidée et logiciels courants"), ["winlux-shell-app", "welcome"]),
             (_t("Choisir le clavier"), ["winlux-shell-app", "settings", "4"]),
             (_t("Configurer le réseau"), ["winlux-system-tools", "quick"]),
-            (_t("Personnaliser l’apparence"), ["winlux-system-tools", "appearance"]),
-            (_t("Découvrir le secours"), ["winlux-system-tools", "recovery"]),
+            (_t("Personnaliser l’apparence"), ["winlux-shell-app", "settings", "21"]),
+            (_t("Découvrir le secours"), ["winlux-shell-app", "settings", "7"]),
         ):
             button = Gtk.Button(label=label)
             button.connect("clicked", lambda _, args=command: self.launch(args))
