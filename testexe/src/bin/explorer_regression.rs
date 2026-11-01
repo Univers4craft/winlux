@@ -64,6 +64,8 @@ mod settings_cpu;
 mod sysmon;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
+#[path = "../shell/sysinfo.rs"]
+mod sysinfo;
 #[path = "../shell/taskschd.rs"]
 mod taskschd;
 #[path = "../shell/terminal.rs"]
