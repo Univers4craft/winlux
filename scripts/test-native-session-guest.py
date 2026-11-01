@@ -384,8 +384,13 @@ def explorer_accented_folders():
     home = Path(os.environ.get("HOME") or "/root")
     assert (home / "Téléchargements").is_dir(), f"{home}/Téléchargements absent de l'image"
     env = dict(os.environ, HOME=str(home), WINLUX_EXPECT_DOWNLOADS="1")
-    result = subprocess.run(["/usr/bin/winlux", "/opt/winlux/tests/explorer_regression.exe"], env=env,
-                            capture_output=True, text=True, timeout=180)
+    try:
+        result = subprocess.run(["/usr/bin/winlux", "/opt/winlux/tests/explorer_regression.exe"], env=env,
+                                capture_output=True, text=True, timeout=180)
+    except subprocess.TimeoutExpired as e:
+        partial = e.stdout.decode(errors="replace") if isinstance(e.stdout, bytes) else (e.stdout or "")
+        print("explorer_regression bloqué après :\n" + "\n".join(partial.splitlines()[-5:]), flush=True)
+        raise
     lines = [line for line in (result.stdout + result.stderr).splitlines() if "Telechargements" in line or "ECHEC" in line]
     print("\n".join(lines), flush=True)
     assert any(line.strip().startswith("OK") and "Telechargements" in line for line in lines), "Explorer cannot open Téléchargements"
