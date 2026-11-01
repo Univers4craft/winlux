@@ -6734,8 +6734,9 @@ unsafe fn watch_drives() -> bool {
         .iter()
         .fold(0xcbf2_9ce4_8422_2325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100_0000_01b3))
         | 1;
-    if DRIVES_SIG == 0 || sig == DRIVES_SIG {
-        DRIVES_SIG = sig;
+    // Premier passage compris : le volet de gauche montre dès l'ouverture les
+    // clés déjà branchées (avant, seulement après un passage par Ce PC).
+    if sig == DRIVES_SIG {
         return false;
     }
     DRIVES_SIG = sig;
