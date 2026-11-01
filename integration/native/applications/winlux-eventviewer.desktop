@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Observateur d'événements
+Name[en]=Event Viewer
+Name[es]=Visor de eventos
+Name[de]=Ereignisanzeige
+Comment=Journaux du système, des applications .exe et des plantages
+Comment[en]=System, .exe application and crash logs
+Comment[es]=Registros del sistema, de las aplicaciones .exe y de los fallos
+Comment[de]=Protokolle des Systems, der .exe-Anwendungen und der Abstürze
+Exec=/usr/bin/winlux-shell-app eventviewer
+Icon=utilities-system-monitor
+StartupWMClass=winlux-eventviewer
+Terminal=false
+Categories=System;Monitor;
