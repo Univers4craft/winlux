@@ -31,6 +31,10 @@ with tempfile.TemporaryDirectory(prefix="winlux-desktop-check.") as temporary:
         identity=call("org.freedesktop.Notifications","Notify",args).unpack()[0]
         history=json.loads((task_directory/"state/winlux/notifications.json").read_text())
         assert history[-1]["id"]==identity and history[-1]["title"]=="Notification test"
+        # Croix du panneau Notifications : une seule notification retirée de l'historique.
+        other=call("org.freedesktop.Notifications","Notify",GLib.Variant("(susssasa{sv}i)",("Winlux test",0,"","Autre","Corps",[],{},1000))).unpack()[0]
+        call("org.winlux.Notifications","Dismiss",GLib.Variant("(u)",(other,)))
+        assert [item["id"] for item in json.loads((task_directory/"state/winlux/notifications.json").read_text())]==[identity]
         call("org.winlux.Notifications","Activate",GLib.Variant("(us)",(identity,"open")))
         call("org.winlux.Notifications","Clear")
         assert json.loads((task_directory/"state/winlux/notifications.json").read_text())==[]

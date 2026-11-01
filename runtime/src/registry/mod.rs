@@ -839,6 +839,8 @@ fn stamp(path: &Path) -> Stamp {
 struct Cache {
     path: PathBuf,
     stamp: Stamp,
+    /// Empreinte de `proxy.conf` : un proxy changé côté Linux se voit tout de suite.
+    proxy: Stamp,
     data: Data,
 }
 
@@ -846,7 +848,75 @@ static CACHE: Mutex<Option<Cache>> = Mutex::new(None);
 #[cfg(test)]
 pub(crate) static TEST_LOCK: Mutex<()> = Mutex::new(());
 
+// ---------- Proxy commun à Linux ----------
+
+const INTERNET_SETTINGS: &str =
+    "hkcu\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings";
+
+/// Valeurs proxy d'`Internet Settings` : (activé, serveur, exceptions).
+fn proxy_values(data: &Data) -> (bool, String, String) {
+    let text = |name: &str| {
+        data.get(INTERNET_SETTINGS, name)
+            .map(|v| string_of(&v.bytes))
+            .unwrap_or_default()
+    };
+    let enabled = data
+        .get(INTERNET_SETTINGS, "ProxyEnable")
+        .is_some_and(|v| v.bytes.iter().any(|&b| b != 0));
+    (enabled, text("ProxyServer"), text("ProxyOverride"))
+}
+
+/// Le proxy système (`/etc/winlux/proxy.conf` ou celui de Linux) apparaît
+/// dans `Internet Settings`, comme le proxy réglé dans Windows.
+fn overlay_proxy(data: &mut Data) {
+    let proxy = crate::proxy::load();
+    if proxy.is_none() && !proxy_values(data).0 {
+        return;
+    }
+    let on = proxy.is_some() as u32;
+    data.raw_set(
+        INTERNET_SETTINGS,
+        "ProxyEnable",
+        REG_DWORD,
+        on.to_le_bytes().to_vec(),
+    );
+    if let Some(p) = proxy {
+        data.raw_set(
+            INTERNET_SETTINGS,
+            "ProxyServer",
+            REG_SZ,
+            utf16z(&crate::proxy::windows_server(&p)),
+        );
+        data.raw_set(
+            INTERNET_SETTINGS,
+            "ProxyOverride",
+            REG_SZ,
+            utf16z(&p.bypass),
+        );
+    }
+}
+
+/// Une appli Windows a changé le proxy : les applis Linux le reprennent.
+fn sync_proxy(before: &(bool, String, String), data: &Data) {
+    let after = proxy_values(data);
+    if &after == before {
+        return;
+    }
+    let p = if after.0 {
+        crate::proxy::from_windows(&after.1, &after.2)
+    } else {
+        None
+    };
+    let _ = crate::proxy::save(p.as_ref());
+}
+
 fn load_from_disk(path: &Path) -> Result<Data, i32> {
+    let mut data = load_file(path)?;
+    overlay_proxy(&mut data);
+    Ok(data)
+}
+
+fn load_file(path: &Path) -> Result<Data, i32> {
     let mut text = String::new();
     match File::open(path) {
         Ok(mut f) => {
@@ -862,12 +932,14 @@ fn load_from_disk(path: &Path) -> Result<Data, i32> {
 fn current(cache: &mut Option<Cache>) -> Result<&Data, i32> {
     let path = store_path();
     let now = stamp(&path);
-    let fresh = matches!(cache, Some(c) if c.path == path && c.stamp == now && now.is_some());
+    let proxy = stamp(&crate::admin::path(crate::proxy::CONFIG));
+    let fresh = matches!(cache, Some(c) if c.path == path && c.stamp == now && now.is_some() && c.proxy == proxy);
     if !fresh {
         let data = load_from_disk(&path)?;
         *cache = Some(Cache {
             path,
             stamp: now,
+            proxy,
             data,
         });
     }
@@ -921,10 +993,13 @@ pub fn write<T>(f: impl FnOnce(&mut Data) -> Result<T, i32>) -> Result<T, i32> {
     let path = store_path();
     let _lock = file_lock(&path)?;
     let mut data = load_from_disk(&path)?;
+    let proxy_before = proxy_values(&data);
     let out = f(&mut data)?;
+    sync_proxy(&proxy_before, &data);
     write_to_disk(&path, &data)?;
     *cache = Some(Cache {
         stamp: stamp(&path),
+        proxy: stamp(&crate::admin::path(crate::proxy::CONFIG)),
         path,
         data,
     });

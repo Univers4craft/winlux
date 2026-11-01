@@ -137,6 +137,9 @@ jobs:
       - name: Vérifier « Coller » sur le bureau (couper = déplacer, noms en double)
         run: python3 -B scripts/test-desktop-paste.py
 
+      - name: Vérifier la détection des modes d'alimentation (économie, normal, turbo)
+        run: python3 -B scripts/test-power-modes.py
+
       - name: Vérifier les grandes images X11 en 1080p
         run: |
           sudo apt-get update -q
@@ -173,6 +176,7 @@ jobs:
           sh scripts/test-install-safety.sh
           sh scripts/test-network.sh
           sh scripts/test-control.sh
+          python3 -B scripts/test-power.py
           sh scripts/test-fonts.sh
           python3 -B scripts/test-store.py
           sh scripts/test-display.sh
@@ -287,9 +291,10 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q xvfb xauth openbox wmctrl python3-gi gir1.2-gtk-3.0 \
-            gir1.2-gdkpixbuf-2.0 fonts-dejavu-core libx11-6 libxft2 libcairo2
+            gir1.2-gdkpixbuf-2.0 fonts-dejavu-core libx11-6 libxft2 libcairo2 python3-gi-cairo \
+            dbus-x11 xfce4-panel xfce4-genmon-plugin
 
-      - name: Contraste du menu Démarrer en thème clair et sombre
+      - name: Contraste du menu Démarrer, des panneaux et de l'horloge en thème clair et sombre
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-shell-contrast.py
 
       - name: Capturer les écrans
