@@ -2399,15 +2399,18 @@ class InstallerApp(Gtk.Application):
 
     def make_pages_scrollable(self):
         """Toutes les pages défilent : Suivant/Retour restent visibles même sur un petit écran."""
-        for child in list(self.pages.get_children()):
-            if isinstance(child, Gtk.ScrolledWindow):
-                child.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-                continue
-            name = self.pages.child_get_property(child, "name")
+        # Toutes les pages sont retirées puis remises dans leur ordre d'origine : un
+        # GtkStack affiche sa première page visible, l'ordre doit donc être conservé.
+        pages = [(self.pages.child_get_property(c, "name"), c) for c in self.pages.get_children()]
+        for name, child in pages:
             self.pages.remove(child)
-            scroll = Gtk.ScrolledWindow()
+            if isinstance(child, Gtk.ScrolledWindow):
+                scroll = child
+            else:
+                scroll = Gtk.ScrolledWindow()
+                scroll.add(child)
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-            scroll.add(child)
+            scroll.show_all()
             self.pages.add_named(scroll, name)
 
     def do_activate(self):
@@ -2470,12 +2473,13 @@ class InstallerApp(Gtk.Application):
         self.make_pages_scrollable()
         self.load_answer_file()
         self.current_step = self.next_step(-1, 1)
-        self.update_step()
         self.fit_window_to_screen()
         screen = Gdk.Screen.get_default()
         screen.connect("size-changed", self.fit_window_to_screen)
         screen.connect("monitors-changed", self.fit_window_to_screen)
         self.win.show_all()
+        # Après show_all : GtkStack ignore une page cible encore invisible.
+        self.update_step()
         threading.Thread(target=self.bg_detect, daemon=True).start()
 
     def bg_detect(self):
