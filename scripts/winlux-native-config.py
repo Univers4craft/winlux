@@ -92,6 +92,12 @@ for path in (source / "config").rglob("*"):
         target.parent.mkdir(parents=True, exist_ok=True)
         if not target.exists() or (reset_panel and path.name == "xfce4-panel.xml"):
             shutil.copyfile(path, target)
+# Corbeille vide d'un nouveau profil : sans ces dossiers (créés d'habitude au
+# premier envoi), l'Explorateur affichait « Ce dossier est introuvable ».
+for directory in ("files", "info"):
+    trash = home / ".local/share/Trash" / directory
+    trash.mkdir(parents=True, exist_ok=True)
+(home / ".local/share/Trash").chmod(0o700)
 # Zone de notification des programmes Windows (Shell_NotifyIcon) : ajoutée une
 # fois aux panneaux déjà configurés, juste avant les icônes réseau/son/batterie.
 panel_config = home / ".config/xfce4/xfconf/xfce-perchannel-xml/xfce4-panel.xml"
@@ -196,6 +202,24 @@ if panel_config.is_file():
         if changed:
             tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
     except (ET.ParseError, OSError, ValueError, TypeError):
+        pass
+# Barre des tâches : un bouton par fenêtre. Regroupées, deux fenêtres de
+# l'Explorateur ne se rouvraient plus d'un clic (menu de choix à la place).
+# Migration unique du réglage livré auparavant.
+grouping_marker = home / ".config/winlux/taskbar-ungrouped"
+if panel_config.is_file() and not grouping_marker.exists():
+    try:
+        tree = ET.parse(panel_config)
+        plugins = next((item for item in tree.getroot() if item.get("name") == "plugins"), None)
+        for plugin in list(plugins) if plugins is not None else []:
+            if plugin.get("value") != "tasklist": continue
+            for child in plugin:
+                if child.get("name") == "grouping" and child.get("value") == "1":
+                    child.set("value", "0")
+        tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
+        grouping_marker.parent.mkdir(parents=True, exist_ok=True)
+        grouping_marker.touch()
+    except (ET.ParseError, OSError):
         pass
 # Migrer uniquement le raccourci livré par Winlux, sans toucher aux raccourcis
 # personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox.

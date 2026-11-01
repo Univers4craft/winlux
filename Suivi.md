@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **257**
-- À faire ou en cours : **40**
-- Total : **297**
-- Progression : **86.5%**
-- Dernière mise à jour : 01/11/2026 (audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, identité visuelle suite #170)
+- Réalisé : **260**
+- À faire ou en cours : **42**
+- Total : **302**
+- Progression : **86.1%**
+- Dernière mise à jour : 01/11/2026 (audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203, identité visuelle suite #170)
 
 ## À FAIRE (par priorité)
 
@@ -37,6 +37,12 @@
 - [x] Permissions des applications Windows : demande claire (dossiers personnels, webcam, micro, écran ; réseau autorisé d'office mais blocable), choix mémorisé et révocable dans Paramètres > Confidentialité et sécurité (#158).
 - [ ] Exécuter le bureau de l'ISO en utilisateur non privilégié avec autorisation ciblée des actions système (le script Xsession existe, mais l'init lance encore le bureau en root).
 - [ ] Signer les mises à jour et utiliser des racines A/B pour les coupures d'alimentation (voir `docs/AB_UPDATES.md`).
+
+- [x] Stabilité de la session native (testée dans une VM de l'ISO v0.2.12, captures dans `docs/captures/stabilite-session/`) : menu Démarrer qui ignorait les clics une fois sur deux (saisie du pointeur), Paramètres en une seule fenêtre qui s'ouvre sur la page demandée, un bouton de barre des tâches par fenêtre (plus de menu de regroupement), compositeur picom (plus de traînées en déplaçant une fenêtre, ombres, coins arrondis), traductions fr/en/es/de conservées dans l'image (bureau, Corbeille, éditeur en français).  Corbeille d’un nouveau profil créée à l’ouverture de session (l’Explorateur affichait « Ce dossier est introuvable »).
+- [x] Explorateur en session native : les fichiers texte (Corbeille comprise) s'ouvrent dans Mousepad avec leur contenu via l'association Linux, et Suppr dans la Corbeille demande un second appui avant la suppression définitive (fiche .trashinfo effacée aussi).
+- [ ] Repeinture de l'Explorateur après un Expose partiel (fenêtre noire jusqu'au survol après le redémarrage du compositeur, `gui_x11.rs`).
+- [x] Finition Windows 11 de la session native (1re passe) : menu Démarrer ouvert au-dessus du bouton quand la barre est à gauche, cadre de fenêtre sans coins noirs en bas et titre en graisse normale, volet latéral de la Corbeille (Thunar) lisible et vue détaillée. Captures dans `docs/captures/finition-session/`.
+- [ ] Finition Windows 11, suite : avertissement « compte administrateur » de Thunar et Mousepad (bureau lancé en root), types de fichiers en anglais dans Thunar, fenêtre de l'Explorateur placée en partie sous la barre des tâches.
 
 ### Priorité 1 — Fiabiliser le runtime
 

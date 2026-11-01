@@ -126,25 +126,19 @@ explorer = wait_title("Explorer Winlux")
 subprocess.Popen(["winlux-shell-app", "settings", "11"], stdout=log, stderr=log)
 settings = wait_title(SETTINGS_TITLES)
 def settings_page(window):
-    try:
-        pid = int(run("xprop", "-id", str(window), "_NET_WM_PID").split("=")[-1].strip())
-        environment=Path(f"/proc/{pid}/environ").read_bytes().split(b"WINLUX_SETTINGS_PAGE=",1)
-        return b"WINLUX_SETTINGS_PAGE="+environment[1].split(b"\0",1)[0] if len(environment)==2 else b""
-    except (OSError,ValueError,subprocess.CalledProcessError):return b""
+    # Paramètres est mono-instance : la page affichée est publiée dans WM_WINDOW_ROLE.
+    try: return run("xprop", "-id", str(window), "WM_WINDOW_ROLE").split("=")[-1].strip().strip('"')
+    except subprocess.CalledProcessError: return ""
 
-assert settings_page(settings) == b"WINLUX_SETTINGS_PAGE=11"
+wait_for(lambda: settings_page(settings) == "page-11", "settings opens the requested page")
 from gi.repository import Gio
 previous = client_ids()
 Gio.DesktopAppInfo.new_from_filename("/usr/share/applications/winlux-updates.desktop").launch([], None)
-def update_windows():
-    return [int(identifier,16) for identifier,(_,title) in windows().items()
-            if int(identifier,16) not in previous and any(name in title for name in SETTINGS_TITLES) and
-            settings_page(identifier)==b"WINLUX_SETTINGS_PAGE=7"]
-wait_for(lambda: len(update_windows())==1,"updates launcher opens its own settings window")
-updates=update_windows()[0]
-assert settings_page(updates) == b"WINLUX_SETTINGS_PAGE=7"
+wait_for(lambda: settings_page(settings) == "page-7", "updates launcher reuses the settings window on its page")
+assert not [identifier for identifier, (_, title) in windows().items()
+            if int(identifier, 16) not in previous and any(name in title for name in SETTINGS_TITLES)], \
+    "a second settings window was opened"
 capture("native-settings-updates")
-run("wmctrl", "-ic", hex(updates))
 print("WINLUX_NATIVE_SETTINGS_ROUTES=0", flush=True)
 document = Path("/tmp/winlux-native-note.txt")
 document.write_text("Winlux : vrai éditeur de texte.\n")

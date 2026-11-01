@@ -1131,20 +1131,23 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         }
         return;
     }
-    // Open text files in integrated editor
-    if ends_ci(&path[..n], b".txt")
-        || ends_ci(&path[..n], b".rs")
-        || ends_ci(&path[..n], b".c")
-        || ends_ci(&path[..n], b".h")
-        || ends_ci(&path[..n], b".py")
-        || ends_ci(&path[..n], b".js")
-        || ends_ci(&path[..n], b".sh")
-        || ends_ci(&path[..n], b".toml")
-        || ends_ci(&path[..n], b".json")
-        || ends_ci(&path[..n], b".md")
-        || ends_ci(&path[..n], b".cfg")
-        || ends_ci(&path[..n], b".conf")
-        || ends_ci(&path[..n], b".log")
+    // Open text files in integrated editor. En session native, l'éditeur est
+    // une appli séparée lancée sans fichier : l'association Linux (xdg-open)
+    // ouvre au contraire le bon fichier dans Mousepad.
+    if !wm::native_session()
+        && (ends_ci(&path[..n], b".txt")
+            || ends_ci(&path[..n], b".rs")
+            || ends_ci(&path[..n], b".c")
+            || ends_ci(&path[..n], b".h")
+            || ends_ci(&path[..n], b".py")
+            || ends_ci(&path[..n], b".js")
+            || ends_ci(&path[..n], b".sh")
+            || ends_ci(&path[..n], b".toml")
+            || ends_ci(&path[..n], b".json")
+            || ends_ci(&path[..n], b".md")
+            || ends_ci(&path[..n], b".cfg")
+            || ends_ci(&path[..n], b".conf")
+            || ends_ci(&path[..n], b".log"))
     {
         crate::notepad::open_new();
         use winlux_testexe::*;
@@ -4276,12 +4279,34 @@ pub unsafe fn drag_count() -> usize {
 
 /// Envoie la sélection dans la Corbeille (format freedesktop.org, partagé
 /// avec les gestionnaires de fichiers Linux).
+/// Suppression définitive depuis la Corbeille armée par un premier appui :
+/// fin de validité (GetTickCount) du second appui qui confirme.
+static mut PURGE_ARMED_UNTIL: u32 = 0;
+
 unsafe fn delete_selection() {
     let p = pane();
     if p.loc.is(HOME) || p.loc.is(PC) {
         return;
     }
     let in_trash = p.loc.is(TRASH);
+    if in_trash {
+        // Rien n'est récupérable ensuite : comme Windows, demander confirmation.
+        let armed = PURGE_ARMED_UNTIL != 0
+            && (PURGE_ARMED_UNTIL.wrapping_sub(GetTickCount()) as i32) > 0;
+        if !armed {
+            if (0..p.nview).any(|v| is_sel(p, p.view[v] as usize)) {
+                PURGE_ARMED_UNTIL = GetTickCount().wrapping_add(4000);
+                notify(tr4(&[
+                    b"Suppression d\xE9finitive : appuyez de nouveau sur Supprimer pour confirmer.",
+                    b"Permanent deletion: press Delete again to confirm.",
+                    b"Eliminaci\xF3n definitiva: pulse Suprimir otra vez para confirmar.",
+                    b"Endg\xFCltig l\xF6schen: zum Best\xE4tigen erneut Entf dr\xFCcken.",
+                ]));
+            }
+            return;
+        }
+        PURGE_ARMED_UNTIL = 0;
+    }
     let mut w1 = [0u16; PATH_LEN + NAME_LEN + 2];
     CreateDirectoryW(
         wstr(&mut w1, b"C:\\.local\\share\\Trash"),
@@ -4315,6 +4340,18 @@ unsafe fn delete_selection() {
             };
             if !ok {
                 failed += 1;
+            } else {
+                // Sa fiche .trashinfo ne sert plus à rien.
+                let mut nm = [0u8; NAME_LEN + 12];
+                let nl = name.len().min(NAME_LEN);
+                nm[..nl].copy_from_slice(&name[..nl]);
+                nm[nl..nl + 10].copy_from_slice(b".trashinfo");
+                let mut info = [0u8; PATH_LEN + NAME_LEN + 2];
+                let il = join(&mut info, b"C:\\.local\\share\\Trash\\info", &nm[..nl + 10]);
+                if il != 0 {
+                    let mut wi = [0u16; PATH_LEN + NAME_LEN + 2];
+                    DeleteFileW(wstr(&mut wi, &info[..il]));
+                }
             }
             continue;
         }

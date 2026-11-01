@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib
+from gi.repository import Gio, Gtk, GLib
 
 
 # ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
@@ -536,7 +536,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.set_icon_name("preferences-system")
         self.set_default_size(1020, 740)
         self.set_size_request(720, 500)
-        self.connect("destroy", Gtk.main_quit)
+        # Seule fenêtre de l'application en session ; sous Gtk.main() (tests),
+        # la fermer quitte encore la boucle.
+        self.connect("destroy", lambda *_: Gtk.main_level() and Gtk.main_quit())
         self.page = min(len(PAGES) - 1, max(0, int(os.environ.get("WINLUX_SETTINGS_PAGE", "0"))))
         # Une page sans contenu possible sur cette machine n'apparaît pas.
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
@@ -600,9 +602,14 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.body.pack_start(label, False, False, 0)
         return label
 
+    def open_page(self, page):
+        self.nav.select_row(self.nav.get_row_at_index(min(len(PAGES) - 1, max(0, page))))
+
     def select(self, _, row):
         if row is None: return
         self.page = row.get_index()
+        # Page visible lisible de l'extérieur (xprop WM_WINDOW_ROLE).
+        self.set_role(f"page-{self.page}")
         for child in self.body.get_children(): child.destroy()
         self.label(PAGES[self.page], "heading")
         self.label(_t("Vos préférences et l’état réel de votre ordinateur."), "subtitle")
@@ -852,6 +859,24 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         dialog.connect("response", lambda window, _: window.destroy())
         dialog.show_all()
 
+class SettingsApp(Gtk.Application):
+    """Une seule fenêtre Paramètres, comme sous Windows : un nouveau lancement
+    (menu Démarrer, raccourci, autre page) la ramène devant et ouvre la page
+    demandée au lieu d'empiler une copie."""
+    def __init__(self):
+        super().__init__(application_id="org.winlux.Settings", flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE | Gio.ApplicationFlags.SEND_ENVIRONMENT)
+        self.window = None
+
+    def do_command_line(self, line):
+        page = line.getenv("WINLUX_SETTINGS_PAGE") or ""
+        if self.window is None:
+            if page: os.environ["WINLUX_SETTINGS_PAGE"] = page
+            self.window = Settings()
+            self.add_window(self.window)
+        elif page.isdigit():
+            self.window.open_page(int(page))
+        self.window.present()
+        return 0
+
 if __name__ == "__main__":
-    Settings()
-    Gtk.main()
+    raise SystemExit(SettingsApp().run(None))
