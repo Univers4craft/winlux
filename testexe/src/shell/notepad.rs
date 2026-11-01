@@ -10,6 +10,7 @@ const MAX_TEXT: usize = 32768;
 const MAX_LINES: usize = 2048;
 const MAX_TABS: usize = 8;
 const MAX_NAME: usize = 48;
+const MAX_PATH: usize = 260;
 const GUTTER_W: i32 = 52;
 const TAB_H: i32 = 28;
 const MENU_H: i32 = 24;
@@ -77,6 +78,9 @@ struct Doc {
     modified: bool,
     name: [u8; MAX_NAME],
     name_len: usize,
+    // Chemin complet du fichier (vide pour un document jamais enregistré).
+    path: [u8; MAX_PATH],
+    path_len: usize,
     lang: Lang,
 }
 
@@ -94,6 +98,8 @@ impl Doc {
             modified: false,
             name: [0; MAX_NAME],
             name_len: 0,
+            path: [0; MAX_PATH],
+            path_len: 0,
             lang: Lang::Plain,
         }
     }
@@ -112,6 +118,12 @@ struct State {
     replace_len: usize,
     find_focused: bool, // true = find field, false = replace field
     find_matches: usize,
+    // barre « Enregistrer sous »
+    save_open: bool,
+    save_buf: [u8; MAX_PATH],
+    save_len: usize,
+    // onglet modifié dont la fermeture a été demandée une première fois
+    close_pending: i32,
     // new tab counter
     counter: usize,
     // cursor blink
@@ -131,6 +143,10 @@ static mut ST: State = State {
     replace_len: 0,
     find_focused: true,
     find_matches: 0,
+    save_open: false,
+    save_buf: [0; MAX_PATH],
+    save_len: 0,
+    close_pending: -1,
     counter: 0,
     blink_on: true,
     blink_tick: 0,
@@ -326,7 +342,216 @@ fn detect_lang(name: &[u8], len: usize) -> Lang {
     Lang::Plain
 }
 
-pub unsafe fn load_into_active(data: &[u8], name: &[u8]) {
+/// Nom de fichier : ce qui suit le dernier séparateur.
+fn basename(path: &[u8]) -> &[u8] {
+    let mut start = 0;
+    for (i, &c) in path.iter().enumerate() {
+        if c == b'\\' || c == b'/' {
+            start = i + 1;
+        }
+    }
+    &path[start..]
+}
+
+/// Mémorise le chemin complet du document, son nom d'onglet et son langage.
+fn set_path(d: &mut Doc, path: &[u8]) {
+    let pn = path.len().min(MAX_PATH);
+    d.path[..pn].copy_from_slice(&path[..pn]);
+    d.path_len = pn;
+    let name = basename(&path[..pn]);
+    let n = name.len().min(MAX_NAME);
+    d.name[..n].copy_from_slice(&name[..n]);
+    d.name_len = n;
+    d.lang = detect_lang(&d.name, d.name_len);
+}
+
+/// Chemin en UTF-16 (octets Latin-1 → unités de code) ; nul si trop long ou vide.
+fn wpath(buf: &mut [u16; MAX_PATH + 1], s: &[u8]) -> *const u16 {
+    if s.is_empty() || s.len() >= MAX_PATH || s.contains(&0) {
+        return core::ptr::null();
+    }
+    for (i, &c) in s.iter().enumerate() {
+        buf[i] = c as u16;
+    }
+    buf[s.len()] = 0;
+    buf.as_ptr()
+}
+
+/// Écrit le texte du document à son chemin. Vrai si tout est écrit.
+unsafe fn write_doc(d: &mut Doc) -> bool {
+    let mut w = [0u16; MAX_PATH + 1];
+    let p = wpath(&mut w, &d.path[..d.path_len]);
+    if p.is_null() {
+        return false;
+    }
+    let h = CreateFileW(
+        p,
+        0x4000_0000, // GENERIC_WRITE
+        0,
+        core::ptr::null_mut(),
+        2,    // CREATE_ALWAYS
+        0x80, // FILE_ATTRIBUTE_NORMAL
+        core::ptr::null_mut(),
+    );
+    if h.is_null() || h as isize == -1 {
+        return false;
+    }
+    let mut written = 0u32;
+    let ok = WriteFile(
+        h,
+        d.text.as_ptr(),
+        d.len as u32,
+        &mut written,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(h);
+    let ok = ok != 0 && written as usize == d.len;
+    if ok {
+        d.modified = false;
+    }
+    ok
+}
+
+/// Message « <préfixe><nom> » dans la zone de notification.
+unsafe fn toast_named(prefix: &[u8], name: &[u8]) {
+    let mut buf = [0u8; 200];
+    let pn = prefix.len().min(buf.len());
+    buf[..pn].copy_from_slice(&prefix[..pn]);
+    let nn = name.len().min(buf.len() - pn);
+    buf[pn..pn + nn].copy_from_slice(&name[..nn]);
+    crate::desktop::toast(&buf[..pn + nn]);
+}
+
+unsafe fn report_save(ok: bool, name: &[u8]) {
+    if ok {
+        toast_named(
+            tr4(&[b"Enregistr\xE9 : ", b"Saved: ", b"Guardado: ", b"Gespeichert: "]),
+            name,
+        );
+    } else {
+        toast_named(
+            tr4(&[
+                b"Impossible d'enregistrer ",
+                b"Couldn't save ",
+                b"No se pudo guardar ",
+                b"Speichern fehlgeschlagen: ",
+            ]),
+            name,
+        );
+    }
+}
+
+/// Ctrl+S : écrit le document à son chemin ; sans chemin (ou Ctrl+Maj+S),
+/// ouvre la barre « Enregistrer sous ».
+pub unsafe fn save_active(save_as: bool) {
+    let d = doc();
+    if save_as || d.path_len == 0 {
+        ST.find_open = false;
+        ST.replace_open = false;
+        ST.save_open = true;
+        // Pré-remplir avec le chemin connu, sinon le nom de l'onglet.
+        let src: &[u8] = if d.path_len > 0 {
+            &d.path[..d.path_len]
+        } else {
+            &d.name[..d.name_len]
+        };
+        let n = src.len().min(MAX_PATH - 1);
+        ST.save_buf[..n].copy_from_slice(&src[..n]);
+        ST.save_len = n;
+        return;
+    }
+    let ok = write_doc(d);
+    ST.close_pending = -1;
+    report_save(ok, &d.name[..d.name_len]);
+}
+
+/// Entrée dans la barre « Enregistrer sous » : un chemin absolu (lecteur ou
+/// « \ ») est pris tel quel, un simple nom va dans C:\Documents.
+unsafe fn save_as_confirm() {
+    let mut typed = &ST.save_buf[..ST.save_len];
+    while let [b' ', rest @ ..] = typed {
+        typed = rest;
+    }
+    while let [rest @ .., b' '] = typed {
+        typed = rest;
+    }
+    if typed.is_empty() {
+        return;
+    }
+    let mut full = [0u8; MAX_PATH];
+    let absolute = typed.contains(&b':') || typed.starts_with(b"\\") || typed.starts_with(b"/");
+    let n = if absolute {
+        if typed.len() >= MAX_PATH {
+            0
+        } else {
+            full[..typed.len()].copy_from_slice(typed);
+            typed.len()
+        }
+    } else {
+        let dir: &[u8] = b"C:\\Documents";
+        let mut w = [0u16; MAX_PATH + 1];
+        CreateDirectoryW(wpath(&mut w, dir), core::ptr::null_mut());
+        let n = dir.len() + 1 + typed.len();
+        if n >= MAX_PATH {
+            0
+        } else {
+            full[..dir.len()].copy_from_slice(dir);
+            full[dir.len()] = b'\\';
+            full[dir.len() + 1..n].copy_from_slice(typed);
+            n
+        }
+    };
+    if n == 0 {
+        crate::desktop::toast(tr4(&[
+            b"Chemin trop long",
+            b"Path too long",
+            b"Ruta demasiado larga",
+            b"Pfad zu lang",
+        ]));
+        return;
+    }
+    let d = doc();
+    set_path(d, &full[..n]);
+    ST.save_open = false;
+    ST.close_pending = -1;
+    let ok = write_doc(d);
+    report_save(ok, &d.name[..d.name_len]);
+}
+
+/// Fermeture d'un onglet : un onglet modifié demande une seconde fermeture
+/// (ou Ctrl+S) avant d'abandonner le texte.
+unsafe fn request_close(idx: usize) {
+    if ST.tabs[idx].modified && ST.close_pending != idx as i32 {
+        ST.close_pending = idx as i32;
+        crate::desktop::toast(tr4(&[
+            b"Modifications non enregistr\xE9es : Ctrl+S pour enregistrer, fermez \xE0 nouveau pour abandonner",
+            b"Unsaved changes: Ctrl+S to save, close again to discard",
+            b"Cambios sin guardar: Ctrl+S para guardar, cierre de nuevo para descartar",
+            b"Nicht gespeichert: Strg+S zum Speichern, erneut schlie\xDFen zum Verwerfen",
+        ]));
+        return;
+    }
+    ST.close_pending = -1;
+    close_tab(idx);
+}
+
+/// Hauteur de la barre affichée sous les menus (recherche, remplacement ou
+/// enregistrement).
+fn bar_h() -> i32 {
+    unsafe {
+        if ST.save_open {
+            FIND_H
+        } else if ST.find_open && ST.replace_open {
+            FIND_H * 2
+        } else if ST.find_open {
+            FIND_H
+        } else {
+            0
+        }
+    }
+}
+
+pub unsafe fn load_into_active(data: &[u8], path: &[u8]) {
     let d = doc();
     d.text = [0; MAX_TEXT];
     d.len = 0;
@@ -346,12 +571,10 @@ pub unsafe fn load_into_active(data: &[u8], name: &[u8]) {
         i += 1;
     }
     d.cursor = d.len;
-    let n = name.len().min(MAX_NAME);
-    for j in 0..n {
-        d.name[j] = name[j];
-    }
-    d.name_len = n;
-    d.lang = detect_lang(&d.name, d.name_len);
+    // L'ancre doit suivre le curseur : sinon tout le fichier est sélectionné
+    // à l'ouverture et la première touche le remplace.
+    d.anchor = d.cursor;
+    set_path(d, path);
     rebuild_lines(d);
 }
 
@@ -466,9 +689,38 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         mx += text_width(*item, 11) + 16;
     }
 
-    // === Find/Replace bar ===
+    // === Save-as bar ===
     let find_y = my + MENU_H;
-    let ey = if ST.find_open {
+    let ey = if ST.save_open {
+        fill(g.hdc, g.b, r.left, find_y, r.right, find_y + FIND_H, p.surface2);
+        let label = tr4(&[
+            b"Enregistrer sous :",
+            b"Save as:",
+            b"Guardar como:",
+            b"Speichern unter:",
+        ]);
+        let field_x = r.left + 12 + text_width(label, 11) + 8;
+        let field_w = (r.right - 40 - field_x).max(120);
+        text(g.hdc, g.f.small, p.text2, r.left + 8, find_y + 9, label);
+        round_rect(
+            g.hdc,
+            g.b,
+            field_x,
+            find_y + 4,
+            field_x + field_w,
+            find_y + FIND_H - 4,
+            4,
+            p.surface,
+        );
+        // Afficher la fin du chemin quand il déborde du champ.
+        let cw_field = ((field_w - 8) / cw.max(1)).max(1) as usize;
+        let shown = &ST.save_buf[ST.save_len.saturating_sub(cw_field)..ST.save_len];
+        text(g.hdc, mono(), p.text, field_x + 4, find_y + 8, shown);
+        let scx = field_x + 4 + text_width(shown, CHAR_H);
+        fill(g.hdc, g.b, scx, find_y + 7, scx + 1, find_y + FIND_H - 7, p.text);
+        text(g.hdc, g.f.small, p.text3, r.right - 24, find_y + 9, b"x");
+        find_y + FIND_H
+    } else if ST.find_open {
         let fh = if ST.replace_open { FIND_H * 2 } else { FIND_H };
         fill(g.hdc, g.b, r.left, find_y, r.right, find_y + fh, p.surface2);
         // Find field
@@ -1340,7 +1592,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                     if x >= tx && x < tx + tw {
                         // Close button area (last 16px)
                         if x >= tx + tw - 16 {
-                            close_tab(i);
+                            request_close(i);
                             return true;
                         }
                         ST.active = i;
@@ -1360,13 +1612,14 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
 
     // === Find bar clicks ===
-    let find_bar_bottom = if ST.find_open {
-        let my = r.top + MENU_H;
-        let fh = if ST.replace_open { FIND_H * 2 } else { FIND_H };
-        my + fh
-    } else {
-        r.top + MENU_H
-    };
+    let find_bar_bottom = r.top + MENU_H + bar_h();
+
+    if ST.save_open && y >= r.top + MENU_H && y < find_bar_bottom {
+        if ev == Mouse::Down && x >= r.right - 24 {
+            ST.save_open = false;
+        }
+        return true;
+    }
 
     if ST.find_open && y >= r.top + MENU_H && y < find_bar_bottom {
         match ev {
@@ -1478,6 +1731,8 @@ unsafe fn close_tab(idx: usize) {
         ST.tabs[i].modified = ST.tabs[src].modified;
         ST.tabs[i].name = ST.tabs[src].name;
         ST.tabs[i].name_len = ST.tabs[src].name_len;
+        ST.tabs[i].path = ST.tabs[src].path;
+        ST.tabs[i].path_len = ST.tabs[src].path_len;
         ST.tabs[i].lang = ST.tabs[src].lang;
         i += 1;
     }
@@ -1612,6 +1867,27 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     let ctrl = (crate::gfx::key_state(0x11) as u16 & 0x8000) != 0;
     let shift = (crate::gfx::key_state(0x10) as u16 & 0x8000) != 0;
 
+    // Save-as bar: it owns the keyboard while open.
+    if ST.save_open {
+        if vk == 0x1B {
+            ST.save_open = false;
+            return true;
+        }
+        if ch == 13 || vk == 0x0D {
+            save_as_confirm();
+            return true;
+        }
+        if ch == 8 {
+            ST.save_len = ST.save_len.saturating_sub(1);
+            return true;
+        }
+        if ch >= 0x20 && ch < 0x100 && ch != 0x7F && ST.save_len < MAX_PATH - 1 {
+            ST.save_buf[ST.save_len] = ch as u8;
+            ST.save_len += 1;
+        }
+        return true;
+    }
+
     // Find bar keyboard handling
     if ST.find_open {
         // Escape closes find bar
@@ -1682,7 +1958,12 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             }
             0x57 => {
                 // Ctrl+W
-                close_tab(ST.active);
+                request_close(ST.active);
+                return true;
+            }
+            0x53 => {
+                // Ctrl+S / Ctrl+Maj+S
+                save_active(shift);
                 return true;
             }
             0x41 => {
@@ -1916,4 +2197,116 @@ pub unsafe fn tick(_f: &Frame) -> bool {
         return true;
     }
     false
+}
+
+/// Régressions : ouvrir un fichier garde son chemin, Ctrl+S l'écrit réellement,
+/// « Enregistrer sous » range un simple nom dans C:\Documents, et un onglet
+/// modifié n'est pas fermé à la première demande.
+pub unsafe fn regression_checks() {
+    let mut raw = [0i8; MAX_PATH];
+    sprintf(
+        raw.as_mut_ptr(),
+        c"Z:\\tmp\\wlnotepad-%u.txt".as_ptr(),
+        GetCurrentProcessId(),
+    );
+    let rn = strlen(raw.as_ptr());
+    let path = core::slice::from_raw_parts(raw.as_ptr().cast::<u8>(), rn);
+
+    ST.tab_count = 0;
+    open_new();
+    load_into_active(b"bonjour\r\nmonde\r\n", path);
+    let d = doc();
+    check!(
+        d.path_len == rn && &d.path[..rn] == path && &d.name[..d.name_len] == basename(path),
+        "Bloc-notes : le fichier ouvert garde son chemin et son nom"
+    );
+    insert_bytes(d, b"!");
+    check!(
+        d.modified && d.len == 15,
+        "Bloc-notes : la saisie apres ouverture ajoute au texte sans le remplacer"
+    );
+    save_active(false);
+    check!(
+        !ST.save_open && !doc().modified,
+        "Bloc-notes : Ctrl+S ecrit le fichier a son chemin"
+    );
+    let mut w = [0u16; MAX_PATH + 1];
+    let h = CreateFileW(
+        wpath(&mut w, path),
+        0x8000_0000,
+        1,
+        core::ptr::null_mut(),
+        3,
+        0,
+        core::ptr::null_mut(),
+    );
+    let mut back = [0u8; 64];
+    let mut got = 0u32;
+    if !h.is_null() && h as isize != -1 {
+        ReadFile(h, back.as_mut_ptr(), 64, &mut got, core::ptr::null_mut());
+        CloseHandle(h);
+    }
+    check!(
+        &back[..got as usize] == b"bonjour\nmonde\n!",
+        "Bloc-notes : le fichier relu contient le texte enregistre"
+    );
+    DeleteFileW(wpath(&mut w, path));
+
+    // Document sans chemin : Ctrl+S ouvre la barre, Entrée enregistre au
+    // chemin saisi (absolu ici, pour ne pas toucher au vrai dossier Documents).
+    open_new();
+    insert_bytes(doc(), b"x");
+    save_active(false);
+    check!(
+        ST.save_open,
+        "Bloc-notes : Ctrl+S sans chemin ouvre Enregistrer sous"
+    );
+    ST.save_len = 0;
+    for &c in path {
+        key(0, c as u16);
+    }
+    key(0x0D, 13);
+    let d = doc();
+    check!(
+        !ST.save_open && !d.modified && d.path_len == rn && &d.path[..rn] == path,
+        "Bloc-notes : Enregistrer sous ecrit au chemin saisi"
+    );
+    check!(
+        GetFileAttributesW(wpath(&mut w, path)) != u32::MAX,
+        "Bloc-notes : le fichier Enregistrer sous existe"
+    );
+    DeleteFileW(wpath(&mut w, path));
+
+    // Un simple nom va dans C:\Documents.
+    ST.save_open = true;
+    ST.save_len = 0;
+    for &c in b"note.txt" {
+        key(0, c as u16);
+    }
+    let d = doc();
+    d.modified = true;
+    let before = d.path_len;
+    save_as_confirm();
+    let d = doc();
+    check!(
+        d.path_len != before
+            && d.path[..d.path_len].starts_with(b"C:\\Documents\\")
+            && &d.name[..d.name_len] == b"note.txt",
+        "Bloc-notes : un simple nom est range dans C:\\Documents"
+    );
+    DeleteFileW(wpath(&mut w, &d.path[..d.path_len]));
+
+    // Fermeture d'un onglet modifié : refusée la première fois.
+    let tabs = ST.tab_count;
+    doc().modified = true;
+    request_close(ST.active);
+    check!(
+        ST.tab_count == tabs,
+        "Bloc-notes : un onglet modifie n'est pas ferme d'emblee"
+    );
+    request_close(ST.active);
+    check!(
+        ST.tab_count == tabs - 1,
+        "Bloc-notes : la seconde fermeture abandonne le texte"
+    );
 }
