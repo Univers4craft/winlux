@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **235**
-- À faire ou en cours : **44**
-- Total : **279**
-- Progression : **84.2%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189)
+- Réalisé : **237**
+- À faire ou en cours : **45**
+- Total : **282**
+- Progression : **84.0%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174)
 
 ## À FAIRE (par priorité)
 
@@ -95,6 +95,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [ ] Observateur d'événements complet : journaux système, applications et .exe, filtres, niveaux, recherche, export (#178).
 - [ ] Informations système détaillées (carte mère, processeur, mémoire, disques, GPU, réseau, pilotes, version) avec export (#178).
 - [ ] Outil de diagnostic : rapport lisible après un plantage, enregistré ou envoyé par `winlux-report` (#178).
+- [ ] Partage de dossiers : valider dans une VM avec un vrai PC Windows (panneau Réseau via wsdd) et un Mac (Finder) sur le même réseau (#171).
 - [ ] Intégrer les applis Windows au bureau : associations de fichiers, .lnk du Bureau et « Applications par défaut » livrés, reste « Ouvrir avec… » dans l'Explorateur (#152).
 - [ ] Démarrage sous 10 secondes et mode jeu : temps de démarrage mesuré et affiché livré, mode jeu livré, reste la réduction des étapes les plus longues (mesure en VM KVM) (#153).
 - [ ] Compatibilité Linux ↔ Windows du texte, des polices, de la langue, du clavier et de l'heure : livré dans la PR de #183 ; restent les clés de registre dynamiques, `ToUnicode`/`VkKeyScan` selon la disposition et les pages 1250/1251/866 (#183, `docs/INTL.md`).
@@ -113,6 +114,8 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Droits Windows tirés des permissions Linux (jetons, SID, `GetFileSecurity`/`GetNamedSecurityInfo`) et UAC maison : manifeste `requireAdministrator` ou `runas` → demande du mot de passe local, fichiers créés laissés à l'utilisateur (#175, partie 2).
 
 - [x] Captures d'écran automatiques et mode machine virtuelle (#156) : `scripts/capture-ui.py` photographie sous Xvfb les 25 pages des Paramètres, le menu Démarrer, les popups, les outils système, Bienvenue et les applis maison PE (bureau, Explorateur, Store, Polices, Planificateur, Pare-feu) ; `scripts/compare-captures.py` les compare à la dernière version verte de master (job CI « Captures d'écran », artefacts `captures-ui` et `captures-ui-diff`, alerte au-delà de 2 % de pixels changés). `winlux-hardware` détecte l'hyperviseur (`/run/winlux/hw/virtual-machine`) et ne compte plus les cartes émulées comme GPU : curseur logiciel conservé, économiseur en GL logiciel, « Suivre la taille de la VM » seulement en VM.
+- [x] Partage de dossiers vers Windows, Mac et Linux (#171) : `winlux-share` (Samba, outil standard, caché s'il manque), comptes Winlux = comptes SMB, droits Aucun accès / Lecture / Modification par compte et pour les invités, dossiers système refusés, SMB1 coupé, pare-feu ouvert sur les réseaux privés seulement, annonce wsdd/Avahi. Explorateur : clic droit > « Partager ce dossier… ». Paramètres > Partage et transfert (page 28). Tests `scripts/test-share.sh`.
+- [x] Transfert des réglages entre deux PC Winlux par fichier `.wlxprofile`, sans compte en ligne (#171) : `winlux-transfer` (thème, barre des tâches, fond, accessibilité, lecteurs réseau sans mot de passe, applis par défaut, langue, clavier, souris, confidentialité), import en liste blanche, sauvegarde et annulation. Tests `scripts/test-transfer.sh`.
 - [x] Direct2D 1.0 logiciel maison (`d2d1.rs`, `d2d_raster.rs`) : géométries, chemins, pinceaux unis, bitmaps, cible de rendu sur bitmap WIC, rendu anticrénelé, transformations et découpe ; `ID2D1DeviceContext` et dégradés à venir (`docs/PAINTNET.md`).
 - [x] Exceptions C++ MSVC maison (`cxx_eh.rs`) : `_CxxThrowException`, `__CxxFrameHandler3`, `__C_specific_handler` (`__try/__except/__finally`), test `testc/msvc/eh_msvc.cpp` en CI ; `__CxxFrameHandler4` à venir.
 - [x] DirectWrite maison (`dwrite.rs`, `sfnt.rs`) : contours TrueType lus sans dépendance, polices du système et de remplacement des polices Windows, mise en page du texte (coupure, alignements, tests de position), texte dessiné par Direct2D ; mise en forme OpenType et polices CFF à venir.

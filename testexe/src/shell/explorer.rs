@@ -2804,6 +2804,7 @@ enum Item {
     CompressTarGz,
     CompressZipPw,
     ConnectNet,
+    Share,
 }
 
 fn item_label(i: Item) -> &'static [u8] {
@@ -2886,6 +2887,12 @@ fn item_label(i: Item) -> &'static [u8] {
             b"Comprimir en ZIP con contrase\xF1a...",
             b"In ZIP mit Kennwort komprimieren...",
         ]),
+        Item::Share => t4([
+            b"Partager ce dossier...",
+            b"Share this folder...",
+            b"Compartir esta carpeta...",
+            b"Diesen Ordner freigeben...",
+        ]),
         Item::ConnectNet => t4([
             b"Connecter un lecteur r\xE9seau...",
             b"Map network drive...",
@@ -2956,6 +2963,7 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Delete,
             Item::Sep,
             Item::CopyPath,
+            Item::Share,
             Item::Sep,
             Item::CompressZip,
             Item::Compress7z,
@@ -3003,6 +3011,12 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Compress7z => !in_pc && !in_home && formats & 2 != 0,
             Item::CompressTarGz => !in_pc && !in_home && formats & 8 != 0,
             Item::ConnectNet => in_pc,
+            // Dossier seulement, et seulement si le partage existe (Samba).
+            Item::Share => {
+                !in_pc
+                    && first_sel(p).is_some_and(|i| p.entries[i].dir)
+                    && crate::sharing::available()
+            }
             _ => true,
         };
         if !keep {
@@ -3148,7 +3162,7 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
             }
             Item::Mount => Some(Glyph::DiskImage),
             Item::Eject => Some(Glyph::Eject),
-            Item::ConnectNet => Some(Glyph::NetDrive),
+            Item::ConnectNet | Item::Share => Some(Glyph::NetDrive),
             _ => None,
         };
         if let Some(gl) = gl {
@@ -4524,6 +4538,15 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             ask_password(JobKind::Create, false);
         }
         Item::ConnectNet => crate::settings::open_page(crate::settings::PAGE_NETDRIVES),
+        Item::Share => {
+            if let Some(i) = first_sel(p) {
+                let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
+                let n = item_path(p, i, &mut b);
+                if n > 0 {
+                    crate::sharing::open_dialog(&b[..n]);
+                }
+            }
+        }
         Item::Sep => {}
     }
     let _ = geo;
@@ -5577,6 +5600,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     draw_status(g, &geo);
     draw_menu(g, &geo, f);
     draw_password(g, f);
+    crate::sharing::draw_dialog(g, f);
 }
 
 unsafe fn pane_rect_inner(geo: &Geo, which: usize) -> Rect {
@@ -5609,6 +5633,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if PASSWORD_OPEN {
         return password_mouse(ev, x, y, f);
+    }
+    if crate::sharing::dialog_open() {
+        return crate::sharing::dialog_mouse(ev, x, y, f);
     }
     let geo = geo(f);
     // Menu ouvert : il capte le clic.
@@ -6053,6 +6080,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     if PASSWORD_OPEN {
         return password_key(vk, ch);
     }
+    if crate::sharing::dialog_open() {
+        return crate::sharing::dialog_key(vk, ch);
+    }
     if ch == 27 && JOB != 0 && FOCUS == Focus::List && MENU == Menu::None {
         cancel_job();
         return true;
@@ -6383,6 +6413,7 @@ unsafe fn watch_folders() -> bool {
 pub unsafe fn tick(_f: &Frame) -> bool {
     let refreshed = watch_folders();
     let mut animating = refreshed || poll_job() || PASSWORD_OPEN || crate::thumbs::pending();
+    animating |= crate::sharing::dialog_tick();
     for i in 0..NTABS {
         for which in 0..2 {
             let pn = &mut TABS[i].panes[which];
