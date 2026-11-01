@@ -114,6 +114,38 @@ if panel_config.is_file():
             tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
     except (ET.ParseError, OSError, ValueError, TypeError):
         pass
+# xfce4-genmon-plugin 4.2+ (Ubuntu 26.04) lit sa configuration dans xfconf
+# (/plugins/plugin-N/command...) et ignore les anciens genmon-N.rc : sans ces
+# propriétés, les icônes réseau, son, batterie et notifications de la barre
+# des tâches restent vides. Reporter chaque genmon-N.rc une fois.
+if panel_config.is_file():
+    try:
+        tree = ET.parse(panel_config)
+        plugins = next((item for item in tree.getroot() if item.get("name") == "plugins"), None)
+        changed = False
+        for plugin in list(plugins) if plugins is not None else []:
+            name = plugin.get("name") or ""
+            if plugin.get("value") != "genmon" or not name[7:].isdigit():
+                continue
+            if any(child.get("name") == "command" for child in plugin):
+                continue
+            rc = home / ".config/xfce4/panel" / f"genmon-{name[7:]}.rc"
+            if not rc.is_file():
+                continue
+            values = dict(line.split("=", 1) for line in rc.read_text(encoding="utf-8").splitlines() if "=" in line)
+            if not values.get("Command"):
+                continue
+            for key, kind, value in [("command", "string", values["Command"]),
+                                     ("use-label", "bool", "true" if values.get("UseLabel") == "1" else "false"),
+                                     ("text", "string", values.get("Text", "")),
+                                     ("update-period", "int", str(int(values.get("UpdatePeriod", "3000") or 3000))),
+                                     ("font", "string", values.get("Font", "DejaVu Sans 10"))]:
+                ET.SubElement(plugin, "property", {"name": key, "type": kind, "value": value})
+            changed = True
+        if changed:
+            tree.write(panel_config, encoding="UTF-8", xml_declaration=True)
+    except (ET.ParseError, OSError, ValueError, TypeError):
+        pass
 # Migrer uniquement le raccourci livré par Winlux, sans toucher aux raccourcis
 # personnalisés. Super_L seul absorbe W-Left/W-Right dans Openbox.
 openbox_config = home / ".config/openbox/rc.xml"
@@ -162,4 +194,4 @@ desktop.mkdir(exist_ok=True)
 # Defaults for file opening, not a rewrite of the user's selected associations.
 mimeapps = home / ".config/mimeapps.list"
 if not mimeapps.exists():
-    mimeapps.write_text("[Default Applications]\ntext/plain=org.xfce.mousepad.desktop;\ntext/x-python=org.xfce.mousepad.desktop;\ntext/x-shellscript=org.xfce.mousepad.desktop;\ninode/directory=winlux-explorer.desktop;\napplication/x-ms-dos-executable=winlux.desktop;\napplication/x-msdownload=winlux.desktop;\napplication/vnd.microsoft.portable-executable=winlux.desktop;\napplication/x-ms-shortcut=winlux.desktop;\nx-scheme-handler/http=winlux-browser.desktop;\nx-scheme-handler/https=winlux-browser.desktop;\n")
+    mimeapps.write_text("[Default Applications]\ntext/plain=org.xfce.mousepad.desktop;\ntext/x-python=org.xfce.mousepad.desktop;\ntext/x-shellscript=org.xfce.mousepad.desktop;\ninode/directory=winlux-explorer.desktop;\napplication/x-ms-dos-executable=winlux.desktop;\napplication/x-msdownload=winlux.desktop;\napplication/vnd.microsoft.portable-executable=winlux.desktop;\napplication/x-ms-shortcut=winlux.desktop;\ntext/x-ms-regedit=winlux-regedit.desktop;\nx-scheme-handler/http=winlux-browser.desktop;\nx-scheme-handler/https=winlux-browser.desktop;\n")

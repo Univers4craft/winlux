@@ -244,6 +244,7 @@ fn builtin_creator(clsid: &Guid) -> Option<Creator> {
     super::dsound::creator(clsid)
         .or_else(|| super::mmdevapi::creator(clsid))
         .or_else(|| super::xaudio2::creator(clsid))
+        .or_else(|| super::windowscodecs::creator(clsid))
 }
 
 /// Crée une instance d'une classe audio intégrée (appelé par CoCreateInstance
