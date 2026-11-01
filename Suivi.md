@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **236**
-- À faire ou en cours : **48**
+- Réalisé : **237**
+- À faire ou en cours : **47**
 - Total : **284**
-- Progression : **83.1%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins Windows ↔ Linux #175, glisser-déposer Windows ↔ Linux #189, stabilité de la session native #203)
+- Progression : **83.5%**
+- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, gestionnaire des tâches #178, chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, stabilité de la session native #203)
 
 ## À FAIRE (par priorité)
 
@@ -58,7 +58,6 @@
 - [ ] Compléter le cycle de vie des processus : héritage de handles, attributs étendus et suivi/récolte robuste des enfants.
 - [ ] Ajouter le partage d’objets nommés et de fichiers entre processus invités.
 - [ ] Continuer `ntdll` : exceptions/unwinding, TLS statique des DLL chargées dynamiquement sur chaque thread, sections et primitives bas niveau manquantes.
-- [ ] Droits Windows tirés des permissions Linux (jetons, SID, `GetFileSecurity`/`GetNamedSecurityInfo`) et UAC maison : manifeste `requireAdministrator` ou `runas` → demande du mot de passe local, fichiers créés laissés à l'utilisateur (#175, partie 2).
 - [ ] Faire tourner Paint.NET (#138) : runtime embarqué par l'appli (coreclr), puis WIC, Direct2D/DirectWrite et WPF. Étapes et blocages mesurés dans `docs/PAINTNET.md`.
 - [ ] Ajouter les DLL système nécessaires aux logiciels ciblés et mesurer leur compatibilité; la présence de stubs ne garantit pas l’API.
 - [ ] Brancher Media Foundation/DirectShow des `.exe` sur le moteur multimédia du runtime (`winlux_media.rs`) : le lecteur du shell lit déjà tous les formats, mais `mfplat`/`quartz` restent des bouchons pour les programmes Windows.
@@ -116,6 +115,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [x] Accents, polices, langue, clavier et heure (#183, `docs/INTL.md`) : pages de code 1252/850/858/437/8859/UTF-8 et API A/W complètes, console en page OEM, noms ZIP Windows (OEM, champ Unicode Path), `winlux --text` (UTF-16, CRLF), locale et formats suivis depuis Paramètres et glibc, disposition clavier XKB → HKL, touches mortes, fuseau TZif et vraies conversions FILETIME (les dates de fichiers des .exe valaient toutes le 1er janvier 2024), polices de `C:\Windows\Fonts` visibles de Linux et remplacements Arial/Segoe UI.
 - [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).
 - [x] Chemins Windows ↔ Linux (#175, partie 1) : `C:\Users\<nom>` et ses dossiers connus suivent les dossiers XDG (Documents, Bureau…), `SHGetFolderPath`/`SHGetKnownFolderPath`/`GetUserProfileDirectory`, variables `USERPROFILE`/`APPDATA`…, `ExpandEnvironmentStrings`, noms Linux interdits sous Windows codés comme Cygwin, casse stable, chemins longs, `NUL`, UNC, liens symboliques (REPARSE_POINT, `CreateSymbolicLink`), `GetFullPathName` sur le texte, lecture seule réelle ; accents perdus par `CreateFileW`/`LoadLibraryW` & co corrigés. Test PE `winpaths`, `docs/CHEMINS-ET-DROITS.md`.
+- [x] Droits Windows tirés des permissions Linux (jetons, SID, `GetFileSecurity`/`GetNamedSecurityInfo`) et UAC maison : manifeste `requireAdministrator` ou `runas` → demande du mot de passe local, fichiers créés laissés à l'utilisateur (#175, partie 2).
 
 - [x] Captures d'écran automatiques et mode machine virtuelle (#156) : `scripts/capture-ui.py` photographie sous Xvfb les 25 pages des Paramètres, le menu Démarrer, les popups, les outils système, Bienvenue et les applis maison PE (bureau, Explorateur, Store, Polices, Planificateur, Pare-feu) ; `scripts/compare-captures.py` les compare à la dernière version verte de master (job CI « Captures d'écran », artefacts `captures-ui` et `captures-ui-diff`, alerte au-delà de 2 % de pixels changés). `winlux-hardware` détecte l'hyperviseur (`/run/winlux/hw/virtual-machine`) et ne compte plus les cartes émulées comme GPU : curseur logiciel conservé, économiseur en GL logiciel, « Suivre la taille de la VM » seulement en VM.
 - [x] Direct2D 1.0 logiciel maison (`d2d1.rs`, `d2d_raster.rs`) : géométries, chemins, pinceaux unis, bitmaps, cible de rendu sur bitmap WIC, rendu anticrénelé, transformations et découpe ; `ID2D1DeviceContext` et dégradés à venir (`docs/PAINTNET.md`).

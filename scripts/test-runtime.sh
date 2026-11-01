@@ -43,7 +43,7 @@ cat >/dev/null
 HELPER
 chmod 755 "$notify_helper"
 
-for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths crt_suite gui_suite gui_demo explorer_regression voicerecorder power_api audio_suite d3d_suite print_suite; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths uac_suite crt_suite gui_suite gui_demo explorer_regression voicerecorder power_api audio_suite d3d_suite print_suite; do
     exe="$testdir/$name.exe"
     test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
     printf '\n== %s ==\n' "$name"
@@ -54,7 +54,7 @@ for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths c
         WINLUX_HOME="$paths_home" WINLUX_DRIVE_C="$paths_home" XDG_CONFIG_HOME="$paths_home/.config" \
             WINLUX_GUI=headless "$runtime" "$exe"
     else
-        WINLUX_AUDIO=null WINLUX_TEST=salut WINLUX_GUI=headless WINLUX_POWER_ROOT="$power_root" \
+        WINLUX_UAC=allow WINLUX_AUDIO=null WINLUX_TEST=salut WINLUX_GUI=headless WINLUX_POWER_ROOT="$power_root" \
             WINLUX_NOTIFY_ICON_HELPER="$notify_helper" "$runtime" "$exe"
     fi
     actual=$?
@@ -79,4 +79,16 @@ test "$captured" = "Bonjour depuis un .exe Windows, execute par Winlux !" || {
     exit 1
 }
 echo "OK"
+# UAC refusée : uac_suite (requireAdministrator) ne doit pas démarrer.
+# 1223 (ERROR_CANCELLED) devient 199 en code de sortie Linux sur 8 bits.
+# root est toujours administrateur : le refus ne se teste qu'en utilisateur.
+if [ "$(id -u)" -ne 0 ]; then
+    printf '\n== uac_suite (refus) ==\n'
+    set +e
+    WINLUX_UAC=deny WINLUX_GUI=headless "$runtime" "$testdir/uac_suite.exe" >/dev/null
+    actual=$?
+    set -e
+    test "$actual" -eq 199 || { echo "uac_suite refusé : code $actual attendu 199" >&2; exit 1; }
+    echo "  OK     programme non démarré après refus"
+fi
 echo "Tous les tests runtime passent."
