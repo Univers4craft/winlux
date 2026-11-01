@@ -27,6 +27,7 @@
 
 ### État actuel
 
+- [x] ISO v0.2.12 réparée pour la v0.2.13 : carte filaire laissée « non gérée » par NetworkManager (réglage Ubuntu Netplan) donc pas de réseau ni de mise à jour, secours DHCP qui ne rallumait pas une carte éteinte, installateur sans ses modules Python (`/usr/lib/winlux` exclu du paquet) et raccourci « Installer Winlux » dépendant de pkexec absent de l'image.
 - [x] Identité visuelle (#170) : logo maison « Prisme » (plus aucun logo Microsoft), écran de démarrage du bureau, thème GRUB assorti, fonds « Winlux Nuit » / « Winlux Aube », page À propos avec matériel réel, son « Prisme ». Voir `docs/IDENTITE-VISUELLE.md`.
 - [ ] Identité visuelle, suite (#170) : écran pendant le chargement du noyau, sons système assortis, jeu d'icônes cohérent.
 - [x] Lecteurs réseau : FTP, FTPS, SFTP, WebDAV(S), SMB, NFS et S3 montés comme un disque avec lettre (`winlux-drives`, page Paramètres « Lecteurs réseau »), mots de passe chiffrés ChaCha20-Poly1305, reconnexion automatique et état hors ligne publiés dans le registre commun `mounts.tsv`. Seuls les protocoles dont l'outil de montage est présent sont proposés. Reste : modules noyau cifs/nfs dans l'ISO live (SMB passe par rclone en attendant, NFS masqué).

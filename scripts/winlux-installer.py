@@ -5208,6 +5208,9 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
 
 
 def main():
+    # The live session already runs as root; elsewhere ask through polkit.
+    if os.geteuid() != 0 and shutil.which("pkexec") and os.environ.get("DISPLAY"):
+        os.execvp("pkexec", ["pkexec", os.path.abspath(__file__), *sys.argv[1:]])
     if os.geteuid() != 0:
         print("ERREUR : l'installateur doit être lancé en tant que root (sudo).", file=sys.stderr)
         sys.exit(1)

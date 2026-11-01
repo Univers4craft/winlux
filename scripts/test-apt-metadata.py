@@ -19,7 +19,8 @@ for invalid in [valid + "format=3\n", valid.replace("format=3", "format=2"),
     else: raise AssertionError("Incompatible or malformed manifest accepted")
 for path in ("usr/bin/telnet", "usr/lib/x86_64-linux-gnu/libc.so.6", "usr/lib/modules/old/driver.ko", "usr/share/winlux/kernel-version"):
     assert not builder["winlux_path"](path), path
-for path in ("usr/bin/winlux", "usr/share/winlux/native/config/panel.xml", "usr/share/applications/winlux-settings.desktop"):
+for path in ("usr/bin/winlux", "usr/share/winlux/native/config/panel.xml", "usr/share/applications/winlux-settings.desktop",
+             "usr/lib/winlux/python/winlux_benchmark.py"):
     assert builder["winlux_path"](path), path
 with tempfile.TemporaryDirectory(prefix="apt-cache-check.") as temporary:
     root = Path(temporary); source = root / "source"; target = root / "installed.deb"
