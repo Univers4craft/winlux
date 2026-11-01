@@ -62,11 +62,13 @@ if test -n "$luks_device"; then
     test "$unlocked" = 1 || fail 'déverrouillage du disque chiffré impossible'
 fi
 if test -n "$root_device"; then
-    for attempt in $("$B" seq 1 60); do
+    # Disque sondé toutes les 0,1 s (30 s au plus) : le SSD/NVMe est souvent
+    # prêt dès le premier tour, l'ancien pas de 0,5 s faisait attendre pour rien.
+    for attempt in $("$B" seq 1 300); do
         device=$root_device
         case "$device" in UUID=*|LABEL=*) device=$("$B" findfs "$device" 2>/dev/null || true) ;; esac
         if test -b "$device" && "$B" mount -t ext4 -o rw "$device" /newroot; then break; fi
-        "$B" sleep 0.5
+        "$B" sleep 0.1
     done
     "$B" awk '$2 == "/newroot" {mounted=1} END {exit !mounted}' /proc/mounts || fail "persistent root not found: $root_device"
     if test -n "$boot_device"; then

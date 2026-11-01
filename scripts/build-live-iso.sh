@@ -519,7 +519,14 @@ boot_mark recovery
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid-generic.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/serio-raw.ko 2>/dev/null || true
 /bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/psmouse.ko 2>/dev/null || true
-for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio bochs qxl vmwgfx; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
+# Pilotes des cartes PCI présentes (réseau, son, affichage bochs/qxl/vmwgfx
+# des VM…) en un seul appel, d'après leur modalias, au lieu de 13 modprobe à
+# l'aveugle ; udev complète ensuite pour l'USB et le reste.
+if test -x /usr/sbin/modprobe; then
+    /bin/busybox cat /sys/bus/pci/devices/*/modalias 2>/dev/null | /bin/busybox xargs /usr/sbin/modprobe -a -b -q 2>/dev/null || true
+else
+    for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio bochs qxl vmwgfx; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
+fi
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
@@ -530,12 +537,17 @@ if test -s /etc/fstab; then
     else /bin/busybox mount -a 2>/dev/null || true; fi
     /sbin/swapon -a 2>/dev/null || /bin/busybox swapon -a 2>/dev/null || true
 fi
-/usr/bin/winlux-hardware >/dev/null 2>&1 || true
-/usr/bin/winlux-firmware >/dev/null 2>&1 || true
-# Profil d'utilisation choisi à l'installation (sysctl, gouverneur CPU, E/S, GPU).
-if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
-    /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
-fi
+# Seule la partie utile à l'affichage (pilote GPU, configuration Xorg)
+# précède Xorg ; le reste de l'inventaire, le contrôle des firmwares et le
+# profil d'utilisation (sysctl, gouverneur CPU, E/S) suivent en arrière-plan.
+/usr/bin/winlux-hardware display >/dev/null 2>&1 || true
+(
+    /usr/bin/winlux-hardware rest >/dev/null 2>&1 || true
+    /usr/bin/winlux-firmware >/dev/null 2>&1 || true
+    if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
+        /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
+    fi
+) &
 boot_mark hardware
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
@@ -804,7 +816,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         # Clavier et pavé tactile appliqués pendant que le bureau se dessine
         # (le pavé seul prenait plusieurs secondes avant le fond d'écran).
         keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
-        case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
+        case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" >/dev/null 2>&1 & ;; esac
         # Pavé tactile : toucher-clic, deux doigts, défilement naturel, vitesse.
         DISPLAY=:0 /usr/bin/winlux-touchpad apply >/dev/null 2>&1 &
         echo "WINLUX_DESKTOP_READY pid=$desktop_pid"

@@ -8,7 +8,19 @@ export PATH
 WINLUX_HW_LOG=${WINLUX_HW_LOG:-/run/winlux/hardware.log}
 mkdir -p "$(dirname "$WINLUX_HW_LOG")" /run/winlux/hw
 
-log() { printf '[%s] %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '??:??:??')" "$*" >>"$WINLUX_HW_LOG"; }
+# Horodatage = secondes depuis l'allumage, lu sans lancer de processus
+# (un `date` par ligne coûtait cher au démarrage).
+log() {
+    read -r log_uptime log_idle </proc/uptime 2>/dev/null || log_uptime=?
+    printf '[%ss] %s\n' "$log_uptime" "$*" >>"$WINLUX_HW_LOG"
+}
+# Lecture d'un petit fichier (sysfs, /run/winlux/hw) sans lancer `cat` :
+# hw_read FICHIER [DÉFAUT] ; résultat dans $hw_value.
+hw_read() {
+    hw_value=
+    { read -r hw_value <"$1"; } 2>/dev/null || true
+    test -n "$hw_value" || hw_value=${2:-}
+}
 # Le winlux-prime-run livré avec Winlux choisit le GPU via le runtime
 # (adresse PCI exacte, NVIDIA ou Mesa) : ne pas le remplacer.
 prime_run_is_runtime() { grep -q -- "--gpu-env" /usr/bin/winlux-prime-run 2>/dev/null; }
@@ -58,7 +70,10 @@ enumerate_pci() {
 # lieu d'un curseur matériel invisible ou décalé et d'un GL sans accélération.
 detect_virtual_machine() {
     dmi=/sys/class/dmi/id
-    identity=$(cat "$dmi/sys_vendor" "$dmi/product_name" "$dmi/board_vendor" 2>/dev/null | tr '\n' ' ')
+    identity=
+    for field in sys_vendor product_name board_vendor; do
+        hw_read "$dmi/$field"; identity="$identity$hw_value "
+    done
     vm=
     case "$identity" in
         *QEMU*|*Bochs*|*KVM*) vm=qemu ;;
@@ -99,11 +114,11 @@ detect_gpu() {
 
     for dev in /sys/bus/pci/devices/*; do
         test -d "$dev" || continue
-        class=$(cat "$dev/class" 2>/dev/null || echo "0x000000")
+        hw_read "$dev/class" 0x000000; class=$hw_value
         case "$class" in
             0x030000|0x030200|0x038000)
-                vendor=$(cat "$dev/vendor" 2>/dev/null || echo "0x0000")
-                device_id=$(cat "$dev/device" 2>/dev/null || echo "0x0000")
+                hw_read "$dev/vendor" 0x0000; vendor=$hw_value
+                hw_read "$dev/device" 0x0000; device_id=$hw_value
                 if virtual_display "$vendor"; then
                     virtual_gpu_count=$((virtual_gpu_count + 1))
                     log "Affichage virtuel détecté : $(basename "$dev") [$vendor:$device_id]"
@@ -144,10 +159,10 @@ detect_gpu() {
 
 # --- Configuration GPU ---
 configure_gpu() {
-    has_nvidia=$(cat /run/winlux/hw/has-nvidia 2>/dev/null || echo 0)
-    has_amd=$(cat /run/winlux/hw/has-amd 2>/dev/null || echo 0)
-    has_intel=$(cat /run/winlux/hw/has-intel 2>/dev/null || echo 0)
-    gpu_count=$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)
+    hw_read /run/winlux/hw/has-nvidia 0; has_nvidia=$hw_value
+    hw_read /run/winlux/hw/has-amd 0; has_amd=$hw_value
+    hw_read /run/winlux/hw/has-intel 0; has_intel=$hw_value
+    hw_read /run/winlux/hw/gpu-count 0; gpu_count=$hw_value
 
     # NVIDIA : tenter nouveau (libre) puis nvidia (propriétaire)
     if test "$has_nvidia" = 1; then
@@ -205,10 +220,10 @@ configure_gpu() {
 
 # --- Multi-GPU (Optimus/PRIME, switchable) ---
 configure_multi_gpu() {
-    has_nvidia=$(cat /run/winlux/hw/has-nvidia 2>/dev/null || echo 0)
-    has_intel=$(cat /run/winlux/hw/has-intel 2>/dev/null || echo 0)
-    has_amd=$(cat /run/winlux/hw/has-amd 2>/dev/null || echo 0)
-    gpu_count=$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)
+    hw_read /run/winlux/hw/has-nvidia 0; has_nvidia=$hw_value
+    hw_read /run/winlux/hw/has-intel 0; has_intel=$hw_value
+    hw_read /run/winlux/hw/has-amd 0; has_amd=$hw_value
+    hw_read /run/winlux/hw/gpu-count 0; gpu_count=$hw_value
 
     log "Configuration multi-GPU ($gpu_count GPU)"
     printf '%s\n' "$gpu_count" >/run/winlux/hw/multi-gpu
@@ -274,8 +289,8 @@ PRIME
         nvidia_count=0
         for dev in /sys/bus/pci/devices/*; do
             test -d "$dev" || continue
-            vendor=$(cat "$dev/vendor" 2>/dev/null || echo "0x0000")
-            class=$(cat "$dev/class" 2>/dev/null || echo "0x000000")
+            hw_read "$dev/vendor" 0x0000; vendor=$hw_value
+            hw_read "$dev/class" 0x000000; class=$hw_value
             case "$class" in 0x030000|0x030200) test "$vendor" = "0x10de" && nvidia_count=$((nvidia_count + 1)) ;; esac
         done
         if test "$nvidia_count" -gt 1; then
@@ -287,8 +302,8 @@ PRIME
         amd_count=0
         for dev in /sys/bus/pci/devices/*; do
             test -d "$dev" || continue
-            vendor=$(cat "$dev/vendor" 2>/dev/null || echo "0x0000")
-            class=$(cat "$dev/class" 2>/dev/null || echo "0x000000")
+            hw_read "$dev/vendor" 0x0000; vendor=$hw_value
+            hw_read "$dev/class" 0x000000; class=$hw_value
             case "$class" in 0x030000|0x030200) test "$vendor" = "0x1002" && amd_count=$((amd_count + 1)) ;; esac
         done
         if test "$amd_count" -gt 1; then
@@ -300,17 +315,17 @@ PRIME
 
 # --- Génération de xorg.conf dynamique ---
 generate_xorg_config() {
-    has_nvidia=$(cat /run/winlux/hw/has-nvidia 2>/dev/null || echo 0)
-    has_amd=$(cat /run/winlux/hw/has-amd 2>/dev/null || echo 0)
-    has_intel=$(cat /run/winlux/hw/has-intel 2>/dev/null || echo 0)
-    gpu_mode=$(cat /run/winlux/hw/gpu-mode 2>/dev/null || echo "")
-    nvidia_driver=$(cat /run/winlux/hw/nvidia-driver 2>/dev/null || echo "")
+    hw_read /run/winlux/hw/has-nvidia 0; has_nvidia=$hw_value
+    hw_read /run/winlux/hw/has-amd 0; has_amd=$hw_value
+    hw_read /run/winlux/hw/has-intel 0; has_intel=$hw_value
+    hw_read /run/winlux/hw/gpu-mode ''; gpu_mode=$hw_value
+    hw_read /run/winlux/hw/nvidia-driver ''; nvidia_driver=$hw_value
 
     conf_dir=/usr/share/X11/xorg.conf.d
     mkdir -p "$conf_dir"
 
     # Supprimer l'ancien config modesetting statique (uniquement si on a un vrai GPU)
-    gpu_count=$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)
+    hw_read /run/winlux/hw/gpu-count 0; gpu_count=$hw_value
     if test "$gpu_count" -gt 0; then
         rm -f "$conf_dir/20-winlux-display.conf"
     fi
@@ -691,12 +706,19 @@ hardware_summary() {
 }
 
 # --- Exécution principale ---
-main() {
-    coldplug_modules
-    enumerate_pci
+# Partie utile à l'affichage (pilote GPU et configuration Xorg), lancée par
+# l'init avant Xorg ; le reste de l'inventaire part en arrière-plan.
+#   winlux-hardware display | winlux-hardware rest | winlux-hardware (tout)
+display_part() {
     detect_virtual_machine
     detect_gpu
     configure_gpu
+    generate_xorg_config
+    log "Affichage prêt"
+}
+rest_part() {
+    coldplug_modules
+    enumerate_pci
     detect_cpu
     configure_smp
     detect_wifi
@@ -709,9 +731,13 @@ main() {
     detect_power
     detect_storage
     load_firmware
-    generate_xorg_config
     hardware_summary
     log "Détection matérielle terminée"
 }
 
-main "$@"
+case "${1:-all}" in
+    display) display_part ;;
+    rest) rest_part ;;
+    all) display_part; rest_part ;;
+    *) echo "usage : winlux-hardware [display|rest]" >&2; exit 2 ;;
+esac

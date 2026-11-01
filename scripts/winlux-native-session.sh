@@ -82,16 +82,9 @@ fi
 # Start the desktop file service after its hardware dependencies are ready.
 # An early GVfs activation could otherwise time out on software-emulated CPUs.
 /usr/bin/Thunar --daemon >/run/winlux/file-manager.log 2>&1 &
-wait_bus_name session org.xfce.FileManager "$!" /run/winlux/file-manager.log
-# Name ownership precedes GTK/GVfs initialization. Wait for an actual method
-# reply so the desktop cannot send file-launch requests to a busy startup loop.
-/usr/bin/gdbus call --session --dest org.xfce.FileManager \
-    --object-path /org/xfce/FileManager --method org.freedesktop.DBus.Peer.Ping \
-    --timeout 90 >>/run/winlux/file-manager.log 2>&1 || {
-        cat /run/winlux/file-manager.log >&2
-        exit 1
-    }
-/usr/bin/winlux-trust-shortcuts
+# Thunar s'initialise pendant que la suite de la session démarre ; on
+# l'attend seulement avant de rendre la main au bureau (xfdesktop).
+thunar_pid=$!
 has_bluetooth=false
 if test "$(cat /run/winlux/hw/has-bluetooth 2>/dev/null)" = 1; then
     has_bluetooth=true
@@ -134,18 +127,22 @@ if test -x /usr/bin/winlux-share; then /usr/bin/winlux-share ensure >/dev/null 2
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
 # Réglages restaurés sans le rapport d'état complet de winlux-control
 # (l'init le rafraîchit toutes les 3 s) : 18 s de gagnées en VM émulée.
-export WINLUX_CONTROL_NO_STATUS=1
-case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
-# Restore the user's input choice on each session, without resetting defaults.
+# En arrière-plan : xfconf garde l'alignement d'une session à l'autre et le
+# panneau suit en direct toute correction ; souris et processeur n'ont pas
+# besoin d'attendre non plus.
 speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
-case "$speed" in
-    25) /usr/bin/winlux-control mouse-slow || true ;;
-    50) /usr/bin/winlux-control mouse-normal || true ;;
-    75) /usr/bin/winlux-control mouse-fast || true ;;
-esac
-# Profil processeur et courbe de ventilateurs choisis dans les Parametres.
-if test -s /etc/winlux/cpu.conf; then /usr/bin/winlux-control cpu-restore || true; fi
-unset WINLUX_CONTROL_NO_STATUS
+(
+    export WINLUX_CONTROL_NO_STATUS=1
+    case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
+    # Restore the user's input choice on each session, without resetting defaults.
+    case "$speed" in
+        25) /usr/bin/winlux-control mouse-slow || true ;;
+        50) /usr/bin/winlux-control mouse-normal || true ;;
+        75) /usr/bin/winlux-control mouse-fast || true ;;
+    esac
+    # Profil processeur et courbe de ventilateurs choisis dans les Parametres.
+    if test -s /etc/winlux/cpu.conf; then /usr/bin/winlux-control cpu-restore || true; fi
+) </dev/null >/run/winlux/session-settings.log 2>&1 &
 # Cache des chargeurs d'images : régénéré seulement s'il manque ou si un
 # chargeur a été installé depuis (paquet APT), pas à chaque démarrage.
 pixbuf_dir=/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0
@@ -156,7 +153,21 @@ if ! test -s "$pixbuf_dir/loaders.cache" || test -n "$(find "$pixbuf_dir/loaders
 fi
 # Shared MIME and desktop caches are generated when building the image,
 # rather than scanning the full database on every cold boot.
-/usr/bin/winlux-applications refresh
+# Catalogue des programmes Windows (menu Démarrer) : son premier passage se
+# fait en parallèle de la barre des tâches au lieu de la retarder ; les
+# raccourcis de la session précédente restent affichés entre-temps.
+(
+    while :; do
+        /usr/bin/winlux-applications refresh >/run/winlux/applications.log 2>&1 || true
+        /usr/bin/winlux-applications window-icons >>/run/winlux/applications.log 2>&1 || true
+        if test -f /run/winlux/browser-chooser; then
+            rm -f /run/winlux/browser-chooser
+            /usr/bin/winlux-shell-app settings 11 >/run/winlux/browser-settings.log 2>&1 &
+        fi
+        sleep 5
+    done
+) </dev/null >/run/winlux/catalogue.log 2>&1 &
+echo $! > /run/winlux/catalogue.pid
 /usr/bin/openbox --sm-disable --config-file "$HOME/.config/openbox/rc.xml" >/run/winlux/window-manager.log 2>&1 &
 echo $! > /run/winlux/window-manager.pid
 for attempt in $(seq 1 30); do
@@ -171,7 +182,18 @@ if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
 fi
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
-/usr/bin/winlux-session-startup >/run/winlux/startup-apps.log 2>&1
+wait_bus_name session org.xfce.FileManager "$thunar_pid" /run/winlux/file-manager.log
+# Name ownership precedes GTK/GVfs initialization. Wait for an actual method
+# reply so the desktop cannot send file-launch requests to a busy startup loop.
+/usr/bin/gdbus call --session --dest org.xfce.FileManager \
+    --object-path /org/xfce/FileManager --method org.freedesktop.DBus.Peer.Ping \
+    --timeout 90 >>/run/winlux/file-manager.log 2>&1 || {
+        cat /run/winlux/file-manager.log >&2
+        exit 1
+    }
+/usr/bin/winlux-trust-shortcuts
+# Programmes « au démarrage » : lancés après le bureau, comme sous Windows.
+/usr/bin/winlux-session-startup >/run/winlux/startup-apps.log 2>&1 &
 # Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
 if command -v winlux-store >/dev/null 2>&1; then
     winlux-store starter --resume >/run/winlux/starter.log 2>&1 &
@@ -191,15 +213,3 @@ if ! { test -f /run/winlux/lock-daemon.pid && kill -0 "$(cat /run/winlux/lock-da
     /usr/bin/winlux-lock daemon >/run/winlux/lock.log 2>&1 &
     echo $! > /run/winlux/lock-daemon.pid
 fi
-(
-    while :; do
-        /usr/bin/winlux-applications refresh >/run/winlux/applications.log 2>&1 || true
-        /usr/bin/winlux-applications window-icons >>/run/winlux/applications.log 2>&1 || true
-        if test -f /run/winlux/browser-chooser; then
-            rm -f /run/winlux/browser-chooser
-            /usr/bin/winlux-shell-app settings 11 >/run/winlux/browser-settings.log 2>&1 &
-        fi
-        sleep 5
-    done
-) </dev/null >/run/winlux/catalogue.log 2>&1 &
-echo $! > /run/winlux/catalogue.pid

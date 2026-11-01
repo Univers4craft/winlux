@@ -195,8 +195,8 @@ fi'
 fi
 cat >"$work/target/boot/grub/grub.cfg" <<EOF
 set default=0
-set timeout=2
-set timeout_style=menu
+set timeout=1
+set timeout_style=hidden
 set winlux_term=console
 $theme_block
 serial --unit=0 --speed=115200
