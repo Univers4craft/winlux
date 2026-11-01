@@ -1,5 +1,5 @@
-//! Format ZIP (PKWARE APPNOTE) : lecture (stocké, DEFLATE, ZIP64, noms CP437
-//! ou UTF-8, chiffrement ZipCrypto) et écriture, écrits de zéro.
+//! Format ZIP (PKWARE APPNOTE) : lecture (stocké, DEFLATE, ZIP64, noms OEM
+//! Windows, UTF-8 ou champ Unicode Path, chiffrement ZipCrypto) et écriture, écrits de zéro.
 
 use super::crc32::{crc32_byte, Crc32};
 use super::deflate::Deflater;
@@ -9,26 +9,49 @@ use std::fs::File;
 use std::io::{self, BufReader, BufWriter, Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
-const CP437_HIGH: [char; 128] = [
-    'Ç', 'ü', 'é', 'â', 'ä', 'à', 'å', 'ç', 'ê', 'ë', 'è', 'ï', 'î', 'ì', 'Ä', 'Å', 'É', 'æ', 'Æ',
-    'ô', 'ö', 'ò', 'û', 'ù', 'ÿ', 'Ö', 'Ü', '¢', '£', '¥', '₧', 'ƒ', 'á', 'í', 'ó', 'ú', 'ñ', 'Ñ',
-    'ª', 'º', '¿', '⌐', '¬', '½', '¼', '¡', '«', '»', '░', '▒', '▓', '│', '┤', '╡', '╢', '╖', '╕',
-    '╣', '║', '╗', '╝', '╜', '╛', '┐', '└', '┴', '┬', '├', '─', '┼', '╞', '╟', '╚', '╔', '╩', '╦',
-    '╠', '═', '╬', '╧', '╨', '╤', '╥', '╙', '╘', '╒', '╓', '╫', '╪', '┘', '┌', '█', '▄', '▌', '▐',
-    '▀', 'α', 'ß', 'Γ', 'π', 'Σ', 'σ', 'µ', 'τ', 'Φ', 'Θ', 'Ω', 'δ', '∞', 'φ', 'ε', '∩', '≡', '±',
-    '≥', '≤', '⌠', '⌡', '÷', '≈', '°', '∙', '·', '√', 'ⁿ', '²', '■', '\u{a0}',
-];
+/// Nom d'une entrée sans l'indicateur UTF-8 : un ZIP créé sous Windows
+/// (Explorateur, anciens WinZip/WinRAR) l'écrit dans la page OEM de sa
+/// langue (850 en Europe de l'Ouest), un ZIP Unix en UTF-8 le plus souvent.
+fn legacy_name(raw: &[u8], made_by_host: u16) -> String {
+    let utf8 = std::str::from_utf8(raw).ok();
+    if raw.iter().all(|&b| b < 128) {
+        return utf8.unwrap_or_default().to_string();
+    }
+    // Hôte 0 = MS-DOS/FAT, 10/11 = NTFS : page OEM même si les octets
+    // ressemblent à de l'UTF-8.
+    let windows = matches!(made_by_host, 0 | 10 | 11 | 14);
+    match utf8 {
+        Some(s) if !windows => s.to_string(),
+        _ => {
+            let oem = crate::intl::codepage::resolve(crate::intl::codepage::CP_OEMCP);
+            crate::intl::codepage::decode(oem, raw, false).unwrap_or_default()
+        }
+    }
+}
 
-fn cp437(b: &[u8]) -> String {
-    b.iter()
-        .map(|&c| {
-            if c < 128 {
-                c as char
-            } else {
-                CP437_HIGH[(c - 128) as usize]
+/// Champ « Info-ZIP Unicode Path » (0x7075) : nom UTF-8 ajouté par 7-Zip,
+/// WinRAR et Info-ZIP, valable si son CRC correspond au nom d'origine.
+fn unicode_path_extra(extra: &[u8], raw: &[u8]) -> Option<String> {
+    let mut x = 0;
+    while x + 4 <= extra.len() {
+        let id = u16le(extra, x);
+        let sz = u16le(extra, x + 2) as usize;
+        if x + 4 + sz > extra.len() {
+            break;
+        }
+        if id == 0x7075 && sz >= 5 && extra[x + 4] == 1 {
+            let crc = u32le(extra, x + 5);
+            let mut c = Crc32::new();
+            c.update(raw);
+            if c.value() == crc {
+                return std::str::from_utf8(&extra[x + 9..x + 4 + sz])
+                    .ok()
+                    .map(str::to_string);
             }
-        })
-        .collect()
+        }
+        x += 4 + sz;
+    }
+    None
 }
 
 #[derive(Clone, Debug)]
@@ -131,15 +154,12 @@ pub fn list(f: &mut File) -> Res<Vec<ZipEntry>> {
             return Err(bad("répertoire central tronqué"));
         }
         let raw = &cd[p + 46..p + 46 + nlen];
+        let extra = &cd[p + 46 + nlen..p + 46 + nlen + xlen];
         let name = if flags & 0x800 != 0 {
             String::from_utf8_lossy(raw).into_owned()
         } else {
-            match std::str::from_utf8(raw) {
-                Ok(s) if raw.iter().all(|&b| b < 128) => s.to_string(),
-                _ => cp437(raw),
-            }
+            unicode_path_extra(extra, raw).unwrap_or_else(|| legacy_name(raw, made_by >> 8))
         };
-        let extra = &cd[p + 46 + nlen..p + 46 + nlen + xlen];
         let mut x = 0;
         while x + 4 <= extra.len() {
             let id = u16le(extra, x);
@@ -756,6 +776,32 @@ mod tests {
             items.push((archive_name(&e.rel), src.join(&e.rel)));
         }
         items
+    }
+
+    #[test]
+    fn noms_de_zip_crees_sous_windows() {
+        // « Été.txt » en page OEM 850 (Explorateur Windows français).
+        let raw = b"\x90t\x82.txt";
+        if crate::intl::codepage::resolve(crate::intl::codepage::CP_OEMCP) == 850 {
+            assert_eq!(legacy_name(raw, 0), "Été.txt");
+        }
+        // Zip Unix sans indicateur : UTF-8.
+        assert_eq!(legacy_name("Été.txt".as_bytes(), 3), "Été.txt");
+        assert_eq!(legacy_name(b"plain.txt", 0), "plain.txt");
+        // Champ Unicode Path (7-Zip) : prioritaire si le CRC correspond.
+        let utf8 = "Ελληνικά.txt".as_bytes();
+        let mut c = Crc32::new();
+        c.update(raw);
+        let mut extra = vec![0x75, 0x70];
+        extra.extend_from_slice(&((5 + utf8.len()) as u16).to_le_bytes());
+        extra.push(1);
+        extra.extend_from_slice(&c.value().to_le_bytes());
+        extra.extend_from_slice(utf8);
+        assert_eq!(
+            unicode_path_extra(&extra, raw).as_deref(),
+            Some("Ελληνικά.txt")
+        );
+        assert_eq!(unicode_path_extra(&extra, b"autre"), None);
     }
 
     #[test]
