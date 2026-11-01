@@ -22,11 +22,8 @@ case "${1:-}" in
         exec /usr/bin/winlux-shell-app explorer "$directory" ;;
     screensaver) exec /usr/bin/xscreensaver-command -activate ;;
     screensaver-settings) exec /usr/bin/xscreensaver-settings ;;
-    shutdown|reboot)
-        action=$1; test "$action" != shutdown || action=poweroff
-        if /usr/bin/winlux-control "$action"; then exit 0; fi
-        detail=$(tail -n 1 /run/winlux/action.log 2>/dev/null || true)
-        /usr/bin/notify-send 'Arrêt ou redémarrage annulé' "${detail:-Consultez le journal système.}" 2>/dev/null || true
-        exit 1 ;;
+    # Boîte de confirmation au style Windows 11, puis arrêt réel (winlux-power).
+    shutdown|reboot) exec /usr/bin/winlux-power ask "$1" ;;
+    lock) exec /usr/bin/winlux-lock now ;;
     *) exit 2 ;;
 esac

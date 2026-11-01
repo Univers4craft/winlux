@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Contraste du texte du menu Démarrer, des panneaux de la barre et de l'horloge.
+"""Contraste du texte du menu Démarrer, des panneaux de la barre, de l'horloge et des boîtes d’arrêt.
 
 À lancer dans un affichage X dédié (xvfb-run). Pour chaque thème (clair et
 sombre, avec et sans le gtk.css écrit par winlux-personalize), chaque libellé,
@@ -214,12 +214,28 @@ def child_case(case):
         GLib.timeout_add(300, run_popup)
         popup.run([])
 
+    # Boîtes d'arrêt (winlux-power) : confirmation, applications bloquantes, erreur.
+    power_module = runpy.run_path(str(directory / "winlux-power.py"), run_name="contrast_test")
+    for action in ("shutdown", "reboot"):
+        ui = power_module["PowerUI"](action)
+        settle()
+        check(ui.window, f"boîte {action} confirmation")
+        ui.show_blocked({"0x1": ("mousepad.Mousepad", "Rapport.txt - Bloc-notes", "1")})
+        settle()
+        check(ui.window, f"boîte {action} applications bloquantes")
+        ui.show_error(power_module["UPDATE_BUSY"])
+        settle()
+        check(ui.window, f"boîte {action} erreur")
+        ui.ungrab()
+        ui.window.destroy()
+        settle()
+
     check_clock(case, problems, luminance)
 
     if problems:
         print("\n".join(problems))
         raise SystemExit(1)
-    print(f"OK: {case}, tout le texte du menu Démarrer, des panneaux de la barre et de l'horloge dépasse {MINIMUM}:1")
+    print(f"OK: {case}, tout le texte du menu Démarrer, des panneaux de la barre, de l'horloge et des boîtes d’arrêt dépasse {MINIMUM}:1")
 
 
 def hex_luminance(value, luminance):
