@@ -1002,6 +1002,12 @@ pub unsafe fn dispatch(rec: *mut ExceptionRecord, orig: &mut Context) -> Unhandl
                 return Unhandled::NotHandled;
             }
             if dc.language_handler == 0 {
+                seh_trace!(
+                    "recherche {:#x} : cadre {} (établi {:#x}) sans gestionnaire",
+                    (*rec).code,
+                    crate::thunks::describe_site(dc.control_pc as usize),
+                    dc.establisher_frame
+                );
                 break 'retry;
             }
             let index = push_frame(FrameKind::Handler, *orig);

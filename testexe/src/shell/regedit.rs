@@ -2133,9 +2133,10 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, _f: &Frame) -> bool {
     }
     match ev {
         Mouse::Move => {
+            // Les coordonnées ne servent à aucun surlignage : rien à repeindre.
             HITS.mx = x;
             HITS.my = y;
-            true
+            false
         }
         Mouse::Down | Mouse::RightDown => {
             let id = HITS.find(x, y);

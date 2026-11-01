@@ -5,7 +5,11 @@
 //!   l'a interdit par `SetThreadExecutionState`/`PowerSetRequest` ;
 //! - réagit au capot, au bouton d'alimentation et à la touche veille
 //!   (lecture directe des périphériques evdev du noyau) ;
-//! - met en veille prolongée quand la batterie devient critique.
+//! - met en veille prolongée quand la batterie devient critique ;
+//! - applique les touches de luminosité du clavier (sauf si le noyau ou le
+//!   micrologiciel l'a déjà fait, pour ne jamais compter deux pas) ;
+//! - capot fermé avec un écran externe branché : la machine reste éveillée
+//!   (mode « station », comme Windows).
 
 use super::{
     active_inhibits_at, last_activity_at, now_secs, read_status_at, read_trim,
@@ -25,6 +29,8 @@ pub enum Hw {
     LidOpened,
     PowerButton,
     SleepButton,
+    BrightnessUp,
+    BrightnessDown,
 }
 
 const EV_KEY: u16 = 1;
@@ -33,6 +39,8 @@ const KEY_POWER: u16 = 116;
 const KEY_SLEEP: u16 = 142;
 const KEY_SUSPEND: u16 = 205;
 const SW_LID: u16 = 0;
+const KEY_BRIGHTNESSDOWN: u16 = 224;
+const KEY_BRIGHTNESSUP: u16 = 225;
 
 /// Décode un `struct input_event` 64 bits (24 octets).
 pub fn decode_event(buf: &[u8; 24]) -> Option<Hw> {
@@ -44,12 +52,28 @@ pub fn decode_event(buf: &[u8; 24]) -> Option<Hw> {
         (EV_KEY, KEY_SLEEP | KEY_SUSPEND, 1) => Some(Hw::SleepButton),
         (EV_SW, SW_LID, 1) => Some(Hw::LidClosed),
         (EV_SW, SW_LID, 0) => Some(Hw::LidOpened),
+        // 1 = appui, 2 = répétition quand la touche reste enfoncée.
+        (EV_KEY, KEY_BRIGHTNESSUP, 1 | 2) => Some(Hw::BrightnessUp),
+        (EV_KEY, KEY_BRIGHTNESSDOWN, 1 | 2) => Some(Hw::BrightnessDown),
         _ => None,
     }
 }
 
-/// Périphériques d'entrée ACPI utiles (bouton, capot, touche veille).
-fn acpi_inputs(root: &Path) -> Vec<PathBuf> {
+/// Vrai si le masque `capabilities/key` du noyau (mots hexadécimaux, le
+/// plus significatif d'abord) annonce la touche `code`.
+pub fn has_key(caps: &str, code: u16) -> bool {
+    let words: Vec<&str> = caps.split_whitespace().collect();
+    let index = usize::from(code / 64);
+    let Some(word) = words.len().checked_sub(index + 1).map(|i| words[i]) else {
+        return false;
+    };
+    u64::from_str_radix(word, 16).is_ok_and(|w| w & (1u64 << (code % 64)) != 0)
+}
+
+/// Périphériques d'entrée utiles : bouton, capot, touche veille et tout
+/// périphérique qui annonce les touches de luminosité (bus vidéo ACPI,
+/// touches spéciales du constructeur, clavier interne).
+pub fn acpi_inputs(root: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let Ok(dir) = fs::read_dir(root.join("sys/class/input")) else {
         return found;
@@ -60,12 +84,78 @@ fn acpi_inputs(root: &Path) -> Vec<PathBuf> {
             continue;
         }
         let dev = read_trim(&entry.path().join("device/name")).unwrap_or_default();
-        if matches!(dev.as_str(), "Power Button" | "Sleep Button" | "Lid Switch") {
+        let keys = read_trim(&entry.path().join("device/capabilities/key")).unwrap_or_default();
+        if matches!(dev.as_str(), "Power Button" | "Sleep Button" | "Lid Switch")
+            || has_key(&keys, KEY_BRIGHTNESSUP)
+            || has_key(&keys, KEY_BRIGHTNESSDOWN)
+        {
             found.push(root.join("dev/input").join(name));
         }
     }
     found.sort();
     found
+}
+
+/// Écran externe branché (connecteur DRM qui n'est pas la dalle interne).
+pub fn external_display_at(root: &Path) -> bool {
+    let Ok(dir) = fs::read_dir(root.join("sys/class/drm")) else {
+        return false;
+    };
+    dir.flatten().any(|e| {
+        let name = e.file_name().to_string_lossy().into_owned();
+        // card0-eDP-1 → eDP-1 ; « card0 » seul n'est pas un connecteur.
+        let Some((_, connector)) = name.split_once('-') else {
+            return false;
+        };
+        let internal = ["eDP", "LVDS", "DSI"]
+            .iter()
+            .any(|p| connector.starts_with(p));
+        !internal && read_trim(&e.path().join("status")).as_deref() == Some("connected")
+    })
+}
+
+/// Action du capot : rien quand un écran externe est branché.
+pub fn lid_action(configured: Action, docked: bool) -> Action {
+    if docked && matches!(configured, Action::Sleep | Action::Hibernate) {
+        Action::Nothing
+    } else {
+        configured
+    }
+}
+
+/// Pas de luminosité : 5 % sous 20 %, 10 % au-dessus (réglage fin dans le
+/// bas de l'échelle, là où l'œil voit le plus la différence).
+pub fn brightness_step(current: u32, up: bool) -> u32 {
+    let step = if current < 20 || (!up && current <= 20) {
+        5
+    } else {
+        10
+    };
+    if up {
+        (current + step).min(100)
+    } else {
+        current.saturating_sub(step).max(5)
+    }
+}
+
+/// Touche luminosité : si le rétroéclairage a déjà bougé depuis `before`
+/// (le noyau ou le micrologiciel a traité la touche), on enregistre
+/// seulement la nouvelle valeur ; sinon on fait le pas nous-mêmes.
+/// Renvoie le pourcentage final.
+pub fn brightness_key(root: &Path, up: bool, before: Option<u32>) -> Option<u32> {
+    std::thread::sleep(Duration::from_millis(150));
+    let now = super::brightness_at(root)?;
+    let mut config = Config::load_at(root);
+    let factor = config.profile.brightness_factor().max(1);
+    let result = if before.is_some_and(|b| b != now) {
+        now
+    } else {
+        let target = brightness_step(now, up);
+        super::set_brightness_at(root, target)?
+    };
+    config.brightness = (result * 100 / factor).clamp(5, 100);
+    let _ = config.save_at(root);
+    Some(result)
 }
 
 fn spawn_readers(root: &Path, tx: &mpsc::Sender<Hw>) -> usize {
@@ -298,6 +388,7 @@ pub fn run(root: &Path) -> i32 {
     let mut lid_was_closed = lid_closed_proc(root).unwrap_or(false);
     let mut quiet_until = 0u64;
     let mut critical_done = false;
+    let mut last_brightness = super::brightness_at(root);
     // En VM sans batterie, la veille sur inactivité figerait la machine de
     // test : seule la veille demandée explicitement reste possible.
     let virtual_machine = super::is_virtual_at(root);
@@ -322,11 +413,29 @@ pub fn run(root: &Path) -> i32 {
                 lid_was_closed = closed;
             }
         }
+        if let Some(ev @ (Hw::BrightnessUp | Hw::BrightnessDown)) = hw {
+            hw = None;
+            if let Some(p) = brightness_key(root, ev == Hw::BrightnessUp, last_brightness) {
+                sleep::event(root, &format!("brightness {p}"));
+            }
+            touch_activity_at(root);
+        }
         if let Some(ev) = hw.filter(|_| now >= quiet_until) {
             let action = match ev {
-                Hw::LidClosed => Some(config.lid),
+                Hw::LidClosed => {
+                    let docked = external_display_at(root);
+                    let action = lid_action(config.lid, docked);
+                    if docked && action != config.lid {
+                        log(
+                            root,
+                            "capot ferm\u{e9} avec un \u{e9}cran externe : veille ignor\u{e9}e",
+                        );
+                    }
+                    Some(action)
+                }
                 Hw::PowerButton => Some(config.button_action(has_battery)),
                 Hw::SleepButton => Some(Action::Sleep),
+                Hw::BrightnessUp | Hw::BrightnessDown => None,
                 Hw::LidOpened => {
                     display_on(root);
                     screen_off = false;
@@ -401,6 +510,8 @@ pub fn run(root: &Path) -> i32 {
             }
             IdleStep::None => {}
         }
+        // Valeur de référence pour reconnaître un pas déjà fait par le noyau.
+        last_brightness = super::brightness_at(root);
         let text = status_lines(&status, &config, root);
         if text != last_text {
             write_status(root, &text);
