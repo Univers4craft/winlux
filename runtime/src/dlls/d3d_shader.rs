@@ -360,10 +360,7 @@ fn convert_sample_calls(line: &str) -> String {
     // Pattern: texName.Sample(samplerName, uv) → texture(texName, uv)
     // We look for `.Sample(` and rewrite.
     while let Some(dot_pos) = s.find(".Sample(") {
-        let tex_start = s[..dot_pos]
-            .rfind(|c: char| !c.is_alphanumeric() && c != '_')
-            .map(|p| p + 1)
-            .unwrap_or(0);
+        let tex_start = ident_start(&s[..dot_pos]);
         let tex_name = &s[tex_start..dot_pos];
         let args_start = dot_pos + 8; // skip ".Sample("
         if let Some(close) = find_matching_paren(&s, args_start - 1) {
@@ -383,10 +380,7 @@ fn convert_sample_calls(line: &str) -> String {
 
     // SampleLevel → textureLod
     while let Some(dot_pos) = s.find(".SampleLevel(") {
-        let tex_start = s[..dot_pos]
-            .rfind(|c: char| !c.is_alphanumeric() && c != '_')
-            .map(|p| p + 1)
-            .unwrap_or(0);
+        let tex_start = ident_start(&s[..dot_pos]);
         let tex_name = &s[tex_start..dot_pos];
         let args_start = dot_pos + 13;
         if let Some(close) = find_matching_paren(&s, args_start - 1) {
@@ -432,6 +426,16 @@ fn convert_mul_calls(line: &str) -> String {
         }
     }
     s
+}
+
+/// Début de l'identifiant qui termine `s` (index d'octet sur une frontière
+/// de caractère, même si le caractère précédent est multi-octets).
+fn ident_start(s: &str) -> usize {
+    s.char_indices()
+        .rev()
+        .find(|(_, c)| !c.is_alphanumeric() && *c != '_')
+        .map(|(i, c)| i + c.len_utf8())
+        .unwrap_or(0)
 }
 
 fn find_matching_paren(s: &str, open_pos: usize) -> Option<usize> {

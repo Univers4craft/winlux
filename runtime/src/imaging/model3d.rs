@@ -628,6 +628,17 @@ fn gltf_json(json: &[u8], bin: &[u8]) -> Result<Vec<[f32; 9]>, Error> {
             .and_then(|v| v.num())
             .map(|v| v as usize)
             .unwrap_or(comps * csize);
+        // `count` vient du JSON : les données doivent exister dans le tampon
+        // avant toute allocation (le dernier élément doit tenir).
+        if count == 0 || stride == 0 {
+            return None;
+        }
+        let last = off
+            .checked_add((count - 1).checked_mul(stride)?)?
+            .checked_add(comps * csize)?;
+        if last > buf.len() {
+            return None;
+        }
         let mut out = Vec::with_capacity(count * comps);
         for i in 0..count {
             for c in 0..comps {
