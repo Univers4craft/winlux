@@ -1,13 +1,20 @@
 //! Gestionnaire des tâches Winlux (fenêtre autonome)
 #![no_std]
 #![no_main]
+#![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
 
+#[path = "../shell/admin_ui.rs"]
+mod admin_ui;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/gpuinfo.rs"]
 mod gpuinfo;
+#[path = "../shell/locale.rs"]
+mod locale;
+#[path = "../shell/sysmon.rs"]
+mod sysmon;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
 #[path = "../shell/wm_standalone.rs"]

@@ -24,6 +24,8 @@ mod diskcleaner;
 mod diskmgr;
 #[path = "../shell/eventviewer.rs"]
 mod eventviewer;
+#[path = "../shell/sysinfo.rs"]
+mod sysinfo;
 #[path = "../shell/explorer.rs"]
 mod explorer;
 #[path = "../shell/filehistory.rs"]
@@ -64,6 +66,8 @@ mod snip;
 mod store;
 #[path = "../shell/settings_cpu.rs"]
 mod settings_cpu;
+#[path = "../shell/sysmon.rs"]
+mod sysmon;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
 #[path = "../shell/taskschd.rs"]
