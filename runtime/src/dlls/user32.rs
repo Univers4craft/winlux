@@ -330,9 +330,19 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
             write_msg(out, &m);
             return 1;
         }
+        // File vide : une zone encore invalidée (pas de BeginPaint) reçoit
+        // de nouveau WM_PAINT, comme sous Windows. En headless, la boucle
+        // vide doit se terminer : pas de réémission sans fin.
+        if gui::backend_is_interactive() {
+            if let Some(m) = gui::pending_paint(hwnd, min, max) {
+                write_msg(out, &m);
+                return 1;
+            }
+        }
         // File vide : en headless on rend la main (fin de boucle); avec un
-        // backend réel on attend les prochains événements hôte, comme Win32.
-        let wait = gui::next_timer_ms(hwnd).map_or(50, |ms| ms.min(50));
+        // backend réel on dort jusqu'au prochain événement hôte, dépôt d'un
+        // autre thread ou minuteur (borne de sûreté : 500 ms).
+        let wait = gui::next_timer_ms(hwnd).map_or(500, |ms| ms.min(500));
         if !gui::wait_backend(wait) {
             return 0;
         }
@@ -376,13 +386,17 @@ pub unsafe extern "win64" fn peek_message_a(
             write_msg(out, &m);
             return 1;
         }
-        return 0;
-    }
-    if let Some(m) = gui::peek_message(&q, hwnd, min, max) {
+    } else if let Some(m) = gui::peek_message(&q, hwnd, min, max) {
         write_msg(out, &m);
-        1
-    } else {
-        0
+        return 1;
+    }
+    // File vide : WM_PAINT tant que la fenêtre n'a pas validé sa zone.
+    match gui::pending_paint(hwnd, min, max) {
+        Some(m) => {
+            write_msg(out, &m);
+            1
+        }
+        None => 0,
     }
 }
 
@@ -792,14 +806,14 @@ pub unsafe extern "win64" fn set_window_text_w(hwnd: usize, text: *const u16) ->
 
 pub unsafe extern "win64" fn get_window_text_a(hwnd: usize, buf: *mut u8, cap: i32) -> i32 {
     match gui::title_of(hwnd) {
-        Some(t) => crate::dlls::put_a(&t, buf, cap.max(0) as u32) as i32,
+        Some(t) => crate::dlls::put_text_a(&t, buf, cap.max(0) as u32) as i32,
         None => 0,
     }
 }
 
 pub unsafe extern "win64" fn get_window_text_w(hwnd: usize, buf: *mut u16, cap: i32) -> i32 {
     match gui::title_of(hwnd) {
-        Some(t) => crate::dlls::put_w(&t, buf, cap.max(0) as u32) as i32,
+        Some(t) => crate::dlls::put_text_w(&t, buf, cap.max(0) as u32) as i32,
         None => 0,
     }
 }
@@ -907,8 +921,10 @@ pub unsafe extern "win64" fn invalidate_rect(hwnd: usize, _rect: *const Rect, _e
     }
 }
 
-pub unsafe extern "win64" fn validate_rect(_hwnd: usize, _rect: *const Rect) {
-    // L'aire est déjà validée par end_paint.
+pub unsafe extern "win64" fn validate_rect(hwnd: usize, _rect: *const Rect) -> i32 {
+    // Toute la fenêtre est validée (pas de régions partielles) : plus de WM_PAINT
+    // tant qu'elle n'est pas invalidée à nouveau.
+    gui::validate_window(hwnd) as i32
 }
 
 // ---------- Divers ----------
@@ -1205,7 +1221,7 @@ pub unsafe extern "win64" fn get_class_long_ptr_w(hwnd: usize, index: i32) -> us
 
 pub unsafe extern "win64" fn get_class_name_a(hwnd: usize, buf: *mut u8, max_count: i32) -> i32 {
     if let Some(name) = gui::window_class(hwnd) {
-        crate::dlls::put_a(&name, buf, max_count as u32) as i32
+        crate::dlls::put_text_a(&name, buf, max_count.max(0) as u32) as i32
     } else {
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         0
@@ -1214,7 +1230,7 @@ pub unsafe extern "win64" fn get_class_name_a(hwnd: usize, buf: *mut u8, max_cou
 
 pub unsafe extern "win64" fn get_class_name_w(hwnd: usize, buf: *mut u16, max_count: i32) -> i32 {
     if let Some(name) = gui::window_class(hwnd) {
-        crate::dlls::put_w(&name, buf, max_count as u32) as i32
+        crate::dlls::put_text_w(&name, buf, max_count.max(0) as u32) as i32
     } else {
         crate::process::set_last_error(1400);
         0
@@ -1836,7 +1852,8 @@ pub unsafe extern "win64" fn draw_text_a(
     if rect.is_null() {
         return 0;
     }
-    let len = if count == -1 {
+    // Win32 : toute valeur négative (-1 en pratique) signifie « chaîne terminée par NUL ».
+    let len = if count < 0 {
         let mut p = text;
         let mut n = 0;
         while !p.is_null() && *p != 0 {
@@ -1862,7 +1879,8 @@ pub unsafe extern "win64" fn draw_text_w(
     if rect.is_null() {
         return 0;
     }
-    let len = if count == -1 {
+    // Win32 : toute valeur négative (-1 en pratique) signifie « chaîne terminée par NUL ».
+    let len = if count < 0 {
         let mut p = text;
         let mut n = 0;
         while !p.is_null() && *p != 0 {
@@ -2066,7 +2084,10 @@ pub extern "win64" fn set_active_window(hwnd: usize) -> usize {
 }
 
 pub extern "win64" fn bring_window_to_top(hwnd: usize) -> i32 {
-    let _ = hwnd;
+    if gui::wnd_proc_of(hwnd).is_none() {
+        return 0;
+    }
+    gui::bring_to_top(hwnd);
     1
 }
 
@@ -2465,14 +2486,50 @@ pub extern "win64" fn char_prev_a(start: *const u8, current: *const u8) -> *cons
     }
 }
 
-pub extern "win64" fn wsprintfa(_buf: *mut u8, _fmt: *const u8) -> i32 {
-    // Très simplifié : ne format pas, retourne 0
-    0
+/// Limite documentée de `wsprintf` : 1024 caractères, terminateur compris.
+const WSPRINTF_MAX: usize = 1024;
+
+/// `wsprintfA(buf, fmt, ...)` : formatage façon printf (%s %d %i %u %x %X %c
+/// %% %ld %lu, largeur et remplissage par zéros) via le moteur de la CRT,
+/// tronqué à 1023 caractères. Renvoie le nombre de caractères écrits.
+///
+/// # Sécurité
+/// `args` pointe sur les registres sauvés par le pont variadique : tampon,
+/// format puis les arguments annoncés par le format.
+pub unsafe extern "win64" fn imp_wsprintfa(args: *const u64) -> i32 {
+    let mut v = crate::thunks::VaList::new(args);
+    let dst = v.next_u64() as *mut u8;
+    let fmt = v.next_ptr::<u8>();
+    if dst.is_null() || fmt.is_null() {
+        return 0;
+    }
+    let mut b = crate::dlls::crt_stdio::format_narrow(fmt, &mut v);
+    b.truncate(WSPRINTF_MAX - 1);
+    std::ptr::copy_nonoverlapping(b.as_ptr(), dst, b.len());
+    *dst.add(b.len()) = 0;
+    b.len() as i32
 }
 
-pub extern "win64" fn wsprintfw(_buf: *mut u16, _fmt: *const u16) -> i32 {
-    0
+/// Variante large de [`imp_wsprintfa`] (`%s` attend une chaîne UTF-16).
+///
+/// # Sécurité
+/// Mêmes conditions que [`imp_wsprintfa`].
+pub unsafe extern "win64" fn imp_wsprintfw(args: *const u64) -> i32 {
+    let mut v = crate::thunks::VaList::new(args);
+    let dst = v.next_u64() as *mut u16;
+    let fmt = v.next_ptr::<u16>();
+    if dst.is_null() || fmt.is_null() {
+        return 0;
+    }
+    let mut w = crate::dlls::crt::format_wide(fmt, &mut v);
+    w.truncate(WSPRINTF_MAX - 1);
+    std::ptr::copy_nonoverlapping(w.as_ptr(), dst, w.len());
+    *dst.add(w.len()) = 0;
+    w.len() as i32
 }
+
+crate::varargs_thunk!(wsprintfa_thunk => imp_wsprintfa);
+crate::varargs_thunk!(wsprintfw_thunk => imp_wsprintfw);
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
@@ -2639,12 +2696,77 @@ pub fn exports() -> crate::dlls::Exports {
         "EndDeferWindowPos"=>fn end_defer_window_pos,
         // --- Misc ---
         "CharNextA"=>fn char_next_a, "CharPrevA"=>fn char_prev_a,
-        "wsprintfA"=>fn wsprintfa, "wsprintfW"=>fn wsprintfw,
+        "wsprintfA"=>fn wsprintfa_thunk, "wsprintfW"=>fn wsprintfw_thunk,
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn wsprintf_formate_et_termine_par_nul() {
+        let mut buf = [0xAAu8; 64];
+        let fmt = b"%s=%d %05u %x %X %c%% %ld\0";
+        let texte = b"id\0";
+        let args: [u64; 9] = [
+            buf.as_mut_ptr() as u64,
+            fmt.as_ptr() as u64,
+            texte.as_ptr() as u64,
+            (-42i32) as u32 as u64,
+            7,
+            255,
+            255,
+            b'Z' as u64,
+            123_456,
+        ];
+        let n = unsafe { imp_wsprintfa(args.as_ptr()) };
+        let attendu = b"id=-42 00007 ff FF Z% 123456";
+        assert_eq!(n as usize, attendu.len());
+        assert_eq!(&buf[..attendu.len()], attendu);
+        assert_eq!(buf[attendu.len()], 0);
+
+        let mut large = [0xAAAAu16; 64];
+        let wfmt: Vec<u16> = "%s %d\0".encode_utf16().collect();
+        let wtexte: Vec<u16> = "été\0".encode_utf16().collect();
+        let args: [u64; 4] = [
+            large.as_mut_ptr() as u64,
+            wfmt.as_ptr() as u64,
+            wtexte.as_ptr() as u64,
+            3,
+        ];
+        let n = unsafe { imp_wsprintfw(args.as_ptr()) };
+        assert_eq!(n, 5);
+        assert_eq!(String::from_utf16_lossy(&large[..5]), "été 3");
+        assert_eq!(large[5], 0);
+
+        // Pointeurs nuls : rien d'écrit.
+        let args: [u64; 2] = [0, fmt.as_ptr() as u64];
+        assert_eq!(unsafe { imp_wsprintfa(args.as_ptr()) }, 0);
+    }
+
+    #[test]
+    fn draw_text_negatif_signifie_chaine_terminee_par_nul() {
+        const DT_CALCRECT: u32 = 0x0400;
+        let texte = b"abc\0ignore";
+        let mut nul = Rect::default();
+        let mut negatif = Rect::default();
+        let mut explicite = Rect::default();
+        let h1 = unsafe { draw_text_a(0, texte.as_ptr(), -1, &mut nul, DT_CALCRECT) };
+        let h2 = unsafe { draw_text_a(0, texte.as_ptr(), -7, &mut negatif, DT_CALCRECT) };
+        let h3 = unsafe { draw_text_a(0, texte.as_ptr(), 3, &mut explicite, DT_CALCRECT) };
+        assert!(nul.right > 0 && nul.bottom > 0);
+        assert_eq!((h1, nul), (h2, negatif));
+        assert_eq!((h1, nul), (h3, explicite));
+        let large: Vec<u16> = "abc\0ignore".encode_utf16().collect();
+        let mut w = Rect::default();
+        let hw = unsafe { draw_text_w(0, large.as_ptr(), -3, &mut w, DT_CALCRECT) };
+        assert_eq!((hw, w), (h1, nul));
+    }
+}
+
+#[cfg(test)]
+mod tests_messages {
     use super::*;
 
     unsafe extern "win64" fn echo_proc(_h: usize, msg: u32, w: usize, l: isize) -> isize {

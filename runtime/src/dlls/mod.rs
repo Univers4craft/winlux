@@ -765,9 +765,58 @@ pub unsafe fn put_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
     w.len() as u32
 }
 
+/// Copie tronquante façon `GetWindowTextA` : le tampon de `cap` caractères
+/// reçoit au plus `cap - 1` caractères, est toujours terminé par un NUL, et
+/// la fonction renvoie le nombre de caractères copiés (0 si `cap` est nul).
+///
+/// # Sécurité
+/// `buf` doit pointer sur `cap` octets inscriptibles (ou être nul).
+pub unsafe fn put_text_a(s: &str, buf: *mut u8, cap: u32) -> u32 {
+    if buf.is_null() || cap == 0 {
+        return 0;
+    }
+    let b = s.as_bytes();
+    let n = b.len().min(cap as usize - 1);
+    std::ptr::copy_nonoverlapping(b.as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    n as u32
+}
+
+/// Variante large de [`put_text_a`] (`GetWindowTextW`, `GetClassNameW`…).
+///
+/// # Sécurité
+/// `buf` doit pointer sur `cap` mots de 16 bits inscriptibles (ou être nul).
+pub unsafe fn put_text_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
+    if buf.is_null() || cap == 0 {
+        return 0;
+    }
+    let w: Vec<u16> = s.encode_utf16().collect();
+    let n = w.len().min(cap as usize - 1);
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    n as u32
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{lookup, normalize};
+    use super::{lookup, normalize, put_text_a, put_text_w};
+
+    #[test]
+    fn put_text_tronque_et_termine_toujours_par_nul() {
+        let mut a = [0xAAu8; 4];
+        assert_eq!(unsafe { put_text_a("Bonjour", a.as_mut_ptr(), 4) }, 3);
+        assert_eq!(&a, b"Bon\0");
+        let mut a = [0xAAu8; 16];
+        assert_eq!(unsafe { put_text_a("Bonjour", a.as_mut_ptr(), 16) }, 7);
+        assert_eq!(&a[..8], b"Bonjour\0");
+        assert_eq!(unsafe { put_text_a("x", a.as_mut_ptr(), 0) }, 0);
+        assert_eq!(unsafe { put_text_a("x", std::ptr::null_mut(), 4) }, 0);
+        let mut w = [0xAAAAu16; 3];
+        assert_eq!(unsafe { put_text_w("été", w.as_mut_ptr(), 3) }, 2);
+        assert_eq!(w, ['é' as u16, 't' as u16, 0]);
+        assert_eq!(unsafe { put_text_w("", w.as_mut_ptr(), 1) }, 0);
+        assert_eq!(w[0], 0);
+    }
 
     #[test]
     fn normalise_les_alias_de_dll() {
