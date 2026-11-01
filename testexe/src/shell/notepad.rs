@@ -1324,6 +1324,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         if HOVER_TAB != old {
             return true;
         }
+        // Un simple déplacement du pointeur ne change rien d'autre à l'écran :
+        // ne pas repeindre tout le bureau à chaque mouvement de souris.
+        return false;
     }
 
     // === Tab bar clicks ===
@@ -1489,16 +1492,17 @@ unsafe fn find_next() {
         return;
     }
     let d = doc();
-    let start = d.cursor;
-    let mut i = start;
-    loop {
-        i += 1;
-        if i + ST.find_len > d.len {
-            i = 0;
-        }
-        if i == start {
-            return;
-        }
+    if d.len < ST.find_len {
+        return;
+    }
+    // Positions de départ possibles : 0..=last. On repart du curseur et on
+    // fait au plus un tour complet (le curseur peut être en fin de document,
+    // au-delà de la dernière position valide : une boucle « jusqu'au retour
+    // au point de départ » ne se terminait alors jamais).
+    let last = d.len - ST.find_len;
+    let mut i = d.cursor.min(last);
+    for _ in 0..=last {
+        i = if i >= last { 0 } else { i + 1 };
         if bytes_eq(&d.text[i..i + ST.find_len], &ST.find_buf[..ST.find_len]) {
             d.cursor = i;
             d.anchor = i + ST.find_len;
@@ -1513,22 +1517,17 @@ unsafe fn find_prev() {
         return;
     }
     let d = doc();
-    let start = if d.cursor > 0 { d.cursor - 1 } else { d.len };
-    let mut i = start;
-    loop {
-        if i + ST.find_len <= d.len
-            && bytes_eq(&d.text[i..i + ST.find_len], &ST.find_buf[..ST.find_len])
-        {
+    if d.len < ST.find_len {
+        return;
+    }
+    let last = d.len - ST.find_len;
+    let mut i = d.cursor.min(last + 1);
+    for _ in 0..=last {
+        i = if i == 0 { last } else { i - 1 };
+        if bytes_eq(&d.text[i..i + ST.find_len], &ST.find_buf[..ST.find_len]) {
             d.cursor = i;
             d.anchor = i + ST.find_len;
             ensure_cursor_visible(d, 400);
-            return;
-        }
-        if i == 0 {
-            i = d.len;
-        }
-        i -= 1;
-        if i == start {
             return;
         }
     }

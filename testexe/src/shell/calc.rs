@@ -200,7 +200,7 @@ unsafe fn draw_stopwatch(g: &mut Gfx, f: &Frame) {
 
     let now = GetTickCount();
     let elapsed = if STOPWATCH_RUNNING {
-        STOPWATCH_ELAPSED + (now - STOPWATCH_START)
+        STOPWATCH_ELAPSED + now.wrapping_sub(STOPWATCH_START)
     } else {
         STOPWATCH_ELAPSED
     };
@@ -286,7 +286,7 @@ unsafe fn draw_timer(g: &mut Gfx, f: &Frame) {
     let y = r.top + 40;
 
     let remaining = if TIMER_RUNNING {
-        let elapsed = (GetTickCount() - TIMER_START) / 1000;
+        let elapsed = GetTickCount().wrapping_sub(TIMER_START) / 1000;
         if elapsed >= TIMER_SECONDS {
             TIMER_REMAINING = 0;
             TIMER_RUNNING = false;
@@ -918,13 +918,13 @@ unsafe fn stopwatch_mouse(ev: Mouse, _x: i32, _y: i32, f: &Frame) -> bool {
             if STOPWATCH_RUNNING {
                 STOPWATCH_START = GetTickCount();
             } else {
-                STOPWATCH_ELAPSED += GetTickCount() - STOPWATCH_START;
+                STOPWATCH_ELAPSED += GetTickCount().wrapping_sub(STOPWATCH_START);
             }
             return true;
         } else if _x >= r.left + 16 + btn_w + 8 && _x < r.left + 16 + btn_w * 2 + 8 {
             if STOPWATCH_RUNNING || STOPWATCH_ELAPSED > 0 {
                 let now = if STOPWATCH_RUNNING {
-                    STOPWATCH_ELAPSED + (GetTickCount() - STOPWATCH_START)
+                    STOPWATCH_ELAPSED + GetTickCount().wrapping_sub(STOPWATCH_START)
                 } else {
                     STOPWATCH_ELAPSED
                 };

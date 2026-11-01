@@ -869,7 +869,7 @@ fn run(opts: Options) -> Option<Options> {
         }
         // SAFETY: `msg` est un MSG local.
         let got = unsafe { crate::dlls::user32::peek_message_w(&mut msg, 0, 0, 0, 1) };
-        if got == -1 {
+        if got != 0 && msg.message == gui::WM_QUIT {
             break; // WM_QUIT : l'application se ferme
         }
         if got == 1 {
