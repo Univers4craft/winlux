@@ -176,6 +176,45 @@ pub unsafe fn native_explorer(path: &[u8]) -> bool {
     SetEnvironmentVariableA(c"WINLUX_SHELL_PATH".as_ptr(), core::ptr::null());
     true
 }
+/// Début de vie de la fenêtre native (GetTickCount), pour `native_keep_visible`.
+static mut NATIVE_SHOWN_AT: u32 = 0;
+
+/// Openbox place parfois une nouvelle fenêtre en partie sous la barre des
+/// tâches (placement « intelligent » sans place libre assez grande). Pendant
+/// la seconde qui suit l'ouverture, on la ramène entière dans la zone de
+/// travail, cadre compris ; ensuite l'utilisateur la place où il veut.
+pub unsafe fn native_keep_visible(hwnd: Handle) {
+    const TITLE: i32 = 34;
+    const BOTTOM: i32 = 6;
+    if NATIVE_SHOWN_AT == 0 {
+        NATIVE_SHOWN_AT = now().max(1);
+    } else if now().wrapping_sub(NATIVE_SHOWN_AT) > 1500 {
+        return;
+    }
+    let mut area = rect(0, 0, 0, 0);
+    let mut r = rect(0, 0, 0, 0);
+    if SystemParametersInfoA(0x0030, 0, (&mut area as *mut Rect).cast(), 0) == 0
+        || GetWindowRect(hwnd, &mut r) == 0
+        || area.bottom <= area.top
+    {
+        return;
+    }
+    let w = (r.right - r.left).min(area.right - area.left);
+    let h = (r.bottom - r.top).min(area.bottom - area.top - TITLE - BOTTOM);
+    let x = r.left.min(area.right - w).max(area.left);
+    let y = r.top.min(area.bottom - BOTTOM - h).max(area.top + TITLE);
+    if (x, y, w, h) != (r.left, r.top, r.right - r.left, r.bottom - r.top) {
+        SetWindowPos(
+            hwnd,
+            core::ptr::null_mut(),
+            x,
+            y,
+            w,
+            h,
+            SWP_NOZORDER | SWP_NOACTIVATE,
+        );
+    }
+}
 unsafe fn native_frame(hwnd: Handle) -> Frame {
     let mut outer = rect(0, 0, 900, 620);
     GetClientRect(hwnd, &mut outer);

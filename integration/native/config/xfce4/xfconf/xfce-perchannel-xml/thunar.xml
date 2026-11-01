@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Corbeille et dossiers ouverts depuis le bureau : volet latéral lisible
+     (le défaut tronquait « Emplacements », « Corbeille »…) et fenêtre à la
+     taille d'un Explorateur Windows 11. -->
+<channel name="thunar" version="1.0">
+  <property name="last-separator-position" type="int" value="190"/>
+  <property name="last-window-width" type="int" value="980"/>
+  <property name="last-window-height" type="int" value="640"/>
+  <property name="last-view" type="string" value="ThunarDetailsView"/>
+</channel>

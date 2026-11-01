@@ -134,6 +134,11 @@ for attempt in $(seq 1 30); do
     sleep 0.1
 done
 /usr/bin/wmctrl -m >/dev/null
+# Compositeur facultatif (absent des anciennes images) : sans lui, chaque
+# fenêtre découverte doit se repeindre et un déplacement laisse des traînées.
+if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0; then
+    /usr/bin/picom --config "$HOME/.config/picom/picom.conf" >/run/winlux/compositor.log 2>&1 &
+fi
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
 /usr/bin/winlux-session-startup >/run/winlux/startup-apps.log 2>&1

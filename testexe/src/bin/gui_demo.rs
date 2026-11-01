@@ -801,6 +801,9 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             WINDOW_POSITION_MATCH = (GetWindowRect(hwnd, &mut rect) != 0
                 && rect.left == expected_x
                 && rect.top == expected_y) as u32;
+            if wm::native_app().is_some() {
+                wm::native_keep_visible(hwnd);
+            }
             0
         }
         WM_SETFOCUS => {
@@ -1056,6 +1059,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
         check!(!hwnd.is_null(), "CreateWindowExA demo");
         ShowWindow(hwnd, SW_SHOWNORMAL);
         UpdateWindow(hwnd);
+        if wm::native_app().is_some() {
+            wm::native_keep_visible(hwnd);
+        }
         if wm::native_app() == Some(wm::APP_EXPLORER) {
             accept_dropped_files(hwnd);
         }

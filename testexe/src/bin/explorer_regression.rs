@@ -96,6 +96,7 @@ pub extern "C" fn mainCRTStartup() -> ! {
         personalize::regression_checks();
         welcome::regression_checks();
         a11y::regression_checks();
+        notepad::regression_checks();
     }
     finish()
 }

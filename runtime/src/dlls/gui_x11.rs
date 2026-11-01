@@ -3285,6 +3285,38 @@ impl gui::GuiBackend for X11Backend {
         ))
     }
 
+    fn work_area(&mut self) -> Option<Rect> {
+        // _NET_WORKAREA du bureau courant : x, y, largeur, hauteur.
+        let root = self.conn.setup().roots[self.screen].root;
+        let atom = self
+            .conn
+            .intern_atom(true, b"_NET_WORKAREA")
+            .ok()?
+            .reply()
+            .ok()?
+            .atom;
+        if atom == 0 {
+            return None;
+        }
+        let reply = self
+            .conn
+            .get_property(false, root, atom, AtomEnum::CARDINAL, 0, 4)
+            .ok()?
+            .reply()
+            .ok()?;
+        let v: Vec<u32> = reply.value32()?.collect();
+        if v.len() < 4 || v[2] == 0 || v[3] == 0 {
+            return None;
+        }
+        let (x, y) = (v[0] as i32, v[1] as i32);
+        Some(Rect {
+            left: self.logical(x),
+            top: self.logical(y),
+            right: self.logical(x + v[2] as i32),
+            bottom: self.logical(y + v[3] as i32),
+        })
+    }
+
     fn monitors(&mut self) -> Vec<crate::dlls::gui::Monitor> {
         use x11rb::protocol::randr::ConnectionExt as _;
         let root = self.conn.setup().roots[self.screen].root;

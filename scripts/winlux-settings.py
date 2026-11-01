@@ -5,7 +5,7 @@ from pathlib import Path
 import subprocess
 import gi
 gi.require_version("Gtk", "3.0")
-from gi.repository import Gtk, GLib
+from gi.repository import Gio, Gtk, GLib
 
 
 # ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
@@ -558,7 +558,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.set_icon_name("preferences-system")
         self.set_default_size(1020, 740)
         self.set_size_request(720, 500)
-        self.connect("destroy", Gtk.main_quit)
+        # Seule fenêtre de l'application en session ; sous Gtk.main() (tests),
+        # la fermer quitte encore la boucle.
+        self.connect("destroy", lambda *_: Gtk.main_level() and Gtk.main_quit())
         try: wanted = int(os.environ.get("WINLUX_SETTINGS_PAGE", "8"))
         except ValueError: wanted = 8
         wanted = MERGED.get(min(len(PAGES) - 1, max(0, wanted)), min(len(PAGES) - 1, max(0, wanted)))
@@ -696,6 +698,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.select(self.nav, None)
 
     def select(self, _, row):
+        # Page visible lisible de l'extérieur (xprop WM_WINDOW_ROLE).
+        self.set_role(f"page-{self.current}")
         self.page = 3 if self.current == SOUND_PAGE and self.sound_fallback else self.current
         for child in self.body.get_children(): child.destroy()
         category = category_of(self.current)
@@ -933,6 +937,24 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         dialog.connect("response", lambda window, _: window.destroy())
         dialog.show_all()
 
+class SettingsApp(Gtk.Application):
+    """Une seule fenêtre Paramètres, comme sous Windows : un nouveau lancement
+    (menu Démarrer, raccourci, autre page) la ramène devant et ouvre la page
+    demandée au lieu d'empiler une copie."""
+    def __init__(self):
+        super().__init__(application_id="org.winlux.Settings", flags=Gio.ApplicationFlags.HANDLES_COMMAND_LINE | Gio.ApplicationFlags.SEND_ENVIRONMENT)
+        self.window = None
+
+    def do_command_line(self, line):
+        page = line.getenv("WINLUX_SETTINGS_PAGE") or ""
+        if self.window is None:
+            if page: os.environ["WINLUX_SETTINGS_PAGE"] = page
+            self.window = Settings()
+            self.add_window(self.window)
+        elif page.isdigit():
+            self.window.open_page(int(page))
+        self.window.present()
+        return 0
+
 if __name__ == "__main__":
-    Settings()
-    Gtk.main()
+    raise SystemExit(SettingsApp().run(None))

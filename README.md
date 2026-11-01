@@ -157,7 +157,7 @@ Cette liste décrit le code présent sur `master`. Certaines fonctions sont plus
 - **.NET** : un CLR maison exécute les programmes .NET simples (interpréteur CIL, ramasse-miettes, exceptions, P/Invoke). Une application .NET autonome qui embarque son propre `coreclr.dll` est démarrée par ce runtime embarqué.
 - **Intégration Linux** : `C:\` = dossier personnel, `Z:\` = racine Linux, lettres `E:`, `F:`… pour les clés USB, disques et lecteurs réseau ; presse-papiers et glisser-déposer communs ; lancement croisé Windows ↔ Linux ; impression vers CUPS ; ports réseau ouverts par les `.exe` visibles dans le pare-feu.
 
-La liste détaillée, API par API, est dans [COMPATIBILITY.md](COMPATIBILITY.md) et dans la page [Compatibilité des applications](wiki/Compatibilite-des-applications.md).
+Ce qu'il reste à faire, mesuré et classé par impact, est dans [docs/COMPATIBILITE.md](docs/COMPATIBILITE.md). La liste détaillée, API par API, est dans [COMPATIBILITY.md](COMPATIBILITY.md) et dans la page [Compatibilité des applications](wiki/Compatibilite-des-applications.md).
 
 ## Ce qui ne fonctionne pas encore
 

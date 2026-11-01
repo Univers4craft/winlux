@@ -1131,20 +1131,23 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         }
         return;
     }
-    // Open text files in integrated editor
-    if ends_ci(&path[..n], b".txt")
-        || ends_ci(&path[..n], b".rs")
-        || ends_ci(&path[..n], b".c")
-        || ends_ci(&path[..n], b".h")
-        || ends_ci(&path[..n], b".py")
-        || ends_ci(&path[..n], b".js")
-        || ends_ci(&path[..n], b".sh")
-        || ends_ci(&path[..n], b".toml")
-        || ends_ci(&path[..n], b".json")
-        || ends_ci(&path[..n], b".md")
-        || ends_ci(&path[..n], b".cfg")
-        || ends_ci(&path[..n], b".conf")
-        || ends_ci(&path[..n], b".log")
+    // Open text files in integrated editor. En session native, l'éditeur est
+    // une appli séparée lancée sans fichier : l'association Linux (xdg-open)
+    // ouvre au contraire le bon fichier dans Mousepad.
+    if !wm::native_session()
+        && (ends_ci(&path[..n], b".txt")
+            || ends_ci(&path[..n], b".rs")
+            || ends_ci(&path[..n], b".c")
+            || ends_ci(&path[..n], b".h")
+            || ends_ci(&path[..n], b".py")
+            || ends_ci(&path[..n], b".js")
+            || ends_ci(&path[..n], b".sh")
+            || ends_ci(&path[..n], b".toml")
+            || ends_ci(&path[..n], b".json")
+            || ends_ci(&path[..n], b".md")
+            || ends_ci(&path[..n], b".cfg")
+            || ends_ci(&path[..n], b".conf")
+            || ends_ci(&path[..n], b".log"))
     {
         crate::notepad::open_new();
         use winlux_testexe::*;
@@ -1170,17 +1173,8 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
                 core::ptr::null_mut(),
             );
             CloseHandle(h);
-            // Extract filename from path
-            let mut fname_start = 0;
-            let mut k = 0;
-            while k < n {
-                if path[k] == b'\\' || path[k] == b'/' {
-                    fname_start = k + 1;
-                }
-                k += 1;
-            }
             unsafe {
-                crate::notepad::load_into_active(&buf[..got as usize], &path[fname_start..n]);
+                crate::notepad::load_into_active(&buf[..got as usize], &path[..n]);
             }
         }
         wm::open(wm::APP_NOTEPAD);
@@ -1198,6 +1192,34 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         wopen.as_ptr(),
         wpath.as_ptr(),
         core::ptr::null(),
+        core::ptr::null(),
+        1,
+    );
+    if (r as isize) <= 32 {
+        notify(tr4(&[b"Aucune application ne sait ouvrir ce fichier.", b"No app can open this file.", b"Ninguna aplicaci\xF3n puede abrir este archivo.", b"Keine App kann diese Datei \xF6ffnen."]));
+    }
+}
+
+/// « Ouvrir avec… » : sélecteur de `winlux-open-with` (programmes Linux, et
+/// programmes Windows déclarés dans le registre), qui reçoit le chemin Windows.
+unsafe fn open_with(path: &[u8]) {
+    let mut quoted = [0u8; PATH_LEN + NAME_LEN + 2];
+    if path.len() + 2 >= quoted.len() {
+        return;
+    }
+    quoted[0] = b'"';
+    quoted[1..=path.len()].copy_from_slice(path);
+    quoted[path.len() + 1] = b'"';
+    let mut wparams = [0u16; PATH_LEN + NAME_LEN + 2];
+    let params = wstr(&mut wparams, &quoted[..path.len() + 2]);
+    let mut wprogram = [0u16; PATH_LEN + NAME_LEN + 2];
+    let program = wstr(&mut wprogram, b"winlux-open-with");
+    let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    let r = ShellExecuteW(
+        core::ptr::null_mut(),
+        wopen.as_ptr(),
+        program,
+        params,
         core::ptr::null(),
         1,
     );
@@ -2785,6 +2807,7 @@ enum Item {
     NewFolder,
     NewText,
     Open,
+    OpenWith,
     OpenTab,
     ExeSettings,
     Cut,
@@ -2830,6 +2853,12 @@ fn item_label(i: Item) -> &'static [u8] {
         Item::NewFolder => tr4(&[b"Dossier", b"Folder", b"Carpeta", b"Ordner"]),
         Item::NewText => tr4(&[b"Document texte", b"Text document", b"Documento de texto", b"Textdokument"]),
         Item::Open => tr(S_OPEN),
+        Item::OpenWith => t4([
+            b"Ouvrir avec...",
+            b"Open with...",
+            b"Abrir con...",
+            b"\xD6ffnen mit...",
+        ]),
         Item::OpenTab => tr4(&[b"Ouvrir dans un nouvel onglet", b"Open in new tab", b"Abrir en una pesta\xF1a nueva", b"In neuer Registerkarte \xF6ffnen"]),
         Item::ExeSettings => tr4(&[b"R\xE9glages de l'ex\xE9cutable", b"Executable settings", b"Ajustes del ejecutable", b"Einstellungen der ausf\xFChrbaren Datei"]),
         Item::Cut => tr(S_CUT),
@@ -2948,6 +2977,7 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
         Menu::New => &[Item::NewFolder, Item::NewText],
         Menu::Context { on_item: true, .. } => &[
             Item::Open,
+            Item::OpenWith,
             Item::OpenTab,
             Item::ExeSettings,
             Item::ExtractAll,
@@ -3011,6 +3041,8 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Compress7z => !in_pc && !in_home && formats & 2 != 0,
             Item::CompressTarGz => !in_pc && !in_home && formats & 8 != 0,
             Item::ConnectNet => in_pc,
+            // Fichier seulement : programmes Linux et Windows qui savent l'ouvrir.
+            Item::OpenWith => !in_pc && first_sel(p).is_some_and(|i| !p.entries[i].dir),
             // Dossier seulement, et seulement si le partage existe (Samba).
             Item::Share => {
                 !in_pc
@@ -3153,7 +3185,7 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
             Item::NewFolder => Some(Glyph::Folder),
             Item::NewText => Some(Glyph::Text),
             Item::Terminal => Some(Glyph::Terminal),
-            Item::Open => Some(Glyph::Forward),
+            Item::Open | Item::OpenWith => Some(Glyph::Forward),
             Item::OpenTab => Some(Glyph::Plus),
             Item::Nav => Some(Glyph::Split),
             Item::ExtractAll | Item::ExtractHere => Some(Glyph::Archive),
@@ -4238,12 +4270,34 @@ pub unsafe fn drag_count() -> usize {
 
 /// Envoie la sélection dans la Corbeille (format freedesktop.org, partagé
 /// avec les gestionnaires de fichiers Linux).
+/// Suppression définitive depuis la Corbeille armée par un premier appui :
+/// fin de validité (GetTickCount) du second appui qui confirme.
+static mut PURGE_ARMED_UNTIL: u32 = 0;
+
 unsafe fn delete_selection() {
     let p = pane();
     if p.loc.is(HOME) || p.loc.is(PC) {
         return;
     }
     let in_trash = p.loc.is(TRASH);
+    if in_trash {
+        // Rien n'est récupérable ensuite : comme Windows, demander confirmation.
+        let armed = PURGE_ARMED_UNTIL != 0
+            && (PURGE_ARMED_UNTIL.wrapping_sub(GetTickCount()) as i32) > 0;
+        if !armed {
+            if (0..p.nview).any(|v| is_sel(p, p.view[v] as usize)) {
+                PURGE_ARMED_UNTIL = GetTickCount().wrapping_add(4000);
+                notify(tr4(&[
+                    b"Suppression d\xE9finitive : appuyez de nouveau sur Supprimer pour confirmer.",
+                    b"Permanent deletion: press Delete again to confirm.",
+                    b"Eliminaci\xF3n definitiva: pulse Suprimir otra vez para confirmar.",
+                    b"Endg\xFCltig l\xF6schen: zum Best\xE4tigen erneut Entf dr\xFCcken.",
+                ]));
+            }
+            return;
+        }
+        PURGE_ARMED_UNTIL = 0;
+    }
     let mut w1 = [0u16; PATH_LEN + NAME_LEN + 2];
     CreateDirectoryW(
         wstr(&mut w1, b"C:\\.local\\share\\Trash"),
@@ -4277,6 +4331,18 @@ unsafe fn delete_selection() {
             };
             if !ok {
                 failed += 1;
+            } else {
+                // Sa fiche .trashinfo ne sert plus à rien.
+                let mut nm = [0u8; NAME_LEN + 12];
+                let nl = name.len().min(NAME_LEN);
+                nm[..nl].copy_from_slice(&name[..nl]);
+                nm[nl..nl + 10].copy_from_slice(b".trashinfo");
+                let mut info = [0u8; PATH_LEN + NAME_LEN + 2];
+                let il = join(&mut info, b"C:\\.local\\share\\Trash\\info", &nm[..nl + 10]);
+                if il != 0 {
+                    let mut wi = [0u16; PATH_LEN + NAME_LEN + 2];
+                    DeleteFileW(wstr(&mut wi, &info[..il]));
+                }
             }
             continue;
         }
@@ -4538,6 +4604,15 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             ask_password(JobKind::Create, false);
         }
         Item::ConnectNet => crate::settings::open_page(crate::settings::PAGE_NETDRIVES),
+        Item::OpenWith => {
+            if let Some(i) = first_sel(p) {
+                let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
+                let n = item_path(p, i, &mut b);
+                if n > 0 {
+                    open_with(&b[..n]);
+                }
+            }
+        }
         Item::Share => {
             if let Some(i) = first_sel(p) {
                 let mut b = [0u8; PATH_LEN + NAME_LEN + 2];

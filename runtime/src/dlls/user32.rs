@@ -2041,14 +2041,8 @@ pub unsafe extern "win64" fn system_parameters_info_a(
     }
     // SPI_GETWORKAREA = 0x0030
     if action == 0x0030 && !data.is_null() {
-        let rect = data as *mut Rect;
-        let (w, h) = gui::screen_size();
-        (*rect) = Rect {
-            left: 0,
-            top: 0,
-            right: w,
-            bottom: h,
-        };
+        // Sans la barre des tâches : une fenêtre placée ici n'est pas cachée dessous.
+        *(data as *mut Rect) = gui::work_area();
         return 1;
     }
     1 // Stub : succès générique
