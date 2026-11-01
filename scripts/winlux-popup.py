@@ -202,12 +202,9 @@ class Popup(Gtk.Application):
         self.hide();subprocess.Popen(["winlux-shell-app","settings","3" if self.kind=="volume" else "0"])
 
     def power_action(self,action):
+        # Même boîte de confirmation et même arrêt que le menu Démarrer.
         self.hide()
-        dialog=Gtk.MessageDialog(transient_for=self.window,modal=True,
-            buttons=Gtk.ButtonsType.OK_CANCEL,text=_t("Éteindre l’ordinateur ?") if action=="poweroff" else _t("Redémarrer l’ordinateur ?"),
-            secondary_text=_t("Enregistrez vos documents avant de continuer."))
-        answer=dialog.run();dialog.destroy()
-        if answer==Gtk.ResponseType.OK:self.command(["winlux-control",action])
+        subprocess.Popen(["/usr/bin/winlux-power","ask",action],start_new_session=True)
 
     def command(self,args):
         if self.child and self.child.poll() is None:return
