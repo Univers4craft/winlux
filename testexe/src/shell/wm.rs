@@ -141,8 +141,12 @@ pub unsafe fn native_launch(app: usize) {
 }
 /// Une seule application Paramètres : dès que les Paramètres Winlux (GTK)
 /// sont installés, le bureau PE les ouvre au lieu de sa propre fenêtre.
+/// Les tests de régression gardent la fenêtre Paramètres du shell, même sur
+/// une image où les Paramètres GTK sont installés.
+pub static mut SHELL_SETTINGS_ONLY: bool = false;
 pub unsafe fn unified_settings() -> bool {
-    NATIVE_APP != APP_SETTINGS
+    !SHELL_SETTINGS_ONLY
+        && NATIVE_APP != APP_SETTINGS
         && GetFileAttributesA(c"Z:\\usr\\bin\\winlux-settings".as_ptr()) != u32::MAX
         && GetFileAttributesA(c"Z:\\usr\\bin\\winlux-shell-app".as_ptr()) != u32::MAX
 }
