@@ -518,6 +518,8 @@ pub struct X11Backend {
     /// Table de correspondance keycode X11 → keysyms (lue à la demande).
     keymap: HashMap<u8, Vec<u32>>,
     keyboard: Option<XkbKeyboard>,
+    /// Touche morte en attente (^, ¨…), composée avec la frappe suivante.
+    dead_keys: crate::intl::keyboard::DeadKeys,
     /// Tampon arrière de chaque fenêtre : la peinture y est composée puis
     /// recopiée d'un bloc, sans scintillement, et les Expose sont servis
     /// sans rejouer les commandes GDI.
@@ -534,6 +536,8 @@ pub struct X11Backend {
     overlay: crate::overlay::Overlay,
     /// Taille et couleur du pointeur (réglages d'accessibilité appliqués).
     pointer_style: (u8, u8),
+    /// Glisser-déposer reçu depuis les applis Linux (XDND).
+    xdnd: Option<crate::dlls::xdnd::Xdnd>,
 }
 
 impl X11Backend {
@@ -565,6 +569,7 @@ impl X11Backend {
             .reply()
             .ok()?
             .atom;
+        let xdnd = crate::dlls::xdnd::Xdnd::new(&conn);
         Some(X11Backend {
             conn,
             screen,
@@ -583,6 +588,7 @@ impl X11Backend {
             scale,
             keymap: HashMap::new(),
             keyboard: unsafe { XkbKeyboard::connect() },
+            dead_keys: Default::default(),
             back: HashMap::new(),
             overlay: crate::overlay::Overlay::new(),
             x11_dirty: Cell::new(false),
@@ -590,6 +596,7 @@ impl X11Backend {
             x11_cursors: HashMap::new(),
             current_cursor: 0x0001_0001,
             pointer_style: (1, 0),
+            xdnd,
         })
     }
 
@@ -1914,8 +1921,20 @@ impl X11Backend {
                 })
             }
             Event::ConfigureNotify(e) => self.on_configure(e),
+            Event::SelectionNotify(e) => {
+                let root = self.conn.setup().roots[self.screen].root;
+                let scale = self.scale;
+                self.xdnd
+                    .as_mut()?
+                    .selection_notify(&self.conn, &e, scale, root)?
+            }
             Event::ClientMessage(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
+                if let Some(xdnd) = self.xdnd.as_mut() {
+                    if let Some(out) = xdnd.client_message(&self.conn, &e, hwnd) {
+                        return out;
+                    }
+                }
                 let data = e.data.as_data32();
                 if e.type_ == self.wm_protocols && data[0] == self.wm_delete {
                     Some(PendingEvent {
@@ -2065,6 +2084,16 @@ impl X11Backend {
                 } else {
                     sym.map(keysym_to_char).filter(|c| *c != 0)
                 };
+                // Touches mortes : « ^ » puis « e » donnent « ê », comme le
+                // pilote clavier Windows (accent seul suivi de la lettre
+                // quand ils ne se combinent pas).
+                let typed = self
+                    .dead_keys
+                    .feed(sym.unwrap_or(0), ch.and_then(|c| char::from_u32(c as u32)));
+                if let Some(prefix) = typed.prefix {
+                    gui::set_key_prefix(hwnd, vk, lparam, prefix as u16);
+                }
+                let ch = typed.ch.and_then(|c| u16::try_from(c as u32).ok());
                 gui::set_key_char(hwnd, vk, lparam, ch);
                 Some(PendingEvent {
                     hwnd,
@@ -2959,6 +2988,9 @@ impl gui::GuiBackend for X11Backend {
             AtomEnum::ATOM,
             &[self.wm_protocols, self.wm_delete],
         );
+        if let Some(xdnd) = self.xdnd.as_ref() {
+            xdnd.set_aware(&self.conn, win);
+        }
         let title_bytes = crate::dlls::encode_ansi(title);
         let _ = self.conn.change_property8(
             x11rb::protocol::xproto::PropMode::REPLACE,
