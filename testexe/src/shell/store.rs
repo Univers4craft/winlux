@@ -194,13 +194,10 @@ pub fn lower(c: u8) -> u8 {
 pub fn lower_eq(a: &[u8], b: &[u8]) -> bool {
     a.len() == b.len() && a.iter().zip(b).all(|(x, y)| lower(*x) == lower(*y))
 }
-/// Recherche insensible à la casse (Windows-1252).
+/// Recherche insensible à la casse et aux accents (Windows-1252).
 pub fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    hay.windows(needle.len())
-        .any(|w| w.iter().zip(needle).all(|(a, b)| lower(*a) == lower(*b)))
+    // Ni casse ni accents : « resume » trouve « Résumé ».
+    crate::locale::contains_fold(hay, needle)
 }
 pub fn parse_num(s: &[u8]) -> u64 {
     s.iter()

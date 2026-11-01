@@ -273,10 +273,8 @@ fn mhz(t: &mut T, mhz: u32) -> &[u8] {
 }
 
 fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
-    needle.is_empty()
-        || hay
-            .windows(needle.len())
-            .any(|w| w.eq_ignore_ascii_case(needle))
+    // Ni casse ni accents : « resume » trouve « Résumé ».
+    crate::locale::contains_fold(hay, needle)
 }
 
 unsafe fn say(s: &[u8]) {

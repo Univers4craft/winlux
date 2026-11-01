@@ -925,18 +925,8 @@ fn lower(c: u8) -> u8 {
 
 /// Recherche sans casse dans l'aperçu (texte ou noms de fichiers).
 pub fn matches(hay: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    if needle.len() > hay.len() {
-        return false;
-    }
-    (0..=hay.len() - needle.len()).any(|i| {
-        hay[i..i + needle.len()]
-            .iter()
-            .zip(needle)
-            .all(|(&a, &b)| lower(a) == lower(b))
-    })
+    // Ni casse ni accents : « resume » trouve « Résumé ».
+    crate::locale::contains_fold(hay, needle)
 }
 
 unsafe fn visible(out: &mut [usize; MAX_ITEMS]) -> usize {

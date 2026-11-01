@@ -3,9 +3,19 @@
 import os
 from pathlib import Path
 import subprocess
+import unicodedata
 import gi
 gi.require_version("Gtk", "3.0")
 from gi.repository import Gio, Gtk, GLib
+
+
+_LIGATURES = str.maketrans({"œ": "oe", "æ": "ae", "ø": "o", "đ": "d", "ł": "l", "ı": "i"})
+
+
+def fold(text):
+    """Recherche sans casse ni accents : « reseau » trouve « Réseau »."""
+    text = unicodedata.normalize("NFKD", text.casefold().translate(_LIGATURES))
+    return "".join(c for c in text if not unicodedata.combining(c))
 
 
 # ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
@@ -658,14 +668,14 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
 
     def nav_visible(self, row):
         kind, key = row.entry
-        query = self.search.get_text().strip().casefold()
+        query = fold(self.search.get_text().strip())
         if kind == "category":
             pages = self.shown_pages(key)
-            return bool(pages) and (not query or query in CATEGORIES[key][0].casefold()
-                                    or any(query in PAGES[page].casefold() for page in pages))
+            return bool(pages) and (not query or query in fold(CATEGORIES[key][0])
+                                    or any(query in fold(PAGES[page]) for page in pages))
         if key in self.hidden_pages: return False
         category = category_of(key)
-        if query: return query in PAGES[key].casefold() or query in CATEGORIES[category][0].casefold()
+        if query: return query in fold(PAGES[key]) or query in fold(CATEGORIES[category][0])
         return category == category_of(self.current) and len(self.shown_pages(category)) > 1
 
     def nav_selected(self, _, row):
