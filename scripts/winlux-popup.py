@@ -4,6 +4,7 @@ from pathlib import Path
 import json
 import re
 import shutil
+from string import Template
 import subprocess
 import sys
 import gi
@@ -90,6 +91,34 @@ def app_streams():
         return streams
     except (OSError,ValueError,KeyError,TypeError,subprocess.TimeoutExpired):return []
 
+# Même palette que winlux-start-menu.py (contraste vérifié par test-shell-contrast.py).
+PALETTES = {
+    "dark": {"bg": "#242238", "fg": "#f7f5ff", "border": "#6b5f92", "dim": "#b8b1d6", "button": "#322e4a",
+             "hover": "#433b60", "disabled": "#9a93b8", "accent": "#b19af9", "trough": "#3b3656"},
+    "light": {"bg": "#f6f4fc", "fg": "#1f1b2e", "border": "#c9c0e6", "dim": "#5e5778", "button": "#ffffff",
+              "hover": "#e4ddf7", "disabled": "#6c6585", "accent": "#7c4dff", "trough": "#d9d2ee"},
+}
+POPUP_CSS = Template("""
+  #winlux-popup { background: $bg; color: $fg; border: 1px solid $border; border-radius: 8px; }
+  #winlux-popup box { background: transparent; }
+  #winlux-popup label, #winlux-popup image, #winlux-popup scale value { color: $fg; text-shadow: none; }
+  #winlux-popup button { padding: 8px; border-radius: 5px; background: $button; color: $fg; border: 1px solid $border;
+                         box-shadow: none; text-shadow: none; }
+  #winlux-popup button:hover { background: $hover; }
+  #winlux-popup button:disabled, #winlux-popup button:disabled label, #winlux-popup scale:disabled value { color: $disabled; }
+  #winlux-popup scale trough { min-height: 5px; background: $trough; border: none; }
+  #winlux-popup scale highlight { background: $accent; }
+""")
+
+
+def dark_theme():
+    forced=os.environ.get("GTK_THEME")
+    if forced:return "dark" in forced.casefold()  # GTK ignore alors la préférence
+    settings=Gtk.Settings.get_default()
+    name=(settings.get_property("gtk-theme-name") or "").casefold()
+    return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name
+
+
 class Popup(Gtk.Application):
     def __init__(self,kind):
         super().__init__(application_id="org.winlux.Popup."+kind,flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -128,9 +157,13 @@ class Popup(Gtk.Application):
     def build(self):
         self.window=Gtk.ApplicationWindow(application=self,title=_t("Volume Winlux") if self.kind=="volume" else _t("Alimentation Winlux"))
         self.window.set_name("winlux-popup")
-        css=Gtk.CssProvider()
-        css.load_from_data(b"#winlux-popup { background: #242238; color: #f7f5ff; border: 1px solid #6b5f92; border-radius: 8px; } #winlux-popup button { padding: 8px; border-radius: 5px; } #winlux-popup scale trough { min-height: 5px; } #winlux-popup scale highlight { background: #b19af9; }")
-        Gtk.StyleContext.add_provider_for_screen(self.window.get_screen(),css,Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        # Même palette que le menu Démarrer, au-dessus du gtk.css utilisateur.
+        self.css=Gtk.CssProvider()
+        Gtk.StyleContext.add_provider_for_screen(self.window.get_screen(),self.css,Gtk.STYLE_PROVIDER_PRIORITY_USER+1)
+        settings=Gtk.Settings.get_default()
+        for name in ("gtk-theme-name","gtk-application-prefer-dark-theme"):
+            settings.connect("notify::"+name,lambda *_:self.apply_theme())
+        self.apply_theme()
         self.window.set_decorated(False);self.window.set_resizable(False)
         self.window.set_default_size(340,-1);self.window.set_skip_taskbar_hint(True)
         self.window.set_type_hint(Gdk.WindowTypeHint.UTILITY);self.window.set_keep_above(True)
@@ -161,6 +194,9 @@ class Popup(Gtk.Application):
         button=Gtk.Button(label=_t("Paramètres du son") if self.kind=="volume" else _t("Options d’alimentation"))
         button.connect("clicked",lambda *_:self.settings());box.pack_start(button,False,False,0)
         GLib.timeout_add_seconds(1,self.refresh)
+
+    def apply_theme(self):
+        self.css.load_from_data(POPUP_CSS.substitute(PALETTES["dark" if dark_theme() else "light"]).encode())
 
     def settings(self):
         self.hide();subprocess.Popen(["winlux-shell-app","settings","3" if self.kind=="volume" else "0"])
