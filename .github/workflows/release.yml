@@ -97,7 +97,7 @@ jobs:
           /usr/bin/python3 -B scripts/test-apt-metadata.py
           xvfb-run -a /usr/bin/python3 -B scripts/test-settings-native.py
           xvfb-run -a dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-desktop-tools.py
-          for popup in start volume power; do
+          for popup in start volume power calendar; do
             xvfb-run -a dbus-run-session --config-file=scripts/test-session-bus.conf -- /usr/bin/python3 -B scripts/test-shell-popups.py "$popup"
           done
           xvfb-run -a -s '-screen 0 1920x1080x24 -noreset' /usr/bin/python3 -B scripts/test-window-performance.py
