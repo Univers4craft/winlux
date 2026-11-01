@@ -26,6 +26,9 @@ echo 'DejaVu Sans|Book|/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf'
 for f in "$work/home/.local/share/fonts"/*; do
     test -f "\$f" && echo "Ma Police|Regular|\$f"
 done
+for f in "$work/home/Windows/Fonts"/*; do
+    test -f "\$f" && echo "Police Windows|Regular|\$f"
+done
 echo 'Bitmap|Regular|/usr/share/fonts/X11/misc/6x13.pcf.gz'
 MOCK
 chmod 755 "$work/bin/"*
@@ -51,4 +54,14 @@ grep -q 'protegidas' "$run/fonts-action.txt" || fail 'message en espagnol'
 fonts remove "$XDG_DATA_HOME/fonts/police.ttf"
 test ! -e "$XDG_DATA_HOME/fonts/police.ttf" || fail 'police non supprimée'
 if grep -q 'Ma Police' "$run/fonts.txt"; then fail 'liste non rafraîchie'; fi
+# Police installée par une application Windows dans C:\Windows\Fonts :
+# listée pour Linux et désinstallable comme une police de l'utilisateur.
+mkdir -p "$work/home/Windows/Fonts"
+printf '\000\001\000\000police' > "$work/home/Windows/Fonts/appli.ttf"
+fonts list
+grep -qx "font=Police Windows|Regular|user|$work/home/Windows/Fonts/appli.ttf" "$run/fonts.txt" || fail 'police Windows listée'
+fonts remove 'C:\Windows\Fonts\appli.ttf'
+test ! -e "$work/home/Windows/Fonts/appli.ttf" || fail 'police Windows non supprimée'
+grep -q 'fontconfig' "$project/integration/native/config/fontconfig/conf.d/60-winlux-windows-fonts.conf" || fail 'configuration fontconfig absente'
+grep -q '<dir>~/Windows/Fonts</dir>' "$project/integration/native/config/fontconfig/conf.d/60-winlux-windows-fonts.conf" || fail 'C:\Windows\Fonts absent de fontconfig'
 echo 'Polices : OK'
