@@ -10,7 +10,7 @@
 | Tâches restantes (prioritaires) | **26** |
 | Tâches restantes (toutes sources) | **~234** |
 | Progression prioritaire | **82.7%** |
-| Version | v0.2.9 |
+| Version | v0.2.12 |
 | Dernière release | v0.2.0-preview.15 |
 | Tests unitaires | 84+ (1 ignoré sans serveur X) |
 | Tests PE | 10 exécutables validés |
