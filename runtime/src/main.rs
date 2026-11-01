@@ -9,11 +9,13 @@ mod clr;
 mod cpu;
 mod crash;
 mod diskimage;
+mod display;
 mod dlls;
 mod firewall;
 mod gamemode;
 mod gpu;
 mod imaging;
+mod intl;
 mod launch;
 mod loader;
 pub mod log;
@@ -34,6 +36,7 @@ mod registry;
 mod setup;
 mod tasks;
 mod thunks;
+mod uac;
 mod volumes;
 
 use std::path::PathBuf;
@@ -67,6 +70,13 @@ fn main() {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(power::cli::main(&rest));
     }
+    if exe == "--intl" {
+        std::process::exit(intl::report());
+    }
+    if exe == "--text" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(intl::text::cli(&rest));
+    }
     if exe == "--boot-time" {
         let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
         std::process::exit(boottime::cli(&rest));
@@ -77,6 +87,10 @@ fn main() {
     }
     if exe == "--clipboard-bridge" {
         std::process::exit(clipbridge::run());
+    }
+    if exe == "--display" {
+        let rest: Vec<String> = args.map(|a| a.to_string_lossy().into_owned()).collect();
+        std::process::exit(display::main(&rest));
     }
     if exe == "--audio-test" {
         std::process::exit(audio::self_test());
@@ -199,6 +213,7 @@ fn main() {
         image.pe.stack_reserve,
         image.pe.stack_commit
     );
+    uac::check_launch(image.base, &exe);
     let imports = image.import_names();
     cpu::apply_launch(&cpu_settings, &imports);
     if cpu::is_heavy(&imports) {

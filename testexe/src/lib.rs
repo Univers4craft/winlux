@@ -1040,6 +1040,7 @@ extern "C" {
     pub fn GetClipboardData(format: u32) -> usize;
     pub fn IsClipboardFormatAvailable(format: u32) -> i32;
     pub fn GetClipboardSequenceNumber() -> u32;
+    pub fn RegisterClipboardFormatA(name: *const c_char) -> u32;
     pub fn RegisterClassExA(wc: *const WndClassExA) -> u16;
     pub fn CreateWindowExA(
         ex_style: u32,
@@ -1102,6 +1103,7 @@ extern "C" {
     pub fn FrameRect(hdc: Handle, rect: *const Rect, brush: Handle) -> i32;
     pub fn InvalidateRect(hwnd: Handle, rect: *const Rect, erase: i32) -> i32;
     pub fn GetSystemMetrics(index: i32) -> i32;
+    pub fn GetMonitorInfoA(monitor: Handle, info: *mut u8) -> i32;
     pub fn GetDoubleClickTime() -> u32;
     pub fn GetSysColor(index: i32) -> u32;
     pub fn GetSysColorBrush(index: i32) -> Handle;

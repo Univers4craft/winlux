@@ -165,6 +165,13 @@ pub struct Rect {
     pub bottom: i32,
 }
 
+/// Un écran physique, en coordonnées logiques de l'écran X.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Monitor {
+    pub rect: Rect,
+    pub primary: bool,
+}
+
 impl Rect {
     pub fn width(&self) -> i32 {
         self.right - self.left
@@ -638,7 +645,23 @@ pub fn take_key_char(hwnd: usize, vk: usize, lparam: isize) -> Option<u16> {
     }
 }
 
+/// Accent isolé à taper avant le caractère d'une frappe (touche morte
+/// suivie d'une lettre qu'elle ne peut pas accentuer : « ^x »).
+fn key_prefixes() -> &'static Mutex<HashMap<KeyCharKey, u16>> {
+    static K: OnceLock<Mutex<HashMap<KeyCharKey, u16>>> = OnceLock::new();
+    K.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+pub fn set_key_prefix(hwnd: usize, vk: usize, lparam: isize, ch: u16) {
+    lock(key_prefixes()).insert(KeyCharKey { hwnd, vk, lparam }, ch);
+}
+
+pub fn take_key_prefix(hwnd: usize, vk: usize, lparam: isize) -> Option<u16> {
+    lock(key_prefixes()).remove(&KeyCharKey { hwnd, vk, lparam })
+}
+
 fn discard_key_chars(hwnd: usize) {
+    lock(key_prefixes()).retain(|key, _| key.hwnd != hwnd);
     lock(key_chars()).retain(|key, _| key.hwnd != hwnd);
 }
 
@@ -1674,6 +1697,10 @@ pub trait GuiBackend: Send {
     fn screen_size(&mut self) -> Option<(i32, i32)> {
         None
     }
+    /// Écrans branchés et allumés (vide si le backend ne sait pas).
+    fn monitors(&mut self) -> Vec<Monitor> {
+        Vec::new()
+    }
     /// Identifiant de la fenêtre native (X11) d'un HWND, pour Vulkan/GLX.
     fn native_window(&mut self, _hwnd: usize) -> Option<u64> {
         None
@@ -1743,6 +1770,12 @@ pub fn native_window(hwnd: usize) -> Option<u64> {
     let mut id = None;
     with_backend(|b| id = b.native_window(hwnd));
     id
+}
+
+pub fn monitors() -> Vec<Monitor> {
+    let mut list = Vec::new();
+    with_backend(|b| list = b.monitors());
+    list
 }
 
 pub fn screen_size() -> (i32, i32) {

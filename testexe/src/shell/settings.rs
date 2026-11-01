@@ -14,6 +14,10 @@ mod graphics;
 /// Page « À propos » (logo, version, caractéristiques de l'appareil).
 #[path = "about.rs"]
 mod about;
+#[path = "settings_display.rs"]
+mod screens;
+#[path = "settings_input.rs"]
+mod input;
 
 pub const CUSTOM_TITLE: bool = false;
 pub const PAGE_SYSUPDATE: usize = 17;
@@ -33,13 +37,17 @@ pub const PAGE_REPORT: usize = 25;
 pub const PAGE_PRINTERS: usize = 26;
 /// Page « Bureau à distance » : état publié par winlux-remote-config.
 const PAGE_REMOTE: usize = 27;
-const PAGE_COUNT: usize = 28;
+/// Page « Partage et transfert » : dossiers partagés (SMB) et transfert des
+/// réglages par fichier (shell/sharing.rs).
+pub const PAGE_SHARING: usize = 28;
+const PAGE_COUNT: usize = 29;
 /// Appareils Bluetooth affichés (une ligne de boutons chacun).
 const BT_ROWS: usize = 5;
 /// Ordre d'affichage du menu : la personnalisation suit l'apparence,
 /// l'alimentation suit le son et la batterie.
 const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 22, 25, 26, 27,
+    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 28, 22, 25, 26,
+    27,
 ];
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
@@ -71,6 +79,7 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_REPORT_PAGE),
         tr(S_PRINTERS),
         tr(S_REMOTE_DESKTOP),
+        tr(S_SHARING),
     ]
 }
 const CAPACITY: usize = 32768;
@@ -102,7 +111,6 @@ static mut BT_CMD: [u8; 64] = [0; 64];
 static mut POWER: Buffer = EMPTY;
 /// Nombre de mises à jour système déjà signalé (u32::MAX : pas encore lu).
 static mut NOTIFIED_UPDATES: u32 = u32::MAX;
-static mut SELECTED_MODE: usize = 0;
 static mut LAST_ANIMATION: u32 = 0;
 static mut PAGE: usize = 0;
 static mut SCROLL: usize = 0;
@@ -398,6 +406,8 @@ pub unsafe fn system_tick() -> bool {
     changed |= crate::netdrives::poll(
         PAGE == PAGE_NETDRIVES && crate::wm::is_open(crate::wm::APP_SETTINGS),
     );
+    changed |=
+        crate::sharing::poll(PAGE == PAGE_SHARING && crate::wm::is_open(crate::wm::APP_SETTINGS));
     changed |= read(c"Z:\\run\\winlux\\action.txt", &mut ACTION);
     changed |= read(
         if PAGE == 7 {
@@ -716,10 +726,6 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
     let disabled = updating() && (PAGE == 0 || PAGE == 7 && id != 4)
         || PAGE == PAGE_SYSUPDATE && sysupdate_busy() && id >= 18;
     let selected = match (PAGE, id) {
-        (4, 0) => value(b"layout") == b"fr",
-        (4, 1) => value(b"layout") == b"us",
-        (4, 3) => value(b"tap") == b"1",
-        (4, 4) => value(b"tap") == b"0",
         (5, 0) => unsafe { MOUSE_SPEED == 25 },
         (5, 1) => unsafe { MOUSE_SPEED == 50 },
         (5, 2) => unsafe { MOUSE_SPEED == 75 },
@@ -727,8 +733,6 @@ unsafe fn button(g: &mut Gfx, c: &Rect, row: i32, col: i32, label: &[u8], id: i3
         (6, 1) => value(b"align") == b"center",
         (6, 3) => value(b"theme") == b"dark",
         (6, 4) => value(b"theme") == b"light",
-        (8, 3) => value(b"display_policy") == b"fixed",
-        (8, 4) => value(b"display_policy") != b"fixed",
         (10, 0..=4) => EXE_SCALE == id as usize,
         (10, 5) => EXE_TRACE,
         (10, 12..=14) => EXE_GPU == (id - 12) as usize,
@@ -1065,6 +1069,8 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     );
     match PAGE {
         PAGE_GRAPHICS => graphics::draw(g, f),
+        8 => screens::draw(g, f),
+        4 => input::draw(g, f),
         PAGE_PERSONALIZE => crate::personalize::draw_settings(g, &c),
         5 => {
             let speed_str = unsafe {
@@ -1360,28 +1366,6 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 3, 0, tr4(&[b"Options d'alimentation", b"Power options", b"Opciones de energ\xEDa", b"Energieoptionen"]), 9);
             journal(g, &c, 280, LOG.get());
         }
-        4 => {
-            row(g, &c, 44, tr4(&[b"Disposition actuelle", b"Current layout", b"Distribuci\xF3n actual", b"Aktuelles Layout"]), value(b"layout"));
-            button(g, &c, 0, 0, tr4(&[b"AZERTY fran\xE7ais", b"French AZERTY", b"AZERTY franc\xE9s", b"AZERTY Franz\xF6sisch"]), 0);
-            button(g, &c, 0, 1, b"QWERTY US", 1);
-            button(g, &c, 1, 0, tr4(&[b"Activer toucher-clic", b"Turn on tap to click", b"Activar tocar para hacer clic", b"Tippen zum Klicken aktivieren"]), 3);
-            button(g, &c, 1, 1, tr4(&[b"D\xE9sactiver", b"Turn off", b"Desactivar", b"Deaktivieren"]), 4);
-            row(
-                g,
-                &c,
-                214,
-                tr4(&[b"Toucher-clic (0 = non, 1 = oui)", b"Tap to click (0 = no, 1 = yes)", b"Tocar para hacer clic (0 = no, 1 = s\xED)", b"Tippen zum Klicken (0 = nein, 1 = ja)"]),
-                value(b"tap"),
-            );
-            row(
-                g,
-                &c,
-                274,
-                tr4(&[b"Pav\xE9 tactile en VM", b"Touchpad in a VM", b"Panel t\xE1ctil en VM", b"Touchpad in einer VM"]),
-                tr4(&[b"SPICE expose souvent une tablette, pas le pav\xE9 physique.", b"SPICE often exposes a tablet, not the physical touchpad.", b"SPICE suele exponer una tableta, no el panel f\xEDsico.", b"SPICE stellt oft ein Tablet bereit, nicht das physische Touchpad."]),
-            );
-            journal(g, &c, 336, LOG.get());
-        }
         6 => {
             row(
                 g,
@@ -1428,63 +1412,6 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             button(g, &c, 5, 0, tr4(&[b"Personnaliser", b"Personalize", b"Personalizar", b"Anpassen"]), 12);
             button(g, &c, 5, 1, tr4(&[b"Assistant de bienvenue", b"Welcome assistant", b"Asistente de bienvenida", b"Willkommensassistent"]), 13);
             button(g, &c, 7, 0, tr4(&[b"R\xE9glages de l'\xE9cran", b"Display settings", b"Configuraci\xF3n de pantalla", b"Bildschirmeinstellungen"]), 18);
-        }
-        8 => {
-            row(
-                g,
-                &c,
-                44,
-                tr4(&[b"D\xE9finition actuellement appliqu\xE9e", b"Resolution currently applied", b"Resoluci\xF3n aplicada actualmente", b"Aktuell angewendete Aufl\xF6sung"]),
-                value(b"display_current"),
-            );
-            let modes = value(b"display_modes");
-            let count = modes
-                .split(|&v| v == b',')
-                .filter(|v| !v.is_empty())
-                .count();
-            if count > 0 {
-                SELECTED_MODE = SELECTED_MODE.min(count - 1);
-            }
-            let chosen = modes
-                .split(|&v| v == b',')
-                .nth(SELECTED_MODE)
-                .unwrap_or(tr4(&[b"Indisponible", b"Unavailable", b"No disponible", b"Nicht verf\xFCgbar"]));
-            button(g, &c, 0, 0, tr4(&[b"D\xE9finition pr\xE9c\xE9dente", b"Previous resolution", b"Resoluci\xF3n anterior", b"Vorherige Aufl\xF6sung"]), 0);
-            button(g, &c, 0, 1, tr4(&[b"D\xE9finition suivante", b"Next resolution", b"Resoluci\xF3n siguiente", b"N\xE4chste Aufl\xF6sung"]), 1);
-            button(g, &c, 0, 2, tr4(&[b"Appliquer", b"Apply", b"Aplicar", b"\xDCbernehmen"]), 2);
-            button(g, &c, 1, 0, tr4(&[b"Image fixe", b"Fixed image", b"Imagen fija", b"Festes Bild"]), 3);
-            button(g, &c, 1, 1, tr4(&[b"Suivre la fen\xEAtre VM", b"Follow the VM window", b"Seguir la ventana de la VM", b"VM-Fenster folgen"]), 4);
-            button(g, &c, 1, 2, tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]), 5);
-            row(
-                g,
-                &c,
-                214,
-                tr4(&[b"D\xE9finition s\xE9lectionn\xE9e (modes r\xE9els de l'\xE9cran)", b"Selected resolution (real display modes)", b"Resoluci\xF3n seleccionada (modos reales de la pantalla)", b"Ausgew\xE4hlte Aufl\xF6sung (echte Bildschirmmodi)"]),
-                chosen,
-            );
-            row(
-                g,
-                &c,
-                274,
-                tr4(&[b"\xC9chelle du texte et des contr\xF4les", b"Text and control scale", b"Escala del texto y los controles", b"Skalierung von Text und Steuerelementen"]),
-                match value(b"display_scale") {
-                    b"1" => b"100 %",
-                    b"1.25" => b"125 %",
-                    b"1.5" => b"150 %",
-                    b"2" => b"200 %",
-                    _ => tr4(&[b"Automatique", b"Automatic", b"Autom\xE1tica", b"Automatisch"]),
-                },
-            );
-            button(g, &c, 5, 0, tr4(&[b"\xC9chelle -", b"Scale -", b"Escala -", b"Skalierung -"]), 15);
-            button(g, &c, 5, 1, tr4(&[b"Automatique", b"Automatic", b"Autom\xE1tica", b"Automatisch"]), 16);
-            button(g, &c, 5, 2, tr4(&[b"\xC9chelle +", b"Scale +", b"Escala +", b"Skalierung +"]), 17);
-            row(
-                g,
-                &c,
-                420,
-                tr4(&[b"Application de l'\xE9chelle", b"Applying the scale", b"Aplicaci\xF3n de la escala", b"Anwendung der Skalierung"]),
-                tr4(&[b"Relancez le bureau apr\xE8s modification de l'\xE9chelle.", b"Restart the desktop after changing the scale.", b"Reinicie el escritorio despu\xE9s de cambiar la escala.", b"Starten Sie den Desktop nach einer \xC4nderung der Skalierung neu."]),
-            );
         }
         7 => {
             if updating() {
@@ -1754,9 +1681,10 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         BLUETOOTH_PAGE => draw_bluetooth(g, &c),
         PAGE_REPORT => draw_report(g, &c),
         PAGE_PRINTERS => printers::draw(g, &c, SCROLL),
+        PAGE_SHARING => crate::sharing::draw(g, &c),
         _ => {}
     }
-    if PAGE == PAGE_NETDRIVES {
+    if PAGE == PAGE_NETDRIVES || PAGE == PAGE_SHARING {
         return;
     }
     let notice = if PAGE == 10 {
@@ -2074,6 +2002,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if PAGE == PAGE_NETDRIVES && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
         return crate::netdrives::mouse(ev, x, y, &content(f));
     }
+    if PAGE == PAGE_SHARING && !matches!(ev, Mouse::Down | Mouse::DoubleClick) {
+        return crate::sharing::mouse(ev, x, y, &content(f));
+    }
     if let Mouse::Wheel(delta) = ev {
         if PAGE == PAGE_CPU {
             return crate::settings_cpu::scroll(if delta < 0 { 3 } else { -3 });
@@ -2087,6 +2018,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if ev == Mouse::Move && PAGE == PAGE_PRINTERS {
         return printers::mouse(ev, x, y);
+    }
+    if ev == Mouse::Move && PAGE == 8 {
+        return screens::hover(f, x, y);
+    }
+    if ev == Mouse::Move && PAGE == 4 {
+        return input::hover(f, x, y);
     }
     if ev == Mouse::Move && PAGE == PAGE_GRAPHICS {
         let h = graphics::hit(f, x, y);
@@ -2137,6 +2074,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     if PAGE == PAGE_GRAPHICS {
         return graphics::click(f, x, y);
     }
+    if PAGE == 8 {
+        return screens::click(f, x, y);
+    }
+    if PAGE == 4 {
+        return input::click(f, x, y);
+    }
     if PAGE == 12 {
         return crate::a11y::page_mouse(ev, x, y, &content(f));
     }
@@ -2145,6 +2088,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if PAGE == PAGE_NETDRIVES {
         return crate::netdrives::mouse(ev, x, y, &content(f));
+    }
+    if PAGE == PAGE_SHARING {
+        return crate::sharing::mouse(ev, x, y, &content(f));
     }
     if PAGE == 7 {
         let c = content(f);
@@ -2250,10 +2196,6 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         (PAGE_POWER, 23) if pvalue(b"power_can_hibernate") == b"1" => Some(c"power-hibernate"),
         (PAGE_POWER, 24) => Some(c"power-brightness-down"),
         (PAGE_POWER, 25) => Some(c"power-brightness-up"),
-        (4, 0) => Some(c"keyboard-fr"),
-        (4, 1) => Some(c"keyboard-us"),
-        (4, 3) => Some(c"tap-on"),
-        (4, 4) => Some(c"tap-off"),
         (6, 0) => Some(c"align-left"),
         (6, 1) => Some(c"align-center"),
         (6, 3) => {
@@ -2277,38 +2219,6 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             open_page(8);
             return true;
         }
-        (8, 0) => {
-            SELECTED_MODE = SELECTED_MODE.saturating_sub(1);
-            return true;
-        }
-        (8, 1) => {
-            let n = value(b"display_modes").split(|&v| v == b',').count();
-            SELECTED_MODE = (SELECTED_MODE + 1).min(n.saturating_sub(1));
-            return true;
-        }
-        (8, 2) => {
-            let chosen = value(b"display_modes")
-                .split(|&v| v == b',')
-                .nth(SELECTED_MODE)
-                .unwrap_or(b"");
-            if chosen.is_empty() || chosen.len() > 24 {
-                return true;
-            }
-            let mut command = [0u8; 64];
-            let prefix = b"display-mode-";
-            command[..prefix.len()].copy_from_slice(prefix);
-            command[prefix.len()..prefix.len() + chosen.len()].copy_from_slice(chosen);
-            if let Ok(cstr) = core::ffi::CStr::from_bytes_until_nul(&command) {
-                control(cstr);
-            }
-            return true;
-        }
-        (8, 3) => Some(c"display-fixed"),
-        (8, 4) => Some(c"display-follow"),
-        (8, 5) => Some(c"status"),
-        (8, 15) => Some(c"display-scale-down"),
-        (8, 16) => Some(c"display-scale-auto"),
-        (8, 17) => Some(c"display-scale-up"),
         (13, 0) => {
             unsafe { ENABLE_BLUR = true };
             Some(c"blur-on")

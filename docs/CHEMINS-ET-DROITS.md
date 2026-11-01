@@ -50,3 +50,32 @@ calculés à partir du compte Linux et ajoutés à l'environnement au lancement
 - Fichiers créés : propriétaire = utilisateur qui lance l'appli, mode selon
   son `umask` (644 en général).
 - Caché : nom commençant par un point.
+
+## Sécurité Windows et UAC
+
+Code : `runtime/src/dlls/security.rs`, `runtime/src/uac.rs`,
+`scripts/winlux-uac.py`.
+
+- Jeton du processus (`OpenProcessToken`, `GetTokenInformation`) :
+  utilisateur Linux d'uid N → `S-1-5-21-<machine>-N`, root → SYSTEM,
+  groupes Tout le monde, Utilisateurs, Utilisateurs authentifiés, et
+  Administrateurs une fois élevé. Un membre de sudo/wheel/admin a avant
+  élévation un jeton « limité », comme un administrateur Windows.
+- `CheckTokenMembership`, `IsUserAnAdmin`, `AllocateAndInitializeSid`,
+  `ConvertSidToStringSid`, `LookupAccountSidW`, `AdjustTokenPrivileges`…
+- Descripteurs de sécurité des fichiers (`GetFileSecurity`,
+  `GetNamedSecurityInfo`, `GetAce`…) : propriétaire, groupe et DACL tirés du
+  propriétaire et des bits rwx Linux (propriétaire rwx = contrôle total,
+  r = lecture, w = écriture, x = exécution, « autres » = Tout le monde ;
+  SYSTEM a le contrôle total, comme root).
+- UAC : manifeste `requireAdministrator` (ou `highestAvailable` pour un
+  administrateur) et verbe `runas` de `ShellExecute(Ex)` → fenêtre
+  « Voulez-vous autoriser cette application à apporter des modifications à
+  votre appareil ? » (FR/EN/ES/DE). Un administrateur tape son propre mot de
+  passe, un compte standard celui d'un administrateur. Accepté : jeton
+  administrateur (`WINLUX_ELEVATED=1`, hérité par les enfants), mais le
+  programme reste lancé sous le compte de l'utilisateur, donc tous les
+  fichiers créés lui appartiennent. Refusé : le programme ne démarre pas
+  (code 1223, soit 199 pour un parent Linux). Sans écran ni `winlux-uac` :
+  lancement sans élévation, avec un avertissement dans le journal.
+- `WINLUX_UAC=allow|deny` force la réponse (tests).
