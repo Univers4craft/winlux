@@ -30,7 +30,8 @@ from urllib.parse import unquote, urlparse
 BROWSER_USER = "winlux-web"
 BROWSER_HOME = Path(os.environ.get("WINLUX_BROWSER_HOME", "/home/winlux-web"))
 BROWSER_DOWNLOADS = BROWSER_HOME / "Téléchargements"
-SPOOL = Path(os.environ.get("WINLUX_BROWSER_SPOOL", "/run/winlux/browser-open"))
+# /run/winlux est réservé à root (700) : boîte aux lettres à part.
+SPOOL = Path(os.environ.get("WINLUX_BROWSER_SPOOL", "/run/winlux-browser-open"))
 HANDLER = "winlux-browser-folder.desktop"
 SELF = Path(__file__).resolve()
 
