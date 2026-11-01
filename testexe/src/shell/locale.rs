@@ -21,6 +21,46 @@ pub const LANG_NAMES: [&[u8]; LANG_COUNT] = [
     b"Deutsch",
 ];
 
+/// Lettre « repliée » pour la recherche (Windows-1252) : minuscule et sans
+/// accent, pour que « parametres » trouve « Paramètres », « espanol »
+/// « Español », « offnen » « Öffnen » et « oeuvre » « Œuvre » par sa
+/// première lettre. Couvre les lettres des quatre langues du système.
+#[allow(dead_code)]
+pub fn fold(c: u8) -> u8 {
+    match c {
+        b'A'..=b'Z' => c + 32,
+        0xC0..=0xC6 | 0xE0..=0xE6 | 0xAA => b'a',
+        0xC7 | 0xE7 => b'c',
+        0xC8..=0xCB | 0xE8..=0xEB => b'e',
+        0xCC..=0xCF | 0xEC..=0xEF => b'i',
+        0xD0 | 0xF0 => b'd',
+        0xD1 | 0xF1 => b'n',
+        0xD2..=0xD6 | 0xD8 | 0xF2..=0xF6 | 0xF8 | 0x8C | 0x9C | 0xBA => b'o',
+        0xD9..=0xDC | 0xF9..=0xFC => b'u',
+        0xDD | 0xFD | 0xFF | 0x9F => b'y',
+        0xDF | 0x8A | 0x9A => b's',
+        0x8E | 0x9E => b'z',
+        0xDE | 0xFE => b't',
+        _ => c,
+    }
+}
+
+/// `needle` apparaît-il dans `hay`, sans tenir compte de la casse ni des
+/// accents ?
+#[allow(dead_code)]
+pub fn contains_fold(hay: &[u8], needle: &[u8]) -> bool {
+    needle.is_empty()
+        || hay
+            .windows(needle.len())
+            .any(|w| w.iter().zip(needle).all(|(a, b)| fold(*a) == fold(*b)))
+}
+
+/// `hay` commence-t-il par `prefix`, sans casse ni accents ?
+#[allow(dead_code)]
+pub fn starts_fold(hay: &[u8], prefix: &[u8]) -> bool {
+    hay.len() >= prefix.len() && hay.iter().zip(prefix).all(|(a, b)| fold(*a) == fold(*b))
+}
+
 pub fn lang_from_code(code: &[u8]) -> Lang {
     match code {
         b"en" => Lang::En,

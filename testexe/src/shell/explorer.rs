@@ -300,14 +300,8 @@ fn cmp_ci(a: &[u8], b: &[u8]) -> core::cmp::Ordering {
     a.len().cmp(&b.len())
 }
 fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    if needle.len() > hay.len() {
-        return false;
-    }
-    (0..=hay.len() - needle.len())
-        .any(|i| (0..needle.len()).all(|k| lower(hay[i + k]) == lower(needle[k])))
+    // Ni casse ni accents : « resume » trouve « Résumé ».
+    crate::locale::contains_fold(hay, needle)
 }
 fn ends_ci(s: &[u8], suffix: &[u8]) -> bool {
     s.len() >= suffix.len() && cmp_ci(&s[s.len() - suffix.len()..], suffix).is_eq()

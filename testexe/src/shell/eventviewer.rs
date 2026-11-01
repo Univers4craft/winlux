@@ -251,10 +251,8 @@ fn num(s: &[u8]) -> u64 {
 }
 
 fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
-    needle.is_empty()
-        || hay
-            .windows(needle.len())
-            .any(|w| w.eq_ignore_ascii_case(needle))
+    // Ni casse ni accents : « resume » trouve « Résumé ».
+    crate::locale::contains_fold(hay, needle)
 }
 
 struct T {

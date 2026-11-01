@@ -7,10 +7,23 @@ import shutil
 from string import Template
 import subprocess
 import threading
+import unicodedata
 import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, Gio, GLib
+
+
+# ── Recherche : ni casse ni accents (« parametres » trouve « Paramètres ») ──
+
+_LIGATURES = str.maketrans({"œ": "oe", "æ": "ae", "ø": "o", "đ": "d", "ł": "l", "ı": "i"})
+
+
+def fold(text):
+    """Texte replié pour comparer : minuscules, sans accents ni cédilles,
+    ß → ss, œ → oe. Vaut pour les quatre langues (fr, en, es, de)."""
+    text = unicodedata.normalize("NFKD", text.casefold().translate(_LIGATURES))
+    return "".join(c for c in text if not unicodedata.combining(c))
 
 
 # ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
@@ -339,8 +352,8 @@ class Start(Gtk.Application):
         self.render()
 
     def first_result(self, *_):
-        query=self.search.get_text().strip().casefold()
-        setting=next((page for label,page in SETTINGS if query and query in label.casefold()),None)
+        query=fold(self.search.get_text().strip())
+        setting=next((page for label,page in SETTINGS if query and query in fold(label)),None)
         if setting is not None:self.open_setting(setting)
         elif self.results:self.launch(self.results[0])
         elif self.file_results:self.open_file(self.file_results[0])
@@ -383,15 +396,15 @@ class Start(Gtk.Application):
     def render(self):
         if not self.window or not hasattr(self, "apps"): return
         for widget in self.content.get_children(): widget.destroy()
-        query = self.search.get_text().strip().casefold()
+        query = fold(self.search.get_text().strip())
         listing = self.all_apps or bool(query)
         self.heading.set_text(_t("Résultats") if query else _t("Toutes les applications") if listing else _t("Épinglé"))
         self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
-        self.results = sorted((app for app in self.apps.values() if query in app.get_display_name().casefold()), key=lambda app: app.get_display_name().casefold())
+        self.results = sorted((app for app in self.apps.values() if query in fold(app.get_display_name())), key=lambda app: app.get_display_name().casefold())
         if listing:
             if query:
                 for label, page in SETTINGS:
-                    if query in label.casefold():
+                    if query in fold(label):
                         button = Gtk.Button(label=_t("Paramètres · ") + label)
                         on_click(button, lambda target=page: self.open_setting(target))
                         self.content.pack_start(button, False, False, 0)
@@ -453,7 +466,7 @@ class Start(Gtk.Application):
             folders[:] = [name for name in folders if not name.startswith(".") and not Path(directory, name).is_symlink()]
             for name in folders + files:
                 visited += 1
-                if not name.startswith(".") and query in name.casefold(): matches.append(Path(directory, name))
+                if not name.startswith(".") and query in fold(name): matches.append(Path(directory, name))
                 if len(matches) >= 30 or visited >= 30000: break
             if len(matches) >= 30 or visited >= 30000: break
         def deliver():

@@ -190,35 +190,20 @@ fn parse_u32(s: &[u8]) -> u32 {
         })
 }
 
-fn lower(c: u8) -> u8 {
-    match c {
-        b'A'..=b'Z' => c + 32,
-        0xC0..=0xDE if c != 0xD7 => c + 32,
-        _ => c,
-    }
-}
-
-fn contains_ci(hay: &[u8], needle: &[u8]) -> bool {
-    if needle.is_empty() {
-        return true;
-    }
-    if needle.len() > hay.len() {
-        return false;
-    }
-    (0..=hay.len() - needle.len())
-        .any(|i| (0..needle.len()).all(|k| lower(hay[i + k]) == lower(needle[k])))
-}
+// Recherche du menu Démarrer : ni casse ni accents (« parametres » trouve
+// « Paramètres »), dans les quatre langues.
+use crate::locale::{contains_fold, fold, starts_fold};
 
 fn fuzzy_match(name: &[u8], query: &[u8]) -> bool {
     if query.is_empty() {
         return true;
     }
-    if contains_ci(name, query) {
+    if contains_fold(name, query) {
         return true;
     }
     let mut qi = 0;
     for &c in name {
-        if qi < query.len() && lower(c) == lower(query[qi]) {
+        if qi < query.len() && fold(c) == fold(query[qi]) {
             qi += 1;
         }
     }
@@ -229,9 +214,8 @@ fn fuzzy_score(name: &[u8], query: &[u8]) -> i32 {
     if query.is_empty() {
         return 0;
     }
-    if contains_ci(name, query) {
-        if name.len() >= query.len() && (0..query.len()).all(|k| lower(name[k]) == lower(query[k]))
-        {
+    if contains_fold(name, query) {
+        if starts_fold(name, query) {
             return 3; // prefix match
         }
         return 2; // substring match
