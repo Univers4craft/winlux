@@ -4,11 +4,11 @@
 
 ## Statistiques
 
-- Réalisé : **230**
-- À faire ou en cours : **42**
-- Total : **272**
-- Progression : **84.6%**
-- Dernière mise à jour : 31/10/2026 (toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC)
+- Réalisé : **231**
+- À faire ou en cours : **43**
+- Total : **274**
+- Progression : **84.3%**
+- Dernière mise à jour : 01/11/2026 (audit complet du code, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC)
 
 ## À FAIRE (par priorité)
 
@@ -94,12 +94,14 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 - [ ] Intégrer les applis Windows au bureau : associations de fichiers, .lnk du Bureau et « Applications par défaut » livrés, reste « Ouvrir avec… » dans l'Explorateur (#152).
 - [ ] Glisser-déposer entre applis Windows et Linux (XDND ↔ `WM_DROPFILES`/`IDropTarget`, `DoDragDrop` vers Thunar), suite du pont presse-papiers (#159).
 - [ ] Démarrage sous 10 secondes et mode jeu : temps de démarrage mesuré et affiché livré, mode jeu livré, reste la réduction des étapes les plus longues (mesure en VM KVM) (#153).
+- [ ] Suite de l'audit du 01/11/2026 : bugs signalés dans les fichiers gelés par la file de merge (menu Démarrer « Toutes les applications », boutons de la barre des tâches, Corbeille sans confirmation, enregistrement de l'Éditeur, Alt+Tab), threads et synchronisation du runtime, IPv6/WSAPoll/WSAEventSelect, robustesse des décodeurs d'images et du CLR, scripts ISO (pkexec, DNS, binfmt) ; voir les issues ouvertes par l'audit.
 - [ ] Direct3D, suite de #92 : shaders DXBC/DXIL, profondeur et alias de ressources placées en D3D12, décodage matériel Media Foundation, codecs DXVA2 autres que H.264, validation sur vrai GPU (#137).
 
 ## DÉJÀ FAIT
 
 ### Livré par pull requests (fin octobre 2026)
 
+- [x] Audit du code du 01/11/2026, corrections nettes : l'Éditeur ne gèle plus à 99 % CPU quand une recherche ne trouve rien ; `GetMessage`/`PeekMessage` livrent `WM_QUIT` (et le `MSG`) ; les exports `user32`/`gdi32` « ext » n'écrasent plus de vraies implémentations par des stubs (`Rectangle`, `ExtTextOut` ETO_OPAQUE, `GetObjectType`, `GetPixel`…) ; `FindResourceA` n'utilise plus un pointeur pendouillant ; `bcrypt` calcule de vrais SHA-1/SHA-256 au lieu de zéros ; Winsock : disposition x64 de `fd_set` (`select` fonctionnel), bornes `FD_SET`, `WSAENOTSOCK`, `MSG_WAITALL`, `servent`, codes d'erreur, `SO_ERROR`, `WSA_FLAG_OVERLAPPED` ne rend plus la socket non bloquante ; FLS et TLS partagent un seul espace d'index ; réveils perdus corrigés sur les variables de condition (kernel32 et ntdll) ; `MoveFile(Ex)` refuse d'écraser sans `MOVEFILE_REPLACE_EXISTING` (erreur 183) ; `CreateFile` OPEN_ALWAYS/CREATE_NEW en lecture seule crée bien le fichier ; `GetUserProfileDirectory` rend `C:\Users\<nom>` ; Calculatrice sans débordement de `GetTickCount` ; Bloc-notes/Éditeur du Registre ne repeignent plus à chaque mouvement de souris ; outils système : bouton Alimentation vers la bonne page ; `winlux-control` : `volume-set <niveau>` et `shutdown` fonctionnels, `$2` sous `set -u`.
 - [x] Applis Windows intégrées au bureau (#152) : associations de fichiers lues dans le registre (HKCU/HKLM\Software\Classes et HKCR, ProgID, OpenWithProgids, OpenWithList, SupportedTypes, UserChoice) → lanceurs cachés `winlux-assoc-*.desktop` (double-clic, « Ouvrir avec » de Thunar et xdg-open, document passé en chemin Windows), type MIME créé pour les extensions inconnues, programme par défaut seulement si l'utilisateur n'a rien choisi ; raccourcis .lnk du Bureau ouvrables (cible, arguments, dossier de travail) ; icônes des .exe/.lnk par thumbnailer tumbler ; fenêtre « Applications par défaut » (Paramètres > Applications) en FR/EN/ES/DE. Zone de notification : `Shell_NotifyIconA/W` (NIM_ADD/MODIFY/DELETE/SETVERSION, infobulle, état caché, bulles par notify-send, clics transmis au `uCallbackMessage` en format classique ou version 4) via l'assistant GTK `winlux-notify-icon`, et zone « systray » ajoutée au panneau (y compris aux panneaux déjà configurés).
 - [x] Mode jeu : un `.exe` Direct3D/OpenGL/Vulkan/XInput déclenche `winlux --gamemode daemon` (gouverneur performances sur secteur, priorité du jeu, sauvegardes et mises à jour en pause et en basse priorité, swappiness et compactage mémoire, veille bloquée), tout est restauré à la fermeture ; réglage dans Paramètres > Processeur, actions affichées selon le matériel (#153, `docs/PERFORMANCES.md`).
 - [x] Temps de démarrage : l'init note chaque étape (`/run/winlux/boot-times`), `winlux --boot-time` en fait le rapport et l'historique, affiché dans Paramètres > Processeur (FR/EN/ES/DE). Edge hors ligne s'installe en arrière-plan et Xorg n'impose plus 3 s d'attente fixe (#153).

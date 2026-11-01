@@ -1116,27 +1116,22 @@ pub unsafe extern "win64" fn winlux_draw_icon_a(
     ) as i32
 }
 
-/// `Rectangle(hdc, left, top, right, bottom, pen, brush)` : cadre + intérieur.
+/// `Rectangle(hdc, left, top, right, bottom)` : cadre avec la plume et
+/// intérieur avec le pinceau sélectionnés dans le DC.
 pub unsafe extern "win64" fn rectangle(
     hdc: usize,
     left: i32,
     top: i32,
     right: i32,
     bottom: i32,
-    pen: usize,
-    brush: usize,
 ) -> i32 {
     if gui::dc_window(hdc).is_none() {
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     }
-    // Les applications passent 5 arguments : sur un DC imprimante on prend
-    // la plume et le pinceau sélectionnés plutôt que les registres suivants.
-    let (pen, brush) = if crate::dlls::winspool::is_printer_dc(hdc) {
-        (gui::dc_pen(hdc), gui::dc_brush(hdc))
-    } else {
-        (pen, brush)
-    };
+    // Win32 n'a que 5 paramètres : lire deux « arguments » de plus prenait
+    // R9 et la pile (valeurs aléatoires) pour des handles GDI.
+    let (pen, brush) = (gui::dc_pen(hdc), gui::dc_brush(hdc));
     let rect = Rect {
         left,
         top,

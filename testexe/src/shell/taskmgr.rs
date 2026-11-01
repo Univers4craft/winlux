@@ -124,11 +124,6 @@ unsafe fn refresh_procs() {
     PROC_COUNT = 0;
 
     // Lecture /proc via Z:\proc
-    let search = FindFirstFileA(
-        c"Z:\\proc\\*".as_ptr(),
-        core::ptr::null_mut() as *mut Win32FindDataA,
-    );
-    // FindFirstFileA needs a valid buffer
     let mut fd: Win32FindDataA = core::mem::zeroed();
     let search = FindFirstFileA(c"Z:\\proc\\*".as_ptr(), &mut fd);
     if search.is_null() || search == -1isize as Handle {

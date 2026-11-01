@@ -1,12 +1,21 @@
 //! Stubs pour userenv.dll — profils utilisateur et blocs d'environnement.
 #![allow(non_snake_case)]
 
+/// Dossier de profil de l'utilisateur courant, au format Windows
+/// (`C:\Users\<nom>`), et non un chemin Linux figé.
+fn profile_dir() -> String {
+    let home = std::env::var_os("HOME")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from("/root"));
+    crate::paths::to_windows(&home)
+}
+
 pub unsafe extern "win64" fn GetUserProfileDirectoryW(
     _token: usize,
     buf: *mut u16,
     size: *mut u32,
 ) -> i32 {
-    let home = "/home/user";
+    let home = profile_dir();
     let wide: Vec<u16> = home.encode_utf16().chain(std::iter::once(0)).collect();
     if size.is_null() {
         return 0;
@@ -38,7 +47,8 @@ pub unsafe extern "win64" fn GetUserProfileDirectoryA(
     buf: *mut u8,
     size: *mut u32,
 ) -> i32 {
-    let home = b"/home/user\0";
+    let mut home = profile_dir().into_bytes();
+    home.push(0);
     if size.is_null() {
         return 0;
     }

@@ -202,8 +202,20 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "user32",
                 exports: {
+                    // user32_ext contient surtout des bouchons : il ne doit
+                    // compléter user32 que pour les noms absents (sinon ses
+                    // stubs écrasaient GetParent, SetCapture, FindWindow,
+                    // SetWindowLongPtr(GWLP_WNDPROC)…). Quelques fonctions y
+                    // sont meilleures que celles de user32 : elles gagnent.
                     let mut e = user32::exports();
-                    e.extend(user32_ext::exports());
+                    for (name, addr) in user32_ext::exports() {
+                        let ext_wins = matches!(name, "GetKeyboardLayoutNameA");
+                        if ext_wins {
+                            e.insert(name, addr);
+                        } else {
+                            e.entry(name).or_insert(addr);
+                        }
+                    }
                     e.extend(clipboard::exports());
                     e
                 },

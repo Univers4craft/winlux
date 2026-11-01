@@ -1001,6 +1001,16 @@ pub unsafe extern "win64" fn create_file_a(
     let want_write = access & 0x4000_0000 != 0 || access & 2 != 0;
     let mut o = OpenOptions::new();
     o.read(want_read || !want_write).write(want_write);
+    // Rust exige `write` pour créer ou tronquer : CreateFile(GENERIC_READ,
+    // OPEN_ALWAYS) sur un fichier absent échouait avec 87.
+    let needs_write = match creation {
+        1 | 4 => !existed,
+        2 | 5 => true,
+        _ => false,
+    };
+    if needs_write && !want_write {
+        o.write(true);
+    }
     match creation {
         1 => {
             o.create_new(true);
@@ -1865,7 +1875,13 @@ pub unsafe extern "win64" fn get_drive_type_w(root: *const u16) -> u32 {
 fn move_file_ex_impl(src: &str, dst: &str, flags: u32) -> i32 {
     let s = crate::paths::to_linux(src);
     let d = crate::paths::to_linux(dst);
-    if flags & 0x1 != 0 && d.exists() {
+    if d.exists() {
+        if flags & 0x1 == 0 {
+            // Sans MOVEFILE_REPLACE_EXISTING, Windows refuse (183) : rename(2)
+            // écraserait silencieusement la destination.
+            crate::process::set_last_error(183);
+            return 0;
+        }
         let _ = std::fs::remove_file(&d);
     }
     match std::fs::rename(&s, &d) {
@@ -4753,7 +4769,7 @@ pub unsafe extern "win64" fn move_file_a(src: *const u8, dst: *const u8) -> i32 
     let s = crate::paths::to_linux(&crate::dlls::cstr(src));
     let d = crate::paths::to_linux(&crate::dlls::cstr(dst));
     if d.exists() {
-        crate::process::set_last_error(80);
+        crate::process::set_last_error(183); // ERROR_ALREADY_EXISTS
         return 0;
     }
     match std::fs::rename(s, d) {
@@ -5440,10 +5456,14 @@ pub extern "win64" fn sleep_condition_variable_cs(cv: usize, cs: usize, ms: u32)
 }
 pub extern "win64" fn wake_condition_variable(cv: usize) {
     let cond = get_condvar(cv);
+    // Prendre `mu` : un dormeur qui a relâché le verrou applicatif mais n'est
+    // pas encore dans `wait` ne doit pas rater le réveil.
+    let _g = cond.mu.lock().unwrap_or_else(|e| e.into_inner());
     cond.cv.notify_one();
 }
 pub extern "win64" fn wake_all_condition_variable(cv: usize) {
     let cond = get_condvar(cv);
+    let _g = cond.mu.lock().unwrap_or_else(|e| e.into_inner());
     cond.cv.notify_all();
 }
 
@@ -5487,18 +5507,20 @@ pub extern "win64" fn init_once_initialize(init_once: usize) {
 
 // --- Fiber Local Storage (FLS) ---
 static FLS_CALLBACKS: OnceLock<Mutex<HashMap<u32, usize>>> = OnceLock::new();
-static FLS_NEXT: AtomicU32 = AtomicU32::new(0);
 
 pub extern "win64" fn fls_alloc(callback: usize) -> u32 {
-    let slot = FLS_NEXT.fetch_add(1, Ordering::Relaxed);
-    if callback != 0 {
+    // FlsGetValue/FlsSetValue lisent les mêmes cases TEB que TlsGetValue :
+    // l'index doit donc venir de la même table que TlsAlloc, sinon le premier
+    // FlsAlloc (CRT) et le premier TlsAlloc (application) partagent la case 0.
+    let slot = tls_alloc();
+    if slot != u32::MAX && callback != 0 {
         lock(FLS_CALLBACKS.get_or_init(|| Mutex::new(HashMap::new()))).insert(slot, callback);
     }
     slot
 }
 pub extern "win64" fn fls_free(slot: u32) -> i32 {
     lock(FLS_CALLBACKS.get_or_init(|| Mutex::new(HashMap::new()))).remove(&slot);
-    1
+    tls_free(slot)
 }
 pub extern "win64" fn fls_get_value(slot: u32) -> *mut c_void {
     crate::process::tls_value(slot).unwrap_or(0) as *mut c_void
