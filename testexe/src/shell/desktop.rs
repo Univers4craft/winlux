@@ -337,11 +337,11 @@ fn init_apps() {
         if ALL_APPS_COUNT > 0 {
             return;
         }
-        let apps: [(&'static [u8], &'static [u8], i32); 39] = [
+        let apps: [(&'static [u8], &'static [u8], i32); 26] = [
             (tr4(&[b"Bienvenue dans Winlux", b"Welcome to Winlux", b"Bienvenido a Winlux", b"Willkommen bei Winlux"]), b"welcome", 9),
-            (tr(S_TERMINAL), b"xterm", 1),
-            (tr(S_FILE_EXPLORER), b"nemo", 1),
-            (tr(S_NOTEPAD), b"mousepad", 1),
+            (tr(S_TERMINAL), b"terminal", 1),
+            (tr(S_FILE_EXPLORER), b"explorer", 1),
+            (tr(S_NOTEPAD), b"notepad", 1),
             (tr(S_CALCULATOR), b"calc.exe", 1),
             (tr4(&[b"Capture d'\xE9cran", b"Screenshot", b"Captura de pantalla", b"Bildschirmfoto"]), b"screenshot.exe", 1),
             (tr4(&[b"Visionneuse", b"Photos", b"Visor", b"Fotoanzeige"]), b"imageviewer.exe", 1),
@@ -349,21 +349,9 @@ fn init_apps() {
             (tr4(&[b"Lecteur PDF", b"PDF Reader", b"Lector de PDF", b"PDF-Reader"]), b"pdfviewer.exe", 1),
             (tr4(&[b"Lecteur multim\xE9dia", b"Media Player", b"Reproductor multimedia", b"Medienwiedergabe"]), b"winlux-mediaplayer", 5),
             (tr4(&[b"Informations syst\xE8me", b"System Information", b"Informaci\xF3n del sistema", b"Systeminformationen"]), b"msinfo32", 9),
-            (tr4(&[b"Utilitaires", b"Utilities", b"Utilidades", b"Dienstprogramme"]), b"utilities-terminal", 2),
-            (tr4(&[b"Archives", b"Archives", b"Archivos comprimidos", b"Archive"]), b"file-roller", 1),
-            (tr4(&[b"Visionneuse Linux", b"Linux image viewer", b"Visor de Linux", b"Linux-Bildanzeige"]), b"xviewer", 3),
-            (b"GIMP", b"gimp", 3),
-            (b"Inkscape", b"inkscape", 3),
+            (tr4(&[b"Utilitaires", b"Utilities", b"Utilidades", b"Dienstprogramme"]), b"utilities", 2),
             (b"Firefox", b"firefox", 4),
-            (b"Chromium", b"chromium", 4),
-            (b"Thunderbird", b"thunderbird", 4),
-            (b"VLC", b"vlc", 5),
-            (b"Rhythmbox", b"rhythmbox", 5),
-            (b"Audacity", b"audacity", 5),
-            (b"VS Code", b"code", 7),
-            (b"Vim", b"vim", 7),
-            (b"Geany", b"geany", 7),
-            (tr(S_SETTINGS_APP), b"cinnamon-settings", 8),
+            (tr(S_SETTINGS_APP), b"settings", 8),
             (b"Store", b"store", 9),
             (tr4(&[b"Polices", b"Fonts", b"Fuentes", b"Schriftarten"]), b"fonts", 8),
             (tr4(&[b"Applications install\xE9es", b"Installed apps", b"Aplicaciones instaladas", b"Installierte Apps"]), b"programs", 8),
@@ -378,7 +366,6 @@ fn init_apps() {
                 b"firewall",
                 9,
             ),
-            (tr4(&[b"Moniteur syst\xE8me", b"System Monitor", b"Monitor del sistema", b"Systemmonitor"]), b"gnome-system-monitor", 9),
             (tr(S_TASK_MANAGER), b"taskmgr", 9),
             (tr4(&[b"Nettoyage de disque", b"Disk Cleanup", b"Liberador de espacio en disco", b"Datentr\xE4gerbereinigung"]), b"diskcleaner", 9),
             (tr4(&[b"Observateur d'\xE9v\xE9nements", b"Event Viewer", b"Visor de eventos", b"Ereignisanzeige"]), b"eventviewer", 9),
@@ -762,6 +749,8 @@ unsafe fn set_start(open: bool) {
     if open {
         START_OPEN = true;
         START_CLOSING = false;
+        START_SHOW_ALL_APPS = false;
+        START_CATEGORY = 0;
         SEARCH_OVERLAY = false;
         weather::PANEL_OPEN = false;
     } else if START_OPEN {
@@ -812,7 +801,7 @@ fn app_launch(app: usize) -> Launch {
     } else if app == wm::APP_TERMINAL {
         Launch::Terminal
     } else if app == wm::APP_UTILITIES {
-        Launch::Settings
+        Launch::Exec(b"utilities")
     } else {
         Launch::Settings
     }
@@ -1188,7 +1177,7 @@ unsafe fn context_action(app: usize, desktop: Option<usize>, row: i32, persist: 
         }
         3 if desktop.is_none() => {
             if wm::is_open(app) {
-                wm::minimize(app);
+                wm::close(app);
             }
         }
         3 if !desktop.is_none() && wm::is_open(app) => wm::minimize(app),
@@ -2064,13 +2053,15 @@ unsafe fn launch(what: Launch) {
             crate::notepad::open_new();
             wm::open(wm::APP_NOTEPAD);
         }
-        Launch::Pc | Launch::Programs => explorer::open_pc(),
+        Launch::Pc => explorer::open_pc(),
+        Launch::Programs => crate::programs::open(),
         Launch::Documents => explorer::open_documents(),
         Launch::Settings => {
             // Si on veut ouvrir les utilitaires, on passe par l'icône dédiée
             wm::open(wm::APP_SETTINGS);
         }
-        Launch::Updates => crate::settings::open_page(6),
+        // Page 7 = « Mises à jour » (la 6 est « Apparence »).
+        Launch::Updates => crate::settings::open_page(7),
         Launch::Terminal => {
             crate::terminal::init();
             wm::open(wm::APP_TERMINAL);
@@ -2109,6 +2100,26 @@ unsafe fn launch(what: Launch) {
         }
         Launch::Exec(cmd) => {
             // Applications intégrées dans le WM
+            if cmd == b"explorer" {
+                launch(Launch::Explorer);
+                return;
+            }
+            if cmd == b"notepad" {
+                launch(Launch::Notepad);
+                return;
+            }
+            if cmd == b"terminal" {
+                launch(Launch::Terminal);
+                return;
+            }
+            if cmd == b"settings" {
+                launch(Launch::Settings);
+                return;
+            }
+            if cmd == b"utilities" {
+                wm::open(wm::APP_UTILITIES);
+                return;
+            }
             if cmd == b"taskmgr" {
                 wm::open(wm::APP_TASKMGR);
                 return;
@@ -2183,7 +2194,7 @@ unsafe fn launch(what: Launch) {
                 }
             }
             static OPEN: &[u16] = &[b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
-            ShellExecuteW(
+            let r = ShellExecuteW(
                 core::ptr::null_mut(),
                 OPEN.as_ptr(),
                 wcmd.as_ptr(),
@@ -2191,6 +2202,24 @@ unsafe fn launch(what: Launch) {
                 core::ptr::null(),
                 1,
             );
+            if (r as isize) <= 32 {
+                // Programme absent : le dire plutôt que de ne rien faire.
+                let mut msg = [0u8; 96];
+                let head = tr4(&[
+                    b"Application introuvable : ",
+                    b"Application not found: ",
+                    b"Aplicaci\xF3n no encontrada: ",
+                    b"Anwendung nicht gefunden: ",
+                ]);
+                let mut n = 0;
+                for &c in head.iter().chain(cmd.iter()) {
+                    if n < msg.len() {
+                        msg[n] = c;
+                        n += 1;
+                    }
+                }
+                toast(&msg[..n]);
+            }
         }
     }
 }
@@ -2764,7 +2793,7 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
     }
     if unsafe { POWER_MENU } {
         let pr = power_rect(s);
-        let pw = 160;
+        let pw = 180;
         let ph = 3 * 36 + 8;
         let mx = pr.right - pw;
         let my = pr.top - ph - 4;
@@ -2826,6 +2855,9 @@ fn start_item_at(l: &Layout, x: i32, y: i32) -> i32 {
             let cat = unsafe { ALL_APPS[i].2 };
             if unsafe { START_CATEGORY == 0 || cat == START_CATEGORY } {
                 let app_y = apps_y + (displayed as i32) * 44;
+                if app_y + 40 >= s.bottom - 72 {
+                    break;
+                }
                 if y >= app_y && y < app_y + 40 && x >= inner_l + 4 && x < inner_r {
                     return 400 + i as i32;
                 }
@@ -4196,6 +4228,10 @@ static mut WIN_ALONE: bool = false;
 
 /// Relâchement d'une touche : la touche Windows seule ouvre Démarrer.
 pub unsafe fn on_key_up(hwnd: Handle, vk: u32) {
+    if vk == 0x12 && wm::alt_released() {
+        repaint(hwnd);
+        return;
+    }
     if (vk == 0x5B || vk == 0x5C) && WIN_ALONE {
         WIN_ALONE = false;
         if !BOOT_DONE || !crate::login::logged_in() || crate::snip::active() {
@@ -4278,16 +4314,12 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                     set_start(!(START_OPEN && !START_CLOSING));
                 } else {
                     set_start(false);
-                    match taskbar_app(i) {
-                        Some(wm::APP_EXPLORER) => {
-                            if wm::is_open(wm::APP_EXPLORER) {
-                                wm::toggle(wm::APP_EXPLORER)
-                            } else {
-                                explorer::open_home()
-                            }
+                    if let Some(app) = taskbar_app(i) {
+                        if wm::is_open(app) {
+                            wm::toggle(app)
+                        } else {
+                            launch(app_launch(app))
                         }
-                        Some(wm::APP_SETTINGS) => wm::toggle(wm::APP_SETTINGS),
-                        _ => {}
                     }
                 }
                 repaint(hwnd);
@@ -4446,8 +4478,24 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                 if v <= 5 {
                     crate::settings::control(c"volume-mute");
                 } else {
-                    // Set volume via repeated up/down to approximate
-                    crate::settings::control(c"volume-set");
+                    // « volume-set NN » : winlux-control applique le niveau.
+                    let mut cmd = *b"volume-set 100\0";
+                    let mut n = 11;
+                    if v >= 100 {
+                        cmd[n..n + 3].copy_from_slice(b"100");
+                        n += 3;
+                    } else {
+                        if v >= 10 {
+                            cmd[n] = b'0' + (v / 10) as u8;
+                            n += 1;
+                        }
+                        cmd[n] = b'0' + (v % 10) as u8;
+                        n += 1;
+                    }
+                    cmd[n] = 0;
+                    if let Ok(c) = core::ffi::CStr::from_bytes_until_nul(&cmd) {
+                        crate::settings::control(c);
+                    }
                 }
             }
             // Mute button
@@ -4560,7 +4608,7 @@ pub unsafe fn on_button_down(hwnd: Handle, x: i32, y: i32) {
                         launch(results[idx].launch);
                     }
                 }
-                i @ 0..=5 => {
+                i @ 0..=7 => {
                     set_start(false);
                     launch(pinned_apps()[i as usize].launch);
                 }
@@ -5095,6 +5143,14 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
         }
         if START_OPEN {
             set_start(false);
+            repaint(hwnd);
+            return;
+        }
+        if NET_PANEL || VOL_PANEL {
+            NET_PANEL = false;
+            NET_HOVER = -1;
+            VOL_PANEL = false;
+            VOL_HOVER = -1;
             repaint(hwnd);
             return;
         }
