@@ -68,3 +68,23 @@ with tempfile.TemporaryDirectory(prefix="apt-fallback-check.") as temporary:
     scope["download"] = fake({}, {api_url: 28})
     failure("délai dépassé")
 print("OK: update metadata falls back to the GitHub release when the manifest is missing")
+
+# APT refuse un fichier local qui ne finit pas par .deb (« Unsupported file »).
+with tempfile.TemporaryDirectory(prefix="apt-suffix-check.") as temporary:
+    work = Path(temporary); tree = work / "pkg"; (tree / "DEBIAN").mkdir(parents=True)
+    (tree / "DEBIAN/control").write_text("Package: winlux-desktop\nVersion: 0.3.1\nArchitecture: all\n"
+                                         "Maintainer: Winlux <winlux@localhost>\nDescription: test\n")
+    download = work / ("download-" + "d" * 64 + ".part")
+    subprocess.run(["dpkg-deb", "--root-owner-group", "-Zgzip", "--build", str(tree), str(download)], check=True, capture_output=True)
+    seen = []
+    real_run = subprocess.run
+    def fake_run(command, **kwargs):
+        if command[0] == "apt-get":
+            seen.append(command[-1]); assert Path(command[-1]).is_file() and command[-1].endswith(".deb"), command
+            return subprocess.CompletedProcess(command, 0)
+        return real_run(command, **kwargs)
+    scope["subprocess"].run = fake_run
+    try: updater["install"](download, version="v0.3.1")
+    finally: scope["subprocess"].run = real_run
+    assert seen and download.is_file() and not Path(seen[0]).exists(), seen
+print("OK: downloaded update handed to APT under a .deb name")

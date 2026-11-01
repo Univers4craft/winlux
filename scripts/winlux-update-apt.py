@@ -274,8 +274,20 @@ def install(package, rollback=False, version=None):
     if version and actual != version.removeprefix("v"): raise ValueError("Version du paquet incorrecte")
     command = ["apt-get", "--no-remove", "--reinstall", "-y", "-o", "Dpkg::Options::=--force-confold"]
     if rollback: command.append("--allow-downgrades")
-    subprocess.run(command + ["install", str(package)], check=True,
-                   env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+    # APT n'accepte un fichier local que s'il se termine par .deb : le
+    # téléchargement (download-<sha>.part) est exposé sous ce nom le temps de
+    # l'installation. Sans cela, la v0.2.12 ne pouvait installer aucune mise à jour.
+    package = Path(package)
+    staged = None
+    if package.suffix != ".deb":
+        staged = package.with_name(package.stem + ".deb")
+        staged.unlink(missing_ok=True)
+        os.link(package, staged)
+    try:
+        subprocess.run(command + ["install", str(staged or package)], check=True,
+                       env=dict(os.environ, DEBIAN_FRONTEND="noninteractive"))
+    finally:
+        if staged: staged.unlink(missing_ok=True)
 
 def cache_copy(source, destination):
     with tempfile.NamedTemporaryFile(dir=destination.parent, prefix=".package-", delete=False) as handle:

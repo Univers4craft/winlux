@@ -435,6 +435,10 @@ def update_from_previous_release():
     # Les adresses GitHub que lit l'outil publié pointent vers les fichiers
     # préparés (test-update-curl-shim.py) ; tout le reste (APT, vérifications,
     # point de restauration) est le vrai code de la version publiée.
+    if (bench / "winlux-update-apt").exists():
+        print(f"Outil de mise à jour de v{previous} connu cassé : test avec l'outil actuel", flush=True)
+        shutil.copyfile(bench / "winlux-update-apt", "/usr/bin/winlux-update-apt")
+        Path("/usr/bin/winlux-update-apt").chmod(0o755)
     shim = Path("/tmp/winlux-update-shim"); shim.mkdir(exist_ok=True)
     shutil.copyfile(bench / "curl", shim / "curl"); (shim / "curl").chmod(0o755)
     env = dict(os.environ, PATH=f"{shim}:" + os.environ.get("PATH", "/usr/bin:/bin:/usr/sbin:/sbin"))

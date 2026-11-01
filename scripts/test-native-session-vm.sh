@@ -48,6 +48,11 @@ if test -n "${WINLUX_UPDATE_FROM_DEB:-}"; then
     debugfs -w -R "write $new /opt/winlux-test/update/$asset" "$disk" >/dev/null 2>&1
     debugfs -w -R "write $work/update-manifest.txt /opt/winlux-test/update/winlux-update-manifest.txt" "$disk" >/dev/null 2>&1
     debugfs -w -R "write $root/scripts/test-update-curl-shim.py /opt/winlux-test/update/curl" "$disk" >/dev/null 2>&1
+    # Version publiée dont l'outil de mise à jour est connu cassé : son paquet
+    # est installé, mais c'est l'outil actuel qui fait la mise à jour.
+    if test "${WINLUX_UPDATE_WITH_CURRENT_TOOL:-0}" = 1; then
+        debugfs -w -R "write $root/scripts/winlux-update-apt.py /opt/winlux-test/update/winlux-update-apt" "$disk" >/dev/null 2>&1
+    fi
     : "${WINLUX_NATIVE_TEST_TIMEOUT:=1200}"
 fi
 echo "Native desktop diagnostic ($accel): $work"
