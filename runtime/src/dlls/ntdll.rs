@@ -5,7 +5,7 @@
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 
 // ---------- Constantes NTSTATUS ----------
 
@@ -15,6 +15,7 @@ const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
 const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
 const STATUS_TIMEOUT: i32 = 0x0000_0102u32 as i32;
 const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023u32 as i32;
+const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004u32 as i32;
 const STATUS_ACCESS_DENIED: i32 = 0xC000_0022u32 as i32;
 const STATUS_OBJECT_NAME_NOT_FOUND: i32 = 0xC000_0034u32 as i32;
 const STATUS_OBJECT_NAME_COLLISION: i32 = 0xC000_0035u32 as i32;
@@ -696,132 +697,71 @@ unsafe fn slist_depth(head: *const u8) -> u16 {
 // ============================================================
 //  SRW Locks (Slim Reader/Writer Locks)
 // ============================================================
-
-/// On utilise une table globale indexée par l'adresse du SRWLOCK guest.
-/// Le SRWLOCK Windows est un seul pointeur (8 octets sur x64). On ne touche
-/// pas à la mémoire guest sauf pour écrire 0 (init) ou un marqueur.
-/// SRW Lock implémenté via pthread_rwlock (stable, pas de force_unlock).
-/// Chaque adresse SRW lock Win32 est associée à un pthread_rwlock_t alloué en heap.
-struct SrwState {
-    rwlock: *mut libc::pthread_rwlock_t,
-}
-
-unsafe impl Send for SrwState {}
-unsafe impl Sync for SrwState {}
-
-impl Drop for SrwState {
-    fn drop(&mut self) {
-        unsafe {
-            libc::pthread_rwlock_destroy(self.rwlock);
-            let layout = std::alloc::Layout::new::<libc::pthread_rwlock_t>();
-            std::alloc::dealloc(self.rwlock as *mut u8, layout);
-        }
-    }
-}
-
-impl SrwState {
-    fn new() -> Self {
-        unsafe {
-            let layout = std::alloc::Layout::new::<libc::pthread_rwlock_t>();
-            let ptr = std::alloc::alloc_zeroed(layout) as *mut libc::pthread_rwlock_t;
-            libc::pthread_rwlock_init(ptr, std::ptr::null());
-            SrwState { rwlock: ptr }
-        }
-    }
-}
-
-static SRW_TABLE: OnceLock<Mutex<HashMap<usize, Arc<SrwState>>>> = OnceLock::new();
-
-fn srw_get_or_init(addr: usize) -> Arc<SrwState> {
-    let mut table = lock(SRW_TABLE.get_or_init(|| Mutex::new(HashMap::new())));
-    table
-        .entry(addr)
-        .or_insert_with(|| Arc::new(SrwState::new()))
-        .clone()
-}
+//
+// Un seul état pour kernel32 et ntdll : les Rtl* délèguent à
+// l'implémentation de kernel32 (attente bloquante, table indexée par
+// l'adresse du SRWLOCK). Un programme qui mélange AcquireSRWLockExclusive et
+// RtlReleaseSRWLockExclusive voit donc le même verrou.
 
 pub unsafe extern "win64" fn rtl_initialize_srw_lock(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    *lock_ptr = 0;
-    srw_get_or_init(lock_ptr as usize);
+    super::kernel32::initialize_srw_lock(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_acquire_srw_lock_exclusive(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_wrlock(s.rwlock);
+    super::kernel32::acquire_srw_lock_exclusive(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_release_srw_lock_exclusive(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_unlock(s.rwlock);
+    super::kernel32::release_srw_lock_exclusive(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_acquire_srw_lock_shared(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_rdlock(s.rwlock);
+    super::kernel32::acquire_srw_lock_shared(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_release_srw_lock_shared(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_unlock(s.rwlock);
+    super::kernel32::release_srw_lock_shared(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_exclusive(lock_ptr: *mut usize) -> u8 {
     if lock_ptr.is_null() {
         return 0;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    if libc::pthread_rwlock_trywrlock(s.rwlock) == 0 {
-        1
-    } else {
-        0
+    super::kernel32::try_acquire_srw_lock_exclusive(lock_ptr as usize)
+}
+
+pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_shared(lock_ptr: *mut usize) -> u8 {
+    if lock_ptr.is_null() {
+        return 0;
     }
+    super::kernel32::try_acquire_srw_lock_shared(lock_ptr as usize)
 }
 
 // ============================================================
 //  Condition Variables
 // ============================================================
-
-struct CondState {
-    condvar: Condvar,
-    mutex: Mutex<()>,
-}
-
-static COND_TABLE: OnceLock<Mutex<HashMap<usize, Arc<CondState>>>> = OnceLock::new();
-
-fn cond_get_or_init(addr: usize) -> Arc<CondState> {
-    let mut table = lock(COND_TABLE.get_or_init(|| Mutex::new(HashMap::new())));
-    table
-        .entry(addr)
-        .or_insert_with(|| {
-            Arc::new(CondState {
-                condvar: Condvar::new(),
-                mutex: Mutex::new(()),
-            })
-        })
-        .clone()
-}
+// Même table que kernel32 (InitializeConditionVariable & co.).
 
 pub unsafe extern "win64" fn rtl_initialize_condition_variable(cv: *mut usize) {
     if cv.is_null() {
         return;
     }
-    *cv = 0;
-    cond_get_or_init(cv as usize);
+    super::kernel32::initialize_condition_variable(cv as usize);
 }
 
 /// `RtlSleepConditionVariableSRW` : attend la condition en relâchant le SRW lock.
@@ -829,57 +769,73 @@ pub unsafe extern "win64" fn rtl_sleep_condition_variable_srw(
     cv: *mut usize,
     srw: *mut usize,
     timeout: u32,
-    _flags: u32,
+    flags: u32,
 ) -> i32 {
     if cv.is_null() || srw.is_null() {
         return STATUS_INVALID_PARAMETER;
     }
-    // Prendre le mutex interne AVANT de relâcher le SRW : un RtlWake* émis
-    // entre les deux serait sinon perdu (le dormeur n'est pas encore en attente).
-    let c = cond_get_or_init(cv as usize);
-    let guard = lock(&c.mutex);
-    rtl_release_srw_lock_exclusive(srw);
-    let result = if timeout == u32::MAX {
-        let _guard = c.condvar.wait(guard).unwrap_or_else(|e| e.into_inner());
-        STATUS_SUCCESS
-    } else {
-        match c
-            .condvar
-            .wait_timeout(guard, std::time::Duration::from_millis(timeout as u64))
-        {
-            Ok((_, result)) => {
-                if result.timed_out() {
-                    STATUS_TIMEOUT
-                } else {
-                    STATUS_SUCCESS
-                }
+    let shared = flags & 1 != 0;
+    let srw = srw as usize;
+    let timed_out = super::kernel32::condvar_sleep(
+        cv as usize,
+        timeout,
+        || {
+            if shared {
+                super::kernel32::release_srw_lock_shared(srw)
+            } else {
+                super::kernel32::release_srw_lock_exclusive(srw)
             }
-            Err(_) => STATUS_SUCCESS,
-        }
-    };
-    // Reprendre le SRW lock.
-    rtl_acquire_srw_lock_exclusive(srw);
-    result
+        },
+        || {
+            if shared {
+                super::kernel32::acquire_srw_lock_shared(srw)
+            } else {
+                super::kernel32::acquire_srw_lock_exclusive(srw)
+            }
+        },
+    );
+    if timed_out {
+        STATUS_TIMEOUT
+    } else {
+        STATUS_SUCCESS
+    }
+}
+
+/// `RtlSleepConditionVariableCS` : même chose avec une section critique.
+pub unsafe extern "win64" fn rtl_sleep_condition_variable_cs(
+    cv: *mut usize,
+    cs: *mut c_void,
+    timeout: u32,
+) -> i32 {
+    if cv.is_null() || cs.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let timed_out = super::kernel32::condvar_sleep(
+        cv as usize,
+        timeout,
+        || super::kernel32::leave_critical_section(cs),
+        || super::kernel32::enter_critical_section(cs),
+    );
+    if timed_out {
+        STATUS_TIMEOUT
+    } else {
+        STATUS_SUCCESS
+    }
 }
 
 pub unsafe extern "win64" fn rtl_wake_condition_variable(cv: *mut usize) {
     if cv.is_null() {
         return;
     }
-    let c = cond_get_or_init(cv as usize);
-    let _g = lock(&c.mutex);
-    c.condvar.notify_one();
+    super::kernel32::wake_condition_variable(cv as usize);
 }
 
 pub unsafe extern "win64" fn rtl_wake_all_condition_variable(cv: *mut usize) {
     if cv.is_null() {
         return;
     }
-    let c = cond_get_or_init(cv as usize);
-    let _g = lock(&c.mutex);
-    c.condvar.notify_all();
+    super::kernel32::wake_all_condition_variable(cv as usize);
 }
-
 // ============================================================
 //  Fiber Local Storage (FLS)
 // ============================================================
@@ -1358,29 +1314,114 @@ pub unsafe extern "win64" fn nt_set_information_thread(
     STATUS_SUCCESS // Silently succeed
 }
 
-/// `NtQuerySystemInformation` : stub.
+/// Copie `bytes` dans le tampon de sortie d'une requête Nt* : taille
+/// requise dans `return_length`, STATUS_INFO_LENGTH_MISMATCH si trop petit.
+unsafe fn write_info(info: *mut c_void, length: u32, return_length: *mut u32, bytes: &[u8]) -> i32 {
+    if !return_length.is_null() {
+        *return_length = bytes.len() as u32;
+    }
+    if (length as usize) < bytes.len() {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    if info.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), info as *mut u8, bytes.len());
+    STATUS_SUCCESS
+}
+
+/// `NtQuerySystemInformation` : SystemBasicInformation (0),
+/// SystemProcessorInformation (1), SystemTimeOfDayInformation (3) et
+/// SystemProcessorPerformanceInformation (8), avec les dispositions publiques
+/// de winternl.h.
 pub unsafe extern "win64" fn nt_query_system_information(
     info_class: u32,
     info: *mut c_void,
     length: u32,
     return_length: *mut u32,
 ) -> i32 {
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
     match info_class {
         0 => {
-            // SystemBasicInformation : taille de page et nombre de processeurs.
-            if length < 44 {
-                return STATUS_BUFFER_TOO_SMALL;
+            // SYSTEM_BASIC_INFORMATION (64 octets).
+            let mut sys: crate::dlls::kernel32::SystemInfo = std::mem::zeroed();
+            crate::dlls::kernel32::get_system_info(&mut sys);
+            let pages = libc::sysconf(libc::_SC_PHYS_PAGES).max(0) as u32;
+            let mut b = Vec::with_capacity(64);
+            b.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+            b.extend_from_slice(&156_250u32.to_le_bytes()); // TimerResolution (15,625 ms)
+            b.extend_from_slice(&4096u32.to_le_bytes()); // PageSize
+            b.extend_from_slice(&pages.to_le_bytes()); // NumberOfPhysicalPages
+            b.extend_from_slice(&0u32.to_le_bytes()); // LowestPhysicalPageNumber
+            b.extend_from_slice(&pages.to_le_bytes()); // HighestPhysicalPageNumber
+            b.extend_from_slice(&65536u32.to_le_bytes()); // AllocationGranularity
+            b.extend_from_slice(&(sys.minimum_application_address as u64).to_le_bytes());
+            b.extend_from_slice(&(sys.maximum_application_address as u64).to_le_bytes());
+            b.extend_from_slice(&(sys.active_processor_mask as u64).to_le_bytes());
+            b.push(cpus.min(255) as u8); // NumberOfProcessors
+            b.resize(64, 0);
+            write_info(info, length, return_length, &b)
+        }
+        1 => {
+            // SYSTEM_PROCESSOR_INFORMATION (12 octets) : AMD64, niveau 6.
+            let mut b = Vec::with_capacity(12);
+            b.extend_from_slice(&9u16.to_le_bytes()); // PROCESSOR_ARCHITECTURE_AMD64
+            b.extend_from_slice(&6u16.to_le_bytes()); // ProcessorLevel
+            b.extend_from_slice(&0u16.to_le_bytes()); // ProcessorRevision
+            b.extend_from_slice(&(cpus.min(u16::MAX as usize) as u16).to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes()); // ProcessorFeatureBits
+            write_info(info, length, return_length, &b)
+        }
+        3 => {
+            // SYSTEM_TIMEOFDAY_INFORMATION (48 octets) : démarrage, heure,
+            // biais de fuseau en unités de 100 ns.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| (d.as_nanos() / 100) as i64)
+                + crate::intl::tz::FILETIME_UNIX_EPOCH;
+            let uptime = crate::dlls::kernel32::get_tick_count64() as i64 * 10_000;
+            let boot = now - uptime;
+            let mut b = Vec::with_capacity(48);
+            b.extend_from_slice(&boot.to_le_bytes()); // BootTime
+            b.extend_from_slice(&now.to_le_bytes()); // CurrentTime
+            b.extend_from_slice(&0i64.to_le_bytes()); // TimeZoneBias
+            b.extend_from_slice(&0u32.to_le_bytes()); // TimeZoneId
+            b.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+            b.extend_from_slice(&0u64.to_le_bytes()); // BootTimeBias
+            b.extend_from_slice(&0u64.to_le_bytes()); // SleepTimeBias
+            write_info(info, length, return_length, &b)
+        }
+        8 => {
+            // SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION : 48 octets par
+            // processeur, temps en unités de 100 ns depuis /proc/stat.
+            let stat = std::fs::read_to_string("/proc/stat").unwrap_or_default();
+            let hz = libc::sysconf(libc::_SC_CLK_TCK).max(1) as i64;
+            let mut b = Vec::with_capacity(48 * cpus);
+            for i in 0..cpus {
+                let prefix = format!("cpu{i} ");
+                let fields: Vec<i64> = stat
+                    .lines()
+                    .find(|l| l.starts_with(&prefix))
+                    .map(|l| {
+                        l.split_whitespace()
+                            .skip(1)
+                            .filter_map(|f| f.parse().ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let get = |k: usize| fields.get(k).copied().unwrap_or(0) * 10_000_000 / hz;
+                let (user, nice, system, idle, irq, softirq) =
+                    (get(0), get(1), get(2), get(3), get(5), get(6));
+                // Comme sous Windows, KernelTime inclut IdleTime.
+                b.extend_from_slice(&idle.to_le_bytes()); // IdleTime
+                b.extend_from_slice(&(system + idle + irq + softirq).to_le_bytes()); // KernelTime
+                b.extend_from_slice(&(user + nice).to_le_bytes()); // UserTime
+                b.extend_from_slice(&softirq.to_le_bytes()); // DpcTime
+                b.extend_from_slice(&irq.to_le_bytes()); // InterruptTime
+                b.extend_from_slice(&0u32.to_le_bytes()); // InterruptCount
+                b.extend_from_slice(&0u32.to_le_bytes()); // remplissage
             }
-            if info.is_null() {
-                return STATUS_INVALID_PARAMETER;
-            }
-            std::ptr::write_bytes(info as *mut u8, 0, 44);
-            // PageSize à offset 0 (pour certains layouts)
-            std::ptr::write_unaligned(info as *mut u32, 4096);
-            if !return_length.is_null() {
-                *return_length = 44;
-            }
-            STATUS_SUCCESS
+            write_info(info, length, return_length, &b)
         }
         _ => {
             if !return_length.is_null() {
@@ -1895,9 +1936,11 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlAcquireSRWLockShared" => fn rtl_acquire_srw_lock_shared,
         "RtlReleaseSRWLockShared" => fn rtl_release_srw_lock_shared,
         "RtlTryAcquireSRWLockExclusive" => fn rtl_try_acquire_srw_lock_exclusive,
+        "RtlTryAcquireSRWLockShared" => fn rtl_try_acquire_srw_lock_shared,
         // --- Rtl : Condition Variables ---
         "RtlInitializeConditionVariable" => fn rtl_initialize_condition_variable,
         "RtlSleepConditionVariableSRW" => fn rtl_sleep_condition_variable_srw,
+        "RtlSleepConditionVariableCS" => fn rtl_sleep_condition_variable_cs,
         "RtlWakeConditionVariable" => fn rtl_wake_condition_variable,
         "RtlWakeAllConditionVariable" => fn rtl_wake_all_condition_variable,
         // --- Rtl : FLS ---
