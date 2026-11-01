@@ -151,7 +151,7 @@ write_config() {
     rows | awk -F '\t' '$4 != "none" { f=1 } END { exit !f }' && guests=1
     mac=
     modules=$(vfs_dir || true)
-    if test -n "$modules" && test -f "$modules/vfs/fruit.so" && test -f "$modules/vfs/streams_xattr.so"; then mac=1; fi
+    if test -n "$modules" && test -f "$modules/vfs/catia.so" && test -f "$modules/vfs/fruit.so" && test -f "$modules/vfs/streams_xattr.so"; then mac=1; fi
     tmp="$smbconf.$$"
     {
         printf '# Généré par winlux-share : modifiez les partages depuis Winlux.\n'
@@ -165,7 +165,7 @@ write_config() {
         printf '   ntlm auth = ntlmv2-only\n'
         printf '   smb encrypt = if_required\n'
         printf '   disable netbios = yes\n'
-        printf '   smb ports = 445\n'
+        printf '   smb ports = %s\n' "${WINLUX_SHARE_PORT:-445}"
         printf '   passdb backend = tdbsam:%s/private/passdb.tdb\n' "$state"
         printf '   private dir = %s/private\n' "$state"
         printf '   lock directory = %s/lock\n' "$state"
@@ -179,7 +179,10 @@ write_config() {
         if test "$guests" = 1; then printf '   map to guest = bad user\n   guest account = nobody\n'; fi
         if test -n "$mac"; then
             # Compatibilité Finder (métadonnées et icônes macOS).
-            printf '   vfs objects = fruit streams_xattr\n   fruit:metadata = stream\n   fruit:model = MacSamba\n'
+            # Tout reste en attributs étendus : aucun fichier ._ visible côté Linux.
+            printf '   vfs objects = catia fruit streams_xattr\n   fruit:metadata = stream\n   fruit:resource = stream\n'
+            printf '   fruit:model = MacSamba\n   fruit:posix_rename = yes\n   fruit:nfs_aces = no\n'
+            printf '   fruit:wipe_intentionally_left_blank_rfork = yes\n   fruit:delete_empty_adfiles = yes\n'
         fi
         if enabled; then
             rows | while IFS='	' read -r id name path guest acl; do

@@ -90,6 +90,15 @@ const LEVELS: [Tr4; 3] = [
     [b"Lecture", b"Read", b"Lectura", b"Lesen"],
     [b"Modification", b"Change", b"Modificaci\xF3n", b"\xC4ndern"],
 ];
+/// Windows 11 (24H2 et après) exige la signature SMB et refuse les sessions
+/// invitées : un partage ouvert aux invités ne s'ouvre que depuis un Mac ou
+/// un Linux (vérifié par scripts/test-share-clients.sh).
+const GUEST_WINDOWS11: Tr4 = [
+    b"Windows 11 refuse l'acc\xE8s invit\xE9 : depuis un PC Windows, connectez-vous avec un compte Winlux.",
+    b"Windows 11 blocks guest access: from a Windows PC, sign in with a Winlux account.",
+    b"Windows 11 bloquea el acceso de invitados: desde un PC con Windows, inicie sesi\xF3n con una cuenta de Winlux.",
+    b"Windows 11 blockiert den Gastzugriff: Melden Sie sich von einem Windows-PC mit einem Winlux-Konto an.",
+];
 const GUESTS: Tr4 = [b"Invit\xE9s", b"Guests", b"Invitados", b"G\xE4ste"];
 const NO_PASSWORD: Tr4 = [
     b"sans mot de passe",
@@ -700,6 +709,10 @@ pub unsafe fn draw(g: &mut Gfx, real: &Rect) {
                 y = card.bottom + 10;
             }
         }
+        if lines(shares(), b"share").any(|share| guest_level(part(share, 3)) != 0) {
+            line(g, g.f.small, p.text3, c.left, y + 2, tr4(&GUEST_WINDOWS11), w, false);
+            y += 20;
+        }
         line(g, g.f.small, p.text3, c.left, y + 2, tr4(&[
             b"Pour partager un dossier : clic droit dessus dans l'Explorateur, puis \xAB Partager ce dossier \xBB.",
             b"To share a folder: right-click it in File Explorer, then \x93Share this folder\x94.",
@@ -1105,12 +1118,17 @@ pub unsafe fn draw_dialog(g: &mut Gfx, f: &Frame) {
             w,
             true,
         );
-        line(g, g.f.small, p.text3, r.left + 20, r.top + 68, tr4(&[
-            b"Cliquez sur un compte pour passer de Aucun acc\xE8s \xE0 Lecture puis \xE0 Modification.",
-            b"Click an account to switch between No access, Read and Change.",
-            b"Haga clic en una cuenta para pasar de Sin acceso a Lectura y Modificaci\xF3n.",
-            b"Klicken Sie auf ein Konto, um zwischen Kein Zugriff, Lesen und \xC4ndern zu wechseln.",
-        ]), w, true);
+        let hint = if guest_level(part(share, 3)) != 0 {
+            tr4(&GUEST_WINDOWS11)
+        } else {
+            tr4(&[
+                b"Cliquez sur un compte pour passer de Aucun acc\xE8s \xE0 Lecture puis \xE0 Modification.",
+                b"Click an account to switch between No access, Read and Change.",
+                b"Haga clic en una cuenta para pasar de Sin acceso a Lectura y Modificaci\xF3n.",
+                b"Klicken Sie auf ein Konto, um zwischen Kein Zugriff, Lesen und \xC4ndern zu wechseln.",
+            ])
+        };
+        line(g, g.f.small, p.text3, r.left + 20, r.top + 68, hint, w, true);
         rights(g, share, r.left + 20, r.top + 92, r.right - 20, true);
         button(
             g,

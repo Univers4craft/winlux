@@ -32,6 +32,14 @@ les Mac (`smb://NOM-DU-PC`) et les autres Linux.
   panneau Réseau de l'Explorateur Windows ; Avahi, s'il est présent, l'annonce
   au Finder ; le module `fruit` de Samba gère les métadonnées macOS.
 
+- **Windows 11** (24H2 et après) exige la signature SMB et refuse les
+  sessions invitées : depuis un PC Windows, il faut se connecter avec un
+  compte Winlux. La page Paramètres et le panneau de partage le rappellent
+  dès qu'un partage est ouvert aux invités. Un Mac, lui, accepte les invités.
+- **Mac** : métadonnées Finder et fourches de ressources restent en attributs
+  étendus (`fruit:resource = stream`), aucun fichier `._` n'apparaît dans le
+  dossier côté Linux ; `catia` traduit les caractères interdits sous Windows.
+
 Fichiers : registre `/etc/winlux/shares.tsv`, configuration générée
 `/etc/winlux/samba/smb.conf` (le `smb.conf` du paquet l'inclut, l'original est
 gardé en `smb.conf.winlux-orig`), base de comptes
@@ -60,7 +68,30 @@ import** les remet.
 
 ## Tests
 
-`sh scripts/test-share.sh` et `sh scripts/test-transfer.sh` (dans la CI). Le
-partage a aussi été vérifié de bout en bout avec un vrai `smbd` et
-`smbclient` : écriture autorisée/refusée selon le droit, mauvais mot de passe
-refusé, invités refusés puis acceptés.
+`sh scripts/test-share.sh` et `sh scripts/test-transfer.sh` (dans la CI).
+
+`sudo sh scripts/test-share-clients.sh` (dans la CI aussi) démarre un vrai
+Samba et le confronte à des clients qui se comportent comme :
+
+- **Windows 11** : SMB 3.1.1 seul, signature obligatoire, NTLMv2 ; liste des
+  partages, nom de partage accentué, chemin de plus de 200 caractères, droit
+  Modification / Lecture respecté, mauvais mot de passe et SMB1 refusés,
+  session invitée refusée (comme Windows 11).
+- **macOS** : SMB 3, accès invité, fourche de ressources écrite et relue,
+  pas de fichier `._`.
+- **Découverte Windows** : sonde WS-Discovery (UDP 3702) puis lecture des
+  métadonnées (HTTP 5357), comme le panneau Réseau de l'Explorateur.
+
+### À vérifier sur un vrai PC Windows et un vrai Mac
+
+Ce que le banc ne peut pas prouver (issue #171) :
+
+1. Windows 11 : le PC Winlux apparaît dans **Réseau** de l'Explorateur.
+2. Windows 11 : `\\NOM-DU-PC\Dossier` s'ouvre avec le compte Winlux ; copier
+   un gros fichier (plus de 1 Go) dans les deux sens.
+3. Windows 11 : « Connecter un lecteur réseau » survit à un redémarrage des
+   deux PC.
+4. Mac : le PC apparaît dans la barre latérale du Finder (Bonjour) ;
+   `smb://NOM-DU-PC` s'ouvre en invité et avec un compte.
+5. Mac : copier un dossier avec étiquettes de couleur, les étiquettes restent.
+6. Pare-feu en profil **Public** : le partage n'est plus joignable.
