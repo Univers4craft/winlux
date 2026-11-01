@@ -43,21 +43,112 @@ pub const PAGE_SHARING: usize = 28;
 const PAGE_COUNT: usize = 29;
 /// Appareils Bluetooth affichés (une ligne de boutons chacun).
 const BT_ROWS: usize = 5;
-/// Ordre d'affichage du menu : la personnalisation suit l'apparence,
-/// l'alimentation suit le son et la batterie.
-const NAV_ORDER: [usize; PAGE_COUNT] = [
-    0, 1, 2, 3, 23, 4, 5, 6, 21, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 24, 20, 28, 22, 25, 26,
-    27,
+/// Menu façon Windows 11 : des catégories, chacune avec ses sous-pages dans
+/// l'ordre affiché. Les numéros de page ne changent pas (barre des tâches,
+/// menu Démarrer et session native ouvrent une page par son numéro) ; les
+/// pages 3 (Son) et 5 (Souris) sont fondues dans 16 et 4, voir `merged`.
+const CATEGORY_COUNT: usize = 9;
+const CATEGORIES: [&[usize]; CATEGORY_COUNT] = [
+    &[8, 16, PAGE_POWER, PAGE_GRAPHICS, PAGE_CPU, 0, PAGE_REMOTE, PAGE_REPORT, 9],
+    &[BLUETOOTH_PAGE, 4, PAGE_PRINTERS],
+    &[2, PAGE_NETDRIVES, PAGE_SHARING],
+    &[PAGE_PERSONALIZE, 6, 13],
+    &[1, 10, 11, 15],
+    &[14],
+    &[12],
+    &[PAGE_PRIVACY],
+    &[7, PAGE_SYSUPDATE],
 ];
+const CATEGORY_NAMES: [&Tr4; CATEGORY_COUNT] = [
+    &[b"Syst\xE8me", b"System", b"Sistema", b"System"],
+    &[b"Bluetooth et appareils", b"Bluetooth & devices", b"Bluetooth y dispositivos", b"Bluetooth und Ger\xE4te"],
+    &[b"R\xE9seau et Internet", b"Network & internet", b"Red e Internet", b"Netzwerk und Internet"],
+    &[b"Personnalisation", b"Personalization", b"Personalizaci\xF3n", b"Personalisierung"],
+    &[b"Applications", b"Apps", b"Aplicaciones", b"Apps"],
+    &[b"Heure et langue", b"Time & language", b"Hora e idioma", b"Zeit und Sprache"],
+    &[b"Accessibilit\xE9", b"Accessibility", b"Accesibilidad", b"Barrierefreiheit"],
+    &[b"Confidentialit\xE9 et s\xE9curit\xE9", b"Privacy & security", b"Privacidad y seguridad", b"Datenschutz und Sicherheit"],
+    &[b"Mises \xE0 jour", b"Updates", b"Actualizaciones", b"Updates"],
+];
+/// Rangées du menu au plus : toutes les catégories et la plus longue ouverte.
+const NAV_ROWS: usize = 20;
+#[derive(Clone, Copy, PartialEq)]
+enum Nav {
+    Category(usize),
+    Page(usize),
+}
+/// Ancienne page absorbée par une autre : son numéro ouvre la page fusionnée.
+pub(crate) fn merged(page: usize) -> usize {
+    match page {
+        3 => 16,
+        5 => 4,
+        p => p,
+    }
+}
+/// Une page sans rien de possible sur cette machine n'apparaît pas.
+unsafe fn page_shown(page: usize) -> bool {
+    match page {
+        PAGE_CPU => crate::settings_cpu::available() || PAGE == PAGE_CPU,
+        PAGE_SHARING => crate::sharing::available() || PAGE == PAGE_SHARING,
+        _ => true,
+    }
+}
+fn category_of(page: usize) -> usize {
+    let page = merged(page);
+    CATEGORIES
+        .iter()
+        .position(|pages| pages.contains(&page))
+        .unwrap_or(0)
+}
+unsafe fn shown_count(k: usize) -> usize {
+    CATEGORIES[k].iter().filter(|&&p| page_shown(p)).count()
+}
+/// Chaque catégorie visible et, sous celle de la page ouverte, ses
+/// sous-pages quand elle en a plusieurs.
+unsafe fn nav_rows(out: &mut [Nav; NAV_ROWS]) -> usize {
+    let current = category_of(PAGE);
+    let mut n = 0;
+    for (k, pages) in CATEGORIES.iter().enumerate() {
+        let shown = shown_count(k);
+        if shown == 0 || n == NAV_ROWS {
+            continue;
+        }
+        out[n] = Nav::Category(k);
+        n += 1;
+        if k == current && shown > 1 {
+            for &p in pages.iter() {
+                if page_shown(p) && n < NAV_ROWS {
+                    out[n] = Nav::Page(p);
+                    n += 1;
+                }
+            }
+        }
+    }
+    n
+}
+/// Ouvre une page depuis le menu (même remise à zéro qu'un clic).
+unsafe fn select_page(page: usize) {
+    if page == PAGE_GRAPHICS {
+        graphics::RUNTIME_LOADED = false;
+    }
+    PAGE = page;
+    SCROLL = 0;
+    HOVER = -1;
+    LAST_POLL = 0;
+    if page == PAGE_REMOTE {
+        control(c"remote-status");
+    }
+    system_tick();
+}
 fn pages() -> [&'static [u8]; PAGE_COUNT] {
     [
         tr(S_SYSTEM_LINUX),
         tr(S_APPS_WINDOWS),
         tr(S_NETWORK),
         tr(S_SOUND_BATTERY),
-        tr(S_KEYBOARD_TOUCHPAD),
+        tr4(&[b"Clavier et souris", b"Keyboard & mouse", b"Teclado y mouse", b"Tastatur und Maus"]),
         tr(S_MOUSE),
-        tr(S_APPEARANCE),
+        tr4(&[b"Th\xE8me et barre des t\xE2ches", b"Theme & taskbar", b"Tema y barra de tareas", b"Design und Taskleiste"]),
         tr(S_UPDATES),
         tr(S_DISPLAY),
         tr(S_ABOUT),
@@ -67,13 +158,13 @@ fn pages() -> [&'static [u8]; PAGE_COUNT] {
         tr(S_VISUAL_EFFECTS),
         tr(S_LOCALIZATION),
         tr(S_FILE_MANAGER),
-        tr(S_ADVANCED_SOUND),
+        tr(S_SOUND_BATTERY),
         tr(S_SYSTEM_UPDATES),
         tr(S_PRIVACY),
         tr(S_PROCESSOR),
         tr(S_NETWORK_DRIVES),
-        tr(S_PERSONALIZATION),
-        tr(S_BLUETOOTH_DEVICES),
+        tr4(&[b"Fond d'\xE9cran et couleurs", b"Background & colors", b"Fondo y colores", b"Hintergrund und Farben"]),
+        b"Bluetooth",
         tr(S_POWER_BATTERY),
         tr(S_GRAPHICS),
         tr(S_REPORT_PAGE),
@@ -116,6 +207,8 @@ static mut PAGE: usize = 0;
 static mut SCROLL: usize = 0;
 static mut LAST_POLL: u32 = 0;
 static mut HOVER: i32 = -1;
+/// Rangée du menu survolée (-1 : aucune).
+static mut HOVER_NAV: i32 = -1;
 /// Boutons dessinés au dernier passage de `draw` : rectangle et identifiant.
 /// `hit()` s'en sert, ce qui garantit qu'un clic touche le bouton affiché et
 /// qu'une zone vide ne déclenche rien, quelle que soit la mise en page.
@@ -692,7 +785,7 @@ pub unsafe fn open_page(page: usize) {
     if crate::wm::native_settings(page) {
         return;
     }
-    PAGE = page.min(PAGE_COUNT - 1);
+    PAGE = merged(page.min(PAGE_COUNT - 1));
     SCROLL = 0;
     LAST_POLL = 0;
     crate::wm::open(crate::wm::APP_SETTINGS);
@@ -711,10 +804,10 @@ fn content(f: &Frame) -> Rect {
         f.client.bottom - 20,
     )
 }
-fn nav_rect(f: &Frame, i: usize) -> Rect {
+fn nav_rect(f: &Frame, i: usize, rows: usize) -> Rect {
     let c = content(f);
-    // Toutes les pages doivent tenir dans la hauteur de la fenêtre.
-    let step = ((f.client.bottom - f.client.top - 72) / PAGE_COUNT as i32).clamp(20, 42);
+    // Toutes les rangées du menu doivent tenir dans la hauteur de la fenêtre.
+    let step = ((f.client.bottom - f.client.top - 72) / rows.max(1) as i32).clamp(20, 38);
     rect(
         f.client.left + 10,
         f.client.top + 64 + i as i32 * step,
@@ -1059,36 +1152,59 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         tr4(&[b"Param\xE8tres", b"Settings", b"Configuraci\xF3n", b"Einstellungen"]),
     );
     let page_names = pages();
-    for (pos, &i) in NAV_ORDER.iter().enumerate() {
-        let name = &page_names[i];
-        let r = nav_rect(f, pos);
-        if i == PAGE {
+    let mut rows = [Nav::Category(0); NAV_ROWS];
+    let count = nav_rows(&mut rows);
+    let current = category_of(PAGE);
+    for (pos, &entry) in rows[..count].iter().enumerate() {
+        let r = nav_rect(f, pos, count);
+        let (name, indent, selected, font, size) = match entry {
+            Nav::Category(k) => {
+                let open = k == current;
+                let single = shown_count(k) == 1;
+                let font = if open && !single { g.f.semibold } else { g.f.body };
+                (tr4(CATEGORY_NAMES[k]), 8, open && single, font, 13)
+            }
+            Nav::Page(i) => (page_names[i], 24, i == PAGE, g.f.small, 12),
+        };
+        if selected {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.selected);
             fill(
                 g.hdc,
                 g.b,
                 r.left,
-                r.top + 8,
+                r.top + 6,
                 r.left + 3,
-                r.bottom - 8,
+                r.bottom - 6,
                 p.accent,
             );
+        } else if HOVER_NAV == pos as i32 {
+            round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.hover);
         }
         let mut end = name.len();
-        while end > 0 && text_width(&name[..end], 13) > r.right - r.left - 16 {
+        while end > 0 && text_width(&name[..end], size) > r.right - r.left - indent - 8 {
             end -= 1;
         }
-        // Centré dans la rangée, même quand les pages se resserrent.
+        // Centré dans la rangée, même quand le menu se resserre.
         let ty = r.top + (r.bottom - r.top - 18) / 2;
-        text(g.hdc, g.f.body, p.text, r.left + 8, ty, &name[..end]);
+        let color = if matches!(entry, Nav::Page(_)) && !selected { p.text2 } else { p.text };
+        text(g.hdc, font, color, r.left + indent, ty, &name[..end]);
     }
+    // Fil d'Ariane : la catégorie au-dessus du titre de la sous-page.
+    let mut crumb = [0u8; 96];
+    let mut n = 0;
+    for part in [tr4(CATEGORY_NAMES[current]), b"  \x9B  ".as_slice(), page_names[PAGE]] {
+        let take = part.len().min(crumb.len() - n);
+        crumb[n..n + take].copy_from_slice(&part[..take]);
+        n += take;
+    }
+    let crumb_len = if shown_count(current) > 1 { n } else { tr4(CATEGORY_NAMES[current]).len() };
     text(
         g.hdc,
         g.f.small,
         p.text3,
         c.left,
         c.top - 22,
-        tr(S_SETTINGS_SUBTITLE),
+        &crumb[..crumb_len],
     );
     text(g.hdc, g.f.large, p.text, c.left, c.top, page_names[PAGE]);
     fill(
@@ -2010,6 +2126,13 @@ unsafe fn draw_power(g: &mut Gfx, c: &Rect) {
     button(g, c, 8, 1, tr4(&[b"Luminosit\xE9 +", b"Brightness +", b"Brillo +", b"Helligkeit +"]), 25);
 }
 
+unsafe fn nav_hover(f: &Frame, x: i32, y: i32) -> i32 {
+    let mut rows = [Nav::Category(0); NAV_ROWS];
+    let count = nav_rows(&mut rows);
+    (0..count)
+        .find(|&pos| inside(&nav_rect(f, pos, count), x, y))
+        .map_or(-1, |pos| pos as i32)
+}
 fn hit(f: &Frame, x: i32, y: i32) -> i32 {
     let c = content(f);
     if unsafe { PAGE == 7 && restart_required() } {
@@ -2098,26 +2221,28 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if ev == Mouse::Move {
         let h = hit(f, x, y);
-        let changed = h != HOVER;
+        let nav = nav_hover(f, x, y);
+        let changed = h != HOVER || nav != HOVER_NAV;
         HOVER = h;
+        HOVER_NAV = nav;
         return changed;
     }
     if ev != Mouse::Down && ev != Mouse::DoubleClick {
         return false;
     }
-    for (pos, &i) in NAV_ORDER.iter().enumerate() {
-        if inside(&nav_rect(f, pos), x, y) {
-            if i == PAGE_GRAPHICS {
-                graphics::RUNTIME_LOADED = false;
-            }
-            PAGE = i;
-            SCROLL = 0;
-            HOVER = -1;
-            LAST_POLL = 0;
-            if i == PAGE_REMOTE {
-                control(c"remote-status");
-            }
-            system_tick();
+    let mut rows = [Nav::Category(0); NAV_ROWS];
+    let count = nav_rows(&mut rows);
+    for (pos, &entry) in rows[..count].iter().enumerate() {
+        if inside(&nav_rect(f, pos, count), x, y) {
+            let page = match entry {
+                // Une catégorie s'ouvre sur sa première sous-page visible.
+                Nav::Category(k) if k != category_of(PAGE) || shown_count(k) == 1 => {
+                    CATEGORIES[k].iter().copied().find(|&p| page_shown(p)).unwrap_or(PAGE)
+                }
+                Nav::Category(_) => return false,
+                Nav::Page(i) => i,
+            };
+            select_page(page);
             return true;
         }
     }
