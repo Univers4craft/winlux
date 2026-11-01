@@ -71,6 +71,7 @@ pub mod quartz;
 pub mod resource;
 pub mod rpcrt4;
 pub mod sechost;
+pub mod security;
 pub mod seh;
 pub mod setupapi;
 pub mod sfnt;
@@ -227,6 +228,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(advapi32_services::exports());
                     e.extend(kernel32_ext::advapi32_exports());
                     e.extend(kernel32_fs::advapi32_exports());
+                    e.extend(security::advapi32_exports());
                     e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
                     e
@@ -272,6 +274,7 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = shell32::exports();
                     e.extend(knownfolders::shell32_exports());
+                    e.extend(security::shell32_exports());
                     e.extend(dataobject::shell32_exports());
                     e
                 },
