@@ -45,6 +45,19 @@ mkdir -p "$stage/usr/share/themes" "$stage/usr/share/xfce4/helpers"
 cp -a "$project/integration/native/themes/." "$stage/usr/share/themes/"
 cp -a "$project/integration/native/helpers/." "$stage/usr/share/xfce4/helpers/"
 cp -a "$project/integration/native/applications/." "$stage/usr/share/applications/"
+# Archives (zip, 7z, rar, tar…) : double-clic = Explorer, qui les ouvre comme
+# un dossier avec « Extraire tout », comme sous Windows 11. Un choix de
+# l'utilisateur (~/.config/mimeapps.list) reste prioritaire.
+mimeapps="$stage/etc/xdg/mimeapps.list"
+mkdir -p "$(dirname -- "$mimeapps")"
+test -f "$mimeapps" || printf '[Default Applications]\n' >"$mimeapps"
+grep -q '^\[Default Applications\]' "$mimeapps" || printf '[Default Applications]\n' >>"$mimeapps"
+sed -n 's/^MimeType=inode\/directory;//p' "$project/integration/native/applications/winlux-explorer.desktop" | tr ';' '\n' |
+while IFS= read -r type; do
+    test -n "$type" || continue
+    grep -q "^$type=" "$mimeapps" && continue
+    sed -i "/^\[Default Applications\]/a $type=winlux-explorer.desktop;" "$mimeapps"
+done
 # Icônes des .exe et des raccourcis .lnk (Bureau, Explorateur, Thunar) via tumbler.
 mkdir -p "$stage/usr/share/thumbnailers"
 cp "$project/integration/native/thumbnailers/winlux-windows.thumbnailer" "$stage/usr/share/thumbnailers/"
@@ -55,7 +68,7 @@ cp --remove-destination "$project/scripts/winlux-systemctl.sh" "$stage/usr/bin/s
 chmod 755 "$stage/usr/bin/systemctl"
 cp --remove-destination "$project/scripts/winlux-apt-service-hook.sh" "$stage/usr/share/winlux/apt-service-hook"
 chmod 755 "$stage/usr/share/winlux/apt-service-hook"
-for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-notify-icon.py:winlux-notify-icon'; do
+for pair in 'winlux-native-session.sh:winlux-native-session' 'winlux-user-session.sh:winlux-user-session' 'winlux-network-watch.sh:winlux-network-watch' 'winlux-native-config.py:winlux-native-config' 'winlux-shell-app.sh:winlux-shell-app' 'winlux-settings.py:winlux-settings' 'winlux-settings-pages.py:winlux-settings-pages' 'winlux-desktop-action.sh:winlux-desktop-action' 'winlux-desktop-paste.py:winlux-desktop-paste' 'winlux-tray.py:winlux-tray' 'winlux-applications.py:winlux-applications' 'winlux-launch-exe.sh:winlux-launch-exe' 'winlux-start-menu.py:winlux-start-menu' 'winlux-default-apps.py:winlux-default-apps' 'winlux-notify-icon.py:winlux-notify-icon'; do
     source=${pair%:*}; destination=${pair#*:}
     cp --remove-destination "$project/scripts/$source" "$stage/usr/bin/$destination"
     chmod 755 "$stage/usr/bin/$destination"

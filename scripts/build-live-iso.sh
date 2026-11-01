@@ -100,6 +100,10 @@ cp "$root/scripts/winlux-sessions.sh" "$stage/usr/bin/winlux-sessions"
 cp "$root/scripts/winlux-remote-config.sh" "$stage/usr/bin/winlux-remote-config"
 cp "$root/target/release/winlux-remote" "$stage/usr/bin/winlux-remote"
 chmod 755 "$stage/usr/bin/winlux-backup" "$stage/usr/bin/winlux-sessions" "$stage/usr/bin/winlux-remote-config" "$stage/usr/bin/winlux-remote"
+# Partage de dossiers (Samba si présent) et transfert des réglages par fichier.
+cp "$root/scripts/winlux-share.sh" "$stage/usr/bin/winlux-share"
+cp "$root/scripts/winlux-transfer.sh" "$stage/usr/bin/winlux-transfer"
+chmod 755 "$stage/usr/bin/winlux-share" "$stage/usr/bin/winlux-transfer"
 mkdir -p "$stage/usr/share/winlux"
 # Store de logiciels et gestionnaire de polices du shell.
 cp "$root/scripts/winlux-store.py" "$stage/usr/bin/winlux-store"
@@ -720,6 +724,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     ) &
     # Bureau à distance : relancé au démarrage s'il était activé.
     DISPLAY=:0 /usr/bin/winlux-remote-config ensure >/dev/null 2>&1 || true
+    # Dossiers partagés : serveur relancé s'il y a des partages actifs.
+    /usr/bin/winlux-share ensure >/dev/null 2>&1 &
     # Tâches planifiées « à l'ouverture de session ».
     /usr/bin/winlux --tasks fire logon >>/run/winlux/tasks.log 2>&1 &
     (
@@ -848,6 +854,15 @@ chmod 755 "$stage/init"
 if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
     python3 "$root/scripts/stage-apt-root.py" "$stage" "$apt_base" --package "$root/build/winlux-desktop.deb"
 fi
+# Samba et wsdd ne démarrent jamais seuls : winlux-share lance smbd et wsdd
+# uniquement quand l'utilisateur partage un dossier (pas de nmbd ni d'AD DC).
+for unit in smbd nmbd samba samba-ad-dc wsdd; do
+    rm -f "$stage/etc/winlux/services-enabled/$unit.service"
+    if test -e "$stage/usr/lib/systemd/system/$unit.service" || test -e "$stage/lib/systemd/system/$unit.service"; then
+        mkdir -p "$stage/etc/systemd/system"
+        ln -sfn /dev/null "$stage/etc/systemd/system/$unit.service"
+    fi
+done
 
 mkdir -p "$iso_root/boot/grub"
 cp -L "$kernel" "$iso_root/boot/vmlinuz"

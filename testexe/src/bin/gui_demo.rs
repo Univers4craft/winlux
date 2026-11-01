@@ -60,6 +60,8 @@ mod restore;
 mod regedit;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/sharing.rs"]
+mod sharing;
 #[path = "../shell/snip.rs"]
 mod snip;
 #[path = "../shell/store.rs"]
@@ -845,6 +847,11 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
             }
             0
         }
+        WM_DROPFILES if wm::native_app() == Some(wm::APP_EXPLORER) => {
+            on_drop_files(wparam);
+            InvalidateRect(hwnd, core::ptr::null(), 0);
+            0
+        }
         WM_KEYUP => {
             GOT_KEYUP += 1;
             THREAD_KEY_UP_CLEAR |= ((GetKeyState(wparam as i32) as u16 & 0x8000) == 0) as u32;
@@ -902,6 +909,60 @@ unsafe extern "win64" fn wnd_proc(hwnd: Handle, msg: u32, wparam: usize, lparam:
         }
         _ => DefWindowProcA(hwnd, msg, wparam, lparam),
     }
+}
+
+const WM_DROPFILES: u32 = 0x0233;
+
+/// Fonctions shell32 du glisser-déposer entrant, cherchées à l'exécution :
+/// un runtime qui ne les fournit pas laisse simplement la fenêtre sans dépôt.
+unsafe fn shell32_fn(name: &core::ffi::CStr) -> usize {
+    let shell = LoadLibraryA(c"shell32.dll".as_ptr());
+    if shell.is_null() {
+        return 0;
+    }
+    GetProcAddress(shell, name.as_ptr()) as usize
+}
+
+unsafe fn accept_dropped_files(hwnd: Handle) {
+    let f = shell32_fn(c"DragAcceptFiles");
+    if f != 0 {
+        let accept: unsafe extern "system" fn(Handle, i32) = core::mem::transmute(f);
+        accept(hwnd, 1);
+    }
+}
+
+/// Fichiers lâchés depuis le bureau, Thunar ou une autre application.
+unsafe fn on_drop_files(hdrop: usize) {
+    let query = shell32_fn(c"DragQueryFileW");
+    let finish = shell32_fn(c"DragFinish");
+    if query == 0 {
+        return;
+    }
+    let query: unsafe extern "system" fn(usize, u32, *mut u16, u32) -> u32 =
+        core::mem::transmute(query);
+    let count = query(hdrop, u32::MAX, core::ptr::null_mut(), 0);
+    let mut list = [0u8; 8192];
+    let mut len = 0;
+    for i in 0..count {
+        let mut w = [0u16; 1024];
+        let n = query(hdrop, i, w.as_mut_ptr(), w.len() as u32) as usize;
+        if n == 0 || n >= w.len() || len + n + 1 > list.len() {
+            continue;
+        }
+        if len > 0 {
+            list[len] = b'\n';
+            len += 1;
+        }
+        for &c in &w[..n] {
+            list[len] = if c <= 0xFF { c as u8 } else { b'?' };
+            len += 1;
+        }
+    }
+    if finish != 0 {
+        let finish: unsafe extern "system" fn(usize) = core::mem::transmute(finish);
+        finish(hdrop);
+    }
+    explorer::drop_paths_here(&list[..len]);
 }
 
 #[no_mangle]
@@ -990,6 +1051,9 @@ pub extern "C" fn mainCRTStartup() -> ! {
         check!(!hwnd.is_null(), "CreateWindowExA demo");
         ShowWindow(hwnd, SW_SHOWNORMAL);
         UpdateWindow(hwnd);
+        if wm::native_app() == Some(wm::APP_EXPLORER) {
+            accept_dropped_files(hwnd);
+        }
 
         // Boucle de messages sur PeekMessageA : on traite ce qui arrive et on
         // pulse sinon, jusqu'à expiration de la durée demandée.

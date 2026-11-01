@@ -1296,6 +1296,13 @@ pub unsafe fn open_at(path: &[u8]) {
     if wm::native_explorer(path) {
         return;
     }
+    // Archive ou image disque (double-clic sur le Bureau, « Ouvrir avec ») :
+    // on ouvre son dossier puis on y entre, comme l'Explorateur de Windows.
+    if let Some(dir) = parent(path).filter(|_| storage_file(path)) {
+        open_at(dir);
+        open_storage_item(path, kind_of(last_component(path), false));
+        return;
+    }
     if !wm::is_open(wm::APP_EXPLORER) || NTABS == 0 {
         load_folder_options();
         NTABS = 0;
@@ -1831,6 +1838,32 @@ fn command_rects(g: &Geo) -> [Rect; 11] {
     out
 }
 
+/// Bouton « Extraire tout » de la barre de commandes, comme dans Windows 11
+/// quand on se trouve dans une archive (aligné à droite).
+unsafe fn extract_rect(g: &Geo) -> Option<Rect> {
+    let loc = pane().loc.get();
+    archive_of(loc)?;
+    let w = 30 + text_width(extract_label(), 13);
+    Some(rect(g.command.right - 10 - w, g.command.top + 7, g.command.right - 10, g.command.top + 39))
+}
+
+fn extract_label() -> &'static [u8] {
+    t4([b"Extraire tout", b"Extract all", b"Extraer todo", b"Alle extrahieren"])
+}
+
+/// Archive (la plus extérieure) que traverse `path` : `C:\a\b.zip\c` → `C:\a\b.zip`.
+fn archive_of(path: &[u8]) -> Option<&[u8]> {
+    let mut end = 0;
+    for (i, c) in path.split(|&c| c == b'\\').enumerate() {
+        end += c.len();
+        if i > 0 && kind_of(c, false) == Kind::Archive {
+            return Some(&path[..end]);
+        }
+        end += 1;
+    }
+    None
+}
+
 unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     let p = pal();
     fill(
@@ -1984,15 +2017,26 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     );
     let has_sel = sel_count(pn) > 0 && !pn.loc.is(HOME) && !pn.loc.is(PC);
     let rects = command_rects(geo);
+    let extract = extract_rect(geo);
+    let limit = extract.map_or(geo.command.right - 8, |e| e.left - 8);
+    if let Some(r) = extract {
+        if hovered(&r) {
+            round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.hover);
+        }
+        set_glyph_bg(Some(if hovered(&r) { p.hover } else { p.window }));
+        glyph(g.hdc, g.b, g.f, Glyph::Archive, r.left + 8, r.top + 8, 16);
+        set_glyph_bg(None);
+        text(g.hdc, g.f.caption, p.text, r.left + 30, r.top + 9, extract_label());
+    }
     for (i, (cmd, gl, label, _)) in COMMANDS.iter().enumerate() {
         let label = tr4(label);
         let r = rects[i];
-        if r.right > geo.command.right - 8 {
+        if r.right > limit {
             break;
         }
         let enabled = match cmd {
             Cmd::Cut | Cmd::Copy | Cmd::Rename | Cmd::Delete => has_sel,
-            Cmd::Paste => NCLIP > 0 && !pn.loc.is(HOME) && !pn.loc.is(PC),
+            Cmd::Paste => can_paste() && !pn.loc.is(HOME) && !pn.loc.is(PC),
             Cmd::New => !pn.loc.is(HOME) && !pn.loc.is(PC),
             _ => true,
         };
@@ -2760,6 +2804,7 @@ enum Item {
     CompressTarGz,
     CompressZipPw,
     ConnectNet,
+    Share,
 }
 
 fn item_label(i: Item) -> &'static [u8] {
@@ -2842,6 +2887,12 @@ fn item_label(i: Item) -> &'static [u8] {
             b"Comprimir en ZIP con contrase\xF1a...",
             b"In ZIP mit Kennwort komprimieren...",
         ]),
+        Item::Share => t4([
+            b"Partager ce dossier...",
+            b"Share this folder...",
+            b"Compartir esta carpeta...",
+            b"Diesen Ordner freigeben...",
+        ]),
         Item::ConnectNet => t4([
             b"Connecter un lecteur r\xE9seau...",
             b"Map network drive...",
@@ -2912,6 +2963,7 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Delete,
             Item::Sep,
             Item::CopyPath,
+            Item::Share,
             Item::Sep,
             Item::CompressZip,
             Item::Compress7z,
@@ -2959,6 +3011,12 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Compress7z => !in_pc && !in_home && formats & 2 != 0,
             Item::CompressTarGz => !in_pc && !in_home && formats & 8 != 0,
             Item::ConnectNet => in_pc,
+            // Dossier seulement, et seulement si le partage existe (Samba).
+            Item::Share => {
+                !in_pc
+                    && first_sel(p).is_some_and(|i| p.entries[i].dir)
+                    && crate::sharing::available()
+            }
             _ => true,
         };
         if !keep {
@@ -3104,7 +3162,7 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
             }
             Item::Mount => Some(Glyph::DiskImage),
             Item::Eject => Some(Glyph::Eject),
-            Item::ConnectNet => Some(Glyph::NetDrive),
+            Item::ConnectNet | Item::Share => Some(Glyph::NetDrive),
             _ => None,
         };
         if let Some(gl) = gl {
@@ -3329,7 +3387,7 @@ unsafe fn copy_selection(cut: bool) {
         for (k, slot) in list.iter_mut().enumerate().take(NCLIP) {
             *slot = CLIP[k].get();
         }
-        crate::cliphist::set_files(&list[..NCLIP]);
+        crate::cliphist::set_files(&list[..NCLIP], cut);
         CLIP_SEQ = GetClipboardSequenceNumber();
         notify(if cut {
             tr4(&[b"\xC9l\xE9ments coup\xE9s : collez-les dans un autre dossier.", b"Items cut: paste them into another folder.", b"Elementos cortados: p\xE9guelos en otra carpeta.", b"Elemente ausgeschnitten: F\xFCgen Sie sie in einen anderen Ordner ein."])
@@ -3658,7 +3716,8 @@ pub unsafe fn paste_from_clipboard() {
         return;
     }
     NCLIP = 0;
-    CLIP_CUT = false;
+    // « Couper » dans Thunar, sur le bureau ou dans un autre Explorer : déplacement.
+    CLIP_CUT = crate::cliphist::files_cut();
     for path in buf[..n].split(|&c| c == b'\n') {
         if NCLIP < CLIP_MAX && !path.is_empty() && CLIP[NCLIP].set(path) {
             NCLIP += 1;
@@ -3668,9 +3727,39 @@ pub unsafe fn paste_from_clipboard() {
     paste();
 }
 
+/// Coller (menu, barre de commandes, Ctrl+V) : le presse-papiers système
+/// l'emporte s'il a changé depuis la dernière copie faite ici (fichiers
+/// copiés ou coupés sur le bureau, dans Thunar ou un autre Explorer).
+pub unsafe fn paste_any() {
+    if GetClipboardSequenceNumber() != CLIP_SEQ && IsClipboardFormatAvailable(15) != 0 {
+        paste_from_clipboard();
+    } else {
+        paste();
+    }
+}
+
+/// Vrai si « Coller » a quelque chose à coller.
+unsafe fn can_paste() -> bool {
+    NCLIP > 0 || IsClipboardFormatAvailable(15) != 0
+}
+
 unsafe fn paste() {
     let p = pane();
     if NCLIP == 0 || p.loc.is(HOME) || p.loc.is(PC) {
+        return;
+    }
+    // Sources déjà déplacées ailleurs (collées sur le bureau, par exemple) :
+    // on les oublie sans message d'erreur.
+    let mut kept = 0;
+    for k in 0..NCLIP {
+        let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+        if GetFileAttributesW(wstr(&mut w, CLIP[k].get())) != u32::MAX {
+            CLIP[kept] = CLIP[k];
+            kept += 1;
+        }
+    }
+    NCLIP = kept;
+    if NCLIP == 0 {
         return;
     }
     let mut failed = 0;
@@ -3748,6 +3837,12 @@ unsafe fn paste() {
     }
     if CLIP_CUT {
         NCLIP = clip_remaining;
+        if NCLIP == 0 && !DROPPING && OpenClipboard(core::ptr::null_mut()) != 0 {
+            // Comme Windows : après un couper-coller, le presse-papiers est vidé.
+            EmptyClipboard();
+            CloseClipboard();
+            CLIP_SEQ = GetClipboardSequenceNumber();
+        }
     }
     reload(p);
     if failed > 0 {
@@ -3893,6 +3988,216 @@ pub unsafe fn paste_to(dest: &[u8]) {
     if failed > 0 {
         notify(tr4(&[b"Collage refus\xE9 ou incomplet.", b"Paste refused or incomplete.", b"Pegado rechazado o incompleto.", b"Einf\xFCgen abgelehnt oder unvollst\xE4ndig."]));
     }
+}
+
+// ---------- Glisser hors de la fenêtre (bureau, Thunar, autres applis) ----------
+
+#[repr(C)]
+struct ComObject {
+    vtbl: *const usize,
+}
+
+const S_OK: i32 = 0;
+const E_NOTIMPL: i32 = 0x8000_4001u32 as i32;
+const DV_E_FORMATETC: i32 = 0x8004_0064u32 as i32;
+const DRAGDROP_S_DROP: i32 = 0x0004_0100;
+const DRAGDROP_S_CANCEL: i32 = 0x0004_0101;
+const DRAGDROP_S_USEDEFAULTCURSORS: i32 = 0x0004_0102;
+
+static mut DRAG_HDROP: [u8; 8192] = [0; 8192];
+static mut DRAG_HDROP_LEN: usize = 0;
+/// Dépôt en cours (WM_DROPFILES) : ne pas vider le presse-papiers.
+static mut DROPPING: bool = false;
+/// 0 : pas encore cherché, 1 : DoDragDrop absent du runtime, autre : adresse.
+static mut DO_DRAG_DROP: usize = 0;
+
+unsafe extern "system" fn com_query_interface(
+    this: *mut ComObject,
+    _iid: *const u8,
+    out: *mut *mut ComObject,
+) -> i32 {
+    if !out.is_null() {
+        *out = this;
+    }
+    S_OK
+}
+unsafe extern "system" fn com_ref(_this: *mut ComObject) -> u32 {
+    1
+}
+unsafe extern "system" fn com_not_impl(_this: *mut ComObject) -> i32 {
+    E_NOTIMPL
+}
+/// IDataObject::GetData : CF_HDROP (15) en HGLOBAL, une copie par appel.
+unsafe extern "system" fn data_get(_this: *mut ComObject, fe: *const u8, med: *mut u8) -> i32 {
+    if fe.is_null() || med.is_null() {
+        return DV_E_FORMATETC;
+    }
+    let cf = *(fe as *const u16);
+    let tymed = *(fe.add(24) as *const u32);
+    if cf != 15 || tymed & 1 == 0 || DRAG_HDROP_LEN == 0 {
+        return DV_E_FORMATETC;
+    }
+    let h = crate::cliphist::global_copy(&DRAG_HDROP[..DRAG_HDROP_LEN]);
+    if h.is_null() {
+        return DV_E_FORMATETC;
+    }
+    *(med as *mut u32) = 1; // TYMED_HGLOBAL
+    *(med.add(8) as *mut usize) = h as usize;
+    *(med.add(16) as *mut usize) = 0;
+    S_OK
+}
+unsafe extern "system" fn data_query(_this: *mut ComObject, fe: *const u8) -> i32 {
+    if !fe.is_null() && *(fe as *const u16) == 15 {
+        S_OK
+    } else {
+        DV_E_FORMATETC
+    }
+}
+/// IDropSource::QueryContinueDrag
+unsafe extern "system" fn source_continue(_this: *mut ComObject, escape: i32, keys: u32) -> i32 {
+    if escape != 0 {
+        DRAGDROP_S_CANCEL
+    } else if keys & 1 == 0 {
+        DRAGDROP_S_DROP
+    } else {
+        S_OK
+    }
+}
+unsafe extern "system" fn source_feedback(_this: *mut ComObject, _effect: u32) -> i32 {
+    DRAGDROP_S_USEDEFAULTCURSORS
+}
+
+static mut DATA_VTBL: [usize; 12] = [0; 12];
+static mut SOURCE_VTBL: [usize; 5] = [0; 5];
+static mut DATA_OBJ: ComObject = ComObject {
+    vtbl: core::ptr::null(),
+};
+static mut SOURCE_OBJ: ComObject = ComObject {
+    vtbl: core::ptr::null(),
+};
+
+unsafe fn do_drag_drop_fn() -> Option<unsafe extern "system" fn(usize, usize, u32, *mut u32) -> i32> {
+    if DO_DRAG_DROP == 0 {
+        let ole = LoadLibraryA(c"ole32.dll".as_ptr());
+        let f = if ole.is_null() {
+            core::ptr::null()
+        } else {
+            GetProcAddress(ole, c"DoDragDrop".as_ptr())
+        };
+        DO_DRAG_DROP = if f.is_null() { 1 } else { f as usize };
+    }
+    (DO_DRAG_DROP > 1).then(|| core::mem::transmute(DO_DRAG_DROP))
+}
+
+/// Le pointeur quitte la fenêtre pendant un glisser de fichiers : on passe
+/// la main au glisser-déposer système (XDND), comme l'Explorateur Windows.
+/// Déplacer par défaut, copier avec Ctrl. Faux si le runtime ne le gère pas.
+unsafe fn drag_out() -> bool {
+    let Some(do_drag_drop) = do_drag_drop_fn() else {
+        return false;
+    };
+    let mut list: [&[u8]; CLIP_MAX] = [b""; CLIP_MAX];
+    let mut paths = [EMPTY_PATH; CLIP_MAX];
+    let mut n = 0;
+    for_each_selected(&mut |path| {
+        if n < CLIP_MAX && paths[n].set(path) {
+            n += 1;
+        }
+    });
+    if n == 0 {
+        return false;
+    }
+    for k in 0..n {
+        list[k] = paths[k].get();
+    }
+    DRAG_HDROP_LEN = crate::cliphist::build_hdrop(&list[..n], &mut *core::ptr::addr_of_mut!(DRAG_HDROP));
+    if DRAG_HDROP_LEN == 0 {
+        return false;
+    }
+    let ni = com_not_impl as *const () as usize;
+    DATA_VTBL = [
+        com_query_interface as *const () as usize,
+        com_ref as *const () as usize,
+        com_ref as *const () as usize,
+        data_get as *const () as usize,
+        ni,
+        data_query as *const () as usize,
+        ni,
+        ni,
+        ni, // EnumFormatEtc : l'appelant demande alors CF_HDROP directement.
+        ni,
+        ni,
+        ni,
+    ];
+    SOURCE_VTBL = [
+        com_query_interface as *const () as usize,
+        com_ref as *const () as usize,
+        com_ref as *const () as usize,
+        source_continue as *const () as usize,
+        source_feedback as *const () as usize,
+    ];
+    DATA_OBJ.vtbl = core::ptr::addr_of!(DATA_VTBL) as *const usize;
+    SOURCE_OBJ.vtbl = core::ptr::addr_of!(SOURCE_VTBL) as *const usize;
+    let allowed = if ctrl() { 1 } else { 2 }; // DROPEFFECT_COPY / DROPEFFECT_MOVE
+    let mut effect = 0u32;
+    let result = do_drag_drop(
+        core::ptr::addr_of_mut!(DATA_OBJ) as usize,
+        core::ptr::addr_of_mut!(SOURCE_OBJ) as usize,
+        allowed,
+        &mut effect,
+    );
+    DRAG_HDROP_LEN = 0;
+    if result == DRAGDROP_S_DROP && effect == 0 {
+        // Ancien runtime : DoDragDrop n'est qu'un bouchon qui rend la main
+        // aussitôt. On garde le glisser interne et son repli sur le Bureau.
+        DO_DRAG_DROP = 1;
+        return false;
+    }
+    cancel_file_drag();
+    // La cible a déplacé ou copié les fichiers elle-même : on rafraîchit.
+    reload(pane());
+    let t = tab();
+    if t.dual {
+        let other = &mut t.panes[1 - t.focus];
+        reload(other);
+    }
+    true
+}
+
+/// Repli sans DoDragDrop : déposer la sélection dans le dossier Bureau.
+unsafe fn drop_on_desktop(do_copy: bool) {
+    let desktop = desktop_folder_path();
+    if desktop.get().is_empty() {
+        cancel_file_drag();
+        return;
+    }
+    drop_files_to(desktop.get(), do_copy);
+    notify(if do_copy {
+        tr4(&[b"Fichier(s) copi\xE9(s) sur le Bureau.", b"File(s) copied to the Desktop.", b"Archivo(s) copiado(s) en el Escritorio.", b"Datei(en) auf den Desktop kopiert."])
+    } else {
+        tr4(&[b"Fichier(s) d\xE9plac\xE9(s) sur le Bureau.", b"File(s) moved to the Desktop.", b"Archivo(s) movido(s) al Escritorio.", b"Datei(en) auf den Desktop verschoben."])
+    });
+}
+
+/// Fichiers lâchés sur la fenêtre depuis le bureau, Thunar ou une autre
+/// appli (WM_DROPFILES) : déplacés dans le dossier affiché, copiés avec Ctrl.
+pub unsafe fn drop_paths_here(paths: &[u8]) {
+    let p = pane();
+    if p.loc.is(HOME) || p.loc.is(PC) || p.loc.is(TRASH) {
+        return;
+    }
+    let saved = (NCLIP, CLIP_CUT, CLIP);
+    NCLIP = 0;
+    for path in paths.split(|&c| c == b'\n') {
+        if NCLIP < CLIP_MAX && !path.is_empty() && CLIP[NCLIP].set(path) {
+            NCLIP += 1;
+        }
+    }
+    CLIP_CUT = !ctrl();
+    DROPPING = true;
+    paste();
+    DROPPING = false;
+    (NCLIP, CLIP_CUT, CLIP) = saved;
 }
 
 pub fn desktop_folder_path() -> Path {
@@ -4189,7 +4494,7 @@ unsafe fn run_item(it: Item, geo: &Geo) {
         }
         Item::Cut => copy_selection(true),
         Item::Copy => copy_selection(false),
-        Item::Paste => paste(),
+        Item::Paste => paste_any(),
         Item::Rename => {
             if let Some(i) = first_sel(p) {
                 start_rename(i)
@@ -4233,6 +4538,15 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             ask_password(JobKind::Create, false);
         }
         Item::ConnectNet => crate::settings::open_page(crate::settings::PAGE_NETDRIVES),
+        Item::Share => {
+            if let Some(i) = first_sel(p) {
+                let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
+                let n = item_path(p, i, &mut b);
+                if n > 0 {
+                    crate::sharing::open_dialog(&b[..n]);
+                }
+            }
+        }
         Item::Sep => {}
     }
     let _ = geo;
@@ -4268,7 +4582,7 @@ unsafe fn run_cmd(cmd: Cmd, geo: &Geo) {
     match cmd {
         Cmd::Cut => copy_selection(true),
         Cmd::Copy => copy_selection(false),
-        Cmd::Paste => paste(),
+        Cmd::Paste => paste_any(),
         Cmd::Rename => {
             if let Some(i) = first_sel(pane()) {
                 start_rename(i)
@@ -5231,6 +5545,16 @@ unsafe fn format_badge(g: &mut Gfx, e: &Entry, x: i32, y: i32, s: i32) {
 
 /// Double-clic sur un fichier : archive → on entre dedans ; image → montage.
 /// Renvoie vrai si l'élément a été pris en charge.
+/// Fichier archive ou image disque existant (pas un dossier du même nom).
+fn storage_file(path: &[u8]) -> bool {
+    if !matches!(kind_of(last_component(path), false), Kind::Archive | Kind::DiskImage) {
+        return false;
+    }
+    let mut buf = [0u16; PATH_LEN + NAME_LEN + 2];
+    let a = unsafe { GetFileAttributesW(wstr(&mut buf, path)) };
+    a != u32::MAX && a & 0x10 == 0
+}
+
 unsafe fn open_storage_item(path: &[u8], kind: Kind) -> bool {
     if !matches!(kind, Kind::Archive | Kind::DiskImage) {
         return false;
@@ -5276,6 +5600,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     draw_status(g, &geo);
     draw_menu(g, &geo, f);
     draw_password(g, f);
+    crate::sharing::draw_dialog(g, f);
 }
 
 unsafe fn pane_rect_inner(geo: &Geo, which: usize) -> Rect {
@@ -5308,6 +5633,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if PASSWORD_OPEN {
         return password_mouse(ev, x, y, f);
+    }
+    if crate::sharing::dialog_open() {
+        return crate::sharing::dialog_mouse(ev, x, y, f);
     }
     let geo = geo(f);
     // Menu ouvert : il capte le clic.
@@ -5379,6 +5707,13 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
                     FILE_DRAG_START = None;
                 }
             }
+            if FILE_DRAG_ACTIVE
+                && wm::native_app().is_some()
+                && !inside(&f.outer, x, y)
+                && drag_out()
+            {
+                return true;
+            }
             if FILE_DRAG_ACTIVE {
                 return true;
             }
@@ -5396,6 +5731,12 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
             LASSO = None;
             SCROLL_DRAG = None;
             FILE_DRAG_START = None;
+            if was_file_drag && !inside(&f.outer, x, y) && wm::native_app().is_some() {
+                // Session native sans glisser-déposer X11 dans le runtime :
+                // relâcher hors de la fenêtre dépose sur le Bureau.
+                drop_on_desktop(ctrl());
+                return true;
+            }
             if was_file_drag {
                 let t = tab();
                 if t.dual {
@@ -5516,8 +5857,18 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
         FOCUS = Focus::List;
     }
     let rects = command_rects(geo);
+    let extract = extract_rect(geo);
+    if extract.is_some_and(|r| inside(&r, x, y)) {
+        let mut a = [0u8; PATH_LEN + NAME_LEN + 2];
+        if let Some(src) = archive_of(pane().loc.get()) {
+            a[..src.len()].copy_from_slice(src);
+            extract_archive(&a[..src.len()], false, None);
+        }
+        return true;
+    }
+    let limit = extract.map_or(geo.command.right - 8, |e| e.left - 8);
     for (i, r) in rects.iter().enumerate() {
-        if inside(r, x, y) && r.right <= geo.command.right - 8 {
+        if inside(r, x, y) && r.right <= limit {
             run_cmd(COMMANDS[i].0, geo);
             return true;
         }
@@ -5728,6 +6079,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     }
     if PASSWORD_OPEN {
         return password_key(vk, ch);
+    }
+    if crate::sharing::dialog_open() {
+        return crate::sharing::dialog_key(vk, ch);
     }
     if ch == 27 && JOB != 0 && FOCUS == Focus::List && MENU == Menu::None {
         cancel_job();
@@ -5998,21 +6352,68 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
         }
         0x43 if c => copy_selection(false),
         0x58 if c => copy_selection(true),
-        0x56 if c => {
-            if GetClipboardSequenceNumber() != CLIP_SEQ && IsClipboardFormatAvailable(15) != 0 {
-                paste_from_clipboard();
-            } else {
-                paste();
-            }
-        }
+        0x56 if c => paste_any(),
         0x4E if c && shift() => new_item(true),
         _ => return false,
     }
     true
 }
 
+/// Dossier modifié par une autre application (collé sur le bureau, déplacé
+/// dans Thunar…) : l'affichage suit, comme dans l'Explorateur Windows.
+static mut WATCH_AT: u32 = 0;
+static mut WATCH: [[(u32, u64); 2]; MAX_TABS] = [[(0, 0); 2]; MAX_TABS];
+
+unsafe fn folder_stamp(path: &[u8]) -> u64 {
+    let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
+    let mut data: Win32FileAttributeData = core::mem::zeroed();
+    if GetFileAttributesExW(wstr(&mut w, path), 0, &mut data) == 0 {
+        return 0;
+    }
+    ((data.write_time.high as u64) << 32) | data.write_time.low as u64
+}
+
+unsafe fn watch_folders() -> bool {
+    let now = GetTickCount();
+    if now.wrapping_sub(WATCH_AT) < 1500 {
+        return false;
+    }
+    WATCH_AT = now;
+    if FILE_DRAG_ACTIVE || MENU != Menu::None || FOCUS == Focus::Rename || CUR >= MAX_TABS {
+        return false;
+    }
+    let mut repaint = false;
+    let t = &mut TABS[CUR];
+    for which in 0..if t.dual { 2 } else { 1 } {
+        let pn = &mut t.panes[which];
+        let loc = pn.loc;
+        if loc.get().is_empty() || loc.is(HOME) || loc.is(PC) {
+            continue;
+        }
+        let key = crate::cliphist::fnv_hash(loc.get());
+        let stamp = folder_stamp(loc.get());
+        let seen = &mut WATCH[CUR][which];
+        let changed = seen.0 == key && seen.1 != stamp && stamp != 0;
+        *seen = (key, stamp);
+        if changed {
+            let mut keep = EMPTY_PATH;
+            if let Some(i) = first_sel(pn) {
+                keep.set(pn.entries[i].name());
+            }
+            reload(pn);
+            if !keep.get().is_empty() {
+                select_named(pn, keep.get());
+            }
+            repaint = true;
+        }
+    }
+    repaint
+}
+
 pub unsafe fn tick(_f: &Frame) -> bool {
-    let mut animating = poll_job() || PASSWORD_OPEN || crate::thumbs::pending();
+    let refreshed = watch_folders();
+    let mut animating = refreshed || poll_job() || PASSWORD_OPEN || crate::thumbs::pending();
+    animating |= crate::sharing::dialog_tick();
     for i in 0..NTABS {
         for which in 0..2 {
             let pn = &mut TABS[i].panes[which];
