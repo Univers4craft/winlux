@@ -10,6 +10,7 @@
 #
 # Usage (via winlux-control share-<action> ...) :
 #   winlux-share status                 écrit /run/winlux/shares.txt
+#   winlux-share set-password COMPTE    (root) mot de passe réseau lu sur l'entrée
 #   winlux-share add [CHEMIN]           partage le dossier (sinon le dossier courant)
 #   winlux-share remove ID
 #   winlux-share set ID COMPTE none|read|write
@@ -234,6 +235,9 @@ sync_passwords() {
     known=$("$(tool pdbedit)" -s "$smbconf" -L 2>/dev/null | cut -d: -f1 || true)
     while IFS=: read -r name _role pass; do
         test -n "$name" || continue
+        # Compte du système installé : son mot de passe réseau est posé par
+        # « set-password » quand il ouvre sa session (relais winlux-root).
+        test "$pass" != shadow || continue
         if test "$pass" = nopass || ! id -u "$name" >/dev/null 2>&1; then
             if printf '%s\n' "$known" | grep -qxF "$name"; then
                 "$(tool "$smbpasswd_bin")" -c "$smbconf" -x "$name" >/dev/null 2>&1 || true
@@ -403,6 +407,16 @@ case "$action" in
     enable) put ENABLED 1; apply ;;
     disable) put ENABLED 0; apply ;;
     ensure|apply) apply ;;
+    set-password)
+        # Appelé en root par winlux-root après une vérification réussie du
+        # mot de passe (lu sur l'entrée standard) ; seulement si Samba existe.
+        check_user "${2:-}"
+        have "$smbpasswd_bin" || exit 0
+        test -f "$smbconf" || exit 0
+        IFS= read -r secret || true
+        test -n "$secret" || exit 0
+        printf '%s\n%s\n' "$secret" "$secret" | "$(tool "$smbpasswd_bin")" -c "$smbconf" -s -a "$2" >/dev/null 2>&1 || true
+        exit 0 ;;
     *) sed -n '2,/^set -eu/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//' >&2; exit 2 ;;
 esac
 status

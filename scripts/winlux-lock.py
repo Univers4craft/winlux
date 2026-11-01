@@ -235,11 +235,33 @@ def _crypt(password, setting):
     return out.decode(errors="replace") if out else ""
 
 
+RELAY = os.environ.get("WINLUX_ROOT_SOCKET", "/run/winlux-root.sock")
+
+
+def relay_check(user, password, op="check"):
+    """Mot de passe vérifié par le relais root (le bureau ne lit pas /etc/shadow)."""
+    import json
+    import socket
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as client:
+            client.settimeout(30)
+            client.connect(path(RELAY))
+            client.sendall((json.dumps({"op": op, "user": user, "password": password}) + "\n").encode())
+            answer = client.makefile("r", encoding="utf-8").readline()
+        return bool(json.loads(answer or "{}").get("ok"))
+    except (OSError, ValueError):
+        return None
+
+
 def requires_password(user):
     stored = shadow_hash(user)
     if stored and stored.startswith("$"):
         return True
     live = users_conf_password(user)
+    if live == "shadow":
+        # Compte du système installé : son empreinte est dans /etc/shadow,
+        # que seul le relais root lit. Vide seulement si root le dit.
+        return stored is None or stored.startswith(("$", "!", "*"))
     if live is not None:
         return live != "nopass"
     # Sans empreinte vérifiable, ne jamais enfermer l'utilisateur dehors.
@@ -254,6 +276,14 @@ def check_password(user, password):
         except OSError:
             return False
     live = users_conf_password(user)
+    if live == "shadow" or (stored is None and os.geteuid() != 0):
+        if stored is not None and os.geteuid() == 0:
+            return stored == "" and password == ""
+        answer = relay_check(user, password)
+        if answer is not None:
+            return answer
+        if live == "shadow":
+            return False
     if live is not None:
         return live == "nopass" or hmac.compare_digest(live.encode(), password.encode())
     return not requires_password(user)

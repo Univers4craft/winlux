@@ -19,14 +19,9 @@ export XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
 export XDG_CONFIG_DIRS=/etc/xdg
 export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
 /usr/bin/winlux-native-config
-# Hardware services run on the system bus; applications use the session bus.
-mkdir -p /run/dbus
-chmod 755 /run/dbus
-if ! test -S /run/dbus/system_bus_socket; then
-    /usr/bin/dbus-daemon --system --fork >/run/winlux/system-bus.log 2>&1
-fi
-# Winlux uses its own init, so start hardware daemons directly instead of
-# relying on systemd activation from the distribution's D-Bus service files.
+# Services système (D-Bus système, polkit, udisks, réseau, impression,
+# Bluetooth) : partagés avec le bureau du compte sur un système installé.
+/usr/bin/winlux-system-services
 wait_bus_name() {
     bus=$1; name=$2; service_pid=$3; service_log=$4
     for attempt in $(seq 1 150); do
@@ -44,29 +39,6 @@ wait_bus_name() {
     cat "$service_log" >&2
     return 1
 }
-if test -x /usr/lib/polkit-1/polkitd; then
-    /usr/lib/polkit-1/polkitd >/run/winlux/polkit.log 2>&1 &
-    wait_bus_name system org.freedesktop.PolicyKit1 "$!" /run/winlux/polkit.log
-fi
-if test -x /usr/libexec/udisks2/udisksd; then
-    /usr/libexec/udisks2/udisksd --no-debug >/run/winlux/udisks.log 2>&1 &
-    wait_bus_name system org.freedesktop.UDisks2 "$!" /run/winlux/udisks.log
-fi
-if test -x /usr/sbin/NetworkManager; then
-    mkdir -p /etc/netplan /etc/NetworkManager/system-connections
-    if test -x /usr/sbin/wpa_supplicant; then
-        /usr/sbin/wpa_supplicant -u -s >/run/winlux/wpa-supplicant.log 2>&1 &
-    fi
-    /usr/sbin/NetworkManager --no-daemon >/run/winlux/network-manager.log 2>&1 &
-    network_pid=$!
-    echo "$network_pid" >/run/winlux/network-manager.pid
-    /usr/bin/winlux-network-watch "$network_pid" >/run/winlux/network-fallback.log 2>&1 &
-fi
-# Printing (#111): there is no systemd to socket-activate CUPS, start it here.
-if test -x /usr/sbin/cupsd && ! test -S /run/cups/cups.sock; then
-    mkdir -p /run/cups /var/spool/cups/tmp /var/cache/cups
-    /usr/sbin/cupsd -f >/run/winlux/cups.log 2>&1 &
-fi
 # Sound (#115): PipeWire with its session manager and Pulse server gives every
 # .exe its own stream (per-app volume). ALSA alone stays the fallback.
 if test -x /usr/bin/pipewire && test -x /usr/bin/wireplumber; then
@@ -92,11 +64,6 @@ if test "$(cat /run/winlux/hw/has-bluetooth 2>/dev/null)" = 1; then
     has_bluetooth=true
 elif test -d /sys/class/bluetooth && test -n "$(ls -A /sys/class/bluetooth/ 2>/dev/null)"; then
     has_bluetooth=true
-fi
-if "$has_bluetooth"; then
-    for bluetooth in /usr/lib/bluetooth/bluetoothd /usr/libexec/bluetooth/bluetoothd; do
-        if test -x "$bluetooth"; then "$bluetooth" -n >/run/winlux/bluetooth.log 2>&1 & break; fi
-    done
 fi
 /usr/bin/xfsettingsd --daemon >/run/winlux/xfsettings.log 2>&1
 # Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur.

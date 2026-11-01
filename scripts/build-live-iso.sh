@@ -530,6 +530,42 @@ if test -s /etc/fstab; then
     else /bin/busybox mount -a 2>/dev/null || true; fi
     /sbin/swapon -a 2>/dev/null || /bin/busybox swapon -a 2>/dev/null || true
 fi
+# Système installé : le bureau s'ouvre sous le compte créé à l'installation,
+# plus en root. Seuls les services système restent en root ; le bureau passe
+# par le relais winlux-root pour ce qui touche au système. winlux.root-session=1
+# (ligne du noyau) rouvre l'ancien bureau root pour un dépannage.
+desktop_user=
+desktop_autologin=1
+if test -s /etc/winlux/install-config.json && ! /bin/busybox grep -qw 'winlux.root-session=1' /proc/cmdline; then
+    desktop_user=$(/bin/busybox sed -n 's/^[[:space:]]*"username":[[:space:]]*"\([a-z_][a-z0-9_.-]*\)".*/\1/p' /etc/winlux/install-config.json | /bin/busybox head -n 1)
+    if test -n "$desktop_user" && ! /bin/busybox awk -F: -v u="$desktop_user" '$1 == u && $3 >= 1000 && $3 < 60000 { found=1 } END { exit !found }' /etc/passwd; then
+        desktop_user=
+    fi
+    if /bin/busybox grep -q '"autologin":[[:space:]]*false' /etc/winlux/install-config.json; then desktop_autologin=0; fi
+fi
+if test -n "$desktop_user"; then
+    # Fichiers d'état et réglages lisibles par le bureau (il n'est plus root).
+    umask 022
+    /bin/busybox chmod -R a+rX /run/winlux 2>/dev/null || true
+    /bin/busybox rm -f /etc/winlux/live-session
+    # Comptes de l'écran de verrouillage et des partages : les vrais comptes,
+    # sans mot de passe en clair (« shadow » : vérifié par winlux-root).
+    /bin/busybox awk -F: 'NR == FNR { if ($1 == "sudo" || $1 == "wheel" || $1 == "admin") { n = split($4, m, ","); for (i = 1; i <= n; i++) admin[m[i]] = 1 } next }
+        $3 >= 1000 && $3 < 60000 && $1 != "winlux-web" && $7 !~ /(nologin|false)$/ { print $1 ":" (($1 in admin) ? "root" : "user") ":shadow" }' \
+        /etc/group /etc/passwd >/etc/winlux/users.conf.new 2>/dev/null || true
+    if /bin/busybox grep -q "^$desktop_user:" /etc/winlux/users.conf.new 2>/dev/null; then
+        /bin/busybox chmod 644 /etc/winlux/users.conf.new
+        /bin/busybox mv /etc/winlux/users.conf.new /etc/winlux/users.conf
+    else
+        /bin/busybox rm -f /etc/winlux/users.conf.new
+    fi
+    /bin/busybox chmod 755 /etc/winlux
+    for conf in locale.conf input.conf preferences.conf cpu.conf overlay.conf lock.conf privacy.conf power.conf display.conf \
+        settings.conf update.conf firewall.conf volumes.conf sysupdate.conf report.conf browser.conf remote.conf \
+        profile.json install-config.json recommended-apps.txt benchmark.json hardware-report.txt; do
+        if test -f "/etc/winlux/$conf"; then /bin/busybox chmod 644 "/etc/winlux/$conf"; fi
+    done
+fi
 /usr/bin/winlux-hardware >/dev/null 2>&1 || true
 /usr/bin/winlux-firmware >/dev/null 2>&1 || true
 # Profil d'utilisation choisi à l'installation (sysctl, gouverneur CPU, E/S, GPU).
@@ -553,7 +589,15 @@ fi
 /bin/busybox rm -f /tmp/.X0-lock /tmp/.X11-unix/X0
 /bin/busybox ip link set lo up
 /bin/busybox mkdir -p /run/winlux /etc/winlux
-/bin/busybox touch /etc/winlux/live-session
+if test -n "$desktop_user"; then
+    # Dossier d'état partagé : chacun y écrit ses fichiers, personne ne
+    # touche à ceux des autres (sticky), root ne suit pas les liens d'autrui.
+    /bin/busybox chmod 1777 /run/winlux
+    echo 1 >/proc/sys/fs/protected_symlinks 2>/dev/null || true
+    echo 1 >/proc/sys/fs/protected_hardlinks 2>/dev/null || true
+else
+    /bin/busybox touch /etc/winlux/live-session
+fi
 # Alimentation : profil, luminosite, veille sur inactivite, capot, bouton
 # d'alimentation et batterie critique. Remplace logind/upower, sans systemd.
 /usr/bin/winlux --power daemon >/run/winlux/power-daemon.log 2>&1 &
@@ -714,12 +758,21 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     export DISPLAY=:0 XDG_CURRENT_DESKTOP=XFCE XDG_SESSION_DESKTOP=winlux XDG_MENU_PREFIX=xfce-
     export XDG_CONFIG_DIRS=/etc/xdg
     export XDG_DATA_DIRS="$HOME/.local/share/flatpak/exports/share:/var/lib/flatpak/exports/share:/usr/local/share:/usr/share"
-    export XDG_RUNTIME_DIR=/run/user/0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus
     export WINLUX_NATIVE_SHELL=1
     # Proxy commun aux applis Windows et Linux (écrit par Winlux).
     if test -r /etc/winlux/proxy.env; then . /etc/winlux/proxy.env; fi
     if test -d /usr/lib/locale/fr_FR.utf8; then export LANG=fr_FR.UTF-8; else export LANG=C.UTF-8; fi
-    if ! /usr/bin/winlux-native-session >/run/winlux/native-session.log 2>&1; then
+    if test -n "$desktop_user"; then
+        # Services système en root, puis les deux relais root du bureau :
+        # winlux-power (arrêt, redémarrage) et winlux-root (réglages système,
+        # Boutique, mises à jour, volumes, partages, mots de passe).
+        if ! /usr/bin/winlux-system-services >/run/winlux/system-services.log 2>&1; then
+            /bin/busybox cat /run/winlux/system-services.log >&2
+        fi
+        (setsid /usr/bin/winlux-power serve >/run/winlux/power-serve.log 2>&1 &)
+        (setsid /usr/bin/winlux-root serve >/run/winlux/root-relay.log 2>&1 &)
+    elif export XDG_RUNTIME_DIR=/run/user/0 DBUS_SESSION_BUS_ADDRESS=unix:path=/run/winlux/session-bus && \
+        ! /usr/bin/winlux-native-session >/run/winlux/native-session.log 2>&1; then
         /bin/busybox cat /run/winlux/native-session.log >&2
         # Une version tout juste installée qui n'ouvre pas le bureau est
         # remplacée par la précédente, puis la machine redémarre.
@@ -740,6 +793,8 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     /usr/bin/winlux-share ensure >/dev/null 2>&1 &
     # Tâches planifiées « à l'ouverture de session ».
     /usr/bin/winlux --tasks fire logon >>/run/winlux/tasks.log 2>&1 &
+    # Session du compte : son bureau publie lui-même l'état et suit les écrans.
+    if test -z "$desktop_user"; then
     (
         while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
             DISPLAY=:0 /usr/bin/winlux-control status 2>/dev/null || true
@@ -754,6 +809,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
             /bin/busybox sleep 1
         done
     ) &
+    fi
     if /bin/busybox grep -qw 'winlux.debug=1' /proc/cmdline; then
         (
             while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
@@ -762,6 +818,68 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
                 /bin/busybox sleep 1
             done
         ) &
+    fi
+    if test -n "$desktop_user"; then
+        user_uid=$(/bin/busybox awk -F: -v u="$desktop_user" '$1 == u { print $3; exit }' /etc/passwd)
+        user_gid=$(/bin/busybox awk -F: -v u="$desktop_user" '$1 == u { print $4; exit }' /etc/passwd)
+        user_home=$(/bin/busybox awk -F: -v u="$desktop_user" '$1 == u { print $6; exit }' /etc/passwd)
+        test -n "$user_home" || user_home=/home/$desktop_user
+        /bin/busybox mkdir -p "/run/user/$user_uid" "/run/winlux/session-$desktop_user" "$user_home"
+        /bin/busybox chown "$user_uid:$user_gid" "/run/user/$user_uid" "/run/winlux/session-$desktop_user"
+        /bin/busybox chmod 700 "/run/user/$user_uid"
+        DISPLAY=:0 /usr/bin/xhost "+si:localuser:$desktop_user" >/dev/null 2>&1 || true
+        # Bureau ouvert sur :0 : arrêt et changement d'utilisateur le connaissent.
+        DISPLAY=:0 /usr/bin/winlux-sessions register "$desktop_user" >/dev/null 2>&1 || true
+        lock_at_start=0
+        test "$desktop_autologin" = 1 || lock_at_start=1
+        quick_exits=0
+        while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
+            session_started=$(/bin/busybox date +%s)
+            # setsid : la session a son groupe de processus, arrêté d'un bloc.
+            setsid /usr/bin/env -u DBUS_SESSION_BUS_ADDRESS -u XDG_RUNTIME_DIR -u MAIL \
+                HOME="$user_home" USER="$desktop_user" LOGNAME="$desktop_user" SHELL=/bin/bash \
+                XDG_RUNTIME_DIR="/run/user/$user_uid" WINLUX_SESSION_USER="$desktop_user" \
+                WINLUX_PRIMARY_SESSION=1 WINLUX_LOCK_AT_START="$lock_at_start" \
+                WINLUX_SESSION_LOGS="/run/winlux/session-$desktop_user" \
+                /usr/bin/setpriv --reuid="$user_uid" --regid="$user_gid" --init-groups \
+                /usr/bin/winlux-user-session >>"/run/winlux/session-$desktop_user.log" 2>&1 &
+            session_pid=$!
+            lock_at_start=0
+            echo "WINLUX_DESKTOP_READY user=$desktop_user pid=$session_pid"
+            if ! test -e /run/winlux/boot-recorded; then
+                boot_mark desktop
+                /usr/bin/winlux --boot-time record 2>/dev/null || true
+                echo "WINLUX_BOOT_PHASES=$(/usr/bin/winlux --boot-time | /bin/busybox sed -n 's/^boot_phases=//p')"
+            fi
+            while /bin/busybox kill -0 "$session_pid" 2>/dev/null; do
+                request=$(/bin/busybox cat /run/winlux/session-action 2>/dev/null)
+                update=$(/bin/busybox cat /run/winlux/update-action 2>/dev/null)
+                if test "$request" = restart-session && ! /usr/bin/winlux-update --busy; then
+                    /bin/busybox rm -f /run/winlux/session-action
+                    if test "$update" = restart-session; then /bin/busybox rm -f /run/winlux/update-action; fi
+                    /bin/busybox kill -TERM "-$session_pid" 2>/dev/null || /bin/busybox kill "$session_pid" 2>/dev/null || true
+                    /bin/busybox sleep 2
+                    /bin/busybox kill -KILL "-$session_pid" 2>/dev/null || true
+                    break
+                fi
+                /bin/busybox sleep 1
+            done
+            wait "$session_pid" 2>/dev/null || true
+            # Un bureau qui ne tient pas : après trois échecs rapides, une
+            # version tout juste installée est remplacée par la précédente.
+            if test $(( $(/bin/busybox date +%s) - session_started )) -lt 20; then
+                quick_exits=$((quick_exits + 1))
+                if test "$quick_exits" -ge 3; then
+                    /bin/busybox tail -n 40 "/run/winlux/session-$desktop_user.log" >&2
+                    /usr/bin/winlux-update --boot-failed >>/run/winlux/boot-update.log 2>&1 || true
+                    /bin/sh
+                fi
+            else
+                quick_exits=0
+            fi
+            /bin/busybox sleep 1
+        done
+        /bin/sh
     fi
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
         keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)

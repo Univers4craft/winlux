@@ -170,6 +170,10 @@ def admin(cmd):
         return cmd
     if have("sudo") and run(["sudo", "-n", "true"], 5)[0] == 0:
         return ["sudo", "-n", *cmd]
+    # Bureau sous le compte de l'utilisateur : relais root de Winlux, avec le
+    # Contrôle de compte d'utilisateur pour installer ou désinstaller.
+    if have("winlux-root") and os.path.exists(os.environ.get("WINLUX_ROOT_SOCKET", "/run/winlux-root.sock")):
+        return ["winlux-root", "exec", *cmd]
     if have("pkexec"):
         return ["pkexec", *cmd]
     return None
@@ -670,8 +674,8 @@ class Apt(Source):
             age = time.time() - max((p.stat().st_mtime for p in lists.glob("*_Packages*")), default=0)
         except OSError:
             age = 0
-        if age > REMOTE_TTL and not OFFLINE and is_root():
-            run(["apt-get", "-q", "-o", "DPkg::Lock::Timeout=30", "update"], 600)
+        if age > REMOTE_TTL and not OFFLINE and (is_root() or (admin(["true"]) or [""])[0] == "winlux-root"):
+            run(admin(["apt-get", "-q", "-o", "DPkg::Lock::Timeout=30", "update"]) or ["true"], 600)
 
     def apps(self, force=False):
         if force:
