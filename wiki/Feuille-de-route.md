@@ -1,85 +1,74 @@
 # Feuille de route
 
-> Organisée par priorité. Chaque tâche est liée à une issue GitHub.
+> Le détail tâche par tâche est dans [Suivi.md](https://github.com/Univers4craft/winlux/blob/master/Suivi.md), la source unique de vérité, et dans les [issues](https://github.com/Univers4craft/winlux/issues). Cette page donne la vue d'ensemble au 1er novembre 2026.
 
-## Priorité IMMÉDIATE
+## Déjà fait (grandes étapes)
 
-| Tâche | Issue | Description |
-|-------|-------|-------------|
-| Corbeille fonctionnelle | [#10](https://github.com/Univers4craft/winlux/issues/10) | Supprimer → corbeille, restaurer, vider |
-| Copie avec progression | [#11](https://github.com/Univers4craft/winlux/issues/11) | Barre de progression + vitesse, ETA, pause/annuler |
-| Réglages rapides | [#12](https://github.com/Univers4craft/winlux/issues/12) | Réseau, volume, éclairage, batterie |
+| Étape | Contenu |
+|---|---|
+| Runtime PE | Chargeur PE32+ x86-64, ~100 DLL réimplémentées, SEH et exceptions C++, registre, chemins, UAC. |
+| Bureau Windows 11 | Session XFCE habillée, menu Démarrer, Paramètres (29 pages), Explorateur et applications maison. |
+| ISO installable | Live, installateur graphique (automatique, manuel, LUKS, double démarrage), Secure Boot, récupération. |
+| Base native | Ubuntu 26.04 avec APT, mises à jour par paquet `.deb` avec retour arrière (v0.2.12). |
+| Multimédia et jeux | Lecteur FFmpeg, son PipeWire, Direct2D/DirectWrite/WIC maison, Direct3D 9/11/12 vers OpenGL/Vulkan, manettes. |
+| Intégration | Clés USB et partitions Windows avec lettres, lecteurs réseau, partage Samba, impression CUPS, presse-papiers et glisser-déposer communs. |
+| Identité | Logo Prisme, fonds, son de démarrage, aucune marque Microsoft. |
+| Langues | Bureau en quatre langues, installateur en six. |
 
-## Sécurité
+## Prochaine version : v0.2.13
 
-| Tâche | Issue | Description |
-|-------|-------|-------------|
-| Bureau non-root | [#13](https://github.com/Univers4craft/winlux/issues/13) | L'init lance encore le bureau en root |
-| Signature + A/B | [#31](https://github.com/Univers4craft/winlux/issues/31) | Ed25519, partitionnement A/B, rollback auto |
+- Outil de mise à jour réparé (le dernier passage obligé par une réinstallation), manifeste publié avec chaque version, repli sur l'API des releases GitHub.
+- Changement rapide d'utilisateur, impression, son PipeWire, lecteurs SMB/NFS par le noyau.
+- Correctifs de l'audit du code et de l'interface du 1er novembre (Éditeur, boucles de messages, plantage du Terminal, menu Démarrer, barre des tâches…).
 
-## P1 — Fiabiliser le runtime
+## En cours (pull requests ouvertes)
 
-| Tâche | Issue | Description |
-|-------|-------|-------------|
-| kernel32/msvcrt/ntdll | [#14](https://github.com/Univers4craft/winlux/issues/14) | Compléter les implémentations partielles |
-| Stack overflow | [#15](https://github.com/Univers4craft/winlux/issues/15) | Pile de secours sûre |
+| Sujet | Pull request |
+|---|---|
+| Installateur, DNS dans les VM, mise à jour sans manifeste (v0.2.13) | #200 |
+| Session native : menu Démarrer fiable, barre des tâches, compositeur, finition Windows 11 | #203 |
+| Corrections de l'audit (runtime, shell, scripts, décodeurs, Winsock IPv6) | #206, #218, #220, #221, #222 |
+| Paint.NET jusqu'à son propre code (`Program.Start`) | #201 |
+| Recherche du menu Démarrer au-dessus des épingles, échelle automatique | #190 |
+| Réseau local partagé Windows ↔ Linux, ports ouverts, proxy commun | #186 |
+| Identité visuelle, suite : écran du noyau, sons, icônes | #187 |
+| Démarrage plus rapide (menu GRUB de 2 s) | #188 |
+| Portable : veille, luminosité, écrans multiples, pavé tactile | #149 |
 
-## P2 — Compatibilité Windows
+## Priorités suivantes
 
-| Tâche | Issue | Description |
-|-------|-------|-------------|
-| COM/OLE complet | [#16](https://github.com/Univers4craft/winlux/issues/16) | Registre, serveurs hors processus, automatisation |
-| Services Windows | [#17](https://github.com/Univers4craft/winlux/issues/17) | StartServiceCtrlDispatcher |
-| Annulation I/O | [#18](https://github.com/Univers4craft/winlux/issues/18) | Tests exhaustifs buffers/handles invalides |
-| Cycle processus | [#19](https://github.com/Univers4craft/winlux/issues/19) | Héritage handles, attributs étendus |
-| IPC nommé | [#20](https://github.com/Univers4craft/winlux/issues/20) | Partage objets et fichiers inter-processus |
-| ntdll | [#21](https://github.com/Univers4craft/winlux/issues/21) | Exceptions/unwinding, TLS statique |
-| CLR/WPF/WinForms | [#22](https://github.com/Univers4craft/winlux/issues/22) | Vrai runtime CLR Windows |
-| Codecs vidéo | [#23](https://github.com/Univers4craft/winlux/issues/23) | Media Foundation/DirectShow |
-| FreeLibrary | [#24](https://github.com/Univers4craft/winlux/issues/24) | Vrai déchargement de DLL |
-| C++ / MSVC | [#25](https://github.com/Univers4craft/winlux/issues/25) | Exceptions RtlUnwind*, exécutables MSVC |
-| DLL ciblées | [#26](https://github.com/Univers4craft/winlux/issues/26) | DLL système pour logiciels ciblés |
+### Sécurité et fiabilité du système
 
-## P3 — Intégration Linux
+- Bureau de l'ISO en **utilisateur non privilégié**, avec autorisation ciblée des actions système (#13).
+- **Mises à jour signées** (Ed25519) et **partitions A/B** résistantes aux coupures (#31, [docs/AB_UPDATES.md](https://github.com/Univers4craft/winlux/blob/master/docs/AB_UPDATES.md)).
+- Validation sur de vrais PC : veille prolongée, capot, Wi-Fi, son, GPU variés.
+- Notices de licences complètes pour une distribution publique.
 
-| Tâche | Issue | Description |
-|-------|-------|-------------|
-| Tests réels | [#27](https://github.com/Univers4craft/winlux/issues/27) | Installation hôte, binfmt réel, GNOME/KDE/XFCE |
+### Compatibilité Windows
 
-## P5 — Thème Windows 11
+- **Paint.NET** : `__CxxFrameHandler4`, puis **WPF** (#138).
+- **WinForms**, puis WPF pour les applications .NET de bureau ; génériques, délégués et LINQ dans le CLR maison.
+- **COM** complet : activation depuis le registre, serveurs hors processus, automatisation.
+- **Media Foundation / DirectShow** branchés sur le moteur multimédia, pour que les `.exe` lisent la vidéo.
+- **Direct3D** : shaders DXBC/DXIL, D3D12 complet, autres codecs DXVA2, validation sur vrais GPU (#137).
+- Processus : héritage des handles, objets nommés partagés, `FreeLibrary` réel, `StartServiceCtrlDispatcher`.
+- Programmes **32 bits**.
+- Clients Windows de ChatGPT et Claude (applications Electron).
 
-| Tâche | Issue | Description |
-|-------|-------|-------------|
-| Accessibilité | [#28](https://github.com/Univers4craft/winlux/issues/28) | Contraste, pointeur, animations, clavier |
-| Multi-résolution | [#29](https://github.com/Univers4craft/winlux/issues/29) | Validation 1080p, 1440p, 4K |
-| Bureau vide | [#30](https://github.com/Univers4craft/winlux/issues/30) | Icônes facultatives, raccourcis explicites |
+### Bureau
 
-## P6 — Qualité et livraison
+- Corbeille complète (#10), copie avec progression, pause et annulation (#11), réglages rapides complets (#12).
+- Navigation au clavier dans toutes les fenêtres du shell ; rendu revalidé en 1080p, 1440p et 4K.
+- Bureau vide par défaut, icônes système facultatives.
+- Traduction des dernières applications (#139) et de tout l'installateur (#140).
+- « Ouvrir avec… » dans l'Explorateur (#152).
 
-| Tâche | Issue | Description |
-|-------|-------|-------------|
-| Signature Ed25519 + A/B | [#31](https://github.com/Univers4craft/winlux/issues/31) | Mises à jour signées, slots A/B |
-| Workflow release | [#32](https://github.com/Univers4craft/winlux/issues/32) | Validation complète sur GitHub Actions |
-| Notices/licences | [#33](https://github.com/Univers4craft/winlux/issues/33) | Obligations de distribution |
-| Version stable v1.0 | [#34](https://github.com/Univers4craft/winlux/issues/34) | Jalon final |
+### Idées proposées, pas encore commencées
 
-## Objectifs long terme (depuis ROADMAP-SSD.md et INTERFACE.md)
+- Jeux : Direct3D 11 complet, Steam, overlay FPS.
+- Suite bureautique et lecteur PDF avancé, navigateur intégré.
+- Finition Windows 11 de la session native : Snap Layouts, animations, bureaux virtuels, widgets, panneau de notifications.
+- Menu de récupération étendu, clé USB de secours, réinitialisation du PC.
+- Site web et documentation utilisateur.
 
-Ces tâches ne sont pas encore planifiées avec des issues individuelles mais sont documentées :
-
-- Assistant graphique d'installation en français
-- Installation à côté de Windows (dual boot)
-- Gestion multi-écrans, fréquence et échelle par écran
-- Gestion Ethernet, Wi-Fi et Bluetooth sur matériel réel
-- Veille, reprise et hibernation
-- Chiffrement du système et des données
-- Gestionnaire de tâches complet
-- Recherche globale (applications, fichiers, paramètres)
-- Glisser-déposer inter-applications
-- Presse-papiers cohérent Linux/Windows
-- Mode de récupération au démarrage
-- Profils d'alimentation et suivi thermique
-- Imprimantes et scanners
-- DirectX et accélération GPU
-- Assistant de compatibilité .exe
-- Assistant de migration depuis Windows
+Voir aussi : [Limites et problèmes connus](Limites-et-problemes-connus)
