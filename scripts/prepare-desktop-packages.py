@@ -17,6 +17,9 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
             "xfce4-settings", "policykit-1-gnome", "wpasupplicant",
             "pciutils", "usbutils", "linux-firmware", "mesa-vulkan-drivers",
+            # Polices aux métriques d'Arial, Times New Roman et Courier New :
+            # les fenêtres des .exe gardent leur mise en page.
+            "fonts-liberation",
             "libgl1", "libglx-mesa0", "irqbalance",
             # Lecteurs réseau montés comme disques (winlux-drives).
             "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",
