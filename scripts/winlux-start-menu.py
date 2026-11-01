@@ -103,6 +103,8 @@ def category(app):
         if key in categories: return label
     return _t("Autres applications")
 
+SESSION_SERVICES = {"picom.desktop"}
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)
@@ -126,7 +128,9 @@ class Start(Gtk.Application):
             self.hide()
             return
         if not self.window: self.build()
-        self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all() if app.should_show() and app.get_id()}
+        # Services de la session livrés avec une entrée de menu par leur paquet.
+        self.apps = {app.get_id(): app for app in Gio.AppInfo.get_all()
+                     if app.should_show() and app.get_id() and app.get_id() not in SESSION_SERVICES}
         self.all_apps = False
         self.search.set_text("")
         self.render()
