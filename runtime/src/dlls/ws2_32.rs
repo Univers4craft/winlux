@@ -2747,7 +2747,33 @@ pub unsafe extern "win64" fn wsa_fd_is_set(s: usize, set: *const WinFdSet) -> i3
     0
 }
 
+/// Ordinaux publics communs à ws2_32 et wsock32 (Winsock 1.1) : les
+/// programmes liés à wsock32 importent souvent par numéro.
+const WINSOCK_ORDINALS: &[(u16, &str)] = &[
+    (1, "accept"), (2, "bind"), (3, "closesocket"), (4, "connect"), (5, "getpeername"),
+    (6, "getsockname"), (7, "getsockopt"), (8, "htonl"), (9, "htons"), (10, "ioctlsocket"),
+    (11, "inet_addr"), (12, "inet_ntoa"), (13, "listen"), (14, "ntohl"), (15, "ntohs"),
+    (16, "recv"), (17, "recvfrom"), (18, "select"), (19, "send"), (20, "sendto"),
+    (21, "setsockopt"), (22, "shutdown"), (23, "socket"), (51, "gethostbyaddr"),
+    (52, "gethostbyname"), (53, "getprotobyname"), (54, "getprotobynumber"),
+    (55, "getservbyname"), (56, "getservbyport"), (57, "gethostname"),
+    (101, "WSAAsyncSelect"), (102, "WSAAsyncGetHostByAddr"), (103, "WSAAsyncGetHostByName"),
+    (108, "WSACancelAsyncRequest"), (111, "WSAGetLastError"), (112, "WSASetLastError"),
+    (113, "WSACancelBlockingCall"), (114, "WSAIsBlocking"), (115, "WSAStartup"),
+    (116, "WSACleanup"), (151, "__WSAFDIsSet"),
+];
+
 pub fn exports() -> crate::dlls::Exports {
+    let mut e = named_exports();
+    for (ordinal, name) in WINSOCK_ORDINALS {
+        if let Some(&addr) = e.get(name) {
+            e.insert(Box::leak(format!("#{ordinal}").into_boxed_str()), addr);
+        }
+    }
+    e
+}
+
+fn named_exports() -> crate::dlls::Exports {
     crate::exports! {
      // init/cleanup
      "WSAStartup"=>fn wsa_startup,"WSACleanup"=>fn wsa_cleanup,

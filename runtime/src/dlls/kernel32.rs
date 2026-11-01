@@ -47,7 +47,7 @@ static OVERLAPPED_HANDLES: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
 fn overlapped_handles() -> &'static Mutex<HashSet<usize>> {
     OVERLAPPED_HANDLES.get_or_init(|| Mutex::new(HashSet::new()))
 }
-fn is_overlapped_handle(h: usize) -> bool {
+pub(crate) fn is_overlapped_handle(h: usize) -> bool {
     lock(overlapped_handles()).contains(&h)
 }
 struct IoResult {
@@ -363,13 +363,61 @@ pub fn init() {
     let _ = CLOCK_START.get_or_init(std::time::Instant::now);
 }
 
-pub extern "win64" fn get_std_handle(which: u32) -> usize {
-    match which {
-        x if x == (-10i32 as u32) => (-10isize) as usize,
-        x if x == (-11i32 as u32) => (-11isize) as usize,
-        x if x == (-12i32 as u32) => (-12isize) as usize,
-        _ => 0,
+/// Valeurs des handles d'entrée, de sortie et d'erreur standard rendues
+/// par GetStdHandle. Comme sous Windows, ce sont de vrais handles (petits
+/// multiples de 4) et non les constantes STD_*_HANDLE : certains runtimes
+/// (Bun, donc Claude Code) rangent un handle sur 63 bits et perdaient le bit
+/// de signe des anciennes valeurs -10/-11/-12. Elles restent au-dessus des
+/// descripteurs de sockets et sous les handles de fichiers (0x10000).
+pub(crate) const STD_INPUT_REAL: usize = 0xFFF0;
+pub(crate) const STD_OUTPUT_REAL: usize = 0xFFF4;
+pub(crate) const STD_ERROR_REAL: usize = 0xFFF8;
+static STD_OVERRIDE: [AtomicUsize; 3] = [AtomicUsize::new(0), AtomicUsize::new(0), AtomicUsize::new(0)];
+
+/// Ramène toutes les formes d'un handle standard (réel, constante STD_*,
+/// constante tronquée à 63 bits) à la constante STD_* historique, que le
+/// reste de kernel32 reconnaît.
+pub(crate) fn canon_std(h: usize) -> usize {
+    match h {
+        STD_INPUT_REAL | 0x7FFF_FFFF_FFFF_FFF6 => (-10isize) as usize,
+        STD_OUTPUT_REAL | 0x7FFF_FFFF_FFFF_FFF5 => (-11isize) as usize,
+        STD_ERROR_REAL | 0x7FFF_FFFF_FFFF_FFF4 => (-12isize) as usize,
+        _ => h,
     }
+}
+
+pub extern "win64" fn get_std_handle(which: u32) -> usize {
+    let slot = match which as i32 {
+        -10 => 0,
+        -11 => 1,
+        -12 => 2,
+        _ => {
+            crate::process::set_last_error(6);
+            return usize::MAX;
+        }
+    };
+    match STD_OVERRIDE[slot].load(Ordering::Relaxed) {
+        0 => [STD_INPUT_REAL, STD_OUTPUT_REAL, STD_ERROR_REAL][slot],
+        h => h,
+    }
+}
+
+/// `SetStdHandle` : redirige l'entrée, la sortie ou l'erreur standard vers
+/// un autre handle (fichier, tube) pour les GetStdHandle suivants.
+pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
+    let slot = match which as i32 {
+        -10 => 0,
+        -11 => 1,
+        -12 => 2,
+        _ => {
+            crate::process::set_last_error(87);
+            return 0;
+        }
+    };
+    let real = [STD_INPUT_REAL, STD_OUTPUT_REAL, STD_ERROR_REAL][slot];
+    let value = if canon_std(h) == canon_std(real) { 0 } else { h };
+    STD_OVERRIDE[slot].store(value, Ordering::Relaxed);
+    1
 }
 
 fn next_handle() -> usize {
@@ -1007,6 +1055,7 @@ pub unsafe extern "win64" fn write_file(
     written: *mut u32,
     ov: usize,
 ) -> i32 {
+    let h = canon_std(h);
     if !written.is_null() {
         *written = 0;
     }
@@ -1081,6 +1130,7 @@ pub unsafe extern "win64" fn read_file(
     read: *mut u32,
     ov: usize,
 ) -> i32 {
+    let h = canon_std(h);
     if !read.is_null() {
         *read = 0;
     }
@@ -1713,6 +1763,7 @@ fn file_type_of_fd(fd: i32) -> u32 {
     }
 }
 pub extern "win64" fn get_file_type(h: usize) -> u32 {
+    let h = canon_std(h);
     let std_fd = match h as isize {
         -10 => Some(0),
         -11 => Some(1),
@@ -2215,6 +2266,11 @@ pub unsafe extern "win64" fn get_proc_address(module: usize, name: *const u8) ->
     let by_ordinal = (name as usize) <= 0xffff;
     if let Some(dll) = crate::dlls::builtin_by_handle(module) {
         if by_ordinal {
+            let symbol = format!("#{}", name as usize);
+            if let Some(a) = crate::dlls::lookup(dll, &symbol) {
+                return crate::thunks::api_trace(dll, &symbol, a);
+            }
+            crate::thunks::api_trace_missing(dll, &symbol);
             crate::process::set_last_error(127);
             return 0;
         }
@@ -3836,8 +3892,9 @@ fn insert_env_entry(entry: &str, env: &mut HashMap<String, (String, String)>) {
     }
 }
 /// Descripteur Linux d'un handle de fichier ou d'un handle standard.
-fn fd_of_handle(h: usize) -> Option<i32> {
+pub(crate) fn fd_of_handle(h: usize) -> Option<i32> {
     use std::os::unix::io::AsRawFd;
+    let h = canon_std(h);
     match h as isize {
         -10 => return Some(0),
         -11 => return Some(1),
@@ -4390,6 +4447,13 @@ pub extern "win64" fn resume_thread(handle: usize) -> u32 {
 /// Utilisé par le module mmap pour CreateFileMappingA.
 pub fn handle_to_fd(h: usize) -> i32 {
     use std::os::unix::io::AsRawFd;
+    let h = canon_std(h);
+    match h as isize {
+        -10 => return 0,
+        -11 => return 1,
+        -12 => return 2,
+        _ => {}
+    }
     let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())));
     match handles.get(&h) {
         Some(FileHandle::File(f)) => lock(f).as_raw_fd(),
@@ -4397,6 +4461,10 @@ pub fn handle_to_fd(h: usize) -> i32 {
     }
 }
 pub extern "win64" fn close_handle(handle: usize) -> i32 {
+    if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
+        // Fermer un handle standard ne ferme pas le terminal de Winlux.
+        return 1;
+    }
     if handle == 1
         || handle == 2
         || handle == (-10isize) as usize
@@ -4406,6 +4474,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
         crate::process::set_last_error(6);
         return 0;
     }
+    crate::dlls::ntdll_file::forget_dir_cursor(handle);
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .remove(&handle)
         .is_some()
@@ -6765,7 +6834,7 @@ pub unsafe extern "win64" fn duplicate_handle(
 ) -> i32 {
     // Un fichier ou un tube reçoit un vrai double (son propre fd) : fermer
     // l'original ne ferme pas la copie, comme sous Windows.
-    let std_fd = match src_handle as isize {
+    let std_fd = match canon_std(src_handle) as isize {
         -10 => Some(0),
         -11 => Some(1),
         -12 => Some(2),
@@ -7104,7 +7173,7 @@ pub unsafe extern "win64" fn get_overlapped_result_ex(
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
-     "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"GetOverlappedResultEx"=>fn get_overlapped_result_ex,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
+     "GetStdHandle"=>fn get_std_handle,"SetStdHandle"=>fn set_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"GetOverlappedResultEx"=>fn get_overlapped_result_ex,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
      "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
      "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
      "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreatePipe"=>fn create_pipe,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"DisableThreadLibraryCalls"=>fn disable_thread_library_calls,"GetCurrentThreadId"=>fn get_current_thread_id,

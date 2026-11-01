@@ -208,6 +208,13 @@ pub fn init_process(exe: &Module, args: &[String]) {
         *((peb + 0x124) as *mut u32) = 2; // VER_PLATFORM_WIN32_NT
     }
     let path_w: Vec<u16> = exe_win.encode_utf16().collect();
+    // StandardInput/Output/Error de RTL_USER_PROCESS_PARAMETERS : lus
+    // directement par certains runtimes (Bun) au lieu de GetStdHandle.
+    unsafe {
+        *((params + 0x20) as *mut usize) = crate::dlls::kernel32::STD_INPUT_REAL;
+        *((params + 0x28) as *mut usize) = crate::dlls::kernel32::STD_OUTPUT_REAL;
+        *((params + 0x30) as *mut usize) = crate::dlls::kernel32::STD_ERROR_REAL;
+    }
     unicode_string(params + 0x60, &path_w);
     unicode_string(params + 0x70, &cmd_w);
     let mut command_line_w = cmd_w;

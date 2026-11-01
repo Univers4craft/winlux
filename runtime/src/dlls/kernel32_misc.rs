@@ -54,10 +54,12 @@ pub extern "win64" fn wer_set_flags(_flags: u32) -> i32 {
 }
 
 fn is_console(h: usize) -> bool {
+    let h = super::kernel32::canon_std(h);
     h == STD_OUTPUT || h == STD_ERROR || h == STD_INPUT
 }
 
 fn write_std(h: usize, bytes: &[u8]) -> bool {
+    let h = super::kernel32::canon_std(h);
     if h == STD_ERROR {
         let _ = std::io::stdout().flush();
         std::io::stderr().write_all(bytes).is_ok()
@@ -78,7 +80,7 @@ pub unsafe extern "win64" fn write_console_a(
     written: *mut u32,
     _reserved: usize,
 ) -> i32 {
-    if !is_console(h) || h == STD_INPUT {
+    if !is_console(h) || super::kernel32::canon_std(h) == STD_INPUT {
         crate::process::set_last_error(6);
         return 0;
     }
@@ -119,6 +121,7 @@ static CONSOLE_CP: AtomicU32 = AtomicU32::new(0);
 static CONSOLE_OUTPUT_CP: AtomicU32 = AtomicU32::new(0);
 
 pub unsafe extern "win64" fn get_console_mode(h: usize, mode: *mut u32) -> i32 {
+    let h = super::kernel32::canon_std(h);
     if mode.is_null() {
         crate::process::set_last_error(87);
         return 0;
@@ -145,6 +148,7 @@ pub unsafe extern "win64" fn get_console_mode(h: usize, mode: *mut u32) -> i32 {
     1
 }
 pub extern "win64" fn set_console_mode(h: usize, mode: u32) -> i32 {
+    let h = super::kernel32::canon_std(h);
     match h {
         STD_INPUT => CONSOLE_MODE_IN.store(mode, Ordering::Relaxed),
         STD_OUTPUT | STD_ERROR => CONSOLE_MODE_OUT.store(mode, Ordering::Relaxed),
@@ -205,6 +209,7 @@ pub extern "win64" fn attach_console(_pid: u32) -> i32 {
 
 /// `CONSOLE_SCREEN_BUFFER_INFO` : taille de la fenêtre du terminal Linux.
 pub unsafe extern "win64" fn get_console_screen_buffer_info(h: usize, info: *mut u16) -> i32 {
+    let h = super::kernel32::canon_std(h);
     if info.is_null() || !(h == STD_OUTPUT || h == STD_ERROR) {
         crate::process::set_last_error(6);
         return 0;

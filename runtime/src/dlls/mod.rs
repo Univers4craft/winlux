@@ -51,6 +51,7 @@ pub mod kernel32_cpu;
 pub mod kernel32_ext;
 pub mod kernel32_fs;
 pub mod kernel32_misc;
+pub mod kernel32_node;
 pub mod knownfolders;
 pub mod libgcc;
 pub mod libstdcpp;
@@ -64,6 +65,7 @@ pub mod msvcrt;
 pub mod nls;
 pub mod notifyicon;
 pub mod ntdll;
+pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
 pub mod powrprof;
@@ -71,6 +73,7 @@ pub mod print_pdf;
 pub mod propsys;
 pub mod quartz;
 pub mod resource;
+pub mod sandbox_dlls;
 pub mod rpcrt4;
 pub mod sechost;
 pub mod security;
@@ -192,6 +195,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     // (formats monétaires, signe négatif…) : il passe après intl.
                     e.extend(nls::exports());
                     e.extend(threadpool::exports());
+                    e.extend(kernel32_node::kernel32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -203,6 +207,8 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(seh::exports());
                     e.extend(kernel32_ext::ntdll_exports());
                     e.extend(kernel32_fs::ntdll_exports());
+                    e.extend(kernel32_node::ntdll_exports());
+                    e.extend(ntdll_file::exports());
                     e
                 },
                 handle: fake_module(),
@@ -445,6 +451,21 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "fwpuclnt",
+                exports: sandbox_dlls::fwpuclnt_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "netapi32",
+                exports: sandbox_dlls::netapi32_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "wtsapi32",
+                exports: sandbox_dlls::wtsapi32_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "wintrust",
                 exports: wintrust::exports(),
                 handle: fake_module(),
@@ -545,6 +566,10 @@ pub fn normalize(dll: &str) -> String {
     let base = l.strip_suffix(".dll").unwrap_or(&l);
     if base.starts_with("api-ms-win-crt-") || base == "vcruntime140" || base == "vcruntime140_1" {
         return "ucrtbase".into();
+    }
+    // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32.
+    if base == "wsock32" {
+        return "ws2_32".into();
     }
     if base.starts_with("api-ms-win-core-com-l1-") {
         return "ole32".into();
