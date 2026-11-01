@@ -88,7 +88,7 @@ Aucune au 31/10/2026 : toutes les PRs du jour sont mergées sur master.
 
 ### Chantiers actifs (issue ouverte)
 
-- [ ] Release v0.2.11 en préparation ; v0.2.7 à v0.2.10 ont échoué (paquets Qt 6 renommés, base APT dans QEMU, bureau bloqué sans Bluetooth, ISO > 2 Gio), corrigés par #128, #132, #142 et la compression xz (#32).
+- [ ] Release v0.2.12 en préparation ; v0.2.7 à v0.2.11 ont échoué (paquets Qt 6 renommés, base APT dans QEMU, bureau bloqué sans Bluetooth, ISO > 2 Gio), corrigés par #128, #132, #142 et la compression xz (#32).
 - [ ] Faire tourner Paint.NET 5.1 sur le runtime .NET qu'il embarque : étape 1 livrée (#133), restent coreclr (exceptions MSVC, SEH x64), WIC, Direct2D/DirectWrite et WPF (#138, `docs/PAINTNET.md`).
 - [ ] Traduire toutes les applications en FR/EN/ES/DE : lots #120, #130, #131, #134 et #135 livrés, reste les applis encore en une seule langue (#139).
 - [ ] Traduire réellement l'installateur : choisir English ne traduit aujourd'hui que la barre des étapes (#140).
