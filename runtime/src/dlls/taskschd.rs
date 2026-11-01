@@ -356,7 +356,7 @@ fn parse_duration(s: &str) -> Option<i64> {
             _ => {
                 let n: i64 = num.parse().ok()?;
                 num.clear();
-                total += n * match (c, time) {
+                let unit: i64 = match (c, time) {
                     ('D', false) => 86_400,
                     ('W', false) => 7 * 86_400,
                     ('Y', false) => 365 * 86_400,
@@ -366,6 +366,8 @@ fn parse_duration(s: &str) -> Option<i64> {
                     ('S', true) => 1,
                     _ => return None,
                 };
+                // Une durée absurde (« P99999999999Y ») ne doit pas déborder.
+                total = n.checked_mul(unit)?.checked_add(total)?;
             }
         }
     }
@@ -2552,6 +2554,8 @@ mod tests {
     fn durations_and_boundaries() {
         assert_eq!(parse_duration("PT72H"), Some(259_200));
         assert_eq!(parse_duration("P1DT30M"), Some(88_200));
+        // Une durée absurde ne déborde pas : elle est refusée.
+        assert_eq!(parse_duration("P9999999999999999Y"), None);
         assert_eq!(parse_duration("PT0S"), Some(0));
         assert_eq!(parse_duration("1H"), None);
         assert_eq!(format_duration(4320), "PT72H");

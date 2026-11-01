@@ -159,6 +159,9 @@ fn with_lock<T>(f: impl FnOnce(&mut Vec<Mount>) -> std::io::Result<T>) -> std::i
         for m in all.iter() {
             writeln!(out, "{}", m.to_line())?;
         }
+        // Sans fsync, une coupure juste après le rename pouvait laisser un
+        // mounts.tsv vide (les lettres de lecteur disparaissaient).
+        out.sync_all()?;
     }
     std::fs::rename(&tmp, &file)?;
     unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
