@@ -5,6 +5,11 @@
 
 use winlux_testexe::*;
 
+/// Logo et identité visuelle Winlux.
+#[path = "brand.rs"]
+#[allow(dead_code)]
+pub mod brand;
+
 pub const fn rgb(r: u32, g: u32, b: u32) -> u32 {
     r | (g << 8) | (b << 16)
 }
@@ -35,6 +40,7 @@ impl Brushes {
         }
     }
     pub unsafe fn get(&mut self, color: u32) -> Handle {
+        let color = chrome(color);
         let hash = (color.wrapping_mul(2654435761) >> 24) as usize;
         let start = hash % self.items.len();
         let mut i = start;
@@ -139,7 +145,10 @@ impl Fonts {
 
 pub unsafe fn text(hdc: Handle, font: Handle, color: u32, x: i32, y: i32, s: &[u8]) {
     SelectObject(hdc, font);
-    SetTextColor(hdc, color);
+    SetTextColor(hdc, chrome(color));
+    if SPAN_CAPTURE && !s.is_empty() {
+        capture_span(hdc, x, y, s);
+    }
     TextOutA(
         hdc,
         x,
@@ -275,7 +284,12 @@ pub fn mix(a: u32, c: u32, t: i32, n: i32) -> u32 {
 pub static mut DARK: bool = true;
 /// Couleur d'accentuation (COLORREF), bleu Windows par défaut.
 pub static mut ACCENT: u32 = rgb(0x4C, 0xC2, 0xFF);
-/// Mode contraste élevé (accessibilité).
+/// Couleur d'accentuation choisie (teinte « de base » de la palette Windows).
+pub static mut ACCENT_BASE: u32 = DEFAULT_ACCENT;
+pub const DEFAULT_ACCENT: u32 = rgb(0x00, 0x78, 0xD4);
+/// Accent sur la barre de titre et la bordure de la fenêtre active.
+pub static mut ACCENT_TITLES: bool = false;
+/// Thème de contraste actif (0 = aucun), copie de `A11Y.contrast`.
 pub static mut HIGH_CONTRAST: bool = false;
 /// Réglages visuels partagés (source unique).
 pub static mut ENABLE_BLUR: bool = true;
@@ -308,25 +322,85 @@ pub struct Palette {
     pub shadow: u32,
 }
 
+/// Couleurs d'un thème de contraste : fond, texte, lien, inactif,
+/// fond et texte sélectionnés (mêmes teintes que le runtime).
+#[derive(Clone, Copy)]
+pub struct Contrast {
+    pub background: u32,
+    pub text: u32,
+    pub hyperlink: u32,
+    pub disabled: u32,
+    pub selected_bg: u32,
+    pub selected_text: u32,
+}
+
+pub const fn contrast_colors(theme: u8) -> Option<Contrast> {
+    Some(match theme {
+        // Aquatique : blanc sur noir, liens cyan.
+        1 => Contrast {
+            background: rgb(0x20, 0x20, 0x20),
+            text: rgb(0xFF, 0xFF, 0xFF),
+            hyperlink: rgb(0x75, 0xE9, 0xFC),
+            disabled: rgb(0xA6, 0xA6, 0xA6),
+            selected_bg: rgb(0x8E, 0xE3, 0xF0),
+            selected_text: rgb(0x26, 0x3B, 0x50),
+        },
+        // Désert : noir sur blanc cassé.
+        2 => Contrast {
+            background: rgb(0xFF, 0xFA, 0xEF),
+            text: rgb(0x3D, 0x3D, 0x3D),
+            hyperlink: rgb(0x1C, 0x5E, 0x75),
+            disabled: rgb(0x67, 0x67, 0x67),
+            selected_bg: rgb(0x90, 0x39, 0x09),
+            selected_text: rgb(0xFF, 0xF5, 0xE3),
+        },
+        // Crépuscule : turquoise sur ardoise.
+        3 => Contrast {
+            background: rgb(0x2D, 0x32, 0x36),
+            text: rgb(0xB6, 0xF6, 0xF0),
+            hyperlink: rgb(0x70, 0xEB, 0xDE),
+            disabled: rgb(0xBD, 0xBD, 0xBD),
+            selected_bg: rgb(0xA1, 0xBF, 0xDE),
+            selected_text: rgb(0x21, 0x2D, 0x3B),
+        },
+        // Ciel nocturne : blanc sur noir, accents violets.
+        4 => Contrast {
+            background: rgb(0x00, 0x00, 0x00),
+            text: rgb(0xFF, 0xFF, 0xFF),
+            hyperlink: rgb(0x80, 0x80, 0xFF),
+            disabled: rgb(0xD6, 0xB4, 0xFD),
+            selected_bg: rgb(0xD6, 0xB4, 0xFD),
+            selected_text: rgb(0x2B, 0x2B, 0x2B),
+        },
+        _ => return None,
+    })
+}
+
+/// Palette Winlux dérivée d'un thème de contraste : aplats sans dégradé,
+/// bordures de la couleur du texte, aucune teinte atténuée pour le texte.
+pub fn contrast_palette(c: &Contrast) -> Palette {
+    Palette {
+        window: c.background,
+        mica: c.background,
+        surface: c.background,
+        surface2: mix(c.background, c.text, 1, 12),
+        border: c.text,
+        hover: mix(c.background, c.hyperlink, 2, 10),
+        pressed: mix(c.background, c.hyperlink, 3, 10),
+        selected: mix(c.background, c.selected_bg, 3, 10),
+        text: c.text,
+        text2: c.text,
+        text3: c.disabled,
+        accent: c.hyperlink,
+        on_accent: c.background,
+        shadow: c.background,
+    }
+}
+
 fn raw_pal(dark: bool) -> Palette {
     let accent = unsafe { ACCENT };
-    if unsafe { HIGH_CONTRAST } {
-        return Palette {
-            window: rgb(0x00, 0x00, 0x00),
-            mica: rgb(0x00, 0x00, 0x00),
-            surface: rgb(0x00, 0x00, 0x00),
-            surface2: rgb(0x1A, 0x1A, 0x1A),
-            border: rgb(0xFF, 0xFF, 0xFF),
-            hover: rgb(0x1A, 0x1A, 0x1A),
-            pressed: rgb(0x33, 0x33, 0x33),
-            selected: rgb(0x00, 0x00, 0x80),
-            text: rgb(0xFF, 0xFF, 0xFF),
-            text2: rgb(0xFF, 0xFF, 0x00),
-            text3: rgb(0x00, 0xFF, 0x00),
-            accent: rgb(0xFF, 0xFF, 0x00),
-            on_accent: rgb(0x00, 0x00, 0x00),
-            shadow: rgb(0x00, 0x00, 0x00),
-        };
+    if let Some(c) = contrast_colors(unsafe { A11Y.contrast }) {
+        return contrast_palette(&c);
     }
     if dark {
         Palette {
@@ -346,7 +420,11 @@ fn raw_pal(dark: bool) -> Palette {
             shadow: rgb(0x08, 0x0C, 0x18),
         }
     } else {
-        let accent = mix(accent, rgb(0, 0x3E, 0x92), 6, 10);
+        let accent = if unsafe { ACCENT_BASE } == DEFAULT_ACCENT {
+            mix(accent, rgb(0, 0x3E, 0x92), 6, 10)
+        } else {
+            mix(unsafe { ACCENT_BASE }, 0, 1, 10)
+        };
         Palette {
             window: rgb(0xF9, 0xF9, 0xF9),
             mica: rgb(0xEE, 0xF1, 0xF8),
@@ -402,6 +480,17 @@ pub fn pal() -> Palette {
     }
 }
 
+/// Applique une couleur d'accentuation : la variante claire sert au thème
+/// sombre (texte noir dessus), la teinte de base au thème clair.
+pub unsafe fn set_accent(base: u32) {
+    ACCENT_BASE = base;
+    ACCENT = if base == DEFAULT_ACCENT {
+        rgb(0x4C, 0xC2, 0xFF)
+    } else {
+        mix(base, rgb(0xFF, 0xFF, 0xFF), 4, 10)
+    };
+}
+
 /// Vrai si une transition de thème est en cours (la boucle doit repeindre).
 pub fn theme_animating() -> bool {
     unsafe { TRANSITIONING }
@@ -414,7 +503,7 @@ pub unsafe fn set_theme(dark: bool) {
     }
     PREV_DARK = DARK;
     DARK = dark;
-    TRANSITIONING = true;
+    TRANSITIONING = animations();
     THEME_ANIM_START = GetTickCount();
 }
 
@@ -607,12 +696,18 @@ pub unsafe fn draw_tooltip(
 
 /// Courbe d'animation « ease-out » cubique, en millièmes (0..=1000).
 pub fn ease_out(t: i32, duration: i32) -> i32 {
+    if !animations() {
+        return 1000;
+    }
     let t = t.clamp(0, duration.max(1)) * 1000 / duration.max(1);
     let u = 1000 - t;
     1000 - u * u / 1000 * u / 1000
 }
 
 pub fn ease_in_out(t: i32, duration: i32) -> i32 {
+    if !animations() {
+        return 1000;
+    }
     let t = t.clamp(0, duration.max(1)) * 1000 / duration.max(1);
     if t < 500 {
         4 * t * t / 1000 * t / 1000_000
@@ -623,6 +718,9 @@ pub fn ease_in_out(t: i32, duration: i32) -> i32 {
 }
 
 pub fn spring(t: i32, duration: i32) -> i32 {
+    if !animations() {
+        return 1000;
+    }
     let t = t.clamp(0, duration.max(1)) * 1000 / duration.max(1);
     if t == 0 {
         return 0;
@@ -707,6 +805,14 @@ pub enum Glyph {
     Tools,
     Wifi,
     Ethernet,
+    /// Fichier image disque (iso, vhd, qcow2…) : un disque optique.
+    DiskImage,
+    /// Image disque montée : lecteur amovible avec un disque.
+    Removable,
+    /// Lecteur réseau (FTP, SFTP, SMB…).
+    NetDrive,
+    /// Bouton Éjecter.
+    Eject,
     Clock,
     Shield,
 }
@@ -714,20 +820,8 @@ pub enum Glyph {
 pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y: i32, s: i32) {
     match g {
         Glyph::Start => {
-            let gap = (s / 12).max(1);
-            let c = (s - gap) / 2;
-            fill(hdc, b, x, y, x + c, y + c, rgb(0x2B, 0xA4, 0xF2));
-            fill(hdc, b, x + c + gap, y, x + s, y + c, rgb(0x45, 0xB8, 0xFF));
-            fill(hdc, b, x, y + c + gap, x + c, y + s, rgb(0x16, 0x84, 0xE0));
-            fill(
-                hdc,
-                b,
-                x + c + gap,
-                y + c + gap,
-                x + s,
-                y + s,
-                rgb(0x2B, 0xA4, 0xF2),
-            );
+            // Logo Winlux « Prisme » (bouton Démarrer, menus, lecteur système).
+            brand::logo(hdc, b, x, y, s, 1000, None);
         }
         Glyph::Search => {
             let r = s * 2 / 3;
@@ -1453,6 +1547,131 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                 );
             }
             fill(hdc, b, x, y + s * 3 / 8, x + s, y + s * 5 / 8, c);
+        }
+        Glyph::DiskImage => {
+            let c = rgb(0xB8, 0xC2, 0xCF);
+            ellipse(hdc, b, x, y, x + s, y + s, rgb(0x8A, 0x96, 0xA6));
+            ellipse(hdc, b, x + 1, y + 1, x + s - 1, y + s - 1, c);
+            // Reflet irisé façon disque optique.
+            ellipse(
+                hdc,
+                b,
+                x + s / 6,
+                y + s / 6,
+                x + s / 2,
+                y + s / 2,
+                rgb(0xD6, 0xE4, 0xF5),
+            );
+            ellipse(
+                hdc,
+                b,
+                x + s * 3 / 8,
+                y + s * 3 / 8,
+                x + s * 5 / 8,
+                y + s * 5 / 8,
+                rgb(0x6B, 0x73, 0x80),
+            );
+            ellipse(
+                hdc,
+                b,
+                x + s * 7 / 16,
+                y + s * 7 / 16,
+                x + s * 9 / 16,
+                y + s * 9 / 16,
+                rgb(0xF4, 0xF6, 0xF9),
+            );
+        }
+        Glyph::Removable | Glyph::NetDrive => {
+            round_rect(
+                hdc,
+                b,
+                x,
+                y + s / 3,
+                x + s,
+                y + s * 5 / 6,
+                3,
+                rgb(0x6B, 0x73, 0x80),
+            );
+            fill(
+                hdc,
+                b,
+                x + 2,
+                y + s / 3 + 2,
+                x + s - 2,
+                y + s / 2,
+                rgb(0x9A, 0xA3, 0xAE),
+            );
+            fill(
+                hdc,
+                b,
+                x + s * 3 / 4,
+                y + s * 2 / 3 - 1,
+                x + s * 7 / 8,
+                y + s * 2 / 3 + 2,
+                rgb(0x5C, 0xE0, 0x7A),
+            );
+            if matches!(g, Glyph::Removable) {
+                glyph(hdc, b, f, Glyph::DiskImage, x + s / 16, y, s * 3 / 8);
+            } else {
+                // Prise réseau : trois postes reliés sous le lecteur.
+                let c = rgb(0x2B, 0x7F, 0xDA);
+                let t = (s / 16).max(1);
+                fill(
+                    hdc,
+                    b,
+                    x + s / 2 - t / 2,
+                    y + s * 5 / 6,
+                    x + s / 2 + t / 2 + 1,
+                    y + s * 11 / 12,
+                    c,
+                );
+                fill(
+                    hdc,
+                    b,
+                    x + s / 6,
+                    y + s * 11 / 12,
+                    x + s * 5 / 6,
+                    y + s * 11 / 12 + t,
+                    c,
+                );
+                for k in [x + s / 6, x + s / 2, x + s * 5 / 6] {
+                    fill(
+                        hdc,
+                        b,
+                        k - s / 16,
+                        y + s * 11 / 12 - t,
+                        k + s / 16 + 1,
+                        y + s,
+                        c,
+                    );
+                }
+                ellipse(hdc, b, x + s / 16, y, x + s * 3 / 8, y + s * 5 / 16, c);
+            }
+        }
+        Glyph::Eject => {
+            let c = rgb(0x5C, 0x66, 0x73);
+            let h = s * 3 / 8;
+            for k in 0..h {
+                let half = (k * s / 2) / h.max(1);
+                fill(
+                    hdc,
+                    b,
+                    x + s / 2 - half,
+                    y + s / 8 + k,
+                    x + s / 2 + half + 1,
+                    y + s / 8 + k + 1,
+                    c,
+                );
+            }
+            fill(
+                hdc,
+                b,
+                x + s / 8,
+                y + s * 5 / 8,
+                x + s * 7 / 8,
+                y + s * 3 / 4,
+                c,
+            );
         }
         Glyph::File
         | Glyph::Image
@@ -2210,5 +2429,392 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
                 );
             }
         }
+    }
+}
+
+
+// ---------- Accessibilité (réglages partagés) ----------
+
+/// Réglages d'accessibilité, enregistrés dans
+/// `C:\.local\share\winlux\accessibility.ini` et relus par tous les
+/// processus Winlux (bureau, applications intégrées, runtime).
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub struct A11y {
+    /// Thème de contraste : 0 = aucun, 1..=4 (Aquatique, Désert, Crépuscule, Ciel nocturne).
+    pub contrast: u8,
+    /// Taille du pointeur : 1 (normal) à 5.
+    pub pointer_size: u8,
+    /// Couleur du pointeur : 0 blanc, 1 noir, 2 vert vif.
+    pub pointer_color: u8,
+    /// Épaisseur du curseur de texte, en pixels (1 à 6).
+    pub caret_width: u8,
+    pub animations: bool,
+    pub magnifier: bool,
+    /// Zoom de la loupe en pourcentage (125 à 1600).
+    pub mag_zoom: u16,
+    /// 0 = plein écran, 1 = lentille, 2 = ancré.
+    pub mag_mode: u8,
+    pub mag_smooth: bool,
+    pub mag_invert: bool,
+    pub narrator: bool,
+    /// Débit de la voix : 1 (lent) à 10 (rapide).
+    pub narrator_rate: u8,
+    /// Lire les caractères saisis.
+    pub narrator_echo: bool,
+    /// Lire le texte sous le pointeur.
+    pub narrator_pointer: bool,
+    /// Sous-titres des sons système.
+    pub captions: bool,
+    /// Faire clignoter l'écran lors des alertes sonores.
+    pub flash: bool,
+    pub sticky: bool,
+    pub filter: bool,
+    /// Touches lentes : durée d'appui minimale (ms).
+    pub slow_ms: u16,
+    /// Touches rebond : délai pendant lequel une frappe répétée est ignorée (ms).
+    pub bounce_ms: u16,
+}
+
+pub const A11Y_DEFAULT: A11y = A11y {
+    contrast: 0,
+    pointer_size: 1,
+    pointer_color: 0,
+    caret_width: 1,
+    animations: true,
+    magnifier: false,
+    mag_zoom: 200,
+    mag_mode: 0,
+    mag_smooth: true,
+    mag_invert: false,
+    narrator: false,
+    narrator_rate: 5,
+    narrator_echo: true,
+    narrator_pointer: true,
+    captions: false,
+    flash: false,
+    sticky: false,
+    filter: false,
+    slow_ms: 300,
+    bounce_ms: 500,
+};
+
+pub static mut A11Y: A11y = A11Y_DEFAULT;
+
+const A11Y_FILE: &core::ffi::CStr = c"C:\\.local\\share\\winlux\\accessibility.ini";
+
+fn parse_num(s: &[u8]) -> Option<u32> {
+    if s.is_empty() || s.len() > 6 {
+        return None;
+    }
+    let mut n = 0u32;
+    for &c in s {
+        if !c.is_ascii_digit() {
+            return None;
+        }
+        n = n * 10 + (c - b'0') as u32;
+    }
+    Some(n)
+}
+
+/// Analyse le contenu du fichier ; les valeurs hors bornes sont ignorées.
+pub fn a11y_parse(data: &[u8]) -> A11y {
+    let mut a = A11Y_DEFAULT;
+    for line in data.split(|&c| c == b'\n') {
+        let line = line.strip_suffix(b"\r").unwrap_or(line);
+        let Some(eq) = line.iter().position(|&c| c == b'=') else {
+            continue;
+        };
+        let (key, value) = (&line[..eq], &line[eq + 1..]);
+        let Some(n) = parse_num(value) else {
+            continue;
+        };
+        let flag = n == 1;
+        match key {
+            b"contrast" if n <= 4 => a.contrast = n as u8,
+            b"pointer_size" if (1..=5).contains(&n) => a.pointer_size = n as u8,
+            b"pointer_color" if n <= 2 => a.pointer_color = n as u8,
+            b"caret_width" if (1..=6).contains(&n) => a.caret_width = n as u8,
+            b"animations" if n <= 1 => a.animations = flag,
+            b"magnifier" if n <= 1 => a.magnifier = flag,
+            b"mag_zoom" if (100..=1600).contains(&n) => a.mag_zoom = n as u16,
+            b"mag_mode" if n <= 2 => a.mag_mode = n as u8,
+            b"mag_smooth" if n <= 1 => a.mag_smooth = flag,
+            b"mag_invert" if n <= 1 => a.mag_invert = flag,
+            b"narrator" if n <= 1 => a.narrator = flag,
+            b"narrator_rate" if (1..=10).contains(&n) => a.narrator_rate = n as u8,
+            b"narrator_echo" if n <= 1 => a.narrator_echo = flag,
+            b"narrator_pointer" if n <= 1 => a.narrator_pointer = flag,
+            b"captions" if n <= 1 => a.captions = flag,
+            b"flash" if n <= 1 => a.flash = flag,
+            b"sticky" if n <= 1 => a.sticky = flag,
+            b"filter" if n <= 1 => a.filter = flag,
+            b"slow_ms" if n <= 2000 => a.slow_ms = n as u16,
+            b"bounce_ms" if n <= 2000 => a.bounce_ms = n as u16,
+            _ => {}
+        }
+    }
+    a
+}
+
+struct Writer {
+    buf: [u8; 512],
+    len: usize,
+}
+
+impl Writer {
+    fn push(&mut self, bytes: &[u8]) {
+        let n = bytes.len().min(self.buf.len() - self.len);
+        self.buf[self.len..self.len + n].copy_from_slice(&bytes[..n]);
+        self.len += n;
+    }
+    fn entry(&mut self, key: &[u8], value: u32) {
+        self.push(key);
+        self.push(b"=");
+        let mut digits = [0u8; 10];
+        let mut n = value;
+        let mut i = digits.len();
+        loop {
+            i -= 1;
+            digits[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+            if n == 0 {
+                break;
+            }
+        }
+        self.push(&digits[i..]);
+        self.push(b"\n");
+    }
+}
+
+/// Sérialise les réglages au format `clé=valeur` (une ligne par réglage).
+pub fn a11y_format(a: &A11y, out: &mut [u8; 512]) -> usize {
+    let mut w = Writer {
+        buf: [0; 512],
+        len: 0,
+    };
+    w.push(b"# Winlux - Param\xE8tres > Accessibilit\xE9\n");
+    w.entry(b"contrast", a.contrast as u32);
+    w.entry(b"pointer_size", a.pointer_size as u32);
+    w.entry(b"pointer_color", a.pointer_color as u32);
+    w.entry(b"caret_width", a.caret_width as u32);
+    w.entry(b"animations", a.animations as u32);
+    w.entry(b"magnifier", a.magnifier as u32);
+    w.entry(b"mag_zoom", a.mag_zoom as u32);
+    w.entry(b"mag_mode", a.mag_mode as u32);
+    w.entry(b"mag_smooth", a.mag_smooth as u32);
+    w.entry(b"mag_invert", a.mag_invert as u32);
+    w.entry(b"narrator", a.narrator as u32);
+    w.entry(b"narrator_rate", a.narrator_rate as u32);
+    w.entry(b"narrator_echo", a.narrator_echo as u32);
+    w.entry(b"narrator_pointer", a.narrator_pointer as u32);
+    w.entry(b"captions", a.captions as u32);
+    w.entry(b"flash", a.flash as u32);
+    w.entry(b"sticky", a.sticky as u32);
+    w.entry(b"filter", a.filter as u32);
+    w.entry(b"slow_ms", a.slow_ms as u32);
+    w.entry(b"bounce_ms", a.bounce_ms as u32);
+    out.copy_from_slice(&w.buf);
+    w.len
+}
+
+/// Applique les réglages aux interrupteurs historiques du thème.
+unsafe fn a11y_apply() {
+    HIGH_CONTRAST = A11Y.contrast != 0;
+    ENABLE_SMOOTH_ANIM = A11Y.animations;
+}
+
+/// Relit le fichier partagé ; vrai si un réglage a changé (repeindre).
+pub unsafe fn a11y_reload() -> bool {
+    let h = CreateFileA(
+        A11Y_FILE.as_ptr(),
+        0x8000_0000,
+        7,
+        core::ptr::null_mut(),
+        3,
+        0,
+        core::ptr::null_mut(),
+    );
+    let next = if h.is_null() || h as isize == -1 {
+        A11Y_DEFAULT
+    } else {
+        let mut data = [0u8; 1024];
+        let mut read = 0;
+        ReadFile(h, data.as_mut_ptr(), 1024, &mut read, core::ptr::null_mut());
+        CloseHandle(h);
+        a11y_parse(&data[..(read as usize).min(1024)])
+    };
+    let changed = next != A11Y;
+    A11Y = next;
+    a11y_apply();
+    changed
+}
+
+/// Enregistre les réglages courants pour tous les processus Winlux.
+pub unsafe fn a11y_save() -> bool {
+    a11y_apply();
+    for dir in [
+        c"C:\\.local",
+        c"C:\\.local\\share",
+        c"C:\\.local\\share\\winlux",
+    ] {
+        CreateDirectoryA(dir.as_ptr(), core::ptr::null_mut());
+    }
+    let mut data = [0u8; 512];
+    let n = a11y_format(&A11Y, &mut data);
+    let h = CreateFileA(
+        A11Y_FILE.as_ptr(),
+        0x4000_0000,
+        0,
+        core::ptr::null_mut(),
+        2,
+        0,
+        core::ptr::null_mut(),
+    );
+    if h.is_null() || h as isize == -1 {
+        return false;
+    }
+    let mut written = 0;
+    let ok = WriteFile(
+        h,
+        data.as_ptr(),
+        n as u32,
+        &mut written,
+        core::ptr::null_mut(),
+    );
+    CloseHandle(h);
+    ok != 0 && written == n as u32
+}
+
+static mut A11Y_POLLED: u32 = 0;
+
+/// Relit les réglages au plus une fois par seconde (applications autonomes).
+pub unsafe fn a11y_poll() -> bool {
+    let t = GetTickCount();
+    if A11Y_POLLED != 0 && t.wrapping_sub(A11Y_POLLED) < 1000 {
+        return false;
+    }
+    A11Y_POLLED = t;
+    a11y_reload()
+}
+
+/// Faux si l'utilisateur a désactivé les animations : les courbes
+/// d'accélération renvoient alors directement leur état final.
+pub fn animations() -> bool {
+    unsafe { A11Y.animations && ENABLE_SMOOTH_ANIM }
+}
+
+/// Épaisseur du curseur de texte (au moins `min` pixels).
+pub fn caret_w(min: i32) -> i32 {
+    (unsafe { A11Y.caret_width } as i32).max(min)
+}
+
+// ----- Touches rémanentes : modificateurs verrouillés par le bureau -----
+
+/// Modificateurs maintenus logiquement : Maj, Ctrl, Alt, Windows.
+pub static mut STICKY_LATCHED: u8 = 0;
+/// Modificateurs verrouillés (appui double) jusqu'au prochain appui.
+pub static mut STICKY_LOCKED: u8 = 0;
+
+pub fn modifier_bit(vk: i32) -> u8 {
+    match vk {
+        0x10 | 0xA0 | 0xA1 => 1,
+        0x11 | 0xA2 | 0xA3 => 2,
+        0x12 | 0xA4 | 0xA5 => 4,
+        0x5B | 0x5C => 8,
+        _ => 0,
+    }
+}
+
+/// `GetKeyState` qui tient compte des touches rémanentes : un modificateur
+/// relâché mais verrouillé est vu comme enfoncé par les raccourcis.
+pub unsafe fn key_state(vk: i32) -> i16 {
+    let state = GetKeyState(vk);
+    let bit = modifier_bit(vk);
+    if bit != 0 && (STICKY_LATCHED | STICKY_LOCKED) & bit != 0 {
+        state | i16::MIN
+    } else {
+        state
+    }
+}
+
+// ----- Texte affiché, relu par le Narrateur -----
+
+#[derive(Clone, Copy)]
+pub struct Span {
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub len: u8,
+    pub text: [u8; 96],
+}
+
+pub const SPAN_MAX: usize = 512;
+const EMPTY_SPAN: Span = Span {
+    x: 0,
+    y: 0,
+    w: 0,
+    h: 0,
+    len: 0,
+    text: [0; 96],
+};
+/// Textes dessinés lors de la dernière peinture (ordre d'affichage).
+pub static mut SPANS: [Span; SPAN_MAX] = [EMPTY_SPAN; SPAN_MAX];
+pub static mut SPAN_COUNT: usize = 0;
+/// Actif seulement quand le Narrateur fonctionne : aucune mesure sinon.
+pub static mut SPAN_CAPTURE: bool = false;
+
+unsafe fn capture_span(hdc: Handle, x: i32, y: i32, s: &[u8]) {
+    if SPAN_COUNT >= SPAN_MAX || s.iter().all(|&c| c <= b' ') {
+        return;
+    }
+    let mut size = [0i32; 2];
+    GetTextExtentPoint32A(
+        hdc,
+        s.as_ptr() as *const core::ffi::c_char,
+        s.len() as i32,
+        &mut size,
+    );
+    let n = s.len().min(96);
+    let span = &mut SPANS[SPAN_COUNT];
+    span.x = x;
+    span.y = y;
+    span.w = size[0].max(1);
+    span.h = size[1].max(10);
+    span.len = n as u8;
+    span.text[..n].copy_from_slice(&s[..n]);
+    SPAN_COUNT += 1;
+}
+
+/// Vrai pendant le dessin de la barre des tâches, du menu Démarrer et des
+/// panneaux du bureau, dont les teintes sombres sont fixes : en contraste
+/// élevé, `chrome` les ramène aux couleurs du thème.
+pub static mut CHROME_MAP: bool = false;
+
+/// Couleur fixe du bureau convertie dans le thème de contraste actif :
+/// surfaces sombres → fond, gris → texte inactif, clair → texte,
+/// teintes vives → couleur des liens.
+pub fn chrome(c: u32) -> u32 {
+    let theme = unsafe {
+        if !CHROME_MAP {
+            return c;
+        }
+        A11Y.contrast
+    };
+    let Some(t) = contrast_colors(theme) else {
+        return c;
+    };
+    let (r, g, b) = (c & 0xFF, (c >> 8) & 0xFF, (c >> 16) & 0xFF);
+    let lum = (r * 30 + g * 59 + b * 11) / 100;
+    let sat = r.max(g).max(b) - r.min(g).min(b);
+    if sat > 90 && lum > 0x40 {
+        t.hyperlink
+    } else if lum < 0x60 {
+        // Garde un léger relief entre surfaces, survols et bordures.
+        mix(t.background, t.text, (lum as i32 - 0x18).clamp(0, 0x48), 0x48 * 6)
+    } else if lum < 0xB8 {
+        t.disabled
+    } else {
+        t.text
     }
 }

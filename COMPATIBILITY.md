@@ -9,6 +9,10 @@ des codecs, des services et parfois d’un runtime managé.
 Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir le
 [diagnostic et les blocages constatés](docs/CHATGPT-WINDOWS.md).
 
+Ce qu'il reste à écrire pour faire tourner presque toutes les applications,
+mesuré sur de vrais logiciels et classé par impact :
+[docs/COMPATIBILITE.md](docs/COMPATIBILITE.md).
+
 ## Ce qui est déjà partagé
 
 - Les exécutables PE64 peuvent être chargés directement par le runtime.
@@ -21,6 +25,12 @@ Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir l
   sont bridées.
 - Des DLL courantes sont intégrées : `user32`, `gdi32`, `advapi32`, `ole32`,
   `bcrypt`, `version`, `shell32`, `ws2_32`, `mfplat` et `winmm`.
+- L'impression passe par `winspool.drv` et `comdlg32` maison : les DC
+  imprimante GDI sont rendus en PDF et envoyés à CUPS par IPP (sans libcups),
+  ou enregistrés par l'imprimante virtuelle « Imprimer en PDF (Winlux) ».
+  Limites : pas de pilotes d'imprimante Windows ni de XPS, pas de
+  `PrintDlg` à crochets (`PD_ENABLEPRINTHOOK`), polices PDF standard
+  (Helvetica, Times, Courier) au lieu des polices TrueType de l'application.
 - Les contrats API-set COM, registre, RTL, sécurité, eventing et downlevel
   sont redirigés vers les backends correspondants. Cela ne complète pas leurs
   fonctions manquantes. `rpcrt4` fournit uniquement `UuidCreate` (UUID v4),
@@ -87,9 +97,15 @@ Le véritable ChatGPT Windows a été testé : il ne démarre pas encore. Voir l
   TSV; il ne reproduit ni les vues 32/64 bits ni les règles ACL du registre Windows.
 - Les DLL intégrées utilisent des fonctions Linux natives et ne dépendent pas
   de Wine ni de bibliothèques Windows existantes.
-- Les PE managés 32/64 bits (et l'apphost d'un .NET moderne, via son `.dll`
-  compagnon) sont exécutés par le CLR intégré (`runtime/src/clr`), sans runtime
-  .NET extérieur : interpréteur CIL, ramasse-miettes, exceptions .NET, appels
+- Une appli .NET autonome, qui livre son propre `coreclr.dll` à côté de son
+  apphost (Paint.NET par exemple), est lancée par son apphost natif. Celui-ci
+  charge ce runtime embarqué comme sous Windows, sans rien télécharger.
+  coreclr démarre, charge la bibliothèque de base et exécute du code managé,
+  mais Paint.NET ne s'ouvre pas encore : voir
+  [Paint.NET sur Winlux](docs/PAINTNET.md).
+- Les autres PE managés 32/64 bits (et l'apphost d'un .NET moderne sans runtime
+  embarqué, via son `.dll` compagnon) sont exécutés par le CLR intégré
+  (`runtime/src/clr`), sans runtime .NET extérieur : interpréteur CIL, ramasse-miettes, exceptions .NET, appels
   virtuels, BCL minimale (Console, Math, String, Environment, File, Path…) et
   P/Invoke vers les DLL intégrées. Limites actuelles : pas de WinForms/WPF, pas
   de génériques de la BCL (`List<T>`, `Dictionary`…), pas de délégués ni de
@@ -253,6 +269,8 @@ référence :
    et publier pour chacune les fonctions validées, les régressions et les
    limites connues. `paint.net` peut servir de cible de référence, sans être
    considéré comme compatible avant que ses scénarios réels passent ces tests.
+   L'état mesuré et l'ordre des travaux sont tenus dans
+   [Paint.NET sur Winlux](docs/PAINTNET.md).
 
 La stratégie d'implémentation du CLR et des couches de bureau reste à choisir
 sur la base des applications prioritaires et de prototypes mesurables. Le

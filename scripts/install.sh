@@ -173,12 +173,34 @@ if test "$split_root" = 1; then
     initrd_line='initrd /boot/winlux-initramfs.cpio.gz'
     printf '1\n' >"$work/target/boot/winlux-split-root"
 fi
+# Thème GRUB Winlux (copié depuis le système live) ; repli texte sinon.
+winlux_term=console
+if test -f /usr/share/winlux/grub-theme/theme.txt; then
+    sh "$root/scripts/winlux-grub-theme.sh" install /usr/share/winlux/grub-theme "$work/target/boot/grub/themes/winlux" && winlux_term=gfxterm
+fi
+# GRUB script has no && : the graphical theme block only exists when the
+# theme was copied, and is nested ifs otherwise.
+theme_block=
+if test "$winlux_term" = gfxterm; then
+    theme_block='if loadfont /boot/grub/themes/winlux/unicode.pf2; then
+    insmod all_video
+    insmod gfxterm
+    insmod png
+    set gfxmode=auto
+    if terminal_output gfxterm; then
+        set theme=/boot/grub/themes/winlux/theme.txt
+        set winlux_term=gfxterm
+    fi
+fi'
+fi
 cat >"$work/target/boot/grub/grub.cfg" <<EOF
 set default=0
 set timeout=8
+set winlux_term=console
+$theme_block
 serial --unit=0 --speed=115200
 terminal_input console serial
-terminal_output console serial
+terminal_output \$winlux_term serial
 menuentry "Winlux Desktop installé" {
     search --no-floppy --fs-uuid $fsuuid --set=root
     linux /boot/vmlinuz root=$root_argument rw rootwait rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 winlux.interactive=1

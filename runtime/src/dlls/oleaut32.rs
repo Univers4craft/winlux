@@ -288,16 +288,29 @@ fn element_size_for_vt(vt: u16) -> u32 {
     }
 }
 
+/// Taille maximale des données d'un SAFEARRAY (1 Gio).
+const MAX_SAFEARRAY_BYTES: usize = 1 << 30;
+
 pub unsafe extern "win64" fn safe_array_create(vt: u16, dims: u32, bounds_ptr: usize) -> usize {
-    if dims == 0 || bounds_ptr == 0 {
+    // `cDims` est un USHORT côté Windows ; le produit des dimensions est
+    // calculé sans débordement et plafonné à 1 Gio (échec = NULL, comme
+    // Windows en cas de mémoire insuffisante).
+    if dims == 0 || dims > 0xFFFF || bounds_ptr == 0 {
         return 0;
     }
     let bounds_slice =
         std::slice::from_raw_parts(bounds_ptr as *const SafeArrayBound, dims as usize);
     let bounds: Vec<SafeArrayBound> = bounds_slice.to_vec();
     let elem_size = element_size_for_vt(vt);
-    let total_elements: usize = bounds.iter().map(|b| b.elements as usize).product();
-    let data_size = total_elements * elem_size as usize;
+    let total_elements = bounds
+        .iter()
+        .try_fold(1usize, |acc, b| acc.checked_mul(b.elements as usize));
+    let Some(data_size) = total_elements
+        .and_then(|n| n.checked_mul(elem_size as usize))
+        .filter(|&n| n <= MAX_SAFEARRAY_BYTES)
+    else {
+        return 0;
+    };
     let data = vec![0u8; data_size];
 
     let inner = Box::new(SafeArrayInner {
@@ -319,7 +332,12 @@ pub unsafe extern "win64" fn safe_array_create_vector(vt: u16, lower: i32, count
         lower_bound: lower,
     };
     let elem_size = element_size_for_vt(vt);
-    let data_size = count as usize * elem_size as usize;
+    let Some(data_size) = (count as usize)
+        .checked_mul(elem_size as usize)
+        .filter(|&n| n <= MAX_SAFEARRAY_BYTES)
+    else {
+        return 0;
+    };
     let data = vec![0u8; data_size];
 
     let inner = Box::new(SafeArrayInner {
@@ -546,5 +564,21 @@ pub fn exports() -> crate::dlls::Exports {
         "GetErrorInfo" => fn get_error_info,
         "SetErrorInfo" => fn set_error_info,
         "CreateErrorInfo" => fn create_error_info,
+        // Ordinaux publics d'oleaut32 : l'apphost de Paint.NET et beaucoup
+        // de programmes Visual C++ importent BSTR et VARIANT par numéro.
+        "#2" => fn sys_alloc_string, "#3" => fn sys_realloc_string,
+        "#4" => fn sys_alloc_string_len, "#5" => fn sys_realloc_string_len,
+        "#6" => fn sys_free_string, "#7" => fn sys_string_len,
+        "#8" => fn variant_init, "#9" => fn variant_clear, "#10" => fn variant_copy,
+        "#12" => fn variant_change_type,
+        "#15" => fn safe_array_create, "#16" => fn safe_array_destroy,
+        "#17" => fn safe_array_get_dim, "#18" => fn safe_array_get_elem_size,
+        "#19" => fn safe_array_get_u_bound, "#20" => fn safe_array_get_l_bound,
+        "#23" => fn safe_array_access_data, "#24" => fn safe_array_unaccess_data,
+        "#25" => fn safe_array_get_element, "#26" => fn safe_array_put_element,
+        "#77" => fn safe_array_get_vartype,
+        "#149" => fn sys_string_byte_len, "#150" => fn sys_alloc_string_byte_len,
+        "#200" => fn get_error_info, "#201" => fn set_error_info, "#202" => fn create_error_info,
+        "#411" => fn safe_array_create_vector,
     }
 }

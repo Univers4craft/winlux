@@ -200,13 +200,17 @@ pub unsafe extern "win64" fn initterm_e(start: *const usize, end: *const usize) 
 
 // ---------- Fin de programme ----------
 
-fn atexit_list() -> &'static Mutex<Vec<usize>> {
-    static L: Mutex<Vec<usize>> = Mutex::new(Vec::new());
+/// Fonctions de fin de programme : (fonction, argument). `atexit` enregistre
+/// une fonction sans argument, `__cxa_atexit` (destructeurs d'objets
+/// statiques C++) une fonction et l'objet à détruire.
+fn atexit_list() -> &'static Mutex<Vec<(usize, usize)>> {
+    static L: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
     &L
 }
 
-/// Exécute les fonctions enregistrées par `atexit`/`_onexit`, la dernière
-/// enregistrée en premier, une seule fois.
+/// Exécute les fonctions enregistrées par `atexit`/`_onexit`/`__cxa_atexit`,
+/// la dernière enregistrée en premier, une seule fois. Une fonction
+/// enregistrée pendant l'exécution (par un destructeur) passe aussi.
 pub fn run_atexit() {
     loop {
         let next = atexit_list()
@@ -214,9 +218,11 @@ pub fn run_atexit() {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .pop();
         match next {
-            Some(f) => unsafe {
-                let f: extern "win64" fn() = std::mem::transmute(f);
-                f();
+            Some((f, arg)) => unsafe {
+                // Passer l'argument en RCX est sans effet pour une fonction
+                // `void (*)(void)` : un seul chemin pour les deux formes.
+                let f: extern "win64" fn(usize) = std::mem::transmute(f);
+                f(arg);
             },
             None => break,
         }
@@ -224,14 +230,26 @@ pub fn run_atexit() {
 }
 
 pub extern "win64" fn atexit(f: usize) -> i32 {
+    register_atexit(f, 0)
+}
+
+/// Enregistre `f(arg)` pour la fin du programme (`__cxa_atexit`).
+pub fn register_atexit(f: usize, arg: usize) -> i32 {
     if f == 0 {
         return -1;
     }
     atexit_list()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .push(f);
+        .push((f, arg));
     0
+}
+
+/// Fixe errno depuis le code Rust (sans passer par le pointeur `_errno`).
+pub fn set_errno_value(v: i32) {
+    unsafe {
+        *errno() = v;
+    }
 }
 pub extern "win64" fn onexit(f: usize) -> usize {
     if atexit(f) == 0 {
@@ -686,18 +704,6 @@ pub extern "win64" fn pctype_func() -> *const u16 {
 }
 
 // ---------- Gestion des exceptions C ----------
-
-/// Gestionnaire de langage des blocs `__try/__except`. Winlux ne distribue
-/// pas encore d'exceptions structurées vers le programme : il n'est donc
-/// appelé que par un futur dispatcher, et laisse chercher plus loin.
-pub extern "win64" fn c_specific_handler(
-    _rec: usize,
-    _frame: usize,
-    _ctx: usize,
-    _disp: usize,
-) -> i32 {
-    1
-}
 
 // ---------- Environnement ----------
 
@@ -1546,6 +1552,62 @@ pub unsafe extern "win64" fn beginthread(start: usize, stack: u32, arg: usize) -
     }
 }
 
+static NEW_MODE: std::sync::atomic::AtomicI32 = std::sync::atomic::AtomicI32::new(0);
+/// `_set_new_mode` : choisit si `malloc` appelle le gestionnaire `new` en cas
+/// d'échec. Winlux mémorise le mode et renvoie le précédent, comme l'UCRT.
+pub extern "win64" fn set_new_mode(mode: i32) -> i32 {
+    if !(0..=1).contains(&mode) {
+        *unsafe { &mut *errno() } = 22;
+        return -1;
+    }
+    NEW_MODE.swap(mode, std::sync::atomic::Ordering::SeqCst)
+}
+pub extern "win64" fn query_new_mode() -> i32 {
+    NEW_MODE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Saute le nom du programme et les blancs qui le suivent, selon les règles
+/// de la CRT pour `WinMain` : un nom entre guillemets va jusqu'au guillemet
+/// fermant, sinon jusqu'au premier espace ou tabulation.
+fn winmain_args_offset<T: Copy + Into<u32>>(line: &[T]) -> usize {
+    let c = |i: usize| line.get(i).map(|&v| v.into()).unwrap_or(0);
+    let mut i = 0;
+    let mut quoted = false;
+    while c(i) != 0 {
+        let ch = c(i);
+        if ch == u32::from(b'"') {
+            quoted = !quoted;
+        } else if !quoted && (ch == u32::from(b' ') || ch == u32::from(b'\t')) {
+            break;
+        }
+        i += 1;
+    }
+    while c(i) == u32::from(b' ') || c(i) == u32::from(b'\t') {
+        i += 1;
+    }
+    i
+}
+
+/// `_get_wide_winmain_command_line` : la ligne de commande sans le nom du
+/// programme, telle que la reçoit `wWinMain`.
+pub unsafe extern "win64" fn get_wide_winmain_command_line() -> *const u16 {
+    let line = crate::dlls::kernel32::get_command_line_w() as *const u16;
+    if line.is_null() {
+        static EMPTY: [u16; 1] = [0];
+        return EMPTY.as_ptr();
+    }
+    let len = crate::printf::wide_len(line);
+    line.add(winmain_args_offset(std::slice::from_raw_parts(line, len)))
+}
+pub unsafe extern "win64" fn get_narrow_winmain_command_line() -> *const u8 {
+    let line = crate::dlls::kernel32::get_command_line_a() as *const u8;
+    if line.is_null() {
+        return c"".as_ptr().cast();
+    }
+    let len = crate::printf::narrow_len(line);
+    line.add(winmain_args_offset(std::slice::from_raw_parts(line, len)))
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "__getmainargs" => fn getmainargs, "__wgetmainargs" => fn wgetmainargs,
@@ -1577,7 +1639,6 @@ pub fn exports() -> crate::dlls::Exports {
         "_configthreadlocale" => fn configthreadlocale, "_create_locale" => fn create_locale,
         "_free_locale" => fn free_locale, "_get_current_locale" => fn get_current_locale,
         "__pctype_func" => fn pctype_func,
-        "__C_specific_handler" => fn c_specific_handler,
         "getenv" => fn getenv, "_wgetenv" => fn wgetenv, "_putenv" => fn putenv, "_wputenv" => fn wputenv, "_putenv_s" => fn putenv_s,
         "time" => fn time64, "_time64" => fn time64, "_time32" => fn time32,
         "localtime" => fn localtime64, "_localtime64" => fn localtime64, "_localtime32" => fn localtime32,
@@ -1598,6 +1659,9 @@ pub fn exports() -> crate::dlls::Exports {
         "_unlink" => fn unlink, "_mkdir" => fn mkdir, "_rmdir" => fn rmdir, "_chdir" => fn chdir, "_getcwd" => fn getcwd,
         "_get_osfhandle" => fn get_osfhandle, "_getpid" => fn getpid,
         "_beginthreadex" => fn beginthreadex, "_beginthread" => fn beginthread,
+        "_set_new_mode" => fn set_new_mode, "_query_new_mode" => fn query_new_mode,
+        "_get_wide_winmain_command_line" => fn get_wide_winmain_command_line,
+        "_get_narrow_winmain_command_line" => fn get_narrow_winmain_command_line,
     }
 }
 
@@ -1614,6 +1678,58 @@ mod tests {
     }
     extern "win64" fn echec() -> i32 {
         7
+    }
+    static ATEXIT_CALLS: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+    extern "win64" fn fin_premier() {
+        ATEXIT_CALLS.lock().unwrap().push(1);
+    }
+    extern "win64" fn fin_second() {
+        ATEXIT_CALLS.lock().unwrap().push(2);
+    }
+    extern "win64" fn destructeur(obj: usize) {
+        ATEXIT_CALLS.lock().unwrap().push(obj as u32);
+    }
+
+    #[test]
+    fn atexit_et_cxa_atexit_executent_en_ordre_inverse() {
+        assert_eq!(atexit(fin_premier as *const () as usize), 0);
+        assert_eq!(
+            unsafe {
+                crate::dlls::libstdcpp::cxa_atexit(
+                    destructeur as *const () as *mut c_void,
+                    0x33 as *mut c_void,
+                    std::ptr::null_mut(),
+                )
+            },
+            0
+        );
+        assert_eq!(atexit(fin_second as *const () as usize), 0);
+        assert_eq!(atexit(0), -1);
+        run_atexit();
+        assert_eq!(*ATEXIT_CALLS.lock().unwrap(), vec![2, 0x33, 1]);
+        // Une seconde exécution ne rejoue rien.
+        run_atexit();
+        assert_eq!(ATEXIT_CALLS.lock().unwrap().len(), 3);
+    }
+
+    #[test]
+    fn ligne_de_commande_winmain_sans_le_programme() {
+        let w = |s: &str| s.encode_utf16().collect::<Vec<u16>>();
+        assert_eq!(
+            winmain_args_offset(&w("\"C:\\Program Files\\p.exe\"  /a b")),
+            26
+        );
+        assert_eq!(winmain_args_offset(b"p.exe\t-x".as_slice()), 6);
+        assert_eq!(winmain_args_offset(b"p.exe".as_slice()), 5);
+        assert_eq!(winmain_args_offset(b"".as_slice()), 0);
+    }
+
+    #[test]
+    fn mode_new_memorise_et_valide() {
+        let old = set_new_mode(1);
+        assert_eq!(query_new_mode(), 1);
+        assert_eq!(set_new_mode(5), -1);
+        assert_eq!(set_new_mode(old), 1);
     }
 
     #[test]

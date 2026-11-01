@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicU32, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, OnceLock};
+use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::{Mutex, OnceLock};
 
 // ---------- Constantes NTSTATUS ----------
 
@@ -15,6 +15,7 @@ const STATUS_INVALID_PARAMETER: i32 = 0xC000_000Du32 as i32;
 const STATUS_INVALID_HANDLE: i32 = 0xC000_0008u32 as i32;
 const STATUS_TIMEOUT: i32 = 0x0000_0102u32 as i32;
 const STATUS_BUFFER_TOO_SMALL: i32 = 0xC000_0023u32 as i32;
+const STATUS_INFO_LENGTH_MISMATCH: i32 = 0xC000_0004u32 as i32;
 const STATUS_ACCESS_DENIED: i32 = 0xC000_0022u32 as i32;
 const STATUS_OBJECT_NAME_NOT_FOUND: i32 = 0xC000_0034u32 as i32;
 const STATUS_OBJECT_NAME_COLLISION: i32 = 0xC000_0035u32 as i32;
@@ -552,350 +553,10 @@ pub extern "win64" fn rtl_decode_pointer(ptr: *mut c_void) -> *mut c_void {
 }
 
 // ============================================================
-//  SEH stubs (x64 table-based unwinding)
+//  SEH : voir seh.rs
 // ============================================================
 
-/// `RtlCaptureContext` : remplit un CONTEXT pour le thread courant.
-pub unsafe extern "win64" fn rtl_capture_context(ctx: *mut c_void) {
-    if ctx.is_null() {
-        return;
-    }
-    let c = ctx as *mut u8;
-    std::ptr::write_bytes(c, 0, 1232);
-    // CONTEXT_AMD64 | CONTEXT_FULL
-    std::ptr::write_unaligned(c as *mut u32, 0x0010_001F);
-    // Capture callee-saved registers.  The function uses win64 ABI so
-    // RCX held `ctx` on entry.  We cannot perfectly capture the caller's
-    // volatile registers, but the unwinder only needs RSP, RIP, and the
-    // callee-saved set (RBX, RBP, RSI, RDI, R12-R15).
-    std::arch::asm!(
-        // RBX
-        "mov [rcx + 0x90], rbx",
-        // RBP
-        "mov [rcx + 0xA0], rbp",
-        // RSI
-        "mov [rcx + 0xA8], rsi",
-        // RDI
-        "mov [rcx + 0xB0], rdi",
-        // R12
-        "mov [rcx + 0xD8], r12",
-        // R13
-        "mov [rcx + 0xE0], r13",
-        // R14
-        "mov [rcx + 0xE8], r14",
-        // R15
-        "mov [rcx + 0xF0], r15",
-        // RSP of caller = current RSP + 8 (return address)
-        "lea rax, [rsp + 8]",
-        "mov [rcx + 0x98], rax",
-        // RIP = return address
-        "mov rax, [rsp]",
-        "mov [rcx + 0xF8], rax",
-        in("rcx") c,
-        out("rax") _,
-        options(nostack, preserves_flags),
-    );
-}
-
-// ── CONTEXT register offsets ────────────────────────────────────────
-const CTX_RAX: usize = 0x78;
-const CTX_RCX: usize = 0x80;
-const CTX_RDX: usize = 0x88;
-const CTX_RBX: usize = 0x90;
-const CTX_RSP: usize = 0x98;
-const CTX_RBP: usize = 0xA0;
-const CTX_RSI: usize = 0xA8;
-const CTX_RDI: usize = 0xB0;
-const CTX_R8: usize = 0xB8;
-const CTX_R9: usize = 0xC0;
-const CTX_R10: usize = 0xC8;
-const CTX_R11: usize = 0xD0;
-const CTX_R12: usize = 0xD8;
-const CTX_R13: usize = 0xE0;
-const CTX_R14: usize = 0xE8;
-const CTX_R15: usize = 0xF0;
-const CTX_RIP: usize = 0xF8;
-
-#[allow(dead_code)]
-const REG_OFFSETS: [usize; 16] = [
-    CTX_RAX, CTX_RCX, CTX_RDX, CTX_RBX, CTX_RSP, CTX_RBP, CTX_RSI, CTX_RDI, CTX_R8, CTX_R9,
-    CTX_R10, CTX_R11, CTX_R12, CTX_R13, CTX_R14, CTX_R15,
-];
-
-unsafe fn ctx_get(c: *const u8, off: usize) -> u64 {
-    (c.add(off) as *const u64).read_unaligned()
-}
-unsafe fn ctx_set(c: *mut u8, off: usize, v: u64) {
-    (c.add(off) as *mut u64).write_unaligned(v);
-}
-
-/// `RtlLookupFunctionEntry` : cherche dans .pdata du module contenant `pc`.
-pub unsafe extern "win64" fn rtl_lookup_function_entry(
-    pc: u64,
-    image_base: *mut u64,
-    _history: *mut c_void,
-) -> *mut c_void {
-    let addr = pc as usize;
-    let modules = crate::loader::MODULES.lock().unwrap();
-    for module in modules.iter() {
-        if !module.contains(addr) {
-            continue;
-        }
-        let base = module.base;
-        let rva = (addr - base) as u32;
-        // Data directory index 3 = exception table (.pdata)
-        let exc_dir = match module.pe.dirs.get(3) {
-            Some(d) if d.rva != 0 && d.size >= 12 => d,
-            _ => return std::ptr::null_mut(),
-        };
-        let count = (exc_dir.size / 12) as usize;
-        let table = base + exc_dir.rva as usize;
-        // Binary search over RUNTIME_FUNCTION (begin, end, unwind_info – 3×u32)
-        let mut lo = 0usize;
-        let mut hi = count;
-        while lo < hi {
-            let mid = lo + (hi - lo) / 2;
-            let entry = table + mid * 12;
-            let begin = (entry as *const u32).read_unaligned();
-            let end = ((entry + 4) as *const u32).read_unaligned();
-            if rva < begin {
-                hi = mid;
-            } else if rva >= end {
-                lo = mid + 1;
-            } else {
-                if !image_base.is_null() {
-                    *image_base = base as u64;
-                }
-                return entry as *mut c_void;
-            }
-        }
-        return std::ptr::null_mut();
-    }
-    std::ptr::null_mut()
-}
-
-// UNW_FLAG constants
-const UNW_FLAG_EHANDLER: u8 = 1;
-const UNW_FLAG_UHANDLER: u8 = 2;
-const UNW_FLAG_CHAININFO: u8 = 4;
-
-/// `RtlVirtualUnwind` : déroulement SEH basé sur .xdata.
-pub unsafe extern "win64" fn rtl_virtual_unwind(
-    handler_type: u32,
-    base: u64,
-    pc: u64,
-    entry: *const c_void,
-    ctx: *mut c_void,
-    handler_data: *mut *mut c_void,
-    establisher_frame: *mut u64,
-    _ctx_pointers: *mut c_void,
-) -> *mut c_void {
-    let base = base as usize;
-    let c = ctx as *mut u8;
-
-    // Read RUNTIME_FUNCTION
-    let rf = entry as *const u32;
-    let fn_begin = rf.read_unaligned() as usize;
-    let unwind_rva = rf.add(2).read_unaligned() as usize;
-    let ui = (base + unwind_rva) as *const u8;
-
-    let version_flags = ui.read();
-    let _version = version_flags & 0x7;
-    let flags = version_flags >> 3;
-    let prolog_size = ui.add(1).read();
-    let code_count = ui.add(2).read() as usize;
-    let frame_reg_off = ui.add(3).read();
-    let frame_reg = (frame_reg_off & 0xF) as usize;
-    let frame_off = ((frame_reg_off >> 4) as usize) * 16;
-
-    let codes_ptr = ui.add(4);
-    let pc_offset = (pc as usize).saturating_sub(base + fn_begin) as u32;
-
-    // Apply unwind codes to restore the caller's context
-    let mut i = 0usize;
-    while i < code_count {
-        let slot = codes_ptr.add(i * 2);
-        let offset_in_prolog = slot.read();
-        let op_info = slot.add(1).read();
-        let op = op_info & 0xF;
-        let info = (op_info >> 4) as usize;
-
-        // Skip unwind codes for instructions we haven't reached yet
-        if pc_offset <= prolog_size as u32 && (offset_in_prolog as u32) > pc_offset {
-            // Skip this code (and any extra slots it uses)
-            i += 1 + unwind_code_extra_slots(op, info);
-            continue;
-        }
-
-        match op {
-            0 => {
-                // UWOP_PUSH_NONVOL: register was pushed
-                let rsp = ctx_get(c, CTX_RSP);
-                let val = (rsp as *const u64).read_unaligned();
-                if info < 16 {
-                    ctx_set(c, REG_OFFSETS[info], val);
-                }
-                ctx_set(c, CTX_RSP, rsp + 8);
-                i += 1;
-            }
-            1 => {
-                // UWOP_ALLOC_LARGE
-                let rsp = ctx_get(c, CTX_RSP);
-                if info == 0 {
-                    let size =
-                        (codes_ptr.add((i + 1) * 2) as *const u16).read_unaligned() as u64 * 8;
-                    ctx_set(c, CTX_RSP, rsp + size);
-                    i += 2;
-                } else {
-                    let lo = (codes_ptr.add((i + 1) * 2) as *const u16).read_unaligned() as u64;
-                    let hi = (codes_ptr.add((i + 2) * 2) as *const u16).read_unaligned() as u64;
-                    let size = lo | (hi << 16);
-                    ctx_set(c, CTX_RSP, rsp + size);
-                    i += 3;
-                }
-            }
-            2 => {
-                // UWOP_ALLOC_SMALL
-                let rsp = ctx_get(c, CTX_RSP);
-                ctx_set(c, CTX_RSP, rsp + (info as u64 + 1) * 8);
-                i += 1;
-            }
-            3 => {
-                // UWOP_SET_FPREG: RSP = frame_register - frame_offset
-                // (during unwinding this is reversed)
-                if frame_reg > 0 && frame_reg < 16 {
-                    let fp_val = ctx_get(c, REG_OFFSETS[frame_reg]);
-                    ctx_set(c, CTX_RSP, fp_val.wrapping_sub(frame_off as u64));
-                }
-                i += 1;
-            }
-            4 => {
-                // UWOP_SAVE_NONVOL: register saved at RSP + offset*8
-                let off = (codes_ptr.add((i + 1) * 2) as *const u16).read_unaligned() as u64 * 8;
-                let rsp = ctx_get(c, CTX_RSP);
-                if info < 16 {
-                    let val = ((rsp + off) as *const u64).read_unaligned();
-                    ctx_set(c, REG_OFFSETS[info], val);
-                }
-                i += 2;
-            }
-            5 => {
-                // UWOP_SAVE_NONVOL_FAR: register saved at RSP + 32-bit offset
-                let lo = (codes_ptr.add((i + 1) * 2) as *const u16).read_unaligned() as u64;
-                let hi = (codes_ptr.add((i + 2) * 2) as *const u16).read_unaligned() as u64;
-                let off = lo | (hi << 16);
-                let rsp = ctx_get(c, CTX_RSP);
-                if info < 16 {
-                    let val = ((rsp + off) as *const u64).read_unaligned();
-                    ctx_set(c, REG_OFFSETS[info], val);
-                }
-                i += 3;
-            }
-            6 => {
-                // UWOP_SAVE_XMM128: skip (we don't track XMM in CONTEXT)
-                i += 2;
-            }
-            7 => {
-                // UWOP_SAVE_XMM128_FAR: skip
-                i += 3;
-            }
-            8 => {
-                // UWOP_PUSH_MACHFRAME
-                let rsp = ctx_get(c, CTX_RSP);
-                let base_off = if info == 1 { 8u64 } else { 0u64 }; // error code
-                let new_rip = ((rsp + base_off) as *const u64).read_unaligned();
-                let new_rsp = ((rsp + base_off + 24) as *const u64).read_unaligned();
-                ctx_set(c, CTX_RIP, new_rip);
-                ctx_set(c, CTX_RSP, new_rsp);
-                i += 1;
-            }
-            _ => {
-                i += 1;
-            }
-        }
-    }
-
-    // Handle chained unwind info
-    if flags & UNW_FLAG_CHAININFO != 0 {
-        // After the unwind codes (aligned to even count), there's another RUNTIME_FUNCTION
-        let aligned_count = (code_count + 1) & !1;
-        let chain = codes_ptr.add(aligned_count * 2) as *const c_void;
-        return rtl_virtual_unwind(
-            handler_type,
-            base as u64,
-            pc,
-            chain,
-            ctx,
-            handler_data,
-            establisher_frame,
-            _ctx_pointers,
-        );
-    }
-
-    // After unwinding codes, RSP should point to the return address.
-    // Pop it into RIP.
-    let rsp = ctx_get(c, CTX_RSP);
-    let ret_addr = (rsp as *const u64).read_unaligned();
-    ctx_set(c, CTX_RIP, ret_addr);
-    ctx_set(c, CTX_RSP, rsp + 8);
-
-    if !establisher_frame.is_null() {
-        *establisher_frame = ctx_get(c, CTX_RSP);
-    }
-
-    // Check if this function has an exception/unwind handler
-    let want_ehandler = handler_type & (UNW_FLAG_EHANDLER as u32) != 0;
-    let want_uhandler = handler_type & (UNW_FLAG_UHANDLER as u32) != 0;
-    let has_ehandler = flags & UNW_FLAG_EHANDLER != 0;
-    let has_uhandler = flags & UNW_FLAG_UHANDLER != 0;
-
-    if (want_ehandler && has_ehandler) || (want_uhandler && has_uhandler) {
-        // Handler RVA is after the unwind codes, aligned to 4-byte boundary
-        let aligned_count = (code_count + 1) & !1;
-        let handler_rva_ptr = codes_ptr.add(aligned_count * 2) as *const u32;
-        let handler_rva = handler_rva_ptr.read_unaligned() as usize;
-        let handler_addr = base + handler_rva;
-        // Language-specific data follows the handler RVA
-        if !handler_data.is_null() {
-            *handler_data = handler_rva_ptr.add(1) as *mut c_void;
-        }
-        return handler_addr as *mut c_void;
-    }
-
-    if !handler_data.is_null() {
-        *handler_data = std::ptr::null_mut();
-    }
-    std::ptr::null_mut()
-}
-
-fn unwind_code_extra_slots(op: u8, info: usize) -> usize {
-    match op {
-        0 | 2 | 3 | 8 => 0,
-        1 => {
-            if info == 0 {
-                1
-            } else {
-                2
-            }
-        }
-        4 | 6 => 1,
-        5 | 7 => 2,
-        _ => 0,
-    }
-}
-
-/// `RtlUnwindEx` : stub.
-pub unsafe extern "win64" fn rtl_unwind_ex(
-    _target_frame: *mut c_void,
-    _target_ip: *mut c_void,
-    _exception_record: *mut c_void,
-    _return_value: *mut c_void,
-    _ctx: *mut c_void,
-    _history: *mut c_void,
-) {
-    // Les programmes qui arrivent ici sans SEH réel vont probablement planter,
-    // mais c'est le mieux qu'on puisse faire sans déroulement complet.
-}
+pub use super::seh::{rtl_capture_context, rtl_lookup_function_entry, rtl_virtual_unwind};
 
 /// `RtlPcToFileHeader` : trouve le module contenant l'adresse.
 pub unsafe extern "win64" fn rtl_pc_to_file_header(
@@ -914,40 +575,6 @@ pub unsafe extern "win64" fn rtl_pc_to_file_header(
     }
     *base = std::ptr::null();
     std::ptr::null()
-}
-
-// ============================================================
-//  Vectored Exception Handlers
-// ============================================================
-
-static VEH_HANDLERS: OnceLock<Mutex<Vec<(usize, usize)>>> = OnceLock::new();
-static NEXT_VEH: AtomicUsize = AtomicUsize::new(0x7E00_0001);
-
-pub unsafe extern "win64" fn rtl_add_vectored_exception_handler(
-    first: u32,
-    handler: usize,
-) -> usize {
-    if handler == 0 {
-        return 0;
-    }
-    let id = NEXT_VEH.fetch_add(1, Ordering::Relaxed);
-    let mut list = lock(VEH_HANDLERS.get_or_init(|| Mutex::new(Vec::new())));
-    if first != 0 {
-        list.insert(0, (id, handler));
-    } else {
-        list.push((id, handler));
-    }
-    id
-}
-
-pub unsafe extern "win64" fn rtl_remove_vectored_exception_handler(handle: usize) -> u32 {
-    let mut list = lock(VEH_HANDLERS.get_or_init(|| Mutex::new(Vec::new())));
-    if let Some(i) = list.iter().position(|&(id, _)| id == handle) {
-        list.remove(i);
-        1
-    } else {
-        0
-    }
 }
 
 // ============================================================
@@ -1070,132 +697,71 @@ unsafe fn slist_depth(head: *const u8) -> u16 {
 // ============================================================
 //  SRW Locks (Slim Reader/Writer Locks)
 // ============================================================
-
-/// On utilise une table globale indexée par l'adresse du SRWLOCK guest.
-/// Le SRWLOCK Windows est un seul pointeur (8 octets sur x64). On ne touche
-/// pas à la mémoire guest sauf pour écrire 0 (init) ou un marqueur.
-/// SRW Lock implémenté via pthread_rwlock (stable, pas de force_unlock).
-/// Chaque adresse SRW lock Win32 est associée à un pthread_rwlock_t alloué en heap.
-struct SrwState {
-    rwlock: *mut libc::pthread_rwlock_t,
-}
-
-unsafe impl Send for SrwState {}
-unsafe impl Sync for SrwState {}
-
-impl Drop for SrwState {
-    fn drop(&mut self) {
-        unsafe {
-            libc::pthread_rwlock_destroy(self.rwlock);
-            let layout = std::alloc::Layout::new::<libc::pthread_rwlock_t>();
-            std::alloc::dealloc(self.rwlock as *mut u8, layout);
-        }
-    }
-}
-
-impl SrwState {
-    fn new() -> Self {
-        unsafe {
-            let layout = std::alloc::Layout::new::<libc::pthread_rwlock_t>();
-            let ptr = std::alloc::alloc_zeroed(layout) as *mut libc::pthread_rwlock_t;
-            libc::pthread_rwlock_init(ptr, std::ptr::null());
-            SrwState { rwlock: ptr }
-        }
-    }
-}
-
-static SRW_TABLE: OnceLock<Mutex<HashMap<usize, Arc<SrwState>>>> = OnceLock::new();
-
-fn srw_get_or_init(addr: usize) -> Arc<SrwState> {
-    let mut table = lock(SRW_TABLE.get_or_init(|| Mutex::new(HashMap::new())));
-    table
-        .entry(addr)
-        .or_insert_with(|| Arc::new(SrwState::new()))
-        .clone()
-}
+//
+// Un seul état pour kernel32 et ntdll : les Rtl* délèguent à
+// l'implémentation de kernel32 (attente bloquante, table indexée par
+// l'adresse du SRWLOCK). Un programme qui mélange AcquireSRWLockExclusive et
+// RtlReleaseSRWLockExclusive voit donc le même verrou.
 
 pub unsafe extern "win64" fn rtl_initialize_srw_lock(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    *lock_ptr = 0;
-    srw_get_or_init(lock_ptr as usize);
+    super::kernel32::initialize_srw_lock(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_acquire_srw_lock_exclusive(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_wrlock(s.rwlock);
+    super::kernel32::acquire_srw_lock_exclusive(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_release_srw_lock_exclusive(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_unlock(s.rwlock);
+    super::kernel32::release_srw_lock_exclusive(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_acquire_srw_lock_shared(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_rdlock(s.rwlock);
+    super::kernel32::acquire_srw_lock_shared(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_release_srw_lock_shared(lock_ptr: *mut usize) {
     if lock_ptr.is_null() {
         return;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    libc::pthread_rwlock_unlock(s.rwlock);
+    super::kernel32::release_srw_lock_shared(lock_ptr as usize);
 }
 
 pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_exclusive(lock_ptr: *mut usize) -> u8 {
     if lock_ptr.is_null() {
         return 0;
     }
-    let s = srw_get_or_init(lock_ptr as usize);
-    if libc::pthread_rwlock_trywrlock(s.rwlock) == 0 {
-        1
-    } else {
-        0
+    super::kernel32::try_acquire_srw_lock_exclusive(lock_ptr as usize)
+}
+
+pub unsafe extern "win64" fn rtl_try_acquire_srw_lock_shared(lock_ptr: *mut usize) -> u8 {
+    if lock_ptr.is_null() {
+        return 0;
     }
+    super::kernel32::try_acquire_srw_lock_shared(lock_ptr as usize)
 }
 
 // ============================================================
 //  Condition Variables
 // ============================================================
-
-struct CondState {
-    condvar: Condvar,
-    mutex: Mutex<()>,
-}
-
-static COND_TABLE: OnceLock<Mutex<HashMap<usize, Arc<CondState>>>> = OnceLock::new();
-
-fn cond_get_or_init(addr: usize) -> Arc<CondState> {
-    let mut table = lock(COND_TABLE.get_or_init(|| Mutex::new(HashMap::new())));
-    table
-        .entry(addr)
-        .or_insert_with(|| {
-            Arc::new(CondState {
-                condvar: Condvar::new(),
-                mutex: Mutex::new(()),
-            })
-        })
-        .clone()
-}
+// Même table que kernel32 (InitializeConditionVariable & co.).
 
 pub unsafe extern "win64" fn rtl_initialize_condition_variable(cv: *mut usize) {
     if cv.is_null() {
         return;
     }
-    *cv = 0;
-    cond_get_or_init(cv as usize);
+    super::kernel32::initialize_condition_variable(cv as usize);
 }
 
 /// `RtlSleepConditionVariableSRW` : attend la condition en relâchant le SRW lock.
@@ -1203,54 +769,73 @@ pub unsafe extern "win64" fn rtl_sleep_condition_variable_srw(
     cv: *mut usize,
     srw: *mut usize,
     timeout: u32,
-    _flags: u32,
+    flags: u32,
 ) -> i32 {
     if cv.is_null() || srw.is_null() {
         return STATUS_INVALID_PARAMETER;
     }
-    // Relâcher le SRW lock (exclusif par défaut).
-    rtl_release_srw_lock_exclusive(srw);
-    let c = cond_get_or_init(cv as usize);
-    let guard = lock(&c.mutex);
-    let result = if timeout == u32::MAX {
-        let _guard = c.condvar.wait(guard).unwrap_or_else(|e| e.into_inner());
-        STATUS_SUCCESS
-    } else {
-        match c
-            .condvar
-            .wait_timeout(guard, std::time::Duration::from_millis(timeout as u64))
-        {
-            Ok((_, result)) => {
-                if result.timed_out() {
-                    STATUS_TIMEOUT
-                } else {
-                    STATUS_SUCCESS
-                }
+    let shared = flags & 1 != 0;
+    let srw = srw as usize;
+    let timed_out = super::kernel32::condvar_sleep(
+        cv as usize,
+        timeout,
+        || {
+            if shared {
+                super::kernel32::release_srw_lock_shared(srw)
+            } else {
+                super::kernel32::release_srw_lock_exclusive(srw)
             }
-            Err(_) => STATUS_SUCCESS,
-        }
-    };
-    // Reprendre le SRW lock.
-    rtl_acquire_srw_lock_exclusive(srw);
-    result
+        },
+        || {
+            if shared {
+                super::kernel32::acquire_srw_lock_shared(srw)
+            } else {
+                super::kernel32::acquire_srw_lock_exclusive(srw)
+            }
+        },
+    );
+    if timed_out {
+        STATUS_TIMEOUT
+    } else {
+        STATUS_SUCCESS
+    }
+}
+
+/// `RtlSleepConditionVariableCS` : même chose avec une section critique.
+pub unsafe extern "win64" fn rtl_sleep_condition_variable_cs(
+    cv: *mut usize,
+    cs: *mut c_void,
+    timeout: u32,
+) -> i32 {
+    if cv.is_null() || cs.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    let timed_out = super::kernel32::condvar_sleep(
+        cv as usize,
+        timeout,
+        || super::kernel32::leave_critical_section(cs),
+        || super::kernel32::enter_critical_section(cs),
+    );
+    if timed_out {
+        STATUS_TIMEOUT
+    } else {
+        STATUS_SUCCESS
+    }
 }
 
 pub unsafe extern "win64" fn rtl_wake_condition_variable(cv: *mut usize) {
     if cv.is_null() {
         return;
     }
-    let c = cond_get_or_init(cv as usize);
-    c.condvar.notify_one();
+    super::kernel32::wake_condition_variable(cv as usize);
 }
 
 pub unsafe extern "win64" fn rtl_wake_all_condition_variable(cv: *mut usize) {
     if cv.is_null() {
         return;
     }
-    let c = cond_get_or_init(cv as usize);
-    c.condvar.notify_all();
+    super::kernel32::wake_all_condition_variable(cv as usize);
 }
-
 // ============================================================
 //  Fiber Local Storage (FLS)
 // ============================================================
@@ -1729,29 +1314,114 @@ pub unsafe extern "win64" fn nt_set_information_thread(
     STATUS_SUCCESS // Silently succeed
 }
 
-/// `NtQuerySystemInformation` : stub.
+/// Copie `bytes` dans le tampon de sortie d'une requête Nt* : taille
+/// requise dans `return_length`, STATUS_INFO_LENGTH_MISMATCH si trop petit.
+unsafe fn write_info(info: *mut c_void, length: u32, return_length: *mut u32, bytes: &[u8]) -> i32 {
+    if !return_length.is_null() {
+        *return_length = bytes.len() as u32;
+    }
+    if (length as usize) < bytes.len() {
+        return STATUS_INFO_LENGTH_MISMATCH;
+    }
+    if info.is_null() {
+        return STATUS_INVALID_PARAMETER;
+    }
+    std::ptr::copy_nonoverlapping(bytes.as_ptr(), info as *mut u8, bytes.len());
+    STATUS_SUCCESS
+}
+
+/// `NtQuerySystemInformation` : SystemBasicInformation (0),
+/// SystemProcessorInformation (1), SystemTimeOfDayInformation (3) et
+/// SystemProcessorPerformanceInformation (8), avec les dispositions publiques
+/// de winternl.h.
 pub unsafe extern "win64" fn nt_query_system_information(
     info_class: u32,
     info: *mut c_void,
     length: u32,
     return_length: *mut u32,
 ) -> i32 {
+    let cpus = std::thread::available_parallelism().map_or(1, |n| n.get());
     match info_class {
         0 => {
-            // SystemBasicInformation : taille de page et nombre de processeurs.
-            if length < 44 {
-                return STATUS_BUFFER_TOO_SMALL;
+            // SYSTEM_BASIC_INFORMATION (64 octets).
+            let mut sys: crate::dlls::kernel32::SystemInfo = std::mem::zeroed();
+            crate::dlls::kernel32::get_system_info(&mut sys);
+            let pages = libc::sysconf(libc::_SC_PHYS_PAGES).max(0) as u32;
+            let mut b = Vec::with_capacity(64);
+            b.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+            b.extend_from_slice(&156_250u32.to_le_bytes()); // TimerResolution (15,625 ms)
+            b.extend_from_slice(&4096u32.to_le_bytes()); // PageSize
+            b.extend_from_slice(&pages.to_le_bytes()); // NumberOfPhysicalPages
+            b.extend_from_slice(&0u32.to_le_bytes()); // LowestPhysicalPageNumber
+            b.extend_from_slice(&pages.to_le_bytes()); // HighestPhysicalPageNumber
+            b.extend_from_slice(&65536u32.to_le_bytes()); // AllocationGranularity
+            b.extend_from_slice(&(sys.minimum_application_address as u64).to_le_bytes());
+            b.extend_from_slice(&(sys.maximum_application_address as u64).to_le_bytes());
+            b.extend_from_slice(&(sys.active_processor_mask as u64).to_le_bytes());
+            b.push(cpus.min(255) as u8); // NumberOfProcessors
+            b.resize(64, 0);
+            write_info(info, length, return_length, &b)
+        }
+        1 => {
+            // SYSTEM_PROCESSOR_INFORMATION (12 octets) : AMD64, niveau 6.
+            let mut b = Vec::with_capacity(12);
+            b.extend_from_slice(&9u16.to_le_bytes()); // PROCESSOR_ARCHITECTURE_AMD64
+            b.extend_from_slice(&6u16.to_le_bytes()); // ProcessorLevel
+            b.extend_from_slice(&0u16.to_le_bytes()); // ProcessorRevision
+            b.extend_from_slice(&(cpus.min(u16::MAX as usize) as u16).to_le_bytes());
+            b.extend_from_slice(&0u32.to_le_bytes()); // ProcessorFeatureBits
+            write_info(info, length, return_length, &b)
+        }
+        3 => {
+            // SYSTEM_TIMEOFDAY_INFORMATION (48 octets) : démarrage, heure,
+            // biais de fuseau en unités de 100 ns.
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |d| (d.as_nanos() / 100) as i64)
+                + crate::intl::tz::FILETIME_UNIX_EPOCH;
+            let uptime = crate::dlls::kernel32::get_tick_count64() as i64 * 10_000;
+            let boot = now - uptime;
+            let mut b = Vec::with_capacity(48);
+            b.extend_from_slice(&boot.to_le_bytes()); // BootTime
+            b.extend_from_slice(&now.to_le_bytes()); // CurrentTime
+            b.extend_from_slice(&0i64.to_le_bytes()); // TimeZoneBias
+            b.extend_from_slice(&0u32.to_le_bytes()); // TimeZoneId
+            b.extend_from_slice(&0u32.to_le_bytes()); // Reserved
+            b.extend_from_slice(&0u64.to_le_bytes()); // BootTimeBias
+            b.extend_from_slice(&0u64.to_le_bytes()); // SleepTimeBias
+            write_info(info, length, return_length, &b)
+        }
+        8 => {
+            // SYSTEM_PROCESSOR_PERFORMANCE_INFORMATION : 48 octets par
+            // processeur, temps en unités de 100 ns depuis /proc/stat.
+            let stat = std::fs::read_to_string("/proc/stat").unwrap_or_default();
+            let hz = libc::sysconf(libc::_SC_CLK_TCK).max(1) as i64;
+            let mut b = Vec::with_capacity(48 * cpus);
+            for i in 0..cpus {
+                let prefix = format!("cpu{i} ");
+                let fields: Vec<i64> = stat
+                    .lines()
+                    .find(|l| l.starts_with(&prefix))
+                    .map(|l| {
+                        l.split_whitespace()
+                            .skip(1)
+                            .filter_map(|f| f.parse().ok())
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                let get = |k: usize| fields.get(k).copied().unwrap_or(0) * 10_000_000 / hz;
+                let (user, nice, system, idle, irq, softirq) =
+                    (get(0), get(1), get(2), get(3), get(5), get(6));
+                // Comme sous Windows, KernelTime inclut IdleTime.
+                b.extend_from_slice(&idle.to_le_bytes()); // IdleTime
+                b.extend_from_slice(&(system + idle + irq + softirq).to_le_bytes()); // KernelTime
+                b.extend_from_slice(&(user + nice).to_le_bytes()); // UserTime
+                b.extend_from_slice(&softirq.to_le_bytes()); // DpcTime
+                b.extend_from_slice(&irq.to_le_bytes()); // InterruptTime
+                b.extend_from_slice(&0u32.to_le_bytes()); // InterruptCount
+                b.extend_from_slice(&0u32.to_le_bytes()); // remplissage
             }
-            if info.is_null() {
-                return STATUS_INVALID_PARAMETER;
-            }
-            std::ptr::write_bytes(info as *mut u8, 0, 44);
-            // PageSize à offset 0 (pour certains layouts)
-            std::ptr::write_unaligned(info as *mut u32, 4096);
-            if !return_length.is_null() {
-                *return_length = 44;
-            }
-            STATUS_SUCCESS
+            write_info(info, length, return_length, &b)
         }
         _ => {
             if !return_length.is_null() {
@@ -2248,14 +1918,8 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlEncodePointer" => fn rtl_encode_pointer,
         "RtlDecodePointer" => fn rtl_decode_pointer,
         // --- Rtl : SEH ---
-        "RtlCaptureContext" => fn rtl_capture_context,
-        "RtlLookupFunctionEntry" => fn rtl_lookup_function_entry,
-        "RtlVirtualUnwind" => fn rtl_virtual_unwind,
-        "RtlUnwindEx" => fn rtl_unwind_ex,
         "RtlPcToFileHeader" => fn rtl_pc_to_file_header,
         // --- Rtl : VEH ---
-        "RtlAddVectoredExceptionHandler" => fn rtl_add_vectored_exception_handler,
-        "RtlRemoveVectoredExceptionHandler" => fn rtl_remove_vectored_exception_handler,
         // --- Rtl : performance counter ---
         "RtlQueryPerformanceCounter" => fn rtl_query_performance_counter,
         "RtlQueryPerformanceFrequency" => fn rtl_query_performance_frequency,
@@ -2272,9 +1936,11 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlAcquireSRWLockShared" => fn rtl_acquire_srw_lock_shared,
         "RtlReleaseSRWLockShared" => fn rtl_release_srw_lock_shared,
         "RtlTryAcquireSRWLockExclusive" => fn rtl_try_acquire_srw_lock_exclusive,
+        "RtlTryAcquireSRWLockShared" => fn rtl_try_acquire_srw_lock_shared,
         // --- Rtl : Condition Variables ---
         "RtlInitializeConditionVariable" => fn rtl_initialize_condition_variable,
         "RtlSleepConditionVariableSRW" => fn rtl_sleep_condition_variable_srw,
+        "RtlSleepConditionVariableCS" => fn rtl_sleep_condition_variable_cs,
         "RtlWakeConditionVariable" => fn rtl_wake_condition_variable,
         "RtlWakeAllConditionVariable" => fn rtl_wake_all_condition_variable,
         // --- Rtl : FLS ---

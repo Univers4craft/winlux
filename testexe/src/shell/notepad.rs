@@ -211,6 +211,68 @@ fn delete_sel(d: &mut Doc) {
     rebuild_lines(d);
 }
 
+/// Insère un bloc de texte en une fois (collage).
+fn insert_bytes(d: &mut Doc, bytes: &[u8]) {
+    delete_sel(d);
+    let room = (MAX_TEXT - 1).saturating_sub(d.len);
+    let mut clean = [0u8; 4096];
+    let mut n = 0;
+    for &c in bytes {
+        if n == clean.len() || n == room {
+            break;
+        }
+        if c == b'\r' {
+            continue;
+        }
+        clean[n] = c;
+        n += 1;
+    }
+    if n == 0 {
+        return;
+    }
+    d.text.copy_within(d.cursor..d.len, d.cursor + n);
+    d.text[d.cursor..d.cursor + n].copy_from_slice(&clean[..n]);
+    d.len += n;
+    d.cursor += n;
+    d.anchor = d.cursor;
+    d.modified = true;
+    rebuild_lines(d);
+}
+
+unsafe fn copy_selection(cut: bool) {
+    let d = doc();
+    if !has_sel(d) {
+        return;
+    }
+    let (a, b) = sel_range(d);
+    let mut buf = [0u8; 8192];
+    let mut n = 0;
+    for &c in &d.text[a..b] {
+        // Fins de ligne Windows dans le presse-papiers.
+        if c == b'\n' && n + 2 <= buf.len() {
+            buf[n] = b'\r';
+            buf[n + 1] = b'\n';
+            n += 2;
+        } else if n < buf.len() {
+            buf[n] = c;
+            n += 1;
+        }
+    }
+    crate::cliphist::set_text(&buf[..n]);
+    if cut {
+        delete_sel(d);
+    }
+}
+
+/// Colle le texte du presse-papiers au curseur (Ctrl+V et historique Win+V).
+pub unsafe fn paste_from_clipboard() {
+    let mut buf = [0u8; 4096];
+    let n = crate::cliphist::get_text(&mut buf);
+    if n > 0 {
+        insert_bytes(doc(), &buf[..n]);
+    }
+}
+
 fn insert_char(d: &mut Doc, c: u8) {
     delete_sel(d);
     if d.len >= MAX_TEXT - 1 {
@@ -300,7 +362,12 @@ pub unsafe fn open_new() {
     let idx = ST.tab_count;
     ST.tabs[idx] = Doc::new();
     ST.counter += 1;
-    let prefix = b"Sans titre ";
+    let prefix = tr4(&[
+        b"Sans titre ",
+        b"Untitled ",
+        b"Sin t\xEDtulo ",
+        b"Unbenannt ",
+    ]);
     let mut n = 0;
     while n < prefix.len() && n < MAX_NAME {
         ST.tabs[idx].name[n] = prefix[n];
@@ -387,7 +454,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     // === Menu bar ===
     let my = r.top;
     fill(g.hdc, g.b, r.left, my, r.right, my + MENU_H, p.surface);
-    let menus: [&[u8]; 4] = [b"Fichier", b"\xC9\x64ition", b"Affichage", b"Aide"];
+    let menus: [&[u8]; 4] = [
+        tr4(&[b"Fichier", b"File", b"Archivo", b"Datei"]),
+        tr4(&[b"\xC9dition", b"Edit", b"Edici\xF3n", b"Bearbeiten"]),
+        tr4(&[b"Affichage", b"View", b"Ver", b"Ansicht"]),
+        tr4(&[b"Aide", b"Help", b"Ayuda", b"Hilfe"]),
+    ];
     let mut mx = r.left + 8;
     for item in &menus {
         text(g.hdc, g.f.small, p.text2, mx, my + 6, *item);
@@ -418,7 +490,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
             p.text2,
             r.left + 8,
             find_y + 9,
-            b"Chercher:",
+            tr4(&[b"Chercher:", b"Find:", b"Buscar:", b"Suchen:"]),
         );
         text(
             g.hdc,
@@ -467,7 +539,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 4,
                 p.surface,
             );
-            text(g.hdc, g.f.small, p.text2, r.left + 8, ry + 9, b"Remplacer:");
+            text(
+                g.hdc,
+                g.f.small,
+                p.text2,
+                r.left + 8,
+                ry + 9,
+                tr4(&[b"Remplacer:", b"Replace:", b"Reemplazar:", b"Ersetzen:"]),
+            );
             text(
                 g.hdc,
                 mono(),
@@ -492,7 +571,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 4,
                 p.surface,
             );
-            text(g.hdc, g.f.small, p.text2, bx + 6, ry + 9, b"Rempl.");
+            text(
+                g.hdc,
+                g.f.small,
+                p.text2,
+                bx + 6,
+                ry + 9,
+                tr4(&[b"Rempl.", b"Repl.", b"Reempl.", b"Ersetz."]),
+            );
             // "Tout remplacer" button
             round_rect(
                 g.hdc,
@@ -504,7 +590,14 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 4,
                 p.surface,
             );
-            text(g.hdc, g.f.small, p.text2, bx + 84, ry + 9, b"Tout");
+            text(
+                g.hdc,
+                g.f.small,
+                p.text2,
+                bx + 84,
+                ry + 9,
+                tr4(&[b"Tout", b"All", b"Todo", b"Alle"]),
+            );
         }
 
         find_y + fh
@@ -628,7 +721,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let cy = editor_y + (cl as i32) * CHAR_H - d.scroll_y;
         if cy >= editor_y && cy < r.bottom - STATUS_H {
             let cx = editor_x + cc * cw - d.scroll_x;
-            fill(g.hdc, g.b, cx, cy, cx + 2, cy + CHAR_H, p.text2);
+            fill(
+                g.hdc,
+                g.b,
+                cx,
+                cy,
+                cx + crate::gfx::caret_w(2),
+                cy + CHAR_H,
+                p.text2,
+            );
         }
     }
 
@@ -1163,7 +1264,12 @@ fn format_status(buf: &mut [u8; 80], line: usize, col: usize, lang: Lang) -> usi
         n += 1;
     }
     let lang_name: &[u8] = match lang {
-        Lang::Plain => b"Texte brut",
+        Lang::Plain => tr4(&[
+            b"Texte brut",
+            b"Plain text",
+            b"Texto sin formato",
+            b"Nur-Text",
+        ]),
         Lang::Rust => b"Rust",
         Lang::C => b"C/C++",
         Lang::Python => b"Python",
@@ -1218,6 +1324,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         if HOVER_TAB != old {
             return true;
         }
+        // Un simple déplacement du pointeur ne change rien d'autre à l'écran :
+        // ne pas repeindre tout le bureau à chaque mouvement de souris.
+        return false;
     }
 
     // === Tab bar clicks ===
@@ -1303,7 +1412,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
         Mouse::Down => {
             if y >= ey && y < r.bottom - STATUS_H && x >= editor_x {
                 let d = doc();
-                let shift = (GetKeyState(0x10) as u16 & 0x8000) != 0;
+                let shift = (crate::gfx::key_state(0x10) as u16 & 0x8000) != 0;
                 let line_idx = ((y - ey + d.scroll_y) / CHAR_H).max(0) as usize;
                 let col_idx = ((x - editor_x + d.scroll_x + cw / 2) / cw).max(0) as usize;
                 let li = line_idx.min(d.line_count.saturating_sub(1));
@@ -1340,7 +1449,12 @@ unsafe fn close_tab(idx: usize) {
     if ST.tab_count <= 1 {
         // Don't close last tab, just clear it
         ST.tabs[0] = Doc::new();
-        let name = b"Sans titre 1";
+        let name = tr4(&[
+            b"Sans titre 1",
+            b"Untitled 1",
+            b"Sin t\xEDtulo 1",
+            b"Unbenannt 1",
+        ]);
         for i in 0..name.len() {
             ST.tabs[0].name[i] = name[i];
         }
@@ -1378,16 +1492,17 @@ unsafe fn find_next() {
         return;
     }
     let d = doc();
-    let start = d.cursor;
-    let mut i = start;
-    loop {
-        i += 1;
-        if i + ST.find_len > d.len {
-            i = 0;
-        }
-        if i == start {
-            return;
-        }
+    if d.len < ST.find_len {
+        return;
+    }
+    // Positions de départ possibles : 0..=last. On repart du curseur et on
+    // fait au plus un tour complet (le curseur peut être en fin de document,
+    // au-delà de la dernière position valide : une boucle « jusqu'au retour
+    // au point de départ » ne se terminait alors jamais).
+    let last = d.len - ST.find_len;
+    let mut i = d.cursor.min(last);
+    for _ in 0..=last {
+        i = if i >= last { 0 } else { i + 1 };
         if bytes_eq(&d.text[i..i + ST.find_len], &ST.find_buf[..ST.find_len]) {
             d.cursor = i;
             d.anchor = i + ST.find_len;
@@ -1402,22 +1517,17 @@ unsafe fn find_prev() {
         return;
     }
     let d = doc();
-    let start = if d.cursor > 0 { d.cursor - 1 } else { d.len };
-    let mut i = start;
-    loop {
-        if i + ST.find_len <= d.len
-            && bytes_eq(&d.text[i..i + ST.find_len], &ST.find_buf[..ST.find_len])
-        {
+    if d.len < ST.find_len {
+        return;
+    }
+    let last = d.len - ST.find_len;
+    let mut i = d.cursor.min(last + 1);
+    for _ in 0..=last {
+        i = if i == 0 { last } else { i - 1 };
+        if bytes_eq(&d.text[i..i + ST.find_len], &ST.find_buf[..ST.find_len]) {
             d.cursor = i;
             d.anchor = i + ST.find_len;
             ensure_cursor_visible(d, 400);
-            return;
-        }
-        if i == 0 {
-            i = d.len;
-        }
-        i -= 1;
-        if i == start {
             return;
         }
     }
@@ -1499,8 +1609,8 @@ unsafe fn replace_all() {
 }
 
 pub unsafe fn key(vk: u32, ch: u16) -> bool {
-    let ctrl = (GetKeyState(0x11) as u16 & 0x8000) != 0;
-    let shift = (GetKeyState(0x10) as u16 & 0x8000) != 0;
+    let ctrl = (crate::gfx::key_state(0x11) as u16 & 0x8000) != 0;
+    let shift = (crate::gfx::key_state(0x10) as u16 & 0x8000) != 0;
 
     // Find bar keyboard handling
     if ST.find_open {
@@ -1580,6 +1690,16 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                 let d = doc();
                 d.anchor = 0;
                 d.cursor = d.len;
+                return true;
+            }
+            0x43 | 0x58 => {
+                // Ctrl+C / Ctrl+X : presse-papiers système (et historique Win+V)
+                copy_selection(vk == 0x58);
+                return true;
+            }
+            0x56 => {
+                // Ctrl+V
+                paste_from_clipboard();
                 return true;
             }
             0x47 => {

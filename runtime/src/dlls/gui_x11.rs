@@ -8,6 +8,7 @@ use crate::dlls::gui_cairo::{Cairo, Shape};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_uchar, c_ulong, c_void, CString};
+use std::os::unix::io::AsRawFd;
 use x11rb::connection::Connection;
 use x11rb::protocol::xproto::{
     Atom, AtomEnum, ChangeGCAux, ChangeWindowAttributesAux, ConfigureNotifyEvent,
@@ -26,6 +27,44 @@ struct XWin {
     y: i32,
     width: u16,
     height: u16,
+}
+
+/// Dégradé de fond déjà calculé, invalidé quand le contraste change.
+#[derive(Default)]
+struct ThemeCache {
+    contrast: u8,
+    bands: HashMap<u16, std::sync::Arc<Vec<(i16, u16, u32)>>>,
+}
+
+/// Bandes (y, hauteur, pixel) du fond d'une fenêtre de `height` pixels :
+/// 32 bandes du dégradé clair, ou une seule bande de la couleur de fond du
+/// thème de contraste. `alloc` convertit un COLORREF en pixel X11.
+fn compute_theme_bands(
+    height: u16,
+    contrast: u8,
+    alloc: impl Fn(u32) -> u32,
+) -> Vec<(i16, u16, u32)> {
+    let h = height.max(1) as u32;
+    if let Some(colors) = crate::dlls::a11y::contrast_colors(contrast) {
+        return vec![(0, h.min(u16::MAX as u32) as u16, alloc(colors.background))];
+    }
+    let bands = 32u32;
+    (0..bands)
+        .map(|i| {
+            let t = i as f32 / (bands - 1) as f32;
+            let c = theme::lerp_colorref(theme::GRADIENT_TOP, theme::GRADIENT_BOTTOM, t);
+            let y = (i * h / bands) as i16;
+            let band_h = ((i + 1) * h / bands - i * h / bands).max(1) as u16;
+            (y, band_h, alloc(c))
+        })
+        .collect()
+}
+
+/// Vrai pour un FocusIn/FocusOut dû à un grab (menu, glisser) : le focus
+/// réel de la fenêtre n'a pas changé.
+fn focus_is_grab(mode: x11rb::protocol::xproto::NotifyMode) -> bool {
+    use x11rb::protocol::xproto::NotifyMode;
+    matches!(mode, NotifyMode::GRAB | NotifyMode::UNGRAB)
 }
 
 #[derive(Clone, Copy)]
@@ -480,6 +519,164 @@ fn font_candidates(spec: &FontSpec) -> Vec<Vec<u8>> {
     unique
 }
 
+/// Ce que l'on sait de la densité de l'écran, du plus au moins fiable.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct ScreenDensity {
+    /// `Xft.dpi` choisi par l'utilisateur (Apparence XFCE, xrdb). 96 est la
+    /// valeur par défaut de toutes les sessions : elle n'apprend rien.
+    user_dpi: Option<f32>,
+    /// Densité physique de l'écran principal, d'après sa taille en
+    /// millimètres lue dans l'EDID (RandR).
+    physical_dpi: Option<f32>,
+    /// Hauteur de l'écran principal en pixels.
+    height: u32,
+}
+
+/// Facteur d'échelle automatique, aux paliers de Windows (100 %, 125 %…).
+///
+/// Xorg annonce toujours 96 ppp sur sa fenêtre racine : la taille réelle vient
+/// donc de l'EDID. La cible est d'environ 110 ppp effectifs, ce qui redonne les
+/// réglages par défaut de Windows : 100 % pour un 24 pouces 1080p ou un 27
+/// pouces 1440p, 125 % pour un portable 15,6 pouces 1080p, 150 % pour un 27
+/// pouces 4K ou un 13 pouces 1080p, 250 % pour un portable 15,6 pouces 4K.
+/// Sans aucune information physique (machine virtuelle, EDID absent), seule la
+/// définition compte : 150 % dès 1440 lignes, 200 % en 4K.
+fn automatic_scale(density: ScreenDensity) -> f32 {
+    if let Some(dpi) = density.user_dpi.filter(|dpi| (*dpi - 96.0).abs() > 1.0) {
+        return dpi_scale(dpi, None);
+    }
+    if let Some(dpi) = density.physical_dpi {
+        return dpi_scale(dpi * 96.0 / 110.0, None);
+    }
+    if density.height >= 2000 {
+        2.0
+    } else if density.height >= 1400 {
+        1.5
+    } else {
+        1.0
+    }
+}
+
+/// Lit `Xft.dpi` dans la base de ressources X (propriété RESOURCE_MANAGER).
+fn resource_dpi(resources: &str) -> Option<f32> {
+    resources.lines().find_map(|line| {
+        let (key, value) = line.split_once(':')?;
+        (key.trim() == "Xft.dpi")
+            .then(|| value.trim().parse::<f32>().ok())
+            .flatten()
+            .filter(|dpi| dpi.is_finite() && (48.0..=480.0).contains(dpi))
+    })
+}
+
+/// Densité physique d'après la largeur en pixels et en millimètres. Les EDID
+/// fantaisistes (0 mm, ou 16x9 « cm » des projecteurs et de certaines
+/// télévisions) sont écartés.
+fn physical_dpi(width_px: u32, width_mm: u32) -> Option<f32> {
+    if width_mm < 100 || width_px == 0 {
+        return None;
+    }
+    let dpi = width_px as f32 * 25.4 / width_mm as f32;
+    (50.0..=400.0).contains(&dpi).then_some(dpi)
+}
+
+/// Taille annoncée par la fenêtre racine. Xorg la calcule toujours pour 96
+/// ppp, ce qui n'apprend rien ; une autre valeur vient d'une vraie mesure
+/// (DisplaySize, `-dpi`, serveur X sans RandR physique).
+fn root_dpi(width_px: u16, width_mm: u16) -> Option<f32> {
+    physical_dpi(width_px as u32, width_mm as u32).filter(|dpi| (*dpi - 96.0).abs() > 1.5)
+}
+
+/// Interroge le serveur X : `Xft.dpi`, puis la taille physique de l'écran
+/// principal (ou du premier écran branché) par RandR.
+fn screen_density(
+    conn: &RustConnection,
+    screen: &x11rb::protocol::xproto::Screen,
+) -> ScreenDensity {
+    let mut density = screen_density_randr(conn, screen.root, screen.height_in_pixels);
+    if density.physical_dpi.is_none() {
+        density.physical_dpi = root_dpi(screen.width_in_pixels, screen.width_in_millimeters);
+    }
+    density
+}
+
+fn screen_density_randr(conn: &RustConnection, root: u32, root_height: u16) -> ScreenDensity {
+    use x11rb::protocol::randr::{self, ConnectionExt as _};
+    let mut density = ScreenDensity {
+        height: root_height as u32,
+        ..ScreenDensity::default()
+    };
+    if let Some(reply) = conn
+        .get_property(
+            false,
+            root,
+            x11rb::protocol::xproto::AtomEnum::RESOURCE_MANAGER,
+            x11rb::protocol::xproto::AtomEnum::STRING,
+            0,
+            1 << 16,
+        )
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    {
+        density.user_dpi = resource_dpi(&String::from_utf8_lossy(&reply.value));
+    }
+    let randr_ok = conn
+        .randr_query_version(1, 3)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .is_some_and(|v| v.major_version > 1 || v.minor_version >= 3);
+    if !randr_ok {
+        return density;
+    }
+    let Some(resources) = conn
+        .randr_get_screen_resources_current(root)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+    else {
+        return density;
+    };
+    let primary = conn
+        .randr_get_output_primary(root)
+        .ok()
+        .and_then(|cookie| cookie.reply().ok())
+        .map(|reply| reply.output)
+        .filter(|output| *output != 0);
+    let outputs = primary.into_iter().chain(
+        resources
+            .outputs
+            .iter()
+            .copied()
+            .filter(|o| Some(*o) != primary),
+    );
+    for output in outputs {
+        let Some(info) = conn
+            .randr_get_output_info(output, resources.config_timestamp)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            continue;
+        };
+        if info.connection != randr::Connection::CONNECTED || info.crtc == 0 {
+            continue;
+        }
+        let Some(crtc) = conn
+            .randr_get_crtc_info(info.crtc, resources.config_timestamp)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+        else {
+            continue;
+        };
+        // Écran tourné d'un quart de tour : la largeur physique suit la hauteur.
+        let rotated = u16::from(crtc.rotation)
+            & (u16::from(randr::Rotation::ROTATE90) | u16::from(randr::Rotation::ROTATE270))
+            != 0;
+        let width_px = if rotated { crtc.height } else { crtc.width };
+        density.height = if rotated { crtc.width } else { crtc.height } as u32;
+        density.physical_dpi = physical_dpi(width_px as u32, info.mm_width);
+        break;
+    }
+    density
+}
+
 fn dpi_scale(dpi: f32, requested: Option<f32>) -> f32 {
     let automatic = ((dpi.max(1.0) / 96.0) * 4.0).round() / 4.0;
     requested
@@ -509,6 +706,8 @@ pub struct X11Backend {
     /// Pixels X11 déjà alloués, notamment pour éviter des milliers d'aller-retours
     /// lors du rafraîchissement animé des icônes PNG.
     color_cache: RefCell<HashMap<u32, u32>>,
+    /// Bandes du dégradé de fond par hauteur de fenêtre (voir `theme_bands`).
+    theme_cache: RefCell<ThemeCache>,
     /// One bounded server-side cache for the large desktop background.
     bitmap_cache: RefCell<Option<BitmapCache>>,
     /// Rendu vectoriel antialiasé Xft/Fontconfig, si les bibliothèques hôte sont présentes.
@@ -518,6 +717,8 @@ pub struct X11Backend {
     /// Table de correspondance keycode X11 → keysyms (lue à la demande).
     keymap: HashMap<u8, Vec<u32>>,
     keyboard: Option<XkbKeyboard>,
+    /// Touche morte en attente (^, ¨…), composée avec la frappe suivante.
+    dead_keys: crate::intl::keyboard::DeadKeys,
     /// Tampon arrière de chaque fenêtre : la peinture y est composée puis
     /// recopiée d'un bloc, sans scintillement, et les Expose sont servis
     /// sans rejouer les commandes GDI.
@@ -530,6 +731,16 @@ pub struct X11Backend {
     x11_cursors: HashMap<usize, u32>,
     /// Dernier handle de curseur Win32 appliqué à la fenêtre X11.
     current_cursor: usize,
+    /// Overlay de performances (Paramètres > Graphismes).
+    overlay: crate::overlay::Overlay,
+    /// Taille et couleur du pointeur (réglages d'accessibilité appliqués).
+    pointer_style: (u8, u8),
+    /// Gestes du pavé tactile (XInput 2.4) disponibles sur ce serveur.
+    gestures: bool,
+    /// Échelle du pincement au dernier cran de zoom envoyé.
+    pinch_last: f32,
+    /// Glisser-déposer reçu depuis les applis Linux (XDND).
+    xdnd: Option<crate::dlls::xdnd::Xdnd>,
 }
 
 impl X11Backend {
@@ -539,16 +750,24 @@ impl X11Backend {
         let setup = conn.setup();
         let scr = &setup.roots[screen];
         let colormap = scr.default_colormap;
-        let dpi_x = if scr.width_in_millimeters > 0 {
-            scr.width_in_pixels as f32 * 25.4 / scr.width_in_millimeters as f32
-        } else {
-            96.0
-        };
+        // WINLUX_UI_SCALE (Paramètres > Écran, session live) l'emporte ;
+        // « auto » ou rien : densité réelle de l'écran.
         let requested_scale = std::env::var("WINLUX_UI_SCALE")
             .ok()
             .and_then(|value| value.parse::<f32>().ok())
             .filter(|value| value.is_finite() && *value > 0.0);
-        let scale = dpi_scale(dpi_x, requested_scale);
+        let scale = match requested_scale {
+            Some(scale) => dpi_scale(96.0, Some(scale)),
+            None => automatic_scale(screen_density(&conn, scr)),
+        };
+        // Pincer pour zoomer : XInput 2.4 (Xorg 21.1+, pilote libinput).
+        let gestures = {
+            use x11rb::protocol::xinput::ConnectionExt as _;
+            conn.xinput_xi_query_version(2, 4)
+                .ok()
+                .and_then(|c| c.reply().ok())
+                .is_some_and(|v| (v.major_version, v.minor_version) >= (2, 4))
+        };
         let wm_protocols = conn
             .intern_atom(false, b"WM_PROTOCOLS")
             .ok()?
@@ -561,6 +780,7 @@ impl X11Backend {
             .reply()
             .ok()?
             .atom;
+        let xdnd = crate::dlls::xdnd::Xdnd::new(&conn);
         Some(X11Backend {
             conn,
             screen,
@@ -574,16 +794,23 @@ impl X11Backend {
             content: HashMap::new(),
             fonts: HashMap::new(),
             color_cache: RefCell::new(HashMap::new()),
+            theme_cache: RefCell::new(ThemeCache::default()),
             bitmap_cache: RefCell::new(None),
             xft: unsafe { XftRenderer::connect() },
             scale,
             keymap: HashMap::new(),
             keyboard: unsafe { XkbKeyboard::connect() },
+            dead_keys: Default::default(),
             back: HashMap::new(),
+            overlay: crate::overlay::Overlay::new(),
             x11_dirty: Cell::new(false),
             xft_dirty: Cell::new(false),
             x11_cursors: HashMap::new(),
             current_cursor: 0x0001_0001,
+            pointer_style: (1, 0),
+            gestures,
+            pinch_last: 1.0,
+            xdnd,
         })
     }
 
@@ -610,6 +837,8 @@ impl X11Backend {
     }
 
     fn init_cursors(&mut self) {
+        let a11y = crate::dlls::a11y::current();
+        self.pointer_style = (a11y.pointer_size, a11y.pointer_color);
         let arrow = self.arrow_cursor().or_else(|| self.create_font_cursor(68));
         if let Some(c) = arrow {
             self.x11_cursors.insert(0x0001_0001, c); // IDC_ARROW
@@ -652,7 +881,28 @@ impl X11Backend {
         }
     }
 
+    /// Reconstruit la flèche quand la taille ou la couleur du pointeur change.
+    fn refresh_pointer_style(&mut self) {
+        if self.x11_cursors.is_empty() {
+            return;
+        }
+        let a11y = crate::dlls::a11y::current();
+        let style = (a11y.pointer_size, a11y.pointer_color);
+        if style == self.pointer_style {
+            return;
+        }
+        self.pointer_style = style;
+        if let Some(arrow) = self.arrow_cursor() {
+            if let Some(old) = self.x11_cursors.insert(0x0001_0001, arrow) {
+                let _ = self.conn.free_cursor(old);
+            }
+            // Force la réapplication du curseur courant aux fenêtres.
+            self.current_cursor = 0;
+        }
+    }
+
     fn apply_cursor(&mut self) {
+        self.refresh_pointer_style();
         let handle = gui::CURSOR_HANDLE.load(std::sync::atomic::Ordering::Relaxed);
         if handle == self.current_cursor {
             return;
@@ -691,7 +941,9 @@ impl X11Backend {
             b"      XooX  ",
             b"       XX   ",
         ];
-        let scale = self.scale.max(1.0);
+        // Taille d'accessibilité : 1×, 1,5×, 2×, 2,5× ou 3× la flèche.
+        let size = self.pointer_style.0.clamp(1, 5) as f32;
+        let scale = self.scale.max(1.0) * (1.0 + (size - 1.0) * 0.5);
         let width = (12.0 * scale).ceil() as u16;
         let height = (19.0 * scale).ceil() as u16;
         let setup = self.conn.setup();
@@ -752,25 +1004,98 @@ impl X11Backend {
             let _ = self.conn.free_gc(gc);
             pixmaps[slot] = pixmap;
         }
+        // Intérieur / contour : blanc, noir ou vert vif (bien visible).
+        let ((fr, fg, fb), (br, bg, bb)) = match self.pointer_style.1 {
+            1 => ((0, 0, 0), (u16::MAX, u16::MAX, u16::MAX)),
+            2 => ((0xC8C8, u16::MAX, 0), (0, 0, 0)),
+            _ => ((u16::MAX, u16::MAX, u16::MAX), (0, 0, 0)),
+        };
         let cursor = self.conn.generate_id().ok()?;
-        let created = self.conn.create_cursor(
-            cursor,
-            pixmaps[0],
-            pixmaps[1],
-            u16::MAX,
-            u16::MAX,
-            u16::MAX,
-            0,
-            0,
-            0,
-            0,
-            0,
-        );
+        let created = self
+            .conn
+            .create_cursor(cursor, pixmaps[0], pixmaps[1], fr, fg, fb, br, bg, bb, 0, 0);
         for p in pixmaps {
             let _ = self.conn.free_pixmap(p);
         }
         created.ok()?.check().ok()?;
         Some(cursor)
+    }
+
+    /// Lit un drawable X11 (fenêtre, pixmap ou racine) en pixels COLORREF.
+    fn read_drawable(
+        &self,
+        drawable: u32,
+        area: x11rb::protocol::xproto::Rectangle,
+    ) -> Option<BitmapSnapshot> {
+        let setup = self.conn.setup();
+        let screen = &setup.roots[self.screen];
+        let depth = screen.root_depth;
+        let masks = screen
+            .allowed_depths
+            .iter()
+            .flat_map(|d| d.visuals.iter())
+            .find(|v| v.visual_id == screen.root_visual)
+            .map(|v| (v.red_mask, v.green_mask, v.blue_mask))?;
+        let format = setup.pixmap_formats.iter().find(|f| f.depth == depth)?;
+        let bits_per_pixel = format.bits_per_pixel as usize;
+        let pad = format.scanline_pad as usize;
+        if bits_per_pixel == 0
+            || bits_per_pixel > 32
+            || !bits_per_pixel.is_multiple_of(8)
+            || pad < 8
+            || !pad.is_multiple_of(8)
+        {
+            return None;
+        }
+        let bytes_per_pixel = bits_per_pixel / 8;
+        let stride = (area.width as usize * bits_per_pixel).div_ceil(pad) * (pad / 8);
+        let image_len = stride.checked_mul(area.height as usize)?;
+        if image_len > 256 * 1024 * 1024 {
+            return None;
+        }
+        let image = self
+            .conn
+            .get_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                drawable,
+                area.x,
+                area.y,
+                area.width,
+                area.height,
+                u32::MAX,
+            )
+            .ok()?
+            .reply()
+            .ok()?
+            .data;
+        if image.len() < image_len {
+            return None;
+        }
+        let mut pixels = vec![0; area.width as usize * area.height as usize];
+        for y in 0..area.height as usize {
+            for x in 0..area.width as usize {
+                let start = y * stride + x * bytes_per_pixel;
+                let mut pixel = 0u32;
+                match setup.image_byte_order {
+                    x11rb::protocol::xproto::ImageOrder::LSB_FIRST => {
+                        for i in 0..bytes_per_pixel {
+                            pixel |= (image[start + i] as u32) << (8 * i);
+                        }
+                    }
+                    _ => {
+                        for i in 0..bytes_per_pixel {
+                            pixel = (pixel << 8) | image[start + i] as u32;
+                        }
+                    }
+                }
+                pixels[y * area.width as usize + x] = pixel_to_colorref(pixel, masks);
+            }
+        }
+        Some(BitmapSnapshot {
+            width: area.width as usize,
+            height: area.height as usize,
+            pixels,
+        })
     }
 
     fn scaled(&self, value: i32) -> i32 {
@@ -865,6 +1190,62 @@ impl X11Backend {
         Some(pixmap)
     }
 
+    /// Pose l'overlay de performances dans un coin de la fenêtre.
+    fn paint_overlay(&mut self, w: &XWin, hwnd: usize) {
+        let lines = self.overlay.lines(hwnd);
+        if lines.is_empty() {
+            return;
+        }
+        let line_h = self.scaled(16).max(12);
+        let pad = self.scaled(8).max(4);
+        let spec = FontSpec {
+            height: self.scaled(13).max(10),
+            weight: 600,
+            face: "Consolas".into(),
+            ..FontSpec::default()
+        };
+        let longest = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0) as i32;
+        let box_w = longest * spec.height * 66 / 100 + pad * 2;
+        let box_h = lines.len() as i32 * line_h + pad * 2;
+        let (ww, wh) = (w.width as i32, w.height as i32);
+        let margin = self.scaled(10);
+        let (left, top) = match self.overlay.position() {
+            crate::overlay::Position::TopLeft => (margin, margin),
+            crate::overlay::Position::TopRight => (ww - box_w - margin, margin),
+            crate::overlay::Position::BottomLeft => (margin, wh - box_h - margin),
+            crate::overlay::Position::BottomRight => (ww - box_w - margin, wh - box_h - margin),
+        };
+        let (left, top) = (left.max(0), top.max(0));
+        self.before_x11();
+        let border = Rect {
+            left,
+            top,
+            right: left + box_w,
+            bottom: top + box_h,
+        };
+        self.paint_fill(w, &border, 0x0060_5040);
+        let inner = Rect {
+            left: left + 1,
+            top: top + 1,
+            right: left + box_w - 1,
+            bottom: top + box_h - 1,
+        };
+        self.paint_fill(w, &inner, 0x0020_1A16);
+        for (i, line) in lines.iter().enumerate() {
+            let color = if i == 0 { 0x0080_FF9A } else { 0x00F0_F0F0 };
+            self.paint_text(
+                w,
+                left + pad,
+                top + pad + i as i32 * line_h,
+                line,
+                color,
+                None,
+                &spec,
+            );
+        }
+        self.before_x11();
+    }
+
     /// Recopie une zone du tampon arrière vers la fenêtre.
     fn present(&self, w: &XWin, pixmap: u32, x: i16, y: i16, width: u16, height: u16) {
         self.before_x11();
@@ -874,21 +1255,36 @@ impl X11Backend {
         let _ = self.conn.flush();
     }
 
+    /// Bandes du dégradé de fond pour une hauteur de fenêtre : (y, hauteur,
+    /// pixel X11). Calculées une fois par hauteur et mises en cache ; le cache
+    /// est vidé quand les préférences d'accessibilité (contraste) changent,
+    /// `a11y::current` relisant le fichier de réglages sur sa date de
+    /// modification. `draw` ne recalcule donc plus le thème à chaque flush.
+    fn theme_bands(&self, height: u16) -> std::sync::Arc<Vec<(i16, u16, u32)>> {
+        let contrast = crate::dlls::a11y::current().contrast;
+        let mut cache = self.theme_cache.borrow_mut();
+        if cache.contrast != contrast {
+            cache.contrast = contrast;
+            cache.bands.clear();
+        }
+        if let Some(bands) = cache.bands.get(&height) {
+            return bands.clone();
+        }
+        let bands = std::sync::Arc::new(compute_theme_bands(height, contrast, |c| {
+            self.alloc_color(c)
+        }));
+        cache.bands.insert(height, bands.clone());
+        bands
+    }
+
     /// Dessine un fond clair avec un dégradé discret, proche des surfaces
     /// d'application de Windows 11. Le contenu GDI invité est posé ensuite.
     fn paint_theme(&self, w: &XWin) {
         self.before_x11();
-        let bands = 32u32;
-        let h = w.height.max(1) as u32;
-        for i in 0..bands {
-            let t = i as f32 / (bands - 1) as f32;
-            let c = theme::lerp_colorref(theme::GRADIENT_TOP, theme::GRADIENT_BOTTOM, t);
-            let pixel = self.alloc_color(c);
+        for &(y, band_h, pixel) in self.theme_bands(w.height).iter() {
             let _ = self
                 .conn
                 .change_gc(w.gc, &ChangeGCAux::new().foreground(pixel));
-            let y = (i * h / bands) as i16;
-            let band_h = ((i + 1) * h / bands - i * h / bands).max(1) as u16;
             let _ = self.conn.poly_fill_rectangle(
                 w.window,
                 w.gc,
@@ -1200,6 +1596,7 @@ impl X11Backend {
         source_rect: &Rect,
         destination_rect: &Rect,
         stretch: bool,
+        smooth: bool,
         rop: gui::RasterOp,
     ) {
         let Some(mut source_window) = self.windows.get(&source_hwnd).copied() else {
@@ -1242,16 +1639,25 @@ impl X11Backend {
             return;
         }
 
-        self.paint_stretched_pixels(source_window.window, destination_window, src, dst, rop);
+        self.paint_stretched_pixels(
+            source_window.window,
+            destination_window,
+            src,
+            dst,
+            smooth,
+            rop,
+        );
     }
 
-    /// Rééchantillonnage nearest-neighbor des pixels ZPixmap (formats 8/16/24/32bpp).
+    /// Rééchantillonnage des pixels ZPixmap (formats 8/16/24/32bpp) :
+    /// plus proche voisin, ou bilinéaire (mode HALFTONE) pour la loupe.
     fn paint_stretched_pixels(
         &self,
         source: Window,
         destination: &XWin,
         src: x11rb::protocol::xproto::Rectangle,
         dst: x11rb::protocol::xproto::Rectangle,
+        smooth: bool,
         rop: gui::RasterOp,
     ) {
         let depth = self.conn.setup().roots[self.screen].root_depth;
@@ -1278,14 +1684,15 @@ impl X11Backend {
         let stride = |width: usize| (width * bits_per_pixel).div_ceil(pad) * (pad / 8);
         let src_stride = stride(src.width as usize);
         let dst_stride = stride(dst.width as usize);
-        const MAX_IMAGE_BYTES: usize = 256 * 1024 - 64;
+        // Une loupe plein écran 4K tient sous cette limite ; au-delà, refus.
+        const MAX_TOTAL_BYTES: usize = 64 * 1024 * 1024;
         let Some(src_len) = src_stride.checked_mul(src.height as usize) else {
             return;
         };
         let Some(dst_len) = dst_stride.checked_mul(dst.height as usize) else {
             return;
         };
-        if src_len > MAX_IMAGE_BYTES || dst_len > MAX_IMAGE_BYTES {
+        if src_len > MAX_TOTAL_BYTES || dst_len > MAX_TOTAL_BYTES {
             return;
         }
         let image = match self.conn.get_image(
@@ -1306,33 +1713,37 @@ impl X11Backend {
         if image.len() < src_len {
             return;
         }
-        let mut output = vec![0u8; dst_len];
-        for dy in 0..dst.height as usize {
-            let sy = dy * src.height as usize / dst.height as usize;
-            for dx in 0..dst.width as usize {
-                let sx = dx * src.width as usize / dst.width as usize;
-                let from = sy * src_stride + sx * bytes_per_pixel;
-                let to = dy * dst_stride + dx * bytes_per_pixel;
-                output[to..to + bytes_per_pixel]
-                    .copy_from_slice(&image[from..from + bytes_per_pixel]);
-            }
-        }
+        let output = resample(
+            &image,
+            (src.width as usize, src.height as usize, src_stride),
+            (dst.width as usize, dst.height as usize, dst_stride),
+            bytes_per_pixel,
+            smooth,
+        );
         let _ = self.conn.change_gc(
             destination.gc,
             &ChangeGCAux::new().function(x11_function(rop)),
         );
-        let _ = self.conn.put_image(
-            x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
-            destination.window,
-            destination.gc,
-            dst.width,
-            dst.height,
-            dst.x,
-            dst.y,
-            0,
-            depth,
-            &output,
-        );
+        // PutImage doit tenir dans une requête X11 de base : envoi par bandes.
+        const MAX_REQUEST_BYTES: usize = 256 * 1024 - 64;
+        let rows = (MAX_REQUEST_BYTES / dst_stride.max(1)).max(1);
+        let mut row = 0usize;
+        while row < dst.height as usize {
+            let count = rows.min(dst.height as usize - row);
+            let _ = self.conn.put_image(
+                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
+                destination.window,
+                destination.gc,
+                dst.width,
+                count as u16,
+                dst.x,
+                dst.y.saturating_add(row as i16),
+                0,
+                depth,
+                &output[row * dst_stride..(row + count) * dst_stride],
+            );
+            row += count;
+        }
         let _ = self.conn.change_gc(
             destination.gc,
             &ChangeGCAux::new().function(x11rb::protocol::xproto::GX::COPY),
@@ -1631,11 +2042,20 @@ impl X11Backend {
                     source,
                     destination,
                     stretch,
+                    smooth,
                     rop,
                 } => {
                     let source = self.scaled_rect(source);
                     let destination = self.scaled_rect(destination);
-                    self.paint_blit(w, *source_hwnd, &source, &destination, *stretch, *rop)
+                    self.paint_blit(
+                        w,
+                        *source_hwnd,
+                        &source,
+                        &destination,
+                        *stretch,
+                        *smooth,
+                        *rop,
+                    )
                 }
                 DrawCmd::Bitmap { rect, pixels, rop } => {
                     let destination = self.scaled_rect(rect);
@@ -1730,8 +2150,20 @@ impl X11Backend {
                 })
             }
             Event::ConfigureNotify(e) => self.on_configure(e),
+            Event::SelectionNotify(e) => {
+                let root = self.conn.setup().roots[self.screen].root;
+                let scale = self.scale;
+                self.xdnd
+                    .as_mut()?
+                    .selection_notify(&self.conn, &e, scale, root)?
+            }
             Event::ClientMessage(e) => {
                 let hwnd = *self.by_xwin.get(&e.window)?;
+                if let Some(xdnd) = self.xdnd.as_mut() {
+                    if let Some(out) = xdnd.client_message(&self.conn, &e, hwnd) {
+                        return out;
+                    }
+                }
                 let data = e.data.as_data32();
                 if e.type_ == self.wm_protocols && data[0] == self.wm_delete {
                     Some(PendingEvent {
@@ -1745,6 +2177,8 @@ impl X11Backend {
                 }
             }
             Event::ButtonPress(e) => {
+                crate::power::note_activity();
+                gui::raw_mouse_button(e.detail, true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
@@ -1772,7 +2206,34 @@ impl X11Backend {
                     lparam,
                 })
             }
+            Event::XinputGesturePinchBegin(_) => {
+                crate::power::note_activity();
+                self.pinch_last = 1.0;
+                None
+            }
+            Event::XinputGesturePinchUpdate(e) => {
+                crate::power::note_activity();
+                let hwnd = *self.by_xwin.get(&e.event)?;
+                let scale = e.scale as f32 / 65536.0;
+                let (delta, last) = pinch_step(self.pinch_last, scale)?;
+                self.pinch_last = last;
+                // Comme un pavé tactile de précision sous Windows : le
+                // pincement devient Ctrl + molette (zoom des applications).
+                let lparam =
+                    pack_i16_pair(self.logical(e.root_x >> 16), self.logical(e.root_y >> 16));
+                Some(PendingEvent {
+                    hwnd,
+                    message: gui::WM_MOUSEWHEEL,
+                    wparam: ((delta as u16 as usize) << 16) | 0x0008,
+                    lparam,
+                })
+            }
+            Event::XinputGesturePinchEnd(_) => {
+                self.pinch_last = 1.0;
+                None
+            }
             Event::ButtonRelease(e) => {
+                gui::raw_mouse_button(e.detail, false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
@@ -1789,6 +2250,8 @@ impl X11Backend {
                 })
             }
             Event::MotionNotify(e) => {
+                crate::power::note_activity();
+                gui::raw_mouse_motion(e.root_x as i32, e.root_y as i32);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let x = self.logical(e.event_x as i32);
                 let y = self.logical(e.event_y as i32);
@@ -1801,6 +2264,12 @@ impl X11Backend {
                 })
             }
             Event::FocusIn(e) => {
+                // NotifyGrab/NotifyUngrab : focus temporairement pris par un
+                // menu ou un glisser (grab du clavier) ; la fenêtre ne perd
+                // pas réellement le focus, ne pas le signaler.
+                if focus_is_grab(e.mode) {
+                    return None;
+                }
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,
@@ -1810,6 +2279,9 @@ impl X11Backend {
                 })
             }
             Event::FocusOut(e) => {
+                if focus_is_grab(e.mode) {
+                    return None;
+                }
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,
@@ -1819,6 +2291,8 @@ impl X11Backend {
                 })
             }
             Event::KeyPress(e) => {
+                crate::power::note_activity();
+                gui::raw_key(e.detail, true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 if std::env::var_os("WINLUX_INPUT_DIAG").is_some_and(|v| !v.is_empty()) {
                     eprintln!("Winlux X11 keycode {}", e.detail);
@@ -1849,6 +2323,14 @@ impl X11Backend {
                         })
                     })
                     .unwrap_or(e.detail as usize);
+                let alt = e.state.contains(x11rb::protocol::xproto::KeyButMask::MOD1);
+                if self.overlay.hotkey(vk, ctrl, shift, alt) {
+                    // Raccourci de l'overlay : consommé, jamais transmis au jeu.
+                    if let Some(cmds) = self.content.get(&hwnd).cloned() {
+                        gui::GuiBackend::draw(self, hwnd, &cmds);
+                    }
+                    return None;
+                }
                 let extended = vk_is_extended(vk);
                 let lparam = key_lparam(e.detail, false, extended);
                 gui::update_async_key_state(vk, true);
@@ -1866,6 +2348,16 @@ impl X11Backend {
                 } else {
                     sym.map(keysym_to_char).filter(|c| *c != 0)
                 };
+                // Touches mortes : « ^ » puis « e » donnent « ê », comme le
+                // pilote clavier Windows (accent seul suivi de la lettre
+                // quand ils ne se combinent pas).
+                let typed = self
+                    .dead_keys
+                    .feed(sym.unwrap_or(0), ch.and_then(|c| char::from_u32(c as u32)));
+                if let Some(prefix) = typed.prefix {
+                    gui::set_key_prefix(hwnd, vk, lparam, prefix as u16);
+                }
+                let ch = typed.ch.and_then(|c| u16::try_from(c as u32).ok());
                 gui::set_key_char(hwnd, vk, lparam, ch);
                 Some(PendingEvent {
                     hwnd,
@@ -1875,6 +2367,7 @@ impl X11Backend {
                 })
             }
             Event::KeyRelease(e) => {
+                gui::raw_key(e.detail, false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 let syms = self.key_syms(e.detail);
                 let vk = self
@@ -1976,6 +2469,21 @@ fn button_wparam(detail: u8) -> usize {
         2 => 0x0010, // MK_MBUTTON
         3 => 0x0002, // MK_RBUTTON
         _ => 0,
+    }
+}
+
+/// Pincement : un cran de zoom (±120) chaque fois que l'échelle a varié
+/// de 10 % depuis le dernier cran. Renvoie (delta, nouvelle référence).
+fn pinch_step(last: f32, scale: f32) -> Option<(i16, f32)> {
+    const STEP: f32 = 1.1;
+    if !scale.is_finite() || scale <= 0.0 {
+        None
+    } else if scale >= last * STEP {
+        Some((120, last * STEP))
+    } else if scale <= last / STEP {
+        Some((-120, last / STEP))
+    } else {
+        None
     }
 }
 
@@ -2082,6 +2590,7 @@ fn keysym_to_vk(sym: u32) -> Option<usize> {
         0xFF57 => 0x23,                                    // VK_END
         0xFF55 => 0x21,                                    // VK_PRIOR
         0xFF56 => 0x22,                                    // VK_NEXT
+        0xFF61 => 0x2C,                                    // VK_SNAPSHOT (Impr. écran)
         0xFF63 => 0x2D,                                    // VK_INSERT
         0xFFBE..=0xFFC9 => 0x70 + (sym - 0xFFBE) as usize, // VK_F1..VK_F12
         0xFFE1 | 0xFFE2 => 0x10,                           // VK_SHIFT
@@ -2198,6 +2707,43 @@ fn key_lparam(keycode: u8, up: bool, extended: bool) -> isize {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pinch_becomes_ctrl_wheel_steps() {
+        // Écarter les doigts : un cran de zoom tous les 10 %.
+        assert_eq!(pinch_step(1.0, 1.05), None);
+        let (d, last) = pinch_step(1.0, 1.12).unwrap();
+        assert_eq!(d, 120);
+        assert!((last - 1.1).abs() < 1e-5);
+        assert_eq!(pinch_step(last, 1.15), None);
+        // Rapprocher : cran négatif.
+        assert_eq!(pinch_step(1.0, 0.85).map(|v| v.0), Some(-120));
+        assert_eq!(pinch_step(1.0, f32::NAN), None);
+        assert_eq!(pinch_step(1.0, 0.0), None);
+    }
+
+    #[test]
+    fn loupe_agrandissement_lisse_ou_net() {
+        // Deux pixels 32 bits : noir puis blanc, agrandis 4×.
+        let image = [0, 0, 0, 0, 255, 255, 255, 0];
+        let net = resample(&image, (2, 1, 8), (8, 1, 32), 4, false);
+        assert_eq!(&net[..4], &[0, 0, 0, 0]);
+        assert_eq!(&net[28..], &[255, 255, 255, 0]);
+        assert!(net.chunks(4).all(|p| p[0] == 0 || p[0] == 255));
+        let lisse = resample(&image, (2, 1, 8), (8, 1, 32), 4, true);
+        assert_eq!(lisse[0], 0, "le bord gauche reste noir");
+        assert_eq!(lisse[28], 255, "le bord droit reste blanc");
+        let gris: Vec<u8> = lisse.chunks(4).map(|p| p[0]).collect();
+        assert!(
+            gris.windows(2).all(|w| w[0] <= w[1]),
+            "dégradé croissant {gris:?}"
+        );
+        assert!(gris.iter().any(|&v| v > 0 && v < 255), "transition lissée");
+        // Pas de lignes (stride) plus large que la largeur utile.
+        let haut = resample(&[9, 9, 9, 0, 0, 0, 0, 0], (1, 2, 4), (2, 4, 8), 4, true);
+        assert_eq!(haut.len(), 32);
+        assert_eq!(haut[0], 9);
+    }
 
     #[test]
     fn les_keysyms_deviennent_des_codes_vk_win32() {
@@ -2324,6 +2870,65 @@ mod tests {
         assert_eq!(dpi_scale(192.0, None), 2.0);
         assert_eq!(dpi_scale(96.0, Some(2.5)), 2.5);
         assert_eq!(dpi_scale(500.0, None), 3.0);
+    }
+
+    #[test]
+    fn echelle_automatique_suit_la_taille_reelle_de_l_ecran() {
+        let ecran = |pixels: u32, mm: u32, lignes: u32| ScreenDensity {
+            user_dpi: None,
+            physical_dpi: physical_dpi(pixels, mm),
+            height: lignes,
+        };
+        // 24 pouces 1080p (531 mm) et 27 pouces 1440p (597 mm) : 100 %.
+        assert_eq!(automatic_scale(ecran(1920, 531, 1080)), 1.0);
+        assert_eq!(automatic_scale(ecran(2560, 597, 1440)), 1.0);
+        // Portable 15,6 pouces 1080p (344 mm) : 125 %.
+        assert_eq!(automatic_scale(ecran(1920, 344, 1080)), 1.25);
+        // Portable 13,3 pouces 1080p (294 mm) et 27 pouces 4K (597 mm) : 150 %.
+        assert_eq!(automatic_scale(ecran(1920, 294, 1080)), 1.5);
+        assert_eq!(automatic_scale(ecran(3840, 597, 2160)), 1.5);
+        // Portable 15,6 pouces 4K : 250 %.
+        assert_eq!(automatic_scale(ecran(3840, 344, 2160)), 2.5);
+        // Portable 1366x768 (15,6 pouces) : 100 %.
+        assert_eq!(automatic_scale(ecran(1366, 344, 768)), 1.0);
+        // EDID absent ou fantaisiste (projecteur « 16x9 ») : définition seule.
+        assert_eq!(automatic_scale(ecran(3840, 16, 2160)), 2.0);
+        assert_eq!(automatic_scale(ecran(2560, 0, 1440)), 1.5);
+        assert_eq!(automatic_scale(ecran(1920, 0, 1080)), 1.0);
+        // Xft.dpi choisi par l'utilisateur : prioritaire, sauf la valeur 96
+        // posée par défaut par toutes les sessions.
+        let choisi = |dpi: f32| ScreenDensity {
+            user_dpi: Some(dpi),
+            ..ecran(1920, 531, 1080)
+        };
+        assert_eq!(automatic_scale(choisi(144.0)), 1.5);
+        assert_eq!(
+            automatic_scale(ScreenDensity {
+                user_dpi: Some(96.0),
+                ..ecran(3840, 597, 2160)
+            }),
+            1.5
+        );
+    }
+
+    #[test]
+    fn racine_a_96_ppp_n_apprend_rien() {
+        assert_eq!(root_dpi(1920, 508), None); // valeur inventée par Xorg
+        assert_eq!(root_dpi(3840, 0), None);
+        let dpi = root_dpi(3840, 598).unwrap();
+        assert!((dpi - 163.1).abs() < 0.5);
+    }
+
+    #[test]
+    fn xft_dpi_est_lu_dans_les_ressources_x() {
+        assert_eq!(
+            resource_dpi("Xft.antialias:\t1\nXft.dpi:\t144\n"),
+            Some(144.0)
+        );
+        assert_eq!(resource_dpi("Xft.dpi: 120.5"), Some(120.5));
+        assert_eq!(resource_dpi("Xcursor.size: 24\n"), None);
+        assert_eq!(resource_dpi("Xft.dpi: abc\n"), None);
+        assert_eq!(resource_dpi("Xft.dpi: 0\n"), None);
     }
 
     #[test]
@@ -2560,6 +3165,59 @@ mod tests {
     }
 }
 
+/// Agrandit/réduit une image ZPixmap. `src`/`dst` = (largeur, hauteur, pas).
+/// En mode lissé (pixels 24/32 bits), interpolation bilinéaire en virgule
+/// fixe ; sinon plus proche voisin, comme le mode COLORONCOLOR de Windows.
+fn resample(
+    image: &[u8],
+    src: (usize, usize, usize),
+    dst: (usize, usize, usize),
+    bytes_per_pixel: usize,
+    smooth: bool,
+) -> Vec<u8> {
+    let (sw, sh, s_stride) = src;
+    let (dw, dh, d_stride) = dst;
+    let mut output = vec![0u8; d_stride * dh];
+    if sw == 0 || sh == 0 || dw == 0 || dh == 0 {
+        return output;
+    }
+    let bilinear = smooth && bytes_per_pixel >= 3 && (sw > 1 || sh > 1);
+    for dy in 0..dh {
+        let row = &mut output[dy * d_stride..];
+        if !bilinear {
+            let sy = dy * sh / dh;
+            for dx in 0..dw {
+                let sx = dx * sw / dw;
+                let from = sy * s_stride + sx * bytes_per_pixel;
+                row[dx * bytes_per_pixel..(dx + 1) * bytes_per_pixel]
+                    .copy_from_slice(&image[from..from + bytes_per_pixel]);
+            }
+            continue;
+        }
+        // Centre du pixel de destination projeté dans la source (1/256 px).
+        let fy = ((2 * dy + 1) * sh * 128 / dh).saturating_sub(128);
+        let y0 = (fy >> 8).min(sh - 1);
+        let y1 = (y0 + 1).min(sh - 1);
+        let wy = (fy & 0xFF) as u32;
+        for dx in 0..dw {
+            let fx = ((2 * dx + 1) * sw * 128 / dw).saturating_sub(128);
+            let x0 = (fx >> 8).min(sw - 1);
+            let x1 = (x0 + 1).min(sw - 1);
+            let wx = (fx & 0xFF) as u32;
+            let at = |x: usize, y: usize, c: usize| {
+                u32::from(image[y * s_stride + x * bytes_per_pixel + c])
+            };
+            for c in 0..bytes_per_pixel {
+                let top = at(x0, y0, c) * (256 - wx) + at(x1, y0, c) * wx;
+                let bottom = at(x0, y1, c) * (256 - wx) + at(x1, y1, c) * wx;
+                let value = (top * (256 - wy) + bottom * wy + 32768) >> 16;
+                row[dx * bytes_per_pixel + c] = value.min(255) as u8;
+            }
+        }
+    }
+    output
+}
+
 impl gui::GuiBackend for X11Backend {
     fn pump(&mut self) -> Vec<PendingEvent> {
         // Événements déjà lus pendant `wait`, puis lecture non bloquante.
@@ -2579,24 +3237,41 @@ impl gui::GuiBackend for X11Backend {
     }
 
     fn wait(&mut self, timeout_ms: u32) -> bool {
-        use std::time::{Duration, Instant};
-        let deadline = Instant::now() + Duration::from_millis(timeout_ms as u64);
-        loop {
-            match self.conn.poll_for_event() {
-                Ok(Some(ev)) => self.pending.push(ev),
-                Ok(None) => {}
-                // Connexion perdue : on laisse la boucle de messages se vider.
-                Err(_) => return !self.pending.is_empty(),
-            }
-            if !self.pending.is_empty() {
-                return true;
-            }
-            if Instant::now() >= deadline {
-                // Backend réel : GetMessage doit continuer d'attendre.
-                return true;
-            }
-            std::thread::sleep(Duration::from_millis(5));
+        // Les événements déjà lus par x11rb (pendant une réponse) ne rendent
+        // pas la socket lisible : on les prend d'abord sans bloquer.
+        if self.poll_pending() {
+            return true;
         }
+        // Puis on dort sur la socket X11 jusqu'au prochain événement ou à
+        // l'échéance, au lieu d'interroger le serveur toutes les 5 ms.
+        let mut pfd = libc::pollfd {
+            fd: self.conn.stream().as_raw_fd(),
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let timeout = timeout_ms.min(i32::MAX as u32) as i32;
+        // SAFETY : `pfd` est une entrée valide pour la durée de l'appel.
+        unsafe { libc::poll(&mut pfd, 1, timeout) };
+        self.poll_pending();
+        // Backend réel : GetMessage doit continuer d'attendre.
+        true
+    }
+
+    fn event_fd(&mut self) -> Option<i32> {
+        Some(self.conn.stream().as_raw_fd())
+    }
+
+    fn poll_pending(&mut self) -> bool {
+        // Une erreur (connexion perdue) arrête la lecture : la boucle de
+        // messages se vide avec ce qui a déjà été lu.
+        while let Ok(Some(ev)) = self.conn.poll_for_event() {
+            self.pending.push(ev);
+        }
+        !self.pending.is_empty()
+    }
+
+    fn native_window(&mut self, hwnd: usize) -> Option<u64> {
+        self.windows.get(&hwnd).map(|w| w.window as u64)
     }
 
     fn screen_size(&mut self) -> Option<(i32, i32)> {
@@ -2608,6 +3283,33 @@ impl gui::GuiBackend for X11Backend {
             self.logical(geometry.width as i32).max(1),
             self.logical(geometry.height as i32).max(1),
         ))
+    }
+
+    fn monitors(&mut self) -> Vec<crate::dlls::gui::Monitor> {
+        use x11rb::protocol::randr::ConnectionExt as _;
+        let root = self.conn.setup().roots[self.screen].root;
+        let Some(reply) = self
+            .conn
+            .randr_get_monitors(root, true)
+            .ok()
+            .and_then(|c| c.reply().ok())
+        else {
+            return Vec::new();
+        };
+        reply
+            .monitors
+            .iter()
+            .filter(|m| m.width > 0 && m.height > 0)
+            .map(|m| crate::dlls::gui::Monitor {
+                rect: Rect {
+                    left: self.logical(i32::from(m.x)),
+                    top: self.logical(i32::from(m.y)),
+                    right: self.logical(i32::from(m.x) + i32::from(m.width)),
+                    bottom: self.logical(i32::from(m.y) + i32::from(m.height)),
+                },
+                primary: m.primary,
+            })
+            .collect()
     }
 
     fn create_window(&mut self, hwnd: usize, title: &str, rect: Rect) {
@@ -2670,6 +3372,20 @@ impl gui::GuiBackend for X11Backend {
             return;
         }
 
+        if self.gestures {
+            use x11rb::protocol::xinput::{ConnectionExt as _, EventMask, XIEventMask};
+            // XI_GesturePinchBegin/Update/End (27..29), périphérique maître
+            // « tous » (1) : absents des constantes de xcb-proto 1.15.
+            let mask = XIEventMask::from((1u32 << 27) | (1 << 28) | (1 << 29));
+            let _ = self.conn.xinput_xi_select_events(
+                win,
+                &[EventMask {
+                    deviceid: 1,
+                    mask: vec![mask],
+                }],
+            );
+        }
+
         // Demande la fermeture propre via WM_DELETE_WINDOW.
         let _ = self.conn.change_property32(
             x11rb::protocol::xproto::PropMode::REPLACE,
@@ -2678,6 +3394,9 @@ impl gui::GuiBackend for X11Backend {
             AtomEnum::ATOM,
             &[self.wm_protocols, self.wm_delete],
         );
+        if let Some(xdnd) = self.xdnd.as_ref() {
+            xdnd.set_aware(&self.conn, win);
+        }
         let title_bytes = crate::dlls::encode_ansi(title);
         let _ = self.conn.change_property8(
             x11rb::protocol::xproto::PropMode::REPLACE,
@@ -2783,10 +3502,14 @@ impl gui::GuiBackend for X11Backend {
             };
             self.paint_theme(&target);
             self.paint_cmds(&target, cmds);
+            self.overlay.frame(hwnd);
+            self.paint_overlay(&target, hwnd);
             self.present(&w, pixmap, 0, 0, w.width, w.height);
         } else {
             self.paint_theme(&w);
             self.paint_cmds(&w, cmds);
+            self.overlay.frame(hwnd);
+            self.paint_overlay(&w, hwnd);
             self.before_x11();
             let _ = self.conn.flush();
         }
@@ -2794,6 +3517,7 @@ impl gui::GuiBackend for X11Backend {
 
     fn destroy_window(&mut self, hwnd: usize) {
         self.content.remove(&hwnd);
+        self.overlay.forget(hwnd);
         if let Some((pixmap, _, _)) = self.back.remove(&hwnd) {
             let _ = self.conn.free_pixmap(pixmap);
         }
@@ -2914,73 +3638,48 @@ impl gui::GuiBackend for X11Backend {
         }
         self.before_x11();
         let area = Self::to_x_rect(&window, &rect)?;
-        let setup = self.conn.setup();
-        let screen = &setup.roots[self.screen];
-        let depth = screen.root_depth;
-        let masks = screen
-            .allowed_depths
-            .iter()
-            .flat_map(|d| d.visuals.iter())
-            .find(|v| v.visual_id == screen.root_visual)
-            .map(|v| (v.red_mask, v.green_mask, v.blue_mask))?;
-        let format = setup.pixmap_formats.iter().find(|f| f.depth == depth)?;
-        let bits_per_pixel = format.bits_per_pixel as usize;
-        let pad = format.scanline_pad as usize;
-        if bits_per_pixel == 0
-            || bits_per_pixel > 32
-            || !bits_per_pixel.is_multiple_of(8)
-            || pad < 8
-            || !pad.is_multiple_of(8)
-        {
+        self.read_drawable(window.window, area)
+    }
+
+    fn capture_screen(&mut self, rect: Rect) -> Option<BitmapSnapshot> {
+        // La racine d'un Xorg sans compositeur contient l'image réellement
+        // affichée : bureau Winlux et fenêtres des autres programmes.
+        self.before_x11();
+        let _ = self.conn.flush();
+        let root = self.conn.setup().roots[self.screen].root;
+        let geometry = self.conn.get_geometry(root).ok()?.reply().ok()?;
+        let physical = self.scaled_rect(&rect);
+        let x0 = physical.left.clamp(0, geometry.width as i32);
+        let y0 = physical.top.clamp(0, geometry.height as i32);
+        let x1 = physical.right.clamp(0, geometry.width as i32);
+        let y1 = physical.bottom.clamp(0, geometry.height as i32);
+        if x1 <= x0 || y1 <= y0 {
             return None;
         }
-        let bytes_per_pixel = bits_per_pixel / 8;
-        let stride = (area.width as usize * bits_per_pixel).div_ceil(pad) * (pad / 8);
-        let image_len = stride.checked_mul(area.height as usize)?;
-        if image_len > 256 * 1024 * 1024 {
-            return None;
+        let area = x11rb::protocol::xproto::Rectangle {
+            x: x0 as i16,
+            y: y0 as i16,
+            width: (x1 - x0) as u16,
+            height: (y1 - y0) as u16,
+        };
+        let snapshot = self.read_drawable(root, area)?;
+        let width = rect.width().max(1) as usize;
+        let height = rect.height().max(1) as usize;
+        if snapshot.width == width && snapshot.height == height {
+            return Some(snapshot);
         }
-        let image = self
-            .conn
-            .get_image(
-                x11rb::protocol::xproto::ImageFormat::Z_PIXMAP,
-                window.window,
-                area.x,
-                area.y,
-                area.width,
-                area.height,
-                u32::MAX,
-            )
-            .ok()?
-            .reply()
-            .ok()?
-            .data;
-        if image.len() < image_len {
-            return None;
-        }
-        let mut pixels = vec![0; area.width as usize * area.height as usize];
-        for y in 0..area.height as usize {
-            for x in 0..area.width as usize {
-                let start = y * stride + x * bytes_per_pixel;
-                let mut pixel = 0u32;
-                match setup.image_byte_order {
-                    x11rb::protocol::xproto::ImageOrder::LSB_FIRST => {
-                        for i in 0..bytes_per_pixel {
-                            pixel |= (image[start + i] as u32) << (8 * i);
-                        }
-                    }
-                    _ => {
-                        for i in 0..bytes_per_pixel {
-                            pixel = (pixel << 8) | image[start + i] as u32;
-                        }
-                    }
-                }
-                pixels[y * area.width as usize + x] = pixel_to_colorref(pixel, masks);
+        // Mise à l'échelle HiDPI : on revient en unités logiques Win32.
+        let mut pixels = vec![0; width.checked_mul(height)?];
+        for y in 0..height {
+            let sy = (y * snapshot.height / height).min(snapshot.height - 1);
+            for x in 0..width {
+                let sx = (x * snapshot.width / width).min(snapshot.width - 1);
+                pixels[y * width + x] = snapshot.pixels[sy * snapshot.width + sx];
             }
         }
         Some(BitmapSnapshot {
-            width: area.width as usize,
-            height: area.height as usize,
+            width,
+            height,
             pixels,
         })
     }

@@ -11,6 +11,7 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 
 ### Fiabilisation du bureau et de la VM
 
+- [x] Direct3D 9 et 12 (backend Vulkan, repli OpenGL puis processeur), DXVA2 H.264 par VA-API et réglages dans Paramètres > Graphismes (#92) ; shaders DXBC/DXIL et décodage Media Foundation restent à faire.
 - [x] Préserver les noms longs et refuser les chemins tronqués dans Explorer.
 - [x] Bloquer les copies dans un descendant, les collisions et les alias de chemins ; tester le couper/coller et les raccourcis.
 - [x] Corriger Ctrl+L, les touches Windows, AltGr et la disposition XKB réelle.
@@ -160,7 +161,8 @@ ne valent pas validation sur matériel réel. Les tâches partielles sont sépar
 - [x] Créer les composants du prototype : barre des tâches, menu Démarrer, fenêtres, notifications et Explorer ; le CSS reste une référence séparée.
 - [x] Ajouter les icônes et polices libres compatibles avec la licence du projet.
 - [x] Définir les variantes clair/sombre et le réglage d'échelle.
-- [ ] Compléter l'accessibilité : contraste, taille du pointeur, réduction des animations et navigation accessible complète.
+- [x] Accessibilité : page Paramètres > Accessibilité (aperçu en direct, navigation au clavier), 4 thèmes de contraste (shell, barre des tâches, menu Démarrer et `GetSysColor` des .exe), Loupe plein écran/lentille/ancrée (Win+Plus/Moins/Échap, lissage HALFTONE, inversion), Narrateur `winlux-speak` (espeak-ng ou piper : fenêtre active, texte survolé, frappes, Insérer+flèches), touches rémanentes (Maj ×5) et filtres, taille/couleur du pointeur X11, épaisseur du curseur de texte, animations désactivables, sous-titres et clignotement pour les sons système. Réglages partagés dans `~/.local/share/winlux/accessibility.ini`.
+- [ ] Navigation clavier complète (Tab entre les contrôles) dans toutes les fenêtres du shell ; la page Accessibilité et le Narrateur sont déjà utilisables au clavier.
 - [x] Intégrer le thème dans l’ISO sans dépendance propriétaire.
 - [ ] Revalider le rendu du bureau courant en 1080p, 1440p et 4K, avec captures et interactions ; les tests X11 généraux ne prouvent pas cette matrice complète.
 - [x] Rendre le menu Démarrer plus compact, animer les accents violets et afficher

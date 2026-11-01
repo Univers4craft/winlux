@@ -212,6 +212,8 @@ unsafe fn get_object_common(obj: usize, size: i32, out: *mut c_void, wide: bool)
             }
         }
         gui::GdiObjectInfo::Bitmap { .. } => core::mem::size_of::<BitmapObject>(),
+        // GetObject ne décrit pas les régions (GetRgnBox s'en charge).
+        gui::GdiObjectInfo::Region(_) => return 0,
     };
     if out.is_null() && size == 0 {
         return needed as i32;
@@ -319,6 +321,7 @@ unsafe fn get_object_common(obj: usize, size: i32, out: *mut c_void, wide: bool)
                 },
             );
         }
+        gui::GdiObjectInfo::Region(_) => return 0,
     }
     needed as i32
 }
@@ -484,6 +487,7 @@ fn blit_common(
             source,
             destination,
             stretch,
+            smooth: stretch && gui::dc_stretch_mode(dst_hdc) == HALFTONE,
             rop: operation,
         }
     } else {
@@ -541,8 +545,67 @@ struct ResizeCache {
 static RESIZE_CACHE: Mutex<Option<ResizeCache>> = Mutex::new(None);
 
 #[cfg(test)]
+mod region_tests {
+    use super::*;
+
+    #[test]
+    fn create_rect_rgn_alloue_un_objet_region() {
+        let rgn = create_rect_rgn(10, 10, 30, 20);
+        assert_ne!(rgn, 1, "1 est WHITE_BRUSH");
+        assert_eq!(get_object_type(rgn), 8); // OBJ_REGION
+        let mut boite = Rect::default();
+        assert_eq!(unsafe { get_rgn_box(rgn, &mut boite) }, SIMPLEREGION);
+        assert_eq!(boite, Rect::from_size(10, 10, 20, 10));
+        assert_eq!(pt_in_region(rgn, 10, 10), 1);
+        assert_eq!(pt_in_region(rgn, 30, 10), 0);
+        let dehors = Rect::from_size(40, 40, 5, 5);
+        let dedans = Rect::from_size(25, 15, 20, 20);
+        assert_eq!(unsafe { rect_in_region(rgn, &dehors) }, 0);
+        assert_eq!(unsafe { rect_in_region(rgn, &dedans) }, 1);
+        assert_eq!(offset_rgn(rgn, 5, 5), SIMPLEREGION);
+        assert_eq!(unsafe { get_rgn_box(rgn, &mut boite) }, SIMPLEREGION);
+        assert_eq!(boite, Rect::from_size(15, 15, 20, 10));
+        // Combinaison dans une région cible, puis libération par DeleteObject.
+        let autre = create_rect_rgn(0, 0, 100, 100);
+        let cible = create_rect_rgn(0, 0, 0, 0);
+        assert_eq!(combine_rgn(cible, rgn, autre, 1), SIMPLEREGION); // RGN_AND
+        assert_eq!(unsafe { get_rgn_box(cible, &mut boite) }, SIMPLEREGION);
+        assert_eq!(boite, Rect::from_size(15, 15, 20, 10));
+        assert_eq!(set_rect_rgn(cible, 0, 0, 0, 0), 1);
+        assert_eq!(unsafe { get_rgn_box(cible, &mut boite) }, NULLREGION);
+        for h in [rgn, autre, cible] {
+            assert_eq!(delete_object(h), 1);
+            assert_eq!(get_object_type(h), 0);
+        }
+        assert_eq!(unsafe { get_rgn_box(rgn, &mut boite) }, REGION_ERROR);
+        // L'export « ext » suit le même chemin.
+        let via_ext = crate::dlls::gdi32_ext::create_rect_rgn(0, 0, 1, 1);
+        assert_eq!(get_object_type(via_ext), 8);
+        assert_eq!(delete_object(via_ext), 1);
+    }
+}
+
+#[cfg(test)]
 mod scaling_tests {
     use super::*;
+    #[test]
+    fn image_ajustee_sans_deformation() {
+        // Image 4×2 rouge opaque dans une boîte 8×8 : bandes de fond en haut
+        // et en bas, image centrée sur 8×4.
+        let red = [[255u8, 0, 0, 255]; 8];
+        let out = fit_rgba(4, 2, &red, 8, 8, 0x00FF_FFFF);
+        assert_eq!(out.len(), 64);
+        assert_eq!(out[0], 0x00FF_FFFF);
+        assert_eq!(out[2 * 8 + 4], 0x0000_00FF);
+        assert_eq!(out[5 * 8 + 7], 0x0000_00FF);
+        assert_eq!(out[7 * 8], 0x00FF_FFFF);
+        // Transparence composée sur le fond.
+        let clear = [[0u8, 0, 0, 0]; 1];
+        assert_eq!(
+            fit_rgba(1, 1, &clear, 2, 2, 0x0012_3456),
+            vec![0x0012_3456; 4]
+        );
+    }
     #[test]
     fn agrandissement_lisse_et_bitmap_4k() {
         let image = gui::BitmapSnapshot {
@@ -681,6 +744,7 @@ pub unsafe extern "win64" fn create_dib_section(
 
 pub extern "win64" fn delete_dc(dc: usize) -> i32 {
     if gui::dc_window(dc).is_some() {
+        crate::dlls::winspool::delete_printer_dc(dc);
         gui::free_dc(dc);
         1
     } else {
@@ -688,13 +752,16 @@ pub extern "win64" fn delete_dc(dc: usize) -> i32 {
     }
 }
 
-pub extern "win64" fn get_device_caps(_dc: usize, index: i32) -> i32 {
+pub extern "win64" fn get_device_caps(dc: usize, index: i32) -> i32 {
+    if let Some(v) = crate::dlls::winspool::device_caps(dc, index) {
+        return v;
+    }
     match index {
-        8 => 1920,  // HORZRES
-        10 => 1080, // VERTRES
-        12 => 24,   // BITSPIXEL
-        90 => 96,   // LOGPIXELSX
-        88 => 96,   // LOGPIXELSY
+        8 => gui::screen_size().0,  // HORZRES : écran réel, 1920 sans affichage
+        10 => gui::screen_size().1, // VERTRES
+        12 => 24,                   // BITSPIXEL
+        90 => 96,                   // LOGPIXELSX
+        88 => 96,                   // LOGPIXELSY
         _ => 0,
     }
 }
@@ -755,6 +822,7 @@ unsafe fn text_extent(hdc: usize, s: &str, size: *mut Size) -> i32 {
         return 0;
     }
     let font = gui::font_spec(gui::dc_font(hdc)).unwrap_or_default();
+    let font = crate::dlls::winspool::printer_text_font(hdc, font);
     let (cx, cy) = gui::measure_text(&font, s);
     std::ptr::write_unaligned(size, Size { cx, cy });
     1
@@ -936,17 +1004,33 @@ fn icon_pixels(request: &str, size: usize, background: u32) -> Option<Vec<u32>> 
         return Some(pixels);
     }
     let (width, height, source) = decode_png(&resolve_icon_path(request)?)?;
-    let scale = (size as f32 / width as f32).min(size as f32 / height as f32);
-    let fitted_width = ((width as f32 * scale).round() as usize).clamp(1, size);
-    let fitted_height = ((height as f32 * scale).round() as usize).clamp(1, size);
-    let offset_x = (size - fitted_width) / 2;
-    let offset_y = (size - fitted_height) / 2;
+    let output = fit_rgba(width, height, &source, size, size, background);
+    cache.lock().ok()?.insert(key, output.clone());
+    Some(output)
+}
+
+/// Redimensionne (filtrage bilinéaire) une image RGBA pour qu'elle tienne,
+/// proportions gardées et centrée, dans une boîte `box_w` × `box_h` ; la
+/// transparence est composée sur `background` (COLORREF).
+fn fit_rgba(
+    width: usize,
+    height: usize,
+    source: &[[u8; 4]],
+    box_w: usize,
+    box_h: usize,
+    background: u32,
+) -> Vec<u32> {
+    let scale = (box_w as f32 / width as f32).min(box_h as f32 / height as f32);
+    let fitted_width = ((width as f32 * scale).round() as usize).clamp(1, box_w);
+    let fitted_height = ((height as f32 * scale).round() as usize).clamp(1, box_h);
+    let offset_x = (box_w - fitted_width) / 2;
+    let offset_y = (box_h - fitted_height) / 2;
     let bg = [
         (background & 0xff) as u8,
         ((background >> 8) & 0xff) as u8,
         ((background >> 16) & 0xff) as u8,
     ];
-    let mut output = vec![background; size * size];
+    let mut output = vec![background; box_w * box_h];
     for y in 0..fitted_height {
         let sy = ((y as f32 + 0.5) * height as f32 / fitted_height as f32 - 0.5)
             .clamp(0.0, height.saturating_sub(1) as f32);
@@ -970,12 +1054,76 @@ fn icon_pixels(request: &str, size: usize, background: u32) -> Option<Vec<u32>> 
             let channel = |index: usize| {
                 (sample(index) * alpha + bg[index] as f32 * (1.0 - alpha)).round() as u32
             };
-            output[(offset_y + y) * size + offset_x + x] =
+            output[(offset_y + y) * box_w + offset_x + x] =
                 channel(0) | (channel(1) << 8) | (channel(2) << 16);
         }
     }
-    cache.lock().ok()?.insert(key, output.clone());
+    output
+}
+
+type ImageCache = Vec<((String, usize, usize, u32), Vec<u32>)>;
+static IMAGE_CACHE: OnceLock<Mutex<ImageCache>> = OnceLock::new();
+
+/// Pixels d'une image PNG (chemin Linux ou Windows) ajustée à la boîte ;
+/// les 48 dernières images servies restent en cache.
+fn image_pixels(path: &str, w: usize, h: usize, background: u32) -> Option<Vec<u32>> {
+    let key = (path.to_string(), w, h, background);
+    let cache = IMAGE_CACHE.get_or_init(|| Mutex::new(Vec::new()));
+    if let Some((_, pixels)) = crate::dlls::lock(cache).iter().find(|(k, _)| *k == key) {
+        return Some(pixels.clone());
+    }
+    let file = if path.starts_with('/') {
+        PathBuf::from(path)
+    } else {
+        crate::paths::to_linux(path)
+    };
+    let (width, height, source) = decode_png(&file)?;
+    let output = fit_rgba(width, height, &source, w, h, background);
+    let mut cache = crate::dlls::lock(cache);
+    if cache.len() >= 48 {
+        cache.remove(0);
+    }
+    cache.push((key, output.clone()));
     Some(output)
+}
+
+/// Extension Winlux : dessine une image PNG (vignette, capture d'écran)
+/// ajustée dans le rectangle `x, y, w, h`, sans déformation.
+pub unsafe extern "win64" fn winlux_draw_image_a(
+    hdc: usize,
+    path: *const u8,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    background: u32,
+) -> i32 {
+    if path.is_null()
+        || gui::dc_window(hdc).is_none()
+        || !(1..=2048).contains(&w)
+        || !(1..=2048).contains(&h)
+    {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    let path = crate::dlls::cstr(path);
+    let Some(pixels) = image_pixels(&path, w as usize, h as usize, background) else {
+        return 0;
+    };
+    let rect = Rect {
+        left: x,
+        top: y,
+        right: x + w,
+        bottom: y + h,
+    };
+    gui::record(
+        hdc,
+        DrawCmd::Bitmap {
+            rect,
+            pixels,
+            rop: gui::RasterOp::Copy,
+        },
+    ) as i32
 }
 
 /// Extension Winlux : charge l'icône PNG réelle déclarée par un fichier
@@ -1012,20 +1160,22 @@ pub unsafe extern "win64" fn winlux_draw_icon_a(
     ) as i32
 }
 
-/// `Rectangle(hdc, left, top, right, bottom, pen, brush)` : cadre + intérieur.
+/// `Rectangle(hdc, left, top, right, bottom)` : cadre avec la plume et
+/// intérieur avec le pinceau sélectionnés dans le DC.
 pub unsafe extern "win64" fn rectangle(
     hdc: usize,
     left: i32,
     top: i32,
     right: i32,
     bottom: i32,
-    pen: usize,
-    brush: usize,
 ) -> i32 {
     if gui::dc_window(hdc).is_none() {
         crate::process::set_last_error(1400); // ERROR_INVALID_WINDOW_HANDLE
         return 0;
     }
+    // Win32 n'a que 5 paramètres : lire deux « arguments » de plus prenait
+    // R9 et la pile (valeurs aléatoires) pour des handles GDI.
+    let (pen, brush) = (gui::dc_pen(hdc), gui::dc_brush(hdc));
     let rect = Rect {
         left,
         top,
@@ -1444,68 +1594,134 @@ pub unsafe extern "win64" fn set_pixel_v(hdc: usize, x: i32, y: i32, color: u32)
 // Region functions
 // =====================================================================
 
-static NEXT_REGION: std::sync::atomic::AtomicUsize =
-    std::sync::atomic::AtomicUsize::new(0x0020_0000);
-
-pub extern "win64" fn create_rect_rgn(_left: i32, _top: i32, _right: i32, _bottom: i32) -> usize {
-    NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+/// `CreateRectRgn` : un vrai objet GDI (table `gui::objects`), libéré par
+/// `DeleteObject`. Les régions restent des rectangles (boîte englobante).
+pub extern "win64" fn create_rect_rgn(left: i32, top: i32, right: i32, bottom: i32) -> usize {
+    gui::create_region(Rect {
+        left,
+        top,
+        right,
+        bottom,
+    })
 }
 
-pub extern "win64" fn create_rect_rgn_indirect(_rect: *const Rect) -> usize {
-    NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+pub unsafe extern "win64" fn create_rect_rgn_indirect(rect: *const Rect) -> usize {
+    if rect.is_null() {
+        return 0;
+    }
+    gui::create_region(*rect)
 }
 
-pub extern "win64" fn create_elliptic_rgn(
-    _left: i32,
-    _top: i32,
-    _right: i32,
-    _bottom: i32,
-) -> usize {
-    NEXT_REGION.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+pub extern "win64" fn create_elliptic_rgn(left: i32, top: i32, right: i32, bottom: i32) -> usize {
+    create_rect_rgn(left, top, right, bottom)
 }
 
-pub extern "win64" fn combine_rgn(_dest: usize, _src1: usize, _src2: usize, _mode: i32) -> i32 {
-    1 // SIMPLEREGION
+/// Codes de retour des fonctions de région.
+const NULLREGION: i32 = 1;
+const SIMPLEREGION: i32 = 2;
+const REGION_ERROR: i32 = 0;
+
+fn region_complexity(rect: &Rect) -> i32 {
+    if rect.width() <= 0 || rect.height() <= 0 {
+        NULLREGION
+    } else {
+        SIMPLEREGION
+    }
+}
+
+pub extern "win64" fn combine_rgn(dest: usize, src1: usize, src2: usize, mode: i32) -> i32 {
+    // RGN_AND=1 RGN_OR=2 RGN_XOR=3 RGN_DIFF=4 RGN_COPY=5 ; les modes autres
+    // que la copie sont approchés par leur boîte englobante.
+    let (Some(a), Some(b)) = (gui::region_rect(src1), gui::region_rect(src2)) else {
+        return REGION_ERROR;
+    };
+    let result = match mode {
+        1 => Rect {
+            left: a.left.max(b.left),
+            top: a.top.max(b.top),
+            right: a.right.min(b.right),
+            bottom: a.bottom.min(b.bottom),
+        },
+        2 | 3 => Rect {
+            left: a.left.min(b.left),
+            top: a.top.min(b.top),
+            right: a.right.max(b.right),
+            bottom: a.bottom.max(b.bottom),
+        },
+        _ => a,
+    };
+    let result = if result.width() <= 0 || result.height() <= 0 {
+        Rect::default()
+    } else {
+        result
+    };
+    if gui::set_region_rect(dest, result) {
+        region_complexity(&result)
+    } else {
+        REGION_ERROR
+    }
 }
 
 pub extern "win64" fn set_rect_rgn(
-    _rgn: usize,
-    _left: i32,
-    _top: i32,
-    _right: i32,
-    _bottom: i32,
+    rgn: usize,
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
 ) -> i32 {
-    1
+    gui::set_region_rect(
+        rgn,
+        Rect {
+            left,
+            top,
+            right,
+            bottom,
+        },
+    ) as i32
 }
 
 #[allow(dead_code)]
 pub extern "win64" fn delete_rgn(rgn: usize) -> i32 {
-    let _ = rgn;
-    1
+    gui::delete_object(rgn) as i32
 }
 
-pub extern "win64" fn offset_rgn(_rgn: usize, _x: i32, _y: i32) -> i32 {
-    1
+pub extern "win64" fn offset_rgn(rgn: usize, x: i32, y: i32) -> i32 {
+    let Some(r) = gui::region_rect(rgn) else {
+        return REGION_ERROR;
+    };
+    let moved = Rect {
+        left: r.left.saturating_add(x),
+        top: r.top.saturating_add(y),
+        right: r.right.saturating_add(x),
+        bottom: r.bottom.saturating_add(y),
+    };
+    gui::set_region_rect(rgn, moved);
+    region_complexity(&moved)
 }
 
-pub unsafe extern "win64" fn get_rgn_box(_rgn: usize, rect: *mut Rect) -> i32 {
+pub unsafe extern "win64" fn get_rgn_box(rgn: usize, rect: *mut Rect) -> i32 {
+    let Some(gui::GdiObjectInfo::Region(r)) = gui::object_info(rgn) else {
+        return REGION_ERROR;
+    };
     if !rect.is_null() {
-        *rect = Rect {
-            left: 0,
-            top: 0,
-            right: 0,
-            bottom: 0,
-        };
+        *rect = r;
     }
-    1
+    region_complexity(&r)
 }
 
-pub extern "win64" fn pt_in_region(_rgn: usize, _x: i32, _y: i32) -> i32 {
-    0
+pub extern "win64" fn pt_in_region(rgn: usize, x: i32, y: i32) -> i32 {
+    match gui::region_rect(rgn) {
+        Some(r) => i32::from(x >= r.left && x < r.right && y >= r.top && y < r.bottom),
+        None => 0,
+    }
 }
 
-pub extern "win64" fn rect_in_region(_rgn: usize, _rect: *const Rect) -> i32 {
-    0
+pub unsafe extern "win64" fn rect_in_region(rgn: usize, rect: *const Rect) -> i32 {
+    let (Some(r), false) = (gui::region_rect(rgn), rect.is_null()) else {
+        return 0;
+    };
+    let q = *rect;
+    i32::from(q.left < r.right && q.right > r.left && q.top < r.bottom && q.bottom > r.top)
 }
 
 pub extern "win64" fn equal_rgn(_rgn1: usize, _rgn2: usize) -> i32 {
@@ -1822,49 +2038,6 @@ pub unsafe extern "win64" fn get_text_metrics_w(hdc: usize, tm: *mut c_void) -> 
 }
 
 // =====================================================================
-// EnumFontFamiliesEx
-// =====================================================================
-
-pub unsafe extern "win64" fn enum_font_families_ex_a(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _callback: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    // Stub : ne rapporte aucune police
-    1
-}
-
-pub unsafe extern "win64" fn enum_font_families_ex_w(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _callback: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    1
-}
-
-pub unsafe extern "win64" fn enum_fonts_a(
-    _hdc: usize,
-    _name: *const u8,
-    _callback: usize,
-    _lparam: isize,
-) -> i32 {
-    1
-}
-
-pub unsafe extern "win64" fn enum_fonts_w(
-    _hdc: usize,
-    _name: *const u16,
-    _callback: usize,
-    _lparam: isize,
-) -> i32 {
-    1
-}
-
-// =====================================================================
 // GetTextFaceA/W
 // =====================================================================
 
@@ -1873,7 +2046,7 @@ pub unsafe extern "win64" fn get_text_face_a(hdc: usize, count: i32, buf: *mut u
     if buf.is_null() {
         return font.face.len() as i32 + 1;
     }
-    crate::dlls::put_a(&font.face, buf, count as u32) as i32
+    crate::dlls::put_text_a(&font.face, buf, count.max(0) as u32) as i32
 }
 
 pub unsafe extern "win64" fn get_text_face_w(hdc: usize, count: i32, buf: *mut u16) -> i32 {
@@ -1881,7 +2054,7 @@ pub unsafe extern "win64" fn get_text_face_w(hdc: usize, count: i32, buf: *mut u
     if buf.is_null() {
         return font.face.len() as i32 + 1;
     }
-    crate::dlls::put_w(&font.face, buf, count as u32) as i32
+    crate::dlls::put_text_w(&font.face, buf, count.max(0) as u32) as i32
 }
 
 // =====================================================================
@@ -1968,6 +2141,7 @@ pub extern "win64" fn get_object_type(obj: usize) -> u32 {
             gui::GdiObjectInfo::Pen { .. } => 1,
             gui::GdiObjectInfo::Font { .. } => 6,
             gui::GdiObjectInfo::Bitmap { .. } => 7,
+            gui::GdiObjectInfo::Region(_) => 8, // OBJ_REGION
         }
     } else {
         0
@@ -1999,12 +2173,21 @@ pub extern "win64" fn get_rop2(_hdc: usize) -> i32 {
     13
 }
 
-pub extern "win64" fn set_stretch_blt_mode(_hdc: usize, _mode: i32) -> i32 {
-    1 // ancien mode
+/// `HALFTONE` : la loupe et les agrandissements demandent un rendu lissé.
+const HALFTONE: i32 = 4;
+
+/// Mémorise le mode par DC ; HALFTONE active l'interpolation bilinéaire
+/// des `StretchBlt` entre fenêtres.
+pub extern "win64" fn set_stretch_blt_mode(hdc: usize, mode: i32) -> i32 {
+    if !(1..=HALFTONE).contains(&mode) {
+        crate::process::set_last_error(87);
+        return 0;
+    }
+    gui::set_dc_stretch_mode(hdc, mode)
 }
 
-pub extern "win64" fn get_stretch_blt_mode(_hdc: usize) -> i32 {
-    4 // HALFTONE
+pub extern "win64" fn get_stretch_blt_mode(hdc: usize) -> i32 {
+    gui::dc_stretch_mode(hdc)
 }
 
 pub extern "win64" fn set_poly_fill_mode(_hdc: usize, _mode: i32) -> i32 {
@@ -2036,40 +2219,81 @@ pub extern "win64" fn create_compatible_dc_from(dc: usize) -> usize {
     create_compatible_dc(dc)
 }
 
-pub extern "win64" fn create_dc_a(
-    _driver: *const u8,
-    _device: *const u8,
-    _output: *const u8,
-    _init: *const c_void,
+/// `CreateDC`/`CreateIC` : DC imprimante quand le pilote ou le périphérique
+/// désigne une imprimante (`WINSPOOL`, nom d'imprimante), sinon DC sans fenêtre.
+unsafe fn create_dc_common(
+    driver: *const c_void,
+    device: *const c_void,
+    init: *const c_void,
+    wide: bool,
+    info_only: bool,
 ) -> usize {
+    let read = |p: *const c_void| {
+        if p.is_null() {
+            None
+        } else if wide {
+            Some(crate::dlls::wstr(p as *const u16))
+        } else {
+            Some(crate::dlls::cstr(p as *const u8))
+        }
+    };
+    let (driver, device) = (read(driver), read(device));
+    let printing = driver
+        .as_deref()
+        .is_some_and(|d| !d.eq_ignore_ascii_case("DISPLAY"))
+        || device
+            .as_deref()
+            .is_some_and(|d| !d.is_empty() && !d.eq_ignore_ascii_case("DISPLAY"));
+    if printing {
+        if let Some(dc) = crate::dlls::winspool::create_printer_dc(
+            driver,
+            device,
+            init as *const u8,
+            wide,
+            info_only,
+        ) {
+            return dc;
+        }
+        crate::process::set_last_error(1801); // ERROR_INVALID_PRINTER_NAME
+        return 0;
+    }
     gui::create_dc(0) // DC sans fenêtre
 }
 
-pub extern "win64" fn create_dc_w(
-    _driver: *const u16,
-    _device: *const u16,
-    _output: *const u16,
-    _init: *const c_void,
-) -> usize {
-    gui::create_dc(0)
-}
-
-pub extern "win64" fn create_ic_a(
-    _driver: *const u8,
-    _device: *const u8,
+pub unsafe extern "win64" fn create_dc_a(
+    driver: *const u8,
+    device: *const u8,
     _output: *const u8,
-    _init: *const c_void,
+    init: *const c_void,
 ) -> usize {
-    gui::create_dc(0)
+    create_dc_common(driver.cast(), device.cast(), init, false, false)
 }
 
-pub extern "win64" fn create_ic_w(
-    _driver: *const u16,
-    _device: *const u16,
+pub unsafe extern "win64" fn create_dc_w(
+    driver: *const u16,
+    device: *const u16,
     _output: *const u16,
-    _init: *const c_void,
+    init: *const c_void,
 ) -> usize {
-    gui::create_dc(0)
+    create_dc_common(driver.cast(), device.cast(), init, true, false)
+}
+
+pub unsafe extern "win64" fn create_ic_a(
+    driver: *const u8,
+    device: *const u8,
+    _output: *const u8,
+    init: *const c_void,
+) -> usize {
+    create_dc_common(driver.cast(), device.cast(), init, false, true)
+}
+
+pub unsafe extern "win64" fn create_ic_w(
+    driver: *const u16,
+    device: *const u16,
+    _output: *const u16,
+    init: *const c_void,
+) -> usize {
+    create_dc_common(driver.cast(), device.cast(), init, true, true)
 }
 
 pub unsafe extern "win64" fn get_current_position_ex(hdc: usize, pt: *mut gui::Point) -> i32 {
@@ -2205,9 +2429,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GetCharWidth32A"=>fn get_char_width_32a, "GetCharWidth32W"=>fn get_char_width_32w,
         "GetCharABCWidthsA"=>fn get_char_abc_widths_a, "GetCharABCWidthsW"=>fn get_char_abc_widths_w,
         // --- Font enum ---
-        "EnumFontFamiliesExA"=>fn enum_font_families_ex_a,
-        "EnumFontFamiliesExW"=>fn enum_font_families_ex_w,
-        "EnumFontsA"=>fn enum_fonts_a, "EnumFontsW"=>fn enum_fonts_w,
         // --- Raster ops ---
         "PatBlt"=>fn pat_blt,
         "BitBlt"=>fn bit_blt, "StretchBlt"=>fn stretch_blt,
@@ -2262,6 +2483,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GdiFlush"=>fn gdi_flush,
         "GdiSetBatchLimit"=>fn gdi_set_batch_limit, "GdiGetBatchLimit"=>fn gdi_get_batch_limit,
         // --- Custom ---
-        "WinluxDrawIconA"=>fn winlux_draw_icon_a,
+        "WinluxDrawIconA"=>fn winlux_draw_icon_a, "WinluxDrawImageA"=>fn winlux_draw_image_a,
     }
 }

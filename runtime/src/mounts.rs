@@ -5,7 +5,8 @@
 //!
 //! `lettre  type  point_de_montage  libellé  ro  source  périphérique  backend  [état]`
 //!
-//! - `type` : `image` (image disque montée), `network` (FTP, SFTP, SMB…) ;
+//! - `type` : `image` (image disque montée), `network` (FTP, SFTP, SMB…),
+//!   `disk` (clé USB, disque NTFS… monté par `winlux --volumes`) ;
 //! - `ro` : `1` si le lecteur est en lecture seule ;
 //! - `état` (optionnel) : `ok`, `offline` ou `connecting`. Un lecteur hors
 //!   ligne est résolu vers un chemin inexistant pour échouer vite.
@@ -158,6 +159,9 @@ fn with_lock<T>(f: impl FnOnce(&mut Vec<Mount>) -> std::io::Result<T>) -> std::i
         for m in all.iter() {
             writeln!(out, "{}", m.to_line())?;
         }
+        // Sans fsync, une coupure juste après le rename pouvait laisser un
+        // mounts.tsv vide (les lettres de lecteur disparaissaient).
+        out.sync_all()?;
     }
     std::fs::rename(&tmp, &file)?;
     unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
@@ -228,10 +232,12 @@ pub fn drive_mask() -> u32 {
         .fold(0, |acc, m| acc | 1 << (m.letter as u32 - 'A' as u32))
 }
 
-/// Valeur `GetDriveType` : 2 amovible (image), 4 réseau, `None` sinon.
+/// Valeur `GetDriveType` : 2 amovible, 3 fixe, 4 réseau, 5 CD, `None` sinon.
 pub fn drive_type(letter: char) -> Option<u32> {
     get(letter).map(|m| match m.kind.as_str() {
         "network" => 4,
+        // Disque branché : fixe (3) s'il est interne, amovible sinon.
+        "disk" if m.backend.split(':').nth(1) == Some("fixed") => 3,
         "image" if m.source.to_ascii_lowercase().ends_with(".iso") => 5,
         _ => 2,
     })
@@ -242,6 +248,8 @@ pub fn drive_type(letter: char) -> Option<u32> {
 /// zéro. Renvoie le nombre de lecteurs (ou la taille requise en caractères,
 /// négative, si `cap` est insuffisant).
 pub unsafe extern "win64" fn winlux_mount_list(buf: *mut u16, cap: u32) -> i32 {
+    // Images démontées hors de Winlux (redémarrage, umount manuel) : oubliées.
+    crate::diskimage::prune_stale();
     let all = list();
     let mut text = String::new();
     for m in &all {
@@ -270,6 +278,10 @@ pub fn exports() -> crate::dlls::Exports {
         "WinluxMountList" => fn winlux_mount_list,
     }
 }
+
+/// Sérialise les tests qui changent les variables d'environnement d'état.
+#[cfg(test)]
+pub static TEST_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[cfg(test)]
 mod tests {
@@ -302,6 +314,7 @@ mod tests {
 
     #[test]
     fn registry_add_remove() {
+        let _g = TEST_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = std::env::temp_dir().join(format!("winlux-mounts-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::env::set_var("WINLUX_STATE_DIR", &dir);

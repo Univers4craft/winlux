@@ -18,6 +18,15 @@ static mut SHOW_PASSWORD: bool = false;
 static mut CURSOR_BLINK: u32 = 0;
 
 const MAX_USERS: usize = 8;
+/// Compte propriétaire de cette session (son bureau est derrière l'écran de
+/// verrouillage). usize::MAX : personne n'est encore connecté sur cet écran.
+static mut OWNER: usize = usize::MAX;
+/// Session ouverte par « Changer d'utilisateur » depuis un autre bureau.
+static mut SPAWNED_SESSION: bool = false;
+static mut SESSIONS: [u8; 1024] = [0; 1024];
+static mut SESSIONS_LEN: usize = 0;
+static mut SESSIONS_POLL: u32 = 0;
+static mut SWITCH_NOTICE: u32 = 0;
 static mut USERS: [User; MAX_USERS] = [User::empty(); MAX_USERS];
 static mut USER_COUNT: usize = 0;
 
@@ -105,6 +114,122 @@ pub unsafe fn init() {
         USERS[0] = u;
         USER_COUNT = 1;
     }
+    // Bureau créé par winlux-sessions pour un compte déjà authentifié sur
+    // l'écran de verrouillage d'une autre session.
+    let mut env = [0u8; 40];
+    let n = GetEnvironmentVariableA(
+        c"WINLUX_SESSION_USER".as_ptr(),
+        env.as_mut_ptr().cast(),
+        env.len() as u32,
+    ) as usize;
+    if n > 0 && n < env.len() {
+        if let Some(i) = find_user(&env[..n]) {
+            SELECTED_USER = i;
+            OWNER = i;
+            SPAWNED_SESSION = true;
+            LOGGED_IN = true;
+        }
+    }
+}
+
+fn find_user(name: &[u8]) -> Option<usize> {
+    unsafe { (0..USER_COUNT).find(|&i| &USERS[i].name[..USERS[i].name_len] == name) }
+}
+
+/// Appelle `winlux-control session-<verbe> <compte>`.
+unsafe fn session_control(verb: &[u8], user: usize) {
+    if user >= USER_COUNT {
+        return;
+    }
+    let mut cmd = [0u8; 64];
+    let mut n = 0;
+    for part in [b"session-".as_slice(), verb, b" ", &USERS[user].name[..USERS[user].name_len]] {
+        cmd[n..n + part.len()].copy_from_slice(part);
+        n += part.len();
+    }
+    if let Ok(c) = core::ffi::CStr::from_bytes_until_nul(&cmd[..n + 1]) {
+        crate::settings::control(c);
+    }
+    SESSIONS_POLL = 0;
+}
+
+pub fn user_count() -> usize {
+    unsafe { USER_COUNT }
+}
+pub fn user_name(i: usize) -> &'static [u8] {
+    unsafe {
+        if i < USER_COUNT {
+            &USERS[i].name[..USERS[i].name_len]
+        } else {
+            b""
+        }
+    }
+}
+pub fn owner() -> usize {
+    unsafe { OWNER }
+}
+
+/// Le compte a-t-il une session ouverte (sur cet écran ou un autre) ?
+pub unsafe fn has_session(i: usize) -> bool {
+    if i == OWNER {
+        return true;
+    }
+    let now = GetTickCount();
+    if SESSIONS_POLL == 0 || now.wrapping_sub(SESSIONS_POLL) > 2000 {
+        SESSIONS_POLL = now.max(1);
+        let h = CreateFileA(
+            c"Z:\\run\\winlux\\sessions.txt".as_ptr(),
+            0x8000_0000,
+            7,
+            core::ptr::null_mut(),
+            3,
+            0,
+            core::ptr::null_mut(),
+        );
+        SESSIONS_LEN = 0;
+        if !h.is_null() && h as isize != -1 {
+            let mut read = 0u32;
+            ReadFile(
+                h,
+                SESSIONS.as_mut_ptr(),
+                SESSIONS.len() as u32,
+                &mut read,
+                core::ptr::null_mut(),
+            );
+            CloseHandle(h);
+            SESSIONS_LEN = (read as usize).min(SESSIONS.len());
+        }
+    }
+    let name = user_name(i);
+    SESSIONS[..SESSIONS_LEN]
+        .split(|&c| c == b'\n')
+        .filter_map(|l| l.strip_prefix(b"session="))
+        .any(|l| l.split(|&c| c == b'|').next() == Some(name))
+}
+
+/// « Changer d'utilisateur » : verrouille ce bureau et propose le compte
+/// choisi ; son mot de passe ouvre ou rejoint sa propre session.
+pub unsafe fn switch_user(i: usize) {
+    lock_screen();
+    if i < USER_COUNT {
+        SELECTED_USER = i;
+    }
+}
+
+/// « Se déconnecter » : ferme la session de ce compte. Un bureau secondaire
+/// s'arrête ; le bureau principal revient à l'écran de connexion.
+pub unsafe fn sign_out() {
+    if OWNER == usize::MAX {
+        lock_screen();
+        return;
+    }
+    if SPAWNED_SESSION {
+        session_control(b"logoff", OWNER);
+        return;
+    }
+    session_control(b"unregister", OWNER);
+    OWNER = usize::MAX;
+    lock_screen();
 }
 
 pub unsafe fn logged_in() -> bool {
@@ -123,6 +248,9 @@ pub unsafe fn skip_login() {
 }
 
 pub unsafe fn current_user_name() -> &'static [u8] {
+    if OWNER < USER_COUNT {
+        return &USERS[OWNER].name[..USERS[OWNER].name_len];
+    }
     if SELECTED_USER < USER_COUNT {
         &USERS[SELECTED_USER].name[..USERS[SELECTED_USER].name_len]
     } else {
@@ -131,6 +259,9 @@ pub unsafe fn current_user_name() -> &'static [u8] {
 }
 
 pub unsafe fn current_user_is_root() -> bool {
+    if OWNER < USER_COUNT {
+        return USERS[OWNER].is_root;
+    }
     if SELECTED_USER < USER_COUNT {
         USERS[SELECTED_USER].is_root
     } else {
@@ -254,27 +385,27 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
 
     // Date sous l'heure.
     let jours: [&[u8]; 7] = [
-        b"dimanche",
-        b"lundi",
-        b"mardi",
-        b"mercredi",
-        b"jeudi",
-        b"vendredi",
-        b"samedi",
+        tr4(&[b"dimanche", b"Sunday", b"domingo", b"Sonntag"]),
+        tr4(&[b"lundi", b"Monday", b"lunes", b"Montag"]),
+        tr4(&[b"mardi", b"Tuesday", b"martes", b"Dienstag"]),
+        tr4(&[b"mercredi", b"Wednesday", b"mi\xE9rcoles", b"Mittwoch"]),
+        tr4(&[b"jeudi", b"Thursday", b"jueves", b"Donnerstag"]),
+        tr4(&[b"vendredi", b"Friday", b"viernes", b"Freitag"]),
+        tr4(&[b"samedi", b"Saturday", b"s\xE1bado", b"Samstag"]),
     ];
     let mois: [&[u8]; 12] = [
-        b"janvier",
-        b"f\xE9vrier",
-        b"mars",
-        b"avril",
-        b"mai",
-        b"juin",
-        b"juillet",
-        b"ao\xFBt",
-        b"septembre",
-        b"octobre",
-        b"novembre",
-        b"d\xE9cembre",
+        tr4(&[b"janvier", b"January", b"enero", b"Januar"]),
+        tr4(&[b"f\xE9vrier", b"February", b"febrero", b"Februar"]),
+        tr4(&[b"mars", b"March", b"marzo", b"M\xE4rz"]),
+        tr4(&[b"avril", b"April", b"abril", b"April"]),
+        tr4(&[b"mai", b"May", b"mayo", b"Mai"]),
+        tr4(&[b"juin", b"June", b"junio", b"Juni"]),
+        tr4(&[b"juillet", b"July", b"julio", b"Juli"]),
+        tr4(&[b"ao\xFBt", b"August", b"agosto", b"August"]),
+        tr4(&[b"septembre", b"September", b"septiembre", b"September"]),
+        tr4(&[b"octobre", b"October", b"octubre", b"Oktober"]),
+        tr4(&[b"novembre", b"November", b"noviembre", b"November"]),
+        tr4(&[b"d\xE9cembre", b"December", b"diciembre", b"Dezember"]),
     ];
     let dow = (st.day_of_week as usize) % 7;
     let mon = ((st.month as usize).wrapping_sub(1)) % 12;
@@ -283,16 +414,20 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
     let jour_nom = jours[dow];
     date_buf[pos..pos + jour_nom.len()].copy_from_slice(jour_nom);
     pos += jour_nom.len();
-    date_buf[pos] = b' ';
-    pos += 1;
+    // « lundi 3 mars », « Monday, 3 March », « lunes, 3 de marzo », « Montag, 3. März ».
+    let lang = ui_lang();
+    let sep: &[u8] = if lang == 0 { b" " } else { b", " };
+    date_buf[pos..pos + sep.len()].copy_from_slice(sep);
+    pos += sep.len();
     if st.day >= 10 {
         date_buf[pos] = b'0' + (st.day / 10) as u8;
         pos += 1;
     }
     date_buf[pos] = b'0' + (st.day % 10) as u8;
     pos += 1;
-    date_buf[pos] = b' ';
-    pos += 1;
+    let sep = [&b" "[..], b" ", b" de ", b". "][lang];
+    date_buf[pos..pos + sep.len()].copy_from_slice(sep);
+    pos += sep.len();
     let mois_nom = mois[mon];
     date_buf[pos..pos + mois_nom.len()].copy_from_slice(mois_nom);
     pos += mois_nom.len();
@@ -316,6 +451,22 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
         draw_user_grid(hdc, &mut b, &f, w, center_y, fade_alpha);
     }
 
+    if SWITCH_NOTICE != 0 && since(SWITCH_NOTICE) < 4000 {
+        text_centered(
+            hdc,
+            f.small,
+            11,
+            mix(0, rgb(0xCC, 0xE4, 0xFF), fade_alpha, 1000),
+            w / 2,
+            h - 90,
+            tr4(&[
+                b"Ouverture de l'autre session : votre bureau reste verrouill\xE9 et intact.",
+                b"Opening the other session: your desktop stays locked and intact.",
+                b"Abriendo la otra sesi\xF3n: su escritorio sigue bloqueado e intacto.",
+                b"Die andere Sitzung wird ge\xF6ffnet: Ihr Desktop bleibt gesperrt und unver\xE4ndert.",
+            ]),
+        );
+    }
     // Message d'erreur.
     if PASSWORD_ERROR && since(ERROR_TIME) < 3000 {
         let alpha = if since(ERROR_TIME) > 2500 {
@@ -331,13 +482,23 @@ pub unsafe fn draw(hdc: Handle, w: i32, h: i32) {
             err_color,
             w / 2,
             center_y + 140,
-            b"Mot de passe incorrect",
+            tr4(&[
+                b"Mot de passe incorrect",
+                b"Incorrect password",
+                b"Contrase\xF1a incorrecta",
+                b"Falsches Kennwort",
+            ]),
         );
     }
 
     // Bouton "Autres utilisateurs" en bas à gauche (si >1 user).
     if USER_COUNT > 1 {
-        let label = b"Autres utilisateurs";
+        let label = tr4(&[
+            b"Autres utilisateurs",
+            b"Other users",
+            b"Otros usuarios",
+            b"Andere Benutzer",
+        ]);
         text(
             hdc,
             f.small,
@@ -467,7 +628,7 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
                 mix(0, rgb(0x80, 0x90, 0xA0), alpha, 1000),
                 fx + 12,
                 fy + 11,
-                b"Mot de passe",
+                tr4(&[b"Mot de passe", b"Password", b"Contrase\xF1a", b"Kennwort"]),
             );
         }
 
@@ -495,7 +656,7 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
                 b,
                 cursor_x,
                 fy + 8,
-                cursor_x + 1,
+                cursor_x + crate::gfx::caret_w(1),
                 fy + field_h - 8,
                 mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
             );
@@ -546,7 +707,12 @@ unsafe fn draw_single_user(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: 
             mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
             w / 2,
             by + 10,
-            b"Se connecter",
+            tr4(&[
+                b"Se connecter",
+                b"Sign in",
+                b"Iniciar sesi\xF3n",
+                b"Anmelden",
+            ]),
         );
     }
 }
@@ -625,9 +791,14 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
 
         // Rôle.
         let role = if user.is_root {
-            b"Administrateur" as &[u8]
+            tr4(&[
+                b"Administrateur",
+                b"Administrator",
+                b"Administrador",
+                b"Administrator",
+            ]) as &[u8]
         } else {
-            b"Utilisateur"
+            tr4(&[b"Utilisateur", b"User", b"Usuario", b"Benutzer"])
         };
         text_centered(
             hdc,
@@ -638,6 +809,27 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
             ay + avatar_size + 28,
             role,
         );
+        // Session déjà ouverte : basculer ne fermera pas son travail.
+        if has_session(i) {
+            text_centered(
+                hdc,
+                f.caption,
+                12,
+                mix(0, rgb(0x7F, 0xE0, 0x9A), alpha, 1000),
+                cx,
+                ay + avatar_size + 44,
+                if i == OWNER {
+                    tr4(&[
+                        b"Session verrouill\xE9e",
+                        b"Session locked",
+                        b"Sesi\xF3n bloqueada",
+                        b"Sitzung gesperrt",
+                    ])
+                } else {
+                    tr4(&[b"Connect\xE9", b"Signed in", b"Conectado", b"Angemeldet"])
+                },
+            );
+        }
     }
 
     // Champ mot de passe sous la grille si l'utilisateur sélectionné en a un.
@@ -691,7 +883,7 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
                 mix(0, rgb(0x80, 0x90, 0xA0), alpha, 1000),
                 fx + 12,
                 fy + 11,
-                b"Mot de passe",
+                tr4(&[b"Mot de passe", b"Password", b"Contrase\xF1a", b"Kennwort"]),
             );
         }
 
@@ -707,7 +899,7 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
                 b,
                 cursor_x,
                 fy + 8,
-                cursor_x + 1,
+                cursor_x + crate::gfx::caret_w(1),
                 fy + field_h - 8,
                 mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
             );
@@ -756,7 +948,12 @@ unsafe fn draw_user_grid(hdc: Handle, b: &mut Brushes, f: &Fonts, w: i32, cy: i3
             mix(0, rgb(0xFF, 0xFF, 0xFF), alpha, 1000),
             w / 2,
             by + 10,
-            b"Se connecter",
+            tr4(&[
+                b"Se connecter",
+                b"Sign in",
+                b"Iniciar sesi\xF3n",
+                b"Anmelden",
+            ]),
         );
     }
 }
@@ -875,6 +1072,19 @@ pub fn approx_sincos(deg: i32) -> (i32, i32) {
 unsafe fn try_login() {
     if check_password() {
         PASSWORD_ERROR = false;
+        if OWNER != usize::MAX && OWNER != SELECTED_USER {
+            // Un autre compte se connecte depuis l'écran verrouillé : sa
+            // session s'ouvre à côté, celle-ci reste intacte et verrouillée.
+            session_control(b"switch", SELECTED_USER);
+            SELECTED_USER = OWNER;
+            PASSWORD_LEN = 0;
+            SWITCH_NOTICE = now().max(1);
+            return;
+        }
+        if OWNER == usize::MAX {
+            OWNER = SELECTED_USER;
+            session_control(b"register", OWNER);
+        }
         LOGIN_FADE_START = now();
     } else {
         PASSWORD_ERROR = true;
@@ -1012,7 +1222,9 @@ pub unsafe fn on_key(hwnd: Handle, vk: u32, ch: u16) {
 
 /// Animation de l'écran de connexion.
 pub unsafe fn animating() -> bool {
-    LOGIN_FADE_START > 0 || (PASSWORD_ERROR && since(ERROR_TIME) < 3000)
+    LOGIN_FADE_START > 0
+        || (PASSWORD_ERROR && since(ERROR_TIME) < 3000)
+        || (SWITCH_NOTICE != 0 && since(SWITCH_NOTICE) < 4100)
 }
 
 // --- Popup d'élévation de privilèges (style UAC) ---
@@ -1131,7 +1343,12 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0xFF, 0xFF, 0xFF),
         w / 2,
         dy + 20,
-        b"Contr\xF4le de compte utilisateur",
+        tr4(&[
+            b"Contr\xF4le de compte utilisateur",
+            b"User Account Control",
+            b"Control de cuentas de usuario",
+            b"Benutzerkontensteuerung",
+        ]),
     );
 
     // Icône bouclier (triangle simplifié).
@@ -1156,7 +1373,12 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0xE6, 0xE6, 0xE6),
         sx + 40,
         sy + 2,
-        b"Voulez-vous autoriser cette application",
+        tr4(&[
+            b"Voulez-vous autoriser cette application",
+            b"Do you want to allow this app",
+            b"\xBFQuiere permitir que esta aplicaci\xF3n",
+            b"M\xF6chten Sie zulassen, dass diese App",
+        ]),
     );
     text(
         hdc,
@@ -1164,7 +1386,12 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0xE6, 0xE6, 0xE6),
         sx + 40,
         sy + 18,
-        b"\xE0 apporter des modifications ?",
+        tr4(&[
+            b"\xE0 apporter des modifications ?",
+            b"to make changes?",
+            b"haga cambios?",
+            b"\xC4nderungen vornimmt?",
+        ]),
     );
 
     // Nom de l'application.
@@ -1184,7 +1411,12 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0x99, 0x99, 0x99),
         dx + 30,
         dy + 130,
-        b"Mot de passe administrateur (root) :",
+        tr4(&[
+            b"Mot de passe administrateur (root) :",
+            b"Administrator (root) password:",
+            b"Contrase\xF1a de administrador (root):",
+            b"Administratorkennwort (root):",
+        ]),
     );
     let fx = dx + 30;
     let fy = dy + 148;
@@ -1233,7 +1465,7 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
             rgb(0x60, 0x70, 0x80),
             fx + 8,
             fy + 9,
-            b"Mot de passe",
+            tr4(&[b"Mot de passe", b"Password", b"Contrase\xF1a", b"Kennwort"]),
         );
     }
 
@@ -1245,7 +1477,12 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
             rgb(0xFF, 0x66, 0x66),
             dx + 30,
             dy + 186,
-            b"Mot de passe incorrect",
+            tr4(&[
+                b"Mot de passe incorrect",
+                b"Incorrect password",
+                b"Contrase\xF1a incorrecta",
+                b"Falsches Kennwort",
+            ]),
         );
     }
 
@@ -1271,7 +1508,7 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0xFF, 0xFF, 0xFF),
         dx + dw - btn_w - 16 - btn_w / 2 - 4,
         btn_y + 7,
-        b"Oui",
+        tr4(&[b"Oui", b"Yes", b"S\xED", b"Ja"]),
     );
     // Non
     round_rect(
@@ -1291,7 +1528,7 @@ pub unsafe fn draw_uac(hdc: Handle, w: i32, h: i32) {
         rgb(0xE6, 0xE6, 0xE6),
         dx + dw - 8 - btn_w / 2,
         btn_y + 7,
-        b"Non",
+        tr4(&[b"Non", b"No", b"No", b"Nein"]),
     );
 
     f.release();

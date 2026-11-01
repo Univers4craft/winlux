@@ -2,62 +2,111 @@
 //! avec la convention d'appel Windows. Le chargeur relie directement les
 //! imports du programme à ces fonctions, sans fabriquer de vraies DLL.
 
+pub mod a11y;
 pub mod advapi32;
 pub mod advapi32_services;
+pub mod audio_com;
 pub mod bcrypt;
+pub mod clipboard;
 pub mod comctl32;
+pub mod comdlg32;
+pub mod comobj;
 pub mod crt;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
+pub mod crt_ucrt;
 pub mod crypt32;
+pub mod cxx_eh;
+pub mod d2d1;
+pub mod d2d_raster;
 pub mod d3d11;
+pub mod d3d12;
+pub mod d3d9;
+pub mod d3d9_shader;
 pub mod d3d_shader;
+pub mod dataobject;
 pub mod dbghelp;
+pub mod dinput8;
+pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
 pub mod dxgi;
+pub mod dxva2;
+pub mod evdev;
 pub mod eventing;
 pub mod gdi32;
 pub mod gdi32_ext;
+pub mod gdi32_fonts;
 pub mod gl_bindings;
+pub mod gl_legacy;
+pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
 pub mod iphlpapi;
+pub mod ipp;
 pub mod kernel32;
 pub mod kernel32_cpu;
+pub mod kernel32_ext;
+pub mod kernel32_fs;
 pub mod kernel32_misc;
+pub mod knownfolders;
 pub mod libgcc;
 pub mod libstdcpp;
+pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
+pub mod mmdevapi;
+pub mod monitors;
 pub mod mscoree;
 pub mod msvcrt;
+pub mod nls;
+pub mod notifyicon;
 pub mod ntdll;
 pub mod ole32;
 pub mod oleaut32;
 pub mod powrprof;
+pub mod print_pdf;
 pub mod propsys;
 pub mod quartz;
 pub mod resource;
 pub mod rpcrt4;
 pub mod sechost;
+pub mod security;
+pub mod seh;
 pub mod setupapi;
+pub mod sfnt;
 pub mod shell32;
 pub mod shlwapi;
+pub mod shlwapi_reg;
+pub mod spirv;
 pub mod taskschd;
+pub mod threadpool;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
 pub mod uxtheme;
+pub mod v4l2;
+pub mod va_bindings;
 pub mod version;
+pub mod vk_backend;
+pub mod vk_bindings;
+pub mod windowscodecs;
 pub mod winfile;
 pub mod winhttp;
+pub mod winlux_capture;
+pub mod winlux_gpu;
+pub mod winlux_media;
 pub mod winlux_pty;
 pub mod winmm;
+pub mod winmm_waveout;
+pub mod winspool;
 pub mod wintrust;
 pub mod ws2_32;
+pub mod xaudio2;
+pub mod xdnd;
+pub mod xinput;
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -101,6 +150,9 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crt_stdio::exports());
             e.extend(crt_scan::exports());
             e.extend(crt_runtime::exports());
+            e.extend(crt_ucrt::exports());
+            e.extend(cxx_eh::exports());
+            e.extend(crate::intl::api::crt_exports());
             e
         };
         let mut ucrt = crt.clone();
@@ -109,6 +161,9 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(crt_stdio::exports());
         ucrt.extend(crt_scan::exports());
         ucrt.extend(crt_runtime::exports());
+        ucrt.extend(crt_ucrt::exports());
+        ucrt.extend(cxx_eh::exports());
+        ucrt.extend(crate::intl::api::crt_exports());
         vec![
             Builtin {
                 name: "kernel32",
@@ -116,18 +171,40 @@ fn builtins() -> &'static Vec<Builtin> {
                     let mut e = kernel32::exports();
                     e.extend(winfile::exports());
                     e.extend(kernel32_misc::exports());
+                    e.extend(kernel32_fs::exports());
                     e.extend(kernel32_cpu::exports());
                     e.extend(resource::exports());
                     e.extend(mmap::exports());
                     e.extend(winlux_pty::exports());
+                    e.extend(winlux_capture::exports());
+                    e.extend(powrprof::kernel32_exports());
+                    e.extend(gpu_caps::exports());
+                    e.extend(winlux_media::exports());
                     e.extend(crate::mounts::exports());
+                    e.extend(crate::archive::ffi::exports());
+                    e.extend(crate::imaging::api::exports());
+                    e.extend(winlux_gpu::exports());
+                    e.extend(seh::kernel32_exports());
+                    e.extend(kernel32_ext::kernel32_exports());
+                    // Langue, pages de code et heure : priment sur les anciennes versions.
+                    e.extend(crate::intl::api::kernel32_exports());
+                    // nls couvre les LCTYPE lus par la globalisation NLS de .NET
+                    // (formats monétaires, signe négatif…) : il passe après intl.
+                    e.extend(nls::exports());
+                    e.extend(threadpool::exports());
                     e
                 },
                 handle: fake_module(),
             },
             Builtin {
                 name: "ntdll",
-                exports: ntdll::exports(),
+                exports: {
+                    let mut e = ntdll::exports();
+                    e.extend(seh::exports());
+                    e.extend(kernel32_ext::ntdll_exports());
+                    e.extend(kernel32_fs::ntdll_exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -143,8 +220,22 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "user32",
                 exports: {
+                    // user32_ext contient surtout des bouchons : il ne doit
+                    // compléter user32 que pour les noms absents (sinon ses
+                    // stubs écrasaient GetParent, SetCapture, FindWindow,
+                    // SetWindowLongPtr(GWLP_WNDPROC)…). Quelques fonctions y
+                    // sont meilleures que celles de user32 : elles gagnent.
                     let mut e = user32::exports();
-                    e.extend(user32_ext::exports());
+                    for (name, addr) in user32_ext::exports() {
+                        let ext_wins = matches!(name, "GetKeyboardLayoutNameA");
+                        if ext_wins {
+                            e.insert(name, addr);
+                        } else {
+                            e.entry(name).or_insert(addr);
+                        }
+                    }
+                    e.extend(clipboard::exports());
+                    e.extend(crate::intl::api::user32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -154,6 +245,10 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = advapi32::exports();
                     e.extend(advapi32_services::exports());
+                    e.extend(kernel32_ext::advapi32_exports());
+                    e.extend(kernel32_fs::advapi32_exports());
+                    e.extend(security::advapi32_exports());
+                    e.extend(crate::intl::api::advapi32_exports());
                     e.extend(eventing::exports());
                     e
                 },
@@ -176,7 +271,11 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "ole32",
-                exports: ole32::exports(),
+                exports: {
+                    let mut e = ole32::exports();
+                    e.extend(dataobject::ole32_exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -191,7 +290,13 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "shell32",
-                exports: shell32::exports(),
+                exports: {
+                    let mut e = shell32::exports();
+                    e.extend(knownfolders::shell32_exports());
+                    e.extend(security::shell32_exports());
+                    e.extend(dataobject::shell32_exports());
+                    e
+                },
                 handle: fake_module(),
             },
             Builtin {
@@ -209,6 +314,8 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: {
                     let mut e = gdi32::exports();
                     e.extend(gdi32_ext::exports());
+                    e.extend(gdi32_fonts::exports());
+                    e.extend(winspool::gdi_exports());
                     e
                 },
                 handle: fake_module(),
@@ -220,7 +327,46 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "winmm",
-                exports: winmm::exports(),
+                exports: {
+                    let mut e = winmm::exports();
+                    e.extend(winmm_waveout::exports());
+                    e
+                },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dsound",
+                exports: dsound::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "mmdevapi",
+                exports: mmdevapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "audioses",
+                exports: mmdevapi::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "avrt",
+                exports: mmdevapi::avrt_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "xaudio2_9",
+                exports: xaudio2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "xaudio2_8",
+                exports: xaudio2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "xaudio2_7",
+                exports: xaudio2::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -249,6 +395,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "mf",
+                exports: mfplat::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "crypt32",
                 exports: crypt32::exports(),
                 handle: fake_module(),
@@ -261,6 +412,21 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "d3d11",
                 exports: d3d11::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d12",
+                exports: d3d12::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dxva2",
+                exports: dxva2::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d3d9",
+                exports: d3d9::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -290,7 +456,21 @@ fn builtins() -> &'static Vec<Builtin> {
             },
             Builtin {
                 name: "userenv",
-                exports: userenv::exports(),
+                exports: {
+                    let mut e = userenv::exports();
+                    e.extend(knownfolders::userenv_exports());
+                    e
+                },
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "windowscodecs",
+                exports: windowscodecs::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "d2d1",
+                exports: d2d1::exports(),
                 handle: fake_module(),
             },
             Builtin {
@@ -319,6 +499,31 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "xinput1_4",
+                exports: xinput::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dinput8",
+                exports: dinput8::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dinput",
+                exports: dinput8::legacy_exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winspool",
+                exports: winspool::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "comdlg32",
+                exports: comdlg32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "libgcc_s_seh-1",
                 exports: libgcc::exports(),
                 handle: fake_module(),
@@ -344,11 +549,20 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-core-com-l1-") {
         return "ole32".into();
     }
+    // Windows Runtime (RoInitialize...) : servi par notre ole32, avant la
+    // règle générale api-ms-win-core-* → kernel32.
+    if base.starts_with("api-ms-win-core-winrt-") {
+        return "ole32".into();
+    }
     if base.starts_with("api-ms-win-core-localregistry-l1-") {
         return "advapi32".into();
     }
     if base.starts_with("api-ms-win-core-rtlsupport-l1-") {
         return "ntdll".into();
+    }
+    // Contrats d'alimentation (PowerGetActiveScheme, PowerSetActiveScheme...).
+    if base.starts_with("api-ms-win-power-") {
+        return "powrprof".into();
     }
     if base.starts_with("api-ms-win-core-")
         || base.starts_with("api-ms-win-downlevel-kernel32-l2-")
@@ -363,9 +577,6 @@ pub fn normalize(dll: &str) -> String {
     }
     if base.starts_with("api-ms-win-eventing-provider-l1-") {
         return "advapi32".into();
-    }
-    if base.starts_with("api-ms-win-core-winrt-") {
-        return "ole32".into();
     }
     if base.starts_with("api-ms-win-core-path-l1-") {
         return "kernel32".into();
@@ -432,11 +643,29 @@ pub fn normalize(dll: &str) -> String {
     if base == "comctl32" || base == "iertutil" {
         return "comctl32".into();
     }
+    // XAudio2 redistribuable (NuGet) et anciennes versions 2.x par COM.
+    if base == "xaudio2_9redist" {
+        return "xaudio2_9".into();
+    }
+    if base.starts_with("xaudio2_") && base != "xaudio2_8" && base != "xaudio2_9" {
+        return "xaudio2_7".into();
+    }
+    // winspool.drv (et son API-set) : le spooler Winlux.
+    if base == "winspool.drv"
+        || base == "winspool"
+        || base.starts_with("ext-ms-win-printer-winspool-")
+    {
+        return "winspool".into();
+    }
     if base == "shlwapi" {
         return "shlwapi".into();
     }
     if base == "oleaut32" {
         return "oleaut32".into();
+    }
+    // Toutes les versions d'XInput partagent la même implémentation.
+    if base.starts_with("xinput1_") || base == "xinput9_1_0" {
+        return "xinput1_4".into();
     }
     base.to_string()
 }
@@ -451,7 +680,12 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
     // Les API « A/W » d'api-ms-win-core peuvent aussi vivre dans ntdll (Rtl*).
     r.or_else(|| {
         if normalized == "kernel32" {
-            lookup("ntdll", func)
+            // KernelBase exporte aussi les Reg* (api-ms-win-core-registry).
+            lookup("ntdll", func).or_else(|| {
+                func.starts_with("Reg")
+                    .then(|| lookup("advapi32", func))
+                    .flatten()
+            })
         } else {
             None
         }
@@ -465,6 +699,21 @@ pub fn module_handle(dll: &str) -> Option<usize> {
         return Some(b.handle);
     }
     crate::loader::find_module_by_name(dll).map(|m| m.base)
+}
+
+/// Toutes les DLL intégrées et leurs exports, triés : sert à `winlux
+/// --exports` et à l'outil de mesure `scripts/compat-imports.py`.
+pub fn builtin_exports() -> Vec<(&'static str, Vec<&'static str>)> {
+    let mut out: Vec<(&'static str, Vec<&'static str>)> = builtins()
+        .iter()
+        .map(|b| {
+            let mut names: Vec<&'static str> = b.exports.keys().copied().collect();
+            names.sort_unstable();
+            (b.name, names)
+        })
+        .collect();
+    out.sort_unstable_by_key(|(name, _)| *name);
+    out
 }
 
 /// Si `h` est le HMODULE d'une DLL intégrée, renvoie son nom normalisé.
@@ -486,42 +735,19 @@ pub unsafe fn cstr(p: *const u8) -> String {
     decode_ansi(std::slice::from_raw_parts(p, n))
 }
 
-const CP1252: [u16; 32] = [
-    0x20ac, 0x0081, 0x201a, 0x0192, 0x201e, 0x2026, 0x2020, 0x2021, 0x02c6, 0x2030, 0x0160, 0x2039,
-    0x0152, 0x008d, 0x017d, 0x008f, 0x0090, 0x2018, 0x2019, 0x201c, 0x201d, 0x2022, 0x2013, 0x2014,
-    0x02dc, 0x2122, 0x0161, 0x203a, 0x0153, 0x009d, 0x017e, 0x0178,
-];
-
-/// Codepage ANSI par défaut de Winlux (Windows-1252), convertie vers UTF-8
-/// pour l'interface Linux. Les API Unicode `W` évitent cette conversion.
+/// Page ANSI de la locale (Windows-1252 en Europe de l'Ouest), convertie
+/// vers UTF-8 pour l'interface Linux. Les API Unicode `W` évitent cette
+/// conversion.
 pub fn decode_ansi(bytes: &[u8]) -> String {
-    bytes
-        .iter()
-        .map(|&b| {
-            let n = if (0x80..=0x9f).contains(&b) {
-                CP1252[(b - 0x80) as usize] as u32
-            } else {
-                b as u32
-            };
-            char::from_u32(n).unwrap_or('\u{fffd}')
-        })
-        .collect()
+    let cp = crate::intl::codepage::resolve(crate::intl::codepage::CP_ACP);
+    crate::intl::codepage::decode(cp, bytes, false).unwrap_or_default()
 }
 
 pub fn encode_ansi(text: &str) -> Vec<u8> {
-    text.chars()
-        .map(|c| {
-            let n = c as u32;
-            if n <= 0x7f || (0xa0..=0xff).contains(&n) {
-                return n as u8;
-            }
-            CP1252
-                .iter()
-                .position(|&x| x as u32 == n)
-                .map(|i| i as u8 + 0x80)
-                .unwrap_or(b'?')
-        })
-        .collect()
+    let cp = crate::intl::codepage::resolve(crate::intl::codepage::CP_ACP);
+    crate::intl::codepage::encode(cp, text, b'?', true)
+        .map(|e| e.bytes)
+        .unwrap_or_default()
 }
 
 pub unsafe fn wstr(p: *const u16) -> String {
@@ -554,9 +780,58 @@ pub unsafe fn put_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
     w.len() as u32
 }
 
+/// Copie tronquante façon `GetWindowTextA` : le tampon de `cap` caractères
+/// reçoit au plus `cap - 1` caractères, est toujours terminé par un NUL, et
+/// la fonction renvoie le nombre de caractères copiés (0 si `cap` est nul).
+///
+/// # Sécurité
+/// `buf` doit pointer sur `cap` octets inscriptibles (ou être nul).
+pub unsafe fn put_text_a(s: &str, buf: *mut u8, cap: u32) -> u32 {
+    if buf.is_null() || cap == 0 {
+        return 0;
+    }
+    let b = s.as_bytes();
+    let n = b.len().min(cap as usize - 1);
+    std::ptr::copy_nonoverlapping(b.as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    n as u32
+}
+
+/// Variante large de [`put_text_a`] (`GetWindowTextW`, `GetClassNameW`…).
+///
+/// # Sécurité
+/// `buf` doit pointer sur `cap` mots de 16 bits inscriptibles (ou être nul).
+pub unsafe fn put_text_w(s: &str, buf: *mut u16, cap: u32) -> u32 {
+    if buf.is_null() || cap == 0 {
+        return 0;
+    }
+    let w: Vec<u16> = s.encode_utf16().collect();
+    let n = w.len().min(cap as usize - 1);
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, n);
+    *buf.add(n) = 0;
+    n as u32
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{lookup, normalize};
+    use super::{lookup, normalize, put_text_a, put_text_w};
+
+    #[test]
+    fn put_text_tronque_et_termine_toujours_par_nul() {
+        let mut a = [0xAAu8; 4];
+        assert_eq!(unsafe { put_text_a("Bonjour", a.as_mut_ptr(), 4) }, 3);
+        assert_eq!(&a, b"Bon\0");
+        let mut a = [0xAAu8; 16];
+        assert_eq!(unsafe { put_text_a("Bonjour", a.as_mut_ptr(), 16) }, 7);
+        assert_eq!(&a[..8], b"Bonjour\0");
+        assert_eq!(unsafe { put_text_a("x", a.as_mut_ptr(), 0) }, 0);
+        assert_eq!(unsafe { put_text_a("x", std::ptr::null_mut(), 4) }, 0);
+        let mut w = [0xAAAAu16; 3];
+        assert_eq!(unsafe { put_text_w("été", w.as_mut_ptr(), 3) }, 2);
+        assert_eq!(w, ['é' as u16, 't' as u16, 0]);
+        assert_eq!(unsafe { put_text_w("", w.as_mut_ptr(), 1) }, 0);
+        assert_eq!(w[0], 0);
+    }
 
     #[test]
     fn normalise_les_alias_de_dll() {
@@ -579,6 +854,7 @@ mod tests {
                 "RegOpenKeyExW",
             ),
             ("api-ms-win-core-com-l1-1-0.dll", "ole32", "CoInitializeEx"),
+            ("api-ms-win-core-winrt-l1-1-0.dll", "ole32", "RoInitialize"),
             (
                 "api-ms-win-core-rtlsupport-l1-1-0.dll",
                 "ntdll",

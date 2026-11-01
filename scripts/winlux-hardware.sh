@@ -9,6 +9,9 @@ WINLUX_HW_LOG=${WINLUX_HW_LOG:-/run/winlux/hardware.log}
 mkdir -p "$(dirname "$WINLUX_HW_LOG")" /run/winlux/hw
 
 log() { printf '[%s] %s\n' "$(date '+%H:%M:%S' 2>/dev/null || echo '??:??:??')" "$*" >>"$WINLUX_HW_LOG"; }
+# Le winlux-prime-run livré avec Winlux choisit le GPU via le runtime
+# (adresse PCI exacte, NVIDIA ou Mesa) : ne pas le remplacer.
+prime_run_is_runtime() { grep -q -- "--gpu-env" /usr/bin/winlux-prime-run 2>/dev/null; }
 log "Début de la détection matérielle"
 
 # --- Chargement des modules de base ---
@@ -36,9 +39,45 @@ enumerate_pci() {
     fi
 }
 
+# --- Machine virtuelle ---
+# Le nom de l'hyperviseur va dans /run/winlux/hw/virtual-machine (fichier
+# absent sur un vrai PC). Les cartes graphiques émulées ne comptent pas comme
+# GPU : le curseur logiciel et le rendu OpenGL logiciel restent actifs, au
+# lieu d'un curseur matériel invisible ou décalé et d'un GL sans accélération.
+detect_virtual_machine() {
+    dmi=/sys/class/dmi/id
+    identity=$(cat "$dmi/sys_vendor" "$dmi/product_name" "$dmi/board_vendor" 2>/dev/null | tr '\n' ' ')
+    vm=
+    case "$identity" in
+        *QEMU*|*Bochs*|*KVM*) vm=qemu ;;
+        *innotek*|*VirtualBox*) vm=virtualbox ;;
+        *VMware*) vm=vmware ;;
+        *Microsoft\ Corporation*Virtual\ Machine*) vm=hyperv ;;
+        *Xen*) vm=xen ;;
+        *Parallels*) vm=parallels ;;
+    esac
+    if test -z "$vm" && grep -qw hypervisor /proc/cpuinfo 2>/dev/null; then vm=other; fi
+    rm -f /run/winlux/hw/virtual-machine
+    if test -n "$vm"; then
+        printf '%s\n' "$vm" >/run/winlux/hw/virtual-machine
+        log "Machine virtuelle détectée : $vm"
+    fi
+}
+
+# Adaptateurs d'affichage émulés : QEMU/Bochs, virtio, QXL, VMware SVGA,
+# VirtualBox, Hyper-V ; Cirrus seulement s'il est dans une VM.
+virtual_display() {
+    case "$1" in
+        0x1234|0x1af4|0x1b36|0x15ad|0x80ee|0x1414) return 0 ;;
+        0x1013) test -s /run/winlux/hw/virtual-machine ;;
+        *) return 1 ;;
+    esac
+}
+
 # --- Détection GPU ---
 detect_gpu() {
     gpu_count=0
+    virtual_gpu_count=0
     has_nvidia=0
     has_amd=0
     has_intel=0
@@ -53,6 +92,11 @@ detect_gpu() {
             0x030000|0x030200|0x038000)
                 vendor=$(cat "$dev/vendor" 2>/dev/null || echo "0x0000")
                 device_id=$(cat "$dev/device" 2>/dev/null || echo "0x0000")
+                if virtual_display "$vendor"; then
+                    virtual_gpu_count=$((virtual_gpu_count + 1))
+                    log "Affichage virtuel détecté : $(basename "$dev") [$vendor:$device_id]"
+                    continue
+                fi
                 gpu_count=$((gpu_count + 1))
                 case "$vendor" in
                     0x10de)
@@ -79,6 +123,7 @@ detect_gpu() {
     done
 
     printf '%s\n' "$gpu_count" >/run/winlux/hw/gpu-count
+    printf '%s\n' "$virtual_gpu_count" >/run/winlux/hw/virtual-gpu-count
     printf '%s\n' "$has_nvidia" >/run/winlux/hw/has-nvidia
     printf '%s\n' "$has_amd" >/run/winlux/hw/has-amd
     printf '%s\n' "$has_intel" >/run/winlux/hw/has-intel
@@ -171,8 +216,12 @@ configure_multi_gpu() {
             log "PRIME via nouveau (pas de nvidia_drm)"
         fi
 
-        # Créer le script d'offload GPU pour les applications
+        # Créer le script d'offload GPU pour les applications, sauf si la
+        # version Winlux (qui interroge le runtime) est déjà installée.
         mkdir -p /usr/bin
+        if prime_run_is_runtime; then
+            log "winlux-prime-run du runtime conservé"
+        else
         cat >/usr/bin/winlux-prime-run <<'PRIME'
 #!/bin/sh
 # Lance une application sur le GPU dédié (PRIME offload).
@@ -185,6 +234,7 @@ exec "$@"
 PRIME
         chmod 755 /usr/bin/winlux-prime-run
         log "Script winlux-prime-run créé"
+        fi
     fi
 
     # AMD switchable (Intel + AMD ou AMD + AMD)
@@ -193,6 +243,9 @@ PRIME
         printf 'switchable-amd\n' >/run/winlux/hw/gpu-mode
 
         mkdir -p /usr/bin
+        if prime_run_is_runtime; then
+            log "winlux-prime-run du runtime conservé"
+        else
         cat >/usr/bin/winlux-prime-run <<'PRIME'
 #!/bin/sh
 # Lance une application sur le GPU AMD dédié (DRI_PRIME).
@@ -201,6 +254,7 @@ exec "$@"
 PRIME
         chmod 755 /usr/bin/winlux-prime-run
         log "Script winlux-prime-run créé (DRI_PRIME AMD)"
+        fi
     fi
 
     # Multi-GPU identique (SLI/CrossFire style)
@@ -626,6 +680,7 @@ load_firmware() {
 hardware_summary() {
     log "=== Résumé matériel ==="
     log "GPU : $(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0) carte(s)"
+    test -s /run/winlux/hw/virtual-machine && log "  Machine virtuelle : $(cat /run/winlux/hw/virtual-machine) ($(cat /run/winlux/hw/virtual-gpu-count 2>/dev/null || echo 0) affichage(s) virtuel(s), curseur logiciel)"
     test "$(cat /run/winlux/hw/has-nvidia 2>/dev/null)" = 1 && log "  NVIDIA (driver=$(cat /run/winlux/hw/nvidia-driver 2>/dev/null || echo ?))"
     test "$(cat /run/winlux/hw/has-amd 2>/dev/null)" = 1 && log "  AMD (driver=$(cat /run/winlux/hw/amd-driver 2>/dev/null || echo ?))"
     test "$(cat /run/winlux/hw/has-intel 2>/dev/null)" = 1 && log "  Intel (driver=$(cat /run/winlux/hw/intel-driver 2>/dev/null || echo ?))"
@@ -643,6 +698,7 @@ hardware_summary() {
 # --- Exécution principale ---
 main() {
     enumerate_pci
+    detect_virtual_machine
     detect_gpu
     configure_gpu
     detect_cpu

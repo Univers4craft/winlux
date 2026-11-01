@@ -35,7 +35,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 rgb(0xCC, 0xCC, 0xCC),
                 (r.left + r.right) / 2,
                 r.top + 40,
-                b"Capture d'ecran",
+                tr4(&[
+                    b"Capture d'ecran",
+                    b"Screenshot",
+                    b"Captura de pantalla",
+                    b"Bildschirmfoto",
+                ]),
             );
             text_centered(
                 g.hdc,
@@ -44,7 +49,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 rgb(0x88, 0x88, 0x88),
                 (r.left + r.right) / 2,
                 r.top + 80,
-                b"Cliquez pour commencer",
+                tr4(&[
+                    b"Cliquez pour commencer",
+                    b"Click to start",
+                    b"Haga clic para empezar",
+                    b"Zum Starten klicken",
+                ]),
             );
 
             let btn_x = (r.left + r.right) / 2 - 75;
@@ -65,7 +75,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 rgb(0xFF, 0xFF, 0xFF),
                 btn_x + 75,
                 btn_y + 12,
-                b"Plein ecran",
+                tr4(&[
+                    b"Plein ecran",
+                    b"Full screen",
+                    b"Pantalla completa",
+                    b"Vollbild",
+                ]),
             );
         }
         1 => {
@@ -126,7 +141,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 rgb(0xCC, 0xCC, 0xCC),
                 (r.left + r.right) / 2,
                 r.top + 40,
-                b"Capture reussie !",
+                tr4(&[
+                    b"Capture reussie !",
+                    b"Screenshot taken!",
+                    b"\xA1Captura realizada!",
+                    b"Bildschirmfoto erstellt!",
+                ]),
             );
 
             let btn_w = 100;
@@ -148,7 +168,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 rgb(0xFF, 0xFF, 0xFF),
                 r.left + 16 + btn_w / 2,
                 btn_y + 12,
-                b"Copier",
+                tr4(&[b"Copier", b"Copy", b"Copiar", b"Kopieren"]),
             );
 
             fill(
@@ -167,7 +187,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 rgb(0xFF, 0xFF, 0xFF),
                 r.left + 16 + btn_w + 8 + btn_w / 2,
                 btn_y + 12,
-                b"Sauvegarder",
+                tr4(&[b"Sauvegarder", b"Save", b"Guardar", b"Speichern"]),
             );
 
             fill(
@@ -186,7 +206,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 rgb(0xFF, 0xFF, 0xFF),
                 r.left + 16 + btn_w * 2 + 16 + btn_w / 2,
                 btn_y + 12,
-                b"Nouvelle",
+                tr4(&[b"Nouvelle", b"New", b"Nueva", b"Neu"]),
             );
         }
         _ => {}

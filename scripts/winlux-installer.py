@@ -27,7 +27,8 @@ import time
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SCRIPT_DIR)
 HW_DETECT = os.path.join(SCRIPT_DIR, "winlux-hw-detect.sh")
-INSTALL_SH = os.path.join(SCRIPT_DIR, "install.sh")
+INSTALL_SH = next((p for p in (os.path.join(SCRIPT_DIR, "install.sh"), "/opt/winlux/scripts/install.sh") if os.path.exists(p)),
+                  os.path.join(SCRIPT_DIR, "install.sh"))
 SECUREBOOT_SH = next((p for p in (os.path.join(SCRIPT_DIR, "winlux-secureboot.sh"), "/usr/bin/winlux-secureboot") if os.path.exists(p)), None)
 sys.path[:0] = [SCRIPT_DIR, "/usr/share/winlux"]
 import winlux_autoinstall as autoinstall  # noqa: E402
@@ -1360,6 +1361,61 @@ TRANSLATIONS = {
 
 EXTRA_TRANSLATIONS = {
     "fr_FR": {
+        "keyboard_name_fr": "AZERTY — Français",
+        "keyboard_name_us": "QWERTY — Anglais (US)",
+        "keyboard_name_gb": "QWERTY — Anglais (UK)",
+        "keyboard_name_de": "QWERTZ — Allemand",
+        "keyboard_name_es": "QWERTY — Espagnol",
+        "keyboard_name_it": "QWERTY — Italien",
+        "keyboard_name_br": "QWERTY — Portugais (Brésil)",
+        "keyboard_name_ch": "QWERTZ — Suisse",
+        "keyboard_name_be": "AZERTY — Belge",
+        "keyboard_name_ca": "QWERTY — Canadien multilingue",
+        "keyboard_test_placeholder": "Tapez ici pour tester...",
+        "language_keyboard": "Clavier : {kb}",
+        "disk_unknown": "Disque inconnu",
+        "network_proxy_placeholder": "proxy.entreprise.local",
+        "bench_title": "Évaluation des performances",
+        "bench_subtitle": "Test rapide de votre matériel (environ 10 secondes) pour régler Winlux au mieux. Le disque est seulement lu : rien n'est écrit avant le lancement de l'installation.",
+        "bench_overall": "Note globale",
+        "bench_starting": "Le test démarre…",
+        "bench_retry": "Relancer",
+        "bench_cpu": "Processeur",
+        "bench_ram": "Mémoire",
+        "bench_disk": "Disque",
+        "bench_gpu": "Graphique",
+        "bench_waiting": "en attente",
+        "bench_tips": "Recommandations",
+        "bench_running": "Test en cours… vous pouvez continuer, il se termine en arrière-plan.",
+        "bench_failed": "Test impossible : {error}",
+        "bench_measuring": "mesure en cours…",
+        "bench_done": "Déterminée par le composant le plus lent, sur une échelle de 1,0 à 9,9. L'écriture disque sera mesurée pendant l'installation.",
+        "bench_no_tip": "Aucun réglage particulier nécessaire.",
+        "bench_stopped": "Le test s'est arrêté avant la fin. Vous pouvez le relancer ou continuer.",
+        "profile_title": "Comment allez-vous utiliser ce PC ?",
+        "profile_subtitle": "Winlux règle le processeur, la mémoire, le disque et la carte graphique selon votre usage. Vous pourrez en changer plus tard (winlux-profile --set).",
+        "profile_recommended": "Recommandé pour ce PC",
+        "profile_apps": "Apps : {apps}",
+        "profile_install_apps": "Installer les applications recommandées au premier démarrage (connexion Internet requise)",
+        "fullname_placeholder": "Utilisateur Winlux",
+        "migration_title": "Transférer depuis un autre PC",
+        "migration_subtitle": "Récupérez vos documents, images et paramètres depuis un PC du même réseau. Le transfert a lieu à la fin de l'installation, directement dans votre nouveau compte.",
+        "err_no_disk": "Aucun disque sélectionné.",
+        "err_iso_missing": "ISO source introuvable. Définissez WINLUX_ISO ou démarrez depuis le Live USB.",
+        "err_verify": "Vérification échouée :\n{error}",
+        "err_boot_file": "Fichier de démarrage absent du média : {path}",
+        "err_manual_plan": "Plan de partitionnement manuel invalide.",
+        "err_partitions_missing": "Partitions introuvables après le partitionnement.",
+        "err_resize_missing": "Partitions Winlux introuvables après le redimensionnement.",
+        "err_partition_not_found": "Partition introuvable : {path}",
+        "warn_import_skipped": "Import Windows ignoré : {error}",
+        "warn_network": "Avertissement réseau : {error}",
+        "warn_bookmarks": "Favoris {browser} ignorés : {error}",
+        "progress_import_folder": "Import Windows : {folder}...",
+        "warn_copy_partial": "Certains fichiers de {folder} n'ont pas pu être copiés.",
+        "warn_import": "Avertissement import Windows : {error}",
+        "warn_write_bench": "Mesure d'écriture disque impossible : {error}",
+        "warn_transfer": "Avertissement transfert : {error}",
         "encrypt_ascii": "Utilisez uniquement des lettres sans accent, des chiffres et des symboles du clavier : l'écran de déverrouillage au démarrage ne gère pas les accents.",
         "part_type_manual_desc": "Choisissez une partition existante pour Winlux : elle sera formatée, les autres partitions sont conservées.",
         "part_layout_after": "Après l'installation :",
@@ -1382,6 +1438,61 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Redimensionnement de Windows (peut prendre plusieurs minutes)...",
     },
     "en_US": {
+        "keyboard_name_fr": "AZERTY — French",
+        "keyboard_name_us": "QWERTY — English (US)",
+        "keyboard_name_gb": "QWERTY — English (UK)",
+        "keyboard_name_de": "QWERTZ — German",
+        "keyboard_name_es": "QWERTY — Spanish",
+        "keyboard_name_it": "QWERTY — Italian",
+        "keyboard_name_br": "QWERTY — Portuguese (Brazil)",
+        "keyboard_name_ch": "QWERTZ — Swiss",
+        "keyboard_name_be": "AZERTY — Belgian",
+        "keyboard_name_ca": "QWERTY — Canadian Multilingual",
+        "keyboard_test_placeholder": "Type here to test...",
+        "language_keyboard": "Keyboard: {kb}",
+        "disk_unknown": "Unknown disk",
+        "network_proxy_placeholder": "proxy.company.local",
+        "bench_title": "Performance assessment",
+        "bench_subtitle": "Quick test of your hardware (about 10 seconds) to tune Winlux as well as possible. The disk is only read: nothing is written before the installation starts.",
+        "bench_overall": "Overall score",
+        "bench_starting": "The test is starting…",
+        "bench_retry": "Run again",
+        "bench_cpu": "Processor",
+        "bench_ram": "Memory",
+        "bench_disk": "Disk",
+        "bench_gpu": "Graphics",
+        "bench_waiting": "waiting",
+        "bench_tips": "Recommendations",
+        "bench_running": "Test in progress… you can continue, it finishes in the background.",
+        "bench_failed": "Test failed: {error}",
+        "bench_measuring": "measuring…",
+        "bench_done": "Set by the slowest component, on a scale from 1.0 to 9.9. Disk writing will be measured during installation.",
+        "bench_no_tip": "No special tuning needed.",
+        "bench_stopped": "The test stopped before the end. You can run it again or continue.",
+        "profile_title": "How will you use this PC?",
+        "profile_subtitle": "Winlux tunes the processor, memory, disk and graphics card for your use. You can change it later (winlux-profile --set).",
+        "profile_recommended": "Recommended for this PC",
+        "profile_apps": "Apps: {apps}",
+        "profile_install_apps": "Install the recommended apps at first startup (Internet connection required)",
+        "fullname_placeholder": "Winlux user",
+        "migration_title": "Transfer from another PC",
+        "migration_subtitle": "Bring over your documents, pictures and settings from a PC on the same network. The transfer happens at the end of installation, straight into your new account.",
+        "err_no_disk": "No disk selected.",
+        "err_iso_missing": "Source ISO not found. Set WINLUX_ISO or start from the Live USB.",
+        "err_verify": "Verification failed:\n{error}",
+        "err_boot_file": "Boot file missing from the media: {path}",
+        "err_manual_plan": "Invalid manual partitioning plan.",
+        "err_partitions_missing": "Partitions not found after partitioning.",
+        "err_resize_missing": "Winlux partitions not found after resizing.",
+        "err_partition_not_found": "Partition not found: {path}",
+        "warn_import_skipped": "Windows import skipped: {error}",
+        "warn_network": "Network warning: {error}",
+        "warn_bookmarks": "{browser} bookmarks skipped: {error}",
+        "progress_import_folder": "Windows import: {folder}...",
+        "warn_copy_partial": "Some files in {folder} could not be copied.",
+        "warn_import": "Windows import warning: {error}",
+        "warn_write_bench": "Disk write measurement failed: {error}",
+        "warn_transfer": "Transfer warning: {error}",
         "encrypt_ascii": 'Use only unaccented letters, digits and keyboard symbols: the unlock screen at startup does not support accented characters.',
         "part_type_manual_desc": "Pick an existing partition for Winlux: it will be formatted, other partitions are kept.",
         "part_layout_after": "After installation:",
@@ -1404,6 +1515,61 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Resizing Windows (may take several minutes)...",
     },
     "de_DE": {
+        "keyboard_name_fr": "AZERTY — Französisch",
+        "keyboard_name_us": "QWERTY — Englisch (USA)",
+        "keyboard_name_gb": "QWERTY — Englisch (GB)",
+        "keyboard_name_de": "QWERTZ — Deutsch",
+        "keyboard_name_es": "QWERTY — Spanisch",
+        "keyboard_name_it": "QWERTY — Italienisch",
+        "keyboard_name_br": "QWERTY — Portugiesisch (Brasilien)",
+        "keyboard_name_ch": "QWERTZ — Schweiz",
+        "keyboard_name_be": "AZERTY — Belgisch",
+        "keyboard_name_ca": "QWERTY — Kanadisch (mehrsprachig)",
+        "keyboard_test_placeholder": "Hier tippen zum Testen...",
+        "language_keyboard": "Tastatur: {kb}",
+        "disk_unknown": "Unbekannter Datenträger",
+        "network_proxy_placeholder": "proxy.firma.local",
+        "bench_title": "Leistungstest",
+        "bench_subtitle": "Schneller Test Ihrer Hardware (etwa 10 Sekunden), um Winlux optimal einzustellen. Der Datenträger wird nur gelesen: Vor dem Start der Installation wird nichts geschrieben.",
+        "bench_overall": "Gesamtbewertung",
+        "bench_starting": "Der Test startet…",
+        "bench_retry": "Erneut ausführen",
+        "bench_cpu": "Prozessor",
+        "bench_ram": "Arbeitsspeicher",
+        "bench_disk": "Datenträger",
+        "bench_gpu": "Grafik",
+        "bench_waiting": "wartet",
+        "bench_tips": "Empfehlungen",
+        "bench_running": "Test läuft… Sie können fortfahren, er wird im Hintergrund beendet.",
+        "bench_failed": "Test nicht möglich: {error}",
+        "bench_measuring": "wird gemessen…",
+        "bench_done": "Bestimmt durch die langsamste Komponente, auf einer Skala von 1,0 bis 9,9. Die Schreibleistung wird während der Installation gemessen.",
+        "bench_no_tip": "Keine besonderen Einstellungen nötig.",
+        "bench_stopped": "Der Test wurde vorzeitig beendet. Sie können ihn erneut ausführen oder fortfahren.",
+        "profile_title": "Wie werden Sie diesen PC verwenden?",
+        "profile_subtitle": "Winlux stellt Prozessor, Arbeitsspeicher, Datenträger und Grafikkarte auf Ihre Nutzung ein. Sie können das später ändern (winlux-profile --set).",
+        "profile_recommended": "Für diesen PC empfohlen",
+        "profile_apps": "Apps: {apps}",
+        "profile_install_apps": "Empfohlene Apps beim ersten Start installieren (Internetverbindung erforderlich)",
+        "fullname_placeholder": "Winlux-Benutzer",
+        "migration_title": "Von einem anderen PC übertragen",
+        "migration_subtitle": "Übernehmen Sie Dokumente, Bilder und Einstellungen von einem PC im selben Netzwerk. Die Übertragung erfolgt am Ende der Installation direkt in Ihr neues Konto.",
+        "err_no_disk": "Kein Datenträger ausgewählt.",
+        "err_iso_missing": "Quell-ISO nicht gefunden. Setzen Sie WINLUX_ISO oder starten Sie vom Live-USB.",
+        "err_verify": "Überprüfung fehlgeschlagen:\n{error}",
+        "err_boot_file": "Startdatei fehlt auf dem Medium: {path}",
+        "err_manual_plan": "Ungültiger manueller Partitionierungsplan.",
+        "err_partitions_missing": "Partitionen nach der Partitionierung nicht gefunden.",
+        "err_resize_missing": "Winlux-Partitionen nach der Größenänderung nicht gefunden.",
+        "err_partition_not_found": "Partition nicht gefunden: {path}",
+        "warn_import_skipped": "Windows-Import übersprungen: {error}",
+        "warn_network": "Netzwerkwarnung: {error}",
+        "warn_bookmarks": "{browser}-Favoriten übersprungen: {error}",
+        "progress_import_folder": "Windows-Import: {folder}...",
+        "warn_copy_partial": "Einige Dateien aus {folder} konnten nicht kopiert werden.",
+        "warn_import": "Warnung beim Windows-Import: {error}",
+        "warn_write_bench": "Messung der Schreibleistung nicht möglich: {error}",
+        "warn_transfer": "Übertragungswarnung: {error}",
         "encrypt_ascii": 'Verwenden Sie nur Buchstaben ohne Akzente/Umlaute, Ziffern und Tastatursymbole: Der Entsperrbildschirm beim Start unterstützt keine Sonderzeichen.',
         "part_type_manual_desc": "Wählen Sie eine vorhandene Partition für Winlux: Sie wird formatiert, andere Partitionen bleiben erhalten.",
         "part_layout_after": "Nach der Installation:",
@@ -1426,6 +1592,61 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Windows wird verkleinert (kann einige Minuten dauern)...",
     },
     "es_ES": {
+        "keyboard_name_fr": "AZERTY — Francés",
+        "keyboard_name_us": "QWERTY — Inglés (EE. UU.)",
+        "keyboard_name_gb": "QWERTY — Inglés (Reino Unido)",
+        "keyboard_name_de": "QWERTZ — Alemán",
+        "keyboard_name_es": "QWERTY — Español",
+        "keyboard_name_it": "QWERTY — Italiano",
+        "keyboard_name_br": "QWERTY — Portugués (Brasil)",
+        "keyboard_name_ch": "QWERTZ — Suizo",
+        "keyboard_name_be": "AZERTY — Belga",
+        "keyboard_name_ca": "QWERTY — Canadiense multilingüe",
+        "keyboard_test_placeholder": "Escriba aquí para probar...",
+        "language_keyboard": "Teclado: {kb}",
+        "disk_unknown": "Disco desconocido",
+        "network_proxy_placeholder": "proxy.empresa.local",
+        "bench_title": "Evaluación del rendimiento",
+        "bench_subtitle": "Prueba rápida de su hardware (unos 10 segundos) para ajustar Winlux lo mejor posible. El disco solo se lee: no se escribe nada antes de iniciar la instalación.",
+        "bench_overall": "Puntuación global",
+        "bench_starting": "La prueba se está iniciando…",
+        "bench_retry": "Volver a ejecutar",
+        "bench_cpu": "Procesador",
+        "bench_ram": "Memoria",
+        "bench_disk": "Disco",
+        "bench_gpu": "Gráficos",
+        "bench_waiting": "en espera",
+        "bench_tips": "Recomendaciones",
+        "bench_running": "Prueba en curso… puede continuar, termina en segundo plano.",
+        "bench_failed": "Prueba imposible: {error}",
+        "bench_measuring": "midiendo…",
+        "bench_done": "Determinada por el componente más lento, en una escala de 1,0 a 9,9. La escritura en disco se medirá durante la instalación.",
+        "bench_no_tip": "No se necesita ningún ajuste especial.",
+        "bench_stopped": "La prueba se detuvo antes de terminar. Puede volver a ejecutarla o continuar.",
+        "profile_title": "¿Cómo va a usar este PC?",
+        "profile_subtitle": "Winlux ajusta el procesador, la memoria, el disco y la tarjeta gráfica según su uso. Podrá cambiarlo más tarde (winlux-profile --set).",
+        "profile_recommended": "Recomendado para este PC",
+        "profile_apps": "Aplicaciones: {apps}",
+        "profile_install_apps": "Instalar las aplicaciones recomendadas en el primer arranque (se requiere conexión a Internet)",
+        "fullname_placeholder": "Usuario de Winlux",
+        "migration_title": "Transferir desde otro PC",
+        "migration_subtitle": "Recupere sus documentos, imágenes y configuración desde un PC de la misma red. La transferencia se realiza al final de la instalación, directamente en su nueva cuenta.",
+        "err_no_disk": "No se ha seleccionado ningún disco.",
+        "err_iso_missing": "No se encuentra la ISO de origen. Defina WINLUX_ISO o inicie desde el Live USB.",
+        "err_verify": "Verificación fallida:\n{error}",
+        "err_boot_file": "Falta el archivo de arranque en el medio: {path}",
+        "err_manual_plan": "Plan de particionado manual no válido.",
+        "err_partitions_missing": "No se encuentran las particiones tras el particionado.",
+        "err_resize_missing": "No se encuentran las particiones de Winlux tras el redimensionado.",
+        "err_partition_not_found": "Partición no encontrada: {path}",
+        "warn_import_skipped": "Importación de Windows omitida: {error}",
+        "warn_network": "Advertencia de red: {error}",
+        "warn_bookmarks": "Favoritos de {browser} omitidos: {error}",
+        "progress_import_folder": "Importación de Windows: {folder}...",
+        "warn_copy_partial": "No se pudieron copiar algunos archivos de {folder}.",
+        "warn_import": "Advertencia de importación de Windows: {error}",
+        "warn_write_bench": "No se pudo medir la escritura en disco: {error}",
+        "warn_transfer": "Advertencia de transferencia: {error}",
         "encrypt_ascii": 'Use solo letras sin acentos, dígitos y símbolos del teclado: la pantalla de desbloqueo al arrancar no admite acentos.',
         "part_type_manual_desc": "Elija una partición existente para Winlux: se formateará, las demás particiones se conservan.",
         "part_layout_after": "Después de la instalación:",
@@ -1448,6 +1669,61 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Redimensionando Windows (puede tardar varios minutos)...",
     },
     "it_IT": {
+        "keyboard_name_fr": "AZERTY — Francese",
+        "keyboard_name_us": "QWERTY — Inglese (USA)",
+        "keyboard_name_gb": "QWERTY — Inglese (Regno Unito)",
+        "keyboard_name_de": "QWERTZ — Tedesco",
+        "keyboard_name_es": "QWERTY — Spagnolo",
+        "keyboard_name_it": "QWERTY — Italiano",
+        "keyboard_name_br": "QWERTY — Portoghese (Brasile)",
+        "keyboard_name_ch": "QWERTZ — Svizzero",
+        "keyboard_name_be": "AZERTY — Belga",
+        "keyboard_name_ca": "QWERTY — Canadese multilingue",
+        "keyboard_test_placeholder": "Digita qui per provare...",
+        "language_keyboard": "Tastiera: {kb}",
+        "disk_unknown": "Disco sconosciuto",
+        "network_proxy_placeholder": "proxy.azienda.local",
+        "bench_title": "Valutazione delle prestazioni",
+        "bench_subtitle": "Test rapido del tuo hardware (circa 10 secondi) per regolare al meglio Winlux. Il disco viene solo letto: nulla viene scritto prima dell'avvio dell'installazione.",
+        "bench_overall": "Punteggio globale",
+        "bench_starting": "Il test sta per iniziare…",
+        "bench_retry": "Ripeti",
+        "bench_cpu": "Processore",
+        "bench_ram": "Memoria",
+        "bench_disk": "Disco",
+        "bench_gpu": "Grafica",
+        "bench_waiting": "in attesa",
+        "bench_tips": "Raccomandazioni",
+        "bench_running": "Test in corso… puoi continuare, termina in background.",
+        "bench_failed": "Test non riuscito: {error}",
+        "bench_measuring": "misurazione…",
+        "bench_done": "Determinato dal componente più lento, su una scala da 1,0 a 9,9. La scrittura su disco sarà misurata durante l'installazione.",
+        "bench_no_tip": "Nessuna regolazione particolare necessaria.",
+        "bench_stopped": "Il test si è interrotto prima della fine. Puoi ripeterlo o continuare.",
+        "profile_title": "Come userai questo PC?",
+        "profile_subtitle": "Winlux regola processore, memoria, disco e scheda grafica in base al tuo utilizzo. Potrai cambiarlo in seguito (winlux-profile --set).",
+        "profile_recommended": "Consigliato per questo PC",
+        "profile_apps": "App: {apps}",
+        "profile_install_apps": "Installa le app consigliate al primo avvio (connessione Internet richiesta)",
+        "fullname_placeholder": "Utente Winlux",
+        "migration_title": "Trasferisci da un altro PC",
+        "migration_subtitle": "Recupera documenti, immagini e impostazioni da un PC della stessa rete. Il trasferimento avviene alla fine dell'installazione, direttamente nel tuo nuovo account.",
+        "err_no_disk": "Nessun disco selezionato.",
+        "err_iso_missing": "ISO di origine non trovata. Imposta WINLUX_ISO o avvia dalla Live USB.",
+        "err_verify": "Verifica non riuscita:\n{error}",
+        "err_boot_file": "File di avvio assente dal supporto: {path}",
+        "err_manual_plan": "Piano di partizionamento manuale non valido.",
+        "err_partitions_missing": "Partizioni non trovate dopo il partizionamento.",
+        "err_resize_missing": "Partizioni Winlux non trovate dopo il ridimensionamento.",
+        "err_partition_not_found": "Partizione non trovata: {path}",
+        "warn_import_skipped": "Importazione Windows ignorata: {error}",
+        "warn_network": "Avviso di rete: {error}",
+        "warn_bookmarks": "Preferiti di {browser} ignorati: {error}",
+        "progress_import_folder": "Importazione Windows: {folder}...",
+        "warn_copy_partial": "Alcuni file di {folder} non sono stati copiati.",
+        "warn_import": "Avviso importazione Windows: {error}",
+        "warn_write_bench": "Misurazione della scrittura su disco non riuscita: {error}",
+        "warn_transfer": "Avviso di trasferimento: {error}",
         "encrypt_ascii": "Usa solo lettere non accentate, cifre e simboli della tastiera: la schermata di sblocco all'avvio non supporta gli accenti.",
         "part_type_manual_desc": "Scegli una partizione esistente per Winlux: verrà formattata, le altre partizioni vengono mantenute.",
         "part_layout_after": "Dopo l'installazione:",
@@ -1470,6 +1746,61 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Ridimensionamento di Windows (potrebbe richiedere diversi minuti)...",
     },
     "pt_BR": {
+        "keyboard_name_fr": "AZERTY — Francês",
+        "keyboard_name_us": "QWERTY — Inglês (EUA)",
+        "keyboard_name_gb": "QWERTY — Inglês (Reino Unido)",
+        "keyboard_name_de": "QWERTZ — Alemão",
+        "keyboard_name_es": "QWERTY — Espanhol",
+        "keyboard_name_it": "QWERTY — Italiano",
+        "keyboard_name_br": "QWERTY — Português (Brasil)",
+        "keyboard_name_ch": "QWERTZ — Suíço",
+        "keyboard_name_be": "AZERTY — Belga",
+        "keyboard_name_ca": "QWERTY — Canadense multilíngue",
+        "keyboard_test_placeholder": "Digite aqui para testar...",
+        "language_keyboard": "Teclado: {kb}",
+        "disk_unknown": "Disco desconhecido",
+        "network_proxy_placeholder": "proxy.empresa.local",
+        "bench_title": "Avaliação de desempenho",
+        "bench_subtitle": "Teste rápido do seu hardware (cerca de 10 segundos) para ajustar o Winlux da melhor forma. O disco é apenas lido: nada é gravado antes do início da instalação.",
+        "bench_overall": "Nota geral",
+        "bench_starting": "O teste está começando…",
+        "bench_retry": "Executar novamente",
+        "bench_cpu": "Processador",
+        "bench_ram": "Memória",
+        "bench_disk": "Disco",
+        "bench_gpu": "Gráficos",
+        "bench_waiting": "aguardando",
+        "bench_tips": "Recomendações",
+        "bench_running": "Teste em andamento… você pode continuar, ele termina em segundo plano.",
+        "bench_failed": "Teste impossível: {error}",
+        "bench_measuring": "medindo…",
+        "bench_done": "Determinada pelo componente mais lento, numa escala de 1,0 a 9,9. A gravação em disco será medida durante a instalação.",
+        "bench_no_tip": "Nenhum ajuste especial necessário.",
+        "bench_stopped": "O teste parou antes do fim. Você pode executá-lo novamente ou continuar.",
+        "profile_title": "Como você vai usar este PC?",
+        "profile_subtitle": "O Winlux ajusta o processador, a memória, o disco e a placa de vídeo conforme o seu uso. Você pode mudar isso depois (winlux-profile --set).",
+        "profile_recommended": "Recomendado para este PC",
+        "profile_apps": "Aplicativos: {apps}",
+        "profile_install_apps": "Instalar os aplicativos recomendados na primeira inicialização (conexão com a Internet necessária)",
+        "fullname_placeholder": "Usuário do Winlux",
+        "migration_title": "Transferir de outro PC",
+        "migration_subtitle": "Recupere seus documentos, imagens e configurações de um PC da mesma rede. A transferência ocorre no fim da instalação, diretamente na sua nova conta.",
+        "err_no_disk": "Nenhum disco selecionado.",
+        "err_iso_missing": "ISO de origem não encontrada. Defina WINLUX_ISO ou inicie pelo Live USB.",
+        "err_verify": "Falha na verificação:\n{error}",
+        "err_boot_file": "Arquivo de inicialização ausente na mídia: {path}",
+        "err_manual_plan": "Plano de particionamento manual inválido.",
+        "err_partitions_missing": "Partições não encontradas após o particionamento.",
+        "err_resize_missing": "Partições do Winlux não encontradas após o redimensionamento.",
+        "err_partition_not_found": "Partição não encontrada: {path}",
+        "warn_import_skipped": "Importação do Windows ignorada: {error}",
+        "warn_network": "Aviso de rede: {error}",
+        "warn_bookmarks": "Favoritos do {browser} ignorados: {error}",
+        "progress_import_folder": "Importação do Windows: {folder}...",
+        "warn_copy_partial": "Alguns arquivos de {folder} não puderam ser copiados.",
+        "warn_import": "Aviso de importação do Windows: {error}",
+        "warn_write_bench": "Não foi possível medir a gravação em disco: {error}",
+        "warn_transfer": "Aviso de transferência: {error}",
         "encrypt_ascii": 'Use apenas letras sem acento, dígitos e símbolos do teclado: a tela de desbloqueio na inicialização não aceita acentos.',
         "part_type_manual_desc": "Escolha uma partição existente para o Winlux: ela será formatada, as outras partições são mantidas.",
         "part_layout_after": "Após a instalação:",
@@ -1506,6 +1837,51 @@ def tr(key, **kwargs):
     return text
 
 tr._lang = "fr_FR"
+
+
+
+def keyboard_name(layout):
+    """Nom affiché d'une disposition de clavier, dans la langue de l'installateur."""
+    key = "keyboard_name_" + layout
+    name = tr(key)
+    return dict(KEYBOARDS).get(layout, layout) if name == key else name
+
+# Colonnes des tables _TR des modules (le français sert de clé).
+MODULE_LANG_COLUMNS = {"en": 0, "de": 1, "es": 2, "it": 3, "pt": 4}
+
+
+def relabel_map(old, new):
+    """Texte affiché dans la langue `old` -> même texte dans la langue `new`."""
+    mapping = {}
+    french = TRANSLATIONS["fr_FR"]
+    old_table, new_table = TRANSLATIONS.get(old, french), TRANSLATIONS.get(new, french)
+    for key, value in french.items():
+        if key.startswith("summary_") and key not in ("summary_title", "summary_subtitle"):
+            continue  # lignes du résumé : recalculées à chaque affichage de la page
+        before, after = old_table.get(key, value), new_table.get(key, value)
+        if isinstance(before, str) and isinstance(after, str) and "{" not in before:
+            mapping.setdefault(before, after)
+    old_col, new_col = MODULE_LANG_COLUMNS.get(old[:2]), MODULE_LANG_COLUMNS.get(new[:2])
+    for table in (winlux_benchmark._TR, winlux_profiles._TR, winlux_migrate._TR):
+        for text, row in table.items():
+            if "{" not in text:
+                mapping.setdefault(text if old_col is None else row[old_col],
+                                   text if new_col is None else row[new_col])
+    return mapping
+
+
+def relabel_widgets(widget, mapping):
+    """Retraduit sur place les libellés et textes d'aide d'une arborescence GTK."""
+    if isinstance(widget, Gtk.Label):
+        text = widget.get_label()
+        if text in mapping:
+            widget.set_label(mapping[text])
+    elif isinstance(widget, Gtk.Entry):
+        hint = widget.get_placeholder_text()
+        if hint in mapping:
+            widget.set_placeholder_text(mapping[hint])
+    if isinstance(widget, Gtk.Container):
+        widget.forall(relabel_widgets, mapping)
 
 for _lang, _table in winlux_partitioner.TRANSLATIONS.items():
     TRANSLATIONS.setdefault(_lang, {}).update(_table)
@@ -1571,8 +1947,32 @@ def human_size(size_bytes):
     return f"{size_bytes:.1f} Po"
 
 
+def live_medium_disk(mounts="/proc/self/mounts", sysfs="/sys"):
+    """Disque (« sdb ») du média Live dont Winlux a démarré : clé USB ou DVD.
+
+    L'installateur ne doit jamais le proposer comme destination : effacer la
+    clé d'installation en cours de route rendrait le PC inutilisable.
+    """
+    try:
+        with open(mounts, encoding="utf-8") as f:
+            lines = f.read().splitlines()
+    except OSError:
+        return None
+    for line in lines:
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "/run/winlux/live/media" and parts[0].startswith("/dev/"):
+            name = os.path.basename(os.path.realpath(parts[0]))
+            # Une partition (sdb1) désigne le disque qui la porte (sdb).
+            if os.path.exists(os.path.join(sysfs, "class/block", name, "partition")):
+                parent = os.path.realpath(os.path.join(sysfs, "class/block", name, ".."))
+                return os.path.basename(parent)
+            return name
+    return None
+
+
 def detect_disks():
     disks = []
+    live_disk = live_medium_disk()
     try:
         out = subprocess.check_output(
             ["lsblk", "-bdnJo", "NAME,SIZE,MODEL,TRAN,TYPE,RO,SERIAL,ROTA"],
@@ -1585,11 +1985,13 @@ def detect_disks():
             if dev.get("ro"):
                 continue
             name = dev["name"]
+            if name == live_disk:
+                continue  # la clé USB d'installation elle-même
             path = f"/dev/{name}"
             size = dev.get("size", 0) or 0
             if size < 2 * 1024**3:
                 continue
-            model = (dev.get("model") or "").strip() or "Disque inconnu"
+            model = (dev.get("model") or "").strip() or tr("disk_unknown")
             tran = (dev.get("tran") or "").upper()
             rota = dev.get("rota", True)
             disk_type = "HDD" if rota else "SSD"
@@ -1743,7 +2145,7 @@ def wait_for_block(path, timeout=20):
         if os.path.exists(path):
             return path
         time.sleep(0.3)
-    raise RuntimeError(f"Partition introuvable : {path}")
+    raise RuntimeError(tr("err_partition_not_found", path=path))
 
 
 def reread_partitions(device):
@@ -2399,18 +2801,15 @@ class InstallerApp(Gtk.Application):
 
     def make_pages_scrollable(self):
         """Toutes les pages défilent : Suivant/Retour restent visibles même sur un petit écran."""
-        # Toutes les pages sont retirées puis remises dans leur ordre d'origine : un
-        # GtkStack affiche sa première page visible, l'ordre doit donc être conservé.
-        pages = [(self.pages.child_get_property(c, "name"), c) for c in self.pages.get_children()]
-        for name, child in pages:
-            self.pages.remove(child)
+        for child in list(self.pages.get_children()):
             if isinstance(child, Gtk.ScrolledWindow):
-                scroll = child
-            else:
-                scroll = Gtk.ScrolledWindow()
-                scroll.add(child)
+                child.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+                continue
+            name = self.pages.child_get_property(child, "name")
+            self.pages.remove(child)
+            scroll = Gtk.ScrolledWindow()
             scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-            scroll.show_all()
+            scroll.add(child)
             self.pages.add_named(scroll, name)
 
     def do_activate(self):
@@ -2425,10 +2824,17 @@ class InstallerApp(Gtk.Application):
         self.sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
         self.sidebar.get_style_context().add_class("installer-sidebar")
         self.sidebar.set_size_request(int(210 * UI_SCALE), -1)
+        brand = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=int(10 * UI_SCALE))
+        brand.set_margin_bottom(24)
+        # Logo Winlux « Prisme » (assets/brand), à la taille de l'écran.
+        logo_size = 32 if UI_SCALE < 1.5 else 64
+        logo_path = f"/usr/share/winlux/brand/winlux-logo-{logo_size}.png"
+        if os.path.exists(logo_path):
+            brand.pack_start(Gtk.Image.new_from_file(logo_path), False, False, 0)
         logo = Gtk.Label(label="Winlux")
         logo.get_style_context().add_class("page-title")
-        logo.set_margin_bottom(24)
-        self.sidebar.pack_start(logo, False, False, 0)
+        brand.pack_start(logo, False, False, 0)
+        self.sidebar.pack_start(brand, False, False, 0)
         self.step_labels = []
         for i, name in enumerate(STEPS):
             lbl = Gtk.Label(label=f"  {i + 1}. {name}", xalign=0)
@@ -2447,15 +2853,19 @@ class InstallerApp(Gtk.Application):
         self.content_area.pack_start(self.pages, True, True, 0)
         self.nav_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
         self.nav_box.set_margin_top(16)
-        self.btn_back = Gtk.Button(label="Retour")
+        self.btn_back = Gtk.Button(label=tr("btn_back"))
         self.btn_back.get_style_context().add_class("btn-secondary")
         self.btn_back.connect("clicked", self.on_back)
-        self.btn_next = Gtk.Button(label="Suivant")
+        self.btn_next = Gtk.Button(label=tr("btn_next"))
         self.btn_next.get_style_context().add_class("btn-primary")
         self.btn_next.connect("clicked", self.on_next)
         self.nav_box.pack_end(self.btn_next, False, False, 0)
         self.nav_box.pack_end(self.btn_back, False, False, 0)
         self.content_area.pack_end(self.nav_box, False, False, 0)
+        self.ui_lang = tr._lang
+        self.lang_keyboard_labels = []
+        self.profile_tune_labels = {}
+        self.profile_apps_labels = {}
         self.build_language_page()
         self.build_keyboard_page()
         self.build_license_page()
@@ -2473,6 +2883,7 @@ class InstallerApp(Gtk.Application):
         self.make_pages_scrollable()
         self.load_answer_file()
         self.current_step = self.next_step(-1, 1)
+        self.update_step()
         self.fit_window_to_screen()
         screen = Gdk.Screen.get_default()
         screen.connect("size-changed", self.fit_window_to_screen)
@@ -2670,10 +3081,10 @@ class InstallerApp(Gtk.Application):
 
     def build_language_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        title = Gtk.Label(label="Choisissez votre langue", xalign=0)
+        title = Gtk.Label(label=tr("choose_language"), xalign=0)
         title.get_style_context().add_class("page-title")
         box.pack_start(title, False, False, 0)
-        sub = Gtk.Label(label="Cette langue sera utilisée pendant l'installation et comme langue par défaut du système.", xalign=0)
+        sub = Gtk.Label(label=tr("language_subtitle"), xalign=0)
         sub.get_style_context().add_class("page-subtitle")
         sub.set_line_wrap(True)
         box.pack_start(sub, False, False, 0)
@@ -2687,7 +3098,8 @@ class InstallerApp(Gtk.Application):
                 self.lang_group = rb
             rb.connect("toggled", self.on_lang_toggle, locale, kb)
             row.pack_start(rb, True, True, 0)
-            kb_label = Gtk.Label(label=f"Clavier : {kb}")
+            kb_label = Gtk.Label(label=tr("language_keyboard", kb=kb))
+            self.lang_keyboard_labels.append((kb_label, kb))
             kb_label.get_style_context().add_class("card-detail")
             row.pack_end(kb_label, False, False, 8)
             box.pack_start(row, False, False, 0)
@@ -2699,20 +3111,35 @@ class InstallerApp(Gtk.Application):
             self.config["keyboard"] = kb.split("(")[1].rstrip(")")
 
     def update_ui_language(self):
+        previous = self.ui_lang
         tr._lang = self.config["language"]
+        # Modules du benchmark, des profils et du transfert : même langue que l'installateur.
+        os.environ["WINLUX_LANG"] = tr._lang[:2]
         steps = tr("steps")
         for i, lbl in enumerate(self.step_labels):
             if i < len(steps):
                 lbl.set_text(f"  {i + 1}. {steps[i]}")
+        if previous == tr._lang:
+            return
+        # Les pages sont construites une seule fois : on retraduit leurs textes sur
+        # place, sans rien reconstruire, pour garder la saisie et les choix en cours.
+        self.ui_lang = tr._lang
+        relabel_widgets(self.win, relabel_map(previous, tr._lang))
+        for label, kb in self.lang_keyboard_labels:
+            label.set_text(tr("language_keyboard", kb=kb))
+        for pid, label in self.profile_tune_labels.items():
+            label.set_text(winlux_profiles.summary_line(pid))
+        for pid, label in self.profile_apps_labels.items():
+            label.set_text(tr("profile_apps", apps=", ".join(winlux_profiles.PROFILES[pid]["apps"])))
 
     # ── Page : Clavier ─────────────────────────────────────────
 
     def build_keyboard_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        title = Gtk.Label(label="Choisissez la disposition du clavier", xalign=0)
+        title = Gtk.Label(label=tr("choose_keyboard"), xalign=0)
         title.get_style_context().add_class("page-title")
         box.pack_start(title, False, False, 0)
-        sub = Gtk.Label(label="Sélectionnez le type de clavier que vous utilisez.", xalign=0)
+        sub = Gtk.Label(label=tr("keyboard_subtitle"), xalign=0)
         sub.get_style_context().add_class("page-subtitle")
         sub.set_line_wrap(True)
         box.pack_start(sub, False, False, 0)
@@ -2723,7 +3150,7 @@ class InstallerApp(Gtk.Application):
         for layout, label in KEYBOARDS:
             row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
             row.get_style_context().add_class("card")
-            rb = Gtk.RadioButton.new_with_label_from_widget(self.kb_group, label)
+            rb = Gtk.RadioButton.new_with_label_from_widget(self.kb_group, keyboard_name(layout))
             rb.set_margin_start(8)
             if self.kb_group is None:
                 self.kb_group = rb
@@ -2734,13 +3161,13 @@ class InstallerApp(Gtk.Application):
             kb_box.pack_start(row, False, False, 0)
         scroll.add(kb_box)
         box.pack_start(scroll, True, True, 0)
-        test_label = Gtk.Label(label="Testez votre clavier ici :", xalign=0)
+        test_label = Gtk.Label(label=tr("keyboard_test"), xalign=0)
         test_label.get_style_context().add_class("input-label")
         test_label.set_margin_top(12)
         box.pack_start(test_label, False, False, 0)
         test_entry = Gtk.Entry()
         test_entry.get_style_context().add_class("input-field")
-        test_entry.set_placeholder_text("Tapez ici pour tester...")
+        test_entry.set_placeholder_text(tr("keyboard_test_placeholder"))
         box.pack_start(test_entry, False, False, 0)
         self.pages.add_named(box, page_name("keyboard"))
 
@@ -2752,10 +3179,10 @@ class InstallerApp(Gtk.Application):
 
     def build_license_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        title = Gtk.Label(label="Contrat de licence", xalign=0)
+        title = Gtk.Label(label=tr("license_title"), xalign=0)
         title.get_style_context().add_class("page-title")
         box.pack_start(title, False, False, 0)
-        sub = Gtk.Label(label="Veuillez lire et accepter les termes de la licence.", xalign=0)
+        sub = Gtk.Label(label=tr("license_subtitle"), xalign=0)
         sub.get_style_context().add_class("page-subtitle")
         box.pack_start(sub, False, False, 0)
         scroll = Gtk.ScrolledWindow()
@@ -2769,7 +3196,7 @@ class InstallerApp(Gtk.Application):
         text_view.get_style_context().add_class("license-text")
         scroll.add(text_view)
         box.pack_start(scroll, True, True, 0)
-        accept = Gtk.CheckButton(label="J'accepte les termes de la licence GPL v3")
+        accept = Gtk.CheckButton(label=tr("license_accept"))
         accept.connect("toggled", self.on_license_toggle)
         accept.set_margin_top(12)
         box.pack_start(accept, False, False, 0)
@@ -2843,7 +3270,7 @@ class InstallerApp(Gtk.Application):
         proxy_row.pack_start(host_lbl, False, False, 0)
         self.proxy_host = Gtk.Entry()
         self.proxy_host.get_style_context().add_class("input-field")
-        self.proxy_host.set_placeholder_text("proxy.entreprise.local")
+        self.proxy_host.set_placeholder_text(tr("network_proxy_placeholder"))
         self.proxy_host.set_hexpand(True)
         self.proxy_host.connect("changed", self.on_proxy_changed)
         proxy_row.pack_start(self.proxy_host, True, True, 0)
@@ -3507,7 +3934,7 @@ class InstallerApp(Gtk.Application):
             self.luks_check.set_active(False)
         self.luks_check.set_sensitive(not reason)
         self.luks_unavailable.set_text(reason)
-        layout = dict(KEYBOARDS).get(self.config["keyboard"], self.config["keyboard"])
+        layout = keyboard_name(self.config["keyboard"])
         if keymap_tools_available():
             self.luks_keyboard_note.set_text(tr("encrypt_keyboard", layout=layout))
         else:
@@ -3562,17 +3989,14 @@ class InstallerApp(Gtk.Application):
 
     # ── Page : Performances (benchmark) ──────────────────────────
 
-    BENCH_ROWS = [("cpu", "Processeur"), ("ram", "Mémoire"), ("disk", "Disque"), ("gpu", "Graphique")]
+    BENCH_ROWS = [("cpu", "bench_cpu"), ("ram", "bench_ram"), ("disk", "bench_disk"), ("gpu", "bench_gpu")]
 
     def build_benchmark_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        title = Gtk.Label(label="Évaluation des performances", xalign=0)
+        title = Gtk.Label(label=tr("bench_title"), xalign=0)
         title.get_style_context().add_class("page-title")
         box.pack_start(title, False, False, 0)
-        sub = Gtk.Label(
-            label="Test rapide de votre matériel (environ 10 secondes) pour régler Winlux au mieux. "
-                  "Le disque est seulement lu : rien n'est écrit avant le lancement de l'installation.",
-            xalign=0)
+        sub = Gtk.Label(label=tr("bench_subtitle"), xalign=0)
         sub.get_style_context().add_class("page-subtitle")
         sub.set_line_wrap(True)
         box.pack_start(sub, False, False, 0)
@@ -3583,15 +4007,15 @@ class InstallerApp(Gtk.Application):
         head.pack_start(self.bench_base, False, False, 8)
         head_text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
         head_text.set_valign(Gtk.Align.CENTER)
-        head_title = Gtk.Label(label="Note globale", xalign=0)
+        head_title = Gtk.Label(label=tr("bench_overall"), xalign=0)
         head_title.get_style_context().add_class("card-title")
         head_text.pack_start(head_title, False, False, 0)
-        self.bench_status = Gtk.Label(label="Le test démarre…", xalign=0)
+        self.bench_status = Gtk.Label(label=tr("bench_starting"), xalign=0)
         self.bench_status.get_style_context().add_class("card-detail")
         self.bench_status.set_line_wrap(True)
         head_text.pack_start(self.bench_status, False, False, 0)
         head.pack_start(head_text, True, True, 0)
-        self.bench_retry = Gtk.Button(label="Relancer")
+        self.bench_retry = Gtk.Button(label=tr("bench_retry"))
         self.bench_retry.get_style_context().add_class("btn-secondary")
         self.bench_retry.set_valign(Gtk.Align.CENTER)
         self.bench_retry.connect("clicked", lambda _b: self.start_benchmark())
@@ -3602,7 +4026,7 @@ class InstallerApp(Gtk.Application):
         grid.get_style_context().add_class("card")
         self.bench_widgets = {}
         for row, (key, label) in enumerate(self.BENCH_ROWS):
-            name = Gtk.Label(label=label, xalign=0)
+            name = Gtk.Label(label=tr(label), xalign=0)
             name.get_style_context().add_class("card-title")
             name.set_size_request(110, -1)
             grid.attach(name, 0, row, 1, 1)
@@ -3616,14 +4040,14 @@ class InstallerApp(Gtk.Application):
             value.get_style_context().add_class("score-value")
             value.set_size_request(48, -1)
             grid.attach(value, 2, row, 1, 1)
-            detail = Gtk.Label(label="en attente", xalign=0)
+            detail = Gtk.Label(label=tr("bench_waiting"), xalign=0)
             detail.get_style_context().add_class("card-detail")
             detail.set_ellipsize(Pango.EllipsizeMode.END)
             detail.set_hexpand(True)
             grid.attach(detail, 3, row, 1, 1)
             self.bench_widgets[key] = (bar, value, detail)
         box.pack_start(grid, False, False, 0)
-        tips_title = Gtk.Label(label="Recommandations", xalign=0)
+        tips_title = Gtk.Label(label=tr("bench_tips"), xalign=0)
         tips_title.get_style_context().add_class("card-title")
         tips_title.set_margin_top(8)
         box.pack_start(tips_title, False, False, 0)
@@ -3642,19 +4066,19 @@ class InstallerApp(Gtk.Application):
         self.benchmark = None
         self.bench_retry.set_sensitive(False)
         self.bench_base.set_text("–")
-        self.bench_status.set_text("Test en cours… vous pouvez continuer, il se termine en arrière-plan.")
+        self.bench_status.set_text(tr("bench_running"))
         self.bench_tips.set_text("")
         for bar, value, detail in self.bench_widgets.values():
             bar.set_value(0)
             value.set_text("…")
-            detail.set_text("en attente")
+            detail.set_text(tr("bench_waiting"))
         argv = [sys.executable, winlux_benchmark.__file__, "--json-lines"]
         if device:
             argv += ["--device", device]
         try:
             proc = subprocess.Popen(argv, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
         except OSError as e:
-            self.bench_status.set_text(f"Test impossible : {e}")
+            self.bench_status.set_text(tr("bench_failed", error=e))
             self.bench_state = "done"
             self.bench_retry.set_sensitive(True)
             return
@@ -3676,7 +4100,7 @@ class InstallerApp(Gtk.Application):
             return False
         kind = event.get("event")
         if kind == "start" and event["test"] in self.bench_widgets:
-            self.bench_widgets[event["test"]][2].set_text("mesure en cours…")
+            self.bench_widgets[event["test"]][2].set_text(tr("bench_measuring"))
         elif kind == "result" and event["test"] in self.bench_widgets:
             bar, value, detail = self.bench_widgets[event["test"]]
             result = event["result"]
@@ -3688,9 +4112,8 @@ class InstallerApp(Gtk.Application):
             self.benchmark = event["summary"]
             self.bench_state = "done"
             self.bench_base.set_text(winlux_benchmark.fr_number(self.benchmark["base_score"], 1))
-            self.bench_status.set_text("Déterminée par le composant le plus lent, sur une échelle de 1,0 à 9,9. "
-                                       "L'écriture disque sera mesurée pendant l'installation.")
-            tips = self.benchmark["recommendations"] or ["Aucun réglage particulier nécessaire."]
+            self.bench_status.set_text(tr("bench_done"))
+            tips = self.benchmark["recommendations"] or [tr("bench_no_tip")]
             self.bench_tips.set_text("\n".join(f"•  {t}" for t in tips))
             self.bench_retry.set_sensitive(True)
             if not self.profile_chosen_by_user:
@@ -3701,7 +4124,7 @@ class InstallerApp(Gtk.Application):
     def on_benchmark_exit(self, proc):
         if proc is self.bench_proc and self.bench_state == "running":
             self.bench_state = "done"
-            self.bench_status.set_text("Le test s'est arrêté avant la fin. Vous pouvez le relancer ou continuer.")
+            self.bench_status.set_text(tr("bench_stopped"))
             self.bench_retry.set_sensitive(True)
         return False
 
@@ -3709,13 +4132,10 @@ class InstallerApp(Gtk.Application):
 
     def build_profile_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        title = Gtk.Label(label="Comment allez-vous utiliser ce PC ?", xalign=0)
+        title = Gtk.Label(label=tr("profile_title"), xalign=0)
         title.get_style_context().add_class("page-title")
         box.pack_start(title, False, False, 0)
-        sub = Gtk.Label(
-            label="Winlux règle le processeur, la mémoire, le disque et la carte graphique selon votre usage. "
-                  "Vous pourrez en changer plus tard (winlux-profile --set).",
-            xalign=0)
+        sub = Gtk.Label(label=tr("profile_subtitle"), xalign=0)
         sub.get_style_context().add_class("page-subtitle")
         sub.set_line_wrap(True)
         box.pack_start(sub, False, False, 0)
@@ -3729,26 +4149,28 @@ class InstallerApp(Gtk.Application):
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
             card.get_style_context().add_class("card")
             top = Gtk.Box(spacing=8)
-            rb = Gtk.RadioButton.new_with_label_from_widget(group, profile["name"])
+            rb = Gtk.RadioButton.new_with_label_from_widget(group, winlux_profiles.display_name(pid))
             rb.get_style_context().add_class("card-title")
             group = group or rb
             rb.connect("toggled", self.on_profile_toggle, pid)
             top.pack_start(rb, False, False, 0)
-            badge = Gtk.Label(label="Recommandé pour ce PC")
+            badge = Gtk.Label(label=tr("profile_recommended"))
             badge.get_style_context().add_class("badge")
             badge.set_no_show_all(True)
             top.pack_end(badge, False, False, 0)
             card.pack_start(top, False, False, 0)
-            desc = Gtk.Label(label=profile["description"], xalign=0)
+            desc = Gtk.Label(label=winlux_profiles.display_description(pid), xalign=0)
             desc.get_style_context().add_class("card-detail")
             desc.set_line_wrap(True)
             desc.set_max_width_chars(40)
             card.pack_start(desc, False, False, 0)
             tune = Gtk.Label(label=winlux_profiles.summary_line(pid), xalign=0)
+            self.profile_tune_labels[pid] = tune
             tune.get_style_context().add_class("hw-info")
             tune.set_line_wrap(True)
             card.pack_start(tune, False, False, 0)
-            apps = Gtk.Label(label="Apps : " + ", ".join(profile["apps"]), xalign=0)
+            apps = Gtk.Label(label=tr("profile_apps", apps=", ".join(profile["apps"])), xalign=0)
+            self.profile_apps_labels[pid] = apps
             apps.get_style_context().add_class("tip")
             apps.set_line_wrap(True)
             apps.set_max_width_chars(40)
@@ -3758,7 +4180,7 @@ class InstallerApp(Gtk.Application):
             self.profile_cards[pid] = card
             self.profile_badges[pid] = badge
         box.pack_start(grid, False, False, 0)
-        apps_check = Gtk.CheckButton(label="Installer les applications recommandées au premier démarrage (connexion Internet requise)")
+        apps_check = Gtk.CheckButton(label=tr("profile_install_apps"))
         apps_check.set_active(True)
         apps_check.set_margin_top(8)
         apps_check.connect("toggled", lambda b: self.config.update({"install_apps": b.get_active()}))
@@ -3805,11 +4227,11 @@ class InstallerApp(Gtk.Application):
         grid = Gtk.Grid(column_spacing=16, row_spacing=12)
         grid.set_margin_top(8)
         fields = [
-            ("Nom de l'ordinateur :", "hostname", "winlux-desktop", False),
-            ("Nom complet :", "fullname", "Utilisateur Winlux", False),
-            ("Nom d'utilisateur :", "username", "winlux", False),
-            ("Mot de passe :", "password", "", True),
-            ("Confirmer le mot de passe :", "password_confirm", "", True),
+            (tr("field_hostname"), "hostname", "winlux-desktop", False),
+            (tr("field_fullname"), "fullname", tr("fullname_placeholder"), False),
+            (tr("field_username"), "username", "winlux", False),
+            (tr("field_password"), "password", "", True),
+            (tr("field_password_confirm"), "password_confirm", "", True),
         ]
         self.account_entries = {}
         self.account_error = Gtk.Label(label="", xalign=0)
@@ -3863,13 +4285,10 @@ class InstallerApp(Gtk.Application):
 
     def build_migration_page(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-        title = Gtk.Label(label="Transférer depuis un autre PC", xalign=0)
+        title = Gtk.Label(label=tr("migration_title"), xalign=0)
         title.get_style_context().add_class("page-title")
         box.pack_start(title, False, False, 0)
-        sub = Gtk.Label(
-            label="Récupérez vos documents, images et paramètres depuis un PC du même réseau. "
-                  "Le transfert a lieu à la fin de l'installation, directement dans votre nouveau compte.",
-            xalign=0)
+        sub = Gtk.Label(label=tr("migration_subtitle"), xalign=0)
         sub.get_style_context().add_class("page-subtitle")
         sub.set_line_wrap(True)
         box.pack_start(sub, False, False, 0)
@@ -3947,7 +4366,7 @@ class InstallerApp(Gtk.Application):
         else:
             lines.append(f"{tr('summary_import')} : {tr('summary_import_none')}")
         lines.append(tr("summary_local_account"))
-        profile_line = f"{tr('summary_profile')} : {winlux_profiles.PROFILES[self.config['profile']]['name']}"
+        profile_line = f"{tr('summary_profile')} : {winlux_profiles.display_name(self.config['profile'])}"
         if self.config["install_apps"]:
             profile_line += " " + tr("summary_profile_apps")
         lines.append(profile_line)
@@ -4072,7 +4491,7 @@ class InstallerApp(Gtk.Application):
     def run_installation(self):
         disk = self.config["disk"]
         if not disk:
-            self.install_error("Aucun disque sélectionné.")
+            self.install_error(tr("err_no_disk"))
             return
         device = disk["path"]
         # Fond d'écran et favoris sont copiés en mémoire avant que le disque soit modifié,
@@ -4081,7 +4500,7 @@ class InstallerApp(Gtk.Application):
             self.prepare_windows_import(disk)
         except Exception as e:
             self.import_plan = None
-            self.set_progress(0.01, f"Import Windows ignoré : {e}")
+            self.set_progress(0.01, tr("warn_import_skipped", error=e))
         finally:
             self.unmount_windows(disk["name"])
         iso_path = os.environ.get("WINLUX_ISO", "")
@@ -4091,7 +4510,7 @@ class InstallerApp(Gtk.Application):
                 iso_path = candidate
         live_root = "/run/winlux/live/lower"
         if not (iso_path and os.path.isfile(iso_path)) and not os.path.isdir(live_root):
-            self.install_error("ISO source introuvable. Définissez WINLUX_ISO ou démarrez depuis le Live USB.")
+            self.install_error(tr("err_iso_missing"))
             return
         work = f"/tmp/winlux-gui-install.{os.getpid()}"
         target = f"{work}/target"
@@ -4107,7 +4526,7 @@ class InstallerApp(Gtk.Application):
                         capture_output=True, text=True, timeout=600
                     )
                     if result.returncode != 0:
-                        raise RuntimeError(f"Vérification échouée :\n{result.stderr.strip()}")
+                        raise RuntimeError(tr("err_verify", error=result.stderr.strip()))
                 self.extract_boot_files(iso_path, work)
             else:
                 self.copy_live_boot_files(work)
@@ -4164,7 +4583,7 @@ class InstallerApp(Gtk.Application):
         media = "/run/winlux/live/media/boot"
         for inside, outside in (("vmlinuz", "vmlinuz"), ("winlux-initramfs.cpio.gz", "initramfs.gz")):
             if not os.path.isfile(f"{media}/{inside}"):
-                raise RuntimeError(f"Fichier de démarrage absent du média : {inside}")
+                raise RuntimeError(tr("err_boot_file", path=inside))
             shutil.copyfile(f"{media}/{inside}", f"{work}/{outside}")
 
     def copy_from_iso(self, iso_path, work):
@@ -4209,11 +4628,11 @@ class InstallerApp(Gtk.Application):
         """Apply the manual editor's plan; the root is formatted later by format_layout."""
         plan = self.manual_editor.plan
         if plan is None or plan.device != device or plan.validate():
-            raise RuntimeError("Plan de partitionnement manuel invalide.")
+            raise RuntimeError(tr("err_manual_plan"))
         self.set_progress(0.06, tr("progress_manual_apply"))
         winlux_partitioner.run_steps(plan.build_steps(), log=lambda cmd: self.set_progress(0.07, cmd))
         if not winlux_partitioner.wait_for_partitions(plan):
-            raise RuntimeError("Partitions introuvables après le partitionnement.")
+            raise RuntimeError(tr("err_partitions_missing"))
         root = plan.root()
         for argv, stdin in plan.format_steps(skip=(root,)):
             self.set_progress(0.10, " ".join(argv))
@@ -4293,7 +4712,7 @@ class InstallerApp(Gtk.Application):
         created = sorted(set(disk_partitions_sysfs(device)) - before,
                          key=lambda n: disk_partitions_sysfs(device)[n]["start"])
         if len(created) != (2 if luks else 1):
-            raise RuntimeError("Partitions Winlux introuvables après le redimensionnement.")
+            raise RuntimeError(tr("err_resize_missing"))
         paths = [wait_for_block(partition_path(device, n)) for n in created]
         if luks:
             boot = paths[0]
@@ -4544,6 +4963,21 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                 f.write(f"{username} ALL=(ALL:ALL) ALL\n")
             os.chmod(sudoers_file, 0o440)
 
+    @staticmethod
+    def write_winlux_conf(path, values):
+        """Écrit des clés KEY=valeur sans toucher aux autres clés du fichier."""
+        lines = []
+        try:
+            with open(path, encoding="utf-8") as f:
+                lines = [line.rstrip("\n") for line in f]
+        except OSError:
+            pass
+        lines = [line for line in lines if line.split("=", 1)[0] not in values]
+        lines += [f"{key}={value}" for key, value in values.items() if value]
+        with open(path, "w", encoding="utf-8") as f:
+            f.write("\n".join(lines) + "\n")
+        os.chmod(path, 0o644)
+
     def configure_first_boot(self, root_path):
         etc = f"{root_path}/etc/winlux"
         os.makedirs(etc, exist_ok=True)
@@ -4556,6 +4990,12 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         kb_conf = f"{root_path}/etc/default/keyboard"
         with open(kb_conf, "w") as f:
             f.write(f'XKBMODEL="pc105"\nXKBLAYOUT="{keyboard}"\nXKBVARIANT=""\nXKBOPTIONS=""\n')
+        # Réglages lus par la session Winlux (xsession-winlux, winlux-control
+        # lang-*/keyboard-*/tz-*) : LANG sur deux lettres dans locale.conf,
+        # XKB_LAYOUT dans input.conf, au format clé=valeur de winlux-control.
+        self.write_winlux_conf(f"{etc}/locale.conf", {"LANG": self.config["language"][:2].lower(),
+                                                      "TIMEZONE": self.config.get("timezone") or ""})
+        self.write_winlux_conf(f"{etc}/input.conf", {"XKB_LAYOUT": keyboard})
         locale_gen = f"{root_path}/etc/locale.gen"
         if os.path.exists(locale_gen):
             with open(locale_gen, "a") as f:
@@ -4598,7 +5038,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         try:
             self.configure_network_target(root_path)
         except Exception as e:
-            self.set_progress(0.91, f"Avertissement réseau : {e}")
+            self.set_progress(0.91, tr("warn_network", error=e))
         fb_script = os.path.join(SCRIPT_DIR, "winlux-first-boot.sh")
         if os.path.exists(fb_script):
             dest = f"{root_path}/usr/bin/winlux-first-boot"
@@ -4685,7 +5125,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                     shutil.copyfile(b["path"], entry["json"])
                 plan["bookmarks"].append(entry)
             except Exception as e:
-                self.set_progress(0.01, f"Favoris {b['browser']} ignorés : {e}")
+                self.set_progress(0.01, tr("warn_bookmarks", browser=b["browser"], error=e))
         for name in ("places.sqlite", "places.sqlite-wal"):
             try:
                 os.remove(os.path.join(stage, name))
@@ -4742,13 +5182,13 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                     self.set_progress(0.87, tr("import_remount_failed"))
                     plan["folders"] = []
             for src, dest in plan["folders"]:
-                self.set_progress(0.87, f"Import Windows : {dest}...")
+                self.set_progress(0.87, tr("progress_import_folder", folder=dest))
                 dst = f"{home}/{dest}"
                 os.makedirs(dst, exist_ok=True)
                 r = subprocess.run(["cp", "-r", "--preserve=timestamps", f"{src}/.", dst],
                                    capture_output=True, text=True, timeout=7200)
                 if r.returncode != 0:
-                    self.set_progress(0.87, f"Certains fichiers de {dest} n'ont pas pu être copiés.")
+                    self.set_progress(0.87, tr("warn_copy_partial", folder=dest))
                 for root, _dirs, files in os.walk(dst):
                     for name in files:
                         if name.lower() in WIN_JUNK:
@@ -4758,7 +5198,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
                                 pass
                 subprocess.run(["chmod", "-R", "u+rwX,go-w", dst], timeout=600)
         except Exception as e:
-            self.set_progress(0.88, f"Avertissement import Windows : {e}")
+            self.set_progress(0.88, tr("warn_import", error=e))
         subprocess.run(["chown", "-R", "1000:1000", home], timeout=600)
 
     def cleanup_windows_import(self):
@@ -4772,7 +5212,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         try:
             result = winlux_benchmark.bench_disk_write(target)
         except OSError as e:
-            self.set_progress(0.16, f"Mesure d'écriture disque impossible : {e}")
+            self.set_progress(0.16, tr("warn_write_bench", error=e))
             return
         self.benchmark["results"]["disk"].update(result)
         self.set_progress(0.16, f"Disque : {result['detail']}")
@@ -4793,7 +5233,7 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
         finally:
             panel.session.close()
         for err in errors:
-            self.set_progress(0.95, f"Avertissement transfert : {err}")
+            self.set_progress(0.95, tr("warn_transfer", error=err))
 
     def post_install(self):
         self.cleanup_windows_import()
@@ -4819,6 +5259,18 @@ menuentry "Winlux secours (restauration ou console)" --hotkey=s {{
 
 def main():
     if os.geteuid() != 0:
+        # Le raccourci lance l'installateur directement : la session live est
+        # déjà root, une session ordinaire demande le mot de passe ici.
+        pkexec = shutil.which("pkexec")
+        if pkexec and os.environ.get("WINLUX_INSTALLER_ELEVATED") != "1":
+            os.execv(pkexec, [pkexec, "env", "WINLUX_INSTALLER_ELEVATED=1",
+                              "DISPLAY=" + os.environ.get("DISPLAY", ":0"),
+                              "XAUTHORITY=" + os.environ.get("XAUTHORITY", ""),
+                              os.path.abspath(__file__), *sys.argv[1:]])
+        elif not pkexec and os.environ.get("WINLUX_INSTALLER_ELEVATED") != "1" and os.environ.get("SUDO_ASKPASS") and shutil.which("sudo"):
+            # Sans pkexec (image Live minimale), un sudo graphique fait l'affaire.
+            os.execvp("sudo", ["sudo", "-A", "-E", "env", "WINLUX_INSTALLER_ELEVATED=1",
+                               sys.executable, os.path.abspath(__file__), *sys.argv[1:]])
         print("ERREUR : l'installateur doit être lancé en tant que root (sudo).", file=sys.stderr)
         sys.exit(1)
     signal.signal(signal.SIGINT, signal.SIG_DFL)

@@ -41,7 +41,12 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         rgb(0xCC, 0xCC, 0xCC),
         r.left + 8,
         r.top + 8,
-        b"Post-it",
+        tr4(&[
+            b"Post-it",
+            b"Sticky Notes",
+            b"Notas r\xE1pidas",
+            b"Kurznotizen",
+        ]),
     );
 
     let selector_y = r.top + 40;
@@ -106,7 +111,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         rgb(0xFF, 0xFF, 0xFF),
         r.left + 24,
         btn_y + 8,
-        b"Nouvelle",
+        tr4(&[b"Nouvelle", b"New", b"Nueva", b"Neu"]),
     );
 
     fill(
@@ -124,7 +129,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         rgb(0xFF, 0xFF, 0xFF),
         r.left + 132,
         btn_y + 8,
-        b"Supprimer",
+        tr4(&[b"Supprimer", b"Delete", b"Eliminar", b"L\xF6schen"]),
     );
 }
 

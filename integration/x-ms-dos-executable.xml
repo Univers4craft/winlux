@@ -7,4 +7,15 @@
       <match type="string" offset="0" value="MZ"/>
     </magic>
   </mime-type>
+  <mime-type type="application/x-ms-shortcut">
+    <comment>Raccourci Windows</comment>
+    <glob pattern="*.lnk"/>
+    <magic priority="60">
+      <match type="string" offset="0" value="L\0\0\0"/>
+    </magic>
+  </mime-type>
+  <mime-type type="application/x-msi">
+    <comment>Paquet Windows Installer</comment>
+    <glob pattern="*.msi"/>
+  </mime-type>
 </mime-info>

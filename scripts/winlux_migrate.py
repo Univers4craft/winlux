@@ -24,6 +24,83 @@ import tempfile
 import threading
 import time
 
+
+# ── Langue : celle choisie dans l'installateur (WINLUX_LANG), sinon celle du système ──
+
+_COL = {"en": 0, "de": 1, "es": 2, "it": 3, "pt": 4}
+
+# Texte français -> (anglais, allemand, espagnol, italien, portugais).
+_TR = {
+    'Bureau': ('Desktop', 'Desktop', 'Escritorio', 'Desktop', 'Área de trabalho'),
+    'Documents': ('Documents', 'Dokumente', 'Documentos', 'Documenti', 'Documentos'),
+    'Téléchargements': ('Downloads', 'Downloads', 'Descargas', 'Download', 'Downloads'),
+    'Images': ('Pictures', 'Bilder', 'Imágenes', 'Immagini', 'Imagens'),
+    'Musique': ('Music', 'Musik', 'Música', 'Musica', 'Músicas'),
+    'Vidéos': ('Videos', 'Videos', 'Vídeos', 'Video', 'Vídeos'),
+    'Adresse invalide (nom de machine ou adresse IP attendue).': ('Invalid address (computer name or IP address expected).', 'Ungültige Adresse (Computername oder IP-Adresse erwartet).', 'Dirección no válida (se espera un nombre de equipo o una dirección IP).', 'Indirizzo non valido (nome del computer o indirizzo IP previsto).', 'Endereço inválido (nome do computador ou endereço IP esperado).'),
+    "Nom d'utilisateur invalide.": ('Invalid user name.', 'Ungültiger Benutzername.', 'Nombre de usuario no válido.', 'Nome utente non valido.', 'Nome de usuário inválido.'),
+    'Port invalide.': ('Invalid port.', 'Ungültiger Port.', 'Puerto no válido.', 'Porta non valida.', 'Porta inválida.'),
+    "scp (rsync absent sur l'autre PC)": ('scp (rsync missing on the other PC)', 'scp (rsync fehlt auf dem anderen PC)', 'scp (rsync no está en el otro PC)', "scp (rsync assente sull'altro PC)", 'scp (rsync ausente no outro PC)'),
+    'Connecté : PC Linux/Winlux, transfert par {tool}.': ('Connected: Linux/Winlux PC, transfer with {tool}.', 'Verbunden: Linux/Winlux-PC, Übertragung per {tool}.', 'Conectado: PC Linux/Winlux, transferencia con {tool}.', 'Connesso: PC Linux/Winlux, trasferimento con {tool}.', 'Conectado: PC Linux/Winlux, transferência por {tool}.'),
+    'Connecté : PC Windows (serveur OpenSSH), transfert par scp.': ('Connected: Windows PC (OpenSSH server), transfer with scp.', 'Verbunden: Windows-PC (OpenSSH-Server), Übertragung per scp.', 'Conectado: PC Windows (servidor OpenSSH), transferencia con scp.', 'Connesso: PC Windows (server OpenSSH), trasferimento con scp.', 'Conectado: PC Windows (servidor OpenSSH), transferência por scp.'),
+    'Transfert : {name}': ('Transferring: {name}', 'Übertragung: {name}', 'Transfiriendo: {name}', 'Trasferimento: {name}', 'Transferindo: {name}'),
+    '{name} : délai dépassé': ('{name}: timed out', '{name}: Zeitüberschreitung', '{name}: tiempo de espera agotado', '{name}: tempo scaduto', '{name}: tempo esgotado'),
+    'Transfert terminé': ('Transfer complete', 'Übertragung abgeschlossen', 'Transferencia terminada', 'Trasferimento completato', 'Transferência concluída'),
+    ' ({count} erreur(s))': (' ({count} error(s))', ' ({count} Fehler)', ' ({count} error(es))', ' ({count} errore/i)', ' ({count} erro(s))'),
+    "Mot de passe ou nom d'utilisateur incorrect.": ('Incorrect password or user name.', 'Falsches Kennwort oder falscher Benutzername.', 'Contraseña o nombre de usuario incorrectos.', 'Password o nome utente errati.', 'Senha ou nome de usuário incorretos.'),
+    "Le PC répond mais SSH n'est pas activé (lancez « winlux-migrate --serve » dessus).": ('The PC answers but SSH is not enabled (run “winlux-migrate --serve” on it).', 'Der PC antwortet, aber SSH ist nicht aktiviert (führen Sie dort „winlux-migrate --serve“ aus).', 'El PC responde pero SSH no está activado (ejecute «winlux-migrate --serve» en él).', 'Il PC risponde ma SSH non è attivo (esegui «winlux-migrate --serve» su di esso).', 'O PC responde, mas o SSH não está ativado (execute “winlux-migrate --serve” nele).'),
+    'PC introuvable : vérifiez son nom ou utilisez son adresse IP.': ('PC not found: check its name or use its IP address.', 'PC nicht gefunden: Prüfen Sie den Namen oder verwenden Sie die IP-Adresse.', 'PC no encontrado: compruebe su nombre o use su dirección IP.', "PC non trovato: controlla il nome o usa l'indirizzo IP.", 'PC não encontrado: verifique o nome ou use o endereço IP.'),
+    "Le PC ne répond pas : vérifiez qu'il est allumé et sur le même réseau.": ('The PC does not answer: check that it is on and on the same network.', 'Der PC antwortet nicht: Prüfen Sie, ob er eingeschaltet und im selben Netzwerk ist.', 'El PC no responde: compruebe que está encendido y en la misma red.', 'Il PC non risponde: verifica che sia acceso e sulla stessa rete.', 'O PC não responde: verifique se está ligado e na mesma rede.'),
+    'La clé SSH du PC a changé pendant la session : transfert refusé par sécurité.': ("The PC's SSH key changed during the session: transfer refused for security.", 'Der SSH-Schlüssel des PCs hat sich während der Sitzung geändert: Übertragung aus Sicherheitsgründen abgelehnt.', 'La clave SSH del PC cambió durante la sesión: transferencia rechazada por seguridad.', 'La chiave SSH del PC è cambiata durante la sessione: trasferimento rifiutato per sicurezza.', 'A chave SSH do PC mudou durante a sessão: transferência recusada por segurança.'),
+    'Connexion SSH impossible.': ('Unable to connect over SSH.', 'SSH-Verbindung nicht möglich.', 'No se puede conectar por SSH.', 'Impossibile connettersi via SSH.', 'Não foi possível conectar por SSH.'),
+    "SSH n'est pas actif : installez openssh-server puis relancez avec sudo.": ('SSH is not running: install openssh-server, then run again with sudo.', 'SSH ist nicht aktiv: Installieren Sie openssh-server und starten Sie erneut mit sudo.', 'SSH no está activo: instale openssh-server y vuelva a ejecutarlo con sudo.', 'SSH non è attivo: installa openssh-server e riavvia con sudo.', 'SSH não está ativo: instale o openssh-server e execute novamente com sudo.'),
+    'Ce PC est visible sous « {hostname} » ({ip}). Utilisateur à saisir : {user}': ('This PC is visible as “{hostname}” ({ip}). User to enter: {user}', 'Dieser PC ist als „{hostname}“ ({ip}) sichtbar. Einzugebender Benutzer: {user}', 'Este PC es visible como «{hostname}» ({ip}). Usuario que debe introducir: {user}', 'Questo PC è visibile come «{hostname}» ({ip}). Utente da inserire: {user}', 'Este PC está visível como “{hostname}” ({ip}). Usuário a digitar: {user}'),
+    'Laissez cette fenêtre ouverte pendant le transfert. Ctrl+C pour arrêter.': ('Keep this window open during the transfer. Ctrl+C to stop.', 'Lassen Sie dieses Fenster während der Übertragung geöffnet. Strg+C zum Beenden.', 'Deje esta ventana abierta durante la transferencia. Ctrl+C para detener.', 'Lascia aperta questa finestra durante il trasferimento. Ctrl+C per interrompere.', 'Deixe esta janela aberta durante a transferência. Ctrl+C para parar.'),
+    'Serveur SSH arrêté.': ('SSH server stopped.', 'SSH-Server beendet.', 'Servidor SSH detenido.', 'Server SSH arrestato.', 'Servidor SSH parado.'),
+    'Ne rien transférer (vous pourrez le faire plus tard avec « Transfert de PC »)': ("Don't transfer anything (you can do it later with “PC transfer”)", 'Nichts übertragen (später mit „PC-Übertragung“ möglich)', 'No transferir nada (podrá hacerlo más tarde con «Transferencia de PC»)', 'Non trasferire nulla (potrai farlo più tardi con «Trasferimento PC»)', 'Não transferir nada (você pode fazer isso depois com “Transferência de PC”)'),
+    'Transférer depuis un autre PC du réseau': ('Transfer from another PC on the network', 'Von einem anderen PC im Netzwerk übertragen', 'Transferir desde otro PC de la red', 'Trasferisci da un altro PC della rete', 'Transferir de outro PC da rede'),
+    'Rechercher les PC du réseau': ('Search for PCs on the network', 'PCs im Netzwerk suchen', 'Buscar PC en la red', 'Cerca PC nella rete', 'Procurar PCs na rede'),
+    'Nom ou adresse IP :': ('Name or IP address:', 'Name oder IP-Adresse:', 'Nombre o dirección IP:', 'Nome o indirizzo IP:', 'Nome ou endereço IP:'),
+    "Utilisateur sur l'autre PC :": ('User on the other PC:', 'Benutzer auf dem anderen PC:', 'Usuario en el otro PC:', "Utente sull'altro PC:", 'Usuário no outro PC:'),
+    'Mot de passe :': ('Password:', 'Kennwort:', 'Contraseña:', 'Password:', 'Senha:'),
+    'Paramètres (thème, navigateur, git, terminal)': ('Settings (theme, browser, git, terminal)', 'Einstellungen (Design, Browser, git, Terminal)', 'Configuración (tema, navegador, git, terminal)', 'Impostazioni (tema, browser, git, terminale)', 'Configurações (tema, navegador, git, terminal)'),
+    'Tester la connexion': ('Test the connection', 'Verbindung testen', 'Probar la conexión', 'Prova la connessione', 'Testar a conexão'),
+    "Sur l'autre PC Winlux ou Linux : lancez « sudo winlux-migrate --serve ».\nSur Windows : Paramètres › Système › Fonctionnalités facultatives › Serveur OpenSSH, puis saisissez son adresse IP. Les paramètres ne sont repris que depuis Linux/Winlux.": ('On the other Winlux or Linux PC: run “sudo winlux-migrate --serve”.\nOn Windows: Settings › System › Optional features › OpenSSH Server, then enter its IP address. Settings are only copied from Linux/Winlux.', 'Auf dem anderen Winlux- oder Linux-PC: Führen Sie „sudo winlux-migrate --serve“ aus.\nUnter Windows: Einstellungen › System › Optionale Features › OpenSSH-Server, dann seine IP-Adresse eingeben. Einstellungen werden nur von Linux/Winlux übernommen.', 'En el otro PC Winlux o Linux: ejecute «sudo winlux-migrate --serve».\nEn Windows: Configuración › Sistema › Características opcionales › Servidor OpenSSH; después introduzca su dirección IP. La configuración solo se copia desde Linux/Winlux.', "Sull'altro PC Winlux o Linux: esegui «sudo winlux-migrate --serve».\nSu Windows: Impostazioni › Sistema › Funzionalità facoltative › Server OpenSSH, poi inserisci il suo indirizzo IP. Le impostazioni vengono copiate solo da Linux/Winlux.", 'No outro PC Winlux ou Linux: execute “sudo winlux-migrate --serve”.\nNo Windows: Configurações › Sistema › Recursos opcionais › Servidor OpenSSH e digite o endereço IP. As configurações só são copiadas do Linux/Winlux.'),
+    'Recherche en cours…': ('Searching…', 'Suche läuft…', 'Buscando…', 'Ricerca in corso…', 'Procurando…'),
+    'Réseau indisponible : {error}': ('Network unavailable: {error}', 'Netzwerk nicht verfügbar: {error}', 'Red no disponible: {error}', 'Rete non disponibile: {error}', 'Rede indisponível: {error}'),
+    '{count} PC trouvé(s). Sélectionnez-en un ou saisissez une adresse.': ('{count} PC(s) found. Select one or enter an address.', '{count} PC(s) gefunden. Wählen Sie einen aus oder geben Sie eine Adresse ein.', '{count} PC encontrado(s). Seleccione uno o introduzca una dirección.', '{count} PC trovato/i. Selezionane uno o inserisci un indirizzo.', '{count} PC(s) encontrado(s). Selecione um ou digite um endereço.'),
+    "Aucun PC annoncé. Saisissez l'adresse IP de l'autre PC.": ("No PC announced. Enter the other PC's IP address.", 'Kein PC gemeldet. Geben Sie die IP-Adresse des anderen PCs ein.', 'Ningún PC anunciado. Introduzca la dirección IP del otro PC.', "Nessun PC annunciato. Inserisci l'indirizzo IP dell'altro PC.", 'Nenhum PC anunciado. Digite o endereço IP do outro PC.'),
+    'Connexion…': ('Connecting…', 'Verbindung wird hergestellt…', 'Conectando…', 'Connessione…', 'Conectando…'),
+    'Aucune': ('None', 'Keine', 'Ninguna', 'Nessuna', 'Nenhuma'),
+    'paramètres': ('settings', 'Einstellungen', 'configuración', 'impostazioni', 'configurações'),
+    'depuis {host} : {items}': ('from {host}: {items}', 'von {host}: {items}', 'desde {host}: {items}', 'da {host}: {items}', 'de {host}: {items}'),
+    'rien de coché': ('nothing selected', 'nichts ausgewählt', 'nada marcado', 'niente selezionato', 'nada marcado'),
+    'Transfert de PC': ('PC transfer', 'PC-Übertragung', 'Transferencia de PC', 'Trasferimento PC', 'Transferência de PC'),
+    'Transférer vos fichiers depuis un autre PC': ('Transfer your files from another PC', 'Ihre Dateien von einem anderen PC übertragen', 'Transferir sus archivos desde otro PC', 'Trasferisci i tuoi file da un altro PC', 'Transferir seus arquivos de outro PC'),
+    'Démarrer le transfert': ('Start the transfer', 'Übertragung starten', 'Iniciar la transferencia', 'Avvia il trasferimento', 'Iniciar a transferência'),
+    'Terminé': ('Done', 'Fertig', 'Terminado', 'Completato', 'Concluído'),
+}
+
+
+def _lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="):
+                        code = line[5:].strip()
+        except OSError:
+            pass
+    return (code or "fr")[:2].lower()
+
+
+def _t(text):
+    """Texte dans la langue de l'installateur ou du système (le français sert de clé)."""
+    row = _TR.get(text)
+    col = _COL.get(_lang())
+    return row[col] if row and col is not None else text
+
 MDNS_ADDR = "224.0.0.251"
 MDNS_PORT = 5353
 SERVICE = "_winlux-migrate._tcp.local"
@@ -266,11 +343,11 @@ def serve_mdns(instance, hostname, port, txt, stop):
 def validate(host, user, port=22):
     host, user = host.strip(), user.strip()
     if not HOST_RE.match(host):
-        raise ValueError("Adresse invalide (nom de machine ou adresse IP attendue).")
+        raise ValueError(_t("Adresse invalide (nom de machine ou adresse IP attendue)."))
     if not USER_RE.match(user):
-        raise ValueError("Nom d'utilisateur invalide.")
+        raise ValueError(_t("Nom d'utilisateur invalide."))
     if not 1 <= int(port) <= 65535:
-        raise ValueError("Port invalide.")
+        raise ValueError(_t("Port invalide."))
     return host, user, int(port)
 
 
@@ -345,11 +422,11 @@ class Session:
                 if not path or path.rstrip("/") == self.remote_home.rstrip("/"):
                     path = f"{self.remote_home}/{english}" if self.remote_home else english
                 self.remote_dirs[key] = path
-            tool = "rsync" if self.has_rsync else "scp (rsync absent sur l'autre PC)"
-            return f"Connecté : PC Linux/Winlux, transfert par {tool}."
+            tool = "rsync" if self.has_rsync else _t("scp (rsync absent sur l'autre PC)")
+            return _t("Connecté : PC Linux/Winlux, transfert par {tool}.").format(tool=tool)
         self.remote_os = "windows"
         self.remote_dirs = {key: english for key, _label, english, _xdg, _local in FOLDERS}
-        return "Connecté : PC Windows (serveur OpenSSH), transfert par scp."
+        return _t("Connecté : PC Windows (serveur OpenSSH), transfert par scp.")
 
     def pull(self, home, folders, settings, progress=None, uid=None, gid=None):
         """Copie les éléments choisis vers `home`. Retourne la liste des erreurs (non bloquantes)."""
@@ -365,7 +442,7 @@ class Session:
                 items.append((f"{self.remote_home}/{rel}", os.path.join(home, rel), False))
         for index, (remote, local, is_folder) in enumerate(items):
             if progress:
-                progress(index / max(1, len(items)), f"Transfert : {os.path.basename(local)}")
+                progress(index / max(1, len(items)), _t("Transfert : {name}").format(name=os.path.basename(local)))
             os.makedirs(os.path.dirname(local), exist_ok=True)
             try:
                 rc, err = self.copy(remote, local, is_folder)
@@ -373,11 +450,11 @@ class Session:
                 if rc not in (0, 23, 24) and is_folder:
                     errors.append(f"{os.path.basename(local)} : {err.strip()[:200] or f'code {rc}'}")
             except subprocess.TimeoutExpired:
-                errors.append(f"{os.path.basename(local)} : délai dépassé")
+                errors.append(_t("{name} : délai dépassé").format(name=os.path.basename(local)))
         if uid is not None:
             subprocess.run(["chown", "-R", f"{uid}:{gid}", home], timeout=600)
         if progress:
-            progress(1.0, "Transfert terminé" + (f" ({len(errors)} erreur(s))" if errors else ""))
+            progress(1.0, _t("Transfert terminé") + (_t(" ({count} erreur(s))").format(count=len(errors)) if errors else ""))
         return errors
 
     def copy(self, remote, local, is_folder):
@@ -409,16 +486,16 @@ class Session:
 def explain_ssh_error(stderr):
     text = stderr.lower()
     if "permission denied" in text:
-        return "Mot de passe ou nom d'utilisateur incorrect."
+        return _t("Mot de passe ou nom d'utilisateur incorrect.")
     if "connection refused" in text:
-        return "Le PC répond mais SSH n'est pas activé (lancez « winlux-migrate --serve » dessus)."
+        return _t("Le PC répond mais SSH n'est pas activé (lancez « winlux-migrate --serve » dessus).")
     if "could not resolve" in text or "name or service not known" in text:
-        return "PC introuvable : vérifiez son nom ou utilisez son adresse IP."
+        return _t("PC introuvable : vérifiez son nom ou utilisez son adresse IP.")
     if "timed out" in text or "no route" in text or "unreachable" in text:
-        return "Le PC ne répond pas : vérifiez qu'il est allumé et sur le même réseau."
+        return _t("Le PC ne répond pas : vérifiez qu'il est allumé et sur le même réseau.")
     if "host key verification failed" in text or "remote host identification has changed" in text:
-        return "La clé SSH du PC a changé pendant la session : transfert refusé par sécurité."
-    return stderr.strip().splitlines()[-1] if stderr.strip() else "Connexion SSH impossible."
+        return _t("La clé SSH du PC a changé pendant la session : transfert refusé par sécurité.")
+    return stderr.strip().splitlines()[-1] if stderr.strip() else _t("Connexion SSH impossible.")
 
 
 # ── Côté source : --serve ─────────────────────────────────────────
@@ -438,7 +515,7 @@ def serve(port=22):
     if not sshd_listening(port):
         sshd = shutil.which("sshd") or "/usr/sbin/sshd"
         if os.geteuid() != 0 or not os.path.exists(sshd):
-            print("SSH n'est pas actif : installez openssh-server puis relancez avec sudo.", file=sys.stderr)
+            print(_t("SSH n'est pas actif : installez openssh-server puis relancez avec sudo."), file=sys.stderr)
             return 1
         subprocess.run(["ssh-keygen", "-A"], check=False)
         os.makedirs("/run/sshd", exist_ok=True)
@@ -449,8 +526,8 @@ def serve(port=22):
     worker = threading.Thread(target=serve_mdns, args=(hostname, hostname, port, txt, stop), daemon=True)
     worker.start()
     ip = local_ip_towards(MDNS_ADDR)
-    print(f"Ce PC est visible sous « {hostname} » ({ip}). Utilisateur à saisir : {user or '?'}")
-    print("Laissez cette fenêtre ouverte pendant le transfert. Ctrl+C pour arrêter.")
+    print(_t("Ce PC est visible sous « {hostname} » ({ip}). Utilisateur à saisir : {user}").format(hostname=hostname, ip=ip, user=user or "?"))
+    print(_t("Laissez cette fenêtre ouverte pendant le transfert. Ctrl+C pour arrêter."))
     try:
         while worker.is_alive():
             worker.join(0.5)
@@ -460,7 +537,7 @@ def serve(port=22):
         stop.set()
         if started:
             started.terminate()
-            print("Serveur SSH arrêté.")
+            print(_t("Serveur SSH arrêté."))
     return 0
 
 
@@ -480,8 +557,8 @@ class MigrationPanel:
         self.hosts = []
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         self.widget = box
-        skip = Gtk.RadioButton.new_with_label(None, "Ne rien transférer (vous pourrez le faire plus tard avec « Transfert de PC »)")
-        use = Gtk.RadioButton.new_with_label_from_widget(skip, "Transférer depuis un autre PC du réseau")
+        skip = Gtk.RadioButton.new_with_label(None, _t("Ne rien transférer (vous pourrez le faire plus tard avec « Transfert de PC »)"))
+        use = Gtk.RadioButton.new_with_label_from_widget(skip, _t("Transférer depuis un autre PC du réseau"))
         for rb in (skip, use):
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
             card.get_style_context().add_class("card")
@@ -491,7 +568,7 @@ class MigrationPanel:
         self.form = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
         box.pack_start(self.form, True, True, 0)
         scan_row = Gtk.Box(spacing=12)
-        self.scan_btn = Gtk.Button(label="Rechercher les PC du réseau")
+        self.scan_btn = Gtk.Button(label=_t("Rechercher les PC du réseau"))
         self.scan_btn.get_style_context().add_class("btn-secondary")
         self.scan_btn.connect("clicked", self._on_scan)
         scan_row.pack_start(self.scan_btn, False, False, 0)
@@ -506,9 +583,9 @@ class MigrationPanel:
         self.form.pack_start(self.host_list, False, False, 0)
         grid = Gtk.Grid(column_spacing=12, row_spacing=8)
         self.entries = {}
-        for row, (key, label, secret) in enumerate([("host", "Nom ou adresse IP :", False),
-                                                    ("user", "Utilisateur sur l'autre PC :", False),
-                                                    ("password", "Mot de passe :", True)]):
+        for row, (key, label, secret) in enumerate([("host", _t("Nom ou adresse IP :"), False),
+                                                    ("user", _t("Utilisateur sur l'autre PC :"), False),
+                                                    ("password", _t("Mot de passe :"), True)]):
             lbl = Gtk.Label(label=label, xalign=1)
             lbl.get_style_context().add_class("input-label")
             grid.attach(lbl, 0, row, 1, 1)
@@ -527,16 +604,16 @@ class MigrationPanel:
         checks.set_max_children_per_line(4)
         self.checks = {}
         for key, label, *_ in FOLDERS:
-            cb = Gtk.CheckButton(label=label)
+            cb = Gtk.CheckButton(label=_t(label))
             cb.set_active(key != "downloads")
             checks.add(cb)
             self.checks[key] = cb
-        self.settings_check = Gtk.CheckButton(label="Paramètres (thème, navigateur, git, terminal)")
+        self.settings_check = Gtk.CheckButton(label=_t("Paramètres (thème, navigateur, git, terminal)"))
         self.settings_check.set_active(True)
         checks.add(self.settings_check)
         self.form.pack_start(checks, False, False, 0)
         test_row = Gtk.Box(spacing=12)
-        self.test_btn = Gtk.Button(label="Tester la connexion")
+        self.test_btn = Gtk.Button(label=_t("Tester la connexion"))
         self.test_btn.get_style_context().add_class("btn-primary")
         self.test_btn.connect("clicked", self._on_test)
         test_row.pack_start(self.test_btn, False, False, 0)
@@ -546,9 +623,9 @@ class MigrationPanel:
         test_row.pack_start(self.test_status, True, True, 0)
         self.form.pack_start(test_row, False, False, 0)
         hint = Gtk.Label(xalign=0, label=(
-            "Sur l'autre PC Winlux ou Linux : lancez « sudo winlux-migrate --serve ».\n"
-            "Sur Windows : Paramètres › Système › Fonctionnalités facultatives › Serveur OpenSSH, "
-            "puis saisissez son adresse IP. Les paramètres ne sont repris que depuis Linux/Winlux."))
+            _t("Sur l'autre PC Winlux ou Linux : lancez « sudo winlux-migrate --serve ».\n"
+               "Sur Windows : Paramètres › Système › Fonctionnalités facultatives › Serveur OpenSSH, "
+               "puis saisissez son adresse IP. Les paramètres ne sont repris que depuis Linux/Winlux.")))
         hint.set_line_wrap(True)
         hint.get_style_context().add_class("card-detail")
         self.form.pack_start(hint, False, False, 0)
@@ -575,7 +652,7 @@ class MigrationPanel:
 
     def _on_scan(self, _btn):
         self.scan_btn.set_sensitive(False)
-        self.scan_status.set_text("Recherche en cours…")
+        self.scan_status.set_text(_t("Recherche en cours…"))
 
         def work():
             try:
@@ -600,11 +677,11 @@ class MigrationPanel:
         self.host_list.set_visible(bool(hosts))
         self.scan_btn.set_sensitive(True)
         if error:
-            self.scan_status.set_text(f"Réseau indisponible : {error}")
+            self.scan_status.set_text(_t("Réseau indisponible : {error}").format(error=error))
         elif hosts:
-            self.scan_status.set_text(f"{len(hosts)} PC trouvé(s). Sélectionnez-en un ou saisissez une adresse.")
+            self.scan_status.set_text(_t("{count} PC trouvé(s). Sélectionnez-en un ou saisissez une adresse.").format(count=len(hosts)))
         else:
-            self.scan_status.set_text("Aucun PC annoncé. Saisissez l'adresse IP de l'autre PC.")
+            self.scan_status.set_text(_t("Aucun PC annoncé. Saisissez l'adresse IP de l'autre PC."))
         return False
 
     def _on_host_selected(self, _box, row):
@@ -623,7 +700,7 @@ class MigrationPanel:
         selected = getattr(self, "selected", None)
         port = selected["port"] if selected and selected["ip"] == host.strip() else 22
         self.test_btn.set_sensitive(False)
-        self.test_status.set_text("Connexion…")
+        self.test_status.set_text(_t("Connexion…"))
 
         def work():
             if self.session:
@@ -649,29 +726,29 @@ class MigrationPanel:
 
     def describe(self):
         if not self.enabled or not self.session:
-            return "Aucune"
+            return _t("Aucune")
         folders, settings = self.selection()
-        names = [label for key, label, *_ in FOLDERS if key in folders]
+        names = [_t(label) for key, label, *_ in FOLDERS if key in folders]
         if settings and self.session.remote_os == "linux":
-            names.append("paramètres")
-        return f"depuis {self.session.host} : " + (", ".join(names) or "rien de coché")
+            names.append(_t("paramètres"))
+        return _t("depuis {host} : {items}").format(host=self.session.host, items=", ".join(names) or _t("rien de coché"))
 
 
 def run_gui():
     import gi
     gi.require_version("Gtk", "3.0")
     from gi.repository import Gtk, GLib
-    win = Gtk.Window(title="Transfert de PC")
+    win = Gtk.Window(title=_t("Transfert de PC"))
     win.set_default_size(720, 560)
     win.connect("destroy", Gtk.main_quit)
     outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
     outer.set_border_width(24)
     win.add(outer)
-    title = Gtk.Label(label="Transférer vos fichiers depuis un autre PC", xalign=0)
+    title = Gtk.Label(label=_t("Transférer vos fichiers depuis un autre PC"), xalign=0)
     title.get_style_context().add_class("page-title")
     outer.pack_start(title, False, False, 0)
     progress = Gtk.ProgressBar(show_text=True)
-    start = Gtk.Button(label="Démarrer le transfert")
+    start = Gtk.Button(label=_t("Démarrer le transfert"))
     panel = MigrationPanel(Gtk, GLib, lambda: start.set_sensitive(panel.enabled and panel.connected))
     outer.pack_start(panel.widget, True, True, 0)
     outer.pack_start(progress, False, False, 0)
@@ -687,7 +764,7 @@ def run_gui():
 
         def work():
             errors = panel.session.pull(os.path.expanduser("~"), folders, settings, report)
-            GLib.idle_add(lambda: progress.set_text("Terminé" if not errors else "; ".join(errors)) and False)
+            GLib.idle_add(lambda: progress.set_text(_t("Terminé") if not errors else "; ".join(errors)) and False)
         threading.Thread(target=work, daemon=True).start()
     start.connect("clicked", on_start)
     win.show_all()

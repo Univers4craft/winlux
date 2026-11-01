@@ -25,11 +25,13 @@ PACKAGES += ["apt", "dpkg", "bash", "coreutils", "findutils", "grep", "sed", "ta
 PACKAGES += ["rsync", "openssh-client"]
 PACKAGES += ["xfonts-base", "libarchive-tools", "squashfs-tools", "libfaad2", "libmpg123-0",
              "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
-             "libqt6core6t64", "libqt6gui6t64", "libqt6widgets6t64"]
+             "libqt6core6t64", "libqt6gui6", "libqt6widgets6"]
 # Tools the graphical installer runs from the live session.
 PACKAGES += ["parted", "dosfstools", "e2fsprogs", "cryptsetup-bin", "ntfs-3g", "kbd",
              "console-setup", "grub2-common", "grub-pc-bin", "grub-efi-amd64-bin", "efibootmgr",
              "xorriso", "openssl", "python3-gi-cairo"]
+# Decoding engine of the media player (winlux_media runs ffmpeg/ffprobe from PATH).
+PACKAGES += ["ffmpeg"]
 DESKTOP_REQUIRED = ["apt", "dpkg", "bash", "busybox-static", "curl", "ca-certificates",
     "python3", "python3-gi", "gir1.2-gtk-3.0", "openbox", "xfdesktop4", "xfce4-panel",
     "xfce4-genmon-plugin", "xfconf", "xfce4-settings", "dbus-x11", "wmctrl", "xdotool",
@@ -37,8 +39,8 @@ DESKTOP_REQUIRED = ["apt", "dpkg", "bash", "busybox-static", "curl", "ca-certifi
     "xserver-xorg-input-libinput", "xterm", "fonts-dejavu-core", "util-linux", "thunar",
     "network-manager", "network-manager-gnome", "udisks2", "gvfs", "libfaad2", "libmpg123-0",
     "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
-    "libqt6core6t64", "libqt6gui6t64", "libqt6widgets6t64", "libasound2t64", "alsa-utils",
-    "libx11-6", "libxft2", "libcairo2", "polkitd", "rsync", "openssh-client", "winlux-kernel"]
+    "libqt6core6t64", "libqt6gui6", "libqt6widgets6", "libasound2t64", "alsa-utils",
+    "libx11-6", "libxft2", "libcairo2", "polkitd", "rsync", "openssh-client", "espeak-ng", "ffmpeg", "winlux-kernel"]
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
@@ -119,9 +121,14 @@ def main():
         "$B chmod 1777 /tmp\n$B chown -R 0:0 /etc /usr /var\n"
         + "".join(f"$B insmod /{module}\n" for module in modules)
         + "$B ip link set lo up\n"
-        + 'for n in /sys/class/net/*; do test "${n##*/}" = lo && continue; '
+        # Diagnostics land in bootstrap.log: a missing NIC or DHCP lease is
+        # otherwise indistinguishable from a package failure.
+        + "echo WINLUX_NET_INTERFACES: $($B ls /sys/class/net)\n"
+        + 'up=0; for n in /sys/class/net/*; do test "${n##*/}" = lo && continue; '
           '$B ip link set "${n##*/}" up; '
-          '$B udhcpc -n -q -t 5 -T 3 -i "${n##*/}" -s /winlux-bootstrap/dhcp || exit 1; break; done\n'
+          '$B udhcpc -n -q -t 20 -T 3 -i "${n##*/}" -s /winlux-bootstrap/dhcp && up=1; break; done\n'
+        + 'if test "$up" != 1; then echo WINLUX_NET_FAILED; $B ip addr; $B dmesg | $B tail -40; '
+          'echo WINLUX_APT_BASE_RESULT=network; $B sync; $B poweroff -f; fi\n'
         + "/bin/bash /winlux-bootstrap/install\nresult=$?\necho WINLUX_APT_BASE_RESULT=$result\n"
           "$B sync\n$B poweroff -f\nwhile :; do $B sleep 1; done\n")
     (boot / "init").chmod(0o755)
@@ -129,16 +136,19 @@ def main():
     run("truncate", "-s", "12G", str(disk))
     run("fakeroot", "mkfs.ext4", "-q", "-F", "-d", str(root), str(disk))
     accel = "kvm" if os.access("/dev/kvm", os.R_OK | os.W_OK) else "tcg"
+    # Host binaries copied into the VM (BusyBox) may use AVX: QEMU's default
+    # qemu64 CPU model lacks it and the guest init dies on an invalid opcode.
     log = work / "bootstrap.log"
     with log.open("w") as output:
         run("timeout", "-k", "5", "2400", "qemu-system-x86_64", "-m", "3072", "-smp", "2",
-            "-accel", accel, "-display", "none", "-monitor", "none", "-serial", "stdio",
+            "-accel", accel, "-cpu", "max", "-display", "none", "-monitor", "none", "-serial", "stdio",
             "-no-reboot", "-kernel", str(args.kernel.resolve()),
             "-append", "root=/dev/vda rw rootfstype=ext4 init=/winlux-bootstrap/init console=ttyS0 panic=1",
             "-drive", f"file={disk},if=virtio,format=raw", "-nic", "user,model=e1000",
             stdout=output, stderr=subprocess.STDOUT)
     if "WINLUX_APT_BASE_RESULT=0" not in log.read_text():
-        raise RuntimeError(f"APT base build failed; see {log}")
+        tail = log.read_text(errors="replace").splitlines()[-40:]
+        raise RuntimeError(f"APT base build failed; see {log}\n" + "\n".join(tail))
     tarball = work / "root.tar"
     run("debugfs", "-R", f"dump /winlux-bootstrap/root.tar {tarball}", str(disk))
     if not tarball.is_file(): raise RuntimeError("Missing configured base archive")

@@ -4,6 +4,10 @@
 #![allow(static_mut_refs, dead_code)]
 
 use winlux_testexe::*;
+#[path = "../shell/cliphist.rs"]
+mod cliphist;
+#[path = "../shell/a11y.rs"]
+mod a11y;
 #[path = "../shell/admin_ui.rs"]
 mod admin_ui;
 #[path = "../shell/bsod.rs"]
@@ -18,8 +22,18 @@ mod diskmgr;
 mod eventviewer;
 #[path = "../shell/explorer.rs"]
 mod explorer;
+#[path = "../shell/filehistory.rs"]
+mod filehistory;
+#[path = "../shell/fonts.rs"]
+mod fonts;
+#[path = "../shell/programs.rs"]
+mod programs;
+#[path = "../shell/thumbs.rs"]
+mod thumbs;
 #[path = "../shell/firewall.rs"]
 mod firewall;
+#[path = "../shell/gpuinfo.rs"]
+mod gpuinfo;
 #[path = "../shell/gfx.rs"]
 mod gfx;
 #[path = "../shell/locale.rs"]
@@ -32,20 +46,36 @@ mod netdrives;
 mod notepad;
 #[path = "../shell/notifications.rs"]
 mod notifications;
+#[path = "../shell/personalize.rs"]
+mod personalize;
 #[path = "../shell/restore.rs"]
 mod restore;
+#[path = "../shell/regedit.rs"]
+mod regedit;
 #[path = "../shell/settings.rs"]
 mod settings;
+#[path = "../shell/sharing.rs"]
+mod sharing;
+#[path = "../shell/snip.rs"]
+mod snip;
+#[path = "../shell/store.rs"]
+mod store;
 #[path = "../shell/settings_cpu.rs"]
 mod settings_cpu;
+#[path = "../shell/sysmon.rs"]
+mod sysmon;
 #[path = "../shell/taskmgr.rs"]
 mod taskmgr;
+#[path = "../shell/sysinfo.rs"]
+mod sysinfo;
 #[path = "../shell/taskschd.rs"]
 mod taskschd;
 #[path = "../shell/terminal.rs"]
 mod terminal;
 #[path = "../shell/utilities.rs"]
 mod utilities;
+#[path = "../shell/volumes.rs"]
+mod volumes;
 #[path = "../shell/weather.rs"]
 mod weather;
 #[path = "../shell/welcome.rs"]
@@ -59,7 +89,12 @@ pub extern "C" fn mainCRTStartup() -> ! {
         explorer::regression_checks();
         desktop::regression_checks();
         settings::regression_checks();
+        cliphist::regression_checks();
+        snip::regression_checks();
+        filehistory::regression_checks();
+        personalize::regression_checks();
         welcome::regression_checks();
+        a11y::regression_checks();
     }
     finish()
 }

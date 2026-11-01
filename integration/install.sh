@@ -13,7 +13,7 @@ bin="$destdir$prefix/bin"
 share="$destdir$prefix/share"
 etc="$destdir/etc"
 version=${WINLUX_VERSION:-$(git -C "$root" describe --tags --always 2>/dev/null || printf 'development')}
-mime_types="application/x-ms-dos-executable application/x-msdownload application/vnd.microsoft.portable-executable application/x-dosexec"
+mime_types="application/x-ms-dos-executable application/x-msdownload application/vnd.microsoft.portable-executable application/x-dosexec application/x-msi application/x-ms-shortcut"
 web_types="x-scheme-handler/http x-scheme-handler/https text/html application/xhtml+xml"
 
 test -x "$root/target/release/winlux" || {
@@ -24,6 +24,10 @@ test -x "$root/target/release/winlux" || {
 install -Dm755 "$root/target/release/winlux" "$bin/winlux"
 install -Dm755 "$root/integration/winlux-open" "$bin/winlux-open"
 install -Dm755 "$root/integration/winlux-browser" "$bin/winlux-browser"
+install -Dm755 "$root/scripts/winlux-report.py" "$bin/winlux-report"
+# Fenêtre UAC (requireAdministrator) et sa vérification de mot de passe.
+install -Dm755 "$root/scripts/winlux-uac.py" "$bin/winlux-uac"
+install -Dm644 "$root/scripts/winlux-lock.py" "$share/winlux/winlux-lock.py"
 install -Dm755 "$root/scripts/install-edge.sh" "$share/winlux/install-edge.sh"
 install -Dm755 "$root/scripts/winlux-update.sh" "$bin/winlux-update"
 install -Dm755 "$root/integration/uninstall.sh" "$share/winlux/uninstall.sh"

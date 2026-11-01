@@ -140,56 +140,9 @@ pub extern "win64" fn copy_icon(_icon: usize) -> usize {
 }
 
 // ── Timers ──────────────────────────────────────────────────────────
-
-static TIMER_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
-static TIMERS: Mutex<Option<HashMap<(usize, usize), TimerInfo>>> = Mutex::new(None);
-
-struct TimerInfo {
-    _interval_ms: u32,
-    _callback: usize,
-    #[allow(dead_code)]
-    next_fire: u64,
-}
-
-pub unsafe extern "win64" fn set_timer(
-    hwnd: usize,
-    id: usize,
-    elapse: u32,
-    callback: usize,
-) -> usize {
-    let real_id = if hwnd == 0 && id == 0 {
-        TIMER_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
-    } else {
-        id
-    };
-    let now = crate::dlls::kernel32::get_tick_count64();
-    let mut g = TIMERS.lock().unwrap();
-    if g.is_none() {
-        *g = Some(HashMap::new());
-    }
-    g.as_mut().unwrap().insert(
-        (hwnd, real_id),
-        TimerInfo {
-            _interval_ms: elapse.max(10),
-            _callback: callback,
-            next_fire: now + elapse as u64,
-        },
-    );
-    // Déclencher WM_TIMER via le message loop est un TODO ; pour l'instant
-    // le timer est enregistré mais ne fire pas activement.
-    real_id
-}
-
-pub unsafe extern "win64" fn kill_timer(hwnd: usize, id: usize) -> i32 {
-    let mut g = TIMERS.lock().unwrap();
-    match g.as_mut().and_then(|m| m.remove(&(hwnd, id))) {
-        Some(_) => 1,
-        None => {
-            crate::process::set_last_error(1402);
-            0
-        }
-    }
-}
+// SetTimer/KillTimer sont fournis par user32.rs (gui::set_timer), qui
+// déclenche réellement WM_TIMER. Une ancienne version bouchon de ce fichier
+// les remplaçait et empêchait tous les minuteurs des applications de sonner.
 
 // ── Menus ───────────────────────────────────────────────────────────
 
@@ -620,42 +573,6 @@ pub extern "win64" fn enable_scroll_bar(_hwnd: usize, _flags: u32, _arrows: u32)
     1
 }
 
-// ── Clipboard ───────────────────────────────────────────────────────
-
-pub extern "win64" fn open_clipboard(_hwnd: usize) -> i32 {
-    1
-}
-pub extern "win64" fn close_clipboard() -> i32 {
-    1
-}
-pub extern "win64" fn empty_clipboard() -> i32 {
-    1
-}
-pub extern "win64" fn set_clipboard_data(_format: u32, _mem: usize) -> usize {
-    0
-}
-pub extern "win64" fn get_clipboard_data(_format: u32) -> usize {
-    0
-}
-pub extern "win64" fn is_clipboard_format_available(_format: u32) -> i32 {
-    0
-}
-pub extern "win64" fn count_clipboard_formats() -> i32 {
-    0
-}
-pub extern "win64" fn enum_clipboard_formats(_format: u32) -> u32 {
-    0
-}
-pub extern "win64" fn register_clipboard_format_a(_name: *const u8) -> u32 {
-    0xC000
-}
-pub extern "win64" fn register_clipboard_format_w(_name: *const u16) -> u32 {
-    0xC000
-}
-pub extern "win64" fn get_clipboard_format_name_a(_format: u32, _buf: *mut u8, _max: i32) -> i32 {
-    0
-}
-
 // ── Accélérateurs ───────────────────────────────────────────────────
 
 pub extern "win64" fn load_accelerators_a(_hinst: usize, _name: *const u8) -> usize {
@@ -779,22 +696,6 @@ pub extern "win64" fn is_dlg_button_checked(_dlg: usize, _id: i32) -> u32 {
 
 // ── Divers ──────────────────────────────────────────────────────────
 
-pub extern "win64" fn system_parameters_info_a(
-    _action: u32,
-    _param: u32,
-    _data: usize,
-    _update: u32,
-) -> i32 {
-    1
-}
-pub extern "win64" fn system_parameters_info_w(
-    _action: u32,
-    _param: u32,
-    _data: usize,
-    _update: u32,
-) -> i32 {
-    1
-}
 pub extern "win64" fn get_class_name_a(_hwnd: usize, _buf: *mut u8, _max: i32) -> i32 {
     0
 }
@@ -859,19 +760,6 @@ pub extern "win64" fn map_virtual_key_a(_code: u32, _map_type: u32) -> u32 {
 pub extern "win64" fn map_virtual_key_w(_code: u32, _map_type: u32) -> u32 {
     0
 }
-pub unsafe extern "win64" fn get_keyboard_layout_name_a(_buf: *mut u8) -> i32 {
-    if !_buf.is_null() {
-        let s = b"0000040C\0";
-        std::ptr::copy_nonoverlapping(s.as_ptr(), _buf, 9);
-    }
-    1
-}
-pub extern "win64" fn get_keyboard_layout(_thread: u32) -> usize {
-    0x0000040C
-} // Français
-pub extern "win64" fn activate_keyboard_layout(_layout: usize, _flags: u32) -> usize {
-    0x0000040C
-}
 pub extern "win64" fn to_unicode_ex(
     _vk: u32,
     _scan: u32,
@@ -913,33 +801,6 @@ pub extern "win64" fn msg_wait_for_multiple_objects_ex(
 ) -> u32 {
     0
 }
-pub extern "win64" fn monitor_from_point(_x: i32, _y: i32, _flags: u32) -> usize {
-    1
-}
-pub extern "win64" fn monitor_from_rect(_rect: usize, _flags: u32) -> usize {
-    1
-}
-pub extern "win64" fn monitor_from_window(_hwnd: usize, _flags: u32) -> usize {
-    1
-}
-pub unsafe extern "win64" fn get_monitor_info_a(_monitor: usize, info: *mut u8) -> i32 {
-    if info.is_null() {
-        return 0;
-    }
-    // MONITORINFO : cbSize(4), rcMonitor(16), rcWork(16), dwFlags(4) = 40 octets
-    let size = *(info as *const u32);
-    if size < 40 {
-        return 0;
-    }
-    let rect = [0i32, 0, 1920, 1080]; // résolution par défaut
-    std::ptr::copy_nonoverlapping(rect.as_ptr() as *const u8, info.add(4), 16);
-    std::ptr::copy_nonoverlapping(rect.as_ptr() as *const u8, info.add(20), 16);
-    *(info.add(36) as *mut u32) = 1; // MONITORINFOF_PRIMARY
-    1
-}
-pub unsafe extern "win64" fn get_monitor_info_w(monitor: usize, info: *mut u8) -> i32 {
-    get_monitor_info_a(monitor, info)
-}
 pub extern "win64" fn get_window_dc(_hwnd: usize) -> usize {
     crate::dlls::user32::get_dc(_hwnd)
 }
@@ -957,7 +818,6 @@ pub fn exports() -> crate::dlls::Exports {
         "LoadIconA"=>fn load_icon_a, "LoadIconW"=>fn load_icon_w,
         "LoadImageA"=>fn load_image_a, "LoadImageW"=>fn load_image_w,
         "DestroyIcon"=>fn destroy_icon, "DestroyCursor"=>fn destroy_cursor, "CopyIcon"=>fn copy_icon,
-        "SetTimer"=>fn set_timer, "KillTimer"=>fn kill_timer,
         "CreateMenu"=>fn create_menu, "CreatePopupMenu"=>fn create_popup_menu, "DestroyMenu"=>fn destroy_menu,
         "GetMenu"=>fn get_menu, "SetMenu"=>fn set_menu, "DrawMenuBar"=>fn draw_menu_bar,
         "AppendMenuA"=>fn append_menu_a, "AppendMenuW"=>fn append_menu_w,
@@ -989,15 +849,6 @@ pub fn exports() -> crate::dlls::Exports {
         "SetScrollRange"=>fn set_scroll_range,
         "ScrollWindow"=>fn scroll_window, "ScrollWindowEx"=>fn scroll_window_ex,
         "ShowScrollBar"=>fn show_scroll_bar, "EnableScrollBar"=>fn enable_scroll_bar,
-        "OpenClipboard"=>fn open_clipboard, "CloseClipboard"=>fn close_clipboard,
-        "EmptyClipboard"=>fn empty_clipboard, "SetClipboardData"=>fn set_clipboard_data,
-        "GetClipboardData"=>fn get_clipboard_data,
-        "IsClipboardFormatAvailable"=>fn is_clipboard_format_available,
-        "CountClipboardFormats"=>fn count_clipboard_formats,
-        "EnumClipboardFormats"=>fn enum_clipboard_formats,
-        "RegisterClipboardFormatA"=>fn register_clipboard_format_a,
-        "RegisterClipboardFormatW"=>fn register_clipboard_format_w,
-        "GetClipboardFormatNameA"=>fn get_clipboard_format_name_a,
         "LoadAcceleratorsA"=>fn load_accelerators_a, "LoadAcceleratorsW"=>fn load_accelerators_w,
         "CreateAcceleratorTableA"=>fn create_accelerator_table_a,
         "CreateAcceleratorTableW"=>fn create_accelerator_table_w,
@@ -1014,8 +865,6 @@ pub fn exports() -> crate::dlls::Exports {
         "SendDlgItemMessageA"=>fn send_dlg_item_message_a,
         "SendDlgItemMessageW"=>fn send_dlg_item_message_w,
         "CheckDlgButton"=>fn check_dlg_button, "IsDlgButtonChecked"=>fn is_dlg_button_checked,
-        "SystemParametersInfoA"=>fn system_parameters_info_a,
-        "SystemParametersInfoW"=>fn system_parameters_info_w,
         "GetClassNameA"=>fn get_class_name_a, "GetClassNameW"=>fn get_class_name_w,
         "GetClassLongA"=>fn get_class_long_a, "GetClassLongW"=>fn get_class_long_w,
         "GetClassLongPtrA"=>fn get_class_long_ptr_a, "GetClassLongPtrW"=>fn get_class_long_ptr_w,
@@ -1026,19 +875,17 @@ pub fn exports() -> crate::dlls::Exports {
         "RemovePropA"=>fn remove_prop_a, "RemovePropW"=>fn remove_prop_w,
         "GetDCEx"=>fn get_dc_ex, "RedrawWindow"=>fn redraw_window, "GetUpdateRect"=>fn get_update_rect,
         "MapVirtualKeyA"=>fn map_virtual_key_a, "MapVirtualKeyW"=>fn map_virtual_key_w,
-        "GetKeyboardLayoutNameA"=>fn get_keyboard_layout_name_a,
-        "GetKeyboardLayout"=>fn get_keyboard_layout,
-        "ActivateKeyboardLayout"=>fn activate_keyboard_layout,
         "ToUnicodeEx"=>fn to_unicode_ex,
         "RegisterWindowMessageA"=>fn register_window_message_a,
         "RegisterWindowMessageW"=>fn register_window_message_w,
         "ReplyMessage"=>fn reply_message, "WaitMessage"=>fn wait_message,
         "MsgWaitForMultipleObjects"=>fn msg_wait_for_multiple_objects,
         "MsgWaitForMultipleObjectsEx"=>fn msg_wait_for_multiple_objects_ex,
-        "MonitorFromPoint"=>fn monitor_from_point,
-        "MonitorFromRect"=>fn monitor_from_rect,
-        "MonitorFromWindow"=>fn monitor_from_window,
-        "GetMonitorInfoA"=>fn get_monitor_info_a, "GetMonitorInfoW"=>fn get_monitor_info_w,
+        "MonitorFromPoint"=>fn crate::dlls::monitors::monitor_from_point_packed,
+        "MonitorFromRect"=>fn crate::dlls::monitors::monitor_from_rect,
+        "MonitorFromWindow"=>fn crate::dlls::monitors::monitor_from_window,
+        "GetMonitorInfoA"=>fn crate::dlls::monitors::get_monitor_info_a,
+        "GetMonitorInfoW"=>fn crate::dlls::monitors::get_monitor_info_w,
         "GetWindowDC"=>fn get_window_dc,
     }
 }

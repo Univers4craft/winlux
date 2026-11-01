@@ -15,11 +15,25 @@ PACKAGES = ["openbox", "xfce4-panel", "xfce4-whiskermenu-plugin", "mousepad", "t
             "python3-gi", "gir1.2-gtk-3.0", "network-manager", "network-manager-gnome",
             "bluez", "blueman", "brightnessctl", "flatpak", "gvfs", "gvfs-backends",
             "udisks2", "thunar-volman", "tumbler", "ristretto", "gnome-disk-utility",
-            "xfce4-settings", "policykit-1-gnome", "wpasupplicant",
+            "xfce4-settings", "policykit-1-gnome", "pkexec", "wpasupplicant",
             "pciutils", "usbutils", "linux-firmware", "mesa-vulkan-drivers",
-            "libgl1-mesa-glx", "irqbalance",
+            # Polices aux métriques d'Arial, Times New Roman et Courier New :
+            # les fenêtres des .exe gardent leur mise en page.
+            "fonts-liberation",
+            "libgl1", "libglx-mesa0", "irqbalance",
             # Lecteurs réseau montés comme disques (winlux-drives).
-            "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone"]
+            "fuse3", "sshfs", "cifs-utils", "nfs-common", "rclone",
+            # Partage de dossiers vers Windows et Mac (winlux-share) : serveur
+            # SMB standard et annonce WS-Discovery pour le panneau Réseau.
+            "samba", "wsdd",
+            # Voix du Narrateur (Parametres > Accessibilite).
+            "espeak-ng",
+            # Impression : CUPS (pont IPP de winspool), filtres PDF et IPP-over-USB.
+            "cups", "cups-filters", "ipp-usb",
+            # Son : PipeWire (un flux par .exe, volume par application) et pactl.
+            "pipewire", "pipewire-pulse", "pipewire-alsa", "wireplumber", "pulseaudio-utils",
+            # Écran de verrouillage (winlux-lock) : crypt() des mots de passe, inactivité X11.
+            "libcrypt1", "libxss1", "python3-gi-cairo"]
 
 def main():
     work = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else "build/desktop-components").resolve()

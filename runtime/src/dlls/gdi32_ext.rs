@@ -188,8 +188,9 @@ pub unsafe extern "win64" fn ext_text_out_a(
     count: u32,
     _dx: *const i32,
 ) -> i32 {
-    let _ = options;
-    if !rect.is_null() {
+    // ETO_OPAQUE (0x2) remplit le rectangle ; ETO_CLIPPED seul ne doit pas
+    // écraser le fond.
+    if !rect.is_null() && options & 0x2 != 0 {
         let r = std::ptr::read_unaligned(rect);
         let bk = gui::dc_bk_color(hdc);
         gui::record(hdc, DrawCmd::FillRect { rect: r, color: bk });
@@ -228,8 +229,9 @@ pub unsafe extern "win64" fn ext_text_out_w(
     count: u32,
     _dx: *const i32,
 ) -> i32 {
-    let _ = options;
-    if !rect.is_null() {
+    // ETO_OPAQUE (0x2) remplit le rectangle ; ETO_CLIPPED seul ne doit pas
+    // écraser le fond.
+    if !rect.is_null() && options & 0x2 != 0 {
         let r = std::ptr::read_unaligned(rect);
         let bk = gui::dc_bk_color(hdc);
         gui::record(hdc, DrawCmd::FillRect { rect: r, color: bk });
@@ -472,13 +474,14 @@ pub extern "win64" fn restore_dc(hdc: usize, saved: i32) -> i32 {
 
 // ── Régions (stubs) ────────────────────────────────────────────────
 
+/// Les régions sont de vrais objets GDI (voir `gdi32::create_rect_rgn`) ;
+/// ces exports s'alignent sur eux plutôt que de renvoyer 1 (= WHITE_BRUSH).
 pub extern "win64" fn create_rect_rgn(left: i32, top: i32, right: i32, bottom: i32) -> usize {
-    let _ = (left, top, right, bottom);
-    0x1 // factice non nul
+    crate::dlls::gdi32::create_rect_rgn(left, top, right, bottom)
 }
 
-pub extern "win64" fn create_rect_rgn_indirect(_rect: *const Rect) -> usize {
-    0x1
+pub unsafe extern "win64" fn create_rect_rgn_indirect(rect: *const Rect) -> usize {
+    crate::dlls::gdi32::create_rect_rgn_indirect(rect)
 }
 
 pub extern "win64" fn select_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {
@@ -493,19 +496,15 @@ pub extern "win64" fn exclude_clip_rect(_hdc: usize, _l: i32, _t: i32, _r: i32, 
     1 // SIMPLEREGION
 }
 
-pub extern "win64" fn combine_rgn(_dst: usize, _src1: usize, _src2: usize, _mode: i32) -> i32 {
-    1 // SIMPLEREGION
+pub extern "win64" fn combine_rgn(dst: usize, src1: usize, src2: usize, mode: i32) -> i32 {
+    crate::dlls::gdi32::combine_rgn(dst, src1, src2, mode)
 }
 
-pub extern "win64" fn set_rect_rgn(_rgn: usize, _l: i32, _t: i32, _r: i32, _b: i32) -> i32 {
-    1
+pub extern "win64" fn set_rect_rgn(rgn: usize, l: i32, t: i32, r: i32, b: i32) -> i32 {
+    crate::dlls::gdi32::set_rect_rgn(rgn, l, t, r, b)
 }
 
 // ── Pixel ──────────────────────────────────────────────────────────
-
-pub extern "win64" fn get_pixel(_hdc: usize, _x: i32, _y: i32) -> u32 {
-    0x00FF_FFFF // CLR_INVALID stub → blanc
-}
 
 pub extern "win64" fn set_pixel(hdc: usize, x: i32, y: i32, color: u32) -> u32 {
     let rect = Rect {
@@ -570,24 +569,11 @@ pub extern "win64" fn set_map_mode(_hdc: usize, _mode: i32) -> i32 {
 pub extern "win64" fn get_map_mode(_hdc: usize) -> i32 {
     1
 } // MM_TEXT
-pub extern "win64" fn set_viewport_org_ex(_hdc: usize, _x: i32, _y: i32, _old: usize) -> i32 {
-    1
-}
-pub extern "win64" fn set_window_org_ex(_hdc: usize, _x: i32, _y: i32, _old: usize) -> i32 {
-    1
-}
 pub extern "win64" fn offset_viewport_org_ex(_hdc: usize, _x: i32, _y: i32, _old: usize) -> i32 {
     1
 }
 
 // ── Stretch mode ───────────────────────────────────────────────────
-
-pub extern "win64" fn set_stretch_blt_mode(_hdc: usize, _mode: i32) -> i32 {
-    1
-}
-pub extern "win64" fn get_stretch_blt_mode(_hdc: usize) -> i32 {
-    3
-} // COLORONCOLOR
 
 // ── ROP2 ───────────────────────────────────────────────────────────
 
@@ -1044,28 +1030,6 @@ pub unsafe extern "win64" fn create_font_indirect_w(
     })
 }
 
-// ── EnumFontFamilies (stub — renvoie 1, pas d'appel du callback) ──
-
-pub unsafe extern "win64" fn enum_font_families_ex_a(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _proc: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    1
-}
-
-pub unsafe extern "win64" fn enum_font_families_ex_w(
-    _hdc: usize,
-    _logfont: *const c_void,
-    _proc: usize,
-    _lparam: isize,
-    _flags: u32,
-) -> i32 {
-    1
-}
-
 // ── GetCharWidth / ABC (stub) ──────────────────────────────────────
 
 pub unsafe extern "win64" fn get_char_width_32a(
@@ -1190,17 +1154,6 @@ pub extern "win64" fn get_current_object(hdc: usize, obj_type: u32) -> usize {
     }
 }
 
-pub extern "win64" fn get_object_type(obj: usize) -> u32 {
-    if obj == 0 {
-        return 0;
-    }
-    if gui::object_info(obj).is_some() {
-        1
-    } else {
-        0
-    } // OBJ_PEN par défaut
-}
-
 pub extern "win64" fn set_text_align(_hdc: usize, _align: u32) -> u32 {
     0
 }
@@ -1239,21 +1192,6 @@ pub unsafe extern "win64" fn get_text_face_w(hdc: usize, count: i32, buf: *mut u
     std::ptr::copy_nonoverlapping(w.as_ptr(), buf, n);
     *buf.add(n) = 0;
     n as i32
-}
-
-pub unsafe extern "win64" fn get_clip_box(_hdc: usize, rect: *mut Rect) -> i32 {
-    if !rect.is_null() {
-        std::ptr::write(
-            rect,
-            Rect {
-                left: 0,
-                top: 0,
-                right: 1920,
-                bottom: 1080,
-            },
-        );
-    }
-    1 // SIMPLEREGION
 }
 
 pub extern "win64" fn get_clip_rgn(_hdc: usize, _rgn: usize) -> i32 {
@@ -1303,7 +1241,6 @@ pub fn exports() -> crate::dlls::Exports {
         // pas accepter les objets système ni empêcher la libération réelle.
         "CombineRgn" => fn combine_rgn,
         "SetRectRgn" => fn set_rect_rgn,
-        "GetPixel" => fn get_pixel,
         "SetPixel" => fn set_pixel,
         "SetPixelV" => fn set_pixel_v,
         "FillRect" => fn fill_rect,
@@ -1311,11 +1248,7 @@ pub fn exports() -> crate::dlls::Exports {
         "InvertRect" => fn invert_rect,
         "SetMapMode" => fn set_map_mode,
         "GetMapMode" => fn get_map_mode,
-        "SetViewportOrgEx" => fn set_viewport_org_ex,
-        "SetWindowOrgEx" => fn set_window_org_ex,
         "OffsetViewportOrgEx" => fn offset_viewport_org_ex,
-        "SetStretchBltMode" => fn set_stretch_blt_mode,
-        "GetStretchBltMode" => fn get_stretch_blt_mode,
         "SetROP2" => fn set_rop2,
         "GetROP2" => fn get_rop2,
         "RealizePalette" => fn realize_palette,
@@ -1325,8 +1258,6 @@ pub fn exports() -> crate::dlls::Exports {
         "StretchDIBits" => fn stretch_di_bits,
         "CreateFontIndirectA" => fn create_font_indirect_a,
         "CreateFontIndirectW" => fn create_font_indirect_w,
-        "EnumFontFamiliesExA" => fn enum_font_families_ex_a,
-        "EnumFontFamiliesExW" => fn enum_font_families_ex_w,
         "GetCharWidth32A" => fn get_char_width_32a,
         "GetCharWidth32W" => fn get_char_width_32w,
         "GetCharWidthA" => fn get_char_width_32a,
@@ -1338,7 +1269,6 @@ pub fn exports() -> crate::dlls::Exports {
         "CreateBrushIndirect" => fn create_brush_indirect,
         "ExtCreatePen" => fn ext_create_pen,
         "GetCurrentObject" => fn get_current_object,
-        "GetObjectType" => fn get_object_type,
         "SetTextAlign" => fn set_text_align,
         "GetTextAlign" => fn get_text_align,
         "SetTextJustification" => fn set_text_justification,
@@ -1346,7 +1276,6 @@ pub fn exports() -> crate::dlls::Exports {
         "GetTextCharacterExtra" => fn get_text_char_extra,
         "GetTextFaceA" => fn get_text_face_a,
         "GetTextFaceW" => fn get_text_face_w,
-        "GetClipBox" => fn get_clip_box,
         "GetClipRgn" => fn get_clip_rgn,
         "GdiFlush" => fn gdi_flush,
         "GdiSetBatchLimit" => fn gdi_set_batch_limit,

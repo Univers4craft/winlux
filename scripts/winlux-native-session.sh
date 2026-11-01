@@ -62,6 +62,18 @@ if test -x /usr/sbin/NetworkManager; then
     echo "$network_pid" >/run/winlux/network-manager.pid
     /usr/bin/winlux-network-watch "$network_pid" >/run/winlux/network-fallback.log 2>&1 &
 fi
+# Printing (#111): there is no systemd to socket-activate CUPS, start it here.
+if test -x /usr/sbin/cupsd && ! test -S /run/cups/cups.sock; then
+    mkdir -p /run/cups /var/spool/cups/tmp /var/cache/cups
+    /usr/sbin/cupsd -f >/run/winlux/cups.log 2>&1 &
+fi
+# Sound (#115): PipeWire with its session manager and Pulse server gives every
+# .exe its own stream (per-app volume). ALSA alone stays the fallback.
+if test -x /usr/bin/pipewire && test -x /usr/bin/wireplumber; then
+    /usr/bin/pipewire >/run/winlux/pipewire.log 2>&1 &
+    /usr/bin/wireplumber >/run/winlux/wireplumber.log 2>&1 &
+    if test -x /usr/bin/pipewire-pulse; then /usr/bin/pipewire-pulse >/run/winlux/pipewire-pulse.log 2>&1 & fi
+fi
 # Start the desktop file service after its hardware dependencies are ready.
 # An early GVfs activation could otherwise time out on software-emulated CPUs.
 /usr/bin/Thunar --daemon >/run/winlux/file-manager.log 2>&1 &
@@ -91,8 +103,12 @@ if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
     /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
 fi
 /usr/bin/winlux-notifications >/run/winlux/notifications.log 2>&1 &
+# Presse-papiers commun : copier dans un .exe, coller dans une appli Linux, et inversement.
+if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux/clipboard-bridge.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
+# Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.
+if test -x /usr/bin/winlux-share; then /usr/bin/winlux-share ensure >/dev/null 2>&1 & fi
 /usr/bin/nm-applet --indicator >/run/winlux/network-agent.log 2>&1 &
 alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
 case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" ;; esac
@@ -121,14 +137,21 @@ done
 /usr/bin/xfce4-panel --disable-wm-check >/run/winlux/panel.log 2>&1 &
 echo $! > /run/winlux/panel.pid
 /usr/bin/winlux-session-startup >/run/winlux/startup-apps.log 2>&1
+# Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
+if command -v winlux-store >/dev/null 2>&1; then
+    winlux-store starter --resume >/run/winlux/starter.log 2>&1 &
+fi
 if test ! -f "$HOME/.config/winlux/welcome-complete" && test "${WINLUX_NO_WELCOME:-0}" != 1 && ! grep -qw 'winlux.native-smoke=1' /proc/cmdline; then
     /usr/bin/winlux-welcome >/run/winlux/welcome.log 2>&1 &
 fi
 # Xfconf activates its own session-bus service. Set wallpaper per real output.
+# Default: the Winlux identity wallpaper, else the build's wallpaper.bmp.
+default_wallpaper=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
+test -f "$default_wallpaper" || default_wallpaper=/usr/share/winlux/wallpaper.bmp
 for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
     property="/backdrop/screen0/monitor$output/workspace0/last-image"
     if ! /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1; then
-        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s /usr/share/winlux/wallpaper.bmp
+        /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s "$default_wallpaper"
         /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5
     fi
 done
@@ -139,6 +162,11 @@ else
     LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash -verbose >/run/winlux/screensaver.log 2>&1 &
 fi
 echo $! > /run/winlux/screensaver.pid
+# Verrouillage après inactivité et au retour de veille (Paramètres > Confidentialité et sécurité).
+if ! { test -f /run/winlux/lock-daemon.pid && kill -0 "$(cat /run/winlux/lock-daemon.pid)" 2>/dev/null; }; then
+    /usr/bin/winlux-lock daemon >/run/winlux/lock.log 2>&1 &
+    echo $! > /run/winlux/lock-daemon.pid
+fi
 (
     while :; do
         /usr/bin/winlux-applications refresh >/run/winlux/applications.log 2>&1 || true

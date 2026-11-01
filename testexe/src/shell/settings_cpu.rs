@@ -52,16 +52,36 @@ const ID_SAVE: i32 = 180;
 const ID_LAUNCH: i32 = 181;
 const ID_EXPLORER: i32 = 182;
 const ID_RESET: i32 = 183;
+const ID_GAME: i32 = 190;
 const ID_CHIP: i32 = 1000;
 
-fn en() -> bool {
-    unsafe { crate::settings::status_value(b"locale_lang") == b"en" }
+/// Langue figée pendant un parcours de la page : `walk` appelle `t` des
+/// dizaines de fois et chaque lecture relit tout l'état publié.
+static mut WALK_LANG: usize = usize::MAX;
+
+/// Langue de l'interface : 0 français, 1 anglais, 2 espagnol, 3 allemand.
+fn lang() -> usize {
+    let cached = unsafe { WALK_LANG };
+    if cached != usize::MAX {
+        return cached;
+    }
+    match unsafe { crate::settings::status_value(b"locale_lang") } {
+        b"en" => 1,
+        b"es" => 2,
+        b"de" => 3,
+        _ => 0,
+    }
 }
+/// Libellé localisé : français et anglais donnés à l'appel, espagnol et
+/// allemand lus dans `CPU_TRANSLATIONS` (l'anglais sert si une entrée manque).
 fn t(fr: &'static [u8], en_text: &'static [u8]) -> &'static [u8] {
-    if en() {
-        en_text
-    } else {
-        fr
+    match lang() {
+        0 => fr,
+        1 => en_text,
+        col => CPU_TRANSLATIONS
+            .iter()
+            .find(|r| r.0 == fr && r.1 == en_text)
+            .map_or(en_text, |r| if col == 2 { r.2 } else { r.3 }),
     }
 }
 
@@ -384,6 +404,9 @@ impl Walk<'_, '_> {
             if inside(&r, px, py) {
                 self.hit = id;
             }
+            if (px, py) == ALL_ZONES {
+                record_zone(id);
+            }
         }
         if let Some(g) = self.g.as_deref_mut() {
             let p = pal();
@@ -458,6 +481,9 @@ impl Walk<'_, '_> {
                     if inside(&r, px, py) {
                         self.hit = chip;
                     }
+                    if (px, py) == ALL_ZONES {
+                        record_zone(chip);
+                    }
                 }
             }
             let Some(g) = self.g.as_deref_mut() else {
@@ -474,11 +500,7 @@ impl Walk<'_, '_> {
                     b" \x95 E"
                 });
             }
-            let live = if i < 64 {
-                unsafe { LIVE_MHZ[i] }
-            } else {
-                mhz
-            };
+            let live = if i < 64 { unsafe { LIVE_MHZ[i] } } else { mhz };
             let live = if live == 0 { mhz } else { live };
             unsafe {
                 round_rect(
@@ -580,9 +602,19 @@ fn profile_label(key: &[u8]) -> &'static [u8] {
 }
 
 unsafe fn walk(w: &mut Walk) {
+    WALK_LANG = usize::MAX;
+    WALK_LANG = lang();
+    walk_page(w);
+    WALK_LANG = usize::MAX;
+}
+
+unsafe fn walk_page(w: &mut Walk) {
     if !available() {
         w.row(
-            t(b"Informations processeur indisponibles", b"Processor information unavailable"),
+            t(
+                b"Informations processeur indisponibles",
+                b"Processor information unavailable",
+            ),
             t(
                 b"Le service Winlux n'a pas encore publi\xE9 l'\xE9tat du processeur.",
                 b"The Winlux service has not published the processor state yet.",
@@ -610,6 +642,8 @@ unsafe fn walk(w: &mut Walk) {
         },
         summary.get(),
     );
+    boot_section(w);
+    game_section(w);
 
     if cap(b"cap_freq") {
         w.header(t(b"Fr\xE9quences en temps r\xE9el", b"Live frequencies"));
@@ -692,7 +726,10 @@ unsafe fn walk(w: &mut Walk) {
     let throttle = cap(b"cap_throttle");
     let fans = cap(b"cap_fans");
     if thermal || throttle || fans {
-        w.header(t(b"Temp\xE9ratures et ventilation", b"Temperatures and cooling"));
+        w.header(t(
+            b"Temp\xE9ratures et ventilation",
+            b"Temperatures and cooling",
+        ));
     }
     if thermal {
         let mut l = Line::new();
@@ -703,7 +740,10 @@ unsafe fn walk(w: &mut Walk) {
                 .num(crit)
                 .push(b" \xB0C)");
         }
-        w.row(t(b"Temp\xE9rature du processeur", b"Processor temperature"), l.get());
+        w.row(
+            t(b"Temp\xE9rature du processeur", b"Processor temperature"),
+            l.get(),
+        );
     }
     if throttle {
         let count = num(info(b"throttle"));
@@ -783,6 +823,102 @@ unsafe fn walk(w: &mut Walk) {
     program_section(w);
 }
 
+/// Durée en secondes avec une décimale (« 8,4 s », « 8.4 s » en anglais).
+fn push_seconds(l: &mut Line, ms: u32) {
+    let tenths = (ms + 50) / 100;
+    l.num(tenths / 10)
+        .push(if lang() == 1 { b"." } else { b"," })
+        .num(tenths % 10)
+        .push(b" s");
+}
+
+fn boot_step_label(key: &[u8]) -> &'static [u8] {
+    match key {
+        b"init" => t(b"Noyau et micrologiciel", b"Kernel and firmware"),
+        b"recovery" => t(b"V\xE9rification du syst\xE8me", b"System check"),
+        b"drivers" => t(b"Pilotes", b"Drivers"),
+        b"hardware" => t(b"D\xE9tection du mat\xE9riel", b"Hardware detection"),
+        b"services" => t(b"Services", b"Services"),
+        b"xorg" => t(b"Affichage", b"Display"),
+        b"session" => t(b"Session", b"Session"),
+        b"desktop" => t(b"Bureau", b"Desktop"),
+        _ => b"?",
+    }
+}
+
+/// Temps du dernier démarrage, mesuré par l'init (`winlux --boot-time`).
+/// Absent tant qu'aucun démarrage complet n'a été mesuré.
+unsafe fn boot_section(w: &mut Walk) {
+    if info(b"boot_known") != b"1" {
+        return;
+    }
+    w.header(t(b"Temps de d\xE9marrage", b"Startup time"));
+    let mut l = Line::new();
+    push_seconds(&mut l, num(info(b"boot_total_ms")));
+    if !info(b"boot_previous_ms").is_empty() {
+        l.push(t(b"  (pr\xE9c\xE9dent ", b"  (previous "));
+        push_seconds(&mut l, num(info(b"boot_previous_ms")));
+        l.push(b")");
+    }
+    w.row(t(b"Dernier d\xE9marrage", b"Last startup"), l.get());
+    let slowest = info(b"boot_slowest");
+    if !slowest.is_empty() {
+        let mut l = Line::new();
+        l.push(boot_step_label(slowest)).push(t(b" : ", b": "));
+        push_seconds(&mut l, num(info(b"boot_slowest_ms")));
+        w.row(t(b"\xC9tape la plus longue", b"Longest step"), l.get());
+    }
+    w.note(t(
+        b"Mesur\xE9 de l'allumage jusqu'au lancement du bureau.",
+        b"Measured from power-on to the desktop starting.",
+    ));
+}
+
+/// Mode jeu : réglage et actions que ce matériel permet réellement.
+unsafe fn game_section(w: &mut Walk) {
+    let mode = info(b"game_mode");
+    if mode.is_empty() {
+        return;
+    }
+    w.header(t(b"Mode jeu", b"Game mode"));
+    if info(b"game_active") == b"1" {
+        let mut l = Line::new();
+        l.push(info(b"game_name"));
+        w.row(t(b"Partie en cours", b"Game running"), l.get());
+    }
+    w.options(&[
+        (
+            t(b"Automatique", b"Automatic"),
+            ID_GAME,
+            mode != b"off",
+        ),
+        (t(b"D\xE9sactiv\xE9", b"Off"), ID_GAME + 1, mode == b"off"),
+    ]);
+    w.note(t(
+        b"S'active quand un jeu ou une application 3D tourne :",
+        b"Turns on while a game or 3D app is running:",
+    ));
+    if cap(b"cap_game_governor") {
+        w.note(t(
+            b"- processeur en mode performances (sur secteur)",
+            b"- processor in performance mode (plugged in)",
+        ));
+    }
+    if cap(b"cap_game_priority") {
+        w.note(t(b"- priorit\xE9 du jeu relev\xE9e", b"- game priority raised"));
+    }
+    w.note(t(
+        b"- sauvegardes et mises \xE0 jour en pause",
+        b"- backups and updates paused",
+    ));
+    if cap(b"cap_game_memory") {
+        w.note(t(
+            b"- m\xE9moire lib\xE9r\xE9e pour le jeu",
+            b"- memory freed for the game",
+        ));
+    }
+}
+
 unsafe fn program_section(w: &mut Walk) {
     PROGRAM_Y = w.y;
     w.header(t(
@@ -834,11 +970,7 @@ unsafe fn program_section(w: &mut Walk) {
             continue;
         }
         let selected = EXE_PRIORITY as usize == i + 1 || EXE_PRIORITY == 0 && i == 1;
-        opts[k] = (
-            if en() { en_label } else { fr },
-            ID_PRIORITY + i as i32,
-            selected,
-        );
+        opts[k] = (t(fr, en_label), ID_PRIORITY + i as i32, selected);
         k += 1;
     }
     w.options(&opts[..k]);
@@ -976,6 +1108,28 @@ unsafe fn hit(c: &Rect, x: i32, y: i32) -> i32 {
     };
     walk(&mut w);
     w.hit
+}
+
+/// Sonde spéciale : au lieu de chercher une zone sous un point, le parcours
+/// relève toutes les zones cliquables visibles (contrôles headless).
+const ALL_ZONES: (i32, i32) = (i32::MIN, i32::MIN);
+static mut ZONES: [i32; 96] = [0; 96];
+static mut ZONE_N: usize = 0;
+
+fn record_zone(id: i32) {
+    unsafe {
+        if ZONE_N < ZONES.len() {
+            ZONES[ZONE_N] = id;
+            ZONE_N += 1;
+        }
+    }
+}
+
+/// Toutes les zones cliquables de la page, en un seul parcours.
+unsafe fn zones(c: &Rect) -> &'static [i32] {
+    ZONE_N = 0;
+    hit(c, ALL_ZONES.0, ALL_ZONES.1);
+    &*core::ptr::slice_from_raw_parts(core::ptr::addr_of!(ZONES) as *const i32, ZONE_N)
 }
 
 pub unsafe fn hover(c: &Rect, x: i32, y: i32) -> bool {
@@ -1118,6 +1272,8 @@ pub unsafe fn click(c: &Rect, x: i32, y: i32) -> bool {
         121 => Some(c"cpu-fan-quiet"),
         122 => Some(c"cpu-fan-balanced"),
         123 => Some(c"cpu-fan-performance"),
+        ID_GAME => Some(c"game-mode-auto"),
+        191 => Some(c"game-mode-off"),
         ID_PRIORITY..=133 => {
             EXE_PRIORITY = (id - ID_PRIORITY) as u8 + 1;
             None
@@ -1178,12 +1334,9 @@ pub unsafe fn regression_checks() {
     INFO[..report.len()].copy_from_slice(report);
     INFO_LEN = report.len();
     let c = rect(300, 80, 1000, 4000);
-    let mut found = false;
-    for y in (80..4000).step_by(6) {
-        for x in (300..1000).step_by(20) {
-            found |= matches!(hit(&c, x, y), 100..=123 | 132 | 133 | 140..=142 | 160..=176);
-        }
-    }
+    let found = zones(&c)
+        .iter()
+        .any(|id| matches!(id, 100..=123 | 132 | 133 | 140..=142 | 160..=176));
     check!(
         !found,
         "Processeur : aucune commande pour une capacite absente"
@@ -1191,18 +1344,8 @@ pub unsafe fn regression_checks() {
     let full = b"cpu_count=4\ncpu_list=0-3\nfreq=0:1200,1:1300,2:1400,3:1500\nfreq_max=4000\ncap_freq=1\ncap_governor=1\nprofiles=performance,powersave\nprofile=powersave\ncap_hybrid=1\npcores=0-1\necores=2-3\ncap_affinity=1\ncap_numa=0\ncap_thermal=1\ntemp=50\ncap_throttle=0\ncap_fans=0\ncap_fan_control=0\ncap_prio_high=1\ncap_prio_realtime=0\nhybrid_policy=heavy\n";
     INFO[..full.len()].copy_from_slice(full);
     INFO_LEN = full.len();
-    let mut seen = [false; 4];
-    for y in (80..4000).step_by(6) {
-        for x in (300..1000).step_by(20) {
-            match hit(&c, x, y) {
-                100 => seen[0] = true,
-                101 => seen[1] = true,
-                102 => seen[2] = true,
-                111 => seen[3] = true,
-                _ => {}
-            }
-        }
-    }
+    let ids = zones(&c);
+    let seen = [100, 101, 102, 111].map(|id| ids.contains(&id));
     check!(
         seen[0] && !seen[1] && seen[2] && seen[3],
         "Processeur : seuls les profils disponibles et le routage hybride sont proposes"
@@ -1217,10 +1360,430 @@ pub unsafe fn regression_checks() {
     );
     load_program(b"cpu_priority=high\ncpu_cores=efficiency\ncpu_affinity=0-1\nnuma_node=1\n");
     check!(
-        EXE_PRIORITY == 3 && EXE_CORES == 2 && exe_cpu_selected(1) && !exe_cpu_selected(2) && EXE_NUMA == 1,
+        EXE_PRIORITY == 3
+            && EXE_CORES == 2
+            && exe_cpu_selected(1)
+            && !exe_cpu_selected(2)
+            && EXE_NUMA == 1,
         "Processeur : le profil du programme est relu"
     );
+    let mut l = Line::new();
+    push_seconds(&mut l, 8_460);
+    check!(
+        l.get() == b"8,5 s" || l.get() == b"8.5 s",
+        "Processeur : temps de demarrage arrondi au dixieme"
+    );
+    let game = b"cpu_count=1\ncpu_list=0\ngame_mode=off\ncap_game_governor=0\n";
+    INFO[..game.len()].copy_from_slice(game);
+    INFO_LEN = game.len();
+    let found = zones(&c);
+    let ids = [ID_GAME, 191].map(|id| found.contains(&id));
+    check!(ids[0] && ids[1], "Processeur : le mode jeu se regle");
     reset_program();
     INFO = saved;
     INFO_LEN = saved_len;
 }
+
+// ---------- Traductions espagnoles et allemandes ----------
+
+/// `(français, anglais, espagnol, allemand)`, retrouvées par le couple
+/// français/anglais passé à `t`.
+const CPU_TRANSLATIONS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
+    // Mode jeu.
+    (b"Mode jeu", b"Game mode", b"Modo juego", b"Spielmodus"),
+    (b"Partie en cours", b"Game running", b"Partida en curso", b"Laufendes Spiel"),
+    (b"Automatique", b"Automatic", b"Autom\xE1tico", b"Automatisch"),
+    (b"D\xE9sactiv\xE9", b"Off", b"Desactivado", b"Aus"),
+    (
+        b"S'active quand un jeu ou une application 3D tourne :",
+        b"Turns on while a game or 3D app is running:",
+        b"Se activa cuando se ejecuta un juego o una aplicaci\xF3n 3D:",
+        b"Aktiv, solange ein Spiel oder eine 3D-App l\xE4uft:",
+    ),
+    (
+        b"- processeur en mode performances (sur secteur)",
+        b"- processor in performance mode (plugged in)",
+        b"- procesador en modo rendimiento (con corriente)",
+        b"- Prozessor im Leistungsmodus (am Netz)",
+    ),
+    (b"- priorit\xE9 du jeu relev\xE9e", b"- game priority raised", b"- prioridad del juego elevada", b"- Spielpriorit\xE4t erh\xF6ht"),
+    (
+        b"- sauvegardes et mises \xE0 jour en pause",
+        b"- backups and updates paused",
+        b"- copias de seguridad y actualizaciones en pausa",
+        b"- Sicherungen und Updates pausiert",
+    ),
+    (
+        b"- m\xE9moire lib\xE9r\xE9e pour le jeu",
+        b"- memory freed for the game",
+        b"- memoria liberada para el juego",
+        b"- Speicher f\xFCr das Spiel freigegeben",
+    ),
+    // Temps de démarrage.
+    (b"Noyau et micrologiciel", b"Kernel and firmware", b"N\xFAcleo y firmware", b"Kernel und Firmware"),
+    (b"V\xE9rification du syst\xE8me", b"System check", b"Comprobaci\xF3n del sistema", b"Systempr\xFCfung"),
+    (b"Pilotes", b"Drivers", b"Controladores", b"Treiber"),
+    (b"D\xE9tection du mat\xE9riel", b"Hardware detection", b"Detecci\xF3n del hardware", b"Hardwareerkennung"),
+    (b"Services", b"Services", b"Servicios", b"Dienste"),
+    (b"Affichage", b"Display", b"Pantalla", b"Anzeige"),
+    (b"Session", b"Session", b"Sesi\xF3n", b"Sitzung"),
+    (b"Bureau", b"Desktop", b"Escritorio", b"Desktop"),
+    (b"Temps de d\xE9marrage", b"Startup time", b"Tiempo de arranque", b"Startzeit"),
+    (b"  (pr\xE9c\xE9dent ", b"  (previous ", b"  (anterior ", b"  (vorher "),
+    (b"Dernier d\xE9marrage", b"Last startup", b"\xDAltimo arranque", b"Letzter Start"),
+    (b"\xC9tape la plus longue", b"Longest step", b"Paso m\xE1s largo", b"L\xE4ngster Schritt"),
+    (
+        b"Mesur\xE9 de l'allumage jusqu'au lancement du bureau.",
+        b"Measured from power-on to the desktop starting.",
+        b"Medido desde el encendido hasta el inicio del escritorio.",
+        b"Gemessen vom Einschalten bis zum Start des Desktops.",
+    ),
+    (
+        b"Autoris\xE9",
+        b"Allowed",
+        b"Permitido",
+        b"Erlaubt",
+    ),
+    (
+        b"Exclu",
+        b"Excluded",
+        b"Excluido",
+        b"Ausgeschlossen",
+    ),
+    (
+        b"Performances maximales",
+        b"Best performance",
+        b"M\xE1ximo rendimiento",
+        b"H\xF6chstleistung",
+    ),
+    (
+        b"\xC9quilibr\xE9",
+        b"Balanced",
+        b"Equilibrado",
+        b"Ausbalanciert",
+    ),
+    (
+        b"\xC9conomie d'\xE9nergie",
+        b"Power saver",
+        b"Ahorro de energ\xEDa",
+        b"Energiesparmodus",
+    ),
+    (
+        b"Personnalis\xE9",
+        b"Custom",
+        b"Personalizado",
+        b"Benutzerdefiniert",
+    ),
+    (
+        b"Informations processeur indisponibles",
+        b"Processor information unavailable",
+        b"Informaci\xF3n del procesador no disponible",
+        b"Prozessorinformationen nicht verf\xFCgbar",
+    ),
+    (
+        b"Le service Winlux n'a pas encore publi\xE9 l'\xE9tat du processeur.",
+        b"The Winlux service has not published the processor state yet.",
+        b"El servicio de Winlux a\xFAn no ha publicado el estado del procesador.",
+        b"Der Winlux-Dienst hat den Prozessorstatus noch nicht ver\xF6ffentlicht.",
+    ),
+    (
+        b" processeurs logiques",
+        b" logical processors",
+        b" procesadores l\xF3gicos",
+        b" logische Prozessoren",
+    ),
+    (
+        b" processeurs physiques",
+        b" sockets",
+        b" procesadores f\xEDsicos",
+        b" physische Prozessoren",
+    ),
+    (
+        b"Processeur",
+        b"Processor",
+        b"Procesador",
+        b"Prozessor",
+    ),
+    (
+        b"Fr\xE9quences en temps r\xE9el",
+        b"Live frequencies",
+        b"Frecuencias en tiempo real",
+        b"Frequenzen in Echtzeit",
+    ),
+    (
+        b"Fr\xE9quence maximale : ",
+        b"Maximum frequency: ",
+        b"Frecuencia m\xE1xima: ",
+        b"Maximale Frequenz: ",
+    ),
+    (
+        b"Mode d'alimentation",
+        b"Power mode",
+        b"Modo de energ\xEDa",
+        b"Energiemodus",
+    ),
+    (
+        b"Performances : vitesse maximale. \xC9conomie : moins de chaleur et de bruit.",
+        b"Performance: top speed. Power saver: less heat and noise.",
+        b"Rendimiento: velocidad m\xE1xima. Ahorro: menos calor y ruido.",
+        b"Leistung: h\xF6chste Geschwindigkeit. Energiesparen: weniger W\xE4rme und L\xE4rm.",
+    ),
+    (
+        b"C\x9Curs performants (P) et c\x9Curs \xE9conomes (E)",
+        b"Performance (P) and efficient (E) cores",
+        b"N\xFAcleos de rendimiento (P) y eficientes (E)",
+        b"Leistungskerne (P) und Effizienzkerne (E)",
+    ),
+    (
+        b"P-cores : ",
+        b"P-cores: ",
+        b"N\xFAcleos P: ",
+        b"P-Kerne: ",
+    ),
+    (
+        b"   E-cores : ",
+        b"   E-cores: ",
+        b"   N\xFAcleos E: ",
+        b"   E-Kerne: ",
+    ),
+    (
+        b"Placement des programmes Windows",
+        b"Placement of Windows programs",
+        b"Ubicaci\xF3n de los programas de Windows",
+        b"Zuordnung der Windows-Programme",
+    ),
+    (
+        b"Automatique (recommand\xE9)",
+        b"Automatic (recommended)",
+        b"Autom\xE1tico (recomendado)",
+        b"Automatisch (empfohlen)",
+    ),
+    (
+        b"Jeux et 3D sur P-cores",
+        b"Games and 3D on P-cores",
+        b"Juegos y 3D en n\xFAcleos P",
+        b"Spiele und 3D auf P-Kernen",
+    ),
+    (
+        b"Tout sur P-cores",
+        b"Everything on P-cores",
+        b"Todo en n\xFAcleos P",
+        b"Alles auf P-Kernen",
+    ),
+    (
+        b"Tout sur E-cores",
+        b"Everything on E-cores",
+        b"Todo en n\xFAcleos E",
+        b"Alles auf E-Kernen",
+    ),
+    (
+        b"S'applique aux programmes lanc\xE9s ensuite.",
+        b"Applies to programs started afterwards.",
+        b"Se aplica a los programas que se inicien despu\xE9s.",
+        b"Gilt f\xFCr danach gestartete Programme.",
+    ),
+    (
+        b"Temp\xE9ratures et ventilation",
+        b"Temperatures and cooling",
+        b"Temperaturas y ventilaci\xF3n",
+        b"Temperaturen und K\xFChlung",
+    ),
+    (
+        b"  (limite ",
+        b"  (limit ",
+        b"  (l\xEDmite ",
+        b"  (Grenze ",
+    ),
+    (
+        b"Temp\xE9rature du processeur",
+        b"Processor temperature",
+        b"Temperatura del procesador",
+        b"Prozessortemperatur",
+    ),
+    (
+        b"Ralentissement en cours : le processeur chauffe.",
+        b"Throttling now: the processor is hot.",
+        b"Ralentizaci\xF3n en curso: el procesador se est\xE1 calentando.",
+        b"Drosselung aktiv: Der Prozessor ist hei\xDF.",
+    ),
+    (
+        b"Aucun ralentissement d\xE9tect\xE9.",
+        b"No throttling detected.",
+        b"No se detect\xF3 ninguna ralentizaci\xF3n.",
+        b"Keine Drosselung erkannt.",
+    ),
+    (
+        b" ralentissements thermiques depuis le d\xE9marrage.",
+        b" thermal throttling events since boot.",
+        b" ralentizaciones t\xE9rmicas desde el arranque.",
+        b" thermische Drosselungen seit dem Start.",
+    ),
+    (
+        b"Bridage thermique",
+        b"Thermal throttling",
+        b"Limitaci\xF3n t\xE9rmica",
+        b"Thermische Drosselung",
+    ),
+    (
+        b" tr/min",
+        b" RPM",
+        b" RPM",
+        b" U/min",
+    ),
+    (
+        b"Courbe des ventilateurs (100 % automatique au-del\xE0 de 85 \xB0C) :",
+        b"Fan curve (always 100% above 85 \xB0C):",
+        b"Curva de los ventiladores (100 % autom\xE1tico por encima de 85 \xB0C):",
+        b"L\xFCfterkurve (\xFCber 85 \xB0C immer 100 %):",
+    ),
+    (
+        b"Automatique",
+        b"Automatic",
+        b"Autom\xE1tico",
+        b"Automatisch",
+    ),
+    (
+        b"Silencieux",
+        b"Quiet",
+        b"Silencioso",
+        b"Leise",
+    ),
+    (
+        b"Refroidissement max.",
+        b"Max cooling",
+        b"Refrigeraci\xF3n m\xE1x.",
+        b"Max. K\xFChlung",
+    ),
+    (
+        b"M\xE9moire NUMA (plusieurs processeurs physiques)",
+        b"NUMA memory (multiple sockets)",
+        b"Memoria NUMA (varios procesadores f\xEDsicos)",
+        b"NUMA-Speicher (mehrere physische Prozessoren)",
+    ),
+    (
+        b"N\x9Cud ",
+        b"Node ",
+        b"Nodo ",
+        b"Knoten ",
+    ),
+    (
+        b"Processeurs ",
+        b"Processors ",
+        b"Procesadores ",
+        b"Prozessoren ",
+    ),
+    (
+        b"Priorit\xE9 et processeurs par programme",
+        b"Priority and processors per program",
+        b"Prioridad y procesadores por programa",
+        b"Priorit\xE4t und Prozessoren pro Programm",
+    ),
+    (
+        b"Choisir un programme",
+        b"Choose a program",
+        b"Elegir un programa",
+        b"Programm ausw\xE4hlen",
+    ),
+    (
+        b"Clic droit sur un .exe dans l'Explorateur, puis R\xE9glages de l'ex\xE9cutable.",
+        b"Right-click an .exe in Explorer, then Executable settings.",
+        b"Haga clic derecho en un .exe en el Explorador y luego en Ajustes del ejecutable.",
+        b"Klicken Sie im Explorer mit der rechten Maustaste auf eine .exe und dann auf Einstellungen der ausf\xFChrbaren Datei.",
+    ),
+    (
+        b"Ouvrir l'Explorateur",
+        b"Open Explorer",
+        b"Abrir el Explorador",
+        b"Explorer \xF6ffnen",
+    ),
+    (
+        b"R\xE9glages appliqu\xE9s au prochain lancement de ce programme.",
+        b"Settings apply the next time this program starts.",
+        b"Los ajustes se aplicar\xE1n la pr\xF3xima vez que se inicie este programa.",
+        b"Die Einstellungen gelten beim n\xE4chsten Start dieses Programms.",
+    ),
+    (
+        b"Priorit\xE9 :",
+        b"Priority:",
+        b"Prioridad:",
+        b"Priorit\xE4t:",
+    ),
+    (
+        b"Type de c\x9Curs :",
+        b"Core type:",
+        b"Tipo de n\xFAcleos:",
+        b"Kerntyp:",
+    ),
+    (
+        b"P-cores (rapides)",
+        b"P-cores (fast)",
+        b"N\xFAcleos P (r\xE1pidos)",
+        b"P-Kerne (schnell)",
+    ),
+    (
+        b"E-cores (\xE9conomes)",
+        b"E-cores (efficient)",
+        b"N\xFAcleos E (eficientes)",
+        b"E-Kerne (effizient)",
+    ),
+    (
+        b"N\x9Cud NUMA :",
+        b"NUMA node:",
+        b"Nodo NUMA:",
+        b"NUMA-Knoten:",
+    ),
+    (
+        b"Processeurs autoris\xE9s (cliquez pour inclure ou exclure) :",
+        b"Allowed processors (click to include or exclude):",
+        b"Procesadores permitidos (haga clic para incluir o excluir):",
+        b"Erlaubte Prozessoren (zum Ein- oder Ausschlie\xDFen klicken):",
+    ),
+    (
+        b"Tous les processeurs",
+        b"All processors",
+        b"Todos los procesadores",
+        b"Alle Prozessoren",
+    ),
+    (
+        b"Enregistrer",
+        b"Save",
+        b"Guardar",
+        b"Speichern",
+    ),
+    (
+        b"Lancer le programme",
+        b"Start program",
+        b"Iniciar el programa",
+        b"Programm starten",
+    ),
+    (
+        b"Valeurs par d\xE9faut",
+        b"Defaults",
+        b"Valores predeterminados",
+        b"Standardwerte",
+    ),
+    (
+        b"Basse",
+        b"Low",
+        b"Baja",
+        b"Niedrig",
+    ),
+    (
+        b"Normale",
+        b"Normal",
+        b"Normal",
+        b"Normal",
+    ),
+    (
+        b"Haute",
+        b"High",
+        b"Alta",
+        b"Hoch",
+    ),
+    (
+        b"Temps r\xE9el",
+        b"Realtime",
+        b"Tiempo real",
+        b"Echtzeit",
+    ),
+];

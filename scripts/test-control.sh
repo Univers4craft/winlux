@@ -53,6 +53,21 @@ cat > "$work/bin/id" <<'MOCK'
 echo 0
 MOCK
 printf '#!/bin/sh\nexec sh "%s/scripts/winlux-sysupdate.sh" "$@"\n' "$project" > "$work/bin/winlux-sysupdate"
+cat > "$work/bin/bluetoothctl" <<'MOCK'
+#!/bin/sh
+state="$WINLUX_CONTROL_ROOT/bt-powered"
+case "$*" in
+  show) printf 'Controller 00:11:22:33:44:55 (public)\n\tAlias: winlux-vm\n\tPowered: %s\n\tDiscovering: no\n' "$(cat "$state" 2>/dev/null || echo no)" ;;
+  devices) printf 'Device AA:BB:CC:DD:EE:01 Casque|Test\nDevice AA:BB:CC:DD:EE:02 Souris\n' ;;
+  'info AA:BB:CC:DD:EE:01') printf '\tName: Casque|Test\n\tIcon: audio-headset\n\tPaired: yes\n\tConnected: yes\n' ;;
+  'info AA:BB:CC:DD:EE:02') printf '\tName: Souris\n\tIcon: input-mouse\n\tPaired: no\n\tConnected: no\n' ;;
+  'power on') echo yes > "$state" ;;
+  'power off') echo no > "$state" ;;
+  *) printf 'bluetoothctl %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+esac
+MOCK
+printf '#!/bin/sh\nexec sh "%s/scripts/winlux-bluetooth.sh" "$@"\n' "$project" > "$work/bin/winlux-bluetooth"
+printf 'H: Handlers=event5 js0\n' >> "$work/root/proc/bus/input/devices"
 chmod 755 "$work/bin/"*
 control() { sh "$project/scripts/winlux-control.sh" "$@"; }
 control status
@@ -110,12 +125,38 @@ grep -q '^Update complete$' "$work/root/run/winlux/update.log"
 grep -qx 'welcome_done=0' "$work/root/run/winlux/control.txt"
 control welcome-done
 grep -qx 'welcome_done=1' "$work/root/run/winlux/control.txt"
+grep -qx 'welcome_step=0' "$work/root/run/winlux/control.txt"
+control welcome-step-8
+grep -qx 'welcome_step=8' "$work/root/run/winlux/control.txt"
+control welcome-reset
+grep -qx 'welcome_step=0' "$work/root/run/winlux/control.txt"
+grep -qx 'welcome_done=0' "$work/root/run/winlux/control.txt"
 grep -qx 'privacy_telemetry=off' "$work/root/run/winlux/control.txt"
 grep -qx 'privacy_location=deny' "$work/root/run/winlux/control.txt"
 grep -qx 'privacy_location_history=off' "$work/root/run/winlux/control.txt"
 control privacy-microphone-deny
 grep -qx 'MICROPHONE=deny' "$work/root/etc/winlux/privacy.conf"
 grep -qx 'privacy_microphone=deny' "$work/root/run/winlux/control.txt"
+# Verrouillage de l'ecran : etat reel de winlux-lock, delai, reveil, Windows+L.
+printf 'root:root:winlux\n' > "$work/root/etc/winlux/users.conf"
+cat > "$work/bin/winlux-lock" <<MOCK
+#!/bin/sh
+case "\$1" in now) printf 'lock now\n' >> "\$WINLUX_CONTROL_TEST_LOG" ;; *) WINLUX_SESSION_USER=root exec python3 -B "$project/scripts/winlux-lock.py" "\$@" ;; esac
+MOCK
+chmod 755 "$work/bin/winlux-lock"
+control status
+grep -qx 'lock_after=300' "$work/root/run/winlux/control.txt"
+grep -qx 'lock_on_resume=1' "$work/root/run/winlux/control.txt"
+grep -qx 'lock_password=1' "$work/root/run/winlux/control.txt"
+control lock-after-900
+grep -qx 'LOCK_AFTER=900' "$work/root/etc/winlux/lock.conf"
+grep -qx 'lock_after=900' "$work/root/run/winlux/control.txt"
+control lock-resume-off
+grep -qx 'lock_on_resume=0' "$work/root/run/winlux/control.txt"
+if control lock-after-42 2>/dev/null; then echo 'delai de verrouillage invalide accepte' >&2; exit 1; fi
+control lock-now
+sleep 1
+grep -qx 'lock now' "$work/commands"
 grep -qx 'sysupdate_mode=manual' "$work/root/run/winlux/control.txt"
 control sysupdate-mode-scheduled
 grep -qx 'sysupdate_mode=scheduled' "$work/root/run/winlux/control.txt"
@@ -136,6 +177,17 @@ touch "$work/root/etc/winlux/live-session"
 if WINLUX_TEST_BUSY=1 control poweroff; then echo 'ERROR: shutdown allowed during update' >&2; exit 1; fi
 if WINLUX_TEST_BUSY=1 control reboot; then echo 'ERROR: reboot allowed during update' >&2; exit 1; fi
 if WINLUX_TEST_BUSY=1 control restart-session; then echo 'ERROR: session restart allowed during update' >&2; exit 1; fi
+# Arrêt réel : winlux-power (écran d'arrêt puis signal à l'init), jamais le
+# poweroff de systemd que l'image fournit et qui échoue sans systemd.
+cat > "$work/bin/winlux-power-mock" <<'MOCK'
+#!/bin/sh
+printf 'winlux-power %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"
+MOCK
+chmod +x "$work/bin/winlux-power-mock"
+WINLUX_POWER="$work/bin/winlux-power-mock" control poweroff
+WINLUX_POWER="$work/bin/winlux-power-mock" control reboot
+grep -qx 'winlux-power now poweroff' "$work/commands"
+grep -qx 'winlux-power now reboot' "$work/commands"
 rm "$work/root/etc/winlux/live-session"
 if control reboot; then echo 'ERROR: refused-host-reboot failed' >&2; exit 1; fi
 grep -q 'Arret reserve a Winlux Live' "$work/root/run/winlux/action.log"
@@ -146,6 +198,8 @@ case "$1" in
   --cpu-report) printf 'cpu_count=4\ncap_governor=1\nprofiles=performance,powersave\ncap_hybrid=0\n' ;;
   --cpu-profile) test "$2" != balanced || { echo 'profil balanced indisponible' >&2; exit 1; }; printf 'cpu-profile %s %s\n' "$2" "$3" >> "$WINLUX_CONTROL_TEST_LOG" ;;
   --fan-daemon) printf 'fan-daemon %s\n' "$2" >> "$WINLUX_CONTROL_TEST_LOG" ;;
+  --boot-time) printf 'boot_known=1\nboot_total_ms=8420\n' ;;
+  --gamemode) printf 'game_mode=auto\ngame_active=0\n' ;;
 esac
 MOCK
 chmod 755 "$work/bin/winlux"
@@ -153,6 +207,12 @@ control status
 grep -qx 'cap_governor=1' "$work/root/run/winlux/cpu.txt"
 grep -qx 'hybrid_policy=auto' "$work/root/run/winlux/cpu.txt"
 grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
+grep -qx 'boot_total_ms=8420' "$work/root/run/winlux/cpu.txt"
+grep -qx 'game_active=0' "$work/root/run/winlux/cpu.txt"
+control game-mode-off
+grep -qx 'GAME_MODE=off' "$work/root/etc/winlux/cpu.conf"
+control game-mode-auto
+grep -qx 'GAME_MODE=auto' "$work/root/etc/winlux/cpu.conf"
 control cpu-profile-performance
 grep -qx "cpu-profile performance $work/root" "$work/commands"
 grep -qx 'CPU_PROFILE=performance' "$work/root/etc/winlux/cpu.conf"
@@ -167,4 +227,109 @@ for attempt in 1 2 3 4 5 6 7 8 9 10; do grep -q '^fan-daemon ' "$work/commands" 
 grep -qx "fan-daemon $work/root" "$work/commands"
 control cpu-fan-auto
 grep -qx 'fan_curve=auto' "$work/root/run/winlux/cpu.txt"
-echo 'OK: control telemetry, keyboard, touchpad, preferences, actions, update journal, system updates, privacy, welcome, host protection, CPU'
+# Sans adaptateur, l'état ne doit jamais interroger bluetoothctl, qui
+# attendrait bluetoothd sans fin (blocage du démarrage de session).
+: > "$work/commands"
+sh "$project/scripts/winlux-bluetooth.sh" status
+grep -qx 'present=0' "$work/root/run/winlux/bluetooth.txt"
+if grep -q '^bluetoothctl' "$work/commands"; then echo 'ERROR: bluetoothctl queried without adapter' >&2; exit 1; fi
+mkdir -p "$work/root/sys/class/bluetooth/hci0"
+# Un bluetoothctl qui ne répond pas est abandonné après le délai.
+mkdir -p "$work/hang"
+printf '#!/bin/sh
+exec sleep 60
+' > "$work/hang/bluetoothctl"
+chmod 755 "$work/hang/bluetoothctl"
+started=$(date +%s)
+PATH="$work/hang:$PATH" WINLUX_BLUETOOTH_QUERY_SECONDS=1 sh "$project/scripts/winlux-bluetooth.sh" status
+test $(( $(date +%s) - started )) -lt 10
+grep -qx 'present=0' "$work/root/run/winlux/bluetooth.txt"
+control bluetooth-on
+grep -qx 'bluetooth_present=1' "$work/root/run/winlux/control.txt"
+grep -qx 'bluetooth_powered=1' "$work/root/run/winlux/control.txt"
+grep -qx 'bluetooth_connected=1' "$work/root/run/winlux/control.txt"
+grep -qx 'gamepads=1' "$work/root/run/winlux/control.txt"
+grep -qx 'device=AA:BB:CC:DD:EE:01|CasqueTest|audio|1|1' "$work/root/run/winlux/bluetooth.txt"
+grep -qx 'device=AA:BB:CC:DD:EE:02|Souris|souris|0|0' "$work/root/run/winlux/bluetooth.txt"
+control bluetooth-pair AA:BB:CC:DD:EE:02
+grep -q 'pair AA:BB:CC:DD:EE:02' "$work/commands"
+grep -qx 'bluetoothctl trust AA:BB:CC:DD:EE:02' "$work/commands"
+control bluetooth-disconnect AA:BB:CC:DD:EE:01
+grep -qx 'bluetoothctl disconnect AA:BB:CC:DD:EE:01' "$work/commands"
+if control bluetooth-remove 'AA;reboot'; then echo 'ERROR: invalid Bluetooth address accepted' >&2; exit 1; fi
+control bluetooth-off
+grep -qx 'bluetooth_powered=0' "$work/root/run/winlux/control.txt"
+# Alimentation : les boutons des Parametres pilotent le runtime reel.
+runtime="$project/target/release/winlux"
+test -x "$runtime" || runtime="$project/target/debug/winlux"
+if test -x "$runtime"; then
+    ln -sf "$runtime" "$work/bin/winlux"
+    printf 'Battery\n' > "$work/root/sys/class/power_supply/BAT0/type"
+    mkdir -p "$work/root/sys/class/backlight/acpi_video0"
+    printf '255\n' > "$work/root/sys/class/backlight/acpi_video0/max_brightness"
+    printf '255\n' > "$work/root/sys/class/backlight/acpi_video0/brightness"
+    control power-profile-saver
+    grep -qx 'PROFILE=saver' "$work/root/etc/winlux/power.conf"
+    grep -qx 'power_profile=saver' "$work/root/run/winlux/control.txt"
+    grep -qx 'power_percent=84' "$work/root/run/winlux/control.txt"
+    grep -qx 'power_state=charging' "$work/root/run/winlux/power.txt"
+    control power-lid
+    grep -qx 'LID=hibernate' "$work/root/etc/winlux/power.conf"
+    control power-screen-dc
+    grep -qx 'SCREEN_DC=600' "$work/root/etc/winlux/power.conf"
+    control power-brightness-down
+    grep -qx 'BRIGHTNESS=70' "$work/root/etc/winlux/power.conf"
+    # 70 % reduits a 49 % par le mode economie : 125/255.
+    grep -qx '125' "$work/root/sys/class/backlight/acpi_video0/brightness"
+    if control power-hibernate; then echo 'veille prolongee acceptee sans zone de reprise' >&2; exit 1; fi
+    grep -q 'Veille prolong' "$work/root/run/winlux/action.log"
+    rm "$work/bin/winlux"
+else
+    echo 'runtime absent : commandes d alimentation non verifiees' >&2
+fi
+# GPU : seuls des jetons simples atteignent le runtime, qui revalide.
+cat > "$work/bin/winlux" <<'MOCK'
+#!/bin/sh
+printf 'winlux %s\n' "$*" >> "$WINLUX_CONTROL_TEST_LOG"
+MOCK
+chmod 755 "$work/bin/winlux"
+control gpu-set card1 power-limit 200
+grep -qx 'winlux --gpu-set card1 power-limit 200' "$work/commands"
+control gpu-set card0 perf auto
+grep -qx 'winlux --gpu-set card0 perf auto' "$work/commands"
+if control gpu-set ../card0 perf auto; then echo 'ERROR: gpu card path accepted' >&2; exit 1; fi
+if control gpu-set card0 fan 100; then echo 'ERROR: unknown gpu setting accepted' >&2; exit 1; fi
+if control gpu-set card0 perf 'high;reboot'; then echo 'ERROR: gpu value injection accepted' >&2; exit 1; fi
+test "$(grep -c '^winlux --gpu-set' "$work/commands")" = 2
+# Overlay : désactivé par défaut, réglages persistés et relus par le statut.
+grep -qx 'overlay_enabled=0' "$work/root/run/winlux/control.txt"
+grep -qx 'overlay_fps=1' "$work/root/run/winlux/control.txt"
+control overlay-on
+control overlay-key-alt-f12
+control overlay-pos-bottom-right
+control overlay-cpu-off
+control overlay-auto-on
+grep -qx 'OVERLAY_ENABLED=1' "$work/root/etc/winlux/overlay.conf"
+grep -qx 'OVERLAY_HOTKEY=alt-f12' "$work/root/etc/winlux/overlay.conf"
+grep -qx 'OVERLAY_POSITION=bottom-right' "$work/root/etc/winlux/overlay.conf"
+grep -qx 'OVERLAY_CPU=0' "$work/root/etc/winlux/overlay.conf"
+grep -qx 'OVERLAY_AUTOSHOW=1' "$work/root/etc/winlux/overlay.conf"
+test "$(stat -c %a "$work/root/etc/winlux/overlay.conf")" = 644
+grep -qx 'overlay_enabled=1' "$work/root/run/winlux/control.txt"
+grep -qx 'overlay_cpu=0' "$work/root/run/winlux/control.txt"
+grep -qx 'overlay_hotkey=alt-f12' "$work/root/run/winlux/control.txt"
+control overlay-off
+grep -qx 'OVERLAY_ENABLED=0' "$work/root/etc/winlux/overlay.conf"
+if control overlay-key-f13; then echo 'ERROR: unknown overlay hotkey accepted' >&2; exit 1; fi
+# winlux-prime-run : exporte uniquement des variables sûres, puis exécute.
+cat > "$work/bin/winlux" <<'MOCK'
+#!/bin/sh
+case "$*" in
+  '--gpu-env dedicated') printf 'DRI_PRIME=pci-0000_03_00_0\nBAD LINE=1\nPATH=$(id)\n' ;;
+  '--gpu-env integrated') printf 'DRI_PRIME=pci-0000_00_02_0\n' ;;
+esac
+MOCK
+test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_03_00_0
+test "$(sh "$project/scripts/winlux-prime-run.sh" --integrated sh -c 'printf %s "$DRI_PRIME"')" = pci-0000_00_02_0
+test "$(sh "$project/scripts/winlux-prime-run.sh" sh -c 'printf %s "$PATH"')" = "$PATH"
+echo 'OK: control telemetry, Bluetooth, keyboard, touchpad, preferences, actions, update journal, system updates, privacy, lock screen, welcome, host protection, CPU, power, GPU, overlay, prime-run'

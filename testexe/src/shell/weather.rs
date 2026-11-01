@@ -608,7 +608,7 @@ pub unsafe fn draw_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, bar_top: i32, 
             rgb(0xF2, 0xF2, 0xF2),
             px + 16,
             py + 14,
-            b"M\xE9t\xE9o",
+            tr4(&[b"M\xE9t\xE9o", b"Weather", b"El tiempo", b"Wetter"]),
         );
     }
 
@@ -619,7 +619,12 @@ pub unsafe fn draw_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, bar_top: i32, 
             rgb(0x9A, 0xA3, 0xAE),
             px + 16,
             py + 50,
-            b"Aucune donn\xE9e disponible",
+            tr4(&[
+                b"Aucune donn\xE9e disponible",
+                b"No data available",
+                b"No hay datos disponibles",
+                b"Keine Daten verf\xFCgbar",
+            ]),
         );
         text(
             hdc,
@@ -680,7 +685,7 @@ pub unsafe fn draw_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, bar_top: i32, 
         rgb(0x9A, 0xA3, 0xAE),
         px + 16,
         detail_y,
-        b"Ressenti",
+        tr4(&[b"Ressenti", b"Feels like", b"Sensaci\xF3n", b"Gef\xFChlt"]),
     );
     text(
         hdc,
@@ -701,7 +706,7 @@ pub unsafe fn draw_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, bar_top: i32, 
         rgb(0x9A, 0xA3, 0xAE),
         px + 16 + col_w,
         detail_y,
-        b"Humidit\xE9",
+        tr4(&[b"Humidit\xE9", b"Humidity", b"Humedad", b"Luftfeuchtigkeit"]),
     );
     text(
         hdc,
@@ -723,7 +728,7 @@ pub unsafe fn draw_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, bar_top: i32, 
         rgb(0x9A, 0xA3, 0xAE),
         px + 16 + col_w * 2,
         detail_y,
-        b"Vent",
+        tr4(&[b"Vent", b"Wind", b"Viento", b"Wind"]),
     );
     text(
         hdc,
@@ -751,7 +756,12 @@ pub unsafe fn draw_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, bar_top: i32, 
             rgb(0xF2, 0xF2, 0xF2),
             px + 16,
             detail_y + 58,
-            b"Pr\xE9visions",
+            tr4(&[
+                b"Pr\xE9visions",
+                b"Forecast",
+                b"Previsi\xF3n",
+                b"Vorhersage",
+            ]),
         );
 
         for i in 0..FORECAST_COUNT {
@@ -814,13 +824,18 @@ pub unsafe fn draw_panel(hdc: Handle, b: &mut Brushes, f: &Fonts, bar_top: i32, 
 
 fn condition_label(c: WeatherCondition) -> &'static [u8] {
     match c {
-        WeatherCondition::Sunny => b"Ensoleill\xE9",
-        WeatherCondition::PartlyCloudy => b"Partiellement nuageux",
-        WeatherCondition::Cloudy => b"Nuageux",
-        WeatherCondition::Rain => b"Pluie",
-        WeatherCondition::Snow => b"Neige",
-        WeatherCondition::Storm => b"Orage",
-        WeatherCondition::Fog => b"Brouillard",
+        WeatherCondition::Sunny => tr4(&[b"Ensoleill\xE9", b"Sunny", b"Soleado", b"Sonnig"]),
+        WeatherCondition::PartlyCloudy => tr4(&[
+            b"Partiellement nuageux",
+            b"Partly cloudy",
+            b"Parcialmente nublado",
+            b"Teilweise bew\xF6lkt",
+        ]),
+        WeatherCondition::Cloudy => tr4(&[b"Nuageux", b"Cloudy", b"Nublado", b"Bew\xF6lkt"]),
+        WeatherCondition::Rain => tr4(&[b"Pluie", b"Rain", b"Lluvia", b"Regen"]),
+        WeatherCondition::Snow => tr4(&[b"Neige", b"Snow", b"Nieve", b"Schnee"]),
+        WeatherCondition::Storm => tr4(&[b"Orage", b"Storm", b"Tormenta", b"Gewitter"]),
+        WeatherCondition::Fog => tr4(&[b"Brouillard", b"Fog", b"Niebla", b"Nebel"]),
         WeatherCondition::Unknown => b"--",
     }
 }

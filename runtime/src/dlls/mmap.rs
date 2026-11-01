@@ -143,11 +143,21 @@ pub unsafe extern "win64" fn map_view_of_file(
     };
 
     let offset = ((offset_high as u64) << 32) | offset_low as u64;
+    // Décalage au-delà de la taille du mapping : ERROR_ACCESS_DENIED, comme
+    // Windows (et non un sous-dépassement de la longueur restante).
+    let Some(remaining) = fm.max_size.checked_sub(offset) else {
+        crate::process::set_last_error(5);
+        return 0;
+    };
     let len = if bytes_to_map == 0 {
-        (fm.max_size - offset) as usize
+        remaining as usize
     } else {
         bytes_to_map
     };
+    if len == 0 || (fm.max_size != 0 && len as u64 > remaining) {
+        crate::process::set_last_error(5);
+        return 0;
+    }
 
     let prot = if access & (FILE_MAP_WRITE | FILE_MAP_COPY) != 0 {
         libc::PROT_READ | libc::PROT_WRITE

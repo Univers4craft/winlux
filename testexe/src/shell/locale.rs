@@ -235,8 +235,61 @@ pub const S_SYSTEM_UPDATES: usize = 156;
 pub const S_PRIVACY: usize = 157;
 pub const S_PROCESSOR: usize = 158;
 pub const S_NETWORK_DRIVES: usize = 159;
+pub const S_PERSONALIZATION: usize = 160;
+pub const S_BLUETOOTH_DEVICES: usize = 161;
+pub const S_POWER_BATTERY: usize = 162;
+pub const S_GRAPHICS: usize = 163;
 
-const STRING_COUNT: usize = 160;
+// Signaler un problème
+pub const S_REPORT_PAGE: usize = 164;
+pub const S_REPORT_DESC: usize = 165;
+pub const S_REPORT_NEW: usize = 166;
+pub const S_REPORT_LAST: usize = 167;
+pub const S_REPORT_SAVED: usize = 168;
+pub const S_REPORT_OFFER: usize = 169;
+pub const S_REPORT_OFFER_ON_DESC: usize = 170;
+pub const S_REPORT_OFFER_OFF_DESC: usize = 171;
+pub const S_REPORT_PROPOSE: usize = 172;
+pub const S_REPORT_SILENT: usize = 173;
+pub const S_REPORT_PRIVATE: usize = 174;
+pub const S_REPORT_MASK_DESC: usize = 175;
+pub const S_REPORT_NOMASK_DESC: usize = 176;
+pub const S_REPORT_MASK: usize = 177;
+pub const S_REPORT_NOMASK: usize = 178;
+pub const S_REPORT_MODE: usize = 179;
+pub const S_REPORT_MODE_RELAY: usize = 180;
+pub const S_REPORT_MODE_BROWSER: usize = 181;
+pub const S_REPORT_MODE_FILE: usize = 182;
+pub const S_REPORT_AUTO: usize = 183;
+pub const S_REPORT_BROWSER: usize = 184;
+pub const S_REPORT_FILE: usize = 185;
+pub const S_REPORT_MODE_AUTO_BROWSER: usize = 186;
+pub const S_REPORT_BUTTON: usize = 187;
+pub const S_PRINTERS: usize = 188;
+
+// Page Bureau à distance
+pub const S_REMOTE_DESKTOP: usize = 189;
+pub const S_REMOTE_OFF: usize = 190;
+pub const S_REMOTE_NOT_RUNNING: usize = 191;
+pub const S_REMOTE_IDLE: usize = 192;
+pub const S_REMOTE_CONNECTED: usize = 193;
+pub const S_REMOTE_FROM: usize = 194;
+pub const S_REMOTE_ENABLE: usize = 195;
+pub const S_REMOTE_DISABLE: usize = 196;
+pub const S_REMOTE_REFRESH: usize = 197;
+pub const S_REMOTE_FULL_CONTROL: usize = 198;
+pub const S_REMOTE_VIEW_ONLY: usize = 199;
+pub const S_REMOTE_LEGACY: usize = 200;
+pub const S_REMOTE_LEGACY_PASSWORD: usize = 201;
+pub const S_REMOTE_FINGERPRINT: usize = 202;
+pub const S_REMOTE_ADDRESS: usize = 203;
+pub const S_REMOTE_ACCOUNTS: usize = 204;
+pub const S_REMOTE_ACCOUNTS_HINT: usize = 205;
+pub const S_REMOTE_THIS_COMPUTER: usize = 206;
+// Page Partage et transfert (dossiers partagés, transfert des réglages)
+pub const S_SHARING: usize = 207;
+
+const STRING_COUNT: usize = 208;
 
 // ── Tables de traduction ───────────────────────────────────────────
 
@@ -245,7 +298,7 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Syst\xE8me Linux",
     b"Applications Windows",
     b"R\xE9seau",
-    b"Son et batterie",
+    b"Son",
     b"Clavier et pav\xE9 tactile",
     b"Souris",
     b"Apparence",
@@ -423,6 +476,57 @@ static FR: [&[u8]; STRING_COUNT] = [
     b"Confidentialit\xE9",
     b"Processeur",
     b"Lecteurs r\xE9seau",
+    b"Personnalisation",
+    b"Bluetooth et appareils",
+    b"Alimentation et batterie",
+    b"Graphismes",
+    // 164-187 : Signaler un problème
+    b"Signaler un probl\xE8me",
+    b"D\xE9crivez un bug : le rapport complet s'affiche, modifiable, avant tout envoi.",
+    b"Nouveau signalement",
+    b"Dernier plantage",
+    b"Rapports enregistr\xE9s",
+    b"Apr\xE8s un plantage",
+    b"Winlux propose de signaler le probl\xE8me. Rien n'est envoy\xE9 sans votre accord.",
+    b"Winlux ne propose rien apr\xE8s un plantage (le journal le conserve).",
+    b"Proposer",
+    b"Ne rien proposer",
+    b"Donn\xE9es personnelles dans les rapports",
+    b"Masqu\xE9es par d\xE9faut : chemins, noms de fichiers, identifiants, Wi-Fi, num\xE9ros de s\xE9rie.",
+    b"Non masqu\xE9es par d\xE9faut : relisez le rapport avant l'envoi.",
+    b"Masquer",
+    b"Ne pas masquer",
+    b"Mode d'envoi",
+    b"Automatique : service de signalement Winlux, sans compte.",
+    b"Navigateur : formulaire GitHub pr\xE9rempli (compte GitHub requis).",
+    b"Fichier : le rapport est seulement enregistr\xE9 sur cet ordinateur.",
+    b"Automatique",
+    b"Navigateur",
+    b"Fichier",
+    b"Automatique : aucun service Winlux configur\xE9, le navigateur sera utilis\xE9.",
+    b"Signaler",
+    b"Imprimantes et scanners",
+    // 189-206 : Bureau à distance
+    b"Bureau \xE0 distance",
+    b"D\xE9sactiv\xE9 : personne ne peut prendre le contr\xF4le de cet ordinateur.",
+    b"Activ\xE9, mais le serveur ne r\xE9pond pas : consultez le journal.",
+    b"Activ\xE9 \x95 aucune connexion en cours",
+    b"Activ\xE9 \x95 connexion(s) : ",
+    b" depuis ",
+    b"Activer",
+    b"D\xE9sactiver",
+    b"Actualiser",
+    b"Contr\xF4le complet",
+    b"Affichage seul",
+    b"Ancien mot de passe VNC",
+    b" \x95 mot de passe VNC non chiffr\xE9 : ",
+    b" \x95 empreinte ",
+    b"Adresse \xE0 saisir dans TigerVNC (chiffrement RSA-AES)",
+    b"Comptes autoris\xE9s",
+    b"Connexion avec le nom et le mot de passe du compte Winlux.",
+    b"adresse IP de cet ordinateur",
+    // 207 : Partage et transfert
+    b"Partage et transfert",
 ];
 
 static EN: [&[u8]; STRING_COUNT] = [
@@ -430,7 +534,7 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Linux System",
     b"Windows Applications",
     b"Network",
-    b"Sound and Battery",
+    b"Sound",
     b"Keyboard and Touchpad",
     b"Mouse",
     b"Appearance",
@@ -608,6 +712,57 @@ static EN: [&[u8]; STRING_COUNT] = [
     b"Privacy",
     b"Processor",
     b"Network drives",
+    b"Personalization",
+    b"Bluetooth & devices",
+    b"Power and battery",
+    b"Graphics",
+    // 164-187 : Signaler un problème
+    b"Report a problem",
+    b"Describe a bug: the full report is shown, editable, before anything is sent.",
+    b"New report",
+    b"Last crash",
+    b"Saved reports",
+    b"After a crash",
+    b"Winlux offers to report the problem. Nothing is sent without your consent.",
+    b"Winlux offers nothing after a crash (the log keeps it).",
+    b"Offer",
+    b"Offer nothing",
+    b"Personal data in reports",
+    b"Hidden by default: paths, file names, identifiers, Wi-Fi, serial numbers.",
+    b"Not hidden by default: review the report before sending.",
+    b"Hide",
+    b"Don't hide",
+    b"Sending mode",
+    b"Automatic: Winlux reporting service, no account.",
+    b"Browser: prefilled GitHub form (GitHub account required).",
+    b"File: the report is only saved on this computer.",
+    b"Automatic",
+    b"Browser",
+    b"File",
+    b"Automatic: no Winlux service configured, the browser will be used.",
+    b"Report",
+    b"Printers & scanners",
+    // 189-206 : Bureau à distance
+    b"Remote Desktop",
+    b"Off: nobody can take control of this computer.",
+    b"On, but the server is not responding: check the log.",
+    b"On \x95 no active connection",
+    b"On \x95 connection(s): ",
+    b" from ",
+    b"Turn on",
+    b"Turn off",
+    b"Refresh",
+    b"Full control",
+    b"View only",
+    b"Legacy VNC password",
+    b" \x95 unencrypted VNC password: ",
+    b" \x95 fingerprint ",
+    b"Address to enter in TigerVNC (RSA-AES encryption)",
+    b"Allowed accounts",
+    b"Sign in with the Winlux account name and password.",
+    b"this computer's IP address",
+    // 207 : Partage et transfert
+    b"Sharing and transfer",
 ];
 
 static ES: [&[u8]; STRING_COUNT] = [
@@ -615,7 +770,7 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Sistema Linux",
     b"Aplicaciones Windows",
     b"Red",
-    b"Sonido y bater\xEDa",
+    b"Sonido",
     b"Teclado y panel t\xE1ctil",
     b"Rat\xF3n",
     b"Apariencia",
@@ -793,6 +948,57 @@ static ES: [&[u8]; STRING_COUNT] = [
     b"Privacidad",
     b"Procesador",
     b"Unidades de red",
+    b"Personalizaci\xF3n",
+    b"Bluetooth y dispositivos",
+    b"Energ\xEDa y bater\xEDa",
+    b"Gr\xE1ficos",
+    // 164-187 : Signaler un problème
+    b"Informar de un problema",
+    b"Describa un error: el informe completo se muestra, editable, antes de enviar nada.",
+    b"Nuevo informe",
+    b"\xDAltimo fallo",
+    b"Informes guardados",
+    b"Tras un fallo",
+    b"Winlux propone informar del problema. No se env\xEDa nada sin su permiso.",
+    b"Winlux no propone nada tras un fallo (el registro lo conserva).",
+    b"Proponer",
+    b"No proponer",
+    b"Datos personales en los informes",
+    b"Ocultos por defecto: rutas, nombres de archivo, identificadores, Wi-Fi, n\xFAmeros de serie.",
+    b"No ocultos por defecto: revise el informe antes de enviarlo.",
+    b"Ocultar",
+    b"No ocultar",
+    b"Modo de env\xEDo",
+    b"Autom\xE1tico: servicio de informes de Winlux, sin cuenta.",
+    b"Navegador: formulario de GitHub rellenado (requiere cuenta de GitHub).",
+    b"Archivo: el informe solo se guarda en este equipo.",
+    b"Autom\xE1tico",
+    b"Navegador",
+    b"Archivo",
+    b"Autom\xE1tico: ning\xFAn servicio de Winlux configurado, se usar\xE1 el navegador.",
+    b"Informar",
+    b"Impresoras y esc\xE1neres",
+    // 189-206 : Bureau à distance
+    b"Escritorio remoto",
+    b"Desactivado: nadie puede tomar el control de este equipo.",
+    b"Activado, pero el servidor no responde: consulte el registro.",
+    b"Activado \x95 ninguna conexi\xF3n activa",
+    b"Activado \x95 conexi\xF3n(es): ",
+    b" desde ",
+    b"Activar",
+    b"Desactivar",
+    b"Actualizar",
+    b"Control total",
+    b"Solo ver",
+    b"Contrase\xF1a VNC antigua",
+    b" \x95 contrase\xF1a VNC sin cifrar: ",
+    b" \x95 huella ",
+    b"Direcci\xF3n para TigerVNC (cifrado RSA-AES)",
+    b"Cuentas autorizadas",
+    b"Inicie sesi\xF3n con el nombre y la contrase\xF1a de la cuenta Winlux.",
+    b"direcci\xF3n IP de este equipo",
+    // 207 : Partage et transfert
+    b"Compartir y transferir",
 ];
 
 static DE: [&[u8]; STRING_COUNT] = [
@@ -800,7 +1006,7 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Linux-System",
     b"Windows-Anwendungen",
     b"Netzwerk",
-    b"Ton und Akku",
+    b"Ton",
     b"Tastatur und Touchpad",
     b"Maus",
     b"Darstellung",
@@ -978,6 +1184,57 @@ static DE: [&[u8]; STRING_COUNT] = [
     b"Datenschutz",
     b"Prozessor",
     b"Netzlaufwerke",
+    b"Personalisierung",
+    b"Bluetooth und Ger\xE4te",
+    b"Energie und Akku",
+    b"Grafik",
+    // 164-187 : Signaler un problème
+    b"Problem melden",
+    b"Beschreiben Sie einen Fehler: Der vollst\xE4ndige Bericht wird vor dem Senden bearbeitbar angezeigt.",
+    b"Neue Meldung",
+    b"Letzter Absturz",
+    b"Gespeicherte Berichte",
+    b"Nach einem Absturz",
+    b"Winlux bietet an, das Problem zu melden. Ohne Ihre Zustimmung wird nichts gesendet.",
+    b"Winlux bietet nach einem Absturz nichts an (das Protokoll beh\xE4lt ihn).",
+    b"Anbieten",
+    b"Nichts anbieten",
+    b"Pers\xF6nliche Daten in Berichten",
+    b"Standardm\xE4\xDFig ausgeblendet: Pfade, Dateinamen, Kennungen, WLAN, Seriennummern.",
+    b"Standardm\xE4\xDFig nicht ausgeblendet: Pr\xFCfen Sie den Bericht vor dem Senden.",
+    b"Ausblenden",
+    b"Nicht ausblenden",
+    b"Versandart",
+    b"Automatisch: Winlux-Meldedienst, ohne Konto.",
+    b"Browser: vorausgef\xFClltes GitHub-Formular (GitHub-Konto n\xF6tig).",
+    b"Datei: Der Bericht wird nur auf diesem Computer gespeichert.",
+    b"Automatisch",
+    b"Browser",
+    b"Datei",
+    b"Automatisch: Kein Winlux-Dienst eingerichtet, der Browser wird verwendet.",
+    b"Melden",
+    b"Drucker und Scanner",
+    // 189-206 : Bureau à distance
+    b"Remotedesktop",
+    b"Aus: Niemand kann diesen Computer fernsteuern.",
+    b"Ein, aber der Server antwortet nicht: Protokoll pr\xFCfen.",
+    b"Ein \x95 keine aktive Verbindung",
+    b"Ein \x95 Verbindung(en): ",
+    b" von ",
+    b"Einschalten",
+    b"Ausschalten",
+    b"Aktualisieren",
+    b"Vollzugriff",
+    b"Nur anzeigen",
+    b"Altes VNC-Kennwort",
+    b" \x95 unverschl\xFCsseltes VNC-Kennwort: ",
+    b" \x95 Fingerabdruck ",
+    b"Adresse f\xFCr TigerVNC (RSA-AES-Verschl\xFCsselung)",
+    b"Zugelassene Konten",
+    b"Anmeldung mit Name und Kennwort des Winlux-Kontos.",
+    b"IP-Adresse dieses Computers",
+    // 207 : Partage et transfert
+    b"Freigabe und \xDCbertragung",
 ];
 
 pub fn tr(id: usize) -> &'static [u8] {

@@ -636,6 +636,13 @@ fn publish(sys: &System, message: Option<(bool, &str)>) {
         .map(|p| p.id())
         .collect();
     s.push_str(&format!("protocols={}\n", offered.join(",")));
+    let missing: Vec<String> = Protocol::ALL
+        .iter()
+        .filter_map(|p| {
+            backend::missing_hint(sys, *p).map(|h| format!("{} : {h}", p.id().to_ascii_uppercase()))
+        })
+        .collect();
+    s.push_str(&format!("missing={}\n", ascii(&missing.join(" ; "))));
     let used: Vec<char> = letters_in_use_elsewhere();
     let free = ('D'..='Y')
         .rev()

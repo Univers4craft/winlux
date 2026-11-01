@@ -24,6 +24,8 @@ struct Stream {
     file: Mutex<Option<File>>,
     eof: AtomicBool,
     err: AtomicBool,
+    /// Octets remis par `ungetc`, relus avant le fichier (dernier en tête).
+    pushback: Mutex<Vec<u8>>,
 }
 
 fn registry() -> &'static Mutex<HashMap<usize, Arc<Stream>>> {
@@ -52,6 +54,7 @@ fn register(kind: Kind, file: Option<File>) -> *mut c_void {
         file: Mutex::new(file),
         eof: AtomicBool::new(false),
         err: AtomicBool::new(false),
+        pushback: Mutex::new(Vec::new()),
     });
     registry()
         .lock()
@@ -92,6 +95,7 @@ fn std_stream(index: usize) -> *mut c_void {
                     file: Mutex::new(None),
                     eof: AtomicBool::new(false),
                     err: AtomicBool::new(false),
+                    pushback: Mutex::new(Vec::new()),
                 }),
             );
         }
@@ -150,6 +154,19 @@ fn read_into(s: &Stream, buf: &mut [u8]) -> usize {
     if buf.is_empty() {
         return 0;
     }
+    {
+        let mut back = s
+            .pushback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !back.is_empty() {
+            let n = back.len().min(buf.len());
+            for b in buf.iter_mut().take(n) {
+                *b = back.pop().unwrap_or(0);
+            }
+            return n;
+        }
+    }
     let n = match s.kind {
         Kind::Disk => {
             let mut g = s
@@ -161,13 +178,52 @@ fn read_into(s: &Stream, buf: &mut [u8]) -> usize {
                 None => 0,
             }
         }
-        Kind::Stdin => std::io::stdin().read(buf).unwrap_or(0),
+        Kind::Stdin => {
+            // Les invites écrites sans retour à la ligne doivent apparaître
+            // avant que le programme n'attende la saisie.
+            flush_console_output();
+            std::io::stdin().read(buf).unwrap_or(0)
+        }
         _ => 0,
     };
     if n == 0 {
         s.eof.store(true, Ordering::Release);
     }
     n
+}
+
+/// Vide stdout et stderr (tampons Rust) avant toute lecture de stdin :
+/// `printf("Nom : "); gets(buf);` affiche l'invite avant d'attendre.
+pub(crate) fn flush_console_output() {
+    let _ = std::io::stdout().flush();
+    let _ = std::io::stderr().flush();
+}
+
+/// Un octet du flux (remis par `ungetc` ou lu), pour les lectures formatées
+/// qui ne doivent consommer que ce que le format demande.
+pub(crate) fn read_byte(p: *mut c_void) -> Option<u8> {
+    let s = lookup(p)?;
+    let mut one = [0u8; 1];
+    (read_into(&s, &mut one) == 1).then_some(one[0])
+}
+
+/// Remet des octets en tête du flux, dans l'ordre où ils seront relus.
+pub(crate) fn unread_bytes(p: *mut c_void, bytes: &[u8]) {
+    if let Some(s) = lookup(p) {
+        let mut back = s
+            .pushback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        back.extend(bytes.iter().rev());
+        if !bytes.is_empty() {
+            s.eof.store(false, Ordering::Release);
+        }
+    }
+}
+
+/// Le flux `stdin` de la CRT.
+pub(crate) fn stdin_stream() -> *mut c_void {
+    std_stream(0)
 }
 
 fn write_from(s: &Stream, buf: &[u8]) -> usize {
@@ -414,26 +470,22 @@ pub unsafe extern "win64" fn fputs(text: *const u8, p: *mut c_void) -> i32 {
     }
 }
 
-/// Lit tout le contenu restant d'un flux ; utilisé par `fscanf`.
-pub unsafe fn read_to_end(p: *mut c_void) -> Vec<u8> {
-    let s = match lookup(p) {
-        Some(s) => s,
-        None => return Vec::new(),
-    };
-    let mut data = Vec::new();
-    let mut buf = [0u8; 4096];
-    loop {
-        let n = read_into(&s, &mut buf);
-        if n == 0 {
-            break;
-        }
-        data.extend_from_slice(&buf[..n]);
-    }
-    data
-}
-
 // ---------- Positionnement et état ----------
-pub unsafe extern "win64" fn fseek(p: *mut c_void, offset: i64, origin: i32) -> i32 {
+/// `fseek` : `long` est 32 bits dans la CRT Windows ; au-delà, _fseeki64.
+pub unsafe extern "win64" fn fseek(p: *mut c_void, offset: i32, origin: i32) -> i32 {
+    fseeki64(p, offset as i64, origin)
+}
+/// `ftell` : -1 et errno EINVAL si la position ne tient pas sur 32 bits.
+pub unsafe extern "win64" fn ftell(p: *mut c_void) -> i32 {
+    match i32::try_from(ftelli64(p)) {
+        Ok(v) => v,
+        Err(_) => {
+            crate::dlls::crt_runtime::set_errno(22);
+            -1
+        }
+    }
+}
+pub unsafe extern "win64" fn fseeki64(p: *mut c_void, offset: i64, origin: i32) -> i32 {
     let s = match lookup(p) {
         Some(s) => s,
         None => return -1,
@@ -446,6 +498,17 @@ pub unsafe extern "win64" fn fseek(p: *mut c_void, offset: i64, origin: i32) -> 
         1 => SeekFrom::Current(offset),
         2 => SeekFrom::End(offset),
         _ => return -1,
+    };
+    let pending = std::mem::take(
+        &mut *s
+            .pushback
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner),
+    )
+    .len() as i64;
+    let from = match from {
+        SeekFrom::Current(o) => SeekFrom::Current(o - pending),
+        other => other,
     };
     let mut g = s
         .file
@@ -465,7 +528,7 @@ pub unsafe extern "win64" fn fseek(p: *mut c_void, offset: i64, origin: i32) -> 
     }
 }
 
-pub unsafe extern "win64" fn ftell(p: *mut c_void) -> i64 {
+pub unsafe extern "win64" fn ftelli64(p: *mut c_void) -> i64 {
     let s = match lookup(p) {
         Some(s) => s,
         None => return -1,
@@ -474,14 +537,38 @@ pub unsafe extern "win64" fn ftell(p: *mut c_void) -> i64 {
         .file
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let pending = s
+        .pushback
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .len() as i64;
     match g.as_mut() {
-        Some(f) => f.stream_position().map(|n| n as i64).unwrap_or(-1),
+        Some(f) => f
+            .stream_position()
+            .map(|n| n as i64 - pending)
+            .unwrap_or(-1),
         None => -1,
     }
 }
 
+/// ungetc : remet un caractère en tête du flux et efface l'indicateur EOF.
+pub unsafe extern "win64" fn ungetc(c: i32, p: *mut c_void) -> i32 {
+    if c == -1 {
+        return -1;
+    }
+    let Some(s) = lookup(p) else {
+        return -1;
+    };
+    s.pushback
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .push(c as u8);
+    s.eof.store(false, Ordering::Release);
+    (c as u8) as i32
+}
+
 pub unsafe extern "win64" fn rewind(p: *mut c_void) {
-    fseek(p, 0, 0);
+    fseeki64(p, 0, 0);
     s_clearerr(p);
 }
 unsafe fn s_clearerr(p: *mut c_void) {
@@ -540,7 +627,14 @@ pub unsafe extern "win64" fn fileno(p: *mut c_void) -> i32 {
             Kind::Stdin => 0,
             Kind::Stdout => 1,
             Kind::Stderr => 2,
-            Kind::Disk => -1,
+            Kind::Disk => {
+                use std::os::unix::io::AsRawFd;
+                s.file
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_ref()
+                    .map_or(-1, |f| f.as_raw_fd())
+            }
         },
         None => -1,
     }
@@ -591,7 +685,19 @@ pub unsafe extern "win64" fn rename_file(old: *const u8, new: *const u8) -> i32 
 
 // ---------- Sortie formatée sur un flux ----------
 
-unsafe fn format_narrow(fmt: *const u8, va: &mut crate::thunks::VaList) -> Vec<u8> {
+/// Écrit des octets déjà formatés sur un `FILE*` ; renvoie leur nombre ou -1.
+pub unsafe fn write_bytes(p: *mut c_void, b: &[u8]) -> i32 {
+    match lookup(p) {
+        Some(s) if write_from(&s, b) == b.len() => b.len() as i32,
+        Some(s) => {
+            s.err.store(true, Ordering::Release);
+            -1
+        }
+        None => -1,
+    }
+}
+
+pub(crate) unsafe fn format_narrow(fmt: *const u8, va: &mut crate::thunks::VaList) -> Vec<u8> {
     crate::printf::format(
         std::slice::from_raw_parts(fmt, crate::printf::narrow_len(fmt)),
         va,
@@ -637,7 +743,7 @@ pub unsafe extern "win64" fn fgetpos(p: *mut c_void, pos: *mut i64) -> i32 {
     if p.is_null() || pos.is_null() {
         return -1;
     }
-    let off = ftell(p);
+    let off = ftelli64(p);
     if off < 0 {
         return -1;
     }
@@ -648,7 +754,7 @@ pub unsafe extern "win64" fn fsetpos(p: *mut c_void, pos: *const i64) -> i32 {
     if p.is_null() || pos.is_null() {
         return -1;
     }
-    fseek(p, *pos, 0)
+    fseeki64(p, *pos, 0)
 }
 
 crate::varargs_thunk!(fprintf_thunk => imp_fprintf);
@@ -659,9 +765,9 @@ pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "fopen" => fn fopen, "_wfopen" => fn wfopen, "fopen_s" => fn fopen_s, "fclose" => fn fclose,
         "fread" => fn fread, "fwrite" => fn fwrite, "fgets" => fn fgets, "fputs" => fn fputs,
-        "fgetc" => fn fgetc, "fputc" => fn fputc, "getc" => fn fgetc, "putc" => fn fputc,
+        "fgetc" => fn fgetc, "fputc" => fn fputc, "ungetc" => fn ungetc, "getc" => fn fgetc, "putc" => fn fputc,
         "fseek" => fn fseek, "ftell" => fn ftell, "rewind" => fn rewind, "fgetpos" => fn fgetpos, "fsetpos" => fn fsetpos,
-        "_fseeki64" => fn fseek, "_ftelli64" => fn ftell,
+        "_fseeki64" => fn fseeki64, "_ftelli64" => fn ftelli64,
         "feof" => fn feof, "ferror" => fn ferror, "clearerr" => fn clearerr,
         "fflush" => fn fflush, "setvbuf" => fn setvbuf, "setbuf" => fn setvbuf, "_fileno" => fn fileno,
         "__acrt_iob_func" => fn acrt_iob_func, "__iob_func" => fn iob_func, "_iob" => data IOB, "_filelength" => fn filelength,
@@ -676,6 +782,32 @@ mod tests {
     use super::*;
 
     #[test]
+    fn ftell_echoue_au_dela_de_32_bits_et_fileno_rend_le_descripteur() {
+        unsafe {
+            let base =
+                std::env::temp_dir().join(format!("winlux-crt-ftell64-{}.txt", std::process::id()));
+            let path = format!("{}\0", base.display());
+            let f = fopen(path.as_ptr(), b"w+\0".as_ptr());
+            assert!(!f.is_null());
+            assert!(fileno(f) > 2);
+            assert_eq!(fileno(std_stream(0)), 0);
+            assert_eq!(fileno(std_stream(2)), 2);
+            // Position lointaine (fichier creux) : _ftelli64 la lit, ftell non.
+            assert_eq!(fseeki64(f, 1 << 33, 0), 0);
+            assert_eq!(ftelli64(f), 1 << 33);
+            crate::dlls::crt_runtime::set_errno_value(0);
+            assert_eq!(ftell(f), -1);
+            assert_eq!(*crate::dlls::crt_runtime::errno(), 22);
+            assert_eq!(fseek(f, 12, 0), 0);
+            assert_eq!(ftell(f), 12);
+            assert_eq!(fseek(f, -4, 1), 0);
+            assert_eq!(ftell(f), 8);
+            fclose(f);
+            let _ = std::fs::remove_file(&base);
+        }
+    }
+
+    #[test]
     fn flux_ecrit_relit_et_repositionne() {
         unsafe {
             let base =
@@ -686,13 +818,13 @@ mod tests {
             let payload = b"ligne1\nligne2\n";
             assert_eq!(fwrite(payload.as_ptr(), 1, payload.len(), f), payload.len());
             assert_eq!(fflush(f), 0);
-            assert_eq!(ftell(f), payload.len() as i64);
+            assert_eq!(ftell(f), payload.len() as i32);
             let mut saved = -1;
             assert_eq!(fgetpos(f, &mut saved), 0);
             assert_eq!(saved, payload.len() as i64);
             assert_eq!(fseek(f, 0, 0), 0);
             assert_eq!(fsetpos(f, &saved), 0);
-            assert_eq!(ftell(f), saved);
+            assert_eq!(ftelli64(f), saved);
             assert_eq!(fgetpos(f, std::ptr::null_mut()), -1);
             assert_eq!(fsetpos(f, std::ptr::null()), -1);
             assert_eq!(fseek(f, 0, 0), 0);
@@ -714,6 +846,29 @@ mod tests {
             assert_eq!(fclose(f), 0);
             assert_eq!(std::fs::read(&base).unwrap(), payload);
             assert_eq!(remove_file(path.as_ptr()), 0);
+        }
+    }
+
+    #[test]
+    fn ungetc_remet_le_caractere_avant_le_fichier() {
+        unsafe {
+            let base =
+                std::env::temp_dir().join(format!("winlux-crt-ungetc-{}.txt", std::process::id()));
+            std::fs::write(&base, b"{\"a\":1}").unwrap();
+            let path = format!("{}\0", base.display());
+            let f = fopen(path.as_ptr(), b"r\0".as_ptr());
+            assert_eq!(fgetc(f), b'{' as i32);
+            assert_eq!(ungetc(b'{' as i32, f), b'{' as i32);
+            assert_eq!(ftell(f), 0);
+            let mut buf = [0u8; 3];
+            assert_eq!(fread(buf.as_mut_ptr(), 1, 3, f), 3);
+            assert_eq!(&buf, b"{\"a");
+            assert_eq!(ungetc(b'x' as i32, f), b'x' as i32);
+            assert_eq!(fseek(f, 0, 1), 0);
+            assert_eq!(fgetc(f), b'a' as i32);
+            assert_eq!(ungetc(-1, f), -1);
+            assert_eq!(fclose(f), 0);
+            std::fs::remove_file(&base).unwrap();
         }
     }
 

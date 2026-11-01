@@ -1,6 +1,6 @@
 [package]
 name = "winlux"
-version = "0.1.0"
+version = "0.2.12"
 edition = "2021"
 description = "Runtime Winlux : chargeur PE et API Win32 écrits de zéro (clean-room), sans Wine"
 license = "GPL-3.0-or-later"
@@ -9,7 +9,12 @@ license = "GPL-3.0-or-later"
 name = "winlux"
 path = "src/main.rs"
 
+# Serveur de bureau à distance (RFB/VNC maison, chiffrement RSA-AES).
+[[bin]]
+name = "winlux-remote"
+path = "src/remote/main.rs"
+
 [dependencies]
 libc = "0.2"
 png = "0.18.1"
-x11rb = "0.14.0"
+x11rb = { version = "0.14.0", features = ["screensaver", "xtest", "xfixes", "randr", "xinput"] }

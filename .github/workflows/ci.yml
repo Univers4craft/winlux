@@ -123,11 +123,22 @@ jobs:
       - name: Vérifier le partitionnement manuel et l'échelle d'écran de l'installateur
         run: python3 -B scripts/test-installer-partitioning.py
 
-      - name: Vérifier que l'installateur affiche la page de l'étape active
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -y -q xvfb xauth python3-gi python3-gi-cairo gir1.2-gtk-3.0
-          xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-installer-startup.py
+      - name: Vérifier le signalement de problèmes (masquage, modèle, relais)
+        run: python3 -B scripts/test-report.py
+
+      - name: Vérifier l'écran de verrouillage (mot de passe, inactivité, réveil)
+        run: python3 -B scripts/test-lock.py
+
+      - name: Vérifier les autorisations des applications Windows
+        run: python3 -B scripts/test-permission.py
+      - name: Vérifier la fenêtre UAC (comptes administrateurs, mot de passe, langues)
+        run: python3 -B scripts/test-uac.py
+
+      - name: Vérifier « Coller » sur le bureau (couper = déplacer, noms en double)
+        run: python3 -B scripts/test-desktop-paste.py
+
+      - name: Vérifier la détection des modes d'alimentation (économie, normal, turbo)
+        run: python3 -B scripts/test-power-modes.py
 
       - name: Vérifier les grandes images X11 en 1080p
         run: |
@@ -144,6 +155,12 @@ jobs:
           stage=$(mktemp -d)
           sh scripts/copy-audio-libraries.sh "$stage"
 
+      - name: Valider le moteur vidéo/audio (FFmpeg réel)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q ffmpeg
+          cargo test -p winlux media_bout_en_bout -- --ignored
+
       - name: Aucune erreur de compilation
         run: cargo check -p winlux --all-targets
 
@@ -151,13 +168,35 @@ jobs:
         run: |
           bash scripts/test-updater.sh
           sh scripts/test-update-notes.sh
+          python3 -B scripts/test-update-guard.py
+          python3 -B scripts/test-apt-metadata.py
 
       - name: Valider le réseau et les commandes des paramètres
         run: |
           sh scripts/test-install-safety.sh
           sh scripts/test-network.sh
           sh scripts/test-control.sh
+          python3 -B scripts/test-power.py
+          sh scripts/test-fonts.sh
+          python3 -B scripts/test-store.py
           sh scripts/test-display.sh
+          sh scripts/test-touchpad.sh
+          sh scripts/test-speak.sh
+
+      - name: Valider sauvegarde, sessions et bureau à distance
+        run: |
+          sh scripts/test-backup.sh
+          sh scripts/test-sessions.sh
+          sh scripts/test-remote.sh
+          sh scripts/test-share.sh
+          sh scripts/test-transfer.sh
+
+      - name: Partage face aux clients Windows 11 et macOS (vrai Samba)
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q samba smbclient wsdd
+          sudo systemctl stop smbd nmbd wsdd 2>/dev/null || true
+          sudo sh scripts/test-share-clients.sh
 
   # 3. Compile les .exe Windows puis les exécute sous Winlux.
   runtime-tests:
@@ -201,7 +240,7 @@ jobs:
         run: sh scripts/test-integration.sh
 
       - name: Installer MinGW-w64
-        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+        run: sudo apt-get update -q && sudo apt-get install -y -q gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64 clang lld llvm
 
       - name: Compiler et exécuter les tests C MinGW
         run: |
@@ -212,3 +251,89 @@ jobs:
         if: always()
         run: |
           ls -l target/x86_64-pc-windows-msvc/release/*.exe || true
+
+  # 4. Captures d'écran de l'interface, comparées à la dernière version verte
+  #    de master : alerte (sans échec) quand un écran change beaucoup.
+  captures:
+    name: Captures d'écran
+    runs-on: ubuntu-latest
+    needs: hygiene
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - name: Installer Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache cargo
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-pe-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-pe-
+
+      - name: Compiler le runtime et les applications maison
+        run: |
+          cargo build --release -p winlux
+          bash scripts/build-tests.sh
+
+      - name: Installer l'écran virtuel
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -y -q xvfb xauth openbox wmctrl python3-gi gir1.2-gtk-3.0 \
+            gir1.2-gdkpixbuf-2.0 fonts-dejavu-core libx11-6 libxft2 libcairo2 python3-gi-cairo \
+            dbus-x11 xfce4-panel xfce4-genmon-plugin
+
+      - name: Contraste du menu Démarrer, des panneaux et de l'horloge en thème clair et sombre
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-shell-contrast.py
+
+      - name: Capturer les écrans
+        run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/capture-ui.py build/captures
+
+      - name: Conserver les captures
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-ui
+          path: build/captures
+          retention-days: 30
+
+      - name: Récupérer les captures de la dernière version verte de master
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -u
+          mkdir -p build/captures-ref
+          for run in $(gh run list -R "$GITHUB_REPOSITORY" --workflow ci.yml --branch master --event push \
+                         --status success --limit 10 --json databaseId -q '.[].databaseId'); do
+            test "$run" = "$GITHUB_RUN_ID" && continue
+            if gh run download "$run" -R "$GITHUB_REPOSITORY" -n captures-ui -D build/captures-ref 2>/dev/null; then
+              echo "Référence : exécution $run"
+              break
+            fi
+          done
+
+      - name: Comparer à la version précédente
+        if: always()
+        run: |
+          /usr/bin/python3 -B scripts/compare-captures.py build/captures-ref build/captures build/captures-diff
+          cat build/captures-diff/rapport.md >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Conserver les différences
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: captures-ui-diff
+          path: build/captures-diff
+          retention-days: 30

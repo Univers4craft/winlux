@@ -180,6 +180,8 @@ fn unicode_string(at: usize, s: &[u16]) {
 }
 
 pub fn init_process(exe: &Module, args: &[String]) {
+    // Identité de l'application pour ses autorisations (caméra, micro…).
+    crate::permissions::init(&exe.path, args);
     let exe_win = crate::paths::to_windows(&exe.path);
     let mut all = vec![exe_win.clone()];
     all.extend(args.iter().cloned());
@@ -239,6 +241,7 @@ pub fn init_thread() -> usize {
         }
     }
     setup_static_tls(teb);
+    install_signal_stack();
     let mut threads = THREAD_TEBS
         .get_or_init(|| Mutex::new(Vec::new()))
         .lock()
@@ -247,6 +250,125 @@ pub fn init_thread() -> usize {
         threads.push(teb);
     }
     teb
+}
+
+const SIGNAL_STACK_SIZE: usize = 64 * 1024;
+
+/// Pile de signal alternative du thread courant : le gestionnaire de
+/// plantage (SA_ONSTACK) doit pouvoir s'exécuter même quand la pile du
+/// thread Windows est épuisée, sur chaque thread et pas seulement le premier.
+fn install_signal_stack() {
+    unsafe {
+        let mut current: libc::stack_t = std::mem::zeroed();
+        if libc::sigaltstack(std::ptr::null(), &mut current) == 0
+            && current.ss_flags & libc::SS_DISABLE == 0
+            && current.ss_size != 0
+        {
+            // Pile déjà installée (par la bibliothèque standard de Rust sur
+            // ses threads, par exemple) : elle appartient à son auteur.
+            return;
+        }
+        let stack = libc::mmap(
+            std::ptr::null_mut(),
+            SIGNAL_STACK_SIZE,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        if stack == libc::MAP_FAILED {
+            return;
+        }
+        let ss = libc::stack_t {
+            ss_sp: stack,
+            ss_flags: 0,
+            ss_size: SIGNAL_STACK_SIZE,
+        };
+        if libc::sigaltstack(&ss, std::ptr::null_mut()) != 0 {
+            libc::munmap(stack, SIGNAL_STACK_SIZE);
+            return;
+        }
+        OWN_SIGNAL_STACK.with(|own| own.set(stack as usize));
+    }
+}
+
+thread_local! {
+    /// Pile de signal installée par `install_signal_stack` sur ce thread
+    /// (0 si c'est quelqu'un d'autre qui l'a installée). Seule celle-ci est
+    /// libérée à la fin du thread : la bibliothèque standard de Rust libère
+    /// elle-même la sienne, et un second `munmap` de la même plage aurait
+    /// pu retirer une page déjà réutilisée (tas, TEB d'un autre thread).
+    static OWN_SIGNAL_STACK: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Retire la pile de signal du thread courant et la libère, seulement si
+/// c'est `install_signal_stack` qui l'a posée.
+fn remove_signal_stack() {
+    let own = OWN_SIGNAL_STACK.with(|own| own.replace(0));
+    if own == 0 {
+        return;
+    }
+    unsafe {
+        let mut current: libc::stack_t = std::mem::zeroed();
+        if libc::sigaltstack(std::ptr::null(), &mut current) != 0
+            || current.ss_flags & libc::SS_ONSTACK != 0
+            || current.ss_sp as usize != own
+        {
+            return;
+        }
+        let off = libc::stack_t {
+            ss_sp: std::ptr::null_mut(),
+            ss_flags: libc::SS_DISABLE,
+            ss_size: 0,
+        };
+        if libc::sigaltstack(&off, std::ptr::null_mut()) == 0 {
+            libc::munmap(own as *mut libc::c_void, SIGNAL_STACK_SIZE);
+        }
+    }
+}
+
+/// Libère le TEB du thread courant (blocs TLS statiques, tableau
+/// d'expansion, pile de signal) et détache GS : plus aucun code Windows ne
+/// tourne sur ce thread.
+fn free_current_teb() {
+    let t = teb();
+    if t == 0 {
+        return;
+    }
+    {
+        let mut threads = THREAD_TEBS
+            .get_or_init(|| Mutex::new(Vec::new()))
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        threads.retain(|&x| x != t);
+    }
+    unsafe {
+        // GS d'abord : un gestionnaire de signal ne doit pas lire un TEB libéré.
+        libc::syscall(libc::SYS_arch_prctl, 0x1001, 0usize);
+        let array = *((t + TEB_TLS_POINTER) as *const usize);
+        if array != 0 {
+            let mods = loader::MODULES.lock().unwrap().clone();
+            let tls_count = mods.iter().filter(|m| m.tls.is_some()).count().min(512);
+            for i in 0..tls_count {
+                let block = *((array + i * 8) as *const usize);
+                if block != 0 {
+                    let tls = mods.iter().filter(|m| m.tls.is_some()).nth(i);
+                    let size = tls
+                        .and_then(|m| m.tls.as_ref())
+                        .map(|t| (t.raw_end.saturating_sub(t.raw_start) + t.zero_fill + 16).max(16))
+                        .unwrap_or(16);
+                    libc::munmap(block as *mut libc::c_void, size);
+                }
+            }
+            libc::munmap(array as *mut libc::c_void, 4096);
+        }
+        let expansion = *((t + TEB_TLS_EXPANSION_POINTER) as *const usize);
+        if expansion != 0 {
+            libc::munmap(expansion as *mut libc::c_void, TLS_EXPANSION_SLOTS * 8);
+        }
+        libc::munmap(t as *mut libc::c_void, TEB_SIZE);
+    }
+    remove_signal_stack();
 }
 
 /// Lit une valeur TLS Win32 du TEB courant.
@@ -431,12 +553,40 @@ pub fn initialize_dynamic_module(m: &Module) -> bool {
     true
 }
 
+/// Modules qui ont appelé `DisableThreadLibraryCalls` : leur DllMain ne
+/// reçoit plus DLL_THREAD_ATTACH/DETACH (les rappels TLS, si).
+static NO_THREAD_CALLS: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+/// `DisableThreadLibraryCalls(hModule)`.
+pub fn disable_thread_library_calls(module: usize) -> bool {
+    if !loader::MODULES
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|m| m.base == module)
+    {
+        return false;
+    }
+    let mut list = NO_THREAD_CALLS.lock().unwrap_or_else(|e| e.into_inner());
+    if !list.contains(&module) {
+        list.push(module);
+    }
+    true
+}
+
+fn thread_calls_enabled(module: usize) -> bool {
+    !NO_THREAD_CALLS
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .contains(&module)
+}
+
 pub fn thread_attach_current() {
     init_thread();
     let mods = loader::MODULES.lock().unwrap().clone();
     for m in mods.into_iter().skip(1) {
         run_tls_callbacks(&m, DLL_THREAD_ATTACH);
-        if let Some(e) = m.entry() {
+        if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
             let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
                 unsafe { std::mem::transmute(e) };
             let _ = dllmain(m.base, DLL_THREAD_ATTACH, 0);
@@ -444,16 +594,22 @@ pub fn thread_attach_current() {
     }
 }
 
+/// Fin d'un thread Windows : rappels DLL_THREAD_DETACH puis libération du
+/// TEB (et de ses blocs TLS) créé par `thread_attach_current`.
 pub fn thread_detach_current() {
+    if teb() == 0 {
+        return;
+    }
     let mods = loader::MODULES.lock().unwrap().clone();
     for m in mods.into_iter().skip(1).rev() {
         run_tls_callbacks(&m, DLL_THREAD_DETACH);
-        if let Some(e) = m.entry() {
+        if let Some(e) = m.entry().filter(|_| thread_calls_enabled(m.base)) {
             let dllmain: extern "win64" fn(usize, u32, usize) -> i32 =
                 unsafe { std::mem::transmute(e) };
             let _ = dllmain(m.base, DLL_THREAD_DETACH, 0);
         }
     }
+    free_current_teb();
 }
 
 /// Initialise les DLL réelles (rappels TLS + DllMain) puis lance le programme.

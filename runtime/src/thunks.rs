@@ -66,6 +66,7 @@ extern "win64" fn missing_called(info: *const Missing) -> u64 {
             .unwrap_or_default()
     );
     eprintln!("winlux: (WINLUX_MISSING=ignore permet de continuer en renvoyant 0, à vos risques)");
+    crate::crash::record_failure("ENTRYPOINT_NOT_FOUND", &format!("fonction={label}"));
     crate::dlls::kernel32::flush_and_exit(0xC000_0139u32 as i32)
 }
 
@@ -83,6 +84,100 @@ pub fn missing_stub(dll: &str, func: &str) -> usize {
     code.extend_from_slice(&(missing_called as *const () as usize as u64).to_le_bytes());
     code.extend_from_slice(&[0xFF, 0xE0]);
     alloc_code(&code)
+}
+
+struct Traced {
+    label: String,
+}
+
+fn api_trace_filter() -> Option<&'static [String]> {
+    static F: std::sync::OnceLock<Option<Vec<String>>> = std::sync::OnceLock::new();
+    F.get_or_init(|| {
+        let raw = std::env::var("WINLUX_APITRACE").ok()?;
+        if raw.is_empty() || raw == "0" {
+            return None;
+        }
+        Some(
+            raw.split(',')
+                .map(|s| s.trim().to_ascii_lowercase())
+                .filter(|s| !s.is_empty() && s != "1")
+                .collect(),
+        )
+    })
+    .as_deref()
+}
+
+/// « module+rva » pour une adresse de code invité, ou l'adresse brute.
+pub fn describe_site(addr: usize) -> String {
+    crate::loader::MODULES
+        .try_lock()
+        .ok()
+        .and_then(|m| {
+            m.iter()
+                .find(|m| m.contains(addr))
+                .map(|m| format!("{}+{:#x}", m.name, addr - m.base))
+        })
+        .unwrap_or_else(|| format!("{addr:#x}"))
+}
+
+extern "win64" fn traced_called(info: *const Traced, ret: usize) {
+    let label = unsafe { &(*info).label };
+    let site = describe_site(ret);
+    let tid = unsafe { libc::syscall(libc::SYS_gettid) };
+    eprintln!("winlux[api] {tid} {label} <- {site}");
+}
+
+/// Avec `WINLUX_APITRACE=1` (ou une liste de fragments de noms séparés par
+/// des virgules), chaque appel d'une fonction intégrée importée est
+/// journalisé sur stderr avec l'adresse de l'appelant, puis transmis tel
+/// quel. Outil de diagnostic pour les programmes qui se bloquent.
+pub fn api_trace(dll: &str, func: &str, target: usize) -> usize {
+    let Some(filter) = api_trace_filter() else {
+        return target;
+    };
+    let label = format!("{}!{}", dll.to_ascii_lowercase(), func);
+    let lower = label.to_ascii_lowercase();
+    if !filter.is_empty() && !filter.iter().any(|f| lower.contains(f.as_str())) {
+        return target;
+    }
+    static CACHE: Mutex<Vec<(usize, usize)>> = Mutex::new(Vec::new());
+    if let Some(&(_, t)) = CACHE.lock().unwrap().iter().find(|(a, _)| *a == target) {
+        return t;
+    }
+    let info = Box::into_raw(Box::new(Traced { label })) as u64;
+    let mut c: Vec<u8> = Vec::with_capacity(128);
+    // push rcx; push rdx; push r8; push r9; sub rsp, 0x68
+    c.extend_from_slice(&[0x51, 0x52, 0x41, 0x50, 0x41, 0x51, 0x48, 0x83, 0xEC, 0x68]);
+    // movdqu [rsp+0x20+16*i], xmm0..3
+    for (i, disp) in [0x20u8, 0x30, 0x40, 0x50].iter().enumerate() {
+        c.extend_from_slice(&[0xF3, 0x0F, 0x7F, 0x44 | ((i as u8) << 3), 0x24, *disp]);
+    }
+    // mov rcx, info ; mov rdx, [rsp+0x88] ; mov rax, traced_called ; call rax
+    c.extend_from_slice(&[0x48, 0xB9]);
+    c.extend_from_slice(&info.to_le_bytes());
+    c.extend_from_slice(&[0x48, 0x8B, 0x94, 0x24, 0x88, 0, 0, 0]);
+    c.extend_from_slice(&[0x48, 0xB8]);
+    c.extend_from_slice(&(traced_called as *const () as usize as u64).to_le_bytes());
+    c.extend_from_slice(&[0xFF, 0xD0]);
+    for (i, disp) in [0x20u8, 0x30, 0x40, 0x50].iter().enumerate() {
+        c.extend_from_slice(&[0xF3, 0x0F, 0x6F, 0x44 | ((i as u8) << 3), 0x24, *disp]);
+    }
+    // add rsp, 0x68; pop r9; pop r8; pop rdx; pop rcx; mov rax, target; jmp rax
+    c.extend_from_slice(&[0x48, 0x83, 0xC4, 0x68, 0x41, 0x59, 0x41, 0x58, 0x5A, 0x59]);
+    c.extend_from_slice(&[0x48, 0xB8]);
+    c.extend_from_slice(&(target as u64).to_le_bytes());
+    c.extend_from_slice(&[0xFF, 0xE0]);
+    let t = alloc_code(&c);
+    CACHE.lock().unwrap().push((target, t));
+    t
+}
+
+/// Journalise un GetProcAddress qui échoue sur une DLL intégrée, quand le
+/// traçage d'API est actif.
+pub fn api_trace_missing(dll: &str, func: &str) {
+    if api_trace_filter().is_some() {
+        eprintln!("winlux[api] GetProcAddress {dll}!{func} : absent");
+    }
 }
 
 /// Copie du code machine dans une zone exécutable.

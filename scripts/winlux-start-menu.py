@@ -4,6 +4,7 @@ import json
 import os
 from pathlib import Path
 import shutil
+from string import Template
 import subprocess
 import threading
 import gi
@@ -11,23 +12,137 @@ gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, Gio, GLib
 
+
+# ── Langue de l'interface (Paramètres > Langue) : fr, en, es ou de ──────────
+
+def _interface_lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="):
+                        code = line[5:].strip()
+        except OSError:
+            pass
+    code = (code or os.environ.get("LANG", "fr"))[:2].lower()
+    return code if code in ("fr", "en", "es", "de") else "fr"
+
+
+_LANG = _interface_lang()
+_COL = {"en": 0, "es": 1, "de": 2}
+
+# Texte français -> (anglais, espagnol, allemand).
+_TR = {
+    'Système et alimentation': ('System and power', 'Sistema y energía', 'System und Energie'),
+    'Applications et démarrage': ('Apps and startup', 'Aplicaciones e inicio', 'Apps und Autostart'),
+    'Réseau Wi-Fi': ('Wi-Fi network', 'Red Wi-Fi', 'WLAN-Netzwerk'),
+    'Son': ('Sound', 'Sonido', 'Sound'),
+    'Alimentation batterie veille': ('Power battery sleep', 'Energía batería suspensión', 'Energie Akku Standby'),
+    'Clavier': ('Keyboard', 'Teclado', 'Tastatur'),
+    'Souris': ('Mouse', 'Ratón', 'Maus'),
+    'Personnalisation fond écran thème': ('Personalization wallpaper theme', 'Personalización fondo pantalla tema', 'Personalisierung Hintergrund Design'),
+    'Mises à jour': ('Updates', 'Actualizaciones', 'Updates'),
+    'Écran résolution': ('Display resolution', 'Pantalla resolución', 'Bildschirm Auflösung'),
+    'À propos version': ('About version', 'Acerca de versión', 'Info Version'),
+    'Navigateurs': ('Browsers', 'Navegadores', 'Browser'),
+    'Partage de dossiers et transfert des réglages': ('Folder sharing and settings transfer', 'Compartir carpetas y transferir ajustes', 'Ordnerfreigabe und Übertragung der Einstellungen'),
+    'Paramètres': ('Settings', 'Configuración', 'Einstellungen'),
+    'Bureautique': ('Office', 'Oficina', 'Büro'),
+    'Graphisme': ('Graphics', 'Gráficos', 'Grafik'),
+    'Audio et vidéo': ('Audio and video', 'Audio y vídeo', 'Audio und Video'),
+    'Jeux': ('Games', 'Juegos', 'Spiele'),
+    'Développement': ('Development', 'Desarrollo', 'Entwicklung'),
+    'Système': ('System', 'Sistema', 'System'),
+    'Accessoires': ('Accessories', 'Accesorios', 'Zubehör'),
+    'Autres applications': ('Other apps', 'Otras aplicaciones', 'Weitere Apps'),
+    'Démarrer Winlux': ('Winlux Start', 'Inicio de Winlux', 'Winlux-Start'),
+    'Applications, fichiers et paramètres': ('Apps, files and settings', 'Aplicaciones, archivos y configuración', 'Apps, Dateien und Einstellungen'),
+    'Épinglé': ('Pinned', 'Anclado', 'Angeheftet'),
+    'Toutes les applications  ›': ('All apps  ›', 'Todas las aplicaciones  ›', 'Alle Apps  ›'),
+    'Options d’alimentation': ('Power options', 'Opciones de energía', 'Energieoptionen'),
+    'Impossible d’ouvrir l’application': ("Couldn't open the app", 'No se puede abrir la aplicación', 'Die App konnte nicht geöffnet werden'),
+    'Résultats': ('Results', 'Resultados', 'Ergebnisse'),
+    'Toutes les applications': ('All apps', 'Todas las aplicaciones', 'Alle Apps'),
+    '‹  Retour': ('‹  Back', '‹  Volver', '‹  Zurück'),
+    'Paramètres · ': ('Settings · ', 'Configuración · ', 'Einstellungen · '),
+    'Fichier · ': ('File · ', 'Archivo · ', 'Datei · '),
+    '30 premiers fichiers affichés. Précisez la recherche.': ('First 30 files shown. Refine your search.', 'Se muestran los 30 primeros archivos. Precise la búsqueda.', 'Die ersten 30 Dateien werden angezeigt. Verfeinern Sie die Suche.'),
+    'Aucune application trouvée': ('No apps found', 'No se encontró ninguna aplicación', 'Keine Apps gefunden'),
+    'Recommandations': ('Recommended', 'Recomendaciones', 'Empfohlen'),
+    'Vos applications récemment ouvertes apparaîtront ici.': ('Your recently opened apps will show up here.', 'Sus aplicaciones abiertas recientemente aparecerán aquí.', 'Ihre zuletzt geöffneten Apps werden hier angezeigt.'),
+    'Impossible d’ouvrir ce fichier': ("Couldn't open this file", 'No se puede abrir este archivo', 'Diese Datei konnte nicht geöffnet werden'),
+    'Ouvrir': ('Open', 'Abrir', 'Öffnen'),
+    'Détacher du menu Démarrer': ('Unpin from Start', 'Desanclar de Inicio', 'Von Start lösen'),
+    'Épingler au menu Démarrer': ('Pin to Start', 'Anclar a Inicio', 'An Start anheften'),
+    'Créer un raccourci sur le bureau': ('Create desktop shortcut', 'Crear acceso directo en el escritorio', 'Desktopverknüpfung erstellen'),
+    'Redémarrer': ('Restart', 'Reiniciar', 'Neu starten'),
+    'Verrouiller': ('Lock', 'Bloquear', 'Sperren'),
+    'Arrêter': ('Shut down', 'Apagar', 'Herunterfahren'),
+}
+
+
+def _t(text):
+    """Texte dans la langue de l'interface (le français sert de clé)."""
+    row = _TR.get(text)
+    return row[_COL[_LANG]] if row and _LANG in _COL else text
+
+
 STATE = Path.home() / ".config/winlux/start.json"
 DEFAULTS = ["winlux-explorer.desktop", "winlux-browser-edge.desktop", "org.xfce.mousepad.desktop",
             "winlux-settings.desktop", "winlux-terminal.desktop", "winlux-updates.desktop"]
-SETTINGS = [("Système et alimentation", 0), ("Applications et démarrage", 1), ("Réseau Wi-Fi", 2),
-            ("Son et batterie", 3), ("Clavier", 4), ("Souris", 5), ("Personnalisation fond écran thème", 6),
-            ("Mises à jour", 7), ("Écran résolution", 8), ("À propos version", 9), ("Navigateurs", 11)]
+SETTINGS = [(_t("Système et alimentation"), 0), (_t("Applications et démarrage"), 1), (_t("Réseau Wi-Fi"), 2),
+            (_t("Son"), 3), (_t("Alimentation batterie veille"), 23), (_t("Clavier"), 4), (_t("Souris"), 5), (_t("Personnalisation fond écran thème"), 6),
+            (_t("Mises à jour"), 7), (_t("Écran résolution"), 8), (_t("À propos version"), 9), (_t("Navigateurs"), 11),
+            (_t("Partage de dossiers et transfert des réglages"), 28)]
 
 def category(app):
     """Use installed desktop metadata, including generated Windows launchers."""
     categories = set((app.get_categories() or "").split(";")) if hasattr(app, "get_categories") else set()
-    for key, label in [("Settings", "Paramètres"), ("Network", "Internet"),
-                       ("Office", "Bureautique"), ("Graphics", "Graphisme"),
-                       ("AudioVideo", "Audio et vidéo"), ("Game", "Jeux"),
-                       ("Development", "Développement"), ("System", "Système"),
-                       ("Utility", "Accessoires")]:
+    for key, label in [("Settings", _t("Paramètres")), ("Network", "Internet"),
+                       ("Office", _t("Bureautique")), ("Graphics", _t("Graphisme")),
+                       ("AudioVideo", _t("Audio et vidéo")), ("Game", _t("Jeux")),
+                       ("Development", _t("Développement")), ("System", _t("Système")),
+                       ("Utility", _t("Accessoires"))]:
         if key in categories: return label
-    return "Autres applications"
+    return _t("Autres applications")
+
+# Couleurs du menu Démarrer : texte/fond au moins 4,5:1 (WCAG AA) dans les deux
+# thèmes, vérifié par scripts/test-shell-contrast.py.
+PALETTES = {
+    "dark": {"bg": "#242238", "fg": "#f7f5ff", "border": "#6b5f92", "field": "#171624", "dim": "#b8b1d6",
+             "hover": "#433b60", "footer": "#1d1a2d", "accent": "#b19af9", "selected": "#7c4dff", "on_selected": "#ffffff"},
+    "light": {"bg": "#f6f4fc", "fg": "#1f1b2e", "border": "#c9c0e6", "field": "#ffffff", "dim": "#5e5778",
+              "hover": "#e4ddf7", "footer": "#ebe7f6", "accent": "#7c4dff", "selected": "#7c4dff", "on_selected": "#ffffff"},
+}
+MENU_CSS = Template("""
+  #winlux-start { background: $bg; color: $fg; border: 1px solid $border; border-radius: 8px; }
+  #winlux-start box, #winlux-start scrolledwindow, #winlux-start viewport { background: transparent; }
+  #winlux-start label, #winlux-start image, #winlux-start button { color: $fg; text-shadow: none; -gtk-icon-shadow: none; }
+  #winlux-start entry { border-radius: 5px; background: $field; color: $fg; padding: 9px; border: 1px solid $border;
+                        border-bottom: 2px solid $accent; box-shadow: none; }
+  #winlux-start entry image { color: $dim; }
+  #winlux-start entry selection { background: $selected; color: $on_selected; }
+  #winlux-start button { background: transparent; border: none; box-shadow: none; border-radius: 5px; padding: 7px; }
+  #winlux-start button:hover, #winlux-start button:focus { background: $hover; }
+  #winlux-start .heading { font-weight: bold; font-size: 12pt; }
+  #winlux-start .footer { background: $footer; padding: 12px 25px; }
+  #winlux-start .app-name { font-size: 9pt; }
+  menu.winlux-menu, .winlux-menu.menu { background: $bg; border: 1px solid $border; border-radius: 8px; padding: 4px; }
+  menu.winlux-menu menuitem { color: $fg; padding: 8px 18px 8px 12px; border-radius: 4px; min-width: 150px; }
+  menu.winlux-menu menuitem label, menu.winlux-menu menuitem image { color: $fg; -gtk-icon-shadow: none; }
+  menu.winlux-menu menuitem:hover { background: $hover; }
+""")
+
+
+def dark_theme():
+    """Thème sombre demandé : préférence GTK, thème « …-dark » ou GTK_THEME=…:dark."""
+    forced = os.environ.get("GTK_THEME")
+    if forced: return "dark" in forced.casefold()  # GTK ignore alors la préférence
+    settings = Gtk.Settings.get_default()
+    name = (settings.get_property("gtk-theme-name") or "").casefold()
+    return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name
+
 
 class Start(Gtk.Application):
     def __init__(self):
@@ -69,7 +184,7 @@ class Start(Gtk.Application):
         GLib.idle_add(self.grab_pointer)
 
     def build(self):
-        self.window = Gtk.ApplicationWindow(application=self, title="Démarrer Winlux")
+        self.window = Gtk.ApplicationWindow(application=self, title=_t("Démarrer Winlux"))
         self.window.set_decorated(False)
         self.window.set_resizable(False)
         self.window.set_skip_taskbar_hint(True)
@@ -81,31 +196,28 @@ class Start(Gtk.Application):
         self.window.connect("key-press-event", self.key)
         self.window.add_events(Gdk.EventMask.BUTTON_PRESS_MASK)
         self.window.connect("button-press-event", self.outside_click)
-        css = Gtk.CssProvider()
-        css.load_from_data(b"""
-          #winlux-start { background: #242238; color: #f7f5ff; border: 1px solid #6b5f92; border-radius: 8px; }
-          #winlux-start entry { border-radius: 5px; background: #171624; padding: 9px; border-bottom: 2px solid #b19af9; }
-          #winlux-start button { background: transparent; border: none; box-shadow: none; border-radius: 5px; padding: 7px; }
-          #winlux-start button:hover { background: #433b60; }
-          #winlux-start .heading { font-weight: bold; font-size: 12pt; }
-          #winlux-start .footer { background: #1d1a2d; padding: 12px 25px; }
-          #winlux-start .app-name { font-size: 9pt; }
-        """)
-        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), css, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        self.css = Gtk.CssProvider()
+        # Au-dessus du gtk.css utilisateur (winlux-personalize) : le menu garde
+        # sa propre palette, lisible dans les deux thèmes.
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), self.css, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+        settings = Gtk.Settings.get_default()
+        for name in ("gtk-theme-name", "gtk-application-prefer-dark-theme"):
+            settings.connect("notify::" + name, lambda *_: self.apply_theme())
+        self.apply_theme()
         self.window.set_name("winlux-start")
         outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.window.add(outer)
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin=28)
         outer.pack_start(body, True, True, 0)
-        self.search = Gtk.SearchEntry(placeholder_text="Applications, fichiers et paramètres")
+        self.search = Gtk.SearchEntry(placeholder_text=_t("Applications, fichiers et paramètres"))
         self.search.connect("search-changed", lambda *_: self.render())
         self.search.connect("activate", self.first_result)
         body.pack_start(self.search, False, False, 0)
         header = Gtk.Box()
-        self.heading = Gtk.Label(label="Épinglé", xalign=0)
+        self.heading = Gtk.Label(label=_t("Épinglé"), xalign=0)
         self.heading.get_style_context().add_class("heading")
         header.pack_start(self.heading, True, True, 0)
-        self.toggle = Gtk.Button(label="Toutes les applications  ›")
+        self.toggle = Gtk.Button(label=_t("Toutes les applications  ›"))
         self.toggle.connect("clicked", self.toggle_list)
         header.pack_end(self.toggle, False, False, 0)
         body.pack_start(header, False, False, 0)
@@ -119,10 +231,18 @@ class Start(Gtk.Application):
         footer.pack_start(Gtk.Image.new_from_icon_name("avatar-default-symbolic", Gtk.IconSize.LARGE_TOOLBAR), False, False, 0)
         footer.pack_start(Gtk.Label(label="Winlux", xalign=0), True, True, 0)
         power = Gtk.Button.new_from_icon_name("system-shutdown-symbolic", Gtk.IconSize.LARGE_TOOLBAR)
-        power.set_tooltip_text("Options d’alimentation")
+        power.set_tooltip_text(_t("Options d’alimentation"))
         power.connect("clicked", self.power)
         footer.pack_end(power, False, False, 0)
         outer.pack_end(footer, False, False, 0)
+
+    def apply_theme(self):
+        """Menu clair en thème clair, sombre en thème sombre, comme Windows 11.
+
+        Chaque nœud qui porte du texte ou une icône symbolique reçoit sa couleur :
+        sinon le thème GTK impose la sienne (Adwaita clair : texte gris foncé des
+        boutons et des champs) sur le fond du menu et le texte disparaît."""
+        self.css.load_from_data(MENU_CSS.substitute(PALETTES["dark" if dark_theme() else "light"]).encode())
 
     def hide(self):
         if self.window.has_grab():self.window.grab_remove()
@@ -171,7 +291,7 @@ class Start(Gtk.Application):
             self.hide()
         except GLib.Error as error:
             dialog = Gtk.MessageDialog(transient_for=self.window, modal=True, message_type=Gtk.MessageType.ERROR,
-                                       buttons=Gtk.ButtonsType.CLOSE, text="Impossible d’ouvrir l’application")
+                                       buttons=Gtk.ButtonsType.CLOSE, text=_t("Impossible d’ouvrir l’application"))
             dialog.format_secondary_text(str(error))
             dialog.run()
             dialog.destroy()
@@ -203,14 +323,14 @@ class Start(Gtk.Application):
         for widget in self.content.get_children(): widget.destroy()
         query = self.search.get_text().strip().casefold()
         listing = self.all_apps or bool(query)
-        self.heading.set_text("Résultats" if query else "Toutes les applications" if listing else "Épinglé")
-        self.toggle.set_label("‹  Retour" if listing else "Toutes les applications  ›")
+        self.heading.set_text(_t("Résultats") if query else _t("Toutes les applications") if listing else _t("Épinglé"))
+        self.toggle.set_label(_t("‹  Retour") if listing else _t("Toutes les applications  ›"))
         self.results = sorted((app for app in self.apps.values() if query in app.get_display_name().casefold()), key=lambda app: app.get_display_name().casefold())
         if listing:
             if query:
                 for label, page in SETTINGS:
                     if query in label.casefold():
-                        button = Gtk.Button(label="Paramètres · " + label)
+                        button = Gtk.Button(label=_t("Paramètres · ") + label)
                         button.connect("clicked", lambda _, target=page: self.open_setting(target))
                         self.content.pack_start(button, False, False, 0)
                 if query != self.file_query:
@@ -220,11 +340,11 @@ class Start(Gtk.Application):
                     if len(query) >= 2:
                         threading.Thread(target=self.find_files, args=(query, self.file_generation), daemon=True).start()
                 for path in self.file_results:
-                    button = Gtk.Button(label="Fichier · " + str(path.relative_to(Path.home())))
+                    button = Gtk.Button(label=_t("Fichier · ") + str(path.relative_to(Path.home())))
                     button.connect("clicked", lambda _, target=path: self.open_file(target))
                     self.content.pack_start(button, False, False, 0)
                 if len(self.file_results) == 30:
-                    self.content.pack_start(Gtk.Label(label="30 premiers fichiers affichés. Précisez la recherche.", xalign=0), False, False, 0)
+                    self.content.pack_start(Gtk.Label(label=_t("30 premiers fichiers affichés. Précisez la recherche."), xalign=0), False, False, 0)
             previous = None
             if not query: self.results.sort(key=lambda app: (category(app), app.get_display_name().casefold()))
             for app in self.results:
@@ -235,19 +355,19 @@ class Start(Gtk.Application):
                     self.content.pack_start(heading, False, False, 0)
                     previous = group
                 self.content.pack_start(self.app_button(app), False, False, 0)
-            if not self.results: self.content.pack_start(Gtk.Label(label="Aucune application trouvée"), False, False, 0)
+            if not self.results: self.content.pack_start(Gtk.Label(label=_t("Aucune application trouvée")), False, False, 0)
         else:
             grid = Gtk.Grid(column_homogeneous=True, column_spacing=4, row_spacing=12)
             self.content.pack_start(grid, False, False, 0)
             pinned = [self.apps[value] for value in self.state.get("pins", DEFAULTS) if value in self.apps]
             for index, app in enumerate(pinned): grid.attach(self.app_button(app, True), index % 6, index // 6, 1, 1)
-            heading = Gtk.Label(label="Recommandations", xalign=0, margin_top=15)
+            heading = Gtk.Label(label=_t("Recommandations"), xalign=0, margin_top=15)
             heading.get_style_context().add_class("heading")
             self.content.pack_start(heading, False, False, 0)
             recent = [self.apps[value] for value in self.state.get("recent", []) if value in self.apps]
             for app in recent[:4]: self.content.pack_start(self.app_button(app), False, False, 0)
             if not recent:
-                self.content.pack_start(Gtk.Label(label="Vos applications récemment ouvertes apparaîtront ici.", xalign=0, wrap=True), False, False, 0)
+                self.content.pack_start(Gtk.Label(label=_t("Vos applications récemment ouvertes apparaîtront ici."), xalign=0, wrap=True), False, False, 0)
         self.content.show_all()
 
     def open_setting(self, page):
@@ -259,7 +379,7 @@ class Start(Gtk.Application):
         try:Gio.AppInfo.launch_default_for_uri(path.as_uri(),self.window.get_display().get_app_launch_context())
         except GLib.Error as error:
             dialog=Gtk.MessageDialog(transient_for=self.window,modal=True,message_type=Gtk.MessageType.ERROR,
-                buttons=Gtk.ButtonsType.CLOSE,text="Impossible d’ouvrir ce fichier",secondary_text=str(error))
+                buttons=Gtk.ButtonsType.CLOSE,text=_t("Impossible d’ouvrir ce fichier"),secondary_text=str(error))
             dialog.run();dialog.destroy()
 
     def find_files(self, query, generation):
@@ -285,9 +405,16 @@ class Start(Gtk.Application):
         if self.window.has_grab():self.window.grab_remove()
         self.window.get_display().get_default_seat().ungrab()
         menu = Gtk.Menu()
+        menu.get_style_context().add_class("winlux-menu")
         self.context = menu
-        for title, callback in actions:
-            item = Gtk.MenuItem(label=title)
+        for entry in actions:
+            title, callback = entry[0], entry[1]
+            item = Gtk.MenuItem()
+            row = Gtk.Box(spacing=12)
+            if len(entry) > 2:
+                row.pack_start(Gtk.Image.new_from_icon_name(entry[2], Gtk.IconSize.MENU), False, False, 0)
+            row.pack_start(Gtk.Label(label=title, xalign=0), True, True, 0)
+            item.add(row)
             item.connect("activate", lambda _, action=callback: action())
             menu.append(item)
         def deactivate(*_):
@@ -317,16 +444,24 @@ class Start(Gtk.Application):
                 target.chmod(0o755)
                 subprocess.run(["gio", "set", "-t", "string", str(target), "metadata::trusted", "true"],
                                check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        self.menu(widget, event, [("Ouvrir", lambda: self.launch(app)),
-                                 ("Détacher du menu Démarrer" if identifier in self.state.get("pins", DEFAULTS) else "Épingler au menu Démarrer", pin),
-                                 ("Créer un raccourci sur le bureau", shortcut)])
+        self.menu(widget, event, [(_t("Ouvrir"), lambda: self.launch(app)),
+                                 (_t("Détacher du menu Démarrer") if identifier in self.state.get("pins", DEFAULTS) else _t("Épingler au menu Démarrer"), pin),
+                                 (_t("Créer un raccourci sur le bureau"), shortcut)])
         return True
 
     def power(self, widget):
+        # Confirmation, fermeture des applications et arrêt réel : winlux-power
+        # (l'ancien chemin appelait le poweroff de systemd, absent, et rien ne
+        # s'éteignait).
         def action(name):
-            subprocess.Popen(["/usr/bin/winlux-desktop-action", name])
             self.hide()
-        self.menu(widget, None, [("Redémarrer", lambda: action("reboot")), ("Arrêter", lambda: action("shutdown"))])
+            subprocess.Popen(["/usr/bin/winlux-power", "ask", name], start_new_session=True)
+        def lock():
+            self.hide()
+            subprocess.Popen(["/usr/bin/winlux-lock", "now"], start_new_session=True)
+        self.menu(widget, None, [(_t("Verrouiller"), lock, "system-lock-screen-symbolic"),
+                                 (_t("Redémarrer"), lambda: action("reboot"), "view-refresh-symbolic"),
+                                 (_t("Arrêter"), lambda: action("shutdown"), "system-shutdown-symbolic")])
 
 if __name__ == "__main__":
     raise SystemExit(Start().run())

@@ -19,8 +19,14 @@ seuls (fournis par les données XFCE) ne suffisent pas : la construction exige
 Paramètres utilise désormais une fenêtre GTK redimensionnable, une recherche
 de catégories et des pages défilantes. Les opérations de contrôle s'exécutent
 sans bloquer l'interface ; la page des mises à jour affiche progression et
-journal. Les catégories avancées Applications, Programmes Windows,
-Accessibilité et Effets visuels ouvrent encore les écrans PE existants.
+journal. Les pages Programmes Windows, Accessibilité, Effets visuels,
+Localisation, Gestionnaire de fichiers, Son avancé, Mises à jour système,
+Lecteurs réseau, Personnalisation du bureau et Bluetooth et appareils viennent
+de `winlux-settings-pages` (installé à côté de `winlux-settings`) et agissent
+sur la session réelle : BlueZ, pactl, winlux-sysupdate, winlux-drives,
+registre Windows (`Explorer\Advanced`, relu par l'Explorateur), xsettings et
+Openbox, `accessibility.ini` et `<programme>.exe.winlux.ini` partagés avec le
+runtime. Une page sans service ou sans matériel n'apparaît pas dans la liste.
 `WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings` conserve l'ancien écran.
 Le test `xvfb-run -a /usr/bin/python3 -B scripts/test-settings-native.py`
 vérifie la navigation sans effectuer d'action système.
@@ -65,7 +71,67 @@ XScreenSaver exécute son animation Pipes après dix minutes, avec un lanceur po
 la prévisualiser. La session demeure administrateur à ce stade : son verrouillage
 par mot de passe est désactivé par XScreenSaver. Son moteur graphique original
 est lancé sous le compte dédié `winlux-saver`, sans modifier l'authentification.
-Ce dispositif n'est pas un écran de verrouillage sécurisé.
+XScreenSaver ne verrouille rien : c'est le rôle de `winlux-lock`.
+
+## Écran de verrouillage
+
+`winlux-lock` (scripts/winlux-lock.py) affiche un écran de verrouillage au
+style de Windows 11 : heure et date sur le fond d'écran, puis, au premier
+appui ou clic, l'avatar, le nom du compte et le champ mot de passe sur un fond
+flouté. Il couvre tous les écrans et prend clavier et souris, donc les
+raccourcis du bureau sont inactifs tant qu'il est affiché. Après cinq erreurs,
+la saisie est bloquée trente secondes.
+
+- Déclenchement : Windows+L (Openbox), Démarrer > alimentation > Verrouiller,
+  Paramètres > Confidentialité et sécurité, inactivité (`winlux-lock daemon`,
+  extension X MIT-SCREEN-SAVER) et mise en veille. Le module d'alimentation
+  du runtime affiche l'écran avant d'écrire dans `/sys/power/state`, pour que
+  le bureau ne soit jamais visible au réveil ; le service détecte aussi une
+  veille déclenchée ailleurs (écart CLOCK_BOOTTIME / CLOCK_MONOTONIC).
+- Mot de passe : celui du compte local. La session tournant encore en
+  administrateur, le compte protégé est le compte personnel créé à
+  l'installation (premier UID ≥ 1000), vérifié avec `crypt()` contre
+  `/etc/shadow` ; en session Live, c'est le mot de passe de
+  `/etc/winlux/users.conf`. Un compte sans mot de passe se déverrouille d'un
+  clic et ne se verrouille jamais tout seul.
+- Réglages : `/etc/winlux/lock.conf` (`LOCK_AFTER` en secondes, 0 = jamais,
+  5 minutes par défaut ; `LOCK_ON_RESUME=1`), via `winlux-control
+  lock-after-<s>`, `lock-resume-on|off` et `lock-now`.
+- Limites : un administrateur qui tue le processus lève le verrouillage, et
+  Ctrl+Alt+F1… change toujours de terminal virtuel. Le bureau PE historique
+  (gui_demo.exe) garde son propre écran de connexion (`login.rs`).
+- Test hors affichage : `python3 -B scripts/test-lock.py`.
+
+## Autorisations des applications Windows
+
+Comme sous Windows 11, une application `.exe` demande la première fois
+qu'elle veut accéder à quelque chose de sensible. La fenêtre
+`winlux-permission ask` (Autoriser / Ne pas autoriser, refus par défaut au
+clavier, fermée sans réponse au bout de deux minutes) explique en une phrase
+ce que l'application pourra faire. Le choix est retenu par programme dans
+`~/.config/winlux/permissions.tsv` et se change dans Paramètres >
+Confidentialité et sécurité (interrupteur par autorisation, « Tout
+redemander »). Aucun fichier n'est analysé : ce n'est pas un antivirus.
+
+| Autorisation | Contrôle dans le runtime (`runtime/src/permissions.rs`) | Demandée ? |
+|---|---|---|
+| Fichiers personnels (Bureau, Documents, Images, Musique, Vidéos, Téléchargements, d'après `user-dirs.dirs`) | conversion des chemins Windows (`paths::to_linux`) ; un refus rend « fichier introuvable » | oui |
+| Caméra | énumération V4L2 (`v4l2::camera_allowed`) | oui |
+| Micro | waveIn, DirectSound et WASAPI (`audio::subscribe_microphone`) ; un refus donne du silence | oui |
+| Capture de l'écran | `gui::capture_screen` | oui |
+| Réseau et Internet | `connect`/`sendto` hors boucle locale, WinHTTP | non : autorisé d'office, mais listé et blocable |
+
+- Restent libres sans question : le dossier de l'application (un installateur
+  lancé depuis Téléchargements lit ce dossier) et le dossier des fichiers
+  ouverts par double-clic ou glisser-déposer (arguments de la ligne de
+  commande).
+- Les interrupteurs « Caméra / Micro pour toutes les applications »
+  (`/etc/winlux/privacy.conf`) l'emportent sur les choix par application.
+- Les connexions entrantes restent gérées par l'alerte du pare-feu.
+- Les programmes livrés avec Winlux (`/opt/winlux`, `/usr/lib/winlux`) ne
+  demandent rien. Sans affichage ou sans `winlux-permission`, le comportement
+  précédent s'applique (accès autorisé, rien n'est retenu).
+- Tests : `cargo test -p winlux permissions`, `python3 -B scripts/test-permission.py`.
 
 Les indicateurs réseau, audio et batterie lisent Linux ; l'absence d'une batterie
 virtuelle est indiquée comme alimentation secteur. Ils ne reproduisent pas
