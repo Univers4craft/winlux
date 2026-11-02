@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Paramètres > Système > Matériel et pilotes (page 33), et les sections
+"""Paramètres > Système > Matériel et pilotes (page 34), et les sections
 « Pilote de la carte graphique » (Graphismes) et « Microcode et fréquence »
 (Processeur).
 
@@ -134,7 +134,7 @@ _TR = {
     "Ouvrir Graphismes": ("Open Graphics", "Abrir Gráficos", "Grafik öffnen"),
 }
 
-PAGE_HARDWARE = 33
+PAGE_HARDWARE = 34
 PAGE_CPU = 19
 PAGE_GRAPHICS = 24
 REPORT = Path(os.environ.get("WINLUX_DRIVERS_REPORT", "/run/winlux/drivers.txt"))

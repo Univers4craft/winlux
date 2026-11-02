@@ -512,7 +512,7 @@ PAGE_GAMES = 29
 PAGE_ASSISTANT = 30
 PAGE_RECOVERY = 31
 PAGE_CLIPBOARD = 32
-PAGE_HARDWARE = 33
+PAGE_HARDWARE = 34
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.

@@ -222,6 +222,7 @@ _TR = {
     'La préparation des mises à jour utilise le disque. Gardez la VM allumée pendant l’installation.': ('Preparing updates uses the disk. Keep the VM running during installation.', 'La preparación de las actualizaciones usa el disco. Mantenga la VM encendida durante la instalación.', 'Die Vorbereitung der Updates nutzt den Datenträger. Lassen Sie die VM während der Installation eingeschaltet.'),
     'Secours et restauration': ('Recovery and restore', 'Recuperación y restauración', 'Wiederherstellung'),
     'Récupération': ('Recovery', 'Recuperación', 'Wiederherstellung'),
+    'Comptes': ('Accounts', 'Cuentas', 'Konten'),
     'Matériel et pilotes': ('Hardware and drivers', 'Hardware y controladores', 'Hardware und Treiber'),
     'Redémarrer après installation': ('Restart after installation', 'Reiniciar tras la instalación', 'Nach der Installation neu starten'),
     'Confirmer cette opération ?': ('Confirm this operation?', '¿Confirmar esta operación?', 'Diesen Vorgang bestätigen?'),
@@ -306,17 +307,18 @@ PAGES = [_t("Système Linux"), _t("Gérer les applications"), _t("Réseau"), _t(
          _t("Bluetooth"), _t("Alimentation et batterie"), _t("Graphismes"),
          _t("Signaler un problème"), _t("Imprimantes et scanners"), _t("Bureau à distance"),
          _t("Partage et transfert"), _t("Jeux"), _t("Assistant Claude"), _t("Récupération"), _t("Presse-papiers"),
-         _t("Matériel et pilotes")]
+         _t("Comptes"), _t("Matériel et pilotes")]
 GRAPHICS_PAGE = 24
 # Menu façon Windows 11 : catégories et sous-pages (même ordre que les
 # Paramètres PE, testexe/src/shell/settings.rs). Tout se règle ici : plus de
 # fenêtre « Réglages avancés » ni d’outil séparé.
-# Pages 29 à 33 n’existent que dans les Paramètres natifs.
-CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 33, 0, 27, 25, 31, 9]),
+# Pages 29 à 34 n’existent que dans les Paramètres natifs.
+CATEGORIES = [(_t("Système"), [8, 16, 23, 24, 32, 19, 34, 0, 27, 25, 31, 9]),
               (_t("Bluetooth et appareils"), [22, 4, 26]),
               (_t("Réseau et Internet"), [2, 20, 28]),
               (_t("Personnalisation"), [21, 13]),
               (_t("Applications"), [1, 10, 11, 15, 30]),
+              (_t("Comptes"), [33]),
               (_t("Heure et langue"), [14]),
               (_t("Jeux"), [29]),
               (_t("Accessibilité"), [12]),
@@ -656,6 +658,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.sound_fallback = SOUND_PAGE in self.hidden_pages
         self.hidden_pages.discard(SOUND_PAGE)
         self.hidden_pages |= set(MERGED)
+        # Page 33 (Comptes, #309) : cachée tant que sa page n’est pas livrée.
+        if not hasattr(EXTRA.ExtraPages, "page_accounts"): self.hidden_pages.add(33)
         if wanted in self.hidden_pages: wanted = 8
         self.current = wanted
         self.page = wanted
