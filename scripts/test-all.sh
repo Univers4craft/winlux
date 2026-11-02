@@ -85,6 +85,8 @@ display() {
     else echo "ni DISPLAY ni xvfb-run : test sauté"; fi
 }
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
+run reglages-rapides     display python3 -B scripts/test-quick-settings.py
+run comptes              display python3 -B scripts/test-accounts.py
 # Fautes matérielles en exceptions SEH (#269) : runtime compilé et clang requis.
 run exceptions-materielles sh scripts/test-hw-exceptions.sh
 # Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.

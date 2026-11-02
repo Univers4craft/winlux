@@ -27,6 +27,29 @@ L'accueil propose des raccourcis vers le clavier, le réseau, l'apparence et
 le secours lors de la première session. « Terminer » enregistre le choix dans
 le profil ; fermer la fenêtre permet de le reprendre plus tard.
 
+## Comptes, changement d'utilisateur et veille
+
+Paramètres › **Comptes** (page 33, cachée en session Live) liste les comptes
+locaux : « Votre compte » (changer le mot de passe) et « Autres
+utilisateurs » (ajouter un compte, changer son type Administrateur/Standard,
+son mot de passe, le supprimer en gardant ou en effaçant ses fichiers).
+Comptes locaux uniquement. Chaque action passe par le Contrôle de compte
+d'utilisateur puis `winlux-control account-*` relayé en root, qui appelle
+`winlux-accounts` (useradd, chpasswd, gpasswd, userdel ; le mot de passe
+passe par l'entrée standard) et tient `/etc/winlux/users.conf` à jour. Le
+dernier administrateur ne peut être ni rétrogradé ni supprimé ; un compte
+dont la session est ouverte ne peut pas être supprimé.
+
+Le menu d'alimentation du menu Démarrer propose **Changer d'utilisateur**
+dès qu'un second compte existe : `winlux-lock switch` verrouille la session
+et affiche les comptes en bas à gauche, comme Windows 11. Le mot de passe du
+compte choisi est vérifié par le relais root (`winlux-root`, op `switch`),
+qui ouvre ou rejoint sa session (`winlux-sessions switch`) ; la session
+quittée reste verrouillée. Ouvrir la session d'un autre compte sans son mot
+de passe demande désormais un administrateur. **Mettre en veille** apparaît
+quand `/sys/power/state` propose `mem` ou `freeze` et passe par
+`winlux-control power-suspend`. Test : `scripts/test-accounts.py`.
+
 ## Réglages rapides et matériel
 
 Les commandes Arrêter et Redémarrer demandent d'abord aux fenêtres de se
@@ -42,8 +65,18 @@ options d'alimentation. Ces deux panneaux sont à instance unique, se placent
 près de la barre des tâches du moniteur courant et se ferment aussi sur Échap
 ou au clic extérieur. Les écritures du curseur sont regroupées sur 120 ms.
 
-Cliquer sur les indicateurs réseau, son ou alimentation ouvre les réglages
-rapides. NetworkManager et son agent gèrent les réseaux et les demandes de
+Cliquer sur les indicateurs réseau, son ou alimentation, ou Windows+A, ouvre
+le panneau **Réglages rapides** façon Windows 11 (`winlux-popup quick`) :
+tuiles Wi-Fi (avec le nom du réseau et une flèche vers la liste des réseaux),
+Bluetooth (flèche vers Paramètres › Bluetooth), Mode avion, Économiseur de
+batterie, Éclairage nocturne et Accessibilité ; curseurs de luminosité et de
+volume (flèche vers le mélangeur) ; batterie et engrenage Paramètres en pied.
+Chaque tuile n'apparaît qu'avec le matériel correspondant : sans carte Wi-Fi,
+la tuile devient « Ethernet » (« Ethernet virtuel » dans une machine
+virtuelle), sans rétroéclairage pas de luminosité, sans batterie ni mode
+« économie » pas d'économiseur. Le mode avion coupe toutes les radios
+(`nmcli radio all off`, `bluetoothctl power off`) et se souvient de son état
+dans `~/.config/winlux/airplane-mode`. Test : `scripts/test-quick-settings.py`. NetworkManager et son agent gèrent les réseaux et les demandes de
 mot de passe ; BlueZ et Blueman gèrent le Bluetooth. `brightnessctl` utilise
 les périphériques de rétroéclairage réellement disponibles. L'absence d'un
 adaptateur, d'un pilote, d'un rétroéclairage ou d'un service est une erreur
