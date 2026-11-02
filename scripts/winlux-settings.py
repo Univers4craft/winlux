@@ -809,19 +809,22 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.page == 11:
             # Ordre alphabétique (chrome, edge, firefox) : aucun navigateur mis en avant.
             self.label(_t("Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous."), "subtitle")
-            actions = [(_t(verb).format(name=name), f"browser-{action}-{name}") for name in ("chrome", "edge", "firefox")
+            # Les vrais noms, pas les identifiants internes (chrome, edge, firefox).
+            actions = [(_t(verb).format(name=BROWSER_NAMES[ident]), f"browser-{action}-{ident}") for ident in BROWSER_NAMES
                        for verb, action in (("Installer {name}", "install"), ("Par défaut : {name}", "default"), ("Ouvrir {name}", "launch"))]
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=3,
                            row_spacing=8, column_spacing=8)
         self.body.pack_start(flow, False, False, 0)
         self.install_button = None
         self.rollback_button = None
+        self.browser_buttons = {}
         for title, action in actions:
             button = Gtk.Button(label=title)
             button.connect("clicked", lambda _, value=action: self.execute(value))
             flow.add(button)
             if action == "update-apply": self.install_button = button
             if action == "update-rollback": self.rollback_button = button
+            if action.startswith("browser-"): self.browser_buttons[action] = button
         self.buttons = flow
         display_status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line) if self.page == 8 else {}
         # Écrans détaillés (définition, fréquence, échelle par écran) : sections_screens.
@@ -855,6 +858,9 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.poll()
         self.body.show_all()
         self.progress.set_visible(self.page == 7)
+        if self.page == 11:
+            # show_all() vient de tout réafficher : on remasque selon l'état réel.
+            self.show_browser_buttons(dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line))
         if self.install_button is not None:
             self.install_button.get_parent().set_visible("Winlux est à jour." not in read("/run/winlux/updates.txt"))
         if self.rollback_button is not None:
@@ -950,6 +956,12 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         self.notice.set_text(_t("Opération en cours…"))
         self.buttons.set_sensitive(False)
 
+    def show_browser_buttons(self, status):
+        for action, button in getattr(self, "browser_buttons", {}).items():
+            child = button.get_parent() or button
+            shown = browser_buttons_shown(status, action)
+            if child.get_visible() != shown: child.set_visible(shown)
+
     def poll(self):
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.busy = status.get("update_busy") == "1"
@@ -979,8 +991,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
                 except ValueError:
                     return value
             if key == "browser_default":
-                names = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
-                return names.get(value, _t("Aucun : choisissez-en un ci-dessous"))
+                return BROWSER_NAMES.get(value, _t("Aucun : choisissez-en un ci-dessous"))
             return value or _t("Indisponible")
         text = "\n".join(_t("{label} : {value}").format(label=label, value=shown(key)) for label, key in fields)
         if self.page == 7: text = read("/run/winlux/updates.txt")
@@ -992,6 +1003,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         if self.page == 7: text = localize_update_text(text)
         if self.page == 9: text += about_build(read("/usr/share/winlux/BUILD-INFO"))
         if self.page == 11:
+            self.show_browser_buttons(status)
             waiting = browsers_waiting()
             if waiting:
                 text += "\n" + _t("En attente d’Internet, installé au prochain démarrage connecté : {names}").format(names=", ".join(waiting))
@@ -1063,9 +1075,23 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         dialog.connect("response", lambda window, _: window.destroy())
         dialog.show_all()
 
+# Ordre alphabétique : aucun navigateur mis en avant.
+BROWSER_NAMES = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+
+
+def browser_buttons_shown(status, action):
+    """« Par défaut » et « Ouvrir » seulement pour un navigateur installé ;
+    « Installer » seulement pour un navigateur absent (ou à mettre à jour)."""
+    verb, _, ident = action[len("browser-"):].partition("-")
+    installed = status.get(f"browser_{ident}") in ("installed", "update")
+    if verb == "install":
+        return not installed or status.get(f"browser_{ident}") == "update"
+    return installed
+
+
 def browsers_waiting():
     """Navigateurs demandés sans réseau, que l'init installera (winlux-browsers)."""
-    names = {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}
+    names = BROWSER_NAMES
     ids = read("/etc/winlux/browser-install-pending").split() + read("/etc/winlux/first-boot-browser").split()[:1]
     return [names[i] for n, i in enumerate(ids) if i in names and i not in ids[:n]]
 

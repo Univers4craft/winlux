@@ -28,6 +28,20 @@ case "${1:-explorer}" in
             WINLUX_STORE_TITLE=$(printf '%s' "${3:-}" | tr _ ' ')
             export WINLUX_STORE_TITLE
         fi
+        # Dossier d'échange du Store propre au compte : partagé, l'index écrit
+        # par un premier compte ne pouvait pas être remplacé par un second
+        # (/run/winlux est « sticky ») et son Store restait vide.
+        if test "$1" = store && test "$(id -u)" != 0; then
+            uid=$(id -u)
+            for dir in "/run/winlux/store-$uid" "${XDG_RUNTIME_DIR:-/nonexistent}/winlux-store" "/tmp/winlux-store-$uid"; do
+                case "$dir" in *[!A-Za-z0-9/_.-]*|/nonexistent/*) continue ;; esac
+                mkdir -p -m 700 "$dir" 2>/dev/null || true
+                if test -d "$dir" && test -O "$dir" && test -w "$dir" && test ! -L "$dir"; then
+                    export WINLUX_STORE_RUN="$dir"
+                    break
+                fi
+            done
+        fi
         exec /usr/bin/winlux /opt/winlux/tests/gui_demo.exe ;;
     editor) shift; exec /usr/bin/mousepad "$@" ;;
     *) echo 'Application Winlux inconnue' >&2; exit 2 ;;
