@@ -76,7 +76,8 @@ ovmf=""
 for f in /usr/share/OVMF/OVMF_CODE_4M.fd /usr/share/OVMF/OVMF_CODE.fd /usr/share/ovmf/OVMF.fd; do
     if test -f "$f"; then ovmf=$f; break; fi
 done
-ovmf32=/usr/share/OVMF/OVMF32_CODE_4M.fd
+ovmf32=${WINLUX_OVMF32:-/usr/share/OVMF/OVMF32_CODE_4M.fd}
+ovmf32_vars=${WINLUX_OVMF32_VARS:-$(dirname "$ovmf32")/OVMF32_VARS_4M.fd}
 for mode in bios uefi uefi32; do
     fw=""
     case $mode in
@@ -85,8 +86,8 @@ for mode in bios uefi uefi32; do
         uefi32) expect=efi-i386 ;;
     esac
     if test "$mode" = uefi32; then
-        test -f "$ovmf32" || { echo "OVMF 32 bits absent (paquet ovmf-ia32) : UEFI 32 bits non testé" >&2; exit 1; }
-        cp /usr/share/OVMF/OVMF32_VARS_4M.fd "$work/vars.fd"
+        test -f "$ovmf32" || { echo "OVMF 32 bits absent (scripts/fetch-ovmf-ia32.sh) : UEFI 32 bits non testé" >&2; exit 1; }
+        cp "$ovmf32_vars" "$work/vars.fd"
         fw="-drive if=pflash,format=raw,readonly=on,file=$ovmf32 -drive if=pflash,format=raw,file=$work/vars.fd"
     elif test "$mode" = uefi; then
         test -n "$ovmf" || { echo "OVMF absent : UEFI non testé" >&2; exit 1; }

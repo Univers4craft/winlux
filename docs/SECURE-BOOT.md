@@ -44,7 +44,8 @@ mixte (`CONFIG_EFI_MIXED`).
 Il n'existe pas de shim signé en 32 bits : sur ces machines, **désactivez
 Secure Boot** dans le menu du micrologiciel. La chaîne signée 64 bits n'est
 pas touchée. La validation de `release.yml` démarre l'ISO et le disque
-installé sous QEMU avec OVMF 32 bits (`ovmf-ia32`), et
+installé sous QEMU avec OVMF 32 bits (`scripts/fetch-ovmf-ia32.sh` : Ubuntu 26.04
+n'a plus le paquet `ovmf-ia32`, celui de 24.04 est vérifié par SHA-256), et
 `scripts/check-iso-boot-paths.sh` fait échouer la construction si l'un des
 trois chemins (BIOS, UEFI 64 bits, UEFI 32 bits) manque.
 

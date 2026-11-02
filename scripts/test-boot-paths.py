@@ -50,9 +50,9 @@ install_sh = (project / "scripts/install.sh").read_text()
 assert "grub-install --target=i386-efi" in install_sh
 assert '"grub-efi-ia32-bin"' in (project / "scripts/prepare-apt-base.py").read_text()
 release = (project / ".github/workflows/release.yml").read_text()
-assert "grub-efi-ia32-bin ovmf-ia32" in release and 'RELEASE_NAME.iso" uefi32' in release
+assert "grub-efi-ia32-bin" in release and "fetch-ovmf-ia32.sh" in release and 'RELEASE_NAME.iso" uefi32' in release
 usb = (project / ".github/workflows/installation.yml").read_text()
-assert "grub-efi-ia32-bin" in usb and "ovmf-ia32" in usb
+assert "grub-efi-ia32-bin" in usb and "fetch-ovmf-ia32.sh" in usb and 'WINLUX_OVMF32="$WINLUX_OVMF32"' in usb
 assert "uefi32" in (project / "installation/tests/test-block-device.sh").read_text()
 assert "uefi32" in (project / "scripts/test-install-vm-guest.sh").read_text()
 assert "uefi32" in (project / "scripts/test-live-iso-qemu.sh").read_text()

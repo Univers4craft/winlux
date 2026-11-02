@@ -24,6 +24,7 @@ on:
       - scripts/winlux-update-apt.py
       - scripts/test-update-curl-shim.py
       - scripts/check-iso-boot-paths.sh
+      - scripts/fetch-ovmf-ia32.sh
       - scripts/install.sh
       - scripts/test-install-vm-guest.sh
   workflow_dispatch:
@@ -68,7 +69,7 @@ jobs:
         run: |
           sudo apt-get update -q
           sudo apt-get install -y -q \
-            xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin ovmf-ia32 \
+            xorriso squashfs-tools grub-pc-bin grub-efi-amd64-bin grub-efi-ia32-bin \
             linux-image-generic xserver-xorg-core \
             x11-xserver-utils xinput gcc-mingw-w64-x86-64 \
             cpio fakeroot zstd kmod busybox-static mtools cryptsetup-bin \
@@ -80,6 +81,10 @@ jobs:
             libqt6core6t64 libqt6gui6 libqt6widgets6 \
             python3-gi gir1.2-gtk-3.0
           sudo apt-get install -y -q openbox wmctrl xdotool x11-utils
+          # UEFI 32 bits pour QEMU : Ubuntu 26.04 n a plus ovmf-ia32 (paquet 24.04 vérifié par SHA-256).
+          ovmf32=$(sh scripts/fetch-ovmf-ia32.sh "$RUNNER_TEMP/ovmf-ia32")
+          echo "WINLUX_OVMF32=$ovmf32/OVMF32_CODE_4M.fd" >>"$GITHUB_ENV"
+          echo "WINLUX_OVMF32_VARS=$ovmf32/OVMF32_VARS_4M.fd" >>"$GITHUB_ENV"
 
       # Aucun navigateur dans l'ISO : l'utilisateur choisit le sien, téléchargé
       # chez son éditeur après l'installation (Paramètres > Navigateurs).
