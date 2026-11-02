@@ -81,6 +81,14 @@ course à la main (la session était verrouillée pendant la mesure).
     Direct3D11 vs_5_0 ps_5_0 », OpenGL ES 3.0), puis
     `ID3D11View::GetResource` rendait un pointeur nul. Les vues gardent
     maintenant leur ressource (avec une référence) et leur descripteur.
+11. **Passage 9** : ANGLE ne trouvait pas `d3dcompiler_47.dll`. Un
+    `d3dcompiler_47` maison renvoie maintenant un conteneur DXBC qui porte le
+    type de shader et garde le texte HLSL. ANGLE crée aussi ses shaders depuis
+    ses threads de travail : un contexte GL partagé leur est donné. Plus de
+    plantage, la partie tourne, mais l'image reste noire : la traduction des
+    shaders DXBC/HLSL vers GLSL manque (#137). `CreateDCW("\\.\DISPLAY1")`
+    ouvrait une imprimante au lieu de l'écran (SDL3) : corrigé. Plein écran
+    1920×1080 en Vulkan : 60 FPS.
 
 Entrée brute (`WM_INPUT` par evdev), changement de définition (xrandr) et
 rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
@@ -94,9 +102,9 @@ rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
 | `CryptImportKey`/`CryptEncrypt` (NTLM de libcurl) | libcurl | authentification NTLM indisponible | #235 |
 | Sélecteur de dossier `SHBrowseForFolderW` (répond « Annuler ») | SDL3 (`SDL_ShowOpenFolderDialog`) | pas de choix de dossier | — |
 | Instantané des modules (`Module32FirstW`), `TransactNamedPipe` | crashpad (rapport de plantage de Warzone 2100) | pas de rapport crashpad | — |
-| Shaders HLSL compilés (DXBC/DXIL) | Warzone 2100 en `--gfxbackend=directx` (ANGLE produit du HLSL pour D3D11) | à mesurer | #137 |
 | libcurl : `curl_global_init` échoue | Warzone 2100 | partie en ligne et mises à jour indisponibles | #235 |
 | Tubes nommés entre processus et héritage de handles | crashpad | pas de rapport de plantage | — |
+| Traduction des shaders D3D11 (DXBC/HLSL → GLSL) | Warzone 2100 en ANGLE | image noire | #137 |
 | 32 bits | versions i686 des deux jeux (non testées) | — | #232 |
 
 ## À vérifier sur le vrai PC (pas de GPU dans une VM)
