@@ -39,6 +39,10 @@
     <keybind key="W-Left"><action name="Execute"><command>winlux-snap key left</command></action></keybind>
     <keybind key="W-Right"><action name="Execute"><command>winlux-snap key right</command></action></keybind>
     <keybind key="W-z"><action name="Execute"><command>winlux-snap layouts</command></action></keybind>
+    <!-- Petits outils : toujours au premier plan, pipette à couleurs, copier le texte de l'écran. -->
+    <keybind key="W-C-t"><action name="Execute"><command>winlux-snap ontop</command></action></keybind>
+    <keybind key="W-S-c"><action name="Execute"><command>winlux-colorpicker</command></action></keybind>
+    <keybind key="W-S-t"><action name="Execute"><command>winlux-ocr</command></action></keybind>
     <!-- Bureaux virtuels et vue des tâches (winlux-taskview). -->
     <keybind key="W-Tab"><action name="Execute"><command>winlux-taskview</command></action></keybind>
     <keybind key="W-C-d"><action name="Execute"><command>winlux-taskview new</command></action></keybind>
