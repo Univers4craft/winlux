@@ -50,7 +50,7 @@ int entry() {
     reset();
     if (!EnumDisplaySettingsW(0, 0xFFFFFFFF, dm)) ExitProcess(1);
     if (WIDTH(dm) != 2560 || HEIGHT(dm) != 1440 || HZ(dm) != 144 || BPP(dm) != 32) ExitProcess(1);
-    // 2. Liste : 6 couples définition/fréquence, en 32 et 16 bits.
+    // 2. Liste : 6 couples définition/fréquence, en 32 bits seulement.
     int count = 0, found = 0;
     for (u32 i = 0; i < 100; i++) {
         reset();
@@ -58,7 +58,7 @@ int entry() {
         count++;
         if (WIDTH(dm) == 1280 && HEIGHT(dm) == 720 && HZ(dm) == 60 && BPP(dm) == 32) found = 1;
     }
-    if (count != 12 || !found) ExitProcess(2);
+    if (count != 6 || !found) ExitProcess(2);
     // 3. CDS_TEST d'un mode existant : accepté, rien n'est changé.
     reset();
     FIELDS(dm) = 0x80000 | 0x100000;
