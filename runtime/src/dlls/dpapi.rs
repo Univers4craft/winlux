@@ -152,7 +152,10 @@ pub fn unprotect(blob: &[u8], entropy: &[u8]) -> Option<(Vec<u8>, Vec<u16>)> {
     let desc_len = u32_at(16)? as usize;
     let body_start = 20 + desc_len + 16;
     let tag_start = blob.len() - 32;
-    if !desc_len.is_multiple_of(2) || body_start > tag_start || !(tag_start - body_start).is_multiple_of(16) {
+    if !desc_len.is_multiple_of(2)
+        || body_start > tag_start
+        || !(tag_start - body_start).is_multiple_of(16)
+    {
         return None;
     }
     let (enc, mac) = keys(flags, entropy)?;
