@@ -86,6 +86,8 @@ display() {
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
 # Fautes matérielles en exceptions SEH (#269) : runtime compilé et clang requis.
 run exceptions-materielles sh scripts/test-hw-exceptions.sh
+# Paquets MSIX (#272) : runtime et hello.exe compilés requis.
+run paquets-msix         sh scripts/test-msix.sh
 # Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gui_demo.exe ]; then
     run contraste-shell-pe   display python3 -B scripts/test-pe-text-contrast.py --seconds 5

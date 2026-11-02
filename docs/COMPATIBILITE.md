@@ -29,6 +29,15 @@ deviennent des exceptions Windows que ses gestionnaires vectorisés et ses
 blocs `__try/__except` rattrapent (`runtime/src/dlls/seh_hw.rs`, test
 `scripts/test-hw-exceptions.sh`). `WINLUX_SEH_HW=0` rend l'ancien comportement.
 
+Depuis #272, les paquets MSIX et AppX (`.msix`, `.appx`, `.msixbundle`) s'installent
+par double-clic ou `winlux --setup paquet.msix` (`runtime/src/setup/msix.rs`) :
+empreintes du block map vérifiées avant toute écriture, installation dans
+`C:\Program Files\WindowsApps\<PackageFullName>`, menu Démarrer, associations et
+protocoles, `LocalState`, identité de paquet à l'exécution
+(`GetCurrentPackageFullName`, `GetCurrentPackageId`, `GetCurrentPackagePath`…).
+Pas encore : la signature `AppxSignature.p7x` (#235), les paquets de ressources
+des bundles, et les paquets 32 bits (#232). Test : `scripts/test-msix.sh`.
+
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
 permise (libGL/libvulkan de l'hôte, FFmpeg, curl, OpenSSL/GnuTLS, PipeWire…).

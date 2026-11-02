@@ -284,6 +284,9 @@ jobs:
       - name: Exécuter les tests runtime
         run: bash scripts/test-runtime.sh
 
+      - name: Installer des paquets MSIX (#272)
+        run: sh scripts/test-msix.sh
+
       - name: Exécuter les dix PE en parallèle
         run: bash scripts/test-runtime-parallel.sh
 
