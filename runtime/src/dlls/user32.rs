@@ -409,6 +409,22 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
         };
         let wait = gui::next_timer_ms(hwnd).map_or(cap, |ms| ms.min(cap));
         if !gui::wait_backend(wait) {
+            // Fin de boucle headless : comme pour un vrai WM_QUIT, le MSG est
+            // renseigné (wParam 0). Sinon `ExitProcess(msg.wParam)` reprenait
+            // le wParam du dernier message, l'identifiant d'un minuteur par
+            // exemple, et le programme sortait au hasard avec le code 1.
+            write_msg(
+                out,
+                &gui::Msg {
+                    hwnd: 0,
+                    message: gui::WM_QUIT,
+                    wparam: 0,
+                    lparam: 0,
+                    time: 0,
+                    pt: Default::default(),
+                    l_private: 0,
+                },
+            );
             return 0;
         }
         // WM_TIMER est le message le moins prioritaire, comme sous Windows :
@@ -3009,6 +3025,32 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Boucle vide en headless : GetMessage renvoie 0 avec un WM_QUIT de
+    /// wParam 0, pas le wParam d'un message précédent (code de sortie au
+    /// hasard de voicerecorder.exe dans la VM de validation).
+    #[test]
+    fn fin_de_boucle_headless_renseigne_wm_quit() {
+        if gui::backend_is_interactive() {
+            return;
+        }
+        let (r, message, wparam) = std::thread::spawn(|| unsafe {
+            let mut m = gui::Msg {
+                hwnd: 0,
+                message: 0x0113,
+                wparam: 1,
+                lparam: 0,
+                time: 0,
+                pt: Default::default(),
+                l_private: 0,
+            };
+            let r = get_message_a(&mut m, 0, 0, 0);
+            (r, m.message, m.wparam)
+        })
+        .join()
+        .unwrap();
+        assert_eq!((r, message, wparam), (0, gui::WM_QUIT, 0));
+    }
 
     #[test]
     fn peek_message_rend_wm_timer_comme_get_message() {
