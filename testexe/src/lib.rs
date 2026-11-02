@@ -839,6 +839,10 @@ extern "system" {
     pub fn WinluxJobPoll(job: u32, progress: *mut u32, msg: *mut u16, cap: u32) -> u32;
     pub fn WinluxJobCancel(job: u32);
     pub fn WinluxJobClose(job: u32);
+    pub fn WinluxJobPause(job: u32, on: u32);
+    pub fn WinluxJobStats(job: u32, out: *mut u64, name: *mut u16, cap: u32) -> u32;
+    pub fn WinluxFileCopy(list: *const u16, flags: u32) -> u32;
+    pub fn WinluxFileDelete(list: *const u16, flags: u32) -> u32;
     // Moteur multimédia (runtime/src/dlls/winlux_media.rs).
     pub fn WinluxMediaProbe(path: *const u16, out: *mut u8, cap: u32) -> i32;
     pub fn WinluxMediaFormats(out: *mut u8, cap: u32) -> i32;

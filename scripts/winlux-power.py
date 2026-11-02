@@ -203,10 +203,19 @@ def serve():
         os.unlink(SOCKET)
     except FileNotFoundError:
         pass
+    # Le socket n'apparaît sous son vrai nom qu'une fois à l'écoute : un
+    # client qui le voit ne tombe jamais entre bind() et listen() (la CI
+    # obtenait alors « service absent » au lieu de « Accès refusé »).
+    pending = SOCKET + ".new"
+    try:
+        os.unlink(pending)
+    except FileNotFoundError:
+        pass
     server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    server.bind(SOCKET)
-    os.chmod(SOCKET, 0o666)
+    server.bind(pending)
+    os.chmod(pending, 0o666)
     server.listen(4)
+    os.replace(pending, SOCKET)
     while True:
         connection, _ = server.accept()
         with connection:

@@ -203,7 +203,7 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite print_suite winpaths uac_suite comctl_suite commdlg_suite; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite print_suite winpaths uac_suite comctl_suite commdlg_suite; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
@@ -619,12 +619,22 @@ if test -n "$desktop_user"; then
     for node in /dev/dri/renderD* /dev/kfd; do test -c "$node" && /bin/busybox chmod 666 "$node"; done 2>/dev/null
     for node in /dev/input/js* /dev/input/event*; do test -c "$node" && /bin/busybox chgrp input "$node" && /bin/busybox chmod 660 "$node"; done 2>/dev/null
 fi
-# Enregistrer binfmt pour les .exe (MZ) si le système de fichiers est monté.
-if /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null; then
-    if test -r /etc/binfmt.d/winlux.conf; then
-        /bin/busybox cat /etc/binfmt.d/winlux.conf > /proc/sys/fs/binfmt_misc/register 2>/dev/null || true
-    fi
+# Enregistrer binfmt pour les .exe (MZ) : « ./programme.exe » dans un
+# terminal lance winlux. Une règle par écriture et sans les commentaires du
+# fichier : le noyau refusait tout le bloc, donc rien n'était enregistré en
+# Live (#214). Le système de fichiers est peut-être déjà monté.
+# binfmt : début
+binfmt=/proc/sys/fs/binfmt_misc
+binfmt_conf=/etc/binfmt.d/winlux.conf
+test -e "$binfmt/register" || /bin/busybox mount -t binfmt_misc binfmt_misc "$binfmt" 2>/dev/null || true
+if test -e "$binfmt/register" && test -r "$binfmt_conf"; then
+    /bin/busybox grep '^:' "$binfmt_conf" | while IFS= read -r rule; do
+        rule_name=${rule#:}
+        rule_name=${rule_name%%:*}
+        test -e "$binfmt/$rule_name" || printf '%s\n' "$rule" > "$binfmt/register" 2>/dev/null || true
+    done
 fi
+# binfmt : fin
 /bin/busybox mkdir -p /tmp/.X11-unix /run /root/.local/share/winlux
 /bin/busybox chmod 1777 /tmp
 /bin/busybox rm -f /tmp/.X0-lock /tmp/.X11-unix/X0

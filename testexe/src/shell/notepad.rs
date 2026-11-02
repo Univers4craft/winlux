@@ -6,8 +6,10 @@ use crate::wm;
 use crate::wm::{Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
-const MAX_TEXT: usize = 32768;
-const MAX_LINES: usize = 2048;
+/// Taille maximale d'un document : 8 Mo par onglet (#209 : 32 Ko avant, un
+/// fichier plus gros était tronqué et l'enregistrer perdait la fin).
+const MAX_TEXT: usize = 8 << 20;
+const MAX_LINES: usize = 1 << 18;
 const MAX_TABS: usize = 8;
 const MAX_NAME: usize = 48;
 const MAX_PATH: usize = 260;
@@ -66,10 +68,46 @@ enum Lang {
     Shell,
 }
 
+/// Textes et index de lignes des onglets, à part du reste de l'état : des
+/// tableaux entièrement nuls vont dans .bss (mémoire réservée à la demande,
+/// rien dans le .exe) au lieu de 64 Mo de zéros dans .data.
+static mut TEXTS: [[u8; MAX_TEXT]; MAX_TABS] = [[0; MAX_TEXT]; MAX_TABS];
+static mut LINES: [[usize; MAX_LINES]; MAX_TABS] = [[0; MAX_LINES]; MAX_TABS];
+
+/// Tampon de texte d'un onglet (numéro de case dans `TEXTS`).
+#[derive(Clone, Copy)]
+struct TextBuf(usize);
+impl core::ops::Deref for TextBuf {
+    type Target = [u8];
+    fn deref(&self) -> &[u8] {
+        unsafe { &(*core::ptr::addr_of!(TEXTS))[self.0] }
+    }
+}
+impl core::ops::DerefMut for TextBuf {
+    fn deref_mut(&mut self) -> &mut [u8] {
+        unsafe { &mut (*core::ptr::addr_of_mut!(TEXTS))[self.0] }
+    }
+}
+
+/// Débuts de ligne d'un onglet (case dans `LINES`).
+#[derive(Clone, Copy)]
+struct LineBuf(usize);
+impl core::ops::Deref for LineBuf {
+    type Target = [usize];
+    fn deref(&self) -> &[usize] {
+        unsafe { &(*core::ptr::addr_of!(LINES))[self.0] }
+    }
+}
+impl core::ops::DerefMut for LineBuf {
+    fn deref_mut(&mut self) -> &mut [usize] {
+        unsafe { &mut (*core::ptr::addr_of_mut!(LINES))[self.0] }
+    }
+}
+
 struct Doc {
-    text: [u8; MAX_TEXT],
+    text: TextBuf,
     len: usize,
-    lines: [usize; MAX_LINES],
+    lines: LineBuf,
     line_count: usize,
     cursor: usize,
     anchor: usize, // selection anchor (== cursor when no selection)
@@ -82,14 +120,20 @@ struct Doc {
     path: [u8; MAX_PATH],
     path_len: usize,
     lang: Lang,
+    /// Fichier ouvert avec des fins de ligne Windows (CRLF) : elles sont
+    /// rétablies à l'enregistrement.
+    crlf: bool,
+    /// Fichier plus gros que `MAX_TEXT` : seul le début est chargé, et
+    /// l'enregistrer à son chemin perdrait la fin, donc c'est refusé.
+    truncated: bool,
 }
 
 impl Doc {
-    const fn new() -> Self {
+    const fn new(slot: usize) -> Self {
         Doc {
-            text: [0; MAX_TEXT],
+            text: TextBuf(slot),
             len: 0,
-            lines: [0; MAX_LINES],
+            lines: LineBuf(slot),
             line_count: 1,
             cursor: 0,
             anchor: 0,
@@ -101,7 +145,14 @@ impl Doc {
             path: [0; MAX_PATH],
             path_len: 0,
             lang: Lang::Plain,
+            crlf: false,
+            truncated: false,
         }
+    }
+    /// Document vide qui garde ses tampons (un nouveau `Doc` sur la pile
+    /// ne pèse que quelques centaines d'octets).
+    fn reset(&mut self) {
+        *self = Doc::new(self.text.0);
     }
 }
 
@@ -132,7 +183,16 @@ struct State {
 }
 
 static mut ST: State = State {
-    tabs: [const { Doc::new() }; MAX_TABS],
+    tabs: [
+        Doc::new(0),
+        Doc::new(1),
+        Doc::new(2),
+        Doc::new(3),
+        Doc::new(4),
+        Doc::new(5),
+        Doc::new(6),
+        Doc::new(7),
+    ],
     tab_count: 0,
     active: 0,
     find_open: false,
@@ -172,11 +232,10 @@ fn rebuild_lines(d: &mut Doc) {
 }
 
 fn line_of(d: &Doc, pos: usize) -> usize {
-    let mut l = 0;
-    while l + 1 < d.line_count && d.lines[l + 1] <= pos {
-        l += 1;
-    }
-    l
+    // Recherche dichotomique : un fichier de plusieurs Mo a des centaines de
+    // milliers de lignes.
+    let lines = &d.lines[..d.line_count.max(1)];
+    lines.partition_point(|&start| start <= pos).saturating_sub(1)
 }
 
 fn col_of(d: &Doc, pos: usize) -> usize {
@@ -396,16 +455,35 @@ unsafe fn write_doc(d: &mut Doc) -> bool {
     if h.is_null() || h as isize == -1 {
         return false;
     }
-    let mut written = 0u32;
-    let ok = WriteFile(
-        h,
-        d.text.as_ptr(),
-        d.len as u32,
-        &mut written,
-        core::ptr::null_mut(),
-    );
+    let ok = if d.crlf {
+        // Fins de ligne Windows d'origine rétablies, par morceaux.
+        let mut out = [0u8; 65536];
+        let mut n = 0;
+        let mut ok = true;
+        for i in 0..=d.len {
+            if i == d.len || n + 2 > out.len() {
+                let mut written = 0u32;
+                ok &= WriteFile(h, out.as_ptr(), n as u32, &mut written, core::ptr::null_mut()) != 0
+                    && written as usize == n;
+                n = 0;
+                if i == d.len {
+                    break;
+                }
+            }
+            if d.text[i] == b'\n' {
+                out[n] = b'\r';
+                n += 1;
+            }
+            out[n] = d.text[i];
+            n += 1;
+        }
+        ok
+    } else {
+        let mut written = 0u32;
+        WriteFile(h, d.text.as_ptr(), d.len as u32, &mut written, core::ptr::null_mut()) != 0
+            && written as usize == d.len
+    };
     CloseHandle(h);
-    let ok = ok != 0 && written as usize == d.len;
     if ok {
         d.modified = false;
     }
@@ -460,6 +538,16 @@ pub unsafe fn save_active(save_as: bool) {
         ST.save_len = n;
         return;
     }
+    if d.truncated {
+        // Écrire le début seul perdrait la fin du fichier d'origine.
+        crate::desktop::toast(tr4(&[
+            b"Fichier trop volumineux, charg\xE9 en partie : utilisez Enregistrer sous pour ne pas perdre la fin.",
+            b"File too large, partly loaded: use Save as so the end isn't lost.",
+            b"Archivo demasiado grande, cargado en parte: use Guardar como para no perder el final.",
+            b"Datei zu gro\xDF, nur teilweise geladen: Speichern unter verwenden, damit das Ende nicht verloren geht.",
+        ]));
+        return;
+    }
     let ok = write_doc(d);
     ST.close_pending = -1;
     report_save(ok, &d.name[..d.name_len]);
@@ -512,6 +600,9 @@ unsafe fn save_as_confirm() {
     }
     let d = doc();
     set_path(d, &full[..n]);
+    // Chemin choisi explicitement : le document tronqué devient un nouveau
+    // fichier, Ctrl+S y écrira ensuite normalement.
+    d.truncated = false;
     ST.save_open = false;
     ST.close_pending = -1;
     let ok = write_doc(d);
@@ -551,25 +642,81 @@ fn bar_h() -> i32 {
     }
 }
 
-pub unsafe fn load_into_active(data: &[u8], path: &[u8]) {
-    let d = doc();
-    d.text = [0; MAX_TEXT];
+/// Ajoute un morceau de fichier au document (les CR sont retirés et notés).
+fn append_raw(d: &mut Doc, data: &[u8]) {
+    for &c in data {
+        if c == b'\r' {
+            d.crlf = true;
+            continue;
+        }
+        if d.len >= MAX_TEXT - 1 {
+            d.truncated = true;
+            return;
+        }
+        d.text[d.len] = c;
+        d.len += 1;
+    }
+}
+
+fn begin_load(d: &mut Doc) {
     d.len = 0;
     d.cursor = 0;
     d.anchor = 0;
     d.scroll_y = 0;
     d.scroll_x = 0;
     d.modified = false;
-    let mut i = 0;
-    while i < data.len() && d.len < MAX_TEXT - 1 {
-        if data[i] == b'\r' {
-            i += 1;
-            continue;
-        }
-        d.text[d.len] = data[i];
-        d.len += 1;
-        i += 1;
+    d.crlf = false;
+    d.truncated = false;
+}
+
+/// Ouvre un fichier entier dans l'onglet actif (jusqu'à 8 Mo ; au-delà, le
+/// début est chargé et le document est protégé contre l'enregistrement).
+pub unsafe fn load_file_into_active(path: &[u8]) -> bool {
+    let mut w = [0u16; MAX_PATH + 1];
+    let p = wpath(&mut w, path);
+    if p.is_null() {
+        return false;
     }
+    let h = CreateFileW(p, 0x8000_0000, 1, core::ptr::null_mut(), 3, 0, core::ptr::null_mut());
+    if h.is_null() || h as isize == -1 {
+        return false;
+    }
+    let d = doc();
+    begin_load(d);
+    let mut chunk = [0u8; 65536];
+    loop {
+        let mut got = 0u32;
+        if ReadFile(h, chunk.as_mut_ptr(), chunk.len() as u32, &mut got, core::ptr::null_mut()) == 0
+            || got == 0
+        {
+            break;
+        }
+        append_raw(d, &chunk[..got as usize]);
+        if d.truncated {
+            break;
+        }
+    }
+    CloseHandle(h);
+    finish_load(d, path);
+    if d.truncated {
+        crate::desktop::toast(tr4(&[
+            b"Fichier de plus de 8 Mo : seul le d\xE9but est affich\xE9, utilisez Enregistrer sous.",
+            b"File larger than 8 MB: only the beginning is shown, use Save as.",
+            b"Archivo de m\xE1s de 8 MB: solo se muestra el principio, use Guardar como.",
+            b"Datei gr\xF6\xDFer als 8 MB: nur der Anfang wird angezeigt, nutzen Sie Speichern unter.",
+        ]));
+    }
+    true
+}
+
+pub unsafe fn load_into_active(data: &[u8], path: &[u8]) {
+    let d = doc();
+    begin_load(d);
+    append_raw(d, data);
+    finish_load(d, path);
+}
+
+fn finish_load(d: &mut Doc, path: &[u8]) {
     d.cursor = d.len;
     // L'ancre doit suivre le curseur : sinon tout le fichier est sélectionné
     // à l'ouverture et la première touche le remplace.
@@ -583,7 +730,7 @@ pub unsafe fn open_new() {
         return;
     }
     let idx = ST.tab_count;
-    ST.tabs[idx] = Doc::new();
+    ST.tabs[idx].reset();
     ST.counter += 1;
     let prefix = tr4(&[
         b"Sans titre ",
@@ -1701,7 +1848,7 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
 unsafe fn close_tab(idx: usize) {
     if ST.tab_count <= 1 {
         // Don't close last tab, just clear it
-        ST.tabs[0] = Doc::new();
+        ST.tabs[0].reset();
         let name = tr4(&[
             b"Sans titre 1",
             b"Untitled 1",
@@ -1715,7 +1862,9 @@ unsafe fn close_tab(idx: usize) {
         ST.active = 0;
         return;
     }
-    // Shift tabs left
+    // Décaler les onglets : les tampons changent de main (aucune copie de
+    // plusieurs Mo), celui de l'onglet fermé passe en dernière position.
+    let freed = (ST.tabs[idx].text, ST.tabs[idx].lines);
     let mut i = idx;
     while i + 1 < ST.tab_count {
         // Can't move Doc (no Copy), so copy field by field
@@ -1734,8 +1883,12 @@ unsafe fn close_tab(idx: usize) {
         ST.tabs[i].path = ST.tabs[src].path;
         ST.tabs[i].path_len = ST.tabs[src].path_len;
         ST.tabs[i].lang = ST.tabs[src].lang;
+        ST.tabs[i].crlf = ST.tabs[src].crlf;
+        ST.tabs[i].truncated = ST.tabs[src].truncated;
         i += 1;
     }
+    ST.tabs[i].text = freed.0;
+    ST.tabs[i].lines = freed.1;
     ST.tab_count -= 1;
     if ST.active >= ST.tab_count {
         ST.active = ST.tab_count - 1;
@@ -2247,8 +2400,8 @@ pub unsafe fn regression_checks() {
         CloseHandle(h);
     }
     check!(
-        &back[..got as usize] == b"bonjour\nmonde\n!",
-        "Bloc-notes : le fichier relu contient le texte enregistre"
+        &back[..got as usize] == b"bonjour\r\nmonde\r\n!",
+        "Bloc-notes : le fichier relu contient le texte enregistre (fins de ligne Windows gardees)"
     );
     DeleteFileW(wpath(&mut w, path));
 
@@ -2309,4 +2462,92 @@ pub unsafe fn regression_checks() {
         ST.tab_count == tabs - 1,
         "Bloc-notes : la seconde fermeture abandonne le texte"
     );
+    big_file_checks(path);
+}
+
+/// Taille de fichier (0 si absent).
+#[doc(hidden)]
+unsafe fn file_size(path: &[u8]) -> u64 {
+    let mut w = [0u16; MAX_PATH + 1];
+    let mut data: Win32FindDataW = core::mem::zeroed();
+    let h = FindFirstFileW(wpath(&mut w, path), &mut data);
+    if h as isize == -1 {
+        return 0;
+    }
+    FindClose(h);
+    (data.size_high as u64) << 32 | data.size_low as u64
+}
+
+/// Écrit `lines` lignes « ligne NNNNN » terminées par CRLF ; renvoie la taille.
+#[doc(hidden)]
+unsafe fn write_lines(path: &[u8], lines: usize) -> u64 {
+    let mut w = [0u16; MAX_PATH + 1];
+    let h = CreateFileW(wpath(&mut w, path), 0x4000_0000, 0, core::ptr::null_mut(), 2, 0x80, core::ptr::null_mut());
+    if h.is_null() || h as isize == -1 {
+        return 0;
+    }
+    let mut total = 0u64;
+    let mut buf = [0u8; 65536];
+    let mut n = 0;
+    for i in 0..lines {
+        let mut line = *b"ligne 00000000\r\n";
+        let mut v = i;
+        for k in (6..14).rev() {
+            line[k] = b'0' + (v % 10) as u8;
+            v /= 10;
+        }
+        if n + line.len() > buf.len() {
+            let mut wr = 0u32;
+            WriteFile(h, buf.as_ptr(), n as u32, &mut wr, core::ptr::null_mut());
+            total += wr as u64;
+            n = 0;
+        }
+        buf[n..n + line.len()].copy_from_slice(&line);
+        n += line.len();
+    }
+    let mut wr = 0u32;
+    WriteFile(h, buf.as_ptr(), n as u32, &mut wr, core::ptr::null_mut());
+    total += wr as u64;
+    CloseHandle(h);
+    total
+}
+
+/// #209 : un fichier de plus de 32 Ko s'ouvre en entier et se réenregistre
+/// sans rien perdre ; au-delà de 8 Mo, Ctrl+S refuse d'écraser l'original.
+#[doc(hidden)]
+unsafe fn big_file_checks(path: &[u8]) {
+    let size = write_lines(path, 20000);
+    ST.tab_count = 0;
+    open_new();
+    let opened = load_file_into_active(path);
+    let d = doc();
+    check!(
+        opened && size == 320000 && d.len == 300000 && d.crlf && !d.truncated && d.line_count == 20001,
+        "Bloc-notes : un fichier de 312 Ko s'ouvre en entier (plus de troncature a 32 Ko)"
+    );
+    check!(
+        &d.text[d.lines[19999]..line_end(d, 19999)] == b"ligne 00019999" && line_of(d, d.len - 3) == 19999,
+        "Bloc-notes : la derniere ligne est la et le curseur s'y place"
+    );
+    d.cursor = d.len;
+    d.anchor = d.len;
+    insert_bytes(d, b"fin");
+    save_active(false);
+    check!(
+        file_size(path) == 320003 && !doc().modified,
+        "Bloc-notes : Ctrl+S reecrit le gros fichier en entier"
+    );
+    let size = write_lines(path, 600000);
+    open_new();
+    load_file_into_active(path);
+    let d = doc();
+    check!(d.truncated && d.len == MAX_TEXT - 1, "Bloc-notes : au-dela de 8 Mo le debut est charge et signale");
+    d.modified = true;
+    save_active(false);
+    check!(
+        file_size(path) == size && doc().modified,
+        "Bloc-notes : Ctrl+S n'ecrase pas un fichier charge en partie"
+    );
+    let mut w = [0u16; MAX_PATH + 1];
+    DeleteFileW(wpath(&mut w, path));
 }

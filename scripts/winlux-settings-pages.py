@@ -40,6 +40,33 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    'Comptes': ('Accounts', 'Cuentas', 'Konten'),
+    'Votre compte': ('Your account', 'Su cuenta', 'Ihr Konto'),
+    'Autres utilisateurs': ('Other users', 'Otros usuarios', 'Andere Benutzer'),
+    'Administrateur': ('Administrator', 'Administrador', 'Administrator'),
+    'Standard': ('Standard user', 'Estándar', 'Standardbenutzer'),
+    'Comptes locaux sur ce PC. Chacun a son bureau, ses fichiers et ses réglages ; « Changer d’utilisateur » dans le menu Démarrer passe de l’un à l’autre sans rien fermer.': ('Local accounts on this PC. Each one has its own desktop, files and settings; “Switch user” in the Start menu moves between them without closing anything.', 'Cuentas locales en este equipo. Cada una tiene su escritorio, sus archivos y su configuración; «Cambiar de usuario» en el menú Inicio pasa de una a otra sin cerrar nada.', 'Lokale Konten auf diesem PC. Jedes hat seinen eigenen Desktop, seine Dateien und Einstellungen; „Benutzer wechseln“ im Startmenü wechselt zwischen ihnen, ohne etwas zu schließen.'),
+    'Ajouter un compte': ('Add account', 'Agregar cuenta', 'Konto hinzufügen'),
+    'Ajouter un autre utilisateur à ce PC': ('Add someone else to this PC', 'Agregar otro usuario a este equipo', 'Andere Person zu diesem PC hinzufügen'),
+    'Changer le mot de passe': ('Change password', 'Cambiar la contraseña', 'Kennwort ändern'),
+    'Changer le type de compte': ('Change account type', 'Cambiar el tipo de cuenta', 'Kontotyp ändern'),
+    'Nom du compte': ('User name', 'Nombre de usuario', 'Benutzername'),
+    'Nom complet (facultatif)': ('Full name (optional)', 'Nombre completo (opcional)', 'Vollständiger Name (optional)'),
+    'Confirmer le mot de passe': ('Confirm password', 'Confirmar la contraseña', 'Kennwort bestätigen'),
+    'Administrateur de ce PC': ('Administrator of this PC', 'Administrador de este equipo', 'Administrator dieses PCs'),
+    'Un administrateur installe des logiciels et change les réglages du système ; un compte standard en a besoin pour ces actions.': ('An administrator installs software and changes system settings; a standard account needs one for those actions.', 'Un administrador instala software y cambia la configuración del sistema; una cuenta estándar lo necesita para esas acciones.', 'Ein Administrator installiert Software und ändert Systemeinstellungen; ein Standardkonto braucht ihn für diese Aktionen.'),
+    'Laissez vide pour un compte sans mot de passe.': ('Leave blank for an account without a password.', 'Déjelo en blanco para una cuenta sin contraseña.', 'Leer lassen für ein Konto ohne Kennwort.'),
+    'Lettres minuscules, chiffres, - et _ (32 au plus), en commençant par une lettre.': ('Lowercase letters, digits, - and _ (32 at most), starting with a letter.', 'Letras minúsculas, cifras, - y _ (32 como máximo), empezando por una letra.', 'Kleinbuchstaben, Ziffern, - und _ (höchstens 32), beginnend mit einem Buchstaben.'),
+    'Les deux mots de passe sont différents.': ('The two passwords don’t match.', 'Las dos contraseñas no coinciden.', 'Die beiden Kennwörter stimmen nicht überein.'),
+    'Ce nom de compte existe déjà.': ('This user name already exists.', 'Este nombre de usuario ya existe.', 'Dieser Benutzername existiert bereits.'),
+    'Supprimer le compte {name} ?': ('Remove the account {name}?', '¿Quitar la cuenta {name}?', 'Konto {name} entfernen?'),
+    'Effacer aussi ses fichiers (Bureau, Documents, Images…)': ('Also delete their files (Desktop, Documents, Pictures…)', 'Borrar también sus archivos (Escritorio, Documentos, Imágenes…)', 'Auch die Dateien löschen (Desktop, Dokumente, Bilder…)'),
+    'Il faut garder au moins un compte administrateur.': ('At least one administrator account must remain.', 'Debe quedar al menos una cuenta de administrador.', 'Mindestens ein Administratorkonto muss bleiben.'),
+    'Session ouverte': ('Signed in', 'Sesión iniciada', 'Angemeldet'),
+    'Nouveau mot de passe pour {name}': ('New password for {name}', 'Nueva contraseña para {name}', 'Neues Kennwort für {name}'),
+    'Annuler': ('Cancel', 'Cancelar', 'Abbrechen'),
+    'Valider': ('OK', 'Aceptar', 'OK'),
+    'Aucun autre compte sur ce PC.': ('No other account on this PC.', 'No hay otras cuentas en este equipo.', 'Keine anderen Konten auf diesem PC.'),
     # Jeux (application Jeux, temps de jeu, dossiers de jeux)
     'Bibliothèque de jeux': ('Game library', 'Biblioteca de juegos', 'Spielebibliothek'),
     'L’application Jeux rassemble vos jeux Windows installés : GOG, itch.io, dossiers de jeux et programmes 3D.': ('The Games app gathers your installed Windows games: GOG, itch.io, game folders and 3D programs.', 'La aplicación Juegos reúne sus juegos de Windows instalados: GOG, itch.io, carpetas de juegos y programas 3D.', 'Die App „Spiele“ sammelt Ihre installierten Windows-Spiele: GOG, itch.io, Spieleordner und 3D-Programme.'),
@@ -512,6 +539,7 @@ PAGE_GAMES = 29
 PAGE_ASSISTANT = 30
 PAGE_RECOVERY = 31
 PAGE_CLIPBOARD = 32
+PAGE_ACCOUNTS = 33
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -935,6 +963,10 @@ def page_available(page, status=None):
         return have("winlux-remote-config") or (RUN / "remote.txt").is_file()
     if page == PAGE_CLIPBOARD:
         return clipboard_tool() is not None
+    if page == PAGE_ACCOUNTS:
+        # Session Live : comptes éphémères, page cachée.
+        return accounts_module() is not None and not Path(os.environ.get(
+            "WINLUX_LIVE_FLAG", "/etc/winlux/live-session")).exists()
     if page == PAGE_SHARING:
         return have("winlux-share") or have("winlux-transfer") or (RUN / "shares.txt").is_file()
     if page == PAGE_GAMES:
@@ -967,6 +999,33 @@ def games_module():
             except Exception:
                 return None
     return None
+
+
+_ACCOUNTS = []
+
+
+def accounts_module():
+    """winlux-accounts (installé à côté, ou scripts/ du dépôt), chargé une fois."""
+    if _ACCOUNTS: return _ACCOUNTS[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-accounts.py"), here.with_name("winlux-accounts")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_accounts", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_accounts", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _ACCOUNTS.append(module)
+    return module
+
+
+ACCOUNT_NAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
 
 
 _ASSISTANT = []
@@ -1038,7 +1097,7 @@ class ExtraPages:
                    PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing",
                    PAGE_GAMES: "page_games",
                    PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
-                   PAGE_CLIPBOARD: "page_clipboard"}
+                   PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -1825,6 +1884,141 @@ class ExtraPages:
             self.row(box, _t("Reconnaissance de texte"), None,
                      _t("Téléchargée à la première utilisation (environ 15 Mo), en français, anglais, espagnol et allemand."))
             self.actions(box, [(_t("Télécharger"), lambda: self.tool(ocr + ["install"]))])
+
+    # ── Comptes ──
+
+    def account_action(self, args, password=None):
+        """winlux-control account-* : Contrôle de compte d’utilisateur, puis
+        action en root ; le mot de passe passe par l’entrée standard."""
+        try:
+            process = subprocess.Popen(["winlux-control", *args], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.PIPE, text=True)
+            process.stdin.write((password or "") + "\n")
+            process.stdin.close()
+        except OSError as error:
+            self.show_error(_t("L’opération a échoué"), str(error))
+            return
+
+        def wait():
+            if process.poll() is None: return True
+            if process.returncode:
+                detail = read(RUN / "action.log").strip()[-2000:] or (process.stderr.read() or "").strip()
+                self.show_error(_t("L’opération a échoué"), detail)
+            self.extra_refresh()
+            return False
+        GLib.timeout_add(200, wait)
+
+    def account_dialog(self, title, name_field, admin_field):
+        """Boîte « Ajouter un compte » / « Changer le mot de passe »."""
+        dialog = Gtk.Dialog(title=title, transient_for=self, modal=True)
+        dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
+        dialog.add_button(_t("Valider"), Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        area.set_border_width(16)
+        fields = {}
+
+        def entry(key, label, secret=False, hint=None):
+            area.pack_start(Gtk.Label(label=label, xalign=0), False, False, 0)
+            widget = Gtk.Entry(visibility=not secret, activates_default=True)
+            widget.get_accessible().set_name(label)
+            area.pack_start(widget, False, False, 0)
+            if hint: self.hint(hint, area)
+            fields[key] = widget
+        if name_field:
+            entry("name", _t("Nom du compte"), hint=_t("Lettres minuscules, chiffres, - et _ (32 au plus), en commençant par une lettre."))
+            entry("fullname", _t("Nom complet (facultatif)"))
+        entry("password", _t("Mot de passe"), True, _t("Laissez vide pour un compte sans mot de passe."))
+        entry("confirm", _t("Confirmer le mot de passe"), True)
+        if admin_field:
+            check = Gtk.CheckButton(label=_t("Administrateur de ce PC"))
+            area.pack_start(check, False, False, 0)
+            self.hint(_t("Un administrateur installe des logiciels et change les réglages du système ; un compte standard en a besoin pour ces actions."), area)
+            fields["admin"] = check
+        error = Gtk.Label(xalign=0, wrap=True)
+        area.pack_start(error, False, False, 0)
+        dialog.show_all()
+        existing = {account["name"] for account in accounts_module().accounts()}
+        while dialog.run() == Gtk.ResponseType.OK:
+            values = {key: (w.get_active() if isinstance(w, Gtk.CheckButton) else w.get_text()) for key, w in fields.items()}
+            if name_field and not ACCOUNT_NAME.match(values["name"]):
+                error.set_text(_t("Lettres minuscules, chiffres, - et _ (32 au plus), en commençant par une lettre."))
+            elif name_field and values["name"] in existing:
+                error.set_text(_t("Ce nom de compte existe déjà."))
+            elif values["password"] != values["confirm"]:
+                error.set_text(_t("Les deux mots de passe sont différents."))
+            else:
+                dialog.destroy()
+                return values
+        dialog.destroy()
+        return None
+
+    def add_account(self):
+        values = self.account_dialog(_t("Ajouter un compte"), True, True)
+        if values is None: return
+        args = ["account-add", values["name"], "admin" if values["admin"] else "user"]
+        if values["fullname"].strip(): args.append(values["fullname"].strip().replace(":", " "))
+        self.account_action(args, values["password"])
+
+    def change_password(self, name):
+        values = self.account_dialog(_t("Nouveau mot de passe pour {name}").format(name=name), False, False)
+        if values is not None: self.account_action(["account-password", name], values["password"])
+
+    def change_type(self, account):
+        others = [a for a in accounts_module().accounts() if a["admin"] and a["name"] != account["name"]]
+        if account["admin"] and not others:
+            self.show_error(_t("L’opération a échoué"), _t("Il faut garder au moins un compte administrateur."))
+            return
+        self.account_action(["account-role", account["name"], "user" if account["admin"] else "admin"])
+
+    def remove_account(self, account):
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True, buttons=Gtk.ButtonsType.OK_CANCEL,
+                                   text=_t("Supprimer le compte {name} ?").format(name=account["name"]))
+        wipe = Gtk.CheckButton(label=_t("Effacer aussi ses fichiers (Bureau, Documents, Images…)"))
+        dialog.get_message_area().pack_start(wipe, False, False, 0)
+        dialog.show_all()
+        answer = dialog.run()
+        files = "delete" if wipe.get_active() else "keep"
+        dialog.destroy()
+        if answer == Gtk.ResponseType.OK: self.account_action(["account-remove", account["name"], files])
+
+    def page_accounts(self):
+        module = accounts_module()
+        import pwd
+        try: me = pwd.getpwuid(os.getuid()).pw_name
+        except KeyError: me = os.environ.get("USER", "")
+        everyone = module.accounts()
+        open_sessions = set()
+        try: open_sessions = set(os.listdir(RUN / "sessions"))
+        except OSError: pass
+
+        def kind(account):
+            return _t("Administrateur") if account["admin"] else _t("Standard")
+        self.hint(_t("Comptes locaux sur ce PC. Chacun a son bureau, ses fichiers et ses réglages ; « Changer d’utilisateur » dans le menu Démarrer passe de l’un à l’autre sans rien fermer."))
+        mine = next((a for a in everyone if a["name"] == me), None)
+        if mine:
+            self.section(_t("Votre compte"))
+            box = self.card()
+            title = f"{mine['fullname']} ({me})" if mine["fullname"] and mine["fullname"] != me else me
+            self.row(box, title, None, kind(mine))
+            self.actions(box, [(_t("Changer le mot de passe"), lambda: self.change_password(me))])
+        self.section(_t("Autres utilisateurs"))
+        box = self.card()
+        self.row(box, _t("Ajouter un autre utilisateur à ce PC"), None)
+        self.actions(box, [(_t("Ajouter un compte"), self.add_account)])
+        others = [a for a in everyone if a["name"] != me]
+        if not others:
+            self.hint(_t("Aucun autre compte sur ce PC."), box)
+        for account in others:
+            box = self.card()
+            title = f"{account['fullname']} ({account['name']})" if account["fullname"] and account["fullname"] != account["name"] else account["name"]
+            subtitle = kind(account) + (" · " + _t("Session ouverte") if account["name"] in open_sessions else "")
+            self.row(box, title, None, subtitle)
+            self.actions(box, [(_t("Changer le type de compte"), lambda a=account: self.change_type(a)),
+                               (_t("Changer le mot de passe"), lambda n=account["name"]: self.change_password(n)),
+                               (_t("Supprimer"), lambda a=account: self.remove_account(a),
+                                account["name"] not in open_sessions)])
 
     # ── Écran : éclairage nocturne ──
 
