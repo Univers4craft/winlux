@@ -73,6 +73,16 @@ clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/devnodes_msvc
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/devnodes_msvc.obj" \
     "$tmp/kernel32_devnodes.lib" "$tmp/advapi32_devnodes.lib" "$tmp/setupapi_devnodes.lib" \
     "$tmp/cfgmgr32_devnodes.lib" "$tmp/user32_devnodes.lib" "$tmp/gdi32_devnodes.lib" /out:"$out/devnodes_msvc.exe"
+# winusb : appareil USB trouvé par setupapi, décrit par WinUSB (#271).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nGetLastError\nCreateFileW\nCloseHandle\n' >"$tmp/kernel32_winusb.def"
+printf 'LIBRARY setupapi.dll\nEXPORTS\nSetupDiGetClassDevsW\nSetupDiEnumDeviceInterfaces\nSetupDiGetDeviceInterfaceDetailW\nSetupDiDestroyDeviceInfoList\n' >"$tmp/setupapi_winusb.def"
+printf 'LIBRARY winusb.dll\nEXPORTS\nWinUsb_Initialize\nWinUsb_Free\nWinUsb_QueryDeviceInformation\nWinUsb_GetDescriptor\nWinUsb_QueryInterfaceSettings\nWinUsb_QueryPipe\nWinUsb_SetPipePolicy\nWinUsb_GetPipePolicy\nWinUsb_ControlTransfer\nWinUsb_ReadPipe\nWinUsb_GetAssociatedInterface\n' >"$tmp/winusb_winusb.def"
+for d in kernel32_winusb setupapi_winusb winusb_winusb; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/winusb_msvc.c" -o "$tmp/winusb_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/winusb_msvc.obj" \
+    "$tmp/kernel32_winusb.lib" "$tmp/setupapi_winusb.lib" "$tmp/winusb_winusb.lib" /out:"$out/winusb_msvc.exe"
 # Définition d'écran et rampe gamma des jeux (#271).
 printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\n' >"$tmp/kernel32_display.def"
 printf 'LIBRARY user32.dll\nEXPORTS\nEnumDisplaySettingsW\nChangeDisplaySettingsExW\n' >"$tmp/user32_display.def"

@@ -134,6 +134,7 @@ pub mod winmm;
 pub mod winmm_waveout;
 pub mod winspool;
 pub mod wintrust;
+pub mod winusb;
 pub mod ws2_32;
 pub mod xaudio2;
 pub mod xdnd;
@@ -487,6 +488,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "hid",
                 exports: hid::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "winusb",
+                exports: winusb::exports(),
                 handle: fake_module(),
             },
             Builtin {
