@@ -1158,33 +1158,8 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
             || ends_ci(&path[..n], b".log"))
     {
         crate::notepad::open_new();
-        use winlux_testexe::*;
-        let mut wide = [0u16; PATH_LEN + NAME_LEN + 2];
-        wstr(&mut wide, &path[..n]);
-        let h = CreateFileW(
-            wide.as_ptr(),
-            0x80000000,
-            1,
-            core::ptr::null_mut(),
-            3,
-            0,
-            core::ptr::null_mut(),
-        );
-        if !h.is_null() && (h as isize) != -1 {
-            let mut buf = [0u8; 32768];
-            let mut got = 0u32;
-            ReadFile(
-                h,
-                buf.as_mut_ptr(),
-                buf.len() as u32,
-                &mut got,
-                core::ptr::null_mut(),
-            );
-            CloseHandle(h);
-            unsafe {
-                crate::notepad::load_into_active(&buf[..got as usize], &path[..n]);
-            }
-        }
+        // Fichier entier (#209 : 32 Ko au plus avant, la fin était perdue).
+        crate::notepad::load_file_into_active(&path[..n]);
         wm::open(wm::APP_NOTEPAD);
         return;
     }
@@ -4718,9 +4693,7 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             if let Some(i) = first_sel(p) {
                 let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
                 let n = item_path(p, i, &mut b);
-                ADDRESS.set(&b[..n]);
-                notify(tr4(&[b"Chemin affich\xE9 dans la barre d'adresse.", b"Path shown in the address bar.", b"Ruta mostrada en la barra de direcciones.", b"Pfad in der Adressleiste angezeigt."]));
-                FOCUS = Focus::Address;
+                copy_as_path(&b[..n]);
             }
         }
         Item::ExtractAll | Item::ExtractHere | Item::Mount => {
@@ -5535,6 +5508,33 @@ fn password_buttons(r: &Rect) -> (Rect, Rect) {
     (ok, cancel)
 }
 
+/// « Copier le chemin d'accès » : comme Windows, le chemin entre guillemets
+/// va dans le presse-papiers (#209 : il n'allait que dans la barre d'adresse).
+unsafe fn copy_as_path(path: &[u8]) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let mut q = [0u8; PATH_LEN + NAME_LEN + 4];
+    q[0] = b'"';
+    q[1..path.len() + 1].copy_from_slice(path);
+    q[path.len() + 1] = b'"';
+    let ok = crate::cliphist::set_text(&q[..path.len() + 2]);
+    notify(if ok {
+        tr4(&[b"Chemin copi\xE9 dans le presse-papiers.", b"Path copied to the clipboard.", b"Ruta copiada en el portapapeles.", b"Pfad in die Zwischenablage kopiert."])
+    } else {
+        tr4(&[b"Impossible de copier le chemin.", b"Couldn't copy the path.", b"No se pudo copiar la ruta.", b"Pfad konnte nicht kopiert werden."])
+    });
+    ok
+}
+
+/// Étoiles affichées pour un mot de passe de `len` caractères (64 au plus :
+/// au 64e caractère, l'ancien code écrivait hors du tableau et l'Explorateur
+/// plantait, #209).
+fn masked(len: usize) -> &'static [u8] {
+    const STARS: [u8; 64] = [b'*'; 64];
+    &STARS[..len.min(STARS.len())]
+}
+
 unsafe fn draw_password(g: &mut Gfx, f: &Frame) {
     if !PASSWORD_OPEN {
         return;
@@ -5596,18 +5596,9 @@ unsafe fn draw_password(g: &mut Gfx, f: &Frame) {
         4,
         p.window,
     );
-    let mut dots = [b'*'; 64];
-    let n = PASSWORD.len.min(dots.len());
-    let caret_x = field.left + 10 + text_width(&dots[..n], 12);
-    dots[n] = b' ';
-    text(
-        g.hdc,
-        g.f.caption,
-        p.text,
-        field.left + 10,
-        field.top + 8,
-        &dots[..n],
-    );
+    let dots = masked(PASSWORD.len);
+    let caret_x = field.left + 10 + text_width(dots, 12);
+    text(g.hdc, g.f.caption, p.text, field.left + 10, field.top + 8, dots);
     if GetTickCount() / 500 % 2 == 0 {
         fill(
             g.hdc,
@@ -7046,6 +7037,23 @@ pub unsafe fn regression_checks() {
     archive_regression(root);
     copy::regression(root);
     copy::trash_regression(root);
+    PASSWORD.len = 0;
+    for _ in 0..300 {
+        PASSWORD.push(b'a');
+    }
+    check!(
+        masked(63).len() == 63 && masked(64).len() == 64 && masked(PASSWORD.len).len() == 64,
+        "Mot de passe d'archive : 64 caracteres et plus ne font plus planter l'Explorateur"
+    );
+    PASSWORD.buf.fill(0);
+    PASSWORD.len = 0;
+    let mut got = [0u8; 64];
+    let ok = copy_as_path(b"C:\\Documents\\rapport.txt");
+    let n = crate::cliphist::get_text(&mut got);
+    check!(
+        ok && &got[..n] == b"\"C:\\Documents\\rapport.txt\"",
+        "Copier le chemin d'acces met le chemin entre guillemets dans le presse-papiers"
+    );
     MENU = Menu::Context { x: 0, y: 0, on_item: false };
     let saved = pane().loc;
     pane().loc.set(TRASH);
