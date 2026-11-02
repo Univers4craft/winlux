@@ -635,6 +635,7 @@ pub unsafe extern "win64" fn send(s: usize, b: *const u8, n: i32, flags: i32) ->
         n as usize,
         flags | libc::MSG_NOSIGNAL,
     );
+    crate::trace!("send({s}, {n}) = {r}");
     if r < 0 {
         set_error(last_error());
         SOCKET_ERROR
@@ -651,7 +652,28 @@ pub unsafe extern "win64" fn recv(s: usize, b: *mut u8, n: i32, flags: i32) -> i
         set_error(if n < 0 { WSA_INVALID_PARAMETER } else { 10014 });
         return SOCKET_ERROR;
     }
+    if n == 0 {
+        // Winsock : une réception de longueur nulle réussit tout de suite
+        // (Bun s'en sert pour sonder une socket après « prête en
+        // écriture »). Sous Linux, elle bloquerait jusqu'aux premières
+        // données ; on ne fait remonter que l'erreur en attente.
+        let mut err: i32 = 0;
+        let mut len = 4u32;
+        libc::getsockopt(
+            s as i32,
+            libc::SOL_SOCKET,
+            libc::SO_ERROR,
+            &mut err as *mut i32 as *mut c_void,
+            &mut len,
+        );
+        if err != 0 {
+            set_error(error_from_errno(err));
+            return SOCKET_ERROR;
+        }
+        return 0;
+    }
     let r = libc::recv(s as i32, b as *mut c_void, n as usize, recv_flags(flags));
+    crate::trace!("recv({s}, {n}, {flags:#x}) = {r}");
     if r < 0 {
         set_error(last_error());
         SOCKET_ERROR
@@ -830,6 +852,30 @@ pub unsafe extern "win64" fn get_host_name(buf: *mut u8, len: i32) -> i32 {
         .unwrap_or(b.len().saturating_sub(1));
     std::ptr::copy_nonoverlapping(b.as_ptr() as *const u8, buf, end);
     *buf.add(end) = 0;
+    0
+}
+
+/// `GetHostNameW(name, namelen)` : nom d'hôte en UTF-16.
+pub unsafe extern "win64" fn get_host_name_w(buf: *mut u16, len: i32) -> i32 {
+    if buf.is_null() || len <= 0 {
+        set_error(10014);
+        return SOCKET_ERROR;
+    }
+    let mut b = [0i8; 256];
+    if libc::gethostname(b.as_mut_ptr(), b.len()) < 0 {
+        set_error(last_error());
+        return SOCKET_ERROR;
+    }
+    let name = std::ffi::CStr::from_ptr(b.as_ptr())
+        .to_string_lossy()
+        .into_owned();
+    let w: Vec<u16> = name.encode_utf16().collect();
+    if w.len() >= len as usize {
+        set_error(10014); // WSAEFAULT : tampon trop petit
+        return SOCKET_ERROR;
+    }
+    std::ptr::copy_nonoverlapping(w.as_ptr(), buf, w.len());
+    *buf.add(w.len()) = 0;
     0
 }
 
@@ -1335,6 +1381,75 @@ pub unsafe extern "win64" fn getsockopt(
         set_error(WSAEFAULT);
         return SOCKET_ERROR;
     }
+    // SO_PROTOCOL_INFOW / SO_PROTOCOL_INFOA : description du fournisseur.
+    // libuv la lit avant de surveiller une socket (uv_poll) ; un
+    // ProviderId nul l'oriente vers sa surveillance par select().
+    if level == WIN_SOL_SOCKET && (optname == 0x2005 || optname == 0x2004) {
+        let wide = optname == 0x2005;
+        let need = if wide { 628 } else { 372 };
+        if *optlen < need {
+            *optlen = need;
+            set_error(WSAEFAULT);
+            return SOCKET_ERROR;
+        }
+        let get = |o: i32| -> i32 {
+            let mut v: i32 = 0;
+            let mut l = 4u32;
+            libc::getsockopt(
+                s as i32,
+                libc::SOL_SOCKET,
+                o,
+                &mut v as *mut i32 as *mut c_void,
+                &mut l,
+            );
+            v
+        };
+        let (domain, kind, proto) = (
+            get(libc::SO_DOMAIN),
+            get(libc::SO_TYPE),
+            get(libc::SO_PROTOCOL),
+        );
+        std::ptr::write_bytes(optval, 0, need as usize);
+        let put = |off: usize, v: i32| std::ptr::write_unaligned(optval.add(off) as *mut i32, v);
+        // XP1_CONNECTIONLESS (datagrammes) ou XP1_GUARANTEED_DELIVERY|ORDER.
+        put(
+            0,
+            if kind == libc::SOCK_DGRAM {
+                0x1 | 0x200
+            } else {
+                0x2 | 0x4 | 0x20000
+            },
+        );
+        put(36, 1001); // dwCatalogEntryId
+        put(40, 1); // ProtocolChain.ChainLen : BASE_PROTOCOL
+        put(72, 2); // iVersion
+        let af = match domain {
+            libc::AF_INET6 => 23,
+            libc::AF_UNIX => 1,
+            d => d,
+        };
+        put(76, af);
+        put(80, if af == 23 { 28 } else { 16 });
+        put(84, if af == 23 { 28 } else { 16 });
+        put(88, kind);
+        put(92, proto);
+        put(100, 1); // BIGENDIAN
+        put(108, if kind == libc::SOCK_DGRAM { 65467 } else { 0 });
+        let name = if kind == libc::SOCK_DGRAM {
+            "Winlux UDP"
+        } else {
+            "Winlux TCP"
+        };
+        if wide {
+            for (i, c) in name.encode_utf16().enumerate() {
+                std::ptr::write_unaligned(optval.add(116 + i * 2) as *mut u16, c);
+            }
+        } else {
+            std::ptr::copy_nonoverlapping(name.as_ptr(), optval.add(116), name.len());
+        }
+        *optlen = need;
+        return 0;
+    }
     if level == WIN_SOL_SOCKET && optname == WIN_SO_EXCLUSIVEADDRUSE && *optlen >= 4 {
         std::ptr::write_unaligned(optval as *mut i32, 0);
         *optlen = 4;
@@ -1562,6 +1677,7 @@ pub unsafe extern "win64" fn select(
         },
         tv.as_mut().map_or(std::ptr::null_mut(), |p| p),
     );
+    crate::trace!("select(r={rfds:?}, w={wfds:?}, e={efds:?}) = {rc}");
     if rc < 0 {
         set_error(last_error());
         return SOCKET_ERROR;
@@ -2477,6 +2593,12 @@ pub unsafe extern "win64" fn wsa_enum_network_events(
 
 // ── WSAIoctl ────────────────────────────────────────────────────────────
 const SIO_KEEPALIVE_VALS: u32 = 0x98000004;
+const SIO_BASE_HANDLE: u32 = 0x48000022;
+const SIO_BSP_HANDLE: u32 = 0x4800001B;
+const SIO_BSP_HANDLE_SELECT: u32 = 0x4800001C;
+const SIO_BSP_HANDLE_POLL: u32 = 0x4800001D;
+const SIO_LOOPBACK_FAST_PATH: u32 = 0x98000010;
+const SIO_TCP_INITIAL_RTO: u32 = 0x98000011;
 
 pub unsafe extern "win64" fn wsa_ioctl(
     s: usize,
@@ -2493,6 +2615,7 @@ pub unsafe extern "win64" fn wsa_ioctl(
         set_error(WSAENOTSOCK);
         return SOCKET_ERROR;
     }
+    crate::trace!("WSAIoctl({s}, {ioctl_code:#010x}, entrée {in_len} o, sortie {out_len} o)");
     match ioctl_code {
         FIONBIO => {
             if in_buf.is_null() || in_len < 4 {
@@ -2552,6 +2675,39 @@ pub unsafe extern "win64" fn wsa_ioctl(
                     4,
                 );
             }
+            if !bytes_returned.is_null() {
+                *bytes_returned = 0;
+            }
+            0
+        }
+        // SIO_BASE_HANDLE et SIO_BSP_HANDLE(_SELECT/_POLL) : pas de
+        // fournisseur en couches, la socket est sa propre base.
+        SIO_BASE_HANDLE | SIO_BSP_HANDLE | SIO_BSP_HANDLE_SELECT | SIO_BSP_HANDLE_POLL => {
+            if out_buf.is_null() || out_len < 8 {
+                set_error(WSAEFAULT);
+                return SOCKET_ERROR;
+            }
+            // Seules les boucles d'événements demandent la socket de base,
+            // juste avant de la surveiller (uv_poll_init_socket de libuv,
+            // dont le contrat est de passer la socket en mode non bloquant).
+            // Bun (Claude Code) lit ensuite jusqu'à WSAEWOULDBLOCK : en mode
+            // bloquant, la deuxième lecture d'une connexion HTTP gardée
+            // ouverte figeait le programme.
+            if ioctl_code == SIO_BASE_HANDLE {
+                let flags = libc::fcntl(s as i32, libc::F_GETFL);
+                if flags >= 0 && flags & libc::O_NONBLOCK == 0 {
+                    libc::fcntl(s as i32, libc::F_SETFL, flags | libc::O_NONBLOCK);
+                }
+            }
+            std::ptr::write_unaligned(out_buf as *mut usize, s);
+            if !bytes_returned.is_null() {
+                *bytes_returned = 8;
+            }
+            0
+        }
+        // Réglages de performance sans équivalent Linux (le noyau gère déjà
+        // le délai initial de retransmission et la boucle locale rapide).
+        SIO_LOOPBACK_FAST_PATH | SIO_TCP_INITIAL_RTO => {
             if !bytes_returned.is_null() {
                 *bytes_returned = 0;
             }
@@ -2747,7 +2903,63 @@ pub unsafe extern "win64" fn wsa_fd_is_set(s: usize, set: *const WinFdSet) -> i3
     0
 }
 
+/// Ordinaux publics communs à ws2_32 et wsock32 (Winsock 1.1) : les
+/// programmes liés à wsock32 importent souvent par numéro.
+const WINSOCK_ORDINALS: &[(u16, &str)] = &[
+    (1, "accept"),
+    (2, "bind"),
+    (3, "closesocket"),
+    (4, "connect"),
+    (5, "getpeername"),
+    (6, "getsockname"),
+    (7, "getsockopt"),
+    (8, "htonl"),
+    (9, "htons"),
+    (10, "ioctlsocket"),
+    (11, "inet_addr"),
+    (12, "inet_ntoa"),
+    (13, "listen"),
+    (14, "ntohl"),
+    (15, "ntohs"),
+    (16, "recv"),
+    (17, "recvfrom"),
+    (18, "select"),
+    (19, "send"),
+    (20, "sendto"),
+    (21, "setsockopt"),
+    (22, "shutdown"),
+    (23, "socket"),
+    (51, "gethostbyaddr"),
+    (52, "gethostbyname"),
+    (53, "getprotobyname"),
+    (54, "getprotobynumber"),
+    (55, "getservbyname"),
+    (56, "getservbyport"),
+    (57, "gethostname"),
+    (101, "WSAAsyncSelect"),
+    (102, "WSAAsyncGetHostByAddr"),
+    (103, "WSAAsyncGetHostByName"),
+    (108, "WSACancelAsyncRequest"),
+    (111, "WSAGetLastError"),
+    (112, "WSASetLastError"),
+    (113, "WSACancelBlockingCall"),
+    (114, "WSAIsBlocking"),
+    (115, "WSAStartup"),
+    (116, "WSACleanup"),
+    (151, "__WSAFDIsSet"),
+];
+
 pub fn exports() -> crate::dlls::Exports {
+    let mut e = named_exports();
+    for (ordinal, name) in WINSOCK_ORDINALS {
+        if let Some(&addr) = e.get(name) {
+            e.insert(Box::leak(format!("#{ordinal}").into_boxed_str()), addr);
+        }
+    }
+    e
+}
+
+fn named_exports() -> crate::dlls::Exports {
     crate::exports! {
      // init/cleanup
      "WSAStartup"=>fn wsa_startup,"WSACleanup"=>fn wsa_cleanup,
@@ -2771,7 +2983,7 @@ pub fn exports() -> crate::dlls::Exports {
      "inet_ntop"=>fn inet_ntop,"InetNtopA"=>fn inet_ntop,
      "InetNtopW"=>fn inet_ntop_w,
      // DNS / host resolution
-     "gethostname"=>fn get_host_name,
+     "gethostname"=>fn get_host_name,"GetHostNameW"=>fn get_host_name_w,
      "gethostbyname"=>fn gethostbyname,"gethostbyaddr"=>fn gethostbyaddr,
      "getservbyname"=>fn getservbyname,"getservbyport"=>fn getservbyport,
      "getaddrinfo"=>fn get_addr_info_a,

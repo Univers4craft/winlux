@@ -421,6 +421,14 @@ enum DynamicTable {
         callback: usize,
         context: usize,
     },
+    /// RtlAddGrowableFunctionTable : table triée dont le nombre d'entrées
+    /// valides grandit avec RtlGrowFunctionTable (JIT de JavaScriptCore).
+    Growable {
+        handle: usize,
+        entries: usize,
+        count: &'static std::sync::atomic::AtomicU32,
+        base: u64,
+    },
 }
 
 static DYNAMIC: Mutex<Vec<DynamicTable>> = Mutex::new(Vec::new());
@@ -443,8 +451,51 @@ pub unsafe extern "win64" fn rtl_delete_function_table(entries: usize) -> u8 {
     t.retain(|e| match e {
         DynamicTable::Static { entries: x, .. } => *x != entries,
         DynamicTable::Callback { id, .. } => *id as usize != entries,
+        DynamicTable::Growable { .. } => true,
     });
     (t.len() != before) as u8
+}
+
+/// `RtlAddGrowableFunctionTable(&table, entries, count, max, base, end)`.
+pub unsafe extern "win64" fn rtl_add_growable_function_table(
+    table: *mut usize,
+    entries: usize,
+    count: u32,
+    _max: u32,
+    base: u64,
+    _end: u64,
+) -> u32 {
+    if table.is_null() || entries == 0 {
+        return 0xC000_000D; // STATUS_INVALID_PARAMETER
+    }
+    let counter: &'static std::sync::atomic::AtomicU32 =
+        Box::leak(Box::new(std::sync::atomic::AtomicU32::new(count)));
+    let handle = counter as *const _ as usize;
+    crate::dlls::lock(&DYNAMIC).push(DynamicTable::Growable {
+        handle,
+        entries,
+        count: counter,
+        base,
+    });
+    *table = handle;
+    0
+}
+pub unsafe extern "win64" fn rtl_grow_function_table(table: usize, count: u32) {
+    let t = crate::dlls::lock(&DYNAMIC);
+    for e in t.iter() {
+        if let DynamicTable::Growable {
+            handle, count: c, ..
+        } = e
+        {
+            if *handle == table {
+                c.store(count, std::sync::atomic::Ordering::Release);
+            }
+        }
+    }
+}
+pub unsafe extern "win64" fn rtl_delete_growable_function_table(table: usize) {
+    crate::dlls::lock(&DYNAMIC)
+        .retain(|e| !matches!(e, DynamicTable::Growable { handle, .. } if *handle == table));
 }
 /// `RtlInstallFunctionTableCallback` : les entrées de [base, base+length)
 /// sont fournies à la demande par `callback(pc, context)`.
@@ -488,6 +539,23 @@ unsafe fn lookup_dynamic(pc: u64) -> Option<(*const c_void, u64)> {
                     base,
                 } => {
                     for i in 0..count as usize {
+                        let e = (entries + i * 12) as *const u32;
+                        let begin = base + e.read_unaligned() as u64;
+                        let end = base + e.add(1).read_unaligned() as u64;
+                        if pc >= begin && pc < end {
+                            hit = Some(Hit::Found(e.cast(), base));
+                            break;
+                        }
+                    }
+                }
+                DynamicTable::Growable {
+                    entries,
+                    count,
+                    base,
+                    ..
+                } => {
+                    let n = count.load(std::sync::atomic::Ordering::Acquire) as usize;
+                    for i in 0..n {
                         let e = (entries + i * 12) as *const u32;
                         let begin = base + e.read_unaligned() as u64;
                         let end = base + e.add(1).read_unaligned() as u64;
@@ -1505,6 +1573,9 @@ pub fn exports() -> crate::dlls::Exports {
         "RtlUnwind" => fn rtl_unwind,
         "RtlRaiseException" => fn rtl_raise_exception,
         "RtlAddFunctionTable" => fn rtl_add_function_table,
+        "RtlAddGrowableFunctionTable" => fn rtl_add_growable_function_table,
+        "RtlGrowFunctionTable" => fn rtl_grow_function_table,
+        "RtlDeleteGrowableFunctionTable" => fn rtl_delete_growable_function_table,
         "RtlDeleteFunctionTable" => fn rtl_delete_function_table,
         "RtlInstallFunctionTableCallback" => fn rtl_install_function_table_callback,
         "RtlAddVectoredExceptionHandler" => fn rtl_add_vectored_exception_handler,

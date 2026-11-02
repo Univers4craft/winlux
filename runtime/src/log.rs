@@ -60,7 +60,14 @@ fn config() -> &'static Config {
 
         let journal = std::env::var_os("WINLUX_JOURNAL").is_none_or(|v| v != "0");
 
-        if std::env::args_os().any(|a| a == "--verbose") || raw.eq_ignore_ascii_case("debug") {
+        // Seules les options placées avant le programme comptent : un
+        // « --verbose » destiné au .exe (claude.exe --verbose) ne doit pas
+        // noyer sa sortie sous le journal de Winlux.
+        let own_verbose = std::env::args_os()
+            .skip(1)
+            .take_while(|a| a.to_string_lossy().starts_with('-'))
+            .any(|a| a == "--verbose");
+        if own_verbose || raw.eq_ignore_ascii_case("debug") {
             return Config {
                 level: Level::Debug,
                 format: Format::Text,

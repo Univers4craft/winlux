@@ -47,7 +47,10 @@ static OVERLAPPED_HANDLES: OnceLock<Mutex<HashSet<usize>>> = OnceLock::new();
 fn overlapped_handles() -> &'static Mutex<HashSet<usize>> {
     OVERLAPPED_HANDLES.get_or_init(|| Mutex::new(HashSet::new()))
 }
-fn is_overlapped_handle(h: usize) -> bool {
+pub(crate) fn mark_overlapped_handle(h: usize) {
+    lock(overlapped_handles()).insert(h);
+}
+pub(crate) fn is_overlapped_handle(h: usize) -> bool {
     lock(overlapped_handles()).contains(&h)
 }
 struct IoResult {
@@ -363,13 +366,69 @@ pub fn init() {
     let _ = CLOCK_START.get_or_init(std::time::Instant::now);
 }
 
-pub extern "win64" fn get_std_handle(which: u32) -> usize {
-    match which {
-        x if x == (-10i32 as u32) => (-10isize) as usize,
-        x if x == (-11i32 as u32) => (-11isize) as usize,
-        x if x == (-12i32 as u32) => (-12isize) as usize,
-        _ => 0,
+/// Valeurs des handles d'entrée, de sortie et d'erreur standard rendues
+/// par GetStdHandle. Comme sous Windows, ce sont de vrais handles (petits
+/// multiples de 4) et non les constantes STD_*_HANDLE : certains runtimes
+/// (Bun, donc Claude Code) rangent un handle sur 63 bits et perdaient le bit
+/// de signe des anciennes valeurs -10/-11/-12. Elles restent au-dessus des
+/// descripteurs de sockets et sous les handles de fichiers (0x10000).
+pub(crate) const STD_INPUT_REAL: usize = 0xFFF0;
+pub(crate) const STD_OUTPUT_REAL: usize = 0xFFF4;
+pub(crate) const STD_ERROR_REAL: usize = 0xFFF8;
+static STD_OVERRIDE: [AtomicUsize; 3] = [
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+    AtomicUsize::new(0),
+];
+
+/// Ramène toutes les formes d'un handle standard (réel, constante STD_*,
+/// constante tronquée à 63 bits) à la constante STD_* historique, que le
+/// reste de kernel32 reconnaît.
+pub(crate) fn canon_std(h: usize) -> usize {
+    match h {
+        STD_INPUT_REAL | 0x7FFF_FFFF_FFFF_FFF6 => (-10isize) as usize,
+        STD_OUTPUT_REAL | 0x7FFF_FFFF_FFFF_FFF5 => (-11isize) as usize,
+        STD_ERROR_REAL | 0x7FFF_FFFF_FFFF_FFF4 => (-12isize) as usize,
+        _ => h,
     }
+}
+
+pub extern "win64" fn get_std_handle(which: u32) -> usize {
+    let slot = match which as i32 {
+        -10 => 0,
+        -11 => 1,
+        -12 => 2,
+        _ => {
+            crate::process::set_last_error(6);
+            return usize::MAX;
+        }
+    };
+    match STD_OVERRIDE[slot].load(Ordering::Relaxed) {
+        0 => [STD_INPUT_REAL, STD_OUTPUT_REAL, STD_ERROR_REAL][slot],
+        h => h,
+    }
+}
+
+/// `SetStdHandle` : redirige l'entrée, la sortie ou l'erreur standard vers
+/// un autre handle (fichier, tube) pour les GetStdHandle suivants.
+pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
+    let slot = match which as i32 {
+        -10 => 0,
+        -11 => 1,
+        -12 => 2,
+        _ => {
+            crate::process::set_last_error(87);
+            return 0;
+        }
+    };
+    let real = [STD_INPUT_REAL, STD_OUTPUT_REAL, STD_ERROR_REAL][slot];
+    let value = if canon_std(h) == canon_std(real) {
+        0
+    } else {
+        h
+    };
+    STD_OVERRIDE[slot].store(value, Ordering::Relaxed);
+    1
 }
 
 fn next_handle() -> usize {
@@ -581,12 +640,214 @@ unsafe fn sync_io_at_overlapped(
     }
 }
 
+/// NTSTATUS rangé dans OVERLAPPED.Internal pour une erreur Win32 :
+/// libuv le relit avec RtlNtStatusToDosError (fin de tube = EOF, etc.).
+pub(crate) fn ntstatus_of_win32(error: u32) -> u32 {
+    match error {
+        0 => 0,
+        5 => 0xC000_0022,     // ACCESS_DENIED
+        6 => 0xC000_0008,     // INVALID_HANDLE
+        38 => 0xC000_0011,    // HANDLE_EOF → END_OF_FILE
+        87 => 0xC000_000D,    // INVALID_PARAMETER
+        109 => 0xC000_014B,   // BROKEN_PIPE → PIPE_BROKEN
+        112 => 0xC000_007F,   // DISK_FULL
+        232 => 0xC000_00B1,   // NO_DATA → PIPE_CLOSING
+        995 => 0xC000_0120,   // OPERATION_ABORTED → CANCELLED
+        1236 => 0xC000_0241,  // CONNECTION_ABORTED
+        10054 => 0xC000_020D, // WSAECONNRESET → CONNECTION_RESET
+        _ => 0xC000_0001,
+    }
+}
+
+/// Erreur Win32 d'un NTSTATUS produit par [`ntstatus_of_win32`].
+fn win32_of_ntstatus(status: u32) -> u32 {
+    crate::dlls::ntdll::rtl_nt_status_to_dos_error(status as i32)
+}
+
+/// Lecture immédiate d'un tube ou d'une socket : Some(Ok(n)) si des
+/// données étaient prêtes, Some(Err(109)) si l'autre bout est fermé,
+/// None s'il faut attendre.
+fn try_stream_read_now(fd: i32, buffer: usize, len: u32) -> Option<Result<u32, u32>> {
+    let mut p = libc::pollfd {
+        fd,
+        events: libc::POLLIN,
+        revents: 0,
+    };
+    if unsafe { libc::poll(&mut p, 1, 0) } <= 0 {
+        return None;
+    }
+    let n = unsafe {
+        libc::recv(
+            fd,
+            buffer as *mut libc::c_void,
+            len as usize,
+            libc::MSG_DONTWAIT,
+        )
+    };
+    let n = if n < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOTSOCK) {
+        let mut avail: libc::c_int = 0;
+        unsafe { libc::ioctl(fd, libc::FIONREAD, &mut avail) };
+        if avail <= 0 {
+            if p.revents & (libc::POLLHUP | libc::POLLERR) != 0 {
+                return Some(Err(109));
+            }
+            return None;
+        }
+        unsafe {
+            libc::read(
+                fd,
+                buffer as *mut libc::c_void,
+                (len as usize).min(avail as usize),
+            )
+        }
+    } else {
+        n
+    };
+    if n < 0 {
+        return match std::io::Error::last_os_error().raw_os_error() {
+            Some(libc::EAGAIN) | Some(libc::EINTR) => None,
+            Some(libc::ECONNRESET) => Some(Err(109)),
+            _ => Some(Err(109)),
+        };
+    }
+    if n == 0 {
+        return Some(Err(109));
+    }
+    Some(Ok(n as u32))
+}
+
+/// E/S d'un tube ou d'une socket pour une opération asynchrone.
+fn stream_io(
+    fd: i32,
+    buffer: usize,
+    len: u32,
+    write: Option<&[u8]>,
+    cancelled: &std::sync::atomic::AtomicBool,
+) -> Result<u32, u32> {
+    if let Some(data) = write {
+        let mut done = 0usize;
+        while done < data.len() {
+            if cancelled.load(Ordering::Acquire) {
+                return Err(995);
+            }
+            let n = unsafe {
+                libc::send(
+                    fd,
+                    data[done..].as_ptr() as *const libc::c_void,
+                    data.len() - done,
+                    libc::MSG_NOSIGNAL,
+                )
+            };
+            let n = if n < 0
+                && std::io::Error::last_os_error().raw_os_error() == Some(libc::ENOTSOCK)
+            {
+                unsafe {
+                    libc::write(
+                        fd,
+                        data[done..].as_ptr() as *const libc::c_void,
+                        data.len() - done,
+                    )
+                }
+            } else {
+                n
+            };
+            if n < 0 {
+                let e = std::io::Error::last_os_error();
+                match e.raw_os_error() {
+                    Some(libc::EINTR) => continue,
+                    Some(libc::EAGAIN) => {
+                        let mut p = libc::pollfd {
+                            fd,
+                            events: libc::POLLOUT,
+                            revents: 0,
+                        };
+                        unsafe { libc::poll(&mut p, 1, 100) };
+                        continue;
+                    }
+                    Some(libc::EPIPE) | Some(libc::ECONNRESET) => return Err(232),
+                    _ => return Err(io_error_code(&e)),
+                }
+            }
+            done += n as usize;
+        }
+        return Ok(done as u32);
+    }
+    loop {
+        if cancelled.load(Ordering::Acquire) {
+            return Err(995);
+        }
+        let mut p = libc::pollfd {
+            fd,
+            events: libc::POLLIN,
+            revents: 0,
+        };
+        let r = unsafe { libc::poll(&mut p, 1, 100) };
+        if r == 0 || (r < 0 && std::io::Error::last_os_error().raw_os_error() == Some(libc::EINTR))
+        {
+            continue;
+        }
+        let mut avail: libc::c_int = 0;
+        unsafe { libc::ioctl(fd, libc::FIONREAD, &mut avail) };
+        if len == 0 {
+            if avail == 0 && p.revents & (libc::POLLHUP | libc::POLLERR) != 0 {
+                return Err(109);
+            }
+            return Ok(0);
+        }
+        let n = unsafe { libc::read(fd, buffer as *mut libc::c_void, len as usize) };
+        if n < 0 {
+            let e = std::io::Error::last_os_error();
+            match e.raw_os_error() {
+                Some(libc::EINTR) | Some(libc::EAGAIN) => continue,
+                Some(libc::ECONNRESET) => return Err(109),
+                _ => return Err(io_error_code(&e)),
+            }
+        }
+        if n == 0 {
+            return Err(109); // l'autre bout est fermé : ERROR_BROKEN_PIPE
+        }
+        return Ok(n as u32);
+    }
+}
+
+/// Termine une opération asynchrone sans fil d'E/S (ConnectNamedPipe) :
+/// OVERLAPPED, événement et port de complétion associé au handle.
+pub(crate) fn complete_overlapped(h: usize, overlapped: usize, bytes: u32, error: u32) {
+    unsafe {
+        let p = overlapped as *mut Overlapped;
+        let raw = (*p).event;
+        (*p).internal = ntstatus_of_win32(error) as usize;
+        (*p).internal_high = bytes as usize;
+        if raw & !1 != 0 {
+            let _ = set_event(raw & !1);
+        }
+        if raw & 1 != 0 {
+            return;
+        }
+    }
+    let completion = lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new())))
+        .get(&h)
+        .cloned();
+    if let Some((port, key)) = completion {
+        post_iocp(
+            &port,
+            CompletionPacket {
+                bytes,
+                key,
+                overlapped,
+                error,
+            },
+        );
+    }
+}
+
 fn start_overlapped_io(
     h: usize,
     buffer: usize,
     len: u32,
     overlapped: usize,
     is_write: bool,
+    done_out: *mut u32,
 ) -> i32 {
     const ERROR_IO_PENDING: u32 = 997;
     const STATUS_PENDING: usize = 0x103;
@@ -607,10 +868,77 @@ fn start_overlapped_io(
     };
     let ov = overlapped as *mut Overlapped;
     let offset = unsafe { ((*ov).offset_high as u64) << 32 | (*ov).offset as u64 };
-    let event = unsafe { (*ov).event };
-    let completion = lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new())))
-        .get(&h)
-        .cloned();
+    // hEvent avec le bit 0 levé : signaler l'événement mais ne rien poster
+    // au port de complétion (libuv s'en sert pour ses lectures d'essai).
+    let raw_event = unsafe { (*ov).event };
+    let event = raw_event & !1;
+    let completion = if raw_event & 1 != 0 {
+        None
+    } else {
+        lock(IOCP_ASSOCIATIONS.get_or_init(|| Mutex::new(HashMap::new())))
+            .get(&h)
+            .cloned()
+    };
+    // Tube ou socket avec des données déjà là (ou fermé) : la lecture se
+    // termine tout de suite, comme sous Windows. libuv lit ainsi la sortie
+    // des processus enfants : ReadFile puis CancelIoEx si c'est en attente.
+    if !is_write && len != 0 {
+        use std::os::unix::io::AsRawFd;
+        let fd = lock(&file).as_raw_fd();
+        if file_type_of_fd(fd) == 3 {
+            match try_stream_read_now(fd, buffer, len) {
+                Some(Ok(n)) => {
+                    let op = Arc::new(IoOperation {
+                        file_handle: h,
+                        issuing_thread: std::thread::current().id(),
+                        state: Mutex::new(IoResult {
+                            done: true,
+                            bytes: n,
+                            error: 0,
+                        }),
+                        changed: Condvar::new(),
+                        cancelled: std::sync::atomic::AtomicBool::new(false),
+                    });
+                    lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())))
+                        .insert(overlapped, op);
+                    unsafe {
+                        (*ov).internal = 0;
+                        (*ov).internal_high = n as usize;
+                        if !done_out.is_null() {
+                            *done_out = n;
+                        }
+                    }
+                    if event != 0 {
+                        let _ = set_event(event);
+                    }
+                    if let Some((port, key)) = completion {
+                        post_iocp(
+                            &port,
+                            CompletionPacket {
+                                bytes: n,
+                                key,
+                                overlapped,
+                                error: 0,
+                            },
+                        );
+                    }
+                    crate::process::set_last_error(0);
+                    return 1;
+                }
+                Some(Err(e)) => {
+                    lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())))
+                        .remove(&overlapped);
+                    unsafe {
+                        (*ov).internal = ntstatus_of_win32(e) as usize;
+                        (*ov).internal_high = 0;
+                    }
+                    crate::process::set_last_error(e);
+                    return 0;
+                }
+                None => {}
+            }
+        }
+    }
     let write_data = if is_write && len != 0 {
         Some(unsafe { std::slice::from_raw_parts(buffer as *const u8, len as usize).to_vec() })
     } else {
@@ -629,7 +957,7 @@ fn start_overlapped_io(
     });
     {
         let mut ops = lock(IO_OPERATIONS.get_or_init(|| Mutex::new(HashMap::new())));
-        if ops.contains_key(&overlapped) {
+        if ops.get(&overlapped).is_some_and(|o| !lock(&o.state).done) {
             crate::process::set_last_error(997);
             return 0;
         }
@@ -644,7 +972,18 @@ fn start_overlapped_io(
         .name("winlux-overlapped-io".into())
         .spawn(move || {
             use std::os::unix::fs::FileExt;
-            let result = {
+            use std::os::unix::io::AsRawFd;
+            let stream_fd = {
+                let f = lock(&file);
+                let fd = f.as_raw_fd();
+                (file_type_of_fd(fd) == 3).then_some(fd)
+            };
+            let result = if let Some(fd) = stream_fd {
+                // Tube ou socket : pas de position (read/write et non
+                // pread/pwrite), lecture annulable, et lecture de zéro octet
+                // = « attendre des données » (lecture d'amorçage de libuv).
+                stream_io(fd, buffer, len, write_data.as_deref(), &op.cancelled)
+            } else {
                 let file = lock(&file);
                 if op.cancelled.load(Ordering::Acquire) {
                     Err(995)
@@ -685,7 +1024,7 @@ fn start_overlapped_io(
             }
             unsafe {
                 let p = overlapped as *mut Overlapped;
-                (*p).internal = if error == 0 { 0 } else { 0xC000_0001 };
+                (*p).internal = ntstatus_of_win32(error) as usize;
                 (*p).internal_high = bytes as usize;
             }
             if event != 0 {
@@ -732,7 +1071,18 @@ pub unsafe extern "win64" fn get_overlapped_result(
         ops.get(&key).cloned()
     };
     let Some(op) = operation else {
-        crate::process::set_last_error(996);
+        // Opération déjà relevée (port de complétion) : Windows relit
+        // simplement OVERLAPPED.Internal / InternalHigh.
+        let status = (*overlapped).internal;
+        if status == 0x103 {
+            crate::process::set_last_error(996);
+            return 0;
+        }
+        *transferred = (*overlapped).internal_high as u32;
+        if status == 0 {
+            return 1;
+        }
+        crate::process::set_last_error(win32_of_ntstatus(status as u32));
         return 0;
     };
     if op.file_handle != h {
@@ -1007,12 +1357,13 @@ pub unsafe extern "win64" fn write_file(
     written: *mut u32,
     ov: usize,
 ) -> i32 {
+    let h = canon_std(h);
     if !written.is_null() {
         *written = 0;
     }
     if ov != 0 {
         if is_overlapped_handle(h) {
-            return start_overlapped_io(h, buf as usize, len, ov, true);
+            return start_overlapped_io(h, buf as usize, len, ov, true, written);
         }
         return sync_io_at_overlapped(h, buf as usize, len, written, ov, true);
     }
@@ -1081,12 +1432,13 @@ pub unsafe extern "win64" fn read_file(
     read: *mut u32,
     ov: usize,
 ) -> i32 {
+    let h = canon_std(h);
     if !read.is_null() {
         *read = 0;
     }
     if ov != 0 {
         if is_overlapped_handle(h) {
-            return start_overlapped_io(h, buf as usize, len, ov, false);
+            return start_overlapped_io(h, buf as usize, len, ov, false, read);
         }
         return sync_io_at_overlapped(h, buf as usize, len, read, ov, false);
     }
@@ -1180,6 +1532,19 @@ unsafe fn create_file_str(
     _flags: u32,
     _template: usize,
 ) -> usize {
+    if let Some(name) = crate::dlls::named_pipes::pipe_name(path) {
+        return crate::dlls::named_pipes::open_client(&name, _flags);
+    }
+    // CONIN$ / CONOUT$ : la console, c'est-à-dire le terminal.
+    let device = path.trim_start_matches("\\\\.\\").to_ascii_uppercase();
+    if device == "CONIN$" && libc::isatty(0) == 1 {
+        crate::process::set_last_error(0);
+        return STD_INPUT_REAL;
+    }
+    if device == "CONOUT$" && libc::isatty(1) == 1 {
+        crate::process::set_last_error(0);
+        return STD_OUTPUT_REAL;
+    }
     let p = crate::paths::to_linux(path);
     let existed = p.exists();
     // Fichier en lecture seule : refusé en écriture même pour root, comme
@@ -1192,10 +1557,47 @@ unsafe fn create_file_str(
             }
         }
     }
-    let want_read = access & 0x8000_0000 != 0 || access & 1 != 0;
-    let want_write = access & 0x4000_0000 != 0 || access & 2 != 0;
+    let want_read = access & (0x8000_0000 | 0x1000_0000 | 0x0200_0000 | 1) != 0;
+    // GENERIC_WRITE, GENERIC_ALL, MAXIMUM_ALLOWED ou FILE_WRITE_DATA.
+    let want_write = access & (0x4000_0000 | 0x1000_0000 | 0x0200_0000 | 2) != 0;
+    // FILE_APPEND_DATA seul (sans FILE_WRITE_DATA) : chaque écriture va en
+    // fin de fichier, comme O_APPEND. C'est ce qu'utilise appendFile() de
+    // Node/Bun (journaux, transcriptions de session de Claude Code).
+    let append_only = access & 4 != 0 && !want_write;
     let mut o = OpenOptions::new();
-    o.read(want_read || !want_write).write(want_write);
+    o.read(want_read || !(want_write || append_only))
+        .write(want_write);
+    if append_only {
+        o.append(true);
+    }
+    use std::os::unix::fs::OpenOptionsExt;
+    // FILE_FLAG_OPEN_REPARSE_POINT : on ouvre le lien symbolique lui-même
+    // (lstat() de Node/Bun, lecture de la cible avec DeviceIoControl).
+    if _flags & 0x0020_0000 != 0
+        && p.symlink_metadata()
+            .is_ok_and(|m| m.file_type().is_symlink())
+        && !want_write
+        && !append_only
+    {
+        o.custom_flags(libc::O_PATH | libc::O_NOFOLLOW);
+    }
+    // Un dossier s'ouvre avec FILE_FLAG_BACKUP_SEMANTICS, y compris pour
+    // en modifier les attributs ou les dates : sous Linux, en lecture seule.
+    let is_dir = p.is_dir();
+    if is_dir {
+        if _flags & 0x0200_0000 == 0 {
+            crate::process::set_last_error(5);
+            return usize::MAX;
+        }
+        if matches!(creation, 1) {
+            crate::process::set_last_error(80); // ERROR_FILE_EXISTS
+            return usize::MAX;
+        }
+        o.read(true)
+            .write(false)
+            .append(false)
+            .custom_flags(libc::O_DIRECTORY);
+    }
     // Rust exige `write` pour créer ou tronquer : CreateFile(GENERIC_READ,
     // OPEN_ALWAYS) sur un fichier absent échouait avec 87.
     let needs_write = match creation {
@@ -1203,7 +1605,7 @@ unsafe fn create_file_str(
         2 | 5 => true,
         _ => false,
     };
-    if needs_write && !want_write {
+    if needs_write && !want_write && !append_only && !is_dir {
         o.write(true);
     }
     match creation {
@@ -1713,6 +2115,7 @@ fn file_type_of_fd(fd: i32) -> u32 {
     }
 }
 pub extern "win64" fn get_file_type(h: usize) -> u32 {
+    let h = canon_std(h);
     let std_fd = match h as isize {
         -10 => Some(0),
         -11 => Some(1),
@@ -1929,7 +2332,7 @@ pub unsafe extern "win64" fn unlock_file(
     }
 }
 
-fn disk_free(path: &str) -> Option<(u64, u64, u64)> {
+pub(crate) fn disk_free(path: &str) -> Option<(u64, u64, u64)> {
     let linux = crate::paths::to_linux(path);
     let text = linux.to_string_lossy().into_owned();
     let c = std::ffi::CString::new(text).ok()?;
@@ -2215,6 +2618,11 @@ pub unsafe extern "win64" fn get_proc_address(module: usize, name: *const u8) ->
     let by_ordinal = (name as usize) <= 0xffff;
     if let Some(dll) = crate::dlls::builtin_by_handle(module) {
         if by_ordinal {
+            let symbol = format!("#{}", name as usize);
+            if let Some(a) = crate::dlls::lookup(dll, &symbol) {
+                return crate::thunks::api_trace(dll, &symbol, a);
+            }
+            crate::thunks::api_trace_missing(dll, &symbol);
             crate::process::set_last_error(127);
             return 0;
         }
@@ -3836,8 +4244,9 @@ fn insert_env_entry(entry: &str, env: &mut HashMap<String, (String, String)>) {
     }
 }
 /// Descripteur Linux d'un handle de fichier ou d'un handle standard.
-fn fd_of_handle(h: usize) -> Option<i32> {
+pub(crate) fn fd_of_handle(h: usize) -> Option<i32> {
     use std::os::unix::io::AsRawFd;
+    let h = canon_std(h);
     match h as isize {
         -10 => return Some(0),
         -11 => return Some(1),
@@ -3939,6 +4348,9 @@ unsafe fn create_process_common(
     } else {
         crate::dlls::cstr(command_line)
     };
+    crate::trace!(
+        "CreateProcess : application {application:?}, ligne {line:?}, options {creation_flags:#x}"
+    );
     let mut args = split_windows_command_line(&line);
     let app_dir =
         crate::loader::main_module().and_then(|m| m.path.parent().map(|d| d.to_path_buf()));
@@ -3988,10 +4400,15 @@ unsafe fn create_process_common(
         };
         host_path = std::path::PathBuf::from(name);
     }
-    let is_pe = host_path
-        .extension()
-        .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("exe"))
-        || (host_path.is_file() && crate::launch::is_windows_program(&host_path));
+    // Un « .exe » qui est en réalité un programme Linux (ELF ou script
+    // « #! », par exemple un lien bash.exe → /usr/bin/bash) s'exécute
+    // directement : c'est ainsi que les outils Linux s'offrent aux
+    // programmes Windows qui cherchent un .exe (Git Bash de Claude Code).
+    let is_pe = !crate::launch::is_linux_program(&host_path)
+        && (host_path
+            .extension()
+            .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("exe"))
+            || (host_path.is_file() && crate::launch::is_windows_program(&host_path)));
     let suspended = creation_flags & 4 != 0;
     let mut target = Vec::<std::ffi::OsString>::new();
     if is_pe {
@@ -4015,10 +4432,20 @@ unsafe fn create_process_common(
         target.extend(argv.into_iter().map(std::ffi::OsString::from));
     } else {
         // Appli Linux : les chemins Windows des arguments deviennent Linux.
+        // Un outil Linux déguisé en .exe (bash.exe pour Git Bash) reçoit en
+        // plus ses scripts avec les chemins Windows et MSYS traduits.
+        let disguised = crate::launch::is_disguised_linux_tool(&host_path);
         target.push(host_path.into_os_string());
         target.extend(
             crate::launch::linux_args(&args)
                 .into_iter()
+                .map(|a| {
+                    if disguised {
+                        crate::launch::msys_script(&a)
+                    } else {
+                        a
+                    }
+                })
                 .map(std::ffi::OsString::from),
         );
     }
@@ -4069,14 +4496,27 @@ unsafe fn create_process_common(
             cmd.env(key, value);
         }
     }
+    // Programme Windows : il reçoit la ligne de commande exacte de
+    // l'appelant, premier mot compris (Claude Code se relance sous le nom
+    // « rg » pour servir de ripgrep).
+    if is_pe && !line.trim().is_empty() {
+        cmd.env("WINLUX_COMMAND_LINE", &line);
+    }
     let mut child = match cmd.spawn() {
         Ok(c) => c,
         Err(e) => {
+            crate::trace!("CreateProcess({:?}) : échec {e}", cmd.get_program());
             crate::process::set_last_error(process_error(&e));
             return 0;
         }
     };
     let pid = child.id();
+    crate::trace!(
+        "CreateProcess({:?} {:?}) = pid {pid}{}",
+        cmd.get_program(),
+        cmd.get_args().collect::<Vec<_>>(),
+        if suspended { " (suspendu)" } else { "" }
+    );
     if suspended {
         let mut status = 0;
         let waited = loop {
@@ -4390,6 +4830,13 @@ pub extern "win64" fn resume_thread(handle: usize) -> u32 {
 /// Utilisé par le module mmap pour CreateFileMappingA.
 pub fn handle_to_fd(h: usize) -> i32 {
     use std::os::unix::io::AsRawFd;
+    let h = canon_std(h);
+    match h as isize {
+        -10 => return 0,
+        -11 => return 1,
+        -12 => return 2,
+        _ => {}
+    }
     let handles = lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())));
     match handles.get(&h) {
         Some(FileHandle::File(f)) => lock(f).as_raw_fd(),
@@ -4397,6 +4844,10 @@ pub fn handle_to_fd(h: usize) -> i32 {
     }
 }
 pub extern "win64" fn close_handle(handle: usize) -> i32 {
+    if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
+        // Fermer un handle standard ne ferme pas le terminal de Winlux.
+        return 1;
+    }
     if handle == 1
         || handle == 2
         || handle == (-10isize) as usize
@@ -4405,6 +4856,11 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     {
         crate::process::set_last_error(6);
         return 0;
+    }
+    crate::dlls::ntdll_file::forget_dir_cursor(handle);
+    crate::dlls::named_pipes::close_server(handle);
+    if crate::dlls::kernel32_node::close_snapshot(handle) {
+        return 1;
     }
     if lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
         .remove(&handle)
@@ -4547,6 +5003,14 @@ pub unsafe extern "win64" fn open_mutex_a(_access: u32, _inherit: i32, name: *co
     open_named_sync(name, false)
 }
 pub extern "win64" fn wait_for_single_object(h: usize, timeout: u32) -> u32 {
+    // Entrée de la console (terminal) : signalée quand une touche attend.
+    if crate::dlls::console_input::is_console_input(h) {
+        return if crate::dlls::console_input::wait(timeout) {
+            0
+        } else {
+            258
+        };
+    }
     let Some(obj) = lookup_sync(h) else {
         crate::process::set_last_error(6);
         return u32::MAX;
@@ -4896,7 +5360,7 @@ pub unsafe extern "win64" fn create_file_w(
             return usize::MAX;
         }
     };
-    create_file_str(
+    let h = create_file_str(
         &s.to_string_lossy(),
         access,
         share,
@@ -4904,7 +5368,13 @@ pub unsafe extern "win64" fn create_file_w(
         creation,
         flags,
         template,
-    )
+    );
+    crate::trace!(
+        "CreateFileW({}, accès {access:#x}, disposition {creation}, options {flags:#x}) = {h:#x} (erreur {})",
+        s.to_string_lossy(),
+        crate::process::last_error()
+    );
+    h
 }
 pub unsafe extern "win64" fn get_environment_variable_w(
     name: *const u16,
@@ -5354,7 +5824,16 @@ pub unsafe extern "win64" fn write_console_w(
         std::slice::from_raw_parts(buf, n as usize)
     };
     let x = String::from_utf16_lossy(units);
-    if std::io::Write::write_all(&mut std::io::stdout(), x.as_bytes()).is_err() {
+    let ok = if canon_std(_h) == (-12isize) as usize {
+        let _ = std::io::Write::flush(&mut std::io::stdout());
+        std::io::Write::write_all(&mut std::io::stderr(), x.as_bytes()).is_ok()
+    } else {
+        let mut out = std::io::stdout();
+        std::io::Write::write_all(&mut out, x.as_bytes())
+            .and_then(|_| std::io::Write::flush(&mut out))
+            .is_ok()
+    };
+    if !ok {
         return 0;
     }
     if !written.is_null() {
@@ -5385,6 +5864,7 @@ pub extern "win64" fn query_performance_counter(out: *mut i64) -> i32 {
 }
 pub fn flush_and_exit(code: i32) -> ! {
     let _ = std::io::Write::flush(&mut std::io::stdout());
+    crate::dlls::console_input::restore();
     crate::log::journal_event("session", &format!("fin du programme (code {code})"));
     std::process::exit(code)
 }
@@ -5986,7 +6466,7 @@ pub extern "win64" fn decode_pointer(ptr: usize) -> usize {
 }
 
 // --- Helpers (hostname, date/time without chrono/nix) ---
-fn get_hostname_string() -> String {
+pub(crate) fn get_hostname_string() -> String {
     let mut buf = [0u8; 256];
     if unsafe { libc::gethostname(buf.as_mut_ptr() as *mut libc::c_char, buf.len()) } == 0 {
         let len = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
@@ -6358,21 +6838,23 @@ pub unsafe extern "win64" fn read_directory_changes_w(
 
 // --- CreateNamedPipeA / ConnectNamedPipe (stubs) ---
 pub unsafe extern "win64" fn create_named_pipe_a(
-    _name: *const u8,
-    _open_mode: u32,
-    _pipe_mode: u32,
-    _max: u32,
+    name: *const u8,
+    open_mode: u32,
+    pipe_mode: u32,
+    max: u32,
     _out_size: u32,
     _in_size: u32,
     _timeout: u32,
     _sa: usize,
 ) -> usize {
-    crate::process::set_last_error(120);
-    usize::MAX
+    if name.is_null() {
+        crate::process::set_last_error(123);
+        return usize::MAX;
+    }
+    crate::dlls::named_pipes::create(&crate::dlls::cstr(name), open_mode, pipe_mode, max)
 }
-pub extern "win64" fn connect_named_pipe(_h: usize, _ov: usize) -> i32 {
-    crate::process::set_last_error(120);
-    0
+pub extern "win64" fn connect_named_pipe(h: usize, ov: usize) -> i32 {
+    crate::dlls::named_pipes::connect(h, ov)
 }
 pub extern "win64" fn disconnect_named_pipe(_h: usize) -> i32 {
     1
@@ -6765,7 +7247,7 @@ pub unsafe extern "win64" fn duplicate_handle(
 ) -> i32 {
     // Un fichier ou un tube reçoit un vrai double (son propre fd) : fermer
     // l'original ne ferme pas la copie, comme sous Windows.
-    let std_fd = match src_handle as isize {
+    let std_fd = match canon_std(src_handle) as isize {
         -10 => Some(0),
         -11 => Some(1),
         -12 => Some(2),
@@ -6776,6 +7258,10 @@ pub unsafe extern "win64" fn duplicate_handle(
     let pseudo = src_handle == get_current_process() || src_handle == get_current_thread();
     let copy = if pseudo {
         Some(src_handle)
+    } else if let Some(fd) = std_fd.filter(|&fd| libc::isatty(fd) == 1) {
+        // La console (terminal) reste la console : la copie est le handle
+        // standard réel, que les fonctions Console reconnaissent.
+        Some([STD_INPUT_REAL, STD_OUTPUT_REAL, STD_ERROR_REAL][fd as usize])
     } else if let Some(fd) = std_fd {
         let new_fd = libc::fcntl(fd, libc::F_DUPFD_CLOEXEC, 3);
         (new_fd >= 0).then(|| insert_file(std::os::unix::io::FromRawFd::from_raw_fd(new_fd)))
@@ -7104,7 +7590,7 @@ pub unsafe extern "win64" fn get_overlapped_result_ex(
 
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
-     "GetStdHandle"=>fn get_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"GetOverlappedResultEx"=>fn get_overlapped_result_ex,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
+     "GetStdHandle"=>fn get_std_handle,"SetStdHandle"=>fn set_std_handle, "WriteFile"=>fn write_file, "ReadFile"=>fn read_file,"GetOverlappedResult"=>fn get_overlapped_result,"GetOverlappedResultEx"=>fn get_overlapped_result_ex,"CancelIo"=>fn cancel_io,"CancelIoEx"=>fn cancel_io_ex,"CreateIoCompletionPort"=>fn create_io_completion_port,"GetQueuedCompletionStatus"=>fn get_queued_completion_status,"GetQueuedCompletionStatusEx"=>fn get_queued_completion_status_ex,"PostQueuedCompletionStatus"=>fn post_queued_completion_status,"CreateFileA"=>fn create_file_a, "GetFileSize"=>fn get_file_size, "SetFilePointer"=>fn set_file_pointer, "FlushFileBuffers"=>fn flush_file_buffers, "ExitProcess"=>fn exit_process,
      "CreateEventA"=>fn create_event_a,"SetEvent"=>fn set_event,"ResetEvent"=>fn reset_event,"CreateMutexA"=>fn create_mutex_a,"ReleaseMutex"=>fn release_mutex,"WaitForSingleObject"=>fn wait_for_single_object,"WaitForMultipleObjects"=>fn wait_for_multiple_objects,"GetExitCodeThread"=>fn get_exit_code_thread,"ResumeThread"=>fn resume_thread,
      "InitializeCriticalSection"=>fn initialize_critical_section,"InitializeCriticalSectionAndSpinCount"=>fn initialize_critical_section_and_spin_count,"InitializeCriticalSectionEx"=>fn initialize_critical_section_ex,"EnterCriticalSection"=>fn enter_critical_section,"TryEnterCriticalSection"=>fn try_enter_critical_section,"LeaveCriticalSection"=>fn leave_critical_section,"DeleteCriticalSection"=>fn delete_critical_section,
      "GetCommandLineA"=>fn get_command_line_a,"GetCommandLineW"=>fn get_command_line_w,"GetModuleHandleA"=>fn get_module_handle_a,"GetModuleHandleW"=>fn get_module_handle_w,"GetProcAddress"=>fn get_proc_address,"LoadLibraryA"=>fn load_library_a,"LoadLibraryW"=>fn load_library_w,"FreeLibrary"=>fn free_library,"CreateProcessA"=>fn create_process_a,"CreatePipe"=>fn create_pipe,"CreateProcessW"=>fn create_process_w,"OpenProcess"=>fn open_process,"TerminateProcess"=>fn terminate_process,"GetExitCodeProcess"=>fn get_exit_code_process,"GetCurrentProcess"=>fn get_current_process,"GetCurrentThread"=>fn get_current_thread,"DisableThreadLibraryCalls"=>fn disable_thread_library_calls,"GetCurrentThreadId"=>fn get_current_thread_id,
