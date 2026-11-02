@@ -92,6 +92,10 @@ fi
 if test -f "$dir/chromium_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-chromium-api.sh"
 fi
+# Rendu Direct3D 11 : shaders DXBC traduits en GLSL (#137), bloquant.
+if test -f "$dir/d3d11_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-d3d11-rendu.sh"
+fi
 # winusb : appareil USB trouvé par setupapi, décrit par WinUSB (#271), bloquant.
 if test -f "$dir/winusb_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-winusb.sh"
