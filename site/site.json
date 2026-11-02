@@ -1,12 +1,7 @@
 {
   "repo": "Univers4craft/winlux",
   "url": "https://univers4craft.github.io/winlux",
-  "languages": [
-    "fr",
-    "en",
-    "de",
-    "es"
-  ],
+  "languages": ["fr", "en", "de", "es"],
   "pages": [
     "index",
     "download",
