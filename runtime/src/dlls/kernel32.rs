@@ -1576,6 +1576,20 @@ unsafe fn create_file_str(
             }
         };
     }
+    // \\.\C: et \\.\PhysicalDriveN : un handle pour DeviceIoControl, posé
+    // sur la racine du lecteur ou l'entrée /sys/block du disque.
+    if let Some(dir) = crate::dlls::devio::device_target(path) {
+        return match std::fs::File::open(&dir) {
+            Ok(f) => {
+                crate::process::set_last_error(0);
+                insert_file(f)
+            }
+            Err(_) => {
+                crate::process::set_last_error(5);
+                usize::MAX
+            }
+        };
+    }
     // CONIN$ / CONOUT$ : la console, c'est-à-dire le terminal.
     let device = path.trim_start_matches("\\\\.\\").to_ascii_uppercase();
     if device == "CONIN$" && libc::isatty(0) == 1 {

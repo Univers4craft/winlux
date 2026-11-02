@@ -33,6 +33,7 @@ pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod dataobject;
 pub mod dbghelp;
+pub mod devio;
 pub mod dialogs;
 pub mod dinput8;
 pub mod dsound;
