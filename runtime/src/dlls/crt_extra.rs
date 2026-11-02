@@ -471,7 +471,7 @@ unsafe extern "win64" fn wcsrtombs(
     }
 }
 unsafe extern "win64" fn btowc(c: i32) -> u32 {
-    if c < 0 || c > 255 {
+    if !(0..=255).contains(&c) {
         return 0xFFFF;
     }
     let b = [c as u8];

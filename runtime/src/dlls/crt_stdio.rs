@@ -774,7 +774,7 @@ pub unsafe extern "win64" fn wfdopen(fd: i32, mode: *const u16) -> *mut c_void {
     if mode.is_null() {
         return std::ptr::null_mut();
     }
-    fdopen(fd, b"r\0".as_ptr())
+    fdopen(fd, c"r".as_ptr().cast())
 }
 
 /// `freopen` : rouvre un flux sur un autre fichier. Pour stdin/stdout/stderr
