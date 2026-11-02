@@ -389,6 +389,21 @@ _TR = {
     "Installer ou désinstaller des programmes": ("Install or uninstall programs", "Instalar o desinstalar programas", "Programme installieren oder deinstallieren"),
     "Enregistrement impossible : le dossier du programme doit être accessible en écriture.": ("Unable to save: the program folder must be writable.", "No se puede guardar: la carpeta del programa debe admitir escritura.", "Speichern nicht möglich: Der Programmordner muss beschreibbar sein."),
     "Les réglages s’appliquent au prochain lancement du programme.": ("Settings apply the next time the program starts.", "Los ajustes se aplican la próxima vez que se inicie el programa.", "Die Einstellungen gelten beim nächsten Programmstart."),
+    # Widgets (Windows + W)
+    'Widgets': ('Widgets', 'Widgets', 'Widgets'),
+    'Windows + W ouvre le volet : météo, agenda, état du PC, pense-bête, photos et minuteur.': ('Windows + W opens the panel: weather, agenda, PC status, sticky note, photos and timer.', 'Windows + W abre el panel: tiempo, agenda, estado del equipo, nota adhesiva, fotos y temporizador.', 'Windows + W öffnet den Bereich: Wetter, Termine, PC-Status, Notizzettel, Fotos und Timer.'),
+    'Bouton Widgets dans la barre des tâches': ('Widgets button on the taskbar', 'Botón Widgets en la barra de tareas', 'Widgets-Schaltfläche in der Taskleiste'),
+    'Affiche la météo ; un clic ouvre les widgets.': ('Shows the weather; a click opens the widgets.', 'Muestra el tiempo; un clic abre los widgets.', 'Zeigt das Wetter; ein Klick öffnet die Widgets.'),
+    'Lieu de la météo': ('Weather location', 'Ubicación del tiempo', 'Wetterort'),
+    'Vide : d’après la connexion Internet. Données de wttr.in.': ('Empty: based on the Internet connection. Data from wttr.in.', 'Vacío: según la conexión a Internet. Datos de wttr.in.', 'Leer: anhand der Internetverbindung. Daten von wttr.in.'),
+    'Unité de température': ('Temperature unit', 'Unidad de temperatura', 'Temperatureinheit'),
+    'Celsius (°C)': ('Celsius (°C)', 'Celsius (°C)', 'Celsius (°C)'),
+    'Fahrenheit (°F)': ('Fahrenheit (°F)', 'Fahrenheit (°F)', 'Fahrenheit (°F)'),
+    'Dossier des photos': ('Photos folder', 'Carpeta de fotos', 'Fotoordner'),
+    'Choisir un dossier…': ('Choose a folder…', 'Elegir una carpeta…', 'Ordner auswählen…'),
+    'Images du compte': ('Account pictures', 'Imágenes de la cuenta', 'Bilder des Kontos'),
+    'Ouvrir les widgets': ('Open widgets', 'Abrir widgets', 'Widgets öffnen'),
+    'Rétablir les widgets par défaut': ('Restore default widgets', 'Restablecer los widgets predeterminados', 'Standard-Widgets wiederherstellen'),
 }
 
 
@@ -1006,6 +1021,8 @@ class ExtraPages:
             _t("Choisir une image…"), images, lambda path: self.tool(["winlux-personalize", "start-icon", path])))
         self.actions(box, [(_t("Icône Winlux"), lambda: self.tool(["winlux-personalize", "start-icon", "default"])),
                            (_t("Rétablir l’apparence par défaut"), lambda: self.tool(["winlux-personalize", "reset", "default"]))])
+        if have("winlux-widgets"):
+            self.widget_settings()
         self.section(_t("Icônes du bureau"))
         box = self.card()
         self.actions(box, [(_t("Corbeille"), lambda: self.execute("desktop-icon-recycle")),
@@ -1013,6 +1030,42 @@ class ExtraPages:
                            (_t("Explorateur"), lambda: self.execute("desktop-icon-explorer")),
                            (_t("Documents"), lambda: self.execute("desktop-icon-documents"))])
         self.hint(_t("Ajoute l’icône sur le bureau ; un clic droit sur l’icône la retire."), box)
+
+    def widget_settings(self):
+        """Volet Win+W (winlux-widgets) : bouton de la barre, météo, photos."""
+        try:
+            answer = run(["winlux-widgets", "status"])
+            prefs = json.loads(answer.stdout if answer else "{}")
+        except ValueError:
+            prefs = {}
+        self.section(_t("Widgets"), _t("Windows + W ouvre le volet : météo, agenda, état du PC, pense-bête, photos et minuteur."))
+        box = self.card()
+        self.switch(box, _t("Bouton Widgets dans la barre des tâches"), prefs.get("button"),
+                    lambda on: self.tool(["winlux-widgets", "set", "button", "on" if on else "off"], refresh=False),
+                    _t("Affiche la météo ; un clic ouvre les widgets."))
+        place = Gtk.Box(spacing=6)
+        entry = Gtk.Entry(text=prefs.get("location", ""), placeholder_text=_t("Automatique"), width_chars=20)
+        entry.get_accessible().set_name(_t("Lieu de la météo"))
+        apply = Gtk.Button(label=_t("Appliquer"))
+        save = lambda *_: self.tool(["winlux-widgets", "set", "location", entry.get_text().strip()], refresh=False)
+        entry.connect("activate", save)
+        apply.connect("clicked", save)
+        place.pack_start(entry, False, False, 0)
+        place.pack_start(apply, False, False, 0)
+        self.row(box, _t("Lieu de la météo"), place, _t("Vide : d’après la connexion Internet. Données de wttr.in."))
+        self.combo(box, _t("Unité de température"), [("c", _t("Celsius (°C)")), ("f", _t("Fahrenheit (°F)"))],
+                   prefs.get("units", "c"), lambda value: self.tool(["winlux-widgets", "set", "units", value], refresh=False))
+        folder = Gtk.Button(label=_t("Choisir un dossier…"))
+
+        def pick(*_):
+            dialog = Gtk.FileChooserNative.new(_t("Dossier des photos"), self, Gtk.FileChooserAction.SELECT_FOLDER, None, None)
+            if dialog.run() == Gtk.ResponseType.ACCEPT and dialog.get_filename():
+                self.tool(["winlux-widgets", "set", "photos", dialog.get_filename()])
+            dialog.destroy()
+        folder.connect("clicked", pick)
+        self.row(box, _t("Dossier des photos"), folder, prefs.get("photos") or _t("Images du compte"))
+        self.actions(box, [(_t("Ouvrir les widgets"), lambda: self.spawn(["winlux-widgets"])),
+                           (_t("Rétablir les widgets par défaut"), lambda: self.tool(["winlux-widgets", "reset"], refresh=False))])
 
     # ── Lecteurs réseau ──
 
