@@ -413,6 +413,16 @@ summary="Langue : $LANG_CHOICE\nClavier : $KB_LAYOUT\nFuseau : $TIMEZONE\nMachin
 if test -n "$USER_AVATAR"; then
     summary="$summary\nAvatar : $(basename "$USER_AVATAR")"
 fi
+# Mention de non-affiliation (docs/DEFENSE-DU-NOM.md), dans la langue choisie.
+case "$LANG_CHOICE" in
+    en_*) independent='Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.' ;;
+    de_*) independent='Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.' ;;
+    es_*) independent='Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.' ;;
+    it_*) independent='Progetto indipendente, non affiliato a Microsoft né da essa approvato. Windows è un marchio di Microsoft Corporation.' ;;
+    pt_*) independent='Projeto independente, não afiliado à Microsoft nem aprovado por ela. Windows é uma marca da Microsoft Corporation.' ;;
+    *)    independent='Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.' ;;
+esac
+summary="$summary\n\n$independent"
 
 if test "$TUI" != none; then
     "$TUI" --title "Récapitulatif de la configuration" --msgbox "$summary" "$(dlg_h 18)" "$(dlg_w 60)" 2>/dev/null || true

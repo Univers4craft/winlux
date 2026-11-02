@@ -7,6 +7,13 @@ LANGS = ("fr", "en", "de", "es", "it", "pt")
 
 # Chaque entrée : (fr, en, de, es, it, pt)
 T = {
+    "independent": (
+        "Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.",
+        "Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.",
+        "Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.",
+        "Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.",
+        "Progetto indipendente, non affiliato a Microsoft né da essa approvato. Windows è un marchio di Microsoft Corporation.",
+        "Projeto independente, não afiliado à Microsoft nem aprovado por ela. Windows é uma marca da Microsoft Corporation."),
     "title": ("Créateur de clé USB Winlux", "Winlux USB Creator", "Winlux USB-Stick-Ersteller",
               "Creador de USB de Winlux", "Creatore di chiavette USB Winlux", "Criador de pen USB Winlux"),
     "subtitle": (

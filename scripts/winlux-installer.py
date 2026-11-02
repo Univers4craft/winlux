@@ -1361,6 +1361,7 @@ TRANSLATIONS = {
 
 EXTRA_TRANSLATIONS = {
     "fr_FR": {
+        "independent_notice": "Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Français",
         "keyboard_name_us": "QWERTY — Anglais (US)",
         "keyboard_name_gb": "QWERTY — Anglais (UK)",
@@ -1438,6 +1439,7 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Redimensionnement de Windows (peut prendre plusieurs minutes)...",
     },
     "en_US": {
+        "independent_notice": "Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — French",
         "keyboard_name_us": "QWERTY — English (US)",
         "keyboard_name_gb": "QWERTY — English (UK)",
@@ -1515,6 +1517,7 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Resizing Windows (may take several minutes)...",
     },
     "de_DE": {
+        "independent_notice": "Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Französisch",
         "keyboard_name_us": "QWERTY — Englisch (USA)",
         "keyboard_name_gb": "QWERTY — Englisch (GB)",
@@ -1592,6 +1595,7 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Windows wird verkleinert (kann einige Minuten dauern)...",
     },
     "es_ES": {
+        "independent_notice": "Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francés",
         "keyboard_name_us": "QWERTY — Inglés (EE. UU.)",
         "keyboard_name_gb": "QWERTY — Inglés (Reino Unido)",
@@ -1669,6 +1673,7 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Redimensionando Windows (puede tardar varios minutos)...",
     },
     "it_IT": {
+        "independent_notice": "Progetto indipendente, non affiliato a Microsoft né da essa approvato. Windows è un marchio di Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francese",
         "keyboard_name_us": "QWERTY — Inglese (USA)",
         "keyboard_name_gb": "QWERTY — Inglese (Regno Unito)",
@@ -1746,6 +1751,7 @@ EXTRA_TRANSLATIONS = {
         "progress_resize": "Ridimensionamento di Windows (potrebbe richiedere diversi minuti)...",
     },
     "pt_BR": {
+        "independent_notice": "Projeto independente, não afiliado à Microsoft nem aprovado por ela. Windows é uma marca da Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francês",
         "keyboard_name_us": "QWERTY — Inglês (EUA)",
         "keyboard_name_gb": "QWERTY — Inglês (Reino Unido)",
@@ -3105,7 +3111,16 @@ class InstallerApp(Gtk.Application):
             kb_label.get_style_context().add_class("card-detail")
             row.pack_end(kb_label, False, False, 8)
             box.pack_start(row, False, False, 0)
+        box.pack_end(self.independent_label(), False, False, 0)
         self.pages.add_named(box, page_name("language"))
+
+    def independent_label(self):
+        """« Projet indépendant, non affilié à Microsoft » (docs/DEFENSE-DU-NOM.md)."""
+        label = Gtk.Label(label=tr("independent_notice"), xalign=0)
+        label.set_line_wrap(True)
+        label.set_margin_top(12)
+        label.get_style_context().add_class("card-detail")
+        return label
 
     def on_lang_toggle(self, btn, locale, kb):
         if btn.get_active():
@@ -4471,6 +4486,11 @@ class InstallerApp(Gtk.Application):
         close_btn.connect("clicked", lambda _: self.quit())
         btn_box.pack_start(close_btn, False, False, 0)
         box.pack_start(btn_box, False, False, 0)
+        notice = self.independent_label()
+        notice.set_xalign(0.5)
+        notice.set_justify(Gtk.Justification.CENTER)
+        notice.set_margin_top(24)
+        box.pack_start(notice, False, False, 0)
         self.pages.add_named(box, page_name("done"))
 
     def on_reboot(self, _btn):

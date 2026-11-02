@@ -38,6 +38,7 @@ _TR = {
     'Découvrir le secours': ('Discover recovery', 'Descubrir la recuperación', 'Wiederherstellung entdecken'),
     'Astuce : Windows + E ouvre l’Explorateur, Windows + A les réglages rapides et Windows + N les notifications.': ('Tip: Windows + E opens File Explorer, Windows + A opens quick settings and Windows + N opens notifications.', 'Consejo: Windows + E abre el Explorador, Windows + A la configuración rápida y Windows + N las notificaciones.', 'Tipp: Windows + E öffnet den Explorer, Windows + A die Schnelleinstellungen und Windows + N die Benachrichtigungen.'),
     'Terminer': ('Finish', 'Finalizar', 'Fertigstellen'),
+    'Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.': ('Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.', 'Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.', 'Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.'),
     'Impossible d’ouvrir ce réglage': ('Unable to open this setting', 'No se puede abrir este ajuste', 'Diese Einstellung kann nicht geöffnet werden'),
     'Impossible d’enregistrer cette préférence': ('Unable to save this preference', 'No se puede guardar esta preferencia', 'Diese Einstellung kann nicht gespeichert werden'),
 }
@@ -78,6 +79,10 @@ class Welcome(Gtk.Window):
         finish = Gtk.Button(label=_t("Terminer"))
         finish.connect("clicked", self.finish)
         box.pack_end(finish, False, False, 0)
+        # Mention de non-affiliation (docs/DEFENSE-DU-NOM.md).
+        notice = Gtk.Label(label=_t("Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation."), xalign=0, wrap=True)
+        notice.get_style_context().add_class("dim-label")
+        box.pack_end(notice, False, False, 0)
 
     def launch(self, command):
         try: subprocess.Popen(command)
