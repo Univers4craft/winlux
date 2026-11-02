@@ -147,10 +147,18 @@ Ce qui reste à valider sur la vraie machine :
 
 ## Limites connues
 
-- `fs.watch` (ReadDirectoryChangesW) n'est pas encore pris en charge. Claude
-  Code le détecte et s'en passe.
-- ConPTY (CreatePseudoConsole) renvoie E_NOTIMPL : les programmes retombent
-  sur des tubes.
+- `fs.watch` repose sur `ReadDirectoryChangesW` / `ReadDirectoryChangesExW`,
+  écrits sur inotify (`runtime/src/dlls/dirwatch.rs`) : appel synchrone,
+  OVERLAPPED + événement, port de complétion et routine d'achèvement (APC
+  rendue pendant `SleepEx` / `WaitForSingleObjectEx` alertables),
+  sous-dossiers, renommages appariés et débordement (`ERROR_NOTIFY_ENUM_DIR`).
+  `FindFirstChangeNotification` utilise le même moteur. Pas encore essayé
+  avec un vrai Node.js sous Winlux.
+- ConPTY : `CreatePseudoConsole` ouvre un vrai pseudo-terminal Linux
+  (`openpty`) ; `CreateProcess` avec `PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE`
+  lui donne le programme comme terminal de contrôle (couleurs VT, taille avec
+  `ResizePseudoConsole`, saisie interactive). `ClosePseudoConsole` envoie
+  SIGHUP aux programmes attachés.
 - Les commandes passent par le bash Linux. Les outils Windows
   (`cmd.exe`, PowerShell) ne sont pas fournis.
 

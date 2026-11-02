@@ -4546,9 +4546,30 @@ unsafe fn create_process_common(
         let cwd = crate::paths::to_linux(&crate::dlls::cstr(current_directory));
         cmd.current_dir(cwd);
     }
+    // EXTENDED_STARTUPINFO_PRESENT + PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE :
+    // le programme s'attache à la pseudo-console (pty) de CreatePseudoConsole.
+    let mut pseudo_console = false;
+    if creation_flags & 0x0008_0000 != 0
+        && !startup.is_null()
+        && (*startup).cb as usize >= std::mem::size_of::<StartupInfoA>() + 8
+    {
+        let list = std::ptr::read_unaligned(
+            (startup as *const u8).add(std::mem::size_of::<StartupInfoA>()) as *const usize,
+        );
+        if let Some(console) = crate::dlls::kernel32_node::proc_thread_attribute(
+            list,
+            crate::dlls::kernel32_node::PROC_THREAD_ATTRIBUTE_PSEUDOCONSOLE,
+        ) {
+            if !crate::dlls::console_input::attach_pseudo_console(&mut cmd, console) {
+                crate::process::set_last_error(6);
+                return 0;
+            }
+            pseudo_console = true;
+        }
+    }
     // STARTF_USESTDHANDLES : entrée, sortie et erreur du programme lancé
     // (tubes de CreatePipe, fichiers, ou handles standard du parent).
-    if !startup.is_null() && (*startup).flags & 0x100 != 0 {
+    if !pseudo_console && !startup.is_null() && (*startup).flags & 0x100 != 0 {
         let s = &*startup;
         match (
             stdio_for_handle(s.std_input, 0),
@@ -4566,7 +4587,7 @@ unsafe fn create_process_common(
     }
     let _ = inherit_handles;
     // DETACHED_PROCESS / CREATE_NEW_PROCESS_GROUP : nouveau groupe de processus.
-    if creation_flags & (0x8 | 0x200) != 0 {
+    if !pseudo_console && creation_flags & (0x8 | 0x200) != 0 {
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
     }
     if let Some(env) = environment {
@@ -7071,7 +7092,7 @@ unsafe fn read_directory_changes(
     routine: usize,
     extended: bool,
 ) -> i32 {
-    if buf.is_null() || filter == 0 || filter & !0x17f != 0 {
+    if buf.is_null() || filter == 0 || filter & !crate::dlls::dirwatch::FILTER_ALL != 0 {
         crate::process::set_last_error(87);
         return 0;
     }
@@ -7129,7 +7150,8 @@ unsafe fn read_directory_changes(
     let overlapped = ov as *mut Overlapped;
     (*overlapped).internal = 0x103; // STATUS_PENDING
     (*overlapped).internal_high = 0;
-    let event = (*overlapped).event & !1;
+    // Les handles de Winlux se suivent : le bit bas n'est pas un drapeau ici.
+    let event = (*overlapped).event;
     if event != 0 {
         let _ = reset_event(event);
     }
@@ -7250,7 +7272,7 @@ fn change_notifications() -> &'static Mutex<HashMap<usize, Arc<std::sync::atomic
 }
 
 fn find_first_change_notification(path: &str, subtree: bool, filter: u32) -> usize {
-    if filter == 0 || filter & !0x17f != 0 {
+    if filter == 0 || filter & !crate::dlls::dirwatch::FILTER_ALL != 0 {
         crate::process::set_last_error(87);
         return usize::MAX;
     }
@@ -8006,13 +8028,7 @@ pub unsafe extern "win64" fn sleep_ex(ms: u32, alertable: i32) -> u32 {
         }
     }) {
         0xC0 => 0xC0,
-        0 => {
-            if run_apcs() {
-                0xC0
-            } else {
-                0
-            }
-        }
+        0 if run_apcs() => 0xC0,
         _ => 0,
     }
 }
@@ -9585,5 +9601,151 @@ mod audit_tests {
             std::str::from_utf8(&out[..n as usize]).unwrap(),
             "Fichier a.txt : 42 octets\r\n%"
         );
+    }
+}
+
+#[cfg(test)]
+mod surveillance_de_dossiers {
+    use super::*;
+    use crate::dlls::dirwatch::{decode, FILE_ACTION_ADDED};
+    use std::sync::atomic::AtomicU32;
+
+    fn temp(name: &str) -> std::path::PathBuf {
+        let dir = std::env::temp_dir().join(format!("winlux-rdcw-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn later(path: std::path::PathBuf) {
+        std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(300));
+            std::fs::write(path, b"x").unwrap();
+        });
+    }
+
+    #[test]
+    fn synchrone_puis_overlapped_avec_evenement() {
+        let dir = temp("sync");
+        let h = insert_file(File::open(&dir).unwrap());
+        let mut buffer = vec![0u8; 4096];
+        let mut bytes = 0u32;
+        later(dir.join("un.txt"));
+        let ok = unsafe {
+            read_directory_changes_w(
+                h,
+                buffer.as_mut_ptr() as *mut c_void,
+                4096,
+                0,
+                0x1,
+                &mut bytes,
+                0,
+                0,
+            )
+        };
+        assert_eq!(ok, 1);
+        let changes = decode(&buffer[..bytes as usize]);
+        assert_eq!(changes[0].action, FILE_ACTION_ADDED);
+        assert_eq!(changes[0].name, "un.txt");
+        // OVERLAPPED + événement : l'appel rend la main tout de suite.
+        let event = unsafe { create_event_a(0, 1, 0, std::ptr::null()) };
+        let mut ov: Overlapped = unsafe { std::mem::zeroed() };
+        ov.event = event;
+        let ok = unsafe {
+            read_directory_changes_w(
+                h,
+                buffer.as_mut_ptr() as *mut c_void,
+                4096,
+                0,
+                0x1,
+                std::ptr::null_mut(),
+                &mut ov as *mut Overlapped as usize,
+                0,
+            )
+        };
+        assert_eq!(ok, 1);
+        later(dir.join("deux.txt"));
+        assert_eq!(wait_for_single_object(event, 5000), 0);
+        let mut got = 0u32;
+        assert_eq!(unsafe { get_overlapped_result(h, &mut ov, &mut got, 1) }, 1);
+        assert_eq!(decode(&buffer[..got as usize])[0].name, "deux.txt");
+        // Fermer le dossier abandonne une attente en cours.
+        let ok = unsafe {
+            read_directory_changes_w(
+                h,
+                buffer.as_mut_ptr() as *mut c_void,
+                4096,
+                0,
+                0x1,
+                std::ptr::null_mut(),
+                &mut ov as *mut Overlapped as usize,
+                0,
+            )
+        };
+        assert_eq!(ok, 1);
+        assert_eq!(close_handle(h), 1);
+        assert_eq!(wait_for_single_object(event, 5000), 0);
+        assert_eq!(unsafe { get_overlapped_result(h, &mut ov, &mut got, 1) }, 0);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    static ROUTINE_BYTES: AtomicU32 = AtomicU32::new(0);
+    extern "win64" fn routine(error: u32, bytes: u32, _ov: usize) {
+        ROUTINE_BYTES.store(if error == 0 { bytes } else { u32::MAX }, Ordering::SeqCst);
+    }
+
+    #[test]
+    fn routine_d_achevement_pendant_sleepex() {
+        let dir = temp("apc");
+        let h = insert_file(File::open(&dir).unwrap());
+        let mut buffer = vec![0u8; 4096];
+        let mut ov: Overlapped = unsafe { std::mem::zeroed() };
+        let ok = unsafe {
+            read_directory_changes_w(
+                h,
+                buffer.as_mut_ptr() as *mut c_void,
+                4096,
+                1,
+                0x17f,
+                std::ptr::null_mut(),
+                &mut ov as *mut Overlapped as usize,
+                routine as *const () as usize,
+            )
+        };
+        assert_eq!(ok, 1);
+        later(dir.join("trois.txt"));
+        // Attente alertable : la routine tourne sur ce thread, SleepEx rend 0xC0.
+        assert_eq!(unsafe { sleep_ex(5000, 1) }, 0xC0);
+        let bytes = ROUTINE_BYTES.load(Ordering::SeqCst);
+        assert!(bytes > 0 && bytes != u32::MAX);
+        assert_eq!(decode(&buffer[..bytes as usize])[0].name, "trois.txt");
+        // Sans APC, une attente alertable expire normalement.
+        assert_eq!(unsafe { sleep_ex(30, 1) }, 0);
+        close_handle(h);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn find_first_change_notification() {
+        let dir = temp("ffcn");
+        let path: Vec<u16> = dir
+            .to_string_lossy()
+            .encode_utf16()
+            .chain(Some(0))
+            .collect();
+        let h = unsafe { find_first_change_notification_w(path.as_ptr(), 0, 0x1) };
+        assert_ne!(h, usize::MAX);
+        assert_eq!(wait_for_single_object(h, 200), 258);
+        later(dir.join("quatre.txt"));
+        assert_eq!(wait_for_single_object(h, 5000), 0);
+        assert_eq!(find_next_change_notification(h), 1);
+        assert_eq!(wait_for_single_object(h, 200), 258);
+        assert_eq!(find_close_change_notification(h), 1);
+        let missing: Vec<u16> = "/nulle/part".encode_utf16().chain(Some(0)).collect();
+        assert_eq!(
+            unsafe { find_first_change_notification_w(missing.as_ptr(), 0, 0x1) },
+            usize::MAX
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

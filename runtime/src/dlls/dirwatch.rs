@@ -458,7 +458,8 @@ pub fn encode_extended(change: &Change, root: &Path) -> Vec<u8> {
     record
 }
 
-/// Relit des enregistrements `FILE_NOTIFY_INFORMATION` (tests, journal).
+/// Relit des enregistrements `FILE_NOTIFY_INFORMATION` (tests).
+#[cfg(test)]
 pub fn decode(records: &[u8]) -> Vec<Change> {
     let mut out = Vec::new();
     let mut offset = 0usize;
@@ -470,8 +471,10 @@ pub fn decode(records: &[u8]) -> Vec<Change> {
         let start = offset + 12;
         let end = (start + length).min(records.len());
         let units: Vec<u16> = records[start..end]
-            .chunks_exact(2)
-            .map(|c| u16::from_le_bytes([c[0], c[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|c| u16::from_le_bytes(*c))
             .collect();
         out.push(Change {
             action,
