@@ -127,6 +127,13 @@ for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); d
 done
 # Presse-papiers commun : copier dans un .exe, coller dans une appli Linux, et inversement.
 if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux/clipboard-bridge.log 2>&1 & fi
+# Session live (root) : mêmes services que la session d'un compte
+# (winlux-user-session.sh). Sans eux, Windows+V restait vide, les alarmes de
+# l'Horloge ne sonnaient pas fenêtre fermée et l'éclairage nocturne ne
+# s'appliquait pas.
+if test -x /usr/bin/winlux-clipboard; then /usr/bin/winlux-clipboard daemon >/run/winlux/clipboard-history.log 2>&1 & fi
+if test -x /usr/bin/winlux-alarms; then /usr/bin/winlux-alarms daemon >/run/winlux/alarms.log 2>&1 & fi
+if test -x /usr/bin/winlux-ambiance; then /usr/bin/winlux-ambiance daemon >/run/winlux/ambiance.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
 # Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.

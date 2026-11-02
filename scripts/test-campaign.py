@@ -284,4 +284,16 @@ for script in ("winlux-personalize.py", "winlux-settings-pages.py", "winlux-nati
     ok('"Adwaita-dark" if' not in text and "gtk_theme=Adwaita-dark" not in text,
        f"{script} : thème sombre par prefer-dark, pas « Adwaita-dark » (inexistant, rendu clair)")
 
+# ── Petits plaisirs (#292, passage en VM) ──────────────────────────────────
+native_session = (SCRIPTS / "winlux-native-session.sh").read_text()
+for daemon in ("winlux-clipboard daemon", "winlux-alarms daemon", "winlux-ambiance daemon"):
+    ok(daemon in native_session, f"session live : {daemon} lancé (Windows+V, alarmes, éclairage nocturne)")
+clipboard = (SCRIPTS / "winlux-clipboard.py").read_text()
+ok('label="📌"' not in clipboard and "user-trash-symbolic" in clipboard,
+   "Windows+V : boutons Épingler/Supprimer en icônes du thème (pas d'emoji illisible sans police)")
+taskview = (SCRIPTS / "winlux-taskview.py").read_text()
+ok("self.set_app_paintable(True)" not in taskview, "vue des tâches : le voile couvre tout l'écran")
+snap = (SCRIPTS / "winlux-snap.py").read_text()
+ok(snap.count('"focus-out-event"') >= 2, "assistant d'ancrage : se ferme quand on passe à une autre fenêtre")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")
