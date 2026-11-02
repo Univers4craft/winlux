@@ -67,4 +67,9 @@ if test -f "$dir/serial_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-serial.sh"
 fi
 
+# Définition d'écran des jeux, remise à la sortie (#271), bloquant.
+if test -f "$dir/display_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-display.sh"
+fi
+
 echo "Tests MinGW réussis."

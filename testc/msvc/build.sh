@@ -59,3 +59,13 @@ done
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/serial_msvc.c" -o "$tmp/serial_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/serial_msvc.obj" \
     "$tmp/kernel32_serial.lib" "$tmp/advapi32_serial.lib" /out:"$out/serial_msvc.exe"
+# Définition d'écran et rampe gamma des jeux (#271).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\n' >"$tmp/kernel32_display.def"
+printf 'LIBRARY user32.dll\nEXPORTS\nEnumDisplaySettingsW\nChangeDisplaySettingsExW\n' >"$tmp/user32_display.def"
+printf 'LIBRARY gdi32.dll\nEXPORTS\nGetDeviceGammaRamp\n' >"$tmp/gdi32_display.def"
+for d in kernel32_display user32_display gdi32_display; do
+    llvm-dlltool -m i386:x86-64 -d "$tmp/$d.def" -l "$tmp/$d.lib"
+done
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/display_msvc.c" -o "$tmp/display_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/display_msvc.obj" \
+    "$tmp/kernel32_display.lib" "$tmp/user32_display.lib" "$tmp/gdi32_display.lib" /out:"$out/display_msvc.exe"

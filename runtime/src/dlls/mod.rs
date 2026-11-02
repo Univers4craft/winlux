@@ -35,6 +35,7 @@ pub mod dbghelp;
 pub mod devio;
 pub mod dialogs;
 pub mod dinput8;
+pub mod displaymode;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
@@ -264,6 +265,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     }
                     e.extend(clipboard::exports());
                     e.extend(rawinput::exports());
+                    e.extend(displaymode::user32_exports());
                     e.extend(crate::intl::api::user32_exports());
                     e
                 },
@@ -347,6 +349,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(gdi32_fonts::exports());
                     e.extend(winspool::gdi_exports());
                     e.extend(opengl32::gdi32_exports());
+                    e.extend(displaymode::gdi32_exports());
                     e
                 },
                 handle: fake_module(),

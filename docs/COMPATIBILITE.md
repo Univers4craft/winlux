@@ -81,6 +81,18 @@ ouverture, et `SetCommMask`/`WaitCommEvent` (OVERLAPPED compris),
 et `GetDefaultCommConfig` complètent. Test : `scripts/test-serial.sh` (COM7 sur
 un pseudo-terminal qui répond).
 
+Les jeux en plein écran exclusif changent la définition et la rampe gamma
+(#271, `runtime/src/dlls/displaymode.rs`) : `EnumDisplaySettings(Ex)A/W` liste les
+vrais modes et fréquences de chaque écran (`xrandr --query`, `\\.\DISPLAY1` =
+écran principal), `ChangeDisplaySettings(Ex)A/W` applique la demande par
+`xrandr --output … --mode … --rate …` (CDS_TEST, DISP_CHANGE_BADMODE,
+WM_DISPLAYCHANGE), et `SetDeviceGammaRamp`/`GetDeviceGammaRamp` passent par la
+rampe RandR de la CRTC. Tout est défait à la fin du programme, même s'il
+plante : un gardien `winlux --display-restore`, lancé au premier changement avec
+l'état d'origine, attend la fermeture de son entrée standard puis remet l'écran.
+Rien n'est écrit dans la configuration d'écran mémorisée. Test :
+`scripts/test-display.sh` (faux xrandr).
+
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
 permise (libGL/libvulkan de l'hôte, FFmpeg, curl, OpenSSL/GnuTLS, PipeWire…).
@@ -373,9 +385,9 @@ série (`SetCommState`…, 4 logiciels), `SetDeviceGammaRamp`, changement de
 résolution (`ChangeDisplaySettingsExW`, 8).
 
 Fait : `hid.dll` et l'énumération HID de `setupapi` sur hidraw, `DeviceIoControl`
-sur disques, volumes et fichiers, entrée brute (voir plus haut).
-Reste : `cfgmgr32`, `winusb`, la classe Ports de `setupapi`,
-résolution et rampe gamma.
+sur disques, volumes et fichiers, entrée brute, ports série, définition
+d'écran et rampe gamma (voir plus haut).
+Reste : `cfgmgr32`, `winusb`, la classe Ports de `setupapi`.
 
 Ampleur : **M**. Suivi : #271.
 
