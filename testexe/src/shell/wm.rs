@@ -2613,5 +2613,10 @@ pub unsafe fn tick() -> bool {
             repaint |= app_tick(app, &frame_of(&WINS[app].rect));
         }
     }
+    // Copie lancée depuis le bureau, Explorateur fermé ou réduit : la tâche
+    // de fond doit tout de même être suivie jusqu'au bout.
+    if !WINS[APP_EXPLORER].open || WINS[APP_EXPLORER].minimized {
+        crate::explorer::background_tick();
+    }
     repaint
 }
