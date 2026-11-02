@@ -99,6 +99,14 @@ course à la main (la session était verrouillée pendant la mesure).
     Rejoué par `tls_suite.exe` contre un serveur HTTPS local ; à confirmer
     dans le jeu sur le vrai PC.
 
+12. **Passage 10** (après #346 et #347) : `curl_global_init` réussit, curl
+    démarre avec Schannel. Les quatre requêtes HTTPS du menu (actualités,
+    vérification de mise à jour) échouaient pourtant : au premier appel,
+    curl déclare son tampon de sortie `SECBUFFER_EMPTY` et
+    `InitializeSecurityContextW` rendait `SEC_E_BUFFER_TOO_SMALL`. Ce tampon
+    devient maintenant le jeton, comme sous Windows. crashpad reste
+    volontairement non lancé (`is_crash_handler`) ; le jeu n'est pas bloqué.
+
 Entrée brute (`WM_INPUT` par evdev), changement de définition (xrandr) et
 rampe gamma (RandR) sont arrivés avec #326 ; à revoir en jouant à la souris.
 

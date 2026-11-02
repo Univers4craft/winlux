@@ -234,6 +234,13 @@ pub unsafe fn free_credentials(cred: *const SecHandle) -> i32 {
 /// Rend `bytes` dans le tampon jeton de `output` (alloué si demandé).
 unsafe fn put_token(output: *mut SecBufferDesc, bytes: &[u8], req: u32) -> Result<bool, i32> {
     let bufs = buffers(output);
+    // curl (Warzone 2100) déclare son premier tampon de sortie SECBUFFER_EMPTY
+    // avec ISC_REQ_ALLOCATE_MEMORY : comme Schannel, on en fait le jeton.
+    if !bufs.iter().any(|b| kind(b) == SECBUFFER_TOKEN) && !bytes.is_empty() {
+        if let Some(e) = bufs.iter_mut().find(|b| kind(b) == SECBUFFER_EMPTY) {
+            e.ty = SECBUFFER_TOKEN;
+        }
+    }
     let Some(t) = bufs.iter_mut().find(|b| kind(b) == SECBUFFER_TOKEN) else {
         return if bytes.is_empty() {
             Ok(false)
@@ -774,6 +781,23 @@ mod tests {
 
     fn sb(ty: u32, pv: *mut u8, cb: u32) -> SecBuffer {
         SecBuffer { cb, ty, pv }
+    }
+
+    #[test]
+    fn empty_output_buffer_becomes_the_token() {
+        // Premier appel de curl : tampon de sortie SECBUFFER_EMPTY, cb=0, pv nul.
+        unsafe {
+            let mut out = [sb(SECBUFFER_EMPTY, std::ptr::null_mut(), 0)];
+            let mut d = desc(&mut out);
+            assert_eq!(
+                put_token(&mut d, b"hello", ISC_REQ_ALLOCATE_MEMORY),
+                Ok(true)
+            );
+            assert_eq!(out[0].ty, SECBUFFER_TOKEN);
+            assert_eq!(out[0].cb, 5);
+            assert_eq!(std::slice::from_raw_parts(out[0].pv, 5), b"hello");
+            libc::free(out[0].pv.cast());
+        }
     }
 
     /// Boucle de poignée de main type « curl » ; renvoie le contexte et le reliquat.
