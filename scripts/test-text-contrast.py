@@ -291,6 +291,14 @@ def audit(Gtk, Pango, lang):
         for widget in walk(window):
             if not widget.get_mapped() or not widget.is_drawable():
                 continue
+            # GtkViewport ne peint pas son fond quand son contenu défile (cache
+            # de pixels) : les marges de l'enfant sortent en noir à l'écran.
+            if isinstance(widget, Gtk.Viewport) and widget.get_child() is not None:
+                child = widget.get_child()
+                if any((child.get_margin_start(), child.get_margin_end(), child.get_margin_top(),
+                        child.get_margin_bottom())):
+                    problems.append(f"marges non peintes dans une zone défilante : {type(child).__name__} "
+                                    f"« {child.get_name()} » (bande noire quand la page défile)")
             if isinstance(widget, Gtk.Image) and widget.get_storage_type() != Gtk.ImageType.ICON_NAME:
                 continue
             if isinstance(widget, Gtk.Image) and not (widget.get_icon_name()[0] or "").endswith("-symbolic"):
