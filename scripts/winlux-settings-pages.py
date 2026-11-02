@@ -574,7 +574,7 @@ DRIVE_STATES = {"ok": "En ligne", "offline": "Hors ligne", "connecting": "Connex
                 "disconnected": "Hors ligne"}
 BT_KINDS = {"audio": "Audio", "clavier": "Clavier", "souris": "Souris", "manette": "Manette",
             "telephone": "Téléphone", "ordinateur": "Ordinateur"}
-ACCENTS = ("#8178b7", "#0078d4", "#0099bc", "#00b294", "#10893e", "#ca5010", "#e81123", "#c239b3")
+ACCENTS = ("#6a3df0", "#0078d4", "#0099bc", "#00b294", "#10893e", "#ca5010", "#e81123", "#c239b3")
 
 
 # ── Contraste du texte (WCAG) : couleurs calculées plutôt que figées ─────────
@@ -617,7 +617,7 @@ def readable(color, background, minimum=4.5):
     return color if contrast(color, background) >= minimum else target
 
 
-def settings_palette(dark, accent="#8178b7"):
+def settings_palette(dark, accent="#6a3df0"):
     """Couleurs de Paramètres (thème clair ou sombre), texte toujours à 4,5:1 au moins."""
     if dark:
         p = {"bg": "#181b24", "fg": "#ecedf5", "side": "#202430", "hover": "#30374a", "card": "#242a38",
@@ -784,7 +784,7 @@ def a11y_write(**changes):
 
 def appearance():
     try: return json.loads(APPEARANCE.read_text())
-    except (OSError, ValueError): return {"theme": "dark", "accent": "#8178b7"}
+    except (OSError, ValueError): return {"theme": "dark", "accent": "#6a3df0"}
 
 
 # ── Registre Windows (reg.exe intégré au runtime) ───────────────────────────

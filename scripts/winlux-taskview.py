@@ -219,7 +219,7 @@ def run_view():
               .title { font-size: 13px; }
               .hint { color: #adb6c9; font-size: 15px; }
               .desk { background: #2a3040; border-radius: 8px; padding: 8px 16px; color: #ecedf5; border: 2px solid transparent; }
-              .desk.on { border-color: #8178b7; }
+              .desk.on { border-color: #b69cff; }
               .desk:hover { background: #343b4e; }
               button.x { background: transparent; border: none; box-shadow: none; padding: 0 6px; color: #ecedf5; }
               button.x:hover { background: #c42b1c; }

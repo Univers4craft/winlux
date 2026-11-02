@@ -96,6 +96,7 @@ display() {
     else echo "ni DISPLAY ni xvfb-run : test sauté"; fi
 }
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
+run accent-prisme        python3 -B scripts/test-default-accent.py
 run reglages-rapides     display python3 -B scripts/test-quick-settings.py
 run comptes              display python3 -B scripts/test-accounts.py
 # Fautes matérielles en exceptions SEH (#269) : runtime compilé et clang requis.
