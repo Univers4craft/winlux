@@ -119,6 +119,11 @@ cp "$root/integration/store-catalog.txt" "$stage/usr/share/winlux/store-catalog.
 mkdir -p "$stage/etc/winlux/store-sources.d"
 cp "$root/integration/store-sources.d/"*.json "$stage/etc/winlux/store-sources.d/"
 chmod 755 "$stage/usr/bin/winlux-store" "$stage/usr/bin/winlux-fonts"
+# Claude Code (#255) : « winlux-claude-code install » télécharge et vérifie
+# claude.exe après le premier démarrage ; rien de lourd dans l'ISO.
+if test -f "$root/scripts/winlux-claude-code.sh"; then
+    install -m 755 "$root/scripts/winlux-claude-code.sh" "$stage/usr/bin/winlux-claude-code"
+fi
 cp "$root/scripts/winlux-dhcp-hook.sh" "$stage/usr/share/winlux/udhcpc.script"
 cp "$root/integration/winlux-browser" "$stage/usr/bin/winlux-browser"
 cp "$root/scripts/winlux-browsers.sh" "$stage/usr/bin/winlux-browsers"
