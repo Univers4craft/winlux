@@ -19,6 +19,18 @@ cat "$work/sortie.txt"
 test "$status" -eq 0 || { echo "mingw_suite.exe : code $status" >&2; exit 1; }
 grep -q '^atexit exécuté$' "$work/sortie.txt" || { echo "les fonctions atexit n'ont pas été exécutées" >&2; exit 1; }
 
+# Fonctions des vrais jeux (docs/VRAIS-JEUX.md), en msvcrt puis en UCRT.
+for name in games_suite games_suite_ucrt; do
+    test -f "$dir/$name.exe" || { echo "$name.exe absent" >&2; exit 1; }
+    set +e
+    WINLUX_GAMES_TEST=jeu WINLUX_GUI=headless "$runtime" "$dir/$name.exe" >"$work/$name.txt" 2>&1
+    games_status=$?
+    set -e
+    cat "$work/$name.txt"
+    test "$games_status" -eq 0 || { echo "$name.exe : $games_status test(s) en échec" >&2; exit 1; }
+    grep -q 'tout est bon' "$work/$name.txt" || { echo "$name : marqueur de réussite absent" >&2; exit 1; }
+done
+
 if test -f "$dir/cpp_exceptions.exe"; then
     set +e
     WINLUX_GUI=headless "$runtime" "$dir/cpp_exceptions.exe" >"$work/cpp.txt" 2>&1
