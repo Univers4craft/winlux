@@ -2296,6 +2296,7 @@ impl X11Backend {
                 if focus_is_grab(e.mode) {
                     return None;
                 }
+                crate::dlls::rawinput::set_app_focus(true);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,
@@ -2308,6 +2309,8 @@ impl X11Backend {
                 if focus_is_grab(e.mode) {
                     return None;
                 }
+                // Un FocusIn suit si le focus passe à une autre fenêtre du programme.
+                crate::dlls::rawinput::set_app_focus(false);
                 let hwnd = *self.by_xwin.get(&e.event)?;
                 Some(PendingEvent {
                     hwnd,
@@ -3737,6 +3740,38 @@ impl gui::GuiBackend for X11Backend {
             .height(height as u32);
         let _ = self.conn.configure_window(window, &aux);
         let _ = self.conn.flush();
+    }
+
+    fn set_popup(&mut self, hwnd: usize) {
+        if let Some(w) = self.windows.get(&hwnd) {
+            let aux = ChangeWindowAttributesAux::new().override_redirect(1);
+            let _ = self.conn.change_window_attributes(w.window, &aux);
+            let _ = self.conn.flush();
+        }
+    }
+
+    fn grab_pointer(&mut self, hwnd: usize, grab: bool) {
+        use x11rb::protocol::xproto::{EventMask, GrabMode};
+        if !grab {
+            let _ = self.conn.ungrab_pointer(x11rb::CURRENT_TIME);
+            let _ = self.conn.flush();
+            return;
+        }
+        if let Some(w) = self.windows.get(&hwnd) {
+            // owner_events : les fenêtres du programme reçoivent toujours
+            // leurs clics ; le reste de l'écran arrive au menu.
+            let _ = self.conn.grab_pointer(
+                true,
+                w.window,
+                EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE | EventMask::POINTER_MOTION,
+                GrabMode::ASYNC,
+                GrabMode::ASYNC,
+                x11rb::NONE,
+                x11rb::NONE,
+                x11rb::CURRENT_TIME,
+            );
+            let _ = self.conn.flush();
+        }
     }
 
     fn lower_window(&mut self, hwnd: usize) {

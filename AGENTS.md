@@ -40,3 +40,31 @@
 - Ne pas masquer les erreurs de validation. Si une commande échoue, examiner
   son résultat et ne relancer que si une action corrective ou une autre
   vérification est nécessaire.
+
+## Salle blanche (compatibilité Windows)
+
+Winlux réimplémente l'API Windows par lui-même. Pour que ce travail reste
+juridiquement irréprochable, il se fait en « salle blanche » :
+
+- **Sources autorisées** : la documentation publique (Microsoft Learn, SDK
+  publics et leurs en-têtes, spécifications publiées comme [MS-CFB],
+  [MS-SHLLINK] ou PE/COFF), les livres et articles publiés, et le
+  comportement observé d'un programme lancé dans Winlux (traces, codes de
+  retour, captures).
+- **Interdit** : lire, décompiler, désassembler ou copier du code ou des
+  binaires Microsoft (DLL de Windows, pilotes, fichiers de symboles privés,
+  code divulgué). Interdit aussi : s'inspirer de Wine, ReactOS ou d'une
+  autre réimplémentation dont la licence ou l'origine poserait problème. Le
+  désassemblage d'un programme tiers testé (PuTTY, un jeu…) reste permis
+  pour comprendre ce qu'il attend de Winlux, jamais pour copier du code
+  Microsoft qu'il contiendrait.
+- **Textes** : les messages, libellés et boîtes de dialogue sont rédigés par
+  Winlux, jamais recopiés mot pour mot de Windows. Les noms d'API, de
+  constantes et de structures, ainsi que les codes d'erreur, ne sont pas
+  concernés : ils sont nécessaires à la compatibilité.
+- **Fichiers de test** : tout fichier binaire ajouté au dépôt (`.msi`,
+  `.exe`, `.dll`, images, polices) est produit par nous ou d'origine libre
+  documentée. Un script ou un `LISEZMOI` à côté indique comment il est
+  généré (exemple : `runtime/src/msi/testdata/`).
+- En cas de doute sur l'origine d'une information ou d'un fichier, ne pas
+  l'utiliser et le signaler.

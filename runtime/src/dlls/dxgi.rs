@@ -600,6 +600,23 @@ fn adapter_desc() -> DxgiAdapterDesc {
     desc
 }
 
+/// Adaptateur (et sa fabrique) pour IDXGIDevice::GetAdapter de d3d11.
+pub(crate) fn new_default_adapter() -> *mut c_void {
+    create_adapter(create_factory()).cast()
+}
+
+pub(crate) unsafe fn adapter_query_interface(
+    adapter: *mut c_void,
+    riid: *const Guid,
+    out: *mut *mut c_void,
+) -> i32 {
+    unsafe { DxgiAdapter::query_interface(adapter.cast(), riid, out) }
+}
+
+pub(crate) unsafe fn adapter_release(adapter: *mut c_void) -> u32 {
+    unsafe { DxgiAdapter::release(adapter.cast()) }
+}
+
 fn create_adapter(factory: *mut DxgiFactory) -> *mut DxgiAdapter {
     Box::into_raw(Box::new(DxgiAdapter {
         vtable: &ADAPTER_VTABLE,

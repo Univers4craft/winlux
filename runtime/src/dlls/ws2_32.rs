@@ -265,6 +265,55 @@ fn assoc_poll_events(a: &EventAssoc) -> i16 {
     e
 }
 
+/// Le handle est-il un événement créé par WSACreateEvent ?
+pub(crate) fn is_wsa_event(h: usize) -> bool {
+    lock(events()).contains_key(&h)
+}
+
+/// État d'un handle attendu par MsgWaitForMultipleObjects : un événement
+/// WSACreateEvent signalé, ou une socket associée au handle par
+/// WSAEventSelect (même un événement CreateEvent, comme PuTTY) qui est prête.
+/// Sous Windows la pile réseau signale l'événement ; ici on interroge les
+/// sockets au moment de l'attente.
+pub(crate) fn handle_ready(h: usize) -> bool {
+    {
+        let ev = lock(events());
+        if let Some(st) = ev.get(&h) {
+            if st.triggered {
+                return true;
+            }
+            let mut p = libc::pollfd {
+                fd: st.fd,
+                events: libc::POLLIN,
+                revents: 0,
+            };
+            // SAFETY : un seul pollfd valide, attente nulle.
+            if unsafe { libc::poll(&mut p, 1, 0) } > 0 && p.revents & libc::POLLIN != 0 {
+                return true;
+            }
+        }
+    }
+    let mut pfds: Vec<libc::pollfd> = lock(event_assoc())
+        .iter()
+        .filter(|(_, a)| a.event == h)
+        .map(|(&sock, a)| libc::pollfd {
+            fd: sock as i32,
+            events: assoc_poll_events(a),
+            revents: 0,
+        })
+        .filter(|p| p.events != 0)
+        .collect();
+    if pfds.is_empty() {
+        return false;
+    }
+    // SAFETY : `pfds` est un tableau valide pour la durée de l'appel.
+    let rc = unsafe { libc::poll(pfds.as_mut_ptr(), pfds.len() as libc::nfds_t, 0) };
+    rc > 0
+        && pfds
+            .iter()
+            .any(|p| p.revents & (p.events | libc::POLLHUP | libc::POLLERR) != 0)
+}
+
 #[repr(C)]
 pub(crate) struct WsaBuf {
     len: u32,
@@ -3033,6 +3082,37 @@ mod tests {
         // WSAEWOULDBLOCK (10035) pour un connect non bloquant en cours.
         assert_eq!(error_from_errno(libc::EINPROGRESS), WSAEWOULDBLOCK);
         assert_eq!(error_from_errno(libc::EWOULDBLOCK), WSAEWOULDBLOCK);
+    }
+
+    #[test]
+    fn handle_associe_par_wsaeventselect_est_pret_quand_la_socket_l_est() {
+        let mut fds = [0i32; 2];
+        // SAFETY : tableau de deux descripteurs.
+        unsafe {
+            assert_eq!(
+                libc::socketpair(libc::AF_UNIX, libc::SOCK_STREAM, 0, fds.as_mut_ptr()),
+                0
+            );
+        }
+        let h = 0x7777_0001usize;
+        lock(event_assoc()).insert(
+            fds[0] as usize,
+            EventAssoc {
+                event: h,
+                mask: FD_READ,
+                write_armed: false,
+            },
+        );
+        assert!(!handle_ready(h));
+        // SAFETY : écrit un octet sur le pair.
+        unsafe { libc::write(fds[1], b"x".as_ptr() as *const c_void, 1) };
+        assert!(handle_ready(h));
+        lock(event_assoc()).remove(&(fds[0] as usize));
+        assert!(!handle_ready(h));
+        unsafe {
+            libc::close(fds[0]);
+            libc::close(fds[1]);
+        }
     }
 
     #[test]
