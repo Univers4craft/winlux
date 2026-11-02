@@ -19,7 +19,7 @@ cat "$work/sortie.txt"
 test "$status" -eq 0 || { echo "mingw_suite.exe : code $status" >&2; exit 1; }
 grep -q '^atexit exécuté$' "$work/sortie.txt" || { echo "les fonctions atexit n'ont pas été exécutées" >&2; exit 1; }
 
-# Fonctions des vrais jeux (docs/JEUX.md), en msvcrt puis en UCRT.
+# Fonctions des vrais jeux (docs/VRAIS-JEUX.md), en msvcrt puis en UCRT.
 for name in games_suite games_suite_ucrt; do
     test -f "$dir/$name.exe" || { echo "$name.exe absent" >&2; exit 1; }
     set +e

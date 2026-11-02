@@ -1,7 +1,7 @@
 /* Fonctions demandées par de vrais jeux Windows 64 bits (SuperTuxKart 1.5,
  * Warzone 2100 4.7) et leurs bibliothèques : SDL, libpng/freetype
  * (setjmp), libcurl, OpenAL, libc++. Compilé deux fois : avec msvcrt
- * (comme SuperTuxKart) et avec l'UCRT (comme Warzone 2100). Voir docs/JEUX.md. */
+ * (comme SuperTuxKart) et avec l'UCRT (comme Warzone 2100). Voir docs/VRAIS-JEUX.md. */
 #include <ctype.h>
 #include <direct.h>
 #include <errno.h>

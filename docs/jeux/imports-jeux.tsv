@@ -1,5 +1,5 @@
 # Imports des DLL système par les vrais jeux testés (jeu, DLL telle qu'importée, fonction).
-# Régénéré par la mesure de docs/JEUX.md ; vérifié par scripts/test-games-imports.py.
+# Régénéré par la mesure de docs/VRAIS-JEUX.md ; vérifié par scripts/test-games-imports.py.
 SuperTuxKart 1.5	advapi32.dll	CryptAcquireContextA
 SuperTuxKart 1.5	advapi32.dll	CryptCreateHash
 SuperTuxKart 1.5	advapi32.dll	CryptDestroyHash

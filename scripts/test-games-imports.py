@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Vérifie que Winlux fournit chaque fonction système importée par les vrais
-jeux testés (docs/jeux/imports-jeux.tsv, voir docs/JEUX.md).
+jeux testés (docs/jeux/imports-jeux.tsv, voir docs/VRAIS-JEUX.md).
 
 Usage : python3 scripts/test-games-imports.py [WINLUX]
 

@@ -1,6 +1,6 @@
 //! Fonctions Win32 demandées par de vrais jeux et leurs bibliothèques
 //! (SDL2/SDL3, OpenAL, libcurl, ANGLE, crashpad, libwinpthread), relevées
-//! sur SuperTuxKart 1.5 et Warzone 2100 4.7 : voir docs/JEUX.md.
+//! sur SuperTuxKart 1.5 et Warzone 2100 4.7 : voir docs/VRAIS-JEUX.md.
 //!
 //! Elles complètent kernel32, user32, gdi32, setupapi, advapi32, crypt32,
 //! ws2_32, dbghelp, shlwapi, shell32, iphlpapi, winhttp, powrprof et rpcrt4
