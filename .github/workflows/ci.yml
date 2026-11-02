@@ -154,6 +154,9 @@ jobs:
       - name: Vérifier l'application Claude Code (téléchargement vérifié, terminal)
         run: python3 -B scripts/test-claude-code.py
 
+      - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
+        run: python3 -B scripts/test-games.py
+
       - name: Vérifier l'assistant Claude (désactivé par défaut, envois montrés, actions confirmées)
         run: python3 -B scripts/test-assistant.py
 
@@ -316,6 +319,11 @@ jobs:
 
       - name: Icônes de la barre des tâches centrées dans leur bouton
         run: xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-taskbar-icons.py
+
+      - name: Fenêtre Jeux (cartes, tri, recherche)
+        run: |
+          mkdir -p build/captures
+          xvfb-run -a -s '-screen 0 1920x1080x24' /usr/bin/python3 -B scripts/test-games.py --gtk build/captures/jeux-bibliotheque.png
 
       - name: Volet de widgets Win+W (ouverture au bord gauche, ordre, minuteur, Échap)
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-widgets.py

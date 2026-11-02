@@ -76,7 +76,7 @@ pas ? », « où est mon fichier ? », « passe au thème sombre ».
   `claude.exe` à travers la couche PE, ils pouvaient être lisibles par tous).
 - Fichiers : `scripts/winlux-assistant.py` (installé en
   `/usr/bin/winlux-assistant`), `integration/native/applications/winlux-assistant.desktop`
-  (masquée du menu Démarrer), page 29 des Paramètres natifs. Test :
+  (masquée du menu Démarrer), page 30 des Paramètres natifs. Test :
   `scripts/test-assistant.py`. Session native seulement : le bureau PE de l'ISO
   live ne l'affiche pas.
 

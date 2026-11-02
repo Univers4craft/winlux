@@ -147,7 +147,7 @@ label, command = assistant.describe_action("reglage", "theme_sombre")
 assert label == "Thème sombre" and command == ["winlux-control", "theme-dark"]
 assert assistant.describe_action("reglage", "rm -rf /") is None
 assert assistant.describe_action("reglage", "poweroff") is None
-assert assistant.describe_action("ouvrir_parametres", "29")[1] == ["winlux-shell-app", "settings", "29"]
+assert assistant.describe_action("ouvrir_parametres", "30")[1] == ["winlux-shell-app", "settings", "30"]
 assert assistant.describe_action("ouvrir_parametres", "7; reboot") is None
 assert assistant.describe_action("ouvrir_dossier", "~/Documents")[1] == ["winlux-shell-app", "explorer", str(home / "Documents")]
 assert assistant.describe_action("ouvrir_dossier", "~/introuvable") is None

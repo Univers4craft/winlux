@@ -1,0 +1,95 @@
+name: Site web
+
+# Construit, teste et publie le site de Winlux (site/) sur GitHub Pages :
+# https://univers4craft.github.io/winlux/
+# Le wiki technique reste publié par wiki.yml ; le site renvoie vers lui.
+on:
+  push:
+    branches: [master]
+    paths:
+      - site/**
+      - wiki/**
+      - scripts/test-site.py
+      - scripts/test-site-render.js
+      - .github/workflows/site.yml
+  pull_request:
+    branches: [master]
+    paths:
+      - site/**
+      - wiki/**
+      - scripts/test-site.py
+      - scripts/test-site-render.js
+      - .github/workflows/site.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: site-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tester:
+    name: Construire et tester le site
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 1
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+
+      - name: Installer Chromium pour le test de rendu
+        run: |
+          npm install --no-save --no-audit --no-fund playwright@1.63.0
+          npx playwright install --with-deps chromium
+
+      - name: Construire et tester (liens, quatre langues, mobile et grand écran)
+        env:
+          WINLUX_SITE_RENDER: required
+          WINLUX_SITE_SHOTS: build/site-captures
+        run: python3 -B scripts/test-site.py --render --keep build/site
+
+      - name: Vérifier que les liens externes répondent
+        continue-on-error: true
+        run: python3 -B scripts/test-site.py --online
+
+      - name: Conserver les captures du rendu
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: site-captures
+          path: build/site-captures
+          if-no-files-found: ignore
+
+      - name: Préparer la publication
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+        uses: actions/upload-pages-artifact@v5
+        with:
+          path: build/site
+
+  publier:
+    name: Publier sur GitHub Pages
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs: tester
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploiement.outputs.page_url }}
+    steps:
+      - name: Publier
+        id: deploiement
+        uses: actions/deploy-pages@v5
+
+      - name: Si la publication échoue
+        if: failure()
+        run: |
+          echo "::error::GitHub Pages n'est pas activé pour ce dépôt. Dans Settings > Pages, choisir la source « GitHub Actions », puis relancer ce workflow."

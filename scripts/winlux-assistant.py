@@ -436,7 +436,7 @@ SETTINGS_PAGES = {2: "Réseau", 4: "Clavier et souris", 7: "Mises à jour", 8: "
                   11: "Navigateurs", 12: "Accessibilité", 14: "Localisation", 16: "Son",
                   18: "Confidentialité et sécurité", 20: "Lecteurs réseau", 21: "Fond d’écran et couleurs",
                   22: "Bluetooth", 23: "Alimentation et batterie", 24: "Graphismes", 26: "Imprimantes et scanners",
-                  28: "Partage et transfert", 29: "Assistant Claude"}
+                  28: "Partage et transfert", 29: "Jeux", 30: "Assistant Claude"}
 REQUESTS = ("aucune", "lire_journal", "lire_plantages", "lire_systeme", "chercher_fichier",
             "ouvrir_parametres", "ouvrir_dossier", "reglage")
 SCHEMA = {
@@ -1015,7 +1015,7 @@ def run_chat():
             self.bubble(text, "claude")
             button = Gtk.Button(label=_t("Terminer la configuration"), halign=Gtk.Align.START)
             button.get_style_context().add_class("suggested-action")
-            button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", "29"],
+            button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", "30"],
                                                                   start_new_session=True) and self.close())
             self.messages.pack_start(button, False, False, 0)
             button.show()

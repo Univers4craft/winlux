@@ -40,6 +40,26 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    # Jeux (application Jeux, temps de jeu, dossiers de jeux)
+    'Bibliothèque de jeux': ('Game library', 'Biblioteca de juegos', 'Spielebibliothek'),
+    'L’application Jeux rassemble vos jeux Windows installés : GOG, itch.io, dossiers de jeux et programmes 3D.': ('The Games app gathers your installed Windows games: GOG, itch.io, game folders and 3D programs.', 'La aplicación Juegos reúne sus juegos de Windows instalados: GOG, itch.io, carpetas de juegos y programas 3D.', 'Die App „Spiele“ sammelt Ihre installierten Windows-Spiele: GOG, itch.io, Spieleordner und 3D-Programme.'),
+    'Ouvrir Jeux': ('Open Games', 'Abrir Juegos', 'Spiele öffnen'),
+    'Rechercher les nouveaux jeux à l’ouverture': ('Look for new games when opening', 'Buscar juegos nuevos al abrir', 'Beim Öffnen nach neuen Spielen suchen'),
+    'Compter le temps de jeu': ('Count play time', 'Contar el tiempo de juego', 'Spielzeit zählen'),
+    'Enregistré sur ce PC uniquement, pour chaque jeu lancé.': ('Stored on this PC only, for each game started.', 'Se guarda solo en este equipo, para cada juego iniciado.', 'Nur auf diesem PC gespeichert, für jedes gestartete Spiel.'),
+    'Effacer le temps de jeu': ('Clear play time', 'Borrar el tiempo de juego', 'Spielzeit löschen'),
+    'Effacer le temps de jeu de tous les jeux ?': ('Clear the play time of every game?', '¿Borrar el tiempo de juego de todos los juegos?', 'Spielzeit aller Spiele löschen?'),
+    'Dossiers de jeux': ('Game folders', 'Carpetas de juegos', 'Spieleordner'),
+    'Toujours parcourus : C:\\Games, C:\\Jeux, C:\\GOG Games, Program Files et les jeux itch.io. Ajoutez ici un disque ou un dossier où vous rangez d’autres jeux.': ('Always searched: C:\\Games, C:\\Jeux, C:\\GOG Games, Program Files and itch.io games. Add a drive or folder here where you keep other games.', 'Siempre se buscan: C:\\Games, C:\\Jeux, C:\\GOG Games, Program Files y los juegos de itch.io. Agregue aquí un disco o una carpeta donde guarde otros juegos.', 'Immer durchsucht: C:\\Games, C:\\Jeux, C:\\GOG Games, Program Files und itch.io-Spiele. Fügen Sie hier ein Laufwerk oder einen Ordner mit weiteren Spielen hinzu.'),
+    'Aucun dossier ajouté.': ('No folder added.', 'No se agregó ninguna carpeta.', 'Kein Ordner hinzugefügt.'),
+    'Ajouter un dossier…': ('Add a folder…', 'Agregar una carpeta…', 'Ordner hinzufügen…'),
+    'Retirer': ('Remove', 'Quitar', 'Entfernen'),
+    'Jeux retirés de la bibliothèque': ('Games removed from the library', 'Juegos quitados de la biblioteca', 'Aus der Bibliothek entfernte Spiele'),
+    'Remettre': ('Restore', 'Restaurar', 'Wiederherstellen'),
+    'Performances en jeu': ('In-game performance', 'Rendimiento en juego', 'Leistung im Spiel'),
+    'Le mode jeu, le choix de la carte graphique et l’overlay de performances s’appliquent tout seuls à chaque jeu.': ('Game mode, graphics card choice and the performance overlay apply automatically to every game.', 'El modo juego, la elección de la tarjeta gráfica y la superposición de rendimiento se aplican solos a cada juego.', 'Spielmodus, Grafikkartenwahl und Leistungs-Overlay gelten automatisch für jedes Spiel.'),
+    'Mode jeu (Processeur)': ('Game mode (Processor)', 'Modo juego (Procesador)', 'Spielmodus (Prozessor)'),
+    'Overlay et carte graphique (Graphismes)': ('Overlay and graphics card (Graphics)', 'Superposición y tarjeta gráfica (Gráficos)', 'Overlay und Grafikkarte (Grafik)'),
     # Refonte des Paramètres (catégories, réglages intégrés)
     'Aucun emplacement d’export pour l’instant : branchez une clé USB ou ouvrez Documents.': ('No export location yet: plug in a USB drive or open Documents.', 'Todavía no hay ubicación de exportación: conecte una memoria USB o abra Documentos.', 'Noch kein Exportziel: Schließen Sie einen USB-Stick an oder öffnen Sie Dokumente.'),
     'Priorité du processeur': ('Processor priority', 'Prioridad del procesador', 'Prozessorpriorität'),
@@ -422,7 +442,8 @@ EXPLORER_WINLUX = r"HKCU\Software\Winlux\Explorer"
 PAGE_PROGRAMS, PAGE_ACCESSIBILITY, PAGE_EFFECTS, PAGE_LOCALE, PAGE_FILES = 10, 12, 13, 14, 15
 PAGE_SOUND, PAGE_SYSUPDATE, PAGE_NETDRIVES, PAGE_DESKTOP, PAGE_BLUETOOTH = 16, 17, 20, 21, 22
 PAGE_APPS, PAGE_INPUT, PAGE_REPORT, PAGE_PRINTERS, PAGE_REMOTE, PAGE_SHARING = 1, 4, 25, 26, 27, 28
-PAGE_ASSISTANT = 29
+PAGE_GAMES = 29
+PAGE_ASSISTANT = 30
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -760,9 +781,33 @@ def page_available(page, status=None):
         return have("winlux-remote-config") or (RUN / "remote.txt").is_file()
     if page == PAGE_SHARING:
         return have("winlux-share") or have("winlux-transfer") or (RUN / "shares.txt").is_file()
+    if page == PAGE_GAMES:
+        return games_module() is not None
     if page == PAGE_ASSISTANT:
         return assistant_module() is not None
     return True
+
+
+GAMES_APP = Path(os.environ.get("WINLUX_GAMES_APP", "/usr/share/winlux/native/jeux/winlux-games.py"))
+
+
+def games_module():
+    """Application Jeux (integration/native/jeux), installée à côté ou dans le dépôt."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (GAMES_APP, here.parent.parent / "integration/native/jeux/winlux-games.py"):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_games", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_games", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                module.APP_PATH = candidate
+                return module
+            except Exception:
+                return None
+    return None
 
 
 _ASSISTANT = []
@@ -816,6 +861,7 @@ class ExtraPages:
                    PAGE_DESKTOP: "page_desktop", PAGE_BLUETOOTH: "page_bluetooth", PAGE_APPS: "page_apps",
                    PAGE_INPUT: "page_input", PAGE_REPORT: "page_report", PAGE_PRINTERS: "page_printers",
                    PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing",
+                   PAGE_GAMES: "page_games",
                    PAGE_ASSISTANT: "page_assistant"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
@@ -1479,6 +1525,61 @@ class ExtraPages:
                        report.get("fan_curve") if report.get("fan_curve") in dict(CPU_FANS) else "auto",
                        lambda value: self.execute("cpu-fan-" + value))
         self.hint(_t("Priorité et cœurs d’un programme précis : Applications › Programmes Windows."))
+
+    # ── Jeux : bibliothèque, temps de jeu, dossiers de jeux ──
+
+    def page_games(self):
+        games = games_module()
+        if games is None: return
+        config = games.load_config()
+
+        def change(edit):
+            games.update_config(edit)
+            GLib.idle_add(self.extra_refresh)
+
+        def setter(key, on):
+            def edit(c): c[key] = "1" if on else "0"
+            change(edit)
+        self.section(_t("Bibliothèque de jeux"), _t("L’application Jeux rassemble vos jeux Windows installés : GOG, itch.io, dossiers de jeux et programmes 3D."))
+        box = self.card()
+        self.actions(box, [(_t("Ouvrir Jeux"), lambda: subprocess.Popen(
+            ["/usr/bin/python3", str(games.APP_PATH)], start_new_session=True,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL))])
+        self.switch(box, _t("Rechercher les nouveaux jeux à l’ouverture"), config["AUTOSCAN"] == "1",
+                    lambda on: setter("AUTOSCAN", on))
+        self.switch(box, _t("Compter le temps de jeu"), config["PLAYTIME"] == "1",
+                    lambda on: setter("PLAYTIME", on), _t("Enregistré sur ce PC uniquement, pour chaque jeu lancé."))
+
+        def forget():
+            if self.confirm(_t("Effacer le temps de jeu de tous les jeux ?")):
+                games.forget_playtime()
+        self.actions(box, [(_t("Effacer le temps de jeu"), forget, games.data_dir().is_dir())])
+        self.section(_t("Dossiers de jeux"), _t("Toujours parcourus : C:\\Games, C:\\Jeux, C:\\GOG Games, Program Files et les jeux itch.io. Ajoutez ici un disque ou un dossier où vous rangez d’autres jeux."))
+        box = self.card()
+        if not config["FOLDER"]: self.hint(_t("Aucun dossier ajouté."), box)
+        for folder in config["FOLDER"]:
+            remove = Gtk.Button(label=_t("Retirer"))
+            remove.connect("clicked", lambda *_, f=folder: change(lambda c: c["FOLDER"].remove(f) if f in c["FOLDER"] else None))
+            self.row(box, folder, remove)
+
+        def pick():
+            dialog = Gtk.FileChooserNative.new(_t("Choisir un dossier"), self, Gtk.FileChooserAction.SELECT_FOLDER, None, None)
+            if dialog.run() == Gtk.ResponseType.ACCEPT and dialog.get_filename():
+                chosen = dialog.get_filename()
+                change(lambda c: chosen in c["FOLDER"] or c["FOLDER"].append(chosen))
+            dialog.destroy()
+        self.actions(box, [(_t("Ajouter un dossier…"), pick)])
+        if config["HIDDEN"]:
+            self.section(_t("Jeux retirés de la bibliothèque"))
+            box = self.card()
+            for exe in config["HIDDEN"][:50]:
+                restore = Gtk.Button(label=_t("Remettre"))
+                restore.connect("clicked", lambda *_, e=exe: change(lambda c: e in c["HIDDEN"] and c["HIDDEN"].remove(e)))
+                self.row(box, Path(exe).name, restore, exe)
+        self.section(_t("Performances en jeu"), _t("Le mode jeu, le choix de la carte graphique et l’overlay de performances s’appliquent tout seuls à chaque jeu."))
+        box = self.card()
+        self.actions(box, [(_t("Mode jeu (Processeur)"), lambda: GLib.idle_add(self.open_page, 19)),
+                           (_t("Overlay et carte graphique (Graphismes)"), lambda: GLib.idle_add(self.open_page, 24))])
 
     # ── Graphismes : overlay de performances en jeu ──
 
