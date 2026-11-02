@@ -79,6 +79,11 @@ fn check_account(cfg: &Config, user: &str, password: &[u8]) -> bool {
         } else {
             cfg.users.iter().any(|u| u == user)
         };
+        // Compte du système installé : le mot de passe est celui de
+        // /etc/shadow, vérifié par le relais root (winlux-root check).
+        if stored == "shadow" {
+            return allowed && !password.is_empty() && system_password_ok(user, password);
+        }
         // Un compte sans mot de passe ne s'ouvre jamais à distance.
         let stored = stored.as_bytes();
         let same = stored.len() == password.len()
@@ -90,6 +95,26 @@ fn check_account(cfg: &Config, user: &str, password: &[u8]) -> bool {
         return allowed && stored != b"nopass" && !stored.is_empty() && same;
     }
     false
+}
+
+fn system_password_ok(user: &str, password: &[u8]) -> bool {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+    let tool = std::env::var("WINLUX_ROOT_TOOL").unwrap_or_else(|_| "/usr/bin/winlux-root".into());
+    let Ok(mut child) = Command::new(tool)
+        .args(["check", user])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+    else {
+        return false;
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        let _ = stdin.write_all(password);
+        let _ = stdin.write_all(b"\n");
+    }
+    child.wait().is_ok_and(|s| s.success())
 }
 
 fn legacy_password() -> Option<Vec<u8>> {

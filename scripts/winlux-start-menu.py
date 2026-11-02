@@ -215,6 +215,7 @@ def on_click(button, callback):
     button.connect("button-release-event", released)
     button.connect("clicked", clicked)
 
+
 class Start(Gtk.Application):
     def __init__(self):
         super().__init__(application_id="org.winlux.Start", flags=Gio.ApplicationFlags.FLAGS_NONE)

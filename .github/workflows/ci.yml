@@ -139,12 +139,17 @@ jobs:
         run: python3 -B scripts/test-permission.py
       - name: Vérifier la fenêtre UAC (comptes administrateurs, mot de passe, langues)
         run: python3 -B scripts/test-uac.py
+      - name: Vérifier le relais root du bureau (politique, préférences, élévation)
+        run: python3 -B scripts/test-root.py
 
       - name: Vérifier « Coller » sur le bureau (couper = déplacer, noms en double)
         run: python3 -B scripts/test-desktop-paste.py
 
       - name: Vérifier la détection des modes d'alimentation (économie, normal, turbo)
         run: python3 -B scripts/test-power-modes.py
+
+      - name: Vérifier l'application Claude Code (téléchargement vérifié, terminal)
+        run: python3 -B scripts/test-claude-code.py
 
       - name: Vérifier les grandes images X11 en 1080p
         run: |

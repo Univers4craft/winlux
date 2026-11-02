@@ -1,11 +1,18 @@
 #!/bin/sh
-# Bureau natif d'un autre compte (changement rapide d'utilisateur, #119).
+# Bureau natif d'un compte, lancé sous l'identité de ce compte.
 #
-# winlux-sessions démarre un serveur X par compte puis lance ce script sous
-# l'identité du compte. Les services système (D-Bus système, réseau, son,
-# impression...) tournent déjà pour le premier bureau : on ne démarre ici que
-# ce qui appartient à la session de l'utilisateur, avec son propre bus D-Bus,
-# son propre gestionnaire de fenêtres, sa barre des tâches et son bureau.
+# Deux usages :
+# - le bureau principal d'un système installé : l'init démarre Xorg et les
+#   services système (winlux-system-services, relais root winlux-root et
+#   winlux-power), puis lance ce script par setpriv sous le compte créé à
+#   l'installation (WINLUX_PRIMARY_SESSION=1) ;
+# - un autre compte ouvert par le changement rapide d'utilisateur (#119) :
+#   winlux-sessions démarre un serveur X par compte puis ce script.
+#
+# On ne démarre ici que ce qui appartient à la session de l'utilisateur, avec
+# son propre bus D-Bus, son son (PipeWire), son gestionnaire de fenêtres, sa
+# barre des tâches et son bureau. Ce qui touche au système passe par le
+# relais root (winlux-control → winlux-root).
 set -eu
 export PATH="/usr/local/bin:/usr/bin:/bin:/usr/local/sbin:/usr/sbin:/sbin:$PATH:/usr/games:/usr/local/games"
 uid=$(id -u)
@@ -22,8 +29,10 @@ export WINLUX_NATIVE_SHELL=1
 if test -z "${LANG:-}"; then
     if test -d /usr/lib/locale/fr_FR.utf8; then export LANG=fr_FR.UTF-8; else export LANG=C.UTF-8; fi
 fi
-logs="$XDG_RUNTIME_DIR/winlux"
+primary=${WINLUX_PRIMARY_SESSION:-0}
+logs=${WINLUX_SESSION_LOGS:-"$XDG_RUNTIME_DIR/winlux"}
 mkdir -p "$logs"
+cd "$HOME" 2>/dev/null || true
 
 pids=
 bus_pid=
@@ -34,9 +43,25 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 0' INT TERM HUP
+start() {
+    # start JOURNAL COMMANDE… : en arrière-plan, arrêté avec la session.
+    journal=$1; shift
+    "$@" >"$logs/$journal" 2>&1 &
+    pids="$pids $!"
+}
+wait_bus_name() {
+    for attempt in $(seq 1 150); do
+        if /usr/bin/gdbus call --session --dest org.freedesktop.DBus \
+            --object-path /org/freedesktop/DBus --method org.freedesktop.DBus.NameHasOwner \
+            --timeout 2 "$1" 2>/dev/null | grep -q true; then return 0; fi
+        kill -0 "$2" 2>/dev/null || return 1
+        sleep 0.2
+    done
+    return 1
+}
 
 # Bus de session propre au compte : ses applications ne parlent pas à celles
-# de l'autre bureau.
+# d'un autre bureau.
 if test -x /usr/bin/dbus-daemon; then
     bus="$XDG_RUNTIME_DIR/bus"
     rm -f "$bus"
@@ -44,17 +69,15 @@ if test -x /usr/bin/dbus-daemon; then
     bus_pid=$(cat "$logs/bus.pid" 2>/dev/null || true)
     export DBUS_SESSION_BUS_ADDRESS="unix:path=$bus"
 fi
+# Le relais root agit sur cet écran pour les réglages d'écran et de pavé
+# tactile (xrandr, xinput) : root y est autorisé, personne d'autre.
+if test -x /usr/bin/xhost; then /usr/bin/xhost +si:localuser:root >/dev/null 2>&1 || true; fi
 
 # Réglages par défaut du bureau, copiés une fois dans le dossier du compte.
 if test -x /usr/bin/winlux-native-config; then /usr/bin/winlux-native-config >"$logs/native-config.log" 2>&1 || true; fi
 
-if test -x /usr/bin/xfsettingsd; then /usr/bin/xfsettingsd --daemon >"$logs/xfsettings.log" 2>&1 || true; fi
-# Thème d'icônes Winlux si celui configuré n'est pas installé (défaut XFCE
-# elementary-xfce-dark, absent) : sinon icônes noires d'Adwaita.
-icon_theme=$(xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null || true)
-if test -d /usr/share/icons/Winlux && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
-    xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux 2>/dev/null || true
-fi
+# Gestionnaire de fenêtres lancé tout de suite : il démarre pendant le son
+# et le service de fichiers, attendu seulement avant la barre des tâches.
 rc="$HOME/.config/openbox/rc.xml"
 if test -f "$rc"; then
     /usr/bin/openbox --sm-disable --config-file "$rc" >"$logs/window-manager.log" 2>&1 &
@@ -63,31 +86,220 @@ else
 fi
 wm_pid=$!
 pids="$pids $wm_pid"
+# Son (#115) : PipeWire du compte, un flux par programme (volume par appli).
+if test -x /usr/bin/pipewire && test -x /usr/bin/wireplumber && ! pgrep -u "$uid" -x pipewire >/dev/null 2>&1; then
+    start pipewire.log /usr/bin/pipewire
+    start wireplumber.log /usr/bin/wireplumber
+    if test -x /usr/bin/pipewire-pulse; then start pipewire-pulse.log /usr/bin/pipewire-pulse; fi
+fi
+# Service de fichiers du bureau (ouverture des fichiers depuis le bureau).
+if test -x /usr/bin/Thunar; then
+    /usr/bin/Thunar --daemon >"$logs/file-manager.log" 2>&1 &
+    thunar_pid=$!
+    pids="$pids $thunar_pid"
+    # Une ouverture demandée par le bureau avant que Thunar ait pris son nom
+    # attend simplement sur le bus : le bureau ne l'attend donc pas. Seuls
+    # les tests automatiques, qui cliquent dès la première seconde, attendent
+    # sa réponse complète (Ping).
+    thunar_ready() {
+        wait_bus_name org.xfce.FileManager "$thunar_pid" && \
+            /usr/bin/gdbus call --session --dest org.xfce.FileManager \
+                --object-path /org/xfce/FileManager --method org.freedesktop.DBus.Peer.Ping \
+                --timeout 90 >>"$logs/file-manager.log" 2>&1
+    }
+    if grep -qw 'winlux.native-smoke=1' /proc/cmdline 2>/dev/null; then
+        thunar_ready || true
+    else
+        (thunar_ready </dev/null >/dev/null 2>&1 &)
+    fi
+fi
+# Raccourcis du Bureau approuvés en arrière-plan : seule leur ouverture en
+# dépend, pas l'affichage du bureau.
+if test -x /usr/bin/winlux-trust-shortcuts; then (/usr/bin/winlux-trust-shortcuts </dev/null >"$logs/trust-shortcuts.log" 2>&1 &); fi
+if test -x /usr/bin/xfsettingsd; then /usr/bin/xfsettingsd --daemon >"$logs/xfsettings.log" 2>&1 || true; fi
+# Thème d'icônes Winlux par défaut, sans écraser un choix de l'utilisateur.
+# Le défaut XFCE (elementary-xfce-dark) n'est pas livré : un thème configuré
+# mais absent laissait les silhouettes noires d'Adwaita.
+icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/null || true)
+if test -d /usr/share/icons/Winlux && test -x /usr/bin/xfconf-query && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
+    /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
+fi
 for attempt in $(seq 1 50); do
     /usr/bin/wmctrl -m >/dev/null 2>&1 && break
     kill -0 "$wm_pid" 2>/dev/null || { cat "$logs/window-manager.log" >&2; exit 1; }
     sleep 0.1
 done
+# Sans connexion automatique, la session s'ouvre verrouillée : le mot de passe
+# du compte est demandé avant d'afficher le bureau.
+if test "${WINLUX_LOCK_AT_START:-0}" = 1 && test -x /usr/bin/winlux-lock; then
+    (setsid /usr/bin/winlux-lock now >"$logs/lock-start.log" 2>&1 &)
+fi
+# Fond d'écran par écran, fixé avant la barre des tâches : l'identité Winlux, sinon le fond de l'image.
+default_wallpaper=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
+test -f "$default_wallpaper" || default_wallpaper=/usr/share/winlux/wallpaper.bmp
+if test -x /usr/bin/xfconf-query && test -x /usr/bin/xrandr; then
+    for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
+        property="/backdrop/screen0/monitor$output/workspace0/last-image"
+        if ! /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1; then
+            /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s "$default_wallpaper" || true
+            /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5 || true
+        fi
+    done
+fi
+# Compositeur facultatif : sans lui, un déplacement laisse des traînées.
+if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HOME/.config/picom/picom.conf"; then
+    start compositor.log /usr/bin/picom --config "$HOME/.config/picom/picom.conf"
+    compositor_pid=$!
+fi
 if test -x /usr/bin/xfce4-panel; then
-    /usr/bin/xfce4-panel --disable-wm-check >"$logs/panel.log" 2>&1 &
-    pids="$pids $!"
+    start panel.log /usr/bin/xfce4-panel --disable-wm-check
 fi
 if test -x /usr/bin/winlux-notifications; then
-    /usr/bin/winlux-notifications >"$logs/notifications.log" 2>&1 &
-    pids="$pids $!"
+    start notifications.log /usr/bin/winlux-notifications
 fi
-if test -x /usr/bin/winlux-session-startup; then /usr/bin/winlux-session-startup >"$logs/startup-apps.log" 2>&1 || true; fi
-if test -x /usr/bin/xscreensaver; then
-    /usr/bin/xscreensaver -no-splash >"$logs/screensaver.log" 2>&1 &
-    pids="$pids $!"
+# Préférences de l'utilisateur : alignement de la barre, souris, processeur,
+# restaurées en arrière-plan pendant que le bureau s'affiche.
+if test "$primary" = 1 && test -x /usr/bin/winlux-control; then (
+    # L'état est publié par la boucle de la session : pas de sondes ici.
+    export WINLUX_CONTROL_NO_STATUS=1
+    alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
+    case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" >/dev/null 2>&1 || true ;; esac
+    speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
+    case "$speed" in
+        25) /usr/bin/winlux-control mouse-slow >/dev/null 2>&1 || true ;;
+        50) /usr/bin/winlux-control mouse-normal >/dev/null 2>&1 || true ;;
+        75) /usr/bin/winlux-control mouse-fast >/dev/null 2>&1 || true ;;
+    esac
+    if test -s /etc/winlux/cpu.conf; then /usr/bin/winlux-control cpu-restore >/dev/null 2>&1 || true; fi
+    ) </dev/null >"$logs/session-settings.log" 2>&1 &
 fi
+if test "$primary" = 1 && test ! -f "$HOME/.config/winlux/welcome-complete" && test "${WINLUX_NO_WELCOME:-0}" != 1 && test -x /usr/bin/winlux-welcome; then
+    # Bienvenue s'ouvre une fois le bureau dessiné : ouverte avant, sa
+    # fenêtre restait parfois noire (cadre vide au centre de l'écran).
+    (
+        for attempt in $(seq 1 100); do
+            /usr/bin/xdotool search --onlyvisible --classname xfdesktop >/dev/null 2>&1 && break
+            sleep 0.2
+        done
+        exec /usr/bin/winlux-welcome
+    ) </dev/null >"$logs/welcome.log" 2>&1 &
+fi
+# Bureau visible : xdotool trouve la fenêtre de xfdesktop (20 s au plus).
+wait_desktop() {
+    for attempt in $(seq 1 100); do
+        /usr/bin/xdotool search --onlyvisible --classname xfdesktop >/dev/null 2>&1 && return 0
+        sleep 0.2
+    done
+    return 0
+}
+# Démarrage décalé : ce qui n'est pas le bureau lui-même (agents de la zone
+# de notification, presse-papiers, lecteurs réseau, programmes au démarrage,
+# économiseur et verrouillage, catalogue, relevé d'état, suivi des écrans)
+# attend que le bureau soit affiché, pour ne pas lui disputer le processeur.
+# Ce sous-shell suit ses propres processus et les arrête avec la session.
+(
+    pids=
+    bus_pid=
+    trap cleanup EXIT
+    trap 'exit 0' INT TERM HUP
+    if test -x /usr/bin/xdotool; then wait_desktop; fi
+    has_bluetooth=false
+    if test "$(cat /run/winlux/hw/has-bluetooth 2>/dev/null)" = 1; then has_bluetooth=true
+    elif test -d /sys/class/bluetooth && test -n "$(ls -A /sys/class/bluetooth/ 2>/dev/null)"; then has_bluetooth=true; fi
+    if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then start bluetooth-agent.log /usr/bin/blueman-applet; fi
+    # Presse-papiers commun : copier dans un .exe, coller dans une appli Linux.
+    if test -x /usr/bin/winlux; then start clipboard-bridge.log /usr/bin/winlux --clipboard-bridge; fi
+    # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
+    if test -x /usr/bin/winlux-drives; then start netdrives.log /usr/bin/winlux-drives watch; fi
+    if test -x /usr/bin/nm-applet; then start network-agent.log /usr/bin/nm-applet --indicator; fi
+    # Programmes « au démarrage » : lancés une fois le bureau affiché.
+    if test -x /usr/bin/winlux-session-startup; then (/usr/bin/winlux-session-startup </dev/null >"$logs/startup-apps.log" 2>&1 &); fi
+    # Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
+    if command -v winlux-store >/dev/null 2>&1; then
+        (winlux-store starter --resume >"$logs/starter.log" 2>&1 &)
+    fi
+    if test -x /usr/bin/xscreensaver; then
+        if test "$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)" -gt 0; then
+            start screensaver.log /usr/bin/xscreensaver -no-splash
+        else
+            start screensaver.log env LIBGL_ALWAYS_SOFTWARE=1 /usr/bin/xscreensaver -no-splash
+        fi
+    fi
+    # Verrouillage après inactivité et au retour de veille.
+    if test -x /usr/bin/winlux-lock; then start lock.log /usr/bin/winlux-lock daemon; fi
+    # Catalogue des applications (raccourcis .lnk, programmes installés) et
+    # relevé d'état en basse priorité : ils ne passent jamais devant le bureau.
+    status_nice=
+    if test -x /usr/bin/nice; then status_nice='/usr/bin/nice -n 10'; fi
+    (
+        while :; do
+            $status_nice /usr/bin/winlux-applications refresh >"$logs/catalogue.log" 2>&1 || true
+            $status_nice /usr/bin/winlux-applications window-icons >>"$logs/catalogue.log" 2>&1 || true
+            if test "$primary" = 1 && test -O /run/winlux/browser-chooser; then
+                rm -f /run/winlux/browser-chooser
+                /usr/bin/winlux-shell-app settings 11 >"$logs/browser-settings.log" 2>&1 &
+            fi
+            sleep 5
+        done
+    ) </dev/null >/dev/null 2>&1 &
+    pids="$pids $!"
+    if test "$primary" = 1; then
+        # État publié pour les Paramètres et la barre des tâches.
+        (
+            while :; do
+                WINLUX_CONTROL_PERIODIC=1 $status_nice /usr/bin/winlux-control status >/dev/null 2>&1 || true
+                sleep 3
+            done
+        ) </dev/null >/dev/null 2>&1 &
+        pids="$pids $!"
+        # Écrans : branchement à chaud, capot et taille de la fenêtre VM.
+        if test -x /usr/bin/winlux-display; then
+            (
+                while :; do
+                    /usr/bin/winlux-display watch 2>>"$logs/display.log" || true
+                    sleep 1
+                done
+            ) </dev/null >/dev/null 2>&1 &
+            pids="$pids $!"
+        fi
+    fi
+
+    wait
+) </dev/null >/dev/null 2>&1 &
+pids="$pids $!"
 
 # Le bureau (fond d'écran, icônes) est relancé s'il s'arrête ; la session
 # vit tant que son gestionnaire de fenêtres vit.
 while kill -0 "$wm_pid" 2>/dev/null; do
+    if test "$primary" = 1; then
+        keyboard_layout=$(sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null || true)
+        # Clavier et pavé tactile appliqués pendant que le bureau se dessine.
+        (
+            case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
+            if test -x /usr/bin/winlux-touchpad; then /usr/bin/winlux-touchpad apply 2>/dev/null || true; fi
+        ) </dev/null >/dev/null 2>&1 &
+        ui_scale=$(/usr/bin/winlux-display session-scale 2>/dev/null || true)
+        case "$ui_scale" in 1|1.25|1.5|1.75|2|2.5|3) ;; *) ui_scale=1 ;; esac
+        WINLUX_THEME=$(sed -n 's/^THEME=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
+        export WINLUX_UI_SCALE="$ui_scale" WINLUX_THEME
+    fi
     if test -x /usr/bin/xfdesktop; then
         /usr/bin/xfdesktop --disable-wm-check >>"$logs/desktop.log" 2>&1 &
         desktop_pid=$!
+        echo "WINLUX_DESKTOP_READY pid=$desktop_pid user=$(id -un)"
+        # picom garde des fenêtres noires quand le fond du bureau change sous
+        # lui : remise à zéro (SIGUSR1) une fois la fenêtre de xfdesktop là.
+        if test -n "${compositor_pid:-}" && test -x /usr/bin/wmctrl; then
+            (
+                for attempt in $(seq 1 240); do
+                    /usr/bin/wmctrl -l -x 2>/dev/null | grep -q ' xfdesktop\.Xfdesktop ' && break
+                    kill -0 "$desktop_pid" 2>/dev/null || exit 0
+                    sleep 0.5
+                done
+                sleep 1
+                kill -USR1 "$compositor_pid" 2>/dev/null || true
+            ) </dev/null >/dev/null 2>&1 &
+        fi
         while kill -0 "$desktop_pid" 2>/dev/null && kill -0 "$wm_pid" 2>/dev/null; do sleep 1; done
         kill "$desktop_pid" 2>/dev/null || true
         wait "$desktop_pid" 2>/dev/null || true

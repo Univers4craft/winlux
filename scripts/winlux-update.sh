@@ -8,6 +8,34 @@ test -d "$target_root" || { echo "racine de mise à jour absente" >&2; exit 1; }
 target_root=$(CDPATH= cd -- "$target_root" && pwd -P)
 if test -f "$target_root/usr/share/winlux/update-backend" && grep -qx apt "$target_root/usr/share/winlux/update-backend"; then
     test "$target_root" = / || { echo 'Exécutez le moteur APT dans le système cible.' >&2; exit 1; }
+    # Démarrage ordinaire : rien à vérifier ni à finir, inutile de lancer
+    # Python (aucune version à l'essai, permissions et caches déjà faits,
+    # aucune opération dpkg interrompue). Sinon le moteur APT fait tout.
+    if test "$*" = --boot && ! test -e /var/lib/winlux/update-trial &&
+        test -e /var/lib/winlux/apt-base-permissions-restored &&
+        test "$(cat /var/lib/winlux/apt-desktop-cache-version 2>/dev/null)" = "$(cat /usr/share/winlux/version 2>/dev/null)" &&
+        test -z "$(ls -A /var/lib/dpkg/updates 2>/dev/null)" &&
+        ! grep -Eq '^Status: [a-z]+ [a-z]+ (half-installed|half-configured|unpacked|triggers-awaited|triggers-pending)$' /var/lib/dpkg/status; then
+        rm -f /run/winlux/update-action
+        exit 0
+    fi
+    # Questions posées toutes les 3 s par `winlux-control status` : réponses
+    # identiques à celles du moteur APT, sans démarrer Python à chaque fois.
+    case "$*" in
+        '--auto status'|--auto)
+            if test -f /etc/winlux/update.conf && grep -qx 'auto=enabled' /etc/winlux/update.conf; then echo enabled; else echo disabled; fi
+            exit 0 ;;
+        --busy)
+            pid=$(cat /run/winlux/update-inhibit 2>/dev/null || true)
+            case "$pid" in ''|0|*[!0-9]*) ;; *) test -d "/proc/$pid" && exit 0 ;; esac
+            # APT et dpkg posent des verrous POSIX (fcntl) : visibles dans /proc/locks.
+            for lock in /var/lib/dpkg/lock-frontend /var/lib/dpkg/lock; do
+                test -e "$lock" || continue
+                inode=$(stat -c %i "$lock" 2>/dev/null) || continue
+                grep -q " POSIX .*:$inode " /proc/locks 2>/dev/null && exit 0
+            done
+            exit 1 ;;
+    esac
     exec /usr/bin/winlux-update-apt "$@"
 fi
 manifest_source=${WINLUX_UPDATE_MANIFEST:-https://github.com/$repository/releases/latest/download/winlux-update-manifest.txt}

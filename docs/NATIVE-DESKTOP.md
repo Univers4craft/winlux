@@ -88,11 +88,11 @@ la saisie est bloquée trente secondes.
   du runtime affiche l'écran avant d'écrire dans `/sys/power/state`, pour que
   le bureau ne soit jamais visible au réveil ; le service détecte aussi une
   veille déclenchée ailleurs (écart CLOCK_BOOTTIME / CLOCK_MONOTONIC).
-- Mot de passe : celui du compte local. La session tournant encore en
-  administrateur, le compte protégé est le compte personnel créé à
-  l'installation (premier UID ≥ 1000), vérifié avec `crypt()` contre
-  `/etc/shadow` ; en session Live, c'est le mot de passe de
-  `/etc/winlux/users.conf`. Un compte sans mot de passe se déverrouille d'un
+- Mot de passe : celui du compte local. Sur un système installé, le bureau
+  tourne sous ce compte et ne lit pas `/etc/shadow` : le relais root
+  `winlux-root` vérifie le mot de passe avec `crypt()` (voir
+  [SYSTEM-SERVICES.md](SYSTEM-SERVICES.md#bureau-sous-le-compte-de-lutilisateur)).
+  En session Live (root), c'est le mot de passe de `/etc/winlux/users.conf`. Un compte sans mot de passe se déverrouille d'un
   clic et ne se verrouille jamais tout seul.
 - Réglages : `/etc/winlux/lock.conf` (`LOCK_AFTER` en secondes, 0 = jamais,
   5 minutes par défaut ; `LOCK_ON_RESUME=1`), via `winlux-control

@@ -20,8 +20,17 @@ save_overlay() { save "$config/overlay.conf" "$1" "$2" && chmod 644 "$config/ove
 cpu_pref() { value "$config/cpu.conf" "$1"; }
 input() { value "$config/input.conf" "$1"; }
 privacy() { v=$(value "$config/privacy.conf" "$1"); printf '%s\n' "${v:-$2}"; }
+# Bureau sous le compte de l'utilisateur (système installé) : /etc reste à
+# root, le relais winlux-root écrit les préférences et exécute les actions
+# système. Jamais dans les tests (WINLUX_CONTROL_ROOT) ni en root.
+relay_socket=${WINLUX_ROOT_SOCKET:-/run/winlux-root.sock}
+relayed_session() { test -z "$root" && test "$(id -u)" != 0 && test -S "$relay_socket"; }
 save() {
     file=$1 key=$2 new_value=$3
+    if relayed_session && test "${file%/*}" = "$config"; then
+        "${WINLUX_ROOT_TOOL:-winlux-root}" conf "${file##*/}" "$key" "$new_value"
+        return
+    fi
     tmp="$file.$$"
     if test -r "$file"; then sed "/^$key=/d" "$file" > "$tmp" || return; else : > "$tmp" || return; fi
     printf '%s=%s\n' "$key" "$new_value" >> "$tmp" || return
@@ -33,6 +42,24 @@ trust_desktop() {
     if have gio; then gio set -t string "$1" metadata::trusted true 2>/dev/null || true; fi
 }
 message() { printf '%s\n' "$*" > "$run/action.txt.tmp.$$"; mv "$run/action.txt.tmp.$$" "$run/action.txt"; }
+# Relevé périodique (boucle de l'init, toutes les 3 s) : les sondes lentes
+# dont la réponse change rarement (deux sont en Python) sont reprises du
+# relevé de moins d'une minute. Toute action de winlux-control, dont chaque
+# réglage changé dans Paramètres, refait un relevé complet.
+cached() {
+    key=$1; shift
+    file="$run/status-cache/$key"
+    if test "${WINLUX_CONTROL_PERIODIC:-0}" = 1 && test -f "$file" && test -n "$(find "$file" -mmin -1 2>/dev/null)"; then
+        cat "$file"; return 0
+    fi
+    # Session du compte : /run/winlux peut ne pas lui être inscriptible,
+    # la valeur est alors calculée à chaque relevé, sans cache.
+    if mkdir -p "$run/status-cache" 2>/dev/null && "$@" >"$file.tmp.$$" 2>/dev/null; then
+        mv "$file.tmp.$$" "$file" && cat "$file" && return 0
+    fi
+    rm -f "$file.tmp.$$" 2>/dev/null || true
+    "$@" 2>/dev/null || true
+}
 status() {
     {
         printf 'version=%s\n' "$(head -n 1 "$root/usr/share/winlux/version" 2>/dev/null || printf 'developpement')"
@@ -133,7 +160,7 @@ status() {
         printf 'wifi=%s\n' "$(cat "$root/run/winlux/hw/has-wifi" 2>/dev/null || echo 0)"
         printf 'touchpad=%s\n' "$(cat "$root/run/winlux/hw/has-touchpad" 2>/dev/null || echo 0)"
         # Réglages réellement acceptés par le pavé (rien sans pavé tactile).
-        if have winlux-touchpad; then winlux-touchpad status 2>/dev/null || true; fi
+        if have winlux-touchpad; then cached touchpad winlux-touchpad status; fi
         printf 'webcam=%s\n' "$(cat "$root/run/winlux/hw/has-webcam" 2>/dev/null || echo 0)"
         welcome=$(pref WELCOME_DONE); printf 'welcome_done=%s\n' "${welcome:-0}"
         welcome=$(pref WELCOME_STEP); printf 'welcome_step=%s\n' "${welcome:-0}"
@@ -144,23 +171,34 @@ status() {
         printf 'privacy_location=%s\n' "$(privacy LOCATION deny)"
         printf 'privacy_location_history=%s\n' "$(privacy LOCATION_HISTORY off)"
         # Verrouillage de l'ecran (delai, sortie de veille, compte protege).
-        if have winlux-lock; then WINLUX_LOCK_ROOT="$root" winlux-lock status 2>/dev/null || true; fi
+        if have winlux-lock; then cached lock env WINLUX_LOCK_ROOT="$root" winlux-lock status; fi
         # Signaler un probleme : reglages lus par winlux-report (rien n'est envoye seul).
-        if have winlux-report; then WINLUX_REPORT_CONF="$config/report.conf" winlux-report --status 2>/dev/null || true; fi
+        if have winlux-report; then cached report env WINLUX_REPORT_CONF="$config/report.conf" winlux-report --status; fi
         if have winlux-sysupdate; then winlux-sysupdate status 2>/dev/null || true; fi
         printf 'control_available=1\n'
-        if have winlux-browsers; then winlux-browsers --status 2>/dev/null || true; fi
+        if have winlux-browsers; then cached browsers winlux-browsers --status; fi
         if have winlux-display; then winlux-display status 2>/dev/null || true; fi
         if winlux-update --busy 2>/dev/null; then printf 'update_busy=1\n'; else printf 'update_busy=0\n'; fi
     } > "$run/control.txt.tmp.$$"
     mv "$run/control.txt.tmp.$$" "$run/control.txt"
     cpu_status
     # --list lit seulement le manifeste deja en cache, sans acces reseau.
-    if have winlux-update; then
+    # Refait seulement si l'une de ses sources a change depuis (les dossiers
+    # d'etat comptent : un fichier supprime change leur date).
+    if have winlux-update && ! updates_current; then
         if winlux-update --list > "$run/updates.txt.tmp.$$" 2>/dev/null; then
             mv "$run/updates.txt.tmp.$$" "$run/updates.txt"
         else rm -f "$run/updates.txt.tmp.$$"; fi
     fi
+}
+updates_current() {
+    test -s "$run/updates.txt" || return 1
+    for source in "$root/usr/share/winlux/version" "$root/var/lib/winlux" "$root/var/cache/winlux" \
+        "$root/var/lib/winlux/available-manifest" "$root/var/lib/winlux/update-trial"; do
+        test -e "$source" || continue
+        test "$source" -nt "$run/updates.txt" && return 1
+    done
+    return 0
 }
 # Capacites processeur detectees par le runtime : chaque section des
 # Parametres n'apparait que si son cap_*=1 (garde-fous materiels).
@@ -196,14 +234,29 @@ apply_tap() {
 case "${1:-status}" in
     status) status; exit 0 ;;
 esac
+# Action executee en root par le relais winlux-root pour le bureau : ni
+# verrou, ni message, ni etat (le bureau s'en charge de son cote).
+relayed=0
+if test "${WINLUX_CONTROL_RELAYED:-}" = 1 && test "$(id -u)" = 0; then relayed=1; umask 022; fi
+if test "$relayed" = 0; then
 # Une seule action a la fois. Le bureau reste reactif pendant les appels
 # reseau et voit le journal quand la commande detachee se termine.
 if ! mkdir "$run/control.lock" 2>/dev/null; then message 'Une operation est deja en cours. Consultez le journal.'; exit 1; fi
 trap 'rmdir "$run/control.lock" 2>/dev/null || true' EXIT HUP INT TERM
+fi
 action=$1
 # Alias accepte par les menus XFCE (whiskermenu) : « shutdown » = poweroff.
 case "$action" in shutdown) action=poweroff ;; esac
-message 'Operation en cours...'
+test "$relayed" = 1 || message 'Operation en cours...'
+# Actions du bureau lui-meme (X, son, dossier personnel) : sous le compte.
+# Les autres touchent au systeme et passent par le relais root.
+local_action() {
+    case "$action" in
+        browser-launch-*|keyboard-*|lang-*|locale-*|tap-*|mouse-*|align-*|desktop-icon-*|theme-*|welcome-*) return 0 ;;
+        privacy-*|lock-*|overlay-*|game-mode-*|cpu-hybrid-*|volume-*|report-open|restart-session|poweroff|reboot) return 0 ;;
+    esac
+    return 1
+}
 perform() {
     case "$action" in
         browser-install-edge|browser-install-chrome|browser-install-firefox) winlux-browsers --install "${action#browser-install-}" ;;
@@ -288,7 +341,8 @@ perform() {
             tz=${action#tz-}; tz=${tz#timezone-}
             case "$tz" in *[!A-Za-z0-9/_+-]*) echo "Fuseau invalide : $tz" >&2; return 1 ;; esac
             test -f "/usr/share/zoneinfo/$tz" || { echo "Fuseau inconnu : $tz" >&2; return 1; }
-            if have timedatectl; then
+            # timedatectl a besoin de systemd, absent de Winlux.
+            if have timedatectl && test -d /run/systemd/system; then
                 timedatectl set-timezone "$tz" || return
             else
                 ln -sf "/usr/share/zoneinfo/$tz" /etc/localtime || return
@@ -328,10 +382,18 @@ perform() {
                 # Garder la zone de notification des programmes Windows (#154).
                 tray=
                 if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-10 2>/dev/null)" = systray; then tray='-t int -s 10'; fi
-                # shellcheck disable=SC2086
-                xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a -t int -s 3 -t int -s 1 -t int -s 2 -t int -s 8 $tray -t int -s 4 -t int -s 5 -t int -s 6 -t int -s 9 -t int -s 7 || return
+                # Valeurs déjà en place (cas de chaque ouverture de session) :
+                # rien n'est réécrit, la barre ne reconstruit pas ses greffons.
+                ids="3 1 2 8 ${tray:+10 }4 5 6 9 7"
+                current=$(xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids 2>/dev/null | grep -E '^[0-9]+$' | tr '\n' ' ' || true)
+                if test "$current" != "$ids "; then
+                    # shellcheck disable=SC2086
+                    xfconf-query -c xfce4-panel -p /panels/panel-1/plugin-ids -a -t int -s 3 -t int -s 1 -t int -s 2 -t int -s 8 $tray -t int -s 4 -t int -s 5 -t int -s 6 -t int -s 9 -t int -s 7 || return
+                fi
                 expand=false; test "$alignment" != center || expand=true
-                xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand -s "$expand" || return
+                if test "$(xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand 2>/dev/null || true)" != "$expand"; then
+                    xfconf-query -c xfce4-panel -p /plugins/plugin-3/expand -s "$expand" || return
+                fi
             fi
             save "$config/preferences.conf" TASKBAR_ALIGN "$alignment" ;;
         desktop-icon-recycle)
@@ -439,7 +501,7 @@ perform() {
         report-open) (setsid winlux-report >/dev/null 2>&1 &) ;;
         restart-session)
             if winlux-update --busy 2>/dev/null; then echo 'Installation en cours : relance du bureau bloquée.' >&2; return 1; fi
-            test -f "$root/etc/winlux/live-session" || { echo 'Redemarrage de session reserve a Winlux Live' >&2; return 1; }
+            test -f "$root/etc/winlux/live-session" || test -f "$root/etc/winlux/install-config.json" || { echo 'Redemarrage de session reserve a Winlux' >&2; return 1; }
             "${WINLUX_POWER:-/usr/bin/winlux-power}" screen restart-session >/dev/null 2>&1 || true
             printf 'restart-session\n' > "$run/session-action" ;;
         power-profile-performance|power-profile-balanced|power-profile-saver)
@@ -454,7 +516,7 @@ perform() {
         power-hibernate) winlux --power hibernate ;;
         power-hibernate-setup) winlux --power hibernate-setup ;;
         poweroff|reboot)
-            test -f "$root/etc/winlux/live-session" || { echo 'Arret reserve a Winlux Live' >&2; return 1; }
+            test -f "$root/etc/winlux/live-session" || test -f "$root/etc/winlux/install-config.json" || { echo 'Arret reserve a Winlux' >&2; return 1; }
             if winlux-update --busy 2>/dev/null || winlux-sysupdate --busy 2>/dev/null; then echo 'Installation en cours : arrêt et redémarrage bloqués.' >&2; return 1; fi
             # Les commandes poweroff/reboot de l'image sont celles de systemd,
             # qui n'est pas l'init de Winlux : elles échouaient sans rien
@@ -481,6 +543,13 @@ perform() {
         *) echo "Action inconnue : $action" >&2; return 1 ;;
     esac
 }
+if test "$relayed" = 1; then
+    perform "$@"
+    exit $?
+fi
+if relayed_session && ! local_action; then
+    perform() { "${WINLUX_ROOT_TOOL:-winlux-root}" control "$@"; }
+fi
 log="$run/action.log"
 case "$action" in update-*) log="$run/update.log" ;; sysupdate-*) log="$run/sysupdate.log" ;; esac
 case "$action" in update-check|update-apply|update-rollback) rm -f "$run/update-error-phase" ;; esac
@@ -496,5 +565,8 @@ else
         message "Echec de l'operation. Le journal indique la cause."
     fi
 fi
-status
+# Au démarrage de session, l'init rafraîchit déjà l'état toutes les 3 s :
+# inutile de relancer ici la vingtaine de sondes de status (plusieurs
+# secondes par appel) entre chaque réglage restauré.
+if test "${WINLUX_CONTROL_NO_STATUS:-0}" != 1; then status; fi
 exit "$result"

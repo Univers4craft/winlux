@@ -1,7 +1,11 @@
 #!/usr/bin/python3
 """Contrôle de compte d'utilisateur Winlux, au style de Windows 11.
 
-Usage : winlux-uac --app NOM [--path CHEMIN_WINDOWS]
+Usage : winlux-uac [--elevate] --app NOM [--path CHEMIN_WINDOWS]
+
+--elevate : demandé par le relais root (winlux-root) avant une action
+système du bureau ; le mot de passe est vérifié par le relais, qui accorde
+alors 5 minutes d'élévation à ce compte.
 
 Affiché par le runtime quand un .exe demande les droits administrateur
 (manifeste requireAdministrator, verbe « runas »). Code de sortie 0 si
@@ -143,14 +147,16 @@ def verify(user, password):
     return False
 
 
-def run_dialog(app, win_path):
+def run_dialog(app, win_path, elevate=False):
     import gi
     gi.require_version("Gtk", "3.0")
     gi.require_version("Gdk", "3.0")
     from gi.repository import Gdk, Gtk
 
     user, _self_admin = target_account()
-    ask_password = needs_password(user)
+    # --elevate : le relais root (winlux-root) ouvre l'élévation après avoir
+    # vérifié lui-même le mot de passe ; il est donc toujours demandé.
+    ask_password = elevate or needs_password(user)
     result = {"ok": False}
 
     css = b"""
@@ -225,7 +231,9 @@ def run_dialog(app, win_path):
     yes.set_sensitive(user is not None)
 
     def on_yes(_button):
-        if ask_password and not verify(user, entry.get_text()):
+        checked = (LOCK["relay_check"](user, entry.get_text(), "elevate") if elevate
+                   else verify(user, entry.get_text()) if ask_password else True)
+        if not checked:
             entry.set_text("")
             error.set_text(_t("Le mot de passe est incorrect. Réessayez."))
             entry.grab_focus()
@@ -246,18 +254,20 @@ def run_dialog(app, win_path):
 
 
 def main(argv):
-    app, win_path = "", ""
+    app, win_path, elevate = "", "", False
     args = list(argv[1:])
     while args:
         flag = args.pop(0)
-        if flag == "--app" and args:
+        if flag == "--elevate":
+            elevate = True
+        elif flag == "--app" and args:
             app = args.pop(0)
         elif flag == "--path" and args:
             win_path = args.pop(0)
         else:
             print(__doc__.strip(), file=sys.stderr)
             return 2
-    return 0 if run_dialog(app or "?", win_path) else 1
+    return 0 if run_dialog(app or "?", win_path, elevate) else 1
 
 
 if __name__ == "__main__":

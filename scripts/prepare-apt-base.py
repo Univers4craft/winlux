@@ -32,6 +32,13 @@ PACKAGES += ["parted", "dosfstools", "e2fsprogs", "cryptsetup-bin", "ntfs-3g", "
              "xorriso", "openssl", "python3-gi-cairo"]
 # Decoding engine of the media player (winlux_media runs ffmpeg/ffprobe from PATH).
 PACKAGES += ["ffmpeg"]
+# Ubuntu retire des paquets les traductions de ses applications (nm-applet,
+# GTK, GLib, PolicyKit…) pour les mettre dans les language-pack : sans eux,
+# le menu réseau et les boîtes de dialogue restent en anglais. Les quatre
+# langues de l'interface ; leur postinst génère aussi les locales es/de/en.
+LANGUAGE_PACKS = [f"language-pack{kind}-{lang}-base"
+                  for lang in ("fr", "en", "es", "de") for kind in ("", "-gnome")]
+PACKAGES += LANGUAGE_PACKS
 DESKTOP_REQUIRED = ["apt", "dpkg", "bash", "busybox-static", "curl", "ca-certificates",
     "python3", "python3-gi", "gir1.2-gtk-3.0", "openbox", "xfdesktop4", "xfce4-panel",
     "xfce4-genmon-plugin", "xfconf", "xfce4-settings", "dbus-x11", "wmctrl", "xdotool",
@@ -40,7 +47,7 @@ DESKTOP_REQUIRED = ["apt", "dpkg", "bash", "busybox-static", "curl", "ca-certifi
     "network-manager", "network-manager-gnome", "udisks2", "gvfs", "libfaad2", "libmpg123-0",
     "libqt5core5t64", "libqt5gui5t64", "libqt5widgets5t64",
     "libqt6core6t64", "libqt6gui6", "libqt6widgets6", "libasound2t64", "alsa-utils",
-    "libx11-6", "libxft2", "libcairo2", "polkitd", "rsync", "openssh-client", "espeak-ng", "ffmpeg", "winlux-kernel"]
+    "libx11-6", "libxft2", "libcairo2", "polkitd", "rsync", "openssh-client", "espeak-ng", "ffmpeg", "winlux-kernel"] + LANGUAGE_PACKS
 
 def run(*args, **kwargs):
     return subprocess.run(args, check=True, **kwargs)
@@ -89,9 +96,12 @@ def main():
     policy.write_text("#!/bin/sh\nexit 101\n"); policy.chmod(0o755)
     # ubuntu-base exclut toutes les traductions (dpkg.cfg.d/excludes) : sans
     # elles le bureau, la Corbeille et l'éditeur restent en anglais. Garder
-    # celles des quatre langues de l'interface ; lu après « excludes ».
+    # celles des quatre langues de l'interface ; lu après « excludes ». Les
+    # pages d'aide des language-pack (help-langpack, la moitié de leur taille)
+    # n'ont pas de lecteur dans Winlux : elles ne sont pas installées.
     (root / "etc/dpkg/dpkg.cfg.d/winlux-locales").write_text(
-        "".join(f"path-include=/usr/share/locale/{lang}/LC_MESSAGES/*.mo\n" for lang in ("fr", "en", "es", "de")))
+        "".join(f"path-include=/usr/share/locale/{lang}/LC_MESSAGES/*.mo\n" for lang in ("fr", "en", "es", "de"))
+        + "path-exclude=/usr/share/help-langpack/*\n")
     (root / "etc/resolv.conf").unlink(missing_ok=True)
     (root / "etc/resolv.conf").write_text("nameserver 10.0.2.3\n")
     # Signed Ubuntu indexes authenticate packages; no trusted=yes or disabled checks.
@@ -110,6 +120,9 @@ def main():
         "apt-get update\n"
         + f"apt-get install -y --no-install-recommends {install}\n"
         + "localedef --no-archive -i fr_FR -f UTF-8 /usr/lib/locale/fr_FR.utf8\n"
+          # Le menu de l'icône réseau est traduit dans chaque langue.
+          "for l in fr es de; do test -s /usr/share/locale-langpack/$l/LC_MESSAGES/nm-applet.mo; done\n"
+          "test -z \"$(find /usr/share/help-langpack -type f 2>/dev/null)\"\n"
           "dpkg --audit > /winlux-bootstrap/audit\ntest ! -s /winlux-bootstrap/audit\n"
           "apt-get check\nhello\napt-get purge -y hello\napt-get clean\n"
           "rm -rf /var/lib/apt/lists/*\nmkdir -p /usr/share/winlux\n"
