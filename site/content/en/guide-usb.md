@@ -29,7 +29,7 @@ sudo dd if=winlux-live-v0.2.15.iso of=/dev/sdX bs=4M status=progress conv=fsync
 
 1. Plug in the drive and switch on (or restart) the PC.
 2. Immediately press the boot menu key: often **F12**, **F11**, **F8** or **Esc**, depending on the manufacturer.
-3. Choose the USB drive. It boots in UEFI as well as legacy BIOS mode, and Secure Boot can stay enabled.
+3. Choose the USB drive. It boots in UEFI as well as legacy BIOS mode, and Secure Boot can stay enabled. On a tablet with 32-bit boot firmware (Atom), turn Secure Boot off: the drive boots in that mode too.
 4. The Winlux menu appears: choose the Live session to try it, or the installation.
 
 > [!tip]

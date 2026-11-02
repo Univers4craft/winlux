@@ -43,6 +43,14 @@ for tool in cargo bash cpio depmod modprobe fakeroot find gzip grub-mkrescue gru
         exit 1
     }
 done
+# Trois chemins d'amorçage : BIOS, UEFI 64 bits, et UEFI 32 bits pour les
+# processeurs 64 bits sur micrologiciel 32 bits (tablettes Atom).
+for platform in i386-pc x86_64-efi i386-efi; do
+    test -d "/usr/lib/grub/$platform" || {
+        echo "modules GRUB $platform absents (paquets grub-pc-bin, grub-efi-amd64-bin, grub-efi-ia32-bin)" >&2
+        exit 1
+    }
+done
 if ! test -r "$kernel"; then
     echo "noyau absent ou illisible : $kernel" >&2
     echo "indiquez un noyau lisible avec WINLUX_KERNEL=/chemin/vers/vmlinuz" >&2
@@ -204,7 +212,6 @@ cp "$root/scripts/test-native-session-guest.py" "$stage/opt/winlux/scripts/test-
 cp "$root/scripts/test-apt-native-guest.py" "$stage/opt/winlux/scripts/test-apt-native-guest.py"
 cp "$root/scripts/test-browsers-guest.sh" "$stage/opt/winlux/scripts/test-browsers-guest.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-cp "$root/scripts/run-tls-suite.sh" "$stage/opt/winlux/scripts/run-tls-suite.sh"
 chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
@@ -1183,10 +1190,20 @@ sh "$root/scripts/build-live-root.sh" "$stage" "$iso_root" "$kernel_release"
 sh "$root/scripts/winlux-grub-theme.sh" install "$root/assets/brand/grub" "$iso_root/boot/grub/themes/winlux"
 cat >"$iso_root/boot/grub/grub.cfg" <<'GRUB'
 set default=1
+# UEFI 32 bits (mode mixte) : sans efi=noruntime, le noyau 64 bits plante
+# dans les services UEFI sur les processeurs sans pages de 1 Go (Atom).
+set winlux_efi_args=
+if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
+    set winlux_efi_args=efi=noruntime
+fi
 set timeout=2
 set timeout_style=menu
 set winlux_term=console
-if loadfont /boot/grub/themes/winlux/unicode.pf2; then
+# UEFI 32 bits : le terminal graphique de GRUB fait planter le noyau 64 bits
+# au démarrage (mode mixte, vérifié sous QEMU) ; menu en texte.
+if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
+    set winlux_term=console
+elif loadfont /boot/grub/themes/winlux/unicode.pf2; then
     insmod all_video
     insmod gfxterm
     insmod png
@@ -1206,11 +1223,11 @@ fi
 set winlux_root=
 search --no-floppy --label WINLUX_ROOT --set=winlux_root
 menuentry "Winlux diagnostic (headless + Xvfb)" --hotkey=d {
-    linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4
+    linux /boot/vmlinuz console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=4 $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
 function winlux_live {
-    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
 menuentry "Winlux Desktop" {
@@ -1218,10 +1235,10 @@ menuentry "Winlux Desktop" {
         if test -f "($winlux_root)/boot/vmlinuz"; then
             # Load the updated kernel and persistent root from the disk.
             if test -f "($winlux_root)/boot/winlux-split-root"; then
-                linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+                linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
                 initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
             else
-                linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1
+                linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 quiet loglevel=3 vt.global_cursor_default=0 winlux.interactive=1 $winlux_efi_args
             fi
         else
             winlux_live
@@ -1236,10 +1253,10 @@ menuentry "Installer Winlux sur le disque" --hotkey=i {
 menuentry "Winlux Recovery (secours)" --hotkey=r {
     if search --no-floppy --label WINLUX_ROOT --set=winlux_root; then
         if test -f "($winlux_root)/boot/winlux-split-root"; then
-            linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1
+            linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1 $winlux_efi_args
             initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
         else
-            linux /boot/vmlinuz root=LABEL=WINLUX_ROOT rw rootfstype=ext4 console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1
+            linux /boot/vmlinuz root=LABEL=WINLUX_ROOT rw rootfstype=ext4 console=tty1 console=ttyS0,115200n8 panic=1 loglevel=3 winlux.recovery=1 $winlux_efi_args
             initrd /boot/winlux-initramfs.cpio.gz
         fi
     else
@@ -1249,16 +1266,16 @@ menuentry "Winlux Recovery (secours)" --hotkey=r {
     fi
 }
 menuentry "Vérifier l'intégrité du média puis démarrer" --hotkey=v {
-    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=3 vt.global_cursor_default=0 winlux.check-iso=1 winlux.interactive=1
+    linux /boot/vmlinuz console=tty1 console=ttyS0,115200n8 rootfstype=ramfs rdinit=/init panic=1 loglevel=3 vt.global_cursor_default=0 winlux.check-iso=1 winlux.interactive=1 $winlux_efi_args
     initrd /boot/winlux-initramfs.cpio.gz
 }
 menuentry "Winlux persistent network diagnostic" --hotkey=s {
     search --no-floppy --label WINLUX_ROOT --set=winlux_root
     if test -f "($winlux_root)/boot/winlux-split-root"; then
-        linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1
+        linux "($winlux_root)/boot/vmlinuz" root=LABEL=WINLUX_ROOT rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1 $winlux_efi_args
         initrd "($winlux_root)/boot/winlux-initramfs.cpio.gz"
     else
-        linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1
+        linux "($winlux_root)/boot/vmlinuz" root=/dev/vda rw rootfstype=ext4 init=/init console=ttyS0,115200n8 panic=1 loglevel=3 winlux.smoke=1 $winlux_efi_args
     fi
 }
 GRUB
@@ -1285,6 +1302,7 @@ if test "$secureboot" = 1; then
 else
     grub-mkrescue -o "$out" "$iso_root"
 fi
+sh "$root/scripts/check-iso-boot-paths.sh" "$out"
 sha256sum "$out" >"$out.sha256"
 echo "ISO live créée : $out"
 echo "Somme SHA-256 : $out.sha256"

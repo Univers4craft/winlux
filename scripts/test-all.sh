@@ -61,6 +61,7 @@ run partitionnement      python3 -B scripts/test-installer-partitioning.py
 run signalement          python3 -B scripts/test-report.py
 run sources-gpl          python3 -B scripts/test-gpl-sources.py
 run identite-image      python3 -B scripts/test-image-identity.py
+run amorcage-3-chemins  python3 -B scripts/test-boot-paths.py
 run liste-mises-a-jour  python3 -B scripts/test-update-listing.py
 run verrouillage         python3 -B scripts/test-lock.py
 run autorisations        python3 -B scripts/test-permission.py

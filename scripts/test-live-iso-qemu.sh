@@ -28,9 +28,15 @@ set -- qemu-system-x86_64 \
 
 case "$mode" in
     bios) ;;
-    uefi)
-        ovmf=${WINLUX_OVMF:-/usr/share/OVMF/OVMF_CODE_4M.fd}
-        ovmf_vars=${WINLUX_OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}
+    uefi|uefi32)
+        if test "$mode" = uefi32; then
+            # Processeur 64 bits, micrologiciel UEFI 32 bits (tablettes Atom) : BOOTIA32.EFI.
+            ovmf=${WINLUX_OVMF32:-/usr/share/OVMF/OVMF32_CODE_4M.fd}
+            ovmf_vars=${WINLUX_OVMF32_VARS:-/usr/share/OVMF/OVMF32_VARS_4M.fd}
+        else
+            ovmf=${WINLUX_OVMF:-/usr/share/OVMF/OVMF_CODE_4M.fd}
+            ovmf_vars=${WINLUX_OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}
+        fi
         test -r "$ovmf" || {
             echo "firmware UEFI absent ou illisible : $ovmf" >&2
             exit 1
@@ -39,7 +45,7 @@ case "$mode" in
             echo "variables UEFI absentes ou illisibles : $ovmf_vars" >&2
             exit 1
         }
-        vars_copy="$root/build/OVMF_VARS_4M.test.fd"
+        vars_copy="$root/build/OVMF_VARS_4M.$mode.test.fd"
         cp "$ovmf_vars" "$vars_copy"
         set -- "$@" \
             -machine q35 \
@@ -47,7 +53,7 @@ case "$mode" in
             -drive "if=pflash,format=raw,unit=1,file=$vars_copy"
         ;;
     *)
-        echo "mode inconnu : $mode (attendu : bios ou uefi)" >&2
+        echo "mode inconnu : $mode (attendu : bios, uefi ou uefi32)" >&2
         exit 1
         ;;
 esac

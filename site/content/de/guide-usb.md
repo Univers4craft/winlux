@@ -29,7 +29,7 @@ sudo dd if=winlux-live-v0.2.15.iso of=/dev/sdX bs=4M status=progress conv=fsync
 
 1. Stecken Sie den Stick ein und schalten Sie den PC ein (oder starten Sie ihn neu).
 2. Drücken Sie sofort die Taste für das Startmenü: oft **F12**, **F11**, **F8** oder **Esc**, je nach Hersteller.
-3. Wählen Sie den USB-Stick. Er startet im UEFI- wie im klassischen BIOS-Modus, und Secure Boot kann aktiviert bleiben.
+3. Wählen Sie den USB-Stick. Er startet im UEFI- wie im klassischen BIOS-Modus, und Secure Boot kann aktiviert bleiben. Auf einem Tablet mit 32-Bit-Firmware (Atom) schalten Sie Secure Boot aus: Der Stick startet auch in diesem Modus.
 4. Das Winlux-Menü erscheint: Wählen Sie die Live-Sitzung zum Ausprobieren oder die Installation.
 
 > [!tip]

@@ -129,6 +129,9 @@ jobs:
       - name: Valider l'identité de l'image (nom Winlux, logos, sources GPL)
         run: python3 -B scripts/test-image-identity.py
 
+      - name: Vérifier les trois chemins d'amorçage (BIOS, UEFI 64 et 32 bits)
+        run: python3 -B scripts/test-boot-paths.py
+
       - name: Vérifier l affichage des mises à jour (taille seulement si disponible)
         run: python3 -B scripts/test-update-listing.py
 

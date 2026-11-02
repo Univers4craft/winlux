@@ -48,7 +48,7 @@ for binary in /usr/bin/grub-* /usr/sbin/grub-*; do
     test -f "$binary" || continue
     copy_binary "$binary" "$(basename -- "$binary")"
 done
-cp -a /usr/lib/grub/i386-pc /usr/lib/grub/x86_64-efi "$guest/usr/lib/grub/"
+cp -a /usr/lib/grub/i386-pc /usr/lib/grub/x86_64-efi /usr/lib/grub/i386-efi "$guest/usr/lib/grub/"
 cp -a /usr/share/grub "$guest/usr/share/"
 test ! -f /etc/mke2fs.conf || cp /etc/mke2fs.conf "$guest/etc/"
 for binary in /usr/lib/grub/i386-pc/grub-bios-setup /usr/lib/grub/x86_64-efi/grub-bios-setup; do
@@ -96,10 +96,15 @@ install_status=0
 # A timeout is a failure too: show where the installer stopped instead of
 # letting set -e end the script without a word.
 grep -q '^WINLUX_INSTALL_EXIT=0' "$log" || { echo "Installation en VM échouée (code ${install_status:-0}) :" >&2; tail -n 80 "$log"; exit 1; }
-for mode in bios uefi; do
+# uefi32 : processeur 64 bits sur micrologiciel UEFI 32 bits (tablettes Atom),
+# démarré par BOOTIA32.EFI que l'installateur pose à côté de BOOTX64.EFI.
+for mode in bios uefi uefi32; do
     log="$work/$mode.log"
     set -- qemu-system-x86_64 -m 2048 -smp 2 -accel "$accel" -cpu max -display none -monitor none -serial stdio -nic none -no-reboot -drive "file=$disk,format=raw,if=virtio"
-    if test "$mode" = uefi; then
+    if test "$mode" = uefi32; then
+        cp "${WINLUX_OVMF32_VARS:-/usr/share/OVMF/OVMF32_VARS_4M.fd}" "$work/vars.fd"
+        set -- "$@" -machine q35 -drive "if=pflash,format=raw,unit=0,readonly=on,file=${WINLUX_OVMF32:-/usr/share/OVMF/OVMF32_CODE_4M.fd}" -drive "if=pflash,format=raw,unit=1,file=$work/vars.fd"
+    elif test "$mode" = uefi; then
         cp "${WINLUX_OVMF_VARS:-/usr/share/OVMF/OVMF_VARS_4M.fd}" "$work/vars.fd"
         set -- "$@" -machine q35 -drive "if=pflash,format=raw,unit=0,readonly=on,file=${WINLUX_OVMF:-/usr/share/OVMF/OVMF_CODE_4M.fd}" -drive "if=pflash,format=raw,unit=1,file=$work/vars.fd"
     fi
