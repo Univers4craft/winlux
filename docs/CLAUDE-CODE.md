@@ -14,7 +14,23 @@ premier démarrage.
 
 ## Installer
 
-Dans un terminal Winlux :
+**Chemin normal, sans commande à taper** : dans le menu Démarrer, ouvrir
+**Claude Code** (catégorie Développement).
+
+- Au premier lancement, une fenêtre télécharge Claude Code avec une barre de
+  progression. Elle vérifie la somme SHA-256 donnée par le manifeste officiel,
+  puis ouvre Claude Code dans le terminal Winlux.
+- Aux lancements suivants, Claude Code s'ouvre directement.
+- Le clic droit sur l'entrée propose « Mettre à jour Claude Code ».
+- En cas d'échec réseau, la fenêtre propose « Réessayer ». Un téléchargement
+  annulé ne laisse aucun fichier partiel.
+
+L'application est `integration/native/claude-code/winlux-claude-code.py`,
+avec son entrée `integration/native/applications/winlux-claude-code.desktop`
+et son icône `winlux-claude-code.svg`. Tout est copié dans l'image avec les
+autres composants du bureau natif.
+
+**Chemin de secours**, dans un terminal :
 
 ```
 winlux-claude-code install          # version Windows, par la couche PE
@@ -22,12 +38,11 @@ winlux-claude-code install linux    # repli : version Linux native
 claude                              # lancer Claude Code
 ```
 
-Le script télécharge la version du canal `stable` depuis le dépôt de
-diffusion officiel d'Anthropic. Il vérifie la somme SHA-256 donnée par le
-manifeste de cette version, range le binaire dans
-`~/.local/share/winlux/claude-code/` et crée la commande `~/.local/bin/claude`.
-La variable `WINLUX_CLAUDE_CANAL=latest` permet de choisir la dernière
-version publiée plutôt que la stable.
+Les deux chemins téléchargent la version du canal `stable` depuis le dépôt de
+diffusion officiel d'Anthropic. Ils rangent le binaire dans
+`~/.local/share/winlux/claude-code/` et créent la commande
+`~/.local/bin/claude`. La variable `WINLUX_CLAUDE_CANAL=latest` permet de
+choisir la dernière version publiée plutôt que la stable.
 
 Au premier lancement, Claude Code ouvre la connexion au compte dans le
 navigateur.
