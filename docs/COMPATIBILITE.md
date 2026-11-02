@@ -99,7 +99,23 @@ rampe RandR de la CRTC. Tout est défait à la fin du programme, même s'il
 plante : un gardien `winlux --display-restore`, lancé au premier changement avec
 l'état d'origine, attend la fermeture de son entrée standard puis remet l'écran.
 Rien n'est écrit dans la configuration d'écran mémorisée. Test :
-`scripts/test-display-mode.sh` (faux xrandr).
+`scripts/test-display-mode.sh` (faux xrandr). `GetDIBits` décrit l'écran comme
+Windows (32 bits, `BI_BITFIELDS`, 8 bits par composante) : SDL3 en tire le
+format des modes, que Warzone 2100 écartait tous.
+
+Les ports COM se trouvent aussi comme le fait pyserial, l'IDE Arduino ou un
+logiciel de flashage (#271, `runtime/src/dlls/devnodes.rs`). Un arbre de
+périphériques Plug and Play est construit à partir de sysfs : la racine, les
+ports (`USB\VID_…&PID_…&MI_…` sous leur appareil USB `USB\VID_…&PID_…\<série>`,
+`ACPI\PNP0501`, `ROOT\PORTS`) et les manettes HID. `setupapi` sert la classe Ports et
+l'interface COMPORT (`SetupDiOpenDevRegKey` → `PortName`,
+`SetupDiGetDeviceInstanceId`, `FRIENDLYNAME` « … (COM5) », `HARDWAREID`,
+`SetupDiClassGuidsFromName`). `cfgmgr32` parcourt l'arbre (`CM_Locate_DevNode`,
+`CM_Get_Parent/Child/Sibling`, `CM_Get_Device_ID`, `CM_Get_DevNode_Status`,
+`CM_Get_DevNode_Registry_Property`, `CM_Get_Device_Interface_List`). Un chemin
+d'interface COMPORT s'ouvre avec `CreateFileW` comme le port lui-même. Test :
+`scripts/test-devnodes.sh` (faux sysfs d'une Arduino Uno, plus COM7 sur un
+pseudo-terminal).
 
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
@@ -394,8 +410,8 @@ résolution (`ChangeDisplaySettingsExW`, 8).
 
 Fait : `hid.dll` et l'énumération HID de `setupapi` sur hidraw, `DeviceIoControl`
 sur disques, volumes et fichiers, entrée brute, ports série, définition
-d'écran et rampe gamma (voir plus haut).
-Reste : `cfgmgr32`, `winusb`, la classe Ports de `setupapi`.
+d'écran et rampe gamma, `cfgmgr32` et la classe Ports de `setupapi` (voir plus haut).
+Reste : `winusb`.
 
 Ampleur : **M**. Suivi : #271.
 

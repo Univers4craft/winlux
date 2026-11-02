@@ -104,6 +104,7 @@ run manettes-hid         sh scripts/test-hid.sh
 run deviceiocontrol      sh scripts/test-devio.sh
 run entree-brute         sh scripts/test-rawinput.sh
 run ports-serie          sh scripts/test-serial.sh
+run arbre-peripheriques  sh scripts/test-devnodes.sh
 run definition-ecran     sh scripts/test-display-mode.sh
 # Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.
 if [ -x target/release/winlux ] && [ -f target/x86_64-pc-windows-msvc/release/gui_demo.exe ]; then
