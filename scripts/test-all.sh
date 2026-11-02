@@ -111,6 +111,7 @@ run entree-brute         sh scripts/test-rawinput.sh
 run ports-serie          sh scripts/test-serial.sh
 run arbre-peripheriques  sh scripts/test-devnodes.sh
 run winusb               sh scripts/test-winusb.sh
+run api-chromium         sh scripts/test-chromium-api.sh
 run heritage-handles     sh scripts/test-heritage.sh
 run definition-ecran     sh scripts/test-display-mode.sh
 # Shell PE : seulement si le runtime et gui_demo.exe sont déjà compilés.

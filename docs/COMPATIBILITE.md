@@ -508,6 +508,23 @@ hérités, l'écoute des clients d'autres processus avant `ConnectNamedPipe`, le
 mode message des tubes entre processus. `crashpad_handler.exe` (Warzone 2100,
 Sentry) reste non lancé tant qu'il n'a pas été essayé avec ces handles.
 
+**Démarrage d'Electron (novembre 2026).** Relevé sur un vrai Electron 45 dans la
+VM, chaque absence arrêtant Chromium (CHECK). Ajoutés
+(`runtime/src/dlls/chromium_win32.rs`) :
+- atténuations `Get/SetProcessMitigationPolicy`, lues comme désactivées ;
+- `Get/SetProcessInformation`, `SetThreadInformation`, `FlsGetValue2` ;
+- contrôle, SACL et contrôle RM des descripteurs de sécurité, `MakeSelfRelativeSD`
+  et `MakeAbsoluteSD` ;
+- notifications de veille, contextes de DPI et `SetWinEventHook` ;
+- shcore (`GetDpiForMonitor`, `GetScaleFactorForMonitor`,
+  `Set/GetProcessDpiAwareness`, contrat `api-ms-win-shcore-scaling-*`) ;
+- les contrats `api-ms-win-downlevel-*` ;
+- les bibliothèques de types d'oleaut32, par nom et par ordinal (#161 à #164,
+  #183), qui rendent l'erreur documentée ;
+- `CONOUT$`/`CONIN$` sans terminal, qui rendent la sortie ou l'entrée standard.
+
+Test : `scripts/test-chromium-api.sh`.
+
 ### 11. Périphériques et entrées des jeux
 
 `DeviceIoControl` (le plus demandé du corpus), entrée brute

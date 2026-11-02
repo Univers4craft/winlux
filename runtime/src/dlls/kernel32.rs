@@ -1729,13 +1729,15 @@ unsafe fn create_file_opened(
             }
         };
     }
-    // CONIN$ / CONOUT$ : la console, c'est-à-dire le terminal.
+    // CONIN$ / CONOUT$ : la console, c'est-à-dire le terminal ; sans
+    // terminal (sortie redirigée, appli graphique), l'entrée ou la sortie
+    // standard, et surtout pas un fichier nommé « CONOUT$ ».
     let device = path.trim_start_matches("\\\\.\\").to_ascii_uppercase();
-    if device == "CONIN$" && libc::isatty(0) == 1 {
+    if device == "CONIN$" {
         crate::process::set_last_error(0);
         return STD_INPUT_REAL;
     }
-    if device == "CONOUT$" && libc::isatty(1) == 1 {
+    if device == "CONOUT$" {
         crate::process::set_last_error(0);
         return STD_OUTPUT_REAL;
     }
