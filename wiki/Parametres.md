@@ -7,7 +7,7 @@
 1. **Masqué plutôt que grisé.** Une page ou une section qui ne correspond à rien sur la machine n'apparaît pas : pas de page Bluetooth sans adaptateur ni périphérique, pas de page Son sans carte son, pas de Lecteurs réseau sans outil de montage, pas de réglage CPU que le matériel ne permet pas. La détection est faite au démarrage par `winlux-hardware`.
 2. **Les réglages matériels avancés vivent ici, et seulement ici** (processeur, GPU, alimentation), après détection réelle du matériel.
 
-## Les 32 pages
+## Les 33 pages
 
 | # | Page | Ce qu'on y règle |
 |---|---|---|
@@ -19,7 +19,7 @@
 | 5 | **Souris** | Vitesse, boutons, pavé tactile (appui pour cliquer). |
 | 6 | **Personnalisation** | Thème clair/sombre, couleur d'accent. |
 | 7 | **Mises à jour** | Rechercher et installer les mises à jour de Winlux, mises à jour automatiques, retour arrière. |
-| 8 | **Écran** | Définition, échelle, « Suivre la taille de la VM » (seulement en machine virtuelle). |
+| 8 | **Écran** | Définition, échelle, « Suivre la taille de la VM » (seulement en machine virtuelle), **éclairage nocturne** (intensité, planning du coucher au lever du soleil calculé hors ligne ou heures choisies ; masqué si l’écran n’a pas de rampe gamma). |
 | 9 | **À propos** | Version, commit et date de construction (`BUILD-INFO`), matériel réel, en quatre langues. |
 | 10 | **Programmes Windows** | Réglages par `.exe` (fichiers `<programme>.exe.winlux.ini` partagés avec le runtime). |
 | 11 | **Navigateurs** | Installer un navigateur préparé hors ligne, choisir le navigateur par défaut. |
@@ -43,6 +43,7 @@
 | 29 | **Jeux** | Bibliothèque des jeux Windows, temps de jeu, raccourcis (docs/JEUX.md). |
 | 30 | **Assistant Claude** | Désactivé par défaut. L'activer télécharge Claude Code s'il manque, connecte le compte Claude (Google, e-mail…) puis ajoute le bouton Claude à la barre des tâches (et Windows+C). Compte connecté, « Se déconnecter », ce qui est envoyé. Session native seulement. |
 | 31 | **Récupération** | Réinitialiser ce PC (conserver mes fichiers ou tout supprimer), revenir en arrière, démarrage avancé, réparer le démarrage, créer une clé de secours ([docs/RECOVERY.md](https://github.com/Univers4craft/winlux/blob/master/docs/RECOVERY.md)). |
+| 32 | **Presse-papiers** | Historique Windows + V activé ou non, effacer les données (sauf les éléments épinglés). Page native seulement. |
 
 Les pages 25 à 28 ouvrent l'interface complète du shell PE (`testexe/src/shell/settings.rs` et ses modules), qui reste aussi l'écran des Paramètres de l'ancien bureau PE (`WINLUX_LEGACY_SETTINGS=1 winlux-shell-app settings`).
 

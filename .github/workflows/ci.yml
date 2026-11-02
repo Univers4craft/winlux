@@ -154,6 +154,21 @@ jobs:
       - name: Vérifier l'application Claude Code (téléchargement vérifié, terminal)
         run: python3 -B scripts/test-claude-code.py
 
+      - name: Vérifier l'éclairage nocturne (soleil, planning, couleurs, langues)
+        run: python3 -B scripts/test-ambiance.py
+
+      - name: Vérifier le sélecteur d'emojis Win+. (recherche en quatre langues, récents)
+        run: python3 -B scripts/test-emoji.py
+
+      - name: Vérifier l'historique du presse-papiers Win+V (épingles, doublons, réglage)
+        run: python3 -B scripts/test-clipboard.py
+
+      - name: Vérifier l'ancrage Windows + flèches / Z et la vue des tâches Windows + Tab
+        run: python3 -B scripts/test-snap-taskview.py
+
+      - name: Vérifier l'application Horloge (alarmes, minuteurs, concentration)
+        run: python3 -B scripts/test-alarms.py
+
       - name: Vérifier l'application Jeux (détection, temps de jeu, raccourcis, langues)
         run: python3 -B scripts/test-games.py
 
