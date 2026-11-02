@@ -50,6 +50,7 @@ pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod hid;
 pub mod hostcall;
 pub mod imm32;
 pub mod iphlpapi;
@@ -461,6 +462,11 @@ fn builtins() -> &'static Vec<Builtin> {
             Builtin {
                 name: "powrprof",
                 exports: powrprof::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "hid",
+                exports: hid::exports(),
                 handle: fake_module(),
             },
             Builtin {

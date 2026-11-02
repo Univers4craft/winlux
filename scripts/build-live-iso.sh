@@ -440,6 +440,9 @@ done
 # Configuration binfmt : le noyau lance automatiquement winlux pour les .exe MZ.
 mkdir -p "$stage/etc/binfmt.d"
 cp "$root/integration/winlux-binfmt.conf" "$stage/etc/binfmt.d/winlux.conf"
+# Manettes lisibles par hid.dll (#271) : /dev/hidraw* des fabricants de jeu.
+mkdir -p "$stage/etc/udev/rules.d"
+cp "$root/integration/70-winlux-manettes.rules" "$stage/etc/udev/rules.d/70-winlux-manettes.rules"
 # Type MIME pour les .exe.
 mkdir -p "$stage/usr/share/mime/packages"
 cp "$root/integration/x-ms-dos-executable.xml" "$stage/usr/share/mime/packages/winlux.xml"
