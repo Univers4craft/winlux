@@ -117,7 +117,9 @@ def build(stage, base, output):
         (metadata / "postinst").write_text('#!/bin/sh\nset -e\n'
             'test -z "${DPKG_ROOT:-}" || exit 0\n'
             'update-desktop-database /usr/share/applications\n'
-            'update-mime-database /usr/share/mime\n')
+            'update-mime-database /usr/share/mime\n'
+            '# Menu GRUB court et noyau silencieux sur les installations existantes.\n'
+            'if test -x /usr/share/winlux/boot-menu; then /usr/share/winlux/boot-menu || true; fi\n')
         (metadata / "postinst").chmod(0o755)
         (metadata / "conffiles").write_text("/etc/apt/apt.conf.d/90winlux-desktop\n")
         output.parent.mkdir(parents=True, exist_ok=True)
