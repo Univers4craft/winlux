@@ -535,8 +535,66 @@ pub extern "win64" fn create_error_info(_info: *mut usize) -> i32 {
     0x8000_4005u32 as i32
 }
 
+// ── Bibliothèques de types ──────────────────────────────────────────
+//
+// Aucune bibliothèque de types n'est enregistrée : les appelants (Chromium,
+// accessibilité, automatisation) reçoivent l'erreur documentée et continuent
+// sans elle.
+
+const TYPE_E_LIBNOTREGISTERED: i32 = 0x8002_801Du32 as i32;
+const TYPE_E_CANTLOADLIBRARY: i32 = 0x8002_9C4Au32 as i32;
+
+pub unsafe extern "win64" fn load_type_lib(_file: *const u16, out: *mut usize) -> i32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    TYPE_E_CANTLOADLIBRARY
+}
+pub unsafe extern "win64" fn load_type_lib_ex(
+    _file: *const u16,
+    _kind: u32,
+    out: *mut usize,
+) -> i32 {
+    load_type_lib(_file, out)
+}
+pub unsafe extern "win64" fn load_reg_type_lib(
+    _guid: *const u8,
+    _major: u16,
+    _minor: u16,
+    _lcid: u32,
+    out: *mut usize,
+) -> i32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    TYPE_E_LIBNOTREGISTERED
+}
+pub unsafe extern "win64" fn query_path_of_reg_type_lib(
+    _guid: *const u8,
+    _major: u16,
+    _minor: u16,
+    _lcid: u32,
+    out: *mut usize,
+) -> i32 {
+    if !out.is_null() {
+        *out = 0;
+    }
+    TYPE_E_LIBNOTREGISTERED
+}
+pub extern "win64" fn register_type_lib(_lib: usize, _path: usize, _help: usize) -> i32 {
+    TYPE_E_CANTLOADLIBRARY
+}
+
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
+        "LoadTypeLib" => fn load_type_lib,
+        "LoadTypeLibEx" => fn load_type_lib_ex,
+        "LoadRegTypeLib" => fn load_reg_type_lib,
+        "QueryPathOfRegTypeLib" => fn query_path_of_reg_type_lib,
+        "RegisterTypeLib" => fn register_type_lib,
+        "#161" => fn load_type_lib, "#162" => fn load_reg_type_lib,
+        "#163" => fn register_type_lib, "#164" => fn query_path_of_reg_type_lib,
+        "#183" => fn load_type_lib_ex,
         "SysAllocString" => fn sys_alloc_string,
         "SysAllocStringLen" => fn sys_alloc_string_len,
         "SysAllocStringByteLen" => fn sys_alloc_string_byte_len,

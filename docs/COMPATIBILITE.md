@@ -426,8 +426,32 @@ Ampleur : **L**. Suivi : #235.
 - Vérifié par `tls_suite.exe` (poignée de main réelle contre un serveur
   `openssl s_server` jetable, `scripts/run-tls-suite.sh`) et par les tests
   unitaires.
-- Reste : `ncrypt`, clés RSA de la CryptoAPI, `CryptProtectData`,
-  certificats client (`PFXImportCertStore`), rôle serveur de Schannel.
+- Données protégées (`runtime/src/dlls/dpapi.rs`) : `CryptProtectData`,
+  `CryptUnprotectData` (AES-256-CBC et HMAC-SHA256, clé maîtresse par compte
+  dans `~/.config/winlux/dpapi/master.key`, clé de la machine avec
+  `CRYPTPROTECT_LOCAL_MACHINE`, entropie et description gérées),
+  `CryptProtectMemory`/`CryptUnprotectMemory` et `RtlEncryptMemory`. Un blob
+  venu d'un vrai Windows ne se relit pas : il dépend des secrets du compte
+  Windows.
+- Certificats client : `PFXImportCertStore` (PKCS #12 déchiffré par
+  OpenSSL, clé privée attachée au certificat, `CERT_KEY_PROV_INFO_PROP_ID`),
+  `PFXIsPFXBlob`, `PFXVerifyPassword`, `CERT_FIND_HAS_PRIVATE_KEY` ; Schannel
+  présente le certificat de `SCHANNEL_CRED.paCred` au serveur qui le demande.
+- Clés RSA de la CryptoAPI (`runtime/src/dlls/advapi32_rsa.rs`) : conteneurs
+  de clés par compte (`CryptAcquireContext` avec `CRYPT_NEWKEYSET`,
+  `CRYPT_DELETEKEYSET`, `CRYPT_VERIFYCONTEXT` ; clés gardées dans
+  `~/.config/winlux/crypto/`, chiffrées par la DPAPI), `CryptGenKey`
+  (`AT_KEYEXCHANGE`, `AT_SIGNATURE`), `CryptGetUserKey`, `CryptExportKey` et
+  `CryptImportKey` (`PUBLICKEYBLOB`, `PRIVATEKEYBLOB`, `PLAINTEXTKEYBLOB`,
+  `SIMPLEBLOB`), HMAC (`CALG_HMAC`, `HP_HMAC_INFO`, `CRYPT_IPSEC_HMAC_KEY`),
+  `CryptSetHashParam(HP_HASHVAL)`,
+  `CryptSignHash`/`CryptVerifySignature` (PKCS #1 v1.5, MD5, SHA-1, SHA-2),
+  `CryptEncrypt`/`CryptDecrypt` RSA (PKCS #1 v1.5 ou `CRYPT_OAEP`),
+  `CryptAcquireCertificatePrivateKey` (clé d'un certificat importé d'un
+  PKCS #12) et `CryptImportPublicKeyInfo(Ex)`. Calculs par l'OpenSSL du
+  système.
+- Reste : `ncrypt`, `CALG_MAC` (MAC par chiffrement), rôle serveur de
+  Schannel.
 
 ### 7. Shaders Direct3D 10/11/12 — tous les jeux récents
 
@@ -496,6 +520,23 @@ Chromium), la mémoire partagée (`CreateFileMapping`) et les mutex et sémaphor
 hérités, l'écoute des clients d'autres processus avant `ConnectNamedPipe`, le
 mode message des tubes entre processus. `crashpad_handler.exe` (Warzone 2100,
 Sentry) reste non lancé tant qu'il n'a pas été essayé avec ces handles.
+
+**Démarrage d'Electron (novembre 2026).** Relevé sur un vrai Electron 45 dans la
+VM, chaque absence arrêtant Chromium (CHECK). Ajoutés
+(`runtime/src/dlls/chromium_win32.rs`) :
+- atténuations `Get/SetProcessMitigationPolicy`, lues comme désactivées ;
+- `Get/SetProcessInformation`, `SetThreadInformation`, `FlsGetValue2` ;
+- contrôle, SACL et contrôle RM des descripteurs de sécurité, `MakeSelfRelativeSD`
+  et `MakeAbsoluteSD` ;
+- notifications de veille, contextes de DPI et `SetWinEventHook` ;
+- shcore (`GetDpiForMonitor`, `GetScaleFactorForMonitor`,
+  `Set/GetProcessDpiAwareness`, contrat `api-ms-win-shcore-scaling-*`) ;
+- les contrats `api-ms-win-downlevel-*` ;
+- les bibliothèques de types d'oleaut32, par nom et par ordinal (#161 à #164,
+  #183), qui rendent l'erreur documentée ;
+- `CONOUT$`/`CONIN$` sans terminal, qui rendent la sortie ou l'entrée standard.
+
+Test : `scripts/test-chromium-api.sh`.
 
 ### 11. Périphériques et entrées des jeux
 
