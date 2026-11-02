@@ -839,8 +839,6 @@ fn init_tables() {
             b.push(0);
             *slot = Box::leak(b.into_boxed_slice()).as_ptr() as usize;
         }
-        ACMDLN = crate::dlls::kernel32::get_command_line_a();
-        WCMDLN = crate::dlls::kernel32::get_command_line_w() as usize;
         // Décalage de l'heure locale (heure d'hiver), en secondes à l'ouest d'UTC.
         let now = libc::time(std::ptr::null_mut());
         let mut tm: libc::tm = std::mem::zeroed();
@@ -874,6 +872,19 @@ fn init_tables() {
         TZ_NAMES = [name(local.tm_zone), name(summer.tm_zone)];
     });
 }
+/// Ligne de commande connue : renseigne les variables exportées `_acmdln`
+/// et `_wcmdln` (importées comme données par les programmes MinGW).
+pub fn process_started() {
+    unsafe {
+        ACMDLN = crate::dlls::kernel32::get_command_line_a();
+        WCMDLN = crate::dlls::kernel32::get_command_line_w();
+    }
+}
+fn cmdline() {
+    if unsafe { ACMDLN } == 0 {
+        process_started();
+    }
+}
 extern "win64" fn p_sys_nerr() -> *mut i32 {
     init_tables();
     std::ptr::addr_of_mut!(SYS_NERR_DATA)
@@ -883,11 +894,11 @@ extern "win64" fn p_sys_errlist() -> *mut usize {
     std::ptr::addr_of_mut!(SYS_ERRLIST) as *mut usize
 }
 extern "win64" fn p_acmdln() -> *mut usize {
-    init_tables();
+    cmdline();
     std::ptr::addr_of_mut!(ACMDLN)
 }
 extern "win64" fn p_wcmdln() -> *mut usize {
-    init_tables();
+    cmdline();
     std::ptr::addr_of_mut!(WCMDLN)
 }
 extern "win64" fn p_timezone() -> *mut i32 {
@@ -1418,6 +1429,8 @@ extern "win64" fn findclose(h: isize) -> i32 {
 }
 
 pub fn exports() -> crate::dlls::Exports {
+    // Les variables exportées comme données doivent être prêtes avant tout appel.
+    init_tables();
     crate::exports! {
         "_setjmp" => fn winlux_crt_setjmp, "_setjmpex" => fn winlux_crt_setjmp, "setjmp" => fn winlux_crt_setjmp,
         "__intrinsic_setjmp" => fn winlux_crt_setjmp, "__intrinsic_setjmpex" => fn winlux_crt_setjmp,
