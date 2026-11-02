@@ -98,6 +98,23 @@ icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/nul
 if test -d /usr/share/icons/Winlux && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
     /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
 fi
+# Thème GTK : le défaut d'XFCE (Greybird) n'est pas livré et GTK retombait
+# sur Adwaita clair, même en thème sombre (Boutique, Jeux, éditeur…). Un thème
+# absent est remplacé par Adwaita.
+gtk_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null || true)
+# Thème absent (défaut XFCE Greybird, « Adwaita-dark » d'anciennes versions) :
+# le thème Winlux du compte est créé d'après Personnalisation (clair ou
+# sombre), sinon Adwaita. Une installation neuve restait claire en mode sombre.
+case "$gtk_theme" in Adwaita|HighContrast|HighContrastInverse) ;; *)
+    # Thèmes du compte (Winlux-dark-1… écrits par Personnalisation) compris.
+    if test -z "$gtk_theme" || ! { test -d "/usr/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.local/share/themes/$gtk_theme/gtk-3.0" || test -d "$HOME/.themes/$gtk_theme/gtk-3.0"; }; then
+        mode=dark
+        if grep -qx 'THEME=light' /etc/winlux/preferences.conf 2>/dev/null; then mode=light; fi
+        if ! { test -x /usr/bin/winlux-personalize && WINLUX_PERSONALIZE_NO_SYSTEM=1 /usr/bin/winlux-personalize theme "$mode" >/dev/null 2>&1; }; then
+            /usr/bin/xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Adwaita 2>/dev/null || true
+        fi
+    fi ;;
+esac
 if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then
     /usr/bin/blueman-applet >/run/winlux/bluetooth-agent.log 2>&1 &
 fi
@@ -143,6 +160,13 @@ gtk_scale() {
 gtk_scale "${WINLUX_UI_SCALE:-$(/usr/bin/winlux-display session-scale 2>/dev/null || echo 1)}"
 # Presse-papiers commun : copier dans un .exe, coller dans une appli Linux, et inversement.
 if test -x /usr/bin/winlux; then /usr/bin/winlux --clipboard-bridge >/run/winlux/clipboard-bridge.log 2>&1 & fi
+# Session live (root) : mêmes services que la session d'un compte
+# (winlux-user-session.sh). Sans eux, Windows+V restait vide, les alarmes de
+# l'Horloge ne sonnaient pas fenêtre fermée et l'éclairage nocturne ne
+# s'appliquait pas.
+if test -x /usr/bin/winlux-clipboard; then /usr/bin/winlux-clipboard daemon >/run/winlux/clipboard-history.log 2>&1 & fi
+if test -x /usr/bin/winlux-alarms; then /usr/bin/winlux-alarms daemon >/run/winlux/alarms.log 2>&1 & fi
+if test -x /usr/bin/winlux-ambiance; then /usr/bin/winlux-ambiance daemon >/run/winlux/ambiance.log 2>&1 & fi
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then /usr/bin/winlux-drives watch >/run/winlux/netdrives.log 2>&1 & fi
 # Dossiers partagés : état publié pour l'Explorateur, serveur relancé si besoin.

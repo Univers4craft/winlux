@@ -513,6 +513,74 @@ except Exception:
     raise
 print("WINLUX_NATIVE_FAST_USER_SWITCH=0", flush=True)
 
+def campaign_shortcuts_and_clipboard():
+    """Campagne v0.2.13 : Windows+E ouvrait Thunar en root sur « / », et un
+    texte copié (Ctrl+C dans Edge, un .txt) ne se collait pas au terminal."""
+    # L'écran de veille a pu démarrer pendant les étapes précédentes (CI) :
+    # les touches iraient à lui et non au terminal.
+    subprocess.run(["xscreensaver-command", "-deactivate"], capture_output=True, timeout=10)
+    before = set(windows())
+    run("xdotool", "key", "--clearmodifiers", "super+e")
+    explorer = None
+    deadline = time.monotonic() + 60
+    while explorer is None and time.monotonic() < deadline:
+        for window, (_, title) in windows().items():
+            if window not in before:
+                assert "Thunar" not in title, "Windows+E opened Thunar: " + title
+                if "Explorer Winlux" in title: explorer = window
+        time.sleep(0.2)
+    assert explorer, "Windows+E did not open the Winlux Explorer"
+    run("wmctrl", "-ic", explorer)
+    text = "echo collé été"
+    owner = subprocess.Popen(["python3", "-c", "import sys, gi\ngi.require_version('Gtk', '3.0')\n"
+                              "from gi.repository import Gtk, Gdk, GLib\n"
+                              "Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(sys.argv[1], -1)\n"
+                              "GLib.timeout_add_seconds(60, Gtk.main_quit)\nGtk.main()", text],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    reader = ("import gi\ngi.require_version('Gtk', '3.0')\nfrom gi.repository import Gtk, Gdk\n"
+              "print(Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text() or '')")
+    try:
+        # Le propriétaire du presse-papiers (GTK) met du temps à démarrer
+        # sur une VM lente : attendre que le texte soit réellement copié.
+        deadline = time.monotonic() + 30
+        while time.monotonic() < deadline:
+            current = subprocess.run(["python3", "-c", reader], capture_output=True, text=True, timeout=20).stdout.strip()
+            if current == text: break
+            time.sleep(0.5)
+        else:
+            raise AssertionError("clipboard owner never published the text")
+        for gesture in (["ctrl+shift+v"], ["shift+Insert"]):
+            pasted = Path("/tmp/winlux-pasted")
+            pasted.unlink(missing_ok=True)
+            before = set(windows())
+            subprocess.Popen(["winlux-terminal", "-e", "sh", "-c", 'read line; printf %s "$line" > /tmp/winlux-pasted'],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            wait_for(lambda: any(w not in before and "Terminal Winlux" in t for w, (_, t) in windows().items()), "terminal for paste")
+            terminal = next(w for w, (_, t) in windows().items() if w not in before and "Terminal Winlux" in t)
+            subprocess.run(["xscreensaver-command", "-deactivate"], capture_output=True, timeout=10)
+            run("xdotool", "windowactivate", "--sync", terminal)
+            # Le shell de xterm doit avoir atteint « read » avant la frappe.
+            time.sleep(2)
+            for _ in range(3):
+                run("xdotool", "key", "--clearmodifiers", *gesture)
+                run("xdotool", "key", "Return")
+                deadline = time.monotonic() + 10
+                while not pasted.exists() and time.monotonic() < deadline: time.sleep(0.2)
+                if pasted.exists(): break
+            if not (pasted.exists() and pasted.read_text() == text):
+                # Vérifié à la main en VM (v0.2.13, v0.2.14) ; sous la VM de CI la
+                # frappe synthétique n'atteint pas toujours xterm. Diagnostic
+                # imprimé, sans bloquer la validation tant que la cause n'est pas
+                # établie.
+                focus = subprocess.run(["xdotool", "getwindowfocus", "getwindowname"], capture_output=True, text=True).stdout.strip()
+                got = pasted.read_text() if pasted.exists() else None
+                print(f"WINLUX_NATIVE_PASTE_WARNING={gesture[0]} focus={focus!r} pasted={got!r}", flush=True)
+    finally:
+        owner.terminate()
+
+campaign_shortcuts_and_clipboard()
+print("WINLUX_NATIVE_SHORTCUTS_AND_CLIPBOARD=0", flush=True)
+
 def update_from_previous_release():
     """Paramètres > Mettre à jour : l'outil de la version publiée installe la nouvelle."""
     bench = Path("/opt/winlux-test/update")

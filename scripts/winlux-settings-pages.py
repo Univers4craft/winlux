@@ -1854,7 +1854,8 @@ class ExtraPages:
             # Retour au thème Winlux du compte (couleurs et accent compris).
             run(["winlux-personalize", "theme", mode if mode in ("dark", "light") else "dark"], timeout=30)
             return
-        if theme is None: theme = "Adwaita-dark" if mode == "dark" else "Adwaita"
+        # « Adwaita-dark » n'est pas un thème GTK 3 installé (rendu clair).
+        if theme is None: theme = "Adwaita"
         xfconf_set("xsettings", "/Net/ThemeName", "string", theme)
 
     def set_pointer(self, size):
