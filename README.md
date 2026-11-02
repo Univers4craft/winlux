@@ -54,7 +54,7 @@ Winlux est un système d'exploitation complet, distribué sous forme d'**ISO ins
 
 1. **Un vrai noyau Linux** et une base Ubuntu 26.04 LTS avec `apt` et `dpkg` natifs. Les logiciels Linux s'installent et fonctionnent normalement.
 2. **Une couche de compatibilité Windows écrite de zéro en Rust** (le *runtime* Winlux) : elle charge directement les exécutables Windows 64 bits (format PE32+) et leur fournit les DLL Windows dont ils ont besoin (`kernel32`, `user32`, `gdi32`, `ntdll`, `advapi32`, `ole32`, `ws2_32`, Direct3D, etc.), réimplémentées au-dessus de Linux.
-3. **Un bureau qui ressemble à Windows 11** : menu Démarrer centré (ou à gauche), barre des tâches, Explorateur, Paramètres, écran de verrouillage, gestionnaire des tâches, sans aucun logo ni marque Microsoft.
+3. **Un bureau à l'ergonomie familière** : menu Démarrer centré (ou à gauche), barre des tâches, Explorateur, Paramètres, écran de verrouillage, gestionnaire des tâches, sans aucun logo ni marque Microsoft.
 
 **Le but** : qu'un utilisateur habitué à Windows puisse double-cliquer sur un `.exe` n'importe où (bureau, clé USB, dossier Téléchargements) et qu'il s'ouvre, comme sous Windows, tout en profitant d'un système Linux avec un accès complet à ses fichiers. Il n'y a **qu'un seul noyau** : aucune machine virtuelle Windows ne tourne en arrière-plan, et aucune licence Windows n'est nécessaire.
 
@@ -66,7 +66,7 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 |---|---|
 | **Tout est fait maison** | La couche de compatibilité Windows n'utilise **ni Wine, ni Proton, ni DXVK**, ni aucune couche tierce. Une étape de la CI refuse toute dépendance à Wine. Les briques Linux standard restent permises : FFmpeg pour les médias, CUPS pour l'impression, Samba pour le partage, `mount.cifs`/`sshfs`/`rclone` pour les lecteurs réseau. |
 | **Aucun lien avec Microsoft** | En dehors de la compatibilité `.exe`, Winlux n'est pas associé à Microsoft : **comptes locaux uniquement**, aucun compte en ligne, aucune application Microsoft proposée par défaut. Seule exception assumée : le démarrage Secure Boot passe par le *shim* contresigné par l'autorité UEFI tierce, la seule façon de démarrer sur un PC du commerce sans réglage. |
-| **Identité visuelle propre** | L'ergonomie est celle de Windows 11, mais il n'y a **aucun logo Windows**. Le logo de Winlux s'appelle **« Prisme »** : un losange taillé, violet à gauche (Linux) et cyan à droite (*lux*, la lumière). |
+| **Identité visuelle propre** | L'ergonomie est familière, mais l'identité est propre au projet : **aucun logo, police, icône ni son de Microsoft**. Le logo de Winlux s'appelle **« Prisme »** : un losange taillé, violet à gauche (Linux) et cyan à droite (*lux*, la lumière). |
 | **Paramètres honnêtes** | Une section qui ne correspond à rien sur la machine (pas de Bluetooth, pas de batterie, pas de réglage CPU possible) est **masquée**, jamais grisée ni vide. Les réglages avancés du matériel vivent uniquement dans Paramètres. |
 | **Ne rien promettre qui n'existe pas** | Une fonction partielle est documentée comme partielle. Un import Windows non implémenté arrête le programme avec un message clair plutôt que de faire semblant de réussir. |
 | **Multilingue** | Le bureau, l'Explorateur, les Paramètres et les applications intégrées sont traduits en **français, anglais, espagnol et allemand** ; l'installateur propose aussi l'italien et le portugais. |
@@ -89,7 +89,7 @@ Ces règles guident chaque décision. Elles sont détaillées dans la page [But 
 
 ```
 ┌────────────────────────────────────────────────────────────────────────┐
-│ Bureau façon Windows 11                                                │
+│ Bureau à l'ergonomie familière                                         │
 │  Session native : xfdesktop + xfce4-panel + Openbox + Thunar, habillés │
 │  Menu Démarrer GTK, Paramètres GTK, écran de verrouillage, UAC…        │
 │  Applications maison PE : Explorateur, Gestionnaire des tâches,        │
@@ -135,7 +135,7 @@ Cette liste décrit le code présent sur `master`. Certaines fonctions sont plus
 
 ### Bureau
 
-- Menu Démarrer façon Windows 11 : recherche, épingles, « Toutes les applications » avec catégories, recommandations, menu d'alimentation et de compte. Les programmes Windows installés y apparaissent automatiquement, avec leur icône extraite du `.exe`.
+- Menu Démarrer : recherche, épingles, « Toutes les applications » avec catégories, recommandations, menu d'alimentation et de compte. Les programmes Windows installés y apparaissent automatiquement, avec leur icône extraite du `.exe`.
 - Échelle d'affichage automatique selon la taille physique réelle de l'écran (paliers Windows de 100 à 300 %), du portable 1366×768 à l'écran 4K.
 - Barre des tâches centrée ou alignée à gauche, zone de notification avec les icônes des applications Windows (`Shell_NotifyIcon`), réglages rapides réseau et volume.
 - **Explorateur** (application maison) : onglets, double volet, recherche, tri, copier/couper/coller, corbeille, ouverture des **archives ZIP, 7z, RAR et tar**, « Extraire tout », partage de dossier en un clic droit.
