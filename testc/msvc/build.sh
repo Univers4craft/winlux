@@ -35,3 +35,9 @@ done
 clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/hid_msvc.c" -o "$tmp/hid_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/hid_msvc.obj" \
     "$tmp/kernel32_hid.lib" "$tmp/setupapi.lib" "$tmp/hid.lib" /out:"$out/hid_msvc.exe"
+# DeviceIoControl sur volumes, disques et fichiers creux (#271).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateFileW\nDeviceIoControl\nWriteFile\nReadFile\nSetFilePointer\nCloseHandle\nGetLastError\n' >"$tmp/kernel32_devio.def"
+llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_devio.def" -l "$tmp/kernel32_devio.lib"
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/devio_msvc.c" -o "$tmp/devio_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/devio_msvc.obj" \
+    "$tmp/kernel32_devio.lib" /out:"$out/devio_msvc.exe"
