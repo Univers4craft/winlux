@@ -64,7 +64,7 @@ namespace = "{http://openbox.org/3.4/rc}"
 rc = ET.parse(HERE.parent / "integration/native/config/openbox/rc.xml").getroot()
 bindings = {item.get("key"): item.findtext(f"{namespace}action/{namespace}command") for item in rc.iter(f"{namespace}keybind")}
 assert bindings.get("W-v") == "winlux-clipboard show", bindings
-assert '"W-v")' in (HERE / "winlux-native-config.py").read_text()
+assert '"W-v"' in (HERE / "winlux-native-config.py").read_text()
 assert "winlux-clipboard daemon" in (HERE / "winlux-user-session.sh").read_text()
 assert "'winlux-clipboard.py:winlux-clipboard'" in (HERE / "stage-desktop-components.sh").read_text()
 pages = (HERE / "winlux-settings-pages.py").read_text()
