@@ -25,18 +25,29 @@
     <keybind key="C-S-Escape"><action name="Execute"><command>winlux-shell-app taskmgr</command></action></keybind>
     <keybind key="W-a"><action name="Execute"><command>winlux-system-tools quick</command></action></keybind>
     <keybind key="W-n"><action name="Execute"><command>winlux-popup notifications</command></action></keybind>
+    <keybind key="W-v"><action name="Execute"><command>winlux-clipboard show</command></action></keybind>
+    <keybind key="W-period"><action name="Execute"><command>winlux-emoji</command></action></keybind>
+    <keybind key="W-semicolon"><action name="Execute"><command>winlux-emoji</command></action></keybind>
     <keybind key="W-w"><action name="Execute"><command>winlux-widgets</command></action></keybind>
     <!-- Assistant Claude : ne fait rien tant qu'il n'est pas activé dans Paramètres. -->
     <keybind key="W-c"><action name="Execute"><command>winlux-assistant</command></action></keybind>
     <keybind key="W-F10"><action name="ShowMenu"><menu>root-menu</menu></action></keybind>
-    <keybind key="W-Up"><action name="Maximize"/></keybind>
-    <keybind key="W-Down"><action name="UnmaximizeFull"/></keybind>
-    <keybind key="W-Left"><action name="UnmaximizeFull"/><action name="MoveResizeTo"><x>0</x><y>0</y><width>50%</width><height>100%</height></action></keybind>
-    <keybind key="W-Right"><action name="UnmaximizeFull"/><action name="MoveResizeTo"><x>-0</x><y>0</y><width>50%</width><height>100%</height></action></keybind>
-    <keybind key="W-C-Left"><action name="UnmaximizeFull"/><action name="MoveResizeTo"><x>0</x><y>0</y><width>50%</width><height>50%</height></action></keybind>
-    <keybind key="W-C-Right"><action name="UnmaximizeFull"/><action name="MoveResizeTo"><x>-0</x><y>0</y><width>50%</width><height>50%</height></action></keybind>
-    <keybind key="W-S-Left"><action name="UnmaximizeFull"/><action name="MoveResizeTo"><x>0</x><y>-0</y><width>50%</width><height>50%</height></action></keybind>
-    <keybind key="W-S-Right"><action name="UnmaximizeFull"/><action name="MoveResizeTo"><x>-0</x><y>-0</y><width>50%</width><height>50%</height></action></keybind>
+    <!-- Ancrage comme Windows 11 (winlux-snap) : Windows + flèches enchaîne moitiés,
+         quarts, agrandissement et taille d'avant ; Windows + Z ouvre les dispositions. -->
+    <keybind key="W-Up"><action name="Execute"><command>winlux-snap key up</command></action></keybind>
+    <keybind key="W-Down"><action name="Execute"><command>winlux-snap key down</command></action></keybind>
+    <keybind key="W-Left"><action name="Execute"><command>winlux-snap key left</command></action></keybind>
+    <keybind key="W-Right"><action name="Execute"><command>winlux-snap key right</command></action></keybind>
+    <keybind key="W-z"><action name="Execute"><command>winlux-snap layouts</command></action></keybind>
+    <!-- Bureaux virtuels et vue des tâches (winlux-taskview). -->
+    <keybind key="W-Tab"><action name="Execute"><command>winlux-taskview</command></action></keybind>
+    <keybind key="W-C-d"><action name="Execute"><command>winlux-taskview new</command></action></keybind>
+    <keybind key="W-C-F4"><action name="Execute"><command>winlux-taskview close</command></action></keybind>
+    <keybind key="W-C-Left"><action name="GoToDesktop"><to>left</to><wrap>no</wrap></action></keybind>
+    <keybind key="W-C-Right"><action name="GoToDesktop"><to>right</to><wrap>no</wrap></action></keybind>
+    <!-- Windows + Maj + flèche : fenêtre vers l'écran voisin. -->
+    <keybind key="W-S-Left"><action name="MoveResizeTo"><monitor>prev</monitor></action></keybind>
+    <keybind key="W-S-Right"><action name="MoveResizeTo"><monitor>next</monitor></action></keybind>
   </keyboard>
   <mouse><dragThreshold>4</dragThreshold><doubleClickTime>450</doubleClickTime>
     <context name="Titlebar">
@@ -49,7 +60,7 @@
     <context name="Client"><mousebind button="Left" action="Press"><action name="Focus"/><action name="Raise"/></mousebind></context>
     <context name="Close"><mousebind button="Left" action="Click"><action name="Close"/></mousebind></context>
     <context name="Iconify"><mousebind button="Left" action="Click"><action name="Iconify"/></mousebind></context>
-    <context name="Maximize"><mousebind button="Left" action="Click"><action name="ToggleMaximize"/></mousebind></context>
+    <context name="Maximize"><mousebind button="Left" action="Click"><action name="ToggleMaximize"/></mousebind><mousebind button="Right" action="Click"><action name="Focus"/><action name="Execute"><command>winlux-snap layouts</command></action></mousebind></context>
     <context name="Bottom"><mousebind button="Left" action="Drag"><action name="Resize"><edge>bottom</edge></action></mousebind></context>
     <context name="BLCorner"><mousebind button="Left" action="Drag"><action name="Resize"><edge>bottomleft</edge></action></mousebind></context>
     <context name="BRCorner"><mousebind button="Left" action="Drag"><action name="Resize"><edge>bottomright</edge></action></mousebind></context>
