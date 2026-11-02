@@ -68,6 +68,43 @@ dialog.run()
 PY
 }
 
+# Paquet MSIX d'un éditeur non vérifié : « Annuler » par défaut, il faut
+# choisir « Installer quand même ». Sans affichage ni boîte : refus.
+confirm_unverified() {
+    name=$1; reason=$2
+    text="« $name » : éditeur non vérifié.
+
+$reason"
+    [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ] || return 1
+    if command -v kdialog >/dev/null 2>&1; then
+        kdialog --title "Éditeur non vérifié" --warningcontinuecancel "$text" --continue-label "Installer quand même"
+        return
+    elif command -v zenity >/dev/null 2>&1; then
+        zenity --question --default-cancel --title="Éditeur non vérifié" \
+            --ok-label="Installer quand même" --cancel-label="Annuler" --no-wrap --text="$text"
+        return
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 - "$name" "$reason" <<'PY' 2>/dev/null
+import sys
+import gi
+gi.require_version("Gtk", "3.0")
+from gi.repository import Gtk
+name, reason = sys.argv[1], sys.argv[2]
+d = Gtk.MessageDialog(message_type=Gtk.MessageType.WARNING, buttons=Gtk.ButtonsType.NONE,
+                      text="« %s » : éditeur non vérifié" % name)
+d.set_title("Éditeur non vérifié")
+d.format_secondary_text(reason)
+d.add_button("Annuler", Gtk.ResponseType.CANCEL)
+d.add_button("Installer quand même", Gtk.ResponseType.ACCEPT)
+d.set_default_response(Gtk.ResponseType.CANCEL)
+d.set_keep_above(True)
+sys.exit(0 if d.run() == Gtk.ResponseType.ACCEPT else 1)
+PY
+        return
+    fi
+    return 1
+}
+
 # Message clair pour un programme qui n'a pas pu démarrer, d'après le journal.
 explain_failure() {
     name=$1; status=$2; journal=$3
@@ -216,6 +253,17 @@ case "$exe" in
         mkdir -p "$state" 2>/dev/null || log=/dev/null
         "$winlux" --setup "$exe" >"$log" 2>&1
         status=$?
+        # Code 3 : éditeur non vérifié (paquet non signé ou chaîne non
+        # vérifiée). Rien n'est installé sans un « oui » explicite.
+        if [ "$status" -eq 3 ]; then
+            reason=$(sed -n 's/^setup : //p' "$log" 2>/dev/null | tail -n 1)
+            if confirm_unverified "$(basename -- "$exe")" "$reason"; then
+                "$winlux" --setup --allow-unverified "$exe" >"$log" 2>&1
+                status=$?
+            else
+                exit 3
+            fi
+        fi
         if [ "$status" -eq 0 ]; then
             command -v winlux-applications >/dev/null 2>&1 && winlux-applications refresh >/dev/null 2>&1
             show_message "« $(basename -- "$exe") » est installé." info
