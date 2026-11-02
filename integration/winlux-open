@@ -20,21 +20,28 @@ show_message() {
     icon=dialog-error
     if [ "$mode" = info ]; then dialog_flag=--msgbox; icon=dialog-information; fi
     if [ -n "${DISPLAY:-}${WAYLAND_DISPLAY:-}" ]; then
+        # Détails techniques : repliés dans la boîte Winlux, ajoutés au texte
+        # pour les autres boîtes.
+        full=$message
+        if [ -n "${3:-}" ]; then full="$message
+
+${3:-}"; fi
+        if command -v kdialog >/dev/null 2>&1; then
+            kdialog --title "$title" "$dialog_flag" "$full" && return
+        elif command -v zenity >/dev/null 2>&1; then
+            zenity "--$mode" --title="$title" --no-wrap --text="$full" && return
         # Boîte Winlux (GTK) : texte en français lisible, détails techniques
         # repliés. xmessage affichait l'UTF-8 en charabia, titre « xmessage ».
-        if command -v python3 >/dev/null 2>&1 && gtk_message "$mode" "$message" "${3:-}"; then
+        elif command -v python3 >/dev/null 2>&1 && gtk_message "$mode" "$message" "${3:-}"; then
             return
-        elif command -v kdialog >/dev/null 2>&1; then
-            kdialog --title "$title" "$dialog_flag" "$message" && return
-        elif command -v zenity >/dev/null 2>&1; then
-            zenity "--$mode" --title="$title" --no-wrap --text="$message" && return
         elif command -v notify-send >/dev/null 2>&1; then
-            notify-send --app-name=Winlux --icon="$icon" "$title" "$message" && return
+            notify-send --app-name=Winlux --icon="$icon" "$title" "$full" && return
         elif command -v xmessage >/dev/null 2>&1; then
-            xmessage -center "$title : $message" && return
+            xmessage -center "$title : $full" && return
         fi
     fi
-    printf 'Winlux : %s\n' "$message" >&2
+    printf 'Winlux : %s\n' "$message${3:+
+$3}" >&2
 }
 show_error() { show_message "$1" error "${2:-}"; }
 
