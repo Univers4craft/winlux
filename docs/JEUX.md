@@ -54,3 +54,5 @@ lanceur Winlux du programme s'il existe, sinon crée
 bibliothèque.
 
 Ligne de commande : `winlux-games.py --scan | --list | --playtime | --add JEU.exe | --forget-playtime`.
+
+Voir aussi [VRAIS-JEUX.md](VRAIS-JEUX.md) : vrais jeux Windows lancés sous Winlux et leurs manques.
