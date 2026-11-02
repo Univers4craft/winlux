@@ -329,7 +329,7 @@ if panel_config.is_file() and not grouping_marker.exists():
 openbox_config = home / ".config/openbox/rc.xml"
 # Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
 ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
-              "W-period", "W-semicolon")
+              "W-period", "W-semicolon", "W-v")
 if openbox_config.is_file():
     namespace = "http://openbox.org/3.4/rc"
     ET.register_namespace("", namespace)

@@ -209,6 +209,8 @@ wait_desktop() {
     if "$has_bluetooth" && test -x /usr/bin/blueman-applet; then start bluetooth-agent.log /usr/bin/blueman-applet; fi
     # Presse-papiers commun : copier dans un .exe, coller dans une appli Linux.
     if test -x /usr/bin/winlux; then start clipboard-bridge.log /usr/bin/winlux --clipboard-bridge; fi
+    # Historique du presse-papiers (Windows + V).
+    if test -x /usr/bin/winlux-clipboard; then start clipboard-history.log /usr/bin/winlux-clipboard daemon; fi
     # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
     if test -x /usr/bin/winlux-drives; then start netdrives.log /usr/bin/winlux-drives watch; fi
     if test -x /usr/bin/nm-applet; then start network-agent.log /usr/bin/nm-applet --indicator; fi

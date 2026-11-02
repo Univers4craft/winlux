@@ -68,6 +68,7 @@ L'ancien bureau entièrement PE (`gui_demo.exe` avec `WINLUX_DESKTOP_DEMO=1`, co
 | Raccourci ou endroit | Fonction |
 |---|---|
 | **Windows + .** ou **Windows + ;** | Sélecteur d'emojis, kaomojis et symboles ; recherche sans accents dans la langue du bureau et en anglais ; le choix est tapé dans la fenêtre active. Les emojis en couleur se téléchargent au premier usage (10 Mo). |
+| **Windows + V** | Historique du presse-papiers : 25 derniers textes et images copiés (applications Linux et programmes Windows), épingles, « Effacer tout » ; un clic colle dans la fenêtre active. Paramètres › Système › Presse-papiers. |
 | Paramètres › Écran, réglages rapides (Windows + A) | **Éclairage nocturne** : couleurs plus chaudes le soir, planning du coucher au lever du soleil (calculé hors ligne) ou heures choisies. |
 
 ## Applications Linux

@@ -369,6 +369,12 @@ _TR = {
     "Installer ou désinstaller des programmes": ("Install or uninstall programs", "Instalar o desinstalar programas", "Programme installieren oder deinstallieren"),
     "Enregistrement impossible : le dossier du programme doit être accessible en écriture.": ("Unable to save: the program folder must be writable.", "No se puede guardar: la carpeta del programa debe admitir escritura.", "Speichern nicht möglich: Der Programmordner muss beschreibbar sein."),
     "Les réglages s’appliquent au prochain lancement du programme.": ("Settings apply the next time the program starts.", "Los ajustes se aplican la próxima vez que se inicie el programa.", "Die Einstellungen gelten beim nächsten Programmstart."),
+    # Presse-papiers
+    'Historique du presse-papiers': ('Clipboard history', 'Historial del portapapeles', 'Zwischenablageverlauf'),
+    'Gardez plusieurs éléments copiés et retrouvez-les avec Windows + V.': ('Keep several copied items and find them with Windows + V.', 'Guarde varios elementos copiados y encuéntrelos con Windows + V.', 'Behalten Sie mehrere kopierte Elemente und finden Sie sie mit Windows + V.'),
+    'Effacer les données du presse-papiers': ('Clear clipboard data', 'Borrar los datos del portapapeles', 'Zwischenablagedaten löschen'),
+    'Efface tout l’historique, sauf les éléments épinglés.': ('Clears the whole history except pinned items.', 'Borra todo el historial excepto los elementos anclados.', 'Löscht den gesamten Verlauf außer angehefteten Elementen.'),
+    'Effacer': ('Clear', 'Borrar', 'Löschen'),
     # Éclairage nocturne (Écran)
     'Éclairage nocturne': ('Night light', 'Luz nocturna', 'Nachtmodus'),
     'Des couleurs plus chaudes le soir reposent les yeux et aident à s’endormir.': ('Warmer colours in the evening rest your eyes and help you fall asleep.', 'Los colores más cálidos por la noche descansan la vista y ayudan a dormir.', 'Wärmere Farben am Abend schonen die Augen und helfen beim Einschlafen.'),
@@ -402,6 +408,7 @@ EXPLORER_WINLUX = r"HKCU\Software\Winlux\Explorer"
 PAGE_PROGRAMS, PAGE_ACCESSIBILITY, PAGE_EFFECTS, PAGE_LOCALE, PAGE_FILES = 10, 12, 13, 14, 15
 PAGE_SOUND, PAGE_SYSUPDATE, PAGE_NETDRIVES, PAGE_DESKTOP, PAGE_BLUETOOTH = 16, 17, 20, 21, 22
 PAGE_APPS, PAGE_INPUT, PAGE_REPORT, PAGE_PRINTERS, PAGE_REMOTE, PAGE_SHARING = 1, 4, 25, 26, 27, 28
+PAGE_CLIPBOARD = 29
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -459,6 +466,12 @@ def ambiance_tool():
     """winlux-ambiance installé, ou le script du dépôt à côté de celui-ci."""
     if have("winlux-ambiance"): return ["winlux-ambiance"]
     script = Path(__file__).resolve().with_name("winlux-ambiance.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def clipboard_tool():
+    if have("winlux-clipboard"): return ["winlux-clipboard"]
+    script = Path(__file__).resolve().with_name("winlux-clipboard.py")
     return ["/usr/bin/python3", str(script)] if script.is_file() else None
 
 
@@ -750,6 +763,8 @@ def page_available(page, status=None):
         return have("lpstat")
     if page == PAGE_REMOTE:
         return have("winlux-remote-config") or (RUN / "remote.txt").is_file()
+    if page == PAGE_CLIPBOARD:
+        return clipboard_tool() is not None
     if page == PAGE_SHARING:
         return have("winlux-share") or have("winlux-transfer") or (RUN / "shares.txt").is_file()
     return True
@@ -781,7 +796,7 @@ class ExtraPages:
                    PAGE_SOUND: "page_sound", PAGE_SYSUPDATE: "page_sysupdate", PAGE_NETDRIVES: "page_netdrives",
                    PAGE_DESKTOP: "page_desktop", PAGE_BLUETOOTH: "page_bluetooth", PAGE_APPS: "page_apps",
                    PAGE_INPUT: "page_input", PAGE_REPORT: "page_report", PAGE_PRINTERS: "page_printers",
-                   PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing"}
+                   PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing", PAGE_CLIPBOARD: "page_clipboard"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
     EXTRA_SECTIONS = {8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
@@ -1407,6 +1422,22 @@ class ExtraPages:
                        report.get("fan_curve") if report.get("fan_curve") in dict(CPU_FANS) else "auto",
                        lambda value: self.execute("cpu-fan-" + value))
         self.hint(_t("Priorité et cœurs d’un programme précis : Applications › Programmes Windows."))
+
+    # ── Presse-papiers (Windows + V) ──
+
+    def page_clipboard(self):
+        tool = clipboard_tool()
+        result = run(tool + ["status"])
+        state = keyvals(result.stdout) if result else {}
+        box = self.card()
+        self.switch(box, _t("Historique du presse-papiers"), state.get("history", "on") == "on",
+                    lambda on: self.tool(tool + ["set", "HISTORY", "on" if on else "off"]),
+                    _t("Gardez plusieurs éléments copiés et retrouvez-les avec Windows + V."))
+        box = self.card()
+        self.row(box, _t("Effacer les données du presse-papiers"), None,
+                 _t("Efface tout l’historique, sauf les éléments épinglés."))
+        self.actions(box, [(_t("Effacer"), lambda: self.tool(tool + ["clear"]),
+                            state.get("items", "0") != state.get("pinned", "0"))])
 
     # ── Écran : éclairage nocturne ──
 
