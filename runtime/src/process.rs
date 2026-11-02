@@ -212,6 +212,11 @@ pub fn init_process(exe: &Module, args: &[String]) {
         *((peb + PEB_PROCESS_HEAP) as *mut usize) = crate::dlls::kernel32::process_heap();
         *((peb + PEB_BEING_DEBUGGED) as *mut u8) = 0;
         // OSMajorVersion / OSMinorVersion / OSBuildNumber : Windows 10 (10.0.19045).
+        // LoaderLock (RTL_CRITICAL_SECTION libre) : du code lit son OwningThread
+        // pour savoir s'il tourne sous le verrou du chargeur (Warzone 2100).
+        let loader_lock = alloc_zeroed(64);
+        *((loader_lock + 8) as *mut i32) = -1; // LockCount (OwningThread à +0x10 reste 0)
+        *((peb + 0x110) as *mut usize) = loader_lock;
         *((peb + 0x118) as *mut u32) = 10;
         *((peb + 0x11c) as *mut u32) = 0;
         *((peb + 0x120) as *mut u16) = 19045;
@@ -234,6 +239,8 @@ pub fn init_process(exe: &Module, args: &[String]) {
         command_line_w,
         command_line_a: cmd_a,
     });
+    // Variables _acmdln/_wcmdln de la CRT, lues directement par les programmes.
+    crate::dlls::crt_extra::process_started();
 }
 
 /// Crée le TEB du thread courant et fait pointer GS dessus.

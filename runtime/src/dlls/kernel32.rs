@@ -170,6 +170,24 @@ pub(crate) enum ThreadTarget {
     NotStarted(Arc<ThreadObject>),
 }
 
+/// Identifiant Win32 du thread d'un handle (GetThreadId).
+pub(crate) fn thread_id_of_handle(h: usize) -> Option<u32> {
+    match lookup_sync(h)? {
+        SyncHandle::Thread(t) => {
+            let st = t
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Some(if st.win_tid != 0 {
+                st.win_tid
+            } else {
+                t.os_tid.load(Ordering::Acquire) as u32
+            })
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn thread_target(h: usize) -> Option<ThreadTarget> {
     if h == get_current_thread() {
         return Some(ThreadTarget::Running(unsafe {
@@ -4437,6 +4455,12 @@ pub unsafe extern "win64" fn create_pipe(
     *write = insert_file(w);
     1
 }
+fn is_crash_handler(path: &std::path::Path) -> bool {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|n| n == "crashpad_handler.exe")
+}
+
 unsafe fn create_process_common(
     application: Option<String>,
     command_line: *const u8,
@@ -4528,6 +4552,19 @@ unsafe fn create_process_common(
             .extension()
             .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("exe"))
             || (host_path.is_file() && crate::launch::is_windows_program(&host_path)));
+    // Gestionnaire de plantage crashpad (Chromium, Sentry, Warzone 2100…) :
+    // il reçoit des handles hérités et un tube nommé du parent, que Winlux ne
+    // partage pas encore entre processus. Le refuser proprement laisse le
+    // programme continuer sans rapport de plantage, comme s'il était absent.
+    if is_pe && is_crash_handler(&host_path) {
+        crate::log_warn!(
+            "process",
+            "{} : gestionnaire de plantage non lancé (handles hérités non pris en charge)",
+            host_path.display()
+        );
+        crate::process::set_last_error(2);
+        return 0;
+    }
     let suspended = creation_flags & 4 != 0;
     let mut target = Vec::<std::ffi::OsString>::new();
     if is_pe {
@@ -4963,6 +5000,11 @@ pub fn handle_to_fd(h: usize) -> i32 {
     }
 }
 pub extern "win64" fn close_handle(handle: usize) -> i32 {
+    // Pseudo-handles (processus -1, thread -2, jetons -4 à -6) : fermer ne
+    // fait rien et réussit, comme sous Windows (crashpad de Warzone 2100).
+    if matches!(handle as isize, -6..=-1) {
+        return 1;
+    }
     if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
         return 1;
@@ -6371,7 +6413,7 @@ pub extern "win64" fn sleep_condition_variable_srw(
         },
     );
     if timed_out {
-        crate::process::set_last_error(258);
+        crate::process::set_last_error(1460); // ERROR_TIMEOUT (libc++ le teste)
         0
     } else {
         1
@@ -6385,7 +6427,7 @@ pub extern "win64" fn sleep_condition_variable_cs(cv: usize, cs: usize, ms: u32)
         || unsafe { enter_critical_section(cs as *mut c_void) },
     );
     if timed_out {
-        crate::process::set_last_error(258);
+        crate::process::set_last_error(1460); // ERROR_TIMEOUT (libc++ le teste)
         0
     } else {
         1

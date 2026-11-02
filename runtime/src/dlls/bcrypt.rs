@@ -207,7 +207,7 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
 // SHA-1/SHA-256 maison, partagés avec winlux-remote.
 #[allow(dead_code)]
 #[path = "../remote/crypto.rs"]
-mod crypto;
+pub(crate) mod crypto;
 
 /// SHA-256 pour le reste du runtime (block map des paquets MSIX).
 pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
@@ -226,14 +226,14 @@ fn hash_states() -> &'static std::sync::Mutex<std::collections::HashMap<usize, H
 }
 static HASH_SEQ: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(1);
 
-/// Condensat réel pour les algorithmes implémentés en interne ; `None` pour
-/// les autres (plutôt que des zéros présentés comme un succès).
-/// SHA-1 et SHA-256 sont maison ; MD5, SHA-384, SHA-512 et les HMAC
-/// passent par l'OpenSSL de l'hôte.
+/// Condensat réel, ou `None` (plutôt que des zéros présentés comme un
+/// succès). SHA-1, SHA-256 et MD5 sont maison ; SHA-384, SHA-512 et les
+/// HMAC passent par l'OpenSSL de l'hôte.
 fn digest(alg: usize, data: &[u8]) -> Option<Vec<u8>> {
     match alg {
         ALG_SHA256 => Some(crypto::sha256(&[data]).to_vec()),
         ALG_SHA1 => Some(crypto::sha1(&[data]).to_vec()),
+        ALG_MD5 => Some(crate::dlls::games_win32::md5(data).to_vec()),
         _ => crate::dlls::hostssl::digest(ossl_name(alg)?, data),
     }
 }
