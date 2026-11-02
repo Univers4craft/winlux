@@ -1233,6 +1233,55 @@ unsafe fn open_with(path: &[u8]) {
     }
 }
 
+/// « Renommer plusieurs fichiers… » : l'outil natif `winlux-rename` reçoit les
+/// chemins sélectionnés (le runtime les traduit en chemins Linux).
+static mut BULK_LINE: [u16; 32768] = [0; 32768];
+unsafe fn bulk_rename(p: &Pane) {
+    let line = &mut *core::ptr::addr_of_mut!(BULK_LINE);
+    let mut n = 0;
+    for v in 0..p.nview {
+        let i = p.view[v] as usize;
+        if !is_sel(p, i) {
+            continue;
+        }
+        let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
+        let len = item_path(p, i, &mut b);
+        if len == 0 || n + len + 4 >= line.len() {
+            continue;
+        }
+        if n > 0 {
+            line[n] = b' ' as u16;
+            n += 1;
+        }
+        line[n] = b'"' as u16;
+        n += 1;
+        for &c in &b[..len] {
+            line[n] = c as u16;
+            n += 1;
+        }
+        line[n] = b'"' as u16;
+        n += 1;
+    }
+    if n == 0 {
+        return;
+    }
+    line[n] = 0;
+    let mut wprogram = [0u16; PATH_LEN + NAME_LEN + 2];
+    let program = wstr(&mut wprogram, b"winlux-rename");
+    let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    let r = ShellExecuteW(
+        core::ptr::null_mut(),
+        wopen.as_ptr(),
+        program,
+        line.as_ptr(),
+        core::ptr::null(),
+        1,
+    );
+    if (r as isize) <= 32 {
+        notify(tr4(&[b"Impossible d'ouvrir le renommage.", b"Could not open the rename tool.", b"No se pudo abrir la herramienta de cambio de nombre.", b"Das Umbenennen konnte nicht ge\xF6ffnet werden."]));
+    }
+}
+
 /// Ouvre un fichier audio/vidéo dans le lecteur multimédia de Winlux.
 unsafe fn open_media(path: &[u8]) -> bool {
     let mut params = [0u16; PATH_LEN + NAME_LEN + 4];
@@ -2851,6 +2900,7 @@ enum Item {
     ConnectNet,
     Share,
     Restore,
+    BulkRename,
 }
 
 fn item_label(i: Item) -> &'static [u8] {
@@ -2940,6 +2990,12 @@ fn item_label(i: Item) -> &'static [u8] {
             b"Comprimir en ZIP con contrase\xF1a...",
             b"In ZIP mit Kennwort komprimieren...",
         ]),
+        Item::BulkRename => t4([
+            b"Renommer plusieurs fichiers...",
+            b"Rename multiple files...",
+            b"Cambiar el nombre de varios archivos...",
+            b"Mehrere Dateien umbenennen...",
+        ]),
         Item::Share => t4([
             b"Partager ce dossier...",
             b"Share this folder...",
@@ -3015,6 +3071,7 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Paste,
             Item::Sep,
             Item::Rename,
+            Item::BulkRename,
             Item::Delete,
             Item::Sep,
             Item::CopyPath,
@@ -3067,6 +3124,14 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::CompressTarGz => !in_pc && !in_home && formats & 8 != 0,
             Item::ConnectNet => in_pc,
             Item::Restore => p.loc.is(TRASH),
+            // Plusieurs éléments d'un vrai dossier, et l'outil natif présent.
+            Item::BulkRename => {
+                sel_count(p) >= 2
+                    && !in_pc
+                    && !in_home
+                    && !p.loc.is(TRASH)
+                    && GetFileAttributesA(c"Z:\\usr\\bin\\winlux-rename".as_ptr()) != u32::MAX
+            }
             // Fichier seulement : programmes Linux et Windows qui savent l'ouvrir.
             Item::OpenWith => !in_pc && first_sel(p).is_some_and(|i| !p.entries[i].dir),
             // Dossier seulement, et seulement si le partage existe (Samba).
@@ -3205,7 +3270,7 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
             Item::Cut => Some(Glyph::Cut),
             Item::Copy => Some(Glyph::Copy),
             Item::Paste => Some(Glyph::Paste),
-            Item::Rename => Some(Glyph::Rename),
+            Item::Rename | Item::BulkRename => Some(Glyph::Rename),
             Item::Delete => Some(Glyph::Delete),
             Item::Refresh | Item::Restore => Some(Glyph::Refresh),
             Item::NewFolder => Some(Glyph::Folder),
@@ -4738,6 +4803,7 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             }
         }
         Item::Delete => delete_selection(),
+        Item::BulkRename => bulk_rename(p),
         Item::Restore => restore_selection(),
         Item::Refresh => reload(p),
         Item::Terminal => open_terminal(),

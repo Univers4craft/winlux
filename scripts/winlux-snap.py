@@ -17,6 +17,7 @@ colonnes, quatre quarts.
     winlux-snap layouts                  (Windows + Z)
     winlux-snap place ZONE [FENÊTRE]     place la fenêtre active (ou FENÊTRE) dans ZONE
     winlux-snap zones                    zones connues (tests)
+    winlux-snap ontop [FENÊTRE]          Windows + Ctrl + T : toujours au premier plan
 
 Une zone est « disposition:case », par exemple half:left, third:2, quarter:tr.
 L'état d'ancrage et la taille d'avant sont gardés dans des propriétés X de la
@@ -255,6 +256,79 @@ def other_windows(exclude, desktop=None):
     return found
 
 
+# ── Toujours au premier plan (Windows + Ctrl + T) ──────────────────────────
+
+ONTOP_BORDER = 3          # épaisseur du cadre coloré, en pixels
+ONTOP_COLOR = "#8178b7"   # couleur d'accent de Winlux
+
+
+def is_above(window):
+    return "_NET_WM_STATE_ABOVE" in _run(["xprop", "-id", str(window), "_NET_WM_STATE"])
+
+
+def border_rects(geometry, size=ONTOP_BORDER):
+    """Quatre bandes (x, y, l, h) qui entourent le cadre de la fenêtre."""
+    x, y, w, h = geometry
+    return [(x - size, y - size, w + 2 * size, size), (x - size, y + h, w + 2 * size, size),
+            (x - size, y, size, h), (x + w, y, size, h)]
+
+
+def ontop(window):
+    """Bascule « toujours au premier plan » et dessine un cadre coloré tant qu'il dure."""
+    if not window: return 1
+    hexa = "0x%x" % window_number(window)
+    _run(["wmctrl", "-i", "-r", hexa, "-b", "toggle,above"])
+    above = is_above(window)
+    sound = "/usr/share/winlux/sounds/notification.wav"
+    if os.path.exists(sound) and shutil.which("paplay"):
+        subprocess.Popen(["paplay", sound], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    if not above or os.environ.get("WINLUX_ONTOP_BORDER") == "0":
+        return 0
+    if os.fork():           # le raccourci rend la main ; le cadre vit à part
+        return 0
+    os.setsid()
+    return ontop_border(window)
+
+
+def ontop_border(window):
+    Gdk, GLib, Gtk = _gtk()
+    css = Gtk.CssProvider()
+    css.load_from_data(f"window.winlux-ontop {{ background: {ONTOP_COLOR}; }}".encode())
+    bands = []
+    for _ in range(4):
+        band = Gtk.Window(type=Gtk.WindowType.POPUP)
+        band.get_style_context().add_class("winlux-ontop")
+        band.set_accept_focus(False)
+        bands.append(band)
+    Gtk.StyleContext.add_provider_for_screen(bands[0].get_screen(), css, 600)
+    state = {"last": None}
+
+    def follow():
+        if not is_above(window):
+            Gtk.main_quit()
+            return False
+        geometry = window_geometry(window)
+        if geometry is None:
+            Gtk.main_quit()
+            return False
+        hidden = "_NET_WM_STATE_HIDDEN" in _run(["xprop", "-id", str(window), "_NET_WM_STATE"])
+        if (geometry, hidden) != state["last"]:
+            state["last"] = (geometry, hidden)
+            for band, (x, y, w, h) in zip(bands, border_rects(geometry)):
+                if hidden:
+                    band.hide()
+                    continue
+                band.move(x, y)
+                band.resize(max(1, w), max(1, h))
+                band.show()
+        return True
+
+    if follow():
+        GLib.timeout_add(250, follow)
+        Gtk.main()
+    return 0
+
+
 # ── Interfaces (GTK) ────────────────────────────────────────────────────────
 
 def _gtk():
@@ -417,6 +491,8 @@ def main(argv):
         if not window: return 1
         snap(window, argv[2])
         return 0
+    if len(argv) in (2, 3) and argv[1] == "ontop":
+        return ontop(argv[2] if len(argv) == 3 else active_window())
     if len(argv) == 2 and argv[1] == "zones":
         print("\n".join(ZONES))
         return 0

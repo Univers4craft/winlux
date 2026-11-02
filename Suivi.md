@@ -4,10 +4,10 @@
 
 ## Statistiques
 
-- Réalisé : **290**
-- À faire ou en cours : **49**
+- Réalisé : **293**
+- À faire ou en cours : **46**
 - Total : **339**
-- Progression : **85.5%**
+- Progression : **86.4%**
 - Dernière mise à jour : 02/11/2026 (14 idées d'ajouts proposées à damien, issues #274 à #287 en attente de son choix ; issues GitHub revues une à une sur master : #13, #21, #25, #32, #139 et #140 fermées, #265 à #272 ouvertes pour Paint.NET et les manques de `docs/`, libellés `urgence:1-quotidien` / `urgence:2-confort` / `urgence:3-long-terme` ; Paramètres réorganisés en une seule application, audit scripts #214 hors fil de release, audit Winsock/registre #212, audit kernel32/CRT #211, audit runtime graphique #210, audit Paramètres du shell #209, audit complet du code #206, audit : menu Démarrer et barre des tâches du shell PE, audit décodeurs #213, toutes les PRs jusqu'à #135 mergées, PR 2 Paint.NET #143, issues #77 à #98 fermées, nouvelles issues #137 à #140, écran de verrouillage et autorisations des applications #158, presse-papiers Windows ↔ Linux #161, applis Windows au bureau #152, identité visuelle #172, disques branchés #169, Éditeur du Registre #185, installateurs NSIS/Inno et Applications installées #179, WIC, Direct2D et DirectWrite maison pour Paint.NET, exceptions C++ MSVC, outils système #180, #197, #198, #199 (issue #178 close), chemins et droits Windows ↔ Linux, UAC #175, glisser-déposer Windows ↔ Linux #189, partage de dossiers et transfert des réglages #174, portable : veille, écrans multiples et pavé tactile #147, réseau local partagé #168, barre native : horloge, calendrier, modes d'alimentation, mélangeur audio #228, stabilité de la session native #203)
 
 ## À FAIRE (par priorité)
@@ -100,9 +100,9 @@ Petits plaisirs :
 - [x] Historique du presse-papiers Win+V dans la session native (#276) : `winlux-clipboard` (25 éléments texte et image, copies Linux et .exe, épingles gardées après « Effacer tout » et au redémarrage, clic = coller dans la fenêtre active, copies de gestionnaires de mots de passe ignorées), page Paramètres › Système › Presse-papiers (n° 32, native), `test-clipboard.py` en CI.
 - [x] Session native : Snap Layouts, vue des tâches Win+Tab et bureaux virtuels (#277) : `winlux-snap` (Windows + flèches enchaîne moitiés, quarts, agrandissement et taille d'avant ; Assistant d'ancrage ; Windows + Z et clic droit sur Agrandir : 5 dispositions), `winlux-taskview` (aperçus des fenêtres, bureaux : nouveau, renommer, supprimer, déplacer une fenêtre ; Windows + Ctrl + D / F4 / flèches), Windows + Maj + flèche vers l'écran voisin ; raccourcis des comptes existants mis à jour sans toucher aux raccourcis personnels ; `test-snap-taskview.py` en CI. Reste : ancrage en glissant la fenêtre au bord de l'écran.
 - [x] Application Horloge : alarmes, minuteur, chronomètre, concentration (#278) : `winlux-alarms` (alarmes répétées ou uniques avec rappel 5 min, minuteurs multiples avec pause, chronomètre avec tours, horloges du monde, sessions de concentration qui activent Ne pas déranger), sonnerie par un processus de session même fenêtre fermée, son « alarme » synthétisé (`render-sounds.py`), `test-alarms.py` en CI.
-- [ ] Petits outils : pipette de couleur, fenêtre au premier plan, renommage en masse (#279).
-- [ ] Copier le texte d'une capture ou d'une image (#280).
-- [ ] Thème clair/sombre automatique, fond en diaporama, thèmes partageables (#281).
+- [x] Petits outils (#279) : pipette Windows + Maj + C (`winlux-colorpicker`, loupe, HEX copié, RGB/HSL, 20 couleurs récentes), Windows + Ctrl + T « toujours au premier plan » avec cadre coloré (`winlux-snap ontop`), « Renommer plusieurs fichiers… » dans l'Explorateur et Thunar (`winlux-rename` : rechercher/remplacer, expressions régulières, numérotation, casse, aperçu des conflits, annulation), `test-small-tools.py` en CI.
+- [x] Copier le texte d'une image ou de l'écran (#280) : `winlux-ocr` (Windows + Maj + T encadre une zone de l'écran, texte copié et retouchable), bouton « Copier le texte » dans la visionneuse d'images, clic droit sur une image dans Thunar, moteur Tesseract et langues fr/en/es/de téléchargés à la première utilisation (environ 15 Mo, rien dans l'ISO), état et retrait dans Paramètres › Système › Presse-papiers, `test-ocr.py` en CI.
+- [x] Thème clair/sombre automatique, fond qui change, thèmes partageables (#281) : mode de couleur « Automatique » (clair du lever au coucher du soleil, calcul hors ligne de `winlux-ambiance`), arrière-plan en diaporama (dossier, intervalle, ordre aléatoire, image suivante) ou Winlux Aube le jour / Winlux Nuit le soir, thèmes `.wlxtheme` (fond, accent, barre, sons) enregistrés et appliqués depuis Paramètres › Personnalisation, `test-appearance-auto.py` en CI.
 
 Gros chantiers :
 

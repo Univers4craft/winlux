@@ -330,7 +330,8 @@ if panel_config.is_file() and not grouping_marker.exists():
 openbox_config = home / ".config/openbox/rc.xml"
 # Raccourcis ajoutés après coup : recopiés du rc.xml livré s'ils manquent.
 ADDED_KEYS = ("W-C-Left", "W-C-Right", "W-S-Left", "W-S-Right", "W-l", "C-A-t",
-              "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w", "W-c")
+              "W-period", "W-semicolon", "W-v", "W-z", "W-Tab", "W-C-d", "W-C-F4", "W-w", "W-c",
+              "W-C-t", "W-S-c", "W-S-t")
 # Raccourcis livrés autrefois en actions openbox simples (moitiés et quarts
 # fixes) : remplacés par l'ancrage et les bureaux virtuels façon Windows 11.
 # Un raccourci personnel (une commande Execute) n'est pas touché.
@@ -413,6 +414,31 @@ try:
         shutil.copyfile(source / "config/Thunar/uca.xml", uca)
 except (OSError, UnicodeDecodeError):
     pass
+# Actions Thunar livrées après coup (#279 renommage, #280 texte d'une image) :
+# ajoutées une fois aux actions déjà copiées, sans toucher aux actions personnelles.
+UCA_ADDED = ("winlux-rename", "winlux-ocr")
+def migrate_uca(uca, shipped_file):
+    if not uca.is_file(): return
+    try:
+        shipped = shipped_file.read_text(encoding="utf-8")
+        current = uca.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return
+    changed = current
+    for command in UCA_ADDED:
+        at = shipped.find("<command>" + command)
+        if at < 0 or "<command>" + command in changed or "</actions>" not in changed: continue
+        start = shipped.rfind("<action>", 0, at)
+        block = shipped[start:shipped.find("</action>", start) + len("</action>")]
+        changed = changed.replace("</actions>", block + "\n</actions>", 1)
+    if changed != current:
+        try:
+            temporary = uca.with_suffix(".xml.tmp")
+            temporary.write_text(changed, encoding="utf-8")
+            temporary.replace(uca)
+        except OSError:
+            pass
+migrate_uca(uca, source / "config/Thunar/uca.xml")
 # « Coller » dans le menu du bureau (clic droit) : ajouté une fois aux menus
 # Openbox déjà copiés, avant « Nouveau », sans toucher au reste.
 openbox_menu = home / ".config/openbox/menu.xml"
