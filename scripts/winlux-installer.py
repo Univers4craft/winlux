@@ -47,14 +47,14 @@ import winlux_screen  # noqa: E402
 UI_SCALE = 1.0
 
 CSS = b"""
-@define-color bg_primary #0078D4;
+@define-color bg_primary #6A3DF0;
 @define-color bg_dark #1a1a2e;
 @define-color bg_surface #2d2d44;
 @define-color bg_card #363654;
 @define-color fg_primary #ffffff;
 @define-color fg_secondary #b4b4cc;
-@define-color accent #0078D4;
-@define-color accent_hover #1a8aff;
+@define-color accent #6A3DF0;
+@define-color accent_hover #7C4DFF;
 @define-color danger #e74856;
 
 window.installer-window {
