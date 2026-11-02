@@ -808,9 +808,11 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             if action == "update-apply": self.install_button = button
             if action == "update-rollback": self.rollback_button = button
         self.buttons = flow
-        if self.page == 8:
+        display_status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line) if self.page == 8 else {}
+        # Écrans détaillés (définition, fréquence, échelle par écran) : sections_screens.
+        if self.page == 8 and not display_status.get("display_1_name"):
             self.modes = Gtk.ComboBoxText()
-            status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
+            status = display_status
             for mode in status.get("display_modes", "").split(","):
                 if mode: self.modes.append_text(mode)
             self.modes.set_active(0)

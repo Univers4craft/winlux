@@ -40,6 +40,18 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    "Disposition": ("Arrangement", "Disposición", "Anordnung"),
+    "Écran": ("Display", "Pantalla", "Bildschirm"),
+    "Plusieurs écrans": ("Multiple displays", "Varias pantallas", "Mehrere Bildschirme"),
+    "Étendre ces écrans": ("Extend these displays", "Extender estas pantallas", "Diese Anzeigen erweitern"),
+    "Dupliquer ces écrans": ("Duplicate these displays", "Duplicar estas pantallas", "Diese Anzeigen duplizieren"),
+    "Afficher seulement sur {name}": ("Show only on {name}", "Mostrar solo en {name}", "Nur auf {name} anzeigen"),
+    "Écran principal": ("Main display", "Pantalla principal", "Hauptanzeige"),
+    "écran intégré": ("built-in display", "pantalla integrada", "integrierte Anzeige"),
+    "Définition de l’écran": ("Display resolution", "Resolución de pantalla", "Bildschirmauflösung"),
+    "Fréquence d’actualisation": ("Refresh rate", "Frecuencia de actualización", "Bildwiederholfrequenz"),
+    "Plus elle est élevée, plus les mouvements sont fluides (jeux, défilement).": ("The higher it is, the smoother motion looks (games, scrolling).", "Cuanto más alta, más fluidos son los movimientos (juegos, desplazamiento).", "Je höher, desto flüssiger wirken Bewegungen (Spiele, Bildlauf)."),
+    "La nouvelle échelle s’applique complètement à la prochaine ouverture de session.": ("The new scale fully applies at the next sign-in.", "La nueva escala se aplica por completo en el próximo inicio de sesión.", "Die neue Skalierung gilt vollständig ab der nächsten Anmeldung."),
     # Clavier tactile et souris avancée
     "Icône du clavier tactile": ("Touch keyboard icon", "Icono del teclado táctil", "Symbol der Bildschirmtastatur"),
     "Dans la barre des tâches. « Sans clavier physique » la montre quand aucun clavier n’est branché.": ("On the taskbar. “Without a physical keyboard” shows it when no keyboard is connected.", "En la barra de tareas. «Sin teclado físico» lo muestra cuando no hay ningún teclado conectado.", "In der Taskleiste. „Ohne physische Tastatur“ zeigt es, wenn keine Tastatur angeschlossen ist."),
@@ -674,6 +686,15 @@ def clipboard_tool():
     if have("winlux-clipboard"): return ["winlux-clipboard"]
     script = Path(__file__).resolve().with_name("winlux-clipboard.py")
     return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+DISPLAY_SCALES = ("1", "1.25", "1.5", "1.75", "2", "2.5", "3")
+
+
+def rate_label(rate):
+    """« 143.97 » → « 144 Hz », comme Windows."""
+    try: return f"{round(float(rate))} Hz"
+    except ValueError: return rate
 
 
 def osk_tool():
@@ -1983,7 +2004,57 @@ class ExtraPages:
 
     # ── Écran : éclairage nocturne ──
 
+    def sections_screens(self):
+        """Chaque écran : définition, fréquence d’actualisation, échelle ; avec
+        plusieurs écrans, disposition et écran principal (comme Windows 11)."""
+        status = self.status
+        try: count = min(4, int(status.get("display_count", "0")))
+        except ValueError: count = 0
+        if count < 1 or not status.get("display_1_name"): return
+        names = [status.get(f"display_{n}_name", "") for n in range(1, count + 1)]
+
+        def display_set(*words):
+            self.execute("display-set", *words)
+        if count > 1:
+            self.section(_t("Plusieurs écrans"))
+            box = self.card()
+            layouts = [("extend", _t("Étendre ces écrans")), ("duplicate", _t("Dupliquer ces écrans"))]
+            layouts += [(f"only:{name}", _t("Afficher seulement sur {name}").format(name=name)) for name in names if name]
+            self.combo(box, _t("Disposition"), layouts, status.get("display_layout", "extend"),
+                       lambda value: display_set("layout", "only", value[5:]) if value.startswith("only:")
+                       else display_set("layout", value))
+            primary = next((name for n, name in enumerate(names, 1) if status.get(f"display_{n}_primary") == "1"), names[0])
+            self.combo(box, _t("Écran principal"), [(name, name) for name in names if name], primary,
+                       lambda value: display_set("primary", value))
+        for n, name in enumerate(names, 1):
+            if not name: continue
+            title = name if count > 1 else _t("Écran")
+            if status.get(f"display_{n}_internal") == "1": title += " · " + _t("écran intégré")
+            self.section(title)
+            box = self.card()
+            modes = [m for m in status.get(f"display_{n}_modes", "").split(",") if m]
+            if modes:
+                self.combo(box, _t("Définition de l’écran"), [(m, m.replace("x", " × ")) for m in modes],
+                           status.get(f"display_{n}_mode") or modes[0], lambda value, name=name: display_set("mode", name, value))
+            rates = [r for r in status.get(f"display_{n}_rates", "").split(",") if r]
+            # Une seule fréquence (VM, écran 60 Hz) : rien à choisir, ligne masquée.
+            if len(rates) > 1:
+                labels = {}
+                for rate in rates: labels.setdefault(rate_label(rate), rate)
+                choices = [("auto", _t("Automatique"))] + [(rate, label) for label, rate in labels.items()]
+                active = "auto" if status.get(f"display_{n}_rate_auto", "1") == "1" else status.get(f"display_{n}_rate")
+                self.combo(box, _t("Fréquence d’actualisation"), choices, active if active in dict(choices) else "auto",
+                           lambda value, name=name: display_set("rate", name, value),
+                           _t("Plus elle est élevée, plus les mouvements sont fluides (jeux, défilement)."))
+            scales = [("auto", _t("Automatique"))] + [(v, f"{round(float(v) * 100)} %") for v in DISPLAY_SCALES]
+            self.combo(box, _t("Échelle"), scales,
+                       "auto" if status.get(f"display_{n}_scale_auto", "1") == "1" else status.get(f"display_{n}_scale", "auto"),
+                       lambda value, name=name: display_set("scale", name, value))
+        if status.get("display_restart_hint") == "1":
+            self.hint(_t("La nouvelle échelle s’applique complètement à la prochaine ouverture de session."))
+
     def sections_display(self):
+        self.sections_screens()
         state = ambiance_status()
         # Pilote sans rampe gamma (certaines VM) : section masquée.
         if state.get("supported") != "1": return

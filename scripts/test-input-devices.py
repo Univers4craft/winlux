@@ -264,4 +264,49 @@ if os.environ.get("DISPLAY"):
     lock["type_into"](entry, "Escape", lambda: None)
     check(entry.get_text() == "", "Échap vide le champ")
 
+
+    # Paramètres > Écran : définition, fréquence et échelle par écran.
+    pages = runpy.run_path(str(HERE / "winlux-settings-pages.py"), run_name="screens_test")
+    combos = {}
+
+    class Screens(Gtk.Window, pages["ExtraPages"]):
+        def __init__(self, status):
+            super().__init__()
+            self.body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            self.add(self.body)
+            self.status, self.sent = status, []
+
+        def execute(self, *args):
+            self.sent.append(args)
+
+        def combo(self, parent, title, items, active, changed, subtitle=None):
+            combos[title] = (items, active, changed)
+
+    two = {"display_count": "2", "display_layout": "extend", "display_1_name": "eDP-1", "display_1_internal": "1",
+           "display_1_primary": "1", "display_1_modes": "1920x1080,1280x720", "display_1_mode": "1920x1080",
+           "display_1_rates": "60.02,48.00", "display_1_rate": "60.02", "display_1_rate_auto": "1",
+           "display_1_scale": "1.5", "display_1_scale_auto": "1", "display_2_name": "DP-1", "display_2_primary": "0",
+           "display_2_modes": "2560x1440", "display_2_mode": "2560x1440", "display_2_rates": "59.95,143.97,119.88",
+           "display_2_rate": "143.97", "display_2_rate_auto": "0", "display_2_scale": "1", "display_2_scale_auto": "0"}
+    screens = Screens(two)
+    screens.sections_screens()
+    rates = combos["Fréquence d’actualisation"]
+    check([label for _key, label in rates[0]] == ["Automatique", "60 Hz", "144 Hz", "120 Hz"], rates[0])
+    check(rates[1] == "143.97", "fréquence choisie sur l'écran de jeu")
+    rates[2]("119.88")
+    check(screens.sent[-1] == ("display-set", "rate", "DP-1", "119.88"), screens.sent)
+    combos["Disposition"][2]("only:DP-1")
+    check(screens.sent[-1] == ("display-set", "layout", "only", "DP-1"), screens.sent)
+    combos["Écran principal"][2]("DP-1")
+    check(screens.sent[-1] == ("display-set", "primary", "DP-1"), screens.sent)
+    combos["Échelle"][2]("1.25")
+    check(screens.sent[-1] == ("display-set", "scale", "DP-1", "1.25"), screens.sent)
+    combos.clear()
+    vm = {"display_count": "1", "display_1_name": "Virtual-1", "display_1_modes": "1280x800,1024x768",
+          "display_1_mode": "1280x800", "display_1_rates": "59.81", "display_1_rate": "59.81"}
+    Screens(vm).sections_screens()
+    check("Définition de l’écran" in combos and "Fréquence d’actualisation" not in combos,
+          "une seule fréquence (VM) : choix masqué")
+    check("Disposition" not in combos, "un seul écran : pas de disposition")
+
 print(f"OK: clavier tactile et souris avancée ({checks} vérifications)")
