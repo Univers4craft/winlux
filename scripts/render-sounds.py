@@ -75,6 +75,9 @@ SOUNDS = {
     # Ouverture et fermeture de session : la signature, raccourcie.
     "connexion": [pad(C4, 0, 1.1), bell(C5, 0.05, 0.9), bell(G5, 0.17, 0.9), bell(D6, 0.29, 1.0)],
     "deconnexion": [pad(C4, 0, 1.0), bell(D6, 0, 0.8), bell(G5, 0.12, 0.8), bell(C5, 0.24, 1.0)],
+    # Alarme et minuteur (application Horloge) : trois arpèges clairs, joués en boucle.
+    "alarme": [note for start in (0, 0.62, 1.24) for note in
+               (bell(G5, start, 0.35, 0.32), bell(C6, start + 0.11, 0.35, 0.32), bell(G6, start + 0.22, 0.5, 0.3))],
 }
 
 

@@ -142,6 +142,8 @@ cp "$root/scripts/winlux-grub-theme.sh" "$stage/opt/winlux/scripts/winlux-grub-t
 cp "$root/scripts/install-safety.sh" "$stage/opt/winlux/scripts/install-safety.sh"
 mkdir -p "$stage/usr/share/winlux"
 cp "$root/scripts/winlux-recovery.sh" "$stage/usr/share/winlux/winlux-recovery.sh"
+# Réinitialiser ce PC, clé de secours, réparation du démarrage (#283).
+install -m 755 "$root/scripts/winlux-reset.py" "$stage/usr/bin/winlux-reset"
 cp "$root/scripts/winlux_autoinstall.py" "$stage/usr/share/winlux/winlux_autoinstall.py"
 cp "$root/scripts/winlux-secureboot.sh" "$stage/usr/bin/winlux-secureboot"
 chmod 755 "$stage/usr/share/winlux/winlux-recovery.sh" "$stage/usr/bin/winlux-secureboot"
@@ -201,10 +203,18 @@ chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
     "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
-for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite print_suite winpaths uac_suite; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles crt_suite gui_suite controls_suite gui_demo explorer_regression imageviewer voicerecorder power_api audio_suite d3d_suite gl_vk_suite print_suite winpaths uac_suite comctl_suite commdlg_suite; do
     cp "$root/target/x86_64-pc-windows-msvc/release/$name.exe" "$stage/opt/winlux/tests/$name.exe"
 done
 cp "$root/target/x86_64-pc-windows-msvc/release/testdll.dll" "$stage/opt/winlux/tests/testdll.dll"
+# Tests C MinGW, dont games_suite (fonctions des vrais jeux, msvcrt et UCRT),
+# quand le compilateur MinGW-w64 est présent sur la machine de construction.
+if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then
+    sh "$root/scripts/build-mingw-tests.sh"
+    for name in mingw_suite games_suite games_suite_ucrt; do
+        cp "$root/target/mingw/$name.exe" "$stage/opt/winlux/tests/$name.exe"
+    done
+fi
 
 # Dossier personnel de la session live (C: dans Winlux) : dossiers usuels,
 # un mot de bienvenue et un .exe d'exemple à ouvrir depuis l'Explorer.
@@ -438,6 +448,9 @@ done
 # Configuration binfmt : le noyau lance automatiquement winlux pour les .exe MZ.
 mkdir -p "$stage/etc/binfmt.d"
 cp "$root/integration/winlux-binfmt.conf" "$stage/etc/binfmt.d/winlux.conf"
+# Manettes lisibles par hid.dll (#271) : /dev/hidraw* des fabricants de jeu.
+mkdir -p "$stage/etc/udev/rules.d"
+cp "$root/integration/70-winlux-manettes.rules" "$stage/etc/udev/rules.d/70-winlux-manettes.rules"
 # Type MIME pour les .exe.
 mkdir -p "$stage/usr/share/mime/packages"
 cp "$root/integration/x-ms-dos-executable.xml" "$stage/usr/share/mime/packages/winlux.xml"
@@ -486,6 +499,9 @@ boot_mark() {
 }
 /bin/busybox rm -f /run/winlux/boot-times /run/winlux/boot-recorded
 boot_mark init
+# « Redémarrer sur le menu de secours » (Paramètres > Récupération) ne vaut
+# que pour un démarrage, même si l'on a choisi le bureau dans le menu GRUB.
+/bin/busybox rm -f /boot/winlux-next-recovery 2>/dev/null || true
 # Écran Prisme dans le framebuffer jusqu'à l'arrivée du bureau (#170).
 if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline && ! /bin/busybox grep -qw 'winlux.check-iso=1' /proc/cmdline && test -e /dev/fb0 && test -x /usr/bin/winlux; then
     /usr/bin/winlux --boot-splash >/run/winlux/boot-splash.log 2>&1 &
@@ -614,12 +630,22 @@ if test -n "$desktop_user"; then
     for node in /dev/dri/renderD* /dev/kfd; do test -c "$node" && /bin/busybox chmod 666 "$node"; done 2>/dev/null
     for node in /dev/input/js* /dev/input/event*; do test -c "$node" && /bin/busybox chgrp input "$node" && /bin/busybox chmod 660 "$node"; done 2>/dev/null
 fi
-# Enregistrer binfmt pour les .exe (MZ) si le système de fichiers est monté.
-if /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null; then
-    if test -r /etc/binfmt.d/winlux.conf; then
-        /bin/busybox cat /etc/binfmt.d/winlux.conf > /proc/sys/fs/binfmt_misc/register 2>/dev/null || true
-    fi
+# Enregistrer binfmt pour les .exe (MZ) : « ./programme.exe » dans un
+# terminal lance winlux. Une règle par écriture et sans les commentaires du
+# fichier : le noyau refusait tout le bloc, donc rien n'était enregistré en
+# Live (#214). Le système de fichiers est peut-être déjà monté.
+# binfmt : début
+binfmt=/proc/sys/fs/binfmt_misc
+binfmt_conf=/etc/binfmt.d/winlux.conf
+test -e "$binfmt/register" || /bin/busybox mount -t binfmt_misc binfmt_misc "$binfmt" 2>/dev/null || true
+if test -e "$binfmt/register" && test -r "$binfmt_conf"; then
+    /bin/busybox grep '^:' "$binfmt_conf" | while IFS= read -r rule; do
+        rule_name=${rule#:}
+        rule_name=${rule_name%%:*}
+        test -e "$binfmt/$rule_name" || printf '%s\n' "$rule" > "$binfmt/register" 2>/dev/null || true
+    done
 fi
+# binfmt : fin
 /bin/busybox mkdir -p /tmp/.X11-unix /run /root/.local/share/winlux
 /bin/busybox chmod 1777 /tmp
 /bin/busybox rm -f /tmp/.X0-lock /tmp/.X11-unix/X0

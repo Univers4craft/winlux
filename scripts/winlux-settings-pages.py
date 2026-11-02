@@ -40,6 +40,33 @@ _COL = {"en": 0, "es": 1, "de": 2}
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
+    'Comptes': ('Accounts', 'Cuentas', 'Konten'),
+    'Votre compte': ('Your account', 'Su cuenta', 'Ihr Konto'),
+    'Autres utilisateurs': ('Other users', 'Otros usuarios', 'Andere Benutzer'),
+    'Administrateur': ('Administrator', 'Administrador', 'Administrator'),
+    'Standard': ('Standard user', 'Estándar', 'Standardbenutzer'),
+    'Comptes locaux sur ce PC. Chacun a son bureau, ses fichiers et ses réglages ; « Changer d’utilisateur » dans le menu Démarrer passe de l’un à l’autre sans rien fermer.': ('Local accounts on this PC. Each one has its own desktop, files and settings; “Switch user” in the Start menu moves between them without closing anything.', 'Cuentas locales en este equipo. Cada una tiene su escritorio, sus archivos y su configuración; «Cambiar de usuario» en el menú Inicio pasa de una a otra sin cerrar nada.', 'Lokale Konten auf diesem PC. Jedes hat seinen eigenen Desktop, seine Dateien und Einstellungen; „Benutzer wechseln“ im Startmenü wechselt zwischen ihnen, ohne etwas zu schließen.'),
+    'Ajouter un compte': ('Add account', 'Agregar cuenta', 'Konto hinzufügen'),
+    'Ajouter un autre utilisateur à ce PC': ('Add someone else to this PC', 'Agregar otro usuario a este equipo', 'Andere Person zu diesem PC hinzufügen'),
+    'Changer le mot de passe': ('Change password', 'Cambiar la contraseña', 'Kennwort ändern'),
+    'Changer le type de compte': ('Change account type', 'Cambiar el tipo de cuenta', 'Kontotyp ändern'),
+    'Nom du compte': ('User name', 'Nombre de usuario', 'Benutzername'),
+    'Nom complet (facultatif)': ('Full name (optional)', 'Nombre completo (opcional)', 'Vollständiger Name (optional)'),
+    'Confirmer le mot de passe': ('Confirm password', 'Confirmar la contraseña', 'Kennwort bestätigen'),
+    'Administrateur de ce PC': ('Administrator of this PC', 'Administrador de este equipo', 'Administrator dieses PCs'),
+    'Un administrateur installe des logiciels et change les réglages du système ; un compte standard en a besoin pour ces actions.': ('An administrator installs software and changes system settings; a standard account needs one for those actions.', 'Un administrador instala software y cambia la configuración del sistema; una cuenta estándar lo necesita para esas acciones.', 'Ein Administrator installiert Software und ändert Systemeinstellungen; ein Standardkonto braucht ihn für diese Aktionen.'),
+    'Laissez vide pour un compte sans mot de passe.': ('Leave blank for an account without a password.', 'Déjelo en blanco para una cuenta sin contraseña.', 'Leer lassen für ein Konto ohne Kennwort.'),
+    'Lettres minuscules, chiffres, - et _ (32 au plus), en commençant par une lettre.': ('Lowercase letters, digits, - and _ (32 at most), starting with a letter.', 'Letras minúsculas, cifras, - y _ (32 como máximo), empezando por una letra.', 'Kleinbuchstaben, Ziffern, - und _ (höchstens 32), beginnend mit einem Buchstaben.'),
+    'Les deux mots de passe sont différents.': ('The two passwords don’t match.', 'Las dos contraseñas no coinciden.', 'Die beiden Kennwörter stimmen nicht überein.'),
+    'Ce nom de compte existe déjà.': ('This user name already exists.', 'Este nombre de usuario ya existe.', 'Dieser Benutzername existiert bereits.'),
+    'Supprimer le compte {name} ?': ('Remove the account {name}?', '¿Quitar la cuenta {name}?', 'Konto {name} entfernen?'),
+    'Effacer aussi ses fichiers (Bureau, Documents, Images…)': ('Also delete their files (Desktop, Documents, Pictures…)', 'Borrar también sus archivos (Escritorio, Documentos, Imágenes…)', 'Auch die Dateien löschen (Desktop, Dokumente, Bilder…)'),
+    'Il faut garder au moins un compte administrateur.': ('At least one administrator account must remain.', 'Debe quedar al menos una cuenta de administrador.', 'Mindestens ein Administratorkonto muss bleiben.'),
+    'Session ouverte': ('Signed in', 'Sesión iniciada', 'Angemeldet'),
+    'Nouveau mot de passe pour {name}': ('New password for {name}', 'Nueva contraseña para {name}', 'Neues Kennwort für {name}'),
+    'Annuler': ('Cancel', 'Cancelar', 'Abbrechen'),
+    'Valider': ('OK', 'Aceptar', 'OK'),
+    'Aucun autre compte sur ce PC.': ('No other account on this PC.', 'No hay otras cuentas en este equipo.', 'Keine anderen Konten auf diesem PC.'),
     # Jeux (application Jeux, temps de jeu, dossiers de jeux)
     'Bibliothèque de jeux': ('Game library', 'Biblioteca de juegos', 'Spielebibliothek'),
     'L’application Jeux rassemble vos jeux Windows installés : GOG, itch.io, dossiers de jeux et programmes 3D.': ('The Games app gathers your installed Windows games: GOG, itch.io, game folders and 3D programs.', 'La aplicación Juegos reúne sus juegos de Windows instalados: GOG, itch.io, carpetas de juegos y programas 3D.', 'Die App „Spiele“ sammelt Ihre installierten Windows-Spiele: GOG, itch.io, Spieleordner und 3D-Programme.'),
@@ -54,6 +81,7 @@ _TR = {
     'Aucun dossier ajouté.': ('No folder added.', 'No se agregó ninguna carpeta.', 'Kein Ordner hinzugefügt.'),
     'Ajouter un dossier…': ('Add a folder…', 'Agregar una carpeta…', 'Ordner hinzufügen…'),
     'Retirer': ('Remove', 'Quitar', 'Entfernen'),
+    'Télécharger': ('Download', 'Descargar', 'Herunterladen'),
     'Jeux retirés de la bibliothèque': ('Games removed from the library', 'Juegos quitados de la biblioteca', 'Aus der Bibliothek entfernte Spiele'),
     'Remettre': ('Restore', 'Restaurar', 'Wiederherstellen'),
     'Performances en jeu': ('In-game performance', 'Rendimiento en juego', 'Leistung im Spiel'),
@@ -92,6 +120,8 @@ _TR = {
     'Bureau à distance': ('Remote Desktop', 'Escritorio remoto', 'Remotedesktop'),
     'Ce PC': ('This PC', 'Este equipo', 'Dieser PC'),
     'Choisir un dossier': ('Choose a folder', 'Elegir una carpeta', 'Ordner auswählen'),
+    'Parcourir…': ('Browse…', 'Examinar…', 'Durchsuchen…'),
+    'Images': ('Pictures', 'Imágenes', 'Bilder'),
     'Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support.': ('Choose “Winlux recovery” at startup, or start from the installation USB drive. Keep a copy of your documents on another drive.', 'Elija «Winlux recuperación» al arrancar o inicie desde la memoria USB de instalación. Guarde una copia de sus documentos en otro soporte.', 'Wählen Sie beim Start „Winlux-Wiederherstellung“ oder starten Sie vom Installations-USB-Stick. Bewahren Sie eine Kopie Ihrer Dokumente auf einem anderen Datenträger auf.'),
     'Clic droit à deux doigts': ('Two-finger right-click', 'Clic derecho con dos dedos', 'Rechtsklick mit zwei Fingern'),
     'Compatibilité VNC classique': ('Classic VNC compatibility', 'Compatibilidad con VNC clásico', 'Klassische VNC-Kompatibilität'),
@@ -175,6 +205,7 @@ _TR = {
     'Refroidissement maximal': ('Maximum cooling', 'Refrigeración máxima', 'Maximale Kühlung'),
     'Se connecter': ('Connect', 'Conectar', 'Verbinden'),
     'Secours et restauration': ('Recovery', 'Recuperación', 'Wiederherstellung'),
+    'Réinitialiser ce PC et clé de secours': ('Reset this PC and recovery drive', 'Restablecer este PC y unidad de recuperación', 'Diesen PC zurücksetzen und Wiederherstellungslaufwerk'),
     'Service arrêté': ('Service stopped', 'Servicio detenido', 'Dienst angehalten'),
     'Si le bureau ne démarre plus': ('If the desktop no longer starts', 'Si el escritorio ya no se inicia', 'Wenn der Desktop nicht mehr startet'),
     'Signaler un problème': ('Report a problem', 'Informar de un problema', 'Problem melden'),
@@ -389,6 +420,68 @@ _TR = {
     "Installer ou désinstaller des programmes": ("Install or uninstall programs", "Instalar o desinstalar programas", "Programme installieren oder deinstallieren"),
     "Enregistrement impossible : le dossier du programme doit être accessible en écriture.": ("Unable to save: the program folder must be writable.", "No se puede guardar: la carpeta del programa debe admitir escritura.", "Speichern nicht möglich: Der Programmordner muss beschreibbar sein."),
     "Les réglages s’appliquent au prochain lancement du programme.": ("Settings apply the next time the program starts.", "Los ajustes se aplican la próxima vez que se inicie el programa.", "Die Einstellungen gelten beim nächsten Programmstart."),
+    # Presse-papiers
+    'Historique du presse-papiers': ('Clipboard history', 'Historial del portapapeles', 'Zwischenablageverlauf'),
+    'Gardez plusieurs éléments copiés et retrouvez-les avec Windows + V.': ('Keep several copied items and find them with Windows + V.', 'Guarde varios elementos copiados y encuéntrelos con Windows + V.', 'Behalten Sie mehrere kopierte Elemente und finden Sie sie mit Windows + V.'),
+    'Copier le texte d’une image': ('Copy text from an image', 'Copiar el texto de una imagen', 'Text aus einem Bild kopieren'),
+    'Windows + Maj + T encadre une zone de l’écran et copie son texte ; la visionneuse d’images et le clic droit sur une image le proposent aussi.': (
+        'Windows + Shift + T lets you draw a box on the screen and copies its text; the image viewer and right-clicking an image offer it too.',
+        'Windows + Mayús + T enmarca una zona de la pantalla y copia su texto; el visor de imágenes y el clic derecho en una imagen también lo ofrecen.',
+        'Windows + Umschalt + T markiert einen Bildschirmbereich und kopiert seinen Text; die Bildanzeige und der Rechtsklick auf ein Bild bieten es ebenfalls an.'),
+    'Reconnaissance de texte installée': ('Text recognition installed', 'Reconocimiento de texto instalado', 'Texterkennung installiert'),
+    'Reconnaissance de texte': ('Text recognition', 'Reconocimiento de texto', 'Texterkennung'),
+    'Téléchargée à la première utilisation (environ 15 Mo), en français, anglais, espagnol et allemand.': (
+        'Downloaded on first use (about 15 MB), in French, English, Spanish and German.',
+        'Se descarga en el primer uso (unos 15 MB), en francés, inglés, español y alemán.',
+        'Wird bei der ersten Verwendung heruntergeladen (etwa 15 MB), auf Französisch, Englisch, Spanisch und Deutsch.'),
+    'français': ('French', 'francés', 'Französisch'),
+    'anglais': ('English', 'inglés', 'Englisch'),
+    'espagnol': ('Spanish', 'español', 'Spanisch'),
+    'allemand': ('German', 'alemán', 'Deutsch'),
+    'Automatique : clair le jour, sombre le soir': ('Automatic: light by day, dark in the evening', 'Automático: claro de día, oscuro por la noche', 'Automatisch: tagsüber hell, abends dunkel'),
+    'Lever et coucher du soleil calculés pour votre fuseau horaire.': ('Sunrise and sunset calculated for your time zone.', 'Amanecer y atardecer calculados para su zona horaria.', 'Sonnenauf- und -untergang für Ihre Zeitzone berechnet.'),
+    'Personnaliser l’arrière-plan': ('Personalize your background', 'Personalizar el fondo', 'Hintergrund anpassen'),
+    'Image': ('Picture', 'Imagen', 'Bild'),
+    'Diaporama': ('Slideshow', 'Presentación', 'Diashow'),
+    'Winlux Aube le jour, Winlux Nuit le soir': ('Winlux Dawn by day, Winlux Night in the evening', 'Winlux Amanecer de día, Winlux Noche por la noche', 'Winlux Morgen tagsüber, Winlux Nacht am Abend'),
+    'Dossier des images': ('Picture folder', 'Carpeta de imágenes', 'Bildordner'),
+    'Aucun dossier choisi.': ('No folder chosen.', 'No se eligió ninguna carpeta.', 'Kein Ordner ausgewählt.'),
+    'Changer d’image toutes les': ('Change picture every', 'Cambiar de imagen cada', 'Bild wechseln alle'),
+    '1 minute': ('1 minute', '1 minuto', '1 Minute'),
+    '10 minutes': ('10 minutes', '10 minutos', '10 Minuten'),
+    '30 minutes': ('30 minutes', '30 minutos', '30 Minuten'),
+    '1 heure': ('1 hour', '1 hora', '1 Stunde'),
+    '6 heures': ('6 hours', '6 horas', '6 Stunden'),
+    '1 jour': ('1 day', '1 día', '1 Tag'),
+    'Ordre aléatoire': ('Shuffle the picture order', 'Orden aleatorio', 'Zufällige Reihenfolge'),
+    'Image suivante': ('Next picture', 'Imagen siguiente', 'Nächstes Bild'),
+    'Thèmes': ('Themes', 'Temas', 'Designs'),
+    'Enregistrez votre fond, votre couleur d’accentuation, la taille de la barre et les sons en un fichier à partager.': (
+        'Save your background, accent color, taskbar size and sounds in one file to share.',
+        'Guarde su fondo, su color de énfasis, el tamaño de la barra y los sonidos en un archivo para compartir.',
+        'Speichern Sie Hintergrund, Akzentfarbe, Taskleistengröße und Sounds in einer Datei zum Teilen.'),
+    'Thèmes Winlux': ('Winlux themes', 'Temas de Winlux', 'Winlux-Designs'),
+    'Enregistrer le thème': ('Save theme', 'Guardar tema', 'Design speichern'),
+    'Enregistrer le thème…': ('Save theme…', 'Guardar tema…', 'Design speichern…'),
+    'Appliquer un thème': ('Apply a theme', 'Aplicar un tema', 'Design anwenden'),
+    'Appliquer un thème…': ('Apply a theme…', 'Aplicar un tema…', 'Design anwenden…'),
+    'Mon thème': ('My theme', 'Mi tema', 'Mein Design'),
+    'Effacer les données du presse-papiers': ('Clear clipboard data', 'Borrar los datos del portapapeles', 'Zwischenablagedaten löschen'),
+    'Efface tout l’historique, sauf les éléments épinglés.': ('Clears the whole history except pinned items.', 'Borra todo el historial excepto los elementos anclados.', 'Löscht den gesamten Verlauf außer angehefteten Elementen.'),
+    'Effacer': ('Clear', 'Borrar', 'Löschen'),
+    # Éclairage nocturne (Écran)
+    'Éclairage nocturne': ('Night light', 'Luz nocturna', 'Nachtmodus'),
+    'Des couleurs plus chaudes le soir reposent les yeux et aident à s’endormir.': ('Warmer colours in the evening rest your eyes and help you fall asleep.', 'Los colores más cálidos por la noche descansan la vista y ayudan a dormir.', 'Wärmere Farben am Abend schonen die Augen und helfen beim Einschlafen.'),
+    'Activer maintenant': ('Turn on now', 'Activar ahora', 'Jetzt einschalten'),
+    'Intensité': ('Strength', 'Intensidad', 'Stärke'),
+    'Planifier l’éclairage nocturne': ('Schedule night light', 'Programar la luz nocturna', 'Nachtmodus planen'),
+    'Jamais': ('Never', 'Nunca', 'Nie'),
+    'Du coucher au lever du soleil ({sunset} – {sunrise})': ('Sunset to sunrise ({sunset} – {sunrise})', 'Del atardecer al amanecer ({sunset} – {sunrise})', 'Sonnenuntergang bis Sonnenaufgang ({sunset} – {sunrise})'),
+    'Définir les heures': ('Set hours', 'Establecer horas', 'Uhrzeiten festlegen'),
+    'Activer à': ('Turn on at', 'Activar a las', 'Einschalten um'),
+    'Désactiver à': ('Turn off at', 'Desactivar a las', 'Ausschalten um'),
+    'Heures calculées pour votre fuseau horaire, sans connexion à Internet.': ('Times calculated for your time zone, without an Internet connection.', 'Horas calculadas para su zona horaria, sin conexión a Internet.', 'Zeiten für Ihre Zeitzone berechnet, ohne Internetverbindung.'),
+    'Fuseau horaire sans coordonnées : 20:00 – 07:00 par défaut.': ('Time zone without coordinates: 20:00 – 07:00 by default.', 'Zona horaria sin coordenadas: 20:00 – 07:00 por defecto.', 'Zeitzone ohne Koordinaten: standardmäßig 20:00 – 07:00.'),
     # Widgets (Windows + W)
     'Widgets': ('Widgets', 'Widgets', 'Widgets'),
     'Windows + W ouvre le volet : météo, agenda, état du PC, pense-bête, photos et minuteur.': ('Windows + W opens the panel: weather, agenda, PC status, sticky note, photos and timer.', 'Windows + W abre el panel: tiempo, agenda, estado del equipo, nota adhesiva, fotos y temporizador.', 'Windows + W öffnet den Bereich: Wetter, Termine, PC-Status, Notizzettel, Fotos und Timer.'),
@@ -457,6 +550,9 @@ PAGE_SOUND, PAGE_SYSUPDATE, PAGE_NETDRIVES, PAGE_DESKTOP, PAGE_BLUETOOTH = 16, 1
 PAGE_APPS, PAGE_INPUT, PAGE_REPORT, PAGE_PRINTERS, PAGE_REMOTE, PAGE_SHARING = 1, 4, 25, 26, 27, 28
 PAGE_GAMES = 29
 PAGE_ASSISTANT = 30
+PAGE_RECOVERY = 31
+PAGE_CLIPBOARD = 32
+PAGE_ACCOUNTS = 33
 
 # Mêmes valeurs que la page PE (contraste, pointeur) : accessibility.ini est lu
 # par le runtime pour les programmes Windows.
@@ -477,6 +573,67 @@ DRIVE_STATES = {"ok": "En ligne", "offline": "Hors ligne", "connecting": "Connex
 BT_KINDS = {"audio": "Audio", "clavier": "Clavier", "souris": "Souris", "manette": "Manette",
             "telephone": "Téléphone", "ordinateur": "Ordinateur"}
 ACCENTS = ("#8178b7", "#0078d4", "#0099bc", "#00b294", "#10893e", "#ca5010", "#e81123", "#c239b3")
+
+
+# ── Contraste du texte (WCAG) : couleurs calculées plutôt que figées ─────────
+
+def _rgb(color):
+    color = color.lstrip("#")
+    return tuple(int(color[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def luminance(color):
+    def channel(value):
+        value /= 255
+        return value / 12.92 if value <= 0.03928 else ((value + 0.055) / 1.055) ** 2.4
+    r, g, b = _rgb(color)
+    return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+
+
+def contrast(first, second):
+    lighter, darker = sorted((luminance(first), luminance(second)), reverse=True)
+    return (lighter + 0.05) / (darker + 0.05)
+
+
+def mix(first, second, amount):
+    """Mélange first → second (amount de 0 à 1)."""
+    return "#%02x%02x%02x" % tuple(round(a + (b - a) * amount) for a, b in zip(_rgb(first), _rgb(second)))
+
+
+def text_on(background):
+    """Texte noir ou blanc, celui qui se lit le mieux sur ce fond."""
+    return "#000000" if contrast("#000000", background) >= contrast("#ffffff", background) else "#ffffff"
+
+
+def readable(color, background, minimum=4.5):
+    """color assombrie ou éclaircie juste assez pour atteindre minimum:1 sur background."""
+    target = text_on(background)
+    step = 0
+    while contrast(color, background) < minimum and step < 20:
+        step += 1
+        color = mix(color, target, 0.1)
+    return color if contrast(color, background) >= minimum else target
+
+
+def settings_palette(dark, accent="#8178b7"):
+    """Couleurs de Paramètres (thème clair ou sombre), texte toujours à 4,5:1 au moins."""
+    if dark:
+        p = {"bg": "#181b24", "fg": "#ecedf5", "side": "#202430", "hover": "#30374a", "card": "#242a38",
+             "card_hover": "#2c3344", "entry": "#171b25", "border": "#48536b", "button": "#30384b",
+             "button_hover": "#414b64", "disabled_fg": "#858da0", "disabled_bg": "#252a36", "dim": "#adb6c9"}
+    else:
+        p = {"bg": "#f3f5fa", "fg": "#1f2330", "side": "#e9ecf4", "hover": "#dce1ec", "card": "#ffffff",
+             "card_hover": "#eef1f7", "entry": "#ffffff", "border": "#b9c0d1", "button": "#ffffff",
+             "button_hover": "#e6eaf3", "disabled_fg": "#7d8496", "disabled_bg": "#eceef3", "dim": "#4f566b"}
+    p["accent"] = accent
+    # Ligne sélectionnée teintée par l'accent, texte noir ou blanc selon le fond obtenu.
+    p["selected"] = mix(p["side"], accent, 0.45)
+    p["selected_fg"] = text_on(p["selected"])
+    p["selected_dim"] = p["selected_fg"]
+    for key in ("dim",):
+        for surface in ("bg", "side", "card", "hover"):
+            p[key] = readable(p[key], p[surface])
+    return p
 EXE_SCALES = (("auto", "Automatique (comme l’écran)"), ("1", "100 %"), ("1.25", "125 %"), ("1.5", "150 %"), ("2", "200 %"))
 # Pavé tactile : (clé touchpad_*, titre, explication), comme la page PE.
 TOUCHPAD = (("tap", "Taper pour cliquer", "Une touche légère vaut un clic."),
@@ -508,6 +665,31 @@ def keyvals(text):
 
 def have(command):
     return shutil.which(command) is not None
+
+
+def ambiance_tool():
+    """winlux-ambiance installé, ou le script du dépôt à côté de celui-ci."""
+    if have("winlux-ambiance"): return ["winlux-ambiance"]
+    script = Path(__file__).resolve().with_name("winlux-ambiance.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def clipboard_tool():
+    if have("winlux-clipboard"): return ["winlux-clipboard"]
+    script = Path(__file__).resolve().with_name("winlux-clipboard.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def ocr_tool():
+    if have("winlux-ocr"): return ["winlux-ocr"]
+    script = Path(__file__).resolve().with_name("winlux-ocr.py")
+    return ["/usr/bin/python3", str(script)] if script.is_file() else None
+
+
+def ambiance_status():
+    tool = ambiance_tool()
+    result = run(tool + ["status"]) if tool else None
+    return keyvals(result.stdout) if result else {}
 
 
 def run(args, timeout=5):
@@ -792,12 +974,21 @@ def page_available(page, status=None):
         return have("lpstat")
     if page == PAGE_REMOTE:
         return have("winlux-remote-config") or (RUN / "remote.txt").is_file()
+    if page == PAGE_CLIPBOARD:
+        return clipboard_tool() is not None
+    if page == PAGE_ACCOUNTS:
+        # Session Live : comptes éphémères, page cachée.
+        return accounts_module() is not None and not Path(os.environ.get(
+            "WINLUX_LIVE_FLAG", "/etc/winlux/live-session")).exists()
     if page == PAGE_SHARING:
         return have("winlux-share") or have("winlux-transfer") or (RUN / "shares.txt").is_file()
     if page == PAGE_GAMES:
         return games_module() is not None
     if page == PAGE_ASSISTANT:
         return assistant_module() is not None
+    if page == PAGE_RECOVERY:
+        module = reset_page()
+        return module is not None and module.available()
     return True
 
 
@@ -823,6 +1014,33 @@ def games_module():
     return None
 
 
+_ACCOUNTS = []
+
+
+def accounts_module():
+    """winlux-accounts (installé à côté, ou scripts/ du dépôt), chargé une fois."""
+    if _ACCOUNTS: return _ACCOUNTS[0]
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    module = None
+    for candidate in (here.with_name("winlux-accounts.py"), here.with_name("winlux-accounts")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_accounts", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_accounts", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                break
+            except Exception:
+                module = None
+    _ACCOUNTS.append(module)
+    return module
+
+
+ACCOUNT_NAME = re.compile(r"^[a-z_][a-z0-9_-]{0,31}$")
+
+
 _ASSISTANT = []
 
 
@@ -845,6 +1063,22 @@ def assistant_module():
                 module = None
     _ASSISTANT.append(module)
     return module
+def reset_page():
+    """Page Récupération (winlux-reset-page, installée à côté), None si absente."""
+    from importlib.machinery import SourceFileLoader
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (here.with_name("winlux-reset-page.py"), here.with_name("winlux-reset-page")):
+        if candidate.is_file():
+            try:
+                loader = SourceFileLoader("winlux_reset_page", str(candidate))
+                spec = importlib.util.spec_from_loader("winlux_reset_page", loader)
+                module = importlib.util.module_from_spec(spec)
+                loader.exec_module(module)
+                return module
+            except Exception:
+                return None
+    return None
 
 
 def default_apps_panel(window):
@@ -875,9 +1109,10 @@ class ExtraPages:
                    PAGE_INPUT: "page_input", PAGE_REPORT: "page_report", PAGE_PRINTERS: "page_printers",
                    PAGE_REMOTE: "page_remote", PAGE_SHARING: "page_sharing",
                    PAGE_GAMES: "page_games",
-                   PAGE_ASSISTANT: "page_assistant"}
+                   PAGE_ASSISTANT: "page_assistant", PAGE_RECOVERY: "page_recovery",
+                   PAGE_CLIPBOARD: "page_clipboard", PAGE_ACCOUNTS: "page_accounts"}
     # Pages gardant leur cadre d’état, complétées par des réglages en dessous.
-    EXTRA_SECTIONS = {2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
+    EXTRA_SECTIONS = {8: "sections_display", 2: "sections_network", 7: "sections_recovery", 19: "sections_cpu", 24: "sections_graphics"}
 
     def extra_page(self, page):
         """Construit la page ; False si elle n’est pas gérée ici."""
@@ -956,7 +1191,7 @@ class ExtraPages:
         try: subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
         except OSError as error: self.show_error(_t("L’opération a échoué"), str(error))
 
-    def tool(self, args, refresh=True):
+    def tool(self, args, refresh=True, after=None):
         """Commande d’un réglage (winlux-personalize…) sans figer la fenêtre."""
         try:
             process = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
@@ -969,6 +1204,7 @@ class ExtraPages:
             if process.returncode:
                 self.show_error(_t("L’opération a échoué"), (process.stderr.read() or "").strip()[-2000:])
             if refresh: self.extra_refresh()
+            if after is not None: after()
             return False
         GLib.timeout_add(200, wait)
 
@@ -1033,6 +1269,17 @@ class ExtraPages:
 
     def page_desktop(self):
         prefs = appearance()
+        tool = ambiance_tool()
+        moods = ambiance_status() if tool else {}
+
+        def fixed_then(args):
+            """Choix manuel : le mode automatique ou le diaporama s'arrête, puis la commande."""
+            key = "THEME_AUTO" if args[1] == "theme" else "WALLPAPER"
+            value = "off" if key == "THEME_AUTO" else "fixed"
+            if tool and moods.get(key.lower()) not in (None, value):
+                self.tool(tool + ["set", key, value], refresh=False, after=lambda: self.tool(args))
+            else:
+                self.tool(args)
         self.section(_t("Arrière-plan"))
         flow = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, max_children_per_line=4, row_spacing=10, column_spacing=10)
         current = prefs.get("wallpaper", "")
@@ -1043,7 +1290,7 @@ class ExtraPages:
             if pixbuf: inner.pack_start(Gtk.Image.new_from_pixbuf(pixbuf), False, False, 0)
             inner.pack_start(Gtk.Label(label=("✓ " if str(path) == current else "") + _t(title)), False, False, 0)
             button.add(inner)
-            button.connect("clicked", lambda *_, p=path: self.tool(["winlux-personalize", "wallpaper", str(p)]))
+            button.connect("clicked", lambda *_, p=path: fixed_then(["winlux-personalize", "wallpaper", str(p)]))
             flow.add(button)
         self.body.pack_start(flow, False, False, 0)
         images = Gtk.FileFilter()
@@ -1051,16 +1298,27 @@ class ExtraPages:
         images.add_pixbuf_formats()
         box = self.card()
         self.row(box, _t("Choisir une photo…"), self.browse_button(
-            _t("Choisir une photo…"), images, lambda path: self.tool(["winlux-personalize", "wallpaper", path])))
-        self.combo(box, _t("Mode de couleur"), [("dark", _t("Sombre")), ("light", _t("Clair"))], prefs.get("theme", "dark"),
-                   lambda value: self.tool(["winlux-personalize", "theme", value]))
+            _t("Choisir une photo…"), images, lambda path: fixed_then(["winlux-personalize", "wallpaper", path])))
+        modes = [("dark", _t("Sombre")), ("light", _t("Clair"))]
+        if tool: modes.append(("auto", _t("Automatique : clair le jour, sombre le soir")))
+        mode = "auto" if moods.get("theme_auto") == "on" else prefs.get("theme", "dark")
+
+        def set_mode(value):
+            if value == "auto": self.tool(tool + ["set", "THEME_AUTO", "on"])
+            else: fixed_then(["winlux-personalize", "theme", value])
+        self.combo(box, _t("Mode de couleur"), modes, mode, set_mode,
+                   _t("Lever et coucher du soleil calculés pour votre fuseau horaire.") if mode == "auto" else None)
+        if tool:
+            self.wallpaper_modes(box, tool, moods)
         self.section(_t("Couleur d’accentuation"))
         palette = Gtk.Box(spacing=8)
         for color in ACCENTS:
             swatch = Gtk.Button(label="✓" if prefs.get("accent", "").lower() == color else " ")
             swatch.set_size_request(44, 36)
             provider = Gtk.CssProvider()
-            provider.load_from_data(f"button {{ background: {color}; color: #ffffff; border-color: {color}; }}".encode())
+            # Coche noire ou blanche selon la teinte (blanc sur turquoise : 2,6:1).
+            provider.load_from_data(f"button, button label {{ background: {color}; color: {text_on(color)}; "
+                                    f"border-color: {color}; }}".encode())
             swatch.get_style_context().add_provider(provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 2)
             swatch.connect("clicked", lambda *_, c=color: self.tool(["winlux-personalize", "accent", c]))
             palette.pack_start(swatch, False, False, 0)
@@ -1080,6 +1338,7 @@ class ExtraPages:
             _t("Choisir une image…"), images, lambda path: self.tool(["winlux-personalize", "start-icon", path])))
         self.actions(box, [(_t("Icône Winlux"), lambda: self.tool(["winlux-personalize", "start-icon", "default"])),
                            (_t("Rétablir l’apparence par défaut"), lambda: self.tool(["winlux-personalize", "reset", "default"]))])
+        self.theme_files()
         if have("winlux-widgets"):
             self.widget_settings()
         self.section(_t("Icônes du bureau"))
@@ -1089,6 +1348,68 @@ class ExtraPages:
                            (_t("Explorateur"), lambda: self.execute("desktop-icon-explorer")),
                            (_t("Documents"), lambda: self.execute("desktop-icon-documents"))])
         self.hint(_t("Ajoute l’icône sur le bureau ; un clic droit sur l’icône la retire."), box)
+
+    def wallpaper_modes(self, box, tool, moods):
+        """Diaporama ou fond selon l'heure (winlux-ambiance, #281)."""
+        mode = moods.get("wallpaper", "fixed")
+        reopen = lambda: self.select(self.nav, None)
+        self.combo(box, _t("Personnaliser l’arrière-plan"),
+                   [("fixed", _t("Image")), ("slideshow", _t("Diaporama")),
+                    ("daynight", _t("Winlux Aube le jour, Winlux Nuit le soir"))], mode,
+                   lambda value: self.tool(tool + ["set", "WALLPAPER", value], refresh=False, after=reopen))
+        if mode != "slideshow": return
+        folder = moods.get("slide_folder") or ""
+        chooser = Gtk.Button(label=_t("Parcourir…"))
+
+        def pick(*_):
+            dialog = Gtk.FileChooserNative.new(_t("Choisir un dossier"), self, Gtk.FileChooserAction.SELECT_FOLDER, None, None)
+            if folder: dialog.set_current_folder(folder)
+            if dialog.run() == Gtk.ResponseType.ACCEPT and dialog.get_filename():
+                self.tool(tool + ["set", "SLIDE_FOLDER", dialog.get_filename()], refresh=False, after=reopen)
+            dialog.destroy()
+        chooser.connect("clicked", pick)
+        self.row(box, _t("Dossier des images"), chooser, folder or _t("Aucun dossier choisi."))
+        self.combo(box, _t("Changer d’image toutes les"),
+                   [("1", _t("1 minute")), ("10", _t("10 minutes")), ("30", _t("30 minutes")), ("60", _t("1 heure")),
+                    ("360", _t("6 heures")), ("1440", _t("1 jour"))], moods.get("slide_minutes", "30"),
+                   lambda value: self.tool(tool + ["set", "SLIDE_MINUTES", value], refresh=False))
+        self.switch(box, _t("Ordre aléatoire"), moods.get("slide_shuffle") == "on",
+                    lambda on: self.tool(tool + ["set", "SLIDE_SHUFFLE", "on" if on else "off"], refresh=False))
+        self.actions(box, [(_t("Image suivante"), lambda: self.tool(tool + ["next"], refresh=False), bool(folder))])
+
+    def theme_files(self):
+        """Thème complet (fond, couleur, barre, sons) en un fichier .wlxtheme (#281)."""
+        self.section(_t("Thèmes"), _t("Enregistrez votre fond, votre couleur d’accentuation, la taille de la barre et les sons en un fichier à partager."))
+        box = self.card()
+        themes = Gtk.FileFilter()
+        themes.set_name(_t("Thèmes Winlux"))
+        themes.add_pattern("*.wlxtheme")
+
+        def save():
+            dialog = Gtk.FileChooserNative.new(_t("Enregistrer le thème"), self, Gtk.FileChooserAction.SAVE, None, None)
+            dialog.add_filter(themes)
+            dialog.set_do_overwrite_confirmation(True)
+            dialog.set_current_name(_t("Mon thème") + ".wlxtheme")
+            if dialog.run() == Gtk.ResponseType.ACCEPT and dialog.get_filename():
+                target = dialog.get_filename()
+                if not target.endswith(".wlxtheme"): target += ".wlxtheme"
+                self.tool(["winlux-personalize", "export", target], refresh=False)
+            dialog.destroy()
+
+        def load():
+            dialog = Gtk.FileChooserNative.new(_t("Appliquer un thème"), self, Gtk.FileChooserAction.OPEN, None, None)
+            dialog.add_filter(themes)
+            if dialog.run() == Gtk.ResponseType.ACCEPT and dialog.get_filename():
+                chosen = dialog.get_filename()
+                tool = ambiance_tool()
+                apply = lambda: self.tool(["winlux-personalize", "import", chosen])
+                if tool:
+                    self.tool(tool + ["set", "THEME_AUTO", "off"], refresh=False,
+                              after=lambda: self.tool(tool + ["set", "WALLPAPER", "fixed"], refresh=False, after=apply))
+                else:
+                    apply()
+            dialog.destroy()
+        self.actions(box, [(_t("Enregistrer le thème…"), save), (_t("Appliquer un thème…"), load)])
 
     def widget_settings(self):
         """Volet Win+W (winlux-widgets) : bouton de la barre, météo, photos."""
@@ -1373,7 +1694,12 @@ class ExtraPages:
     def set_contrast(self, index):
         a11y_write(contrast=index)
         theme = CONTRAST_GTK[index] if 0 <= index < len(CONTRAST_GTK) else None
-        if theme is None: theme = "Adwaita-dark" if appearance().get("theme", "dark") == "dark" else "Adwaita"
+        mode = appearance().get("theme", "dark")
+        if theme is None and have("winlux-personalize"):
+            # Retour au thème Winlux du compte (couleurs et accent compris).
+            run(["winlux-personalize", "theme", mode if mode in ("dark", "light") else "dark"], timeout=30)
+            return
+        if theme is None: theme = "Adwaita-dark" if mode == "dark" else "Adwaita"
         xfconf_set("xsettings", "/Net/ThemeName", "string", theme)
 
     def set_pointer(self, size):
@@ -1539,6 +1865,220 @@ class ExtraPages:
                        lambda value: self.execute("cpu-fan-" + value))
         self.hint(_t("Priorité et cœurs d’un programme précis : Applications › Programmes Windows."))
 
+    # ── Presse-papiers (Windows + V) ──
+
+    def page_clipboard(self):
+        tool = clipboard_tool()
+        result = run(tool + ["status"])
+        state = keyvals(result.stdout) if result else {}
+        box = self.card()
+        self.switch(box, _t("Historique du presse-papiers"), state.get("history", "on") == "on",
+                    lambda on: self.tool(tool + ["set", "HISTORY", "on" if on else "off"]),
+                    _t("Gardez plusieurs éléments copiés et retrouvez-les avec Windows + V."))
+        box = self.card()
+        self.row(box, _t("Effacer les données du presse-papiers"), None,
+                 _t("Efface tout l’historique, sauf les éléments épinglés."))
+        self.actions(box, [(_t("Effacer"), lambda: self.tool(tool + ["clear"]),
+                            state.get("items", "0") != state.get("pinned", "0"))])
+        ocr = ocr_tool()
+        if ocr is None: return
+        result = run(ocr + ["status"])
+        state = keyvals(result.stdout) if result else {}
+        self.section(_t("Copier le texte d’une image"),
+                     _t("Windows + Maj + T encadre une zone de l’écran et copie son texte ; la visionneuse d’images et le clic droit sur une image le proposent aussi."))
+        box = self.card()
+        if state.get("installed") == "1":
+            names = {"fra": _t("français"), "eng": _t("anglais"), "spa": _t("espagnol"), "deu": _t("allemand")}
+            languages = ", ".join(names[code] for code in state.get("languages", "").split(",") if code in names)
+            self.row(box, _t("Reconnaissance de texte installée"), None, languages or None)
+            self.actions(box, [(_t("Retirer"), lambda: self.tool(ocr + ["remove"]))])
+        else:
+            self.row(box, _t("Reconnaissance de texte"), None,
+                     _t("Téléchargée à la première utilisation (environ 15 Mo), en français, anglais, espagnol et allemand."))
+            self.actions(box, [(_t("Télécharger"), lambda: self.tool(ocr + ["install"]))])
+
+    # ── Comptes ──
+
+    def account_action(self, args, password=None):
+        """winlux-control account-* : Contrôle de compte d’utilisateur, puis
+        action en root ; le mot de passe passe par l’entrée standard."""
+        try:
+            process = subprocess.Popen(["winlux-control", *args], stdin=subprocess.PIPE, stdout=subprocess.DEVNULL,
+                                       stderr=subprocess.PIPE, text=True)
+            process.stdin.write((password or "") + "\n")
+            process.stdin.close()
+        except OSError as error:
+            self.show_error(_t("L’opération a échoué"), str(error))
+            return
+
+        def wait():
+            if process.poll() is None: return True
+            if process.returncode:
+                detail = read(RUN / "action.log").strip()[-2000:] or (process.stderr.read() or "").strip()
+                self.show_error(_t("L’opération a échoué"), detail)
+            self.extra_refresh()
+            return False
+        GLib.timeout_add(200, wait)
+
+    def account_dialog(self, title, name_field, admin_field):
+        """Boîte « Ajouter un compte » / « Changer le mot de passe »."""
+        dialog = Gtk.Dialog(title=title, transient_for=self, modal=True)
+        dialog.add_button(_t("Annuler"), Gtk.ResponseType.CANCEL)
+        dialog.add_button(_t("Valider"), Gtk.ResponseType.OK)
+        dialog.set_default_response(Gtk.ResponseType.OK)
+        area = dialog.get_content_area()
+        area.set_spacing(8)
+        area.set_border_width(16)
+        fields = {}
+
+        def entry(key, label, secret=False, hint=None):
+            area.pack_start(Gtk.Label(label=label, xalign=0), False, False, 0)
+            widget = Gtk.Entry(visibility=not secret, activates_default=True)
+            widget.get_accessible().set_name(label)
+            area.pack_start(widget, False, False, 0)
+            if hint: self.hint(hint, area)
+            fields[key] = widget
+        if name_field:
+            entry("name", _t("Nom du compte"), hint=_t("Lettres minuscules, chiffres, - et _ (32 au plus), en commençant par une lettre."))
+            entry("fullname", _t("Nom complet (facultatif)"))
+        entry("password", _t("Mot de passe"), True, _t("Laissez vide pour un compte sans mot de passe."))
+        entry("confirm", _t("Confirmer le mot de passe"), True)
+        if admin_field:
+            check = Gtk.CheckButton(label=_t("Administrateur de ce PC"))
+            area.pack_start(check, False, False, 0)
+            self.hint(_t("Un administrateur installe des logiciels et change les réglages du système ; un compte standard en a besoin pour ces actions."), area)
+            fields["admin"] = check
+        error = Gtk.Label(xalign=0, wrap=True)
+        area.pack_start(error, False, False, 0)
+        dialog.show_all()
+        existing = {account["name"] for account in accounts_module().accounts()}
+        while dialog.run() == Gtk.ResponseType.OK:
+            values = {key: (w.get_active() if isinstance(w, Gtk.CheckButton) else w.get_text()) for key, w in fields.items()}
+            if name_field and not ACCOUNT_NAME.match(values["name"]):
+                error.set_text(_t("Lettres minuscules, chiffres, - et _ (32 au plus), en commençant par une lettre."))
+            elif name_field and values["name"] in existing:
+                error.set_text(_t("Ce nom de compte existe déjà."))
+            elif values["password"] != values["confirm"]:
+                error.set_text(_t("Les deux mots de passe sont différents."))
+            else:
+                dialog.destroy()
+                return values
+        dialog.destroy()
+        return None
+
+    def add_account(self):
+        values = self.account_dialog(_t("Ajouter un compte"), True, True)
+        if values is None: return
+        args = ["account-add", values["name"], "admin" if values["admin"] else "user"]
+        if values["fullname"].strip(): args.append(values["fullname"].strip().replace(":", " "))
+        self.account_action(args, values["password"])
+
+    def change_password(self, name):
+        values = self.account_dialog(_t("Nouveau mot de passe pour {name}").format(name=name), False, False)
+        if values is not None: self.account_action(["account-password", name], values["password"])
+
+    def change_type(self, account):
+        others = [a for a in accounts_module().accounts() if a["admin"] and a["name"] != account["name"]]
+        if account["admin"] and not others:
+            self.show_error(_t("L’opération a échoué"), _t("Il faut garder au moins un compte administrateur."))
+            return
+        self.account_action(["account-role", account["name"], "user" if account["admin"] else "admin"])
+
+    def remove_account(self, account):
+        dialog = Gtk.MessageDialog(transient_for=self, modal=True, buttons=Gtk.ButtonsType.OK_CANCEL,
+                                   text=_t("Supprimer le compte {name} ?").format(name=account["name"]))
+        wipe = Gtk.CheckButton(label=_t("Effacer aussi ses fichiers (Bureau, Documents, Images…)"))
+        dialog.get_message_area().pack_start(wipe, False, False, 0)
+        dialog.show_all()
+        answer = dialog.run()
+        files = "delete" if wipe.get_active() else "keep"
+        dialog.destroy()
+        if answer == Gtk.ResponseType.OK: self.account_action(["account-remove", account["name"], files])
+
+    def page_accounts(self):
+        module = accounts_module()
+        import pwd
+        try: me = pwd.getpwuid(os.getuid()).pw_name
+        except KeyError: me = os.environ.get("USER", "")
+        everyone = module.accounts()
+        open_sessions = set()
+        try: open_sessions = set(os.listdir(RUN / "sessions"))
+        except OSError: pass
+
+        def kind(account):
+            return _t("Administrateur") if account["admin"] else _t("Standard")
+        self.hint(_t("Comptes locaux sur ce PC. Chacun a son bureau, ses fichiers et ses réglages ; « Changer d’utilisateur » dans le menu Démarrer passe de l’un à l’autre sans rien fermer."))
+        mine = next((a for a in everyone if a["name"] == me), None)
+        if mine:
+            self.section(_t("Votre compte"))
+            box = self.card()
+            title = f"{mine['fullname']} ({me})" if mine["fullname"] and mine["fullname"] != me else me
+            self.row(box, title, None, kind(mine))
+            self.actions(box, [(_t("Changer le mot de passe"), lambda: self.change_password(me))])
+        self.section(_t("Autres utilisateurs"))
+        box = self.card()
+        self.row(box, _t("Ajouter un autre utilisateur à ce PC"), None)
+        self.actions(box, [(_t("Ajouter un compte"), self.add_account)])
+        others = [a for a in everyone if a["name"] != me]
+        if not others:
+            self.hint(_t("Aucun autre compte sur ce PC."), box)
+        for account in others:
+            box = self.card()
+            title = f"{account['fullname']} ({account['name']})" if account["fullname"] and account["fullname"] != account["name"] else account["name"]
+            subtitle = kind(account) + (" · " + _t("Session ouverte") if account["name"] in open_sessions else "")
+            self.row(box, title, None, subtitle)
+            self.actions(box, [(_t("Changer le type de compte"), lambda a=account: self.change_type(a)),
+                               (_t("Changer le mot de passe"), lambda n=account["name"]: self.change_password(n)),
+                               (_t("Supprimer"), lambda a=account: self.remove_account(a),
+                                account["name"] not in open_sessions)])
+
+    # ── Écran : éclairage nocturne ──
+
+    def sections_display(self):
+        state = ambiance_status()
+        # Pilote sans rampe gamma (certaines VM) : section masquée.
+        if state.get("supported") != "1": return
+        tool = ambiance_tool()
+        self.section(_t("Éclairage nocturne"), _t("Des couleurs plus chaudes le soir reposent les yeux et aident à s’endormir."))
+        box = self.card()
+        self.switch(box, _t("Activer maintenant"), state.get("nightlight") == "on",
+                    lambda on: self.tool(tool + ["set", "NIGHTLIGHT", "on" if on else "off"], refresh=False))
+        try: strength = int(state.get("strength", "50"))
+        except ValueError: strength = 50
+        scale = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0, 100, 5)
+        scale.set_value(strength)
+        scale.set_size_request(240, -1)
+        scale.set_draw_value(False)
+        pending = {}
+
+        def moved(widget):
+            # Valeur envoyée quand le curseur s’arrête, pas à chaque pixel.
+            if pending.get("id"): GLib.source_remove(pending["id"])
+            def send():
+                pending["id"] = None
+                self.tool(tool + ["set", "STRENGTH", str(int(widget.get_value()))], refresh=False)
+                return False
+            pending["id"] = GLib.timeout_add(250, send)
+        scale.connect("value-changed", moved)
+        self.row(box, _t("Intensité"), scale)
+        sunset, sunrise = state.get("sunset", "20:00"), state.get("sunrise", "07:00")
+        schedule = state.get("schedule") if state.get("schedule") in ("off", "sun", "manual") else "off"
+        self.combo(box, _t("Planifier l’éclairage nocturne"),
+                   [("off", _t("Jamais")),
+                    ("sun", _t("Du coucher au lever du soleil ({sunset} – {sunrise})").format(sunset=sunset, sunrise=sunrise)),
+                    ("manual", _t("Définir les heures"))], schedule,
+                   lambda value: self.tool(tool + ["set", "SCHEDULE", value], refresh=False,
+                                           after=lambda: self.select(self.nav, None)))
+        if schedule == "sun":
+            self.hint(_t("Heures calculées pour votre fuseau horaire, sans connexion à Internet.")
+                      if state.get("sun_known") == "1" else _t("Fuseau horaire sans coordonnées : 20:00 – 07:00 par défaut."), box)
+        if schedule == "manual":
+            for title, key, value in ((_t("Activer à"), "FROM", state.get("from", "21:00")),
+                                      (_t("Désactiver à"), "TO", state.get("to", "07:00"))):
+                entry = Gtk.Entry(text=value, width_chars=6, max_length=5)
+                entry.connect("activate", lambda widget, k=key: self.tool(tool + ["set", k, widget.get_text()], refresh=False))
+                self.row(box, title, entry)
+
     # ── Jeux : bibliothèque, temps de jeu, dossiers de jeux ──
 
     def page_games(self):
@@ -1651,6 +2191,15 @@ class ExtraPages:
                  _t("Conservée : le bouton Restaurer ci-dessus y revient.") if saved else _t("Aucune version précédente conservée."))
         self.row(box, _t("Si le bureau ne démarre plus"), None,
                  _t("Choisissez « Winlux secours » au démarrage, ou démarrez sur la clé USB d’installation. Gardez une copie de vos documents sur un autre support."))
+        if page_available(PAGE_RECOVERY):
+            self.actions(box, [(_t("Réinitialiser ce PC et clé de secours"), lambda: self.open_page(PAGE_RECOVERY))])
+
+    # ── Récupération : réinitialiser ce PC, clé de secours (#283) ──
+
+    def page_recovery(self):
+        module = reset_page()
+        if module is not None:
+            self.recovery_panel = module.RecoveryPanel(self)
 
     # ── Signaler un problème ──
 

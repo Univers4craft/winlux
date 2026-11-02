@@ -155,6 +155,8 @@ _TR = {
     'Fermer': ('Close', 'Cerrar', 'Schließen'),
     'Aperçu indisponible pour ce format.': ('No preview for this format.', 'Vista previa no disponible para este formato.', 'Keine Vorschau für dieses Format.'),
     'Aperçu limité aux premiers 64 Kio.': ('Preview limited to the first 64 KiB.', 'Vista previa limitada a los primeros 64 KiB.', 'Vorschau auf die ersten 64 KiB begrenzt.'),
+    'Éclairage nocturne : activer': ('Night light: turn on', 'Luz nocturna: activar', 'Nachtmodus: einschalten'),
+    'Éclairage nocturne : désactiver': ('Night light: turn off', 'Luz nocturna: desactivar', 'Nachtmodus: ausschalten'),
 }
 
 
@@ -271,8 +273,32 @@ class Tools(Gtk.Window):
             (_t("Alimentation"), ["winlux-shell-app","settings","23"],"winlux-shell-app", True)]:
             if shown:
                 self.button(title, lambda command=args: self.command(command), bool(shutil.which(binary)))
+        self.night_light()
         if wifi:
             self.wifi()
+
+    def night_light(self):
+        """Bouton Éclairage nocturne, masqué si l’écran n’a pas de rampe gamma."""
+        tool = shutil.which("winlux-ambiance")
+        if not tool: return
+        try:
+            result = subprocess.run([tool, "status"], capture_output=True, text=True, timeout=5)
+        except (OSError, subprocess.SubprocessError):
+            return
+        state = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if state.get("supported") != "1": return
+        on = state.get("nightlight") == "on"
+        button = self.button(_t("Éclairage nocturne : désactiver") if on else _t("Éclairage nocturne : activer"), lambda: None)
+
+        def toggled(*_):
+            try:
+                subprocess.run([tool, "toggle"], capture_output=True, timeout=5)
+                again = subprocess.run([tool, "status"], capture_output=True, text=True, timeout=5).stdout
+            except (OSError, subprocess.SubprocessError):
+                return
+            now_on = "nightlight=on" in again.splitlines()
+            button.set_label(_t("Éclairage nocturne : désactiver") if now_on else _t("Éclairage nocturne : activer"))
+        button.connect("clicked", toggled)
 
     def wifi(self):
         self.label(_t("Ethernet est prioritaire quand il est disponible. Le Wi-Fi peut rester configuré et prendre le relais lorsque le câble est débranché. Dans une VM, la connexion apparaît généralement comme Ethernet."))
@@ -577,5 +603,9 @@ if __name__ == "__main__":
     # aussi pour les raccourcis Win+N déjà enregistrés vers cette page.
     if page == "notifications" and shutil.which("winlux-popup") and not os.environ.get("WINLUX_TOOLS_WINDOW"):
         os.execvp("winlux-popup", ["winlux-popup", "notifications"])
+    # Réglages rapides (Win+A) : panneau à tuiles et curseurs façon Windows 11 ;
+    # la liste des réseaux Wi-Fi ci-dessous s'ouvre depuis la flèche de la tuile.
+    if page == "quick" and shutil.which("winlux-popup") and not os.environ.get("WINLUX_TOOLS_WINDOW"):
+        os.execvp("winlux-popup", ["winlux-popup", "quick"])
     Tools(page)
     Gtk.main()

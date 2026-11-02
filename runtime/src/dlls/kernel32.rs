@@ -170,6 +170,24 @@ pub(crate) enum ThreadTarget {
     NotStarted(Arc<ThreadObject>),
 }
 
+/// Identifiant Win32 du thread d'un handle (GetThreadId).
+pub(crate) fn thread_id_of_handle(h: usize) -> Option<u32> {
+    match lookup_sync(h)? {
+        SyncHandle::Thread(t) => {
+            let st = t
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Some(if st.win_tid != 0 {
+                st.win_tid
+            } else {
+                t.os_tid.load(Ordering::Acquire) as u32
+            })
+        }
+        _ => None,
+    }
+}
+
 pub(crate) fn thread_target(h: usize) -> Option<ThreadTarget> {
     if h == get_current_thread() {
         return Some(ThreadTarget::Running(unsafe {
@@ -1534,6 +1552,43 @@ unsafe fn create_file_str(
 ) -> usize {
     if let Some(name) = crate::dlls::named_pipes::pipe_name(path) {
         return crate::dlls::named_pipes::open_client(&name, _flags);
+    }
+    // \\?\hid#vid_…#hidrawN#{…} : un périphérique HID (manette, volant…).
+    if let Some(dev) = crate::dlls::hid::device_path(path) {
+        return match crate::dlls::hid::open(&dev) {
+            Ok(f) => {
+                crate::process::set_last_error(0);
+                let h = insert_file(f);
+                if _flags & 0x4000_0000 != 0 {
+                    mark_overlapped_handle(h);
+                }
+                h
+            }
+            Err(e) => {
+                crate::process::set_last_error(
+                    if e.kind() == std::io::ErrorKind::PermissionDenied {
+                        5
+                    } else {
+                        2
+                    },
+                );
+                usize::MAX
+            }
+        };
+    }
+    // \\.\C: et \\.\PhysicalDriveN : un handle pour DeviceIoControl, posé
+    // sur la racine du lecteur ou l'entrée /sys/block du disque.
+    if let Some(dir) = crate::dlls::devio::device_target(path) {
+        return match std::fs::File::open(&dir) {
+            Ok(f) => {
+                crate::process::set_last_error(0);
+                insert_file(f)
+            }
+            Err(_) => {
+                crate::process::set_last_error(5);
+                usize::MAX
+            }
+        };
     }
     // CONIN$ / CONOUT$ : la console, c'est-à-dire le terminal.
     let device = path.trim_start_matches("\\\\.\\").to_ascii_uppercase();
@@ -3363,11 +3418,25 @@ pub unsafe extern "win64" fn virtual_free(addr: *mut c_void, size: usize, kind: 
     crate::process::set_last_error(87);
     0
 }
+/// PAGE_GUARD, PAGE_NOCACHE et PAGE_WRITECOMBINE modifient une protection
+/// de base ; PAGE_GUARD ne s'applique pas à PAGE_NOACCESS.
+const PAGE_GUARD: u32 = 0x100;
+const PAGE_MODIFIERS: u32 = 0x100 | 0x200 | 0x400;
 fn valid_win_prot(p: u32) -> bool {
-    matches!(p, 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80)
+    p & !(0xFF | PAGE_MODIFIERS) == 0
+        && matches!(
+            p & 0xFF,
+            0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x40 | 0x80
+        )
+        && !(p & 0xFF == 0x01 && p & PAGE_MODIFIERS != 0)
 }
 fn win_prot(p: u32) -> i32 {
-    match p {
+    // Page de garde : inaccessible jusqu'au premier accès, qui lève
+    // STATUS_GUARD_PAGE_VIOLATION et rend la protection de base (seh_hw).
+    if p & PAGE_GUARD != 0 {
+        return libc::PROT_NONE;
+    }
+    match p & 0xFF {
         0x01 => libc::PROT_NONE,
         0x02 => libc::PROT_READ,
         0x04 | 0x08 => libc::PROT_READ | libc::PROT_WRITE,
@@ -3421,6 +3490,71 @@ pub unsafe extern "win64" fn virtual_protect(
     r.protection[first..first + count].fill(prot);
     1
 }
+/// Pour le gestionnaire de fautes (contexte de signal : jamais de verrou
+/// bloquant) : `Some(true)` si `addr` est dans une page VirtualAlloc
+/// exécutable (code d'un JIT), `Some(false)` si elle n'y est pas, `None` si
+/// la table est occupée.
+pub(crate) fn exec_region_try(addr: usize) -> Option<bool> {
+    const PAGE: usize = 4096;
+    let Some(table) = ALLOCS.get() else {
+        return Some(false);
+    };
+    let maps = table.try_lock().ok()?;
+    Some(maps.iter().any(|(&b, r)| {
+        addr >= b
+            && addr < b + r.size
+            && r.committed[(addr - b) / PAGE]
+            && matches!(
+                r.protection[(addr - b) / PAGE] & 0xFF,
+                0x10 | 0x20 | 0x40 | 0x80
+            )
+    }))
+}
+
+/// Page de garde touchée en `addr` : retire PAGE_GUARD de cette page (une
+/// seule levée, comme Windows) et renvoie vrai. Faux si `addr` n'est pas
+/// dans une page de garde VirtualAlloc. Hors contexte de signal.
+pub(crate) fn clear_guard_page(addr: usize) -> bool {
+    const PAGE: usize = 4096;
+    let Some(table) = ALLOCS.get() else {
+        return false;
+    };
+    let mut maps = lock(table);
+    let Some((&base, r)) = maps
+        .iter_mut()
+        .find(|(&b, r)| addr >= b && addr < b + r.size)
+    else {
+        return false;
+    };
+    let index = (addr - base) / PAGE;
+    if !r.committed[index] || r.protection[index] & PAGE_GUARD == 0 {
+        return false;
+    }
+    let prot = r.protection[index] & !PAGE_GUARD;
+    let page = base + index * PAGE;
+    if unsafe { libc::mprotect(page as *mut c_void, PAGE, win_prot(prot)) } != 0 {
+        return false;
+    }
+    r.protection[index] = prot;
+    true
+}
+
+/// Variante sans verrou bloquant de `clear_guard_page`, pour savoir dans le
+/// gestionnaire de signal si la faute vise une page de garde.
+pub(crate) fn is_guard_page_try(addr: usize) -> Option<bool> {
+    const PAGE: usize = 4096;
+    let Some(table) = ALLOCS.get() else {
+        return Some(false);
+    };
+    let maps = table.try_lock().ok()?;
+    Some(maps.iter().any(|(&b, r)| {
+        addr >= b
+            && addr < b + r.size
+            && r.committed[(addr - b) / PAGE]
+            && r.protection[(addr - b) / PAGE] & PAGE_GUARD != 0
+    }))
+}
+
 /// Région Linux (hors VirtualAlloc) qui contient `address` : la pile du
 /// thread courant, décrite comme une pile Windows (AllocationBase au bas de
 /// la réservation, ce que lit coreclr pour borner sa pile), ou une
@@ -4318,6 +4452,12 @@ pub unsafe extern "win64" fn create_pipe(
     *write = insert_file(w);
     1
 }
+fn is_crash_handler(path: &std::path::Path) -> bool {
+    path.file_name()
+        .map(|n| n.to_string_lossy().to_ascii_lowercase())
+        .is_some_and(|n| n == "crashpad_handler.exe")
+}
+
 unsafe fn create_process_common(
     application: Option<String>,
     command_line: *const u8,
@@ -4409,6 +4549,19 @@ unsafe fn create_process_common(
             .extension()
             .is_some_and(|e| e.to_string_lossy().eq_ignore_ascii_case("exe"))
             || (host_path.is_file() && crate::launch::is_windows_program(&host_path)));
+    // Gestionnaire de plantage crashpad (Chromium, Sentry, Warzone 2100…) :
+    // il reçoit des handles hérités et un tube nommé du parent, que Winlux ne
+    // partage pas encore entre processus. Le refuser proprement laisse le
+    // programme continuer sans rapport de plantage, comme s'il était absent.
+    if is_pe && is_crash_handler(&host_path) {
+        crate::log_warn!(
+            "process",
+            "{} : gestionnaire de plantage non lancé (handles hérités non pris en charge)",
+            host_path.display()
+        );
+        crate::process::set_last_error(2);
+        return 0;
+    }
     let suspended = creation_flags & 4 != 0;
     let mut target = Vec::<std::ffi::OsString>::new();
     if is_pe {
@@ -4844,6 +4997,11 @@ pub fn handle_to_fd(h: usize) -> i32 {
     }
 }
 pub extern "win64" fn close_handle(handle: usize) -> i32 {
+    // Pseudo-handles (processus -1, thread -2, jetons -4 à -6) : fermer ne
+    // fait rien et réussit, comme sous Windows (crashpad de Warzone 2100).
+    if matches!(handle as isize, -6..=-1) {
+        return 1;
+    }
     if matches!(handle, STD_INPUT_REAL | STD_OUTPUT_REAL | STD_ERROR_REAL) {
         // Fermer un handle standard ne ferme pas le terminal de Winlux.
         return 1;
@@ -6252,7 +6410,7 @@ pub extern "win64" fn sleep_condition_variable_srw(
         },
     );
     if timed_out {
-        crate::process::set_last_error(258);
+        crate::process::set_last_error(1460); // ERROR_TIMEOUT (libc++ le teste)
         0
     } else {
         1
@@ -6266,7 +6424,7 @@ pub extern "win64" fn sleep_condition_variable_cs(cv: usize, cs: usize, ms: u32)
         || unsafe { enter_critical_section(cs as *mut c_void) },
     );
     if timed_out {
-        crate::process::set_last_error(258);
+        crate::process::set_last_error(1460); // ERROR_TIMEOUT (libc++ le teste)
         0
     } else {
         1

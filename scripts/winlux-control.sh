@@ -556,6 +556,8 @@ perform() {
         # Le dossier à partager est le dossier courant (fixé par l'Explorateur).
         share-*) shift; winlux-share "${action#share-}" "$@" ;;
         transfer-*) shift; winlux-transfer "${action#transfer-}" "$@" ;;
+        # Comptes locaux (Paramètres › Comptes) ; mot de passe sur l'entrée standard.
+        account-add|account-password|account-role|account-remove) shift; winlux-accounts "${action#account-}" "$@" ;;
         *) echo "Action inconnue : $action" >&2; return 1 ;;
     esac
 }

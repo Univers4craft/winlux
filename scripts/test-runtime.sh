@@ -43,7 +43,7 @@ cat >/dev/null
 HELPER
 chmod 755 "$notify_helper"
 
-for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths uac_suite crt_suite gui_suite gui_demo explorer_regression voicerecorder power_api audio_suite d3d_suite print_suite; do
+for name in hello exitcode p1_suite dll_import delay_import findfiles winpaths uac_suite crt_suite gui_suite controls_suite comctl_suite commdlg_suite gui_demo explorer_regression voicerecorder power_api audio_suite d3d_suite gl_vk_suite print_suite; do
     exe="$testdir/$name.exe"
     test -f "$exe" || { echo "exécutable absent : $exe" >&2; exit 1; }
     printf '\n== %s ==\n' "$name"

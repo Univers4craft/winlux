@@ -61,7 +61,15 @@ def wait_for(predicate, label):
 def capture(name):
     destination = Path("/var/lib/winlux") / (name + ".xwd")
     destination.parent.mkdir(parents=True, exist_ok=True)
-    run("xwd", "-root", "-silent", "-out", str(destination))
+    # xwd lit les attributs de chaque fenêtre : une fenêtre qui se ferme
+    # pendant la capture le fait échouer (BadWindow, vu au tag v0.2.14).
+    for attempt in range(3):
+        try:
+            run("xwd", "-root", "-silent", "-out", str(destination))
+            break
+        except subprocess.CalledProcessError as error:
+            if attempt == 2 or "BadWindow" not in (error.output or ""): raise
+            time.sleep(0.3)
     return destination.read_bytes()
 
 def client_ids():
@@ -177,8 +185,21 @@ def snap(key, predicate, label):
             print(f"{label}: {windows().get(terminal)}, nouvel essai", flush=True)
     raise AssertionError(label)
 
-snap("super+Left", lambda: abs(windows()[terminal][0][0]) < 32 and abs(windows()[terminal][0][2] - 960) < 32, "snap left")
+def left_half():
+    return abs(windows()[terminal][0][0]) < 32 and abs(windows()[terminal][0][2] - 960) < 32
+
+def close_assist():
+    # L'Assistant d'ancrage (winlux-snap) propose une fenêtre pour l'autre moitié : Échap le ferme.
+    time.sleep(0.5)
+    run("xdotool", "key", "Escape")
+
+# Comme Windows 11 (winlux-snap) : ← moitié gauche, → depuis la moitié gauche
+# rend la taille d'avant, → encore moitié droite.
+snap("super+Left", left_half, "snap left")
+close_assist()
+snap("super+Right", lambda: not left_half(), "snap restore")
 snap("super+Right", lambda: abs(windows()[terminal][0][0] - 960) < 32 and abs(windows()[terminal][0][2] - 960) < 32, "snap right")
+close_assist()
 print("WINLUX_NATIVE_WINDOW_SNAPPING=0", flush=True)
 
 # End-to-end geometry acknowledgement latency. This includes subprocess and

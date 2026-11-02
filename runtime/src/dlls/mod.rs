@@ -10,10 +10,14 @@ pub mod bcrypt;
 pub mod clipboard;
 pub mod comctl32;
 pub mod comdlg32;
+pub mod comdlg32_files;
+pub mod comdlg32_ui;
 pub mod comobj;
 pub mod console_input;
+pub mod controls;
 pub mod credentials;
 pub mod crt;
+pub mod crt_extra;
 pub mod crt_runtime;
 pub mod crt_scan;
 pub mod crt_stdio;
@@ -29,6 +33,8 @@ pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod dataobject;
 pub mod dbghelp;
+pub mod devio;
+pub mod dialogs;
 pub mod dinput8;
 pub mod dsound;
 pub mod dwmapi;
@@ -37,6 +43,7 @@ pub mod dxgi;
 pub mod dxva2;
 pub mod evdev;
 pub mod eventing;
+pub mod games_win32;
 pub mod gdi32;
 pub mod gdi32_ext;
 pub mod gdi32_fonts;
@@ -46,6 +53,9 @@ pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod hid;
+pub mod hostcall;
+pub mod imm32;
 pub mod iphlpapi;
 pub mod ipp;
 pub mod kernel32;
@@ -57,6 +67,7 @@ pub mod kernel32_node;
 pub mod knownfolders;
 pub mod libgcc;
 pub mod libstdcpp;
+pub mod menus;
 pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
@@ -71,6 +82,7 @@ pub mod ntdll;
 pub mod ntdll_file;
 pub mod ole32;
 pub mod oleaut32;
+pub mod opengl32;
 pub mod powrprof;
 pub mod print_pdf;
 pub mod propsys;
@@ -79,8 +91,10 @@ pub mod resource;
 pub mod rpcrt4;
 pub mod sandbox_dlls;
 pub mod sechost;
+pub mod secur32;
 pub mod security;
 pub mod seh;
+pub mod seh_hw;
 pub mod setupapi;
 pub mod sfnt;
 pub mod shell32;
@@ -98,6 +112,8 @@ pub mod va_bindings;
 pub mod version;
 pub mod vk_backend;
 pub mod vk_bindings;
+pub mod vulkan1;
+pub mod win32_basics;
 pub mod windowscodecs;
 pub mod winfile;
 pub mod winhttp;
@@ -159,6 +175,7 @@ fn builtins() -> &'static Vec<Builtin> {
             e.extend(crt_ucrt::exports());
             e.extend(cxx_eh::exports());
             e.extend(crate::intl::api::crt_exports());
+            e.extend(crt_extra::exports());
             e
         };
         let mut ucrt = crt.clone();
@@ -170,7 +187,8 @@ fn builtins() -> &'static Vec<Builtin> {
         ucrt.extend(crt_ucrt::exports());
         ucrt.extend(cxx_eh::exports());
         ucrt.extend(crate::intl::api::crt_exports());
-        vec![
+        ucrt.extend(crt_extra::exports());
+        let mut all = vec![
             Builtin {
                 name: "kernel32",
                 exports: {
@@ -327,6 +345,7 @@ fn builtins() -> &'static Vec<Builtin> {
                     e.extend(gdi32_ext::exports());
                     e.extend(gdi32_fonts::exports());
                     e.extend(winspool::gdi_exports());
+                    e.extend(opengl32::gdi32_exports());
                     e
                 },
                 handle: fake_module(),
@@ -451,6 +470,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "hid",
+                exports: hid::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "setupapi",
                 exports: setupapi::exports(),
                 handle: fake_module(),
@@ -559,8 +583,86 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: libstdcpp::exports(),
                 handle: fake_module(),
             },
-        ]
+            Builtin {
+                name: "imm32",
+                exports: imm32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "secur32",
+                exports: secur32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "opengl32",
+                exports: opengl32::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "vulkan-1",
+                exports: vulkan1::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
+                name: "dnsapi",
+                exports: games_win32::dnsapi_exports(),
+                handle: fake_module(),
+            },
+        ];
+        add_basics(&mut all);
+        all
     })
+}
+
+/// Fonctions de base (win32_basics) : elles complètent chaque DLL sans
+/// jamais remplacer une fonction que la DLL fournit déjà.
+fn add_basics(all: &mut [Builtin]) {
+    let extra: [(&str, Exports); 9] = [
+        ("kernel32", win32_basics::kernel32_exports()),
+        ("user32", win32_basics::user32_exports()),
+        ("gdi32", win32_basics::gdi32_exports()),
+        ("shell32", win32_basics::shell32_exports()),
+        ("winmm", win32_basics::winmm_exports()),
+        ("ws2_32", win32_basics::ws2_32_exports()),
+        ("comctl32", win32_basics::comctl32_exports()),
+        ("ucrtbase", win32_basics::crt_exports()),
+        ("msvcrt", win32_basics::crt_exports()),
+    ];
+    // Fonctions relevées sur de vrais jeux (games_win32), elles aussi en complément.
+    let games: [(&str, Exports); 15] = [
+        ("hid", games_win32::hid_exports()),
+        ("kernel32", games_win32::kernel32_exports()),
+        ("user32", games_win32::user32_exports()),
+        ("gdi32", games_win32::gdi32_exports()),
+        ("setupapi", games_win32::setupapi_exports()),
+        ("advapi32", games_win32::advapi32_exports()),
+        ("crypt32", games_win32::crypt32_exports()),
+        ("ws2_32", games_win32::ws2_32_exports()),
+        ("dbghelp", games_win32::dbghelp_exports()),
+        ("shlwapi", games_win32::shlwapi_exports()),
+        ("shell32", games_win32::shell32_exports()),
+        ("iphlpapi", games_win32::iphlpapi_exports()),
+        ("winhttp", games_win32::winhttp_exports()),
+        ("powrprof", games_win32::powrprof_exports()),
+        ("rpcrt4", games_win32::rpcrt4_exports()),
+    ];
+    for (dll, exports) in extra.into_iter().chain(games) {
+        if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
+            for (name, addr) in exports {
+                b.exports.entry(name).or_insert(addr);
+            }
+        }
+    }
+    // Versions réelles qui remplacent d'anciens exports vides.
+    if let Some(b) = all.iter_mut().find(|b| b.name == "user32") {
+        for (name, addr) in controls::user32_overrides()
+            .into_iter()
+            .chain(dialogs::user32_overrides())
+            .chain(menus::user32_overrides())
+        {
+            b.exports.insert(name, addr);
+        }
+    }
 }
 
 /// Nom de DLL normalisé : minuscules, sans « .dll », avec les alias connus
@@ -572,9 +674,17 @@ pub fn normalize(dll: &str) -> String {
     if base.starts_with("api-ms-win-crt-") || base == "vcruntime140" || base == "vcruntime140_1" {
         return "ucrtbase".into();
     }
+    // sspicli porte l'interface SSPI de secur32 depuis Windows 7.
+    if base == "sspicli" {
+        return "secur32".into();
+    }
     // wsock32 (Winsock 1.1) fait suivre ses fonctions vers ws2_32.
     if base == "wsock32" {
         return "ws2_32".into();
+    }
+    // Gestionnaire de configuration Plug and Play (CM_*) : servi par setupapi.
+    if base == "cfgmgr32" || base.starts_with("api-ms-win-devices-config-") {
+        return "setupapi".into();
     }
     if base.starts_with("api-ms-win-core-com-l1-") {
         return "ole32".into();
@@ -709,6 +819,11 @@ pub fn lookup(normalized: &str, func: &str) -> Option<usize> {
     let r = b.exports.get(func).copied();
     // Les API « A/W » d'api-ms-win-core peuvent aussi vivre dans ntdll (Rtl*).
     r.or_else(|| {
+        // ntdll exporte aussi une partie de la CRT (memcpy, _snprintf,
+        // __C_specific_handler…).
+        if normalized == "ntdll" {
+            return lookup("msvcrt", func);
+        }
         if normalized == "kernel32" {
             // KernelBase exporte aussi les Reg* (api-ms-win-core-registry).
             lookup("ntdll", func).or_else(|| {
@@ -907,6 +1022,11 @@ mod tests {
         assert!(lookup(
             &normalize("api-ms-win-security-base-l1-1-0.dll"),
             "SetSecurityDescriptorDacl"
+        )
+        .is_some());
+        assert!(lookup(
+            &normalize("api-ms-win-security-base-l1-1-0.dll"),
+            "AccessCheckByTypeResultList"
         )
         .is_none());
         assert_eq!(

@@ -23,6 +23,9 @@ use crate::locale::*;
 use crate::wm::{self, Frame, Gfx, Mouse};
 use winlux_testexe::*;
 
+#[path = "explorer_copy.rs"]
+mod copy;
+
 pub const CUSTOM_TITLE: bool = true;
 
 const MAX_ENTRIES: usize = 1024;
@@ -1155,33 +1158,8 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
             || ends_ci(&path[..n], b".log"))
     {
         crate::notepad::open_new();
-        use winlux_testexe::*;
-        let mut wide = [0u16; PATH_LEN + NAME_LEN + 2];
-        wstr(&mut wide, &path[..n]);
-        let h = CreateFileW(
-            wide.as_ptr(),
-            0x80000000,
-            1,
-            core::ptr::null_mut(),
-            3,
-            0,
-            core::ptr::null_mut(),
-        );
-        if !h.is_null() && (h as isize) != -1 {
-            let mut buf = [0u8; 32768];
-            let mut got = 0u32;
-            ReadFile(
-                h,
-                buf.as_mut_ptr(),
-                buf.len() as u32,
-                &mut got,
-                core::ptr::null_mut(),
-            );
-            CloseHandle(h);
-            unsafe {
-                crate::notepad::load_into_active(&buf[..got as usize], &path[..n]);
-            }
-        }
+        // Fichier entier (#209 : 32 Ko au plus avant, la fin était perdue).
+        crate::notepad::load_file_into_active(&path[..n]);
         wm::open(wm::APP_NOTEPAD);
         return;
     }
@@ -1230,6 +1208,55 @@ unsafe fn open_with(path: &[u8]) {
     );
     if (r as isize) <= 32 {
         notify(tr4(&[b"Aucune application ne sait ouvrir ce fichier.", b"No app can open this file.", b"Ninguna aplicaci\xF3n puede abrir este archivo.", b"Keine App kann diese Datei \xF6ffnen."]));
+    }
+}
+
+/// « Renommer plusieurs fichiers… » : l'outil natif `winlux-rename` reçoit les
+/// chemins sélectionnés (le runtime les traduit en chemins Linux).
+static mut BULK_LINE: [u16; 32768] = [0; 32768];
+unsafe fn bulk_rename(p: &Pane) {
+    let line = &mut *core::ptr::addr_of_mut!(BULK_LINE);
+    let mut n = 0;
+    for v in 0..p.nview {
+        let i = p.view[v] as usize;
+        if !is_sel(p, i) {
+            continue;
+        }
+        let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
+        let len = item_path(p, i, &mut b);
+        if len == 0 || n + len + 4 >= line.len() {
+            continue;
+        }
+        if n > 0 {
+            line[n] = b' ' as u16;
+            n += 1;
+        }
+        line[n] = b'"' as u16;
+        n += 1;
+        for &c in &b[..len] {
+            line[n] = c as u16;
+            n += 1;
+        }
+        line[n] = b'"' as u16;
+        n += 1;
+    }
+    if n == 0 {
+        return;
+    }
+    line[n] = 0;
+    let mut wprogram = [0u16; PATH_LEN + NAME_LEN + 2];
+    let program = wstr(&mut wprogram, b"winlux-rename");
+    let wopen: [u16; 5] = [b'o' as u16, b'p' as u16, b'e' as u16, b'n' as u16, 0];
+    let r = ShellExecuteW(
+        core::ptr::null_mut(),
+        wopen.as_ptr(),
+        program,
+        line.as_ptr(),
+        core::ptr::null(),
+        1,
+    );
+    if (r as isize) <= 32 {
+        notify(tr4(&[b"Impossible d'ouvrir le renommage.", b"Could not open the rename tool.", b"No se pudo abrir la herramienta de cambio de nombre.", b"Das Umbenennen konnte nicht ge\xF6ffnet werden."]));
     }
 }
 
@@ -1867,14 +1894,21 @@ fn command_rects(g: &Geo) -> [Rect; 11] {
 
 /// Bouton « Extraire tout » de la barre de commandes, comme dans Windows 11
 /// quand on se trouve dans une archive (aligné à droite).
+/// Bouton contextuel à droite de la barre de commandes : « Extraire tout »
+/// dans une archive, « Vider la Corbeille » dans la Corbeille (#10).
 unsafe fn extract_rect(g: &Geo) -> Option<Rect> {
     let loc = pane().loc.get();
-    archive_of(loc)?;
+    if loc != TRASH {
+        archive_of(loc)?;
+    }
     let w = 30 + text_width(extract_label(), 13);
     Some(rect(g.command.right - 10 - w, g.command.top + 7, g.command.right - 10, g.command.top + 39))
 }
 
 fn extract_label() -> &'static [u8] {
+    if unsafe { pane().loc.is(TRASH) } {
+        return tr(S_EMPTY_TRASH);
+    }
     t4([b"Extraire tout", b"Extract all", b"Extraer todo", b"Alle extrahieren"])
 }
 
@@ -2051,7 +2085,8 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 4, p.hover);
         }
         set_glyph_bg(Some(if hovered(&r) { p.hover } else { p.window }));
-        glyph(g.hdc, g.b, g.f, Glyph::Archive, r.left + 8, r.top + 8, 16);
+        let gl = if pn.loc.is(TRASH) { Glyph::Trash } else { Glyph::Archive };
+        glyph(g.hdc, g.b, g.f, gl, r.left + 8, r.top + 8, 16);
         set_glyph_bg(None);
         text(g.hdc, g.f.caption, p.text, r.left + 30, r.top + 9, extract_label());
     }
@@ -2851,6 +2886,8 @@ enum Item {
     ConnectNet,
     Share,
     Restore,
+    EmptyTrash,
+    BulkRename,
 }
 
 fn item_label(i: Item) -> &'static [u8] {
@@ -2890,6 +2927,7 @@ fn item_label(i: Item) -> &'static [u8] {
         Item::Rename => tr(S_RENAME),
         Item::Delete => tr(S_DELETE),
         Item::Restore => tr4(&[b"Restaurer", b"Restore", b"Restaurar", b"Wiederherstellen"]),
+        Item::EmptyTrash => tr(S_EMPTY_TRASH),
         Item::Refresh => tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
         Item::Terminal => tr4(&[b"Ouvrir dans le terminal", b"Open in terminal", b"Abrir en el terminal", b"Im Terminal \xF6ffnen"]),
         Item::CopyPath => tr4(&[b"Copier le chemin d'acc\xE8s", b"Copy as path", b"Copiar como ruta de acceso", b"Als Pfad kopieren"]),
@@ -2939,6 +2977,12 @@ fn item_label(i: Item) -> &'static [u8] {
             b"Compress to ZIP with password...",
             b"Comprimir en ZIP con contrase\xF1a...",
             b"In ZIP mit Kennwort komprimieren...",
+        ]),
+        Item::BulkRename => t4([
+            b"Renommer plusieurs fichiers...",
+            b"Rename multiple files...",
+            b"Cambiar el nombre de varios archivos...",
+            b"Mehrere Dateien umbenennen...",
         ]),
         Item::Share => t4([
             b"Partager ce dossier...",
@@ -3015,6 +3059,7 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::Paste,
             Item::Sep,
             Item::Rename,
+            Item::BulkRename,
             Item::Delete,
             Item::Sep,
             Item::CopyPath,
@@ -3026,6 +3071,8 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::CompressZipPw,
         ],
         Menu::Context { .. } => &[
+            Item::EmptyTrash,
+            Item::Sep,
             Item::View(View::Large),
             Item::View(View::Details),
             Item::Sep,
@@ -3067,6 +3114,15 @@ unsafe fn menu_items(out: &mut [Item; MENU_MAX]) -> usize {
             Item::CompressTarGz => !in_pc && !in_home && formats & 8 != 0,
             Item::ConnectNet => in_pc,
             Item::Restore => p.loc.is(TRASH),
+            Item::EmptyTrash => p.loc.is(TRASH) && p.count > 0,
+            // Plusieurs éléments d'un vrai dossier, et l'outil natif présent.
+            Item::BulkRename => {
+                sel_count(p) >= 2
+                    && !in_pc
+                    && !in_home
+                    && !p.loc.is(TRASH)
+                    && GetFileAttributesA(c"Z:\\usr\\bin\\winlux-rename".as_ptr()) != u32::MAX
+            }
             // Fichier seulement : programmes Linux et Windows qui savent l'ouvrir.
             Item::OpenWith => !in_pc && first_sel(p).is_some_and(|i| !p.entries[i].dir),
             // Dossier seulement, et seulement si le partage existe (Samba).
@@ -3205,9 +3261,10 @@ unsafe fn draw_menu(g: &mut Gfx, geo: &Geo, f: &Frame) {
             Item::Cut => Some(Glyph::Cut),
             Item::Copy => Some(Glyph::Copy),
             Item::Paste => Some(Glyph::Paste),
-            Item::Rename => Some(Glyph::Rename),
+            Item::Rename | Item::BulkRename => Some(Glyph::Rename),
             Item::Delete => Some(Glyph::Delete),
             Item::Refresh | Item::Restore => Some(Glyph::Refresh),
+            Item::EmptyTrash => Some(Glyph::Trash),
             Item::NewFolder => Some(Glyph::Folder),
             Item::NewText => Some(Glyph::Text),
             Item::Terminal => Some(Glyph::Terminal),
@@ -3821,93 +3878,38 @@ unsafe fn paste() {
     if NCLIP == 0 {
         return;
     }
-    let mut failed = 0;
-    let mut sources_kept = 0;
-    let mut clip_remaining = 0;
-    for k in 0..NCLIP {
-        let src = CLIP[k];
-        if CLIP_CUT {
-            if let Some(source_dir) = parent(src.get()) {
-                if let (Some(a), Some(b)) =
-                    (canonical_path(source_dir), canonical_path(p.loc.get()))
-                {
-                    // Couper puis coller au même endroit ne doit ni renommer
-                    // la source en « (2) » ni la recopier.
-                    if cmp_ci(a.get(), b.get()).is_eq() {
-                        continue;
-                    }
-                }
-            }
-        }
-        if !safe_destination(src.get(), p.loc.get()) {
-            failed += 1;
-            if CLIP_CUT {
-                CLIP[clip_remaining] = src;
-                clip_remaining += 1;
-            }
-            continue;
-        }
-        let name = last_component(src.get());
-        let (base, ext) = match name.iter().rposition(|&c| c == b'.') {
-            Some(i) if i > 0 => (&name[..i], &name[i..]),
-            _ => (name, &b""[..]),
-        };
-        let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
-        let mut direct = [0u8; PATH_LEN + NAME_LEN + 2];
-        let dn = join(&mut direct, p.loc.get(), name);
-        if dn == 0 {
-            failed += 1;
-            if CLIP_CUT {
-                CLIP[clip_remaining] = src;
-                clip_remaining += 1;
-            }
-            continue;
-        }
-        let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
-        let n = if GetFileAttributesW(wstr(&mut wd, &direct[..dn])) == u32::MAX {
-            dst[..dn + 1].copy_from_slice(&direct[..dn + 1]);
-            dn
-        } else {
-            unique_name(p.loc.get(), base, ext, &mut dst)
-        };
-        if n == 0 {
-            failed += 1;
-            if CLIP_CUT {
-                CLIP[clip_remaining] = src;
-                clip_remaining += 1;
-            }
-            continue;
-        }
-        let mut wsrc_b = [0u16; PATH_LEN + NAME_LEN + 2];
-        let mut wdst_b = [0u16; PATH_LEN + NAME_LEN + 2];
-        let moved =
-            CLIP_CUT && MoveFileW(wstr(&mut wsrc_b, src.get()), wstr(&mut wdst_b, &dst[..n])) != 0;
-        let ok = moved || copy_tree(src.get(), &dst[..n]);
-        if !ok {
-            failed += 1;
-        }
-        if CLIP_CUT && !moved {
-            CLIP[clip_remaining] = src;
-            clip_remaining += 1;
-            if ok {
-                sources_kept += 1;
-            }
-        }
+    let srcs = CLIP;
+    let dest = p.loc;
+    // Copie de fond (#11) ; noms déjà présents : boîte « Remplacer ou ignorer ».
+    let out = copy::transfer(&srcs[..NCLIP], dest.get(), CLIP_CUT, copy::Mode::Ask, true);
+    if out.asked {
+        return;
     }
     if CLIP_CUT {
-        NCLIP = clip_remaining;
-        if NCLIP == 0 && !DROPPING && OpenClipboard(core::ptr::null_mut()) != 0 {
-            // Comme Windows : après un couper-coller, le presse-papiers est vidé.
-            EmptyClipboard();
-            CloseClipboard();
-            CLIP_SEQ = GetClipboardSequenceNumber();
-        }
+        after_cut_paste(out.failed);
     }
-    reload(p);
+    after_transfer(out);
+}
+
+/// Après un couper-coller : comme Windows, le presse-papiers est vidé.
+/// En cas d'échec il reste rempli pour pouvoir réessayer.
+unsafe fn after_cut_paste(failed: u32) {
     if failed > 0 {
+        return;
+    }
+    NCLIP = 0;
+    if !DROPPING && OpenClipboard(core::ptr::null_mut()) != 0 {
+        EmptyClipboard();
+        CloseClipboard();
+        CLIP_SEQ = GetClipboardSequenceNumber();
+    }
+}
+
+/// Rafraîchit les volets et signale les éléments refusés.
+unsafe fn after_transfer(out: copy::Outcome) {
+    reload(pane());
+    if out.failed > 0 {
         notify(tr4(&[b"Collage refus\xE9 ou incomplet : chemin trop long, cycle ou droits. Sources conserv\xE9es.", b"Paste refused or incomplete: path too long, loop or rights. Sources kept.", b"Pegado rechazado o incompleto: ruta demasiado larga, ciclo o permisos. Se conservan los originales.", b"Einf\xFCgen abgelehnt oder unvollst\xE4ndig: Pfad zu lang, Schleife oder Rechte. Quellen bleiben erhalten."]));
-    } else if sources_kept > 0 {
-        notify(tr4(&[b"Copie termin\xE9e. D\xE9placement indisponible : sources conserv\xE9es.", b"Copy finished. Move unavailable: sources kept.", b"Copia terminada. No se puede mover: se conservan los originales.", b"Kopieren abgeschlossen. Verschieben nicht m\xF6glich: Quellen bleiben erhalten."]));
     }
     // L'autre volet affiche peut-être le dossier source ou cible.
     let t = tab();
@@ -3915,6 +3917,12 @@ unsafe fn paste() {
         let other = &mut t.panes[1 - t.focus];
         reload(other);
     }
+}
+
+/// Copies de fond lancées depuis le bureau pendant que l'Explorateur est
+/// fermé ou réduit : elles doivent quand même se terminer proprement.
+pub unsafe fn background_tick() -> bool {
+    copy::busy() && copy::tick()
 }
 
 // ---------- Drag & drop de fichiers ----------
@@ -3935,6 +3943,8 @@ pub unsafe fn drop_files_to(dest: &[u8], do_copy: bool) {
         return;
     }
     let mut failed = 0u32;
+    let mut srcs = [EMPTY_PATH; CLIP_MAX];
+    let mut n = 0;
     for v in 0..p.nview {
         let i = p.view[v] as usize;
         if !is_sel(p, i) {
@@ -3942,47 +3952,19 @@ pub unsafe fn drop_files_to(dest: &[u8], do_copy: bool) {
         }
         let mut src = [0u8; PATH_LEN + NAME_LEN + 2];
         let sn = item_path(p, i, &mut src);
-        if sn == 0 {
+        if sn == 0 || n == CLIP_MAX || !srcs[n].set(&src[..sn]) {
             failed += 1;
             continue;
         }
-        if !safe_destination(&src[..sn], dest) {
-            failed += 1;
-            continue;
-        }
-        let name = p.entries[i].name();
-        let (base, ext) = match name.iter().rposition(|&c| c == b'.') {
-            Some(k) if k > 0 => (&name[..k], &name[k..]),
-            _ => (name, &b""[..]),
-        };
-        let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
-        let mut direct = [0u8; PATH_LEN + NAME_LEN + 2];
-        let dn = join(&mut direct, dest, name);
-        if dn == 0 {
-            failed += 1;
-            continue;
-        }
-        let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
-        let n = if GetFileAttributesW(wstr(&mut wd, &direct[..dn])) == u32::MAX {
-            dst[..dn + 1].copy_from_slice(&direct[..dn + 1]);
-            dn
-        } else {
-            unique_name(dest, base, ext, &mut dst)
-        };
-        if n == 0 {
-            failed += 1;
-            continue;
-        }
-        let mut wsrc_b = [0u16; PATH_LEN + NAME_LEN + 2];
-        let mut wdst_b = [0u16; PATH_LEN + NAME_LEN + 2];
-        let moved =
-            !do_copy && MoveFileW(wstr(&mut wsrc_b, &src[..sn]), wstr(&mut wdst_b, &dst[..n])) != 0;
-        let ok = moved || copy_tree(&src[..sn], &dst[..n]);
-        if !ok {
-            failed += 1;
-        }
+        n += 1;
     }
-    if failed > 0 {
+    let mut out = copy::transfer(&srcs[..n], dest, !do_copy, copy::Mode::Ask, false);
+    cancel_file_drag();
+    if out.asked {
+        return;
+    }
+    out.failed += failed;
+    if out.failed > 0 {
         notify(if do_copy {
             tr4(&[b"Certains fichiers n'ont pas pu \xEAtre copi\xE9s.", b"Some files couldn't be copied.", b"Algunos archivos no se pudieron copiar.", b"Einige Dateien konnten nicht kopiert werden."])
         } else {
@@ -3995,56 +3977,20 @@ pub unsafe fn drop_files_to(dest: &[u8], do_copy: bool) {
         let other = &mut t.panes[1 - t.focus];
         reload(other);
     }
-    cancel_file_drag();
 }
 
 pub unsafe fn paste_to(dest: &[u8]) {
     if NCLIP == 0 {
         return;
     }
-    let mut failed = 0u32;
-    for k in 0..NCLIP {
-        let src = CLIP[k];
-        if !safe_destination(src.get(), dest) {
-            failed += 1;
-            continue;
-        }
-        let name = last_component(src.get());
-        let (base, ext) = match name.iter().rposition(|&c| c == b'.') {
-            Some(i) if i > 0 => (&name[..i], &name[i..]),
-            _ => (name, &b""[..]),
-        };
-        let mut dst = [0u8; PATH_LEN + NAME_LEN + 2];
-        let mut direct = [0u8; PATH_LEN + NAME_LEN + 2];
-        let dn = join(&mut direct, dest, name);
-        if dn == 0 {
-            failed += 1;
-            continue;
-        }
-        let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
-        let n = if GetFileAttributesW(wstr(&mut wd, &direct[..dn])) == u32::MAX {
-            dst[..dn + 1].copy_from_slice(&direct[..dn + 1]);
-            dn
-        } else {
-            unique_name(dest, base, ext, &mut dst)
-        };
-        if n == 0 {
-            failed += 1;
-            continue;
-        }
-        let mut wsrc_b = [0u16; PATH_LEN + NAME_LEN + 2];
-        let mut wdst_b = [0u16; PATH_LEN + NAME_LEN + 2];
-        let moved =
-            CLIP_CUT && MoveFileW(wstr(&mut wsrc_b, src.get()), wstr(&mut wdst_b, &dst[..n])) != 0;
-        let ok = moved || copy_tree(src.get(), &dst[..n]);
-        if !ok {
-            failed += 1;
-        }
-    }
+    let srcs = CLIP;
+    // Collage sur le bureau : l'Explorateur est peut-être caché, pas de
+    // boîte de conflit, les doublons deviennent « nom (2) » comme avant.
+    let out = copy::transfer(&srcs[..NCLIP], dest, CLIP_CUT, copy::Mode::KeepBoth, true);
     if CLIP_CUT {
-        NCLIP = 0;
+        after_cut_paste(out.failed);
     }
-    if failed > 0 {
+    if out.failed > 0 {
         notify(tr4(&[b"Collage refus\xE9 ou incomplet.", b"Paste refused or incomplete.", b"Pegado rechazado o incompleto.", b"Einf\xFCgen abgelehnt oder unvollst\xE4ndig."]));
     }
 }
@@ -4738,16 +4684,16 @@ unsafe fn run_item(it: Item, geo: &Geo) {
             }
         }
         Item::Delete => delete_selection(),
+        Item::BulkRename => bulk_rename(p),
         Item::Restore => restore_selection(),
+        Item::EmptyTrash => copy::ask_empty_trash(),
         Item::Refresh => reload(p),
         Item::Terminal => open_terminal(),
         Item::CopyPath => {
             if let Some(i) = first_sel(p) {
                 let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
                 let n = item_path(p, i, &mut b);
-                ADDRESS.set(&b[..n]);
-                notify(tr4(&[b"Chemin affich\xE9 dans la barre d'adresse.", b"Path shown in the address bar.", b"Ruta mostrada en la barra de direcciones.", b"Pfad in der Adressleiste angezeigt."]));
-                FOCUS = Focus::Address;
+                copy_as_path(&b[..n]);
             }
         }
         Item::ExtractAll | Item::ExtractHere | Item::Mount => {
@@ -5562,6 +5508,33 @@ fn password_buttons(r: &Rect) -> (Rect, Rect) {
     (ok, cancel)
 }
 
+/// « Copier le chemin d'accès » : comme Windows, le chemin entre guillemets
+/// va dans le presse-papiers (#209 : il n'allait que dans la barre d'adresse).
+unsafe fn copy_as_path(path: &[u8]) -> bool {
+    if path.is_empty() {
+        return false;
+    }
+    let mut q = [0u8; PATH_LEN + NAME_LEN + 4];
+    q[0] = b'"';
+    q[1..path.len() + 1].copy_from_slice(path);
+    q[path.len() + 1] = b'"';
+    let ok = crate::cliphist::set_text(&q[..path.len() + 2]);
+    notify(if ok {
+        tr4(&[b"Chemin copi\xE9 dans le presse-papiers.", b"Path copied to the clipboard.", b"Ruta copiada en el portapapeles.", b"Pfad in die Zwischenablage kopiert."])
+    } else {
+        tr4(&[b"Impossible de copier le chemin.", b"Couldn't copy the path.", b"No se pudo copiar la ruta.", b"Pfad konnte nicht kopiert werden."])
+    });
+    ok
+}
+
+/// Étoiles affichées pour un mot de passe de `len` caractères (64 au plus :
+/// au 64e caractère, l'ancien code écrivait hors du tableau et l'Explorateur
+/// plantait, #209).
+fn masked(len: usize) -> &'static [u8] {
+    const STARS: [u8; 64] = [b'*'; 64];
+    &STARS[..len.min(STARS.len())]
+}
+
 unsafe fn draw_password(g: &mut Gfx, f: &Frame) {
     if !PASSWORD_OPEN {
         return;
@@ -5623,18 +5596,9 @@ unsafe fn draw_password(g: &mut Gfx, f: &Frame) {
         4,
         p.window,
     );
-    let mut dots = [b'*'; 64];
-    let n = PASSWORD.len.min(dots.len());
-    let caret_x = field.left + 10 + text_width(&dots[..n], 12);
-    dots[n] = b' ';
-    text(
-        g.hdc,
-        g.f.caption,
-        p.text,
-        field.left + 10,
-        field.top + 8,
-        &dots[..n],
-    );
+    let dots = masked(PASSWORD.len);
+    let caret_x = field.left + 10 + text_width(dots, 12);
+    text(g.hdc, g.f.caption, p.text, field.left + 10, field.top + 8, dots);
     if GetTickCount() / 500 % 2 == 0 {
         fill(
             g.hdc,
@@ -5669,7 +5633,7 @@ unsafe fn draw_password(g: &mut Gfx, f: &Frame) {
     text(
         g.hdc,
         g.f.caption,
-        rgb(0xFF, 0xFF, 0xFF),
+        p.on_accent,
         (ok.left + ok.right - text_width(okl, 12)) / 2,
         ok.top + 8,
         okl,
@@ -5850,6 +5814,7 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     }
     draw_status(g, &geo);
     draw_menu(g, &geo, f);
+    copy::draw(g, f);
     draw_password(g, f);
     crate::sharing::draw_dialog(g, f);
 }
@@ -5928,6 +5893,9 @@ pub unsafe fn mouse(ev: Mouse, x: i32, y: i32, f: &Frame) -> bool {
     }
     if crate::sharing::dialog_open() {
         return crate::sharing::dialog_mouse(ev, x, y, f);
+    }
+    if copy::mouse(ev, x, y, f) {
+        return true;
     }
     let geo = geo(f);
     // Menu ouvert : il capte le clic.
@@ -6159,6 +6127,10 @@ unsafe fn click(ev: Mouse, x: i32, y: i32, f: &Frame, geo: &Geo) -> bool {
     let rects = command_rects(geo);
     let extract = extract_rect(geo);
     if extract.is_some_and(|r| inside(&r, x, y)) {
+        if pane().loc.is(TRASH) {
+            copy::ask_empty_trash();
+            return true;
+        }
         let mut a = [0u8; PATH_LEN + NAME_LEN + 2];
         if let Some(src) = archive_of(pane().loc.get()) {
             a[..src.len()].copy_from_slice(src);
@@ -6388,8 +6360,14 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
     if crate::sharing::dialog_open() {
         return crate::sharing::dialog_key(vk, ch);
     }
+    if copy::dialog_open() {
+        return copy::key(vk, ch);
+    }
     if ch == 27 && JOB != 0 && FOCUS == Focus::List && MENU == Menu::None {
         cancel_job();
+        return true;
+    }
+    if ch == 27 && FOCUS == Focus::List && MENU == Menu::None && copy::cancel_latest() {
         return true;
     }
     // Les raccourcis de fenêtre fonctionnent aussi lorsqu'un champ est actif.
@@ -6793,6 +6771,7 @@ unsafe fn watch_drives() -> bool {
 pub unsafe fn tick(_f: &Frame) -> bool {
     let refreshed = watch_folders() | watch_drives();
     let mut animating = refreshed || poll_job() || PASSWORD_OPEN || crate::thumbs::pending();
+    animating |= copy::tick();
     animating |= crate::sharing::dialog_tick();
     for i in 0..NTABS {
         for which in 0..2 {
@@ -6958,6 +6937,8 @@ pub unsafe fn regression_checks() {
         );
         navigate_pane(pane(), &dst[..dn], false);
         paste();
+        // Copie de fond (#11) : on attend sa fin avant de vérifier.
+        copy::wait_all();
         let n = join(&mut scratch, &dst[..dn], &long_name);
         check!(
             n != 0
@@ -7054,6 +7035,39 @@ pub unsafe fn regression_checks() {
     );
     MENU = Menu::None;
     archive_regression(root);
+    copy::regression(root);
+    copy::trash_regression(root);
+    PASSWORD.len = 0;
+    for _ in 0..300 {
+        PASSWORD.push(b'a');
+    }
+    check!(
+        masked(63).len() == 63 && masked(64).len() == 64 && masked(PASSWORD.len).len() == 64,
+        "Mot de passe d'archive : 64 caracteres et plus ne font plus planter l'Explorateur"
+    );
+    PASSWORD.buf.fill(0);
+    PASSWORD.len = 0;
+    let mut got = [0u8; 64];
+    let ok = copy_as_path(b"C:\\Documents\\rapport.txt");
+    let n = crate::cliphist::get_text(&mut got);
+    check!(
+        ok && &got[..n] == b"\"C:\\Documents\\rapport.txt\"",
+        "Copier le chemin d'acces met le chemin entre guillemets dans le presse-papiers"
+    );
+    MENU = Menu::Context { x: 0, y: 0, on_item: false };
+    let saved = pane().loc;
+    pane().loc.set(TRASH);
+    pane().count = 1;
+    let mut items = [Item::Sep; MENU_MAX];
+    let count = menu_items(&mut items);
+    check!(
+        items[..count].contains(&Item::EmptyTrash) && extract_label() == tr(S_EMPTY_TRASH),
+        "Corbeille : \"Vider la Corbeille\" au clic droit et dans la barre de commandes"
+    );
+    pane().loc = saved;
+    let count = menu_items(&mut items);
+    check!(!items[..count].contains(&Item::EmptyTrash), "\"Vider la Corbeille\" absent hors de la Corbeille");
+    MENU = Menu::None;
     check!(
         rollback_copy(root, 0),
         "Explorer nettoie ses seuls fichiers de regression"

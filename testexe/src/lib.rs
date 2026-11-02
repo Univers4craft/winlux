@@ -127,7 +127,8 @@ pub struct OverlappedEntry {
     pub reserved: u32,
 }
 
-#[repr(C)]
+// FILETIME n'est aligné que sur 4 octets : cFileName est à l'offset 44.
+#[repr(C, packed(4))]
 pub struct Win32FindDataA {
     pub attributes: u32,
     pub creation_time: u64,
@@ -140,7 +141,8 @@ pub struct Win32FindDataA {
     pub file_name: [c_char; 260],
     pub alternate_name: [c_char; 14],
 }
-#[repr(C)]
+// FILETIME n'est aligné que sur 4 octets : cFileName est à l'offset 44.
+#[repr(C, packed(4))]
 pub struct Win32FindDataW {
     pub attributes: u32,
     pub creation_time: u64,
@@ -839,6 +841,10 @@ extern "system" {
     pub fn WinluxJobPoll(job: u32, progress: *mut u32, msg: *mut u16, cap: u32) -> u32;
     pub fn WinluxJobCancel(job: u32);
     pub fn WinluxJobClose(job: u32);
+    pub fn WinluxJobPause(job: u32, on: u32);
+    pub fn WinluxJobStats(job: u32, out: *mut u64, name: *mut u16, cap: u32) -> u32;
+    pub fn WinluxFileCopy(list: *const u16, flags: u32) -> u32;
+    pub fn WinluxFileDelete(list: *const u16, flags: u32) -> u32;
     // Moteur multimédia (runtime/src/dlls/winlux_media.rs).
     pub fn WinluxMediaProbe(path: *const u16, out: *mut u8, cap: u32) -> i32;
     pub fn WinluxMediaFormats(out: *mut u8, cap: u32) -> i32;

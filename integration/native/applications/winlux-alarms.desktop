@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=Horloge
+Name[en]=Clock
+Name[es]=Reloj
+Name[de]=Uhr
+Comment=Alarmes, minuteurs, chronomètre, horloges du monde et sessions de concentration
+Comment[en]=Alarms, timers, stopwatch, world clock and focus sessions
+Comment[es]=Alarmas, temporizadores, cronómetro, reloj mundial y sesiones de concentración
+Comment[de]=Wecker, Timer, Stoppuhr, Weltuhr und Fokussitzungen
+Keywords=horloge;alarme;réveil;reveil;minuteur;chronomètre;chronometre;concentration;clock;alarm;timer;stopwatch;focus;reloj;alarma;temporizador;Uhr;Wecker;Timer;Stoppuhr;
+Exec=/usr/bin/winlux-alarms
+Icon=preferences-system-time
+Categories=Utility;Clock;
+Terminal=false
