@@ -34,7 +34,9 @@ Démarrer (« Store Winlux », trouvé aussi en tapant « boutique »). Chaque
 boutique choisie a en plus son lanceur, qui ouvre le Store sur ses seuls
 logiciels (`winlux-shell-app store flatpak: Flathub` → `WINLUX_STORE_SOURCE`).
 
-Fichiers échangés avec le shell (`/run/winlux`, UTF-8) :
+Fichiers échangés avec le shell (UTF-8), dans le dossier propre au compte
+`WINLUX_STORE_RUN` (`/run/winlux/store-<uid>`, posé par `winlux-shell-app`),
+sinon `/run/winlux` ; partagé, l'index d'un premier compte bloquait celui d'un second :
 
 - `store.txt` : `app=clé|catégorie|nom|résumé|éditeur|état|version|disponible|taille_ko|icône|badge|sélection|autres_clés`
   (état `a` disponible, `i` installé, `u` mise à jour), `updates=`, `system_updates=`, `sources=`, `refreshing=`, `win=nom|exe` ;

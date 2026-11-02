@@ -116,6 +116,30 @@ manager --default edge
 test ! -e "$WINLUX_BROWSER_ROOT/etc/winlux/browser-install-pending"
 test ! -e "$WINLUX_BROWSER_ROOT/etc/winlux/first-boot-browser"
 manager --status | grep -qx 'browser_edge=installed'
+# Paramètres > Navigateurs : vrais noms, « Par défaut »/« Ouvrir » pour les seuls
+# navigateurs installés, « Installer » pour les autres. Logique sans GTK.
+manager --status > "$work/status.txt"
+python3 -B - "$project/scripts/winlux-settings.py" "$work/status.txt" <<'PY'
+import ast, sys
+tree = ast.parse(open(sys.argv[1], encoding="utf-8").read())
+keep = [n for n in tree.body if (isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "BROWSER_NAMES" for t in n.targets))
+        or (isinstance(n, ast.FunctionDef) and n.name == "browser_buttons_shown")]
+scope = {}
+exec(compile(ast.Module(body=keep, type_ignores=[]), "settings", "exec"), scope)
+names, shown = scope["BROWSER_NAMES"], scope["browser_buttons_shown"]
+assert names == {"chrome": "Google Chrome", "edge": "Microsoft Edge", "firefox": "Mozilla Firefox"}, names
+status = dict(l.split("=", 1) for l in open(sys.argv[2]).read().split() if "=" in l)
+def visible(status):
+    return sorted(f"{v}-{i}" for i in names for v in ("install", "default", "launch") if shown(status, f"browser-{v}-{i}"))
+# État réel ici : les trois sont installés.
+assert visible(status) == [f"{v}-{i}" for v in ("default", "launch") for i in names], (status, visible(status))
+status.update(browser_chrome="downloadable", browser_firefox="update")
+assert visible(status) == ["default-edge", "default-firefox", "install-chrome", "install-firefox",
+                           "launch-edge", "launch-firefox"], visible(status)
+assert visible({}) == [f"install-{i}" for i in names]
+source = open(sys.argv[1], encoding="utf-8").read()
+assert 'format(name=BROWSER_NAMES[ident])' in source and 'for name in ("chrome", "edge", "firefox")' not in source
+PY
 if python3 -B "$project/scripts/prepare-browser-packages.py" --only safari "$work/none" >/dev/null 2>&1; then exit 1; fi
 python3 -B "$project/scripts/test-browser-downloads.py"
 echo 'OK: no browser shipped or preferred, choice screen, download on demand, URL arguments, checksums and cleanup'

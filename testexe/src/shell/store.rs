@@ -391,6 +391,50 @@ static mut SOURCE_FILTER: Buf<48> = Buf::new();
 static mut SOURCE_TITLE: Buf<48> = Buf::new();
 static mut FILTER_READ: bool = false;
 
+/// Dossier d'échange avec `winlux-store` : propre à chaque compte
+/// (`WINLUX_STORE_RUN`, posé par winlux-shell-app), sinon `Z:\run\winlux`.
+/// Partagé, le fichier d'index écrit par un premier compte ne pouvait pas
+/// être remplacé par un second (dossier « sticky ») : Store vide.
+static mut RUN_DIR: Buf<240> = Buf::new();
+
+unsafe fn run_file(name: &[u8]) -> [u8; 300] {
+    if RUN_DIR.n == 0 {
+        let mut value = [0u8; 200];
+        let n = GetEnvironmentVariableA(
+            c"WINLUX_STORE_RUN".as_ptr(),
+            value.as_mut_ptr().cast(),
+            value.len() as u32,
+        ) as usize;
+        if n > 1
+            && n < value.len()
+            && value[0] == b'/'
+            && value[..n].iter().all(|c| c.is_ascii_graphic())
+        {
+            RUN_DIR.push(b"Z:");
+            for &c in &value[..n] {
+                RUN_DIR.push(&[if c == b'/' { b'\\' } else { c }]);
+            }
+        } else {
+            RUN_DIR.push(b"Z:\\run\\winlux");
+        }
+    }
+    let mut out = [0u8; 300];
+    let dir = RUN_DIR.get();
+    let n = name.len().min(out.len() - dir.len() - 2);
+    out[..dir.len()].copy_from_slice(dir);
+    out[dir.len()] = b'\\';
+    out[dir.len() + 1..dir.len() + 1 + n].copy_from_slice(&name[..n]);
+    out
+}
+
+unsafe fn read_run(name: &[u8], buf: &mut [u8]) -> usize {
+    let path = run_file(name);
+    read_file(
+        core::ffi::CStr::from_bytes_until_nul(&path).unwrap_or(c""),
+        buf,
+    )
+}
+
 unsafe fn read_filter() {
     if FILTER_READ {
         return;
@@ -432,7 +476,7 @@ unsafe fn store_title() -> &'static [u8] {
 
 unsafe fn load_index() {
     read_filter();
-    let n = read_file(c"Z:\\run\\winlux\\store.txt", &mut INDEX);
+    let n = read_run(b"store.txt", &mut INDEX);
     if n == 0 {
         return;
     }
@@ -518,7 +562,7 @@ unsafe fn detail_value(prefix: &[u8]) -> &'static [u8] {
 }
 
 unsafe fn load_detail() {
-    let n = read_file(c"Z:\\run\\winlux\\store-detail.txt", &mut DETAIL);
+    let n = read_run(b"store-detail.txt", &mut DETAIL);
     let len = utf8_to_cp1252(&mut DETAIL, n);
     DETAIL_LEN = len;
     let key = detail_value(b"key=");
@@ -540,7 +584,7 @@ static mut OP_STARTED: u32 = 0;
 
 unsafe fn poll_progress() -> bool {
     let mut buf = [0u8; 1024];
-    let n = read_file(c"Z:\\run\\winlux\\store-progress.txt", &mut buf);
+    let n = read_run(b"store-progress.txt", &mut buf);
     let n = utf8_to_cp1252(&mut buf, n);
     let text = &buf[..n];
     let mut state: &[u8] = b"";
@@ -762,7 +806,7 @@ unsafe fn operate(verb: &[u8], key: &[u8]) {
     }
     let mut raw = [0u8; 1000];
     let n = cp1252_to_utf8(args.get(), &mut raw);
-    DeleteFileA(c"Z:\\run\\winlux\\store-progress.txt".as_ptr());
+    DeleteFileA(run_file(b"store-progress.txt").as_ptr().cast());
     if spawn(c"winlux-store", &raw[..n]) {
         OP_ACTIVE = true;
         OP_STARTED = GetTickCount();
