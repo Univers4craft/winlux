@@ -340,4 +340,15 @@ esac
     check(starter_state()["keepassxc"][1] == "f", "échec signalé")
     st("starter", "keepassxc")
     check(starter_state()["keepassxc"][1] == "a", "nouvel essai après échec")
+    # Un dossier d'échange par compte (WINLUX_STORE_RUN) : un second compte
+    # ne pouvait pas remplacer l'index écrit par le premier (/run/winlux sticky).
+    mine = w / "run-compte"
+    r = subprocess.run([sys.executable, "-I", "-B", str(store), "refresh"],
+                       env={**env, "WINLUX_STORE_RUN": str(mine)}, capture_output=True, text=True)
+    check(r.returncode == 0 and "refreshing=0" in (mine / "store.txt").read_text(), "index dans le dossier du compte")
+    launcher = (project / "scripts/winlux-shell-app.sh").read_text()
+    check('"/run/winlux/store-$uid"' in launcher and "test -O" in launcher and "export WINLUX_STORE_RUN" in launcher,
+          "winlux-shell-app donne au Store un dossier propre au compte")
+    ui = (project / "testexe/src/shell/store.rs").read_text()
+    check('c"WINLUX_STORE_RUN"' in ui and 'c"Z:\\run\\winlux\\store' not in ui, "la fenêtre lit le dossier du compte")
     print("Store : OK")
