@@ -1622,7 +1622,12 @@ class ExtraPages:
     def set_contrast(self, index):
         a11y_write(contrast=index)
         theme = CONTRAST_GTK[index] if 0 <= index < len(CONTRAST_GTK) else None
-        if theme is None: theme = "Adwaita-dark" if appearance().get("theme", "dark") == "dark" else "Adwaita"
+        mode = appearance().get("theme", "dark")
+        if theme is None and have("winlux-personalize"):
+            # Retour au thème Winlux du compte (couleurs et accent compris).
+            run(["winlux-personalize", "theme", mode if mode in ("dark", "light") else "dark"], timeout=30)
+            return
+        if theme is None: theme = "Adwaita-dark" if mode == "dark" else "Adwaita"
         xfconf_set("xsettings", "/Net/ThemeName", "string", theme)
 
     def set_pointer(self, size):

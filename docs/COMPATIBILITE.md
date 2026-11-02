@@ -22,6 +22,13 @@ Issues des grands chantiers : #14 et #26 (fonctions et DLL système), #232
 exceptions, suspension de threads), #270 (`ReadDirectoryChangesW`, ConPTY),
 #271 (périphériques), #272 (MSIX) et #265 à #268 (suite de Paint.NET).
 
+Depuis #269 (première partie), les fautes matérielles du code d'un programme
+(accès mémoire invalide, division par zéro, `int3`, `ud2`, pas à pas,
+instruction privilégiée, page de garde `PAGE_GUARD`, débordement de pile)
+deviennent des exceptions Windows que ses gestionnaires vectorisés et ses
+blocs `__try/__except` rattrapent (`runtime/src/dlls/seh_hw.rs`, test
+`scripts/test-hw-exceptions.sh`). `WINLUX_SEH_HW=0` rend l'ancien comportement.
+
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
 permise (libGL/libvulkan de l'hôte, FFmpeg, curl, OpenSSL/GnuTLS, PipeWire…).
