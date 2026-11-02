@@ -296,4 +296,10 @@ ok("self.set_app_paintable(True)" not in taskview, "vue des tâches : le voile c
 snap = (SCRIPTS / "winlux-snap.py").read_text()
 ok(snap.count('"focus-out-event"') >= 2, "assistant d'ancrage : se ferme quand on passe à une autre fenêtre")
 
+# ── Petits plaisirs (2) (#305, passage en VM) ──────────────────────────────
+ok("apt_candidate(target[4:])" in (SCRIPTS / "winlux-store.py").read_text(),
+   "Boutique : un paquet Ubuntu hors catalogue s'installe (police d'emojis, moteur de Win+Maj+T)")
+ok('chmod 644 "$resolver"' in (SCRIPTS / "winlux-dhcp-hook.sh").read_text(),
+   "DHCP : resolv.conf lisible par apt (_apt) après un renouvellement")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

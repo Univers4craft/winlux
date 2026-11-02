@@ -54,7 +54,7 @@ with tempfile.TemporaryDirectory() as tmp:
     mock(bindir, "dpkg-query", "printf 'vlc\\tii \\t3.0.20-1\\t12000\\ngit\\tii \\t1:2.43\\t9000\\nlibc6\\tii \\t2.39\\t100\\n'\n")
     mock(bindir, "apt", "printf 'Listing...\\nvlc/noble-updates 3.0.21-1 amd64 [upgradable from: 3.0.20-1]\\nlibc6/noble-updates 2.40 amd64 [upgradable from: 2.39]\\n'\n")
     mock(bindir, "apt-cache", """case "$1" in
-policy) shift; for p in "$@"; do echo "$p:"; case "$p" in 0ad) echo '  Candidate: (none)';; *) echo '  Candidate: 1.0-1';; esac; done;;
+policy) shift; for p in "$@"; do echo "$p:"; case "$p" in 0ad|inconnu) echo '  Candidate: (none)';; *) echo '  Candidate: 1.0-1';; esac; done;;
 show) printf 'Package: gimp\\nVersion: 2.10.36-3\\nInstalled-Size: 20480\\nHomepage: https://www.gimp.org\\nDescription: retouche\\n Premier paragraphe.\\n .\\n Second paragraphe.\\n';;
 esac
 """)
@@ -306,6 +306,10 @@ esac
     check(state["windows"]["msi/outil"]["msi"] == "{AAAA-BBBB}", "code produit MSI retenu")
     st("remove", "windows:msi/outil")
     check("winlux --msiexec /x {AAAA-BBBB} /qn" in log.read_text(), "désinstallation MSI")
+    # Paquet Ubuntu réel hors du catalogue (police d'emojis, moteur OCR) :
+    # installé directement au lieu de « Logiciel inconnu ».
+    st("install", "apt:fonts-noto-color-emoji")
+    check("install --no-install-recommends -- fonts-noto-color-emoji" in log.read_text(), "paquet hors catalogue installé")
     st("install", "apt:inconnu", code=2)
     check("Logiciel inconnu" in (run / "store-progress.txt").read_text(), "message en français")
     for code, text in (("en", "Unknown software"), ("es", "Software desconocido"), ("de", "Unbekannte Software")):
