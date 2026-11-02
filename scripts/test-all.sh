@@ -77,6 +77,12 @@ while IFS= read -r command; do
     step "$script" sh -c "$command"
 done <"$logs/steps.txt"
 
+# Fautes matérielles en exceptions SEH (#269) : lancé en CI par test-mingw.sh ;
+# ici aussi sans MinGW, dès que clang et le runtime compilé sont là.
+if ! command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1 && command -v clang >/dev/null 2>&1 && test -x target/release/winlux; then
+    step "scripts/test-hw-exceptions.sh" sh scripts/test-hw-exceptions.sh
+fi
+
 # Site web et wiki (site.yml) : rendu Chromium sauté sans Node.js ni
 # Playwright, sauf WINLUX_SITE_RENDER=required.
 step "scripts/test-site.py (site web)" python3 -B scripts/test-site.py --render

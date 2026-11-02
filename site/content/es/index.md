@@ -44,7 +44,7 @@ El sistema, el instalador y este sitio están disponibles en francés, inglés, 
 Obtenga la imagen de la última versión y, si lo desea, el creador de memoria USB. [Página Descargar](page:download)
 
 ### 2. Seguir la guía
-Seis pasos, de la memoria USB a su primer programa de Windows, y luego las actualizaciones. [Abrir la guía](page:guide)
+Siete pasos, de la memoria USB a su primer programa de Windows, y luego las actualizaciones. [Abrir la guía](page:guide)
 
 ### 3. Comprobar sus programas
 Lo que ya funciona, lo que todavía no, y cómo comunicárnoslo. [Aplicaciones probadas](page:apps)
