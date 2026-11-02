@@ -10,6 +10,8 @@ pub mod bcrypt;
 pub mod clipboard;
 pub mod comctl32;
 pub mod comdlg32;
+pub mod comdlg32_files;
+pub mod comdlg32_ui;
 pub mod comobj;
 pub mod console_input;
 pub mod controls;

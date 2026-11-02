@@ -2499,6 +2499,17 @@ fn updown_step(hwnd: usize, delta: i32) {
         pos: i32,
         delta: i32,
     }
+    // UDS_SETBUDDYINT : la valeur part du nombre tapé dans le champ associé.
+    let buddy = common_snapshot(hwnd).buddy;
+    if style(hwnd) & 0x2 != 0 && buddy != 0 {
+        let typed: String = title(buddy)
+            .chars()
+            .filter(|c| *c != ' ' && *c != '\u{202F}')
+            .collect();
+        if let Ok(v) = typed.trim().parse::<i32>() {
+            with_common(hwnd, |st| st.value = v);
+        }
+    }
     let s = common_snapshot(hwnd);
     // Plage inversée (défaut 100..0) : le haut fait baisser la valeur.
     let delta = if s.lo > s.hi { -delta } else { delta };
