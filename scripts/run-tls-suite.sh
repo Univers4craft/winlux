@@ -27,4 +27,4 @@ while [ $i -lt 50 ] && ! python3 -c "import socket; socket.create_connection(('1
     sleep 0.1
     i=$((i + 1))
 done
-WINLUX_TLS_PORT=$port WINLUX_GUI=headless "$runtime" "$exe"
+WINLUX_TLS_CA="$dir/cert.pem" WINLUX_TLS_PORT=$port WINLUX_GUI=headless "$runtime" "$exe"

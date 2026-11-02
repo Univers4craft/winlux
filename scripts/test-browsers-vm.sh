@@ -25,4 +25,4 @@ for browser in edge chrome firefox; do
     grep -q "WINLUX_BROWSER_${browser}_RESULT=0" "$log" || { tail -50 "$log"; exit 1; }
 done
 grep -q 'WINLUX_BROWSERS_RESULT=0' "$log"
-echo 'OK : rendu réel Edge, Chrome et Firefox avec sandbox, installation hors ligne.'
+echo 'OK : rendu réel de Firefox hors ligne ; Edge et Chrome absents de l image, téléchargeables à la demande.'

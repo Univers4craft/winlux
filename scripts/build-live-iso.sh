@@ -200,6 +200,7 @@ cp "$root/scripts/test-native-session-guest.py" "$stage/opt/winlux/scripts/test-
 cp "$root/scripts/test-apt-native-guest.py" "$stage/opt/winlux/scripts/test-apt-native-guest.py"
 cp "$root/scripts/test-browsers-guest.sh" "$stage/opt/winlux/scripts/test-browsers-guest.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
+cp "$root/scripts/run-tls-suite.sh" "$stage/opt/winlux/scripts/run-tls-suite.sh"
 chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
@@ -369,28 +370,23 @@ if command -v xmessage >/dev/null 2>&1; then
     chmod 755 "$stage/usr/bin/xmessage"
     copy_shared_libraries "$(command -v xmessage)"
 fi
-# Microsoft Edge, navigateur par défaut : intégré seulement si un paquet
-# .deb officiel est fourni (WINLUX_EDGE_DEB=/chemin/microsoft-edge-stable.deb,
-# téléchargé depuis https://www.microsoft.com/edge). Sinon le bouton Edge
-# affiche une notification.
+# Aucun navigateur n'est intégré à l'ISO : l'utilisateur choisit le sien.
+# Microsoft Edge et Google Chrome ne pourraient de toute façon pas l'être :
+# leurs licences interdisent de les redistribuer (Edge : « you will not ... share,
+# publish, distribute, or lend the Software », section 2.8 f). Ils se
+# téléchargent chez leur éditeur, sur le PC, à la demande de l'utilisateur.
 if [ -n "${WINLUX_EDGE_DEB:-}" ]; then
-    test -r "$WINLUX_EDGE_DEB" || { echo "paquet Edge illisible : $WINLUX_EDGE_DEB" >&2; exit 1; }
-    dpkg-deb -x "$WINLUX_EDGE_DEB" "$stage"
-    test -x "$stage/opt/microsoft/msedge/msedge" || { echo "paquet Edge inattendu" >&2; exit 1; }
-    missing=$(ldd "$stage/opt/microsoft/msedge/msedge" | awk '/not found/ { print $1 }')
-    if [ -n "$missing" ]; then
-        echo "bibliothèques manquantes pour Edge sur cette machine : $missing" >&2
-        echo "installez-les (sudo apt install microsoft-edge-stable les tire) puis relancez" >&2
-        exit 1
-    fi
-    copy_shared_libraries "$stage/opt/microsoft/msedge/msedge"
-    ln -sf /opt/microsoft/msedge/microsoft-edge "$stage/usr/bin/microsoft-edge-stable"
+    echo "WINLUX_EDGE_DEB refusé : Edge ne peut pas être redistribué dans l'ISO" >&2
+    exit 1
 fi
-# Offline browser catalogue; official packages are prepared before this build.
+# Aucun navigateur dans l'image : seulement les outils et bibliothèques qui
+# font tourner celui que l'utilisateur choisira (stage-browser-packages.sh
+# refuse tout paquet de navigateur).
 browser_packages=${WINLUX_BROWSER_PACKAGES:-"$root/build/browser-packages"}
-if test -f "$browser_packages/edge.deb"; then
-    sh "$root/scripts/stage-browser-packages.sh" "$stage" "$browser_packages"
-fi
+mkdir -p "$browser_packages"
+sh "$root/scripts/stage-browser-packages.sh" "$stage" "$browser_packages"
+# Téléchargement du navigateur choisi chez son éditeur (index HTTPS, SHA-256).
+install -D -m 755 "$root/scripts/prepare-browser-packages.py" "$stage/usr/lib/winlux/winlux-browser-fetch"
 mkdir -p "$stage$(dirname -- "$xft_library")"
 cp -L "$xft_library" "$stage$xft_library"
 copy_shared_libraries "$xft_library"
@@ -691,16 +687,8 @@ fi
 /bin/busybox chmod 755 /home
 /bin/busybox chown winlux-web:winlux-web /home/winlux-web
 /bin/busybox chmod 700 /home/winlux-web
-# Installation hors ligne d'Edge (copie, vérification, extraction) : en
-# arrière-plan et en basse priorité, elle ne retarde plus le bureau.
+# Aucun navigateur à installer au démarrage : l'utilisateur choisit le sien.
 browser_setup_pid=
-if test -f /usr/share/winlux/browsers/edge.deb; then
-    # The static BusyBox of the image has no nice applet: use coreutils.
-    nice=
-    if test -x /usr/bin/nice; then nice='/usr/bin/nice -n 10'; fi
-    $nice /usr/bin/winlux-browsers --install edge >/run/winlux/browser-setup.log 2>&1 &
-    browser_setup_pid=$!
-fi
 echo "WINLUX_SYSTEM_VERSION=$(/bin/busybox cat /usr/share/winlux/version)"
 /bin/busybox awk '$2 == "/" { print "WINLUX_ROOT_MODE=" $3 }' /proc/mounts
 # BusyBox poweroff/reboot signal PID 1. A shell init must handle those signals
@@ -753,6 +741,25 @@ if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
             $notice_as /usr/bin/winlux-first-boot-notice failed 2>/dev/null || true
         fi
     ) >>/var/log/winlux-first-boot-packages.log 2>&1 &
+fi
+# Navigateur choisi à l'installation ou au premier démarrage : téléchargé sur
+# le site officiel de son éditeur, vérifié et installé dès que le réseau
+# répond, en basse priorité. Sans réseau, il est retenté au démarrage suivant
+# (aucun navigateur n'est fourni dans l'image : docs/BROWSERS.md).
+if test -s /etc/winlux/first-boot-browser; then
+    (
+        choice=$(/bin/busybox sed -n '1p' /etc/winlux/first-boot-browser)
+        case "$choice" in chrome|edge|firefox) ;; *) exit 0 ;; esac
+        for attempt in $(/bin/busybox seq 1 120); do
+            /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+            /bin/busybox sleep 5
+        done
+        low=
+        if test -x /usr/bin/nice; then low='/usr/bin/nice -n 10'; fi
+        if $low /usr/bin/winlux-browsers --default "$choice"; then
+            /bin/busybox mv /etc/winlux/first-boot-browser /etc/winlux/first-boot-browser.done
+        fi
+    ) >>/var/log/winlux-first-boot-browser.log 2>&1 &
 fi
 if test -n "$browser_setup_pid" && /bin/busybox grep -qwE 'winlux\.(native|browser)-smoke=1' /proc/cmdline; then
     # Les tests de navigateurs ont besoin d'Edge déjà installé.
@@ -1130,7 +1137,17 @@ chmod 755 "$stage/init"
 "$root/scripts/source-fingerprint.sh" >"$stage/usr/share/winlux/source-fingerprint"
 if test "${WINLUX_LEGACY_BASE:-0}" != 1; then
     python3 "$root/scripts/stage-apt-root.py" "$stage" "$apt_base" --package "$root/build/winlux-desktop.deb"
+    # Nom et logos Winlux à la place de ceux d'Ubuntu (politique de Canonical).
+    sh "$root/scripts/winlux-brand-image.sh" "$stage"
+    # Offre de sources GPL : liste exacte des paquets sources de l'image,
+    # dans l'image et à côté de l'ISO (publiée avec chaque version).
+    mkdir -p "$stage/usr/share/doc/winlux"
+    python3 "$root/scripts/list-gpl-sources.py" "$stage" "$stage/usr/share/doc/winlux/sources-gpl.tsv"
+    test -s "$stage/usr/share/doc/winlux/sources-gpl.tsv" || { echo 'sources-gpl.tsv vide' >&2; exit 1; }
+    cp "$stage/usr/share/doc/winlux/sources-gpl.tsv" "$root/build/sources-gpl.tsv"
 fi
+# Aucun logiciel d'éditeur tiers non redistribuable dans l'image publiée.
+sh "$root/scripts/check-image-redistributable.sh" "$stage"
 # Samba et wsdd ne démarrent jamais seuls : winlux-share lance smbd et wsdd
 # uniquement quand l'utilisateur partage un dossier (pas de nmbd ni d'AD DC).
 for unit in smbd nmbd samba samba-ad-dc wsdd; do

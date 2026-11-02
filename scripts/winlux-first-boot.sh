@@ -309,9 +309,18 @@ fi
 # ============================================================
 log "Étape 6/$TOTAL_STEPS : Applications"
 
-CHECKLIST_ARGS='firefox Navigateur_Firefox on libreoffice Suite_bureautique_LibreOffice on vlc Lecteur_multimédia_VLC on gimp Éditeur_images_GIMP off git Outils_développeur_(git,build-essential) off geany Éditeur_de_code_Geany off audacity Éditeur_audio_Audacity off obs-studio Capture_vidéo_OBS_Studio off'
+CHECKLIST_ARGS='libreoffice Suite_bureautique_LibreOffice on vlc Lecteur_multimédia_VLC on gimp Éditeur_images_GIMP off git Outils_développeur_(git,build-essential) off geany Éditeur_de_code_Geany off audacity Éditeur_audio_Audacity off obs-studio Capture_vidéo_OBS_Studio off'
 checklist "Applications à pré-installer" $CHECKLIST_ARGS
-APPS_SELECTED=${REPLY:-firefox libreoffice vlc}
+APPS_SELECTED=${REPLY:-libreoffice vlc}
+
+# Navigateur : aucun n'est fourni ni présélectionné (docs/BROWSERS.md). La
+# liste est alphabétique ; le choix est téléchargé sur le site officiel de
+# l'éditeur et installé par l'init dès que le réseau répond.
+log "Étape 6/$TOTAL_STEPS : Navigateur"
+MENU_ARGS='aucun Choisir_plus_tard chrome Google_Chrome edge Microsoft_Edge firefox Mozilla_Firefox'
+menu "Navigateur web (téléchargé chez son éditeur ; Winlux n'en impose aucun)" $MENU_ARGS
+BROWSER_CHOICE=${REPLY:-aucun}
+case "$BROWSER_CHOICE" in chrome|edge|firefox) ;; *) BROWSER_CHOICE=aucun ;; esac
 
 # ============================================================
 #  Étape 7 : Compte utilisateur local
@@ -409,10 +418,20 @@ fi
 #  Étape 10 : Récapitulatif
 # ============================================================
 log "Étape 10/$TOTAL_STEPS : Récapitulatif"
-summary="Langue : $LANG_CHOICE\nClavier : $KB_LAYOUT\nFuseau : $TIMEZONE\nMachine : $HOSTNAME_CHOICE\nThème : $THEME_CHOICE\nUtilisateur : $USERNAME ($FULLNAME)\nConnexion auto : $(test $AUTO_LOGIN = 1 && echo Oui || echo Non)\nApps : $APPS_SELECTED"
+summary="Langue : $LANG_CHOICE\nClavier : $KB_LAYOUT\nFuseau : $TIMEZONE\nMachine : $HOSTNAME_CHOICE\nThème : $THEME_CHOICE\nUtilisateur : $USERNAME ($FULLNAME)\nConnexion auto : $(test $AUTO_LOGIN = 1 && echo Oui || echo Non)\nApps : $APPS_SELECTED\nNavigateur : $BROWSER_CHOICE"
 if test -n "$USER_AVATAR"; then
     summary="$summary\nAvatar : $(basename "$USER_AVATAR")"
 fi
+# Mention de non-affiliation (docs/DEFENSE-DU-NOM.md), dans la langue choisie.
+case "$LANG_CHOICE" in
+    en_*) independent='Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.' ;;
+    de_*) independent='Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.' ;;
+    es_*) independent='Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.' ;;
+    it_*) independent='Progetto indipendente, non affiliato a Microsoft né da essa approvato. Windows è un marchio di Microsoft Corporation.' ;;
+    pt_*) independent='Projeto independente, não afiliado à Microsoft nem aprovado por ela. Windows é uma marca da Microsoft Corporation.' ;;
+    *)    independent='Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.' ;;
+esac
+summary="$summary\n\n$independent"
 
 if test "$TUI" != none; then
     "$TUI" --title "Récapitulatif de la configuration" --msgbox "$summary" "$(dlg_h 18)" "$(dlg_w 60)" 2>/dev/null || true
@@ -602,18 +621,23 @@ EOF
     # install-config.json (autologin) pour les outils qui l'affichent.
 fi
 
+# --- Navigateur choisi : téléchargé et installé par l'init (réseau requis) ---
+if test "$BROWSER_CHOICE" != aucun; then
+    mkdir -p /etc/winlux
+    printf '%s\n' "$BROWSER_CHOICE" > /etc/winlux/first-boot-browser
+    if command -v winlux-browsers >/dev/null 2>&1 && winlux-browsers --default "$BROWSER_CHOICE"; then
+        mv /etc/winlux/first-boot-browser /etc/winlux/first-boot-browser.done
+    else
+        log "Navigateur $BROWSER_CHOICE : installation reportée au prochain démarrage avec réseau"
+    fi
+fi
+
 # --- Installation des applications sélectionnées ---
 log "Installation des applications : $APPS_SELECTED"
 if command -v apt-get >/dev/null 2>&1 && test -n "$APPS_SELECTED"; then
     apt-get update -qq 2>/dev/null || true
     for app in $APPS_SELECTED; do
         case "$app" in
-            firefox)
-                log "Installation de Firefox..."
-                apt-get install -y --no-install-recommends firefox 2>/dev/null || \
-                apt-get install -y --no-install-recommends firefox-esr 2>/dev/null || \
-                log "Échec de l'installation de Firefox"
-                ;;
             libreoffice)
                 log "Installation de LibreOffice..."
                 apt-get install -y --no-install-recommends \

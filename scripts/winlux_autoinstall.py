@@ -18,7 +18,7 @@ SEARCH_PATHS = [
 LANGUAGES = {"fr_FR": "fr", "en_US": "us", "de_DE": "de", "es_ES": "es", "it_IT": "it", "pt_BR": "br"}
 KEYBOARDS = {"fr", "us", "gb", "de", "es", "it", "br", "ch", "be", "ca"}
 TOP_KEYS = {"version", "unattended", "language", "keyboard", "timezone", "license_accepted",
-            "partitioning", "account", "packages", "reboot"}
+            "partitioning", "account", "packages", "browser", "reboot"}
 PARTITION_KEYS = {"disk", "mode"}
 ACCOUNT_KEYS = {"hostname", "username", "fullname", "password", "password_hash", "autologin"}
 
@@ -227,6 +227,12 @@ def validate(data):
             settings["autologin"] = _bool(account["autologin"], "account.autologin")
         if "username" in settings and ("password" in settings or "password_hash" in settings):
             steps.add(STEP_ACCOUNT)
+    browser = data.get("browser")
+    if browser is not None:
+        # Navigateur téléchargé chez l'éditeur au premier démarrage ; null = aucun.
+        if browser not in ("chrome", "edge", "firefox"):
+            raise AnswerFileError(f"browser : chrome, edge, firefox ou null attendu : {browser!r}")
+        settings["browser"] = browser
     packages = data.get("packages")
     if packages is not None:
         if not isinstance(packages, list):

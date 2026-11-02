@@ -729,7 +729,9 @@ pub unsafe fn query_attributes(ctx: *const SecHandle, attr: u32, out: *mut u8) -
                     }
                 }
             }
-            super::crypt32::CertCloseStore(store, 0);
+            // Le magasin reste ouvert : sous Windows il vit tant que le
+            // contexte rendu le désigne (hCertStore), et libcurl y cherche
+            // les intermédiaires pour CertGetCertificateChain.
             (out as *mut usize).write_unaligned(leaf);
         }
         // SECPKG_ATTR_CONNECTION_INFO

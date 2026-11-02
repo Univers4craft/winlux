@@ -329,7 +329,7 @@ ni de cookies).
 | 1 | Recherche d'antériorité sur chaque candidat de nom, puis avis d'un conseil en propriété industrielle avant domaine et dépôt | Élevée | Fil du renommage ; damien pour le conseil |
 | 2 | Brancher la liste des sources GPL dans l'ISO et la publication | Élevée | Fil des versions |
 | 3 | « Assistant Claude » → « Assistant IA », icône neutre, conditions d'Anthropic et d'OpenAI | Moyenne | Fil de l'assistant IA (#300) ; damien pour accepter les conditions |
-| 4 | MSIX non signés refusés par défaut | Moyenne | Fil du MSIX (#272) |
+| 4 | MSIX vérifiés (signature, contenu, chaîne de certificats) ; autorité inconnue = confirmation de l'utilisateur | **Fait** (#332, #345) | Fil du MSIX |
 | 5 | Marques Ubuntu retirées de l'image installée | Moyenne-faible | Fil des versions |
 | 6 | Règle de salle blanche, messages d'erreur reformulés, origine des `.msi` de test | Faible | Fil des .exe |
 | 7 | Forme juridique | — | damien, avec un expert-comptable |
@@ -357,12 +357,11 @@ ni de cookies).
    jamais `~/.claude` ni `~/.codex` pour réutiliser un jeton ; relis les
    conditions d'utilisation de Codex et de la connexion ChatGPT et note dans
    `docs/ASSISTANT-IA.md` ce qu'elles permettent. »
-4. *Fil du MSIX (#272)* : « Dans `runtime/src/setup/msix.rs`, vérifie la
-   signature `AppxSignature.p7x` (chaîne de certificats et empreinte du
-   paquet) ; tant que ce n'est pas fait, refuse par défaut un paquet dont la
-   signature n'est pas vérifiée, avec le message “Éditeur non vérifié :
-   <nom du manifeste>” et une confirmation explicite pour passer outre ;
-   ajoute le test du refus. »
+4. *Fil du MSIX* : **fait** (#332, #345). Les paquets MSIX signés sont
+   vérifiés de bout en bout (signature, contenu, chaîne de certificats) ;
+   une signature fausse ou un paquet modifié est refusé ; une autorité
+   inconnue, dont celles du Store absentes sous Linux, demande une
+   confirmation.
 5. *Fil des .exe* : « Ajoute à `AGENTS.md` la règle de salle blanche de
    `docs/RISQUES-JURIDIQUES.md` section 2 (aucun code ni document interne de
    Microsoft, pas de décompilation de DLL Microsoft pour écrire du code,

@@ -35,6 +35,13 @@ pub struct Ssl {
     pub X509_STORE_free: unsafe extern "C" fn(P),
     pub X509_STORE_set_default_paths: unsafe extern "C" fn(P) -> c_int,
     pub X509_STORE_add_cert: unsafe extern "C" fn(P, P) -> c_int,
+    pub X509_STORE_set_flags: unsafe extern "C" fn(P, std::ffi::c_ulong) -> c_int,
+    pub EVP_get_cipherbyname: unsafe extern "C" fn(*const c_char) -> P,
+    pub EVP_CIPHER_CTX_new: unsafe extern "C" fn() -> P,
+    pub EVP_CIPHER_CTX_free: unsafe extern "C" fn(P),
+    pub EVP_CipherInit_ex: unsafe extern "C" fn(P, P, P, *const u8, *const u8, c_int) -> c_int,
+    pub EVP_CIPHER_CTX_set_padding: unsafe extern "C" fn(P, c_int) -> c_int,
+    pub EVP_CipherUpdate: unsafe extern "C" fn(P, *mut u8, *mut c_int, *const u8, c_int) -> c_int,
     pub X509_STORE_CTX_new: unsafe extern "C" fn() -> P,
     pub X509_STORE_CTX_free: unsafe extern "C" fn(P),
     pub X509_STORE_CTX_init: unsafe extern "C" fn(P, P, P, P) -> c_int,
@@ -51,6 +58,16 @@ pub struct Ssl {
     pub OPENSSL_sk_free: unsafe extern "C" fn(P),
     pub OPENSSL_sk_pop_free: unsafe extern "C" fn(P, unsafe extern "C" fn(P)),
     pub CRYPTO_free: unsafe extern "C" fn(*mut c_void, *const c_char, c_int),
+    // condensats par morceaux et vérification de signature (MSIX)
+    pub EVP_MD_CTX_new: unsafe extern "C" fn() -> P,
+    pub EVP_MD_CTX_free: unsafe extern "C" fn(P),
+    pub EVP_DigestInit_ex: unsafe extern "C" fn(P, P, P) -> c_int,
+    pub EVP_DigestUpdate: unsafe extern "C" fn(P, *const c_void, usize) -> c_int,
+    pub EVP_DigestFinal_ex: unsafe extern "C" fn(P, *mut u8, *mut u32) -> c_int,
+    pub EVP_DigestVerifyInit: unsafe extern "C" fn(P, *mut P, P, P, P) -> c_int,
+    pub EVP_DigestVerify: unsafe extern "C" fn(P, *const u8, usize, *const u8, usize) -> c_int,
+    pub X509_get_pubkey: unsafe extern "C" fn(P) -> P,
+    pub EVP_PKEY_free: unsafe extern "C" fn(P),
     // libssl
     pub TLS_client_method: unsafe extern "C" fn() -> P,
     pub SSL_CTX_new: unsafe extern "C" fn(P) -> P,
@@ -130,6 +147,13 @@ pub fn ssl() -> Option<&'static Ssl> {
             X509_STORE_free: f!(c, "X509_STORE_free"),
             X509_STORE_set_default_paths: f!(c, "X509_STORE_set_default_paths"),
             X509_STORE_add_cert: f!(c, "X509_STORE_add_cert"),
+            X509_STORE_set_flags: f!(c, "X509_STORE_set_flags"),
+            EVP_get_cipherbyname: f!(c, "EVP_get_cipherbyname"),
+            EVP_CIPHER_CTX_new: f!(c, "EVP_CIPHER_CTX_new"),
+            EVP_CIPHER_CTX_free: f!(c, "EVP_CIPHER_CTX_free"),
+            EVP_CipherInit_ex: f!(c, "EVP_CipherInit_ex"),
+            EVP_CIPHER_CTX_set_padding: f!(c, "EVP_CIPHER_CTX_set_padding"),
+            EVP_CipherUpdate: f!(c, "EVP_CipherUpdate"),
             X509_STORE_CTX_new: f!(c, "X509_STORE_CTX_new"),
             X509_STORE_CTX_free: f!(c, "X509_STORE_CTX_free"),
             X509_STORE_CTX_init: f!(c, "X509_STORE_CTX_init"),
@@ -145,6 +169,15 @@ pub fn ssl() -> Option<&'static Ssl> {
             OPENSSL_sk_free: f!(c, "OPENSSL_sk_free"),
             OPENSSL_sk_pop_free: f!(c, "OPENSSL_sk_pop_free"),
             CRYPTO_free: f!(c, "CRYPTO_free"),
+            EVP_MD_CTX_new: f!(c, "EVP_MD_CTX_new"),
+            EVP_MD_CTX_free: f!(c, "EVP_MD_CTX_free"),
+            EVP_DigestInit_ex: f!(c, "EVP_DigestInit_ex"),
+            EVP_DigestUpdate: f!(c, "EVP_DigestUpdate"),
+            EVP_DigestFinal_ex: f!(c, "EVP_DigestFinal_ex"),
+            EVP_DigestVerifyInit: f!(c, "EVP_DigestVerifyInit"),
+            EVP_DigestVerify: f!(c, "EVP_DigestVerify"),
+            X509_get_pubkey: f!(c, "X509_get_pubkey"),
+            EVP_PKEY_free: f!(c, "EVP_PKEY_free"),
             TLS_client_method: f!(s, "TLS_client_method"),
             SSL_CTX_new: f!(s, "SSL_CTX_new"),
             SSL_CTX_free: f!(s, "SSL_CTX_free"),
@@ -178,6 +211,80 @@ pub fn ssl() -> Option<&'static Ssl> {
         })
     })
     .as_ref()
+}
+
+/// Condensat calculé par morceaux (gros fichiers).
+pub struct Hasher {
+    ctx: P,
+}
+
+impl Hasher {
+    pub fn new(name: &CStr) -> Option<Hasher> {
+        let s = ssl()?;
+        unsafe {
+            let md = (s.EVP_get_digestbyname)(name.as_ptr());
+            if md.is_null() {
+                return None;
+            }
+            let ctx = (s.EVP_MD_CTX_new)();
+            if ctx.is_null() || (s.EVP_DigestInit_ex)(ctx, md, std::ptr::null_mut()) != 1 {
+                (s.EVP_MD_CTX_free)(ctx);
+                return None;
+            }
+            Some(Hasher { ctx })
+        }
+    }
+    pub fn update(&mut self, data: &[u8]) {
+        if let Some(s) = ssl() {
+            unsafe {
+                (s.EVP_DigestUpdate)(self.ctx, data.as_ptr() as *const c_void, data.len());
+            }
+        }
+    }
+    pub fn finish(self) -> Vec<u8> {
+        let mut out = vec![0u8; 64];
+        let mut n = 0u32;
+        if let Some(s) = ssl() {
+            unsafe {
+                (s.EVP_DigestFinal_ex)(self.ctx, out.as_mut_ptr(), &mut n);
+            }
+        }
+        out.truncate(n as usize);
+        out
+    }
+}
+
+impl Drop for Hasher {
+    fn drop(&mut self) {
+        if let Some(s) = ssl() {
+            unsafe { (s.EVP_MD_CTX_free)(self.ctx) }
+        }
+    }
+}
+
+/// La signature `sig` de `data` (condensat `digest`) est-elle celle de la clé
+/// publique du certificat `cert` (RSA PKCS #1 v1.5 ou ECDSA) ? None : OpenSSL
+/// absent ou certificat illisible.
+pub fn verify_signature(cert: &[u8], digest: &CStr, sig: &[u8], data: &[u8]) -> Option<bool> {
+    let s = ssl()?;
+    unsafe {
+        let x = x509_of(cert)?;
+        let key = (s.X509_get_pubkey)(x);
+        (s.X509_free)(x);
+        if key.is_null() {
+            return None;
+        }
+        let md = (s.EVP_get_digestbyname)(digest.as_ptr());
+        let ctx = (s.EVP_MD_CTX_new)();
+        let ok = !md.is_null()
+            && !ctx.is_null()
+            && (s.EVP_DigestVerifyInit)(ctx, std::ptr::null_mut(), md, std::ptr::null_mut(), key)
+                == 1
+            && (s.EVP_DigestVerify)(ctx, sig.as_ptr(), sig.len(), data.as_ptr(), data.len()) == 1;
+        (s.EVP_MD_CTX_free)(ctx);
+        (s.EVP_PKEY_free)(key);
+        Some(ok)
+    }
 }
 
 /// Condensat `name` (« MD5 », « SHA1 », « SHA256 »…) de `data`.
@@ -262,11 +369,39 @@ pub struct Verified {
 /// Vérifie `leaf` avec les autorités du système, `extra` servant
 /// d'intermédiaires. `host` : nom à contrôler (None : pas de contrôle).
 pub fn verify(leaf: &[u8], extra: &[Vec<u8>], host: Option<&str>) -> Option<Verified> {
+    verify_with(leaf, extra, None, false, host)
+}
+
+/// Comme `verify`, mais avec des racines de confiance données (`roots`) à la
+/// place de celles du système ; `partial` accepte une chaîne qui s'arrête sur
+/// n'importe quel certificat de `roots` (X509_V_FLAG_PARTIAL_CHAIN).
+pub fn verify_with(
+    leaf: &[u8],
+    extra: &[Vec<u8>],
+    roots: Option<&[Vec<u8>]>,
+    partial: bool,
+    host: Option<&str>,
+) -> Option<Verified> {
     let s = ssl()?;
     unsafe {
         let x = x509_of(leaf)?;
         let store = (s.X509_STORE_new)();
-        (s.X509_STORE_set_default_paths)(store);
+        match roots {
+            None => {
+                (s.X509_STORE_set_default_paths)(store);
+            }
+            Some(list) => {
+                for r in list {
+                    if let Some(rx) = x509_of(r) {
+                        (s.X509_STORE_add_cert)(store, rx);
+                        (s.X509_free)(rx);
+                    }
+                }
+            }
+        }
+        if partial {
+            (s.X509_STORE_set_flags)(store, 0x80000);
+        }
         let untrusted = (s.OPENSSL_sk_new_null)();
         let mut extras = Vec::new();
         for e in extra {
@@ -315,6 +450,43 @@ pub fn verify(leaf: &[u8], extra: &[Vec<u8>], host: Option<&str>) -> Option<Veri
         (s.X509_free)(x);
         (s.X509_STORE_free)(store);
         Some(Verified { error, chain })
+    }
+}
+
+/// Chiffre (`enc`) ou déchiffre des blocs entiers avec le chiffrement
+/// OpenSSL `name` (« AES-128-CBC », « DES-EDE3-ECB »…), sans bourrage ;
+/// `iv` sert aux modes chaînés.
+pub fn cipher(name: &CStr, key: &[u8], iv: &[u8], enc: bool, data: &mut [u8]) -> bool {
+    let Some(s) = ssl() else {
+        return false;
+    };
+    unsafe {
+        let cipher = (s.EVP_get_cipherbyname)(name.as_ptr());
+        if cipher.is_null() {
+            return false;
+        }
+        let ctx = (s.EVP_CIPHER_CTX_new)();
+        if ctx.is_null() {
+            return false;
+        }
+        let null = std::ptr::null_mut();
+        let mut ok =
+            (s.EVP_CipherInit_ex)(ctx, cipher, null, key.as_ptr(), iv.as_ptr(), enc as c_int) == 1;
+        if ok {
+            (s.EVP_CIPHER_CTX_set_padding)(ctx, 0);
+            let input = data.to_vec();
+            let mut n: c_int = 0;
+            ok = (s.EVP_CipherUpdate)(
+                ctx,
+                data.as_mut_ptr(),
+                &mut n,
+                input.as_ptr(),
+                input.len() as c_int,
+            ) == 1
+                && n as usize == input.len();
+        }
+        (s.EVP_CIPHER_CTX_free)(ctx);
+        ok
     }
 }
 

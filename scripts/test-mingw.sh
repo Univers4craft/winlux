@@ -84,6 +84,10 @@ if test -f "$dir/devnodes_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-devnodes.sh"
 fi
 
+# Héritage des handles entre processus (crashpad), bloquant.
+if test -f "$dir/inherit_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-heritage.sh"
+fi
 # winusb : appareil USB trouvé par setupapi, décrit par WinUSB (#271), bloquant.
 if test -f "$dir/winusb_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-winusb.sh"
