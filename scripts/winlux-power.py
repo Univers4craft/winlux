@@ -275,6 +275,7 @@ def dark_theme(Gtk):
         return "dark" in forced.casefold()
     settings = Gtk.Settings.get_default()
     name = (settings.get_property("gtk-theme-name") or "").casefold()
+    if name.startswith("winlux-"): return "-dark" in name  # thème de winlux-personalize
     return bool(settings.get_property("gtk-application-prefer-dark-theme")) or "dark" in name
 
 
