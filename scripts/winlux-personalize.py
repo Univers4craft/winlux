@@ -110,9 +110,11 @@ def apply(kind,value):
     gtk_config.read(gtk_preferences)
     if not gtk_config.has_section("Settings"):gtk_config.add_section("Settings")
     gtk_config.set("Settings","gtk-application-prefer-dark-theme","1" if dark else "0")
-    gtk_config.set("Settings","gtk-theme-name","Adwaita-dark" if dark else "Adwaita")
+    # « Adwaita-dark » n'existe pas comme thème GTK 3 installé : GTK retombait
+    # sur Adwaita clair. Le sombre vient de gtk-application-prefer-dark-theme.
+    gtk_config.set("Settings","gtk-theme-name","Adwaita")
     with gtk_preferences.open("w") as stream:gtk_config.write(stream)
-    query("xsettings","/Net/ThemeName","Adwaita-dark" if dark else "Adwaita","string")
+    query("xsettings","/Net/ThemeName","Adwaita","string")
     source=Path("/usr/share/themes/Winlux/openbox-3/themerc")
     if source.is_file():
         replacements={"window.active.title.bg.color":surface,"window.active.client.color":surface,

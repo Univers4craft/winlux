@@ -29,6 +29,7 @@ mod overlay;
 mod paths;
 mod pe;
 mod permissions;
+mod playtime;
 mod power;
 mod printf;
 mod process;
@@ -237,6 +238,12 @@ fn main() {
         // Jeu ou application 3D : le mode jeu lui donne la priorité.
         let name = exe.file_name().map(|n| n.to_string_lossy().into_owned());
         gamemode::register_current(name.as_deref().unwrap_or("jeu"));
+        // Temps de jeu affiché par l'application Jeux.
+        playtime::start(&exe);
+    } else if std::env::var_os("WINLUX_GAME").is_some_and(|v| v == "1") {
+        // Lancé depuis l'application Jeux : un jeu même sans import
+        // graphique visible (Unity, Direct3D chargé à la demande).
+        playtime::start(&exe);
     }
     dlls::kernel32::init();
     process::init_process(&image, &launch::windows_args(&rest));

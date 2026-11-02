@@ -124,6 +124,17 @@ icon_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName 2>/dev/nul
 if test -d /usr/share/icons/Winlux && test -x /usr/bin/xfconf-query && { test -z "$icon_theme" || ! test -d "/usr/share/icons/$icon_theme"; }; then
     /usr/bin/xfconf-query -c xsettings -p /Net/IconThemeName -n -t string -s Winlux || true
 fi
+# Thème GTK : le défaut d'XFCE (Greybird) n'est pas livré et GTK retombait
+# sur Adwaita clair, même en thème sombre (Boutique, Jeux, éditeur…). Un thème
+# absent est remplacé par Adwaita.
+gtk_theme=$(/usr/bin/xfconf-query -c xsettings -p /Net/ThemeName 2>/dev/null || true)
+# Le sombre vient de gtk-application-prefer-dark-theme (settings.ini) :
+# « Adwaita-dark », écrit par d'anciennes versions, n'existe pas en GTK 3.
+case "$gtk_theme" in Adwaita|HighContrast|HighContrastInverse) ;; *)
+    if test -z "$gtk_theme" || ! test -d "/usr/share/themes/$gtk_theme/gtk-3.0"; then
+        /usr/bin/xfconf-query -c xsettings -p /Net/ThemeName -n -t string -s Adwaita 2>/dev/null || true
+    fi ;;
+esac
 for attempt in $(seq 1 50); do
     /usr/bin/wmctrl -m >/dev/null 2>&1 && break
     kill -0 "$wm_pid" 2>/dev/null || { cat "$logs/window-manager.log" >&2; exit 1; }

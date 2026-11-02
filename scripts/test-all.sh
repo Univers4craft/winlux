@@ -2,6 +2,8 @@
 # Suite complète de tests locaux en une seule commande :
 #   sh scripts/test-all.sh            tout ce que la CI lance sur l'hôte
 #   sh scripts/test-all.sh --rapide   sans compilation ni tests PE (quelques minutes)
+#   sh scripts/test-all.sh site       seulement les étapes dont le nom contient « site »
+#                                     (filtre combinable avec --rapide)
 #
 # Les étapes sont lues dans .github/workflows/ci.yml : une vérification ajoutée
 # à la CI est aussi lancée ici, sans liste à tenir à jour. Les étapes qui
@@ -10,14 +12,17 @@
 set -u
 root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 cd "$root" || exit 1
-quick=0
-test "${1:-}" = --rapide && quick=1
+quick=0 filter=
+for argument in "$@"; do
+    case "$argument" in --rapide) quick=1 ;; *) filter=$argument ;; esac
+done
 logs=$(mktemp -d "${TMPDIR:-/tmp}/winlux-tests.XXXXXX")
 passed=0 failed=0 skipped=0
 failures= skips=
 
 step() {
     name=$1; shift
+    case "$name" in *"$filter"*) ;; *) return 0 ;; esac
     log="$logs/$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '_').log"
     printf '%-60s' "$name"
     start=$(date +%s)
@@ -32,7 +37,7 @@ step() {
 skip() { skipped=$((skipped + 1)); skips="$skips
   - $1 ($2)"; }
 
-if test "$quick" = 0; then
+if test "$quick" = 0 && test -z "$filter"; then
     step "Compilation du runtime" cargo build --release -p winlux
     step "Tests unitaires Rust (cargo test)" cargo test -p winlux
     if command -v cargo >/dev/null && test -f scripts/build-tests.sh; then
@@ -42,8 +47,8 @@ fi
 
 # Commandes « scripts/test-… » de la CI (ci.yml, et les tests d'hôte de
 # release.yml), une par ligne ; la boucle des fenêtres surgissantes est dépliée.
-grep -hE '^\s*(run: )?(sudo |xvfb-run [^/]*)?(/usr/bin/)?(python3|sh|bash|dbus-run-session)[^#]*scripts/test-[A-Za-z0-9_.-]+' \
-    .github/workflows/ci.yml .github/workflows/release.yml |
+grep -hE '^\s*(run: )?(sudo |xvfb-run [^/]*)?(/usr/bin/)?(python3|sh|bash|dbus-run-session)[^#]*(scripts/test-|installation/tests/test)[A-Za-z0-9_.-]+' \
+    .github/workflows/ci.yml .github/workflows/release.yml .github/workflows/installation.yml |
     sed -E 's/^\s*(run: )?//' | awk '!seen[$0]++' |
     while IFS= read -r line; do
         case "$line" in
@@ -52,7 +57,7 @@ grep -hE '^\s*(run: )?(sudo |xvfb-run [^/]*)?(/usr/bin/)?(python3|sh|bash|dbus-r
         esac
     done >"$logs/steps.txt"
 while IFS= read -r command; do
-    script=$(printf '%s\n' "$command" | grep -oE 'scripts/test-[A-Za-z0-9_-]+\.(py|sh)( [a-z]+$)?' | tail -n 1)
+    script=$(printf '%s\n' "$command" | grep -oE '(scripts/test-|installation/tests/test)[A-Za-z0-9_-]+\.(py|sh)( [a-z]+$)?' | tail -n 1)
     case "$command" in
         sudo*) skip "$script" "demande sudo"; continue ;;
         *-vm.sh*|*qemu*|*vm-guest*) skip "$script" "VM et ISO complète (release.yml)"; continue ;;
@@ -69,6 +74,22 @@ while IFS= read -r command; do
     fi
     step "$script" sh -c "$command"
 done <"$logs/steps.txt"
+
+# Site web et wiki (site.yml) : rendu Chromium sauté sans Node.js ni
+# Playwright, sauf WINLUX_SITE_RENDER=required.
+step "scripts/test-site.py (site web)" python3 -B scripts/test-site.py --render
+step "wiki : liens entre pages" python3 -B -c '
+import pathlib, re, sys
+pages = {p.stem for p in pathlib.Path("wiki").glob("*.md")}
+bad = 0
+for page in sorted(pathlib.Path("wiki").glob("*.md")):
+    text = re.sub(r"`[^`]*`", "", page.read_text(encoding="utf-8"))
+    for target in re.findall(r"\]\(([A-Za-z0-9_-]+)(?:#[^)]*)?\)", text):
+        if target not in pages:
+            print(f"{page}: lien vers une page absente : {target}")
+            bad = 1
+sys.exit(bad)
+'
 
 total=$((passed + failed))
 echo

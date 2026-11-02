@@ -260,4 +260,28 @@ with tempfile.TemporaryDirectory() as directory:
     keys = {bind.get("key"): bind.findtext(f"{OB}action/{OB}command") for bind in rc.find(f"{OB}keyboard")}
     ok(keys.get("W-w") == "winlux-widgets", "Windows+W ouvre les widgets")
 
+# ── Jeux (#294, passage en VM) ─────────────────────────────────────────────
+games = runpy.run_path(str(NATIVE / "jeux/winlux-games.py"), run_name="test_campaign")
+with tempfile.TemporaryDirectory() as directory:
+    folder = Path(directory) / "Démo"
+    folder.mkdir()
+    exe = folder / "demo.exe"
+    pe = bytearray(512)
+    pe[0:2] = b"MZ"; pe[60:64] = (128).to_bytes(4, "little")
+    pe[128:132] = b"PE\0\0"; pe[148:150] = (240).to_bytes(2, "little")
+    pe[152:154] = (0x20B).to_bytes(2, "little")
+    exe.write_bytes(bytes(pe))
+    ok(games["best_exe"](folder) is None and games["best_exe"](folder, any_exe=True) is not None,
+       "Jeux : un .exe sans import graphique (Unity, D3D à la demande) est retenu dans un dossier de jeux")
+ok(games["summary"]({"exe": "/x.exe", "wide": True}, {"/x.exe": {"seconds": 0, "last": 1, "running": False}}) != "Jamais lancé",
+   "Jeux : une partie de moins de 30 s n'affiche plus « Jamais lancé »")
+games_source = (NATIVE / "jeux/winlux-games.py").read_text()
+ok('Path("/proc", pid)' in games_source, "Jeux : un jeu quitté n'est plus « En cours » (bouton Jouer grisé)")
+ok('WINLUX_GAME="1"' in games_source and 'var_os("WINLUX_GAME")' in (ROOT / "runtime/src/main.rs").read_text(),
+   "Jeux : lancé depuis la bibliothèque, le temps de jeu est compté")
+for script in ("winlux-personalize.py", "winlux-settings-pages.py", "winlux-native-session.sh", "winlux-user-session.sh"):
+    text = (SCRIPTS / script).read_text()
+    ok('"Adwaita-dark" if' not in text and "gtk_theme=Adwaita-dark" not in text,
+       f"{script} : thème sombre par prefer-dark, pas « Adwaita-dark » (inexistant, rendu clair)")
+
 print(f"Campagne v0.2.13 : {checks} régressions vérifiées.")

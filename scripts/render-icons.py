@@ -67,6 +67,7 @@ APPS = {
     "network-workgroup": ("cyan", '<rect x="15" y="22" width="14" height="11" rx="2"/><rect x="35" y="31" width="14" height="11" rx="2"/><path d="M29 28h4v8h2"/>', "Transfert de PC"),
     "accessories-text-editor": ("cyan", '<path d="M22 18h14l7 7v21H22z"/><path d="M27 32h11M27 38h8"/>', "Bloc-notes"),
     "accessories-calculator": ("ardoise", '<rect x="21" y="17" width="22" height="30" rx="3"/><path d="M26 24h12M26 33h1M32 33h1M38 33h1M26 40h1M32 40h1M38 40h1"/>', "Calculatrice"),
+    "applications-games": ("prisme", '<path d="M22 24h20a8 8 0 0 1 7.6 5.5l2.6 8.6A4.5 4.5 0 0 1 44.6 42L40 37H24l-4.6 5a4.5 4.5 0 0 1-7.6-3.9l2.6-8.6A8 8 0 0 1 22 24z"/><path d="M24 28v6M21 31h6"/><circle cx="40" cy="29" r="1.2" fill="#fff"/><circle cx="43" cy="33" r="1.2" fill="#fff"/>', "Jeux"),
     "system-help": ("violet", '<circle cx="32" cy="32" r="14"/><path d="M27 28a5 5 0 1 1 7 4.5c-1.5.8-2 1.7-2 3.5M32 41v.5"/>', "Aide"),
 }
 
