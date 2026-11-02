@@ -732,34 +732,12 @@ else
     log 'Script de détection matériel non trouvé, sauté'
 fi
 
-# Installer les pilotes GPU si APT est disponible
-if command -v apt-get >/dev/null 2>&1; then
-    gpu_vendors=$(lspci 2>/dev/null | grep -iE 'VGA|3D|Display' || true)
-
-    if printf '%s' "$gpu_vendors" | grep -qi nvidia; then
-        log 'GPU NVIDIA détecté — installation des pilotes...'
-        apt-get install -y --no-install-recommends \
-            nvidia-driver nvidia-utils 2>/dev/null || \
-        apt-get install -y --no-install-recommends \
-            nvidia-driver-535 2>/dev/null || \
-        log 'Installation des pilotes NVIDIA échouée (pas de dépôt configuré ?)'
-    fi
-
-    if printf '%s' "$gpu_vendors" | grep -qi 'AMD\|ATI\|Radeon'; then
-        log 'GPU AMD détecté — firmware Mesa/AMDGPU'
-        apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers firmware-amd-graphics 2>/dev/null || \
-        apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers linux-firmware 2>/dev/null || \
-        log 'Installation des pilotes AMD échouée'
-    fi
-
-    if printf '%s' "$gpu_vendors" | grep -qi intel; then
-        log 'GPU Intel détecté — pilotes Mesa i965/iris'
-        apt-get install -y --no-install-recommends \
-            mesa-vulkan-drivers intel-media-va-driver 2>/dev/null || \
-        log 'Installation des pilotes Intel échouée'
-    fi
+# Pilotes recommandés pour ce matériel (NVIDIA, pilotes complets du noyau,
+# VA-API, microcode, fwupd) : winlux-drivers choisit d'après les cartes
+# réellement présentes et les dépôts Ubuntu, comme Windows Update.
+if command -v winlux-drivers >/dev/null 2>&1; then
+    log 'Installation des pilotes recommandés...'
+    winlux-drivers auto 2>/dev/null || log 'Pilotes recommandés : nouvel essai au prochain démarrage'
 fi
 
 # --- Profil d'utilisation et applications recommandées ---

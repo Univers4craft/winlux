@@ -85,6 +85,7 @@ pub mod mfreader;
 pub mod mmap;
 pub mod mmdevapi;
 pub mod monitors;
+pub mod mouse;
 pub mod mscoree;
 pub mod msvcp140;
 pub mod msvcrt;

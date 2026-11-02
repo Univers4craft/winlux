@@ -1401,6 +1401,7 @@ EXTRA_TRANSLATIONS = {
         "store_subtitle": "Winlux ne fournit ni n'impose aucune boutique. Celles que vous cochez sont ajoutées au Store au premier démarrage : téléchargées chez l'éditeur et vérifiées (connexion Internet requise, sinon au démarrage suivant).",
         "summary_store": 'Boutiques',
         "summary_store_none": 'aucune (Paramètres > Applications)',
+        "summary_offline_later": "Pas de connexion Internet pour l'instant : le navigateur et les boutiques choisis seront installés automatiquement au premier démarrage connecté.",
         "independent_notice": "Projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Français",
         "keyboard_name_us": "QWERTY — Anglais (US)",
@@ -1488,6 +1489,7 @@ EXTRA_TRANSLATIONS = {
         "store_subtitle": 'Winlux neither ships nor imposes any store. The ones you tick are added to the Store at first startup: downloaded from the publisher and checked (Internet connection required, otherwise at the next startup).',
         "summary_store": 'Stores',
         "summary_store_none": 'none (Settings > Apps)',
+        "summary_offline_later": 'No Internet connection for now: the chosen browser and stores will be installed automatically at the first startup with a connection.',
         "independent_notice": "Independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — French",
         "keyboard_name_us": "QWERTY — English (US)",
@@ -1575,6 +1577,7 @@ EXTRA_TRANSLATIONS = {
         "store_subtitle": 'Winlux liefert und erzwingt keinen Store. Die angekreuzten werden beim ersten Start dem Store hinzugefügt: beim Herausgeber heruntergeladen und geprüft (Internetverbindung erforderlich, sonst beim nächsten Start).',
         "summary_store": 'Stores',
         "summary_store_none": 'keine (Einstellungen > Apps)',
+        "summary_offline_later": 'Derzeit keine Internetverbindung: Der gewählte Browser und die Stores werden beim ersten Start mit Verbindung automatisch installiert.',
         "independent_notice": "Unabhängiges Projekt, weder mit Microsoft verbunden noch von Microsoft unterstützt. Windows ist eine Marke der Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Französisch",
         "keyboard_name_us": "QWERTY — Englisch (USA)",
@@ -1662,6 +1665,7 @@ EXTRA_TRANSLATIONS = {
         "store_subtitle": 'Winlux no incluye ni impone ninguna tienda. Las que marque se añaden a la Tienda en el primer arranque: se descargan del editor y se comprueban (se requiere conexión a Internet; si no, en el siguiente arranque).',
         "summary_store": 'Tiendas',
         "summary_store_none": 'ninguna (Configuración > Aplicaciones)',
+        "summary_offline_later": 'Sin conexión a Internet por ahora: el navegador y las tiendas elegidos se instalarán automáticamente en el primer arranque con conexión.',
         "independent_notice": "Proyecto independiente, no afiliado a Microsoft ni aprobado por ella. Windows es una marca de Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francés",
         "keyboard_name_us": "QWERTY — Inglés (EE. UU.)",
@@ -1749,6 +1753,7 @@ EXTRA_TRANSLATIONS = {
         "store_subtitle": "Winlux non include né impone alcun negozio. Quelli selezionati vengono aggiunti allo Store al primo avvio: scaricati dall'editore e verificati (connessione Internet richiesta, altrimenti al riavvio successivo).",
         "summary_store": 'Negozi',
         "summary_store_none": 'nessuno (Impostazioni > App)',
+        "summary_offline_later": 'Nessuna connessione Internet per ora: il browser e i negozi scelti verranno installati automaticamente al primo avvio con connessione.',
         "independent_notice": "Progetto indipendente, non affiliato a Microsoft né da essa approvato. Windows è un marchio di Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francese",
         "keyboard_name_us": "QWERTY — Inglese (USA)",
@@ -1836,6 +1841,7 @@ EXTRA_TRANSLATIONS = {
         "store_subtitle": 'O Winlux não inclui nem impõe nenhuma loja. As que você marcar são adicionadas à Store na primeira inicialização: baixadas do editor e verificadas (conexão com a Internet necessária, senão na inicialização seguinte).',
         "summary_store": 'Lojas',
         "summary_store_none": 'nenhuma (Configurações > Aplicativos)',
+        "summary_offline_later": 'Sem conexão com a Internet por enquanto: o navegador e as lojas escolhidos serão instalados automaticamente na primeira inicialização com conexão.',
         "independent_notice": "Projeto independente, não afiliado à Microsoft nem aprovado por ela. Windows é uma marca da Microsoft Corporation.",
         "keyboard_name_fr": "AZERTY — Francês",
         "keyboard_name_us": "QWERTY — Inglês (EUA)",
@@ -2550,6 +2556,15 @@ def nm_available():
         return out.strip() == "running"
     except Exception:
         return False
+
+
+def has_default_route():
+    """Route par défaut présente (même test que l'init avant de télécharger)."""
+    try:
+        with open("/proc/net/route", encoding="ascii", errors="replace") as routes:
+            return any(len(f) > 1 and f[1] == "00000000" for f in (line.split() for line in list(routes)[1:]))
+    except OSError:
+        return True
 
 
 def network_status():
@@ -4562,6 +4577,9 @@ class InstallerApp(Gtk.Application):
         lines.append(f"{tr('summary_browser')} : {browser or tr('summary_browser_none')}")
         stores = [name for ident, name, _ in store_catalog_choices() if ident in self.config.get("store_catalogs", [])]
         lines.append(f"{tr('summary_store')} : {', '.join(stores) or tr('summary_store_none')}")
+        if (browser or stores) and not has_default_route():
+            # Pas une erreur : l'init les installe au premier démarrage connecté.
+            lines.append(tr("summary_offline_later"))
         score = (winlux_benchmark.fr_number(self.benchmark["base_score"], 1) if self.benchmark
                  else tr("summary_benchmark_none"))
         lines.append(f"{tr('summary_benchmark')} : {score}")

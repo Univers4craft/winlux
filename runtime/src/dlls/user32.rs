@@ -1042,6 +1042,11 @@ pub extern "win64" fn get_system_metrics(index: i32) -> i32 {
         4 => 4,                               // SM_CYBORDER
         7 => 32,                              // SM_CYHSCROLL
         8 => 16,                              // SM_CYVSCROLL
+        19 => 1,                              // SM_MOUSEPRESENT
+        23 => i32::from(crate::dlls::mouse::current().swap_buttons), // SM_SWAPBUTTON
+        36 | 37 => 4,                         // SM_CXDOUBLECLK / SM_CYDOUBLECLK
+        43 => 3,                              // SM_CMOUSEBUTTONS
+        75 => 1,                              // SM_MOUSEWHEELPRESENT
         90 => 96,                             // LOGPIXELSX
         91 => 96,                             // LOGPIXELSY
         _ => 0,
@@ -1637,11 +1642,14 @@ pub extern "win64" fn show_cursor(show: i32) -> i32 {
 }
 
 pub extern "win64" fn get_double_click_time() -> u32 {
-    500 // Valeur Windows par défaut
+    // Paramètres > Souris (500 ms par défaut, comme Windows).
+    crate::dlls::mouse::current().double_click
 }
 
 pub extern "win64" fn swap_mouse_button(_swap: i32) -> i32 {
-    0 // Pas de swap
+    // Les boutons sont déjà inversés par libinput quand le réglage gaucher est
+    // actif : on renvoie l'état précédent sans le modifier pour tout le bureau.
+    i32::from(crate::dlls::mouse::current().swap_buttons)
 }
 
 // =====================================================================
@@ -2173,6 +2181,18 @@ pub unsafe extern "win64" fn system_parameters_info_a(
         // SPI_GETCLIENTAREAANIMATION : BOOL.
         0x1042 if !data.is_null() => {
             *data.cast::<i32>() = i32::from(a11y.animations);
+            return 1;
+        }
+        // Souris (Paramètres > Souris) : SPI_GETMOUSETRAILS, SPI_GETWHEELSCROLLLINES,
+        // SPI_GETMOUSESPEED (1 à 20) et SPI_GETWHEELSCROLLCHARS (3, comme Windows).
+        0x005E | 0x0068 | 0x0070 | 0x006C if !data.is_null() => {
+            let mouse = crate::dlls::mouse::current();
+            *data.cast::<u32>() = match action {
+                0x005E => mouse.trails,
+                0x0068 => mouse.wheel_lines,
+                0x0070 => mouse.speed,
+                _ => 3,
+            };
             return 1;
         }
         // SPI_GETCARETWIDTH : DWORD en pixels.

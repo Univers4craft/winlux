@@ -49,7 +49,7 @@ if test -n "$cryptsetup"; then
 else
     echo 'cryptsetup absent : les installations chiffrées (LUKS) ne seront pas proposées' >&2
 fi
-for driver in virtio_pci virtio_blk virtio_scsi sr_mod sd_mod ata_piix ahci nvme usb_storage uas xhci_pci xhci_hcd ehci_pci ehci_hcd uhci_hcd hid usbhid hid_generic mmc_core sdhci sdhci_pci loop isofs squashfs overlay vfat ext4 $crypt_drivers; do
+for driver in virtio_pci virtio_blk virtio_scsi sr_mod sd_mod ata_piix ahci nvme vmd usb_storage uas xhci_pci xhci_hcd ehci_pci ehci_hcd uhci_hcd hid usbhid hid_generic mmc_core mmc_block sdhci sdhci_pci sdhci_acpi loop isofs squashfs overlay vfat ext4 $crypt_drivers; do
     # Pas de pipeline : l'échec de modprobe (pilote absent) est visible et la
     # boucle, lue depuis un fichier, s'exécute dans le shell courant (set -e).
     if ! modprobe -S "$kernel_release" --show-depends "$driver" >"$work/depends" 2>"$work/depends.err"; then

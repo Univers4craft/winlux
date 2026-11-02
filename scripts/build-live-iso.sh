@@ -143,6 +143,8 @@ chmod 755 "$stage/usr/bin/winlux-browsers"
 cp "$root/integration/winlux-open" "$stage/usr/bin/winlux-open"
 cp "$root/scripts/winlux-hardware.sh" "$stage/usr/bin/winlux-hardware"
 cp "$root/scripts/winlux-firmware.sh" "$stage/usr/bin/winlux-firmware"
+# Pilotes du matériel réel (cartes graphiques, NVIDIA, VA-API, microcode, fwupd).
+install -m 755 "$root/scripts/winlux-drivers.py" "$stage/usr/bin/winlux-drivers"
 chmod 755 "$stage/usr/bin/winlux-browser" "$stage/usr/bin/winlux-open" "$stage/usr/bin/winlux-control" "$stage/usr/bin/winlux-journal" "$stage/usr/bin/winlux-restore" "$stage/usr/bin/winlux-network" "$stage/usr/share/winlux/udhcpc.script" "$stage/usr/bin/winlux-hardware" "$stage/usr/bin/winlux-firmware"
 
 # Installateur et outils associés
@@ -329,7 +331,11 @@ fi
 # nls_utf8: FAT and exFAT USB keys are mounted with iocharset=utf8 (volumes.rs);
 # without it every such key failed with "IO charset utf8 not found". usb_storage
 # and uas give USB keys their /dev/sdX even where the kernel builds them as modules.
-for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1 nls_utf8 usb_storage uas bochs qxl vmwgfx cifs nfs nfsv3 nfsv4; do
+# Matériel réel : scripts/hardware-modules.list (cartes graphiques, Wi-Fi,
+# Ethernet, Bluetooth, son, pavés tactiles, capteurs). udev ne les charge que
+# si le matériel est là.
+hardware_modules=$(sed 's/#.*//' "$root/scripts/hardware-modules.list" | tr '\n' ' ')
+for driver in virtio_net e1000 e1000e r8169 virtio_input hid_generic usbhid psmouse snd_hda_intel snd_intel8x0 snd_virtio vfat nls_cp437 nls_ascii nls_iso8859_1 nls_utf8 usb_storage uas bochs qxl vmwgfx cifs nfs nfsv3 nfsv4 $hardware_modules; do
     modprobe -S "$kernel_release" --show-depends "$driver" 2>/dev/null | while read -r directive module rest; do
         test "$directive" = insmod || continue
         destination="$stage${module%.zst}"
@@ -620,6 +626,16 @@ fi
 (
     /usr/bin/winlux-hardware rest >/dev/null 2>&1 || true
     /usr/bin/winlux-firmware >/dev/null 2>&1 || true
+    # Système installé : microcode et pilotes suivis à chaque démarrage, puis
+    # au premier démarrage les pilotes recommandés (NVIDIA, pilotes complets
+    # du noyau, VA-API, microcode), réseau venu et en basse priorité.
+    if test -x /usr/bin/winlux-drivers && test -f /etc/winlux/install-config.json; then
+        /usr/bin/winlux-drivers boot >/run/winlux/drivers-boot.log 2>&1 || true
+        if test ! -e /var/lib/winlux/drivers/auto.done; then
+            low=; test -x /usr/bin/nice && low='/usr/bin/nice -n 19'
+            $low /usr/bin/winlux-drivers auto >>/var/log/winlux-drivers.log 2>&1 || true
+        fi
+    fi
     if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
         /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
     fi
@@ -770,6 +786,21 @@ if test -s /etc/winlux/first-boot-browser; then
         if $low /usr/bin/winlux-browsers --default "$choice"; then
             /bin/busybox mv /etc/winlux/first-boot-browser /etc/winlux/first-boot-browser.done
         fi
+    ) >>/var/log/winlux-first-boot-browser.log 2>&1 &
+fi
+# Navigateurs demandés hors ligne depuis Paramètres > Navigateurs : installés
+# dès que le réseau répond (winlux-browsers les retire de la liste ensuite).
+if test -s /etc/winlux/browser-install-pending; then
+    (
+        for attempt in $(/bin/busybox seq 1 120); do
+            /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
+            /bin/busybox sleep 5
+        done
+        low=
+        if test -x /usr/bin/nice; then low='/usr/bin/nice -n 10'; fi
+        for choice in $(/bin/busybox grep -E '^(chrome|edge|firefox)$' /etc/winlux/browser-install-pending); do
+            $low /usr/bin/winlux-browsers --install "$choice" || true
+        done
     ) >>/var/log/winlux-first-boot-browser.log 2>&1 &
 fi
 # Boutiques de logiciels choisies (installateur, premier démarrage) : ajoutées
