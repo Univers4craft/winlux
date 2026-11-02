@@ -153,6 +153,11 @@ jobs:
       - name: Vérifier la fenêtre Bienvenue et sa réouverture depuis le menu Démarrer
         run: xvfb-run -a -s '-screen 0 1366x768x24' /usr/bin/python3 -B scripts/test-welcome.py
 
+      - name: Vérifier « Afficher dans le dossier » (FileManager1, xdg) vers l'Explorateur
+        run: |
+          sudo apt-get install -y -q dbus libglib2.0-bin
+          /usr/bin/python3 -B scripts/test-filemanager1.py
+
       - name: Vérifier le signalement de problèmes (masquage, modèle, relais)
         run: python3 -B scripts/test-report.py
 

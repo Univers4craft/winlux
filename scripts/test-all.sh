@@ -116,6 +116,7 @@ run clavier-panneaux    display python3 -B scripts/test-keyboard-nav.py quick
 run comptes              display python3 -B scripts/test-accounts.py
 run sans-marque-ms       display python3 -B scripts/test-no-microsoft-branding.py
 run bienvenue            display python3 -B scripts/test-welcome.py
+run afficher-dossier     python3 -B scripts/test-filemanager1.py
 # Fautes matérielles en exceptions SEH (#269) : runtime compilé et clang requis.
 run exceptions-materielles sh scripts/test-hw-exceptions.sh
 # Paquets MSIX (#272) : runtime et hello.exe compilés requis.
