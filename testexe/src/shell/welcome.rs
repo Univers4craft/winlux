@@ -94,7 +94,7 @@ const STEPS: [Step; 10] = [
     },
     Step {
         title: [b"Raccourcis clavier", b"Keyboard shortcuts", b"M\xE9todos abreviados de teclado", b"Tastenkombinationen"],
-        text: [b"Les raccourcis de Windows 11 fonctionnent dans Winlux :", b"Windows 11 shortcuts work in Winlux:", b"Los atajos de Windows 11 funcionan en Winlux:", b"Die Tastenkombinationen von Windows 11 funktionieren in Winlux:"],
+        text: [b"Raccourcis clavier utiles dans Winlux :", b"Handy keyboard shortcuts in Winlux:", b"Atajos de teclado \xFAtiles en Winlux:", b"N\xFCtzliche Tastenkombinationen in Winlux:"],
         tips: [NONE, NONE, NONE],
         action: NONE,
     },
@@ -499,7 +499,7 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
     let h = w * 2 / 3;
     let cx = (pr.left + pr.right) / 2;
     let cy = (pr.top + pr.bottom) / 2 - 20;
-    // Légère montée à chaque étape, comme les pages d'accueil de Windows 11.
+    // Légère montée à chaque étape.
     let t = ease_out(GetTickCount().wrapping_sub(ANIM).min(10_000) as i32, ANIM_MS);
     let dy = 14 - 14 * t / 1000;
     let r = rect(cx - w / 2, cy - h / 2 + dy, cx + w / 2, cy + h / 2 + dy);

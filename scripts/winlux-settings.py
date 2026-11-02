@@ -140,6 +140,7 @@ _TR = {
     'Connexion': ('Connection', 'Conexión', 'Verbindung'),
     'Volume': ('Volume', 'Volumen', 'Lautstärke'),
     'Batterie': ('Battery', 'Batería', 'Akku'),
+    'Alimentation': ('Power', 'Energía', 'Energie'),
     'Mode': ('Mode', 'Modo', 'Modus'),
     'Écran éteint après': ('Turn off screen after', 'Apagar pantalla tras', 'Bildschirm aus nach'),
     'Veille après': ('Sleep after', 'Suspender tras', 'Energiesparmodus nach'),
@@ -540,6 +541,40 @@ def read(name):
     except OSError: return ""
 
 
+def power_hardware(root=None):
+    """Matériel d'alimentation réellement présent : (batterie, capot, rétroéclairage).
+
+    Sans batterie (ordinateur de bureau, VM), les réglages « sur batterie »
+    sont masqués, jamais grisés ; de même pour le capot et la luminosité."""
+    base = Path(root or os.environ.get("WINLUX_HW_ROOT", "/"))
+    battery = False
+    for supply in (base / "sys/class/power_supply").glob("*"):
+        try:
+            kind = (supply / "type").read_text().strip()
+            present = (supply / "present").read_text().strip() if (supply / "present").exists() else "1"
+        except OSError:
+            continue
+        if kind == "Battery" and present == "1" and (supply / "capacity").exists():
+            battery = True
+    lid = any((base / "proc/acpi/button/lid").glob("*/state"))
+    backlight = any((base / "sys/class/backlight").glob("*/brightness"))
+    return battery, lid, backlight
+
+
+def power_page_items(fields, actions, hardware):
+    """Champs et boutons de la page Alimentation selon le matériel détecté."""
+    battery, lid, backlight = hardware
+    def keep(key):
+        if not battery and (key == "battery" or key.endswith("-dc")):
+            return False
+        if not lid and key in ("power_lid", "power-lid"):
+            return False
+        if not backlight and (key == "power_brightness" or key.startswith("power-brightness-")):
+            return False
+        return True
+    return [f for f in fields if keep(f[1])], [a for a in actions if keep(a[1])]
+
+
 def _power_modes():
     """Modes d'alimentation disponibles (winlux-power-modes, installé à côté)."""
     from importlib.machinery import SourceFileLoader
@@ -657,6 +692,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
         # Une page sans contenu possible sur cette machine n'apparaît pas.
         status = dict(line.split("=", 1) for line in read("/run/winlux/control.txt").splitlines() if "=" in line)
         self.hidden_pages = {page for page in EXTRA.ExtraPages.EXTRA_PAGES if not EXTRA.page_available(page, status)}
+        # Sans batterie, la page s'appelle « Alimentation » (comme un PC de bureau).
+        if not power_hardware()[0]: PAGES[23] = _t("Alimentation")
         # Sans PipeWire, « Son » garde les commandes simples de l’ancienne page.
         self.sound_fallback = SOUND_PAGE in self.hidden_pages
         self.hidden_pages.discard(SOUND_PAGE)
@@ -800,6 +837,7 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             available = _power_modes()
             actions = [(title, action) for title, action in actions
                        if not action.startswith("power-profile-") or action[len("power-profile-"):] in available]
+            _, actions = power_page_items([], actions, power_hardware())
         if self.page == 11:
             # Ordre alphabétique (chrome, edge, firefox) : aucun navigateur mis en avant.
             self.label(_t("Winlux ne fournit ni n’impose aucun navigateur, dans l’esprit des règles européennes sur le choix du navigateur. Choisissez celui que vous préférez : Winlux le télécharge sur le site officiel de son éditeur, vérifie le fichier et l’installe pour vous."), "subtitle")
@@ -959,6 +997,8 @@ class Settings(EXTRA.ExtraPages, Gtk.Window):
             GLib.idle_add(self.extra_refresh)
         self.buttons.set_sensitive(self.process is None and not self.busy)
         fields = FIELDS.get(self.page, [])
+        if self.page == 23:
+            fields, _ = power_page_items(fields, [], power_hardware())
         def shown(key):
             value = status.get(key)
             # Échelle non réglée : automatique (et non « Indisponible »), en %.
