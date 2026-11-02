@@ -250,7 +250,11 @@ while time.monotonic() < deadline and not chooser.exists() and not Path("/run/wi
 assert chooser.exists() or Path("/run/winlux/browser-settings.log").exists(), "écran de choix du navigateur non demandé"
 print("WINLUX_NATIVE_BROWSER_CHOICE=0", flush=True)
 # A plain application window stands in for the browser in the window tests.
-subprocess.Popen(["xterm", "-T", "Winlux browser window test"], stdout=log, stderr=log)
+# A GTK window (the toolkit every native Winlux app uses) is always present.
+subprocess.Popen(["python3", "-c", "import gi; gi.require_version('Gtk', '3.0'); from gi.repository import Gtk; "
+                  "w = Gtk.Window(title='Winlux browser window test'); w.set_default_size(1000, 700); "
+                  "w.add(Gtk.Label(label='Winlux')); w.connect('destroy', Gtk.main_quit); w.show_all(); Gtk.main()"],
+                 stdout=log, stderr=log)
 browser = wait_title("Winlux browser window test", 90)
 assert "_NET_WM_STATE_FULLSCREEN" not in run("xprop", "-id", browser, "_NET_WM_STATE")
 geometry = windows()[browser][0]
