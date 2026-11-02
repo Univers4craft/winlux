@@ -1,0 +1,1193 @@
+#!/usr/bin/python3
+"""Assistant Claude de Winlux : poser une question depuis la barre des tâches.
+
+Désactivé par défaut. Paramètres > Applications > Assistant Claude l'active :
+la fenêtre « --configurer » télécharge Claude Code s'il manque (même
+installation que l'application Claude Code du menu Démarrer, rien dans
+l'ISO), connecte le compte Claude de l'utilisateur (Google, e-mail…) avec
+« claude auth login », puis ajoute le bouton de la barre des tâches. Tant
+qu'il n'est pas activé, rien n'apparaît dans la barre et rien ne tourne :
+Windows+C ne fait rien.
+
+Garde-fous :
+- Claude n'a aucun outil (« --tools "" ») : il ne lit ni ne touche rien
+  lui-même. Pour lire un journal, chercher un fichier ou changer un réglage,
+  il le demande ; l'utilisateur voit le texte exact qui partirait (ou
+  l'action exacte) et accepte ou refuse.
+- Seuls partent la question et l'historique de la conversation en cours,
+  rien n'est gardé sur le disque (« --no-session-persistence »), la
+  télémétrie de Claude Code est coupée.
+- La connexion reste celle de Claude Code (~/.claude), remise en lecture
+  seule pour le propriétaire (dossier 700, fichiers 600) à chaque lancement.
+
+Commandes : winlux-assistant [--configurer | --activer | --desactiver |
+--deconnecter | --etat].
+"""
+import json
+import os
+from pathlib import Path
+import re
+import shutil
+import subprocess
+import sys
+import threading
+import time
+import unicodedata
+
+HOME = Path.home()
+CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "winlux/assistant.conf"
+WORK = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share") / "winlux/assistant"
+JOURNAL = Path(os.environ.get("WINLUX_JOURNAL_DIR", "/run/winlux/journal"))
+DESKTOP_FILE = "/usr/share/applications/winlux-assistant.desktop"
+MODEL = os.environ.get("WINLUX_ASSISTANT_MODEL", "sonnet")
+FIRST_PLUGIN = 30  # 1 à 11 sont livrés ou réservés (11 = Widgets) : loin d'eux.
+PANEL_AFTER = 8  # séparateur qui pousse les icônes à droite : le bouton vient juste après.
+
+
+def _interface_lang():
+    code = os.environ.get("WINLUX_LANG", "")
+    if not code:
+        try:
+            with open("/etc/winlux/locale.conf", encoding="utf-8") as conf:
+                for line in conf:
+                    if line.startswith("LANG="):
+                        code = line[5:].strip()
+        except OSError:
+            pass
+    code = (code or os.environ.get("LANG", "fr"))[:2].lower()
+    return code if code in ("fr", "en", "es", "de") else "fr"
+
+
+_LANG = _interface_lang()
+_COL = {"en": 0, "es": 1, "de": 2}
+LANGUAGE_NAMES = {"fr": "français", "en": "English", "es": "español", "de": "Deutsch"}
+
+# Texte français -> (anglais, espagnol, allemand).
+_TR = {
+    "Assistant Claude": ("Claude assistant", "Asistente Claude", "Claude-Assistent"),
+    "Activer l'assistant Claude": ("Turn on the Claude assistant", "Activar el asistente Claude",
+                                   "Claude-Assistenten aktivieren"),
+    "Télécharger Claude Code (environ 300 Mo)": ("Download Claude Code (about 300 MB)",
+                                                 "Descargar Claude Code (unos 300 MB)",
+                                                 "Claude Code herunterladen (etwa 300 MB)"),
+    "Se connecter à votre compte Claude": ("Sign in to your Claude account", "Iniciar sesión en su cuenta de Claude",
+                                           "Bei Ihrem Claude-Konto anmelden"),
+    "Ajouter le bouton à la barre des tâches": ("Add the button to the taskbar", "Agregar el botón a la barra de tareas",
+                                                "Schaltfläche zur Taskleiste hinzufügen"),
+    "Vérification de la connexion…": ("Checking the sign-in…", "Comprobando el inicio de sesión…",
+                                      "Anmeldung wird geprüft…"),
+    "Connectez-vous dans la page qui vient de s'ouvrir (Google, e-mail…).":
+        ("Sign in on the page that just opened (Google, email…).",
+         "Inicie sesión en la página que se acaba de abrir (Google, correo…).",
+         "Melden Sie sich auf der soeben geöffneten Seite an (Google, E-Mail…)."),
+    "Si la page affiche un code, collez-le ici :": ("If the page shows a code, paste it here:",
+                                                   "Si la página muestra un código, péguelo aquí:",
+                                                   "Wenn die Seite einen Code anzeigt, fügen Sie ihn hier ein:"),
+    "Valider": ("Confirm", "Confirmar", "Bestätigen"),
+    "Ouvrir la page de connexion": ("Open the sign-in page", "Abrir la página de inicio de sesión",
+                                    "Anmeldeseite öffnen"),
+    "Connecté au compte Claude{who}.": ("Signed in to the Claude account{who}.",
+                                        "Sesión iniciada en la cuenta de Claude{who}.",
+                                        "Beim Claude-Konto angemeldet{who}."),
+    "La connexion n'a pas abouti : {e}": ("Sign-in did not complete: {e}", "No se completó el inicio de sesión: {e}",
+                                          "Die Anmeldung wurde nicht abgeschlossen: {e}"),
+    "C'est prêt ! Cliquez sur le bouton Claude de la barre des tâches ou appuyez sur Windows+C.":
+        ("All set! Click the Claude button on the taskbar or press Windows+C.",
+         "¡Listo! Haga clic en el botón Claude de la barra de tareas o pulse Windows+C.",
+         "Fertig! Klicken Sie auf die Claude-Schaltfläche in der Taskleiste oder drücken Sie Windows+C."),
+    "Ouvrir l'assistant": ("Open the assistant", "Abrir el asistente", "Assistent öffnen"),
+    "Réessayer": ("Try again", "Reintentar", "Erneut versuchen"),
+    "Annuler": ("Cancel", "Cancelar", "Abbrechen"),
+    "Fermer": ("Close", "Cerrar", "Schließen"),
+    "Le téléchargement a échoué : {e}": ("The download failed: {e}", "La descarga falló: {e}",
+                                         "Der Download ist fehlgeschlagen: {e}"),
+    "Posez votre question…": ("Ask your question…", "Haga su pregunta…", "Stellen Sie Ihre Frage…"),
+    "Envoyer": ("Send", "Enviar", "Senden"),
+    "Claude réfléchit…": ("Claude is thinking…", "Claude está pensando…", "Claude denkt nach…"),
+    "Envoyé à Claude (Anthropic) : votre question et cette conversation. Rien d'autre sans votre accord.":
+        ("Sent to Claude (Anthropic): your question and this conversation. Nothing else without your consent.",
+         "Se envía a Claude (Anthropic): su pregunta y esta conversación. Nada más sin su permiso.",
+         "An Claude (Anthropic) gesendet: Ihre Frage und dieses Gespräch. Nichts anderes ohne Ihre Zustimmung."),
+    "Bonjour ! Je peux vous aider à utiliser Winlux, par exemple :":
+        ("Hello! I can help you use Winlux, for example:", "¡Hola! Puedo ayudarle a usar Winlux, por ejemplo:",
+         "Hallo! Ich helfe Ihnen bei Winlux, zum Beispiel:"),
+    "Pourquoi mon programme .exe ne s'ouvre pas ?": ("Why won't my .exe program open?",
+                                                    "¿Por qué no se abre mi programa .exe?",
+                                                    "Warum startet mein .exe-Programm nicht?"),
+    "Où est mon fichier… ?": ("Where is my file…?", "¿Dónde está mi archivo…?", "Wo ist meine Datei…?"),
+    "Passe au thème sombre": ("Switch to the dark theme", "Cambia al tema oscuro", "Wechsle zum dunklen Design"),
+    "Claude demande à lire : {what}": ("Claude asks to read: {what}", "Claude pide leer: {what}",
+                                       "Claude möchte lesen: {what}"),
+    "Voir exactement ce qui sera envoyé": ("See exactly what will be sent", "Ver exactamente lo que se enviará",
+                                           "Genau ansehen, was gesendet wird"),
+    "Envoyer à Claude": ("Send to Claude", "Enviar a Claude", "An Claude senden"),
+    "Refuser": ("Decline", "Rechazar", "Ablehnen"),
+    "Claude propose : {what}": ("Claude suggests: {what}", "Claude propone: {what}", "Claude schlägt vor: {what}"),
+    "Faire": ("Do it", "Hacerlo", "Ausführen"),
+    "Non merci": ("No thanks", "No, gracias", "Nein danke"),
+    "Fait.": ("Done.", "Hecho.", "Erledigt."),
+    "Refusé : rien n'a été envoyé.": ("Declined: nothing was sent.", "Rechazado: no se envió nada.",
+                                     "Abgelehnt: Es wurde nichts gesendet."),
+    "Refusé : rien n'a été changé.": ("Declined: nothing was changed.", "Rechazado: no se cambió nada.",
+                                     "Abgelehnt: Es wurde nichts geändert."),
+    "L'action a échoué : {e}": ("The action failed: {e}", "La acción falló: {e}", "Die Aktion ist fehlgeschlagen: {e}"),
+    "Claude n'a pas répondu : {e}": ("Claude did not answer: {e}", "Claude no respondió: {e}",
+                                     "Claude hat nicht geantwortet: {e}"),
+    "Vous n'êtes pas connecté à votre compte Claude.": ("You are not signed in to your Claude account.",
+                                                       "No ha iniciado sesión en su cuenta de Claude.",
+                                                       "Sie sind nicht bei Ihrem Claude-Konto angemeldet."),
+    "L'assistant Claude est désactivé. Activez-le dans Paramètres.":
+        ("The Claude assistant is turned off. Turn it on in Settings.",
+         "El asistente Claude está desactivado. Actívelo en Configuración.",
+         "Der Claude-Assistent ist deaktiviert. Aktivieren Sie ihn in den Einstellungen."),
+    "Terminer la configuration": ("Finish setting up", "Terminar la configuración", "Einrichtung abschließen"),
+    "Nouvelle conversation": ("New conversation", "Nueva conversación", "Neues Gespräch"),
+    # Lectures et actions proposées par Claude.
+    "le journal du programme {name}": ("the log of the program {name}", "el registro del programa {name}",
+                                       "das Protokoll des Programms {name}"),
+    "les dernières erreurs du journal Winlux": ("the latest errors in the Winlux log",
+                                                "los últimos errores del registro de Winlux",
+                                                "die letzten Fehler im Winlux-Protokoll"),
+    "les derniers plantages de programmes": ("the latest program crashes", "los últimos bloqueos de programas",
+                                             "die letzten Programmabstürze"),
+    "la description de ce PC (version, processeur, mémoire)": ("a description of this PC (version, processor, memory)",
+                                                               "la descripción de este equipo (versión, procesador, memoria)",
+                                                               "eine Beschreibung dieses PCs (Version, Prozessor, Speicher)"),
+    "les noms des fichiers de votre dossier personnel qui contiennent « {name} »":
+        ("the names of the files in your home folder that contain “{name}”",
+         "los nombres de los archivos de su carpeta personal que contienen «{name}»",
+         "die Namen der Dateien in Ihrem persönlichen Ordner, die „{name}“ enthalten"),
+    "(aucune ligne trouvée)": ("(no line found)", "(no se encontró ninguna línea)", "(keine Zeile gefunden)"),
+    "(aucun fichier trouvé)": ("(no file found)", "(no se encontró ningún archivo)", "(keine Datei gefunden)"),
+    "ouvrir Paramètres, page {page}": ("open Settings, page {page}", "abrir Configuración, página {page}",
+                                       "Einstellungen öffnen, Seite {page}"),
+    "ouvrir le dossier {path}": ("open the folder {path}", "abrir la carpeta {path}", "den Ordner {path} öffnen"),
+    "Thème sombre": ("Dark theme", "Tema oscuro", "Dunkles Design"),
+    "Thème clair": ("Light theme", "Tema claro", "Helles Design"),
+    "Barre des tâches centrée": ("Centered taskbar", "Barra de tareas centrada", "Zentrierte Taskleiste"),
+    "Barre des tâches à gauche": ("Left-aligned taskbar", "Barra de tareas a la izquierda", "Taskleiste links"),
+    "Monter le son": ("Turn the volume up", "Subir el volumen", "Lauter"),
+    "Baisser le son": ("Turn the volume down", "Bajar el volumen", "Leiser"),
+    "Couper ou remettre le son": ("Mute or unmute", "Silenciar o reactivar el sonido", "Ton aus- oder einschalten"),
+    "Activer le Bluetooth": ("Turn Bluetooth on", "Activar Bluetooth", "Bluetooth einschalten"),
+    "Désactiver le Bluetooth": ("Turn Bluetooth off", "Desactivar Bluetooth", "Bluetooth ausschalten"),
+    "Renouveler la connexion réseau": ("Renew the network connection", "Renovar la conexión de red",
+                                       "Netzwerkverbindung erneuern"),
+    "Verrouiller l'écran": ("Lock the screen", "Bloquear la pantalla", "Bildschirm sperren"),
+    "Agrandir le texte et les éléments": ("Make text and items bigger", "Agrandar el texto y los elementos",
+                                          "Text und Elemente vergrößern"),
+    "Réduire le texte et les éléments": ("Make text and items smaller", "Reducir el texto y los elementos",
+                                         "Text und Elemente verkleinern"),
+    "Échelle d'affichage automatique": ("Automatic display scale", "Escala de pantalla automática",
+                                        "Automatische Anzeigeskalierung"),
+    "Mode performances": ("Performance mode", "Modo rendimiento", "Leistungsmodus"),
+    "Mode équilibré": ("Balanced mode", "Modo equilibrado", "Ausbalancierter Modus"),
+    "Mode économie d'énergie": ("Power saving mode", "Modo ahorro de energía", "Energiesparmodus"),
+    "Rechercher les mises à jour de Winlux": ("Check for Winlux updates", "Buscar actualizaciones de Winlux",
+                                              "Nach Winlux-Updates suchen"),
+}
+
+
+def _t(text, **kw):
+    row = _TR.get(text)
+    out = row[_COL[_LANG]] if row and _LANG in _COL else text
+    return out.format(**kw) if kw else out
+
+
+_LIGATURES = str.maketrans({"œ": "oe", "æ": "ae", "ø": "o", "đ": "d", "ł": "l", "ı": "i"})
+
+
+def fold(text):
+    """Recherche sans casse ni accents (même règle que les Paramètres)."""
+    text = unicodedata.normalize("NFKD", text.casefold().translate(_LIGATURES))
+    return "".join(c for c in text if not unicodedata.combining(c))
+
+
+# ── Réglages (assistant.conf, lisible par le seul propriétaire) ─────────────
+
+def read_config():
+    try:
+        lines = CONFIG.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return {}
+    return dict(line.split("=", 1) for line in lines if "=" in line)
+
+
+def write_config(**changes):
+    values = read_config()
+    for key, value in changes.items():
+        if value is None:
+            values.pop(key, None)
+        else:
+            values[key] = str(value)
+    CONFIG.parent.mkdir(parents=True, exist_ok=True)
+    temporary = CONFIG.with_suffix(".tmp")
+    fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w", encoding="utf-8") as out:
+        out.write("".join(f"{key}={value}\n" for key, value in sorted(values.items())))
+    os.chmod(temporary, 0o600)
+    temporary.replace(CONFIG)
+
+
+def is_enabled():
+    return read_config().get("enabled") == "1"
+
+
+# ── Claude Code : même installation que l'application du menu Démarrer ──────
+
+def claude_code_app():
+    """Module winlux-claude-code.py (téléchargement vérifié de claude.exe)."""
+    import importlib.util
+    here = Path(__file__).resolve()
+    for candidate in (os.environ.get("WINLUX_CLAUDE_CODE_APP"),
+                      here.parent.parent / "integration/native/claude-code/winlux-claude-code.py",
+                      "/usr/share/winlux/native/claude-code/winlux-claude-code.py"):
+        if candidate and Path(candidate).is_file():
+            spec = importlib.util.spec_from_file_location("winlux_claude_code", candidate)
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            return module
+    return None
+
+
+def claude_launcher():
+    forced = os.environ.get("WINLUX_ASSISTANT_CLAUDE")
+    if forced:
+        return Path(forced) if Path(forced).is_file() else None
+    app = claude_code_app()
+    return app.installed_launcher() if app else None
+
+
+def claude_env():
+    """Rien d'autre que la conversation ne part : télémétrie et rapports coupés."""
+    env = dict(os.environ)
+    env.update(DISABLE_TELEMETRY="1", DISABLE_ERROR_REPORTING="1", DISABLE_BUG_COMMAND="1",
+               CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1")
+    return env
+
+
+def protect_credentials():
+    """Identifiants de Claude Code lisibles par le seul propriétaire.
+
+    Créés par claude.exe à travers la couche PE, ils pouvaient hériter de
+    droits 644 : dossier ~/.claude en 700, jetons et compte en 600."""
+    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME / ".claude")
+    fixed = []
+    for path, mode in ((base, 0o700), (base / ".credentials.json", 0o600), (HOME / ".claude.json", 0o600)):
+        try:
+            if path.stat().st_mode & 0o077:
+                path.chmod(mode)
+                fixed.append(path)
+        except OSError:
+            pass
+    return fixed
+
+
+def auth_status(launcher=None, timeout=60):
+    """{"loggedIn": bool, ...} d'après « claude auth status --json »."""
+    launcher = launcher or claude_launcher()
+    if not launcher:
+        return {"loggedIn": False, "installed": False}
+    try:
+        out = subprocess.run([str(launcher), "auth", "status", "--json"], capture_output=True, text=True,
+                             timeout=timeout, env=claude_env(), stdin=subprocess.DEVNULL).stdout
+        start = out.find("{")
+        status = json.loads(out[start:out.rindex("}") + 1]) if start >= 0 else {}
+    except (OSError, subprocess.SubprocessError, ValueError):
+        status = {}
+    status["installed"] = True
+    status["loggedIn"] = bool(status.get("loggedIn"))
+    return status
+
+
+def account_name(status):
+    for key in ("email", "emailAddress", "account"):
+        value = status.get(key)
+        if isinstance(value, str) and value:
+            return value
+    account = status.get("oauthAccount")
+    if isinstance(account, dict):
+        return account.get("emailAddress") or ""
+    return ""
+
+
+# ── Bouton de la barre des tâches (greffon lanceur xfce4-panel) ─────────────
+
+def _xfconf(*args):
+    try:
+        return subprocess.run(["xfconf-query", "-c", "xfce4-panel", *args], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _panel_ids():
+    """Ordre des greffons ; xfconf-query l'écrit après « Value is an array with N items: »."""
+    result = _xfconf("-p", "/panels/panel-1/plugin-ids")
+    if result is None or result.returncode:
+        return None
+    return [int(line) for line in result.stdout.splitlines() if line.strip().isdigit()]
+
+
+def _set_panel_ids(ids):
+    args = []
+    for number in ids:
+        args += ["-t", "int", "-s", str(number)]
+    result = _xfconf("-p", "/panels/panel-1/plugin-ids", "-a", *args)
+    return result is not None and not result.returncode
+
+
+def _plugin_type(number):
+    result = _xfconf("-p", f"/plugins/plugin-{number}")
+    return result.stdout.strip() if result is not None and not result.returncode else None
+
+
+def _plugin_is_ours(number):
+    result = _xfconf("-p", f"/plugins/plugin-{number}/items")
+    return result is not None and not result.returncode and "winlux-assistant.desktop" in result.stdout
+
+
+def _panel_restart():
+    """La barre en cours ne charge un greffon ajouté ou retiré qu'en redémarrant."""
+    if not shutil.which("xfce4-panel"):
+        return
+    try:
+        if subprocess.run(["pgrep", "-u", str(os.getuid()), "-x", "xfce4-panel"], capture_output=True,
+                          timeout=5).returncode == 0:
+            subprocess.run(["xfce4-panel", "-r"], capture_output=True, timeout=15)
+    except (OSError, subprocess.SubprocessError):
+        pass
+
+
+def panel_add():
+    """Ajoute le bouton Claude juste à gauche des icônes de la barre."""
+    if not shutil.which("xfconf-query"):
+        return False
+    ids = _panel_ids()
+    if ids is None:
+        return False
+    number = read_config().get("panel_plugin", "")
+    if not (number.isdigit() and _plugin_type(number) == "launcher" and _plugin_is_ours(number)):
+        number = next(str(n) for n in range(FIRST_PLUGIN, 400) if _plugin_type(n) is None)
+        for prop, kind, value in ((f"/plugins/plugin-{number}", "string", "launcher"),
+                                  (f"/plugins/plugin-{number}/show-label", "bool", "false")):
+            _xfconf("-p", prop, "-n", "-t", kind, "-s", value)
+        _xfconf("-p", f"/plugins/plugin-{number}/items", "-n", "-a", "-t", "string", "-s", DESKTOP_FILE)
+    write_config(panel_plugin=number)
+    if int(number) not in ids:
+        position = ids.index(PANEL_AFTER) + 1 if PANEL_AFTER in ids else max(len(ids) - 1, 0)
+        ids.insert(position, int(number))
+        if not _set_panel_ids(ids):
+            return False
+        _panel_restart()
+    return True
+
+
+def panel_remove():
+    number = read_config().get("panel_plugin", "")
+    if not number.isdigit() or not shutil.which("xfconf-query"):
+        return False
+    ids = _panel_ids()
+    shown = ids is not None and int(number) in ids
+    if shown:
+        _set_panel_ids([n for n in ids if n != int(number)])
+    if _plugin_is_ours(number):
+        _xfconf("-p", f"/plugins/plugin-{number}", "-r", "-R")
+    write_config(panel_plugin=None)
+    if shown:
+        _panel_restart()
+    return True
+
+
+def enable():
+    write_config(enabled=1)
+    panel_add()
+
+
+def disable():
+    panel_remove()
+    write_config(enabled=0)
+
+
+# ── Ce que Claude peut demander (toujours confirmé par l'utilisateur) ───────
+
+# Réglage proposé -> (libellé, action de winlux-control).
+SETTINGS = {
+    "theme_sombre": ("Thème sombre", "theme-dark"),
+    "theme_clair": ("Thème clair", "theme-light"),
+    "barre_centree": ("Barre des tâches centrée", "align-center"),
+    "barre_gauche": ("Barre des tâches à gauche", "align-left"),
+    "son_plus": ("Monter le son", "volume-up"),
+    "son_moins": ("Baisser le son", "volume-down"),
+    "son_couper": ("Couper ou remettre le son", "volume-mute"),
+    "bluetooth_on": ("Activer le Bluetooth", "bluetooth-on"),
+    "bluetooth_off": ("Désactiver le Bluetooth", "bluetooth-off"),
+    "reseau_renouveler": ("Renouveler la connexion réseau", "network-renew"),
+    "verrouiller": ("Verrouiller l'écran", "lock-now"),
+    "echelle_plus": ("Agrandir le texte et les éléments", "display-scale-up"),
+    "echelle_moins": ("Réduire le texte et les éléments", "display-scale-down"),
+    "echelle_auto": ("Échelle d'affichage automatique", "display-scale-auto"),
+    "mode_performances": ("Mode performances", "power-profile-performance"),
+    "mode_equilibre": ("Mode équilibré", "power-profile-balanced"),
+    "mode_economie": ("Mode économie d'énergie", "power-profile-saver"),
+    "mises_a_jour": ("Rechercher les mises à jour de Winlux", "update-check"),
+}
+# Pages des Paramètres que Claude peut proposer d'ouvrir (numéros stables).
+SETTINGS_PAGES = {2: "Réseau", 4: "Clavier et souris", 7: "Mises à jour", 8: "Écran", 10: "Programmes Windows",
+                  11: "Navigateurs", 12: "Accessibilité", 14: "Localisation", 16: "Son",
+                  18: "Confidentialité et sécurité", 20: "Lecteurs réseau", 21: "Fond d’écran et couleurs",
+                  22: "Bluetooth", 23: "Alimentation et batterie", 24: "Graphismes", 26: "Imprimantes et scanners",
+                  28: "Partage et transfert", 29: "Jeux", 30: "Assistant Claude"}
+REQUESTS = ("aucune", "lire_journal", "lire_plantages", "lire_systeme", "chercher_fichier",
+            "ouvrir_parametres", "ouvrir_dossier", "reglage")
+SCHEMA = {
+    "type": "object",
+    "properties": {
+        "reponse": {"type": "string", "description": "Réponse montrée à l'utilisateur, texte simple."},
+        "demande": {"type": "string", "enum": list(REQUESTS)},
+        "argument": {"type": "string", "description": "Programme, nom de fichier, page, dossier ou réglage."},
+    },
+    "required": ["reponse", "demande"],
+    "additionalProperties": False,
+}
+
+
+def system_prompt():
+    pages = ", ".join(f"{number} = {name}" for number, name in SETTINGS_PAGES.items())
+    settings = ", ".join(f"{key} ({label})" for key, (label, _) in SETTINGS.items())
+    return f"""Tu es l'assistant Claude intégré à Winlux. Winlux est un système Linux qui lance les programmes
+Windows (.exe) directement, grâce à sa propre couche de compatibilité PE (ce n'est pas Wine), avec un bureau
+qui ressemble à Windows 11 : menu Démarrer, barre des tâches, Explorateur, Paramètres. Les fichiers Windows
+C:\\Users\\<nom> sont le dossier personnel Linux. Le journal Winlux note les DLL et fonctions Windows qui
+manquent à un programme ; un .exe qui ne s'ouvre pas manque souvent d'une DLL ou d'une fonction encore non
+fournie, ou plante (journal des plantages). Les pilotes noyau et anti-triche ne sont pas pris en charge.
+
+Réponds en {LANGUAGE_NAMES[_LANG]}, simplement, en quelques phrases, pour quelqu'un qui n'est pas informaticien.
+Tu n'as aucun outil. Pour lire une information ou agir, remplis « demande » (une seule par réponse) et
+« argument » ; l'utilisateur voit la demande et l'accepte ou la refuse. Demandes possibles :
+- aucune : simple réponse.
+- lire_journal : lignes du journal Winlux d'un programme ; argument = nom du .exe (vide = dernières erreurs).
+- lire_plantages : derniers plantages de programmes.
+- lire_systeme : version de Winlux, processeur, mémoire, carte graphique.
+- chercher_fichier : chercher un fichier par son nom dans le dossier personnel ; argument = morceau du nom.
+- ouvrir_parametres : argument = numéro de page ({pages}).
+- ouvrir_dossier : ouvrir l'Explorateur sur un dossier ; argument = chemin (~ = dossier personnel).
+- reglage : argument = un de : {settings}.
+N'invente jamais le contenu d'un journal : demande-le. Ce qui n'est pas dans cette liste (par exemple
+l'éclairage nocturne, s'il n'y figure pas), explique comment le faire à la main ou dis que Winlux ne le
+propose pas encore. Les données lues avec l'accord de l'utilisateur arrivent entre <donnees> et </donnees>.
+"""
+
+
+def _home_relative(text):
+    return text.replace(str(HOME), "~")
+
+
+def _journal_lines():
+    lines = []
+    for name in ("winlux.log.1", "winlux.log"):
+        try:
+            lines += (JOURNAL / name).read_text(encoding="utf-8", errors="replace").splitlines()
+        except OSError:
+            pass
+    return lines
+
+
+def _crash_blocks():
+    try:
+        text = (JOURNAL / "crash.log").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return [block.strip() for block in re.split(r"(?=^\[CRASH\])", text, flags=re.M) if block.strip()]
+
+
+def read_journal(program):
+    program = Path(program.replace("\\", "/")).name.strip()
+    lines = _journal_lines()
+    if program:
+        wanted = fold(program)
+        lines = [line for line in lines if wanted in fold(line)]
+        crashes = [block for block in _crash_blocks() if wanted in fold(block)]
+    else:
+        lines = [line for line in lines if "[error]" in line or "[warn]" in line]
+        crashes = []
+    text = "\n".join(lines[-80:])
+    if crashes:
+        text += "\n\n" + "\n\n".join(crashes[-3:])
+    return _home_relative(text.strip()[-9000:]) or _t("(aucune ligne trouvée)")
+
+
+def read_crashes():
+    return _home_relative("\n\n".join(_crash_blocks()[-5:])[-9000:]) or _t("(aucune ligne trouvée)")
+
+
+def read_system():
+    lines = []
+    try:
+        info = dict(line.split("=", 1) for line in Path("/usr/share/winlux/BUILD-INFO").read_text().splitlines()
+                    if "=" in line)
+        lines.append(f"Winlux {info.get('version', '?')}")
+    except OSError:
+        pass
+    lines.append("Linux " + os.uname().release)
+    try:
+        model = next(line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
+                     if line.startswith("model name"))
+        lines.append(f"Processeur : {model} ({os.cpu_count()} cœurs)")
+    except (OSError, StopIteration):
+        pass
+    try:
+        total = next(int(line.split()[1]) for line in Path("/proc/meminfo").read_text().splitlines()
+                     if line.startswith("MemTotal"))
+        lines.append(f"Mémoire : {total / 1048576:.1f} Gio")
+    except (OSError, StopIteration, ValueError):
+        pass
+    try:
+        status = dict(line.split("=", 1) for line in Path("/run/winlux/control.txt").read_text().splitlines()
+                      if "=" in line)
+        for key, label in (("gpu", "Carte graphique"), ("display_mode", "Écran"), ("virtual_machine", "Machine virtuelle")):
+            if status.get(key):
+                lines.append(f"{label} : {status[key]}")
+    except OSError:
+        pass
+    return "\n".join(lines)
+
+
+def find_files(part, limit=40, budget=4.0):
+    wanted = fold(Path(part.replace("\\", "/")).name.strip())
+    if not wanted:
+        return _t("(aucun fichier trouvé)")
+    found, deadline = [], time.monotonic() + budget
+    for root, dirs, files in os.walk(HOME):
+        dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in ("node_modules", "__pycache__"))
+        for name in sorted(dirs + files):
+            if wanted in fold(name):
+                found.append(_home_relative(os.path.join(root, name)))
+                if len(found) >= limit:
+                    return "\n".join(found)
+        if time.monotonic() > deadline:
+            break
+    return "\n".join(found) or _t("(aucun fichier trouvé)")
+
+
+def describe_request(kind, argument):
+    """(texte affiché, fonction qui lit les données) d'une demande de lecture."""
+    if kind == "lire_journal":
+        name = Path(argument.replace("\\", "/")).name.strip()
+        what = _t("le journal du programme {name}", name=name) if name else _t("les dernières erreurs du journal Winlux")
+        return what, lambda: read_journal(argument)
+    if kind == "lire_plantages":
+        return _t("les derniers plantages de programmes"), read_crashes
+    if kind == "lire_systeme":
+        return _t("la description de ce PC (version, processeur, mémoire)"), read_system
+    if kind == "chercher_fichier":
+        return (_t("les noms des fichiers de votre dossier personnel qui contiennent « {name} »", name=argument),
+                lambda: find_files(argument))
+    return None
+
+
+def describe_action(kind, argument):
+    """(texte affiché, commande exacte) d'une action ; None si elle n'est pas permise."""
+    if kind == "reglage" and argument in SETTINGS:
+        label, action = SETTINGS[argument]
+        return _t(label), ["winlux-control", action]
+    if kind == "ouvrir_parametres" and argument.strip().isdigit() and int(argument) in SETTINGS_PAGES:
+        page = int(argument)
+        return (_t("ouvrir Paramètres, page {page}", page=f"« {SETTINGS_PAGES[page]} »"),
+                ["winlux-shell-app", "settings", str(page)])
+    if kind == "ouvrir_dossier":
+        path = Path(os.path.expanduser(argument.strip())) if argument.strip() else None
+        if path is not None and path.is_absolute() and path.is_dir():
+            return _t("ouvrir le dossier {path}", path=_home_relative(str(path))), ["winlux-shell-app", "explorer", str(path)]
+    return None
+
+
+def run_action(command):
+    """Lance l'action confirmée ; renvoie un message d'erreur ou None."""
+    try:
+        if command[0] == "winlux-shell-app":
+            subprocess.Popen(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            return None
+        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
+        if result.returncode:
+            return (result.stderr or result.stdout).strip()[-400:] or f"code {result.returncode}"
+        return None
+    except (OSError, subprocess.SubprocessError) as error:
+        return str(error)
+
+
+# ── Conversation ────────────────────────────────────────────────────────────
+
+class NotSignedIn(Exception):
+    pass
+
+
+class Conversation:
+    """Historique envoyé à chaque question ; rien n'est écrit sur le disque."""
+
+    def __init__(self, launcher=None):
+        self.launcher = launcher
+        self.entries = []  # (rôle, texte) : user, assistant, data
+
+    def prompt(self):
+        parts = []
+        for role, text in self.entries[-16:]:
+            if role == "user":
+                parts.append(f"Utilisateur : {text}")
+            elif role == "assistant":
+                parts.append(f"Assistant : {text}")
+            else:
+                parts.append(f"<donnees>\n{text}\n</donnees>")
+        return "\n\n".join(parts)
+
+    def command(self):
+        return [str(self.launcher or claude_launcher()), "-p", "--output-format", "json", "--tools", "",
+                "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "",
+                "--no-session-persistence", "--model", MODEL, "--system-prompt", system_prompt(),
+                "--json-schema", json.dumps(SCHEMA, ensure_ascii=False)]
+
+    def ask(self, timeout=240):
+        """Envoie la conversation (par l'entrée standard, jamais en argument :
+        `ps` la montrerait aux autres comptes) ; renvoie (réponse, demande, argument)."""
+        WORK.mkdir(parents=True, exist_ok=True)
+        WORK.chmod(0o700)
+        protect_credentials()
+        try:
+            result = subprocess.run(self.command(), input=self.prompt(), capture_output=True, text=True,
+                                    timeout=timeout, cwd=WORK, env=claude_env())
+        finally:
+            protect_credentials()
+        output = result.stdout.strip()
+        try:
+            data = json.loads(output[output.find("{"):]) if "{" in output else {}
+        except ValueError:
+            data = {}
+        message = str(data.get("result") or result.stderr or output).strip()
+        if data.get("is_error") or result.returncode or not data:
+            if re.search(r"log ?in|not logged|authenticat|/login|oauth", message, re.I):
+                raise NotSignedIn(message)
+            raise RuntimeError(message[-400:] or f"code {result.returncode}")
+        answer = data.get("structured_output")
+        if not isinstance(answer, dict):
+            try:
+                answer = json.loads(data.get("result") or "")
+            except ValueError:
+                answer = {"reponse": data.get("result") or "", "demande": "aucune"}
+        reply = str(answer.get("reponse") or "").strip()
+        kind = answer.get("demande") if answer.get("demande") in REQUESTS else "aucune"
+        argument = str(answer.get("argument") or "")
+        self.entries.append(("assistant", reply + (f" [demande : {kind} {argument}]".rstrip() if kind != "aucune" else "")))
+        return reply, kind, argument
+
+
+# ── Interface GTK ───────────────────────────────────────────────────────────
+
+CSS = b"""
+window.assistant, .assistant-body { background: #1c1b25; color: #ecedf5; }
+.assistant-head { padding: 12px 14px; border-bottom: 1px solid #2f3142; }
+.assistant-title { font-size: 15px; font-weight: bold; }
+.bubble-user { background: #5b4fc4; color: #ffffff; border-radius: 12px; padding: 8px 12px; }
+.bubble-claude { background: #2a2c3a; color: #ecedf5; border-radius: 12px; padding: 8px 12px; }
+.bubble-note { color: #aeb3c7; font-size: 12px; }
+.request { background: #262838; border: 1px solid #5b4fc4; border-radius: 10px; padding: 10px; }
+.hint { color: #9aa0b6; font-size: 11px; }
+.chip { background: #2a2c3a; color: #ecedf5; border: 1px solid #3c3f55; border-radius: 14px; padding: 4px 10px; }
+entry { background: #14131b; color: #ecedf5; border: 1px solid #48536b; border-radius: 8px; padding: 8px; }
+button { background: #30384b; color: #ecedf5; border: 1px solid #48536b; border-radius: 6px; padding: 6px 12px; box-shadow: none; }
+button.suggested-action { background: #5b4fc4; border-color: #6f63dc; color: #ffffff; }
+textview, textview text { background: #14131b; color: #d6d9e6; font-family: monospace; font-size: 11px; }
+"""
+
+
+def _gtk():
+    import gi
+    gi.require_version("Gtk", "3.0")
+    from gi.repository import Gdk, GLib, Gtk
+    provider = Gtk.CssProvider()
+    provider.load_from_data(CSS)
+    Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider, 600)
+    return Gdk, GLib, Gtk
+
+
+def open_url(url):
+    for opener in ("xdg-open", "exo-open"):
+        path = shutil.which(opener)
+        if path:
+            try:
+                subprocess.Popen([path, url], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+                return True
+            except OSError:
+                pass
+    return False
+
+
+def run_setup():
+    """Activation : téléchargement de Claude Code, connexion au compte, bouton."""
+    Gdk, GLib, Gtk = _gtk()
+    win = Gtk.Window(title=_t("Activer l'assistant Claude"))
+    win.set_role("winlux-assistant-setup")
+    win.set_default_size(540, -1)
+    win.set_resizable(False)
+    win.set_position(Gtk.WindowPosition.CENTER)
+    win.set_icon_name("winlux-claude-code")
+    win.get_style_context().add_class("assistant")
+    box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin=24)
+    title = Gtk.Label(xalign=0)
+    heading = GLib.markup_escape_text(_t("Activer l'assistant Claude"))
+    title.set_markup(f"<span size='x-large' weight='bold'>{heading}</span>")
+    box.pack_start(title, False, False, 0)
+    steps = []
+    for text in (_t("Télécharger Claude Code (environ 300 Mo)"), _t("Se connecter à votre compte Claude"),
+                 _t("Ajouter le bouton à la barre des tâches")):
+        label = Gtk.Label(label="○  " + text, xalign=0)
+        box.pack_start(label, False, False, 0)
+        steps.append((label, text))
+    bar = Gtk.ProgressBar()
+    box.pack_start(bar, False, False, 0)
+    status = Gtk.Label(xalign=0, wrap=True, max_width_chars=62, selectable=True)
+    box.pack_start(status, False, False, 0)
+    code_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    code_box.pack_start(Gtk.Label(label=_t("Si la page affiche un code, collez-le ici :"), xalign=0), False, False, 0)
+    code_line = Gtk.Box(spacing=8)
+    code = Gtk.Entry(hexpand=True)
+    send_code = Gtk.Button(label=_t("Valider"))
+    code_line.pack_start(code, True, True, 0)
+    code_line.pack_start(send_code, False, False, 0)
+    code_box.pack_start(code_line, False, False, 0)
+    box.pack_start(code_box, False, False, 0)
+    buttons = Gtk.Box(spacing=8, halign=Gtk.Align.END)
+    open_page = Gtk.Button(label=_t("Ouvrir la page de connexion"))
+    retry = Gtk.Button(label=_t("Réessayer"))
+    finish = Gtk.Button(label=_t("Ouvrir l'assistant"))
+    finish.get_style_context().add_class("suggested-action")
+    close = Gtk.Button(label=_t("Annuler"))
+    for button in (open_page, retry, finish, close):
+        buttons.pack_start(button, False, False, 0)
+    box.pack_start(buttons, False, False, 0)
+    win.add(box)
+    state = {"cancel": threading.Event(), "process": None, "url": None}
+
+    def mark(index, done):
+        label, text = steps[index]
+        label.set_text(("✓  " if done else "●  ") + text)
+        return False
+
+    def show(fraction, text):
+        if fraction is None:
+            bar.pulse()
+        else:
+            bar.set_fraction(fraction)
+        status.set_text(text)
+        return False
+
+    def failed(text):
+        status.set_text(text)
+        code_box.hide()
+        open_page.hide()
+        retry.show()
+        close.set_label(_t("Fermer"))
+        return False
+
+    def ready(status_info):
+        mark(0, True)
+        mark(1, True)
+        enable()
+        mark(2, True)
+        who = account_name(status_info)
+        bar.set_fraction(1.0)
+        status.set_text(_t("Connecté au compte Claude{who}.", who=f" ({who})" if who else "") + "\n\n"
+                        + _t("C'est prêt ! Cliquez sur le bouton Claude de la barre des tâches ou appuyez sur Windows+C."))
+        code_box.hide()
+        open_page.hide()
+        finish.show()
+        finish.grab_focus()
+        close.set_label(_t("Fermer"))
+        return False
+
+    def got_url():
+        open_page.show()
+        code_box.show_all()
+        open_url(state["url"])
+        return False
+
+    def login_output(process):
+        for line in iter(process.stdout.readline, ""):
+            found = re.search(r"https://\S+", line)
+            if found and not state["url"]:
+                state["url"] = found.group(0)
+                GLib.idle_add(got_url)
+        process.wait()
+        protect_credentials()
+        info = auth_status()
+        if info.get("loggedIn"):
+            GLib.idle_add(ready, info)
+        elif not state["cancel"].is_set():
+            GLib.idle_add(failed, _t("La connexion n'a pas abouti : {e}", e=f"code {process.returncode}"))
+
+    def login(launcher):
+        mark(1, False)
+        bar.set_fraction(0.0)
+        status.set_text(_t("Connectez-vous dans la page qui vient de s'ouvrir (Google, e-mail…)."))
+        try:
+            process = subprocess.Popen([str(launcher), "auth", "login", "--claudeai"], stdin=subprocess.PIPE,
+                                       stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
+                                       env=claude_env(), cwd=str(HOME))
+        except OSError as error:
+            return failed(_t("La connexion n'a pas abouti : {e}", e=error))
+        state["process"] = process
+        threading.Thread(target=login_output, args=(process,), daemon=True).start()
+        return False
+
+    def work():
+        launcher = claude_launcher()
+        try:
+            if launcher is None:
+                app = claude_code_app()
+                if app is None:
+                    raise RuntimeError("winlux-claude-code.py")
+                launcher = app.install(lambda f, t: GLib.idle_add(show, f, t), state["cancel"])
+            GLib.idle_add(mark, 0, True)
+            GLib.idle_add(show, None, _t("Vérification de la connexion…"))
+            info = auth_status(launcher)
+        except Exception as error:  # réseau, disque, manifeste, annulation
+            if not state["cancel"].is_set():
+                GLib.idle_add(failed, _t("Le téléchargement a échoué : {e}", e=error))
+            return
+        if info.get("loggedIn"):
+            GLib.idle_add(ready, info)
+        else:
+            GLib.idle_add(login, launcher)
+
+    def start(*_):
+        retry.hide()
+        finish.hide()
+        open_page.hide()
+        code_box.hide()
+        close.set_label(_t("Annuler"))
+        state["cancel"] = threading.Event()
+        state["url"] = None
+        mark(0, False)
+        threading.Thread(target=work, daemon=True).start()
+
+    def submit_code(*_):
+        process = state["process"]
+        if process and process.poll() is None and code.get_text().strip():
+            try:
+                process.stdin.write(code.get_text().strip() + "\n")
+                process.stdin.flush()
+            except OSError:
+                pass
+            code.set_text("")
+
+    def quit_setup(*_):
+        state["cancel"].set()
+        process = state["process"]
+        if process and process.poll() is None:
+            process.terminate()
+        Gtk.main_quit()
+
+    def open_assistant(*_):
+        subprocess.Popen([sys.executable, str(Path(__file__).resolve())], start_new_session=True)
+        quit_setup()
+
+    open_page.connect("clicked", lambda *_: state["url"] and open_url(state["url"]))
+    send_code.connect("clicked", submit_code)
+    code.connect("activate", submit_code)
+    retry.connect("clicked", start)
+    finish.connect("clicked", open_assistant)
+    close.connect("clicked", quit_setup)
+    win.connect("destroy", quit_setup)
+    win.show_all()
+    start()
+    Gtk.main()
+
+
+def run_chat():
+    Gdk, GLib, Gtk = _gtk()
+    from gi.repository import Gio
+
+    class Window(Gtk.ApplicationWindow):
+        def __init__(self, app):
+            super().__init__(application=app, title=_t("Assistant Claude"))
+            self.set_role("winlux-assistant")
+            self.set_icon_name("winlux-claude-code")
+            self.set_decorated(False)
+            self.set_keep_above(True)
+            self.set_skip_taskbar_hint(True)  # le bouton Claude de la barre l'ouvre et la ferme
+            self.get_style_context().add_class("assistant")
+            self.conversation = Conversation()
+            self.busy = False
+            self.place()
+            outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+            outer.get_style_context().add_class("assistant-body")
+            self.add(outer)
+            head = Gtk.Box(spacing=10)
+            head.get_style_context().add_class("assistant-head")
+            head.pack_start(Gtk.Image.new_from_icon_name("winlux-claude-code", Gtk.IconSize.LARGE_TOOLBAR), False, False, 0)
+            title = Gtk.Label(label=_t("Assistant Claude"), xalign=0)
+            title.get_style_context().add_class("assistant-title")
+            head.pack_start(title, True, True, 0)
+            new = Gtk.Button.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON)
+            new.set_tooltip_text(_t("Nouvelle conversation"))
+            new.connect("clicked", lambda *_: self.reset())
+            head.pack_start(new, False, False, 0)
+            close = Gtk.Button.new_from_icon_name("window-close-symbolic", Gtk.IconSize.BUTTON)
+            close.set_tooltip_text(_t("Fermer"))
+            close.connect("clicked", lambda *_: self.close())
+            head.pack_start(close, False, False, 0)
+            outer.pack_start(head, False, False, 0)
+            self.scroll = Gtk.ScrolledWindow(hscrollbar_policy=Gtk.PolicyType.NEVER)
+            self.messages = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin=14)
+            self.scroll.add(self.messages)
+            outer.pack_start(self.scroll, True, True, 0)
+            bottom = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin=12)
+            line = Gtk.Box(spacing=8)
+            self.entry = Gtk.Entry(placeholder_text=_t("Posez votre question…"), hexpand=True)
+            self.entry.connect("activate", lambda *_: self.send())
+            self.send_button = Gtk.Button(label=_t("Envoyer"))
+            self.send_button.get_style_context().add_class("suggested-action")
+            self.send_button.connect("clicked", lambda *_: self.send())
+            line.pack_start(self.entry, True, True, 0)
+            line.pack_start(self.send_button, False, False, 0)
+            bottom.pack_start(line, False, False, 0)
+            hint = Gtk.Label(label=_t("Envoyé à Claude (Anthropic) : votre question et cette conversation. "
+                                      "Rien d'autre sans votre accord."), xalign=0, wrap=True, max_width_chars=56)
+            hint.get_style_context().add_class("hint")
+            bottom.pack_start(hint, False, False, 0)
+            outer.pack_start(bottom, False, False, 0)
+            self.connect("key-press-event", self.on_key)
+            self.start_state()
+
+        def place(self):
+            """Panneau en bas à droite, au-dessus de la barre des tâches."""
+            width, height = 420, 640
+            display = Gdk.Display.get_default()
+            monitor = display.get_primary_monitor() or display.get_monitor(0)
+            area = monitor.get_workarea()
+            height = min(height, area.height - 24)
+            self.set_default_size(width, height)
+            self.move(area.x + area.width - width - 12, area.y + area.height - height - 12)
+
+        def on_key(self, _, event):
+            if event.keyval == Gdk.KEY_Escape:
+                self.close()
+                return True
+            return False
+
+        def scroll_down(self):
+            adjustment = self.scroll.get_vadjustment()
+            GLib.timeout_add(60, lambda: adjustment.set_value(adjustment.get_upper()) or False)
+
+        def bubble(self, text, kind):
+            label = Gtk.Label(label=text, xalign=0, wrap=True, selectable=True, max_width_chars=40)
+            label.get_style_context().add_class({"user": "bubble-user", "claude": "bubble-claude"}.get(kind, "bubble-note"))
+            label.set_halign(Gtk.Align.END if kind == "user" else Gtk.Align.START)
+            self.messages.pack_start(label, False, False, 0)
+            label.show()
+            self.scroll_down()
+            return label
+
+        def reset(self):
+            self.conversation = Conversation()
+            for child in self.messages.get_children():
+                child.destroy()
+            self.start_state()
+
+        def start_state(self):
+            if not is_enabled():
+                self.blocked(_t("L'assistant Claude est désactivé. Activez-le dans Paramètres."))
+                return
+            self.bubble(_t("Bonjour ! Je peux vous aider à utiliser Winlux, par exemple :"), "claude")
+            for text in (_t("Pourquoi mon programme .exe ne s'ouvre pas ?"), _t("Où est mon fichier… ?"),
+                         _t("Passe au thème sombre")):
+                chip = Gtk.Button(label=text, halign=Gtk.Align.START)
+                chip.get_style_context().add_class("chip")
+                chip.connect("clicked", lambda _, value=text: self.suggest(value))
+                self.messages.pack_start(chip, False, False, 0)
+            self.messages.show_all()
+
+        def suggest(self, text):
+            # « Où est mon fichier… ? » attend le nom : curseur après « fichier ».
+            self.entry.set_text(text.split("…")[0] + " " if "…" in text else text)
+            self.entry.grab_focus_without_selecting()
+            self.entry.set_position(-1)
+
+        def blocked(self, text):
+            self.bubble(text, "claude")
+            button = Gtk.Button(label=_t("Terminer la configuration"), halign=Gtk.Align.START)
+            button.get_style_context().add_class("suggested-action")
+            button.connect("clicked", lambda *_: subprocess.Popen(["winlux-shell-app", "settings", "30"],
+                                                                  start_new_session=True) and self.close())
+            self.messages.pack_start(button, False, False, 0)
+            button.show()
+
+        def set_busy(self, busy):
+            self.busy = busy
+            self.send_button.set_sensitive(not busy)
+            self.entry.set_sensitive(not busy)
+
+        def send(self):
+            text = self.entry.get_text().strip()
+            if not text or self.busy or not is_enabled():
+                return
+            self.entry.set_text("")
+            self.bubble(text, "user")
+            self.conversation.entries.append(("user", text))
+            self.ask()
+
+        def ask(self):
+            self.set_busy(True)
+            waiting = self.bubble(_t("Claude réfléchit…"), "note")
+
+            def work():
+                try:
+                    outcome = ("ok",) + self.conversation.ask()
+                except NotSignedIn:
+                    outcome = ("login",)
+                except subprocess.TimeoutExpired:
+                    outcome = ("error", "timeout")
+                except Exception as error:
+                    outcome = ("error", str(error))
+                GLib.idle_add(self.answered, waiting, outcome)
+            threading.Thread(target=work, daemon=True).start()
+
+        def answered(self, waiting, outcome):
+            waiting.destroy()
+            self.set_busy(False)
+            if outcome[0] == "login":
+                self.blocked(_t("Vous n'êtes pas connecté à votre compte Claude."))
+                return False
+            if outcome[0] == "error":
+                self.bubble(_t("Claude n'a pas répondu : {e}", e=outcome[1]), "note")
+                return False
+            _, reply, kind, argument = outcome
+            if reply:
+                self.bubble(reply, "claude")
+            reading = describe_request(kind, argument)
+            if reading:
+                self.request_card(*reading)
+            else:
+                action = describe_action(kind, argument)
+                if action:
+                    self.action_card(*action)
+            self.entry.grab_focus()
+            return False
+
+        def card(self, title):
+            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            box.get_style_context().add_class("request")
+            box.pack_start(Gtk.Label(label=title, xalign=0, wrap=True, max_width_chars=44), False, False, 0)
+            self.messages.pack_start(box, False, False, 0)
+            return box
+
+        def request_card(self, what, reader):
+            """Lecture demandée : le texte exact est montré avant tout envoi."""
+            box = self.card(_t("Claude demande à lire : {what}", what=what))
+            data = reader()
+            expander = Gtk.Expander(label=_t("Voir exactement ce qui sera envoyé"))
+            view = Gtk.TextView(editable=False, wrap_mode=Gtk.WrapMode.WORD_CHAR, cursor_visible=False)
+            view.get_buffer().set_text(data)
+            frame = Gtk.ScrolledWindow(min_content_height=140, max_content_height=220, propagate_natural_height=True)
+            frame.add(view)
+            expander.add(frame)
+            box.pack_start(expander, False, False, 0)
+            line = Gtk.Box(spacing=8)
+            accept = Gtk.Button(label=_t("Envoyer à Claude"))
+            accept.get_style_context().add_class("suggested-action")
+            refuse = Gtk.Button(label=_t("Refuser"))
+            line.pack_start(accept, False, False, 0)
+            line.pack_start(refuse, False, False, 0)
+            box.pack_start(line, False, False, 0)
+
+            def answer(send):
+                line.destroy()
+                if send:
+                    self.conversation.entries.append(("data", data))
+                    self.ask()
+                else:
+                    self.conversation.entries.append(("user", "(Refusé : ne lis pas cette information.)"))
+                    self.bubble(_t("Refusé : rien n'a été envoyé."), "note")
+            accept.connect("clicked", lambda *_: answer(True))
+            refuse.connect("clicked", lambda *_: answer(False))
+            box.show_all()
+            self.scroll_down()
+
+        def action_card(self, what, command):
+            """Action proposée : rien ne change sans un clic sur « Faire »."""
+            box = self.card(_t("Claude propose : {what}", what=what))
+            detail = Gtk.Label(label=" ".join(command), xalign=0, selectable=True)
+            detail.get_style_context().add_class("hint")
+            box.pack_start(detail, False, False, 0)
+            line = Gtk.Box(spacing=8)
+            accept = Gtk.Button(label=_t("Faire"))
+            accept.get_style_context().add_class("suggested-action")
+            refuse = Gtk.Button(label=_t("Non merci"))
+            line.pack_start(accept, False, False, 0)
+            line.pack_start(refuse, False, False, 0)
+            box.pack_start(line, False, False, 0)
+
+            def answer(do):
+                line.destroy()
+                if do:
+                    error = run_action(command)
+                    self.bubble(_t("L'action a échoué : {e}", e=error) if error else _t("Fait."), "note")
+                    outcome = f"échec : {error}" if error else "faite"
+                    self.conversation.entries.append(("user", f"(Action {' '.join(command)} {outcome}.)"))
+                else:
+                    self.bubble(_t("Refusé : rien n'a été changé."), "note")
+                    self.conversation.entries.append(("user", "(Action refusée.)"))
+            accept.connect("clicked", lambda *_: answer(True))
+            refuse.connect("clicked", lambda *_: answer(False))
+            box.show_all()
+            self.scroll_down()
+
+    class App(Gtk.Application):
+        """Une seule fenêtre : un nouveau clic sur le bouton (ou Windows+C) la ferme."""
+
+        def __init__(self):
+            super().__init__(application_id="org.winlux.Assistant", flags=Gio.ApplicationFlags.FLAGS_NONE)
+            self.window = None
+
+        def do_activate(self):
+            if self.window is not None:
+                self.window.close()
+                return
+            self.window = Window(self)
+            self.window.connect("destroy", lambda *_: setattr(self, "window", None))
+            self.window.show_all()
+            self.window.present()
+            self.window.entry.grab_focus()
+
+    return App().run(None)
+
+
+def main(argv):
+    command = argv[1] if len(argv) > 1 else ""
+    if command == "--activer":
+        enable()
+        return 0
+    if command == "--desactiver":
+        disable()
+        return 0
+    if command == "--deconnecter":
+        launcher = claude_launcher()
+        if launcher:
+            subprocess.run([str(launcher), "auth", "logout"], capture_output=True, timeout=60, env=claude_env())
+        disable()
+        return 0
+    if command == "--etat":
+        status = auth_status() if claude_launcher() else {"installed": False, "loggedIn": False}
+        print(json.dumps({"enabled": is_enabled(), "installed": status.get("installed", False),
+                          "loggedIn": status.get("loggedIn", False), "account": account_name(status)}))
+        return 0
+    if command == "--configurer":
+        run_setup()
+        return 0
+    # Bouton de la barre ou Windows+C : rien du tout tant que l'assistant est désactivé.
+    if not is_enabled():
+        return 0
+    protect_credentials()
+    return run_chat()
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))
