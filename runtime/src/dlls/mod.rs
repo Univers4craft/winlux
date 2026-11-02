@@ -46,6 +46,7 @@ pub mod dpapi;
 pub mod dsound;
 pub mod dwmapi;
 pub mod dwrite;
+pub mod dxbc;
 pub mod dxgi;
 pub mod dxva2;
 pub mod evdev;

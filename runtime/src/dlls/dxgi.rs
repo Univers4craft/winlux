@@ -168,6 +168,22 @@ thread_local! {
 /// Ici ces objets vivent dans OpenGL : un thread sans contexte courant reçoit
 /// un contexte GLX partagé avec le contexte principal, rendu courant sur la
 /// fenêtre racine (il ne sert qu'à créer des objets, jamais à présenter).
+/// Contexte GL hors écran pour un périphérique créé sans chaîne d'échange
+/// (rendu dans des textures, D3D11CreateDevice seul) ; sans effet s'il en
+/// existe déjà un ou sans affichage X.
+pub(crate) fn ensure_offscreen_context() {
+    static DONE: std::sync::Once = std::sync::Once::new();
+    if MAIN_CONTEXT.load(Ordering::Acquire) != 0 || std::env::var_os("DISPLAY").is_none() {
+        return;
+    }
+    DONE.call_once(|| {
+        if let Some(ctx) = GlContext::create_for_window(0) {
+            // Vit autant que le processus, comme le périphérique.
+            std::mem::forget(ctx);
+        }
+    });
+}
+
 pub(crate) fn ensure_thread_context() {
     let main = MAIN_CONTEXT.load(Ordering::Acquire);
     if main == 0 || WORKER_CONTEXT.with(|w| w.get()) {
@@ -283,7 +299,10 @@ impl GlContext {
                 return None;
             }
 
-            let context = (glx.CreateContext)(display, vi, std::ptr::null_mut(), 1);
+            // Partagé avec le premier contexte (périphérique créé avant la
+            // chaîne d'échange) : ses tampons et textures restent visibles.
+            let share = MAIN_CONTEXT.load(Ordering::Acquire) as gl::GLXContext;
+            let context = (glx.CreateContext)(display, vi, share, 1);
             if context.is_null() {
                 log_error!("dxgi", "glXCreateContext a échoué");
                 (glx.XCloseDisplay)(display);
@@ -379,15 +398,17 @@ impl GlContext {
         unsafe {
             (g.BindFramebuffer)(gl::GL_READ_FRAMEBUFFER, self.framebuffer);
             (g.BindFramebuffer)(gl::GL_DRAW_FRAMEBUFFER, 0);
+            // Le rendu D3D11 garde la ligne 0 en haut (voir d3d11_pipeline.rs) :
+            // l'image est retournée en la copiant vers la fenêtre.
             (g.BlitFramebuffer)(
                 0,
                 0,
                 self.width as i32,
                 self.height as i32,
                 0,
-                0,
-                self.width as i32,
                 self.height as i32,
+                self.width as i32,
+                0,
                 gl::GL_COLOR_BUFFER_BIT,
                 gl::GL_LINEAR as u32,
             );

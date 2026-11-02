@@ -466,6 +466,22 @@ DirectDraw (point 12).
 Ampleur : **XL** (deux traducteurs de bytecode complets, le plus gros chantier
 graphique). Suivi : #137.
 
+Fait (Direct3D 11, SM4/5) : `runtime/src/dlls/dxbc.rs` traduit le bytecode
+DXBC en GLSL 4.30 (signatures, tampons de constantes, textures et
+échantillonneurs, calcul flottant et entier, sauts et boucles, geometry
+shaders). `d3d11_pipeline.rs` applique au tirage la mise en page des entrées,
+les tampons de sommets, d'index et de constantes, les vues de textures, les
+échantillonneurs, les états de mélange, de profondeur et de rastérisation, et
+les ciseaux. Un périphérique sans chaîne d'échange rend hors écran. Test :
+`scripts/test-d3d11-rendu.sh`, un .exe qui dessine un quad texturé sous Mesa
+et relit ses pixels.
+
+Reste : DXIL (SM6, Direct3D 12), compute shaders et UAV, sortie de flux,
+hull et domain shaders, textures 3D, cubes et tableaux. Il reste aussi le HLSL
+compilé à la volée : notre `D3DCompile` garde le texte dans un chunk « HLSL »
+sans produire de DXBC, donc ANGLE (Chromium, Warzone 2100) n'en profite pas
+encore.
+
 ### 8. Chromium, Electron, CEF et WebView2 — une grande partie des applis modernes
 
 Discord, Slack, Teams, Spotify, Notion, Obsidian, WhatsApp, Steam (son

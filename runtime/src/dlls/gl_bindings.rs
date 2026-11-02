@@ -364,6 +364,33 @@ pub(crate) struct GlFunctions {
     pub PixelStorei: unsafe extern "C" fn(GLenum, GLint),
     pub ReadPixels:
         unsafe extern "C" fn(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, *mut c_void),
+
+    // Pipeline Direct3D 11 (GL 3.3 à 4.3 ; absents : sans effet)
+    pub BindBufferBase: unsafe extern "C" fn(GLenum, GLuint, GLuint),
+    pub BindBufferRange: unsafe extern "C" fn(GLenum, GLuint, GLuint, GLintptr, GLsizeiptr),
+    pub GenSamplers: unsafe extern "C" fn(GLsizei, *mut GLuint),
+    pub DeleteSamplers: unsafe extern "C" fn(GLsizei, *const GLuint),
+    pub BindSampler: unsafe extern "C" fn(GLuint, GLuint),
+    pub SamplerParameteri: unsafe extern "C" fn(GLuint, GLenum, GLint),
+    pub SamplerParameterf: unsafe extern "C" fn(GLuint, GLenum, GLfloat),
+    pub SamplerParameterfv: unsafe extern "C" fn(GLuint, GLenum, *const GLfloat),
+    pub VertexAttribIPointer: unsafe extern "C" fn(GLuint, GLint, GLenum, GLsizei, *const c_void),
+    pub VertexAttribDivisor: unsafe extern "C" fn(GLuint, GLuint),
+    pub DrawElementsInstancedBaseVertexBaseInstance:
+        unsafe extern "C" fn(GLenum, GLsizei, GLenum, *const c_void, GLsizei, GLint, GLuint),
+    pub DrawArraysInstancedBaseInstance:
+        unsafe extern "C" fn(GLenum, GLint, GLsizei, GLsizei, GLuint),
+    pub BlendEquationSeparate: unsafe extern "C" fn(GLenum, GLenum),
+    pub BlendColor: unsafe extern "C" fn(GLfloat, GLfloat, GLfloat, GLfloat),
+    pub ColorMaski: unsafe extern "C" fn(GLuint, GLboolean, GLboolean, GLboolean, GLboolean),
+    pub StencilFuncSeparate: unsafe extern "C" fn(GLenum, GLenum, GLint, GLuint),
+    pub StencilOpSeparate: unsafe extern "C" fn(GLenum, GLenum, GLenum, GLenum),
+    pub DepthRange: unsafe extern "C" fn(f64, f64),
+    pub PolygonOffset: unsafe extern "C" fn(GLfloat, GLfloat),
+    pub DrawBuffers: unsafe extern "C" fn(GLsizei, *const GLenum),
+    pub GetTexImage: unsafe extern "C" fn(GLenum, GLint, GLenum, GLenum, *mut c_void),
+    pub ClearDepth: unsafe extern "C" fn(f64),
+    pub ClearStencil: unsafe extern "C" fn(GLint),
 }
 
 unsafe impl Send for GlFunctions {}
@@ -732,6 +759,81 @@ unsafe fn load_gl(lib: *mut c_void) -> GlFunctions {
             "glReadPixels",
             unsafe extern "C" fn(GLint, GLint, GLsizei, GLsizei, GLenum, GLenum, *mut c_void)
         ),
+
+        BindBufferBase: ext!(
+            "glBindBufferBase",
+            unsafe extern "C" fn(GLenum, GLuint, GLuint)
+        ),
+        BindBufferRange: ext!(
+            "glBindBufferRange",
+            unsafe extern "C" fn(GLenum, GLuint, GLuint, GLintptr, GLsizeiptr)
+        ),
+        GenSamplers: ext!("glGenSamplers", unsafe extern "C" fn(GLsizei, *mut GLuint)),
+        DeleteSamplers: ext!(
+            "glDeleteSamplers",
+            unsafe extern "C" fn(GLsizei, *const GLuint)
+        ),
+        BindSampler: ext!("glBindSampler", unsafe extern "C" fn(GLuint, GLuint)),
+        SamplerParameteri: ext!(
+            "glSamplerParameteri",
+            unsafe extern "C" fn(GLuint, GLenum, GLint)
+        ),
+        SamplerParameterf: ext!(
+            "glSamplerParameterf",
+            unsafe extern "C" fn(GLuint, GLenum, GLfloat)
+        ),
+        SamplerParameterfv: ext!(
+            "glSamplerParameterfv",
+            unsafe extern "C" fn(GLuint, GLenum, *const GLfloat)
+        ),
+        VertexAttribIPointer: ext!(
+            "glVertexAttribIPointer",
+            unsafe extern "C" fn(GLuint, GLint, GLenum, GLsizei, *const c_void)
+        ),
+        VertexAttribDivisor: ext!(
+            "glVertexAttribDivisor",
+            unsafe extern "C" fn(GLuint, GLuint)
+        ),
+        DrawElementsInstancedBaseVertexBaseInstance: ext!(
+            "glDrawElementsInstancedBaseVertexBaseInstance",
+            unsafe extern "C" fn(GLenum, GLsizei, GLenum, *const c_void, GLsizei, GLint, GLuint)
+        ),
+        DrawArraysInstancedBaseInstance: ext!(
+            "glDrawArraysInstancedBaseInstance",
+            unsafe extern "C" fn(GLenum, GLint, GLsizei, GLsizei, GLuint)
+        ),
+        BlendEquationSeparate: ext!(
+            "glBlendEquationSeparate",
+            unsafe extern "C" fn(GLenum, GLenum)
+        ),
+        BlendColor: ext!(
+            "glBlendColor",
+            unsafe extern "C" fn(GLfloat, GLfloat, GLfloat, GLfloat)
+        ),
+        ColorMaski: ext!(
+            "glColorMaski",
+            unsafe extern "C" fn(GLuint, GLboolean, GLboolean, GLboolean, GLboolean)
+        ),
+        StencilFuncSeparate: ext!(
+            "glStencilFuncSeparate",
+            unsafe extern "C" fn(GLenum, GLenum, GLint, GLuint)
+        ),
+        StencilOpSeparate: ext!(
+            "glStencilOpSeparate",
+            unsafe extern "C" fn(GLenum, GLenum, GLenum, GLenum)
+        ),
+        DepthRange: sym!("glDepthRange", unsafe extern "C" fn(f64, f64)),
+        PolygonOffset: sym!("glPolygonOffset", unsafe extern "C" fn(GLfloat, GLfloat)),
+        DrawBuffers: ext!(
+            "glDrawBuffers",
+            unsafe extern "C" fn(GLsizei, *const GLenum)
+        ),
+        GetTexImage: sym!(
+            "glGetTexImage",
+            unsafe extern "C" fn(GLenum, GLint, GLenum, GLenum, *mut c_void)
+        ),
+        ClearDepth: sym!("glClearDepth", unsafe extern "C" fn(f64)),
+        ClearStencil: sym!("glClearStencil", unsafe extern "C" fn(GLint)),
     }
 }
 
