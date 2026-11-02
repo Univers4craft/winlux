@@ -208,7 +208,10 @@ pub fn run(pairs: &[(PathBuf, PathBuf)], flags: u32, pr: &Progress) -> Res<Strin
             Err(ArcError::Cancelled) => return Err(ArcError::Cancelled),
             Err(e) => {
                 if created && flags & MOVE == 0 {
-                    let _ = if fs::symlink_metadata(dst).map(|m| m.is_dir()).unwrap_or(false) {
+                    let _ = if fs::symlink_metadata(dst)
+                        .map(|m| m.is_dir())
+                        .unwrap_or(false)
+                    {
                         fs::remove_dir_all(dst)
                     } else {
                         fs::remove_file(dst)
@@ -300,7 +303,10 @@ mod tests {
         let pr = Progress::default();
         run(&[(s.clone(), d.clone())], 0, &pr).unwrap();
         assert_eq!(fs::read(d.join("sous").join("b.txt")).unwrap(), b"winlux");
-        assert_eq!(fs::metadata(d.join("a.txt")).unwrap().len(), 3 * CHUNK as u64 + 5);
+        assert_eq!(
+            fs::metadata(d.join("a.txt")).unwrap().len(),
+            3 * CHUNK as u64 + 5
+        );
         assert_eq!(pr.permille(), 1000);
         assert_eq!(pr.items_done.load(Ordering::Relaxed), 4);
         assert_eq!(pr.items_total.load(Ordering::Relaxed), 4);
@@ -331,7 +337,10 @@ mod tests {
         // Sans consigne, un fichier existant n'est jamais écrasé.
         assert!(run(&[(s.clone(), d.clone())], 0, &Progress::default()).is_err());
         assert_eq!(fs::read(d.join("sous").join("b.txt")).unwrap(), b"ancien");
-        assert!(d.join("garde.txt").exists(), "un échec ne touche pas un dossier existant");
+        assert!(
+            d.join("garde.txt").exists(),
+            "un échec ne touche pas un dossier existant"
+        );
         run(&[(s.clone(), d.clone())], SKIP, &Progress::default()).unwrap();
         assert_eq!(fs::read(d.join("sous").join("b.txt")).unwrap(), b"ancien");
         assert!(d.join("a.txt").exists());
@@ -349,7 +358,10 @@ mod tests {
         fs::create_dir_all(&d).unwrap();
         fs::write(d.join("a.txt"), b"deja la").unwrap();
         run(&[(s.clone(), d.clone())], MOVE | SKIP, &Progress::default()).unwrap();
-        assert!(s.join("a.txt").exists(), "le fichier ignoré reste à sa place");
+        assert!(
+            s.join("a.txt").exists(),
+            "le fichier ignoré reste à sa place"
+        );
         assert!(!s.join("sous").exists(), "le reste est déplacé");
         assert_eq!(fs::read(d.join("a.txt")).unwrap(), b"deja la");
         let _ = fs::remove_dir_all(&r);
@@ -395,7 +407,11 @@ mod tests {
         let (s2, d2) = (s.clone(), d.clone());
         let t = std::thread::spawn(move || run(&[(s2, d2)], 0, &p2).map(|_| ()));
         std::thread::sleep(std::time::Duration::from_millis(200));
-        assert_eq!(pr.items_done.load(Ordering::Relaxed), 0, "rien ne bouge en pause");
+        assert_eq!(
+            pr.items_done.load(Ordering::Relaxed),
+            0,
+            "rien ne bouge en pause"
+        );
         pr.pause.store(false, Ordering::Relaxed);
         t.join().unwrap().unwrap();
         assert!(d.join("a.txt").exists());
