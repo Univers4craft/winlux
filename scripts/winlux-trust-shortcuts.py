@@ -1,5 +1,6 @@
 #!/usr/bin/python3
 """Repair permissions only for unchanged copies of installed launchers."""
+import hashlib
 import os
 from pathlib import Path
 import subprocess
@@ -15,6 +16,12 @@ if desktop.is_dir() and not desktop.is_symlink():
                 continue
             shortcut.chmod(shortcut.stat().st_mode | 0o100)
             subprocess.run(["gio", "set", "-t", "string", str(shortcut), "metadata::trusted", "true"],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
+            # xfdesktop 4.18+ ne lit plus metadata::trusted mais la somme SHA-256
+            # du lanceur : sans elle, « Installer Winlux » ouvrait l'avertissement
+            # « Lanceur d'application non fiable ».
+            checksum = hashlib.sha256(shortcut.read_bytes()).hexdigest()
+            subprocess.run(["gio", "set", "-t", "string", str(shortcut), "metadata::xfce-exe-checksum", checksum],
                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
         except OSError:
             continue
