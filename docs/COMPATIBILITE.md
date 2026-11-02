@@ -481,6 +481,22 @@ compléments Office et de l'automatisation.
 
 Ampleur : **L**. Suivi : #16, #17, #19, #20.
 
+**Fait (novembre 2026), pour crashpad (Chromium, Electron).** Héritage des
+handles entre processus .exe (`runtime/src/dlls/inherit.rs`) : `bInheritHandle`
+de `SECURITY_ATTRIBUTES`, `SetHandleInformation`/`GetHandleInformation`,
+`DuplicateHandle(…, bInheritHandle)` (y compris un vrai handle vers le
+processus courant) et `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`. L'enfant retrouve
+chaque handle à la même valeur : fichiers, tubes et sockets en descripteurs
+hérités, événements dans une page partagée attendue par futex, processus par
+leur PID, instances de tube nommé reprises par l'enfant. Les tubes nommés se
+joignent d'un processus à l'autre par leur nom (socket Unix de rendez-vous dans
+`$XDG_RUNTIME_DIR/winlux-tubes`, droits 0700). Test : `scripts/test-heritage.sh`.
+Pas encore : `DuplicateHandle` vers un **autre** processus (le courtier de
+Chromium), la mémoire partagée (`CreateFileMapping`) et les mutex et sémaphores
+hérités, l'écoute des clients d'autres processus avant `ConnectNamedPipe`, le
+mode message des tubes entre processus. `crashpad_handler.exe` (Warzone 2100,
+Sentry) reste non lancé tant qu'il n'a pas été essayé avec ces handles.
+
 ### 11. Périphériques et entrées des jeux
 
 `DeviceIoControl` (le plus demandé du corpus), entrée brute

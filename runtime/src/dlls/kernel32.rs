@@ -96,6 +96,63 @@ pub(crate) struct EventObject {
     manual_reset: bool,
     signaled: Mutex<bool>,
     changed: Condvar,
+    /// État partagé avec d'autres processus (événement hérité, voir
+    /// `inherit`) : quand il est là, il fait foi à la place de `signaled`.
+    shared: std::sync::OnceLock<crate::dlls::inherit::SharedWord>,
+}
+impl EventObject {
+    fn new(manual_reset: bool, initial: bool) -> EventObject {
+        EventObject {
+            manual_reset,
+            signaled: Mutex::new(initial),
+            changed: Condvar::new(),
+            shared: std::sync::OnceLock::new(),
+        }
+    }
+    /// Signalé ? (sans le consommer)
+    fn is_set(&self, local: &bool) -> bool {
+        match self.shared.get() {
+            Some(w) => w.get() != 0,
+            None => *local,
+        }
+    }
+    fn store(&self, local: &mut bool, v: bool) {
+        match self.shared.get() {
+            Some(w) => w.set(v),
+            None => *local = v,
+        }
+    }
+    /// Prend le signal (remis à zéro pour un événement automatique).
+    fn take(&self, local: &mut bool) -> bool {
+        match self.shared.get() {
+            Some(w) if self.manual_reset => w.get() != 0,
+            Some(w) => w.take(),
+            None => {
+                let was = *local;
+                if was && !self.manual_reset {
+                    *local = false;
+                }
+                was
+            }
+        }
+    }
+    /// Rend l'événement partageable avec un processus enfant : descripteur
+    /// de la page partagée qui porte son état.
+    pub(crate) fn share(&self) -> Option<i32> {
+        let _gate = sync_gate();
+        let local = lock(&self.signaled);
+        if self.shared.get().is_none() {
+            let w = crate::dlls::inherit::SharedWord::create(*local)?;
+            let _ = self.shared.set(w);
+        }
+        self.shared.get().map(|w| w.fd())
+    }
+    /// Événement dont l'état vit dans une page partagée héritée.
+    pub(crate) fn adopt(manual_reset: bool, word: crate::dlls::inherit::SharedWord) -> SyncHandle {
+        let e = EventObject::new(manual_reset, false);
+        let _ = e.shared.set(word);
+        SyncHandle::Event(Arc::new(e))
+    }
 }
 struct MutexState {
     owner: Option<ThreadId>,
@@ -451,6 +508,48 @@ pub extern "win64" fn set_std_handle(which: u32, h: usize) -> i32 {
 
 fn next_handle() -> usize {
     NEXT_HANDLE.fetch_add(1, Ordering::Relaxed)
+}
+/// Handle hérité (voir `inherit`) : même valeur que chez le parent.
+pub(crate) fn insert_file_at(h: usize, file: File, overlapped: bool) {
+    lock(HANDLES.get_or_init(|| Mutex::new(HashMap::new())))
+        .insert(h, FileHandle::File(Arc::new(Mutex::new(file))));
+    if overlapped {
+        mark_overlapped_handle(h);
+    }
+}
+pub(crate) fn insert_sync_at(h: usize, obj: SyncHandle) {
+    lock(SYNCS.get_or_init(|| Mutex::new(HashMap::new()))).insert(h, obj);
+}
+/// Les prochains handles seront au-dessus de `h` (handles hérités).
+pub(crate) fn reserve_handles_up_to(h: usize) {
+    NEXT_HANDLE.fetch_max(h + 1, Ordering::Relaxed);
+}
+/// Événement transmissible à un enfant : (descripteur de sa page partagée,
+/// réinitialisation manuelle).
+pub(crate) fn share_event(h: usize) -> Option<(i32, bool)> {
+    match lookup_sync(h)? {
+        SyncHandle::Event(e) => Some((e.share()?, e.manual_reset)),
+        _ => None,
+    }
+}
+/// PID d'un handle de processus réel (pas le pseudo-handle courant).
+pub(crate) fn inheritable_process_pid(h: usize) -> Option<i32> {
+    match lookup_sync(h)? {
+        SyncHandle::Process(_) => process_os_pid(h),
+        _ => None,
+    }
+}
+/// Processus connu par son seul PID (OpenProcess, handle hérité).
+pub(crate) fn foreign_process(pid: i32) -> SyncHandle {
+    SyncHandle::Process(Arc::new(ProcessObject {
+        state: Mutex::new(ProcessState {
+            child: None,
+            foreign: Some(pid),
+            exit_code: 259,
+            suspended: false,
+        }),
+        changed: Condvar::new(),
+    }))
 }
 pub(crate) fn insert_file(file: File) -> usize {
     let h = next_handle();
@@ -1542,6 +1641,19 @@ fn want_write_access(access: u32) -> bool {
     access & (0x4000_0000 | 0x1000_0000 | 0x2 | 0x4) != 0
 }
 unsafe fn create_file_str(
+    path: &str,
+    access: u32,
+    share: u32,
+    sec: usize,
+    creation: u32,
+    flags: u32,
+    template: usize,
+) -> usize {
+    let h = create_file_opened(path, access, share, sec, creation, flags, template);
+    crate::dlls::inherit::from_security_attributes(h, sec);
+    h
+}
+unsafe fn create_file_opened(
     path: &str,
     access: u32,
     _share: u32,
@@ -3865,10 +3977,7 @@ fn wait_event(e: &EventObject, timeout: u32) -> u32 {
     loop {
         let gate = sync_gate();
         let mut state = lock(&e.signaled);
-        if *state {
-            if !e.manual_reset {
-                *state = false;
-            }
+        if e.take(&mut state) {
             return 0;
         }
         if timeout == 0 {
@@ -3884,6 +3993,12 @@ fn wait_event(e: &EventObject, timeout: u32) -> u32 {
             timeout - elapsed
         };
         drop(gate);
+        if let Some(w) = e.shared.get() {
+            // Signalé par un autre processus : attente sur la page partagée.
+            drop(state);
+            w.wait(left.min(50));
+            continue;
+        }
         let (next, _) = wait_condvar(&e.changed, state, left);
         drop(next);
     }
@@ -4464,7 +4579,7 @@ pub struct SecurityAttributes {
 pub unsafe extern "win64" fn create_pipe(
     read: *mut usize,
     write: *mut usize,
-    _sa: *const SecurityAttributes,
+    sa: *const SecurityAttributes,
     _size: u32,
 ) -> i32 {
     if read.is_null() || write.is_null() {
@@ -4480,6 +4595,8 @@ pub unsafe extern "win64" fn create_pipe(
     let w: File = std::os::unix::io::FromRawFd::from_raw_fd(fds[1]);
     *read = insert_file(r);
     *write = insert_file(w);
+    crate::dlls::inherit::from_security_attributes(*read, sa as usize);
+    crate::dlls::inherit::from_security_attributes(*write, sa as usize);
     1
 }
 fn is_crash_handler(path: &std::path::Path) -> bool {
@@ -4668,7 +4785,21 @@ unsafe fn create_process_common(
             }
         }
     }
-    let _ = inherit_handles;
+    // Handles hérités par un programme Windows (voir `inherit`) :
+    // STARTUPINFOEX.lpAttributeList (décalage 104) peut en restreindre la
+    // liste (PROC_THREAD_ATTRIBUTE_HANDLE_LIST).
+    let passed = if is_pe && inherit_handles != 0 {
+        let list = if creation_flags & 0x80000 != 0 && !startup.is_null() && (*startup).cb >= 112 {
+            crate::dlls::kernel32_node::attribute_handle_list(std::ptr::read_unaligned(
+                (startup as *const u8).add(104) as *const usize,
+            ))
+        } else {
+            None
+        };
+        Some(crate::dlls::inherit::prepare(list.as_deref()))
+    } else {
+        None
+    };
     // DETACHED_PROCESS / CREATE_NEW_PROCESS_GROUP : nouveau groupe de processus.
     if creation_flags & (0x8 | 0x200) != 0 {
         std::os::unix::process::CommandExt::process_group(&mut cmd, 0);
@@ -4685,7 +4816,14 @@ unsafe fn create_process_common(
     if is_pe && !line.trim().is_empty() {
         cmd.env("WINLUX_COMMAND_LINE", &line);
     }
-    let mut child = match cmd.spawn() {
+    cmd.env_remove(crate::dlls::inherit::ENV);
+    if let Some(p) = passed.as_ref().filter(|p| !p.env.is_empty()) {
+        cmd.env(crate::dlls::inherit::ENV, &p.env);
+    }
+    let spawned = cmd.spawn();
+    // Les copies héritables restent chez l'enfant ; le parent les ferme.
+    drop(passed);
+    let mut child = match spawned {
         Ok(c) => c,
         Err(e) => {
             crate::trace!("CreateProcess({:?}) : échec {e}", cmd.get_program());
@@ -5047,6 +5185,7 @@ pub extern "win64" fn close_handle(handle: usize) -> i32 {
     }
     crate::dlls::ntdll_file::forget_dir_cursor(handle);
     crate::dlls::named_pipes::close_server(handle);
+    crate::dlls::inherit::set(handle, false);
     if crate::dlls::kernel32_node::close_snapshot(handle) {
         return 1;
     }
@@ -5071,12 +5210,10 @@ pub unsafe extern "win64" fn create_event_a(
     initial: i32,
     name: *const u8,
 ) -> usize {
-    let obj = SyncHandle::Event(Arc::new(EventObject {
-        manual_reset: manual != 0,
-        signaled: Mutex::new(initial != 0),
-        changed: Condvar::new(),
-    }));
-    add_sync(obj, named_event(name))
+    let obj = SyncHandle::Event(Arc::new(EventObject::new(manual != 0, initial != 0)));
+    let h = add_sync(obj, named_event(name));
+    crate::dlls::inherit::from_security_attributes(h, _sec);
+    h
 }
 pub extern "win64" fn set_event(h: usize) -> i32 {
     let Some(SyncHandle::Event(v)) = lookup_sync(h) else {
@@ -5084,7 +5221,10 @@ pub extern "win64" fn set_event(h: usize) -> i32 {
         return 0;
     };
     let _gate = sync_gate();
-    *lock(&v.signaled) = true;
+    v.store(&mut lock(&v.signaled), true);
+    if let Some(w) = v.shared.get() {
+        w.wake();
+    }
     if v.manual_reset {
         v.changed.notify_all()
     } else {
@@ -5098,7 +5238,7 @@ pub extern "win64" fn reset_event(h: usize) -> i32 {
         return 0;
     };
     let _gate = sync_gate();
-    *lock(&v.signaled) = false;
+    v.store(&mut lock(&v.signaled), false);
     1
 }
 pub unsafe extern "win64" fn create_mutex_a(_sec: usize, initial: i32, name: *const u8) -> usize {
@@ -5243,7 +5383,7 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
             let gate = sync_gate();
             let me = std::thread::current().id();
             let ready = objects.iter().all(|o| match o {
-                SyncHandle::Event(e) => *lock(&e.signaled),
+                SyncHandle::Event(e) => e.is_set(&lock(&e.signaled)),
                 SyncHandle::Mutex(m) => {
                     let s = lock(&m.state);
                     s.owner.is_none() || s.owner.as_ref() == Some(&me)
@@ -5257,10 +5397,7 @@ pub unsafe extern "win64" fn wait_for_multiple_objects(
                 for o in &objects {
                     match o {
                         SyncHandle::Event(e) => {
-                            let mut signaled = lock(&e.signaled);
-                            if !e.manual_reset {
-                                *signaled = false;
-                            }
+                            e.take(&mut lock(&e.signaled));
                         }
                         SyncHandle::Mutex(m) => {
                             let mut s = lock(&m.state);
@@ -6743,11 +6880,7 @@ pub unsafe extern "win64" fn create_waitable_timer_a(
     manual: i32,
     name: *const u8,
 ) -> usize {
-    let obj = SyncHandle::Event(Arc::new(EventObject {
-        manual_reset: manual != 0,
-        signaled: Mutex::new(false),
-        changed: Condvar::new(),
-    }));
+    let obj = SyncHandle::Event(Arc::new(EventObject::new(manual != 0, false)));
     let h = add_sync(obj, named_event(name));
     if h != 0 {
         lock(waitable_timers()).insert(h, Arc::new(AtomicUsize::new(0)));
@@ -6807,7 +6940,7 @@ pub unsafe extern "win64" fn set_waitable_timer(
         std::time::Duration::from_nanos((due - now).max(0) as u64 * 100)
     };
     let my_generation = generation.fetch_add(1, Ordering::AcqRel) + 1;
-    *lock(&event.signaled) = false;
+    event.store(&mut lock(&event.signaled), false);
     let period = std::time::Duration::from_millis(period as u64);
     let spawned = std::thread::Builder::new()
         .name("winlux-waitable-timer".into())
@@ -6820,7 +6953,10 @@ pub unsafe extern "win64" fn set_waitable_timer(
                 }
                 {
                     let _gate = sync_gate();
-                    *lock(&event.signaled) = true;
+                    event.store(&mut lock(&event.signaled), true);
+                    if let Some(w) = event.shared.get() {
+                        w.wake();
+                    }
                     event.changed.notify_all();
                 }
                 if period.is_zero() {
@@ -7039,7 +7175,9 @@ pub unsafe extern "win64" fn create_named_pipe_a(
         crate::process::set_last_error(123);
         return usize::MAX;
     }
-    crate::dlls::named_pipes::create(&crate::dlls::cstr(name), open_mode, pipe_mode, max)
+    let h = crate::dlls::named_pipes::create(&crate::dlls::cstr(name), open_mode, pipe_mode, max);
+    crate::dlls::inherit::from_security_attributes(h, _sa);
+    h
 }
 pub extern "win64" fn connect_named_pipe(h: usize, ov: usize) -> i32 {
     crate::dlls::named_pipes::connect(h, ov)
@@ -7415,12 +7553,13 @@ pub unsafe extern "win64" fn get_thread_times(
     get_process_times(0, creation, exit, kernel, user)
 }
 
-pub unsafe extern "win64" fn set_handle_information(_h: usize, _mask: u32, _flags: u32) -> i32 {
+pub unsafe extern "win64" fn set_handle_information(h: usize, mask: u32, flags: u32) -> i32 {
+    crate::dlls::inherit::set_information(h, mask, flags);
     1
 }
-pub unsafe extern "win64" fn get_handle_information(_h: usize, flags: *mut u32) -> i32 {
+pub unsafe extern "win64" fn get_handle_information(h: usize, flags: *mut u32) -> i32 {
     if !flags.is_null() {
-        *flags = 0;
+        *flags = crate::dlls::inherit::information(h);
     }
     1
 }
@@ -7430,7 +7569,7 @@ pub unsafe extern "win64" fn duplicate_handle(
     _dst_process: usize,
     dst_handle: *mut usize,
     _access: u32,
-    _inherit: i32,
+    inherit: i32,
     options: u32,
 ) -> i32 {
     // Un fichier ou un tube reçoit un vrai double (son propre fd) : fermer
@@ -7444,7 +7583,13 @@ pub unsafe extern "win64" fn duplicate_handle(
     // Pseudo-handles (processus et thread courants) : Windows rend un vrai
     // handle vers le même objet ; ici il reste utilisable tel quel.
     let pseudo = src_handle == get_current_process() || src_handle == get_current_thread();
-    let copy = if pseudo {
+    let copy = if src_handle == get_current_process() && inherit != 0 {
+        // Handle héritable vers soi-même (crashpad le passe à son
+        // gestionnaire de plantage) : un vrai handle, désigné par le PID.
+        let h = next_handle();
+        insert_sync_at(h, foreign_process(std::process::id() as i32));
+        Some(h)
+    } else if pseudo {
         Some(src_handle)
     } else if let Some(fd) = std_fd.filter(|&fd| libc::isatty(fd) == 1) {
         // La console (terminal) reste la console : la copie est le handle
@@ -7472,6 +7617,9 @@ pub unsafe extern "win64" fn duplicate_handle(
     };
     if options & 1 != 0 && std_fd.is_none() && !pseudo {
         close_handle(src_handle);
+    }
+    if result != src_handle || !pseudo {
+        crate::dlls::inherit::set(result, inherit != 0);
     }
     if !dst_handle.is_null() {
         *dst_handle = result;

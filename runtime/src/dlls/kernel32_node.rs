@@ -920,8 +920,11 @@ pub unsafe extern "win64" fn fail_no_more_files() -> usize {
     usize::MAX
 }
 
-/// `ProcThreadAttributeList` : liste opaque ; les attributs (ConPTY,
-/// handles hérités) sont acceptés et ignorés.
+/// `ProcThreadAttributeList` : liste opaque. On y garde seulement
+/// `PROC_THREAD_ATTRIBUTE_HANDLE_LIST` (handles hérités, lu par
+/// CreateProcess) ; les autres attributs (ConPTY…) sont acceptés et ignorés.
+/// Disposition : marque, adresse du tableau de handles, nombre.
+pub(crate) const ATTRIBUTE_LIST_MAGIC: u64 = 0x5453_494C_5254_5441; // « ATTRLIST »
 pub unsafe extern "win64" fn InitializeProcThreadAttributeList(
     list: *mut u8,
     _count: u32,
@@ -938,18 +941,44 @@ pub unsafe extern "win64" fn InitializeProcThreadAttributeList(
         return 0;
     }
     std::ptr::write_bytes(list, 0, 64);
+    std::ptr::write_unaligned(list as *mut u64, ATTRIBUTE_LIST_MAGIC);
     1
 }
 pub unsafe extern "win64" fn UpdateProcThreadAttribute(
-    _list: usize,
+    list: usize,
     _flags: u32,
-    _attr: usize,
-    _value: usize,
-    _size: usize,
+    attr: usize,
+    value: usize,
+    size: usize,
     _prev: usize,
     _ret: usize,
 ) -> i32 {
+    const PROC_THREAD_ATTRIBUTE_HANDLE_LIST: usize = 0x20002;
+    if list != 0 && attr == PROC_THREAD_ATTRIBUTE_HANDLE_LIST {
+        if std::ptr::read_unaligned(list as *const u64) != ATTRIBUTE_LIST_MAGIC {
+            crate::process::set_last_error(87);
+            return 0;
+        }
+        std::ptr::write_unaligned((list + 8) as *mut usize, value);
+        std::ptr::write_unaligned((list + 16) as *mut usize, size / 8);
+    }
     1
+}
+/// Handles de `PROC_THREAD_ATTRIBUTE_HANDLE_LIST`, s'il y en a.
+pub(crate) unsafe fn attribute_handle_list(list: usize) -> Option<Vec<usize>> {
+    if list == 0 || std::ptr::read_unaligned(list as *const u64) != ATTRIBUTE_LIST_MAGIC {
+        return None;
+    }
+    let ptr = std::ptr::read_unaligned((list + 8) as *const usize);
+    let n = std::ptr::read_unaligned((list + 16) as *const usize);
+    if ptr == 0 || n > 4096 {
+        return None;
+    }
+    Some(
+        (0..n)
+            .map(|i| std::ptr::read_unaligned((ptr + i * 8) as *const usize))
+            .collect(),
+    )
 }
 pub unsafe extern "win64" fn DeleteProcThreadAttributeList(_list: usize) {}
 

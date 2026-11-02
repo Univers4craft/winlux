@@ -73,6 +73,12 @@ clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/devnodes_msvc
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/devnodes_msvc.obj" \
     "$tmp/kernel32_devnodes.lib" "$tmp/advapi32_devnodes.lib" "$tmp/setupapi_devnodes.lib" \
     "$tmp/cfgmgr32_devnodes.lib" "$tmp/user32_devnodes.lib" "$tmp/gdi32_devnodes.lib" /out:"$out/devnodes_msvc.exe"
+# Héritage des handles entre processus (crashpad de Chromium et d'Electron).
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nCreateEventW\nSetEvent\nWaitForSingleObject\nCreateNamedPipeW\nConnectNamedPipe\nWaitNamedPipeW\nCreatePipe\nDuplicateHandle\nGetCurrentProcess\nGetCurrentProcessId\nGetProcessId\nGetHandleInformation\nSetHandleInformation\nInitializeProcThreadAttributeList\nUpdateProcThreadAttribute\nCreateProcessW\nGetExitCodeProcess\nGetModuleFileNameW\nGetCommandLineW\nCreateFileW\nReadFile\nWriteFile\nCloseHandle\nSleep\n' >"$tmp/kernel32_inherit.def"
+llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32_inherit.def" -l "$tmp/kernel32_inherit.lib"
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -c "$src/inherit_msvc.c" -o "$tmp/inherit_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/inherit_msvc.obj" \
+    "$tmp/kernel32_inherit.lib" /out:"$out/inherit_msvc.exe"
 # winusb : appareil USB trouvé par setupapi, décrit par WinUSB (#271).
 printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nGetLastError\nCreateFileW\nCloseHandle\n' >"$tmp/kernel32_winusb.def"
 printf 'LIBRARY setupapi.dll\nEXPORTS\nSetupDiGetClassDevsW\nSetupDiEnumDeviceInterfaces\nSetupDiGetDeviceInterfaceDetailW\nSetupDiDestroyDeviceInfoList\n' >"$tmp/setupapi_winusb.def"
