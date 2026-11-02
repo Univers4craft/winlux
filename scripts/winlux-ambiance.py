@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Ambiance de l'écran : éclairage nocturne (couleurs plus chaudes le soir).
+"""Ambiance de l'écran : éclairage nocturne, thème et fond d'écran selon l'heure.
 
 Comme Windows 11 (Paramètres > Système > Écran > Éclairage nocturne) :
 - interrupteur « Activer maintenant », intensité de 0 à 100 ;
@@ -14,9 +14,18 @@ Les couleurs sont appliquées par les rampes gamma de chaque écran (RandR,
 libXrandr). Un pilote sans rampe gamma (certaines VM) rend la fonction
 indisponible : Paramètres et réglages rapides la masquent.
 
+Le même démon suit aussi Paramètres › Personnalisation (#281) : mode de
+couleur automatique (clair du lever au coucher du soleil, sombre ensuite) et
+fond d'écran en diaporama (dossier, intervalle, ordre aléatoire) ou « Winlux
+Aube » le jour et « Winlux Nuit » le soir. Il passe par winlux-personalize.
+
     winlux-ambiance status            état, une valeur par ligne (clé=valeur)
     winlux-ambiance set CLÉ VALEUR    NIGHTLIGHT on|off, SCHEDULE off|sun|manual,
-                                      FROM HH:MM, TO HH:MM, STRENGTH 0-100
+                                      FROM HH:MM, TO HH:MM, STRENGTH 0-100,
+                                      THEME_AUTO on|off, WALLPAPER fixed|slideshow|daynight,
+                                      SLIDE_FOLDER DOSSIER, SLIDE_MINUTES 1|10|30|60|360|1440,
+                                      SLIDE_SHUFFLE on|off
+    winlux-ambiance next              image suivante du diaporama
     winlux-ambiance toggle            active ou coupe l'éclairage nocturne
     winlux-ambiance apply             applique tout de suite l'état voulu
     winlux-ambiance reset             couleurs normales sur tous les écrans
@@ -36,7 +45,13 @@ import sys
 import time
 
 DEFAULTS = {"NIGHTLIGHT": "off", "SCHEDULE": "off", "FROM": "21:00", "TO": "07:00",
-            "STRENGTH": "50", "STAMP": ""}
+            "STRENGTH": "50", "STAMP": "",
+            "THEME_AUTO": "off", "THEME_STAMP": "", "WALLPAPER": "fixed", "WALL_STAMP": "",
+            "SLIDE_FOLDER": "", "SLIDE_MINUTES": "30", "SLIDE_SHUFFLE": "off", "SLIDE_INDEX": "-1", "SLIDE_NEXT": "0"}
+# Clés tenues par le démon, pas par l'utilisateur.
+INTERNAL = {"STAMP", "THEME_STAMP", "WALL_STAMP", "SLIDE_INDEX", "SLIDE_NEXT"}
+SLIDE_MINUTES = ("1", "10", "30", "60", "360", "1440")
+IMAGE_SUFFIXES = {".png", ".jpg", ".jpeg", ".webp", ".bmp", ".gif", ".tif", ".tiff"}
 DAY_KELVIN = 6500
 NIGHT_MIN_KELVIN = 2700   # intensité 100 : comparable au réglage le plus chaud de Windows
 FALLBACK_SUN = ("20:00", "07:00")
@@ -91,6 +106,12 @@ def validate(key, value):
         try: number = int(value)
         except ValueError: return None
         return str(min(100, max(0, number)))
+    if key in ("THEME_AUTO", "SLIDE_SHUFFLE"): return value if value in ("on", "off") else None
+    if key == "WALLPAPER": return value if value in ("fixed", "slideshow", "daynight") else None
+    if key == "SLIDE_MINUTES": return value if value in SLIDE_MINUTES else None
+    if key == "SLIDE_FOLDER":
+        folder = Path(value).expanduser()
+        return str(folder.resolve()) if folder.is_dir() else None
     return None
 
 
@@ -333,6 +354,94 @@ class FakeScreens:
         self.path.write_text("%.4f %.4f %.4f\n" % rgb, encoding="ascii")
 
 
+# ── Thème et fond d'écran selon l'heure (#281) ──────────────────────────────
+
+def personalize_command():
+    custom = os.environ.get("WINLUX_PERSONALIZE")
+    if custom: return custom.split()
+    for path in ("/usr/bin/winlux-personalize", str(Path(__file__).resolve().with_name("winlux-personalize.py"))):
+        if os.path.isfile(path): return ["/usr/bin/python3", path] if path.endswith(".py") else [path]
+    return None
+
+
+def personalize(kind, value):
+    command = personalize_command()
+    if not command: return False
+    import subprocess
+    try:
+        return subprocess.run(command + [kind, value], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                              timeout=60).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def sun_period(moment):
+    """(nuit ?, repère) d'après le vrai coucher et lever du soleil."""
+    return scheduled_period({"SCHEDULE": "sun", "FROM": "", "TO": ""}, moment)
+
+
+def theme_due(values, moment):
+    """'light' ou 'dark' quand le mode automatique doit changer de thème, sinon None."""
+    if values["THEME_AUTO"] != "on": return None
+    night, stamp = sun_period(moment)
+    if not stamp or stamp == values["THEME_STAMP"]: return None
+    values["THEME_STAMP"] = stamp
+    return "dark" if night else "light"
+
+
+def wallpaper_folder():
+    return Path(os.environ.get("WINLUX_WALLPAPERS", "/usr/share/winlux")) / "wallpapers"
+
+
+def daynight_due(values, moment):
+    """Fond « Winlux Aube » le jour, « Winlux Nuit » le soir, au changement de plage."""
+    if values["WALLPAPER"] != "daynight": return None
+    night, stamp = sun_period(moment)
+    if not stamp or stamp == values["WALL_STAMP"]: return None
+    values["WALL_STAMP"] = stamp
+    path = wallpaper_folder() / ("winlux-prisme-nuit.png" if night else "winlux-prisme-aube.png")
+    return str(path) if path.is_file() else None
+
+
+def slideshow_images(folder):
+    try:
+        return sorted((str(p) for p in Path(folder).iterdir()
+                       if p.suffix.lower() in IMAGE_SUFFIXES and p.is_file() and not p.name.startswith(".")),
+                      key=str.casefold)
+    except OSError:
+        return []
+
+
+def slideshow_due(values, epoch, force=False):
+    """Image suivante du diaporama quand l'intervalle est passé (ou `force`), sinon None."""
+    if values["WALLPAPER"] != "slideshow" or not values["SLIDE_FOLDER"]: return None
+    try: due = float(values["SLIDE_NEXT"])
+    except ValueError: due = 0
+    if not force and epoch < due: return None
+    images = slideshow_images(values["SLIDE_FOLDER"])
+    values["SLIDE_NEXT"] = str(int(epoch + int(values["SLIDE_MINUTES"]) * 60))
+    if not images: return None
+    try: index = int(values["SLIDE_INDEX"])
+    except ValueError: index = -1
+    if values["SLIDE_SHUFFLE"] == "on" and len(images) > 1:
+        import random
+        index = random.choice([i for i in range(len(images)) if i != index % len(images)])
+    else:
+        index = (index + 1) % len(images)
+    values["SLIDE_INDEX"] = str(index)
+    return images[index]
+
+
+def follow_appearance(values, moment, epoch=None):
+    """Applique thème et fond dus ; renvoie True si les réglages ont changé."""
+    before = dict(values)
+    theme = theme_due(values, moment)
+    if theme: personalize("theme", theme)
+    picture = daynight_due(values, moment) or slideshow_due(values, time.time() if epoch is None else epoch)
+    if picture: personalize("wallpaper", picture)
+    return values != before
+
+
 def screens():
     fake = os.environ.get("WINLUX_AMBIANCE_FAKE")
     if fake: return FakeScreens(fake)
@@ -349,7 +458,10 @@ def status_lines(values, moment, output):
     return [f"supported={int(supported)}", f"nightlight={values['NIGHTLIGHT']}",
             f"schedule={values['SCHEDULE']}", f"from={values['FROM']}", f"to={values['TO']}",
             f"strength={values['STRENGTH']}", f"sunset={sunset}", f"sunrise={sunrise}",
-            f"sun_known={int(real)}", f"kelvin={target_kelvin(values)}"]
+            f"sun_known={int(real)}", f"kelvin={target_kelvin(values)}",
+            f"theme_auto={values['THEME_AUTO']}", f"wallpaper={values['WALLPAPER']}",
+            f"slide_folder={values['SLIDE_FOLDER']}", f"slide_minutes={values['SLIDE_MINUTES']}",
+            f"slide_shuffle={values['SLIDE_SHUFFLE']}"]
 
 
 def apply_now(values, output, previous=None, steps=1):
@@ -370,7 +482,13 @@ def daemon():
     last_full = 0.0
     while True:
         values = load()
-        if follow_schedule(values, now()): save(values)
+        changed = follow_schedule(values, now())
+        if follow_appearance(values, now()): changed = True
+        if changed:
+            # Relire juste avant d'écrire : un réglage changé pendant ce tour reste.
+            fresh = load()
+            for key in INTERNAL | {"NIGHTLIGHT"}: fresh[key] = values[key]
+            save(fresh)
         if output is None:
             output = screens()
         target = target_kelvin(values)
@@ -396,7 +514,7 @@ def main(argv):
         return 0
     if command == "set" and len(argv) == 4:
         key = argv[2].upper()
-        value = validate(key, argv[3]) if key in DEFAULTS and key != "STAMP" else None
+        value = validate(key, argv[3]) if key in DEFAULTS and key not in INTERNAL else None
         if value is None:
             print(f"winlux-ambiance : valeur refusée pour {argv[2]}", file=sys.stderr)
             return 2
@@ -405,9 +523,20 @@ def main(argv):
             # Nouveau planning : il s'applique tout de suite.
             values["STAMP"] = ""
             follow_schedule(values, moment)
+        if key in ("THEME_AUTO", "WALLPAPER", "SLIDE_FOLDER", "SLIDE_MINUTES", "SLIDE_SHUFFLE"):
+            # Mode automatique ou diaporama choisi : appliqué tout de suite.
+            values.update(THEME_STAMP="", WALL_STAMP="")
+            if key in ("WALLPAPER", "SLIDE_FOLDER"): values.update(SLIDE_NEXT="0", SLIDE_INDEX="-1")
+            follow_appearance(values, moment)
+            save(values)
+            return 0
         save(values)
         apply_now(values, screens(), steps=1)
         return 0
+    if command == "next":
+        picture = slideshow_due(values, time.time(), force=True)
+        save(values)
+        return 0 if picture and personalize("wallpaper", picture) else 1
     if command == "toggle":
         follow_schedule(values, moment)
         values["NIGHTLIGHT"] = "off" if values["NIGHTLIGHT"] == "on" else "on"

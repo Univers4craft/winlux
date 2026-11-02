@@ -4,10 +4,17 @@ use std::sync::Mutex as StdMutex;
 /// Notifications WM_COMMAND reçues par la fenêtre parente : (id, code).
 static NOTES: StdMutex<Vec<(u16, u16)>> = StdMutex::new(Vec::new());
 static SERIAL: StdMutex<()> = StdMutex::new(());
+/// Codes WM_NOTIFY reçus par la fenêtre parente.
+static NOTIFY: StdMutex<Vec<i32>> = StdMutex::new(Vec::new());
 
 extern "win64" fn parent_proc(hwnd: usize, msg: u32, wp: usize, lp: isize) -> isize {
     if msg == WM_COMMAND {
         NOTES.lock().unwrap().push((wp as u16, (wp >> 16) as u16));
+        return 0;
+    }
+    if msg == 0x004E && lp != 0 {
+        let code = unsafe { *((lp as *const u8).add(16) as *const i32) };
+        NOTIFY.lock().unwrap().push(code);
         return 0;
     }
     gui::def_window_proc(hwnd, msg, wp, lp)
@@ -101,7 +108,19 @@ fn les_classes_predefinies_existent_sans_tenir_compte_de_la_casse() {
     ] {
         assert!(gui::lookup_class(name).is_some(), "{name}");
     }
-    assert!(gui::lookup_class("SysTreeView32").is_none());
+    for name in [
+        "SysTreeView32",
+        "SysListView32",
+        "SysTabControl32",
+        "msctls_statusbar32",
+        "msctls_progress32",
+        "msctls_trackbar32",
+        "msctls_updown32",
+        "tooltips_class32",
+    ] {
+        assert!(gui::lookup_class(name).is_some(), "{name}");
+    }
+    assert!(gui::lookup_class("SysPager").is_none());
     assert_eq!(atom_class(0x80), Some("Button"));
 }
 
@@ -362,4 +381,269 @@ fn coupure_des_lignes_et_marques_de_raccourci() {
     let lines = wrap(font, "mot mot mot", one * 2);
     assert!(lines.len() >= 2, "{lines:?}");
     assert_eq!(wrap(font, "a\r\nb", 1000), vec!["a", "b"]);
+}
+
+// ---------- comctl32 ----------
+
+fn notify_codes() -> Vec<i32> {
+    std::mem::take(&mut *NOTIFY.lock().unwrap())
+}
+
+#[repr(C)]
+struct TvInsert {
+    parent: usize,
+    after: usize,
+    mask: u32,
+    item: usize,
+    state: u32,
+    state_mask: u32,
+    text: *const u16,
+    text_max: i32,
+    image: i32,
+    selected_image: i32,
+    children: i32,
+    param: isize,
+}
+
+fn tv_insert(tv: usize, parent: usize, text: &str, param: isize) -> usize {
+    let t = w(text);
+    let mut ins = TvInsert {
+        parent,
+        after: 0xFFFF_FFFF_FFFF_0002, // TVI_LAST
+        mask: 0x1 | 0x4,              // TEXT | PARAM
+        item: 0,
+        state: 0,
+        state_mask: 0,
+        text: t.as_ptr(),
+        text_max: 0,
+        image: 0,
+        selected_image: 0,
+        children: 0,
+        param,
+    };
+    sendw(tv, 0x1132, 0, &mut ins as *mut TvInsert as isize) as usize
+}
+
+#[test]
+fn arborescence_insertion_depliage_et_selection() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let tv = child(p, "SysTreeView32", "", 0x7, 50, (0, 0, 200, 200));
+    let session = tv_insert(tv, 0xFFFF_FFFF_FFFF_0000, "Session", 1);
+    let terminal = tv_insert(tv, 0xFFFF_FFFF_FFFF_0000, "Terminal", 2);
+    let clavier = tv_insert(tv, terminal, "Clavier", 3);
+    assert!(session != 0 && terminal != 0 && clavier != 0);
+    assert_eq!(sendw(tv, 0x1105, 0, 0), 3, "TVM_GETCOUNT");
+    // TVM_GETNEXTITEM : racine, suivant, enfant, parent
+    assert_eq!(sendw(tv, 0x110A, 0, 0) as usize, session);
+    assert_eq!(sendw(tv, 0x110A, 1, session as isize) as usize, terminal);
+    assert_eq!(sendw(tv, 0x110A, 4, terminal as isize) as usize, clavier);
+    assert_eq!(sendw(tv, 0x110A, 3, clavier as isize) as usize, terminal);
+    // Dépliage puis sélection : TVN_SELCHANGINGW / TVN_SELCHANGEDW
+    notify_codes();
+    assert_eq!(sendw(tv, 0x1102, 2, terminal as isize), 1, "TVM_EXPAND");
+    assert_eq!(sendw(tv, 0x110B, 9, clavier as isize), 1, "TVM_SELECTITEM");
+    assert_eq!(sendw(tv, 0x110A, 9, 0) as usize, clavier, "TVGN_CARET");
+    let codes = notify_codes();
+    assert!(codes.contains(&-450) && codes.contains(&-451), "{codes:?}");
+    // TVM_GETITEMW : texte et lParam
+    let mut buf = [0u16; 32];
+    let mut it = TvInsert {
+        parent: 0,
+        after: 0,
+        mask: 0x1 | 0x4 | 0x10,
+        item: clavier,
+        state: 0,
+        state_mask: 0,
+        text: buf.as_mut_ptr(),
+        text_max: 32,
+        image: 0,
+        selected_image: 0,
+        children: 0,
+        param: 0,
+    };
+    let item_ptr = unsafe { (&mut it as *mut TvInsert as *mut u8).add(16) };
+    assert_eq!(sendw(tv, 0x113E, 0, item_ptr as isize), 1);
+    let n = buf.iter().position(|&c| c == 0).unwrap();
+    assert_eq!(String::from_utf16_lossy(&buf[..n]), "Clavier");
+    assert_eq!(it.param, 3);
+    // Suppression d'un parent : ses enfants partent avec lui
+    assert_eq!(sendw(tv, 0x1101, 0, terminal as isize), 1);
+    assert_eq!(sendw(tv, 0x1105, 0, 0), 1);
+    gui::destroy_window(p);
+}
+
+#[repr(C)]
+struct LvItemW {
+    mask: u32,
+    item: i32,
+    sub_item: i32,
+    state: u32,
+    state_mask: u32,
+    text: *const u16,
+    text_max: i32,
+    image: i32,
+    param: isize,
+}
+
+#[repr(C)]
+struct LvColumnW {
+    mask: u32,
+    fmt: i32,
+    cx: i32,
+    text: *const u16,
+    text_max: i32,
+    sub_item: i32,
+}
+
+#[test]
+fn liste_a_colonnes_lignes_textes_et_selection() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let lv = child(p, "SysListView32", "", 0x1 | 0x4, 51, (0, 0, 300, 200));
+    for (i, name) in ["Nom", "Port"].iter().enumerate() {
+        let t = w(name);
+        let mut col = LvColumnW {
+            mask: 0x2 | 0x4, // WIDTH | TEXT
+            fmt: 0,
+            cx: 120,
+            text: t.as_ptr(),
+            text_max: 0,
+            sub_item: 0,
+        };
+        assert_eq!(
+            sendw(lv, 0x1061, i, &mut col as *mut LvColumnW as isize),
+            i as isize
+        );
+    }
+    for (i, (host, port)) in [("serveur", "22"), ("routeur", "23")].iter().enumerate() {
+        let t = w(host);
+        let mut it = LvItemW {
+            mask: 0x1 | 0x4,
+            item: i as i32,
+            sub_item: 0,
+            state: 0,
+            state_mask: 0,
+            text: t.as_ptr(),
+            text_max: 0,
+            image: 0,
+            param: 100 + i as isize,
+        };
+        assert_eq!(
+            sendw(lv, 0x104D, 0, &mut it as *mut LvItemW as isize),
+            i as isize
+        );
+        let t = w(port);
+        let mut sub = LvItemW {
+            mask: 0x1,
+            item: i as i32,
+            sub_item: 1,
+            state: 0,
+            state_mask: 0,
+            text: t.as_ptr(),
+            text_max: 0,
+            image: 0,
+            param: 0,
+        };
+        assert_eq!(sendw(lv, 0x104C, 0, &mut sub as *mut LvItemW as isize), 1);
+    }
+    assert_eq!(sendw(lv, 0x1004, 0, 0), 2, "LVM_GETITEMCOUNT");
+    let mut buf = [0u16; 16];
+    let mut get = LvItemW {
+        mask: 0x1,
+        item: 1,
+        sub_item: 1,
+        state: 0,
+        state_mask: 0,
+        text: buf.as_mut_ptr(),
+        text_max: 16,
+        image: 0,
+        param: 0,
+    };
+    let n = sendw(lv, 0x1073, 1, &mut get as *mut LvItemW as isize);
+    assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "23");
+    // Sélection : LVM_SETITEMSTATE puis LVM_GETNEXTITEM(LVNI_SELECTED)
+    notify_codes();
+    let mut st = LvItemW {
+        mask: 0x8,
+        item: 0,
+        sub_item: 0,
+        state: 0x3,
+        state_mask: 0x3,
+        text: std::ptr::null(),
+        text_max: 0,
+        image: 0,
+        param: 0,
+    };
+    sendw(lv, 0x102B, 1, &mut st as *mut LvItemW as isize);
+    assert_eq!(sendw(lv, 0x100C, usize::MAX, 0x2), 1);
+    assert!(notify_codes().contains(&-101), "LVN_ITEMCHANGED");
+    gui::destroy_window(p);
+}
+
+#[repr(C)]
+struct TcItemW {
+    mask: u32,
+    state: u32,
+    state_mask: u32,
+    text: *const u16,
+    text_max: i32,
+    image: i32,
+    param: isize,
+}
+
+#[test]
+fn onglets_barre_d_etat_progression_et_curseur() {
+    let _g = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+    let p = parent_window();
+    let tab = child(p, "SysTabControl32", "", 0, 52, (0, 0, 300, 200));
+    for (i, name) in ["Général", "Avancé"].iter().enumerate() {
+        let t = w(name);
+        let mut it = TcItemW {
+            mask: 0x1,
+            state: 0,
+            state_mask: 0,
+            text: t.as_ptr(),
+            text_max: 0,
+            image: 0,
+            param: 0,
+        };
+        assert_eq!(
+            sendw(tab, 0x133E, i, &mut it as *mut TcItemW as isize),
+            i as isize
+        );
+    }
+    assert_eq!(sendw(tab, 0x1304, 0, 0), 2);
+    assert_eq!(sendw(tab, 0x130B, 0, 0), 0, "premier onglet choisi");
+    assert_eq!(sendw(tab, 0x130C, 1, 0), 0, "SETCURSEL renvoie l'ancien");
+    assert_eq!(sendw(tab, 0x130B, 0, 0), 1);
+
+    let status = unsafe {
+        let t = w("Prêt");
+        crate::dlls::comctl32::create_status_window_w(0x1000_0000, t.as_ptr(), p, 53)
+    };
+    assert!(status != 0);
+    let mut buf = [0u16; 16];
+    let n = sendw(status, 0x040D, 0, buf.as_mut_ptr() as isize) & 0xFFFF;
+    assert_eq!(String::from_utf16_lossy(&buf[..n as usize]), "Prêt");
+    let r = gui::window_rect(status).unwrap();
+    assert_eq!(r.bottom - r.top, 26, "hauteur de la barre d'état");
+
+    let bar = child(p, "msctls_progress32", "", 0, 54, (0, 0, 200, 20));
+    sendw(bar, 0x0406, 0, 50); // PBM_SETRANGE32
+    sendw(bar, 0x0402, 30, 0); // PBM_SETPOS
+    assert_eq!(sendw(bar, 0x0408, 0, 0), 30);
+    sendw(bar, 0x0404, 40, 0); // PBM_SETSTEP
+    sendw(bar, 0x0405, 0, 0); // PBM_STEPIT
+    assert_eq!(
+        sendw(bar, 0x0408, 0, 0),
+        20,
+        "repart du début comme Windows"
+    );
+
+    let track = child(p, "msctls_trackbar32", "", 0, 55, (0, 0, 200, 30));
+    sendw(track, 0x0406, 1, (10 << 16) as isize); // TBM_SETRANGE 0..10
+    sendw(track, 0x0405, 1, 7); // TBM_SETPOS
+    assert_eq!(sendw(track, 0x0400, 0, 0), 7);
+    gui::destroy_window(p);
 }

@@ -16,6 +16,7 @@ use winlux_testexe::*;
 #[link(name = "user32", kind = "raw-dylib")]
 extern "C" {
     fn SendMessageA(hwnd: Handle, msg: u32, wparam: usize, lparam: isize) -> isize;
+    fn MessageBoxW(owner: Handle, text: *const u16, caption: *const u16, kind: u32) -> i32;
     fn GetDlgItem(dlg: Handle, id: i32) -> Handle;
     fn SetDlgItemTextA(dlg: Handle, id: i32, text: *const c_char) -> i32;
     fn GetDlgItemTextA(dlg: Handle, id: i32, buf: *mut c_char, max: i32) -> u32;
@@ -117,6 +118,20 @@ unsafe fn control(
 
 fn eq(a: &[u8], b: &[u8]) -> bool {
     a == b
+}
+
+/// Ferme la boîte de message comme un utilisateur : touche Entrée.
+unsafe extern "win64" fn press_enter(hwnd: Handle, _msg: u32, id: usize, _time: u32) {
+    KillTimer(hwnd, id);
+    PostMessageW(GetFocus(), 0x0100, 0x0D, 0);
+}
+
+fn wide<const N: usize>(s: &[u8; N]) -> [u16; N] {
+    let mut out = [0u16; N];
+    for (o, &b) in out.iter_mut().zip(s.iter()) {
+        *o = b as u16;
+    }
+    out
 }
 
 #[no_mangle]
@@ -395,6 +410,13 @@ pub extern "C" fn mainCRTStartup() -> ! {
                 ms = ms * 10 + (b - b'0') as u32;
             }
         }
+        // MessageBox : vraie boîte modale sous X11 (fermée par Entrée), choix
+        // par défaut sans affichage. Les deux donnent OK.
+        SetTimer(main, 2, if ms > 0 { 1500 } else { 20 }, press_enter as *const () as usize);
+        let text = wide(b"Voulez-vous enregistrer la session \"serveur-maison\" ?\0");
+        let caption = wide(b"Connexion\0");
+        let answer = MessageBoxW(main, text.as_ptr(), caption.as_ptr(), 0x21); // MB_OKCANCEL | MB_ICONQUESTION
+        check!(answer == 1, "MessageBox OK");
         SetFocus(host);
         SetTimer(main, 1, ms.max(50), 0);
         let mut msg: Msg = core::mem::zeroed();

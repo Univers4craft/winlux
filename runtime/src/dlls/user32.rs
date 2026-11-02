@@ -130,19 +130,30 @@ unsafe fn create_window_common(
         return 0;
     };
     let hwnd = gui::alloc_hwnd();
-    // Tailles CW_USEDEFAULT : fenêtre raisonnable par défaut.
-    let w = if cx == gui::CW_USEDEFAULT || cx <= 0 {
-        800
+    // Tailles CW_USEDEFAULT : fenêtre raisonnable par défaut. Un contrôle
+    // enfant garde la taille demandée, même nulle (barre d'état, flèches
+    // haut/bas : le contrôle se place lui-même pendant WM_CREATE).
+    let child = style & WS_CHILD != 0 && parent != 0;
+    let (w, h, px, py) = if child {
+        let size = |v: i32| if v == gui::CW_USEDEFAULT { 0 } else { v.max(0) };
+        let pos = |v: i32| if v == gui::CW_USEDEFAULT { 0 } else { v };
+        (size(cx), size(cy), pos(x), pos(y))
     } else {
-        cx
+        (
+            if cx == gui::CW_USEDEFAULT || cx <= 0 {
+                800
+            } else {
+                cx
+            },
+            if cy == gui::CW_USEDEFAULT || cy <= 0 {
+                600
+            } else {
+                cy
+            },
+            if x == gui::CW_USEDEFAULT { 100 } else { x },
+            if y == gui::CW_USEDEFAULT { 100 } else { y },
+        )
     };
-    let h = if cy == gui::CW_USEDEFAULT || cy <= 0 {
-        600
-    } else {
-        cy
-    };
-    let px = if x == gui::CW_USEDEFAULT { 100 } else { x };
-    let py = if y == gui::CW_USEDEFAULT { 100 } else { y };
     let rect = Rect::from_size(px, py, w, h);
     let visible = style & 0x1000_0000 != 0; // WS_VISIBLE
 
@@ -212,8 +223,12 @@ unsafe fn create_window_common(
         return 0;
     }
 
+    // WM_CREATE a pu déplacer la fenêtre (SetWindowPos) : on crée la
+    // fenêtre X à sa place actuelle.
+    let rect = gui::window_rect(hwnd).unwrap_or(rect);
+    let (w, h) = (rect.width(), rect.height());
     with_backend(|b| {
-        if style & WS_CHILD != 0 && parent != 0 {
+        if child {
             b.create_child_window(hwnd, parent, rect);
         } else {
             b.create_window(hwnd, &title, rect);
@@ -473,6 +488,14 @@ pub unsafe extern "win64" fn dispatch_message_a(msg: *const Msg) -> isize {
     }
     let m = &*msg;
     if super::dataobject::dispatch_private(m.hwnd, m.message, m.wparam) {
+        return 0;
+    }
+    // WM_TIMER d'un minuteur à fonction de rappel : lParam est la TIMERPROC,
+    // appelée à la place de la procédure de fenêtre.
+    if m.message == 0x0113 && m.lparam != 0 {
+        let callback: unsafe extern "win64" fn(usize, u32, usize, u32) =
+            std::mem::transmute(m.lparam as usize);
+        callback(m.hwnd, m.message, m.wparam, m.time);
         return 0;
     }
     let wnd_proc = gui::wnd_proc_of(m.hwnd);

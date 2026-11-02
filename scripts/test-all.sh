@@ -67,6 +67,14 @@ run modes-alimentation   python3 -B scripts/test-power-modes.py
 run claude-code          python3 -B scripts/test-claude-code.py
 run reinitialisation    python3 -B scripts/test-reset.py
 run assistant            python3 -B scripts/test-assistant.py
+run eclairage-nocturne   python3 -B scripts/test-ambiance.py
+run emojis               python3 -B scripts/test-emoji.py
+run presse-papiers       python3 -B scripts/test-clipboard.py
+run ancrage-vue-taches   python3 -B scripts/test-snap-taskview.py
+run horloge              python3 -B scripts/test-alarms.py
+run petits-outils        python3 -B scripts/test-small-tools.py
+run copier-texte-image   python3 -B scripts/test-ocr.py
+run theme-automatique    python3 -B scripts/test-appearance-auto.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
 
 # Lisibilité du texte dans chaque thème : il faut un affichage (xvfb-run sinon).
