@@ -29,6 +29,23 @@ typedef struct { void *hwnd; u32 message, pad; u64 wparam, lparam; u32 time; int
 typedef struct { u16 page, usage; u32 flags; void *hwnd; } Device;
 typedef struct { u64 sec, usec; u16 type, code; int value; } Event;
 
+void *memset(void *d, int c, u64 n) {
+    u8 *o = d;
+    while (n--) *o++ = (u8)c;
+    return d;
+}
+u64 wcslen(const u16 *s) {
+    u64 n = 0;
+    while (s[n]) n++;
+    return n;
+}
+void *memcpy(void *d, const void *s, u64 n) {
+    u8 *o = d;
+    const u8 *i = s;
+    while (n--) *o++ = *i++;
+    return d;
+}
+
 static const u16 STATIC_[] = {'S', 'T', 'A', 'T', 'I', 'C', 0};
 static const u16 souris[] = {'s', 'o', 'u', 'r', 'i', 's', '.', 'f', 'i', 'f', 'o', 0};
 static const u16 clavier[] = {'c', 'l', 'a', 'v', 'i', 'e', 'r', '.', 'f', 'i', 'f', 'o', 0};

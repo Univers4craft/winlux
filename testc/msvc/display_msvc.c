@@ -20,6 +20,17 @@ void *memset(void *d, int c, u64 n) {
     while (n--) *o++ = (u8)c;
     return d;
 }
+u64 wcslen(const u16 *s) {
+    u64 n = 0;
+    while (s[n]) n++;
+    return n;
+}
+void *memcpy(void *d, const void *s, u64 n) {
+    u8 *o = d;
+    const u8 *i = s;
+    while (n--) *o++ = *i++;
+    return d;
+}
 
 static u8 dm[220];
 static u16 ramp[768];
