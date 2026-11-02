@@ -47,6 +47,39 @@ choisir la dernière version publiée plutôt que la stable.
 Au premier lancement, Claude Code ouvre la connexion au compte dans le
 navigateur.
 
+## Assistant Claude dans la barre des tâches (#286)
+
+Un panneau de discussion avec Claude, ouvert par un bouton de la barre des
+tâches ou par Windows+C, qui connaît Winlux : « pourquoi ce .exe ne s'ouvre
+pas ? », « où est mon fichier ? », « passe au thème sombre ».
+
+- **Désactivé par défaut.** Tant qu'il n'est pas activé, aucun bouton dans la
+  barre, rien ne tourne, Windows+C ne fait rien.
+- **Activation** : Paramètres > Applications > Assistant Claude. L'interrupteur
+  ouvre une fenêtre qui télécharge Claude Code s'il manque (même installation
+  que ci-dessus), lance `claude auth login` (connexion au compte Claude dans le
+  navigateur, Google compris ; un champ accepte le code si la page en affiche
+  un), puis ajoute le bouton à la barre (greffon lanceur xfce4-panel, la barre
+  redémarre une fois). `winlux-control align-left/center` garde le bouton.
+- **Garde-fous** : Claude tourne en `claude -p` sans aucun outil (`--tools ""`),
+  sans réglages ni crochets personnels (`--setting-sources ""`,
+  `--strict-mcp-config`), sans historique sur le disque
+  (`--no-session-persistence`), télémétrie coupée. La conversation part par
+  l'entrée standard, jamais en argument visible par `ps`. Pour lire le journal
+  d'un programme, les plantages, la description du PC ou chercher un fichier,
+  Claude le *demande* : le texte exact est montré et ne part qu'après « Envoyer
+  à Claude ». Les actions viennent d'une liste fermée (réglages de
+  `winlux-control`, pages des Paramètres, ouvrir un dossier) et attendent
+  « Faire ».
+- **Identifiants** : gardés par Claude Code dans `~/.claude` ; l'assistant
+  remet le dossier en 700 et les fichiers en 600 à chaque lancement (créés par
+  `claude.exe` à travers la couche PE, ils pouvaient être lisibles par tous).
+- Fichiers : `scripts/winlux-assistant.py` (installé en
+  `/usr/bin/winlux-assistant`), `integration/native/applications/winlux-assistant.desktop`
+  (masquée du menu Démarrer), page 30 des Paramètres natifs. Test :
+  `scripts/test-assistant.py`. Session native seulement : le bureau PE de l'ISO
+  live ne l'affiche pas.
+
 ## État vérifié (2 novembre 2026, claude.exe 2.1.316 et 2.1.309)
 
 Les essais ont été faits sur le runtime compilé depuis cette branche, dans
