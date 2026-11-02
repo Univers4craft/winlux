@@ -47,4 +47,14 @@ if test -f "$dir/hwexc_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hw-exceptions.sh"
 fi
 
+# Manettes et périphériques HID (#271), bloquant.
+if test -f "$dir/hid_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-hid.sh"
+fi
+
+# DeviceIoControl sur volumes, disques et fichiers creux (#271), bloquant.
+if test -f "$dir/devio_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-devio.sh"
+fi
+
 echo "Tests MinGW réussis."

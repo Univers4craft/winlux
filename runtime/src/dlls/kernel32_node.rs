@@ -196,21 +196,64 @@ const FSCTL_GET_REPARSE_POINT: u32 = 0x0009_00A8;
 pub unsafe extern "win64" fn DeviceIoControl(
     h: usize,
     code: u32,
-    _inb: *const u8,
-    _inl: u32,
+    inb: *const u8,
+    inl: u32,
     outb: *mut u8,
     outl: u32,
     returned: *mut u32,
     ov: *mut c_void,
 ) -> i32 {
+    use crate::dlls::devio;
     if !returned.is_null() {
         *returned = 0;
     }
+    // Fin immédiate : OVERLAPPED.Internal / InternalHigh, puis l'événement.
+    let finish = |n: u32, status: usize| {
+        if !returned.is_null() {
+            *returned = n;
+        }
+        if !ov.is_null() {
+            (ov as *mut usize).write(status);
+            (ov as *mut usize).add(1).write(n as usize);
+            let ev = (ov as *const usize).add(3).read();
+            if ev != 0 {
+                crate::dlls::kernel32::set_event(ev);
+            }
+        }
+    };
+    // Rapports HID par code de contrôle (hidapi, outils de manettes).
+    match code {
+        devio::IOCTL_HID_GET_FEATURE | devio::IOCTL_HID_GET_INPUT_REPORT => {
+            let f = if code == devio::IOCTL_HID_GET_FEATURE {
+                crate::dlls::hid::HidD_GetFeature
+            } else {
+                crate::dlls::hid::HidD_GetInputReport
+            };
+            if f(h, outb, outl) == 0 {
+                return 0;
+            }
+            finish(outl, 0);
+            return 1;
+        }
+        devio::IOCTL_HID_SET_FEATURE | devio::IOCTL_HID_SET_OUTPUT_REPORT => {
+            let f = if code == devio::IOCTL_HID_SET_FEATURE {
+                crate::dlls::hid::HidD_SetFeature
+            } else {
+                crate::dlls::hid::HidD_SetOutputReport
+            };
+            if f(h, inb as *mut u8, inl) == 0 {
+                return 0;
+            }
+            finish(0, 0);
+            return 1;
+        }
+        _ => {}
+    }
+    let Some(fd) = crate::dlls::kernel32::fd_of_handle(h) else {
+        crate::process::set_last_error(6);
+        return 0;
+    };
     if code == FSCTL_GET_REPARSE_POINT {
-        let Some(fd) = crate::dlls::kernel32::fd_of_handle(h) else {
-            crate::process::set_last_error(6);
-            return 0;
-        };
         let mut iosb = [0u64; 2];
         let st = crate::dlls::ntdll_file::reparse_point_of_fd(
             fd,
@@ -219,25 +262,41 @@ pub unsafe extern "win64" fn DeviceIoControl(
             iosb.as_mut_ptr() as *mut c_void,
         );
         if st == 0 {
-            if !returned.is_null() {
-                *returned = iosb[1] as u32;
-            }
-            if !ov.is_null() {
-                // OVERLAPPED.Internal / InternalHigh : terminé tout de suite.
-                (ov as *mut usize).write(0);
-                (ov as *mut usize).add(1).write(iosb[1] as usize);
-                let ev = (ov as *const usize).add(3).read();
-                if ev != 0 {
-                    crate::dlls::kernel32::set_event(ev);
-                }
-            }
+            finish(iosb[1] as u32, 0);
             return 1;
         }
         crate::process::set_last_error(if st == 0xC000_0023 { 122 } else { 4390 });
         return 0;
     }
-    crate::process::set_last_error(50); // ERROR_NOT_SUPPORTED
-    0
+    let input = if inb.is_null() || inl == 0 {
+        &[][..]
+    } else {
+        std::slice::from_raw_parts(inb, inl as usize)
+    };
+    let (data, error) = match devio::control(fd, code, input, outl as usize) {
+        devio::Reply::Data(d) => (d, 0),
+        devio::Reply::Header(d) => (d, devio::header_error(code)),
+        devio::Reply::Error(e) => {
+            crate::process::set_last_error(e);
+            return 0;
+        }
+    };
+    if data.len() > outl as usize || (!data.is_empty() && outb.is_null()) {
+        crate::process::set_last_error(devio::ERROR_BUFFER);
+        return 0;
+    }
+    if !data.is_empty() {
+        std::ptr::copy_nonoverlapping(data.as_ptr(), outb, data.len());
+    }
+    if error != 0 {
+        // ERROR_MORE_DATA : réponse partielle, STATUS_BUFFER_OVERFLOW.
+        finish(data.len() as u32, 0x8000_0005);
+        crate::process::set_last_error(error);
+        return 0;
+    }
+    finish(data.len() as u32, 0);
+    crate::process::set_last_error(0);
+    1
 }
 
 /// `ReOpenFile` : nouveau handle sur le même fichier, éventuellement en

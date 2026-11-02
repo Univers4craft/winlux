@@ -209,6 +209,11 @@ pub unsafe extern "win64" fn bcrypt_create_hash(
 #[path = "../remote/crypto.rs"]
 mod crypto;
 
+/// SHA-256 pour le reste du runtime (block map des paquets MSIX).
+pub(crate) fn sha256(data: &[u8]) -> [u8; 32] {
+    crypto::sha256(&[data])
+}
+
 const STATUS_NOT_SUPPORTED: i32 = 0xC000_00BBu32 as i32;
 
 /// Clé HMAC éventuelle et données accumulées par handle de hachage

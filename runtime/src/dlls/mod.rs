@@ -33,6 +33,7 @@ pub mod d3d9_shader;
 pub mod d3d_shader;
 pub mod dataobject;
 pub mod dbghelp;
+pub mod devio;
 pub mod dialogs;
 pub mod dinput8;
 pub mod dsound;
@@ -51,6 +52,7 @@ pub mod gpu_caps;
 pub mod gui;
 mod gui_cairo;
 pub mod gui_x11;
+pub mod hid;
 pub mod hostcall;
 pub mod hostssl;
 pub mod imm32;
@@ -65,6 +67,7 @@ pub mod kernel32_node;
 pub mod knownfolders;
 pub mod libgcc;
 pub mod libstdcpp;
+pub mod menus;
 pub mod mfcapture;
 pub mod mfplat;
 pub mod mmap;
@@ -469,6 +472,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 handle: fake_module(),
             },
             Builtin {
+                name: "hid",
+                exports: hid::exports(),
+                handle: fake_module(),
+            },
+            Builtin {
                 name: "setupapi",
                 exports: setupapi::exports(),
                 handle: fake_module(),
@@ -644,6 +652,7 @@ fn add_basics(all: &mut [Builtin]) {
         for (name, addr) in controls::user32_overrides()
             .into_iter()
             .chain(dialogs::user32_overrides())
+            .chain(menus::user32_overrides())
         {
             b.exports.insert(name, addr);
         }
