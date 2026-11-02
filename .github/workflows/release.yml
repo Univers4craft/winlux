@@ -223,11 +223,18 @@ jobs:
           if [ "$SKIP_ISO" = "false" ]; then
             set -- "$@" "build/winlux-live-$GITHUB_REF_NAME.iso" "build/winlux-live-$GITHUB_REF_NAME.iso.sha256" build/sources-gpl.tsv
           fi
+          # Mention de non-affiliation sous chaque note de version (docs/DEFENSE-DU-NOM.md).
+          {
+            cat "docs/releases/$GITHUB_REF_NAME.md"
+            printf '\n---\n\n'
+            printf '%s\n\n' "Winlux est un projet indépendant, ni affilié à Microsoft ni approuvé par elle. Windows est une marque de Microsoft Corporation, citée uniquement pour décrire la compatibilité. Winlux est construit à partir de paquets Ubuntu ; Ubuntu est une marque de Canonical Ltd., qui n'approuve pas ce projet. Liste des sources GPL : sources-gpl.tsv."
+            printf '%s\n' "_Winlux is an independent project, neither affiliated with nor endorsed by Microsoft. Windows is a trademark of Microsoft Corporation, named only to describe compatibility._"
+          } > build/release-notes.md
           gh release create "$GITHUB_REF_NAME" \
             "$@" \
             --repo "$GITHUB_REPOSITORY" \
             --draft --verify-tag \
-            --notes-file "docs/releases/$GITHUB_REF_NAME.md" \
+            --notes-file build/release-notes.md \
             --title "Winlux $GITHUB_REF_NAME"
           # Le manifeste latest ne devient visible qu'après tous les uploads.
           gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

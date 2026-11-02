@@ -70,6 +70,19 @@ assert 'list-gpl-sources.py" "$stage" "$stage/usr/share/doc/winlux/sources-gpl.t
 release_yml = (project / ".github/workflows/release.yml").read_text()
 assert "test -s build/sources-gpl.tsv" in release_yml
 assert '.iso.sha256" build/sources-gpl.tsv' in release_yml, "sources-gpl.tsv absent des fichiers publiés"
+assert "ni affilié à Microsoft" in release_yml and "--notes-file build/release-notes.md" in release_yml
+# Mention de non-affiliation partout où l'on installe Winlux (docs/DEFENSE-DU-NOM.md).
+for path, needle in (("scripts/winlux-installer.py", 'tr("independent_notice")'),
+                     ("scripts/winlux-first-boot.sh", "ni affilié à Microsoft"),
+                     ("scripts/winlux-welcome.py", "neither affiliated with nor endorsed by Microsoft"),
+                     ("installation/winlux_usb/gui.py", 'tr("independent")')):
+    assert needle in (project / path).read_text(), path
+import sys  # noqa: E402
+sys.path.insert(0, str(project / "installation"))
+from winlux_usb import i18n  # noqa: E402
+assert all("Microsoft" in text for text in i18n.T["independent"]) and len(i18n.T["independent"]) == len(i18n.LANGS)
+installer = (project / "scripts/winlux-installer.py").read_text()
+assert installer.count('"independent_notice":') == 6, "mention absente d'une langue de l'installateur"
 guest = (project / "scripts/test-native-session-guest.py").read_text()
 assert "/usr/share/doc/winlux/sources-gpl.tsv" in guest and "WINLUX_NATIVE_IMAGE_IDENTITY" in guest
 
