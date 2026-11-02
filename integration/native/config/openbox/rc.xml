@@ -26,6 +26,8 @@
     <keybind key="W-a"><action name="Execute"><command>winlux-system-tools quick</command></action></keybind>
     <keybind key="W-n"><action name="Execute"><command>winlux-popup notifications</command></action></keybind>
     <keybind key="W-w"><action name="Execute"><command>winlux-widgets</command></action></keybind>
+    <!-- Assistant Claude : ne fait rien tant qu'il n'est pas activé dans Paramètres. -->
+    <keybind key="W-c"><action name="Execute"><command>winlux-assistant</command></action></keybind>
     <keybind key="W-F10"><action name="ShowMenu"><menu>root-menu</menu></action></keybind>
     <keybind key="W-Up"><action name="Maximize"/></keybind>
     <keybind key="W-Down"><action name="UnmaximizeFull"/></keybind>
