@@ -7,12 +7,13 @@
 | Étape | Contenu |
 |---|---|
 | Runtime PE | Chargeur PE32+ x86-64, ~100 DLL réimplémentées, SEH et exceptions C++, registre, chemins, UAC. |
-| Bureau Windows 11 | Session XFCE habillée, menu Démarrer, Paramètres (29 pages), Explorateur et applications maison. |
+| Bureau Windows 11 | Session XFCE habillée, menu Démarrer, Paramètres (30 pages), Explorateur et applications maison. |
 | ISO installable | Live, installateur graphique (automatique, manuel, LUKS, double démarrage), Secure Boot, récupération. |
 | Base native | Ubuntu 26.04 avec APT, mises à jour par paquet `.deb` avec retour arrière (v0.2.12). |
 | Multimédia et jeux | Lecteur FFmpeg, son PipeWire, Direct2D/DirectWrite/WIC maison, Direct3D 9/11/12 vers OpenGL/Vulkan, manettes. |
 | Intégration | Clés USB et partitions Windows avec lettres, lecteurs réseau, partage Samba, impression CUPS, presse-papiers et glisser-déposer communs. |
 | Identité | Logo Prisme, fonds, son de démarrage, aucune marque Microsoft. |
+| Récupération | Réinitialiser ce PC (conserver mes fichiers ou tout supprimer), clé de secours, démarrage avancé, réparation du démarrage, menu de secours en quatre langues (#283). |
 | Langues | Bureau en quatre langues, installateur en six. |
 
 ## Prochaine version : v0.2.14
@@ -59,7 +60,6 @@ Aucune pull request ouverte pour la v0.2.14.
 - Jeux : Direct3D 11 complet, Steam, overlay FPS.
 - Suite bureautique et lecteur PDF avancé, navigateur intégré.
 - Finition Windows 11 de la session native : Snap Layouts, animations, bureaux virtuels, widgets, panneau de notifications.
-- Menu de récupération étendu, clé USB de secours, réinitialisation du PC.
 - Site web et documentation utilisateur.
 
 Voir aussi : [Limites et problèmes connus](Limites-et-problemes-connus)
