@@ -28,8 +28,8 @@ Mesa 25.2.8, OpenGL 4.6, Vulkan 1.4 (ANV), session X11.
 | Imports résolus (analyse statique) | oui, 0 manquant | oui, 0 manquant |
 | Démarrage de la CRT et des DLL | oui | oui |
 | Fenêtre | oui (fenêtre 1040×815 et plein écran 1920×1080) | oui |
-| Menu | oui | en cours (passe 5) |
-| Partie jouable | **oui, 117 FPS** (limite `max_fps=120` du jeu), fenêtre et plein écran | en cours (passe 5) |
+| Menu | oui | oui |
+| Partie jouable | **oui, 117 FPS** (limite `max_fps=120` du jeu), fenêtre et plein écran | **oui, 60 FPS** (synchro d'un écran 60 Hz) en OpenGL 4.6 et Vulkan 1.4 ; ANGLE (Direct3D 11, OpenGL ES) échouait et le jeu basculait seul sur Vulkan |
 
 Souris, clavier et son de SuperTuxKart restent à confirmer en jouant une
 course à la main (la session était verrouillée pendant la mesure).
@@ -58,6 +58,12 @@ course à la main (la session était verrouillée pendant la mesure).
    lieu de 1460 ; la table `ID3D11DeviceContext` n'avait pas les 38 méthodes
    `Get*` (72 à 109), donc ANGLE appelait `Flush` à la place de
    `ClearState` et plantait. Test : `offset_of!(clear_state) == 110 × 8`.
+7. **Passage 5** : escarmouche complète (carte Sk-Rush, 3 IA) en OpenGL et
+   Vulkan. ANGLE refusait de présenter (« DXGI 1.2 required ») car l'appareil
+   D3D11 ne répondait pas à `IDXGIDevice2` : l'appareil expose maintenant
+   `IDXGIDevice` 0 à 3, avec `GetAdapter`/`GetParent` vers l'adaptateur DXGI.
+   À vérifier : l'horloge de jeu semblait avancer trop vite avec
+   `--autogame` (≈ 20 min de jeu en 30 s).
 
 ## Manques connus, par fil
 

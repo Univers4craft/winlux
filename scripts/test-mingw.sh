@@ -69,4 +69,19 @@ if test -f "$dir/devio_msvc.exe"; then
     WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-devio.sh"
 fi
 
+# Entrée brute : souris relative et clavier en WM_INPUT (#271), bloquant.
+if test -f "$dir/rawinput_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-rawinput.sh"
+fi
+
+# Ports série : recherche du port, réglage, WaitCommEvent (#271), bloquant.
+if test -f "$dir/serial_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-serial.sh"
+fi
+
+# Définition d'écran des jeux, remise à la sortie (#271), bloquant.
+if test -f "$dir/display_msvc.exe"; then
+    WINLUX_MINGW_DIR="$dir" sh "$root/scripts/test-display-mode.sh"
+fi
+
 echo "Tests MinGW réussis."

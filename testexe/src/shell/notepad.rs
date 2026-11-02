@@ -9,6 +9,9 @@ use winlux_testexe::*;
 /// Taille maximale d'un document : 8 Mo par onglet (#209 : 32 Ko avant, un
 /// fichier plus gros était tronqué et l'enregistrer perdait la fin).
 const MAX_TEXT: usize = 8 << 20;
+/// Limite de chargement ; les tests l'abaissent pour vérifier la troncature
+/// sans générer 8 Mo (trop lent dans l'ISO live sous QEMU TCG).
+static mut LOAD_LIMIT: usize = MAX_TEXT - 1;
 const MAX_LINES: usize = 1 << 18;
 const MAX_TABS: usize = 8;
 const MAX_NAME: usize = 48;
@@ -649,7 +652,7 @@ fn append_raw(d: &mut Doc, data: &[u8]) {
             d.crlf = true;
             continue;
         }
-        if d.len >= MAX_TEXT - 1 {
+        if d.len >= unsafe { LOAD_LIMIT } {
             d.truncated = true;
             return;
         }
@@ -2537,11 +2540,14 @@ unsafe fn big_file_checks(path: &[u8]) {
         file_size(path) == 320003 && !doc().modified,
         "Bloc-notes : Ctrl+S reecrit le gros fichier en entier"
     );
-    let size = write_lines(path, 600000);
+    // Au-delà de la limite (8 Mo en vrai, abaissée ici pour rester rapide).
+    let size = file_size(path);
+    LOAD_LIMIT = 100_000;
     open_new();
     load_file_into_active(path);
+    LOAD_LIMIT = MAX_TEXT - 1;
     let d = doc();
-    check!(d.truncated && d.len == MAX_TEXT - 1, "Bloc-notes : au-dela de 8 Mo le debut est charge et signale");
+    check!(d.truncated && d.len == 100_000, "Bloc-notes : au-dela de 8 Mo le debut est charge et signale");
     d.modified = true;
     save_active(false);
     check!(
