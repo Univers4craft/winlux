@@ -1333,6 +1333,318 @@ extern "win64" fn xcpt_filter(_code: u32, _ptrs: usize) -> i32 {
     0
 }
 
+// ── Pool de threads : attentes (CreateThreadpoolWait…) ─────────────────
+
+/// PTP_WAIT_CALLBACK(Instance, Context, Wait, WaitResult).
+type WaitCallback = unsafe extern "win64" fn(usize, usize, usize, u32);
+
+struct TpWait {
+    callback: WaitCallback,
+    context: usize,
+    /// Numéro de l'attente armée ; SetThreadpoolWait et Close le changent,
+    /// ce qui annule l'attente précédente.
+    generation: std::sync::atomic::AtomicU64,
+    running: std::sync::Mutex<u32>,
+    idle: std::sync::Condvar,
+}
+
+unsafe extern "win64" fn create_threadpool_wait(
+    callback: Option<WaitCallback>,
+    context: usize,
+    _env: usize,
+) -> usize {
+    let Some(callback) = callback else {
+        set_last_error(ERROR_INVALID_PARAMETER);
+        return 0;
+    };
+    std::sync::Arc::into_raw(std::sync::Arc::new(TpWait {
+        callback,
+        context,
+        generation: std::sync::atomic::AtomicU64::new(0),
+        running: std::sync::Mutex::new(0),
+        idle: std::sync::Condvar::new(),
+    })) as usize
+}
+
+/// Délai FILETIME de SetThreadpoolWait en millisecondes (None = infini).
+unsafe fn wait_timeout_ms(ft: *const i64) -> Option<u64> {
+    if ft.is_null() {
+        return None;
+    }
+    let v = std::ptr::read_unaligned(ft);
+    Some(if v < 0 {
+        v.unsigned_abs() / 10_000
+    } else {
+        let now = crate::dlls::kernel32::filetime_now() as i64;
+        ((v - now).max(0) / 10_000) as u64
+    })
+}
+
+unsafe extern "win64" fn set_threadpool_wait(wait: usize, handle: usize, timeout: *const i64) {
+    if wait == 0 {
+        return;
+    }
+    std::sync::Arc::increment_strong_count(wait as *const TpWait);
+    let w = std::sync::Arc::from_raw(wait as *const TpWait);
+    let gen = w
+        .generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+        + 1;
+    if handle == 0 {
+        return; // annulation
+    }
+    let limit = wait_timeout_ms(timeout)
+        .map(|ms| std::time::Instant::now() + std::time::Duration::from_millis(ms));
+    std::thread::spawn(move || {
+        crate::process::thread_attach_current();
+        let result = loop {
+            if w.generation.load(std::sync::atomic::Ordering::SeqCst) != gen {
+                return;
+            }
+            // Tranches de 20 ms pour voir une annulation.
+            let r = api!(
+                "kernel32",
+                "WaitForSingleObject",
+                fn(usize, u32) -> u32,
+                handle,
+                20
+            )
+            .unwrap_or(0xFFFF_FFFF);
+            if r != 0x102 {
+                break r; // signalé, abandonné ou erreur
+            }
+            if limit.is_some_and(|l| std::time::Instant::now() >= l) {
+                break 0x102; // WAIT_TIMEOUT
+            }
+        };
+        if w.generation.load(std::sync::atomic::Ordering::SeqCst) != gen {
+            return;
+        }
+        *w.running.lock().unwrap_or_else(|e| e.into_inner()) += 1;
+        (w.callback)(0, w.context, wait, result);
+        let mut n = w.running.lock().unwrap_or_else(|e| e.into_inner());
+        *n -= 1;
+        w.idle.notify_all();
+    });
+}
+
+unsafe extern "win64" fn wait_for_threadpool_wait_callbacks(wait: usize, cancel: i32) {
+    let Some(w) = (wait as *const TpWait).as_ref() else {
+        return;
+    };
+    if cancel != 0 {
+        w.generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    let mut n = w.running.lock().unwrap_or_else(|e| e.into_inner());
+    while *n > 0 {
+        n = w.idle.wait(n).unwrap_or_else(|e| e.into_inner());
+    }
+}
+
+unsafe extern "win64" fn close_threadpool_wait(wait: usize) {
+    if wait == 0 {
+        return;
+    }
+    let w = std::sync::Arc::from_raw(wait as *const TpWait);
+    w.generation
+        .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// FreeLibraryWhenCallbackReturns : la DLL reste chargée (Winlux ne
+/// décharge pas une DLL dont un rappel peut encore tourner).
+extern "win64" fn free_library_when_callback_returns(_instance: usize, _module: usize) {}
+
+/// RtlPcToFileHeader : module (base) qui contient une adresse de code.
+unsafe extern "win64" fn rtl_pc_to_file_header(pc: usize, base: *mut usize) -> usize {
+    let b = crate::loader::find_module_by_addr(pc).map_or(0, |m| m.base);
+    if !base.is_null() {
+        *base = b;
+    }
+    b
+}
+
+/// TerminateThread : arrêter un fil de l'extérieur n'est pas possible sans
+/// risque sous Linux ; seul le fil courant peut s'arrêter ainsi.
+unsafe extern "win64" fn terminate_thread(handle: usize, code: u32) -> i32 {
+    let current = api!("kernel32", "GetCurrentThread", fn() -> usize,).unwrap_or(0);
+    if handle == current || handle == usize::MAX - 1 {
+        api!("kernel32", "ExitThread", fn(u32) -> (), code);
+    }
+    crate::log_warn!(
+        "kernel32",
+        "TerminateThread refusé sur un autre fil (code {code})"
+    );
+    set_last_error(5); // ERROR_ACCESS_DENIED
+    0
+}
+
+// ── winmm : minuteurs multimédia ────────────────────────────────────────
+
+/// LPTIMECALLBACK(uTimerID, uMsg, dwUser, dw1, dw2).
+type TimeCallback = unsafe extern "win64" fn(u32, u32, usize, usize, usize);
+
+struct MmTimer {
+    stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    thread: Option<std::thread::JoinHandle<()>>,
+    worker: std::sync::Arc<std::sync::OnceLock<std::thread::ThreadId>>,
+}
+
+fn mm_timers() -> &'static std::sync::Mutex<std::collections::HashMap<u32, MmTimer>> {
+    static T: std::sync::OnceLock<std::sync::Mutex<std::collections::HashMap<u32, MmTimer>>> =
+        std::sync::OnceLock::new();
+    T.get_or_init(Default::default)
+}
+
+const TIME_PERIODIC: u32 = 1;
+const TIME_CALLBACK_EVENT_SET: u32 = 0x10;
+const TIME_CALLBACK_EVENT_PULSE: u32 = 0x20;
+
+/// timeGetDevCaps : de 1 ms à 1 000 000 ms, comme Windows.
+unsafe extern "win64" fn time_get_dev_caps(caps: *mut u32, size: u32) -> u32 {
+    if caps.is_null() || size < 8 {
+        return 97; // TIMERR_NOCANDO
+    }
+    *caps = 1;
+    *caps.add(1) = 1_000_000;
+    0
+}
+
+/// timeSetEvent : un fil Windows par minuteur appelle la fonction (ou
+/// signale l'événement) à l'échéance, une fois ou périodiquement.
+unsafe extern "win64" fn time_set_event(
+    delay: u32,
+    _resolution: u32,
+    callback: usize,
+    user: usize,
+    flags: u32,
+) -> u32 {
+    static NEXT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+    if callback == 0 || delay == 0 || delay > 1_000_000 {
+        return 0;
+    }
+    let id = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let worker = std::sync::Arc::new(std::sync::OnceLock::new());
+    let (stop2, worker2) = (stop.clone(), worker.clone());
+    let period = std::time::Duration::from_millis(delay as u64);
+    let thread = std::thread::spawn(move || {
+        let _ = worker2.set(std::thread::current().id());
+        crate::process::thread_attach_current();
+        let mut next = std::time::Instant::now() + period;
+        loop {
+            while let Some(left) = next.checked_duration_since(std::time::Instant::now()) {
+                if stop2.load(std::sync::atomic::Ordering::SeqCst) {
+                    return;
+                }
+                std::thread::sleep(left.min(std::time::Duration::from_millis(5)));
+            }
+            if stop2.load(std::sync::atomic::Ordering::SeqCst) {
+                return;
+            }
+            if flags & TIME_CALLBACK_EVENT_SET != 0 {
+                api!("kernel32", "SetEvent", fn(usize) -> i32, callback);
+            } else if flags & TIME_CALLBACK_EVENT_PULSE != 0 {
+                if api!("kernel32", "PulseEvent", fn(usize) -> i32, callback).is_none() {
+                    api!("kernel32", "SetEvent", fn(usize) -> i32, callback);
+                }
+            } else {
+                let f: TimeCallback = std::mem::transmute(callback);
+                f(id, 0, user, 0, 0);
+            }
+            if flags & TIME_PERIODIC == 0 {
+                return;
+            }
+            // Rattrapage sans rafale : l'échéance suivante part de maintenant
+            // si le rappel a duré plus d'une période.
+            next += period;
+            let now = std::time::Instant::now();
+            if next < now {
+                next = now;
+            }
+        }
+    });
+    mm_timers()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .insert(
+            id,
+            MmTimer {
+                stop,
+                thread: Some(thread),
+                worker,
+            },
+        );
+    id
+}
+
+/// timeKillEvent : arrête le minuteur et attend la fin d'un rappel en cours
+/// (sauf depuis ce rappel lui-même).
+extern "win64" fn time_kill_event(id: u32) -> u32 {
+    let Some(mut t) = mm_timers()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .remove(&id)
+    else {
+        return 11; // MMSYSERR_INVALPARAM
+    };
+    t.stop.store(true, std::sync::atomic::Ordering::SeqCst);
+    if t.worker.get() != Some(&std::thread::current().id()) {
+        if let Some(h) = t.thread.take() {
+            let _ = h.join();
+        }
+    }
+    0
+}
+
+pub fn winmm_exports() -> Exports {
+    crate::exports! {
+        "timeGetDevCaps" => fn time_get_dev_caps,
+        "timeSetEvent" => fn time_set_event,
+        "timeKillEvent" => fn time_kill_event,
+    }
+}
+
+/// Numéros d'ordre publics de Winsock 2 (ws2_32.def), pour les programmes
+/// qui importent par numéro.
+pub const WS2_32_ORDINALS: &[(u16, &str)] = &[
+    (1, "accept"),
+    (2, "bind"),
+    (3, "closesocket"),
+    (4, "connect"),
+    (5, "getpeername"),
+    (6, "getsockname"),
+    (7, "getsockopt"),
+    (8, "htonl"),
+    (9, "htons"),
+    (10, "ioctlsocket"),
+    (11, "inet_addr"),
+    (12, "inet_ntoa"),
+    (13, "listen"),
+    (14, "ntohl"),
+    (15, "ntohs"),
+    (16, "recv"),
+    (17, "recvfrom"),
+    (18, "select"),
+    (19, "send"),
+    (20, "sendto"),
+    (21, "setsockopt"),
+    (22, "shutdown"),
+    (23, "socket"),
+    (51, "gethostbyaddr"),
+    (52, "gethostbyname"),
+    (53, "getprotobyname"),
+    (54, "getprotobynumber"),
+    (55, "getservbyname"),
+    (56, "getservbyport"),
+    (57, "gethostname"),
+    (111, "WSAGetLastError"),
+    (112, "WSASetLastError"),
+    (115, "WSAStartup"),
+    (116, "WSACleanup"),
+    (151, "__WSAFDIsSet"),
+];
+
 // ── Tables ──────────────────────────────────────────────────────────────
 
 pub fn kernel32_exports() -> Exports {
@@ -1346,6 +1658,13 @@ pub fn kernel32_exports() -> Exports {
         "FindFirstChangeNotificationW" => fn find_first_change_notification_w,
         "FindNextChangeNotification" => fn find_next_change_notification,
         "FindCloseChangeNotification" => fn find_close_change_notification,
+        "CreateThreadpoolWait" => fn create_threadpool_wait,
+        "SetThreadpoolWait" => fn set_threadpool_wait,
+        "WaitForThreadpoolWaitCallbacks" => fn wait_for_threadpool_wait_callbacks,
+        "CloseThreadpoolWait" => fn close_threadpool_wait,
+        "FreeLibraryWhenCallbackReturns" => fn free_library_when_callback_returns,
+        "RtlPcToFileHeader" => fn rtl_pc_to_file_header,
+        "TerminateThread" => fn terminate_thread,
     }
 }
 
@@ -1558,6 +1877,30 @@ mod tests {
             );
             il_free(p);
         }
+    }
+
+    #[test]
+    fn minuteur_multimedia_periodique_puis_arrete() {
+        static HITS: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+        unsafe extern "win64" fn tick(_id: u32, _m: u32, user: usize, _a: usize, _b: usize) {
+            assert_eq!(user, 42);
+            HITS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }
+        let mut caps = [0u32; 2];
+        unsafe {
+            assert_eq!(time_get_dev_caps(caps.as_mut_ptr(), 8), 0);
+            let cb: TimeCallback = tick;
+            let id = time_set_event(5, 1, cb as usize, 42, TIME_PERIODIC);
+            assert_ne!(id, 0);
+            std::thread::sleep(std::time::Duration::from_millis(60));
+            assert_eq!(time_kill_event(id), 0);
+        }
+        let n = HITS.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(n >= 3, "{n} appels");
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert_eq!(HITS.load(std::sync::atomic::Ordering::SeqCst), n, "arrêté");
+        assert_eq!(time_kill_event(9999), 11);
+        assert_eq!(caps, [1, 1_000_000]);
     }
 
     #[test]

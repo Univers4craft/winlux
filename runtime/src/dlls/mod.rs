@@ -116,6 +116,7 @@ pub mod threadpool;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
+pub mod usp10;
 pub mod uxtheme;
 pub mod v4l2;
 pub mod va_bindings;
@@ -651,6 +652,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: games_win32::dnsapi_exports(),
                 handle: fake_module(),
             },
+            Builtin {
+                name: "usp10",
+                exports: usp10::usp10_exports(),
+                handle: fake_module(),
+            },
         ];
         add_basics(&mut all);
         all
@@ -690,7 +696,9 @@ fn add_basics(all: &mut [Builtin]) {
         ("rpcrt4", games_win32::rpcrt4_exports()),
     ];
     // Fonctions relevées sur de vrais logiciels (apps_win32), en complément.
-    let apps: [(&str, Exports); 8] = [
+    let apps: [(&str, Exports); 10] = [
+        ("winmm", apps_win32::winmm_exports()),
+        ("gdi32", usp10::gdi32_exports()),
         ("kernel32", apps_win32::kernel32_exports()),
         ("kernel32", seh::exports()),
         ("user32", apps_win32::user32_exports()),
@@ -707,6 +715,15 @@ fn add_basics(all: &mut [Builtin]) {
             }
         }
     }
+    // Winsock importé par numéro d'ordre.
+    if let Some(b) = all.iter_mut().find(|b| b.name == "ws2_32") {
+        for &(ord, name) in apps_win32::WS2_32_ORDINALS {
+            if let Some(&a) = b.exports.get(name) {
+                let key: &'static str = Box::leak(format!("#{ord}").into_boxed_str());
+                b.exports.entry(key).or_insert(a);
+            }
+        }
+    }
     // ?terminate@@YAXXZ est le nom décoré C++ de terminate().
     for crt in ["msvcrt", "ucrtbase"] {
         if let Some(b) = all.iter_mut().find(|b| b.name == crt) {
@@ -718,6 +735,11 @@ fn add_basics(all: &mut [Builtin]) {
     // Versions réelles qui remplacent d'anciens exports vides.
     if let Some(b) = all.iter_mut().find(|b| b.name == "shell32") {
         for (name, addr) in apps_win32::shell32_overrides() {
+            b.exports.insert(name, addr);
+        }
+    }
+    if let Some(b) = all.iter_mut().find(|b| b.name == "gdi32") {
+        for (name, addr) in usp10::gdi32_overrides() {
             b.exports.insert(name, addr);
         }
     }
