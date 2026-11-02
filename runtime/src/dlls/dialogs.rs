@@ -1168,7 +1168,7 @@ pub fn session_lang() -> String {
 }
 
 /// Libellés des boutons dans la langue de la session.
-fn labels() -> [&'static str; 9] {
+pub(crate) fn labels() -> [&'static str; 9] {
     // OK, Annuler, Abandonner, Réessayer, Ignorer, Oui, Non, Recommencer, Continuer
     match session_lang().as_str() {
         "fr" => [
@@ -1519,4 +1519,4 @@ pub fn user32_overrides() -> Exports {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

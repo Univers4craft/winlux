@@ -199,20 +199,6 @@ pub extern "win64" fn init_flat_sb(_hwnd: usize) -> i32 {
     0
 }
 
-/// TaskDialog (Vista+, stub renvoyant une erreur)
-pub unsafe extern "win64" fn task_dialog(
-    _parent: usize,
-    _instance: usize,
-    _title: *const u16,
-    _main: *const u16,
-    _content: *const u16,
-    _buttons: i32,
-    _icon: *const u16,
-    _button: *mut i32,
-) -> i32 {
-    1 // E_NOTIMPL, les appelants testent le retour
-}
-
 pub fn exports() -> crate::dlls::Exports {
     crate::exports! {
         "InitCommonControlsEx" => fn init_common_controls_ex,
@@ -233,6 +219,7 @@ pub fn exports() -> crate::dlls::Exports {
         "FlatSB_EnableScrollBar" => fn flat_sb_enable_scroll_bar,
         "FlatSB_ShowScrollBar" => fn flat_sb_show_scroll_bar,
         "InitializeFlatSB" => fn init_flat_sb,
-        "TaskDialog" => fn task_dialog,
+        "TaskDialog" => fn super::taskdialog::task_dialog,
+        "TaskDialogIndirect" => fn super::taskdialog::task_dialog_indirect,
     }
 }

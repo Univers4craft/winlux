@@ -82,6 +82,15 @@ run copier-texte-image   python3 -B scripts/test-ocr.py
 run theme-automatique    python3 -B scripts/test-appearance-auto.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
 run explorateur-copie    python3 -B scripts/test-explorer-fixes.py
+# Bureau en 1080p, 1440p et 4K (#29) : un écran virtuel par résolution.
+resolutions() {
+    command -v xvfb-run >/dev/null 2>&1 || { echo "xvfb-run absent : test sauté"; return 0; }
+    for size in 1920x1080 2560x1440 3840x2160; do
+        xvfb-run -a -s "-screen 0 ${size}x24" python3 -B scripts/test-resolutions.py build/captures || return 1
+    done
+}
+run resolutions-bureau   resolutions
+
 # Vrais jeux (docs/VRAIS-JEUX.md) : chaque import système de SuperTuxKart et de
 # Warzone 2100 est fourni ; puis leurs fonctions, si les tests MinGW sont construits.
 run jeux-imports         python3 -B scripts/test-games-imports.py
@@ -100,7 +109,11 @@ display() {
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
 run accent-prisme        python3 -B scripts/test-default-accent.py
 run reglages-rapides     display python3 -B scripts/test-quick-settings.py
+run clavier-menus       display python3 -B scripts/test-keyboard-nav.py start
+run clavier-panneaux    display python3 -B scripts/test-keyboard-nav.py quick
 run comptes              display python3 -B scripts/test-accounts.py
+run sans-marque-ms       display python3 -B scripts/test-no-microsoft-branding.py
+run bienvenue            display python3 -B scripts/test-welcome.py
 # Fautes matérielles en exceptions SEH (#269) : runtime compilé et clang requis.
 run exceptions-materielles sh scripts/test-hw-exceptions.sh
 # Paquets MSIX (#272) : runtime et hello.exe compilés requis.
