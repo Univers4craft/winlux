@@ -22,7 +22,7 @@ failures= skips=
 
 step() {
     name=$1; shift
-    case "$name" in *"$filter"*) ;; *) return 0 ;; esac
+    case "$name $*" in *"$filter"*) ;; *) return 0 ;; esac
     log="$logs/$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '_').log"
     printf '%-60s' "$name"
     start=$(date +%s)
@@ -34,7 +34,7 @@ step() {
         printf ' ÉCHEC\n'; tail -n 15 "$log" | sed 's/^/      /'
     fi
 }
-skip() { skipped=$((skipped + 1)); skips="$skips
+skip() { case "$1" in *"$filter"*) ;; *) return 0 ;; esac; skipped=$((skipped + 1)); skips="$skips
   - $1 ($2)"; }
 
 if test "$quick" = 0 && test -z "$filter"; then
@@ -45,6 +45,8 @@ if test "$quick" = 0 && test -z "$filter"; then
     fi
 fi
 
+# Noms courts acceptés par le filtre (« contraste », « site »…) : le filtre
+# porte sur le nom de l'étape et sa commande.
 # Commandes « scripts/test-… » de la CI (ci.yml, et les tests d'hôte de
 # release.yml), une par ligne ; la boucle des fenêtres surgissantes est dépliée.
 grep -hE '^\s*(run: )?(sudo |xvfb-run [^/]*)?(/usr/bin/)?(python3|sh|bash|dbus-run-session)[^#]*(scripts/test-|installation/tests/test)[A-Za-z0-9_.-]+' \
