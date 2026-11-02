@@ -182,7 +182,11 @@ fi
 # theme was copied, and is nested ifs otherwise.
 theme_block=
 if test "$winlux_term" = gfxterm; then
-    theme_block='if loadfont /boot/grub/themes/winlux/unicode.pf2; then
+    theme_block='# UEFI 32 bits : le terminal graphique de GRUB fait planter le noyau 64 bits
+# au démarrage (mode mixte, vérifié sous QEMU) ; menu en texte.
+if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
+    set winlux_term=console
+elif loadfont /boot/grub/themes/winlux/unicode.pf2; then
     insmod all_video
     insmod gfxterm
     insmod png

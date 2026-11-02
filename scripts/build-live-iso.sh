@@ -1175,7 +1175,11 @@ set default=1
 set timeout=2
 set timeout_style=menu
 set winlux_term=console
-if loadfont /boot/grub/themes/winlux/unicode.pf2; then
+# UEFI 32 bits : le terminal graphique de GRUB fait planter le noyau 64 bits
+# au démarrage (mode mixte, vérifié sous QEMU) ; menu en texte.
+if [ "${grub_platform}-${grub_cpu}" = "efi-i386" ]; then
+    set winlux_term=console
+elif loadfont /boot/grub/themes/winlux/unicode.pf2; then
     insmod all_video
     insmod gfxterm
     insmod png

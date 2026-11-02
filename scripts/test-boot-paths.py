@@ -59,6 +59,11 @@ assert "uefi32" in (project / "scripts/test-live-iso-qemu.sh").read_text()
 build = (project / "scripts/build-live-iso.sh").read_text()
 assert "for platform in i386-pc x86_64-efi i386-efi" in build
 assert 'check-iso-boot-paths.sh" "$out"' in build
+# Terminal graphique de GRUB + UEFI 32 bits = noyau 64 bits planté (mode mixte) :
+# chaque grub.cfg généré reste en texte sur efi-i386.
+for script in ("scripts/build-live-iso.sh", "scripts/install.sh"):
+    assert '= "efi-i386" ]; then\n    set winlux_term=console\nelif loadfont' in (project / script).read_text(), script
+assert reset.count('efi-i386\\" ]; then\\n    set winlux_term=console\\nelif loadfont') == 2
 assert 'ia32_loader "$iso_root"' in (project / "scripts/winlux-secureboot.sh").read_text()
 
 if all(shutil.which(tool) for tool in ("grub-mkrescue", "xorriso", "mdir")) and all(

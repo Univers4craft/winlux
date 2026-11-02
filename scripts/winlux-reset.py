@@ -1134,10 +1134,10 @@ def key_grub_cfg(root_spec, extra, theme):
                    f'    linux /boot/vmlinuz {live} winlux.check-iso=1 winlux.interactive=1\n'
                    f'    initrd /boot/winlux-initramfs.cpio.gz\n}}\n')
     # Sans thème, la police Unicode de GRUB (posée par grub-install) garde les accents.
-    themed = ("if loadfont /boot/grub/fonts/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
+    themed = ("if [ \"${grub_platform}-${grub_cpu}\" = \"efi-i386\" ]; then\n    set winlux_term=console\nelif loadfont /boot/grub/fonts/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
               "    set gfxmode=auto\n    if terminal_output gfxterm; then\n        set winlux_term=gfxterm\n    fi\nfi\n")
     if theme:
-        themed = ("if loadfont /boot/grub/themes/winlux/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
+        themed = ("if [ \"${grub_platform}-${grub_cpu}\" = \"efi-i386\" ]; then\n    set winlux_term=console\nelif loadfont /boot/grub/themes/winlux/unicode.pf2; then\n    insmod all_video\n    insmod gfxterm\n"
                   "    insmod png\n    set gfxmode=auto\n    if terminal_output gfxterm; then\n"
                   "        set theme=/boot/grub/themes/winlux/theme.txt\n        set winlux_term=gfxterm\n    fi\nfi\n")
     return ("set default=0\nset timeout=10\nset timeout_style=menu\nset winlux_term=console\n" + themed +

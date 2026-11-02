@@ -39,7 +39,9 @@ disque installé, la clé de secours et la réinitialisation portent les deux, e
 le micrologiciel prend seul celui de son mode. Sur une partition EFI partagée
 avec Windows, l'installateur pose uniquement le chargeur du mode détecté
 (`/sys/firmware/efi/fw_platform_size`). Le noyau Ubuntu démarre dans ce mode
-mixte (`CONFIG_EFI_MIXED`).
+mixte (`CONFIG_EFI_MIXED`). En UEFI 32 bits, le menu GRUB reste en texte : son
+terminal graphique fait planter le noyau 64 bits juste après le chargement
+(reproduit sous QEMU avec OVMF 32 bits et le noyau 7.0 d'Ubuntu 26.04).
 
 Il n'existe pas de shim signé en 32 bits : sur ces machines, **désactivez
 Secure Boot** dans le menu du micrologiciel. La chaîne signée 64 bits n'est
