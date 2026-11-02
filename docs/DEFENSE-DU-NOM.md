@@ -288,9 +288,11 @@ Relevé fait dans le dépôt le 2 novembre 2026.
 | 1 | Installateur, assistant de premier démarrage, créateur de clé USB (`installation/`) | Ajouter la mention de non-affiliation sur l'écran d'accueil ou « À propos » | Fil de l'installateur |
 | 2 | Notes de version et page des versions GitHub (`release.yml`, `docs/releases/`) | Ajouter la mention de non-affiliation en pied des notes ; relire le vocabulaire | Fil des versions |
 | 3 | Commentaires et docstrings du code (environ 25 fichiers : `winlux-start-menu.py`, `winlux-popup.py`, `winlux-taskview.py`, `winlux-emoji.py`, `winlux-permission.py`, `winlux-widgets.py`, `gfx.rs`, `settings.rs`, `wm.rs`…) qui disent « comme Windows 11 » ou « Mica » | Remplacer au fil des modifications par une description fonctionnelle ; pas de grand balayage qui créerait des conflits | Chaque fil, quand il touche le fichier |
-| 4 | Captures du site, du wiki et du dossier partagé | Vérifier qu'aucune ne montre un logo Microsoft, une application Microsoft ouverte en grand ou une comparaison avec un vrai Windows | Fil de test en VM, à la prochaine série de captures |
+| 4 | Captures du site, du wiki et du dossier partagé | Fait le 2 novembre 2026 : les huit images de `site/static/img` ne montrent aucun élément Microsoft ; le wiki n'a pas d'image | Coordinateur (fait) |
 | 5 | Wiki, pages techniques (`Reseau-et-disques`, `Registre-Windows`, `Bureau-et-applications`, `Architecture`, `Parametres`…) | Relire avec la liste 2.1 ; « Registre Windows » reste un nom descriptif acceptable | Fil de la documentation, ou le coordinateur |
 | 6 | Accent de couleur et bouton Démarrer par défaut | Vérifier que le logo Prisme et l'accent violet sont bien les réglages par défaut dans les deux bureaux | Fil de l'interface |
+| 7 | Épingle « Microsoft Edge » avec son logo dans le menu Démarrer d'un compte neuf | La remplacer par une entrée générique « Navigateur » à icône neutre ; vérifier qu'aucune épingle par défaut ne porte un nom ou un logo Microsoft. Tant que ce n'est pas fusionné, la page publique ne parle que du code et des ressources du projet, pas de l'image | Fil des comptes |
+| 8 | Paquet Edge intégré à l'ISO (`WINLUX_EDGE_DEB`, `build/browser-packages/edge.deb`) | Vérifier dans la licence d'Edge pour Linux que la redistribution dans une image tierce est permise ; sinon, ne proposer Edge qu'en téléchargement depuis Microsoft après installation | Fil des versions, avec un avis juridique si la licence est ambiguë |
 
 ---
 

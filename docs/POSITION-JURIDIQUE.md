@@ -165,13 +165,15 @@ Chacun peut les contrôler dans le dépôt public
    ultérieure (`LICENSE`). Les composants tiers et leurs licences sont
    listés dans `NOTICES`, avec une offre écrite de code source pour les
    logiciels sous GPL inclus dans l'image d'installation.
-2. **Aucun élément de Microsoft** : le dépôt et l'image d'installation ne
-   contiennent ni code, ni bibliothèque (DLL), ni exécutable, ni police
+2. **Aucun élément de Microsoft** : le code et les ressources du projet
+   (son dépôt public) ne contiennent ni code, ni bibliothèque (DLL), ni exécutable, ni police
    (Segoe UI n'est pas fournie ; son nom est seulement remplacé par une
    police libre), ni icône, ni son, ni fond d'écran, ni logo de Microsoft.
    Les fichiers Microsoft qu'une application apporte elle-même (par exemple
    ses bibliothèques d'exécution) restent ceux de l'utilisateur, sous la
-   licence qu'il a reçue.
+   licence qu'il a reçue. De même, les programmes d'autres éditeurs que
+   l'utilisateur choisit d'installer, par exemple un navigateur, restent les
+   leurs, sous leur propre licence.
 3. **Salle blanche** : le guide des contributeurs (`AGENTS.md`) interdit de
    consulter ou de reproduire du code source de Microsoft, publié ou divulgué
    illicitement, et de décompiler une bibliothèque de Microsoft pour écrire

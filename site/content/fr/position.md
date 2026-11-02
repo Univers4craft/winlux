@@ -57,7 +57,7 @@ Le nom Winlux ne reprend pas le mot Windows et ne lui ressemble ni à l'œil ni 
 Tout se vérifie dans le [dépôt public](https://github.com/Univers4craft/winlux) :
 
 1. **Licence libre** : code sous GNU GPL version 3 ou ultérieure ; composants tiers et offre écrite de code source dans le fichier [NOTICES](https://github.com/Univers4craft/winlux/blob/master/NOTICES).
-2. **Aucun élément de Microsoft** : ni code, ni bibliothèque, ni exécutable, ni police, ni icône, ni son, ni fond d'écran, ni logo de Microsoft dans le dépôt ou dans l'image d'installation.
+2. **Aucun élément de Microsoft** : ni code, ni bibliothèque, ni exécutable, ni police, ni icône, ni son, ni fond d'écran, ni logo de Microsoft dans le code et les ressources du projet (son dépôt public). Les programmes d'autres éditeurs que l'utilisateur choisit d'installer, par exemple un navigateur, restent les leurs, sous leur propre licence.
 3. **Salle blanche** : le [guide des contributeurs](https://github.com/Univers4craft/winlux/blob/master/AGENTS.md) interdit de consulter ou de reproduire du code source de Microsoft et de décompiler une bibliothèque de Microsoft pour écrire du code.
 4. **Fichiers de test reproductibles** : les fichiers de test au format Windows sont construits par le projet, avec des outils libres, à partir de sources du dépôt.
 5. **Aucune promesse de remplacement** : le projet ne se présente pas comme une alternative ou un remplacement de Windows.
