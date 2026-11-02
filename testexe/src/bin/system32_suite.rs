@@ -45,11 +45,18 @@ unsafe fn system32() {
     // sous un nom introuvable ailleurs.
     let mut me = [0u8; 512];
     let len = GetModuleFileNameA(null_mut(), me.as_mut_ptr(), 512) as usize;
-    let dir_end = me[..len].iter().rposition(|&c| c == b'\\' || c == b'/').map_or(0, |p| p + 1);
+    let dir_end = me[..len]
+        .iter()
+        .rposition(|&c| c == b'\\' || c == b'/')
+        .map_or(0, |p| p + 1);
     let mut src = [0u8; 512];
     let src = join(&mut src, &me[..dir_end], b"testdll.dll");
     let mut dst = [0u8; 512];
-    let dst = join(&mut dst, b"C:\\Windows\\System32\\", b"winlux_sys32_probe.dll");
+    let dst = join(
+        &mut dst,
+        b"C:\\Windows\\System32\\",
+        b"winlux_sys32_probe.dll",
+    );
     check!(CopyFileA(src, dst, 0) != 0, "copie d'une DLL dans System32");
     let m = LoadLibraryA(c"winlux_sys32_probe.dll".as_ptr());
     check!(!m.is_null(), "DLL de System32 chargée par son nom");
@@ -72,7 +79,11 @@ struct Shared {
     ready: u32,
 }
 
-static mut SHARED: Shared = Shared { mtx: [0; 10], cnd: [0; 9], ready: 0 };
+static mut SHARED: Shared = Shared {
+    mtx: [0; 10],
+    cnd: [0; 9],
+    ready: 0,
+};
 
 type MtxFn = unsafe extern "system" fn(*mut c_void) -> i32;
 type CndWait = unsafe extern "system" fn(*mut c_void, *mut c_void, u32) -> i32;
@@ -85,7 +96,9 @@ extern "system" fn worker(_p: *mut c_void) -> u32 {
 }
 
 unsafe fn worker_body() -> u32 {
-    let Some((lock, unlock, signal)) = FNS else { return 1 };
+    let Some((lock, unlock, signal)) = FNS else {
+        return 1;
+    };
     let s = &raw mut SHARED;
     lock((*s).mtx.as_mut_ptr().cast());
     (*s).ready = 1;
@@ -131,7 +144,10 @@ unsafe fn msvcp() {
         f[i] = p(n);
     }
     // _Cnd_timedwait_for n'existe que dans les msvcp140 récentes.
-    check!(f.iter().take(4).all(|x| !x.is_null()) && !f[5].is_null(), "_Mtx_* et _Cnd_*");
+    check!(
+        f.iter().take(4).all(|x| !x.is_null()) && !f[5].is_null(),
+        "_Mtx_* et _Cnd_*"
+    );
     if f.iter().any(|x| x.is_null()) {
         return;
     }
@@ -150,11 +166,18 @@ unsafe fn msvcp() {
     check!(!t.is_null(), "thread créé");
     let mut rounds = 0;
     while (*s).ready == 0 && rounds < 50 {
-        wait((*s).cnd.as_mut_ptr().cast(), (*s).mtx.as_mut_ptr().cast(), 100);
+        wait(
+            (*s).cnd.as_mut_ptr().cast(),
+            (*s).mtx.as_mut_ptr().cast(),
+            100,
+        );
         rounds += 1;
     }
     unlock((*s).mtx.as_mut_ptr().cast());
-    check!((*s).ready == 1, "variable de condition réveillée par un autre thread");
+    check!(
+        (*s).ready == 1,
+        "variable de condition réveillée par un autre thread"
+    );
     if !t.is_null() {
         WaitForSingleObject(t, 5000);
         CloseHandle(t);
