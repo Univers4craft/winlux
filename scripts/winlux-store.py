@@ -173,6 +173,8 @@ def admin(cmd):
     # Bureau sous le compte de l'utilisateur : relais root de Winlux, avec le
     # Contrôle de compte d'utilisateur pour installer ou désinstaller.
     if have("winlux-root") and os.path.exists(os.environ.get("WINLUX_ROOT_SOCKET", "/run/winlux-root.sock")):
+        # Nom affiché par la fenêtre de confirmation.
+        os.environ.setdefault("WINLUX_ROOT_APP", "Store Winlux")
         return ["winlux-root", "exec", *cmd]
     if have("pkexec"):
         return ["pkexec", *cmd]

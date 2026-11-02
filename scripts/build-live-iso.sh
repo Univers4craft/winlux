@@ -584,6 +584,15 @@ echo "Winlux input devices detected:"
 /bin/busybox mdev -s 2>/dev/null || true
 # Existing installations retain /etc, including an older mdev configuration.
 /bin/busybox chmod 666 /dev/null /dev/zero /dev/random /dev/urandom /dev/ptmx /dev/tty
+# Bureau sous le compte : mdev -s remet les périphériques en root:root 660
+# et il n'y a pas de logind pour donner l'accès au siège. Son, carte
+# graphique, webcam et manettes reviennent aux groupes du compte.
+if test -n "$desktop_user"; then
+    for node in /dev/snd/*; do test -c "$node" && /bin/busybox chgrp audio "$node" && /bin/busybox chmod 660 "$node"; done 2>/dev/null
+    for node in /dev/dri/card* /dev/video* /dev/media*; do test -c "$node" && /bin/busybox chgrp video "$node" && /bin/busybox chmod 660 "$node"; done 2>/dev/null
+    for node in /dev/dri/renderD* /dev/kfd; do test -c "$node" && /bin/busybox chmod 666 "$node"; done 2>/dev/null
+    for node in /dev/input/js* /dev/input/event*; do test -c "$node" && /bin/busybox chgrp input "$node" && /bin/busybox chmod 660 "$node"; done 2>/dev/null
+fi
 # Enregistrer binfmt pour les .exe (MZ) si le système de fichiers est monté.
 if /bin/busybox mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc 2>/dev/null; then
     if test -r /etc/binfmt.d/winlux.conf; then
