@@ -242,6 +242,10 @@ unsafe fn create_window_common(
             }
         } else {
             b.create_window(hwnd, &title, rect);
+            if class.eq_ignore_ascii_case(super::controls::popup::CLASS) {
+                // Menu surgissant : ni cadre ni placement du gestionnaire.
+                b.set_popup(hwnd);
+            }
         }
         if visible {
             b.show_window(hwnd, true);
@@ -1747,8 +1751,7 @@ pub unsafe extern "win64" fn track_popup_menu(
     hwnd: usize,
     _rect: *const Rect,
 ) -> i32 {
-    let _ = (menu, flags, x, y, hwnd);
-    0 // Rien sélectionné
+    super::controls::popup::track(menu, flags, x, y, hwnd) as i32
 }
 
 pub unsafe extern "win64" fn track_popup_menu_ex(
@@ -1759,8 +1762,7 @@ pub unsafe extern "win64" fn track_popup_menu_ex(
     hwnd: usize,
     _params: *const c_void,
 ) -> i32 {
-    let _ = (menu, flags, x, y, hwnd);
-    0
+    super::controls::popup::track(menu, flags, x, y, hwnd) as i32
 }
 
 pub unsafe extern "win64" fn check_menu_item(menu: usize, id: u32, flags: u32) -> u32 {

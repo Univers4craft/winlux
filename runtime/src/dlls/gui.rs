@@ -1882,6 +1882,12 @@ pub trait GuiBackend: Send {
     fn raise_window(&mut self, _hwnd: usize) {}
     /// Passe une fenêtre derrière ses voisines (ordre Win32 des enfants).
     fn lower_window(&mut self, _hwnd: usize) {}
+    /// Fenêtre surgissante (menu) : sans cadre, hors du gestionnaire de
+    /// fenêtres. À appeler avant de l'afficher.
+    fn set_popup(&mut self, _hwnd: usize) {}
+    /// Capture du pointeur pour un menu : les clics hors du programme
+    /// arrivent à `hwnd` (coordonnées hors de la fenêtre).
+    fn grab_pointer(&mut self, _hwnd: usize, _grab: bool) {}
     fn invalidate(&mut self, _hwnd: usize) {}
     /// Lit une zone de la fenêtre en pixels COLORREF (pour les blits vers un DC mémoire).
     fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> {
