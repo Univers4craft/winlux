@@ -199,6 +199,7 @@ cp "$root/scripts/test-native-session-guest.py" "$stage/opt/winlux/scripts/test-
 cp "$root/scripts/test-apt-native-guest.py" "$stage/opt/winlux/scripts/test-apt-native-guest.py"
 cp "$root/scripts/test-browsers-guest.sh" "$stage/opt/winlux/scripts/test-browsers-guest.sh"
 cp "$root/scripts/test-runtime-parallel.sh" "$stage/opt/winlux/scripts/test-runtime-parallel.sh"
+cp "$root/scripts/run-tls-suite.sh" "$stage/opt/winlux/scripts/run-tls-suite.sh"
 chmod 755 \
     "$stage/usr/bin/winlux" "$stage/usr/bin/winlux-update" \
     "$stage/opt/winlux/scripts/test-runtime.sh" \
