@@ -7,10 +7,15 @@
 set -eu
 export DBUS_SYSTEM_BUS_ADDRESS=unix:path=/run/dbus/system_bus_socket
 # Chargeurs d'images GTK (PNG, SVG) : sans ce cache, icônes et fenêtres GTK
-# plantent. Écrit en root, lu par tous les comptes.
-for query in /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders /usr/bin/gdk-pixbuf-query-loaders; do
-    if test -x "$query"; then "$query" --update-cache && chmod 644 /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0/loaders.cache 2>/dev/null; break; fi
-done
+# plantent. Régénéré seulement s'il manque ou si un chargeur a été installé
+# depuis (paquet APT) ; écrit en root, lisible par tous les comptes.
+pixbuf_dir=/usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/2.10.0
+if ! test -s "$pixbuf_dir/loaders.cache" || test -n "$(find "$pixbuf_dir/loaders" -newer "$pixbuf_dir/loaders.cache" -print 2>/dev/null | head -n 1)"; then
+    for query in /usr/lib/x86_64-linux-gnu/gdk-pixbuf-2.0/gdk-pixbuf-query-loaders /usr/bin/gdk-pixbuf-query-loaders; do
+        if test -x "$query"; then "$query" --update-cache; break; fi
+    done
+fi
+chmod 644 "$pixbuf_dir/loaders.cache" 2>/dev/null || true
 mkdir -p /run/winlux /var/lib/dbus
 if ! test -e /var/run && ! test -L /var/run; then ln -s /run /var/run; fi
 /usr/bin/dbus-uuidgen --ensure=/etc/machine-id
@@ -42,14 +47,19 @@ wait_bus_name() {
     cat "$service_log" >&2
     return 1
 }
+# polkitd et udisksd démarrent en même temps ; on attend ensuite les deux.
+polkit_pid=
+udisks_pid=
 if test -x /usr/lib/polkit-1/polkitd; then
     /usr/lib/polkit-1/polkitd >/run/winlux/polkit.log 2>&1 &
-    wait_bus_name system org.freedesktop.PolicyKit1 "$!" /run/winlux/polkit.log
+    polkit_pid=$!
 fi
 if test -x /usr/libexec/udisks2/udisksd; then
     /usr/libexec/udisks2/udisksd --no-debug >/run/winlux/udisks.log 2>&1 &
-    wait_bus_name system org.freedesktop.UDisks2 "$!" /run/winlux/udisks.log
+    udisks_pid=$!
 fi
+if test -n "$polkit_pid"; then wait_bus_name system org.freedesktop.PolicyKit1 "$polkit_pid" /run/winlux/polkit.log; fi
+if test -n "$udisks_pid"; then wait_bus_name system org.freedesktop.UDisks2 "$udisks_pid" /run/winlux/udisks.log; fi
 if test -x /usr/sbin/NetworkManager; then
     mkdir -p /etc/netplan /etc/NetworkManager/system-connections
     if test -x /usr/sbin/wpa_supplicant; then

@@ -117,6 +117,18 @@ done
 if test "${WINLUX_LOCK_AT_START:-0}" = 1 && test -x /usr/bin/winlux-lock; then
     (setsid /usr/bin/winlux-lock now >"$logs/lock-start.log" 2>&1 &)
 fi
+# Fond d'écran par écran, fixé avant la barre des tâches : l'identité Winlux, sinon le fond de l'image.
+default_wallpaper=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
+test -f "$default_wallpaper" || default_wallpaper=/usr/share/winlux/wallpaper.bmp
+if test -x /usr/bin/xfconf-query && test -x /usr/bin/xrandr; then
+    for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
+        property="/backdrop/screen0/monitor$output/workspace0/last-image"
+        if ! /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1; then
+            /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s "$default_wallpaper" || true
+            /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5 || true
+        fi
+    done
+fi
 # Compositeur facultatif : sans lui, un déplacement laisse des traînées.
 if test -x /usr/bin/picom && test "${WINLUX_COMPOSITOR:-1}" != 0 && test -f "$HOME/.config/picom/picom.conf"; then
     start compositor.log /usr/bin/picom --config "$HOME/.config/picom/picom.conf"
@@ -136,8 +148,11 @@ if test -x /usr/bin/winlux; then start clipboard-bridge.log /usr/bin/winlux --cl
 # Lecteurs réseau : reconnexion au démarrage et surveillance hors ligne.
 if test -x /usr/bin/winlux-drives; then start netdrives.log /usr/bin/winlux-drives watch; fi
 if test -x /usr/bin/nm-applet; then start network-agent.log /usr/bin/nm-applet --indicator; fi
-# Préférences de l'utilisateur : alignement de la barre, souris, processeur.
-if test "$primary" = 1 && test -x /usr/bin/winlux-control; then
+# Préférences de l'utilisateur : alignement de la barre, souris, processeur,
+# restaurées en arrière-plan pendant que le bureau s'affiche.
+if test "$primary" = 1 && test -x /usr/bin/winlux-control; then (
+    # L'état est publié par la boucle de la session : pas de sondes ici.
+    export WINLUX_CONTROL_NO_STATUS=1
     alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
     case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" >/dev/null 2>&1 || true ;; esac
     speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
@@ -147,8 +162,8 @@ if test "$primary" = 1 && test -x /usr/bin/winlux-control; then
         75) /usr/bin/winlux-control mouse-fast >/dev/null 2>&1 || true ;;
     esac
     if test -s /etc/winlux/cpu.conf; then /usr/bin/winlux-control cpu-restore >/dev/null 2>&1 || true; fi
+    ) </dev/null >"$logs/session-settings.log" 2>&1 &
 fi
-if test -x /usr/bin/winlux-applications; then /usr/bin/winlux-applications refresh >"$logs/applications.log" 2>&1 || true; fi
 if test -x /usr/bin/winlux-session-startup; then /usr/bin/winlux-session-startup >"$logs/startup-apps.log" 2>&1 || true; fi
 # Logiciels demandés depuis Bienvenue et interrompus par la fin de session.
 if command -v winlux-store >/dev/null 2>&1; then
@@ -156,18 +171,6 @@ if command -v winlux-store >/dev/null 2>&1; then
 fi
 if test "$primary" = 1 && test ! -f "$HOME/.config/winlux/welcome-complete" && test "${WINLUX_NO_WELCOME:-0}" != 1 && test -x /usr/bin/winlux-welcome; then
     (/usr/bin/winlux-welcome >"$logs/welcome.log" 2>&1 &)
-fi
-# Fond d'écran par écran : l'identité Winlux, sinon le fond de l'image.
-default_wallpaper=/usr/share/winlux/wallpapers/winlux-prisme-nuit.png
-test -f "$default_wallpaper" || default_wallpaper=/usr/share/winlux/wallpaper.bmp
-if test -x /usr/bin/xfconf-query && test -x /usr/bin/xrandr; then
-    for output in $(/usr/bin/xrandr --query | awk '$2 == "connected" {print $1}'); do
-        property="/backdrop/screen0/monitor$output/workspace0/last-image"
-        if ! /usr/bin/xfconf-query -c xfce4-desktop -p "$property" >/dev/null 2>&1; then
-            /usr/bin/xfconf-query -c xfce4-desktop -p "$property" -n -t string -s "$default_wallpaper" || true
-            /usr/bin/xfconf-query -c xfce4-desktop -p "/backdrop/screen0/monitor$output/workspace0/image-style" -n -t int -s 5 || true
-        fi
-    done
 fi
 if test -x /usr/bin/xscreensaver; then
     if test "$(cat /run/winlux/hw/gpu-count 2>/dev/null || echo 0)" -gt 0; then

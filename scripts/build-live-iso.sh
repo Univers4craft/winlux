@@ -512,15 +512,23 @@ while ! (umask 022; /usr/bin/winlux-update --boot) >/run/winlux/boot-update.log 
 done
 boot_mark recovery
 /usr/lib/systemd/systemd-udevd --daemon 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio_dma_buf.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-gpu.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/virtio-input.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/usbhid.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/hid-generic.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/serio-raw.ko 2>/dev/null || true
-/bin/busybox insmod /lib/modules/$(/bin/busybox uname -r)/psmouse.ko 2>/dev/null || true
-for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio bochs qxl vmwgfx; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
+kernel_modules=/lib/modules/$(/bin/busybox uname -r)
+/bin/busybox insmod "$kernel_modules"/virtio_dma_buf.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/virtio-gpu.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/virtio-input.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/hid.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/usbhid.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/hid-generic.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/serio-raw.ko 2>/dev/null || true
+/bin/busybox insmod "$kernel_modules"/psmouse.ko 2>/dev/null || true
+# Pilotes des cartes PCI présentes (réseau, son, affichage bochs/qxl/vmwgfx
+# des VM…) en un seul appel, d'après leur modalias, au lieu de 13 modprobe à
+# l'aveugle ; udev complète ensuite pour l'USB et le reste.
+if test -x /usr/sbin/modprobe; then
+    /bin/busybox cat /sys/bus/pci/devices/*/modalias 2>/dev/null | /bin/busybox xargs /usr/sbin/modprobe -a -b -q 2>/dev/null || true
+else
+    for driver in virtio_net e1000 e1000e r8169 igb igc snd_hda_intel snd_intel8x0 snd_hda_codec_realtek snd_usb_audio bochs qxl vmwgfx; do /bin/busybox modprobe "$driver" 2>/dev/null || true; done
+fi
 /bin/busybox mdev -s 2>/dev/null || true
 /usr/bin/udevadm trigger --action=add 2>/dev/null || true
 /usr/bin/udevadm settle --timeout=3 2>/dev/null || true
@@ -572,12 +580,17 @@ if test -n "$desktop_user"; then
         if test -f "/etc/winlux/$conf"; then /bin/busybox chmod 644 "/etc/winlux/$conf"; fi
     done
 fi
-/usr/bin/winlux-hardware >/dev/null 2>&1 || true
-/usr/bin/winlux-firmware >/dev/null 2>&1 || true
-# Profil d'utilisation choisi à l'installation (sysctl, gouverneur CPU, E/S, GPU).
-if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
-    /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
-fi
+# Seule la partie utile à l'affichage (pilote GPU, configuration Xorg)
+# précède Xorg ; le reste de l'inventaire, le contrôle des firmwares et le
+# profil d'utilisation (sysctl, gouverneur CPU, E/S) suivent en arrière-plan.
+/usr/bin/winlux-hardware display >/dev/null 2>&1 || true
+(
+    /usr/bin/winlux-hardware rest >/dev/null 2>&1 || true
+    /usr/bin/winlux-firmware >/dev/null 2>&1 || true
+    if test -x /usr/bin/winlux-profile && test -f /etc/winlux/profile.json; then
+        /usr/bin/winlux-profile --apply-boot >/run/winlux/profile.log 2>&1 || true
+    fi
+) &
 boot_mark hardware
 echo "Winlux input devices detected:"
 /bin/busybox cat /proc/bus/input/devices 2>/dev/null || true
@@ -658,17 +671,40 @@ if ! test -x /usr/sbin/NetworkManager; then /usr/bin/winlux-network start & fi
 # Mode jeu : processeur et mémoire pour le jeu tant qu'il tourne.
 /usr/bin/winlux --gamemode daemon >>/run/winlux/gamemode.log 2>&1 &
 boot_mark services
-# Paquets demandés par un fichier de réponse : installés une fois, dès que le réseau répond.
+# Paquets demandés par un fichier de réponse : installés une fois, dès que le
+# réseau répond, mais seulement après l'arrivée du bureau et en basse priorité
+# (le premier démarrage restait sinon plus d'une minute sur un écran noir).
 if test -s /etc/winlux/first-boot-packages && test -x /usr/bin/apt-get; then
     /bin/busybox mkdir -p /var/log
     (
+        if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
+            for attempt in $(/bin/busybox seq 1 300); do
+                test -e /run/winlux/boot-recorded && break
+                /bin/busybox sleep 1
+            done
+            /bin/busybox sleep 10
+        fi
+        low=
+        if test -x /usr/bin/nice; then low='/usr/bin/nice -n 19'; fi
+        if test -x /usr/bin/ionice; then low="$low /usr/bin/ionice -c 3"; fi
         for attempt in $(/bin/busybox seq 1 60); do
             /bin/busybox ip route | /bin/busybox grep -q '^default ' && break
             /bin/busybox sleep 5
         done
         packages=$(/bin/busybox grep -E '^[a-z0-9][a-z0-9+.-]+$' /etc/winlux/first-boot-packages | /bin/busybox tr '\n' ' ')
-        if /usr/bin/apt-get update && DEBIAN_FRONTEND=noninteractive /usr/bin/apt-get install -y $packages; then
+        # Notification sur le bureau du compte quand il n'est plus root.
+        notice_as=
+        if test -n "$desktop_user"; then
+            notice_uid=$(/bin/busybox awk -F: -v u="$desktop_user" '$1 == u { print $3; exit }' /etc/passwd)
+            notice_gid=$(/bin/busybox awk -F: -v u="$desktop_user" '$1 == u { print $4; exit }' /etc/passwd)
+            notice_as="/usr/bin/setpriv --reuid=$notice_uid --regid=$notice_gid --init-groups /usr/bin/env DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/$notice_uid/bus"
+        fi
+        $notice_as /usr/bin/winlux-first-boot-notice start $packages 2>/dev/null || true
+        if $low /usr/bin/apt-get update && DEBIAN_FRONTEND=noninteractive $low /usr/bin/apt-get install -y $packages; then
             /bin/busybox mv /etc/winlux/first-boot-packages /etc/winlux/first-boot-packages.done
+            $notice_as /usr/bin/winlux-first-boot-notice done 2>/dev/null || true
+        else
+            $notice_as /usr/bin/winlux-first-boot-notice failed 2>/dev/null || true
         fi
     ) >>/var/log/winlux-first-boot-packages.log 2>&1 &
 fi
@@ -753,6 +789,24 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
     /bin/busybox touch /run/winlux/splash.stop
     /usr/bin/Xorg :0 -background none -noreset -nolisten tcp -logfile /tmp/Xorg.0.log >/tmp/xorg-console.log 2>&1 &
     xorg_pid=$!
+    # Bus D-Bus, polkit, udisks, réseau, impression et son n'ont pas besoin de
+    # l'écran : ils démarrent pendant que Xorg s'initialise.
+    # Système installé : seuls les services système (root) ; le son et le bus
+    # de session appartiennent au bureau du compte.
+    (
+        if test -d /usr/lib/locale/fr_FR.utf8; then LANG=fr_FR.UTF-8; else LANG=C.UTF-8; fi
+        export LANG DISPLAY=:0 XDG_RUNTIME_DIR=/run/user/0
+        if test -n "$desktop_user"; then
+            if /usr/bin/winlux-system-services; then
+                /bin/busybox touch /run/winlux/session-early.done
+            else
+                /bin/busybox touch /run/winlux/session-early.failed
+            fi
+            exit 0
+        fi
+        exec /usr/bin/winlux-native-session --early
+    ) >/run/winlux/native-early.log 2>&1 &
+    echo "$!" >/run/winlux/session-early.pid
     # Attendre que Xorg réponde (au plus 10 s) au lieu d'une pause fixe de 3 s.
     for attempt in $(/bin/busybox seq 1 100); do
         if test -S /tmp/.X11-unix/X0; then
@@ -781,8 +835,16 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         # Services système en root, puis les deux relais root du bureau :
         # winlux-power (arrêt, redémarrage) et winlux-root (réglages système,
         # Boutique, mises à jour, volumes, partages, mots de passe).
-        if ! /usr/bin/winlux-system-services >/run/winlux/system-services.log 2>&1; then
-            /bin/busybox cat /run/winlux/system-services.log >&2
+        early_pid=$(/bin/busybox cat /run/winlux/session-early.pid 2>/dev/null || true)
+        while ! test -e /run/winlux/session-early.done && ! test -e /run/winlux/session-early.failed && \
+            /bin/busybox kill -0 "$early_pid" 2>/dev/null; do
+            /bin/busybox sleep 0.05
+        done
+        if ! test -e /run/winlux/session-early.done; then
+            # Lancement anticipé absent ou en échec : une seconde tentative ici.
+            /bin/busybox cat /run/winlux/native-early.log >&2 2>/dev/null || true
+            /usr/bin/winlux-system-services >/run/winlux/system-services.log 2>&1 || \
+                /bin/busybox cat /run/winlux/system-services.log >&2
         fi
         (setsid /usr/bin/winlux-power serve >/run/winlux/power-serve.log 2>&1 &)
         (setsid /usr/bin/winlux-root serve >/run/winlux/root-relay.log 2>&1 &)
@@ -803,7 +865,7 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         fi
     ) &
     # Bureau à distance : relancé au démarrage s'il était activé.
-    DISPLAY=:0 /usr/bin/winlux-remote-config ensure >/dev/null 2>&1 || true
+    DISPLAY=:0 /usr/bin/winlux-remote-config ensure >/dev/null 2>&1 &
     # Dossiers partagés : serveur relancé s'il y a des partages actifs.
     /usr/bin/winlux-share ensure >/dev/null 2>&1 &
     # Tâches planifiées « à l'ouverture de session ».
@@ -897,10 +959,6 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         /bin/sh
     fi
     while /bin/busybox kill -0 "$xorg_pid" 2>/dev/null; do
-        keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
-        case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
-        # Pavé tactile : toucher-clic, deux doigts, défilement naturel, vitesse.
-        DISPLAY=:0 /usr/bin/winlux-touchpad apply 2>/dev/null || true
         taskbar_align=$(/bin/busybox sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null)
         desktop_theme=$(/bin/busybox sed -n 's/^THEME=//p' /etc/winlux/preferences.conf 2>/dev/null)
         # Échelle du bureau : la plus grande demandée parmi les écrans
@@ -922,6 +980,12 @@ if /bin/busybox grep -qw 'winlux.interactive=1' /proc/cmdline; then
         export WINLUX_UI_SCALE="$ui_scale" WINLUX_THEME="$desktop_theme"
         /usr/bin/xfdesktop --disable-wm-check >/run/winlux/desktop.log 2>&1 &
         desktop_pid=$!
+        # Clavier et pavé tactile appliqués pendant que le bureau se dessine
+        # (le pavé seul prenait plusieurs secondes avant le fond d'écran).
+        keyboard_layout=$(/bin/busybox sed -n 's/^XKB_LAYOUT=//p' /etc/winlux/input.conf 2>/dev/null)
+        case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) DISPLAY=:0 /usr/bin/setxkbmap "$keyboard_layout" >/dev/null 2>&1 & ;; esac
+        # Pavé tactile : toucher-clic, deux doigts, défilement naturel, vitesse.
+        DISPLAY=:0 /usr/bin/winlux-touchpad apply >/dev/null 2>&1 &
         echo "WINLUX_DESKTOP_READY pid=$desktop_pid"
         if ! test -e /run/winlux/boot-recorded; then
             boot_mark desktop
