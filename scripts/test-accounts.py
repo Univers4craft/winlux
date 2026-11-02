@@ -184,7 +184,7 @@ for lang, words in (("en", ("Switch user", "Sleep", "Sign out")), ("es", ("Cambi
 
 # ── Paramètres : page 33 « Comptes » ──────────────────────────────────────
 settings = runpy.run_path(str(HERE / "winlux-settings.py"), run_name="settings_test")
-check(len(settings["PAGES"]) == 34 and settings["PAGES"][33] == "Comptes", "page 33 = Comptes")
+check(len(settings["PAGES"]) >= 34 and settings["PAGES"][33] == "Comptes", "page 33 = Comptes")
 check(any(33 in pages for _, pages in settings["CATEGORIES"]), "catégorie Comptes")
 pages = runpy.run_path(str(HERE / "winlux-settings-pages.py"), run_name="pages_test")
 check(pages["PAGE_ACCOUNTS"] == 33 and pages["ExtraPages"].EXTRA_PAGES[33] == "page_accounts", "page branchée")

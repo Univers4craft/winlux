@@ -171,6 +171,9 @@ fi
 if test "$primary" = 1 && test -x /usr/bin/winlux-control; then (
     # L'état est publié par la boucle de la session : pas de sondes ici.
     export WINLUX_CONTROL_NO_STATUS=1
+    # Icône du clavier tactile (sans clavier physique) : greffon placé
+    # avant que l'alignement range la barre.
+    if test -x /usr/bin/winlux-osk; then /usr/bin/winlux-osk panel >/dev/null 2>&1 || true; fi
     alignment=$(sed -n 's/^TASKBAR_ALIGN=//p' /etc/winlux/preferences.conf 2>/dev/null || true)
     case "$alignment" in left|center) /usr/bin/winlux-control "align-$alignment" >/dev/null 2>&1 || true ;; esac
     speed=$(sed -n 's/^MOUSE_SPEED=//p' /etc/winlux/input.conf 2>/dev/null || true)
@@ -311,6 +314,8 @@ while kill -0 "$wm_pid" 2>/dev/null; do
         (
             case "$keyboard_layout" in fr|us|de|es|gb|it|pt|be) /usr/bin/setxkbmap "$keyboard_layout" 2>/dev/null || true ;; esac
             if test -x /usr/bin/winlux-touchpad; then /usr/bin/winlux-touchpad apply 2>/dev/null || true; fi
+            # Souris : précision, défilement, gaucher, double-clic, couleur, traînée.
+            if test -x /usr/bin/winlux-mouse; then /usr/bin/winlux-mouse apply 2>/dev/null || true; fi
         ) </dev/null >/dev/null 2>&1 &
         ui_scale=$(/usr/bin/winlux-display session-scale 2>/dev/null || true)
         case "$ui_scale" in 1|1.25|1.5|1.75|2|2.5|3) ;; *) ui_scale=1 ;; esac

@@ -83,6 +83,8 @@ run petits-outils        python3 -B scripts/test-small-tools.py
 run copier-texte-image   python3 -B scripts/test-ocr.py
 run theme-automatique    python3 -B scripts/test-appearance-auto.py
 run createur-cle-usb     python3 -B installation/tests/test_winlux_usb.py
+run pilotes-materiel     python3 -B scripts/test-drivers.py
+run clavier-souris       python3 -B scripts/test-input-devices.py
 run explorateur-copie    python3 -B scripts/test-explorer-fixes.py
 # Bureau en 1080p, 1440p et 4K (#29) : un écran virtuel par résolution.
 resolutions() {
@@ -109,6 +111,8 @@ display() {
     else echo "ni DISPLAY ni xvfb-run : test sauté"; fi
 }
 run contraste-gtk        display python3 -B scripts/test-text-contrast.py
+run pilotes-page         display python3 -B scripts/test-drivers.py
+run clavier-tactile      display python3 -B scripts/test-input-devices.py
 run accent-prisme        python3 -B scripts/test-default-accent.py
 run reglages-rapides     display python3 -B scripts/test-quick-settings.py
 run clavier-menus       display python3 -B scripts/test-keyboard-nav.py start

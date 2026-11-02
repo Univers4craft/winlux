@@ -164,13 +164,17 @@ configure_gpu() {
     hw_read /run/winlux/hw/has-intel 0; has_intel=$hw_value
     hw_read /run/winlux/hw/gpu-count 0; gpu_count=$hw_value
 
-    # NVIDIA : tenter nouveau (libre) puis nvidia (propriétaire)
+    # NVIDIA : le pilote propriétaire (Paramètres > Matériel et pilotes) s'il
+    # est installé pour ce noyau, sinon nouveau (libre). Les deux ne doivent
+    # jamais être chargés ensemble.
     if test "$has_nvidia" = 1; then
-        if test -d /lib/modules/"$(uname -r)"/kernel/drivers/gpu/drm/nouveau; then
+        nvidia_module=
+        if command -v modinfo >/dev/null 2>&1; then nvidia_module=$(modinfo -F filename nvidia 2>/dev/null || true); fi
+        if test -z "$nvidia_module" && test -d /lib/modules/"$(uname -r)"/kernel/drivers/gpu/drm/nouveau; then
             load_module nouveau
             log "Driver nouveau chargé pour GPU NVIDIA"
         fi
-        if test -f /usr/bin/nvidia-smi || test -d /lib/modules/"$(uname -r)"/updates/dkms; then
+        if test -n "$nvidia_module" || test -f /usr/bin/nvidia-smi || test -d /lib/modules/"$(uname -r)"/updates/dkms; then
             for m in nvidia nvidia_modeset nvidia_uvm nvidia_drm; do
                 load_module "$m"
             done
