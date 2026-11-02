@@ -123,16 +123,131 @@ const STEPS: [Step; 10] = [
 ];
 
 const SHORTCUTS: [(Tr4, Tr4); 10] = [
-    ([b"Windows", b"Windows", b"Windows", b"Windows"], [b"Menu D\xE9marrer", b"Start menu", b"Men\xFA Inicio", b"Startmen\xFC"]),
-    ([b"Windows + E", b"Windows + E", b"Windows + E", b"Windows + E"], [b"Explorateur de fichiers", b"File Explorer", b"Explorador de archivos", b"Datei-Explorer"]),
-    ([b"Windows + I", b"Windows + I", b"Windows + I", b"Windows + I"], [b"Param\xE8tres", b"Settings", b"Configuraci\xF3n", b"Einstellungen"]),
-    ([b"Windows + S", b"Windows + S", b"Windows + S", b"Windows + S"], [b"Recherche", b"Search", b"B\xFAsqueda", b"Suche"]),
-    ([b"Windows + D", b"Windows + D", b"Windows + D", b"Windows + D"], [b"Afficher le bureau", b"Show desktop", b"Mostrar el escritorio", b"Desktop anzeigen"]),
-    ([b"Windows + L", b"Windows + L", b"Windows + L", b"Windows + L"], [b"Verrouiller la session", b"Lock the session", b"Bloquear la sesi\xF3n", b"Sitzung sperren"]),
-    ([b"Windows + Tab", b"Windows + Tab", b"Windows + Tab", b"Windows + Tab"], [b"Vue des t\xE2ches", b"Task view", b"Vista de tareas", b"Aktive Anwendungen"]),
-    ([b"Windows + fl\xE8ches", b"Windows + arrows", b"Windows + flechas", b"Windows + Pfeiltasten"], [b"Ancrer une fen\xEAtre", b"Snap a window", b"Acoplar una ventana", b"Fenster andocken"]),
-    ([b"Alt + Tab", b"Alt + Tab", b"Alt + Tab", b"Alt + Tab"], [b"Passer d'une fen\xEAtre \xE0 l'autre", b"Switch between windows", b"Cambiar de ventana", b"Zwischen Fenstern wechseln"]),
-    ([b"Ctrl + Maj + \xC9chap", b"Ctrl + Shift + Esc", b"Ctrl + May\xFAs + Esc", b"Strg + Umschalt + Esc"], [b"Gestionnaire des t\xE2ches", b"Task Manager", b"Administrador de tareas", b"Task-Manager"]),
+    (
+        [b"Windows", b"Windows", b"Windows", b"Windows"],
+        [
+            b"Menu D\xE9marrer",
+            b"Start menu",
+            b"Men\xFA Inicio",
+            b"Startmen\xFC",
+        ],
+    ),
+    (
+        [
+            b"Windows + E",
+            b"Windows + E",
+            b"Windows + E",
+            b"Windows + E",
+        ],
+        [
+            b"Explorateur de fichiers",
+            b"File Explorer",
+            b"Explorador de archivos",
+            b"Datei-Explorer",
+        ],
+    ),
+    (
+        [
+            b"Windows + I",
+            b"Windows + I",
+            b"Windows + I",
+            b"Windows + I",
+        ],
+        [
+            b"Param\xE8tres",
+            b"Settings",
+            b"Configuraci\xF3n",
+            b"Einstellungen",
+        ],
+    ),
+    (
+        [
+            b"Windows + S",
+            b"Windows + S",
+            b"Windows + S",
+            b"Windows + S",
+        ],
+        [b"Recherche", b"Search", b"B\xFAsqueda", b"Suche"],
+    ),
+    (
+        [
+            b"Windows + D",
+            b"Windows + D",
+            b"Windows + D",
+            b"Windows + D",
+        ],
+        [
+            b"Afficher le bureau",
+            b"Show desktop",
+            b"Mostrar el escritorio",
+            b"Desktop anzeigen",
+        ],
+    ),
+    (
+        [
+            b"Windows + L",
+            b"Windows + L",
+            b"Windows + L",
+            b"Windows + L",
+        ],
+        [
+            b"Verrouiller la session",
+            b"Lock the session",
+            b"Bloquear la sesi\xF3n",
+            b"Sitzung sperren",
+        ],
+    ),
+    (
+        [
+            b"Windows + Tab",
+            b"Windows + Tab",
+            b"Windows + Tab",
+            b"Windows + Tab",
+        ],
+        [
+            b"Vue des t\xE2ches",
+            b"Task view",
+            b"Vista de tareas",
+            b"Aktive Anwendungen",
+        ],
+    ),
+    (
+        [
+            b"Windows + fl\xE8ches",
+            b"Windows + arrows",
+            b"Windows + flechas",
+            b"Windows + Pfeiltasten",
+        ],
+        [
+            b"Ancrer une fen\xEAtre",
+            b"Snap a window",
+            b"Acoplar una ventana",
+            b"Fenster andocken",
+        ],
+    ),
+    (
+        [b"Alt + Tab", b"Alt + Tab", b"Alt + Tab", b"Alt + Tab"],
+        [
+            b"Passer d'une fen\xEAtre \xE0 l'autre",
+            b"Switch between windows",
+            b"Cambiar de ventana",
+            b"Zwischen Fenstern wechseln",
+        ],
+    ),
+    (
+        [
+            b"Ctrl + Maj + \xC9chap",
+            b"Ctrl + Shift + Esc",
+            b"Ctrl + May\xFAs + Esc",
+            b"Strg + Umschalt + Esc",
+        ],
+        [
+            b"Gestionnaire des t\xE2ches",
+            b"Task Manager",
+            b"Administrador de tareas",
+            b"Task-Manager",
+        ],
+    ),
 ];
 
 /// Logiciels courants proposés à l'étape « Vos premiers logiciels ». Le
@@ -147,16 +262,116 @@ struct Starter {
 }
 
 const STARTER: [Starter; 10] = [
-    Starter { id: b"firefox", name: b"Firefox", what: [b"Navigateur web", b"Web browser", b"Navegador web", b"Webbrowser"], preselected: true },
-    Starter { id: b"libreoffice", name: b"LibreOffice", what: [b"Textes, tableurs, pr\xE9sentations", b"Documents and spreadsheets", b"Textos, hojas de c\xE1lculo", b"Texte, Tabellen, Folien"], preselected: true },
-    Starter { id: b"vlc", name: b"VLC", what: [b"Vid\xE9os et musique", b"Videos and music", b"V\xEDdeos y m\xFAsica", b"Videos und Musik"], preselected: true },
-    Starter { id: b"thunderbird", name: b"Thunderbird", what: [b"Courrier \xE9lectronique", b"Email", b"Correo electr\xF3nico", b"E-Mail"], preselected: false },
-    Starter { id: b"gimp", name: b"GIMP", what: [b"Retouche photo", b"Photo editing", b"Edici\xF3n de fotos", b"Bildbearbeitung"], preselected: false },
-    Starter { id: b"7zip", name: b"7-Zip", what: [b"Archives zip, 7z, rar", b"Zip, 7z, rar archives", b"Archivos zip, 7z, rar", b"Zip-, 7z-, RAR-Archive"], preselected: false },
-    Starter { id: b"keepassxc", name: b"KeePassXC", what: [b"Mots de passe", b"Password manager", b"Gestor de contrase\xF1as", b"Passwortmanager"], preselected: false },
-    Starter { id: b"geany", name: b"Geany", what: [b"\xC9diteur de code", b"Code editor", b"Editor de c\xF3digo", b"Code-Editor"], preselected: false },
-    Starter { id: b"obs", name: b"OBS Studio", what: [b"Enregistrer l'\xE9cran", b"Screen recording", b"Grabar la pantalla", b"Bildschirmaufnahme"], preselected: false },
-    Starter { id: b"notepadpp", name: b"Notepad++", what: [b"\xC9diteur de texte (Windows)", b"Text editor (Windows)", b"Editor de texto (Windows)", b"Texteditor (Windows)"], preselected: false },
+    Starter {
+        id: b"firefox",
+        name: b"Firefox",
+        what: [
+            b"Navigateur web",
+            b"Web browser",
+            b"Navegador web",
+            b"Webbrowser",
+        ],
+        preselected: true,
+    },
+    Starter {
+        id: b"libreoffice",
+        name: b"LibreOffice",
+        what: [
+            b"Textes, tableurs, pr\xE9sentations",
+            b"Documents and spreadsheets",
+            b"Textos, hojas de c\xE1lculo",
+            b"Texte, Tabellen, Folien",
+        ],
+        preselected: true,
+    },
+    Starter {
+        id: b"vlc",
+        name: b"VLC",
+        what: [
+            b"Vid\xE9os et musique",
+            b"Videos and music",
+            b"V\xEDdeos y m\xFAsica",
+            b"Videos und Musik",
+        ],
+        preselected: true,
+    },
+    Starter {
+        id: b"thunderbird",
+        name: b"Thunderbird",
+        what: [
+            b"Courrier \xE9lectronique",
+            b"Email",
+            b"Correo electr\xF3nico",
+            b"E-Mail",
+        ],
+        preselected: false,
+    },
+    Starter {
+        id: b"gimp",
+        name: b"GIMP",
+        what: [
+            b"Retouche photo",
+            b"Photo editing",
+            b"Edici\xF3n de fotos",
+            b"Bildbearbeitung",
+        ],
+        preselected: false,
+    },
+    Starter {
+        id: b"7zip",
+        name: b"7-Zip",
+        what: [
+            b"Archives zip, 7z, rar",
+            b"Zip, 7z, rar archives",
+            b"Archivos zip, 7z, rar",
+            b"Zip-, 7z-, RAR-Archive",
+        ],
+        preselected: false,
+    },
+    Starter {
+        id: b"keepassxc",
+        name: b"KeePassXC",
+        what: [
+            b"Mots de passe",
+            b"Password manager",
+            b"Gestor de contrase\xF1as",
+            b"Passwortmanager",
+        ],
+        preselected: false,
+    },
+    Starter {
+        id: b"geany",
+        name: b"Geany",
+        what: [
+            b"\xC9diteur de code",
+            b"Code editor",
+            b"Editor de c\xF3digo",
+            b"Code-Editor",
+        ],
+        preselected: false,
+    },
+    Starter {
+        id: b"obs",
+        name: b"OBS Studio",
+        what: [
+            b"Enregistrer l'\xE9cran",
+            b"Screen recording",
+            b"Grabar la pantalla",
+            b"Bildschirmaufnahme",
+        ],
+        preselected: false,
+    },
+    Starter {
+        id: b"notepadpp",
+        name: b"Notepad++",
+        what: [
+            b"\xC9diteur de texte (Windows)",
+            b"Text editor (Windows)",
+            b"Editor de texto (Windows)",
+            b"Texteditor (Windows)",
+        ],
+        preselected: false,
+    },
 ];
 const APP_MAX: usize = STARTER.len();
 
@@ -233,7 +448,11 @@ pub unsafe fn open() {
         crate::settings::system_tick();
     }
     let saved = crate::settings::number(crate::settings::status_value(b"welcome_step")) as usize;
-    STEP = if !done() && saved < STEPS.len() { saved } else { 0 };
+    STEP = if !done() && saved < STEPS.len() {
+        saved
+    } else {
+        0
+    };
     HOVER = -1;
     LISTED = false;
     ANIM = GetTickCount();
@@ -267,10 +486,16 @@ unsafe fn load_rows() -> bool {
         if line == b"busy=1" {
             BUSY = true;
         }
-        let Some(rest) = line.strip_prefix(b"app=") else { continue };
+        let Some(rest) = line.strip_prefix(b"app=") else {
+            continue;
+        };
         let mut parts = rest.split(|&c| c == b'|');
-        let (Some(id), Some(state)) = (parts.next(), parts.next()) else { continue };
-        let Some(i) = STARTER.iter().position(|s| s.id == id) else { continue };
+        let (Some(id), Some(state)) = (parts.next(), parts.next()) else {
+            continue;
+        };
+        let Some(i) = STARTER.iter().position(|s| s.id == id) else {
+            continue;
+        };
         let pct = crate::settings::number(parts.next().unwrap_or(b"0")).min(100);
         let icon = parts.next().unwrap_or(b"");
         let r = &mut rows[i];
@@ -374,7 +599,9 @@ fn button_rect(f: &Frame, id: i32) -> Rect {
                 rect(x + 222, t, (x + 222 + 230).min(c.right - 24), t + 34)
             }
         }
-        _ if id >= BTN_APP => unsafe { app_rect(f, (id - BTN_APP) as usize).unwrap_or(rect(0, 0, 0, 0)) },
+        _ if id >= BTN_APP => unsafe {
+            app_rect(f, (id - BTN_APP) as usize).unwrap_or(rect(0, 0, 0, 0))
+        },
         _ => {
             let i = id - BTN_DOT;
             let n = STEPS.len() as i32;
@@ -402,10 +629,25 @@ fn visible(id: i32) -> bool {
 }
 
 fn hit(f: &Frame, x: i32, y: i32) -> i32 {
-    let ids = [BTN_NEXT, BTN_BACK, BTN_SKIP, BTN_ACTION, BTN_DARK, BTN_LIGHT, BTN_CENTER, BTN_LEFT, BTN_INSTALL, BTN_STORE];
+    let ids = [
+        BTN_NEXT,
+        BTN_BACK,
+        BTN_SKIP,
+        BTN_ACTION,
+        BTN_DARK,
+        BTN_LIGHT,
+        BTN_CENTER,
+        BTN_LEFT,
+        BTN_INSTALL,
+        BTN_STORE,
+    ];
     for i in 0..STEPS.len() as i32 {
         let r = button_rect(f, BTN_DOT + i);
-        if inside(&rect(r.left - 3, r.top - 3, r.right + 3, r.bottom + 3), x, y) {
+        if inside(
+            &rect(r.left - 3, r.top - 3, r.right + 3, r.bottom + 3),
+            x,
+            y,
+        ) {
             return BTN_DOT + i;
         }
     }
@@ -425,7 +667,16 @@ fn hit(f: &Frame, x: i32, y: i32) -> i32 {
 }
 
 /// Paragraphe coupé aux espaces ; renvoie la hauteur utilisée.
-unsafe fn paragraph(g: &mut Gfx, font: Handle, size: i32, color: u32, x: i32, y: i32, w: i32, s: &[u8]) -> i32 {
+unsafe fn paragraph(
+    g: &mut Gfx,
+    font: Handle,
+    size: i32,
+    color: u32,
+    x: i32,
+    y: i32,
+    w: i32,
+    s: &[u8],
+) -> i32 {
     let mut rest = s;
     let mut line = 0;
     while !rest.is_empty() {
@@ -455,9 +706,17 @@ unsafe fn paragraph(g: &mut Gfx, font: Handle, size: i32, color: u32, x: i32, y:
 
 unsafe fn pill(g: &mut Gfx, r: &Rect, label: &[u8], primary: bool, hover: bool, selected: bool) {
     let p = pal();
-    let border = if primary || selected { p.accent } else { p.border };
+    let border = if primary || selected {
+        p.accent
+    } else {
+        p.border
+    };
     let fill_c = if primary {
-        if hover { blend(rgb(255, 255, 255), p.accent, 30) } else { p.accent }
+        if hover {
+            blend(rgb(255, 255, 255), p.accent, 30)
+        } else {
+            p.accent
+        }
     } else if selected {
         p.selected
     } else if hover {
@@ -465,7 +724,9 @@ unsafe fn pill(g: &mut Gfx, r: &Rect, label: &[u8], primary: bool, hover: bool, 
     } else {
         p.surface2
     };
-    panel(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, fill_c, border);
+    panel(
+        g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, fill_c, border,
+    );
     text_centered(
         g.hdc,
         g.f.semibold,
@@ -480,13 +741,40 @@ unsafe fn pill(g: &mut Gfx, r: &Rect, label: &[u8], primary: bool, hover: bool, 
 /// Mini bureau commun aux illustrations : écran, fond et barre des tâches.
 unsafe fn mini_screen(g: &mut Gfx, r: &Rect) -> Rect {
     let p = pal();
-    panel(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 10, p.window, p.border);
+    panel(
+        g.hdc, g.b, r.left, r.top, r.right, r.bottom, 10, p.window, p.border,
+    );
     let s = rect(r.left + 6, r.top + 6, r.right - 6, r.bottom - 6);
-    fill(g.hdc, g.b, s.left, s.top, s.right, s.bottom, blend(p.accent, p.mica, 22));
-    fill(g.hdc, g.b, s.left, s.bottom - 16, s.right, s.bottom, p.surface);
+    fill(
+        g.hdc,
+        g.b,
+        s.left,
+        s.top,
+        s.right,
+        s.bottom,
+        blend(p.accent, p.mica, 22),
+    );
+    fill(
+        g.hdc,
+        g.b,
+        s.left,
+        s.bottom - 16,
+        s.right,
+        s.bottom,
+        p.surface,
+    );
     let cx = (s.left + s.right) / 2;
     for i in -2..3 {
-        round_rect(g.hdc, g.b, cx + i * 16 - 5, s.bottom - 13, cx + i * 16 + 5, s.bottom - 3, 2, if i == -2 { p.accent } else { p.text3 });
+        round_rect(
+            g.hdc,
+            g.b,
+            cx + i * 16 - 5,
+            s.bottom - 13,
+            cx + i * 16 + 5,
+            s.bottom - 3,
+            2,
+            if i == -2 { p.accent } else { p.text3 },
+        );
     }
     s
 }
@@ -494,60 +782,183 @@ unsafe fn mini_screen(g: &mut Gfx, r: &Rect) -> Rect {
 unsafe fn illustration(g: &mut Gfx, f: &Frame) {
     let p = pal();
     let pr = panel_rect(f);
-    fill(g.hdc, g.b, pr.left, pr.top, pr.right, pr.bottom, blend(p.accent, p.surface, 18));
+    fill(
+        g.hdc,
+        g.b,
+        pr.left,
+        pr.top,
+        pr.right,
+        pr.bottom,
+        blend(p.accent, p.surface, 18),
+    );
     let w = (pr.right - pr.left - 56).min(300);
     let h = w * 2 / 3;
     let cx = (pr.left + pr.right) / 2;
     let cy = (pr.top + pr.bottom) / 2 - 20;
     // Légère montée à chaque étape, comme les pages d'accueil de Windows 11.
-    let t = ease_out(GetTickCount().wrapping_sub(ANIM).min(10_000) as i32, ANIM_MS);
+    let t = ease_out(
+        GetTickCount().wrapping_sub(ANIM).min(10_000) as i32,
+        ANIM_MS,
+    );
     let dy = 14 - 14 * t / 1000;
     let r = rect(cx - w / 2, cy - h / 2 + dy, cx + w / 2, cy + h / 2 + dy);
     match STEP {
         0 => {
             let s = w / 3;
             glyph(g.hdc, g.b, g.f, Glyph::Start, cx - s / 2, r.top + 10, s);
-            text_centered(g.hdc, g.f.display, 28, p.text, cx, r.top + s + 30, b"Winlux");
-            text_centered(g.hdc, g.f.body, 13, p.text2, cx, r.top + s + 70, tr4(&[b"Linux + programmes Windows", b"Linux + Windows programs", b"Linux + programas de Windows", b"Linux + Windows-Programme"]));
+            text_centered(
+                g.hdc,
+                g.f.display,
+                28,
+                p.text,
+                cx,
+                r.top + s + 30,
+                b"Winlux",
+            );
+            text_centered(
+                g.hdc,
+                g.f.body,
+                13,
+                p.text2,
+                cx,
+                r.top + s + 70,
+                tr4(&[
+                    b"Linux + programmes Windows",
+                    b"Linux + Windows programs",
+                    b"Linux + programas de Windows",
+                    b"Linux + Windows-Programme",
+                ]),
+            );
         }
         1 => {
             let s = mini_screen(g, &r);
             let mw = (s.right - s.left) / 2;
-            let m = rect((s.left + s.right) / 2 - mw / 2, s.top + 14, (s.left + s.right) / 2 + mw / 2, s.bottom - 22);
-            panel(g.hdc, g.b, m.left, m.top, m.right, m.bottom, 6, p.surface, p.border);
-            round_rect(g.hdc, g.b, m.left + 8, m.top + 8, m.right - 8, m.top + 18, 4, p.surface2);
+            let m = rect(
+                (s.left + s.right) / 2 - mw / 2,
+                s.top + 14,
+                (s.left + s.right) / 2 + mw / 2,
+                s.bottom - 22,
+            );
+            panel(
+                g.hdc, g.b, m.left, m.top, m.right, m.bottom, 6, p.surface, p.border,
+            );
+            round_rect(
+                g.hdc,
+                g.b,
+                m.left + 8,
+                m.top + 8,
+                m.right - 8,
+                m.top + 18,
+                4,
+                p.surface2,
+            );
             for i in 0..8 {
                 let x = m.left + 10 + (i % 4) * ((m.right - m.left - 20) / 4);
                 let y = m.top + 28 + (i / 4) * 24;
-                round_rect(g.hdc, g.b, x, y, x + 14, y + 14, 3, if i == 0 { p.accent } else { p.text3 });
+                round_rect(
+                    g.hdc,
+                    g.b,
+                    x,
+                    y,
+                    x + 14,
+                    y + 14,
+                    3,
+                    if i == 0 { p.accent } else { p.text3 },
+                );
             }
-            let b = rect((s.left + s.right) / 2 - 37, s.bottom - 15, (s.left + s.right) / 2 - 27, s.bottom - 1);
-            ring(g.hdc, g.b, b.left - 6, b.top - 6, b.right + 6, b.bottom + 4, 2, p.accent, blend(p.accent, p.surface, 30));
+            let b = rect(
+                (s.left + s.right) / 2 - 37,
+                s.bottom - 15,
+                (s.left + s.right) / 2 - 27,
+                s.bottom - 1,
+            );
+            ring(
+                g.hdc,
+                g.b,
+                b.left - 6,
+                b.top - 6,
+                b.right + 6,
+                b.bottom + 4,
+                2,
+                p.accent,
+                blend(p.accent, p.surface, 30),
+            );
         }
         S_EXPLORER | S_SETTINGS => {
             let s = mini_screen(g, &r);
             let win = rect(s.left + 16, s.top + 12, s.right - 16, s.bottom - 24);
-            panel(g.hdc, g.b, win.left, win.top, win.right, win.bottom, 6, p.surface, p.border);
-            fill(g.hdc, g.b, win.left + 1, win.top + 1, win.right - 1, win.top + 12, p.surface2);
+            panel(
+                g.hdc, g.b, win.left, win.top, win.right, win.bottom, 6, p.surface, p.border,
+            );
+            fill(
+                g.hdc,
+                g.b,
+                win.left + 1,
+                win.top + 1,
+                win.right - 1,
+                win.top + 12,
+                p.surface2,
+            );
             let nav = win.left + (win.right - win.left) / 4;
-            fill(g.hdc, g.b, nav, win.top + 12, nav + 1, win.bottom - 1, p.border);
+            fill(
+                g.hdc,
+                g.b,
+                nav,
+                win.top + 12,
+                nav + 1,
+                win.bottom - 1,
+                p.border,
+            );
             for i in 0..4 {
                 let y = win.top + 20 + i * 14;
-                fill(g.hdc, g.b, win.left + 6, y, nav - 6, y + 6, if i == 1 { p.accent } else { p.text3 });
+                fill(
+                    g.hdc,
+                    g.b,
+                    win.left + 6,
+                    y,
+                    nav - 6,
+                    y + 6,
+                    if i == 1 { p.accent } else { p.text3 },
+                );
             }
             if STEP == S_EXPLORER {
                 for i in 0..6 {
                     let x = nav + 10 + (i % 3) * ((win.right - nav - 16) / 3);
                     let y = win.top + 20 + (i / 3) * 28;
-                    glyph(g.hdc, g.b, g.f, if i == 4 { Glyph::Exe } else { Glyph::Folder }, x, y, 18);
+                    glyph(
+                        g.hdc,
+                        g.b,
+                        g.f,
+                        if i == 4 { Glyph::Exe } else { Glyph::Folder },
+                        x,
+                        y,
+                        18,
+                    );
                 }
             } else {
                 for i in 0..4 {
                     let y = win.top + 20 + i * 16;
                     round_rect(g.hdc, g.b, nav + 8, y, win.right - 8, y + 12, 3, p.surface2);
                     let on = i % 2 == 0;
-                    round_rect(g.hdc, g.b, win.right - 30, y + 2, win.right - 12, y + 10, 4, if on { p.accent } else { p.text3 });
-                    ellipse(g.hdc, g.b, if on { win.right - 20 } else { win.right - 29 }, y + 3, if on { win.right - 13 } else { win.right - 22 }, y + 9, p.surface);
+                    round_rect(
+                        g.hdc,
+                        g.b,
+                        win.right - 30,
+                        y + 2,
+                        win.right - 12,
+                        y + 10,
+                        4,
+                        if on { p.accent } else { p.text3 },
+                    );
+                    ellipse(
+                        g.hdc,
+                        g.b,
+                        if on { win.right - 20 } else { win.right - 29 },
+                        y + 3,
+                        if on { win.right - 13 } else { win.right - 22 },
+                        y + 9,
+                        p.surface,
+                    );
                 }
             }
         }
@@ -557,30 +968,149 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
             let s = mini_screen(g, &r);
             let ix = s.left + 22;
             let iy = s.top + 18;
-            ring(g.hdc, g.b, ix - 8, iy - 8, ix + 44, iy + 44, 2, p.accent, blend(p.accent, p.surface, 22));
+            ring(
+                g.hdc,
+                g.b,
+                ix - 8,
+                iy - 8,
+                ix + 44,
+                iy + 44,
+                2,
+                p.accent,
+                blend(p.accent, p.surface, 22),
+            );
             glyph(g.hdc, g.b, g.f, Glyph::Exe, ix + 2, iy + 2, 32);
             text_centered(g.hdc, g.f.small, 11, p.text, ix + 18, iy + 48, b"setup.exe");
             // Pointeur de souris.
             let (mx, my) = (ix + 30, iy + 26);
             for k in 0..12 {
-                fill(g.hdc, g.b, mx, my + k, mx + k * 2 / 3 + 1, my + k + 1, p.text);
+                fill(
+                    g.hdc,
+                    g.b,
+                    mx,
+                    my + k,
+                    mx + k * 2 / 3 + 1,
+                    my + k + 1,
+                    p.text,
+                );
             }
-            let win = rect(s.left + (s.right - s.left) / 2 - 6, s.top + 22, s.right - 14, s.bottom - 26);
-            panel(g.hdc, g.b, win.left, win.top, win.right, win.bottom, 6, p.surface, p.accent);
-            fill(g.hdc, g.b, win.left + 1, win.top + 1, win.right - 1, win.top + 13, p.surface2);
-            round_rect(g.hdc, g.b, win.left + 10, win.top + 22, win.right - 10, win.top + 32, 3, p.text3);
-            round_rect(g.hdc, g.b, win.left + 10, win.top + 38, win.left + (win.right - win.left) * 2 / 3, win.top + 48, 3, p.text3);
-            round_rect(g.hdc, g.b, win.right - 56, win.bottom - 22, win.right - 10, win.bottom - 8, 4, p.accent);
-            text_centered(g.hdc, g.f.semibold, 13, p.text2, cx, r.bottom + 14, tr4(&[b"Double-clic et c'est parti", b"Double-click and go", b"Doble clic y listo", b"Doppelklick und los"]));
+            let win = rect(
+                s.left + (s.right - s.left) / 2 - 6,
+                s.top + 22,
+                s.right - 14,
+                s.bottom - 26,
+            );
+            panel(
+                g.hdc, g.b, win.left, win.top, win.right, win.bottom, 6, p.surface, p.accent,
+            );
+            fill(
+                g.hdc,
+                g.b,
+                win.left + 1,
+                win.top + 1,
+                win.right - 1,
+                win.top + 13,
+                p.surface2,
+            );
+            round_rect(
+                g.hdc,
+                g.b,
+                win.left + 10,
+                win.top + 22,
+                win.right - 10,
+                win.top + 32,
+                3,
+                p.text3,
+            );
+            round_rect(
+                g.hdc,
+                g.b,
+                win.left + 10,
+                win.top + 38,
+                win.left + (win.right - win.left) * 2 / 3,
+                win.top + 48,
+                3,
+                p.text3,
+            );
+            round_rect(
+                g.hdc,
+                g.b,
+                win.right - 56,
+                win.bottom - 22,
+                win.right - 10,
+                win.bottom - 8,
+                4,
+                p.accent,
+            );
+            text_centered(
+                g.hdc,
+                g.f.semibold,
+                13,
+                p.text2,
+                cx,
+                r.bottom + 14,
+                tr4(&[
+                    b"Double-clic et c'est parti",
+                    b"Double-click and go",
+                    b"Doble clic y listo",
+                    b"Doppelklick und los",
+                ]),
+            );
         }
         S_TERMINAL => {
-            panel(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 8, rgb(0x0C, 0x0C, 0x0C), p.border);
-            fill(g.hdc, g.b, r.left + 1, r.top + 1, r.right - 1, r.top + 22, rgb(0x20, 0x20, 0x20));
-            text(g.hdc, g.f.small, rgb(0xCC, 0xCC, 0xCC), r.left + 10, r.top + 5, b"Terminal");
-            let lines: [&[u8]; 4] = [tr4(&[b"$ ls ~/T\xE9l\xE9chargements", b"$ ls ~/Downloads", b"$ ls ~/Descargas", b"$ ls ~/Downloads"]), b"setup.exe  photos  notes.txt", b"$ winlux setup.exe", b"$ _"];
+            panel(
+                g.hdc,
+                g.b,
+                r.left,
+                r.top,
+                r.right,
+                r.bottom,
+                8,
+                rgb(0x0C, 0x0C, 0x0C),
+                p.border,
+            );
+            fill(
+                g.hdc,
+                g.b,
+                r.left + 1,
+                r.top + 1,
+                r.right - 1,
+                r.top + 22,
+                rgb(0x20, 0x20, 0x20),
+            );
+            text(
+                g.hdc,
+                g.f.small,
+                rgb(0xCC, 0xCC, 0xCC),
+                r.left + 10,
+                r.top + 5,
+                b"Terminal",
+            );
+            let lines: [&[u8]; 4] = [
+                tr4(&[
+                    b"$ ls ~/T\xE9l\xE9chargements",
+                    b"$ ls ~/Downloads",
+                    b"$ ls ~/Descargas",
+                    b"$ ls ~/Downloads",
+                ]),
+                b"setup.exe  photos  notes.txt",
+                b"$ winlux setup.exe",
+                b"$ _",
+            ];
             for (i, l) in lines.iter().enumerate() {
-                let c = if l.starts_with(b"$") { rgb(0x6C, 0xD1, 0x7A) } else { rgb(0xD0, 0xD0, 0xD0) };
-                text(g.hdc, g.f.small, c, r.left + 12, r.top + 32 + i as i32 * 18, l);
+                let c = if l.starts_with(b"$") {
+                    rgb(0x6C, 0xD1, 0x7A)
+                } else {
+                    rgb(0xD0, 0xD0, 0xD0)
+                };
+                text(
+                    g.hdc,
+                    g.f.small,
+                    c,
+                    r.left + 12,
+                    r.top + 32 + i as i32 * 18,
+                    l,
+                );
             }
         }
         S_SHORTCUTS => {
@@ -600,12 +1130,68 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
             let s = h * 2 / 3;
             let l = cx - s / 2;
             let top = r.top + 10;
-            ring(g.hdc, g.b, l + s / 6, top, l + s - s / 6, top + s * 2 / 3, s / 9, p.text2, blend(p.accent, p.surface, 18));
-            fill(g.hdc, g.b, l, top + s / 3, l + s, top + s / 3 + 4, blend(p.accent, p.surface, 18));
-            round_rect(g.hdc, g.b, l, top + s / 3, l + s, top + s + 10, 10, p.accent);
-            ellipse(g.hdc, g.b, cx - 8, top + s * 2 / 3 - 6, cx + 8, top + s * 2 / 3 + 10, p.on_accent);
-            fill(g.hdc, g.b, cx - 3, top + s * 2 / 3 + 6, cx + 3, top + s * 2 / 3 + 22, p.on_accent);
-            text_centered(g.hdc, g.f.semibold, 13, p.text, cx, top + s + 28, tr4(&[b"Aucune t\xE9l\xE9m\xE9trie", b"No telemetry", b"Sin telemetr\xEDa", b"Keine Telemetrie"]));
+            ring(
+                g.hdc,
+                g.b,
+                l + s / 6,
+                top,
+                l + s - s / 6,
+                top + s * 2 / 3,
+                s / 9,
+                p.text2,
+                blend(p.accent, p.surface, 18),
+            );
+            fill(
+                g.hdc,
+                g.b,
+                l,
+                top + s / 3,
+                l + s,
+                top + s / 3 + 4,
+                blend(p.accent, p.surface, 18),
+            );
+            round_rect(
+                g.hdc,
+                g.b,
+                l,
+                top + s / 3,
+                l + s,
+                top + s + 10,
+                10,
+                p.accent,
+            );
+            ellipse(
+                g.hdc,
+                g.b,
+                cx - 8,
+                top + s * 2 / 3 - 6,
+                cx + 8,
+                top + s * 2 / 3 + 10,
+                p.on_accent,
+            );
+            fill(
+                g.hdc,
+                g.b,
+                cx - 3,
+                top + s * 2 / 3 + 6,
+                cx + 3,
+                top + s * 2 / 3 + 22,
+                p.on_accent,
+            );
+            text_centered(
+                g.hdc,
+                g.f.semibold,
+                13,
+                p.text,
+                cx,
+                top + s + 28,
+                tr4(&[
+                    b"Aucune t\xE9l\xE9m\xE9trie",
+                    b"No telemetry",
+                    b"Sin telemetr\xEDa",
+                    b"Keine Telemetrie",
+                ]),
+            );
         }
         S_APPS => {
             // Une étagère d'applications et la flèche de téléchargement.
@@ -613,9 +1199,32 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
             for i in 0..6 {
                 let l = r.left + 12 + (i % 3) * (tile + 12);
                 let t = r.top + (i / 3) * (tile + 12);
-                panel(g.hdc, g.b, l, t, l + tile, t + tile, 10, p.surface, p.border);
+                panel(
+                    g.hdc,
+                    g.b,
+                    l,
+                    t,
+                    l + tile,
+                    t + tile,
+                    10,
+                    p.surface,
+                    p.border,
+                );
                 let inner = tile / 2;
-                round_rect(g.hdc, g.b, l + (tile - inner) / 2, t + (tile - inner) / 2, l + (tile + inner) / 2, t + (tile + inner) / 2, inner / 4, if i == 1 { p.accent } else { blend(p.accent, p.surface, 35 + i * 8) });
+                round_rect(
+                    g.hdc,
+                    g.b,
+                    l + (tile - inner) / 2,
+                    t + (tile - inner) / 2,
+                    l + (tile + inner) / 2,
+                    t + (tile + inner) / 2,
+                    inner / 4,
+                    if i == 1 {
+                        p.accent
+                    } else {
+                        blend(p.accent, p.surface, 35 + i * 8)
+                    },
+                );
             }
             let by = r.top + 2 * (tile + 12) + 4;
             ellipse(g.hdc, g.b, cx - 20, by, cx + 20, by + 40, p.accent);
@@ -626,14 +1235,58 @@ unsafe fn illustration(g: &mut Gfx, f: &Frame) {
                 let w2 = w / 2 - 8;
                 let l = r.left + i as i32 * (w2 + 16);
                 let (bg, fg, bar) = if *dark {
-                    (rgb(0x20, 0x20, 0x20), rgb(0x2C, 0x2C, 0x2C), rgb(0x1A, 0x1A, 0x1A))
+                    (
+                        rgb(0x20, 0x20, 0x20),
+                        rgb(0x2C, 0x2C, 0x2C),
+                        rgb(0x1A, 0x1A, 0x1A),
+                    )
                 } else {
-                    (rgb(0xF3, 0xF3, 0xF3), rgb(0xFF, 0xFF, 0xFF), rgb(0xE8, 0xE8, 0xE8))
+                    (
+                        rgb(0xF3, 0xF3, 0xF3),
+                        rgb(0xFF, 0xFF, 0xFF),
+                        rgb(0xE8, 0xE8, 0xE8),
+                    )
                 };
-                panel(g.hdc, g.b, l, r.top + 20, l + w2, r.bottom - 20, 8, bg, p.border);
-                round_rect(g.hdc, g.b, l + 10, r.top + 34, l + w2 - 10, r.bottom - 50, 5, fg);
-                fill(g.hdc, g.b, l + 1, r.bottom - 38, l + w2 - 1, r.bottom - 21, bar);
-                round_rect(g.hdc, g.b, l + w2 / 2 - 5, r.bottom - 34, l + w2 / 2 + 5, r.bottom - 25, 2, p.accent);
+                panel(
+                    g.hdc,
+                    g.b,
+                    l,
+                    r.top + 20,
+                    l + w2,
+                    r.bottom - 20,
+                    8,
+                    bg,
+                    p.border,
+                );
+                round_rect(
+                    g.hdc,
+                    g.b,
+                    l + 10,
+                    r.top + 34,
+                    l + w2 - 10,
+                    r.bottom - 50,
+                    5,
+                    fg,
+                );
+                fill(
+                    g.hdc,
+                    g.b,
+                    l + 1,
+                    r.bottom - 38,
+                    l + w2 - 1,
+                    r.bottom - 21,
+                    bar,
+                );
+                round_rect(
+                    g.hdc,
+                    g.b,
+                    l + w2 / 2 - 5,
+                    r.bottom - 34,
+                    l + w2 / 2 + 5,
+                    r.bottom - 25,
+                    2,
+                    p.accent,
+                );
             }
         }
     }
@@ -648,7 +1301,10 @@ fn step_label(step: usize) -> crate::store::Buf<32> {
         _ => (b"\xC9TAPE ", b" SUR "),
     };
     let mut out = crate::store::Buf::<32>::new();
-    out.push(a).num(step as u64 + 1).push(b).num(STEPS.len() as u64);
+    out.push(a)
+        .num(step as u64 + 1)
+        .push(b)
+        .num(STEPS.len() as u64);
     out
 }
 
@@ -666,7 +1322,12 @@ unsafe fn draw_apps(g: &mut Gfx, f: &Frame) {
     let width = f.client.right - 32 - x;
     if !LOADED || shown_count() == 0 {
         let msg = if !LOADED {
-            tr4(&[b"Recherche des logiciels disponibles...", b"Looking for available apps...", b"Buscando aplicaciones disponibles...", b"Verf\xFCgbare Programme werden gesucht..."])
+            tr4(&[
+                b"Recherche des logiciels disponibles...",
+                b"Looking for available apps...",
+                b"Buscando aplicaciones disponibles...",
+                b"Verf\xFCgbare Programme werden gesucht...",
+            ])
         } else {
             tr4(&[b"Aucun logiciel disponible pour l'instant : v\xE9rifiez la connexion r\xE9seau.", b"No apps available right now: check the network connection.", b"No hay aplicaciones disponibles por ahora: compruebe la conexi\xF3n de red.", b"Derzeit keine Programme verf\xFCgbar: \xDCberpr\xFCfen Sie die Netzwerkverbindung."])
         };
@@ -685,7 +1346,17 @@ unsafe fn draw_apps(g: &mut Gfx, f: &Frame) {
         } else {
             p.surface2
         };
-        panel(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, fill_c, if on { p.accent } else { p.border });
+        panel(
+            g.hdc,
+            g.b,
+            r.left,
+            r.top,
+            r.right,
+            r.bottom,
+            6,
+            fill_c,
+            if on { p.accent } else { p.border },
+        );
         let mid = (r.top + r.bottom) / 2;
         // Case à cocher, coche verte si déjà installé, anneau si en cours.
         let bx = r.left + 10;
@@ -693,42 +1364,110 @@ unsafe fn draw_apps(g: &mut Gfx, f: &Frame) {
             ellipse(g.hdc, g.b, bx, mid - 9, bx + 18, mid + 9, GREEN);
             tick_mark(g, bx, mid, rgb(0xFF, 0xFF, 0xFF));
         } else if pickable {
-            panel(g.hdc, g.b, bx, mid - 9, bx + 18, mid + 9, 4, if on { p.accent } else { p.window }, if on || hot { p.accent } else { p.text3 });
+            panel(
+                g.hdc,
+                g.b,
+                bx,
+                mid - 9,
+                bx + 18,
+                mid + 9,
+                4,
+                if on { p.accent } else { p.window },
+                if on || hot { p.accent } else { p.text3 },
+            );
             if on {
                 tick_mark(g, bx, mid, p.on_accent);
             }
         } else {
-            ring(g.hdc, g.b, bx, mid - 9, bx + 18, mid + 9, 3, p.accent, fill_c);
+            ring(
+                g.hdc,
+                g.b,
+                bx,
+                mid - 9,
+                bx + 18,
+                mid + 9,
+                3,
+                p.accent,
+                fill_c,
+            );
         }
-        crate::store::app_icon(g, &row.icon[..row.icon_len], s.name, bx + 28, mid - 14, 28, fill_c);
+        crate::store::app_icon(
+            g,
+            &row.icon[..row.icon_len],
+            s.name,
+            bx + 28,
+            mid - 14,
+            28,
+            fill_c,
+        );
         let tx = bx + 66;
         let tw = r.right - tx - 8;
         text_fit(g.hdc, g.f.semibold, 13, p.text, tx, r.top + 4, s.name, tw);
         let mut status = crate::store::Buf::<64>::new();
         let (detail, color): (&[u8], u32) = match row.state {
-            b'i' => (tr4(&[b"Install\xE9", b"Installed", b"Instalado", b"Installiert"]), GREEN),
-            b'w' => (tr4(&[b"En attente", b"Waiting", b"En espera", b"Wartet"]), p.text2),
+            b'i' => (
+                tr4(&[b"Install\xE9", b"Installed", b"Instalado", b"Installiert"]),
+                GREEN,
+            ),
+            b'w' => (
+                tr4(&[b"En attente", b"Waiting", b"En espera", b"Wartet"]),
+                p.text2,
+            ),
             b'r' => {
                 status
-                    .push(tr4(&[b"Installation... ", b"Installing... ", b"Instalando... ", b"Installation... "]))
+                    .push(tr4(&[
+                        b"Installation... ",
+                        b"Installing... ",
+                        b"Instalando... ",
+                        b"Installation... ",
+                    ]))
                     .num(row.pct as u64)
                     .push(b" %");
                 (status.get(), p.accent)
             }
-            b'f' => (tr4(&[b"\xC9chec, cochez pour r\xE9essayer", b"Failed, tick to retry", b"Error, marque para reintentar", b"Fehler, zum Wiederholen ausw\xE4hlen"]), rgb(0xC4, 0x2B, 0x1C)),
+            b'f' => (
+                tr4(&[
+                    b"\xC9chec, cochez pour r\xE9essayer",
+                    b"Failed, tick to retry",
+                    b"Error, marque para reintentar",
+                    b"Fehler, zum Wiederholen ausw\xE4hlen",
+                ]),
+                rgb(0xC4, 0x2B, 0x1C),
+            ),
             _ => (tr4(&s.what), p.text2),
         };
         text_fit(g.hdc, g.f.small, 11, color, tx, r.top + 22, detail, tw);
         if row.state == b'r' {
             let w = r.right - r.left - 16;
-            fill(g.hdc, g.b, r.left + 8, r.bottom - 4, r.right - 8, r.bottom - 2, p.border);
-            fill(g.hdc, g.b, r.left + 8, r.bottom - 4, r.left + 8 + w * row.pct as i32 / 100, r.bottom - 2, p.accent);
+            fill(
+                g.hdc,
+                g.b,
+                r.left + 8,
+                r.bottom - 4,
+                r.right - 8,
+                r.bottom - 2,
+                p.border,
+            );
+            fill(
+                g.hdc,
+                g.b,
+                r.left + 8,
+                r.bottom - 4,
+                r.left + 8 + w * row.pct as i32 / 100,
+                r.bottom - 2,
+                p.accent,
+            );
         }
     }
     if LOADED && shown_count() > 0 {
         let n = selected_count();
         let mut label = crate::store::Buf::<64>::new();
-        label.push(tr4(&[b"Installer", b"Install", b"Instalar", b"Installieren"]));
+        label.push(tr4(&[
+            b"Installer",
+            b"Install",
+            b"Instalar",
+            b"Installieren",
+        ]));
         if n > 0 {
             label.push(b" (").num(n as u64).push(b")");
         }
@@ -736,15 +1475,39 @@ unsafe fn draw_apps(g: &mut Gfx, f: &Frame) {
         if n > 0 {
             pill(g, &r, label.get(), true, HOVER == BTN_INSTALL, false);
         } else {
-            panel(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, p.surface2, p.border);
-            text_centered(g.hdc, g.f.semibold, 13, p.text3, (r.left + r.right) / 2, (r.top + r.bottom) / 2 - 8, label.get());
+            panel(
+                g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, p.surface2, p.border,
+            );
+            text_centered(
+                g.hdc,
+                g.f.semibold,
+                13,
+                p.text3,
+                (r.left + r.right) / 2,
+                (r.top + r.bottom) / 2 - 8,
+                label.get(),
+            );
         }
     }
     let r = button_rect(f, BTN_STORE);
     if HOVER == BTN_STORE {
         round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, p.hover);
     }
-    text_fit(g.hdc, g.f.body, 13, p.accent, r.left + 10, r.top + 9, tr4(&[b"Plus de logiciels dans le Store", b"More apps in the Store", b"M\xE1s aplicaciones en la Tienda", b"Mehr Programme im Store"]), r.right - r.left - 14);
+    text_fit(
+        g.hdc,
+        g.f.body,
+        13,
+        p.accent,
+        r.left + 10,
+        r.top + 9,
+        tr4(&[
+            b"Plus de logiciels dans le Store",
+            b"More apps in the Store",
+            b"M\xE1s aplicaciones en la Tienda",
+            b"Mehr Programme im Store",
+        ]),
+        r.right - r.left - 14,
+    );
     let y = r.bottom + 10;
     if BUSY && y + 16 < footer_y(f) {
         text_fit(g.hdc, g.f.small, 11, p.text2, x, y, tr4(&[b"Vous pouvez continuer la visite ou fermer cette fen\xEAtre : l'installation se poursuit.", b"You can continue the tour or close this window: installation keeps going.", b"Puede continuar el recorrido o cerrar esta ventana: la instalaci\xF3n sigue.", b"Sie k\xF6nnen die Tour fortsetzen oder das Fenster schlie\xDFen: Die Installation l\xE4uft weiter."]), width);
@@ -775,28 +1538,107 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                     break;
                 }
                 text_fit(g.hdc, g.f.semibold, 13, p.text, l, y, tr4(keys), col - 12);
-                text_fit(g.hdc, g.f.small, 11, p.text2, l, y + 18, tr4(what), col - 12);
+                text_fit(
+                    g.hdc,
+                    g.f.small,
+                    11,
+                    p.text2,
+                    l,
+                    y + 18,
+                    tr4(what),
+                    col - 12,
+                );
             }
         }
         S_APPS => draw_apps(g, f),
         S_STYLE => {
             let dark = crate::settings::status_value(b"theme") != b"light";
             let left = crate::desktop::ALIGN_LEFT;
-            for (id, label, sel) in [(BTN_DARK, tr4(&[b"Sombre", b"Dark", b"Oscuro", b"Dunkel"]), dark), (BTN_LIGHT, tr4(&[b"Clair", b"Light", b"Claro", b"Hell"]), !dark)] {
+            for (id, label, sel) in [
+                (
+                    BTN_DARK,
+                    tr4(&[b"Sombre", b"Dark", b"Oscuro", b"Dunkel"]),
+                    dark,
+                ),
+                (
+                    BTN_LIGHT,
+                    tr4(&[b"Clair", b"Light", b"Claro", b"Hell"]),
+                    !dark,
+                ),
+            ] {
                 let r = button_rect(f, id);
                 let (bg, fg) = if id == BTN_DARK {
                     (rgb(0x20, 0x20, 0x20), rgb(0xF0, 0xF0, 0xF0))
                 } else {
                     (rgb(0xF6, 0xF6, 0xF6), rgb(0x1A, 0x1A, 0x1A))
                 };
-                round_rect(g.hdc, g.b, r.left - 2, r.top - 2, r.right + 2, r.bottom + 2, 9, if sel { p.accent } else if HOVER == id { p.text3 } else { p.border });
-                round_rect(g.hdc, g.b, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, 7, bg);
-                round_rect(g.hdc, g.b, r.left + 14, r.top + 14, r.right - 14, r.bottom - 40, 4, blend(fg, bg, 12));
+                round_rect(
+                    g.hdc,
+                    g.b,
+                    r.left - 2,
+                    r.top - 2,
+                    r.right + 2,
+                    r.bottom + 2,
+                    9,
+                    if sel {
+                        p.accent
+                    } else if HOVER == id {
+                        p.text3
+                    } else {
+                        p.border
+                    },
+                );
+                round_rect(
+                    g.hdc,
+                    g.b,
+                    r.left + 1,
+                    r.top + 1,
+                    r.right - 1,
+                    r.bottom - 1,
+                    7,
+                    bg,
+                );
+                round_rect(
+                    g.hdc,
+                    g.b,
+                    r.left + 14,
+                    r.top + 14,
+                    r.right - 14,
+                    r.bottom - 40,
+                    4,
+                    blend(fg, bg, 12),
+                );
                 text(g.hdc, g.f.semibold, fg, r.left + 14, r.bottom - 28, label);
             }
-            text(g.hdc, g.f.semibold, p.text, x, top + 124, tr4(&[b"Barre des t\xE2ches", b"Taskbar", b"Barra de tareas", b"Taskleiste"]));
-            pill(g, &button_rect(f, BTN_CENTER), tr4(&[b"Centr\xE9e", b"Centered", b"Centrada", b"Zentriert"]), false, HOVER == BTN_CENTER, !left);
-            pill(g, &button_rect(f, BTN_LEFT), tr4(&[b"\xC0 gauche", b"Left", b"A la izquierda", b"Links"]), false, HOVER == BTN_LEFT, left);
+            text(
+                g.hdc,
+                g.f.semibold,
+                p.text,
+                x,
+                top + 124,
+                tr4(&[
+                    b"Barre des t\xE2ches",
+                    b"Taskbar",
+                    b"Barra de tareas",
+                    b"Taskleiste",
+                ]),
+            );
+            pill(
+                g,
+                &button_rect(f, BTN_CENTER),
+                tr4(&[b"Centr\xE9e", b"Centered", b"Centrada", b"Zentriert"]),
+                false,
+                HOVER == BTN_CENTER,
+                !left,
+            );
+            pill(
+                g,
+                &button_rect(f, BTN_LEFT),
+                tr4(&[b"\xC0 gauche", b"Left", b"A la izquierda", b"Links"]),
+                false,
+                HOVER == BTN_LEFT,
+                left,
+            );
         }
         _ => {
             for (i, tip) in step.tips.iter().enumerate() {
@@ -805,18 +1647,54 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
                 text_fit(g.hdc, g.f.body, 13, p.text, x + 20, y, tr4(tip), w - 20);
             }
             if visible(BTN_ACTION) {
-                pill(g, &button_rect(f, BTN_ACTION), tr4(&step.action), false, HOVER == BTN_ACTION, false);
+                pill(
+                    g,
+                    &button_rect(f, BTN_ACTION),
+                    tr4(&step.action),
+                    false,
+                    HOVER == BTN_ACTION,
+                    false,
+                );
             }
         }
     }
-    fill(g.hdc, g.b, panel_rect(f).right, footer_y(f), c.right, footer_y(f) + 1, p.border);
+    fill(
+        g.hdc,
+        g.b,
+        panel_rect(f).right,
+        footer_y(f),
+        c.right,
+        footer_y(f) + 1,
+        p.border,
+    );
     for i in 0..STEPS.len() as i32 {
         let r = button_rect(f, BTN_DOT + i);
         let current = i as usize == STEP;
         if current {
-            round_rect(g.hdc, g.b, r.left - 4, r.top, r.right + 4, r.bottom, 5, p.accent);
+            round_rect(
+                g.hdc,
+                g.b,
+                r.left - 4,
+                r.top,
+                r.right + 4,
+                r.bottom,
+                5,
+                p.accent,
+            );
         } else {
-            ellipse(g.hdc, g.b, r.left + 1, r.top + 1, r.right - 1, r.bottom - 1, if HOVER == BTN_DOT + i { p.text2 } else { p.text3 });
+            ellipse(
+                g.hdc,
+                g.b,
+                r.left + 1,
+                r.top + 1,
+                r.right - 1,
+                r.bottom - 1,
+                if HOVER == BTN_DOT + i {
+                    p.text2
+                } else {
+                    p.text3
+                },
+            );
         }
     }
     if visible(BTN_SKIP) {
@@ -824,13 +1702,43 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         if HOVER == BTN_SKIP {
             round_rect(g.hdc, g.b, r.left, r.top, r.right, r.bottom, 6, p.hover);
         }
-        text(g.hdc, g.f.body, p.text2, r.left + 12, r.top + 9, tr4(&[b"Passer la visite", b"Skip the tour", b"Omitir el recorrido", b"Tour \xFCberspringen"]));
+        text(
+            g.hdc,
+            g.f.body,
+            p.text2,
+            r.left + 12,
+            r.top + 9,
+            tr4(&[
+                b"Passer la visite",
+                b"Skip the tour",
+                b"Omitir el recorrido",
+                b"Tour \xFCberspringen",
+            ]),
+        );
     }
     if visible(BTN_BACK) {
-        pill(g, &button_rect(f, BTN_BACK), tr4(&[b"Pr\xE9c\xE9dent", b"Back", b"Anterior", b"Zur\xFCck"]), false, HOVER == BTN_BACK, false);
+        pill(
+            g,
+            &button_rect(f, BTN_BACK),
+            tr4(&[b"Pr\xE9c\xE9dent", b"Back", b"Anterior", b"Zur\xFCck"]),
+            false,
+            HOVER == BTN_BACK,
+            false,
+        );
     }
     let last = STEP + 1 == STEPS.len();
-    pill(g, &button_rect(f, BTN_NEXT), if last { tr4(&[b"Commencer", b"Get started", b"Empezar", b"Los geht's"]) } else { tr4(&[b"Suivant", b"Next", b"Siguiente", b"Weiter"]) }, true, HOVER == BTN_NEXT, false);
+    pill(
+        g,
+        &button_rect(f, BTN_NEXT),
+        if last {
+            tr4(&[b"Commencer", b"Get started", b"Empezar", b"Los geht's"])
+        } else {
+            tr4(&[b"Suivant", b"Next", b"Siguiente", b"Weiter"])
+        },
+        true,
+        HOVER == BTN_NEXT,
+        false,
+    );
 }
 
 unsafe fn go(step: usize) {
@@ -905,7 +1813,11 @@ unsafe fn activate(id: i32) -> bool {
         }
         BTN_CENTER | BTN_LEFT => {
             crate::desktop::ALIGN_LEFT = id == BTN_LEFT;
-            crate::settings::control(if id == BTN_LEFT { c"align-left" } else { c"align-center" });
+            crate::settings::control(if id == BTN_LEFT {
+                c"align-left"
+            } else {
+                c"align-center"
+            });
         }
         _ if id >= BTN_DOT => go((id - BTN_DOT) as usize),
         _ => return false,
@@ -957,7 +1869,10 @@ pub unsafe fn tick(_f: &Frame) -> bool {
 
 /// Vrai pendant l'animation d'entrée d'une étape (la boucle doit repeindre).
 pub fn animating() -> bool {
-    unsafe { crate::wm::is_visible(crate::wm::APP_WELCOME) && (GetTickCount().wrapping_sub(ANIM) as i32) < ANIM_MS + 40 }
+    unsafe {
+        crate::wm::is_visible(crate::wm::APP_WELCOME)
+            && (GetTickCount().wrapping_sub(ANIM) as i32) < ANIM_MS + 40
+    }
 }
 
 pub unsafe fn regression_checks() {
@@ -968,18 +1883,39 @@ pub unsafe fn regression_checks() {
         client: rect(0, 40, 900, 600),
     };
     STEP = 0;
-    check!(!visible(BTN_BACK) && visible(BTN_SKIP), "Bienvenue : pas de bouton Precedent a la premiere etape");
+    check!(
+        !visible(BTN_BACK) && visible(BTN_SKIP),
+        "Bienvenue : pas de bouton Precedent a la premiere etape"
+    );
     let next = button_rect(&f, BTN_NEXT);
-    check!(hit(&f, next.left + 5, next.top + 5) == BTN_NEXT, "Bienvenue : Suivant est cliquable");
+    check!(
+        hit(&f, next.left + 5, next.top + 5) == BTN_NEXT,
+        "Bienvenue : Suivant est cliquable"
+    );
     activate(BTN_NEXT);
-    check!(STEP == 1 && visible(BTN_ACTION), "Bienvenue : l'etape Demarrer propose de l'essayer");
+    check!(
+        STEP == 1 && visible(BTN_ACTION),
+        "Bienvenue : l'etape Demarrer propose de l'essayer"
+    );
     let dot = button_rect(&f, BTN_DOT + 5);
-    check!(hit(&f, dot.left + 4, dot.top + 4) == BTN_DOT + 5, "Bienvenue : les points de progression menent a une etape");
+    check!(
+        hit(&f, dot.left + 4, dot.top + 4) == BTN_DOT + 5,
+        "Bienvenue : les points de progression menent a une etape"
+    );
     STEP = S_STYLE;
-    check!(visible(BTN_DARK) && !visible(BTN_SKIP), "Bienvenue : la derniere etape propose le theme clair ou sombre");
+    check!(
+        visible(BTN_DARK) && !visible(BTN_SKIP),
+        "Bienvenue : la derniere etape propose le theme clair ou sombre"
+    );
     let r = button_rect(&f, BTN_LEFT);
-    check!(r.bottom < footer_y(&f), "Bienvenue : les choix de la barre ne chevauchent pas le pied de page");
-    check!(ui_lang() != 0 || step_label(9).get() == b"\xC9TAPE 10 SUR 10", "Bienvenue : numero d'etape a deux chiffres");
+    check!(
+        r.bottom < footer_y(&f),
+        "Bienvenue : les choix de la barre ne chevauchent pas le pied de page"
+    );
+    check!(
+        ui_lang() != 0 || step_label(9).get() == b"\xC9TAPE 10 SUR 10",
+        "Bienvenue : numero d'etape a deux chiffres"
+    );
     // Logiciels courants : grille de dix, sans chevauchement du pied de page.
     STEP = S_APPS;
     let saved_rows = ROWS;
@@ -990,16 +1926,31 @@ pub unsafe fn regression_checks() {
     ROWS[2].state = b'i';
     SEL = 0;
     let last = app_rect(&f, APP_MAX - 1);
-    check!(last.is_some_and(|r| r.bottom < button_rect(&f, BTN_INSTALL).top), "Bienvenue : la grille des logiciels tient au-dessus du bouton Installer");
-    check!(button_rect(&f, BTN_INSTALL).bottom < footer_y(&f), "Bienvenue : le bouton Installer ne chevauche pas le pied de page");
+    check!(
+        last.is_some_and(|r| r.bottom < button_rect(&f, BTN_INSTALL).top),
+        "Bienvenue : la grille des logiciels tient au-dessus du bouton Installer"
+    );
+    check!(
+        button_rect(&f, BTN_INSTALL).bottom < footer_y(&f),
+        "Bienvenue : le bouton Installer ne chevauche pas le pied de page"
+    );
     let first = app_rect(&f, 0).unwrap_or(rect(0, 0, 0, 0));
-    check!(hit(&f, first.left + 30, first.top + 10) == BTN_APP, "Bienvenue : un logiciel se coche d'un clic");
+    check!(
+        hit(&f, first.left + 30, first.top + 10) == BTN_APP,
+        "Bienvenue : un logiciel se coche d'un clic"
+    );
     activate(BTN_APP);
     check!(SEL == 1, "Bienvenue : la case se coche");
     activate(BTN_APP + 2);
-    check!(SEL == 1, "Bienvenue : un logiciel deja installe ne se coche pas");
+    check!(
+        SEL == 1,
+        "Bienvenue : un logiciel deja installe ne se coche pas"
+    );
     ROWS[1].state = 0;
-    check!(app_rect(&f, 1).is_none() && slot(2) == Some(1), "Bienvenue : un logiciel non installable est masque");
+    check!(
+        app_rect(&f, 1).is_none() && slot(2) == Some(1),
+        "Bienvenue : un logiciel non installable est masque"
+    );
     ROWS = saved_rows;
     SEL = saved_sel;
     STEP = saved;

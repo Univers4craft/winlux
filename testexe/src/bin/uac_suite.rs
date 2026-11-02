@@ -16,7 +16,8 @@ use winlux_testexe::*;
 #[link(name = "advapi32", kind = "raw-dylib")]
 extern "system" {
     fn OpenProcessToken(process: Handle, access: u32, token: *mut Handle) -> i32;
-    fn GetTokenInformation(token: Handle, class: u32, buf: *mut u8, len: u32, ret: *mut u32) -> i32;
+    fn GetTokenInformation(token: Handle, class: u32, buf: *mut u8, len: u32, ret: *mut u32)
+        -> i32;
     fn CheckTokenMembership(token: Handle, sid: *const u8, member: *mut i32) -> i32;
     fn EqualSid(a: *const u8, b: *const u8) -> i32;
     fn GetNamedSecurityInfoW(
@@ -59,7 +60,8 @@ pub extern "C" fn mainCRTStartup() -> ! {
         check!(elevated, "TokenElevation = 1");
         let mut member = 0;
         check!(
-            CheckTokenMembership(null_mut(), ADMINISTRATORS.as_ptr(), &mut member) != 0 && member == 1,
+            CheckTokenMembership(null_mut(), ADMINISTRATORS.as_ptr(), &mut member) != 0
+                && member == 1,
             "membre des Administrateurs"
         );
 
@@ -72,20 +74,40 @@ pub extern "C" fn mainCRTStartup() -> ! {
         for (i, c) in "Z:\\tmp\\winlux-uac-test.txt".encode_utf16().enumerate() {
             name[i] = c;
         }
-        let h = CreateFileW(name.as_ptr(), 0x4000_0000, 0, null_mut(), 2, 0x80, null_mut());
+        let h = CreateFileW(
+            name.as_ptr(),
+            0x4000_0000,
+            0,
+            null_mut(),
+            2,
+            0x80,
+            null_mut(),
+        );
         let created = h as usize != usize::MAX;
         if created {
             CloseHandle(h);
         }
         let (mut owner, mut dacl, mut sd) = (null_mut(), null_mut(), null_mut());
-        let rc = GetNamedSecurityInfoW(name.as_ptr(), 1, 1 | 4, &mut owner, null_mut(), &mut dacl, null_mut(), &mut sd);
+        let rc = GetNamedSecurityInfoW(
+            name.as_ptr(),
+            1,
+            1 | 4,
+            &mut owner,
+            null_mut(),
+            &mut dacl,
+            null_mut(),
+            &mut sd,
+        );
         let owned = created && got_user && rc == 0 && EqualSid(owner, user_sid) != 0;
         check!(owned, "le fichier créé appartient à l'utilisateur");
         let mut ace: *mut u8 = null_mut();
         let full = rc == 0
             && GetAce(dacl, 0, &mut ace) != 0
             && core::ptr::read_unaligned(ace.add(4) as *const u32) & 0x0012_0116 == 0x0012_0116;
-        check!(full, "le propriétaire peut écrire (ACL tirée des droits Linux)");
+        check!(
+            full,
+            "le propriétaire peut écrire (ACL tirée des droits Linux)"
+        );
         if !sd.is_null() {
             LocalFree(sd as *mut c_void);
         }

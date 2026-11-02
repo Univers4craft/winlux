@@ -196,6 +196,9 @@ unsafe fn write_dec_fd(fd: i32, mut n: u64) {
 
 extern "C" fn quality_crash_handler(sig: i32, info: *mut libc::siginfo_t, ctx: *mut libc::c_void) {
     unsafe {
+        if crate::dlls::seh_hw::on_fault(sig, info, ctx) {
+            return;
+        }
         // Journal centralisé + écran bleu + signalement d'abord : ce chemin
         // ne relit la mémoire que par sondage sûr, contrairement au dump
         // détaillé ci-dessous.

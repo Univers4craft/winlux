@@ -10,7 +10,7 @@ for d in clang lld-link llvm-dlltool; do
     command -v "$d" >/dev/null 2>&1 || { echo "msvc : $d absent, test ignoré" >&2; exit 0; }
 done
 printf 'LIBRARY vcruntime140.dll\nEXPORTS\n_CxxThrowException\n__CxxFrameHandler3\n__C_specific_handler\n__std_terminate\n' >"$tmp/vcruntime140.def"
-printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nRaiseException\n' >"$tmp/kernel32.def"
+printf 'LIBRARY kernel32.dll\nEXPORTS\nExitProcess\nRaiseException\nAddVectoredExceptionHandler\nRemoveVectoredExceptionHandler\nVirtualAlloc\nCreateThread\nWaitForSingleObject\nGetExitCodeThread\nGetCommandLineA\n' >"$tmp/kernel32.def"
 llvm-dlltool -m i386:x86-64 -d "$tmp/vcruntime140.def" -l "$tmp/vcruntime140.lib"
 llvm-dlltool -m i386:x86-64 -d "$tmp/kernel32.def" -l "$tmp/kernel32.lib"
 # Table virtuelle de type_info : seul son adresse compte ici.
@@ -20,3 +20,8 @@ clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -fexceptions -fcxx-exc
     -c "$src/eh_msvc.cpp" -o "$tmp/eh_msvc.obj"
 lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/eh_msvc.obj" "$tmp/typeinfo.obj" \
     "$tmp/vcruntime140.lib" "$tmp/kernel32.lib" /out:"$out/eh_msvc.exe"
+# Fautes matérielles en exceptions SEH (#269) : __try autour d'un accès à
+# NULL, d'une division par zéro, d'int3, d'ud2, d'une page de garde…
+clang --target=x86_64-pc-windows-msvc -O1 -fms-extensions -fasync-exceptions -c "$src/hwexc_msvc.c" -o "$tmp/hwexc_msvc.obj"
+lld-link /nologo /entry:entry /subsystem:console /nodefaultlib "$tmp/hwexc_msvc.obj" \
+    "$tmp/vcruntime140.lib" "$tmp/kernel32.lib" /out:"$out/hwexc_msvc.exe"

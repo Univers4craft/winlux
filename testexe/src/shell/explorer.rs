@@ -442,9 +442,19 @@ fn last_component(path: &[u8]) -> &[u8] {
             }
         }
         return if path.first() == Some(&b'Z') {
-            tr4(&[b"Syst\xE8me Linux (Z:)", b"Linux system (Z:)", b"Sistema Linux (Z:)", b"Linux-System (Z:)"])
+            tr4(&[
+                b"Syst\xE8me Linux (Z:)",
+                b"Linux system (Z:)",
+                b"Sistema Linux (Z:)",
+                b"Linux-System (Z:)",
+            ])
         } else {
-            tr4(&[b"Dossier personnel (C:)", b"Home folder (C:)", b"Carpeta personal (C:)", b"Pers\xF6nlicher Ordner (C:)"])
+            tr4(&[
+                b"Dossier personnel (C:)",
+                b"Home folder (C:)",
+                b"Carpeta personal (C:)",
+                b"Pers\xF6nlicher Ordner (C:)",
+            ])
         };
     }
     match path.iter().rposition(|&c| c == b'\\') {
@@ -547,12 +557,12 @@ fn kind_of(name: &[u8], dir: bool) -> Kind {
         Kind::Exe
     } else if any(&[
         b"png", b"jpg", b"jpeg", b"gif", b"bmp", b"webp", b"svg", b"ico", b"tif", b"tiff", b"heic",
-        b"heif", b"avif", b"jxl", b"apng", b"jpe", b"jfif", b"dib", b"cur", b"qoi", b"svgz", b"psd",
-        b"psb", b"xcf", b"ai", b"eps", b"tga", b"pcx", b"pbm", b"pgm", b"ppm", b"pnm", b"pam",
-        b"pfm", b"dds", b"exr", b"hdr", b"icns", b"sgi", b"ras", b"xbm", b"xpm", b"wbmp", b"jp2",
-        b"cr2", b"cr3", b"crw", b"nef", b"nrw", b"arw", b"srf", b"sr2", b"dng", b"orf", b"rw2",
-        b"raf", b"pef", b"srw", b"x3f", b"3fr", b"iiq", b"kdc", b"dcr", b"mrw", b"erf", b"rwl",
-        b"mef",
+        b"heif", b"avif", b"jxl", b"apng", b"jpe", b"jfif", b"dib", b"cur", b"qoi", b"svgz",
+        b"psd", b"psb", b"xcf", b"ai", b"eps", b"tga", b"pcx", b"pbm", b"pgm", b"ppm", b"pnm",
+        b"pam", b"pfm", b"dds", b"exr", b"hdr", b"icns", b"sgi", b"ras", b"xbm", b"xpm", b"wbmp",
+        b"jp2", b"cr2", b"cr3", b"crw", b"nef", b"nrw", b"arw", b"srf", b"sr2", b"dng", b"orf",
+        b"rw2", b"raf", b"pef", b"srw", b"x3f", b"3fr", b"iiq", b"kdc", b"dcr", b"mrw", b"erf",
+        b"rwl", b"mef",
     ]) {
         Kind::Image
     } else if any(&[
@@ -615,12 +625,28 @@ fn glyph_of(k: Kind) -> Glyph {
 /// Nom du type pour la colonne « Type ».
 fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
     let fixed: &[u8] = match e.kind {
-        Kind::Folder => tr4(&[b"Dossier de fichiers", b"File folder", b"Carpeta de archivos", b"Dateiordner"]),
-        Kind::Drive | Kind::LinuxDrive => tr4(&[b"Disque local", b"Local disk", b"Disco local", b"Lokaler Datentr\xE4ger"]),
+        Kind::Folder => tr4(&[
+            b"Dossier de fichiers",
+            b"File folder",
+            b"Carpeta de archivos",
+            b"Dateiordner",
+        ]),
+        Kind::Drive | Kind::LinuxDrive => tr4(&[
+            b"Disque local",
+            b"Local disk",
+            b"Disco local",
+            b"Lokaler Datentr\xE4ger",
+        ]),
         Kind::Removable
-            if unsafe { drive_letter_in(e.name()).and_then(|l| find_drive(l)) }.is_some_and(|d| d.disk) =>
+            if unsafe { drive_letter_in(e.name()).and_then(|l| find_drive(l)) }
+                .is_some_and(|d| d.disk) =>
         {
-            t4([b"Lecteur amovible", b"Removable drive", b"Unidad extra\xEDble", b"Wechseldatentr\xE4ger"])
+            t4([
+                b"Lecteur amovible",
+                b"Removable drive",
+                b"Unidad extra\xEDble",
+                b"Wechseldatentr\xE4ger",
+            ])
         }
         Kind::Removable => t4([
             b"Image disque mont\xE9e",
@@ -634,7 +660,12 @@ fn type_name<'a>(e: &Entry, out: &'a mut [u8; 48]) -> &'a [u8] {
             b"Unidad de red",
             b"Netzlaufwerk",
         ]),
-        Kind::Exe if ends_ci(e.name(), b".exe") => tr4(&[b"Application Windows", b"Windows application", b"Aplicaci\xF3n de Windows", b"Windows-Anwendung"]),
+        Kind::Exe if ends_ci(e.name(), b".exe") => tr4(&[
+            b"Application Windows",
+            b"Windows application",
+            b"Aplicaci\xF3n de Windows",
+            b"Windows-Anwendung",
+        ]),
         Kind::Exe => tr4(&[b"Programme", b"Program", b"Programa", b"Programm"]),
         _ => b"",
     };
@@ -925,7 +956,12 @@ unsafe fn reload(p: &mut Pane) {
     } else if loc.is(PC) {
         add_entry(
             p,
-            tr4(&[b"Dossier personnel (C:)", b"Home folder (C:)", b"Carpeta personal (C:)", b"Pers\xF6nlicher Ordner (C:)"]),
+            tr4(&[
+                b"Dossier personnel (C:)",
+                b"Home folder (C:)",
+                b"Carpeta personal (C:)",
+                b"Pers\xF6nlicher Ordner (C:)",
+            ]),
             true,
             false,
             0,
@@ -934,7 +970,12 @@ unsafe fn reload(p: &mut Pane) {
         );
         add_entry(
             p,
-            tr4(&[b"Syst\xE8me Linux (Z:)", b"Linux system (Z:)", b"Sistema Linux (Z:)", b"Linux-System (Z:)"]),
+            tr4(&[
+                b"Syst\xE8me Linux (Z:)",
+                b"Linux system (Z:)",
+                b"Sistema Linux (Z:)",
+                b"Linux-System (Z:)",
+            ]),
             true,
             false,
             0,
@@ -1008,7 +1049,12 @@ fn max_scroll_hint(_p: &Pane) -> i32 {
 
 unsafe fn navigate_pane(p: &mut Pane, target: &[u8], record: bool) {
     if !valid_path(target) || target.is_empty() {
-        notify(tr4(&[b"Chemin trop long : aucun nom n'a \xE9t\xE9 tronqu\xE9.", b"Path too long: no name was truncated.", b"Ruta demasiado larga: no se ha truncado ning\xFAn nombre.", b"Pfad zu lang: Kein Name wurde gek\xFCrzt."]));
+        notify(tr4(&[
+            b"Chemin trop long : aucun nom n'a \xE9t\xE9 tronqu\xE9.",
+            b"Path too long: no name was truncated.",
+            b"Ruta demasiado larga: no se ha truncado ning\xFAn nombre.",
+            b"Pfad zu lang: Kein Name wurde gek\xFCrzt.",
+        ]));
         return;
     }
     if record && !p.loc.get().is_empty() && !p.loc.is(target) {
@@ -1111,7 +1157,12 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
     let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
     let n = item_path(p, index, &mut path);
     if n == 0 {
-        notify(tr4(&[b"Chemin trop long pour cette version d'Explorer.", b"Path too long for this version of Explorer.", b"Ruta demasiado larga para esta versi\xF3n del Explorador.", b"Pfad zu lang f\xFCr diese Version des Explorers."]));
+        notify(tr4(&[
+            b"Chemin trop long pour cette version d'Explorer.",
+            b"Path too long for this version of Explorer.",
+            b"Ruta demasiado larga para esta versi\xF3n del Explorador.",
+            b"Pfad zu lang f\xFCr diese Version des Explorers.",
+        ]));
         return;
     }
     if p.entries[index].kind == Kind::Network {
@@ -1201,7 +1252,12 @@ unsafe fn open_item(p: &mut Pane, index: usize, new_tab: bool) {
         1,
     );
     if (r as isize) <= 32 {
-        notify(tr4(&[b"Aucune application ne sait ouvrir ce fichier.", b"No app can open this file.", b"Ninguna aplicaci\xF3n puede abrir este archivo.", b"Keine App kann diese Datei \xF6ffnen."]));
+        notify(tr4(&[
+            b"Aucune application ne sait ouvrir ce fichier.",
+            b"No app can open this file.",
+            b"Ninguna aplicaci\xF3n puede abrir este archivo.",
+            b"Keine App kann diese Datei \xF6ffnen.",
+        ]));
     }
 }
 
@@ -1229,7 +1285,12 @@ unsafe fn open_with(path: &[u8]) {
         1,
     );
     if (r as isize) <= 32 {
-        notify(tr4(&[b"Aucune application ne sait ouvrir ce fichier.", b"No app can open this file.", b"Ninguna aplicaci\xF3n puede abrir este archivo.", b"Keine App kann diese Datei \xF6ffnen."]));
+        notify(tr4(&[
+            b"Aucune application ne sait ouvrir ce fichier.",
+            b"No app can open this file.",
+            b"Ninguna aplicaci\xF3n puede abrir este archivo.",
+            b"Keine App kann diese Datei \xF6ffnen.",
+        ]));
     }
 }
 
@@ -1278,7 +1339,12 @@ unsafe fn bulk_rename(p: &Pane) {
         1,
     );
     if (r as isize) <= 32 {
-        notify(tr4(&[b"Impossible d'ouvrir le renommage.", b"Could not open the rename tool.", b"No se pudo abrir la herramienta de cambio de nombre.", b"Das Umbenennen konnte nicht ge\xF6ffnet werden."]));
+        notify(tr4(&[
+            b"Impossible d'ouvrir le renommage.",
+            b"Could not open the rename tool.",
+            b"No se pudo abrir la herramienta de cambio de nombre.",
+            b"Das Umbenennen konnte nicht ge\xF6ffnet werden.",
+        ]));
     }
 }
 
@@ -1321,7 +1387,12 @@ unsafe fn notify(msg: &[u8]) {
 
 unsafe fn open_tab(path: &[u8]) {
     if NTABS == MAX_TABS {
-        notify(tr4(&[b"Nombre maximal d'onglets atteint.", b"Maximum number of tabs reached.", b"Se alcanz\xF3 el n\xFAmero m\xE1ximo de pesta\xF1as.", b"Maximale Anzahl an Registerkarten erreicht."]));
+        notify(tr4(&[
+            b"Nombre maximal d'onglets atteint.",
+            b"Maximum number of tabs reached.",
+            b"Se alcanz\xF3 el n\xFAmero m\xE1ximo de pesta\xF1as.",
+            b"Maximale Anzahl an Registerkarten erreicht.",
+        ]));
         return;
     }
     let t = &mut TABS[NTABS];
@@ -1462,7 +1533,14 @@ const HKEY_CURRENT_USER: usize = 0x8000_0001;
 
 unsafe fn reg_dword(key: &core::ffi::CStr, name: &core::ffi::CStr) -> Option<u32> {
     let mut h: Handle = core::ptr::null_mut();
-    if RegOpenKeyExA(HKEY_CURRENT_USER as Handle, key.as_ptr(), 0, 0x2_0019, &mut h) != 0 {
+    if RegOpenKeyExA(
+        HKEY_CURRENT_USER as Handle,
+        key.as_ptr(),
+        0,
+        0x2_0019,
+        &mut h,
+    ) != 0
+    {
         return None;
     }
     let mut value = 0u32;
@@ -1888,17 +1966,52 @@ enum Cmd {
     Terminal,
 }
 const COMMANDS: [(Cmd, Glyph, Tr4, i32); 11] = [
-    (Cmd::New, Glyph::Plus, [b"Nouveau", b"New", b"Nuevo", b"Neu"], 112),
+    (
+        Cmd::New,
+        Glyph::Plus,
+        [b"Nouveau", b"New", b"Nuevo", b"Neu"],
+        112,
+    ),
     (Cmd::Cut, Glyph::Cut, [b"", b"", b"", b""], 38),
     (Cmd::Copy, Glyph::Copy, [b"", b"", b"", b""], 38),
     (Cmd::Paste, Glyph::Paste, [b"", b"", b"", b""], 38),
     (Cmd::Rename, Glyph::Rename, [b"", b"", b"", b""], 38),
     (Cmd::Delete, Glyph::Delete, [b"", b"", b"", b""], 38),
-    (Cmd::Sort, Glyph::Sort, [b"Trier", b"Sort", b"Ordenar", b"Sortieren"], 84),
-    (Cmd::View, Glyph::View, [b"Afficher", b"View", b"Ver", b"Anzeigen"], 104),
-    (Cmd::Dual, Glyph::Split, [b"Double volet", b"Dual pane", b"Doble panel", b"Doppelansicht"], 130),
-    (Cmd::Nav, Glyph::Details, [b"Volet", b"Pane", b"Panel", b"Bereich"], 76),
-    (Cmd::Terminal, Glyph::Terminal, [b"Terminal", b"Terminal", b"Terminal", b"Terminal"], 102),
+    (
+        Cmd::Sort,
+        Glyph::Sort,
+        [b"Trier", b"Sort", b"Ordenar", b"Sortieren"],
+        84,
+    ),
+    (
+        Cmd::View,
+        Glyph::View,
+        [b"Afficher", b"View", b"Ver", b"Anzeigen"],
+        104,
+    ),
+    (
+        Cmd::Dual,
+        Glyph::Split,
+        [
+            b"Double volet",
+            b"Dual pane",
+            b"Doble panel",
+            b"Doppelansicht",
+        ],
+        130,
+    ),
+    (
+        Cmd::Nav,
+        Glyph::Details,
+        [b"Volet", b"Pane", b"Panel", b"Bereich"],
+        76,
+    ),
+    (
+        Cmd::Terminal,
+        Glyph::Terminal,
+        [b"Terminal", b"Terminal", b"Terminal", b"Terminal"],
+        102,
+    ),
 ];
 
 fn command_rects(g: &Geo) -> [Rect; 11] {
@@ -1920,11 +2033,21 @@ unsafe fn extract_rect(g: &Geo) -> Option<Rect> {
     let loc = pane().loc.get();
     archive_of(loc)?;
     let w = 30 + text_width(extract_label(), 13);
-    Some(rect(g.command.right - 10 - w, g.command.top + 7, g.command.right - 10, g.command.top + 39))
+    Some(rect(
+        g.command.right - 10 - w,
+        g.command.top + 7,
+        g.command.right - 10,
+        g.command.top + 39,
+    ))
 }
 
 fn extract_label() -> &'static [u8] {
-    t4([b"Extraire tout", b"Extract all", b"Extraer todo", b"Alle extrahieren"])
+    t4([
+        b"Extraire tout",
+        b"Extract all",
+        b"Extraer todo",
+        b"Alle extrahieren",
+    ])
 }
 
 /// Archive (la plus extérieure) que traverse `path` : `C:\a\b.zip\c` → `C:\a\b.zip`.
@@ -2016,7 +2139,15 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
         );
         let cx = a.left + 12 + text_width(ADDRESS.get(), 13).min(a.right - a.left - 30);
         if GetTickCount() / 530 % 2 == 0 {
-            fill(g.hdc, g.b, cx, a.top + 7, cx + crate::gfx::caret_w(1), a.bottom - 7, p.text);
+            fill(
+                g.hdc,
+                g.b,
+                cx,
+                a.top + 7,
+                cx + crate::gfx::caret_w(1),
+                a.bottom - 7,
+                p.text,
+            );
         }
     } else {
         draw_breadcrumb(g, &a, pn.loc.get());
@@ -2049,7 +2180,12 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     set_glyph_bg(None);
     if pn.search.len == 0 {
         let mut label = [0u8; 80];
-        let pre = tr4(&[b"Rechercher dans ", b"Search ", b"Buscar en ", b"Suchen in "]);
+        let pre = tr4(&[
+            b"Rechercher dans ",
+            b"Search ",
+            b"Buscar en ",
+            b"Suchen in ",
+        ]);
         label[..pre.len()].copy_from_slice(pre);
         let name = last_component(pn.loc.get());
         let n = name.len().min(60);
@@ -2078,7 +2214,15 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
     }
     if active && GetTickCount() / 530 % 2 == 0 {
         let cx = s.left + 12 + text_width(pn.search.get(), 13).min(s.right - s.left - 52);
-        fill(g.hdc, g.b, cx, s.top + 7, cx + crate::gfx::caret_w(1), s.bottom - 7, p.text);
+        fill(
+            g.hdc,
+            g.b,
+            cx,
+            s.top + 7,
+            cx + crate::gfx::caret_w(1),
+            s.bottom - 7,
+            p.text,
+        );
     }
 
     // Barre de commandes.
@@ -2102,7 +2246,14 @@ unsafe fn draw_toolbar(g: &mut Gfx, geo: &Geo) {
         set_glyph_bg(Some(if hovered(&r) { p.hover } else { p.window }));
         glyph(g.hdc, g.b, g.f, Glyph::Archive, r.left + 8, r.top + 8, 16);
         set_glyph_bg(None);
-        text(g.hdc, g.f.caption, p.text, r.left + 30, r.top + 9, extract_label());
+        text(
+            g.hdc,
+            g.f.caption,
+            p.text,
+            r.left + 30,
+            r.top + 9,
+            extract_label(),
+        );
     }
     for (i, (cmd, gl, label, _)) in COMMANDS.iter().enumerate() {
         let label = tr4(label);
@@ -2270,8 +2421,28 @@ unsafe fn nav_items(out: &mut [(&'static [u8], Glyph, Path, i32); NAV_MAX]) -> u
         push(place_label(i), PLACES[i].glyph, pp.get(), 0);
     }
     push(tr(S_THIS_PC), Glyph::Computer, PC, 0);
-    push(tr4(&[b"Dossier personnel (C:)", b"Home folder (C:)", b"Carpeta personal (C:)", b"Pers\xF6nlicher Ordner (C:)"]), Glyph::Drive, b"C:\\", 1);
-    push(tr4(&[b"Syst\xE8me Linux (Z:)", b"Linux system (Z:)", b"Sistema Linux (Z:)", b"Linux-System (Z:)"]), Glyph::LinuxDrive, b"Z:\\", 1);
+    push(
+        tr4(&[
+            b"Dossier personnel (C:)",
+            b"Home folder (C:)",
+            b"Carpeta personal (C:)",
+            b"Pers\xF6nlicher Ordner (C:)",
+        ]),
+        Glyph::Drive,
+        b"C:\\",
+        1,
+    );
+    push(
+        tr4(&[
+            b"Syst\xE8me Linux (Z:)",
+            b"Linux system (Z:)",
+            b"Sistema Linux (Z:)",
+            b"Linux-System (Z:)",
+        ]),
+        Glyph::LinuxDrive,
+        b"Z:\\",
+        1,
+    );
     for i in 0..NDRIVES {
         let d = DRIVES[i];
         let gl = if d.network {
@@ -2379,7 +2550,15 @@ unsafe fn draw_nav(g: &mut Gfx, geo: &Geo) {
 
 /// Vignette du fichier (images, vidéos, audio) à la place de l'icône dans
 /// les affichages en icônes et en mosaïques ; `false` garde l'icône.
-unsafe fn draw_thumbnail(g: &mut Gfx, pn: &Pane, idx: usize, x: i32, y: i32, s: i32, bg: u32) -> bool {
+unsafe fn draw_thumbnail(
+    g: &mut Gfx,
+    pn: &Pane,
+    idx: usize,
+    x: i32,
+    y: i32,
+    s: i32,
+    bg: u32,
+) -> bool {
     let e = &pn.entries[idx];
     let src = match e.kind {
         _ if e.dir => return false,
@@ -2431,11 +2610,26 @@ unsafe fn draw_pane(g: &mut Gfx, r: &Rect, which: usize) {
 
     if pn.nview == 0 {
         let msg: &[u8] = if pn.missing {
-            tr4(&[b"Ce dossier est introuvable.", b"This folder can't be found.", b"No se encuentra esta carpeta.", b"Dieser Ordner wurde nicht gefunden."])
+            tr4(&[
+                b"Ce dossier est introuvable.",
+                b"This folder can't be found.",
+                b"No se encuentra esta carpeta.",
+                b"Dieser Ordner wurde nicht gefunden.",
+            ])
         } else if pn.search.len > 0 {
-            tr4(&[b"Aucun \xE9l\xE9ment ne correspond \xE0 votre recherche.", b"No items match your search.", b"Ning\xFAn elemento coincide con la b\xFAsqueda.", b"Keine Elemente entsprechen Ihrer Suche."])
+            tr4(&[
+                b"Aucun \xE9l\xE9ment ne correspond \xE0 votre recherche.",
+                b"No items match your search.",
+                b"Ning\xFAn elemento coincide con la b\xFAsqueda.",
+                b"Keine Elemente entsprechen Ihrer Suche.",
+            ])
         } else {
-            tr4(&[b"Ce dossier est vide.", b"This folder is empty.", b"Esta carpeta est\xE1 vac\xEDa.", b"Dieser Ordner ist leer."])
+            tr4(&[
+                b"Ce dossier est vide.",
+                b"This folder is empty.",
+                b"Esta carpeta est\xE1 vac\xEDa.",
+                b"Dieser Ordner ist leer.",
+            ])
         };
         text_centered(
             g.hdc,
@@ -2751,7 +2945,10 @@ unsafe fn draw_rename(g: &mut Gfx, r: Rect) {
         let base = if RENAME_ALL || p_is_dir_renamed() {
             name.len()
         } else {
-            name.iter().rposition(|&c| c == b'.').filter(|&i| i > 0).unwrap_or(name.len())
+            name.iter()
+                .rposition(|&c| c == b'.')
+                .filter(|&i| i > 0)
+                .unwrap_or(name.len())
         };
         let w = text_width(&name[..base], 12).min(r.right - r.left - 10);
         fill(
@@ -2776,7 +2973,15 @@ unsafe fn draw_rename(g: &mut Gfx, r: Rect) {
     );
     let cx = r.left + 5 + text_width(RENAME.get(), 12).min(r.right - r.left - 12);
     if GetTickCount() / 530 % 2 == 0 {
-        fill(g.hdc, g.b, cx, r.top + 3, cx + crate::gfx::caret_w(1), r.bottom - 3, p.text);
+        fill(
+            g.hdc,
+            g.b,
+            cx,
+            r.top + 3,
+            cx + crate::gfx::caret_w(1),
+            r.bottom - 3,
+            p.text,
+        );
     }
 }
 
@@ -2822,7 +3027,12 @@ unsafe fn draw_status(g: &mut Gfx, geo: &Geo) {
         }
     }
     if pn.truncated {
-        let l3 = tr4(&[b"  (limite atteinte ou noms non repr\xE9sentables masqu\xE9s)", b"  (limit reached or unrepresentable names hidden)", b"  (l\xEDmite alcanzado o nombres no representables ocultos)", b"  (Grenze erreicht oder nicht darstellbare Namen ausgeblendet)"]);
+        let l3 = tr4(&[
+            b"  (limite atteinte ou noms non repr\xE9sentables masqu\xE9s)",
+            b"  (limit reached or unrepresentable names hidden)",
+            b"  (l\xEDmite alcanzado o nombres no representables ocultos)",
+            b"  (Grenze erreicht oder nicht darstellbare Namen ausgeblendet)",
+        ]);
         buf[n..n + l3.len()].copy_from_slice(l3);
         n += l3.len();
     }
@@ -2906,25 +3116,75 @@ enum Item {
 fn item_label(i: Item) -> &'static [u8] {
     match i {
         Item::Sep => b"",
-        Item::View(View::XLarge) => tr4(&[b"Tr\xE8s grandes ic\xF4nes", b"Extra large icons", b"Iconos muy grandes", b"Extra gro\xDFe Symbole"]),
-        Item::View(View::Large) => tr4(&[b"Grandes ic\xF4nes", b"Large icons", b"Iconos grandes", b"Gro\xDFe Symbole"]),
-        Item::View(View::Medium) => tr4(&[b"Ic\xF4nes moyennes", b"Medium icons", b"Iconos medianos", b"Mittelgro\xDFe Symbole"]),
-        Item::View(View::Small) => tr4(&[b"Petites ic\xF4nes", b"Small icons", b"Iconos peque\xF1os", b"Kleine Symbole"]),
+        Item::View(View::XLarge) => tr4(&[
+            b"Tr\xE8s grandes ic\xF4nes",
+            b"Extra large icons",
+            b"Iconos muy grandes",
+            b"Extra gro\xDFe Symbole",
+        ]),
+        Item::View(View::Large) => tr4(&[
+            b"Grandes ic\xF4nes",
+            b"Large icons",
+            b"Iconos grandes",
+            b"Gro\xDFe Symbole",
+        ]),
+        Item::View(View::Medium) => tr4(&[
+            b"Ic\xF4nes moyennes",
+            b"Medium icons",
+            b"Iconos medianos",
+            b"Mittelgro\xDFe Symbole",
+        ]),
+        Item::View(View::Small) => tr4(&[
+            b"Petites ic\xF4nes",
+            b"Small icons",
+            b"Iconos peque\xF1os",
+            b"Kleine Symbole",
+        ]),
         Item::View(View::List) => tr4(&[b"Liste", b"List", b"Lista", b"Liste"]),
         Item::View(View::Details) => tr4(&[b"D\xE9tails", b"Details", b"Detalles", b"Details"]),
         Item::View(View::Tiles) => tr4(&[b"Mosa\xEFques", b"Tiles", b"Mosaicos", b"Kacheln"]),
-        Item::Compact => tr4(&[b"Mode compact", b"Compact view", b"Vista compacta", b"Kompakte Ansicht"]),
-        Item::Hidden => tr4(&[b"\xC9l\xE9ments masqu\xE9s", b"Hidden items", b"Elementos ocultos", b"Ausgeblendete Elemente"]),
-        Item::Ext => tr4(&[b"Extensions de noms de fichiers", b"File name extensions", b"Extensiones de nombre de archivo", b"Dateinamenerweiterungen"]),
-        Item::Nav => tr4(&[b"Volet de navigation", b"Navigation pane", b"Panel de navegaci\xF3n", b"Navigationsbereich"]),
+        Item::Compact => tr4(&[
+            b"Mode compact",
+            b"Compact view",
+            b"Vista compacta",
+            b"Kompakte Ansicht",
+        ]),
+        Item::Hidden => tr4(&[
+            b"\xC9l\xE9ments masqu\xE9s",
+            b"Hidden items",
+            b"Elementos ocultos",
+            b"Ausgeblendete Elemente",
+        ]),
+        Item::Ext => tr4(&[
+            b"Extensions de noms de fichiers",
+            b"File name extensions",
+            b"Extensiones de nombre de archivo",
+            b"Dateinamenerweiterungen",
+        ]),
+        Item::Nav => tr4(&[
+            b"Volet de navigation",
+            b"Navigation pane",
+            b"Panel de navegaci\xF3n",
+            b"Navigationsbereich",
+        ]),
         Item::Sort(SortKey::Name) => tr(S_NAME),
         Item::Sort(SortKey::Date) => tr(S_DATE),
         Item::Sort(SortKey::Kind) => tr(S_TYPE),
         Item::Sort(SortKey::Size) => tr(S_SIZE),
         Item::Asc => tr4(&[b"Croissant", b"Ascending", b"Ascendente", b"Aufsteigend"]),
-        Item::Desc => tr4(&[b"D\xE9croissant", b"Descending", b"Descendente", b"Absteigend"]),
+        Item::Desc => tr4(&[
+            b"D\xE9croissant",
+            b"Descending",
+            b"Descendente",
+            b"Absteigend",
+        ]),
         Item::NewFolder => tr4(&[b"Dossier", b"Folder", b"Carpeta", b"Ordner"]),
-        Item::NewText => tr4(&[b"Document texte", b"Text document", b"Documento de texto", b"Textdokument"]),
+        Item::NewText => tr4(&[
+            b"Document texte",
+            b"Text document",
+            b"Documento de texto",
+            b"Textdokument",
+        ]),
         Item::Open => tr(S_OPEN),
         Item::OpenWith => t4([
             b"Ouvrir avec...",
@@ -2932,8 +3192,18 @@ fn item_label(i: Item) -> &'static [u8] {
             b"Abrir con...",
             b"\xD6ffnen mit...",
         ]),
-        Item::OpenTab => tr4(&[b"Ouvrir dans un nouvel onglet", b"Open in new tab", b"Abrir en una pesta\xF1a nueva", b"In neuer Registerkarte \xF6ffnen"]),
-        Item::ExeSettings => tr4(&[b"R\xE9glages de l'ex\xE9cutable", b"Executable settings", b"Ajustes del ejecutable", b"Einstellungen der ausf\xFChrbaren Datei"]),
+        Item::OpenTab => tr4(&[
+            b"Ouvrir dans un nouvel onglet",
+            b"Open in new tab",
+            b"Abrir en una pesta\xF1a nueva",
+            b"In neuer Registerkarte \xF6ffnen",
+        ]),
+        Item::ExeSettings => tr4(&[
+            b"R\xE9glages de l'ex\xE9cutable",
+            b"Executable settings",
+            b"Ajustes del ejecutable",
+            b"Einstellungen der ausf\xFChrbaren Datei",
+        ]),
         Item::Cut => tr(S_CUT),
         Item::Copy => tr(S_COPY),
         Item::Paste => tr(S_PASTE),
@@ -2941,8 +3211,18 @@ fn item_label(i: Item) -> &'static [u8] {
         Item::Delete => tr(S_DELETE),
         Item::Restore => tr4(&[b"Restaurer", b"Restore", b"Restaurar", b"Wiederherstellen"]),
         Item::Refresh => tr4(&[b"Actualiser", b"Refresh", b"Actualizar", b"Aktualisieren"]),
-        Item::Terminal => tr4(&[b"Ouvrir dans le terminal", b"Open in terminal", b"Abrir en el terminal", b"Im Terminal \xF6ffnen"]),
-        Item::CopyPath => tr4(&[b"Copier le chemin d'acc\xE8s", b"Copy as path", b"Copiar como ruta de acceso", b"Als Pfad kopieren"]),
+        Item::Terminal => tr4(&[
+            b"Ouvrir dans le terminal",
+            b"Open in terminal",
+            b"Abrir en el terminal",
+            b"Im Terminal \xF6ffnen",
+        ]),
+        Item::CopyPath => tr4(&[
+            b"Copier le chemin d'acc\xE8s",
+            b"Copy as path",
+            b"Copiar como ruta de acceso",
+            b"Als Pfad kopieren",
+        ]),
         Item::ExtractAll => t4([
             b"Extraire tout...",
             b"Extract all...",
@@ -3389,7 +3669,17 @@ unsafe fn new_item(folder: bool) {
     let n = if folder {
         unique_name(p.loc.get(), tr(S_NEW_FOLDER), b"", &mut path)
     } else {
-        unique_name(p.loc.get(), tr4(&[b"Nouveau document texte", b"New text document", b"Nuevo documento de texto", b"Neues Textdokument"]), b".txt", &mut path)
+        unique_name(
+            p.loc.get(),
+            tr4(&[
+                b"Nouveau document texte",
+                b"New text document",
+                b"Nuevo documento de texto",
+                b"Neues Textdokument",
+            ]),
+            b".txt",
+            &mut path,
+        )
     };
     if n == 0 {
         return;
@@ -3416,7 +3706,12 @@ unsafe fn new_item(folder: bool) {
         }
     };
     if !ok {
-        notify(tr4(&[b"Impossible de cr\xE9er l'\xE9l\xE9ment ici (droits insuffisants ?).", b"Can't create the item here (insufficient rights?).", b"No se puede crear el elemento aqu\xED (\xBFpermisos insuficientes?).", b"Element kann hier nicht erstellt werden (fehlende Rechte?)."]));
+        notify(tr4(&[
+            b"Impossible de cr\xE9er l'\xE9l\xE9ment ici (droits insuffisants ?).",
+            b"Can't create the item here (insufficient rights?).",
+            b"No se puede crear el elemento aqu\xED (\xBFpermisos insuficientes?).",
+            b"Element kann hier nicht erstellt werden (fehlende Rechte?).",
+        ]));
         return;
     }
     reload(p);
@@ -3466,7 +3761,12 @@ unsafe fn commit_rename() {
     let mut to = [0u8; PATH_LEN + NAME_LEN + 2];
     if join(&mut from, p.loc.get(), old_name) == 0 || join(&mut to, p.loc.get(), RENAME.get()) == 0
     {
-        notify(tr4(&[b"Chemin trop long : renommage annul\xE9.", b"Path too long: rename cancelled.", b"Ruta demasiado larga: cambio de nombre cancelado.", b"Pfad zu lang: Umbenennen abgebrochen."]));
+        notify(tr4(&[
+            b"Chemin trop long : renommage annul\xE9.",
+            b"Path too long: rename cancelled.",
+            b"Ruta demasiado larga: cambio de nombre cancelado.",
+            b"Pfad zu lang: Umbenennen abgebrochen.",
+        ]));
         return;
     }
     let mut wfrom = [0u16; PATH_LEN + NAME_LEN + 2];
@@ -3480,7 +3780,12 @@ unsafe fn commit_rename() {
         &to[..to.iter().position(|&c| c == 0).unwrap_or(to.len())],
     );
     if MoveFileW(wfrom.as_ptr(), wto.as_ptr()) == 0 {
-        notify(tr4(&[b"Renommage impossible.", b"Can't rename.", b"No se puede cambiar el nombre.", b"Umbenennen nicht m\xF6glich."]));
+        notify(tr4(&[
+            b"Renommage impossible.",
+            b"Can't rename.",
+            b"No se puede cambiar el nombre.",
+            b"Umbenennen nicht m\xF6glich.",
+        ]));
         return;
     }
     let new_name = RENAME;
@@ -3500,7 +3805,12 @@ unsafe fn copy_selection(cut: bool) {
         let mut path = [0u8; PATH_LEN + NAME_LEN + 2];
         let n = item_path(p, i, &mut path);
         if n == 0 || !CLIP[NCLIP].set(&path[..n]) {
-            notify(tr4(&[b"Chemin trop long : \xE9l\xE9ment ignor\xE9.", b"Path too long: item skipped.", b"Ruta demasiado larga: elemento omitido.", b"Pfad zu lang: Element \xFCbersprungen."]));
+            notify(tr4(&[
+                b"Chemin trop long : \xE9l\xE9ment ignor\xE9.",
+                b"Path too long: item skipped.",
+                b"Ruta demasiado larga: elemento omitido.",
+                b"Pfad zu lang: Element \xFCbersprungen.",
+            ]));
             continue;
         }
         NCLIP += 1;
@@ -3514,9 +3824,19 @@ unsafe fn copy_selection(cut: bool) {
         crate::cliphist::set_files(&list[..NCLIP], cut);
         CLIP_SEQ = GetClipboardSequenceNumber();
         notify(if cut {
-            tr4(&[b"\xC9l\xE9ments coup\xE9s : collez-les dans un autre dossier.", b"Items cut: paste them into another folder.", b"Elementos cortados: p\xE9guelos en otra carpeta.", b"Elemente ausgeschnitten: F\xFCgen Sie sie in einen anderen Ordner ein."])
+            tr4(&[
+                b"\xC9l\xE9ments coup\xE9s : collez-les dans un autre dossier.",
+                b"Items cut: paste them into another folder.",
+                b"Elementos cortados: p\xE9guelos en otra carpeta.",
+                b"Elemente ausgeschnitten: F\xFCgen Sie sie in einen anderen Ordner ein.",
+            ])
         } else {
-            tr4(&[b"\xC9l\xE9ments copi\xE9s.", b"Items copied.", b"Elementos copiados.", b"Elemente kopiert."])
+            tr4(&[
+                b"\xC9l\xE9ments copi\xE9s.",
+                b"Items copied.",
+                b"Elementos copiados.",
+                b"Elemente kopiert.",
+            ])
         });
     }
 }
@@ -3746,7 +4066,12 @@ unsafe fn copy_file_new(from: &[u8], to: &[u8]) -> bool {
     if !ok {
         let mut wd = [0u16; PATH_LEN + NAME_LEN + 2];
         if DeleteFileW(wstr(&mut wd, to)) == 0 {
-            notify(tr4(&[b"Copie interrompue : le fichier cible partiel reste accessible.", b"Copy interrupted: the partial target file is still available.", b"Copia interrumpida: el archivo de destino parcial sigue disponible.", b"Kopieren unterbrochen: Die unvollst\xE4ndige Zieldatei bleibt verf\xFCgbar."]));
+            notify(tr4(&[
+                b"Copie interrompue : le fichier cible partiel reste accessible.",
+                b"Copy interrupted: the partial target file is still available.",
+                b"Copia interrumpida: el archivo de destino parcial sigue disponible.",
+                b"Kopieren unterbrochen: Die unvollst\xE4ndige Zieldatei bleibt verf\xFCgbar.",
+            ]));
         }
     }
     ok
@@ -3826,7 +4151,12 @@ unsafe fn copy_tree(from: &[u8], to: &[u8]) -> bool {
         return true;
     }
     if created && !rollback_copy(to, 0) {
-        notify(tr4(&[b"Copie interrompue : une copie partielle reste dans le dossier cible.", b"Copy interrupted: a partial copy remains in the target folder.", b"Copia interrumpida: queda una copia parcial en la carpeta de destino.", b"Kopieren unterbrochen: Eine Teilkopie bleibt im Zielordner."]));
+        notify(tr4(&[
+            b"Copie interrompue : une copie partielle reste dans le dossier cible.",
+            b"Copy interrupted: a partial copy remains in the target folder.",
+            b"Copia interrumpida: queda una copia parcial en la carpeta de destino.",
+            b"Kopieren unterbrochen: Eine Teilkopie bleibt im Zielordner.",
+        ]));
     }
     false
 }
@@ -3972,7 +4302,12 @@ unsafe fn paste() {
     if failed > 0 {
         notify(tr4(&[b"Collage refus\xE9 ou incomplet : chemin trop long, cycle ou droits. Sources conserv\xE9es.", b"Paste refused or incomplete: path too long, loop or rights. Sources kept.", b"Pegado rechazado o incompleto: ruta demasiado larga, ciclo o permisos. Se conservan los originales.", b"Einf\xFCgen abgelehnt oder unvollst\xE4ndig: Pfad zu lang, Schleife oder Rechte. Quellen bleiben erhalten."]));
     } else if sources_kept > 0 {
-        notify(tr4(&[b"Copie termin\xE9e. D\xE9placement indisponible : sources conserv\xE9es.", b"Copy finished. Move unavailable: sources kept.", b"Copia terminada. No se puede mover: se conservan los originales.", b"Kopieren abgeschlossen. Verschieben nicht m\xF6glich: Quellen bleiben erhalten."]));
+        notify(tr4(&[
+            b"Copie termin\xE9e. D\xE9placement indisponible : sources conserv\xE9es.",
+            b"Copy finished. Move unavailable: sources kept.",
+            b"Copia terminada. No se puede mover: se conservan los originales.",
+            b"Kopieren abgeschlossen. Verschieben nicht m\xF6glich: Quellen bleiben erhalten.",
+        ]));
     }
     // L'autre volet affiche peut-être le dossier source ou cible.
     let t = tab();
@@ -4049,9 +4384,19 @@ pub unsafe fn drop_files_to(dest: &[u8], do_copy: bool) {
     }
     if failed > 0 {
         notify(if do_copy {
-            tr4(&[b"Certains fichiers n'ont pas pu \xEAtre copi\xE9s.", b"Some files couldn't be copied.", b"Algunos archivos no se pudieron copiar.", b"Einige Dateien konnten nicht kopiert werden."])
+            tr4(&[
+                b"Certains fichiers n'ont pas pu \xEAtre copi\xE9s.",
+                b"Some files couldn't be copied.",
+                b"Algunos archivos no se pudieron copiar.",
+                b"Einige Dateien konnten nicht kopiert werden.",
+            ])
         } else {
-            tr4(&[b"Certains fichiers n'ont pas pu \xEAtre d\xE9plac\xE9s.", b"Some files couldn't be moved.", b"Algunos archivos no se pudieron mover.", b"Einige Dateien konnten nicht verschoben werden."])
+            tr4(&[
+                b"Certains fichiers n'ont pas pu \xEAtre d\xE9plac\xE9s.",
+                b"Some files couldn't be moved.",
+                b"Algunos archivos no se pudieron mover.",
+                b"Einige Dateien konnten nicht verschoben werden.",
+            ])
         });
     }
     reload(p);
@@ -4110,7 +4455,12 @@ pub unsafe fn paste_to(dest: &[u8]) {
         NCLIP = 0;
     }
     if failed > 0 {
-        notify(tr4(&[b"Collage refus\xE9 ou incomplet.", b"Paste refused or incomplete.", b"Pegado rechazado o incompleto.", b"Einf\xFCgen abgelehnt oder unvollst\xE4ndig."]));
+        notify(tr4(&[
+            b"Collage refus\xE9 ou incomplet.",
+            b"Paste refused or incomplete.",
+            b"Pegado rechazado o incompleto.",
+            b"Einf\xFCgen abgelehnt oder unvollst\xE4ndig.",
+        ]));
     }
 }
 
@@ -4200,7 +4550,8 @@ static mut SOURCE_OBJ: ComObject = ComObject {
     vtbl: core::ptr::null(),
 };
 
-unsafe fn do_drag_drop_fn() -> Option<unsafe extern "system" fn(usize, usize, u32, *mut u32) -> i32> {
+unsafe fn do_drag_drop_fn() -> Option<unsafe extern "system" fn(usize, usize, u32, *mut u32) -> i32>
+{
     if DO_DRAG_DROP == 0 {
         let ole = LoadLibraryA(c"ole32.dll".as_ptr());
         let f = if ole.is_null() {
@@ -4234,7 +4585,8 @@ unsafe fn drag_out() -> bool {
     for k in 0..n {
         list[k] = paths[k].get();
     }
-    DRAG_HDROP_LEN = crate::cliphist::build_hdrop(&list[..n], &mut *core::ptr::addr_of_mut!(DRAG_HDROP));
+    DRAG_HDROP_LEN =
+        crate::cliphist::build_hdrop(&list[..n], &mut *core::ptr::addr_of_mut!(DRAG_HDROP));
     if DRAG_HDROP_LEN == 0 {
         return false;
     }
@@ -4297,9 +4649,19 @@ unsafe fn drop_on_desktop(do_copy: bool) {
     }
     drop_files_to(desktop.get(), do_copy);
     notify(if do_copy {
-        tr4(&[b"Fichier(s) copi\xE9(s) sur le Bureau.", b"File(s) copied to the Desktop.", b"Archivo(s) copiado(s) en el Escritorio.", b"Datei(en) auf den Desktop kopiert."])
+        tr4(&[
+            b"Fichier(s) copi\xE9(s) sur le Bureau.",
+            b"File(s) copied to the Desktop.",
+            b"Archivo(s) copiado(s) en el Escritorio.",
+            b"Datei(en) auf den Desktop kopiert.",
+        ])
     } else {
-        tr4(&[b"Fichier(s) d\xE9plac\xE9(s) sur le Bureau.", b"File(s) moved to the Desktop.", b"Archivo(s) movido(s) al Escritorio.", b"Datei(en) auf den Desktop verschoben."])
+        tr4(&[
+            b"Fichier(s) d\xE9plac\xE9(s) sur le Bureau.",
+            b"File(s) moved to the Desktop.",
+            b"Archivo(s) movido(s) al Escritorio.",
+            b"Datei(en) auf den Desktop verschoben.",
+        ])
     });
 }
 
@@ -4374,8 +4736,8 @@ unsafe fn delete_selection() {
     let in_trash = p.loc.is(TRASH);
     if in_trash {
         // Rien n'est récupérable ensuite : comme Windows, demander confirmation.
-        let armed = PURGE_ARMED_UNTIL != 0
-            && (PURGE_ARMED_UNTIL.wrapping_sub(GetTickCount()) as i32) > 0;
+        let armed =
+            PURGE_ARMED_UNTIL != 0 && (PURGE_ARMED_UNTIL.wrapping_sub(GetTickCount()) as i32) > 0;
         if !armed {
             if (0..p.nview).any(|v| is_sel(p, p.view[v] as usize)) {
                 PURGE_ARMED_UNTIL = GetTickCount().wrapping_add(4000);
@@ -4536,9 +4898,19 @@ unsafe fn delete_selection() {
     }
     reload(p);
     if failed > 0 {
-        notify(tr4(&[b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre supprim\xE9s.", b"Some items couldn't be deleted.", b"Algunos elementos no se pudieron eliminar.", b"Einige Elemente konnten nicht gel\xF6scht werden."]));
+        notify(tr4(&[
+            b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre supprim\xE9s.",
+            b"Some items couldn't be deleted.",
+            b"Algunos elementos no se pudieron eliminar.",
+            b"Einige Elemente konnten nicht gel\xF6scht werden.",
+        ]));
     } else if !in_trash {
-        notify(tr4(&[b"\xC9l\xE9ments d\xE9plac\xE9s dans la Corbeille.", b"Items moved to the Recycle Bin.", b"Elementos movidos a la Papelera.", b"Elemente in den Papierkorb verschoben."]));
+        notify(tr4(&[
+            b"\xC9l\xE9ments d\xE9plac\xE9s dans la Corbeille.",
+            b"Items moved to the Recycle Bin.",
+            b"Elementos movidos a la Papelera.",
+            b"Elemente in den Papierkorb verschoben.",
+        ]));
     }
 }
 
@@ -4548,20 +4920,37 @@ const TRASH_INFO: &[u8] = b"C:\\.local\\share\\Trash\\info";
 /// %XX décodés, UTF-8 ramené en Windows-1252, dossier personnel en C:.
 unsafe fn trash_origin(info: &[u8], out: &mut [u8; PATH_LEN + NAME_LEN + 2]) -> usize {
     let mut wide = [0u16; PATH_LEN + NAME_LEN + 2];
-    let h = CreateFileW(wstr(&mut wide, info), 0x8000_0000, 1, core::ptr::null_mut(), 3, 0, core::ptr::null_mut());
+    let h = CreateFileW(
+        wstr(&mut wide, info),
+        0x8000_0000,
+        1,
+        core::ptr::null_mut(),
+        3,
+        0,
+        core::ptr::null_mut(),
+    );
     if h.is_null() || h as isize == -1 {
         return 0;
     }
     let mut buf = [0u8; 2048];
     let mut got = 0u32;
-    ReadFile(h, buf.as_mut_ptr(), buf.len() as u32, &mut got, core::ptr::null_mut());
+    ReadFile(
+        h,
+        buf.as_mut_ptr(),
+        buf.len() as u32,
+        &mut got,
+        core::ptr::null_mut(),
+    );
     CloseHandle(h);
     let text = &buf[..got as usize];
     let Some(start) = text.windows(5).position(|w| w == b"Path=").map(|k| k + 5) else {
         return 0;
     };
     let line = &text[start..];
-    let line = &line[..line.iter().position(|&c| c == b'\n' || c == b'\r').unwrap_or(line.len())];
+    let line = &line[..line
+        .iter()
+        .position(|&c| c == b'\n' || c == b'\r')
+        .unwrap_or(line.len())];
     // %XX → octets UTF-8.
     let mut utf = [0u8; 1024];
     let mut un = 0;
@@ -4605,11 +4994,12 @@ unsafe fn trash_origin(info: &[u8], out: &mut [u8; PATH_LEN + NAME_LEN + 2]) -> 
     let mut home = [0i8; 200];
     let hn = GetEnvironmentVariableA(c"HOME".as_ptr(), home.as_mut_ptr(), 200) as usize;
     let home: &[u8] = core::slice::from_raw_parts(home.as_ptr() as *const u8, hn.min(199));
-    let (prefix, rest): (&[u8], &[u8]) = if !home.is_empty() && linux.starts_with(home) && linux.get(home.len()) == Some(&b'/') {
-        (b"C:", &linux[home.len()..])
-    } else {
-        (b"Z:", linux)
-    };
+    let (prefix, rest): (&[u8], &[u8]) =
+        if !home.is_empty() && linux.starts_with(home) && linux.get(home.len()) == Some(&b'/') {
+            (b"C:", &linux[home.len()..])
+        } else {
+            (b"Z:", linux)
+        };
     let n = prefix.len() + rest.len();
     if rest.first() != Some(&b'/') || n >= PATH_LEN {
         return 0;
@@ -4644,12 +5034,19 @@ unsafe fn restore_selection() {
         let sn = join(&mut src, TRASH, name);
         let il = join(&mut info, TRASH_INFO, &nm[..name.len() + 10]);
         let mut original = [0u8; PATH_LEN + NAME_LEN + 2];
-        let on = if sn == 0 || il == 0 { 0 } else { trash_origin(&info[..il], &mut original) };
+        let on = if sn == 0 || il == 0 {
+            0
+        } else {
+            trash_origin(&info[..il], &mut original)
+        };
         if on == 0 {
             failed += 1;
             continue;
         }
-        let cut = original[..on].iter().rposition(|&c| c == b'\\').unwrap_or(2);
+        let cut = original[..on]
+            .iter()
+            .rposition(|&c| c == b'\\')
+            .unwrap_or(2);
         let mut wdir = [0u16; PATH_LEN + NAME_LEN + 2];
         for k in 3..=cut {
             if k == cut || original[k] == b'\\' {
@@ -4680,9 +5077,19 @@ unsafe fn restore_selection() {
     }
     reload(p);
     if failed > 0 {
-        notify(tr4(&[b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre restaur\xE9s.", b"Some items couldn't be restored.", b"Algunos elementos no se pudieron restaurar.", b"Einige Elemente konnten nicht wiederhergestellt werden."]));
+        notify(tr4(&[
+            b"Certains \xE9l\xE9ments n'ont pas pu \xEAtre restaur\xE9s.",
+            b"Some items couldn't be restored.",
+            b"Algunos elementos no se pudieron restaurar.",
+            b"Einige Elemente konnten nicht wiederhergestellt werden.",
+        ]));
     } else {
-        notify(tr4(&[b"\xC9l\xE9ments restaur\xE9s \xE0 leur emplacement d'origine.", b"Items restored to their original location.", b"Elementos restaurados a su ubicaci\xF3n original.", b"Elemente am urspr\xFCnglichen Ort wiederhergestellt."]));
+        notify(tr4(&[
+            b"\xC9l\xE9ments restaur\xE9s \xE0 leur emplacement d'origine.",
+            b"Items restored to their original location.",
+            b"Elementos restaurados a su ubicaci\xF3n original.",
+            b"Elemente am urspr\xFCnglichen Ort wiederhergestellt.",
+        ]));
     }
 }
 
@@ -4812,7 +5219,12 @@ unsafe fn run_item(it: Item, geo: &Geo) {
                 let mut b = [0u8; PATH_LEN + NAME_LEN + 2];
                 let n = item_path(p, i, &mut b);
                 ADDRESS.set(&b[..n]);
-                notify(tr4(&[b"Chemin affich\xE9 dans la barre d'adresse.", b"Path shown in the address bar.", b"Ruta mostrada en la barra de direcciones.", b"Pfad in der Adressleiste angezeigt."]));
+                notify(tr4(&[
+                    b"Chemin affich\xE9 dans la barre d'adresse.",
+                    b"Path shown in the address bar.",
+                    b"Ruta mostrada en la barra de direcciones.",
+                    b"Pfad in der Adressleiste angezeigt.",
+                ]));
                 FOCUS = Focus::Address;
             }
         }
@@ -5323,7 +5735,12 @@ unsafe fn compress_selection(ext: &[u8], password: Option<&[u8]>) {
     let mut out = [0u8; PATH_LEN + NAME_LEN + 2];
     let on = join(&mut out, p.loc.get(), &name[..bl + 1 + ext.len()]);
     if on == 0 {
-        notify(tr4(&[b"Chemin trop long pour cette version d'Explorer.", b"Path too long for this version of Explorer.", b"Ruta demasiado larga para esta versi\xF3n del Explorador.", b"Pfad zu lang f\xFCr diese Version des Explorers."]));
+        notify(tr4(&[
+            b"Chemin trop long pour cette version d'Explorer.",
+            b"Path too long for this version of Explorer.",
+            b"Ruta demasiado larga para esta versi\xF3n del Explorador.",
+            b"Pfad zu lang f\xFCr diese Version des Explorers.",
+        ]));
         return;
     }
     let mut w = [0u16; PATH_LEN + NAME_LEN + 2];
@@ -5801,7 +6218,12 @@ unsafe fn password_key(vk: u32, ch: u16) -> bool {
         8 => PASSWORD.pop(),
         c if c >= 32 => match ansi_char(c) {
             Some(a) => PASSWORD.push(a),
-            None => notify(tr4(&[b"Caract\xE8re non pris en charge.", b"Unsupported character.", b"Car\xE1cter no admitido.", b"Nicht unterst\xFCtztes Zeichen."])),
+            None => notify(tr4(&[
+                b"Caract\xE8re non pris en charge.",
+                b"Unsupported character.",
+                b"Car\xE1cter no admitido.",
+                b"Nicht unterst\xFCtztes Zeichen.",
+            ])),
         },
         _ => {
             let _ = vk;
@@ -5864,7 +6286,10 @@ unsafe fn format_badge(g: &mut Gfx, e: &Entry, x: i32, y: i32, s: i32) {
 /// Renvoie vrai si l'élément a été pris en charge.
 /// Fichier archive ou image disque existant (pas un dossier du même nom).
 fn storage_file(path: &[u8]) -> bool {
-    if !matches!(kind_of(last_component(path), false), Kind::Archive | Kind::DiskImage) {
+    if !matches!(
+        kind_of(last_component(path), false),
+        Kind::Archive | Kind::DiskImage
+    ) {
         return false;
     }
     let mut buf = [0u16; PATH_LEN + NAME_LEN + 2];
@@ -5962,7 +6387,11 @@ unsafe fn drop_target(geo: &Geo, x: i32, y: i32) -> Option<(Path, Option<(usize,
         let n = nav_items(&mut items);
         for i in 0..n {
             let path = items[i].2;
-            if inside(&nav_row(geo, i), x, y) && !path.is(HOME) && !path.is(PC) && !path.is(pane().loc.get()) {
+            if inside(&nav_row(geo, i), x, y)
+                && !path.is(HOME)
+                && !path.is(PC)
+                && !path.is(pane().loc.get())
+            {
                 return Some((path, None));
             }
         }
@@ -6482,7 +6911,9 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
             if ch != 22 {
                 crate::cliphist::set_text(fl.get());
             }
-            if ch == 24 || (ch == 22 && (RENAME_FRESH || (FOCUS == Focus::Address && ADDRESS_SELECTED))) {
+            if ch == 24
+                || (ch == 22 && (RENAME_FRESH || (FOCUS == Focus::Address && ADDRESS_SELECTED)))
+            {
                 fl.len = 0;
                 RENAME_FRESH = false;
                 RENAME_TAIL = 0;
@@ -6632,7 +7063,12 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                                         1,
                                     );
                                     if (r as isize) <= 32 {
-                                        notify(tr4(&[b"Winlux ne trouve pas cet emplacement.", b"Winlux can't find this location.", b"Winlux no encuentra esta ubicaci\xF3n.", b"Winlux findet diesen Speicherort nicht."]));
+                                        notify(tr4(&[
+                                            b"Winlux ne trouve pas cet emplacement.",
+                                            b"Winlux can't find this location.",
+                                            b"Winlux no encuentra esta ubicaci\xF3n.",
+                                            b"Winlux findet diesen Speicherort nicht.",
+                                        ]));
                                     } else {
                                         FOCUS = Focus::List;
                                     }
@@ -6652,7 +7088,12 @@ pub unsafe fn key(vk: u32, ch: u16) -> bool {
                                 read_dir(p, loc.get(), b"", filter.get(), 3);
                                 p.deep = true;
                                 rebuild_view(p);
-                                notify(tr4(&[b"Recherche termin\xE9e dans les sous-dossiers.", b"Search finished in subfolders.", b"B\xFAsqueda terminada en las subcarpetas.", b"Suche in Unterordnern abgeschlossen."]));
+                                notify(tr4(&[
+                                    b"Recherche termin\xE9e dans les sous-dossiers.",
+                                    b"Search finished in subfolders.",
+                                    b"B\xFAsqueda terminada en las subcarpetas.",
+                                    b"Suche in Unterordnern abgeschlossen.",
+                                ]));
                             }
                         }
                         Focus::List => {}
@@ -6836,7 +7277,9 @@ unsafe fn watch_drives() -> bool {
     let n = WinluxMountList(buf.as_mut_ptr(), buf.len() as u32).max(0) as usize;
     let sig = buf[..n.min(buf.len())]
         .iter()
-        .fold(0xcbf2_9ce4_8422_2325u64, |h, &c| (h ^ c as u64).wrapping_mul(0x100_0000_01b3))
+        .fold(0xcbf2_9ce4_8422_2325u64, |h, &c| {
+            (h ^ c as u64).wrapping_mul(0x100_0000_01b3)
+        })
         | 1;
     // Premier passage compris : le volet de gauche montre dès l'ouverture les
     // clés déjà branchées (avant, seulement après un passage par Ce PC).
@@ -6893,18 +7336,31 @@ pub unsafe fn regression_checks() {
     // Dossier accentué réel (VM de l'ISO) : « Téléchargements » doit s'ouvrir,
     // pas « Ce dossier est introuvable ». Seulement si le test le demande.
     let mut flag = [0u8; 4];
-    if GetEnvironmentVariableA(c"WINLUX_EXPECT_DOWNLOADS".as_ptr(), flag.as_mut_ptr().cast(), 4) == 1 && flag[0] == b'1' {
+    if GetEnvironmentVariableA(
+        c"WINLUX_EXPECT_DOWNLOADS".as_ptr(),
+        flag.as_mut_ptr().cast(),
+        4,
+    ) == 1
+        && flag[0] == b'1'
+    {
         let downloads = place_path(1);
         let mut pattern = [0u16; PATH_LEN + NAME_LEN + 2];
         let n = wjoin(&mut pattern, downloads.get(), b"*");
         let mut data: Win32FindDataW = core::mem::zeroed();
-        let h = if n == 0 { -1isize as Handle } else { FindFirstFileW(pattern.as_ptr(), &mut data) };
+        let h = if n == 0 {
+            -1isize as Handle
+        } else {
+            FindFirstFileW(pattern.as_ptr(), &mut data)
+        };
         // Dossier vide : aucune entrée, ce n'est pas un échec de lecture.
         let listed = h as isize != -1 || GetLastError() == 2 || GetLastError() == 18;
         if h as isize != -1 {
             FindClose(h);
         }
-        check!(exists_dir(downloads.get()) && listed, "Explorer ouvre le dossier Telechargements (nom accentue)");
+        check!(
+            exists_dir(downloads.get()) && listed,
+            "Explorer ouvre le dossier Telechargements (nom accentue)"
+        );
     }
     let mut scratch = [0u8; PATH_LEN + NAME_LEN + 2];
     let long_name = [b'a'; 200];

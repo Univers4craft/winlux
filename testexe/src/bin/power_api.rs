@@ -42,7 +42,11 @@ unsafe fn active() -> [u8; 16] {
 pub extern "C" fn mainCRTStartup() -> ! {
     unsafe {
         let mut st = SystemPowerStatus::default();
-        check(GetSystemPowerStatus(&mut st) != 0, c"GetSystemPowerStatus", 2);
+        check(
+            GetSystemPowerStatus(&mut st) != 0,
+            c"GetSystemPowerStatus",
+            2,
+        );
         printf(
             c"secteur=%u drapeaux=%u batterie=%u%% autonomie=%u s\n".as_ptr(),
             st.ac_line_status as u32,
@@ -54,14 +58,20 @@ pub extern "C" fn mainCRTStartup() -> ! {
         check(st.battery_life_percent == 75, c"BatteryLifePercent", 4);
         check(st.battery_flag == 1, c"BatteryFlag (haute)", 5);
         check(st.battery_life_time == 10_800, c"BatteryLifeTime", 6);
-        check(st.battery_full_life_time == 14_400, c"BatteryFullLifeTime", 7);
+        check(
+            st.battery_full_life_time == 14_400,
+            c"BatteryFullLifeTime",
+            7,
+        );
 
         // Lecteur vidéo : garder l'écran et le système éveillés.
-        let first = SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
+        let first =
+            SetThreadExecutionState(ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED);
         check(first & ES_CONTINUOUS != 0, c"SetThreadExecutionState", 8);
         let previous = SetThreadExecutionState(ES_CONTINUOUS);
         check(
-            previous & (ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED) == ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED,
+            previous & (ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED)
+                == ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED,
             c"SetThreadExecutionState (etat precedent)",
             9,
         );
@@ -76,13 +86,25 @@ pub extern "C" fn mainCRTStartup() -> ! {
         );
 
         check(active() == BALANCED, c"mode par defaut Equilibre", 12);
-        check(PowerSetActiveScheme(null_mut(), &SAVER) == 0, c"PowerSetActiveScheme", 13);
+        check(
+            PowerSetActiveScheme(null_mut(), &SAVER) == 0,
+            c"PowerSetActiveScheme",
+            13,
+        );
         check(active() == SAVER, c"mode Economie applique", 14);
         let mut st = SystemPowerStatus::default();
         GetSystemPowerStatus(&mut st);
-        check(st.system_status_flag == 1, c"SystemStatusFlag (economiseur)", 15);
+        check(
+            st.system_status_flag == 1,
+            c"SystemStatusFlag (economiseur)",
+            15,
+        );
         let unknown = [0u8; 16];
-        check(PowerSetActiveScheme(null_mut(), &unknown) != 0, c"GUID inconnu refuse", 16);
+        check(
+            PowerSetActiveScheme(null_mut(), &unknown) != 0,
+            c"GUID inconnu refuse",
+            16,
+        );
         let mut size = 0u32;
         check(
             PowerReadFriendlyName(null_mut(), &SAVER, null(), null(), null_mut(), &mut size) == 0
@@ -90,7 +112,11 @@ pub extern "C" fn mainCRTStartup() -> ! {
             c"PowerReadFriendlyName",
             17,
         );
-        check(PowerSetActiveScheme(null_mut(), &BALANCED) == 0, c"retour Equilibre", 18);
+        check(
+            PowerSetActiveScheme(null_mut(), &BALANCED) == 0,
+            c"retour Equilibre",
+            18,
+        );
         printf(c"power_api: OK\n".as_ptr());
         exit(0)
     }

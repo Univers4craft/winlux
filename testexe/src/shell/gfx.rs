@@ -2494,7 +2494,15 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
             let p = pal();
             ellipse(hdc, b, x + 1, y + 1, x + s - 1, y + s - 1, p.accent);
             let t = (s / 9).max(2);
-            ellipse(hdc, b, x + 1 + t, y + 1 + t, x + s - 1 - t, y + s - 1 - t, glyph_bg());
+            ellipse(
+                hdc,
+                b,
+                x + 1 + t,
+                y + 1 + t,
+                x + s - 1 - t,
+                y + s - 1 - t,
+                glyph_bg(),
+            );
             let cx = x + s / 2;
             let cy = y + s / 2;
             let w = (s / 14).max(1);
@@ -2516,10 +2524,26 @@ pub unsafe fn glyph(hdc: Handle, b: &mut Brushes, f: &Fonts, g: Glyph, x: i32, y
             // Coche claire au centre.
             let w = (s / 12).max(1);
             for i in 0..s / 6 {
-                fill(hdc, b, x + s / 3 + i, y + s / 2 + i, x + s / 3 + i + w, y + s / 2 + i + w, p.on_accent);
+                fill(
+                    hdc,
+                    b,
+                    x + s / 3 + i,
+                    y + s / 2 + i,
+                    x + s / 3 + i + w,
+                    y + s / 2 + i + w,
+                    p.on_accent,
+                );
             }
             for i in 0..s / 3 {
-                fill(hdc, b, x + s / 2 + i - 1, y + s * 2 / 3 - i, x + s / 2 + i - 1 + w, y + s * 2 / 3 - i + w, p.on_accent);
+                fill(
+                    hdc,
+                    b,
+                    x + s / 2 + i - 1,
+                    y + s * 2 / 3 - i,
+                    x + s / 2 + i - 1 + w,
+                    y + s * 2 / 3 - i + w,
+                    p.on_accent,
+                );
             }
         }
         Glyph::Wifi => {

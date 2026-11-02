@@ -55,7 +55,7 @@ const STATUS_UNWIND_CONSOLIDATE: u32 = 0x8000_0029;
 const STATUS_NONCONTINUABLE_EXCEPTION: u32 = 0xC000_0025;
 const STATUS_INVALID_DISPOSITION: u32 = 0xC000_0026;
 
-const EXCEPTION_CONTINUE_EXECUTION: i32 = -1;
+pub(crate) const EXCEPTION_CONTINUE_EXECUTION: i32 = -1;
 
 const DISPOSITION_CONTINUE_EXECUTION: u32 = 0;
 const DISPOSITION_CONTINUE_SEARCH: u32 = 1;
@@ -279,11 +279,77 @@ pub unsafe extern "win64" fn rtl_restore_context(ctx: *mut u8, rec: *mut Excepti
     resume(&target)
 }
 
-unsafe fn resume(ctx: &Context) -> ! {
+pub(crate) unsafe fn resume(ctx: &Context) -> ! {
     // Les cadres de Winlux abandonnés par ce saut ne sont plus déroulables.
     let rsp = ctx.get(CTX_RSP);
     FRAMES.with(|f| f.borrow_mut().retain(|e| e.rsp >= rsp));
+    // Drapeau TF (pas à pas) : `popfq ; ret` lèverait le piège avant la
+    // première instruction cible ; `iretq` l'exécute d'abord, comme Windows.
+    if ctx.get(CTX_EFLAGS) & 0x100 != 0 {
+        load_context_iret(ctx.0.as_ptr())
+    }
     load_context(ctx.0.as_ptr())
+}
+
+pub const CTX_EFLAGS: usize = 0x44;
+
+/// Comme `load_context`, mais reprend par `iretq` (RIP, CS, RFLAGS, RSP,
+/// SS posés sous la pile cible) : un drapeau TF prend effet après la
+/// première instruction reprise.
+#[unsafe(naked)]
+unsafe extern "win64" fn load_context_iret(_ctx: *const u8) -> ! {
+    core::arch::naked_asm!(
+        "movdqu xmm0, [rcx + 0x1A0]",
+        "movdqu xmm1, [rcx + 0x1B0]",
+        "movdqu xmm2, [rcx + 0x1C0]",
+        "movdqu xmm3, [rcx + 0x1D0]",
+        "movdqu xmm4, [rcx + 0x1E0]",
+        "movdqu xmm5, [rcx + 0x1F0]",
+        "movdqu xmm6, [rcx + 0x200]",
+        "movdqu xmm7, [rcx + 0x210]",
+        "movdqu xmm8, [rcx + 0x220]",
+        "movdqu xmm9, [rcx + 0x230]",
+        "movdqu xmm10, [rcx + 0x240]",
+        "movdqu xmm11, [rcx + 0x250]",
+        "movdqu xmm12, [rcx + 0x260]",
+        "movdqu xmm13, [rcx + 0x270]",
+        "movdqu xmm14, [rcx + 0x280]",
+        "movdqu xmm15, [rcx + 0x290]",
+        "ldmxcsr [rcx + 0x34]",
+        // Trame iretq 64 octets sous la pile cible, alignée sur 16.
+        "mov rax, [rcx + 0x98]",
+        "sub rax, 64",
+        "and rax, -16",
+        "mov rdx, [rcx + 0xF8]",
+        "mov [rax], rdx",
+        "xor edx, edx",
+        "mov dx, cs",
+        "mov [rax + 8], rdx",
+        "mov edx, [rcx + 0x44]",
+        "mov [rax + 16], rdx",
+        "mov rdx, [rcx + 0x98]",
+        "mov [rax + 24], rdx",
+        "xor edx, edx",
+        "mov dx, ss",
+        "mov [rax + 32], rdx",
+        "mov rdx, [rcx + 0x88]",
+        "mov rbx, [rcx + 0x90]",
+        "mov rbp, [rcx + 0xA0]",
+        "mov rsi, [rcx + 0xA8]",
+        "mov rdi, [rcx + 0xB0]",
+        "mov r8, [rcx + 0xB8]",
+        "mov r9, [rcx + 0xC0]",
+        "mov r10, [rcx + 0xC8]",
+        "mov r11, [rcx + 0xD0]",
+        "mov r12, [rcx + 0xD8]",
+        "mov r13, [rcx + 0xE0]",
+        "mov r14, [rcx + 0xE8]",
+        "mov r15, [rcx + 0xF0]",
+        "mov rsp, rax",
+        "mov rax, [rcx + 0x78]",
+        "mov rcx, [rcx + 0x80]",
+        "iretq",
+    )
 }
 
 // ============================================================
@@ -519,6 +585,39 @@ pub unsafe extern "win64" fn rtl_install_function_table_callback(
         context,
     });
     1
+}
+
+/// Pour le gestionnaire de fautes (contexte de signal) : `pc` est-il dans
+/// du code déclaré par une table dynamique ? `None` si la liste est occupée.
+/// N'appelle jamais les rappels de RtlInstallFunctionTableCallback.
+pub(crate) fn dynamic_contains_try(pc: u64) -> Option<bool> {
+    let tables = DYNAMIC.try_lock().ok()?;
+    let in_entries = |entries: usize, n: usize, base: u64| unsafe {
+        (0..n).any(|i| {
+            let e = (entries + i * 12) as *const u32;
+            let begin = base + e.read_unaligned() as u64;
+            let end = base + e.add(1).read_unaligned() as u64;
+            pc >= begin && pc < end
+        })
+    };
+    Some(tables.iter().any(|t| match *t {
+        DynamicTable::Static {
+            entries,
+            count,
+            base,
+        } => in_entries(entries, count as usize, base),
+        DynamicTable::Growable {
+            entries,
+            count,
+            base,
+            ..
+        } => in_entries(
+            entries,
+            count.load(std::sync::atomic::Ordering::Acquire) as usize,
+            base,
+        ),
+        DynamicTable::Callback { base, length, .. } => pc >= base && pc < base + length as u64,
+    }))
 }
 
 /// Cherche `pc` dans les tables dynamiques. Renvoie (entrée, base) ; une
@@ -1015,9 +1114,9 @@ pub extern "win64" fn rtl_remove_vectored_continue_handler(handle: usize) -> u32
 }
 
 #[repr(C)]
-struct ExceptionPointers {
-    record: *mut ExceptionRecord,
-    context: *mut u8,
+pub(crate) struct ExceptionPointers {
+    pub(crate) record: *mut ExceptionRecord,
+    pub(crate) context: *mut u8,
 }
 
 unsafe fn call_vectored(rec: *mut ExceptionRecord, ctx: *mut u8, continue_handlers: bool) -> bool {

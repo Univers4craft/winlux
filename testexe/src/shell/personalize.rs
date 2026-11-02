@@ -729,7 +729,8 @@ fn prisme(x: i32, y: i32, w: i32, h: i32, light: bool) -> u32 {
         lerp(c, hex(0x0B244A), (u - 300).max(0) * 8 / 10)
     };
     // Halo : distance au centre en millièmes de la largeur.
-    let r = isqrt(((u - 500) as i64).pow(2) + ((v - 470) as i64 * h as i64 / w as i64).pow(2)) as i32;
+    let r =
+        isqrt(((u - 500) as i64).pow(2) + ((v - 470) as i64 * h as i64 / w as i64).pow(2)) as i32;
     let halo = (1000 - r * 1000 / 420).max(0);
     let halo = halo * halo / 1000;
     c = lerp(
@@ -759,7 +760,11 @@ fn prisme(x: i32, y: i32, w: i32, h: i32, light: bool) -> u32 {
         let q = 1000 - d * d / 4000;
         let band = q * q / 1000;
         let k = band * gain / 1000 * 55 / 100 * fade / 1000;
-        c = if light { lerp(c, col, k) } else { add(c, col, k) };
+        c = if light {
+            lerp(c, col, k)
+        } else {
+            add(c, col, k)
+        };
     }
     // Logo au centre : facettes et bord lissé (couverture estimée).
     let s = h * 20 / 100;
@@ -998,11 +1003,7 @@ pub unsafe fn paint_desktop(hdc: Handle, w: i32, h: i32) {
 
 pub const SOUNDS: [(&[u8], &[u8], &[u8]); 7] = [
     (b"Aucun", b"none", b"D\xE9marrage silencieux."),
-    (
-        b"Aurore",
-        b"aurore",
-        b"Arp\xE8ge chaleureux et lumineux.",
-    ),
+    (b"Aurore", b"aurore", b"Arp\xE8ge chaleureux et lumineux."),
     (
         b"Cristal",
         b"cristal",
@@ -1147,7 +1148,13 @@ unsafe fn synth(id: usize) -> usize {
             n(0, 130_810, 2200, 230, Voice::Pad);
             n(60, 196_000, 2000, 170, Voice::Pad);
             for (k, f) in [523_250, 783_990, 1_174_660, 1_567_980].iter().enumerate() {
-                n(140 + k as u32 * 120, *f, 1500 - k as u32 * 120, 300, Voice::Bell);
+                n(
+                    140 + k as u32 * 120,
+                    *f,
+                    1500 - k as u32 * 120,
+                    300,
+                    Voice::Bell,
+                );
             }
             n(620, 2_349_320, 1100, 140, Voice::Bell);
             n(620, 587_330, 1300, 200, Voice::Sine);
@@ -3188,9 +3195,24 @@ const PERSO_LABELS: &[(&[u8], &[u8], &[u8], &[u8])] = &[
         b"La firma de Winlux: un acorde que se ilumina de grave a agudo.",
         b"Die Winlux-Signatur: ein Akkord, der sich von tief nach hoch aufhellt.",
     ),
-    (b"Winlux classique", b"Winlux classic", b"Winlux cl\xE1sico", b"Winlux klassisch"),
-    (b"Winlux Nuit", b"Winlux Night", b"Winlux Noche", b"Winlux Nacht"),
-    (b"Winlux Aube", b"Winlux Dawn", b"Winlux Amanecer", b"Winlux Morgengrauen"),
+    (
+        b"Winlux classique",
+        b"Winlux classic",
+        b"Winlux cl\xE1sico",
+        b"Winlux klassisch",
+    ),
+    (
+        b"Winlux Nuit",
+        b"Winlux Night",
+        b"Winlux Noche",
+        b"Winlux Nacht",
+    ),
+    (
+        b"Winlux Aube",
+        b"Winlux Dawn",
+        b"Winlux Amanecer",
+        b"Winlux Morgengrauen",
+    ),
     (b"Cristal", b"Crystal", b"Cristal", b"Kristall"),
     (
         b"Clochettes claires et l\xE9g\xE8res.",

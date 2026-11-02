@@ -425,7 +425,12 @@ unsafe fn toast_named(prefix: &[u8], name: &[u8]) {
 unsafe fn report_save(ok: bool, name: &[u8]) {
     if ok {
         toast_named(
-            tr4(&[b"Enregistr\xE9 : ", b"Saved: ", b"Guardado: ", b"Gespeichert: "]),
+            tr4(&[
+                b"Enregistr\xE9 : ",
+                b"Saved: ",
+                b"Guardado: ",
+                b"Gespeichert: ",
+            ]),
             name,
         );
     } else {
@@ -692,7 +697,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
     // === Save-as bar ===
     let find_y = my + MENU_H;
     let ey = if ST.save_open {
-        fill(g.hdc, g.b, r.left, find_y, r.right, find_y + FIND_H, p.surface2);
+        fill(
+            g.hdc,
+            g.b,
+            r.left,
+            find_y,
+            r.right,
+            find_y + FIND_H,
+            p.surface2,
+        );
         let label = tr4(&[
             b"Enregistrer sous :",
             b"Save as:",
@@ -717,7 +730,15 @@ pub unsafe fn draw(g: &mut Gfx, f: &Frame) {
         let shown = &ST.save_buf[ST.save_len.saturating_sub(cw_field)..ST.save_len];
         text(g.hdc, mono(), p.text, field_x + 4, find_y + 8, shown);
         let scx = field_x + 4 + text_width(shown, CHAR_H);
-        fill(g.hdc, g.b, scx, find_y + 7, scx + 1, find_y + FIND_H - 7, p.text);
+        fill(
+            g.hdc,
+            g.b,
+            scx,
+            find_y + 7,
+            scx + 1,
+            find_y + FIND_H - 7,
+            p.text,
+        );
         text(g.hdc, g.f.small, p.text3, r.right - 24, find_y + 9, b"x");
         find_y + FIND_H
     } else if ST.find_open {
