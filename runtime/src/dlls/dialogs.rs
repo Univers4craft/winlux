@@ -389,6 +389,13 @@ unsafe fn create_from_template(
                 rect.height(),
             );
         }
+        // Jamais hors de l'écran (propriétaire petit ou près d'un bord).
+        let screen = gui::work_area();
+        if screen.width() > 0 && screen.height() > 0 {
+            let x = rect.left.min(screen.right - rect.width()).max(screen.left);
+            let y = rect.top.min(screen.bottom - rect.height()).max(screen.top);
+            rect = Rect::from_size(x, y, rect.width(), rect.height());
+        }
     }
     let class = class_name(&t.class).unwrap_or_else(|| DIALOG_CLASS.to_string());
     let class_w = wide_str(&class);
@@ -1149,16 +1156,21 @@ pub unsafe extern "win64" fn map_dialog_rect(dlg: usize, rect: *mut Rect) -> i32
 
 // ---------- MessageBox ----------
 
-/// Libellés des boutons dans la langue de la session.
-fn labels() -> [&'static str; 9] {
+/// Langue de la session (deux lettres : fr, de, es, en…).
+pub fn session_lang() -> String {
     let lang = std::env::var("LC_ALL")
         .ok()
         .filter(|v| !v.is_empty())
         .or_else(|| std::env::var("LC_MESSAGES").ok().filter(|v| !v.is_empty()))
         .or_else(|| std::env::var("LANG").ok())
         .unwrap_or_default();
+    lang.get(..2).unwrap_or("en").to_ascii_lowercase()
+}
+
+/// Libellés des boutons dans la langue de la session.
+fn labels() -> [&'static str; 9] {
     // OK, Annuler, Abandonner, Réessayer, Ignorer, Oui, Non, Recommencer, Continuer
-    match lang.get(..2).unwrap_or("") {
+    match session_lang().as_str() {
         "fr" => [
             "OK",
             "Annuler",
@@ -1309,6 +1321,68 @@ fn message_box_template(text: &str, caption: &str, kind: u32) -> Vec<u8> {
         x += bw + gap;
     }
     out
+}
+
+/// Boîte modale propre à Winlux (boîtes communes de comdlg32) : le modèle ne
+/// décrit que le cadre, `w` × `h` pixels de zone cliente ; la procédure crée
+/// ses contrôles en pixels pendant `WM_INITDIALOG` (voir [`add_control`]).
+pub unsafe fn run_builtin(
+    owner: usize,
+    caption: &str,
+    w: i32,
+    h: i32,
+    proc_addr: usize,
+    init: isize,
+) -> isize {
+    let base = base_units(super::gdi32::get_stock_object(17));
+    let mut out: Vec<u8> = Vec::new();
+    out.extend_from_slice(&(0x80C8_0000 | DS_CENTER | 0x80).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes());
+    out.extend_from_slice(&0u16.to_le_bytes()); // aucun élément
+    let du_w = (w * 4 + base.0 - 1) / base.0;
+    let du_h = (h * 8 + base.1 - 1) / base.1;
+    for v in [0, 0, du_w, du_h] {
+        out.extend_from_slice(&(v as i16 as u16).to_le_bytes());
+    }
+    out.extend_from_slice(&[0, 0, 0, 0]); // pas de menu, classe par défaut
+    for u in caption.encode_utf16().chain([0]) {
+        out.extend_from_slice(&u.to_le_bytes());
+    }
+    dialog_box(0, Some(&out), owner, proc_addr, init, true)
+}
+
+/// Contrôle enfant d'une boîte de Winlux, placé en pixels, avec la police
+/// de la boîte. `WS_CHILD | WS_VISIBLE` sont ajoutés.
+pub unsafe fn add_control(
+    dlg: usize,
+    class: &str,
+    text: &str,
+    id: usize,
+    style: u32,
+    ex_style: u32,
+    rect: (i32, i32, i32, i32),
+) -> usize {
+    let class = wide_str(class);
+    let text = wide_str(text);
+    let hwnd = user32::create_window_ex_w(
+        ex_style,
+        class.as_ptr(),
+        text.as_ptr(),
+        WS_CHILD | WS_VISIBLE | style,
+        rect.0,
+        rect.1,
+        rect.2,
+        rect.3,
+        dlg,
+        id,
+        0,
+        std::ptr::null_mut(),
+    );
+    let font = user32::send_message_w(dlg, WM_GETFONT, 0, 0);
+    if hwnd != 0 && font != 0 {
+        user32::send_message_w(hwnd, WM_SETFONT, font as usize, 0);
+    }
+    hwnd
 }
 
 unsafe extern "win64" fn message_box_proc(hwnd: usize, msg: u32, wp: usize, _lp: isize) -> isize {
