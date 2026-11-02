@@ -66,7 +66,7 @@ def parent_case():
                 # Ce qu'écrit winlux-personalize theme light|dark (priorité « utilisateur »).
                 bg, fg, surface = ("#181b24", "#ecedf5", "#242a38") if dark else ("#f3f5fa", "#202430", "#ffffff")
                 css += (f"\n/* Winlux appearance */\nwindow, window box, list, viewport {{background-color:{bg}; color:{fg};}} "
-                        f"button {{background:{surface}; color:{fg}; border-color:#8178b7;}} "
+                        f"button {{background:{surface}; color:{fg}; border-color:#6a3df0;}} "
                         f"entry {{background:{surface}; color:{fg};}}\n/* End Winlux appearance */\n")
             (config / "gtk-3.0/gtk.css").write_text(css, encoding="utf-8")
             # Barre des tâches réelle : horloge et icônes pointées vers le dépôt.

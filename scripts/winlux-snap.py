@@ -259,7 +259,7 @@ def other_windows(exclude, desktop=None):
 # ── Toujours au premier plan (Windows + Ctrl + T) ──────────────────────────
 
 ONTOP_BORDER = 3          # épaisseur du cadre coloré, en pixels
-ONTOP_COLOR = "#8178b7"   # couleur d'accent de Winlux
+ONTOP_COLOR = "#6a3df0"   # couleur d'accent de Winlux
 
 
 def is_above(window):
@@ -344,10 +344,10 @@ CSS = b"""
   .heading { font-weight: bold; }
   .subtitle { color: #adb6c9; font-size: 12px; }
   button.zone { background: #3a4254; border: 1px solid #56607a; border-radius: 4px; min-width: 10px; min-height: 10px; padding: 0; }
-  button.zone:hover { background: #8178b7; border-color: #b8b0ff; }
+  button.zone:hover { background: #6a3df0; border-color: #b8b0ff; }
   .layout { background: #2a3040; border-radius: 6px; padding: 6px; }
   button.window { background: #2a3040; border: 1px solid #48536b; border-radius: 6px; padding: 10px; color: #ecedf5; }
-  button.window:hover { background: #343b4e; border-color: #8178b7; }
+  button.window:hover { background: #343b4e; border-color: #b69cff; }
 """
 
 
