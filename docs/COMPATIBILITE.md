@@ -302,8 +302,8 @@ Reste : `wglUseFontBitmaps` et le rendu dans un bitmap (`PFD_DRAW_TO_BITMAP`).
 `d3dcompiler_47.dll` sont normalement installés par le « redistribuable » de
 Visual Studio ou de DirectX. Beaucoup d'applis supposent qu'ils sont déjà là
 (wxPython : 22 modules en dépendent). Winlux ne les fournit pas et son
-chargeur ne cherche que dans le dossier de l'appli, le dossier courant et
-`PATH` : il n'existe pas de `C:\Windows\System32`.
+chargeur ne cherchait que dans le dossier de l'appli, le dossier courant et
+`PATH` : il n'existait pas de `C:\Windows\System32`.
 
 Ce qu'il faut : un dossier système où les installeurs peuvent déposer leurs
 DLL (et que le chargeur parcourt), le support des installeurs WiX Burn
@@ -313,6 +313,29 @@ existante).
 
 Ampleur : **S** pour le dossier système, **M** pour Burn, **L** pour une
 `msvcp140` complète. Suivi : #234.
+
+**Fait (novembre 2026).**
+- `C:\Windows\System32` est parcouru par le chargeur juste après le dossier
+  de l'appli, dans l'ordre de Windows (`loader::find_dll_file`).
+- Les bundles WiX Burn s'installent sans exécuter leur moteur
+  (`runtime/src/setup/burn.rs`) : Winlux lit la section `.wixburn`, extrait
+  les conteneurs (cabinets), lit `BurnManifest.xml` et installe la chaîne.
+  Les paquets MSI passent par le msiexec maison, les `.exe` sont relancés
+  avec leurs arguments d'installation, `.msu`/`.msp` sont ignorés.
+  `/uninstall` retire les paquets. Un MSI 32 bits dépose ses DLL système
+  dans `SysWOW64`, comme sous Windows 64 bits. Les redistribuables
+  arrivent donc avec les applis, après l'installation de Winlux, et ne sont
+  pas dans l'ISO.
+- Une `msvcp140` maison sert quand aucun redistribuable n'est installé :
+  threads, mutex et variables de condition (compatibles avec les deux
+  dispositions du STL), horloges, `random_device`, tables d'erreurs. Les
+  `_X*` (erreurs fatales de conteneur) arrêtent le programme avec un
+  message au lieu de lever l'exception C++. La vraie `msvcp140.dll`, si
+  elle est présente, passe toujours avant (`dlls::prefers_real_file`).
+- Vérifié par `system32_suite.exe` et par un bundle de test réel (MSI
+  produit par wixl) dans les tests unitaires.
+- Reste : flux et locale C++ (`iostream`), MFC, `concrt140`, `vcomp140`,
+  et `d3dcompiler_47` (avec #137).
 
 ### 6. HTTPS et sécurité des applications
 
@@ -331,6 +354,35 @@ comme le curl de `winhttp`), les magasins de certificats branchés sur
 WinINet sur le même moteur que WinHTTP.
 
 Ampleur : **L**. Suivi : #235.
+
+**Fait (novembre 2026).**
+- WinINet (`InternetOpen`, `InternetOpenUrl`, `HttpOpenRequest`,
+  `HttpSendRequest`, `HttpQueryInfo`…) passe par le moteur de WinHTTP ;
+  urlmon fournit `URLDownloadToFile` et `URLDownloadToCacheFile`.
+- `crypt32` donne de vrais certificats : `CERT_CONTEXT` et `CERT_INFO`
+  remplis par un lecteur DER maison, magasin `ROOT` alimenté par les
+  autorités de l'hôte (`/etc/ssl/certs/ca-certificates.crt`), magasins en
+  mémoire, recherche (SHA-1, sujet, émetteur), propriétés de condensat,
+  `CertGetNameString`, `CertNameToStr`, `CryptStringToBinary` et
+  `CryptBinaryToString`. Les chaînes (`CertGetCertificateChain`) et la
+  stratégie SSL (`CertVerifyCertificateChainPolicy`, nom du serveur compris)
+  sont vérifiées par l'OpenSSL de l'hôte (`runtime/src/dlls/hostssl.rs`).
+- Schannel (`runtime/src/dlls/schannel.rs`) : `AcquireCredentialsHandle`,
+  `InitializeSecurityContext` (codes `SEC_I_CONTINUE_NEEDED`,
+  `SEC_E_INCOMPLETE_MESSAGE`, tampons `EXTRA` et `MISSING` comme Windows),
+  `EncryptMessage`, `DecryptMessage`, fermeture par `ApplyControlToken`,
+  attributs (tailles du flux, certificat du serveur, protocole, ALPN) et la
+  table `InitSecurityInterface`. Le certificat du serveur est validé
+  automatiquement avec les autorités du système, sauf validation manuelle
+  demandée par l'appli. Kerberos, NTLM et Negotiate restent absents.
+- CryptoAPI : `CryptCreateHash`, `CryptHashData`, `CryptGetHashParam`,
+  `CryptDuplicateHash` (MD5, SHA-1, SHA-2) ; `bcrypt` gagne MD5, SHA-384,
+  SHA-512 et HMAC.
+- Vérifié par `tls_suite.exe` (poignée de main réelle contre un serveur
+  `openssl s_server` jetable, `scripts/run-tls-suite.sh`) et par les tests
+  unitaires.
+- Reste : `ncrypt`, clés de la CryptoAPI (`CryptGenKey`, `CryptEncrypt`),
+  `CryptProtectData`, certificats client, rôle serveur de Schannel.
 
 ### 7. Shaders Direct3D 10/11/12 — tous les jeux récents
 
