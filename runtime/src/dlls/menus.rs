@@ -56,10 +56,15 @@ pub fn create() -> usize {
     h
 }
 
-#[allow(dead_code)] // affichage des menus (à venir)
 /// Éléments d'un menu (copie), pour l'affichage.
 pub fn items(menu: usize) -> Option<Vec<Item>> {
     lock(menus()).menus.get(&menu).cloned()
+}
+
+/// Menu système d'une fenêtre (ou l'un de ses sous-menus) : ses commandes
+/// partent en WM_SYSCOMMAND.
+pub fn is_system_menu(menu: usize) -> bool {
+    lock(menus()).system_menu.values().any(|&h| h == menu)
 }
 
 /// Position d'un élément : par position, ou par identifiant de commande

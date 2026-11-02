@@ -489,6 +489,8 @@ _TR = {
     'Affiche la météo ; un clic ouvre les widgets.': ('Shows the weather; a click opens the widgets.', 'Muestra el tiempo; un clic abre los widgets.', 'Zeigt das Wetter; ein Klick öffnet die Widgets.'),
     'Lieu de la météo': ('Weather location', 'Ubicación del tiempo', 'Wetterort'),
     'Vide : d’après la connexion Internet. Données de wttr.in.': ('Empty: based on the Internet connection. Data from wttr.in.', 'Vacío: según la conexión a Internet. Datos de wttr.in.', 'Leer: anhand der Internetverbindung. Daten von wttr.in.'),
+    'Météo en ligne': ('Online weather', 'Tiempo en línea', 'Onlinewetter'),
+    'Désactivée par défaut. Activée, le service wttr.in reçoit votre adresse IP et le lieu.': ('Off by default. When on, the wttr.in service receives your IP address and the place.', 'Desactivado de forma predeterminada. Activado, el servicio wttr.in recibe su dirección IP y el lugar.', 'Standardmäßig aus. Eingeschaltet erhält der Dienst wttr.in Ihre IP-Adresse und den Ort.'),
     'Unité de température': ('Temperature unit', 'Unidad de temperatura', 'Temperatureinheit'),
     'Celsius (°C)': ('Celsius (°C)', 'Celsius (°C)', 'Celsius (°C)'),
     'Fahrenheit (°F)': ('Fahrenheit (°F)', 'Fahrenheit (°F)', 'Fahrenheit (°F)'),
@@ -497,24 +499,37 @@ _TR = {
     'Images du compte': ('Account pictures', 'Imágenes de la cuenta', 'Bilder des Kontos'),
     'Ouvrir les widgets': ('Open widgets', 'Abrir widgets', 'Widgets öffnen'),
     'Rétablir les widgets par défaut': ('Restore default widgets', 'Restablecer los widgets predeterminados', 'Standard-Widgets wiederherstellen'),
-    # Assistant Claude (#286)
-    'Assistant Claude dans la barre des tâches': ('Claude assistant on the taskbar', 'Asistente Claude en la barra de tareas', 'Claude-Assistent in der Taskleiste'),
-    'Un bouton Claude dans la barre des tâches, et Windows+C, pour poser une question sur Winlux : pourquoi un programme .exe ne s’ouvre pas, où est un fichier, comment changer un réglage.': ('A Claude button on the taskbar, and Windows+C, to ask a question about Winlux: why an .exe program won’t open, where a file is, how to change a setting.', 'Un botón Claude en la barra de tareas, y Windows+C, para preguntar sobre Winlux: por qué no se abre un programa .exe, dónde está un archivo, cómo cambiar un ajuste.', 'Eine Claude-Schaltfläche in der Taskleiste und Windows+C, um Fragen zu Winlux zu stellen: warum ein .exe-Programm nicht startet, wo eine Datei liegt, wie man eine Einstellung ändert.'),
+    # Assistant IA (#286) : Claude, ChatGPT, IA locale
+    'Un bouton dans la barre des tâches, et Windows+C, pour poser une question sur Winlux. Activez un ou plusieurs assistants ; s’il y en a plusieurs, on choisit dans le panneau.': ('A button on the taskbar, and Windows+C, to ask a question about Winlux. Turn on one or more assistants; with several, you choose in the panel.', 'Un botón en la barra de tareas, y Windows+C, para preguntar sobre Winlux. Active uno o varios asistentes; si hay varios, se elige en el panel.', 'Eine Schaltfläche in der Taskleiste und Windows+C, um Fragen zu Winlux zu stellen. Aktivieren Sie einen oder mehrere Assistenten; bei mehreren wählen Sie im Fenster.'),
+    'Claude': ('Claude', 'Claude', 'Claude'),
+    'ChatGPT': ('ChatGPT', 'ChatGPT', 'ChatGPT'),
+    'IA locale': ('Local AI', 'IA local', 'Lokale KI'),
+    'Le modèle d’Anthropic, avec votre compte Claude. Le plus fin pour expliquer pourquoi un programme .exe ne s’ouvre pas.': ('Anthropic’s model, with your Claude account. The sharpest at explaining why an .exe program won’t open.', 'El modelo de Anthropic, con su cuenta de Claude. El más preciso para explicar por qué no se abre un programa .exe.', 'Das Modell von Anthropic mit Ihrem Claude-Konto. Erklärt am genauesten, warum ein .exe-Programm nicht startet.'),
+    'Le modèle d’OpenAI, avec votre compte ChatGPT.': ('OpenAI’s model, with your ChatGPT account.', 'El modelo de OpenAI, con su cuenta de ChatGPT.', 'Das Modell von OpenAI mit Ihrem ChatGPT-Konto.'),
+    'Une petite IA qui tourne sur ce PC, sans compte ni Internet. Trois agents : retrouver un fichier et l’ouvrir dans l’Explorateur, changer un réglage, aider sur un programme.': ('A small AI that runs on this PC, with no account or Internet. Three agents: find a file and open it in File Explorer, change a setting, help with a program.', 'Una pequeña IA que funciona en este equipo, sin cuenta ni Internet. Tres agentes: encontrar un archivo y abrirlo en el Explorador, cambiar un ajuste, ayudar con un programa.', 'Eine kleine KI, die auf diesem PC läuft, ohne Konto und ohne Internet. Drei Agenten: eine Datei finden und im Explorer öffnen, eine Einstellung ändern, bei einem Programm helfen.'),
     'À l’activation, Claude Code est téléchargé s’il manque (environ 300 Mo), puis vous vous connectez à votre compte Claude (Google, e-mail…).': ('When you turn it on, Claude Code is downloaded if needed (about 300 MB), then you sign in to your Claude account (Google, email…).', 'Al activarlo, se descarga Claude Code si falta (unos 300 MB) y luego inicia sesión en su cuenta de Claude (Google, correo…).', 'Beim Aktivieren wird Claude Code bei Bedarf heruntergeladen (etwa 300 MB), dann melden Sie sich bei Ihrem Claude-Konto an (Google, E-Mail…).'),
-    'Compte Claude': ('Claude account', 'Cuenta de Claude', 'Claude-Konto'),
+    'À l’activation, Codex, l’outil officiel d’OpenAI, est téléchargé (environ 170 Mo), puis vous vous connectez à votre compte ChatGPT (Google, e-mail…).': ('When you turn it on, Codex, OpenAI’s official tool, is downloaded (about 170 MB), then you sign in to your ChatGPT account (Google, email…).', 'Al activarlo, se descarga Codex, la herramienta oficial de OpenAI (unos 170 MB), y luego inicia sesión en su cuenta de ChatGPT (Google, correo…).', 'Beim Aktivieren wird Codex, das offizielle Werkzeug von OpenAI, heruntergeladen (etwa 170 MB), dann melden Sie sich bei Ihrem ChatGPT-Konto an (Google, E-Mail…).'),
+    'À l’activation, le moteur llama.cpp (environ 30 Mo) et le modèle Qwen2.5 1,5B (environ 1,1 Go) sont téléchargés. Elle ne tourne que lorsque son panneau est ouvert.': ('When you turn it on, the llama.cpp engine (about 30 MB) and the Qwen2.5 1.5B model (about 1.1 GB) are downloaded. It only runs while its panel is open.', 'Al activarla, se descargan el motor llama.cpp (unos 30 MB) y el modelo Qwen2.5 1,5B (unos 1,1 GB). Solo funciona mientras su panel está abierto.', 'Beim Aktivieren werden die llama.cpp-Engine (etwa 30 MB) und das Modell Qwen2.5 1,5B (etwa 1,1 GB) heruntergeladen. Sie läuft nur, solange ihr Fenster geöffnet ist.'),
+    'Compte {name}': ('{name} account', 'Cuenta de {name}', '{name}-Konto'),
+    'Modèle': ('Model', 'Modelo', 'Modell'),
+    'Supprimer l’IA locale': ('Remove the local AI', 'Eliminar la IA local', 'Lokale KI entfernen'),
+    'Pas encore téléchargé': ('Not downloaded yet', 'Aún no descargado', 'Noch nicht heruntergeladen'),
+    'Qwen2.5 1,5B, sur ce PC': ('Qwen2.5 1.5B, on this PC', 'Qwen2.5 1,5B, en este equipo', 'Qwen2.5 1,5B, auf diesem PC'),
+    'Terminer l’installation': ('Finish installing', 'Terminar la instalación', 'Installation abschließen'),
     'Vérification de la connexion…': ('Checking the sign-in…', 'Comprobando el inicio de sesión…', 'Anmeldung wird geprüft…'),
-    'Connecté': ('Signed in', 'Sesión iniciada', 'Angemeldet'),
+    'Connecté au compte': ('Signed in', 'Sesión iniciada', 'Angemeldet'),
     'Connecté : {account}': ('Signed in: {account}', 'Sesión iniciada: {account}', 'Angemeldet: {account}'),
     'Non connecté': ('Not signed in', 'Sin iniciar sesión', 'Nicht angemeldet'),
-    'Claude Code n’est pas installé': ('Claude Code is not installed', 'Claude Code no está instalado', 'Claude Code ist nicht installiert'),
     'Ouvrir l’assistant': ('Open the assistant', 'Abrir el asistente', 'Assistent öffnen'),
-    'Se connecter': ('Sign in', 'Iniciar sesión', 'Anmelden'),
+    'Se connecter au compte': ('Sign in', 'Iniciar sesión', 'Anmelden'),
     'Se déconnecter': ('Sign out', 'Cerrar sesión', 'Abmelden'),
     'Ce qui est envoyé': ('What is sent', 'Qué se envía', 'Was gesendet wird'),
-    'Seuls votre question et la conversation en cours partent vers Claude (Anthropic). Rien n’est gardé sur ce PC une fois la fenêtre fermée.': ('Only your question and the current conversation go to Claude (Anthropic). Nothing is kept on this PC once the window is closed.', 'Solo su pregunta y la conversación actual se envían a Claude (Anthropic). No se guarda nada en este equipo al cerrar la ventana.', 'Nur Ihre Frage und das aktuelle Gespräch gehen an Claude (Anthropic). Nach dem Schließen des Fensters bleibt nichts auf diesem PC gespeichert.'),
-    'Claude ne lit rien et ne change rien tout seul : chaque lecture (journal d’un programme, recherche de fichier) vous montre le texte exact avant l’envoi, et chaque action attend votre clic.': ('Claude reads and changes nothing on its own: each read (a program’s log, a file search) shows you the exact text before it is sent, and each action waits for your click.', 'Claude no lee ni cambia nada por sí solo: cada lectura (registro de un programa, búsqueda de archivos) le muestra el texto exacto antes del envío, y cada acción espera su clic.', 'Claude liest und ändert nichts von selbst: Jeder Lesezugriff (Protokoll eines Programms, Dateisuche) zeigt Ihnen vor dem Senden den genauen Text, und jede Aktion wartet auf Ihren Klick.'),
-    'La connexion à votre compte est gardée par Claude Code dans votre dossier personnel, lisible par vous seul.': ('The sign-in to your account is kept by Claude Code in your home folder, readable only by you.', 'El inicio de sesión de su cuenta lo guarda Claude Code en su carpeta personal, legible solo por usted.', 'Die Anmeldung bei Ihrem Konto speichert Claude Code in Ihrem persönlichen Ordner, nur für Sie lesbar.'),
-    'Désactivé, l’assistant n’apparaît nulle part et rien ne tourne.': ('When off, the assistant appears nowhere and nothing runs.', 'Desactivado, el asistente no aparece en ningún sitio y nada se ejecuta.', 'Ausgeschaltet erscheint der Assistent nirgends und nichts läuft.'),
+    'Claude et ChatGPT : seuls votre question et la conversation en cours partent vers Anthropic ou OpenAI. Rien n’est gardé sur ce PC une fois la fenêtre fermée.': ('Claude and ChatGPT: only your question and the current conversation go to Anthropic or OpenAI. Nothing is kept on this PC once the window is closed.', 'Claude y ChatGPT: solo su pregunta y la conversación actual se envían a Anthropic u OpenAI. No se guarda nada en este equipo al cerrar la ventana.', 'Claude und ChatGPT: Nur Ihre Frage und das aktuelle Gespräch gehen an Anthropic oder OpenAI. Nach dem Schließen des Fensters bleibt nichts auf diesem PC gespeichert.'),
+    'Ils ne lisent rien et ne changent rien tout seuls : chaque lecture (journal d’un programme, recherche de fichier) vous montre le texte exact avant l’envoi.': ('They read and change nothing on their own: each read (a program’s log, a file search) shows you the exact text before it is sent.', 'No leen ni cambian nada por sí solos: cada lectura (registro de un programa, búsqueda de archivos) le muestra el texto exacto antes del envío.', 'Sie lesen und ändern nichts von selbst: Jeder Lesezugriff (Protokoll eines Programms, Dateisuche) zeigt Ihnen vor dem Senden den genauen Text.'),
+    'IA locale : rien ne quitte ce PC. Ce qu’elle lit (recherche de fichier, journal) vous est montré.': ('Local AI: nothing leaves this PC. What it reads (file search, log) is shown to you.', 'IA local: nada sale de este equipo. Lo que lee (búsqueda de archivos, registro) se le muestra.', 'Lokale KI: Nichts verlässt diesen PC. Was sie liest (Dateisuche, Protokoll), wird Ihnen angezeigt.'),
+    'Pour les trois, chaque action (réglage, dossier, page des Paramètres) attend votre clic sur « Faire ».': ('For all three, each action (setting, folder, Settings page) waits for your click on “Do it”.', 'Para los tres, cada acción (ajuste, carpeta, página de Configuración) espera su clic en «Hacerlo».', 'Bei allen dreien wartet jede Aktion (Einstellung, Ordner, Einstellungsseite) auf Ihren Klick auf „Ausführen“.'),
+    'Les connexions à vos comptes sont gardées dans votre dossier personnel, lisibles par vous seul.': ('The sign-ins to your accounts are kept in your home folder, readable only by you.', 'Los inicios de sesión de sus cuentas se guardan en su carpeta personal, legibles solo por usted.', 'Die Anmeldungen bei Ihren Konten werden in Ihrem persönlichen Ordner gespeichert, nur für Sie lesbar.'),
+    'Désactivé, un assistant n’apparaît nulle part et rien ne tourne.': ('When off, an assistant appears nowhere and nothing runs.', 'Desactivado, un asistente no aparece en ningún sitio y nada se ejecuta.', 'Ausgeschaltet erscheint ein Assistent nirgends und nichts läuft.'),
 }
 
 
@@ -1410,6 +1425,9 @@ class ExtraPages:
         self.switch(box, _t("Bouton Widgets dans la barre des tâches"), prefs.get("button"),
                     lambda on: self.tool(["winlux-widgets", "set", "button", "on" if on else "off"], refresh=False),
                     _t("Affiche la météo ; un clic ouvre les widgets."))
+        self.switch(box, _t("Météo en ligne"), prefs.get("weather"),
+                    lambda on: self.tool(["winlux-widgets", "set", "weather", "on" if on else "off"], refresh=False),
+                    _t("Désactivée par défaut. Activée, le service wttr.in reçoit votre adresse IP et le lieu."))
         place = Gtk.Box(spacing=6)
         entry = Gtk.Entry(text=prefs.get("location", ""), placeholder_text=_t("Automatique"), width_chars=20)
         entry.get_accessible().set_name(_t("Lieu de la météo"))
@@ -2286,59 +2304,88 @@ class ExtraPages:
             for name in accounts:
                 self.switch(box, name, name in allowed, lambda on, n=name: self.execute("remote-allow" if on else "remote-deny", n))
 
-    # ── Assistant Claude (#286) : désactivé par défaut ──
+    # ── Assistant IA (#286) : Claude, ChatGPT, IA locale, tous désactivés par défaut ──
+
+    ASSISTANTS = (
+        ("claude", "Claude",
+         "Le modèle d’Anthropic, avec votre compte Claude. Le plus fin pour expliquer pourquoi un programme .exe ne s’ouvre pas.",
+         "À l’activation, Claude Code est téléchargé s’il manque (environ 300 Mo), puis vous vous connectez à votre compte Claude (Google, e-mail…)."),
+        ("chatgpt", "ChatGPT",
+         "Le modèle d’OpenAI, avec votre compte ChatGPT.",
+         "À l’activation, Codex, l’outil officiel d’OpenAI, est téléchargé (environ 170 Mo), puis vous vous connectez à votre compte ChatGPT (Google, e-mail…)."),
+        ("local", "IA locale",
+         "Une petite IA qui tourne sur ce PC, sans compte ni Internet. Trois agents : retrouver un fichier et l’ouvrir dans l’Explorateur, changer un réglage, aider sur un programme.",
+         "À l’activation, le moteur llama.cpp (environ 30 Mo) et le modèle Qwen2.5 1,5B (environ 1,1 Go) sont téléchargés. Elle ne tourne que lorsque son panneau est ouvert."),
+    )
 
     def page_assistant(self):
         import sys, threading
         module = assistant_module()
-        enabled = module.is_enabled()
         module.protect_credentials()
-        box = self.card()
-        self.switch(box, _t("Assistant Claude dans la barre des tâches"), enabled, self.assistant_toggle,
-                    _t("Un bouton Claude dans la barre des tâches, et Windows+C, pour poser une question sur Winlux : pourquoi un programme .exe ne s’ouvre pas, où est un fichier, comment changer un réglage."))
-        if not enabled:
-            self.hint(_t("À l’activation, Claude Code est téléchargé s’il manque (environ 300 Mo), puis vous vous connectez à votre compte Claude (Google, e-mail…)."), box)
-        else:
+        self.hint(_t("Un bouton dans la barre des tâches, et Windows+C, pour poser une question sur Winlux. Activez un ou plusieurs assistants ; s’il y en a plusieurs, on choisit dans le panneau."))
+        for key, name, text, before in self.ASSISTANTS:
+            backend = module.provider(key)
+            if not backend.supported(): continue  # matériel trop juste : option cachée, pas grisée
+            enabled = module.is_enabled(key)
+            box = self.card()
+            self.switch(box, _t(name), enabled, lambda on, k=key: self.assistant_toggle(k, on), _t(text))
+            if not enabled:
+                self.hint(_t(before), box)
+                continue
             account = Gtk.Label(label=_t("Vérification de la connexion…"), xalign=0)
             account.get_style_context().add_class("subtitle")
-            self.row(box, _t("Compte Claude"), account)
-            buttons = self.actions(box, [(_t("Ouvrir l’assistant"), lambda: self.spawn([sys.executable, module.__file__])),
-                                         (_t("Se déconnecter"), lambda: self.tool([sys.executable, module.__file__, "--deconnecter"]))])
+            if backend.remote:
+                self.row(box, _t("Compte {name}").format(name=name), account)
+                buttons = self.actions(box, [(_t("Ouvrir l’assistant"), lambda k=key: self.assistant_open(k)),
+                                             (_t("Se déconnecter"), lambda k=key: self.tool([sys.executable, module.__file__, "--deconnecter", k]))])
+            else:
+                self.row(box, _t("Modèle"), account)
+                buttons = self.actions(box, [(_t("Ouvrir l’assistant"), lambda k=key: self.assistant_open(k)),
+                                             (_t("Supprimer l’IA locale"), lambda: self.tool([sys.executable, module.__file__, "--supprimer", "local"]))])
 
-            def checked(status):
-                if not status.get("installed"): text = _t("Claude Code n’est pas installé")
+            def checked(status, account=account, buttons=buttons, key=key, backend=backend):
+                if not status.get("installed"): text = _t("Pas encore téléchargé")
+                elif not backend.remote: text = _t("Qwen2.5 1,5B, sur ce PC")
                 elif status.get("loggedIn"):
                     who = module.account_name(status)
-                    text = _t("Connecté : {account}").format(account=who) if who else _t("Connecté")
+                    text = _t("Connecté : {account}").format(account=who) if who else _t("Connecté au compte")
                 else: text = _t("Non connecté")
                 if account.get_toplevel() is not None: account.set_text(text)
                 if not status.get("loggedIn"):
                     for child in buttons.get_children(): child.destroy()
-                    login = Gtk.Button(label=_t("Se connecter"))
-                    login.connect("clicked", lambda *_: self.assistant_toggle(True))
+                    login = Gtk.Button(label=_t("Se connecter au compte") if backend.remote and status.get("installed") else _t("Terminer l’installation"))
+                    login.connect("clicked", lambda *_: self.assistant_toggle(key, True))
                     buttons.pack_start(login, False, False, 0)
                     login.show()
                 return False
-            threading.Thread(target=lambda: GLib.idle_add(checked, module.auth_status()), daemon=True).start()
+            threading.Thread(target=lambda b=backend, c=checked: GLib.idle_add(c, b.status()), daemon=True).start()
         self.section(_t("Ce qui est envoyé"))
         box = self.card()
-        for text in ("Seuls votre question et la conversation en cours partent vers Claude (Anthropic). Rien n’est gardé sur ce PC une fois la fenêtre fermée.",
-                     "Claude ne lit rien et ne change rien tout seul : chaque lecture (journal d’un programme, recherche de fichier) vous montre le texte exact avant l’envoi, et chaque action attend votre clic.",
-                     "La connexion à votre compte est gardée par Claude Code dans votre dossier personnel, lisible par vous seul.",
-                     "Désactivé, l’assistant n’apparaît nulle part et rien ne tourne."):
+        for text in ("Claude et ChatGPT : seuls votre question et la conversation en cours partent vers Anthropic ou OpenAI. Rien n’est gardé sur ce PC une fois la fenêtre fermée.",
+                     "Ils ne lisent rien et ne changent rien tout seuls : chaque lecture (journal d’un programme, recherche de fichier) vous montre le texte exact avant l’envoi.",
+                     "IA locale : rien ne quitte ce PC. Ce qu’elle lit (recherche de fichier, journal) vous est montré.",
+                     "Pour les trois, chaque action (réglage, dossier, page des Paramètres) attend votre clic sur « Faire ».",
+                     "Les connexions à vos comptes sont gardées dans votre dossier personnel, lisibles par vous seul.",
+                     "Désactivé, un assistant n’apparaît nulle part et rien ne tourne."):
             self.hint(_t(text), box)
 
-    def assistant_toggle(self, on):
+    def assistant_open(self, key):
+        import sys
+        module = assistant_module()
+        module.write_config(current=key)
+        self.spawn([sys.executable, module.__file__])
+
+    def assistant_toggle(self, key, on):
         """Activer ouvre la fenêtre de configuration (téléchargement, connexion) ;
         l’assistant n’est activé qu’une fois tout prêt. Désactiver est immédiat."""
         import sys
         module = assistant_module()
         if not on:
-            self.tool([sys.executable, module.__file__, "--desactiver"])
+            self.tool([sys.executable, module.__file__, "--desactiver", key])
             return
         if getattr(self, "assistant_setup", None) is not None and self.assistant_setup.poll() is None: return
         try:
-            self.assistant_setup = subprocess.Popen([sys.executable, module.__file__, "--configurer"], start_new_session=True)
+            self.assistant_setup = subprocess.Popen([sys.executable, module.__file__, "--configurer", key], start_new_session=True)
         except OSError as error:
             self.show_error(_t("L’opération a échoué"), str(error))
             return

@@ -1,9 +1,9 @@
 ---
 title: Atajos y pequeñas herramientas
-description: Acoplar ventanas, recuperar lo que copió, elegir un color o copiar el texto de una imagen, como en Windows 11.
+description: Acoplar ventanas, recuperar lo que copió, elegir un color o copiar el texto de una imagen, con los atajos habituales.
 ---
 
-El escritorio de Winlux usa los atajos de Windows 11. Funcionan en todas las aplicaciones, incluidos los programas de Windows.
+El escritorio de Winlux usa los atajos de teclado habituales, con la tecla Windows. Funcionan en todas las aplicaciones, incluidos los programas de Windows.
 
 ## Atajos de teclado
 

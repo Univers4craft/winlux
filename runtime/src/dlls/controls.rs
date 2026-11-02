@@ -90,7 +90,7 @@ const VK_DELETE: usize = 0x2E;
 const VK_F4: usize = 0x73;
 
 // Couleurs COLORREF (0x00BBGGRR) de Windows 11, thème clair.
-const ACCENT: u32 = 0x00C0_6700; // #0067C0
+const ACCENT: u32 = 0x00F0_3D6A; // #6A3DF0, violet Prisme
 const TEXT: u32 = 0x001B_1B1B;
 const TEXT_DISABLED: u32 = 0x00A0_A0A0;
 const CONTROL_FILL: u32 = 0x00FD_FDFD;
@@ -310,6 +310,7 @@ pub fn builtin_class(name: &str) -> Option<usize> {
             "listbox" | "combolbox" => listbox_proc,
             "combobox" => combobox_proc,
             "scrollbar" => scrollbar_proc,
+            "#32768" => popup::popup_proc,
             _ => match comctl::class_kind(&lower)? {
                 Kind::TreeView => treeview_proc,
                 Kind::ListView => listview_proc,
@@ -3297,6 +3298,7 @@ pub fn user32_overrides() -> Exports {
 }
 
 mod comctl;
+pub(crate) mod popup;
 
 #[cfg(test)]
 mod tests;

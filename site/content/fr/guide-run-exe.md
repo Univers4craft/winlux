@@ -5,14 +5,14 @@ description: Double-cliquez sur un .exe, installez un logiciel avec son installa
 
 ## Double-cliquer, tout simplement
 
-Double-cliquez sur un fichier `.exe` dans l'Explorateur ou sur le bureau : il s'ouvre comme sous Windows. Il n'y a rien à installer ni à configurer avant.
+Double-cliquez sur un fichier `.exe` dans l'Explorateur ou sur le bureau : il s'ouvre directement. Il n'y a rien à installer ni à configurer avant.
 
 ![La visite de Winlux : lancer un programme Windows](img:lancer-un-exe.jpg "La visite de premier démarrage montre comment lancer un programme Windows.")
 
 ## Installer un logiciel
 
 1. Téléchargez l'installateur sur le site de l'éditeur (`setup.exe`, `installer.exe` ou `.msi`).
-2. Double-cliquez dessus et suivez ses étapes, comme sous Windows.
+2. Double-cliquez dessus et suivez les étapes de son installateur.
 3. Le logiciel apparaît dans le menu Démarrer. Pour le retirer, ouvrez **Applications installées**.
 
 Les installateurs les plus courants (MSI, NSIS, Inno Setup) sont pris en charge. Le **Store** de Winlux propose aussi des logiciels Windows et Linux à installer en un clic.
@@ -21,7 +21,7 @@ Les installateurs les plus courants (MSI, NSIS, Inno Setup) sont pris en charge.
 
 La première fois qu'un programme veut utiliser la **caméra**, le **micro**, la **capture d'écran** ou vos **dossiers personnels**, Winlux vous demande votre accord. Vous pouvez changer d'avis à tout moment dans Paramètres › Confidentialité et sécurité, où l'accès au réseau peut aussi être bloqué programme par programme.
 
-Quand un installateur demande les droits d'administrateur, une fenêtre de confirmation s'ouvre, comme sous Windows.
+Quand un installateur demande les droits d'administrateur, Winlux ouvre une fenêtre de confirmation.
 
 ## Si un programme ne s'ouvre pas
 

@@ -1,47 +1,77 @@
 #!/usr/bin/python3
-"""Assistant Claude de Winlux : poser une question depuis la barre des tâches.
+"""Assistant IA de Winlux : poser une question depuis la barre des tâches.
 
-Désactivé par défaut. Paramètres > Applications > Assistant Claude l'active :
-la fenêtre « --configurer » télécharge Claude Code s'il manque (même
-installation que l'application Claude Code du menu Démarrer, rien dans
-l'ISO), connecte le compte Claude de l'utilisateur (Google, e-mail…) avec
-« claude auth login », puis ajoute le bouton de la barre des tâches. Tant
-qu'il n'est pas activé, rien n'apparaît dans la barre et rien ne tourne :
-Windows+C ne fait rien.
+Trois assistants au choix, tous désactivés par défaut et activés un par un
+dans Paramètres > Applications > Assistant IA :
+- Claude (Anthropic) : Claude Code (claude.exe à travers la couche PE, même
+  installation que l'application du menu Démarrer), connexion au compte
+  Claude (Google, e-mail…) avec « claude auth login ».
+- ChatGPT (OpenAI) : Codex, l'outil officiel d'OpenAI (programme Linux),
+  téléchargé depuis npm avec l'empreinte SHA-512 du registre, connexion au
+  compte ChatGPT avec « codex login ».
+- IA locale : llama.cpp (llama-server) et le petit modèle Qwen2.5 1,5B, tout
+  sur ce PC ; trois agents au plus (fichiers, réglages, aide).
+Rien de tout cela n'est dans l'ISO. Tant qu'aucun n'est activé, rien
+n'apparaît dans la barre et rien ne tourne : Windows+C ne fait rien.
 
 Garde-fous :
-- Claude n'a aucun outil (« --tools "" ») : il ne lit ni ne touche rien
-  lui-même. Pour lire un journal, chercher un fichier ou changer un réglage,
-  il le demande ; l'utilisateur voit le texte exact qui partirait (ou
-  l'action exacte) et accepte ou refuse.
-- Seuls partent la question et l'historique de la conversation en cours,
-  rien n'est gardé sur le disque (« --no-session-persistence »), la
-  télémétrie de Claude Code est coupée.
-- La connexion reste celle de Claude Code (~/.claude), remise en lecture
-  seule pour le propriétaire (dossier 700, fichiers 600) à chaque lancement.
+- Claude et ChatGPT n'ont aucun outil : ils ne lisent ni ne touchent rien
+  eux-mêmes. Pour lire un journal ou chercher un fichier, ils le demandent ;
+  l'utilisateur voit le texte exact qui partirait et accepte ou refuse.
+- Les actions (réglages, pages des Paramètres, ouvrir un dossier) viennent
+  d'une liste fermée et attendent un clic sur « Faire », pour les trois.
+- Seuls partent la question et la conversation en cours ; rien n'est gardé
+  sur le disque, la télémétrie est coupée. L'IA locale n'envoie rien.
+- Les connexions sont propres à l'assistant (~/.local/share/winlux/
+  assistant-comptes) : ~/.claude et ~/.codex des autres outils ne sont jamais
+  lus ni réutilisés. Dossiers en 700, jetons en 600 à chaque lancement.
 
 Commandes : winlux-assistant [--configurer | --activer | --desactiver |
---deconnecter | --etat].
+--deconnecter] [claude|chatgpt|local], --supprimer local, --etat.
 """
+import base64
+import hashlib
 import json
 import os
 from pathlib import Path
+import platform
 import re
+import secrets
 import shutil
+import socket
 import subprocess
 import sys
+import tarfile
 import threading
 import time
 import unicodedata
+import urllib.request
+import zipfile
 
 HOME = Path.home()
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME") or HOME / ".config") / "winlux/assistant.conf"
-WORK = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share") / "winlux/assistant"
+DATA = Path(os.environ.get("XDG_DATA_HOME") or HOME / ".local/share") / "winlux"
+WORK = DATA / "assistant"
+CODEX_DIR = DATA / "codex"
+LOCAL_DIR = DATA / "ia-locale"
+# Connexions propres à l'assistant : jamais celles de ~/.claude ou ~/.codex
+# (Claude Code ou Codex installés à part par l'utilisateur).
+ACCOUNTS = DATA / "assistant-comptes"
+CLAUDE_ACCOUNT = ACCOUNTS / "claude"
+CODEX_ACCOUNT = ACCOUNTS / "chatgpt"
 JOURNAL = Path(os.environ.get("WINLUX_JOURNAL_DIR", "/run/winlux/journal"))
 DESKTOP_FILE = "/usr/share/applications/winlux-assistant.desktop"
 MODEL = os.environ.get("WINLUX_ASSISTANT_MODEL", "sonnet")
 FIRST_PLUGIN = 30  # 1 à 11 sont livrés ou réservés (11 = Widgets) : loin d'eux.
 PANEL_AFTER = 8  # séparateur qui pousse les icônes à droite : le bouton vient juste après.
+NPM_REGISTRY = os.environ.get("WINLUX_NPM_REGISTRY", "https://registry.npmjs.org").rstrip("/")
+LLAMA_RELEASE_API = os.environ.get("WINLUX_LLAMA_RELEASE_API",
+                                   "https://api.github.com/repos/ggml-org/llama.cpp/releases/latest")
+HF_BASE = os.environ.get("WINLUX_HF_BASE", "https://huggingface.co").rstrip("/")
+LOCAL_MODEL_REPO = "Qwen/Qwen2.5-1.5B-Instruct-GGUF"
+LOCAL_MODEL_FILE = "qwen2.5-1.5b-instruct-q4_k_m.gguf"
+LOCAL_MIN_RAM_GIB = 3  # modèle 1,1 Go + contexte : au-dessous, l'option est cachée
+MAX_AGENTS = 3
 
 
 def _interface_lang():
@@ -64,14 +94,9 @@ LANGUAGE_NAMES = {"fr": "français", "en": "English", "es": "español", "de": "D
 
 # Texte français -> (anglais, espagnol, allemand).
 _TR = {
-    "Assistant Claude": ("Claude assistant", "Asistente Claude", "Claude-Assistent"),
-    "Activer l'assistant Claude": ("Turn on the Claude assistant", "Activar el asistente Claude",
-                                   "Claude-Assistenten aktivieren"),
     "Télécharger Claude Code (environ 300 Mo)": ("Download Claude Code (about 300 MB)",
                                                  "Descargar Claude Code (unos 300 MB)",
                                                  "Claude Code herunterladen (etwa 300 MB)"),
-    "Se connecter à votre compte Claude": ("Sign in to your Claude account", "Iniciar sesión en su cuenta de Claude",
-                                           "Bei Ihrem Claude-Konto anmelden"),
     "Ajouter le bouton à la barre des tâches": ("Add the button to the taskbar", "Agregar el botón a la barra de tareas",
                                                 "Schaltfläche zur Taskleiste hinzufügen"),
     "Vérification de la connexion…": ("Checking the sign-in…", "Comprobando el inicio de sesión…",
@@ -86,15 +111,8 @@ _TR = {
     "Valider": ("Confirm", "Confirmar", "Bestätigen"),
     "Ouvrir la page de connexion": ("Open the sign-in page", "Abrir la página de inicio de sesión",
                                     "Anmeldeseite öffnen"),
-    "Connecté au compte Claude{who}.": ("Signed in to the Claude account{who}.",
-                                        "Sesión iniciada en la cuenta de Claude{who}.",
-                                        "Beim Claude-Konto angemeldet{who}."),
     "La connexion n'a pas abouti : {e}": ("Sign-in did not complete: {e}", "No se completó el inicio de sesión: {e}",
                                           "Die Anmeldung wurde nicht abgeschlossen: {e}"),
-    "C'est prêt ! Cliquez sur le bouton Claude de la barre des tâches ou appuyez sur Windows+C.":
-        ("All set! Click the Claude button on the taskbar or press Windows+C.",
-         "¡Listo! Haga clic en el botón Claude de la barra de tareas o pulse Windows+C.",
-         "Fertig! Klicken Sie auf die Claude-Schaltfläche in der Taskleiste oder drücken Sie Windows+C."),
     "Ouvrir l'assistant": ("Open the assistant", "Abrir el asistente", "Assistent öffnen"),
     "Réessayer": ("Try again", "Reintentar", "Erneut versuchen"),
     "Annuler": ("Cancel", "Cancelar", "Abbrechen"),
@@ -103,11 +121,6 @@ _TR = {
                                          "Der Download ist fehlgeschlagen: {e}"),
     "Posez votre question…": ("Ask your question…", "Haga su pregunta…", "Stellen Sie Ihre Frage…"),
     "Envoyer": ("Send", "Enviar", "Senden"),
-    "Claude réfléchit…": ("Claude is thinking…", "Claude está pensando…", "Claude denkt nach…"),
-    "Envoyé à Claude (Anthropic) : votre question et cette conversation. Rien d'autre sans votre accord.":
-        ("Sent to Claude (Anthropic): your question and this conversation. Nothing else without your consent.",
-         "Se envía a Claude (Anthropic): su pregunta y esta conversación. Nada más sin su permiso.",
-         "An Claude (Anthropic) gesendet: Ihre Frage und dieses Gespräch. Nichts anderes ohne Ihre Zustimmung."),
     "Bonjour ! Je peux vous aider à utiliser Winlux, par exemple :":
         ("Hello! I can help you use Winlux, for example:", "¡Hola! Puedo ayudarle a usar Winlux, por ejemplo:",
          "Hallo! Ich helfe Ihnen bei Winlux, zum Beispiel:"),
@@ -116,13 +129,9 @@ _TR = {
                                                     "Warum startet mein .exe-Programm nicht?"),
     "Où est mon fichier… ?": ("Where is my file…?", "¿Dónde está mi archivo…?", "Wo ist meine Datei…?"),
     "Passe au thème sombre": ("Switch to the dark theme", "Cambia al tema oscuro", "Wechsle zum dunklen Design"),
-    "Claude demande à lire : {what}": ("Claude asks to read: {what}", "Claude pide leer: {what}",
-                                       "Claude möchte lesen: {what}"),
     "Voir exactement ce qui sera envoyé": ("See exactly what will be sent", "Ver exactamente lo que se enviará",
                                            "Genau ansehen, was gesendet wird"),
-    "Envoyer à Claude": ("Send to Claude", "Enviar a Claude", "An Claude senden"),
     "Refuser": ("Decline", "Rechazar", "Ablehnen"),
-    "Claude propose : {what}": ("Claude suggests: {what}", "Claude propone: {what}", "Claude schlägt vor: {what}"),
     "Faire": ("Do it", "Hacerlo", "Ausführen"),
     "Non merci": ("No thanks", "No, gracias", "Nein danke"),
     "Fait.": ("Done.", "Hecho.", "Erledigt."),
@@ -131,15 +140,6 @@ _TR = {
     "Refusé : rien n'a été changé.": ("Declined: nothing was changed.", "Rechazado: no se cambió nada.",
                                      "Abgelehnt: Es wurde nichts geändert."),
     "L'action a échoué : {e}": ("The action failed: {e}", "La acción falló: {e}", "Die Aktion ist fehlgeschlagen: {e}"),
-    "Claude n'a pas répondu : {e}": ("Claude did not answer: {e}", "Claude no respondió: {e}",
-                                     "Claude hat nicht geantwortet: {e}"),
-    "Vous n'êtes pas connecté à votre compte Claude.": ("You are not signed in to your Claude account.",
-                                                       "No ha iniciado sesión en su cuenta de Claude.",
-                                                       "Sie sind nicht bei Ihrem Claude-Konto angemeldet."),
-    "L'assistant Claude est désactivé. Activez-le dans Paramètres.":
-        ("The Claude assistant is turned off. Turn it on in Settings.",
-         "El asistente Claude está desactivado. Actívelo en Configuración.",
-         "Der Claude-Assistent ist deaktiviert. Aktivieren Sie ihn in den Einstellungen."),
     "Terminer la configuration": ("Finish setting up", "Terminar la configuración", "Einrichtung abschließen"),
     "Nouvelle conversation": ("New conversation", "Nueva conversación", "Neues Gespräch"),
     # Lectures et actions proposées par Claude.
@@ -185,6 +185,72 @@ _TR = {
     "Mode économie d'énergie": ("Power saving mode", "Modo ahorro de energía", "Energiesparmodus"),
     "Rechercher les mises à jour de Winlux": ("Check for Winlux updates", "Buscar actualizaciones de Winlux",
                                               "Nach Winlux-Updates suchen"),
+    # Pages des Paramètres et description du PC, dans la langue choisie.
+    "Réseau": ("Network", "Red", "Netzwerk"),
+    "Clavier et souris": ("Keyboard and mouse", "Teclado y ratón", "Tastatur und Maus"),
+    "Mises à jour": ("Updates", "Actualizaciones", "Updates"),
+    "Écran": ("Display", "Pantalla", "Bildschirm"),
+    "Programmes Windows": ("Windows programs", "Programas de Windows", "Windows-Programme"),
+    "Navigateurs": ("Browsers", "Navegadores", "Browser"),
+    "Accessibilité": ("Accessibility", "Accesibilidad", "Barrierefreiheit"),
+    "Localisation": ("Location", "Ubicación", "Standort"),
+    "Son": ("Sound", "Sonido", "Sound"),
+    "Confidentialité et sécurité": ("Privacy and security", "Privacidad y seguridad", "Datenschutz und Sicherheit"),
+    "Lecteurs réseau": ("Network drives", "Unidades de red", "Netzlaufwerke"),
+    "Fond d’écran et couleurs": ("Wallpaper and colors", "Fondo de pantalla y colores", "Hintergrund und Farben"),
+    "Bluetooth": ("Bluetooth", "Bluetooth", "Bluetooth"),
+    "Alimentation et batterie": ("Power and battery", "Energía y batería", "Energie und Akku"),
+    "Graphismes": ("Graphics", "Gráficos", "Grafik"),
+    "Imprimantes et scanners": ("Printers and scanners", "Impresoras y escáneres", "Drucker und Scanner"),
+    "Partage et transfert": ("Sharing and transfer", "Compartir y transferir", "Freigabe und Übertragung"),
+    "Jeux": ("Games", "Juegos", "Spiele"),
+    "Processeur : {model} ({count} cœurs)": ("Processor: {model} ({count} cores)", "Procesador: {model} ({count} núcleos)", "Prozessor: {model} ({count} Kerne)"),
+    "Mémoire : {size} Gio": ("Memory: {size} GiB", "Memoria: {size} GiB", "Arbeitsspeicher: {size} GiB"),
+    "Carte graphique": ("Graphics card", "Tarjeta gráfica", "Grafikkarte"),
+    "Machine virtuelle": ("Virtual machine", "Máquina virtual", "Virtuelle Maschine"),
+    # Trois assistants : Claude, ChatGPT, IA locale.
+    'Assistant IA': ('AI assistant', 'Asistente de IA', 'KI-Assistent'),
+    'IA locale': ('Local AI', 'IA local', 'Lokale KI'),
+    "Assistant IA : activer {name}": ('AI assistant: turn on {name}', 'Asistente de IA: activar {name}', 'KI-Assistent: {name} aktivieren'),
+    'Annulé.': ('Cancelled.', 'Cancelado.', 'Abgebrochen.'),
+    'Archive inattendue : {name}': ('Unexpected archive: {name}', 'Archivo inesperado: {name}', 'Unerwartetes Archiv: {name}'),
+    "C'est prêt ! Cliquez sur le bouton de l'assistant dans la barre des tâches ou appuyez sur Windows+C.": ('All set! Click the assistant button on the taskbar or press Windows+C.', '¡Listo! Haga clic en el botón del asistente en la barra de tareas o pulse Windows+C.', 'Fertig! Klicken Sie auf die Assistent-Schaltfläche in der Taskleiste oder drücken Sie Windows+C.'),
+    'Connecté au compte {name}{who}.': ('Signed in to the {name} account{who}.', 'Sesión iniciada en la cuenta de {name}{who}.', 'Beim {name}-Konto angemeldet{who}.'),
+    "Démarrage de l'IA locale…": ('Starting the local AI…', 'Iniciando la IA local…', 'Lokale KI wird gestartet…'),
+    'Envoyer à {name}': ('Send to {name}', 'Enviar a {name}', 'An {name} senden'),
+    "Envoyé à {name} ({company}) : votre question et cette conversation. Rien d'autre sans votre accord.": ('Sent to {name} ({company}): your question and this conversation. Nothing else without your consent.', 'Se envía a {name} ({company}): su pregunta y esta conversación. Nada más sin su permiso.', 'An {name} ({company}) gesendet: Ihre Frage und dieses Gespräch. Nichts anderes ohne Ihre Zustimmung.'),
+    'Fichier corrompu, empreinte incorrecte : {name}': ('Corrupted file, wrong checksum: {name}', 'Archivo dañado, suma de comprobación incorrecta: {name}', 'Beschädigte Datei, falsche Prüfsumme: {name}'),
+    "IA locale : tout reste sur ce PC, rien n'est envoyé sur Internet.": ('Local AI: everything stays on this PC, nothing is sent over the Internet.', 'IA local: todo se queda en este equipo, no se envía nada por Internet.', 'Lokale KI: Alles bleibt auf diesem PC, nichts wird ins Internet gesendet.'),
+    "J'ai trouvé {count} résultat(s) pour « {name} ». Voici les premiers :": ('I found {count} result(s) for “{name}”. Here are the first ones:', 'He encontrado {count} resultado(s) para «{name}». Estos son los primeros:', 'Ich habe {count} Ergebnis(se) für „{name}“ gefunden. Hier die ersten:'),
+    "Je n'ai trouvé aucun fichier dont le nom contient « {name} ».": ('I found no file whose name contains “{name}”.', 'No encontré ningún archivo cuyo nombre contenga «{name}».', 'Ich habe keine Datei gefunden, deren Name „{name}“ enthält.'),
+    'Je ne sais pas faire ce réglage. Essayez dans Paramètres.': ("I can't change that setting. Try in Settings.", 'No sé cambiar ese ajuste. Pruebe en Configuración.', 'Diese Einstellung kann ich nicht ändern. Versuchen Sie es in den Einstellungen.'),
+    'Je ne sais pas.': ("I don't know.", 'No lo sé.', 'Das weiß ich nicht.'),
+    'Je peux le faire pour vous : cliquez sur « Faire ».': ('I can do it for you: click “Do it”.', 'Puedo hacerlo por usted: haga clic en «Hacerlo».', 'Ich kann das für Sie erledigen: Klicken Sie auf „Ausführen“.'),
+    'Je peux ouvrir ce dossier :': ('I can open this folder:', 'Puedo abrir esta carpeta:', 'Ich kann diesen Ordner öffnen:'),
+    "L'IA locale est installée sur ce PC : rien de ce que vous lui demandez ne quitte l'ordinateur.": ('The local AI is installed on this PC: nothing you ask it leaves the computer.', 'La IA local está instalada en este equipo: nada de lo que le pida sale del ordenador.', 'Die lokale KI ist auf diesem PC installiert: Nichts, was Sie sie fragen, verlässt den Computer.'),
+    "L'IA locale n'a pas démarré : {e}": ('The local AI did not start: {e}', 'La IA local no se inició: {e}', 'Die lokale KI ist nicht gestartet: {e}'),
+    "L'IA locale n'est pas installée.": ('The local AI is not installed.', 'La IA local no está instalada.', 'Die lokale KI ist nicht installiert.'),
+    "L'assistant est désactivé. Activez-le dans Paramètres.": ('The assistant is turned off. Turn it on in Settings.', 'El asistente está desactivado. Actívelo en Configuración.', 'Der Assistent ist deaktiviert. Aktivieren Sie ihn in den Einstellungen.'),
+    "Le moteur de l'IA locale ne répond pas.": ('The local AI engine is not responding.', 'El motor de la IA local no responde.', 'Die Engine der lokalen KI antwortet nicht.'),
+    "Le moteur de l'IA locale s'est arrêté (code {code}).": ('The local AI engine stopped (code {code}).', 'El motor de la IA local se detuvo (código {code}).', 'Die Engine der lokalen KI wurde beendet (Code {code}).'),
+    "Lu sur ce PC (rien n'est envoyé) : {what}": ('Read on this PC (nothing is sent): {what}', 'Leído en este equipo (no se envía nada): {what}', 'Auf diesem PC gelesen (nichts wird gesendet): {what}'),
+    'Quel fichier cherchez-vous ? Donnez une partie de son nom.': ('Which file are you looking for? Give part of its name.', '¿Qué archivo busca? Indique parte de su nombre.', 'Welche Datei suchen Sie? Nennen Sie einen Teil ihres Namens.'),
+    "Réponse refusée : ChatGPT a tenté d'utiliser un outil.": ('Answer rejected: ChatGPT tried to use a tool.', 'Respuesta rechazada: ChatGPT intentó usar una herramienta.', 'Antwort abgelehnt: ChatGPT hat versucht, ein Werkzeug zu verwenden.'),
+    'Se connecter à votre compte {name}': ('Sign in to your {name} account', 'Iniciar sesión en su cuenta de {name}', 'Bei Ihrem {name}-Konto anmelden'),
+    'Téléchargement de Codex': ('Downloading Codex', 'Descargando Codex', 'Codex wird heruntergeladen'),
+    'Téléchargement du modèle': ('Downloading the model', 'Descargando el modelo', 'Modell wird heruntergeladen'),
+    'Téléchargement du moteur': ('Downloading the engine', 'Descargando el motor', 'Engine wird heruntergeladen'),
+    "Télécharger Codex, l'outil officiel d'OpenAI (environ 170 Mo)": ("Download Codex, OpenAI's official tool (about 170 MB)", 'Descargar Codex, la herramienta oficial de OpenAI (unos 170 MB)', 'Codex herunterladen, das offizielle Werkzeug von OpenAI (etwa 170 MB)'),
+    'Télécharger le modèle Qwen2.5 1,5B (environ 1,1 Go)': ('Download the Qwen2.5 1.5B model (about 1.1 GB)', 'Descargar el modelo Qwen2.5 1,5B (unos 1,1 GB)', 'Das Modell Qwen2.5 1,5B herunterladen (etwa 1,1 GB)'),
+    'Télécharger le moteur llama.cpp (environ 30 Mo)': ('Download the llama.cpp engine (about 30 MB)', 'Descargar el motor llama.cpp (unos 30 MB)', 'Die llama.cpp-Engine herunterladen (etwa 30 MB)'),
+    'Voir ce qui a été lu': ('See what was read', 'Ver lo que se leyó', 'Ansehen, was gelesen wurde'),
+    "Vous n'êtes pas connecté à votre compte {name}.": ('You are not signed in to your {name} account.', 'No ha iniciado sesión en su cuenta de {name}.', 'Sie sind nicht bei Ihrem {name}-Konto angemeldet.'),
+    "ouvrir l'emplacement de {path}": ('open the location of {path}', 'abrir la ubicación de {path}', 'den Speicherort von {path} öffnen'),
+    'recherche de « {name} » dans votre dossier personnel': ('search for “{name}” in your home folder', 'búsqueda de «{name}» en su carpeta personal', 'Suche nach „{name}“ in Ihrem persönlichen Ordner'),
+    '{name} demande à lire : {what}': ('{name} asks to read: {what}', '{name} pide leer: {what}', '{name} möchte lesen: {what}'),
+    "{name} n'a pas répondu : {e}": ('{name} did not answer: {e}', '{name} no respondió: {e}', '{name} hat nicht geantwortet: {e}'),
+    '{name} propose : {what}': ('{name} suggests: {what}', '{name} propone: {what}', '{name} schlägt vor: {what}'),
+    '{name} réfléchit…': ('{name} is thinking…', '{name} está pensando…', '{name} denkt nach…'),
 }
 
 
@@ -210,7 +276,11 @@ def read_config():
         lines = CONFIG.read_text(encoding="utf-8").splitlines()
     except OSError:
         return {}
-    return dict(line.split("=", 1) for line in lines if "=" in line)
+    values = dict(line.split("=", 1) for line in lines if "=" in line)
+    # Avant les trois assistants (#298), « enabled » ne valait que pour Claude.
+    if "enabled" in values:
+        values.setdefault("enabled_claude", values.pop("enabled"))
+    return values
 
 
 def write_config(**changes):
@@ -229,8 +299,443 @@ def write_config(**changes):
     temporary.replace(CONFIG)
 
 
-def is_enabled():
-    return read_config().get("enabled") == "1"
+def enabled_providers():
+    values = read_config()
+    return [key for key in PROVIDERS if values.get(f"enabled_{key}") == "1" and provider(key).supported()]
+
+
+def is_enabled(key=None):
+    enabled = enabled_providers()
+    return bool(enabled) if key is None else key in enabled
+
+
+def current_provider():
+    """Assistant ouvert par le bouton : le dernier choisi, sinon le premier activé."""
+    enabled = enabled_providers()
+    chosen = read_config().get("current")
+    return chosen if chosen in enabled else (enabled[0] if enabled else None)
+
+
+def _mem_total_gib():
+    try:
+        return next(int(line.split()[1]) for line in Path("/proc/meminfo").read_text().splitlines()
+                    if line.startswith("MemTotal")) / 1048576
+    except (OSError, StopIteration, ValueError):
+        return 0.0
+
+
+def _machine():
+    return platform.machine().lower()
+
+
+# ── Téléchargements vérifiés (rien de tout cela n'est dans l'ISO) ───────────
+
+def _get(url, timeout=30):
+    request = urllib.request.Request(url, headers={"User-Agent": "Winlux-assistant", "Accept": "application/json, */*"})
+    return urllib.request.urlopen(request, timeout=timeout)
+
+
+def _get_json(url):
+    with _get(url) as response:
+        return json.loads(response.read().decode("utf-8"))
+
+
+def download(url, target, algorithm, expected, progress=None, cancel=None, label=""):
+    """Télécharge `url` dans `target` ; le fichier n'est gardé que si son
+    empreinte `algorithm` (sha256, sha512) vaut exactement `expected` (octets)."""
+    target.parent.mkdir(parents=True, exist_ok=True)
+    partial = target.with_name(target.name + ".part")
+    digest = hashlib.new(algorithm)
+    try:
+        with _get(url, timeout=60) as response, open(partial, "wb") as out:
+            total = int(response.headers.get("Content-Length") or 0)
+            done = 0
+            while True:
+                if cancel is not None and cancel.is_set():
+                    raise RuntimeError(_t("Annulé."))
+                chunk = response.read(1 << 20)
+                if not chunk:
+                    break
+                out.write(chunk)
+                digest.update(chunk)
+                done += len(chunk)
+                if progress:
+                    size = f"{done >> 20} Mo" + (f" / {total >> 20} Mo" if total else "")
+                    progress(done / total if total else None, f"{label} : {size}")
+        if not expected or digest.digest() != expected:
+            raise RuntimeError(_t("Fichier corrompu, empreinte incorrecte : {name}", name=target.name))
+        partial.replace(target)
+    finally:
+        partial.unlink(missing_ok=True)
+    return target
+
+
+def _replace_dir(staging, final):
+    """Remplace `final` par `staging` (installation précédente supprimée après)."""
+    old = final.with_name(final.name + ".ancien")
+    shutil.rmtree(old, ignore_errors=True)
+    if final.exists():
+        final.rename(old)
+    staging.rename(final)
+    shutil.rmtree(old, ignore_errors=True)
+
+
+# ── Assistants : Claude (Anthropic), ChatGPT (OpenAI), IA locale ────────────
+
+class NotSignedIn(Exception):
+    pass
+
+
+class Provider:
+    key = ""
+    name = ""
+    remote = True  # False : rien ne quitte ce PC
+    open_login_page = True  # ouvrir nous-mêmes la page de connexion
+    code_entry = False  # champ pour coller un code de connexion
+
+    def supported(self):
+        return True
+
+    def steps(self):
+        return ()
+
+    def launcher(self):
+        return None
+
+    def install(self, progress, cancel, mark):
+        raise NotImplementedError
+
+    def status(self, launcher=None):
+        return {"installed": self.launcher() is not None, "loggedIn": False}
+
+    def login_command(self, launcher):
+        return None
+
+    def logout(self):
+        pass
+
+    def protect(self):
+        return []
+
+    def env(self):
+        return dict(os.environ)
+
+
+class ClaudeProvider(Provider):
+    """claude.exe à travers la couche PE (même installation que le menu Démarrer)."""
+    key, name = "claude", "Claude"
+    code_entry = True
+
+    def steps(self):
+        return (_t("Télécharger Claude Code (environ 300 Mo)"), _t("Se connecter à votre compte {name}", name=self.name),
+                _t("Ajouter le bouton à la barre des tâches"))
+
+    def launcher(self):
+        return claude_launcher()
+
+    def install(self, progress, cancel, mark):
+        app = claude_code_app()
+        if app is None:
+            raise RuntimeError("winlux-claude-code.py")
+        launcher = app.install(progress, cancel)
+        mark(0)
+        return launcher
+
+    def status(self, launcher=None):
+        return auth_status(launcher)
+
+    def login_command(self, launcher):
+        return [str(launcher), "auth", "login", "--claudeai"]
+
+    def logout(self):
+        launcher = self.launcher()
+        if launcher:
+            subprocess.run([str(launcher), "auth", "logout"], capture_output=True, timeout=60, env=claude_env(),
+                           stdin=subprocess.DEVNULL)
+
+    def protect(self):
+        return protect_credentials()
+
+    def env(self):
+        return claude_env()
+
+    def command(self, name):
+        return [str(claude_launcher()), "-p", "--output-format", "json", "--tools", "",
+                "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "",
+                "--no-session-persistence", "--model", MODEL, "--system-prompt", system_prompt(name),
+                "--json-schema", json.dumps(SCHEMA, ensure_ascii=False)]
+
+    def ask(self, prompt, timeout=240):
+        """La conversation part par l'entrée standard, jamais en argument :
+        `ps` la montrerait aux autres comptes."""
+        result = subprocess.run(self.command(self.name), input=prompt, capture_output=True, text=True,
+                                timeout=timeout, cwd=WORK, env=claude_env())
+        output = result.stdout.strip()
+        try:
+            data = json.loads(output[output.find("{"):]) if "{" in output else {}
+        except ValueError:
+            data = {}
+        message = str(data.get("result") or result.stderr or output).strip()
+        if data.get("is_error") or result.returncode or not data:
+            if re.search(r"log ?in|not logged|authenticat|/login|oauth", message, re.I):
+                raise NotSignedIn(message)
+            raise RuntimeError(message[-400:] or f"code {result.returncode}")
+        answer = data.get("structured_output")
+        if not isinstance(answer, dict):
+            try:
+                answer = json.loads(data.get("result") or "")
+            except ValueError:
+                answer = {"reponse": data.get("result") or "", "demande": "aucune"}
+        return answer
+
+
+class ChatGPTProvider(Provider):
+    """Codex, l'outil officiel d'OpenAI (programme Linux natif) : il se connecte
+    au compte ChatGPT de l'utilisateur. Téléchargé depuis npm, empreinte
+    SHA-512 du registre vérifiée ; rien dans l'ISO."""
+    key, name = "chatgpt", "ChatGPT"
+    open_login_page = False  # « codex login » ouvre lui-même le navigateur
+    TARGETS = {"x86_64": ("linux-x64", "x86_64-unknown-linux-musl"),
+               "aarch64": ("linux-arm64", "aarch64-unknown-linux-musl")}
+
+    def supported(self):
+        return _machine() in self.TARGETS
+
+    def steps(self):
+        return (_t("Télécharger Codex, l'outil officiel d'OpenAI (environ 170 Mo)"),
+                _t("Se connecter à votre compte {name}", name=self.name), _t("Ajouter le bouton à la barre des tâches"))
+
+    def home(self):
+        return CODEX_ACCOUNT
+
+    def launcher(self):
+        forced = os.environ.get("WINLUX_ASSISTANT_CODEX")
+        if forced:
+            return Path(forced) if Path(forced).is_file() else None
+        path = CODEX_DIR / "bin/codex"
+        return path if path.is_file() and os.access(path, os.X_OK) else None
+
+    def install(self, progress, cancel, mark):
+        suffix, triple = self.TARGETS[_machine()]
+        package = f"{NPM_REGISTRY}/@openai%2fcodex"
+        version = _get_json(f"{package}/latest")["version"]
+        dist = _get_json(f"{package}/{version}-{suffix}")["dist"]
+        integrity = next((part for part in dist.get("integrity", "").split() if part.startswith("sha512-")), "")
+        expected = base64.b64decode(integrity[7:]) if integrity else b""
+        CODEX_DIR.parent.mkdir(parents=True, exist_ok=True)
+        archive = download(dist["tarball"], CODEX_DIR.with_name("codex.tgz"), "sha512", expected, progress, cancel,
+                           _t("Téléchargement de Codex"))
+        staging = CODEX_DIR.with_name("codex.nouveau")
+        shutil.rmtree(staging, ignore_errors=True)
+        prefix = f"package/vendor/{triple}/"
+        try:
+            with tarfile.open(archive) as tar:
+                members = []
+                for member in tar.getmembers():
+                    if not member.name.startswith(prefix) or "/codex-resources/voice/" in member.name:
+                        continue
+                    member.name = member.name[len(prefix):]
+                    if member.name:
+                        members.append(member)
+                tar.extractall(staging, members=members, filter="data")
+            if not (staging / "bin/codex").is_file():
+                raise RuntimeError(_t("Archive inattendue : {name}", name="codex"))
+            (staging / "bin/codex").chmod(0o755)
+            (staging / "VERSION").write_text(version + "\n")
+            _replace_dir(staging, CODEX_DIR)
+        finally:
+            archive.unlink(missing_ok=True)
+            shutil.rmtree(staging, ignore_errors=True)
+        mark(0)
+        return self.launcher()
+
+    def env(self):
+        env = dict(os.environ)
+        env.pop("OPENAI_API_KEY", None)  # le compte ChatGPT, pas une clé d'API
+        _private_dir(CODEX_ACCOUNT)
+        env["CODEX_HOME"] = str(CODEX_ACCOUNT)  # jamais ~/.codex
+        env["PATH"] = f"{CODEX_DIR / 'codex-path'}:{env.get('PATH', '/usr/bin:/bin')}"
+        return env
+
+    def status(self, launcher=None):
+        launcher = launcher or self.launcher()
+        if not launcher:
+            return {"installed": False, "loggedIn": False}
+        try:
+            result = subprocess.run([str(launcher), "login", "status"], capture_output=True, text=True, timeout=30,
+                                    env=self.env(), stdin=subprocess.DEVNULL)
+            out = result.stdout + result.stderr
+            logged = result.returncode == 0 and "Logged in" in out
+        except (OSError, subprocess.SubprocessError):
+            out, logged = "", False
+        return {"installed": True, "loggedIn": logged, "account": "ChatGPT" if logged and "ChatGPT" in out else ""}
+
+    def login_command(self, launcher):
+        return [str(launcher), "login"]
+
+    def logout(self):
+        launcher = self.launcher()
+        if launcher:
+            subprocess.run([str(launcher), "logout"], capture_output=True, timeout=60, env=self.env(),
+                           stdin=subprocess.DEVNULL)
+
+    def protect(self):
+        """Jeton du compte ChatGPT (auth.json) lisible par le seul propriétaire."""
+        base, fixed = self.home(), []
+        for path, mode in ((base, 0o700), (base / "auth.json", 0o600)):
+            try:
+                if path.stat().st_mode & 0o077:
+                    path.chmod(mode)
+                    fixed.append(path)
+            except OSError:
+                pass
+        return fixed
+
+    def command(self, schema_file, out_file):
+        """Aucun outil : ni commandes (shell), ni recherche web, ni fichiers de
+        réglages de l'utilisateur (serveurs MCP), bac à sable en lecture seule
+        dans un dossier vide, rien de gardé (« --ephemeral »)."""
+        return [str(self.launcher()), "exec", "--json", "--ephemeral", "--ignore-user-config",
+                "--skip-git-repo-check", "--sandbox", "read-only", "-C", str(WORK),
+                "--output-schema", str(schema_file), "-o", str(out_file),
+                "-c", "features.shell_tool=false", "-c", "features.unified_exec=false",
+                "-c", "features.apply_patch_freeform=false", "-c", "features.view_image_tool=false",
+                "-c", 'web_search="disabled"', "-c", "analytics.enabled=false",
+                "-c", "check_for_update_on_startup=false", "-"]
+
+    def ask(self, prompt, timeout=240):
+        schema_file, out_file = WORK / "schema.json", WORK / "reponse.txt"
+        schema_file.write_text(json.dumps(SCHEMA, ensure_ascii=False), encoding="utf-8")
+        out_file.unlink(missing_ok=True)
+        try:
+            result = subprocess.run(self.command(schema_file, out_file),
+                                    input=system_prompt(self.name) + "\n\n" + prompt,
+                                    capture_output=True, text=True, timeout=timeout, cwd=WORK, env=self.env())
+            text = out_file.read_text(encoding="utf-8") if out_file.is_file() else ""
+        finally:
+            out_file.unlink(missing_ok=True)
+        errors, last = [], ""
+        for line in result.stdout.splitlines():
+            try:
+                event = json.loads(line)
+            except ValueError:
+                continue
+            item = event.get("item") or {}
+            if item.get("type") in ("command_execution", "file_change", "mcp_tool_call", "web_search"):
+                # Ne devrait jamais arriver (outils coupés) : la réponse est refusée.
+                raise RuntimeError(_t("Réponse refusée : ChatGPT a tenté d'utiliser un outil."))
+            if item.get("type") == "agent_message":
+                last = item.get("text") or last
+            if event.get("type") in ("error", "turn.failed"):
+                errors.append(str(event.get("message") or (event.get("error") or {}).get("message") or ""))
+        text = (text or last).strip()
+        if result.returncode or not text:
+            message = " ".join(errors + [result.stderr.strip()]).strip()
+            if re.search(r"log ?in|not logged|unauthori[sz]ed|401|auth", message, re.I):
+                raise NotSignedIn(message)
+            raise RuntimeError(message[-400:] or f"code {result.returncode}")
+        try:
+            answer = json.loads(text[text.find("{"):text.rindex("}") + 1])
+        except ValueError:
+            answer = {"reponse": text, "demande": "aucune"}
+        return answer if isinstance(answer, dict) else {"reponse": str(answer), "demande": "aucune"}
+
+
+class LocalProvider(Provider):
+    """Petite IA sur ce PC : llama.cpp (llama-server, processeur seul) et
+    Qwen2.5 1,5B Instruct Q4_K_M (1,1 Go, licence Apache 2.0). Bon français,
+    JSON fiable, tourne avec 4 Go de mémoire. Rien ne quitte ce PC."""
+    key, name = "local", "IA locale"
+    remote = False
+
+    def supported(self):
+        return _machine() in ("x86_64", "amd64") and _mem_total_gib() >= LOCAL_MIN_RAM_GIB
+
+    def steps(self):
+        return (_t("Télécharger le moteur llama.cpp (environ 30 Mo)"),
+                _t("Télécharger le modèle Qwen2.5 1,5B (environ 1,1 Go)"), _t("Ajouter le bouton à la barre des tâches"))
+
+    def engine(self):
+        forced = os.environ.get("WINLUX_ASSISTANT_LLAMA")
+        if forced:
+            return Path(forced) if Path(forced).is_file() else None
+        found = sorted(LOCAL_DIR.glob("moteur/**/llama-server"))
+        return found[0] if found and os.access(found[0], os.X_OK) else None
+
+    def model(self):
+        path = LOCAL_DIR / LOCAL_MODEL_FILE
+        return path if path.is_file() else None
+
+    def launcher(self):
+        return self.engine() if self.engine() and self.model() else None
+
+    def install_engine(self, progress, cancel):
+        release = _get_json(LLAMA_RELEASE_API)
+        asset = next((a for a in release.get("assets", [])
+                      if re.search(r"-bin-ubuntu-x64\.(zip|tar\.gz)$", a.get("name", ""))), None)
+        if asset is None:
+            raise RuntimeError(_t("Archive inattendue : {name}", name="llama.cpp"))
+        digest = asset.get("digest") or ""
+        expected = bytes.fromhex(digest[7:]) if digest.startswith("sha256:") else b""
+        LOCAL_DIR.mkdir(parents=True, exist_ok=True)
+        archive = download(asset["browser_download_url"], LOCAL_DIR / asset["name"], "sha256", expected, progress,
+                           cancel, _t("Téléchargement du moteur"))
+        staging = LOCAL_DIR / "moteur.nouveau"
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            if archive.name.endswith(".zip"):
+                with zipfile.ZipFile(archive) as bundle:
+                    bundle.extractall(staging)
+            else:
+                with tarfile.open(archive) as tar:
+                    tar.extractall(staging, filter="data")
+            servers = sorted(staging.glob("**/llama-server"))
+            if not servers:
+                raise RuntimeError(_t("Archive inattendue : {name}", name="llama.cpp"))
+            for path in servers[0].parent.iterdir():  # zip ne garde pas le droit d'exécution
+                if path.is_file() and (path.name.startswith("llama-") or ".so" in path.name):
+                    path.chmod(0o755)
+            _replace_dir(staging, LOCAL_DIR / "moteur")
+        finally:
+            archive.unlink(missing_ok=True)
+            shutil.rmtree(staging, ignore_errors=True)
+
+    def install_model(self, progress, cancel):
+        files = _get_json(f"{HF_BASE}/api/models/{LOCAL_MODEL_REPO}/tree/main")
+        entry = next((f for f in files if f.get("path") == LOCAL_MODEL_FILE), None)
+        oid = ((entry or {}).get("lfs") or {}).get("oid", "")
+        if not re.fullmatch(r"[0-9a-f]{64}", oid):
+            raise RuntimeError(_t("Fichier corrompu, empreinte incorrecte : {name}", name=LOCAL_MODEL_FILE))
+        download(f"{HF_BASE}/{LOCAL_MODEL_REPO}/resolve/main/{LOCAL_MODEL_FILE}", LOCAL_DIR / LOCAL_MODEL_FILE,
+                 "sha256", bytes.fromhex(oid), progress, cancel, _t("Téléchargement du modèle"))
+
+    def install(self, progress, cancel, mark):
+        if self.engine() is None:
+            self.install_engine(progress, cancel)
+        mark(0)
+        if self.model() is None:
+            self.install_model(progress, cancel)
+        mark(1)
+        return self.launcher()
+
+    def status(self, launcher=None):
+        installed = (launcher or self.launcher()) is not None
+        return {"installed": installed, "loggedIn": installed}
+
+    def remove(self):
+        shutil.rmtree(LOCAL_DIR, ignore_errors=True)
+
+
+PROVIDERS = ("claude", "chatgpt", "local")
+_PROVIDERS = {cls.key: cls() for cls in (ClaudeProvider, ChatGPTProvider, LocalProvider)}
+
+
+def provider(key):
+    return _PROVIDERS[key]
+
+
+def display_name(key):
+    return _t(provider(key).name)
 
 
 # ── Claude Code : même installation que l'application du menu Démarrer ──────
@@ -258,29 +763,56 @@ def claude_launcher():
     return app.installed_launcher() if app else None
 
 
-def claude_env():
-    """Rien d'autre que la conversation ne part : télémétrie et rapports coupés."""
+def _private_dir(path):
+    path.mkdir(parents=True, exist_ok=True)
+    path.chmod(0o700)
+    return path
+
+
+def _runs_pe(launcher):
+    """Le lanceur de Claude Code passe-t-il par la couche PE (claude.exe) ?"""
+    try:
+        return launcher is not None and Path(launcher).stat().st_size < 4096 and \
+            "claude.exe" in Path(launcher).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return False
+
+
+def windows_path(path):
+    """Chemin Linux vu par un programme Windows : Z:\\ est la racine (paths::to_windows)."""
+    return "Z:" + str(path).replace("/", "\\")
+
+
+def claude_env(launcher=None):
+    """Rien d'autre que la conversation ne part : télémétrie et rapports coupés.
+    Connexion propre à l'assistant (CLAUDE_CONFIG_DIR), jamais ~/.claude."""
     env = dict(os.environ)
+    env.pop("ANTHROPIC_API_KEY", None)  # le compte Claude, pas une clé d'API
     env.update(DISABLE_TELEMETRY="1", DISABLE_ERROR_REPORTING="1", DISABLE_BUG_COMMAND="1",
                CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC="1", DISABLE_AUTOUPDATER="1")
+    _private_dir(CLAUDE_ACCOUNT)
+    launcher = launcher or claude_launcher()
+    env["CLAUDE_CONFIG_DIR"] = windows_path(CLAUDE_ACCOUNT) if _runs_pe(launcher) else str(CLAUDE_ACCOUNT)
     return env
 
 
 def protect_credentials():
-    """Identifiants de Claude Code lisibles par le seul propriétaire.
+    """Connexions de l'assistant lisibles par le seul propriétaire.
 
-    Créés par claude.exe à travers la couche PE, ils pouvaient hériter de
-    droits 644 : dossier ~/.claude en 700, jetons et compte en 600."""
-    base = Path(os.environ.get("CLAUDE_CONFIG_DIR") or HOME / ".claude")
+    Créées par claude.exe à travers la couche PE, elles pouvaient hériter de
+    droits 644 : dossiers en 700, jetons et compte en 600. ~/.claude et
+    ~/.codex ne sont jamais touchés."""
+    base = CLAUDE_ACCOUNT
     fixed = []
-    for path, mode in ((base, 0o700), (base / ".credentials.json", 0o600), (HOME / ".claude.json", 0o600)):
+    for path, mode in ((ACCOUNTS, 0o700), (base, 0o700), (base / ".credentials.json", 0o600),
+                       (base / ".claude.json", 0o600)):
         try:
             if path.stat().st_mode & 0o077:
                 path.chmod(mode)
                 fixed.append(path)
         except OSError:
             pass
-    return fixed
+    return fixed + _PROVIDERS["chatgpt"].protect()
 
 
 def auth_status(launcher=None, timeout=60):
@@ -290,7 +822,7 @@ def auth_status(launcher=None, timeout=60):
         return {"loggedIn": False, "installed": False}
     try:
         out = subprocess.run([str(launcher), "auth", "status", "--json"], capture_output=True, text=True,
-                             timeout=timeout, env=claude_env(), stdin=subprocess.DEVNULL).stdout
+                             timeout=timeout, env=claude_env(launcher), stdin=subprocess.DEVNULL).stdout
         start = out.find("{")
         status = json.loads(out[start:out.rindex("}") + 1]) if start >= 0 else {}
     except (OSError, subprocess.SubprocessError, ValueError):
@@ -359,7 +891,8 @@ def _panel_restart():
 
 
 def panel_add():
-    """Ajoute le bouton Claude juste à gauche des icônes de la barre."""
+    """Ajoute le bouton de l'assistant juste à gauche des icônes de la barre (un seul,
+    quel que soit le nombre d'assistants activés)."""
     if not shutil.which("xfconf-query"):
         return False
     ids = _panel_ids()
@@ -398,14 +931,18 @@ def panel_remove():
     return True
 
 
-def enable():
-    write_config(enabled=1)
+def enable(key="claude"):
+    write_config(**{f"enabled_{key}": 1, "current": key})
     panel_add()
 
 
-def disable():
-    panel_remove()
-    write_config(enabled=0)
+def disable(key="claude"):
+    """Le bouton ne disparaît qu'une fois le dernier assistant désactivé."""
+    write_config(**{f"enabled_{key}": 0})
+    if read_config().get("current") == key:
+        write_config(current=None)
+    if not enabled_providers():
+        panel_remove()
 
 
 # ── Ce que Claude peut demander (toujours confirmé par l'utilisateur) ───────
@@ -436,7 +973,7 @@ SETTINGS_PAGES = {2: "Réseau", 4: "Clavier et souris", 7: "Mises à jour", 8: "
                   11: "Navigateurs", 12: "Accessibilité", 14: "Localisation", 16: "Son",
                   18: "Confidentialité et sécurité", 20: "Lecteurs réseau", 21: "Fond d’écran et couleurs",
                   22: "Bluetooth", 23: "Alimentation et batterie", 24: "Graphismes", 26: "Imprimantes et scanners",
-                  28: "Partage et transfert", 29: "Jeux", 30: "Assistant Claude"}
+                  28: "Partage et transfert", 29: "Jeux", 30: "Assistant IA"}
 REQUESTS = ("aucune", "lire_journal", "lire_plantages", "lire_systeme", "chercher_fichier",
             "ouvrir_parametres", "ouvrir_dossier", "reglage")
 SCHEMA = {
@@ -446,24 +983,26 @@ SCHEMA = {
         "demande": {"type": "string", "enum": list(REQUESTS)},
         "argument": {"type": "string", "description": "Programme, nom de fichier, page, dossier ou réglage."},
     },
-    "required": ["reponse", "demande"],
+    # Tous requis : le format strict d'OpenAI l'exige (argument vide si inutile).
+    "required": ["reponse", "demande", "argument"],
     "additionalProperties": False,
 }
 
 
-def system_prompt():
+def system_prompt(name="Claude"):
     pages = ", ".join(f"{number} = {name}" for number, name in SETTINGS_PAGES.items())
     settings = ", ".join(f"{key} ({label})" for key, (label, _) in SETTINGS.items())
-    return f"""Tu es l'assistant Claude intégré à Winlux. Winlux est un système Linux qui lance les programmes
+    return f"""Tu es l'assistant {name} intégré à Winlux. Winlux est un système Linux qui lance les programmes
 Windows (.exe) directement, grâce à sa propre couche de compatibilité PE (ce n'est pas Wine), avec un bureau
 qui ressemble à Windows 11 : menu Démarrer, barre des tâches, Explorateur, Paramètres. Les fichiers Windows
 C:\\Users\\<nom> sont le dossier personnel Linux. Le journal Winlux note les DLL et fonctions Windows qui
 manquent à un programme ; un .exe qui ne s'ouvre pas manque souvent d'une DLL ou d'une fonction encore non
 fournie, ou plante (journal des plantages). Les pilotes noyau et anti-triche ne sont pas pris en charge.
 
-Réponds en {LANGUAGE_NAMES[_LANG]}, simplement, en quelques phrases, pour quelqu'un qui n'est pas informaticien.
-Tu n'as aucun outil. Pour lire une information ou agir, remplis « demande » (une seule par réponse) et
-« argument » ; l'utilisateur voit la demande et l'accepte ou la refuse. Demandes possibles :
+Réponds toujours en {LANGUAGE_NAMES[_LANG]}, la langue choisie pour Winlux, même si la question est posée dans une
+autre langue ; simplement, en quelques phrases, pour quelqu'un qui n'est pas informaticien.
+Tu n'as aucun outil : n'exécute aucune commande et ne lis aucun fichier toi-même. Pour lire une information
+ou agir, remplis « demande » (une seule par réponse) et « argument » (vide si inutile) ; l'utilisateur voit la demande et l'accepte ou la refuse. Demandes possibles :
 - aucune : simple réponse.
 - lire_journal : lignes du journal Winlux d'un programme ; argument = nom du .exe (vide = dernières erreurs).
 - lire_plantages : derniers plantages de programmes.
@@ -532,13 +1071,13 @@ def read_system():
     try:
         model = next(line.split(":", 1)[1].strip() for line in Path("/proc/cpuinfo").read_text().splitlines()
                      if line.startswith("model name"))
-        lines.append(f"Processeur : {model} ({os.cpu_count()} cœurs)")
+        lines.append(_t("Processeur : {model} ({count} cœurs)", model=model, count=os.cpu_count()))
     except (OSError, StopIteration):
         pass
     try:
         total = next(int(line.split()[1]) for line in Path("/proc/meminfo").read_text().splitlines()
                      if line.startswith("MemTotal"))
-        lines.append(f"Mémoire : {total / 1048576:.1f} Gio")
+        lines.append(_t("Mémoire : {size} Gio", size=f"{total / 1048576:.1f}"))
     except (OSError, StopIteration, ValueError):
         pass
     try:
@@ -546,27 +1085,33 @@ def read_system():
                       if "=" in line)
         for key, label in (("gpu", "Carte graphique"), ("display_mode", "Écran"), ("virtual_machine", "Machine virtuelle")):
             if status.get(key):
-                lines.append(f"{label} : {status[key]}")
+                lines.append(f"{_t(label)} : {status[key]}")
     except OSError:
         pass
     return "\n".join(lines)
 
 
-def find_files(part, limit=40, budget=4.0):
+def find_paths(part, limit=40, budget=4.0):
+    """Fichiers et dossiers du dossier personnel dont le nom contient `part`
+    (sans casse ni accents), dossiers cachés exclus."""
     wanted = fold(Path(part.replace("\\", "/")).name.strip())
     if not wanted:
-        return _t("(aucun fichier trouvé)")
+        return []
     found, deadline = [], time.monotonic() + budget
     for root, dirs, files in os.walk(HOME):
         dirs[:] = sorted(d for d in dirs if not d.startswith(".") and d not in ("node_modules", "__pycache__"))
         for name in sorted(dirs + files):
             if wanted in fold(name):
-                found.append(_home_relative(os.path.join(root, name)))
+                found.append(os.path.join(root, name))
                 if len(found) >= limit:
-                    return "\n".join(found)
+                    return found
         if time.monotonic() > deadline:
             break
-    return "\n".join(found) or _t("(aucun fichier trouvé)")
+    return found
+
+
+def find_files(part, limit=40, budget=4.0):
+    return "\n".join(_home_relative(path) for path in find_paths(part, limit, budget)) or _t("(aucun fichier trouvé)")
 
 
 def describe_request(kind, argument):
@@ -592,12 +1137,16 @@ def describe_action(kind, argument):
         return _t(label), ["winlux-control", action]
     if kind == "ouvrir_parametres" and argument.strip().isdigit() and int(argument) in SETTINGS_PAGES:
         page = int(argument)
-        return (_t("ouvrir Paramètres, page {page}", page=f"« {SETTINGS_PAGES[page]} »"),
+        return (_t("ouvrir Paramètres, page {page}", page=f"« {_t(SETTINGS_PAGES[page])} »"),
                 ["winlux-shell-app", "settings", str(page)])
     if kind == "ouvrir_dossier":
         path = Path(os.path.expanduser(argument.strip())) if argument.strip() else None
         if path is not None and path.is_absolute() and path.is_dir():
             return _t("ouvrir le dossier {path}", path=_home_relative(str(path))), ["winlux-shell-app", "explorer", str(path)]
+        if path is not None and path.is_absolute() and path.is_file():
+            # Un fichier : l'Explorateur s'ouvre sur le dossier qui le contient.
+            return (_t("ouvrir l'emplacement de {path}", path=_home_relative(str(path))),
+                    ["winlux-shell-app", "explorer", str(path.parent)])
     return None
 
 
@@ -615,17 +1164,13 @@ def run_action(command):
         return str(error)
 
 
-# ── Conversation ────────────────────────────────────────────────────────────
-
-class NotSignedIn(Exception):
-    pass
-
+# ── Conversation avec Claude ou ChatGPT ─────────────────────────────────────
 
 class Conversation:
     """Historique envoyé à chaque question ; rien n'est écrit sur le disque."""
 
-    def __init__(self, launcher=None):
-        self.launcher = launcher
+    def __init__(self, key="claude"):
+        self.key = key
         self.entries = []  # (rôle, texte) : user, assistant, data
 
     def prompt(self):
@@ -640,43 +1185,255 @@ class Conversation:
         return "\n\n".join(parts)
 
     def command(self):
-        return [str(self.launcher or claude_launcher()), "-p", "--output-format", "json", "--tools", "",
-                "--strict-mcp-config", "--disable-slash-commands", "--setting-sources", "",
-                "--no-session-persistence", "--model", MODEL, "--system-prompt", system_prompt(),
-                "--json-schema", json.dumps(SCHEMA, ensure_ascii=False)]
+        return provider("claude").command(provider(self.key).name)
 
     def ask(self, timeout=240):
-        """Envoie la conversation (par l'entrée standard, jamais en argument :
-        `ps` la montrerait aux autres comptes) ; renvoie (réponse, demande, argument)."""
+        """Envoie la conversation ; renvoie (réponse, demande, argument)."""
         WORK.mkdir(parents=True, exist_ok=True)
         WORK.chmod(0o700)
-        protect_credentials()
+        backend = provider(self.key)
+        backend.protect()
         try:
-            result = subprocess.run(self.command(), input=self.prompt(), capture_output=True, text=True,
-                                    timeout=timeout, cwd=WORK, env=claude_env())
+            answer = backend.ask(self.prompt(), timeout)
         finally:
-            protect_credentials()
-        output = result.stdout.strip()
-        try:
-            data = json.loads(output[output.find("{"):]) if "{" in output else {}
-        except ValueError:
-            data = {}
-        message = str(data.get("result") or result.stderr or output).strip()
-        if data.get("is_error") or result.returncode or not data:
-            if re.search(r"log ?in|not logged|authenticat|/login|oauth", message, re.I):
-                raise NotSignedIn(message)
-            raise RuntimeError(message[-400:] or f"code {result.returncode}")
-        answer = data.get("structured_output")
-        if not isinstance(answer, dict):
-            try:
-                answer = json.loads(data.get("result") or "")
-            except ValueError:
-                answer = {"reponse": data.get("result") or "", "demande": "aucune"}
+            backend.protect()
         reply = str(answer.get("reponse") or "").strip()
         kind = answer.get("demande") if answer.get("demande") in REQUESTS else "aucune"
         argument = str(answer.get("argument") or "")
         self.entries.append(("assistant", reply + (f" [demande : {kind} {argument}]".rstrip() if kind != "aucune" else "")))
         return reply, kind, argument
+
+
+# ── IA locale : llama-server sur 127.0.0.1, seulement fenêtre ouverte ───────
+
+def _die_with_parent():
+    try:
+        import ctypes
+        import signal
+        ctypes.CDLL(None).prctl(1, signal.SIGTERM)  # PR_SET_PDEATHSIG
+    except (OSError, AttributeError):
+        pass
+
+
+class LocalServer:
+    """llama-server démarre quand le panneau s'ouvre et s'arrête à sa fermeture.
+    Il n'écoute que 127.0.0.1, sur un port libre, protégé par une clé tirée au
+    hasard (passée par l'environnement, pas en argument visible par `ps`)."""
+
+    def __init__(self):
+        self.process = None
+        self.port = None
+        self.key = secrets.token_hex(16)
+
+    def running(self):
+        return self.process is not None and self.process.poll() is None
+
+    def spawn(self):
+        """Lance le moteur. À appeler depuis le fil principal : le moteur reçoit
+        SIGTERM si l'assistant meurt (PR_SET_PDEATHSIG suit le fil qui l'a lancé)."""
+        if self.running():
+            return
+        local = provider("local")
+        engine, model = local.engine(), local.model()
+        if engine is None or model is None:
+            raise RuntimeError(_t("L'IA locale n'est pas installée."))
+        with socket.socket() as probe:
+            probe.bind(("127.0.0.1", 0))
+            self.port = probe.getsockname()[1]
+        env = dict(os.environ, LLAMA_API_KEY=self.key)
+        env["LD_LIBRARY_PATH"] = ":".join(filter(None, (str(engine.parent), env.get("LD_LIBRARY_PATH"))))
+        WORK.mkdir(parents=True, exist_ok=True)
+        with open(WORK / "ia-locale.log", "wb") as log:
+            self.process = subprocess.Popen([str(engine), "-m", str(model), "--host", "127.0.0.1",
+                                             "--port", str(self.port), "-c", "4096", "-np", "1"],
+                                            stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
+                                            preexec_fn=_die_with_parent)
+
+    def wait_ready(self, timeout=180):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            process = self.process
+            if process is None:
+                raise RuntimeError(_t("Le moteur de l'IA locale ne répond pas."))
+            if process.poll() is not None:
+                raise RuntimeError(_t("Le moteur de l'IA locale s'est arrêté (code {code}).", code=process.returncode))
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{self.port}/health", timeout=2) as response:
+                    if response.status == 200:
+                        return
+            except OSError:
+                pass
+            time.sleep(0.3)
+        self.stop()
+        raise RuntimeError(_t("Le moteur de l'IA locale ne répond pas."))
+
+    def start(self, timeout=180):
+        self.spawn()
+        self.wait_ready(timeout)
+
+    def stop(self):
+        process, self.process = self.process, None
+        if process is not None and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+
+    def chat(self, system, user, schema, max_tokens=300, timeout=120):
+        """Une réponse JSON contrainte par `schema` (grammaire de llama.cpp)."""
+        body = json.dumps({"messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+                           "temperature": 0.2, "max_tokens": max_tokens,
+                           "response_format": {"type": "json_schema",
+                                               "json_schema": {"name": "reponse", "schema": schema}}}).encode()
+        request = urllib.request.Request(f"http://127.0.0.1:{self.port}/v1/chat/completions", data=body,
+                                         headers={"Content-Type": "application/json",
+                                                  "Authorization": f"Bearer {self.key}"})
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            content = json.loads(response.read().decode("utf-8"))["choices"][0]["message"]["content"]
+        answer = json.loads(content[content.find("{"):content.rindex("}") + 1])
+        if not isinstance(answer, dict):
+            raise ValueError(content)
+        return answer
+
+
+# Dossiers que l'agent « fichiers » sait ouvrir -> nom XDG.
+FOLDERS = {"documents": "DOCUMENTS", "images": "PICTURES", "musique": "MUSIC", "videos": "VIDEOS",
+           "telechargements": "DOWNLOAD", "bureau": "DESKTOP"}
+_FOLDER_DEFAULTS = {"documents": "Documents", "images": "Images", "musique": "Musique", "videos": "Vidéos",
+                    "telechargements": "Téléchargements", "bureau": "Bureau"}
+
+
+def user_folder(key):
+    try:
+        out = subprocess.run(["xdg-user-dir", FOLDERS[key]], capture_output=True, text=True, timeout=5).stdout.strip()
+        if out and Path(out).is_dir() and Path(out) != HOME:
+            return Path(out)
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return HOME / _FOLDER_DEFAULTS[key]
+
+
+AGENTS = ("fichiers", "reglages", "aide")
+assert len(AGENTS) <= MAX_AGENTS
+ROUTER_SCHEMA = {"type": "object", "properties": {"agent": {"type": "string", "enum": list(AGENTS)}},
+                 "required": ["agent"], "additionalProperties": False}
+FILES_SCHEMA = {"type": "object", "properties": {
+    "terme": {"type": "string"}, "dossier": {"type": "string", "enum": ["aucun", *FOLDERS]}},
+    "required": ["terme", "dossier"], "additionalProperties": False}
+SETTINGS_SCHEMA = {"type": "object", "properties": {
+    "reglage": {"type": "string", "enum": ["aucun", *SETTINGS]},
+    "page": {"type": "string", "enum": ["aucune", *(str(n) for n in SETTINGS_PAGES)]}},
+    "required": ["reglage", "page"], "additionalProperties": False}
+HELP_SCHEMA = {"type": "object", "properties": {
+    "reponse": {"type": "string"},
+    "page": {"type": "string", "enum": ["aucune", *(str(n) for n in SETTINGS_PAGES)]}},
+    "required": ["reponse", "page"], "additionalProperties": False}
+
+
+class LocalAssistant:
+    """Petite IA à trois agents au plus. Un aiguilleur choisit l'agent ; chaque
+    agent ne remplit que des champs fermés, le code fait le reste :
+    - fichiers : terme cherché ou dossier connu -> recherche sur ce PC, puis
+      « ouvrir l'emplacement » pour chaque résultat (clic « Faire ») ;
+    - reglages : un réglage de la liste fermée ou une page des Paramètres ;
+    - aide : réponse courte ; le journal d'un .exe nommé est lu sur ce PC.
+    Les lectures restent sur ce PC (rien n'est envoyé) ; les actions attendent
+    toujours un clic."""
+
+    def __init__(self, server=None):
+        self.server = server or LocalServer()
+
+    def route(self, question):
+        text = fold(question)
+        if re.search(r"\S+\.exe\b", text):
+            return "aide"
+        system = ("Tu aiguilles la demande d'un utilisateur de Winlux (bureau façon Windows 11) vers un agent. "
+                  "fichiers : chercher, trouver ou ouvrir un fichier, un document, une photo ou un dossier. "
+                  "reglages : changer un réglage (thème sombre ou clair, son, Bluetooth, réseau, barre des tâches, "
+                  "taille du texte, mode d'énergie, verrouiller, mises à jour) ou ouvrir une page des Paramètres. "
+                  "aide : toute autre question, par exemple un programme qui ne s'ouvre pas.")
+        try:
+            agent = self.server.chat(system, question, ROUTER_SCHEMA, max_tokens=20).get("agent")
+        except (OSError, ValueError, KeyError, IndexError):
+            agent = None
+        return agent if agent in AGENTS else "aide"
+
+    def handle(self, question):
+        """{"agent", "reply", "reads": [(quoi, texte)], "actions": [(quoi, commande)]}."""
+        agent = self.route(question)
+        result = {"agent": agent, "reply": "", "reads": [], "actions": []}
+        getattr(self, f"agent_{agent}")(question, result)
+        return result
+
+    def agent_fichiers(self, question, result):
+        system = ("Tu aides à retrouver un fichier. Mets dans « terme » le nom ou le morceau de nom du fichier "
+                  "cherché, tel que l'utilisateur l'écrit, sans les mots « fichier », « document », « mon ». "
+                  "Si l'utilisateur veut seulement ouvrir un de ses dossiers (Documents, Images, Musique, Vidéos, "
+                  "Téléchargements, Bureau), mets-le dans « dossier » et laisse « terme » vide ; sinon "
+                  "« dossier » vaut aucun.")
+        answer = self.server.chat(system, question, FILES_SCHEMA, max_tokens=60)
+        term = str(answer.get("terme") or "").strip().strip("«»\"' ")
+        folder = answer.get("dossier")
+        if folder in FOLDERS and not term:
+            action = describe_action("ouvrir_dossier", str(user_folder(folder)))
+            if action:
+                result["actions"].append(action)
+                result["reply"] = _t("Je peux ouvrir ce dossier :")
+                return
+        if not term:
+            result["reply"] = _t("Quel fichier cherchez-vous ? Donnez une partie de son nom.")
+            return
+        paths = find_paths(term)
+        result["reads"].append((_t("recherche de « {name} » dans votre dossier personnel", name=term),
+                                "\n".join(_home_relative(p) for p in paths) or _t("(aucun fichier trouvé)")))
+        if not paths:
+            result["reply"] = _t("Je n'ai trouvé aucun fichier dont le nom contient « {name} ».", name=term)
+            return
+        result["reply"] = _t("J'ai trouvé {count} résultat(s) pour « {name} ». Voici les premiers :",
+                             count=len(paths), name=term)
+        for path in paths[:5]:
+            action = describe_action("ouvrir_dossier", path)
+            if action:
+                result["actions"].append(action)
+
+    def agent_reglages(self, question, result):
+        settings = "; ".join(f"{key} = {label}" for key, (label, _) in SETTINGS.items())
+        pages = "; ".join(f"{number} = {name}" for number, name in SETTINGS_PAGES.items())
+        system = ("Tu choisis le réglage de Winlux que l'utilisateur demande. Réglages possibles : " + settings
+                  + ". S'il n'y en a pas, « reglage » vaut aucun et « page » est la page des Paramètres la plus "
+                  "proche : " + pages + " ; sinon « page » vaut aucune.")
+        answer = self.server.chat(system, question, SETTINGS_SCHEMA, max_tokens=40)
+        action = describe_action("reglage", str(answer.get("reglage")))
+        if action is None and str(answer.get("page")).isdigit():
+            action = describe_action("ouvrir_parametres", str(answer.get("page")))
+        if action:
+            result["actions"].append(action)
+            result["reply"] = _t("Je peux le faire pour vous : cliquez sur « Faire ».")
+        else:
+            result["reply"] = _t("Je ne sais pas faire ce réglage. Essayez dans Paramètres.")
+
+    def agent_aide(self, question, result):
+        data = ""
+        program = re.search(r"([\w.+ -]*?\w)\.exe\b", question, re.I)
+        if program:
+            name = program.group(1).split()[-1] + ".exe"
+            data = read_journal(name)
+            result["reads"].append((_t("le journal du programme {name}", name=name), data))
+        pages = "; ".join(f"{number} = {name}" for number, name in SETTINGS_PAGES.items())
+        system = (f"Tu es la petite IA locale de Winlux, un système Linux qui lance les programmes Windows (.exe) "
+                  f"avec sa propre couche de compatibilité et un bureau façon Windows 11. Réponds en "
+                  f"{LANGUAGE_NAMES[_LANG]} (la langue choisie pour Winlux), en trois phrases au plus, simplement. Un .exe qui ne s'ouvre pas manque "
+                  f"souvent d'une DLL ou d'une fonction Windows : le journal le dit (« missing », « unimplemented »). "
+                  f"N'invente rien ; si tu ne sais pas, dis-le. « page » : la page des Paramètres utile ({pages}), "
+                  f"sinon aucune.")
+        user = question + (f"\n\nJournal :\n{data[-3000:]}" if data else "")
+        answer = self.server.chat(system, user, HELP_SCHEMA, max_tokens=300)
+        result["reply"] = str(answer.get("reponse") or "").strip() or _t("Je ne sais pas.")
+        if str(answer.get("page")).isdigit():
+            action = describe_action("ouvrir_parametres", str(answer.get("page")))
+            if action:
+                result["actions"].append(action)
 
 
 # ── Interface GTK ───────────────────────────────────────────────────────────
@@ -720,24 +1477,26 @@ def open_url(url):
     return False
 
 
-def run_setup():
-    """Activation : téléchargement de Claude Code, connexion au compte, bouton."""
+def run_setup(key="claude"):
+    """Activation d'un assistant : téléchargement, connexion au compte, bouton."""
+    backend = provider(key)
+    name = display_name(key)
     Gdk, GLib, Gtk = _gtk()
-    win = Gtk.Window(title=_t("Activer l'assistant Claude"))
+    heading_text = _t("Assistant IA : activer {name}", name=name)
+    win = Gtk.Window(title=heading_text)
     win.set_role("winlux-assistant-setup")
     win.set_default_size(540, -1)
     win.set_resizable(False)
     win.set_position(Gtk.WindowPosition.CENTER)
-    win.set_icon_name("winlux-claude-code")
+    win.set_icon_name("winlux-assistant")
     win.get_style_context().add_class("assistant")
     box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin=24)
     title = Gtk.Label(xalign=0)
-    heading = GLib.markup_escape_text(_t("Activer l'assistant Claude"))
+    heading = GLib.markup_escape_text(heading_text)
     title.set_markup(f"<span size='x-large' weight='bold'>{heading}</span>")
     box.pack_start(title, False, False, 0)
     steps = []
-    for text in (_t("Télécharger Claude Code (environ 300 Mo)"), _t("Se connecter à votre compte Claude"),
-                 _t("Ajouter le bouton à la barre des tâches")):
+    for text in backend.steps():
         label = Gtk.Label(label="○  " + text, xalign=0)
         box.pack_start(label, False, False, 0)
         steps.append((label, text))
@@ -766,7 +1525,7 @@ def run_setup():
     win.add(box)
     state = {"cancel": threading.Event(), "process": None, "url": None}
 
-    def mark(index, done):
+    def mark(index, done=True):
         label, text = steps[index]
         label.set_text(("✓  " if done else "●  ") + text)
         return False
@@ -788,14 +1547,18 @@ def run_setup():
         return False
 
     def ready(status_info):
-        mark(0, True)
-        mark(1, True)
-        enable()
-        mark(2, True)
-        who = account_name(status_info)
+        for index in range(len(steps) - 1):
+            mark(index)
+        enable(key)
+        mark(len(steps) - 1)
         bar.set_fraction(1.0)
-        status.set_text(_t("Connecté au compte Claude{who}.", who=f" ({who})" if who else "") + "\n\n"
-                        + _t("C'est prêt ! Cliquez sur le bouton Claude de la barre des tâches ou appuyez sur Windows+C."))
+        if backend.remote:
+            who = account_name(status_info)
+            done = _t("Connecté au compte {name}{who}.", name=name, who=f" ({who})" if who and who != name else "")
+        else:
+            done = _t("L'IA locale est installée sur ce PC : rien de ce que vous lui demandez ne quitte l'ordinateur.")
+        status.set_text(done + "\n\n" + _t("C'est prêt ! Cliquez sur le bouton de l'assistant dans la barre des "
+                                           "tâches ou appuyez sur Windows+C."))
         code_box.hide()
         open_page.hide()
         finish.show()
@@ -805,8 +1568,10 @@ def run_setup():
 
     def got_url():
         open_page.show()
-        code_box.show_all()
-        open_url(state["url"])
+        if backend.code_entry:
+            code_box.show_all()
+        if backend.open_login_page:
+            open_url(state["url"])
         return False
 
     def login_output(process):
@@ -816,8 +1581,8 @@ def run_setup():
                 state["url"] = found.group(0)
                 GLib.idle_add(got_url)
         process.wait()
-        protect_credentials()
-        info = auth_status()
+        backend.protect()
+        info = backend.status()
         if info.get("loggedIn"):
             GLib.idle_add(ready, info)
         elif not state["cancel"].is_set():
@@ -828,9 +1593,9 @@ def run_setup():
         bar.set_fraction(0.0)
         status.set_text(_t("Connectez-vous dans la page qui vient de s'ouvrir (Google, e-mail…)."))
         try:
-            process = subprocess.Popen([str(launcher), "auth", "login", "--claudeai"], stdin=subprocess.PIPE,
+            process = subprocess.Popen(backend.login_command(launcher), stdin=subprocess.PIPE,
                                        stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, bufsize=1,
-                                       env=claude_env(), cwd=str(HOME))
+                                       env=backend.env(), cwd=str(HOME))
         except OSError as error:
             return failed(_t("La connexion n'a pas abouti : {e}", e=error))
         state["process"] = process
@@ -838,17 +1603,19 @@ def run_setup():
         return False
 
     def work():
-        launcher = claude_launcher()
+        launcher = backend.launcher()
         try:
             if launcher is None:
-                app = claude_code_app()
-                if app is None:
-                    raise RuntimeError("winlux-claude-code.py")
-                launcher = app.install(lambda f, t: GLib.idle_add(show, f, t), state["cancel"])
-            GLib.idle_add(mark, 0, True)
-            GLib.idle_add(show, None, _t("Vérification de la connexion…"))
-            info = auth_status(launcher)
-        except Exception as error:  # réseau, disque, manifeste, annulation
+                launcher = backend.install(lambda f, t: GLib.idle_add(show, f, t), state["cancel"],
+                                           lambda index: GLib.idle_add(mark, index))
+            else:
+                for index in range(len(steps) - (2 if backend.remote else 1)):
+                    GLib.idle_add(mark, index)
+            if launcher is None:
+                raise RuntimeError(_t("Archive inattendue : {name}", name=name))
+            GLib.idle_add(show, None, _t("Vérification de la connexion…") if backend.remote else "")
+            info = backend.status(launcher)
+        except Exception as error:  # réseau, disque, empreinte, annulation
             if not state["cancel"].is_set():
                 GLib.idle_add(failed, _t("Le téléchargement a échoué : {e}", e=error))
             return
@@ -907,14 +1674,17 @@ def run_chat():
 
     class Window(Gtk.ApplicationWindow):
         def __init__(self, app):
-            super().__init__(application=app, title=_t("Assistant Claude"))
+            super().__init__(application=app, title=_t("Assistant IA"))
             self.set_role("winlux-assistant")
-            self.set_icon_name("winlux-claude-code")
+            self.set_icon_name("winlux-assistant")
             self.set_decorated(False)
             self.set_keep_above(True)
-            self.set_skip_taskbar_hint(True)  # le bouton Claude de la barre l'ouvre et la ferme
+            self.set_skip_taskbar_hint(True)  # le bouton de la barre l'ouvre et la ferme
             self.get_style_context().add_class("assistant")
-            self.conversation = Conversation()
+            self.key = current_provider() or "claude"
+            self.conversation = Conversation(self.key)
+            self.server = LocalServer()
+            self.local = LocalAssistant(self.server)
             self.busy = False
             self.place()
             outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
@@ -922,10 +1692,22 @@ def run_chat():
             self.add(outer)
             head = Gtk.Box(spacing=10)
             head.get_style_context().add_class("assistant-head")
-            head.pack_start(Gtk.Image.new_from_icon_name("winlux-claude-code", Gtk.IconSize.LARGE_TOOLBAR), False, False, 0)
-            title = Gtk.Label(label=_t("Assistant Claude"), xalign=0)
-            title.get_style_context().add_class("assistant-title")
-            head.pack_start(title, True, True, 0)
+            head.pack_start(Gtk.Image.new_from_icon_name("winlux-assistant", Gtk.IconSize.LARGE_TOOLBAR), False, False, 0)
+            enabled = enabled_providers()
+            if len(enabled) > 1:
+                # Plusieurs assistants activés : on choisit ici, le choix est retenu.
+                self.chooser = Gtk.ComboBoxText()
+                for key in enabled:
+                    self.chooser.append(key, display_name(key))
+                self.chooser.set_active_id(self.key)
+                self.chooser.connect("changed", lambda combo: self.switch_provider(combo.get_active_id()))
+                head.pack_start(self.chooser, True, True, 0)
+                self.title = None
+            else:
+                self.chooser = None
+                self.title = Gtk.Label(xalign=0)
+                self.title.get_style_context().add_class("assistant-title")
+                head.pack_start(self.title, True, True, 0)
             new = Gtk.Button.new_from_icon_name("view-refresh-symbolic", Gtk.IconSize.BUTTON)
             new.set_tooltip_text(_t("Nouvelle conversation"))
             new.connect("clicked", lambda *_: self.reset())
@@ -949,13 +1731,17 @@ def run_chat():
             line.pack_start(self.entry, True, True, 0)
             line.pack_start(self.send_button, False, False, 0)
             bottom.pack_start(line, False, False, 0)
-            hint = Gtk.Label(label=_t("Envoyé à Claude (Anthropic) : votre question et cette conversation. "
-                                      "Rien d'autre sans votre accord."), xalign=0, wrap=True, max_width_chars=56)
-            hint.get_style_context().add_class("hint")
-            bottom.pack_start(hint, False, False, 0)
+            self.hint = Gtk.Label(xalign=0, wrap=True, max_width_chars=56)
+            self.hint.get_style_context().add_class("hint")
+            bottom.pack_start(self.hint, False, False, 0)
             outer.pack_start(bottom, False, False, 0)
             self.connect("key-press-event", self.on_key)
+            self.connect("destroy", lambda *_: self.server.stop())
             self.start_state()
+
+        @property
+        def name(self):
+            return display_name(self.key)
 
         def place(self):
             """Panneau en bas à droite, au-dessus de la barre des tâches."""
@@ -986,15 +1772,30 @@ def run_chat():
             self.scroll_down()
             return label
 
+        def switch_provider(self, key):
+            if key and key != self.key and not self.busy:
+                write_config(current=key)
+                self.key = key
+                self.server.stop()
+                self.reset()
+
         def reset(self):
-            self.conversation = Conversation()
+            self.conversation = Conversation(self.key)
             for child in self.messages.get_children():
                 child.destroy()
             self.start_state()
 
         def start_state(self):
-            if not is_enabled():
-                self.blocked(_t("L'assistant Claude est désactivé. Activez-le dans Paramètres."))
+            if self.title is not None:
+                self.title.set_text(_t("Assistant IA") + " · " + self.name)
+            if provider(self.key).remote:
+                company = {"claude": "Anthropic", "chatgpt": "OpenAI"}[self.key]
+                self.hint.set_text(_t("Envoyé à {name} ({company}) : votre question et cette conversation. "
+                                      "Rien d'autre sans votre accord.", name=self.name, company=company))
+            else:
+                self.hint.set_text(_t("IA locale : tout reste sur ce PC, rien n'est envoyé sur Internet."))
+            if not is_enabled(self.key):
+                self.blocked(_t("L'assistant est désactivé. Activez-le dans Paramètres."))
                 return
             self.bubble(_t("Bonjour ! Je peux vous aider à utiliser Winlux, par exemple :"), "claude")
             for text in (_t("Pourquoi mon programme .exe ne s'ouvre pas ?"), _t("Où est mon fichier… ?"),
@@ -1004,6 +1805,34 @@ def run_chat():
                 chip.connect("clicked", lambda _, value=text: self.suggest(value))
                 self.messages.pack_start(chip, False, False, 0)
             self.messages.show_all()
+            if not provider(self.key).remote:
+                self.start_local()
+
+        def start_local(self):
+            """Le moteur local ne tourne que fenêtre ouverte."""
+            self.set_busy(True)
+            waiting = self.bubble(_t("Démarrage de l'IA locale…"), "note")
+
+            def work():
+                try:
+                    self.server.wait_ready()
+                    error = None
+                except Exception as problem:
+                    error = str(problem)
+                GLib.idle_add(started, error)
+
+            def started(error):
+                waiting.destroy()
+                self.set_busy(False)
+                if error:
+                    self.blocked(_t("L'IA locale n'a pas démarré : {e}", e=error))
+                self.entry.grab_focus()
+                return False
+            try:
+                self.server.spawn()  # fil principal : le moteur meurt avec l'assistant
+            except Exception as problem:
+                return started(str(problem))
+            threading.Thread(target=work, daemon=True).start()
 
         def suggest(self, text):
             # « Où est mon fichier… ? » attend le nom : curseur après « fichier ».
@@ -1024,19 +1853,24 @@ def run_chat():
             self.busy = busy
             self.send_button.set_sensitive(not busy)
             self.entry.set_sensitive(not busy)
+            if self.chooser is not None:
+                self.chooser.set_sensitive(not busy)
 
         def send(self):
             text = self.entry.get_text().strip()
-            if not text or self.busy or not is_enabled():
+            if not text or self.busy or not is_enabled(self.key):
                 return
             self.entry.set_text("")
             self.bubble(text, "user")
-            self.conversation.entries.append(("user", text))
-            self.ask()
+            if provider(self.key).remote:
+                self.conversation.entries.append(("user", text))
+                self.ask()
+            else:
+                self.ask_local(text)
 
         def ask(self):
             self.set_busy(True)
-            waiting = self.bubble(_t("Claude réfléchit…"), "note")
+            waiting = self.bubble(_t("{name} réfléchit…", name=self.name), "note")
 
             def work():
                 try:
@@ -1054,10 +1888,10 @@ def run_chat():
             waiting.destroy()
             self.set_busy(False)
             if outcome[0] == "login":
-                self.blocked(_t("Vous n'êtes pas connecté à votre compte Claude."))
+                self.blocked(_t("Vous n'êtes pas connecté à votre compte {name}.", name=self.name))
                 return False
             if outcome[0] == "error":
-                self.bubble(_t("Claude n'a pas répondu : {e}", e=outcome[1]), "note")
+                self.bubble(_t("{name} n'a pas répondu : {e}", name=self.name, e=outcome[1]), "note")
                 return False
             _, reply, kind, argument = outcome
             if reply:
@@ -1072,6 +1906,36 @@ def run_chat():
             self.entry.grab_focus()
             return False
 
+        def ask_local(self, text):
+            self.set_busy(True)
+            waiting = self.bubble(_t("{name} réfléchit…", name=self.name), "note")
+
+            def work():
+                try:
+                    if not self.server.running():
+                        raise RuntimeError(_t("Le moteur de l'IA locale ne répond pas."))
+                    outcome = ("ok", self.local.handle(text))
+                except Exception as error:
+                    outcome = ("error", str(error))
+                GLib.idle_add(self.answered_local, waiting, outcome)
+            threading.Thread(target=work, daemon=True).start()
+
+        def answered_local(self, waiting, outcome):
+            waiting.destroy()
+            self.set_busy(False)
+            if outcome[0] == "error":
+                self.bubble(_t("{name} n'a pas répondu : {e}", name=self.name, e=outcome[1]), "note")
+                return False
+            result = outcome[1]
+            for what, data in result["reads"]:
+                self.local_read_card(what, data)
+            if result["reply"]:
+                self.bubble(result["reply"], "claude")
+            for what, command in result["actions"]:
+                self.action_card(what, command)
+            self.entry.grab_focus()
+            return False
+
         def card(self, title):
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
             box.get_style_context().add_class("request")
@@ -1079,19 +1943,29 @@ def run_chat():
             self.messages.pack_start(box, False, False, 0)
             return box
 
-        def request_card(self, what, reader):
-            """Lecture demandée : le texte exact est montré avant tout envoi."""
-            box = self.card(_t("Claude demande à lire : {what}", what=what))
-            data = reader()
-            expander = Gtk.Expander(label=_t("Voir exactement ce qui sera envoyé"))
+        def data_view(self, box, label, data):
+            expander = Gtk.Expander(label=label)
             view = Gtk.TextView(editable=False, wrap_mode=Gtk.WrapMode.WORD_CHAR, cursor_visible=False)
             view.get_buffer().set_text(data)
             frame = Gtk.ScrolledWindow(min_content_height=140, max_content_height=220, propagate_natural_height=True)
             frame.add(view)
             expander.add(frame)
             box.pack_start(expander, False, False, 0)
+
+        def local_read_card(self, what, data):
+            """Lecture de l'IA locale : faite sur ce PC, montrée, jamais envoyée."""
+            box = self.card(_t("Lu sur ce PC (rien n'est envoyé) : {what}", what=what))
+            self.data_view(box, _t("Voir ce qui a été lu"), data)
+            box.show_all()
+            self.scroll_down()
+
+        def request_card(self, what, reader):
+            """Lecture demandée : le texte exact est montré avant tout envoi."""
+            box = self.card(_t("{name} demande à lire : {what}", name=self.name, what=what))
+            data = reader()
+            self.data_view(box, _t("Voir exactement ce qui sera envoyé"), data)
             line = Gtk.Box(spacing=8)
-            accept = Gtk.Button(label=_t("Envoyer à Claude"))
+            accept = Gtk.Button(label=_t("Envoyer à {name}", name=self.name))
             accept.get_style_context().add_class("suggested-action")
             refuse = Gtk.Button(label=_t("Refuser"))
             line.pack_start(accept, False, False, 0)
@@ -1113,8 +1987,8 @@ def run_chat():
 
         def action_card(self, what, command):
             """Action proposée : rien ne change sans un clic sur « Faire »."""
-            box = self.card(_t("Claude propose : {what}", what=what))
-            detail = Gtk.Label(label=" ".join(command), xalign=0, selectable=True)
+            box = self.card(_t("{name} propose : {what}", name=self.name, what=what))
+            detail = Gtk.Label(label=" ".join(command), xalign=0, selectable=True, wrap=True, max_width_chars=50)
             detail.get_style_context().add_class("hint")
             box.pack_start(detail, False, False, 0)
             line = Gtk.Box(spacing=8)
@@ -1162,27 +2036,39 @@ def run_chat():
 
 def main(argv):
     command = argv[1] if len(argv) > 1 else ""
+    key = argv[2] if len(argv) > 2 else "claude"
+    if command.startswith("--") and command != "--etat" and key not in PROVIDERS:
+        print(f"winlux-assistant : assistant inconnu « {key} » ({', '.join(PROVIDERS)})", file=sys.stderr)
+        return 2
     if command == "--activer":
-        enable()
+        enable(key)
         return 0
     if command == "--desactiver":
-        disable()
+        disable(key)
         return 0
     if command == "--deconnecter":
-        launcher = claude_launcher()
-        if launcher:
-            subprocess.run([str(launcher), "auth", "logout"], capture_output=True, timeout=60, env=claude_env())
-        disable()
+        provider(key).logout()
+        disable(key)
+        return 0
+    if command == "--supprimer":
+        disable(key)
+        if key == "local":
+            provider("local").remove()
         return 0
     if command == "--etat":
-        status = auth_status() if claude_launcher() else {"installed": False, "loggedIn": False}
-        print(json.dumps({"enabled": is_enabled(), "installed": status.get("installed", False),
-                          "loggedIn": status.get("loggedIn", False), "account": account_name(status)}))
+        state = {}
+        for name in PROVIDERS:
+            backend = provider(name)
+            status = backend.status() if backend.supported() and backend.launcher() else {}
+            state[name] = {"supported": backend.supported(), "enabled": is_enabled(name),
+                           "installed": bool(status.get("installed")), "loggedIn": bool(status.get("loggedIn")),
+                           "account": account_name(status)}
+        print(json.dumps(state))
         return 0
     if command == "--configurer":
-        run_setup()
+        run_setup(key)
         return 0
-    # Bouton de la barre ou Windows+C : rien du tout tant que l'assistant est désactivé.
+    # Bouton de la barre ou Windows+C : rien du tout tant qu'aucun assistant n'est activé.
     if not is_enabled():
         return 0
     protect_credentials()

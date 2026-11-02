@@ -1,9 +1,9 @@
 ---
 title: Raccourcis et petits outils
-description: Ancrer les fenêtres, retrouver ce que vous avez copié, choisir une couleur ou copier le texte d'une image, comme sous Windows 11.
+description: Ancrer les fenêtres, retrouver ce que vous avez copié, choisir une couleur ou copier le texte d'une image, avec les raccourcis habituels.
 ---
 
-Le bureau de Winlux reprend les raccourcis de Windows 11. Ils marchent dans toutes les applications, programmes Windows compris.
+Le bureau de Winlux utilise les raccourcis clavier courants, avec la touche Windows. Ils marchent dans toutes les applications, programmes Windows compris.
 
 ## Raccourcis clavier
 

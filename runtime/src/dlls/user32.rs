@@ -242,6 +242,10 @@ unsafe fn create_window_common(
             }
         } else {
             b.create_window(hwnd, &title, rect);
+            if class.eq_ignore_ascii_case(super::controls::popup::CLASS) {
+                // Menu surgissant : ni cadre ni placement du gestionnaire.
+                b.set_popup(hwnd);
+            }
         }
         if visible {
             b.show_window(hwnd, true);
@@ -366,6 +370,7 @@ unsafe fn write_msg(out: *mut Msg, m: &Msg) {
 pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32, max: u32) -> i32 {
     loop {
         gui::pump_backend();
+        super::ws2_32::pump_async();
         let q = gui::current_queue();
         // Un minuteur très en retard passe avant les entrées (anti-famine).
         if let Some(m) = gui::due_timer(hwnd, min, max, true) {
@@ -396,7 +401,13 @@ pub unsafe extern "win64" fn get_message_a(out: *mut Msg, hwnd: usize, min: u32,
         // File vide : en headless on rend la main (fin de boucle); avec un
         // backend réel on dort jusqu'au prochain événement hôte, dépôt d'un
         // autre thread ou minuteur (borne de sûreté : 500 ms).
-        let wait = gui::next_timer_ms(hwnd).map_or(500, |ms| ms.min(500));
+        // Sockets WSAAsyncSelect : sondées toutes les 10 ms au plus.
+        let cap = if super::ws2_32::async_active() {
+            10
+        } else {
+            500
+        };
+        let wait = gui::next_timer_ms(hwnd).map_or(cap, |ms| ms.min(cap));
         if !gui::wait_backend(wait) {
             return 0;
         }
@@ -423,6 +434,7 @@ pub unsafe extern "win64" fn peek_message_a(
     remove: u32,
 ) -> i32 {
     gui::pump_backend();
+    super::ws2_32::pump_async();
     let q = gui::current_queue();
     if remove & 0x1 != 0 {
         if let Some(m) = gui::take_message(&q, hwnd, min, max) {
@@ -445,13 +457,20 @@ pub unsafe extern "win64" fn peek_message_a(
         return 1;
     }
     // File vide : WM_PAINT tant que la fenêtre n'a pas validé sa zone.
-    match gui::pending_paint(hwnd, min, max) {
-        Some(m) => {
-            write_msg(out, &m);
-            1
-        }
-        None => 0,
+    if let Some(m) = gui::pending_paint(hwnd, min, max) {
+        write_msg(out, &m);
+        return 1;
     }
+    // Puis WM_TIMER, comme GetMessage : sans lui, un programme qui attend
+    // par MsgWaitForMultipleObjects (réveillé par le minuteur échu) puis
+    // vide sa file par PeekMessage tournerait sans fin (PuTTY).
+    if remove & 0x1 != 0 {
+        if let Some(m) = gui::due_timer(hwnd, min, max, false) {
+            write_msg(out, &m);
+            return 1;
+        }
+    }
+    0
 }
 
 pub unsafe extern "win64" fn peek_message_w(
@@ -1747,8 +1766,7 @@ pub unsafe extern "win64" fn track_popup_menu(
     hwnd: usize,
     _rect: *const Rect,
 ) -> i32 {
-    let _ = (menu, flags, x, y, hwnd);
-    0 // Rien sélectionné
+    super::controls::popup::track(menu, flags, x, y, hwnd) as i32
 }
 
 pub unsafe extern "win64" fn track_popup_menu_ex(
@@ -1759,8 +1777,7 @@ pub unsafe extern "win64" fn track_popup_menu_ex(
     hwnd: usize,
     _params: *const c_void,
 ) -> i32 {
-    let _ = (menu, flags, x, y, hwnd);
-    0
+    super::controls::popup::track(menu, flags, x, y, hwnd) as i32
 }
 
 pub unsafe extern "win64" fn check_menu_item(menu: usize, id: u32, flags: u32) -> u32 {
@@ -2444,8 +2461,80 @@ pub unsafe extern "win64" fn msg_wait_for_multiple_objects(
     timeout: u32,
     wake_mask: u32,
 ) -> u32 {
-    let _ = (count, handles, wait_all, timeout, wake_mask);
-    count // WAIT_OBJECT_0 + count = signalé par message
+    const WAIT_TIMEOUT: u32 = 258;
+    if count > 63 || (count > 0 && handles.is_null()) {
+        crate::process::set_last_error(87);
+        return u32::MAX;
+    }
+    let hs: Vec<usize> = (0..count as usize)
+        .map(|i| std::ptr::read_unaligned(handles.add(i)))
+        .collect();
+    let start = std::time::Instant::now();
+    loop {
+        // 1. Les objets. Une socket associée par WSAEventSelect rend son
+        //    événement prêt : PuTTY attend ainsi le réseau (avant, on
+        //    répondait toujours « un message attend » et il tournait à vide).
+        if wait_all != 0 {
+            let all = !hs.is_empty()
+                && hs.iter().all(|&h| {
+                    crate::dlls::ws2_32::handle_ready(h)
+                        || (!crate::dlls::ws2_32::is_wsa_event(h)
+                            && crate::dlls::kernel32::lookup_sync(h).is_some()
+                            && crate::dlls::kernel32::wait_for_single_object(h, 0) == 0)
+                });
+            if all {
+                return 0;
+            }
+        } else {
+            for (i, &h) in hs.iter().enumerate() {
+                if crate::dlls::ws2_32::handle_ready(h) {
+                    return i as u32;
+                }
+                if crate::dlls::ws2_32::is_wsa_event(h) {
+                    continue;
+                }
+                if crate::dlls::kernel32::lookup_sync(h).is_none()
+                    && !crate::dlls::console_input::is_console_input(h)
+                {
+                    crate::process::set_last_error(6);
+                    return u32::MAX;
+                }
+                if crate::dlls::kernel32::wait_for_single_object(h, 0) == 0 {
+                    return i as u32;
+                }
+            }
+        }
+        // 2. La file de messages du thread (messages, WM_PAINT, minuteurs).
+        if wake_mask != 0 && message_waiting() {
+            return count;
+        }
+        // 3. Le délai.
+        let elapsed = start.elapsed().as_millis().min(u32::MAX as u128) as u32;
+        if timeout != u32::MAX && elapsed >= timeout {
+            return WAIT_TIMEOUT;
+        }
+        let left = if timeout == u32::MAX {
+            u32::MAX
+        } else {
+            timeout - elapsed
+        };
+        // Tranches courtes : les objets et les sockets n'ont pas de
+        // descripteur commun avec la connexion X11.
+        let slice = left.min(gui::next_timer_ms(0).unwrap_or(10)).clamp(1, 10);
+        if !gui::wait_backend(slice) {
+            std::thread::sleep(std::time::Duration::from_millis(slice as u64));
+        }
+    }
+}
+
+/// Un message, un WM_PAINT en attente ou un minuteur échu pour ce thread ?
+fn message_waiting() -> bool {
+    gui::pump_backend();
+    super::ws2_32::pump_async();
+    let q = gui::current_queue();
+    gui::peek_message(&q, 0, 0, 0).is_some()
+        || gui::pending_paint(0, 0, 0).is_some()
+        || gui::next_timer_ms(0) == Some(0)
 }
 
 pub unsafe extern "win64" fn msg_wait_for_multiple_objects_ex(
@@ -2843,6 +2932,72 @@ pub fn exports() -> crate::dlls::Exports {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn peek_message_rend_wm_timer_comme_get_message() {
+        unsafe {
+            // Minuteur de thread (hwnd 0), comme SetTimer(NULL, …).
+            let id = set_timer(0, 0, 30, 0);
+            assert_ne!(id, 0);
+            std::thread::sleep(std::time::Duration::from_millis(40));
+            // MsgWait voit le minuteur échu…
+            assert_eq!(
+                msg_wait_for_multiple_objects(0, std::ptr::null(), 0, 0, 0x04FF),
+                0
+            );
+            // …et PeekMessage(PM_REMOVE) le rend, sinon la boucle tournerait.
+            let mut m: Msg = std::mem::zeroed();
+            assert_eq!(peek_message_a(&mut m, 0, 0, 0, 1), 1);
+            let msg = std::ptr::read_unaligned(&m).message;
+            assert_eq!(msg, 0x0113);
+            assert_eq!(
+                msg_wait_for_multiple_objects(0, std::ptr::null(), 0, 0, 0x04FF),
+                258
+            );
+            kill_timer(0, id);
+        }
+    }
+
+    #[test]
+    fn msg_wait_respecte_le_delai_et_les_evenements() {
+        unsafe {
+            let debut = std::time::Instant::now();
+            assert_eq!(
+                msg_wait_for_multiple_objects(0, std::ptr::null(), 0, 30, 0x04FF),
+                258
+            );
+            assert!(debut.elapsed().as_millis() >= 30);
+            let ev = crate::dlls::kernel32::create_event_a(0, 1, 0, std::ptr::null());
+            let hs = [ev];
+            assert_eq!(
+                msg_wait_for_multiple_objects(1, hs.as_ptr(), 0, 0, 0x04FF),
+                258
+            );
+            crate::dlls::kernel32::set_event(ev);
+            assert_eq!(
+                msg_wait_for_multiple_objects(1, hs.as_ptr(), 0, 1000, 0x04FF),
+                0
+            );
+            // Un message posté réveille l'attente (WAIT_OBJECT_0 + count).
+            crate::dlls::kernel32::reset_event(ev);
+            let m = Msg {
+                hwnd: 0,
+                message: 0x0400,
+                wparam: 0,
+                lparam: 0,
+                time: 0,
+                pt: Point::default(),
+                l_private: 0,
+            };
+            assert!(gui::post_to_thread(std::thread::current().id(), m));
+            assert_eq!(
+                msg_wait_for_multiple_objects(1, hs.as_ptr(), 0, 1000, 0x04FF),
+                1
+            );
+            let q = gui::current_queue();
+            assert!(gui::take_message(&q, 0, 0, 0).is_some());
+        }
+    }
 
     #[test]
     fn wsprintf_formate_et_termine_par_nul() {

@@ -166,13 +166,13 @@ pub const WALLPAPERS: [Wallpaper; 15] = [
         name: b"Winlux classique",
         slug: b"winlux",
         category: 2,
-        accent: hex(0x0078D4),
+        accent: hex(0x7C4DFF),
     },
     Wallpaper {
         name: b"Bloom",
         slug: b"bloom",
         category: 2,
-        accent: hex(0x0078D4),
+        accent: hex(0x7C4DFF),
     },
     Wallpaper {
         name: b"Vagues",

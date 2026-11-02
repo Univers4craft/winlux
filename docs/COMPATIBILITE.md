@@ -35,8 +35,16 @@ empreintes du block map vérifiées avant toute écriture, installation dans
 `C:\Program Files\WindowsApps\<PackageFullName>`, menu Démarrer, associations et
 protocoles, `LocalState`, identité de paquet à l'exécution
 (`GetCurrentPackageFullName`, `GetCurrentPackageId`, `GetCurrentPackagePath`…).
-Pas encore : la signature `AppxSignature.p7x` (#235), les paquets de ressources
-des bundles, et les paquets 32 bits (#232). Test : `scripts/test-msix.sh`.
+Éditeur : comme Windows, un paquet non signé n'est pas installé sans
+avertissement. Il est refusé par défaut avec « Éditeur non vérifié » (code 3), et le
+double-clic demande une confirmation explicite (« Annuler » par défaut,
+« Installer quand même ») avant de relancer avec `--allow-unverified`. Un paquet signé
+dont le certificat porte bien l'éditeur du manifeste passe par la même confirmation,
+tant que la chaîne de certificats n'est pas vérifiée (#235). Un certificat au nom d'un
+autre éditeur est refusé dans tous les cas (`runtime/src/setup/appx_signature.rs`).
+Pas encore : la vérification cryptographique de la signature et de sa chaîne (#235),
+les paquets de ressources des bundles, et les paquets 32 bits (#232).
+Test : `scripts/test-msix.sh`.
 
 Depuis #271 (première partie), les manettes, volants et joysticks se lisent
 aussi en HID brut, comme le font SDL, les moteurs de jeu et les outils de
@@ -91,7 +99,23 @@ rampe RandR de la CRTC. Tout est défait à la fin du programme, même s'il
 plante : un gardien `winlux --display-restore`, lancé au premier changement avec
 l'état d'origine, attend la fermeture de son entrée standard puis remet l'écran.
 Rien n'est écrit dans la configuration d'écran mémorisée. Test :
-`scripts/test-display-mode.sh` (faux xrandr).
+`scripts/test-display-mode.sh` (faux xrandr). `GetDIBits` décrit l'écran comme
+Windows (32 bits, `BI_BITFIELDS`, 8 bits par composante) : SDL3 en tire le
+format des modes, que Warzone 2100 écartait tous.
+
+Les ports COM se trouvent aussi comme le fait pyserial, l'IDE Arduino ou un
+logiciel de flashage (#271, `runtime/src/dlls/devnodes.rs`). Un arbre de
+périphériques Plug and Play est construit à partir de sysfs : la racine, les
+ports (`USB\VID_…&PID_…&MI_…` sous leur appareil USB `USB\VID_…&PID_…\<série>`,
+`ACPI\PNP0501`, `ROOT\PORTS`) et les manettes HID. `setupapi` sert la classe Ports et
+l'interface COMPORT (`SetupDiOpenDevRegKey` → `PortName`,
+`SetupDiGetDeviceInstanceId`, `FRIENDLYNAME` « … (COM5) », `HARDWAREID`,
+`SetupDiClassGuidsFromName`). `cfgmgr32` parcourt l'arbre (`CM_Locate_DevNode`,
+`CM_Get_Parent/Child/Sibling`, `CM_Get_Device_ID`, `CM_Get_DevNode_Status`,
+`CM_Get_DevNode_Registry_Property`, `CM_Get_Device_Interface_List`). Un chemin
+d'interface COMPORT s'ouvre avec `CreateFileW` comme le port lui-même. Test :
+`scripts/test-devnodes.sh` (faux sysfs d'une Arduino Uno, plus COM7 sur un
+pseudo-terminal).
 
 Règle du projet rappelée : tout est maison. Pas de Wine, de Proton, de DXVK ni
 d'aucune couche de compatibilité tierce. La plomberie Linux standard reste
@@ -294,8 +318,8 @@ Reste : `wglUseFontBitmaps` et le rendu dans un bitmap (`PFD_DRAW_TO_BITMAP`).
 `d3dcompiler_47.dll` sont normalement installés par le « redistribuable » de
 Visual Studio ou de DirectX. Beaucoup d'applis supposent qu'ils sont déjà là
 (wxPython : 22 modules en dépendent). Winlux ne les fournit pas et son
-chargeur ne cherche que dans le dossier de l'appli, le dossier courant et
-`PATH` : il n'existe pas de `C:\Windows\System32`.
+chargeur ne cherchait que dans le dossier de l'appli, le dossier courant et
+`PATH` : il n'existait pas de `C:\Windows\System32`.
 
 Ce qu'il faut : un dossier système où les installeurs peuvent déposer leurs
 DLL (et que le chargeur parcourt), le support des installeurs WiX Burn
@@ -305,6 +329,29 @@ existante).
 
 Ampleur : **S** pour le dossier système, **M** pour Burn, **L** pour une
 `msvcp140` complète. Suivi : #234.
+
+**Fait (novembre 2026).**
+- `C:\Windows\System32` est parcouru par le chargeur juste après le dossier
+  de l'appli, dans l'ordre de Windows (`loader::find_dll_file`).
+- Les bundles WiX Burn s'installent sans exécuter leur moteur
+  (`runtime/src/setup/burn.rs`) : Winlux lit la section `.wixburn`, extrait
+  les conteneurs (cabinets), lit `BurnManifest.xml` et installe la chaîne.
+  Les paquets MSI passent par le msiexec maison, les `.exe` sont relancés
+  avec leurs arguments d'installation, `.msu`/`.msp` sont ignorés.
+  `/uninstall` retire les paquets. Un MSI 32 bits dépose ses DLL système
+  dans `SysWOW64`, comme sous Windows 64 bits. Les redistribuables
+  arrivent donc avec les applis, après l'installation de Winlux, et ne sont
+  pas dans l'ISO.
+- Une `msvcp140` maison sert quand aucun redistribuable n'est installé :
+  threads, mutex et variables de condition (compatibles avec les deux
+  dispositions du STL), horloges, `random_device`, tables d'erreurs. Les
+  `_X*` (erreurs fatales de conteneur) arrêtent le programme avec un
+  message au lieu de lever l'exception C++. La vraie `msvcp140.dll`, si
+  elle est présente, passe toujours avant (`dlls::prefers_real_file`).
+- Vérifié par `system32_suite.exe` et par un bundle de test réel (MSI
+  produit par wixl) dans les tests unitaires.
+- Reste : flux et locale C++ (`iostream`), MFC, `concrt140`, `vcomp140`,
+  et `d3dcompiler_47` (avec #137).
 
 ### 6. HTTPS et sécurité des applications
 
@@ -323,6 +370,35 @@ comme le curl de `winhttp`), les magasins de certificats branchés sur
 WinINet sur le même moteur que WinHTTP.
 
 Ampleur : **L**. Suivi : #235.
+
+**Fait (novembre 2026).**
+- WinINet (`InternetOpen`, `InternetOpenUrl`, `HttpOpenRequest`,
+  `HttpSendRequest`, `HttpQueryInfo`…) passe par le moteur de WinHTTP ;
+  urlmon fournit `URLDownloadToFile` et `URLDownloadToCacheFile`.
+- `crypt32` donne de vrais certificats : `CERT_CONTEXT` et `CERT_INFO`
+  remplis par un lecteur DER maison, magasin `ROOT` alimenté par les
+  autorités de l'hôte (`/etc/ssl/certs/ca-certificates.crt`), magasins en
+  mémoire, recherche (SHA-1, sujet, émetteur), propriétés de condensat,
+  `CertGetNameString`, `CertNameToStr`, `CryptStringToBinary` et
+  `CryptBinaryToString`. Les chaînes (`CertGetCertificateChain`) et la
+  stratégie SSL (`CertVerifyCertificateChainPolicy`, nom du serveur compris)
+  sont vérifiées par l'OpenSSL de l'hôte (`runtime/src/dlls/hostssl.rs`).
+- Schannel (`runtime/src/dlls/schannel.rs`) : `AcquireCredentialsHandle`,
+  `InitializeSecurityContext` (codes `SEC_I_CONTINUE_NEEDED`,
+  `SEC_E_INCOMPLETE_MESSAGE`, tampons `EXTRA` et `MISSING` comme Windows),
+  `EncryptMessage`, `DecryptMessage`, fermeture par `ApplyControlToken`,
+  attributs (tailles du flux, certificat du serveur, protocole, ALPN) et la
+  table `InitSecurityInterface`. Le certificat du serveur est validé
+  automatiquement avec les autorités du système, sauf validation manuelle
+  demandée par l'appli. Kerberos, NTLM et Negotiate restent absents.
+- CryptoAPI : `CryptCreateHash`, `CryptHashData`, `CryptGetHashParam`,
+  `CryptDuplicateHash` (MD5, SHA-1, SHA-2) ; `bcrypt` gagne MD5, SHA-384,
+  SHA-512 et HMAC.
+- Vérifié par `tls_suite.exe` (poignée de main réelle contre un serveur
+  `openssl s_server` jetable, `scripts/run-tls-suite.sh`) et par les tests
+  unitaires.
+- Reste : `ncrypt`, clés de la CryptoAPI (`CryptGenKey`, `CryptEncrypt`),
+  `CryptProtectData`, certificats client, rôle serveur de Schannel.
 
 ### 7. Shaders Direct3D 10/11/12 — tous les jeux récents
 
@@ -386,8 +462,8 @@ résolution (`ChangeDisplaySettingsExW`, 8).
 
 Fait : `hid.dll` et l'énumération HID de `setupapi` sur hidraw, `DeviceIoControl`
 sur disques, volumes et fichiers, entrée brute, ports série, définition
-d'écran et rampe gamma (voir plus haut).
-Reste : `cfgmgr32`, `winusb`, la classe Ports de `setupapi`.
+d'écran et rampe gamma, `cfgmgr32` et la classe Ports de `setupapi` (voir plus haut).
+Reste : `winusb`.
 
 Ampleur : **M**. Suivi : #271.
 

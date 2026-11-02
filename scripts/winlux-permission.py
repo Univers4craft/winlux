@@ -184,7 +184,7 @@ def ask(cap, name, exe):
       .winlux-consent .consent-path { color: #9a9a9a; font-size: 11px; }
       .winlux-consent .consent-footer { background: #2b2b2b; padding: 18px 24px; }
       .winlux-consent .consent-note { color: #a8a8a8; font-size: 11px; }
-      button.consent-allow { background: #4cc2ff; color: #000; border: none; border-radius: 4px;
+      button.consent-allow { background: #b19af9; color: #000; border: none; border-radius: 4px;
                              padding: 7px 22px; font-weight: 600; box-shadow: none; text-shadow: none; }
       button.consent-allow:hover { background: #48b2e9; }
       button.consent-deny { background: #3a3a3a; color: #f3f3f3; border: 1px solid #4a4a4a; border-radius: 4px;

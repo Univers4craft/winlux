@@ -83,10 +83,10 @@ pub mod theme {
     pub const BG_SURFACE: u32 = 0x00FF_FFFF; // #FFFFFF
     pub const BG_ELEVATED: u32 = 0x00FA_FAFA; // #FAFAFA
     /// Accent principal bleu.
-    pub const ACCENT: u32 = 0x00C0_6700; // #0067C0
+    pub const ACCENT: u32 = 0x00F0_3D6A; // #6A3DF0, violet Prisme
     pub const ACCENT_VIOLET: u32 = 0x00E6_8A74; // #748AE6
     pub const ACCENT_BLUE: u32 = 0x00E6_8A74; // #748AE6
-    pub const ACCENT_CYAN: u32 = 0x00FF_CD60; // #60CDFF
+    pub const ACCENT_CYAN: u32 = 0x00F9_9AB1; // #B19AF9 (thème sombre)
     /// Texte.
     pub const TEXT: u32 = 0x001F_1F1F; // #1F1F1F
     pub const TEXT_DIM: u32 = 0x0060_6060; // #606060
@@ -1898,6 +1898,12 @@ pub trait GuiBackend: Send {
     fn raise_window(&mut self, _hwnd: usize) {}
     /// Passe une fenêtre derrière ses voisines (ordre Win32 des enfants).
     fn lower_window(&mut self, _hwnd: usize) {}
+    /// Fenêtre surgissante (menu) : sans cadre, hors du gestionnaire de
+    /// fenêtres. À appeler avant de l'afficher.
+    fn set_popup(&mut self, _hwnd: usize) {}
+    /// Capture du pointeur pour un menu : les clics hors du programme
+    /// arrivent à `hwnd` (coordonnées hors de la fenêtre).
+    fn grab_pointer(&mut self, _hwnd: usize, _grab: bool) {}
     fn invalidate(&mut self, _hwnd: usize) {}
     /// Lit une zone de la fenêtre en pixels COLORREF (pour les blits vers un DC mémoire).
     fn capture(&mut self, _hwnd: usize, _rect: Rect) -> Option<BitmapSnapshot> {

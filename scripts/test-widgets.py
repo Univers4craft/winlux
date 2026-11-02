@@ -88,6 +88,11 @@ report = {"current_condition": [{"temp_C": "14", "temp_F": "57", "FeelsLikeC": "
 fixture = temp / "wttr.json"
 fixture.write_text(json.dumps(report), encoding="utf-8")
 os.environ["WINLUX_WEATHER_URL"] = fixture.as_uri()
+assert not cli["fetch_weather"](), "wttr.in contacté sans l'accord de l'utilisateur"
+assert not (run_dir / "weather.json").exists()
+accord = cli["load_config"]()
+accord["weather"] = True
+cli["save_config"](accord)
 assert cli["fetch_weather"](), "relevé météo non écrit"
 raw = (run_dir / "weather.json").read_bytes()
 assert "city=Besançon\n".encode("cp1252") in raw, raw  # shell PE : octets Windows-1252

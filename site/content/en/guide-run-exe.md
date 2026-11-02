@@ -5,14 +5,14 @@ description: Double-click an .exe, install software with its installer, and set 
 
 ## Just double-click
 
-Double-click an `.exe` file in Explorer or on the desktop: it opens just as it would on Windows. There is nothing to install or configure first.
+Double-click an `.exe` file in Explorer or on the desktop: it opens straight away. There is nothing to install or configure first.
 
 ![The Winlux tour: running a Windows program](img:lancer-un-exe.jpg "The first-start tour shows how to run a Windows program.")
 
 ## Install software
 
 1. Download the installer from the publisher's website (`setup.exe`, `installer.exe` or `.msi`).
-2. Double-click it and follow its steps, just as on Windows.
+2. Double-click it and follow the steps of its installer.
 3. The software appears in the Start menu. To remove it, open **Installed apps**.
 
 The most common installers (MSI, NSIS, Inno Setup) are supported. The Winlux **Store** also offers Windows and Linux software to install in one click.
@@ -21,7 +21,7 @@ The most common installers (MSI, NSIS, Inno Setup) are supported. The Winlux **S
 
 The first time a program wants to use the **camera**, the **microphone**, **screen capture** or your **personal folders**, Winlux asks for your consent. You can change your mind at any time in Settings › Privacy and security, where network access can also be blocked program by program.
 
-When an installer asks for administrator rights, a confirmation window opens, just as on Windows.
+When an installer asks for administrator rights, Winlux opens a confirmation window.
 
 ## If a program does not open
 
