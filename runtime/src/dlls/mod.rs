@@ -95,6 +95,7 @@ pub mod shell32;
 pub mod shlwapi;
 pub mod shlwapi_reg;
 pub mod spirv;
+pub mod taskdialog;
 pub mod taskschd;
 pub mod threadpool;
 pub mod user32;
