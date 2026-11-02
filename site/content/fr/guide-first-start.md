@@ -15,7 +15,7 @@ description: La fenêtre Bienvenue vous mène, en un clic, vers la visite guidé
 
 ![La fenêtre Bienvenue](img:assistant-bienvenue.jpg "La fenêtre Bienvenue : cinq raccourcis vers la visite guidée et les premiers réglages.")
 
-Cliquez sur **« Terminer »** quand vous avez fini. Tant que vous ne l'avez pas fait, la fenêtre revient à chaque ouverture de session ; ensuite, tous ces réglages restent dans Paramètres.
+Cliquez sur **« Terminer »** quand vous avez fini. Tant que vous ne l'avez pas fait, la fenêtre revient à chaque ouverture de session. Ensuite, elle ne s'ouvre plus d'elle-même, mais vous pouvez la relancer à tout moment depuis le menu Démarrer : cherchez « Bienvenue dans Winlux ».
 
 Si vous l'avez demandé pendant l'installation, les applications recommandées pour votre profil s'installent ensuite en arrière-plan, quand une connexion Internet est disponible.
 

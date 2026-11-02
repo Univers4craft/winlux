@@ -15,7 +15,7 @@ La primera vez que inicia sesión, la ventana **Bienvenido a Winlux** se abre en
 
 ![La ventana de bienvenida](img:assistant-bienvenue.jpg "La ventana de bienvenida: cinco accesos al recorrido guiado y a los primeros ajustes.")
 
-Haga clic en **«Finalizar»** cuando termine. Mientras no lo haga, la ventana vuelve a aparecer en cada inicio de sesión; después, todos estos ajustes siguen en Configuración.
+Haga clic en **«Finalizar»** cuando termine. Mientras no lo haga, la ventana vuelve a aparecer en cada inicio de sesión. Después ya no se abre sola, pero puede volver a abrirla en cualquier momento desde el menú Inicio: busque «Bienvenido a Winlux».
 
 Si lo pidió durante la instalación, las aplicaciones recomendadas para su perfil se instalan después en segundo plano, en cuanto haya conexión a Internet.
 

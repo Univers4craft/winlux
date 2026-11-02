@@ -15,7 +15,7 @@ The first time you sign in, the **Welcome to Winlux** window opens on the deskto
 
 ![The Welcome window](img:assistant-bienvenue.jpg "The Welcome window: five shortcuts to the guided tour and the first settings.")
 
-Click **“Finish”** when you are done. Until you do, the window comes back each time you sign in; after that, all these settings stay in Settings.
+Click **“Finish”** when you are done. Until you do, the window comes back each time you sign in. After that, it no longer opens by itself, but you can start it again at any time from the Start menu: search for “Welcome to Winlux”.
 
 If you asked for it during installation, the applications recommended for your profile are then installed in the background, as soon as an Internet connection is available.
 

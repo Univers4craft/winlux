@@ -15,7 +15,7 @@ Bei der ersten Anmeldung öffnet sich auf dem Desktop das Fenster **Willkommen b
 
 ![Das Willkommensfenster](img:assistant-bienvenue.jpg "Das Willkommensfenster: fünf Abkürzungen zur geführten Tour und zu den ersten Einstellungen.")
 
-Klicken Sie auf **„Fertigstellen“**, wenn Sie fertig sind. Bis dahin erscheint das Fenster bei jeder Anmeldung wieder; danach bleiben alle diese Einstellungen in den Einstellungen.
+Klicken Sie auf **„Fertigstellen“**, wenn Sie fertig sind. Bis dahin erscheint das Fenster bei jeder Anmeldung wieder. Danach öffnet es sich nicht mehr von selbst, lässt sich aber jederzeit über das Startmenü erneut starten: Suchen Sie nach „Willkommen bei Winlux“.
 
 Wenn Sie es bei der Installation gewünscht haben, werden die für Ihr Profil empfohlenen Anwendungen anschließend im Hintergrund installiert, sobald eine Internetverbindung besteht.
 
