@@ -7,6 +7,7 @@ pub mod advapi32;
 pub mod advapi32_crypto;
 pub mod advapi32_rsa;
 pub mod advapi32_services;
+pub mod apps_win32;
 pub mod audio_com;
 pub mod bcrypt;
 pub mod chromium_win32;
@@ -124,6 +125,7 @@ pub mod threadpool;
 pub mod user32;
 pub mod user32_ext;
 pub mod userenv;
+pub mod usp10;
 pub mod uxtheme;
 pub mod v4l2;
 pub mod va_bindings;
@@ -674,6 +676,11 @@ fn builtins() -> &'static Vec<Builtin> {
                 exports: games_win32::dnsapi_exports(),
                 handle: fake_module(),
             },
+            Builtin {
+                name: "usp10",
+                exports: usp10::usp10_exports(),
+                handle: fake_module(),
+            },
         ];
         add_basics(&mut all);
         all
@@ -712,14 +719,59 @@ fn add_basics(all: &mut [Builtin]) {
         ("powrprof", games_win32::powrprof_exports()),
         ("rpcrt4", games_win32::rpcrt4_exports()),
     ];
-    for (dll, exports) in extra.into_iter().chain(games) {
+    // Fonctions relevées sur de vrais logiciels (apps_win32), en complément.
+    let apps: [(&str, Exports); 10] = [
+        ("winmm", apps_win32::winmm_exports()),
+        ("gdi32", usp10::gdi32_exports()),
+        ("kernel32", apps_win32::kernel32_exports()),
+        ("kernel32", seh::exports()),
+        ("user32", apps_win32::user32_exports()),
+        ("comctl32", apps_win32::comctl32_exports()),
+        ("shell32", apps_win32::shell32_exports()),
+        ("advapi32", apps_win32::advapi32_exports()),
+        ("msvcrt", apps_win32::crt_exports()),
+        ("ucrtbase", apps_win32::crt_exports()),
+    ];
+    for (dll, exports) in extra.into_iter().chain(games).chain(apps) {
         if let Some(b) = all.iter_mut().find(|b| b.name == dll) {
             for (name, addr) in exports {
                 b.exports.entry(name).or_insert(addr);
             }
         }
     }
+    // Winsock importé par numéro d'ordre.
+    if let Some(b) = all.iter_mut().find(|b| b.name == "ws2_32") {
+        for &(ord, name) in apps_win32::WS2_32_ORDINALS {
+            if let Some(&a) = b.exports.get(name) {
+                let key: &'static str = Box::leak(format!("#{ord}").into_boxed_str());
+                b.exports.entry(key).or_insert(a);
+            }
+        }
+    }
+    // ?terminate@@YAXXZ est le nom décoré C++ de terminate().
+    for crt in ["msvcrt", "ucrtbase"] {
+        if let Some(b) = all.iter_mut().find(|b| b.name == crt) {
+            if let Some(&t) = b.exports.get("terminate") {
+                b.exports.entry("?terminate@@YAXXZ").or_insert(t);
+            }
+        }
+    }
     // Versions réelles qui remplacent d'anciens exports vides.
+    if let Some(b) = all.iter_mut().find(|b| b.name == "shell32") {
+        for (name, addr) in apps_win32::shell32_overrides() {
+            b.exports.insert(name, addr);
+        }
+    }
+    if let Some(b) = all.iter_mut().find(|b| b.name == "gdi32") {
+        for (name, addr) in usp10::gdi32_overrides() {
+            b.exports.insert(name, addr);
+        }
+    }
+    if let Some(b) = all.iter_mut().find(|b| b.name == "advapi32") {
+        for (name, addr) in apps_win32::advapi32_overrides() {
+            b.exports.insert(name, addr);
+        }
+    }
     if let Some(b) = all.iter_mut().find(|b| b.name == "user32") {
         for (name, addr) in controls::user32_overrides()
             .into_iter()
